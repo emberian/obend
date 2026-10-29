@@ -2,6 +2,7 @@
 
 [READ: /Users/ember/dev/obend/astra/fareoo/.git/config] The archive checkout used here is a local clone of /Users/ember/dev/fareoo.
 [READ: /Users/ember/dev/obend/astra/fareoo/.git/shallow] Its shallow boundary is d7ddf53fbdb818377b75c3d2bfafd14a072a0051.
+[INFERRED] This checkout matches the archive's dev head returned by GitHub during this reading.
 [INFERRED] The READ claims below describe inspected sources rather than newly executed demonstrations.
 
 ## A. THE THESIS
