@@ -1,9 +1,7 @@
 name = "obend"
 version = "0.0.1"
-defaultTargets = ["Theory"]
+defaultTargets = ["Obend"]
 
-# Trial extraction (2026-10-29): minidregg's Objective Bend theory closure, module names
-# unchanged, no Mathlib. Renaming to Obend.* follows once this builds clean.
 [[lean_lib]]
-name = "Theory"
-globs = ["Theory.+"]
+name = "Obend"
+globs = ["Obend", "Obend.+"]
