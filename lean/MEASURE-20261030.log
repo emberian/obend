@@ -1,0 +1,117 @@
+== 0. baseline: lake build with nothing changed
+wall 1793294793-1793294793 = 0s
+  except_map_error
+  simp [List.foldlM_cons, except_bind_error, e̵x̵c̵e̵p̵t̵_̵m̵a̵p̵_̵e̵r̵r̵o̵r̵,̵ ̵recordStep, cond, runL, childL]
+  except_bind_error
+  except_bind_error
+  except_bind_error
+Build completed successfully
+== 1. private proof edit: a trivial private theorem appended to Obend/Core/Proofs/Adequacy.lean
+wall 1793294826-1793294794 = 32s
+  except_map_error
+  simp [List.foldlM_cons, except_bind_error, e̵x̵c̵e̵p̵t̵_̵m̵a̵p̵_̵e̵r̵r̵o̵r̵,̵ ̵recordStep, cond, runL, childL]
+  except_bind_error
+  except_bind_error
+  except_bind_error
+✔ [68/72] Built Obend.Core.Teeth.DataSoundness
+✔ [69/72] Built Obend.Core.Teeth.Force
+✔ [70/72] Built Obend
+✔ [71/72] Built Obend.Core.Teeth.BackFail
+Build completed successfully
+== 2. definitional change: an exposed public def appended to Obend/Core/Term.lean (inside its exposed section)
+wall 1793294904-1793294826 = 78s
+✔ [21/72] Built Obend.Core.Term
+✔ [22/72] Built Obend.Core.Machine
+✔ [23/72] Built Obend.Core.Backend
+✔ [24/72] Built Obend.Core.Proofs.StepCases
+✔ [26/72] Built Obend.Core.Collect
+✔ [27/72] Built Obend.Core.Checkpoint
+✔ [28/72] Built Obend.Core.MachineFast
+✔ [29/72] Built Obend.Core.Invariant
+✔ [31/72] Built Obend.Core.Teeth.Collect
+✔ [33/72] Built Obend.Core.Data
+✔ [35/72] Built Obend.Core.MachineTyping
+✔ [36/72] Built Obend.Core.Capacity
+✔ [37/72] Built Obend.Core.Proofs.DataBudget
+✔ [38/72] Built Obend.Core.Proofs.Collect
+✔ [39/72] Built Obend.Core.Teeth.CollectYield
+✔ [40/72] Built Obend.Core.Teeth.CollectTyping
+✔ [41/72] Built Obend.Core.Proofs.Settle
+✔ [42/72] Built Obend.Core.Proofs.Forcing.Agree
+✔ [44/72] Built Obend.Core.Proofs.Forcing.Nest
+✔ [45/72] Built Obend.Core.Proofs.Forcing.Pend
+✔ [49/72] Built Obend.Core.Proofs.Preservation.Base
+✔ [50/72] Built Obend.Core.Proofs.Forcing.Chain
+✔ [52/72] Built Obend.Core.Proofs.DataSoundness
+✔ [53/72] Built Obend.Core.Proofs.Preservation.Cases.Sums
+✔ [54/72] Built Obend.Core.Proofs.Preservation.Cases.Arithmetic
+✔ [55/72] Built Obend.Core.Proofs.Preservation.Cases.Records
+✔ [56/72] Built Obend.Core.Proofs.Preservation.Cases.Pairs
+✔ [57/72] Built Obend.Core.Proofs.Preservation.Cases.Functions
+✔ [59/72] Built Obend.Core.Proofs.Preservation
+✔ [60/72] Built Obend.Core.Teeth.DataSoundness
+✔ [61/72] Built Obend.Core.Proofs.Forcing.Segment
+✔ [62/72] Built Obend.Core.Proofs.LedgerPoles
+✔ [63/72] Built Obend.Core.Proofs.Force
+✔ [64/72] Built Obend.Core.Proofs.Forcing.Extract
+✔ [65/72] Built Obend.Core.Teeth.Force
+✔ [66/72] Built Obend.Core.Proofs.Forcing.Back
+✔ [67/72] Built Obend.Core.Proofs.Forcing.Converse
+✔ [68/72] Built Obend.Core.Interaction
+✔ [69/72] Built Obend
+  except_map_error
+  simp [List.foldlM_cons, except_bind_error, e̵x̵c̵e̵p̵t̵_̵m̵a̵p̵_̵e̵r̵r̵o̵r̵,̵ ̵recordStep, cond, runL, childL]
+  except_bind_error
+  except_bind_error
+  except_bind_error
+✔ [71/72] Built Obend.Core.Teeth.BackFail
+Build completed successfully
+== 3. restore: lake build after reverting both
+wall 1793294982-1793294904 = 78s
+✔ [21/72] Built Obend.Core.Term
+✔ [22/72] Built Obend.Core.Machine
+✔ [23/72] Built Obend.Core.Backend
+✔ [24/72] Built Obend.Core.Proofs.StepCases
+✔ [26/72] Built Obend.Core.Collect
+✔ [27/72] Built Obend.Core.Checkpoint
+✔ [28/72] Built Obend.Core.MachineFast
+✔ [29/72] Built Obend.Core.Invariant
+✔ [31/72] Built Obend.Core.Teeth.Collect
+✔ [34/72] Built Obend.Core.Data
+✔ [35/72] Built Obend.Core.MachineTyping
+✔ [36/72] Built Obend.Core.Capacity
+✔ [37/72] Built Obend.Core.Proofs.DataBudget
+✔ [38/72] Built Obend.Core.Proofs.Collect
+✔ [39/72] Built Obend.Core.Teeth.CollectYield
+✔ [40/72] Built Obend.Core.Teeth.CollectTyping
+✔ [41/72] Built Obend.Core.Proofs.Settle
+✔ [42/72] Built Obend.Core.Proofs.Forcing.Agree
+✔ [44/72] Built Obend.Core.Proofs.Forcing.Nest
+✔ [45/72] Built Obend.Core.Proofs.Forcing.Pend
+✔ [47/72] Built Obend.Core.Proofs.Forcing.Chain
+✔ [51/72] Built Obend.Core.Proofs.Preservation.Base
+✔ [52/72] Built Obend.Core.Proofs.Forcing.Segment
+✔ [53/72] Built Obend.Core.Proofs.DataSoundness
+✔ [55/72] Built Obend.Core.Proofs.Preservation.Cases.Arithmetic
+✔ [56/72] Built Obend.Core.Proofs.Preservation.Cases.Sums
+✔ [57/72] Built Obend.Core.Proofs.Preservation.Cases.Records
+✔ [58/72] Built Obend.Core.Proofs.Preservation.Cases.Pairs
+✔ [59/72] Built Obend.Core.Proofs.Preservation.Cases.Functions
+✔ [60/72] Built Obend.Core.Proofs.Forcing.Extract
+✔ [61/72] Built Obend.Core.Proofs.Preservation
+✔ [62/72] Built Obend.Core.Teeth.DataSoundness
+✔ [63/72] Built Obend.Core.Proofs.Forcing.Back
+✔ [64/72] Built Obend.Core.Proofs.LedgerPoles
+✔ [65/72] Built Obend.Core.Proofs.Force
+✔ [66/72] Built Obend.Core.Proofs.Forcing.Converse
+✔ [67/72] Built Obend.Core.Teeth.Force
+✔ [68/72] Built Obend.Core.Interaction
+✔ [69/72] Built Obend
+  except_map_error
+  simp [List.foldlM_cons, except_bind_error, e̵x̵c̵e̵p̵t̵_̵m̵a̵p̵_̵e̵r̵r̵o̵r̵,̵ ̵recordStep, cond, runL, childL]
+  except_bind_error
+  except_bind_error
+  except_bind_error
+✔ [71/72] Built Obend.Core.Teeth.BackFail
+Build completed successfully
+done
