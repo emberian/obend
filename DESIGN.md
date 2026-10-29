@@ -7,8 +7,11 @@ version, wide scope, no named gaps; two mature instantiations rather than a harn
 
 ## 1. The seam, in one sentence
 
-**Objective Bend is a lazy, non-affine language of specifications whose targets are Bend books;
-`fix` elaborates a book; `self` and `super` are names in that book, not runtime values.**
+**Objective Bend is a lazy, non-affine language of specifications whose targets include Bend
+books; where a family is known at elaboration, `fix` emits a book in which `self` and `super`
+are names; where a specification is built or inspected at run time, it runs on a demand machine
+whose heap is one affinely owned Bend array.** The specification graph is kept after a book is
+emitted, so reflection still sees the composition that is running (Astra, §B).
 
 Bend already has exactly one freely reusable thing, and BendTT §7 says which: "the name of a
 definition is not a variable, so a program may call a definition any number of times." BendTT
@@ -68,10 +71,18 @@ so it does what Bend asks, mechanically:
    dispatcher `def Obj.dispatch(which: Obj.Method, fuel: Nat, state, args)` with a descending
    `fuel`, which BendTT accepts (the 10-03 note already saw this: "a single checked tagged
    dispatcher with explicit descending fuel");
-3. a method the author marks `live` is emitted `@unsafe`: Bend runs it, BendTT names every
-   dependent proof it taints, and in the world it is admitted the way Mini admits everything,
-   by re-execution under a declared envelope with refusals by name. World code is not proof
-   code; the two already have different gates in every tree here.
+3. a method that needs general recursion, or any specification constructed at run time, runs on
+   the **represented demand machine**: a total Bend program over an explicit state (code,
+   environments, heap cells `unforced | evaluating | done`, continuation frames) whose `run` recurses
+   on a leading `Nat` fuel and returns a result or the retained state. Fuel exhaustion is a
+   *suspension*, never a value or a false proposition; the budget counts machine transitions, not
+   recursion depth, because duplicating a smaller fuel into two branches does not bound their sum.
+   The heap is one Bend `Array` with one threaded owner; shareable heap addresses are `Data`.
+   This is Mini's demand machine (`ObjectiveBendDemandMachine.lean`, proved equal to Core4's
+   reference) compiled by Bend rather than by Lean. `@unsafe` is not used on the checked path; a
+   user-selected unsafe leaf carries an executable-only contract and acquires no law by passing
+   through a wrapper (Astra, §B). World code and proof code keep the different gates every tree
+   here already gives them.
 
 **Where laziness stops.** Inside a leaf, evaluation is Bend's. Laziness lives in three places,
 all above the leaf: elaboration (which layers and methods are built), the kernel (a slot is
@@ -129,6 +140,12 @@ them as the two halves of one thing.
   owner's law), whose candidates are the versions, whose justification is "the record names
   version v at pin p." Resolving an intention is a fill; a new version is a repair offered, not
   applied; the executed prefix (objects already born) keeps its pins until their owners adopt.
+  A refusal names the ancestor declaration, the clause, the span, the operands and the failed
+  support; where the current laws admit some request from the current values it offers that
+  request, and where none exists it says so (Astra, §C). Intentions resolve inside a **workspace's ecosystem root**, not a universal namespace: two
+  workspaces may extend the same intention differently, and closing a workspace fixes its
+  resolution environment while its target stays lazy (Astra, §C). A recorded turn retains that
+  environment's commitment, which is what the receiver re-derives.
 - **C4 across packages.** Identity is already the qualified declaration key; it becomes
   `(intention, declaration)`, so a diamond through two routes to `commons/record` applies it
   once, and `compose(E, E)` still applies `E` twice. The precedence list is one list over the
@@ -160,7 +177,7 @@ Five words, each a thing in the world, together a page a person writes in:
 |---|---|---|
 | **page** | an object of kind `Page`: id, pinned program, versioned state (rows of runs), law lines | the unit a person names and links |
 | **section** | a slot at type `Run`: candidates posted by members, a chooser, each candidate justified | the unit of contribution; selection is editing, revocation withdraws by name |
-| **cite** | a support: `(page, range, version)` of another page's bytes | a quote that lightens when the bytes verify and darkens when the source moves |
+| **cite** | a support: `(page, range, version, byte commitment)` of another page's bytes | a quote that lightens when the bytes verify; a *pinned* cite stays historically verified when the source moves on, a *following* cite's "current" condition fails and it is re-justified against the new range or shown as behind (breadstuffs `site/transclusion`; Astra, §D) |
 | **law** | a `law NAME "reading": EXPR` line on the page or its kind | judged on every write; refusals hand back the yes |
 | **kind** | a spec over `Page` (a layer): forms, verbs, rules, wants, a voice | what a stranger extends; a notebook, a ledger, a ballot, a story room are kinds |
 
@@ -187,21 +204,32 @@ is refused like anyone. The vault is still markdown; the world is where it means
 Not a harness. Two complete elaborations of the same programs, so the ideas can be read worked
 out and compared by the people who wrote them.
 
-**I. Objective Bend over Leaf Bend.** `fix` emits Bend books; methods run on Bend's compiler;
-leaf laws are BendTT theorems; the world kernel (admission, slots, laws, receipts) is Lean, as
-Mini's and nano's are. Laziness lives above the leaf. "Mature" means: the CoAuthor story, the
-single-seller market, the Tally resident and the two-member document (LANG-83) all run with
-their laws, and a Bend user's unmodified package is an ancestor of a world kind.
+Both implement **the same lazy source language and the same governed document interface**, and
+both support kernel justifications and document justifications, so the comparison varies one
+thing: the affine execution boundary (Astra, §E).
 
-**II. Objective Bend over Core4.** Mini's language as built: lazy call-by-need all the way down,
-reflection and `perform` in the term language, admission by re-execution on the Lean machine.
-"Mature" means the same four programs, plus cross-package `extends` added to the front end.
+**I. Objective Bend on its own Lean demand machine.** Mini's language as built: direct graph
+sharing for closures and recursive objects, reflection and `perform` in the term language,
+admission by re-execution. Mature means: a source semantics connected to the emitted core, the
+contextual selection covered by a statement over admitted history (DESIGN-CTX B4/B4′), persistent
+checkpoints that keep sharing, pending effects and code revisions, upgrades that carry an
+existing document, and a reflective view that explains the exact composition running.
 
-What the comparison teaches: where laziness must live. I says "in elaboration and the kernel";
-II says "in every value." Both are consistent with Faré; only II is in tension with Taelin.
-The programs are the same; the difference is in the elaborator's output and in what each proves
-about a method body. Whoever reads both elaborations will know which they want, and why, which
-no number would have told them.
+**II. Objective Bend on ordinary Bend.** Known compositions specialize to ordinary definitions;
+remaining dynamic behaviour runs on the represented demand machine compiled by Bend (§2.3);
+runtime specification construction never escapes to Lean. Mature means: resumable sharing under
+affine heap ownership, inspectable books with their exact law obligations, a stated
+correspondence for the source-to-book boundary, and a result-and-resource contract per native
+backend. (Bend 2 does not carry HVM; the backends are C, Metal, CUDA and JS.)
+
+Both carry one report through the same life: independent package extension, a diamond, a
+protocol attached by a third package, evidence withdrawal, an offline conflict, a law amendment,
+a schema migration. The report holds an unused cyclic field that does not block reading a good
+section, a shared expensive field selected twice that keeps one thunk's identity, and an owned
+leaf resource that is never copied; after a restart a reader can inspect why a section is
+selected. The comparison is a discussion of where each design makes expression, explanation,
+implementation and proof simpler. Where a number is then wanted, the question it answers is
+already concrete.
 
 ## 7. Upstream
 

@@ -15,34 +15,45 @@ The thesis of this repository is that **for the thing people want out of Bend �
 and humans keep building together under rules that cannot be broken — affinity is the wrong load-
 bearing wall, and Faré's object model is the right one.** Specifically:
 
-1. **Open recursion is non-affine by construction.** `fix spec seed ⟶ spec (fix spec seed) seed`:
-   the same `self` is handed to every layer and used as many times as there are methods. A record
-   of methods is a record of closures; in Bend a closure "can be called at most once, even when
-   everything it captures is Data" and a function type can never be `+`. So *the* mechanism of
-   modularity (late-bound `self`) and incrementality (`super`) cannot be written in Bend's live
-   fragment. Taelin knows the affine core is a placeholder ("we don't have that answer yet",
-   2026-09-19); the point is that Faré had the answer in 1979 and it is not EAL boxes.
-2. **Faré's laziness and Taelin's parallelism are in direct tension, and laws need laziness.**
-   Taelin: "parallelism is inherently competing with laziness." Faré: "the simplest, most natural
-   and safest usable setting for OO is: lazy evaluation"; partial specifications must be usable
-   before closure, `{good=7, bad=self.bad}.good` must be 7. A law over an object that is still
-   being specified by other people is a partial specification. SUPPORTED by Core4's call-by-name
-   reference and the `WHY-OBJECTIVE-BEND` argument; CONTESTED by nanodregg's CBV cut (LANG-2's
-   own unmeasured critique: exponential blowup under CBV where CBN is linear).
+1. **Core4 gives a reusable `self` a non-affine source semantics on purpose, and Bend's live
+   fragment has no such value.** `fix spec seed ⟶ spec (fix spec seed) seed` hands one `self` to
+   every layer and uses it as many times as there are methods. In Bend a closure "can be called
+   at most once, even when everything it captures is Data" and a function type is never `+`; the
+   one freely reusable thing is a top-level definition name (BendTT §7). So Bend *can* express a
+   statically known family's late binding, by generating names, a Data receiver tag and a
+   dispatcher, or a represented interpreter with fuel, and a Bend user must write all of that by
+   hand today (Astra, §A). What Bend cannot express is Faré's first-class lazy `fix`/`mix` over a
+   reusable record of methods *as a value*. Taelin knows the affine core is a placeholder ("we
+   don't have that answer yet", 2026-09-19); Faré's answer is a layer above the leaf, not EAL boxes.
+2. **Laziness is necessary for partial objects, not for every law system, and it is compatible
+   with parallel leaves.** Taelin: "parallelism is inherently competing with laziness." Faré: "the
+   simplest, most natural and safest usable setting for OO is: lazy evaluation";
+   `{good=7, bad=self.bad}.good` must be 7, `keep(7, fix(identity))` must be 7. A law over an
+   object other people are still specifying is a partial specification. Lazy *selection* of
+   demanded work and parallel *execution* of independent demanded leaves do not conflict (Astra,
+   §A); the `WHY-OBJECTIVE-BEND` argument already allowed strict implementations with explicit
+   indirection. SUPPORTED by Core4's call-by-name reference; CONTESTED by nanodregg's CBV cut
+   (LANG-2's own critique: exponential blowup under CBV where CBN is linear), which the two
+   mature instantiations in `DESIGN.md` §6 are built to settle by elaboration.
 3. **The right "linearity" for a law system is Faré's, not Girard's.** LTUO §7.3.5.2: every
    ancestor's contribution counted *once and only once* in the linearized composition. That is
    what lets ten authors' laws combine into one judged conjunction without a fight. Girard-style
    affinity of *variables* buys GC-freedom and parallel speed; it buys nothing for "whose law
    applies, in what order, and can I add mine without rewriting yours."
-4. **Laws people want are not Bend laws.** Bend's `law` is a closed proposition about a closed
-   program, proved once by whoever edits the code. What every tree here found people wanting is
-   a *judge at the point of use*: a predicate on one write of one object, under the current
-   authority, naming the clause that refused and the request that would pass, re-derivable by
-   anyone, and *amendable by someone who did not write it*. That is minidregg's cell law +
-   `why`/`can --any`, delvetalk2's `law NAME "reading": EXPR` + metarule, nanodregg's `Verdict`
-   by occasion + `adopt`. None of these is a theorem about a program; all of them are laws in
-   the civic sense. SUPPORTED everywhere; the one Bend-shaped artefact (a spec `claim`) was
-   demoted to *unchecked* and renamed so it could not borrow the word.
+4. **The laws people want are judged at the point of use, and Bend laws are one source of
+   their justification.** Bend's `law` quantifies over inputs and its proof may live in another
+   module, so it is modular, not "closed" (Astra, §A). But it is proved once about leaf code.
+   What every tree here found people wanting is a *judge on every write*: a predicate on one
+   write of one object under the current authority, naming the clause that refused and, where
+   one exists, a request that would pass, re-derivable by anyone, amendable by someone who did
+   not write it, and saying what it does when added over existing state. That is minidregg's cell
+   law + `why`/`can --any`, delvetalk2's `law NAME "reading": EXPR` + metarule + `under`,
+   nanodregg's `Verdict` by occasion + `adopt`. The two meet in nano's `keeps inv law` (LANG-92):
+   a sentence the kernel refuses to let be false, checked by shape at install and holding along
+   every admitted chain, which is a proposition about a program *and* a civic law at once. So the
+   split is not civic versus propositional; it is *when* and *by whom* a law is discharged.
+   SUPPORTED everywhere; the one artefact that borrowed the word without a judge (a spec `claim`)
+   was demoted to *unchecked* and renamed.
 5. **Extensible, contextual theories are the missing half, and they were found, not designed.**
    The nanodregg contextual program is what you get when you ask "what is an installed program
    whose meaning depends on a world the author never saw?" and answer with the literature: CMTT
@@ -81,10 +92,13 @@ consumer short (DESIGN-CTX §1.3). It also cut Mini's laziness, reflection and `
 chose old-self `extend`, and its own scholars say those cuts hurt authoring (DELVETALK-LEARNINGS
 §3.2, §5).
 
-**The Faré audit proved the gap is in cross-author extension.** Within a package Objective Bend
-is OO; across packages it is object-based ("no surface form names another package's root").
-Laws that inherit, kinds as first-class cells, and a checked carry were proposed on 10-01 and are
-still the three largest unbuilt things.
+**The Faré audit proved the gap is in cross-author extension, and delvetalk2 half-closed it.**
+Within a package Objective Bend is OO; across packages it is object-based ("no surface form
+names another package's root"). delvetalk2 already lets a kind's law cite its parent's by
+`under`, conjoined four levels deep, with tenure (LAW §4 F); kinds over kinds compose bodies by
+`layer over`. What no tree has is a package root extensible from another package, kinds as
+first-class cells with their own law, orthogonal protocols, and a checked carry. Those four,
+proposed on 10-01, are the construction `DESIGN.md` §4 takes up.
 
 **breadstuffs and o7vn hold the knowledge-maintenance primitives.** Patch theory with pushout
 merge and conflicts as data; transclusion that "lightens on verification"; evidence tokens whose
