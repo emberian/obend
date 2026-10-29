@@ -1,3 +1,4 @@
+module
 /- The update-frame discipline and closed demands (forcing transparency, part 2).
 
 * `persist_step`: an update frame below the top stays until a returned value pops it.
@@ -7,7 +8,7 @@
   outer stack appended, and that demand finishes (`Demand`).
 * `demand_props`: a finished closed demand of a suspended cell takes at least four
   transitions, caches the cell with its result, and runs the same over any outer stack. -/
-import Obend.Core.Proofs.Forcing.Run
+public import Obend.Core.Proofs.Forcing.Run
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -63,7 +64,7 @@ theorem persist_step {s : State} {w : Nat} {R Y : List Frame} (h : s.stack = Y +
 
 
 /-- Only entering a cell pushes its update frame. -/
-theorem stepRaw_push_update (s : State) {fr : Frame} (push : (stepRaw s).stack = fr :: s.stack)
+public theorem stepRaw_push_update (s : State) {fr : Frame} (push : (stepRaw s).stack = fr :: s.stack)
     {a : Nat} (isUpdate : fr = .update a) : s.control = .enter a := by
   subst isUpdate
   obtain ⟨heap, control, stack⟩ := s
@@ -90,7 +91,7 @@ theorem stepRaw_push_update (s : State) {fr : Frame} (push : (stepRaw s).stack =
         first | exact absurd push (lenFalse2 _ _ _) | exact absurd push.2 (lenFalse2 _ _ _) | skip
 
 /-- A transition never writes an update frame over another top frame. -/
-theorem stepRaw_top_update (s : State) {fr : Frame} {rest : List Frame} (stack : s.stack = fr :: rest)
+public theorem stepRaw_top_update (s : State) {fr : Frame} {rest : List Frame} (stack : s.stack = fr :: rest)
     {a : Nat} (next : (stepRaw s).stack = .update a :: rest) : fr = .update a := by
   by_cases r : ∃ v, s.control = .returned v
   · obtain ⟨v, hv⟩ := r
@@ -106,7 +107,7 @@ theorem stepRaw_top_update (s : State) {fr : Frame} {rest : List Frame} (stack :
 
 theorem exec_zero (s : State) : exec 0 s = s := rfl
 
-theorem stepRaw_enter_evaluating {s : State} {b : Nat} {o : Closure} (ctl : s.control = .enter b)
+public theorem stepRaw_enter_evaluating {s : State} {b : Nat} {o : Closure} (ctl : s.control = .enter b)
     (ev : s.heap[b]? = some (.evaluating o)) : (stepRaw s).control = .blackhole b := by
   obtain ⟨heap, control, stack⟩ := s
   simp only at ctl ev; subst ctl
@@ -126,7 +127,7 @@ theorem stepRaw_enter_suspended {s : State} {b : Nat} {o : Closure} (ctl : s.con
   simp only at ctl su; subst ctl
   simp [stepRaw, su]
 
-theorem exists_first_fail {P : Nat → Prop} (h : ∃ m, ¬ P m) : ∃ m, ¬ P m ∧ ∀ m', m' < m → P m' := by
+public theorem exists_first_fail {P : Nat → Prop} (h : ∃ m, ¬ P m) : ∃ m, ¬ P m ∧ ∀ m', m' < m → P m' := by
   classical
   obtain ⟨m, hm⟩ := h
   induction m using Nat.strongRecOn with
@@ -142,7 +143,7 @@ theorem exists_first_fail {P : Nat → Prop} (h : ∃ m, ¬ P m) : ∃ m, ¬ P m
 /-- **An entered suspended cell's evaluation.** Its update frame stays on the stack, with
 no other update frame for it above, and the cell stays evaluating, until a returned value
 pops the frame and caches the cell. -/
-theorem nested_pop {σ : State} {w : Nat} {o : Closure} {R : List Frame} {k : Nat}
+public theorem nested_pop {σ : State} {w : Nat} {o : Closure} {R : List Frame} {k : Nat}
     (enter : σ.control = .enter w) (stack : σ.stack = R) (susp : σ.heap[w]? = some (.suspended o))
     (pos : 1 ≤ k) (alive : ∀ j, j < k → active (exec j σ).control = true)
     (gone : ∀ Y, (exec k σ).stack ≠ Y ++ .update w :: R) :
@@ -269,20 +270,20 @@ theorem nested_pop {σ : State} {w : Nat} {o : Closure} {R : List Frame} {k : Na
 /-! ## Halting runs and closed demands -/
 
 /-- The run from `s` is active for its first `n` states and stops at the `n`-th. -/
-def Halts (s : State) (n : Nat) : Prop :=
+@[expose] public def Halts (s : State) (n : Nat) : Prop :=
   (∀ j, j < n → active (exec j s).control = true) ∧ active (exec n s).control = false
 
-theorem halts_unique {s : State} {n m : Nat} (one : Halts s n) (two : Halts s m) : n = m := by
+public theorem halts_unique {s : State} {n m : Nat} (one : Halts s n) (two : Halts s m) : n = m := by
   apply Classical.byContradiction; intro ne
   rcases Nat.lt_or_gt_of_ne ne with lt | lt
   · have := two.1 n lt; rw [one.2] at this; cases this
   · have := one.1 m lt; rw [two.2] at this; cases this
 
 /-- The closed demand of `w` on `P`: enter it with an empty stack. -/
-def demandStart (P : Array Cell) (w : Nat) : State := ⟨P, .enter w, []⟩
+@[expose] public def demandStart (P : Array Cell) (w : Nat) : State := ⟨P, .enter w, []⟩
 
 /-- The closed demand of `w` on `P` finishes in `n` transitions with `v`, leaving `Pf`. -/
-structure Demand (P : Array Cell) (w n : Nat) (Pf : Array Cell) (v : RuntimeValue) : Prop where
+public structure Demand (P : Array Cell) (w n : Nat) (Pf : Array Cell) (v : RuntimeValue) : Prop where
   halts : Halts (demandStart P w) n
   final : exec n (demandStart P w) = ⟨Pf, .complete v, []⟩
 
@@ -314,7 +315,7 @@ theorem withStack_inj {s : State} {h : Array Cell} {c : Control} {st R : List Fr
 /-- **The nested evaluation is a closed demand.** Until the entered cell's frame pops, the
 run is the closed demand of that cell with the outer stack appended, and that demand
 finishes. -/
-theorem nested_demand {σ : State} {w : Nat} {o : Closure} {R : List Frame} {k : Nat}
+public theorem nested_demand {σ : State} {w : Nat} {o : Closure} {R : List Frame} {k : Nat}
     (enter : σ.control = .enter w) (stack : σ.stack = R) (susp : σ.heap[w]? = some (.suspended o))
     (pos : 1 ≤ k) (alive : ∀ j, j < k → active (exec j σ).control = true)
     (gone : ∀ Y, (exec k σ).stack ≠ Y ++ .update w :: R) :
@@ -361,7 +362,7 @@ theorem nested_demand {σ : State} {w : Nat} {o : Closure} {R : List Frame} {k :
 /-- **A finished closed demand of a suspended cell**: it takes at least four transitions,
 caches the cell with its result, returns that result one transition before it stops, and
 runs the same over any stack appended below. -/
-theorem demand_props {P : Array Cell} {w n : Nat} {Pf : Array Cell} {v : RuntimeValue} {o : Closure}
+public theorem demand_props {P : Array Cell} {w n : Nat} {Pf : Array Cell} {v : RuntimeValue} {o : Closure}
     (d : Demand P w n Pf v) (susp : P[w]? = some (.suspended o)) :
     4 ≤ n ∧ Pf[w]? = some (.cached o v) ∧ exec (n-1) (demandStart P w) = ⟨Pf, .returned v, []⟩ ∧
       (∀ j, 1 ≤ j → j ≤ n - 2 → ∃ Y, (exec j (demandStart P w)).stack = Y ++ [.update w]) ∧

@@ -1,3 +1,4 @@
+module
 /- The difference is resources only (forcing transparency, part 10).
 
 A kernel checkpoint is the program's own yield normalized: its Plan's cells forced
@@ -17,9 +18,9 @@ any composite of those three relations. Along a chain, read backward (lazy `s`, 
   (`Chain.next`), which is what an activity needs.
 * `Chain.spins`: if the lazy run never halts (silent divergence), the normalized run commits
   nothing under any resources. Spinning forever is never equated with a visible ending. -/
-import Obend.Core.Proofs.Forcing.Back
-import Obend.Core.Proofs.Settle
-import Obend.Core.Proofs.Force
+public import Obend.Core.Proofs.Forcing.Back
+public import Obend.Core.Proofs.Settle
+public import Obend.Core.Proofs.Force
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -41,7 +42,7 @@ theorem renameStack_idMap (S : List Frame) : S.map (renameFrame id) = S :=
   renameStack_id (f := id) (fun _ _ _ _ => rfl)
 
 /-- **Settling (origins erased) is a backward simulation**: exact lockstep, identity map. -/
-theorem settleSim : BackSim (fun F s t => F = id ∧ Agree s t) (fun _ _ => True) where
+public theorem settleSim : BackSim (fun F s t => F = id ∧ Agree s t) (fun _ _ => True) where
   renames h := by
     obtain ⟨rfl, a⟩ := h
     exact ⟨by rw [renameControl_idMap]; exact a.control.symm, by rw [renameStack_idMap]; exact a.stack.symm⟩
@@ -62,7 +63,7 @@ theorem settleSim : BackSim (fun F s t => F = id ∧ Agree s t) (fun _ _ => True
 /-! ## Endings -/
 
 /-- How a segment ends, as what a kernel commits from it. -/
-inductive Ending where
+public inductive Ending where
   | yielded (plan : Data)
   | finished (result : Data)
   | divergent
@@ -71,7 +72,7 @@ inductive Ending where
 /-- The segment from `s` under limits `L`, `T` ticks and extraction budget `budget`: its
 ending and the state the run stopped in (for a yield, the yielded state), or `none` (out of
 ticks or room, or an extraction that did not succeed). -/
-def endsWith (L : Limits) (T : Nat) (budget : Budget) (s : State) : Option (Ending × State) :=
+@[expose] public def endsWith (L : Limits) (T : Nat) (budget : Budget) (s : State) : Option (Ending × State) :=
   match runBounded L T s with
   | .yielded _ y => match yieldedPlan L budget y with
     | .ok r => some (.yielded r.value, y)
@@ -86,13 +87,13 @@ def endsWith (L : Limits) (T : Nat) (budget : Budget) (s : State) : Option (Endi
 /-- **The ending above a threshold**: under every resource vector at least `(L0, T0, E0)`
 (the same output nodes and bytes as `budget`), the segment from `s` ends with `e`, stopping in
 `y` (which does not depend on the resources). -/
-def EndsAbove (s : State) (budget : Budget) (e : Ending) (y : State) : Prop :=
+@[expose] public def EndsAbove (s : State) (budget : Budget) (e : Ending) (y : State) : Prop :=
   ∃ (L0 : Limits) (T0 E0 : Nat), ∀ (L : Limits) (T k : Nat), LimitsLe L0 L → T0 ≤ T →
     endsWith L T ⟨budget.nodes, E0 + k, budget.bytes⟩ s = some (e, y)
 
 /-- **A backward simulation's segment, as endings**: whatever the forced side ends with, the
 lazy side ends with above a threshold, stopping in a related state. -/
-theorem BackSim.ends {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.ends {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) {F : Nat → Nat} {s t : State} (rel : R F s t) {L' : Limits} {T' : Nat}
     {budget' : Budget} {e : Ending} {y' : State} (ran : endsWith L' T' budget' t = some (e, y')) :
     ∃ y F', R F' y y' ∧ EndsAbove s budget' e y := by
@@ -150,7 +151,7 @@ theorem BackSim.ends {R : (Nat → Nat) → State → State → Prop} {Dom : Arr
 /-- **A chain** from a lazy state to a normalized one: forcing (`ForcesBy`), settling
 (`Agree`) and collection (`Related`) steps, composed. A kernel checkpoint is in a chain
 with the yield it was made from (`chain_checkpoint`). -/
-inductive Chain : State → State → Prop where
+public inductive Chain : State → State → Prop where
   | forces {gap : Nat} {F : Nat → Nat} {s t : State} : ForcesBy gap F s t → Chain s t
   | settles {s t : State} : Agree s t → Chain s t
   | collects {f : Nat → Nat} {D : Nat → Prop} {s t : State} : Related f D s t → Chain s t
@@ -160,7 +161,7 @@ inductive Chain : State → State → Prop where
 normalized state ends with (under some resources), the lazy state ends with the SAME ending
 under every resource vector above a threshold, with the same output nodes and bytes, and
 stops in a state in a chain with the normalized one's. -/
-theorem Chain.back {s t : State} (h : Chain s t) :
+public theorem Chain.back {s t : State} (h : Chain s t) :
     ∀ {L' : Limits} {T' : Nat} {budget' : Budget} {e : Ending} {y' : State},
       endsWith L' T' budget' t = some (e, y') → ∃ y, Chain y y' ∧ EndsAbove s budget' e y := by
   induction h with
@@ -183,7 +184,7 @@ theorem Chain.back {s t : State} (h : Chain s t) :
     exact ⟨y, .trans cs cm, above'⟩
 
 /-- **Every response resumes a chain to a chain** (the response captures no address). -/
-theorem Chain.resume {s t : State} (h : Chain s t) (response : Term) :
+public theorem Chain.resume {s t : State} (h : Chain s t) (response : Term) :
     ∀ {s0 : State}, Obend.Core.Machine.resume response s = some s0 →
       ∃ t0, Obend.Core.Machine.resume response t = some t0 ∧ Chain s0 t0 := by
   induction h with
@@ -223,7 +224,7 @@ theorem chain_checkpoint {L : Limits} {budget : Budget} {y : State} {r : Result}
   exact .trans (.forces forces) (.trans (.settles (agree_settle r.state)) (.collects (related_collect (settle r.state))))
 
 /-- A run that halts is a bounded run that does not suspend, read back. -/
-theorem halts_of_endsWith {L : Limits} {T : Nat} {budget : Budget} {s : State} {e : Ending} {y : State}
+public theorem halts_of_endsWith {L : Limits} {T : Nat} {budget : Budget} {s : State} {e : Ending} {y : State}
     (ran : endsWith L T budget s = some (e, y)) : ∃ n, Halts s n := by
   have notSusp : ∀ r st, Obend.Core.Machine.runBounded L T s ≠ .suspended r st := by
     intro r st h; unfold endsWith at ran; rw [h] at ran; cases ran
@@ -232,7 +233,7 @@ theorem halts_of_endsWith {L : Limits} {T : Nat} {budget : Budget} {s : State} {
 
 /-- **Silent divergence is never a visible ending**: if the lazy run never halts, the
 normalized run ends no segment, under any resources. -/
-theorem Chain.spins {s t : State} (h : Chain s t) (spins : ∀ n, ¬ Halts s n) (L : Limits) (T : Nat)
+public theorem Chain.spins {s t : State} (h : Chain s t) (spins : ∀ n, ¬ Halts s n) (L : Limits) (T : Nat)
     (budget : Budget) : endsWith L T budget t = none := by
   cases ran : endsWith L T budget t with
   | none => rfl
@@ -249,7 +250,7 @@ theorem Chain.spins {s t : State} (h : Chain s t) (spins : ∀ n, ¬ Halts s n) 
 `d` and the kernel stores the checkpoint of that yield's extraction, the lazy state yields the
 same `d` above a threshold, and the lazy state's OWN yield is in a chain with the stored
 checkpoint: so every later response resumes them to a chain again (`Chain.resume`). -/
-theorem Chain.next {s t : State} (h : Chain s t) {L' : Limits} {T' : Nat} {budget' : Budget} {d : Data}
+public theorem Chain.next {s t : State} (h : Chain s t) {L' : Limits} {T' : Nat} {budget' : Budget} {d : Data}
     {y' : State} (ran : endsWith L' T' budget' t = some (.yielded d, y')) (valid : AddrValid y') {r' : Result}
     (found : Obend.Core.Data.yieldedPlan L' budget' y' = .ok r') :
     ∃ y, EndsAbove s budget' (.yielded d) y ∧ Chain y (checkpoint r'.state) := by
@@ -257,7 +258,7 @@ theorem Chain.next {s t : State} (h : Chain s t) {L' : Limits} {T' : Nat} {budge
   exact ⟨y, above, .trans c (chain_checkpoint valid found)⟩
 
 /-- A chain renames the control. -/
-theorem Chain.control {s t : State} (h : Chain s t) : ∃ G, t.control = renameControl G s.control := by
+public theorem Chain.control {s t : State} (h : Chain s t) : ∃ G, t.control = renameControl G s.control := by
   induction h with
   | forces r => exact ⟨_, r.renames.1⟩
   | settles a => exact ⟨id, by rw [renameControl_idMap]; exact a.control.symm⟩
@@ -268,7 +269,7 @@ theorem Chain.control {s t : State} (h : Chain s t) : ∃ G, t.control = renameC
     exact ⟨G2 ∘ G1, by rw [e2, e1, renameControl_comp]⟩
 
 /-- **A response the normalized state accepts, the lazy state accepts**, to a chain. -/
-theorem Chain.resume_back {s t : State} (h : Chain s t) (response : Term) {t0 : State}
+public theorem Chain.resume_back {s t : State} (h : Chain s t) (response : Term) {t0 : State}
     (resumed : Obend.Core.Machine.resume response t = some t0) :
     ∃ s0, Obend.Core.Machine.resume response s = some s0 ∧ Chain s0 t0 := by
   obtain ⟨plan, yielded⟩ := resume_requires_yield response t (by rw [resumed]; rfl)

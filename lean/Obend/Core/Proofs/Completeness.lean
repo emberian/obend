@@ -1,3 +1,4 @@
+module
 /- Finite completion for the Core4 lazy demand machine.
 
 From ONLY a closed source (`Scoped 0`) and an independent reference
@@ -13,8 +14,8 @@ the permanent address meanings of `GraphRepresentsBy`; Fix by its tied origin.
 Lemmas marked "(leaf intake)" are copied verbatim from the unlanded lane source
 /tank/dregg-build/codex-objective-demand-bool-20261003/src/Theory/
 Obend.Core.Proofs.Adequacy.lean (sha256 489b1527…ed1fcd, hbox leaf78 log). -/
-import Obend.Core.Proofs.Adequacy
-import Obend.AxiomPin
+public import Obend.Core.Proofs.Adequacy
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Completeness
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -246,14 +247,14 @@ set_option autoImplicit false
 
 /-- The whole residual source program at a state: the phase-sensitive demand
 focus closed under the actual continuation (update frames are transparent). -/
-def budgetWhole (meaning : AddressMeaning) (state : State) : Option Term :=
+@[expose] public def budgetWhole (meaning : AddressMeaning) (state : State) : Option Term :=
   (budgetFocus meaning state).map (stackMeaning meaning state.stack)
 
-noncomputable def cellPotential : Cell → Nat
+@[expose] public noncomputable def cellPotential : Cell → Nat
   | .suspended origin => 3 * sizeOf origin.term + 1
   | .evaluating _ | .cached _ _ => 0
 
-noncomputable def controlPotential : Control → Nat
+@[expose] public noncomputable def controlPotential : Control → Nat
   | .evaluate term _ => 3 * sizeOf term + 1
   | .enter _ => 2
   | .returned _ => 1
@@ -261,7 +262,7 @@ noncomputable def controlPotential : Control → Nat
   -- only by a resume (an admitted turn), never by stepRaw.
   | .complete _ | .refused _ | .blackhole _ | .yielded _ => 0
 
-noncomputable def framePotential : Frame → Nat
+@[expose] public noncomputable def framePotential : Frame → Nat
   | .argument term _ => 3 * sizeOf term
   | .binaryLeft _ right _ => 3 * sizeOf right + 2
   | .condition zero body _ => 3 * (sizeOf zero + sizeOf body)
@@ -270,12 +271,12 @@ noncomputable def framePotential : Frame → Nat
   | .ifBool whenTrue whenFalse _ => 3 * (sizeOf whenTrue + sizeOf whenFalse)
   | .update _ | .field _ | .reflect | .metadata | .project | .binaryRight _ _ => 0
 
-noncomputable def heapPotential (heap : Array Cell) : Nat := (heap.toList.map cellPotential).sum
+@[expose] public noncomputable def heapPotential (heap : Array Cell) : Nat := (heap.toList.map cellPotential).sum
 
 /-- Raw syntax still to be traversed (suspended thunks, the control term,
 pending operands) plus continuation depth. Every non-semantic raw transition
 strictly decreases it, for every state, terminating or not. -/
-noncomputable def stutterRank (state : State) : Nat :=
+@[expose] public noncomputable def stutterRank (state : State) : Nat :=
   2 * (heapPotential state.heap + controlPotential state.control +
     (state.stack.map framePotential).sum) + state.stack.length
 
@@ -332,7 +333,7 @@ noncomputable def stutterRank (state : State) : Nat :=
 /-- One raw transition advances the whole residual program: either a genuine
 reference reduction (then possibly a demand-focus unfolding), or a `Steps`
 (often identity) together with a strict stutter-rank descent. -/
-def WholeAdvance (meaning next : AddressMeaning) (state successor : State) : Prop :=
+@[expose] public def WholeAdvance (meaning next : AddressMeaning) (state successor : State) : Prop :=
   ∃ before after, budgetWhole meaning state = some before ∧ budgetWhole next successor = some after ∧
     ((∃ middle, Step before middle ∧ Steps middle after) ∨
       (Steps before after ∧ stutterRank successor < stutterRank state))
@@ -978,7 +979,7 @@ edition: every elaborated program is closed, and nothing narrower is assumed.
 The step is the machine's own bounded `step`, run at limits that admit the next
 transition, read through an explicit Outcome → Transition adapter. -/
 
-def groundObservation : RuntimeValue → Option Observation
+@[expose] public def groundObservation : RuntimeValue → Option Observation
   | .natural number => some (.natural number)
   | .boolean value => some (.boolean value)
   | .label name => some (.label name)
@@ -987,7 +988,7 @@ def groundObservation : RuntimeValue → Option Observation
 /-- Adapter: a tick suspension is an advance, unless it advanced into a fault
 or blackhole (refusal); capacity suspension retains the exact state; only a
 GROUND completion is a finished observation. -/
-def outcomeTransition : Outcome → Transition State
+@[expose] public def outcomeTransition : Outcome → Transition State
   | .suspended .ticks next => match next.control with
       | .refused _ => .refused "refused"
       | .blackhole _ => .refused "blackhole"
@@ -1001,7 +1002,7 @@ def outcomeTransition : Outcome → Transition State
   | .refused _ _ => .refused "refused"
   | .yielded _ waiting => .yielded waiting
 
-def machineTransition (state : State) : Transition State :=
+@[expose] public def machineTransition (state : State) : Transition State :=
   outcomeTransition (step (traceLimits 1 state) state)
 
  theorem machineTransition_running {state : State}
@@ -1047,7 +1048,7 @@ def machineTransition (state : State) : Transition State :=
       simp only [machineTransition,fits,outcomeTransition] at finished
       cases next : (stepRaw state).control <;> simp [next] at finished
 
- theorem machineTransition_suspension_exact {state retained : State}
+ public theorem machineTransition_suspension_exact {state retained : State}
     (suspended : machineTransition state = .suspended retained) : retained = state := by
   cases control : state.control with
   | complete value =>
@@ -1060,14 +1061,14 @@ def machineTransition (state : State) : Transition State :=
       simp only [machineTransition,fits,outcomeTransition] at suspended
       cases next : (stepRaw state).control <;> simp [next] at suspended
 
-def Represents (state : State) (whole : Term) : Prop :=
+@[expose] public def Represents (state : State) (whole : Term) : Prop :=
   ∃ meaning source, GraphRepresentsBy meaning state source ∧ budgetWhole meaning state = some whole
 
 open Classical in
-noncomputable def startSource (source : Term) : Option State :=
+@[expose] public noncomputable def startSource (source : Term) : Option State :=
   if Scoped 0 source then some (initial source) else none
 
- theorem machine_simulation {state successor : State} {whole : Term}
+ public theorem machine_simulation {state successor : State} {whole : Term}
     (represented : Represents state whole) (advanced : machineTransition state = .advanced successor) :
     ∃ next, Represents successor next ∧
       ((next = whole ∧ stutterRank successor < stutterRank state) ∨ PositiveSteps whole next) := by
@@ -1083,7 +1084,7 @@ noncomputable def startSource (source : Term) : Option State :=
     | refl => exact Or.inl ⟨rfl,smaller⟩
     | next step rest => exact Or.inr (.begin step rest)
 
- theorem machine_value_adequacy {state : State} {whole : Term} {result : Observation}
+ public theorem machine_value_adequacy {state : State} {whole : Term} {result : Observation}
     (represented : Represents state whole) (finished : machineTransition state = .finished result) :
     ∃ value, Steps whole value ∧ Value value ∧ Observes value result := by
   obtain ⟨value,control,ground⟩ := machineTransition_finished finished
@@ -1112,7 +1113,7 @@ noncomputable def startSource (source : Term) : Option State :=
         obtain ⟨final,steps,last⟩ := ih (fun ticks => progress (ticks+1)) complete
         exact ⟨final,.next advanced steps,last⟩
 
- theorem machine_evaluation_complete {source value : Term} {result : Observation}
+ public theorem machine_evaluation_complete {source value : Term} {result : Observation}
     (closed : Scoped 0 source) (evaluates : Evaluates source value) (observes : Observes value result) :
     ∃ initialState final, startSource source = some initialState ∧
       MachineSteps machineTransition initialState final ∧ machineTransition final = .finished result := by
@@ -1124,7 +1125,7 @@ noncomputable def startSource (source : Term) : Option State :=
 
 /-- The Core4 demand machine inhabits the reference Representation contract
 for EVERY closed source. Nothing here restricts the domain below closedness. -/
-noncomputable def coreRepresentation : Representation State (Scoped 0) where
+@[expose] public noncomputable def coreRepresentation : Representation State (Scoped 0) where
   represents := Represents
   start := startSource
   initializesSupported := fun source closed => ⟨initial source,by simp [startSource,closed]⟩
@@ -1146,7 +1147,7 @@ noncomputable def coreRepresentation : Representation State (Scoped 0) where
 /-! ## Non-vacuity -/
 
 /-- A closed Fix program with a ground answer: `fix (λself λinh. inh) 7`. -/
-def lazyFixedSeed : Term := .fix (.lam (.lam (.bound 0))) (.nat 7)
+@[expose] public def lazyFixedSeed : Term := .fix (.lam (.lam (.bound 0))) (.nat 7)
 
 theorem lazyFixedSeed_closed : Scoped 0 lazyFixedSeed :=
   .fix (.lam (.lam (.bound (by decide)))) (.natural 7)

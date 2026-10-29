@@ -1,3 +1,4 @@
+module
 /- The state a Plan extraction leaves is typed. Definitions: `yieldedPlanWith`
 (`Obend.Core.Data`), `checkpoint` (`Obend.Core.Collect`).
 
@@ -14,8 +15,8 @@ at the extended address types (`typed_yieldedPlanWith`). With `typed_settle` and
 What this module does NOT prove: that resuming the extraction's state ends as resuming
 the yielded state (sharing transparency). That is `Kernel.ObjectiveResumeContract.
 forcingTransparent_of_yieldedPlan`, over `Obend.Core.Proofs.Forcing.*`. -/
-import Obend.Core.Proofs.Settle
-import Obend.Core.Proofs.Preservation
+public import Obend.Core.Proofs.Settle
+public import Obend.Core.Proofs.Preservation
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -45,7 +46,7 @@ theorem runBounded_of_yielded (limits : Limits) (ticks : Nat) {s : State} {plan 
     (yielded : s.control = .yielded plan) : runBounded limits ticks s = .yielded plan s := by
   cases ticks <;> simp [runBounded, step, yielded]
 
-theorem runBounded_zero_yielded {limits : Limits} {s y : State} {plan : Address}
+public theorem runBounded_zero_yielded {limits : Limits} {s y : State} {plan : Address}
     (ran : runBounded limits 0 s = .yielded plan y) : s.control = .yielded plan ∧ y = s := by
   unfold runBounded at ran
   split at ran <;> simp_all
@@ -79,7 +80,7 @@ theorem runBounded_yields_outside (limits : Limits) :
 
 /-! ## Typing through bounded runs and forcing -/
 
-def outcomeState : Outcome → State
+@[expose] public def outcomeState : Outcome → State
   | .finished _ state | .suspended _ state | .divergent _ state | .refused _ state | .yielded _ state => state
 
 theorem outcomeState_runBounded_zero (limits : Limits) (s : State) :
@@ -142,7 +143,7 @@ theorem typed_forceWith_any {assumptions : Assumptions} {policy : State → Bool
           | capacity => rw [ran] at next; exact ⟨after, extension, ⟨next⟩⟩
         | _ => rw [ran] at next; exact ⟨after, extension, ⟨next⟩⟩
 
-theorem runBounded_finished_control (limits : Limits) :
+public theorem runBounded_finished_control (limits : Limits) :
     ∀ (ticks : Nat) (s : State) {value : RuntimeValue} {r : State},
       runBounded limits ticks s = .finished value r → r.control = .complete value := by
   intro ticks
@@ -191,7 +192,7 @@ theorem forceWith_finished_control {policy : State → Bool} (limits : Limits) :
 /-! ## The forced heap -/
 
 /-- A heap every forcing may start from: typed, lexically valid, no cell being evaluated. -/
-structure HeapGood (assumptions : Assumptions) (types : AddressTypes) (heap : Array Cell) : Prop where
+public structure HeapGood (assumptions : Assumptions) (types : AddressTypes) (heap : Array Cell) : Prop where
   typed : HeapTyping assumptions types heap
   valid : ∀ (address : Nat) (cell : Cell), heap[address]? = some cell → CellValid heap.size cell
   idle : ∀ (address : Nat) (origin : Closure), heap[address]? ≠ some (.evaluating origin)
@@ -206,13 +207,13 @@ theorem extension_length_le {before after : AddressTypes} (extension : TypeExten
     have := (List.getElem?_eq_some_iff.mp last).1
     simp at this ⊢; omega
 
-theorem HeapGood.size_le {assumptions : Assumptions} {types after : AddressTypes} {heap heap' : Array Cell}
+public theorem HeapGood.size_le {assumptions : Assumptions} {types after : AddressTypes} {heap heap' : Array Cell}
     (good : HeapGood assumptions types heap) (good' : HeapGood assumptions after heap')
     (extension : TypeExtension types after) : heap.size ≤ heap'.size := by
   rw [← good.typed.length, ← good'.typed.length]; exact extension_length_le extension
 
 /-- Forcing a cell of a good heap starts from a typed state. -/
-def enteredTyping {assumptions : Assumptions} {types : AddressTypes} {heap : Array Cell}
+@[expose] public def enteredTyping {assumptions : Assumptions} {types : AddressTypes} {heap : Array Cell}
     (good : HeapGood assumptions types heap) {address : Nat} (bound : address < heap.size) :
     StateTyping assumptions types ⟨heap, .enter address, []⟩ (types[address]'(by rw [good.typed.length]; exact bound)) where
   current := types[address]'(by rw [good.typed.length]; exact bound)
@@ -425,7 +426,7 @@ theorem typed_checkpoint {assumptions : Assumptions} {types : AddressTypes} {y :
   obtain ⟨after, _, ⟨forced⟩⟩ := typed_yieldedPlanWith typed outside found
   exact ⟨_, ⟨typed_collect (typed_settle forced)⟩⟩
 
-theorem yieldedPlanWith_control {policy : State → Bool} {limits : Limits} {budget : Budget} {y : State}
+public theorem yieldedPlanWith_control {policy : State → Bool} {limits : Limits} {budget : Budget} {y : State}
     {r : Result} (found : yieldedPlanWith policy limits budget y = .ok r) :
     r.state.control = y.control ∧ r.state.stack = y.stack := by
   unfold yieldedPlanWith at found
@@ -452,17 +453,14 @@ segment's limits from its own heap end (`limitsPast`, `Kernel.ObjectiveActivity.
 segmentLimits`), under which it resumes exactly (`ObjectiveResumeContract.
 largerYield_resumes_exactly`, `runSegment_stored_complete`). -/
 
-def largerYield : State :=
+@[expose] public def largerYield : State :=
   ⟨#[.suspended ⟨.record [("a", .nat 1), ("b", .nat 2), ("c", .nat 3)], []⟩, .suspended ⟨.bound 0, [0]⟩],
    .yielded 1, [.argument (.bound 0) [0]]⟩
 
-def largerLimits : Limits := ⟨64, 64⟩
-def largerBudget : Budget := ⟨16, 64, 256⟩
+@[expose] public def largerLimits : Limits := ⟨64, 64⟩
+@[expose] public def largerBudget : Budget := ⟨16, 64, 256⟩
 
-theorem largerYield_checkpoint_grows :
-    (collect largerYield).heap.size = 2 ∧
-      ((yieldedPlan largerLimits largerBudget largerYield).toOption.map
-        fun r => (checkpoint r.state).heap.size) = some 5 := by
-  decide +kernel
+/- `largerYield_checkpoint_grows` (collection leaves two cells; the checkpoint after extraction has five)
+is in `Obend.Core.Teeth.Force`, a legacy leaf: its `decide` runs `yieldedPlan` and `checkpoint`. -/
 
 end Obend.Core.Collect

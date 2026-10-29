@@ -1,3 +1,4 @@
+module
 /- Forcing chains (forcing transparency, part 5).
 
 `ForcesBy gap F σ τ`: a finite chain of pending demands (`PendRel`) and exact agreements
@@ -10,7 +11,7 @@ address map `F`, with heap headroom `gap`.
 * `ForcesBy.reenter`: a chain relates heaps: any valid control and stack of the lazy heap,
   renamed, are related alike (what extraction needs: it re-enters cells with an empty stack).
 * `agree_inverse`: a covering exact agreement between equal-size heaps inverts. -/
-import Obend.Core.Proofs.Forcing.Switch
+public import Obend.Core.Proofs.Forcing.Switch
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -19,7 +20,7 @@ set_option autoImplicit false
 
 /-- **`σ` forces to `τ`** under the address map `F`, with heap headroom `gap`: a finite
 chain of pending demands and exact agreements. -/
-inductive ForcesBy : Nat → (Nat → Nat) → State → State → Prop where
+public inductive ForcesBy : Nat → (Nat → Nat) → State → State → Prop where
   | pend {e : Pending} {f : Nat → Nat} {gap : Nat} {σ τ : State} :
       PendRel e f σ τ → e.gap ≤ gap → ForcesBy gap f σ τ
   | agree {f : Nat → Nat} {gap : Nat} {σ τ : State} :
@@ -29,14 +30,14 @@ inductive ForcesBy : Nat → (Nat → Nat) → State → State → Prop where
 
 namespace ForcesBy
 
-theorem mono {gap gap' : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) (le : gap ≤ gap') :
+public theorem mono {gap gap' : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) (le : gap ≤ gap') :
     ForcesBy gap' F σ τ := by
   cases h with
   | pend r g => exact .pend r (Nat.le_trans g le)
   | agree r g => exact .agree r (by omega)
   | trans a b g => exact .trans a b (Nat.le_trans g le)
 
-theorem renames {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) :
+public theorem renames {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) :
     τ.control = renameControl F σ.control ∧ τ.stack = σ.stack.map (renameFrame F) := by
   induction h with
   | pend r _ => exact ⟨r.control, r.stack⟩
@@ -45,13 +46,13 @@ theorem renames {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap 
     refine ⟨by rw [ih2.1, ih1.1, renameControl_comp], ?_⟩
     rw [ih2.2, ih1.2, List.map_map]; congr 1; funext fr; exact renameFrame_comp _ _ fr
 
-theorem lazyValid {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) : AddrValid σ := by
+public theorem lazyValid {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) : AddrValid σ := by
   induction h with
   | pend r _ => exact r.valid
   | agree r _ => exact r.valid
   | trans _ _ _ ih1 _ => exact ih1
 
-theorem image {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) :
+public theorem image {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) :
     ∀ x, x < σ.heap.size → F x < τ.heap.size := by
   induction h with
   | pend r _ => exact fun x lt => r.heap.agree.image_lt trivial lt
@@ -60,7 +61,7 @@ theorem image {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F 
 
 /-- **Re-entry**: the relation is a relation of heaps; any valid control and stack of the
 lazy heap, renamed, are related to the forced heap alike. -/
-theorem reenter {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) (c : Control) (S : List Frame)
+public theorem reenter {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) (c : Control) (S : List Frame)
     (cIn : AllIn (· < σ.heap.size) (controlAddresses c))
     (sIn : ∀ fr ∈ S, AllIn (· < σ.heap.size) (frameAddresses fr)) :
     ForcesBy gap F ⟨σ.heap, c, S⟩ ⟨τ.heap, renameControl F c, S.map (renameFrame F)⟩ := by
@@ -100,7 +101,7 @@ theorem bounded_mono {σ τ : State} {n n' g g' : Nat} (b : Bounded σ τ n n' g
   exact ⟨j, hj, lj, by omega, st⟩
 
 /-- **Transfer along a forcing chain.** -/
-theorem forces_transfer {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) :
+public theorem forces_transfer {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : ForcesBy gap F σ τ) :
     ∀ n, Halts σ n → ∃ n' F', n' ≤ n ∧ Halts τ n' ∧ Bounded σ τ n n' gap ∧ ForcesBy gap F' (exec n σ) (exec n' τ) ∧
       ∀ a, a < σ.heap.size → F' a = F a := by
   induction h with
@@ -128,7 +129,7 @@ theorem forces_transfer {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : Force
 
 /-! ## Exact agreements: the identity, and the inverse of a covering one -/
 
-theorem agreeRel_refl {σ : State} (valid : AddrValid σ) : AgreeRel id σ σ := by
+public theorem agreeRel_refl {σ : State} (valid : AddrValid σ) : AgreeRel id σ σ := by
   refine ⟨⟨⟨fun a _ => ⟨trivial, fun h => h, rfl⟩, fun _ _ _ _ h => h, ?_⟩, allIn_everywhere _, ?_,
     fun _ _ => allIn_everywhere _, ?_⟩, valid⟩
   · intro a _ _ lt
@@ -140,7 +141,7 @@ theorem agreeRel_refl {σ : State} (valid : AddrValid σ) : AgreeRel id σ σ :=
     rw [renameFrame_congr (g := id) (fun _ _ => rfl)]; cases fr <;> simp [renameFrame, renameValue_id (f := id) (fun _ _ => rfl)]
 
 /-- **The inverse of a covering exact agreement** between equal-size heaps. -/
-theorem agree_inverse {g : Nat → Nat} {H1 H2 : Array Cell} (hr : HeapAgree g everywhere (fun _ => False) H1 H2)
+public theorem agree_inverse {g : Nat → Nat} {H1 H2 : Array Cell} (hr : HeapAgree g everywhere (fun _ => False) H1 H2)
     (cov : Covers g H1 H2) (sizes : H2.size = H1.size) (valid : HeapValid H1) :
     ∃ ginv : Nat → Nat, HeapAgree ginv everywhere (fun _ => False) H2 H1 ∧
       (∀ a, a < H1.size → ginv (g a) = a) := by
@@ -173,7 +174,7 @@ theorem agree_inverse {g : Nat → Nat} {H1 H2 : Array Cell} (hr : HeapAgree g e
     rw [found, renameCell_comp, renameCell_id (f := ginv ∘ g) (fun x m => left x (valid _ _ found x m))]
 
 /-- When the transition enters an unsuspended cell, nothing in the heap or stack changes. -/
-theorem stepRaw_enter_cases {s : State} {b : Nat} (ctl : s.control = .enter b) :
+public theorem stepRaw_enter_cases {s : State} {b : Nat} (ctl : s.control = .enter b) :
     (∃ o, s.heap[b]? = some (.suspended o)) ∨ ((stepRaw s).heap = s.heap ∧ (stepRaw s).stack = s.stack) := by
   obtain ⟨heap, control, stack⟩ := s
   simp only at ctl; subst ctl
@@ -184,7 +185,7 @@ theorem stepRaw_enter_cases {s : State} {b : Nat} (ctl : s.control = .enter b) :
     | evaluating o => right; simp [stepRaw, h]
     | cached o v => right; simp [stepRaw, h]
 
-theorem StateAgree.readsIn {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (rel : StateAgree f D U s t)
+public theorem StateAgree.readsIn {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (rel : StateAgree f D U s t)
     {a : Nat} (reads : readsAt s = some a) : D a := by
   obtain ⟨heap, control, stack⟩ := s
   have cIn := rel.controlIn; have sIn := rel.stackIn

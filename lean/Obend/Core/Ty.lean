@@ -1,4 +1,6 @@
-import Lean
+module
+public import Lean
+@[expose] public section
 namespace Obend.Core.Ty
 set_option autoImplicit false
 
@@ -287,3 +289,5 @@ theorem binary_method_changes_with_future_self (first second : Ty) :
       (fun _ => second) = Ty.arrow .reusable .unrestricted second second := ⟨rfl, rfl⟩
 
 end Obend.Core.Ty
+
+end

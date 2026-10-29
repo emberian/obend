@@ -1,5 +1,6 @@
--- The public face of the Objective Bend library. Definitional modules only; the proofs
--- (Obend.Core.Proofs.*) are built by `lake build Obend` as well but are imported by nothing here.
+-- The public face of the Objective Bend library: the definitional modules. The proofs
+-- (Obend.Core.Proofs.*, Obend.Slot.Proofs.*) and the legacy evaluation teeth
+-- (Obend.Core.Teeth.*) are built by `lake build Obend` too, but nothing imports them.
 import Obend.Core.Term
 import Obend.Core.Ty
 import Obend.Core.Check
@@ -10,3 +11,8 @@ import Obend.Core.Checkpoint
 import Obend.Core.Collect
 import Obend.Core.Interaction
 import Obend.Core.Digest
+import Obend.Core.Backend
+import Obend.Digest.Class
+import Obend.Slot
+import Obend.Slot.Calculus
+import Obend.Slot.Core4

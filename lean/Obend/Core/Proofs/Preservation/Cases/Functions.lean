@@ -1,13 +1,14 @@
+module
 /- Preservation cases: Functions. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
 
 /-- Immediate weak-head values are precisely scalars and lexical lambdas.
 Records still allocate suspended fields through the actual machine. -/
-def immediateValue (term : Term) (environment : Environment) : Option RuntimeValue :=
+@[expose] public def immediateValue (term : Term) (environment : Environment) : Option RuntimeValue :=
   match term with
   | .lam body => some (.closure body environment)
   | other => scalarValue other
@@ -61,7 +62,7 @@ theorem immediate_value_typed {assumptions : Assumptions} {context : Context}
 /-- Demanding ANY well-typed address preserves its assigned type in all three
 cell phases. A cyclic active demand may become blackhole, never missingCell.
 Suspended origins retain their source derivation and capture quantities. -/
-theorem typed_enter_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_enter_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {address : Address}
     (typed : StateTyping assumptions types state result)
     (enter : state.control = .enter address) :
@@ -93,7 +94,7 @@ closure's authored domain representative. Its body keeps the original capture
 and quantity evidence; component conversions remain in the continuation. A
 first-class specification enters its stored extension without consuming the
 argument frame. This follows the actual machine's two application branches. -/
-theorem typed_argument_return_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_argument_return_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {argument : Term}
     {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
@@ -151,7 +152,7 @@ theorem typed_argument_return_preserved {assumptions : Assumptions} {types : Add
 /-- The actual mix-generated lexical body is reusable under the checked operand
 capture premise. Both generated parameters retain their shareability evidence;
 composition does not make an affine captured environment duplicable. -/
-def reusable_mix_body {assumptions : Assumptions} {context : Context} {lower upper : Term}
+@[expose] public def reusable_mix_body {assumptions : Assumptions} {context : Context} {lower upper : Term}
     {lowerType upperType self inherited middle provided : Ty} {lu uu : Uses}
     (lowerTyped : PartialTyping assumptions context lower lowerType lu)
     (upperTyped : PartialTyping assumptions context upper upperType uu)
@@ -191,7 +192,7 @@ def reusable_mix_body {assumptions : Assumptions} {context : Context} {lower upp
 /-- The suspended knot created by Fix is typed using the same recursive address
 as both the lexical self binding and the resulting target. No evaluation or
 termination of that knot is required by this construction. -/
-def reusable_fix_body {assumptions : Assumptions} {context : Context} {spec seed : Term}
+@[expose] public def reusable_fix_body {assumptions : Assumptions} {context : Context} {spec seed : Term}
     {specType inherited target : Ty} {su iu : Uses}
     (specTyped : PartialTyping assumptions context spec specType su)
     (specCallable : callable specType = .arrow .reusable .unrestricted target (.arrow .reusable .unrestricted inherited target))
@@ -241,7 +242,7 @@ theorem source_mix_expansion {assumptions : Assumptions} {context : Context}
 
 /-- Evaluating every checked mix, including source result conversions, preserves
 its actual lexical capture qualification and the executor's generated body. -/
-theorem typed_mix_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_mix_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {lower upper : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.mix lower upper) environment) :
@@ -293,7 +294,7 @@ theorem source_fix_expansion {assumptions : Assumptions} {context : Context}
 /-- Generic Fix preserves typed address assignments at its actual cyclic
 allocation. The suspended origin contains the new address, preserving the
 recursive self type and capture quantities without any termination premise. -/
-theorem typed_fix_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_fix_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {spec seed : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.fix spec seed) environment) :
@@ -325,7 +326,7 @@ theorem typed_fix_preserved {assumptions : Assumptions} {types : AddressTypes}
 
 /-- Bound-variable demand preserves the actual immutable address type; source
 conversions move into the continuation instead of retyping the heap identity. -/
-theorem typed_bound_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_bound_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {index : Nat} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.bound index) environment) :
@@ -380,7 +381,7 @@ theorem source_application_decomposition {assumptions : Assumptions} {context : 
 /-- Focusing the function of ANY well-typed application keeps both lexical
 origins, safely splits the usage vector, and retains copy/shareability evidence
 on the actual argument continuation. -/
-theorem typed_application_focus_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_application_focus_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {function argument : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.app function argument) environment) :
@@ -406,7 +407,7 @@ theorem typed_application_focus_preserved {assumptions : Assumptions} {types : A
 
 /-- Evaluating any immediate source value preserves its assigned result type,
 including captured reusable/once lambdas and both String and Bool scalars. -/
-theorem typed_immediate_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_immediate_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {term : Term} {environment : Environment} {value : RuntimeValue}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate term environment)
@@ -428,7 +429,7 @@ theorem typed_immediate_preserved {assumptions : Assumptions} {types : AddressTy
 /-- Updating a demanded thunk stores a value of the thunk's original assigned
 source type. BusyInvariant supplies the actual evaluating origin; no arbitrary
 update-validity oracle is needed. -/
-theorem typed_update_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_update_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {address : Address} {value : RuntimeValue} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
     (returned : state.control = .returned value)
@@ -454,7 +455,7 @@ theorem typed_update_preserved {assumptions : Assumptions} {types : AddressTypes
 
 /-- A returned value with no pending demand frames completes at the promised
 result type. Completion itself makes no termination assertion about the source. -/
-theorem typed_completion_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_completion_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue}
     (typed : StateTyping assumptions types state result)
     (returned : state.control = .returned value) (empty : state.stack = []) :

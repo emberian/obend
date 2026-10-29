@@ -1,3 +1,4 @@
+module
 /- Settling a checkpoint changes no transition. Definitions: `settle`, `checkpoint` in
 `Obend.Core.Collect`.
 
@@ -15,7 +16,7 @@ relation is `Agree s t`: erasing every cached origin (`eraseState`) makes them e
   same address types (the self origin is typed at the cell's own type).
 * `settle_resume_segment`: the kernel's segment from a settled state agrees with the
   segment from the state it settled. -/
-import Obend.Core.Proofs.Collect
+public import Obend.Core.Proofs.Collect
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -29,43 +30,43 @@ open Obend.Core.Invariant
 /-! ## Erasing cached origins -/
 
 /-- Forget a cached cell's origin. -/
-def eraseCell : Cell → Cell
+@[expose] public def eraseCell : Cell → Cell
   | .cached _ value => .cached ⟨.nat 0, []⟩ value
   | cell => cell
 
-@[simp] theorem eraseCell_eraseCell (cell : Cell) : eraseCell (eraseCell cell) = eraseCell cell := by
+@[simp] public theorem eraseCell_eraseCell (cell : Cell) : eraseCell (eraseCell cell) = eraseCell cell := by
   cases cell <;> rfl
 
-@[simp] theorem eraseCell_suspended (origin : Closure) : eraseCell (.suspended origin) = .suspended origin := rfl
-@[simp] theorem eraseCell_evaluating (origin : Closure) : eraseCell (.evaluating origin) = .evaluating origin := rfl
-@[simp] theorem eraseCell_cached (origin : Closure) (value : RuntimeValue) :
+@[simp] public theorem eraseCell_suspended (origin : Closure) : eraseCell (.suspended origin) = .suspended origin := rfl
+@[simp] public theorem eraseCell_evaluating (origin : Closure) : eraseCell (.evaluating origin) = .evaluating origin := rfl
+@[simp] public theorem eraseCell_cached (origin : Closure) (value : RuntimeValue) :
     eraseCell (.cached origin value) = .cached ⟨.nat 0, []⟩ value := rfl
 
-@[simp] theorem eraseCell_comp : eraseCell ∘ eraseCell = eraseCell := by
+@[simp] public theorem eraseCell_comp : eraseCell ∘ eraseCell = eraseCell := by
   funext cell; simp
 
-def eraseState (state : State) : State := ⟨state.heap.map eraseCell, state.control, state.stack⟩
+@[expose] public def eraseState (state : State) : State := ⟨state.heap.map eraseCell, state.control, state.stack⟩
 
 /-- Two states agree up to the origins of cached cells. -/
-def Agree (s t : State) : Prop := eraseState s = eraseState t
+@[expose] public def Agree (s t : State) : Prop := eraseState s = eraseState t
 
-theorem Agree.refl (s : State) : Agree s s := rfl
-theorem Agree.symm {s t : State} (agree : Agree s t) : Agree t s := Eq.symm agree
-theorem Agree.trans {s t u : State} (one : Agree s t) (two : Agree t u) : Agree s u := Eq.trans one two
+public theorem Agree.refl (s : State) : Agree s s := rfl
+public theorem Agree.symm {s t : State} (agree : Agree s t) : Agree t s := Eq.symm agree
+public theorem Agree.trans {s t u : State} (one : Agree s t) (two : Agree t u) : Agree s u := Eq.trans one two
 
-theorem Agree.control {s t : State} (agree : Agree s t) : s.control = t.control := by
+public theorem Agree.control {s t : State} (agree : Agree s t) : s.control = t.control := by
   have same := congrArg State.control (show eraseState s = eraseState t from agree)
   simpa [eraseState] using same
-theorem Agree.stack {s t : State} (agree : Agree s t) : s.stack = t.stack := by
+public theorem Agree.stack {s t : State} (agree : Agree s t) : s.stack = t.stack := by
   have same := congrArg State.stack (show eraseState s = eraseState t from agree)
   simpa [eraseState] using same
-theorem Agree.heap {s t : State} (agree : Agree s t) : s.heap.map eraseCell = t.heap.map eraseCell :=
+public theorem Agree.heap {s t : State} (agree : Agree s t) : s.heap.map eraseCell = t.heap.map eraseCell :=
   congrArg State.heap (show eraseState s = eraseState t from agree)
-theorem Agree.size {s t : State} (agree : Agree s t) : s.heap.size = t.heap.size := by
+public theorem Agree.size {s t : State} (agree : Agree s t) : s.heap.size = t.heap.size := by
   have := congrArg Array.size agree.heap
   simpa using this
 
-theorem Agree.mk' {s t : State} (heap : s.heap.map eraseCell = t.heap.map eraseCell)
+public theorem Agree.mk' {s t : State} (heap : s.heap.map eraseCell = t.heap.map eraseCell)
     (control : s.control = t.control) (stack : s.stack = t.stack) : Agree s t := by
   unfold Agree eraseState; rw [heap, control, stack]
 
@@ -136,13 +137,13 @@ theorem erase_stepRaw (s : State) : eraseState (stepRaw (eraseState s)) = eraseS
         simp [stepRaw, eraseState, Array.map_map, erase_allocateFields] <;>
           (repeat' split) <;> simp [Array.map_map, Array.map_push]
 
-theorem agree_stepRaw {s t : State} (agree : Agree s t) : Agree (stepRaw s) (stepRaw t) := by
+public theorem agree_stepRaw {s t : State} (agree : Agree s t) : Agree (stepRaw s) (stepRaw t) := by
   unfold Agree
   rw [← erase_stepRaw s, ← erase_stepRaw t, agree]
 
 /-! ## Bounded runs agree exactly -/
 
-def eraseOutcome : Outcome → Outcome
+@[expose] public def eraseOutcome : Outcome → Outcome
   | .finished value state => .finished value (eraseState state)
   | .suspended reason state => .suspended reason (eraseState state)
   | .divergent address state => .divergent address (eraseState state)
@@ -150,7 +151,7 @@ def eraseOutcome : Outcome → Outcome
   | .yielded plan state => .yielded plan (eraseState state)
 
 /-- Outcomes agree: same constructor, same payload, agreeing retained states. -/
-def OutcomeAgree (o o' : Outcome) : Prop := eraseOutcome o = eraseOutcome o'
+@[expose] public def OutcomeAgree (o o' : Outcome) : Prop := eraseOutcome o = eraseOutcome o'
 
 theorem agree_step (limits : Limits) {s t : State} (agree : Agree s t) :
     OutcomeAgree (step limits s) (step limits t) := by
@@ -198,7 +199,7 @@ theorem agree_runBounded (limits : Limits) :
           Outcome.refused.injEq, Outcome.yielded.injEq, reduceCtorEq] at stepped
       all_goals (obtain ⟨same, rest⟩ := stepped; subst same; simp only [OutcomeAgree, eraseOutcome, rest])
 
-theorem agree_resume {s t : State} (agree : Agree s t) (response : Term) {s' : State}
+public theorem agree_resume {s t : State} (agree : Agree s t) (response : Term) {s' : State}
     (resumed : resume response s = some s') :
     ∃ t', resume response t = some t' ∧ Agree s' t' := by
   obtain ⟨plan, yielded⟩ := resume_requires_yield response s (by rw [resumed]; rfl)
@@ -261,7 +262,7 @@ theorem agree_forceWith {policy : State → Bool}
                      exact ⟨by simp only [continueForce, OutcomeAgree, eraseOutcome, rest], rfl⟩)
 
 /-- Extraction results agree: same Data, same remaining budget, agreeing states. -/
-def ResultAgree (r r' : Result) : Prop :=
+@[expose] public def ResultAgree (r r' : Result) : Prop :=
   r'.value = r.value ∧ r'.remaining = r.remaining ∧ Agree r.state r'.state
 
 theorem foldlM_agree
@@ -497,14 +498,14 @@ theorem settle_heap_erased (state : State) :
   | some cell => cases cell <;> rfl
 
 /-- **A settled state agrees with the state it settled.** -/
-theorem agree_settle (state : State) : Agree state (settle state) :=
+public theorem agree_settle (state : State) : Agree state (settle state) :=
   Agree.mk' (settle_heap_erased state).symm rfl rfl
 
 theorem settle_getElem? (state : State) (address : Nat) :
     (settle state).heap[address]? = (state.heap[address]?).map (settleCell address) := by
   simp [settle, Array.getElem?_mapIdx]
 
-@[simp] theorem settle_size (state : State) : (settle state).heap.size = state.heap.size := by
+@[simp] public theorem settle_size (state : State) : (settle state).heap.size = state.heap.size := by
   simp [settle]
 
 /-- **Resuming a settled state ends as resuming the state it settled**: with any
@@ -518,7 +519,7 @@ theorem settle_resume_runBounded {state resumed : State} {response : Term}
 
 /-- The self origin is typed at the cell's own assigned type: the closure `bound 0`
 over the one-address environment `[address]`, its binding affine (read at most once). -/
-def selfOriginTyping (assumptions : Assumptions) {types : AddressTypes} {address : Nat} {type : Ty}
+@[expose] public def selfOriginTyping (assumptions : Assumptions) {types : AddressTypes} {address : Nat} {type : Ty}
     (assigned : types[address]? = some type) : ClosureTyping assumptions types (selfOrigin address) type where
   context := [⟨type, .affine⟩]
   uses := variableUses [⟨type, .affine⟩] 0
@@ -527,7 +528,7 @@ def selfOriginTyping (assumptions : Assumptions) {types : AddressTypes} {address
   safe := by simp [safeUses, variableUses, safeQuantity]
   contextValid := by simp [validContext]
 
-theorem heapTyping_settle {assumptions : Assumptions} {types : AddressTypes} {state : State}
+public theorem heapTyping_settle {assumptions : Assumptions} {types : AddressTypes} {state : State}
     (typed : HeapTyping assumptions types state.heap) : HeapTyping assumptions types (settle state).heap := by
   refine ⟨by simp [typed.length], ?_⟩
   intro address type assigned
@@ -538,7 +539,7 @@ theorem heapTyping_settle {assumptions : Assumptions} {types : AddressTypes} {st
   | evaluating origin pure => exact .evaluating origin pure
   | cached origin value pure => exact .cached (selfOriginTyping assumptions assigned) value pure
 
-theorem lexical_settle {state : State} (lexical : LexicalInvariant state) : LexicalInvariant (settle state) := by
+public theorem lexical_settle {state : State} (lexical : LexicalInvariant state) : LexicalInvariant (settle state) := by
   obtain ⟨cells, control, frames⟩ := lexical
   refine ⟨?_, by rw [settle_size]; exact control, by rw [settle_size]; exact frames⟩
   intro address cell found
@@ -561,7 +562,7 @@ theorem lexical_settle {state : State} (lexical : LexicalInvariant state) : Lexi
       simp only [selfOrigin, List.mem_singleton] at member
       subst member; exact bound
 
-theorem busy_settle {state : State} (busy : BusyInvariant state) : BusyInvariant (settle state) := by
+public theorem busy_settle {state : State} (busy : BusyInvariant state) : BusyInvariant (settle state) := by
   refine ⟨busy.1, ?_⟩
   intro address
   show address ∈ stackUpdates state.stack ↔ ∃ origin, (settle state).heap[address]? = some (.evaluating origin)
@@ -571,7 +572,7 @@ theorem busy_settle {state : State} (busy : BusyInvariant state) : BusyInvariant
   | some cell => cases cell <;> simp [settleCell]
 
 /-- **A settled state is typed at the same address types.** -/
-def typed_settle {assumptions : Assumptions} {types : AddressTypes} {state : State} {result : Ty}
+@[expose] public def typed_settle {assumptions : Assumptions} {types : AddressTypes} {state : State} {result : Ty}
     (typed : StateTyping assumptions types state result) : StateTyping assumptions types (settle state) result where
   current := typed.current
   heap := heapTyping_settle typed.heap
@@ -587,7 +588,7 @@ def typed_settle {assumptions : Assumptions} {types : AddressTypes} {state : Sta
 /-- **The kernel's segment from a settled state** agrees exactly with the segment from
 the state it settled: the same Plan address and Plan Data, the same result Data, the
 same divergence and refusal, and agreeing retained states. -/
-theorem settle_resume_segment {state resumed : State} {response : Term}
+public theorem settle_resume_segment {state resumed : State} {response : Term}
     (yielded : resume response state = some resumed) (limits : Limits) (ticks : Nat) (budget : Budget) :
     ∃ resumed', resume response (settle state) = some resumed' ∧
       (∀ plan y r, runBounded limits ticks resumed = .yielded plan y → yieldedPlan limits budget y = .ok r →

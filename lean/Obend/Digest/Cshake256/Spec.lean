@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Digest.Cshake256.Spec -- the cSHAKE256 specification
 
@@ -29,6 +30,7 @@ byte.  The total Lean function extends framing outside that standard domain by
 truncating the width byte with `UInt8.ofNat`; ordinary finite protocol frames
 are far inside the standard bound.
 -/
+@[expose] public section
 
 
 namespace Obend.Digest.Cshake256
@@ -300,3 +302,5 @@ theorem cshake256Bytes_eq_indexed (customization input : List UInt8) :
   simp [cshake256Bytes]
 
 end Obend.Digest.Cshake256
+
+end

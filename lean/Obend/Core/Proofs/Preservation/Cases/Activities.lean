@@ -1,18 +1,19 @@
+module
 /- Preservation cases: Activities. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
 
 /-- A perform's derivation: its plan is typed at a Plan sum and its activity
 type reaches the derivation's type along a finite conversion path. -/
-def PerformDerivation (assumptions : Assumptions) (context : Context) (plan : Term) (type : Ty) (uses : Uses) : Prop :=
+@[expose] public def PerformDerivation (assumptions : Assumptions) (context : Context) (plan : Term) (type : Ty) (uses : Uses) : Prop :=
   ∃ planType response, PartialTyping assumptions context plan planType uses ∧
     planType.isPlan = true ∧ response.isData = true ∧
     ConversionPath assumptions (.computation planType response response) type
 
-def DoneDerivation (assumptions : Assumptions) (context : Context) (value : Term) (type : Ty) (uses : Uses) : Prop :=
+@[expose] public def DoneDerivation (assumptions : Assumptions) (context : Context) (value : Term) (type : Ty) (uses : Uses) : Prop :=
   ∃ planType response result, PartialTyping assumptions context value result uses ∧
     result.isComputation = false ∧ ConversionPath assumptions (.computation planType response result) type
 
@@ -90,7 +91,7 @@ theorem stack_activity_no_update {assumptions : Assumptions} {types : AddressTyp
 
 /-- A perform outside every shared cell allocates its plan cell at the Plan
 type and yields at its exact activity type; the stack is untouched. -/
-theorem typed_perform_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_perform_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {plan : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.perform plan) environment) :
@@ -121,7 +122,7 @@ theorem typed_perform_preserved {assumptions : Assumptions} {types : AddressType
 
 /-- `done v` continues with `v` at its pure type: the continuation, which
 awaits an activity of that type, accepts it by `returns`. -/
-theorem typed_done_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_done_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.done value) environment) :
@@ -158,7 +159,7 @@ theorem yielded_control_type {assumptions : Assumptions} {types : AddressTypes} 
 
 /-- A typed yielded state awaits no shared cell: no frame forces one, and no
 cell is half-evaluated. Every yield is a quiescent safe point. -/
-theorem typed_yield_quiescent {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_yield_quiescent {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {plan : Address}
     (typed : StateTyping assumptions types state result) (yielded : state.control = .yielded plan) :
     forcingShared state.stack = false ∧
@@ -211,7 +212,7 @@ theorem stack_activity_signature {assumptions : Assumptions} {types : AddressTyp
 /-- Resuming a typed yield with a closed response typed at the PROGRAM's
 declared response type yields a typed state: the response is evaluated at the
 yield's response type and the untouched continuation takes it by `returns`. -/
-theorem typed_resume_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_resume_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state next : State} {plan : Address} {response : Term}
     {entryPlan entryResponse entryResult : Ty} {uses : Uses}
     (typed : StateTyping assumptions types state (.computation entryPlan entryResponse entryResult))

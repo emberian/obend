@@ -1,3 +1,4 @@
+module
 /- Templates over rigid Self/Super (OB-LTUO LT2, docs/objective-bend/MODULAR-TYPING.md §6).
 
 Step 2: `canonical_instantiate`. The checker compares types by `Ty.canonical` (sorted
@@ -12,9 +13,9 @@ including the override case (a tail instantiated with a row that repeats a liste
 field: the listed one, which is first, wins on both sides). No sortedness premise is
 needed: `insertCanonical` is first-match, and the two facts it rests on
 (`insertCanonical_same`, `insertCanonical_comm`) hold for every row. -/
-import Obend.Core.Ty
-import Obend.Core.Check
-import Obend.AxiomPin
+public import Obend.Core.Ty
+public import Obend.Core.Check
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Templates
 open Obend.Core.Ty
 set_option autoImplicit false
@@ -117,20 +118,20 @@ additional lookup depth (a wider row may hide a member deeper than the bound did
 
 open Obend.Core.Check Obend.Core.Term
 
-def instantiateAnnotation (σ : Nat → Ty) (annotation : LambdaAnnotation) : LambdaAnnotation :=
+@[expose] public def instantiateAnnotation (σ : Nat → Ty) (annotation : LambdaAnnotation) : LambdaAnnotation :=
   { annotation with domain := annotation.domain.instantiate σ, codomain := annotation.codomain.instantiate σ }
 
-def instantiateAnnotations (σ : Nat → Ty) (annotations : Annotations) : Annotations :=
+@[expose] public def instantiateAnnotations (σ : Nat → Ty) (annotations : Annotations) : Annotations :=
   fun position => (annotations position).map (instantiateAnnotation σ)
 
-def instantiateContext (σ : Nat → Ty) (context : Context) : Context :=
+@[expose] public def instantiateContext (σ : Nat → Ty) (context : Context) : Context :=
   context.map fun binding => ⟨binding.type.instantiate σ, binding.quantity⟩
 
 /-- What an instance must discharge. Non-rigid variables are left alone and keep their
 bounds (which mention no rigid variable); each rigid variable's image supports its bound
 (every member the bound discloses, at the bound's member type instantiated, and row-ness),
 is shareable exactly when the template assumed it shareable, and is never an activity. -/
-structure Discharges (σ : Nat → Ty) (template instance_ : Assumptions) (extra : Nat) : Prop where
+public structure Discharges (σ : Nat → Ty) (template instance_ : Assumptions) (extra : Nat) : Prop where
   fixed : ∀ j, j ∉ template.rigid → σ j = .variable j
   bounds : ∀ j, j ∉ template.rigid → instance_.bounds.lookup j = template.bounds.lookup j
   aliases : ∀ j, j ∉ template.rigid → instance_.alias j = template.alias j
@@ -1067,12 +1068,12 @@ deeper than in the bound, so `extra = 1`) discharges the bounds, so `check_insta
 accepts it without re-checking. The tooth: a template that returns `self` where the bound
 ROW is declared is accepted by the alias checker and refused by the rigid one. -/
 
-def weightBound : Ty := .field "weight" .natural .emptyRow
-def colouredRow : Ty := .field "colour" .label (.field "weight" .natural .emptyRow)
-def templateAssumptions : Assumptions := ⟨[(5, weightBound)], [5], [5]⟩
-def colouredSelf : Nat → Ty := fun j => if j = 5 then colouredRow else .variable j
+@[expose] public def weightBound : Ty := .field "weight" .natural .emptyRow
+@[expose] public def colouredRow : Ty := .field "colour" .label (.field "weight" .natural .emptyRow)
+@[expose] public def templateAssumptions : Assumptions := ⟨[(5, weightBound)], [5], [5]⟩
+@[expose] public def colouredSelf : Nat → Ty := fun j => if j = 5 then colouredRow else .variable j
 
-def weightTemplate : AnnotatedTerm :=
+@[expose] public def weightTemplate : AnnotatedTerm :=
   ⟨.lam (.get (.bound 0) "weight"),
     fun position => if position = [] then some ⟨.variable 5, .natural, .unrestricted, .reusable⟩ else none,
     templateAssumptions⟩
@@ -1146,7 +1147,7 @@ theorem coloured_instance_accepted :
 
 /-- D2's tooth: `self` returned where the bound row is declared. The alias checker (the
 emitted program's) accepts it; the rigid checker (the template's) refuses it. -/
-def selfAsBoundRow (rigid : List Nat) : AnnotatedTerm :=
+@[expose] public def selfAsBoundRow (rigid : List Nat) : AnnotatedTerm :=
   ⟨.lam (.bound 0),
     fun position => if position = [] then some ⟨.variable 5, weightBound, .unrestricted, .reusable⟩ else none,
     ⟨[(5, weightBound)], [5], rigid⟩⟩

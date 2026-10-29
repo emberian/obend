@@ -1,3 +1,4 @@
+module
 /- A pending closed demand (forcing transparency, part 3).
 
 `PendRel e f σ τ`: the forced state `τ` is the lazy state `σ` renamed by `f`, except
@@ -16,7 +17,7 @@ in `τ` at `e.base`'s end. `e` reads nothing but `e.cell` and cached cells of `e
   (heap within `e.gap` of a lazy state no earlier, stack no deeper), and the final
   states are still pending or, once the lazy run entered `e.cell`, agree exactly, the
   forced run then STRICTLY shorter. -/
-import Obend.Core.Proofs.Forcing.Nest
+public import Obend.Core.Proofs.Forcing.Nest
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -24,18 +25,18 @@ open Obend.Core.Collect
 open Obend.Core.Invariant (PreservesCached stepRaw_preservesCached)
 set_option autoImplicit false
 
-def everywhere : Nat → Prop := fun _ => True
+@[expose] public def everywhere : Nat → Prop := fun _ => True
 
-theorem allIn_everywhere (l : List Nat) : AllIn everywhere l := fun _ _ => trivial
+public theorem allIn_everywhere (l : List Nat) : AllIn everywhere l := fun _ _ => trivial
 
 /-! ## Runs: monotone sizes, kept cells, validity -/
 
-theorem exec_size_mono (s : State) (n : Nat) : s.heap.size ≤ (exec n s).heap.size := by
+public theorem exec_size_mono (s : State) (n : Nat) : s.heap.size ≤ (exec n s).heap.size := by
   induction n with
   | zero => exact Nat.le_refl _
   | succ n ih => rw [exec_succ]; exact Nat.le_trans ih (stepRaw_size_mono _)
 
-theorem exec_heap_keep (s : State) {a : Nat} (bound : a < s.heap.size) :
+public theorem exec_heap_keep (s : State) {a : Nat} (bound : a < s.heap.size) :
     ∀ n, (∀ j, j < n → readsAt (exec j s) ≠ some a) → (exec n s).heap[a]? = s.heap[a]? := by
   intro n
   induction n with
@@ -45,17 +46,17 @@ theorem exec_heap_keep (s : State) {a : Nat} (bound : a < s.heap.size) :
     rw [exec_succ, stepRaw_heap_keep _ (Nat.lt_of_lt_of_le bound (exec_size_mono s n)) (unread n (by omega)),
       ih (fun j lt => unread j (by omega))]
 
-theorem exec_preservesCached (s : State) (n : Nat) : PreservesCached s.heap (exec n s).heap := by
+public theorem exec_preservesCached (s : State) (n : Nat) : PreservesCached s.heap (exec n s).heap := by
   induction n with
   | zero => exact fun _ _ _ h => h
   | succ n ih => rw [exec_succ]; exact fun a o v h => stepRaw_preservesCached _ a o v (ih a o v h)
 
-theorem addrValid_exec {s : State} (valid : AddrValid s) (n : Nat) : AddrValid (exec n s) := by
+public theorem addrValid_exec {s : State} (valid : AddrValid s) (n : Nat) : AddrValid (exec n s) := by
   induction n with
   | zero => exact valid
   | succ n ih => rw [exec_succ]; exact addrValid_stepRaw ih
 
-theorem halts_succ {s : State} {n : Nat} (active : active s.control = true) (h : Halts (stepRaw s) n) :
+public theorem halts_succ {s : State} {n : Nat} (active : active s.control = true) (h : Halts (stepRaw s) n) :
     Halts s (n + 1) := by
   refine ⟨fun j lt => ?_, ?_⟩
   · cases j with
@@ -64,26 +65,26 @@ theorem halts_succ {s : State} {n : Nat} (active : active s.control = true) (h :
   · rw [exec_succ']; exact h.2
 where exec_succ' {s : State} {n : Nat} : exec (n + 1) s = exec n (stepRaw s) := rfl
 
-theorem halts_tail {s : State} {n : Nat} (h : Halts s (n + 1)) : Halts (stepRaw s) n :=
+public theorem halts_tail {s : State} {n : Nat} (h : Halts s (n + 1)) : Halts (stepRaw s) n :=
   ⟨fun j lt => h.1 (j + 1) (by omega), h.2⟩
 
-theorem halts_drop {s : State} {n m : Nat} (h : Halts s (m + n)) : Halts (exec m s) n := by
+public theorem halts_drop {s : State} {n m : Nat} (h : Halts s (m + n)) : Halts (exec m s) n := by
   refine ⟨fun j lt => ?_, ?_⟩
   · rw [← exec_add]; exact h.1 (m + j) (by omega)
   · rw [← exec_add]; exact h.2
 
 /-- Forced states are bounded by lazy states no earlier. -/
-def Bounded (σ τ : State) (n n' gap : Nat) : Prop :=
+@[expose] public def Bounded (σ τ : State) (n n' gap : Nat) : Prop :=
   ∀ j', j' ≤ n' → ∃ j, j ≤ n ∧ j' ≤ j ∧ (exec j' τ).heap.size ≤ (exec j σ).heap.size + gap ∧
     (exec j' τ).stack.length ≤ (exec j σ).stack.length
 
 /-- Every forced address up to the heap end is an image. -/
-def Covers (f : Nat → Nat) (H T : Array Cell) : Prop := ∀ b, b < T.size → ∃ a, a < H.size ∧ f a = b
+@[expose] public def Covers (f : Nat → Nat) (H T : Array Cell) : Prop := ∀ b, b < T.size → ∃ a, a < H.size ∧ f a = b
 
 /-! ## Agreement without exception -/
 
 /-- The lazy and forced states agree under `f` with no exception. -/
-structure AgreeRel (f : Nat → Nat) (σ τ : State) : Prop where
+public structure AgreeRel (f : Nat → Nat) (σ τ : State) : Prop where
   agree : StateAgree f everywhere (fun _ => False) σ τ
   valid : AddrValid σ
 
@@ -107,7 +108,7 @@ theorem agree_covers_step {f : Nat → Nat} {σ τ σ' τ' : State}
     omega
 
 /-- **Agreeing runs halt together and keep agreeing.** -/
-theorem agree_transfer {f : Nat → Nat} {σ τ : State} (rel : AgreeRel f σ τ) {n : Nat} (halts : Halts σ n) :
+public theorem agree_transfer {f : Nat → Nat} {σ τ : State} (rel : AgreeRel f σ τ) {n : Nat} (halts : Halts σ n) :
     Halts τ n ∧ AgreeRel f (exec n σ) (exec n τ) ∧
       (∀ j, j ≤ n → (exec j τ).heap.size + σ.heap.size = (exec j σ).heap.size + τ.heap.size ∧
         (exec j τ).stack.length = (exec j σ).stack.length) ∧
@@ -123,14 +124,14 @@ theorem agree_transfer {f : Nat → Nat} {σ τ : State} (rel : AgreeRel f σ τ
 /-! ## The pending demand -/
 
 /-- The cells a pending demand may read: its own cell and cached cells of its base. -/
-def Footprint (B : Array Cell) (y a : Nat) : Prop := a = y ∨ ∃ o w, B[a]? = some (.cached o w)
+@[expose] public def Footprint (B : Array Cell) (y a : Nat) : Prop := a = y ∨ ∃ o w, B[a]? = some (.cached o w)
 
 /-- The closed demand of `y` on `B` reads, of `B`'s cells, only its footprint. -/
-def PreShallow (B : Array Cell) (y n : Nat) : Prop :=
+@[expose] public def PreShallow (B : Array Cell) (y n : Nat) : Prop :=
   ∀ j, j < n → ∀ a, readsAt (exec j (demandStart B y)) = some a → a < B.size → Footprint B y a
 
 /-- A pending closed demand and its result. -/
-structure Pending where
+public structure Pending where
   base : Array Cell
   cell : Nat
   steps : Nat
@@ -138,17 +139,17 @@ structure Pending where
   value : RuntimeValue
   origin : Closure
 
-structure Pending.Valid (e : Pending) : Prop where
+public structure Pending.Valid (e : Pending) : Prop where
   demand : Demand e.base e.cell e.steps e.final e.value
   susp : e.base[e.cell]? = some (.suspended e.origin)
   shallow : PreShallow e.base e.cell e.steps
   baseValid : HeapValid e.base
 
 /-- How many cells the pending demand allocates. -/
-def Pending.gap (e : Pending) : Nat := e.final.size - e.base.size
+@[expose] public def Pending.gap (e : Pending) : Nat := e.final.size - e.base.size
 
 /-- The lazy heap with `e` pending, against the forced heap. -/
-structure PendHeap (e : Pending) (f : Nat → Nat) (Hσ Hτ : Array Cell) : Prop where
+public structure PendHeap (e : Pending) (f : Nat → Nat) (Hσ Hτ : Array Cell) : Prop where
   valid : e.Valid
   grows : e.base.size ≤ Hσ.size
   cellKept : Hσ[e.cell]? = some (.suspended e.origin)
@@ -159,7 +160,7 @@ structure PendHeap (e : Pending) (f : Nat → Nat) (Hσ Hτ : Array Cell) : Prop
   block : ∀ a, e.base.size ≤ a → a < e.final.size → Hτ[a]? = e.final[a]?
   cached : Hτ[e.cell]? = e.final[e.cell]?
 
-structure PendRel (e : Pending) (f : Nat → Nat) (σ τ : State) : Prop where
+public structure PendRel (e : Pending) (f : Nat → Nat) (σ τ : State) : Prop where
   heap : PendHeap e f σ.heap τ.heap
   control : τ.control = renameControl f σ.control
   stack : τ.stack = σ.stack.map (renameFrame f)
@@ -169,19 +170,19 @@ theorem PendRel.stateAgree {e : Pending} {f : Nat → Nat} {σ τ : State} (rel 
     StateAgree f everywhere (· = e.cell) σ τ :=
   ⟨rel.heap.agree, allIn_everywhere _, rel.control, fun _ _ => allIn_everywhere _, rel.stack⟩
 
-theorem Pending.final_ge {e : Pending} (valid : e.Valid) : e.base.size ≤ e.final.size := by
+public theorem Pending.final_ge {e : Pending} (valid : e.Valid) : e.base.size ≤ e.final.size := by
   have := exec_size_mono (demandStart e.base e.cell) e.steps
   rw [valid.demand.final] at this; exact this
 
-theorem Pending.cell_lt {e : Pending} (valid : e.Valid) : e.cell < e.base.size := bound_of_some valid.susp
+public theorem Pending.cell_lt {e : Pending} (valid : e.Valid) : e.cell < e.base.size := bound_of_some valid.susp
 
-theorem PendHeap.sizes {e : Pending} {f : Nat → Nat} {Hσ Hτ : Array Cell} (ph : PendHeap e f Hσ Hτ) :
+public theorem PendHeap.sizes {e : Pending} {f : Nat → Nat} {Hσ Hτ : Array Cell} (ph : PendHeap e f Hσ Hτ) :
     Hτ.size = Hσ.size + e.gap := by
   have := ph.agree.image_size.1
   rw [ph.mapNew _ ph.grows] at this; omega
 
 /-- The renaming never lands in the pending demand's block. -/
-theorem PendHeap.not_block {e : Pending} {f : Nat → Nat} {Hσ Hτ : Array Cell} (ph : PendHeap e f Hσ Hτ) (a : Nat) :
+public theorem PendHeap.not_block {e : Pending} {f : Nat → Nat} {Hσ Hτ : Array Cell} (ph : PendHeap e f Hσ Hτ) (a : Nat) :
     f a < e.base.size ∨ e.final.size ≤ f a := by
   have ge := Pending.final_ge ph.valid
   by_cases lt : a < e.base.size
@@ -197,7 +198,7 @@ theorem PendHeap.f_eq_cell {e : Pending} {f : Nat → Nat} {Hσ Hτ : Array Cell
   · rw [ph.mapNew a (by omega)] at eq; unfold Pending.gap at eq; omega
 
 /-- **A lazy transition that does not read the pending cell keeps the relation.** -/
-theorem pend_step {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : PendRel e f σ τ)
+public theorem pend_step {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : PendRel e f σ τ)
     (unread : readsAt σ ≠ some e.cell) : PendRel e f (stepRaw σ) (stepRaw τ) := by
   have ph := rel.heap
   have next := agree_stepRaw rel.stateAgree (fun a reads isCell => unread (isCell ▸ reads))

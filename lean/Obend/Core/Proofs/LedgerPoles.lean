@@ -1,3 +1,4 @@
+module
 /- Named poles for the Objective Bend families the hypothesis ledger reads.
 
 `scripts/HypothesisLedger.lean` now imports the `ObjectiveProofs` modules (through
@@ -6,7 +7,7 @@ every lexically valid yield), so it reads
 four families it never saw before, each consumed and each TOOTHLESS: no named instance
 showed it can hold AND can fail. These are those instances, one satisfying and one
 refuting per family, over the real definitions. -/
-import Obend.Core.Proofs.Preservation
+public import Obend.Core.Proofs.Preservation
 namespace Obend.Core.Proofs.LedgerPoles
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -32,7 +33,7 @@ theorem not_meaningsScoped_open : ¬ MeaningsScoped 1 (fun _ => .bound 0) := by
 
 /-! ## `EvaluatingSegment` -/
 
-def poleEntered : State := ⟨#[.suspended ⟨.nat 1, []⟩], .enter 0, []⟩
+@[expose] public def poleEntered : State := ⟨#[.suspended ⟨.nat 1, []⟩], .enter 0, []⟩
 
 /-- Entering a suspended cell starts its evaluating segment. -/
 theorem evaluatingSegment_started :

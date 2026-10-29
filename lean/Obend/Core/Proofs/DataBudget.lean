@@ -1,4 +1,7 @@
-/- Executable witnesses for remaining budgets, including failed forcing. -/
+/- Executable witnesses for remaining budgets, including failed forcing.
+A legacy (non-`module`) leaf: every theorem here evaluates the machine by `change`/`rfl`/`decide`, which
+under Lean v4.30.0's module system cannot see `Init`'s bodies for the `Array` functions the machine runs.
+Nothing imports this module. -/
 import Obend.Core.Data
 
 namespace Obend.Core.Data

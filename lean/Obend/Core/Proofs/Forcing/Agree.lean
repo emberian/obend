@@ -1,3 +1,4 @@
+module
 /- Agreement up to renaming, except on cells a run never reads.
 
 `StateAgree f D U s t`: `t` is `s` renamed by `f` on the domain `D` (which contains
@@ -10,7 +11,7 @@ This generalizes `Obend.Core.Collect.Related` (the collect relation, `U` empty,
 the image heap no larger) to the shapes the forcing-transparency proof needs: the forced
 heap may be LARGER (it holds the cells a demand allocated), and a cell may be suspended
 on one side and cached on the other while nothing reads it. -/
-import Obend.Core.Proofs.Collect
+public import Obend.Core.Proofs.Collect
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -18,14 +19,14 @@ open Obend.Core.Collect
 set_option autoImplicit false
 
 /-- Heaps agree under `f` on `D`, except at `U`. -/
-structure HeapAgree (f : Nat → Nat) (D U : Nat → Prop) (heap heap' : Array Cell) : Prop where
+public structure HeapAgree (f : Nat → Nat) (D U : Nat → Prop) (heap heap' : Array Cell) : Prop where
   beyond : ∀ a, heap.size ≤ a → D a ∧ ¬ U a ∧ f a + heap.size = a + heap'.size
   inj : ∀ a b, D a → D b → f a = f b → a = b
   cells : ∀ a, D a → ¬ U a → a < heap.size →
     ∃ c, heap[a]? = some c ∧ heap'[f a]? = some (renameCell f c) ∧ AllIn D (cellAddresses c)
 
 /-- States agree: heaps agree, control and stack are renamed. -/
-structure StateAgree (f : Nat → Nat) (D U : Nat → Prop) (s t : State) : Prop where
+public structure StateAgree (f : Nat → Nat) (D U : Nat → Prop) (s t : State) : Prop where
   heap : HeapAgree f D U s.heap t.heap
   controlIn : AllIn D (controlAddresses s.control)
   control : t.control = renameControl f s.control
@@ -34,19 +35,19 @@ structure StateAgree (f : Nat → Nat) (D U : Nat → Prop) (s t : State) : Prop
 
 /-- The heap cell a transition reads: the entered address, or the cell an update
 frame on top of a returned value caches. -/
-def readsAt (state : State) : Option Nat :=
+@[expose] public def readsAt (state : State) : Option Nat :=
   match state.control, state.stack with
   | .enter address, _ => some address
   | .returned _, .update address :: _ => some address
   | _, _ => none
 
 /-- The transition reads no cell of `U`. -/
-def Avoids (U : Nat → Prop) (state : State) : Prop := ∀ a, readsAt state = some a → ¬ U a
+@[expose] public def Avoids (U : Nat → Prop) (state : State) : Prop := ∀ a, readsAt state = some a → ¬ U a
 
 namespace HeapAgree
 variable {f : Nat → Nat} {D U : Nat → Prop} {heap heap' : Array Cell}
 
-theorem lookup (hr : HeapAgree f D U heap heap') {a : Nat} (inD : D a) (notU : ¬ U a) :
+public theorem lookup (hr : HeapAgree f D U heap heap') {a : Nat} (inD : D a) (notU : ¬ U a) :
     heap'[f a]? = (heap[a]?).map (renameCell f) := by
   by_cases bound : a < heap.size
   · obtain ⟨c, found, found', _⟩ := hr.cells a inD notU bound
@@ -55,19 +56,19 @@ theorem lookup (hr : HeapAgree f D U heap heap') {a : Nat} (inD : D a) (notU : �
     rw [Array.getElem?_eq_none (Nat.le_of_not_lt bound), Array.getElem?_eq_none (by omega)]
     rfl
 
-theorem cellIn (hr : HeapAgree f D U heap heap') {a : Nat} {c : Cell} (inD : D a) (notU : ¬ U a)
+public theorem cellIn (hr : HeapAgree f D U heap heap') {a : Nat} {c : Cell} (inD : D a) (notU : ¬ U a)
     (found : heap[a]? = some c) : AllIn D (cellAddresses c) := by
   obtain ⟨c', found', _, inC⟩ := hr.cells a inD notU (bound_of_some found)
   rw [found] at found'; cases found'; exact inC
 
-theorem image_size (hr : HeapAgree f D U heap heap') : f heap.size = heap'.size ∧ D heap.size := by
+public theorem image_size (hr : HeapAgree f D U heap heap') : f heap.size = heap'.size ∧ D heap.size := by
   have := hr.beyond heap.size (Nat.le_refl _); exact ⟨by omega, this.1⟩
 
-theorem image_size_succ (hr : HeapAgree f D U heap heap') :
+public theorem image_size_succ (hr : HeapAgree f D U heap heap') :
     f (heap.size + 1) = heap'.size + 1 ∧ D (heap.size + 1) := by
   have := hr.beyond (heap.size + 1) (Nat.le_succ _); exact ⟨by omega, this.1⟩
 
-theorem image_lt (hr : HeapAgree f D U heap heap') {a : Nat} (inD : D a) (bound : a < heap.size) :
+public theorem image_lt (hr : HeapAgree f D U heap heap') {a : Nat} (inD : D a) (bound : a < heap.size) :
     f a < heap'.size := by
   by_cases lt : f a < heap'.size
   · exact lt
@@ -76,7 +77,7 @@ theorem image_lt (hr : HeapAgree f D U heap heap') {a : Nat} (inD : D a) (bound 
     have same := hr.inj _ _ inD inD' (by omega)
     omega
 
-theorem push (hr : HeapAgree f D U heap heap') {c : Cell} (cIn : AllIn D (cellAddresses c)) :
+public theorem push (hr : HeapAgree f D U heap heap') {c : Cell} (cIn : AllIn D (cellAddresses c)) :
     HeapAgree f D U (heap.push c) (heap'.push (renameCell f c)) := by
   refine ⟨?_, hr.inj, ?_⟩
   · intro a past
@@ -96,7 +97,7 @@ theorem push (hr : HeapAgree f D U heap heap') {c : Cell} (cIn : AllIn D (cellAd
       refine ⟨c, by simp, ?_, cIn⟩
       rw [hr.image_size.1]; simp
 
-theorem set (hr : HeapAgree f D U heap heap') {a : Nat} {c : Cell} (inD : D a) (notU : ¬ U a)
+public theorem set (hr : HeapAgree f D U heap heap') {a : Nat} {c : Cell} (inD : D a) (notU : ¬ U a)
     (bound : a < heap.size) (cIn : AllIn D (cellAddresses c)) :
     HeapAgree f D U (heap.set! a c) (heap'.set! (f a) (renameCell f c)) := by
   obtain ⟨_, _, found', _⟩ := hr.cells a inD notU bound
@@ -170,7 +171,7 @@ theorem allocateFields_agree {f : Nat → Nat} {D U : Nat → Prop} {heap heap' 
 
 /-- **Lockstep.** An agreeing pair steps to an agreeing pair, provided the transition
 reads no cell of `U`. -/
-theorem agree_stepRaw {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t)
+public theorem agree_stepRaw {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t)
     (avoids : Avoids U s) : StateAgree f D U (stepRaw s) (stepRaw t) := by
   obtain ⟨hr, controlIn, controlEq, stackIn, stackEq⟩ := related
   obtain ⟨heap, control, stack⟩ := s
@@ -378,22 +379,22 @@ theorem agree_stepRaw {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (rela
 /-! ## Runs -/
 
 /-- `n` raw transitions (no capacity, no tick budget). -/
-def exec : Nat → State → State
+@[expose] public def exec : Nat → State → State
   | 0, state => state
   | n + 1, state => exec n (stepRaw state)
 
-theorem exec_add (m n : Nat) (state : State) : exec (m + n) state = exec n (exec m state) := by
+public theorem exec_add (m n : Nat) (state : State) : exec (m + n) state = exec n (exec m state) := by
   induction m generalizing state with
   | zero => simp [exec]
   | succ m ih => rw [Nat.succ_add]; simp only [exec]; exact ih _
 
-theorem exec_succ (n : Nat) (state : State) : exec (n + 1) state = stepRaw (exec n state) := by
+public theorem exec_succ (n : Nat) (state : State) : exec (n + 1) state = stepRaw (exec n state) := by
   rw [exec_add n 1]; rfl
 
-theorem exec_one (state : State) : exec 1 state = stepRaw state := rfl
+public theorem exec_one (state : State) : exec 1 state = stepRaw state := rfl
 
 /-- **A run that reads no `U` cell is mirrored step for step.** -/
-theorem agree_exec {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t)
+public theorem agree_exec {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t)
     (n : Nat) (avoids : ∀ j, j < n → Avoids U (exec j s)) : StateAgree f D U (exec n s) (exec n t) := by
   induction n with
   | zero => exact related
@@ -401,15 +402,15 @@ theorem agree_exec {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related
     rw [exec_succ, exec_succ]
     exact agree_stepRaw (ih (fun j lt => avoids j (by omega))) (avoids n (by omega))
 
-theorem StateAgree.active_eq {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t) :
+public theorem StateAgree.active_eq {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t) :
     active t.control = active s.control := by
   rw [related.control, active_rename]
 
-theorem StateAgree.stack_length {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t) :
+public theorem StateAgree.stack_length {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t) :
     t.stack.length = s.stack.length := by
   rw [related.stack, List.length_map]
 
-theorem StateAgree.readsAt_eq {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t) :
+public theorem StateAgree.readsAt_eq {f : Nat → Nat} {D U : Nat → Prop} {s t : State} (related : StateAgree f D U s t) :
     readsAt t = (readsAt s).map f := by
   obtain ⟨_, _, controlEq, _, stackEq⟩ := related
   obtain ⟨heap, control, stack⟩ := s

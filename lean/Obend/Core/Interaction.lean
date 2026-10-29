@@ -1,3 +1,4 @@
+module
 /- The reference interaction semantics of an activity: its interaction tree.
 
 An activity is a program that yields Plans and is resumed with responses. Its reference
@@ -23,7 +24,8 @@ kernel forms in `Kernel.ObjectiveResumeContract`): whatever a normalized state (
 checkpoint) commits, under any resources, is the reference node of the lazy state it is in a
 chain with; after a yield, for EVERY response, the resumed checkpoint is in a chain with
 `k r`; and if the reference spins, the normalized state commits nothing, ever. -/
-import Obend.Core.Proofs.Forcing.Converse
+public import Obend.Core.Proofs.Forcing.Converse
+@[expose] public section
 namespace Obend.Core.Interaction
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -172,3 +174,5 @@ theorem chain_spin {s t : State} (h : Chain s t) {b : Budget} (spin : node b s =
 #assert_axioms chain_spin
 
 end Obend.Core.Interaction
+
+end

@@ -1,8 +1,9 @@
+module
 /- The checkpoint codec round trip: every machine State, in particular every
 quiescent yielded activity, is restored exactly from its token encoding.
 Fuel is the token count, so no separate depth bound is assumed. -/
-import Obend.Core.Checkpoint
-import Obend.AxiomPin
+public import Obend.Core.Checkpoint
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.CheckpointRoundTrip
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Checkpoint
 set_option autoImplicit false

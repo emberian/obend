@@ -1,3 +1,4 @@
+module
 /-
 # `StepCases` — the one case split of a demand-machine state
 
@@ -17,8 +18,8 @@ The module depends only on the machine's types, so a per-constructor case
 module may import it without importing any dispatcher (the layout of
 PROOF-ENG-DESIGN.md §1(a)).
 -/
-import Obend.Core.Machine
-import Obend.AxiomPin
+public import Obend.Core.Machine
+public import Obend.AxiomPin
 
 namespace Obend.Core.Machine
 
@@ -26,7 +27,7 @@ open Obend.Core.Term
 
 /-- One obligation per branch of `stepRaw`'s dispatch, for a property `P` of
 the pre-state. -/
-structure StepCases (P : State → Prop) : Prop where
+public structure StepCases (P : State → Prop) : Prop where
   complete : ∀ s value, s.control = .complete value → P s
   refused : ∀ s reason, s.control = .refused reason → P s
   blackhole : ∀ s address, s.control = .blackhole address → P s
@@ -83,7 +84,7 @@ structure StepCases (P : State → Prop) : Prop where
     s.stack = .ifBool whenTrue whenFalse env :: rest → P s
 
 /-- The only copy of the dispatch tree. -/
-theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : State) : P s := by
+public theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : State) : P s := by
   cases control : s.control with
   | complete value => exact cases.complete s value control
   | refused reason => exact cases.refused s reason control

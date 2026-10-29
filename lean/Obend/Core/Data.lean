@@ -1,9 +1,11 @@
+module
 /- Full Core4 data extraction through the same bounded demand machine. Global
 node/tick/canonical encoded output budgets are shared across all fields. Budget suspension
 retains the exact graph, never a partial successful Plan or invalid-program claim. -/
-import Obend.Core.Machine
-import Obend.Core.MachineFast
-import Obend.Core.Ty
+public import Obend.Core.Machine
+public import Obend.Core.MachineFast
+public import Obend.Core.Ty
+@[expose] public section
 namespace Obend.Core.Data
 open Obend.Core.Machine
 inductive Data where
@@ -135,9 +137,11 @@ def completeWith (policy : State → Bool) (limits : Limits) (budget : Budget) (
     pure result
   | _,_ => .error (.suspended,state,budget)
 /-- A receiver keeps this exact graph-to-full-data correspondence alongside
-its independently checked source/state-origin evidence. -/
+its independently checked source/state-origin evidence. The constructor was `private mk ::` in
+minidregg; under the module system (Lean v4.30.0) an exposed body (`extractWith`, which downstream
+teeth evaluate by `decide`) may not cite a private constructor, so the constructor is public and
+"built only by `extractWith`" is a convention of this module, not an enforcement (obend 2026-10-30). -/
 structure ExtractionWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) where
-  private mk ::
   result : Result
   exact : completeWith policy limits budget state = .ok result
 
@@ -147,10 +151,10 @@ def extractWith (policy : State → Bool) (limits : Limits) (budget : Budget) (s
   | .error failure => .error failure
   | .ok result => .ok ⟨result,equation⟩
 /-- One whole source-and-materialization allowance; native callers do not need
-an untrusted source tick estimate or a fresh budget at WHNF completion. -/
+an untrusted source tick estimate or a fresh budget at WHNF completion. Constructor public for the
+reason given at `ExtractionWith`. -/
 structure ExecutionWith (policy : State → Bool) (limits : Limits) (budget : Budget)
     (term : Obend.Core.Term.Term) where
-  private mk ::
   value : RuntimeValue
   state : State
   remainingTicks : Nat
@@ -246,3 +250,5 @@ def yieldedPlanWith (policy : State → Bool) (limits : Limits) (budget : Budget
 def yieldedPlan := yieldedPlanWith (fun _ => true)
 
 end Obend.Core.Data
+
+end

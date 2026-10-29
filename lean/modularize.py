@@ -10,7 +10,8 @@ DEF_MODULES={'Obend/AxiomPin.lean','Obend/AssertAxioms.lean','Obend/AssertCompil
  'Obend/Core/Term.lean','Obend/Core/Ty.lean','Obend/Core/Check.lean','Obend/Core/Machine.lean',
  'Obend/Core/MachineFast.lean','Obend/Core/Invariant.lean','Obend/Core/Data.lean','Obend/Core/Capacity.lean',
  'Obend/Core/Collect.lean','Obend/Core/Checkpoint.lean','Obend/Core/Extensions.lean',
- 'Obend/Core/MachineTyping.lean','Obend/Core/Interaction.lean','Obend/Core/Digest.lean'}
+ 'Obend/Core/MachineTyping.lean','Obend/Core/Interaction.lean','Obend/Core/Digest.lean',
+ 'Obend/Slot.lean','Obend/Slot/Protocol.lean','Obend/Slot/Proofs/ProtocolTyping.lean'}
 DECL=re.compile(r'^(?P<attrs>(?:@\[[^\]]*\]\s*)*)(?P<mods>(?:(?:noncomputable|protected|unsafe|partial)\s+)*)(?P<kind>theorem|lemma|def|abbrev|inductive|structure|class|instance|opaque|axiom)\s+(?P<name>[^\s:(\[{]+)')
 files=sorted(os.path.join(r,f) for r,_,fs in os.walk('Obend') for f in fs if f.endswith('.lean'))
 src={p:open(p).read() for p in files}
@@ -28,7 +29,7 @@ tokens={p:set(re.findall(r'[A-Za-z_][A-Za-z0-9_\'!?]*',s)) for p,s in src.items(
 dry='--dry' in sys.argv
 report=[]
 for p,s in src.items():
-    if s.startswith('module'): continue
+    if s.startswith('module') or '/Teeth/' in p or p.endswith('Proofs/DataBudget.lean'): continue  # legacy leaves stay legacy
     lines=s.split('\n')
     # header: find import block
     imps=[i for i,l in enumerate(lines) if l.startswith('import ')]

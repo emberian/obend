@@ -1,6 +1,7 @@
+module
 /- Preservation cases: Records. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -58,7 +59,7 @@ theorem stack_field_member {assumptions : Assumptions} {types : AddressTypes}
 /-- All typed field returns enter an existing correctly assigned field address.
 First-field shadowing and finite alias conversions cannot cause missingField
 or wrongValue; the heap's assigned member type remains unchanged. -/
-theorem typed_field_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_field_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {name : String} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
     (returned : state.control = .returned value)
@@ -250,7 +251,7 @@ theorem source_record_decomposition {assumptions : Assumptions} {context : Conte
 /-- Actual record allocation preserves all typed addresses and lazy field
 origins, including declaration-order first-field shadowing. Row conversion is
 retained in the continuation rather than changing any allocated address type. -/
-theorem typed_record_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_record_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {fields : List (String × Term)} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.record fields) environment) :
@@ -300,7 +301,7 @@ theorem stack_extend_value {assumptions : Assumptions} {types : AddressTypes}
 /-- Returning an inherited record under an overlay preserves its unknown tail
 and immutable address types, while new fields shadow old names in the SAME
 order as the executor. Member conversion evidence remains explicit. -/
-theorem typed_extend_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_extend_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {fields : List (String × Term)}
     {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)

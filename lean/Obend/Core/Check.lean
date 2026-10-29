@@ -1,6 +1,8 @@
-import Obend.Core.Ty
-import Obend.Core.Term
-import Obend.AxiomPin
+module
+public import Obend.Core.Ty
+public import Obend.Core.Term
+public import Obend.AxiomPin
+@[expose] public section
 namespace Obend.Core.Check
 open Obend.Core.Ty Obend.Core.Term
 set_option autoImplicit false
@@ -1434,3 +1436,5 @@ theorem computation_not_shareable (plan response result : Ty) (variables : List 
   shadowed_override_accepted agree_never_manufactures_shareability
 
 end Obend.Core.Check
+
+end

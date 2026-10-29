@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Digest.Cshake256.Fast -- the compiled cSHAKE256, proved equal to the spec
 
@@ -32,7 +33,8 @@ implement `UInt64`/`ByteArray` primitives as their Lean definitions say.
 `Sp800185Cshake256Core` imports this module and the spec; import Core.
 -/
 
-import Obend.Digest.Cshake256.Spec
+public import Obend.Digest.Cshake256.Spec
+@[expose] public section
 
 namespace Obend.Digest.Cshake256.Fast
 open Obend.Digest.Cshake256
@@ -881,3 +883,5 @@ end Obend.Digest.Cshake256.Fast
 #guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.absorbPadded_eq_fast
 /-- info: 'Obend.Digest.Cshake256.Fast.cshake256Bytes_eq_fast' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.cshake256Bytes_eq_fast
+
+end

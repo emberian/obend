@@ -1,3 +1,4 @@
+module
 /- The behaviour theorem for collecting the Core4 heap at a yield (design B4/T5), and
 the typing transfer. Definitions: `Obend.Core.Collect`.
 
@@ -23,9 +24,9 @@ heap ends and `f` maps one end to the other.
 * Inhabitants: a typed state with a garbage cell (`garbageTyping`) and a closed program
   that yields with a garbage cell (`yieldingTerm`), whose Plan extracts to the same
   encoded Data before and after collection. -/
-import Obend.Core.Collect
-import Obend.Core.Data
-import Obend.Core.MachineTyping
+public import Obend.Core.Collect
+public import Obend.Core.Data
+public import Obend.Core.MachineTyping
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -65,7 +66,7 @@ theorem pending_cons {marks : Array Bool} {work rest : List Nat} {address : Nat}
       · exact .inl notFalse
       · exact others x member
 
-theorem bound_of_some {α : Type} {xs : Array α} {i : Nat} {v : α} (found : xs[i]? = some v) :
+public theorem bound_of_some {α : Type} {xs : Array α} {i : Nat} {v : α} (found : xs[i]? = some v) :
     i < xs.size := (Array.getElem?_eq_some_iff.mp found).1
 
 theorem count_false_set {marks : Array Bool} {address : Nat}
@@ -88,10 +89,10 @@ theorem all_marked {marks : Array Bool} (none : marks.count false = 0) (address 
   exact (Array.count_eq_zero.mp none) member
 
 /-- The marking invariant: every unmarked child of a marked cell is still to be traced. -/
-def Traced (heap : Array Cell) (marks : Array Bool) (work : List Nat) : Prop :=
+@[expose] public def Traced (heap : Array Cell) (marks : Array Bool) (work : List Nat) : Prop :=
   ∀ a x : Nat, marks[a]? = some true → x ∈ children heap a → marks[x]? = some false → x ∈ work
 
-theorem markFrom_spec (heap : Array Cell) :
+public theorem markFrom_spec (heap : Array Cell) :
     ∀ (fuel : Nat) (marks : Array Bool) (work : List Nat),
       marks.size = heap.size → marks.count false ≤ fuel → Traced heap marks work →
       (markFrom heap fuel marks work).size = heap.size ∧
@@ -290,13 +291,13 @@ theorem compact_getElem (f : Nat → Nat) (heap : Array Cell) (marks : Array Boo
 
 /-! ## The renaming simulation -/
 
-def AllIn (D : Nat → Prop) (addresses : List Nat) : Prop := ∀ x ∈ addresses, D x
+@[expose] public def AllIn (D : Nat → Prop) (addresses : List Nat) : Prop := ∀ x ∈ addresses, D x
 
 /-- Two heaps agree under a renaming `f` on a domain `D`: `D` contains everything past
 the first heap (where `f` is the shift between the two ends), `f` is injective on `D`,
 and every `D`-cell of the first heap is, renamed, the `f`-image cell of the second, with
 its addresses again in `D`. Nothing is said about cells outside `D` (the garbage). -/
-structure HeapRel (f : Nat → Nat) (D : Nat → Prop) (heap heap' : Array Cell) : Prop where
+public structure HeapRel (f : Nat → Nat) (D : Nat → Prop) (heap heap' : Array Cell) : Prop where
   size_le : heap'.size ≤ heap.size
   beyond : ∀ a, heap.size ≤ a → D a ∧ f a + heap.size = a + heap'.size
   inj : ∀ a b, D a → D b → f a = f b → a = b
@@ -306,7 +307,7 @@ structure HeapRel (f : Nat → Nat) (D : Nat → Prop) (heap heap' : Array Cell)
 /-- **The simulation relation.** `t` is `s` renamed by `f` on everything `s` can reach
 (`D` is closed under the heap and contains the roots): same control, same stack, and
 the `D`-cells agree. -/
-structure Related (f : Nat → Nat) (D : Nat → Prop) (s t : State) : Prop where
+public structure Related (f : Nat → Nat) (D : Nat → Prop) (s t : State) : Prop where
   heap : HeapRel f D s.heap t.heap
   controlIn : AllIn D (controlAddresses s.control)
   control : t.control = renameControl f s.control
@@ -314,7 +315,7 @@ structure Related (f : Nat → Nat) (D : Nat → Prop) (s t : State) : Prop wher
   stack : t.stack = s.stack.map (renameFrame f)
 
 /-- The domain `collect` traces: the live cells and everything past the heap. -/
-def liveDomain (state : State) (a : Nat) : Prop :=
+@[expose] public def liveDomain (state : State) (a : Nat) : Prop :=
   state.heap.size ≤ a ∨ (liveMarks state)[a]? = some true
 
 theorem liveDomain_of_not_false {state : State} {x : Nat}
@@ -349,7 +350,7 @@ theorem collect_heap_size (state : State) :
   compact_size _ _ _ (liveMarks_spec state).1
 
 /-- **Collection is a renaming of the state it collects.** -/
-theorem related_collect (state : State) :
+public theorem related_collect (state : State) :
     Related (collectRenaming state) (liveDomain state) state (collect state) := by
   obtain ⟨size, roots, closed⟩ := liveMarks_spec state
   have live_lt : ∀ a, (liveMarks state)[a]? = some true →
@@ -397,7 +398,7 @@ theorem related_collect (state : State) :
 namespace HeapRel
 variable {f : Nat → Nat} {D : Nat → Prop} {heap heap' : Array Cell}
 
-theorem lookup (hr : HeapRel f D heap heap') {a : Nat} (inD : D a) :
+public theorem lookup (hr : HeapRel f D heap heap') {a : Nat} (inD : D a) :
     heap'[f a]? = (heap[a]?).map (renameCell f) := by
   by_cases bound : a < heap.size
   · obtain ⟨c, found, found', _⟩ := hr.cells a inD bound
@@ -406,19 +407,19 @@ theorem lookup (hr : HeapRel f D heap heap') {a : Nat} (inD : D a) :
     rw [Array.getElem?_eq_none (Nat.le_of_not_lt bound), Array.getElem?_eq_none (by omega)]
     rfl
 
-theorem cellIn (hr : HeapRel f D heap heap') {a : Nat} {c : Cell} (inD : D a)
+public theorem cellIn (hr : HeapRel f D heap heap') {a : Nat} {c : Cell} (inD : D a)
     (found : heap[a]? = some c) : AllIn D (cellAddresses c) := by
   obtain ⟨c', found', _, inC⟩ := hr.cells a inD (bound_of_some found)
   rw [found] at found'; cases found'; exact inC
 
-theorem image_size (hr : HeapRel f D heap heap') : f heap.size = heap'.size ∧ D heap.size := by
+public theorem image_size (hr : HeapRel f D heap heap') : f heap.size = heap'.size ∧ D heap.size := by
   have := hr.beyond heap.size (Nat.le_refl _); exact ⟨by omega, this.1⟩
 
-theorem image_size_succ (hr : HeapRel f D heap heap') :
+public theorem image_size_succ (hr : HeapRel f D heap heap') :
     f (heap.size + 1) = heap'.size + 1 ∧ D (heap.size + 1) := by
   have := hr.beyond (heap.size + 1) (Nat.le_succ _); exact ⟨by omega, this.1⟩
 
-theorem push (hr : HeapRel f D heap heap') {c : Cell} (cIn : AllIn D (cellAddresses c)) :
+public theorem push (hr : HeapRel f D heap heap') {c : Cell} (cIn : AllIn D (cellAddresses c)) :
     HeapRel f D (heap.push c) (heap'.push (renameCell f c)) := by
   have sizeLe := hr.size_le
   refine ⟨by simp; omega, ?_, hr.inj, ?_⟩
@@ -439,7 +440,7 @@ theorem push (hr : HeapRel f D heap heap') {c : Cell} (cIn : AllIn D (cellAddres
       refine ⟨c, by simp, ?_, cIn⟩
       rw [hr.image_size.1]; simp
 
-theorem set (hr : HeapRel f D heap heap') {a : Nat} {c : Cell} (inD : D a) (bound : a < heap.size)
+public theorem set (hr : HeapRel f D heap heap') {a : Nat} {c : Cell} (inD : D a) (bound : a < heap.size)
     (cIn : AllIn D (cellAddresses c)) :
     HeapRel f D (heap.set! a c) (heap'.set! (f a) (renameCell f c)) := by
   obtain ⟨_, _, found', _⟩ := hr.cells a inD bound
@@ -516,7 +517,7 @@ theorem allocateFields_related {f : Nat → Nat} {D : Nat → Prop} {heap heap' 
 
 /-! ## Lockstep: one machine transition -/
 
-theorem forcingShared_rename (f : Nat → Nat) (stack : List Frame) :
+public theorem forcingShared_rename (f : Nat → Nat) (stack : List Frame) :
     forcingShared (stack.map (renameFrame f)) = forcingShared stack := by
   induction stack with
   | nil => rfl
@@ -524,38 +525,38 @@ theorem forcingShared_rename (f : Nat → Nat) (stack : List Frame) :
     simp only [forcingShared, List.map_cons, List.any_cons] at ih ⊢
     rw [ih]; cases frame <;> rfl
 
-theorem valueTerm_rename (f : Nat → Nat) (value : RuntimeValue) :
+public theorem valueTerm_rename (f : Nat → Nat) (value : RuntimeValue) :
     valueTerm (renameValue f value) = valueTerm value := by
   cases value <;> rfl
 
-theorem scalarValue_rename {f : Nat → Nat} {result : Term} {next : RuntimeValue}
+public theorem scalarValue_rename {f : Nat → Nat} {result : Term} {next : RuntimeValue}
     (scalar : scalarValue result = some next) : renameValue f next = next ∧ valueAddresses next = [] := by
   cases result <;> simp [scalarValue] at scalar <;> subst scalar <;> exact ⟨rfl, rfl⟩
 
-theorem allIn_nil (D : Nat → Prop) : AllIn D [] := fun _ member => by cases member
+public theorem allIn_nil (D : Nat → Prop) : AllIn D [] := fun _ member => by cases member
 
-theorem allIn_cons {D : Nat → Prop} {a : Nat} {rest : List Nat} (head : D a) (tail : AllIn D rest) :
+public theorem allIn_cons {D : Nat → Prop} {a : Nat} {rest : List Nat} (head : D a) (tail : AllIn D rest) :
     AllIn D (a :: rest) := by
   intro x member
   rcases List.mem_cons.mp member with rfl | member
   · exact head
   · exact tail x member
 
-theorem allIn_append {D : Nat → Prop} {first second : List Nat} (one : AllIn D first)
+public theorem allIn_append {D : Nat → Prop} {first second : List Nat} (one : AllIn D first)
     (two : AllIn D second) : AllIn D (first ++ second) := by
   intro x member
   rcases List.mem_append.mp member with member | member
   · exact one x member
   · exact two x member
 
-theorem frames_cons {D : Nat → Prop} {frame : Frame} {rest : List Frame}
+public theorem frames_cons {D : Nat → Prop} {frame : Frame} {rest : List Frame}
     (head : AllIn D (frameAddresses frame)) (tail : ∀ frame ∈ rest, AllIn D (frameAddresses frame)) :
     ∀ frame' ∈ frame :: rest, AllIn D (frameAddresses frame') :=
   List.forall_mem_cons.mpr ⟨head, tail⟩
 
 /-- **Lockstep.** A related pair steps to a related pair: the renaming and its domain
 are fixed, and the two machines allocate at the two heap ends (`f heap.size = heap'.size`). -/
-theorem related_stepRaw {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related : Related f D s t) :
+public theorem related_stepRaw {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related : Related f D s t) :
     Related f D (stepRaw s) (stepRaw t) := by
   obtain ⟨hr, controlIn, controlEq, stackIn, stackEq⟩ := related
   obtain ⟨heap, control, stack⟩ := s
@@ -763,7 +764,7 @@ theorem related_stepRaw {f : Nat → Nat} {D : Nat → Prop} {s t : State} (rela
 
 /-- Outcomes agree under the renaming: same constructor, same reason, renamed payload,
 related retained states. -/
-def OutcomeRel (f : Nat → Nat) (D : Nat → Prop) : Outcome → Outcome → Prop
+@[expose] public def OutcomeRel (f : Nat → Nat) (D : Nat → Prop) : Outcome → Outcome → Prop
   | .finished value s, .finished value' t =>
     value' = renameValue f value ∧ AllIn D (valueAddresses value) ∧ Related f D s t
   | .suspended reason s, .suspended reason' t => reason' = reason ∧ Related f D s t
@@ -773,17 +774,17 @@ def OutcomeRel (f : Nat → Nat) (D : Nat → Prop) : Outcome → Outcome → Pr
   | _, _ => False
 
 /-- The one outcome a collected state may improve on: running out of heap. -/
-def ranOutOfHeap : Outcome → Bool
+@[expose] public def ranOutOfHeap : Outcome → Bool
   | .suspended .capacity _ => true
   | _ => false
 
-theorem Related.stack_length {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related : Related f D s t) :
+public theorem Related.stack_length {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related : Related f D s t) :
     t.stack.length = s.stack.length := by
   rw [related.stack, List.length_map]
 
 /-- The gap between the two heap ends is fixed by the renaming: every pair related by
 `f` has the same gap (allocation is lockstep). -/
-theorem Related.gap {f : Nat → Nat} {D : Nat → Prop} {s t s' t' : State} (one : Related f D s t)
+public theorem Related.gap {f : Nat → Nat} {D : Nat → Prop} {s t s' t' : State} (one : Related f D s t)
     (two : Related f D s' t') : s.heap.size - t.heap.size = s'.heap.size - t'.heap.size := by
   have a := (one.heap.beyond (s.heap.size + s'.heap.size) (by omega)).2
   have b := (two.heap.beyond (s.heap.size + s'.heap.size) (by omega)).2
@@ -801,11 +802,11 @@ theorem runBounded_zero_related {f : Nat → Nat} {D : Nat → Prop} {s t : Stat
       | exact ⟨by have inside := related.controlIn; rw [control] at inside; exact inside, related⟩
 
 /-- An active control is the only one `step` advances. -/
-def active : Control → Bool
+@[expose] public def active : Control → Bool
   | .evaluate _ _ | .enter _ | .returned _ => true
   | _ => false
 
-theorem runBounded_succ_active {limits : Limits} {ticks : Nat} {s : State} (isActive : active s.control = true) :
+public theorem runBounded_succ_active {limits : Limits} {ticks : Nat} {s : State} (isActive : active s.control = true) :
     runBounded limits (ticks + 1) s =
       if (stepRaw s).heap.size ≤ limits.heap ∧ (stepRaw s).stack.length ≤ limits.stack then
         runBounded limits ticks (stepRaw s) else .suspended .capacity s := by
@@ -818,12 +819,12 @@ theorem runBounded_succ_active {limits : Limits} {ticks : Nat} {s : State} (isAc
   by_cases fits : (stepRaw s).heap.size ≤ limits.heap ∧ (stepRaw s).stack.length ≤ limits.stack <;>
     simp [fits]
 
-theorem runBounded_succ_inactive {limits : Limits} {ticks : Nat} {s : State} (inactive : active s.control = false) :
+public theorem runBounded_succ_inactive {limits : Limits} {ticks : Nat} {s : State} (inactive : active s.control = false) :
     runBounded limits (ticks + 1) s = runBounded limits 0 s := by
   cases control : s.control <;> rw [control] at inactive <;> simp [active] at inactive <;>
     simp [runBounded, step, control]
 
-theorem active_rename (f : Nat → Nat) (control : Control) :
+public theorem active_rename (f : Nat → Nat) (control : Control) :
     active (renameControl f control) = active control := by
   cases control <;> rfl
 
@@ -833,14 +834,14 @@ no smaller a stack limit. The gap is the same for every pair one renaming relate
 (`Related.gap`), so the room is too (`RoomFor.shift`). Two instances: the same limits
 (`RoomFor.same`), and limits counted from each state's own heap end
 (`collect_resume_segment`'s use in `Kernel.ObjectiveResumeContract`). -/
-structure RoomFor (limits limits' : Limits) (s t : State) : Prop where
+public structure RoomFor (limits limits' : Limits) (s t : State) : Prop where
   heap : limits.heap ≤ limits'.heap + (s.heap.size - t.heap.size)
   stack : limits.stack ≤ limits'.stack
 
-theorem RoomFor.same (limits : Limits) (s t : State) : RoomFor limits limits s t :=
+public theorem RoomFor.same (limits : Limits) (s t : State) : RoomFor limits limits s t :=
   ⟨Nat.le_add_right _ _, Nat.le_refl _⟩
 
-theorem RoomFor.shift {f : Nat → Nat} {D : Nat → Prop} {limits limits' : Limits} {s t s' t' : State}
+public theorem RoomFor.shift {f : Nat → Nat} {D : Nat → Prop} {limits limits' : Limits} {s t s' t' : State}
     (one : Related f D s t) (two : Related f D s' t') (room : RoomFor limits limits' s t) :
     RoomFor limits limits' s' t' :=
   ⟨by rw [← one.gap two]; exact room.heap, room.stack⟩
@@ -921,7 +922,7 @@ theorem related_runBounded_exact {f : Nat → Nat} {D : Nat → Prop} (limits : 
         exact ⟨rfl, related⟩
 
 /-- **Resumption agrees**, with any response term (a response captures no address). -/
-theorem related_resume {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related : Related f D s t)
+public theorem related_resume {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related : Related f D s t)
     (response : Term) {s' : State} (resumed : resume response s = some s') :
     ∃ t', resume response t = some t' ∧ Related f D s' t' := by
   obtain ⟨plan, yielded⟩ := resume_requires_yield response s (by rw [resumed]; rfl)
@@ -936,36 +937,36 @@ theorem related_resume {f : Nat → Nat} {D : Nat → Prop} {s t : State} (relat
 
 section ExceptLemmas
 variable {ε α β : Type}
-@[simp] theorem except_throw_bind (e : ε) (k : α → Except ε β) : (throw e >>= k : Except ε β) = .error e := rfl
-@[simp] theorem except_map_throw (g : α → β) (e : ε) : (g <$> (throw e : Except ε α)) = .error e := rfl
-@[simp] theorem except_throw_ok (e : ε) (a : α) : ((throw e : Except ε α) = .ok a) ↔ False := by
+@[simp] public theorem except_throw_bind (e : ε) (k : α → Except ε β) : (throw e >>= k : Except ε β) = .error e := rfl
+@[simp] public theorem except_map_throw (g : α → β) (e : ε) : (g <$> (throw e : Except ε α)) = .error e := rfl
+@[simp] public theorem except_throw_ok (e : ε) (a : α) : ((throw e : Except ε α) = .ok a) ↔ False := by
   constructor <;> intro h <;> cases h
-@[simp] theorem except_error_ok (e : ε) (a : α) : ((Except.error e : Except ε α) = .ok a) ↔ False := by
+@[simp] public theorem except_error_ok (e : ε) (a : α) : ((Except.error e : Except ε α) = .ok a) ↔ False := by
   constructor <;> intro h <;> cases h
-@[simp] theorem except_bind_ok (x : Except ε α) (k : α → Except ε β) (r : β) :
+@[simp] public theorem except_bind_ok (x : Except ε α) (k : α → Except ε β) (r : β) :
     (x >>= k) = .ok r ↔ ∃ a, x = .ok a ∧ k a = .ok r := by
   cases x <;> simp [bind, Except.bind]
-@[simp] theorem except_map_ok (g : α → β) (x : Except ε α) (r : β) :
+@[simp] public theorem except_map_ok (g : α → β) (x : Except ε α) (r : β) :
     (g <$> x) = .ok r ↔ ∃ a, x = .ok a ∧ g a = r := by
   cases x <;> simp [Functor.map, Except.map]
-@[simp] theorem except_pure_ok (a b : α) : ((pure a : Except ε α) = .ok b) ↔ a = b := by
+@[simp] public theorem except_pure_ok (a b : α) : ((pure a : Except ε α) = .ok b) ↔ a = b := by
   simp [pure, Except.pure]
 end ExceptLemmas
 
 open Obend.Core.Data
 
 /-- The continuation `forceWith` takes after one bounded transition. -/
-def continueForce (policy : State → Bool) (limits : Limits) (ticks : Nat) : Outcome → Outcome × Nat
+@[expose] public def continueForce (policy : State → Bool) (limits : Limits) (ticks : Nat) : Outcome → Outcome × Nat
   | .suspended .ticks next => forceWith policy limits ticks next
   | other => (other, ticks)
 
-theorem forceWith_succ_inactive {policy : State → Bool} {limits : Limits} {ticks : Nat} {s : State}
+public theorem forceWith_succ_inactive {policy : State → Bool} {limits : Limits} {ticks : Nat} {s : State}
     (inactive : active s.control = false) :
     forceWith policy limits (ticks + 1) s = (runBounded limits 0 s, ticks + 1) := by
   cases control : s.control <;> rw [control] at inactive <;> simp [active] at inactive <;>
     simp [forceWith, control]
 
-theorem forceWith_succ_active {policy : State → Bool} {limits : Limits} {ticks : Nat} {s : State}
+public theorem forceWith_succ_active {policy : State → Bool} {limits : Limits} {ticks : Nat} {s : State}
     (isActive : active s.control = true) :
     forceWith policy limits (ticks + 1) s =
       if policy s = false then (.suspended .capacity s, ticks + 1)
@@ -1020,11 +1021,11 @@ theorem related_forceWith {f : Nat → Nat} {D : Nat → Prop} {policy : State �
 
 
 /-- Extraction results agree: same Data, same remaining budget, related states. -/
-def ResultRel (f : Nat → Nat) (D : Nat → Prop) (r r' : Result) : Prop :=
+@[expose] public def ResultRel (f : Nat → Nat) (D : Nat → Prop) (r r' : Result) : Prop :=
   r'.value = r.value ∧ r'.remaining = r.remaining ∧ Related f D r.state r'.state
 
 /-- One field of a record's materialization (the body of `materializeWith`'s fold). -/
-def recordStep (policy : State → Bool) (limits : Limits) (depth : Nat)
+@[expose] public def recordStep (policy : State → Bool) (limits : Limits) (depth : Nat)
     (prior : List (String × Data) × State × Budget) (field : String × Nat) :
     Except (Failure × State × Budget) (List (String × Data) × State × Budget) := do
   let bytes := field.1.utf8ByteSize+(toString field.1.utf8ByteSize).utf8ByteSize+1
@@ -1041,7 +1042,7 @@ def recordStep (policy : State → Bool) (limits : Limits) (depth : Nat)
   | .refused _ retained => throw (.refused,retained,nextBudget)
   | .yielded _ retained => throw (.yielded,retained,nextBudget)
 
-theorem materializeWith_record (policy : State → Bool) (limits : Limits) (depth : Nat) (budget : Budget)
+public theorem materializeWith_record (policy : State → Bool) (limits : Limits) (depth : Nat) (budget : Budget)
     (fields : List (String × Nat)) (state : State) :
     materializeWith policy limits (depth+1) budget (.record fields) state = (do
       if budget.nodes = 0 then throw (.budget,state,budget)
@@ -1361,19 +1362,19 @@ theorem related_segment {f : Nat → Nat} {D : Nat → Prop} {s t : State} (rela
 
 /-! ## Composition: collecting at every yield -/
 
-theorem renameValue_comp (f g : Nat → Nat) (value : RuntimeValue) :
+public theorem renameValue_comp (f g : Nat → Nat) (value : RuntimeValue) :
     renameValue g (renameValue f value) = renameValue (g ∘ f) value := by
   cases value <;> simp [renameValue, Function.comp_def]
 
-theorem renameCell_comp (f g : Nat → Nat) (cell : Cell) :
+public theorem renameCell_comp (f g : Nat → Nat) (cell : Cell) :
     renameCell g (renameCell f cell) = renameCell (g ∘ f) cell := by
   cases cell <;> simp [renameCell, renameClosure, renameValue_comp, Function.comp_def]
 
-theorem renameFrame_comp (f g : Nat → Nat) (frame : Frame) :
+public theorem renameFrame_comp (f g : Nat → Nat) (frame : Frame) :
     renameFrame g (renameFrame f frame) = renameFrame (g ∘ f) frame := by
   cases frame <;> simp [renameFrame, renameValue_comp, Function.comp_def]
 
-theorem renameControl_comp (f g : Nat → Nat) (control : Control) :
+public theorem renameControl_comp (f g : Nat → Nat) (control : Control) :
     renameControl g (renameControl f control) = renameControl (g ∘ f) control := by
   cases control <;> simp [renameControl, renameValue_comp, Function.comp_def]
 
@@ -1385,17 +1386,17 @@ theorem cellAddresses_rename (f : Nat → Nat) (cell : Cell) :
     cellAddresses (renameCell f cell) = (cellAddresses cell).map f := by
   cases cell <;> simp [renameCell, renameClosure, cellAddresses, valueAddresses_rename]
 
-theorem frameAddresses_rename (f : Nat → Nat) (frame : Frame) :
+public theorem frameAddresses_rename (f : Nat → Nat) (frame : Frame) :
     frameAddresses (renameFrame f frame) = (frameAddresses frame).map f := by
   cases frame <;> simp [renameFrame, frameAddresses, valueAddresses_rename]
 
-theorem controlAddresses_rename (f : Nat → Nat) (control : Control) :
+public theorem controlAddresses_rename (f : Nat → Nat) (control : Control) :
     controlAddresses (renameControl f control) = (controlAddresses control).map f := by
   cases control <;> simp [renameControl, controlAddresses, valueAddresses_rename]
 
 /-- **Relations compose**, so a history that collects at every yield stays related to
 the history that never collects. -/
-theorem Related.trans {f g : Nat → Nat} {D E : Nat → Prop} {s t u : State}
+public theorem Related.trans {f g : Nat → Nat} {D E : Nat → Prop} {s t u : State}
     (one : Related f D s t) (two : Related g E t u) :
     Related (g ∘ f) (fun a => D a ∧ E (f a)) s u := by
   have sizeOne := one.heap.size_le
@@ -1442,10 +1443,10 @@ open Obend.Core.MachineTyping Obend.Core.Invariant
 variable {f : Nat → Nat} {D : Nat → Prop} {assumptions : Assumptions} {types types' : AddressTypes}
 
 /-- `types'` assigns each renamed address the type `types` assigns the original. -/
-def TypesRel (f : Nat → Nat) (D : Nat → Prop) (types types' : AddressTypes) : Prop :=
+@[expose] public def TypesRel (f : Nat → Nat) (D : Nat → Prop) (types types' : AddressTypes) : Prop :=
   ∀ a, D a → types'[f a]? = types[a]?
 
-theorem environmentTyping_rename (rel : TypesRel f D types types') {context : Context}
+public theorem environmentTyping_rename (rel : TypesRel f D types types') {context : Context}
     {environment : List Nat} (inside : AllIn D environment)
     (typed : EnvironmentTyping types context environment) :
     EnvironmentTyping types' context (environment.map f) := by
@@ -1455,7 +1456,7 @@ theorem environmentTyping_rename (rel : TypesRel f D types types') {context : Co
   refine ⟨f address, by simp [member], ?_⟩
   rw [rel address (inside address (List.mem_of_getElem? member)), assigned]
 
-def closureTyping_rename (rel : TypesRel f D types types') {closure : Closure} {type : Ty}
+@[expose] public def closureTyping_rename (rel : TypesRel f D types types') {closure : Closure} {type : Ty}
     (inside : AllIn D closure.environment) (typed : ClosureTyping assumptions types closure type) :
     ClosureTyping assumptions types' (renameClosure f closure) type where
   context := typed.context
@@ -1563,10 +1564,10 @@ theorem controlTyping_rename (rel : TypesRel f D types types') {control : Contro
     exact .yielded (by rw [rel plan (inside plan (List.mem_singleton_self _)), assigned]) isPlan isData
 
 /-- Every cell of the second heap is the image of a cell of the first. -/
-def Covers (f : Nat → Nat) (D : Nat → Prop) (heap heap' : Array Cell) : Prop :=
+@[expose] public def Covers (f : Nat → Nat) (D : Nat → Prop) (heap heap' : Array Cell) : Prop :=
   ∀ k, k < heap'.size → ∃ a, D a ∧ a < heap.size ∧ f a = k
 
-theorem heapTyping_rename {heap heap' : Array Cell} (hr : HeapRel f D heap heap')
+public theorem heapTyping_rename {heap heap' : Array Cell} (hr : HeapRel f D heap heap')
     (rel : TypesRel f D types types') (length : types'.length = heap'.size) (cover : Covers f D heap heap')
     (typed : HeapTyping assumptions types heap) : HeapTyping assumptions types' heap' := by
   refine ⟨length, ?_⟩
@@ -1581,7 +1582,7 @@ theorem heapTyping_rename {heap heap' : Array Cell} (hr : HeapRel f D heap heap'
 
 /-! ### The representation invariants -/
 
-theorem image_lt {heap heap' : Array Cell} (hr : HeapRel f D heap heap') {a : Nat} (inA : D a)
+public theorem image_lt {heap heap' : Array Cell} (hr : HeapRel f D heap heap') {a : Nat} (inA : D a)
     (bound : a < heap.size) : f a < heap'.size := by
   obtain ⟨_, _, found', _⟩ := hr.cells a inA bound
   exact bound_of_some found'
@@ -1658,7 +1659,7 @@ theorem controlValid_rename {heap heap' : Array Cell} (hr : HeapRel f D heap hea
   | refused _ => trivial
   | yielded plan => exact image_lt hr (inside plan (List.mem_singleton_self _)) valid
 
-theorem lexical_related {s t : State} (related : Related f D s t) (cover : Covers f D s.heap t.heap)
+public theorem lexical_related {s t : State} (related : Related f D s t) (cover : Covers f D s.heap t.heap)
     (lexical : LexicalInvariant s) : LexicalInvariant t := by
   obtain ⟨cells, control, frames⟩ := lexical
   refine ⟨?_, ?_, ?_⟩
@@ -1702,7 +1703,7 @@ theorem nodup_map_on {l : List Nat} (inside : AllIn D l) (inj : ∀ a b, D a →
     have := inj other head (inside other (List.mem_cons_of_mem _ memberO)) (inside head (List.mem_cons_self ..)) same
     exact nodup.1 (this ▸ memberO)
 
-theorem busy_related {s t : State} (related : Related f D s t) (cover : Covers f D s.heap t.heap)
+public theorem busy_related {s t : State} (related : Related f D s t) (cover : Covers f D s.heap t.heap)
     (busy : BusyInvariant s) : BusyInvariant t := by
   obtain ⟨nodup, marks⟩ := busy
   have updatesIn := stackUpdates_in related.stackIn
@@ -1727,7 +1728,7 @@ theorem busy_related {s t : State} (related : Related f D s t) (cover : Covers f
       | suspended o => cases found
       | cached o v => cases found
 
-theorem finalStack_related {s t : State} (related : Related f D s t) (final : FinalStackInvariant s) :
+public theorem finalStack_related {s t : State} (related : Related f D s t) (final : FinalStackInvariant s) :
     FinalStackInvariant t := by
   intro value complete
   rw [related.stack]
@@ -1736,7 +1737,7 @@ theorem finalStack_related {s t : State} (related : Related f D s t) (final : Fi
   rw [final _ control]; rfl
 
 /-- **Typing transfers along a covering renaming.** -/
-def typed_related {s t : State} {result : Ty} (related : Related f D s t) (cover : Covers f D s.heap t.heap)
+@[expose] public def typed_related {s t : State} {result : Ty} (related : Related f D s t) (cover : Covers f D s.heap t.heap)
     (rel : TypesRel f D types types') (length : types'.length = t.heap.size)
     (typed : StateTyping assumptions types s result) : StateTyping assumptions types' t result where
   current := typed.current
@@ -1769,7 +1770,7 @@ theorem count_take_surj : ∀ (M : List Bool) (k : Nat), k < M.count true →
       exact ⟨i + 1, by simpa using marked, by simp [rank]⟩
 
 /-- Every collected cell is the image of a live cell. -/
-theorem collect_covers (state : State) :
+public theorem collect_covers (state : State) :
     Covers (collectRenaming state) (liveDomain state) state.heap (collect state).heap := by
   intro k bound
   rw [collect_heap_size, ← Array.count_toList] at bound
@@ -1784,15 +1785,15 @@ open Obend.Core.Ty Obend.Core.Check
 open Obend.Core.MachineTyping Obend.Core.Invariant
 
 /-- The address types of the collected heap: the live cells' types, in order. -/
-def collectTypes (state : State) (types : AddressTypes) : AddressTypes :=
+@[expose] public def collectTypes (state : State) (types : AddressTypes) : AddressTypes :=
   (types.zip (liveMarks state).toList).filterMap fun entry => if entry.2 then some entry.1 else none
 
-theorem collectTypes_length {state : State} {types : AddressTypes} (length : types.length = state.heap.size) :
+public theorem collectTypes_length {state : State} {types : AddressTypes} (length : types.length = state.heap.size) :
     (collectTypes state types).length = (collect state).heap.size := by
   rw [collect_heap_size, ← Array.count_toList]
   exact filterMap_zip_length (fun x => x) _ _ (by simp [length, (liveMarks_spec state).1])
 
-theorem collectTypes_rel {state : State} {types : AddressTypes} (length : types.length = state.heap.size) :
+public theorem collectTypes_rel {state : State} {types : AddressTypes} (length : types.length = state.heap.size) :
     TypesRel (collectRenaming state) (liveDomain state) types (collectTypes state types) := by
   intro a inA
   rcases inA with past | marked
@@ -1807,7 +1808,7 @@ theorem collectTypes_rel {state : State} {types : AddressTypes} (length : types.
 
 /-- **Typing transfers to the collected state** (heap typing, control and stack
 typing, and the lexical, busy and final-stack invariants), at the live cells' types. -/
-def typed_collect {assumptions : Assumptions} {types : AddressTypes} {state : State} {result : Ty}
+@[expose] public def typed_collect {assumptions : Assumptions} {types : AddressTypes} {state : State} {result : Ty}
     (typed : StateTyping assumptions types state result) :
     StateTyping assumptions (collectTypes state types) (collect state) result :=
   typed_related (related_collect state) (collect_covers state) (collectTypes_rel typed.heap.length)
@@ -1821,9 +1822,9 @@ theorem typed_collect_exists {assumptions : Assumptions} {types : AddressTypes} 
 /-! ### Inhabitants -/
 
 /-- A typed state with garbage: a cached natural no root reaches. -/
-def garbageTyped : State := ⟨#[.cached ⟨.nat 0, []⟩ (.natural 0)], .evaluate (.nat 5) [], []⟩
+@[expose] public def garbageTyped : State := ⟨#[.cached ⟨.nat 0, []⟩ (.natural 0)], .evaluate (.nat 5) [], []⟩
 
-def garbageTyping : StateTyping {} [.natural] garbageTyped .natural where
+@[expose] public def garbageTyping : StateTyping {} [.natural] garbageTyped .natural where
   current := .natural
   heap := ⟨rfl, by
     intro address type found
@@ -1850,9 +1851,8 @@ def garbageTyping : StateTyping {} [.natural] garbageTyped .natural where
     | succ n => simp at found
   terminalStack := fun _ complete => by cases complete
 
-/-- The collected typed state drops the garbage cell and keeps its typing. -/
-theorem garbageTyped_collected : garbageTyped.heap.size = 1 ∧ (collect garbageTyped).heap.size = 0 := by
-  decide +kernel
+/- `garbageTyped_collected` (the collected typed state drops the garbage cell: sizes 1 and 0) is in
+`Obend.Core.Teeth.CollectTyping`, a legacy leaf: its `decide` evaluates `collect`. -/
 
 theorem garbageTyped_collect_typed :
     Nonempty (StateTyping {} (collectTypes garbageTyped [.natural]) (collect garbageTyped) .natural) :=
@@ -1866,43 +1866,18 @@ end CollectTyping
 condition takes the zero branch, and the program yields Plan `5`. The forced argument
 is garbage at the yield. -/
 
-def yieldingTerm : Term := .ifZero (.app (.lam (.bound 0)) (.nat 0)) (.perform (.nat 5)) (.nat 9)
-def exampleLimits : Limits := ⟨16, 16⟩
-def exampleBudget : Budget := ⟨8, 64, 64⟩
+@[expose] public def yieldingTerm : Term := .ifZero (.app (.lam (.bound 0)) (.nat 0)) (.perform (.nat 5)) (.nat 9)
+@[expose] public def exampleLimits : Limits := ⟨16, 16⟩
+@[expose] public def exampleBudget : Budget := ⟨8, 64, 64⟩
 
-def exampleYield : State :=
+@[expose] public def exampleYield : State :=
   match runBounded exampleLimits 32 (initial yieldingTerm) with
   | .yielded _ yielded => yielded
   | _ => initial yieldingTerm
 
-theorem yieldingTerm_yields : runBounded exampleLimits 32 (initial yieldingTerm) = .yielded 1 exampleYield := by
-  rfl
-
-/-- The yield leaves one garbage cell of two; collection drops it. -/
-theorem exampleYield_collected : exampleYield.heap.size = 2 ∧ (collect exampleYield).heap.size = 1 := by
-  decide +kernel
-
-/-- Both Plans extract, to the same encoded Data. -/
-theorem exampleYield_plan_agrees :
-    ((yieldedPlan exampleLimits exampleBudget exampleYield).toOption.map fun r => encoded 4 r.value) =
-      some (some [0, 53, 0]) ∧
-    ((yieldedPlan exampleLimits exampleBudget (collect exampleYield)).toOption.map fun r => encoded 4 r.value) =
-      some (some [0, 53, 0]) := by
-  decide +kernel
-
-theorem exampleYield_plan_extracts : ∃ r, yieldedPlan exampleLimits exampleBudget exampleYield = .ok r := by
-  have agrees := exampleYield_plan_agrees.1
-  cases extracted : yieldedPlan exampleLimits exampleBudget exampleYield with
-  | ok r => exact ⟨r, rfl⟩
-  | error e => rw [extracted] at agrees; simp [Except.toOption] at agrees
-
-/-- The segment premises are inhabited: the original yields and its Plan extracts. -/
-theorem exampleYield_segment_premises :
-    ∃ plan y r, runBounded exampleLimits 32 (initial yieldingTerm) = .yielded plan y ∧
-      yieldedPlan exampleLimits exampleBudget y = .ok r := by
-  obtain ⟨r, extracted⟩ := exampleYield_plan_extracts
-  exact ⟨1, exampleYield, r, yieldingTerm_yields, extracted⟩
-
+/- The five executed teeth over `yieldingTerm`/`exampleYield` (it yields at cell 1; collection drops one
+of two cells; both Plans extract to the same encoded Data; the segment premises are inhabited) are in
+`Obend.Core.Teeth.CollectYield`, a legacy leaf: their `decide`/`rfl` run the machine and `collect`. -/
 
 /-! ## The T5 statements for `collect` -/
 
@@ -2069,13 +2044,7 @@ theorem collect_yieldedPlan {state : State} {limits : Limits} {budget : Budget} 
 #assert_axioms collectTypes_length
 #assert_axioms collectTypes_rel
 #assert_axioms typed_collect_exists
-#assert_axioms garbageTyped_collected
 #assert_axioms garbageTyped_collect_typed
-#assert_axioms yieldingTerm_yields
-#assert_axioms exampleYield_collected
-#assert_axioms exampleYield_plan_agrees
-#assert_axioms exampleYield_plan_extracts
-#assert_axioms exampleYield_segment_premises
 #assert_axioms collect_heap_le
 #assert_axioms collect_yielded
 #assert_axioms collect_resume_runBounded

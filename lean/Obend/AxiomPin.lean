@@ -1,3 +1,4 @@
+module
 /-
 # `#assert_axioms` — axiom footprints as checks that can fail (core module)
 
@@ -16,14 +17,15 @@ The axiom footprint of a declaration is pinned where it is stated, as a
 `#guard_msgs … #print axioms` pair (the contract manifests that once held it as
 a column were deleted on 2026-10-27: docs/COORDINATION-2026-10-27.md §2).
 -/
-import Lean
+public import Lean
+@[expose] public section
 
 namespace Obend.AssertAxioms
 
 open Lean Elab Command
 
 /-- The axioms a kernel-checked Mini theorem may rest on. -/
-def standard : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+meta def standard : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
 elab "#assert_axioms " ids:ident+ : command => do
   let mut offenders : Array MessageData := #[]
@@ -37,3 +39,5 @@ elab "#assert_axioms " ids:ident+ : command => do
     throwError MessageData.joinSep offenders.toList "\n"
 
 end Obend.AssertAxioms
+
+end

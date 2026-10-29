@@ -1,6 +1,7 @@
+module
 /- Preservation cases: Pairs. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -28,7 +29,7 @@ theorem stack_metadata_value {assumptions : Assumptions} {types : AddressTypes}
 /-- Metadata projection enters the actual stored address representative and
 carries its component conversion into the continuation. No address is retyped
 and a law-bearing specification grants no native authority. -/
-theorem typed_metadata_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_metadata_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
     (returned : state.control = .returned value) (stack : state.stack = .metadata :: rest) :
@@ -49,7 +50,7 @@ theorem typed_metadata_preserved {assumptions : Assumptions} {types : AddressTyp
   · simpa [stepRaw,returned,stack] using (ControlTyping.enter metadataAssigned)
   · simpa [stepRaw,returned,stack] using (StackTyping.conversion (canonical_same_type assumptions _ _ component) restTyped)
 
-def projectionFrame (specification : Bool) : Frame := if specification then .reflect else .project
+@[expose] public def projectionFrame (specification : Bool) : Frame := if specification then .reflect else .project
 
 theorem stack_projection_value {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty} {value : RuntimeValue}
@@ -76,7 +77,7 @@ theorem stack_projection_value {assumptions : Assumptions} {types : AddressTypes
 /-- Reflection and target projection preserve pointer identity and transport
 component conversions to the continuation. The law/native-authority layer is
 not part of this effect-free runtime typing judgment. -/
-theorem typed_prototype_projection_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_prototype_projection_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {rest : List Frame}
     (typed : StateTyping assumptions types state result) (specification : Bool)
     (returned : state.control = .returned value)
@@ -105,13 +106,13 @@ theorem typed_prototype_projection_preserved {assumptions : Assumptions} {types 
     · simpa [stepRaw,returned,stack,projectionFrame] using
         (StackTyping.conversion (canonical_same_type assumptions _ _ specComponent) restTyped)
 
-def pairedTerm (specification : Bool) (left right : Term) : Term :=
+@[expose] public def pairedTerm (specification : Bool) (left right : Term) : Term :=
   if specification then .specification left right else .prototype left right
 
-def pairedType (specification : Bool) (left right : Ty) : Ty :=
+@[expose] public def pairedType (specification : Bool) (left right : Ty) : Ty :=
   if specification then .specification left right else .prototype left right
 
-def PairDerivation (assumptions : Assumptions) (context : Context)
+@[expose] public def PairDerivation (assumptions : Assumptions) (context : Context)
     (kind : Bool) (left right : Term) (type : Ty) (uses : Uses) : Prop :=
   ∃ leftType rightType lu ru,
     PartialTyping assumptions context left leftType lu ∧
@@ -149,7 +150,7 @@ theorem source_pair_decomposition {assumptions : Assumptions} {context : Context
 
 /-- The pair decomposition with its component types' suspendability (each
 component becomes a shared cell). -/
-def PairPureDerivation (assumptions : Assumptions) (context : Context)
+@[expose] public def PairPureDerivation (assumptions : Assumptions) (context : Context)
     (kind : Bool) (left right : Term) (type : Ty) (uses : Uses) : Prop :=
   ∃ leftType rightType lu ru,
     PartialTyping assumptions context left leftType lu ∧
@@ -188,7 +189,7 @@ theorem source_pair_decomposition_pure {assumptions : Assumptions} {context : Co
 
 /-- Specification and prototype allocation keep both authored source origins,
 their independently typed pointers, and all prior heap identities. -/
-theorem typed_pair_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_pair_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {left right : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result) (kind : Bool)
     (evaluate : state.control = .evaluate (pairedTerm kind left right) environment) :

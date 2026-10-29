@@ -1,3 +1,4 @@
+module
 /-
 # `#assert_axioms` and `#assert_axioms_tree` — axiom footprints as checks that can fail
 
@@ -22,7 +23,8 @@ Lean v4.30 precomputes each imported declaration's axioms at olean export, so
 the census is a lookup per constant, not a walk.
 -/
 
-import Obend.AxiomPin
+public import Obend.AxiomPin
+@[expose] public section
 
 namespace Obend.AssertAxioms
 
@@ -34,7 +36,7 @@ open Lean Elab Command
 counted (not refused) by `#assert_axioms_tree`. In Lean v4.30 each
 `native_decide` proof is an auxiliary axiom `<theorem>._native.native_decide.ax_…`
 (older toolchains used `Lean.ofReduceBool`). -/
-def isCompilerTrust (axiomName : Name) : Bool :=
+meta def isCompilerTrust (axiomName : Name) : Bool :=
   axiomName == ``Lean.ofReduceBool || axiomName == ``Lean.trustCompiler ||
     axiomName.components.any (· == `_native)
 
@@ -45,16 +47,16 @@ own placeholder. Kernel-checked statements never reach it: a theorem about the
 inductive or its field depends on the kernel-side definitions, which carry no
 `lcProof` (a theorem that did reach it would be an offender). Like
 `native_decide`, this is compiler trust, counted and reported, never silent. -/
-def isComputedFieldOverride (info : ConstantInfo) (constant : Name) (outside : List Name) : Bool :=
+meta def isComputedFieldOverride (info : ConstantInfo) (constant : Name) (outside : List Name) : Bool :=
   info matches .defnInfo _ && constant.components.getLast? == some `_override &&
     outside == [``lcProof]
 
 /-- This package's module roots. -/
-def packageRoots : List Name :=
+meta def packageRoots : List Name :=
   [`Theory, `Compiler, `Kernel, `Assurance, `Pred, `Effects, `Selvage, `Host, `Obend]
 
 /-- The module a constant was declared in, when it is one of this package's. -/
-def packageModule? (env : Environment) (constant : Name) : Option Name := do
+meta def packageModule? (env : Environment) (constant : Name) : Option Name := do
   let index ← env.getModuleIdxFor? constant
   let module ← env.header.moduleNames[index.toNat]?
   if packageRoots.contains module.getRoot then some module else none
@@ -82,3 +84,5 @@ elab "#assert_axioms_tree" : command => do
   logInfo m!"#assert_axioms_tree: {checked} package constants; {compiled} rest on the compiler trust (native_decide); {overrides} are computed_fields overrides (lcProof, compiled code only); none on sorryAx or a declared axiom"
 
 end Obend.AssertAxioms
+
+end

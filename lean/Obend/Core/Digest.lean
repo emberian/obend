@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Core.Digest — Core4's `digest` primitive: what it computes and what it binds
 
@@ -44,8 +45,10 @@ scalar primitive.
 Init only (plus Obend.Digest.HashBytes and the cSHAKE256 leaf): the C transcription links this module's
 compiled object and calls `minidregg_obend_digest`, so there is one implementation of the digest.
 -/
-import Obend.Digest.Cshake256
-import Obend.Digest.HashBytes
+public import Obend.Digest.Cshake256
+public import Obend.Digest.Class
+public import Obend.Digest.HashBytes
+@[expose] public section
 
 namespace Obend.Core.Digest
 
@@ -170,12 +173,15 @@ theorem preimage_injective {a b a' b' : Nat} (ha : Admissible a) (ha' : Admissib
 /-- The digest of `(a, b)` under the byte hash `H`, read big-endian. -/
 def digestWith (H : Hash) (a b : Nat) : Nat := ofBE (H (preimage a b))
 
-/-- This primitive's cSHAKE256 customization string. -/
-def customization : List UInt8 := "DREGG.OBEND.DIGEST/v1".toUTF8.data.toList
+/-- This primitive's cSHAKE256 customization string, `"DREGG.OBEND.DIGEST/v1"` as its UTF-8 bytes.
+Spelled as bytes (obend, 2026-10-30): under the module system `String.toUTF8` is an opaque import
+(Lean 4.30's `Init` does not expose it), so `decide` could not read the string; the bytes are the value. -/
+def customization : List UInt8 := [0x44, 0x52, 0x45, 0x47, 0x47, 0x2e, 0x4f, 0x42, 0x45, 0x4e, 0x44, 0x2e, 0x44, 0x49, 0x47, 0x45, 0x53, 0x54, 0x2f, 0x76, 0x31]
 
-/-- **The deployed hash**: the kernel's cSHAKE256 (empty function name, 256-bit output) under
-`customization`. The compiled path is the word sponge of `Sp800185Cshake256Fast` (`@[csimp]`). -/
-def deployed : Hash := cshake256Bytes customization
+/-- **The deployed hash**: the `Obend.Digest.Digest` instance (cSHAKE256, empty function name, 256-bit
+output) under `customization`. A host that attaches a native kernel keeps this definition and adds its
+`@[csimp]` on `cshake256Bytes`. -/
+def deployed : Hash := Obend.Digest.Digest.hash customization
 
 /-- **Core4's `digest`.** -/
 def digest (a b : Nat) : Nat := digestWith deployed a b
@@ -184,7 +190,7 @@ def digest (a b : Nat) : Nat := digestWith deployed a b
 theorem digest_lt (a b : Nat) : digest a b < 2 ^ 256 := by
   have h := ofBE_lt (deployed (preimage a b))
   have hlen : (deployed (preimage a b)).length = 32 := by
-    simp [deployed]
+    simp [deployed, Obend.Digest.cshake_hash]
   rw [hlen] at h
   have h256 : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
   simpa [digest, digestWith, h256] using h
@@ -283,7 +289,7 @@ theorem deployed_eq (input : List UInt8) :
     apply propext; constructor
     · intro h; have := congrArg List.length h; revert this; decide
     · intro h; cases h
-  simp only [deployed, cshake256Bytes, hne, if_false]
+  simp only [deployed, Obend.Digest.cshake_hash, cshake256Bytes, hne, if_false]
 
 /-- The permutations `deployed` runs on `preimage a b`: `absorbPadded` runs Keccak-f[1600] once per
 `rateBytes` block of the padded input (its definition); squeezing 32 bytes runs none. -/
@@ -360,3 +366,5 @@ theorem digestExport_reads (a b : ByteArray) :
   exact ofBE_be (h256 ▸ digest_lt _ _)
 
 end Obend.Core.Digest
+
+end

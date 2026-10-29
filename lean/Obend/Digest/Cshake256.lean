@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Digest.Cshake256 -- cSHAKE256: the specification and its compiled path
 
@@ -13,6 +14,9 @@ A module importing only the spec would compile against the list definitions:
 correct, and about three orders of magnitude slower.
 -/
 
-import Obend.Digest.Cshake256.Spec
-import Obend.Digest.Cshake256.Fast
-import Obend.Digest.Cshake256.Seam
+public import Obend.Digest.Cshake256.Spec
+public import Obend.Digest.Cshake256.Fast
+public import Obend.Digest.Cshake256.Seam
+@[expose] public section
+
+end

@@ -1,7 +1,9 @@
+module
 /- Compiled-evaluation audit adapted from Bread metatheory/Dregg2/Tactics.lean.
 Re-runs actual closed Boolean oracle claims; rejects arbitrary named axioms.
 This marks compiler trust and does not certify general source refinement. -/
-import Obend.AssertAxioms
+public import Obend.AssertAxioms
+@[expose] public section
 
 /-- The two axioms LEAN ITSELF declares for proof-by-compiled-evaluation (`Lean.ofReduceBool`,
 `Lean.ofReduceNat`, both `Init.Core`). Recognising THESE by name is sound in the way a name
@@ -10,7 +12,7 @@ ever bear them and a second one cannot be declared. The equality test is an IDEN
 spelling test. Their claim lives in the proof term (via `Lean.reduceBool`), not in the axiom, so
 there is nothing here to re-run — accepting them IS accepting compiler trust, which is exactly
 what this command's label announces. -/
-def Obend.AssertCompiled.isCoreReduceAxiom (a : Lean.Name) : Bool :=
+meta def Obend.AssertCompiled.isCoreReduceAxiom (a : Lean.Name) : Bool :=
   a == ``Lean.ofReduceBool || a == ``Lean.ofReduceNat
 
 /-- The Boolean claim a `native_decide`/`bv_decide` oracle axiom makes, if its type has the shape
@@ -21,7 +23,7 @@ just watched evaluate to `true`; this returns that `e`.
 Returning the CLAIM rather than a yes/no about the name is the whole point: it is what lets the
 caller go and re-run `e` for itself. A type that is not of this shape is not a compiled-evaluation
 claim at all and there is nothing to re-run — which is a refusal, not a pass. -/
-def Obend.AssertCompiled.nativeOracleClaim? (type : Lean.Expr) : Option Lean.Expr :=
+meta def Obend.AssertCompiled.nativeOracleClaim? (type : Lean.Expr) : Option Lean.Expr :=
   match type.eq? with
   | some (α, lhs, rhs) =>
       if α.isConstOf ``Bool && rhs.isConstOf ``Bool.true then some lhs else none
@@ -94,3 +96,5 @@ elab "#assert_compiled" id:ident : command => do
 
 
 
+
+end

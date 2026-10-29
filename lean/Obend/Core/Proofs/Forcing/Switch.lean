@@ -1,3 +1,4 @@
+module
 /- The switch and the transfer through a pending demand (forcing transparency, part 4).
 
 * `renameValue_congr` / `renameCell_congr` / `renameFrame_congr` / `renameControl_congr`:
@@ -12,7 +13,7 @@
   the final states are still pending or, once the lazy run entered the pending cell, agree
   exactly with equal heaps, the forced run then strictly shorter, under a map that extends
   the pending one on every address the lazy state held. -/
-import Obend.Core.Proofs.Forcing.Pend
+public import Obend.Core.Proofs.Forcing.Pend
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -47,7 +48,7 @@ theorem renameClosure_id {f : Nat → Nat} {c : Closure} (same : ∀ x ∈ c.env
   conv => rhs; rw [← List.map_id env]
   exact List.map_congr_left same
 
-theorem renameValue_id {f : Nat → Nat} {v : RuntimeValue} (same : ∀ x ∈ valueAddresses v, f x = x) :
+public theorem renameValue_id {f : Nat → Nat} {v : RuntimeValue} (same : ∀ x ∈ valueAddresses v, f x = x) :
     renameValue f v = v := by
   rw [renameValue_congr (g := id) same]; cases v <;> simp [renameValue]
 
@@ -61,11 +62,11 @@ theorem renameCell_congr {f g : Nat → Nat} {c : Cell} (same : ∀ x ∈ cellAd
     rw [List.map_congr_left (fun x m => same x (List.mem_append_left _ m)),
       renameValue_congr (fun x m => same x (List.mem_append_right _ m))]
 
-theorem renameCell_id {f : Nat → Nat} {c : Cell} (same : ∀ x ∈ cellAddresses c, f x = x) :
+public theorem renameCell_id {f : Nat → Nat} {c : Cell} (same : ∀ x ∈ cellAddresses c, f x = x) :
     renameCell f c = c := by
   rw [renameCell_congr (g := id) same]; cases c <;> simp [renameCell, renameClosure, renameValue_id]
 
-theorem renameFrame_congr {f g : Nat → Nat} {fr : Frame} (same : ∀ x ∈ frameAddresses fr, f x = g x) :
+public theorem renameFrame_congr {f g : Nat → Nat} {fr : Frame} (same : ∀ x ∈ frameAddresses fr, f x = g x) :
     renameFrame f fr = renameFrame g fr := by
   cases fr <;> simp only [renameFrame, frameAddresses] at same ⊢ <;>
     first
@@ -74,7 +75,7 @@ theorem renameFrame_congr {f g : Nat → Nat} {fr : Frame} (same : ∀ x ∈ fra
       | (rw [same _ (List.mem_singleton_self _)])
       | (congr 1; exact renameValue_congr same)
 
-theorem renameControl_congr {f g : Nat → Nat} {c : Control} (same : ∀ x ∈ controlAddresses c, f x = g x) :
+public theorem renameControl_congr {f g : Nat → Nat} {c : Control} (same : ∀ x ∈ controlAddresses c, f x = g x) :
     renameControl f c = renameControl g c := by
   cases c <;> simp only [renameControl, controlAddresses] at same ⊢ <;>
     first
@@ -86,10 +87,10 @@ theorem renameControl_congr {f g : Nat → Nat} {c : Control} (same : ∀ x ∈ 
 /-! ## The switch -/
 
 /-- `e` on its base, carried to the lazy heap (its fresh cells after the lazy end). -/
-def liftMap (base lazySize : Nat) : Nat → Nat := fun a => if a < base then a else a + (lazySize - base)
+@[expose] public def liftMap (base lazySize : Nat) : Nat → Nat := fun a => if a < base then a else a + (lazySize - base)
 
 /-- After the switch: the lazy run's copy of `e`'s cells lands on `e`'s block. -/
-def switchMap (e : Pending) (f : Nat → Nat) (lazySize : Nat) : Nat → Nat := fun a =>
+@[expose] public def switchMap (e : Pending) (f : Nat → Nat) (lazySize : Nat) : Nat → Nat := fun a =>
   if a < lazySize then f a else if a < lazySize + e.gap then e.base.size + (a - lazySize) else a
 
 theorem stepRaw_enter_cached {s : State} {b : Nat} {o : Closure} {v : RuntimeValue} (ctl : s.control = .enter b)
@@ -98,12 +99,12 @@ theorem stepRaw_enter_cached {s : State} {b : Nat} {o : Closure} {v : RuntimeVal
   simp only at ctl ca; subst ctl
   simp [stepRaw, ca]
 
-theorem state_ext {s : State} : s = ⟨s.heap, s.control, s.stack⟩ := rfl
+public theorem state_ext {s : State} : s = ⟨s.heap, s.control, s.stack⟩ := rfl
 
-theorem heapValid_exec {s : State} (valid : AddrValid s) (n : Nat) : HeapValid (exec n s).heap :=
+public theorem heapValid_exec {s : State} (valid : AddrValid s) (n : Nat) : HeapValid (exec n s).heap :=
   (addrValid_exec valid n).heap
 
-theorem addrValid_demandStart {P : Array Cell} {w : Nat} (valid : HeapValid P) (lt : w < P.size) :
+public theorem addrValid_demandStart {P : Array Cell} {w : Nat} (valid : HeapValid P) (lt : w < P.size) :
     AddrValid (demandStart P w) :=
   ⟨valid, by simp [demandStart, controlAddresses, lt], fun _ m => by simp [demandStart] at m⟩
 
@@ -111,7 +112,7 @@ theorem addrValid_demandStart {P : Array Cell} {w : Nat} (valid : HeapValid P) (
 (over its own stack) to the demand's result, renamed; the forced run returns the cached
 result in one transition; and the two then agree exactly, the forced heap covering the
 lazy heap, the renaming the identity on the demand's base. -/
-theorem pend_switch {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : PendRel e f σ τ)
+public theorem pend_switch {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : PendRel e f σ τ)
     (enter : σ.control = .enter e.cell) :
     4 ≤ e.steps ∧ (∀ j, j ≤ e.steps - 1 → active (exec j σ).control = true) ∧
       (∀ j, j ≤ e.steps - 1 → σ.stack.length ≤ (exec j σ).stack.length) ∧
@@ -337,7 +338,7 @@ theorem stepRaw_update_not_evaluating {s : State} {v : RuntimeValue} {a : Nat} {
 
 /-- A lazy update frame for the pending cell finds it suspended, the forced one finds it
 cached: both refuse alike. -/
-theorem pend_update_read {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : PendRel e f σ τ) {v : RuntimeValue}
+public theorem pend_update_read {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : PendRel e f σ τ) {v : RuntimeValue}
     {rest : List Frame} (ctl : σ.control = .returned v) (st : σ.stack = .update e.cell :: rest) :
     PendRel e f (stepRaw σ) (stepRaw τ) ∧ active (stepRaw σ).control = false := by
   have ph := rel.heap
@@ -354,7 +355,7 @@ theorem pend_update_read {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : 
   rw [σStep] at this; exact this
 
 /-- **Transfer through a pending demand.** -/
-theorem pend_transfer {e : Pending} {f : Nat → Nat} :
+public theorem pend_transfer {e : Pending} {f : Nat → Nat} :
     ∀ (n : Nat) (σ τ : State), PendRel e f σ τ → Halts σ n →
       ∃ n', n' ≤ n ∧ Halts τ n' ∧ Bounded σ τ n n' e.gap ∧
         (PendRel e f (exec n σ) (exec n' τ) ∨

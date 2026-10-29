@@ -1,8 +1,10 @@
+module
 /- Typed graph representation for the frozen effect-free Objective demand core.
 This module carries actual source derivations and captured quantity premises.
 It does not turn static use counts into a native custody/liveness theorem. -/
-import Obend.Core.Check
-import Obend.Core.Invariant
+public import Obend.Core.Check
+public import Obend.Core.Invariant
+@[expose] public section
 namespace Obend.Core.MachineTyping
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine
 set_option autoImplicit false
@@ -446,3 +448,5 @@ def checked_initial_state (source : AnnotatedTerm) (checked : Checked source [])
 
 
 end Obend.Core.MachineTyping
+
+end

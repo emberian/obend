@@ -1,7 +1,9 @@
+module
 /- Lexical invariants for the partial Objective Bend edition. These proofs do
 not assert totality, ownership of native effects, or source/heap adequacy. -/
-import Obend.Core.Machine
-import Obend.AxiomPin
+public import Obend.Core.Machine
+public import Obend.AxiomPin
+@[expose] public section
 namespace Obend.Core.Invariant
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -944,3 +946,5 @@ def FinalStackInvariant (state : State) : Prop :=
   stepRaw_busyInvariant stepRaw_finalStackInvariant reachable_no_internalRefusal
 
 end Obend.Core.Invariant
+
+end

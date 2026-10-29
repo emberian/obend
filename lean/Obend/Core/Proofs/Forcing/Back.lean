@@ -1,3 +1,4 @@
+module
 /- The converse of forcing transparency: the forced side halts only where the lazy side halts
 (forcing transparency, part 9).
 
@@ -17,7 +18,7 @@ given ENOUGH of each resource. The difference between the two runs is resources 
   that commits alike, to the same Data, under every resource vector above a threshold
   (`LimitsLe L0 L`, ticks `≥ T0`, extraction ticks `≥ E0`), with the SAME output nodes and
   bytes, ending again related (the continuation states, not only the Data). -/
-import Obend.Core.Proofs.Forcing.Extract
+public import Obend.Core.Proofs.Forcing.Extract
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -110,19 +111,19 @@ theorem forces_transfer_back {gap : Nat} {F : Nat → Nat} {σ τ : State} (h : 
 /-! ## Resource vectors -/
 
 /-- `L` gives at least the room `L0` gives. -/
-def LimitsLe (L0 L : Limits) : Prop := L0.heap ≤ L.heap ∧ L0.stack ≤ L.stack
+@[expose] public def LimitsLe (L0 L : Limits) : Prop := L0.heap ≤ L.heap ∧ L0.stack ≤ L.stack
 
-def limitsMax (L L' : Limits) : Limits := ⟨max L.heap L'.heap, max L.stack L'.stack⟩
+@[expose] public def limitsMax (L L' : Limits) : Limits := ⟨max L.heap L'.heap, max L.stack L'.stack⟩
 
-theorem limitsLe_refl (L : Limits) : LimitsLe L L := ⟨Nat.le_refl _, Nat.le_refl _⟩
+public theorem limitsLe_refl (L : Limits) : LimitsLe L L := ⟨Nat.le_refl _, Nat.le_refl _⟩
 
-theorem limitsLe_trans {L1 L2 L3 : Limits} (a : LimitsLe L1 L2) (b : LimitsLe L2 L3) : LimitsLe L1 L3 :=
+public theorem limitsLe_trans {L1 L2 L3 : Limits} (a : LimitsLe L1 L2) (b : LimitsLe L2 L3) : LimitsLe L1 L3 :=
   ⟨Nat.le_trans a.1 b.1, Nat.le_trans a.2 b.2⟩
 
-theorem limitsLe_max_left (L L' : Limits) : LimitsLe L (limitsMax L L') :=
+public theorem limitsLe_max_left (L L' : Limits) : LimitsLe L (limitsMax L L') :=
   ⟨Nat.le_max_left _ _, Nat.le_max_left _ _⟩
 
-theorem limitsLe_max_right (L L' : Limits) : LimitsLe L' (limitsMax L L') :=
+public theorem limitsLe_max_right (L L' : Limits) : LimitsLe L' (limitsMax L L') :=
   ⟨Nat.le_max_right _ _, Nat.le_max_right _ _⟩
 
 theorem fitsFrom_mono {L L' : Limits} (le : LimitsLe L L') {s : State} {n : Nat} (h : FitsFrom L s n) :
@@ -150,7 +151,7 @@ theorem fitsFrom_exists (s : State) : ∀ n, ∃ L, FitsFrom L s n := by
 addresses are in the domain, any domain control and stack re-enter related, and a forced run
 that halts has a lazy run that halts, ending related, under a map that extends `F` on the
 domain (which only grows). -/
-structure BackSim (R : (Nat → Nat) → State → State → Prop) (Dom : Array Cell → Nat → Prop) : Prop where
+public structure BackSim (R : (Nat → Nat) → State → State → Prop) (Dom : Array Cell → Nat → Prop) : Prop where
   renames : ∀ {F : Nat → Nat} {s t : State}, R F s t →
     t.control = renameControl F s.control ∧ t.stack = s.stack.map (renameFrame F)
   controlIn : ∀ {F : Nat → Nat} {s t : State}, R F s t → AllIn (Dom s.heap) (controlAddresses s.control)
@@ -163,11 +164,11 @@ structure BackSim (R : (Nat → Nat) → State → State → Prop) (Dom : Array 
 
 /-- The threshold form of "the lazy side commits too": every resource vector at least
 `(L0, T0)` commits, to `out`, with `T - T0` ticks left. -/
-def ForceAbove (L0 : Limits) (n : Nat) (s : State) (v : RuntimeValue) (st : State) : Prop :=
+@[expose] public def ForceAbove (L0 : Limits) (n : Nat) (s : State) (v : RuntimeValue) (st : State) : Prop :=
   ∀ (L : Limits) (T : Nat), LimitsLe L0 L → n ≤ T → forceWith (fun _ => true) L T s = (.finished v st, T - n)
 
 /-- **Forcing, backward.** -/
-theorem BackSim.forceWith {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.forceWith {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) {F : Nat → Nat} {s t : State} (rel : R F s t)
     {L' : Limits} {T' : Nat} {v' : RuntimeValue} {st' : State} {r' : Nat}
     (ran : Obend.Core.Data.forceWith (fun _ => true) L' T' t = (.finished v' st', r')) :
@@ -194,7 +195,7 @@ theorem BackSim.forceWith {R : (Nat → Nat) → State → State → Prop} {Dom 
 /-- Materialization backward at one depth: the forced side's success has, above a threshold,
 a lazy success to the same Data with the same nodes and bytes left, `k` ticks left for every
 `T0 + k` given, ending in a related state that does not depend on the resources given. -/
-def MaterializeBack (R : (Nat → Nat) → State → State → Prop) (Dom : Array Cell → Nat → Prop)
+@[expose] public def MaterializeBack (R : (Nat → Nat) → State → State → Prop) (Dom : Array Cell → Nat → Prop)
     (L' : Limits) (depth : Nat) : Prop :=
   ∀ (budget' : Budget) (v : RuntimeValue) (s t : State) (F : Nat → Nat) (r' : Result),
     R F s t → AllIn (Dom s.heap) (valueAddresses v) →
@@ -206,7 +207,7 @@ def MaterializeBack (R : (Nat → Nat) → State → State → Prop) (Dom : Arra
           .ok ⟨r'.value, st, ⟨r'.remaining.nodes, k, r'.remaining.bytes⟩⟩
 
 /-- **The record fold, backward.** -/
-theorem BackSim.fold {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.fold {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) {L' : Limits} {depth : Nat} (ih : MaterializeBack R Dom L' depth) :
     ∀ (fields : List (String × Nat)) (acc : List (String × Data)) (s t : State) (b' : Budget)
       (F : Nat → Nat) (out' : List (String × Data) × State × Budget),
@@ -274,7 +275,7 @@ theorem BackSim.fold {R : (Nat → Nat) → State → State → Prop} {Dom : Arr
         | _ => simp at first'
 
 /-- **Materialization, backward.** -/
-theorem BackSim.materialize {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.materialize {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) (L' : Limits) : ∀ depth, MaterializeBack R Dom L' depth := by
   intro depth
   induction depth with
@@ -381,7 +382,7 @@ theorem rename_state_congr {Dom : Array Cell → Nat → Prop} {F G : Nat → Na
 /-- **Plan extraction, backward**: the forced yield's Plan extracts, so the lazy yield's Plan
 extracts to the same Data above a threshold (heap and stack room, extraction ticks), with the
 same nodes and bytes left, ending in a related state (the checkpoint candidates). -/
-theorem BackSim.yieldedPlan {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.yieldedPlan {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) {F : Nat → Nat} {y y' : State} (rel : R F y y') {L' : Limits} {budget' : Budget}
     {r' : Result} (found : Obend.Core.Data.yieldedPlan L' budget' y' = .ok r') :
     ∃ (L0 : Limits) (E0 : Nat) (st : State) (F' : Nat → Nat), R F' st r'.state ∧
@@ -432,7 +433,7 @@ theorem BackSim.yieldedPlan {R : (Nat → Nat) → State → State → Prop} {Do
   | _ => rw [ctlEq, hc] at found; simp [renameControl] at found
 
 /-- **Completion, backward.** -/
-theorem BackSim.complete {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.complete {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) {F : Nat → Nat} {y y' : State} (rel : R F y y') {L' : Limits} {budget' : Budget}
     {r' : Result} (found : Obend.Core.Data.complete L' budget' y' = .ok r') :
     ∃ (L0 : Limits) (E0 : Nat) (st : State) (F' : Nat → Nat), R F' st r'.state ∧
@@ -470,7 +471,7 @@ theorem BackSim.complete {R : (Nat → Nat) → State → State → Prop} {Dom :
 
 /-- **Bounded runs, backward**: a forced bounded run that does not suspend has a lazy run that,
 under every limits and ticks above a threshold, is its halting raw run, the two ends related. -/
-theorem BackSim.runBounded {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
+public theorem BackSim.runBounded {R : (Nat → Nat) → State → State → Prop} {Dom : Array Cell → Nat → Prop}
     (sim : BackSim R Dom) {F : Nat → Nat} {s t : State} (rel : R F s t) {L' : Limits} {T' : Nat}
     (notSusp : ∀ r st, Obend.Core.Machine.runBounded L' T' t ≠ .suspended r st) :
     ∃ (n n' : Nat) (L0 : Limits) (F' : Nat → Nat), R F' (exec n s) (exec n' t) ∧
@@ -486,7 +487,7 @@ theorem BackSim.runBounded {R : (Nat → Nat) → State → State → Prop} {Dom
 
 /-! ## Terminal states -/
 
-theorem runBounded_zero_yielded {L : Limits} {s y : State} {p : Nat} :
+public theorem runBounded_zero_yielded {L : Limits} {s y : State} {p : Nat} :
     Obend.Core.Machine.runBounded L 0 s = .yielded p y ↔ s.control = .yielded p ∧ y = s := by
   cases hc : s.control <;> simp [Obend.Core.Machine.runBounded, hc, eq_comm]
 
@@ -505,7 +506,7 @@ theorem runBounded_zero_refused {L : Limits} {s y : State} {reason : Refusal} :
 /-! ## Instances -/
 
 /-- **Forcing chains are backward simulations.** -/
-theorem forcesSim (gap : Nat) : BackSim (ForcesBy gap) (fun H a => a < H.size) where
+public theorem forcesSim (gap : Nat) : BackSim (ForcesBy gap) (fun H a => a < H.size) where
   renames h := h.renames
   controlIn h := h.lazyValid.control
   stackIn h := h.lazyValid.stack
@@ -523,7 +524,7 @@ theorem related_exec {f : Nat → Nat} {D : Nat → Prop} {s t : State} (related
 
 /-- **A renaming relation (the collection's) is a backward simulation**: it is lockstep, so
 the original halts exactly when the renamed state does. -/
-theorem relatedSim (f : Nat → Nat) (D : Nat → Prop) :
+public theorem relatedSim (f : Nat → Nat) (D : Nat → Prop) :
     BackSim (fun F s t => F = f ∧ Related f D s t) (fun _ a => D a) where
   renames h := by obtain ⟨rfl, r⟩ := h; exact ⟨r.control, r.stack⟩
   controlIn h := h.2.controlIn

@@ -1,20 +1,21 @@
+module
 /- Preservation, shared lemmas: weakening, the typing/usage algebra, value and stack
 inversions, source decompositions every constructor's case uses. No dispatcher here:
 the per-constructor case modules import this, the umbrella imports them. -/
-import Obend.Core.MachineTyping
-import Obend.Core.Proofs.Adequacy
-import Obend.AxiomPin
+public import Obend.Core.MachineTyping
+public import Obend.Core.Proofs.Adequacy
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
 
-def ClosureTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
+@[expose] public def ClosureTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {closure : Closure} {type : Ty} (extension : TypeExtension before after)
     (typed : Obend.Core.MachineTyping.ClosureTyping assumptions before closure type) :
     Obend.Core.MachineTyping.ClosureTyping assumptions after closure type :=
   ⟨typed.context,typed.uses,typed.environment.weaken extension,typed.source,typed.safe,typed.contextValid⟩
 
-theorem ValueTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
+public theorem ValueTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {value : RuntimeValue} {type : Ty} (extension : TypeExtension before after)
     (typed : ValueTyping assumptions before value type) : ValueTyping assumptions after value type := by
   induction typed with
@@ -33,7 +34,7 @@ theorem ValueTyping.weaken {assumptions : Assumptions} {before after : AddressTy
   | conversion prior agreement ih => exact .conversion ih agreement
   | variant lookup assigned path => exact .variant lookup (extension _ _ assigned) path
 
-theorem CellTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
+public theorem CellTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {cell : Cell} {type : Ty} (extension : TypeExtension before after)
     (typed : CellTyping assumptions before cell type) : CellTyping assumptions after cell type := by
   cases typed with
@@ -42,7 +43,7 @@ theorem CellTyping.weaken {assumptions : Assumptions} {before after : AddressTyp
   | cached origin value pure =>
       exact .cached (ClosureTyping.weaken extension origin) (ValueTyping.weaken extension value) pure
 
-theorem FrameTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
+public theorem FrameTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {frame : Frame} {input output : Ty} (extension : TypeExtension before after)
     (typed : FrameTyping assumptions before frame input output) :
     FrameTyping assumptions after frame input output := by
@@ -63,7 +64,7 @@ theorem FrameTyping.weaken {assumptions : Assumptions} {before after : AddressTy
       exact .ifBool (ClosureTyping.weaken extension whenTrue) (ClosureTyping.weaken extension whenFalse)
   | effectCase environment arms valid pure => exact .effectCase (environment.weaken extension) arms valid pure
 
-theorem StackTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
+public theorem StackTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {stack : List Frame} {input output : Ty} (extension : TypeExtension before after)
     (typed : StackTyping assumptions before stack input output) :
     StackTyping assumptions after stack input output := by
@@ -73,7 +74,7 @@ theorem StackTyping.weaken {assumptions : Assumptions} {before after : AddressTy
   | conversion agreement rest ih => exact .conversion agreement ih
   | returns pure rest ih => exact .returns pure ih
 
-theorem ControlTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
+public theorem ControlTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {control : Control} {type : Ty} (extension : TypeExtension before after)
     (typed : ControlTyping assumptions before control type) :
     ControlTyping assumptions after control type := by
@@ -86,7 +87,7 @@ theorem ControlTyping.weaken {assumptions : Assumptions} {before after : Address
   | yielded assigned plan response => exact .yielded (extension _ _ assigned) plan response
 
 /-- Address identity is conserved through arbitrary allocation extensions. -/
-theorem type_extension_append (before additions : AddressTypes) :
+public theorem type_extension_append (before additions : AddressTypes) :
     TypeExtension before (before ++ additions) := by
   intro address type assigned
   have bound : address < before.length := (List.getElem?_eq_some_iff.mp assigned).1
@@ -96,31 +97,31 @@ theorem type_extension_append (before additions : AddressTypes) :
 /-! ## Activities in the typed graph -/
 
 /-- No heap cell is an activity (CellTyping carries it). -/
-theorem heap_type_pure {assumptions : Assumptions} {types : AddressTypes} {heap : Array Cell}
+public theorem heap_type_pure {assumptions : Assumptions} {types : AddressTypes} {heap : Array Cell}
     (heapTyped : HeapTyping assumptions types heap) {address : Address} {type : Ty}
     (assigned : types[address]? = some type) : type.isComputation = false := by
   obtain ⟨cell,_,cellTyped⟩ := heapTyped.cell address type assigned
   cases cellTyped <;> assumption
 
-theorem conversionPath_isComputation {assumptions : Assumptions} {first last : Ty}
+public theorem conversionPath_isComputation {assumptions : Assumptions} {first last : Ty}
     (path : ConversionPath assumptions first last) : first.isComputation = last.isComputation := by
   induction path with
   | refl => rfl
   | step prior agreement ih => exact ih.trans (sameType_isComputation agreement)
 
-theorem lookup_not_computation (bounds : Bounds) (fuel : Nat) (row : Ty) (name : String) (member : Ty)
+public theorem lookup_not_computation (bounds : Bounds) (fuel : Nat) (row : Ty) (name : String) (member : Ty)
     (lookup : row.lookup bounds fuel name = some member) : row.isComputation = false := by
   cases fuel <;> cases row <;> simp_all [Ty.lookup,Ty.isComputation]
 
-theorem isRow_not_computation (bounds : Bounds) (fuel : Nat) (row : Ty)
+public theorem isRow_not_computation (bounds : Bounds) (fuel : Nat) (row : Ty)
     (isRow : row.isRow bounds fuel = true) : row.isComputation = false := by
   cases fuel <;> cases row <;> simp_all [Ty.isRow,Ty.isComputation]
 
-theorem callable_arrow_not_computation {type : Ty} {reuse : Reuse} {quantity : Quantity} {domain codomain : Ty}
+public theorem callable_arrow_not_computation {type : Ty} {reuse : Reuse} {quantity : Quantity} {domain codomain : Ty}
     (callable : callable type = .arrow reuse quantity domain codomain) : type.isComputation = false := by
   cases type <;> simp_all [Obend.Core.Check.callable,Ty.isComputation]
 
-theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
+public theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
     (agreement : sameType assumptions actual expected = true)
     (equal : actual.canonical = (Ty.computation plan response produced).canonical) :
     expected.canonical = (Ty.computation plan response produced).canonical := by
@@ -133,7 +134,7 @@ theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected
   · cases expected <;> simp at aliasExpected
     simp_all [Ty.isComputation]
 
-theorem argumentAllowed_not_computation {assumptions : Assumptions} {quantity : Quantity}
+public theorem argumentAllowed_not_computation {assumptions : Assumptions} {quantity : Quantity}
     {context : Context} {type : Ty} {uses : Uses}
     (allowed : argumentAllowed assumptions quantity context type uses = true) : type.isComputation = false := by
   simp only [argumentAllowed,Bool.and_eq_true] at allowed
@@ -141,7 +142,7 @@ theorem argumentAllowed_not_computation {assumptions : Assumptions} {quantity : 
 
 /-- An activity-typed continuation begins with an effect case: no other frame,
 and in particular no update frame (a shared cell being forced), accepts one. -/
-theorem stack_activity_head {assumptions : Assumptions} {types : AddressTypes}
+public theorem stack_activity_head {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty}
     (typed : StackTyping assumptions types stack input result) :
     input.isComputation = true →
@@ -166,7 +167,7 @@ theorem stack_activity_head {assumptions : Assumptions} {types : AddressTypes}
       intro activity; exact ih ((sameType_isComputation agreement) ▸ activity)
   | returns pure restTyped ih => intro activity; simp_all
 
-theorem computation_canonical_inj {plan response result plan' response' result' : Ty}
+public theorem computation_canonical_inj {plan response result plan' response' result' : Ty}
     (equal : (Ty.computation plan response result).canonical = (Ty.computation plan' response' result').canonical) :
     plan.canonical = plan'.canonical ∧ response.canonical = response'.canonical ∧ result.canonical = result'.canonical := by
   simp only [Ty.canonical,Ty.computation.injEq] at equal
@@ -175,7 +176,7 @@ theorem computation_canonical_inj {plan response result plan' response' result' 
 /-- Inversion of an activity continuation at an effect case: the arms are
 activities over the case's own Plan/Response, and the incoming activity
 produces the case's sum. -/
-theorem stack_effect_case {assumptions : Assumptions} {types : AddressTypes}
+public theorem stack_effect_case {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty}
     (typed : StackTyping assumptions types stack input result) :
     ∀ arms environment rest plan response produced, stack = .case arms environment :: rest →
@@ -207,7 +208,7 @@ theorem stack_effect_case {assumptions : Assumptions} {types : AddressTypes}
 
 /-- A cache update preserves every assigned address type and every retained
 origin's source/capture evidence; it changes no address assignment. -/
-theorem heap_typed_set {assumptions : Assumptions} {types : AddressTypes}
+public theorem heap_typed_set {assumptions : Assumptions} {types : AddressTypes}
     {heap : Array Cell} {address : Address} {type : Ty} {replacement : Cell}
     (heapTyped : HeapTyping assumptions types heap) (assigned : types[address]? = some type)
     (replacementTyped : CellTyping assumptions types replacement type) :
@@ -227,7 +228,7 @@ theorem heap_typed_set {assumptions : Assumptions} {types : AddressTypes}
 
 /-- Pushing a typed thunk/cached predecessor extends the type assignment once;
 all old origins, cached values, captures and frame addresses remain typed. -/
-theorem heap_typed_push {assumptions : Assumptions} {types : AddressTypes}
+public theorem heap_typed_push {assumptions : Assumptions} {types : AddressTypes}
     {heap : Array Cell} {cell : Cell} {type : Ty}
     (heapTyped : HeapTyping assumptions types heap)
     (cellTyped : CellTyping assumptions (types ++ [type]) cell type) :
@@ -249,7 +250,7 @@ theorem heap_typed_push {assumptions : Assumptions} {types : AddressTypes}
     exact ⟨cell,by rw [heapTyped.length]; exact Array.getElem?_push_size,cellTyped⟩
 
 /-- A typed control cannot already be a semantic/internal refusal. -/
-theorem typed_control_not_refused {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_control_not_refused {assumptions : Assumptions} {types : AddressTypes}
     {control : Control} {type : Ty} (typed : ControlTyping assumptions types control type)
     (reason : Refusal) : control ≠ .refused reason := by
   cases typed <;> simp
@@ -265,7 +266,7 @@ theorem typed_step_no_invalidUpdate {assumptions : Assumptions} {types : Address
 
 /-- The independent graph invariants accompany any locally proved typed raw
 transition, without an additional scope or update-stack premise. -/
-def step_certificate {assumptions : Assumptions} {types : AddressTypes}
+@[expose] public def step_certificate {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} (typed : StateTyping assumptions types state result)
     (current : Ty) (heap : HeapTyping assumptions types (stepRaw state).heap)
     (control : ControlTyping assumptions types (stepRaw state).control current)
@@ -278,7 +279,7 @@ def step_certificate {assumptions : Assumptions} {types : AddressTypes}
 
 /-- Allocating transitions use a genuinely extended assignment; all imported
 representation invariants continue over the same raw executor step. -/
-def step_alloc_certificate {assumptions : Assumptions} {types : AddressTypes}
+@[expose] public def step_alloc_certificate {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} (typed : StateTyping assumptions types state result)
     (after : AddressTypes) (current : Ty)
     (heap : HeapTyping assumptions after (stepRaw state).heap)
@@ -293,7 +294,7 @@ def step_alloc_certificate {assumptions : Assumptions} {types : AddressTypes}
 /-- Lookup of the explicit finite row prefix preserves first-field shadowing.
 Rigid/recursive tails stay opaque here; this theorem makes no alias-unfolding
 or arbitrary future-field assertion. -/
-def finiteLookup : Ty → String → Option Ty
+@[expose] public def finiteLookup : Ty → String → Option Ty
   | .field name member tail, query =>
       if name = query then some member else finiteLookup tail query
   | _, _ => none
@@ -320,7 +321,7 @@ theorem insert_canonical_lookup (row : Ty) (name query : String) (member : Ty) :
 /-- The SAME canonicalizer used by the executable checker preserves every
 visible member modulo recursively canonical member types, at arbitrary row
 length and duplicate shadowing. It preserves the opaque tail by construction. -/
-theorem canonical_lookup (row : Ty) (query : String) :
+public theorem canonical_lookup (row : Ty) (query : String) :
     finiteLookup row.canonical query = (finiteLookup row query).map Ty.canonical := by
   induction row with
   | field name member tail memberIH tailIH =>
@@ -340,7 +341,7 @@ theorem safe_quantity_add_left (quantity : Quantity) (first second : Nat)
     safeQuantity quantity first = true := by
   cases quantity <;> simp_all [safeQuantity] <;> omega
 
-theorem safe_add_uses_left (context : Context) (first second : Uses)
+public theorem safe_add_uses_left (context : Context) (first second : Uses)
     (firstLength : first.length = context.length) (secondLength : second.length = context.length)
     (safe : safeUses context (addUses first second) = true) : safeUses context first = true := by
   induction context generalizing first second with
@@ -364,7 +365,7 @@ theorem safe_add_uses_left (context : Context) (first second : Uses)
           have tail := ih firsts seconds fl sl decomposed.2
           simpa [safeUses,List.zip,List.all_cons,fl,head] using tail
 
-def isVariable : Ty → Bool
+@[expose] public def isVariable : Ty → Bool
   | .variable _ => true
   | _ => false
 
@@ -402,7 +403,7 @@ theorem canonical_tail (row : Ty) : row.canonical.tail = row.tail.canonical := b
 /-- A successful finite lookup either uses the explicit prefix or discloses
 its precise unknown tail alias and the already-bounded lookup into that alias.
 Cycles are permitted; the theorem never asks an alias to terminate. -/
-theorem lookup_prefix_or_alias (bounds : Bounds) (fuel : Nat) (row : Ty)
+public theorem lookup_prefix_or_alias (bounds : Bounds) (fuel : Nat) (row : Ty)
     (name : String) (member : Ty) (lookup : row.lookup bounds fuel name = some member) :
     finiteLookup row name = some member ∨
       (finiteLookup row name = none ∧ ∃ index bound depth,
@@ -455,7 +456,7 @@ theorem alias_tail_lookup_realizes (bounds : Bounds) (row : Ty) (name : String) 
 /-- The checker's finite row equality transports every actual bounded lookup,
 including a disclosed recursive tail. Address member types retain a concrete
 canonical-equality proof; unknown members are never fabricated. -/
-theorem canonical_lookup_transport (bounds : Bounds) (actual expected : Ty)
+public theorem canonical_lookup_transport (bounds : Bounds) (actual expected : Ty)
     (agreement : actual.canonical = expected.canonical) (fuel : Nat) (name : String) (member : Ty)
     (lookup : expected.lookup bounds fuel name = some member) :
     ∃ depth actualMember, actual.lookup bounds depth name = some actualMember ∧
@@ -478,7 +479,7 @@ theorem canonical_lookup_transport (bounds : Bounds) (actual expected : Ty)
     obtain ⟨fuel,actualLookup⟩ := alias_tail_lookup_realizes bounds actual name member actualAbsent index bound depth actualTail found next
     exact ⟨fuel,member,actualLookup,rfl⟩
 
-theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
+public theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
     (agreement : sameType assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
     (lookup : expected.lookup assumptions.bounds fuel name = some member) :
     ∃ depth actualMember, actual.lookup assumptions.bounds depth name = some actualMember ∧
@@ -511,12 +512,12 @@ theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected 
 /-- Declared aliases have a deterministic head equation. Its normalization
 relation is partial: cyclic aliases need not produce a head, and no general Fix
 computation or subtype oracle is used in conversion. -/
-inductive HeadNormalizes (bounds : Bounds) : Ty → Ty → Prop where
+public inductive HeadNormalizes (bounds : Bounds) : Ty → Ty → Prop where
   | direct (type : Ty) : isVariable type = false → HeadNormalizes bounds type type.canonical
   | alias {index : Nat} {bound result : Ty} : bounds.lookup index = some bound →
       HeadNormalizes bounds bound result → HeadNormalizes bounds (.variable index) result
 
-theorem head_normalizes_unique {bounds : Bounds} {type first second : Ty}
+public theorem head_normalizes_unique {bounds : Bounds} {type first second : Ty}
     (one : HeadNormalizes bounds type first) (two : HeadNormalizes bounds type second) :
     first = second := by
   induction one with
@@ -548,7 +549,7 @@ theorem canonical_agreement_normalizes {bounds : Bounds} {first second result : 
 /-- Every successful checker's SAME finite type agreement preserves any head
 normalization witness. Thus a row/alias conversion cannot turn a Nat value into
 Bool/String or a scalar into a callable/record. Cyclic aliases remain partial. -/
-theorem same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
+public theorem same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
     (agreement : sameType assumptions first second = true)
     (normal : HeadNormalizes assumptions.bounds first result) :
     HeadNormalizes assumptions.bounds second result := by
@@ -577,19 +578,19 @@ theorem same_type_preserves_head {assumptions : Assumptions} {first second resul
       obtain ⟨-,equal⟩ : _ ∧ bound.canonical = first.canonical := by simpa [aliased] using aliasSecond
       exact .alias found (canonical_agreement_normalizes equal.symm normal)
 
-inductive HeadKind where
+public inductive HeadKind where
   | natural | boolean | label | function | row | specification | prototype | custody | variable | variant
   | computation
   deriving DecidableEq
 
-def typeHead : Ty → HeadKind
+@[expose] public def typeHead : Ty → HeadKind
   | .natural => .natural | .boolean => .boolean | .label => .label
   | .arrow _ _ _ _ => .function | .emptyRow | .field _ _ _ => .row
   | .specification _ _ => .specification | .prototype _ _ => .prototype
   | .custody _ => .custody | .variable _ => .variable | .variant _ => .variant
   | .computation _ _ _ => .computation
 
-def valueHead : RuntimeValue → HeadKind
+@[expose] public def valueHead : RuntimeValue → HeadKind
   | .natural _ => .natural | .boolean _ => .boolean | .label _ => .label
   | .closure _ _ => .function | .record _ => .row
   | .specification _ _ => .specification | .prototype _ _ => .prototype
@@ -627,7 +628,7 @@ theorem row_head_normalizes (bounds : Bounds) (fuel : Nat) (row : Ty)
 /-- Runtime canonical forms follow from ACTUAL value derivations and the same
 finite alias equations checked at source. No assumed constructor-shape oracle
 is used, and no termination of cyclic aliases is required. -/
-theorem value_head_correct {assumptions : Assumptions} {types : AddressTypes}
+public theorem value_head_correct {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
     ∃ head, HeadNormalizes assumptions.bounds type head ∧ typeHead head = valueHead value := by
   induction typed with
@@ -646,7 +647,7 @@ theorem value_head_correct {assumptions : Assumptions} {types : AddressTypes}
       exact ⟨head,same_type_preserves_head agreement normal,kind⟩
 
 /-- No runtime value inhabits an activity type: activities are control, not data. -/
-theorem value_typed_not_computation {assumptions : Assumptions} {types : AddressTypes}
+public theorem value_typed_not_computation {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
     type.isComputation = false := by
   cases h : type.isComputation
@@ -658,7 +659,7 @@ theorem value_typed_not_computation {assumptions : Assumptions} {types : Address
     subst same
     cases value <;> simp [typeHead,valueHead,Ty.canonical] at kind
 
-theorem natural_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem natural_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} (typed : ValueTyping assumptions types value .natural) :
     ∃ number, value = .natural number := by
   obtain ⟨head,normal,kind⟩ := value_head_correct typed
@@ -669,7 +670,7 @@ theorem natural_value_form {assumptions : Assumptions} {types : AddressTypes}
   | natural number => exact ⟨number,rfl⟩
   | _ => cases scalarKind
 
-theorem boolean_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem boolean_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} (typed : ValueTyping assumptions types value .boolean) :
     ∃ boolean, value = .boolean boolean := by
   obtain ⟨head,normal,kind⟩ := value_head_correct typed
@@ -680,7 +681,7 @@ theorem boolean_value_form {assumptions : Assumptions} {types : AddressTypes}
   | boolean boolean => exact ⟨boolean,rfl⟩
   | _ => cases scalarKind
 
-theorem label_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem label_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} (typed : ValueTyping assumptions types value .label) :
     ∃ name, value = .label name := by
   obtain ⟨head,normal,kind⟩ := value_head_correct typed
@@ -691,11 +692,11 @@ theorem label_value_form {assumptions : Assumptions} {types : AddressTypes}
   | label name => exact ⟨name,rfl⟩
   | _ => cases scalarKind
 
-theorem canonical_same_type (assumptions : Assumptions) (first second : Ty)
+public theorem canonical_same_type (assumptions : Assumptions) (first second : Ty)
     (agreement : first.canonical = second.canonical) : sameType assumptions first second = true := by
   simp [sameType,agreement]
 
-theorem specification_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem specification_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {metadataType extensionType : Ty}
     (typed : ValueTyping assumptions types value (.specification metadataType extensionType)) :
     ∃ metadata extension, value = .specification metadata extension := by
@@ -707,7 +708,7 @@ theorem specification_value_form {assumptions : Assumptions} {types : AddressTyp
   | specification metadata extension => exact ⟨metadata,extension,rfl⟩
   | _ => cases shape
 
-theorem value_specification_fields {assumptions : Assumptions} {types : AddressTypes}
+public theorem value_specification_fields {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
     ∀ metadata extension, value = .specification metadata extension →
       ∃ metadataType extensionType,
@@ -730,7 +731,7 @@ theorem value_specification_fields {assumptions : Assumptions} {types : AddressT
       obtain ⟨metadataType,extensionType,metadataAssigned,extensionAssigned,normal⟩ := ih metadata extension same
       exact ⟨metadataType,extensionType,metadataAssigned,extensionAssigned,same_type_preserves_head agreement normal⟩
 
-theorem prototype_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem prototype_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {specType targetType : Ty}
     (typed : ValueTyping assumptions types value (.prototype specType targetType)) :
     ∃ spec target, value = .prototype spec target := by
@@ -742,7 +743,7 @@ theorem prototype_value_form {assumptions : Assumptions} {types : AddressTypes}
   | prototype spec target => exact ⟨spec,target,rfl⟩
   | _ => cases shape
 
-theorem value_prototype_fields {assumptions : Assumptions} {types : AddressTypes}
+public theorem value_prototype_fields {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
     ∀ spec target, value = .prototype spec target → ∃ specType targetType,
       types[spec]? = some specType ∧ types[target]? = some targetType ∧
@@ -763,7 +764,7 @@ theorem value_prototype_fields {assumptions : Assumptions} {types : AddressTypes
       obtain ⟨specType,targetType,specAssigned,targetAssigned,normal⟩ := ih spec target same
       exact ⟨specType,targetType,specAssigned,targetAssigned,same_type_preserves_head agreement normal⟩
 
-structure CapturedFunction (assumptions : Assumptions) (types : AddressTypes)
+public structure CapturedFunction (assumptions : Assumptions) (types : AddressTypes)
     (body : Term) (environment : Environment) where
   context : Context
   annotation : LambdaAnnotation
@@ -774,11 +775,11 @@ structure CapturedFunction (assumptions : Assumptions) (types : AddressTypes)
   valid : validContext assumptions.shareableVariables (⟨annotation.domain,annotation.parameter⟩ :: context) = true
   captures : reusableAllowed assumptions annotation.reuse context uses.tail = true
 
-def CapturedFunction.arrow {assumptions : Assumptions} {types : AddressTypes}
+@[expose] public def CapturedFunction.arrow {assumptions : Assumptions} {types : AddressTypes}
     {body : Term} {environment : Environment} (captured : CapturedFunction assumptions types body environment) : Ty :=
   .arrow captured.annotation.reuse captured.annotation.parameter captured.annotation.domain captured.annotation.codomain
 
-theorem value_closure_fields {assumptions : Assumptions} {types : AddressTypes}
+public theorem value_closure_fields {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
     ∀ body environment, value = .closure body environment →
       ∃ captured : CapturedFunction assumptions types body environment,
@@ -799,7 +800,7 @@ theorem value_closure_fields {assumptions : Assumptions} {types : AddressTypes}
       obtain ⟨captured,normal⟩ := ih body environment same
       exact ⟨captured,same_type_preserves_head agreement normal⟩
 
-theorem callable_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem callable_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {functionType domain codomain : Ty} {reuse : Reuse} {quantity : Quantity}
     (typed : ValueTyping assumptions types value functionType)
     (callableEq : callable functionType = .arrow reuse quantity domain codomain) :
@@ -817,7 +818,7 @@ theorem callable_value_form {assumptions : Assumptions} {types : AddressTypes}
   | specification metadata extension => exact .inr (specification_value_form typed)
   | _ => simp [callable] at callableEq
 
-theorem closure_callable_type {bounds : Bounds} {functionType : Ty}
+public theorem closure_callable_type {bounds : Bounds} {functionType : Ty}
     {reuse actualReuse : Reuse} {quantity actualQuantity : Quantity}
     {domain codomain actualDomain actualCodomain : Ty}
     (normal : HeadNormalizes bounds functionType (Ty.arrow actualReuse actualQuantity actualDomain actualCodomain).canonical)
@@ -830,7 +831,7 @@ theorem closure_callable_type {bounds : Bounds} {functionType : Ty}
       simp [Ty.canonical] at same
   | _ => simp [callable] at callableEq
 
-theorem specification_callable_type {bounds : Bounds} {functionType : Ty}
+public theorem specification_callable_type {bounds : Bounds} {functionType : Ty}
     {reuse : Reuse} {quantity : Quantity} {domain codomain metadata extension : Ty}
     (normal : HeadNormalizes bounds functionType (Ty.specification metadata extension).canonical)
     (callableEq : callable functionType = .arrow reuse quantity domain codomain) :
@@ -842,7 +843,7 @@ theorem specification_callable_type {bounds : Bounds} {functionType : Ty}
       simp [Ty.canonical] at same
   | _ => simp [callable] at callableEq
 
-theorem stack_argument_value {assumptions : Assumptions} {types : AddressTypes}
+public theorem stack_argument_value {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty} {value : RuntimeValue}
     (continuation : StackTyping assumptions types stack input result)
     (valueTyped : ValueTyping assumptions types value input) :
@@ -867,7 +868,7 @@ theorem stack_argument_value {assumptions : Assumptions} {types : AddressTypes}
 
 /-- Inserting a lexical slot shifts precisely the indices at/after its depth.
 This is independent of rigid future-type variables in annotations. -/
-def shiftIndex (depth index : Nat) : Nat := if index < depth then index else index+1
+@[expose] public def shiftIndex (depth index : Nat) : Nat := if index < depth then index else index+1
 
 theorem lift_shift_index (depth : Nat) : liftRename (shiftIndex depth) = shiftIndex (depth+1) := by
   funext index
@@ -1046,7 +1047,7 @@ theorem arms_uses_length {assumptions : Assumptions} {context : Context}
 /-- General capture-sensitive lexical weakening over EVERY source constructor,
 including nested fields and conditional/lambda binders. The inserted slot is
 unused; its declared context validity is checked rather than assumed pure. -/
-theorem source_insert_binding {assumptions : Assumptions} {context : Context}
+public theorem source_insert_binding {assumptions : Assumptions} {context : Context}
     {term : Term} {type : Ty} {uses : Uses}
     (typed : PartialTyping assumptions context term type uses) :
     ∀ depth binding, depth ≤ context.length → validContext assumptions.shareableVariables [binding] = true →
@@ -1222,7 +1223,7 @@ theorem source_insert_binding {assumptions : Assumptions} {context : Context}
 
 theorem shift_zero : shiftIndex 0 = Nat.succ := by funext index; simp [shiftIndex,Nat.succ_eq_add_one]
 
-theorem source_weaken {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty} {uses : Uses}
+public theorem source_weaken {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty} {uses : Uses}
     (typed : PartialTyping assumptions context term type uses) (binding : Binding)
     (bindingValid : validContext assumptions.shareableVariables [binding] = true) :
     PartialTyping assumptions (binding :: context) (term.rename Nat.succ) type (0 :: uses) := by
@@ -1242,7 +1243,7 @@ theorem variable_uses_cons_succ (context : Context) (binding : Binding) (index :
     variableUses (binding :: context) (index+1) = 0 :: variableUses context index := by
   simp [variableUses,List.range_succ_eq_map,List.map_map,Function.comp_def]
 
-theorem reusable_variable {variables : List Nat} {context : Context} {index : Nat} {binding : Binding}
+public theorem reusable_variable {variables : List Nat} {context : Context} {index : Nat} {binding : Binding}
     (found : context[index]? = some binding) (quantity : binding.quantity = .unrestricted)
     (shareable : binding.type.shareableUnder variables = true) :
     reusableCaptures variables context (variableUses context index) = true := by
@@ -1275,7 +1276,7 @@ theorem reusable_count_add_left (quantity : Quantity) (shareable : Bool) (first 
   · have sumNonzero : first+second ≠ 0 := by omega
     simpa [firstZero,sumNonzero] using combined
 
-theorem reusable_add_uses (variables : List Nat) (context : Context) (first second : Uses)
+public theorem reusable_add_uses (variables : List Nat) (context : Context) (first second : Uses)
     (left : reusableCaptures variables context first = true)
     (right : reusableCaptures variables context second = true) :
     reusableCaptures variables context (addUses first second) = true := by
@@ -1297,7 +1298,7 @@ theorem reusable_add_uses (variables : List Nat) (context : Context) (first seco
           simpa [reusableCaptures,addUses,List.zipWith,List.zip,List.all_cons,and_assoc,and_left_comm,and_comm] using
             And.intro (reusable_count_add _ _ first second lf.1 rf.1) (ih firsts seconds lf.2 rf.2)
 
-theorem reusable_add_uses_left (variables : List Nat) (context : Context) (first second : Uses)
+public theorem reusable_add_uses_left (variables : List Nat) (context : Context) (first second : Uses)
     (firstLength : first.length = context.length) (secondLength : second.length = context.length)
     (combined : reusableCaptures variables context (addUses first second) = true) :
     reusableCaptures variables context first = true := by
@@ -1318,7 +1319,7 @@ theorem reusable_add_uses_left (variables : List Nat) (context : Context) (first
           simpa [reusableCaptures,List.zip,List.all_cons,and_assoc,and_left_comm,and_comm] using
             And.intro (reusable_count_add_left _ _ first second facts.1) (ih firsts seconds fl sl facts.2)
 
-theorem reusable_uses_safe (variables : List Nat) (context : Context) (uses : Uses)
+public theorem reusable_uses_safe (variables : List Nat) (context : Context) (uses : Uses)
     (captures : reusableCaptures variables context uses = true) : safeUses context uses = true := by
   induction context generalizing uses with
   | nil => cases uses <;> simp_all [safeUses,reusableCaptures]
@@ -1335,7 +1336,7 @@ theorem reusable_uses_safe (variables : List Nat) (context : Context) (uses : Us
             · rw [unrestricted]; rfl
           simpa [safeUses,List.zip,List.all_cons,and_assoc,and_left_comm,and_comm] using And.intro head (ih uses facts.2)
 
-theorem reusable_tail {variables : List Nat} {binding : Binding} {context : Context} {uses : Uses}
+public theorem reusable_tail {variables : List Nat} {binding : Binding} {context : Context} {uses : Uses}
     (captures : reusableCaptures variables (binding :: context) uses = true) :
     reusableCaptures variables context uses.tail = true := by
   cases uses with
@@ -1345,25 +1346,25 @@ theorem reusable_tail {variables : List Nat} {binding : Binding} {context : Cont
         simpa [reusableCaptures,List.zip,List.all_cons,and_assoc,and_left_comm,and_comm] using captures
       exact facts.2
 
-structure ReusableTerm (assumptions : Assumptions) (context : Context) (term : Term) (type : Ty) where
+public structure ReusableTerm (assumptions : Assumptions) (context : Context) (term : Term) (type : Ty) where
   uses : Uses
   derivation : PartialTyping assumptions context term type uses
   captures : reusableCaptures assumptions.shareableVariables context uses = true
 
-def ReusableTerm.weaken {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty}
+@[expose] public def ReusableTerm.weaken {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty}
     (typed : ReusableTerm assumptions context term type) (binding : Binding)
     (valid : validContext assumptions.shareableVariables [binding] = true) :
     ReusableTerm assumptions (binding :: context) (term.rename Nat.succ) type :=
   ⟨0::typed.uses,source_weaken typed.derivation binding valid,
     by simpa only [List.insertIdx_zero] using reusable_captures_insert assumptions.shareableVariables context typed.uses 0 binding typed.captures (Nat.zero_le _)⟩
 
-def ReusableTerm.«variable» {assumptions : Assumptions} {context : Context} {index : Nat} {binding : Binding}
+@[expose] public def ReusableTerm.«variable» {assumptions : Assumptions} {context : Context} {index : Nat} {binding : Binding}
     (found : context[index]? = some binding) (quantity : binding.quantity = .unrestricted)
     (shareable : binding.type.shareableUnder assumptions.shareableVariables = true) :
     ReusableTerm assumptions context (.bound index) binding.type :=
   ⟨variableUses context index,.bound found,reusable_variable found quantity shareable⟩
 
-def ReusableTerm.apply {assumptions : Assumptions} {context : Context}
+@[expose] public def ReusableTerm.apply {assumptions : Assumptions} {context : Context}
     {function argument : Term} {functionType domain codomain : Ty} {reuse : Reuse}
     (fn : ReusableTerm assumptions context function functionType) (arg : ReusableTerm assumptions context argument domain)
     (callableEq : callable functionType = .arrow reuse .unrestricted domain codomain)
@@ -1373,7 +1374,7 @@ def ReusableTerm.apply {assumptions : Assumptions} {context : Context}
     (by simpa [argumentAllowed,shareable,Ty.shareableUnder_not_computation _ _ shareable] using arg.captures),
     reusable_add_uses assumptions.shareableVariables context fn.uses arg.uses fn.captures arg.captures⟩
 
-def ReusableTerm.abstraction {assumptions : Assumptions} {context : Context} {body : Term}
+@[expose] public def ReusableTerm.abstraction {assumptions : Assumptions} {context : Context} {body : Term}
     {domain codomain : Ty} {quantity : Quantity}
     (bodyTyped : ReusableTerm assumptions (⟨domain,quantity⟩ :: context) body codomain)
     (valid : validContext assumptions.shareableVariables (⟨domain,quantity⟩ :: context) = true) :
@@ -1381,7 +1382,7 @@ def ReusableTerm.abstraction {assumptions : Assumptions} {context : Context} {bo
   ⟨bodyTyped.uses.tail,.lambda (annotation := ⟨domain,codomain,quantity,.reusable⟩) bodyTyped.derivation (reusable_uses_safe _ _ _ bodyTyped.captures) valid
     (by simpa [reusableAllowed] using reusable_tail bodyTyped.captures),reusable_tail bodyTyped.captures⟩
 
-theorem source_weaken_twice {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty} {uses : Uses}
+public theorem source_weaken_twice {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty} {uses : Uses}
     (typed : PartialTyping assumptions context term type uses) (first second : Binding)
     (firstValid : validContext assumptions.shareableVariables [first] = true)
     (secondValid : validContext assumptions.shareableVariables [second] = true) :
@@ -1401,7 +1402,7 @@ theorem add_zero_uses (context : Context) (uses : Uses) (length : uses.length = 
         have tailLength : tail.length = context.length := Nat.succ.inj length
         simpa [addUses,zeroUses,List.replicate_succ,List.zipWith] using congrArg (List.cons head) (ih tail tailLength)
 
-theorem add_uses_comm (first second : Uses) : addUses first second = addUses second first := by
+public theorem add_uses_comm (first second : Uses) : addUses first second = addUses second first := by
   induction first generalizing second with
   | nil => cases second <;> rfl
   | cons head tail ih =>
@@ -1413,7 +1414,7 @@ theorem add_uses_comm (first second : Uses) : addUses first second = addUses sec
         congr 1
         exact ih rest
 
-def ReusableTerm.shiftTwo {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty}
+@[expose] public def ReusableTerm.shiftTwo {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty}
     (typed : ReusableTerm assumptions context term type) (first second : Binding)
     (firstValid : validContext assumptions.shareableVariables [first] = true)
     (secondValid : validContext assumptions.shareableVariables [second] = true) :
@@ -1425,7 +1426,7 @@ def ReusableTerm.shiftTwo {assumptions : Assumptions} {context : Context} {term 
       simpa only [List.insertIdx_zero] using
         reusable_captures_insert assumptions.shareableVariables (first :: context) (0::typed.uses) 0 second once (Nat.zero_le _)⟩
 
-theorem stack_convert_path {assumptions : Assumptions} {types : AddressTypes}
+public theorem stack_convert_path {assumptions : Assumptions} {types : AddressTypes}
     {first last result : Ty} {stack : List Frame}
     (path : ConversionPath assumptions first last)
     (continuation : StackTyping assumptions types stack last result) :
@@ -1436,7 +1437,7 @@ theorem stack_convert_path {assumptions : Assumptions} {types : AddressTypes}
 
 /-- Variable source derivations disclose the actual environment binding even
 when the authored result has crossed one or several row/alias conversions. -/
-theorem source_bound_assignment {assumptions : Assumptions} {context : Context}
+public theorem source_bound_assignment {assumptions : Assumptions} {context : Context}
     {term : Term} {type : Ty} {uses : Uses}
     (source : PartialTyping assumptions context term type uses) :
     match term with
@@ -1460,13 +1461,13 @@ theorem source_bound_assignment {assumptions : Assumptions} {context : Context}
     exact ⟨binding,found,.step path agreement⟩
   all_goals (intros; trivial)
 
-theorem safe_add_uses_right (context : Context) (first second : Uses)
+public theorem safe_add_uses_right (context : Context) (first second : Uses)
     (firstLength : first.length = context.length) (secondLength : second.length = context.length)
     (safe : safeUses context (addUses first second) = true) : safeUses context second = true := by
   rw [add_uses_comm] at safe
   exact safe_add_uses_left context second first secondLength firstLength safe
 
-def sourceFocus (term : Term) (environment : Environment) : Option (Term × Frame) :=
+@[expose] public def sourceFocus (term : Term) (environment : Environment) : Option (Term × Frame) :=
   match term with
   | .get target name => some (target,.field name)
   | .reflect target => some (target,.reflect)
@@ -1479,7 +1480,7 @@ def sourceFocus (term : Term) (environment : Environment) : Option (Term × Fram
   | .ifBool condition whenTrue whenFalse => some (condition,.ifBool whenTrue whenFalse environment)
   | _ => none
 
-structure FocusedSource (assumptions : Assumptions) (types : AddressTypes)
+public structure FocusedSource (assumptions : Assumptions) (types : AddressTypes)
     (target : Term) (environment : Environment) (frame : Frame) (expected : Ty) where
   current : Ty
   output : Ty
@@ -1600,7 +1601,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
 
 /-- Focusing projection/overlay, binary and conditional source forms preserves the typed stack
 at the exact raw-machine step; no source annotation or row oracle is assumed. -/
-theorem typed_source_focus_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_source_focus_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {term target : Term} {environment : Environment} {frame : Frame}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate term environment)
@@ -1623,7 +1624,7 @@ theorem typed_source_focus_preserved {assumptions : Assumptions} {types : Addres
     · simpa [next] using ControlTyping.evaluate data.origin
     · simpa [next] using StackTyping.cons data.continuation (stack_convert_path data.result typed.stack)
 
-theorem record_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem record_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {row : Ty} (typed : ValueTyping assumptions types value row)
     (fuel : Nat) (isRow : row.isRow assumptions.bounds fuel = true) :
     ∃ fields, value = .record fields := by
@@ -1639,7 +1640,7 @@ theorem record_value_form {assumptions : Assumptions} {types : AddressTypes}
 /-- Source conversions may sit above an update continuation. Transport the
 returned value across those exact boundaries before storing it at the immutable
 address representative; conversion cannot change the heap assignment. -/
-theorem stack_update_value {assumptions : Assumptions} {types : AddressTypes}
+public theorem stack_update_value {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty} {value : RuntimeValue}
     (continuation : StackTyping assumptions types stack input result)
     (valueTyped : ValueTyping assumptions types value input) :
@@ -1661,14 +1662,14 @@ theorem stack_update_value {assumptions : Assumptions} {types : AddressTypes}
       obtain ⟨_,_,impossible⟩ := stack_activity_head restTyped rfl _ _ same
       cases impossible
 
-theorem source_convert_path {assumptions : Assumptions} {context : Context} {term : Term}
+public theorem source_convert_path {assumptions : Assumptions} {context : Context} {term : Term}
     {first last : Ty} {uses : Uses} (typed : PartialTyping assumptions context term first uses)
     (path : ConversionPath assumptions first last) : PartialTyping assumptions context term last uses := by
   induction path with
   | refl => exact typed
   | step prior agreement ih => exact .conversion ih agreement
 
-theorem value_variant_fields {assumptions : Assumptions} {types : AddressTypes}
+public theorem value_variant_fields {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
     ∀ tag address, value = .variant tag address →
       ∃ (row member actual : Ty) (fuel : Nat), row.lookup assumptions.bounds fuel tag = some member ∧
@@ -1691,7 +1692,7 @@ theorem value_variant_fields {assumptions : Assumptions} {types : AddressTypes}
       obtain ⟨row,member,actual,fuel,lookup,assigned,path,normal⟩ := ih tag address same
       exact ⟨row,member,actual,fuel,lookup,assigned,path,same_type_preserves_head agreement normal⟩
 
-theorem variant_value_form {assumptions : Assumptions} {types : AddressTypes}
+public theorem variant_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {row : Ty} (typed : ValueTyping assumptions types value (.variant row)) :
     ∃ tag address, value = .variant tag address := by
   obtain ⟨head,normal,kind⟩ := value_head_correct typed

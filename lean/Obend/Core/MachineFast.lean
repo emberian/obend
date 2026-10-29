@@ -1,3 +1,4 @@
+module
 /- Compiled implementation of the Core4 demand machine for unique (linear) use.
 
 `stepRaw`/`step`/`runBounded` (Obend/Core/DemandMachine) stay the
@@ -19,7 +20,8 @@ The implementation: the capacity check is decided BEFORE the transition from the
 pre-state (`sizesAfter`, proved equal to the sizes of `stepRaw`'s result), so no
 pre-state is retained on the success path; the stack depth is carried as a
 counter; the four push sites read the size before pushing. -/
-import Obend.Core.Machine
+public import Obend.Core.Machine
+@[expose] public section
 namespace Obend.Core.MachineFast
 open Obend.Core.Term Obend.Core.Machine
 set_option autoImplicit false
@@ -384,3 +386,5 @@ info: 'Obend.Core.MachineFast.forceWithFast_unique' depends on axioms: [propext,
 #print axioms forceWithFast_unique
 
 end Obend.Core.MachineFast
+
+end

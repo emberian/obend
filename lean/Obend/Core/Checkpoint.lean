@@ -1,3 +1,4 @@
+module
 /- Checkpoint codec for the Objective demand machine. A machine State is
 first-order Lean data (heap of cells holding closures, control, frame stack),
 so a whole activity — in particular a QUIESCENT yielded state — is captured as a
@@ -7,7 +8,8 @@ authority, generation or custody: those belong to the kernel's activity record,
 which holds this checkpoint as one artifact. The round trip
 `decodeState (encodeState s) = some s` is the obligation this module exists for
 (ObjectiveProofs). -/
-import Obend.Core.Machine
+public import Obend.Core.Machine
+@[expose] public section
 namespace Obend.Core.Checkpoint
 open Obend.Core.Term Obend.Core.Machine
 set_option autoImplicit false
@@ -294,3 +296,5 @@ def roundTrips (state : State) : Bool :=
   | none => false
 
 end Obend.Core.Checkpoint
+
+end

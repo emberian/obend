@@ -1,7 +1,9 @@
+module
 /- Native-selected scalar work envelope, separate from unrestricted raw Core4.
 A conservative arithmetic bound suspends BEFORE the primitive, preserving its
 exact state. This is a resource observation, never source divergence/refusal. -/
-import Obend.Core.Data
+public import Obend.Core.Data
+@[expose] public section
 namespace Obend.Core.Capacity
 open Obend.Core.Machine Obend.Core.Term
 set_option autoImplicit false
@@ -56,3 +58,5 @@ def decodeNatural (profile : Profile) (text : String) : Except InputFailure Nat 
   if bits n > profile.scalarBits then throw .capacity
   pure n
 end Obend.Core.Capacity
+
+end

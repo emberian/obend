@@ -1,6 +1,7 @@
+module
 /- Preservation cases: Arithmetic. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -31,7 +32,7 @@ theorem stack_binary_left_value {assumptions : Assumptions} {types : AddressType
 /-- Finishing the left primitive operand preserves its type as a stored value,
 and evaluates the same typed lexical right origin. This covers every primitive
 and arbitrarily many source conversion boundaries. -/
-theorem typed_binary_left_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_binary_left_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {primitive : Primitive}
     {right : Term} {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
@@ -123,7 +124,7 @@ theorem stack_binary_right_values {assumptions : Assumptions} {types : AddressTy
 
 /-- The final primitive return branch both preserves typing and excludes its
 semantic wrong-value refusal, with arbitrary retained source conversions. -/
-theorem typed_binary_right_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_binary_right_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {right left : RuntimeValue} {primitive : Primitive} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
     (returned : state.control = .returned right)
@@ -141,7 +142,7 @@ theorem typed_binary_right_preserved {assumptions : Assumptions} {types : Addres
   · simpa [stepRaw,returned,stack,primitiveRun,scalarRun] using (ControlTyping.returned nextTyped)
   · simpa [stepRaw,returned,stack,primitiveRun,scalarRun] using restTyped
 
-theorem typed_binary_right_no_wrong_value {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_binary_right_no_wrong_value {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {right left : RuntimeValue} {primitive : Primitive} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
     (returned : state.control = .returned right)
@@ -179,7 +180,7 @@ theorem stack_condition_value {assumptions : Assumptions} {types : AddressTypes}
 /-- Both conditional return branches preserve typing. The successor allocates
 a typed cached predecessor, extends every old assignment monotonically, and
 connects the actual lexical binder to that new address. -/
-theorem typed_condition_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_condition_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {zero successor : Term}
     {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
@@ -217,7 +218,7 @@ theorem typed_condition_preserved {assumptions : Assumptions} {types : AddressTy
       · simpa [stepRaw,returned,stack] using (ControlTyping.evaluate next)
       · simpa [stepRaw,returned,stack] using (StackTyping.weaken extension restTyped)
 
-theorem typed_condition_no_wrong_value {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_condition_no_wrong_value {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {zero successor : Term}
     {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)

@@ -1,13 +1,14 @@
+module
 /- Preservation lemmas over the frozen demand graph and actual source typing.
 All-constructor preservation connects the checker derivation to every actual
 raw transition; termination, liveness and native authority are separate. -/
-import Obend.Core.Proofs.Preservation.Cases.Functions
-import Obend.Core.Proofs.Preservation.Cases.Pairs
-import Obend.Core.Proofs.Preservation.Cases.Records
-import Obend.Core.Proofs.Preservation.Cases.Arithmetic
-import Obend.Core.Proofs.Preservation.Cases.Sums
-import Obend.Core.Proofs.Preservation.Cases.Activities
-import Obend.Core.Proofs.StepCases
+public import Obend.Core.Proofs.Preservation.Cases.Functions
+public import Obend.Core.Proofs.Preservation.Cases.Pairs
+public import Obend.Core.Proofs.Preservation.Cases.Records
+public import Obend.Core.Proofs.Preservation.Cases.Arithmetic
+public import Obend.Core.Proofs.Preservation.Cases.Sums
+public import Obend.Core.Proofs.Preservation.Cases.Activities
+public import Obend.Core.Proofs.StepCases
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -15,7 +16,7 @@ set_option autoImplicit false
 /-- Every raw-machine constructor preserves typing over a monotonically
 extended address assignment. Captured quantities travel with lexical origins,
 closures, continuation arguments and generated mix/Fix bodies. -/
-theorem typed_stepRaw_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_stepRaw_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} (typed : StateTyping assumptions types state result) :
     ∃ after, TypeExtension types after ∧ Nonempty (StateTyping assumptions after (stepRaw state) result) := by
   -- one named line per branch of `stepRaw`; the case split itself is `StepCases.apply`

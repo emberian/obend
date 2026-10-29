@@ -1,19 +1,20 @@
+module
 /- Source/graph correspondence for the new partial lazy edition. All running
 and finished raw transitions preserve the concrete graph relation. Every
 normally finished closed computation, through rawRun or runBounded at any
 limits, has an independent source evaluation to the same ground observation.
 This module does not yet inhabit Representation: administrative progress and
 source-to-machine completeness remain separate substantive obligations. -/
-import Obend.Core.Invariant
-import Obend.AxiomPin
-import Obend.Core.Proofs.StepCases
+public import Obend.Core.Invariant
+public import Obend.AxiomPin
+public import Obend.Core.Proofs.StepCases
 namespace Obend.Core.Proofs.Adequacy
 open Obend.Core.Term
 open Obend.Core.Machine
 open Obend.Core.Invariant
 set_option autoImplicit false
 
- theorem sourceSteps_trans {a b c : Term} (first : Steps a b) (second : Steps b c) : Steps a c := by
+ public theorem sourceSteps_trans {a b c : Term} (first : Steps a b) (second : Steps b c) : Steps a c := by
   induction first with
   | refl => exact second
   | next step _ ih => exact .next step (ih second)
@@ -42,7 +43,7 @@ constructor. This includes fixed-point unfolding and field shadowing. -/
   | refl => rfl
   | next step _ => exact False.elim (source_value_noStep value step)
 
- theorem source_evaluates_unique {source first second : Term}
+ public theorem source_evaluates_unique {source first second : Term}
     (left : Evaluates source first) (right : Evaluates source second) : first = second := by
   obtain ⟨steps,value⟩ := left
   obtain ⟨otherSteps,otherValue⟩ := right
@@ -68,7 +69,7 @@ Determinism aligns its first reduction with the independent evaluation trace. -/
       cases aligned
       exact ⟨rest,isValue⟩
 
- theorem sourceSteps_evaluates_tail {source next value : Term}
+ public theorem sourceSteps_evaluates_tail {source next value : Term}
     (steps : Steps source next) (evaluates : Evaluates source value) : Evaluates next value := by
   induction steps with
   | refl => exact evaluates
@@ -77,7 +78,7 @@ Determinism aligns its first reduction with the independent evaluation trace. -/
 /-- A finite independent CBN evaluation derivation. Cost counts demand
 constructors, including values; it is a proof measure for partial programs,
 not a total evaluator or a promise that Fix terminates. -/
-inductive SourceDerivation : Term → Term → Nat → Prop where
+public inductive SourceDerivation : Term → Term → Nat → Prop where
   | value {term : Term} : Value term → SourceDerivation term term 1
   | applicationLambda {function body argument result : Term} {functionCost bodyCost : Nat} :
       SourceDerivation function (.lam body) functionCost →
@@ -315,7 +316,7 @@ strictly increases demand cost. Context reductions retain the latent terms. -/
 
 /-- Cost derivations characterize the given independent source semantics;
 their existence does not restrict the partial source domain. -/
- theorem source_evaluates_derivation {source result : Term} (evaluates : Evaluates source result) :
+ public theorem source_evaluates_derivation {source result : Term} (evaluates : Evaluates source result) :
     ∃ cost, SourceDerivation source result cost := by
   obtain ⟨steps,value⟩ := evaluates
   induction steps with
@@ -347,7 +348,7 @@ there are multiple proofs of its evaluation. -/
 
 /-- Every real source reduction consumes a positive part of the unique finite
 demand budget. This is the semantic component of the lazy graph progress rank. -/
- theorem sourceStep_derivation_tail {source next result : Term} {cost : Nat}
+ public theorem sourceStep_derivation_tail {source next result : Term} {cost : Nat}
     (step : Step source next) (derivation : SourceDerivation source result cost) :
     ∃ smaller, SourceDerivation next result smaller ∧ smaller < cost := by
   obtain ⟨smaller,tail⟩ := source_evaluates_derivation
@@ -356,7 +357,7 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
   have aligned := sourceDerivation_cost_unique previous derivation
   exact ⟨smaller,tail,aligned ▸ greater⟩
 
- theorem sourceSteps_derivation_tail {source next result : Term} {cost : Nat}
+ public theorem sourceSteps_derivation_tail {source next result : Term} {cost : Nat}
     (steps : Steps source next) (derivation : SourceDerivation source result cost) :
     ∃ smaller, SourceDerivation next result smaller ∧ smaller ≤ cost := by
   induction steps generalizing cost with
@@ -571,7 +572,7 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
       liftSubstitution (fun i => substitution (rename i)) := by
   funext i; cases i <;> rfl
 
- theorem scoped_rename_comp {n : Nat} {term : Term} (h : Scoped n term)
+ public theorem scoped_rename_comp {n : Nat} {term : Term} (h : Scoped n term)
     (first : Nat → Nat) (second : Nat → Nat) :
     (term.rename first).rename second = term.rename (fun i => second (first i)) := by
   induction h generalizing first second with
@@ -808,22 +809,22 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
 /-- The assignment gives each address a finite source computation; it does NOT
 recursively unfold its pointers. In particular a recursive address can denote a
 source Fix while its origin denotes the one-step expansion of that same Fix. -/
-abbrev AddressMeaning := Address → Term
+@[expose] public abbrev AddressMeaning := Address → Term
 
-def environmentSubstitution (meaning : AddressMeaning) (environment : Environment) (index : Nat) : Term :=
+@[expose] public def environmentSubstitution (meaning : AddressMeaning) (environment : Environment) (index : Nat) : Term :=
   match environment[index]? with
   | some address => meaning address
   | none => .bound index
 
-def closeTerm (meaning : AddressMeaning) (environment : Environment) (term : Term) : Term :=
+@[expose] public def closeTerm (meaning : AddressMeaning) (environment : Environment) (term : Term) : Term :=
   match environment with
   | [] => term
   | _::_ => term.substitute (environmentSubstitution meaning environment)
 
-def closeOrigin (meaning : AddressMeaning) (origin : Closure) : Term :=
+@[expose] public def closeOrigin (meaning : AddressMeaning) (origin : Closure) : Term :=
   closeTerm meaning origin.environment origin.term
 
-def valueMeaning (meaning : AddressMeaning) : RuntimeValue → Term
+@[expose] public def valueMeaning (meaning : AddressMeaning) : RuntimeValue → Term
   | .closure body environment => closeTerm meaning environment (.lam body)
   | .natural value => .nat value
   | .boolean value => .boolean value
@@ -838,7 +839,7 @@ an actual independent reference evaluation, rather than an arbitrary cached
 scalar. Stable origins let the same relation survive the phase change. -/
 /-- Each allocated graph name denotes a closed source computation. The
 assignment remains finite syntax even when these computations contain Fix. -/
-def MeaningsScoped (bound : Nat) (meaning : AddressMeaning) : Prop :=
+@[expose] public def MeaningsScoped (bound : Nat) (meaning : AddressMeaning) : Prop :=
   ∀ address, address < bound → Scoped 0 (meaning address)
 
  theorem environmentSubstitution_scoped {bound : Nat} {meaning : AddressMeaning}
@@ -859,7 +860,7 @@ def MeaningsScoped (bound : Nat) (meaning : AddressMeaning) : Prop :=
 
 /-- Extending an allocated prefix cannot change the source meaning of a
 lexical capture. The agreement is only required at actually allocated names. -/
- theorem closeTerm_meaning_congr {bound : Nat} {first second : AddressMeaning}
+ public theorem closeTerm_meaning_congr {bound : Nat} {first second : AddressMeaning}
     {environment : Environment} {term : Term} (captures : EnvironmentValid bound environment)
     (scope : Scoped environment.length term) (same : ∀ address, address < bound → first address = second address) :
     closeTerm first environment term = closeTerm second environment term := by
@@ -906,7 +907,7 @@ substitution, even when the environment points into a cyclic heap. -/
       simp only [liftSubstitution,renameSame,substSame,environmentSubstitution,List.getElem?_cons_succ,found]
       simpa only [sigma,environmentSubstitution,found] using same _ (captures _ (List.mem_of_getElem? found))
 
- theorem closeTerm_scoped {bound : Nat} {meaning : AddressMeaning} {environment : Environment}
+ public theorem closeTerm_scoped {bound : Nat} {meaning : AddressMeaning} {environment : Environment}
     {term : Term} (names : MeaningsScoped bound meaning)
     (captures : EnvironmentValid bound environment) (hscope : Scoped environment.length term) :
     Scoped 0 (closeTerm meaning environment term) := by
@@ -936,16 +937,16 @@ substitution, even when the environment points into a cyclic heap. -/
   | prototype specification target => exact .prototype (names _ valid.1) (names _ valid.2)
   | variant tag payload => exact .inject (names _ valid)
 
-def CellRealizes (meaning : AddressMeaning) (address : Address) (cell : Cell) : Prop :=
+@[expose] public def CellRealizes (meaning : AddressMeaning) (address : Address) (cell : Cell) : Prop :=
   Steps (meaning address) (closeOrigin meaning (cellOrigin cell)) ∧
     match cell with
     | .cached _ value => Evaluates (meaning address) (valueMeaning meaning value)
     | _ => True
 
-def HeapRealizes (meaning : AddressMeaning) (heap : Array Cell) : Prop :=
+@[expose] public def HeapRealizes (meaning : AddressMeaning) (heap : Array Cell) : Prop :=
   ∀ (address : Nat) (cell : Cell), heap[address]? = some cell → CellRealizes meaning address cell
 
- theorem valueMeaning_congr {bound : Nat} {first second : AddressMeaning} {value : RuntimeValue}
+ public theorem valueMeaning_congr {bound : Nat} {first second : AddressMeaning} {value : RuntimeValue}
     (valid : RuntimeValueValid bound value)
     (same : ∀ address, address < bound → first address = second address) :
     valueMeaning first value = valueMeaning second value := by
@@ -974,14 +975,14 @@ def HeapRealizes (meaning : AddressMeaning) (heap : Array Cell) : Prop :=
       simp only [CellRealizes,cellOrigin,closeOrigin,same _ allocated,
         closeTerm_meaning_congr valid.1.2 valid.1.1 same,valueMeaning_congr valid.2 same]
 
- theorem heapRealizes_congr {heap : Array Cell} {first second : AddressMeaning}
+ public theorem heapRealizes_congr {heap : Array Cell} {first second : AddressMeaning}
     (valid : HeapValid heap) (same : ∀ address, address < heap.size → first address = second address)
     (realizes : HeapRealizes first heap) : HeapRealizes second heap := by
   intro address cell found
   have allocated := (Array.getElem?_eq_some_iff.mp found).1
   exact (cellRealizes_congr allocated (valid address cell found) same).mp (realizes address cell found)
 
- theorem heapRealizes_push {heap : Array Cell} {meaning : AddressMeaning} {cell : Cell}
+ public theorem heapRealizes_push {heap : Array Cell} {meaning : AddressMeaning} {cell : Cell}
     (realizes : HeapRealizes meaning heap) (fresh : CellRealizes meaning heap.size cell) :
     HeapRealizes meaning (heap.push cell) := by
   intro address other found
@@ -993,7 +994,7 @@ def HeapRealizes (meaning : AddressMeaning) (heap : Array Cell) : Prop :=
   · apply realizes address other
     simpa [Array.getElem?_push,eq] using found
 
-def frameMeaning (meaning : AddressMeaning) (frame : Frame) (hole : Term) : Term :=
+@[expose] public def frameMeaning (meaning : AddressMeaning) (frame : Frame) (hole : Term) : Term :=
   match frame with
   | .argument term environment => .app hole (closeTerm meaning environment term)
   | .update _ => hole
@@ -1013,7 +1014,7 @@ def frameMeaning (meaning : AddressMeaning) (frame : Frame) (hole : Term) : Term
   | .ifBool whenTrue whenFalse environment => .ifBool hole
       (closeTerm meaning environment whenTrue) (closeTerm meaning environment whenFalse)
 
- theorem frameMeaning_congr {bound : Nat} {first second : AddressMeaning} {frame : Frame} {hole : Term}
+ public theorem frameMeaning_congr {bound : Nat} {first second : AddressMeaning} {frame : Frame} {hole : Term}
     (valid : FrameValid bound frame)
     (same : ∀ address, address < bound → first address = second address) :
     frameMeaning first frame hole = frameMeaning second frame hole := by
@@ -1057,10 +1058,10 @@ def frameMeaning (meaning : AddressMeaning) (frame : Frame) (hole : Term) : Term
       simp only [frameMeaning,closeTerm_meaning_congr valid.1 valid.2.1 same,
         closeTerm_meaning_congr valid.1 valid.2.2 same]
 
-def stackMeaning (meaning : AddressMeaning) (stack : List Frame) (hole : Term) : Term :=
+@[expose] public def stackMeaning (meaning : AddressMeaning) (stack : List Frame) (hole : Term) : Term :=
   stack.foldl (fun prior frame => frameMeaning meaning frame prior) hole
 
-def controlMeaning (meaning : AddressMeaning) : Control → Option Term
+@[expose] public def controlMeaning (meaning : AddressMeaning) : Control → Option Term
   | .evaluate term environment => some (closeTerm meaning environment term)
   | .enter address => some (meaning address)
   | .returned value | .complete value => some (valueMeaning meaning value)
@@ -1068,7 +1069,7 @@ def controlMeaning (meaning : AddressMeaning) : Control → Option Term
   -- A yielded program means its stuck source redex `perform plan`.
   | .yielded plan => some (.perform (meaning plan))
 
- theorem valueMeaning_value (meaning : AddressMeaning) (value : RuntimeValue) :
+ public theorem valueMeaning_value (meaning : AddressMeaning) (value : RuntimeValue) :
     Value (valueMeaning meaning value) := by
   cases value with
   | closure body environment =>
@@ -1085,7 +1086,7 @@ def controlMeaning (meaning : AddressMeaning) : Control → Option Term
 /-- A dynamic demand focus reads the actual cell phase. The fixed source
 address meaning remains in HeapRealizes and local update provenance; this
 focus exposes already justified unfolding/cache reductions at pointer entry. -/
-def enteredFocus (meaning : AddressMeaning) (heap : Array Cell) : Control → Option Term
+@[expose] public def enteredFocus (meaning : AddressMeaning) (heap : Array Cell) : Control → Option Term
   | .enter address => match heap[address]? with
       | some (.suspended origin) => some (closeOrigin meaning origin)
       | some (.cached _ value) => some (valueMeaning meaning value)
@@ -1142,13 +1143,13 @@ def enteredFocus (meaning : AddressMeaning) (heap : Array Cell) : Control → Op
 /-- Every active update carries its own demand-segment source evaluation.
 Erasing update frames would lose the LOCAL proof required when writing a cache:
 a whole-program reduction alone cannot justify that heap-cell result. -/
-def StackRealizes (meaning : AddressMeaning) (root focus : Term) : List Frame → Prop
+@[expose] public def StackRealizes (meaning : AddressMeaning) (root focus : Term) : List Frame → Prop
   | [] => Steps root focus
   | .update address::rest =>
       Steps (meaning address) focus ∧ StackRealizes meaning root (meaning address) rest
   | frame::rest => StackRealizes meaning root (frameMeaning meaning frame focus) rest
 
- theorem stackRealizes_congr {bound : Nat} {first second : AddressMeaning} {root focus : Term}
+ public theorem stackRealizes_congr {bound : Nat} {first second : AddressMeaning} {root focus : Term}
     {stack : List Frame} (valid : ∀ frame ∈ stack, FrameValid bound frame)
     (same : ∀ address, address < bound → first address = second address)
     (realizes : StackRealizes first root focus stack) : StackRealizes second root focus stack := by
@@ -1164,7 +1165,7 @@ def StackRealizes (meaning : AddressMeaning) (root focus : Term) : List Frame �
       | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ =>
           simpa only [StackRealizes,frameMeaning_congr hv same] using ih ht realizes
 
- theorem stackRealizes_steps {meaning : AddressMeaning} {root before after : Term}
+ public theorem stackRealizes_steps {meaning : AddressMeaning} {root before after : Term}
     {stack : List Frame} (realizes : StackRealizes meaning root before stack)
     (steps : Steps before after) : StackRealizes meaning root after stack := by
   induction stack generalizing before after with
@@ -1175,7 +1176,7 @@ def StackRealizes (meaning : AddressMeaning) (root focus : Term) : List Frame �
       | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ =>
           exact ih realizes (sourceSteps_frame _ _ steps)
 
- theorem sourceSteps_stack (meaning : AddressMeaning) (stack : List Frame) {before after : Term}
+ public theorem sourceSteps_stack (meaning : AddressMeaning) (stack : List Frame) {before after : Term}
     (steps : Steps before after) : Steps (stackMeaning meaning stack before) (stackMeaning meaning stack after) := by
   induction stack generalizing before after with
   | nil => exact steps
@@ -1183,7 +1184,7 @@ def StackRealizes (meaning : AddressMeaning) (root focus : Term) : List Frame �
 
 /-- Erasing operational update frames is sound AFTER retaining their local
 provenance: each erased boundary contributes its actual demand derivation. -/
- theorem stackRealizes_erases {meaning : AddressMeaning} {root focus : Term} {stack : List Frame}
+ public theorem stackRealizes_erases {meaning : AddressMeaning} {root focus : Term} {stack : List Frame}
     (realizes : StackRealizes meaning root focus stack) : Steps root (stackMeaning meaning stack focus) := by
   induction stack generalizing focus with
   | nil => exact realizes
@@ -1224,12 +1225,12 @@ runtime closures/records as well as scalars. -/
 addresses and local provenance for every active update. Initialization,
 running/finished transition preservation and ground soundness are proved
 below; no source-evaluator oracle is a field of this relation. -/
-def GraphRepresents (state : State) (source : Term) : Prop :=
+@[expose] public def GraphRepresents (state : State) (source : Term) : Prop :=
   LexicalInvariant state ∧ BusyInvariant state ∧ FinalStackInvariant state ∧ ∃ meaning, MeaningsScoped state.heap.size meaning ∧ HeapRealizes meaning state.heap ∧
     ∃ residual, controlMeaning meaning state.control = some residual ∧
       StackRealizes meaning source residual state.stack
 
- theorem graph_initializes {source : Term} (closed : Scoped 0 source) :
+ public theorem graph_initializes {source : Term} (closed : Scoped 0 source) :
     GraphRepresents (initial source) source := by
   refine ⟨initial_lexicalInvariant closed,initial_busyInvariant source,initial_finalStackInvariant source,fun _ => .bound 0,?_,?_,source,?_,?_⟩
   · intro address allocated; simp [initial] at allocated
@@ -1271,7 +1272,7 @@ def GraphRepresents (state : State) (source : Term) : Prop :=
 values through the same concrete heap graph assignment as scalars. The
 existential retains the HeapRealizes proof; it is not an oracle or contextual
 equivalence assertion about arbitrary external consumers. -/
- theorem graph_complete_value_sound {state : State} {source : Term} {value : RuntimeValue}
+ public theorem graph_complete_value_sound {state : State} {source : Term} {value : RuntimeValue}
     (represented : GraphRepresents state source) (complete : state.control = .complete value) :
     ∃ meaning : AddressMeaning, MeaningsScoped state.heap.size meaning ∧ HeapRealizes meaning state.heap ∧
       Evaluates source (valueMeaning meaning value) := by
@@ -1379,7 +1380,7 @@ constructed by the existing graph theorem, rather than an evaluation oracle. -/
 
 /-- The source contexts that start a lexical demand without allocating heap
 cells. This enumerates actual syntax and actual machine frames. -/
-inductive DemandContext where
+public inductive DemandContext where
   | argument (term : Term)
   | field (name : String)
   | reflect | metadata | project
@@ -1389,7 +1390,7 @@ inductive DemandContext where
   | case (arms : List (String × Term))
   | ifBool (whenTrue whenFalse : Term)
 
-def DemandContext.term : DemandContext → Term → Term
+@[expose] public def DemandContext.term : DemandContext → Term → Term
   | .argument arg, hole => .app hole arg
   | .field name, hole => .get hole name
   | .reflect, hole => .reflect hole
@@ -1401,7 +1402,7 @@ def DemandContext.term : DemandContext → Term → Term
   | .case arms, hole => .case hole arms
   | .ifBool whenTrue whenFalse, hole => .ifBool hole whenTrue whenFalse
 
-def DemandContext.frame : DemandContext → Environment → Frame
+@[expose] public def DemandContext.frame : DemandContext → Environment → Frame
   | .argument arg, environment => .argument arg environment
   | .field name, _ => .field name
   | .reflect, _ => .reflect
@@ -1413,7 +1414,7 @@ def DemandContext.frame : DemandContext → Environment → Frame
   | .case arms, environment => .case arms environment
   | .ifBool whenTrue whenFalse, environment => .ifBool whenTrue whenFalse environment
 
- theorem demandContext_closes (context : DemandContext) (meaning : AddressMeaning)
+ public theorem demandContext_closes (context : DemandContext) (meaning : AddressMeaning)
     (environment : Environment) (hole : Term)
     (scope : Scoped environment.length (context.term hole)) :
     closeTerm meaning environment (context.term hole) =
@@ -1441,7 +1442,7 @@ def DemandContext.frame : DemandContext → Environment → Frame
           exact Prod.ext rfl (scoped_substitute_identity (scopedArms arm member) Term.bound (by intros; rfl))
       | argument _ | field _ | reflect | metadata | project | binary _ _ | ifBool _ _ => rfl
 
- theorem demandContext_dispatch {state : State} {context : DemandContext} {hole : Term} {environment : Environment}
+ public theorem demandContext_dispatch {state : State} {context : DemandContext} {hole : Term} {environment : Environment}
     (evaluate : state.control = .evaluate (context.term hole) environment) :
     stepRaw state = {state with control := .evaluate hole environment,stack := context.frame environment::state.stack} := by
   cases context <;> simp [stepRaw,evaluate,DemandContext.term,DemandContext.frame]
@@ -1450,19 +1451,19 @@ def DemandContext.frame : DemandContext → Environment → Frame
 
 
 
-inductive ImmediateValue where
+public inductive ImmediateValue where
   | closure (body : Term)
   | natural (number : Nat)
   | boolean (value : Bool)
   | label (name : String)
 
-def ImmediateValue.term : ImmediateValue → Term
+@[expose] public def ImmediateValue.term : ImmediateValue → Term
   | .closure body => .lam body
   | .natural number => .nat number
   | .boolean value => .boolean value
   | .label name => .label name
 
-def ImmediateValue.runtime : ImmediateValue → Environment → RuntimeValue
+@[expose] public def ImmediateValue.runtime : ImmediateValue → Environment → RuntimeValue
   | .closure body, environment => .closure body environment
   | .natural number, _ => .natural number
   | .boolean value, _ => .boolean value
@@ -1470,30 +1471,30 @@ def ImmediateValue.runtime : ImmediateValue → Environment → RuntimeValue
 
 
 
-inductive ObjectAccess where
+public inductive ObjectAccess where
   | reflect | metadata | project
 
-def ObjectAccess.frame : ObjectAccess → Frame
+@[expose] public def ObjectAccess.frame : ObjectAccess → Frame
   | .reflect => .reflect | .metadata => .metadata | .project => .project
 
-def ObjectAccess.value : ObjectAccess → Address → Address → RuntimeValue
+@[expose] public def ObjectAccess.value : ObjectAccess → Address → Address → RuntimeValue
   | .reflect, first, second => .prototype first second
   | .metadata, first, second => .specification first second
   | .project, first, second => .prototype first second
 
-def ObjectAccess.address : ObjectAccess → Address → Address → Address
+@[expose] public def ObjectAccess.address : ObjectAccess → Address → Address → Address
   | .reflect, first, _ => first | .metadata, first, _ => first | .project, _, second => second
 
 
 
 
 
- theorem valueTerm_meaning {value : RuntimeValue} {term : Term} (found : valueTerm value = some term)
+ public theorem valueTerm_meaning {value : RuntimeValue} {term : Term} (found : valueTerm value = some term)
     (meaning : AddressMeaning) : valueMeaning meaning value = term := by
   cases value <;> simp [valueTerm] at found
   all_goals subst term; rfl
 
- theorem scalarValue_meaning {value : RuntimeValue} {term : Term} (found : scalarValue term = some value)
+ public theorem scalarValue_meaning {value : RuntimeValue} {term : Term} (found : scalarValue term = some value)
     (meaning : AddressMeaning) : valueMeaning meaning value = term := by
   cases term <;> simp [scalarValue] at found
   all_goals subst value; rfl
@@ -1506,7 +1507,7 @@ def ObjectAccess.address : ObjectAccess → Address → Address → Address
 
 
 
- theorem closeTerm_app (meaning : AddressMeaning) (environment : Environment) (function argument : Term) :
+ public theorem closeTerm_app (meaning : AddressMeaning) (environment : Environment) (function argument : Term) :
     closeTerm meaning environment (.app function argument) =
       .app (closeTerm meaning environment function) (closeTerm meaning environment argument) := by
   cases environment <;> simp [closeTerm,Term.substitute]
@@ -1518,17 +1519,17 @@ def ObjectAccess.address : ObjectAccess → Address → Address → Address
   rw [closeTerm_eq_substitution (Scoped.lam scope)]
   simp only [Term.substitute]
 
-def extendMeaning (meaning : AddressMeaning) (address : Address) (term : Term) : AddressMeaning :=
+@[expose] public def extendMeaning (meaning : AddressMeaning) (address : Address) (term : Term) : AddressMeaning :=
   fun index => if index = address then term else meaning index
 
- theorem extendMeaning_prefix (meaning : AddressMeaning) (bound : Nat) (term : Term) :
+ public theorem extendMeaning_prefix (meaning : AddressMeaning) (bound : Nat) (term : Term) :
     ∀ address, address < bound → meaning address = extendMeaning meaning bound term address := by
   intro address allocated
   simp [extendMeaning,Nat.ne_of_lt allocated]
 
 /-- The shared allocation lemma records the actual suspended origin, its
 closed source name and exact agreement at every old allocated address. -/
- theorem allocateClosure_realizes {heap : Array Cell} {meaning : AddressMeaning}
+ public theorem allocateClosure_realizes {heap : Array Cell} {meaning : AddressMeaning}
     {term : Term} {environment : Environment} (validHeap : HeapValid heap)
     (names : MeaningsScoped heap.size meaning) (realizes : HeapRealizes meaning heap)
     (scope : Scoped environment.length term) (captures : EnvironmentValid heap.size environment) :
@@ -1554,20 +1555,20 @@ closed source name and exact agreement at every old allocated address. -/
     have originEq := closeTerm_meaning_congr captures scope same
     simpa only [fresh,cellOrigin,closeOrigin,←originEq] using Steps.refl source
 
-inductive PairObject where
+public inductive PairObject where
   | specification | prototype
 
-def PairObject.term : PairObject → Term → Term → Term
+@[expose] public def PairObject.term : PairObject → Term → Term → Term
   | .specification, first, second => .specification first second
   | .prototype, first, second => .prototype first second
 
-def PairObject.value : PairObject → Address → Address → RuntimeValue
+@[expose] public def PairObject.value : PairObject → Address → Address → RuntimeValue
   | .specification, first, second => .specification first second
   | .prototype, first, second => .prototype first second
 
 
 
-def allocationLoop (environment : Environment) (fields : List (String × Term))
+@[expose] public def allocationLoop (environment : Environment) (fields : List (String × Term))
     (heap : Array Cell) (prior : List (String × Address)) : Array Cell × List (String × Address) :=
   fields.foldl (fun pair field =>
     (pair.1.push (.suspended ⟨field.2,environment⟩),(field.1,pair.1.size)::pair.2)) (heap,prior)
@@ -1585,7 +1586,7 @@ def allocationLoop (environment : Environment) (fields : List (String × Term))
       rw [ih _ ((field.1,heap.size)::prior),ih _ [(field.1,heap.size)]]
       simp [List.append_assoc]
 
- theorem allocateFields_cons (heap : Array Cell) (environment : Environment) (field : String × Term)
+ public theorem allocateFields_cons (heap : Array Cell) (environment : Environment) (field : String × Term)
     (fields : List (String × Term)) :
     allocateFields heap environment (field::fields) =
       ((allocateFields (heap.push (.suspended ⟨field.2,environment⟩)) environment fields).1,
@@ -1598,7 +1599,7 @@ def allocationLoop (environment : Environment) (fields : List (String × Term))
 /-- Arbitrary lazy record allocation: every generated field name denotes the
 original captured computation, in field order, while all old graph meanings
 and all source origins are retained. Fields may contain general Fix. -/
- theorem allocateFields_realizes {heap : Array Cell} {meaning : AddressMeaning} {environment : Environment}
+ public theorem allocateFields_realizes {heap : Array Cell} {meaning : AddressMeaning} {environment : Environment}
     {fields : List (String × Term)} (valid : HeapValid heap) (names : MeaningsScoped heap.size meaning)
     (realizes : HeapRealizes meaning heap) (captures : EnvironmentValid heap.size environment)
     (scopes : ∀ field ∈ fields, Scoped environment.length field.2) :
@@ -1636,7 +1637,7 @@ and all source origins are retained. Fields may contain general Fix. -/
         intro f member
         exact Prod.ext rfl (closeTerm_meaning_congr captures (tailScopes f member) oneSame).symm
 
- theorem closeTerm_record (meaning : AddressMeaning) (environment : Environment) (fields : List (String × Term)) :
+ public theorem closeTerm_record (meaning : AddressMeaning) (environment : Environment) (fields : List (String × Term)) :
     closeTerm meaning environment (.record fields) =
       .record (fields.map fun field => (field.1,closeTerm meaning environment field.2)) := by
   cases environment <;> simp [closeTerm,Term.substitute]
@@ -1683,7 +1684,7 @@ and all source origins are retained. Fields may contain general Fix. -/
 
 
 
- theorem closeTerm_weaken {bound : Nat} {meaning extended : AddressMeaning}
+ public theorem closeTerm_weaken {bound : Nat} {meaning extended : AddressMeaning}
     {environment : Environment} {term : Term}
     (captures : EnvironmentValid bound environment) (scope : Scoped environment.length term)
     (same : ∀ address, address < bound → meaning address = extended address) :
@@ -1697,7 +1698,7 @@ and all source origins are retained. Fields may contain general Fix. -/
   simp only [environmentSubstitution,List.getElem?_cons_succ,found]
   exact (same _ (captures _ (List.mem_of_getElem? found))).symm
 
- theorem closeTerm_fix (meaning : AddressMeaning) (environment : Environment) (spec inherited : Term) :
+ public theorem closeTerm_fix (meaning : AddressMeaning) (environment : Environment) (spec inherited : Term) :
     closeTerm meaning environment (.fix spec inherited) =
       .fix (closeTerm meaning environment spec) (closeTerm meaning environment inherited) := by
   cases environment <;> simp only [closeTerm,Term.substitute]
@@ -1714,7 +1715,7 @@ and all source origins are retained. Fields may contain general Fix. -/
 
 /-- Running and finished controls have a source focus. Faults and blackholes
 are retained operational outcomes and are deliberately not source values. -/
-def ResultControl : Control → Prop
+@[expose] public def ResultControl : Control → Prop
   | .evaluate _ _ | .enter _ | .returned _ | .complete _ => True
   -- A yield is not a pure result: it is a whole-program step taken only by a
   -- resume, so (like a fault) it never appears on a terminating pure trace.
@@ -1723,13 +1724,13 @@ def ResultControl : Control → Prop
 /-- Actual thunk birth provenance: ordinary captures precede their address;
 the sole same-address capture is the exact body installed by tied Fix. Cached
 RESULT edges may point forward; the permanent SOURCE origin obeys this law. -/
-def OriginBorn (address : Address) (origin : Closure) : Prop :=
+@[expose] public def OriginBorn (address : Address) (origin : Closure) : Prop :=
   EnvironmentValid address origin.environment ∨
     ∃ (spec inherited : Term) (captured : Environment),
       origin.environment = address::captured ∧ EnvironmentValid address captured ∧
       origin.term = .app (.app (spec.rename Nat.succ) (.bound 0)) (inherited.rename Nat.succ)
 
-def HeapOriginsBorn (heap : Array Cell) : Prop :=
+@[expose] public def HeapOriginsBorn (heap : Array Cell) : Prop :=
   ∀ address cell, heap[address]? = some cell → OriginBorn address (cellOrigin cell)
 
 /-- A tied Fix origin contains the permanent source name as a proper subterm.
@@ -1849,13 +1850,13 @@ Fix and sharing, while excluding arbitrary fabricated cyclic suspended aliases. 
 
 /-- A graph representation at a specified permanent source assignment. This
 interface retains address-name identity for reachability and update budgets. -/
-def GraphRepresentsBy (meaning : AddressMeaning) (state : State) (source : Term) : Prop :=
+@[expose] public def GraphRepresentsBy (meaning : AddressMeaning) (state : State) (source : Term) : Prop :=
   LexicalInvariant state ∧ BusyInvariant state ∧ FinalStackInvariant state ∧
     MeaningsScoped state.heap.size meaning ∧ HeapRealizes meaning state.heap ∧
     ∃ residual, controlMeaning meaning state.control = some residual ∧
       StackRealizes meaning source residual state.stack
 
-def SourceNamesAgree (before : State) (meaning next : AddressMeaning) : Prop :=
+@[expose] public def SourceNamesAgree (before : State) (meaning next : AddressMeaning) : Prop :=
   ∀ address, address < before.heap.size → meaning address = next address
 
  theorem graphBy_graph {meaning : AddressMeaning} {state : State} {source : Term}
@@ -1863,7 +1864,7 @@ def SourceNamesAgree (before : State) (meaning next : AddressMeaning) : Prop :=
   obtain ⟨lexical,busy,final,names,heap,focus,control,stack⟩ := represented
   exact ⟨lexical,busy,final,meaning,names,heap,focus,control,stack⟩
 
- theorem graphBy_initializes {source : Term} (closed : Scoped 0 source) :
+ public theorem graphBy_initializes {source : Term} (closed : Scoped 0 source) :
     GraphRepresentsBy (fun _ => .bound 0) (initial source) source := by
   refine ⟨initial_lexicalInvariant closed,initial_busyInvariant source,initial_finalStackInvariant source,?_,?_,source,rfl,Steps.refl _⟩
   · intro address allocated; simp [initial] at allocated
@@ -1872,7 +1873,7 @@ def SourceNamesAgree (before : State) (meaning next : AddressMeaning) : Prop :=
 
 /-- The actual semantic transition consumes a continuation prefix and one
 independent source reduction; remaining heap names retain their prefix. -/
-def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
+@[expose] public def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   ∃ consumed before after,
     controlMeaning meaning state.control = some before ∧
     controlMeaning next (stepRaw state).control = some after ∧
@@ -1933,7 +1934,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   · rw [denotes]
     cases immediate <;> simpa [stepRaw,evaluate,ImmediateValue.term] using stack
 
- theorem graph_object_access_execution {meaning : AddressMeaning} {state : State} {source : Term} {access : ObjectAccess} {first second : Address} {rest : List Frame}
+ public theorem graph_object_access_execution {meaning : AddressMeaning} {state : State} {source : Term} {access : ObjectAccess} {first second : Address} {rest : List Frame}
     (represented : GraphRepresentsBy meaning state source)
     (returned : state.control = .returned (access.value first second))
     (head : state.stack = access.frame::rest) : ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ (GraphRepresentsBy next (stepRaw state) source ∧ SourceDispatch meaning next state) := by
@@ -2131,7 +2132,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   · rw [denotes]
     simpa [stepRaw,evaluate] using consumers
 
- theorem graph_field_return_execution {meaning : AddressMeaning} {state : State} {source : Term} {fields : List (String × Address)}
+ public theorem graph_field_return_execution {meaning : AddressMeaning} {state : State} {source : Term} {fields : List (String × Address)}
     {name key : String} {address : Address} {rest : List Frame}
     (represented : GraphRepresentsBy meaning state source) (returned : state.control = .returned (.record fields))
     (head : state.stack = .field name::rest)
@@ -2171,7 +2172,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   obtain ⟨next,same,current,_⟩ := graph_field_return_execution represented returned head found
   exact ⟨next,same,current⟩
 
- theorem graph_evaluate_mix_execution {meaning : AddressMeaning} {state : State} {source lower upper : Term} {environment : Environment}
+ public theorem graph_evaluate_mix_execution {meaning : AddressMeaning} {state : State} {source lower upper : Term} {environment : Environment}
     (represented : GraphRepresentsBy meaning state source)
     (evaluate : state.control = .evaluate (.mix lower upper) environment) : ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ (GraphRepresentsBy next (stepRaw state) source ∧ SourceDispatch meaning next state) := by
   obtain ⟨lexical,busy,final,names,heap,focus,control,stack⟩ := represented
@@ -2205,7 +2206,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   obtain ⟨next,same,current,_⟩ := graph_evaluate_mix_execution represented evaluate
   exact ⟨next,same,current⟩
 
- theorem graph_condition_zero_execution {meaning : AddressMeaning} {state : State} {source zero body : Term} {environment : Environment} {rest : List Frame}
+ public theorem graph_condition_zero_execution {meaning : AddressMeaning} {state : State} {source zero body : Term} {environment : Environment} {rest : List Frame}
     (represented : GraphRepresentsBy meaning state source) (returned : state.control = .returned (.natural 0))
     (head : state.stack = .condition zero body environment::rest) : ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ (GraphRepresentsBy next (stepRaw state) source ∧ SourceDispatch meaning next state) := by
   obtain ⟨lexical,busy,final,names,heap,focus,control,stack⟩ := represented
@@ -2236,7 +2237,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   obtain ⟨next,same,current,_⟩ := graph_condition_zero_execution represented returned head
   exact ⟨next,same,current⟩
 
- theorem graph_condition_successor_execution {meaning : AddressMeaning} {state : State} {source zero body : Term} {environment : Environment}
+ public theorem graph_condition_successor_execution {meaning : AddressMeaning} {state : State} {source zero body : Term} {environment : Environment}
     {number : Nat} {rest : List Frame} (represented : GraphRepresentsBy meaning state source)
     (returned : state.control = .returned (.natural (number+1)))
     (head : state.stack = .condition zero body environment::rest) : ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ (GraphRepresentsBy next (stepRaw state) source ∧ SourceDispatch meaning next state) := by
@@ -2392,7 +2393,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   · simp [stepRaw,evaluate,controlMeaning,fresh]
   · simpa [stepRaw,evaluate,fixSource] using consumers
 
- theorem graph_closure_call_execution {meaning : AddressMeaning} {state : State} {source body argument : Term}
+ public theorem graph_closure_call_execution {meaning : AddressMeaning} {state : State} {source body argument : Term}
     {captured environment : Environment} {rest : List Frame}
     (represented : GraphRepresentsBy meaning state source)
     (returned : state.control = .returned (.closure body captured))
@@ -2504,7 +2505,7 @@ def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   · simp [stepRaw,returned,empty,controlMeaning]
   · simpa [stepRaw,returned,empty] using stack
 
- theorem closeTerm_inject (meaning : AddressMeaning) (environment : Environment) (tag : String) (payload : Term) :
+ public theorem closeTerm_inject (meaning : AddressMeaning) (environment : Environment) (tag : String) (payload : Term) :
     closeTerm meaning environment (.inject tag payload) = .inject tag (closeTerm meaning environment payload) := by
   cases environment <;> simp [closeTerm,Term.substitute]
 
@@ -2548,7 +2549,7 @@ denotes the injected closed payload computation without forcing it. -/
 /-- A returned variant selects its first matching arm. The binder is a fresh
 indirection cell to the shared payload address, and the transition is exactly
 independent source case-of-injection reduction. -/
- theorem graph_case_return_execution {meaning : AddressMeaning} {state : State} {source body : Term}
+ public theorem graph_case_return_execution {meaning : AddressMeaning} {state : State} {source body : Term}
     {arms : List (String × Term)} {environment : Environment} {tag key : String} {payload : Address}
     {rest : List Frame} (represented : GraphRepresentsBy meaning state source)
     (returned : state.control = .returned (.variant tag payload))
@@ -2621,7 +2622,7 @@ independent source case-of-injection reduction. -/
   exact ⟨next,same,current⟩
 
 /-- A returned Boolean selects exactly one branch; the other stays latent. -/
- theorem graph_ifBool_return_execution {meaning : AddressMeaning} {state : State} {source whenTrue whenFalse : Term}
+ public theorem graph_ifBool_return_execution {meaning : AddressMeaning} {state : State} {source whenTrue whenFalse : Term}
     {environment : Environment} {rest : List Frame} {value : Bool} (represented : GraphRepresentsBy meaning state source)
     (returned : state.control = .returned (.boolean value))
     (head : state.stack = .ifBool whenTrue whenFalse environment::rest) :
@@ -2671,7 +2672,7 @@ independent source case-of-injection reduction. -/
   obtain ⟨next,same,current,_⟩ := graph_ifBool_return_execution represented returned head
   exact ⟨next,same,current⟩
 
- theorem closeTerm_perform (meaning : AddressMeaning) (environment : Environment) (plan : Term) :
+ public theorem closeTerm_perform (meaning : AddressMeaning) (environment : Environment) (plan : Term) :
     closeTerm meaning environment (.perform plan) = .perform (closeTerm meaning environment plan) := by
   cases environment <;> simp [closeTerm,Term.substitute]
 
@@ -2707,7 +2708,7 @@ so no source step is claimed or needed. -/
     simpa [stepRaw,evaluate,direct] using consumers
 
 /-- `done` is exactly the independent source reduction `done v → v`. -/
- theorem graph_evaluate_done_execution {meaning : AddressMeaning} {state : State} {source value : Term}
+ public theorem graph_evaluate_done_execution {meaning : AddressMeaning} {state : State} {source value : Term}
     {environment : Environment} (represented : GraphRepresentsBy meaning state source)
     (evaluate : state.control = .evaluate (.done value) environment) :
     ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧
@@ -2739,7 +2740,7 @@ so no source step is claimed or needed. -/
   exact ⟨next,same,current⟩
 
 /-- EVERY running/finished raw transition retains a specified source name assignment on all already allocated addresses. New names are constructed from actual allocations. -/
- theorem graph_stepRaw_names {meaning : AddressMeaning} {state : State} {source : Term}
+ public theorem graph_stepRaw_names {meaning : AddressMeaning} {state : State} {source : Term}
     (represented : GraphRepresentsBy meaning state source) (successful : ResultControl (stepRaw state).control) :
     ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ GraphRepresentsBy next (stepRaw state) source := by
   -- one named field per branch of `stepRaw`; the case split itself is `StepCases.apply`
@@ -3108,7 +3109,7 @@ fault/blackhole successors are proved independently in DemandInvariant. -/
   obtain ⟨next,_,advanced⟩ := graph_stepRaw_names ⟨lexical,busy,final,names,heap,focus,control,stack⟩ successful
   exact graphBy_graph advanced
 
- theorem graph_stepRaw {state : State} {source : Term}
+ public theorem graph_stepRaw {state : State} {source : Term}
     (represented : GraphRepresents state source) (successful : ResultControl (stepRaw state).control) :
     GraphRepresents (stepRaw state) source := by
   -- one named field per branch of `stepRaw`; the case split itself is `StepCases.apply`
@@ -3244,7 +3245,7 @@ unfolding. Neither this witness nor the lexical invariant forbids the cycle. -/
 /-- Finite raw execution is independent of capacity. Resource completeness
 below computes a sufficient bound from this real transition trace; it does not
 assert that a source computation terminates. -/
-def rawRun : Nat → State → State
+@[expose] public def rawRun : Nat → State → State
   | 0,state => state
   | ticks+1,state => rawRun ticks (stepRaw state)
 
@@ -3252,15 +3253,15 @@ def rawRun : Nat → State → State
 The endpoint can be a genuine source constructor, returned/cache value, or an
 explicit fault/blackhole; terminating this segment does not label a blackhole
 as source divergence. -/
-def DemandAdministrative (state : State) : Prop :=
+@[expose] public def DemandAdministrative (state : State) : Prop :=
   match state.control with
   | .enter _ | .evaluate (.bound _) _ => True
   | _ => False
 
-def DemandAdministrationHalts (state : State) : Prop :=
+@[expose] public def DemandAdministrationHalts (state : State) : Prop :=
   ∃ ticks, ¬ DemandAdministrative (rawRun ticks state)
 
-def AdministrativeBudget (cost cap : Nat) : Prop :=
+@[expose] public def AdministrativeBudget (cost cap : Nat) : Prop :=
   ∀ (meaning : AddressMeaning) (state : State), HeapRealizes meaning state.heap → HeapOriginsBorn state.heap →
     (∀ (address : Address) (result : Term), state.control = .enter address → address+1 ≤ cap →
       SourceDerivation (meaning address) result cost → DemandAdministrationHalts state) ∧
@@ -3343,11 +3344,11 @@ Fix and sharing; it assumes neither an acyclic heap nor finite unfolding. -/
           · refine ⟨0,?_⟩
             cases term <;> simp_all [rawRun,DemandAdministrative]
 
-def retainedState : Outcome → State
+@[expose] public def retainedState : Outcome → State
   | .finished _ state | .suspended _ state | .divergent _ state | .refused _ state
   | .yielded _ state => state
 
-def TraceFits (limits : Limits) : Nat → State → Prop
+@[expose] public def TraceFits (limits : Limits) : Nat → State → Prop
   | 0,_ => True
   | ticks+1,state =>
       (stepRaw state).heap.size ≤ limits.heap ∧
@@ -3356,7 +3357,7 @@ def TraceFits (limits : Limits) : Nat → State → Prop
 /-- Explicit maximum heap/stack bounds along the requested finite trace. Tick
 bound is its length. A resource suspension requires larger bounds and keeps the
 exact resumable state; this maximum is a semantic bound, not a native allocator. -/
-def traceLimits : Nat → State → Limits
+@[expose] public def traceLimits : Nat → State → Limits
   | 0,_ => ⟨0,0⟩
   | ticks+1,state =>
       let next := stepRaw state
@@ -3379,7 +3380,7 @@ def traceLimits : Nat → State → Limits
       refine ⟨Nat.le_max_left _ _,Nat.le_max_left _ _,?_⟩
       exact traceFits_mono (ih (stepRaw state)) (Nat.le_max_right _ _) (Nat.le_max_right _ _)
 
- theorem rawRun_absorbs {state : State} (ticks : Nat) (absorbs : stepRaw state = state) :
+ public theorem rawRun_absorbs {state : State} (ticks : Nat) (absorbs : stepRaw state = state) :
     rawRun ticks state = state := by
   induction ticks with
   | zero => rfl
@@ -3396,7 +3397,7 @@ def traceLimits : Nat → State → Limits
 /-- A normally terminating trace never traverses an absorbing fault or
 blackhole. This derives the per-step successful classification from the
 actual final control, instead of assuming coverage along the trace. -/
- theorem rawRun_graph {ticks : Nat} {state : State} {source : Term}
+ public theorem rawRun_graph {ticks : Nat} {state : State} {source : Term}
     (represented : GraphRepresents state source)
     (successful : ResultControl (rawRun ticks state).control) : GraphRepresents (rawRun ticks state) source := by
   induction ticks generalizing state with
@@ -3430,7 +3431,7 @@ actual final control, instead of assuming coverage along the trace. -/
   | returned value | complete value | refused reason | blackhole address | yielded _ =>
       exact ⟨0,by simp [rawRun,DemandAdministrative,current]⟩
 
- theorem rawRun_reachable {start state : State} (reachable : Reachable start state) (ticks : Nat) :
+ public theorem rawRun_reachable {start state : State} (reachable : Reachable start state) (ticks : Nat) :
     Reachable start (rawRun ticks state) := by
   induction ticks generalizing state with
   | zero => exact reachable
@@ -3521,7 +3522,7 @@ state; treating GraphRepresents as a completeness oracle would be unsound. -/
   all_goals try contradiction
   all_goals split at stepped <;> simp_all
 
- theorem runBounded_finished_control {limits : Limits} {ticks : Nat} {state final : State} {value : RuntimeValue}
+ public theorem runBounded_finished_control {limits : Limits} {ticks : Nat} {state final : State} {value : RuntimeValue}
     (finished : runBounded limits ticks state = .finished value final) : final.control = .complete value := by
   induction ticks generalizing state with
   | zero =>
@@ -3603,12 +3604,12 @@ suspension and blackholes cannot be laundered into source evaluations. -/
       Evaluates source (valueMeaning meaning value) :=
   graph_complete_value_sound (runBounded_finished_graph (graph_initializes closed) finished) (runBounded_finished_control finished)
 
-def observationTerm : Observation → Term
+@[expose] public def observationTerm : Observation → Term
   | .natural number => .nat number
   | .boolean value => .boolean value
   | .label name => .label name
 
-def observationRuntime : Observation → RuntimeValue
+@[expose] public def observationRuntime : Observation → RuntimeValue
   | .natural number => .natural number
   | .boolean value => .boolean value
   | .label name => .label name
@@ -3699,7 +3700,7 @@ pointer lookup, not normal completion of the entire program. -/
   refine ⟨ticks,traceLimits ticks (rawRun prefixTicks (initial source)),?_⟩
   simpa only [adequate_trace_execution] using stop
 
- theorem adequate_trace_completion {ticks : Nat} {state : State} {value : RuntimeValue}
+ public theorem adequate_trace_completion {ticks : Nat} {state : State} {value : RuntimeValue}
     (complete : (rawRun ticks state).control = .complete value) :
     runBounded (traceLimits ticks state) ticks state = .finished value (rawRun ticks state) := by
   have retained := adequate_trace_execution ticks state
@@ -3839,7 +3840,7 @@ the tied address is memoized in place with its retained unfolding origin. -/
 /-- Finite actual traces construct coherent name assignments. Already allocated
 source identities survive every prefix, including cached structured values;
 only freshly allocated addresses acquire names. -/
- theorem rawRun_graphBy_names {meaning : AddressMeaning} {state : State} {source : Term} {ticks : Nat}
+ public theorem rawRun_graphBy_names {meaning : AddressMeaning} {state : State} {source : Term} {ticks : Nat}
     (represented : GraphRepresentsBy meaning state source)
     (successful : ResultControl (rawRun ticks state).control) :
     ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ GraphRepresentsBy next (rawRun ticks state) source := by
@@ -3854,7 +3855,7 @@ only freshly allocated addresses acquire names. -/
       exact (first address allocated).trans
         (rest address (Nat.lt_of_lt_of_le allocated (stepRaw_preservesOrigins state).1))
 
- theorem rawRun_named_graph {source : Term} (closed : Scoped 0 source) (ticks : Nat)
+ public theorem rawRun_named_graph {source : Term} (closed : Scoped 0 source) (ticks : Nat)
     (successful : ResultControl (rawRun ticks (initial source)).control) :
     ∃ meaning : AddressMeaning, GraphRepresentsBy meaning (rawRun ticks (initial source)) source := by
   obtain ⟨meaning,_,represented⟩ := rawRun_graphBy_names (graphBy_initializes closed) successful
@@ -3960,7 +3961,7 @@ GraphRepresents/Born counterexample, independently of source termination. -/
 /-- An actual uninterrupted evaluating interval starts by entering this exact
 suspended origin. Every later member is an actual transition still carrying
 that same evaluating cell, rather than an assumed phase marker. -/
-inductive EvaluatingSegment (address : Address) (origin : Closure) (entered : State) : State → Prop where
+public inductive EvaluatingSegment (address : Address) (origin : Closure) (entered : State) : State → Prop where
   | start : entered.control = .enter address → entered.heap[address]? = some (.suspended origin) →
       EvaluatingSegment address origin entered (stepRaw entered)
   | next {state : State} : EvaluatingSegment address origin entered state →
@@ -4122,7 +4123,7 @@ oracle for the heap. -/
 #assert_axioms reachable_evaluating_current_budget graphBy_pending_budget
 
 /-- A cap for the exact addresses retained by the current lexical closure. -/
-def captureCap : Environment → Nat
+@[expose] public def captureCap : Environment → Nat
   | [] => 0
   | address::rest => max (address+1) (captureCap rest)
 
@@ -4148,7 +4149,7 @@ def captureCap : Environment → Nat
 /-- Demand focus also exposes evaluating entry as its permanent name, so a
 finite-budget active-update invariant can rule it out instead of silently
 omitting the blackhole-producing state. -/
-def budgetFocus (meaning : AddressMeaning) (state : State) : Option Term :=
+@[expose] public def budgetFocus (meaning : AddressMeaning) (state : State) : Option Term :=
   match state.control with
   | .enter address => match state.heap[address]? with
       | some (.suspended origin) => some (closeOrigin meaning origin)
@@ -4156,7 +4157,7 @@ def budgetFocus (meaning : AddressMeaning) (state : State) : Option Term :=
       | some (.evaluating _) | none => some (meaning address)
   | control => controlMeaning meaning control
 
-def budgetCap (state : State) : Nat :=
+@[expose] public def budgetCap (state : State) : Nat :=
   match state.control with
   | .evaluate _ environment => captureCap environment
   | .enter address => match state.heap[address]? with
@@ -4168,7 +4169,7 @@ def budgetCap (state : State) : Nat :=
 /-- Universal partial-budget invariant: undemanded divergent names need no
 finite evaluation. Every FINITE pending-name/current-demand pair satisfies
 strict semantic decrease or equal-cost lexical cap confinement. -/
-def DemandSafety (meaning : AddressMeaning) (state : State) : Prop :=
+@[expose] public def DemandSafety (meaning : AddressMeaning) (state : State) : Prop :=
   ∀ (address : Address) (origin : Closure), state.heap[address]? = some (.evaluating origin) →
     ∀ (nameValue : Term) (nameCost : Nat), SourceDerivation (meaning address) nameValue nameCost →
       ∀ focus, budgetFocus meaning state = some focus →
@@ -4239,7 +4240,7 @@ is general heap/closure preservation, including actual tied Fix origins. -/
 
 #assert_axioms stepRaw_demandSafety_enter_suspended demandSafety_forbids_finite_reentry
 
- theorem budgetFocus_enter_steps {meaning : AddressMeaning} {state : State} {address : Address} {focus : Term}
+ public theorem budgetFocus_enter_steps {meaning : AddressMeaning} {state : State} {address : Address} {focus : Term}
     (heap : HeapRealizes meaning state.heap) (enter : state.control = .enter address)
     (current : budgetFocus meaning state = some focus) : Steps (meaning address) focus := by
   cases found : state.heap[address]? with
@@ -4411,7 +4412,7 @@ finite update budgets is used separately to exclude evaluating re-entry. -/
         obtain ⟨before,after,eq⟩ := ih later
         exact ⟨frame::before,after,by simp [eq]⟩
 
- theorem budgetFocus_control_steps {meaning : AddressMeaning} {state : State} {before focus : Term}
+ public theorem budgetFocus_control_steps {meaning : AddressMeaning} {state : State} {before focus : Term}
     (heap : HeapRealizes meaning state.heap)
     (control : controlMeaning meaning state.control = some before)
     (current : budgetFocus meaning state = some focus) : Steps before focus := by
@@ -5006,7 +5007,7 @@ classifying blackholes for arbitrary diverging source computations. -/
 /-- A finite independent derivation of the demanded returned-value context
 forces every real frame dispatch to have the required operand/field. This
 uses source semantics, without a separate typed-source restriction. -/
- theorem closeTerm_lam_form (meaning : AddressMeaning) (environment : Environment) (body : Term) :
+ public theorem closeTerm_lam_form (meaning : AddressMeaning) (environment : Environment) (body : Term) :
     closeTerm meaning environment (.lam body) = .lam
       (match environment with
         | [] => body
@@ -5199,7 +5200,7 @@ actual next raw control is running/finished, with no typed-domain premise. -/
 /-- Every finite prefix of the actual executor remains running/finished for
 EVERY independently terminating closed source. All refusals and blackholes
 are excluded from these actual traces; finite completion is still separate. -/
- theorem rawRun_terminating_resultControl {source result : Term} (closed : Scoped 0 source)
+ public theorem rawRun_terminating_resultControl {source result : Term} (closed : Scoped 0 source)
     (terminates : Evaluates source result) (ticks : Nat) :
     ResultControl (rawRun ticks (initial source)).control := by
   obtain ⟨meaning,represented,safe⟩ := rawRun_terminating_graphSafety (graphBy_initializes closed)
@@ -5222,7 +5223,7 @@ are excluded from these actual traces; finite completion is still separate. -/
 /-- For arbitrary capacities, the bounded executor retains an exact actual
 raw prefix; suspension can shorten its physical work, but cannot synthesize
 or replace machine state. -/
- theorem runBounded_retained_prefix (limits : Limits) (ticks : Nat) (state : State) :
+ public theorem runBounded_retained_prefix (limits : Limits) (ticks : Nat) (state : State) :
     ∃ count, count ≤ ticks ∧ retainedState (runBounded limits ticks state) = rawRun count state := by
   induction ticks generalizing state with
   | zero =>
@@ -5341,7 +5342,7 @@ discharged on actual traces by `rawRun_terminating_graphSafety` from
 `graphBy_initializes`, `initial_demandSafety` and `initial_originsBorn`. -/
 
 /-- The closed lazy Fix program of `lazy_fixed_function`. -/
-def lazyFixedSource : Term := .fix (.lam (.lam (.lam (.bound 0)))) (.nat 7)
+@[expose] public def lazyFixedSource : Term := .fix (.lam (.lam (.lam (.bound 0)))) (.nat 7)
 
 theorem lazyFixedSource_closed : Scoped 0 lazyFixedSource :=
   .fix (.lam (.lam (.lam (.bound (by decide))))) (.natural 7)

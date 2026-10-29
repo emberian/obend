@@ -1,11 +1,12 @@
+module
 /- Preservation cases: Sums. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
 
-def InjectDerivation (assumptions : Assumptions) (context : Context)
+@[expose] public def InjectDerivation (assumptions : Assumptions) (context : Context)
     (tag : String) (payload : Term) (type : Ty) (uses : Uses) : Prop :=
   ∃ payloadType row fuel, PartialTyping assumptions context payload payloadType uses ∧
     row.lookup assumptions.bounds fuel tag = some payloadType ∧
@@ -35,7 +36,7 @@ theorem source_inject_decomposition {assumptions : Assumptions} {context : Conte
   all_goals (intros; trivial)
 
 /-- The injection decomposition with the payload's suspendability. -/
-def InjectPureDerivation (assumptions : Assumptions) (context : Context)
+@[expose] public def InjectPureDerivation (assumptions : Assumptions) (context : Context)
     (tag : String) (payload : Term) (type : Ty) (uses : Uses) : Prop :=
   ∃ payloadType row fuel, PartialTyping assumptions context payload payloadType uses ∧
     row.lookup assumptions.bounds fuel tag = some payloadType ∧ payloadType.isComputation = false ∧
@@ -66,7 +67,7 @@ theorem source_inject_decomposition_pure {assumptions : Assumptions} {context : 
 
 /-- Injection allocates its payload thunk at the payload's source type; the
 returned variant is typed at the declared row by that exact address. -/
-theorem typed_inject_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_inject_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {tag : String} {payload : Term} {environment : Environment}
     (typed : StateTyping assumptions types state result)
     (evaluate : state.control = .evaluate (.inject tag payload) environment) :
@@ -104,7 +105,7 @@ theorem arms_row_closed {assumptions : Assumptions} {context : Context} {arms : 
       cases typed with
       | cons bodyTyped safe shareable restTyped => simpa [Ty.tail] using ih restTyped
 
-theorem arms_typing_find {assumptions : Assumptions} {context : Context} {arms : List (String × Term)}
+public theorem arms_typing_find {assumptions : Assumptions} {context : Context} {arms : List (String × Term)}
     {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context arms row result uses)
     {tag key : String} {body : Term} (found : arms.find? (fun arm => arm.1 == tag) = some (key,body)) :
     key = tag ∧ ∃ payload bodyUses, finiteLookup row tag = some payload ∧
@@ -175,7 +176,7 @@ theorem stack_case_value {assumptions : Assumptions} {types : AddressTypes}
 /-- A typed returned variant always has its arm (no missingArm), and the arm
 binder is a fresh indirection cell typed at the arm's declared payload type,
 reached from the payload's own address type along a finite conversion path. -/
-theorem typed_case_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_case_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {arms : List (String × Term)}
     {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)
@@ -260,7 +261,7 @@ theorem stack_ifBool_value {assumptions : Assumptions} {types : AddressTypes}
 
 /-- A typed returned Boolean selects exactly one branch, typed at the frame's
 result; no wrongValue refusal is reachable. -/
-theorem typed_ifBool_preserved {assumptions : Assumptions} {types : AddressTypes}
+public theorem typed_ifBool_preserved {assumptions : Assumptions} {types : AddressTypes}
     {state : State} {result : Ty} {value : RuntimeValue} {whenTrue whenFalse : Term}
     {environment : Environment} {rest : List Frame}
     (typed : StateTyping assumptions types state result)

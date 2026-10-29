@@ -1,3 +1,4 @@
+module
 /- Extraction failures, backward (forcing transparency, part 11).
 
 `ObjectiveBendDemandForcingBack` transfers SUCCESS backward along a normalization: a forced
@@ -17,9 +18,9 @@ whose extraction suspends with no extraction ticks and succeeds with more).
 So (`node_malformed_of_chain`) a normalized state whose segment halts in a yield or a
 completion whose extraction fails semantically is in a chain with a lazy state whose reference
 node is `malformed`: no resources make its Plan or result Data within the output sizes. -/
-import Obend.Core.Proofs.Forcing.Converse
-import Obend.Core.Interaction
-import Obend.Core.Proofs.DataSoundness
+public import Obend.Core.Proofs.Forcing.Converse
+public import Obend.Core.Interaction
+public import Obend.Core.Proofs.DataSoundness
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -28,20 +29,20 @@ open Obend.Core.Data
 set_option autoImplicit false
 
 /-- The failure an extraction throws for a forcing outcome (`none`: it finished). -/
-def failureOf : Outcome → Option Failure
+@[expose] public def failureOf : Outcome → Option Failure
   | .finished _ _ => none
   | .suspended reason _ => some (suspensionFailure reason)
   | .divergent _ _ => some .divergent
   | .refused _ _ => some .refused
   | .yielded _ _ => some .yielded
 
-@[simp] theorem suspensionFailure_ne_divergent (reason : Suspension) :
+@[simp] public theorem suspensionFailure_ne_divergent (reason : Suspension) :
     suspensionFailure reason ≠ .divergent := by cases reason <;> simp [suspensionFailure]
 
-@[simp] theorem suspensionFailure_ne_refused (reason : Suspension) :
+@[simp] public theorem suspensionFailure_ne_refused (reason : Suspension) :
     suspensionFailure reason ≠ .refused := by cases reason <;> simp [suspensionFailure]
 
-@[simp] theorem suspensionFailure_ne_yielded (reason : Suspension) :
+@[simp] public theorem suspensionFailure_ne_yielded (reason : Suspension) :
     suspensionFailure reason ≠ .yielded := by cases reason <;> simp [suspensionFailure]
 
 /-- A terminal outcome's failure depends only on the control, up to renaming. -/
@@ -81,7 +82,7 @@ theorem except_bind_error {ε α β : Type} (x : Except ε α) (k : α → Excep
   cases x <;> simp [bind, Except.bind]
 
 /-- Materialization failure backward at one depth. -/
-def MaterializeFailBack (R : (Nat → Nat) → State → State → Prop) (Dom : Array Cell → Nat → Prop)
+@[expose] public def MaterializeFailBack (R : (Nat → Nat) → State → State → Prop) (Dom : Array Cell → Nat → Prop)
     (L' : Limits) (depth : Nat) : Prop :=
   ∀ (budget' : Budget) (v : RuntimeValue) (s t : State) (F : Nat → Nat) (f : Failure) (st' : State × Budget),
     R F s t → AllIn (Dom s.heap) (valueAddresses v) → (f ≠ .suspended ∧ f ≠ .tickExhausted) →
@@ -590,7 +591,7 @@ theorem BackSim.completeFail {R : (Nat → Nat) → State → State → Prop} {D
 
 /-- The extraction failure a segment ends with: its bounded run halted in a yield or a
 completion, and that extraction failed (`none`: anything else). -/
-def failsWith (L : Limits) (T : Nat) (budget : Budget) (s : State) : Option Failure :=
+@[expose] public def failsWith (L : Limits) (T : Nat) (budget : Budget) (s : State) : Option Failure :=
   match Obend.Core.Machine.runBounded L T s with
   | .yielded _ y => match Obend.Core.Data.yieldedPlan L budget y with
     | .error (f, _) => some f
@@ -602,7 +603,7 @@ def failsWith (L : Limits) (T : Nat) (budget : Budget) (s : State) : Option Fail
 
 /-- **A failure above a threshold**: under every resource vector at least `(L0, T0, E0)`, with
 the same output nodes and bytes, the segment from `s` ends with extraction failure `f`. -/
-def FailsAbove (s : State) (budget : Budget) (f : Failure) : Prop :=
+@[expose] public def FailsAbove (s : State) (budget : Budget) (f : Failure) : Prop :=
   ∃ (L0 : Limits) (T0 E0 : Nat), ∀ (L : Limits) (T k : Nat), LimitsLe L0 L → T0 ≤ T →
     failsWith L T ⟨budget.nodes, E0 + k, budget.bytes⟩ s = some f
 
@@ -726,9 +727,9 @@ theorem node_malformed_of_chain {s t : State} (h : Chain s t) {L' : Limits} {T' 
 /-! ## `suspended` is a resource failure -/
 
 /-- A yield whose Plan is one suspended cell. -/
-def suspendedYield : State := ⟨#[.suspended ⟨.nat 1, []⟩], .yielded 0, []⟩
+@[expose] public def suspendedYield : State := ⟨#[.suspended ⟨.nat 1, []⟩], .yielded 0, []⟩
 
-def suspendedCheck : Bool :=
+@[expose] public def suspendedCheck : Bool :=
   (match Obend.Core.Data.yieldedPlan ⟨8, 8⟩ ⟨8, 0, 64⟩ suspendedYield with
     | .error (.tickExhausted, _) => true
     | _ => false) &&
@@ -736,30 +737,12 @@ def suspendedCheck : Bool :=
     | .ok _ => true
     | .error _ => false)
 
-theorem suspendedCheck_true : suspendedCheck = true := by decide +kernel
-
-/-- **Tick suspension does not transfer: it is a resource failure.** One yield, one heap and stack
-room, the same output nodes and bytes: with no extraction ticks its Plan extraction fails
-`tickExhausted`, with 16 it succeeds. (So the backward theorems above exclude it, and a kernel
-fault "plan extraction: tickExhausted" is a statement about the envelope, not the program.) -/
-theorem suspended_is_resource :
-    ∃ st r, Obend.Core.Data.yieldedPlan ⟨8, 8⟩ ⟨8, 0, 64⟩ suspendedYield = .error (.tickExhausted, st) ∧
-      Obend.Core.Data.yieldedPlan ⟨8, 8⟩ ⟨8, 16, 64⟩ suspendedYield = .ok r := by
-  have checked := suspendedCheck_true
-  unfold suspendedCheck at checked
-  rw [Bool.and_eq_true] at checked
-  obtain ⟨one, two⟩ := checked
-  split at one
-  · rename_i st found
-    split at two
-    · rename_i r ok
-      exact ⟨st, r, found, ok⟩
-    · cases two
-  · cases one
+/- `suspendedCheck_true` and `suspended_is_resource` (tick suspension does not transfer: with no
+extraction ticks the Plan extraction fails `tickExhausted`, with 16 it succeeds) are in
+`Obend.Core.Teeth.BackFail`, a legacy leaf: `suspendedCheck_true` evaluates `yieldedPlan` by `decide`. -/
 
 #assert_axioms failureOf_rename BackSim.forceFail except_map_error except_bind_error
 #assert_axioms BackSim.foldFail BackSim.materializeFail BackSim.yieldedPlanFail BackSim.completeFail
 #assert_axioms failsWith_halts endsWith_of_failsWith BackSim.failsBack Chain.failsBack node_malformed_of_chain
-#assert_axioms suspendedCheck_true suspended_is_resource
 
 end Obend.Core.Proofs.Forcing

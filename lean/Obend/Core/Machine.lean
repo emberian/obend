@@ -1,3 +1,4 @@
+module
 /- Executable demand/sharing candidate for the NEW Objective Bend runtime core.
 It consumes actual elaborated Objective terms, not a linked method dictionary.
 Thunk identity is stable through evaluating→cached update; Fix uses one tied
@@ -9,8 +10,9 @@ run once-for-all or once-per-demand. Native authority and affine continuations
 are not constructors and cannot be minted/copied by this machine.
 Weak-head reference adequacy, graph/capture ownership and new type metatheory
 remain obligations. -/
-import Obend.Core.Term
-import Obend.AxiomPin
+public import Obend.Core.Term
+public import Obend.AxiomPin
+@[expose] public section
 namespace Obend.Core.Machine
 open Obend.Core.Term
 set_option autoImplicit false
@@ -282,3 +284,5 @@ theorem perform_yields (heap : Array Cell) (plan : Term) (environment : Environm
 #assert_axioms perform_yields perform_under_update_refused resume_requires_yield
 
 end Obend.Core.Machine
+
+end

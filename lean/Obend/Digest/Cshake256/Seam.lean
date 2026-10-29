@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Digest.Cshake256.Seam -- the cSHAKE256 kernel seam, standalone: Lean body only (obend copy; minidregg attaches a Rust kernel here by @[extern])
 
@@ -23,7 +24,8 @@ Build consequence: compiled code (and `#eval`/`native_decide` at elaboration) ne
 inputs of every Lean executable) and `.lake/native/libmini_kernels_lean.so` (loaded into `lean`
 by the lakefile's `--load-dynlib`). Run it before `lake build`.
 -/
-import Obend.Digest.Cshake256.Fast
+public import Obend.Digest.Cshake256.Fast
+@[expose] public section
 
 namespace Obend.Digest.Cshake256
 
@@ -72,3 +74,5 @@ end Obend.Digest.Cshake256
 #guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Native.cshake256Native_eq
 /-- info: 'Obend.Digest.Cshake256.cshake256Bytes_eq_native' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.cshake256Bytes_eq_native
+
+end

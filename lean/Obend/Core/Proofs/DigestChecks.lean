@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Core.Proofs.DigestChecks — axiom pins and deployed-hash instances for `digest`
 
@@ -13,8 +14,8 @@ in its low bit; `sealed_lowBit_not_vote` exhibits a YES commitment with an even 
 commitment with an odd one under `digest`, so that leak is gone. Neither is a hiding proof (hiding
 is `Obend.Core.Digest.Hiding`, assumed).
 -/
-import Obend.Core.Digest
-import Obend.AssertCompiled
+public meta import Obend.Core.Digest
+public import Obend.AssertCompiled
 
 namespace Obend.Core.Proofs.DigestChecks
 

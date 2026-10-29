@@ -1,3 +1,4 @@
+module
 /- Collection of the Core4 demand heap at a yield (design B4/T5).
 
 A yielded activity's checkpoint is its exact machine state, and the demand machine
@@ -17,8 +18,9 @@ heap.
 The behaviour theorem (a renaming simulation: lockstep `stepRaw`, `resume`, bounded runs,
 Plan/result extraction) and the typing transfer are in
 `Obend.Core.Proofs.Collect` (`ObjectiveProofs`). -/
-import Obend.Core.Machine
-import Obend.AxiomPin
+public import Obend.Core.Machine
+public import Obend.AxiomPin
+@[expose] public section
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -215,15 +217,11 @@ def garbageExample : State :=
 
 theorem garbageExample_heap_size : garbageExample.heap.size = 5 := rfl
 
-/-- Two of five cells are garbage: the collected heap has three. -/
-theorem collect_garbageExample_heap_size : (collect garbageExample).heap.size = 3 := by decide +kernel
-
-/-- The yielded Plan cell moved from 2 to 1, and the frame's capture from 4 to 2. -/
-theorem collect_garbageExample_roots :
-    (match (collect garbageExample).control with | .yielded plan => plan | _ => 99) = 1 ∧
-    (collect garbageExample).stack.flatMap frameAddresses = [2] := by decide
-
-#assert_axioms collect_garbageExample_heap_size
-#assert_axioms collect_garbageExample_roots
+/- The two evaluation teeth over `garbageExample` (collected heap size 3; the Plan cell moved from 2
+to 1 and the frame's capture from 4 to 2) are in `Obend.Core.Teeth.Collect`, a legacy (non-`module`)
+leaf: their `decide` evaluates `collect` through `Array.map`/`Array.zip`, whose bodies Lean v4.30.0's
+`Init` does not expose to `module` files. -/
 
 end Obend.Core.Collect
+
+end

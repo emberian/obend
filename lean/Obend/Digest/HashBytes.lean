@@ -1,3 +1,4 @@
+module
 /-
 # Obend.Digest.HashBytes — fixed-width big-endian bytes, byte hashes, and their collisions
 
@@ -13,6 +14,7 @@ the two layers share one carrier for the hash's failure rather than two that agr
 
 Init only: the channel library and the C differential link this module's compiled object.
 -/
+@[expose] public section
 
 namespace Obend.Digest.HashBytes
 
@@ -108,3 +110,5 @@ theorem CollisionAmong.global {H : Hash} {S : List UInt8 → Prop} (c : Collisio
   exact ⟨a, b, ne, eq⟩
 
 end Obend.Digest.HashBytes
+
+end

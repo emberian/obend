@@ -1,4 +1,5 @@
-import Obend.Core.Proofs.Forcing.Demand
+module
+public import Obend.Core.Proofs.Forcing.Demand
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -7,14 +8,14 @@ open Obend.Core.Data
 set_option autoImplicit false
 
 /-- Every state after the first `n` transitions fits the limits. -/
-def FitsFrom (L : Limits) (s : State) (n : Nat) : Prop :=
+@[expose] public def FitsFrom (L : Limits) (s : State) (n : Nat) : Prop :=
   ∀ j, 1 ≤ j → j ≤ n → (exec j s).heap.size ≤ L.heap ∧ (exec j s).stack.length ≤ L.stack
 
 theorem fitsFrom_tail {L : Limits} {s : State} {n : Nat} (h : FitsFrom L s (n + 1)) : FitsFrom L (stepRaw s) n :=
   fun j lo hi => h (j + 1) (by omega) (by omega)
 
 /-- **A bounded run that does not suspend is a halting raw run that fits.** -/
-theorem runBounded_halts (L : Limits) :
+public theorem runBounded_halts (L : Limits) :
     ∀ (ticks : Nat) (s : State), (∀ r st, runBounded L ticks s ≠ .suspended r st) →
       ∃ n, n ≤ ticks ∧ Halts s n ∧ FitsFrom L s n ∧ runBounded L ticks s = runBounded L 0 (exec n s) := by
   intro ticks
@@ -50,7 +51,7 @@ theorem runBounded_halts (L : Limits) :
       · rw [if_neg fits] at ns; exact absurd rfl (ns .capacity s)
 
 /-- **A halting raw run that fits is the bounded run.** -/
-theorem runBounded_of_halts (L : Limits) :
+public theorem runBounded_of_halts (L : Limits) :
     ∀ (ticks : Nat) (s : State) (n : Nat), Halts s n → n ≤ ticks → FitsFrom L s n →
       runBounded L ticks s = runBounded L 0 (exec n s) := by
   intro ticks
@@ -70,7 +71,7 @@ theorem runBounded_of_halts (L : Limits) :
       exact ih (stepRaw s) n (halts_tail halts) (by omega) (fitsFrom_tail fit)
 
 /-- Forcing with the open policy finishes exactly when the raw run halts complete, fitting. -/
-theorem forceWith_finished (L : Limits) :
+public theorem forceWith_finished (L : Limits) :
     ∀ (ticks : Nat) (s : State) (v : RuntimeValue) (st : State) (r : Nat),
       forceWith (fun _ => true) L ticks s = (.finished v st, r) →
       ∃ n, n ≤ ticks ∧ Halts s n ∧ FitsFrom L s n ∧ exec n s = st ∧ st.control = .complete v ∧ r = ticks - n := by
@@ -119,7 +120,7 @@ theorem forceWith_finished (L : Limits) :
             fun j lo hi => by rw [show j = 1 by omega]; exact fits, rfl, ctl, by omega⟩
       · rw [if_neg fits] at h; simp [continueForce] at h
 
-theorem forceWith_of_halts (L : Limits) :
+public theorem forceWith_of_halts (L : Limits) :
     ∀ (ticks : Nat) (s : State) (n : Nat) (v : RuntimeValue), Halts s n → n ≤ ticks → FitsFrom L s n →
       (exec n s).control = .complete v →
       forceWith (fun _ => true) L ticks s = (.finished v (exec n s), ticks - n) := by

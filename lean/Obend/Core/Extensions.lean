@@ -1,8 +1,10 @@
+module
 /- Independent, context/target-parametric modular-extension meaning. This is neither
 selector resolution nor an authorization model. Inherited and provided target types may differ. A target may be a number,
 function, document, record, or another specification. Partial specifications
 retain their requirements and laws before any fixed point is available.
 The implementation must separately represent this meaning in executable code. -/
+@[expose] public section
 /- FixedPoint below is an algebraic equation only. It does not choose the least or
 computational fixed point or imply operational convergence. Behavioral law
 retention is an optional compatible-interface policy, not all ModExt semantics. -/
@@ -92,3 +94,5 @@ theorem no_successor_fixed_point (inherited self : Nat) :
   simp [FixedPoint, mix, replacement]
 
 end Obend.Core.Extensions
+
+end

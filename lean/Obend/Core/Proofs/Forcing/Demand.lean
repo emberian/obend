@@ -1,3 +1,4 @@
+module
 /- Every finished closed demand is a forcing chain (forcing transparency, part 6).
 
 * `pending_within`: inside every finished nested evaluation sits a PRE-SHALLOW demand:
@@ -10,7 +11,7 @@
   run the rest of the demand against it (`pend_transfer`: strictly shorter, ending in exact
   agreement), apply the induction to that shorter demand, and close with the inverse of the
   agreement. -/
-import Obend.Core.Proofs.Forcing.Chain
+public import Obend.Core.Proofs.Forcing.Chain
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -19,12 +20,12 @@ set_option autoImplicit false
 
 /-- A stripped nested run, seen from the base heap `B`: the cells of `B` other than `w`
 keep their state in `P`, and every update frame is for `w` or for a cell past `B`. -/
-def StripInv (B P : Array Cell) (w : Nat) (s : State) : Prop :=
+@[expose] public def StripInv (B P : Array Cell) (w : Nat) (s : State) : Prop :=
   (∀ a, a < B.size → a ≠ w → s.heap[a]? = P[a]?) ∧
     (∀ fr ∈ s.stack, ∀ b, fr = .update b → b = w ∨ B.size ≤ b) ∧ B.size ≤ s.heap.size
 
 /-- The transition enters no suspended cell of `B` but `w`. -/
-def NoPreEntry (B : Array Cell) (w : Nat) (s : State) : Prop :=
+@[expose] public def NoPreEntry (B : Array Cell) (w : Nat) (s : State) : Prop :=
   ∀ b o, s.control = .enter b → s.heap[b]? = some (.suspended o) → b < B.size → b = w
 
 theorem stripInv_step {B P : Array Cell} {w : Nat} {s : State} (inv : StripInv B P w s)
@@ -84,7 +85,7 @@ theorem stripInv_run {B P : Array Cell} {w : Nat} {s : State} (inv : StripInv B 
 
 /-- The map from a heap `P` that extends `B` back to `B`: the identity on `B`, the shift past
 `P`'s end; the cells of `P` past `B` (allocated before the nested demand) are left out. -/
-def backMap (B P : Nat) : Nat → Nat := fun a => if a < B then a else a - P + B
+@[expose] public def backMap (B P : Nat) : Nat → Nat := fun a => if a < B then a else a - P + B
 
 /-- **Inside every finished nested evaluation sits a pre-shallow demand.** Following the
 first suspended cell of the base heap `B` each nested evaluation enters, one reaches an
@@ -295,7 +296,7 @@ theorem pending_within (B : Array Cell) (Bvalid : HeapValid B) :
 #assert_axioms stripInv_run
 #assert_axioms pending_within
 
-theorem renameControl_id {f : Nat → Nat} {c : Control} (same : ∀ x ∈ controlAddresses c, f x = x) :
+public theorem renameControl_id {f : Nat → Nat} {c : Control} (same : ∀ x ∈ controlAddresses c, f x = x) :
     renameControl f c = c := by
   rw [renameControl_congr (g := id) same]
   cases c <;> simp [renameControl, renameValue_id (f := id) (fun _ _ => rfl)]
@@ -305,7 +306,7 @@ theorem renameFrame_id {f : Nat → Nat} {fr : Frame} (same : ∀ x ∈ frameAdd
   rw [renameFrame_congr (g := id) same]
   cases fr <;> simp [renameFrame, renameValue_id (f := id) (fun _ _ => rfl)]
 
-theorem renameStack_id {f : Nat → Nat} {S : List Frame} (same : ∀ fr ∈ S, ∀ x ∈ frameAddresses fr, f x = x) :
+public theorem renameStack_id {f : Nat → Nat} {S : List Frame} (same : ∀ fr ∈ S, ∀ x ∈ frameAddresses fr, f x = x) :
     S.map (renameFrame f) = S := by
   conv => rhs; rw [← List.map_id S]
   exact List.map_congr_left (fun fr m => renameFrame_id (same fr m))
@@ -359,7 +360,7 @@ theorem pendRel_start {e : Pending} (valid : e.Valid) {c : Control} {S : List Fr
   · show S = S.map (renameFrame f0)
     rw [renameStack_id (fun fr m x mx => f0Old x (sIn fr m x mx))]
 
-theorem demand_cell_lt {B : Array Cell} {y n : Nat} {Bf : Array Cell} {v : RuntimeValue} (d : Demand B y n Bf v) :
+public theorem demand_cell_lt {B : Array Cell} {y n : Nat} {Bf : Array Cell} {v : RuntimeValue} (d : Demand B y n Bf v) :
     y < B.size ∧ ((∃ o, B[y]? = some (.suspended o)) ∨ (∃ o w, B[y]? = some (.cached o w) ∧ Bf = B)) := by
   have pos : 1 ≤ n := by
     apply Classical.byContradiction; intro h
@@ -398,7 +399,7 @@ theorem demand_cell_lt {B : Array Cell} {y n : Nat} {Bf : Array Cell} {v : Runti
 control and stack of the demand's base heap, the base heap forces to the demand's final
 heap, with headroom the cells the demand allocated, by an address map that is the identity
 on the base. -/
-theorem demand_forces : ∀ (n : Nat) (B : Array Cell) (y : Nat) (Bf : Array Cell) (v : RuntimeValue),
+public theorem demand_forces : ∀ (n : Nat) (B : Array Cell) (y : Nat) (Bf : Array Cell) (v : RuntimeValue),
     HeapValid B → Demand B y n Bf v →
     ∃ F : Nat → Nat, (∀ a, a < B.size → F a = a) ∧
       ∀ (c : Control) (S : List Frame), AllIn (· < B.size) (controlAddresses c) →

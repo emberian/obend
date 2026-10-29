@@ -1,3 +1,4 @@
+module
 /- The Plan output path as a theorem: `forceWith`/`executeWith` against the
 proved `runBounded`, and deep soundness of the Data that `materializeWith`
 extracts by re-entering lazy record fields.
@@ -14,10 +15,10 @@ extracts by re-entering lazy record fields.
   extracted Data is THE deep evaluation of the source term, and
   `execution_data_unique`: every successful execution of a closed term, under
   any two policies, limits and budgets, extracts the same Data. -/
-import Obend.Core.Proofs.Completeness
-import Obend.Core.Data
-import Obend.Core.Capacity
-import Obend.AxiomPin
+public import Obend.Core.Proofs.Completeness
+public import Obend.Core.Data
+public import Obend.Core.Capacity
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.DataSoundness
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -28,7 +29,7 @@ set_option autoImplicit false
 
 /-! ## forceWith against runBounded -/
 
-def Terminal (state : State) : Prop :=
+@[expose] public def Terminal (state : State) : Prop :=
   match state.control with
   | .complete _ | .refused _ | .blackhole _ | .yielded _ => True
   | _ => False
@@ -40,7 +41,7 @@ def Terminal (state : State) : Prop :=
   | succ ticks =>
       cases control : state.control <;> simp [Terminal,control] at terminal <;> simp [runBounded,step,control]
 
- theorem forceWith_unrestricted (limits : Limits) (ticks : Nat) (state : State) :
+ public theorem forceWith_unrestricted (limits : Limits) (ticks : Nat) (state : State) :
     (forceWith (fun _ => true) limits ticks state).1 = runBounded limits ticks state := by
   induction ticks generalizing state with
   | zero => simp [forceWith]
@@ -105,7 +106,7 @@ exact state that the unrestricted bounded run reached at that point. -/
             refine ⟨0,state,by omega,by simp [runBounded,control],by simpa using allowed,?_⟩
             simp [forceWith,control,allowed]
 
- theorem forceWith_finished {policy : State → Bool} {limits : Limits} {ticks : Nat} {state final : State}
+ public theorem forceWith_finished {policy : State → Bool} {limits : Limits} {ticks : Nat} {state final : State}
     {value : RuntimeValue} (finished : (forceWith policy limits ticks state).1 = .finished value final) :
     runBounded limits ticks state = .finished value final := by
   rcases forceWith_policy_suspends policy limits ticks state with same | ⟨_,_,_,_,_,suspended⟩
@@ -118,7 +119,7 @@ mutual
 /-- Deep reference evaluation: a scalar is an `Evaluates` of the term; a record
 is an `Evaluates` to a record literal whose field TERMS deep-evaluate, in order,
 to the field data. This is defined from the independent source semantics only. -/
-inductive DeepEvaluates : Term → Data → Prop where
+public inductive DeepEvaluates : Term → Data → Prop where
   | natural {term : Term} {number : Nat} : Evaluates term (.nat number) → DeepEvaluates term (.natural number)
   | boolean {term : Term} {value : Bool} : Evaluates term (.boolean value) → DeepEvaluates term (.boolean value)
   | label {term : Term} {name : String} : Evaluates term (.label name) → DeepEvaluates term (.label name)
@@ -127,7 +128,7 @@ inductive DeepEvaluates : Term → Data → Prop where
   /-- A variant evaluates to an injection whose payload TERM deep-evaluates. -/
   | variant {term payload : Term} {tag : String} {data : Data} :
       Evaluates term (.inject tag payload) → DeepEvaluates payload data → DeepEvaluates term (.variant tag data)
-inductive DeepFields : List (String × Term) → List (String × Data) → Prop where
+public inductive DeepFields : List (String × Term) → List (String × Data) → Prop where
   | nil : DeepFields [] []
   | cons {name : String} {term : Term} {value : Data} {fields : List (String × Term)} {data : List (String × Data)} :
       DeepEvaluates term value → DeepFields fields data → DeepFields ((name,term)::fields) ((name,value)::data)
@@ -219,7 +220,7 @@ field terms, and an injection fixes its payload term. -/
 /-! ## Materialization re-enters fields soundly -/
 
 /-- A completed, settled heap: no active update, every name realized. -/
-def Settled (meaning : AddressMeaning) (state : State) : Prop :=
+@[expose] public def Settled (meaning : AddressMeaning) (state : State) : Prop :=
   LexicalInvariant state ∧ BusyInvariant state ∧ state.stack = [] ∧
     MeaningsScoped state.heap.size meaning ∧ HeapRealizes meaning state.heap
 
@@ -260,7 +261,7 @@ def Settled (meaning : AddressMeaning) (state : State) : Prop :=
   simpa only [empty,StackRealizes] using stack
 
 /-- Fold invariant over the record fields processed so far. -/
-def FieldsInvariant (origin : State) (meaning : AddressMeaning) (processed : List (String × Address))
+@[expose] public def FieldsInvariant (origin : State) (meaning : AddressMeaning) (processed : List (String × Address))
     (accumulated : List (String × Data) × State × Budget) : Prop :=
   DeepFields (processed.map fun field => (field.1,meaning field.2)) accumulated.1.reverse ∧
     ∃ current : AddressMeaning, SourceNamesAgree origin meaning current ∧ Settled current accumulated.2.1 ∧
@@ -296,7 +297,7 @@ def FieldsInvariant (origin : State) (meaning : AddressMeaning) (processed : Lis
             (fun other member => valid other (List.mem_cons_of_mem _ member)) middleInvariant folded
           simpa using done
 
- theorem except_bind_ok {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {r : β}
+ public theorem except_bind_ok {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {r : β}
     (h : (x >>= f) = .ok r) : ∃ a, x = .ok a ∧ f a = .ok r := by
   cases x with
   | error e => cases h
@@ -430,7 +431,7 @@ the value's source meaning, and leaves a settled heap extending the names. -/
 
 /-- The extracted Data deep-evaluates the source term (the soundness half of
 `execution_source_semantics`). -/
- theorem execution_deepEvaluates {policy : State → Bool} {limits : Limits} {budget : Budget} {term : Term}
+ public theorem execution_deepEvaluates {policy : State → Bool} {limits : Limits} {budget : Budget} {term : Term}
     (closed : Scoped 0 term) (execution : ExecutionWith policy limits budget term) :
     runBounded limits budget.ticks (initial term) = .finished execution.value execution.state ∧
       DeepEvaluates term execution.extraction.result.value := by
@@ -489,43 +490,20 @@ budgets: a capacity policy can refuse a run, never change its Data. -/
 /-! ## Non-vacuity: a real execution exists -/
 
 /-- `{answer: 6 * 7}`: a lazy record whose field is demanded by extraction. -/
-def sampleRecord : Term := .record [("answer",.binary .multiply (.nat 6) (.nat 7))]
+@[expose] public def sampleRecord : Term := .record [("answer",.binary .multiply (.nat 6) (.nat 7))]
 
-theorem sampleRecord_closed : Scoped 0 sampleRecord := by
+public theorem sampleRecord_closed : Scoped 0 sampleRecord := by
   refine .record ?_
   intro field member
   simp at member
   subst member
   exact .binary (.natural _) (.natural _)
 
-theorem sampleRecord_executes :
-    (executeWith (fun _ => true) ⟨16,16⟩ ⟨8,64,256⟩ sampleRecord).toBool = true := by decide +kernel
-
-theorem sampleRecord_source_semantics :
-    ∃ execution : ExecutionWith (fun _ => true) ⟨16,16⟩ ⟨8,64,256⟩ sampleRecord,
-      DeepEvaluates sampleRecord execution.extraction.result.value := by
-  cases executed : executeWith (fun _ => true) ⟨16,16⟩ ⟨8,64,256⟩ sampleRecord with
-  | error failure =>
-      have ok := sampleRecord_executes
-      rw [executed] at ok
-      cases ok
-  | ok execution => exact ⟨execution,(execution_deepEvaluates sampleRecord_closed execution).2⟩
-
-/-- The same program under the native scalar capacity profile (64-bit). -/
-theorem sampleRecord_executes_native :
-    (executeWith (Obend.Core.Capacity.allows ⟨64⟩) ⟨16,16⟩ ⟨8,64,256⟩ sampleRecord).toBool = true := by
-  decide +kernel
-
-theorem sampleRecord_native_source_semantics :
-    ∃ execution : ExecutionWith (Obend.Core.Capacity.allows ⟨64⟩) ⟨16,16⟩ ⟨8,64,256⟩ sampleRecord,
-      runBounded ⟨16,16⟩ 64 (initial sampleRecord) = .finished execution.value execution.state ∧
-      DeepEvaluates sampleRecord execution.extraction.result.value := by
-  cases executed : executeWith (Obend.Core.Capacity.allows ⟨64⟩) ⟨16,16⟩ ⟨8,64,256⟩ sampleRecord with
-  | error failure =>
-      have ok := sampleRecord_executes_native
-      rw [executed] at ok
-      cases ok
-  | ok execution => exact ⟨execution,execution_deepEvaluates sampleRecord_closed execution⟩
+/- The four executed teeth over `sampleRecord` (`sampleRecord_executes`, `sampleRecord_source_semantics`,
+`sampleRecord_executes_native`, `sampleRecord_native_source_semantics`) are in
+`Obend.Core.Teeth.DataSoundness`, a legacy leaf: their `decide +kernel` runs the machine on
+`sampleRecord`, through `Array` functions whose bodies Lean v4.30.0's `Init` does not expose to
+`module` files. `sampleRecord_data` below needs none of them. -/
 
 /-- The source meaning of `sampleRecord`, derived by hand from the reference `Step`
 alone: the record literal is a value and its field `6 * 7` steps to `42`. -/
@@ -549,6 +527,5 @@ theorem sampleRecord_data {policy : State → Bool} {limits : Limits} {budget : 
   forceWith_finished deepEvaluates_steps deepFields_append force_field_sound foldlM_fieldsInvariant
   except_bind_ok materialize_sound execution_deepEvaluates execution_source_semantics
   deepEvaluates_unique deepFields_unique execution_data_unique sampleRecord_closed
-  sampleRecord_executes sampleRecord_source_semantics sampleRecord_executes_native
-  sampleRecord_native_source_semantics sampleRecord_deepEvaluates sampleRecord_data
+  sampleRecord_deepEvaluates sampleRecord_data
 end Obend.Core.Proofs.DataSoundness

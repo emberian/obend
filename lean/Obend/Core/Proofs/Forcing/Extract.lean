@@ -1,3 +1,4 @@
+module
 /- Extraction through a forcing chain (forcing transparency, part 8).
 
 * `addrValid_of_lexical`: `LexicalInvariant` gives `AddrValid` (every held address allocated).
@@ -10,7 +11,7 @@
 * `HeapForces` / `yieldedPlan_heapForces`: a successful Plan extraction is a chain of finished
   closed demands (`demand_forces`), so the yielded heap forces to the extraction's heap, on
   every valid control and stack of the yielded heap. -/
-import Obend.Core.Proofs.Forcing.Segment
+public import Obend.Core.Proofs.Forcing.Segment
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -138,7 +139,7 @@ theorem forces_forceWith {gap : Nat} {F : Nat → Nat} {s t : State} (h : Forces
   exact this
 
 /-- Two budgets differ only in ticks, the second no smaller. -/
-def TicksLe (b b' : Budget) : Prop := b'.nodes = b.nodes ∧ b'.bytes = b.bytes ∧ b.ticks ≤ b'.ticks
+@[expose] public def TicksLe (b b' : Budget) : Prop := b'.nodes = b.nodes ∧ b'.bytes = b.bytes ∧ b.ticks ≤ b'.ticks
 
 theorem ticksLe_with (b : Budget) {t : Nat} (le : b.ticks ≤ t) : TicksLe b {b with ticks := t} := ⟨rfl, rfl, le⟩
 
@@ -427,7 +428,7 @@ theorem runBounded_zero_forces {gap : Nat} {F : Nat → Nat} {σ τ : State} (h 
 
 /-- **One segment's four endings transfer along a chain**, with heap headroom of its gap: a
 yield whose Plan extracts, a completion that extracts, a divergence, a refusal. -/
-theorem forces_segment {gap : Nat} {F : Nat → Nat} {s t : State} (h : ForcesBy gap F s t) {L L' : Limits}
+public theorem forces_segment {gap : Nat} {F : Nat → Nat} {s t : State} (h : ForcesBy gap F s t) {L L' : Limits}
     (heapRoom : L.heap + gap ≤ L'.heap) (stackRoom : L.stack ≤ L'.stack) (ticks : Nat) (budget : Budget) :
     (∀ plan y r, runBounded L ticks s = .yielded plan y → yieldedPlan L budget y = .ok r →
       ∃ plan' y' r', runBounded L' ticks t = .yielded plan' y' ∧ yieldedPlan L' budget y' = .ok r' ∧
@@ -467,7 +468,7 @@ theorem forces_segment {gap : Nat} {F : Nat → Nat} {s t : State} (h : ForcesBy
 
 /-- **`H` forces to `H'`**: both valid, `H'` extends `H`, and on every valid control and stack of
 `H`, `H` forces to `H'` (headroom: the cells `H'` added) by a map that is the identity on `H`. -/
-def HeapForces (H H' : Array Cell) : Prop :=
+@[expose] public def HeapForces (H H' : Array Cell) : Prop :=
   HeapValid H ∧ HeapValid H' ∧ H.size ≤ H'.size ∧ ∃ F : Nat → Nat, (∀ a, a < H.size → F a = a) ∧
     ∀ (c : Control) (S : List Frame), AllIn (· < H.size) (controlAddresses c) →
       (∀ fr ∈ S, AllIn (· < H.size) (frameAddresses fr)) →
@@ -643,7 +644,7 @@ theorem yieldedPlan_heapForces {L : Limits} {budget : Budget} {y : State} {r : R
 /-- **The resumed yield forces to the resumed extraction**: resuming a valid yield and resuming
 the state its Plan extraction left (the same control and stack over the larger heap) are related
 by a forcing chain whose headroom is the cells the extraction added. -/
-theorem yieldedPlan_forces {L : Limits} {budget : Budget} {y : State} {r : Result} (valid : AddrValid y)
+public theorem yieldedPlan_forces {L : Limits} {budget : Budget} {y : State} {r : Result} (valid : AddrValid y)
     (found : yieldedPlan L budget y = .ok r) (c : Control) (cIn : AllIn (· < y.heap.size) (controlAddresses c)) :
     ∃ F, ForcesBy (r.state.heap.size - y.heap.size) F ⟨y.heap, c, y.stack⟩ ⟨r.state.heap, c, y.stack⟩ := by
   obtain ⟨_, _, _, F, _, chain⟩ := yieldedPlan_heapForces valid.heap found
