@@ -5,3 +5,5 @@ astra/last.md
 lean/.lake/
 lean/build.log
 lean/build.pid
+lean/measure.out
+lean/measure.pid
