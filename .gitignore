@@ -2,3 +2,6 @@ astra/fareoo/
 astra/run.log
 astra/run.pid
 astra/last.md
+lean/.lake/
+lean/build.log
+lean/build.pid
