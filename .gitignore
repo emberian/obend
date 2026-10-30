@@ -7,3 +7,5 @@ lean/build.log
 lean/build.pid
 lean/measure.out
 lean/measure.pid
+astra/impl/
+astra/sol/
