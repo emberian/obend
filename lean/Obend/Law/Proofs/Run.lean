@@ -13,16 +13,16 @@ namespace Obend.Law
 open Obend.Core.Term
 set_option autoImplicit false
 
-public theorem isValueB_value {t : Term} (h : isValueB t = true) : Value t := by
+theorem isValueB_value {t : Term} (h : isValueB t = true) : Value t := by
   cases t <;> simp [isValueB] at h <;> constructor
 
-public theorem value_isValueB {t : Term} (h : Value t) : isValueB t = true := by
+theorem value_isValueB {t : Term} (h : Value t) : isValueB t = true := by
   cases h <;> rfl
 
 public theorem value_no_step {t t' : Term} (h : Value t) (s : Step t t') : False := by
   cases h <;> cases s
 
-public theorem value_step?_none {t : Term} (h : Value t) : step? t = none := by
+theorem value_step?_none {t : Term} (h : Value t) : step? t = none := by
   cases h <;> simp [step?]
 
 theorem find?_pair {α : Type} {l : List (String × α)} {n : String} {p : String × α}
@@ -249,7 +249,8 @@ public theorem run_sound : (fuel : Nat) → {t v : Term} → run fuel t = some v
         · exact evaluates_step (step?_sound _ (by assumption)) (run_sound fuel h)
         · cases h
 
-#assert_axioms isValueB_value value_isValueB value_no_step value_step?_none step?_sound
+#assert_axioms find?_pair step?_app_cong step?_reflect_cong step?_metadata_cong step?_project_cong
+  step?_get_cong step?_extend_cong step?_ifZero_cong step?_case_cong step?_ifBool_cong isValueB_value value_isValueB value_no_step value_step?_none step?_sound
   step?_complete step_iff step_deterministic steps_trans evaluates_value evaluates_self
   evaluates_of_steps evaluates_unique evaluates_step evaluates_steps run_sound
 

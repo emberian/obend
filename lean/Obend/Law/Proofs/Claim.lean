@@ -30,7 +30,7 @@ set_option autoImplicit false
 /-! ## Term equality and closedness -/
 
 mutual
-public theorem treeEq_sound : ∀ {a b : Tree Tag}, treeEq a b = true → a = b
+theorem treeEq_sound : ∀ {a b : Tree Tag}, treeEq a b = true → a = b
   | .var i, .var j, h => by simp [treeEq] at h; subst h; rfl
   | .bind a, .bind b, h => by simp only [treeEq] at h; rw [treeEq_sound h]
   | .node t cs, .node u ds, h => by
@@ -38,7 +38,7 @@ public theorem treeEq_sound : ∀ {a b : Tree Tag}, treeEq a b = true → a = b
       rw [h.1, treesEq_sound h.2]
   | .var _, .bind _, h | .var _, .node _ _, h | .bind _, .var _, h | .bind _, .node _ _, h
   | .node _ _, .var _, h | .node _ _, .bind _, h => by simp [treeEq] at h
-public theorem treesEq_sound : ∀ {as bs : List (Tree Tag)}, treesEq as bs = true → as = bs
+theorem treesEq_sound : ∀ {as bs : List (Tree Tag)}, treesEq as bs = true → as = bs
   | [], [], _ => rfl
   | a :: as, b :: bs, h => by
       simp only [treesEq, Bool.and_eq_true] at h
@@ -47,11 +47,11 @@ public theorem treesEq_sound : ∀ {as bs : List (Tree Tag)}, treesEq as bs = tr
 end
 
 mutual
-public theorem treeEq_refl : ∀ (a : Tree Tag), treeEq a a = true
+theorem treeEq_refl : ∀ (a : Tree Tag), treeEq a a = true
   | .var i => by simp [treeEq]
   | .bind a => by simp only [treeEq]; exact treeEq_refl a
   | .node t cs => by simp only [treeEq, decide_true, Bool.true_and]; exact treesEq_refl cs
-public theorem treesEq_refl : ∀ (as : List (Tree Tag)), treesEq as as = true
+theorem treesEq_refl : ∀ (as : List (Tree Tag)), treesEq as as = true
   | [] => rfl
   | a :: as => by simp only [treesEq, Bool.and_eq_true]; exact ⟨treeEq_refl a, treesEq_refl as⟩
 end
@@ -59,10 +59,10 @@ end
 public theorem termEq_sound {a b : Term} (h : termEq a b = true) : a = b :=
   Obend.Core.TermTraverse.encode_injective (treeEq_sound h)
 
-public theorem termEq_refl (a : Term) : termEq a a = true := treeEq_refl _
+theorem termEq_refl (a : Term) : termEq a a = true := treeEq_refl _
 
 mutual
-public theorem scopedB_sound : ∀ {n : Nat} {t : Tree Tag}, scopedB n t = true → Tree.Scoped n t
+theorem scopedB_sound : ∀ {n : Nat} {t : Tree Tag}, scopedB n t = true → Tree.Scoped n t
   | n, .var i, h => by simpa [scopedB, Tree.Scoped, Tree.All] using h
   | n, .bind b, h => by
       have ih : Tree.Scoped (n + 1) b := scopedB_sound (by simpa [scopedB] using h)
@@ -71,7 +71,7 @@ public theorem scopedB_sound : ∀ {n : Nat} {t : Tree Tag}, scopedB n t = true 
   | n, .node _ cs, h => by
       simp only [Tree.Scoped, Tree.All]
       exact scopedsB_sound (by simpa [scopedB] using h)
-public theorem scopedsB_sound : ∀ {n : Nat} {cs : List (Tree Tag)}, scopedsB n cs = true →
+theorem scopedsB_sound : ∀ {n : Nat} {cs : List (Tree Tag)}, scopedsB n cs = true →
     ∀ c ∈ cs, Tree.Scoped n c
   | _, [], _, _, hc => by simp at hc
   | n, c :: cs, h, d, hd => by
@@ -92,21 +92,21 @@ public theorem closedB_subst {t : Term} (h : closedB t = true) (σ : Nat → Ter
 @[expose] public def GuardedOk (I : Term) (k r : Nat) (σ : Nat → Term) : Prop :=
   Evaluates (.app I (σ k)) (.boolean true) ∨ ∃ x, Evaluates (.get (σ r) "occasion") (.inject "relaw" x)
 
-public theorem guardedOk_scons {I : Term} {k r : Nat} {p : Term} {σ : Nat → Term}
+theorem guardedOk_scons {I : Term} {k r : Nat} {p : Term} {σ : Nat → Term}
     (h : GuardedOk I (k + 1) (r + 1) (scons p σ)) : GuardedOk I k r σ := h
 
 @[simp] public theorem subst_inject (σ : Nat → Term) (l : String) (t : Term) :
     (Term.inject l t).substitute σ = .inject l (t.substitute σ) := by
   simp [Term.substitute]
 
-public theorem isGuardCond_eq {I c : Term} {k : Nat} (h : isGuardCond I k c = true) : c = .app I (.bound k) := by
+theorem isGuardCond_eq {I c : Term} {k : Nat} (h : isGuardCond I k c = true) : c = .app I (.bound k) := by
   unfold isGuardCond at h
   split at h
   · simp only [Bool.and_eq_true, beq_iff_eq] at h
     rw [h.1, termEq_sound h.2]
   · cases h
 
-public theorem isOccasion_eq {s : Term} {r : Nat} (h : isOccasion r s = true) : s = .get (.bound r) "occasion" := by
+theorem isOccasion_eq {s : Term} {r : Nat} (h : isOccasion r s = true) : s = .get (.bound r) "occasion" := by
   unfold isOccasion at h
   split at h
   · simp only [Bool.and_eq_true, beq_iff_eq] at h
@@ -236,7 +236,7 @@ public theorem claim_chain_keeps {fields : List (String × Term)} {inv law : Str
   | some (.boolean b) => some b
   | _ => none
 
-public theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (run fuel t) = some b) :
+theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (run fuel t) = some b) :
     Evaluates t (.boolean b) := by
   unfold boolOf at h
   split at h
@@ -246,7 +246,7 @@ public theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (run f
 /-- `total ≤ 5`. -/
 @[expose] public def smallTotal : Term := .lam (leNat (.get (.bound 0) "total") (natT 5))
 
-public theorem keeps_tooth :
+theorem keeps_tooth :
     checkClaim [("small", smallTotal), ("law", keeps unitTy smallTotal)] (.keeps "small" "law") = true ∧
       checkClaim [("small", smallTotal), ("law", bounded unitTy "total" 5)] (.keeps "small" "law") = false ∧
       checkClaim [("small", smallTotal), ("law", lawOf unitTy (fun _ => okT) (fun _ => okT) (fun _ => okT)

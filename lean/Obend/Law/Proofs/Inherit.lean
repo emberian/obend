@@ -20,7 +20,7 @@ open Obend.Core.Ty (Ty)
 open Obend.Core.Data (Data)
 set_option autoImplicit false
 
-public theorem subst_chain_cons (σ : Nat → Term) (d : Nat) (name : String) (L : Term)
+theorem subst_chain_cons (σ : Nat → Term) (d : Nat) (name : String) (L : Term)
     (rest : List (String × Term)) (hL : closedB L = true) :
     (chainAt ⟨d⟩ ((name, L) :: rest)).substitute σ =
       .case (.app (.app (.app L (σ (d + 2))) (σ (d + 1))) (σ d))
@@ -28,16 +28,16 @@ public theorem subst_chain_cons (σ : Nat → Term) (d : Nat) (name : String) (L
          ("refused", (blameT name).substitute (liftSubstitution σ))] := by
   simp [chainAt, Term.substitute, closedB_subst hL, At.old, At.new, At.req, At.under]
 
-public theorem blame_inst (name : String) (σ : Nat → Term) (p : Term) :
+theorem blame_inst (name : String) (σ : Nat → Term) (p : Term) :
     instantiate ((blameT name).substitute (liftSubstitution σ)) p = blamed name p := by
   rw [instantiate_lift]
   simp [blameT, blamed, Term.substitute]
 
-public theorem blamed_value (name : String) (why : Term) : Value (blamed name why) := .inject _ _
+theorem blamed_value (name : String) (why : Term) : Value (blamed name why) := .inject _ _
 
 /-- The effective chain at depth `d`, under a substitution that holds the request, the new and
 the old state at `d`, `d + 1`, `d + 2`, admits exactly when every law on it does. -/
-public theorem chain_eval {o n rq : Data} : ∀ (lin : List (String × Term)) (d : Nat) (σ : Nat → Term),
+theorem chain_eval {o n rq : Data} : ∀ (lin : List (String × Term)) (d : Nat) (σ : Nat → Term),
     (∀ p ∈ lin, closedB p.2 = true) → σ d = rq.term → σ (d + 1) = n.term → σ (d + 2) = o.term →
     ((∃ w, Evaluates ((chainAt ⟨d⟩ lin).substitute σ) (.inject "ok" w)) ↔ ∀ p ∈ lin, Admits p.2 o n rq)
   | [], d, σ, _, _, _, _ => by
@@ -89,7 +89,7 @@ public theorem inherited_refusal_kept {lin : List (String × Term)} (hc : ∀ p 
     (h : Refuses L o n rq why) : ¬ Admits (effective lin) o n rq :=
   inherited_never_widens hc hp (refuses_not_admits h)
 
-public theorem chain_refused {o n rq : Data} : ∀ (lin : List (String × Term)) (d : Nat) (σ : Nat → Term),
+theorem chain_refused {o n rq : Data} : ∀ (lin : List (String × Term)) (d : Nat) (σ : Nat → Term),
     (∀ p ∈ lin, closedB p.2 = true) → σ d = rq.term → σ (d + 1) = n.term → σ (d + 2) = o.term →
     ∀ {r : Term}, Evaluates ((chainAt ⟨d⟩ lin).substitute σ) (.inject "refused" r) →
       ∃ pre name L post why, lin = pre ++ (name, L) :: post ∧ (∀ q ∈ pre, Admits q.2 o n rq) ∧
@@ -131,7 +131,7 @@ public theorem effective_refusal_names {lin : List (String × Term)} (hc : ∀ p
   obtain ⟨pre, name, L, post, why, hlin, hpre, hL, rfl⟩ := chain_refused lin 0 _ hc rfl rfl rfl h'
   exact ⟨pre, name, L, post, why, hlin, hpre, hL, h⟩
 
-public theorem chain_refuses_first {o n rq : Data} {name : String} {L : Term} {why : Term}
+theorem chain_refuses_first {o n rq : Data} {name : String} {L : Term} {why : Term}
     (hL : closedB L = true) (hrefuse : Evaluates (applyLaw L o n rq) (.inject "refused" why)) :
     ∀ (pre post : List (String × Term)) (d : Nat) (σ : Nat → Term),
       (∀ p ∈ pre, closedB p.2 = true) → (∀ q ∈ pre, Admits q.2 o n rq) →
@@ -225,7 +225,7 @@ public theorem effectiveVia_eval {g : Obend.Spec.C4.Graph} {laws : List (String 
   | some (.inject "refused" (.record [("by", .label b), ("reason", .label why)])) => some (b, why)
   | _ => none
 
-public theorem refusedBy_of_run {law : Term} {o n rq : Data} {name why : String} (fuel : Nat)
+theorem refusedBy_of_run {law : Term} {o n rq : Data} {name why : String} (fuel : Nat)
     (h : blameOf (run fuel (applyLaw law o n rq)) = some (name, why)) :
     RefusedBy law o n rq name (.label why) := by
   unfold blameOf at h
@@ -239,12 +239,12 @@ the owner. -/
   [("board2", ownerSigns unitTy), ("board", allowlistLaw unitTy ["ann", "bob"]),
    ("room", bounded unitTy "total" 5)]
 
-public theorem boardLaws_closed : ∀ p ∈ boardLaws, closedB p.2 = true := by
+theorem boardLaws_closed : ∀ p ∈ boardLaws, closedB p.2 = true := by
   intro p hp
   simp only [boardLaws, List.mem_cons, List.not_mem_nil, or_false] at hp
   rcases hp with rfl | rfl | rfl <;> decide +kernel
 
-public theorem inherit_tooth :
+theorem inherit_tooth :
     Admits (effective boardLaws) (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO) ∧
       RefusedBy (effective boardLaws) (totalIs 0) (totalIs 9) (rqBy "ann" "ann" writeO) "room" (.label "total over the bound") ∧
       RefusedBy (effective boardLaws) (totalIs 0) (totalIs 3) (rqBy "eve" "eve" writeO) "board" (.label "not on the allowlist") ∧
@@ -259,7 +259,7 @@ public theorem inherit_tooth :
   precedence x := if x = "board" then ["board", "room"] else if x = "room" then ["room"] else [x]
   isSuffix _ := false
 
-public theorem c4_tooth :
+theorem c4_tooth :
     (precedence boardGraph "board2" [["board"]]).toOption = some ["board2", "board", "room"] ∧
       ((effectiveVia boardGraph boardLaws "board2" [["board"]]).toOption.map
         fun t => okB (run 500 (applyLaw t (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO)))) = some true ∧

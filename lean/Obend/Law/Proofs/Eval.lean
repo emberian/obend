@@ -32,7 +32,7 @@ set_option autoImplicit false
 @[simp] public theorem scons_zero (x : Term) (σ : Nat → Term) : scons x σ 0 = x := rfl
 @[simp] public theorem scons_succ (x : Term) (σ : Nat → Term) (k : Nat) : scons x σ (k + 1) = σ k := rfl
 
-public theorem substitute_bound_id (t : Term) : t.substitute .bound = t := by
+theorem substitute_bound_id (t : Term) : t.substitute .bound = t := by
   apply Obend.Core.TermTraverse.encode_injective
   rw [Obend.Core.TermTraverse.encode_substitute]
   have : (fun i => Obend.Core.TermTraverse.encode (Term.bound i)) = Obend.Core.Traverse.Tree.var := by
@@ -40,7 +40,7 @@ public theorem substitute_bound_id (t : Term) : t.substitute .bound = t := by
   rw [this]
   exact Obend.Core.Traverse.Tree.substitute_id _
 
-public theorem instantiate_eq (t x : Term) : instantiate t x = t.substitute (scons x .bound) := by
+theorem instantiate_eq (t x : Term) : instantiate t x = t.substitute (scons x .bound) := by
   unfold instantiate
   congr 1
 
@@ -176,12 +176,12 @@ public theorem binary_inv {p : Primitive} {l r v : Term} (h : Evaluates (.binary
 
 /-! ## Congruence: building evaluations -/
 
-public theorem steps_ifBool {c c' x y : Term} (h : Steps c c') : Steps (.ifBool c x y) (.ifBool c' x y) := by
+theorem steps_ifBool {c c' x y : Term} (h : Steps c c') : Steps (.ifBool c x y) (.ifBool c' x y) := by
   induction h with
   | refl => exact .refl _
   | next s _ ih => exact .next (.ifCondition _ _ s) ih
 
-public theorem steps_case {s s' : Term} {arms : List (String × Term)} (h : Steps s s') :
+theorem steps_case {s s' : Term} {arms : List (String × Term)} (h : Steps s s') :
     Steps (.case s arms) (.case s' arms) := by
   induction h with
   | refl => exact .refl _
@@ -211,7 +211,7 @@ public theorem data_value : (d : Data) → Value d.term
 public theorem evaluates_data {d : Data} {v : Term} (h : Evaluates d.term v) : v = d.term :=
   evaluates_value (data_value d) h
 
-public theorem fieldsTerm_find (f : String) : (fs : List (String × Data)) →
+theorem fieldsTerm_find (f : String) : (fs : List (String × Data)) →
     (fieldsTerm fs).find? (fun field => field.1 == f) = (fieldsLookup f fs).map (fun d => (f, d.term))
   | [] => by simp [fieldsTerm, fieldsLookup]
   | (g, d) :: rest => by
@@ -251,17 +251,17 @@ public theorem data_term_inject {d : Data} {l : String} {p : Term} (h : d.term =
   cases d <;> simp_all [Data.term]
 
 /-- A data field read and evaluated: it is that field. -/
-public theorem field_of_get {d : Data} {f : String} {v : Term} (h : Evaluates (.get d.term f) v) :
+theorem field_of_get {d : Data} {f : String} {v : Term} (h : Evaluates (.get d.term f) v) :
     ∃ e, d.field f = some e ∧ e.term = v := by
   obtain ⟨e, he, rfl⟩ := get_data h
   exact ⟨e, he, rfl⟩
 
 /-! ## Runs as evidence -/
 
-public theorem okB_some {r : Option Term} (h : okB r = true) : ∃ w, r = some (.inject "ok" w) := by
+theorem okB_some {r : Option Term} (h : okB r = true) : ∃ w, r = some (.inject "ok" w) := by
   unfold okB at h; split at h <;> simp_all
 
-public theorem refusalOf_some {r : Option Term} {why : String} (h : refusalOf r = some why) :
+theorem refusalOf_some {r : Option Term} {why : String} (h : refusalOf r = some why) :
     r = some (refusedT why) := by
   unfold refusalOf at h; split at h <;> simp_all [refusedT]
 

@@ -363,7 +363,7 @@ public theorem ownerSigns_spec {S : Ty} {o n rq x : Data} {ℓ : String}
   obtain ⟨s, ha, hp⟩ := eqLabel_true (allOf_ok hb _ (List.mem_singleton_self _))
   exact ⟨s, get_label ha, get_label hp⟩
 
-public theorem listed_true {ids : List String} {rq : Data} {σ : Nat → Term} (hσ : σ 1 = rq.term)
+theorem listed_true {ids : List String} {rq : Data} {σ : Nat → Term} (hσ : σ 1 = rq.term)
     (h : Evaluates ((listedT ids ⟨1⟩).substitute σ) (.boolean true)) :
     ∃ m ∈ ids, rq.field "agent" = some (.label m) := by
   simp only [listedT, subst_anyOf, List.map_map] at h
@@ -411,7 +411,7 @@ public theorem bounded_spec {S : Ty} {f : String} {max : Nat} {o n rq occ : Data
 
 /-! ## Machines -/
 
-public theorem isState_true {states : List String} {t : Term} {s : String} {σ : Nat → Term} {d : Data}
+theorem isState_true {states : List String} {t : Term} {s : String} {σ : Nat → Term} {d : Data}
     {f : String} (hd : t.substitute σ = .get d.term f)
     (h : Evaluates ((isState states t s).substitute σ) (.boolean true)) :
     ∃ y, d.field f = some (.variant s y) := by
@@ -430,7 +430,7 @@ public theorem isState_true {states : List String} {t : Term} {s : String} {σ :
   exact ⟨y, hy⟩
 
 /-- The machine's start clause: the new field is the initial state. -/
-public theorem machine_start {states : List String} {f initial : String} {n : Data} {σ : Nat → Term} {w : Term}
+theorem machine_start {states : List String} {f initial : String} {n : Data} {σ : Nat → Term} {w : Term}
     (hσ : σ 2 = n.term)
     (h : Evaluates ((allOf [(isState states ((⟨1⟩ : At).newF f) initial, f ++ " does not start at " ++ initial)]).substitute σ)
       (.inject "ok" w)) :
@@ -480,7 +480,7 @@ public theorem machine_invoke {S : Ty} {f : String} {states : List String} {init
   have := evaluates_data hx
   exact (data_term_nat this.symm)
 
-public theorem machine_frozen {σ : Nat → Term} {w : Term}
+theorem machine_frozen {σ : Nat → Term} {w : Term}
     (h : Evaluates ((refusedT "a machine changes only by its methods").substitute σ) (.inject "ok" w)) : False := by
   simp only [subst_refusedT] at h
   exact refusedT_not_ok h
@@ -514,7 +514,7 @@ public theorem machine_retire_refused {S : Ty} {f : String} {states : List Strin
 
 /-! ## Quorum -/
 
-public theorem bit_val {t v : Term} {i : Nat} {d : Data} {f : String} (ht : t = .get d.term f)
+theorem bit_val {t v : Term} {i : Nat} {d : Data} {f : String} (ht : t = .get d.term f)
     (h : Evaluates (bit t i) v) : ∃ a, d.field f = some (.natural a) ∧ v = .nat (a / pow2 i % 2) := by
   subst ht
   obtain ⟨x, y, hx, hy, hp⟩ := binary_inv h
@@ -524,7 +524,7 @@ public theorem bit_val {t v : Term} {i : Nat} {d : Data} {f : String} (ht : t = 
   simp [primitiveResult] at hp
   exact ⟨_, get_nat ha, hp.symm⟩
 
-public theorem popcount_fold {d : Data} {f : String} :
+theorem popcount_fold {d : Data} {f : String} :
     ∀ (l : List Nat) (acc : Term) {p : Nat},
       Evaluates (l.foldl (fun acc j => addNat acc (bit (.get d.term f) j)) acc) (.nat p) →
       ∃ q, Evaluates acc (.nat q) ∧
@@ -541,10 +541,10 @@ public theorem popcount_fold {d : Data} {f : String} :
     rw [ha] at ha'; cases ha'
     simpa using hl a ha
 
-public theorem subst_bit (σ : Nat → Term) (t : Term) (i : Nat) :
+theorem subst_bit (σ : Nat → Term) (t : Term) (i : Nat) :
     (bit t i).substitute σ = bit (t.substitute σ) i := by simp [bit]
 
-public theorem subst_fold (σ : Nat → Term) (t : Term) :
+theorem subst_fold (σ : Nat → Term) (t : Term) :
     ∀ (l : List Nat) (acc : Term),
       (l.foldl (fun acc j => addNat acc (bit t j)) acc).substitute σ =
         l.foldl (fun acc j => addNat acc (bit (t.substitute σ) j)) (acc.substitute σ)
@@ -554,12 +554,12 @@ public theorem subst_fold (σ : Nat → Term) (t : Term) :
     rw [subst_fold σ t l]
     simp [subst_bit]
 
-public theorem subst_popcount (σ : Nat → Term) (t : Term) (cnt : Nat) :
+theorem subst_popcount (σ : Nat → Term) (t : Term) (cnt : Nat) :
     (popcount t cnt).substitute σ = popcount (t.substitute σ) cnt := by
   simp [popcount, subst_fold]
 
 /-- The quorum's threshold: `k` set bits among the old approvals. -/
-public theorem quorate_true {k cnt : Nat} {o : Data} {σ : Nat → Term} (hσ : σ 3 = o.term) (hc : 0 < cnt)
+theorem quorate_true {k cnt : Nat} {o : Data} {σ : Nat → Term} (hσ : σ 3 = o.term) (hc : 0 < cnt)
     (h : Evaluates ((leNat (natT k) (popcount ((⟨1⟩ : At).oldF "approvals") cnt)).substitute σ) (.boolean true)) :
     ∃ a, o.field "approvals" = some (.natural a) ∧ k ≤ popcountNat a cnt := by
   simp only [subst_leNat, subst_natT, subst_popcount, at_oldF, at1_old, subst_get, subst_bound, hσ] at h
@@ -572,12 +572,12 @@ public theorem quorate_true {k cnt : Nat} {o : Data} {σ : Nat → Term} (hσ : 
   rw [hval a ha] at hle
   exact hle
 
-public theorem member_true {ms : List String} {rq : Data} {σ : Nat → Term} (hσ : σ 1 = rq.term)
+theorem member_true {ms : List String} {rq : Data} {σ : Nat → Term} (hσ : σ 1 = rq.term)
     (h : Evaluates ((isMember ms ⟨1⟩).substitute σ) (.boolean true)) :
     ∃ m ∈ ms, rq.field "agent" = some (.label m) :=
   listed_true hσ h
 
-public theorem fresh_approvals {n : Data} {σ : Nat → Term} {w : Term} (hσ : σ 2 = n.term)
+theorem fresh_approvals {n : Data} {σ : Nat → Term} {w : Term} (hσ : σ 2 = n.term)
     (h : Evaluates ((allOf [(eqNat ((⟨1⟩ : At).newF "approvals") (natT 0), "approvals at birth")]).substitute σ)
       (.inject "ok" w)) :
     n.field "approvals" = some (.natural 0) := by
@@ -643,7 +643,7 @@ public theorem quorum_relaw_needs_k {S T : Ty} {ms : List String} {k : Nat} {g :
     have := evaluates_value (.boolean _) hbody
     simp at this
 
-public theorem subst_eqAt (σ : Nat → Term) (T : Ty) (a b : Term) :
+theorem subst_eqAt (σ : Nat → Term) (T : Ty) (a b : Term) :
     (eqAt T a b).substitute σ = eqAt T (a.substitute σ) (b.substitute σ) := by
   cases T <;> simp [eqAt]
 
@@ -666,7 +666,7 @@ public theorem eqAt_true {T : Ty} {a b : Term} (h : Evaluates (eqAt T a b) (.boo
       exact ⟨_, ha, hb, .inl ⟨m, rfl⟩⟩
 
 /-- `eqAt` of the new and old value of a field, `true`: the field is unchanged. -/
-public theorem eqAt_fields_true {T : Ty} {g : String} {o n : Data}
+theorem eqAt_fields_true {T : Ty} {g : String} {o n : Data}
     (h : Evaluates (eqAt T (.get n.term g) (.get o.term g)) (.boolean true)) : n.field g = o.field g := by
   obtain ⟨v, ha, hb, hs⟩ := eqAt_true h
   obtain ⟨e1, h1, rfl⟩ := get_data ha
@@ -708,7 +708,7 @@ public theorem quorum_change_needs_k {S T : Ty} {ms : List String} {k : Nat} {g 
 
 /-! ## Windowed -/
 
-public theorem div_req {rq : Data} {f : String} {W : Nat} {v : Term} {σ : Nat → Term} (hσ : σ 1 = rq.term)
+theorem div_req {rq : Data} {f : String} {W : Nat} {v : Term} {σ : Nat → Term} (hσ : σ 1 = rq.term)
     (h : Evaluates ((divNat ((⟨1⟩ : At).reqF f) (natT W)).substitute σ) v) :
     ∃ a, rq.field f = some (.natural a) ∧ v = .nat (a / W) := by
   simp [hσ] at h
@@ -718,7 +718,7 @@ public theorem div_req {rq : Data} {f : String} {W : Nat} {v : Term} {σ : Nat �
 
 /-- The window facts: the call's window lies in one epoch of width `W`, and the new state's epoch is
 that one. -/
-public theorem inOneEpoch_true {W : Nat} {n rq : Data} {σ : Nat → Term} (h1 : σ 1 = rq.term) (h2 : σ 2 = n.term)
+theorem inOneEpoch_true {W : Nat} {n rq : Data} {σ : Nat → Term} (h1 : σ 1 = rq.term) (h2 : σ 2 = n.term)
     (h : ∀ p ∈ (inOneEpoch W ⟨1⟩).map (fun p => (p.1.substitute σ, p.2)), Evaluates p.1 (.boolean true)) :
     ∃ nb vu, rq.field "notBefore" = some (.natural nb) ∧ rq.field "validUntil" = some (.natural vu) ∧
       vu / W = nb / W ∧ n.field "epoch" = some (.natural (nb / W)) := by
@@ -816,18 +816,18 @@ not trivially `ok` (a concrete refusal with the named reason, `refuses_of_run`).
 
 @[expose] public def totalIs (k : Nat) : Data := .record [("total", .natural k)]
 
-public theorem ownerSigns_tooth :
+theorem ownerSigns_tooth :
     Admits (ownerSigns unitTy) (totalIs 0) (totalIs 1) (rqBy "ann" "ann" writeO) ∧
       Refuses (ownerSigns unitTy) (totalIs 0) (totalIs 1) (rqBy "bob" "ann" writeO) "not signed by the owner" :=
   ⟨admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
 
-public theorem allowlist_tooth :
+theorem allowlist_tooth :
     Admits (allowlistLaw unitTy ["ann", "bob"]) (totalIs 0) (totalIs 1) (rqBy "bob" "ann" (relawO "L")) ∧
       Refuses (allowlistLaw unitTy ["ann", "bob"]) (totalIs 0) (totalIs 1) (rqBy "eve" "ann" birthO)
         "not on the allowlist" :=
   ⟨admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
 
-public theorem bounded_tooth :
+theorem bounded_tooth :
     Admits (bounded unitTy "total" 5) (totalIs 1) (totalIs 5) (rqBy "ann" "ann" (invokeO 0)) ∧
       Refuses (bounded unitTy "total" 5) (totalIs 1) (totalIs 6) (rqBy "ann" "ann" (adoptO "L"))
         "total over the bound" ∧
@@ -841,7 +841,7 @@ public theorem bounded_tooth :
 
 @[expose] public def door (s : String) : Data := .record [("door", .variant s (.record []))]
 
-public theorem machine_tooth :
+theorem machine_tooth :
     Admits doorLaw (door "shut") (door "shut") (rqBy "ann" "ann" birthO) ∧
       Refuses doorLaw (door "shut") (door "open") (rqBy "ann" "ann" (adoptO "L")) "door does not start at shut" ∧
       Admits doorLaw (door "shut") (door "open") (rqBy "ann" "ann" (invokeO 0)) ∧
@@ -857,7 +857,7 @@ public theorem machine_tooth :
 @[expose] public def council (total approvals : Nat) (proposal : Data) : Data :=
   .record [("approvals", .natural approvals), ("proposal", proposal), ("total", .natural total)]
 
-public theorem quorum_tooth :
+theorem quorum_tooth :
     Admits councilLaw (council 0 0 (.variant "set" (.natural 0))) (council 0 0 (.variant "set" (.natural 0)))
       (rqBy "ann" "ann" birthO) ∧
       Refuses councilLaw (council 0 3 (.variant "set" (.natural 0))) (council 0 3 (.variant "set" (.natural 0)))
@@ -888,7 +888,7 @@ public theorem quorum_tooth :
 @[expose] public def rated (total count epoch : Nat) : Data :=
   .record [("count", .natural count), ("epoch", .natural epoch), ("total", .natural total)]
 
-public theorem windowed_tooth :
+theorem windowed_tooth :
     Admits rateLaw (rated 0 0 0) (rated 0 0 0) (rqBy "ann" "ann" birthO) ∧
       Admits rateLaw (rated 0 0 0) (rated 1 1 0) (rqBy "ann" "ann" writeO) ∧
       Refuses rateLaw (rated 1 1 0) (rated 2 2 0) (rqBy "ann" "ann" writeO) "over the rate limit" ∧
@@ -906,7 +906,7 @@ public theorem windowed_tooth :
   lawOf6_admits arms6_const
   ownerSigns_spec listed_true allowlist_spec bounded_spec isState_true machine_start machine_birth
   machine_adopt machine_invoke machine_write_refused machine_relaw_refused machine_retire_refused
-  bit_val popcount_fold subst_popcount quorate_true member_true fresh_approvals quorum_birth_empty
+  machine_frozen nat_eval natT_eval subst_bit subst_fold bit_val popcount_fold subst_popcount quorate_true member_true fresh_approvals quorum_birth_empty
   quorum_adopt_fresh quorum_retire_refused quorum_relaw_needs_k subst_eqAt eqAt_true eqAt_fields_true
   quorum_change_needs_k div_req inOneEpoch_true
   windowed_lands_in_epoch windowed_fresh windowed_limit
