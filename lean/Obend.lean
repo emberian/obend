@@ -6,6 +6,7 @@ public import Obend.Core.Graded
 public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Check
+public import Obend.Core.Bidirectional
 public import Obend.Core.Packet
 public import Obend.Core.Machine
 public import Obend.Core.MachineFast

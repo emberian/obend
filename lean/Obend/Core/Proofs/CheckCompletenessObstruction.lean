@@ -5,6 +5,7 @@ Fuel bounds procedure, but annotations and the algorithmic fragment are independ
 obstructions. This leaf changes no checker or calculus interface.
 -/
 public import Obend.Core.Check
+public import Obend.Core.Bidirectional
 public import Obend.AxiomPin
 
 namespace Obend.Core.Proofs.CheckCompletenessObstruction
@@ -190,10 +191,41 @@ theorem duplicateCase_refused (fuel : Nat) : check duplicateCase [] fuel = none 
   | none => rfl
   | some checked => exact (duplicate_arms_have_no_derivation ⟨checked⟩).elim
 
+/-! ## The bidirectional checker on the three obstructions (2026-10-30)
+
+`Obend.Core.Bidirectional.checkAgainst` checks each former counterexample against the type
+its certificate has, with no annotation read in checking mode, and refuses the duplicate
+arms (which have no certificate) naming the rule. -/
+
+/-- The unannotated lambda checks against its type: checking mode needs no annotation. -/
+theorem unannotatedConstant_checks :
+    (Bidirectional.checkAgainst unannotatedConstant [] unannotatedConstantChecked.type).toOption.map (·.type) =
+      some unannotatedConstantChecked.type := by decide
+
+/-- In synthesis the same lambda is refused, and the refusal names the missing annotation. -/
+theorem unannotatedConstant_synthesis_names_annotation :
+    (match Bidirectional.infer unannotatedConstant [] with
+      | .error refusal => some refusal
+      | .ok _ => none) = some (.missingLambdaAnnotation []) := by decide
+
+theorem aliasBranch_checks :
+    (Bidirectional.checkAgainst aliasBranch [] aliasBranchChecked.type).toOption.isSome = true := by decide
+
+/-- The empty case checks against the result its lambda declares. -/
+theorem emptyCase_checks :
+    (Bidirectional.checkAgainst emptyCase [] emptyCaseChecked.type).toOption.isSome = true := by decide
+
+theorem duplicateCase_names_duplicate_labels :
+    (match Bidirectional.checkAgainst duplicateCase [] .natural with
+      | .error refusal => some refusal
+      | .ok _ => none) = some (.duplicateLabels []) := by decide
+
 #assert_axioms checked_lambda_without_annotations_never_checks
   checked_does_not_imply_eventual_success unannotatedConstant_refused
   annotatedConstant_accepted aliasBranch_accepted correct_lambda_annotation_now_checks
   emptyCase_refused annotated_empty_eliminator_still_incomplete
   case_labels_distinct duplicate_arms_have_no_derivation duplicateCase_refused
+  unannotatedConstant_checks unannotatedConstant_synthesis_names_annotation aliasBranch_checks emptyCase_checks
+  duplicateCase_names_duplicate_labels
 
 end Obend.Core.Proofs.CheckCompletenessObstruction

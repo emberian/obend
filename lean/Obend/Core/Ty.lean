@@ -195,6 +195,88 @@ theorem Ty.shareableUnder_canonical (variables : List Nat) (type : Ty) :
 theorem Ty.shareable_canonical (type : Ty) : type.canonical.shareable = type.shareable := by
   simpa using Ty.shareableUnder_canonical [] type
 
+/-! ### Canonical form is idempotent -/
+
+/-- The label relation between a row entry and the row after it in canonical form:
+labels ascend, and a label repeats only before a non-shareable shadowed member. -/
+def Ty.headOk (name : String) : Ty → Prop
+  | .field next member _ => name < next ∨ (name = next ∧ member.shareable = false)
+  | _ => True
+
+/-- The shape `Ty.canonical` produces. -/
+def Ty.isCanonical : Ty → Prop
+  | .arrow _ _ domain codomain => domain.isCanonical ∧ codomain.isCanonical
+  | .field name member tail => member.isCanonical ∧ tail.isCanonical ∧ Ty.headOk name tail
+  | .specification metadata extension => metadata.isCanonical ∧ extension.isCanonical
+  | .prototype spec target => spec.isCanonical ∧ target.isCanonical
+  | .variant row => row.isCanonical
+  | .computation plan response result => plan.isCanonical ∧ response.isCanonical ∧ result.isCanonical
+  | _ => True
+
+theorem String.gt_of_not_lt_ne {a b : String} (h1 : ¬ a < b) (h2 : a ≠ b) : b < a :=
+  Decidable.byContradiction fun h3 => h2 (String.le_antisymm (String.not_lt.mp h3) (String.not_lt.mp h1))
+
+theorem Ty.isCanonical_insert (name : String) (member : Ty) (canonicalMember : member.isCanonical) :
+    ∀ (row : Ty), row.isCanonical → (row.insertCanonical name member).isCanonical
+  | .field prior old tail, ⟨co, ct, ho⟩ => by
+    simp only [Ty.insertCanonical]
+    by_cases he : name = prior
+    · subst he
+      by_cases hs : old.shareable = true
+      · simp only [if_true, hs]; exact ⟨canonicalMember, ct, ho⟩
+      · simp only [if_true, hs, Bool.false_eq_true, if_false]
+        exact ⟨canonicalMember, ⟨co, ct, ho⟩, .inr ⟨rfl, by simpa using hs⟩⟩
+    · by_cases hl : name < prior
+      · simp only [he, hl, if_true, if_false]; exact ⟨canonicalMember, ⟨co, ct, ho⟩, .inl hl⟩
+      · have gt : prior < name := String.gt_of_not_lt_ne hl he
+        simp only [he, hl, if_false]
+        refine ⟨co, Ty.isCanonical_insert name member canonicalMember tail ct, ?_⟩
+        cases tail with
+        | field next m rest =>
+          simp only [Ty.insertCanonical]
+          by_cases he' : name = next
+          · subst he'
+            by_cases hs : m.shareable = true <;> simp [hs, Ty.headOk, gt]
+          · by_cases hl' : name < next
+            · simp only [he', hl', if_true, if_false, Ty.headOk]; exact .inl gt
+            · simp only [he', hl', if_false]; exact ho
+        | _ => simp only [Ty.insertCanonical, Ty.headOk]; exact .inl gt
+  | .natural, _ | .label, _ | .boolean, _ | .variable _, _ | .arrow .., _ | .emptyRow, _
+  | .specification .., _ | .prototype .., _ | .custody _, _ | .variant _, _ | .computation .., _ => by
+    simp only [Ty.insertCanonical]; exact ⟨canonicalMember, by assumption, trivial⟩
+
+theorem Ty.canonical_isCanonical : ∀ (type : Ty), type.canonical.isCanonical
+  | .field name member tail =>
+    Ty.isCanonical_insert name _ (Ty.canonical_isCanonical member) _ (Ty.canonical_isCanonical tail)
+  | .arrow _ _ d c => ⟨Ty.canonical_isCanonical d, Ty.canonical_isCanonical c⟩
+  | .specification m e => ⟨Ty.canonical_isCanonical m, Ty.canonical_isCanonical e⟩
+  | .prototype s t => ⟨Ty.canonical_isCanonical s, Ty.canonical_isCanonical t⟩
+  | .variant r => Ty.canonical_isCanonical r
+  | .computation p r a => ⟨Ty.canonical_isCanonical p, Ty.canonical_isCanonical r, Ty.canonical_isCanonical a⟩
+  | .natural | .label | .boolean | .variable _ | .emptyRow | .custody _ => trivial
+
+theorem Ty.canonical_of_isCanonical : ∀ {type : Ty}, type.isCanonical → type.canonical = type
+  | .field name member tail, ⟨cm, ct, ho⟩ => by
+    simp only [Ty.canonical, Ty.canonical_of_isCanonical cm, Ty.canonical_of_isCanonical ct]
+    cases tail with
+    | field next m rest =>
+      simp only [Ty.insertCanonical]
+      rcases ho with lt | ⟨rfl, hs⟩
+      · simp [String.ne_of_lt lt, lt]
+      · simp [hs]
+    | _ => rfl
+  | .arrow _ _ d c, ⟨cd, cc⟩ => by simp [Ty.canonical, Ty.canonical_of_isCanonical cd, Ty.canonical_of_isCanonical cc]
+  | .specification m e, ⟨cm, ce⟩ => by simp [Ty.canonical, Ty.canonical_of_isCanonical cm, Ty.canonical_of_isCanonical ce]
+  | .prototype s t, ⟨cs, ct⟩ => by simp [Ty.canonical, Ty.canonical_of_isCanonical cs, Ty.canonical_of_isCanonical ct]
+  | .variant r, cr => by simp [Ty.canonical, Ty.canonical_of_isCanonical (type := r) cr]
+  | .computation p r a, ⟨cp, cr, ca⟩ => by
+    simp [Ty.canonical, Ty.canonical_of_isCanonical cp, Ty.canonical_of_isCanonical cr, Ty.canonical_of_isCanonical ca]
+  | .natural, _ | .label, _ | .boolean, _ | .variable _, _ | .emptyRow, _ | .custody _, _ => rfl
+
+/-- Canonical form is idempotent. -/
+@[simp] theorem Ty.canonical_canonical (type : Ty) : type.canonical.canonical = type.canonical :=
+  Ty.canonical_of_isCanonical (Ty.canonical_isCanonical type)
+
 /-- Explicit finite bounds disclose the members available on a rigid self/super
 variable. Recursive bounds are explored only to the requested finite depth. -/
 abbrev Bounds := List (Nat × Ty)
