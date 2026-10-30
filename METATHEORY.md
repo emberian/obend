@@ -22,11 +22,12 @@ checker's clothes, and the fix is the one every step-indexed development makes:
   monoid `R` with a typeclass `Graded R`: fuel is one instance; the machine's ticks, heap and
   extraction budget are others. The law reads `grade (msubst σ t) ≤ grade t + Σ grade σ`, and the
   arithmetic of `n + m` becomes the monoid law, stated once.
-- **The budget is a support.** The slot's judge is `decide (check (budget packet) Ψ t A)`, and the
-  budget comes from the packet as a *declared* resource, exactly as Mini prices an envelope and nano
-  prices ticks: not a parameter of meaning but a justification that can fail by name (`uncovered`),
-  withdrawn and repaired like any other support. This is nano's rule, "ticks and the stack bound are
-  resources, not meanings" (LANG-18), applied to typing.
+- **The budget is declared.** `slotOf` takes a `Budget R`; the toy World supplies it from
+  its view. Admission names a failed invocation `uncovered`, and Integrity's resolver diagnostic
+  connects that name to an actual failed candidate with live ordinary supports. The generic Slot
+  retains its existing refusal API. A budget is not semantic typing, and `uncovered` does not
+  assert that more fuel alone can repair the term. Recording grants as audited World facts is
+  a subsequent integration, not a claim of this implementation.
 
 So `Obend.Slot.Calculus` splits into `Calculus` (with `Typed : Ctx → Tm → Ty → Prop`, `msubst`, and
 the substitution law on `Typed`) and `Decides R` (the graded procedure with soundness, monotonicity
@@ -80,11 +81,16 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
 
 ## 5. Order
 
-1. Landed: the meaning/procedure split (`Typed`, `Graded`, `Decides`), semantic substitution,
-   budgeted slots and named `uncovered` admission. D12 is closed at meaning; procedural
-   completeness is explicitly conditional, with pinned obstructions to the stronger claim.
-2. `Obend.Spec` (lane C, in flight): the front end, so everything downstream reads `.obend`.
-3. Law and the inheritance theorems; B4/B4′ at the toy World, then at minidregg's.
-4. The generic traversal and `obend_cases`, then the `hole n σ` exercise under the journal.
+1. Landed: meaning/procedure/budget split, fuel-free semantic substitution, generic traversal
+   laws used by existing metatheory, and `obend_cases`/`fuel_lift`/`#tooth` used in the library.
+   D12 is closed at meaning; procedural completeness is explicitly conditional, with pinned
+   obstructions to the stronger claim. See `astra/ASTRA-IMPL-REPORT-20261030.md`.
+2. Landed: the `hole-exercise` branch, merged after the whole exercise and its pins passed.
+   The before/after journal comparison and actual proof repairs are recorded separately in
+   `astra/HOLE-REPAIR-SET-20261030.md`. The corrected journal closure is used for the comparison.
+3. `Obend.Spec` is landed by lane C. Law and inheritance are the concurrent active lane;
+   B4/B4′ already have the toy World, with production history instances still to integrate.
+4. Decide the checker coverage design: align procedure with declarative typing, or state an
+   independently characterized checking fragment. More fuel cannot fix the proved obstructions.
 5. `≈b` via Iris-Lean, as its own lane with its own toolchain decision.
 6. Leaf refinement against `bendtt.lean`.
