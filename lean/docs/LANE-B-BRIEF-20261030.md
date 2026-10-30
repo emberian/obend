@@ -4,7 +4,7 @@ For a fresh agent. Read, in this order:
 
 1. `/Users/ember/dev/redregg/work/HOLES-FOR-PROOF-ENGINEERING-20261020.md` (the memo; PE1 is the
    card you are building the first slice of) and `/Users/ember/dev/obend/THESIS.md` §1.5.
-2. `/Users/ember/dev/obend/lean/REPORT-20261030.md` §2 and §4 (the module discipline; the one
+2. `/Users/ember/dev/obend/lean/docs/REPORT-20261030.md` §2 and §4 (the module discipline; the one
    measurement: a private proof edit in `Core.Proofs.Adequacy` rebuilt only Adequacy plus three legacy
    leaves; an exposed def appended to `Core.Term` rebuilt the whole tree).
 3. `/Users/ember/dev/obend/lean/Obend/Slot.lean` (the slot you will instantiate) and
