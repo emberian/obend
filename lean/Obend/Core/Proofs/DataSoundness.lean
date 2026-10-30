@@ -468,7 +468,7 @@ the value's source meaning, and leaves a settled heap extending the names. -/
 profile — and any limits/budget) of a closed term is a finished `runBounded`
 run of the same term, and its extracted Data is THE deep evaluation of the
 source term: a Data deep-evaluates the term exactly when it is that Data. -/
- theorem execution_source_semantics {policy : State → Bool} {limits : Limits} {budget : Budget} {term : Term}
+ public theorem execution_source_semantics {policy : State → Bool} {limits : Limits} {budget : Budget} {term : Term}
     (closed : Scoped 0 term) (execution : ExecutionWith policy limits budget term) :
     runBounded limits budget.ticks (initial term) = .finished execution.value execution.state ∧
       ∀ data, DeepEvaluates term data ↔ data = execution.extraction.result.value := by

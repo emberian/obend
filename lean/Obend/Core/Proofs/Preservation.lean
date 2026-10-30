@@ -120,7 +120,7 @@ theorem typed_runBounded_no_refusal {assumptions : Assumptions} {types : Address
 /-- This is the SAME proof-producing checker and SAME decoded erasure consumed
 by ObjectiveBendPreview: successful closed checking excludes bounded-executor
 refusals at any tick, heap and stack budget. No termination claim is added. -/
-theorem check_runBounded_no_refusal (source : AnnotatedTerm) (typeFuel : Nat)
+public theorem check_runBounded_no_refusal (source : AnnotatedTerm) (typeFuel : Nat)
     (checked : Checked source []) (_accepted : check source [] typeFuel = some checked)
     (limits : Limits) (ticks : Nat) (reason : Refusal) (retained : State) :
     runBounded limits ticks (initial source.erase) ≠ .refused reason retained := by

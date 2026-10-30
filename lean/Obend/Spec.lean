@@ -28,3 +28,10 @@ front end on Mini's own cohorts by `tests/run-obend-source.py` (REPORT-SPEC-2026
 public import Obend.Spec.Law
 public import Obend.Spec.Syntax
 public import Obend.Spec.Parse
+public import Obend.Spec.Types
+public import Obend.Spec.Annotated
+public import Obend.Spec.C4
+public import Obend.Spec.Contract
+public import Obend.Spec.Elaborate
+public import Obend.Spec.Sha256
+public import Obend.Spec.FrontEnd
