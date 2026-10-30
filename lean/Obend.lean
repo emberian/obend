@@ -17,3 +17,5 @@ public import Obend.Digest.Class
 public import Obend.Slot
 public import Obend.Slot.Calculus
 public import Obend.Slot.Core4
+public import Obend.Slot.World
+public import Obend.Slot.Integrity
