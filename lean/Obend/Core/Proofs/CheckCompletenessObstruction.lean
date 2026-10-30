@@ -63,8 +63,9 @@ theorem annotatedConstant_accepted :
     safeUses, zeroUses, safeQuantity, validContext, reusableAllowed,
     reusableCaptures, Assumptions.valid]
 
-/-! Correct annotations still do not suffice: a branch can use a declarative
-conversion that the inference algorithm's exact branch-type comparison refuses. -/
+/-! Correct annotations used not to suffice: a branch could use a declarative
+conversion that the algorithm's exact branch-type comparison refused. The join now
+converts (`agree`), and the example checks. -/
 
 @[expose] public def naturalAliasAssumptions : Assumptions :=
   ⟨[(0, .natural)], [0], []⟩
@@ -94,24 +95,20 @@ conversion that the inference algorithm's exact branch-type comparison refuses. 
   contextValid := rfl
   assumptionsValid := rfl
 
-theorem aliasBranch_refused (fuel : Nat) : check aliasBranch [] fuel = none := by
-  cases fuel with
-  | zero => rfl
-  | succ fuel =>
-    cases fuel with
-    | zero => rfl
-    | succ fuel =>
-      cases fuel <;>
-        simp [check, infer, aliasBranch, aliasBranchAnnotation]
+/-- Since the branch join converts through `agree` (2026-10-30), the correctly annotated
+lambda checks, at the type the exhibited derivation has. -/
+theorem aliasBranch_accepted :
+    (check aliasBranch [] 4).map (fun checked => checked.type) = some aliasBranchChecked.type := by decide
 
-/-- Every annotation lookup succeeds, the sole lambda annotation agrees exactly
-with the exhibited derivation, and nevertheless no fuel suffices. -/
-public theorem correct_lambda_annotation_still_incomplete :
+/-- The former counterexample `correct_lambda_annotation_still_incomplete`, negated: a
+correct annotation now suffices for this lambda. -/
+public theorem correct_lambda_annotation_now_checks :
     (∀ position, aliasBranch.annotations position = some aliasBranchAnnotation) ∧
-    aliasBranchChecked.type = .arrow aliasBranchAnnotation.reuse aliasBranchAnnotation.parameter
-      aliasBranchAnnotation.domain aliasBranchAnnotation.codomain ∧
-    ∀ fuel, check aliasBranch [] fuel = none :=
-  ⟨fun _ => rfl, rfl, aliasBranch_refused⟩
+    ¬ ∀ fuel, check aliasBranch [] fuel = none := by
+  refine ⟨fun _ => rfl, fun refused => ?_⟩
+  have := aliasBranch_accepted
+  rw [refused 4] at this
+  cases this
 
 /-! Empty variants have a semantic eliminator at any result type. The
 algorithm refuses empty arm lists because there is no result type to infer. -/
@@ -195,7 +192,7 @@ theorem duplicateCase_refused (fuel : Nat) : check duplicateCase [] fuel = none 
 
 #assert_axioms checked_lambda_without_annotations_never_checks
   checked_does_not_imply_eventual_success unannotatedConstant_refused
-  annotatedConstant_accepted aliasBranch_refused correct_lambda_annotation_still_incomplete
+  annotatedConstant_accepted aliasBranch_accepted correct_lambda_annotation_now_checks
   emptyCase_refused annotated_empty_eliminator_still_incomplete
   case_labels_distinct duplicate_arms_have_no_derivation duplicateCase_refused
 

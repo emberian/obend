@@ -800,7 +800,7 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         have hl : a₂.length = a₃.tail.length := by simp [ha₂, ha₃]
         have hl' : a₁.length = (addUses a₂ a₃.tail).length := by rw [length_addUses hl, ha₂, ha₁]
         have c1 : c'.type = .natural := by rw [cType, cShape]
-        have s1 : s'.type = z'.type := by rw [sType, zType, same]
+        have s1 : agree asm s'.type z'.type = true := by rw [sType, zType]; exact same
         have u1 : safeUses (⟨.natural, .unrestricted⟩ :: (Δ ++ Ψ')) s'.uses = true := by
           rw [sUses']
           exact safeUses_append_zero (Δ := ⟨.natural, .unrestricted⟩ :: Δ) ha₃ (by rw [← sUses]; exact safe)
@@ -955,7 +955,7 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         have hl : a₂.length = a₃.length := ha₂.trans ha₃.symm
         have hl' : a₁.length = (addUses a₂ a₃).length := by rw [length_addUses hl, ha₂, ha₁]
         have c1 : c'.type = .boolean := by rw [cType, cShape]
-        have s1 : f'.type = t'.type := by rw [fType, tType, same]
+        have s1 : agree asm f'.type t'.type = true := by rw [fType, tType]; exact same
         simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1]
         refine ⟨addUses a₁ (addUses a₂ a₃), by rw [length_addUses hl', ha₁], ?_, _, rfl, by exact tType, ?_⟩
         · show addUses c.uses (addUses t.uses f.uses) = _
@@ -1041,6 +1041,9 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i safe
+        split at h
+        rotate_left; · cases h
+        rename_i agreed
         simp only [Option.bind_eq_some_iff] at h
         obtain ⟨later, laterTyped, h⟩ := h
         split at h
@@ -1056,7 +1059,7 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
                 some first' ∧ first'.type = first.type ∧ first'.uses = a₁ ++ zeroUses Ψ' :=
           ⟨first₀, firstTyped₀, firstType₀, firstUses₀⟩
         obtain ⟨a₂, ha₂, laterUses, later', laterTyped', laterRow, laterResult, laterUses'⟩ :=
-          ihArms ann ann' Δ pos pos' (index + 1) row (some first.type) rest later
+          ihArms ann ann' Δ pos pos' (index + 1) row (some (expected.getD first.type)) rest later
             (fun arm harm => hs arm (List.mem_cons_of_mem _ harm)) laterTyped hann
         have hne : a₁ ≠ [] := ne_nil_of_length_succ ha₁
         have hl : a₁.tail.length = a₂.length := by simp [ha₁, ha₂]
@@ -1065,10 +1068,11 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           rw [firstUses']
           exact safeUses_append_zero (Δ := ⟨payload, .unrestricted⟩ :: Δ) ha₁ (by rw [← firstUses]; exact safe)
         rw [← firstType] at laterTyped'
-        have hl' : later'.result = first'.type := by rw [laterResult, firstType]; exact sameResult
+        have hl' : later'.result = expected.getD first'.type := by rw [laterResult, firstType]; exact sameResult
+        have a1 : agree asm first'.type (expected.getD first'.type) = true := by rw [firstType]; exact agreed
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos sharePayload, firstTyped',
-          dif_pos u1, laterTyped', dif_pos hl']
-        refine ⟨addUses a₁.tail a₂, by rw [length_addUses hl]; simp [ha₁], ?_, _, rfl, ?_, by exact firstType, ?_⟩
+          dif_pos u1, dif_pos a1, laterTyped', dif_pos hl']
+        refine ⟨addUses a₁.tail a₂, by rw [length_addUses hl]; simp [ha₁], ?_, _, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], ?_⟩
         · show addUses first.uses.tail later.uses = _; rw [firstUses, laterUses, split_tail Ψ hne, split_add Ψ hl]
         · show Ty.field name payload later'.row = Ty.field name payload later.row; rw [laterRow]
         · show addUses first'.uses.tail later'.uses = _
@@ -1635,7 +1639,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
                 s'.type = s.type ∧ UsesLE s'.uses s.uses :=
           ⟨s₀, sTyped₀, sType₀, sUses₀⟩
         have c1 : c'.type = .natural := by rw [cType, cShape]
-        have s1 : s'.type = z'.type := by rw [sType, zType, same]
+        have s1 : agree asm s'.type z'.type = true := by rw [sType, zType]; exact same
         simp only [infer, Option.bind_eq_bind, cTyped', zTyped',
           sTyped', Option.bind_some, dif_pos c1, dif_pos s1, dif_pos (safeUses_of_le sUses safe)]
         exact ⟨_, rfl, by exact zType, by exact UsesLE.add cUses (UsesLE.add zUses sUses.tail)⟩
@@ -1782,7 +1786,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         obtain ⟨f', fTyped', fType, fUses⟩ :=
           ih ann ann' Δ _ whenFalse f fTyped valid (hann.child 2 _ whenFalse (fun _ => by simp only [annotationsAt])) _ rfl
         have c1 : c'.type = .boolean := by rw [cType, cShape]
-        have s1 : f'.type = t'.type := by rw [fType, tType, same]
+        have s1 : agree asm f'.type t'.type = true := by rw [fType, tType]; exact same
         simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1,
           dif_pos s1]
         exact ⟨_, rfl, by exact tType, by exact UsesLE.add cUses (UsesLE.add tUses fUses)⟩
@@ -1882,6 +1886,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i safe
+        split at h
+        rotate_left; · cases h
+        rename_i agreed
         simp only [Option.bind_eq_some_iff] at h
         obtain ⟨later, laterTyped, h⟩ := h
         split at h
@@ -1901,13 +1908,14 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
                 first'.type = first.type ∧ UsesLE first'.uses first.uses :=
           ⟨first₀, firstTyped₀, firstType₀, firstUses₀⟩
         obtain ⟨later', laterTyped', laterRow, laterResult, laterUses⟩ :=
-          ihArms ann ann' Δ pos (index + 1) row (some first.type) rest later laterTyped valid hann.tail _ rfl
+          ihArms ann ann' Δ pos (index + 1) row (some (expected.getD first.type)) rest later laterTyped valid hann.tail _ rfl
         have found' : row.lookup asm.bounds (fuel + m + 1) name = some payload := Ty.lookup_mono found (by omega)
         rw [← firstType] at laterTyped'
-        have hl : later'.result = first'.type := by rw [laterResult, firstType]; exact sameResult
+        have hl : later'.result = expected.getD first'.type := by rw [laterResult, firstType]; exact sameResult
+        have a1 : agree asm first'.type (expected.getD first'.type) = true := by rw [firstType]; exact agreed
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos sharePayload,
-          firstTyped', dif_pos (safeUses_of_le firstUses safe), laterTyped', dif_pos hl]
-        refine ⟨_, rfl, ?_, by exact firstType, by exact UsesLE.add firstUses.tail laterUses⟩
+          firstTyped', dif_pos (safeUses_of_le firstUses safe), dif_pos a1, laterTyped', dif_pos hl]
+        refine ⟨_, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], by exact UsesLE.add firstUses.tail laterUses⟩
         show Ty.field name payload later'.row = Ty.field name payload later.row
         rw [laterRow]
 

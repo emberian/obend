@@ -812,7 +812,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         obtain ⟨s', sTyped', sType, sUses⟩ := ih _ _ _ _ _ sTyped
         simp only [instantiateContext_cons, Ty.instantiate] at sTyped'
         have c1 : c'.type = .natural := by rw [cType, cShape]; rfl
-        have s1 : s'.type = z'.type := by rw [sType, zType, same]
+        have s1 : agree instance_ s'.type z'.type = true := by rw [sType, zType]; exact D.agree_instantiate same
         have u1 : safeUses (⟨.natural, .unrestricted⟩ :: instantiateContext σ context) s'.uses = true := by
           rw [sUses, show (⟨.natural, .unrestricted⟩ :: instantiateContext σ context : Context) =
             instantiateContext σ (⟨.natural, .unrestricted⟩ :: context) from rfl, safeUses_instantiate]; exact safe
@@ -986,7 +986,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         obtain ⟨t', tTyped', tType, tUses⟩ := ih _ _ _ _ _ tTyped
         obtain ⟨f', fTyped', fType, fUses⟩ := ih _ _ _ _ _ fTyped
         have c1 : c'.type = .boolean := by rw [cType, cShape]; rfl
-        have s1 : f'.type = t'.type := by rw [fType, tType, same]
+        have s1 : agree instance_ f'.type t'.type = true := by rw [fType, tType]; exact D.agree_instantiate same
         simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1]
         exact ⟨_, rfl, tType, by dsimp only; rw [cUses, tUses, fUses]⟩
       | perform plan =>
@@ -1065,6 +1065,9 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         split at h
         rotate_left; · cases h
         rename_i safe
+        split at h
+        rotate_left; · cases h
+        rename_i agreed
         simp only [Option.bind_eq_some_iff] at h
         obtain ⟨later, laterTyped, h⟩ := h
         split at h
@@ -1080,13 +1083,17 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         simp only [instantiateContext_cons] at firstTyped'
         obtain ⟨later', laterTyped', laterRow, laterResult, laterUses⟩ := ihArms _ _ _ _ _ _ _ _ laterTyped
         simp only [Option.map_some] at laterTyped'
-        rw [← firstType] at laterTyped'
+        have getD : ((expected.map (Ty.instantiate σ)).getD first'.type) = (expected.getD first.type).instantiate σ := by
+          rw [firstType]; cases expected <;> rfl
+        rw [← getD] at laterTyped'
         have u1 : safeUses (⟨payload.instantiate σ, .unrestricted⟩ :: instantiateContext σ context) first'.uses = true := by
           rw [firstUses, ← instantiateContext_cons, safeUses_instantiate]; exact safe
-        have l1 : later'.result = first'.type := by rw [laterResult, firstType, same]
+        have l1 : later'.result = (expected.map (Ty.instantiate σ)).getD first'.type := by rw [laterResult, getD, same]
+        have a1 : agree instance_ first'.type ((expected.map (Ty.instantiate σ)).getD first'.type) = true := by
+          rw [getD, firstType]; exact D.agree_instantiate agreed
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos s1, firstTyped', dif_pos u1,
-          laterTyped', dif_pos l1]
-        exact ⟨_, rfl, by simp [Ty.instantiate, laterRow], firstType, by dsimp only; rw [firstUses, laterUses]⟩
+          dif_pos a1, laterTyped', dif_pos l1]
+        exact ⟨_, rfl, by simp [Ty.instantiate, laterRow], getD, by dsimp only; rw [firstUses, laterUses]⟩
 
 
 end

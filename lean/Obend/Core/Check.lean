@@ -1133,10 +1133,10 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let z ← infer assumptions annotations context (position ++ [1]) fuel zero
       let s ← infer assumptions annotations (⟨.natural,.unrestricted⟩ :: context) (position ++ [2]) fuel successor
       if ht : condition.type = .natural then
-        if hb : s.type = z.type then
+        if hb : agree assumptions s.type z.type = true then
           if hu : safeUses (⟨.natural,.unrestricted⟩ :: context) s.uses = true then
             some ⟨z.type, addUses condition.uses (addUses z.uses s.uses.tail),
-              .ifZero (ht ▸ condition.derivation) z.derivation (hb ▸ s.derivation) hu⟩
+              .ifZero (ht ▸ condition.derivation) z.derivation (.conversion s.derivation (agree_sameType hb)) hu⟩
           else none
         else none
       else none
@@ -1203,9 +1203,9 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let t ← infer assumptions annotations context (position ++ [1]) fuel whenTrue
       let f ← infer assumptions annotations context (position ++ [2]) fuel whenFalse
       if hc : c.type = .boolean then
-        if hb : f.type = t.type then
+        if hb : agree assumptions f.type t.type = true then
           some ⟨t.type, addUses c.uses (addUses t.uses f.uses),
-            .ifBool (hc ▸ c.derivation) t.derivation (hb ▸ f.derivation)⟩
+            .ifBool (hc ▸ c.derivation) t.derivation (.conversion f.derivation (agree_sameType hb))⟩
         else none
       else none
   | fuel + 1, .perform plan => do
@@ -1242,8 +1242,9 @@ def inferFields (assumptions : Assumptions) (annotations : Annotations) (context
       else none
 
 /-- Every arm body is checked under its label's payload type in the scrutinee
-row; all arms must agree exactly on the result type. Empty arm lists have no
-result type to infer and are refused here (the relation itself permits them). -/
+row; every later arm is converted to the first arm's type (`agree`). Empty arm
+lists have no result type to infer and are refused here (the relation itself
+permits them; the bidirectional checker checks them against an expected type). -/
 def inferArms (assumptions : Assumptions) (annotations : Annotations) (context : Context)
     (position : List Nat) (index : Nat) (scrutineeRow : Ty) (expected : Option Ty) :
     Nat → (arms : List (String × Term)) → Option (InferredArms assumptions context arms)
@@ -1256,10 +1257,13 @@ def inferArms (assumptions : Assumptions) (annotations : Annotations) (context :
       if hs : payload.shareableUnder assumptions.shareableVariables = true then
         let first ← infer assumptions annotations (⟨payload,.unrestricted⟩ :: context) (position ++ [index]) fuel body
         if hu : safeUses (⟨payload,.unrestricted⟩ :: context) first.uses = true then
-          let later ← inferArms assumptions annotations context position (index + 1) scrutineeRow (some first.type) fuel rest
-          if hl : later.result = first.type then
-            some ⟨.field name payload later.row, first.type, addUses first.uses.tail later.uses,
-              .cons first.derivation hu hs (hl ▸ later.derivation)⟩
+          if ht : agree assumptions first.type (expected.getD first.type) = true then
+            let later ← inferArms assumptions annotations context position (index + 1) scrutineeRow
+              (some (expected.getD first.type)) fuel rest
+            if hl : later.result = expected.getD first.type then
+              some ⟨.field name payload later.row, expected.getD first.type, addUses first.uses.tail later.uses,
+                .cons (.conversion first.derivation (agree_sameType ht)) hu hs (hl ▸ later.derivation)⟩
+            else none
           else none
         else none
       else none
