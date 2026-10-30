@@ -21,6 +21,7 @@ pre-state (`sizesAfter`, proved equal to the sizes of `stepRaw`'s result), so no
 pre-state is retained on the success path; the stack depth is carried as a
 counter; the four push sites read the size before pushing. -/
 public import Obend.Core.Machine
+public import Obend.Tactic.Cases
 @[expose] public section
 namespace Obend.Core.MachineFast
 open Obend.Core.Term Obend.Core.Machine
@@ -111,7 +112,7 @@ def sizesAfter (state : State) (depth : Nat) : Nat × Nat :=
     | .app _ _ | .reflect _ | .metadata _ | .project _ | .get _ _ | .extend _ _
     | .ifZero _ _ _ | .binary _ _ _ | .case _ _ | .ifBool _ _ _ => (size,depth+1)
     | .perform _ => if forcingShared state.stack then (size,depth) else (size+1,depth)
-    | .bound _ | .lam _ | .nat _ | .boolean _ | .label _ | .mix _ _ | .done _ => (size,depth)
+    | .bound _ | .lam _ | .nat _ | .boolean _ | .label _ | .mix _ _ | .done _ | .hole _ _ => (size,depth)
   | .returned value => match state.stack with
     | [] => (size,depth)
     | frame::_ => match frame,value with
@@ -136,7 +137,9 @@ theorem sizesAfter_eq (state : State) :
     | none => simp
     | some cell => cases cell <;> simp
   | evaluate term environment =>
-    cases term <;> simp [sizesAfter, stepRaw, allocateFields_size]
+    cases term
+    case hole n σ => obend_cases σ with [sizesAfter,stepRaw]
+    all_goals simp [sizesAfter, stepRaw, allocateFields_size]
     · rename_i index; cases environment[index]? <;> simp
     · split <;> simp
   | returned value =>

@@ -20,6 +20,7 @@ PROOF-ENG-DESIGN.md §1(a)).
 -/
 public import Obend.Core.Machine
 public import Obend.AxiomPin
+public import Obend.Tactic.Cases
 
 namespace Obend.Core.Machine
 
@@ -33,6 +34,7 @@ public structure StepCases (P : State → Prop) : Prop where
   blackhole : ∀ s address, s.control = .blackhole address → P s
   yielded : ∀ s plan, s.control = .yielded plan → P s
   enter : ∀ s address, s.control = .enter address → P s
+  evaluate_hole : ∀ s n σ env, s.control = .evaluate (.hole n σ) env → P s
   evaluate_bound : ∀ s index env, s.control = .evaluate (.bound index) env → P s
   evaluate_lam : ∀ s body env, s.control = .evaluate (.lam body) env → P s
   evaluate_app : ∀ s function argument env, s.control = .evaluate (.app function argument) env → P s
@@ -92,32 +94,33 @@ public theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : S
   | yielded plan => exact cases.yielded s plan control
   | enter address => exact cases.enter s address control
   | evaluate term env =>
-      cases term with
-      | bound index => exact cases.evaluate_bound s index env control
-      | lam body => exact cases.evaluate_lam s body env control
-      | app function argument => exact cases.evaluate_app s function argument env control
-      | mix lower upper => exact cases.evaluate_mix s lower upper env control
-      | fix spec inherited => exact cases.evaluate_fix s spec inherited env control
-      | specification metadata extension =>
+      obend_cases term with []
+      case hole n σ => exact cases.evaluate_hole s n σ env control
+      case bound index => exact cases.evaluate_bound s index env control
+      case lam body => exact cases.evaluate_lam s body env control
+      case app function argument => exact cases.evaluate_app s function argument env control
+      case mix lower upper => exact cases.evaluate_mix s lower upper env control
+      case fix spec inherited => exact cases.evaluate_fix s spec inherited env control
+      case specification metadata extension =>
           exact cases.evaluate_specification s metadata extension env control
-      | prototype spec target => exact cases.evaluate_prototype s spec target env control
-      | reflect target => exact cases.evaluate_reflect s target env control
-      | metadata target => exact cases.evaluate_metadata s target env control
-      | project target => exact cases.evaluate_project s target env control
-      | nat value => exact cases.evaluate_nat s value env control
-      | boolean value => exact cases.evaluate_boolean s value env control
-      | label value => exact cases.evaluate_label s value env control
-      | binary primitive left right => exact cases.evaluate_binary s primitive left right env control
-      | extend target fields => exact cases.evaluate_extend s target fields env control
-      | record fields => exact cases.evaluate_record s fields env control
-      | get target name => exact cases.evaluate_get s target name env control
-      | ifZero value zero successor => exact cases.evaluate_ifZero s value zero successor env control
-      | inject tag payload => exact cases.evaluate_inject s tag payload env control
-      | case scrutinee arms => exact cases.evaluate_case s scrutinee arms env control
-      | ifBool condition whenTrue whenFalse =>
+      case prototype spec target => exact cases.evaluate_prototype s spec target env control
+      case reflect target => exact cases.evaluate_reflect s target env control
+      case metadata target => exact cases.evaluate_metadata s target env control
+      case project target => exact cases.evaluate_project s target env control
+      case nat value => exact cases.evaluate_nat s value env control
+      case boolean value => exact cases.evaluate_boolean s value env control
+      case label value => exact cases.evaluate_label s value env control
+      case binary primitive left right => exact cases.evaluate_binary s primitive left right env control
+      case extend target fields => exact cases.evaluate_extend s target fields env control
+      case record fields => exact cases.evaluate_record s fields env control
+      case get target name => exact cases.evaluate_get s target name env control
+      case ifZero value zero successor => exact cases.evaluate_ifZero s value zero successor env control
+      case inject tag payload => exact cases.evaluate_inject s tag payload env control
+      case case scrutinee arms => exact cases.evaluate_case s scrutinee arms env control
+      case ifBool condition whenTrue whenFalse =>
           exact cases.evaluate_ifBool s condition whenTrue whenFalse env control
-      | perform plan => exact cases.evaluate_perform s plan env control
-      | done value => exact cases.evaluate_done s value env control
+      case perform plan => exact cases.evaluate_perform s plan env control
+      case done value => exact cases.evaluate_done s value env control
   | returned value =>
       cases stack : s.stack with
       | nil => exact cases.return_nil s value control stack

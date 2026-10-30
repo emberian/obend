@@ -14,6 +14,7 @@ and the closed demand a nested evaluation is.
   with the outer stack appended (`nested_demand`). -/
 public import Obend.Core.Proofs.Forcing.Agree
 public import Obend.Core.Invariant
+public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -193,53 +194,54 @@ public theorem addrValid_stepRaw {s : State} (valid : AddrValid s) : AddrValid (
           · exact sv frame member
   | evaluate term env =>
     have envIn : AllIn (· < heap.size) env := cv
-    cases term with
-    | bound i =>
+    obend_cases term with []
+    case hole n σ => exact ⟨hv, allIn_nil _, sv⟩
+    case bound i =>
       simp only [stepRaw]
       cases found : env[i]? with
       | none => exact ⟨hv, by simp [controlAddresses], sv⟩
       | some a => exact ⟨hv, by simpa [controlAddresses] using envIn a (List.mem_of_getElem? found), sv⟩
-    | lam body => exact ⟨hv, envIn, sv⟩
-    | nat n => exact ⟨hv, by simp [stepRaw, controlAddresses, valueAddresses], by simpa [stepRaw] using sv⟩
-    | boolean b => exact ⟨hv, by simp [stepRaw, controlAddresses, valueAddresses], by simpa [stepRaw] using sv⟩
-    | label l => exact ⟨hv, by simp [stepRaw, controlAddresses, valueAddresses], by simpa [stepRaw] using sv⟩
-    | app fn arg => exact ⟨hv, envIn, frames_cons envIn sv⟩
-    | mix lower upper => exact ⟨hv, envIn, sv⟩
-    | fix spec inherited =>
+    case lam body => exact ⟨hv, envIn, sv⟩
+    case nat n => exact ⟨hv, by simp [stepRaw, controlAddresses, valueAddresses], by simpa [stepRaw] using sv⟩
+    case boolean b => exact ⟨hv, by simp [stepRaw, controlAddresses, valueAddresses], by simpa [stepRaw] using sv⟩
+    case label l => exact ⟨hv, by simp [stepRaw, controlAddresses, valueAddresses], by simpa [stepRaw] using sv⟩
+    case app fn arg => exact ⟨hv, envIn, frames_cons envIn sv⟩
+    case mix lower upper => exact ⟨hv, envIn, sv⟩
+    case fix spec inherited =>
       simp only [stepRaw]
       refine ⟨heapValid_push hv ?_, ?_, frames_mono sv (by simp only [Array.size_push]; omega)⟩
       · simp only [cellAddresses, allIn_cons_iff]
         exact ⟨by omega, allBelow_mono envIn (by omega)⟩
       · simp [controlAddresses]
-    | specification descriptor extension =>
+    case specification descriptor extension =>
       simp only [stepRaw]
       refine ⟨heapValid_push (heapValid_push hv (allBelow_mono envIn (by omega)))
         (allBelow_mono envIn (by simp only [Array.size_push]; omega)), ?_, frames_mono sv (by simp only [Array.size_push]; omega)⟩
       simp [controlAddresses, valueAddresses] <;> omega
-    | prototype spec target =>
+    case prototype spec target =>
       simp only [stepRaw]
       refine ⟨heapValid_push (heapValid_push hv (allBelow_mono envIn (by omega)))
         (allBelow_mono envIn (by simp only [Array.size_push]; omega)), ?_, frames_mono sv (by simp only [Array.size_push]; omega)⟩
       simp [controlAddresses, valueAddresses] <;> omega
-    | reflect body => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
-    | metadata body => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
-    | project body => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
-    | record fields =>
+    case reflect body => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
+    case metadata body => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
+    case project body => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
+    case record fields =>
       simp only [stepRaw]
       obtain ⟨v', le, inside⟩ := allocateFields_valid' hv envIn fields
       exact ⟨v', inside, frames_mono sv le⟩
-    | get target name => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
-    | extend inherited fields => exact ⟨hv, envIn, frames_cons envIn sv⟩
-    | ifZero value zero successorBody => exact ⟨hv, envIn, frames_cons envIn sv⟩
-    | binary primitive left right => exact ⟨hv, envIn, frames_cons envIn sv⟩
-    | inject tag payload =>
+    case get target name => exact ⟨hv, envIn, frames_cons (allIn_nil _) sv⟩
+    case extend inherited fields => exact ⟨hv, envIn, frames_cons envIn sv⟩
+    case ifZero value zero successorBody => exact ⟨hv, envIn, frames_cons envIn sv⟩
+    case binary primitive left right => exact ⟨hv, envIn, frames_cons envIn sv⟩
+    case inject tag payload =>
       simp only [stepRaw]
       refine ⟨heapValid_push hv (allBelow_mono envIn (by omega)), ?_, frames_mono sv (by simp only [Array.size_push]; omega)⟩
       simp [controlAddresses, valueAddresses] <;> omega
-    | case scrutinee arms => exact ⟨hv, envIn, frames_cons envIn sv⟩
-    | ifBool condition whenTrue whenFalse => exact ⟨hv, envIn, frames_cons envIn sv⟩
-    | done value => exact ⟨hv, envIn, sv⟩
-    | perform plan =>
+    case case scrutinee arms => exact ⟨hv, envIn, frames_cons envIn sv⟩
+    case ifBool condition whenTrue whenFalse => exact ⟨hv, envIn, frames_cons envIn sv⟩
+    case done value => exact ⟨hv, envIn, sv⟩
+    case perform plan =>
       simp only [stepRaw]
       cases shared : forcingShared stack with
       | true => exact ⟨hv, by simp [controlAddresses], sv⟩

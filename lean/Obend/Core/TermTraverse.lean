@@ -1,5 +1,6 @@
 module
 public import Obend.Core.Term
+public import Obend.Tactic.Cases
 public import Obend.Core.Traverse
 @[expose] public section
 namespace Obend.Core.TermTraverse
@@ -10,6 +11,7 @@ set_option autoImplicit false
 /-- Payloads and field labels are retained without imposing a fixed child arity
 on the generic traversal. Field wrappers also retain duplicate labels and order. -/
 inductive Tag where
+  | hole (n : Nat)
   | app
   | mix
   | fix
@@ -33,6 +35,7 @@ inductive Tag where
 abbrev Shape := Tree Tag
 
 def encode : Term → Shape
+  | .hole n σ => .node (.hole n) (σ.map encode)
   | .bound i => .var i
   | .lam b => .bind (encode b)
   | .app a b => .node .app [encode a, encode b]
@@ -61,6 +64,7 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
     | (rename_i hmem
        have hlist := List.sizeOf_lt_of_mem hmem
        have hpair : sizeOf f.snd < sizeOf f := by cases f; simp +arith
@@ -68,6 +72,7 @@ decreasing_by
 
 /-- Decode is total; malformed shapes are irrelevant to the left inverse. -/
 def decode : Shape → Term
+  | .node (.hole n) σ => .hole n (σ.map decode)
   | .var i => .bound i
   | .bind b => .lam (decode b)
   | .node .app [a, b] => .app (decode a) (decode b)
@@ -104,6 +109,7 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
     | (rename_i hmem
        have hlist := List.sizeOf_lt_of_mem hmem
        omega)
@@ -113,19 +119,24 @@ theorem map_self {α : Type} (f : α → α) (xs : List α)
   (List.map_congr_left h).trans (List.map_id xs)
 
 theorem decode_encode (t : Term) : decode (encode t) = t := by
-  cases ht : t <;> simp only [encode, decode, List.map_map]
+  obend_cases t with []
+  all_goals simp only [encode, decode, List.map_map]
   all_goals first
     | rfl
     | (congr 1 <;> first
         | exact decode_encode _
         | (apply map_self; intro f hf
            simp only [Function.comp_apply, decode]
-           rw [decode_encode f.2]))
+           rw [decode_encode f.2])
+        | (apply map_self; intro a ha
+           simp only [Function.comp_apply]
+           exact decode_encode a))
 termination_by sizeOf t
 decreasing_by
   all_goals simp_all
   all_goals first
     | omega
+    | (have := List.sizeOf_lt_of_mem ha; omega)
     | (have hlist := List.sizeOf_lt_of_mem hf
        have hpair : sizeOf f.snd < sizeOf f := by cases f; simp +arith
        omega)
@@ -135,12 +146,15 @@ theorem encode_injective {a b : Term} (h : encode a = encode b) : a = b := by
 
 @[simp] theorem encode_rename (t : Term) (f : Nat → Nat) :
     encode (t.rename f) = Tree.rename f (encode t) := by
-  cases t <;> simp only [Term.rename, encode, Tree.rename, Tree.traverse, List.map_cons,
+  obend_cases t with []
+  all_goals simp only [Term.rename, encode, Tree.rename, Tree.traverse, List.map_cons,
     List.map_nil, List.map_map]
   all_goals
     repeat first
       | rfl
       | exact encode_rename _ _
+      | (apply List.map_congr_left; intro a ha
+         exact encode_rename a f)
       | (apply List.map_congr_left; intro a ha
          simp only [Function.comp_apply, Tree.traverse, List.map_cons, List.map_nil]
          rw [encode_rename a.2])
@@ -150,6 +164,7 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (have := List.sizeOf_lt_of_mem ha; omega)
     | (have hlist := List.sizeOf_lt_of_mem ha
        have hpair : sizeOf a.snd < sizeOf a := by cases a; simp +arith
        omega)
@@ -160,7 +175,8 @@ decreasing_by
 
 @[simp] theorem encode_substitute (t : Term) (σ : Nat → Term) :
     encode (t.substitute σ) = Tree.substitute (fun i => encode (σ i)) (encode t) := by
-  cases t <;> simp only [Term.substitute, encode, Tree.substitute, Tree.traverse, List.map_cons,
+  obend_cases t with []
+  all_goals simp only [Term.substitute, encode, Tree.substitute, Tree.traverse, List.map_cons,
     List.map_nil, List.map_map, Tree.node.injEq, Tree.bind.injEq, List.cons.injEq,
     and_true, true_and]
   all_goals
@@ -168,6 +184,8 @@ decreasing_by
       | rfl
       | exact encode_substitute _ _
       | (rw [← encode_liftSubstitution]; exact encode_substitute _ _)
+      | (apply List.map_congr_left; intro a ha
+         exact encode_substitute a σ)
       | (apply List.map_congr_left; intro a ha
          simp only [Function.comp_apply, Tree.traverse, List.map_cons, List.map_nil]
          rw [encode_substitute a.2]
@@ -178,6 +196,7 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (have := List.sizeOf_lt_of_mem ha; omega)
     | (have hlist := List.sizeOf_lt_of_mem ha
        have hpair : sizeOf a.snd < sizeOf a := by cases a; simp +arith
        omega)

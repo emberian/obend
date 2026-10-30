@@ -1,6 +1,7 @@
 module
 /- Lexical invariants for the partial Objective Bend edition. These proofs do
 not assert totality, ownership of native effects, or source/heap adequacy. -/
+public import Obend.Tactic.Cases
 public import Obend.Core.TermTraverse
 public import Obend.Core.Machine
 public import Obend.AxiomPin
@@ -14,6 +15,7 @@ set_option autoImplicit false
 predecessor; a lambda binds its argument. Recursive self is bound by the heap
 machine, rather than counted as a free index of the source Fix constructor. -/
 inductive Scoped : Nat → Term → Prop where
+  | hole {n k : Nat} {σ : List Term} : (∀ t ∈ σ, Scoped n t) → Scoped n (.hole k σ)
   | bound {n i : Nat} : i < n → Scoped n (.bound i)
   | lam {n : Nat} {body : Term} : Scoped (n+1) body → Scoped n (.lam body)
   | app {n : Nat} {f a : Term} : Scoped n f → Scoped n a → Scoped n (.app f a)
@@ -40,6 +42,12 @@ inductive Scoped : Nat → Term → Prop where
   | ifBool {n : Nat} {c t f : Term} : Scoped n c → Scoped n t → Scoped n f → Scoped n (.ifBool c t f)
   | perform {n : Nat} {plan : Term} : Scoped n plan → Scoped n (.perform plan)
   | done {n : Nat} {value : Term} : Scoped n value → Scoped n (.done value)
+
+@[simp] theorem scoped_hole_iff (n k : Nat) (σ : List Term) :
+    Scoped n (.hole k σ) ↔ ∀ t ∈ σ, Scoped n t := by
+  constructor
+  · intro h; obend_cases h with []
+  · exact Scoped.hole
 
 @[simp] theorem scoped_bound_iff (n : Nat) (i : Nat) :
     Scoped n (.bound i) ↔ i < n := by
@@ -176,29 +184,31 @@ theorem shape_scoped_node {Tag : Type} (n : Nat) (tag : Tag) (children : List (T
 
 /-- The machine's lexical invariant agrees with the generic syntax traversal. -/
 theorem scoped_encode_iff (n : Nat) (t : Term) : Scoped n t ↔ TermTraverse.Scoped n t := by
-  cases t <;> simp only [scoped_bound_iff, scoped_lam_iff, scoped_app_iff, scoped_mix_iff,
-    scoped_fix_iff, scoped_specification_iff, scoped_prototype_iff, scoped_reflect_iff,
-    scoped_metadata_iff, scoped_project_iff, scoped_binary_iff, scoped_extend_iff,
-    scoped_record_iff, scoped_get_iff, scoped_condition_iff, scoped_inject_iff,
-    scoped_case_iff, scoped_ifBool_iff, scoped_perform_iff, scoped_done_iff,
+  obend_cases t with []
+  all_goals simp only [
     TermTraverse.Scoped, TermTraverse.encode, shape_scoped_bind, shape_scoped_node,
     List.mem_cons, List.not_mem_nil, forall_eq_or_imp, forall_false,
     List.mem_map, forall_exists_index, and_imp, forall_apply_eq_imp_iff₂, shape_forall_true, and_true]
+  all_goals try simp only [Prod.forall]
   all_goals first
     | (constructor <;> intro h <;> first | trivial | constructor; done)
     | (simp only [Traverse.Tree.Scoped, Traverse.Tree.All]; done)
     | (repeat first
         | apply and_congr
         | exact scoped_encode_iff _ _
-        | (apply forall_congr'; intro f; apply forall_congr'; intro hf
-           exact scoped_encode_iff _ f.2))
+        | (apply forall_congr'; intro a; apply forall_congr'; intro b
+           apply forall_congr'; intro hf
+           exact scoped_encode_iff _ b)
+        | (apply forall_congr'; intro a; apply forall_congr'; intro ha
+           exact scoped_encode_iff _ a))
 termination_by sizeOf t
 decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (have := List.sizeOf_lt_of_mem ha; omega)
     | (have hlist := List.sizeOf_lt_of_mem hf
-       have hpair : sizeOf f.snd < sizeOf f := by cases f; simp +arith
+       simp at hlist
        omega)
 
 /-- A renaming that fixes every index below `n` fixes a term scoped under `n`. (Moved from
@@ -800,7 +810,7 @@ def FinalStackInvariant (state : State) : Prop :=
   | start => exact initial_finalStackInvariant _
   | next _ ih => exact stepRaw_finalStackInvariant ih
 
-#assert_axioms scoped_encode_iff scoped_rename_identity scoped_rename scoped_substitute
+#assert_axioms scoped_hole_iff scoped_encode_iff scoped_rename_identity scoped_rename scoped_substitute
 
 #assert_axioms stepRaw_lexicalInvariant stepRaw_preservesOrigins stepRaw_preservesCached
   stepRaw_busyInvariant stepRaw_finalStackInvariant reachable_no_internalRefusal

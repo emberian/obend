@@ -26,6 +26,7 @@ public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.AxiomPin
+public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Substitution
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant
 set_option autoImplicit false
@@ -410,6 +411,7 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
     refine ⟨?_, ?_, ?_⟩
     · intro ann ann' Δ pos pos' term result hs h hann
       cases term with
+      | hole _ _ => obend_cases fuel with [infer]
       | bound index =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨binding, found, h⟩ := h
@@ -1207,6 +1209,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
     refine ⟨?_, ?_, ?_⟩
     · intro ann ann' Δ pos term result h valid hann term' hterm'
       cases term with
+      | hole _ _ => obend_cases fuel with [infer]
       | bound index =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨binding, found, h⟩ := h

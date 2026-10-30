@@ -5,6 +5,7 @@ normally finished closed computation, through rawRun or runBounded at any
 limits, has an independent source evaluation to the same ground observation.
 This module does not yet inhabit Representation: administrative progress and
 source-to-machine completeness remain separate substantive obligations. -/
+public import Obend.Tactic.Cases
 public import Obend.Core.Invariant
 public import Obend.Core.TermTraverse
 public import Obend.AxiomPin
@@ -135,6 +136,13 @@ public inductive SourceDerivation : Term → Term → Nat → Prop where
       SourceDerivation (.ifBool condition whenTrue whenFalse) result (conditionCost+resultCost+1)
   | done {value result : Term} {cost : Nat} :
       SourceDerivation value result cost → SourceDerivation (.done value) result (cost+1)
+
+theorem sourceDerivation_hole_false {n : Nat} {payload : List Term} {v : Term} {cost : Nat}
+    (d : SourceDerivation (.hole n payload) v cost) : False := by
+  obend_cases d with []
+  case value h => obend_cases h with []
+
+#assert_axioms sourceDerivation_hole_false
 
  theorem sourceSteps_lift (context : Term → Term)
     (compatible : ∀ {first second}, Step first second → Step (context first) (context second))
@@ -2414,6 +2422,8 @@ so no source step is claimed or needed. -/
             | suspended origin => exact graph_enter_suspended_names represented control found
             | cached origin value => exact graph_enter_cached_names represented control found
             | evaluating origin => simp [stepRaw,control,found,ResultControl] at successful
+      evaluate_hole := fun state n payload environment control represented successful => by
+        obend_cases payload with [stepRaw, control, ResultControl]
       evaluate_bound := fun state index environment control represented successful => by
         cases found : environment[index]? with
         | none => simp [stepRaw,control,found,ResultControl] at successful
@@ -2783,6 +2793,8 @@ fault/blackhole successors are proved independently in DemandInvariant. -/
             | suspended origin => exact graph_enter_suspended represented control found
             | cached origin value => exact graph_enter_cached represented control found
             | evaluating origin => simp [stepRaw,control,found,ResultControl] at successful
+      evaluate_hole := fun state n payload environment control represented successful => by
+        obend_cases payload with [stepRaw, control, ResultControl]
       evaluate_bound := fun state index environment control represented successful => by
         cases found : environment[index]? with
         | none => simp [stepRaw,control,found,ResultControl] at successful
@@ -4441,6 +4453,7 @@ Fault exclusion is a separate source-termination consequence. -/
           | evaluating origin => simp [stepRaw,control,found,ResultControl] at successful
   | evaluate term environment =>
       cases term with
+      | hole n payload => obend_cases payload with [stepRaw, control, ResultControl]
       | bound index =>
           cases found : environment[index]? with
           | none => simp [stepRaw,control,found,ResultControl] at successful
@@ -4810,6 +4823,16 @@ actual next raw control is running/finished, with no typed-domain premise. -/
           | suspended origin | cached origin value => simp [stepRaw,control,found,ResultControl]
   | evaluate term environment =>
       cases term <;> try simp [stepRaw,control,ResultControl]
+      case hole n payload =>
+        obtain ⟨_,_,_,_,_,focus,current,stack⟩ := represented
+        have aligned : focus = closeTerm meaning environment (.hole n payload) := by
+          simpa [controlMeaning,control] using current.symm
+        subst focus
+        obtain ⟨cost,whole⟩ := source_evaluates_derivation
+          (sourceSteps_evaluates_tail (stackRealizes_erases stack) terminates)
+        obtain ⟨_,_,demand,_⟩ := stack_derivation_demand whole
+        cases environment <;> simp only [closeTerm,Term.substitute] at demand
+        all_goals exact False.elim (sourceDerivation_hole_false demand)
       case perform plan =>
         -- A terminating source never demands a perform: it has no derivation.
         exfalso

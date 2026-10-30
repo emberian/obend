@@ -16,6 +16,7 @@ needed: `insertCanonical` is first-match, and the two facts it rests on
 public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.AxiomPin
+public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Templates
 open Obend.Core.Ty
 set_option autoImplicit false
@@ -421,6 +422,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
     refine ⟨?_, ?_, ?_⟩
     · intro annotations context position term result h
       cases term with
+      | hole _ _ => obend_cases fuel with [infer]
       | bound index =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨binding, found, h⟩ := h

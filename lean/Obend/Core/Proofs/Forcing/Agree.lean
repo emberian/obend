@@ -203,6 +203,9 @@ public theorem agree_stepRaw {f : Nat → Nat} {D U : Nat → Prop} {s t : State
   | evaluate term env =>
     have envIn : AllIn D env := controlIn
     cases term with
+    | hole _ payload =>
+      obend_cases payload with []
+      all_goals exact ⟨hr, allIn_nil D, rfl, stackIn, rfl⟩
     | bound i =>
       simp only [stepRaw, renameControl]
       rw [List.getElem?_map]
