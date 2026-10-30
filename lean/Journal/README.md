@@ -24,7 +24,18 @@ one experiment (`tools/journal/EXPERIMENT-20261030.md`).
 
 **What it does not claim.** The verdict is a dependency reading, not a re-check: PROOF-CITED means
 the kernel should look again, not that the proof fails; UNAFFECTED means no tree constant the
-theorem reaches changed meaning, under this hash (64-bit structural, not cryptographic) and this
-notion of meaning (toolchain constants are a fixed background; a `lean-toolchain` bump is not read). A theorem
+theorem reaches changed meaning, under this hash and this notion of meaning (toolchain constants are a fixed background; a `lean-toolchain` bump is not read). A theorem
 whose own statement changed is REVISED, outside any slot: nothing says the new statement succeeds
 the old. Exports of a tree with uncommitted edits compare those edits too.
+
+**Equal hashes are evidence, not equality.** A meaning is a 64-bit non-cryptographic structural
+hash. When `holdsIn` finds the old and new hash equal it calls the support held; a collision would
+make a changed constant read as unchanged, and an UNAFFECTED verdict would carry that silently.
+Accidental collisions between two exports are unlikely; a deliberately crafted one is not excluded.
+Different hashes from the same exporter do mean different terms, so a dead support (STATEMENT-CITED, PROOF-CITED,
+withdrawn) is exact.
+
+**The closure.** `mem_closure_iff` proves a name is in a theorem's support closure exactly when a
+finite meaning-edge path from its citations reaches it. Before 2026-10-30 the walk could stop early
+on a convergent graph; `tools/journal/ClosureTooth.lean` (`teeth.sh` (c)) is the counterexample,
+checked by the kernel against the old definition and the new.

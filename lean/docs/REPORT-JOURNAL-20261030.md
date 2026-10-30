@@ -153,3 +153,69 @@ plus its axioms and everything else's its type plus body. It is the memo's contr
 why the journal does not call `T : f = 7` unaffected when `f`'s body moves. It is also larger,
 noisier on a definitional redesign, and a departure from the words of the brief. The flat scheme is
 two one-line changes away; the closure is the one I would defend.
+
+## 8. 2026-10-30, later: the closure fix (lane Journal-fix, Claude Opus 5.5)
+
+On `LANE-JOURNAL-FIX-BRIEF-20261030.md`, answering item 1 of `review/KIMI-REVIEW-20261030.md`.
+
+**What was wrong (READ).** `closure` gave its depth-first walk fuel `E.size + seeds.length + 1` and
+spent one unit on every pop, including a pop of a name already seen. A convergent graph pays for
+each repeat: Kimi's seven rows (`R` cites `[A,B,C,D,Z]`, `A..D` each cite `X`) give fuel 9, the walk
+pops `R A X B X C X D X` and stops with `Z` on its stack, so a change to `Z` alone reads UNAFFECTED
+for every theorem whose statement reaches `R`. The `(name, meaning)` closure of D1 was exactly the
+feature that failed.
+
+**What changed.** `Journal.Journal` now has a generic walk (`walk`, `closureBy`) over an edge
+function and a `VisitSet` (membership, insertion, two laws). A pop first drops every already-seen
+name off the stack (`dropWhile`), so fuel pays only for a new name, and `closureBy` gives
+`seeds.length + bound + 1` where `bound` is the length of a list holding every edge target. For an
+export that list is `E.targets` (every row's meaning edges, with repetition); `closure E seeds :=
+closureWithin E E.targets.length seeds`. `report` computes the bound once and calls
+`candidateWithin`, which is `candidateOf` with that bound passed in. The output order (depth-first
+preorder) is unchanged. The journal runs the walk on `hashVisit` (a `Std.HashSet String`); the tooth
+runs the same walk on `listVisit`, because the kernel cannot evaluate `String.hash`.
+
+**The theorem.**
+
+    theorem mem_closure_iff (E : Export) (seeds : List String) (x : String) :
+        x ∈ closure E seeds ↔ Reach (edgesIn E) seeds x
+
+where `Reach edges seeds` is the inductive "a seed, or one edge on from a reached name", i.e. the end
+of a finite path. Completeness (the `←` direction, also stated as `closure_complete`) rests on
+`walk_complete`: while the visited set agrees with the accumulator, every accumulated name's edges
+land in the accumulator or on the stack, and the fuel exceeds the number of unvisited names in
+`seeds ++ targets`, the walk ends with a list containing the accumulator and the stack and closed
+under edges. Each new visit strictly shrinks that count (`length_filter_lt`), so the fuel never runs
+out first. Soundness (`walk_sound`) is the plain invariant that everything visited or stacked is
+reachable. The generic form is `mem_closureBy_iff`; `mem_closureWithin_iff` holds for any bound at
+least `E.targets.length`. Axioms: `propext`, `Classical.choice`, `Quot.sound`. No `sorry`.
+
+**The tooth** (`tools/journal/ClosureTooth.lean`, `teeth.sh` (c), MEASURED passing). It keeps the old
+definition as `oldClosureBy` over the same `VisitSet`, and states completeness at the graph as
+`Complete cl := ∀ x, Reach edges ["R"] x → x ∈ cl`. `old_refuted : ¬ Complete oldClosure` is
+`decide` after one `Reach` step to `Z`; the kernel evaluates the old walk to
+`["R","A","X","B","C","D"]` and the new one to `["R","A","X","B","C","D","Z"]`; `new_complete` is
+`mem_closureBy_iff` at the graph. `#guard_msgs` pins the three theorems' axiom sets, so a `sorry`
+fails the tooth.
+
+**On the real tree (MEASURED once, scratch script, not committed).** On `env-b3ddd73.jsonl` (10659
+rows, 94146 meaning-edge targets) the old and the new closure agree on every one of the 6063
+theorems' type and value citations: the bug did not bite on the baseline (its fuel, about 10660, was
+never exhausted there). The committed reports and the experiment stand as written. `journal diff`
+of the baseline against itself still runs in about 1 s. Teeth (a) and (b) were not rerun: they edit
+`Obend/Slot*.lean` in place while other lanes work in the checkout, and since the closures agree on
+the baseline, they cannot have changed.
+
+**What I would still not trust.**
+- The hash (now said in the README and the module docstring): equal 64-bit non-cryptographic hashes
+  are evidence of equal meaning, not equality. `holdsIn` treats them as equality; a collision makes
+  a changed support read as holding and can make a theorem UNAFFECTED that is not. Dead supports are
+  exact.
+- The theorem is about `closure` as a function of an `Export`; it says nothing about whether the
+  exporter's cites are the right edges (D3's unchecked `axiomsOf`, the `proj`-structure cites).
+- `verdict`/`report` are tied to the closure only by definition (`report` calls `candidateWithin
+  old old.targets.length`, which is `candidateOf`); there is no theorem that a theorem is UNAFFECTED
+  only if no reachable support changed. That would be the next one to state.
+- The tooth runs the walk on a list visited set; the journal runs it on a hash set. Both are
+  instances of the one `walk`, and `hashVisit`'s laws are proved from `Std.HashSet`'s lemmas, but
+  the kernel never evaluated the hash-set instance.

@@ -5,6 +5,9 @@
 #       journal lists `no_foresight` under PROOF-CITED and nowhere else.
 #   (b) swap the order of two independent declarations (`dead_eq_nil_iff`, `mem_dead_iff` in
 #       `Obend/Slot.lean`): the journal flags nothing.
+#   (c) Kimi's seven-row graph (`tools/journal/ClosureTooth.lean`): the kernel, by `decide`, finds the
+#       pre-2026-10-30 closure missing `Z` (refuting the completeness statement) and the current one
+#       complete. Runs first: it needs only `Journal.Journal` built, no export.
 # Each edit is applied and inverted by exact text, so the files are as they were when this exits.
 # The teeth live in the `Obend.Slot` subtree: only its modules are built and exported (`--only`), so a
 # red module elsewhere in the tree (another lane's proof in progress) does not stop them.
@@ -62,6 +65,10 @@ section() {  # $1 report file, $2 section title: the names listed under it (inde
 SLOT_TARGETS="+Obend.Slot +Obend.Slot.Protocol +Obend.Slot.Calculus +Obend.Slot.Core4 +Obend.Slot.Proofs.ProtocolTyping +Obend.Slot.Proofs.Protocol +Obend.Slot.Proofs.Negotiation journal"
 build() { lake build $SLOT_TARGETS > "$1" 2>&1; }
 export_only() { lake env .lake/build/bin/journal export --only Obend.Slot --out "$1"; }
+
+echo "== (c) closure completeness on Kimi's seven-row graph"
+lake build Journal.Journal > "$OUT/teeth-build-c.log" 2>&1 || { echo "Journal.Journal not green; see $OUT/teeth-build-c.log"; exit 1; }
+lake env lean "$J/ClosureTooth.lean" > "$OUT/teeth-c.log" 2>&1; check "(c) old closure refuted, new closure complete (ClosureTooth.lean)" $?
 
 echo "== Slot subtree green, export before"
 build "$OUT/teeth-build-0.log" || { echo "Slot subtree not green; see $OUT/teeth-build-0.log"; exit 1; }

@@ -44,6 +44,19 @@ Where `Slot` does not fit, and what is outside it:
 Toolchain constants (`Init`, `Std`, `Lean`) are not rows: the export records the toolchain once and
 the journal treats its constants as a fixed background. A toolchain bump is not a redesign this
 journal reads.
+The closure is a depth-first walk whose fuel is spent only on a name not yet visited, and is more
+than the names it can find (the seeds plus every meaning-edge target of the export, with
+repetition). `mem_closure_iff`: a name is in `closure E seeds` exactly when a finite meaning-edge
+path from a seed ends at it. Until 2026-10-30 the fuel was `rows + seeds + 1` and every pop spent
+one, repeats included, so a convergent graph could stop the walk with reachable names unvisited
+(Kimi's seven-row graph, `tools/journal/ClosureTooth.lean`, by `decide`).
+
+A MEANING is a 64-bit structural hash (`mixHash`, not cryptographic), so equal meanings are evidence
+that two declarations mean the same, not proof. `holdsIn` compares hashes: a support it calls
+holding may have changed under a collision, and an UNAFFECTED verdict inherits that. Nothing here
+was chosen to resist an adversary who picks the edit; an accidental collision on one name between
+two exports is the 2^-64 kind of event, a crafted one is not ruled out. A dead support is exact
+(different hashes are different terms); only "holds" carries the caveat.
 -/
 public import Obend.Slot
 public import Std.Data.HashMap
@@ -93,23 +106,273 @@ everything its value cites unless the value is a proof. -/
 def Row.meaningEdges (r : Row) : List String :=
   if r.kind == "theorem" then r.typeCites else r.typeCites ++ r.valueCites
 
-/-- Every constant reachable from `seeds` along meaning edges in `E`, `seeds` included (names not
-in `E` are toolchain background or vanished: kept as names, not followed). Depth-first with a
-visited set; `fuel` bounds the walk by the export's size, which the closure cannot exceed. -/
+/-- What the walk asks of its visited set: membership, insertion, and the two laws the
+completeness proof reads. -/
+structure VisitSet (α σ : Type) where
+  empty : σ
+  contains : σ → α → Bool
+  insert : σ → α → σ
+  contains_empty : ∀ a, contains empty a = false
+  contains_insert : ∀ s a b, contains (insert s a) b = true ↔ b = a ∨ contains s b = true
+
+/-- The visited set the journal runs on. -/
+def hashVisit : VisitSet String (Std.HashSet String) where
+  empty := {}
+  contains s a := s.contains a
+  insert s a := s.insert a
+  contains_empty _ := Std.HashSet.contains_empty
+  contains_insert s a b := by
+    show (s.insert a).contains b = true ↔ _
+    rw [Std.HashSet.contains_insert, Bool.or_eq_true, beq_iff_eq]
+    exact ⟨fun h => h.imp_left Eq.symm, fun h => h.imp_left Eq.symm⟩
+
+/-- A list as a visited set: what a kernel `decide` can evaluate (the hash set's `String.hash` is
+opaque to the kernel). -/
+def listVisit (α : Type) [DecidableEq α] : VisitSet α (List α) where
+  empty := []
+  contains s a := s.contains a
+  insert s a := a :: s
+  contains_empty _ := rfl
+  contains_insert s a b := by simp
+
+section Walk
+variable {α σ : Type}
+
+/-- Depth-first from `stack`, with `seen` the names already in `acc`. A pop first skips the names
+already seen (`dropWhile`), so `fuel` pays for a NEW name only: the walk stops early only if more
+names are new than `fuel`, and `closureBy` gives it more fuel than there are names to find. -/
+def walk (V : VisitSet α σ) (edges : α → List α) :
+    Nat → List α → σ → List α → List α
+  | 0, _, _, acc => acc.reverse
+  | fuel + 1, stack, seen, acc =>
+    match stack.dropWhile (V.contains seen) with
+    | [] => acc.reverse
+    | n :: rest => walk V edges fuel (edges n ++ rest) (V.insert seen n) (n :: acc)
+
+/-- Everything reachable from `seeds` along `edges`, `seeds` included, in depth-first preorder.
+`bound` is the length of a list holding every edge target (`closureBy_complete`): with
+`seeds.length + bound + 1` fuel the walk cannot run dry before its stack does. -/
+def closureBy (V : VisitSet α σ) (edges : α → List α) (bound : Nat) (seeds : List α) : List α :=
+  walk V edges (seeds.length + bound + 1) seeds V.empty []
+
+/-- `x` is reached from `seeds` by a finite path along `edges`: a seed, or one edge on from a
+reached name. -/
+inductive Reach (edges : α → List α) (seeds : List α) : α → Prop
+  | seed {s : α} : s ∈ seeds → Reach edges seeds s
+  | step {n m : α} : Reach edges seeds n → m ∈ edges n → Reach edges seeds m
+
+/-! ## The walk is complete and sound -/
+
+theorem dropWhile_mem {p : α → Bool} : ∀ {l : List α} {x : α},
+    x ∈ l → x ∈ l.dropWhile p ∨ p x = true
+  | [], _, h => by simp at h
+  | y :: ys, x, h => by
+    rw [List.dropWhile_cons]
+    by_cases hy : p y = true
+    · simp only [hy, if_true]
+      rcases List.mem_cons.1 h with rfl | h
+      · exact .inr hy
+      · exact dropWhile_mem h
+    · simp only [hy]
+      exact .inl h
+
+theorem mem_of_mem_dropWhile {p : α → Bool} : ∀ {l : List α} {x : α},
+    x ∈ l.dropWhile p → x ∈ l
+  | [], _, h => by simp at h
+  | y :: ys, x, h => by
+    rw [List.dropWhile_cons] at h
+    split at h
+    · exact List.mem_cons_of_mem _ (mem_of_mem_dropWhile h)
+    · exact h
+
+theorem head_dropWhile {p : α → Bool} {l : List α} {n : α} {rest : List α}
+    (h : l.dropWhile p = n :: rest) : p n = false := by
+  have := List.head_dropWhile_not p (l := l) (by simp [h])
+  simpa [h] using this
+
+/-- Strictly fewer elements pass a filter that is weaker everywhere and fails somewhere it held. -/
+theorem length_filter_lt {p q : α → Bool} : ∀ {U : List α},
+    (∀ x ∈ U, q x = true → p x = true) → (∃ y ∈ U, p y = true ∧ q y = false) →
+    (U.filter q).length < (U.filter p).length
+  | [], _, ⟨_, hy, _⟩ => by simp at hy
+  | u :: us, hqp, ⟨y, hy, hpy, hqy⟩ => by
+    have hqp' : ∀ x ∈ us, q x = true → p x = true := fun x hx => hqp x (List.mem_cons_of_mem _ hx)
+    rcases List.mem_cons.1 hy with rfl | hy'
+    · have := List.length_filter_le q us
+      have hle : (us.filter q).length ≤ (us.filter p).length := by
+        clear hy hqp hpy hqy this
+        induction us with
+        | nil => simp
+        | cons v vs ih =>
+          have hv := hqp' v (by simp)
+          simp only [List.filter_cons]
+          split <;> split <;> simp_all <;> omega
+      simp [hpy, hqy]
+      omega
+    · have ih := length_filter_lt hqp' ⟨y, hy', hpy, hqy⟩
+      simp only [List.filter_cons]
+      have hu := hqp u (by simp)
+      split <;> split <;> simp_all <;> omega
+
+/-- The names of `U` not yet seen: the measure the walk's fuel outlasts. -/
+def unseen (V : VisitSet α σ) (seen : σ) (U : List α) : Nat :=
+  (U.filter (fun x => !V.contains seen x)).length
+
+theorem walk_complete (V : VisitSet α σ) (edges : α → List α) (U : List α)
+    (hU : ∀ n, ∀ m ∈ edges n, m ∈ U) :
+    ∀ (fuel : Nat) (stack : List α) (seen : σ) (acc : List α),
+      (∀ x, V.contains seen x = true ↔ x ∈ acc) →
+      (∀ x ∈ stack, x ∈ U) →
+      (∀ x ∈ acc, ∀ y ∈ edges x, y ∈ acc ∨ y ∈ stack) →
+      unseen V seen U < fuel →
+      ∃ R : List α, walk V edges fuel stack seen acc = R.reverse ∧ (∀ x ∈ acc, x ∈ R) ∧
+        (∀ x ∈ stack, x ∈ R) ∧ (∀ x ∈ R, ∀ y ∈ edges x, y ∈ R)
+  | 0, _, _, _, _, _, _, hf => absurd hf (Nat.not_lt_zero _)
+  | fuel + 1, stack, seen, acc, hseen, hstack, hclosed, hf => by
+    -- a name of `stack` the pop skips is already in `acc`
+    have hskip : ∀ x ∈ stack, x ∈ stack.dropWhile (V.contains seen) ∨ x ∈ acc := fun x hx =>
+      (dropWhile_mem hx).imp_right (hseen x).1
+    unfold walk
+    split
+    · rename_i hnil
+      refine ⟨acc, rfl, fun x hx => hx, fun x hx => ?_, fun x hx y hy => ?_⟩
+      · simpa [hnil] using hskip x hx
+      · rcases hclosed x hx y hy with h | h
+        · exact h
+        · simpa [hnil] using hskip y h
+    · rename_i n rest hcons
+      have hn : V.contains seen n = false := head_dropWhile hcons
+      have hnU : n ∈ U := hstack n (mem_of_mem_dropWhile (by rw [hcons]; simp))
+      have hrest : ∀ x ∈ rest, x ∈ stack := fun x hx =>
+        mem_of_mem_dropWhile (by rw [hcons]; exact List.mem_cons_of_mem _ hx)
+      obtain ⟨R, hw, hacc, hst, hR⟩ := walk_complete V edges U hU fuel (edges n ++ rest)
+        (V.insert seen n) (n :: acc)
+        (fun x => by rw [V.contains_insert, hseen]; simp)
+        (fun x hx => by
+          rcases List.mem_append.1 hx with h | h
+          · exact hU n x h
+          · exact hstack x (hrest x h))
+        (fun x hx y hy => by
+          rcases List.mem_cons.1 hx with rfl | hx
+          · exact .inr (List.mem_append_left _ hy)
+          · rcases hclosed x hx y hy with h | h
+            · exact .inl (List.mem_cons_of_mem _ h)
+            · rcases hskip y h with h | h
+              · rw [hcons] at h
+                rcases List.mem_cons.1 h with rfl | h
+                · exact .inl (by simp)
+                · exact .inr (List.mem_append_right _ h)
+              · exact .inl (List.mem_cons_of_mem _ h))
+        (by
+          have : unseen V (V.insert seen n) U < unseen V seen U := by
+            apply length_filter_lt
+            · intro x _ hx
+              simp only [Bool.not_eq_true'] at hx ⊢
+              cases h : V.contains seen x
+              · rfl
+              · have := (V.contains_insert seen n x).2 (.inr h)
+                simp_all
+            · refine ⟨n, hnU, by simp [hn], ?_⟩
+              simp [(V.contains_insert seen n n).2 (.inl rfl)]
+          omega)
+      refine ⟨R, hw, fun x hx => hacc x (List.mem_cons_of_mem _ hx), fun x hx => ?_, hR⟩
+      rcases hskip x hx with h | h
+      · rw [hcons] at h
+        rcases List.mem_cons.1 h with rfl | h
+        · exact hacc x (by simp)
+        · exact hst x (List.mem_append_right _ h)
+      · exact hacc x (List.mem_cons_of_mem _ h)
+
+theorem walk_sound (V : VisitSet α σ) (edges : α → List α) (seeds : List α) :
+    ∀ (fuel : Nat) (stack : List α) (seen : σ) (acc : List α),
+      (∀ x ∈ acc, Reach edges seeds x) → (∀ x ∈ stack, Reach edges seeds x) →
+      ∀ x ∈ walk V edges fuel stack seen acc, Reach edges seeds x
+  | 0, _, _, _, hacc, _ => by simpa [walk] using hacc
+  | fuel + 1, stack, seen, acc, hacc, hstack => by
+    unfold walk
+    split
+    · simpa using hacc
+    · rename_i n rest hcons
+      have hn : Reach edges seeds n := hstack n (mem_of_mem_dropWhile (by rw [hcons]; simp))
+      refine walk_sound V edges seeds fuel _ _ _ (fun x hx => ?_) (fun x hx => ?_)
+      · rcases List.mem_cons.1 hx with rfl | hx
+        · exact hn
+        · exact hacc x hx
+      · rcases List.mem_append.1 hx with h | h
+        · exact .step hn h
+        · exact hstack x (mem_of_mem_dropWhile (by rw [hcons]; exact List.mem_cons_of_mem _ h))
+
+/-- CLOSURE COMPLETENESS AND SOUNDNESS. When every edge target is in a list `T` of length at most
+`bound`, a name is in `closureBy` exactly when a finite path along `edges` from a seed ends at it. -/
+theorem mem_closureBy_iff (V : VisitSet α σ) (edges : α → List α) (bound : Nat) (seeds : List α)
+    (T : List α) (hT : ∀ n, ∀ m ∈ edges n, m ∈ T) (hb : T.length ≤ bound) (x : α) :
+    x ∈ closureBy V edges bound seeds ↔ Reach edges seeds x := by
+  constructor
+  · exact walk_sound V edges seeds _ _ _ _ (by simp) (fun _ h => .seed h) x
+  · intro hx
+    obtain ⟨R, hw, -, hst, hR⟩ := walk_complete V edges (seeds ++ T)
+      (fun n m h => List.mem_append_right _ (hT n m h)) (seeds.length + bound + 1) seeds V.empty []
+      (by simp [V.contains_empty]) (fun x h => List.mem_append_left _ h) (by simp)
+      (by
+        have : unseen V V.empty (seeds ++ T) ≤ (seeds ++ T).length := List.length_filter_le _ _
+        simp at this; omega)
+    unfold closureBy
+    rw [hw, List.mem_reverse]
+    induction hx with
+    | seed h => exact hst _ h
+    | step _ hm ih => exact hR _ ih _ hm
+
+end Walk
+
+/-! ## The closure of an export -/
+
+/-- One step of meaning edges in `E`: a name not in `E` (toolchain background, or vanished) is kept
+as a name and not followed. -/
+def edgesIn (E : Export) (n : String) : List String :=
+  match E[n]? with
+  | some r => r.meaningEdges
+  | none => []
+
+/-- Every meaning-edge target in `E`, with repetition: its length bounds the names the closure can
+find beyond its seeds. -/
+def Export.targets (E : Export) : List String :=
+  E.toList.flatMap fun p => p.2.meaningEdges
+
+/-- `closure` with the bound computed once by the caller (`report` reads every theorem of one
+export, and `E.targets` is a pass over all of it). -/
+def closureWithin (E : Export) (bound : Nat) (seeds : List String) : List String :=
+  closureBy hashVisit (edgesIn E) bound seeds
+
+/-- Every constant reachable from `seeds` along meaning edges in `E`, `seeds` included, in
+depth-first preorder. `mem_closure_iff`: exactly the names a finite meaning-edge path from a seed
+ends at. -/
 def closure (E : Export) (seeds : List String) : List String :=
-  let rec go (fuel : Nat) (stack : List String) (seen : Std.HashSet String) (acc : List String) :
-      List String :=
-    match fuel, stack with
-    | 0, _ => acc.reverse
-    | _, [] => acc.reverse
-    | fuel + 1, n :: rest =>
-      if seen.contains n then go fuel rest seen acc
-      else
-        let next := match E[n]? with
-          | some r => r.meaningEdges
-          | none => []
-        go fuel (next ++ rest) (seen.insert n) (n :: acc)
-  go (E.size + seeds.length + 1) seeds {} []
+  closureWithin E E.targets.length seeds
+
+theorem edgesIn_sub_targets (E : Export) (n : String) : ∀ m ∈ edgesIn E n, m ∈ E.targets := by
+  intro m hm
+  unfold edgesIn at hm
+  split at hm
+  · rename_i r hr
+    exact List.mem_flatMap.2 ⟨(n, r), Std.HashMap.mem_toList_iff_getElem?_eq_some.2 hr, hm⟩
+  · simp at hm
+
+/-- CLOSURE COMPLETENESS (and soundness): a name is in `closureWithin E bound seeds`, for any
+`bound` at least `E.targets.length`, exactly when a finite meaning-edge path in `E` from a seed ends
+at it. -/
+theorem mem_closureWithin_iff (E : Export) (bound : Nat) (hb : E.targets.length ≤ bound)
+    (seeds : List String) (x : String) :
+    x ∈ closureWithin E bound seeds ↔ Reach (edgesIn E) seeds x :=
+  mem_closureBy_iff hashVisit (edgesIn E) bound seeds E.targets (edgesIn_sub_targets E) hb x
+
+theorem mem_closure_iff (E : Export) (seeds : List String) (x : String) :
+    x ∈ closure E seeds ↔ Reach (edgesIn E) seeds x :=
+  mem_closureWithin_iff E _ (Nat.le_refl _) seeds x
+
+/-- Every finite meaning-edge path from a seed ends in the closure. -/
+theorem closure_complete (E : Export) (seeds : List String) (x : String)
+    (h : Reach (edgesIn E) seeds x) : x ∈ closure E seeds :=
+  (mem_closure_iff E seeds x).2 h
 
 /-- A support: a constant at a meaning, in the role its citation plays for the theorem. -/
 inductive Support where
@@ -141,16 +404,20 @@ structure Candidate where
 citations; proof supports are the closure of the value's citations minus the statement's. A name
 the old export lacks (a toolchain constant that slipped the filter, or a vanished one) gets meaning
 `0`; the citation lists are tree-only, so this does not occur on an export of the tree. -/
-def candidateOf (old : Export) (r : Row) : Candidate :=
+def candidateWithin (old : Export) (bound : Nat) (r : Row) : Candidate :=
   let meaningIn (n : String) : UInt64 := match old[n]? with
     | some s => s.meaning
     | none => 0
-  let stmtNames := closure old r.typeCites
+  let stmtNames := closureWithin old bound r.typeCites
   let stmtSet : Std.HashSet String := stmtNames.foldl (·.insert ·) {}
-  let proofNames := (closure old r.valueCites).filter (fun n => !stmtSet.contains n)
+  let proofNames := (closureWithin old bound r.valueCites).filter (fun n => !stmtSet.contains n)
   { name := r.name
     stmtSupports := stmtNames.map fun n => .stmt n (meaningIn n)
     proofSupports := proofNames.map fun n => .proof n (meaningIn n) }
+
+/-- The candidate of theorem `r` in export `old`, its supports closed by `closure`. -/
+def candidateOf (old : Export) (r : Row) : Candidate :=
+  candidateWithin old old.targets.length r
 
 /-- A support holds at a view when the view has the constant at that meaning. -/
 def holdsIn (new : Export) (s : Support) : Bool :=
@@ -259,6 +526,7 @@ def report (old new : Export) : Report :=
     | none => some (.removed r.name)
     | some s => if s.meaning == r.meaning then none else some (.changed r.name r.meaning s.meaning)
   let thms := oldRows.filter Row.isTheorem
+  let bound := old.targets.length
   let init : Report :=
     { withdrawn, revised := [], statementCited := [], proofCited := [], unaffected := [],
       reproved := [], added := [], removed := [] }
@@ -266,7 +534,7 @@ def report (old new : Export) : Report :=
     match new[r.name]? with
     | none => { rep with removed := r.name :: rep.removed }
     | some s =>
-      let v := verdict new (candidateOf old r)
+      let v := verdict new (candidateWithin old bound r)
       if s.meaning != r.meaning then { rep with revised := (r.name, v) :: rep.revised }
       else match v with
         | .unaffected =>
