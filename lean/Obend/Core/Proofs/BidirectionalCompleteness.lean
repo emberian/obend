@@ -954,4 +954,177 @@ widen the fragment to everything and its stored proof is rejected. -/
 #assert_axioms complete checkAgainst_complete checked_covered_accepted appliedLambda_boundary coverage_premise_needed
   appliedLambda_annotated_checks whnf_of_sameType callable_canonical isData_canonical rowMember_canonical
 
+/-! ## Uses are determined by the term, so a certificate is determined by its type -/
+
+mutual
+/-- The usage vector every derivation of a term computes: occurrence counts per slot of a
+context of the given length. -/
+@[expose] public def occurrences (n : Nat) : Term → Uses
+  | .bound index => (List.range n).map fun position => if position = index then 1 else 0
+  | .nat _ | .boolean _ | .label _ | .hole _ _ => List.replicate n 0
+  | .lam body => (occurrences (n + 1) body).tail
+  | .app a b | .binary _ a b | .specification a b | .prototype a b | .mix a b | .fix a b =>
+    addUses (occurrences n a) (occurrences n b)
+  | .get t _ | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t => occurrences n t
+  | .record fields => fieldOccurrences n fields
+  | .extend target fields => addUses (occurrences n target) (fieldOccurrences n fields)
+  | .ifZero v z s => addUses (occurrences n v) (addUses (occurrences n z) (occurrences (n + 1) s).tail)
+  | .case scrutinee arms => addUses (occurrences n scrutinee) (armOccurrences n arms)
+  | .ifBool c t f => addUses (occurrences n c) (addUses (occurrences n t) (occurrences n f))
+@[expose] public def fieldOccurrences (n : Nat) : List (String × Term) → Uses
+  | [] => List.replicate n 0
+  | (_, body) :: rest => addUses (occurrences n body) (fieldOccurrences n rest)
+@[expose] public def armOccurrences (n : Nat) : List (String × Term) → Uses
+  | [] => List.replicate n 0
+  | (_, body) :: rest => addUses (occurrences (n + 1) body).tail (armOccurrences n rest)
+end
+
+/-- Every derivation of a term computes the same usage vector. -/
+public theorem uses_determined {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty}
+    {uses : Uses} (typed : PartialTyping assumptions context term type uses) :
+    uses = occurrences context.length term := by
+  refine PartialTyping.rec
+    (motive_1 := fun context term _ uses _ => uses = occurrences context.length term)
+    (motive_2 := fun context fields _ uses _ => uses = fieldOccurrences context.length fields)
+    (motive_3 := fun context arms _ _ uses _ => uses = armOccurrences context.length arms)
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+  all_goals intros
+  all_goals simp_all [occurrences, fieldOccurrences, armOccurrences, variableUses, zeroUses]
+
+/-- Two certificates for the same term and context with the same type are the same
+certificate: the type is the only free choice. -/
+public theorem Checked.eq_of_type {source : AnnotatedTerm} {context : Context} (c d : Checked source context)
+    (same : c.type = d.type) : c = d := by
+  have hc := uses_determined c.derivation
+  have hd := uses_determined d.derivation
+  cases c; cases d
+  simp only at same hc hd
+  subst same
+  have uses := hc.trans hd.symm
+  subst uses; rfl
+
+#assert_axioms uses_determined Checked.eq_of_type
+
+/-! ## What no annotation can repair: the full corollary fails for this checker
+
+A record whose label repeats is checked by synthesizing its fields (the expected row cannot
+say what the shadowed field's type is). A lambda field synthesizes an arrow, whatever its
+annotation. If the derivation converted that lambda to an alias of the arrow, the row the
+derivation has and the row the checker synthesizes differ inside a field, and agreement
+does not descend into rows (D1 of the report). So some certified term is refused under
+every annotation. -/
+
+/-- An alias of `Nat → Nat`. -/
+@[expose] public def arrowAlias : Assumptions := ⟨[(0, .arrow .reusable .unrestricted .natural .natural)], [0], []⟩
+
+@[expose] public def shadowedLambdaRecord : Term := .record [("a", .lam (.bound 0)), ("a", .nat 0)]
+
+@[expose] public def shadowedLambdaRow : Ty := .field "a" (.variable 0) (.field "a" .natural .emptyRow)
+
+@[expose] public def shadowedLambdaChecked :
+    Checked ⟨shadowedLambdaRecord, fun _ => none, arrowAlias⟩ [] :=
+  ⟨shadowedLambdaRow, [], .record (.cons
+      (.conversion (.lambda (annotation := ⟨.natural, .natural, .unrestricted, .reusable⟩)
+        (.bound (binding := ⟨.natural, .unrestricted⟩) rfl) (by decide) (by decide) (by decide)) (by decide))
+      (.cons (.natural _ _) (.nil _) rfl) rfl), rfl, rfl, rfl⟩
+
+theorem synth_lam_arrow {assumptions : Assumptions} {annotations : Annotations} {context : Context}
+    {path : List Nat} {body : Term} {r : Synth assumptions context (.lam body)}
+    (h : elaborate assumptions annotations context path (.lam body) .synth = .ok r) :
+    ∃ reuse quantity domain codomain, r.type = .arrow reuse quantity domain codomain := by
+  rw [elaborate] at h
+  simp only at h
+  split at h
+  · cases h
+  · rename_i annotation _
+    cases hw : elaborate assumptions annotations (⟨annotation.domain, annotation.parameter⟩ :: context)
+        (path ++ [0]) body (.check annotation.codomain) with
+    | error e => simp [hw, bind, Except.bind, Except.map] at h
+    | ok checked =>
+      simp only [hw, bind, Except.bind, need] at h
+      repeat' (split at h)
+      all_goals (try simp only [pure, Except.pure, Except.map, Except.ok.injEq, reduceCtorEq] at h)
+      all_goals (try exact ⟨_, _, _, _, by rw [← h]⟩)
+
+theorem shadowed_row_disagrees (reuse : Reuse) (quantity : Quantity) (domain codomain later : Ty) :
+    sameType arrowAlias (.field "a" (.arrow reuse quantity domain codomain) (.field "a" later .emptyRow))
+      shadowedLambdaRow = false := by
+  cases h : sameType arrowAlias (.field "a" (.arrow reuse quantity domain codomain) (.field "a" later .emptyRow))
+      shadowedLambdaRow
+  · rfl
+  · obtain ⟨i, j, -, -, e⟩ := (sameType_iff _ _ _).1 h
+    have fixedRow : ∀ (type : Ty), (∀ index, type.canonical ≠ .variable index) →
+        arrowAlias.unfoldHead type.canonical = type.canonical := by
+      intro type h; cases hc : type.canonical <;> simp_all [Assumptions.unfoldHead]
+    rw [chase_fixed _ (fixedRow _ (by intro k hk; cases Ty.canonical_variable_eq hk)) i,
+      chase_fixed _ (fixedRow _ (by intro k hk; cases Ty.canonical_variable_eq hk)) j] at e
+    simp only [shadowedLambdaRow, Ty.canonical, Ty.insertCanonical, if_pos rfl] at e
+    by_cases hs : later.canonical.shareable = true <;> simp [hs, Ty.shareable] at e
+
+theorem synthFields_cons_ok {assumptions : Assumptions} {annotations : Annotations} {context : Context}
+    {path : List Nat} {index : Nat} {name : String} {body : Term} {rest : List (String × Term)}
+    {r : InferredFields assumptions context ((name, body) :: rest)}
+    (h : synthFields assumptions annotations context path index ((name, body) :: rest) = .ok r) :
+    ∃ (f : Synth assumptions context body) (l : InferredFields assumptions context rest),
+      elaborate assumptions annotations context (path ++ [index]) body .synth = .ok f ∧
+      synthFields assumptions annotations context path (index + 1) rest = .ok l ∧
+      r.type = .field name f.type l.type := by
+  rw [synthFields] at h
+  cases hf : elaborate assumptions annotations context (path ++ [index]) body .synth with
+  | error e => simp [hf, bind, Except.bind] at h
+  | ok f =>
+    cases hl : synthFields assumptions annotations context path (index + 1) rest with
+    | error e => simp [hf, hl, bind, Except.bind] at h
+    | ok l =>
+      by_cases hc : (!f.type.isComputation) = true
+      · simp only [hf, hl, bind, Except.bind, need, hc, ↓reduceDIte, pure, Except.pure, Except.ok.injEq] at h
+        exact ⟨f, l, rfl, rfl, by rw [← h]⟩
+      · simp [hf, hl, bind, Except.bind, need, hc] at h
+
+theorem shadowed_fields_shape (annotations : Annotations)
+    (r : InferredFields arrowAlias [] [("a", .lam (.bound 0)), ("a", .nat 0)])
+    (h : synthFields arrowAlias annotations [] [] 0 [("a", .lam (.bound 0)), ("a", .nat 0)] = .ok r) :
+    ∃ reuse quantity domain codomain later,
+      r.type = .field "a" (.arrow reuse quantity domain codomain) (.field "a" later .emptyRow) := by
+  obtain ⟨f, l, hf, hl, hr⟩ := synthFields_cons_ok h
+  obtain ⟨reuse, quantity, domain, codomain, shape⟩ := synth_lam_arrow hf
+  obtain ⟨g, m, -, hm, hl'⟩ := synthFields_cons_ok hl
+  have empty : m.type = .emptyRow := by
+    simp only [synthFields, pure, Except.pure, Except.ok.injEq] at hm; rw [← hm]
+  exact ⟨reuse, quantity, domain, codomain, g.type, by rw [hr, shape, hl', empty]⟩
+
+/-- Under every annotation, the checker refuses the certified record at its type. -/
+public theorem shadowedLambdaRecord_refused (annotations : Annotations) :
+    (checkAgainst ⟨shadowedLambdaRecord, annotations, arrowAlias⟩ [] shadowedLambdaRow).toBool = false := by
+  have inner : (checkAt arrowAlias annotations [] [] shadowedLambdaRecord shadowedLambdaRow).toBool = false := by
+    rw [checkAt_def, shadowedLambdaRecord, elaborate]
+    simp only [introduce]
+    rw [dif_neg (by decide)]
+    cases hs : synthFields arrowAlias annotations [] [] 0 [("a", .lam (.bound 0)), ("a", .nat 0)] with
+    | error e => simp [hs, bind, Except.bind, Except.toBool]
+    | ok r =>
+      obtain ⟨reuse, quantity, domain, codomain, later, shape⟩ := shadowed_fields_shape annotations r hs
+      have refused : sameType arrowAlias r.type shadowedLambdaRow = false := by
+        rw [shape]; exact shadowed_row_disagrees _ _ _ _ _
+      simp [hs, bind, Except.bind, need, refused, Except.toBool]
+  simp only [checkAgainst]
+  cases h : checkAt arrowAlias annotations [] [] shadowedLambdaRecord shadowedLambdaRow with
+  | error e => simp [h, bind, Except.bind, Except.toBool]
+  | ok r => rw [h] at inner; simp [Except.toBool] at inner
+
+/-- The full corollary is false for this checker: a certified term no annotation makes it accept. -/
+public theorem full_corollary_fails :
+    ¬ ∀ (source : AnnotatedTerm) (context : Context) (certificate : Checked source context),
+      ∃ annotations, ∃ checked, checkAgainst { source with annotations := annotations } context certificate.type =
+        .ok checked := by
+  intro all
+  obtain ⟨annotations, checked, accepted⟩ := all _ [] shadowedLambdaChecked
+  have := shadowedLambdaRecord_refused annotations
+  simp only [shadowedLambdaChecked] at accepted
+  rw [show ({ (⟨shadowedLambdaRecord, fun _ => none, arrowAlias⟩ : AnnotatedTerm) with annotations := annotations }
+    : AnnotatedTerm) = ⟨shadowedLambdaRecord, annotations, arrowAlias⟩ from rfl, accepted] at this
+  simp [Except.toBool] at this
+
+#assert_axioms shadowedLambdaRecord_refused full_corollary_fails
+
 end Obend.Core.Proofs.BidirectionalCompleteness
