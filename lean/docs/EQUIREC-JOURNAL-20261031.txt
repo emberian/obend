@@ -1,0 +1,22 @@
+Equi-recursive migration journal checkpoints
+
+Foundation (sameType unchanged), start 5955007, dirty 130-job build:
+withdrawn supports (0)
+revised theorems (own statement meaning changed) (0)
+STATEMENT-CITED (0)
+PROOF-CITED (0)
+reproved (supports hold, proof hash differs) (1)
+added theorems (574)
+removed theorems (0)
+unaffected (9092)
+
+Exact repair sets: STATEMENT-CITED={}, PROOF-CITED={}, withdrawn={}, revised={}, removed={}.
+Reproved: {List.lookup.eq_def}. This is a generated theorem moved by extracting
+Assumptions; its statement and every reached support hold unchanged.
+
+Local full exports (ignored scratch):
+  astra/equirec/env-before.jsonl (17632 rows,121 modules,113 module files)
+  astra/equirec/env-foundation-130.jsonl (18639 rows,128 modules,120 module files)
+Full names: astra/equirec/journal-foundation-130.txt
+
+The agreement-switch repair set has not yet been measured: no switch has occurred.
