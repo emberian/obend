@@ -343,7 +343,12 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         let members ← checkFieldsByLabel assumptions annotations context path 0 (whnf assumptions expected) fields
         let ⟨hc⟩ ← need (sameType assumptions members.type expected) (.typeMismatch path expected members.type)
         pure ⟨members.uses, .conversion (.record members.derivation) hc⟩
-      else throw (.duplicateLabels path))
+      else do
+        -- a repeated label shadows: the expected row cannot say what the hidden field's type
+        -- is, so the fields are synthesized and the row converted at the mode switch
+        let row ← synthFields assumptions annotations context path 0 fields
+        let ⟨hc⟩ ← need (sameType assumptions row.type expected) (.typeMismatch path expected row.type)
+        pure ⟨row.uses, .conversion (.record row.derivation) hc⟩)
       (do
         let row ← synthFields assumptions annotations context path 0 fields
         pure ⟨row.type, row.uses, .record row.derivation⟩) mode
@@ -437,14 +442,44 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         let ⟨hu⟩ ← need (safeUses successorContext s.uses) (overuse (path ++ [2]) successorContext s.uses)
         pure ⟨z.type, addUses v.uses (addUses z.uses s.uses.tail), .ifZero v.derivation z.derivation s.derivation hu⟩)
       mode
-  | .case scrutinee arms, mode => do
+  | .case scrutinee [], mode => do
     let value ← elaborate assumptions annotations context (path ++ [0]) scrutinee .synth
-    let ⟨hd⟩ ← need (labelsDistinct arms) (.duplicateLabels path)
-    -- the case against a result type, given the scrutinee's weak-head form
-    let against (expected : Ty) : Except CheckRefusal (Against assumptions context (.case scrutinee arms) expected) :=
+    let against (expected : Ty) : Except CheckRefusal (Against assumptions context (.case scrutinee []) expected) :=
       match whnf assumptions value.type with
       | .variant row => do
-        let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected arms
+        let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected []
+        let ⟨hc⟩ ← need (sameType assumptions value.type (.variant typed.row))
+          (.typeMismatch (path ++ [0]) (.variant typed.row) value.type)
+        pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation rfl⟩
+      | .computation planType response (.variant row) =>
+        match whnf assumptions expected with
+        | .computation _ _ result => do
+          let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row
+            (.computation planType response result) []
+          let ⟨hc⟩ ← need (sameType assumptions value.type (.computation planType response (.variant typed.row)))
+            (.typeMismatch (path ++ [0]) (.computation planType response (.variant typed.row)) value.type)
+          let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced path result)
+          let ⟨he⟩ ← need (sameType assumptions (.computation planType response result) expected)
+            (.typeMismatch path expected (.computation planType response result))
+          pure ⟨addUses value.uses typed.uses, .conversion
+            (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) rfl) he⟩
+        | _ => throw (.shapeMismatch path "activity" expected)
+      | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
+    match mode with
+    | .check expected => against expected
+    | .synth =>
+      match annotations path with
+      | some annotation => (against annotation.codomain).map fun checked =>
+          (⟨annotation.codomain, checked.uses, checked.derivation⟩ : Synth assumptions context _)
+      | none => throw (.emptyCaseInSynthMode path)
+  | .case scrutinee ((name, body) :: rest), mode => do
+    let value ← elaborate assumptions annotations context (path ++ [0]) scrutinee .synth
+    let ⟨hd⟩ ← need (labelsDistinct ((name, body) :: rest)) (.duplicateLabels path)
+    let against (expected : Ty) :
+        Except CheckRefusal (Against assumptions context (.case scrutinee ((name, body) :: rest)) expected) :=
+      match whnf assumptions value.type with
+      | .variant row => do
+        let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected ((name, body) :: rest)
         let ⟨hc⟩ ← need (sameType assumptions value.type (.variant typed.row))
           (.typeMismatch (path ++ [0]) (.variant typed.row) value.type)
         pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation hd⟩
@@ -452,7 +487,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         match whnf assumptions expected with
         | .computation _ _ result => do
           let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row
-            (.computation planType response result) arms
+            (.computation planType response result) ((name, body) :: rest)
           let ⟨hc⟩ ← need (sameType assumptions value.type (.computation planType response (.variant typed.row)))
             (.typeMismatch (path ++ [0]) (.computation planType response (.variant typed.row)) value.type)
           let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced path result)
@@ -462,30 +497,28 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
             (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) hd) he⟩
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
-    -- without an ascription, the first arm's synthesized type is the result
-    let firstArm : Except CheckRefusal Ty :=
-      match arms with
-      | [] => throw (.emptyCaseInSynthMode path)
-      | (name, body) :: _ =>
-        match whnf assumptions value.type with
-        | .variant row | .computation _ _ (.variant row) =>
-          match rowMember row name with
-          | some payload => do
-            let first ← elaborate assumptions annotations (⟨payload, .unrestricted⟩ :: context)
-              (path ++ [1] ++ [0]) body .synth
-            pure first.type
-          | none => throw (.unknownLabel (path ++ [1]) name row)
-        | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
     match mode with
     | .check expected => against expected
     | .synth =>
       match annotations path with
       | some annotation => (against annotation.codomain).map fun checked =>
           (⟨annotation.codomain, checked.uses, checked.derivation⟩ : Synth assumptions context _)
-      | none => do
-        let result ← firstArm
-        let checked ← against result
-        pure ⟨result, checked.uses, checked.derivation⟩
+      | none =>
+        -- without an ascription, the first arm's synthesized type is the result
+        let row? : Option Ty := match whnf assumptions value.type with
+          | .variant row => some row
+          | .computation _ _ (.variant row) => some row
+          | _ => none
+        match row? with
+        | some row =>
+          match rowMember row name with
+          | some payload => do
+            let first ← elaborate assumptions annotations (⟨payload, .unrestricted⟩ :: context)
+              (path ++ [1] ++ [0]) body .synth
+            let checked ← against first.type
+            pure ⟨first.type, checked.uses, checked.derivation⟩
+          | none => throw (.unknownLabel (path ++ [1]) name row)
+        | none => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
 
 /-- Record fields, synthesized; positions `path ++ [index]`, `path ++ [index + 1]`, …. -/
 def synthFields (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
