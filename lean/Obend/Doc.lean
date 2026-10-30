@@ -9,6 +9,11 @@ TRUST: Lean core and `Obend.Slot` only; no axiom beyond Lean's three, no `sorry`
   edges, the order `Before` and its decided form.
 * `Obend.Doc.Patch` — `Add | Delete | Connect | SetField`, `apply`, `compose`, `invert`;
   `apply_compose`, `apply_invert`, `apply_frame`.
+* `Obend.Doc.Merge` — patch-morphisms (`Le`), the merge as pushout with its universal property
+  (`merge_isPushout`, `pushout_unique`, `no_cocone`), files as the plain category with Mimram–Di
+  Giusto's diagram (3) having no pushout there (`Teeth.files_no_pushout`), and the linearization
+  whose conflicts are the antichains of heads (`content`, `walk_conflict`).
 -/
 public import Obend.Doc.Graph
 public import Obend.Doc.Patch
+public import Obend.Doc.Merge
