@@ -1,6 +1,7 @@
 module
 /- Lexical invariants for the partial Objective Bend edition. These proofs do
 not assert totality, ownership of native effects, or source/heap adequacy. -/
+public import Obend.Core.TermTraverse
 public import Obend.Core.Machine
 public import Obend.AxiomPin
 @[expose] public section
@@ -160,171 +161,57 @@ inductive Scoped : Nat → Term → Prop where
   · intro h; cases h; assumption
   · intro h; exact .done h
 
+/-- The syntax encoding's binder has exactly the source lexical policy. -/
+theorem shape_scoped_bind {Tag : Type} (n : Nat) (body : Traverse.Tree Tag) :
+    Traverse.Tree.Scoped n (.bind body) ↔ Traverse.Tree.Scoped (n+1) body := by
+  simp only [Traverse.Tree.Scoped, Traverse.Tree.All]
+  apply Traverse.Tree.all_congr
+  intro i; cases i <;> simp +arith
+
+theorem shape_forall_true {α : Type} : (∀ _ : α, True) ↔ True := ⟨fun _ => trivial, fun _ _ => trivial⟩
+
+theorem shape_scoped_node {Tag : Type} (n : Nat) (tag : Tag) (children : List (Traverse.Tree Tag)) :
+    Traverse.Tree.Scoped n (.node tag children) ↔ ∀ c ∈ children, Traverse.Tree.Scoped n c := by
+  simp only [Traverse.Tree.Scoped, Traverse.Tree.All]
+
+/-- The machine's lexical invariant agrees with the generic syntax traversal. -/
+theorem scoped_encode_iff (n : Nat) (t : Term) : Scoped n t ↔ TermTraverse.Scoped n t := by
+  cases t <;> simp only [scoped_bound_iff, scoped_lam_iff, scoped_app_iff, scoped_mix_iff,
+    scoped_fix_iff, scoped_specification_iff, scoped_prototype_iff, scoped_reflect_iff,
+    scoped_metadata_iff, scoped_project_iff, scoped_binary_iff, scoped_extend_iff,
+    scoped_record_iff, scoped_get_iff, scoped_condition_iff, scoped_inject_iff,
+    scoped_case_iff, scoped_ifBool_iff, scoped_perform_iff, scoped_done_iff,
+    TermTraverse.Scoped, TermTraverse.encode, shape_scoped_bind, shape_scoped_node,
+    List.mem_cons, List.not_mem_nil, forall_eq_or_imp, forall_false,
+    List.mem_map, forall_exists_index, and_imp, forall_apply_eq_imp_iff₂, shape_forall_true, and_true]
+  all_goals first
+    | (constructor <;> intro h <;> first | trivial | constructor; done)
+    | (simp only [Traverse.Tree.Scoped, Traverse.Tree.All]; done)
+    | (repeat first
+        | apply and_congr
+        | exact scoped_encode_iff _ _
+        | (apply forall_congr'; intro f; apply forall_congr'; intro hf
+           exact scoped_encode_iff _ f.2))
+termination_by sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals first
+    | omega
+    | (have hlist := List.sizeOf_lt_of_mem hf
+       have hpair : sizeOf f.snd < sizeOf f := by cases f; simp +arith
+       omega)
+
 /-- A renaming that fixes every index below `n` fixes a term scoped under `n`. (Moved from
 `Core.Proofs.Adequacy` on 2026-10-30, where it was private; `Core.Proofs.Substitution` needs it too.) -/
 theorem scoped_rename_identity {n : Nat} {term : Term} (h : Scoped n term)
     (f : Nat → Nat) (hf : ∀ i, i < n → f i = i) : term.rename f = term := by
-  induction h generalizing f with
-  | bound hi => simp only [Term.rename,hf _ hi]
-  | lam h ih =>
-      simp only [Term.rename]
-      congr 1
-      apply ih (liftRename f)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp [liftRename,hf i (Nat.lt_of_succ_lt_succ hi)]
-  | app _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-  | mix _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-  | fix _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-  | specification _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-  | binary _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-  | reflect _ ih => simp only [Term.rename,ih f hf]
-  | metadata _ ih => simp only [Term.rename,ih f hf]
-  | project _ ih => simp only [Term.rename,ih f hf]
-  | get _ ih => simp only [Term.rename,ih f hf]
-  | natural _ => simp only [Term.rename]
-  | boolean _ => simp only [Term.rename]
-  | label _ => simp only [Term.rename]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.rename,ih₁ f hf]
-      congr 1
-      apply Eq.trans _ (List.map_id' _)
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member f hf)
-  | record _ ih =>
-      simp only [Term.rename]
-      congr 1
-      apply Eq.trans _ (List.map_id' _)
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member f hf)
-  | inject _ ih => simp only [Term.rename,ih f hf]
-  | perform _ ih => simp only [Term.rename,ih f hf]
-  | done _ ih => simp only [Term.rename,ih f hf]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.rename,ih₁ f hf,ih₂ f hf,ih₃ f hf]
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.rename,ih₁ f hf]
-      congr 1
-      apply Eq.trans _ (List.map_id' _)
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl (ih₂ original member (liftRename f) ?_)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp [liftRename,hf i (Nat.lt_of_succ_lt_succ hi)]
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.rename,ih₁ f hf,ih₂ f hf]
-      congr 1
-      apply ih₃ (liftRename f)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp [liftRename,hf i (Nat.lt_of_succ_lt_succ hi)]
+  exact TermTraverse.scoped_rename_identity term n ((scoped_encode_iff n term).mp h) f hf
 
  theorem scoped_rename {n : Nat} {t : Term} (h : Scoped n t)
     (f : Nat → Nat) (m : Nat) (hf : ∀ i, i < n → f i < m) :
     Scoped m (t.rename f) := by
-  induction h generalizing m f with
-  | bound hi =>
-      simp only [Term.rename]
-      exact .bound (hf _ hi)
-  | lam h ih =>
-      simp only [Term.rename]
-
-      apply Scoped.lam
-      apply ih (liftRename f) (m+1)
-      intro i hi
-      cases i with
-      | zero => simp [liftRename]
-      | succ i => simp only [liftRename]; exact Nat.succ_lt_succ (hf i (Nat.lt_of_succ_lt_succ hi))
-  | app _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      exact .app (ih₁ f m hf) (ih₂ f m hf)
-  | mix _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      exact .mix (ih₁ f m hf) (ih₂ f m hf)
-  | fix _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      exact .fix (ih₁ f m hf) (ih₂ f m hf)
-  | specification _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      exact .specification (ih₁ f m hf) (ih₂ f m hf)
-  | prototype _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      exact .prototype (ih₁ f m hf) (ih₂ f m hf)
-  | reflect _ ih =>
-      simp only [Term.rename]
-      exact .reflect (ih f m hf)
-  | metadata _ ih =>
-      simp only [Term.rename]
-      exact .metadata (ih f m hf)
-  | project _ ih =>
-      simp only [Term.rename]
-      exact .project (ih f m hf)
-  | natural v =>
-      simp only [Term.rename]
-      exact .natural v
-  | boolean v =>
-      simp only [Term.rename]
-      exact .boolean v
-  | label v =>
-      simp only [Term.rename]
-      exact .label v
-  | binary _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      exact .binary (ih₁ f m hf) (ih₂ f m hf)
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-
-      apply Scoped.extend (ih₁ f m hf)
-      intro field member
-      obtain ⟨original, ho, rfl⟩ := List.mem_map.mp member
-      exact ih₂ original ho f m hf
-  | record _ ih =>
-      simp only [Term.rename]
-
-      apply Scoped.record
-      intro field member
-      obtain ⟨original, ho, rfl⟩ := List.mem_map.mp member
-      exact ih original ho f m hf
-  | get _ ih =>
-      simp only [Term.rename]
-      exact .get (ih f m hf)
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.rename]
-
-      apply Scoped.condition (ih₁ f m hf) (ih₂ f m hf)
-      apply ih₃ (liftRename f) (m+1)
-      intro i hi
-      cases i with
-      | zero => simp [liftRename]
-      | succ i => simp only [liftRename]; exact Nat.succ_lt_succ (hf i (Nat.lt_of_succ_lt_succ hi))
-  | inject _ ih =>
-      simp only [Term.rename]
-      exact .inject (ih f m hf)
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.rename]
-      apply Scoped.case (ih₁ f m hf)
-      intro arm member
-      obtain ⟨original, ho, rfl⟩ := List.mem_map.mp member
-      apply ih₂ original ho (liftRename f) (m+1)
-      intro i hi
-      cases i with
-      | zero => simp [liftRename]
-      | succ i => simp only [liftRename]; exact Nat.succ_lt_succ (hf i (Nat.lt_of_succ_lt_succ hi))
-  | ifBool _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.rename]
-      exact .ifBool (ih₁ f m hf) (ih₂ f m hf) (ih₃ f m hf)
-  | perform _ ih =>
-      simp only [Term.rename]
-      exact .perform (ih f m hf)
-  | done _ ih =>
-      simp only [Term.rename]
-      exact .done (ih f m hf)
+  exact (scoped_encode_iff m _).mpr
+    (TermTraverse.scoped_rename t n m ((scoped_encode_iff n t).mp h) f hf)
 
  theorem scoped_weaken {n : Nat} {t : Term} (h : Scoped n t) :
     Scoped (n+1) (t.rename Nat.succ) :=
@@ -333,103 +220,9 @@ theorem scoped_rename_identity {n : Nat} {term : Term} (h : Scoped n term)
  theorem scoped_substitute {n : Nat} {t : Term} (h : Scoped n t)
     (substitution : Nat → Term) (m : Nat)
     (hs : ∀ i, i < n → Scoped m (substitution i)) : Scoped m (t.substitute substitution) := by
-  induction h generalizing m substitution with
-  | bound hi =>
-      simp only [Term.substitute]
-      exact hs _ hi
-  | lam h ih =>
-      simp only [Term.substitute]
-
-      apply Scoped.lam
-      apply ih (liftSubstitution substitution) (m+1)
-      intro i hi
-      cases i with
-      | zero => exact .bound (Nat.zero_lt_succ _)
-      | succ i => exact scoped_weaken (hs i (Nat.lt_of_succ_lt_succ hi))
-  | app _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      exact .app (ih₁ substitution m hs) (ih₂ substitution m hs)
-  | mix _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      exact .mix (ih₁ substitution m hs) (ih₂ substitution m hs)
-  | fix _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      exact .fix (ih₁ substitution m hs) (ih₂ substitution m hs)
-  | specification _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      exact .specification (ih₁ substitution m hs) (ih₂ substitution m hs)
-  | prototype _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      exact .prototype (ih₁ substitution m hs) (ih₂ substitution m hs)
-  | reflect _ ih =>
-      simp only [Term.substitute]
-      exact .reflect (ih substitution m hs)
-  | metadata _ ih =>
-      simp only [Term.substitute]
-      exact .metadata (ih substitution m hs)
-  | project _ ih =>
-      simp only [Term.substitute]
-      exact .project (ih substitution m hs)
-  | natural v =>
-      simp only [Term.substitute]
-      exact .natural v
-  | boolean v =>
-      simp only [Term.substitute]
-      exact .boolean v
-  | label v =>
-      simp only [Term.substitute]
-      exact .label v
-  | binary _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      exact .binary (ih₁ substitution m hs) (ih₂ substitution m hs)
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-
-      apply Scoped.extend (ih₁ substitution m hs)
-      intro field member
-      obtain ⟨original, ho, rfl⟩ := List.mem_map.mp member
-      exact ih₂ original ho substitution m hs
-  | record _ ih =>
-      simp only [Term.substitute]
-
-      apply Scoped.record
-      intro field member
-      obtain ⟨original, ho, rfl⟩ := List.mem_map.mp member
-      exact ih original ho substitution m hs
-  | get _ ih =>
-      simp only [Term.substitute]
-      exact .get (ih substitution m hs)
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.substitute]
-
-      apply Scoped.condition (ih₁ substitution m hs) (ih₂ substitution m hs)
-      apply ih₃ (liftSubstitution substitution) (m+1)
-      intro i hi
-      cases i with
-      | zero => exact .bound (Nat.zero_lt_succ _)
-      | succ i => exact scoped_weaken (hs i (Nat.lt_of_succ_lt_succ hi))
-  | inject _ ih =>
-      simp only [Term.substitute]
-      exact .inject (ih substitution m hs)
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.substitute]
-      apply Scoped.case (ih₁ substitution m hs)
-      intro arm member
-      obtain ⟨original, ho, rfl⟩ := List.mem_map.mp member
-      apply ih₂ original ho (liftSubstitution substitution) (m+1)
-      intro i hi
-      cases i with
-      | zero => exact .bound (Nat.zero_lt_succ _)
-      | succ i => exact scoped_weaken (hs i (Nat.lt_of_succ_lt_succ hi))
-  | ifBool _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.substitute]
-      exact .ifBool (ih₁ substitution m hs) (ih₂ substitution m hs) (ih₃ substitution m hs)
-  | perform _ ih =>
-      simp only [Term.substitute]
-      exact .perform (ih substitution m hs)
-  | done _ ih =>
-      simp only [Term.substitute]
-      exact .done (ih substitution m hs)
+  exact (scoped_encode_iff m _).mpr
+    (TermTraverse.scoped_substitute t n m ((scoped_encode_iff n t).mp h) substitution
+      (fun i hi => (scoped_encode_iff m _).mp (hs i hi)))
 
  theorem scoped_mixBody {n : Nat} {lower upper : Term}
     (hl : Scoped n lower) (hu : Scoped n upper) : Scoped n (mixBody lower upper) := by
@@ -1006,6 +799,8 @@ def FinalStackInvariant (state : State) : Prop :=
   induction reachable with
   | start => exact initial_finalStackInvariant _
   | next _ ih => exact stepRaw_finalStackInvariant ih
+
+#assert_axioms scoped_encode_iff scoped_rename_identity scoped_rename scoped_substitute
 
 #assert_axioms stepRaw_lexicalInvariant stepRaw_preservesOrigins stepRaw_preservesCached
   stepRaw_busyInvariant stepRaw_finalStackInvariant reachable_no_internalRefusal

@@ -6,6 +6,7 @@ limits, has an independent source evaluation to the same ground observation.
 This module does not yet inhabit Representation: administrative progress and
 source-to-machine completeness remain separate substantive obligations. -/
 public import Obend.Core.Invariant
+public import Obend.Core.TermTraverse
 public import Obend.AxiomPin
 public import Obend.Core.Proofs.StepCases
 namespace Obend.Core.Proofs.Adequacy
@@ -380,125 +381,14 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
 
  theorem scoped_substitute_identity {n : Nat} {term : Term} (h : Scoped n term)
     (f : Nat → Term) (hf : ∀ i, i < n → f i = .bound i) : term.substitute f = term := by
-  induction h generalizing f with
-  | bound hi => simp only [Term.substitute,hf _ hi]
-  | lam h ih =>
-      simp only [Term.substitute]
-      congr 1
-      apply ih (liftSubstitution f)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp [liftSubstitution,hf i (Nat.lt_of_succ_lt_succ hi),Term.rename]
-  | app _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-  | mix _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-  | fix _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-  | specification _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-  | binary _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-  | reflect _ ih => simp only [Term.substitute,ih f hf]
-  | metadata _ ih => simp only [Term.substitute,ih f hf]
-  | project _ ih => simp only [Term.substitute,ih f hf]
-  | get _ ih => simp only [Term.substitute,ih f hf]
-  | natural _ => simp only [Term.substitute]
-  | boolean _ => simp only [Term.substitute]
-  | label _ => simp only [Term.substitute]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.substitute,ih₁ f hf]
-      congr 1
-      apply Eq.trans _ (List.map_id' _)
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member f hf)
-  | record _ ih =>
-      simp only [Term.substitute]
-      congr 1
-      apply Eq.trans _ (List.map_id' _)
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member f hf)
-  | inject _ ih => simp only [Term.substitute,ih f hf]
-  | perform _ ih => simp only [Term.substitute,ih f hf]
-  | done _ ih => simp only [Term.substitute,ih f hf]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.substitute,ih₁ f hf,ih₂ f hf,ih₃ f hf]
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.substitute,ih₁ f hf]
-      congr 1
-      apply Eq.trans _ (List.map_id' _)
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl (ih₂ original member (liftSubstitution f) ?_)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp [liftSubstitution,hf i (Nat.lt_of_succ_lt_succ hi),Term.rename]
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.substitute,ih₁ f hf,ih₂ f hf]
-      congr 1
-      apply ih₃ (liftSubstitution f)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp [liftSubstitution,hf i (Nat.lt_of_succ_lt_succ hi),Term.rename]
+  exact Obend.Core.TermTraverse.scoped_substitute_identity term n ((scoped_encode_iff n term).1 h) f hf
+
 
  theorem scoped_substitution_congr {n : Nat} {term : Term} (h : Scoped n term)
     (first second : Nat → Term) (same : ∀ i, i < n → first i = second i) :
     term.substitute first = term.substitute second := by
-  induction h generalizing first second with
-  | bound hi => simp only [Term.substitute,same _ hi]
-  | lam h ih =>
-      simp only [Term.substitute]
-      congr 1
-      apply ih (liftSubstitution first) (liftSubstitution second)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp only [liftSubstitution,same i (Nat.lt_of_succ_lt_succ hi)]
-  | app _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-  | mix _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-  | fix _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-  | specification _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-  | binary _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-  | reflect _ ih => simp only [Term.substitute,ih first second same]
-  | metadata _ ih => simp only [Term.substitute,ih first second same]
-  | project _ ih => simp only [Term.substitute,ih first second same]
-  | get _ ih => simp only [Term.substitute,ih first second same]
-  | natural _ | boolean _ | label _ => simp only [Term.substitute]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.substitute,ih₁ first second same]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member first second same)
-  | record _ ih =>
-      simp only [Term.substitute]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member first second same)
-  | inject _ ih => simp only [Term.substitute,ih first second same]
-  | perform _ ih => simp only [Term.substitute,ih first second same]
-  | done _ ih => simp only [Term.substitute,ih first second same]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.substitute,ih₁ first second same,ih₂ first second same,ih₃ first second same]
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.substitute,ih₁ first second same]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl (ih₂ original member (liftSubstitution first) (liftSubstitution second) ?_)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp only [liftSubstitution,same i (Nat.lt_of_succ_lt_succ hi)]
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.substitute,ih₁ first second same,ih₂ first second same]
-      congr 1
-      apply ih₃ (liftSubstitution first) (liftSubstitution second)
-      intro i hi
-      cases i with
-      | zero => rfl
-      | succ i => simp only [liftSubstitution,same i (Nat.lt_of_succ_lt_succ hi)]
+  exact Obend.Core.TermTraverse.scoped_substitution_congr term n ((scoped_encode_iff n term).1 h) first second same
+
 
  theorem liftRename_comp (first second : Nat → Nat) :
     (fun i => liftRename second (liftRename first i)) = liftRename (fun i => second (first i)) := by
@@ -512,92 +402,14 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
  public theorem scoped_rename_comp {n : Nat} {term : Term} (h : Scoped n term)
     (first : Nat → Nat) (second : Nat → Nat) :
     (term.rename first).rename second = term.rename (fun i => second (first i)) := by
-  induction h generalizing first second with
-  | bound _ => simp only [Term.rename,Term.rename]
-  | lam h ih =>
-      simp only [Term.rename,Term.rename,ih,liftRename_comp]
-  | app _ _ ih₁ ih₂ => simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second]
-  | mix _ _ ih₁ ih₂ => simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second]
-  | fix _ _ ih₁ ih₂ => simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second]
-  | specification _ _ ih₁ ih₂ => simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second]
-  | binary _ _ ih₁ ih₂ => simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second]
-  | reflect _ ih => simp only [Term.rename,Term.rename,ih first second]
-  | metadata _ ih => simp only [Term.rename,Term.rename,ih first second]
-  | project _ ih => simp only [Term.rename,Term.rename,ih first second]
-  | get _ ih => simp only [Term.rename,Term.rename,ih first second]
-  | natural _ | boolean _ | label _ => simp only [Term.rename,Term.rename]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.rename,Term.rename,List.map_map,ih₁ first second]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member first second)
-  | record _ ih =>
-      simp only [Term.rename,Term.rename,List.map_map]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member first second)
-  | inject _ ih => simp only [Term.rename,ih first second]
-  | perform _ ih => simp only [Term.rename,ih first second]
-  | done _ ih => simp only [Term.rename,ih first second]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.rename,ih₁ first second,ih₂ first second,ih₃ first second]
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.rename,List.map_map,ih₁ first second]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl ?_
-      simp only [Function.comp_apply]
-      rw [ih₂ original member,liftRename_comp]
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.rename,Term.rename,ih₁ first second,ih₂ first second,ih₃,liftRename_comp]
+  exact Obend.Core.TermTraverse.rename_comp term first second
+
 
  theorem scoped_rename_substitute {n : Nat} {term : Term} (h : Scoped n term)
     (first : Nat → Nat) (second : Nat → Term) :
     (term.rename first).substitute second = term.substitute (fun i => second (first i)) := by
-  induction h generalizing first second with
-  | bound _ => simp only [Term.rename,Term.substitute]
-  | lam h ih =>
-      simp only [Term.rename,Term.substitute,ih,liftRename_substitution_comp]
-  | app _ _ ih₁ ih₂ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second]
-  | mix _ _ ih₁ ih₂ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second]
-  | fix _ _ ih₁ ih₂ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second]
-  | specification _ _ ih₁ ih₂ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second]
-  | binary _ _ ih₁ ih₂ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second]
-  | reflect _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | metadata _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | project _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | get _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | natural _ | boolean _ | label _ => simp only [Term.rename,Term.substitute]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.rename,Term.substitute,List.map_map,ih₁ first second]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member first second)
-  | record _ ih =>
-      simp only [Term.rename,Term.substitute,List.map_map]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member first second)
-  | inject _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | perform _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | done _ ih => simp only [Term.rename,Term.substitute,ih first second]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second,ih₃ first second]
-  | case _ _ ih₁ ih₂ =>
-      simp only [Term.rename,Term.substitute,List.map_map,ih₁ first second]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl ?_
-      simp only [Function.comp_apply]
-      rw [ih₂ original member,liftRename_substitution_comp]
-  | condition _ _ _ ih₁ ih₂ ih₃ =>
-      simp only [Term.rename,Term.substitute,ih₁ first second,ih₂ first second,ih₃,liftRename_substitution_comp]
+  exact Obend.Core.TermTraverse.rename_substitute term first second
+
 
  theorem lifted_substitution_scoped {n m : Nat} {substitution : Nat → Term}
     (images : ∀ i, i < n → Scoped m (substitution i)) :
@@ -626,54 +438,8 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
     (rename : Nat → Nat) :
     (term.substitute substitution).rename rename =
       term.substitute (fun i => (substitution i).rename rename) := by
-  induction h generalizing m substitution rename with
-  | bound hi => simp only [Term.substitute]
-  | lam h ih =>
-      simp only [Term.substitute,Term.rename]
-      congr 1
-      rw [ih _ (lifted_substitution_scoped images)]
-      exact scoped_substitution_congr h _ _ (lifted_substitution_rename images rename)
-  | app _ _ ih₁ ih₂ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-  | mix _ _ ih₁ ih₂ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-  | fix _ _ ih₁ ih₂ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-  | specification _ _ ih₁ ih₂ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-  | binary _ _ ih₁ ih₂ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-  | reflect _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | metadata _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | project _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | get _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | natural _ | boolean _ | label _ => simp only [Term.substitute,Term.rename]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.substitute,Term.rename,List.map_map,ih₁ substitution images rename]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member substitution images rename)
-  | record _ ih =>
-      simp only [Term.substitute,Term.rename,List.map_map]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member substitution images rename)
-  | inject _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | perform _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | done _ ih => simp only [Term.substitute,Term.rename,ih substitution images rename]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename,ih₃ substitution images rename]
-  | case _ hs ih₁ ih₂ =>
-      simp only [Term.substitute,Term.rename,List.map_map,ih₁ substitution images rename]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl ?_
-      simp only [Function.comp_apply]
-      rw [ih₂ original member _ (lifted_substitution_scoped images)]
-      exact scoped_substitution_congr (hs original member) _ _ (lifted_substitution_rename images rename)
-  | condition _ _ h ih₁ ih₂ ih₃ =>
-      simp only [Term.substitute,Term.rename,ih₁ substitution images rename,ih₂ substitution images rename]
-      congr 1
-      rw [ih₃ _ (lifted_substitution_scoped images)]
-      exact scoped_substitution_congr h _ _ (lifted_substitution_rename images rename)
+  exact Obend.Core.TermTraverse.substitute_rename term substitution rename
+
 
  theorem lifted_substitution_comp {n m k : Nat} {first second : Nat → Term}
     (images : ∀ i, i < n → Scoped m (first i))
@@ -694,54 +460,8 @@ demand budget. This is the semantic component of the lazy graph progress rank. -
     (second : Nat → Term) (nextImages : ∀ i, i < m → Scoped k (second i)) :
     (term.substitute first).substitute second =
       term.substitute (fun i => (first i).substitute second) := by
-  induction h generalizing m k first second with
-  | bound _ => simp only [Term.substitute]
-  | lam h ih =>
-      simp only [Term.substitute]
-      congr 1
-      rw [ih _ (lifted_substitution_scoped images) _ (lifted_substitution_scoped nextImages)]
-      exact scoped_substitution_congr h _ _ (lifted_substitution_comp images nextImages)
-  | app _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-  | mix _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-  | fix _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-  | specification _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-  | prototype _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-  | binary _ _ ih₁ ih₂ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-  | reflect _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | metadata _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | project _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | get _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | natural _ | boolean _ | label _ => simp only [Term.substitute]
-  | extend _ _ ih₁ ih₂ =>
-      simp only [Term.substitute,List.map_map,ih₁ first images second nextImages]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih₂ original member first images second nextImages)
-  | record _ ih =>
-      simp only [Term.substitute,List.map_map]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      exact Prod.ext rfl (ih original member first images second nextImages)
-  | inject _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | perform _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | done _ ih => simp only [Term.substitute,ih first images second nextImages]
-  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages,ih₃ first images second nextImages]
-  | case _ hs ih₁ ih₂ =>
-      simp only [Term.substitute,List.map_map,ih₁ first images second nextImages]
-      congr 1
-      apply List.map_congr_left
-      intro original member
-      refine Prod.ext rfl ?_
-      simp only [Function.comp_apply]
-      rw [ih₂ original member _ (lifted_substitution_scoped images) _ (lifted_substitution_scoped nextImages)]
-      exact scoped_substitution_congr (hs original member) _ _ (lifted_substitution_comp images nextImages)
-  | condition _ _ h ih₁ ih₂ ih₃ =>
-      simp only [Term.substitute,ih₁ first images second nextImages,ih₂ first images second nextImages]
-      congr 1
-      rw [ih₃ _ (lifted_substitution_scoped images) _ (lifted_substitution_scoped nextImages)]
-      exact scoped_substitution_congr h _ _ (lifted_substitution_comp images nextImages)
+  exact Obend.Core.TermTraverse.substitute_comp term first second
+
 
 /-- The assignment gives each address a finite source computation; it does NOT
 recursively unfold its pointers. In particular a recursive address can denote a

@@ -3,6 +3,7 @@ module
 substitution law is independent of annotation coverage. The checker is a graded
 sound procedure, complete only on its explicitly recognized fragment. -/
 public import Obend.Core.Term
+public import Obend.Core.TermTraverse
 public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Invariant
@@ -24,47 +25,8 @@ set_option autoImplicit false
 
 /-- Does hypothesis `x` (a free de Bruijn index, counted at the root) occur in `t`? Each binder
 shifts the index sought by one: `lam`, the successor arm of `ifZero`, every `case` arm. -/
-def freeIn (x : Nat) : Term → Bool
-  | .bound index => index == x
-  | .lam body => freeIn (x + 1) body
-  | .app function argument => freeIn x function || freeIn x argument
-  | .mix lower upper => freeIn x lower || freeIn x upper
-  | .fix spec inherited => freeIn x spec || freeIn x inherited
-  | .specification metadata extension => freeIn x metadata || freeIn x extension
-  | .prototype spec target => freeIn x spec || freeIn x target
-  | .reflect target => freeIn x target
-  | .metadata spec => freeIn x spec
-  | .project target => freeIn x target
-  | .nat _ => false
-  | .boolean _ => false
-  | .label _ => false
-  | .binary _ left right => freeIn x left || freeIn x right
-  | .extend inherited fields => freeIn x inherited || (fields.map fun field => freeIn x field.2).any id
-  | .record fields => (fields.map fun field => freeIn x field.2).any id
-  | .get target _ => freeIn x target
-  | .ifZero value zero successorBody => freeIn x value || freeIn x zero || freeIn (x + 1) successorBody
-  | .inject _ payload => freeIn x payload
-  | .case scrutinee arms => freeIn x scrutinee || (arms.map fun arm => freeIn (x + 1) arm.2).any id
-  | .ifBool condition whenTrue whenFalse => freeIn x condition || freeIn x whenTrue || freeIn x whenFalse
-  | .perform plan => freeIn x plan
-  | .done value => freeIn x value
-termination_by t => sizeOf t
-decreasing_by
-  all_goals simp_wf
-  all_goals first
-    | omega
-    | (rename_i hmem
-       have hlist := List.sizeOf_lt_of_mem hmem
-       have hpair : sizeOf field.snd < sizeOf field := by
-         cases field
-         simp +arith
-       omega)
-    | (rename_i hmem
-       have hlist := List.sizeOf_lt_of_mem hmem
-       have hpair : sizeOf arm.snd < sizeOf arm := by
-         cases arm
-         simp +arith
-       omega)
+def freeIn (x : Nat) (t : Term) : Bool :=
+  Obend.Core.Traverse.Tree.uses x (Obend.Core.TermTraverse.encode t)
 
 /-- The front end's type fuel (`Obend.Core.Check`'s preview wire caps `typeFuel` at 16384). -/
 def checkFuel : Nat := 16384
@@ -170,7 +132,7 @@ theorem msubst_var_open (σ : Nat → Option AnnotatedTerm) (x : Nat) (h : σ x 
 
 /-- A hypothesis occurs in itself. -/
 theorem uses_var (x : Nat) : Obend.Slot.Calculus.uses (var x) x = true := by
-  simp [Obend.Slot.Calculus.uses, var, freeIn]
+  simp [Obend.Slot.Calculus.uses, var, freeIn, Obend.Core.Traverse.Tree.uses, Obend.Core.Traverse.Tree.all, Obend.Core.TermTraverse.encode]
 
 /-- The judge of this calculus: `check` at the fixed fuel, then the type compared exactly. -/
 theorem calculus_check_iff (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
