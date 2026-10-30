@@ -1,10 +1,10 @@
 #!/bin/bash
 # Step-4 measurement (2026-10-30): after a green build, (1) a private proof edit in Adequacy, (2) a
 # definitional change in Term; record which modules rebuild and the wall time of each `lake build`.
-# Run from lean/. Reverts both edits. One measurement, not a harness.
+# Run from lean/ as `tools/measure.sh`. Reverts both edits. One measurement (docs/MEASURE-20261030.log), not a harness.
 set -u
 export LEAN_NUM_THREADS=2
-LOG=MEASURE-20261030.log
+LOG=docs/MEASURE-$(date +%Y%m%d).log
 : > $LOG
 t() { local s=$(date +%s); "$@" > /tmp/obend-measure.out 2>&1; local e=$(date +%s); echo "wall ${e}-${s} = $((e-s))s" >> $LOG; grep -E "^✔|^✖|Build completed|error" /tmp/obend-measure.out | sed 's/ (.*//' >> $LOG; }
 echo "== 0. baseline: lake build with nothing changed" >> $LOG; t lake build

@@ -32,7 +32,7 @@ what is proved, under which axioms, and what is trusted with no theorem.
 
 ## 2. Where each library comes from
 
-| library | source today | extraction state (2026-10-30, `lean/REPORT-20261030.md`) |
+| library | source today | extraction state (2026-10-30, `lean/docs/REPORT-20261030.md`) |
 |---|---|---|
 | `Obend/Core` | minidregg `Theory/ObjectiveBend*.lean` (46 files, 25.8K lines) + `AxiomPin`, `AssertAxioms`, `AssertCompiled`, `HashBytes`, cSHAKE `Spec/Fast/Seam` | **landed** as `Obend.Core.*` / `Obend.Core.Proofs.*` / `Obend.Digest.*`, Lean v4.30.0 `module` files, no Mathlib, no Rust; every theorem statement and axiom pin kept (checked by name against the rename commit); seven evaluation teeth live in legacy leaves `Obend.Core.Teeth.*` because `Init` does not expose `Array.map`/`Array.zip`/`String.toUTF8` to module files. `Obend.Core.Backend` is the executor typeclass with the demand machine as its instance; `Obend.Digest.Class` the digest typeclass with the cSHAKE instance. |
 | `Obend/Spec` | minidregg `Compiler/ObjectiveBend{Parse,Elaborate,C4,Contract,Templates,Law,TermWire,SpecificationClosure,FrontEndAdequacy,Publication,...}.lean` (24 files) + `Host/ObjectiveBend{FrontEnd,Preview}.lean` | not started; imports `Compiler.Sha256`, `Pred.Core` and Mini's codec modules; the parser and elaborator themselves import only `Lean`, `Std.Data.HashMap`, `Theory.*`. Extraction is a cut at the codec boundary. |

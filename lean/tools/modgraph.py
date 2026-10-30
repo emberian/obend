@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Print the module graph for REPORT: one line per module — kind (module|legacy), public imports,
-private imports, and counts of exposed defs / public theorems / private theorems."""
+private imports, and counts of exposed defs / public theorems / private theorems. Run from lean/ as
+`tools/modgraph.py > docs/MODGRAPH-<date>.md`."""
 import os,re
 rows=[]
 for r,_,fs in os.walk('Obend'):
