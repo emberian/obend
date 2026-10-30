@@ -35,3 +35,7 @@ public import Obend.Spec.Contract
 public import Obend.Spec.Elaborate
 public import Obend.Spec.Sha256
 public import Obend.Spec.FrontEnd
+public import Obend.Spec.DataWire
+public import Obend.Spec.Identity
+public import Obend.Spec.Capture
+public import Obend.Spec.Preview
