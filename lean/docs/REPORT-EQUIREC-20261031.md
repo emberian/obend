@@ -346,3 +346,16 @@ The foundation was pushed in `bd10929` and `f6ecb15`. The public switch and its
 machine/checker/substitution/judge consumers are committed in `89bd283`:
 the intermediate signatures cannot be committed independently as green builds.
 The final report and exact journal comparison are recorded separately.
+
+## 7. Concurrent integration
+
+The first push found the independent Doc lane (`f2be76f` through `dd7a761`)
+already on remote `dev`. Merge `1cbec28` preserves both histories. Its only
+shared root change adds `import Obend.Doc`; no Core, Slot, Spec or tactic source
+from this migration changed. **MEASURED:** the combined full
+`LEAN_NUM_THREADS=2 lake build` passes **177 jobs**
+(`astra/equirec/final-merged-full-build.log`), and the Doc lane's
+`lake env lean tests/doc/RoundTrip.lean` passes all 16 checks. The journal above
+isolates the equi-recursive migration before these independent additions.
+The Doc lane adds its own `lean/tests/doc` fixtures; Mini's cohorts remain
+unchanged.
