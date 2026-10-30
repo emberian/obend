@@ -122,18 +122,27 @@ public theorem callable_arrow_not_computation {type : Ty} {reuse : Reuse} {quant
     (callable : callable type = .arrow reuse quantity domain codomain) : type.isComputation = false := by
   obend_cases type with [Obend.Core.Check.callable,Ty.isComputation]
 
-public theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
-    (agreement : sameType assumptions actual expected = true)
+theorem sameStep_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
+    (agreement : sameStep assumptions actual expected = true)
     (equal : actual.canonical = (Ty.computation plan response produced).canonical) :
     expected.canonical = (Ty.computation plan response produced).canonical := by
   have activity : actual.isComputation = true := by
     rw [← Ty.canonical_isComputation,equal]; rfl
-  simp only [sameType,Bool.or_eq_true] at agreement
+  simp only [sameStep,Bool.or_eq_true] at agreement
   rcases agreement with (canonical | aliasActual) | aliasExpected
   · rw [← equal]; exact (by simpa using canonical : actual.canonical = expected.canonical).symm
   · cases actual <;> simp_all [Ty.isComputation]
   · cases expected <;> simp at aliasExpected
     simp_all [Ty.isComputation]
+
+public theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
+    (agreement : sameType assumptions actual expected = true)
+    (equal : actual.canonical = (Ty.computation plan response produced).canonical) :
+    expected.canonical = (Ty.computation plan response produced).canonical :=
+  sameType_lift (fun a e => a.canonical = (Ty.computation plan response produced).canonical →
+      e.canonical = (Ty.computation plan response produced).canonical)
+    (fun _ h => h) (fun one two h => two (one h)) (fun step h => sameStep_activity_canonical step h)
+    agreement equal
 
 public theorem argumentAllowed_not_computation {assumptions : Assumptions} {quantity : Quantity}
     {context : Context} {type : Ty} {uses : Uses}
@@ -307,7 +316,8 @@ theorem insert_canonical_lookup (row : Ty) (name query : String) (member : Ty) :
   | field prior old tail oldIH tailIH =>
       by_cases equal : name = prior
       · subst prior
-        by_cases hit : name = query <;> simp [Ty.insertCanonical,finiteLookup,hit]
+        by_cases hit : name = query <;> by_cases sh : old.shareable = true <;>
+          simp [Ty.insertCanonical,finiteLookup,hit,sh]
       · by_cases before : name < prior
         · simp only [Ty.insertCanonical,if_neg equal,if_pos before]
           by_cases hit : name = query
@@ -391,8 +401,9 @@ theorem insert_canonical_tail (row : Ty) (name : String) (member : Ty) :
   induction row with
   | field prior old tail oldIH tailIH =>
       simp only [Ty.insertCanonical]
-      split <;> try rfl
-      split <;> simp_all [Ty.tail]
+      split
+      · split <;> rfl
+      · split <;> simp_all [Ty.tail]
   | _ => rfl
 
 theorem canonical_tail (row : Ty) : row.canonical.tail = row.tail.canonical := by
@@ -477,12 +488,12 @@ public theorem canonical_lookup_transport (bounds : Bounds) (actual expected : T
     obtain ⟨fuel,actualLookup⟩ := alias_tail_lookup_realizes bounds actual name member actualAbsent index bound depth actualTail found next
     exact ⟨fuel,member,actualLookup,rfl⟩
 
-public theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
-    (agreement : sameType assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
+theorem same_step_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
+    (agreement : sameStep assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
     (lookup : expected.lookup assumptions.bounds fuel name = some member) :
     ∃ depth actualMember, actual.lookup assumptions.bounds depth name = some actualMember ∧
       actualMember.canonical = member.canonical := by
-  simp only [sameType,Bool.or_eq_true] at agreement
+  simp only [sameStep,Bool.or_eq_true] at agreement
   rcases agreement with (canonical | aliasActual) | aliasExpected
   · exact canonical_lookup_transport assumptions.bounds actual expected (by simpa using canonical) fuel name member lookup
   · cases actual <;> simp at aliasActual
@@ -506,6 +517,22 @@ public theorem same_type_lookup_transport {assumptions : Assumptions} {actual ex
       | succ fuel =>
         have next : bound.lookup assumptions.bounds fuel name = some member := by simpa [Ty.lookup,found] using lookup
         exact canonical_lookup_transport assumptions.bounds actual bound equal.symm fuel name member next
+
+public theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
+    (agreement : sameType assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
+    (lookup : expected.lookup assumptions.bounds fuel name = some member) :
+    ∃ depth actualMember, actual.lookup assumptions.bounds depth name = some actualMember ∧
+      actualMember.canonical = member.canonical :=
+  sameType_lift (fun a e => ∀ fuel name member, e.lookup assumptions.bounds fuel name = some member →
+      ∃ depth actualMember, a.lookup assumptions.bounds depth name = some actualMember ∧
+        actualMember.canonical = member.canonical)
+    (fun _ fuel _ member lookup => ⟨fuel, member, lookup, rfl⟩)
+    (fun one two fuel name member lookup => by
+      obtain ⟨d, m, l, e⟩ := two fuel name member lookup
+      obtain ⟨d', m', l', e'⟩ := one d name m l
+      exact ⟨d', m', l', e'.trans e⟩)
+    (fun step fuel name member lookup => same_step_lookup_transport step fuel name member lookup)
+    agreement fuel name member lookup
 
 /-- Declared aliases have a deterministic head equation. Its normalization
 relation is partial: cyclic aliases need not produce a head, and no general Fix
@@ -547,11 +574,11 @@ theorem canonical_agreement_normalizes {bounds : Bounds} {first second result : 
 /-- Every successful checker's SAME finite type agreement preserves any head
 normalization witness. Thus a row/alias conversion cannot turn a Nat value into
 Bool/String or a scalar into a callable/record. Cyclic aliases remain partial. -/
-public theorem same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
-    (agreement : sameType assumptions first second = true)
+theorem same_step_preserves_head {assumptions : Assumptions} {first second result : Ty}
+    (agreement : sameStep assumptions first second = true)
     (normal : HeadNormalizes assumptions.bounds first result) :
     HeadNormalizes assumptions.bounds second result := by
-  simp only [sameType,Bool.or_eq_true] at agreement
+  simp only [sameStep,Bool.or_eq_true] at agreement
   rcases agreement with (canonical | aliasFirst) | aliasSecond
   · exact canonical_agreement_normalizes (by simpa using canonical) normal
   · cases first <;> simp at aliasFirst
@@ -575,6 +602,14 @@ public theorem same_type_preserves_head {assumptions : Assumptions} {first secon
       have found := Assumptions.alias_bound aliased
       obtain ⟨-,equal⟩ : _ ∧ bound.canonical = first.canonical := by simpa [aliased] using aliasSecond
       exact .alias found (canonical_agreement_normalizes equal.symm normal)
+
+public theorem same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
+    (agreement : sameType assumptions first second = true)
+    (normal : HeadNormalizes assumptions.bounds first result) :
+    HeadNormalizes assumptions.bounds second result :=
+  sameType_lift (fun a e => ∀ result, HeadNormalizes assumptions.bounds a result → HeadNormalizes assumptions.bounds e result)
+    (fun _ _ h => h) (fun one two result h => two result (one result h))
+    (fun step result h => same_step_preserves_head step h) agreement result normal
 
 public inductive HeadKind where
   | natural | boolean | label | function | row | specification | prototype | custody | variable | variant
@@ -1156,10 +1191,11 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     intro context tag payload payloadType row uses fuel payloadTyped lookup pure ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.inject (ih depth binding bound bindingValid) lookup pure)
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped ihScrutinee ihArms depth binding bound bindingValid
+    intro context scrutinee arms row result su au scrutineeTyped armsTyped distinct ihScrutinee ihArms depth binding bound bindingValid
     have counts := add_uses_insert su au depth ((source_uses_length scrutineeTyped).trans (arms_uses_length armsTyped).symm) (insert_usage_bound scrutineeTyped bound)
     simpa only [Term.rename,lift_shift_index,counts] using
-      (PartialTyping.case (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid))
+      (PartialTyping.case (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid)
+        (by simpa using distinct))
   case ifBool =>
     intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped ihCondition ihTrue ihFalse depth binding bound bindingValid
     have trueLength := source_uses_length trueTyped
@@ -1178,10 +1214,11 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename] using
       (PartialTyping.done (planType := planType) (response := response) (ih depth binding bound bindingValid) pure)
   case effectCase =>
-    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure ihScrutinee ihArms depth binding bound bindingValid
+    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure distinct ihScrutinee ihArms depth binding bound bindingValid
     have counts := add_uses_insert su au depth ((source_uses_length scrutineeTyped).trans (arms_uses_length armsTyped).symm) (insert_usage_bound scrutineeTyped bound)
     simpa only [Term.rename,lift_shift_index,counts] using
-      (PartialTyping.effectCase (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid) pure)
+      (PartialTyping.effectCase (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid) pure
+        (by simpa using distinct))
   case nil =>
     intro context depth binding bound bindingValid
     simpa only [List.map_nil,← zero_uses_insert context binding depth bound] using (FieldsTyping.nil (context.insertIdx depth binding) : FieldsTyping assumptions _ [] .emptyRow _)
@@ -1571,7 +1608,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.natural,result,⟨context,vu,environmentTyped,valueTyped,valueSafe,valid⟩,
       .condition zeroOrigin environmentTyped successorTyped successorSafe valid,.refl _⟩⟩
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped ihScrutinee ihArms types environment environmentTyped safe valid
+    intro context scrutinee arms row result su au scrutineeTyped armsTyped _ ihScrutinee ihArms types environment environmentTyped safe valid
     have scrutineeSafe := safe_add_uses_left context su au (source_uses_length scrutineeTyped) (arms_uses_length armsTyped) safe
     exact ⟨⟨.variant row,result,⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,
       .case environmentTyped armsTyped valid,.refl _⟩⟩
@@ -1589,7 +1626,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.boolean,result,⟨context,cu,environmentTyped,conditionTyped,conditionSafe,valid⟩,
       .ifBool ⟨context,tu,environmentTyped,trueTyped,trueSafe,valid⟩ ⟨context,fu,environmentTyped,falseTyped,falseSafe,valid⟩,.refl _⟩⟩
   case effectCase =>
-    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure ihScrutinee ihArms types environment environmentTyped safe valid
+    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure _ ihScrutinee ihArms types environment environmentTyped safe valid
     have scrutineeSafe := safe_add_uses_left context su au (source_uses_length scrutineeTyped) (arms_uses_length armsTyped) safe
     exact ⟨⟨.computation planType response (.variant row),.computation planType response result,
       ⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,

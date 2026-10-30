@@ -30,17 +30,19 @@ theorem tri {a b : String} (h : a ≠ b) : (a < b ∧ ¬ b < a) ∨ (b < a ∧ �
   · have g := lt_of_not_lt_ne l h
     exact .inr ⟨g, l⟩
 
-/-- Inserting a name twice keeps the second insertion. -/
-theorem insertCanonical_same (row : Ty) (name : String) (first second : Ty) :
+/-- Inserting a name twice keeps the second insertion when the first is shareable
+(a non-shareable first insertion stays behind the second). -/
+theorem insertCanonical_same (row : Ty) (name : String) (first second : Ty) (shareable : first.shareable = true) :
     (row.insertCanonical name first).insertCanonical name second = row.insertCanonical name second := by
   induction row with
   | field prior old tail _ ih =>
     by_cases he : name = prior
-    · subst he; simp [Ty.insertCanonical]
+    · subst he
+      by_cases ho : old.shareable = true <;> simp [Ty.insertCanonical, ho, shareable]
     · by_cases hl : name < prior
-      · simp [Ty.insertCanonical, he, hl]
+      · simp [Ty.insertCanonical, he, hl, shareable]
       · simp [Ty.insertCanonical, he, hl, ih]
-  | _ => simp [Ty.insertCanonical]
+  | _ => simp [Ty.insertCanonical, shareable]
 
 /-- Inserting two different names commutes. -/
 theorem insertCanonical_comm (row : Ty) (n p : String) (a b : Ty) (ne : n ≠ p) :
@@ -48,29 +50,70 @@ theorem insertCanonical_comm (row : Ty) (n p : String) (a b : Ty) (ne : n ≠ p)
   have ne' : p ≠ n := fun h => ne h.symm
   induction row with
   | field q o t _ ih =>
-    by_cases hn : n = q
-    · subst hn
-      by_cases hp : p < n
-      · simp [Ty.insertCanonical, ne, ne', hp, String.lt_asymm hp]
-      · have : n < p := lt_of_not_lt_ne hp ne'
-        simp [Ty.insertCanonical, ne', hp]
-    · by_cases hp : p = q
-      · subst hp
-        by_cases hl : n < p
-        · simp [Ty.insertCanonical, ne, ne', hl, String.lt_asymm hl]
-        · simp [Ty.insertCanonical, ne, hl]
-      · have hp' : q ≠ p := fun h => hp h.symm
-        rcases tri hn with ⟨a1, a2⟩ | ⟨a1, a2⟩ <;> rcases tri hp with ⟨b1, b2⟩ | ⟨b1, b2⟩ <;>
-          rcases tri ne with ⟨c1, c2⟩ | ⟨c1, c2⟩ <;>
-          simp [Ty.insertCanonical, a1, a2, b1, b2, c1, c2, hn, hp, hp', ne, ne', ih] <;>
-          first
-          | exact absurd (String.lt_trans (String.lt_trans ‹_› ‹_›) ‹_›) (String.lt_irrefl _)
-          | skip
+    by_cases ho : o.shareable = true
+    · by_cases hn : n = q
+      · subst hn
+        by_cases hp : p < n
+        · simp [Ty.insertCanonical, ne, ne', hp, String.lt_asymm hp, ho]
+        · have : n < p := lt_of_not_lt_ne hp ne'
+          simp [Ty.insertCanonical, ne', hp, ho, this, String.lt_asymm this]
+      · by_cases hp : p = q
+        · subst hp
+          by_cases hl : n < p
+          · simp [Ty.insertCanonical, ne, ne', hl, String.lt_asymm hl, ho]
+          · have : p < n := lt_of_not_lt_ne hl ne
+            simp [Ty.insertCanonical, ne, hl, ho, this]
+        · have hp' : q ≠ p := fun h => hp h.symm
+          rcases tri hn with ⟨a1, a2⟩ | ⟨a1, a2⟩ <;> rcases tri hp with ⟨b1, b2⟩ | ⟨b1, b2⟩ <;>
+            rcases tri ne with ⟨c1, c2⟩ | ⟨c1, c2⟩ <;>
+            simp [Ty.insertCanonical, a1, a2, b1, b2, c1, c2, hn, hp, hp', ne, ne', ih] <;>
+            first
+            | exact absurd (String.lt_trans (String.lt_trans ‹_› ‹_›) ‹_›) (String.lt_irrefl _)
+            | skip
+    · by_cases hn : n = q
+      · subst hn
+        by_cases hp : p < n
+        · simp [Ty.insertCanonical, ne, ne', hp, String.lt_asymm hp, ho]
+        · have : n < p := lt_of_not_lt_ne hp ne'
+          simp [Ty.insertCanonical, ne', hp, ho, this, String.lt_asymm this]
+      · by_cases hp : p = q
+        · subst hp
+          by_cases hl : n < p
+          · simp [Ty.insertCanonical, ne, ne', hl, String.lt_asymm hl, ho]
+          · have : p < n := lt_of_not_lt_ne hl ne
+            simp [Ty.insertCanonical, ne, hl, ho, this]
+        · have hp' : q ≠ p := fun h => hp h.symm
+          rcases tri hn with ⟨a1, a2⟩ | ⟨a1, a2⟩ <;> rcases tri hp with ⟨b1, b2⟩ | ⟨b1, b2⟩ <;>
+            rcases tri ne with ⟨c1, c2⟩ | ⟨c1, c2⟩ <;>
+            simp [Ty.insertCanonical, a1, a2, b1, b2, c1, c2, hn, hp, hp', ne, ne', ih] <;>
+            first
+            | exact absurd (String.lt_trans (String.lt_trans ‹_› ‹_›) ‹_›) (String.lt_irrefl _)
+            | skip
   | _ =>
     by_cases hl : n < p
     · simp [Ty.insertCanonical, ne, ne', hl, String.lt_asymm hl]
     · have hl' : p < n := lt_of_not_lt_ne hl ne
       simp [Ty.insertCanonical, ne, ne', hl, hl']
+
+/-- A shareable type stays shareable at every instance: it mentions no variable where
+shareability looks. -/
+theorem shareable_instantiate (σ : Nat → Ty) : ∀ {type : Ty}, type.shareable = true →
+    (type.instantiate σ).shareable = true
+  | .field _ member tail, h => by
+    simp only [Ty.shareable, Bool.and_eq_true] at h
+    simp [Ty.instantiate, Ty.shareable, shareable_instantiate σ h.1, shareable_instantiate σ h.2]
+  | .specification m e, h => by
+    simp only [Ty.shareable, Bool.and_eq_true] at h
+    simp [Ty.instantiate, Ty.shareable, shareable_instantiate σ h.1, shareable_instantiate σ h.2]
+  | .prototype s t, h => by
+    simp only [Ty.shareable, Bool.and_eq_true] at h
+    simp [Ty.instantiate, Ty.shareable, shareable_instantiate σ h.1, shareable_instantiate σ h.2]
+  | .variant r, h => by
+    simp only [Ty.shareable] at h
+    simp [Ty.instantiate, Ty.shareable, shareable_instantiate σ h]
+  | .variable _, h => by simp [Ty.shareable] at h
+  | .natural, _ | .label, _ | .boolean, _ | .emptyRow, _ | .custody _, _ | .arrow _ _ _ _, _
+  | .computation _ _ _, _ => by simp_all [Ty.instantiate, Ty.shareable]
 
 theorem canonical_instantiate_insert (σ : Nat → Ty) (row : Ty) (name : String) (member : Ty) :
     ((row.insertCanonical name member).instantiate σ).canonical =
@@ -79,7 +122,11 @@ theorem canonical_instantiate_insert (σ : Nat → Ty) (row : Ty) (name : String
   | field prior old tail _ ih =>
     by_cases he : name = prior
     · subst he
-      simp [Ty.insertCanonical, Ty.instantiate, Ty.canonical, insertCanonical_same]
+      by_cases ho : old.shareable = true
+      · have sh : ((old.instantiate σ).canonical).shareable = true := by
+          rw [Ty.shareable_canonical]; exact shareable_instantiate σ ho
+        simp [Ty.insertCanonical, Ty.instantiate, Ty.canonical, ho, insertCanonical_same _ _ _ _ sh]
+      · simp [Ty.insertCanonical, Ty.instantiate, Ty.canonical, ho]
     · by_cases hl : name < prior
       · simp [Ty.insertCanonical, he, hl, Ty.instantiate, Ty.canonical]
       · simp only [Ty.insertCanonical, he, hl, if_false, Ty.instantiate, Ty.canonical]
@@ -105,7 +152,7 @@ theorem canonical_eq_instantiate (σ : Nat → Ty) {a b : Ty} (h : a.canonical =
     (a.instantiate σ).canonical = (b.instantiate σ).canonical := by
   rw [canonical_instantiate σ a, canonical_instantiate σ b, h]
 
-#assert_axioms insertCanonical_same insertCanonical_comm canonical_instantiate_insert canonical_instantiate
+#assert_axioms insertCanonical_same insertCanonical_comm shareable_instantiate canonical_instantiate_insert canonical_instantiate
   canonical_eq_instantiate
 
 /-! ## Step 4: a template checked against its rigid bounds is accepted at every discharge
@@ -315,10 +362,10 @@ theorem Discharges.isRow_instantiate : ∀ (fuel : Nat) (type : Ty),
           rwa [D.closed j bound rigid found] at this
     | _ => simp [Ty.isRow] at h
 
-theorem Discharges.sameType_instantiate {actual expected : Ty}
-    (agreement : sameType template actual expected = true) :
-    sameType instance_ (actual.instantiate σ) (expected.instantiate σ) = true := by
-  simp only [sameType, Bool.or_eq_true] at agreement ⊢
+theorem Discharges.sameStep_instantiate {actual expected : Ty}
+    (agreement : sameStep template actual expected = true) :
+    sameStep instance_ (actual.instantiate σ) (expected.instantiate σ) = true := by
+  simp only [sameStep, Bool.or_eq_true] at agreement ⊢
   rcases agreement with (canonical | aliasActual) | aliasExpected
   · exact .inl (.inl (by simpa using canonical_eq_instantiate σ (by simpa using canonical)))
   · cases actual with
@@ -353,6 +400,13 @@ theorem Discharges.sameType_instantiate {actual expected : Ty}
         simp [Ty.instantiate, D.fixed j rigid, D.aliases j rigid, aliased, equal',
           instantiate_isComputation D.pure, pure]
     | _ => simp at aliasExpected
+
+theorem Discharges.sameType_instantiate {actual expected : Ty}
+    (agreement : sameType template actual expected = true) :
+    sameType instance_ (actual.instantiate σ) (expected.instantiate σ) = true :=
+  sameType_lift (fun a e => sameType instance_ (a.instantiate σ) (e.instantiate σ) = true)
+    (fun _ => sameType_refl _ _) (fun one two => sameType_trans one two)
+    (fun step => sameStep_sameType (D.sameStep_instantiate step)) agreement
 
 theorem Discharges.agree_instantiate {actual expected : Ty}
     (agreement : agree template actual expected = true) :
@@ -858,6 +912,9 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
           split at h
           rotate_left; · cases h
           rename_i pureResult
+          split at h
+          rotate_left; · cases h
+          rename_i distinct
           cases h
           have activity' : value'.type = .computation (plan.instantiate σ) (response.instantiate σ)
               (produced.instantiate σ) := by rw [valueType, activity]; rfl
@@ -880,7 +937,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
                 rw [typedRow, valueType]; exact D.agree_instantiate agreed
               have p1 : (result.instantiate σ).isComputation = false := by
                 rw [instantiate_isComputation D.pure]; exact pureResult
-              rw [dif_pos a1, dif_pos p1]
+              rw [dif_pos a1, dif_pos p1, dif_pos distinct]
               exact ⟨_, rfl, rfl, by dsimp only; rw [valueUses, typedUses]⟩
             · rename_i other
               exact (other _ _ _ typedResult).elim
@@ -892,6 +949,9 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
           split at h
           rotate_left; · cases h
           rename_i agreed
+          split at h
+          rotate_left; · cases h
+          rename_i distinct
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ := ihArms _ _ _ _ _ _ _ _ armsTyped
           simp only [Option.map_none] at armsTyped'
@@ -910,7 +970,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
             have a1 : agree instance_ value'.type (.variant typed'.row) = true := by
               rw [typedRow, valueType]
               exact D.agree_instantiate agreed
-            rw [dif_pos a1]
+            rw [dif_pos a1, dif_pos distinct]
             exact ⟨_, rfl, typedResult, by dsimp only; rw [valueUses, typedUses]⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -1157,7 +1217,7 @@ emitted program's) accepts it; the rigid checker (the template's) refuses it. -/
 theorem self_as_bound_row_alias_accepted : (check (selfAsBoundRow []) [] 8).isSome = true := by decide
 theorem self_as_bound_row_rigid_refused : (check (selfAsBoundRow [5]) [] 8).isNone = true := by decide
 
-#assert_axioms Discharges.lookup_instantiate Discharges.isRow_instantiate Discharges.sameType_instantiate
+#assert_axioms Discharges.lookup_instantiate Discharges.isRow_instantiate Discharges.sameStep_instantiate Discharges.sameType_instantiate
   Discharges.agree_instantiate Discharges.variantRow_instantiate Discharges.infer_instantiate
   Discharges.check_instantiate weight_template_accepted coloured_discharges coloured_instance_accepted
   self_as_bound_row_alias_accepted self_as_bound_row_rigid_refused

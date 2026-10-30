@@ -110,11 +110,15 @@ theorem put_preserves_future_tail (row : Ty) (name : String) (member : Ty) :
   | _ => rfl
 
 /-- Canonical finite named-row equality preserves a rigid unknown tail and
-first-field shadowing. It is equality, not width/depth subtyping or a solver. -/
+first-field shadowing. It is equality, not width/depth subtyping or a solver.
+A shadowed member is forgotten only when it is `shareable`: a custody, a once
+closure or any other non-shareable member stays in the canonical row behind the
+member that shadows it, so canonical equality never hides what shareability
+sees (`Ty.shareableUnder_canonical`). -/
 def Ty.insertCanonical (row : Ty) (name : String) (member : Ty) : Ty :=
   match row with
   | .field prior old tail =>
-      if name = prior then .field name member tail
+      if name = prior then (if old.shareable then .field name member tail else .field name member row)
       else if name < prior then .field name member row
       else .field prior old (tail.insertCanonical name member)
   | tail => .field name member tail
@@ -138,6 +142,58 @@ theorem Ty.insertCanonical_not_computation (row : Ty) (name : String) (member : 
 theorem Ty.canonical_isComputation (type : Ty) : type.canonical.isComputation = type.isComputation := by
   cases type <;> try rfl
   exact Ty.insertCanonical_not_computation _ _ _
+
+/-- A shareable type is shareable under any shareability premises. -/
+theorem Ty.shareableUnder_of_shareable (variables : List Nat) : ∀ {type : Ty},
+    type.shareable = true → type.shareableUnder variables = true
+  | .field _ member tail, h => by
+    simp only [Ty.shareable, Bool.and_eq_true] at h
+    simp [Ty.shareableUnder, Ty.shareableUnder_of_shareable variables h.1, Ty.shareableUnder_of_shareable variables h.2]
+  | .specification metadata extension, h => by
+    simp only [Ty.shareable, Bool.and_eq_true] at h
+    simp [Ty.shareableUnder, Ty.shareableUnder_of_shareable variables h.1, Ty.shareableUnder_of_shareable variables h.2]
+  | .prototype spec target, h => by
+    simp only [Ty.shareable, Bool.and_eq_true] at h
+    simp [Ty.shareableUnder, Ty.shareableUnder_of_shareable variables h.1, Ty.shareableUnder_of_shareable variables h.2]
+  | .variant row, h => by
+    simp only [Ty.shareable] at h
+    simp [Ty.shareableUnder, Ty.shareableUnder_of_shareable variables h]
+  | .variable _, h => by simp [Ty.shareable] at h
+  | .natural, _ | .label, _ | .boolean, _ | .emptyRow, _ | .custody _, _ | .arrow _ _ _ _, _
+  | .computation _ _ _, _ => by simp_all [Ty.shareableUnder]
+
+theorem Ty.shareableUnder_insertCanonical (variables : List Nat) (row : Ty) (name : String) (member : Ty) :
+    (row.insertCanonical name member).shareableUnder variables =
+      (member.shareableUnder variables && row.shareableUnder variables) := by
+  induction row with
+  | field prior old tail _ ih =>
+    simp only [Ty.insertCanonical]
+    by_cases he : name = prior
+    · by_cases hs : old.shareable = true
+      · simp [he, hs, Ty.shareableUnder, Ty.shareableUnder_of_shareable variables hs]
+      · simp [he, hs, Ty.shareableUnder]
+    · by_cases hl : name < prior
+      · simp [he, hl, Ty.shareableUnder]
+      · simp only [he, hl, if_false, Ty.shareableUnder, ih]
+        cases member.shareableUnder variables <;> cases old.shareableUnder variables <;> rfl
+  | _ => simp [Ty.insertCanonical, Ty.shareableUnder]
+
+/-- Canonical form never changes shareability: no member it forgets was needed
+to refuse it (`Ty.insertCanonical` forgets only shareable shadowed members). -/
+theorem Ty.shareableUnder_canonical (variables : List Nat) (type : Ty) :
+    type.canonical.shareableUnder variables = type.shareableUnder variables := by
+  induction type with
+  | field name member tail ihm iht =>
+    simp only [Ty.canonical, Ty.shareableUnder_insertCanonical, ihm, iht, Ty.shareableUnder]
+  | specification m e ihm ihe => simp [Ty.canonical, Ty.shareableUnder, ihm, ihe]
+  | prototype s t ihs iht => simp [Ty.canonical, Ty.shareableUnder, ihs, iht]
+  | variant r ih => simp [Ty.canonical, Ty.shareableUnder, ih]
+  | arrow => simp [Ty.canonical, Ty.shareableUnder, Ty.shareable]
+  | computation => simp [Ty.canonical, Ty.shareableUnder, Ty.shareable]
+  | _ => rfl
+
+theorem Ty.shareable_canonical (type : Ty) : type.canonical.shareable = type.shareable := by
+  simpa using Ty.shareableUnder_canonical [] type
 
 /-- Explicit finite bounds disclose the members available on a rigid self/super
 variable. Recursive bounds are explored only to the requested finite depth. -/

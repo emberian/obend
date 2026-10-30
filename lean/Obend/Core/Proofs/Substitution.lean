@@ -882,6 +882,9 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           split at h
           rotate_left; · cases h
           rename_i pureResult
+          split at h
+          rotate_left; · cases h
+          rename_i distinct
           cases h
           obtain ⟨a₂, ha₂, typedUses, typed', armsTyped', typedRow, typedResult, typedUses'⟩ :=
             ihArms ann ann' Δ _ _ 0 row none arms typed hs₂ armsTyped (shift_child hann 1)
@@ -899,6 +902,7 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
               have a1 : agree asm value'.type (.computation planType responseType (.variant typed'.row)) = true := by
                 rw [typedRow, valueType]; exact agreed
               rw [dif_pos a1, dif_pos pureResult]
+              simp only [labelsDistinct_map, distinct, ↓reduceDIte]
               refine ⟨addUses a₁ a₂, by rw [length_addUses hl, ha₁], ?_, _, rfl, rfl, ?_⟩
               · show addUses value.uses typed.uses = _; rw [valueUses, typedUses, split_add Ψ hl]
               · show addUses value'.uses typed'.uses = _; rw [valueUses', typedUses', split_add Ψ' hl]
@@ -912,6 +916,9 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           split at h
           rotate_left; · cases h
           rename_i agreed
+          split at h
+          rotate_left; · cases h
+          rename_i distinct
           cases h
           obtain ⟨a₂, ha₂, typedUses, typed', armsTyped', typedRow, typedResult, typedUses'⟩ :=
             ihArms ann ann' Δ _ _ 0 row none arms typed hs₂ armsTyped (shift_child hann 1)
@@ -924,6 +931,7 @@ theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
+            simp only [labelsDistinct_map, distinct, ↓reduceDIte]
             refine ⟨addUses a₁ a₂, by rw [length_addUses hl, ha₁], ?_, _, rfl, by exact typedResult, ?_⟩
             · show addUses value.uses typed.uses = _; rw [valueUses, typedUses, split_add Ψ hl]
             · show addUses value'.uses typed'.uses = _; rw [valueUses', typedUses', split_add Ψ' hl]
@@ -1708,6 +1716,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           split at h
           rotate_left; · cases h
           rename_i pureResult
+          split at h
+          rotate_left; · cases h
+          rename_i distinct
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ :=
             ihArms ann ann' Δ (pos ++ [1]) 0 row none arms typed armsTyped valid hann.arms _ rfl
@@ -1724,6 +1735,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
               have a1 : agree asm value'.type (.computation planType responseType (.variant typed'.row)) = true := by
                 rw [typedRow, valueType]; exact agreed
               rw [dif_pos a1, dif_pos pureResult]
+              simp only [labelsDistinct_map, distinct, ↓reduceDIte]
               exact ⟨_, rfl, rfl, by exact UsesLE.add valueUses typedUses⟩
             · rename_i other
               exact (other _ _ _ (typedResult.trans resultShape)).elim
@@ -1735,6 +1747,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           split at h
           rotate_left; · cases h
           rename_i agreed
+          split at h
+          rotate_left; · cases h
+          rename_i distinct
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ :=
             ihArms ann ann' Δ (pos ++ [1]) 0 row none arms typed armsTyped valid hann.arms _ rfl
@@ -1746,6 +1761,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
+            simp only [labelsDistinct_map, distinct, ↓reduceDIte]
             exact ⟨_, rfl, by exact typedResult, by exact UsesLE.add valueUses typedUses⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [Term.substitute] at hterm'

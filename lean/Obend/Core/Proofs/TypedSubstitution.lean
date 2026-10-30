@@ -162,7 +162,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ tag payload pt row u fuel d found pure ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_inject_iff _ _ _).mp hs)
     exact ⟨a, ha, hu, .inject d' found pure⟩
-  · rintro Γ scrut arms row result su au ds da ih₁ ih₂ Δ rfl hs
+  · rintro Γ scrut arms row result su au ds da distinct ih₁ ih₂ Δ rfl hs
     simp only [scoped_case_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
@@ -170,7 +170,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
-      exact .case d₁ d₂
+      exact .case d₁ d₂ distinct
   · rintro Γ cond yes no result cu tu fu dc dt df ih₁ ih₂ ih₃ Δ rfl hs
     simp only [scoped_ifBool_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl hs.1
@@ -188,7 +188,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ value pt response result u d pure ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_done_iff _ _).mp hs)
     exact ⟨a, ha, hu, .done d' pure⟩
-  · rintro Γ scrut arms plan response row result su au ds da pure ih₁ ih₂ Δ rfl hs
+  · rintro Γ scrut arms plan response row result su au ds da pure distinct ih₁ ih₂ Δ rfl hs
     simp only [scoped_case_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
@@ -196,7 +196,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
-      exact .effectCase d₁ d₂ pure
+      exact .effectCase d₁ d₂ pure distinct
   · rintro Γ Δ rfl hs
     refine ⟨zeroUses Δ, length_zeroUses _, zeroUses_append Δ Ψ, ?_⟩
     rw [← zeroUses_append]
@@ -371,11 +371,11 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .inject d' found pure, hu⟩
-  · rintro Γ scrut arms row result su au ds da ih₁ ih₂ Δ rfl validΓ
+  · rintro Γ scrut arms row result su au ds da distinct ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .case d₁ d₂, UsesLE.add hu hv⟩
+    exact ⟨_, .case d₁ d₂ (by simpa using distinct), UsesLE.add hu hv⟩
   · rintro Γ cond yes no result cu tu fu dc dt df ih₁ ih₂ ih₃ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
@@ -390,11 +390,11 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .done d' pure, hu⟩
-  · rintro Γ scrut arms plan response row result su au ds da pure ih₁ ih₂ Δ rfl validΓ
+  · rintro Γ scrut arms plan response row result su au ds da pure distinct ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .effectCase d₁ d₂ pure, UsesLE.add hu hv⟩
+    exact ⟨_, .effectCase d₁ d₂ pure (by simpa using distinct), UsesLE.add hu hv⟩
   · rintro Γ Δ rfl validΓ
     exact ⟨_, .nil _, UsesLE.refl _⟩
   · rintro Γ name body rest type row bu ru db dr pure ih₁ ih₂ Δ rfl validΓ

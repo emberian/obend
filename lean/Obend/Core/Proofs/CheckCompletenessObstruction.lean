@@ -82,9 +82,7 @@ conversion that the inference algorithm's exact branch-type comparison refuses. 
   derivation := .lambda (annotation := aliasBranchAnnotation)
     (.ifBool (.boolean _ _)
       (.conversion (.bound (binding := ⟨.variable 0, .unrestricted⟩) (index := 0) (by rfl))
-        (by simp [sameType, aliasBranch, aliasBranchAnnotation,
-          naturalAliasAssumptions, Assumptions.alias,
-          Ty.canonical, Ty.isComputation]))
+        (by decide))
       (.natural _ _))
     (by simp [aliasBranchAnnotation, safeUses, zeroUses, variableUses,
       addUses, safeQuantity])
@@ -129,7 +127,7 @@ algorithm refuses empty arm lists because there is no result type to infer. -/
   uses := []
   derivation := .lambda (annotation := emptyCaseAnnotation)
     (.case (.bound (binding := ⟨.variant .emptyRow, .unrestricted⟩) (index := 0) (by rfl))
-      (.nil _ _))
+      (.nil _ _) rfl)
     (by simp [emptyCaseAnnotation, safeUses, variableUses, zeroUses, addUses, safeQuantity])
     (by simp [emptyCaseAnnotation, validContext, Ty.shareableUnder, Ty.shareable])
     (by simp [emptyCaseAnnotation, reusableAllowed, reusableCaptures,
@@ -154,10 +152,10 @@ public theorem annotated_empty_eliminator_still_incomplete :
     ∀ fuel, check emptyCase [] fuel = none :=
   ⟨⟨emptyCaseChecked⟩, fun _ => rfl, emptyCase_refused⟩
 
-/-! A later duplicate arm is unreachable under first-match execution. The
-relation checks it at its own row entry, whereas the algorithm uses the FIRST
-entry for every occurrence of that label. This is a different obstruction from
-empty cases and does not involve a missing or false annotation. -/
+/-! A later duplicate arm is unreachable under first-match execution. The relation used
+to check it at its own row entry, whose payload no scrutinee determines; since
+2026-10-30 both judgments refuse a case whose arms repeat a label (`labelsDistinct`),
+so this obstruction is retired by the relation, not by the checker. -/
 
 @[expose] public def duplicateRow : Ty :=
   .field "a" .natural (.field "a" .boolean .emptyRow)
@@ -172,71 +170,33 @@ empty cases and does not involve a missing or false annotation. -/
   ⟨.case (.inject "a" (.nat 0)) [("a", .nat 0), ("a", unreachableBooleanArm)],
     fun _ => some duplicateInjectionAnnotation, {}⟩
 
-@[expose] public def duplicateCaseChecked : Checked duplicateCase [] where
-  type := .natural
-  uses := []
-  derivation := .case
-    (.inject (fuel := 1) (.natural _ _) (by rfl) rfl)
-    (.cons (payload := .natural) (.natural _ _)
-      (by simp [safeUses, zeroUses, safeQuantity]) rfl
-      (.cons (payload := .boolean)
-        (.ifBool (.bound (binding := ⟨.boolean, .unrestricted⟩) (index := 0) (by rfl))
-          (.natural _ _) (.natural _ _))
-        (by simp [safeUses, variableUses, zeroUses, addUses, safeQuantity])
-        rfl (.nil _ _)))
-  safe := by simp [safeUses]
-  contextValid := rfl
-  assumptionsValid := rfl
+/-- Every derivation of a case, through any number of conversions, has distinct labels. -/
+public theorem case_labels_distinct {assumptions : Assumptions} {context : Context}
+    {scrutinee : Term} {arms : List (String × Term)} {type : Ty} {uses : Uses}
+    (typed : PartialTyping assumptions context (.case scrutinee arms) type uses) :
+    labelsDistinct arms = true := by
+  refine (PartialTyping.rec
+    (motive_1 := fun _ term _ _ _ => ∀ s a, term = Term.case s a → labelsDistinct a = true)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed) _ _ rfl
+  all_goals intros
+  all_goals first | trivial | simp_all
 
-theorem booleanArm_at_natural_refused (annotations : Annotations) (position : List Nat)
-    (fuel : Nat) :
-    infer {} annotations [⟨.natural, .unrestricted⟩] position fuel unreachableBooleanArm = none := by
-  cases fuel with
-  | zero => rfl
-  | succ fuel => cases fuel <;> simp [infer, unreachableBooleanArm]
-
-theorem duplicateArms_refused (position : List Nat) (index : Nat) (expected : Option Ty)
-    (fuel : Nat) :
-    inferArms {} duplicateCase.annotations [] position index duplicateRow expected fuel
-      [("a", .nat 0), ("a", unreachableBooleanArm)] = none := by
-  cases fuel with
-  | zero => rfl
-  | succ fuel =>
-    cases fuel with
-    | zero => rfl
-    | succ fuel =>
-      cases fuel <;>
-        simp [inferArms, infer, duplicateRow, Ty.lookup,
-          Ty.shareable, safeUses, zeroUses, safeQuantity,
-          booleanArm_at_natural_refused]
+/-- The duplicate-arm program has no certificate at all, so no checker is incomplete on it. -/
+public theorem duplicate_arms_have_no_derivation : ¬ Nonempty (Checked duplicateCase []) := by
+  rintro ⟨checked⟩
+  have := case_labels_distinct checked.derivation
+  simp [duplicateCase, AnnotatedTerm.erase, labelsDistinct] at this
 
 theorem duplicateCase_refused (fuel : Nat) : check duplicateCase [] fuel = none := by
-  cases fuel with
-  | zero => rfl
-  | succ fuel =>
-    cases fuel with
-    | zero => rfl
-    | succ fuel =>
-      cases fuel with
-      | zero => rfl
-      | succ fuel =>
-        have refused := duplicateArms_refused [1] 0 none (fuel + 2)
-        simp only [duplicateCase, duplicateInjectionAnnotation, duplicateRow] at refused
-        simp [check, infer, duplicateCase, duplicateInjectionAnnotation,
-          duplicateRow, Ty.lookup, agree, sameType, Ty.canonical,
-          Ty.shareableUnder, Ty.shareable, Ty.isComputation, variantRow, refused]
-
-public theorem annotated_unreachable_arm_still_incomplete :
-    Nonempty (Checked duplicateCase []) ∧
-    (∀ position, duplicateCase.annotations position = some duplicateInjectionAnnotation) ∧
-    ∀ fuel, check duplicateCase [] fuel = none :=
-  ⟨⟨duplicateCaseChecked⟩, fun _ => rfl, duplicateCase_refused⟩
+  cases h : check duplicateCase [] fuel with
+  | none => rfl
+  | some checked => exact (duplicate_arms_have_no_derivation ⟨checked⟩).elim
 
 #assert_axioms checked_lambda_without_annotations_never_checks
   checked_does_not_imply_eventual_success unannotatedConstant_refused
   annotatedConstant_accepted aliasBranch_refused correct_lambda_annotation_still_incomplete
   emptyCase_refused annotated_empty_eliminator_still_incomplete
-  booleanArm_at_natural_refused duplicateArms_refused duplicateCase_refused
-  annotated_unreachable_arm_still_incomplete
+  case_labels_distinct duplicate_arms_have_no_derivation duplicateCase_refused
 
 end Obend.Core.Proofs.CheckCompletenessObstruction

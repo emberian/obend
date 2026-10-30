@@ -327,9 +327,11 @@ def shadowProgram (hidden : Term) (hiddenAnnotation : Annotations) : AnnotatedTe
    fun position => if position = [0] then some ⟨shadowRow, shadowSum, .unrestricted, .reusable⟩
      else hiddenAnnotation position, {}⟩
 
-/-- Agreement holds, shareability differs: the exact gap `agree` closes. -/
-theorem canonical_agreement_loses_shareability :
-    sameType {} (.field "a" .natural (.field "a" (.custody 17) .emptyRow)) shadowRow = true ∧
+/-- The gap `agree` closed is now closed in the relation itself: canonical form keeps a
+non-shareable shadowed member, so the hidden custody row no longer agrees with the
+shareable one at all (`Ty.shareableUnder_canonical`), and `agree` still refuses. -/
+theorem canonical_agreement_keeps_shareability :
+    sameType {} (.field "a" .natural (.field "a" (.custody 17) .emptyRow)) shadowRow = false ∧
     (Ty.field "a" .natural (.field "a" (.custody 17) .emptyRow)).shareable = false ∧
     shadowRow.shareable = true ∧
     agree {} (.field "a" .natural (.field "a" (.custody 17) .emptyRow)) shadowRow = false := by decide
@@ -438,9 +440,40 @@ theorem closure_response_refused :
   pure_affine_argument_accepted effect_in_record_field_refused effect_in_payload_refused
   effect_in_specification_refused scalar_plan_refused closure_response_refused
 #assert_axioms recursive_sum_list_accepted recursive_sum_ill_typed_tail_refused
-#assert_axioms canonical_agreement_loses_shareability shadowed_custody_laundering_refused
+/-! ### Agreement is the equivalence closure of one-step agreement (2026-10-30) -/
+
+def siblingAliases : Assumptions := ⟨[(1, .natural), (2, .natural)], [], []⟩
+
+/-- Two aliases of the same type: no single step relates them, the closure does. -/
+theorem sibling_aliases_agree :
+    sameStep siblingAliases (.variable 1) (.variable 2) = false ∧
+    sameType siblingAliases (.variable 1) (.variable 2) = true := by decide
+
+/-- Agreement does not descend into constructors: an alias under an arrow stays itself. -/
+theorem agreement_does_not_descend :
+    sameType siblingAliases (.arrow .reusable .unrestricted (.variable 1) .boolean)
+      (.arrow .reusable .unrestricted .natural .boolean) = false := by decide
+
+/-- A rigid variable is nominal: never its bound, never a sibling alias of that bound. -/
+theorem rigid_variable_nominal :
+    sameType ⟨[(1, .natural), (2, .natural)], [], [1]⟩ (.variable 1) .natural = false ∧
+    sameType ⟨[(1, .natural), (2, .natural)], [], [1]⟩ (.variable 1) (.variable 2) = false := by decide
+
+/-- A cycle of bare aliases agrees within itself and with nothing else; the walk stops. -/
+theorem cyclic_aliases_close :
+    sameType ⟨[(1, .variable 2), (2, .variable 1)], [], []⟩ (.variable 1) (.variable 2) = true ∧
+    sameType ⟨[(1, .variable 2), (2, .variable 1)], [], []⟩ (.variable 1) .natural = false := by decide
+
+/-- The visited-set walk refuses a cycle of bounds and finds what fuel finds elsewhere. -/
+theorem visited_walk_cycle :
+    lookupV [(1, .variable 2), (2, .variable 1)] [] (.variable 1) "x" = none ∧
+    isRowV [(1, .variable 2), (2, .variable 1)] [] (.variable 1) = false ∧
+    lookupV [(1, .field "x" .natural (.variable 1))] [] (.variable 1) "x" = some .natural := by decide
+
+#assert_axioms canonical_agreement_keeps_shareability shadowed_custody_laundering_refused
   shadowed_once_closure_laundering_refused shadowed_shareable_member_accepted
-  shadowed_override_accepted
+  shadowed_override_accepted sibling_aliases_agree agreement_does_not_descend rigid_variable_nominal
+  cyclic_aliases_close visited_walk_cycle
 
 end Obend.Core.Proofs.CheckTeeth
 end
