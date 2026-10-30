@@ -156,7 +156,7 @@ def fieldsLookup (f : String) : List (String × Data) → Option Data
   | [] => none
   | (g, d) :: rest => if g == f then some d else fieldsLookup f rest
 
-def Data.field (d : Data) (f : String) : Option Data :=
+def _root_.Obend.Core.Data.Data.field (d : Data) (f : String) : Option Data :=
   match d with
   | .record fs => fieldsLookup f fs
   | _ => none
