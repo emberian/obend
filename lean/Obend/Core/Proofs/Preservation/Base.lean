@@ -5,6 +5,7 @@ the per-constructor case modules import this, the umbrella imports them. -/
 public import Obend.Core.MachineTyping
 public import Obend.Core.Proofs.Adequacy
 public import Obend.AxiomPin
+public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -101,7 +102,7 @@ public theorem heap_type_pure {assumptions : Assumptions} {types : AddressTypes}
     (heapTyped : HeapTyping assumptions types heap) {address : Address} {type : Ty}
     (assigned : types[address]? = some type) : type.isComputation = false := by
   obtain ⟨cell,_,cellTyped⟩ := heapTyped.cell address type assigned
-  cases cellTyped <;> assumption
+  obend_cases cellTyped with []
 
 public theorem conversionPath_isComputation {assumptions : Assumptions} {first last : Ty}
     (path : ConversionPath assumptions first last) : first.isComputation = last.isComputation := by
@@ -111,15 +112,15 @@ public theorem conversionPath_isComputation {assumptions : Assumptions} {first l
 
 public theorem lookup_not_computation (bounds : Bounds) (fuel : Nat) (row : Ty) (name : String) (member : Ty)
     (lookup : row.lookup bounds fuel name = some member) : row.isComputation = false := by
-  cases fuel <;> cases row <;> simp_all [Ty.lookup,Ty.isComputation]
+  cases fuel <;> obend_cases row with [Ty.lookup,Ty.isComputation]
 
 public theorem isRow_not_computation (bounds : Bounds) (fuel : Nat) (row : Ty)
     (isRow : row.isRow bounds fuel = true) : row.isComputation = false := by
-  cases fuel <;> cases row <;> simp_all [Ty.isRow,Ty.isComputation]
+  cases fuel <;> obend_cases row with [Ty.isRow,Ty.isComputation]
 
 public theorem callable_arrow_not_computation {type : Ty} {reuse : Reuse} {quantity : Quantity} {domain codomain : Ty}
     (callable : callable type = .arrow reuse quantity domain codomain) : type.isComputation = false := by
-  cases type <;> simp_all [Obend.Core.Check.callable,Ty.isComputation]
+  obend_cases type with [Obend.Core.Check.callable,Ty.isComputation]
 
 public theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
     (agreement : sameType assumptions actual expected = true)
@@ -253,7 +254,7 @@ public theorem heap_typed_push {assumptions : Assumptions} {types : AddressTypes
 public theorem typed_control_not_refused {assumptions : Assumptions} {types : AddressTypes}
     {control : Control} {type : Ty} (typed : ControlTyping assumptions types control type)
     (reason : Refusal) : control ≠ .refused reason := by
-  cases typed <;> simp
+  obend_cases typed with []
 
 /-- Independently qualified graph invariants preserve invalid-update exclusion
 for EVERY stepRaw branch. This independent local lemma uses only busy-update
@@ -339,7 +340,7 @@ theorem canonical_row_lookup_agreement (first second : Ty) (query : String)
 theorem safe_quantity_add_left (quantity : Quantity) (first second : Nat)
     (safe : safeQuantity quantity (first + second) = true) :
     safeQuantity quantity first = true := by
-  cases quantity <;> simp_all [safeQuantity] <;> omega
+  obend_cases quantity with [safeQuantity]
 
 public theorem safe_add_uses_left (context : Context) (first second : Uses)
     (firstLength : first.length = context.length) (secondLength : second.length = context.length)
@@ -376,8 +377,8 @@ theorem insert_canonical_not_variable (row : Ty) (name : String) (member : Ty) :
   all_goals rfl
 
 theorem canonical_is_variable (type : Ty) : isVariable type.canonical = isVariable type := by
-  cases type <;> try rfl
-  exact insert_canonical_not_variable _ _ _
+  obend_cases type with [Ty.canonical,insert_canonical_not_variable]
+  all_goals rfl
 
 theorem canonical_variable_inverse {type : Ty} {index : Nat}
     (equal : type.canonical = .variable index) : type = .variable index := by
@@ -395,10 +396,7 @@ theorem insert_canonical_tail (row : Ty) (name : String) (member : Ty) :
   | _ => rfl
 
 theorem canonical_tail (row : Ty) : row.canonical.tail = row.tail.canonical := by
-  induction row with
-  | field name member tail memberIH tailIH =>
-      simpa only [Ty.canonical,Ty.tail,insert_canonical_tail] using tailIH
-  | _ => rfl
+  obend_cases induction row with [Ty.canonical,Ty.tail,insert_canonical_tail]
 
 /-- A successful finite lookup either uses the explicit prefix or discloses
 its precise unknown tail alias and the already-bounded lookup into that alias.
@@ -603,8 +601,8 @@ theorem insert_canonical_row_head (row : Ty) (name : String) (member : Ty) :
   all_goals rfl
 
 theorem canonical_type_head (type : Ty) : typeHead type.canonical = typeHead type := by
-  cases type <;> try rfl
-  exact insert_canonical_row_head _ _ _
+  obend_cases type with [Ty.canonical,insert_canonical_row_head]
+  all_goals rfl
 
 theorem row_head_normalizes (bounds : Bounds) (fuel : Nat) (row : Ty)
     (isRow : row.isRow bounds fuel = true) :
@@ -666,9 +664,7 @@ public theorem natural_value_form {assumptions : Assumptions} {types : AddressTy
   have same := head_normalizes_unique normal (.direct .natural rfl)
   subst head
   have scalarKind : valueHead value = .natural := by simpa [typeHead] using kind.symm
-  cases value with
-  | natural number => exact ⟨number,rfl⟩
-  | _ => cases scalarKind
+  obend_cases value with [valueHead]
 
 public theorem boolean_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} (typed : ValueTyping assumptions types value .boolean) :
@@ -677,9 +673,7 @@ public theorem boolean_value_form {assumptions : Assumptions} {types : AddressTy
   have same := head_normalizes_unique normal (.direct .boolean rfl)
   subst head
   have scalarKind : valueHead value = .boolean := by simpa [typeHead] using kind.symm
-  cases value with
-  | boolean boolean => exact ⟨boolean,rfl⟩
-  | _ => cases scalarKind
+  obend_cases value with [valueHead]
 
 public theorem label_value_form {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} (typed : ValueTyping assumptions types value .label) :
@@ -688,9 +682,7 @@ public theorem label_value_form {assumptions : Assumptions} {types : AddressType
   have same := head_normalizes_unique normal (.direct .label rfl)
   subst head
   have scalarKind : valueHead value = .label := by simpa [typeHead] using kind.symm
-  cases value with
-  | label name => exact ⟨name,rfl⟩
-  | _ => cases scalarKind
+  obend_cases value with [valueHead]
 
 public theorem canonical_same_type (assumptions : Assumptions) (first second : Ty)
     (agreement : first.canonical = second.canonical) : sameType assumptions first second = true := by
@@ -704,9 +696,7 @@ public theorem specification_value_form {assumptions : Assumptions} {types : Add
   have same := head_normalizes_unique normal (.direct (.specification metadataType extensionType) rfl)
   rw [same,Ty.canonical] at kind
   have shape : valueHead value = .specification := by simpa [typeHead] using kind.symm
-  cases value with
-  | specification metadata extension => exact ⟨metadata,extension,rfl⟩
-  | _ => cases shape
+  obend_cases value with [valueHead]
 
 public theorem value_specification_fields {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
@@ -739,9 +729,7 @@ public theorem prototype_value_form {assumptions : Assumptions} {types : Address
   have same := head_normalizes_unique normal (.direct (.prototype specType targetType) rfl)
   rw [same,Ty.canonical] at kind
   have shape : valueHead value = .prototype := by simpa [typeHead] using kind.symm
-  cases value with
-  | prototype spec target => exact ⟨spec,target,rfl⟩
-  | _ => cases shape
+  obend_cases value with [valueHead]
 
 public theorem value_prototype_fields {assumptions : Assumptions} {types : AddressTypes}
     {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
@@ -1615,10 +1603,7 @@ public theorem typed_source_focus_preserved {assumptions : Assumptions} {types :
     rw [focus] at focused
     obtain ⟨data⟩ := focused
     have next : stepRaw state = {state with control := .evaluate target environment,stack := frame :: state.stack} := by
-      cases term <;> simp [sourceFocus] at focus
-      all_goals
-        obtain ⟨rfl,rfl⟩ := focus
-        simp [stepRaw,evaluate]
+      obend_cases term with [sourceFocus,stepRaw,evaluate]
     refine ⟨step_certificate typed data.current ?_ ?_ ?_⟩
     · simpa [next] using typed.heap
     · simpa [next] using ControlTyping.evaluate data.origin
@@ -1633,9 +1618,7 @@ public theorem record_value_form {assumptions : Assumptions} {types : AddressTyp
   have equal := head_normalizes_unique normal rowNormal
   subst head
   have shape : valueHead value = .row := kind.symm.trans rowKind
-  cases value with
-  | record fields => exact ⟨fields,rfl⟩
-  | _ => cases shape
+  obend_cases value with [valueHead]
 
 /-- Source conversions may sit above an update continuation. Transport the
 returned value across those exact boundaries before storing it at the immutable
@@ -1699,8 +1682,6 @@ public theorem variant_value_form {assumptions : Assumptions} {types : AddressTy
   have same := head_normalizes_unique normal (.direct (.variant row) rfl)
   rw [same,Ty.canonical] at kind
   have shape : valueHead value = .variant := by simpa [typeHead] using kind.symm
-  cases value with
-  | variant tag address => exact ⟨tag,address,rfl⟩
-  | _ => cases shape
+  obend_cases value with [valueHead]
 
 end Obend.Core.Proofs.Preservation
