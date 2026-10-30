@@ -5,3 +5,16 @@ defaultTargets = ["Obend"]
 [[lean_lib]]
 name = "Obend"
 globs = ["Obend", "Obend.+"]
+
+# Lane B (2026-10-30): the declaration-level obligation journal. `Journal.Export` walks the built
+# environment; `Journal.Journal` reads two exports as slots. The tool does not `needs` the `Obend`
+# library: `lake build` the tree (or the subtree an `--only` export reads) before exporting, so a red
+# proof module elsewhere does not block the tool from building.
+[[lean_lib]]
+name = "Journal"
+roots = ["Journal.Journal", "Journal.Export"]
+
+[[lean_exe]]
+name = "journal"
+srcDir = "tools/journal"
+root = "Main"
