@@ -1,7 +1,10 @@
 # Objective Bend: lazy open recursion over partial specifications, and its mechanized metatheory
 
-Draft 1, 2026-10-30. Written against the tree at `/Users/ember/dev/obend` (`lean/`, Lean `v4.30.0`,
-no Mathlib). For a reader who knows Bend or Lean and has never seen minidregg.
+Draft 2, 2026-10-30. Draft 1 is commit `9126123`; this revision adds prior art (§11), restates the
+template instantiation path of §6 from the elaborator's code, re-reads §10 against the tree, and
+brings the checker story of §3.5 and §8 up to date. Written against `origin/dev` at `e5fca29`
+(`lean/`, Lean `v4.30.0`, no Mathlib); only what is committed there is described. For a reader who
+knows Bend or Lean and has never seen minidregg.
 
 Evidence words, as the trees use them. *Compiled*: Lean checked it, and where the check is
 `native_decide` the claim rests on the compiler trust (`#assert_compiled`). *Proved*: a theorem in
@@ -26,7 +29,8 @@ linear, unrestricted). Effects are yields, not reductions. We describe the term 
 hold for which observers, and what the Lean development proves: determinism of the reference
 semantics, soundness and finite completeness of the demand machine, type preservation and
 no-refusal for checked terms, instantiation of templates, the composition contract, front-end
-adequacy, checkpoint transparency. We say what it does not prove, among them that `mix` is
+adequacy, checkpoint transparency, and, for the checker, both a proof that the annotation-directed
+procedure is incomplete and a completeness theorem for a bidirectional one on a stated fragment. We say what it does not prove, among them that `mix` is
 associative up to behavioural equivalence, that the surface language has a meaning of its own, and
 that call-by-need costs no more than call-by-name. One correction to the literature is recorded:
 the book's claim that C4 linearization is determined by a bare DAG is too strong; the invariance
@@ -52,9 +56,10 @@ use: a predicate on one write of one object under the current authority, naming 
 refused. If ten hands built the object, ten sets of laws must combine into one judgment without a
 fight and without any hand rewriting another's. That is a statement about *composition*: whose
 contribution is counted, how often, in what order. It is why ancestry (§9) matters here. The law
-layer itself is not part of what this paper covers: `Obend/Law` is being built (its types and
-generators, `Obend.Law.Syntax` and `Obend.Law.Std`, landed as steps 1 and 2 and no theorem about
-them is cited here), and the cell laws that judge writes live in minidregg's kernel. What is here is the calculus underneath them.
+layer itself is not part of what this paper covers: `Obend/Law` has landed in five steps
+(the law's types, generators, meaning theorems over the reference step, `keeps` claims, inheritance
+along a C4 precedence list; `lean/docs/REPORT-LAW-20261030.md`), no row of §8 is about it, and §10
+says what it does and does not connect), and the cell laws that judge writes live in minidregg's kernel. What is here is the calculus underneath them.
 
 Bend's answer to "laws plus proofs plus a fast compiler" rests on affinity: live code may not copy
 a function, which lets a `match` free its node and gives fork-join parallelism for free. The thesis
@@ -355,9 +360,16 @@ The checker `Obend.Core.Check.check` is *proof-producing*: it returns `Checked`,
 a `PartialTyping` derivation of the term it was given (`Obend.Core.Check.checked_erasure`, which is
 a projection, and says so). Four design points.
 
-*Rows are compared canonically.* There is no subtyping: type equality is exact up to canonical
-row order (first field of a name wins) and one head unfolding of a declared alias variable. A
-bounded variable keeps its row tail, so a method can be typed against a future self it has not
+*Rows are compared canonically.* There is no subtyping. Type agreement, `Obend.Core.Check.sameType`,
+is exact up to canonical row order (first field of a name wins) and the unfolding of declared alias
+variables at the head, repeated: it is the equivalence closure of the one-step agreement
+(`Obend.Core.Check.sameType_equivalence`), decided by testing whether the two head-unfolding orbits
+meet within as many steps as there are declared bounds (`Obend.Core.Check.Assumptions.chase_bounded`
+is why that bound is exact). It does not descend into constructors, so an alias-domain arrow and the
+arrow it names stay distinct, and a rigid variable is never unfolded. Canonical form forgets a
+shadowed row member only if that member is shareable
+(`Obend.Core.Proofs.CheckTeeth.canonical_agreement_keeps_shareability`), so a conversion cannot launder a custody
+value. A bounded variable keeps its row tail, so a method can be typed against a future self it has not
 seen (`Obend.Core.Proofs.CheckTeeth.future_row_instantiation_accepted`), and a `mix` may join layers
 with different inherited, middle and provided types
 (`Obend.Core.Proofs.CheckTeeth.heterogeneous_runtime_mix_accepted`).
@@ -384,7 +396,9 @@ activity can sit in a field, an argument, a payload or a Plan. §7 returns to th
 The checker is sound for its derivation type and not complete for it. Fuel is monotone
 (`Obend.Core.Proofs.Substitution.check_mono`), and `Obend.Core.Proofs.CheckCompletenessObstruction.checked_does_not_imply_eventual_success`
 exhibits a term that has a `Checked` certificate but is refused at every fuel (a lambda with no
-annotation: annotations are inputs to the checker, not inferred). The tree separates *meaning*,
+annotation: annotations are inputs to the checker, not inferred). A second, bidirectional procedure
+exists beside `check` and is complete on a named fragment; §8.1 states both results and where each
+stops. The front end still admits programs with `check`. The tree separates *meaning*,
 which is existence of a derivation, from *procedure*, which is `check` at a granted fuel.
 `Obend.Core.Graded` is the monoid of grades the procedure is indexed by. Nothing in a statement
 about meaning mentions fuel.
@@ -793,12 +807,42 @@ the same uses, given a fixed amount of extra fuel (`extend`'s row check reads `i
 this reason). The theorem is inhabited by a real example
 (`Obend.Core.Proofs.Templates.coloured_discharges`, `Obend.Core.Proofs.Templates.coloured_instance_accepted`).
 
-What admission *relies on* is not that theorem. The closed program, instances included, is
-checked again by the checker. The front end emits each open instance as the cached template under
-its substitution (`ATerm.instantiate σ template`, one `templateLayer` per knot field), and the
-whole-program check is the one that counts. No front-end corollary of `check_instantiate` is
-claimed, because no check depends on one: a translation defect it would rule out is still caught by
-the whole-program check, as an anonymous typing refusal.
+What admission *relies on* is not that theorem. This is what the elaborator does
+(`Obend.Spec.Elaborate`, read at `e5fca29`; I traced it by reading, and ran nothing).
+
+1. `templateLayer` elaborates an open declaration once, at its own bounds, with `Self` and `Super`
+   its two bounded variables, and caches `(Self index, Super index, layer)` under the declaration's
+   key. That layer is the declaration's own knot field, and `Obend.Spec.FrontEnd.checkTemplates`
+   checks each such field once with those variables rigid (`refused (self-rigid)`,
+   `(super-rigid)` or `(template-typing)`).
+2. `chainFix` lowers a `fix` over a chain of declared specifications when some layer is open, or all
+   are closed specs and the seed is not already a whole target. It walks the chain bottom-up,
+   holding `below`, the row beneath the current layer, which starts as the canonical type of the
+   seed. For an open layer it resolves the layer's bounds at `Self = target`, `Super = below`, runs
+   the read clause and the write clause of the composition contract (`Contract.checkBounds`,
+   `Contract.checkProvides`) and emits an instance.
+3. The instance is `ATerm.retarget annotated arity (layer.instantiate σ)` with
+   `σ = {Self ↦ target, Super ↦ below}`. `ATerm.instantiate` substitutes σ into the *type
+   annotations* of the cached term and canonicalizes them, and does nothing else; `retarget`
+   re-annotates the result type of the `arity`-parameter function as `annotated` (the layer's
+   provided row, or the target variable itself for the last layer of a recursive record target).
+   `arity` is 2 for an open spec and the parameter count for an open extension.
+4. Instances are memoized by (declaration, target, `below`, `annotated`) and emitted as hidden knot
+   fields named `key@n`, so one distinct row context gets one field. A closed spec in the chain is
+   not instantiated at all: `layerAt` elaborates it afresh at (target, `below`, `annotated`). A
+   closed extension is referenced as a global, and is refused `inherited-mismatch` if its declared
+   `super` is not the row beneath.
+5. After the last layer, `Contract.close` compares the final row with the target, the operands are
+   joined with `mix` and the chain is tied with `fix` over the seed.
+
+So the emitted instance is the checked template with its annotations rewritten, and the claim
+that the template at σ equals the instance is made by a comment in the code ("holds by
+construction"), not by a theorem. `ATerm.instantiate` acts on the front end's annotated terms and
+types; `Discharges.check_instantiate` is about Core4's `AnnotatedTerm` and `Ty`; nothing in the tree
+relates the two. The whole closed program, instances included, is then checked by `Check.check`, and
+that check is the one that counts. No front-end corollary of `check_instantiate` is claimed, because
+no check depends on one: a translation defect it would rule out is still caught by the
+whole-program check, as an anonymous typing refusal.
 
 ### The composition contract
 
@@ -908,15 +952,23 @@ guarantees that a well-typed resident's pure segment terminates.
 ## 8. What is proved
 
 Scope: closed Core4 terms and the front end's *output*; nothing here mentions the meaning of `.obend`.
-I read each statement below at its source and did not rebuild the library; the tree's own reports
-(`lean/docs/REPORT-20261031.md`) record it green at each of its commits. I did print the axioms of
-every `Obend.*` constant this paper cites that the built library exports (74 of them) with
-`#print axioms`: none rests on more than `propext`, `Classical.choice` and `Quot.sound`, except the
-four `native_decide` facts `pommette_vectors`, `ordered_presentation_invariance_4000`,
-`twice_accepted` and `claim_spec_accepted`, which are *compiled*. The other 19 cited constants are
-module-private (a theorem is public only if another module cites it), so an importer cannot print
-them; all but one (`Obend.Core.Collect.agree_runBounded`, in a module with no pin) are named in
-their module's `#assert_axioms`.
+I read each statement below at its source, by script (every `Obend.*` name in this paper resolves to a
+declaration under `lean/Obend` on `origin/dev` at `e5fca29`), and did not rebuild the library; the
+tree's own reports (`lean/docs/REPORT-20261031.md`, `REPORT-CHECKER-20261030.md`) record it green at
+their commits.
+
+On axioms. For Draft 1, at commit `c04c948`, I printed `#print axioms` for the 74 cited constants the
+built library exports: none rests on more than `propext`, `Classical.choice` and `Quot.sound`, except
+the four `native_decide` facts `pommette_vectors`, `ordered_presentation_invariance_4000`,
+`twice_accepted` and `claim_spec_accepted`, which are *compiled*. The other 19 cited constants were
+module-private there, so an importer could not print them. Stated plainly: for those 19 the evidence
+is their module's `#assert_axioms` pin, not a printout, and for one of them, `Obend.Core.Collect.agree_runBounded`
+(`Core/Proofs/Settle.lean`, which has no pin at all on `e5fca29`), there is no pin either, so its axioms
+were never checked by anything I ran. I did not repeat the printing for this revision. For every
+constant added or changed since `c04c948` (the checker rows below) the evidence is the module's pin
+(`Check`, `LegacyAgreement`, `Bidirectional`, `BidirectionalCompleteness`,
+`CheckCompletenessObstruction`, `EquiRecursiveAgreement`, `FiniteBisimulation` all end in
+`#assert_axioms`), which holds when the library builds.
 
 | Theorem | Statement in words | Premises | Module |
 | --- | --- | --- | --- |
@@ -932,6 +984,11 @@ their module's `#assert_axioms`.
 | `Obend.Core.Proofs.Preservation.typed_yield_quiescent`, `.typed_resume_preserved` | a typed yield forces no shared cell; resuming it with a typed response gives a typed state | a typed state; a typed response | `Core/Proofs/Preservation` |
 | `Obend.Core.Proofs.Substitution.check_mono`, `.check_msubst` | more fuel never loses a result; closed fillings that check at their hypotheses' types keep a checked term checked, at fuel `n + m`, at the same type, with no more uses | the fillings check, closed, under the template's assumptions | `Core/Proofs/Substitution` |
 | `Obend.Core.Proofs.Templates.canonical_instantiate`, `.Discharges.infer_instantiate`, `.Discharges.check_instantiate` | a template accepted under rigid bounds is accepted at every substitution that discharges them | `Discharges` | `Core/Proofs/Templates` |
+| `Obend.Core.Check.sameType_equivalence`, `Obend.Core.Check.Assumptions.chase_bounded` | type agreement (canonical rows plus hereditary alias unfolding) is an equivalence; the bounded orbit test is exact | none | `Core/LegacyAgreement` |
+| `Obend.Core.Bidirectional.checkAgainst_sound` | whatever the bidirectional checker accepts has a derivation at exactly the expected type | `checkAgainst … = .ok` | `Core/Bidirectional` |
+| `Obend.Core.Proofs.BidirectionalCompleteness.complete`, `.checkAgainst_complete`, `.checked_covered_accepted` | a derivation of a term in the syntactic fragment makes `checkAgainst` succeed against every agreeing type, with the derivation's usage vector, whatever the annotations | `checkCovered`; the certificate's top-level premises | `Core/Proofs/BidirectionalCompleteness` |
+| `Obend.Core.Proofs.BidirectionalCompleteness.appliedLambda_boundary`, `.coverage_premise_needed`, `.full_corollary_fails` | the fragment boundary bites; the unconditional annotatability corollary is false for this checker | none | `Core/Proofs/BidirectionalCompleteness` |
+| `Obend.Core.Proofs.CheckCompletenessObstruction.checked_lambda_without_annotations_never_checks`, `.checked_does_not_imply_eventual_success`, `.annotated_empty_eliminator_still_incomplete` | the annotation-directed `check` is incomplete for `Checked`: a certified term it refuses at every fuel | none | `Core/Proofs/CheckCompletenessObstruction` |
 | `Obend.Spec.Contract.run_append`, `.run_assoc`, `.checkLayer_ok`, `.discharge_ok` | the composition contract threads through a chain; composition is associative; an admitted layer met its clauses; a discharged chain fills the final self exactly | none | `Spec/Proofs/Contract` |
 | `Obend.Spec.Proofs.SpecificationClosure.composeTy_closed`, `.compose_wrapper_typed` | `Specification<T>` is closed under `compose`, and the lowering is typable at every shareable `T` | `T.shareable` for the lowering | `Spec/Proofs/SpecificationClosure` |
 | `Obend.Spec.Proofs.FrontEndAdequacy.accepted_typed`, `.accepted_never_refused`, `.accepted_execution_semantics` | a program the front end accepts is closed and carries the checker's derivation, is never refused by the bounded machine, and a finished run extracts the unique deep evaluation of its term | an `Accepted` value | `Spec/Proofs/FrontEndAdequacy` |
@@ -950,16 +1007,83 @@ progress or preservation for the call-by-name `Step`, and a checked term may div
 language with activities the useful form of progress is that a checked term is never refused (it
 finishes, diverges, exhausts a bound or yields), and `checked_reachable_no_refusal` is that.
 
-*The checker is not complete.* `Obend.Core.Proofs.CheckCompletenessObstruction` pins
-counterexamples (`checked_lambda_without_annotations_never_checks`,
-`correct_lambda_annotation_still_incomplete`, `annotated_empty_eliminator_still_incomplete`,
-`annotated_unreachable_arm_still_incomplete`): `Checked` is strictly larger than what `check` finds
-at any fuel.
+*The checker is not complete, and one checker is.* §8.1 states which result applies to which procedure.
 
 *Things that read like proof but are not.* `Obend.Core.Check.checked_erasure` is a projection of the
 certificate. `Obend.Core.Term.Representation` is a contract; the claim is its inhabitant
 `coreRepresentation`. The `native_decide` fixtures of `Obend.Spec.Proofs.SpecificationClosure` show
 the front end accepts or refuses one source string, not a property of all strings.
+
+### 8.1 What is proved about the checker's completeness
+
+There are two checking procedures in the tree, and the results differ.
+
+**The annotation-directed checker is provably incomplete.** `Obend.Core.Check.check` reads a lambda's
+annotation and checks a derivation with a granted fuel. For its certificate type `Checked` (a
+`PartialTyping` derivation with the top-level premises)
+`Obend.Core.Proofs.CheckCompletenessObstruction.checked_lambda_without_annotations_never_checks` and
+`.checked_does_not_imply_eventual_success` give a certified term refused at every fuel (a lambda with
+no annotations), and `.annotated_empty_eliminator_still_incomplete` gives one that stays refused even
+with the right annotations (an empty case, which has a semantic eliminator at any result type but no
+type to infer it from). Two obstructions the first draft listed no longer stand and are removed:
+a correct annotation now suffices for a lambda whose branches meet through an alias, because branch
+joins convert through `agree` (`.correct_lambda_annotation_now_checks` is the former counterexample
+negated), and the duplicate-arm program has no certificate at all, because the relation itself
+refuses repeated case labels (`.case_labels_distinct`, `.duplicate_arms_have_no_derivation`).
+
+**A bidirectional checker exists, with a completeness theorem on a stated fragment.**
+`Obend.Core.Bidirectional` has one structural function, `elaborate`, over a mode `synth | check E`;
+it takes no fuel, returns `Except CheckRefusal` carrying the derivation, and has top levels
+`checkAgainst` and `infer`. Soundness is by construction (`checkAgainst_sound`). Conversion happens at
+the mode switch, annotations are read only in synthesis, and a refusal names its rule
+(`.missingLambdaAnnotation`, `.duplicateLabels`). Completeness is
+`Obend.Core.Proofs.BidirectionalCompleteness.complete`, by induction on `PartialTyping`: for a term
+that `synthCovered` or `checkCovered` accepts, the checker succeeds against every type agreeing with
+the derived one, with the same usage vector, *whatever the annotations*. The fragment is syntactic:
+variables, literals and eliminations synthesize; every introduction form (`lam`, `inject`, `perform`,
+`done`, a `record` with distinct labels, `specification`, `prototype`) and every branching form
+(`ifBool`, `ifZero`, `case`, empty arms included) sits in checking position. `extend` and holes are
+outside. The three former counterexamples check against their certificates' types by `decide`
+(`.unannotatedConstant_checks`, `.aliasBranch_checks`, `.emptyCase_checks`, in the obstruction
+module). The boundary is a theorem too: a lambda applied directly is certified at `Nat`, outside the
+fragment, and refused naming the missing annotation (`appliedLambda_boundary`), so the coverage
+premise cannot be dropped (`coverage_premise_needed`), while annotating the lambda is enough
+(`appliedLambda_annotated_checks`). Usage vectors are determined by the term
+(`uses_determined`), hence a certificate is determined by its type (`Checked.eq_of_type`).
+
+**The full annotatability statement is false for this checker.** "Every certified term has some
+annotations under which `checkAgainst` accepts it" is refuted by `full_corollary_fails`, through the
+witness `shadowedLambdaRecord_refused`: a record with a repeated label forces the checker to
+synthesize its fields; a lambda synthesizes an arrow whatever its annotation; and agreement does not
+descend into rows, so a field converted to an alias of its arrow type never meets the expected row.
+In the terms of Dunfield and Krishnaswami's criteria (§11) the system is complete on its fragment and
+fails annotatability outside it; the cause the proof isolates is that agreement does not descend into
+rows, not a missing mode.
+
+**Where the bidirectional checker is used.** The Slot layer's Core4 judge is `fragmentJudge` (the
+bidirectional checker restricted to the fragment, depth bounded by the grant) or `annotatedJudge`
+(`Check.check` with the grant as fuel); `Obend.Slot.Core4.routes_agree` says the two certify the same
+thing, and `extend_filling_admitted` shows an `extend` filling that only the second admits. The
+front end does not use it: a program is admitted by `Check.check`.
+
+**Equi-recursive type agreement is in progress, and the committed part is a foundation.** What is on
+`origin/dev` (`lean/docs/REPORT-EQUIREC-20261031.md` is its own account): a finite-graph
+bisimulation kernel whose visited-pair worklist accepts exactly when some bisimulation relates the
+pair (`Obend.Core.FiniteBisimulation.visitedSame_iff`; Amadio and Cardelli's trail of assumed pairs
+is the precedent), a type-graph decision proved equivalent to the graph meaning
+(`Obend.Core.TypeGraph.candidate_iff`), and the assembled relation
+`Obend.Core.EquiRecursiveAgreement.agrees` with `agrees_iff`, `agrees_equivalence`, congruence for
+arrows, fields, specifications, prototypes, variants and computations (`agrees_arrow` and its
+siblings), alias unfolding (`agrees_alias`), and the theorem that every old agreement is kept
+(`legacy_sameType_extends`). **It is not the checker's agreement yet.** `Check.sameType` still
+resolves to the legacy relation; `PartialTyping`, preservation, the bidirectional checker and the slot
+judge have not been switched; and `full_corollary_fails` therefore remains true and present. Two
+theorems record why the switch is not free: arrow congruence would equate `Nat → Nat` with its
+alias-domain spelling (`Obend.Core.Proofs.EquiRecursiveBoundary.congruence_equates_arrows`), while the
+current checker refuses `λx. x` at the latter under every annotation
+(`identity_alias_check_refused`), because the alias is not shareable and the unrestricted binder is
+invalid (`alias_shareability_differs`). Work in the tree beyond what is committed is not described
+here.
 
 ## 9. Ancestry, method combination, and a correction to the book
 
@@ -1085,14 +1209,29 @@ Stated plainly, from the tree's own lists.
 - **Cross-package extension.** No surface form names another package's root, and a package cannot be
   extended from another. Instances across package roots are not addressed. Everything downstream of a
   stranger extending my specification, with my law inheriting yours, waits on this.
-- **Laws.** `Obend/Law` is in progress (steps 1 and 2 landed: types and generators); no law
-  theorem is stated in this paper's scope. Spec `claim`s are never checked, and laws are not re-checked
-  at each template instance's types.
+- **Laws.** `Obend/Law` has landed in five steps, with 167 theorems pinned to the standard three
+  axioms by its own report (`lean/docs/REPORT-LAW-20261030.md`; I did not recount them). Among them,
+  over Core4's substitution-based `Evaluates` and not over the machine: `Obend.Law.guardedBy_sound`,
+  `Obend.Law.chain_keeps` (a claim of the `keeps` shape is preserved along a chain),
+  `Obend.Law.effective_law_eval` and `Obend.Law.inherited_never_widens` (for closed laws, the
+  effective law admits exactly when every law on the list admits), and
+  `Obend.Law.effective_refuses_first` (a refusal names the first refusing ancestor). The report
+  lists what is not done: no theorem that the generated laws type-check at their stated type, none
+  connecting the machine to `Admits`, and no compilation of the `.obend` law fragment to Law terms.
+  Spec `claim`s, in the front end, are elaborated into a hidden Boolean-typed knot field and recorded
+  with status `unchecked`; they are typed and retained and never evaluated or proved, and are not
+  re-checked at each template instance's types.
 - **Guardedness.** No check that a well-typed resident's segment terminates.
 - **Completeness of the machine** is finite, not bounded: no resource bound is proved. Quantities are
   static; use counts are not tracked at run time.
-- **Completeness of the checker** is conditional on annotations and an algorithmic fragment, with
-  the obstructions of §8 pinned.
+- **Completeness of the checker.** Neither procedure is complete for `PartialTyping`. `check` is
+  provably incomplete, `checkAgainst` is complete on a syntactic fragment, the unconditional
+  annotatability statement is refuted for it, and the front end uses `check` (§8.1). Closing the gap
+  is the equi-recursive agreement lane, of which only a foundation is committed, and the
+  `full_corollary_fails` witness remains true until `sameType` is switched.
+- **Equi-recursive agreement.** `Check.sameType` does not descend into constructors; the relation that
+  does (`EquiRecursiveAgreement.agrees`) is proved an equivalence and to extend the old one but is not
+  wired into `PartialTyping`, preservation, the checker or the slot judge.
 - **Language.** A digest primitive callable from source (`Obend.Core.Digest` exists; Core4 has no
   digest term); `before` and `after` methods, which the elaborator refuses.
 - **The leaf.** Refinement of a Core4 run against Bend's own `Eval` of the emitted book is a stated
@@ -1119,12 +1258,75 @@ context, and a filling is a closed term substituted for it. The development prov
 theorem (`Obend.Slot.slot_repair`) and instantiates the calculus at Core4 through the substitution
 lemma of §8. It is outside the subject of this paper.
 
-**Cook, Bracha and mixins.** Cook's account of inheritance as a fixed point over a function of the
-self (Cook and Palsberg, 1989) and Bracha and Cook's mixin-based inheritance (1990) are the
-ancestors of Faré's account. Core4's `mix` generalizes composition to different inherited, middle
-and provided types, and its `fix` is the fixed point with laziness as the semantics. Not in either
-account, so far as I know, are reflection with a stated observer table, typing against future self
-types, and a notion of ancestor identity that counts a diamond once.
+**Open recursion and mixins.** Cook and Palsberg (1989; *Information and Computation*, 1994) model
+inheritance as deriving modified versions of recursive definitions and prove that denotational model
+equivalent to the operational method-lookup of Smalltalk. Bracha and Cook (1990) read Smalltalk, Beta
+and CLOS inheritance as uses of one construct, the composition of mixins (abstract subclasses). Flatt,
+Krishnamurthi and Felleisen (1998) treat mixins as class-to-class functions and give them a reduction
+semantics for a Java subset, with type soundness theorems for it. Core4's `mix` generalizes
+composition to different inherited, middle and provided types, and its `fix` is the fixed point.
+Objective Bend adds, over these, a lazy reference semantics with effects as yields, a checker that
+types an extension against the members it reads from a future self (§6), a reflection contract with
+a stated observer table (§4), and statements checked in Lean for Core4 itself rather than for a
+Java subset. It does not add a result about mixins in a class-based language.
+
+**Linearization.** Barrett et al. (1996) give a monotonic linearization for Dylan, easily described,
+strictly observing local precedence order and agreeing with CLOS whenever CLOS's order is monotonic.
+C4 (§9) is that rule with the suffix property added. Objective Bend adds a method-combination
+discipline over the linearization, a diamond counted once, and an invariance under renaming of the
+ordered presentation checked on 4000 seeded DAGs. Neither monotonicity nor local precedence is stated
+as a theorem here, and the invariance is checked, not proved.
+
+**Call-by-need.** Launchbury (1993) defines a natural semantics for lazy evaluation with an explicit
+heap, in order to be precise about sharing; Sestoft (1997) derives a lazy abstract machine from it,
+updating the heap with each computed value; Ariola and Felleisen (1997) give an equational theory of
+call-by-need with no heap and prove it correct with respect to the call-by-name lambda calculus;
+Breitner (2014) machine-checked Launchbury's correctness proof, found it to fail, and gave two
+repairs; Hackett and Hutton (2019) replace the heap by nondeterminism ("clairvoyant" evaluation) and
+obtain simpler operational reasoning and a denotational cost semantics. The machine of §3.4 is a
+call-by-need machine of this family, but Objective Bend does not derive it from a heap semantics:
+the reference is call-by-name, and adequacy and finite completeness are proved against it in Lean
+for a machine that checkpoints, suspends at yields and is typed (§8). What it does not have is a
+cost theory: `METATHEORY.md` plans one from improvement theory (Moran and Sands, 1999), and the
+text of that paper in my collection is not machine-readable, so I say nothing about its content here.
+
+**Bidirectional typing and annotatability.** Pierce and Turner (2000) recover missing annotations
+locally, from adjacent nodes of the syntax tree. Dunfield and Krishnaswami (2021) survey the field:
+a bidirectional system should be mode-correct and *complete* with respect to a type-assignment
+system, a theorem sometimes called annotatability because the bidirectional derivation may need
+annotations added to the term, and the annotations required should be few. Lennon-Bertrand (2021)
+gives a bidirectional system for the Calculus of Inductive Constructions with a completeness theorem
+against the undirected system, proved in Coq, which needs a judgement between inference and checking
+to handle computation in types. Abel, Öhman and Vezzosi (2018) formalize a conversion-checking
+algorithm in Agda and prove it complete by a Kripke logical relation. Objective Bend adds a
+completeness theorem in Lean for a fragment named syntactically, valid whatever the annotations,
+alongside two machine-checked negative results: the annotation-directed `check` is incomplete, and the
+annotatability statement itself is false for this calculus, because agreement does not descend into
+rows (§8.1). It does not yet have what Lennon-Bertrand and Abel et al. have, a completeness result for
+the whole system, and equi-recursive agreement is the step that would decide whether one is reachable.
+
+**Quantitative types.** McBride (2016) tracks usage with annotations from an arbitrary rig, using the
+rig's zero to mark information present only to be contemplated; Atkey (2018) gives that system a
+realizability semantics; Wood and Atkey (2022) prove the metatheory of renaming and substitution for
+usage-annotated terms by linear algebra over semirings, formalized in Agda; Orchard, Liepelt and
+Eades (2019) put graded modal types in a working language, Granule; and Bernardy et al. (2018) attach
+linearity to function arrows in GHC to keep backwards compatibility. Core4 attaches a quantity and a
+reuse flag to arrows (§3.5) and synthesizes usage bottom-up, the shape Wood and Atkey exploit, and
+the tree proves a certificate's usage vector is determined by the term (`uses_determined`). It adds
+no dependent types and no usage-polymorphism over a semiring: its quantities are the fixed four
+(erased, affine, linear, unrestricted), with at-most-once enforced for both affine and linear, and
+the rule that a reusable closure captures only shareable bindings is its own.
+
+**Recursive type equality.** Amadio and Cardelli (1993) relate equality and subtyping of recursive
+types as induced by a model, an ordering on infinite trees, an algorithm and a set of rules, and show
+soundness and completeness between the rules, the algorithm and the tree semantics; their algorithm
+keeps a trail of assumed pairs. Gaster and Jones (1996) type extensible records and variants with
+rows, using *lacks* predicates to keep labels from repeating. Core4's rows go the other way: a label
+may repeat, the first wins, and a shadowed member is kept only if forgetting it could lose a resource
+(§3.5). What the tree has today is hereditary alias unfolding that does not descend into
+constructors; a visited-pair relation in the Amadio–Cardelli style is proved to be an equivalence
+and to extend it, and is not yet the checker's (§8.1). Rigid template variables are nominal, and lookup through them
+goes through their bound, which is the use of bounds that §6 describes and not an equality.
 
 **Jsonnet and Nix.** Both are lazy and both compose a `self` with a `super`, which is the evidence
 that the idea is usable. They split on conflation. A Jsonnet object is its own specification: `+`
@@ -1141,9 +1343,16 @@ theory, which is what Core4's checker is for, nor a mechanized metatheory.
 
 ## Reproducing
 
-Read against `/Users/ember/dev/obend` at commit `c04c948` (the Law steps `4340797` and `cd27755` landed while this was being written; they are not read here) plus the uncommitted work of the other
-lanes in `lean/` at the time. From `lean/`: `LEAN_NUM_THREADS=2 lake build 2>&1 | tee build.log`,
-then `lake build obend` and `python3 tests/run-obend-source.py` for the conformance cohorts. Every `.obend` block above is a
+Draft 1 was read against `/Users/ember/dev/obend` at commit `c04c948` plus uncommitted work of other
+lanes. Draft 2 describes only what is committed on `origin/dev` at `e5fca29`: names were resolved
+against `git archive origin/dev lean/Obend`, so the uncommitted files in the working tree (further
+equi-recursive modules, edits to `Bidirectional.lean` and `Check.lean`) are not read. From `lean/`:
+`LEAN_NUM_THREADS=2 lake build 2>&1 | tee build.log`, then `lake build obend` and
+`python3 tests/run-obend-source.py` for the conformance cohorts. Every `.obend` block above is a
 file under `lean/tests/obend-source/` byte for byte, spliced mechanically; every `lean` excerpt names
 its file and line range. This paper was written without building: the example outputs were produced
-by the already-built `lean/.lake/build/bin/obend`, whose build the paper did not itself check.
+by the already-built `lean/.lake/build/bin/obend` for Draft 1 and were not regenerated, and the build
+of the library was not checked by this revision. Prior art in §11 is limited to papers whose text in
+`~/paperbin` I opened; the sources `review/PRIOR-ART-20261030.md` names but could not fetch
+(Brandt and Henglein 1998, Leijen 2005, Ducournau et al. 1994, Cardelli 1986, Birgisson et al. 2014)
+are not cited.
