@@ -23,6 +23,7 @@ candidate 0 at height 0, the stored selection reads blocked by the revoked grant
 and the slot fills by candidate 1 there (`toy_repair`).
 -/
 public import Obend.Slot.World
+public import Obend.Slot.Calculus
 public import Obend.AxiomPin
 @[expose] public section
 
@@ -127,6 +128,16 @@ theorem slotFiller_integrity : Integrity (slotFiller : Filler V Fact Cand) := by
     | nil => rw [ha] at hmem; cases hmem
     | cons c' rest => exact ⟨c', rfl⟩
 
+/-- A calculus filling selected by the integrity-preserving filler has semantic
+typing, independently of the budget used to discover its certificate. -/
+theorem slotFiller_typed {Tm R : Type} [Calculus Tm] [Obend.Core.Graded R] [Decides R Tm]
+    (budget : Budget R) (Ψ : Calculus.Ctx Tm) (A : Calculus.Ty Tm)
+    (supports : Tm → List Fact) (v : V) (order : List Tm) (t : Tm)
+    (h : (slotFiller : Filler V Fact Tm).fill
+      (Calculus.slotOf budget Ψ A supports) v order = .ok t) : Calculus.Typed Ψ t A := by
+  obtain ⟨_, hu, _⟩ := select_ok h
+  exact (Calculus.slotOf_usable budget Ψ A supports (holdsAt v) t hu).1
+
 /-! ## The floor -/
 
 /-- Judges, ignores supports: `supportLive := fun _ => true`. -/
@@ -221,7 +232,7 @@ theorem not_integrity_blindRefusal : ¬ Integrity (blindRefusal : Filler Nat Mem
 /-- The slot's filler has integrity on the toy, where the non-trivial case happens. -/
 theorem toy_integrity : Integrity (slotFiller : Filler Nat Member Member) := slotFiller_integrity
 
-#assert_axioms resolve_eq_select select_ok select_error slotFiller_integrity toy_repair toy_alice_dead
+#assert_axioms slotFiller_typed resolve_eq_select select_ok select_error slotFiller_integrity toy_repair toy_alice_dead
   not_integrity_credulousHoles not_integrity_firstCandidate not_integrity_blindRefusal toy_integrity
 
 end Obend.Slot

@@ -1,42 +1,15 @@
 module
-/-
-# Obend.Slot.Core4 — Core4 as a contextual calculus, on its closed-hole fragment
-
-The instance the slot theory needs, at the language this library is about. A HOLE is a free de Bruijn
-hypothesis of an open Core4 term (`Term.bound x` with `x` beyond the binders above it); a FILLING is
-a closed annotated term; `msubst` (`Obend.Core.Proofs.Substitution.msubst`) substitutes fillings for
-the hypotheses they name and merges the fillings' lambda annotations at the positions where they land,
-so the filled term is again an `AnnotatedTerm` the checker reads.
-
-What fragment this is, said as LANG-68 said it of nano: a hole here has the EMPTY local context. CMTT's
-`u :: [Ψ ⊢ A]` with `Ψ ≠ []` and occurrences `u[σ]` carrying a substitution are not expressible: Core4
-has no hole former, and a free variable cannot carry a context. So `Calculus.check Ψ t A` judges a
-filling in the context `Ψ` of the HOLE'S SURROUNDINGS, and the filling may use those hypotheses, but a
-filling is itself never open in further holes (depth one). The checker is Core4's own `check` at the
-front end's type fuel; `strengthen`/`weaken` rename hypotheses with `Term.rename`.
-
-The law of the calculus (nano's `CalculusLaws.msubst_lemma`) is PROVED here, from the substitution
-lemma of `Obend.Core.Check` (`check_msubst`): a template that passes the judge at `A`, with every
-filling closed, under the template's assumptions, and passing the judge at the type `Ψ` declares for
-its hypothesis, gives a filled term that checks at `A` (`calculus_check_msubst`), with no more uses of
-any hypothesis than the template had. Three corners, each with a tooth in `Substitution`:
-- FUEL. The judge runs `check` at the fixed `checkFuel`; the filled term needs the template's fuel
-  plus a filling's, so the law at the fixed fuel holds within that budget
-  (`calculus_check_msubst_within`), and in general at `2 * checkFuel` (`calculus_check_msubst`).
-  `fuel_tooth` exhibits template and filling at fuel 2 whose filling is refused at 2.
-- CLOSED FILLINGS. An open filling that shares a linear hypothesis with its surroundings is refused
-  after substitution (`open_filling_tooth`); `Scoped 0` on fillings is load-bearing.
-- ASSUMPTIONS. `msubst` keeps the template's assumptions; a filling that passes the judge only under
-  its own is refused (`assumptions_tooth`); the law asks `f.assumptions = t.assumptions`.
-Also proved: the equations a slot reader relies on (`msubst_var_filled`, `msubst_var_open`,
-`uses_var`) and `annotationsAt_root`.
--/
+/- Core4's fuel-free meaning is existence of Checked evidence. Its semantic
+substitution law is independent of annotation coverage. The checker is a graded
+sound procedure, complete only on its explicitly recognized fragment. -/
 public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.Core.Proofs.Substitution
+public import Obend.Core.Proofs.TypedSubstitution
 public import Obend.Slot.Calculus
+public import Obend.Tactic.Fuel
 
 @[expose] public section
 namespace Obend.Slot.Core4
@@ -109,16 +82,67 @@ instance : Obend.Slot.Calculus AnnotatedTerm where
   Ty := Ty
   Ctx := Context
   msubst := msubst
-  check Ψ t A :=
-    match check t Ψ checkFuel with
-    | some checked => decide (checked.type = A)
-    | none => false
+  Typed Ψ t A := ∃ c : Checked t Ψ, c.type = A
   uses t x := freeIn x t.term
   drop Ψ x := Ψ.eraseIdx x
   strengthen x t := { t with term := t.term.rename (lowerFrom x) }
   weaken x t := { t with term := t.term.rename (liftFrom x) }
   var := var
   lookup Ψ x := (Ψ[x]?).map (·.type)
+
+/-- Exact-result recognition at a supplied grade. -/
+def gradedCheck (fuel : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
+  match check t Ψ fuel with
+  | some c => decide (c.type = A)
+  | none => false
+
+theorem gradedCheck_iff (fuel : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
+    gradedCheck fuel Ψ t A = true ↔ ∃ c : Checked t Ψ, check t Ψ fuel = some c ∧ c.type = A := by
+  unfold gradedCheck
+  cases h : check t Ψ fuel with
+  | none => simp
+  | some c =>
+    simp only [decide_eq_true_eq]
+    constructor
+    · intro hc; exact ⟨c, rfl, hc⟩
+    · rintro ⟨c', hc', hA⟩; cases hc'; exact hA
+
+/-- Recognition is explicit evidence about the algorithm, not another spelling
+of semantic typing. No decision procedure for this predicate is claimed. -/
+def Recognized (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Prop :=
+  ∃ fuel, ∃ c : Checked t Ψ, check t Ψ fuel = some c ∧ c.type = A
+
+instance : Decides Nat AnnotatedTerm where
+  check := gradedCheck
+  Covered := Recognized
+  check_sound := by
+    intro r Ψ t A h
+    obtain ⟨c, _, same⟩ := (gradedCheck_iff r Ψ t A).1 h
+    exact ⟨c, same⟩
+  check_mono := by
+    intro r s Ψ t A h le
+    obtain ⟨c, hc, same⟩ := (gradedCheck_iff r Ψ t A).1 h
+    apply (gradedCheck_iff s Ψ t A).2
+    refine ⟨c, ?_, same⟩
+    fuel_lift hc using check_mono
+  check_complete := by
+    intro Ψ t A _ covered
+    obtain ⟨r, c, hc, same⟩ := covered
+    exact ⟨r, (gradedCheck_iff r Ψ t A).2 ⟨c, hc, same⟩⟩
+  check_covered := by
+    intro r Ψ t A h
+    exact ⟨r, (gradedCheck_iff r Ψ t A).1 h⟩
+
+/-- The substitution law is about meaning, including derivations the checker
+cannot recognize. Closedness and shared assumptions remain essential. -/
+theorem calculus_typed_msubst (Ψ : Context) (t : AnnotatedTerm) (A : Ty)
+    (σ : Nat → Option AnnotatedTerm) (ht : Calculus.Typed Ψ t A)
+    (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
+      ∃ b : Binding, Ψ[x]? = some b ∧ Calculus.Typed Ψ f b.type) :
+    Calculus.Typed Ψ (msubst σ t) A := by
+  obtain ⟨c, same⟩ := ht
+  obtain ⟨c', same', _⟩ := Obend.Core.Proofs.TypedSubstitution.checked_msubst c σ hσ
+  exact ⟨c', same'.trans same⟩
 
 /-- At the root (depth 0, empty path), a filled hypothesis answers with the filling's own annotations. -/
 theorem annotationsAt_root (σ : Nat → Option AnnotatedTerm) (ann : Annotations) (x : Nat)
@@ -150,7 +174,7 @@ theorem uses_var (x : Nat) : Obend.Slot.Calculus.uses (var x) x = true := by
 
 /-- The judge of this calculus: `check` at the fixed fuel, then the type compared exactly. -/
 theorem calculus_check_iff (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
-    Obend.Slot.Calculus.check Ψ t A = true ↔ ∃ c : Checked t Ψ, check t Ψ checkFuel = some c ∧ c.type = A := by
+    gradedCheck checkFuel Ψ t A = true ↔ ∃ c : Checked t Ψ, check t Ψ checkFuel = some c ∧ c.type = A := by
   show (match check t Ψ checkFuel with
     | some checked => decide (checked.type = A)
     | none => false) = true ↔ _
@@ -167,9 +191,9 @@ closed, sharing the template's assumptions, and passing the judge at the type `�
 hypothesis, gives a filled term that `check` accepts at `A` with twice the judge's fuel (the
 template's budget plus a filling's: `fuel_tooth` is why the fuel adds). -/
 theorem calculus_check_msubst (Ψ : Context) (t : AnnotatedTerm) (A : Ty) (σ : Nat → Option AnnotatedTerm)
-    (ht : Obend.Slot.Calculus.check Ψ t A = true)
+    (ht : gradedCheck checkFuel Ψ t A = true)
     (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
-      ∃ b : Binding, Ψ[x]? = some b ∧ Obend.Slot.Calculus.check Ψ f b.type = true) :
+      ∃ b : Binding, Ψ[x]? = some b ∧ gradedCheck checkFuel Ψ f b.type = true) :
     ∃ c : Checked (msubst σ t) Ψ, check (msubst σ t) Ψ (2 * checkFuel) = some c ∧ c.type = A := by
   obtain ⟨c, hc, hA⟩ := (calculus_check_iff Ψ t A).1 ht
   obtain ⟨c', hc', hty, -⟩ := check_msubst σ hc (fun x f hx => by
@@ -179,8 +203,8 @@ theorem calculus_check_msubst (Ψ : Context) (t : AnnotatedTerm) (A : Ty) (σ : 
     refine ⟨closed, b, ?_⟩
     rw [e]
     exact ⟨d, hb, hd, hdt⟩)
-  rw [Nat.two_mul]
-  exact ⟨c', hc', hty.trans hA⟩
+  refine ⟨c', ?_, hty.trans hA⟩
+  fuel_lift hc' using check_mono
 
 /-- The law at the judge's own fuel: when the template checks at fuel `n` and every filling at fuel
 `m` with `n + m ≤ checkFuel`, the filled term passes the judge. Fuel is the one corner where the law
@@ -189,16 +213,17 @@ theorem calculus_check_msubst_within (Ψ : Context) (t : AnnotatedTerm) (A : Ty)
     (n m : Nat) (budget : n + m ≤ checkFuel) (c : Checked t Ψ) (ht : check t Ψ n = some c) (hA : c.type = A)
     (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
       ∃ (b : Binding) (d : Checked f Ψ), Ψ[x]? = some b ∧ check f Ψ m = some d ∧ d.type = b.type) :
-    Obend.Slot.Calculus.check Ψ (msubst σ t) A = true := by
+    gradedCheck checkFuel Ψ (msubst σ t) A = true := by
   obtain ⟨c', hc', hty, -⟩ := check_msubst σ ht (fun x f hx => by
     obtain ⟨closed, hfa, b, d, hb, hd, hdt⟩ := hσ x f hx
     have e : { f with assumptions := t.assumptions } = f := by rw [← hfa]
     refine ⟨closed, b, ?_⟩
     rw [e]
     exact ⟨d, hb, hd, hdt⟩)
-  exact (calculus_check_iff Ψ _ A).2 ⟨c', check_mono hc' budget, hty.trans hA⟩
+  refine (calculus_check_iff Ψ _ A).2 ⟨c', ?_, hty.trans hA⟩
+  fuel_lift hc' using check_mono
 
-#assert_axioms annotationsAt_root msubst_var_filled msubst_var_open uses_var calculus_check_iff
+#assert_axioms gradedCheck_iff calculus_typed_msubst annotationsAt_root msubst_var_filled msubst_var_open uses_var calculus_check_iff
   calculus_check_msubst calculus_check_msubst_within
 
 end Obend.Slot.Core4

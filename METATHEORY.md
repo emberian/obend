@@ -12,10 +12,13 @@ yield a filled term the same judge refuses for depth. That is step-indexing wear
 checker's clothes, and the fix is the one every step-indexed development makes:
 
 - **Meaning is fuel-free.** `PartialTyping Ψ t A` (the derivation `Checked` already carries) is the
-  typing judgment. The substitution lemma is stated there, unconditionally; `check_msubst` at
-  `n + m` plus soundness is already its proof.
+  typing judgment. The substitution lemma is stated there: `checked_msubst` proves it by induction on
+  typing evidence. Checker soundness alone cannot prove it: some semantic derivations are
+  never recognized by the checker.
 - **The procedure is graded.** `check : Fuel → Ctx → Tm → Ty → Option Checked` with `check_mono`
-  (lane A proved it) and completeness-at-some-fuel. Generalize the index to any ordered commutative
+  (lane A proved it) and conditional completeness on the recognized fragment.
+  `CheckCompletenessObstruction` pins counterexamples even with complete lambda annotations;
+  `Recognized` explicitly records eventual algorithmic success and is not claimed decidable. Generalize the index to any ordered commutative
   monoid `R` with a typeclass `Graded R`: fuel is one instance; the machine's ticks, heap and
   extraction budget are others. The law reads `grade (msubst σ t) ≤ grade t + Σ grade σ`, and the
   arithmetic of `n + m` becomes the monoid law, stated once.
@@ -27,7 +30,7 @@ checker's clothes, and the fix is the one every step-indexed development makes:
 
 So `Obend.Slot.Calculus` splits into `Calculus` (with `Typed : Ctx → Tm → Ty → Prop`, `msubst`, and
 the substitution law on `Typed`) and `Decides R` (the graded procedure with soundness, monotonicity
-and completeness-at-some-grade). The slot's theorems quantify over `Typed`; admission quantifies
+and completeness-at-some-grade under an explicit coverage premise). The slot's theorems quantify over `Typed`; admission quantifies
 over the grade the world granted. Nothing about fuel appears in a statement about meaning again.
 
 ## 2. The remaining theorems, and the tool each wants
@@ -77,8 +80,9 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
 
 ## 5. Order
 
-1. The meaning/procedure split of §1 (`Typed`, `Graded`, `Decides`), with the slot's statements
-   moved onto `Typed`. Small, and it closes D12.
+1. Landed: the meaning/procedure split (`Typed`, `Graded`, `Decides`), semantic substitution,
+   budgeted slots and named `uncovered` admission. D12 is closed at meaning; procedural
+   completeness is explicitly conditional, with pinned obstructions to the stronger claim.
 2. `Obend.Spec` (lane C, in flight): the front end, so everything downstream reads `.obend`.
 3. Law and the inheritance theorems; B4/B4′ at the toy World, then at minidregg's.
 4. The generic traversal and `obend_cases`, then the `hole n σ` exercise under the journal.
