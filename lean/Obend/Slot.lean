@@ -22,6 +22,7 @@ hold is usable the moment it is selected: the repair changes the selection and n
 `interp` runs a protocol whose holes a RESOLVER fills when reached; a resolver may refuse, and the run
 then ends `withdrawn` with the resolver's reason. `Slot.resolve` is the resolver a slot gives.
 -/
+public import Obend.Tactic.Tooth
 public import Obend.Slot.Protocol
 @[expose] public section
 
@@ -155,6 +156,8 @@ theorem slot_repair {V : Type} (S : Slot Fact Cand) (holdsAt : V → Fact → Bo
     have hd : S.dead (holdsAt v) c' = [] := (dead_eq_nil_iff S _ c').2 hall
     unfold Slot.read
     simp [hj, hd]
+
+#tooth slot_repair by mutation Slot.read := fun _ _ _ => .empty
 
 end
 

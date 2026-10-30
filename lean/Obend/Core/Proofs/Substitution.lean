@@ -21,6 +21,7 @@ The lemmas on the way are of independent use: `infer` is monotone in its fuel (`
 `check_mono`), a checked term is scoped by its context (`typed_scoped`), and a closed term checks
 the same in any valid context, at any position, with zero uses (`infer_transport`).
 -/
+public import Obend.Tactic.Tooth
 public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Check
@@ -1959,12 +1960,14 @@ theorem msubst_fuel : msubst (fillZero fuelFilling) fuelTemplate =
       liftRename]
   rw [← e]; rfl
 /-- TOOTH (the fuel adds). Template and filling each check at fuel 2; the filled term is refused at
-fuel 2 and accepted at 3. `check_msubst` promises fuel `2 + 2`; a fixed fuel keeps the lemma only
-within its budget (`Obend.Slot.Core4.calculus_check_msubst`). -/
+fuel 2 and accepted at 3. `check_msubst` promises fuel `2 + 2`; a fixed fuel limits procedural admission, not fuel-free semantic substitution
+(`Obend.Slot.Core4.calculus_typed_msubst`). -/
 theorem fuel_tooth :
     (check (msubst (fillZero fuelFilling) fuelTemplate) fuelContext 2).isNone = true ∧
     (check (msubst (fillZero fuelFilling) fuelTemplate) fuelContext 3).isSome = true := by
   rw [msubst_fuel]; exact ⟨by decide, by decide⟩
+
+#tooth fuel_tooth by mutation fuelFilling := ⟨.nat 0, fun _ => none, {}⟩
 
 @[expose] public def linearTemplate : AnnotatedTerm := ⟨.binary .add (.bound 0) (.bound 1), fun _ => none, {}⟩
 @[expose] public def linearFilling : AnnotatedTerm := ⟨.bound 1, fun _ => none, {}⟩
@@ -1985,6 +1988,8 @@ of hypothesis `0`, and the template checks; the filled term uses the linear hypo
 refused. `Scoped 0` on the fillings is load-bearing. -/
 theorem open_filling_tooth : (check (msubst (fillZero linearFilling) linearTemplate) linearContext 4).isNone = true := by
   rw [msubst_linear]; decide
+
+#tooth open_filling_tooth by mutation linearFilling := ⟨.nat 0, fun _ => none, {}⟩
 
 @[expose] public def sumRow : Ty := .field "l" .natural .emptyRow
 @[expose] public def sumAssumptions : Assumptions := ⟨[(0, .variant sumRow)], [], []⟩
@@ -2008,6 +2013,8 @@ type; `msubst` keeps the template's assumptions, which have no bound, and the fi
 This is why `check_msubst` judges a filling as `{ f with assumptions := t.assumptions }`. -/
 theorem assumptions_tooth : (check (msubst (fillZero aliasFilling) aliasTemplate) aliasContext 4).isNone = true := by
   rw [msubst_alias]; decide
+
+#tooth assumptions_tooth by mutation aliasFilling := aliasTemplate
 
 #assert_axioms liftSubstitution_fillTerm typed_scoped infer_transport infer_mono check_mono infer_msubst check_msubst
   fuel_template_checks fuel_filling_checks fuel_tooth linear_template_checks linear_filling_checks linear_filling_open

@@ -22,6 +22,7 @@ slot's selection, a refusal that names nothing). The toy also inhabits the non-t
 candidate 0 at height 0, the stored selection reads blocked by the revoked grant's name at height 1,
 and the slot fills by candidate 1 there (`toy_repair`).
 -/
+public import Obend.Tactic.Tooth
 public import Obend.Slot.World
 public import Obend.Slot.Calculus
 public import Obend.AxiomPin
@@ -138,6 +139,26 @@ theorem slotFiller_typed {Tm R : Type} [Calculus Tm] [Obend.Core.Graded R] [Deci
   obtain ⟨_, hu, _⟩ := select_ok h
   exact (Calculus.slotOf_usable budget Ψ A supports (holdsAt v) t hu).1
 
+/-- When a budgeted slot refuses a candidate whose ordinary supports all hold,
+its named explanation is precisely `uncovered` at the declared grade. This
+connects admission diagnostics to the actual integrity-preserving filler. -/
+theorem slotFiller_uncovered {Tm R : Type} [Calculus Tm] [Obend.Core.Graded R] [Decides R Tm]
+    (budget : Budget R) (Ψ : Calculus.Ctx Tm) (A : Calculus.Ty Tm)
+    (supports : Tm → List Fact) (v : V) (order : List Tm) (t : Tm)
+    (w : Refusal Fact Tm)
+    (h : (slotFiller : Filler V Fact Tm).fill
+      (Calculus.slotOf budget Ψ A supports) v order = .error w)
+    (member : t ∈ order) (live : ∀ f ∈ supports t, holdsAt v f = true) :
+    Calculus.admit budget Ψ A t = .error (.uncovered budget.grade) := by
+  have refused := (select_error h).1 t member
+  have dead : (Calculus.slotOf budget Ψ A supports).dead (holdsAt v) t = [] :=
+    (dead_eq_nil_iff _ _ _).2 live
+  unfold Slot.usable at refused
+  rw [dead] at refused
+  have checkFalse : Decides.check budget.grade Ψ t A = false := by
+    simpa only [Calculus.slotOf, List.isEmpty_nil, Bool.and_true] using refused
+  simp [Calculus.admit, checkFalse]
+
 /-! ## The floor -/
 
 /-- Judges, ignores supports: `supportLive := fun _ => true`. -/
@@ -206,6 +227,8 @@ theorem toy_repair :
     slotFiller.fill toySlot 1 toyOrder = .ok .bob :=
   ⟨rfl, rfl, rfl⟩
 
+#tooth toy_repair by mutation toyOrder := []
+
 theorem toy_alice_dead : holdsAt (V := Nat) 1 Member.alice = false := rfl
 
 /-- FLOOR. The credulous filler admits Alice's candidate at height 1, where her grant is retired. -/
@@ -215,12 +238,16 @@ theorem not_integrity_credulousHoles : ¬ Integrity (credulousHoles : Filler Nat
   rw [toy_alice_dead] at this
   cases this
 
+#tooth not_integrity_credulousHoles by mutation Integrity := fun {_ _ _} [_] _ => True
+
 /-- FLOOR. The first-candidate filler admits Alice's candidate at height 1 too. -/
 theorem not_integrity_firstCandidate : ¬ Integrity (firstCandidate : Filler Nat Member Member) := by
   intro h
   have := ((h.1 toySlot 1 toyOrder).1 .alice rfl).2.2.1 .alice (by simp [toySlot])
   rw [toy_alice_dead] at this
   cases this
+
+#tooth not_integrity_firstCandidate by mutation Integrity := fun {_ _ _} [_] _ => True
 
 /-- FLOOR. The blind refusal refuses Alice alone at height 1 with no coordinate: nothing names her
 dead grant. -/
@@ -229,10 +256,12 @@ theorem not_integrity_blindRefusal : ¬ Integrity (blindRefusal : Filler Nat Mem
   obtain ⟨d, hd, -⟩ := (h.1 toySlot 1 [.alice]).2 [] rfl .alice (List.mem_singleton.2 rfl)
   cases hd
 
+#tooth not_integrity_blindRefusal by mutation blindRefusal := slotFiller
+
 /-- The slot's filler has integrity on the toy, where the non-trivial case happens. -/
 theorem toy_integrity : Integrity (slotFiller : Filler Nat Member Member) := slotFiller_integrity
 
-#assert_axioms slotFiller_typed resolve_eq_select select_ok select_error slotFiller_integrity toy_repair toy_alice_dead
+#assert_axioms slotFiller_uncovered slotFiller_typed resolve_eq_select select_ok select_error slotFiller_integrity toy_repair toy_alice_dead
   not_integrity_credulousHoles not_integrity_firstCandidate not_integrity_blindRefusal toy_integrity
 
 end Obend.Slot
