@@ -94,3 +94,15 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
    independently characterized checking fragment. More fuel cannot fix the proved obstructions.
 5. `≈b` via Iris-Lean, as its own lane with its own toolchain decision.
 6. Leaf refinement against `bendtt.lean`.
+
+## 6. Checker alignment (added 2026-10-30, after Gemini Argon's analysis)
+
+The procedure is provably incomplete for `PartialTyping` (`Core/Proofs/CheckCompletenessObstruction.lean`).
+The plan, checked against the code in `review/ARGON-RESPONSE-20261030.md`: separate transparent
+aliases from rigid bounds and make `sameType` a hereditary, visited-set-bounded equivalence; put
+`sameType` plus `conversion` at every join in the existing checker; build a bidirectional checker
+beside it with uses synthesized inline and refusals that name the rule and the path; define
+`Covered := checkCovered` syntactically and prove direct completeness on it plus full completeness
+through `annotateFromDerivation`; swap the Core4 `Decides` instance. §1's correction: usage
+accounting is already a synthesized output and stays inside the checker; no solver pass. Solvers
+belong only in the member-side elaborator that finds annotations, never in admission.
