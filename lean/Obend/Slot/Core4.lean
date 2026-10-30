@@ -4,9 +4,9 @@ module
 
 The instance the slot theory needs, at the language this library is about. A HOLE is a free de Bruijn
 hypothesis of an open Core4 term (`Term.bound x` with `x` beyond the binders above it); a FILLING is
-a closed annotated term; `msubst` substitutes fillings for the hypotheses they name and merges the
-fillings' lambda annotations at the positions where they land, so the filled term is again an
-`AnnotatedTerm` the checker reads.
+a closed annotated term; `msubst` (`Obend.Core.Proofs.Substitution.msubst`) substitutes fillings for
+the hypotheses they name and merges the fillings' lambda annotations at the positions where they land,
+so the filled term is again an `AnnotatedTerm` the checker reads.
 
 What fragment this is, said as LANG-68 said it of nano: a hole here has the EMPTY local context. CMTT's
 `u :: [Ψ ⊢ A]` with `Ψ ≠ []` and occurrences `u[σ]` carrying a substitution are not expressible: Core4
@@ -15,24 +15,38 @@ filling in the context `Ψ` of the HOLE'S SURROUNDINGS, and the filling may use 
 filling is itself never open in further holes (depth one). The checker is Core4's own `check` at the
 front end's type fuel; `strengthen`/`weaken` rename hypotheses with `Term.rename`.
 
-Nothing here is proved about `check` under `msubst` (the substitution lemma of the calculus): that is
-the law `CalculusLaws.msubst_lemma` nano stated of its instance, and it is owed here as a theorem about
-`Obend.Core.Check` (a typed closed filling at a hypothesis of its type keeps the whole typed). What is
-proved: the three equations a slot reader relies on (`msubst_var_filled`, `msubst_var_open`,
-`uses_var`), and `annotationsAt_root`.
+The law of the calculus (nano's `CalculusLaws.msubst_lemma`) is PROVED here, from the substitution
+lemma of `Obend.Core.Check` (`check_msubst`): a template that passes the judge at `A`, with every
+filling closed, under the template's assumptions, and passing the judge at the type `Ψ` declares for
+its hypothesis, gives a filled term that checks at `A` (`calculus_check_msubst`), with no more uses of
+any hypothesis than the template had. Three corners, each with a tooth in `Substitution`:
+- FUEL. The judge runs `check` at the fixed `checkFuel`; the filled term needs the template's fuel
+  plus a filling's, so the law at the fixed fuel holds within that budget
+  (`calculus_check_msubst_within`), and in general at `2 * checkFuel` (`calculus_check_msubst`).
+  `fuel_tooth` exhibits template and filling at fuel 2 whose filling is refused at 2.
+- CLOSED FILLINGS. An open filling that shares a linear hypothesis with its surroundings is refused
+  after substitution (`open_filling_tooth`); `Scoped 0` on fillings is load-bearing.
+- ASSUMPTIONS. `msubst` keeps the template's assumptions; a filling that passes the judge only under
+  its own is refused (`assumptions_tooth`); the law asks `f.assumptions = t.assumptions`.
+Also proved: the equations a slot reader relies on (`msubst_var_filled`, `msubst_var_open`,
+`uses_var`) and `annotationsAt_root`.
 -/
 public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Check
+public import Obend.Core.Invariant
+public import Obend.Core.Proofs.Substitution
 public import Obend.Slot.Calculus
 
 @[expose] public section
 namespace Obend.Slot.Core4
 
 open Obend.Core.Term (Term)
-open Obend.Core.Ty (Ty Context)
-open Obend.Core.Check (AnnotatedTerm Annotations)
+open Obend.Core.Ty (Ty Context Binding)
+open Obend.Core.Check (AnnotatedTerm Annotations Checked check)
 open Obend.Core.Ty (LambdaAnnotation)
+open Obend.Core.Invariant (Scoped)
+open Obend.Core.Proofs.Substitution (fillingAt annotationsAt fillTerm msubst fillTerm_zero check_msubst check_mono)
 set_option autoImplicit false
 
 /-- Does hypothesis `x` (a free de Bruijn index, counted at the root) occur in `t`? Each binder
@@ -79,86 +93,6 @@ decreasing_by
          simp +arith
        omega)
 
-/-- The filling of hypothesis `x` at binder depth `depth`, if `σ` fills it: a `bound index` with
-`depth ≤ index` is the hypothesis `index - depth`. -/
-def fillingAt (σ : Nat → Option AnnotatedTerm) (depth index : Nat) : Option AnnotatedTerm :=
-  if depth ≤ index then σ (index - depth) else none
-
-/-- Walk `t` along a checker position (`Obend.Core.Check.infer`'s conventions: children numbered as
-the checker numbers them, record fields by their index, `extend` fields under `1`, `case` arms under
-`1`, binders counted). If the path passes through a filled hypothesis, the answer is the filling's own
-annotation at the rest of the path; otherwise it is `ann` at the whole path. -/
-def annotationsAt (σ : Nat → Option AnnotatedTerm) (ann : Annotations) :
-    Nat → List Nat → Term → List Nat → Option LambdaAnnotation
-  | depth, path, .bound index, rest =>
-      match fillingAt σ depth index with
-      | some f => f.annotations rest
-      | none => ann (path ++ rest)
-  | depth, path, .lam body, 0 :: rest => annotationsAt σ ann (depth + 1) (path ++ [0]) body rest
-  | depth, path, .app function argument, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) function rest
-  | depth, path, .app function argument, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) argument rest
-  | depth, path, .mix lower upper, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) lower rest
-  | depth, path, .mix lower upper, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) upper rest
-  | depth, path, .fix spec inherited, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) spec rest
-  | depth, path, .fix spec inherited, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) inherited rest
-  | depth, path, .specification metadata extension, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) metadata rest
-  | depth, path, .specification metadata extension, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) extension rest
-  | depth, path, .prototype spec target, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) spec rest
-  | depth, path, .prototype spec target, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) target rest
-  | depth, path, .reflect target, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) target rest
-  | depth, path, .metadata spec, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) spec rest
-  | depth, path, .project target, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) target rest
-  | depth, path, .binary _ left right, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) left rest
-  | depth, path, .binary _ left right, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) right rest
-  | depth, path, .extend inherited fields, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) inherited rest
-  | depth, path, .extend inherited fields, 1 :: k :: rest =>
-      match hget : fields[k]? with
-      | some field => annotationsAt σ ann depth (path ++ [1, k]) field.2 rest
-      | none => ann (path ++ 1 :: k :: rest)
-  | depth, path, .record fields, k :: rest =>
-      match hget : fields[k]? with
-      | some field => annotationsAt σ ann depth (path ++ [k]) field.2 rest
-      | none => ann (path ++ k :: rest)
-  | depth, path, .get target _, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) target rest
-  | depth, path, .ifZero value zero successorBody, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) value rest
-  | depth, path, .ifZero value zero successorBody, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) zero rest
-  | depth, path, .ifZero value zero successorBody, 2 :: rest => annotationsAt σ ann (depth + 1) (path ++ [2]) successorBody rest
-  | depth, path, .inject _ payload, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) payload rest
-  | depth, path, .case scrutinee arms, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) scrutinee rest
-  | depth, path, .case scrutinee arms, 1 :: k :: rest =>
-      match hget : arms[k]? with
-      | some arm => annotationsAt σ ann (depth + 1) (path ++ [1, k]) arm.2 rest
-      | none => ann (path ++ 1 :: k :: rest)
-  | depth, path, .ifBool condition whenTrue whenFalse, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) condition rest
-  | depth, path, .ifBool condition whenTrue whenFalse, 1 :: rest => annotationsAt σ ann depth (path ++ [1]) whenTrue rest
-  | depth, path, .ifBool condition whenTrue whenFalse, 2 :: rest => annotationsAt σ ann depth (path ++ [2]) whenFalse rest
-  | depth, path, .perform plan, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) plan rest
-  | depth, path, .done value, 0 :: rest => annotationsAt σ ann depth (path ++ [0]) value rest
-  | _, path, _, rest => ann (path ++ rest)
-termination_by _ _ t _ => sizeOf t
-decreasing_by
-  all_goals simp_wf
-  all_goals first
-    | omega
-    | (have hmem := List.mem_of_getElem? hget
-       have hlist := List.sizeOf_lt_of_mem hmem
-       first
-         | (have hpair : sizeOf field.snd < sizeOf field := by cases field; simp +arith
-            omega)
-         | (have hpair : sizeOf arm.snd < sizeOf arm := by cases arm; simp +arith
-            omega))
-
-/-- Fill the hypotheses `σ` names in an annotated term: the term by `Term.substitute` (a filling is
-closed, so lifting under binders renames nothing that matters), the annotations by `annotationsAt`.
-Assumptions are the template's. -/
-def msubst (σ : Nat → Option AnnotatedTerm) (t : AnnotatedTerm) : AnnotatedTerm where
-  term := t.term.substitute fun index =>
-    match σ index with
-    | some f => f.term
-    | none => .bound index
-  annotations := annotationsAt σ t.annotations 0 [] t.term
-  assumptions := t.assumptions
-
 /-- The front end's type fuel (`Obend.Core.Check`'s preview wire caps `typeFuel` at 16384). -/
 def checkFuel : Nat := 16384
 
@@ -176,7 +110,7 @@ instance : Obend.Slot.Calculus AnnotatedTerm where
   Ctx := Context
   msubst := msubst
   check Ψ t A :=
-    match Obend.Core.Check.check t Ψ checkFuel with
+    match check t Ψ checkFuel with
     | some checked => decide (checked.type = A)
     | none => false
   uses t x := freeIn x t.term
@@ -196,7 +130,7 @@ theorem annotationsAt_root (σ : Nat → Option AnnotatedTerm) (ann : Annotation
 theorem msubst_var_filled (σ : Nat → Option AnnotatedTerm) (x : Nat) (f : AnnotatedTerm)
     (h : σ x = some f) : msubst σ (var x) = { f with assumptions := {} } := by
   unfold msubst var
-  simp only [Obend.Core.Term.Term.substitute, h]
+  simp only [Obend.Core.Term.Term.substitute, fillTerm_zero, h]
   congr 1
   funext rest
   exact annotationsAt_root σ (fun _ => none) x f h rest
@@ -205,7 +139,7 @@ theorem msubst_var_filled (σ : Nat → Option AnnotatedTerm) (x : Nat) (f : Ann
 theorem msubst_var_open (σ : Nat → Option AnnotatedTerm) (x : Nat) (h : σ x = none) :
     msubst σ (var x) = var x := by
   unfold msubst var
-  simp only [Obend.Core.Term.Term.substitute, h]
+  simp only [Obend.Core.Term.Term.substitute, fillTerm_zero, h]
   congr 1
   funext rest
   simp [annotationsAt, fillingAt, h]
@@ -214,7 +148,58 @@ theorem msubst_var_open (σ : Nat → Option AnnotatedTerm) (x : Nat) (h : σ x 
 theorem uses_var (x : Nat) : Obend.Slot.Calculus.uses (var x) x = true := by
   simp [Obend.Slot.Calculus.uses, var, freeIn]
 
-#assert_axioms annotationsAt_root msubst_var_filled msubst_var_open uses_var
+/-- The judge of this calculus: `check` at the fixed fuel, then the type compared exactly. -/
+theorem calculus_check_iff (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
+    Obend.Slot.Calculus.check Ψ t A = true ↔ ∃ c : Checked t Ψ, check t Ψ checkFuel = some c ∧ c.type = A := by
+  show (match check t Ψ checkFuel with
+    | some checked => decide (checked.type = A)
+    | none => false) = true ↔ _
+  cases h : check t Ψ checkFuel with
+  | none => simp
+  | some c =>
+    simp only [decide_eq_true_eq]
+    constructor
+    · intro hc; exact ⟨c, rfl, hc⟩
+    · rintro ⟨c', hc', hA⟩; cases hc'; exact hA
+
+/-- **The law of the calculus at Core4.** A template passing the judge at `A`, with every filling
+closed, sharing the template's assumptions, and passing the judge at the type `Ψ` declares for its
+hypothesis, gives a filled term that `check` accepts at `A` with twice the judge's fuel (the
+template's budget plus a filling's: `fuel_tooth` is why the fuel adds). -/
+theorem calculus_check_msubst (Ψ : Context) (t : AnnotatedTerm) (A : Ty) (σ : Nat → Option AnnotatedTerm)
+    (ht : Obend.Slot.Calculus.check Ψ t A = true)
+    (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
+      ∃ b : Binding, Ψ[x]? = some b ∧ Obend.Slot.Calculus.check Ψ f b.type = true) :
+    ∃ c : Checked (msubst σ t) Ψ, check (msubst σ t) Ψ (2 * checkFuel) = some c ∧ c.type = A := by
+  obtain ⟨c, hc, hA⟩ := (calculus_check_iff Ψ t A).1 ht
+  obtain ⟨c', hc', hty, -⟩ := check_msubst σ hc (fun x f hx => by
+    obtain ⟨closed, hfa, b, hb, hf⟩ := hσ x f hx
+    obtain ⟨d, hd, hdt⟩ := (calculus_check_iff Ψ f b.type).1 hf
+    have e : { f with assumptions := t.assumptions } = f := by rw [← hfa]
+    refine ⟨closed, b, ?_⟩
+    rw [e]
+    exact ⟨d, hb, hd, hdt⟩)
+  rw [Nat.two_mul]
+  exact ⟨c', hc', hty.trans hA⟩
+
+/-- The law at the judge's own fuel: when the template checks at fuel `n` and every filling at fuel
+`m` with `n + m ≤ checkFuel`, the filled term passes the judge. Fuel is the one corner where the law
+is conditional; the premise is the budget. -/
+theorem calculus_check_msubst_within (Ψ : Context) (t : AnnotatedTerm) (A : Ty) (σ : Nat → Option AnnotatedTerm)
+    (n m : Nat) (budget : n + m ≤ checkFuel) (c : Checked t Ψ) (ht : check t Ψ n = some c) (hA : c.type = A)
+    (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
+      ∃ (b : Binding) (d : Checked f Ψ), Ψ[x]? = some b ∧ check f Ψ m = some d ∧ d.type = b.type) :
+    Obend.Slot.Calculus.check Ψ (msubst σ t) A = true := by
+  obtain ⟨c', hc', hty, -⟩ := check_msubst σ ht (fun x f hx => by
+    obtain ⟨closed, hfa, b, d, hb, hd, hdt⟩ := hσ x f hx
+    have e : { f with assumptions := t.assumptions } = f := by rw [← hfa]
+    refine ⟨closed, b, ?_⟩
+    rw [e]
+    exact ⟨d, hb, hd, hdt⟩)
+  exact (calculus_check_iff Ψ _ A).2 ⟨c', check_mono hc' budget, hty.trans hA⟩
+
+#assert_axioms annotationsAt_root msubst_var_filled msubst_var_open uses_var calculus_check_iff
+  calculus_check_msubst calculus_check_msubst_within
 
 end Obend.Slot.Core4
 end

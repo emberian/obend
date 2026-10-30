@@ -160,6 +160,71 @@ inductive Scoped : Nat → Term → Prop where
   · intro h; cases h; assumption
   · intro h; exact .done h
 
+/-- A renaming that fixes every index below `n` fixes a term scoped under `n`. (Moved from
+`Core.Proofs.Adequacy` on 2026-10-30, where it was private; `Core.Proofs.Substitution` needs it too.) -/
+theorem scoped_rename_identity {n : Nat} {term : Term} (h : Scoped n term)
+    (f : Nat → Nat) (hf : ∀ i, i < n → f i = i) : term.rename f = term := by
+  induction h generalizing f with
+  | bound hi => simp only [Term.rename,hf _ hi]
+  | lam h ih =>
+      simp only [Term.rename]
+      congr 1
+      apply ih (liftRename f)
+      intro i hi
+      cases i with
+      | zero => rfl
+      | succ i => simp [liftRename,hf i (Nat.lt_of_succ_lt_succ hi)]
+  | app _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+  | mix _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+  | fix _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+  | specification _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+  | prototype _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+  | binary _ _ ih₁ ih₂ => simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+  | reflect _ ih => simp only [Term.rename,ih f hf]
+  | metadata _ ih => simp only [Term.rename,ih f hf]
+  | project _ ih => simp only [Term.rename,ih f hf]
+  | get _ ih => simp only [Term.rename,ih f hf]
+  | natural _ => simp only [Term.rename]
+  | boolean _ => simp only [Term.rename]
+  | label _ => simp only [Term.rename]
+  | extend _ _ ih₁ ih₂ =>
+      simp only [Term.rename,ih₁ f hf]
+      congr 1
+      apply Eq.trans _ (List.map_id' _)
+      apply List.map_congr_left
+      intro original member
+      exact Prod.ext rfl (ih₂ original member f hf)
+  | record _ ih =>
+      simp only [Term.rename]
+      congr 1
+      apply Eq.trans _ (List.map_id' _)
+      apply List.map_congr_left
+      intro original member
+      exact Prod.ext rfl (ih original member f hf)
+  | inject _ ih => simp only [Term.rename,ih f hf]
+  | perform _ ih => simp only [Term.rename,ih f hf]
+  | done _ ih => simp only [Term.rename,ih f hf]
+  | ifBool _ _ _ ih₁ ih₂ ih₃ => simp only [Term.rename,ih₁ f hf,ih₂ f hf,ih₃ f hf]
+  | case _ _ ih₁ ih₂ =>
+      simp only [Term.rename,ih₁ f hf]
+      congr 1
+      apply Eq.trans _ (List.map_id' _)
+      apply List.map_congr_left
+      intro original member
+      refine Prod.ext rfl (ih₂ original member (liftRename f) ?_)
+      intro i hi
+      cases i with
+      | zero => rfl
+      | succ i => simp [liftRename,hf i (Nat.lt_of_succ_lt_succ hi)]
+  | condition _ _ _ ih₁ ih₂ ih₃ =>
+      simp only [Term.rename,ih₁ f hf,ih₂ f hf]
+      congr 1
+      apply ih₃ (liftRename f)
+      intro i hi
+      cases i with
+      | zero => rfl
+      | succ i => simp [liftRename,hf i (Nat.lt_of_succ_lt_succ hi)]
+
  theorem scoped_rename {n : Nat} {t : Term} (h : Scoped n t)
     (f : Nat → Nat) (m : Nat) (hf : ∀ i, i < n → f i < m) :
     Scoped m (t.rename f) := by
