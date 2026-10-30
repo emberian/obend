@@ -20,3 +20,532 @@ Local full exports (ignored scratch):
 Full names: astra/equirec/journal-foundation-130.txt
 
 The agreement-switch repair set has not yet been measured: no switch has occurred.
+
+Pre-switch structural-law checkpoint (148-job working tree, bd10929 dirty):
+Full export: astra/equirec/env-before-switch.jsonl, 19865 rows, 146 modules,
+138 module files. Includes temporary BidirectionalNext checker prototype.
+Comparison below is original baseline -> pre-switch, not the actual switch.
+Extraction moved private/generated constants even though legacy agreement and
+infer source definitions remain unchanged. The full build rechecked these sets.
+Added=1325, unaffected=8855. Full names: astra/equirec/journal-before-switch.txt.
+
+withdrawn supports (59)
+  Obend.Core.Check.Assumptions.chase_add._f  meaning changed
+  Obend.Core.Check.Assumptions.chase_chain._f  meaning changed
+  Obend.Core.Check.Assumptions.mem_orbit._f  meaning changed
+  Obend.Core.Check.inferArms._f  meaning changed
+  Obend.Core.Check.inferArms._sunfold  meaning changed
+  Obend.Core.Check.inferArms._unsafe_rec  meaning changed
+  Obend.Core.Check.inferArms.eq_def  meaning changed
+  Obend.Core.Check.nodup_length_le._f  meaning changed
+  _private.Obend.Core.Check.0.List.filter.match_1.eq_1  removed
+  _private.Obend.Core.Check.0.List.filter.match_1.eq_2  removed
+  _private.Obend.Core.Check.0.List.filter.match_1.splitter  removed
+  _private.Obend.Core.Check.0.List.lookup.match_1.eq_1  removed
+  _private.Obend.Core.Check.0.List.lookup.match_1.eq_2  removed
+  _private.Obend.Core.Check.0.List.lookup.match_1.splitter  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.eq_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.eq_2  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.splitter  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_add.match_1_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_11  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_12  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_13  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_14  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_15  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_16  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_6  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_10  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_5  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_9  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded.match_1_7  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_chain.match_1_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._proof_1_8  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._proof_1_9  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._simp_1_6  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._simp_1_7  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit.match_1_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.nodup_length_le._proof_1_3  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.nodup_length_le.match_1_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_2  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.splitter  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.splitter._sparseCasesOn_2  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_2  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_3  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_4  removed
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_5  removed
+  _private.Obend.Core.Check.0.Obend.Core.Ty.Ty.isComputation.match_1.eq_1  removed
+  _private.Obend.Core.Check.0.Obend.Core.Ty.Ty.isComputation.match_1.eq_2  removed
+  _private.Obend.Core.Check.0.Obend.Core.Ty.Ty.isComputation.match_1.splitter  removed
+  _private.Obend.Core.Check.0.Obend.Core.Ty.Ty.isComputation.match_1.splitter._sparseCasesOn_2  removed
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_1  removed
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_2  removed
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.splitter  removed
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_1  removed
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_2  removed
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.splitter  removed
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_1  removed
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_2  removed
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.splitter  removed
+revised theorems (own statement meaning changed) (1)
+  Obend.Core.Check.inferArms.eq_def  then STATEMENT-CITED [Obend.Core.Check.inferArms._f]
+STATEMENT-CITED (179)
+  Obend.Core.Check.check.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_10
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_11
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_12
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_13
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_14
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_15
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_16
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_17
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_18
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_19
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_2
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_20
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_21
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_22
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_23
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_24
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_25
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_3
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_4
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_5
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_6
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_7
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_8
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_9
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.infer.eq_def
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferArms.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferArms.eq_2
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferArms.eq_3
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferArms.eq_4
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferFields.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferFields.eq_2
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferFields.eq_3
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Check.inferFields.eq_def
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckCompletenessObstruction.annotated_empty_eliminator_still_incomplete
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckCompletenessObstruction.checked_does_not_imply_eventual_success
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckCompletenessObstruction.checked_lambda_without_annotations_never_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckCompletenessObstruction.correct_lambda_annotation_now_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.absent_future_requirement_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.affine_in_one_arm_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.affine_in_two_arms_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.affine_mix_capture_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.arbitrary_labels_are_not_booleans
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.arm_results_must_agree
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.boolean_label_equality_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.closure_response_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.custody_in_once_closure_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.custody_in_reusable_closure_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.duplicate_affine_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.effect_as_argument_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.effect_case_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.effect_in_payload_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.effect_in_record_field_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.effect_in_specification_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.equality_branch_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.exhaustive_case_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.explicit_boolean_conjunction_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.explicit_boolean_has_boolean_type
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.extra_arm_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.futureRowInstanceChecked.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.future_binary_instantiation_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.future_row_instantiation_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.heterogeneous_runtime_mix_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.independent_requirements_checked
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.independently_checked_future_rows
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.label_condition_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.label_equality_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.missing_arm_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.nat_primitive_label_operand_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.nat_primitive_types
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.order_primitive_branch_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.pure_affine_argument_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.pure_arm_without_done_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.record_wrapper_does_not_hide_custody
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.recursive_alias_does_not_hide_custody
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.recursive_global_knot_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.recursive_sum_ill_typed_tail_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.recursive_sum_list_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.refusal_kind_custody_in_reusable_closure
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.refusal_kind_duplicate_affine
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.refusal_kind_label_conjunction
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.refusal_kind_starved_fuel
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.reordered_arms_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.reserved_string_has_string_type
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.reserved_strings_are_not_booleans
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.reusable_lexical_capture_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.reusable_mix_capture_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.scalar_plan_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.scalar_record_extend_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.shadowed_custody_laundering_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.shadowed_once_closure_laundering_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.shadowed_override_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.shadowed_shareable_member_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.unannotated_injection_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.CheckTeeth.undeclared_injection_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Hole.check_refuses_hole
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Hole.infer_refuses_hole
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Preservation.check_runBounded_no_refusal
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Substitution.Fillings.closed
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Substitution.Fillings.typed
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Substitution.check_mono
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Substitution.check_msubst
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Core.Proofs.Substitution.infer_mono
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.annotatedJudge.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.annotation_presence_not_coverage
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.calculus_check_iff
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.calculus_check_msubst
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.calculus_check_msubst_within
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.extend_filling_admitted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.extend_filling_decided
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.gradedCheck.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.gradedCheck_iff
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.instDecidesNatAnnotatedTerm._proof_2
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.instDecidesNatAnnotatedTerm._proof_3
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.instDecidesNatAnnotatedTerm._proof_5
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.instDecidesNatAnnotatedTerm._proof_6
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.judge.eq_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.routes_agree
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.Core4.wronglyAnnotated_check_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.budget_tooth
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Slot.budget_uncovered
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.checkedExact
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.closed
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.decoded
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.erasure
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.mk.inj
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.mk.injEq
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.mk.sizeOf_spec
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.packetTerm
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.proposed
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.shallow
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.sound
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.sourceExact
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.FrontEnd.Accepted.source_eq_packet
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.FrontEndAdequacy.accept_inhabited
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.FrontEndAdequacy.accepted_execution_semantics
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.FrontEndAdequacy.accepted_never_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.FrontEndAdequacy.accepted_typed
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.binary_self_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.claim_spec_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.empty_seed_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.f_bound_mismatch_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.inherited_unprovided_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.law_keyword_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.non_boolean_claim_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.open_extension_reused_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.requires_signature_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.twice_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.unbound_self_member_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.unprovided_requirement_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  Obend.Spec.Proofs.SpecificationClosure.wrong_target_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Proofs.CheckCompletenessObstruction.aliasBranch_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Proofs.CheckCompletenessObstruction.annotatedConstant_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Proofs.CheckCompletenessObstruction.duplicateCase_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Proofs.CheckCompletenessObstruction.emptyCase_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Proofs.CheckCompletenessObstruction.unannotatedConstant_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckTeeth.0.Obend.Core.Proofs.CheckTeeth.refusal_kind_custody_in_reusable_closure._proof_1_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckTeeth.0.Obend.Core.Proofs.CheckTeeth.refusal_kind_duplicate_affine._proof_1_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckTeeth.0.Obend.Core.Proofs.CheckTeeth.refusal_kind_label_conjunction._proof_1_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.CheckTeeth.0.Obend.Core.Proofs.CheckTeeth.refusal_kind_starved_fuel._proof_1_1
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.alias_filling_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.alias_template_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.assumptions_tooth
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.fuel_filling_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.fuel_template_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.fuel_tooth
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.infer_msubst
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.infer_transport
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.linear_filling_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.linear_template_checks
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Proofs.Substitution.open_filling_tooth
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.Discharges.check_instantiate
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.Discharges.infer_instantiate
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.coloured_instance_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.inferFields_tail
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.self_as_bound_row_alias_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.self_as_bound_row_rigid_refused
+      dead: Obend.Core.Check.inferArms._f [statement]
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Proofs.Templates.weight_template_accepted
+      dead: Obend.Core.Check.inferArms._f [statement]
+PROOF-CITED (15)
+  List.lookup.eq_def
+      dead: _private.Obend.Core.Check.0.List.lookup.match_1.splitter [proof]
+  Obend.Core.Check.Assumptions.chase.eq_def
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.splitter [proof]
+  Obend.Core.Check.Assumptions.chase_add
+      dead: Obend.Core.Check.Assumptions.chase_add._f [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_add.match_1_1 [proof]
+  Obend.Core.Check.Assumptions.chase_bounded
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_1 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_11 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_12 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_13 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_14 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_15 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_16 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_6 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_10 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_5 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_9 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded.match_1_7 [proof]
+  Obend.Core.Check.Assumptions.chase_chain
+      dead: Obend.Core.Check.Assumptions.chase_chain._f [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_chain.match_1_1 [proof]
+  Obend.Core.Check.Assumptions.mem_orbit
+      dead: Obend.Core.Check.Assumptions.mem_orbit._f [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._proof_1_8 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._proof_1_9 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._simp_1_6 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._simp_1_7 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit.match_1_1 [proof]
+  Obend.Core.Check.Assumptions.orbit.eq_def
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.splitter [proof]
+  Obend.Core.Check.Assumptions.unfoldHead.eq_2
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_2 [proof]
+  Obend.Core.Check.nodup_length_le
+      dead: Obend.Core.Check.nodup_length_le._f [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.nodup_length_le._proof_1_3 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.nodup_length_le.match_1_1 [proof]
+  Obend.Core.Check.sameStep.eq_2
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_2 [proof]
+  Obend.Core.Check.sameStep.eq_3
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_2 [proof]
+  Obend.Core.Check.sameStep.eq_4
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_2 [proof]
+  Obend.Core.Check.sameType_iff
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_2 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_3 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_4 [proof]
+      dead: _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_5 [proof]
+  Obend.Core.Proofs.CheckTeeth.future_row_typed
+      dead: Obend.Core.Check.inferArms._f [proof]
+  Obend.Slot.budget_filling_typed
+      dead: Obend.Core.Check.inferArms._f [proof]
+reproved (supports hold, proof hash differs) (7)
+  Obend.Core.Check.overlay.eq_2
+  Obend.Core.Check.overlay.eq_def
+  Obend.Core.Check.variantRow.eq_3
+  Obend.Core.Ty.Ty.isRow.eq_5
+  Obend.Core.Ty.Ty.isRow.eq_def
+  Obend.Core.Ty.Ty.lookup.eq_4
+  Obend.Core.Ty.Ty.lookup.eq_def
+removed theorems (36)
+  _private.Obend.Core.Check.0.List.filter.match_1.eq_1
+  _private.Obend.Core.Check.0.List.filter.match_1.eq_2
+  _private.Obend.Core.Check.0.List.lookup.match_1.eq_1
+  _private.Obend.Core.Check.0.List.lookup.match_1.eq_2
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.eq_1
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase.match_1.eq_2
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_1
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_11
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_12
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_13
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_14
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_15
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_16
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._proof_1_6
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_10
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_5
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.chase_bounded._simp_1_9
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._proof_1_8
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._proof_1_9
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._simp_1_6
+  _private.Obend.Core.Check.0.Obend.Core.Check.Assumptions.mem_orbit._simp_1_7
+  _private.Obend.Core.Check.0.Obend.Core.Check.nodup_length_le._proof_1_3
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_1
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameStep.match_1.eq_2
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_2
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_3
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_4
+  _private.Obend.Core.Check.0.Obend.Core.Check.sameType_iff._simp_1_5
+  _private.Obend.Core.Check.0.Obend.Core.Ty.Ty.isComputation.match_1.eq_1
+  _private.Obend.Core.Check.0.Obend.Core.Ty.Ty.isComputation.match_1.eq_2
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_1
+  _private.Obend.Core.Proofs.CheckCompletenessObstruction.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_2
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_1
+  _private.Obend.Core.Proofs.Substitution.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_2
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_1
+  _private.Obend.Core.Proofs.Templates.0.Obend.Core.Check.Assumptions.unfoldHead.match_1.eq_2

@@ -4,60 +4,97 @@ Streams are graph observations: an emission contains the raw tail state. Calling
 `streamStep` on that tail starts a fresh epsilon scan, preserving infinitely
 many hidden resourceful fields without constructing an infinite Lean list. -/
 public import Obend.Core.AliasExposure
+public import Obend.Core.ResourceSemantics
 public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 set_option autoImplicit false
 
-/-- Finite greatest-fixed-point exploration. Outside the remaining candidate
-set productive states are assumed true; opaque head-only cycles are always
-false. `shareable` supplies the complete root-and-bounds syntax support. -/
-def resourceWalk (assumptions : Assumptions) (remaining : List Ty) (t : Ty) : Bool :=
-  match expose assumptions t with
-  | .nominal index => assumptions.shareableVariables.contains index
-  | .unproductive _ => false
-  | .constructor observation =>
-    match observation.tag with
-    | .natural | .label | .boolean | .emptyRow => true
-    | .arrow reuse _ => reuse == .reusable
-    | .custody _ | .computation => false
-    | .field _ | .specification | .prototype | .variant =>
-      if present : t ∈ remaining then
-        observation.children.all (fun child => resourceWalk assumptions (remaining.erase t) child)
-      else true
-termination_by remaining.length
-decreasing_by
-  all_goals
-    rw [List.length_erase_of_mem present]
-    have positive := List.length_pos_of_mem present
-    omega
-
+/-- Resource observations now use the proved greatest-safe-predicate decision.
+The former branch-local DFS and its implementation-specific helper lemmas are
+retired; stream scanning continues to use this single semantic implementation. -/
 def shareable (assumptions : Assumptions) (t : Ty) : Bool :=
-  resourceWalk assumptions (support assumptions t t) t
+  Obend.Core.ResourceSemantics.shareable assumptions t
 
-/-- Expose one field step before simplifying recursive calls. In particular,
-this avoids unfolding the walk under the generic lambda used by `List.all`. -/
-theorem resourceWalk_field (assumptions : Assumptions) (remaining : List Ty)
-    (t member tail : Ty) (name : String)
-    (head : expose assumptions t = .constructor ⟨.field name, [member, tail]⟩) :
-    resourceWalk assumptions remaining t =
-      if t ∈ remaining then
-        resourceWalk assumptions (remaining.erase t) member &&
-          resourceWalk assumptions (remaining.erase t) tail
-      else true := by
-  rw [resourceWalk, head]
-  by_cases present : t ∈ remaining <;> simp [present]
+theorem shareable_iff (assumptions : Assumptions) (t : Ty) :
+    shareable assumptions t = true ↔
+      Obend.Core.FiniteSafety.Safe (Obend.Core.ResourceSemantics.graph assumptions) t :=
+  Obend.Core.ResourceSemantics.shareable_iff assumptions t
 
-theorem resourceWalk_natural (assumptions : Assumptions) (remaining : List Ty) :
-    resourceWalk assumptions remaining .natural = true := by
-  rw [resourceWalk]
-  simp [expose, exposeWalk, constructorHead]
+theorem shareable_unfold (assumptions : Assumptions) (t : Ty) :
+    shareable assumptions t = true ↔
+      (Obend.Core.ResourceSemantics.head assumptions t).1 = true ∧
+      ∀ child ∈ (Obend.Core.ResourceSemantics.head assumptions t).2,
+        shareable assumptions child = true :=
+  Obend.Core.ResourceSemantics.shareable_unfold assumptions t
 
-theorem resourceWalk_custody (assumptions : Assumptions) (remaining : List Ty) (identity : Nat) :
-    resourceWalk assumptions remaining (.custody identity) = false := by
-  rw [resourceWalk]
-  simp [expose, exposeWalk, constructorHead]
+theorem shareable_eq_of_expose_eq {assumptions : Assumptions} {left right : Ty}
+    (same : expose assumptions left = expose assumptions right) :
+    shareable assumptions left = shareable assumptions right :=
+  Obend.Core.ResourceSemantics.shareable_eq_of_expose_eq same
+
+theorem shareable_terminal {assumptions : Assumptions} {t : Ty} {value : Bool}
+    (terminal : Obend.Core.ResourceSemantics.head assumptions t = (value,[])) :
+    shareable assumptions t = value := by
+  apply Obend.Core.FiniteSafety.bool_ext
+  rw [shareable_unfold]
+  simp [terminal]
+
+@[simp] theorem shareable_natural (assumptions : Assumptions) :
+    shareable assumptions .natural = true := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+@[simp] theorem shareable_label (assumptions : Assumptions) :
+    shareable assumptions .label = true := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+@[simp] theorem shareable_boolean (assumptions : Assumptions) :
+    shareable assumptions .boolean = true := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+@[simp] theorem shareable_emptyRow (assumptions : Assumptions) :
+    shareable assumptions .emptyRow = true := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+@[simp] theorem shareable_custody (assumptions : Assumptions) (identity : Nat) :
+    shareable assumptions (.custody identity) = false := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+@[simp] theorem shareable_arrow (assumptions : Assumptions) (reuse : Reuse)
+    (quantity : Quantity) (domain codomain : Ty) :
+    shareable assumptions (.arrow reuse quantity domain codomain) = (reuse == .reusable) := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+@[simp] theorem shareable_computation (assumptions : Assumptions) (plan response result : Ty) :
+    shareable assumptions (.computation plan response result) = false := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
+
+theorem shareable_field (assumptions : Assumptions) (name : String) (member tail : Ty) :
+    shareable assumptions (.field name member tail) =
+      (shareable assumptions member && shareable assumptions tail) :=
+  Obend.Core.ResourceSemantics.shareable_field assumptions name member tail
+
+theorem shareable_specification (assumptions : Assumptions) (metadata extension : Ty) :
+    shareable assumptions (.specification metadata extension) =
+      (shareable assumptions metadata && shareable assumptions extension) :=
+  Obend.Core.ResourceSemantics.shareable_specification assumptions metadata extension
+
+theorem shareable_prototype (assumptions : Assumptions) (spec target : Ty) :
+    shareable assumptions (.prototype spec target) =
+      (shareable assumptions spec && shareable assumptions target) :=
+  Obend.Core.ResourceSemantics.shareable_prototype assumptions spec target
+
+theorem shareable_variant (assumptions : Assumptions) (row : Ty) :
+    shareable assumptions (.variant row) = shareable assumptions row :=
+  Obend.Core.ResourceSemantics.shareable_variant assumptions row
 
 inductive Tail where
   | closed
@@ -182,86 +219,98 @@ theorem labels_productive_cycle_finite :
 theorem shadow_natural_alias_discarded :
     streamStep ⟨[(0, .natural)], [], []⟩
       (.field "a" (.variable 0) .emptyRow) "a" false = .end .closed := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
+  have aliasShare : shareable ⟨[(0, .natural)], [], []⟩ (.variable 0) = true := by
+    apply shareable_terminal
+    simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
+      constructorHead,Ty.isComputation,List.lookup]
+  simp [streamStep, scanStream, residual, scanResidual, aliasShare, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem shadow_custody_alias_retained :
     streamStep ⟨[(0, .custody 7)], [], []⟩
       (.field "a" (.variable 0) .emptyRow) "a" false = .emit (.variable 0) .emptyRow := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
+  have aliasShare : shareable ⟨[(0, .custody 7)], [], []⟩ (.variable 0) = false := by
+    apply shareable_terminal
+    simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
+      constructorHead,Ty.isComputation,List.lookup]
+  simp [streamStep, scanStream, residual, scanResidual, aliasShare, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem alias_tail_field_exposed :
     streamStep ⟨[(0, .field "b" .natural .emptyRow)], [], []⟩
       (.field "a" .boolean (.variable 0)) "b" true = .emit .natural .emptyRow := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
+  simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem cyclic_shareable_shadow_stream_finite :
     streamStep ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩
       (.variable 0) "a" false = .end .closed := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
+  simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem cyclic_resourceful_shadow_stream_recursive :
     streamStep ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩
       (.variable 0) "a" false = .emit (.custody 7) (.variable 0) := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
+  simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem cyclic_row_residual_productive :
     residual ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩ (.variable 0) = .productiveCycle := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
+  simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem productive_recursive_row_shareable :
     shareable ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩ (.variable 0) = true := by
-  have equation (remaining : List Ty) :
-      resourceWalk ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩ remaining (.variable 0) =
-        if Ty.variable 0 ∈ remaining then
-          resourceWalk ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩
-            (remaining.erase (.variable 0)) .natural &&
-          resourceWalk ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩
-            (remaining.erase (.variable 0)) (.variable 0)
-        else true :=
-    resourceWalk_field _ remaining _ _ _ "a" (by
-      simp [expose, exposeWalk, Assumptions.alias, constructorHead, Ty.isComputation, List.lookup])
-  simp [shareable, support, subterms, equation, resourceWalk_natural,
-    List.erase, Bool.beq_eq_decide_eq]
+  let assumptions : Assumptions := ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩
+  have exposedHead : Obend.Core.ResourceSemantics.head assumptions (.variable 0) =
+      (true,[.natural,.variable 0]) := by
+    simp [Obend.Core.ResourceSemantics.head,assumptions,expose,exposeWalk,
+      Assumptions.alias,constructorHead,Ty.isComputation,List.lookup]
+  apply (shareable_iff assumptions (.variable 0)).mpr
+  refine ⟨fun t => t = .variable 0 ∨ t = .natural,?_,Or.inl rfl⟩
+  intro t member
+  rcases member with isVariable | natural
+  · subst t
+    change (Obend.Core.ResourceSemantics.head assumptions (.variable 0)).1 = true ∧
+      ∀ child ∈ (Obend.Core.ResourceSemantics.head assumptions (.variable 0)).2,
+        child = .variable 0 ∨ child = .natural
+    rw [exposedHead]
+    simp [or_comm]
+  · subst t
+    change (Obend.Core.ResourceSemantics.head assumptions .natural).1 = true ∧
+      ∀ child ∈ (Obend.Core.ResourceSemantics.head assumptions .natural).2,
+        child = .variable 0 ∨ child = .natural
+    simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
 
-theorem unproductive_alias_not_shareable :
-    shareable ⟨[(0, .variable 0)], [0], []⟩ (.variable 0) = false := by
-  simp [streamStep, scanStream, residual, scanResidual, shareable, resourceWalk,
-    support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
-    cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
+theorem unproductive_alias_shareable :
+    shareable ⟨[(0, .variable 0)], [0], []⟩ (.variable 0) = true := by
+  apply shareable_terminal
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
+    constructorHead,cycleRepresentative,Ty.isComputation,List.lookup,List.erase,
+    Bool.beq_eq_decide_eq]
 
 theorem custody_recursive_row_not_shareable :
     shareable ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩ (.variable 0) = false := by
-  have equation (remaining : List Ty) :
-      resourceWalk ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩ remaining (.variable 0) =
-        if Ty.variable 0 ∈ remaining then
-          resourceWalk ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩
-            (remaining.erase (.variable 0)) (.custody 7) &&
-          resourceWalk ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩
-            (remaining.erase (.variable 0)) (.variable 0)
-        else true :=
-    resourceWalk_field _ remaining _ _ _ "a" (by
-      simp [expose, exposeWalk, Assumptions.alias, constructorHead, Ty.isComputation, List.lookup])
-  simp [shareable, support, subterms, equation, resourceWalk_custody,
-    List.erase, Bool.beq_eq_decide_eq]
+  apply Obend.Core.FiniteSafety.bool_ext
+  rw [shareable_unfold]
+  simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
+    constructorHead,Ty.isComputation,List.lookup]
 
-#assert_axioms resourceWalk_field resourceWalk_natural resourceWalk_custody
+#assert_axioms shareable_iff shareable_unfold shareable_eq_of_expose_eq shareable_terminal
+  shareable_natural shareable_label shareable_boolean shareable_emptyRow shareable_custody
+  shareable_arrow shareable_computation shareable_field shareable_specification
+  shareable_prototype shareable_variant
   shadow_natural_alias_discarded shadow_custody_alias_retained
   mem_insertLabel labels_alias_tail_sorted_unique labels_productive_cycle_finite
   alias_tail_field_exposed cyclic_shareable_shadow_stream_finite
   cyclic_resourceful_shadow_stream_recursive cyclic_row_residual_productive
-  productive_recursive_row_shareable unproductive_alias_not_shareable custody_recursive_row_not_shareable
+  productive_recursive_row_shareable unproductive_alias_shareable custody_recursive_row_not_shareable
 
 public theorem scanStream_emit_support
     (assumptions : Assumptions) (left right : Ty)

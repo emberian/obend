@@ -192,13 +192,13 @@ theorem observe_arrow (assumptions : Assumptions) (reuse : Reuse) (quantity : Qu
     observe assumptions (.type (.arrow reuse quantity domain codomain)) =
       (.ordinary (.arrow reuse quantity) (reuse == .reusable),[.type domain,.type codomain]) := by
   simp [observe,expose,exposeWalk,constructorHead,rowTag,
-    Obend.Core.RecursiveRows.shareable,Obend.Core.RecursiveRows.resourceWalk]
+    Obend.Core.RecursiveRows.shareable_arrow,Obend.Core.RecursiveRows.shareable_computation]
 
 theorem observe_computation (assumptions : Assumptions) (plan response result : Ty) :
     observe assumptions (.type (.computation plan response result)) =
       (.ordinary .computation false,[.type plan,.type response,.type result]) := by
   simp [observe,expose,exposeWalk,constructorHead,rowTag,
-    Obend.Core.RecursiveRows.shareable,Obend.Core.RecursiveRows.resourceWalk]
+    Obend.Core.RecursiveRows.shareable_arrow,Obend.Core.RecursiveRows.shareable_computation]
 
 theorem arrow_congruence {assumptions : Assumptions} {reuse : Reuse} {quantity : Quantity}
     {domain codomain domain' codomain' : Ty}

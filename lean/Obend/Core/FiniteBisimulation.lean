@@ -331,12 +331,38 @@ theorem visited_skip {Label : Type} {n : Nat} {g : Graph Label n}
       exact seen
     · exact Or.inr rest
 
-/-- The actual visited-pair worklist. `remaining` is the finite complement of
-the visited set. Revisiting a pair discharges it; a fresh pair must expose equal
-labels and arities before its children are queued. The proof arguments erase. -/
+private theorem nodup_length_le_of_subset {α : Type} [DecidableEq α]
+    (xs ys : List α) (distinct : xs.Nodup) (contained : ∀ x ∈ xs, x ∈ ys) :
+    xs.length ≤ ys.length := by
+  induction xs generalizing ys with
+  | nil => simp
+  | cons a xs ih =>
+    obtain ⟨fresh,tailDistinct⟩ := List.nodup_cons.mp distinct
+    have member : a ∈ ys := contained a (by simp)
+    have tailContained : ∀ x ∈ xs, x ∈ ys.erase a := by
+      intro x hx
+      have unequal : x ≠ a := by
+        intro same
+        subst x
+        exact fresh hx
+      exact (List.mem_erase_of_ne unequal).mpr (contained x (List.mem_cons_of_mem a hx))
+    have bounded := ih (ys.erase a) tailDistinct tailContained
+    have removed := List.length_erase_of_mem member
+    have positive := List.length_pos_of_mem member
+    simp only [List.length_cons]
+    omega
+
+theorem visited_length_le {n : Nat} (visited : List (Pair n)) (distinct : visited.Nodup) :
+    visited.length ≤ n * n := by
+  have bound := nodup_length_le_of_subset visited (allPairs n) distinct
+    (fun pair _ => mem_allPairs pair.1 pair.2)
+  simpa only [allPairs_length] using bound
+
+/-- A revisit checks only the sparse visited list. A fresh pair must expose
+matching constructors before its successors are queued. The cardinality proof
+and no-duplicate invariant erase; no `allPairs` list is allocated. -/
 def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
-    (remaining visited pending : List (Pair n))
-    (coverage : ∀ p, p ∈ remaining ∨ p ∈ visited)
+    (visited pending : List (Pair n)) (distinct : visited.Nodup)
     (valid : VisitedInvariant g visited pending) : Decidable (Covered g (visited ++ pending)) :=
   match pending with
   | [] => .isTrue (by
@@ -350,46 +376,39 @@ def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
         · exact False.elim (by simpa [InRelation] using impossible)
       · intro p hp; simpa using hp)
   | p :: pending =>
-    if fresh : p ∈ remaining then
+    if seen : p ∈ visited then
+      letI : Decidable (Covered g (visited ++ pending)) :=
+        worklist g visited pending distinct (visited_skip valid seen)
+      decidable_of_iff _ (covered_skip g visited p pending seen).symm
+    else
       if compatible : g.label p.1 = g.label p.2 ∧
           (g.successors p.1).length = (g.successors p.2).length then
-        let nextCoverage : ∀ q, q ∈ remaining.erase p ∨ q ∈ p :: visited := by
-          intro q
-          by_cases equal : q = p
-          · exact Or.inr (List.mem_cons.mpr (Or.inl equal))
-          · rcases coverage q with unseen | seen
-            · exact Or.inl ((List.mem_erase_of_ne equal).mpr unseen)
-            · exact Or.inr (List.mem_cons_of_mem p seen)
+        let nextDistinct : (p :: visited).Nodup := List.nodup_cons.mpr ⟨seen,distinct⟩
         letI : Decidable (Covered g ((p :: visited) ++
             ((g.successors p.1).zip (g.successors p.2) ++ pending))) :=
-          worklist g (remaining.erase p) (p :: visited)
-          ((g.successors p.1).zip (g.successors p.2) ++ pending) nextCoverage
-          (visited_advance valid compatible.1 compatible.2)
+          worklist g (p :: visited)
+            ((g.successors p.1).zip (g.successors p.2) ++ pending) nextDistinct
+            (visited_advance valid compatible.1 compatible.2)
         decidable_of_iff _ (covered_advance g visited p pending).symm
       else .isFalse (by
         rintro ⟨R,closed,contains⟩
         obtain ⟨labels,children⟩ := closed _ _ (contains p (by simp))
         exact compatible ⟨labels,((children_iff_zip _ _).mp children).1⟩)
-    else
-      let seen : p ∈ visited := (coverage p).resolve_left fresh
-      letI : Decidable (Covered g (visited ++ pending)) :=
-        worklist g remaining visited pending coverage (visited_skip valid seen)
-      decidable_of_iff _ (covered_skip g visited p pending seen).symm
-termination_by (remaining.length,pending.length)
+termination_by (n * n - visited.length,pending.length)
 decreasing_by
   all_goals simp_wf
   all_goals
     first
     | omega
-    | have member : p ∈ remaining := by assumption
-      have len := List.length_erase_of_mem member
-      have pos := List.length_pos_iff_exists_mem.mpr ⟨p,member⟩
+    | have unseen : p ∉ visited := by assumption
+      have bound := visited_length_le (p :: visited) (List.nodup_cons.mpr ⟨unseen,distinct⟩)
+      simp only [List.length_cons] at bound
       omega
 
 def visitedSame {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
     (x y : Fin n) : Bool :=
-  letI := worklist g (allPairs n) [] [(x,y)]
-    (fun p => Or.inl (mem_allPairs p.1 p.2)) (by intro p hp; simp at hp)
+  letI : Decidable (Covered g ([] ++ [(x,y)])) :=
+    worklist g [] [(x,y)] (by simp) (by intro p hp; simp at hp)
   decide (Covered g ([] ++ [(x,y)]))
 
 theorem visitedSame_iff {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
@@ -477,7 +496,7 @@ theorem arity_mismatch_rejected : visitedSame arityMismatch 0 1 = false := by
 end Probes
 
 #assert_axioms same_iff same_equivalence bisimilar_equivalence visitedSame_iff visitedSame_eq_same
-  visitedSame_equivalence allPairs_length Probes.different_periods_accepted
+  visitedSame_equivalence allPairs_length visited_length_le Probes.different_periods_accepted
   Probes.reachable_mismatch_rejected Probes.arity_mismatch_rejected
 
 end Obend.Core.FiniteBisimulation
