@@ -62,23 +62,23 @@ def atomText (G : Graph) (a : AtomId) : String :=
   | _ => ""
 
 mutual
-/-- The source text of segments. -/
-def segsText (G : Graph) : List Segment → String
+/-- Segments as text, each atom read by `f`. -/
+def segsWith (f : AtomId → String) : List Segment → String
   | [] => ""
-  | s :: ss => G.segText s ++ G.segsText ss
-/-- The source text of a segment; a conflict shows every alternative between markers. -/
-def segText (G : Graph) : Segment → String
-  | .run a => G.atomText a
-  | .conflict alts => "<<<<<<<\n" ++ G.altsText alts ++ ">>>>>>>\n"
+  | s :: ss => segWith f s ++ segsWith f ss
+/-- A segment as text; a conflict shows every alternative between markers. -/
+def segWith (f : AtomId → String) : Segment → String
+  | .run a => f a
+  | .conflict alts => "<<<<<<<\n" ++ altsWith f alts ++ ">>>>>>>\n"
 /-- Alternatives, separated. -/
-def altsText (G : Graph) : List (AtomId × List Segment) → String
+def altsWith (f : AtomId → String) : List (AtomId × List Segment) → String
   | [] => ""
-  | [(_, ss)] => G.segsText ss
-  | (_, ss) :: rest => G.segsText ss ++ "=======\n" ++ G.altsText rest
+  | [(_, ss)] => segsWith f ss
+  | (_, ss) :: rest => segsWith f ss ++ "=======\n" ++ altsWith f rest
 end
 
-/-- A page version's source text: its content, in order. -/
-def source (G : Graph) : String := G.segsText G.content
+/-- A page version's source text: its content, in order, each atom as written. -/
+def source (G : Graph) : String := segsWith G.atomText G.content
 
 end Graph
 

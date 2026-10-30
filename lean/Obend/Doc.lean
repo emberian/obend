@@ -16,8 +16,12 @@ TRUST: Lean core, `Obend.Slot` and the byte vocabulary of `Obend.Digest.HashByte
 * `Obend.Doc.Section` — worlds of page histories, a section as `Slot Fact Run`, a cite as a
   support; `section_alternatives`, `conflict_is_section` (a merge conflict is the section's
   alternatives under an `empty` read), `pinned_cite_stays`, `following_cite_behind`, `recite_holds`.
+* `Obend.Doc.Render` — markdown read into a page as one patch (wikilinks become following cites),
+  a vault read into a world, a page rendered at a view (`renderAt`, `renderAt_fresh`). The vault
+  round trip is `lean/tests/doc/RoundTrip.lean`.
 -/
 public import Obend.Doc.Graph
 public import Obend.Doc.Patch
 public import Obend.Doc.Merge
 public import Obend.Doc.Section
+public import Obend.Doc.Render
