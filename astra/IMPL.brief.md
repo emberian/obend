@@ -76,16 +76,37 @@ their output, what you did not do and why, and the one decision for Ember. Updat
 §5's order and `SHIP.md` §2 rows as facts change. Reply when done with the commit range, the
 tactics and where each is used, the `hole` exercise's repair set by name, and the one decision.
 
-## Supervising Sol
+## Supervising Sol: use codex's native subagents
 
-Spawn a Sol worker for a parallel, well-bounded piece (e.g. the traversal lemmas while you do the
-`Graded` class; the `#tooth` command while you rewrite proofs with `obend_cases`) with
-`codex exec --ephemeral -m gpt-6.1-sol -s workspace-write -c approval_policy='"never"' -C /Users/ember/dev/obend --skip-git-repo-check -o <dir>/last.md - < <dir>/brief.md > <dir>/run.log 2>&1 & echo $! > <dir>/run.pid`
-under `/Users/ember/dev/obend/astra/sol/<name>/`, one directory per worker, a written brief per
-worker that names the exact files it owns (disjoint from yours and from each other), the real
-signatures it builds against, and every rule below verbatim. Read a worker's Lean before you build
-it; a worker's "done" is not evidence, a green `lake build` with pins intact is. Never run two
-`lake build`s in the same tree at once: serialize builds yourself. Workers commit nothing; you commit.
+codex-cli 0.162 has native multi-agent support (`codex features list`: `multi_agent` stable, on).
+Use it: spawn Sol workers (model `gpt-6.1-sol`) as subagents from inside your own session, one per
+parallel, well-bounded piece (the traversal lemmas while you do the `Graded` class; the `#tooth`
+command while you rewrite proofs with `obend_cases`). Each worker gets a written brief naming the
+exact files it owns (disjoint from yours and from each other), the real signatures it builds
+against, and every rule below verbatim. Do NOT shell out to `codex exec` to make workers. Read a
+worker's Lean before you build it; a worker's "done" is not evidence, a green `lake build` with pins
+intact is. Never run two `lake build`s in the same tree at once: serialize builds yourself. Workers
+commit nothing; you commit.
+
+## Resuming: a previous run of you was stopped
+
+A first run of this brief (which wrongly told you to spawn workers with `codex exec`) was stopped
+by Ember after ~25 minutes. It left UNCOMMITTED work in the tree that is yours to inherit, not
+redo: `lean/Obend/Core/Graded.lean`, `lean/Obend/Core/Traverse.lean`, `lean/Obend/Tactic/`
+(`Fuel.lean` and whatever else is there), `lean/Obend/Core/Proofs/TypedSubstitution.lean`,
+`lean/Obend/Core/Proofs/CheckCompletenessObstruction.lean`, and edits to
+`lean/Obend/Core/Proofs/Preservation/Base.lean` and `lean/Obend/Slot/Core4.lean`. The previous
+run's transcript tail is `/Users/ember/dev/obend/astra/impl/run.log` (large; read its last part)
+and the Sol workers' briefs and logs are under `/Users/ember/dev/obend/astra/sol/*/` (`brief.md`,
+`run.log`, `last.md`). Start by reading those, `git status`, and `git diff`; keep what is right,
+fix or discard what is not, and say in your report what you inherited and what you threw away.
+Note `CheckCompletenessObstruction.lean`: if the previous run found that `check_complete` (Typed →
+∃ grade, check succeeds) is FALSE for the current checker, that is a finding to state as a theorem
+with its counterexample and to design around (the completeness field becomes the honest weaker
+statement), not to paper over.
+
+Lane C's files (`lean/Obend/Spec/**`, `lean/Obend/Spec.lean`, `lean/tests/**`, `lean/Obend/Main.lean`)
+are ALSO modified or untracked in the tree right now: lane C is live and working; leave them alone.
 
 ## Rules (Ember's, verbatim where quoted)
 
