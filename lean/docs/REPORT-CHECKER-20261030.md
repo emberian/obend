@@ -195,6 +195,54 @@ My recommendation is (a) now and (c) as its own lane:
 - (c) is the agreement a reader of recursive object types expects.
 - (b) is weaker than (c) on recursive aliases, and no simpler to decide.
 
+
+## 7. Follow-up (coordinator's request): option (a)
+
+| commit | what |
+|---|---|
+| `a50147e` | `uses_determined` and `Checked.eq_of_type`: a certificate is determined by its type. `full_corollary_fails`. |
+| `8354e09` | The widened Core4 judge (`fragmentJudge` or `annotatedJudge`), `routes_agree`, the `extend` filling and its `#tooth`, and `annotation_presence_not_coverage`. |
+
+**The full corollary is false for this checker, and it is proved false.** `full_corollary_fails` refutes "every certified term has annotations under which `checkAgainst` accepts it". The witness is `shadowedLambdaRecord`, which needs three things together:
+
+1. a record with a repeated label;
+2. one field a lambda that the derivation converts to an alias of its arrow type (`arrowAlias`);
+3. a context where the record has to be checked against that row.
+
+`shadowedLambdaRecord_refused` shows it is refused under every annotation. Three facts force this:
+
+- A repeated label forces the checker to synthesize the fields, because the expected row cannot give the shadowed field's type.
+- A lambda synthesizes an arrow whatever its annotation.
+- Agreement does not descend into rows (D1).
+
+So `annotateFromDerivation` was not proved for the rest of the language either. The class it would cover is everything except terms where an introduction form converted to an alias type sits inside a construct that synthesizes its components. That means records with repeated labels, and `extend` fields that are not annotated through `extend`'s row annotation. It is a second induction of the size of `complete`, plus a locality lemma, and it is the remaining work under (a).
+
+Repairing the witness is a checker or relation choice, not a proof:
+
+- check the fields of a record with repeated labels positionally against the expected row's raw spine (this fails again when the expected type is an alias of such a row); or
+- agreement that descends, which is option (c).
+
+**The widened judge.**
+- `judge grant` is `fragmentJudge grant` (the step-5 judge) or `annotatedJudge grant`, which is `Check.check` with the grant as fuel and the type exactly `A`.
+- Both routes certify the same thing: `routes_agree`, through `Checked.eq_of_type`.
+- `extendFilling` (`extend {a = 1} {b = 2}`) is refused by the fragment route at every grant (`extend_filling_fragment_refused`) and admitted by the widened judge (`extend_filling_admitted`).
+- `#tooth extend_filling_admitted by mutation annotatedJudge := fun _ _ _ _ => false` rejects the stored proof.
+- `budget_tooth` and the Integrity teeth rebuild.
+
+**Covered cannot be a disjunction of two syntactic conditions.** `Decides.check_complete` asks a typed, covered term to be accepted. `Typed` reads only the erased term, so annotations play no part in it. `annotation_presence_not_coverage` exhibits `wronglyAnnotated`:
+
+- it carries an annotation at every position;
+- it has a certificate at `Nat`;
+- both routes refuse it at every grant.
+
+So the annotation route's coverage is stated as `AnnotationDirected` (`Check.check` accepts at some fuel). That is not syntactic, and it is the honest minimum. A syntactic second disjunct would need the class to stop asking for `check_covered`, or `Typed` to read annotations. Both are changes to `Slot.Calculus`, which is outside this lane.
+
+**Journal** (`a755357` against the working tree before commit, MEASURED):
+
+| revised | statement-cited | proof-cited | unaffected | added / removed |
+|---|---|---|---|---|
+| 2 (the instance's two proofs) | 2 (`budget_tooth`, `budget_uncovered`) | 1 (`budget_filling_typed`) | 8981 | 107 / 6 |
+
 ## Appendix: the journal's exact sets
 
 Names are grouped by their namespace prefix; `_private.` prefixes are dropped. Auto-generated
