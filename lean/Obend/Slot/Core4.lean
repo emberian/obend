@@ -1,11 +1,15 @@
 module
 /- Core4's fuel-free meaning is existence of Checked evidence. Its semantic
-substitution law is independent of annotation coverage. The checker is a graded
-sound procedure, complete only on its explicitly recognized fragment. -/
+substitution law is independent of annotation coverage. The judge is the
+bidirectional checker on its syntactic fragment (`checkCovered`): sound by its
+certificate, complete there by `checkAgainst_complete`, and the fragment is decided
+from the term alone, not by running the checker. -/
 public import Obend.Core.Term
 public import Obend.Core.TermTraverse
 public import Obend.Core.Ty
 public import Obend.Core.Check
+public import Obend.Core.Bidirectional
+public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Core.Invariant
 public import Obend.Core.Proofs.Substitution
 public import Obend.Core.Proofs.TypedSubstitution
@@ -69,31 +73,54 @@ theorem gradedCheck_iff (fuel : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty)
     · intro hc; exact ⟨c, rfl, hc⟩
     · rintro ⟨c', hc', hA⟩; cases hc'; exact hA
 
-/-- Recognition is explicit evidence about the algorithm, not another spelling
-of semantic typing. No decision procedure for this predicate is claimed. -/
-def Recognized (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Prop :=
-  ∃ fuel, ∃ c : Checked t Ψ, check t Ψ fuel = some c ∧ c.type = A
+mutual
+/-- The checker's recursion depth on a term: what a grant prices. -/
+def termDepth : Term → Nat
+  | .hole _ _ | .bound _ | .nat _ | .boolean _ | .label _ => 1
+  | .lam t | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t | .get t _ => termDepth t + 1
+  | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b => max (termDepth a) (termDepth b) + 1
+  | .ifZero a b c | .ifBool a b c => max (termDepth a) (max (termDepth b) (termDepth c)) + 1
+  | .extend t fields => max (termDepth t) (fieldsDepth fields) + 1
+  | .record fields => fieldsDepth fields + 1
+  | .case t arms => max (termDepth t) (fieldsDepth arms) + 1
+def fieldsDepth : List (String × Term) → Nat
+  | [] => 0
+  | (_, t) :: rest => max (termDepth t + 1) (fieldsDepth rest)
+end
+
+/-- The judge at a grant: the term is in the bidirectional checker's syntactic fragment,
+its depth is within the grant, and the checker accepts it at `A`. -/
+def judge (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
+  Obend.Core.Proofs.BidirectionalCompleteness.checkCovered t.term && decide (termDepth t.term ≤ grant) &&
+    (Obend.Core.Bidirectional.checkAgainst t Ψ A).toBool
+
+theorem judge_iff (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
+    judge grant Ψ t A = true ↔ Obend.Core.Proofs.BidirectionalCompleteness.checkCovered t.term = true ∧
+      termDepth t.term ≤ grant ∧ ∃ c, Obend.Core.Bidirectional.checkAgainst t Ψ A = .ok c := by
+  unfold judge
+  cases h : Obend.Core.Bidirectional.checkAgainst t Ψ A with
+  | error e => simp [Except.toBool]
+  | ok c => simp [Except.toBool, and_assoc]
 
 instance : Decides Nat AnnotatedTerm where
-  check := gradedCheck
-  Covered := Recognized
+  check := judge
+  Covered _ t _ := Obend.Core.Proofs.BidirectionalCompleteness.checkCovered t.term = true
   check_sound := by
     intro r Ψ t A h
-    obtain ⟨c, _, same⟩ := (gradedCheck_iff r Ψ t A).1 h
-    exact ⟨c, same⟩
+    obtain ⟨-, -, c, hc⟩ := (judge_iff r Ψ t A).1 h
+    exact ⟨c, (Obend.Core.Bidirectional.checkAgainst_sound hc).1⟩
   check_mono := by
     intro r s Ψ t A h le
-    obtain ⟨c, hc, same⟩ := (gradedCheck_iff r Ψ t A).1 h
-    apply (gradedCheck_iff s Ψ t A).2
-    refine ⟨c, ?_, same⟩
-    fuel_lift hc using check_mono
+    obtain ⟨covered, within, accepted⟩ := (judge_iff r Ψ t A).1 h
+    exact (judge_iff s Ψ t A).2 ⟨covered, Nat.le_trans within le, accepted⟩
   check_complete := by
-    intro Ψ t A _ covered
-    obtain ⟨r, c, hc, same⟩ := covered
-    exact ⟨r, (gradedCheck_iff r Ψ t A).2 ⟨c, hc, same⟩⟩
+    intro Ψ t A typed covered
+    obtain ⟨c, same⟩ := typed
+    obtain ⟨checked, accepted⟩ := Obend.Core.Proofs.BidirectionalCompleteness.checked_covered_accepted c covered
+    exact ⟨termDepth t.term, (judge_iff _ Ψ t A).2 ⟨covered, Nat.le_refl _, checked, same ▸ accepted⟩⟩
   check_covered := by
     intro r Ψ t A h
-    exact ⟨r, (gradedCheck_iff r Ψ t A).1 h⟩
+    exact ((judge_iff r Ψ t A).1 h).1
 
 /-- The substitution law is about meaning, including derivations the checker
 cannot recognize. Closedness and shared assumptions remain essential. -/
@@ -185,7 +212,7 @@ theorem calculus_check_msubst_within (Ψ : Context) (t : AnnotatedTerm) (A : Ty)
   refine (calculus_check_iff Ψ _ A).2 ⟨c', ?_, hty.trans hA⟩
   fuel_lift hc' using check_mono
 
-#assert_axioms gradedCheck_iff calculus_typed_msubst annotationsAt_root msubst_var_filled msubst_var_open uses_var calculus_check_iff
+#assert_axioms gradedCheck_iff judge_iff calculus_typed_msubst annotationsAt_root msubst_var_filled msubst_var_open uses_var calculus_check_iff
   calculus_check_msubst calculus_check_msubst_within
 
 end Obend.Slot.Core4
