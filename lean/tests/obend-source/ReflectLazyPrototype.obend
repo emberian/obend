@@ -1,0 +1,13 @@
+edition ObjectiveBend 1
+
+spec Named for Nat:
+  claim retained: true
+
+extension Identity(self: Nat, super: Nat) -> Nat:
+  self
+
+def inspect() -> String:
+  match metadata(reflect(prototype(Named, fix(Identity, 0n)))):
+    case declared(d): d.name
+    case composed(c): "composed"
+    case extension(e): "extension"

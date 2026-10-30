@@ -1,0 +1,130 @@
+edition ObjectiveBend 1
+# The surface operators - / % < <= > >= . Each is one Core4 machine step on unbounded
+# naturals (Primitive subtract / divide / modulo / less / lessEqual; `a > b` is `!(a <= b)`
+# and `a >= b` is `!(a < b)`), so money-sized values cost the same as small ones.
+# `-` is truncated at 0n; `/` is floor division and a zero divisor gives 0n; `%` is the
+# remainder of `/`, so a zero divisor gives the dividend: (a / b) * b + a % b == a always.
+# The cohort pins the machine tick count of the money-sized rows (expectedTicks): a
+# lowering back to recursion is red there, not merely slower.
+
+def subExact() -> Nat:
+  9n - 4n
+
+def subTruncated() -> Nat:
+  3n - 5n
+
+def subZero() -> Nat:
+  7n - 0n
+
+def subFromZero() -> Nat:
+  0n - 4n
+
+def subChain() -> Nat:
+  20n - 5n - 3n
+
+def lessTrue() -> Bool:
+  3n < 4n
+
+def lessEqual() -> Bool:
+  4n < 4n
+
+def lessFalse() -> Bool:
+  5n < 4n
+
+def lessOrEqualAtEdge() -> Bool:
+  4n <= 4n
+
+def lessOrEqualFalse() -> Bool:
+  5n <= 4n
+
+def lessOrEqualZero() -> Bool:
+  0n <= 0n
+
+def greaterTrue() -> Bool:
+  5n > 4n
+
+def greaterEqual() -> Bool:
+  4n > 4n
+
+def greaterOrEqualAtEdge() -> Bool:
+  4n >= 4n
+
+def greaterOrEqualFalse() -> Bool:
+  3n >= 4n
+
+def divExact() -> Nat:
+  12n / 4n
+
+def divFloors() -> Nat:
+  17n / 5n
+
+def divSmallerNumerator() -> Nat:
+  3n / 5n
+
+def divByOne() -> Nat:
+  9n / 1n
+
+def divZeroNumerator() -> Nat:
+  0n / 7n
+
+def divByZero() -> Nat:
+  17n / 0n
+
+def divChain() -> Nat:
+  100n / 5n / 4n
+
+# Precedence: * and / bind tighter than + and -, which bind tighter than comparisons.
+def precedenceArithmetic() -> Nat:
+  10n - 2n * 3n
+
+def precedenceMixed() -> Bool:
+  2n * 3n < 10n - 3n && 7n / 2n >= 3n
+
+def subOfArguments(a: Nat, b: Nat) -> Nat:
+  a - b
+
+def clampedDifference(a: Nat, b: Nat) -> Nat:
+  if a < b then b - a else a - b
+
+# A comparison is an ordinary Bool: it feeds if, match, ==, != and &&.
+def comparisonAsBool(a: Nat, b: Nat) -> Bool:
+  (a < b) == (b > a)
+
+def comparisonMatched(a: Nat, b: Nat) -> Nat:
+  match a <= b:
+    case true: 1n
+    case false: 0n
+
+# A comparison forces both operands (left first); the branch it does not select is
+# never forced, so a diverging expression there is harmless.
+def forever(n: Nat) -> Nat:
+  forever(n + 1n)
+def lazyUnused() -> Nat:
+  if 1n < 2n then 5n else forever(0n)
+
+def divOfArguments(a: Nat, b: Nat) -> Nat:
+  a / b
+
+def greaterOfArguments(a: Nat, b: Nat) -> Bool:
+  a > b
+
+def atLeastOfArguments(a: Nat, b: Nat) -> Bool:
+  a >= b
+
+def atMostOfArguments(a: Nat, b: Nat) -> Bool:
+  a <= b
+
+def lessOfArguments(a: Nat, b: Nat) -> Bool:
+  a < b
+
+def modExact() -> Nat:
+  17n % 5n
+
+def modByZero() -> Nat:
+  17n % 0n
+
+def modOfArguments(a: Nat, b: Nat) -> Nat:
+  a % b
+
+def divModIdentity(a: Nat, b: Nat) -> Bool:
+  (a / b) * b + a % b == a

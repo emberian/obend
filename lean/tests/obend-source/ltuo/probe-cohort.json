@@ -1,0 +1,634 @@
+[
+ {
+  "name": "P01-ReviewSelfSuper",
+  "modules": [
+   {
+    "name": "ReviewSelfSuper",
+    "source": "ReviewSelfSuper.obend"
+   }
+  ],
+  "entry": "twiceOfThree",
+  "arguments": [],
+  "prediction": "accepted, twice(3) = 7",
+  "current": {
+   "status": "finished",
+   "value": "7"
+  },
+  "target": {
+   "status": "finished",
+   "value": "7"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "P02-ReviewSuperNotSelf",
+  "modules": [
+   {
+    "name": "ReviewSelfSuper",
+    "source": "ReviewSelfSuper.obend"
+   }
+  ],
+  "entry": "reviewOfThree",
+  "arguments": [],
+  "prediction": "super reaches the inherited review: review(3) = 5",
+  "current": {
+   "status": "finished",
+   "value": "5"
+  },
+  "target": {
+   "status": "finished",
+   "value": "5"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "P03-GenericExtension",
+  "modules": [
+   {
+    "name": "GenericExtension",
+    "source": "../GenericExtension.obend"
+   }
+  ],
+  "entry": "reuseCaptured",
+  "arguments": [
+   "5"
+  ],
+  "prediction": "captured extensions compose: 5+2+3",
+  "current": {
+   "status": "finished",
+   "value": "10"
+  },
+  "target": {
+   "status": "finished",
+   "value": "10"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "P04-HeterogeneousXYZ",
+  "modules": [
+   {
+    "name": "HeterogeneousXYZ",
+    "source": "HeterogeneousXYZ.obend"
+   }
+  ],
+  "entry": "zOfFive",
+  "arguments": [],
+  "prediction": "X -> XY -> XYZ under one self XYZ: z = y = 2x",
+  "current": {
+   "status": "finished",
+   "value": "10"
+  },
+  "target": {
+   "status": "finished",
+   "value": "10"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "W01-TwiceSpecification",
+  "modules": [
+   {
+    "name": "TwiceSpecification",
+    "source": "TwiceSpecification.obend"
+   }
+  ],
+  "entry": "twiceOfFive",
+  "arguments": [],
+  "prediction": "REFUSED: Specification<Nat> metadata {name,interface,laws:{}} vs compose's {operator,inherited,wrapping}",
+  "current": {
+   "status": "finished",
+   "value": "7"
+  },
+  "target": {
+   "status": "finished",
+   "value": "7"
+  },
+  "owner": "LT1"
+ },
+ {
+  "name": "W02-LawSpecification",
+  "modules": [
+   {
+    "name": "LawSpecification",
+    "source": "LawSpecification.obend"
+   }
+  ],
+  "entry": "built",
+  "arguments": [],
+  "prediction": "REFUSED: a law changes the exact laws row, so the spec is not Specification<T>",
+  "current": {
+   "status": "finished",
+   "value": "41"
+  },
+  "target": {
+   "status": "finished",
+   "value": "41"
+  },
+  "owner": "LT1"
+ },
+ {
+  "name": "W03-AssociatedSpecifications",
+  "modules": [
+   {
+    "name": "AssociatedSpecifications",
+    "source": "AssociatedSpecifications.obend"
+   }
+  ],
+  "entry": "leftOfOne",
+  "arguments": [],
+  "prediction": "(audit section 5) the two associations carry differently shaped metadata types",
+  "current": {
+   "status": "finished",
+   "value": "7"
+  },
+  "target": {
+   "status": "finished",
+   "value": "7"
+  },
+  "owner": "LT1"
+ },
+ {
+  "name": "W04-RecursiveNode",
+  "modules": [
+   {
+    "name": "RecursiveNode",
+    "source": "RecursiveNode.obend"
+   }
+  ],
+  "entry": "two",
+  "arguments": [],
+  "prediction": "REFUSED: recursive row annotation requires explicit future-row binder (the elaborator records exactly this, but the user-visible diagnostic was the downstream 'parameter self has no resolvable type')",
+  "current": {
+   "status": "finished",
+   "value": "2"
+  },
+  "target": {
+   "status": "finished",
+   "value": "2"
+  },
+  "owner": "LT2"
+ },
+ {
+  "name": "D6a-RecursiveNodeIllTyped",
+  "modules": [
+   {
+    "name": "RecursiveNodeIllTyped",
+    "source": "RecursiveNodeIllTyped.obend"
+   }
+  ],
+  "entry": "two",
+  "arguments": [],
+  "prediction": "LT2 D6 tooth: a recursive record value missing a member is refused",
+  "current": {
+   "status": "refused",
+   "refusal": "typing refused"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "typing refused"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "W05-PartialSeed",
+  "modules": [
+   {
+    "name": "PartialSeed",
+    "source": "PartialSeed.obend"
+   }
+  ],
+  "entry": "twiceOfThree",
+  "arguments": [],
+  "prediction": "REFUSED: spec S for T types super as the whole T, so a one-method spec needs a whole-T seed",
+  "current": {
+   "status": "finished",
+   "value": "7"
+  },
+  "target": {
+   "status": "finished",
+   "value": "7"
+  },
+  "owner": "LT2"
+ },
+ {
+  "name": "W06-RequiresUnprovided",
+  "modules": [
+   {
+    "name": "RequiresUnprovided",
+    "source": "RequiresUnprovided.obend"
+   }
+  ],
+  "entry": "resultOfThree",
+  "arguments": [],
+  "prediction": "(audit: requires is unchecked metadata) the whole-T seed rule refuses the empty seed before any requirement is examined",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (requires-unprovided)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (requires-unprovided)"
+  },
+  "owner": "LT2"
+ },
+ {
+  "name": "W06b-RequiresPlaceholderSeed",
+  "modules": [
+   {
+    "name": "RequiresPlaceholderSeed",
+    "source": "RequiresPlaceholderSeed.obend"
+   }
+  ],
+  "entry": "placeholderOfThree",
+  "arguments": [],
+  "prediction": "ACCEPTED: the seed's placeholder discharges the requirement by type alone and answers 0",
+  "current": {
+   "status": "finished",
+   "value": "0"
+  },
+  "target": {
+   "status": "finished",
+   "value": "0"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "W07-RequiresWrongSignature",
+  "modules": [
+   {
+    "name": "RequiresWrongSignature",
+    "source": "RequiresWrongSignature.obend"
+   }
+  ],
+  "entry": "twiceOfThree",
+  "arguments": [],
+  "prediction": "ACCEPTED: the requires signature is never compared with the target",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (requires-signature)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (requires-signature)"
+  },
+  "owner": "LT2"
+ },
+ {
+  "name": "D3a-InheritedUnprovided",
+  "modules": [
+   {
+    "name": "OpenSuperInheritedUnprovided",
+    "source": "OpenSuperInheritedUnprovided.obend"
+   }
+  ],
+  "entry": "reviewOfThree",
+  "arguments": [],
+  "prediction": "LT2 D3 tooth: a super read with nothing below is refused by name",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (inherited-unprovided)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (inherited-unprovided)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "D3b-SeedExtra",
+  "modules": [
+   {
+    "name": "OpenSuperSeedExtra",
+    "source": "OpenSuperSeedExtra.obend"
+   }
+  ],
+  "entry": "reviewOfThree",
+  "arguments": [],
+  "prediction": "LT2 D3 tooth: a seed field outside the target is refused by name",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (seed-extra)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (seed-extra)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "D3c-RepeatedLayer",
+  "modules": [
+   {
+    "name": "OpenSuperRepeatedLayer",
+    "source": "OpenSuperRepeatedLayer.obend"
+   }
+  ],
+  "entry": "reviewOfThree",
+  "arguments": [],
+  "prediction": "LT2 D3 control: one spec at two chain positions over an empty seed",
+  "current": {
+   "status": "finished",
+   "value": "6"
+  },
+  "target": {
+   "status": "finished",
+   "value": "6"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "W08-LawImpossible",
+  "modules": [
+   {
+    "name": "LawImpossible",
+    "source": "LawImpossible.obend"
+   }
+  ],
+  "entry": "built",
+  "arguments": [],
+  "prediction": "ACCEPTED: law impossible: false is a retained closure, never evaluated",
+  "current": {
+   "status": "finished",
+   "value": "41"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (law-refuted)"
+  },
+  "owner": "LT6"
+ },
+ {
+  "name": "C09-ConcreteSelfStaysClosed",
+  "modules": [
+   {
+    "name": "FourthField",
+    "source": "FourthField.obend"
+   }
+  ],
+  "entry": "wOfFive",
+  "arguments": [],
+  "prediction": "REFUSED: AddY names the concrete self XYZ, so it does not compose under XYZW. Correct after LT2 as well: reuse is earned by the binder (W09b), not by loosening closed annotations",
+  "current": {
+   "status": "refused",
+   "refusal": "typing refused"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "typing refused"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "W09b-FourthFieldOpen",
+  "modules": [
+   {
+    "name": "FourthFieldOpen",
+    "source": "FourthFieldOpen.obend"
+   }
+  ],
+  "entry": "wOfFive",
+  "arguments": [],
+  "prediction": "design acceptance (LT2): an extension written over its assumptions survives a fourth field without edits",
+  "current": {
+   "status": "finished",
+   "value": "11"
+  },
+  "target": {
+   "status": "finished",
+   "value": "11"
+  },
+  "owner": "LT2"
+ },
+ {
+  "name": "W10-BinarySelf",
+  "modules": [
+   {
+    "name": "BinarySelf",
+    "source": "BinarySelf.obend"
+   }
+  ],
+  "entry": "pick",
+  "arguments": [],
+  "prediction": "design acceptance (LT2): an F-bounded binary method closes at two records (5 + 7)",
+  "current": {
+   "status": "finished",
+   "value": "12"
+  },
+  "target": {
+   "status": "finished",
+   "value": "12"
+  },
+  "owner": "LT2"
+ },
+ {
+  "name": "S3a-SelfUnboundMember",
+  "modules": [
+   {
+    "name": "OpenSelfUnboundMember",
+    "source": "OpenSelfUnboundMember.obend"
+   }
+  ],
+  "entry": "zero",
+  "arguments": [],
+  "prediction": "LT2 step 3b tooth: a template reads only what its binder declares",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (self-unbound-member)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (self-unbound-member)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "S3b-SelfBoundUnmet",
+  "modules": [
+   {
+    "name": "OpenSelfBoundUnmet",
+    "source": "OpenSelfBoundUnmet.obend"
+   }
+  ],
+  "entry": "yOfNothing",
+  "arguments": [],
+  "prediction": "LT2 step 3b tooth: fix discharges the Self bound",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (self-bound)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (self-bound)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "S3c-SelfUndetermined",
+  "modules": [
+   {
+    "name": "OpenSelfUndetermined",
+    "source": "OpenSelfUndetermined.obend"
+   }
+  ],
+  "entry": "weight",
+  "arguments": [],
+  "prediction": "LT2 step 3b tooth: an all-open fix needs a named final self",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (self-undetermined)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (self-undetermined)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "S3d-FBoundMismatch",
+  "modules": [
+   {
+    "name": "OpenFBoundMismatch",
+    "source": "OpenFBoundMismatch.obend"
+   }
+  ],
+  "entry": "pair",
+  "arguments": [],
+  "prediction": "LT2 step 3b tooth: an F-bound is discharged at the instance's self",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (self-bound)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (self-bound)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "R01-LeftAssociationNested",
+  "modules": [
+   {
+    "name": "AssociationProvenance",
+    "source": "AssociationProvenance.obend"
+   }
+  ],
+  "entry": "leftNested",
+  "arguments": [],
+  "prediction": "(audit section 5) composition retains an observable construction history that differs between the two associations",
+  "current": {
+   "status": "finished",
+   "value": "true"
+  },
+  "target": {
+   "status": "finished",
+   "value": "true"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "R02-RightAssociationFlat",
+  "modules": [
+   {
+    "name": "AssociationProvenance",
+    "source": "AssociationProvenance.obend"
+   }
+  ],
+  "entry": "rightNested",
+  "arguments": [],
+  "prediction": "(audit section 5) composition retains an observable construction history that differs between the two associations",
+  "current": {
+   "status": "finished",
+   "value": "false"
+  },
+  "target": {
+   "status": "finished",
+   "value": "false"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "S4a-SelfRigid",
+  "modules": [
+   {
+    "name": "OpenSelfRigid",
+    "source": "OpenSelfRigid.obend"
+   }
+  ],
+  "entry": "wOfFive",
+  "arguments": [],
+  "prediction": "LT2 step 4 tooth (D2): a template that uses self as a value of its Self bound row is refused at the declaration, by name, not anonymously at a wider instance",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (self-rigid): open declaration OpenSelfRigid.AddY"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (self-rigid): open declaration OpenSelfRigid.AddY"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "D4a-ReplaceUndeclared",
+  "modules": [
+   {
+    "name": "OpenSuperReplace",
+    "source": "OpenSuperReplace.obend"
+   }
+  ],
+  "entry": "replaced",
+  "arguments": [],
+  "prediction": "GPT-6 row D per-operation constraint: a layer that changes a member type is refused at that layer by name, even when a later layer restores the final self (it used to finish = 4)",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (replace-undeclared)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (replace-undeclared)"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "D4b-OverrideSameType",
+  "modules": [
+   {
+    "name": "OpenSuperOverride",
+    "source": "OpenSuperOverride.obend"
+   }
+  ],
+  "entry": "overridden",
+  "arguments": [],
+  "prediction": "pole of D4a: an override at the same type over Super is admitted: size(3) = 3 + 1",
+  "current": {
+   "status": "finished",
+   "value": "4"
+  },
+  "target": {
+   "status": "finished",
+   "value": "4"
+  },
+  "owner": "control"
+ },
+ {
+  "name": "S5a-SuperRigid",
+  "modules": [
+   {
+    "name": "OpenSuperRigid",
+    "source": "OpenSuperRigid.obend"
+   }
+  ],
+  "entry": "xOfFive",
+  "arguments": [],
+  "prediction": "GPT-6 row D, Super abstract: a template using super as a value of its Super bound row is refused at the declaration (it used to finish = 5: Super was the literal bound row)",
+  "current": {
+   "status": "refused",
+   "refusal": "refused (super-rigid)"
+  },
+  "target": {
+   "status": "refused",
+   "refusal": "refused (super-rigid)"
+  },
+  "owner": "control"
+ }
+]

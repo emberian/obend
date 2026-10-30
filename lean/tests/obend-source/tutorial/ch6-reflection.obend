@@ -1,0 +1,69 @@
+edition ObjectiveBend 1
+# Chapter 6: prototypes and reflection. prototype(spec, target) keeps a spec
+# and the object built from it together. reflect, metadata and targetOf take
+# them apart without running the other half.
+
+record Tally:
+  n: Nat
+
+spec Start for Tally:
+  claim nonNegative: true
+  def n() -> Nat:
+    41n
+
+def seed() -> Tally:
+  {n: 0n}
+
+def built() -> Tally:
+  fix(Start, seed())
+
+# metadata(s) is a SpecMeta: what a declaration says about itself
+# (declared), how a composition was built (composed), or nothing for a bare
+# extension. Every spec has this one metadata type, so a match reads it.
+def nameOf(meta: SpecMeta) -> String:
+  match meta:
+    case declared(d): d.name
+    case composed(c): "a composition"
+    case extension(e): "an extension"
+
+def interfaceOf(meta: SpecMeta) -> String:
+  match meta:
+    case declared(d): d.interface
+    case composed(c): ""
+    case extension(e): ""
+
+def claimsOf(meta: SpecMeta) -> SpecClaims:
+  match meta:
+    case declared(d): d.claims
+    case composed(c): SpecClaims.none({})
+    case extension(e): SpecClaims.none({})
+
+def firstName() -> String:
+  nameOf(metadata(reflect(prototype(Start, built()))))
+
+def target() -> Nat:
+  targetOf(prototype(Start, built())).n
+
+def interface() -> String:
+  interfaceOf(metadata(Start))
+
+def composedName() -> String:
+  nameOf(metadata(compose(Start, Start)))
+
+# A claim is listed by name, with its status.
+def claimStatus() -> String:
+  match claimsOf(metadata(Start)):
+    case none(n): "no claims"
+    case claim(l): l.status
+
+# stuck never finishes. The prototype is never asked for its target, so
+# reflecting on it still works.
+def stuck() -> Tally:
+  stuck()
+
+def name() -> String:
+  nameOf(metadata(reflect(prototype(Start, stuck()))))
+
+# Asking for the target of the same prototype does run it.
+def stuckTarget() -> Nat:
+  targetOf(prototype(Start, stuck())).n
