@@ -13,14 +13,16 @@ available. The `Journal` library and `lake exe journal` belong to the obligation
 
 **Library map** (`Obend.lean` re-exports the definitional modules).
 
-- `Obend/Core/` — Core4: `Term`, `Ty`, the checker `Check`, the demand `Machine` (and `MachineFast`,
-  `Invariant`, `MachineTyping`), `Data`, `Capacity`, `Collect`, `Checkpoint`, `Extensions`,
-  `Interaction`, `Digest`, the executor typeclass `Backend`.
+- `Obend/Core/` — Core4: `Term`, `Ty`, the checker `Check`, the typed-core wire `Packet`, the
+  demand `Machine` (and `MachineFast`, `Invariant`, `MachineTyping`), `Data`, `Capacity`,
+  `Collect`, `Checkpoint`, `Extensions`, `Interaction`, `Digest`, the executor typeclass `Backend`.
 - `Obend/Core/Proofs/` — the theorems about Core: `Adequacy`, `Completeness`, `Preservation.*`,
-  `Forcing.*`, `Collect`, `Settle`, `Templates`, `DataSoundness`, `Substitution`, …
+  `Forcing.*`, `Collect`, `Settle`, `Templates`, `DataSoundness`, `Substitution` (the substitution
+  lemma for `check`), `CheckTeeth` (the checker's `decide` fixtures), …
 - `Obend/Digest/` — `HashBytes`, cSHAKE256 (`Spec`, `Fast`, `Seam`), the `Digest` typeclass.
 - `Obend/Slot/` — the slot (`Obend.Slot`), open protocols (`Protocol`), their proofs, the calculus
   typeclass (`Calculus`), Core4 as its instance (`Core4`), the abstract `World` and `Integrity`.
+- `Obend/Main.lean` — `lake exe obend check FILE.json` / `obend run FILE.json [--ticks N …]`.
 
 **The module discipline.** A definitional module is `module` + `@[expose] public section`: its
 bodies are its interface, so a change there rebuilds every importer. A proof module is `module`
