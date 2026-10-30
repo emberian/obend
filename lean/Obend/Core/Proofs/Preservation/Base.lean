@@ -1423,6 +1423,23 @@ public theorem stack_convert_path {assumptions : Assumptions} {types : AddressTy
   | refl => exact continuation
   | step prior agreement ih => exact ih (.conversion agreement continuation)
 
+/-- Unresolved holes have no source typing derivation, including through conversion. -/
+public theorem source_not_hole {assumptions : Assumptions} {context : Context}
+    {term : Term} {type : Ty} {uses : Uses}
+    (source : PartialTyping assumptions context term type uses) :
+    ∀ n σ, term ≠ .hole n σ := by
+  apply PartialTyping.rec
+    (motive_1 := fun _ term _ _ _ => ∀ n σ, term ≠ .hole n σ)
+    (motive_2 := fun _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ => True)
+    (t := source)
+  case conversion =>
+    intro context term actual expected uses prior agreement ih
+    obend_cases term with []
+  all_goals (intros; simp_all)
+
+#assert_axioms source_not_hole
+
 /-- Variable source derivations disclose the actual environment binding even
 when the authored result has crossed one or several row/alias conversions. -/
 public theorem source_bound_assignment {assumptions : Assumptions} {context : Context}

@@ -57,9 +57,13 @@ def encodeTerm : Term → Tokens
       .nat 20 :: (encodeTerm condition ++ encodeTerm whenTrue ++ encodeTerm whenFalse)
   | .perform plan => .nat 21 :: encodeTerm plan
   | .done value => .nat 22 :: encodeTerm value
+  | .hole identity payload => .nat 23 :: .nat identity :: encodeTerms payload
 def encodeFields : List (String × Term) → Tokens
   | [] => [.nat 0]
   | (name,body) :: rest => .nat 1 :: .text name :: (encodeTerm body ++ encodeFields rest)
+def encodeTerms : List Term → Tokens
+  | [] => [.nat 0]
+  | body :: rest => .nat 1 :: (encodeTerm body ++ encodeTerms rest)
 end
 
 mutual
@@ -105,6 +109,9 @@ def decodeTerm : Nat → Tokens → Option (Term × Tokens)
     | 20, _ => three .ifBool
     | 21, _ => one .perform
     | 22, _ => one .done
+    | 23, .nat identity :: rest => do
+        let (payload, rest) ← decodeTerms fuel rest
+        pure (.hole identity payload, rest)
     | _, _ => none
   | _ + 1, _ => none
 def decodeFields : Nat → Tokens → Option (List (String × Term) × Tokens)
@@ -114,6 +121,14 @@ def decodeFields : Nat → Tokens → Option (List (String × Term) × Tokens)
       let (body, rest) ← decodeTerm fuel rest
       let (others, rest) ← decodeFields fuel rest
       pure ((name,body) :: others, rest)
+  | _ + 1, _ => none
+def decodeTerms : Nat → Tokens → Option (List Term × Tokens)
+  | 0, _ => none
+  | _ + 1, .nat 0 :: rest => some ([], rest)
+  | fuel + 1, .nat 1 :: rest => do
+      let (body, rest) ← decodeTerm fuel rest
+      let (others, rest) ← decodeTerms fuel rest
+      pure (body :: others, rest)
   | _ + 1, _ => none
 end
 
@@ -228,10 +243,10 @@ def decodeFrame (fuel : Nat) : Tokens → Option (Frame × Tokens)
 
 def refusalCode : Refusal → Nat
   | .unbound => 0 | .missingCell => 1 | .missingField => 2 | .wrongValue => 3
-  | .invalidUpdate => 4 | .capacity => 5 | .missingArm => 6 | .sharedEffect => 7
+  | .invalidUpdate => 4 | .capacity => 5 | .missingArm => 6 | .sharedEffect => 7 | .unresolvedHole => 8
 def refusalOf : Nat → Option Refusal
   | 0 => some .unbound | 1 => some .missingCell | 2 => some .missingField | 3 => some .wrongValue
-  | 4 => some .invalidUpdate | 5 => some .capacity | 6 => some .missingArm | 7 => some .sharedEffect
+  | 4 => some .invalidUpdate | 5 => some .capacity | 6 => some .missingArm | 7 => some .sharedEffect | 8 => some .unresolvedHole
   | _ => none
 
 def encodeControl : Control → Tokens

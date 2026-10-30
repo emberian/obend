@@ -57,6 +57,8 @@ inductive Refusal where
   stack): its effect would be cached and shared, so it is refused. Typed programs
   never reach it (computation types are never cell types). -/
   | sharedEffect
+  /-- Evaluation demanded an unresolved syntax hole. Suspended holes remain inert. -/
+  | unresolvedHole
   deriving Repr
 inductive Control where
   | evaluate (term : Term) (environment : Environment)
@@ -105,6 +107,7 @@ def stepRaw (state : State) : State :=
     | some (.suspended origin) =>
       {state with heap:=state.heap.set! address (.evaluating origin), control:=.evaluate origin.term origin.environment,stack:=.update address::state.stack}
   | .evaluate term environment => match term with
+    | .hole _ _ => {state with control:=.refused .unresolvedHole}
     | .bound index => match environment[index]? with
       | some address => {state with control:=.enter address}
       | none => {state with control:=.refused .unbound}

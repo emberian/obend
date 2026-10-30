@@ -24,6 +24,7 @@ heap ends and `f` maps one end to the other.
 * Inhabitants: a typed state with a garbage cell (`garbageTyping`) and a closed program
   that yields with a garbage cell (`yieldingTerm`), whose Plan extracts to the same
   encoded Data before and after collection. -/
+public import Obend.Tactic.Cases
 public import Obend.Core.Collect
 public import Obend.Core.Data
 public import Obend.Core.MachineTyping
@@ -587,6 +588,9 @@ public theorem related_stepRaw {f : Nat → Nat} {D : Nat → Prop} {s t : State
   | evaluate term env =>
     have envIn : AllIn D env := controlIn
     cases term with
+    | hole n σ =>
+      obend_cases σ with []
+      all_goals exact ⟨hr, allIn_nil D, rfl, stackIn, rfl⟩
     | bound i =>
       simp only [stepRaw, renameControl]
       rw [List.getElem?_map]

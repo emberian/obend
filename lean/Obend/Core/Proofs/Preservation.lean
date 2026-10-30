@@ -27,6 +27,12 @@ public theorem typed_stepRaw_preserved {assumptions : Assumptions} {types : Addr
       blackhole := fun _ _ control types typed => ⟨types, type_extension_refl types, by simpa [stepRaw, control] using (Nonempty.intro typed)⟩
       yielded := fun _ _ control types typed => ⟨types, type_extension_refl types, by simpa [stepRaw, control] using (Nonempty.intro typed)⟩
       enter := fun _ _ control types typed => ⟨types, type_extension_refl types, typed_enter_preserved typed control⟩
+      evaluate_hole := by
+        intro state n σ environment control types typed
+        have current := typed.control
+        rw [control] at current
+        obend_cases current with []
+        case evaluate origin => exact False.elim (source_not_hole origin.source n σ rfl)
       evaluate_bound := fun _ _ _ control types typed => ⟨types, type_extension_refl types, typed_bound_preserved typed control⟩
       evaluate_lam := fun _ _ _ control types typed => ⟨types, type_extension_refl types, typed_immediate_preserved typed control rfl⟩
       evaluate_nat := fun _ _ _ control types typed => ⟨types, type_extension_refl types, typed_immediate_preserved typed control rfl⟩

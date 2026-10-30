@@ -754,6 +754,7 @@ yielding transition leaves the continuation untouched. -/
   | evaluate term environment =>
       have noEnter : ∀ address, state.control ≠ .enter address := by intro address; simp [control]
       cases term with
+      | hole n _ => obend_cases n with [stepRaw, control, ResultControl]
       | bound index =>
           cases found : environment[index]? with
           | none => simp [stepRaw,control,found,ResultControl] at successful

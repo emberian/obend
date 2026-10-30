@@ -348,6 +348,7 @@ any stronger language. The result carries a runtime-syntax derivation. -/
 def infer (assumptions : Assumptions) (annotations : Annotations) (context : Context)
     (position : List Nat) : Nat → (term : Term) → Option (Inferred assumptions context term)
   | 0, _ => none
+  | _ + 1, .hole _ _ => none
   | fuel + 1, .bound index => do
       let binding ← context[index]?
       if h : context[index]? = some binding then

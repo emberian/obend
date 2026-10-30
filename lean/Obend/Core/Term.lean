@@ -21,6 +21,7 @@ inductive Primitive where
   deriving Repr, DecidableEq
 
 inductive Term where
+  | hole (n : Nat) (σ : List Term)
   | bound (index : Nat)
   | lam (body : Term)
   | app (function argument : Term)
@@ -56,6 +57,7 @@ def liftRename (rename : Nat → Nat) : Nat → Nat
   | 0 => 0 | n + 1 => rename n + 1
 
 def Term.rename (rename : Nat → Nat) : Term → Term
+  | .hole n σ => .hole n (σ.map (fun t => t.rename rename))
   | .bound index => .bound (rename index)
   | .lam body => .lam (body.rename (liftRename rename))
   | .app function argument => .app (function.rename rename) (argument.rename rename)
@@ -90,6 +92,7 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
     | (rename_i hmem
        have hlist := List.sizeOf_lt_of_mem hmem
        have hpair : sizeOf field.snd < sizeOf field := by
@@ -102,6 +105,7 @@ def liftSubstitution (substitution : Nat → Term) : Nat → Term
   | n + 1 => (substitution n).rename Nat.succ
 
 def Term.substitute (substitution : Nat → Term) : Term → Term
+  | .hole n σ => .hole n (σ.map (fun t => t.substitute substitution))
   | .bound index => substitution index
   | .lam body => .lam (body.substitute (liftSubstitution substitution))
   | .app function argument => .app (function.substitute substitution) (argument.substitute substitution)
@@ -137,6 +141,7 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
     | (rename_i hmem
        have hlist := List.sizeOf_lt_of_mem hmem
        have hpair : sizeOf field.snd < sizeOf field := by

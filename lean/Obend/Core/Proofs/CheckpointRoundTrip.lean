@@ -4,6 +4,7 @@ quiescent yielded activity, is restored exactly from its token encoding.
 Fuel is the token count, so no separate depth bound is assumed. -/
 public import Obend.Core.Checkpoint
 public import Obend.AxiomPin
+public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.CheckpointRoundTrip
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Checkpoint
 set_option autoImplicit false
@@ -12,7 +13,7 @@ theorem primitive_roundTrip (primitive : Primitive) : primitiveOf (primitiveCode
   cases primitive <;> rfl
 
 theorem refusal_roundTrip (reason : Refusal) : refusalOf (refusalCode reason) = some reason := by
-  cases reason <;> rfl
+  obend_cases reason with [refusalCode, refusalOf]
 
 mutual
 theorem term_roundTrip : ∀ (term : Term) (fuel : Nat) (rest : Tokens),
@@ -83,7 +84,12 @@ theorem term_roundTrip : ∀ (term : Term) (fuel : Nat) (rest : Tokens),
   | .done v, fuel+1, rest, h => by
       simp only [encodeTerm,List.length_cons] at h
       simp [encodeTerm,decodeTerm,term_roundTrip v fuel rest (by omega)]
-  | term, 0, rest, h => by cases term <;> simp [encodeTerm] at h
+  | .hole identity payload, fuel+1, rest, h => by
+      have payloadOk := terms_roundTrip payload fuel rest (by
+        simp only [encodeTerm, List.length_cons] at h
+        omega)
+      obend_cases payload with [encodeTerm, decodeTerm, payloadOk]
+  | term, 0, rest, h => by obend_cases term with [encodeTerm]
 theorem fields_roundTrip : ∀ (fields : List (String × Term)) (fuel : Nat) (rest : Tokens),
     (encodeFields fields).length ≤ fuel → decodeFields fuel (encodeFields fields ++ rest) = some (fields,rest)
   | [], fuel+1, rest, _ => by simp [encodeFields,decodeFields]
@@ -92,6 +98,14 @@ theorem fields_roundTrip : ∀ (fields : List (String × Term)) (fuel : Nat) (re
       simp [encodeFields,decodeFields,List.append_assoc,term_roundTrip body fuel _ (by omega),
         fields_roundTrip others fuel rest (by omega)]
   | fields, 0, rest, h => by cases fields <;> simp [encodeFields] at h
+theorem terms_roundTrip : ∀ (terms : List Term) (fuel : Nat) (rest : Tokens),
+    (encodeTerms terms).length ≤ fuel → decodeTerms fuel (encodeTerms terms ++ rest) = some (terms,rest)
+  | [], fuel+1, rest, _ => by simp [encodeTerms,decodeTerms]
+  | body :: others, fuel+1, rest, h => by
+      simp only [encodeTerms,List.length_cons,List.length_append] at h
+      simp [encodeTerms,decodeTerms,List.append_assoc,term_roundTrip body fuel _ (by omega),
+        terms_roundTrip others fuel rest (by omega)]
+  | terms, 0, rest, h => by obend_cases terms with [encodeTerms]
 end
 
 theorem addressesN_roundTrip : ∀ (addresses : List Address) (rest : Tokens),
@@ -258,6 +272,19 @@ theorem state_roundTrip (state : State) : decodeState (encodeState state) = some
   rw [show heap.size = heap.toList.length by simp,heapDecoded]
   simp [controlOk,stackDecoded]
 
+/-- A hole's identity and its entire payload survive checkpoint serialization. -/
+theorem hole_payload_roundTrip (identity : Nat) (payload : List Term) (rest : Tokens) :
+    decodeTerm (encodeTerm (.hole identity payload)).length
+      (encodeTerm (.hole identity payload) ++ rest) = some (.hole identity payload, rest) :=
+  term_roundTrip _ _ _ (Nat.le_refl _)
+
+/-- Concrete nested, nonempty payload and trailing-token boundary regression. -/
+theorem hole_checkpoint_tooth :
+    decodeTerm 12 (encodeTerm (.hole 7 [.nat 3, .hole 9 [.bound 2]]) ++ [.text "tail"]) =
+      some (.hole 7 [.nat 3, .hole 9 [.bound 2]], [.text "tail"]) := by
+  rfl
+
+#assert_axioms hole_payload_roundTrip hole_checkpoint_tooth
 #assert_axioms state_roundTrip
 
 end Obend.Core.Proofs.CheckpointRoundTrip
