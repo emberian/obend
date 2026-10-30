@@ -178,10 +178,9 @@ theorem finite_field_commute (a : Assumptions) (name prior : String)
   · intro label
     exact stream_commute a name prior label true member old tail different
 
-theorem finite_field_shadow (a : Assumptions) (name : String) (member old tail : Ty)
-    (oldShare : old.shareable = true) :
+theorem semantic_field_shadow (a : Assumptions) (name : String) (member old tail : Ty)
+    (share : RR.shareable a old = true) :
     Equivalent a (.field name member (.field name old tail)) (.field name member tail) := by
-  have share := semantic_shareable_of_syntactic a old oldShare
   apply fields_equivalent
   · simp only [Obend.Core.RecursiveRows.labels_field]
     apply Obend.Core.RecursiveRows.sorted_ext
@@ -198,6 +197,11 @@ theorem finite_field_shadow (a : Assumptions) (name : String) (member old tail :
   · intro label
     exact stream_shadow a name label true member old tail share
 
+theorem finite_field_shadow (a : Assumptions) (name : String) (member old tail : Ty)
+    (oldShare : old.shareable = true) :
+    Equivalent a (.field name member (.field name old tail)) (.field name member tail) :=
+  semantic_field_shadow a name member old tail (semantic_shareable_of_syntactic a old oldShare)
+
 #assert_axioms field_stream_skip field_stream_emit stream_commute stream_shadow
-  semantic_shareable_of_syntactic finite_field_commute finite_field_shadow
+  semantic_shareable_of_syntactic finite_field_commute semantic_field_shadow finite_field_shadow
 end Obend.Core.TypeGraph

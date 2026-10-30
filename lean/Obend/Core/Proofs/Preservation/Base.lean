@@ -3,6 +3,9 @@ module
 inversions, source decompositions every constructor's case uses. No dispatcher here:
 the per-constructor case modules import this, the umbrella imports them. -/
 public import Obend.Core.MachineTyping
+public import Obend.Core.RuntimeOrigins
+public import Obend.Core.EquiRecursiveLookup
+public import Obend.Core.TypeGraphHead
 public import Obend.Core.Proofs.Adequacy
 public import Obend.AxiomPin
 public import Obend.Tactic.Cases
@@ -135,11 +138,11 @@ theorem sameStep_activity_canonical {assumptions : Assumptions} {actual expected
   · cases expected <;> simp at aliasExpected
     simp_all [Ty.isComputation]
 
-public theorem sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
-    (agreement : sameType assumptions actual expected = true)
+public theorem legacy_sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
+    (agreement : legacySameType assumptions actual expected = true)
     (equal : actual.canonical = (Ty.computation plan response produced).canonical) :
     expected.canonical = (Ty.computation plan response produced).canonical :=
-  sameType_lift (fun a e => a.canonical = (Ty.computation plan response produced).canonical →
+  legacySameType_lift (fun a e => a.canonical = (Ty.computation plan response produced).canonical →
       e.canonical = (Ty.computation plan response produced).canonical)
     (fun _ h => h) (fun one two h => two (one h)) (fun step h => sameStep_activity_canonical step h)
     agreement equal
@@ -186,38 +189,7 @@ public theorem computation_canonical_inj {plan response result plan' response' r
 /-- Inversion of an activity continuation at an effect case: the arms are
 activities over the case's own Plan/Response, and the incoming activity
 produces the case's sum. -/
-public theorem stack_effect_case {assumptions : Assumptions} {types : AddressTypes}
-    {stack : List Frame} {input result : Ty}
-    (typed : StackTyping assumptions types stack input result) :
-    ∀ arms environment rest plan response produced, stack = .case arms environment :: rest →
-      input.canonical = (Ty.computation plan response produced).canonical →
-      ∃ row planType responseType branch context uses,
-        EnvironmentTyping types context environment ∧
-        ArmsTyping assumptions context arms row (.computation planType responseType branch) uses ∧
-        validContext assumptions.shareableVariables context = true ∧
-        produced.canonical = (Ty.variant row).canonical ∧
-        StackTyping assumptions types rest (.computation planType responseType branch) result := by
-  induction typed with
-  | nil => intro arms environment rest plan response produced impossible; simp at impossible
-  | cons frameTyped restTyped ih =>
-      intro arms environment rest plan response produced same equal
-      cases same
-      cases frameTyped with
-      | case environmentTyped armsTyped valid =>
-          simp [Ty.canonical] at equal
-      | effectCase environmentTyped armsTyped valid pure =>
-          obtain ⟨_,_,component⟩ := computation_canonical_inj equal
-          exact ⟨_,_,_,_,_,_,environmentTyped,armsTyped,valid,component.symm,restTyped⟩
-  | conversion agreement restTyped ih =>
-      intro arms environment rest plan response produced same equal
-      exact ih arms environment rest plan response produced same (sameType_activity_canonical agreement equal)
-  | returns pure restTyped ih =>
-      intro arms environment rest plan response produced same equal
-      rw [← Ty.canonical_isComputation,equal] at pure
-      simp [Ty.canonical,Ty.isComputation] at pure
 
-/-- A cache update preserves every assigned address type and every retained
-origin's source/capture evidence; it changes no address assignment. -/
 public theorem heap_typed_set {assumptions : Assumptions} {types : AddressTypes}
     {heap : Array Cell} {address : Address} {type : Ty} {replacement : Cell}
     (heapTyped : HeapTyping assumptions types heap) (assigned : types[address]? = some type)
@@ -519,24 +491,14 @@ theorem same_step_lookup_transport {assumptions : Assumptions} {actual expected 
         exact canonical_lookup_transport assumptions.bounds actual bound equal.symm fuel name member next
 
 public theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
-    (agreement : sameType assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
+    (related : sameType assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
     (lookup : expected.lookup assumptions.bounds fuel name = some member) :
     ∃ depth actualMember, actual.lookup assumptions.bounds depth name = some actualMember ∧
-      actualMember.canonical = member.canonical :=
-  sameType_lift (fun a e => ∀ fuel name member, e.lookup assumptions.bounds fuel name = some member →
-      ∃ depth actualMember, a.lookup assumptions.bounds depth name = some actualMember ∧
-        actualMember.canonical = member.canonical)
-    (fun _ fuel _ member lookup => ⟨fuel, member, lookup, rfl⟩)
-    (fun one two fuel name member lookup => by
-      obtain ⟨d, m, l, e⟩ := two fuel name member lookup
-      obtain ⟨d', m', l', e'⟩ := one d name m l
-      exact ⟨d', m', l', e'.trans e⟩)
-    (fun step fuel name member lookup => same_step_lookup_transport step fuel name member lookup)
-    agreement fuel name member lookup
+      sameType assumptions actualMember member = true := by
+  obtain ⟨depth, actualMember, found, members⟩ :=
+    TypeGraph.equivalent_lookup_transport ((sameType_iff assumptions _ _).mp related) fuel name member lookup
+  exact ⟨depth, actualMember, found, (sameType_iff assumptions _ _).mpr members⟩
 
-/-- Declared aliases have a deterministic head equation. Its normalization
-relation is partial: cyclic aliases need not produce a head, and no general Fix
-computation or subtype oracle is used in conversion. -/
 public inductive HeadNormalizes (bounds : Bounds) : Ty → Ty → Prop where
   | direct (type : Ty) : isVariable type = false → HeadNormalizes bounds type type.canonical
   | alias {index : Nat} {bound result : Ty} : bounds.lookup index = some bound →
@@ -603,11 +565,13 @@ theorem same_step_preserves_head {assumptions : Assumptions} {first second resul
       obtain ⟨-,equal⟩ : _ ∧ bound.canonical = first.canonical := by simpa [aliased] using aliasSecond
       exact .alias found (canonical_agreement_normalizes equal.symm normal)
 
-public theorem same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
-    (agreement : sameType assumptions first second = true)
+/-- Exact head normalization belongs to the legacy head-only closure. It is
+false for structural equality; runtime consumers now use component agreement. -/
+public theorem legacy_same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
+    (agreement : legacySameType assumptions first second = true)
     (normal : HeadNormalizes assumptions.bounds first result) :
     HeadNormalizes assumptions.bounds second result :=
-  sameType_lift (fun a e => ∀ result, HeadNormalizes assumptions.bounds a result → HeadNormalizes assumptions.bounds e result)
+  legacySameType_lift (fun a e => ∀ result, HeadNormalizes assumptions.bounds a result → HeadNormalizes assumptions.bounds e result)
     (fun _ _ h => h) (fun one two result h => two result (one result h))
     (fun step result h => same_step_preserves_head step h) agreement result normal
 
@@ -658,213 +622,280 @@ theorem row_head_normalizes (bounds : Bounds) (fuel : Nat) (row : Ty)
           exact ⟨head,.alias found normal,kind⟩
       | _ => simp [Ty.isRow] at isRow
 
-/-- Runtime canonical forms follow from ACTUAL value derivations and the same
-finite alias equations checked at source. No assumed constructor-shape oracle
-is used, and no termination of cyclic aliases is required. -/
-public theorem value_head_correct {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
-    ∃ head, HeadNormalizes assumptions.bounds type head ∧ typeHead head = valueHead value := by
-  induction typed with
-  | natural value => exact ⟨.natural,.direct .natural rfl,rfl⟩
-  | boolean value => exact ⟨.boolean,.direct .boolean rfl,rfl⟩
-  | label value => exact ⟨.label,.direct .label rfl,rfl⟩
-  | closure environment body safe valid captures => exact ⟨_,.direct _ rfl,rfl⟩
-  | record isRow members =>
-      obtain ⟨fuel,isRow⟩ := isRow
-      exact row_head_normalizes _ fuel _ isRow
-  | specification metadata ext => exact ⟨_,.direct _ rfl,rfl⟩
-  | prototype spec target => exact ⟨_,.direct _ rfl,rfl⟩
-  | variant lookup assigned path => exact ⟨_,.direct _ rfl,rfl⟩
-  | conversion prior agreement ih =>
-      obtain ⟨head,normal,kind⟩ := ih
-      exact ⟨head,same_type_preserves_head agreement normal,kind⟩
-
-/-- No runtime value inhabits an activity type: activities are control, not data. -/
-public theorem value_typed_not_computation {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
-    type.isComputation = false := by
-  cases h : type.isComputation
-  · rfl
-  · exfalso
-    obtain ⟨head,normal,kind⟩ := value_head_correct typed
-    cases type <;> simp [Ty.isComputation] at h
-    have same := head_normalizes_unique normal (.direct _ rfl)
-    subst same
-    cases value <;> simp [typeHead,valueHead,Ty.canonical] at kind
-
-public theorem natural_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} (typed : ValueTyping assumptions types value .natural) :
-    ∃ number, value = .natural number := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  have same := head_normalizes_unique normal (.direct .natural rfl)
-  subst head
-  have scalarKind : valueHead value = .natural := by simpa [typeHead] using kind.symm
-  obend_cases value with [valueHead]
-
-public theorem boolean_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} (typed : ValueTyping assumptions types value .boolean) :
-    ∃ boolean, value = .boolean boolean := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  have same := head_normalizes_unique normal (.direct .boolean rfl)
-  subst head
-  have scalarKind : valueHead value = .boolean := by simpa [typeHead] using kind.symm
-  obend_cases value with [valueHead]
-
-public theorem label_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} (typed : ValueTyping assumptions types value .label) :
-    ∃ name, value = .label name := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  have same := head_normalizes_unique normal (.direct .label rfl)
-  subst head
-  have scalarKind : valueHead value = .label := by simpa [typeHead] using kind.symm
-  obend_cases value with [valueHead]
+/- Structural conversion preserves graph head classes and relates actual
+components. Exact canonical-head conversion is intentionally not asserted. -/
+@[expose] public section
+section StructuralRuntime
+variable {assumptions : Assumptions}
 
 public theorem canonical_same_type (assumptions : Assumptions) (first second : Ty)
     (agreement : first.canonical = second.canonical) : sameType assumptions first second = true := by
-  simp [sameType,agreement]
+  exact (sameType_iff assumptions first second).mpr
+    (Obend.Core.CanonicalExtension.of_canonical_eq
+      (Obend.Core.EquiRecursiveAgreement.canonical_laws assumptions) agreement)
 
-public theorem specification_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {metadataType extensionType : Ty}
-    (typed : ValueTyping assumptions types value (.specification metadataType extensionType)) :
-    ∃ metadata extension, value = .specification metadata extension := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  have same := head_normalizes_unique normal (.direct (.specification metadataType extensionType) rfl)
-  rw [same,Ty.canonical] at kind
-  have shape : valueHead value = .specification := by simpa [typeHead] using kind.symm
-  obend_cases value with [valueHead]
-
-public theorem value_specification_fields {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
-    ∀ metadata extension, value = .specification metadata extension →
-      ∃ metadataType extensionType,
-        types[metadata]? = some metadataType ∧ types[extension]? = some extensionType ∧
-        HeadNormalizes assumptions.bounds type (.specification metadataType.canonical extensionType.canonical) := by
-  induction typed with
-  | natural value => intros; contradiction
-  | boolean value => intros; contradiction
-  | label value => intros; contradiction
-  | closure environment body safe valid captures => intros; contradiction
-  | record isRow members => intros; contradiction
-  | specification metadataAssigned extensionAssigned =>
-      intro metadata extension same
-      cases same
-      exact ⟨_,_,metadataAssigned,extensionAssigned,.direct _ rfl⟩
-  | prototype spec target => intros; contradiction
-  | variant lookup assigned path => intros; contradiction
-  | conversion prior agreement ih =>
-      intro metadata extension same
-      obtain ⟨metadataType,extensionType,metadataAssigned,extensionAssigned,normal⟩ := ih metadata extension same
-      exact ⟨metadataType,extensionType,metadataAssigned,extensionAssigned,same_type_preserves_head agreement normal⟩
-
-public theorem prototype_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {specType targetType : Ty}
-    (typed : ValueTyping assumptions types value (.prototype specType targetType)) :
-    ∃ spec target, value = .prototype spec target := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  have same := head_normalizes_unique normal (.direct (.prototype specType targetType) rfl)
-  rw [same,Ty.canonical] at kind
-  have shape : valueHead value = .prototype := by simpa [typeHead] using kind.symm
-  obend_cases value with [valueHead]
-
-public theorem value_prototype_fields {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
-    ∀ spec target, value = .prototype spec target → ∃ specType targetType,
-      types[spec]? = some specType ∧ types[target]? = some targetType ∧
-      HeadNormalizes assumptions.bounds type (.prototype specType.canonical targetType.canonical) := by
-  induction typed with
-  | natural value => intros; contradiction
-  | boolean value => intros; contradiction
-  | label value => intros; contradiction
-  | closure environment body safe valid captures => intros; contradiction
-  | record isRow members => intros; contradiction
-  | specification metadata ext => intros; contradiction
-  | prototype specAssigned targetAssigned =>
-      intro spec target same; cases same
-      exact ⟨_,_,specAssigned,targetAssigned,.direct _ rfl⟩
-  | variant lookup assigned path => intros; contradiction
-  | conversion prior agreement ih =>
-      intro spec target same
-      obtain ⟨specType,targetType,specAssigned,targetAssigned,normal⟩ := ih spec target same
-      exact ⟨specType,targetType,specAssigned,targetAssigned,same_type_preserves_head agreement normal⟩
-
-public structure CapturedFunction (assumptions : Assumptions) (types : AddressTypes)
-    (body : Term) (environment : Environment) where
-  context : Context
-  annotation : LambdaAnnotation
-  uses : Uses
-  environmentTyped : EnvironmentTyping types context environment
-  bodyTyped : PartialTyping assumptions (⟨annotation.domain,annotation.parameter⟩ :: context) body annotation.codomain uses
-  safe : safeUses (⟨annotation.domain,annotation.parameter⟩ :: context) uses = true
-  valid : validContext assumptions.shareableVariables (⟨annotation.domain,annotation.parameter⟩ :: context) = true
-  captures : reusableAllowed assumptions annotation.reuse context uses.tail = true
+abbrev CapturedFunction := Obend.Core.MachineTyping.Next.FunctionOrigin
 
 @[expose] public def CapturedFunction.arrow {assumptions : Assumptions} {types : AddressTypes}
     {body : Term} {environment : Environment} (captured : CapturedFunction assumptions types body environment) : Ty :=
-  .arrow captured.annotation.reuse captured.annotation.parameter captured.annotation.domain captured.annotation.codomain
+  Obend.Core.MachineTyping.Next.FunctionOrigin.arrow captured
 
-public theorem value_closure_fields {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
-    ∀ body environment, value = .closure body environment →
-      ∃ captured : CapturedFunction assumptions types body environment,
-        HeadNormalizes assumptions.bounds type captured.arrow.canonical := by
+def RuntimeHead (assumptions : Assumptions) (value : RuntimeValue) (type : Ty) : Prop :=
+  match value with
+  | .natural _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .natural
+  | .boolean _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .boolean
+  | .label _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .label
+  | .closure _ _ => ∃ reuse quantity,
+      TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary (.arrow reuse quantity)
+  | .record _ => TypeGraph.FiniteRow assumptions type
+  | .specification _ _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .specification
+  | .prototype _ _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .prototype
+  | .variant _ _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .variant
+
+theorem runtimeHead_transport {value : RuntimeValue} {actual expected : Ty}
+    (related : TypeGraph.Equivalent assumptions actual expected)
+    (origin : RuntimeHead assumptions value actual) : RuntimeHead assumptions value expected := by
+  have heads := TypeGraph.equivalent_head related
+  cases value with
+  | record fields => exact (TypeGraph.equivalent_finite_row_iff related).mp origin
+  | closure body environment =>
+    obtain ⟨reuse,quantity,shape⟩ := origin
+    exact ⟨reuse,quantity,heads.symm.trans shape⟩
+  | natural n | boolean n | label n | specification n m | prototype n m | variant n m =>
+    exact heads.symm.trans origin
+
+
+theorem value_head_correct {types : AddressTypes} {value : RuntimeValue} {type : Ty}
+    (typed : ValueTyping assumptions types value type) : RuntimeHead assumptions value type := by
   induction typed with
-  | natural value => intros; contradiction
-  | boolean value => intros; contradiction
-  | label value => intros; contradiction
-  | record isRow members => intros; contradiction
-  | specification metadata ext => intros; contradiction
-  | prototype spec target => intros; contradiction
-  | closure env bodyTyped safe valid captures =>
-      intro body environment same; cases same
-      exact ⟨⟨_,_,_,env,bodyTyped,safe,valid,captures⟩,.direct _ rfl⟩
-  | variant lookup assigned path => intros; contradiction
-  | conversion prior agreement ih =>
-      intro body environment same
-      obtain ⟨captured,normal⟩ := ih body environment same
-      exact ⟨captured,same_type_preserves_head agreement normal⟩
+  | natural value | boolean value | label value =>
+    simp [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+      AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag]
+  | closure env source safe valid captures =>
+    rename_i body environment context annotation uses
+    refine ⟨annotation.reuse,annotation.parameter,?_⟩
+    simp [TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,
+      AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag]
+  | record isRow members => exact isRow
+  | specification metadata ext | prototype metadata ext | variant metadata ext path =>
+    simp [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,
+      AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag]
+  | conversion prior converted ih => exact runtimeHead_transport ((sameType_iff assumptions _ _).mp converted) ih
 
-public theorem callable_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {functionType domain codomain : Ty} {reuse : Reuse} {quantity : Quantity}
+/-- This syntactic discriminator is used only for direct runtime constructors,
+not to normalize aliases or decide semantic row equality. -/
+def rowSyntax : Ty → Bool
+  | .variable _ | .field _ _ _ | .emptyRow => true
+  | _ => false
+
+theorem finiteRow_nonrow {type : Ty} (nonrow : rowSyntax type = false) :
+    TypeGraph.FiniteRow assumptions type ↔ False := by
+  constructor
+  · rintro ⟨fuel,finite⟩
+    cases fuel <;> cases type <;> simp_all [rowSyntax,Ty.isRow]
+  · intro impossible; exact False.elim impossible
+
+theorem natural_value_form {types : AddressTypes} {value : RuntimeValue}
+    (typed : ValueTyping assumptions types value .natural) :
+    ∃ number, value = .natural number := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem boolean_value_form {types : AddressTypes} {value : RuntimeValue}
+    (typed : ValueTyping assumptions types value .boolean) :
+    ∃ boolean, value = .boolean boolean := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem label_value_form {types : AddressTypes} {value : RuntimeValue}
+    (typed : ValueTyping assumptions types value .label) :
+    ∃ name, value = .label name := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem specification_value_form {types : AddressTypes} {value : RuntimeValue} {metadataType extensionType : Ty}
+    (typed : ValueTyping assumptions types value (.specification metadataType extensionType)) :
+    ∃ metadata extension, value = .specification metadata extension := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem prototype_value_form {types : AddressTypes} {value : RuntimeValue} {specType targetType : Ty}
+    (typed : ValueTyping assumptions types value (.prototype specType targetType)) :
+    ∃ spec target, value = .prototype spec target := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem variant_value_form {types : AddressTypes} {value : RuntimeValue} {row : Ty}
+    (typed : ValueTyping assumptions types value (.variant row)) :
+    ∃ tag address, value = .variant tag address := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem closure_value_form {types : AddressTypes} {value : RuntimeValue} {reuse : Reuse} {quantity : Quantity} {domain codomain : Ty}
+    (typed : ValueTyping assumptions types value (.arrow reuse quantity domain codomain)) :
+    ∃ body environment, value = .closure body environment := by
+  have shape := value_head_correct typed
+  obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+    AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+    rowSyntax,finiteRow_nonrow]
+
+theorem value_typed_not_computation {types : AddressTypes} {value : RuntimeValue} {type : Ty}
+    (typed : ValueTyping assumptions types value type) : type.isComputation = false := by
+  cases type with
+  | computation plan response result =>
+    have shape := value_head_correct typed
+    obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
+      AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
+      rowSyntax,finiteRow_nonrow]
+  | _ => rfl
+
+theorem value_specification_fields {types : AddressTypes} {value : RuntimeValue} {type : Ty}
+    (typed : ValueTyping assumptions types value type) :
+    ∀ metadata extension, value = .specification metadata extension →
+      ∃ metadataType extensionType,
+        types[metadata]? = some metadataType ∧ types[extension]? = some extensionType ∧
+        sameType assumptions (.specification metadataType extensionType) type = true := by
+  intro metadata extension same
+  obtain ⟨metadataType,extensionType,assignedMetadata,assignedExtension,related⟩ :=
+    Obend.Core.MachineTyping.Next.value_specification_origin
+      (fun a b h => (sameType_iff assumptions a b).mp h) typed metadata extension same
+  exact ⟨metadataType,extensionType,assignedMetadata,assignedExtension,(sameType_iff assumptions _ _).mpr related⟩
+
+theorem value_prototype_fields {types : AddressTypes} {value : RuntimeValue} {type : Ty}
+    (typed : ValueTyping assumptions types value type) :
+    ∀ spec target, value = .prototype spec target →
+      ∃ specType targetType,
+        types[spec]? = some specType ∧ types[target]? = some targetType ∧
+        sameType assumptions (.prototype specType targetType) type = true := by
+  intro spec target same
+  obtain ⟨specType,targetType,assignedSpec,assignedTarget,related⟩ :=
+    Obend.Core.MachineTyping.Next.value_prototype_origin
+      (fun a b h => (sameType_iff assumptions a b).mp h) typed spec target same
+  exact ⟨specType,targetType,assignedSpec,assignedTarget,(sameType_iff assumptions _ _).mpr related⟩
+
+theorem value_closure_fields {types : AddressTypes} {value : RuntimeValue} {type : Ty}
+    (typed : ValueTyping assumptions types value type) :
+    ∀ body environment, value = .closure body environment →
+      ∃ origin : Obend.Core.MachineTyping.Next.FunctionOrigin assumptions types body environment,
+        sameType assumptions origin.arrow type = true := by
+  intro body environment same
+  obtain ⟨origin,related⟩ := Obend.Core.MachineTyping.Next.value_closure_origin
+    (fun a b h => (sameType_iff assumptions a b).mp h) typed body environment same
+  exact ⟨origin,(sameType_iff assumptions _ _).mpr related⟩
+
+theorem computation_same_type_inj {plan response result plan' response' result' : Ty}
+    (converted : sameType assumptions (.computation plan response result)
+      (.computation plan' response' result') = true) :
+    sameType assumptions plan plan' = true ∧ sameType assumptions response response' = true ∧
+      sameType assumptions result result' = true := by
+  obtain ⟨plans,responses,results⟩ := TypeGraph.computation_components ((sameType_iff assumptions _ _).mp converted)
+  exact ⟨(sameType_iff assumptions _ _).mpr plans,(sameType_iff assumptions _ _).mpr responses,(sameType_iff assumptions _ _).mpr results⟩
+
+/-- Structural agreement with an activity exposes an actual activity on the
+other side and relates its components separately. No canonical identity follows. -/
+theorem sameType_activity_components {actual expected plan response produced : Ty}
+    (converted : sameType assumptions actual expected = true)
+    (source : actual = .computation plan response produced) :
+    ∃ plan' response' produced', expected = .computation plan' response' produced' ∧
+      sameType assumptions plan plan' = true ∧ sameType assumptions response response' = true ∧
+      sameType assumptions produced produced' = true := by
+  subst actual
+  have activity := TypeGraph.equivalent_isComputation ((sameType_iff assumptions _ _).mp converted)
+  cases expected with
+  | computation plan' response' produced' =>
+    obtain ⟨plans,responses,results⟩ := computation_same_type_inj converted
+    exact ⟨plan',response',produced',rfl,plans,responses,results⟩
+  | _ => simp [Ty.isComputation] at activity
+
+theorem callable_value_form {types : AddressTypes} {value : RuntimeValue}
+    {functionType domain codomain : Ty} {reuse : Reuse} {quantity : Quantity}
     (typed : ValueTyping assumptions types value functionType)
     (callableEq : callable functionType = .arrow reuse quantity domain codomain) :
     (∃ body environment, value = .closure body environment) ∨
       (∃ metadata extension, value = .specification metadata extension) := by
   cases functionType with
-  | arrow r q d c =>
-      obtain ⟨head,normal,kind⟩ := value_head_correct typed
-      have same := head_normalizes_unique normal (.direct (.arrow r q d c) rfl)
-      rw [same,Ty.canonical] at kind
-      have shape : valueHead value = .function := by simpa [typeHead] using kind.symm
-      cases value with
-      | closure body environment => exact .inl ⟨body,environment,rfl⟩
-      | _ => cases shape
-  | specification metadata extension => exact .inr (specification_value_form typed)
+  | arrow r q d c => exact Or.inl (closure_value_form typed)
+  | specification metadata extension => exact Or.inr (specification_value_form typed)
   | _ => simp [callable] at callableEq
 
-public theorem closure_callable_type {bounds : Bounds} {functionType : Ty}
+theorem closure_callable_type {functionType : Ty}
     {reuse actualReuse : Reuse} {quantity actualQuantity : Quantity}
     {domain codomain actualDomain actualCodomain : Ty}
-    (normal : HeadNormalizes bounds functionType (Ty.arrow actualReuse actualQuantity actualDomain actualCodomain).canonical)
+    (related : TypeGraph.Equivalent assumptions (.arrow actualReuse actualQuantity actualDomain actualCodomain) functionType)
     (callableEq : callable functionType = .arrow reuse quantity domain codomain) :
     functionType = .arrow reuse quantity domain codomain := by
   cases functionType with
   | arrow r q d c => exact callableEq
   | specification metadata extension =>
-      have same := head_normalizes_unique normal (.direct (.specification metadata extension) rfl)
-      simp [Ty.canonical] at same
+    have heads := TypeGraph.equivalent_head related
+    simp [TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,
+      AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag] at heads
   | _ => simp [callable] at callableEq
 
-public theorem specification_callable_type {bounds : Bounds} {functionType : Ty}
+theorem specification_callable_type {functionType : Ty}
     {reuse : Reuse} {quantity : Quantity} {domain codomain metadata extension : Ty}
-    (normal : HeadNormalizes bounds functionType (Ty.specification metadata extension).canonical)
+    (related : TypeGraph.Equivalent assumptions (.specification metadata extension) functionType)
     (callableEq : callable functionType = .arrow reuse quantity domain codomain) :
     ∃ metadataType extensionType, functionType = .specification metadataType extensionType := by
   cases functionType with
   | specification metadata extension => exact ⟨metadata,extension,rfl⟩
   | arrow r q d c =>
-      have same := head_normalizes_unique normal (.direct (.arrow r q d c) rfl)
-      simp [Ty.canonical] at same
+    have heads := TypeGraph.equivalent_head related
+    simp [TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,
+      AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag] at heads
   | _ => simp [callable] at callableEq
+
+/-- Activity continuations retain their own component representatives. The
+incoming produced type agrees with the arm row; it need not canonicalize to it. -/
+theorem stack_effect_case {types : AddressTypes} {stack : List Frame} {input result : Ty}
+    (typed : StackTyping assumptions types stack input result) :
+    ∀ arms environment rest plan response produced, stack = .case arms environment :: rest →
+      TypeGraph.Equivalent assumptions input (.computation plan response produced) →
+      ∃ row planType responseType branch context uses,
+        EnvironmentTyping types context environment ∧
+        ArmsTyping assumptions context arms row (.computation planType responseType branch) uses ∧
+        validContext assumptions.shareableVariables context = true ∧
+        TypeGraph.Equivalent assumptions produced (.variant row) ∧
+        StackTyping assumptions types rest (.computation planType responseType branch) result := by
+  induction typed with
+  | nil => intro arms environment rest plan response produced impossible; simp at impossible
+  | cons frameTyped restTyped ih =>
+    intro arms environment rest plan response produced same related
+    cases same
+    cases frameTyped with
+    | case environmentTyped armsTyped valid =>
+      have activity := TypeGraph.equivalent_isComputation related
+      simp [Ty.isComputation] at activity
+    | effectCase environmentTyped armsTyped valid pure =>
+      have producedRelated := (TypeGraph.computation_components related).2.2
+      exact ⟨_,_,_,_,_,_,environmentTyped,armsTyped,valid,
+        (TypeGraph.equivalent_equivalence assumptions).symm producedRelated,restTyped⟩
+  | conversion converted restTyped ih =>
+    intro arms environment rest plan response produced same related
+    have next := (TypeGraph.equivalent_equivalence assumptions).trans
+      ((TypeGraph.equivalent_equivalence assumptions).symm ((sameType_iff assumptions _ _).mp converted)) related
+    exact ih arms environment rest plan response produced same next
+  | returns pure restTyped ih =>
+    intro arms environment rest plan response produced same related
+    have activity := TypeGraph.equivalent_isComputation related
+    change _ = true at activity
+    rw [pure] at activity
+    cases activity
+
+end StructuralRuntime
+end
 
 public theorem stack_argument_value {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty} {value : RuntimeValue}
@@ -1663,20 +1694,19 @@ public theorem typed_source_focus_preserved {assumptions : Assumptions} {types :
     · simpa [next] using ControlTyping.evaluate data.origin
     · simpa [next] using StackTyping.cons data.continuation (stack_convert_path data.result typed.stack)
 
-public theorem record_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {row : Ty} (typed : ValueTyping assumptions types value row)
-    (fuel : Nat) (isRow : row.isRow assumptions.bounds fuel = true) :
-    ∃ fields, value = .record fields := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  obtain ⟨rowHead,rowNormal,rowKind⟩ := row_head_normalizes assumptions.bounds fuel row isRow
-  have equal := head_normalizes_unique normal rowNormal
-  subst head
-  have shape : valueHead value = .row := kind.symm.trans rowKind
-  obend_cases value with [valueHead]
+public theorem record_value_form {assumptions : Assumptions} {types : AddressTypes} {value : RuntimeValue} {row : Ty}
+    (typed : ValueTyping assumptions types value row) (fuel : Nat)
+    (isRow : row.isRow assumptions.bounds fuel = true) : ∃ fields, value = .record fields := by
+  induction typed generalizing fuel with
+  | record finite members => exact ⟨_, rfl⟩
+  | conversion prior converted ih =>
+    obtain ⟨depth, finite⟩ := TypeGraph.equivalent_finite_row_transport
+      ((sameType_iff assumptions _ _).mp converted) fuel isRow
+    exact ih depth finite
+  | natural value | boolean value | label value | closure environment body safe valid captures
+    | specification metadata ext | prototype spec target | variant rowLookup assigned path =>
+    cases fuel <;> simp [Ty.isRow, literalType] at isRow
 
-/-- Source conversions may sit above an update continuation. Transport the
-returned value across those exact boundaries before storing it at the immutable
-address representative; conversion cannot change the heap assignment. -/
 public theorem stack_update_value {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty} {value : RuntimeValue}
     (continuation : StackTyping assumptions types stack input result)
@@ -1706,12 +1736,12 @@ public theorem source_convert_path {assumptions : Assumptions} {context : Contex
   | refl => exact typed
   | step prior agreement ih => exact .conversion ih agreement
 
-public theorem value_variant_fields {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {type : Ty} (typed : ValueTyping assumptions types value type) :
+public theorem value_variant_fields {assumptions : Assumptions} {types : AddressTypes} {value : RuntimeValue} {type : Ty}
+    (typed : ValueTyping assumptions types value type) :
     ∀ tag address, value = .variant tag address →
       ∃ (row member actual : Ty) (fuel : Nat), row.lookup assumptions.bounds fuel tag = some member ∧
         types[address]? = some actual ∧ ConversionPath assumptions actual member ∧
-        HeadNormalizes assumptions.bounds type (.variant row.canonical) := by
+        TypeGraph.Equivalent assumptions (.variant row) type := by
   induction typed with
   | natural value => intros; contradiction
   | boolean value => intros; contradiction
@@ -1721,21 +1751,22 @@ public theorem value_variant_fields {assumptions : Assumptions} {types : Address
   | specification metadata ext => intros; contradiction
   | prototype spec target => intros; contradiction
   | variant lookup assigned path =>
-      intro tag address same
-      cases same
-      exact ⟨_,_,_,_,lookup,assigned,path,.direct _ rfl⟩
-  | conversion prior agreement ih =>
-      intro tag address same
-      obtain ⟨row,member,actual,fuel,lookup,assigned,path,normal⟩ := ih tag address same
-      exact ⟨row,member,actual,fuel,lookup,assigned,path,same_type_preserves_head agreement normal⟩
+    intro tag address same
+    cases same
+    exact ⟨_, _, _, _, lookup, assigned, path, (TypeGraph.equivalent_equivalence assumptions).refl _⟩
+  | conversion prior converted ih =>
+    intro tag address same
+    obtain ⟨row, member, actual, fuel, lookup, assigned, path, related⟩ := ih tag address same
+    exact ⟨row, member, actual, fuel, lookup, assigned, path,
+      (TypeGraph.equivalent_equivalence assumptions).trans related ((sameType_iff assumptions _ _).mp converted)⟩
 
-public theorem variant_value_form {assumptions : Assumptions} {types : AddressTypes}
-    {value : RuntimeValue} {row : Ty} (typed : ValueTyping assumptions types value (.variant row)) :
-    ∃ tag address, value = .variant tag address := by
-  obtain ⟨head,normal,kind⟩ := value_head_correct typed
-  have same := head_normalizes_unique normal (.direct (.variant row) rfl)
-  rw [same,Ty.canonical] at kind
-  have shape : valueHead value = .variant := by simpa [typeHead] using kind.symm
-  obend_cases value with [valueHead]
+
+#assert_axioms legacy_same_type_preserves_head legacy_sameType_activity_canonical
+  runtimeHead_transport value_head_correct natural_value_form boolean_value_form label_value_form
+  specification_value_form prototype_value_form variant_value_form closure_value_form
+  callable_value_form closure_callable_type specification_callable_type
+  value_typed_not_computation value_specification_fields value_prototype_fields value_closure_fields
+  computation_same_type_inj sameType_activity_components stack_effect_case
+  same_type_lookup_transport record_value_form value_variant_fields
 
 end Obend.Core.Proofs.Preservation

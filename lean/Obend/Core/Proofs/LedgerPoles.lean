@@ -14,7 +14,6 @@ open Obend.Core.Machine
 open Obend.Core.Invariant
 open Obend.Core.Proofs.Adequacy (MeaningsScoped EvaluatingSegment)
 open Obend.Core.MachineTyping (ConversionPath)
-open Obend.Core.Proofs.Preservation (HeadNormalizes head_normalizes_unique same_type_preserves_head)
 open Obend.Core.Ty (Ty)
 open Obend.Core.Check (Assumptions)
 set_option autoImplicit false
@@ -58,21 +57,25 @@ theorem not_evaluatingSegment_unallocated (state : State) :
 
 theorem conversionPath_natural : ConversionPath ({} : Assumptions) .natural .natural := .refl _
 
-theorem conversionPath_head {assumptions : Assumptions} {first last result : Ty}
-    (path : ConversionPath assumptions first last)
-    (normal : HeadNormalizes assumptions.bounds first result) :
-    HeadNormalizes assumptions.bounds last result := by
+/-- Conversion preserves the exposed constructor class, while recursively
+related components may have different finite canonical syntax. -/
+theorem conversionPath_head {assumptions : Assumptions} {first last : Ty}
+    (path : ConversionPath assumptions first last) :
+    Obend.Core.TypeGraph.labelHead ((Obend.Core.TypeGraph.graph assumptions).label (.type first)) =
+      Obend.Core.TypeGraph.labelHead ((Obend.Core.TypeGraph.graph assumptions).label (.type last)) := by
   induction path with
-  | refl => exact normal
-  | step _ agreement ih => exact same_type_preserves_head agreement ih
+  | refl => rfl
+  | step _ agreement ih =>
+    exact ih.trans (Obend.Core.TypeGraph.equivalent_head
+      ((Obend.Core.Check.sameType_iff _ _ _).mp agreement))
 
 /-- No conversion path turns a natural into a boolean. -/
 theorem not_conversionPath_natural_boolean : ¬ ConversionPath ({} : Assumptions) .natural .boolean := by
   intro path
-  have natural : HeadNormalizes ({} : Assumptions).bounds .natural Ty.natural.canonical := .direct _ rfl
-  have boolean : HeadNormalizes ({} : Assumptions).bounds .boolean Ty.boolean.canonical := .direct _ rfl
-  have same := head_normalizes_unique (conversionPath_head path natural) boolean
-  simp [Ty.canonical] at same
+  have same := conversionPath_head path
+  simp [Obend.Core.TypeGraph.labelHead, Obend.Core.TypeGraph.graph, Obend.Core.TypeGraph.observe,
+    Obend.Core.AliasExposure.expose, Obend.Core.AliasExposure.exposeWalk,
+    Obend.Core.AliasExposure.constructorHead, Obend.Core.TypeGraph.rowTag] at same
 
 /-! ## `StepCases` -/
 

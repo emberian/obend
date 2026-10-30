@@ -60,7 +60,7 @@ public theorem checked_does_not_imply_eventual_success :
 theorem annotatedConstant_accepted :
     (check annotatedConstant [] 2).isSome = true := by
   simp [check, infer, annotatedConstant, unannotatedConstant, naturalAnnotation,
-    agree, sameType, Ty.canonical, Ty.shareable,
+    agree, sameType_refl, Ty.canonical, Ty.shareable,
     safeUses, zeroUses, safeQuantity, validContext, reusableAllowed,
     reusableCaptures, Assumptions.valid]
 
@@ -78,13 +78,23 @@ converts (`agree`), and the example checks. -/
   ⟨.lam (.ifBool (.boolean true) (.bound 0) (.nat 0)),
     fun _ => some aliasBranchAnnotation, naturalAliasAssumptions⟩
 
+/-- The concrete alias equation uses the certified extension of the old checker,
+not reduction of the finite graph decision. -/
+@[simp] public theorem naturalAlias_agrees :
+    sameType (⟨[(0, .natural)], [0], []⟩ : Assumptions) (.variable 0) .natural = true :=
+  sameType_extends (by decide)
+
+@[simp] public theorem naturalAlias_agrees_reverse :
+    sameType (⟨[(0, .natural)], [0], []⟩ : Assumptions) .natural (.variable 0) = true :=
+  sameType_symm naturalAlias_agrees
+
 @[expose] public def aliasBranchChecked : Checked aliasBranch [] where
   type := .arrow .reusable .unrestricted (.variable 0) .natural
   uses := []
   derivation := .lambda (annotation := aliasBranchAnnotation)
     (.ifBool (.boolean _ _)
       (.conversion (.bound (binding := ⟨.variable 0, .unrestricted⟩) (index := 0) (by rfl))
-        (by decide))
+        (naturalAlias_agrees))
       (.natural _ _))
     (by simp [aliasBranchAnnotation, safeUses, zeroUses, variableUses,
       addUses, safeQuantity])
@@ -99,7 +109,12 @@ converts (`agree`), and the example checks. -/
 /-- Since the branch join converts through `agree` (2026-10-30), the correctly annotated
 lambda checks, at the type the exhibited derivation has. -/
 theorem aliasBranch_accepted :
-    (check aliasBranch [] 4).map (fun checked => checked.type) = some aliasBranchChecked.type := by decide
+    (check aliasBranch [] 4).map (fun checked => checked.type) = some aliasBranchChecked.type := by
+  simp [check, infer, aliasBranch, aliasBranchAnnotation, aliasBranchChecked,
+    agree, sameType_refl, naturalAlias_agrees, naturalAlias_agrees_reverse,
+    safeUses, zeroUses, variableUses, addUses, safeQuantity, validContext,
+    Ty.shareableUnder, Ty.shareable, Ty.isComputation, reusableAllowed, reusableCaptures,
+    naturalAliasAssumptions, Assumptions.valid]
 
 /-- The former counterexample `correct_lambda_annotation_still_incomplete`, negated: a
 correct annotation now suffices for this lambda. -/
@@ -191,34 +206,93 @@ theorem duplicateCase_refused (fuel : Nat) : check duplicateCase [] fuel = none 
   | none => rfl
   | some checked => exact (duplicate_arms_have_no_derivation ⟨checked⟩).elim
 
-/-! ## The bidirectional checker on the three obstructions (2026-10-30)
+/-! ## Expected checking and local representative annotations
 
-`Obend.Core.Bidirectional.checkAgainst` checks each former counterexample against the type
-its certificate has, with no annotation read in checking mode, and refuses the duplicate
-arms (which have no certificate) naming the rule. -/
+The historical `check` fixtures above retain their original annotation maps.
+The bidirectional checker reads representatives at every relevant position, so a
+lambda annotation must not accidentally become an operand annotation below it.
+The following maps put representatives only where that rule consumes them. -/
 
-/-- The unannotated lambda checks against its type: checking mode needs no annotation. -/
+@[expose] public def aliasBranchBidirectional : AnnotatedTerm :=
+  { aliasBranch with annotations := fun path =>
+      if path = [] then some aliasBranchAnnotation else none }
+
+@[expose] public def emptyCaseBidirectional : AnnotatedTerm :=
+  { emptyCase with annotations := fun path =>
+      if path = [] ∨ path = [0] then some emptyCaseAnnotation else none }
+
+@[expose] public def duplicateCaseBidirectional : AnnotatedTerm :=
+  { duplicateCase with annotations := fun path =>
+      if path = [0] then some duplicateInjectionAnnotation else none }
+
+-- Simplify the checker algebra and established agreement laws; the graph
+-- decision itself is deliberately opaque in these regression proofs.
+local macro "obstruction_check" : tactic => `(tactic|
+  simp [bind, Except.bind, Functor.map, Except.map, pure, Except.pure,
+    throw, Except.toOption, List.getElem?_cons_zero, Bidirectional.checkAgainst, Bidirectional.infer,
+    Bidirectional.checkAt, Bidirectional.synthAt, Bidirectional.elaborate,
+    Bidirectional.checkArms, Bidirectional.introduce, Bidirectional.finish,
+    Bidirectional.ascribe, Bidirectional.checkedSynth, Bidirectional.need,
+    Bidirectional.representativeHead, Bidirectional.whnf,
+    Assumptions.chase, Assumptions.unfoldHead, sameType_refl,
+    naturalAlias_agrees, naturalAlias_agrees_reverse,
+    unannotatedConstant, unannotatedConstantChecked, naturalAnnotation,
+    aliasBranchBidirectional, aliasBranch, aliasBranchChecked, aliasBranchAnnotation,
+    emptyCaseBidirectional, emptyCase, emptyCaseChecked, emptyCaseAnnotation,
+    duplicateCaseBidirectional, duplicateCase, duplicateInjectionAnnotation, duplicateRow,
+    lookupV, lookupW, unvisited, walkRow, Ty.isComputation, Ty.canonical,
+    safeUses, safeQuantity, validContext, reusableAllowed, reusableCaptures,
+    zeroUses, variableUses, addUses, Ty.shareableUnder, Ty.shareable,
+    Assumptions.valid, naturalAliasAssumptions, labelsDistinct])
+
+/-- An absent annotation permits expected-directed checking. -/
 theorem unannotatedConstant_checks :
     (Bidirectional.checkAgainst unannotatedConstant [] unannotatedConstantChecked.type).toOption.map (·.type) =
-      some unannotatedConstantChecked.type := by decide
+      some unannotatedConstantChecked.type := by obstruction_check
 
-/-- In synthesis the same lambda is refused, and the refusal names the missing annotation. -/
+/-- Synthesis still names the missing lambda annotation. -/
 theorem unannotatedConstant_synthesis_names_annotation :
     (match Bidirectional.infer unannotatedConstant [] with
       | .error refusal => some refusal
-      | .ok _ => none) = some (.missingLambdaAnnotation []) := by decide
+      | .ok _ => none) = some (.missingLambdaAnnotation []) := by obstruction_check
 
 theorem aliasBranch_checks :
-    (Bidirectional.checkAgainst aliasBranch [] aliasBranchChecked.type).toOption.isSome = true := by decide
+    (Bidirectional.checkAgainst aliasBranchBidirectional [] aliasBranchChecked.type).toOption.isSome = true := by
+  obstruction_check
 
-/-- The empty case checks against the result its lambda declares. -/
+/-- The empty case has its operand representative and result hint at its own path. -/
 theorem emptyCase_checks :
-    (Bidirectional.checkAgainst emptyCase [] emptyCaseChecked.type).toOption.isSome = true := by decide
+    (Bidirectional.checkAgainst emptyCaseBidirectional [] emptyCaseChecked.type).toOption.isSome = true := by
+  obstruction_check
 
 theorem duplicateCase_names_duplicate_labels :
-    (match Bidirectional.checkAgainst duplicateCase [] .natural with
+    (match Bidirectional.checkAgainst duplicateCaseBidirectional [] .natural with
       | .error refusal => some refusal
-      | .ok _ => none) = some (.duplicateLabels []) := by decide
+      | .ok _ => none) = some (.duplicateLabels []) := by obstruction_check
+
+@[expose] public def wrongConstantAnnotation : LambdaAnnotation :=
+  ⟨.natural, .computation .natural .natural .natural, .unrestricted, .reusable⟩
+
+/-- Expected checking does not erase an explicitly wrong representative. -/
+@[expose] public def wrongAnnotationConstant : AnnotatedTerm :=
+  { unannotatedConstant with annotations := fun path =>
+      if path = [] then (Option.some wrongConstantAnnotation) else Option.none }
+
+theorem wrong_annotation_residue :
+    (match Bidirectional.checkAgainst wrongAnnotationConstant [] unannotatedConstantChecked.type with
+      | .error refusal => some refusal
+      | .ok _ => none) =
+      some (.typeMismatch [0] (.computation .natural .natural .natural) .natural) := by
+  have mismatch : sameType ({} : Assumptions) .natural
+      (.computation .natural .natural .natural) = false := by
+    cases equation : sameType ({} : Assumptions) .natural (.computation .natural .natural .natural)
+    · rfl
+    · have activity := sameType_isComputation equation
+      cases activity
+  simp [bind, Except.bind, Functor.map, Except.map, pure, Except.pure,
+    throw, Except.toOption, wrongAnnotationConstant, wrongConstantAnnotation, mismatch,
+    Bidirectional.checkAgainst, Bidirectional.checkAt, Bidirectional.elaborate,
+    Bidirectional.finish, unannotatedConstant, unannotatedConstantChecked]
 
 #assert_axioms checked_lambda_without_annotations_never_checks
   checked_does_not_imply_eventual_success unannotatedConstant_refused
@@ -226,6 +300,7 @@ theorem duplicateCase_names_duplicate_labels :
   emptyCase_refused annotated_empty_eliminator_still_incomplete
   case_labels_distinct duplicate_arms_have_no_derivation duplicateCase_refused
   unannotatedConstant_checks unannotatedConstant_synthesis_names_annotation aliasBranch_checks emptyCase_checks
-  duplicateCase_names_duplicate_labels
+  duplicateCase_names_duplicate_labels naturalAlias_agrees naturalAlias_agrees_reverse
+  wrong_annotation_residue
 
 end Obend.Core.Proofs.CheckCompletenessObstruction

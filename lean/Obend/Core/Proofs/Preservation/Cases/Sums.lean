@@ -169,9 +169,10 @@ theorem stack_case_value {assumptions : Assumptions} {types : AddressTypes}
   | returns pure restTyped ih =>
       intro arms environment rest same
       obtain ⟨row,planType,responseType,branch,context,uses,environmentTyped,armsTyped,valid,produced,restTyped'⟩ :=
-        stack_effect_case restTyped arms environment rest _ _ _ same rfl
+        stack_effect_case restTyped arms environment rest _ _ _ same
+          ((TypeGraph.equivalent_equivalence assumptions).refl _)
       exact ⟨row,.computation planType responseType branch,context,uses,environmentTyped,armsTyped,valid,
-        .conversion valueTyped (canonical_same_type assumptions _ _ produced),restTyped'⟩
+        .conversion valueTyped ((sameType_iff _ _ _).mpr produced),restTyped'⟩
 
 /-- A typed returned variant always has its arm (no missingArm), and the arm
 binder is a fresh indirection cell typed at the arm's declared payload type,
@@ -192,11 +193,11 @@ public theorem typed_case_preserved {assumptions : Assumptions} {types : Address
     stack_case_value typed.stack valueTyped arms environment rest stack
   obtain ⟨tag,address,rfl⟩ := variant_value_form variantTyped
   obtain ⟨valueRow,member,actual,fuel,lookup,assigned,path,normal⟩ := value_variant_fields variantTyped tag address rfl
-  have rowsEq : valueRow.canonical = row.canonical := by
-    have same := head_normalizes_unique normal (.direct (.variant row) rfl)
-    simpa [Ty.canonical] using same
+  have rowsEq : TypeGraph.Equivalent assumptions valueRow row :=
+    TypeGraph.variant_components normal
   obtain ⟨depth,armMember,armLookup,memberEq⟩ :=
-    canonical_lookup_transport assumptions.bounds row valueRow rowsEq.symm fuel tag member lookup
+    TypeGraph.equivalent_lookup_transport
+      ((TypeGraph.equivalent_equivalence assumptions).symm rowsEq) fuel tag member lookup
   have armVisible := closed_lookup_finite (arms_row_closed armsTyped) armLookup
   cases found : arms.find? (fun arm => arm.1 == tag) with
   | none =>
@@ -209,7 +210,7 @@ public theorem typed_case_preserved {assumptions : Assumptions} {types : Address
     have payloadEq : armMember = payload := Option.some.inj (armVisible.symm.trans payloadLookup)
     subst payloadEq
     have toPayload : ConversionPath assumptions actual armMember :=
-      .step path (canonical_same_type assumptions member armMember memberEq.symm)
+      .step path ((sameType_iff _ _ _).mpr ((TypeGraph.equivalent_equivalence assumptions).symm memberEq))
     let after := types ++ [armMember]
     have extension : TypeExtension types after := type_extension_append types [armMember]
     have addressAssigned : after[address]? = some actual := extension _ _ assigned

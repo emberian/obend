@@ -1,19 +1,15 @@
 module
-/- Templates over rigid Self/Super (OB-LTUO LT2, docs/objective-bend/MODULAR-TYPING.md §6).
+/- Templates over rigid Self/Super (OB-LTUO LT2, MODULAR-TYPING.md §6).
 
-Step 2: `canonical_instantiate`. The checker compares types by `Ty.canonical` (sorted
-rows, first field of a name wins). A template is checked with rigid variables and
-emitted at instances `τ.instantiate σ`; for a conversion the template's checker
-accepted (`a.canonical = b.canonical`) to remain a conversion at the instance, canonical
-form must commute with instantiation up to a final `canonical`:
-
-    (τ.instantiate σ).canonical = (τ.canonical.instantiate σ).canonical
-
-including the override case (a tail instantiated with a row that repeats a listed
-field: the listed one, which is first, wins on both sides). No sortedness premise is
-needed: `insertCanonical` is first-match, and the two facts it rests on
-(`insertCanonical_same`, `insertCanonical_comm`) hold for every row. -/
+The canonicalization lemmas remain useful compatibility laws for finite syntax.
+Public agreement is now structural equi-recursive bisimulation. Its hereditary
+substitution theorem lives in EquiRecursiveSubstitutionTransport; this module
+lifts it through the annotation-directed checker. Discharges retains its original
+fields. Agreement and checker transport require validated instance assumptions,
+which connect declared nominal shareability to semantic resource safety. -/
 public import Obend.Core.Ty
+public import Obend.Core.TemplateDischarge
+public import Obend.Core.EquiRecursiveSubstitutionTransport
 public import Obend.Core.Check
 public import Obend.AxiomPin
 public import Obend.Tactic.Cases
@@ -175,22 +171,6 @@ open Obend.Core.Check Obend.Core.Term
 @[expose] public def instantiateContext (σ : Nat → Ty) (context : Context) : Context :=
   context.map fun binding => ⟨binding.type.instantiate σ, binding.quantity⟩
 
-/-- What an instance must discharge. Non-rigid variables are left alone and keep their
-bounds (which mention no rigid variable); each rigid variable's image supports its bound
-(every member the bound discloses, at the bound's member type instantiated, and row-ness),
-is shareable exactly when the template assumed it shareable, and is never an activity. -/
-public structure Discharges (σ : Nat → Ty) (template instance_ : Assumptions) (extra : Nat) : Prop where
-  fixed : ∀ j, j ∉ template.rigid → σ j = .variable j
-  bounds : ∀ j, j ∉ template.rigid → instance_.bounds.lookup j = template.bounds.lookup j
-  aliases : ∀ j, j ∉ template.rigid → instance_.alias j = template.alias j
-  closed : ∀ j bound, j ∉ template.rigid → template.bounds.lookup j = some bound → bound.instantiate σ = bound
-  lookup : ∀ k bound, k ∈ template.rigid → template.bounds.lookup k = some bound →
-    ∀ fuel name member, bound.lookup template.bounds fuel name = some member →
-      (σ k).lookup instance_.bounds (fuel + extra) name = some (member.instantiate σ)
-  row : ∀ k bound, k ∈ template.rigid → template.bounds.lookup k = some bound →
-    ∀ fuel, bound.isRow template.bounds fuel = true → (σ k).isRow instance_.bounds (fuel + extra) = true
-  shareable : ∀ j, (σ j).shareableUnder instance_.shareableVariables = template.shareableVariables.contains j
-  pure : ∀ j, (σ j).isComputation = false
 
 section
 variable {σ : Nat → Ty} {template instance_ : Assumptions} {extra : Nat}
@@ -401,18 +381,21 @@ theorem Discharges.sameStep_instantiate {actual expected : Ty}
           instantiate_isComputation D.pure, pure]
     | _ => simp at aliasExpected
 
+/-- Recursive equality is stable at valid discharging instances. Validity
+supplies the instance's declared resource premises during substitution. -/
 theorem Discharges.sameType_instantiate {actual expected : Ty}
+    (instanceValid : instance_.valid = true)
     (agreement : sameType template actual expected = true) :
     sameType instance_ (actual.instantiate σ) (expected.instantiate σ) = true :=
-  sameType_lift (fun a e => sameType instance_ (a.instantiate σ) (e.instantiate σ) = true)
-    (fun _ => sameType_refl _ _) (fun one two => sameType_trans one two)
-    (fun step => sameStep_sameType (D.sameStep_instantiate step)) agreement
+  (sameType_iff instance_ _ _).mpr
+    (D.equivalent_instantiate instanceValid ((sameType_iff template actual expected).mp agreement))
 
 theorem Discharges.agree_instantiate {actual expected : Ty}
+    (instanceValid : instance_.valid = true)
     (agreement : agree template actual expected = true) :
     agree instance_ (actual.instantiate σ) (expected.instantiate σ) = true := by
   simp only [agree, Bool.and_eq_true] at agreement ⊢
-  refine ⟨D.sameType_instantiate agreement.1, ?_⟩
+  refine ⟨D.sameType_instantiate instanceValid agreement.1, ?_⟩
   simpa [shareableUnder_instantiate D.shareable] using agreement.2
 
 theorem Discharges.variantRow_instantiate {type row : Ty} (found : variantRow template type = some row) :
@@ -442,10 +425,15 @@ theorem Discharges.reusableAllowed_instantiate (reuse : Reuse) (context : Contex
     reusableAllowed instance_ reuse (instantiateContext σ context) uses = reusableAllowed template reuse context uses := by
   simp [reusableAllowed, reusableCaptures_instantiate D.shareable]
 
+-- Agreement is consumed through its semantic transport theorem below. Keeping
+-- the executable finite graph opaque prevents elaboration from traversing it
+-- while matching the three mutually recursive checker induction hypotheses.
+attribute [local irreducible] Check.sameType EquiRecursiveAgreement.agrees TypeGraph.candidate
+
 /-- The template theorem (MODULAR-TYPING §6): every term the checker accepts under rigid
 bounds is accepted at every instance that discharges them, at the instantiated type, with
 the same usage. By induction on fuel, mirroring `infer`, `inferFields`, `inferArms`. -/
-theorem Discharges.infer_instantiate : ∀ fuel : Nat,
+theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : ∀ fuel : Nat,
     (∀ (annotations : Annotations) (context : Context) (position : List Nat) (term : Term)
         (result : Inferred template context term),
       infer template annotations context position fuel term = some result →
@@ -471,7 +459,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
   | 0 => ⟨fun _ _ _ _ _ h => by simp [infer] at h, fun _ _ _ _ _ _ h => by simp [inferFields] at h,
       fun _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
   | fuel + 1 => by
-    obtain ⟨ih, ihFields, ihArms⟩ := Discharges.infer_instantiate fuel
+    obtain ⟨ih, ihFields, ihArms⟩ := Discharges.infer_instantiate instanceValid fuel
     rw [show fuel + 1 + extra = (fuel + extra) + 1 by omega]
     refine ⟨?_, ?_, ?_⟩
     · intro annotations context position term result h
@@ -519,7 +507,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         simp only [instantiateAnnotation] at innerTyped' ⊢
         rw [innerTyped', Option.bind_some]
         have a1 : agree instance_ inner'.type (annotation.codomain.instantiate σ) = true := by
-          rw [innerType]; exact D.agree_instantiate agreed
+          rw [innerType]; exact D.agree_instantiate instanceValid agreed
         have a2 : safeUses (⟨annotation.domain.instantiate σ, annotation.parameter⟩ :: instantiateContext σ context)
             inner'.uses = true := by
           rw [innerUses, ← instantiateContext_cons, safeUses_instantiate]; exact safe
@@ -553,7 +541,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
           rw [shape'] at shape''
           cases shape''
           have a1 : agree instance_ arg'.type (domain.instantiate σ) = true := by
-            rw [argType]; exact D.agree_instantiate agreed
+            rw [argType]; exact D.agree_instantiate instanceValid agreed
           have a2 : argumentAllowed instance_ quantity (instantiateContext σ context) (domain.instantiate σ)
               arg'.uses = true := by
             rw [argUses, D.argumentAllowed_instantiate]; exact allowed
@@ -766,7 +754,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
           simp only [Ty.arrow.injEq, true_and] at t1
           obtain ⟨rfl, rfl, rfl⟩ := t1
           have a1 : agree instance_ base'.type (inherited.instantiate σ) = true := by
-            rw [baseType]; exact D.agree_instantiate agreed
+            rw [baseType]; exact D.agree_instantiate instanceValid agreed
           have a2 : argumentAllowed instance_ .unrestricted (instantiateContext σ context) (inherited.instantiate σ)
               base'.uses = true := by
             rw [baseUses, D.argumentAllowed_instantiate]; exact allowed
@@ -812,7 +800,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         obtain ⟨s', sTyped', sType, sUses⟩ := ih _ _ _ _ _ sTyped
         simp only [instantiateContext_cons, Ty.instantiate] at sTyped'
         have c1 : c'.type = .natural := by rw [cType, cShape]; rfl
-        have s1 : agree instance_ s'.type z'.type = true := by rw [sType, zType]; exact D.agree_instantiate same
+        have s1 : agree instance_ s'.type z'.type = true := by rw [sType, zType]; exact D.agree_instantiate instanceValid same
         have u1 : safeUses (⟨.natural, .unrestricted⟩ :: instantiateContext σ context) s'.uses = true := by
           rw [sUses, show (⟨.natural, .unrestricted⟩ :: instantiateContext σ context : Context) =
             instantiateContext σ (⟨.natural, .unrestricted⟩ :: context) from rfl, safeUses_instantiate]; exact safe
@@ -851,7 +839,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
             rw [show fuel + extra + 1 = fuel + 1 + extra by omega]
             exact D.lookup_instantiate _ _ _ _ member
           have a1 : agree instance_ value'.type (instantiateAnnotation σ annotation).domain = true := by
-            rw [valueType]; exact D.agree_instantiate agreed
+            rw [valueType]; exact D.agree_instantiate instanceValid agreed
           have p1 : (instantiateAnnotation σ annotation).domain.isComputation = false := by
             simp only [instantiateAnnotation]; rw [instantiate_isComputation D.pure]; exact pure
           rw [dif_pos m1, dif_pos a1, dif_pos p1]
@@ -885,11 +873,11 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
             have := D.lookup_instantiate _ _ _ _ member
             rwa [closed] at this
           have a1 : agree instance_ value'.type (instantiateAnnotation σ annotation).domain = true := by
-            rw [valueType]; exact D.agree_instantiate agreed
+            rw [valueType]; exact D.agree_instantiate instanceValid agreed
           have p1 : (instantiateAnnotation σ annotation).domain.isComputation = false := by
             simp only [instantiateAnnotation]; rw [instantiate_isComputation D.pure]; exact pure
           have c1 : sameType instance_ (.variant row) (.variable index) = true := by
-            have := D.sameType_instantiate conversion
+            have := D.sameType_instantiate instanceValid conversion
             simpa [Ty.instantiate, closed, D.fixed index rigid] using this
           rw [dif_pos m1, dif_pos a1, dif_pos p1, dif_pos c1]
           exact ⟨_, rfl, by simp [Ty.instantiate, D.fixed index rigid], valueUses⟩
@@ -934,7 +922,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
               obtain ⟨rfl, rfl, rfl⟩ := resultShape'
               have a1 : agree instance_ value'.type
                   (.computation (planType.instantiate σ) (responseType.instantiate σ) (.variant typed'.row)) = true := by
-                rw [typedRow, valueType]; exact D.agree_instantiate agreed
+                rw [typedRow, valueType]; exact D.agree_instantiate instanceValid agreed
               have p1 : (result.instantiate σ).isComputation = false := by
                 rw [instantiate_isComputation D.pure]; exact pureResult
               rw [dif_pos a1, dif_pos p1, dif_pos distinct]
@@ -969,7 +957,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree instance_ value'.type (.variant typed'.row) = true := by
               rw [typedRow, valueType]
-              exact D.agree_instantiate agreed
+              exact D.agree_instantiate instanceValid agreed
             rw [dif_pos a1, dif_pos distinct]
             exact ⟨_, rfl, typedResult, by dsimp only; rw [valueUses, typedUses]⟩
       | ifBool condition whenTrue whenFalse =>
@@ -986,7 +974,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         obtain ⟨t', tTyped', tType, tUses⟩ := ih _ _ _ _ _ tTyped
         obtain ⟨f', fTyped', fType, fUses⟩ := ih _ _ _ _ _ fTyped
         have c1 : c'.type = .boolean := by rw [cType, cShape]; rfl
-        have s1 : agree instance_ f'.type t'.type = true := by rw [fType, tType]; exact D.agree_instantiate same
+        have s1 : agree instance_ f'.type t'.type = true := by rw [fType, tType]; exact D.agree_instantiate instanceValid same
         simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1]
         exact ⟨_, rfl, tType, by dsimp only; rw [cUses, tUses, fUses]⟩
       | perform plan =>
@@ -1009,7 +997,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
         have cod : annotation.codomain.instantiate σ = annotation.codomain := instantiate_of_isData isData
         simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, instantiateAnnotation, dom, cod]
         have a1 : agree instance_ value'.type annotation.domain = true := by
-          rw [valueType, ← dom]; exact D.agree_instantiate agreed
+          rw [valueType, ← dom]; exact D.agree_instantiate instanceValid agreed
         rw [dif_pos a1, dif_pos isPlan, dif_pos isData]
         exact ⟨_, rfl, by simp [Ty.instantiate, dom, cod], valueUses⟩
       | done inner =>
@@ -1090,7 +1078,7 @@ theorem Discharges.infer_instantiate : ∀ fuel : Nat,
           rw [firstUses, ← instantiateContext_cons, safeUses_instantiate]; exact safe
         have l1 : later'.result = (expected.map (Ty.instantiate σ)).getD first'.type := by rw [laterResult, getD, same]
         have a1 : agree instance_ first'.type ((expected.map (Ty.instantiate σ)).getD first'.type) = true := by
-          rw [getD, firstType]; exact D.agree_instantiate agreed
+          rw [getD, firstType]; exact D.agree_instantiate instanceValid agreed
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos s1, firstTyped', dif_pos u1,
           dif_pos a1, laterTyped', dif_pos l1]
         exact ⟨_, rfl, by simp [Ty.instantiate, laterRow], getD, by dsimp only; rw [firstUses, laterUses]⟩
@@ -1119,7 +1107,7 @@ theorem Discharges.check_instantiate {σ : Nat → Ty} {instance_ : Assumptions}
   split at accepted
   rotate_left; · cases accepted
   cases accepted
-  obtain ⟨result', inferred', resultType, resultUses⟩ := (D.infer_instantiate fuel).1 _ _ _ _ _ inferred
+  obtain ⟨result', inferred', resultType, resultUses⟩ := (D.infer_instantiate valid fuel).1 _ _ _ _ _ inferred
   have s1 : safeUses (instantiateContext σ context) result'.uses = true := by
     rw [resultUses, safeUses_instantiate]; exact safe
   have v1 : validContext instance_.shareableVariables (instantiateContext σ context) = true := by
@@ -1147,7 +1135,18 @@ ROW is declared is accepted by the alias checker and refused by the rigid one. -
     fun position => if position = [] then some ⟨.variable 5, .natural, .unrestricted, .reusable⟩ else none,
     templateAssumptions⟩
 
-theorem weight_template_accepted : (check weightTemplate [] 8).isSome = true := by decide
+theorem weight_template_type :
+    (check weightTemplate [] 8).map Checked.type =
+      some (.arrow .reusable .unrestricted (.variable 5) .natural) := by
+  simp [check, infer, weightTemplate, templateAssumptions, weightBound,
+    Ty.lookup, List.lookup, agree, sameType_refl, safeUses, safeQuantity, validContext,
+    reusableAllowed, reusableCaptures, zeroUses, variableUses, addUses,
+    Ty.shareableUnder, Ty.shareable, Ty.isComputation, Assumptions.valid,
+    List.getElem?_cons_zero]
+
+theorem weight_template_accepted : (check weightTemplate [] 8).isSome = true := by
+  have accepted := congrArg Option.isSome weight_template_type
+  simpa using accepted
 
 theorem coloured_discharges : Discharges colouredSelf templateAssumptions {} 1 where
   fixed j rigid := by
@@ -1209,7 +1208,7 @@ theorem coloured_instance_accepted :
   rw [type]
   have : checked.type = .arrow .reusable .unrestricted (.variable 5) .natural := by
     have typed : (check weightTemplate [] 8).map Checked.type =
-        some (.arrow .reusable .unrestricted (.variable 5) .natural) := by decide
+        some (.arrow .reusable .unrestricted (.variable 5) .natural) := weight_template_type
     rw [accepted] at typed
     simpa using typed
   simp [this, Ty.instantiate, colouredSelf]
@@ -1221,12 +1220,34 @@ emitted program's) accepts it; the rigid checker (the template's) refuses it. -/
     fun position => if position = [] then some ⟨.variable 5, weightBound, .unrestricted, .reusable⟩ else none,
     ⟨[(5, weightBound)], [5], rigid⟩⟩
 
-theorem self_as_bound_row_alias_accepted : (check (selfAsBoundRow []) [] 8).isSome = true := by decide
-theorem self_as_bound_row_rigid_refused : (check (selfAsBoundRow [5]) [] 8).isNone = true := by decide
+theorem self_as_bound_row_alias_accepted : (check (selfAsBoundRow []) [] 8).isSome = true := by
+  have aliased : sameType (⟨[(5, weightBound)], [5], []⟩ : Assumptions)
+      (.variable 5) weightBound = true := sameType_extends (by decide)
+  dsimp only [weightBound] at aliased
+  simp [check, infer, selfAsBoundRow, agree, aliased,
+    safeUses, safeQuantity, validContext, reusableAllowed, reusableCaptures,
+    zeroUses, variableUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
+    weightBound, Assumptions.valid, List.getElem?_cons_zero]
+
+theorem self_as_bound_row_rigid_refused : (check (selfAsBoundRow [5]) [] 8).isNone = true := by
+  have refused : sameType (⟨[(5, weightBound)], [5], [5]⟩ : Assumptions)
+      (.variable 5) weightBound = false := by
+    cases equation : sameType (⟨[(5, weightBound)], [5], [5]⟩ : Assumptions)
+        (.variable 5) weightBound with
+    | false => rfl
+    | true =>
+      have heads := TypeGraph.equivalent_head ((sameType_iff _ _ _).mp equation)
+      simp [TypeGraph.graph, TypeGraph.observe, TypeGraph.labelHead,
+        TypeGraph.rowTag, TypeGraph.rowObservation,
+        AliasExposure.expose, AliasExposure.exposeWalk, AliasExposure.constructorHead,
+        Assumptions.alias, weightBound, List.lookup] at heads
+  dsimp only [weightBound] at refused
+  simp [check, infer, selfAsBoundRow, agree, refused,
+    weightBound, List.getElem?_cons_zero]
 
 #assert_axioms Discharges.lookup_instantiate Discharges.isRow_instantiate Discharges.sameStep_instantiate Discharges.sameType_instantiate
   Discharges.agree_instantiate Discharges.variantRow_instantiate Discharges.infer_instantiate
-  Discharges.check_instantiate weight_template_accepted coloured_discharges coloured_instance_accepted
+  Discharges.check_instantiate weight_template_type weight_template_accepted coloured_discharges coloured_instance_accepted
   self_as_bound_row_alias_accepted self_as_bound_row_rigid_refused
 end Obend.Core.Proofs.Templates
 

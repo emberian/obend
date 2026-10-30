@@ -73,10 +73,10 @@ theorem of_canonical_eq (laws : Laws E) {a b : Ty}
 
 /-- The only extra equations needed for the old alias steps. The guard is
 essential: declarations naming computations are opaque to old agreement. -/
-theorem sameType_extends (laws : Laws E) (assumptions : Assumptions)
+theorem legacySameType_extends (laws : Laws E) (assumptions : Assumptions)
     (alias : ∀ index body, assumptions.alias index = some body →
       body.isComputation = false → E (.variable index) body)
-    {actual expected : Ty} (agreement : sameType assumptions actual expected = true) :
+    {actual expected : Ty} (agreement : legacySameType assumptions actual expected = true) :
     E actual expected := by
   have viaAlias : ∀ {index : Nat} {other : Ty}, (!other.isComputation) = true →
       (assumptions.alias index).map Ty.canonical = some other.canonical → E (.variable index) other := by
@@ -90,7 +90,7 @@ theorem sameType_extends (laws : Laws E) (assumptions : Assumptions)
         rw [← Ty.canonical_isComputation, equal, Ty.canonical_isComputation]
         exact pure
       exact laws.trans (alias index body aliased bodyPure) (of_canonical_eq laws equal)
-  apply sameType_lift E laws.refl laws.trans (agreement := agreement)
+  apply legacySameType_lift E laws.refl laws.trans (agreement := agreement)
   intro a b step
   simp only [sameStep, Bool.or_eq_true] at step
   rcases step with (canonical | aliasActual) | aliasExpected
@@ -107,5 +107,5 @@ theorem sameType_extends (laws : Laws E) (assumptions : Assumptions)
         (by simpa using (Bool.and_eq_true_iff.mp aliasExpected).2)
     | _ => simp at aliasExpected
 
-#assert_axioms insertCanonical_sound insertCanonical_congr canonical_sound of_canonical_eq sameType_extends
+#assert_axioms insertCanonical_sound insertCanonical_congr canonical_sound of_canonical_eq legacySameType_extends
 end Obend.Core.CanonicalExtension

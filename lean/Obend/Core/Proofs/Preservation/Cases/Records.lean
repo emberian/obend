@@ -24,7 +24,7 @@ theorem value_record_member {assumptions : Assumptions} {types : AddressTypes}
       intro fuel name member lookup
       obtain ⟨depth,actualMember,actualLookup,memberEq⟩ := same_type_lookup_transport agreement fuel name member lookup
       obtain ⟨fields,address,actual,shape,found,assigned,path⟩ := ih depth name actualMember actualLookup
-      exact ⟨fields,address,actual,shape,found,assigned,.step path (canonical_same_type assumptions actualMember member memberEq)⟩
+      exact ⟨fields,address,actual,shape,found,assigned,.step path memberEq⟩
   | natural value => intro fuel name member lookup; cases fuel <;> simp [Ty.lookup] at lookup
   | boolean value => intro fuel name member lookup; cases fuel <;> simp [Ty.lookup] at lookup
   | label value => intro fuel name member lookup; cases fuel <;> simp [Ty.lookup,literalType] at lookup

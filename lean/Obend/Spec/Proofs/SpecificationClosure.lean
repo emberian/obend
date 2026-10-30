@@ -120,7 +120,9 @@ theorem operand_callable (T : Ty) (b : Bool) :
     callable (coreOperandTy T b) = .arrow .reusable .unrestricted T (.arrow .reusable .unrestricted T T) := by
   cases b <;> rfl
 
-theorem meta_conversion : sameType metaAssumptions (.variant specMetaRow) (.variable metaVariable) = true := by decide
+theorem meta_conversion : sameType metaAssumptions (.variant specMetaRow) (.variable metaVariable) = true := by
+  apply sameType_extends
+  decide
 
 /-- An operand's provenance has type `SpecMeta` (the bounded variable). -/
 theorem provenance_typed (T : Ty) (context : Context) (index : Nat) (b : Bool)

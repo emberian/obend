@@ -177,15 +177,14 @@ keep the Plan and Response types. -/
 theorem stack_activity_signature {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty}
     (typed : StackTyping assumptions types stack input result) :
-    ∀ plan response produced, input.canonical = (Ty.computation plan response produced).canonical →
-      ∃ final, result.canonical = (Ty.computation plan response final).canonical := by
+    ∀ plan response produced, sameType assumptions input (.computation plan response produced) = true →
+      ∃ final, sameType assumptions result (.computation plan response final) = true := by
   induction typed with
   | nil => intro plan response produced equal; exact ⟨produced,equal⟩
   | cons frameTyped restTyped ih =>
       intro plan response produced equal
-      have activity := congrArg Ty.isComputation equal
-      rw [Ty.canonical_isComputation,Ty.canonical_isComputation] at activity
-      change _ = true at activity
+      have activity := sameType_isComputation equal
+      change Ty.isComputation _ = true at activity
       cases frameTyped with
       | argument argument callable copy =>
           simp [callable_arrow_not_computation callable] at activity
@@ -195,19 +194,21 @@ theorem stack_activity_signature {assumptions : Assumptions} {types : AddressTyp
       | binaryLeft right => rename_i primitive _ _; cases primitive <;> simp_all [primitiveTypes,Ty.isComputation]
       | binaryRight left => rename_i primitive _; cases primitive <;> simp_all [primitiveTypes,Ty.isComputation]
       | effectCase environmentTyped armsTyped valid pure =>
-          obtain ⟨planEq,responseEq,_⟩ := computation_canonical_inj equal
-          obtain ⟨final,finalEq⟩ := ih _ _ _ rfl
-          refine ⟨final,?_⟩
-          rw [finalEq]
-          simp only [Ty.canonical,planEq,responseEq]
-      | _ => simp_all [Ty.isComputation,Ty.canonical]
+          have components := Obend.Core.TypeGraph.computation_components ((sameType_iff _ _ _).mp equal)
+          obtain ⟨final,finalEq⟩ := ih _ _ _ (sameType_refl _ _)
+          refine ⟨final,sameType_trans finalEq ?_⟩
+          exact (sameType_iff _ _ _).mpr (Obend.Core.TypeGraph.computation_congruence
+            components.1 components.2.1 ((Obend.Core.TypeGraph.equivalent_equivalence assumptions).refl _))
+      | _ => simp_all [Ty.isComputation]
   | conversion agreement restTyped ih =>
       intro plan response produced equal
-      exact ih plan response produced (sameType_activity_canonical agreement equal)
+      exact ih plan response produced (sameType_trans (sameType_symm agreement) equal)
   | returns pure restTyped ih =>
       intro plan response produced equal
-      rw [← Ty.canonical_isComputation,equal] at pure
-      simp [Ty.canonical,Ty.isComputation] at pure
+      have activity := sameType_isComputation equal
+      change Ty.isComputation _ = true at activity
+      rw [pure] at activity
+      contradiction
 
 /-- Resuming a typed yield with a closed response typed at the PROGRAM's
 declared response type yields a typed state: the response is evaluated at the
@@ -224,15 +225,15 @@ public theorem typed_resume_preserved {assumptions : Assumptions} {types : Addre
   obtain ⟨planType,responseType,currentEq,assigned,isPlan,isData⟩ := yielded_control_type (yielded ▸ typed.control)
   have stackTyped := typed.stack
   rw [currentEq] at stackTyped
-  obtain ⟨final,finalEq⟩ := stack_activity_signature stackTyped planType responseType responseType rfl
-  obtain ⟨_,responseAgree,_⟩ := computation_canonical_inj finalEq
+  obtain ⟨final,finalEq⟩ := stack_activity_signature stackTyped planType responseType responseType (sameType_refl _ _)
+  have responseAgree := (Obend.Core.TypeGraph.computation_components ((sameType_iff _ _ _).mp finalEq)).2.1
   have responsePure : responseType.isComputation = false := by
     cases responseType <;> simp_all [Ty.isData,Ty.isComputation]
   have uses0 : uses = [] := by simpa using source_uses_length responseTyped
   subst uses0
   let origin : ClosureTyping assumptions types ⟨response,[]⟩ responseType :=
     ⟨[],[],EnvironmentTyping.empty types,
-      .conversion responseTyped (canonical_same_type assumptions _ _ responseAgree),rfl,rfl⟩
+      .conversion responseTyped ((sameType_iff _ _ _).mpr responseAgree),rfl,rfl⟩
   have closedResponse := source_scoped responseTyped
   refine ⟨⟨responseType,heapEq ▸ typed.heap,?_,?_,typed.assumptionsValid,?_,?_,?_⟩⟩
   · rw [controlEq]; exact .evaluate origin

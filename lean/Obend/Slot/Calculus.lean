@@ -1,7 +1,7 @@
 module
-/- Meaning, procedure, and the budget granted to a procedure are separate.
-`Covered` is an explicit algorithmic-fragment premise, not a claim that every
-semantic derivation is recognized. Core4's counterexamples forbid that claim. -/
+/- Meaning, procedure, preparation, and a procedure's budget are separate.
+Coverage describes syntax. Completeness permits preparation that preserves semantic
+typing, so it does not claim arbitrary supplied annotations are accepted. -/
 public import Obend.Slot
 public import Obend.Core.Graded
 
@@ -20,22 +20,26 @@ class Calculus (Tm : Type) where
   var : Nat → Tm
   lookup : Ctx → Nat → Option Ty
 
-/-- A sound monotone procedure for a calculus. Completeness is conditional on
-membership in its recognized fragment. The Core4 semantic substitution law is
+/-- A sound monotone procedure for a calculus. Completeness permits an explicit meaning-preserving preparation within
+its syntactic fragment. It does not assert acceptance of arbitrary supplied annotations. The Core4 semantic substitution law is
 proved on `Typed`, independently of this class and its coverage premise. -/
 class Decides (R Tm : Type) [Obend.Core.Graded R] [Calculus Tm] where
   check : R → Calculus.Ctx Tm → Tm → Calculus.Ty Tm → Bool
   Covered : Calculus.Ctx Tm → Tm → Calculus.Ty Tm → Prop
   check_sound : ∀ {r Ψ t A}, check r Ψ t A = true → Calculus.Typed Ψ t A
   check_mono : ∀ {r s Ψ t A}, check r Ψ t A = true → r ≤ s → check s Ψ t A = true
-  check_complete : ∀ {Ψ t A}, Calculus.Typed Ψ t A → Covered Ψ t A → ∃ r, check r Ψ t A = true
+  /-- Preparation may supply operational annotations without changing meaning. -/
+  Prepares : Tm → Tm → Prop
+  prepare_sound : ∀ {Ψ t u A}, Prepares t u → Calculus.Typed Ψ t A → Calculus.Typed Ψ u A
+  check_complete : ∀ {Ψ t A}, Calculus.Typed Ψ t A → Covered Ψ t A →
+    ∃ u r, Prepares t u ∧ check r Ψ u A = true
   check_covered : ∀ {r Ψ t A}, check r Ψ t A = true → Covered Ψ t A
 
 /-- The declared grant for this invocation, independent of semantic typing. -/
 structure Budget (R : Type) where
   grade : R
 
-/-- The procedure did not establish coverage within the declared grant. This
+/-- The procedure did not accept the supplied term within the declared grant. This
 names a refusal, not a diagnosis that the term is ill-typed or that fuel alone
 would repair it. -/
 inductive BudgetRefusal (R : Type) where

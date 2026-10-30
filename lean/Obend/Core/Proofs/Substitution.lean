@@ -1975,8 +1975,16 @@ public theorem check_msubst {t : AnnotatedTerm} {Ψ : Context} {n m : Nat} {c : 
   ⟨.lam (.bound 0), fun p => if p = [] then some ⟨.natural, .natural, .unrestricted, .reusable⟩ else none, {}⟩
 @[expose] public def fuelContext : Context := [⟨.arrow .reusable .unrestricted .natural .natural, .unrestricted⟩]
 
-theorem fuel_template_checks : (check fuelTemplate fuelContext 2).isSome = true := by decide
-theorem fuel_filling_checks : (check fuelFilling fuelContext 2).isSome = true := by decide
+theorem fuel_template_checks : (check fuelTemplate fuelContext 2).isSome = true := by
+  simp [fuelTemplate, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+    validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
+    addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
+    Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
+theorem fuel_filling_checks : (check fuelFilling fuelContext 2).isSome = true := by
+  simp [fuelFilling, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+    validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
+    addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
+    Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
 theorem msubst_fuel : msubst (fillZero fuelFilling) fuelTemplate =
     ⟨.lam (.lam (.bound 0)), annotationsAt (fillZero fuelFilling) fuelTemplate.annotations 0 [] fuelTemplate.term, {}⟩ := by
   have e : (msubst (fillZero fuelFilling) fuelTemplate).term = .lam (.lam (.bound 0)) := by
@@ -1989,7 +1997,23 @@ fuel 2 and accepted at 3. `check_msubst` promises fuel `2 + 2`; a fixed fuel lim
 theorem fuel_tooth :
     (check (msubst (fillZero fuelFilling) fuelTemplate) fuelContext 2).isNone = true ∧
     (check (msubst (fillZero fuelFilling) fuelTemplate) fuelContext 3).isSome = true := by
-  rw [msubst_fuel]; exact ⟨by decide, by decide⟩
+  rw [msubst_fuel]
+  constructor
+  · decide
+  · -- Only these two annotation addresses are consumed. Kernel reduction at
+    -- concrete paths avoids importing annotationsAt's generated splitters into
+    -- the stored proof checked by the mutation tooth.
+    have outer : annotationsAt (fillZero fuelFilling) fuelTemplate.annotations 0 []
+        fuelTemplate.term [] =
+        some ⟨.natural, .arrow .reusable .unrestricted .natural .natural,
+          .unrestricted, .reusable⟩ := rfl
+    have inner : annotationsAt (fillZero fuelFilling) fuelTemplate.annotations 0 []
+        fuelTemplate.term [0] =
+        some ⟨.natural, .natural, .unrestricted, .reusable⟩ := rfl
+    simp [outer, inner, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+    validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
+    addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
+    Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
 
 #tooth fuel_tooth by mutation fuelFilling := ⟨.nat 0, fun _ => none, {}⟩
 
@@ -2023,7 +2047,15 @@ theorem open_filling_tooth : (check (msubst (fillZero linearFilling) linearTempl
 @[expose] public def aliasTemplate : AnnotatedTerm := ⟨.bound 0, fun _ => none, {}⟩
 @[expose] public def aliasContext : Context := [⟨.variable 0, .linear⟩]
 
-theorem alias_filling_checks : (check aliasFilling aliasContext 4).isSome = true := by decide
+theorem alias_filling_checks : (check aliasFilling aliasContext 4).isSome = true := by
+  have aliased : sameType (⟨[(0, .variant sumRow)], [], []⟩ : Assumptions)
+      (.variant sumRow) (.variable 0) = true := sameType_extends (by decide)
+  dsimp only [sumRow] at aliased
+  simp [aliasFilling, aliasContext, sumAssumptions, sumRow, Assumptions.alias,
+    Ty.lookup, List.lookup, aliased, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+    validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
+    addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
+    Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
 theorem alias_template_checks : (check aliasTemplate aliasContext 4).isSome = true := by decide
 theorem alias_filling_closed : Scoped 0 aliasFilling.term := .inject (.natural _)
 theorem msubst_alias : msubst (fillZero aliasFilling) aliasTemplate =

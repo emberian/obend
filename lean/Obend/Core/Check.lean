@@ -1,5 +1,5 @@
 module
-public import Obend.Core.LegacyAgreement
+public import Obend.Core.RecursiveAgreement
 public import Obend.Core.Term
 public import Obend.AxiomPin
 @[expose] public section
@@ -350,14 +350,12 @@ def Assumptions.valid (assumptions : Assumptions) : Bool :=
   -- activity into a suspendable type or back (`Ty.isComputation` is invariant).
   assumptions.bounds.all (fun bound => !bound.2.isComputation)
 
-/-- The checker converts an inferred type to a declared one only when the two
-agree AND the conversion does not manufacture shareability. `Ty.canonical`
-forgets a shadowed member (first-field shadowing), so a row hiding a custody or
-a once closure behind a later field of the same name is canonically equal to a
-row that is shareable; `sameType` alone would let such a value be bound
-unrestricted and duplicated. Every conversion the checker inserts goes through
-this; the relation `PartialTyping.conversion` keeps plain `sameType` because the
-machine proofs rebuild conversions from canonical equality alone. -/
+/-- The annotation-directed checker retains its nominal shareability guard in
+addition to equi-recursive agreement. Equivalent aliases can have different
+`shareableUnder` answers when a variable is not explicitly listed as shareable.
+This guard preserves the resource premises attached to the chosen annotation.
+Declarative conversion uses plain `sameType`; machine preservation transports
+actual runtime origins and relates their component representatives. -/
 def agree (assumptions : Assumptions) (actual expected : Ty) : Bool :=
   sameType assumptions actual expected &&
     (!expected.shareableUnder assumptions.shareableVariables ||
@@ -588,8 +586,9 @@ structure InferredArms (assumptions : Assumptions) (context : Context) (arms : L
   uses : Uses
   derivation : ArmsTyping assumptions context arms row result uses
 
-/-- The scrutinee's row guides arm binder types; one declared variable head
-unfolds, as in sameType. The final sameType premise is what is trusted. -/
+/-- The historical annotation-directed checker obtains arm binder types from
+a variant head or one declared alias step. Its final `sameType` premise validates
+the selected representative using the full recursive relation. -/
 def variantRow (assumptions : Assumptions) : Ty → Option Ty
   | .variant row => some row
   | .variable index => match assumptions.alias index with
@@ -959,7 +958,7 @@ theorem computation_not_shareable (plan response result : Ty) (variables : List 
     (Ty.computation plan response result).shareableUnder variables = false := rfl
 
 #assert_axioms agree_never_manufactures_shareability sameStep_symm sameType_iff Assumptions.chase_bounded
-  sameType_equivalence sameStep_sameType SameChain.sameType sameType_chain sameType_lift sameType_isComputation
+  sameType_equivalence sameStep_sameType SameChain.sameType legacySameType_chain legacySameType_lift sameType_isComputation
   Ty.shareableUnder_canonical Ty.shareable_canonical labelsDistinct_map
   lookupW_sound lookupV_iff isRowW_sound isRowV_iff
 

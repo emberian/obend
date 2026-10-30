@@ -1,5 +1,5 @@
 module
-public import Obend.Core.Proofs.Templates
+public import Obend.Core.TemplateDischarge
 public import Obend.Core.AliasExposure
 @[expose] public section
 namespace Obend.Core.Proofs.Templates

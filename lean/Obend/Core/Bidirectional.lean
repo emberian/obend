@@ -10,13 +10,16 @@ weak-head form (`whnf`), and a join (`ifBool`, `ifZero`, `case` in synthesis, wh
 synthesize one branch and check the rest against it). Usage vectors are synthesized
 bottom-up exactly as the relation computes them.
 
-Annotations are read only in synthesis: a lambda's (`LambdaAnnotation`), an
+Representative annotations are used in both modes. In synthesis: a lambda's (`LambdaAnnotation`), an
 injection's (its codomain is the sum), a `perform`'s (plan and response), a `done`'s
 (plan and response), and, anywhere else, an ascription (its codomain): an
 introduction form checks against it, an elimination form takes it when it agrees
 with what was synthesized and otherwise keeps its own type. An `extend` takes its
 target's representative from the annotation's domain and its fields' row from the
-codomain. In checking mode annotations are ignored: the expected type decides. -/
+codomain. Checking prefers a present representative annotation and then converts
+to the requested type. Missing annotations retain expected-directed behavior.
+Eliminations may use annotation.domain as their operand representative; mix uses
+domain for the lower operand and codomain for the upper operand. -/
 public import Obend.Core.Check
 public import Obend.AxiomPin
 
@@ -93,12 +96,33 @@ theorem whnf_canonical (assumptions : Assumptions) (type : Ty) :
 /-- Every type agrees with its weak-head form. -/
 theorem sameType_whnf (assumptions : Assumptions) (type : Ty) :
     sameType assumptions type (whnf assumptions type) = true := by
-  refine (sameType_iff _ _ _).2 ⟨assumptions.bounds.length, 0, Nat.le_refl _, Nat.zero_le _, ?_⟩
+  apply sameType_extends
+  refine (legacySameType_iff _ _ _).2 ⟨assumptions.bounds.length, 0, Nat.le_refl _, Nat.zero_le _, ?_⟩
   rw [whnf_canonical]; rfl
 
 theorem whnf_sameType (assumptions : Assumptions) (type : Ty) :
     sameType assumptions (whnf assumptions type) type = true :=
   sameType_symm (sameType_whnf assumptions type)
+
+/-- With a local annotation, the parent selected an exact raw rule
+representative. Do not canonicalize its payloads or binder contexts. Unannotated
+calls retain the original weak-head fallback. -/
+def representativeHead (assumptions : Assumptions) (annotations : Annotations)
+    (path : List Nat) (type : Ty) : Ty :=
+  if (annotations path).isSome then type else whnf assumptions type
+
+theorem sameType_representativeHead (assumptions : Assumptions) (annotations : Annotations)
+    (path : List Nat) (type : Ty) :
+    sameType assumptions type (representativeHead assumptions annotations path type) = true := by
+  unfold representativeHead
+  split
+  · exact sameType_refl assumptions type
+  · exact sameType_whnf assumptions type
+
+theorem representativeHead_sameType (assumptions : Assumptions) (annotations : Annotations)
+    (path : List Nat) (type : Ty) :
+    sameType assumptions (representativeHead assumptions annotations path type) type = true :=
+  sameType_symm (sameType_representativeHead assumptions annotations path type)
 
 /-- The first entry of a label in a row's explicit fields. -/
 def rowMember : Ty → String → Option Ty
@@ -134,6 +158,13 @@ abbrev Result (assumptions : Assumptions) (context : Context) (term : Term) : Mo
   | .synth => Synth assumptions context term
   | .check expected => Against assumptions context term expected
 
+/-- Package a checked operand at the exact representative selected by its
+parent's annotation. This prevents nominal resource tests from observing an
+arbitrary equivalent type chosen by synthesis. -/
+def checkedSynth {assumptions : Assumptions} {context : Context} {term : Term} {expected : Ty}
+    (checked : Against assumptions context term expected) : Synth assumptions context term :=
+  ⟨expected, checked.uses, checked.derivation⟩
+
 /-- An elimination form's synthesized type, or its ascription when the two agree. -/
 def ascribe (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) {context : Context}
     {term : Term} (synthesized : Synth assumptions context term) : Synth assumptions context term :=
@@ -160,7 +191,12 @@ def introduce (annotations : Annotations) (path : List Nat) {assumptions : Assum
     {term : Term} (against : (expected : Ty) → Except CheckRefusal (Against assumptions context term expected))
     (unannotated : Except CheckRefusal (Synth assumptions context term)) :
     (mode : Mode) → Except CheckRefusal (Result assumptions context term mode)
-  | .check expected => against expected
+  | .check expected =>
+    match annotations path with
+    | none => against expected
+    | some annotation => do
+      let checked ← against annotation.codomain
+      finish assumptions annotations path (checkedSynth checked) (.check expected)
   | .synth =>
     match annotations path with
     | some annotation => (against annotation.codomain).map fun checked =>
@@ -198,50 +234,70 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       | some annotation => (withAnnotation annotation).map fun checked =>
           (⟨_, checked.uses, checked.derivation⟩ : Synth assumptions context _)
     | .check expected =>
-      match shape : whnf assumptions expected with
-      | .arrow reuse parameter domain codomain => do
-        let typed ← withAnnotation ⟨domain, codomain, parameter, reuse⟩
-        pure ⟨typed.uses, .conversion typed.derivation (shape ▸ whnf_sameType assumptions expected)⟩
-      | _ => throw (.shapeMismatch path "function" expected)
+      match annotations path with
+      | some annotation => do
+        let typed ← withAnnotation annotation
+        finish assumptions annotations path (checkedSynth typed) (.check expected)
+      | none =>
+        match shape : representativeHead assumptions annotations path expected with
+        | .arrow reuse parameter domain codomain => do
+          let typed ← withAnnotation ⟨domain, codomain, parameter, reuse⟩
+          pure ⟨typed.uses, .conversion typed.derivation (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
+        | _ => throw (.shapeMismatch path "function" expected)
   | .app function argument, mode => do
-    let fn ← elaborate assumptions annotations context (path ++ [0]) function .synth
-    match shape : callable (whnf assumptions fn.type) with
+    let fn ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) function .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) function (.check annotation.domain)).map checkedSynth
+    match shape : callable (representativeHead assumptions annotations path fn.type) with
     | .arrow reuse quantity domain codomain =>
       let arg ← elaborate assumptions annotations context (path ++ [1]) argument (.check domain)
       let ⟨ha⟩ ← need (argumentAllowed assumptions quantity context domain arg.uses) (.notShareable (path ++ [1]) domain)
       finish assumptions annotations path ⟨codomain, addUses fn.uses arg.uses,
-        .application (.conversion fn.derivation (sameType_whnf _ _)) arg.derivation shape rfl ha⟩ mode
+        .application (.conversion fn.derivation (sameType_representativeHead _ annotations path _)) arg.derivation shape rfl ha⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "function" fn.type)
   | .get target name, mode => do
-    let value ← elaborate assumptions annotations context (path ++ [0]) target .synth
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) target .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
     match found : lookupV assumptions.bounds [] value.type name with
     | some member =>
       finish assumptions annotations path ⟨member, value.uses,
         (by obtain ⟨fuel, h⟩ := (lookupV_iff _ _ _ _).1 found; exact .get value.derivation h)⟩ mode
     | none => throw (.unknownLabel (path ++ [0]) name value.type)
   | .reflect target, mode => do
-    let value ← elaborate assumptions annotations context (path ++ [0]) target .synth
-    match shape : whnf assumptions value.type with
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) target .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
+    match shape : representativeHead assumptions annotations path value.type with
     | .prototype specType targetType =>
       finish assumptions annotations path ⟨specType, value.uses,
         .reflect (PartialTyping.conversion (expected := .prototype specType targetType) value.derivation
-          (shape ▸ sameType_whnf assumptions value.type))⟩ mode
+          (shape ▸ sameType_representativeHead assumptions annotations path value.type))⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "prototype" value.type)
   | .metadata target, mode => do
-    let value ← elaborate assumptions annotations context (path ++ [0]) target .synth
-    match shape : whnf assumptions value.type with
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) target .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
+    match shape : representativeHead assumptions annotations path value.type with
     | .specification metadataType extensionType =>
       finish assumptions annotations path ⟨metadataType, value.uses,
         .metadata (PartialTyping.conversion (expected := .specification metadataType extensionType) value.derivation
-          (shape ▸ sameType_whnf assumptions value.type))⟩ mode
+          (shape ▸ sameType_representativeHead assumptions annotations path value.type))⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "specification" value.type)
   | .project target, mode => do
-    let value ← elaborate assumptions annotations context (path ++ [0]) target .synth
-    match shape : whnf assumptions value.type with
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) target .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
+    match shape : representativeHead assumptions annotations path value.type with
     | .prototype specType targetType =>
       finish assumptions annotations path ⟨targetType, value.uses,
         .project (PartialTyping.conversion (expected := .prototype specType targetType) value.derivation
-          (shape ▸ sameType_whnf assumptions value.type))⟩ mode
+          (shape ▸ sameType_representativeHead assumptions annotations path value.type))⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "prototype" value.type)
   | .binary primitive left right, mode => do
     let l ← elaborate assumptions annotations context (path ++ [0]) left (.check (primitiveTypes primitive).1)
@@ -249,9 +305,15 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
     finish assumptions annotations path ⟨(primitiveTypes primitive).2, addUses l.uses r.uses,
       .binary (Prod.eta _) l.derivation r.derivation⟩ mode
   | .mix lower upper, mode => do
-    let first ← elaborate assumptions annotations context (path ++ [0]) lower .synth
-    let second ← elaborate assumptions annotations context (path ++ [1]) upper .synth
-    match hl : callable (whnf assumptions first.type), hu : callable (whnf assumptions second.type) with
+    let first ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) lower .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) lower (.check annotation.domain)).map checkedSynth
+    let second ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [1]) upper .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [1]) upper (.check annotation.codomain)).map checkedSynth
+    match hl : callable (representativeHead assumptions annotations path first.type), hu : callable (representativeHead assumptions annotations path second.type) with
     | .arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited middle),
       .arrow .reusable .unrestricted self' (.arrow .reusable .unrestricted middle' provided) =>
       if hs : self' = self then
@@ -265,14 +327,17 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
           finish assumptions annotations path
             ⟨.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited provided),
               addUses first.uses second.uses,
-              .mix (.conversion first.derivation (sameType_whnf _ _)) (.conversion second.derivation (sameType_whnf _ _))
+              .mix (.conversion first.derivation (sameType_representativeHead _ annotations path _)) (.conversion second.derivation (sameType_representativeHead _ annotations path _))
                 hl (by rw [hu, hs, hm]) captures shareSelf shareInherited shareMiddle⟩ mode
         else throw (.typeMismatch (path ++ [1]) middle middle')
       else throw (.typeMismatch (path ++ [1]) self self')
     | _, _ => throw (.shapeMismatch path "mixable pair" first.type)
   | .fix spec inheritedTerm, mode => do
-    let code ← elaborate assumptions annotations context (path ++ [0]) spec .synth
-    match shape : callable (whnf assumptions code.type) with
+    let code ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) spec .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) spec (.check annotation.domain)).map checkedSynth
+    match shape : callable (representativeHead assumptions annotations path code.type) with
     | .arrow .reusable .unrestricted target (.arrow .reusable .unrestricted inherited output) =>
       if ho : output = target then do
         let base ← elaborate assumptions annotations context (path ++ [1]) inheritedTerm (.check inherited)
@@ -282,12 +347,12 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         let ⟨hc⟩ ← need (reusableCaptures assumptions.shareableVariables context code.uses)
           (.capturesNotShareable (path ++ [0]))
         finish assumptions annotations path ⟨target, addUses code.uses base.uses,
-          .fix (.conversion code.derivation (sameType_whnf _ _)) (by rw [shape, ho]) base.derivation hs ha hc⟩ mode
+          .fix (.conversion code.derivation (sameType_representativeHead _ annotations path _)) (by rw [shape, ho]) base.derivation hs ha hc⟩ mode
       else throw (.typeMismatch (path ++ [0]) target output)
     | _ => throw (.shapeMismatch (path ++ [0]) "fixable specification" code.type)
   | .inject tag payload, mode =>
     introduce annotations path (fun expected =>
-      match shape : whnf assumptions expected with
+      match shape : representativeHead assumptions annotations path expected with
       | .variant row =>
         match found : lookupV assumptions.bounds [] row tag with
         | some payloadType => do
@@ -296,51 +361,71 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
           pure ⟨value.uses, .conversion
             (by obtain ⟨fuel, h⟩ := (lookupV_iff _ _ _ _).1 found
                 exact .inject value.derivation h (by simpa using hp))
-            (shape ▸ whnf_sameType assumptions expected)⟩
+            (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
         | none => throw (.unknownLabel path tag row)
       | _ => throw (.shapeMismatch path "sum" expected))
       (throw (.missingAnnotation path)) mode
   | .perform plan, mode =>
     let against (expected : Ty) : Except CheckRefusal (Against assumptions context (.perform plan) expected) :=
-      match shape : whnf assumptions expected with
+      match shape : representativeHead assumptions annotations path expected with
       | .computation planType response result =>
         if same : result = response then do
           let value ← elaborate assumptions annotations context (path ++ [0]) plan (.check planType)
           let ⟨hp⟩ ← need planType.isPlan (.shapeMismatch path "plan" planType)
           let ⟨hr⟩ ← need response.isData (.shapeMismatch path "data" response)
           pure ⟨value.uses, .conversion (.perform value.derivation hp hr)
-            (by have h := whnf_sameType assumptions expected; rw [shape, same] at h; exact h)⟩
+            (by have h := representativeHead_sameType assumptions annotations path expected; rw [shape, same] at h; exact h)⟩
         else throw (.typeMismatch path response result)
       | _ => throw (.shapeMismatch path "activity" expected)
     match mode with
-    | .check expected => against expected
+    | .check expected =>
+      match annotations path with
+      | none => against expected
+      | some annotation => do
+        let typed ← against (.computation annotation.domain annotation.codomain annotation.codomain)
+        finish assumptions annotations path (checkedSynth typed) (.check expected)
     | .synth =>
       match annotations path with
       | some annotation => (against (.computation annotation.domain annotation.codomain annotation.codomain)).map
           fun checked => ⟨_, checked.uses, checked.derivation⟩
       | none => throw (.missingAnnotation path)
   | .done value, mode =>
-    match mode with
-    | .check expected =>
-      match shape : whnf assumptions expected with
-      | .computation planType response result => do
-        let inner ← elaborate assumptions annotations context (path ++ [0]) value (.check result)
-        let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced (path ++ [0]) result)
-        pure ⟨inner.uses, .conversion (.done inner.derivation (by simpa using hn))
-          (shape ▸ whnf_sameType assumptions expected)⟩
-      | _ => throw (.shapeMismatch path "activity" expected)
-    | .synth =>
+    let synthesized : Except CheckRefusal (Synth assumptions context (.done value)) :=
       match annotations path with
-      | some annotation => do
-        let inner ← elaborate assumptions annotations context (path ++ [0]) value .synth
-        let ⟨hn⟩ ← need (!inner.type.isComputation) (.activityMisplaced (path ++ [0]) inner.type)
-        pure ⟨.computation annotation.domain annotation.codomain inner.type, inner.uses,
-          .done inner.derivation (by simpa using hn)⟩
+      | some annotation =>
+        match annotation.codomain with
+        | .computation planType response result => do
+          let inner ← elaborate assumptions annotations context (path ++ [0]) value (.check result)
+          let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced (path ++ [0]) result)
+          pure ⟨.computation planType response result, inner.uses, .done inner.derivation (by simpa using hn)⟩
+        | _ => do
+          let inner ← elaborate assumptions annotations context (path ++ [0]) value .synth
+          let ⟨hn⟩ ← need (!inner.type.isComputation) (.activityMisplaced (path ++ [0]) inner.type)
+          pure ⟨.computation annotation.domain annotation.codomain inner.type, inner.uses,
+            .done inner.derivation (by simpa using hn)⟩
       | none => throw (.missingAnnotation path)
+    match mode with
+    | .synth => synthesized
+    | .check expected =>
+      match annotations path with
+      | some _ => do
+        let typed ← synthesized
+        finish assumptions annotations path typed (.check expected)
+      | none =>
+        match shape : representativeHead assumptions annotations path expected with
+        | .computation planType response result => do
+          let inner ← elaborate assumptions annotations context (path ++ [0]) value (.check result)
+          let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced (path ++ [0]) result)
+          pure ⟨inner.uses, .conversion (.done inner.derivation (by simpa using hn))
+            (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
+        | _ => throw (.shapeMismatch path "activity" expected)
   | .record fields, mode =>
     introduce annotations path (fun expected =>
-      if distinct : labelsDistinct fields = true then do
-        let members ← checkFieldsByLabel assumptions annotations context path 0 (whnf assumptions expected) fields
+      if (annotations path).isSome then do
+        let members ← checkFields assumptions annotations context path 0 fields expected
+        pure ⟨members.uses, .record members.derivation⟩
+      else if distinct : labelsDistinct fields = true then do
+        let members ← checkFieldsByLabel assumptions annotations context path 0 (representativeHead assumptions annotations path expected) fields
         let ⟨hc⟩ ← need (sameType assumptions members.type expected) (.typeMismatch path expected members.type)
         pure ⟨members.uses, .conversion (.record members.derivation) hc⟩
       else do
@@ -354,7 +439,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         pure ⟨row.type, row.uses, .record row.derivation⟩) mode
   | .specification metadata extension, mode =>
     introduce annotations path (fun expected =>
-      match shape : whnf assumptions expected with
+      match shape : representativeHead assumptions annotations path expected with
       | .specification metadataType extensionType => do
         let m ← elaborate assumptions annotations context (path ++ [0]) metadata (.check metadataType)
         let e ← elaborate assumptions annotations context (path ++ [1]) extension (.check extensionType)
@@ -362,7 +447,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         let ⟨he⟩ ← need (!extensionType.isComputation) (.activityMisplaced (path ++ [1]) extensionType)
         pure ⟨addUses m.uses e.uses, .conversion
           (.specification m.derivation e.derivation (by simpa using hm) (by simpa using he))
-          (shape ▸ whnf_sameType assumptions expected)⟩
+          (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
       | _ => throw (.shapeMismatch path "specification" expected))
       (do
         let m ← elaborate assumptions annotations context (path ++ [0]) metadata .synth
@@ -373,7 +458,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
           .specification m.derivation e.derivation (by simpa using hm) (by simpa using he)⟩) mode
   | .prototype spec target, mode =>
     introduce annotations path (fun expected =>
-      match shape : whnf assumptions expected with
+      match shape : representativeHead assumptions annotations path expected with
       | .prototype specType targetType => do
         let s ← elaborate assumptions annotations context (path ++ [0]) spec (.check specType)
         let t ← elaborate assumptions annotations context (path ++ [1]) target (.check targetType)
@@ -381,7 +466,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         let ⟨ht⟩ ← need (!targetType.isComputation) (.activityMisplaced (path ++ [1]) targetType)
         pure ⟨addUses s.uses t.uses, .conversion
           (.prototype s.derivation t.derivation (by simpa using hs) (by simpa using ht))
-          (shape ▸ whnf_sameType assumptions expected)⟩
+          (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
       | _ => throw (.shapeMismatch path "prototype" expected))
       (do
         let s ← elaborate assumptions annotations context (path ++ [0]) spec .synth
@@ -391,7 +476,10 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         pure ⟨.prototype s.type t.type, addUses s.uses t.uses,
           .prototype s.derivation t.derivation (by simpa using hs) (by simpa using ht)⟩) mode
   | .extend target fields, mode => do
-    let prior ← elaborate assumptions annotations context (path ++ [0]) target .synth
+    let prior ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) target .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
     let synthesized : Except CheckRefusal (Synth assumptions context (.extend target fields)) :=
       match annotations path with
       | some annotation => do
@@ -443,16 +531,19 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         pure ⟨z.type, addUses v.uses (addUses z.uses s.uses.tail), .ifZero v.derivation z.derivation s.derivation hu⟩)
       mode
   | .case scrutinee [], mode => do
-    let value ← elaborate assumptions annotations context (path ++ [0]) scrutinee .synth
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) scrutinee .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) scrutinee (.check annotation.domain)).map checkedSynth
     let against (expected : Ty) : Except CheckRefusal (Against assumptions context (.case scrutinee []) expected) :=
-      match whnf assumptions value.type with
+      match representativeHead assumptions annotations path value.type with
       | .variant row => do
         let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected []
         let ⟨hc⟩ ← need (sameType assumptions value.type (.variant typed.row))
           (.typeMismatch (path ++ [0]) (.variant typed.row) value.type)
         pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation rfl⟩
       | .computation planType response (.variant row) =>
-        match whnf assumptions expected with
+        match representativeHead assumptions annotations path expected with
         | .computation _ _ result => do
           let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row
             (.computation planType response result) []
@@ -466,25 +557,33 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
     match mode with
-    | .check expected => against expected
+    | .check expected =>
+      match annotations path with
+      | none => against expected
+      | some annotation => do
+        let typed ← against annotation.codomain
+        finish assumptions annotations path (checkedSynth typed) (.check expected)
     | .synth =>
       match annotations path with
       | some annotation => (against annotation.codomain).map fun checked =>
           (⟨annotation.codomain, checked.uses, checked.derivation⟩ : Synth assumptions context _)
       | none => throw (.emptyCaseInSynthMode path)
   | .case scrutinee ((name, body) :: rest), mode => do
-    let value ← elaborate assumptions annotations context (path ++ [0]) scrutinee .synth
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) scrutinee .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) scrutinee (.check annotation.domain)).map checkedSynth
     let ⟨hd⟩ ← need (labelsDistinct ((name, body) :: rest)) (.duplicateLabels path)
     let against (expected : Ty) :
         Except CheckRefusal (Against assumptions context (.case scrutinee ((name, body) :: rest)) expected) :=
-      match whnf assumptions value.type with
+      match representativeHead assumptions annotations path value.type with
       | .variant row => do
         let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected ((name, body) :: rest)
         let ⟨hc⟩ ← need (sameType assumptions value.type (.variant typed.row))
           (.typeMismatch (path ++ [0]) (.variant typed.row) value.type)
         pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation hd⟩
       | .computation planType response (.variant row) =>
-        match whnf assumptions expected with
+        match representativeHead assumptions annotations path expected with
         | .computation _ _ result => do
           let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row
             (.computation planType response result) ((name, body) :: rest)
@@ -498,14 +597,19 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
     match mode with
-    | .check expected => against expected
+    | .check expected =>
+      match annotations path with
+      | none => against expected
+      | some annotation => do
+        let typed ← against annotation.codomain
+        finish assumptions annotations path (checkedSynth typed) (.check expected)
     | .synth =>
       match annotations path with
       | some annotation => (against annotation.codomain).map fun checked =>
           (⟨annotation.codomain, checked.uses, checked.derivation⟩ : Synth assumptions context _)
       | none =>
         -- without an ascription, the first arm's synthesized type is the result
-        let row? : Option Ty := match whnf assumptions value.type with
+        let row? : Option Ty := match representativeHead assumptions annotations path value.type with
           | .variant row => some row
           | .computation _ _ (.variant row) => some row
           | _ => none
@@ -623,7 +727,8 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
       simp [h1, h2, h3, pure, Except.pure] at accepted
     cases accepted; rfl
 
-#assert_axioms sameType_whnf whnf_sameType checkAgainst_sound
+#assert_axioms sameType_whnf whnf_sameType sameType_representativeHead
+  representativeHead_sameType checkAgainst_sound
 
 end Obend.Core.Bidirectional
 

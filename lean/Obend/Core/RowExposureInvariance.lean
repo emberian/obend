@@ -165,7 +165,7 @@ public theorem labels_expose_eq (a : Assumptions) (left right : Ty)
 
 /-- Residual terminal search retains raw non-row types. Consequently its heads
 are exposure-invariant only on row constructors, not on arbitrary scalar aliases. -/
-def residualStep (a : Assumptions) (row : Ty) : Search.Step Ty Tail :=
+@[expose] public def residualStep (a : Assumptions) (row : Ty) : Search.Step Ty Tail :=
   match expose a row with
   | .nominal index => .emit (.nominal index)
   | .unproductive index => .emit (.unproductive index)
@@ -175,7 +175,7 @@ def residualStep (a : Assumptions) (row : Ty) : Search.Step Ty Tail :=
     | .field _, [_, tail] => .skip tail
     | _, _ => .emit (.nonRow row)
 
-theorem residualStep_skip_support (a : Assumptions) (left right row tail : Ty)
+public theorem residualStep_skip_support (a : Assumptions) (left right row tail : Ty)
     (present : row ∈ support a left right) (skipped : residualStep a row = .skip tail) :
     tail ∈ support a left right := by
   rw [residualStep] at skipped
@@ -251,7 +251,7 @@ decreasing_by
   have positive := List.length_pos_of_mem available
   omega
 
-theorem residual_projection (a : Assumptions) (row : Ty) :
+public theorem residual_projection (a : Assumptions) (row : Ty) :
     residual a row = (Search.find (residualStep a) (support a row row) row).getD .productiveCycle :=
   residual_find_projection a row row _ row (left_mem_support a row row)
     (fun _ _ present _ => present)

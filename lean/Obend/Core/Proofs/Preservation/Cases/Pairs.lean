@@ -42,13 +42,13 @@ public theorem typed_metadata_preserved {assumptions : Assumptions} {types : Add
   obtain ⟨metadata,extension,rfl⟩ := specification_value_form specTyped
   obtain ⟨actualMetadata,actualExtension,metadataAssigned,extensionAssigned,normal⟩ :=
     value_specification_fields specTyped metadata extension rfl
-  have same := head_normalizes_unique normal (.direct (.specification metadataType extensionType) rfl)
-  have component : actualMetadata.canonical = metadataType.canonical := by
-    simpa [Ty.canonical] using congrArg (fun type => match type with | .specification metadata _ => metadata | _ => type) same
+  have component : sameType assumptions actualMetadata metadataType = true :=
+    (sameType_iff _ _ _).mpr
+      (Obend.Core.TypeGraph.specification_components ((sameType_iff _ _ _).mp normal)).1
   refine ⟨step_certificate typed actualMetadata ?_ ?_ ?_⟩
   · simpa [stepRaw,returned,stack] using typed.heap
   · simpa [stepRaw,returned,stack] using (ControlTyping.enter metadataAssigned)
-  · simpa [stepRaw,returned,stack] using (StackTyping.conversion (canonical_same_type assumptions _ _ component) restTyped)
+  · simpa [stepRaw,returned,stack] using (StackTyping.conversion (component) restTyped)
 
 @[expose] public def projectionFrame (specification : Bool) : Frame := if specification then .reflect else .project
 
@@ -89,22 +89,20 @@ public theorem typed_prototype_projection_preserved {assumptions : Assumptions} 
   obtain ⟨specType,targetType,protoTyped,restTyped⟩ := stack_projection_value typed.stack valueTyped specification rest stack
   obtain ⟨spec,target,rfl⟩ := prototype_value_form protoTyped
   obtain ⟨actualSpec,actualTarget,specAssigned,targetAssigned,normal⟩ := value_prototype_fields protoTyped spec target rfl
-  have same := head_normalizes_unique normal (.direct (.prototype specType targetType) rfl)
-  have specComponent : actualSpec.canonical = specType.canonical := by
-    simpa [Ty.canonical] using congrArg (fun type => match type with | .prototype spec _ => spec | _ => type) same
-  have targetComponent : actualTarget.canonical = targetType.canonical := by
-    simpa [Ty.canonical] using congrArg (fun type => match type with | .prototype _ target => target | _ => type) same
+  have components := Obend.Core.TypeGraph.prototype_components ((sameType_iff _ _ _).mp normal)
+  have specComponent := (sameType_iff _ _ _).mpr components.1
+  have targetComponent := (sameType_iff _ _ _).mpr components.2
   cases specification
   · refine ⟨step_certificate typed actualTarget ?_ ?_ ?_⟩
     · simpa [stepRaw,returned,stack,projectionFrame] using typed.heap
     · simpa [stepRaw,returned,stack,projectionFrame] using (ControlTyping.enter targetAssigned)
     · simpa [stepRaw,returned,stack,projectionFrame] using
-        (StackTyping.conversion (canonical_same_type assumptions _ _ targetComponent) restTyped)
+        (StackTyping.conversion (targetComponent) restTyped)
   · refine ⟨step_certificate typed actualSpec ?_ ?_ ?_⟩
     · simpa [stepRaw,returned,stack,projectionFrame] using typed.heap
     · simpa [stepRaw,returned,stack,projectionFrame] using (ControlTyping.enter specAssigned)
     · simpa [stepRaw,returned,stack,projectionFrame] using
-        (StackTyping.conversion (canonical_same_type assumptions _ _ specComponent) restTyped)
+        (StackTyping.conversion (specComponent) restTyped)
 
 @[expose] public def pairedTerm (specification : Bool) (left right : Term) : Term :=
   if specification then .specification left right else .prototype left right

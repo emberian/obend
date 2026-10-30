@@ -107,46 +107,40 @@ public theorem typed_argument_return_preserved {assumptions : Assumptions} {type
   obtain ⟨ft,domain,codomain,reuse,quantity,argumentOrigin,callableEq,copyAllowed,fnTyped,restTyped⟩ :=
     stack_argument_value typed.stack valueTyped argument environment rest stack
   rcases callable_value_form fnTyped callableEq with ⟨body,capturedEnvironment,rfl⟩ | ⟨metadata,extension,rfl⟩
-  · obtain ⟨captured,normal⟩ := value_closure_fields fnTyped body capturedEnvironment rfl
+  · obtain ⟨captured,normal⟩ := Obend.Core.MachineTyping.Next.value_closure_origin
+      (fun a b h => (sameType_iff assumptions a b).mp h) fnTyped body capturedEnvironment rfl
     have ftEq := closure_callable_type normal callableEq
     rw [ftEq] at normal
-    have same := head_normalizes_unique normal (.direct (.arrow reuse quantity domain codomain) rfl)
-    have domainEq : captured.annotation.domain.canonical = domain.canonical := by
-      simpa [CapturedFunction.arrow,Ty.canonical] using
-        congrArg (fun type => match type with | .arrow _ _ domain _ => domain | _ => type) same
-    have codomainEq : captured.annotation.codomain.canonical = codomain.canonical := by
-      simpa [CapturedFunction.arrow,Ty.canonical] using
-        congrArg (fun type => match type with | .arrow _ _ _ codomain => codomain | _ => type) same
+    obtain ⟨_,_,domainEq,codomainEq⟩ := TypeGraph.arrow_components normal
     let after := types ++ [captured.annotation.domain]
     have extension : TypeExtension types after := type_extension_append types _
     have assigned : after[state.heap.size]? = some captured.annotation.domain := by rw [← typed.heap.length]; simp [after]
     let argumentNext : ClosureTyping assumptions after ⟨argument,environment⟩ captured.annotation.domain :=
       ⟨argumentOrigin.context,argumentOrigin.uses,argumentOrigin.environment.weaken extension,
-        .conversion argumentOrigin.source (canonical_same_type assumptions _ _ domainEq.symm),argumentOrigin.safe,argumentOrigin.contextValid⟩
+        .conversion argumentOrigin.source ((sameType_iff assumptions _ _).mpr ((TypeGraph.equivalent_equivalence assumptions).symm domainEq)),argumentOrigin.safe,argumentOrigin.contextValid⟩
     let bodyNext : ClosureTyping assumptions after ⟨body,state.heap.size :: capturedEnvironment⟩ captured.annotation.codomain :=
       ⟨⟨captured.annotation.domain,captured.annotation.parameter⟩ :: captured.context,captured.uses,
         (captured.environmentTyped.weaken extension).cons assigned,captured.bodyTyped,captured.safe,captured.valid⟩
     refine ⟨after,extension,⟨step_alloc_certificate typed after captured.annotation.codomain ?_ ?_ ?_⟩⟩
     · have domainPure : captured.annotation.domain.isComputation = false := by
-        rw [← Ty.canonical_isComputation,domainEq,Ty.canonical_isComputation]
+        rw [TypeGraph.equivalent_isComputation domainEq]
         exact argumentAllowed_not_computation copyAllowed
       simpa [stepRaw,returned,stack] using heap_typed_push typed.heap (.suspended argumentNext domainPure)
     · simpa [stepRaw,returned,stack] using (ControlTyping.evaluate bodyNext)
     · simpa [stepRaw,returned,stack] using
-        (StackTyping.weaken extension (.conversion (canonical_same_type assumptions _ _ codomainEq) restTyped))
-  · obtain ⟨actualMetadata,actualExtension,metadataAssigned,extensionAssigned,normal⟩ := value_specification_fields fnTyped metadata extension rfl
-    obtain ⟨metadataType,extensionType,ftEq⟩ := specification_callable_type normal callableEq
-    rw [ftEq] at normal callableEq
-    have same := head_normalizes_unique normal (.direct (.specification metadataType extensionType) rfl)
-    have extensionEq : actualExtension.canonical = extensionType.canonical := by
-      simpa [Ty.canonical] using
-        congrArg (fun type => match type with | .specification _ extension => extension | _ => type) same
+        (StackTyping.weaken extension (.conversion ((sameType_iff assumptions _ _).mpr codomainEq) restTyped))
+  · obtain ⟨actualMetadata,actualExtension,metadataAssigned,extensionAssigned,related⟩ :=
+      Obend.Core.MachineTyping.Next.value_specification_origin
+        (fun a b h => (sameType_iff assumptions a b).mp h) fnTyped metadata extension rfl
+    obtain ⟨metadataType,extensionType,ftEq⟩ := specification_callable_type related callableEq
+    rw [ftEq] at related callableEq
+    have extensionEq := (TypeGraph.specification_components related).2
     have extensionCallable : callable extensionType = .arrow reuse quantity domain codomain := callableEq
     refine ⟨types,type_extension_refl types,⟨step_certificate typed actualExtension ?_ ?_ ?_⟩⟩
     · simpa [stepRaw,returned,stack] using typed.heap
     · simpa [stepRaw,returned,stack] using (ControlTyping.enter extensionAssigned)
     · simpa [stepRaw,returned,stack] using
-        (StackTyping.conversion (canonical_same_type assumptions _ _ extensionEq)
+        (StackTyping.conversion ((sameType_iff assumptions _ _).mpr extensionEq)
           (.cons (.argument argumentOrigin extensionCallable copyAllowed) restTyped))
 
 /-- The actual mix-generated lexical body is reusable under the checked operand
