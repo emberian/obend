@@ -18,3 +18,9 @@ roots = ["Journal.Journal", "Journal.Export"]
 name = "journal"
 srcDir = "tools/journal"
 root = "Main"
+
+# Lane A (2026-10-30): the CLI of SHIP §1, rooted at the library module `Obend.Main` (a root named `Main`
+# would collide with the journal executable). `lake exe obend check FILE.json` / `lake exe obend run FILE.json`.
+[[lean_exe]]
+name = "obend"
+root = "Obend.Main"
