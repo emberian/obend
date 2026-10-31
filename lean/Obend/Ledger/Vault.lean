@@ -92,6 +92,20 @@ theorem fieldOf_stateOf (vals : List (String × Nat)) (k : String) :
       have : k ∈ ys := (List.mem_cons.1 h).resolve_left (Ne.symm e)
       exact fieldOf_stateOf vals k ys this
 
+/-- **What the register's kind admits keeps every law of the kind**, by the fragment's meaning, read
+on the posting's state: its own measures, and every account's totals in the register after it
+(`accountMeasures`). So `solvent: new.Cash_credits <= new.Cash_debits` admits a posting only when the
+register's cash credits after it are at most its cash debits. -/
+theorem kindLaw_holds (lin : List (String × LawExpr)) (g : Reg) (p : Posting) (h : kindLaw lin g p = none) :
+    ∀ l ∈ lin, l.2.denote postFacts none
+      (stateOf (postingKeys lin (postingMeasures p ++ accountMeasures g p)) (postingMeasures p ++ accountMeasures g p)) = true := by
+  simp only [kindLaw] at h
+  split at h
+  · rename_i hj
+    exact judge_admits (k := .birth) (who := "owner") (facts := postFacts) hj
+  · cases h
+  · cases h
+
 /-- **What the register's kind admits is balanced** when its laws say `new.debits == new.credits`. -/
 theorem kindLaw_balanced (lin : List (String × LawExpr))
     (hb : ∃ name, (name, LawExpr.eqR (.field "debits") (.field "credits")) ∈ lin) (g : Reg) (p : Posting)
