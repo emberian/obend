@@ -1,0 +1,20 @@
+edition ObjectiveBend 1
+# A function over Kilos passed where a function over Miles is declared is refused, by name, though
+# the two kinds have the same fields: kinds are nominal in checking, not only at direct calls.
+record Mile:
+  n: Nat
+
+record Kilo:
+  n: Nat
+
+def kmMetres(k: Kilo) -> Nat:
+  k.n * 1000n
+
+def mileMetres(m: Mile) -> Nat:
+  m.n * 1609n
+
+def apply(f: (Mile) -> Nat, m: Mile) -> Nat:
+  f(m)
+
+def crossed() -> Nat:
+  apply(kmMetres, {n: 1n})

@@ -240,6 +240,89 @@ def variantRowOf (s : St) : Option PTy → Option PTy
   | some (.variant row) => some row
   | _ => none
 
+/-! ## Construction names the kind
+
+A record literal is an instance of a kind exactly where it is checked against that kind: at a
+declared result, an annotated `let`, a parameter, a field of a kind or a sum payload. `brandAt`
+writes the kind's brand (`Obend.Core.Nominal`) into the literal there, descending through the
+positions that pass their expected type on (a `let`'s body, both branches, every arm, a field, a
+payload). Elsewhere a literal is an anonymous structural record. -/
+
+/-- A type's declared head: a bounded variable's bound, one step. -/
+def unfoldHead (bounds : List (Nat × PTy)) : PTy → PTy
+  | .variable k => (bounds.lookup k).getD (.variable k)
+  | t => t
+
+/-- The payload type of label `l` of a sum type. -/
+def payloadOf (bounds : List (Nat × PTy)) (sum : Option PTy) (l : String) : Option PTy :=
+  match sum.map (unfoldHead bounds) with
+  | some (.variant row) => lookupRow (some (unfoldHead bounds row)) l
+  | _ => none
+
+/-- The source field names a person may write: never a brand. -/
+def brandFree (names : List String) : M Unit := do
+  if let some n := names.find? Obend.Core.Brand.isBrand then
+    fail ("refused (brand-field): " ++ n ++ " is a kind's identity; a kind's brand is written by construction, never by a field")
+
+/-- The brand field of an instance of kind `k`: `#kind` holding the one constructor of `k`'s sum. -/
+def brandField (k : String) : String × ATerm :=
+  (Obend.Core.Brand.brandLabel, .inject k (some (kindPTy k)) none (.record []))
+
+mutual
+/-- **Construction names the kind**: brand the record literals of `t` that it produces at type
+`expected` (see above). -/
+def brandAt (bounds : List (Nat × PTy)) : Nat → Option PTy → ATerm → ATerm
+  | 0, _, t => t
+  | _ + 1, none, t => t
+  | fuel + 1, some expected, t =>
+    let ty := unfoldHead bounds expected
+    match t with
+    | .record fs =>
+      let fs' := brandFields bounds fuel ty fs
+      match ty.kindOf with
+      | some k =>
+        if fs.any (·.1 == Obend.Core.Brand.brandLabel) then .record fs' else .record ((brandField k) :: fs')
+      | none => .record fs'
+    | .extend inh fs =>
+      -- an extension constructs a new record: at a kind, it is an instance of that kind
+      let fs' := brandFields bounds fuel ty fs
+      match ty.kindOf with
+      | some k =>
+        if fs.any (·.1 == Obend.Core.Brand.brandLabel) then .extend inh fs' else .extend inh ((brandField k) :: fs')
+      | none => .extend inh fs'
+    | .app (.lam p b) v =>
+      -- a `let`: its body is the result
+      let p' := if expected.hasBrand then { p with codomain := some expected } else p
+      .app (.lam p' (brandAt bounds fuel (some expected) b)) v
+    | .ifBool c a b => .ifBool c (brandAt bounds fuel (some expected) a) (brandAt bounds fuel (some expected) b)
+    | .ifZero v z sc => .ifZero v (brandAt bounds fuel (some expected) z) (brandAt bounds fuel (some expected) sc)
+    | .case sc arms => .case sc (brandArms bounds fuel expected arms)
+    | .inject l sum r p => .inject l sum r (brandAt bounds fuel (payloadOf bounds sum l) p)
+    | .done pl rs v => match ty with
+      | .computation _ _ result => .done pl rs (brandAt bounds fuel (some result) v)
+      | _ => .done pl rs v
+    | other => other
+def brandFields (bounds : List (Nat × PTy)) : Nat → PTy → List (String × ATerm) → List (String × ATerm)
+  | _, _, [] => []
+  | fuel, row, (n, v) :: rest => (n, brandAt bounds fuel (lookupRow (some row) n) v) :: brandFields bounds fuel row rest
+def brandArms (bounds : List (Nat × PTy)) : Nat → PTy → List (String × ATerm) → List (String × ATerm)
+  | _, _, [] => []
+  | fuel, expected, (l, b) :: rest => (l, brandAt bounds fuel (some expected) b) :: brandArms bounds fuel expected rest
+end
+
+/-- Brand the body under `n` lambdas at `result`. -/
+def brandUnder (bounds : List (Nat × PTy)) : Nat → PTy → ATerm → ATerm
+  | 0, result, t => brandAt bounds 4096 (some result) t
+  | n + 1, result, .lam p b => .lam p (brandUnder bounds n result b)
+  | _, _, t => t
+
+/-- The parameter types of `n` successive applications of a function of type `t`. -/
+def domainsOf : Option PTy → Nat → List (Option PTy)
+  | _, 0 => []
+  | t, n + 1 => match callable t with
+    | some (.arrow _ _ d c) => some d :: domainsOf (some c) n
+    | _ => none :: domainsOf none n
+
 def isPerform (c : Ctx) (e : Expr) (env : List Binding) (m : Module) : Bool :=
   match e with
   | .call (.var "perform") _ => !env.any (·.name == "perform") && (lookupGlobal c "perform" m).isNone
@@ -507,6 +590,7 @@ def sourceType (c : Ctx) : Nat → String → String → List String → M (Opti
       return some (.variable index)
     let some (_, .record _ recordFields methods) := c.records.find? (·.1 == key)
       | do typeError ("unsupported source type " ++ name); return none
+    brandFree (recordFields.map (·.1))
     if let some k := (← get).sumVariables.lookup key then
       if ((← get).sumBounds.lookup k).isSome then return some (.variable k)
     let mut row : List (String × PTy) := []
@@ -520,6 +604,10 @@ def sourceType (c : Ctx) : Nat → String → String → List String → M (Opti
       | some t => row := row ++ [(method.name, t)]
       | none => ok := false
     if !ok then return none
+    -- Kinds are nominal (C1, `Obend.Core.Nominal`): a declared record's type carries its kind's
+    -- identity, the brand of its key, so two kinds with the same fields are two types everywhere.
+    -- The built-in records (`SpecMeta`, `SpecClaims`) are the elaborator's own and stay structural.
+    if moduleName != builtinModuleName then row := (Obend.Core.Brand.brandLabel, kindPTy key) :: row
     if let some k := (← get).sumVariables.lookup key then
       modify fun s => { s with sumBounds := s.sumBounds ++ [(k, PTy.row row)] }
       return some (.variable k)
@@ -651,11 +739,11 @@ def protocolKey (c : Ctx) : Nat → String → String → List Expr → List Bin
     let mut applies : List ProtocolImpl := []
     for i in c.protocols.filter (fun i => i.generic == generic && i.method == method) do
       match callable (← globalType c fuel i.key) with
-      | some (.arrow _ _ d _) => if sameTy (some d) argTy then applies := applies ++ [i]
+      | some (.arrow _ _ d _) => if sameTy (some d.unbrand) (argTy.map PTy.unbrand) then applies := applies ++ [i]
       | _ => pure ()
-    -- Dispatch is by kind: when the instance's kind is declared, only implementations for that kind
-    -- apply, so two kinds with the same fields are two kinds.
-    match kindOf c 64 x env m with
+    -- Dispatch is by kind: when the instance's kind is declared (or its type carries the kind's
+    -- brand), only implementations for that kind apply, so two kinds with the same fields are two kinds.
+    match (kindOf c 64 x env m).or (argTy.bind PTy.kindOf) with
     | some k =>
       let own := applies.filter (·.kind == k)
       if own.isEmpty && !applies.isEmpty then
@@ -823,7 +911,7 @@ def abstractWith (c : Ctx) (fuel : Nat) (params : List Param) (domains : Option 
   -- (A failure aborts the whole elaboration, so only success restores the mode.)
   let lowered ← lower (bindings.reverse ++ env)
   modify fun s => { s with effect := saved, resultType := savedResult }
-  let mut value := lowered
+  let mut value := brandAt (← get).sumBounds 4096 initial lowered
   let mut codomain := initial
   for i in (List.range params.length).reverse do
     let b := bindings[i]!
@@ -870,7 +958,9 @@ def lowerLet (c : Ctx) (fuel : Nat) (name type : String) (value : Expr) (env : L
   let fn ← abstractWith c fuel [⟨name, type, "default"⟩] (some [ty]) env lowerBody "let" (.given codomain) m.name
   if let .fix .. := value then
     if type != "_" then modify fun st => { st with fixTarget := ty }
-  return .app fn (← elaborateValue)
+  let v ← elaborateValue
+  let bounds := (← get).sumBounds
+  return .app fn (if type == "_" then v else brandAt bounds 4096 ty v)
 
 /-! ## Specifications, declared ancestry and method combination -/
 
@@ -954,9 +1044,10 @@ def fixChain (c : Ctx) (spec : Expr) (env : List Binding) (m : Module) : Option 
   ops.mapM (chainOp c · env m)
 
 /-- A row as the composition contract reads it: its fields, each at its canonical type, so the
-contract's `==` on a member type is `sameTy`. -/
+contract's `==` on a member type is `sameTy`. A kind's brand is not a member a layer provides or
+reads: it is written by the construction at the kind (`brandAt`), so the contract does not see it. -/
 def contractRow (row : PTy) : Contract.Row PTy :=
-  (rowFields row).map fun (n, t) => (n, t.canonical)
+  ((rowFields row).filter fun (n, _) => !Obend.Core.Brand.isBrand n).map fun (n, t) => (n, t.canonical)
 
 /-- The text of a composition-contract refusal (the `refused (...)` names the cohorts pin). -/
 def contractRefusalText : Contract.Refusal → String
@@ -1034,7 +1125,7 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
             if let some bound := (← get).sumBounds.lookup k then
               if isRowTy bound && (lookupRow (some bound) name).isNone then
                 fail ("refused (self-unbound-member): self." ++ name ++ " is read, but the self's type declares only {" ++
-                  ", ".intercalate (rowNames bound) ++ "}")
+                  ", ".intercalate (visibleNames bound) ++ "}")
       if let .var "super" := target then
         if let some b := env.find? (·.name == "super") then
           if let some ty := b.ty then
@@ -1044,14 +1135,16 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
               | t => t
             if isRowTy ty && (lookupRow (some ty) name).isNone then
               fail ("refused (inherited-unprovided): super." ++ name ++ " is read, but nothing below this layer provides " ++
-                name ++ " (inherited: {" ++ ", ".intercalate (rowNames ty) ++ "})")
+                name ++ " (inherited: {" ++ ", ".intercalate (visibleNames ty) ++ "})")
       return .get (← expression c fuel target env m) name
     | .record fields =>
       if duplicate (fields.map (·.1)) then fail "duplicate record field"
+      brandFree (fields.map (·.1))
       for (_, v) in fields do noActivity c fuel v env m "effect-in-field" "a record field is a shared lazy cell"
       return .record (← fieldsOf c fuel fields env m)
     | .extend inherited fields =>
       if duplicate (fields.map (·.1)) then fail "duplicate provided field"
+      brandFree (fields.map (·.1))
       for (_, v) in fields do noActivity c fuel v env m "effect-in-field" "an extended field is a shared lazy cell"
       let i ← expression c fuel inherited env m
       return .extend i (← fieldsOf c fuel fields env m)
@@ -1119,7 +1212,11 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
         if let some lowered := (← chainFix c fuel chain inherited expected env m) then return lowered
       let st ← expression c fuel spec env m
       let it ← expression c fuel inherited env m
-      return .fix st it
+      -- the seed is constructed at the type the specification reads it at
+      let inheritedTy := match callable (← synth c fuel spec env m) with
+        | some (.arrow _ _ _ (.arrow _ _ i _)) => some i
+        | _ => none
+      return .fix st (brandAt (← get).sumBounds 4096 inheritedTy it)
     | .call callee args =>
       -- Kinds are nominal: an argument of a declared kind is refused where a parameter declares
       -- another, even when the two kinds have the same fields.
@@ -1149,6 +1246,7 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
           | [a] => expression c fuel a env m
           | _ => pure (.record [])
         let type ← sourceType c fuel sumName moduleName []
+        let payload := brandAt (← get).sumBounds 4096 (payloadOf (← get).sumBounds type caseLabel) payload
         return .inject caseLabel type (if type.isSome then none else some ("sum " ++ key ++ " type unresolved")) payload
       if let .var name := callee then
         if !env.any (·.name == name) && (lookupGlobal c name m).isNone then
@@ -1167,11 +1265,14 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
             | _ => fail "prototype expects spec and lazy target"
       for a in args do noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
       if let some (generic, method) := protocolGeneric c callee env m then
-        let mut fn ← globalRef env (← protocolKey c fuel generic method args env m)
-        for a in args do fn := .app fn (← expression c fuel a env m)
+        let key ← protocolKey c fuel generic method args env m
+        let mut fn ← globalRef env key
+        let domains := domainsOf (← globalType c fuel key) args.length
+        for (a, d) in args.zip domains do fn := .app fn (brandAt (← get).sumBounds 4096 d (← expression c fuel a env m))
         return fn
       let mut fn ← expression c fuel callee env m
-      for a in args do fn := .app fn (← expression c fuel a env m)
+      let domains := domainsOf (← synth c fuel callee env m) args.length
+      for (a, d) in args.zip domains do fn := .app fn (brandAt (← get).sumBounds 4096 d (← expression c fuel a env m))
       return fn
 
 /-- A tail position of an activity body: pure results are lifted with `done`. -/
@@ -1268,6 +1369,15 @@ def chainFix (c : Ctx) : Nat → List (String × Decl × Module) → Expr → Op
       else return none
     let some seedTy ← synth c fuel inherited env m
       | if anyOpen then fail "refused (seed-unresolved): the seed's type does not resolve" else return none
+    -- The seed is constructed at the type the bottom layer reads it at (a closed extension's
+    -- declared super, a closed specification's final self): at a kind, it is an instance of it.
+    let seedAt : Option PTy ← match chain.head? with
+      | some (_, .extension _ params _ _ binders, dm) =>
+        if binders.isEmpty then sourceType c fuel params[1]!.type dm.name [] else pure none
+      | some (_, .spec s, _) => pure (if s.binders.isEmpty then some target else none)
+      | _ => pure none
+    let seedAt := seedAt.filter fun t => t.hasBrand && sameTy (some t.unbrand) (some seedTy.unbrand)
+    let seedTy := seedAt.getD seedTy
     if !anyOpen && sameTy (some seedTy) (some target) then return none
     if !isRowTy seedTy then
       if anyOpen then fail "refused (seed-not-record): an open chain closes over a record seed" else return none
@@ -1303,14 +1413,31 @@ def chainFix (c : Ctx) : Nat → List (String × Decl × Module) → Expr → Op
       | .spec s =>
         let some defs ← withTypes bindings (specDefs c fuel s dm.name) | return none
         writes := some (defs.map (fun (n, t) => (n, t.canonical)), false)
-        provided? := some (overDefs defs below)
+        -- a specification for a kind constructs instances of it: its layer writes the brand
+        let branded := match targetRow.kindOf with
+          | some k => (Obend.Core.Brand.brandLabel, kindPTy k) :: defs
+          | none => defs
+        provided? := some (overDefs branded below)
       | .extension _ params targetType _ binders =>
         if binders.isEmpty then
           -- A closed extension keeps its declared types: the row beneath must be its super.
           let some inheritedTy ← sourceType c fuel params[1]!.type dm.name [] | return none
           if !sameTy (some inheritedTy) (some below) then
+            -- The row beneath has the declared super's layout but is not (yet) an instance of its
+            -- kind: the composition constructs one, explicitly, by a layer of its own that writes
+            -- the kind's brand over it. Checked: the layouts agree exactly.
+            match inheritedTy.kindOf with
+            | some k =>
+              if sameTy (some inheritedTy.unbrand) (some below.unbrand) then
+                let adapter := ATerm.lam ⟨some target, some (arrowTy below inheritedTy), "unrestricted", "reusable", none⟩
+                  (.lam ⟨some below, some inheritedTy, "unrestricted", "reusable", none⟩ (.extend (.bound 0) [brandField k]))
+                operands := operands ++ [(adapter, some (arrowTy target (arrowTy below inheritedTy)))]
+                below := inheritedTy
+              else pure ()
+            | none => pure ()
+          if !sameTy (some inheritedTy) (some below) then
             fail ("refused (inherited-mismatch): extension " ++ key ++ " takes super : {" ++
-              ", ".intercalate (rowNames inheritedTy) ++ "}, but the row beneath it is {" ++ ", ".intercalate (rowNames below) ++ "}")
+              ", ".intercalate (visibleNames inheritedTy) ++ "}, but the row beneath it is {" ++ ", ".intercalate (visibleNames below) ++ "}")
           provided? ← sourceType c fuel targetType dm.name []
         else
           provided? := (← withTypes bindings (sourceType c fuel targetType dm.name [])).map PTy.canonical
@@ -1339,10 +1466,12 @@ def chainFix (c : Ctx) : Nat → List (String × Decl × Module) → Expr → Op
           let name := key ++ "@" ++ toString (← get).instances.length
           -- An open declaration's instance is its checked template at σ = {Self ↦ target,
           -- Super ↦ below}: the square `template[σ] = instance` holds by construction.
+          -- At a kind, the instance's layer constructs an instance of it: its body is branded at
+          -- the instance's result (`brandUnder`); the rest of the term is the template at σ.
           let instanceOf := fun (arity : Nat) => do
             let (i, j, layer) ← templateLayer c fuel key d dm
             let σ := fun k => if k == i then some target else if k == j then some below else none
-            pure (ATerm.retarget annotated arity (layer.instantiate σ)).1
+            pure (brandUnder (← get).sumBounds arity annotated (ATerm.retarget annotated arity (layer.instantiate σ)).1)
           let (value, type) ← match d with
             | .spec s => do
               let layer ← if d.binders.isEmpty then withTypes bindings (layerAt c fuel s dm target below annotated)
@@ -1383,7 +1512,7 @@ def chainFix (c : Ctx) : Nat → List (String × Decl × Module) → Expr → Op
     for (right, rightTy) in operands.drop 1 do
       let (composite, compositeTy, metadata) := composeStep metaTy value valueTy valueMeta right rightTy
       value := composite; valueTy := compositeTy; valueMeta := some metadata
-    return some (.fix value (← expression c fuel inherited env m))
+    return some (.fix value (brandAt (← get).sumBounds 4096 seedAt (← expression c fuel inherited env m)))
 
 def fieldsOf (c : Ctx) : Nat → List (String × Expr) → List Binding → Module → M (List (String × ATerm))
   | 0, _, _, _ => fail "elaboration fuel"
@@ -1466,7 +1595,7 @@ def layer (c : Ctx) (fuel : Nat) (s : Spec) (m : Module) (group : String) : M AT
       | _ => none
     | _ => none
   let provided := match recursiveRow with
-    | some row => ATerm.record ((rowNames row).map fun f => (f, (methods.lookup f).getD (.get (.bound 0) f)))
+    | some row => ATerm.record ((visibleNames row).map fun f => (f, (methods.lookup f).getD (.get (.bound 0) f)))
     | none => ATerm.extend (.bound 0) methods
   abstract c fuel (selfSuperParams s) outerEnv (fun _ => pure provided) s.name (.source s.targetType) m.name
 
@@ -1715,6 +1844,12 @@ def elaborateM (c : Ctx) (entryModule : Nat) (entryDefinition : String) (args : 
   let entryKey := entry.name ++ "." ++ entryDefinition
   if (declOf c entryKey).isNone then fail "missing selected entry"
   let mut selected := ATerm.get root entryKey
+  -- An argument is constructed at its parameter's type: a record argument of a kind is branded.
+  let entryType ← globalType c fuel entryKey
+  let argCount := match args with
+    | .arr a => a.size
+    | envelope => (((envelope.getObjVal? "values").bind Json.getArr?).toOption.map (·.size)).getD 0
+  let mut domains := domainsOf entryType argCount
   if mode == "definition" then
     match args with
     | .arr a => if !a.isEmpty then fail "definition mode forbids invocation arguments"
@@ -1722,14 +1857,18 @@ def elaborateM (c : Ctx) (entryModule : Nat) (entryDefinition : String) (args : 
   else match args with
     | .arr a => for x in a do
         match legacyArgument 256 x with
-        | .ok t => selected := .app selected t
+        | .ok t =>
+          selected := .app selected (brandAt (← get).sumBounds 4096 (domains.headD none) t)
+          domains := domains.drop 1
         | .error e => fail e
     | envelope =>
       if exactKeys envelope ["schema", "values"] && (envelope.getObjValAs? String "schema").toOption == some "dregg.objective-bend.argument-values.v1" then
         match (envelope.getObjVal? "values").bind Json.getArr? with
         | .ok values => for x in values do
             match typedArgument 256 x with
-            | .ok t => selected := .app selected t
+            | .ok t =>
+              selected := .app selected (brandAt (← get).sumBounds 4096 (domains.headD none) t)
+              domains := domains.drop 1
             | .error e => fail e
         | .error _ => fail "arguments must select a supported complete value envelope"
       else fail "arguments must select a supported complete value envelope"

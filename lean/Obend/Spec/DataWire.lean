@@ -9,6 +9,7 @@ there and is structural here (SHIP §5: no `partial def` on a deployed path).
 -/
 public import Lean
 public import Obend.Core.Data
+public import Obend.Core.Brand
 public section
 namespace Obend.Spec.DataWire
 open Lean (Json toJson)
@@ -23,9 +24,13 @@ def dataJson : Data → Json
   | .label s => Json.mkObj [("tag",toJson "label"),("value",toJson s)]
   | .record fields => Json.mkObj [("tag",toJson "record"),("fields",Json.arr (fieldsJson fields).toArray)]
   | .variant label payload => Json.mkObj [("tag",toJson "variant"),("label",toJson label),("payload",dataJson payload)]
+/-- A kind's brand does not cross the wire: the declared type carries it, and the reader writes it
+back by type (`Obend.Core.Nominal.brandData`). -/
 def fieldsJson : List (String × Data) → List Json
   | [] => []
-  | (name, value) :: rest => Json.mkObj [("name",toJson name),("value",dataJson value)] :: fieldsJson rest
+  | (name, value) :: rest =>
+    if Obend.Core.Brand.isBrand name then fieldsJson rest
+    else Json.mkObj [("name",toJson name),("value",dataJson value)] :: fieldsJson rest
 end
 
 def decodeNatural (json : Json) : Except String Data := do

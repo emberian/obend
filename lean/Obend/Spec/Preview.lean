@@ -26,6 +26,7 @@ public import Obend.Core.Data
 public import Obend.Core.Checkpoint
 public import Obend.Spec.DataWire
 public import Obend.Spec.Capture
+public import Obend.Core.Nominal
 public section
 namespace Obend.Spec.Preview
 open Lean (Json toJson)
@@ -51,7 +52,8 @@ def valueJson : RuntimeValue → Json
   | .natural value => Json.mkObj [("tag",toJson "natural"),("value",toJson (toString value))]
   | .label value => Json.mkObj [("tag",toJson "label"),("value",toJson value)]
   | .closure _ _ => Json.mkObj [("tag",toJson "closure"),("status",toJson "unforced body")]
-  | .record fields => Json.mkObj [("tag",toJson "record"),("fields",toJson (fields.map Prod.fst))]
+  | .record fields => Json.mkObj [("tag",toJson "record"),
+      ("fields",toJson ((fields.map Prod.fst).filter fun n => !Obend.Core.Brand.isBrand n))]
   | .specification _ _ => Json.mkObj [("tag",toJson "specification"),("status",toJson "unforced extension")]
   | .prototype _ _ => Json.mkObj [("tag",toJson "prototype"),("status",toJson "unforced target")]
   | .variant label _ => Json.mkObj [("tag",toJson "variant"),("label",toJson label),("status",toJson "unforced payload")]
@@ -100,6 +102,8 @@ def runTurns (limits : Limits) (ticks : Nat) (budget : Obend.Core.Data.Budget)
       | [] => pure (.yielded plan extracted.state, turns.push (Json.mkObj turn))
       | response :: rest => do
         let some declared := response? | throw "a yield needs an Activity entry type"
+        -- constructed at its declared type: the brands the wire does not carry are written back
+        let response := Obend.Core.Nominal.brandData 4096 declared response
         if !response.conforms declared then
           throw ("response refused: it does not conform to the declared response type " ++ (typeJson declared).compress)
         let some resumed := resume response.term extracted.state | throw "internal: yielded state did not resume"

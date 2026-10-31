@@ -271,7 +271,10 @@ def typeText (t : Json) : String :=
           | 0, _ => []
           | fuel' + 1, r =>
             if (r.getObjValAs? String "tag").toOption == some "field" then
-              (((r.getObjValAs? String "name").toOption.getD "") ++ ": " ++ go fuel ((r.getObjVal? "member").toOption.getD .null)) ::
+              let name := (r.getObjValAs? String "name").toOption.getD ""
+              -- a kind's brand is its identity, not a field a person reads
+              if Obend.Core.Brand.isBrand name then fields fuel' ((r.getObjVal? "tail").toOption.getD .null) else
+              (name ++ ": " ++ go fuel ((r.getObjVal? "member").toOption.getD .null)) ::
                 fields fuel' ((r.getObjVal? "tail").toOption.getD .null)
             else []
         "{" ++ ", ".intercalate (fields (fuel + 1) t) ++ "}"

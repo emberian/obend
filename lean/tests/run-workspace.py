@@ -17,7 +17,8 @@ Two workspaces under tests/obend-source/, each a `dregg.objective-bend.workspace
     and the more specific one selected when only one is in the closure.
   * kinds/: kinds are nominal. Two record kinds with the same fields, a protocol implemented for each:
     a call reaches its instance's kind's implementation; an instance that names no kind is refused,
-    and so is a Kilo passed where a Mile is declared.
+    and so is a Kilo passed where a Mile is declared, and (HigherOrder*.obend) a function over Kilos
+    where one over Miles is declared: the checker refuses it, naming the two kinds.
   * builtin/: a program names the built-in `Syntax` sum (Obend.Core.Code.syntaxSource) as a type.
 
 usage: python3 tests/run-workspace.py [OBEND_BINARY]      (from lean/, after `lake build obend`)
@@ -159,6 +160,17 @@ check("kinds: an instance that names no kind is refused, never resolved by its f
 got = run_file(os.path.join(K, "Crossed.obend"), "crossed")
 check("kinds: a Kilo where a Mile is declared is refused",
       len(got) > 2 and got[2].startswith("message: refused (kind-mismatch)"), repr(got))
+higher = os.path.join(K, "HigherOrder.obend")
+got = run_file(higher, "within")
+check("kinds: a function over Miles passed where one is declared",
+      got[:3] == ["status: finished", "type: Nat", "result: 3218"], repr(got))
+got = run_file(higher, "structural")
+check("kinds: an anonymous record stays structural",
+      got[:3] == ["status: finished", "type: Nat", "result: 3"], repr(got))
+got = run_file(os.path.join(K, "HigherOrderCrossed.obend"), "crossed")
+check("kinds: a function over Kilos where one over Miles is declared is refused, by name",
+      len(got) > 2 and got[2].startswith("message: typing refused (kind-mismatch): kind HigherOrderCrossed.Mile is expected where kind HigherOrderCrossed.Kilo is given"),
+      repr(got))
 
 # ---------------------------------------------------------------- built-in types
 

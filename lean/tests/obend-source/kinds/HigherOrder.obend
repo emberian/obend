@@ -1,0 +1,26 @@
+edition ObjectiveBend 1
+# Within a kind, a function over Miles is passed where one is declared; an anonymous record is
+# structural. (HigherOrderCrossed.obend passes a function over Kilos: refused.)
+record Mile:
+  n: Nat
+
+record Kilo:
+  n: Nat
+
+def kmMetres(k: Kilo) -> Nat:
+  k.n * 1000n
+
+def mileMetres(m: Mile) -> Nat:
+  m.n * 1609n
+
+def apply(f: (Mile) -> Nat, m: Mile) -> Nat:
+  f(m)
+
+def within() -> Nat:
+  apply(mileMetres, {n: 2n})
+
+def anonymous(r: {n: Nat}) -> Nat:
+  r.n
+
+def structural() -> Nat:
+  anonymous({n: 3n})

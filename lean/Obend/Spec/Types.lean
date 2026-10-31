@@ -11,6 +11,7 @@ row lookup and overlay, substitution of type variables (`PTy.subst`) and the typ
 type computation, not the elaborator.
 -/
 public import Lean
+public import Obend.Core.Brand
 public section
 namespace Obend.Spec.Types
 open Lean (Json toJson)
@@ -89,6 +90,36 @@ def isRowTy : PTy → Bool
 def rowNames : PTy → List String
   | .field n _ t => n :: rowNames t
   | _ => []
+
+/-- A row's field names a person reads: its brand, if any, is the kind's identity, not a field. -/
+def visibleNames (t : PTy) : List String := (rowNames t).filter fun n => !Obend.Core.Brand.isBrand n
+
+/-- The brand member of kind `k`: the one-label sum naming it (`Obend.Core.Nominal.kindTy`). -/
+def kindPTy (k : String) : PTy := .variant (.field k .emptyRow .emptyRow)
+
+/-- The kind a row's brand names (its first brand field). -/
+def PTy.kindOf : PTy → Option String
+  | .field n m t => if Obend.Core.Brand.isBrand n then
+      (match m with | .variant (.field k _ _) => some k | _ => none) else t.kindOf
+  | _ => none
+
+/-- Whether a brand occurs anywhere in a type. -/
+def PTy.hasBrand : PTy → Bool
+  | .field n m t => Obend.Core.Brand.isBrand n || m.hasBrand || t.hasBrand
+  | .arrow _ _ d c => d.hasBrand || c.hasBrand
+  | .specification m e => m.hasBrand || e.hasBrand
+  | .variant r => r.hasBrand
+  | .computation p r a => p.hasBrand || r.hasBrand || a.hasBrand
+  | _ => false
+
+/-- A type with every brand dropped: its layout, what "has its fields" compares. -/
+def PTy.unbrand : PTy → PTy
+  | .field n m t => if Obend.Core.Brand.isBrand n then t.unbrand else .field n m.unbrand t.unbrand
+  | .arrow r q d c => .arrow r q d.unbrand c.unbrand
+  | .specification m e => .specification m.unbrand e.unbrand
+  | .variant r => .variant r.unbrand
+  | .computation p r a => .computation p.unbrand r.unbrand a.unbrand
+  | other => other
 
 def rowFields : PTy → List (String × PTy)
   | .field n t rest => (n, t) :: rowFields rest

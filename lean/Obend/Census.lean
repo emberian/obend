@@ -36,6 +36,8 @@ import Obend.Core.Capacity
 import Obend.Core.Check
 import Obend.Core.Checkpoint
 import Obend.Core.Code
+import Obend.Core.Nominal
+import Obend.Core.Brand
 import Obend.Core.Collect
 import Obend.Core.Data
 import Obend.Core.Digest
@@ -332,6 +334,7 @@ import Obend.Teeth.Core.DataSoundness
 import Obend.Teeth.Core.EquiRecursiveTeeth
 import Obend.Teeth.Core.Force
 import Obend.Teeth.Core.LinearTeeth
+import Obend.Teeth.Core.NominalTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
 import Obend.Teeth.Law.LawJudgeTeeth

@@ -21,8 +21,10 @@ Three conformance checks, all against outcomes minidregg pinned (commit 092027a2
     capture pin refuses, checkWork 1 is a named budget refusal, ticks 1 and heap 1 suspend).
 
 Deviation from Mini: requests carry `checkWork` (the checker's work grant, Obend.Elab.Work.checkWork),
-not Mini's nesting `typeFuel`; LIMITS pins 43237, the most any cohort program needs (MEASURED
-2026-10-31, Market-book-*), where Mini pinned typeFuel 4096 (lean/docs/REPORT-SPEC-20261030.md).
+not Mini's nesting `typeFuel`; LIMITS pins 57755, the most any cohort program needs (MEASURED
+2026-11-01, Market-*; it was 43237 before kinds were nominal in checking: each kinded record type an
+annotation names carries its kind's brand, five more type constructors, lean/docs/REPORT-C1-20261101.md),
+where Mini pinned typeFuel 4096 (lean/docs/REPORT-SPEC-20261030.md).
 
 A probe or a command whose outcome differs from Mini's is a port defect, not a new truth.
 
@@ -191,7 +193,7 @@ def tutorial():
 
 # ---------------------------------------------------------------- preview cohort (check-preview.ts)
 
-LIMITS = {"ticks": "100000", "heap": "100000", "stack": "10000", "checkWork": "43237"}
+LIMITS = {"ticks": "100000", "heap": "100000", "stack": "10000", "checkWork": "57755"}
 
 
 def sha256_file(path):

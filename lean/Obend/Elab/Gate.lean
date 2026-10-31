@@ -15,6 +15,7 @@ and its path. -/
 public import Obend.Elab.Prepare
 public import Obend.Elab.Work
 public import Obend.Core.Packet
+public import Obend.Core.Nominal
 
 @[expose] public section
 namespace Obend.Elab.Gate
@@ -83,7 +84,16 @@ def refusalReason (packet : DecodedPacket) : String :=
     | .error (.prepare (.checker (.linearArgumentDropped _ _ _))) =>
       "ownership refused: a linear parameter is used exactly once, and only by a linear parameter; one is not used, or is passed where it may be dropped or shared (the program checks with every quantity unrestricted)"
     | _ => "ownership refused: an affine or linear parameter is used more than once (both mean at most once), or one is captured by a closure that may run again (the program checks with every quantity unrestricted)"
-  | .typing => "typing refused: types disagree, a custody value is shared or captured, or an activity rule (an Activity is refused as an argument, record/extend field, specification or prototype component, or sum payload; a Plan must be a sum of first-order data; a response must be first-order data)"
+  | .typing =>
+    match admit packet with
+    | .error (.prepare (.checker r)) =>
+      match Obend.Core.Nominal.crossedKinds r with
+      | some (_, expected, actual) =>
+        "typing refused (kind-mismatch): kind " ++ expected ++ " is expected where kind " ++ actual ++
+          " is given; kinds are nominal, and two kinds with the same fields are two types"
+      | none => typingWords
+    | _ => typingWords
+where typingWords := "typing refused: types disagree, a custody value is shared or captured, or an activity rule (an Activity is refused as an argument, record/extend field, specification or prototype component, or sum payload; a Plan must be a sum of first-order data; a response must be first-order data)"
 
 def packetReceipt (value : Json) : Except String Json := do
   let packet ← decodePacket value
