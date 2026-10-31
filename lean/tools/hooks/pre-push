@@ -1,5 +1,11 @@
 #!/bin/sh
-# Tier 2 before a push: the teeth and the axiom census (lean/README.md, "Build").
+# Both tiers before a push: tier 1 (definitions and proofs), then the teeth and the axiom census
+# (lean/README.md, "Build"). Tier 2 alone let a tier-1 break reach dev once (2026-11-01).
 # Install once per clone: git config core.hooksPath lean/tools/hooks
 cd "$(git rev-parse --show-toplevel)/lean" || exit 1
-LEAN_NUM_THREADS=2 lake build Obend.Census Teeth
+log="${TMPDIR:-/tmp}/obend-prepush-$$.log"
+if LEAN_NUM_THREADS=2 lake build >"$log" 2>&1 && LEAN_NUM_THREADS=2 lake build Obend.Census Teeth >>"$log" 2>&1; then
+  grep -E "^(Build completed|✖|error)" "$log" | tail -3; rm -f "$log"
+else
+  grep -E "^(✖|error)" "$log" | head -20; echo "pre-push: build failed; full log at $log"; exit 1
+fi
