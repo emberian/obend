@@ -2,10 +2,12 @@ module
 /-
 # Obend.Spec.Proofs.C4Vectors — C4 linearization's published vectors and refusals
 
-pommette.scm's precedence vectors and refusals, four DAG local orders, fuel exhaustion named apart
-from inconsistency, and the ordered-presentation invariance property
-(`Obend.Spec.C4.OrderedPresentationInvariant`, stated, not proved) checked on 4000 seeded random
-DAGs with suffix marks. Each is a compiled theorem (`native_decide`, re-run and named by
+pommette.scm's precedence vectors and refusals, four DAG local orders, the refusals of an
+inconsistent graph, and the ordered-presentation invariance property
+(`Obend.Spec.C4.OrderedPresentationInvariant`) checked on 4000 seeded random DAGs with suffix marks,
+with inheritance order, local order, monotonicity and the suffix property checked of every accepted
+list (proved of `linearize` for every graph in `Obend.Spec.Proofs.C4`; these stay as tests of the
+implementation against pommette's published outputs). Each is a compiled theorem (`native_decide`, re-run and named by
 `#assert_compiled`). Statements as in minidregg `Compiler/ObjectiveBendC4Vectors.lean` (commit
 092027a2). An exposed-section leaf: nothing imports it.
 -/
@@ -73,10 +75,10 @@ theorem pommette_refusals :
 
 def precedenceGraph : Graph := ⟨fun x => (precedenceOf supers isStruct x).getD [], isStruct⟩
 
-/-- **Fuel exhaustion is not inconsistency.** A cyclic local order (A before B before C before A)
-is refused `inconsistent`; SBc's incompatible suffix parents are refused `inconsistent`; and a
-suffix chain that cannot end within its derived fuel (a suffix oracle whose chain cycles,
-`cyclicSuffix`) is refused `fuelExhausted`, never reported as an inconsistent graph. -/
+/-- **Refusals are inconsistencies.** A cyclic local order (A before B before C before A) is
+refused `inconsistent`; SBc's incompatible suffix parents are refused `inconsistent`; and a suffix
+oracle whose chain cycles (`cyclicSuffix`) is refused `inconsistent` too: its two parents' suffix
+tails lie on no one chain. The structural linearization has no fuel to run out of. -/
 def cyclicTable : List (String × List String) :=
   [("P", ["P", "S1"]), ("Q", ["Q", "S2"]), ("S1", ["S1", "U"]), ("U", ["U", "V"]), ("V", ["V", "U"]),
    ("S2", ["S2", "W"]), ("W", ["W", "X"]), ("X", ["X", "W"])]
@@ -84,14 +86,13 @@ def cyclicSuffix : Graph := ⟨fun x => (cyclicTable.lookup x).getD [x], fun x =
 
 def refusalKind : Except Refusal (List String × Option String) → String
   | .error (.inconsistent _ _) => "inconsistent"
-  | .error (.fuelExhausted _ _) => "fuel"
   | .ok _ => "ok"
 
-theorem fuel_is_not_inconsistency :
+theorem c4_refusals :
     refusalKind (linearize precedenceGraph [] [["A", "B"], ["B", "C"], ["C", "A"]]) = "inconsistent" ∧
     refusalKind (linearize (⟨fun x => if x == "SBc" then ["SBc", "sBs", "SBB"] else (precedenceOf supers isStruct x).getD [x],
       isStruct⟩ : Graph) ["SBc"] [["sBs", "SBB"]]) = "inconsistent" ∧
-    refusalKind (linearize cyclicSuffix ["X"] [["P", "Q"]]) = "fuel" := by
+    refusalKind (linearize cyclicSuffix ["X"] [["P", "Q"]]) = "inconsistent" := by
   native_decide
 def dag (order : List (List String)) : Option (List String) := (linearize precedenceGraph [] order).toOption.map (·.1)
 
@@ -191,7 +192,7 @@ theorem ordered_presentation_invariance_4000 :
 #assert_compiled pommette_vectors
 #assert_compiled pommette_refusals
 #assert_compiled dag_local_orders
-#assert_compiled fuel_is_not_inconsistency
+#assert_compiled c4_refusals
 #assert_compiled ordered_presentation_invariance_4000
 
 /-- The gate's marker line, computed from the same checks. -/

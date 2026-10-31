@@ -228,6 +228,8 @@ import Obend.Spec.LawCompile
 import Obend.Spec.PackageLaw
 import Obend.Spec.Parse
 import Obend.Spec.Preview
+import Obend.Spec.Proofs.C4
+import Obend.Spec.Proofs.C4Teeth
 import Obend.Spec.Proofs.C4Vectors
 import Obend.Spec.Proofs.Contract
 import Obend.Spec.Proofs.Ecosystem

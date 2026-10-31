@@ -64,9 +64,6 @@ inductive InheritRefusal
   | unknownLaw (name : String)
   /-- a law with a free index would mean something different in every position -/
   | openLaw (name : String)
-  /-- the linearization is not a precedence list of `head`: it does not start at `head`, repeats a
-  name, or breaks monotonicity or local precedence (`precedenceOk`) -/
-  | unordered (head : String)
   deriving DecidableEq, Repr
 
 /-- Each name's law, closed, in order. -/
@@ -82,29 +79,14 @@ def resolve (laws : List (String × Term)) : List String → Except InheritRefus
         | .error e => .error e
       else .error (.openLaw name)
 
-/-- No name twice. -/
-def nodupB : List String → Bool
-  | [] => true
-  | x :: xs => !xs.contains x && nodupB xs
-
-/-- What the inheritance theorems need of a precedence list (Barrett et al. 1996): it starts at
-`head`, names nothing twice, keeps every local chain of `parents` in order (LOCAL PRECEDENCE), and
-keeps every parent's own precedence list in order (MONOTONICITY: nothing a parent inherits skips
-over the parent's own order). -/
-def precedenceOk (g : Obend.Spec.C4.Graph) (head : String) (parents : List (List String))
-    (lin : List String) : Bool :=
-  lin.head? == some head && nodupB lin &&
-    parents.all fun chain => chain.isSublist lin && chain.all fun p => (g.precedence p).isSublist lin
-
-/-- The C4 precedence list of `head` with local parent chains `parents`, validated: C4's
-`linearize` (the Spec lane's, which has no theorem of its own) is run, and its list is accepted only
-when `precedenceOk` holds of it. On a tree the check always passes (`precedence_tree`); on the
-published vectors and 4000 seeded DAGs the same properties are checked of `linearize` itself
-(`Obend.Spec.Proofs.C4Vectors.checkDag`). -/
+/-- The C4 precedence list of `head` with local parent chains `parents`. What it is, for every graph,
+is proved of `Obend.Spec.C4.linearize` itself (`Obend.Spec.Proofs.C4`): it starts at `head`, names
+nothing twice, and keeps every local chain and every parent's own precedence list in order
+(`precedence_ok`). -/
 def precedence (g : Obend.Spec.C4.Graph) (head : String) (parents : List (List String)) :
     Except InheritRefusal (List String) :=
   match Obend.Spec.C4.linearize g [head] parents with
-  | .ok (lin, _) => if precedenceOk g head parents lin then .ok lin else .error (.unordered head)
+  | .ok (lin, _) => .ok lin
   | .error e => .error (.c4 e)
 
 /-! ## Trees -/

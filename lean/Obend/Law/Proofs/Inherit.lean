@@ -11,9 +11,9 @@ module
 * `effectiveVia_eval`: the same, through a C4 linearization of the parent graph and the name table.
 * `precedence_ok` (`precedence_monotone`, `precedence_local`): the list the effective law is built
   from starts at the head, repeats nothing, and keeps every parent's precedence list and every local
-  chain in order (Barrett et al. 1996).
-* `c3_tree_is_chain`: on a tree C4's `linearize` is the chain to the root; `precedence_tree`: the
-  validation never refuses an acyclic tree; `effectiveVia_tree`: the effective law is the
+  chain in order (Barrett et al. 1996): theorems of C4's `linearize` itself (`Obend.Spec.Proofs.C4`).
+* `c3_tree_is_chain`: on an acyclic tree C4's `linearize` is the chain to the root;
+  `precedence_tree`: so is the precedence; `effectiveVia_tree`: the effective law is the
   conjunction along the chain.
 * `effectiveVia_parent`, `child_never_widens`: a child's effective law admits nothing a parent's
   (precedence list, or effective law at a coherent parent) refuses.
@@ -21,6 +21,9 @@ module
 public import Obend.Law.Inherit
 public import Obend.Law.Proofs.Std
 public import Obend.Law.Proofs.Claim
+public import Obend.Spec.Proofs.C4
+import all Obend.Spec.C4
+import all Obend.Spec.Proofs.C4
 public import Obend.Tactic.Tooth
 namespace Obend.Law
 open Obend.Core.Term
@@ -228,18 +231,6 @@ public theorem effectiveVia_eval {g : Obend.Spec.C4.Graph} {laws : List (String 
 
 /-! ## Precedence lists: the head, no repeats, monotonicity, local precedence -/
 
-public theorem nodupB_sound : ∀ {l : List String}, nodupB l = true → l.Nodup
-  | [], _ => List.nodup_nil
-  | x :: xs, h => by
-      have h' : x ∉ xs ∧ nodupB xs = true := by simpa [nodupB] using h
-      exact List.nodup_cons.2 ⟨h'.1, nodupB_sound h'.2⟩
-
-public theorem nodupB_complete : ∀ {l : List String}, l.Nodup → nodupB l = true
-  | [], _ => rfl
-  | x :: xs, h => by
-      obtain ⟨hx, hxs⟩ := List.nodup_cons.1 h
-      simp [nodupB, hx, nodupB_complete hxs]
-
 /-- **What a precedence list is.** A list `precedence` accepts starts at the head, names nothing
 twice, keeps every local chain in order and every parent's own precedence list in order. -/
 public theorem precedence_ok {g : Obend.Spec.C4.Graph} {head : String} {parents : List (List String)}
@@ -248,14 +239,11 @@ public theorem precedence_ok {g : Obend.Spec.C4.Graph} {head : String} {parents 
       ∀ chain ∈ parents, ∀ p ∈ chain, (g.precedence p).Sublist lin := by
   unfold precedence at h
   split at h
-  · split at h
-    · rename_i hok
-      cases h
-      simp only [precedenceOk, Bool.and_eq_true, beq_iff_eq, List.all_eq_true,
-        List.isSublist_iff_sublist] at hok
-      obtain ⟨⟨hh, hn⟩, hp⟩ := hok
-      exact ⟨hh, nodupB_sound hn, fun c hc => (hp c hc).1, fun c hc p hp' => (hp c hc).2 p hp'⟩
-    · cases h
+  · rename_i lin' s hl
+    cases h
+    obtain ⟨rest, hr⟩ := Obend.Spec.C4.linearize_head hl
+    exact ⟨by simp [hr], Obend.Spec.C4.linearize_nodup hl, Obend.Spec.C4.linearize_local hl,
+      Obend.Spec.C4.linearize_monotone hl⟩
   · cases h
 
 /-- **Monotonicity** (Barrett et al. 1996): every parent's precedence list is kept, in order. -/
@@ -276,44 +264,98 @@ theorem chain_head (t : Tree) : ∀ (n : Nat) (x : String), ∃ rest, t.chain n 
   | 0, x => ⟨[], rfl⟩
   | n + 1, x => ⟨_, rfl⟩
 
-/-- **On a tree the C4 linearization is the chain to the root** (C3 and C4 agree with single
-inheritance): the linearization of `x` with its one parent is `x` followed by the parent's chain. -/
-public theorem c3_tree_is_chain (t : Tree) (n : Nat) (x : String) :
+theorem mergeN_chain (head : List String) :
+    ∀ (l : List String), l.Nodup → ∀ n, l.length ≤ n → Obend.Spec.C4.mergeN head n [l, []] = .ok l := by
+  intro l
+  induction l with
+  | nil => intro _ n _; cases n <;> rfl
+  | cons c r ih =>
+    intro hnd n hn
+    obtain ⟨hc, hr⟩ := List.nodup_cons.1 hnd
+    cases n with
+    | zero => simp at hn
+    | succ k =>
+      have hnext : Obend.Spec.C4.nextHead [c :: r, []] = some c := by
+        simp [Obend.Spec.C4.nextHead, List.findSome?, hc]
+      have hpop : Obend.Spec.C4.pop c [c :: r, []] = [r, []] := by
+        simp [Obend.Spec.C4.pop, Obend.Spec.C4.popOne]
+      simp only [Obend.Spec.C4.mergeN, hnext, hpop, List.all_cons, List.isEmpty_cons, Bool.false_and,
+        Bool.false_eq_true, ite_false, ih hr k (by simpa using hn)]
+
+/-- **On an acyclic tree the C4 linearization is the chain to the root** (C3 and C4 agree with
+single inheritance): the linearization of `x` with its one parent is `x` followed by the parent's
+chain. A cyclic "tree" has no linearization: a node would be its own ancestor. -/
+public theorem c3_tree_is_chain (t : Tree) (n : Nat) (x : String) (acyclic : (t.chain (n + 1) x).Nodup) :
     Obend.Spec.C4.linearize (t.graph n) [x] (t.parents x) = .ok (t.chain (n + 1) x, none) := by
   unfold Tree.parents
   cases hp : t.parent x with
-  | none => simp [Obend.Spec.C4.linearize, Tree.chain, hp]; rfl
+  | none =>
+    simp [Obend.Spec.C4.linearize, Obend.Spec.C4.tailOf, Obend.Spec.C4.cleanAll, Obend.Spec.C4.nodupB,
+      Obend.Spec.C4.merge, Obend.Spec.C4.mergeN, Tree.chain, hp]
   | some p =>
-      have : List.find? (fun _ => false) (t.chain n p).tail = none := List.find?_eq_none.2 (by simp)
-      simp [Obend.Spec.C4.linearize, Tree.chain, hp, Tree.graph, Obend.Spec.C4.superSuffix, this]; rfl
+    have hch : t.chain (n + 1) x = x :: t.chain n p := by simp [Tree.chain, hp]
+    rw [hch] at acyclic ⊢
+    obtain ⟨hx, hnd⟩ := List.nodup_cons.1 acyclic
+    obtain ⟨rest, hr⟩ := chain_head t n p
+    have dropAll : ∀ l : List String, l.dropWhile (fun _ => true) = [] := by
+      intro l; induction l with
+      | nil => rfl
+      | cons _ _ ih => simpa [List.dropWhile] using ih
+    have takeAll : ∀ l : List String, l.takeWhile (fun _ => true) = l := by
+      intro l; induction l with
+      | nil => rfl
+      | cons _ _ ih => simpa [List.takeWhile] using ih
+    have htail : (t.graph n).tailAt p = [] := by
+      simp [Obend.Spec.C4.Graph.tailAt, Obend.Spec.C4.Graph.suffixPart, Tree.graph, dropAll]
+    have hclean : ∀ l : List String, Obend.Spec.C4.clean [] l = some l := by
+      intro l; simp [Obend.Spec.C4.clean, dropAll, takeAll]
+    have hxp : x ≠ p := fun e => hx (by rw [hr, e]; exact List.mem_cons_self)
+    have hmerge : Obend.Spec.C4.merge [x] [t.chain n p, [p]] = .ok (t.chain n p) := by
+      rw [hr] at hnd ⊢
+      obtain ⟨hpr, hrn⟩ := List.nodup_cons.1 hnd
+      have hnext : Obend.Spec.C4.nextHead [p :: rest, [p]] = some p := by
+        simp [Obend.Spec.C4.nextHead, List.findSome?, hpr]
+      have hpop : Obend.Spec.C4.pop p [p :: rest, [p]] = [rest, []] := by
+        simp [Obend.Spec.C4.pop, Obend.Spec.C4.popOne]
+      have hgen : ∀ N, rest.length + 1 ≤ N →
+          Obend.Spec.C4.mergeN [x] N [p :: rest, [p]] = .ok (p :: rest) := by
+        intro N hN
+        cases N with
+        | zero => omega
+        | succ k =>
+          simp only [Obend.Spec.C4.mergeN, hnext, hpop, List.all_cons, List.isEmpty_cons, Bool.false_and,
+            Bool.false_eq_true, ite_false, mergeN_chain [x] rest hrn k (by omega)]
+      exact hgen _ (by simp)
+    simp only [Obend.Spec.C4.linearize, List.flatten_cons, List.flatten_nil, List.append_nil,
+      Obend.Spec.C4.tailOf, htail, Obend.Spec.C4.joinTail, List.isSuffixOf_nil_left, ite_true,
+      List.map_cons, List.map_nil, List.cons_append, List.nil_append, Obend.Spec.C4.cleanAll, hclean]
+    have hgp : (t.graph n).precedence p = t.chain n p := rfl
+    rw [hgp]
+    have hchk : (Obend.Spec.C4.nodupB [x] && [x].all fun h => ![t.chain n p, [p]].any (·.contains h)) = true := by
+      simp [Obend.Spec.C4.nodupB, hx, hxp]
+    simp only [hchk, ↓reduceIte, hmerge]
+    rfl
 
-/-- On an acyclic tree the validated precedence is the chain: the check never refuses. -/
+/-- A tree that linearizes is acyclic along the chain. -/
+public theorem tree_acyclic {t : Tree} {n : Nat} {x : String} {lin : List String} {s : Option String}
+    (h : Obend.Spec.C4.linearize (t.graph n) [x] (t.parents x) = .ok (lin, s)) :
+    (t.chain (n + 1) x).Nodup := by
+  unfold Tree.parents at h
+  cases hp : t.parent x with
+  | none => simp [Tree.chain, hp]
+  | some p =>
+    rw [hp] at h
+    have hch : t.chain (n + 1) x = x :: t.chain n p := by simp [Tree.chain, hp]
+    rw [hch]
+    have hl : t.chain n p ∈ [[p]].flatten.map (t.graph n).precedence ++ [[p]] := by simp [Tree.graph]
+    exact List.nodup_cons.2 ⟨Obend.Spec.C4.linearize_fresh h x List.mem_cons_self _ hl,
+      ((Obend.Spec.C4.linearize_candidates h _ hl).nodup (Obend.Spec.C4.linearize_nodup h))⟩
+
+/-- On an acyclic tree the precedence is the chain. -/
 public theorem precedence_tree (t : Tree) (n : Nat) (x : String) (acyclic : (t.chain (n + 1) x).Nodup) :
     precedence (t.graph n) x (t.parents x) = .ok (t.chain (n + 1) x) := by
   unfold precedence
-  rw [c3_tree_is_chain]
-  simp only
-  rw [if_pos]
-  simp only [precedenceOk, Bool.and_eq_true, beq_iff_eq, List.all_eq_true, List.isSublist_iff_sublist]
-  refine ⟨⟨by simp [Tree.chain], nodupB_complete acyclic⟩, ?_⟩
-  intro chain hc
-  unfold Tree.parents at hc
-  cases hp : t.parent x with
-  | none => rw [hp] at hc; cases hc
-  | some p =>
-      rw [hp] at hc
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
-      subst hc
-      have hch : t.chain (n + 1) x = x :: t.chain n p := by simp [Tree.chain, hp]
-      obtain ⟨rest, hr⟩ := chain_head t n p
-      refine ⟨?_, ?_⟩
-      · rw [hch, hr]
-        exact List.Sublist.cons _ (List.Sublist.cons_cons _ (List.nil_sublist _))
-      · intro q hq
-        simp only [List.mem_cons, List.not_mem_nil, or_false] at hq
-        subst hq
-        rw [hch]
-        exact List.Sublist.cons _ (List.Sublist.refl _)
+  rw [c3_tree_is_chain t n x acyclic]
 
 /-- **On a tree the effective law is the conjunction along the chain to the root.** -/
 public theorem effectiveVia_tree {t : Tree} {n : Nat} {laws : List (String × Term)} {x : String} {law : Term}
@@ -322,10 +364,11 @@ public theorem effectiveVia_tree {t : Tree} {n : Nat} {laws : List (String × Te
   obtain ⟨names, hn, hev⟩ := effectiveVia_eval h
   have : names = t.chain (n + 1) x := by
     unfold precedence at hn
-    rw [c3_tree_is_chain] at hn
-    simp only at hn
     split at hn
-    · cases hn; rfl
+    · rename_i lin s hl
+      cases hn
+      rw [c3_tree_is_chain t n x (tree_acyclic hl)] at hl
+      cases hl; rfl
     · cases hn
   subst this
   exact hev o new rq
@@ -414,18 +457,15 @@ theorem tree_tooth :
         fun t => okB (run 500 (applyLaw t (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO)))) = some true :=
   ⟨by decide +kernel, by decide +kernel, by decide +kernel⟩
 
-/-- An incoherent oracle: the parent's "precedence" does not start at the parent, so the produced
-list breaks local precedence, and the validated precedence refuses it. -/
+/-- An incoherent oracle: the parent's "precedence" does not start at the parent. The linearization
+still keeps the local chain and the parent's list: the parent follows what its list names. -/
 @[expose] public def incoherentGraph : Obend.Spec.C4.Graph := ⟨fun x => if x = "board" then ["room"] else [x], fun _ => false⟩
 
-theorem unordered_tooth :
-    (Obend.Spec.C4.linearize incoherentGraph ["board2"] [["board"]]).toOption.map (·.1) = some ["board2", "room"] ∧
-      (match precedence incoherentGraph "board2" [["board"]] with
-        | .error e => some e
-        | .ok _ => none) = some (.unordered "board2") :=
-  ⟨by decide +kernel, by decide +kernel⟩
+theorem incoherent_tooth :
+    (precedence incoherentGraph "board2" [["board"]]).toOption = some ["board2", "room", "board"] :=
+  by decide +kernel
 
-#tooth precedence_local by mutation precedenceOk := fun _ _ _ _ => true
-#tooth precedence_monotone by mutation precedenceOk := fun _ _ _ _ => true
+#tooth precedence_local by mutation Obend.Spec.C4.cleanAll := fun _ ls => some (ls.map fun _ => [])
+#tooth precedence_monotone by mutation Obend.Spec.C4.cleanAll := fun _ ls => some (ls.map fun _ => [])
 
 end Obend.Law

@@ -11,7 +11,7 @@ the demand machine runs, plus a typing proposal that the proof-producing checker
 ## Trust boundary (minidregg docs/OBJECTIVE-BEND-FRONTEND.md, "Trust boundary", in its words)
 
 Trusted, with no theorem: the parser (`Obend.Spec.Parse`), the elaborator and its typing
-proposal's choices (`Obend.Spec.Elaborate`), the C4 implementation (`Obend.Spec.C4`). There is no
+proposal's choices (`Obend.Spec.Elaborate`). There is no
 surface semantics, so nothing states that the core means what the source means.
 
 What is proved of the output (`Obend.Spec.Proofs.*`): `accepted_typed`, `accepted_never_refused`,
@@ -21,8 +21,9 @@ finished run of it extracts THE deep source evaluation of its term; `decode_json
 `decodePacket_term`: the checker's decoder inverts the front end's rendering, so a receiver types
 the front end's own term, never a parse of published bytes; the composition contract's laws
 (`run_append`, `run_assoc`, `checkLayer_ok`, `discharge_ok`); `Specification<T>` closed under
-`compose` (`composeTy_closed`, `compose_wrapper_typed`); the C4 vectors and the ordered-presentation
-invariance on 4000 seeded DAGs (compiled). The port is held byte-identical in behaviour to Mini's
+`compose` (`composeTy_closed`, `compose_wrapper_typed`); C4's linearization keeps local precedence
+and monotonicity, names nothing twice and has the suffix property (`Obend.Spec.Proofs.C4`); the C4
+vectors and the ordered-presentation invariance on 4000 seeded DAGs (compiled). The port is held byte-identical in behaviour to Mini's
 front end on Mini's own cohorts by `tests/run-obend-source.py` (REPORT-SPEC-20261030.md).
 -/
 public import Obend.Spec.Law

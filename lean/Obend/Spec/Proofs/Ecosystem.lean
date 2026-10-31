@@ -217,9 +217,8 @@ public theorem closure_law_inherited {v : View} {e : Release} {cl : Closure} (hc
   exact (Obend.Spec.PackageLaw.package_law_eval hl o n rq).1 ha r.name (hchosen r hr) c hcl
 
 /-! ## Teeth: a chain closed and admitted; a record step that moves the base; a diamond that
-reaches its base twice. (A two-parent C4 merge does not reduce in the kernel: its hash map hashes
-strings by an `extern`; the diamond's order is checked on the executable path,
-`tests/obend-source/three-package/`.) -/
+reaches its base once by two routes, its C4 order computed by the kernel; the same diamond after the
+base moved, refused by name. -/
 
 def baseR : Release := ⟨"base", "1.0.0", 1, "aa", []⟩
 def leftR : Release := ⟨"left", "1.0.0", 1, "bb", [.intention "base" 1]⟩
@@ -243,6 +242,8 @@ theorem ecosystem_tooth :
       ((close view0 chainR).toOption.map fun cl => (admit view0 cl.turn) matches .admitted _) = some true ∧
       ((close view0 chainR).toOption.map fun cl => admit view1 cl.turn) =
         some (.stale (.intention "base" 1 3 "1.0.0" "aa")) ∧
+      -- at view0 both routes reach base 1.0.0: one release, applied once, in C4 order
+      ((close view0 diamondR).toOption.map (·.order)) = some ["diamond", "left", "right", "base"] ∧
       -- at view1 `left` reaches base 1.1.0 by name, `right` base 1.0.0 by hash: two releases, refused
       (match close view1 diamondR with
         | .error e => decide (e = .incompatible "base" "1.1.0" "1.0.0")
