@@ -30,7 +30,7 @@ identity receipt's statement holds.
 public import Obend.Receipt.Negotiation
 public import Obend.Judge.Identity
 
-@[expose] public section
+public section
 namespace Obend.Receipt.Export
 open Lean (Json toJson)
 open Obend.Receipt.Negotiation

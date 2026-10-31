@@ -45,7 +45,7 @@ public import Obend.Judge.Class
 public import Obend.Slot.World
 public import Obend.Receipt.Merkle
 
-@[expose] public section
+public section
 namespace Obend.Receipt
 open Obend.Fold
 open Obend.Slot (World)
@@ -107,7 +107,7 @@ def ofExcept {α : Type} : Except Clause α → Outcome Clause
   | .ok _ => .ok
   | .error k => .refused k []
 
-def isOk : Outcome Clause → Bool
+@[expose] def isOk : Outcome Clause → Bool
   | .ok => true
   | _ => false
 
@@ -264,7 +264,7 @@ structure Naming (W Rest Row Fact Cell Pin : Type) where
   proofsOf : W → List Fact → List Merkle.Opening
 
 /-- The receipt of row `r` judged at accumulator `a`. -/
-def issue (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (a : W × Rest) (r : Row)
+@[expose] def issue (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (a : W × Rest) (r : Row)
     (quantifier : Shape) (trust : List (String × Trust)) (prev : Digest) :
     Receipt Cell Pin Fact Clause where
   pre := N.root a.2
@@ -305,7 +305,7 @@ receipt is never replayed against another row); the pre root of the rest it was 
 at its world, in order (`R.openings.map Prod.fst = A.reads (w', rest) r`), so a producer cannot omit a
 read it would rather not show; each opening is what its world says; the verdict and the post root
 recomputed. -/
-def recheck [DecidableEq Clause] [DecidableEq Fact] (A : Admission W Rest Row Fact Clause)
+@[expose] def recheck [DecidableEq Clause] [DecidableEq Fact] (A : Admission W Rest Row Fact Clause)
     (N : Naming W Rest Row Fact Cell Pin)
     (rest : Rest) (r : Row) (w' : W) (R : Receipt Cell Pin Fact Clause) : Bool :=
   N.rowDigest r == R.row && N.root rest == R.pre && R.openings.map Prod.fst == A.reads (w', rest) r &&
@@ -388,7 +388,7 @@ open Obend.Digest.HashBytes (Hash Collision)
 variable {W Rest Row Fact Clause Cell Pin Key : Type}
 
 /-- **What a stranger checks of the dated root**: every opening proof opens against it. -/
-def datedOpens (H : Hash) (R : Receipt Cell Pin Fact Clause) : Bool :=
+@[expose] def datedOpens (H : Hash) (R : Receipt Cell Pin Fact Clause) : Bool :=
   R.proofs.all fun o => opens H o R.dated
 
 /-- How a committed view is read: the committed map, the key of the fact an opening reads, and how a
@@ -399,12 +399,12 @@ structure Reading (W Fact Key : Type) where
   bit : Fact → Nat → Bool
 
 /-- The committed values read as the admission's look. -/
-def Reading.Coherent (D : Reading W Fact Key) (look : W → Fact → Bool) : Prop :=
+@[expose] def Reading.Coherent (D : Reading W Fact Key) (look : W → Fact → Bool) : Prop :=
   ∀ w f, D.bit f (D.C.val w (D.key f)) = look w f
 
 /-- Each opening is matched, in order, by its proof: the key's position in the schema, the map's
 size, a value that reads as the opening. -/
-def Reading.matched [BEq Key] (D : Reading W Fact Key) (R : Receipt Cell Pin Fact Clause) : Bool :=
+@[expose] def Reading.matched [BEq Key] (D : Reading W Fact Key) (R : Receipt Cell Pin Fact Clause) : Bool :=
   R.openings.length == R.proofs.length &&
   (R.openings.zip R.proofs).all fun op =>
     D.C.keys.idxOf? (D.key op.1.1) == some op.2.index && op.2.size == D.C.keys.length &&
@@ -479,7 +479,7 @@ theorem dated_sound [DecidableEq Clause] [DecidableEq Fact] [BEq Key] [LawfulBEq
   · exact .inr c
 
 /-- The naming whose dated root and opening proofs come from a committed view. -/
-def Naming.ofReading [BEq Key] (H : Hash) (D : Reading W Fact Key) (root : Rest → Digest) (rowDigest : Row → Digest)
+@[expose] def Naming.ofReading [BEq Key] (H : Hash) (D : Reading W Fact Key) (root : Rest → Digest) (rowDigest : Row → Digest)
     (law : Digest) (pinsOf : W → List Fact → List (Cell × Option Pin)) : Naming W Rest Row Fact Cell Pin where
   root := root
   rowDigest := rowDigest

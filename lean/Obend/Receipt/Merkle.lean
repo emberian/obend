@@ -23,7 +23,7 @@ from the leaf to a root, checking every sibling and the position are digest-size
 -/
 public import Obend.Core.Digest
 
-@[expose] public section
+public section
 namespace Obend.Receipt.Merkle
 open Obend.Core.Digest (digestWith Admissible admissible_of_lt binds_or_collides deployed digest_lt preimage lengthHash)
 open Obend.Digest.HashBytes (Hash Collision CollisionAmong)
@@ -33,7 +33,7 @@ set_option autoImplicit false
 def Small (n : Nat) : Bool := decide (n < 2 ^ 256)
 
 /-- A hash whose digests are digest-sized. -/
-def Bounded (H : Hash) : Prop := ∀ a b, digestWith H a b < 2 ^ 256
+@[expose] def Bounded (H : Hash) : Prop := ∀ a b, digestWith H a b < 2 ^ 256
 
 /-- The deployed hash is bounded (32 bytes out). -/
 theorem deployed_bounded : Bounded deployed := fun a b => digest_lt a b
@@ -49,7 +49,7 @@ termination_by l.length
 decreasing_by all_goals simp only [List.length_take, List.length_drop]; omega
 
 /-- The siblings on the way from leaf `i` to the root, top first. -/
-def path (H : Hash) (l : List Nat) (i : Nat) : List Nat :=
+@[expose] def path (H : Hash) (l : List Nat) (i : Nat) : List Nat :=
   if l.length < 2 then []
   else if i < l.length / 2 then root H (l.drop (l.length / 2)) :: path H (l.take (l.length / 2)) i
   else root H (l.take (l.length / 2)) :: path H (l.drop (l.length / 2)) (i - l.length / 2)
@@ -188,10 +188,10 @@ theorem climb_binds {H : Hash} (hb : Bounded H) :
 def leaf (H : Hash) (j v : Nat) : Nat := digestWith H j v
 
 /-- The leaves of a list of values. -/
-def leaves (H : Hash) (vs : List Nat) : List Nat := vs.mapIdx fun j v => leaf H j v
+@[expose] def leaves (H : Hash) (vs : List Nat) : List Nat := vs.mapIdx fun j v => leaf H j v
 
 /-- The root of a list of values. -/
-def mapRoot (H : Hash) (vs : List Nat) : Nat := root H (leaves H vs)
+@[expose] def mapRoot (H : Hash) (vs : List Nat) : Nat := root H (leaves H vs)
 
 /-- An opening: the map's size, the position, the value claimed there, and the siblings. -/
 structure Opening where
@@ -202,11 +202,11 @@ structure Opening where
   deriving DecidableEq, Repr
 
 /-- The honest opening of position `j`. -/
-def mapOpening (H : Hash) (vs : List Nat) (j : Nat) : Opening :=
+@[expose] def mapOpening (H : Hash) (vs : List Nat) (j : Nat) : Opening :=
   ⟨vs.length, j, vs.getD j 0, path H (leaves H vs) j⟩
 
 /-- **An opening opens against a root.** -/
-def opens (H : Hash) (o : Opening) (r : Nat) : Bool :=
+@[expose] def opens (H : Hash) (o : Opening) (r : Nat) : Bool :=
   Small o.index && climb H o.size o.index (leaf H o.index o.value) o.path == some r
 
 theorem leaves_length (H : Hash) (vs : List Nat) : (leaves H vs).length = vs.length := by
@@ -264,13 +264,13 @@ namespace Commit
 variable {W Key : Type}
 
 /-- The view's values, in schema order. -/
-def values (C : Commit W Key) (w : W) : List Nat := C.keys.map (C.val w)
+@[expose] def values (C : Commit W Key) (w : W) : List Nat := C.keys.map (C.val w)
 
 /-- **The view's root**: what a receipt is dated by. -/
-def dated (H : Hash) (C : Commit W Key) (w : W) : Nat := mapRoot H (C.values w)
+@[expose] def dated (H : Hash) (C : Commit W Key) (w : W) : Nat := mapRoot H (C.values w)
 
 /-- The opening of key `k`, if the schema has it. -/
-def opening [BEq Key] (H : Hash) (C : Commit W Key) (w : W) (k : Key) : Option Opening :=
+@[expose] def opening [BEq Key] (H : Hash) (C : Commit W Key) (w : W) (k : Key) : Option Opening :=
   (C.keys.idxOf? k).map fun j => mapOpening H (C.values w) j
 
 /-- **An honest opening opens against the dated root.** -/

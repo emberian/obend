@@ -29,7 +29,7 @@ judge is "this pin resolves this reference", its supports are the pin's. So:
 The judge compares references, so `Ref` has decidable equality; nothing else is assumed.
 -/
 public import Obend.Slot
-@[expose] public section
+public section
 
 namespace Obend
 
@@ -56,15 +56,15 @@ variable {W Ref Pin Fact Err : Type} [DecidableEq Ref] (I : Intention W Ref Pin 
 
 /-- The slot of a reference: candidates are pins, the judge is "it resolves `r`", the supports are
 the pin's. -/
-def slot (r : Ref) : Slot Fact Pin where
+@[expose] def slot (r : Ref) : Slot Fact Pin where
   supports := I.supports
   judge p := decide (I.ref p = r)
 
 /-- Every support of the pin holds at the world. -/
-def current (w : W) (p : Pin) : Bool := (I.supports p).all (I.holds w)
+@[expose] def current (w : W) (p : Pin) : Bool := (I.supports p).all (I.holds w)
 
 /-- The repair: resolve the pin's reference again at the world. -/
-def renew (w : W) (p : Pin) : Except Err Pin := I.resolve w (I.ref p)
+@[expose] def renew (w : W) (p : Pin) : Except Err Pin := I.resolve w (I.ref p)
 
 omit [DecidableEq Ref] in
 theorem current_iff (w : W) (p : Pin) : I.current w p = true ↔ ∀ f ∈ I.supports p, I.holds w f = true := by

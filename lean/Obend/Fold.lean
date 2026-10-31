@@ -26,7 +26,7 @@ Theorems, once for every admission:
 Instances: `Legal` (`Obend.Run.Fold.legalAdmission`, `legal_iff_fold`); the shared-World composition
 of runners (`Obend.Run.Shared`).
 -/
-@[expose] public section
+public section
 
 namespace Obend.Fold
 
@@ -50,12 +50,12 @@ structure Admission (W Rest Row Fact Clause : Type) where
 variable {W Rest Row Fact Clause : Type}
 
 /-- The fold. -/
-def Admission.run (A : Admission W Rest Row Fact Clause) (a : W × Rest) (rows : List Row) :
+@[expose] def Admission.run (A : Admission W Rest Row Fact Clause) (a : W × Rest) (rows : List Row) :
     Except Clause (W × Rest) :=
   rows.foldlM A.step a
 
 /-- What a row opens: each fact it reads, with what the world says of it. -/
-def Admission.openings (A : Admission W Rest Row Fact Clause) (a : W × Rest) (r : Row) : List (Fact × Bool) :=
+@[expose] def Admission.openings (A : Admission W Rest Row Fact Clause) (a : W × Rest) (r : Row) : List (Fact × Bool) :=
   (A.reads a r).map fun f => (f, A.look a.1 f)
 
 /-- **A receipt suffices**: the accumulator's roots and the row's openings decide the verdict. At
@@ -94,7 +94,7 @@ theorem dupd_ne (ls : (i : ι) → L i) {i j : ι} (l : L i) (h : j ≠ i) : dup
 
 /-- The joint step of a family sharing the world component: a row of member `i` is judged by `i`
 against the shared world and `i`'s own rest. -/
-def Family.step (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) (a : W × ((i : ι) → L i)) :
+@[expose] def Family.step (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) (a : W × ((i : ι) → L i)) :
     (Σ i, R i) → Except (Σ i, C i) (W × ((i : ι) → L i))
   | ⟨i, r⟩ =>
     match (A i).step (a.1, a.2 i) r with
@@ -167,7 +167,7 @@ state should be. The rely–guarantee condition weakens with it (`GuaranteeMoves
 must be allowed by the others), and `project_moves_run` is `project_run` for it. -/
 
 /-- The rows member `i` sees of a joint run: its own rows, and every other member's accepted MOVE. -/
-def projectMoves (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) (i : ι) :
+@[expose] def projectMoves (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) (i : ι) :
     W × ((i : ι) → L i) → List (Σ i, R i) → List (R i)
   | _, [] => []
   | a, ⟨j, r⟩ :: rs =>
@@ -178,7 +178,7 @@ def projectMoves (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) (i : ι) 
     | .error _ => []
 
 /-- Every member's accepted MOVE is a world move every other member allows. -/
-def GuaranteeMoves (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) : Prop :=
+@[expose] def GuaranteeMoves (A : (i : ι) → Admission W (L i) (R i) Fact (C i)) : Prop :=
   ∀ i j, i ≠ j → ∀ (a : W × L j) (r : R j) (b : W × L j), (A j).moves r = true →
     (A j).step a r = .ok b → (A i).allowed a.1 b.1 = true
 

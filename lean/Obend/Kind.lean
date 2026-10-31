@@ -31,7 +31,7 @@ The theorems are `Obend.Kind.Proofs`: `kind_law_inherited`, `create_carries`,
 -/
 public import Obend.Intention
 public import Obend.Law.Inherit
-@[expose] public section
+public section
 
 namespace Obend.Kind
 
@@ -66,7 +66,7 @@ structure KindPin where
 deriving DecidableEq, Repr
 
 /-- The registry names version `p.version` of kind `p.name`. -/
-def holds (ks : Kinds) (p : KindPin) : Bool :=
+@[expose] def holds (ks : Kinds) (p : KindPin) : Bool :=
   match ks.find p.name with
   | some c => c.version == p.version
   | none => false
@@ -154,7 +154,7 @@ def instanceGraph (k : String) (lk : List String) : Obend.Spec.C4.Graph :=
 
 /-- **An instance's effective law**: refused by name when its kind pin is stale; otherwise its own
 law, then every law on its kind's precedence list, by `Obend.Law.effectiveVia`. -/
-def effectiveOf (ks : Kinds) (i : Instance) : Except Refusal Term :=
+@[expose] def effectiveOf (ks : Kinds) (i : Instance) : Except Refusal Term :=
   if !kindRefs.current ks i.kind then .error (.stale i.kind)
   else if (ks.find i.name).isSome then .error (.clash i.name)
   else
@@ -185,7 +185,7 @@ def implFor {Body : Type} (impls : List (Impl Body)) (generic k : String) : Opti
 
 /-- **Dispatch by kind**: the implementation of `generic` of the first kind on the instance's kind's
 precedence list that has one (`none` when no kind there implements it). -/
-def dispatch {Body : Type} (ks : Kinds) (impls : List (Impl Body)) (generic : String) (i : Instance) :
+@[expose] def dispatch {Body : Type} (ks : Kinds) (impls : List (Impl Body)) (generic : String) (i : Instance) :
     Except Refusal (Option Body) :=
   match kindPrecedence ks ks.depth i.kind.name with
   | .ok lk => .ok (lk.findSome? (implFor impls generic))
