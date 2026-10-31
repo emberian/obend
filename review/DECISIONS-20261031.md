@@ -53,3 +53,16 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 ProofEng (speed, restructuring, waterfall); Extends (cross-package `extends`, intentions as slots,
 laws across packages, orthogonal protocols); Vault (`obend open`).
+
+## Plan for the open items (2026-10-31, launched)
+
+| item | lane | brief |
+|---|---|---|
+| World non-return law; renames; runner authority and descriptor; adapter gaps | SlotRun (opus) | `lean/docs/LANE-SLOTRUN-BRIEF-20261031.md` |
+| machine-to-`Admits`; `c3_tree_is_chain`; `keeps` typing; laws reach the runner | LawFinish (opus) | `lean/docs/LANE-LAWFINISH-BRIEF-20261031.md` |
+| the trees consuming `obend` | Adoption study (opus, read-only) | `review/ADOPTION-BRIEF-20261031.md` |
+| `≈b`, `mix_assoc`, Iris-Lean usability | Equiv study and spike (opus) | `review/EQUIV-BRIEF-20261031.md` |
+| the six unfetched papers | Papers (sonnet) | `review/PAPERS-BRIEF-20261031.md` |
+| expose-all tightening | after ProofEng lands (same files) | queued |
+| Elab leftovers; Simple-sub template elaborator; carry | after Extends lands (Spec files) | queued |
+| Leaf emitter and refinement | after the Equiv spike and the runner adapter | queued |
