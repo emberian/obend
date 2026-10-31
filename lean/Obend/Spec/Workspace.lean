@@ -290,7 +290,7 @@ def judge (c : Closed) (old new : Json) : Except String Json := do
   let law ← match effectiveLaw c S with
     | .ok t => pure t
     | .error e => throw ("open clause " ++ e.name)
-  let rq := Law.requestAt "member" "member" 0 1000000 Law.writeO none none 0 0
+  let rq := Law.requestAt "member" "member" 0 1000000 Law.writeO none none ⟨0⟩ 0
   let r := Law.run 200000 (Law.applyLaw law o n rq)
   let clauses := c.closure.order.flatMap fun pkg => ((c.laws.lookup pkg).getD []).map (PackageLaw.clauseName pkg ·.1)
   if Law.okB r then return Json.mkObj [("status", toJson "admitted"), ("clauses", toJson clauses)]

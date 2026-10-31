@@ -17,7 +17,7 @@ The fragment, exactly (G1B-ENFORCED-LAW-DESIGN; anything else refuses
     ATOM  ::= REF == INT | REF <= INT | REF in [INT, …]
             | REF == REF | REF <= REF | REF <= REF + INT
             | monotone(FIELD) | writeOnce(FIELD)
-    REF   ::= new.FIELD | request.subject | request.caller | request.height | request.turn
+    REF   ::= new.FIELD | request.subject | request.caller | request.turn | ledger.height
     INT   ::= -?[0-9]+
 
 `implies` binds loosest and associates to the right; `or` then `and` associate to the left;
@@ -92,10 +92,11 @@ def LawExpr.fieldsPlain : LawExpr → Bool
 
 /-! ## Meaning, over the declared-state data (minidregg `Kernel/ObjectLaw.lean`) -/
 
-/-- The request facts a law may read: the subject whose authority the write carries (`none` in
-a frame no grant covers, so every atom reading it fails closed), the calling object, the height
-and the kernel turn. The kernel's `Facts` carries more (the target, the patience); a law reads
-these four. -/
+/-- The kernel facts a law may read: the subject whose authority the write carries (`none` in
+a frame no grant covers, so every atom reading it fails closed), the calling object and the kernel
+turn; and the LEDGER's height (consensus time: `ledger.height`, supplied by the ledger the act
+commits to, never by the request; `Obend.Law.Consensus`). The kernel's `Facts` carries more (the
+target, the patience); a law reads these four. -/
 structure Facts where
   subject : Option Nat
   caller : Option Nat
@@ -176,7 +177,7 @@ def LawRef.render : LawRef → String
   | .field name => "new." ++ name
   | .subject => "request.subject"
   | .caller => "request.caller"
-  | .height => "request.height"
+  | .height => "ledger.height"
   | .turn => "request.turn"
 
 def LawExpr.render : LawExpr → String
@@ -257,7 +258,6 @@ def startsInt : List Tok → Bool
 def requestFact : String → Option LawRef
   | "subject" => some .subject
   | "caller" => some .caller
-  | "height" => some .height
   | "turn" => some .turn
   | _ => none
 
@@ -267,13 +267,18 @@ def parseRef : List Tok → Except String (LawRef × List Tok)
     | .sym "." :: _ => refuse ("the nested field path new." ++ field ++ ".… (edition 1 reads top-level fields of the \
         declared state only)")
     | _ => .ok (.field field, rest)
+  | .ident "ledger" :: .sym "." :: .ident "height" :: rest => .ok (.height, rest)
+  | .ident "ledger" :: .sym "." :: .ident fact :: _ =>
+    refuse ("ledger." ++ fact ++ " (a law reads the ledger's height, ledger.height)")
+  | .ident "request" :: .sym "." :: .ident "height" :: _ =>
+    refuse "request.height: the height is a ledger fact, never a request field (write ledger.height)"
   | .ident "request" :: .sym "." :: .ident fact :: rest =>
     match requestFact fact with
     | some ref => .ok (ref, rest)
-    | none => refuse ("request." ++ fact ++ " (a law reads request.subject, request.caller, request.height and \
-        request.turn)")
+    | none => refuse ("request." ++ fact ++ " (a law reads request.subject, request.caller and request.turn, \
+        and ledger.height)")
   | .ident "old" :: _ => refuse "old.FIELD outside monotone(FIELD) and writeOnce(FIELD)"
-  | t :: _ => refuse (t.render ++ " where a reference new.FIELD or request.FACT was expected")
+  | t :: _ => refuse (t.render ++ " where a reference new.FIELD, request.FACT or ledger.height was expected")
   | [] => refuse "a comparison missing its reference"
 
 def parseIntList : Nat → List Tok → Except String (List Int × List Tok)

@@ -44,12 +44,17 @@ def host : Host Nat Unit Fact := ⟨fun _ _ => true, fun _ => ⟨fun _ => true, 
 /-- The deployment requires and spends nothing. -/
 def sp : Spec sig Unit Fact Unit := ⟨fun _ => none, fun _ => [], fun _ => []⟩
 
-/-- The board's effective law judges the write, signed by `agent`. -/
-def J (agent : String) : LawJudge Nat Fact Op where
+/-- What `agent` submits: the board's request, less the height, claiming height `seen` (if any). -/
+def subBy (agent : String) (seen : Option Nat := none) : Submission :=
+  ⟨agent, agent, 0, 9, writeO, none, none, 0, seen⟩
+
+/-- The board's effective law judges the write, signed by `agent`, at the ledger's height 0. -/
+def J (agent : String) (seen : Option Nat := none) : LawJudge Nat Fact Op where
   embed := id
   classify := some
   classify_embed := fun _ => rfl
-  act := fun v o => some (totalIs v, totalIs o.2, rqBy agent agent writeO)
+  act := fun v o => some (totalIs v, totalIs o.2, subBy agent seen)
+  consensus := fun _ => ⟨0⟩
   lin := boardLaws
   policy := fun _ => true
   limits := ⟨4096, 4096⟩
@@ -87,7 +92,7 @@ theorem room_named :
       ∃ pre L post, boardLaws = pre ++ ("room", L) :: post ∧
         (∀ q ∈ pre, Admits q.2 (totalIs 0) (totalIs 9) (rqBy "ann" "ann" writeO)) ∧
         RefusesAs L (totalIs 0) (totalIs 9) (rqBy "ann" "ann" writeO) "total over the bound" :=
-  dispatch_refused_names (J := J "ann") boardLaws_closed (k := fun _ => .ret ()) rfl rfl rfl rfl
+  dispatch_refused_names (J := J "ann") boardLaws_closed (k := fun _ => .ret ()) rfl rfl rfl rfl rfl
     (by decide +kernel)
 
 /-- The general admission theorem at the fixture: Ann's accepted dispatch reaches a configuration
@@ -103,12 +108,32 @@ theorem ann_law_admitted : ∃ c, Reachable (lawHost host (J "ann")) (lawSpec sp
       have reach : Reachable _ _ _ c := .step _ .init h
       refine ⟨c, reach, ?_⟩
       have hlog : c.log = [.dispatch ⟨(), 3⟩] := run_dispatch_log h
-      have := reachable_law_admitted boardLaws_closed reach 0 ⟨(), 3⟩ (by rw [hlog]; rfl)
-        (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO) rfl
-      exact this.2
+      obtain ⟨rq, hs, _, all⟩ := reachable_law_admitted boardLaws_closed reach 0 ⟨(), 3⟩ (by rw [hlog]; rfl)
+        (totalIs 0) (totalIs 3) (subBy "ann") rfl
+      cases hs
+      exact all
+
+/-- **Consensus time: a submission claiming a future height is refused**, naming `current`, before
+the board's laws run (Ann's write of 3, admitted at height 0, claims height 5). -/
+theorem future_refused :
+    missingIn (Obend.Run.run (lawHost host (J "ann" (some 5))) (lawSpec sp (J "ann" (some 5))) (Cfg.init (obj 3) 0)
+      (.dispatch ⟨(), 3⟩)) = [.current ⟨(), 3⟩, .admitted ⟨(), 3⟩] := by decide +kernel
+
+/-- **A claim at the ledger's height is the same write**: Ann claiming height 0 is admitted. -/
+theorem past_admitted :
+    accepted (Obend.Run.run (lawHost host (J "ann" (some 0))) (lawSpec sp (J "ann" (some 0))) (Cfg.init (obj 3) 0)
+      (.dispatch ⟨(), 3⟩)) = true := by decide +kernel
+
+/-- The general theorem at the fixture. -/
+theorem future_named :
+    ∃ missing dead, Obend.Run.run (lawHost host (J "ann" (some 5))) (lawSpec sp (J "ann" (some 5))) (Cfg.init (obj 3) 0)
+        (.dispatch ⟨(), 3⟩) = .error (.unadmitted ⟨(), 3⟩ missing dead) ∧ LawFact.current ⟨(), 3⟩ ∈ missing :=
+  dispatch_future_refused (J := J "ann" (some 5)) (k := fun _ => .ret ()) rfl rfl rfl rfl rfl (by decide)
 
 -- Without the law's requirements the runner admits what the law refuses: the proof no longer checks.
 #tooth legal_law_admitted by mutation lawRequires := fun _ _ => []
 #tooth dispatch_refused_names by mutation lawRequires := fun _ _ => []
+-- A judge that reads the height the submission claims lets the future through.
+#tooth future_refused by mutation Obend.Law.sealAt := fun c s => .ok (s.request ⟨(s.seen.getD c.height)⟩)
 
 end Obend.Law.LawJudgeTeeth

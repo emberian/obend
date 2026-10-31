@@ -525,6 +525,45 @@ public theorem member_receipt_dated_verdict [DecidableEq Fact] {i₀ : Ix} (O : 
   exact Obend.Receipt.dated_verdict Obend.Receipt.Merkle.deployed_bounded _ N (viewReading L base keys)
     (viewReading_coherent keys) a r hm d (by exact hd) hc hmt
 
+/-! ## Consensus time -/
+
+omit [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Cand] in
+theorem ledgerStep_height {d d' : L.Rec} {r : LRow ι W Tok L.Rec} (h : ledgerStep L d r = .ok d') :
+    L.height d ≤ L.height d' :=
+  L.allowed_height _ _ (ledgerStep_allowed L h)
+
+/-- **Consensus time never goes back**: every joint transition keeps the ledger's height or raises
+it, and a commit raises it. -/
+public theorem jrun_height_mono {i₀ : Ix} {J J' : JCfg L S Hole A P Cand Fact Ob i₀}
+    {ev : JEvent ι W S Hole A P Cred Cand Fact L.Rec} (h : jrun L base sp au k J ev = .ok J') :
+    L.height J.led ≤ L.height J'.led := by
+  cases ev with
+  | world w =>
+    simp only [jrun] at h; split at h
+    · rename_i d hd; cases h; exact ledgerStep_height hd
+    · cases h
+  | dispatch i o =>
+    simp only [jrun] at h; split at h
+    · split at h
+      · rename_i d hd; cases h; exact ledgerStep_height hd
+      · cases h
+    · split at h <;> cases h
+    · cases h
+  | abandon i o =>
+    simp only [jrun] at h; split at h
+    · split at h
+      · rename_i d hd; cases h; exact ledgerStep_height hd
+      · cases h
+    · cases h
+  | own i ev =>
+    simp only [jrun] at h; split at h
+    · cases h
+    · cases h
+    · cases h
+    · split at h
+      · cases h; exact Nat.le_refl _
+      · cases h
+
 /-! ## The headline -/
 
 variable {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole A Tok Fact Ob i₀}
@@ -831,6 +870,13 @@ public theorem joint_once {J : JCfg L S Hole A P Cand Fact Ob i₀}
   have hwi := of_decide_eq_true hgi.2
   have hwj := of_decide_eq_true hgj.2
   rw [← hwi, ← hwj, this]
+
+/-- **Every runner reads the ledger's consensus**: a law judging runner `i`'s write at its world
+reads the ledger's height (the runner's world is the ledger's record). -/
+public theorem joint_consensus {J : JCfg L S Hole A P Cand Fact Ob i₀}
+    (h : JReachable L base sp au k (JCfg.init L d₀ O stored₀) J) (i : ι) :
+    L.consensus (J.cfgs i).cfg.world = L.consensus J.led := by
+  rw [(jreachable_inv hs₀ hg₀ h).coupled i]
 
 /-- **Coupling**: every runner's world is the ledger. -/
 public theorem joint_coupled {J : JCfg L S Hole A P Cand Fact Ob i₀}

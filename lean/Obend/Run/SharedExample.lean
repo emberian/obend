@@ -43,6 +43,7 @@ structure NRec where
   raw : Wv
   spent : List Tok
   grants : List (Grant Buyer Tok)
+  height : Nat
 
 /-- What an abandonment does to the record (a `#tooth` mutation target): nothing; the consumption
 is durable. -/
@@ -61,10 +62,11 @@ def nledger : Ledger Buyer Wv Tok where
   spent := NRec.spent
   grants := NRec.grants
   stepRaw := stepW
-  commit d i t := ⟨d.raw, d.spent ++ [t], d.grants ++ [⟨t, i, d.grants.length⟩]⟩
-  setRaw d w := ⟨w, d.spent, d.grants⟩
+  commit d i t := ⟨d.raw, d.spent ++ [t], d.grants ++ [⟨t, i, d.grants.length⟩], d.height + 1⟩
+  setRaw d w := ⟨w, d.spent, d.grants, d.height + 1⟩
   onAbandon d _ := ledgerAbandon d
-  allowed d d' := decide (d.raw = d'.raw) || stepW d.raw d'.raw
+  allowed d d' := (decide (d.raw = d'.raw) || stepW d.raw d'.raw) && decide (d.height ≤ d'.height)
+  height := NRec.height
   commit_raw _ _ _ := rfl
   commit_spent _ _ _ := rfl
   commit_grants _ _ _ := rfl
@@ -76,6 +78,8 @@ def nledger : Ledger Buyer Wv Tok where
   allowed_commit _ _ _ := by simp
   allowed_setRaw _ _ h := by simp [h]
   allowed_onAbandon _ _ := by simp [ledgerAbandon]
+  commit_height _ _ _ := rfl
+  allowed_height _ _ h := by simp only [Bool.and_eq_true, decide_eq_true_eq] at h; exact h.2
   abandon_spent d _ := (ledgerAbandon_durable d).1
   abandon_grants d _ := (ledgerAbandon_durable d).2
 
@@ -84,7 +88,7 @@ theorem nledger_durable : nledger.Durable := nledger.durable
 
 def base : Wv → View Tok Fact := host.view
 
-def d₀ : NRec := ⟨everything, [], []⟩
+def d₀ : NRec := ⟨everything, [], [], 0⟩
 
 abbrev BCfg := JCfg nledger sig HoleN Res Unit NCand Fact Ob .idle
 abbrev BEv := JEvent Buyer Wv sig HoleN Res Unit Unit NCand Fact NRec
@@ -179,7 +183,7 @@ theorem general_instances :
 #tooth alice_wins by mutation sharedLive := fun {_ _ _ _} [_] _ base d t => (base (Ledger.raw _ d)).live t
 -- Durability is a field: a record whose abandonment erases the consumption fails the obligation the
 -- structure consumes, so it is not a `Ledger` (and `nledger` cannot be rebuilt over it).
-#tooth ledgerAbandon_durable by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants⟩
+#tooth ledgerAbandon_durable by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants, d.height⟩
 -- Without propagating the ledger's moves, Bob does not see Alice's commit.
 #tooth coupled_after_commit by mutation propagate :=
   fun {_ _ _ _ _ _ _ _ _ _ _ _} [_] [_] [_] [_] [_] _ _ _ _ _ {_} _ cs => cs

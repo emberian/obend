@@ -7,7 +7,10 @@ number of controlled runners (`Obend.Run.Control`, indexed by `ι`) share one au
 the LEDGER, whose laws are fields (`Ledger`): a commit records a token's consumption and its grant
 (winner and epoch) in one step; a move of the raw world and an abandonment leave the consumption and
 the grants as they were (the raw world may call a spent token live again; it cannot unspend it).
-Durability is a field (`abandon_spent`, `abandon_grants`): a record that releases on abandonment is
+Consensus time is a field too: `height`, which a commit advances and no allowed move lowers; a
+law judging a runner's write reads it (`Ledger.consensus`, `Obend.Run.LawJudge.consensus`), never a
+height the request carries (`joint_height_mono`, `joint_consensus`). Durability is a field
+(`abandon_spent`, `abandon_grants`): a record that releases on abandonment is
 not a `Ledger` (the tooth `nledger` in `Obend.Run.SharedExample`). Each runner's host is built from
 the ledger (`localHost`): it reads facts from the raw world and a token as live only while the raw
 world says so AND the ledger has not consumed it (`sharedLive`, the shared mask).
@@ -42,6 +45,7 @@ once globally, and the loser's refusal names the winner and the epoch.
 public import Obend.Run.Proofs.Control
 public import Obend.Run.Fold
 public import Obend.Receipt
+public import Obend.Law.Syntax
 @[expose] public section
 
 namespace Obend.Run.Shared
@@ -72,6 +76,8 @@ structure Ledger (ι W Tok : Type) where
   onAbandon : Rec → ι → Rec
   /-- the moves of the record every runner's host accepts -/
   allowed : Rec → Rec → Bool
+  /-- CONSENSUS TIME: the ledger's height, the one clock every law reads (`Obend.Law.Consensus`) -/
+  height : Rec → Nat
   commit_raw : ∀ d i t, raw (commit d i t) = raw d
   commit_spent : ∀ d i t, spent (commit d i t) = spent d ++ [t]
   commit_grants : ∀ d i t, grants (commit d i t) = grants d ++ [⟨t, i, (grants d).length⟩]
@@ -83,10 +89,17 @@ structure Ledger (ι W Tok : Type) where
   allowed_commit : ∀ d i t, allowed d (commit d i t) = true
   allowed_setRaw : ∀ d w, stepRaw (raw d) w = true → allowed d (setRaw d w) = true
   allowed_onAbandon : ∀ d i, allowed d (onAbandon d i) = true
+  /-- a commit is a new height -/
+  commit_height : ∀ d i t, height (commit d i t) = height d + 1
+  /-- no allowed move goes back in time -/
+  allowed_height : ∀ d d', allowed d d' = true → height d ≤ height d'
   /-- DURABLE: an abandonment releases nothing (the call abandoned stays dispatched, its
   consumption and its grant stand) -/
   abandon_spent : ∀ d i, spent (onAbandon d i) = spent d
   abandon_grants : ∀ d i, grants (onAbandon d i) = grants d
+
+/-- The consensus every law reads at a record: the ledger's height. -/
+def Ledger.consensus {ι W Tok : Type} (L : Ledger ι W Tok) (d : L.Rec) : Obend.Law.Consensus := ⟨L.height d⟩
 
 /-- The ledger is DURABLE (an abandonment releases nothing), as one proposition. Every `Ledger` is
 (`Ledger.durable`): the law is a field. -/

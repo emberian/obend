@@ -16,7 +16,8 @@ What the fragment reads, and how the compiled term reads it:
   boolean `1` or `0` (`scalarOf`); a field `S` lacks, or holds at another type, is ABSENT, and
   every comparison with an absent reading is false (`denote`'s rule), statically.
 * `request.subject`, `request.caller`: the request's `optNatTy` fields, absent at `none`;
-  `request.height`, `request.turn`: its natural fields (`Obend.Law.reqTy`).
+  `request.turn`: its natural field; `ledger.height`: the record's `height`, which `requestAt`
+  takes from the ledger's `Consensus`, never from the request (`Obend.Law.reqTy`).
 * `monotone(F)` and `writeOnce(F)`: the old state's `F` against the new one's. At a first write
   there is no old state (`denote … none …`): `monotone` is false and `writeOnce` true.
 * Integer constants: every reading is a natural (`scalarOf`), so a comparison with a negative
@@ -179,7 +180,7 @@ def oldOf (src : OldSrc) (o n : Data) : Option Data :=
 
 /-- The request a kernel builds for an act with the fragment's facts. -/
 def reqOf (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) (facts : Facts) : Data :=
-  requestAt agent principal notBefore validUntil occasion facts.subject facts.caller facts.height facts.turn
+  requestAt agent principal notBefore validUntil occasion facts.subject facts.caller ⟨facts.height⟩ facts.turn
 
 /-- The state's fields fit `S` at field `f`: a natural or boolean field of `S` holds a natural or
 boolean (the first field so named), and a field `S` does not read as a scalar holds no scalar. -/

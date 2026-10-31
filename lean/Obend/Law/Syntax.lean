@@ -21,6 +21,13 @@ the clause, so a clause may open a `case` of its own (`At.under`) and still name
 (`Obend.Law.Proofs.Std`), never an evaluation of the term: `Admits` and `Refuses` below are stated
 over `Evaluates`.
 
+Consensus time (`review/VISION-CLAUDE-20261031.md` §2.1 item 4): the request record's `height` is
+the LEDGER's, never the submitter's. `requestAt` takes it as a `Consensus` (the ledger's facts every
+law reads); what a submitter sends is a `Submission`, which has no height field and may only CLAIM
+the height it was made at (`seen`); `sealAt` builds the request at the ledger's consensus, refusing a
+claim from the future (`futureHeight`), so no law can read a height a request chose
+(`seal_claim_irrelevant`).
+
 Deviation from the brief's `reqTy S`: the request type does not depend on the state type (it did
 not in nano either), so it is `reqTy`, and `lawTy S` is the only type indexed by `S`.
 -/
@@ -186,18 +193,84 @@ def optNat : Option Nat → Data
   | none => .variant "none" (.record [])
   | some k => .variant "some" (.natural k)
 
+/-- **The ledger's facts every law reads**: the consensus height. A ledger supplies it; a request
+never does. -/
+structure Consensus where
+  height : Nat
+  deriving DecidableEq, Repr
+
 /-- A request with the kernel's facts: who signs, under whose authority, in which window, on which
-occasion; the subject and caller (if any), the height and the turn. -/
+occasion; the subject and caller (if any), the turn; and the ledger's consensus `c`, whose height is
+the record's `height`. -/
 def requestAt (agent principal : String) (notBefore validUntil : Nat) (occasion : Data)
-    (subject caller : Option Nat) (height turn : Nat) : Data :=
-  .record [("agent", .label agent), ("caller", optNat caller), ("height", .natural height),
+    (subject caller : Option Nat) (c : Consensus) (turn : Nat) : Data :=
+  .record [("agent", .label agent), ("caller", optNat caller), ("height", .natural c.height),
     ("notBefore", .natural notBefore), ("occasion", occasion), ("principal", .label principal),
     ("subject", optNat subject), ("turn", .natural turn), ("validUntil", .natural validUntil)]
 
 /-- A request: who signs, under whose authority, in which window, on which occasion (no subject,
-no caller, height and turn 0). -/
+no caller, turn 0, at the genesis consensus). -/
 def request (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) : Data :=
-  requestAt agent principal notBefore validUntil occasion none none 0 0
+  requestAt agent principal notBefore validUntil occasion none none ⟨0⟩ 0
+
+/-- **What a submitter sends**: everything a request carries except the ledger's facts. `seen` is
+the height the submitter claims it acted at: a claim the ledger checks, never a value a law reads. -/
+structure Submission where
+  agent : String
+  principal : String
+  notBefore : Nat
+  validUntil : Nat
+  occasion : Data
+  subject : Option Nat
+  caller : Option Nat
+  turn : Nat
+  seen : Option Nat
+
+/-- Why a submission cannot be sealed. -/
+inductive SealRefusal where
+  /-- the submission claims a height the ledger has not reached -/
+  | futureHeight (claimed current : Nat)
+  deriving DecidableEq, Repr
+
+/-- The request a submission becomes at consensus `c`. -/
+def Submission.request (s : Submission) (c : Consensus) : Data :=
+  requestAt s.agent s.principal s.notBefore s.validUntil s.occasion s.subject s.caller c s.turn
+
+/-- **Seal a submission at the ledger's consensus**: the request's height is the ledger's; a claim of
+a height the ledger has not reached is refused. -/
+def sealAt (c : Consensus) (s : Submission) : Except SealRefusal Data :=
+  match s.seen with
+  | some h => if c.height < h then .error (.futureHeight h c.height) else .ok (s.request c)
+  | none => .ok (s.request c)
+
+/-- A sealed request is the submission at the ledger's consensus. -/
+theorem seal_ok {c : Consensus} {s : Submission} {d : Data} (h : sealAt c s = .ok d) : d = s.request c := by
+  unfold sealAt at h; split at h
+  · split at h
+    · cases h
+    · cases h; rfl
+  · cases h; rfl
+
+/-- The sealed request's height is the ledger's. -/
+theorem seal_height {c : Consensus} {s : Submission} {d : Data} (h : sealAt c s = .ok d) :
+    d.field "height" = some (.natural c.height) := by
+  rw [seal_ok h]; simp [Submission.request, requestAt, Data.field, fieldsLookup]
+
+/-- **The claim is irrelevant to what a law reads**: two submissions that differ only in the height
+they claim seal, when both seal, to the same request. -/
+theorem seal_claim_irrelevant {c : Consensus} {s : Submission} {h h' : Option Nat} {d d' : Data}
+    (hd : sealAt c { s with seen := h } = .ok d) (hd' : sealAt c { s with seen := h' } = .ok d') : d = d' := by
+  rw [seal_ok hd, seal_ok hd']; rfl
+
+/-- **A claim from the future is refused**, naming the claim and the ledger's height. -/
+theorem seal_future {c : Consensus} {s : Submission} {h : Nat} (hs : s.seen = some h) (hlt : c.height < h) :
+    sealAt c s = .error (.futureHeight h c.height) := by
+  simp [sealAt, hs, hlt]
+
+/-- A claim at or before the ledger's height seals. -/
+theorem seal_past {c : Consensus} {s : Submission} {h : Nat} (hs : s.seen = some h) (hle : h ≤ c.height) :
+    sealAt c s = .ok (s.request c) := by
+  simp [sealAt, hs, Nat.not_lt.2 hle]
 
 /-- The occasions, as data. -/
 def birthO : Data := .variant "birth" (.record [])

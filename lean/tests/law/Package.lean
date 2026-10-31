@@ -23,7 +23,7 @@ record Tally:
   total: Nat
   open: Bool
 law bounded: new.total <= 1000 and monotone(total)
-law gated: new.open == 0 implies new.total <= request.height
+law gated: new.open == 0 implies new.total <= ledger.height
 law once: writeOnce(total) or request.caller == 7
 def seed() -> Nat:
   0n
@@ -76,4 +76,10 @@ def verdict (law : Obend.Core.Term.Term) (o n rq : Data) : Option Bool :=
   check "a law outside the fragment refuses"
     (match lower [bad] 0 "seed" (Json.arr #[]) (Json.arr #[]) limits "application" with
       | .error d => d.message.startsWith Obend.Spec.Law.refusalPrefix || (d.message.splitOn "enforced fragment").length > 1
+      | .ok _ => false)
+  -- Consensus time: the height is the ledger's; a law reading it off the request refuses by name.
+  let asked : SourceModule := ⟨"Asked", source.replace "ledger.height" "request.height", "", []⟩
+  check "request.height refuses: the height is a ledger fact"
+    (match lower [asked] 0 "seed" (Json.arr #[]) (Json.arr #[]) limits "application" with
+      | .error d => (d.message.splitOn "the height is a ledger fact").length > 1
       | .ok _ => false)
