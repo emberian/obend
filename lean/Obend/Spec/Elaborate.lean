@@ -986,27 +986,24 @@ def boundsAt (c : Ctx) (fuel : Nat) (binders : String) (requirements : List Sign
     let some superRow ← sourceType c fuel superText moduleName [] | return none
     return some ((PTy.overlay (PTy.row required) selfRow).canonical, superRow)
 
-/-- One `compose` step over lowered operands (the composite's metadata is
-`SpecMeta.composed{P value, P right}`). -/
-def composeStep (metaTy : Option PTy) (value : ATerm) (valueTy : Option PTy) (right : ATerm) (rightTy : Option PTy) :
-    ATerm × Option PTy :=
+/-- One `compose` step over lowered operands: `specification (composed{inherited, wrapping}) (mix value right)`,
+the composite's metadata `SpecMeta.composed{P value, P right}` and its extension the mix, with no binder:
+neither `specification` nor `mix` binds a variable, and both operands capture only reusable hypotheses,
+so each may occur twice. An operand's provenance `P` is its own `SpecMeta` when it is a specification
+(`metadata operand`), else `extension {}`. When `value` is the previous step's composite, its
+metadata is already known (`valueMeta`, the term this function returned for it) and is used as is, not
+re-read by `metadata value`: re-reading would put the whole chain into each step's metadata, doubling
+the term at every step of a left fold. Returns the composite, its type, and its metadata term. -/
+def composeStep (metaTy : Option PTy) (value : ATerm) (valueTy : Option PTy) (valueMeta : Option ATerm)
+    (right : ATerm) (rightTy : Option PTy) : ATerm × Option PTy × ATerm :=
   let composite := metaTy.bind (composeTy · valueTy rightTy)
   let reason := if composite.isSome then none else some "composition operand types are not resolvable as extensions"
-  -- An operand's provenance: its own SpecMeta when it is a specification, else
-  -- `extension {}` (a bare extension carries no metadata). Decided statically.
   let provenance := fun (ty : Option PTy) (operand : ATerm) => match ty with
     | some (.specification _ _) => ATerm.metadata operand
     | _ => ATerm.inject "extension" metaTy reason (.record [])
-  let body := ATerm.specification
-    (.inject "composed" metaTy reason
-      (.record [("inherited", provenance valueTy (.bound 1)), ("wrapping", provenance rightTy (.bound 0))]))
-    (.mix (.bound 1) (.bound 0))
-  let inner := ATerm.lam ⟨rightTy, composite, "unrestricted", "reusable", reason⟩ body
-  let outerCodomain := match rightTy, composite with
-    | some r, some comp => some (arrowTy r comp)
-    | _, _ => none
-  let outer := ATerm.lam ⟨valueTy, outerCodomain, "unrestricted", "reusable", reason⟩ inner
-  (.app (.app outer value) right, composite)
+  let metadata := ATerm.inject "composed" metaTy reason
+    (.record [("inherited", valueMeta.getD (provenance valueTy value)), ("wrapping", provenance rightTy right)])
+  (.specification metadata (.mix value right), composite, metadata)
 
 
 
@@ -1108,10 +1105,12 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
         let metaTy ← sourceType c fuel specMetaName builtinModuleName []
         let mut value ← expression c fuel first env m
         let mut valueTy ← synth c fuel first env m
+        let mut valueMeta : Option ATerm := none
         for next in rest do
           let right ← expression c fuel next env m
           let rightTy ← synth c fuel next env m
-          (value, valueTy) := composeStep metaTy value valueTy right rightTy
+          let (composite, compositeTy, metadata) := composeStep metaTy value valueTy valueMeta right rightTy
+          value := composite; valueTy := compositeTy; valueMeta := some metadata
         return value
     | .fix spec inherited =>
       let expected := (← get).fixTarget
@@ -1380,8 +1379,10 @@ def chainFix (c : Ctx) : Nat → List (String × Decl × Module) → Expr → Op
     let some (first, firstTy) := operands.head? | return none
     let mut value := first
     let mut valueTy := firstTy
+    let mut valueMeta : Option ATerm := none
     for (right, rightTy) in operands.drop 1 do
-      (value, valueTy) := composeStep metaTy value valueTy right rightTy
+      let (composite, compositeTy, metadata) := composeStep metaTy value valueTy valueMeta right rightTy
+      value := composite; valueTy := compositeTy; valueMeta := some metadata
     return some (.fix value (← expression c fuel inherited env m))
 
 def fieldsOf (c : Ctx) : Nat → List (String × Expr) → List Binding → Module → M (List (String × ATerm))

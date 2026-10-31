@@ -421,7 +421,7 @@ At the surface, every specification has one type, `Specification<T>`, which in C
 `metadata(x)` for a specification and `extension{}` for a bare extension. Laws, ancestry and
 composition change the metadata *value*, never the type, so `Specification<T>` is closed under
 `compose` at every shareable target (`Obend.Spec.Proofs.SpecificationClosure.composeTy_closed`,
-`Obend.Spec.Proofs.SpecificationClosure.compose_wrapper_typed`) and a function like
+`Obend.Spec.Proofs.SpecificationClosure.compose_typed`) and a function like
 `def twice(e: Extension<Nat>) -> Specification<Nat>: compose(e, e)` checks
 (`Obend.Spec.Proofs.SpecificationClosure.twice_accepted`, compiled).
 
@@ -988,7 +988,7 @@ that census, which holds when the library builds; the per-module pins it replace
 | `Obend.Core.Proofs.BidirectionalCompleteness.appliedLambda_boundary`, `.coverage_premise_needed`, `.full_corollary_fails` | the fragment boundary bites; the unconditional annotatability corollary is false for this checker | none | `Core/Proofs/BidirectionalCompleteness` |
 | `Obend.Core.Proofs.CheckCompletenessObstruction.checked_lambda_without_annotations_never_checks`, `.checked_does_not_imply_eventual_success`, `.annotated_empty_eliminator_still_incomplete` | the annotation-directed `check` is incomplete for `Checked`: a certified term it refuses at every fuel | none | `Core/Proofs/CheckCompletenessObstruction` |
 | `Obend.Spec.Contract.run_append`, `.run_assoc`, `.checkLayer_ok`, `.discharge_ok` | the composition contract threads through a chain; composition is associative; an admitted layer met its clauses; a discharged chain fills the final self exactly | none | `Spec/Proofs/Contract` |
-| `Obend.Spec.Proofs.SpecificationClosure.composeTy_closed`, `.compose_wrapper_typed` | `Specification<T>` is closed under `compose`, and the lowering is typable at every shareable `T` | `T.shareable` for the lowering | `Spec/Proofs/SpecificationClosure` |
+| `Obend.Spec.Proofs.SpecificationClosure.composeTy_closed`, `.compose_typed` | `Specification<T>` is closed under `compose`, and the lowering is typable at every shareable `T` | `T.shareable` for the lowering | `Spec/Proofs/SpecificationClosure` |
 | `Obend.Spec.Proofs.FrontEndAdequacy.accepted_typed`, `.accepted_never_refused`, `.accepted_execution_semantics` | a program the front end accepts is closed and carries the checker's derivation, is never refused by the bounded machine, and a finished run extracts the unique deep evaluation of its term | an `Accepted` value | `Spec/Proofs/FrontEndAdequacy` |
 | `Obend.Core.Proofs.DataSoundness.execution_source_semantics`, `.deepEvaluates_unique`, `.execution_data_unique` | the Data of a successful execution is the deep reference evaluation, unique across policies, limits and budgets | closed; an `ExecutionWith` | `Core/Proofs/DataSoundness` |
 | `Obend.Core.Proofs.CheckpointRoundTrip.state_roundTrip` | the checkpoint codec restores every machine state | none | `Core/Proofs/CheckpointRoundTrip` |

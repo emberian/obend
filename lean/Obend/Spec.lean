@@ -21,7 +21,7 @@ finished run of it extracts THE deep source evaluation of its term; `decode_json
 `decodePacket_term`: the checker's decoder inverts the front end's rendering, so a receiver types
 the front end's own term, never a parse of published bytes; the composition contract's laws
 (`run_append`, `run_assoc`, `checkLayer_ok`, `discharge_ok`); `Specification<T>` closed under
-`compose` (`composeTy_closed`, `compose_wrapper_typed`); C4's linearization keeps local precedence
+`compose` (`composeTy_closed`, `compose_typed`); C4's linearization keeps local precedence
 and monotonicity, names nothing twice and has the suffix property (`Obend.Spec.Proofs.C4`); the C4
 vectors and the ordered-presentation invariance on 4000 seeded DAGs (compiled). The port is held byte-identical in behaviour to Mini's
 front end on Mini's own cohorts by `tests/run-obend-source.py` (REPORT-SPEC-20261030.md).

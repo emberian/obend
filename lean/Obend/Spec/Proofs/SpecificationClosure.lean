@@ -8,9 +8,10 @@ neither a claim nor a composition changes the public type. Two levels are stated
 
 * the front end's own type computation: `composeTy_closed` — composing two operands that are each
   `Specification<T>` or `Extension<T>` has type `Specification<T>`, for EVERY target `T` (symbolic);
-* the Core4 typing relation: `compose_wrapper_typed` — the term the elaborator lowers one `compose`
-  step to has a `PartialTyping` derivation at every shareable target `T` and every operand kind,
-  built generically in `T`. So the no-refusal theorem
+* the Core4 typing relation: `compose_typed` — the term the elaborator lowers one `compose` step to,
+  `specification (composed{inherited, wrapping}) (mix lower upper)` with no binder (`composeLowering`),
+  has a `PartialTyping` derivation at every shareable target `T` and every operand kind, built
+  generically in `T`; `compose_step_typed` is the first step of a chain, provenance read off each operand. So the no-refusal theorem
   (`Obend.Spec.Proofs.FrontEndAdequacy.accepted_never_refused`, statement unchanged) covers every
   program built from it; `twice_accepted` and `claim_spec_accepted` exhibit the surface programs the
   old metadata typing refused, and the teeth after them the refusals that stay.
@@ -25,12 +26,14 @@ public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Term
 public import Obend.AssertCompiled
+public import Obend.Core.Proofs.Preservation.Base.Insert
 public section
 namespace Obend.Spec.Proofs.SpecificationClosure
 open Lean (Json toJson)
 open Obend.Core.Ty
 open Obend.Core.Check
 open Obend.Core.Term
+open Obend.Core.Proofs.Preservation (reusable_add_uses)
 open Obend.Spec.Types Obend.Spec.Elaborate
 set_option autoImplicit false
 
@@ -91,19 +94,10 @@ def coreOperandTy (T : Ty) : Bool → Ty
 def provenance (isSpecification : Bool) (operand : Obend.Core.Term.Term) : Obend.Core.Term.Term :=
   if isSpecification then .metadata operand else .inject "extension" (.record [])
 
-def composeWrapper (T : Ty) (left right : Bool) : AnnotatedTerm :=
-  ⟨.lam (.lam (.specification
-      (.inject "composed" (.record [("inherited", provenance left (.bound 1)), ("wrapping", provenance right (.bound 0))]))
-      (.mix (.bound 1) (.bound 0)))),
-    fun position =>
-      if position = [] then some ⟨coreOperandTy T left,
-        .arrow .reusable .unrestricted (coreOperandTy T right) (specTy T), .unrestricted, .reusable⟩
-      else if position = [0] then some ⟨coreOperandTy T right, specTy T, .unrestricted, .reusable⟩
-      else if position = [0, 0, 0] then some ⟨composedPayload, .variable metaVariable, .unrestricted, .reusable⟩
-      else if position = [0, 0, 0, 0, 0] then some ⟨.emptyRow, .variable metaVariable, .unrestricted, .reusable⟩
-      else if position = [0, 0, 0, 0, 1] then some ⟨.emptyRow, .variable metaVariable, .unrestricted, .reusable⟩
-      else none,
-    metaAssumptions⟩
+/-- One `compose` step as the elaborator lowers it (`Obend.Spec.Elaborate.composeStep`): the composite's
+metadata `SpecMeta.composed{inherited, wrapping}` and its extension `mix lower upper`, with no binder. -/
+def composeLowering (inherited wrapping lower upper : Term) : Term :=
+  .specification (.inject "composed" (.record [("inherited", inherited), ("wrapping", wrapping)])) (.mix lower upper)
 
 theorem shareableUnder_of_shareable (vars : List Nat) (type : Ty) (h : type.shareable = true) :
     type.shareableUnder vars = true := by
@@ -124,54 +118,72 @@ theorem meta_conversion : sameType metaAssumptions (.variant specMetaRow) (.vari
   apply sameType_extends
   decide
 
-/-- An operand's provenance has type `SpecMeta` (the bounded variable). -/
-theorem provenance_typed (T : Ty) (context : Context) (index : Nat) (b : Bool)
-    (h : context[index]? = some ⟨coreOperandTy T b, .unrestricted⟩) :
-    PartialTyping metaAssumptions context (provenance b (.bound index)) (.variable metaVariable)
-      (if b then variableUses context index else zeroUses context) := by
+/-- An operand's provenance has type `SpecMeta` (the bounded variable), with the operand's uses when it
+is a specification and none otherwise. -/
+theorem provenance_typed (T : Ty) {context : Context} {operand : Term} {uses : Uses} (b : Bool)
+    (typed : PartialTyping metaAssumptions context operand (coreOperandTy T b) uses)
+    (free : linearFree context uses = true) :
+    PartialTyping metaAssumptions context (provenance b operand) (.variable metaVariable)
+      (if b then uses else zeroUses context) := by
   cases b
   · exact .conversion (.inject (fuel := 4) (.record (.nil context)) (by decide) rfl) meta_conversion
-  · exact .metadata (.bound h) (linearFree_variableUses h (by simp))
+  · exact .metadata typed free
 
-/-- The compose lowering is typable by the Core4 typing relation at EVERY shareable target
-`T`, for every operand kind: the derivation is built here, generically in `T`. -/
-theorem compose_wrapper_typed (T : Ty) (shareable : T.shareable = true) (left right : Bool) :
-    ∃ uses, PartialTyping metaAssumptions [] (composeWrapper T left right).term
-      (.arrow .reusable .unrestricted (coreOperandTy T left)
-        (.arrow .reusable .unrestricted (coreOperandTy T right) (specTy T))) uses := by
-  have sl := operand_shareable T shareable left
-  have sr := operand_shareable T shareable right
+/-- The compose lowering is typable by the Core4 typing relation at EVERY shareable target `T`: two
+operands at `Specification<T>` or `Extension<T>` whose captures are reusable, and two provenance terms
+at `SpecMeta` that use no `linear` hypothesis, give a `Specification<T>` with the uses of all four.
+The derivation is built here, generically in `T`. -/
+theorem compose_typed (T : Ty) (shareable : T.shareable = true) {context : Context} (left right : Bool)
+    {inherited wrapping lower upper : Term} {iu wu lu uu : Uses}
+    (inheritedTyped : PartialTyping metaAssumptions context inherited (.variable metaVariable) iu)
+    (wrappingTyped : PartialTyping metaAssumptions context wrapping (.variable metaVariable) wu)
+    (lowerTyped : PartialTyping metaAssumptions context lower (coreOperandTy T left) lu)
+    (upperTyped : PartialTyping metaAssumptions context upper (coreOperandTy T right) uu)
+    (captures : reusableCaptures metaAssumptions.shareableVariables context (addUses lu uu) = true)
+    (free : linearFree context (addUses iu (addUses wu (zeroUses context))) = true) :
+    PartialTyping metaAssumptions context (composeLowering inherited wrapping lower upper) (specTy T)
+      (addUses (addUses iu (addUses wu (zeroUses context))) (addUses lu uu)) := by
   have under := shareableUnder_of_shareable metaAssumptions.shareableVariables T shareable
-  let inner : Context := [⟨coreOperandTy T right, .unrestricted⟩, ⟨coreOperandTy T left, .unrestricted⟩]
-  have pl := provenance_typed T inner 1 left rfl
-  have pr := provenance_typed T inner 0 right rfl
-  have payload : PartialTyping metaAssumptions inner
-      (.record [("inherited", provenance left (.bound 1)), ("wrapping", provenance right (.bound 0))])
-      composedPayload _ :=
-    .record (.cons pl (.cons pr (.nil inner) rfl) rfl)
-  have metaTyped : PartialTyping metaAssumptions inner
-      (.inject "composed" (.record [("inherited", provenance left (.bound 1)), ("wrapping", provenance right (.bound 0))]))
-      (.variable metaVariable) _ :=
-    .conversion (.inject (fuel := 4) payload (by decide) rfl) meta_conversion
-  have mixTyped : PartialTyping metaAssumptions inner (.mix (.bound 1) (.bound 0)) (extTy T) _ :=
-    .mix (.bound (binding := ⟨coreOperandTy T left, .unrestricted⟩) rfl)
-      (.bound (binding := ⟨coreOperandTy T right, .unrestricted⟩) rfl)
-      (operand_callable T left) (operand_callable T right)
-      (by cases left <;> cases right <;>
-        simp_all [reusableCaptures, addUses, variableUses, zeroUses, inner, List.range_succ, List.zipWith])
-      under under under
-  have innerFree : ∀ u : Uses, linearFree inner u = true := by
-    intro u; rcases u with _ | ⟨_, _ | ⟨_, _⟩⟩ <;> simp [linearFree, inner]
-  have body : PartialTyping metaAssumptions inner
-      (.specification (.inject "composed" (.record [("inherited", provenance left (.bound 1)),
-        ("wrapping", provenance right (.bound 0))])) (.mix (.bound 1) (.bound 0))) (specTy T) _ :=
-    .specification metaTyped mixTyped rfl rfl (innerFree _)
-  refine ⟨_, .lambda (annotation := ⟨coreOperandTy T left,
-      .arrow .reusable .unrestricted (coreOperandTy T right) (specTy T), .unrestricted, .reusable⟩)
-    (.lambda (annotation := ⟨coreOperandTy T right, specTy T, .unrestricted, .reusable⟩) body ?_ ?_ ?_ ?_) ?_ ?_ ?_ ?_⟩ <;>
-  cases left <;> cases right <;>
-  simp_all [safeUses, safeQuantity, Quantity.fits, validContext, reusableAllowed, reusableCaptures, addUses, variableUses,
-    zeroUses, inner, List.range_succ, List.zipWith]
+  have metaTyped : PartialTyping metaAssumptions context
+      (.inject "composed" (.record [("inherited", inherited), ("wrapping", wrapping)]))
+      (.variable metaVariable) (addUses iu (addUses wu (zeroUses context))) :=
+    .conversion (.inject (fuel := 4) (.record (.cons inheritedTyped (.cons wrappingTyped (.nil context) rfl) rfl))
+      (by decide) rfl) meta_conversion
+  have mixTyped : PartialTyping metaAssumptions context (.mix lower upper) (extTy T) (addUses lu uu) :=
+    .mix lowerTyped upperTyped (operand_callable T left) (operand_callable T right) captures under under under
+  exact .specification metaTyped mixTyped rfl rfl free
+
+theorem zero_captures (variables : List Nat) : ∀ context : Context,
+    reusableCaptures variables context (zeroUses context) = true
+  | [] => rfl
+  | _ :: rest => by
+    have ih := zero_captures variables rest
+    simp only [reusableCaptures, zeroUses, List.length_replicate, beq_self_eq_true, Bool.true_and,
+      List.all_eq_true] at ih ⊢
+    simpa [List.replicate_succ, List.zip] using ih
+
+/-- The step the elaborator emits, with each provenance read off its own operand (the first step of a
+chain; a later step reuses the previous step's metadata term, an instance of `compose_typed`). -/
+theorem compose_step_typed (T : Ty) (shareable : T.shareable = true) {context : Context} (left right : Bool)
+    {lower upper : Term} {lu uu : Uses}
+    (lowerTyped : PartialTyping metaAssumptions context lower (coreOperandTy T left) lu)
+    (upperTyped : PartialTyping metaAssumptions context upper (coreOperandTy T right) uu)
+    (lowerCaptures : reusableCaptures metaAssumptions.shareableVariables context lu = true)
+    (upperCaptures : reusableCaptures metaAssumptions.shareableVariables context uu = true) :
+    ∃ uses, PartialTyping metaAssumptions context
+      (composeLowering (provenance left lower) (provenance right upper) lower upper) (specTy T) uses := by
+  have zero := zero_captures metaAssumptions.shareableVariables context
+  have captures := reusable_add_uses _ _ _ _ lowerCaptures upperCaptures
+  refine ⟨_, compose_typed T shareable left right
+    (provenance_typed T left lowerTyped (linearFree_of_reusableCaptures lowerCaptures))
+    (provenance_typed T right upperTyped (linearFree_of_reusableCaptures upperCaptures))
+    lowerTyped upperTyped captures (linearFree_of_reusableCaptures (variables := metaAssumptions.shareableVariables) ?_)⟩
+  cases left <;> cases right <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
+    first
+    | exact reusable_add_uses _ _ _ _ lowerCaptures (reusable_add_uses _ _ _ _ upperCaptures zero)
+    | exact reusable_add_uses _ _ _ _ zero (reusable_add_uses _ _ _ _ upperCaptures zero)
+    | exact reusable_add_uses _ _ _ _ lowerCaptures (reusable_add_uses _ _ _ _ zero zero)
+    | exact reusable_add_uses _ _ _ _ zero (reusable_add_uses _ _ _ _ zero zero)
 
 /-! ## Surface programs the old metadata typing refused, now accepted -/
 
