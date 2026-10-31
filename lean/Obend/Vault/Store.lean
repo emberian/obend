@@ -31,6 +31,7 @@ Every write goes through `commit`, which judges it by the page's laws and its ki
 granted `relaw`).
 -/
 public import Obend.Vault.Law
+public import Obend.Kind.Proofs
 @[expose] public section
 
 namespace Obend.Vault
@@ -54,6 +55,9 @@ structure Page where
   authors : List (AtomId × String)
   /-- the last refusal of a write to it -/
   note : Option String
+  /-- the pin of its kind (`Obend.Kind.KindPin`): the versions of its kind and of every kind on its
+  kind's precedence list when it was born or last adopted its laws; none for a page of no kind -/
+  kind : Option Obend.Kind.KindPin := none
 deriving Repr
 
 /-- A member: a name, an id (the owner is 0), and grants `(verb, page pattern)`. -/
@@ -115,15 +119,6 @@ def kindLine (src : String) : Option String :=
 
 /-- A kind named by a person: the kind page `K` itself, or a folder `K`'s `_kind`. -/
 def kindName (k : String) : String := if isKind k then k else (if k == "" then "_kind" else k ++ "/_kind")
-
-/-- **A page's kinds**, its kind first: the kind it names (`kind: K`, carried by every page born
-under `K`), then that kind's ancestors; a page that names none is an instance of its folders'
-kinds. A kind page is an instance of none. -/
-def kindChain (name : String) (src : String) : List String :=
-  if isKind name then [] else
-  match kindLine src with
-  | some k => kindName k :: kindParents (kindName k)
-  | none => kindsOf name
 
 /-- A page's id: a hash of its name (so two replicas name a page alike), the first not taken. -/
 def pageIdFor (H : Hash) (taken : PageId → Bool) (name : String) : PageId :=
@@ -200,87 +195,140 @@ def lawsIn (pageName : String) (G : Graph) : Except String (List (String × LawE
     | .ok e => .ok (pageName ++ ": " ++ n, e, txt)
     | .error msg => .error (pageName ++ ": law " ++ n ++ ": " ++ msg)
 
-/-- The laws of each kind on the list, in order; a kind the page names explicitly (`named`) must
-exist, a folder's kind may be absent. -/
-def kindLaws (es : List Entry) (named : Option String) : List String → Except String (List (String × LawExpr × String))
-  | [] => .ok []
-  | k :: ks =>
-    match es.find? (·.name == k) with
-    | some e =>
-      match lawsIn k e.graph, kindLaws es named ks with
-      | .ok ls, .ok rest => .ok (ls ++ rest)
-      | .error m, _ => .error m
-      | _, .error m => .error m
-    | none =>
-      if named == some k then .error ("refused (unknown-kind): no kind page " ++ k)
-      else kindLaws es named ks
+/-! ## The vault's kinds are kind cells
 
-/-- The laws a write of `pageName` (at version `G`) is judged by: its own, then each of its kinds'
-(`kindChain`), its kind first. -/
-def lawsFor (es : List Entry) (pageName : String) (G : Graph) : Except String (List (String × LawExpr × String)) := do
+Decided 2026-11-01 (C1; `lean/docs/REPORT-PARSIMONY-20261101.md`'s decision): a vault's `_kind`
+pages are registered as kind cells of `Obend.Kind`, with the page's law lines as the cell's law and
+its fields as its layout. The registry resolves a page's kind to a pin (its kind's version and every
+ancestor's), linearizes the hierarchy by C4 (a kind page may name several parents, `parents: a, b`;
+one that names none has its nearest enclosing folder's kind as its parent), and a pin goes stale when
+any kind it rests on is revised (`Obend.Kind.Proofs.kind_stale_iff_blocked`). This replaces the
+folder chain (`kindChain`, `kindLaws`) the vault computed on its own. -/
+
+/-- The laws of a page or a kind: `(PAGE: NAME, expression, text)`. -/
+abbrev Laws := List (String × LawExpr × String)
+
+/-- The kinds a kind page names as its parents (`parents: a, b`), each a kind name. -/
+def parentsLine (src : String) : Option (List String) :=
+  ((frontFields src).find? (·.1 == "parents")).map fun (_, v) =>
+    (((v.splitOn ",").map fun t => t.trimAscii.toString).filter (!·.isEmpty)).map kindName
+
+/-- A kind page's parents: those it names, or else the nearest enclosing folder's kind the vault
+holds. -/
+def kindParentsIn (es : List Entry) (k src : String) : List String :=
+  match parentsLine src with
+  | some ps => ps
+  | none => ((kindParents k).filter fun x => es.any (·.name == x)).take 1
+
+/-- **The vault's kind registry**: each `_kind` page at its current version, a kind cell whose law is
+its law lines and whose layout and initial state are its other fields. -/
+def vaultKinds (es : List Entry) : Except String (Obend.Kind.Kinds Laws) := do
+  let cells ← (es.filter fun e => isKind e.name).mapM fun e => do
+    let src := settled e.graph
+    let laws ← lawsIn e.name e.graph
+    let fields := (frontFields src).filter fun f => (lawKey f.1).isNone && f.1 != "kind" && f.1 != "parents"
+    let init : Obend.Core.Data.Data := .record (fields.map fun f => (f.1, Obend.Core.Data.Data.label f.2))
+    let cell : Obend.Kind.KindCell Laws :=
+      ⟨e.name, e.version, fields.map (·.1), init, laws, kindParentsIn es e.name src⟩
+    pure cell
+  pure ⟨cells⟩
+
+/-- The kind a page is an instance of: the one it names (`kind: K`, carried by every page born under
+`K`), else its nearest folder's kind the vault holds. A kind page is an instance of none. -/
+def pageKind (es : List Entry) (name src : String) : Option String :=
+  if isKind name then none else
+  match kindLine src with
+  | some k => some (kindName k)
+  | none => (kindsOf name).find? fun x => es.any (·.name == x)
+
+/-- A refusal of the kind registry, said to a person. -/
+def kindRefusalText : Obend.Kind.Refusal → String
+  | .unknown k => "refused (unknown-kind): no kind page " ++ k
+  | .stale p => "refused (stale-kind): " ++ p.name ++ " was revised"
+  | .cycle k => "refused (kind-cycle): " ++ k ++ " is its own ancestor"
+  | .c4 k _ => "refused (kind-order): the parents of " ++ k ++ " have no C4 order"
+  | .law _ => "refused (kind-law)"
+  | .clash n => "refused (kind-clash): " ++ n ++ " is a kind"
+
+/-- What a page's laws rest on: its kind's pin at the vault's registry, the kinds on its kind's
+precedence list (its kind first), and their laws in that order. -/
+structure KindsOf where
+  pin : Option Obend.Kind.KindPin
+  chain : List String
+  laws : Laws
+
+/-- **A page's kinds**: its kind resolved at the vault's registry, linearized by C4. -/
+def kindsFor (es : List Entry) (name src : String) : Except String KindsOf :=
+  match pageKind es name src with
+  | none => .ok ⟨none, [], []⟩
+  | some k =>
+    match vaultKinds es with
+    | .error e => .error e
+    | .ok ks =>
+      match Obend.Kind.resolve ks k with
+      | .error e => .error (kindRefusalText e)
+      | .ok pin =>
+        let chain := pin.lineage.map (·.name)
+        .ok ⟨some pin, chain, chain.flatMap fun x => ((ks.find x).map (·.law)).getD []⟩
+
+/-- A page's kinds, its kind first (for the analyses that ask which kind pages a page's laws read). -/
+def kindChain (es : List Entry) (name src : String) : List String :=
+  match kindsFor es name src with
+  | .ok K => K.chain
+  | .error _ => []
+
+/-- The laws a write of `pageName` (at version `G`) is judged by: its own, then its kinds' (its kind
+first, along the C4 precedence list). -/
+def lawsFor (es : List Entry) (pageName : String) (G : Graph) : Except String Laws := do
   let own ← lawsIn pageName G
-  let src := settled G
-  let kinds ← kindLaws es ((kindLine src).map kindName) (kindChain pageName src)
-  return own ++ kinds
+  let kinds ← kindsFor es pageName (settled G)
+  return own ++ kinds.laws
 
-theorem kindLaws_mem {es : List Entry} {named : Option String} :
-    ∀ {chain : List String} {ls : List (String × LawExpr × String)}, kindLaws es named chain = .ok ls →
-      ∀ k ∈ chain, ∀ e, es.find? (·.name == k) = some e → ∀ kl, lawsIn k e.graph = .ok kl → ∀ x ∈ kl, x ∈ ls := by
-  intro chain
-  induction chain with
-  | nil => intro ls _ k hk; cases hk
-  | cons c cs ih =>
-    intro ls h k hk e he kl hkl x hx
-    simp only [kindLaws] at h
+/-- Every law of every kind on a page's chain is among the kinds' laws it collects. -/
+theorem kindsFor_laws {es : List Entry} {name src : String} {K : KindsOf} (h : kindsFor es name src = .ok K)
+    {ks : Obend.Kind.Kinds Laws} (hks : vaultKinds es = .ok ks) :
+    ∀ k ∈ K.chain, ∀ c, ks.find k = some c → ∀ x ∈ c.law, x ∈ K.laws := by
+  unfold kindsFor at h
+  split at h
+  · cases h; intro k hk; cases hk
+  · rw [hks] at h
+    simp only at h
     split at h
-    · rename_i e' he'
-      split at h
-      · rename_i a b ha hb
-        cases h
-        rcases List.mem_cons.1 hk with rfl | hk
-        · rw [he] at he'; cases he'; rw [hkl] at ha; cases ha; exact List.mem_append_left _ hx
-        · exact List.mem_append_right _ (ih hb k hk e he kl hkl x hx)
-      · cases h
-      · cases h
-    · rename_i hn
-      split at h
-      · cases h
-      · rcases List.mem_cons.1 hk with rfl | hk
-        · rw [he] at hn; cases hn
-        · exact ih h k hk e he kl hkl x hx
+    · cases h
+    · cases h
+      intro k hk c hc x hx
+      exact List.mem_flatMap.2 ⟨k, hk, by simp [hc, hx]⟩
 
-/-- **A kind's laws are an ancestor's**: every law of every kind of a page (its kind first, then the
-kind's ancestors, `kindChain`) is among the laws its writes are judged by. -/
-theorem lawsFor_kinds {es : List Entry} {name : String} {G : Graph} {laws : List (String × LawExpr × String)}
-    (h : lawsFor es name G = .ok laws) :
-    ∀ k ∈ kindChain name (settled G), ∀ e, es.find? (·.name == k) = some e →
-      ∀ kl, lawsIn k e.graph = .ok kl → ∀ x ∈ kl, x ∈ laws := by
+/-- **A kind's laws are an ancestor's**: every law of every kind on a page's precedence list (its
+kind first) is among the laws its writes are judged by. -/
+theorem lawsFor_kinds {es : List Entry} {name : String} {G : Graph} {laws : Laws}
+    (h : lawsFor es name G = .ok laws) {K : KindsOf} (hK : kindsFor es name (settled G) = .ok K)
+    {ks : Obend.Kind.Kinds Laws} (hks : vaultKinds es = .ok ks) :
+    ∀ k ∈ K.chain, ∀ c, ks.find k = some c → ∀ x ∈ c.law, x ∈ laws := by
   unfold lawsFor at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · cases h
-  · rename_i own _
-    split at h
-    · cases h
-    · rename_i kinds hk
-      cases h
-      intro k hkc e he kl hkl x hx
-      exact List.mem_append_right _ (kindLaws_mem hk k hkc e he kl hkl x hx)
+  · rw [hK] at h
+    cases h
+    intro k hk c hc x hx
+    exact List.mem_append_right _ (kindsFor_laws hK hks k hk c hc x hx)
 
 /-- **What a vault write is admitted by, its kinds' laws hold of** (`judge_admits`): a write judged
-by a page's laws and admitted satisfies, by the fragment's meaning, every law of every kind of the
-page, its own kind first. -/
-theorem kind_law_inherited {es : List Entry} {name : String} {G : Graph} {laws : List (String × LawExpr × String)}
-    (hl : lawsFor es name G = .ok laws) {S : Obend.Core.Ty.Ty} {o n : Obend.Core.Data.Data} {facts : Facts} {who : String} {k : Occ}
+by a page's laws and admitted satisfies, by the fragment's meaning, every law of every kind on the
+page's precedence list, its own kind first. -/
+theorem kind_law_inherited {es : List Entry} {name : String} {G : Graph} {laws : Laws}
+    (hl : lawsFor es name G = .ok laws) {K : KindsOf} (hK : kindsFor es name (settled G) = .ok K)
+    {ks : Obend.Kind.Kinds Laws} (hks : vaultKinds es = .ok ks)
+    {S : Obend.Core.Ty.Ty} {o n : Obend.Core.Data.Data} {facts : Facts} {who : String} {k : Occ}
     (hj : judge S name (laws.map fun x => (x.1, x.2.1)) o n (requestOf who k facts) = .admitted) :
-    ∀ kk ∈ kindChain name (settled G), ∀ e, es.find? (·.name == kk) = some e →
-      ∀ kl, lawsIn kk e.graph = .ok kl → ∀ x ∈ kl, x.2.1.denote facts (k.old o n) n = true := by
-  intro kk hkk e he kl hkl x hx
-  exact judge_admits hj (x.1, x.2.1) (List.mem_map.2 ⟨x, lawsFor_kinds hl kk hkk e he kl hkl x hx, rfl⟩)
+    ∀ kk ∈ K.chain, ∀ c, ks.find kk = some c → ∀ x ∈ c.law, x.2.1.denote facts (k.old o n) n = true := by
+  intro kk hkk c hc x hx
+  exact judge_admits hj (x.1, x.2.1) (List.mem_map.2 ⟨x, lawsFor_kinds hl hK hks kk hkk c hc x hx, rfl⟩)
 
 /-- **A write keeps the page's laws** when its law lines and the kind it names are as they were. The
-kind line is compared, not only the law lines: retargeting `kind:` changes the kind chain
-(`kindChain`), and so the laws a page is judged by (Kimi's review, 2026-11-01). -/
+kind line is compared, not only the law lines: retargeting `kind:` changes the kind
+(`pageKind`), and so the laws a page is judged by (Kimi's review, 2026-11-01). -/
 def lawsKept (old new : String) : Bool :=
   lawLines old == lawLines new && kindLine old == kindLine new
 
@@ -288,16 +336,30 @@ def lawsKept (old new : String) : Bool :=
 theorem lawsFor_of_kept (es : List Entry) (name : String) {G G' : Graph}
     (h : lawsKept (settled G) (settled G') = true) : lawsFor es name G = lawsFor es name G' := by
   simp only [lawsKept, Bool.and_eq_true, beq_iff_eq] at h
-  simp only [lawsFor, lawsIn, kindChain, h.1, h.2]
+  simp only [lawsFor, lawsIn, kindsFor, pageKind, h.1, h.2]
 
-/-- Kept laws keep the kind chain. -/
-theorem kindChain_of_kept (name : String) {old new : String} (h : lawsKept old new = true) :
-    kindChain name old = kindChain name new := by
+/-- Kept laws keep the kinds. -/
+theorem kindChain_of_kept (es : List Entry) (name : String) {old new : String} (h : lawsKept old new = true) :
+    kindChain es name old = kindChain es name new := by
   simp only [lawsKept, Bool.and_eq_true, beq_iff_eq] at h
-  simp only [kindChain, h.2]
+  simp only [kindChain, kindsFor, pageKind, h.2]
 
 -- Comparing the law lines alone lets a write retarget its kind and be judged by the old kind's laws.
 #tooth lawsFor_of_kept by mutation lawsKept := fun old new => lawLines old == lawLines new
+
+/-- **A page's pin goes stale exactly when a kind it rests on is revised**, its blocked read naming
+the kinds that moved (`Obend.Kind.kind_stale_iff_blocked` at the vault's registry). -/
+theorem page_kind_stale_iff_blocked (ks : Obend.Kind.Kinds Laws) (p : Obend.Kind.KindPin) :
+    Obend.Kind.kindRefs.current ks p = false ↔
+      ((Obend.Kind.kindRefs (Law := Laws)).slot p.name).read (Obend.Kind.holds ks) (some p) =
+        .blocked p (p.lineage.filter fun f => !Obend.Kind.holds ks f) :=
+  Obend.Kind.kind_stale_iff_blocked ks p
+
+/-- The kinds a pin rests on that the vault's registry has revised. -/
+def movedKinds (es : List Entry) (p : Obend.Kind.KindPin) : List Obend.Kind.KindVersion :=
+  match vaultKinds es with
+  | .ok ks => p.lineage.filter fun f => !Obend.Kind.holds ks f
+  | .error _ => []
 
 /-- What a write leaves of a page. -/
 structure Change where
@@ -305,9 +367,11 @@ structure Change where
   seen : String
   authors : List (AtomId × String)
   note : Option String
+  /-- the page's kind pin after the write -/
+  kind : Option Obend.Kind.KindPin
 
 def Page.withChange (p : Page) (c : Change) : Page :=
-  { p with history := c.history, seen := some c.seen, authors := c.authors, note := c.note }
+  { p with history := c.history, seen := some c.seen, authors := c.authors, note := c.note, kind := c.kind }
 
 /-- Why a write was refused, said to a person. -/
 def refusalText (pageName : String) (laws : List (String × LawExpr × String)) (law reason : String)
@@ -324,22 +388,35 @@ def refusalText (pageName : String) (laws : List (String × LawExpr × String)) 
     "refused by " ++ who ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts old new front
   | none => "refused by " ++ who ++ ": " ++ reason
 
+/-- Why a stale kind refuses a write, said to a person. -/
+def staleText (pageName who : String) (moved : List Obend.Kind.KindVersion) : String :=
+  "refused (stale-kind): the kinds " ++ pageName ++ " was pinned to were revised since (" ++
+    ", ".intercalate (moved.map fun f => f.name ++ " at v" ++ toString (f.version + 1)) ++
+    "); adopting their laws is the owner's (" ++ who ++ " has no relaw grant on " ++ pageName ++ ")"
+
 /-- **Commit a write**: judge the new version `G'` of page `p` by its laws, and on admission append
-it. A change of a law line or of the kind the page names is the owner's, or a member's granted
-`relaw`; it is judged as the adoption of the new laws over the page as written. Otherwise the laws
-are kept (`lawsKept`), and the new laws are the old ones (`lawsFor_of_kept`). A birth is judged as
-a first write. -/
+it, pinning its kind at the vault's registry. A change of a law line or of the kind the page names
+is the owner's, or a member's granted `relaw`; it is judged as the adoption of the new laws over the
+page as written. So is a write to a page whose kind pin is stale (a kind it rests on was revised,
+`movedKinds`): the owner's write adopts the revised kinds' laws and renews the pin; anyone else's is
+refused, naming the kinds that moved. Otherwise the laws are kept (`lawsKept`), and the new laws are
+the old ones (`lawsFor_of_kept`). A birth is judged as a first write. -/
 def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
     (turn : Nat) : Except String Change := do
   let authors := p.authors ++ added
   let p' := { p with authors := authors }
   let v := p.history.length
   let newLaws ← lawsFor es p.name G'
+  let kinds ← kindsFor es p.name (settled G')
+  let moved := match p.kind with
+    | some old => movedKinds es old
+    | none => []
   let (occ, laws, oldMs) ← match p.current with
     | none => pure (Occ.birth, newLaws, [])
     | some G =>
-      if lawsKept (settled G) (settled G') then pure (Occ.write, newLaws, measures G (v - 1))
+      if lawsKept (settled G) (settled G') && moved.isEmpty then pure (Occ.write, newLaws, measures G (v - 1))
       else if who.may "relaw" p.name then pure (Occ.adopt, newLaws, measures G (v - 1))
+      else if lawsKept (settled G) (settled G') then throw (staleText p.name who.name moved)
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
   let newMs := measures G' v
@@ -351,7 +428,7 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   let facts : Facts := ⟨some who.id, some who.id, v, turn⟩
   match judge S p.name lin o n (requestOf who.name occ facts) with
   | .admitted =>
-    pure ⟨p.history ++ [G'], render G' p.name p'.who, authors, none⟩
+    pure ⟨p.history ++ [G'], render G' p.name p'.who, authors, none, kinds.pin⟩
   | .refused law reason =>
     throw (refusalText p.name laws law reason facts (occ.old o n) n
       ((scalarFields (settled G')).map (·.1)))
@@ -368,8 +445,27 @@ theorem commit_kind_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (add
   cases lawsFor es p.name G' with
   | error m => exact ⟨m, rfl⟩
   | ok newLaws =>
-    simp only [bind, Except.bind, hc, hkept, hw, Bool.false_eq_true, if_false]
-    exact ⟨_, rfl⟩
+    cases kindsFor es p.name (settled G') with
+    | error m => exact ⟨m, rfl⟩
+    | ok kinds =>
+      simp only [bind, Except.bind, hc, hkept, hw, Bool.false_and, Bool.false_eq_true, if_false]
+      exact ⟨_, rfl⟩
+
+/-- **A stale kind needs the grant**: a write to a page whose kind pin rests on a revised kind, by an
+actor without `relaw` on the page, is refused (`staleText` names the kinds that moved). -/
+theorem commit_stale_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (added : List (AtomId × String))
+    (who : Actor) (turn : Nat) (hc : p.current = some G) {old : Obend.Kind.KindPin} (hp : p.kind = some old)
+    (hm : (movedKinds es old).isEmpty = false)
+    (hw : who.may "relaw" p.name = false) : ∃ msg, commit es p G' added who turn = .error msg := by
+  unfold commit
+  cases lawsFor es p.name G' with
+  | error m => exact ⟨m, rfl⟩
+  | ok newLaws =>
+    cases kindsFor es p.name (settled G') with
+    | error m => exact ⟨m, rfl⟩
+    | ok kinds =>
+      simp only [bind, Except.bind, hc, hp, hm, hw, Bool.and_false, Bool.false_eq_true, if_false]
+      split <;> exact ⟨_, rfl⟩
 
 /-! ## Open -/
 
@@ -383,10 +479,10 @@ def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String
       let b := editPatch H G (align (pieces G p.name p.who) cs) "owner"
       (G.apply b.ops, b.added, b.ops.isEmpty)
   -- Only the view's marks changed (one deleted, say): nothing to write; the view is redrawn.
-  if same then ⟨p.history, md, p.authors, p.note⟩ else
+  if same then ⟨p.history, md, p.authors, p.note, p.kind⟩ else
   match commit es p G' (added.map (·, "owner")) .owner turn with
   | .ok ch => ch
-  | .error msg => ⟨p.history, md, p.authors, some msg⟩
+  | .error msg => ⟨p.history, md, p.authors, some msg, p.kind⟩
 
 /-- One page at open: unchanged if its file is missing or is what the store last saw. -/
 def openPage (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (file : Option String) : Page :=
@@ -420,7 +516,7 @@ def overwrite (V w : List (String × String)) : List (String × String) :=
 def freshPages (H : Hash) (s : Store) (names : List String) : List Page :=
   (names.foldl (fun (acc : List Page) n =>
     let taken := fun q => s.pages.any (·.id == q) || acc.any (·.id == q)
-    acc ++ [⟨n, pageIdFor H taken n, [], none, [], none⟩]) [])
+    acc ++ [⟨n, pageIdFor H taken n, [], none, [], none, none⟩]) [])
 
 /-- The entries new cites resolve against at an open: a page whose file changed quotes the file
 (the version it is about to become), the others their current version. -/
@@ -555,7 +651,7 @@ theorem freshPages_names (H : Hash) (s : Store) (names : List String) :
   unfold freshPages
   suffices ∀ (acc : List Page), (names.foldl (fun (acc : List Page) n =>
       let taken := fun q => s.pages.any (·.id == q) || acc.any (·.id == q)
-      acc ++ [⟨n, pageIdFor H taken n, [], none, [], none⟩]) acc).map (·.name) = acc.map (·.name) ++ names by
+      acc ++ [⟨n, pageIdFor H taken n, [], none, [], none, none⟩]) acc).map (·.name) = acc.map (·.name) ++ names by
     simpa using this []
   induction names with
   | nil => intro acc; simp
@@ -904,7 +1000,7 @@ def createFrom (s : Store) (k page : String) : Except String String := do
   if isKind page then throw ("refused: " ++ page ++ " is a kind page; a kind is not born under a kind")
   let some kp := s.page? kn | throw ("refused (unknown-kind): no kind page " ++ kn)
   let some G := kp.current | throw ("refused (unknown-kind): " ++ kn ++ " has no version")
-  let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind"
+  let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents"
   return "---\nkind: " ++ kn ++ "\n" ++ String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++ "---\n"
 
 /-! ### Re-citing -/

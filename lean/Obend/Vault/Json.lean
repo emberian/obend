@@ -99,11 +99,27 @@ def graphOf (j : Json) : Except String Graph := do
   let edges ← (← j.getObjValAs? (Array Json) "edges").toList.mapM pairNat
   return { atoms := atoms, dead := dead, edges := edges }
 
+def kindVersionJson (f : Obend.Kind.KindVersion) : Json :=
+  Json.mkObj [("kind", Json.str f.name), ("version", toJson f.version)]
+
+def kindVersionOf (j : Json) : Except String Obend.Kind.KindVersion := do
+  return ⟨← j.getObjValAs? String "kind", ← j.getObjValAs? Nat "version"⟩
+
+/-- A page's kind pin: its kind's version, then every ancestor's. -/
+def pinJson (p : Obend.Kind.KindPin) : Json :=
+  Json.arr (p.lineage.map kindVersionJson).toArray
+
+def pinOf (j : Json) : Except String Obend.Kind.KindPin := do
+  match (← (← j.getArr?).toList.mapM kindVersionOf) with
+  | f :: rest => return ⟨f.name, f.version, rest⟩
+  | [] => throw "a kind pin names its kind"
+
 def pageJson (p : Page) : Json :=
-  Json.mkObj [("name", p.name), ("id", toJson p.id), ("history", Json.arr (p.history.map graphJson).toArray),
+  Json.mkObj ([("name", Json.str p.name), ("id", toJson p.id), ("history", Json.arr (p.history.map graphJson).toArray),
     ("seen", match p.seen with | some t => Json.str t | none => Json.null),
     ("authors", Json.arr (p.authors.map fun (a, w) => Json.arr #[toJson a, Json.str w]).toArray),
-    ("note", match p.note with | some t => Json.str t | none => Json.null)]
+    ("note", match p.note with | some t => Json.str t | none => Json.null)] ++
+    (match p.kind with | some k => [("kind", pinJson k)] | none => []))
 
 def optStr (j : Json) (k : String) : Option String :=
   match j.getObjVal? k with
@@ -118,7 +134,10 @@ def pageOf (j : Json) : Except String Page := do
     let a ← e.getArrVal? 0 >>= fromJson?
     let w ← e.getArrVal? 1 >>= fromJson?
     return (a, w)
-  return ⟨name, id, history, optStr j "seen", authors, optStr j "note"⟩
+  let kind ← match j.getObjVal? "kind" with
+    | .ok k => some <$> pinOf k
+    | .error _ => pure none
+  return ⟨name, id, history, optStr j "seen", authors, optStr j "note", kind⟩
 
 def memberJson (m : Member) : Json :=
   Json.mkObj [("name", m.name), ("id", toJson m.id),

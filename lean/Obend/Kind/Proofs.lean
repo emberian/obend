@@ -36,19 +36,19 @@ open Obend.Law (Admits)
 /-! ## The kind reference is an intention -/
 
 /-- **A stale kind is a blocked read** (`Obend.Intention.stale_iff_blocked` at kinds). -/
-public theorem kind_stale_iff_blocked (ks : Kinds) (p : KindPin) :
+public theorem kind_stale_iff_blocked {Law : Type} (ks : Kinds Law) (p : KindPin) :
     kindRefs.current ks p = false ↔
-      (kindRefs.slot p.name).read (holds ks) (some p) = .blocked p (p.lineage.filter fun f => !holds ks f) :=
+      ((kindRefs (Law := Law)).slot p.name).read (holds ks) (some p) = .blocked p (p.lineage.filter fun f => !holds ks f) :=
   kindRefs.stale_iff_blocked rfl ks
 
-theorem current_kind (ks : Kinds) (p : KindPin) : kindRefs.current ks p = p.lineage.all (holds ks) := by
+public theorem current_kind {Law : Type} (ks : Kinds Law) (p : KindPin) : kindRefs.current ks p = p.lineage.all (holds ks) := by
   simp [Obend.Intention.current, kindRefs]
 
 /-- **Revising an ancestor stales the pin, naming it.** A pin resting on version `v` of kind `a`
 (its own kind or any kind on its precedence list) is not current at a registry that holds another
 version of `a`, and its blocked read names `⟨a, v⟩`. -/
-public theorem ancestor_revised_stale {ks : Kinds} {p : KindPin} {f : KindVersion} (hf : f ∈ p.lineage)
-    {c : KindCell} (hc : ks.find f.name = some c) (hv : c.version ≠ f.version) :
+public theorem ancestor_revised_stale {Law : Type} {ks : Kinds Law} {p : KindPin} {f : KindVersion} (hf : f ∈ p.lineage)
+    {c : KindCell Law} (hc : ks.find f.name = some c) (hv : c.version ≠ f.version) :
     kindRefs.current ks p = false ∧ f ∈ p.lineage.filter fun f => !holds ks f := by
   have hd : holds ks f = false := by simp [holds, hc, hv]
   refine ⟨?_, List.mem_filter.2 ⟨hf, by simp [hd]⟩⟩
@@ -95,8 +95,8 @@ public theorem effective_refuses_stale {ks : Kinds} {i : Instance} (h : kindRefs
 current, its slot's read usable; nothing else of the instance changes. -/
 public theorem renew_kind {ks : Kinds} {i i' : Instance} (h : renewKind ks i = .ok i') :
     i'.kind.name = i.kind.name ∧ kindRefs.current ks i'.kind = true ∧
-      (kindRefs.slot i.kind.name).read (holds ks) (some i'.kind) =
-        .usable i'.kind ((kindRefs.slot i.kind.name).evidence (holds ks) i'.kind) ∧
+      ((kindRefs (Law := Term)).slot i.kind.name).read (holds ks) (some i'.kind) =
+        .usable i'.kind (((kindRefs (Law := Term)).slot i.kind.name).evidence (holds ks) i'.kind) ∧
       i'.name = i.name ∧ i'.law = i.law ∧ i'.state = i.state := by
   unfold renewKind at h
   split at h
@@ -151,7 +151,7 @@ theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] :
     · exact List.mem_cons_of_mem _ (lookup_mem h)
 
 /-- A kind's precedence list starts at the kind, which the registry holds. -/
-theorem kindPrecedence_head {ks : Kinds} {n : Nat} {k : String} {l : List String}
+public theorem kindPrecedence_head {Law : Type} {ks : Kinds Law} {n : Nat} {k : String} {l : List String}
     (h : kindPrecedence ks n k = .ok l) : (ks.find k).isSome ∧ ∃ rest, l = k :: rest := by
   cases n with
   | zero => simp [kindPrecedence] at h
@@ -170,7 +170,7 @@ theorem kindPrecedence_head {ks : Kinds} {n : Nat} {k : String} {l : List String
         · cases h
 
 /-- Every name on a kind's precedence list is a kind the registry holds. -/
-theorem kindPrecedence_found {ks : Kinds} : ∀ {n : Nat} {k : String} {l : List String},
+public theorem kindPrecedence_found {Law : Type} {ks : Kinds Law} : ∀ {n : Nat} {k : String} {l : List String},
     kindPrecedence ks n k = .ok l → ∀ x ∈ l, (ks.find x).isSome := by
   intro n
   induction n with
@@ -245,7 +245,7 @@ theorem lookup_table_self {ks : Kinds} {i : Instance} (h : (ks.find i.name).isSo
 
 /-! ## The kind's law is an ancestor of the instance's -/
 
-theorem pinnedPrecedence_ok {ks : Kinds} {p : KindPin} {lk : List String} (h : pinnedPrecedence ks p = .ok lk) :
+public theorem pinnedPrecedence_ok {Law : Type} {ks : Kinds Law} {p : KindPin} {lk : List String} (h : pinnedPrecedence ks p = .ok lk) :
     kindRefs.current ks p = true ∧ kindPrecedence ks ks.depth p.name = .ok lk ∧ lk = p.lineage.map (·.name) := by
   unfold pinnedPrecedence at h
   split at h
@@ -259,7 +259,7 @@ theorem pinnedPrecedence_ok {ks : Kinds} {p : KindPin} {lk : List String} (h : p
       · cases h
 
 /-- A stale pin has no precedence list. -/
-theorem pinnedPrecedence_stale {ks : Kinds} {p : KindPin} (h : kindRefs.current ks p = false) :
+public theorem pinnedPrecedence_stale {Law : Type} {ks : Kinds Law} {p : KindPin} (h : kindRefs.current ks p = false) :
     pinnedPrecedence ks p = .error (.stale p) := by
   simp [pinnedPrecedence, h]
 

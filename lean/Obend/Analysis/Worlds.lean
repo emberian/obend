@@ -105,7 +105,7 @@ def versionFact (s : Store) (name : String) : TFact :=
 /-- Every page's law row: it reads the page and the pages of its kinds. -/
 def lawDeps (s : Store) : List (Dep TFact) :=
   s.pages.filterMap fun p => p.current.map fun G =>
-    let cells := p.name :: (kindChain p.name (settled G)).filter fun k => (s.page? k).isSome
+    let cells := p.name :: (kindChain s.entries p.name (settled G)).filter fun k => (s.page? k).isSome
     ⟨.law, "law of " ++ p.name, true, cells.map (versionFact s)⟩
 
 /-- The base pins. -/

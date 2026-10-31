@@ -45,8 +45,10 @@ set_option autoImplicit false
 open Obend.Core.Term (Term)
 open Obend.Core.Data (Data)
 
-/-- A kind at a version. -/
-structure KindCell where
+/-- A kind at a version. Its law is a `Term` in the language (the default) and a page's law lines in
+the vault (`Obend.Vault.vaultKinds`): the registry, pins, precedence and staleness are one
+structure over either. -/
+structure KindCell (Law : Type := Term) where
   name : String
   version : Nat
   /-- the field names its instances have -/
@@ -54,15 +56,18 @@ structure KindCell where
   /-- an instance's state at birth -/
   init : Data
   /-- the kind's own law (closed) -/
-  law : Term
+  law : Law
   /-- the kinds it inherits from, a local chain -/
   parents : List String
 
 /-- The kind cells a world holds, the current version of each. -/
-structure Kinds where
-  cells : List KindCell
+structure Kinds (Law : Type := Term) where
+  cells : List (KindCell Law)
 
-def Kinds.find (ks : Kinds) (k : String) : Option KindCell := ks.cells.find? (·.name == k)
+section
+variable {Law : Type}
+
+def Kinds.find (ks : Kinds Law) (k : String) : Option (KindCell Law) := ks.cells.find? (·.name == k)
 
 /-- One kind at one version: what a pin cites of each kind it rests on. -/
 structure KindVersion where
@@ -85,7 +90,7 @@ deriving DecidableEq, Repr
 @[expose] def KindPin.lineage (p : KindPin) : List KindVersion := ⟨p.name, p.version⟩ :: p.ancestors
 
 /-- The registry names version `f.version` of kind `f.name`. -/
-@[expose] def holds (ks : Kinds) (f : KindVersion) : Bool :=
+@[expose] def holds (ks : Kinds Law) (f : KindVersion) : Bool :=
   match ks.find f.name with
   | some c => c.version == f.version
   | none => false
@@ -105,7 +110,7 @@ inductive Refusal where
 /-! ## Kind precedence -/
 
 /-- Kind `k`'s C4 precedence list over its parent kinds, `n` bounding the depth of the hierarchy. -/
-def kindPrecedence (ks : Kinds) : Nat → String → Except Refusal (List String)
+def kindPrecedence (ks : Kinds Law) : Nat → String → Except Refusal (List String)
   | 0, k => .error (.cycle k)
   | n + 1, k =>
     match ks.find k with
@@ -120,15 +125,15 @@ def kindPrecedence (ks : Kinds) : Nat → String → Except Refusal (List String
         | .error e => .error (.c4 k e)
 
 /-- The depth bound: no acyclic hierarchy is deeper than the registry. -/
-def Kinds.depth (ks : Kinds) : Nat := ks.cells.length + 1
+def Kinds.depth (ks : Kinds Law) : Nat := ks.cells.length + 1
 
 /-- The kinds on a precedence list at their registry versions. -/
-def versionsOf (ks : Kinds) (l : List String) : List KindVersion :=
+def versionsOf (ks : Kinds Law) (l : List String) : List KindVersion :=
   l.filterMap fun x => (ks.find x).map fun c => ⟨x, c.version⟩
 
 /-- Resolve a kind reference: the registry's current version of the kind and of every other kind on
 its precedence list. -/
-def resolve (ks : Kinds) (k : String) : Except Refusal KindPin :=
+def resolve (ks : Kinds Law) (k : String) : Except Refusal KindPin :=
   match kindPrecedence ks ks.depth k with
   | .error e => .error e
   | .ok lk =>
@@ -136,7 +141,7 @@ def resolve (ks : Kinds) (k : String) : Except Refusal KindPin :=
     | some c => .ok ⟨k, c.version, versionsOf ks (lk.drop 1)⟩
     | none => .error (.unknown k)
 
-theorem versionsOf_holds (ks : Kinds) (l : List String) : ∀ f ∈ versionsOf ks l, holds ks f = true := by
+theorem versionsOf_holds (ks : Kinds Law) (l : List String) : ∀ f ∈ versionsOf ks l, holds ks f = true := by
   intro f hf
   obtain ⟨x, _, hx⟩ := List.mem_filterMap.1 hf
   cases hc : ks.find x with
@@ -146,7 +151,7 @@ theorem versionsOf_holds (ks : Kinds) (l : List String) : ∀ f ∈ versionsOf k
     subst hx
     simp [holds, hc]
 
-theorem resolve_ok {ks : Kinds} {k : String} {p : KindPin} (h : resolve ks k = .ok p) :
+theorem resolve_ok {ks : Kinds Law} {k : String} {p : KindPin} (h : resolve ks k = .ok p) :
     ∃ lk c, kindPrecedence ks ks.depth k = .ok lk ∧ ks.find k = some c ∧
       p = ⟨k, c.version, versionsOf ks (lk.drop 1)⟩ := by
   unfold resolve at h
@@ -159,7 +164,7 @@ theorem resolve_ok {ks : Kinds} {k : String} {p : KindPin} (h : resolve ks k = .
 
 /-- **The kind reference** (`Obend.Intention`): an instance's kind, resolved at the registry. Its
 supports are the pin's lineage: the kind's version and every ancestor's. -/
-def kindRefs : Obend.Intention Kinds String KindPin KindVersion Refusal where
+def kindRefs : Obend.Intention (Kinds Law) String KindPin KindVersion Refusal where
   ref := KindPin.name
   supports := KindPin.lineage
   holds := holds
@@ -171,6 +176,18 @@ def kindRefs : Obend.Intention Kinds String KindPin KindVersion Refusal where
     rcases List.mem_cons.1 hf with rfl | hf
     · simp [holds, hc]
     · exact versionsOf_holds ks _ f hf
+
+/-- The precedence list a current pin was resolved over: the registry's, refused as stale unless its
+names are the pin's lineage (a kind whose parents moved without a new version is not the kind that
+was pinned). -/
+@[expose] def pinnedPrecedence (ks : Kinds Law) (p : KindPin) : Except Refusal (List String) :=
+  if !kindRefs.current ks p then .error (.stale p)
+  else
+    match kindPrecedence ks ks.depth p.name with
+    | .error e => .error e
+    | .ok lk => if lk == p.lineage.map (·.name) then .ok lk else .error (.stale p)
+
+end
 
 /-- An instance: its name, its kind's identity, its own law, its state. -/
 structure Instance where
@@ -199,16 +216,6 @@ def lawTable (ks : Kinds) (i : Instance) : List (String × Term) :=
 /-- The graph an instance's law is linearized over: its kind's precedence list. -/
 def instanceGraph (k : String) (lk : List String) : Obend.Spec.C4.Graph :=
   ⟨fun x => if x = k then lk else [x], fun _ => false⟩
-
-/-- The precedence list a current pin was resolved over: the registry's, refused as stale unless its
-names are the pin's lineage (a kind whose parents moved without a new version is not the kind that
-was pinned). -/
-@[expose] def pinnedPrecedence (ks : Kinds) (p : KindPin) : Except Refusal (List String) :=
-  if !kindRefs.current ks p then .error (.stale p)
-  else
-    match kindPrecedence ks ks.depth p.name with
-    | .error e => .error e
-    | .ok lk => if lk == p.lineage.map (·.name) then .ok lk else .error (.stale p)
 
 /-- **An instance's effective law**: refused by name when its kind pin is stale (its kind or any
 ancestor revised); otherwise its own law, then every law on its kind's precedence list, by

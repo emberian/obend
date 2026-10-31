@@ -96,7 +96,7 @@ def replayPage (es es' : List Entry) (p : Page) : PageReplay :=
 /-- The pages a page's laws judge: itself, and every page it is a kind of. -/
 def judgedBy (s : Store) (k : String) : List Page :=
   s.pages.filter fun p => p.name == k || match p.current with
-    | some G => (kindChain p.name (settled G)).contains k
+    | some G => (kindChain s.entries p.name (settled G)).contains k
     | none => false
 
 /-- **Replay a vault under an amended page**: the page's new version (the owner's write of `md`,
