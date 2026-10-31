@@ -3,8 +3,8 @@ module
 (`Obend.Elab.Prepare`, with the packet's annotations as hints) succeeds in synthesis,
 `Bidirectional.checkAgainst` accepts the prepared term at the predicted type, and the prepared
 term's `checkWork` is within the packet's grant (the request's `limits.checkWork`, the same
-measure and the same word as the slot judge's grant, `Slot.Core4.checkWork`). This replaces the historical fuelled
-`Check.check` everywhere the front end admits a program: `FrontEnd.accept`, the open
+measure and the same word as the slot judge's grant, `Slot.Core4.checkWork`). It is how the front end
+admits a program everywhere (the retired fuelled `Check.check` is gone): `FrontEnd.accept`, the open
 template check, `Preview.preview`, `obend run` on a packet and `obend check-core`.
 
 A refusal is classified as before, by re-running the same gate on variations of the

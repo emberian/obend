@@ -6,7 +6,7 @@ The one front end of Objective Bend, ported from minidregg (commit 092027a2:
 `Compiler/ObjectiveBend{Parse,Law,Elaborate,C4,Contract,TermWire,FrontEnd,...}.lean`,
 `Host/ObjectiveBend{FrontEnd,Preview}.lean`). It turns `.obend` source into the `Obend.Core.Term`
 the demand machine runs, plus a typing proposal that the proof-producing checker
-(`Obend.Core.Check.check`) accepts with a derivation or refuses.
+(`Obend.Core.Bidirectional.checkAgainst`, through `Obend.Elab.Gate`) accepts with a derivation or refuses.
 
 ## Trust boundary (minidregg docs/OBJECTIVE-BEND-FRONTEND.md, "Trust boundary", in its words)
 
