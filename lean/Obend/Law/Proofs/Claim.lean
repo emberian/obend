@@ -61,7 +61,7 @@ public theorem termEq_sound {a b : Term} (h : termEq a b = true) : a = b :=
 theorem termEq_refl (a : Term) : termEq a a = true := treeEq_refl _
 
 mutual
-theorem scopedB_sound : ∀ {n : Nat} {t : Tree Tag}, scopedB n t = true → Tree.Scoped n t
+public theorem scopedB_sound : ∀ {n : Nat} {t : Tree Tag}, scopedB n t = true → Tree.Scoped n t
   | n, .var i, h => by simpa [scopedB, Tree.Scoped, Tree.All] using h
   | n, .bind b, h => by
       have ih : Tree.Scoped (n + 1) b := scopedB_sound (by simpa [scopedB] using h)
@@ -70,7 +70,7 @@ theorem scopedB_sound : ∀ {n : Nat} {t : Tree Tag}, scopedB n t = true → Tre
   | n, .node _ cs, h => by
       simp only [Tree.Scoped, Tree.All]
       exact scopedsB_sound (by simpa [scopedB] using h)
-theorem scopedsB_sound : ∀ {n : Nat} {cs : List (Tree Tag)}, scopedsB n cs = true →
+public theorem scopedsB_sound : ∀ {n : Nat} {cs : List (Tree Tag)}, scopedsB n cs = true →
     ∀ c ∈ cs, Tree.Scoped n c
   | _, [], _, _, hc => by simp at hc
   | n, c :: cs, h, d, hd => by

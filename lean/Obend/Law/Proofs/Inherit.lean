@@ -238,7 +238,7 @@ the owner. -/
   [("board2", ownerSigns unitTy), ("board", allowlistLaw unitTy ["ann", "bob"]),
    ("room", bounded unitTy "total" 5)]
 
-theorem boardLaws_closed : ∀ p ∈ boardLaws, closedB p.2 = true := by
+public theorem boardLaws_closed : ∀ p ∈ boardLaws, closedB p.2 = true := by
   intro p hp
   simp only [boardLaws, List.mem_cons, List.not_mem_nil, or_false] at hp
   rcases hp with rfl | rfl | rfl <;> decide +kernel

@@ -77,6 +77,7 @@ import Obend.Core.Proofs.Forcing.Pend
 import Obend.Core.Proofs.Forcing.Run
 import Obend.Core.Proofs.Forcing.Segment
 import Obend.Core.Proofs.Forcing.Switch
+import Obend.Core.Proofs.GroundExecution
 import Obend.Core.Proofs.Hole
 import Obend.Core.Proofs.LedgerPoles
 import Obend.Core.Proofs.Preservation
@@ -159,7 +160,11 @@ import Obend.Law.Claim
 import Obend.Law.Inherit
 import Obend.Law.Proofs.Claim
 import Obend.Law.Proofs.Eval
+import Obend.Law.Machine
 import Obend.Law.Proofs.Inherit
+import Obend.Law.Proofs.LawJudgeTeeth
+import Obend.Law.Proofs.Machine
+import Obend.Law.Proofs.MachineTeeth
 import Obend.Law.Proofs.Run
 import Obend.Law.Proofs.Std
 import Obend.Law.Proofs.Typing
@@ -171,6 +176,7 @@ import Obend.Main
 import Obend.Run
 import Obend.Run.Core4
 import Obend.Run.Core4Example
+import Obend.Run.LawJudge
 import Obend.Run.Negotiation
 import Obend.Run.Proofs.Core4
 import Obend.Run.Proofs.Interpret
