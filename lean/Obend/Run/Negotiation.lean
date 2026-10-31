@@ -29,12 +29,15 @@ instance : DecidableEq (Σ i, sig.Op i) := inferInstanceAs (DecidableEq (Σ i, O
 
 /-! ## The host's world -/
 
-/-- What the host's world says: each provider's grant, the deadline, whether the capability is live. -/
+/-- What the host's world says: each provider's grant, the deadline, whether the capability is live,
+and the world's clock (every world move is a new version of every cell: a restored grant is a new
+grant, not the old one returned). -/
 structure Wv where
   grant1 : Bool
   grant2 : Bool
   beforeDeadline : Bool
   capLive : Bool
+  clock : Nat
 deriving DecidableEq, Repr
 
 def holdsW (v : Wv) : Fact → Bool
@@ -42,21 +45,30 @@ def holdsW (v : Wv) : Fact → Bool
   | .auth .p2 => v.grant2
   | .beforeDeadline => v.beforeDeadline
 
-/-- The world's audited step: anything but un-passing the deadline. Grants are revoked and restored,
-and the world may even call the spent capability live again. -/
-def stepW (v v' : Wv) : Bool := v.beforeDeadline || !v'.beforeDeadline
+/-- The world's audited step: anything but un-passing the deadline, with the clock moving forward.
+Grants are revoked and restored, and the world may even call the spent capability live again. -/
+def stepW (v v' : Wv) : Bool := (v.beforeDeadline || !v'.beforeDeadline) && decide (v.clock < v'.clock)
 
-/-- The world as a `World`: each fact is its own cell, pinned to its truth. -/
+/-- The world as a `World`: each fact is its own cell, pinned to its truth at the clock's version. -/
 instance : World Wv Fact where
   Cell := Fact
-  Pin := Bool
+  Pin := Nat × Bool
   cell := id
-  pin := fun v f => some (holdsW v f)
+  pin := fun v f => some (v.clock, holdsW v f)
   holdsAt := holdsW
   Step := fun v v' => stepW v v' = true
-  holds_congr := fun _ _ _ h => Option.some.inj h
+  holds_congr := fun _ _ _ h => (Prod.mk.inj (Option.some.inj h)).2
   retired_dead := fun _ _ h => by cases h
   retired_step := fun _ _ _ _ h => by cases h
+  Ver := Nat × Bool
+  ver := fun v f => (v.clock, holdsW v f)
+  Past := fun a b => a.1 < b.1
+  past_irrefl := fun _ => Nat.lt_irrefl _
+  past_trans := fun _ _ _ => Nat.lt_trans
+  pinOf := fun _ => some
+  pin_ver := fun _ _ => rfl
+  ver_step := fun v v' _ h => .inr (by
+    simp only [stepW, Bool.and_eq_true, decide_eq_true_eq] at h; exact h.2)
 
 /-- The host: the `World`'s step and truth, the capability live as the world says. -/
 def host : Host Wv Tok Fact :=
@@ -67,7 +79,7 @@ def host : Host Wv Tok Fact :=
 /-- The negotiation, nothing done yet, planning on provider `p1`. -/
 def O₀ : Open sig HoleN Res Tok Fact Ob .idle := obj (plan .p1) ⟨[], none⟩
 
-def everything : Wv := ⟨true, true, true, true⟩
+def everything : Wv := ⟨true, true, true, true, 0⟩
 
 def c₀ : Cfg sig HoleN Res Tok Fact Ob Wv .idle := Cfg.init O₀ everything
 
@@ -92,7 +104,7 @@ def commitOp (p : Provider) : Σ i, sig.Op i := ⟨.reserved, Op.commit p⟩
 
 /-- The script up to the revocation: reserve, its reply, `p1`'s grant revoked. -/
 def opening : List (Event sig HoleN Res Fact Wv) :=
-  [.dispatch reserveOp, .respond ⟨.idle, Op.reserve, ()⟩, .world ⟨false, true, true, true⟩]
+  [.dispatch reserveOp, .respond ⟨.idle, Op.reserve, ()⟩, .world ⟨false, true, true, true, 1⟩]
 
 def c₁ : Cfg sig HoleN Res Tok Fact Ob Wv .idle := (session host spec c₀ opening).1
 
@@ -119,19 +131,19 @@ def rest : List (Event sig HoleN Res Fact Wv) :=
   [.dispatch (commitOp .p1),
    .replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline],
    .dispatch (commitOp .p2),
-   .world everything,
+   .world ⟨true, true, true, true, 2⟩,
    .replan (j := Phase.reserved) () cancelPlan [],
    .replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline],
    .replan (j := Phase.reserved) () (planFlip .p2) [.auth .p2, .beforeDeadline],
    .dispatch (commitOp .p1),
    .respond ⟨.reserved, Op.commit .p1, true⟩,
-   .world ⟨true, true, false, true⟩,
-   .world everything,
+   .world ⟨true, true, false, true, 3⟩,
+   .world ⟨true, true, true, true, 4⟩,
    .abandon (commitOp .p2),
    .respond ⟨.reserved, Op.commit .p2, true⟩,
    .replan (j := Phase.reserved) () cancelPlan [],
    .dispatch (commitOp .p1),
-   .world ⟨false, false, false, true⟩]
+   .world ⟨false, false, false, true, 5⟩]
 
 def script : List (Event sig HoleN Res Fact Wv) := opening ++ rest
 
@@ -174,7 +186,7 @@ dispatched in the hole; the world ends past the deadline with both grants revoke
 the run has ended). -/
 theorem changed :
     c₁.obj.σ .reserved () = some (plan .p1) ∧ final.obj.σ .reserved () = some (plan .p2) ∧
-      final.world = ⟨false, false, false, true⟩ := ⟨rfl, rfl, rfl⟩
+      final.world = ⟨false, false, false, true, 5⟩ := ⟨rfl, rfl, rfl⟩
 
 -- Without the replan guard the three replans in flight are not refused by name (the cancellation
 -- and the return to `p1` become `inconsistent`, and the same-first-call `planFlip` is ACCEPTED).
@@ -189,7 +201,7 @@ theorem script_legal : Legal host spec O₀ everything (fun _ _ => []) final.log
 /-! ## The fixture the library could not refuse -/
 
 /-- Every required fact false, the capability live (`astra/ASTRA-EVAL-20261031.md`, line 105). -/
-def withdrawn : Wv := ⟨false, false, false, true⟩
+def withdrawn : Wv := ⟨false, false, false, true, 0⟩
 
 /-- **Refused**: at the withdrawn view `admitOp` says no to committing on `p1`, `interpret` delivers
 it anyway (two calls, delivered), and the runner driven by the same handler refuses it, naming the
@@ -278,7 +290,7 @@ grant its decision cited. -/
 theorem decision_rechecked :
     (session host laxSpec c₀ (opening.take 2 ++
       [.replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline],
-       .world ⟨false, true, true, true⟩,
+       .world ⟨false, true, true, true, 1⟩,
        .dispatch (commitOp .p1)])).2 =
       [none, none, none, none, some (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1])] :=
   rfl

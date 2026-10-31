@@ -37,8 +37,8 @@ Where `Slot` does not fit, and what is outside it:
 - A theorem whose own statement meaning differs between the exports is REVISED: the obligation
   changed, which is not a support withdrawing from a fixed obligation. Reported outside the slot.
 - `Permanent` has no instance here: an edit can be reverted, so no dead support stays dead along
-  "later export". Clause (3) of `slot_repair` is unused; clauses (1), (2), (4) are what `verdict`
-  rests on.
+  "later export". `permanent_blocked_forever` is unused; `read_usable_supports`,
+  `read_blocked_exact` and `read_of_usable` are what `verdict` rests on.
 - A theorem new in the second export, or gone from it, has no slot to read.
 
 Toolchain constants (`Init`, `Std`, `Lean`) are not rows: the export records the toolchain once and
@@ -460,7 +460,7 @@ theorem verdict_eq_unaffected_iff_dead_nil (new : Export) (c : Candidate) :
     simp only [verdict, hd]
     split <;> simp
 
-/-- UNAFFECTED is exactly `slot_repair` (1): the read is `usable` iff every support holds at the
+/-- UNAFFECTED is exactly `read_usable_supports`: the read is `usable` iff every support holds at the
 new view (the judge being constant, nothing else is asked). -/
 theorem verdict_unaffected_iff (new : Export) (c : Candidate) :
     verdict new c = .unaffected ↔
@@ -469,7 +469,7 @@ theorem verdict_unaffected_iff (new : Export) (c : Candidate) :
   simp [slot]
 
 /-- A verdict that names dead supports names exactly what the slot's read names: the list is the
-read's `blocked` list, which (`slot_repair` (2)) holds every support of the candidate that does not
+read's `blocked` list, which (`read_blocked_exact`) holds every support of the candidate that does not
 hold at the new view and nothing else. -/
 theorem verdict_blocked (new : Export) (c : Candidate) (dead : List Support)
     (h : verdict new c = .statementCited dead ∨ verdict new c = .proofCited dead) :

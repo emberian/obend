@@ -13,11 +13,14 @@ view the selection is USABLE when it passes the judge and every support it cites
 BLOCKED, and the read names exactly the supports that do not hold. Stored and usable are different
 things: a stored selection stays stored while it is blocked, and a read says which it is.
 
-`slot_repair` is the one repair theorem. A selection is usable at a view iff every support it cites
-holds there. A blocked read names every dead support of the selection and nothing else. A support that
-is PERMANENT (false once means false at every later view of the World: a retired cell, an answered
-ring) keeps the selection blocked, by that name, at every later view. And a candidate whose supports
-hold is usable the moment it is selected: the repair changes the selection and nothing else of the slot.
+What a read says, one lemma each: a selection reads usable iff it passes the judge and every support
+it cites holds (`read_usable_supports`); a blocked read names every dead support of the selection and
+nothing else, at least one (`read_blocked_exact`); a support that is PERMANENT (false once means false
+at every later view: a retired cell, an answered ring) keeps the selection blocked, by that name, at
+every later view (`permanent_blocked_forever`); and a usable candidate reads usable, with its
+evidence, the moment it is selected (`read_of_usable`). The four were once bundled as `slot_repair`,
+which stays as a deprecated conjunction: they are reading and permanence lemmas, and no stored
+object is repaired by them (Kimi `review/KIMI-REVIEW-20261030.md` §1).
 
 `interp` runs a protocol whose holes a RESOLVER fills when reached; a resolver may refuse, and the run
 then ends `withdrawn` with the resolver's reason. `Slot.resolve` is the resolver a slot gives.
@@ -123,12 +126,49 @@ the relation reaches from it. -/
 def Permanent {V : Type} (holdsAt : V → Fact → Bool) (later : V → V → Prop) (f : Fact) : Prop :=
   ∀ v v', later v v' → holdsAt v f = false → holdsAt v' f = false
 
-/-- The ONE repair theorem.
-(1) A stored selection is usable at a view iff it passes the judge and every support it cites holds.
-(2) A blocked read names exactly the dead supports of the selection, at least one.
-(3) A dead PERMANENT support keeps the selection blocked, by that name, at every later view.
-(4) A candidate that is usable at the view reads usable as soon as it is selected, with its evidence;
-    the slot (its supports and its judge) is the same slot: nothing is reinstalled. -/
+/-- A stored selection reads usable iff it passes the judge and every support it cites holds. -/
+theorem read_usable_supports (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) :
+    (∃ ev, S.read holds (some c) = .usable c ev) ↔ S.judge c = true ∧ ∀ f ∈ S.supports c, holds f = true :=
+  (read_usable_iff S _ c).trans (usable_iff S _ c)
+
+/-- A blocked read of `c` names exactly the dead supports of `c`, at least one. -/
+theorem read_blocked_exact (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) :
+    ∀ c' d, S.read holds (some c) = .blocked c' d →
+      d ≠ [] ∧ ∀ f, f ∈ d ↔ f ∈ S.supports c ∧ holds f = false :=
+  fun _ _ h => (read_blocked_names S _ h).2
+
+/-- A dead PERMANENT support keeps a selection that passes the judge blocked, by that support's
+name, at every later view. -/
+theorem permanent_blocked_forever {V : Type} (S : Slot Fact Cand) (holdsAt : V → Fact → Bool)
+    (later : V → V → Prop) (v : V) (c : Cand) :
+    ∀ f, f ∈ S.supports c → holdsAt v f = false → Permanent holdsAt later f →
+      ∀ v', later v v' → S.judge c = true →
+        ∃ d, S.read (holdsAt v') (some c) = .blocked c d ∧ f ∈ d := by
+  intro f hf hdead hperm v' hv' hj
+  have hf' : holdsAt v' f = false := hperm v v' hv' hdead
+  have hmem : f ∈ S.dead (holdsAt v') c := (mem_dead_iff S _ c f).2 ⟨hf, hf'⟩
+  unfold Slot.read
+  simp only [hj, if_true]
+  cases hd : S.dead (holdsAt v') c with
+  | nil => rw [hd] at hmem; cases hmem
+  | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩
+
+/-- A usable candidate reads usable, with its evidence, as soon as it is selected: the slot (its
+supports and its judge) is the same slot, nothing is reinstalled. -/
+theorem read_of_usable (S : Slot Fact Cand) (holds : Fact → Bool) :
+    ∀ c', S.usable holds c' = true → S.read holds (some c') = .usable c' (S.evidence holds c') := by
+  intro c' hu
+  have ⟨hj, hall⟩ := (usable_iff S _ c').1 hu
+  have hd : S.dead holds c' = [] := (dead_eq_nil_iff S _ c').2 hall
+  unfold Slot.read
+  simp [hj, hd]
+
+#tooth read_usable_supports by mutation Slot.read := fun _ _ _ => .empty
+#tooth permanent_blocked_forever by mutation Slot.read := fun _ _ _ => .empty
+#tooth read_of_usable by mutation Slot.read := fun _ _ _ => .empty
+
+/-- The four reading and permanence lemmas, bundled (deprecated: use them by name). -/
+@[deprecated "use `read_usable_supports`, `read_blocked_exact`, `permanent_blocked_forever`, `read_of_usable`" (since := "2026-10-31")]
 theorem slot_repair {V : Type} (S : Slot Fact Cand) (holdsAt : V → Fact → Bool)
     (later : V → V → Prop) (v : V) (c : Cand) :
     ((∃ ev, S.read (holdsAt v) (some c) = .usable c ev) ↔
@@ -139,25 +179,9 @@ theorem slot_repair {V : Type} (S : Slot Fact Cand) (holdsAt : V → Fact → Bo
         ∀ v', later v v' → S.judge c = true →
           ∃ d, S.read (holdsAt v') (some c) = .blocked c d ∧ f ∈ d) ∧
     (∀ c', S.usable (holdsAt v) c' = true →
-        S.read (holdsAt v) (some c') = .usable c' (S.evidence (holdsAt v) c')) := by
-  refine ⟨(read_usable_iff S _ c).trans (usable_iff S _ c), ?_, ?_, ?_⟩
-  · intro c' d h
-    exact (read_blocked_names S _ h).2
-  · intro f hf hdead hperm v' hv' hj
-    have hf' : holdsAt v' f = false := hperm v v' hv' hdead
-    have hmem : f ∈ S.dead (holdsAt v') c := (mem_dead_iff S _ c f).2 ⟨hf, hf'⟩
-    unfold Slot.read
-    simp only [hj, if_true]
-    cases hd : S.dead (holdsAt v') c with
-    | nil => rw [hd] at hmem; cases hmem
-    | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩
-  · intro c' hu
-    have ⟨hj, hall⟩ := (usable_iff S _ c').1 hu
-    have hd : S.dead (holdsAt v) c' = [] := (dead_eq_nil_iff S _ c').2 hall
-    unfold Slot.read
-    simp [hj, hd]
-
-#tooth slot_repair by mutation Slot.read := fun _ _ _ => .empty
+        S.read (holdsAt v) (some c') = .usable c' (S.evidence (holdsAt v) c')) :=
+  ⟨read_usable_supports S _ c, read_blocked_exact S _ c, permanent_blocked_forever S holdsAt later v c,
+    read_of_usable S _⟩
 
 end
 

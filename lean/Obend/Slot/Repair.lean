@@ -109,24 +109,39 @@ end
 
 /-! ## The pin world: Astra's countermodel, refused, and a compatible repair -/
 
-/-- Two cells (`false`, `true`), each holding a natural pin; the fact `(c, n)` says cell `c` holds
-`n`. Every step is allowed and nothing retires. -/
-instance pinWorld : World (Bool → Nat) (Bool × Nat) where
+/-- Two cells (`false`, `true`), each holding a value at a version: the view gives each cell its
+`(version, value)`, the pin. The fact `(c, n)` says cell `c` holds value `n` (at any version: a fact
+about the cell's content, not a citation of a version). A step keeps each cell or moves its version
+forward; nothing retires. -/
+instance pinWorld : World (Bool → Nat × Nat) (Bool × Nat) where
   Cell := Bool
-  Pin := Nat
+  Pin := Nat × Nat
   cell := Prod.fst
   pin v c := some (v c)
-  holdsAt v f := v f.1 == f.2
-  Step _ _ := True
+  holdsAt v f := (v f.1).2 == f.2
+  Step v v' := ∀ c, v c = v' c ∨ (v c).1 < (v' c).1
   holds_congr := fun v v' f h => by simp only [Option.some.injEq] at h; simp [h]
   retired_dead := fun _ _ h => by cases h
   retired_step := fun _ _ _ _ h => by cases h
+  Ver := Nat × Nat
+  ver v c := v c
+  Past a b := a.1 < b.1
+  past_irrefl := fun _ => Nat.lt_irrefl _
+  past_trans := fun _ _ _ => Nat.lt_trans
+  pinOf _ := some
+  pin_ver := fun _ _ => rfl
+  ver_step := fun _ _ c h => h c
 
-/-- Set cell `c`'s pin to `n`. -/
-def setPin (c : Bool) (n : Nat) (v : Bool → Nat) : Bool → Nat := fun b => if b = c then n else v b
+/-- Set cell `c`'s value to `n`, at its next version. -/
+def setPin (c : Bool) (n : Nat) (v : Bool → Nat × Nat) : Bool → Nat × Nat :=
+  fun b => if b = c then ((v c).1 + 1, n) else v b
 
-def pinRepair (c : Bool) (n : Nat) : Repair (Bool → Nat) (Bool × Nat) :=
-  ⟨(c, n), setPin c n, fun _ => trivial, fun v => by simp [holdsAt, setPin]⟩
+def pinRepair (c : Bool) (n : Nat) : Repair (Bool → Nat × Nat) (Bool × Nat) :=
+  ⟨(c, n), setPin c n, fun v b => by
+      by_cases hb : b = c
+      · subst hb; exact .inr (by simp [setPin])
+      · exact .inl (by simp [setPin, hb]),
+    fun v => by simp [holdsAt, setPin]⟩
 
 theorem pinRepair_local (c : Bool) (n : Nat) : (pinRepair c n).Local := by
   intro v b hb
@@ -136,7 +151,7 @@ theorem pinRepair_local (c : Bool) (n : Nat) : (pinRepair c n).Local := by
 /-- Astra's candidate: cell `false` at pin 0 and at pin 1. -/
 def clash : Slot (Bool × Nat) Unit := ⟨fun _ => [(false, 0), (false, 1)], fun _ => true⟩
 
-theorem clash_unsat (v : Bool → Nat) : clash.usable (holdsAt v) () = false := by
+theorem clash_unsat (v : Bool → Nat × Nat) : clash.usable (holdsAt v) () = false := by
   cases h : clash.usable (holdsAt v) ()
   · rfl
   · have := ((usable_iff clash _ ()).1 h).2
@@ -148,22 +163,22 @@ theorem clash_unsat (v : Bool → Nat) : clash.usable (holdsAt v) () = false := 
 /-- The naive repair law (each repair an allowed step establishing its fact; every dead support
 covered) holds of the clash, and the repaired candidate is not usable. -/
 theorem clash_naive :
-    (∀ f ∈ clash.dead (holdsAt (fun (_ : Bool) => 2)) (), ∃ r ∈ [pinRepair false 0, pinRepair false 1], r.fact = f) ∧
-    clash.usable (holdsAt (applyPlan [pinRepair false 0, pinRepair false 1] fun (_ : Bool) => 2)) () = false :=
+    (∀ f ∈ clash.dead (holdsAt (fun (_ : Bool) => (0, 2))) (), ∃ r ∈ [pinRepair false 0, pinRepair false 1], r.fact = f) ∧
+    clash.usable (holdsAt (applyPlan [pinRepair false 0, pinRepair false 1] fun (_ : Bool) => (0, 2))) () = false :=
   ⟨by decide, clash_unsat _⟩
 
 /-- Compatibility refuses the clash: repairing `pin = 0` retires `pin = 1` where it held. -/
 theorem clash_refused : ¬ (pinRepair false 0).Compatible clash () := by
   intro h
-  have := h (fun (_ : Bool) => 1) (false, 1) (by simp [clash]) rfl
+  have := h (fun (_ : Bool) => (0, 1)) (false, 1) (by simp [clash]) rfl
   simp [holdsAt, pinRepair, setPin] at this
 
 /-- Two requirements on two cells: the local repairs are compatible and repair the candidate. -/
 def apart : Slot (Bool × Nat) Unit := ⟨fun _ => [(false, 0), (true, 1)], fun _ => true⟩
 
 theorem apart_repaired :
-    apart.usable (holdsAt (fun (_ : Bool) => 2)) () = false ∧
-    apart.usable (holdsAt (applyPlan [pinRepair false 0, pinRepair true 1] fun (_ : Bool) => 2)) () = true := by
+    apart.usable (holdsAt (fun (_ : Bool) => (0, 2))) () = false ∧
+    apart.usable (holdsAt (applyPlan [pinRepair false 0, pinRepair true 1] fun (_ : Bool) => (0, 2))) () = true := by
   refine ⟨rfl, (repair_sound apart () _ _ rfl (fun r hr => ?_) (by decide)).2⟩
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with rfl | rfl <;>

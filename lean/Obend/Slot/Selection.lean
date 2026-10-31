@@ -1,10 +1,10 @@
 module
 /-
-# Obend.Slot.Selection — selection soundness, factored out of `Integrity.transition`
+# Obend.Slot.Selection — selection soundness, factored out of `Integrity.incumbentTransition`
 
 `astra/ASTRA-SELECTION-20261031.md` §7.1: the policy-independent clause of a stored-selection
 policy is SOUNDNESS (whatever it selects is usable at the view), not incumbent retention.
-`Integrity.transition` implies it (`transition_sound`); so does first-usable re-selection (`churn`,
+`Integrity.incumbentTransition` implies it (`transition_sound`); so does first-usable re-selection (`churn`,
 `churn_sound`), which is NOT incumbent-first (`Integrity.not_transition_churn`) and is still sound;
 `sticky` is not (`not_sound_sticky`). Exclusion of retired supports needs only soundness
 (`sound_retired`, the policy-independent form of `transition_retired`). The incumbent-first preset's
@@ -24,7 +24,7 @@ def SelectionSound (A : Advance V Fact Cand) : Prop :=
   ∀ (S : Slot Fact Cand) (v : V) (order : List Cand) (stored : Option Cand) (c : Cand),
     A.advance S v order stored = .ok c → S.usable (holdsAt v) c = true
 
-theorem transition_sound {A : Advance V Fact Cand} (hA : Integrity.transition A) :
+theorem transition_sound {A : Advance V Fact Cand} (hA : Integrity.incumbentTransition A) :
     SelectionSound A :=
   fun S v order stored c h => ((hA S v order stored).2.1 c h).1
 

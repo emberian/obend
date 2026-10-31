@@ -17,7 +17,7 @@ REPAIR (`Integrity.repair`: a justification withdrawn stays withdrawn, and a slo
 candidate is fillable now) is not a second guarantee: it is a corollary of contextual integrity for
 every filler (`repair_of_contextual`; Kimi `review/KIMI-REVIEW-20261030.md` §1, Astra's proof).
 
-B4′, TRANSITION (`Integrity.transition`), the operational property over a stored selection: a stored
+B4′, TRANSITION (`Integrity.incumbentTransition`, formerly `Integrity.transition`), the operational property over a stored selection: a stored
 selection that is usable at the new view is kept; an advanced selection is usable at the new view,
 and is either the kept one or the first usable of the order; a refusal happens only when the stored
 selection and every candidate of the order are unusable, and names each candidate's dead supports.
@@ -89,8 +89,11 @@ def Integrity.repair (F : Filler V Fact Cand) : Prop :=
 structure Advance (V Fact Cand : Type) where
   advance : Slot Fact Cand → V → List Cand → Option Cand → Except (Refusal Fact Cand) Cand
 
-/-- B4′. TRANSITION, over a stored selection. -/
-def Integrity.transition (A : Advance V Fact Cand) : Prop :=
+/-- B4′, the INCUMBENT-FIRST TRANSITION law of a stored selection: a usable stored selection is
+kept; an advanced selection is usable and is the kept one or the head of the usable order; a refusal
+only when nothing is usable, naming each candidate's dead supports. One preset's law, not the
+policy-independent clause (that is `SelectionSound`, `Obend.Slot.Selection`). -/
+def Integrity.incumbentTransition (A : Advance V Fact Cand) : Prop :=
   ∀ (S : Slot Fact Cand) (v : V) (order : List Cand) (stored : Option Cand),
     (∀ c, stored = some c → S.usable (holdsAt v) c = true → A.advance S v order stored = .ok c) ∧
     (∀ c, A.advance S v order stored = .ok c → S.usable (holdsAt v) c = true ∧
@@ -101,9 +104,13 @@ def Integrity.transition (A : Advance V Fact Cand) : Prop :=
       ∀ c ∈ order, ∃ d, (c, d) ∈ w ∧ (∀ f ∈ d, f ∈ S.supports c ∧ holdsAt v f = false) ∧
         (d = [] → S.judge c = false))
 
+/-- The old name of `Integrity.incumbentTransition` (deprecated). -/
+@[deprecated Integrity.incumbentTransition (since := "2026-10-31")]
+abbrev Integrity.transition (A : Advance V Fact Cand) : Prop := Integrity.incumbentTransition A
+
 /-- CONTEXTUAL INTEGRITY ∧ TRANSITION. -/
 def Integrity (F : Filler V Fact Cand) (A : Advance V Fact Cand) : Prop :=
-  Integrity.contextual F ∧ Integrity.transition A
+  Integrity.contextual F ∧ Integrity.incumbentTransition A
 
 theorem select_ok {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand} {c : Cand}
     (h : S.select holds order = .ok c) :
@@ -221,7 +228,7 @@ theorem slotFiller_repair : Integrity.repair (slotFiller : Filler V Fact Cand) :
 
 /-- Under TRANSITION, a stored selection citing a cell retired at `v` is never the advanced
 selection at any later view. -/
-theorem transition_retired {A : Advance V Fact Cand} (hA : Integrity.transition A)
+theorem transition_retired {A : Advance V Fact Cand} (hA : Integrity.incumbentTransition A)
     (S : Slot Fact Cand) (order : List Cand) (stored : Option Cand) {v v' : V} {c : Cand} {f : Fact}
     (hf : f ∈ S.supports c) (hr : pin (Fact := Fact) v (cell f) = none) (hl : Later (Fact := Fact) v v') :
     A.advance S v' order stored ≠ .ok c := by
@@ -356,6 +363,21 @@ instance toyWorld : World Nat Member where
       · cases h
       · rw [if_neg (by omega)]
     | bob => simp [toyPin] at h
+  Ver := Option Unit
+  ver := toyPin
+  Past a b := a ≠ none ∧ b = none
+  past_irrefl := fun _ ⟨h, h'⟩ => h h'
+  past_trans := fun _ _ _ ⟨_, h⟩ ⟨h', _⟩ => absurd h h'
+  pinOf _ x := x
+  pin_ver := fun _ _ => rfl
+  ver_step := fun v v' c step => by
+    subst step
+    cases c with
+    | alice =>
+      by_cases h : v < 1
+      · exact .inr ⟨by simp [toyPin, h], by simp [toyPin]⟩
+      · exact .inl (by simp [toyPin, h])
+    | bob => exact .inl rfl
 
 /-- Each member's candidate cites that member's grant; the judge accepts both. -/
 def toySlot : Slot Member Member := ⟨fun member => [member], fun _ => true⟩
@@ -417,7 +439,7 @@ theorem not_integrity_blindRefusal :
 
 /-- FLOOR. Re-selecting at every view drops Bob's stored selection at height 0, where it is usable,
 for Alice, who comes first. -/
-theorem not_transition_churn : ¬ Integrity.transition (churn : Advance Nat Member Member) := by
+theorem not_transition_churn : ¬ Integrity.incumbentTransition (churn : Advance Nat Member Member) := by
   intro h
   have := (h toySlot 0 toyOrder (some .bob)).1 .bob rfl rfl
   cases this
@@ -425,7 +447,7 @@ theorem not_transition_churn : ¬ Integrity.transition (churn : Advance Nat Memb
 #tooth not_transition_churn by mutation churn := slotAdvance
 
 /-- FLOOR. Keeping the stored selection keeps Alice's at height 1, where her grant is retired. -/
-theorem not_transition_sticky : ¬ Integrity.transition (sticky : Advance Nat Member Member) := by
+theorem not_transition_sticky : ¬ Integrity.incumbentTransition (sticky : Advance Nat Member Member) := by
   intro h
   have := ((h toySlot 1 toyOrder (some .alice)).2.1 .alice rfl).1
   cases this

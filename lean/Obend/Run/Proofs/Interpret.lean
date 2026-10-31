@@ -286,10 +286,10 @@ public theorem resolveEventBy_ok {Cand : Type} [World V Fact] {adv : Advance V F
     exact ⟨cand, rfl, rfl, hA Sl c.world order stored cand ha⟩
 
 omit [DecidableEq (Σ i, S.Op i)] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok] in
-/-- Under an incumbent-retaining policy (`Integrity.transition`), a usable stored choice is
+/-- Under an incumbent-retaining policy (`Integrity.incumbentTransition`), a usable stored choice is
 re-installed as it is. -/
 public theorem resolveEventBy_keeps {Cand : Type} [World V Fact] {adv : Advance V Fact Cand}
-    (hA : Integrity.transition adv) {i : Ix} {c : Cfg S Hole A Tok Fact Ob V i}
+    (hA : Integrity.incumbentTransition adv) {i : Ix} {c : Cfg S Hole A Tok Fact Ob V i}
     {Sl : Slot Fact Cand} {j : Ix} {h : Hole j} {body : Cand → Prot S Hole A j}
     {order : List Cand} {cand : Cand} (hu : Sl.usable (World.holdsAt c.world) cand = true) :
     resolveEventBy adv c Sl h body order (some cand) = .ok (.replan h (body cand) (Sl.supports cand)) := by
