@@ -199,16 +199,5 @@ public theorem StateAgree.readsIn {f : Nat → Nat} {D U : Nat → Prop} {s t : 
       cases fr <;> simp [readsAt] at reads
       subst reads; exact sIn _ (List.mem_cons_self ..) _ (List.mem_singleton_self _)
   | _ => simp [readsAt] at reads
-#assert_axioms ForcesBy.mono
-#assert_axioms ForcesBy.renames
-#assert_axioms ForcesBy.lazyValid
-#assert_axioms ForcesBy.image
-#assert_axioms ForcesBy.reenter
-#assert_axioms bounded_trans
-#assert_axioms forces_transfer
-#assert_axioms agreeRel_refl
-#assert_axioms agree_inverse
-#assert_axioms stepRaw_enter_cases
-#assert_axioms StateAgree.readsIn
 
 end Obend.Core.Proofs.Forcing

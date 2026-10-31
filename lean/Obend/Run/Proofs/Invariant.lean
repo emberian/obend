@@ -22,7 +22,6 @@ guard `Open.Replan` (`run_replan_guard`).
 public import Obend.Run.Spec
 public import Obend.Slot.Proofs.Protocol
 public import Obend.Tactic.Tooth
-public import Obend.AxiomPin
 import all Obend.Run.Runner
 import all Obend.Run.Spec
 import all Obend.Slot.Proofs.Protocol
@@ -864,11 +863,6 @@ public theorem lost_reply_frozen {host : Host V Tok Fact} {sp : Spec S Tok Fact 
   obtain ⟨hh, hs, hd⟩ := key evs c ho hno
   refine ⟨hh, hs, hd, ?_⟩
   exact (refines (session_reachable hc evs)).next o (by rw [hh]; exact ho)
-
-#assert_axioms abandon_accepted abandon_keeps_obligation ended_frozen
-#assert_axioms refines reachable_legal step_inv dispatch_usable_choice run_replan_guard replan_accepted
-  replace_then_dispatch inflight_busy inflight_replan_refused answered_replan_refused lost_reply_frozen
-  entered_iff advance_reach reach_advance
 
 end
 

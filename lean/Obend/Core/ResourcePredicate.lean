@@ -145,6 +145,4 @@ theorem ResourcePredicate.weighted_safe {a : Assumptions} {nominal : Nat → Boo
           simp_all [weightedResourceGraph,graph,observe,weightedResourceLabel,
             weightedResourceDependencies,resourceObservation,rowTag,Nodes]
 
-#assert_axioms ResourcePredicate.field ResourcePredicate.scanStream ResourcePredicate.scanResidual
-  ResourcePredicate.weighted_safe
 end Obend.Core.TypeGraph

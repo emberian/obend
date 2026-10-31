@@ -108,5 +108,4 @@ public theorem Discharges.filtered_hit_image
           refine ⟨mode,?_⟩
           exact (Obend.Core.RowSearch.hit_path_iff targetPath).mpr ⟨count,endpointHit⟩
 
-#assert_axioms Discharges.filtered_hit_image
 end Obend.Core.Proofs.Templates

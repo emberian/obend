@@ -5,10 +5,9 @@ module
 `C_{A;B}(S,I) = C_A(S,I) ∧ C_B(S, F_A(S,I))` and `F_{A;B} = F_B ∘ F_A` (`run_append`), its
 associativity (`run_assoc`), what an admitted layer met (`checkLayer_ok`) and what a discharged
 composition guarantees (`discharge_ok`). Statements as in minidregg
-`Compiler/ObjectiveBendContract.lean` (commit 092027a2); pinned standard.
+`Compiler/ObjectiveBendContract.lean` (commit 092027a2).
 -/
 public import Obend.Spec.Contract
-public import Obend.AxiomPin
 namespace Obend.Spec.Contract
 set_option autoImplicit false
 
@@ -83,7 +82,5 @@ public theorem discharge_ok {self seed : Row τ} {chain : List (Layer τ)}
     · revert admitted
       simp only [m, Bool.false_eq_true, if_false]
       split <;> (try split) <;> simp
-
-#assert_axioms run_append run_assoc checkLayer_ok missing_nil_get discharge_ok
 
 end Obend.Spec.Contract

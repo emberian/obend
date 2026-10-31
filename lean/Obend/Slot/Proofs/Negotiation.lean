@@ -21,7 +21,6 @@ shared-parameter theorems) went with PROT-6, replaced by Std.offer's deployed fu
 `lost_reply_policy`).
 -/
 public import Obend.Slot.Proofs.Protocol
-public import Obend.AxiomPin
 
 namespace Obend.Slot.Protocol.Negotiation
 
@@ -256,11 +255,5 @@ theorem replan_before_dispatch (f : P .reserved) (hf : Fills spec Ω iface f) :
   refine ⟨hnd _ _, fun j h hd => (hnd j h hd).elim, ?_⟩
   obtain ⟨hw, hh, _⟩ := Open.resubst_wf hwf (choose_ok hf) (fun j h hd => (hnd j h hd).elim)
   exact ⟨hw, hh⟩
-
-#assert_axioms template_hasProt plan_fills cancel_fills choose_ok instantiations_hasProt
-#assert_axioms interpret_instance holes_instance cancel_path_refunds_obligation commit_path_pays
-#assert_axioms reach_reserved reach_hole started_lost dispatched_lost lost_reply_not_started
-#assert_axioms lost_reply_blocks_replan dispatched_answered answered_blocks_replan planFlip_fills
-#assert_axioms guard_stricter_than_wf guarded_replan_after_dispatch_is_noop replan_before_dispatch
 
 end Obend.Slot.Protocol.Negotiation

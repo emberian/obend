@@ -40,8 +40,8 @@ piece are written up here:
 ## State
 
 The Lean library in [`lean/`](lean/) builds at Lean 4.35 with no Mathlib and no native code: about
-two hundred modules, twenty-five hundred theorems, every proof module pinned to Lean's three
-standard axioms, seventy-odd mutation teeth that fail their theorem under a planted fault. It holds
+two hundred modules, twenty-five hundred theorems, every constant checked by one census against Lean's
+three standard axioms, seventy-odd mutation teeth that fail their theorem under a planted fault. It holds
 the calculus and its demand machine with their proofs; a bidirectional checker complete for a stated
 fragment of the declarative typing, with equi-recursive type agreement decided by finite
 bisimulation and executable annotation preparation; laws by occasion with inheritance along the

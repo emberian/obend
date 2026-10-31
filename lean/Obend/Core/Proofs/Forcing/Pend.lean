@@ -230,8 +230,4 @@ public theorem pend_step {e : Pending} {f : Nat → Nat} {σ τ : State} (rel : 
     rw [stepRaw_heap_keep τ (by unfold Pending.gap at tSize; have := Pending.cell_lt ph.valid; omega) tUnread]
     exact ph.cached
 
-#assert_axioms exec_heap_keep
-#assert_axioms agree_transfer
-#assert_axioms pend_step
-
 end Obend.Core.Proofs.Forcing

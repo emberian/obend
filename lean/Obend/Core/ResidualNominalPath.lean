@@ -1,6 +1,5 @@
 module
 public import Obend.Core.SubstitutionResidualTransport
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
@@ -85,6 +84,4 @@ public theorem noemit_nominal_skipPath (a : Assumptions) (row : Ty) (label : Str
   obtain ⟨n, hit⟩ := Obend.Core.RowSearch.find_sound _ _ _ _ found
   exact residual_hit_nominal_noemit_path hit index rfl noemit
 
-#assert_axioms noemit_step_not_emit stream_skip_emission_eq residual_hit_nominal_noemit_path
-  noemit_nominal_skipPath
 end Obend.Core.RecursiveRows

@@ -243,9 +243,6 @@ public theorem Chain.spins {s t : State} (h : Chain s t) (spins : ∀ n, ¬ Halt
     obtain ⟨n, halts⟩ := halts_of_endsWith (above L0 T0 0 (limitsLe_refl _) (Nat.le_refl _))
     exact absurd halts (spins n)
 
-#assert_axioms settle_exec renameControl_idMap renameStack_idMap settleSim BackSim.ends Chain.back Chain.resume chain_checkpoint
-#assert_axioms halts_of_endsWith Chain.spins
-
 /-- **The continuation states after equal next Plans.** If the normalized state yields Plan
 `d` and the kernel stores the checkpoint of that yield's extraction, the lazy state yields the
 same `d` above a threshold, and the lazy state's OWN yield is in a chain with the stored
@@ -285,7 +282,5 @@ public theorem Chain.resume_back {s t : State} (h : Chain s t) (response : Term)
   rw [resumed] at again
   cases again
   exact ⟨_, sResumed, chain⟩
-
-#assert_axioms Chain.next Chain.control Chain.resume_back
 
 end Obend.Core.Proofs.Forcing

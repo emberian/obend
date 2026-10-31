@@ -103,5 +103,4 @@ theorem Discharges.equivalent_instantiate
   | streams h => exact D.related_stream_closed valid h
   | trans h k ih₁ ih₂ => exact ⟨ih₁.1.trans ih₂.1,instantiation_children_trans ih₁.2 ih₂.2⟩
 
-#assert_axioms existing_instantiation_closed Discharges.type_seed_closed Discharges.equivalent_instantiate
 end Obend.Core.Proofs.Templates

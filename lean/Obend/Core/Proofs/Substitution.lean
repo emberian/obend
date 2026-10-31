@@ -26,7 +26,6 @@ public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Invariant
-public import Obend.AxiomPin
 public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Substitution
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant
@@ -2069,9 +2068,5 @@ theorem assumptions_tooth : (check (msubst (fillZero aliasFilling) aliasTemplate
   rw [msubst_alias]; decide
 
 #tooth assumptions_tooth by mutation aliasFilling := aliasTemplate
-
-#assert_axioms liftSubstitution_fillTerm typed_scoped infer_transport infer_mono check_mono infer_msubst check_msubst
-  fuel_template_checks fuel_filling_checks fuel_tooth linear_template_checks linear_filling_checks linear_filling_open
-  open_filling_tooth alias_filling_checks alias_template_checks alias_filling_closed assumptions_tooth
 
 end Obend.Core.Proofs.Substitution

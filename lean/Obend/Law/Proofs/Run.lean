@@ -8,7 +8,6 @@ passes through every term `t` steps to, which is how a meaning proof skips the f
 law's application.
 -/
 public import Obend.Law.Run
-public import Obend.AxiomPin
 namespace Obend.Law
 open Obend.Core.Term
 set_option autoImplicit false
@@ -248,10 +247,5 @@ public theorem run_sound : (fuel : Nat) → {t v : Term} → run fuel t = some v
       · split at h
         · exact evaluates_step (step?_sound _ (by assumption)) (run_sound fuel h)
         · cases h
-
-#assert_axioms find?_pair step?_app_cong step?_reflect_cong step?_metadata_cong step?_project_cong
-  step?_get_cong step?_extend_cong step?_ifZero_cong step?_case_cong step?_ifBool_cong isValueB_value value_isValueB value_no_step value_step?_none step?_sound
-  step?_complete step_iff step_deterministic steps_trans evaluates_value evaluates_self
-  evaluates_of_steps evaluates_unique evaluates_step evaluates_steps run_sound
 
 end Obend.Law

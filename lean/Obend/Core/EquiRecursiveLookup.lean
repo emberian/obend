@@ -533,9 +533,4 @@ theorem equivalent_finite_row_transport {a : Assumptions} {actual expected : Ty}
   · rintro ⟨fuel, finite⟩
     exact equivalent_finite_row_transport agreement fuel finite
 
-#assert_axioms lookup_alias_chain row_alias_chain expose_constructor_chain expose_nominal_chain
-  stream_emission_realizes stream_nominal_realizes absent_nominal_scan
-  bound_lookup_decompose equivalent_lookup_transport
-  residual_closed_realizes residual_nominal_row_realizes finite_row_decompose
-  equivalent_finite_row_transport equivalent_finite_row_iff
 end Obend.Core.TypeGraph

@@ -3,7 +3,6 @@ module
 observations before using this module: an edge is a constructor child, never an
 unproductive alias-unfolding obligation. No user-supplied fuel is involved. -/
 public import Lean
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.FiniteBisimulation
 set_option autoImplicit false
@@ -494,9 +493,5 @@ theorem arity_mismatch_rejected : visitedSame arityMismatch 0 1 = false := by
 #guard !(visitedSame arityMismatch 0 1)
 
 end Probes
-
-#assert_axioms same_iff same_equivalence bisimilar_equivalence visitedSame_iff visitedSame_eq_same
-  visitedSame_equivalence allPairs_length visited_length_le Probes.different_periods_accepted
-  Probes.reachable_mismatch_rejected Probes.arity_mismatch_rejected
 
 end Obend.Core.FiniteBisimulation

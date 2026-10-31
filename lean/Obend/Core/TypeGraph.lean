@@ -182,8 +182,6 @@ theorem candidate_equivalence (assumptions : Assumptions) :
   · intro x y z h k
     exact (candidate_iff _ _ _).mpr (equivalence.trans ((candidate_iff _ _ _).mp h) ((candidate_iff _ _ _).mp k))
 
-#assert_axioms nodes_closed candidate_iff equivalent_equivalence candidate_equivalence
-
 open Obend.Core.FiniteBisimulation (Children)
 
 /-- Arrow shareability observes reuse, independently of its component types. -/
@@ -230,7 +228,5 @@ theorem computation_congruence {assumptions : Assumptions}
       (observe assumptions (.type (.computation plan' response' result'))).2
     rw [observe_computation,observe_computation]
     exact ⟨plans,responses,results,True.intro⟩
-
-#assert_axioms observe_arrow observe_computation arrow_congruence computation_congruence
 
 end Obend.Core.TypeGraph

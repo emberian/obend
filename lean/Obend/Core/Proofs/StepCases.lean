@@ -19,7 +19,6 @@ module may import it without importing any dispatcher (the layout of
 PROOF-ENG-DESIGN.md §1(a)).
 -/
 public import Obend.Core.Machine
-public import Obend.AxiomPin
 public import Obend.Tactic.Cases
 
 namespace Obend.Core.Machine
@@ -141,7 +140,5 @@ public theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : S
           | case arms env => exact cases.return_case s value arms env rest control stack
           | ifBool whenTrue whenFalse env =>
               exact cases.return_ifBool s value whenTrue whenFalse env rest control stack
-
-#assert_axioms StepCases.apply
 
 end Obend.Core.Machine

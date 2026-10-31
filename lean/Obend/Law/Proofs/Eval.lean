@@ -13,7 +13,6 @@ evaluation of a field selection back to the field.
 public import Obend.Law.Syntax
 public import Obend.Law.Proofs.Run
 public import Obend.Core.TermTraverse
-public import Obend.AxiomPin
 namespace Obend.Law
 open Obend.Core.Term
 open Obend.Core.Data (Data fieldsTerm)
@@ -275,11 +274,5 @@ public theorem admits_of_run {law : Term} {o n rq : Data} (fuel : Nat)
 public theorem refuses_of_run {law : Term} {o n rq : Data} {why : String} (fuel : Nat)
     (h : refusalOf (run fuel (applyLaw law o n rq)) = some why) : Refuses law o n rq why :=
   run_sound fuel (refusalOf_some h)
-
-#assert_axioms substitute_bound_id instantiate_eq instantiate_lift applyLaw_steps admits_iff
-  refuses_iff refuses_not_admits ifBool_inv case_inv get_inv primitiveResult_value binary_inv
-  steps_ifBool steps_case evaluates_ifBool evaluates_case data_value evaluates_data fieldsTerm_find
-  get_data data_term_nat data_term_boolean data_term_label data_term_inject field_of_get
-  okB_some refusalOf_some admits_of_run refuses_of_run
 
 end Obend.Law

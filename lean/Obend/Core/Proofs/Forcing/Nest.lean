@@ -403,22 +403,4 @@ public theorem demand_props {P : Array Cell} {w n : Nat} {Pf : Array Cell} {v : 
         exact frameSafe_of_update hY
     exact frame_run safe j (by omega)
 
-#assert_axioms stepRaw_stack_grows
-#assert_axioms stepRaw_consumes_returned
-#assert_axioms persist_step
-#assert_axioms stepRaw_push_update
-#assert_axioms stepRaw_top_update
-#assert_axioms exists_first_fail
-#assert_axioms stepRaw_enter_evaluating
-#assert_axioms stepRaw_pop_update
-#assert_axioms stepRaw_enter_suspended
-#assert_axioms nested_pop
-#assert_axioms halts_unique
-#assert_axioms withStack_nil
-#assert_axioms frame_run
-#assert_axioms frameSafe_of_update
-#assert_axioms withStack_inj
-#assert_axioms nested_demand
-#assert_axioms demand_props
-
 end Obend.Core.Proofs.Forcing

@@ -866,22 +866,8 @@ theorem cshake256Bytes_eq_fast : cshake256Bytes = cshake256Fast := by
 
 end Obend.Digest.Cshake256.Fast
 
-/-! Axiom pins: the standard three at most; no `sorryAx`, no `native_decide`. -/
-/-- info: 'Obend.Digest.Cshake256.Fast.keccakF_fast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.keccakF_fast_eq
-/-- info: 'Obend.Digest.Cshake256.Fast.absorb_fast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.absorb_fast_eq
+/-! `squeeze_fast_eq` is choice-free; the census admits `Classical.choice`, so this exact set is kept. -/
 /-- info: 'Obend.Digest.Cshake256.Fast.squeeze_fast_eq' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.squeeze_fast_eq
-/-- info: 'Obend.Digest.Cshake256.Fast.sponge_fast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.sponge_fast_eq
-/-- info: 'Obend.Digest.Cshake256.Fast.absorbPadded_fast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.absorbPadded_fast_eq
-/-- info: 'Obend.Digest.Cshake256.Fast.cshake256Fast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.cshake256Fast_eq
-/-- info: 'Obend.Digest.Cshake256.Fast.absorbPadded_eq_fast' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.absorbPadded_eq_fast
-/-- info: 'Obend.Digest.Cshake256.Fast.cshake256Bytes_eq_fast' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.cshake256Bytes_eq_fast
 
 end

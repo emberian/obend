@@ -29,8 +29,8 @@ open Lean Elab Command in
 /-- `#assert_compiled foo` — see the section note above. For every axiom `foo` rests on that is not
 kernel-clean, this command requires an axiom asserting `<closed Bool expr> = true` whose
 expression this command RE-RUNS through the compiled evaluator and watches return `true`. Anything
-else is a hard ERROR. It ALSO errors if `foo` rests on no oracle at all (then `#assert_axioms` is
-the correct, stronger pin). A name is never the test — see the `⚑ WHY A NAME CANNOT BE THE TEST`
+else is a hard ERROR. It ALSO errors if `foo` rests on no oracle at all (then it is kernel-clean and
+the census `#assert_axioms_tree` already covers it). A name is never the test — see the `⚑ WHY A NAME CANNOT BE THE TEST`
 note above, which records the forgery this command used to accept. -/
 elab "#assert_compiled" id:ident : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
@@ -82,8 +82,8 @@ elab "#assert_compiled" id:ident : command => do
       \nA compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name."
   if candidates.isEmpty then
     throwError "compiled-pin REFUSED: {name} rests on NO compiled-evaluation oracle — it is \
-      kernel-clean, so pin it with the STRONGER `#assert_axioms {name}`. Labelling a \
-      kernel-clean fact 'compiled' throws away its real pin"
+      kernel-clean, so the census already covers it and it needs no compiled pin. \
+      Labelling a kernel-clean fact 'compiled' throws away its real footing"
 
 
 

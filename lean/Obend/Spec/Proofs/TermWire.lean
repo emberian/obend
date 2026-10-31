@@ -21,7 +21,6 @@ A legacy (non-`module`) leaf: every proof here unfolds `Lean.Json.mkObj`, `getOb
 Nothing imports this file; `accept` is a `module` definition that does not cite it.
 -/
 import Obend.Spec.FrontEnd
-import Obend.AxiomPin
 namespace Obend.Spec.Proofs.TermWire
 open Lean
 open Obend.Spec.Types Obend.Spec.Annotated Obend.Spec.FrontEnd
@@ -314,11 +313,4 @@ theorem _root_.Obend.Spec.FrontEnd.Accepted.sound {l : Lowering} (a : Accepted l
       Obend.Elab.Gate.admitSource { a.packet.source with term := a.erased } [] a.packet.fuel = .ok a.admitted :=
   ⟨a.erasure, a.decoded, a.packetTerm, a.admittedExact⟩
 
-#assert_axioms getObjVal_mkObj
-#assert_axioms decode_json
-#assert_axioms decodePacket_term
-#assert_axioms Obend.Spec.FrontEnd.Lowering.packet_term
-#assert_axioms Obend.Spec.FrontEnd.Accepted.packetTerm
-#assert_axioms Obend.Spec.FrontEnd.Accepted.source_eq_packet
-#assert_axioms Obend.Spec.FrontEnd.Accepted.sound
 end Obend.Spec.Proofs.TermWire

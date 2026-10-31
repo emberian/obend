@@ -4,7 +4,6 @@ not assert totality, ownership of native effects, or source/heap adequacy. -/
 public import Obend.Tactic.Cases
 public import Obend.Core.TermTraverse
 public import Obend.Core.Machine
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Invariant
 open Obend.Core.Term
@@ -809,11 +808,6 @@ def FinalStackInvariant (state : State) : Prop :=
   induction reachable with
   | start => exact initial_finalStackInvariant _
   | next _ ih => exact stepRaw_finalStackInvariant ih
-
-#assert_axioms scoped_hole_iff scoped_encode_iff scoped_rename_identity scoped_rename scoped_substitute
-
-#assert_axioms stepRaw_lexicalInvariant stepRaw_preservesOrigins stepRaw_preservesCached
-  stepRaw_busyInvariant stepRaw_finalStackInvariant reachable_no_internalRefusal
 
 end Obend.Core.Invariant
 

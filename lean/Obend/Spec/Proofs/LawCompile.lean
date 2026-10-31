@@ -22,7 +22,6 @@ boolean `denote` computes), not by evaluating a term. `compile_checks`: the comp
 public import Obend.Spec.LawCompile
 public import Obend.Law.Proofs.Std
 public import Obend.Law.Proofs.Typing
-public import Obend.AxiomPin
 namespace Obend.Spec.LawCompile
 open Obend.Law
 open Obend.Law.Typing
@@ -811,16 +810,5 @@ theorem tally_typed : ChecksAt (compile flagTotal "Tally" "tally" tally) flagTot
   compile_checks "Tally" "tally" tally (Obend.Law.Typing.Teeth.isCanonical_of (by decide)) rfl
 
 end Teeth
-
-#assert_axioms steps_binL steps_binR ev_binary find_fieldsTerm ev_get ev_bool ev_nat ev_andT ev_notT
-  ev_orT ev_impliesT ev_anyOf ev_eqNat ev_leNat ev_addNat ev_case_subst firstScalar_of_lookup
-  kind_member subst_scalarRead field_read field_absent req_field_opt opt_read read_spec ev_eq
-  ev_guarded ev_both subst_orT subst_impliesT subst_both contains_filter old_left old_right cond_eval
-  old_spec lawOf6_eval clause_eval armEnv_at compile_change compile_birth compile_adopt compile_relaw
-  compile_retire verdict_iff
-  compile_admits_change compile_refuses_change compile_admits_birth compile_refuses_birth
-  compile_admits_adopt compile_refuses_adopt compile_refuses_relaw compile_admits_retire chk_oldRead chk_opt chk_scalarRead chk_read chk_cond compile_checks compilePackage_checks
-  Teeth.tally_write_admitted Teeth.tally_write_refused Teeth.first_write_teeth Teeth.static_teeth
-  Teeth.tally_run_agrees Teeth.tally_typed Teeth.adopt_teeth Teeth.relaw_teeth
 
 end Obend.Spec.LawCompile

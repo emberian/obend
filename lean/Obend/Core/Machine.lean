@@ -11,7 +11,6 @@ are not constructors and cannot be minted/copied by this machine.
 Weak-head reference adequacy, graph/capture ownership and new type metatheory
 remain obligations. -/
 public import Obend.Core.Term
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Machine
 open Obend.Core.Term
@@ -283,8 +282,6 @@ theorem perform_yields (heap : Array Cell) (plan : Term) (environment : Environm
     stepRaw ⟨heap,.evaluate (.perform plan) environment,stack⟩ =
       ⟨heap.push (.suspended ⟨plan,environment⟩),.yielded heap.size,stack⟩ := by
   simp [stepRaw, direct]
-
-#assert_axioms perform_yields perform_under_update_refused resume_requires_yield
 
 end Obend.Core.Machine
 

@@ -178,10 +178,4 @@ theorem hide_visible_congruence {a : Assumptions}
       exact eqv.trans (hideEmit r name member tail left)
         (eqv.trans middle (eqv.symm (hideEmit s name member' tail' right)))
 
-#assert_axioms scanStream_hide_end scanStream_hide_resourceful hide_end
-  hide_emit_resourceful hide_visible_congruence
-
-#assert_axioms scanStream_hide_end scanStream_hide_resourceful hide_emit_resourceful
-  hide_end hide_visible_congruence
-
 end Obend.Core.TypeGraph

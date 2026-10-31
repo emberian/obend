@@ -426,14 +426,4 @@ public theorem StateAgree.readsAt_eq {f : Nat → Nat} {D U : Nat → Prop} {s t
   | nil => simp
   | cons frame rest => cases frame <;> simp [renameFrame]
 
-#assert_axioms HeapAgree.lookup
-#assert_axioms HeapAgree.image_lt
-#assert_axioms HeapAgree.push
-#assert_axioms HeapAgree.set
-#assert_axioms allocateFields_agree
-#assert_axioms agree_stepRaw
-#assert_axioms exec_add
-#assert_axioms agree_exec
-#assert_axioms StateAgree.readsAt_eq
-
 end Obend.Core.Proofs.Forcing

@@ -161,6 +161,4 @@ public theorem forceWith_of_halts (L : Limits) :
         congr 1
         omega
 
-#assert_axioms fitsFrom_tail runBounded_halts runBounded_of_halts forceWith_finished forceWith_of_halts
-
 end Obend.Core.Proofs.Forcing

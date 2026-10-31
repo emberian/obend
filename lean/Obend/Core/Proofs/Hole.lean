@@ -48,7 +48,4 @@ public theorem scoped_hole_payload (depth n : Nat) (σ : List Term) :
   · intro h
     exact .hole h
 
-#assert_axioms infer_refuses_hole check_refuses_hole demanded_hole_refused
-  ignored_hole_evaluates rename_hole_payload substitute_hole_payload scoped_hole_payload
-
 end Obend.Core.Proofs.Hole

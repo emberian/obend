@@ -308,6 +308,4 @@ theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × T
     checkedSynth, sameType_refl, need_ok safe, need_ok validCtx, need_ok captures, need_ok valid, hint,
     need_ok top, need_ok topValid, bind, Except.bind, pure, Except.pure, annotations, Except.map, Functor.map]
 
-#assert_axioms emit_identity_checks width_checks coerce_checks
-
 end Obend.Elab.Coerce

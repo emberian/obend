@@ -202,6 +202,4 @@ theorem finite_field_shadow (a : Assumptions) (name : String) (member old tail :
     Equivalent a (.field name member (.field name old tail)) (.field name member tail) :=
   semantic_field_shadow a name member old tail (semantic_shareable_of_syntactic a old oldShare)
 
-#assert_axioms field_stream_skip field_stream_emit stream_commute stream_shadow
-  semantic_shareable_of_syntactic finite_field_commute semantic_field_shadow finite_field_shadow
 end Obend.Core.TypeGraph

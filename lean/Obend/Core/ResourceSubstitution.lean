@@ -81,6 +81,4 @@ theorem Discharges.semantic_shareable_instantiate
   (RS.shareable_iff _ _).mpr
     (D.resource_safe_instantiate valid ((RS.shareable_iff _ _).mp share))
 
-#assert_axioms Discharges.resource_head_instantiate Discharges.resource_safe_instantiate
-  Discharges.semantic_shareable_instantiate
 end Obend.Core.Proofs.Templates

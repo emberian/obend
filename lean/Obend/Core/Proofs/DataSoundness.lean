@@ -18,7 +18,6 @@ extracts by re-entering lazy record fields.
 public import Obend.Core.Proofs.Completeness
 public import Obend.Core.Data
 public import Obend.Core.Capacity
-public import Obend.AxiomPin
 namespace Obend.Core.Proofs.DataSoundness
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -515,10 +514,4 @@ theorem sampleRecord_data {policy : State → Bool} {limits : Limits} {budget : 
   ((execution_source_semantics sampleRecord_closed execution).2 _).1 sampleRecord_deepEvaluates |>.symm
 
 
-/-! Axiom pins. -/
-#assert_axioms runBounded_terminal forceWith_unrestricted forceWith_policy_suspends
-  forceWith_finished deepEvaluates_steps deepFields_append force_field_sound foldlM_fieldsInvariant
-  except_bind_ok materialize_sound execution_deepEvaluates execution_source_semantics
-  deepEvaluates_unique deepFields_unique execution_data_unique sampleRecord_closed
-  sampleRecord_deepEvaluates sampleRecord_data
 end Obend.Core.Proofs.DataSoundness

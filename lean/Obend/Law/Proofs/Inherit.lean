@@ -13,7 +13,6 @@ module
 public import Obend.Law.Inherit
 public import Obend.Law.Proofs.Std
 public import Obend.Law.Proofs.Claim
-public import Obend.AxiomPin
 namespace Obend.Law
 open Obend.Core.Term
 open Obend.Core.Ty (Ty)
@@ -265,10 +264,5 @@ theorem c4_tooth :
         fun t => okB (run 500 (applyLaw t (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO)))) = some true ∧
       (effectiveVia boardGraph [] "board2" [["board"]]).toOption.isNone = true :=
   ⟨by decide +kernel, by decide +kernel, by decide +kernel⟩
-
-#assert_axioms subst_chain_cons blame_inst blamed_value chain_eval effective_law_eval
-  inherited_never_widens inherited_refusal_kept chain_refused effective_refusal_names
-  chain_refuses_first effective_refuses_first resolve_ok effectiveVia_eval refusedBy_of_run
-  boardLaws_closed inherit_tooth c4_tooth
 
 end Obend.Law

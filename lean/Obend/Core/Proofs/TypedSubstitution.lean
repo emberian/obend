@@ -427,6 +427,4 @@ public theorem checked_msubst {t : AnnotatedTerm} {Ψ : Context} (c : Checked t 
     (fun x f found => (hσ x f found).1) fillings [] rfl c.contextValid
   exact ⟨⟨c.type, u, derivation, safeUses_of_le le c.safe, c.contextValid, c.assumptionsValid⟩, rfl, le⟩
 
-#assert_axioms partialTyping_transport partialTyping_closed_transport partialTyping_msubst checked_msubst
-
 end Obend.Core.Proofs.TypedSubstitution

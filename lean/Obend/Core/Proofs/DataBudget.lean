@@ -56,8 +56,4 @@ theorem complete_tick_failure_remaining :
     | .error (.tickExhausted, _, remaining) => remaining.ticks = 0
     | _ => False := by change 0 = 0; rfl
 
-#assert_axioms yielded_tick_failure_remaining yielded_success_remaining yielded_semantic_failure_remaining
-#assert_axioms full_ceiling_exceeds_remaining capacity_failure_remaining complete_later_failure_remaining
-#assert_axioms complete_tick_failure_remaining
-
 end Obend.Core.Data

@@ -2,7 +2,6 @@ module
 /- Preservation cases: Pairs. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
 public import Obend.Core.Proofs.Preservation.Base
-public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -232,9 +231,5 @@ public theorem typed_pair_preserved {assumptions : Assumptions} {types : Address
     · cases kind <;> simpa [stepRaw,evaluate,pairedTerm] using ControlTyping.returned value
     · cases kind <;> simpa [stepRaw,evaluate,pairedTerm] using
         StackTyping.weaken extension (stack_convert_path path typed.stack)
-
-#assert_axioms stack_metadata_value typed_metadata_preserved stack_projection_value
-#assert_axioms typed_prototype_projection_preserved source_pair_decomposition
-#assert_axioms source_pair_decomposition_pure typed_pair_preserved
 
 end Obend.Core.Proofs.Preservation

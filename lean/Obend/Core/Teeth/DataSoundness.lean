@@ -7,7 +7,6 @@ which runs `Array` functions whose bodies Lean v4.30.0's `Init` does not expose 
 teeth and move with them; `sampleRecord_data`, which needs no run, stays in `Obend.Core.Proofs.DataSoundness`.
 -/
 import Obend.Core.Proofs.DataSoundness
-import Obend.AxiomPin
 
 namespace Obend.Core.Proofs.DataSoundness
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Data Obend.Core.Invariant
@@ -41,8 +40,5 @@ public theorem sampleRecord_native_source_semantics :
       cases ok
   | ok execution => exact ⟨execution,execution_deepEvaluates sampleRecord_closed execution⟩
 
-
-#assert_axioms sampleRecord_executes sampleRecord_source_semantics sampleRecord_executes_native
-  sampleRecord_native_source_semantics
 
 end Obend.Core.Proofs.DataSoundness

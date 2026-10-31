@@ -2,7 +2,6 @@ module
 /- Source-first congruence for executable proof reduction. Register locally
 where simplifying a symbolic continuation would expand speculative branches. -/
 public import Lean
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Tactic.MonadicReduction
 set_option autoImplicit false
@@ -49,7 +48,4 @@ theorem except_map_ok {ε α β : Type} (next : α → β) (value : α) :
 theorem except_map_error {ε α β : Type} (next : α → β) (error : ε) :
     Except.map next (.error error : Except ε α) = .error error := rfl
 
-#assert_axioms option_bind_source_congr except_bind_source_congr except_monad_bind
-  except_bind_ok except_bind_error except_map_source_congr except_functor_map
-  except_map_ok except_map_error
 end Obend.Tactic.MonadicReduction

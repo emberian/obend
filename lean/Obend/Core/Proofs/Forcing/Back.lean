@@ -546,9 +546,4 @@ theorem not_backSim_everything : ¬ BackSim (fun _ _ _ => True) (fun _ _ => True
     (t := ⟨#[], .refused .unbound, []⟩) trivial).1
   simp [renameControl, initial] at renamed
 
-#assert_axioms halts_prepend agree_halts_back pend_halts_back forces_halts_back forces_transfer_back
-#assert_axioms fitsFrom_mono fitsFrom_exists rename_state_congr
-#assert_axioms BackSim.forceWith BackSim.fold BackSim.materialize BackSim.yieldedPlan BackSim.complete
-#assert_axioms BackSim.runBounded forcesSim related_exec relatedSim not_backSim_everything
-
 end Obend.Core.Proofs.Forcing

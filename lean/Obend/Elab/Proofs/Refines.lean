@@ -123,6 +123,4 @@ public theorem argumentAllowed_refines (none_ : a.bounds = []) {Γ' Γ : Context
   · exact .inl notU
   · exact .inr ⟨by rw [shareable_congr none_ agrees]; exact share, reusableCaptures_refines none_ h captures⟩
 
-#assert_axioms refines_refl refines_getElem safeUses_refines validContext_refines reusableCaptures_refines
-  reusableAllowed_refines argumentAllowed_refines
 end Obend.Elab.Proofs.Refines

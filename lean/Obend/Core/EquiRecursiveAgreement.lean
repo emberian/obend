@@ -153,7 +153,4 @@ theorem agrees_shadow (assumptions : Assumptions) (name : String) (member old ta
     agrees assumptions (.field name member (.field name old tail)) (.field name member tail) = true :=
   (agrees_iff _ _ _).mpr (finite_field_shadow assumptions name member old tail share)
 
-#assert_axioms canonical_laws canonical_sound legacy_sameType_extends agrees_iff agrees_eq_candidate agrees_equivalence
-  agrees_refl agrees_symm agrees_trans agrees_arrow agrees_field agrees_specification agrees_prototype
-  agrees_variant agrees_computation agrees_alias agrees_commute agrees_shadow
 end Obend.Core.EquiRecursiveAgreement

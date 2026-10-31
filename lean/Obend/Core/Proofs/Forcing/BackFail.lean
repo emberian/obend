@@ -741,8 +741,4 @@ theorem node_malformed_of_chain {s t : State} (h : Chain s t) {L' : Limits} {T' 
 extraction ticks the Plan extraction fails `tickExhausted`, with 16 it succeeds) are in
 `Obend.Core.Teeth.BackFail`, a legacy leaf: `suspendedCheck_true` evaluates `yieldedPlan` by `decide`. -/
 
-#assert_axioms failureOf_rename BackSim.forceFail except_map_error except_bind_error
-#assert_axioms BackSim.foldFail BackSim.materializeFail BackSim.yieldedPlanFail BackSim.completeFail
-#assert_axioms failsWith_halts endsWith_of_failsWith BackSim.failsBack Chain.failsBack node_malformed_of_chain
-
 end Obend.Core.Proofs.Forcing

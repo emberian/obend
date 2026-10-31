@@ -8,7 +8,6 @@ source-to-machine completeness remain separate substantive obligations. -/
 public import Obend.Tactic.Cases
 public import Obend.Core.Invariant
 public import Obend.Core.TermTraverse
-public import Obend.AxiomPin
 public import Obend.Core.Proofs.StepCases
 namespace Obend.Core.Proofs.Adequacy
 open Obend.Core.Term
@@ -141,8 +140,6 @@ theorem sourceDerivation_hole_false {n : Nat} {payload : List Term} {v : Term} {
     (d : SourceDerivation (.hole n payload) v cost) : False := by
   obend_cases d with []
   case value h => obend_cases h with []
-
-#assert_axioms sourceDerivation_hole_false
 
  theorem sourceSteps_lift (context : Term → Term)
     (compatible : ∀ {first second}, Step first second → Step (context first) (context second))
@@ -3487,25 +3484,6 @@ the tied address is memoized in place with its retained unfolding origin. -/
         simpa [instantiate,Term.substitute] using inheritedBeta) (.refl _)))
   · exact .natural _
 
-#assert_axioms graph_enter_suspended graph_cache_update graph_enter_cached
-  graph_evaluate_application graph_closure_call graph_evaluate_fix graph_evaluate_context
-  graph_evaluate_pair graph_evaluate_bound graph_evaluate_immediate graph_object_access
-  graph_specification_call graph_primitive_return allocateFields_realizes graph_evaluate_record
-  graph_field_return graph_evaluate_mix graph_condition_zero graph_condition_successor
-  graph_extend_record graph_stepRaw rawRun_graph rawRun_natural_sound rawRun_boolean_sound
-  rawRun_label_sound runBounded_finished_graph runBounded_natural_sound runBounded_boolean_sound
-  runBounded_label_sound sourceStep_deterministic source_evaluates_unique
-  runBounded_observation_sound runBounded_resource_independent sourceSteps_evaluates_tail
-  stepRaw_originsBorn reachable_originsBorn stackRealizes_erases graph_complete_value_sound
-  runBounded_value_sound graph_enteredFocus_source runBounded_observes_sound
-  graph_complete_boolean_sound closeTerm_beta graph_binary_left_return graph_complete_return
-  initial_fix_graph adequate_trace_execution adequate_trace_completion shared_field_executor
-  shared_field_source fixed_constant_executor fixed_constant_source source_evaluates_iff_derivation
-  sourceDerivation_cost_unique sourceStep_derivation_tail originBorn_demand_descent
-  graph_terminating_demand administrative_budget_halts rawRun_terminating_administration
-  runBounded_terminating_administration represented_born_blackhole_counterexample
-  graph_stepRaw_names
-
 /-- Finite actual traces construct coherent name assignments. Already allocated
 source identities survive every prefix, including cached structured values;
 only freshly allocated addresses acquire names. -/
@@ -3529,8 +3507,6 @@ only freshly allocated addresses acquire names. -/
     ∃ meaning : AddressMeaning, GraphRepresentsBy meaning (rawRun ticks (initial source)) source := by
   obtain ⟨meaning,_,represented⟩ := rawRun_graphBy_names (graphBy_initializes closed) successful
   exact ⟨meaning,represented⟩
-
-#assert_axioms rawRun_graphBy_names rawRun_named_graph
 
  theorem push_nonEvaluating_backward {heap : Array Cell} {cell : Cell} {address : Address} {origin : Closure}
     (notEvaluating : ∀ source, cell ≠ .evaluating source)
@@ -3625,8 +3601,6 @@ GraphRepresents/Born counterexample, independently of source termination. -/
       · exact ih existing
       · exact ⟨_,reachable,entered,suspended⟩
 
-#assert_axioms stepRaw_evaluating_birth reachable_evaluating_started
-
 /-- An actual uninterrupted evaluating interval starts by entering this exact
 suspended origin. Every later member is an actual transition still carrying
 that same evaluating cell, rather than an assumed phase marker. -/
@@ -3668,8 +3642,6 @@ active-update budgets and excluding blackholes in terminating source runs. -/
       · obtain ⟨entry,earlier,enter,old,segment⟩ := ih existing
         exact ⟨entry,earlier,enter,old,.next segment found⟩
       · exact ⟨_,reachable,entered,suspended,.start entered suspended⟩
-
-#assert_axioms reachable_evaluating_segment
 
  theorem reachable_graphBy_names {start state : State} {source : Term} {meaning : AddressMeaning}
     (represented : GraphRepresentsBy meaning start source) (reachable : Reachable start state)
@@ -3720,8 +3692,6 @@ interval witness is derived from reachability, including faulty endpoints. -/
     · have aligned := sourceDerivation_cost_unique tail originDemand
       exact Or.inr (aligned ▸ less)
   exact ⟨entered,meaning,value,nameCost,originCost,earlier,enter,suspended,segment,snapshot,demand,originDemand,le,descent⟩
-
-#assert_axioms reachable_graphBy_names reachable_evaluating_budget
 
  theorem evaluatingSegment_from_entry {address : Address} {origin : Closure} {entered state : State}
     (segment : EvaluatingSegment address origin entered state) : Reachable entered state := by
@@ -3788,8 +3758,6 @@ oracle for the heap. -/
   obtain ⟨contextCost,context,contextLe⟩ := sourceSteps_derivation_tail segment demand
   obtain ⟨value,cost,focusDemand,le⟩ := stack_derivation_demand context
   exact ⟨value,cost,focusDemand,Nat.le_trans le contextLe⟩
-
-#assert_axioms reachable_evaluating_current_budget graphBy_pending_budget
 
 /-- A cap for the exact addresses retained by the current lexical closure. -/
 @[expose] public def captureCap : Environment → Nat
@@ -3907,8 +3875,6 @@ is general heap/closure preservation, including actual tied Fix origins. -/
     · have aligned := sourceDerivation_cost_unique tail focusDemand
       exact Or.inl (aligned ▸ less)
 
-#assert_axioms stepRaw_demandSafety_enter_suspended demandSafety_forbids_finite_reentry
-
  public theorem budgetFocus_enter_steps {meaning : AddressMeaning} {state : State} {address : Address} {focus : Term}
     (heap : HeapRealizes meaning state.heap) (enter : state.control = .enter address)
     (current : budgetFocus meaning state = some focus) : Steps (meaning address) focus := by
@@ -4006,8 +3972,6 @@ finite update budgets is used separately to exclude evaluating re-entry. -/
         | none => exact demandSafety_terminal (Or.inl ⟨.unbound,by simp [stepRaw,current,lookup]⟩)
         | some address => exact stepRaw_demandSafety_bound safe heap born current lookup
   | returned value | complete value | refused reason | blackhole address | yielded _ => simp [DemandAdministrative,current] at administrative
-
-#assert_axioms stepRaw_demandSafety_administrative stepRaw_demandSafety_bound
 
  theorem frame_derivation_demand_strict {meaning : AddressMeaning} {frame : Frame} {focus result : Term} {cost : Nat}
     (ordinary : ∀ address, frame ≠ .update address)
@@ -4141,8 +4105,6 @@ No finite-source or evaluator oracle is a premise. -/
   · intro address
     cases context <;> simp [DemandContext.frame]
 
-#assert_axioms graphBy_nonUpdate_head_demandSafety graph_evaluate_context_safety
-
 
 /-- A genuine source reduction after an actual continuation prefix makes the
 next demand strictly smaller than every surviving active update. Allocation
@@ -4201,8 +4163,6 @@ may change future names; the actual old heap prefix retains its assignment. -/
   refine ⟨next,same,current,?_⟩
   exact graphBy_semantic_reduction_demandSafety represented same current
     (by intro address; simp [returned]) split oldControl newControl reduce
-
-#assert_axioms graphBy_semantic_reduction_demandSafety graph_object_access_safety
 
 
  theorem graph_execution_demandSafety {meaning next : AddressMeaning} {state : State} {source : Term}
@@ -4306,9 +4266,6 @@ update budget, even though the heap graph itself is cyclic. -/
   · simp [stepRaw,evaluate]
   · simp [stepRaw,evaluate]
 
-#assert_axioms graph_closure_call_safety graph_condition_successor_safety
-  graphBy_enter_tied_demandSafety graph_evaluate_fix_safety
-
 
  theorem budgetFocus_meaning_congr {meaning next : AddressMeaning} {state : State}
     (lexical : LexicalInvariant state) (same : ∀ address, address < state.heap.size → meaning address = next address) :
@@ -4347,8 +4304,6 @@ update budget, even though the heap graph itself is cyclic. -/
     rw [same address (Array.getElem?_eq_some_iff.mp found).1]; exact nameDemand
   have oldFocus : budgetFocus meaning state = some focus := (budgetFocus_meaning_congr lexical same).trans current
   exact safe address origin found nameValue nameCost oldDemand focus oldFocus focusValue focusCost focusDemand
-
-#assert_axioms demandSafety_meaning_congr
 
 
  theorem demandSafety_complete {meaning : AddressMeaning} {state : State} {value : RuntimeValue}
@@ -4565,8 +4520,6 @@ Fault exclusion is a separate source-termination consequence. -/
                   simp [stepRaw,control,frames,ResultControl] at successful
 
 
-#assert_axioms graph_stepRaw_safety_names
-
 
  theorem rawRun_graphBy_safety_names {meaning : AddressMeaning} {state : State} {source : Term} {ticks : Nat}
     (represented : GraphRepresentsBy meaning state source) (safe : DemandSafety meaning state)
@@ -4627,8 +4580,6 @@ Fix. The named graph and safety proof are constructed by the actual trace. -/
   obtain ⟨meaning,represented,safe⟩ := rawRun_closed_demandSafety closed ticks successful
   exact graphBy_terminating_reentry_impossible represented safe terminates enter busy
 
-#assert_axioms rawRun_closed_demandSafety rawRun_terminating_reentry_impossible
-
 
  theorem reachable_closed_demandSafety {source : Term} {state : State} (closed : Scoped 0 source)
     (reachable : Reachable (initial source) state) (successful : ResultControl state.control) :
@@ -4670,8 +4621,6 @@ classifying blackholes for arbitrary diverging source computations. -/
     (terminates : Evaluates source result) (ticks : Nat) :
     ∀ address, (rawRun ticks (initial source)).control ≠ .blackhole address :=
   reachable_terminating_no_blackhole closed terminates (rawRun_reachable .start ticks)
-
-#assert_axioms reachable_terminating_no_blackhole rawRun_terminating_no_blackhole
 
 
 /-- A finite independent derivation of the demanded returned-value context
@@ -4788,8 +4737,6 @@ uses source semantics, without a separate typed-source restriction. -/
           cases returnedValue <;> simp [valueMeaning,closeTerm_lam_form] at same
           case boolean value => subst value; simp [stepRaw,returned,head,ResultControl]
 
-#assert_axioms frame_derivation_return_progress
-
 
 /-- Independent source termination supplies the exact demanded frame operand
 and selected field, while earned Safety excludes busy re-entry. Thus every
@@ -4897,8 +4844,6 @@ are excluded from these actual traces; finite completion is still separate. -/
        cases demand with
        | value isValue => cases isValue)
 
-#assert_axioms graphBy_terminating_next_result rawRun_terminating_resultControl
-
 
 /-- For arbitrary capacities, the bounded executor retains an exact actual
 raw prefix; suspension can shorten its physical work, but cannot synthesize
@@ -4965,55 +4910,6 @@ suspension, never a semantic refusal or blackhole for a terminating source. -/
       (∃ reason retained, runBounded limits ticks (initial source) = .suspended reason retained) :=
   runBounded_only_finish_or_suspend limits ticks (initial source) (rawRun_terminating_resultControl closed terminates)
 
-#assert_axioms runBounded_retained_prefix runBounded_terminating_finish_or_suspend
-
-/-! Axiom pins for every r11 theorem not pinned above. -/
-#assert_axioms sourceSteps_trans source_value_noStep source_value_steps_identity
-  sourceStep_evaluates_tail sourceSteps_lift primitiveResult_value sourceDerivation_evaluates
-  sourceDerivation_cost_positive sourceDerivation_value_inv sourceStep_derivation_prepend
-  source_evaluates_derivation sourceDerivation_result_unique sourceSteps_derivation_tail
-  sourceSteps_derivation_strict scoped_rename_identity scoped_substitute_identity
-  scoped_substitution_congr liftRename_comp liftRename_substitution_comp scoped_rename_comp
-  scoped_rename_substitute lifted_substitution_scoped lifted_substitution_rename
-  scoped_substitute_rename lifted_substitution_comp scoped_substitute_comp
-  environmentSubstitution_scoped closeTerm_eq_substitution closeTerm_meaning_congr closeTerm_scoped
-  valueMeaning_scoped valueMeaning_congr cellRealizes_congr heapRealizes_congr heapRealizes_push
-  frameMeaning_congr valueMeaning_value enteredFocus_steps sourceSteps_frame stackRealizes_congr
-  stackRealizes_steps sourceSteps_stack heapRealizes_set cachedCell_realizes graph_initializes
-  graph_complete_natural_sound graph_complete_label_sound frame_derivation_demand
-  stack_derivation_demand demandContext_closes demandContext_dispatch valueTerm_meaning
-  scalarValue_meaning closeTerm_app closeTerm_lambda extendMeaning_prefix allocateClosure_realizes
-  allocationLoop_accumulator allocateFields_cons closeTerm_record closeTerm_mixBody closeTerm_weaken
-  closeTerm_fix tiedOrigin_name_proper heapOriginsBorn_sameSize heapOriginsBorn_set
-  heapOriginsBorn_push heapOriginsBorn_suspend heapOriginsBorn_fix allocateFields_originsBorn
-  initial_originsBorn graphBy_graph graphBy_initializes graph_evaluate_context_names
-  graph_evaluate_bound_names graph_evaluate_immediate_names graph_object_access_execution
-  graph_object_access_names graph_specification_call_names graph_primitive_return_names
-  graph_enter_suspended_names graph_cache_update_names graph_enter_cached_names
-  graph_evaluate_pair_names graph_evaluate_record_names graph_field_return_execution
-  graph_field_return_names graph_evaluate_mix_execution graph_evaluate_mix_names
-  graph_condition_zero_execution graph_condition_zero_names graph_condition_successor_execution
-  graph_condition_successor_names graph_extend_record_names graph_evaluate_fix_names
-  graph_closure_call_execution graph_closure_call_names graph_evaluate_application_names
-  graph_binary_left_return_names graph_complete_return_names originBorn_capture_bound traceFits_mono
-  traceFits_traceLimits rawRun_absorbs rawRun_resultControl graph_terminating_administration
-  rawRun_reachable step_finished_control step_ticks_raw runBounded_finished_control
-  runBounded_finished_resultControl runBounded_retains_rawRun runBounded_complete_classifies
-  rawRun_lexicalInvariant rawRun_preservesOrigins rawRun_preservesCached unused_argument_executor
-  unused_argument_source shared_argument_executor shared_argument_source push_nonEvaluating_backward
-  allocateFields_evaluating_backward set_nonEvaluating_backward evaluatingSegment_reachable
-  evaluatingSegment_cell evaluatingSegment_from_entry stackRealizes_update_segment captureCap_le
-  captureCap_valid initial_demandSafety demandSafety_returned budgetFocus_enter_steps
-  budgetCap_enter_bound demandSafety_terminal frame_derivation_demand_strict
-  stackUpdates_member_split budgetFocus_control_steps graph_execution_demandSafety
-  graph_evaluate_mix_safety graph_condition_zero_safety graph_field_return_safety
-  budgetFocus_meaning_congr demandSafety_complete graph_next_returned_safety
-  graph_next_complete_safety graph_next_ordinary_safety graph_administrative_safety
-  rawRun_graphBy_safety_names graphBy_terminating_control_budget
-  graphBy_terminating_reentry_impossible reachable_closed_demandSafety stepRaw_blackhole_origin
-  closeTerm_lam_form rawRun_terminating_graphSafety runBounded_terminating_retained_resultControl
-  runBounded_only_finish_or_suspend
-
 /-! Non-vacuity of the r11 source-only premises. Every new r11 theorem whose
 premises are `Scoped 0 source` and `Evaluates source result` is instantiated
 below at a closed Fix program that genuinely evaluates. The internal graph
@@ -5038,9 +4934,5 @@ theorem lazyFixedSource_finish_or_suspend (limits : Limits) (ticks : Nat) :
     (∃ value final, runBounded limits ticks (initial lazyFixedSource) = .finished value final) ∨
       (∃ reason retained, runBounded limits ticks (initial lazyFixedSource) = .suspended reason retained) :=
   runBounded_terminating_finish_or_suspend lazyFixedSource_closed lazyFixedSource_evaluates limits ticks
-
-#assert_axioms lazyFixedSource_closed lazyFixedSource_evaluates lazyFixedSource_resultControl
-  lazyFixedSource_finish_or_suspend graph_evaluate_inject_names graph_case_return_execution
-  graph_ifBool_return_execution graph_case_return_safety graph_ifBool_return_safety graph_via_names
 
 end Obend.Core.Proofs.Adequacy

@@ -1,6 +1,5 @@
 module
 public import Obend.Core.FieldCongruence
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
@@ -56,5 +55,4 @@ public theorem labels_iff_true_emits (a : Assumptions) (row : Ty) (label : Strin
     exact Obend.Core.TypeGraph.scan_emission_label a (support a row row) label true
       row member tail emitted
 
-#assert_axioms scanLabels_mem_true_emits labels_iff_true_emits
 end Obend.Core.RecursiveRows

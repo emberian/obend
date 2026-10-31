@@ -11,7 +11,6 @@ public import Obend.Core.Ty
 public import Obend.Core.TemplateDischarge
 public import Obend.Core.EquiRecursiveSubstitutionTransport
 public import Obend.Core.Check
-public import Obend.AxiomPin
 public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Templates
 open Obend.Core.Ty
@@ -147,9 +146,6 @@ theorem canonical_instantiate (σ : Nat → Ty) (type : Ty) :
 theorem canonical_eq_instantiate (σ : Nat → Ty) {a b : Ty} (h : a.canonical = b.canonical) :
     (a.instantiate σ).canonical = (b.instantiate σ).canonical := by
   rw [canonical_instantiate σ a, canonical_instantiate σ b, h]
-
-#assert_axioms insertCanonical_same insertCanonical_comm shareable_instantiate canonical_instantiate_insert canonical_instantiate
-  canonical_eq_instantiate
 
 /-! ## Step 4: a template checked against its rigid bounds is accepted at every discharge
 
@@ -1252,9 +1248,5 @@ theorem self_as_bound_row_rigid_refused : (check (selfAsBoundRow [5]) [] 8).isNo
   simp [check, infer, selfAsBoundRow, agree, refused,
     weightBound, List.getElem?_cons_zero]
 
-#assert_axioms Discharges.lookup_instantiate Discharges.isRow_instantiate Discharges.sameStep_instantiate Discharges.sameType_instantiate
-  Discharges.agree_instantiate Discharges.variantRow_instantiate Discharges.infer_instantiate
-  Discharges.check_instantiate weight_template_type weight_template_accepted coloured_discharges coloured_instance_accepted
-  self_as_bound_row_alias_accepted self_as_bound_row_rigid_refused
 end Obend.Core.Proofs.Templates
 

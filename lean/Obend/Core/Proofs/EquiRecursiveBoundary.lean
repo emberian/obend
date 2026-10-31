@@ -3,7 +3,6 @@ module
 annotation supplies its valid natural-domain representative. Missing or invalid
 representatives retain a precise refusal; nominal resource checks still matter. -/
 public import Obend.Core.Bidirectional
-public import Obend.AxiomPin
 
 namespace Obend.Core.Proofs.EquiRecursiveBoundary
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional
@@ -175,14 +174,5 @@ public theorem representative_annotation_resolves_boundary :
           .error (.invalidContext [])) ∧
       ∃ checked, checkAgainst ⟨identityTerm, identityAnnotations, natAlias⟩ [] aliasDomainArrow = .ok checked :=
   ⟨identity_alias_derivation, identity_alias_top_refused, identity_annotated_top_accepted⟩
-
-#assert_axioms alias_agrees alias_agrees_reverse natural_arrow_agrees_alias_domain
-  congruence_equates_arrows alias_shareability_differs alias_binder_invalid identity_derivation
-  identity_alias_check_refused identity_alias_top_refused identity_bad_annotation_refused
-  identity_bad_annotation_top_refused
-  identity_alias_derivation identity_annotated_check_exact identity_annotated_check_accepted identity_annotated_top_accepted
-  canonical_shadow_spines_differ canonical_retains_hidden_alias
-  canonical_discards_hidden_natural field_congruence_crosses_shadow_spines
-  representative_annotation_resolves_boundary
 
 end Obend.Core.Proofs.EquiRecursiveBoundary

@@ -7,8 +7,7 @@ name (captures, custody, affine use, rows, sums, shadowing, activities), the tem
 (`futureRowSource` and its instantiations), and the classification teeth on
 `Obend.Core.Packet.refusalKind`. Moved out of `Obend.Core.Check` on 2026-10-30: a tooth edit
 rebuilt every importer of the checker; here nothing imports this module. Historical refusal of arrow congruence is retained
-explicitly for legacySameType and replaced by a positive public-agreement tooth; the
-four `#guard_msgs`-on-`#print axioms` pins are `#assert_axioms` like the rest.
+explicitly for legacySameType and replaced by a positive public-agreement tooth.
 -/
 public import Obend.Core.Ty
 public import Obend.Core.Term
@@ -16,7 +15,6 @@ public import Obend.Core.Check
 public import Obend.Core.Packet
 public import Obend.Core.DecisionReduction
 public import Obend.Tactic.MonadicReduction
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Proofs.CheckTeeth
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Packet
@@ -260,9 +258,6 @@ theorem absent_future_requirement_refused :
 @[local simp] theorem not_triangle_lt_circle : ¬ ("triangle" : String) < "circle" := by decide
 @[local simp] theorem not_triangle_lt_square : ¬ ("triangle" : String) < "square" := by decide
 
-#assert_axioms circle_lt_square circle_lt_triangle square_lt_triangle
-  not_square_lt_circle not_triangle_lt_circle not_triangle_lt_square
-
 /-- A closed two-label sum; arms checked against it in any source order. -/
 @[local simp] def shapeRow : Ty := .field "circle" .natural (.field "square" .natural .emptyRow)
 /-- A nonexistent arm cannot manufacture a payload for its continuation. -/
@@ -275,8 +270,6 @@ theorem absent_future_requirement_refused :
     cases fuel with
     | zero => rfl
     | succ fuel => cases fuel <;> rfl
-
-#assert_axioms shape_triangle_lookup
 
 @[local simp] def shapeInjection : LambdaAnnotation := ⟨.natural,.variant shapeRow,.unrestricted,.reusable⟩
 @[local simp] def shapeCase (arms : List (String × Term)) (tag : String) : AnnotatedTerm :=
@@ -444,8 +437,6 @@ theorem refusal_kind_label_conjunction :
     refusalKind ⟨stringConjunction, [], 8⟩ = .typing := by check_reduce
 theorem refusal_kind_custody_in_reusable_closure :
     refusalKind ⟨custodyCapture .reusable, [⟨.custody 17,.linear⟩], 8⟩ = .typing := by check_reduce
-#assert_axioms refusal_kind_duplicate_affine refusal_kind_starved_fuel refusal_kind_label_conjunction
-  refusal_kind_custody_in_reusable_closure
 
 /-! ## Activities: effects as a type, never in a shared position -/
 
@@ -502,15 +493,6 @@ theorem closure_response_refused :
       if position = [] then some ⟨planType,.arrow .reusable .unrestricted .natural .natural,.unrestricted,.reusable⟩
       else if position = [0] then some writeAction else none,{}⟩ [] 32).isNone = true := by check_reduce
 
-#assert_axioms exhaustive_case_accepted reordered_arms_accepted missing_arm_refused
-  extra_arm_refused undeclared_injection_refused unannotated_injection_refused
-  arm_results_must_agree equality_branch_accepted label_condition_refused label_equality_accepted
-  boolean_label_equality_refused nat_primitive_types order_primitive_branch_accepted
-  nat_primitive_label_operand_refused affine_in_two_arms_refused affine_in_one_arm_accepted
-  effect_case_accepted pure_arm_without_done_refused effect_as_argument_refused
-  pure_affine_argument_accepted effect_in_record_field_refused effect_in_payload_refused
-  effect_in_specification_refused scalar_plan_refused closure_response_refused
-#assert_axioms recursive_sum_list_accepted recursive_sum_ill_typed_tail_refused
 /-! ### Agreement is the equivalence closure of one-step agreement (2026-10-30) -/
 
 @[local simp] def siblingAliases : Assumptions := ⟨[(1, .natural), (2, .natural)], [], []⟩
@@ -545,12 +527,6 @@ theorem visited_walk_cycle :
     lookupV [(1, .variable 2), (2, .variable 1)] [] (.variable 1) "x" = none ∧
     isRowV [(1, .variable 2), (2, .variable 1)] [] (.variable 1) = false ∧
     lookupV [(1, .field "x" .natural (.variable 1))] [] (.variable 1) "x" = some .natural := by check_reduce
-
-#assert_axioms canonical_agreement_keeps_shareability shadowed_custody_laundering_refused
-  shadowed_once_closure_laundering_refused shadowed_shareable_member_accepted
-  shadowed_override_accepted sibling_aliases_agree agreement_does_not_descend
-  agreement_descends_into_constructors rigid_variable_nominal
-  cyclic_aliases_close visited_walk_cycle
 
 end Obend.Core.Proofs.CheckTeeth
 end

@@ -15,7 +15,6 @@ module
 public import Obend.Run.Core4
 public import Obend.Run.Proofs.Interpret
 public import Obend.Core.Proofs.Force
-public import Obend.AxiomPin
 public import Obend.Tactic.Tooth
 import all Obend.Core.Term
 import all Obend.Run.Runner
@@ -236,8 +235,6 @@ public theorem trace_is_run {host : Host V Tok Fact} {sp : Spec planSig Tok Fact
       exact ⟨y, rfl⟩
 
 #tooth session_of_transcript by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => false
-
-#assert_axioms turn_vis_resumes reach_of_transcript transcript_of_reach run_is_trace trace_is_run
 
 end
 

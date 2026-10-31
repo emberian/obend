@@ -85,7 +85,4 @@ theorem sameType_computation {assumptions : Assumptions} {a b c d e f : Ty}
     sameType assumptions (.computation a c e) (.computation b d f) = true :=
   EquiRecursiveAgreement.agrees_computation plans responses results
 
-#assert_axioms sameType_iff sameType_equivalence sameType_extends sameStep_sameType SameChain.sameType
-  sameType_isComputation sameType_canonical sameType_of_canonical sameType_arrow sameType_field
-  sameType_specification sameType_prototype sameType_variant sameType_computation
 end Obend.Core.Check

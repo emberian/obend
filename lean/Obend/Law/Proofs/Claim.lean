@@ -18,7 +18,6 @@ semantics instead of nano's environments.
 public import Obend.Law.Claim
 public import Obend.Law.Std
 public import Obend.Law.Proofs.Std
-public import Obend.AxiomPin
 namespace Obend.Law
 open Obend.Core.Term
 open Obend.Core.Traverse (Tree)
@@ -264,9 +263,5 @@ theorem keeps_tooth :
       simp at this,
     by decide +kernel,
     admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
-
-#assert_axioms treeEq_sound treesEq_sound treeEq_refl treesEq_refl termEq_sound termEq_refl scopedB_sound scopedsB_sound closedB_subst
-  guardedOk_scons isGuardCond_eq isOccasion_eq guardedBy_sound guardedArms_sound keeps_step chain_keeps
-  keeps_guarded checkClaim_keeps claim_chain_keeps boolOf_eval keeps_tooth
 
 end Obend.Law

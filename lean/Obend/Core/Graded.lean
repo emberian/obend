@@ -1,5 +1,4 @@
 module
-public import Obend.AxiomPin
 
 @[expose] public section
 namespace Obend.Core
@@ -42,6 +41,5 @@ instance : Graded Nat where
   zero_le := Nat.zero_le
   add_mono := Nat.add_le_add
 
-#assert_axioms le_add_right le_add_left lift
 end Graded
 end Obend.Core

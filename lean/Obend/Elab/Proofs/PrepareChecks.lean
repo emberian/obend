@@ -1180,7 +1180,4 @@ public theorem appliedLambda_prepared :
     (prepareChecked { appliedLambda with annotations := noHints } [] .natural).toBool = true :=
   prepareChecked_complete rfl appliedLambda_checkable appliedLambdaChecked
 
-#assert_axioms motive_of_typing prepare_checks prepareChecked_complete annotateExecutable_checks
-  appliedLambda_checkable appliedLambda_prepared
-
 end Obend.Elab.Proofs.PrepareChecks

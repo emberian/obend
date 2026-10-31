@@ -3,7 +3,6 @@ module
 so recursive agreement can be integrated without an import cycle. Names and
 semantics are preserved at this extraction checkpoint. -/
 public import Obend.Core.Assumptions
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Check
 open Obend.Core.Ty
@@ -372,12 +371,5 @@ theorem legacySameType_isComputation {assumptions : Assumptions} {actual expecte
   induction chain with
   | refl => rfl
   | step _ agreement ih => exact ih.trans (sameStep_isComputation agreement)
-
-#assert_axioms sameStep_isComputation sameStep_symm_of sameStep_symm Assumptions.chase_add
-  Assumptions.chase_succ' Assumptions.mem_orbit legacySameType_iff nodup_length_le
-  Assumptions.alias_key Assumptions.chase_bounded legacySameType_refl legacySameType_symm
-  legacySameType_trans legacySameType_equivalence SameChain.trans SameChain.symm
-  sameStep_legacySameType SameChain.legacySameType Ty.canonical_variable_eq Assumptions.chase_chain
-  legacySameType_chain legacySameType_lift legacySameType_isComputation
 
 end Obend.Core.Check

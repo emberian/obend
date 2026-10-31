@@ -1,39 +1,34 @@
 module
 /-
-# `#assert_axioms` and `#assert_axioms_tree` — axiom footprints as checks that can fail
+# `#assert_axioms_tree` — the axiom census as a check that can fail
 
-`#assert_axioms foo` elaborates to nothing when `foo` depends on no axiom
-outside Lean's three standard ones (`propext`, `Classical.choice`,
-`Quot.sound`), and is an error otherwise.  `sorryAx` and the compiler trust of
-`native_decide` (its `…._native…` axioms) are therefore refused.
-
-`#assert_axioms_tree` is the same check over the whole package: every constant
-declared in one of this package's modules (roots `Theory`, `Compiler`,
-`Kernel`, `Assurance`, `Pred`, `Effects`, `Selvage`, `Host`, `Obend`) that
-the importing module can see. It fails on any constant resting on `sorryAx` or
-on a declared axiom, and on any package `axiom` declaration. The compiler trust
-(`native_decide`'s auxiliary `…._native…` axioms) is admitted there only as a
-counted exception, reported in the verdict line: `native_decide` is a
-deliberate tool in this tree (the `*_compiled` facts), not a hole.
-`Obend/Census.lean` runs it over the whole library. Its importer must see the
-bodies: under a plain `module` import a non-exposed theorem arrives as an
-axiom and is refused, so the census is a non-`module` file (or `import all`).
+`#assert_axioms_tree` checks every constant declared in one of this package's modules (roots
+`Theory`, `Compiler`, `Kernel`, `Assurance`, `Pred`, `Effects`, `Selvage`, `Host`, `Obend`) that
+the importing module can see. It fails on any constant resting on `sorryAx` or on a declared
+axiom, and on any package `axiom` declaration; only Lean's three standard axioms (`propext`,
+`Classical.choice`, `Quot.sound`) pass silently. The compiler trust (`native_decide`'s auxiliary
+`…._native…` axioms) is admitted only as a counted exception, reported in the verdict line:
+`native_decide` is a deliberate tool in this tree (the `*_compiled` facts), each such theorem
+re-run by `#assert_compiled` (`Obend/AssertCompiled.lean`). `Obend/Census.lean` runs it over the
+whole library. Its importer must see the bodies: under a plain `module` import a non-exposed
+theorem arrives as an axiom and is refused, so the census is a non-`module` file (or `import all`).
 
 Lean v4.30 precomputes each imported declaration's axioms at olean export, so
 the census is a lookup per constant, not a walk.
 -/
 
-public import Obend.AxiomPin
+public import Lean
 @[expose] public section
 
 namespace Obend.AssertAxioms
 
 open Lean Elab Command
 
--- `standard` and `#assert_axioms` (over one or many names) live in Theory/AxiomPin.lean.
+/-- The axioms a kernel-checked theorem may rest on. -/
+meta def standard : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
-/-- The compiler trust `native_decide` adds; refused by `#assert_axioms`,
-counted (not refused) by `#assert_axioms_tree`. Since Lean v4.30 each
+/-- The compiler trust `native_decide` adds; counted (not refused) by
+`#assert_axioms_tree`. Since Lean v4.30 each
 `native_decide` proof is an auxiliary axiom `<theorem>._native.native_decide.ax_…`
 (`Lean.Meta.nativeEqTrue`); v4.35 removed the older global axioms
 `Lean.ofReduceBool` and `Lean.trustCompiler`, so the `_native` component is the

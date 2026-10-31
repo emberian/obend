@@ -2,7 +2,6 @@ module
 /- Preservation cases: Sums. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
 public import Obend.Core.Proofs.Preservation.Base
-public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -288,9 +287,5 @@ public theorem typed_ifBool_preserved {assumptions : Assumptions} {types : Addre
       · simpa [stepRaw,returned,stack] using typed.heap
       · simpa [stepRaw,returned,stack] using ControlTyping.evaluate falseOrigin
       · simpa [stepRaw,returned,stack] using restTyped
-
-#assert_axioms source_inject_decomposition source_inject_decomposition_pure typed_inject_preserved
-#assert_axioms arms_row_closed arms_typing_find arms_typing_absent closed_lookup_finite
-#assert_axioms stack_case_value typed_case_preserved stack_ifBool_value typed_ifBool_preserved
 
 end Obend.Core.Proofs.Preservation

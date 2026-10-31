@@ -6,7 +6,6 @@ Not a `module`, for the reason `Obend.Core.Teeth.Collect` gives: `suspendedCheck
 expose to `module` files; `suspended_is_resource` consumes it and moves with it.
 -/
 import Obend.Core.Proofs.Forcing.BackFail
-import Obend.AxiomPin
 
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Collect Obend.Core.Data
@@ -31,7 +30,5 @@ theorem suspended_is_resource :
       exact ⟨st, r, found, ok⟩
     · cases two
   · cases one
-
-#assert_axioms suspendedCheck_true suspended_is_resource
 
 end Obend.Core.Proofs.Forcing

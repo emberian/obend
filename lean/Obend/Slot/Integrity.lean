@@ -38,7 +38,6 @@ there (`toy_repair`, `toy_advance`).
 public import Obend.Tactic.Tooth
 public import Obend.Slot.World
 public import Obend.Slot.Calculus
-public import Obend.AxiomPin
 @[expose] public section
 
 namespace Obend.Slot
@@ -447,12 +446,6 @@ theorem reuse_needs_prefix :
 /-- The slot's pair has integrity on the toy, where the non-trivial case happens. -/
 theorem toy_integrity : Integrity (slotFiller : Filler Nat Member Member) slotAdvance :=
   slotFiller_integrity
-
-#assert_axioms slotFiller_uncovered slotFiller_typed resolve_eq_select select_ok select_error select_names
-  repair_of_contextual select_some slotFiller_integrity slotFiller_repair transition_retired select_prefix
-  select_reuse toy_repair toy_advance toy_alice_dead not_integrity_credulousHoles
-  not_integrity_firstCandidate not_integrity_blindRefusal not_transition_churn not_transition_sticky
-  reuse_needs_prefix toy_integrity
 
 end Obend.Slot
 end

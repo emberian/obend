@@ -180,6 +180,4 @@ theorem weighted_field_safe (a : Assumptions) (nominal : Nat → Bool)
     · simpa only [if_pos same] using And.intro memberSafe (tail.2.1 label)
     · simpa only [if_neg same] using tail.2.1 label
 
-#assert_axioms weighted_safe_of_related weighted_end_safe weighted_emit_safe weighted_hide_safe
-  weighted_field_stream_safe weighted_absent_stream_safe weighted_interface_safe weighted_field_safe
 end Obend.Core.TypeGraph

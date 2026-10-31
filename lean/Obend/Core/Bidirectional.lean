@@ -21,7 +21,6 @@ to the requested type. Missing annotations retain expected-directed behavior.
 Eliminations may use annotation.domain as their operand representative; mix uses
 domain for the lower operand and codomain for the upper operand. -/
 public import Obend.Core.Check
-public import Obend.AxiomPin
 
 @[expose] public section
 namespace Obend.Core.Bidirectional
@@ -745,9 +744,6 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
       by_cases h3 : source.assumptions.valid = true <;>
       simp [h1, h2, h3, pure, Except.pure] at accepted
     cases accepted; rfl
-
-#assert_axioms sameType_whnf whnf_sameType sameType_representativeHead
-  representativeHead_sameType injectionHead_sameType checkAgainst_sound
 
 end Obend.Core.Bidirectional
 

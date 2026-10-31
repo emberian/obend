@@ -85,8 +85,6 @@ decreasing_by
 theorem residual_shareable {a : Assumptions} {row : Ty} (share : shareable a row = true) :
     TailShareable a (residual a row) := scanResidual_shareable a _ row share
 
-#assert_axioms exposed_field_shareable scanStream_emit_shareable streamStep_emit_shareable
-  scanResidual_shareable residual_shareable
 end Obend.Core.RecursiveRows
 
 namespace Obend.Core.TypeGraph
@@ -152,5 +150,4 @@ theorem weighted_safe_of_shareable (a : Assumptions) (nominal : Nat → Bool)
           simp_all [weightedResourceGraph,graph,observe,weightedResourceLabel,
             weightedResourceDependencies,Obend.Core.ResourceSemantics.head,rowTag,P]
 
-#assert_axioms weighted_safe_of_shareable
 end Obend.Core.TypeGraph

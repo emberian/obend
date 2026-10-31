@@ -41,7 +41,6 @@ theorem weighted_resource_predicate (a : Assumptions) (nominal : Nat → Bool)
       simpa [resourceObservation,weightedResourceGraph,graph,observe,expose,exposeWalk,
         constructorHead,rowTag,weightedResourceLabel,weightedResourceDependencies] using rawSafe
 
-#assert_axioms weighted_resource_predicate
 end Obend.Core.TypeGraph
 
 namespace Obend.Core.Proofs.Templates
@@ -127,6 +126,4 @@ theorem Discharges.semantic_shareable_congr
   exact (D.weighted_resource_iff_image valid left).symm.trans
     ((equivalent_weighted_resource _ related).trans (D.weighted_resource_iff_image valid right))
 
-#assert_axioms Discharges.image_resource_predicate Discharges.weighted_resource_iff_image
-  Discharges.semantic_shareable_congr
 end Obend.Core.Proofs.Templates

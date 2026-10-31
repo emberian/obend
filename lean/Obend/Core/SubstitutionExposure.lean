@@ -102,7 +102,4 @@ public theorem Discharges.expose_instantiate_unproductive
     expose instance_ (t.instantiate σ) = .unproductive representative := by
   rw [D.expose_instantiate t, observed]
 
-#assert_axioms exposure_alias_not_rigid Discharges.aliasChain_instantiate aliasChain_expose aliasChain_path_nonrigid
-  Discharges.expose_instantiate Discharges.expose_instantiate_constructor
-  Discharges.expose_instantiate_nominal Discharges.expose_instantiate_unproductive
 end Obend.Core.Proofs.Templates

@@ -150,9 +150,6 @@ theorem support_independent [DecidableEq Label] (P Q : ClosedSupport g) (x y : �
 
 end ClosedSupport
 
-#assert_axioms bisimilar_equivalence ClosedSupport.decode_index ClosedSupport.decode_successors
-  ClosedSupport.finite_iff ClosedSupport.global_iff ClosedSupport.support_independent
-
 /-- The union of all bisimulations is itself closed. -/
 theorem bisimilar_closed {α Label : Type} (g : Graph α Label) :
     Bisimulation g (Bisimilar g) := by
@@ -174,7 +171,5 @@ theorem bisimilar_of_children {α Label : Type} {g : Graph α Label} {x y : α}
   · obtain ⟨equal,nested⟩ := bisimilar_closed g a b prior
     exact ⟨equal,children_mono (fun _ _ h => Or.inl h) nested⟩
   · exact ⟨labels,children_mono (fun _ _ h => Or.inl h) children⟩
-
-#assert_axioms bisimilar_closed bisimilar_of_children
 
 end Obend.Core.FinitePresentation

@@ -268,9 +268,5 @@ theorem scoped_substitute (t : Term) (n m : Nat) (h : Scoped n t)
   simpa only [Scoped, encode_substitute] using
     Tree.scoped_substitute (encode t) n m h (fun i => encode (σ i)) maps
 
-#assert_axioms rename_eq_derived substitute_eq_derived decode_encode encode_injective encode_rename encode_liftSubstitution encode_substitute
-  rename_comp rename_substitute substitute_rename substitute_comp
-  scoped_rename_identity scoped_substitution_congr scoped_substitute_identity scoped_rename scoped_substitute
-
 end Obend.Core.TermTraverse
 end

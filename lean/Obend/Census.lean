@@ -19,7 +19,6 @@ next such rebuild, not at its own.
 import Obend
 import Obend.AssertAxioms
 import Obend.AssertCompiled
-import Obend.AxiomPin
 import Obend.Core.AliasExposure
 import Obend.Core.Assumptions
 import Obend.Core.Backend

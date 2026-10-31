@@ -25,7 +25,6 @@ The DUAL evaluation substitutes, for each token, `1` if it holds and the token i
 failed product is refuted by any one failed factor, and a failed sum needs every alternative
 refuted); and its Boolean image at "nothing restored" is the Boolean evaluation (`missing_bool`).
 -/
-public import Obend.AxiomPin
 public import Obend.Tactic.Tooth
 @[expose] public section
 
@@ -481,12 +480,6 @@ theorem missing_mono_mem (ν : X → Bool) (m : List X) :
 #tooth missing_mono_mem by mutation missingVal := fun _ _ => [[]]
 
 end
-
-#assert_axioms Just.add_idem Just.zero_mul astra3_absorptive astra3_not_idem Mono.eval_subset
-  Raw.eval_mul Raw.eval_congr Mono.eval_zero_tok Mono.eval_bool Raw.eval_bool insertMin_antichain
-  insertMin_eval norm_antichain norm_nodup eval_norm canonical raw_not_canonical Poly.eval_add
-  Poly.eval_mul Poly.eval_one Poly.eval_var Poly.canonical Raw.eval_subst missing_bool missing_mono
-  missing_mono_mem
 
 end Obend.Just
 end

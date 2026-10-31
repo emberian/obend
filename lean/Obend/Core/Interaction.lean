@@ -170,9 +170,6 @@ theorem chain_spin {s t : State} (h : Chain s t) {b : Budget} (spin : node b s =
     (b' : Budget) : endsWith L T b' t = none :=
   h.spins ((node_spin_iff b s).mp spin) L T b'
 
-#assert_axioms endsAbove_unique ending_of_above node_of_above node_spin_iff node_of_chain node_of_chain_vis
-#assert_axioms chain_spin
-
 end Obend.Core.Interaction
 
 end

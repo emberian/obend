@@ -21,7 +21,6 @@ pin is re-cited rather than resurrected, is the planner's.
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Slot.World
-public import Obend.AxiomPin
 @[expose] public section
 
 namespace Obend.Slot
@@ -171,9 +170,6 @@ theorem apart_repaired :
     exact compatible_of_local _ (pinRepair_local _ _) apart () (by
       simp only [apart, List.mem_cons, List.not_mem_nil, or_false]
       rintro g (rfl | rfl) h <;> simp_all [cell, pinRepair])
-
-#assert_axioms Reaches.head plan_later plan_keeps plan_establishes repair_sound compatible_of_local
-  pinRepair_local clash_unsat clash_naive clash_refused apart_repaired
 
 end Obend.Slot
 end

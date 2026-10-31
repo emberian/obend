@@ -650,11 +650,4 @@ public theorem yieldedPlan_forces {L : Limits} {budget : Budget} {y : State} {r 
   obtain ⟨_, _, _, F, _, chain⟩ := yieldedPlan_heapForces valid.heap found
   exact ⟨F, chain c y.stack cIn valid.stack⟩
 
-#assert_axioms valueValid_allIn cellValid_allIn frameValid_allIn controlValid_allIn addrValid_of_lexical
-#assert_axioms forces_fits forces_forceWith ticksLe_with foldlM_forces
-#assert_axioms forces_materializeWith forces_yieldedPlan forces_complete
-#assert_axioms forces_runBounded runBounded_zero_forces forces_segment
-#assert_axioms heapForces_refl heapForces_trans heapForces_demand stepRaw_complete_stack forceWith_demand
-#assert_axioms foldlM_invariant materializeWith_heapForces yieldedPlan_heapForces yieldedPlan_forces
-
 end Obend.Core.Proofs.Forcing

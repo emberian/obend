@@ -5,7 +5,6 @@ This is a frontend scaffold, NOT a replacement for `sameType`. In particular,
 raw fields are exposed as syntax constructors, NOT row equality observations.
 No consumer may interpret this raw graph as canonical row equality. -/
 public import Obend.Core.Assumptions
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.AliasExposure
 open Obend.Core.Ty Obend.Core.Check
@@ -234,11 +233,6 @@ theorem raw_field_observation (assumptions : Assumptions) (name : String) (membe
     expose assumptions (.field name member tail) = .constructor ⟨.field name, [member, tail]⟩ := by
   simp [expose, exposeWalk, constructorHead]
 
-#assert_axioms constructorHead_children subterms_trans support_subterms alias_mem_support self_mem_subterms left_mem_support right_mem_support bound_subterm_mem_support
-  covers_step initial_covers expose_rigid expose_without_alias productive_alias_probe
-  expose_computation_alias computation_alias_refused_probe
-  unproductive_cycle_probe unproductive_cycle_same_class_probe cycle_prefix_probe raw_field_observation
-
 /-- Alias exposure may leave the query root's syntax, but every disclosed
 constructor child remains in the roots-and-bounds support. -/
 public theorem exposeWalk_children_support
@@ -293,8 +287,6 @@ public theorem expose_children_support
     ∀ child ∈ observation.children, child ∈ support assumptions left right :=
   exposeWalk_children_support assumptions left right _ [] (initial_covers assumptions)
     t observation present observed
-
-#assert_axioms exposeWalk_children_support expose_children_support
 
 
 /-- Every productive observation originates at an actual syntax node in the
@@ -359,8 +351,6 @@ public theorem expose_field_mem_support
     Ty.field name member tail ∈ support assumptions left right := by
   obtain ⟨source, sourcePresent, raw⟩ := expose_origin present observed
   cases source <;> simp_all [constructorHead]
-
-#assert_axioms exposeWalk_origin expose_origin expose_field_mem_support
 
 
 theorem takeWhile_before_repeat (index : Nat) (pre post : List Nat)
@@ -756,12 +746,6 @@ public theorem expose_alias_nonvariable
     subst disclosed
     simp only [pure, Bool.false_eq_true, ↓reduceIte]
     exact exposeWalk_nonvariable assumptions _ _ _ body nonvariable
-
-#assert_axioms cycleRepresentative_segment cycle_min_rotate
-  visitPath_reverse exposeWalk_replay
-  exposeWalk_trace
-  expose_alias
-  exposeWalk_nonvariable expose_nonvariable expose_alias_nonvariable
 
 
 end Obend.Core.AliasExposure

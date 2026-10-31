@@ -113,5 +113,4 @@ theorem Discharges.filteredStep_related
           exact ⟨member,member',nested.1,rfl,rfl,tails⟩
         · exact .skip tails
 
-#assert_axioms FilteredRelated.symm Discharges.filteredStep_related
 end Obend.Core.Proofs.Templates

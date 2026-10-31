@@ -1,6 +1,5 @@
 module
 public import Obend.Core.RowHit
-public import Obend.AxiomPin
 
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
@@ -313,9 +312,5 @@ public theorem labels_field (a : Assumptions) (name : String) (member tail : Ty)
     rw [same]
     simpa only [sameName, false_or, labels] using
       (labels_find_projection a (support a tail tail) tail wanted).symm
-
-#assert_axioms labels_find_projection insertLabel_sorted scanLabels_sorted sorted_ext labels_expose_eq
-  residual_find_projection residual_projection residual_expose_eq
-  residual_field labels_field
 
 end Obend.Core.RecursiveRows

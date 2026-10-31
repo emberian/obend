@@ -15,7 +15,6 @@ Lemmas marked "(leaf intake)" are copied verbatim from the unlanded lane source
 /tank/dregg-build/codex-objective-demand-bool-20261003/src/Theory/
 Obend.Core.Proofs.Adequacy.lean (sha256 489b1527…ed1fcd, hbox leaf78 log). -/
 public import Obend.Core.Proofs.Adequacy
-public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Completeness
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -1180,21 +1179,5 @@ theorem lazyFixedSeed_supported_by_representation :
 theorem open_term_not_started : startSource (.bound 0) = none := by
   have notClosed : ¬ Scoped 0 (.bound 0) := by simp
   simp [startSource,notClosed]
-
-/-! Axiom pins. -/
-#assert_axioms stackMeaning_names_congr sourceStep_frame sourceStep_stack controlMeaning_names_congr
-  graphBy_names_congr budgetFocus_result_exists rawRun_add graph_primitive_return_execution
-  graph_extend_record_execution graph_evaluate_fix_execution heapPotential_push
-  cellPotential_list_set heapPotential_set heapPotential_allocateFields fields_potential_lt
-  budgetFocus_of_controlMeaning graphBy_same_size dispatch_advance closeTerm_nat closeTerm_boolean
-  closeTerm_label stutter_advance bound_advance immediate_advance context_advance pair_advance
-  record_advance fix_advance enter_suspended_advance enter_cached_advance complete_return_advance
-  update_return_advance binaryLeft_advance specification_call_advance graph_stepRaw_whole
-  rawRun_succ graphBy_whole_derivation rawRun_terminating_completes_from rawRun_terminating_complete
-  rawRun_finite_completion runBounded_finite_completion machineTransition_running
-  machineTransition_advanced machineTransition_finished machineTransition_suspension_exact
-  machine_simulation machine_value_adequacy machine_steps_of_rawRun machine_evaluation_complete
-  lazyFixedSeed_closed lazyFixedSeed_evaluates lazyFixedSeed_completes
-  lazyFixedSeed_supported_by_representation open_term_not_started inject_advance
 
 end Obend.Core.Proofs.Completeness

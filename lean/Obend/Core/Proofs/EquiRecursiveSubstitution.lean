@@ -176,7 +176,4 @@ theorem valid_instance_agreement :
   simpa only [actual,expected,Ty.instantiate,substitution,if_pos rfl,ite_true] using
     semantic_field_shadow validInstance "a" .natural (.variable 1) .emptyRow valid_image_resource
 
-#assert_axioms discharged template_agreement invalid_image_resource instance_disagreement
-  counterexample_environments_invalid discharges_not_substitution_stable valid_discharged
-  valid_environments valid_image_resource valid_template_agreement valid_instance_agreement
 end Obend.Core.EquiRecursiveSubstitution

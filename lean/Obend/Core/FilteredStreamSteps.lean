@@ -82,5 +82,4 @@ theorem expanded_hit (σ : Nat → Ty) (a b : Assumptions) {row : Ty}
     apply Obend.Core.RowSearch.Hit.skip _ (.expanded next first) _ n _ ih
     simp only [filteredStep,observed]
 
-#assert_axioms source_stream_hit filteredStep_source_skip filteredStep_source_emit filteredStep_source_nominal expanded_hit
 end Obend.Core.Proofs.Templates

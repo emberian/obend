@@ -17,7 +17,6 @@ The other direction, a run `interpret` delivers and the runner refuses, is the f
 -/
 public import Obend.Run.Proofs.Invariant
 public import Obend.Slot.Selection
-public import Obend.AxiomPin
 public import Obend.Tactic.Tooth
 import all Obend.Run.Runner
 import all Obend.Run.Spec
@@ -311,9 +310,6 @@ public theorem override_accepted {Cand : Type} {host : Host V Tok Fact} {sp : Sp
   refine ⟨c', hc', ?_⟩
   rw [(run_replan_inv hc').2.2.2.2.2.2.2.2]
   simp [setCites]
-
-#assert_axioms dispatch_respond drive_sound drive_complete resolveEvent_ok resolveEventBy_ok
-  resolveEventBy_keeps override_accepted
 
 end
 

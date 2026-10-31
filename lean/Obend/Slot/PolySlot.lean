@@ -238,8 +238,6 @@ theorem blocked_forever (S : Slot Fact Cand) {v v' : V} (c : Cand) (f : Fact) (h
   have hdead := dead_behind_forever f hr h
   exact ⟨_, by simp [read, usable_dead S _ hf hdead, hj], (mem_dead_iff S _ c f).2 ⟨hf, hdead⟩⟩
 
-#assert_axioms usable_congr read_congr alternatives_congr blocked_forever
-
 end World
 
 /-! ### `Slot/Integrity.lean` -/
@@ -468,14 +466,6 @@ theorem reuse_needs_prefix :
 
 theorem toy_integrity : PIntegrity (slotFiller : Filler Nat Member Member) slotAdvance :=
   slotFiller_integrity
-
-#assert_axioms usable_iff usable_dead read_usable_iff read_blocked_names slot_repair select_ok
-  select_error resolve_ok resolve_error resolve_eq_select usable_eq alternatives_eq read_eq select_eq
-  advance_eq missing_eq missing_usable dup_normal select_names repair_of_contextual
-  slotFiller_integrity slotFiller_repair transition_retired select_prefix select_reuse
-  slotFiller_typed slotFiller_uncovered toy_repair toy_advance not_integrity_credulousHoles
-  not_integrity_firstCandidate not_integrity_blindRefusal not_transition_churn not_transition_sticky
-  reuse_needs_prefix toy_integrity
 
 end Obend.Slot.PolySlot
 end

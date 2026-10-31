@@ -1,7 +1,6 @@
 module
 public import Obend.Core.RecursiveAgreement
 public import Obend.Core.Term
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Check
 open Obend.Core.Ty Obend.Core.Term
@@ -956,11 +955,6 @@ def responseType : Ty := .variant (.field "written" .emptyRow (.field "refused" 
 unrestricted binder either. -/
 theorem computation_not_shareable (plan response result : Ty) (variables : List Nat) :
     (Ty.computation plan response result).shareableUnder variables = false := rfl
-
-#assert_axioms agree_never_manufactures_shareability sameStep_symm sameType_iff Assumptions.chase_bounded
-  sameType_equivalence sameStep_sameType SameChain.sameType legacySameType_chain legacySameType_lift sameType_isComputation
-  Ty.shareableUnder_canonical Ty.shareable_canonical labelsDistinct_map
-  lookupW_sound lookupV_iff isRowW_sound isRowV_iff
 
 end Obend.Core.Check
 

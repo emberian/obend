@@ -292,8 +292,6 @@ theorem unbound_self_member_refused :
 front end's own parser reads. -/
 theorem builtin_parses : Elaborate.builtinModule.toBool = true := by native_decide
 
-#assert_axioms composeTy_closed composeTy_fold_closed shareableUnder_of_shareable metaAssumptions_valid
-  provenance_typed compose_wrapper_typed
 #assert_compiled twice_accepted
 #assert_compiled claim_spec_accepted
 #assert_compiled non_boolean_claim_refused

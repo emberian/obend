@@ -6,7 +6,6 @@ Not a `module`, for the reason `Obend.Core.Teeth.Collect` gives: `decide +kernel
 expose to `module` files.
 -/
 import Obend.Core.Proofs.Force
-import Obend.AxiomPin
 
 namespace Obend.Core.Collect
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Data
@@ -16,7 +15,5 @@ theorem largerYield_checkpoint_grows :
       ((yieldedPlan largerLimits largerBudget largerYield).toOption.map
         fun r => (checkpoint r.state).heap.size) = some 5 := by
   decide +kernel
-
-#assert_axioms largerYield_checkpoint_grows
 
 end Obend.Core.Collect

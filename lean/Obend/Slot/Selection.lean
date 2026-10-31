@@ -83,9 +83,6 @@ theorem not_sound_sticky : ¬ SelectionSound (sticky : Advance Nat Member Member
 
 end
 
-#assert_axioms transition_sound churn_sound slotAdvance_sound sound_retired incumbent_choice
-  not_sound_sticky
-
 end Obend.Slot
 
 end

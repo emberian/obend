@@ -73,8 +73,8 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
 - `#tooth T by mutation`: a command that applies a stated mutation to a definition in a scratch
   environment and checks the theorem `T` *fails*; the trees do this by hand today with planted
   files. A green that cannot red is not evidence; this makes the red mechanical.
-- `#pin` is `#assert_axioms` (exists); `lake check` with independent kernels for the pins once the
-  toolchain moves; `decide +kernel` in place of `native_decide` where it is fast enough, so fewer
+- the axiom check is one census, `#assert_axioms_tree` in `Obend/Census.lean` (exists; the
+  per-theorem lists are gone); `lake check` with independent kernels once the toolchain moves; `decide +kernel` in place of `native_decide` where it is fast enough, so fewer
   compiled-trust pins.
 - `grind` configurations per module (`Core.Proofs.Preservation`, `Collect`) for the arithmetic and
   row lemmas; Aesop as a Mathlib-free dependency only if `grind` falls short.

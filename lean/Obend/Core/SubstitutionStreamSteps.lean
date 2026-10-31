@@ -130,6 +130,4 @@ theorem Discharges.stream_hit_hidden_path
     intro hidden
     exact .cons _ _ _ (D.stream_step_skip_instantiate valid observed) (ih hidden)
 
-#assert_axioms Discharges.stream_step_skip_instantiate Discharges.stream_step_emit_instantiate
-  Discharges.stream_path_instantiate Discharges.stream_hit_instantiate Discharges.stream_hit_hidden_path
 end Obend.Core.Proofs.Templates

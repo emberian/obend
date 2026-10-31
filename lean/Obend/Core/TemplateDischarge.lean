@@ -1,6 +1,5 @@
 module
 public import Obend.Core.Assumptions
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Proofs.Templates
 open Obend.Core.Ty Obend.Core.Check

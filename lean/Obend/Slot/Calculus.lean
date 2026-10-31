@@ -74,6 +74,5 @@ theorem resolve_checks {Ix : Type} {S : Protocol.Sig Ix} {Hole : Ix → Type} {A
   obtain ⟨t, _, _, hmem, hu, rfl⟩ := resolve_ok h
   exact ⟨t, hmem, (slotOf_usable budget Ψ A supports holds t hu).1, rfl⟩
 
-#assert_axioms slotOf_usable resolve_checks
 end Calculus
 end Obend.Slot

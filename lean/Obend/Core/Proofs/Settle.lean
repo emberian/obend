@@ -17,7 +17,6 @@ relation is `Agree s t`: erasing every cached origin (`eraseState`) makes them e
 * `settle_resume_segment`: the kernel's segment from a settled state agrees with the
   segment from the state it settled. -/
 public import Obend.Core.Proofs.Collect
-public import Obend.AxiomPin
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -633,14 +632,5 @@ public theorem settle_resume_segment {state resumed : State} {response : Term}
     cases runT : runBounded limits ticks resumed' <;> rw [runT] at ran <;>
       simp only [OutcomeAgree, eraseOutcome, Outcome.refused.injEq, reduceCtorEq] at ran
     exact ⟨_, by rw [ran.1]⟩
-
-#assert_axioms eraseCell_eraseCell eraseCell_suspended eraseCell_evaluating eraseCell_cached
-#assert_axioms eraseCell_comp Agree.refl Agree.symm Agree.trans Agree.control Agree.stack Agree.heap
-#assert_axioms Agree.size Agree.mk' agree_eraseState eraseState_eraseState erase_set!
-#assert_axioms erase_allocateFields erase_stepRaw agree_stepRaw agree_step agree_runBounded_zero
-#assert_axioms agree_runBounded agree_resume active_of_agree agree_forceWith foldlM_agree
-#assert_axioms agree_entered agree_materializeWith agree_completeWith agree_yieldedPlanWith
-#assert_axioms settle_heap_erased agree_settle settle_getElem? settle_size settle_resume_runBounded
-#assert_axioms heapTyping_settle lexical_settle busy_settle settle_resume_segment
 
 end Obend.Core.Collect

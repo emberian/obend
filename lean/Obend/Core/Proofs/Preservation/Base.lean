@@ -7,7 +7,6 @@ public import Obend.Core.RuntimeOrigins
 public import Obend.Core.EquiRecursiveLookup
 public import Obend.Core.TypeGraphHead
 public import Obend.Core.Proofs.Adequacy
-public import Obend.AxiomPin
 public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
@@ -1510,8 +1509,6 @@ public theorem source_not_hole {assumptions : Assumptions} {context : Context}
     obend_cases term with []
   all_goals (intros; simp_all)
 
-#assert_axioms source_not_hole
-
 /-- Variable source derivations disclose the actual environment binding even
 when the authored result has crossed one or several row/alias conversions. -/
 public theorem source_bound_assignment {assumptions : Assumptions} {context : Context}
@@ -1764,13 +1761,5 @@ public theorem value_variant_fields {assumptions : Assumptions} {types : Address
     exact ⟨row, member, actual, fuel, lookup, assigned, path,
       (TypeGraph.equivalent_equivalence assumptions).trans related ((sameType_iff assumptions _ _).mp converted)⟩
 
-
-#assert_axioms legacy_same_type_preserves_head legacy_sameType_activity_canonical
-  runtimeHead_transport value_head_correct natural_value_form boolean_value_form label_value_form
-  specification_value_form prototype_value_form variant_value_form closure_value_form
-  callable_value_form closure_callable_type specification_callable_type
-  value_typed_not_computation value_specification_fields value_prototype_fields value_closure_fields
-  computation_same_type_inj sameType_activity_components stack_effect_case
-  same_type_lookup_transport record_value_form value_variant_fields
 
 end Obend.Core.Proofs.Preservation

@@ -308,7 +308,7 @@ theorem forceWithFast_unique (F : (State → Bool) → Limits → Nat → State 
           · rfl
       · simp_all
 
-/-! ## Axiom pins: exact sets (no Classical.choice, no compiler trust, no sorry) -/
+/-! ## Exact axiom sets: no `Classical.choice` (stricter than the census, which admits it) -/
 
 /--
 info: 'Obend.Core.MachineFast.allocateFieldsFast_eq' does not depend on any axioms

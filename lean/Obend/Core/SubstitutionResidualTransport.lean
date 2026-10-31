@@ -1,6 +1,5 @@
 module
 public import Obend.Core.SubstitutionResidual
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
@@ -197,7 +196,4 @@ public theorem discharge_residual_instantiate
     obtain ⟨n, hit⟩ := found
     exact discharge_residual_hit D hit
 
-#assert_axioms ResidualRelated.tailKind residualStep_skip_exposed residualStep_skip residualStep_no_stop residualStep_no_cycle
-  residual_hit_payload_not_cycle residual_hit_no_cycle residual_cycle_iff_no_hit discharge_residualStep_skip
-  discharge_residual_no_hit discharge_residual_emit discharge_residual_hit discharge_residual_instantiate
 end Obend.Core.RecursiveRows

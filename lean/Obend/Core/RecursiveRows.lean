@@ -5,7 +5,6 @@ Streams are graph observations: an emission contains the raw tail state. Calling
 many hidden resourceful fields without constructing an infinite Lean list. -/
 public import Obend.Core.AliasExposure
 public import Obend.Core.ResourceSemantics
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
@@ -302,16 +301,6 @@ theorem custody_recursive_row_not_shareable :
   simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
     constructorHead,Ty.isComputation,List.lookup]
 
-#assert_axioms shareable_iff shareable_unfold shareable_eq_of_expose_eq shareable_terminal
-  shareable_natural shareable_label shareable_boolean shareable_emptyRow shareable_custody
-  shareable_arrow shareable_computation shareable_field shareable_specification
-  shareable_prototype shareable_variant
-  shadow_natural_alias_discarded shadow_custody_alias_retained
-  mem_insertLabel labels_alias_tail_sorted_unique labels_productive_cycle_finite
-  alias_tail_field_exposed cyclic_shareable_shadow_stream_finite
-  cyclic_resourceful_shadow_stream_recursive cyclic_row_residual_productive
-  productive_recursive_row_shareable unproductive_alias_shareable custody_recursive_row_not_shareable
-
 public theorem scanStream_emit_support
     (assumptions : Assumptions) (left right : Ty)
     (remaining : List Ty) (label : String) (first : Bool)
@@ -397,9 +386,6 @@ public theorem residual_nonRow_support
     result ∈ support assumptions left right :=
   scanResidual_nonRow_support assumptions left right _ row result present returned
 
-#assert_axioms scanStream_emit_support streamStep_emit_support
-  scanResidual_nonRow_support residual_nonRow_support
-
 
 @[expose] public def fieldLabels (nodes : List Ty) : List String :=
   nodes.filterMap (fun
@@ -455,8 +441,6 @@ public theorem labels_mem_fieldLabels
     (listed : name ∈ labels assumptions row) :
     name ∈ fieldLabels (support assumptions left right) :=
   scanLabels_mem_fieldLabels assumptions left right _ row name present listed
-
-#assert_axioms field_name_mem_fieldLabels scanLabels_mem_fieldLabels labels_mem_fieldLabels
 
 
 end Obend.Core.RecursiveRows

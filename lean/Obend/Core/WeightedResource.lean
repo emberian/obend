@@ -40,7 +40,6 @@ theorem safe_bisimilar_iff {α : Type} (g : Graph α Bool) {x y : α}
   ⟨safe_of_bisimilar g related,
     safe_of_bisimilar g ((Obend.Core.FinitePresentation.bisimilar_equivalence g).symm related)⟩
 
-#assert_axioms children_right_member safe_of_bisimilar safe_bisimilar_iff
 end Obend.Core.FiniteSafety
 
 namespace Obend.Core.TypeGraph
@@ -93,5 +92,4 @@ theorem equivalent_weighted_resource {a : Assumptions} {left right : Ty}
       Obend.Core.FiniteSafety.Safe (weightedResourceGraph a nominal) (.type right) :=
   Obend.Core.FiniteSafety.safe_bisimilar_iff _ (weightedResource_bisimilar a nominal related)
 
-#assert_axioms weightedResource_bisimilar equivalent_weighted_resource
 end Obend.Core.TypeGraph

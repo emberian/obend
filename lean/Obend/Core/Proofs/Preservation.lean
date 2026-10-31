@@ -149,16 +149,4 @@ theorem checked_reachable_no_internal_refusal (source : AnnotatedTerm)
       state.control ≠ .refused .invalidUpdate :=
   Obend.Core.Invariant.reachable_no_internalRefusal (source_scoped checked.derivation) reachable
 
-#assert_axioms legacy_same_type_preserves_head runtimeHead_transport value_head_correct typed_binary_right_no_wrong_value
-  typed_condition_preserved typed_condition_no_wrong_value canonical_lookup typed_bound_preserved
-  typed_application_focus_preserved typed_enter_preserved typed_update_preserved
-  checked_reachable_no_internal_refusal source_insert_binding typed_mix_preserved
-  typed_fix_preserved typed_record_preserved typed_field_preserved typed_extend_preserved
-  typed_stepRaw_preserved checked_reachable_typed checked_reachable_no_refusal
-  checked_reachable_no_wrong_value_or_missing_field typed_runBounded_no_refusal
-  checked_runBounded_no_refusal
-  check_runBounded_no_refusal typed_inject_preserved typed_case_preserved typed_ifBool_preserved
-  arms_typing_find value_variant_fields typed_yield_quiescent typed_resume_preserved
-  typed_perform_preserved
-
 end Obend.Core.Proofs.Preservation

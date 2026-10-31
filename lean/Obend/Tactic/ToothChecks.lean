@@ -1,6 +1,5 @@
 module
 public import Obend.Tactic.Tooth
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Tactic.ToothChecks
 @[expose] def f : Nat := 0
@@ -33,6 +32,4 @@ theorem reconstructionTarget : f = 0 := reconstructionHelper
 #tooth reconstructionTarget by mutation f := 1
 
 theorem restored : f = 0 := rfl
-#assert_axioms lemmaF transitive inductiveUse restored
-#assert_axioms reconstructionTarget
 end Obend.Tactic.ToothChecks

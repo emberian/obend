@@ -15,7 +15,6 @@ hypothesis is inhabited) and one where it refuses with the named reason (so the 
 -/
 public import Obend.Law.Std
 public import Obend.Law.Proofs.Eval
-public import Obend.AxiomPin
 namespace Obend.Law
 open Obend.Core.Term
 open Obend.Core.Ty (Ty)
@@ -897,19 +896,5 @@ theorem windowed_tooth :
   ⟨admits_of_run 1000 (by decide +kernel), admits_of_run 1000 (by decide +kernel),
     refuses_of_run 1000 (by decide +kernel), refuses_of_run 1000 (by decide +kernel),
     refuses_of_run 1000 (by decide +kernel)⟩
-
-#assert_axioms subst_okT subst_refusedT subst_guard subst_guards subst_allOf subst_anyOf
-  okT_value refusedT_not_ok guard_ok guards_ok allOf_ok anyOf_true andT_true notT_true notT_false
-  eqLabel_bool eqLabel_true eqNat_bool eqNat_true leNat_true ltNat_true addNat_val divNat_val
-  get_nat get_label get_inject case_subst_inv lawCase6_arm lawCase6_birth lawCase6_adopt
-  lawCase6_relaw lawCase6_retire lawCase6_write lawCase6_invoke lawCase_change lawOf_admits
-  lawOf6_admits arms6_const
-  ownerSigns_spec listed_true allowlist_spec bounded_spec isState_true machine_start machine_birth
-  machine_adopt machine_invoke machine_write_refused machine_relaw_refused machine_retire_refused
-  machine_frozen nat_eval natT_eval subst_bit subst_fold bit_val popcount_fold subst_popcount quorate_true member_true fresh_approvals quorum_birth_empty
-  quorum_adopt_fresh quorum_retire_refused quorum_relaw_needs_k subst_eqAt eqAt_true eqAt_fields_true
-  quorum_change_needs_k div_req inOneEpoch_true
-  windowed_lands_in_epoch windowed_fresh windowed_limit
-  ownerSigns_tooth allowlist_tooth bounded_tooth machine_tooth quorum_tooth windowed_tooth
 
 end Obend.Law

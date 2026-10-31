@@ -6,7 +6,6 @@ A sharing implementation must prove representation adequacy; this reference
 relation does not claim a heap machine, type safety, termination, proof
 consistency, or authority. -/
 public import Lean
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Term
 set_option autoImplicit false
@@ -605,11 +604,6 @@ theorem one_turn_interaction (plan : Term) :
   refine .turn (.refl _) (.case _ (.perform plan)) ?_
   refine .finish ⟨.next (.caseInject "written" (.record []) _ (.done (.nat 1)) rfl) ?_,.natural 1⟩
   simpa [instantiate, Term.substitute] using Steps.next (Step.done (.nat 1)) (.refl _)
-
-#assert_axioms label_equality_boolean_exact label_equality_booleans_refused
-  case_selects_injected_arm equality_drives_branch yields_no_step yields_deterministic yields_plug
-  one_turn_interaction subtract_truncated_exact divide_floor_exact order_exact nat_primitives_refuse_labels
-  divide_modulo_reconstruct
 
 end Obend.Core.Term
 

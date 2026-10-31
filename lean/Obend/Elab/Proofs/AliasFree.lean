@@ -7,7 +7,6 @@ facts preparation's completeness uses where the checker reads a representative i
 public import Obend.Core.Bidirectional
 public import Obend.Core.EquiRecursiveLookup
 public import Obend.Core.TypeGraphResource
-public import Obend.AxiomPin
 
 namespace Obend.Elab.Proofs.AliasFree
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Bidirectional Obend.Core.TypeGraph
@@ -148,6 +147,4 @@ public theorem lookupV_transport {t row : Ty} (agrees : sameType a t row = true)
     Obend.Core.TypeGraph.equivalent_lookup_transport ((sameType_iff _ _ _).mp agrees) fuel name member h
   exact ⟨member', (lookupV_iff _ _ _ _).2 ⟨depth, h'⟩, (sameType_iff _ _ _).mpr related⟩
 
-#assert_axioms whnf_eq shape_congr shareable_semantic shareable_congr arrow_inv variant_inv
-  specification_inv computation_inv callable_transport lookupV_transport
 end Obend.Elab.Proofs.AliasFree

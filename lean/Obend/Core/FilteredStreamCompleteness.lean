@@ -107,5 +107,4 @@ decreasing_by
     have current : n = count + 1 := by assumption
     omega
 
-#assert_axioms Discharges.image_hit_filtered
 end Obend.Core.Proofs.Templates

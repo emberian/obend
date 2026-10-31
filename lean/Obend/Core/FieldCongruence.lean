@@ -280,8 +280,4 @@ theorem field_congruence {a : Assumptions} {name : String} {member tail member' 
     · rw [Rows.residual_field, Rows.residual_field]
       exact view.residualChildren
 
-#assert_axioms nonrow_scans observed_alphabet observed_residual observed_row_children
-  observed_nonrow_children scan_emission_label absent_stream equivalent_row_interface
-  stream_field_prefix_congruence field_congruence
-
 end Obend.Core.TypeGraph

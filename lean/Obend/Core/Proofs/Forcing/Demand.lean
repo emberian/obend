@@ -292,9 +292,6 @@ theorem pending_within (B : Array Cell) (Bvalid : HeapValid B) :
     refine ⟨w', o', n', Bw', vw, bsus, d, ps, j1 + i', by omega, ?_, ?_⟩
     · rw [exec_add]; exact ci
     · rw [exec_add]; exact si
-#assert_axioms stripInv_step
-#assert_axioms stripInv_run
-#assert_axioms pending_within
 
 public theorem renameControl_id {f : Nat → Nat} {c : Control} (same : ∀ x ∈ controlAddresses c, f x = x) :
     renameControl f c = c := by
@@ -490,13 +487,5 @@ public theorem demand_forces : ∀ (n : Nat) (B : Array Cell) (y : Nat) (Bf : Ar
   · subst BfEq
     refine ⟨id, fun _ _ => rfl, fun c S cIn sIn => ?_⟩
     exact .agree (agreeRel_refl ⟨Bvalid, cIn, sIn⟩) (by omega)
-
-#assert_axioms renameControl_id
-#assert_axioms renameFrame_id
-#assert_axioms renameStack_id
-#assert_axioms preShallow_keeps
-#assert_axioms pendRel_start
-#assert_axioms demand_cell_lt
-#assert_axioms demand_forces
 
 end Obend.Core.Proofs.Forcing

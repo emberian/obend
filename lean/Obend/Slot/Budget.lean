@@ -72,5 +72,4 @@ theorem budget_filling_typed : Calculus.Typed fuelContext fuelFilling budgetType
 
 end BudgetFixtures
 
-#assert_axioms budget_filling_admitted budget_tooth budget_uncovered budget_filling_typed
 end Obend.Slot

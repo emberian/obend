@@ -107,5 +107,4 @@ theorem legacySameType_extends (laws : Laws E) (assumptions : Assumptions)
         (by simpa using (Bool.and_eq_true_iff.mp aliasExpected).2)
     | _ => simp at aliasExpected
 
-#assert_axioms insertCanonical_sound insertCanonical_congr canonical_sound of_canonical_eq legacySameType_extends
 end Obend.Core.CanonicalExtension

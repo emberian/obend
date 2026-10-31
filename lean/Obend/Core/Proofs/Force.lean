@@ -17,7 +17,6 @@ the yielded state (sharing transparency). That is `Kernel.ObjectiveResumeContrac
 forcingTransparent_of_yieldedPlan`, over `Obend.Core.Proofs.Forcing.*`. -/
 public import Obend.Core.Proofs.Settle
 public import Obend.Core.Proofs.Preservation
-public import Obend.AxiomPin
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -463,12 +462,5 @@ largerYield_resumes_exactly`, `runSegment_stored_complete`). -/
 
 /- `largerYield_checkpoint_grows` (collection leaves two cells; the checkpoint after extraction has five)
 is in `Obend.Core.Teeth.Force`, a legacy leaf: its `decide` runs `yieldedPlan` and `checkpoint`. -/
-
-#assert_axioms forcingShared_false_iff stepRaw_yields_outside runBounded_of_yielded
-#assert_axioms runBounded_zero_yielded runBounded_yields_outside outcomeState_runBounded_zero
-#assert_axioms typed_runBounded_any typed_forceWith_any runBounded_finished_control
-#assert_axioms forceWith_finished_control extension_length_le HeapGood.size_le good_of_finished
-#assert_axioms good_forceWith good_foldlM good_materializeWith typed_yieldedPlanWith
-#assert_axioms typed_checkpoint yieldedPlanWith_control
 
 end Obend.Core.Collect

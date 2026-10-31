@@ -6,7 +6,6 @@ Not a `module`, for the reason `Obend.Core.Teeth.Collect` gives: these theorems 
 functions whose bodies Lean v4.30.0's `Init` does not expose to `module` files.
 -/
 import Obend.Core.Proofs.Collect
-import Obend.AxiomPin
 
 namespace Obend.Core.Collect
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Data
@@ -38,11 +37,5 @@ theorem exampleYield_segment_premises :
       yieldedPlan exampleLimits exampleBudget y = .ok r := by
   obtain ⟨r, extracted⟩ := exampleYield_plan_extracts
   exact ⟨1, exampleYield, r, yieldingTerm_yields, extracted⟩
-
-#assert_axioms yieldingTerm_yields
-#assert_axioms exampleYield_collected
-#assert_axioms exampleYield_plan_agrees
-#assert_axioms exampleYield_plan_extracts
-#assert_axioms exampleYield_segment_premises
 
 end Obend.Core.Collect

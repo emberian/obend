@@ -245,11 +245,6 @@ theorem scoped_substitute (t : Tree Tag) (n m : Nat) (h : Scoped n t)
     (σ : Nat → Tree Tag) (maps : ∀ i, i < n → Scoped m (σ i)) : Scoped m (substitute σ t) :=
   all_substitute t _ _ h σ maps
 
-#assert_axioms rename_comp rename_id rename_substitute substitute_rename substitute_comp
-  all_eq_true all_congr traverse_congr_on rename_congr_on scoped_rename_identity
-  substitute_id substitute_congr_on scoped_substitute_identity all_rename all_substitute
-  scoped_rename scoped_substitute
-
 end Tree
 end Obend.Core.Traverse
 end

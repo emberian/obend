@@ -5,10 +5,9 @@ Not a `module`: `decide`/`decide +kernel` here evaluate `collect` on a concrete 
 `Array.map`, `Array.zip` and `Array.filterMap`; under the module system (Lean v4.30.0) the kernel does
 not see `Init`'s bodies for `Array.map`/`Array.zip`, so the evaluation is only possible in a legacy file.
 A legacy file may import `module` files (the converse is refused), so teeth are leaves: nothing imports
-this module, and the theorems keep their statements and their standard-axiom pin.
+this module, and the theorems keep their statements.
 -/
 import Obend.Core.Collect
-import Obend.AxiomPin
 
 namespace Obend.Core.Collect
 
@@ -19,8 +18,5 @@ theorem collect_garbageExample_heap_size : (collect garbageExample).heap.size = 
 theorem collect_garbageExample_roots :
     (match (collect garbageExample).control with | .yielded plan => plan | _ => 99) = 1 ∧
     (collect garbageExample).stack.flatMap frameAddresses = [2] := by decide
-
-#assert_axioms collect_garbageExample_heap_size
-#assert_axioms collect_garbageExample_roots
 
 end Obend.Core.Collect

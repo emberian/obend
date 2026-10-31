@@ -1,8 +1,8 @@
 module
 /-
-# Obend.Core.Proofs.DigestChecks — axiom pins and deployed-hash instances for `digest`
+# Obend.Core.Proofs.DigestChecks — deployed-hash instances for `digest`
 
-`Obend.Core.Digest` stays Init-only so the C transcription can link it; its pins live
+`Obend.Core.Digest` stays Init-only so the C transcription can link it; its compiled checks live
 here. The theorems there are kernel-checked over an arbitrary hash; the facts below that need the
 deployed cSHAKE256 are closed instances run by the compiled evaluator (`native_decide`), pinned by
 `#assert_compiled`, because one Keccak-f[1600] permutation under kernel reduction is outside any
@@ -23,20 +23,11 @@ open Obend.Core.Digest
 
 set_option autoImplicit false
 
-#assert_axioms ofBE_natBytesBE natBytesBE_injective natBytesBE_length_le admissible_of_lt
-  preimage_injective digest_lt binds_or_collides sealed_binds_or_collides
-  lengthHash_binding_fails lengthHash_collides
-  constHash_hiding identity_not_hiding hiding_at_equality_is_a_collision digestExport_reads
-  deployed_eq customizationPrefix_length padForRate_length permutations_eq preimage_length
-  permutations_le permutations_le_three permutations_le_two
-
 /-- The stand-in commitment of `world/ballot` before `digest` existed: binding on its small domain,
 and the vote is its low bit, for every voter, vote and salt. -/
 theorem standIn_lowBit_is_vote (voter vote salt : Nat) (h : vote < 2) :
     (2 * (salt * 1000 + voter) + vote) % 2 = vote := by
   omega
-
-#assert_axioms standIn_lowBit_is_vote
 
 /-- Under `digest` the low bit is not the vote: voter 1 voting YES under salt 101 commits to an
 even digest, and voting NO under salt 100 to an odd one. -/

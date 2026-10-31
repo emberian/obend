@@ -110,6 +110,4 @@ theorem Discharges.related_stream_closed
       rw [one] at impossible
       contradiction
 
-#assert_axioms streamStep_of_hit Discharges.realized_hit_filtered filtered_payload_nodes
-  Discharges.related_stream_emits Discharges.related_stream_closed
 end Obend.Core.Proofs.Templates

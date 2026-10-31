@@ -317,16 +317,6 @@ public theorem pend_switch {e : Pending} {f : Nat → Nat} {σ τ : State} (rel 
   · rw [lazyAt j hj]; simp [withStack]
   · simp only [switchMap, show a < σ.heap.size by omega, if_true]; exact fOld a lt
 
-#assert_axioms renameValue_congr
-#assert_axioms renameCell_congr
-#assert_axioms renameFrame_congr
-#assert_axioms renameControl_congr
-#assert_axioms pend_switch
-#assert_axioms renameClosure_id
-#assert_axioms renameCell_id
-#assert_axioms renameValue_id
-#assert_axioms stepRaw_enter_cached
-
 theorem stepRaw_update_not_evaluating {s : State} {v : RuntimeValue} {a : Nat} {rest : List Frame}
     (ctl : s.control = .returned v) (st : s.stack = .update a :: rest)
     (notEval : ∀ o, s.heap[a]? ≠ some (.evaluating o)) :
@@ -465,9 +455,5 @@ public theorem pend_transfer {e : Pending} {f : Nat → Nat} :
         rcases result with p | ⟨g, a, c, i, ext, lt, sz⟩
         · exact Or.inl p
         · exact Or.inr ⟨g, a, c, i, fun x hx => ext x (Nat.lt_of_lt_of_le hx (stepRaw_size_mono σ)), by omega, sz⟩
-
-#assert_axioms pend_update_read
-#assert_axioms pend_transfer
-#assert_axioms stepRaw_update_not_evaluating
 
 end Obend.Core.Proofs.Forcing

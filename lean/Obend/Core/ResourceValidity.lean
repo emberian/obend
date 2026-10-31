@@ -86,6 +86,4 @@ theorem valid_shareableUnder_shareable {a : Assumptions} (valid : a.valid = true
   (Obend.Core.ResourceSemantics.shareable_iff a t).mpr
     (valid_shareableUnder_safe valid t share)
 
-#assert_axioms valid_boundShareable walk_head_safe shareableUnder_safe
-  valid_shareableUnder_safe valid_shareableUnder_shareable
 end Obend.Core.ResourceValidity

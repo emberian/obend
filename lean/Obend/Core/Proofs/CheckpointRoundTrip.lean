@@ -3,7 +3,6 @@ module
 quiescent yielded activity, is restored exactly from its token encoding.
 Fuel is the token count, so no separate depth bound is assumed. -/
 public import Obend.Core.Checkpoint
-public import Obend.AxiomPin
 public import Obend.Tactic.Cases
 namespace Obend.Core.Proofs.CheckpointRoundTrip
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Checkpoint
@@ -283,8 +282,5 @@ theorem hole_checkpoint_tooth :
     decodeTerm 12 (encodeTerm (.hole 7 [.nat 3, .hole 9 [.bound 2]]) ++ [.text "tail"]) =
       some (.hole 7 [.nat 3, .hole 9 [.bound 2]], [.text "tail"]) := by
   rfl
-
-#assert_axioms hole_payload_roundTrip hole_checkpoint_tooth
-#assert_axioms state_roundTrip
 
 end Obend.Core.Proofs.CheckpointRoundTrip

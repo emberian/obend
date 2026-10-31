@@ -115,7 +115,4 @@ theorem variant_congruence {assumptions : Assumptions} {row row' : Ty}
     rw [observe_variant,observe_variant]
     exact ⟨related,True.intro⟩
 
-#assert_axioms observed_shareable equivalent_shareable candidate_shareable
-  observe_specification observe_prototype observe_variant
-  specification_congruence prototype_congruence variant_congruence
 end Obend.Core.TypeGraph

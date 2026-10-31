@@ -9,7 +9,6 @@ a host world in which grants come and go and the deadline, once passed, stays pa
 public import Obend.Run.Proofs.Interpret
 public import Obend.Slot.Proofs.Negotiation
 public import Obend.Tactic.Tooth
-public import Obend.AxiomPin
 import all Obend.Run.Runner
 import all Obend.Run.Spec
 @[expose] public section
@@ -315,10 +314,6 @@ theorem initial_legal :
         (opening ++ [.dispatch (commitOp .p1)])).1.log :=
   reachable_legal (session_reachable .init _)
 
-#assert_axioms resolvesBy_p2 selects_p1 decision_rechecked initial_decision_rechecked
-  uncited_start_admitted initial_legal
-#assert_axioms resolves_p2 receipt reserve_retry_refused abandon_ends lost_instance typed_instance stayed changed script_legal withdrawn_refused everything_delivers
-
 end Obend.Run.Negotiation
 
 /-! ## Durable spending: a ticket the world keeps calling live -/
@@ -377,8 +372,6 @@ theorem second_use_refused :
       [none, none, some (.unadmitted useOp [] (some ()))] := rfl
 
 #tooth second_use_refused by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
-
-#assert_axioms second_use_refused
 
 end Obend.Run.Ticket
 

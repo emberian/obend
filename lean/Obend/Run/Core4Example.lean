@@ -10,7 +10,6 @@ Nothing imports this file.
 -/
 import Obend.Run.Proofs.Core4
 import Obend.Core.Proofs.Collect
-import Obend.AxiomPin
 
 namespace Obend.Run.Core4.Example
 open Obend.Slot.Protocol Obend.Core.Machine Obend.Core.Data Obend.Core.Collect
@@ -56,7 +55,5 @@ theorem dead_ticket_refused :
     (session (host false) spec (Cfg.init O ()) (eventsOf [⟨(), .natural 5, .natural 7⟩])).2 =
       [some (.unadmitted ⟨(), .natural 5⟩ [] (some ())), some (.unsolicited ⟨(), .natural 5, .natural 7⟩)] :=
   rfl
-
-#assert_axioms yields transcript turn_is_trace dead_ticket_refused
 
 end Obend.Run.Core4.Example

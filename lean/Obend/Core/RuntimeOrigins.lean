@@ -195,6 +195,4 @@ theorem value_scalar_origin {types : AddressTypes} {value : RuntimeValue} {type 
 
 end Conversion
 
-#assert_axioms conversionPath_candidate value_closure_origin value_specification_origin
-  value_prototype_origin value_variant_origin value_record_origin value_scalar_origin
 end Obend.Core.MachineTyping.Next

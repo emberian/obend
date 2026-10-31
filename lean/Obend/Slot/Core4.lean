@@ -301,10 +301,5 @@ theorem msubst_var_open (σ : Nat → Option AnnotatedTerm) (x : Nat) (h : σ x 
 theorem uses_var (x : Nat) : Obend.Slot.Calculus.uses (var x) x = true := by
   simp [Obend.Slot.Calculus.uses, var, freeIn, Obend.Core.Traverse.Tree.uses, Obend.Core.Traverse.Tree.all, Obend.Core.TermTraverse.encode]
 
-#assert_axioms judge_iff reannotates_typed typed_iff_preparable_within_work extend_filling_admitted
-  extend_filling_decided extend_filling_budget_refused wide_record_work wide_record_refused_at_depth_grant
-  wronglyAnnotated_judge_refused annotation_presence_not_coverage calculus_typed_msubst annotationsAt_root msubst_var_filled
-  msubst_var_open uses_var
-
 end Obend.Slot.Core4
 end

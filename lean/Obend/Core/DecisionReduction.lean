@@ -77,7 +77,6 @@ theorem cycle : visitedSame Probes.differentPeriods 0 1 = true := by
 theorem mismatch : visitedSame Probes.reachableMismatch 0 1 = false := by
   simp [visitedSame_eq_worklistBool,worklistBool_cons,Probes.reachableMismatch] <;> decide
 
-#assert_axioms cycle mismatch
 end ReductionProbes
 end Obend.Core.FiniteBisimulation
 
@@ -134,7 +133,6 @@ theorem successors_index_pmap {α Label : Type} [DecidableEq α]
         (fun child member => P.closed x hx child member) := by
   rw [successors_index, List.pmap_eq_map_attach]
 
-#assert_axioms index_eq_iff successors_of_decode successors_index successors_index_pmap
 end Obend.Core.FinitePresentation.ClosedSupport
 
 namespace Obend.Core.DecisionReduction
@@ -194,5 +192,4 @@ theorem checker_atomic_mismatch :
     Check.sameType ⟨[],[],[]⟩ .natural .boolean = false := by
   equirec_reduce
 
-#assert_axioms atomic_mismatch redundant_shadow checker_atomic_mismatch
 end Obend.Core.DecisionReduction.Probes

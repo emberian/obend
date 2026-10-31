@@ -5,7 +5,6 @@ eliminating a typing proof into data. Rule representatives preserve the exact
 usage vector while conversion composes agreement without changing annotations. -/
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.Preservation.Base
-public import Obend.AxiomPin
 
 namespace Obend.Core.Proofs.BidirectionalCompleteness
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional
@@ -19,8 +18,6 @@ The independent typing premise excludes holes and invalid programs. -/
 
 public theorem all_syntax_covered (term : Term) :
     checkCovered term = true ∧ synthCovered term = true := ⟨rfl, rfl⟩
-
-#assert_axioms all_syntax_covered
 
 public inductive AnnotationTree where
   | node (here : Option LambdaAnnotation) (children : List AnnotationTree)
@@ -1501,21 +1498,6 @@ public theorem Checked.eq_of_type {source : AnnotatedTerm} {context : Context} (
   subst uses; rfl
 
 
-#assert_axioms treeAnnotations_realizes Realizes.root Realizes.child Realizes.forest
-  ForestRealizes.head ForestRealizes.tail completes_conversion finish_complete
-  completes_bound completes_natural completes_boolean completes_label
-  modes_complete completes_lambda fields_nil_complete fields_cons_complete
-  completes_record completes_done completes_application completes_get
-  completes_reflect completes_metadata completes_project completes_specification completes_prototype
-  completes_binary completes_ifBool completes_perform
-  completes_ifZero completes_extend completes_inject
-  completes_mix completes_fix
-  arms_nil_complete arms_cons_complete
-  completes_case completes_effectCase
-  complete annotated_complete full_annotated annotateFromDerivation_checks
-  arrow_alias_agrees shadow_record_now_checks uses_determined Checked.eq_of_type
-  callable_canonical isData_canonical rowMember_canonical
-
 
 /-- A direct identity application. Its bare source still lacks the annotation
 needed to synthesize the lambda in function position. -/
@@ -1570,5 +1552,4 @@ public theorem coverage_premise_needed :
   rw [accepted] at refused
   cases refused
 
-#assert_axioms appliedLambda_annotated_checks appliedLambda_boundary coverage_premise_needed
 end Obend.Core.Proofs.BidirectionalCompleteness

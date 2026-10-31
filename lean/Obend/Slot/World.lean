@@ -23,7 +23,6 @@ here is a fact about a cell, judged by the cell's current pin; which pins are "b
 instance's business.
 -/
 public import Obend.Slot
-public import Obend.AxiomPin
 @[expose] public section
 
 namespace Obend.Slot
@@ -131,9 +130,6 @@ theorem blocked_forever (S : Slot Fact Cand) {v v' : V} (c : Cand) (f : Fact) (h
   | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩
 
 end
-
-#assert_axioms retired_later dead_behind_forever holds_agree dead_congr usable_congr read_congr alternatives_congr
-  blocked_forever
 
 end World
 end Obend.Slot

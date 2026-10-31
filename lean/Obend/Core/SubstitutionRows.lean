@@ -95,6 +95,4 @@ theorem instantiation_type_children (σ : Nat → Ty) (a b : Assumptions) (xs ys
     | nil => contradiction
     | cons y ys => exact ⟨.types children.1,ih ys children.2⟩
 
-#assert_axioms instantiation_children_trans residual_existing_children mapped_residual_interface
-  Discharges.row_residual_interface Discharges.row_alphabet_instantiate instantiation_type_children
 end Obend.Core.Proofs.Templates

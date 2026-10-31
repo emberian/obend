@@ -85,8 +85,4 @@ theorem stepCases_trivial : StepCases (fun _ => True) := by
 theorem not_stepCases_false : ¬ StepCases (fun _ => False) :=
   fun cases => cases.complete ⟨#[], .complete (.natural 0), []⟩ (.natural 0) rfl
 
-#assert_axioms meaningsScoped_unallocated not_meaningsScoped_open evaluatingSegment_started
-  evaluatingSegment_entry_cell not_evaluatingSegment_unallocated conversionPath_natural conversionPath_head
-  not_conversionPath_natural_boolean stepCases_trivial not_stepCases_false
-
 end Obend.Core.Proofs.LedgerPoles

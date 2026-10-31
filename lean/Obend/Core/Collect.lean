@@ -19,7 +19,6 @@ The behaviour theorem (a renaming simulation: lockstep `stepRaw`, `resume`, boun
 Plan/result extraction) and the typing transfer are in
 `Obend.Core.Proofs.Collect` (`ObjectiveProofs`). -/
 public import Obend.Core.Machine
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.Collect
 open Obend.Core.Term

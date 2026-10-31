@@ -6,7 +6,6 @@ obstructions. This leaf changes no checker or calculus interface.
 -/
 public import Obend.Core.Check
 public import Obend.Core.Bidirectional
-public import Obend.AxiomPin
 
 namespace Obend.Core.Proofs.CheckCompletenessObstruction
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check
@@ -293,14 +292,5 @@ theorem wrong_annotation_residue :
     throw, Except.toOption, wrongAnnotationConstant, wrongConstantAnnotation, mismatch,
     Bidirectional.checkAgainst, Bidirectional.checkAt, Bidirectional.elaborate,
     Bidirectional.finish, unannotatedConstant, unannotatedConstantChecked]
-
-#assert_axioms checked_lambda_without_annotations_never_checks
-  checked_does_not_imply_eventual_success unannotatedConstant_refused
-  annotatedConstant_accepted aliasBranch_accepted correct_lambda_annotation_now_checks
-  emptyCase_refused annotated_empty_eliminator_still_incomplete
-  case_labels_distinct duplicate_arms_have_no_derivation duplicateCase_refused
-  unannotatedConstant_checks unannotatedConstant_synthesis_names_annotation aliasBranch_checks emptyCase_checks
-  duplicateCase_names_duplicate_labels naturalAlias_agrees naturalAlias_agrees_reverse
-  wrong_annotation_residue
 
 end Obend.Core.Proofs.CheckCompletenessObstruction

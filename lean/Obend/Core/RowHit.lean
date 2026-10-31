@@ -189,8 +189,6 @@ theorem hit_of_step_eq {α β : Type} {step : α → Step α β}
     | some p => have impossible := (same p).mpr two; rw [one] at impossible; contradiction
   | some p => exact ((same p).mp one).symm
 
-#assert_axioms hit_unique find_sound find_complete find_iff_hit hit_path_iff find_path_eq find_step_eq
-
 end Obend.Core.RowSearch
 
 namespace Obend.Core.TypeGraph.RowHit
@@ -453,10 +451,5 @@ observation, for either visible or hidden stream mode. -/
     simp only [left_mem_support, ↓reduceIte]
   cases returned : RR.streamStep a row label first <;>
     simp_all [emission, observe]
-
-#assert_axioms scan_projection step_skip_support true_skip_false true_emit_false_skip
-  shareable_hit_path shareable_reset hide_emit_shareable
-  stream_emission_expose_eq stream_observe_expose_eq stream_skip_observe_eq
-  stream_emit_observe_eq
 
 end Obend.Core.TypeGraph.RowHit

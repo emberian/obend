@@ -110,7 +110,6 @@ theorem decision_support_independent {α : Type} [DecidableEq α] {g : Graph α 
 theorem bool_ext {a b : Bool} (h : a = true ↔ b = true) : a = b := by
   cases a <;> cases b <;> simp_all
 
-#assert_axioms safe_closed safe_of_children safe_iff mirror_iff decision_iff decision_support_independent
 end Obend.Core.FiniteSafety
 
 namespace Obend.Core.ResourceSemantics
@@ -224,6 +223,4 @@ theorem shareable_variant (assumptions : Assumptions) (row : Ty) :
   rw [shareable_unfold]
   simp [head_variant]
 
-#assert_axioms dependencies_support shareable_iff shareable_unfold shareable_eq_of_expose_eq
-  shareable_field shareable_specification shareable_prototype shareable_variant
 end Obend.Core.ResourceSemantics

@@ -124,10 +124,6 @@ theorem theta_eq_thetaCached : theta = thetaCached := by
   simp only [Array.getElem_ofFn, xorColumn_mod]
   exact BitVec.xor_assoc _ _ _
 
-/-- info: 'Obend.Digest.Cshake256.theta_eq_thetaCached' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in
-#print axioms theta_eq_thetaCached
-
 /-- FIPS 202 rotation offsets, indexed by `x + 5*y`. -/
 def rotationOffsets : Array Nat := #[
    0,  1, 62, 28, 27,

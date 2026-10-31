@@ -2,7 +2,6 @@ module
 /- Preservation cases: Records. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
 public import Obend.Core.Proofs.Preservation.Base
-public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -335,11 +334,5 @@ public theorem typed_extend_preserved {assumptions : Assumptions} {types : Addre
   · simpa [stepRaw,returned,stack] using heap
   · simpa [stepRaw,returned,stack,allocated,retained] using ControlTyping.returned newValue
   · simpa [stepRaw,returned,stack] using StackTyping.weaken extension restTyped
-
-#assert_axioms value_record_member stack_field_member typed_field_preserved fields_loop_acc
-#assert_axioms allocate_fields_cons typed_fields_allocation allocate_fields_absent
-#assert_axioms retained_fields_lookup fields_overlay_lookup fields_overlay_row
-#assert_axioms source_record_decomposition typed_record_preserved stack_extend_value
-#assert_axioms typed_extend_preserved
 
 end Obend.Core.Proofs.Preservation

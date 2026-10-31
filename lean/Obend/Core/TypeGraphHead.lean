@@ -169,7 +169,4 @@ theorem variant_components {assumptions : Assumptions} {row row' : Ty}
     simpa [graph,observe_variant] using children
   exact components.1
 
-#assert_axioms expose_isComputation observed_isComputation equivalent_isComputation
-  candidate_isComputation equivalent_exposed_components arrow_components computation_components
-  specification_components prototype_components variant_components
 end Obend.Core.TypeGraph

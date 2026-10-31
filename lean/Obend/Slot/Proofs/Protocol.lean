@@ -26,7 +26,6 @@ matchers and the private Negotiation `World` went with PROT-6, replaced by Std.o
 (`Hosting.Resident.Prog`, filled by `Obend.Slot`).
 -/
 public import Obend.Slot.Proofs.ProtocolTyping
-public import Obend.AxiomPin
 
 namespace Obend.Slot.Protocol
 
@@ -806,20 +805,6 @@ theorem peer_hole_never_planned (σ : Subst sig HoleN Res) (b : Bool) :
   simp [Subst.mine, ctxOf, iface]
 
 end Coin
-
-#assert_axioms SubBag.refl SubBag.trans SubBag.mem SubBag.erase HasProt.weaken
-#assert_axioms subst_preserves_hasProt SubstOK.mine fill_preserves_hasProt fill_skips_others
-#assert_axioms others_hole_untypable fill_eq_subst mem_holes_iff subst_away fold_fusion
-#assert_axioms subst_eq_fold underHom fold_subst interpret_fill runs_reach reach_append reach_subst
-#assert_axioms reach_through_hole reach_subst_cases consumed_cons hasProt_reach at_most_once
-#assert_axioms hasProt_runs started_some_iff resubst_preserves_started started_obligations
-#assert_axioms Open.resubst_wf interpret_record all_congr' admits_local admitFrag_readsOnly
-#assert_axioms admitOp_sound commit_once Frag.unaffected locality repair_agrees_from_scratch
-#assert_axioms repair_residual repair_reuses count_map_inj SubBag.map map_erase_bij hasProt_mapTok
-#assert_axioms admitOp_mapTok separate_witnesses_bounded Coin.wins_planHole Coin.no_foresight
-#assert_axioms Coin.response_dependent_succeeds Coin.wins_planNamed
-#assert_axioms Coin.foresight_iff_names_separate Coin.response_indexed_names_have_foresight
-#assert_axioms Coin.planHole_named Coin.peer_hole_never_planned
 
 end Obend.Slot.Protocol
 

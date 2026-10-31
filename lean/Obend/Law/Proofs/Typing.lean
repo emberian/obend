@@ -22,7 +22,6 @@ public import Obend.Law.Std
 public import Obend.Core.Bidirectional
 public import Obend.Core.MachineTyping
 public import Obend.Tactic.Tooth
-public import Obend.AxiomPin
 namespace Obend.Law.Typing
 open Obend.Law
 open Obend.Core.Ty
@@ -687,17 +686,5 @@ theorem bounded_not_at_state :
     (checkAgainst ⟨bounded totalTy "total" 5, noAnn, {}⟩ [] (fnTy totalTy totalTy)).toBool = false := by decide
 
 end Teeth
-
-#assert_axioms finish_check lookupV_empty syn_bound chk_bound chk_nat chk_boolean chk_label syn_get
-  chk_get chk_binary chk_ifBool chk_unit chk_inject Clean.cons safeUses_clean validContext_clean
-  reusableCaptures_clean chk_lam checkArms_ok chk_case chk_bin chk_okT chk_refusedT chk_guard
-  chk_guards chk_allOf chk_anyOf chk_andT chk_notT chk_field reqTy_canonical verdictTy_canonical
-  rowMember_isCanonical lawOf6_checks lawOf_checks clean_clause forall_pair forall_nil
-  Scalar.shareable chk_eqAt ownerSigns_checks chk_listed allowlist_checks bounded_checks
-  windowed_checks rowMember_stateRow labelsDistinct_states armsChk_states chk_isState machine_checks
-  machine_ok_checks chk_bit chk_foldl_bits chk_popcount proposalTy_canonical quorum_checks
-  allowlist_ok_checks windowed_ok_checks quorum_ok_checks Teeth.isCanonical_of Teeth.bounded_typed
-  Teeth.quorum_typed Teeth.windowed_typed Teeth.machine_typed Teeth.bounded_missing_refused
-  Teeth.bounded_not_at_state
 
 end Obend.Law.Typing

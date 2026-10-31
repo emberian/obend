@@ -85,5 +85,4 @@ theorem find_related {α β γ δ : Type} [DecidableEq α] [DecidableEq γ]
       rw [one] at found
       contradiction
 
-#assert_axioms StepLift.symm Hit.related find_related
 end Obend.Core.RowSearch

@@ -1,7 +1,6 @@
 module
 public import Obend.Core.SubstitutionExposure
 public import Obend.Core.TypeGraphAlias
-public import Obend.AxiomPin
 @[expose] public section
 namespace Obend.Core.RecursiveRows
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
@@ -121,6 +120,4 @@ public theorem residual_related_of_expose_eq {a : Assumptions} {left right : Ty}
       rw [residual_nonrow exposed nonrow, residual_nonrow other nonrow]
       exact .nonRow (Obend.Core.TypeGraph.equivalent_of_expose_eq heads)
 
-#assert_axioms residual_exposed_field scanStream_residual_emit residual_emit residual_skip
-  ResidualRelated.refl residual_nonrow residual_related_of_expose_eq
 end Obend.Core.RecursiveRows

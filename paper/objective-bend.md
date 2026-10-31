@@ -961,14 +961,12 @@ On axioms. For Draft 1, at commit `c04c948`, I printed `#print axioms` for the 7
 built library exports: none rests on more than `propext`, `Classical.choice` and `Quot.sound`, except
 the four `native_decide` facts `pommette_vectors`, `ordered_presentation_invariance_4000`,
 `twice_accepted` and `claim_spec_accepted`, which are *compiled*. The other 19 cited constants were
-module-private there, so an importer could not print them. Stated plainly: for those 19 the evidence
-is their module's `#assert_axioms` pin, not a printout, and for one of them, `Obend.Core.Collect.agree_runBounded`
-(`Core/Proofs/Settle.lean`, which has no pin at all on `e5fca29`), there is no pin either, so its axioms
-were never checked by anything I ran. I did not repeat the printing for this revision. For every
-constant added or changed since `c04c948` (the checker rows below) the evidence is the module's pin
-(`Check`, `LegacyAgreement`, `Bidirectional`, `BidirectionalCompleteness`,
-`CheckCompletenessObstruction`, `EquiRecursiveAgreement`, `FiniteBisimulation` all end in
-`#assert_axioms`), which holds when the library builds.
+module-private there, so an importer could not print them. Since then the build has carried one
+census, `Obend/Census.lean`: a non-module file importing every module of the library with its private
+part, ending in `#assert_axioms_tree`, which fails the build on any constant, public or private,
+resting on `sorryAx` or a declared axiom, and counts the 27 compiled theorems separately. So for every
+cited constant, the 19 private ones and `Obend.Core.Collect.agree_runBounded` included, the evidence is
+that census, which holds when the library builds; the per-module pins it replaced were removed.
 
 | Theorem | Statement in words | Premises | Module |
 | --- | --- | --- | --- |

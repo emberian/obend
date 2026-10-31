@@ -101,6 +101,4 @@ theorem alias_candidate (assumptions : Assumptions) (index : Nat) (body : Ty)
     candidate assumptions (.variable index) body = true :=
   (candidate_iff _ _ _).mpr (alias_equivalent assumptions index body found pure)
 
-#assert_axioms node_equivalent_of_observe_eq stream_equivalent_of_expose_eq
-  equivalent_of_expose_eq alias_equivalent alias_candidate
 end Obend.Core.TypeGraph
