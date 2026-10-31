@@ -39,7 +39,10 @@ biunification as a design, with the exact coercion grammar it emits and the theo
 executable on the template fragment); the rows-versus-width decision argued from Tang et al. and
 from what C4 and reflection need; the quantity interaction stated as open with the specific case
 that worries you; and a construction order with the first artefact. Tag claims READ, INFERRED or
-PROPOSED. Plain prose, one claim per sentence, no praise, as long as it needs to be. You may fetch
+PROPOSED. Plain prose, one claim per sentence, no praise, as long as it needs to be. Two are missing from paperbin: `dolan-mycroft2017-mlsub` (the Cambridge and CORE mirrors refuse) and
+`parreaux2020-simple-essence-algebraic-subtyping` (the lptk and EPFL links 404); the thesis covers the
+first's content, and MLstruct restates the second's core. Fetch them if you can (`$ANNAS_SECRET_KEY`
+is available for papers), and you may fetch
 one or two more papers through Kagi if a claim needs them (key in `~/dev/allgame/.env`, request shape
 in `~/dev/allgame/claude_resident/tools/web_tools.py`, PDFs into `~/paperbin` with a `.txt` sibling via
 `pdftotext`). Commit the file on `dev` with `git -c commit.gpgsign=false commit -F -` and the trailer
