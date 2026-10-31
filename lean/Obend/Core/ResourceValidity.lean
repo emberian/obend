@@ -3,6 +3,7 @@ module
 cycles safe. This proof is staged for the opaque-safe ResourceSemantics head. -/
 public import Obend.Core.ResourceSemantics
 public import Obend.Core.Check
+import all Obend.Core.Check
 @[expose] public section
 namespace Obend.Core.ResourceValidity
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure

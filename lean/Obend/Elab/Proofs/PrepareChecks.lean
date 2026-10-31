@@ -3,6 +3,7 @@ module
 aliases, every typed erased term is prepared and the checker accepts the preparation. -/
 public import Obend.Elab.Prepare
 public import Obend.Elab.Proofs.Refines
+import all Obend.Core.Check
 
 namespace Obend.Elab.Proofs.PrepareChecks
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Bidirectional

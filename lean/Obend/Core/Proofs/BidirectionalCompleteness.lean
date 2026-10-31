@@ -6,6 +6,7 @@ usage vector while conversion composes agreement without changing annotations. -
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.Preservation.Base.Reusable
 public import Obend.Core.Proofs.Preservation.Base.Values
+import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.BidirectionalCompleteness
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional

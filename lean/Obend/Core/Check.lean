@@ -49,7 +49,7 @@ refuses a revisited variable finds exactly what some fuel finds
 (`lookupV_iff`, `isRowV_iff`). The bidirectional checker uses these. -/
 
 /-- How many declared bounds a walk has not yet entered. -/
-@[expose] def unvisited (bounds : Bounds) (visited : List Nat) : Nat :=
+def unvisited (bounds : Bounds) (visited : List Nat) : Nat :=
   (bounds.filter (fun entry => !visited.contains entry.1)).length
 
 theorem filter_length_lt {α : Type} (p q : α → Bool) (sub : ∀ x, q x = true → p x = true) :
@@ -97,7 +97,7 @@ theorem unvisited_lt {bounds : Bounds} {visited : List Nat} {index : Nat} {bound
     (by simp only [key]; simpa using fresh) (by simp [key])
 
 /-- Walk a row's explicit fields; at a variable tail, ask `onVariable`. -/
-@[expose] def walkRow {α : Type} (onVariable : Nat → Option α) (onField : String → Ty → Option α)
+def walkRow {α : Type} (onVariable : Nat → Option α) (onField : String → Ty → Option α)
     (onEnd : Ty → Option α) : Ty → Option α
   | .field prior member tail => (onField prior member).or (walkRow onVariable onField onEnd tail)
   | .variable index => onVariable index
@@ -105,7 +105,7 @@ theorem unvisited_lt {bounds : Bounds} {visited : List Nat} {index : Nat} {bound
 
 /-- Field lookup through bounds with a budget of variable entries, refusing to enter a
 bounded variable twice. Structural, so the kernel evaluates it. -/
-@[expose] def lookupW (bounds : Bounds) (name : String) : Nat → List Nat → Ty → Option Ty
+def lookupW (bounds : Bounds) (name : String) : Nat → List Nat → Ty → Option Ty
   | 0, _, type => walkRow (fun _ => none) (fun prior member => if prior = name then some member else none)
       (fun _ => none) type
   | budget + 1, visited, type =>
@@ -114,7 +114,7 @@ bounded variable twice. Structural, so the kernel evaluates it. -/
         (fun prior member => if prior = name then some member else none) (fun _ => none) type
 
 /-- Row-ness through bounds with a budget of variable entries, refusing re-entry. -/
-@[expose] def isRowW (bounds : Bounds) : Nat → List Nat → Ty → Bool
+def isRowW (bounds : Bounds) : Nat → List Nat → Ty → Bool
   | 0, _, type => (walkRow (fun _ => none) (fun _ _ => none)
       (fun end_ => if end_ = .emptyRow then some true else none) type).getD false
   | budget + 1, visited, type =>
@@ -124,10 +124,10 @@ bounded variable twice. Structural, so the kernel evaluates it. -/
 
 /-- Field lookup through bounds: each bounded variable is entered at most once, and a
 budget of one entry per bound not yet visited is exactly enough. -/
-@[expose] def lookupV (bounds : Bounds) (visited : List Nat) (type : Ty) (name : String) : Option Ty :=
+def lookupV (bounds : Bounds) (visited : List Nat) (type : Ty) (name : String) : Option Ty :=
   lookupW bounds name (unvisited bounds visited) visited type
 
-@[expose] def isRowV (bounds : Bounds) (visited : List Nat) (type : Ty) : Bool :=
+def isRowV (bounds : Bounds) (visited : List Nat) (type : Ty) : Bool :=
   isRowW bounds (unvisited bounds visited) visited type
 
 theorem walkRow_field {α : Type} (onVariable : Nat → Option α) (onField : String → Ty → Option α)
@@ -355,7 +355,7 @@ addition to equi-recursive agreement. Equivalent aliases can have different
 This guard preserves the resource premises attached to the chosen annotation.
 Declarative conversion uses plain `sameType`; machine preservation transports
 actual runtime origins and relates their component representatives. -/
-@[expose] def agree (assumptions : Assumptions) (actual expected : Ty) : Bool :=
+def agree (assumptions : Assumptions) (actual expected : Ty) : Bool :=
   sameType assumptions actual expected &&
     (!expected.shareableUnder assumptions.shareableVariables ||
       actual.shareableUnder assumptions.shareableVariables)
@@ -396,7 +396,7 @@ structure AnnotatedTerm where
 /-- An argument becomes a shared heap thunk, so it is never an activity (rule
 `effect-as-argument`); an unrestricted one must also be shareable; one that uses a `linear`
 hypothesis goes only to a `linear` parameter (`linearFree`). -/
-@[expose] def argumentAllowed (assumptions : Assumptions) (quantity : Quantity)
+def argumentAllowed (assumptions : Assumptions) (quantity : Quantity)
     (context : Context) (type : Ty) (uses : Uses) : Bool :=
   !type.isComputation && (quantity == .linear || linearFree context uses) && (quantity != .unrestricted ||
     (type.shareableUnder assumptions.shareableVariables &&
@@ -408,14 +408,14 @@ it), so this is `argumentAllowed`'s quantity clauses. A scrutinee that uses a `l
 binds a `linear` payload, which the arm uses exactly once; one whose captures are not all reusable
 binds at most `affine`; an `unrestricted` payload needs reusable captures (and, per arm, a
 shareable payload type: `validContext`). -/
-@[expose] def caseAllowed (assumptions : Assumptions) (quantity : Quantity) (context : Context) (uses : Uses) : Bool :=
+def caseAllowed (assumptions : Assumptions) (quantity : Quantity) (context : Context) (uses : Uses) : Bool :=
   (quantity == .linear || linearFree context uses) &&
     (quantity != .unrestricted || reusableCaptures assumptions.shareableVariables context uses)
 
 /-- The quantity a `case` binds its payload at when no annotation names one: `linear` for a
 scrutinee that uses a `linear` hypothesis, `unrestricted` for one whose captures are reusable when
 every payload is shareable, `affine` otherwise. The most permissive quantity `caseAllowed` admits. -/
-@[expose] def caseQuantity (assumptions : Assumptions) (context : Context) (uses : Uses) (shareable : Bool) : Quantity :=
+def caseQuantity (assumptions : Assumptions) (context : Context) (uses : Uses) (shareable : Bool) : Quantity :=
   if !linearFree context uses then .linear
   else if reusableCaptures assumptions.shareableVariables context uses && shareable then .unrestricted
   else .affine
@@ -429,7 +429,7 @@ theorem caseQuantity_allowed (assumptions : Assumptions) (context : Context) (us
     · simp [hl, hr]
   · simp [hl]
 
-@[expose] def overlay : Ty → Ty → Ty
+def overlay : Ty → Ty → Ty
   | .field name member rest, inherited => .field name member (overlay rest inherited)
   | _, inherited => inherited
 
@@ -642,7 +642,7 @@ structure InferredArms (assumptions : Assumptions) (context : Context) (q : Quan
 /-- The historical annotation-directed checker obtains arm binder types from
 a variant head or one declared alias step. Its final `sameType` premise validates
 the selected representative using the full recursive relation. -/
-@[expose] def variantRow (assumptions : Assumptions) : Ty → Option Ty
+def variantRow (assumptions : Assumptions) : Ty → Option Ty
   | .variant row => some row
   | .variable index => match assumptions.alias index with
     | some (.variant row) => some row
@@ -653,7 +653,7 @@ mutual
 /-- Fuel bounds only the checker, never the runtime or meaning of Fix. Failure
 means outside this annotated fragment/budget; it is not a proof of ill-typing in
 any stronger language. The result carries a runtime-syntax derivation. -/
-@[expose] def infer (assumptions : Assumptions) (annotations : Annotations) (context : Context)
+def infer (assumptions : Assumptions) (annotations : Annotations) (context : Context)
     (position : List Nat) : Nat → (term : Term) → Option (Inferred assumptions context term)
   | 0, _ => none
   | _ + 1, .hole _ _ => none
@@ -961,7 +961,7 @@ structure Checked (source : AnnotatedTerm) (context : Context) where
   contextValid : validContext source.assumptions.shareableVariables context = true
   assumptionsValid : source.assumptions.valid = true
 
-@[expose] def check (source : AnnotatedTerm) (context : Context) (fuel : Nat) : Option (Checked source context) := do
+def check (source : AnnotatedTerm) (context : Context) (fuel : Nat) : Option (Checked source context) := do
   let result ← infer source.assumptions source.annotations context [] fuel source.term
   if hs : safeUses context result.uses = true then
     if hv : validContext source.assumptions.shareableVariables context = true then
@@ -1027,18 +1027,18 @@ theorem agree_never_manufactures_shareability (assumptions : Assumptions) (actua
 /-! ## Activities: the plan and response types the activity teeth and proofs share -/
 def planRow : Ty := .field "write" (.field "after" .natural .emptyRow) .emptyRow
 def planType : Ty := .variant planRow
-@[expose] def responseType : Ty := .variant (.field "written" .emptyRow (.field "refused" .emptyRow .emptyRow))
+def responseType : Ty := .variant (.field "written" .emptyRow (.field "refused" .emptyRow .emptyRow))
 
 /-- An activity is never shareable, so it is never a fix target, mix operand or
 unrestricted binder either. -/
 theorem computation_not_shareable (plan response result : Ty) (variables : List Nat) :
     (Ty.computation plan response result).shareableUnder variables = false := rfl
 
-/-- At no fuel the checker gives no verdict, for every term. Proved through `infer.eq_def`, so the
-unfolding equation is generated here once, not again in each module that unfolds `infer`. -/
+/-- At no fuel the checker gives no verdict, for every term. Proved by reduction, not by `infer`'s
+equations: realizing them here would write `infer`'s body into this module's public `.olean`. -/
 theorem infer_zero (assumptions : Assumptions) (annotations : Annotations) (context : Context)
     (position : List Nat) (term : Term) : infer assumptions annotations context position 0 term = none := by
-  rw [infer.eq_def]
+  cases term <;> rfl
 
 end Obend.Core.Check
 

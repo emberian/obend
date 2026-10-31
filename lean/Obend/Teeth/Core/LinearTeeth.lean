@@ -16,6 +16,7 @@ public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Tactic.Tooth
 import all Obend.Core.Ty
+import all Obend.Core.Check
 
 namespace Obend.Teeth.Core.LinearTeeth
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional

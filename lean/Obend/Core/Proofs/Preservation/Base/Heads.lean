@@ -7,6 +7,7 @@ public import Obend.Core.TypeGraphHead
 public import Obend.Core.Proofs.Adequacy.Defs
 public import Obend.Tactic.Cases
 public import Obend.Core.Proofs.Preservation.Base.Weaken
+import all Obend.Core.Check
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false

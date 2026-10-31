@@ -5,6 +5,7 @@ the derivation's, or `affine` where the derivation's was not `unrestricted`, or
 `validContext`, `reusableCaptures`, `argumentAllowed`) transfers from a context to any
 refinement of it when the assumptions declare no aliases. -/
 public import Obend.Elab.Proofs.AliasFree
+import all Obend.Core.Check
 
 namespace Obend.Elab.Proofs.Refines
 open Obend.Core.Ty Obend.Core.Check Obend.Elab.Proofs.AliasFree

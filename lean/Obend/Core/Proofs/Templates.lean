@@ -12,6 +12,7 @@ public import Obend.Core.TemplateDischarge
 public import Obend.Core.EquiRecursiveSubstitutionTransport
 public import Obend.Core.Check
 public import Obend.Tactic.Cases
+import all Obend.Core.Check
 namespace Obend.Core.Proofs.Templates
 open Obend.Core.Ty
 set_option autoImplicit false

@@ -1,6 +1,7 @@
 module
 public import Obend.Core.Proofs.Templates
 public import Obend.Core.EquiRecursiveAgreement
+import all Obend.Core.Check
 @[expose] public section
 namespace Obend.Core.EquiRecursiveSubstitution
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Proofs.Templates

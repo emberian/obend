@@ -7,6 +7,7 @@ the term must consume exactly once. The count is `occurrences` (every derivation
 `uses_determined`), so the theorem needs the derivation of the term before the step only. -/
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Core.Proofs.Preservation.Cases.Functions
+import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.Conservation
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.MachineTyping

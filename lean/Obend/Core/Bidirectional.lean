@@ -21,6 +21,7 @@ to the requested type. Missing annotations retain expected-directed behavior.
 Eliminations may use annotation.domain as their operand representative; mix uses
 domain for the lower operand and codomain for the upper operand. -/
 public import Obend.Core.Check
+import all Obend.Core.Check
 
 @[expose] public section
 namespace Obend.Core.Bidirectional

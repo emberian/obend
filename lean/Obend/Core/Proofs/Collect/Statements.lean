@@ -6,6 +6,7 @@ public import Obend.Core.Data
 public import Obend.Core.MachineTyping
 public import Obend.Core.Proofs.Collect.Segment
 public import Obend.Core.Proofs.Collect.Typing
+import all Obend.Core.Check
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine

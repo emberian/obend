@@ -3,6 +3,7 @@ module
 public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.Tactic.Cases
+import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.Hole
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant Obend.Core.Machine

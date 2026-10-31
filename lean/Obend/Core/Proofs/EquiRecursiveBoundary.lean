@@ -3,6 +3,7 @@ module
 annotation supplies its valid natural-domain representative. Missing or invalid
 representatives retain a precise refusal; nominal resource checks still matter. -/
 public import Obend.Core.Bidirectional
+import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.EquiRecursiveBoundary
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional

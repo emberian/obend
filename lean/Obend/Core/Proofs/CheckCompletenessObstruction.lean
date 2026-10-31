@@ -6,6 +6,7 @@ obstructions. This leaf changes no checker or calculus interface.
 -/
 public import Obend.Core.Check
 public import Obend.Core.Bidirectional
+import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.CheckCompletenessObstruction
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check

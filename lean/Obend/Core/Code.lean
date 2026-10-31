@@ -28,6 +28,7 @@ public import Obend.Core.MachineTyping
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Slot.Core4
 public import Obend.Tactic.Tooth
+import all Obend.Core.Check
 public section
 namespace Obend.Core.Code
 open Obend.Core.Term

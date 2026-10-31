@@ -20,6 +20,7 @@ public import Obend.Slot
 public import Obend.Tactic.Tooth
 public import Obend.Tactic.MonadicReduction
 public import Obend.Elab.Work
+import all Obend.Core.Check
 
 public section
 namespace Obend.Slot.Core4

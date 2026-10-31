@@ -28,6 +28,7 @@ astra/ASTRA-EVAL-20261031.md lines 55–67 propose).
 a width/representative record coercion (agreeing kept members) always checks. -/
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
+import all Obend.Core.Check
 
 @[expose] public section
 namespace Obend.Elab.Coerce

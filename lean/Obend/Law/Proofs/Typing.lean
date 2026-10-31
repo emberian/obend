@@ -26,6 +26,7 @@ public import Obend.Core.Bidirectional
 public import Obend.Core.MachineTyping
 public import Obend.Tactic.Tooth
 public import Obend.Core.Proofs.TypedSubstitution
+import all Obend.Core.Check
 namespace Obend.Law.Typing
 open Obend.Law
 open Obend.Core.Ty
