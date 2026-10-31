@@ -8,6 +8,7 @@ public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.Tactic.Cases
 public import Obend.Core.Proofs.Substitution.Msubst
+import all Obend.Core.Ty
 namespace Obend.Core.Proofs.Substitution
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant
 set_option autoImplicit false

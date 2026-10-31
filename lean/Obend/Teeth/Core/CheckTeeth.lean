@@ -15,6 +15,9 @@ public import Obend.Core.Check
 public import Obend.Core.Packet
 public import Obend.Core.RecursiveAgreement
 public import Obend.Tactic.MonadicReduction
+import all Obend.Core.Ty
+import all Obend.Core.Check
+import all Obend.Core.TypeGraph
 @[expose] public section
 namespace Obend.Core.Proofs.CheckTeeth
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Packet

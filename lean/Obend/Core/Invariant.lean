@@ -4,7 +4,7 @@ not assert totality, ownership of native effects, or source/heap adequacy. -/
 public import Obend.Tactic.Cases
 public import Obend.Core.TermTraverse
 public import Obend.Core.Machine
-@[expose] public section
+public section
 namespace Obend.Core.Invariant
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -245,10 +245,10 @@ theorem scoped_rename_identity {n : Nat} {term : Term} (h : Scoped n term)
 
 /-- Unlike a tree-unfolding predicate, this permits a thunk to capture itself
 and permits mutually reachable cells. It only requires allocated addresses. -/
-def EnvironmentValid (bound : Nat) (environment : Environment) : Prop :=
+@[expose] def EnvironmentValid (bound : Nat) (environment : Environment) : Prop :=
   ∀ address ∈ environment, address < bound
 
-def RuntimeValueValid (bound : Nat) : RuntimeValue → Prop
+@[expose] def RuntimeValueValid (bound : Nat) : RuntimeValue → Prop
   | .closure body environment => Scoped (environment.length+1) body ∧ EnvironmentValid bound environment
   | .natural _ | .boolean _ | .label _ => True
   | .record fields => ∀ field ∈ fields, field.2 < bound
@@ -268,14 +268,14 @@ def RuntimeValueValid (bound : Nat) : RuntimeValue → Prop
   · exact Nat.lt_succ_self _
   · exact Nat.lt_succ_of_lt (h address member)
 
-def ClosureValid (bound : Nat) (closure : Closure) : Prop :=
+@[expose] def ClosureValid (bound : Nat) (closure : Closure) : Prop :=
   Scoped closure.environment.length closure.term ∧ EnvironmentValid bound closure.environment
 
-def CellValid (bound : Nat) : Cell → Prop
+@[expose] def CellValid (bound : Nat) : Cell → Prop
   | .suspended origin | .evaluating origin => ClosureValid bound origin
   | .cached origin value => ClosureValid bound origin ∧ RuntimeValueValid bound value
 
-def FrameValid (bound : Nat) : Frame → Prop
+@[expose] def FrameValid (bound : Nat) : Frame → Prop
   | .argument term environment | .binaryLeft _ term environment => ClosureValid bound ⟨term,environment⟩
   | .update address => address < bound
   | .field _ | .reflect | .metadata | .project => True
@@ -288,14 +288,14 @@ def FrameValid (bound : Nat) : Frame → Prop
   | .ifBool whenTrue whenFalse environment => EnvironmentValid bound environment ∧
       Scoped environment.length whenTrue ∧ Scoped environment.length whenFalse
 
-def ControlValid (bound : Nat) : Control → Prop
+@[expose] def ControlValid (bound : Nat) : Control → Prop
   | .evaluate term environment => ClosureValid bound ⟨term,environment⟩
   | .enter address | .blackhole address => address < bound
   | .returned value | .complete value => RuntimeValueValid bound value
   | .refused _ => True
   | .yielded plan => plan < bound
 
-def LexicalInvariant (state : State) : Prop :=
+@[expose] def LexicalInvariant (state : State) : Prop :=
   (∀ (address : Nat) (cell : Cell), state.heap[address]? = some cell → CellValid state.heap.size cell) ∧
     ControlValid state.heap.size state.control ∧ ∀ frame ∈ state.stack, FrameValid state.heap.size frame
 
@@ -426,12 +426,12 @@ abbrev HeapValid (heap : Array Cell) : Prop :=
 
 /-- Origin is lexical source plus capture vector, retained even while a cell is
 being evaluated or after its result has been memoized. -/
-def cellOrigin : Cell → Closure
+@[expose] def cellOrigin : Cell → Closure
   | .suspended origin | .evaluating origin | .cached origin _ => origin
 
 /-- No transition can retarget an allocated thunk. This permits new allocations
 and memoization; it forbids changing either its source or its lexical captures. -/
-def PreservesOrigins (before after : Array Cell) : Prop :=
+@[expose] def PreservesOrigins (before after : Array Cell) : Prop :=
   before.size ≤ after.size ∧ ∀ (address : Nat) (cell : Cell), before[address]? = some cell →
     ∃ (next : Cell), after[address]? = some next ∧ cellOrigin next = cellOrigin cell
 
@@ -924,7 +924,7 @@ theorem stepRaw_lexicalInvariant {state : State} (invariant : LexicalInvariant s
 /-- Memoization is permanent: later raw steps cannot overwrite or re-enter an
 already cached cell. This is the operational sharing fact; it makes no native
 effect claim (this edition has no native-effect value constructor). -/
-def PreservesCached (before after : Array Cell) : Prop :=
+@[expose] def PreservesCached (before after : Array Cell) : Prop :=
   ∀ (address : Nat) (origin : Closure) (value : RuntimeValue),
     before[address]? = some (.cached origin value) → after[address]? = some (.cached origin value)
 
@@ -1008,16 +1008,16 @@ inductive Reachable (initial : State) : State → Prop where
 /-- The active update stack owns evaluation marks. The relation permits cyclic
 origins, but never duplicate active demand of one address. Re-entry observes a
 blackhole before pushing another update frame. -/
-def stackUpdates : List Frame → List Address
+@[expose] def stackUpdates : List Frame → List Address
   | [] => []
   | .update address::rest => address::stackUpdates rest
   | _::rest => stackUpdates rest
 
-def Busy (heap : Array Cell) (stack : List Frame) : Prop :=
+@[expose] def Busy (heap : Array Cell) (stack : List Frame) : Prop :=
   (stackUpdates stack).Nodup ∧ ∀ address,
     address ∈ stackUpdates stack ↔ ∃ origin, heap[address]? = some (.evaluating origin)
 
-def BusyInvariant (state : State) : Prop := Busy state.heap state.stack
+@[expose] def BusyInvariant (state : State) : Prop := Busy state.heap state.stack
 
  theorem initial_busyInvariant (source : Term) : BusyInvariant (initial source) := by
   simp [BusyInvariant,Busy,initial,stackUpdates]
@@ -1171,7 +1171,7 @@ def BusyInvariant (state : State) : Prop := Busy state.heap state.stack
         stepRaw_no_invalidUpdate busy ih.2.2⟩
 
 /-- Completion is exposed only after the continuation has been discharged. -/
-def FinalStackInvariant (state : State) : Prop :=
+@[expose] def FinalStackInvariant (state : State) : Prop :=
   ∀ value, state.control = .complete value → state.stack = []
 
  theorem initial_finalStackInvariant (source : Term) : FinalStackInvariant (initial source) := by

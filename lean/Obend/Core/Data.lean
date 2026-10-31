@@ -5,7 +5,7 @@ retains the exact graph, never a partial successful Plan or invalid-program clai
 public import Obend.Core.Machine
 public import Obend.Core.MachineFast
 public import Obend.Core.Ty
-@[expose] public section
+public section
 namespace Obend.Core.Data
 open Obend.Core.Machine
 inductive Data where
@@ -14,7 +14,7 @@ inductive Data where
   | variant (label : String) (payload : Data)
   deriving Repr
 def lengthBytes (n : Nat) : List UInt8 := (toString n).toUTF8.toList ++ [0]
-def encoded : Nat → Data → Option (List UInt8)
+@[expose] def encoded : Nat → Data → Option (List UInt8)
   | 0,_ => none
   | _+1,.natural n => some ([0] ++ lengthBytes n)
   | _+1,.boolean b => some [1,if b then 1 else 0]
@@ -37,7 +37,7 @@ inductive Failure where
   | yielded
   deriving Repr
 /-- Tick exhaustion is distinct from capacity/policy suspension. -/
-def suspensionFailure : Suspension → Failure
+@[expose] def suspensionFailure : Suspension → Failure
   | .ticks => .tickExhausted
   | .capacity => .suspended
 structure Budget where
@@ -52,7 +52,7 @@ structure Result where
   deriving Repr
 /-- One-tick calls consume one global allowance; terminal inspection is free.
 No field receives a fresh allowance. Heap/stack limits stay common throughout. -/
-def forceWith (policy : State → Bool) (limits : Limits) : Nat → State → Outcome × Nat
+@[expose] def forceWith (policy : State → Bool) (limits : Limits) : Nat → State → Outcome × Nat
   | 0,state => (runBounded limits 0 state,0)
   | ticks+1,state => match state.control with
     | .complete _ | .refused _ | .blackhole _ | .yielded _ => (runBounded limits 0 state,ticks+1)
@@ -73,7 +73,7 @@ info: 'Obend.Core.Data.forceWith_eq_fast' depends on axioms: [propext, Quot.soun
 
 /-- Materialization threads the remaining budget through failures as well as successes.
 Tick counts come directly from forceWith; failed children retain all earlier field spend. -/
-def materializeWith (policy : State → Bool) (limits : Limits) : Nat → Budget → RuntimeValue → State → Except (Failure × State × Budget) Result
+@[expose] def materializeWith (policy : State → Bool) (limits : Limits) : Nat → Budget → RuntimeValue → State → Except (Failure × State × Budget) Result
   | 0, budget, _, state => .error (.budget,state,budget)
   | depth+1, budget, value, state => do
     if budget.nodes = 0 then throw (.budget,state,budget)
@@ -129,7 +129,7 @@ def materializeWith (policy : State → Bool) (limits : Limits) : Nat → Budget
       | .yielded _ retained => throw (.yielded,retained,nextBudget)
     | .closure _ _ | .specification _ _ | .prototype _ _ => throw (.executableValue,state,remaining)
 
-def completeWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) : Except (Failure × State × Budget) Result :=
+@[expose] def completeWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) : Except (Failure × State × Budget) Result :=
   if !policy state then .error (.suspended,state,budget) else
   match state.control,state.stack with
   | .complete value,[] => do
@@ -147,7 +147,7 @@ structure ExtractionWith (policy : State → Bool) (limits : Limits) (budget : B
   result : Result
   exact : completeWith policy limits budget state = .ok result
 
-def extractWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) :
+@[expose] def extractWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) :
     Except (Failure × State × Budget) (ExtractionWith policy limits budget state) :=
   match equation : completeWith policy limits budget state with
   | .error failure => .error failure
@@ -164,7 +164,7 @@ structure ExecutionWith (policy : State → Bool) (limits : Limits) (budget : Bu
     (.finished value state,remainingTicks)
   extraction : ExtractionWith policy limits {budget with ticks:=remainingTicks} state
 
-def executeWith (policy : State → Bool) (limits : Limits) (budget : Budget)
+@[expose] def executeWith (policy : State → Bool) (limits : Limits) (budget : Budget)
     (term : Obend.Core.Term.Term) :
     Except (Failure × State × Budget) (ExecutionWith policy limits budget term) :=
   match equation : forceWith policy limits budget.ticks (initial term) with
@@ -178,17 +178,17 @@ def executeWith (policy : State → Bool) (limits : Limits) (budget : Budget)
 /-- Existing clear preview behavior remains the unrestricted raw language. -/
 def force := forceWith (fun _ => true)
 def materialize := materializeWith (fun _ => true)
-def complete := completeWith (fun _ => true)
+@[expose] def complete := completeWith (fun _ => true)
 abbrev Extraction := ExtractionWith (fun _ => true)
 def extract := extractWith (fun _ => true)
 abbrev Execution := ExecutionWith (fun _ => true)
-def execute := executeWith (fun _ => true)
+@[expose] def execute := executeWith (fun _ => true)
 
 /-! ## Activities: the yielded Plan is data; the response is typed data -/
 
 open Obend.Core.Ty in
 /-- The member type of a first-order row (no rigid variables in data types). -/
-def rowMember : Ty → String → Option Ty
+@[expose] def rowMember : Ty → String → Option Ty
   | .field name member tail, query => if name = query then some member else rowMember tail query
   | _, _ => none
 
@@ -221,20 +221,20 @@ end
 
 mutual
 /-- A closed Core4 term for decoded data: the response a kernel resumes with. -/
-def Data.term : Data → Obend.Core.Term.Term
+@[expose] def Data.term : Data → Obend.Core.Term.Term
   | .natural n => .nat n
   | .boolean b => .boolean b
   | .label s => .label s
   | .record fields => .record (fieldsTerm fields)
   | .variant label payload => .inject label payload.term
-def fieldsTerm : List (String × Data) → List (String × Obend.Core.Term.Term)
+@[expose] def fieldsTerm : List (String × Data) → List (String × Obend.Core.Term.Term)
   | [] => []
   | (name,value) :: rest => (name,value.term) :: fieldsTerm rest
 end
 
 /-- Extract the Plan of a yielded state through the same budgeted
 materialization as every other Data: enter its cell with an empty stack. -/
-def yieldedPlanWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) :
+@[expose] def yieldedPlanWith (policy : State → Bool) (limits : Limits) (budget : Budget) (state : State) :
     Except (Failure × State × Budget) Result :=
   match state.control with
   | .yielded plan =>
@@ -249,7 +249,7 @@ def yieldedPlanWith (policy : State → Bool) (limits : Limits) (budget : Budget
     | (.refused _ retained,ticks) => .error (.refused,retained,{budget with ticks := ticks})
     | (.yielded _ retained,ticks) => .error (.yielded,retained,{budget with ticks := ticks})
   | _ => .error (.suspended,state,budget)
-def yieldedPlan := yieldedPlanWith (fun _ => true)
+@[expose] def yieldedPlan := yieldedPlanWith (fun _ => true)
 
 end Obend.Core.Data
 

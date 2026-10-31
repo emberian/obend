@@ -1,6 +1,6 @@
 module
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Core.Ty
 set_option autoImplicit false
 
@@ -32,11 +32,11 @@ inductive Ty where
   (never suspended) position may hold it: it is not shareable, and every
   cell-allocating typing rule refuses it. Surface: `Activity<Plan, Response, Result>`. -/
   | computation (plan response result : Ty)
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 
 /-- A reusable closure is shareable only after its captures have been checked.
 Custody is never hidden by a record/prototype/specification wrapper. -/
-def Ty.shareable : Ty → Bool
+@[expose] def Ty.shareable : Ty → Bool
   | .natural | .label | .boolean | .emptyRow => true
   | .variable _ | .custody _ => false
   | .arrow reuse _ _ _ => reuse == .reusable
@@ -49,7 +49,7 @@ def Ty.shareable : Ty → Bool
 /-- Rigid variables may be quantified over shareable future types explicitly.
 Every instantiation must discharge this finite premise; an unknown row is never
 implicitly pure merely because its currently visible fields are immutable. -/
-def Ty.shareableUnder (variables : List Nat) : Ty → Bool
+@[expose] def Ty.shareableUnder (variables : List Nat) : Ty → Bool
   | .variable index => variables.contains index
   | .field _ member tail => member.shareableUnder variables && tail.shareableUnder variables
   | .specification metadata extension => metadata.shareableUnder variables && extension.shareableUnder variables
@@ -63,21 +63,21 @@ def Ty.shareableUnder (variables : List Nat) : Ty → Bool
 /-- The head of an activity type. Only the head is inspected: canonical row
 equality preserves it, and bounds never name an activity (`Assumptions.valid`),
 so this is invariant under every checked type agreement. -/
-def Ty.isComputation : Ty → Bool
+@[expose] def Ty.isComputation : Ty → Bool
   | .computation _ _ _ => true
   | _ => false
 
 /-- First-order data: what a Plan, a response and a checkpointed reply can be.
 No closures, specifications, prototypes, custody, rigid variables (so no
 recursive sums yet) and no activities. -/
-def Ty.isData : Ty → Bool
+@[expose] def Ty.isData : Ty → Bool
   | .natural | .label | .boolean | .emptyRow => true
   | .field _ member tail => member.isData && tail.isData
   | .variant row => row.isData
   | _ => false
 
 /-- A Plan is a sum of typed actions over first-order data. -/
-def Ty.isPlan : Ty → Bool
+@[expose] def Ty.isPlan : Ty → Bool
   | .variant row => row.isData
   | _ => false
 
@@ -97,7 +97,7 @@ def Ty.put (row : Ty) (name : String) (member : Ty) : Ty :=
       if prior = name then .field name member tail else .field prior old (tail.put name member)
   | tail => .field name member tail
 
-def Ty.tail : Ty → Ty
+@[expose] def Ty.tail : Ty → Ty
   | .field _ _ rest => rest.tail
   | other => other
 
@@ -115,7 +115,7 @@ A shadowed member is forgotten only when it is `shareable`: a custody, a once
 closure or any other non-shareable member stays in the canonical row behind the
 member that shadows it, so canonical equality never hides what shareability
 sees (`Ty.shareableUnder_canonical`). -/
-def Ty.insertCanonical (row : Ty) (name : String) (member : Ty) : Ty :=
+@[expose] def Ty.insertCanonical (row : Ty) (name : String) (member : Ty) : Ty :=
   match row with
   | .field prior old tail =>
       if name = prior then (if old.shareable then .field name member tail else .field name member row)
@@ -123,7 +123,7 @@ def Ty.insertCanonical (row : Ty) (name : String) (member : Ty) : Ty :=
       else .field prior old (tail.insertCanonical name member)
   | tail => .field name member tail
 
-def Ty.canonical : Ty → Ty
+@[expose] def Ty.canonical : Ty → Ty
   | .arrow reuse quantity domain codomain => .arrow reuse quantity domain.canonical codomain.canonical
   | .field name member tail => tail.canonical.insertCanonical name member.canonical
   | .specification metadata extension => .specification metadata.canonical extension.canonical
@@ -199,12 +199,12 @@ theorem Ty.shareable_canonical (type : Ty) : type.canonical.shareable = type.sha
 
 /-- The label relation between a row entry and the row after it in canonical form:
 labels ascend, and a label repeats only before a non-shareable shadowed member. -/
-def Ty.headOk (name : String) : Ty → Prop
+@[expose] def Ty.headOk (name : String) : Ty → Prop
   | .field next member _ => name < next ∨ (name = next ∧ member.shareable = false)
   | _ => True
 
 /-- The shape `Ty.canonical` produces. -/
-def Ty.isCanonical : Ty → Prop
+@[expose] def Ty.isCanonical : Ty → Prop
   | .arrow _ _ domain codomain => domain.isCanonical ∧ codomain.isCanonical
   | .field name member tail => member.isCanonical ∧ tail.isCanonical ∧ Ty.headOk name tail
   | .specification metadata extension => metadata.isCanonical ∧ extension.isCanonical
@@ -280,7 +280,7 @@ theorem Ty.canonical_of_isCanonical : ∀ {type : Ty}, type.isCanonical → type
 /-- Explicit finite bounds disclose the members available on a rigid self/super
 variable. Recursive bounds are explored only to the requested finite depth. -/
 abbrev Bounds := List (Nat × Ty)
-def Ty.lookup (bounds : Bounds) : Nat → Ty → String → Option Ty
+@[expose] def Ty.lookup (bounds : Bounds) : Nat → Ty → String → Option Ty
   | 0, _, _ => none
   | fuel + 1, .field prior member tail, name =>
       if prior = name then some member else tail.lookup bounds fuel name
@@ -289,7 +289,7 @@ def Ty.lookup (bounds : Bounds) : Nat → Ty → String → Option Ty
       bound.lookup bounds fuel name
   | _, _, _ => none
 
-def Ty.isRow (bounds : Bounds) : Nat → Ty → Bool
+@[expose] def Ty.isRow (bounds : Bounds) : Nat → Ty → Bool
   | 0, _ => false
   | _ + 1, .emptyRow => true
   | fuel + 1, .field _ _ tail => tail.isRow bounds fuel
@@ -311,7 +311,7 @@ def Ty.supports (bounds : Bounds) : Nat → Ty → Ty → Bool
 
 /-- What a binder of this quantity promises about its own uses: `linear` exactly once. The lambda
 rule (`PartialTyping.lambda`) requires it of the parameter's count. -/
-def Quantity.fits : Quantity → Nat → Bool
+@[expose] def Quantity.fits : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count => count <= 1
   | .linear, count => count == 1
@@ -324,10 +324,10 @@ structure Binding where
 abbrev Context := List Binding
 abbrev Uses := List Nat
 
-def zeroUses (context : Context) : Uses := List.replicate context.length 0
-def variableUses (context : Context) (index : Nat) : Uses :=
+@[expose] def zeroUses (context : Context) : Uses := List.replicate context.length 0
+@[expose] def variableUses (context : Context) (index : Nat) : Uses :=
   (List.range context.length).map (fun position => if position = index then 1 else 0)
-def addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
+@[expose] def addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
 
 /-- At most once for `affine` and `linear`, never for `erased`. A partial computation may still
 retain a linear obligation forever (a divergent body never reaches its use); the checker's part of
@@ -336,19 +336,19 @@ exact discharge is syntactic and lives at the binder (`Quantity.fits`, required 
 (`branchesAgree`, required by `ifBool`, `ifZero` and the arms of a `case`), and wherever a step may
 discard what a subterm holds (`linearFree`: the target of `get`, `reflect`, `metadata`, `project` and
 `extend`, a specification's metadata, a `case` scrutinee, a `done` value). -/
-def safeQuantity : Quantity → Nat → Bool
+@[expose] def safeQuantity : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count | .linear, count => count <= 1
   | .unrestricted, _ => true
 
-def safeUses (context : Context) (uses : Uses) : Bool :=
+@[expose] def safeUses (context : Context) (uses : Uses) : Bool :=
   uses.length == context.length &&
     (context.zip uses).all (fun pair => safeQuantity pair.1.quantity pair.2)
 
 /-- No `linear` hypothesis is used: what an argument must satisfy unless the parameter it is
 passed to is itself `linear`. A `linear` hypothesis flows only into a `linear` slot, so a callee
 that may drop its argument (`erased`, `affine`) or share it (`unrestricted`) never receives one. -/
-def linearFree (context : Context) (uses : Uses) : Bool :=
+@[expose] def linearFree (context : Context) (uses : Uses) : Bool :=
   (context.zip uses).all (fun pair => pair.2 == 0 || pair.1.quantity != .linear)
 
 /-- The uses of two branches of which exactly one runs (`ifBool`, `ifZero`, the arms of a `case`):
@@ -356,24 +356,24 @@ pointwise maximum. With `branchesAgree` this is the additive rule: a `linear` hy
 equally often on every branch and the join is that common count; an `affine` one at most once on
 each branch, so at most once; an `unrestricted` one any number of times. The join is the same `max`
 at every quantity, so the uses of a term stay a function of the term alone (`uses_determined`). -/
-def joinUses (first second : Uses) : Uses := List.zipWith max first second
+@[expose] def joinUses (first second : Uses) : Uses := List.zipWith max first second
 
 /-- What a binder of this quantity demands of two branches: a `linear` one the same count on both. -/
-def Quantity.agrees : Quantity → Nat → Nat → Bool
+@[expose] def Quantity.agrees : Quantity → Nat → Nat → Bool
   | .linear, first, second => first == second
   | _, _, _ => true
 
 /-- The branches agree on every `linear` hypothesis: the premise `joinUses` needs at a join. -/
-def branchesAgree : Context → Uses → Uses → Bool
+@[expose] def branchesAgree : Context → Uses → Uses → Bool
   | binding :: context, first :: firsts, second :: seconds =>
       binding.quantity.agrees first second && branchesAgree context firsts seconds
   | _, _, _ => true
 
-def reusableCaptures (variables : List Nat) (context : Context) (uses : Uses) : Bool :=
+@[expose] def reusableCaptures (variables : List Nat) (context : Context) (uses : Uses) : Bool :=
   uses.length == context.length && (context.zip uses).all (fun pair =>
     pair.2 == 0 || (pair.1.quantity == .unrestricted && pair.1.type.shareableUnder variables))
 
-def validContext (variables : List Nat) (context : Context) : Bool :=
+@[expose] def validContext (variables : List Nat) (context : Context) : Bool :=
   context.all (fun binding => binding.quantity != .unrestricted || binding.type.shareableUnder variables)
 
 /-- No affine/linear binding can occur twice in a checked computation. This
@@ -440,7 +440,7 @@ structure LambdaAnnotation where
 
 /-- Type substitution instantiates future row/type parameters, including their
 negative occurrences in binary methods. No variance/subtype oracle is hidden. -/
-def Ty.instantiate (arguments : Nat → Ty) : Ty → Ty
+@[expose] def Ty.instantiate (arguments : Nat → Ty) : Ty → Ty
   | .variable index => arguments index
   | .arrow reuse quantity domain codomain =>
       .arrow reuse quantity (domain.instantiate arguments) (codomain.instantiate arguments)

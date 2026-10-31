@@ -4,7 +4,7 @@ checker equality: constructor congruence and compatibility remain obligations. -
 public import Obend.Core.AliasExposure
 public import Obend.Core.RecursiveRows
 public import Obend.Core.FinitePresentation
-@[expose] public section
+public section
 namespace Obend.Core.TypeGraph
 open Obend.Core.Ty Obend.Core.Check Obend.Core.AliasExposure
 namespace RR
@@ -19,7 +19,7 @@ set_option autoImplicit false
 inductive Node where
   | type (type : Ty)
   | stream (row : Ty) (label : String) (first : Bool)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 inductive TailKind where
   | closed | productiveCycle
@@ -34,34 +34,34 @@ inductive Label where
   | ordinary (tag : Tag) (shareable : Bool)
   | row (labels : List String) (tail : TailKind) (shareable : Bool)
   | streamEnd | streamEmit
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
-def tailKind : RR.Tail → TailKind
+@[expose] def tailKind : RR.Tail → TailKind
   | .closed => .closed
   | .productiveCycle => .productiveCycle
   | .nominal index => .nominal index
   | .unproductive index => .unproductive index
   | .nonRow _ => .nonRow
 
-def tailChildren : RR.Tail → List Node
+@[expose] def tailChildren : RR.Tail → List Node
   | .nonRow type => [.type type]
   | _ => []
 
-def rowTag : Tag → Bool
+@[expose] def rowTag : Tag → Bool
   | .emptyRow | .field _ => true
   | _ => false
 
-def rowChildren (assumptions : Assumptions) (t : Ty) : List Node :=
+@[expose] def rowChildren (assumptions : Assumptions) (t : Ty) : List Node :=
   (RR.labels assumptions t).map (fun label => .stream t label true) ++
     tailChildren (RR.residual assumptions t)
 
-def rowObservation (assumptions : Assumptions) (t : Ty) : Label × List Node :=
+@[expose] def rowObservation (assumptions : Assumptions) (t : Ty) : Label × List Node :=
   (.row (RR.labels assumptions t) (tailKind (RR.residual assumptions t))
     (RR.shareable assumptions t),rowChildren assumptions t)
 
 /-- These observations are global: they do not depend on either comparison
 root or on the particular finite support used to execute the decision. -/
-def observe (assumptions : Assumptions) : Node → Label × List Node
+@[expose] def observe (assumptions : Assumptions) : Node → Label × List Node
   | .type t =>
     match expose assumptions t with
     | .nominal index => (.nominal index,[])
@@ -74,11 +74,11 @@ def observe (assumptions : Assumptions) : Node → Label × List Node
     | .end _ => (.streamEnd,[])
     | .emit member tail => (.streamEmit,[.type member,.stream tail label false])
 
-def graph (assumptions : Assumptions) : FP.Graph Node Label where
+@[expose] def graph (assumptions : Assumptions) : FP.Graph Node Label where
   label := fun node => (observe assumptions node).1
   successors := fun node => (observe assumptions node).2
 
-def nodes (assumptions : Assumptions) (left right : Ty) : List Node :=
+@[expose] def nodes (assumptions : Assumptions) (left right : Ty) : List Node :=
   let types := support assumptions left right
   types.map .type ++ types.flatMap (fun t =>
     (RR.fieldLabels types).flatMap (fun label => [.stream t label true,.stream t label false]))
@@ -145,7 +145,7 @@ theorem nodes_closed (assumptions : Assumptions) (left right : Ty) :
       · rw [tailChild]
         exact (stream_mem_nodes_iff _ _ _ _ _ _).mpr ⟨tailPresent,listed⟩
 
-def presentation (assumptions : Assumptions) (left right : Ty) :
+@[expose] def presentation (assumptions : Assumptions) (left right : Ty) :
     FP.ClosedSupport (graph assumptions) :=
   ⟨nodes assumptions left right,nodes_closed assumptions left right⟩
 
@@ -157,10 +157,10 @@ theorem right_mem_nodes (assumptions : Assumptions) (left right : Ty) :
     Node.type right ∈ (presentation assumptions left right).nodes :=
   (type_mem_nodes_iff _ _ _ _).mpr (right_mem_support _ _ _)
 
-def Equivalent (assumptions : Assumptions) (left right : Ty) : Prop :=
+@[expose] def Equivalent (assumptions : Assumptions) (left right : Ty) : Prop :=
   FP.Bisimilar (graph assumptions) (.type left) (.type right)
 
-def candidate (assumptions : Assumptions) (left right : Ty) : Bool :=
+@[expose] def candidate (assumptions : Assumptions) (left right : Ty) : Bool :=
   (presentation assumptions left right).agreement (.type left) (.type right)
     (left_mem_nodes _ _ _) (right_mem_nodes _ _ _)
 

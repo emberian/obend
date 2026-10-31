@@ -11,7 +11,7 @@ are not constructors and cannot be minted/copied by this machine.
 Weak-head reference adequacy, graph/capture ownership and new type metatheory
 remain obligations. -/
 public import Obend.Core.Term
-@[expose] public section
+public section
 namespace Obend.Core.Machine
 open Obend.Core.Term
 set_option autoImplicit false
@@ -79,24 +79,24 @@ structure Limits where
   stack : Nat
   deriving Repr
 
-def initial (term : Term) : State := ⟨#[],.evaluate term [],[]⟩
-def allocateFields (heap : Array Cell) (environment : Environment)
+@[expose] def initial (term : Term) : State := ⟨#[],.evaluate term [],[]⟩
+@[expose] def allocateFields (heap : Array Cell) (environment : Environment)
     (fields : List (String × Term)) : Array Cell × List (String × Address) :=
   let pair := fields.foldl (fun (prior : Array Cell × List (String × Address)) field =>
     (prior.1.push (.suspended ⟨field.2,environment⟩),(field.1,prior.1.size)::prior.2)) (heap,[])
   (pair.1,pair.2.reverse)
-def valueTerm : RuntimeValue → Option Term
+@[expose] def valueTerm : RuntimeValue → Option Term
   | .natural n => some (.nat n) | .boolean value => some (.boolean value)
   | .label name => some (.label name) | _ => none
-def scalarValue : Term → Option RuntimeValue
+@[expose] def scalarValue : Term → Option RuntimeValue
   | .nat n => some (.natural n) | .boolean value => some (.boolean value)
   | .label name => some (.label name) | _ => none
 
 /-- A shared cell is being forced exactly when an update frame is on the stack. -/
-def forcingShared (stack : List Frame) : Bool :=
+@[expose] def forcingShared (stack : List Frame) : Bool :=
   stack.any fun frame => match frame with | .update _ => true | _ => false
 
-def stepRaw (state : State) : State :=
+@[expose] def stepRaw (state : State) : State :=
   match state.control with
   | .complete _ | .refused _ | .blackhole _ | .yielded _ => state
   | .enter address => match state.heap[address]? with
@@ -216,7 +216,7 @@ inductive Outcome where
   | yielded (plan : Address) (state : State)
   deriving Repr
 
-def step (limits : Limits) (state : State) : Outcome :=
+@[expose] def step (limits : Limits) (state : State) : Outcome :=
   match state.control with
   | .complete value => .finished value state
   | .blackhole address => .divergent address state
@@ -228,7 +228,7 @@ def step (limits : Limits) (state : State) : Outcome :=
       .suspended .ticks next
     else .suspended .capacity state
 
-def runBounded (limits : Limits) : Nat → State → Outcome
+@[expose] def runBounded (limits : Limits) : Nat → State → Outcome
   | 0,state => match state.control with
     | .complete value => .finished value state
     | .blackhole address => .divergent address state
@@ -249,7 +249,7 @@ def run (limits : Limits) (ticks : Nat) (state : State) : State :=
 /-- Resume a yielded program with the kernel's response, a closed term (decoded
 data). Heap and stack are unchanged: the yielded state IS the checkpoint.
 Any other state cannot be resumed. -/
-def resume (response : Term) (state : State) : Option State :=
+@[expose] def resume (response : Term) (state : State) : Option State :=
   match state.control with
   | .yielded _ => some {state with control:=.evaluate response []}
   | _ => none

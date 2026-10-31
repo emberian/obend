@@ -1,6 +1,7 @@
 module
 public import Obend.Core.Check
 public meta import Obend.Core.Check
+import all Obend.Core.TypeGraph
 open Obend.Core.Ty Obend.Core.Check
 set_option maxRecDepth 100000
 set_option maxHeartbeats 2000000

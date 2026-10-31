@@ -6,7 +6,7 @@ A sharing implementation must prove representation adequacy; this reference
 relation does not claim a heap machine, type safety, termination, proof
 consistency, or authority. -/
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Core.Term
 set_option autoImplicit false
 
@@ -52,10 +52,10 @@ inductive Term where
   | done (value : Term)
   deriving Repr
 
-def liftRename (rename : Nat → Nat) : Nat → Nat
+@[expose] def liftRename (rename : Nat → Nat) : Nat → Nat
   | 0 => 0 | n + 1 => rename n + 1
 
-def Term.rename (rename : Nat → Nat) : Term → Term
+@[expose] def Term.rename (rename : Nat → Nat) : Term → Term
   | .hole n σ => .hole n (σ.map (fun t => t.rename rename))
   | .bound index => .bound (rename index)
   | .lam body => .lam (body.rename (liftRename rename))
@@ -99,11 +99,11 @@ decreasing_by
          simp +arith
        omega)
 
-def liftSubstitution (substitution : Nat → Term) : Nat → Term
+@[expose] def liftSubstitution (substitution : Nat → Term) : Nat → Term
   | 0 => .bound 0
   | n + 1 => (substitution n).rename Nat.succ
 
-def Term.substitute (substitution : Nat → Term) : Term → Term
+@[expose] def Term.substitute (substitution : Nat → Term) : Term → Term
   | .hole n σ => .hole n (σ.map (fun t => t.substitute substitution))
   | .bound index => substitution index
   | .lam body => .lam (body.substitute (liftSubstitution substitution))
@@ -148,12 +148,12 @@ decreasing_by
          simp +arith
        omega)
 
-def instantiate (body argument : Term) : Term :=
+@[expose] def instantiate (body argument : Term) : Term :=
   body.substitute (fun index => match index with | 0 => argument | n + 1 => .bound n)
 
 /-- `λself. λsuper. upper self (lower self super)`: the inherited target is a
 computation; both extensions receive the identical final self expression. -/
-def mixBody (lower upper : Term) : Term :=
+@[expose] def mixBody (lower upper : Term) : Term :=
   .lam (.lam (.app (.app (upper.rename (fun n => n + 2)) (.bound 1))
     (.app (.app (lower.rename (fun n => n + 2)) (.bound 1)) (.bound 0))))
 
@@ -169,10 +169,10 @@ inductive Value : Term → Prop where
 
 /-- A record-target fragment only. Other target kinds use ordinary extensions.
 New fields shadow inherited fields; the inherited computation remains super. -/
-def extendFields (inherited fields : List (String × Term)) : List (String × Term) :=
+@[expose] def extendFields (inherited fields : List (String × Term)) : List (String × Term) :=
   fields ++ inherited.filter (fun prior => !(fields.any fun field => field.1 == prior.1))
 
-def primitiveResult : Primitive → Term → Term → Option Term
+@[expose] def primitiveResult : Primitive → Term → Term → Option Term
   | .add, .nat a, .nat b => some (.nat (a + b))
   | .multiply, .nat a, .nat b => some (.nat (a * b))
   | .equal, .nat a, .nat b => some (.boolean (a == b))
@@ -187,21 +187,21 @@ def primitiveResult : Primitive → Term → Term → Option Term
 
 /-- All String labels, including true/false, are excluded from Boolean operations. -/
 theorem conjunction_labels_refused (left right : String) :
-    primitiveResult .conjunction (.label left) (.label right) = none := rfl
+    primitiveResult .conjunction (.label left) (.label right) = none := by rfl
 
 theorem conjunction_boolean_exact (left right : Bool) :
     primitiveResult .conjunction (.boolean left) (.boolean right) =
-      some (.boolean (left && right)) := rfl
+      some (.boolean (left && right)) := by rfl
 
 theorem equality_boolean_exact (left right : Nat) :
-    primitiveResult .equal (.nat left) (.nat right) = some (.boolean (left == right)) := rfl
+    primitiveResult .equal (.nat left) (.nat right) = some (.boolean (left == right)) := by rfl
 
 theorem label_equality_boolean_exact (left right : String) :
-    primitiveResult .labelEqual (.label left) (.label right) = some (.boolean (left == right)) := rfl
+    primitiveResult .labelEqual (.label left) (.label right) = some (.boolean (left == right)) := by rfl
 
 /-- Labels compare only with labels: a Boolean is never a reserved label. -/
 theorem label_equality_booleans_refused (left right : Bool) :
-    primitiveResult .labelEqual (.boolean left) (.boolean right) = none := rfl
+    primitiveResult .labelEqual (.boolean left) (.boolean right) = none := by rfl
 
 /-- Subtraction is truncated: `left - right` is `0` whenever `right ≥ left`. -/
 theorem subtract_truncated_exact (left right : Nat) :
@@ -303,7 +303,7 @@ inductive Steps : Term → Term → Prop where
   | refl (term : Term) : Steps term term
   | next {initial middle result : Term} : Step initial middle → Steps middle result → Steps initial result
 
-def Evaluates (initial result : Term) : Prop := Steps initial result ∧ Value result
+@[expose] def Evaluates (initial result : Term) : Prop := Steps initial result ∧ Value result
 
 /-! ## Activities: a perform in evaluation position is a yield
 
@@ -325,7 +325,7 @@ inductive SourceFrame where
   | reflect | metadata | project
   deriving Repr
 
-def SourceFrame.plug : SourceFrame → Term → Term
+@[expose] def SourceFrame.plug : SourceFrame → Term → Term
   | .application argument, hole => .app hole argument
   | .field name, hole => .get hole name
   | .extend fields, hole => .extend hole fields
@@ -339,7 +339,7 @@ def SourceFrame.plug : SourceFrame → Term → Term
   | .project, hole => .project hole
 
 /-- Plug a hole into a context listed innermost first. -/
-def plug (context : List SourceFrame) (hole : Term) : Term :=
+@[expose] def plug (context : List SourceFrame) (hole : Term) : Term :=
   context.foldl (fun term frame => frame.plug term) hole
 
 /-- `Yields term plan context`: the next redex of `term` is `perform plan` in
@@ -399,7 +399,7 @@ inductive Observation where
   | natural (value : Nat)
   | boolean (value : Bool)
   | label (value : String)
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 inductive Observes : Term → Observation → Prop where
   | natural (value : Nat) : Observes (.nat value) (.natural value)
   | boolean (value : Bool) : Observes (.boolean value) (.boolean value)

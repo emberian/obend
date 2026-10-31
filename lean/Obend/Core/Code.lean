@@ -28,7 +28,7 @@ public import Obend.Core.MachineTyping
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Slot.Core4
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 namespace Obend.Core.Code
 open Obend.Core.Term
 open Obend.Core.Traverse (Tree)
@@ -84,7 +84,7 @@ def tagData : Tag → Data
   | .inject name => .variant "inject" (.label name)
   | .field name => .variant "field" (.label name)
 
-def tagOf : Data → Option Tag
+@[expose] def tagOf : Data → Option Tag
   | .variant "hole" (.natural n) => some (.hole n)
   | .variant "app" (.record []) => some .app
   | .variant "mix" (.record []) => some .mix
@@ -120,7 +120,7 @@ def shapeData : Shape → Data
   | .var i => .variant "var" (.natural i)
   | .bind b => .variant "bind" (shapeData b)
   | .node tag cs => .variant "node" (.record [("tag", tagData tag), ("children", childrenData cs)])
-def childrenData : List Shape → Data
+@[expose] def childrenData : List Shape → Data
   | [] => .variant "nil" unit
   | c :: cs => .variant "cons" (.record [("head", shapeData c), ("tail", childrenData cs)])
 end
@@ -179,7 +179,7 @@ theorem treesEq_refl : ∀ (as : List Shape), Obend.Law.treesEq as as = true
 end
 
 /-- **`quote`**: the canonical first-order rendering of a term the kernel holds. -/
-def quote (t : Term) : Data := shapeData (encode t)
+@[expose] def quote (t : Term) : Data := shapeData (encode t)
 
 /-- Read a quotation back. Only the encoding of a term is accepted: a well-formed tree that
 `decode` would repair (a `node .app` with three children, say) is refused. -/
@@ -701,11 +701,11 @@ structure Held where
   tree : AnnotationTree
   assumptions : Assumptions
 
-def Held.annotated (h : Held) : AnnotatedTerm := ⟨h.term, treeAnnotations h.tree, h.assumptions⟩
+@[expose] def Held.annotated (h : Held) : AnnotatedTerm := ⟨h.term, treeAnnotations h.tree, h.assumptions⟩
 
 /-- **`Code Ψ A θ`**: a term typed at `A` in hypotheses `Ψ` under the theory `θ`. The typing is
 `Typed` of the slot calculus (`Slot/Core4.lean`): a `Checked` certificate at type `A`. -/
-def Code (Ψ : Context) (A : Ty) (θ : Assumptions) : Type :=
+@[expose] def Code (Ψ : Context) (A : Ty) (θ : Assumptions) : Type :=
   { t : AnnotatedTerm // t.assumptions = θ ∧ ∃ c : Checked t Ψ, c.type = A }
 
 theorem Code.typed {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
