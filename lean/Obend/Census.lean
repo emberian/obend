@@ -129,6 +129,7 @@ import Obend.Core.Proofs.Substitution.Msubst
 import Obend.Core.Proofs.Substitution.Transport
 import Obend.Core.Proofs.Substitution.Uses
 import Obend.Core.Proofs.Templates
+import Obend.Core.Proofs.TickCost
 import Obend.Core.Proofs.TypedSubstitution
 import Obend.Core.RecursiveAgreement
 import Obend.Core.RecursiveRows
