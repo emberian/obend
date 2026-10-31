@@ -180,10 +180,13 @@ import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Main
 import Obend.Run
+import Obend.Run.Control
+import Obend.Run.ControlExample
 import Obend.Run.Core4
 import Obend.Run.Core4Example
 import Obend.Run.LawJudge
 import Obend.Run.Negotiation
+import Obend.Run.Proofs.Control
 import Obend.Run.Proofs.Core4
 import Obend.Run.Proofs.Interpret
 import Obend.Run.Proofs.Invariant
