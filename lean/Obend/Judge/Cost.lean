@@ -187,7 +187,7 @@ def Meaning (o : Term × Term) (steps : List Step) : Prop :=
 
 /-- **The improvement judge.** Objects are an original term and a candidate; certificates are
 re-association derivations; the grade bounds their length. -/
-instance improvement : Judge (Term × Term) (List Step) Nat where
+instance improvement : Judge (Term × Term) (List Step) where
   Clause := Clause
   Meaning := Meaning
   check := check

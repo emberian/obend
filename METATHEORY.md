@@ -32,9 +32,12 @@ checker's clothes, and the fix is the one every step-indexed development makes:
   assert that more fuel alone can repair the term. Recording grants as audited World facts is
   a subsequent integration, not a claim of this implementation.
 
-So `Obend.Slot.Calculus` splits into `Calculus` (with `Typed : Ctx → Tm → Ty → Prop`, `msubst`, and
+So `Obend.Slot.Calculus` split into `Calculus` (with `Typed : Ctx → Tm → Ty → Prop`, `msubst`, and
 the substitution law on `Typed`) and `Decides R` (the graded procedure with soundness, monotonicity
-and completeness-at-some-grade under an explicit coverage premise). The slot's theorems quantify over `Typed`; admission quantifies
+and completeness-at-some-grade under an explicit coverage premise). (2026-11-01, lane Parsimony: each
+class had one instance and `Graded` had one, `Nat`, so `Typed` and the substitution law are Core4's
+own definitions, the procedure is the `Judge` instance `bidirectional`, and grades are `Nat`;
+`REPORT-PARSIMONY-20261101.md`.) The slot's theorems quantify over `Typed`; admission quantifies
 over the grade the world granted. Nothing about fuel appears in a statement about meaning again.
 
 ## 2. The remaining theorems, and the tool each wants (revised 2026-11-01)
@@ -73,8 +76,8 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
 
 ## 4. Custom tactics and commands worth having
 
-- `obend_cases` (above) and `fuel_lift` (apply `check_mono` / `Graded` monotonicity to raise a
-  judgment's grade to a common bound, so no proof mentions `n + m` by hand).
+- `obend_cases` (above). (`fuel_lift`, which raised a judgment's grade through `Graded`, was built,
+  lost its last use, and was deleted on 2026-11-01.)
 - `#tooth T by mutation`: a command that applies a stated mutation to a definition in a scratch
   environment and checks the theorem `T` *fails*; the trees do this by hand today with planted
   files. A green that cannot red is not evidence; this makes the red mechanical.

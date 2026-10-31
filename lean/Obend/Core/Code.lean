@@ -704,12 +704,12 @@ structure Held where
 def Held.annotated (h : Held) : AnnotatedTerm := ⟨h.term, treeAnnotations h.tree, h.assumptions⟩
 
 /-- **`Code Ψ A θ`**: a term typed at `A` in hypotheses `Ψ` under the theory `θ`. The typing is
-`Calculus.Typed` of the slot calculus (`Slot/Core4.lean`): a `Checked` certificate at type `A`. -/
+`Typed` of the slot calculus (`Slot/Core4.lean`): a `Checked` certificate at type `A`. -/
 def Code (Ψ : Context) (A : Ty) (θ : Assumptions) : Type :=
   { t : AnnotatedTerm // t.assumptions = θ ∧ ∃ c : Checked t Ψ, c.type = A }
 
 theorem Code.typed {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
-    Obend.Slot.Calculus.Typed (Tm := AnnotatedTerm) Ψ c.val A := c.2.2
+    Obend.Slot.Core4.Typed Ψ c.val A := c.2.2
 
 /-- The body of a quotation of held code. -/
 def heldData (h : Held) : Data :=
@@ -958,7 +958,7 @@ theorem importWith_ok {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions}
 accepted exactly the imported annotated term. -/
 theorem import_sound {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
     {c : Code Ψ A θ} (h : importWith version Ψ A θ d = .ok c) :
-    c.val.assumptions = θ ∧ Obend.Slot.Calculus.Typed (Tm := AnnotatedTerm) Ψ c.val A ∧
+    c.val.assumptions = θ ∧ Obend.Slot.Core4.Typed Ψ c.val A ∧
       ∃ k, checkAgainst c.val Ψ A = .ok k := by
   obtain ⟨_, held, _, _, hc, k, hk⟩ := importWith_ok h
   refine ⟨c.2.1, c.typed, ?_⟩

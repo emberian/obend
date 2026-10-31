@@ -45,7 +45,6 @@ import Obend.Core.FilteredStreamSteps
 import Obend.Core.FiniteBisimulation
 import Obend.Core.FinitePresentation
 import Obend.Core.FiniteRowLaws
-import Obend.Core.Graded
 import Obend.Core.Interaction
 import Obend.Core.Invariant
 import Obend.Core.LegacyAgreement
@@ -256,7 +255,6 @@ import Obend.Run.SharedExample
 import Obend.Run.Spec
 import Obend.Slot
 import Obend.Slot.Budget
-import Obend.Slot.Calculus
 import Obend.Slot.Core4
 import Obend.Slot.Integrity
 import Obend.Slot.Proofs.Negotiation
@@ -295,7 +293,6 @@ import Obend.Spec.Syntax
 import Obend.Spec.Types
 import Obend.Spec.Workspace
 import Obend.Tactic.Cases
-import Obend.Tactic.Fuel
 import Obend.Tactic.MonadicReduction
 import Obend.Tactic.Tooth
 import Obend.Teeth.Core.BackFail

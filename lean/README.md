@@ -31,8 +31,8 @@ and `python3 tests/run-receipts.py` the receipt tests. The `Journal` library and
 - `Obend/Teeth/` — tier 2: `Core/CheckTeeth` (the checker's `decide` fixtures), the evaluation leaves,
   the law and vault teeth, `Tactic/ToothChecks`.
 - `Obend/Digest/` — `HashBytes`, cSHAKE256 (`Spec`, `Fast`, `Seam`), the `Digest` typeclass.
-- `Obend/Slot/` — the slot (`Obend.Slot`), open protocols (`Protocol`), their proofs, the calculus
-  typeclass (`Calculus`), Core4 as its instance (`Core4`), the abstract `World` and `Integrity`.
+- `Obend/Slot/` — the slot (`Obend.Slot`), open protocols (`Protocol`), their proofs, Core4's slot
+  calculus (`Core4`: `Typed`, the checker as the slot's judge, `slotOf`), the abstract `World` and `Integrity`.
 - `Obend/Spec/` — the `.obend` front end (trusted, no theorem: `Spec.lean` states the boundary):
   `Law`, `Syntax`, `Parse`, `Types`, `Annotated`, `C4`, `Contract`, `Elaborate`, `Sha256`, `FrontEnd`
   (`lower`, `accept`), `DataWire`, `Identity`, `Capture`, `Preview`.

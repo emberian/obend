@@ -1,8 +1,11 @@
 module
-/- The single judge is the bidirectional checker, bounded by the checker's work
-(`Obend.Elab.Work.checkWork`: one per node plus the annotations it reads).
-Full completeness prepares annotations while preserving the erased program and
-assumptions. Arbitrary fixed annotations need not be accepted. -/
+/- The slot calculus of Core4: semantic typing (`Typed`, a `Checked` certificate at the type), the
+substitution law on it (`calculus_typed_msubst`), and the single judge, the bidirectional checker
+bounded by the checker's work (`Obend.Elab.Work.checkWork`: one per node plus the annotations it
+reads). Full completeness prepares annotations while preserving the erased program and assumptions;
+arbitrary fixed annotations need not be accepted. The judge is the `Judge` instance
+`Obend.Judge.Instances.bidirectional` (`judge_iff_check`); a slot whose judge it is (`slotOf`)
+fills only typed terms (`slotOf_usable`), and refuses within a declared grant by name (`admit`). -/
 public import Obend.Core.Term
 public import Obend.Core.TermTraverse
 public import Obend.Core.Ty
@@ -13,8 +16,7 @@ public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Core.Invariant
 public import Obend.Core.Proofs.Substitution.Mono
 public import Obend.Core.Proofs.TypedSubstitution
-public import Obend.Slot.Calculus
-public import Obend.Tactic.Fuel
+public import Obend.Slot
 public import Obend.Tactic.Tooth
 public import Obend.Tactic.MonadicReduction
 public import Obend.Elab.Work
@@ -38,23 +40,9 @@ def freeIn (x : Nat) (t : Term) : Bool :=
 /-- Hypothesis `x` as a term: a bare `bound x`, no annotations. -/
 def var (x : Nat) : AnnotatedTerm := ⟨.bound x, fun _ => none, {}⟩
 
-/-- Rename hypothesis indices from `x` on down by one (the hypothesis `x` itself must be unused). -/
-def lowerFrom (x : Nat) (index : Nat) : Nat := if x < index then index - 1 else index
-
-/-- Rename hypothesis indices from `x` on up by one, making room at `x`. -/
-def liftFrom (x : Nat) (index : Nat) : Nat := if x ≤ index then index + 1 else index
-
-instance : Obend.Slot.Calculus AnnotatedTerm where
-  Ty := Ty
-  Ctx := Context
-  msubst := msubst
-  Typed Ψ t A := ∃ c : Checked t Ψ, c.type = A
-  uses t x := freeIn x t.term
-  drop Ψ x := Ψ.eraseIdx x
-  strengthen x t := { t with term := t.term.rename (lowerFrom x) }
-  weaken x t := { t with term := t.term.rename (liftFrom x) }
-  var := var
-  lookup Ψ x := (Ψ[x]?).map (·.type)
+/-- Semantic typing: a `Checked` certificate of `t` in `Ψ` at type `A`, whether or not the checker
+recognizes it within a grant. -/
+def Typed (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Prop := ∃ c : Checked t Ψ, c.type = A
 
 /-- What a grant prices: the work the bidirectional checker does on the annotated term. -/
 abbrev checkWork (t : AnnotatedTerm) : Nat := Obend.Elab.Work.checkWork t
@@ -62,10 +50,6 @@ abbrev checkWork (t : AnnotatedTerm) : Nat := Obend.Elab.Work.checkWork t
 /-- Only annotations may change during preparation. -/
 def Reannotates (source target : AnnotatedTerm) : Prop :=
   source.term = target.term ∧ source.assumptions = target.assumptions
-
-/-- Full syntactic coverage: every constructor is eligible for annotation preparation.
-Typing remains an independent premise of completeness, so this includes ill-typed syntax. -/
-def Covered (_ : Context) (_ : AnnotatedTerm) (_ : Ty) : Prop := True
 
 /-- One route: a work grant and the equi-recursive bidirectional checker. -/
 def judge (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
@@ -80,7 +64,7 @@ theorem judge_iff (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
   | ok c => simp [Except.toBool]
 
 theorem reannotates_typed {Ψ : Context} {t u : AnnotatedTerm} {A : Ty}
-    (h : Reannotates t u) (typed : Calculus.Typed Ψ t A) : Calculus.Typed Ψ u A := by
+    (h : Reannotates t u) (typed : Typed Ψ t A) : Typed Ψ u A := by
   obtain ⟨c, same⟩ := typed
   obtain ⟨termSame, assumptionsSame⟩ := h
   refine ⟨⟨c.type, c.uses, ?_, c.safe, ?_, ?_⟩, same⟩
@@ -88,32 +72,16 @@ theorem reannotates_typed {Ψ : Context} {t u : AnnotatedTerm} {A : Ty}
   · simpa only [← assumptionsSame] using c.contextValid
   · simpa only [← assumptionsSame] using c.assumptionsValid
 
-instance : Decides Nat AnnotatedTerm where
-  check := judge
-  Covered := Covered
-  Prepares := Reannotates
-  prepare_sound := reannotates_typed
-  check_sound := by
-    intro r Ψ t A h
-    obtain ⟨_, c, accepted⟩ := (judge_iff r Ψ t A).1 h
-    exact ⟨c, (Obend.Core.Bidirectional.checkAgainst_sound accepted).1⟩
-  check_mono := by
-    intro r s Ψ t A h le
-    obtain ⟨within, accepted⟩ := (judge_iff r Ψ t A).1 h
-    exact (judge_iff s Ψ t A).2 ⟨Nat.le_trans within le, accepted⟩
-  check_complete := by
-    intro Ψ t A typed _
-    obtain ⟨c, same⟩ := typed
-    obtain ⟨annotations, checked, accepted⟩ :=
-      Obend.Core.Proofs.BidirectionalCompleteness.full_annotated c
-    refine ⟨{ t with annotations := annotations }, checkWork { t with annotations := annotations }, ⟨rfl, rfl⟩, ?_⟩
-    exact (judge_iff _ _ _ _).2 ⟨Nat.le_refl _, checked, same ▸ accepted⟩
-  check_covered := by intros; trivial
+/-- The judge is sound: an accepted term is typed. -/
+theorem judge_sound {grant : Nat} {Ψ : Context} {t : AnnotatedTerm} {A : Ty}
+    (h : judge grant Ψ t A = true) : Typed Ψ t A := by
+  obtain ⟨_, c, accepted⟩ := (judge_iff grant Ψ t A).1 h
+  exact ⟨c, (Obend.Core.Bidirectional.checkAgainst_sound accepted).1⟩
 
 /-- Exact-work completeness for the erased program: annotations can be prepared, and no
 grant larger than the prepared term's own work is needed. -/
 theorem typed_iff_preparable_within_work (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
-    Calculus.Typed Ψ t A ↔ ∃ annotations,
+    Typed Ψ t A ↔ ∃ annotations,
       judge (checkWork { t with annotations := annotations }) Ψ { t with annotations := annotations } A = true := by
   constructor
   · rintro ⟨certificate, same⟩
@@ -122,10 +90,8 @@ theorem typed_iff_preparable_within_work (Ψ : Context) (t : AnnotatedTerm) (A :
     refine ⟨annotations, (judge_iff _ _ _ _).2 ?_⟩
     exact ⟨Nat.le_refl _, checked, same ▸ accepted⟩
   · rintro ⟨annotations, accepted⟩
-    have preparedTyped : Calculus.Typed Ψ { t with annotations := annotations } A :=
-      Decides.check_sound (R := Nat) accepted
     exact reannotates_typed (t := { t with annotations := annotations }) (u := t)
-      ⟨rfl, rfl⟩ preparedTyped
+      ⟨rfl, rfl⟩ (judge_sound accepted)
 
 section JudgeFixtures
 attribute [local congr] Obend.Tactic.MonadicReduction.except_bind_source_congr
@@ -182,9 +148,6 @@ theorem extend_filling_admitted : judge 4 [] extendFilling extendType = true := 
     List.range_succ, List.zipWith,
     Except.toBool, bind, Except.bind, pure, Except.pure]
   <;> decide +kernel
-
-theorem extend_filling_decided : Decides.check (R := Nat) 4 ([] : Context) extendFilling extendType = true :=
-  extend_filling_admitted
 
 /-- The exact same filling is refused below its work. -/
 theorem extend_filling_budget_refused : judge 3 [] extendFilling extendType = false := by
@@ -253,24 +216,23 @@ theorem wronglyAnnotated_judge_refused (grant : Nat) :
 
   simp only [judge, refused, Bool.and_false]
 
-/-- Coverage is full syntax; it deliberately does not assert that supplied annotations
-are correct. Completeness permits replacing them and preserves the program. -/
+/-- Supplied annotations are not coverage: they may be wrong for a typed program, which the judge
+then refuses at every grant. Completeness permits replacing them and preserves the program. -/
 theorem annotation_presence_not_coverage :
     (∀ position, (wronglyAnnotated.annotations position).isSome = true) ∧
-    Calculus.Typed ([] : Context) wronglyAnnotated Ty.natural ∧
-    Covered [] wronglyAnnotated .natural ∧
+    Typed ([] : Context) wronglyAnnotated Ty.natural ∧
     ∀ grant, judge grant [] wronglyAnnotated .natural = false :=
-  ⟨fun _ => rfl, ⟨wronglyAnnotatedChecked, rfl⟩, trivial, wronglyAnnotated_judge_refused⟩
+  ⟨fun _ => rfl, ⟨wronglyAnnotatedChecked, rfl⟩, wronglyAnnotated_judge_refused⟩
 
 end JudgeFixtures
 
 /-- The substitution law is about meaning, including derivations the checker
 cannot recognize. Closedness and shared assumptions remain essential. -/
 theorem calculus_typed_msubst (Ψ : Context) (t : AnnotatedTerm) (A : Ty)
-    (σ : Nat → Option AnnotatedTerm) (ht : Calculus.Typed Ψ t A)
+    (σ : Nat → Option AnnotatedTerm) (ht : Typed Ψ t A)
     (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
-      ∃ b : Binding, Ψ[x]? = some b ∧ Calculus.Typed Ψ f b.type) :
-    Calculus.Typed Ψ (msubst σ t) A := by
+      ∃ b : Binding, Ψ[x]? = some b ∧ Typed Ψ f b.type) :
+    Typed Ψ (msubst σ t) A := by
   obtain ⟨c, same⟩ := ht
   obtain ⟨c', same', _⟩ := Obend.Core.Proofs.TypedSubstitution.checked_msubst c σ hσ
   exact ⟨c', same'.trans same⟩
@@ -300,8 +262,48 @@ theorem msubst_var_open (σ : Nat → Option AnnotatedTerm) (x : Nat) (h : σ x 
   simp [annotationsAt, fillingAt, h]
 
 /-- A hypothesis occurs in itself. -/
-theorem uses_var (x : Nat) : Obend.Slot.Calculus.uses (var x) x = true := by
-  simp [Obend.Slot.Calculus.uses, var, freeIn, Obend.Core.Traverse.Tree.uses, Obend.Core.Traverse.Tree.all, Obend.Core.TermTraverse.encode]
+theorem uses_var (x : Nat) : freeIn x (var x).term = true := by
+  simp [var, freeIn, Obend.Core.Traverse.Tree.uses, Obend.Core.Traverse.Tree.all, Obend.Core.TermTraverse.encode]
+
+/-! ## A slot judged by the checker, within a declared grant -/
+
+/-- The declared grant for this invocation, independent of semantic typing. -/
+structure Budget where
+  grade : Nat
+
+/-- The procedure did not accept the supplied term within the declared grant. This names a refusal,
+not a diagnosis that the term is ill-typed or that more work alone would repair it. -/
+inductive BudgetRefusal where
+  | uncovered (budget : Nat)
+  deriving DecidableEq, Repr
+
+variable {Fact : Type}
+
+/-- The slot whose judge is the checker at the grant, at `Ψ ⊢ _ : A`. -/
+def slotOf (budget : Budget) (Ψ : Context) (A : Ty) (supports : AnnotatedTerm → List Fact) :
+    Slot Fact AnnotatedTerm :=
+  ⟨supports, fun t => judge budget.grade Ψ t A⟩
+
+/-- Admission exposes the named budget refusal; the generic slot retains its existing `rejected`
+reading for a failed judge. -/
+def admit (budget : Budget) (Ψ : Context) (A : Ty) (t : AnnotatedTerm) : Except BudgetRefusal AnnotatedTerm :=
+  if judge budget.grade Ψ t A then .ok t else .error (.uncovered budget.grade)
+
+theorem slotOf_usable (budget : Budget) (Ψ : Context) (A : Ty)
+    (supports : AnnotatedTerm → List Fact) (holds : Fact → Bool) (t : AnnotatedTerm)
+    (h : (slotOf budget Ψ A supports).usable holds t = true) :
+    Typed Ψ t A ∧ ∀ f ∈ supports t, holds f = true := by
+  obtain ⟨checked, live⟩ := (usable_iff (slotOf budget Ψ A supports) holds t).1 h
+  exact ⟨judge_sound checked, live⟩
+
+theorem resolve_checks {Ix : Type} {S : Protocol.Sig Ix} {Hole : Ix → Type} {A' : Ix → Type}
+    (budget : Budget) (Ψ : Context) (A : Ty) (supports : AnnotatedTerm → List Fact)
+    (holds : Fact → Bool) {i : Ix} (body : AnnotatedTerm → Protocol.Prot S Hole A' i)
+    (order : List AnnotatedTerm) {f : Protocol.Prot S Hole A' i}
+    (h : (slotOf budget Ψ A supports).resolve holds body order = .ok f) :
+    ∃ t ∈ order, Typed Ψ t A ∧ f = body t := by
+  obtain ⟨t, _, _, hmem, hu, rfl⟩ := resolve_ok h
+  exact ⟨t, hmem, (slotOf_usable budget Ψ A supports holds t hu).1, rfl⟩
 
 end Obend.Slot.Core4
 end

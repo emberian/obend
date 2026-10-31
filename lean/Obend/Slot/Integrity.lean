@@ -37,7 +37,6 @@ there (`toy_repair`, `toy_advance`).
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Slot.World
-public import Obend.Slot.Calculus
 @[expose] public section
 
 namespace Obend.Slot
@@ -270,36 +269,6 @@ theorem select_reuse {S : Slot Fact Cand} {holds : Fact → Bool} {pre post : Li
   rfl
 
 #tooth select_reuse by mutation Slot.alternatives := fun _ _ _ => []
-
-/-- A calculus filling selected by the integrity-preserving filler has semantic
-typing, independently of the budget used to discover its certificate. -/
-theorem slotFiller_typed {Tm R : Type} [Calculus Tm] [Obend.Core.Graded R] [Decides R Tm]
-    (budget : Budget R) (Ψ : Calculus.Ctx Tm) (A : Calculus.Ty Tm)
-    (supports : Tm → List Fact) (v : V) (order : List Tm) (t : Tm)
-    (h : (slotFiller : Filler V Fact Tm).fill
-      (Calculus.slotOf budget Ψ A supports) v order = .ok t) : Calculus.Typed Ψ t A := by
-  obtain ⟨_, hu, _⟩ := select_ok h
-  exact (Calculus.slotOf_usable budget Ψ A supports (holdsAt v) t hu).1
-
-/-- When a budgeted slot refuses a candidate whose ordinary supports all hold,
-its named explanation is precisely `uncovered` at the declared grade. This
-connects admission diagnostics to the actual integrity-preserving filler. -/
-theorem slotFiller_uncovered {Tm R : Type} [Calculus Tm] [Obend.Core.Graded R] [Decides R Tm]
-    (budget : Budget R) (Ψ : Calculus.Ctx Tm) (A : Calculus.Ty Tm)
-    (supports : Tm → List Fact) (v : V) (order : List Tm) (t : Tm)
-    (w : Refusal Fact Tm)
-    (h : (slotFiller : Filler V Fact Tm).fill
-      (Calculus.slotOf budget Ψ A supports) v order = .error w)
-    (member : t ∈ order) (live : ∀ f ∈ supports t, holdsAt v f = true) :
-    Calculus.admit budget Ψ A t = .error (.uncovered budget.grade) := by
-  have refused := (select_error h).1 t member
-  have dead : (Calculus.slotOf budget Ψ A supports).dead (holdsAt v) t = [] :=
-    (dead_eq_nil_iff _ _ _).2 live
-  unfold Slot.usable at refused
-  rw [dead] at refused
-  have checkFalse : Decides.check budget.grade Ψ t A = false := by
-    simpa only [Calculus.slotOf, List.isEmpty_nil, Bool.and_true] using refused
-  simp [Calculus.admit, checkFalse]
 
 /-! ## The floor -/
 

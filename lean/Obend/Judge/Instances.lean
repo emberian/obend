@@ -8,7 +8,6 @@ one is written and proved against the existing relation.
 
 | judge | object | certificate | `sound` from | `complete` from, on |
 |---|---|---|---|---|
-| `Decides` (any) | context, term, type | the prepared term | `check_sound` | `check_complete`, on `Typed ∧ Covered` |
 | bidirectional checker | context, term, type | annotations | `checkAgainst_sound`, `reannotates_typed` | `full_annotated`, every typed term |
 | law machine probe | law, old, new, request | none | `judge_sound`, `refusesAs_not_admits` | `judge_complete`, closed laws |
 | `coerce` | assumptions, source, target | the emitted coercion | `checkAgainst_sound` | `coerce_checks`, where the emitter succeeds |
@@ -20,7 +19,6 @@ grade is monotone with no fuel-monotonicity theorem for the machine; `judged_uni
 first answer the relation's.
 -/
 public import Obend.Judge.Class
-public import Obend.Slot.Calculus
 public import Obend.Slot.Core4
 public import Obend.Law.Proofs.Machine
 public import Obend.Law.Proofs.Inherit
@@ -31,39 +29,6 @@ public import Obend.Slot.Proofs.Protocol
 namespace Obend.Judge.Instances
 open Obend.Core
 set_option autoImplicit false
-
-/-! ## Every `Decides` is a judge -/
-
-section Decides
-open Obend.Slot
-
-/-- `Decides` at the judge's interface: the certificate is the prepared term. A Boolean procedure
-cannot tell a refusal from an exhausted grade, so a `false` is `uncovered` (as `Calculus.admit`
-says). -/
-def ofDecides (R Tm : Type) [Graded R] [Calculus Tm] [Decides R Tm] :
-    Judge (Calculus.Ctx Tm × Tm × Calculus.Ty Tm) Tm R where
-  Clause := Empty
-  Meaning o u := Calculus.Typed o.1 u o.2.2
-  check r o u := if Decides.check r o.1 u o.2.2 then .ok else .uncovered
-  sound := by
-    intro r o u h
-    by_cases hc : Decides.check r o.1 u o.2.2 = true
-    · exact Decides.check_sound hc
-    · simp [hc] at h
-  refutes k := nomatch k
-  refuted := by intro _ _ _ k; exact nomatch k
-  Fragment o := Calculus.Typed o.1 o.2.1 o.2.2 ∧ Decides.Covered (R := R) o.1 o.2.1 o.2.2
-  complete := by
-    rintro ⟨Ψ, t, A⟩ ⟨typed, covered⟩ _
-    obtain ⟨u, r, _, h⟩ := Decides.check_complete typed covered
-    exact ⟨u, r, by simp [h]⟩
-  mono := by
-    intro r r' o u le hne
-    by_cases hc : Decides.check r o.1 u o.2.2 = true
-    · simp [hc, Decides.check_mono hc le]
-    · simp [hc] at hne
-
-end Decides
 
 /-! ## The bidirectional checker: the certificate is the annotations -/
 
@@ -96,7 +61,7 @@ def bidiCheck (r : Nat) (o : Context × AnnotatedTerm × Ty) (ann : Annotations)
 
 /-- **The bidirectional checker** (`Obend.Core.Bidirectional.checkAgainst`, bounded by
 `checkWork` as `Obend.Slot.Core4.judge` is). -/
-instance bidirectional : Judge (Context × AnnotatedTerm × Ty) Annotations Nat where
+instance bidirectional : Judge (Context × AnnotatedTerm × Ty) Annotations where
   Clause := CheckRefusal
   Meaning o _ := ∃ c : Checked o.2.1 o.1, c.type = o.2.2
   check := bidiCheck
@@ -105,7 +70,7 @@ instance bidirectional : Judge (Context × AnnotatedTerm × Ty) Annotations Nat 
     simp only [bidiCheck] at h
     split at h
     · obtain ⟨c, hc⟩ := ofExcept_ok h
-      have typed : Obend.Slot.Calculus.Typed Ψ { t with annotations := ann } A :=
+      have typed : Obend.Slot.Core4.Typed Ψ { t with annotations := ann } A :=
         ⟨c, (checkAgainst_sound hc).1⟩
       exact Obend.Slot.Core4.reannotates_typed (t := { t with annotations := ann }) (u := t) ⟨rfl, rfl⟩ typed
     · cases h
@@ -127,6 +92,22 @@ instance bidirectional : Judge (Context × AnnotatedTerm × Ty) Annotations Nat 
     split at hne
     · rename_i h; rw [if_pos h, if_pos (Nat.le_trans h le)]
     · exact absurd rfl hne
+
+/-- **The slot's judge is this judge's check**: `Core4.judge` at a grant accepts a term exactly when
+the bidirectional judge accepts it with its own annotations as the certificate. -/
+theorem judge_iff_check (r : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
+    Obend.Slot.Core4.judge r Ψ t A = true ↔ bidirectional.check r (Ψ, t, A) t.annotations = .ok := by
+  show _ ↔ bidiCheck r (Ψ, t, A) t.annotations = .ok
+  rcases t with ⟨term, ann, asm⟩
+  simp only [Obend.Slot.Core4.judge, bidiCheck]
+  by_cases w : Obend.Slot.Core4.checkWork ⟨term, ann, asm⟩ ≤ r <;>
+    cases h : checkAgainst ⟨term, ann, asm⟩ Ψ A <;> simp [w, h, ofExcept, Except.toBool]
+
+/-- Object extension is accepted by the typing judge at grant 4 (`Core4.extend_filling_admitted`). -/
+theorem extend_filling_decided :
+    bidirectional.check 4 (([] : Context), Obend.Slot.Core4.extendFilling, Obend.Slot.Core4.extendType)
+      Obend.Slot.Core4.extendFilling.annotations = .ok :=
+  (judge_iff_check _ _ _ _).1 Obend.Slot.Core4.extend_filling_admitted
 
 end Bidirectional
 
@@ -173,7 +154,7 @@ theorem lawCheck_judged {k : Nat} {p : LawProblem} {v : Obend.Law.Verdict} (clos
   exact judge_sound closed hi
 
 /-- **The law machine probe**: `ok` is `Admits`; a refusal by the law refutes it. -/
-instance lawProbe : Judge LawProblem Unit Nat where
+instance lawProbe : Judge LawProblem Unit where
   Clause := LawClause
   Meaning p _ := Admits p.law p.old p.new p.req
   check := lawCheck
@@ -243,7 +224,7 @@ def coerceCheck (r : Nat) (o : Assumptions × Ty × Ty) (e : Emitted) : Verdict 
 
 /-- **`coerce`**: the producer is the emitter, the checker re-runs the bidirectional checker on
 what it emitted. -/
-instance coercion : Judge (Assumptions × Ty × Ty) Emitted Nat where
+instance coercion : Judge (Assumptions × Ty × Ty) Emitted where
   Clause := CheckRefusal
   Meaning o e := ∃ c : Checked (Emitted.source o.1 e) [], c.type = e.type o.2.1 o.2.2
   check := coerceCheck
@@ -288,7 +269,7 @@ def PrecedenceList (g : Obend.Spec.C4.Graph) (head : String) (parents : List (Li
     ∀ chain ∈ parents, ∀ p ∈ chain, (g.precedence p).Sublist lin
 
 /-- **C4's validated linearization**: `ok` means the computed list is a precedence list. -/
-instance c4 : Judge (Obend.Spec.C4.Graph × String × List (List String)) Unit Nat where
+instance c4 : Judge (Obend.Spec.C4.Graph × String × List (List String)) Unit where
   Clause := InheritRefusal
   Meaning o _ := ∃ lin, precedence o.1 o.2.1 o.2.2 = .ok lin ∧ PrecedenceList o.1 o.2.1 o.2.2 lin
   check := c4Check
@@ -430,7 +411,7 @@ inductive EnvelopeClause where
 
 /-- **The protocol envelope** over an `Envelope`: decided, so a refusal refutes. The meaning is
 `HasProt`; its consequences are `hasProt_runs`, `hasProt_reach` and `started_obligations`. -/
-def envelope [DecidableEq Tok] [DecidableEq Fact] [DecidableEq Ob] (E : Envelope S Hole A Tok Fact Ob) : Judge (ProtObj S Hole A Tok) Unit Nat where
+def envelope [DecidableEq Tok] [DecidableEq Fact] [DecidableEq Ob] (E : Envelope S Hole A Tok Fact Ob) : Judge (ProtObj S Hole A Tok) Unit where
   Clause := EnvelopeClause
   Meaning o _ := E.Typed o.Δ o.P
   check _ o _ := if checkProt E o.Δ o.P then .ok else .refused .untyped []

@@ -2,7 +2,7 @@ module
 /-
 # Obend.Core.Proofs.Substitution — filling hypotheses keeps a checked term checked
 
-The substitution lemma of the contextual calculus (`Obend.Slot.Calculus`), stated of Core4's own
+The substitution lemma of the contextual calculus (`Obend.Slot.Core4`), stated of Core4's own
 checker. A HOLE is a free de Bruijn hypothesis of an open term; a FILLING is a closed annotated
 term; `msubst σ t` puts the fillings `σ` names in place of the hypotheses they name, in the term by
 `Term.substitute` and in the annotations by `annotationsAt`, which walks the checker's positions

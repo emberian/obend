@@ -11,12 +11,12 @@ open Obend.Core.Proofs.Substitution
 remain their existing meanings; this grant prices one checker invocation in
 `Obend.Elab.Work.checkWork` units: the filling's two nodes plus the two types of the
 annotation the checker reads at its lambda cost four. -/
-def toyBudget (view : Nat) : Budget Nat := ⟨if view = 0 then 1 else 1 + 3⟩
+def toyBudget (view : Nat) : Core4.Budget := ⟨if view = 0 then 1 else 1 + 3⟩
 
 def budgetType : Ty := .arrow .reusable .unrestricted .natural .natural
 
 def budgetSlot (view : Nat) : Slot Member AnnotatedTerm :=
-  Calculus.slotOf (toyBudget view) fuelContext budgetType (fun _ => [.bob])
+  Core4.slotOf (toyBudget view) fuelContext budgetType (fun _ => [.bob])
 
 section BudgetFixtures
 attribute [local irreducible] Obend.Core.Check.sameType
@@ -48,7 +48,7 @@ by name; the combined grant makes it usable. This is a budget tooth, not a
 counterexample to semantic substitution. -/
 theorem budget_tooth :
     (budgetSlot 1).usable (World.holdsAt 1) fuelFilling = true ∧
-    (match Calculus.admit (toyBudget 0) fuelContext budgetType fuelFilling with
+    (match Core4.admit (toyBudget 0) fuelContext budgetType fuelFilling with
       | .error (.uncovered r) => r == 1
       | .ok _ => false) = true := by
   constructor
@@ -64,12 +64,48 @@ theorem budget_tooth :
   · rfl
 
 theorem budget_uncovered :
-    Calculus.admit (toyBudget 0) fuelContext budgetType fuelFilling = .error (.uncovered 1) := rfl
+    Core4.admit (toyBudget 0) fuelContext budgetType fuelFilling = .error (.uncovered 1) := rfl
 
-theorem budget_filling_typed : Calculus.Typed fuelContext fuelFilling budgetType :=
-  (Calculus.slotOf_usable (Tm := AnnotatedTerm) (toyBudget 1) fuelContext budgetType (fun _ => [Member.bob])
+theorem budget_filling_typed : Core4.Typed fuelContext fuelFilling budgetType :=
+  (Core4.slotOf_usable (toyBudget 1) fuelContext budgetType (fun _ => [Member.bob])
     (World.holdsAt 1) fuelFilling budget_tooth.1).1
 
 end BudgetFixtures
+
+/-! ## The integrity-preserving filler on a checker's slot -/
+
+section
+variable {V Fact : Type} [World V Fact]
+open World
+
+/-- A Core4 filling selected by the integrity-preserving filler has semantic typing, independently
+of the budget used to discover its certificate. -/
+theorem slotFiller_typed (budget : Core4.Budget) (Ψ : Context) (A : Ty)
+    (supports : AnnotatedTerm → List Fact) (v : V) (order : List AnnotatedTerm) (t : AnnotatedTerm)
+    (h : (slotFiller : Filler V Fact AnnotatedTerm).fill
+      (Core4.slotOf budget Ψ A supports) v order = .ok t) : Core4.Typed Ψ t A := by
+  obtain ⟨_, hu, _⟩ := select_ok h
+  exact (Core4.slotOf_usable budget Ψ A supports (holdsAt v) t hu).1
+
+/-- When a budgeted slot refuses a candidate whose ordinary supports all hold, its named
+explanation is precisely `uncovered` at the declared grade. This connects admission diagnostics to
+the actual integrity-preserving filler. -/
+theorem slotFiller_uncovered (budget : Core4.Budget) (Ψ : Context) (A : Ty)
+    (supports : AnnotatedTerm → List Fact) (v : V) (order : List AnnotatedTerm) (t : AnnotatedTerm)
+    (w : Refusal Fact AnnotatedTerm)
+    (h : (slotFiller : Filler V Fact AnnotatedTerm).fill
+      (Core4.slotOf budget Ψ A supports) v order = .error w)
+    (member : t ∈ order) (live : ∀ f ∈ supports t, holdsAt v f = true) :
+    Core4.admit budget Ψ A t = .error (.uncovered budget.grade) := by
+  have refused := (select_error h).1 t member
+  have dead : (Core4.slotOf budget Ψ A supports).dead (holdsAt v) t = [] :=
+    (dead_eq_nil_iff _ _ _).2 live
+  unfold Slot.usable at refused
+  rw [dead] at refused
+  have checkFalse : Core4.judge budget.grade Ψ t A = false := by
+    simpa only [Core4.slotOf, List.isEmpty_nil, Bool.and_true] using refused
+  simp [Core4.admit, checkFalse]
+
+end
 
 end Obend.Slot

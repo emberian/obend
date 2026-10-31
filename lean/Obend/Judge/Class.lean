@@ -3,8 +3,8 @@ module
 # Obend.Judge.Class — a judge is a certificate checker over a declared domain
 
 `review/GENERALIZATION-20261031.md` G2, `review/VISION-CLAUDE-20261031.md` §6.1–6.2,
-`astra/ASTRA-VISION-20261031.md` §4.1. `Decides` (`Obend.Slot.Calculus`) generalized from typing to
-every judge: a deterministic `check : R → Obj → Cert → Verdict`, where the verdict is `ok`, a refusal
+`astra/ASTRA-VISION-20261031.md` §4.1. The typing checker's interface generalized to every judge: a
+deterministic `check : Nat → Obj → Cert → Verdict`, where the verdict is `ok`, a refusal
 naming the clause and the path where it applies, or `uncovered` (the grade ran out, which is not
 `false`). The laws are fields:
 
@@ -30,11 +30,8 @@ statement a byte-level acceptance establishes is the one the bytes decode to. A 
 a domain into a format's objects carries `encode_sound`; `Translation.sound` composes it with the
 checker.
 -/
-public import Obend.Core.Graded
-
 @[expose] public section
 namespace Obend
-open Obend.Core
 set_option autoImplicit false
 
 /-- A judge's verdict: accepted, refused by a clause at a path, or not decided within the grade. -/
@@ -64,39 +61,39 @@ theorem map_ne_uncovered {Clause' : Type} {f : Clause → Clause'} {v : Verdict 
 
 end Judge.Verdict
 
-/-- **A judge**: a deterministic certificate checker over objects `Obj`, certificates `Cert` and
-grades `R`, with its laws as fields. -/
-class Judge (Obj Cert R : Type) [Graded R] where
+/-- **A judge**: a deterministic certificate checker over objects `Obj` and certificates `Cert`,
+graded by a natural number (the work or fuel granted), with its laws as fields. -/
+class Judge (Obj Cert : Type) where
   /-- the refusal vocabulary -/
   Clause : Type
   /-- what an accepted certificate establishes of the object -/
   Meaning : Obj → Cert → Prop
   /-- the checker -/
-  check : R → Obj → Cert → Judge.Verdict Clause
-  sound : ∀ {r : R} {o : Obj} {c : Cert}, check r o c = .ok → Meaning o c
+  check : Nat → Obj → Cert → Judge.Verdict Clause
+  sound : ∀ {r : Nat} {o : Obj} {c : Cert}, check r o c = .ok → Meaning o c
   /-- the clauses whose refusal is a refutation, not a failure to prove -/
   refutes : Clause → Bool
-  refuted : ∀ {r : R} {o : Obj} {c : Cert} {k : Clause} {p : List Nat},
+  refuted : ∀ {r : Nat} {o : Obj} {c : Cert} {k : Clause} {p : List Nat},
     check r o c = .refused k p → refutes k = true → ∀ c', ¬ Meaning o c'
   /-- where completeness is claimed -/
   Fragment : Obj → Prop
   complete : ∀ {o : Obj}, Fragment o → (∃ c, Meaning o c) → ∃ c r, check r o c = .ok
-  mono : ∀ {r r' : R} {o : Obj} {c : Cert}, r ≤ r' → check r o c ≠ .uncovered → check r' o c = check r o c
+  mono : ∀ {r r' : Nat} {o : Obj} {c : Cert}, r ≤ r' → check r o c ≠ .uncovered → check r' o c = check r o c
 
 namespace Judge
-variable {Obj Cert R : Type} [Graded R] [J : Judge Obj Cert R]
+variable {Obj Cert : Type} [J : Judge Obj Cert]
 
 /-- An accepted verdict stays accepted at every larger grade. -/
-theorem ok_mono {r r' : R} {o : Obj} {c : Cert} (h : J.check r o c = .ok) (le : r ≤ r') :
+theorem ok_mono {r r' : Nat} {o : Obj} {c : Cert} (h : J.check r o c = .ok) (le : r ≤ r') :
     J.check r' o c = .ok := by
   rw [J.mono le (by rw [h]; exact fun e => by cases e)]; exact h
 
-/-- A judge's acceptance used under a joint budget keeps its meaning (`Graded.lift`). -/
-theorem sound_lift {r s : R} {o : Obj} {c : Cert} (h : J.check r o c = .ok) (le : r ≤ s) : J.Meaning o c :=
+/-- A judge's acceptance used under a joint budget keeps its meaning. -/
+theorem sound_lift {r s : Nat} {o : Obj} {c : Cert} (h : J.check r o c = .ok) (le : r ≤ s) : J.Meaning o c :=
   J.sound (ok_mono h le)
 
 /-- A decided verdict is the verdict at every larger grade. -/
-theorem decided_agree {r r' : R} {o : Obj} {c : Cert} (le : r ≤ r') (h : J.check r o c ≠ .uncovered) :
+theorem decided_agree {r r' : Nat} {o : Obj} {c : Cert} (le : r ≤ r') (h : J.check r o c ≠ .uncovered) :
     J.check r o c = J.check r' o c :=
   (J.mono le h).symm
 
@@ -185,9 +182,7 @@ structure Judge.Format where
   version : String
   Obj : Type
   Cert : Type
-  R : Type
-  [graded : Graded R]
-  [judge : @Judge Obj Cert R graded]
+  [judge : Judge Obj Cert]
   /-- the object's canonical decoder -/
   decodeObj : String → Except String Obj
   /-- the certificate's decoder -/
@@ -197,16 +192,16 @@ structure Judge.Format where
   /-- a planted bad certificate -/
   bad : Obj × Cert
   /-- the grade it is refused at -/
-  badGrade : R
+  badGrade : Nat
   /-- it is refused there, by a clause (and so at every larger grade, `refused_above`) -/
   bad_refused : ∃ k p, judge.check badGrade bad.1 bad.2 = .refused k p
 
 namespace Judge.Format
 
-attribute [instance] Format.graded Format.judge
+attribute [instance] Format.judge
 
 /-- Check bytes: decode the object and the certificate, then judge. -/
-def checkBytes (F : Format) (r : F.R) (obj cert : String) : Verdict (FormatClause F.judge.Clause) :=
+def checkBytes (F : Format) (r : Nat) (obj cert : String) : Verdict (FormatClause F.judge.Clause) :=
   match F.decodeObj obj, F.decodeCert cert with
   | .ok o, .ok c => (F.judge.check r o c).map .judge
   | .error e, _ => .refused (.malformed s!"object: {e}") []
@@ -214,7 +209,7 @@ def checkBytes (F : Format) (r : F.R) (obj cert : String) : Verdict (FormatClaus
 
 /-- **Decoded bytes denote the checked statement**: an acceptance of bytes is an acceptance of the
 statement they decode to, and its meaning holds of exactly that statement. -/
-theorem checkBytes_sound (F : Format) {r : F.R} {obj cert : String} (h : F.checkBytes r obj cert = .ok) :
+theorem checkBytes_sound (F : Format) {r : Nat} {obj cert : String} (h : F.checkBytes r obj cert = .ok) :
     ∃ o c, F.decodeObj obj = .ok o ∧ F.decodeCert cert = .ok c ∧ F.judge.Meaning o c := by
   unfold checkBytes at h
   cases ho : F.decodeObj obj with
@@ -227,14 +222,14 @@ theorem checkBytes_sound (F : Format) {r : F.R} {obj cert : String} (h : F.check
       exact ⟨o, c, rfl, rfl, F.judge.sound (Verdict.map_eq_ok h)⟩
 
 /-- The planted certificate is refused at every grade past the planted one. -/
-theorem refused_above (F : Format) {r : F.R} (le : F.badGrade ≤ r) :
+theorem refused_above (F : Format) {r : Nat} (le : F.badGrade ≤ r) :
     ∃ k p, F.judge.check r F.bad.1 F.bad.2 = .refused k p := by
   obtain ⟨k, p, h⟩ := F.bad_refused
   refine ⟨k, p, ?_⟩
   rw [F.judge.mono le (by rw [h]; exact fun e => by cases e), h]
 
 /-- A format cannot accept everything: its planted certificate is not accepted past its grade. -/
-theorem not_trivial (F : Format) {r : F.R} (le : F.badGrade ≤ r) : F.judge.check r F.bad.1 F.bad.2 ≠ .ok := by
+theorem not_trivial (F : Format) {r : Nat} (le : F.badGrade ≤ r) : F.judge.check r F.bad.1 F.bad.2 ≠ .ok := by
   obtain ⟨k, p, h⟩ := F.refused_above le
   rw [h]; exact fun e => by cases e
 
@@ -242,8 +237,8 @@ end Judge.Format
 
 /-- A judge whose checker accepts everything cannot be registered: no planted certificate of it is
 refused. -/
-theorem Judge.trivial_unregistrable {Obj Cert R : Type} [Graded R] (J : Judge Obj Cert R)
-    (htriv : ∀ r o c, J.check r o c = .ok) (bad : Obj × Cert) (r : R) :
+theorem Judge.trivial_unregistrable {Obj Cert : Type} (J : Judge Obj Cert)
+    (htriv : ∀ r o c, J.check r o c = .ok) (bad : Obj × Cert) (r : Nat) :
     ¬ ∃ k p, J.check r bad.1 bad.2 = .refused k p := by
   rintro ⟨k, p, h⟩; rw [htriv] at h; cases h
 
@@ -255,7 +250,7 @@ structure Judge.Translation (F : Judge.Format) (Domain : Type) (Claim : Domain �
 
 /-- The composition rule: a checked certificate for the encoding establishes the domain's claim. -/
 theorem Judge.Translation.sound {F : Judge.Format} {Domain : Type} {Claim : Domain → Prop}
-    (T : Judge.Translation F Domain Claim) {r : F.R} {d : Domain} {c : F.Cert}
+    (T : Judge.Translation F Domain Claim) {r : Nat} {d : Domain} {c : F.Cert}
     (h : F.judge.check r (T.encode d) c = .ok) : Claim d :=
   T.encode_sound d c (F.judge.sound h)
 

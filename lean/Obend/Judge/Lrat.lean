@@ -27,7 +27,6 @@ public import Obend.Judge.Class
 
 @[expose] public section
 namespace Obend.Judge.Lrat
-open Obend.Core
 set_option autoImplicit false
 
 /-! ## Formulas and their semantics -/
@@ -368,7 +367,7 @@ theorem initial_pos {F : Cnf} {i : Nat} {d : Clause} (h : (initial F).lookup i =
 
 /-! ## The judge -/
 
-instance lratJudge : Judge Cnf Cert Nat where
+instance lratJudge : Judge Cnf Cert where
   Clause := Refusal
   Meaning F _ := Unsat F
   check := check
@@ -498,7 +497,6 @@ def format : Format where
   version := "1"
   Obj := Cnf
   Cert := Cert
-  R := Nat
   decodeObj := parseDimacs
   decodeCert := parseCert
   trust := .compiled
