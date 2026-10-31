@@ -18,3 +18,4 @@ astra/eval/
 astra/select/
 lean/tools/journal/env-*.jsonl
 astra/effectlaws/
+astra/vision/
