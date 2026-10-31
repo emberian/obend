@@ -30,6 +30,7 @@ public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Packet
 public import Obend.Spec.Law
+public import Obend.Spec.LawCompile
 public import Obend.Spec.Syntax
 public import Obend.Spec.Parse
 public import Obend.Spec.Types
@@ -266,6 +267,13 @@ def lower (modules : List SourceModule) (entryModule : Nat) (entryDefinition : S
   discard <| options projections limits mode
   let decoded ← modules.mapM parseModule
   lowerDecoded modules decoded entryModule entryDefinition args projections limits mode
+
+/-- The package's enforced laws as the Law terms a kernel installs on an object whose declared
+state type is `S`: each `law NAME: EXPR` compiled to a closed Core4 law of type `lawTy S`
+(`Obend.Spec.LawCompile.compile`; it admits exactly what `denote` admits and checks at `lawTy S`,
+`Obend.Spec.Proofs.LawCompile`). -/
+def Lowering.lawTerms (l : Lowering) (S : Obend.Core.Ty.Ty) : List (String × Obend.Core.Term.Term) :=
+  LawCompile.compilePackage S l.laws
 
 def Lowering.core (l : Lowering) : Json :=
   Json.mkObj [("schema", toJson "dregg.objective-bend.core.v2"), ("edition", toJson "objective-bend-1"),

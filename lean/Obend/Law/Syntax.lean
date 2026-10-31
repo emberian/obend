@@ -49,11 +49,19 @@ def occasionTy : Ty := .variant occasionRow
 /-- `sum {ok : {}, refused : label}` (LANG-8). -/
 def verdictTy : Ty := .variant (.field "ok" unitTy (.field "refused" .label .emptyRow))
 
+/-- An optional natural: `sum {none : {}, some : nat}`. -/
+def optNatTy : Ty := .variant (.field "none" unitTy (.field "some" .natural .emptyRow))
+
 /-- The request a law judges: the signer (`agent`), the authority it acts under (`principal`), the
-signed window (`notBefore`, `validUntil`) and the occasion. -/
+signed window (`notBefore`, `validUntil`) and the occasion; and the kernel's facts of the act that
+the enforced `law` fragment reads (`Obend.Spec.Law.Facts`): the `subject` whose authority the act
+carries and the `caller` (each absent in a frame that has none), the `height` and the kernel `turn`.
+Fields in label order. -/
 def reqTy : Ty :=
-  .field "agent" .label (.field "notBefore" .natural (.field "occasion" occasionTy
-    (.field "principal" .label (.field "validUntil" .natural .emptyRow))))
+  .field "agent" .label (.field "caller" optNatTy (.field "height" .natural
+    (.field "notBefore" .natural (.field "occasion" occasionTy
+    (.field "principal" .label (.field "subject" optNatTy (.field "turn" .natural
+    (.field "validUntil" .natural .emptyRow))))))))
 
 /-- A reusable, unrestricted arrow: a law may be applied any number of times. -/
 def fnTy (domain codomain : Ty) : Ty := .arrow .reusable .unrestricted domain codomain
@@ -173,10 +181,23 @@ def Admits (law : Term) (old new req : Data) : Prop :=
 def Refuses (law : Term) (old new req : Data) (why : String) : Prop :=
   Evaluates (applyLaw law old new req) (refusedT why)
 
-/-- A request: who signs, under whose authority, in which window, on which occasion. -/
+/-- An optional natural, as data. -/
+def optNat : Option Nat → Data
+  | none => .variant "none" (.record [])
+  | some k => .variant "some" (.natural k)
+
+/-- A request with the kernel's facts: who signs, under whose authority, in which window, on which
+occasion; the subject and caller (if any), the height and the turn. -/
+def requestAt (agent principal : String) (notBefore validUntil : Nat) (occasion : Data)
+    (subject caller : Option Nat) (height turn : Nat) : Data :=
+  .record [("agent", .label agent), ("caller", optNat caller), ("height", .natural height),
+    ("notBefore", .natural notBefore), ("occasion", occasion), ("principal", .label principal),
+    ("subject", optNat subject), ("turn", .natural turn), ("validUntil", .natural validUntil)]
+
+/-- A request: who signs, under whose authority, in which window, on which occasion (no subject,
+no caller, height and turn 0). -/
 def request (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) : Data :=
-  .record [("agent", .label agent), ("notBefore", .natural notBefore), ("occasion", occasion),
-    ("principal", .label principal), ("validUntil", .natural validUntil)]
+  requestAt agent principal notBefore validUntil occasion none none 0 0
 
 /-- The occasions, as data. -/
 def birthO : Data := .variant "birth" (.record [])

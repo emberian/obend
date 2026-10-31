@@ -26,6 +26,7 @@ invariance on 4000 seeded DAGs (compiled). The port is held byte-identical in be
 front end on Mini's own cohorts by `tests/run-obend-source.py` (REPORT-SPEC-20261030.md).
 -/
 public import Obend.Spec.Law
+public import Obend.Spec.LawCompile
 public import Obend.Spec.Syntax
 public import Obend.Spec.Parse
 public import Obend.Spec.Types
