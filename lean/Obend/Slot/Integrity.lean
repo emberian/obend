@@ -1,26 +1,39 @@
 module
 /-
-# Obend.Slot.Integrity — CONTEXTUAL INTEGRITY ∧ REPAIR, over an abstract World
+# Obend.Slot.Integrity — CONTEXTUAL INTEGRITY ∧ TRANSITION, over an abstract World
 
-The top clause of the contextual layer (DESIGN-CTX §2.4, B4 and B4′), stated of a FILLER: the part of
-a system that, at a view, fills a slot from the chooser's order or refuses. The slot's own filler
-(`slotFiller`, `Slot.resolve` without the body) satisfies it over EVERY World, from `resolve_ok`,
-`resolve_error`, `read_blocked_names` and the World's laws (`slotFiller_integrity`): nothing here is
-stated with a premise beyond the `World` class.
+The top clause of the contextual layer (DESIGN-CTX §2.4, B4 and B4′), stated of a FILLER (the part
+of a system that, at a view, fills a slot from the chooser's order or refuses) and of an ADVANCE (the
+transition a runner applies to a STORED selection when the view changes). The slot's own pair
+(`slotFiller`, `slotAdvance`) satisfies it over EVERY World (`slotFiller_integrity`).
 
 B4, CONTEXTUAL INTEGRITY (`Integrity.contextual`): an admitted filling is a committed candidate (in
 the order), typed at the interface (passes the judge), with every support it cites holding on the
 view, and it is the one the chooser's order names (the first usable); a refusal names, for every
 candidate of the order, the coordinate of a justification that did not hold: its dead supports, or
-the judge when none is dead (why-not completeness). B4′, REPAIR (`Integrity.repair`): a justification
-withdrawn stays withdrawn (a candidate citing a cell retired at a view is never filled at any later
-view), and a slot with a usable candidate in the order is fillable now.
+the judge when none is dead (why-not completeness).
+
+REPAIR (`Integrity.repair`: a justification withdrawn stays withdrawn, and a slot with a usable
+candidate is fillable now) is not a second guarantee: it is a corollary of contextual integrity for
+every filler (`repair_of_contextual`; Kimi `review/KIMI-REVIEW-20261030.md` §1, Astra's proof).
+
+B4′, TRANSITION (`Integrity.transition`), the operational property over a stored selection: a stored
+selection that is usable at the new view is kept; an advanced selection is usable at the new view,
+and is either the kept one or the first usable of the order; a refusal happens only when the stored
+selection and every candidate of the order are unusable, and names each candidate's dead supports.
+A stored selection citing a retired cell is never kept at a later view (`transition_retired`). The
+policy is INCUMBENT-FIRST: it differs from re-running `select` (`churn` is refuted), because the
+first-usable choice of a later view is a different choice whenever an earlier candidate came back
+(`reuse_needs_prefix`). Exact reuse of a first-usable choice needs the rejected prefix as evidence
+(`select_prefix`, `select_reuse`).
 
 THE FLOOR, each refuted on the toy World (two members, one grant revoked at height 1):
 `credulousHoles` (judges, ignores supports), `firstCandidate` (ignores both), `blindRefusal` (the
-slot's selection, a refusal that names nothing). The toy also inhabits the non-trivial case: filled by
-candidate 0 at height 0, the stored selection reads blocked by the revoked grant's name at height 1,
-and the slot fills by candidate 1 there (`toy_repair`).
+slot's selection, a refusal that names nothing) fail contextual integrity; `churn` (re-select at
+every view) and `sticky` (keep the stored selection whatever the view) fail the transition. The toy
+also inhabits the non-trivial case: filled by candidate 0 at height 0, the stored selection reads
+blocked by the revoked grant's name at height 1, and the stored selection advances to candidate 1
+there (`toy_repair`, `toy_advance`).
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Slot.World
@@ -65,15 +78,33 @@ def Integrity.contextual (F : Filler V Fact Cand) : Prop :=
     (∀ w, F.fill S v order = .error w → ∀ c ∈ order,
       ∃ d, (c, d) ∈ w ∧ (∀ f ∈ d, f ∈ S.supports c ∧ holdsAt v f = false) ∧ (d = [] → S.judge c = false))
 
-/-- B4′. REPAIR. -/
+/-- REPAIR: a justification withdrawn stays withdrawn, and a usable candidate makes the slot
+fillable now. A corollary of `Integrity.contextual` (`repair_of_contextual`). -/
 def Integrity.repair (F : Filler V Fact Cand) : Prop :=
   ∀ (S : Slot Fact Cand) (order : List Cand),
     (∀ (v v' : V) (c : Cand) (f : Fact), f ∈ S.supports c → pin (Fact := Fact) v (cell f) = none →
       Later (Fact := Fact) v v' → F.fill S v' order ≠ .ok c) ∧
     (∀ (v : V) (c : Cand), c ∈ order → S.usable (holdsAt v) c = true → ∃ c', F.fill S v order = .ok c')
 
-/-- CONTEXTUAL INTEGRITY ∧ REPAIR. -/
-def Integrity (F : Filler V Fact Cand) : Prop := Integrity.contextual F ∧ Integrity.repair F
+/-- How a runner moves a STORED selection (`none`: nothing stored) when the view changes. -/
+structure Advance (V Fact Cand : Type) where
+  advance : Slot Fact Cand → V → List Cand → Option Cand → Except (Refusal Fact Cand) Cand
+
+/-- B4′. TRANSITION, over a stored selection. -/
+def Integrity.transition (A : Advance V Fact Cand) : Prop :=
+  ∀ (S : Slot Fact Cand) (v : V) (order : List Cand) (stored : Option Cand),
+    (∀ c, stored = some c → S.usable (holdsAt v) c = true → A.advance S v order stored = .ok c) ∧
+    (∀ c, A.advance S v order stored = .ok c → S.usable (holdsAt v) c = true ∧
+      (stored = some c ∨ ∃ rest, S.alternatives (holdsAt v) order = c :: rest)) ∧
+    (∀ w, A.advance S v order stored = .error w →
+      (∀ c, stored = some c → S.usable (holdsAt v) c = false) ∧
+      (∀ c ∈ order, S.usable (holdsAt v) c = false) ∧
+      ∀ c ∈ order, ∃ d, (c, d) ∈ w ∧ (∀ f ∈ d, f ∈ S.supports c ∧ holdsAt v f = false) ∧
+        (d = [] → S.judge c = false))
+
+/-- CONTEXTUAL INTEGRITY ∧ TRANSITION. -/
+def Integrity (F : Filler V Fact Cand) (A : Advance V Fact Cand) : Prop :=
+  Integrity.contextual F ∧ Integrity.transition A
 
 theorem select_ok {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand} {c : Cand}
     (h : S.select holds order = .ok c) :
@@ -103,31 +134,136 @@ theorem select_error {S : Slot Fact Cand} {holds : Fact → Bool} {order : List 
       show c ∉ S.alternatives holds order; rw [ha]; simp
     simpa [List.mem_filter, hc] using this
 
-/-- The slot's own filler has CONTEXTUAL INTEGRITY ∧ REPAIR over every World. -/
-theorem slotFiller_integrity : Integrity (slotFiller : Filler V Fact Cand) := by
-  refine ⟨fun S v order => ⟨fun c h => ?_, fun w h c hc => ?_⟩, fun S order => ⟨?_, ?_⟩⟩
+/-- A refusal of `select` names, for every candidate, its dead supports, or the judge. -/
+theorem select_names {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand}
+    {w : Refusal Fact Cand} (h : S.select holds order = .error w) :
+    ∀ c ∈ order, ∃ d, (c, d) ∈ w ∧ (∀ f ∈ d, f ∈ S.supports c ∧ holds f = false) ∧
+      (d = [] → S.judge c = false) := by
+  obtain ⟨hnone, rfl⟩ := select_error h
+  intro c hc
+  refine ⟨S.dead holds c, List.mem_map.2 ⟨c, hc, rfl⟩, fun f hf => (mem_dead_iff S _ c f).1 hf, fun hd => ?_⟩
+  have := hnone c hc
+  unfold Slot.usable at this
+  rw [hd] at this
+  simpa using this
+
+/-- REPAIR is a corollary of CONTEXTUAL INTEGRITY, for every filler. -/
+theorem repair_of_contextual {F : Filler V Fact Cand} (h : Integrity.contextual F) :
+    Integrity.repair F := by
+  intro S order
+  refine ⟨fun v v' c f hf hr hl hfill => ?_, fun v c hc hu => ?_⟩
+  · have live := ((h S v' order).1 c hfill).2.2.1 f hf
+    rw [dead_behind_forever f hr hl] at live
+    cases live
+  · cases answer : F.fill S v order with
+    | ok c' => exact ⟨c', rfl⟩
+    | error w =>
+      obtain ⟨d, -, sound, rejected⟩ := (h S v order).2 w answer c hc
+      have ⟨hj, hall⟩ := (usable_iff S _ c).1 hu
+      have empty : d = [] := List.eq_nil_iff_forall_not_mem.2 fun f hf => by
+        have := hall f (sound f hf).1
+        rw [(sound f hf).2] at this
+        cases this
+      rw [rejected empty] at hj
+      cases hj
+
+/-- The slot's transition of a stored selection: keep it while it is usable, else select. -/
+def Slot.advance (S : Slot Fact Cand) (holds : Fact → Bool) (order : List Cand) :
+    Option Cand → Except (Refusal Fact Cand) Cand
+  | some c => if S.usable holds c then .ok c else S.select holds order
+  | none => S.select holds order
+
+/-- The advance a slot gives. -/
+def slotAdvance : Advance V Fact Cand := ⟨fun S v order stored => S.advance (holdsAt v) order stored⟩
+
+/-- `select` fills whenever some candidate of the order is usable. -/
+theorem select_some {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand} {c : Cand}
+    (hc : c ∈ order) (hu : S.usable holds c = true) : ∃ c', S.select holds order = .ok c' := by
+  have hmem : c ∈ S.alternatives holds order := List.mem_filter.2 ⟨hc, hu⟩
+  unfold Slot.select
+  cases ha : S.alternatives holds order with
+  | nil => rw [ha] at hmem; cases hmem
+  | cons c' rest => exact ⟨c', rfl⟩
+
+/-- The slot's own pair has CONTEXTUAL INTEGRITY ∧ TRANSITION over every World. -/
+theorem slotFiller_integrity :
+    Integrity (slotFiller : Filler V Fact Cand) (slotAdvance : Advance V Fact Cand) := by
+  refine ⟨fun S v order => ⟨fun c h => ?_, fun w h => select_names h⟩,
+    fun S v order stored => ⟨fun c hs hu => ?_, fun c h => ?_, fun w h => ?_⟩⟩
   · obtain ⟨hmem, hu, rest, ha⟩ := select_ok h
     obtain ⟨hj, hholds⟩ := (usable_iff S _ c).1 hu
     exact ⟨hmem, hj, hholds, rest, ha⟩
-  · obtain ⟨hnone, rfl⟩ := select_error h
-    refine ⟨S.dead (holdsAt v) c, List.mem_map.2 ⟨c, hc, rfl⟩, fun f hf => (mem_dead_iff S _ c f).1 hf, fun hd => ?_⟩
-    have := hnone c hc
-    unfold Slot.usable at this
-    rw [hd] at this
-    simpa using this
-  · intro v v' c f hf hr hl h
-    obtain ⟨-, hu, -⟩ := select_ok h
-    have hdead : holdsAt v' f = false := dead_behind_forever f hr hl
-    have := ((usable_iff S _ c).1 hu).2 f hf
-    rw [hdead] at this
-    cases this
-  · intro v c hc hu
-    have hmem : c ∈ S.alternatives (holdsAt v) order := List.mem_filter.2 ⟨hc, hu⟩
-    show ∃ c', S.select (holdsAt v) order = .ok c'
-    unfold Slot.select
-    cases ha : S.alternatives (holdsAt v) order with
-    | nil => rw [ha] at hmem; cases hmem
-    | cons c' rest => exact ⟨c', rfl⟩
+  · subst hs; simp [slotAdvance, Slot.advance, hu]
+  · have fresh : S.select (holdsAt v) order = .ok c → S.usable (holdsAt v) c = true ∧
+        (stored = some c ∨ ∃ rest, S.alternatives (holdsAt v) order = c :: rest) := fun h =>
+      have ⟨_, hu, ha⟩ := select_ok h; ⟨hu, .inr ha⟩
+    cases stored with
+    | none => exact fresh h
+    | some c₀ =>
+      by_cases hu : S.usable (holdsAt v) c₀ = true
+      · simp only [slotAdvance, Slot.advance, hu, ite_true, Except.ok.injEq] at h
+        subst h; exact ⟨hu, .inl rfl⟩
+      · simp only [slotAdvance, Slot.advance, hu] at h; exact fresh h
+  · have hsel : S.select (holdsAt v) order = .error w ∧ ∀ c, stored = some c → S.usable (holdsAt v) c = false := by
+      cases stored with
+      | none => exact ⟨h, fun _ h => by cases h⟩
+      | some c₀ =>
+        by_cases hu : S.usable (holdsAt v) c₀ = true
+        · simp [slotAdvance, Slot.advance, hu] at h
+        · simp only [slotAdvance, Slot.advance, hu] at h
+          exact ⟨h, fun c hc => by cases hc; simpa using hu⟩
+    exact ⟨hsel.2, (select_error hsel.1).1, select_names hsel.1⟩
+
+#tooth slotFiller_integrity by mutation Slot.advance := fun _ _ _ _ => .error []
+
+/-- The slot's filler has REPAIR, as the corollary it is. -/
+theorem slotFiller_repair : Integrity.repair (slotFiller : Filler V Fact Cand) :=
+  repair_of_contextual slotFiller_integrity.1
+
+/-- Under TRANSITION, a stored selection citing a cell retired at `v` is never the advanced
+selection at any later view. -/
+theorem transition_retired {A : Advance V Fact Cand} (hA : Integrity.transition A)
+    (S : Slot Fact Cand) (order : List Cand) (stored : Option Cand) {v v' : V} {c : Cand} {f : Fact}
+    (hf : f ∈ S.supports c) (hr : pin (Fact := Fact) v (cell f) = none) (hl : Later (Fact := Fact) v v') :
+    A.advance S v' order stored ≠ .ok c := by
+  intro h
+  have live := ((usable_iff S _ c).1 ((hA S v' order stored).2.1 c h).1).2 f hf
+  rw [dead_behind_forever f hr hl] at live
+  cases live
+
+/-! ## Exact reuse of a first-usable choice -/
+
+/-- A first-usable choice is certified by its own eligibility and the ineligibility of the
+candidates before it. -/
+theorem select_prefix {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand} {c : Cand}
+    (h : S.select holds order = .ok c) :
+    ∃ pre post, order = pre ++ c :: post ∧ S.usable holds c = true ∧ ∀ c' ∈ pre, S.usable holds c' = false := by
+  induction order with
+  | nil => simp [Slot.select, Slot.alternatives] at h
+  | cons x xs ih =>
+    by_cases hx : S.usable holds x = true
+    · simp [Slot.select, Slot.alternatives, hx] at h
+      subst h; exact ⟨[], xs, rfl, hx, by simp⟩
+    · have h' : S.select holds xs = .ok c := by
+        simp only [Slot.select, Slot.alternatives, List.filter_cons, hx] at h ⊢
+        split at h <;> simp_all
+      obtain ⟨pre, post, rfl, hc, hpre⟩ := ih h'
+      exact ⟨x :: pre, post, rfl, hc, fun c' hc' => by
+        rcases List.mem_cons.1 hc' with rfl | hc'
+        · simpa using hx
+        · exact hpre c' hc'⟩
+
+/-- Replaying a first-usable choice at another view: the same choice when it is still usable and
+the rejected prefix is still rejected. -/
+theorem select_reuse {S : Slot Fact Cand} {holds : Fact → Bool} {pre post : List Cand} {c : Cand}
+    (hc : S.usable holds c = true) (hpre : ∀ c' ∈ pre, S.usable holds c' = false) :
+    S.select holds (pre ++ c :: post) = .ok c := by
+  unfold Slot.select Slot.alternatives
+  rw [List.filter_append, List.filter_eq_nil_iff.2 fun c' h => by simp [hpre c' h],
+    List.filter_cons_of_pos hc]
+  rfl
+
+#tooth select_reuse by mutation Slot.alternatives := fun _ _ _ => []
 
 /-- A calculus filling selected by the integrity-preserving filler has semantic
 typing, independently of the budget used to discover its certificate. -/
@@ -179,6 +315,15 @@ def blindRefusal : Filler V Fact Cand :=
     | c :: _ => .ok c
     | [] => .error []⟩
 
+/-- Re-selects at every view: forgets the stored selection. -/
+def churn : Advance V Fact Cand := ⟨fun S v order _ => S.select (holdsAt v) order⟩
+
+/-- Keeps the stored selection whatever the view. -/
+def sticky : Advance V Fact Cand :=
+  ⟨fun S v order stored => match stored with
+    | some c => .ok c
+    | none => S.select (holdsAt v) order⟩
+
 end
 
 /-! ## The toy World: two members, one grant revoked -/
@@ -229,40 +374,85 @@ theorem toy_repair :
 
 #tooth toy_repair by mutation toyOrder := []
 
+/-- The same, as transitions of the stored selection: Alice's selection is kept at height 0, moves to
+Bob at height 1, and Bob's is kept at height 0 although Alice comes first in the order. -/
+theorem toy_advance :
+    slotAdvance.advance toySlot 0 toyOrder (some .alice) = .ok .alice ∧
+    slotAdvance.advance toySlot 1 toyOrder (some .alice) = .ok .bob ∧
+    slotAdvance.advance toySlot 0 toyOrder (some .bob) = .ok .bob :=
+  ⟨rfl, rfl, rfl⟩
+
+#tooth toy_advance by mutation toyOrder := []
+
 theorem toy_alice_dead : holdsAt (V := Nat) 1 Member.alice = false := rfl
 
 /-- FLOOR. The credulous filler admits Alice's candidate at height 1, where her grant is retired. -/
-theorem not_integrity_credulousHoles : ¬ Integrity (credulousHoles : Filler Nat Member Member) := by
+theorem not_integrity_credulousHoles :
+    ¬ Integrity.contextual (credulousHoles : Filler Nat Member Member) := by
   intro h
-  have := ((h.1 toySlot 1 toyOrder).1 .alice rfl).2.2.1 .alice (by simp [toySlot])
+  have := ((h toySlot 1 toyOrder).1 .alice rfl).2.2.1 .alice (by simp [toySlot])
   rw [toy_alice_dead] at this
   cases this
 
-#tooth not_integrity_credulousHoles by mutation Integrity := fun {_ _ _} [_] _ => True
+#tooth not_integrity_credulousHoles by mutation Integrity.contextual := fun {_ _ _} [_] _ => True
 
 /-- FLOOR. The first-candidate filler admits Alice's candidate at height 1 too. -/
-theorem not_integrity_firstCandidate : ¬ Integrity (firstCandidate : Filler Nat Member Member) := by
+theorem not_integrity_firstCandidate :
+    ¬ Integrity.contextual (firstCandidate : Filler Nat Member Member) := by
   intro h
-  have := ((h.1 toySlot 1 toyOrder).1 .alice rfl).2.2.1 .alice (by simp [toySlot])
+  have := ((h toySlot 1 toyOrder).1 .alice rfl).2.2.1 .alice (by simp [toySlot])
   rw [toy_alice_dead] at this
   cases this
 
-#tooth not_integrity_firstCandidate by mutation Integrity := fun {_ _ _} [_] _ => True
+#tooth not_integrity_firstCandidate by mutation Integrity.contextual := fun {_ _ _} [_] _ => True
 
 /-- FLOOR. The blind refusal refuses Alice alone at height 1 with no coordinate: nothing names her
 dead grant. -/
-theorem not_integrity_blindRefusal : ¬ Integrity (blindRefusal : Filler Nat Member Member) := by
+theorem not_integrity_blindRefusal :
+    ¬ Integrity.contextual (blindRefusal : Filler Nat Member Member) := by
   intro h
-  obtain ⟨d, hd, -⟩ := (h.1 toySlot 1 [.alice]).2 [] rfl .alice (List.mem_singleton.2 rfl)
+  obtain ⟨d, hd, -⟩ := (h toySlot 1 [.alice]).2 [] rfl .alice (List.mem_singleton.2 rfl)
   cases hd
 
 #tooth not_integrity_blindRefusal by mutation blindRefusal := slotFiller
 
-/-- The slot's filler has integrity on the toy, where the non-trivial case happens. -/
-theorem toy_integrity : Integrity (slotFiller : Filler Nat Member Member) := slotFiller_integrity
+/-- FLOOR. Re-selecting at every view drops Bob's stored selection at height 0, where it is usable,
+for Alice, who comes first. -/
+theorem not_transition_churn : ¬ Integrity.transition (churn : Advance Nat Member Member) := by
+  intro h
+  have := (h toySlot 0 toyOrder (some .bob)).1 .bob rfl rfl
+  cases this
 
-#assert_axioms slotFiller_uncovered slotFiller_typed resolve_eq_select select_ok select_error slotFiller_integrity toy_repair toy_alice_dead
-  not_integrity_credulousHoles not_integrity_firstCandidate not_integrity_blindRefusal toy_integrity
+#tooth not_transition_churn by mutation churn := slotAdvance
+
+/-- FLOOR. Keeping the stored selection keeps Alice's at height 1, where her grant is retired. -/
+theorem not_transition_sticky : ¬ Integrity.transition (sticky : Advance Nat Member Member) := by
+  intro h
+  have := ((h toySlot 1 toyOrder (some .alice)).2.1 .alice rfl).1
+  cases this
+
+#tooth not_transition_sticky by mutation sticky := slotAdvance
+
+/-- Astra's countermodel to replay without the prefix: candidate 0 cites `early`, candidate 1 cites
+`chosen`. With only `chosen` live the slot selects 1; once `early` is live too it selects 0, though
+1 is still usable and its supports are unchanged. -/
+def reuseSlot : Slot Bool Bool := ⟨fun c => [c], fun _ => true⟩
+
+theorem reuse_needs_prefix :
+    reuseSlot.select (fun f => f) [false, true] = .ok true ∧
+    reuseSlot.usable (fun _ => true) true = true ∧
+    reuseSlot.select (fun _ => true) [false, true] = .ok false :=
+  ⟨rfl, rfl, rfl⟩
+
+/-- The slot's pair has integrity on the toy, where the non-trivial case happens. -/
+theorem toy_integrity : Integrity (slotFiller : Filler Nat Member Member) slotAdvance :=
+  slotFiller_integrity
+
+#assert_axioms slotFiller_uncovered slotFiller_typed resolve_eq_select select_ok select_error select_names
+  repair_of_contextual select_some slotFiller_integrity slotFiller_repair transition_retired select_prefix
+  select_reuse toy_repair toy_advance toy_alice_dead not_integrity_credulousHoles
+  not_integrity_firstCandidate not_integrity_blindRefusal not_transition_churn not_transition_sticky
+  reuse_needs_prefix toy_integrity
 
 end Obend.Slot
 end
