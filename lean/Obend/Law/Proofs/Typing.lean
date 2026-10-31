@@ -134,7 +134,9 @@ public theorem chk_inject {ctx : Context} {tag : String} {payload : Term} {T row
   intro path
   obtain ⟨a, ha⟩ := h (path ++ [0])
   simp only [elaborate, introduce, noAnn]
-  have hw : representativeHead {} noAnn path T = .variant row := hT
+  have hw : Obend.Core.Bidirectional.injectionHead {} noAnn path T = .variant row := by
+    have head : representativeHead {} noAnn path T = .variant row := hT
+    simp [Obend.Core.Bidirectional.injectionHead, head]
   have hl : lookupV [] [] row tag = some P := by rw [lookupV_empty, hP]
   split
   · rename_i row' hs
