@@ -19,6 +19,7 @@ difference from Mini: a machine `diagnostic` is `reprStr` of the outcome, so it 
 public import Lean
 public import Obend.Core.Check
 public import Obend.Core.Packet
+public import Obend.Elab.Gate
 public import Obend.Core.Machine
 public import Obend.Core.MachineFast
 public import Obend.Core.Data
@@ -118,8 +119,9 @@ def preview (typed limits : Json) (responsesJson : Json := Json.arr #[]) : Excep
   let ticks ← natural limits "ticks"
   let responses ← (← responsesJson.getArr?).toList.mapM (decodeData 64)
   if responses.length > 64 then throw "preview response capacity refused"
-  let some checked := check packet.source packet.context packet.fuel
-    | throw (refusalReason packet)
+  let .ok admitted := Obend.Elab.Gate.admit packet
+    | throw (Obend.Elab.Gate.refusalReason packet)
+  let checked := admitted.checked
   let response? : Option Ty := match checked.type with
     | .computation _ response _ => some response
     | _ => none

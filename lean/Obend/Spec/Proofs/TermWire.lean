@@ -299,16 +299,20 @@ theorem _root_.Obend.Spec.FrontEnd.Accepted.packetTerm {l : Lowering} (a : Accep
   rw [rendered] at read
   exact (Except.ok.inj read).symm
 
-/-- The checked source IS the decoded packet's source. -/
-theorem _root_.Obend.Spec.FrontEnd.Accepted.source_eq_packet {l : Lowering} (a : Accepted l) : a.source = a.packet.source := by
-  rw [a.sourceExact, ← a.packetTerm]
+/-- The checked source is the decoded packet's source under the gate's prepared annotations. -/
+theorem _root_.Obend.Spec.FrontEnd.Accepted.source_eq_packet {l : Lowering} (a : Accepted l) :
+    a.source = { a.packet.source with annotations := a.admitted.annotations } := by
+  have term := a.packetTerm
+  rw [a.sourceExact]
+  simp only [term]
 
-/-- The checker accepted, closed, the decoded packet of this lowering, whose term is the
+/-- The gate admitted, closed, the decoded packet of this lowering, whose term is the
 lowering's own erasure. -/
 theorem _root_.Obend.Spec.FrontEnd.Accepted.sound {l : Lowering} (a : Accepted l) :
     l.term.erase = .ok a.erased ∧ decodePacket l.packet = .ok a.packet ∧
-      a.packet.source.term = a.erased ∧ check a.source [] a.packet.fuel = some a.typed :=
-  ⟨a.erasure, a.decoded, a.packetTerm, a.checkedExact⟩
+      a.packet.source.term = a.erased ∧
+      Obend.Elab.Gate.admitSource { a.packet.source with term := a.erased } [] a.packet.fuel = .ok a.admitted :=
+  ⟨a.erasure, a.decoded, a.packetTerm, a.admittedExact⟩
 
 #assert_axioms getObjVal_mkObj
 #assert_axioms decode_json

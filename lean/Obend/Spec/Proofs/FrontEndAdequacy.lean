@@ -50,8 +50,8 @@ theorem accepted_typed (l : Lowering) (a : Accepted l) :
 theorem accepted_never_refused (l : Lowering) (a : Accepted l) (limits : Limits) (ticks : Nat)
     (reason : Refusal) (retained : State) :
     runBounded limits ticks (initial a.erased) ≠ .refused reason retained := by
-  have := Obend.Core.Proofs.Preservation.check_runBounded_no_refusal
-    a.source a.packet.fuel a.typed a.checkedExact limits ticks reason retained
+  have := Obend.Core.Proofs.Preservation.checked_runBounded_no_refusal
+    a.source a.typed limits ticks reason retained
   have term : a.source.erase = a.erased := by rw [a.sourceExact]; rfl
   rwa [term] at this
 

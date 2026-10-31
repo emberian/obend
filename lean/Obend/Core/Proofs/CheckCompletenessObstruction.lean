@@ -233,7 +233,7 @@ local macro "obstruction_check" : tactic => `(tactic|
     Bidirectional.checkAt, Bidirectional.synthAt, Bidirectional.elaborate,
     Bidirectional.checkArms, Bidirectional.introduce, Bidirectional.finish,
     Bidirectional.ascribe, Bidirectional.checkedSynth, Bidirectional.need,
-    Bidirectional.representativeHead, Bidirectional.whnf,
+    Bidirectional.representativeHead, Bidirectional.injectionHead, Bidirectional.whnf,
     Assumptions.chase, Assumptions.unfoldHead, sameType_refl,
     naturalAlias_agrees, naturalAlias_agrees_reverse,
     unannotatedConstant, unannotatedConstantChecked, naturalAnnotation,

@@ -132,6 +132,13 @@ public theorem check_runBounded_no_refusal (source : AnnotatedTerm) (typeFuel : 
     runBounded limits ticks (initial source.erase) ≠ .refused reason retained := by
   exact typed_runBounded_no_refusal (checked_initial_state source checked) limits ticks reason retained
 
+/-- Any closed `Checked` certificate, whichever route produced it (the front end's gate
+produces one from `Bidirectional.checkAgainst`), excludes bounded-executor refusals. -/
+public theorem checked_runBounded_no_refusal (source : AnnotatedTerm) (checked : Checked source [])
+    (limits : Limits) (ticks : Nat) (reason : Refusal) (retained : State) :
+    runBounded limits ticks (initial source.erase) ≠ .refused reason retained :=
+  typed_runBounded_no_refusal (checked_initial_state source checked) limits ticks reason retained
+
 /-- The actual checker token excludes all three internal-reference refusals
 through arbitrary raw-machine reachability. The stronger all-refusal theorem
 above additionally covers semantic operands. Blackholes and bounds may suspend. -/
@@ -149,6 +156,7 @@ theorem checked_reachable_no_internal_refusal (source : AnnotatedTerm)
   typed_fix_preserved typed_record_preserved typed_field_preserved typed_extend_preserved
   typed_stepRaw_preserved checked_reachable_typed checked_reachable_no_refusal
   checked_reachable_no_wrong_value_or_missing_field typed_runBounded_no_refusal
+  checked_runBounded_no_refusal
   check_runBounded_no_refusal typed_inject_preserved typed_case_preserved typed_ifBool_preserved
   arms_typing_find value_variant_fields typed_yield_quiescent typed_resume_preserved
   typed_perform_preserved

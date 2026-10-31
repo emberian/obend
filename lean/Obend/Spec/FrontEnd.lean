@@ -9,8 +9,9 @@ declaration (`Obend.Spec.Elaborate`), apply result projections, and render the c
 that the checker reads.
 
 `accept` closes the loop on the SAME value: it decodes the packet the front end just rendered with
-the checker's own decoder (`Obend.Core.Packet.decodePacket`) and runs the proof-producing checker
-(`Obend.Core.Check.check`) on it. That the decoded term IS the erasure of the elaborator's annotated
+the checker's own decoder (`Obend.Core.Packet.decodePacket`) and runs the gate on it
+(`Obend.Elab.Gate.admit`: executable annotation preparation with the packet's annotations as hints,
+then the proof-producing bidirectional checker `Obend.Core.Bidirectional.checkAgainst`). That the decoded term IS the erasure of the elaborator's annotated
 term is a theorem (`Obend.Spec.Proofs.TermWire.decode_json`, applied to the `shallow` bound `accept`
 records as `Accepted.packetTerm`), not a run-time comparison: `accept` refuses only a term nested
 deeper than the decoder's capacity. An `Accepted` value therefore carries
@@ -37,6 +38,7 @@ public import Obend.Spec.Types
 public import Obend.Spec.Annotated
 public import Obend.Spec.Elaborate
 public import Obend.Spec.Sha256
+public import Obend.Elab.Gate
 @[expose] public section
 namespace Obend.Spec.FrontEnd
 open Lean (Json toJson)
@@ -311,11 +313,15 @@ structure Accepted (l : Lowering) where
   packet : DecodedPacket
   decoded : decodePacket l.packet = .ok packet
   closed : packet.context = []
-  /-- The checked source: the packet's annotations on the elaborator's erased term. -/
+  /-- The gate's verdict on the decoded packet: preparation, with the packet's annotations as
+  hints, then `Bidirectional.checkAgainst` (`Obend.Elab.Gate.admit`). -/
+  admitted : Obend.Elab.Gate.Admitted { packet.source with term := erased } [] packet.fuel
+  admittedExact : Obend.Elab.Gate.admitSource { packet.source with term := erased } [] packet.fuel = .ok admitted
+  /-- The checked source: the prepared annotations and the packet's assumptions on the
+  elaborator's erased term. -/
   source : Obend.Core.Check.AnnotatedTerm
-  sourceExact : source = { packet.source with term := erased }
+  sourceExact : source = { packet.source with term := erased, annotations := admitted.annotations }
   typed : Checked source []
-  checkedExact : check source [] packet.fuel = some typed
 
 def accept (l : Lowering) : Except Diagnostic (Accepted l) := do
   match erasure : l.term.erase with
@@ -330,11 +336,13 @@ def accept (l : Lowering) : Except Diagnostic (Accepted l) := do
           throw { stage := "objective-source-type-proposal", message := "typed packet does not decode: " ++ e }
         | .ok packet =>
           if closed : packet.context = [] then
-            let source := { packet.source with term := erased }
-            match typed : check source [] packet.fuel with
-            | some checked =>
-              pure ⟨erased, erasure, proposal, proposed, shallow, packet, decoded, closed, source, rfl, checked, typed⟩
-            | none => throw { stage := "objective-typed-check", message := "the checker refused the front end's typed packet" }
+            match admittedExact : Obend.Elab.Gate.admitSource { packet.source with term := erased } [] packet.fuel with
+            | .ok admitted =>
+              let source := { packet.source with term := erased, annotations := admitted.annotations }
+              let typed : Checked source [] := admitted.checked
+              pure ⟨erased, erasure, proposal, proposed, shallow, packet, decoded, closed, admitted, admittedExact,
+                source, rfl, typed⟩
+            | .error _ => throw { stage := "objective-typed-check", message := "the checker refused the front end's typed packet" }
           else throw (elaborationRefusal "typed packet context must be closed")
       else throw (elaborationRefusal "core term nesting exceeds the checker's decoding capacity")
 

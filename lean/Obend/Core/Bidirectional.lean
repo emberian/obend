@@ -11,7 +11,7 @@ synthesize one branch and check the rest against it). Usage vectors are synthesi
 bottom-up exactly as the relation computes them.
 
 Representative annotations are used in both modes. In synthesis: a lambda's (`LambdaAnnotation`), an
-injection's (its codomain is the sum), a `perform`'s (plan and response), a `done`'s
+injection's (its codomain is the sum, or an alias of it, `injectionHead`), a `perform`'s (plan and response), a `done`'s
 (plan and response), and, anywhere else, an ascription (its codomain): an
 introduction form checks against it, an elimination form takes it when it agrees
 with what was synthesized and otherwise keeps its own type. An `extend` takes its
@@ -123,6 +123,25 @@ theorem representativeHead_sameType (assumptions : Assumptions) (annotations : A
     (path : List Nat) (type : Ty) :
     sameType assumptions (representativeHead assumptions annotations path type) type = true :=
   sameType_symm (sameType_representativeHead assumptions annotations path type)
+
+/-- The sum an injection is typed at. A local annotation selects its raw representative
+when that is a sum; an annotation naming the sum through an alias (the front end's
+convention for a recursive sum) is unfolded to its weak head, and the injection is then
+converted back to the alias, so the synthesized type stays the name the annotation gave. -/
+def injectionHead (assumptions : Assumptions) (annotations : Annotations)
+    (path : List Nat) (type : Ty) : Ty :=
+  match representativeHead assumptions annotations path type with
+  | .variant row => .variant row
+  | other => whnf assumptions other
+
+theorem injectionHead_sameType (assumptions : Assumptions) (annotations : Annotations)
+    (path : List Nat) (type : Ty) :
+    sameType assumptions (injectionHead assumptions annotations path type) type = true := by
+  unfold injectionHead
+  split
+  · rename_i row shape
+    rw [← shape]; exact representativeHead_sameType assumptions annotations path type
+  · exact sameType_trans (whnf_sameType assumptions _) (representativeHead_sameType assumptions annotations path type)
 
 /-- The first entry of a label in a row's explicit fields. -/
 def rowMember : Ty → String → Option Ty
@@ -352,7 +371,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
     | _ => throw (.shapeMismatch (path ++ [0]) "fixable specification" code.type)
   | .inject tag payload, mode =>
     introduce annotations path (fun expected =>
-      match shape : representativeHead assumptions annotations path expected with
+      match shape : injectionHead assumptions annotations path expected with
       | .variant row =>
         match found : lookupV assumptions.bounds [] row tag with
         | some payloadType => do
@@ -361,7 +380,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
           pure ⟨value.uses, .conversion
             (by obtain ⟨fuel, h⟩ := (lookupV_iff _ _ _ _).1 found
                 exact .inject value.derivation h (by simpa using hp))
-            (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
+            (shape ▸ injectionHead_sameType assumptions annotations path expected)⟩
         | none => throw (.unknownLabel path tag row)
       | _ => throw (.shapeMismatch path "sum" expected))
       (throw (.missingAnnotation path)) mode
@@ -728,7 +747,7 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
     cases accepted; rfl
 
 #assert_axioms sameType_whnf whnf_sameType sameType_representativeHead
-  representativeHead_sameType checkAgainst_sound
+  representativeHead_sameType injectionHead_sameType checkAgainst_sound
 
 end Obend.Core.Bidirectional
 

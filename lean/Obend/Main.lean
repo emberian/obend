@@ -33,6 +33,7 @@ Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-ben
         Exit 0 on finished, 3 otherwise, 2 on refusal.
 -/
 public import Obend.Core.Packet
+public import Obend.Elab.Gate
 public import Obend.Core.Machine
 public import Obend.Core.MachineFast
 public import Obend.Spec.Capture
@@ -92,9 +93,10 @@ def runPacket (path : String) (options : RunOptions) : IO UInt32 := do
     if packet.context ≠ [] then
       refusePacket "closed" "run needs a closed program: the packet's context is not empty"
     else
-      match Check.check packet.source packet.context packet.fuel with
-      | none => refusePacket "objective-source-type-check" (Packet.refusalReason packet)
-      | some checked =>
+      match Obend.Elab.Gate.admit packet with
+      | .error _ => refusePacket "objective-source-type-check" (Obend.Elab.Gate.refusalReason packet)
+      | .ok admitted =>
+        let checked := admitted.checked
         let limits : Machine.Limits := ⟨options.heap, options.stack⟩
         let outcome := Machine.runBounded limits options.ticks (Machine.initial packet.source.term)
         let (status, detail) : String × List (String × Json) :=
@@ -317,7 +319,7 @@ public def main (args : List String) : IO UInt32 :=
     elaborateCommand capture prefix_ a projections limits mode
   | ["preview", request, dir] => previewCommand request dir
   | ["batch", jobs, out] => batchCommand jobs out
-  | ["check-core", path] => Packet.checkPacketFile path
+  | ["check-core", path] => Obend.Elab.Gate.checkPacketFile path
   | "run-core" :: path :: rest =>
     match parseOptions rest {} with
     | .ok options => runPacket path options

@@ -921,6 +921,8 @@ public theorem completes_inject {assumptions : Assumptions} {context : Context}
   have root := realizes.root
   have rawHead (type : Ty) : representativeHead assumptions annotations path type = type := by
     simp [representativeHead, root]
+  have injHead : injectionHead assumptions annotations path (.variant row) = .variant row := by
+    simp [injectionHead, rawHead]
   have child : Realizes annotations (path ++ [0]) payloadTree := by
     simpa [AnnotationTree.child] using realizes.child 0
   obtain ⟨value, accepted, sameUses⟩ :=
@@ -937,7 +939,7 @@ public theorem completes_inject {assumptions : Assumptions} {context : Context}
     split
     · rename_i disclosed actual
       have identified : disclosed = row := by
-        simpa only [rawHead, Ty.variant.injEq] using actual.symm
+        simpa only [injHead, Ty.variant.injEq] using actual.symm
       subst disclosed
       split
       · rename_i member actual
@@ -949,7 +951,7 @@ public theorem completes_inject {assumptions : Assumptions} {context : Context}
         rw [lookup] at absent
         contradiction
     · rename_i absent
-      exact (absent row (rawHead (.variant row))).elim
+      exact (absent row injHead).elim
   · intro expected
     change elaborate assumptions annotations context path (.inject tag payload) (.check expected) = _
     rw [elaborate]
@@ -957,7 +959,7 @@ public theorem completes_inject {assumptions : Assumptions} {context : Context}
     split
     · rename_i disclosed actual
       have identified : disclosed = row := by
-        simpa only [rawHead, Ty.variant.injEq] using actual.symm
+        simpa only [injHead, Ty.variant.injEq] using actual.symm
       subst disclosed
       split
       · rename_i member actual
@@ -969,7 +971,7 @@ public theorem completes_inject {assumptions : Assumptions} {context : Context}
         rw [lookup] at absent
         contradiction
     · rename_i absent
-      exact (absent row (rawHead (.variant row))).elim
+      exact (absent row injHead).elim
   · exact sameType_refl _ _
   · exact sameUses
 
