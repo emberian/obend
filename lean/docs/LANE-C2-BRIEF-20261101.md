@@ -14,10 +14,7 @@ anonymous records stay `⊗`-introduced, and `get` stays the `&`-style eliminato
 (2) The stated aggregate contract: how a resourceful aggregate may be dropped, transferred, split and
 returned, and what a terminal machine state owes, as theorems over `Step` and the machine, not prose.
 (3) Transfer across a generated-code boundary and closure capture tested as teeth (Astra's list:
-returning a resource, nesting it, matching it, capture, crossing a quotation/import). (4) The
-quantity-indexed  revisited: whether unrestricted should stay max (term-only counts) is
-settled with a theorem about what the count may be read as (all-path usage, never demand or cost).
-(5)  of the quote orientation: the usage-composed contextual substitution for , so a
-splice cannot launder a once-resource, with its tooth. Cohorts unchanged or deviations recorded.
+returning a resource, nesting it, matching it, capture, crossing a quotation/import). (4) The quantity-indexed `joinUses` revisited: whether unrestricted should stay max (term-only counts) is settled with a theorem about what the count may be read as (all-path usage, never demand or cost).
+(5) T7 of the quote orientation (`review/QUOTE-ORIENTATION-20261101.md` §4): the usage-composed contextual substitution for `splice`, so a splice cannot launder a once-resource, with its tooth. Cohorts unchanged or deviations recorded.
 
 Build on the box per lean/docs/BUILD-ON-BB2.md (hbox `~/obend/repo` user `hbox` preferred, dregg-build2 `bb2` user `build` otherwise; read ~/swarm/MACHINES.md and RULES.md first). Tier 1 green is the bar for pushing `dev` from the Mac (`--no-verify` when the box built the identical commit); run tier 2 on the box and report it. Lean v4.35.0; every file a `module`; the census is the only axiom check; named-file commits on `dev`, `git -c commit.gpgsign=false commit -F -`, trailer `Co-Authored-By: Claude Opus <noreply@anthropic.com>`, rebase before each push; three other lanes are live, keep theirs on conflicts outside your files. No sorry, no axiom; every former theorem kept or an instance, named in the report `lean/docs/REPORT-<LANE>-20261101.md`. Ember: "Never kill by pattern. No `pkill -f <anything>`, no `pkill -x <bare word>`, no `killall`, no `kill -u`. A process you started is stopped by the PID in its PID file, and only that. Every detached job writes one (`nohup ... & echo $! > job.pid`). No PID file, no kill: tell me instead." When a disk is low: stop writing to it, tell Ember, wait. Reply with the commit range, what is proved, and the one decision for Ember.
