@@ -24,6 +24,10 @@ accepted history across replanning, revocation and lost replies.
   principals in a chooser office, decision revisions, tenure across an office change, the presets
   first-usable / incumbent-first / chooser-required with their choice laws, honest
   `nothingAdmissible` with exact diagnostics); `Obend.Run.ControlExample`, its fixtures.
+- `Obend.Run.Shared`, `Obend.Run.Proofs.Shared`: any number of controlled runners over one World through a
+  ledger with an atomic commit boundary; each runner's log `Legal` by projection, grants exclusive,
+  `OnceSpent` globally, the loser's refusal naming the winner and epoch; `Obend.Run.SharedExample`, two
+  buyers and one capability.
 - `Obend.Run.Negotiation`: the stranger's example (revocation, a slot's replan, a lost reply), the
   fixture `interpret` delivers and the runner refuses, and the durable-spending ticket.
 -/
@@ -40,3 +44,6 @@ public import Obend.Run.Proofs.Adapter
 public import Obend.Run.Control
 public import Obend.Run.Proofs.Control
 public import Obend.Run.ControlExample
+public import Obend.Run.Shared
+public import Obend.Run.Proofs.Shared
+public import Obend.Run.SharedExample

@@ -194,8 +194,11 @@ import Obend.Run.Proofs.Adapter
 import Obend.Run.Proofs.Control
 import Obend.Run.Proofs.Core4
 import Obend.Run.Proofs.Interpret
+import Obend.Run.Proofs.Shared
 import Obend.Run.Proofs.Invariant
 import Obend.Run.Runner
+import Obend.Run.Shared
+import Obend.Run.SharedExample
 import Obend.Run.Spec
 import Obend.Slot
 import Obend.Slot.Budget
