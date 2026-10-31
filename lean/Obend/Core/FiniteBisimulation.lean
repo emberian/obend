@@ -357,9 +357,46 @@ theorem visited_length_le {n : Nat} (visited : List (Pair n)) (distinct : visite
     (fun pair _ => mem_allPairs pair.1 pair.2)
   simpa only [allPairs_length] using bound
 
+/-- The longest successor list of `g`, by structural recursion over the nodes so the kernel
+evaluates it: the worklist's measure scales the unvisited pairs by it. -/
+def successorBound {Label : Type} {n : Nat} (g : Graph Label n) : Nat :=
+  go n (Nat.le_refl n)
+where
+  go : (k : Nat) → k ≤ n → Nat
+    | 0, _ => 0
+    | k+1, bound => max (g.successors ⟨k,bound⟩).length (go k (Nat.le_of_succ_le bound))
+
+theorem successors_length_le {Label : Type} {n : Nat} (g : Graph Label n) (x : Fin n) :
+    (g.successors x).length ≤ successorBound g := by
+  have below : ∀ k (bound : k ≤ n), ∀ i (lt : i < k),
+      (g.successors ⟨i,Nat.lt_of_lt_of_le lt bound⟩).length ≤ successorBound.go g k bound := by
+    intro k
+    induction k with
+    | zero => intro _ i lt; exact absurd lt (Nat.not_lt_zero i)
+    | succ k ih =>
+      intro bound i lt
+      simp only [successorBound.go]
+      rcases Nat.lt_succ_iff_lt_or_eq.mp lt with inside | rfl
+      · exact Nat.le_trans (ih (Nat.le_of_succ_le bound) i inside) (Nat.le_max_right _ _)
+      · exact Nat.le_max_left _ _
+  exact below n (Nat.le_refl n) x.val x.isLt
+
+/-- The worklist's step decreases `(n * n - visited) * (bound + 1) + pending`: a fresh pair adds
+one visited pair and at most `bound` pending ones. -/
+theorem worklist_advance_lt {total visited bound queued rest : Nat} (room : visited + 1 ≤ total)
+    (queuedBound : queued ≤ bound) :
+    (total - (visited + 1)) * (bound + 1) + (queued + rest) < (total - visited) * (bound + 1) + (rest + 1) := by
+  obtain ⟨k,hk⟩ : ∃ k, total - visited = k + 1 := ⟨total - visited - 1,by omega⟩
+  have smaller : total - (visited + 1) = k := by omega
+  rw [hk,smaller,Nat.succ_mul]
+  generalize k * (bound + 1) = t
+  omega
+
 /-- A revisit checks only the sparse visited list. A fresh pair must expose
 matching constructors before its successors are queued. The cardinality proof
-and no-duplicate invariant erase; no `allPairs` list is allocated. -/
+and no-duplicate invariant erase; no `allPairs` list is allocated. The measure is one `Nat`,
+so Lean compiles the recursion through `WellFounded.Nat.fix`, which the kernel reduces on a
+closed graph: `decide +kernel` evaluates the checker's type agreement. -/
 def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
     (visited pending : List (Pair n)) (distinct : visited.Nodup)
     (valid : VisitedInvariant g visited pending) : Decidable (Covered g (visited ++ pending)) :=
@@ -393,16 +430,16 @@ def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
         rintro ⟨R,closed,contains⟩
         obtain ⟨labels,children⟩ := closed _ _ (contains p (by simp))
         exact compatible ⟨labels,((children_iff_zip _ _).mp children).1⟩)
-termination_by (n * n - visited.length,pending.length)
+termination_by (n * n - visited.length) * (successorBound g + 1) + pending.length
 decreasing_by
-  all_goals simp_wf
-  all_goals
-    first
-    | omega
-    | have unseen : p ∉ visited := by assumption
-      have bound := visited_length_le (p :: visited) (List.nodup_cons.mpr ⟨unseen,distinct⟩)
-      simp only [List.length_cons] at bound
-      omega
+  · simp only [List.length_cons]; omega
+  · have unseen : p ∉ visited := by assumption
+    have room := visited_length_le (p :: visited) (List.nodup_cons.mpr ⟨unseen,distinct⟩)
+    simp only [List.length_cons] at room
+    simp only [List.length_cons,List.length_append]
+    apply worklist_advance_lt room
+    rw [List.length_zip]
+    exact Nat.le_trans (Nat.min_le_left _ _) (successors_length_le g p.1)
 
 def visitedSame {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
     (x y : Fin n) : Bool :=

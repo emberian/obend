@@ -32,7 +32,6 @@ import Obend.Core.Checkpoint
 import Obend.Core.Code
 import Obend.Core.Collect
 import Obend.Core.Data
-import Obend.Core.DecisionReduction
 import Obend.Core.Digest
 import Obend.Core.EquiRecursiveAgreement
 import Obend.Core.EquiRecursiveLookup

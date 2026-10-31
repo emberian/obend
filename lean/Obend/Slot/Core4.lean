@@ -7,7 +7,7 @@ public import Obend.Core.Term
 public import Obend.Core.TermTraverse
 public import Obend.Core.Ty
 public import Obend.Core.Check
-public import Obend.Core.DecisionReduction
+public import Obend.Core.RecursiveAgreement
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Core.Invariant
@@ -143,7 +143,7 @@ attribute [local simp] Obend.Tactic.MonadicReduction.except_bind_ok
 attribute [local congr] Obend.Tactic.MonadicReduction.except_map_source_congr
 
 -- Keep routine checker simplification at the Boolean agreement API boundary.
--- Closed mismatches are reduced explicitly by `equirec_reduce` below.
+-- Closed type comparisons left over are evaluated by the kernel (`decide +kernel`) below.
 attribute [local irreducible] Obend.Core.Check.sameType
   Obend.Core.EquiRecursiveAgreement.agrees Obend.Core.TypeGraph.candidate
 
@@ -181,7 +181,7 @@ theorem extend_filling_admitted : judge 4 [] extendFilling extendType = true := 
     Obend.Core.Ty.Ty.shareable, Obend.Core.Ty.Ty.isComputation,
     List.range_succ, List.zipWith,
     Except.toBool, bind, Except.bind, pure, Except.pure]
-  <;> equirec_reduce
+  <;> decide +kernel
 
 theorem extend_filling_decided : Decides.check (R := Nat) 4 ([] : Context) extendFilling extendType = true :=
   extend_filling_admitted
@@ -220,7 +220,7 @@ theorem wronglyAnnotated_judge_refused (grant : Nat) :
     judge grant [] wronglyAnnotated .natural = false := by
   have arrowNotBoolean : Obend.Core.Check.sameType {}
       (.arrow .reusable .unrestricted .boolean .boolean) .boolean = false := by
-    equirec_reduce
+    decide +kernel
   have refused : (Obend.Core.Bidirectional.checkAgainst wronglyAnnotated [] .natural).toBool = false := by
     simp [wronglyAnnotated, arrowNotBoolean,
       Obend.Core.Bidirectional.checkAgainst,

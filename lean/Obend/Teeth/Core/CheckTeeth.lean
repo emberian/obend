@@ -13,7 +13,7 @@ public import Obend.Core.Ty
 public import Obend.Core.Term
 public import Obend.Core.Check
 public import Obend.Core.Packet
-public import Obend.Core.DecisionReduction
+public import Obend.Core.RecursiveAgreement
 public import Obend.Tactic.MonadicReduction
 @[expose] public section
 namespace Obend.Core.Proofs.CheckTeeth
@@ -23,7 +23,7 @@ set_option maxRecDepth 20000
 set_option maxHeartbeats 400000
 
 -- These are local reduction rules for this executable fixture module. The
--- graph equations stay shared with DecisionReduction; no second checker lives
+-- closed runs are evaluated by the kernel (`check_reduce`); no second checker lives
 -- in this test frontend.
 attribute [local simp] check infer inferFields inferArms checkExtension agree
   Assumptions.valid Assumptions.alias callable variantRow overlay primitiveTypes literalType
@@ -48,18 +48,10 @@ attribute [local irreducible] sameType Obend.Core.EquiRecursiveAgreement.agrees
   Obend.Core.TypeGraph.candidate
 attribute [local simp] sameType_refl sameType_extends
 
-/-- First let the kernel evaluate the closed run (`decide +kernel`: most teeth here, at no
-elaboration cost). A run that reaches the well-founded type-graph worklist is stuck for the
-kernel; then expose the checker with comparison opaque, and keep that simplification when graph
-equations are needed for a remaining closed comparison. -/
--- `maxSteps` was 10000 at Lean v4.30. The v4.35 `do` elaborator compiles `if … then throw …`
--- into join points that the evaluation duplicates, so the same checker runs take more steps.
-macro "check_reduce" : tactic =>
-  `(tactic| first
-    | decide +kernel
-    | decide
-    | (simp (config := { maxSteps := 200000, failIfUnchanged := false })
-       all_goals equirec_reduce))
+/-- Every checker tooth is a closed run the kernel evaluates. The type-graph worklist recurses on
+one `Nat` measure (`FiniteBisimulation.worklist`), so `decide +kernel` reduces it like the rest of
+the checker; no simplifier fallback remains. -/
+macro "check_reduce" : tactic => `(tactic| decide +kernel)
 
 @[local simp] def reusableNaturalCapture : AnnotatedTerm :=
   ⟨.lam (.bound 1), fun _ => some ⟨.natural,.natural,.erased,.reusable⟩, {}⟩
