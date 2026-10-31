@@ -223,6 +223,7 @@ import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Logic.Claim
+import Obend.Logic.Frame
 import Obend.Logic.Ground
 import Obend.Logic.LateBinding
 import Obend.Logic.Rewrite
@@ -312,6 +313,8 @@ import Obend.Teeth.Equiv.CostTeeth
 import Obend.Teeth.Law.LawJudgeTeeth
 import Obend.Teeth.Law.MachineTeeth
 import Obend.Teeth.Law.TypingTeeth
+import Obend.Teeth.Logic.FrameTeeth
+import Obend.Teeth.Logic.GroundTeeth
 import Obend.Teeth.Logic.LateBindingTeeth
 import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
