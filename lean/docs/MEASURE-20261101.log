@@ -1,0 +1,596 @@
+== 0. baseline: lake build with nothing changed
+load 153.01 158.25 144.77
+wall 1s
+⚠ Replayed Obend.Core.Ty
+⚠ Replayed Obend.Core.FiniteBisimulation
+⚠ Replayed Obend.Core.Assumptions
+⚠ Replayed Obend.Core.AliasExposure
+⚠ Replayed Obend.Core.FinitePresentation
+⚠ Replayed Obend.Core.RecursiveRows
+⚠ Replayed Obend.Core.TypeGraph
+⚠ Replayed Obend.Core.RowHit
+⚠ Replayed Obend.Core.CanonicalExtension
+⚠ Replayed Obend.Core.Traverse
+⚠ Replayed Obend.Core.TermTraverse
+⚠ Replayed Obend.Core.Proofs.Adequacy.Defs
+⚠ Replayed Obend.Core.Proofs.Adequacy.Scoped
+⚠ Replayed Obend.Digest.Cshake256.Fast
+⚠ Replayed Obend.Core.Digest
+⚠ Replayed Obend.Slot
+⚠ Replayed Obend.Slot.World
+⚠ Replayed Obend.Slot.Integrity
+⚠ Replayed Obend.Law.Std
+⚠ Replayed Obend.Law.Proofs.Run
+⚠ Replayed Obend.Law.Proofs.Eval
+⚠ Replayed Obend.Law.Proofs.Std
+⚠ Replayed Obend.Judge.Lrat
+⚠ Replayed Obend.Fold
+⚠ Replayed Obend.Receipt.Merkle
+⚠ Replayed Obend.Doc.Patch
+⚠ Replayed Obend.Doc.Section
+⚠ Replayed Obend.Core.Proofs.CheckpointRoundTrip
+⚠ Replayed Obend.Spec.Proofs.Contract
+⚠ Replayed Obend.Core.RowExposureInvariance
+⚠ Replayed Obend.Core.FieldCongruence
+⚠ Replayed Obend.Core.FiniteRowLaws
+⚠ Replayed Obend.Core.Check
+⚠ Replayed Obend.Core.Proofs.Collect.Mark
+⚠ Replayed Obend.Core.Proofs.Collect.Rename
+⚠ Replayed Obend.Core.EquiRecursiveLookup
+⚠ Replayed Obend.Core.Proofs.Preservation.Base.Heads
+⚠ Replayed Obend.Core.Proofs.Substitution.Uses
+⚠ Replayed Obend.Core.Proofs.Substitution.Transport
+⚠ Replayed Obend.Core.Proofs.Substitution.Msubst
+⚠ Replayed Obend.Law.Proofs.Claim
+⚠ Replayed Obend.Law.Proofs.Inherit
+⚠ Replayed Obend.Core.Proofs.Adequacy.CasesControl
+⚠ Replayed Obend.Core.Proofs.Adequacy.CasesEval
+⚠ Replayed Obend.Core.Proofs.Adequacy.CasesReturn
+⚠ Replayed Obend.Core.Proofs.Adequacy.Progress
+⚠ Replayed Obend.Core.Proofs.Completeness
+⚠ Replayed Obend.Core.Proofs.GroundExecution
+⚠ Replayed Obend.Run.Proofs.Control
+⚠ Replayed Obend.Run.Fold
+⚠ Replayed Obend.Core.SubstitutionStreamSteps
+⚠ Replayed Obend.Core.WeightedRowSafety
+⚠ Replayed Obend.Core.SubstitutionResourceCongruence
+⚠ Replayed Obend.Core.ResidualNominalPath
+⚠ Replayed Obend.Core.Proofs.CheckCompletenessObstruction
+⚠ Replayed Obend.Core.Proofs.EquiRecursiveBoundary
+⚠ Replayed Obend.Law.Fold
+⚠ Replayed Obend.Run.Proofs.Shared
+⚠ Replayed Obend.Core.Proofs.Collect.Runs
+⚠ Replayed Obend.Core.Proofs.Forcing.Run
+⚠ Replayed Obend.Core.Proofs.Collect.Extract
+⚠ Replayed Obend.Core.Proofs.Forcing.Switch
+⚠ Replayed Obend.Core.Proofs.Forcing.Chain
+⚠ Replayed Obend.Core.Proofs.Forcing.Demand
+⚠ Replayed Obend.Core.Proofs.Forcing.Segment
+⚠ Replayed Obend.Core.Proofs.Settle
+⚠ Replayed Obend.Core.Proofs.Preservation.Base.Values
+⚠ Replayed Obend.Core.Proofs.Preservation.Cases.Pairs
+⚠ Replayed Obend.Core.Interaction
+⚠ Replayed Obend.Core.Proofs.BidirectionalCompleteness
+⚠ Replayed Obend.Slot.Core4
+⚠ Replayed Obend.Slot.Budget
+⚠ Replayed Obend.Elab.Coerce
+⚠ Replayed Obend.Judge.Instances
+⚠ Replayed Obend.Elab.Prepare
+⚠ Replayed Obend.Law.Proofs.Typing
+⚠ Replayed Obend.Receipt.Negotiation
+⚠ Replayed Obend.Receipt.Export
+⚠ Replayed Obend.Core.FilteredStreamCompleteness
+⚠ Replayed Obend.Core.EquiRecursiveSubstitutionTransport
+⚠ Replayed Obend.Core.Proofs.Forcing.BackFail
+⚠ Replayed Obend.Core.Proofs.Templates
+⚠ Replayed Obend.Core.Proofs.EquiRecursiveSubstitution
+⚠ Replayed Obend.Elab.Proofs.PrepareChecks
+Build completed successfully (279 jobs).
+== 1. private proof edit: a trivial private theorem appended to Obend/Core/Proofs/Adequacy/Safety.lean
+load 153.01 158.25 144.77
+wall 5s
+⚠ Replayed Obend.Core.Ty
+⚠ Replayed Obend.Core.FiniteBisimulation
+⚠ Replayed Obend.Fold
+⚠ Replayed Obend.Core.Assumptions
+⚠ Replayed Obend.Core.AliasExposure
+⚠ Replayed Obend.Core.FinitePresentation
+⚠ Replayed Obend.Core.RecursiveRows
+⚠ Replayed Obend.Core.TypeGraph
+⚠ Replayed Obend.Core.CanonicalExtension
+⚠ Replayed Obend.Core.Traverse
+⚠ Replayed Obend.Core.TermTraverse
+⚠ Replayed Obend.Core.Proofs.Adequacy.Defs
+⚠ Replayed Obend.Core.Proofs.Adequacy.Scoped
+⚠ Replayed Obend.Digest.Cshake256.Fast
+⚠ Replayed Obend.Core.Digest
+⚠ Replayed Obend.Slot
+⚠ Replayed Obend.Slot.World
+⚠ Replayed Obend.Slot.Integrity
+⚠ Replayed Obend.Law.Std
+⚠ Replayed Obend.Law.Proofs.Run
+⚠ Replayed Obend.Law.Proofs.Eval
+⚠ Replayed Obend.Law.Proofs.Std
+⚠ Replayed Obend.Judge.Lrat
+⚠ Replayed Obend.Doc.Patch
+⚠ Replayed Obend.Doc.Section
+⚠ Replayed Obend.Core.Proofs.CheckpointRoundTrip
+⚠ Replayed Obend.Spec.Proofs.Contract
+⚠ Replayed Obend.Core.RowHit
+⚠ Replayed Obend.Core.RowExposureInvariance
+⚠ Replayed Obend.Core.FieldCongruence
+⚠ Replayed Obend.Core.FiniteRowLaws
+⚠ Replayed Obend.Core.Check
+⚠ Replayed Obend.Core.Proofs.Collect.Mark
+⚠ Replayed Obend.Core.EquiRecursiveLookup
+⚠ Replayed Obend.Core.Proofs.Substitution.Uses
+⚠ Replayed Obend.Law.Proofs.Claim
+⚠ Replayed Obend.Law.Proofs.Inherit
+⚠ Replayed Obend.Core.Proofs.Adequacy.CasesControl
+⚠ Replayed Obend.Core.Proofs.Adequacy.CasesEval
+⚠ Replayed Obend.Core.Proofs.Adequacy.CasesReturn
+⚠ Replayed Obend.Receipt.Merkle
+⚠ Replayed Obend.Run.Proofs.Control
+⚠ Replayed Obend.Run.Fold
+⚠ Replayed Obend.Core.SubstitutionStreamSteps
+⚠ Replayed Obend.Core.WeightedRowSafety
+⚠ Replayed Obend.Core.SubstitutionResourceCongruence
+⚠ Replayed Obend.Core.ResidualNominalPath
+⚠ Replayed Obend.Core.Proofs.CheckCompletenessObstruction
+⚠ Replayed Obend.Core.Proofs.EquiRecursiveBoundary
+⚠ Replayed Obend.Law.Fold
+⚠ Replayed Obend.Run.Proofs.Shared
+⚠ Replayed Obend.Core.Proofs.Collect.Rename
+⚠ Replayed Obend.Core.Proofs.Collect.Runs
+⚠ Replayed Obend.Core.Proofs.Preservation.Base.Heads
+⚠ Replayed Obend.Core.Proofs.Preservation.Base.Values
+⚠ Replayed Obend.Core.Proofs.Substitution.Transport
+⚠ Replayed Obend.Core.Proofs.Substitution.Msubst
+⚠ Replayed Obend.Core.Proofs.Forcing.Run
+⚠ Replayed Obend.Core.Proofs.Collect.Extract
+⚠ Replayed Obend.Core.Proofs.Settle
+⚠ Replayed Obend.Core.Proofs.Preservation.Cases.Pairs
+⚠ Replayed Obend.Core.Proofs.BidirectionalCompleteness
+⚠ Replayed Obend.Slot.Core4
+⚠ Replayed Obend.Elab.Coerce
+⚠ Replayed Obend.Elab.Prepare
+⚠ Replayed Obend.Law.Proofs.Typing
+⚠ Replayed Obend.Core.FilteredStreamCompleteness
+⚠ Replayed Obend.Core.EquiRecursiveSubstitutionTransport
+⚠ Replayed Obend.Core.Proofs.Forcing.Switch
+⚠ Replayed Obend.Slot.Budget
+⚠ Replayed Obend.Core.Proofs.Templates
+⚠ Replayed Obend.Elab.Proofs.PrepareChecks
+⚠ Replayed Obend.Core.Proofs.Forcing.Chain
+⚠ Replayed Obend.Core.Proofs.Forcing.Demand
+⚠ Replayed Obend.Core.Proofs.Forcing.Segment
+⚠ Replayed Obend.Core.Interaction
+⚠ Replayed Obend.Core.Proofs.EquiRecursiveSubstitution
+✔ Built Obend.Core.Proofs.Adequacy.Safety (3.2s)
+⚠ Replayed Obend.Core.Proofs.Adequacy.Progress
+⚠ Replayed Obend.Core.Proofs.Completeness
+⚠ Replayed Obend.Core.Proofs.Forcing.BackFail
+⚠ Built Obend.Core.Proofs.GroundExecution (1.6s)
+⚠ Replayed Obend.Judge.Instances
+⚠ Replayed Obend.Receipt.Negotiation
+⚠ Replayed Obend.Receipt.Export
+Build completed successfully (279 jobs).
+== 2. definitional change: an exposed public def appended to Obend/Core/Term.lean (inside its exposed section)
+load 142.92 156.07 144.08
+wall 198s
+⚠ Replayed Obend.Core.Ty
+⚠ Replayed Obend.Core.Assumptions
+⚠ Replayed Obend.Core.AliasExposure
+⚠ Replayed Obend.Core.FiniteBisimulation
+⚠ Replayed Obend.Core.FinitePresentation
+⚠ Replayed Obend.Core.RecursiveRows
+⚠ Replayed Obend.Core.TypeGraph
+⚠ Replayed Obend.Core.RowHit
+⚠ Replayed Obend.Core.RowExposureInvariance
+⚠ Replayed Obend.Core.CanonicalExtension
+⚠ Replayed Obend.Digest.Cshake256.Fast
+⚠ Replayed Obend.Core.Digest
+⚠ Replayed Obend.Slot
+⚠ Replayed Obend.Slot.World
+⚠ Replayed Obend.Slot.Integrity
+⚠ Replayed Obend.Judge.Lrat
+⚠ Replayed Obend.Fold
+⚠ Replayed Obend.Receipt.Merkle
+⚠ Replayed Obend.Doc.Patch
+⚠ Replayed Obend.Doc.Section
+⚠ Replayed Obend.Run.Proofs.Control
+⚠ Replayed Obend.Run.Fold
+⚠ Replayed Obend.Spec.Proofs.Contract
+⚠ Replayed Obend.Core.FieldCongruence
+⚠ Replayed Obend.Core.FiniteRowLaws
+⚠ Replayed Obend.Core.EquiRecursiveLookup
+⚠ Replayed Obend.Core.WeightedRowSafety
+⚠ Replayed Obend.Core.ResidualNominalPath
+✔ Built Obend.Core.Term (2.5s)
+✔ Built Obend.Equiv.Fields (1.1s)
+⚠ Built Obend.Core.Check (3.0s)
+✔ Built Obend.Spec.Annotated (2.6s)
+✔ Built Obend.Law.Run (1.3s)
+⚠ Built Obend.Core.Traverse (1.2s)
+✔ Built Obend.Core.Machine (1.3s)
+✔ Built Obend.Core.Packet (1.1s)
+✔ Built Obend.Core.ResourceValidity (1.0s)
+✔ Built Obend.Elab.Work (1.6s)
+⚠ Built Obend.Law.Proofs.Run (1.5s)
+✔ Built Obend.Core.Bidirectional (4.8s)
+⚠ Built Obend.Core.TermTraverse (3.1s)
+✔ Built Obend.Core.Backend (901ms)
+✔ Built Obend.Core.Proofs.StepCases (929ms)
+✔ Built Obend.Core.Collect (963ms)
+✔ Built Obend.Core.Checkpoint (1.5s)
+✔ Built Obend.Core.ResourceSubstitution (1.2s)
+✔ Built Obend.Core.MachineFast (2.8s)
+✔ Built Obend.Elab.Proofs.AliasFree (1.4s)
+⚠ Built Obend.Core.Proofs.CheckCompletenessObstruction (2.8s)
+⚠ Built Obend.Core.Proofs.EquiRecursiveBoundary (1.7s)
+✔ Built Obend.Core.Invariant (5.9s)
+⚠ Built Obend.Core.Proofs.CheckpointRoundTrip (4.4s)
+✔ Built Obend.Equiv.Reduction (11s)
+⚠ Built Obend.Core.SubstitutionStreamSteps (1.3s)
+⚠ Built Obend.Core.SubstitutionResourceCongruence (2.2s)
+✔ Built Obend.Elab.Proofs.Refines (1.0s)
+✔ Built Obend.Core.Data (1.4s)
+✔ Built Obend.Core.MachineTyping (1.5s)
+✔ Built Obend.Core.Proofs.Hole (1.4s)
+✔ Built Obend.Core.Proofs.Substitution.Defs (1.4s)
+⚠ Built Obend.Core.Proofs.Adequacy.Defs (1.4s)
+⚠ Built Obend.Core.Proofs.Adequacy.Scoped (786ms)
+✔ Built Obend.Core.Proofs.Adequacy.Examples (1.1s)
+✔ Built Obend.Equiv.Ahead (893ms)
+✔ Built Obend.Core.FilteredStream (946ms)
+✔ Built Obend.Law.Syntax (1.1s)
+✔ Built Obend.Run.Core4 (1.0s)
+✔ Built Obend.Spec.DataWire (907ms)
+✔ Built Obend.Core.Capacity (952ms)
+✔ Built Obend.Spec.Law (1.4s)
+✔ Built Obend.Core.Proofs.Collect.Compact (1.1s)
+⚠ Built Obend.Core.Proofs.Collect.Mark (1.1s)
+✔ Built Obend.Core.RuntimeOrigins (1.1s)
+⚠ Built Obend.Core.Proofs.Substitution.Uses (1.1s)
+✔ Built Obend.Core.Proofs.Adequacy.Source (1.9s)
+✔ Built Obend.Core.FilteredStreamSteps (938ms)
+✔ Built Obend.Run.Shared (1.5s)
+⚠ Built Obend.Law.Proofs.Eval (1.3s)
+⚠ Built Obend.Law.Std (1.3s)
+✔ Built Obend.Equiv.Simulation (7.1s)
+✔ Built Obend.Law.Claim (1.2s)
+✔ Built Obend.Run.Adapter (1.3s)
+✔ Built Obend.Spec.Syntax (1.7s)
+✔ Built Obend.Spec.Proofs.Law (2.3s)
+⚠ Built Obend.Core.Proofs.Collect.Rename (1.6s)
+✔ Built Obend.Spec.Parse (2.9s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Weaken (1.5s)
+✔ Built Obend.Core.Proofs.Adequacy.Meaning (2.1s)
+✔ Built Obend.Core.FilteredStreamSoundness (1.0s)
+⚠ Built Obend.Core.FilteredStreamCompleteness (1.6s)
+⚠ Built Obend.Core.Proofs.Substitution.Transport (8.5s)
+✔ Built Obend.Spec.LawCompile (1.2s)
+⚠ Built Obend.Run.Proofs.Shared (3.8s)
+✔ Built Obend.Equiv.Behaviour (1.3s)
+✔ Built Obend.Law.Inherit (2.2s)
+✔ Built Obend.Spec.Ecosystem (1.6s)
+✔ Built Obend.Core.Proofs.Collect.Lockstep (1.5s)
+⚠ Built Obend.Law.Proofs.Std (8.9s)
+✔ Built Obend.Spec.Elaborate (3.6s)
+⚠ Built Obend.Core.Proofs.Preservation.Base.Heads (2.1s)
+✔ Built Obend.Core.Proofs.Adequacy.Graph (1.1s)
+✔ Built Obend.Core.SubstitutionBisimulation (1.2s)
+✔ Built Obend.Core.Proofs.Substitution.Mono (1.0s)
+✔ Built Obend.Run.Durable (1.9s)
+✔ Built Obend.Equiv.FareTests (1.4s)
+⚠ Built Obend.Core.Proofs.Substitution.Msubst (8.6s)
+✔ Built Obend.Spec.PackageLaw (1.4s)
+✔ Built Obend.Law.Machine (1.4s)
+✔ Built Obend.Core.Proofs.Collect.Typing (1.6s)
+⚠ Built Obend.Core.Proofs.Collect.Runs (2.4s)
+⚠ Built Obend.Law.Proofs.Claim (2.8s)
+⚠ Built Obend.Core.Proofs.Preservation.Base.Values (2.7s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Insert (2.4s)
+⚠ Built Obend.Core.Proofs.Adequacy.CasesReturn (1.5s)
+✔ Built Obend.Core.Proofs.Adequacy.Origins (3.3s)
+⚠ Built Obend.Core.Proofs.Adequacy.CasesEval (1.7s)
+⚠ Built Obend.Core.Proofs.Adequacy.CasesControl (1.3s)
+✔ Built Obend.Core.SubstitutionRows (942ms)
+✔ Built Obend.Core.Proofs.Adequacy.Birth (2.9s)
+✔ Built Obend.Run.Proofs.Durable (1.3s)
+✔ Built Obend.Core.Proofs.Substitution (1.2s)
+✔ Built Obend.Core.Proofs.TypedSubstitution (1.4s)
+✔ Built Obend.Law (1.0s)
+⚠ Built Obend.Law.Fold (1.1s)
+⚠ Built Obend.Core.Proofs.Collect.Extract (1.7s)
+✔ Built Obend.Core.Proofs.Forcing.Agree (2.0s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Arithmetic (1.4s)
+⚠ Built Obend.Law.Proofs.Inherit (3.7s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Reusable (1.3s)
+✔ Built Obend.Core.Proofs.Adequacy.Run (1.7s)
+✔ Built Obend.Core.Proofs.Adequacy.StepRaw (1.9s)
+⚠ Built Obend.Core.EquiRecursiveSubstitutionTransport (1.3s)
+✔ Built Obend.Core.Proofs.Collect.Segment (1.3s)
+⚠ Built Obend.Law.Proofs.Typing (3.4s)
+⚠ Built Obend.Core.Proofs.Forcing.Run (3.6s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Focus (1.5s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Activities (1.9s)
+⚠ Built Obend.Core.Proofs.BidirectionalCompleteness (3.0s)
+⚠ Built Obend.Core.Proofs.Preservation.Cases.Pairs (1.4s)
+✔ Built Obend.Core.Proofs.Adequacy.Safety (1.3s)
+✔ Built Obend.Core.Proofs.Adequacy.Sound (1000ms)
+✔ Built Obend.Core.Proofs.Adequacy.Reach (1.0s)
+✔ Built Obend.Core.Proofs.Collect.Statements (1.7s)
+⚠ Built Obend.Core.Proofs.Settle (3.0s)
+⚠ Built Obend.Core.Proofs.Templates (7.5s)
+✔ Built Obend.Spec.Proofs.LawCompile (2.5s)
+✔ Built Obend.Core.Proofs.Forcing.Nest (1.7s)
+✔ Built Obend.Core.Proofs.Preservation.Base (1.2s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Sums (1.5s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Records (1.4s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Functions (1.8s)
+⚠ Built Obend.Slot.Core4 (2.7s)
+⚠ Built Obend.Elab.Coerce (2.6s)
+⚠ Built Obend.Elab.Prepare (2.3s)
+✔ Built Obend.Core.Proofs.Adequacy.SafetyRaw (1.5s)
+✔ Built Obend.Core.Proofs.Collect (1.5s)
+⚠ Built Obend.Core.Proofs.EquiRecursiveSubstitution (1.2s)
+✔ Built Obend.Vault.Law (1.4s)
+✔ Built Obend.Core.Proofs.Forcing.Pend (1.4s)
+✔ Built Obend.Core.Proofs.Preservation (1.3s)
+⚠ Built Obend.Slot.Budget (1.9s)
+✔ Built Obend.Elab.Proofs.CoerceProbes (2.0s)
+⚠ Built Obend.Elab.Proofs.PrepareChecks (5.0s)
+✔ Built Obend.Elab.Proofs.PrepareProbes (1.2s)
+✔ Built Obend.Elab.Gate (1.0s)
+⚠ Built Obend.Core.Proofs.Adequacy.Progress (3.4s)
+⚠ Built Obend.Core.Proofs.Forcing.Switch (1.9s)
+✔ Built Obend.Core.Proofs.Force (1.8s)
+✔ Built Obend.Core.Proofs.LedgerPoles (1.1s)
+✔ Built Obend.Elab (989ms)
+✔ Built Obend.Equiv.Quote (1.9s)
+✔ Built Obend.Spec.FrontEnd (1.4s)
+✔ Built Obend.Vault.Json (1.1s)
+✔ Built Obend.Core.Proofs.Adequacy (1.0s)
+⚠ Built Obend.Core.Proofs.Completeness (1.9s)
+⚠ Built Obend.Core.Proofs.Forcing.Chain (1.7s)
+✔ Built Obend.Spec.Identity (4.5s)
+✔ Built Obend.Vault (1.3s)
+✔ Built Obend.Vault.Cli (1.5s)
+✔ Built Obend.Spec.Proofs.SpecificationClosure (5.0s)
+⚠ Built Obend.Core.Proofs.Forcing.Demand (2.2s)
+✔ Built Obend.Core.Proofs.DataSoundness (2.8s)
+✔ Built Obend.Spec.Capture (2.0s)
+✔ Built Obend.Run.Proofs.Adapter (2.3s)
+⚠ Built Obend.Core.Proofs.Forcing.Segment (1.2s)
+✔ Built Obend.Spec.Proofs.FrontEndAdequacy (1.3s)
+⚠ Built Obend.Core.Proofs.GroundExecution (1.5s)
+✔ Built Obend.Spec.Preview (1.8s)
+✔ Built Obend.Spec.Workspace (1.6s)
+✔ Built Obend.Run (1.2s)
+✔ Built Obend.Core.Proofs.Forcing.Extract (2.0s)
+✔ Built Obend.Law.Proofs.Machine (1.0s)
+✔ Built Obend.Spec (1.2s)
+✔ Built Obend.Core.Proofs.Forcing.Back (2.2s)
+⚠ Built Obend.Judge.Instances (2.5s)
+✔ Built Obend.Run.LawJudge (1.6s)
+✔ Built Obend.Core.Proofs.Forcing.Converse (1.3s)
+✔ Built Obend.Judge (1.4s)
+⚠ Built Obend.Receipt.Negotiation (2.3s)
+⚠ Built Obend.Core.Interaction (1.3s)
+⚠ Built Obend.Receipt.Export (1.7s)
+✔ Built Obend (1.6s)
+⚠ Built Obend.Core.Proofs.Forcing.BackFail (2.6s)
+✔ Built Obend.Receipt.Cli (1.3s)
+✔ Built Obend.Main (1.9s)
+Build completed successfully (279 jobs).
+== 3. restore: lake build after reverting both
+load 55.00 106.62 125.58
+wall 210s
+⚠ Replayed Obend.Core.Ty
+⚠ Replayed Obend.Core.Assumptions
+⚠ Replayed Obend.Core.AliasExposure
+⚠ Replayed Obend.Core.FiniteBisimulation
+⚠ Replayed Obend.Core.FinitePresentation
+⚠ Replayed Obend.Core.RecursiveRows
+⚠ Replayed Obend.Core.TypeGraph
+⚠ Replayed Obend.Core.CanonicalExtension
+⚠ Replayed Obend.Digest.Cshake256.Fast
+⚠ Replayed Obend.Core.Digest
+⚠ Replayed Obend.Slot
+⚠ Replayed Obend.Slot.World
+⚠ Replayed Obend.Slot.Integrity
+⚠ Replayed Obend.Judge.Lrat
+⚠ Replayed Obend.Fold
+⚠ Replayed Obend.Doc.Patch
+⚠ Replayed Obend.Doc.Section
+⚠ Replayed Obend.Spec.Proofs.Contract
+⚠ Replayed Obend.Core.RowHit
+⚠ Replayed Obend.Core.RowExposureInvariance
+⚠ Replayed Obend.Core.FieldCongruence
+⚠ Replayed Obend.Core.FiniteRowLaws
+⚠ Replayed Obend.Core.EquiRecursiveLookup
+⚠ Replayed Obend.Receipt.Merkle
+⚠ Replayed Obend.Run.Proofs.Control
+⚠ Replayed Obend.Run.Fold
+⚠ Replayed Obend.Core.WeightedRowSafety
+⚠ Replayed Obend.Core.ResidualNominalPath
+✔ Built Obend.Core.Term (2.6s)
+✔ Built Obend.Equiv.Fields (1.4s)
+⚠ Built Obend.Core.Check (3.5s)
+✔ Built Obend.Spec.Annotated (3.2s)
+✔ Built Obend.Law.Run (2.2s)
+⚠ Built Obend.Core.Traverse (1.0s)
+✔ Built Obend.Core.Machine (1.6s)
+✔ Built Obend.Core.Packet (2.2s)
+✔ Built Obend.Core.ResourceValidity (2.1s)
+✔ Built Obend.Elab.Work (2.1s)
+⚠ Built Obend.Law.Proofs.Run (1.8s)
+✔ Built Obend.Core.Bidirectional (5.8s)
+⚠ Built Obend.Core.TermTraverse (3.2s)
+✔ Built Obend.Core.Backend (1.3s)
+✔ Built Obend.Core.Proofs.StepCases (1.4s)
+✔ Built Obend.Core.Collect (1.2s)
+✔ Built Obend.Core.Checkpoint (1.5s)
+✔ Built Obend.Core.ResourceSubstitution (1.0s)
+✔ Built Obend.Core.MachineFast (2.7s)
+✔ Built Obend.Elab.Proofs.AliasFree (1.4s)
+⚠ Built Obend.Core.Proofs.CheckCompletenessObstruction (2.6s)
+⚠ Built Obend.Core.Proofs.EquiRecursiveBoundary (1.7s)
+✔ Built Obend.Core.Invariant (5.9s)
+✔ Built Obend.Equiv.Reduction (11s)
+⚠ Built Obend.Core.Proofs.CheckpointRoundTrip (4.4s)
+⚠ Built Obend.Core.SubstitutionStreamSteps (1.4s)
+⚠ Built Obend.Core.SubstitutionResourceCongruence (1.9s)
+✔ Built Obend.Elab.Proofs.Refines (1.4s)
+✔ Built Obend.Core.Data (1.6s)
+✔ Built Obend.Core.MachineTyping (1.4s)
+✔ Built Obend.Core.Proofs.Hole (1.4s)
+⚠ Built Obend.Core.Proofs.Adequacy.Defs (1.4s)
+✔ Built Obend.Core.Proofs.Substitution.Defs (1.4s)
+⚠ Built Obend.Core.Proofs.Adequacy.Scoped (1.5s)
+✔ Built Obend.Core.Proofs.Adequacy.Examples (1.8s)
+✔ Built Obend.Equiv.Ahead (1.3s)
+✔ Built Obend.Core.FilteredStream (1.4s)
+✔ Built Obend.Law.Syntax (1.7s)
+✔ Built Obend.Run.Core4 (1.5s)
+✔ Built Obend.Spec.DataWire (1.0s)
+✔ Built Obend.Spec.Law (1.5s)
+✔ Built Obend.Core.Capacity (1.2s)
+✔ Built Obend.Core.Proofs.Collect.Compact (1.6s)
+⚠ Built Obend.Core.Proofs.Collect.Mark (1.8s)
+✔ Built Obend.Core.RuntimeOrigins (1.1s)
+⚠ Built Obend.Core.Proofs.Substitution.Uses (1.3s)
+✔ Built Obend.Core.Proofs.Adequacy.Source (2.2s)
+✔ Built Obend.Core.FilteredStreamSteps (1.5s)
+✔ Built Obend.Run.Shared (1.8s)
+⚠ Built Obend.Law.Proofs.Eval (1.3s)
+⚠ Built Obend.Law.Std (2.3s)
+✔ Built Obend.Equiv.Simulation (8.2s)
+✔ Built Obend.Law.Claim (1.4s)
+✔ Built Obend.Run.Adapter (1.5s)
+✔ Built Obend.Spec.Syntax (1.9s)
+✔ Built Obend.Spec.Proofs.Law (2.3s)
+⚠ Built Obend.Core.Proofs.Collect.Rename (1.6s)
+✔ Built Obend.Spec.Parse (2.9s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Weaken (1.3s)
+✔ Built Obend.Core.Proofs.Adequacy.Meaning (1.9s)
+✔ Built Obend.Core.FilteredStreamSoundness (1.8s)
+⚠ Built Obend.Core.FilteredStreamCompleteness (1.2s)
+⚠ Built Obend.Core.Proofs.Substitution.Transport (8.6s)
+⚠ Built Obend.Run.Proofs.Shared (3.7s)
+✔ Built Obend.Equiv.Behaviour (1.1s)
+✔ Built Obend.Spec.LawCompile (1.3s)
+✔ Built Obend.Law.Inherit (1.4s)
+✔ Built Obend.Spec.Ecosystem (1.0s)
+✔ Built Obend.Core.Proofs.Collect.Lockstep (1.6s)
+⚠ Built Obend.Law.Proofs.Std (8.7s)
+✔ Built Obend.Spec.Elaborate (3.7s)
+✔ Built Obend.Core.Proofs.Adequacy.Graph (1.4s)
+⚠ Built Obend.Core.Proofs.Preservation.Base.Heads (2.3s)
+✔ Built Obend.Core.SubstitutionBisimulation (1.3s)
+✔ Built Obend.Core.Proofs.Substitution.Mono (1.0s)
+✔ Built Obend.Run.Durable (1.4s)
+✔ Built Obend.Equiv.FareTests (1.4s)
+✔ Built Obend.Spec.PackageLaw (1.8s)
+⚠ Built Obend.Core.Proofs.Substitution.Msubst (9.2s)
+✔ Built Obend.Law.Machine (2.5s)
+✔ Built Obend.Core.Proofs.Collect.Typing (2.4s)
+⚠ Built Obend.Core.Proofs.Collect.Runs (2.1s)
+⚠ Built Obend.Law.Proofs.Claim (2.2s)
+⚠ Built Obend.Core.Proofs.Adequacy.CasesReturn (2.2s)
+✔ Built Obend.Core.Proofs.Adequacy.Origins (4.6s)
+⚠ Built Obend.Core.Proofs.Adequacy.CasesEval (1.0s)
+⚠ Built Obend.Core.Proofs.Adequacy.CasesControl (1.5s)
+⚠ Built Obend.Core.Proofs.Preservation.Base.Values (2.6s)
+✔ Built Obend.Core.Proofs.Adequacy.Birth (3.7s)
+✔ Built Obend.Core.SubstitutionRows (1.2s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Insert (1.0s)
+✔ Built Obend.Run.Proofs.Durable (1.8s)
+✔ Built Obend.Core.Proofs.Substitution (1.3s)
+✔ Built Obend.Law (1.1s)
+✔ Built Obend.Core.Proofs.TypedSubstitution (1.4s)
+⚠ Built Obend.Law.Fold (1.5s)
+⚠ Built Obend.Core.Proofs.Collect.Extract (2.0s)
+✔ Built Obend.Core.Proofs.Forcing.Agree (2.1s)
+✔ Built Obend.Core.Proofs.Adequacy.Run (1.4s)
+⚠ Built Obend.Law.Proofs.Inherit (3.5s)
+✔ Built Obend.Core.Proofs.Adequacy.StepRaw (1.8s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Arithmetic (1.3s)
+⚠ Built Obend.Core.EquiRecursiveSubstitutionTransport (1.2s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Reusable (1.2s)
+✔ Built Obend.Core.Proofs.Collect.Segment (1.2s)
+⚠ Built Obend.Law.Proofs.Typing (3.6s)
+✔ Built Obend.Core.Proofs.Adequacy.Safety (1.4s)
+⚠ Built Obend.Core.Proofs.Forcing.Run (3.0s)
+✔ Built Obend.Core.Proofs.Adequacy.Sound (1.6s)
+✔ Built Obend.Core.Proofs.Adequacy.Reach (1.1s)
+✔ Built Obend.Core.Proofs.Preservation.Base.Focus (1.7s)
+⚠ Built Obend.Core.Proofs.BidirectionalCompleteness (5.0s)
+⚠ Built Obend.Core.Proofs.Templates (8.3s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Activities (2.2s)
+⚠ Built Obend.Core.Proofs.Preservation.Cases.Pairs (2.2s)
+✔ Built Obend.Core.Proofs.Collect.Statements (1.6s)
+⚠ Built Obend.Core.Proofs.Settle (2.3s)
+✔ Built Obend.Spec.Proofs.LawCompile (2.8s)
+✔ Built Obend.Core.Proofs.Adequacy.SafetyRaw (1.6s)
+✔ Built Obend.Core.Proofs.Forcing.Nest (2.3s)
+✔ Built Obend.Core.Proofs.Preservation.Base (907ms)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Sums (1.2s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Records (1.2s)
+✔ Built Obend.Core.Proofs.Preservation.Cases.Functions (1.8s)
+⚠ Built Obend.Slot.Core4 (3.2s)
+⚠ Built Obend.Elab.Coerce (3.5s)
+⚠ Built Obend.Elab.Prepare (2.7s)
+⚠ Built Obend.Core.Proofs.EquiRecursiveSubstitution (1.2s)
+✔ Built Obend.Core.Proofs.Collect (1.2s)
+✔ Built Obend.Vault.Law (1.5s)
+✔ Built Obend.Core.Proofs.Forcing.Pend (1.5s)
+✔ Built Obend.Core.Proofs.Preservation (1.2s)
+⚠ Built Obend.Core.Proofs.Adequacy.Progress (3.3s)
+⚠ Built Obend.Slot.Budget (1.7s)
+✔ Built Obend.Elab.Proofs.CoerceProbes (1.0s)
+⚠ Built Obend.Elab.Proofs.PrepareChecks (3.9s)
+✔ Built Obend.Elab.Proofs.PrepareProbes (1.5s)
+✔ Built Obend.Elab.Gate (1.3s)
+⚠ Built Obend.Core.Proofs.Forcing.Switch (2.1s)
+✔ Built Obend.Core.Proofs.LedgerPoles (1.4s)
+✔ Built Obend.Core.Proofs.Force (2.2s)
+✔ Built Obend.Core.Proofs.Adequacy (1.8s)
+⚠ Built Obend.Core.Proofs.Completeness (2.8s)
+✔ Built Obend.Equiv.Quote (2.7s)
+✔ Built Obend.Elab (1.4s)
+✔ Built Obend.Spec.FrontEnd (1.2s)
+✔ Built Obend.Vault.Json (1.1s)
+⚠ Built Obend.Core.Proofs.Forcing.Chain (1.3s)
+✔ Built Obend.Core.Proofs.DataSoundness (2.7s)
+✔ Built Obend.Spec.Identity (3.6s)
+✔ Built Obend.Vault (1.3s)
+✔ Built Obend.Vault.Cli (1.7s)
+✔ Built Obend.Spec.Proofs.SpecificationClosure (4.6s)
+⚠ Built Obend.Core.Proofs.Forcing.Demand (1.7s)
+✔ Built Obend.Run.Proofs.Adapter (1.8s)
+✔ Built Obend.Spec.Proofs.FrontEndAdequacy (1.8s)
+⚠ Built Obend.Core.Proofs.GroundExecution (1.5s)
+✔ Built Obend.Spec.Capture (1.6s)
+⚠ Built Obend.Core.Proofs.Forcing.Segment (1.4s)
+✔ Built Obend.Run (1.5s)
+✔ Built Obend.Law.Proofs.Machine (2.0s)
+✔ Built Obend.Spec.Preview (2.2s)
+✔ Built Obend.Spec.Workspace (2.2s)
+⚠ Built Obend.Judge.Instances (3.1s)
+✔ Built Obend.Core.Proofs.Forcing.Extract (3.5s)
+✔ Built Obend.Spec (1.4s)
+✔ Built Obend.Run.LawJudge (1.8s)
+✔ Built Obend.Judge (1.3s)
+⚠ Built Obend.Receipt.Negotiation (1.0s)
+✔ Built Obend.Core.Proofs.Forcing.Back (1.8s)
+⚠ Built Obend.Receipt.Export (1.8s)
+✔ Built Obend.Core.Proofs.Forcing.Converse (1.4s)
+✔ Built Obend.Receipt.Cli (1.2s)
+⚠ Built Obend.Core.Interaction (1.2s)
+✔ Built Obend.Main (2.2s)
+⚠ Built Obend.Core.Proofs.Forcing.BackFail (2.1s)
+✔ Built Obend (952ms)
+Build completed successfully (279 jobs).
+done
