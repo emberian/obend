@@ -84,6 +84,7 @@ import Obend.Core.Proofs.Collect.Segment
 import Obend.Core.Proofs.Collect.Statements
 import Obend.Core.Proofs.Collect.Typing
 import Obend.Core.Proofs.Completeness
+import Obend.Core.Proofs.Conservation
 import Obend.Core.Proofs.DataSoundness
 import Obend.Core.Proofs.DigestChecks
 import Obend.Core.Proofs.EquiRecursiveBoundary

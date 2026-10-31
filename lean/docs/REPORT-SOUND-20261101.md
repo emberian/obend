@@ -1,0 +1,173 @@
+# Report: lane Sound — linear holes closed, conservation proved, receipts and the stitch made honest (Claude Opus, 2026-11-01)
+
+Brief: `lean/docs/LANE-SOUND-BRIEF-20261101.md`, from Gemini's checkpoint review
+(`review/GEMINI-CHECKPOINT-20261101.md`, items 1–3) and, mid-lane, three findings of Kimi's code
+reviews (`review/KIMI-CODE-A-20261101.md`, `-B`). Item 1 in worktree `scratchpad/kinds` (branch
+`lane-sound`); item 2 and Kimi's receipt/vault findings in `scratchpad/build`; item 3 in
+`scratchpad/runner2` (sub-agents of this lane). Commits on `dev`: `802d85e` (receipts), `f12e474`
+(stitch), `a550bad` (Kimi: receipts and vault), then this lane's `Sound (1)`, `Sound (2)` and this report.
+
+**Builds.** Start, at `49808d7`: tier 1 282 jobs, tier 2 303 jobs, green (warm). End, after rebasing
+onto `a550bad`: tier 1 283 jobs, tier 2 304 jobs, green; census 35,462 constants, 27 on compiler trust,
+none on `sorryAx` or a declared axiom. **Controls** (start → end): cohorts probes 30/30, tutorial
+71/71, preview 161 with 0 failures → unchanged; receipts 22/22 → 32/32 (ten new forgery tests, all
+refused by name); workspaces 30/30 → 30/30; the vault walkthrough 26 → 26.
+
+## 1. Linear soundness (`Core/Check.lean`, `Core/Bidirectional.lean`)
+
+Each hole was confirmed first: the fixture below was accepted by the bidirectional checker at
+`linear` on the tree at `9d75d59` (and by the fuel checker for the first two), and one or two `Step`s
+from its body lose the use of the hypothesis (`*_drops_in_*_step` in `Teeth/Core/LinearTeeth`, a
+`Step` and the `occurrences` before and after).
+
+| hole | fixture body (`h : Nat`) | the drop | rule added | refusal |
+|---|---|---|---|---|
+| specification | `{meta = h; λx. x} 3` | `applySpecification` discards the metadata | `linearFree context mu` | `linearMetadata path index` |
+| extend | `{a = h} with {a = 0}` | `extendRecord` overwrites the field | `linearFree context targetUses` | `linearOverwritten path index` |
+| case | `case l h of l x. 0` | `caseInject` binds the payload `unrestricted`; `x + x` copies it | `linearFree context su` (scrutinee) | `linearScrutinee path index` |
+| done (fifth, found here) | `case (done (l h)) of l x. done 0` | `done` steps to its value, then the plain `case` drops it (two steps) | `linearFree context uses` at `done` | `linearReturned path index` |
+
+Each refusal is a `#tooth` by mutating the fixture's quantity to `affine` (accepted there: dropping is
+within "at most once"). Both checkers (`Check.infer`, `Bidirectional.elaborate`) check the premises.
+
+**Not a hole: `ifZero` and `ifBool`.** Their scrutinee is *eliminated*: the test is the one use of the
+hypothesis. `Step.zero`/`successor`/`ifTrue`/`ifFalse` fire only at a literal, which holds no
+hypothesis, and the predecessor `ifZero` binds `unrestricted` is a fresh literal, not the scrutinee's
+contents. `λ(h : linear Nat). ifZero h 0 (p. p + p)` is accepted (`ifZero_scrutinee_accepted`), and
+`step_conserves_linear` covers both rules with no new premise. Gemini's ⊕-reading (the predecessor
+inherits linearity) would matter for a type whose values carry custody; `Nat` and `Bool` do not.
+
+**Metatheory re-established (all green).** Weakening (`source_insert_binding`), closed substitution
+(`infer_msubst`, `partialTyping_msubst` in `Substitution/Transport`, `Msubst`, `TypedSubstitution`;
+`check_msubst`, `checked_msubst`, `calculus_typed_msubst` unchanged in statement), templates
+(`Templates`), the machine's preservation (`Preservation/Base/Focus`, `Cases/Activities`, `Cases/Pairs`:
+the machine needs no new premise), completeness: `completes_specification`, `completes_extend`,
+`completes_case`, `completes_done` take the premise (revised); `complete`, `full_annotated`,
+`annotated_complete` unchanged; `prepare_checks` unchanged (its private `motive_case` takes the
+premise); Law typing (`chk_case`, via `linearFree_noLinear`); `SpecificationClosure`
+(`compose_wrapper_typed`: its context is all `unrestricted`).
+
+**Linear resource conservation** (`Core/Proofs/Conservation.lean`, new, tier 1):
+
+```lean
+public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : Term} {T : Ty} {u : Uses}
+    (typed : PartialTyping a context t T u) (valid : validContext a.shareableVariables context = true)
+    {t' : Term} (step : Step t t') {j : Nat} (lin : LinearAt context j) :
+    (occurrences context.length t').getD j 0 = u.getD j 0
+```
+
+A `Step` from a term that checks in `context` uses every `linear` hypothesis of `context` exactly as
+often as the term did (`u` is that count, `uses_determined`): none dropped, none copied. The context is
+the custody the term holds; `Step` has no discharge (a `perform` does not step; the kernel's resume is
+the explicit discharge). The substitution case is `subst_counts`: through `t.substitute σ` with `σ`
+putting `A` at `d`, hypothesis `j` counts `u[skipAt d j] + u[d] · uses(A)[j]`, exactly at every `linear`
+`j`, because at each join both branches agree on a `linear` hypothesis and either the substituted
+binder is `linear` (so they agree on it too) or `A` uses no `linear` hypothesis. Beta uses `fits`
+(a `linear` binder is used once) and `argumentAllowed`; `caseInject` uses the new scrutinee premise and
+`arms_find`; `mix` and `fix` use their reusable captures.
+
+**What it does not say (stated, not proved).** `steps_conserve_linear` extends it along a reduction
+*every term of which checks*: source subject reduction is not proved in the tree (the proved
+preservation is the machine's, `typed_stepRaw_preserved`, which does not track counts). The closed-term
+version the brief asks for needs exactly that: over a closed term the context is empty, and the custody
+lives in heap cells after `beta`, so "live linear positions" are machine addresses. That version needs
+the machine to carry per-address use counts; it is not done.
+
+**Refusals that name their own clause** (Kimi review A, while in these rules). `overuse` said
+`affineBinderOverused` for every quantity: it is now `binderOverused path index quantity count`
+(`linear_overuse_named`, `erased_use_named`). `argumentRefusal` follows `argumentAllowed`'s clauses in
+order: `activityMisplaced`, `linearArgumentDropped`, `notShareable` (the type), `capturesNotShareable`
+(the captures) — it said `notShareable` for all (`unrestricted_argument_captures_named`,
+`activity_argument_named`). `checkFields`' empty-field mismatch had expected and actual reversed
+(`empty_fields_mismatch_ordered`).
+
+**Deviations.**
+- `CheckTeeth.shadowed_shareable_member_accepted` pinned acceptance of a `linear` hypothesis hidden in a
+  shadowed field of a `case` scrutinee: that program drops it in two steps. The control is now
+  `affine` (revised); `shadowed_linear_member_refused` is new.
+- `CoerceProbes`: the `linear → linear` sum codomain coercion matches its `linear` component and is now
+  refused `.checker (.linearScrutinee _ 0)` (accepted before): a `linear` sum, like a `linear` record
+  (Linear round 2), is consumed whole.
+- Cohorts, receipts, workspaces, walkthrough: no change from item 1.
+
+**The decision for Ember.** The `case` rule taken is the brief's first option, `linearFree` of the
+scrutinee: sound, and the same shape as the projections, but it makes a `linear` sum uneliminable
+(the coercion deviation above). The quantity-preserving rule (the arm binds the payload at `linear`
+when the scrutinee uses a `linear` hypothesis, and must use it once) is the honest elimination; it
+changes `ArmsTyping`'s shape (a quantity index) through the machine typing, completeness and
+preparation. `step_conserves_linear` already handles a `linear` substituted binder, so it would carry
+over. Also open: affine *copying* through `case` (`case l h of l x. x + x` with `h : affine`) is still
+accepted; the source semantics copies, the machine shares one thunk, so it is harmless there.
+
+## Journal (`lake exe journal`, `49808d7` → end, the base moved by the three sub-lane commits)
+
+160 revised, 1,220 STATEMENT-CITED, 0 PROOF-CITED, 417 added, 178 removed, 16,289 unaffected.
+This lane's revised statements: `completes_specification`, `completes_extend`, `completes_case`,
+`completes_done`, `motive_case` (private), `CheckTeeth.shadowed_shareable_member_accepted`, and the
+equations of `elaborate`, `checkFields`, `CheckRefusal`'s `DecidableEq` (new constructors).
+`check_msubst`, `checked_msubst`, `full_annotated`, `prepare_checks` are STATEMENT-CITED (they mention
+`PartialTyping`) and rebuilt green with unchanged statements. The `Receipt.*`, `Run.Fork.*`,
+`Vault.Store.*` revisions are items 2, 3 and Kimi's below.
+
+## 2. Receipts (`Receipt.lean`, `Receipt/Export.lean`), commit `802d85e` (49808d7..802d85e), worktree scratchpad/build
+
+Files: `Obend/Receipt.lean`, `Obend/Receipt/Export.lean`, `Obend/Receipt/Negotiation.lean`, `Obend/Receipt/Cli.lean`, the usage line in `Obend/Main.lean`, `tests/run-receipts.py`.
+
+- **(a) Coverage computed.** `recheck` requires `R.openings.map Prod.fst == A.reads (w', rest) r` (takes `[DecidableEq Fact]`). There was no theorem named `dated_sound`; the gap was that `dated_verdict` covered only receipts built by `issue`. New `dated_sound`: for any receipt R, if `recheck` passes at the stranger's view `w'`, R's dated root is the root of world `w`'s view, and `datedOpens` and `matched` pass, then the row judged at `w` has R's verdict and post root, or the hash collides (from `recheck_covers` (new), `openings_checked`, `Admission.step_of_reads`). `verifyWorld` refuses `openings: the receipt does not open exactly what the row reads` before `recheck`.
+- **(b)** `capOpening`: `| none => false`.
+- **(c) Trust derived.** There is no `R.supports`; the per-support list is `R.trust`, and the verifier no longer reads its trust from it. New `ceiling ran claimed`, `ran` what the verifier itself checked (`identitySupports`; `worldSupports = trust4`). It refuses a support it ran with no entry (so `[]` is never `checked`), a `checked` claim no check stands behind, and any unrun support not `attested` with a principal. Theorems `ceiling_checked`, `ceiling_empty`.
+- **(d) Cited dial re-checks.** `accepts` takes a `Stranger` (naming, hash, reading, view, supports run); `.cited` runs `recheck`, `datedOpens`, `matched` and `ceiling` over the prefix's accumulator, skipping only certificate re-execution; `.bit` alone trusts the producer's bit. New `accepts_cited_sound`.
+- **(e) Expected root and quantifier.** `verify j prev root`, `obend verify R [--prev P] [--root N]`; a world-transition is refused without a root (`root: no expected root given…`) or when `R.dated` differs (`root: the receipt is dated at a view whose root is not the expected root`); a world-transition predecessor is refused (no root for it). New `checkQuantifier`: identity receipts `forAll`, transitions `existsRun`, else `quantifier: the law establishes …, the receipt says …`. `negotiationReceipt` takes `shift` (`--shift-clock N`), issuing honestly at the clock-moved view (Astra's probe).
+
+Revised: `recheck_sound` (new instance argument); `recheck_issued` (adds `hr : A.reads (w', a.2) r = A.reads a r`; new `recheck_issued_self` with no premise; `row4_recheck` discharges `hr` by `rfl`); `dial_invariant` (stated for a stranger with `Naming.ofReading`, a view agreeing with the openings and reads, a ceiling-passing support list; cited case via `issue_checks`). Kept unchanged: `receipt_sufficient`, `openings_checked`, `dated_verdict`, `issue_checks`, `overall_none_checked`, `chain_binds`, `receipt4_checks`, `receipt4_dated_verdict`, `pins_sufficient`, `issueLast`.
+
+Forgeries refused by name (`tests/run-receipts.py`):
+
+| forgery | refusal |
+|---|---|
+| capability opening and its proof omitted | `openings: the receipt does not open exactly` |
+| empty support list | `trust: the support legal-fold has no entry` |
+| clock-shifted receipt against the run's root | `root: the receipt is dated` |
+| quantifier relabelled to `planForAll` | `quantifier: the law establishes existsRun` |
+| extra `checked` support nothing runs | `trust: the support oracle claims checked` |
+| world-transition verified without `--root` | `root: no expected root` |
+
+The clock-shifted receipt verifies against its own root: the root check is what refuses it.
+
+Controls: receipts 22/22 → 31/31; cohorts 30/30, 71/71, 161/0; workspaces 30/30; walkthrough 26; unchanged. Deviations: the `move_root` tamper is now refused first by the root check; a second case verifies it against its own moved root so `dated: an opening proof does not open` is still exercised. Honest verify calls pass `--root`, taken from the first honest receipt (the test stands in for the authority).
+
+Not bugs: all four findings real. Nuance: the CLI's cited path (`verifyWorld`) already ran `recheck`, `datedOpens`, `matched`; only the abstract `accepts` trusted `R.verdict.isOk` at `.cited`. `dated_sound` did not exist; the missing coverage premise sat in the issued-only `dated_verdict`.
+
+## 3. Fork stitch (`Run/Fork.lean`), commit `f12e474` (802d85e..f12e474), worktree scratchpad/runner2
+
+**The hole, verified.** `stitchRows` committed each escalated `(i, t)` through `ledgerStep L d (.commit i t)` alone: no `crun`, so no protocol state, law or decision citations, selection control or authority judged the row; a refused row left the rows before it committed. `forkStep (.defer i t)` recorded only a token, so nothing the runner could judge.
+
+**What landed.**
+- `Fork Tok M E` and `FRow.defer (e : E)` carry an abstract escalated row, unjudged in the fork (`forkStep` takes `tokOf : E → Option Tok` for the `ownToken` refusal). `fork_owns_no_shared`, `fork_spend_notMine` kept (restated over `E`).
+- Generic stitch: `replay (step : St → E → Except R St)` runs escalated rows in order; a refusal is a conflict section `(e, r)` that moves nothing; `accepted`; `settle main tentative conflicts` returns the replay only when `conflicts = []`; `stitch step main F = ((settle …, union main.2 F.grown), conflicts)`.
+- Joint instance: `Deferred ι S := ι × (Σ i, S.Op i)`, `jstep L base sp au k J e := jrun L base sp au k J (.dispatch e.1 e.2)`, `jstitch := stitch (jstep …)`: each escalated dispatch is judged by runner `i`'s `crun` at main's current World (protocol, law, citations, selection control, authority), then by the ledger's commit row, exactly as a live dispatch.
+- `stitch_atomic`:
+  ```lean
+  theorem stitch_atomic (step : St → E → Except R St) (main : St × List M) (F : Fork Tok M E) :
+      ((stitch step main F).2 = [] ∧ accepted step main.1 F.escalated = F.escalated ∧
+          (stitch step main F).1.1 = (replay step main.1 F.escalated).1) ∨
+        ((stitch step main F).2 ≠ [] ∧ (stitch step main F).1.1 = main.1)
+  ```
+- Kept: `stitch_union`, `stitch_union_comm` (unchanged), `stitch_accounts` (every escalated row is accepted or has a conflict), `stitch_exclusive` (over `jstitch`, via `jstep_exclusive`), `stitch_double_spend` (over `jstitch`: a grant `g` in main's ledger while the fork was offline makes the fork's escalated dispatch consuming `g.tok` a conflict `.taken g.tok g.winner g.epoch`; now takes `JReachable` of main and the runner being at that call). Revised: `stitch_is_commit` is now `JReachable … main.1 → JReachable … (jstitch … main F).1.1` (the former ledger-fold statement is `joint_ledger_fold` applied to it). New helpers: `replay_keeps`, `stitch_keeps`, `replay_append`, `accepted_all`, `jstep_ledger`, `jstep_exclusive`, `jstep_grants`.
+- `propagate` returns `Except`: `.ok (propagated L d cs)` when `L.allowed prev d`, `.error (.ledger .notAllowed)` otherwise; `jrun` maps it. `crun_propagated`, `propagate_allowed` (`Proofs/Shared.lean`); `propagate_ok` kept over `propagated`. `jreachable_inv`, `jreachable_fold`, `jrun_height_mono`, `jrun_toks` (`Proofs/Durable.lean`) repaired; the `coupled_after_commit` tooth now mutates `propagate` to `.ok cs`.
+
+**Teeth** (`ForkExample.lean`, tier 2, all bite): `fork_refuses`; `bob_offline_conflict` by mutating `sharedLive` (the former tooth no longer bites: Bob's runner's shared mask refuses him first); `runner_judges_escalation` (stitched into `J₀` where Bob never reserved, his escalated commitment is refused by his own runner and nothing is granted; the tooth is the former stitch, `ledgerStep` alone, which grants it); `two_step_atomic` (Bob escalates his commitment twice into a main where both reserved and nobody committed; the first would commit, the second is refused; the stitch returns one conflict, `grants = []`, Bob's log length unchanged; the tooth is `settle` returning the tentative state). `bob_offline_wins`, `conflict_general` kept.
+
+**Controls.** Tier 1 282, tier 2 303 green; census 35,174 constants, 27 on compiler trust, none on sorryAx or an axiom. Cohorts 30/30, 71/71, 161/0; receipts 31/31 (after the receipts commit); workspaces 30/30; walkthrough 26/26. No deviations.
+
+**Not a bug / caveats.** `propagate` did not swallow errors in any reachable state: `propagate_ok` proved every coupled runner accepts the world event for an allowed move, and `jrun` called it only after `ledgerStep` succeeded (`ledgerStep_allowed`); the `.error _ => cs i` arm was dead code, now a refusal by name. "Bypasses the law judge and citations" is right insofar as `crun` is where those live; `jrun`'s dispatch arm is unchanged, the stitch now goes through it. The old `stitch_double_spend` held unconditionally because the ledger alone judged; the new one needs the runner at the escalated call (otherwise the runner's own refusal is the conflict, which `stitch_accounts` covers).
+
+## 4. Kimi's review findings in receipts and vault, commit `a550bad` (618da4b..a550bad), worktree scratchpad/build
+
+**(1) Receipt replayed against another row** (`Receipt.lean`). `recheck` first checks `N.rowDigest r == R.row`. `recheck_sound` (revised, extended) concludes `N.rowDigest r = R.row ∧ N.root rest = R.pre ∧ verdict ∧ post`; `recheck_covers`, `recheck_issued`, `recheck_issued_self`, `dated_sound` re-established with unchanged statements (the new conjunct is `rfl` for issued receipts). New test: the disclosed `rowData` replaced by `dispatch commit p1`, refused `row: the disclosed row is not the receipt's`. Not a CLI bug: `verifyWorld` already compared `naming.rowDigest row` with `R.row`; the gap was in the abstract `recheck`, `recheck_sound` and `accepts`.
+
+**(2) A kind change judged by the old laws** (`Vault/Store.lean`, `commit`). New `lawsKept old new := lawLines old == lawLines new && kindLine old == kindLine new` replaces the law-line comparison; retargeting `kind:` goes through the adoption branch (needs `relaw`, judged by `newLaws`); the write branch judges by `newLaws`, equal to the old by `lawsFor_of_kept`, so `oldLaws` is gone. Refusal: "refused: changing a law line or the page's kind is the owner's (… has no relaw grant on …)". New: `lawsFor_of_kept`, `kindChain_of_kept`, `commit_kind_needs_relaw`. Tooth: `#tooth lawsFor_of_kept by mutation lawsKept := fun old new => lawLines old == lawLines new` bites. The kind line, not the chain, is compared: the chain is a function of page name and kind line, and the laws read the kind line through `kindLaws`' `named`.
+
+**(3) Section 0 aliasing section 1** (`Store.lean`, `selectIn`). New `sectionAt G k := if 1 ≤ k then (sections G)[k - 1]? else none`; `sectionAt_zero`, `select_section_zero_refused`; tooth by mutating `sectionAt` to the unguarded form bites.
+
+Controls: receipts 32/32 (one new); cohorts 30/30, 71/71, 161/0; workspaces 30/30; walkthrough 26; tier 1 282, tier 2 303; census 35,194 constants, 27 on compiler trust, none on sorryAx or an axiom. No deviations.
