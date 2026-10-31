@@ -41,7 +41,9 @@ public statement may mention anything its module imports.
 
 **Pins and teeth.** `#assert_axioms` (standard axioms only) and `#assert_compiled` (re-runs a
 `native_decide` claim) live in `Obend/AxiomPin.lean`, `AssertAxioms.lean`, `AssertCompiled.lean`;
-every proof module ends with its pins. Teeth that need `Array.map`/`String.toUTF8` reduced are the
+every proof module ends with its pins. `Obend/Census.lean` (built by `lake build`) runs
+`#assert_axioms_tree` over every constant of the library, private ones included, and fails the
+build on `sorryAx` or a declared axiom; it counts the `native_decide` theorems separately. Teeth that need `Array.map`/`String.toUTF8` reduced are the
 legacy (non-`module`) leaves `Obend/Core/Teeth/*.lean` and `Core/Proofs/DataBudget.lean`.
 
 **Records.** `docs/`: the dated reports, module graphs, the one measurement. `tools/`: the split

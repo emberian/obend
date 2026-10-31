@@ -15,6 +15,7 @@ and the closed demand a nested evaluation is.
 public import Obend.Core.Proofs.Forcing.Agree
 public import Obend.Core.Invariant
 public import Obend.Tactic.Cases
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -435,5 +436,10 @@ public theorem stepRaw_size_mono (s : State) : s.heap.size ≤ (stepRaw s).heap.
   · rw [eq]; simp
   · exact ext.1
 
+
+#assert_axioms stepRaw_stack_shape forcingShared_append_true stepRaw_withStack allIn_mono
+#assert_axioms allBelow_mono allIn_nil_iff allIn_cons_iff frames_mono heapValid_push heapValid_set
+#assert_axioms allocateFields_valid' addrValid_stepRaw prefixExt_refl prefixExt_trans prefixExt_push
+#assert_axioms prefixExt_alloc stepRaw_heap_cases stepRaw_heap_keep stepRaw_size_mono
 
 end Obend.Core.Proofs.Forcing

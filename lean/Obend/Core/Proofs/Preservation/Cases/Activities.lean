@@ -2,6 +2,7 @@ module
 /- Preservation cases: Activities. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
 public import Obend.Core.Proofs.Preservation.Base
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -254,5 +255,10 @@ counter's declared Response sum. -/
 theorem written_response_typed :
     PartialTyping {} [] (.inject "written" (.record [])) responseType [] :=
   .inject (fuel := 1) (.record (.nil [])) (by decide) rfl
+
+#assert_axioms source_perform_decomposition source_done_decomposition stack_activity_no_update
+#assert_axioms typed_perform_preserved typed_done_preserved forcingShared_false_updates
+#assert_axioms yielded_control_type typed_yield_quiescent stack_activity_signature
+#assert_axioms typed_resume_preserved written_response_typed
 
 end Obend.Core.Proofs.Preservation

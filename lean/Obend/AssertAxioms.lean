@@ -14,11 +14,11 @@ the importing module can see. It fails on any constant resting on `sorryAx` or
 on a declared axiom, and on any package `axiom` declaration. The compiler trust
 (`native_decide`'s auxiliary `…._native…` axioms) is admitted there only as a
 counted exception, reported in the verdict line: `native_decide` is a
-deliberate tool in this tree (the `*_compiled` facts), not a hole. The root
-`AxiomCensus` module runs it over the umbrella.
+deliberate tool in this tree (the `*_compiled` facts), not a hole.
+`Obend/Census.lean` runs it over the whole library. Its importer must see the
+bodies: under a plain `module` import a non-exposed theorem arrives as an
+axiom and is refused, so the census is a non-`module` file (or `import all`).
 
-It lives in `Theory/` (it imports only Mathlib's tactic base), so every library
-of the tree may import it without crossing the ATLAS §7 import boundary.
 Lean v4.30 precomputes each imported declaration's axioms at olean export, so
 the census is a lookup per constant, not a walk.
 -/

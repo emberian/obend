@@ -2,6 +2,7 @@ module
 /- Preservation cases: Arithmetic. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
 public import Obend.Core.Proofs.Preservation.Base
+public import Obend.AxiomPin
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
@@ -227,5 +228,10 @@ public theorem typed_condition_no_wrong_value {assumptions : Assumptions} {types
     (stepRaw state).control ≠ .refused .wrongValue := by
   obtain ⟨after,extension,⟨next⟩⟩ := typed_condition_preserved typed returned stack
   exact typed_control_not_refused next.control .wrongValue
+
+#assert_axioms stack_binary_left_value typed_binary_left_preserved primitive_result_typed
+#assert_axioms stack_binary_right_values typed_binary_right_preserved
+#assert_axioms typed_binary_right_no_wrong_value stack_condition_value typed_condition_preserved
+#assert_axioms typed_condition_no_wrong_value
 
 end Obend.Core.Proofs.Preservation
