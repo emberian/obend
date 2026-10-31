@@ -54,7 +54,8 @@ over the grade the world granted. Nothing about fuel appears in a statement abou
 | B4/B4′: `Integrity.contextual`, `incumbentTransition` | PROVED over every `World`; `repair_of_contextual` shows B4′ was a corollary (`repair_sound` under compatibility was proved and, unconsumed, retired 2026-11-01; record in REPORT-JUST) | the slot calculus |
 | shared-World exclusion | PROVED (`joint_reachable_ticket_exclusive`, `joint_once`, `loser_refused_names_winner_and_epoch`); projection by each runner's reachability, not yet the generic `project_run` | the audited fold |
 | Doc pushout universal property | PROVED (`merge_isPushout`, `pushout_unique`, `no_cocone`, `files_no_pushout`) | thin category, join |
-| leaf refinement: a Core4 run equals BendTT's `Eval` of the emitted book | OPEN; toolchain decision (BendTT at 4.34) pending | interaction-tree simulation through the runner's adapter |
+| the compilation `late_binding` justifies: a closed composition's flattened object, and its emitted book, `≈b` the machine's `fix (compose …) {seed}` member by member | PROVED (`flatten_sound`, `book_sound`, `Obend/Leaf`), on closed compositions | `Joins`: `Ahead` up to a base of closed unfolding pairs (`bequiv_of_joins`) |
+| leaf refinement: a Core4 run equals BendTT's `Eval` of the emitted book | OPEN; `bendtt.lean` builds unmodified at 4.35 (11 s); the dependency mode is Ember's decision (`REPORT-LEAF-20261101.md` §5) | fuel-indexed adequacy for pure members; interaction-tree simulation through the runner's adapter only for activities |
 | `quote`: observer ladder, `rewrite_sound_below`, erasure and preservation | OPEN; gated on `review/QUOTE-ORIENTATION-20261101.md` | typed represented syntax first; CMTT substitution; two-level staging results |
 | judgment class soundness per format; one foreign certificate format | IN PROGRESS (Judge lane) | `Decides` generalized; LRAT or PBLean |
 

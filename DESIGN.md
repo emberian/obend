@@ -14,8 +14,19 @@ running. Each author keeps their claim whole: Taelin's "parallelism competes wit
 inside a leaf, and leaves are strict and affine; Faré's "lazy makes OO easy" is true of elaboration,
 and elaboration is lazy; Faré's linearity (each ancestor counted once) is a theorem about `fix` over
 the C4 list, Girard's affinity a theorem about the leaves it emits. Built: the calculus, the machine,
-the checker, the front end. Planned: the leaf emitter and its refinement against BendTT's `Eval`, as
-one of the two mature instantiations (`§8`).
+the checker, the front end, and the leaf emitter (`Obend/Leaf`, lane Leaf 2026-11-01). Planned: its
+refinement against BendTT's `Eval`, as one of the two mature instantiations (`§8`).
+
+Why compiling late binding away is sound and cheap (Gemini's efficiency argument, taken as the
+emitter's scope): rows are static, so a field name is a slot index; the `prototype spec value` split
+and the observer ladder keep reflection on the cold spine, so the vtable carries no metadata; and
+`late_binding` says every `self.m` of a known composition is a read of the final row and every
+`super.p` has a statically known target, the provider `providesLast` names on the prefix. So a closed
+composition flattens to a vtable whose `self` is the vtable and whose `super.p` reads are resolved
+(`flatten_sound`: each member `≈b` the member of `fix (compose …) {seed}`), and the vtable emits to a
+book of method definitions that name no other definition, one dispatcher, and the slot table
+(`book_sound`). Method fields are already values and need no thunks; computed fields become explicit
+thunk cells, and their sharing cost is the Demand lane's two-stage cost.
 
 ## 2. Laws, three kinds, one word
 
@@ -96,16 +107,20 @@ usage-composed contextual substitution. `≈q` is equality of encodings; the lad
 with cost as a refinement; `rewrite_sound_below` is "no congruence under box" as a theorem about
 contexts with an observer census. No new `Term` constructor, no machine frame; a program-level
 quote on values is refused (Taha–Sheard, Kiselyov, Kavvos). Reflection goes through mirrors with
-depths; stages are views of the World. Then the specialization slot: an emitted leaf is a candidate whose supports are the
-pins it assumed, the machine is the always-usable fallback, deoptimization is the withdrawal of a
-support, and an optimization is a candidate justified under `≈c`.
+depths; stages are views of the World. Then the specialization slot (built, `Obend/Leaf/Specialize`): an emitted book is a candidate whose
+supports are the pins it assumed (each layer it flattened, and the object's composition), the machine
+is the always-usable fallback, incumbent-first keeps the book exactly while its pins hold, and
+deoptimization is the withdrawal of a support, named by the blocked read (`specialize_choice`,
+`moved_pin_blocks`: `incumbent_choice` and `read_blocked_exact` applied). Planned: an optimization as
+a candidate justified under `≈c`.
 
 ## 8. Two mature instantiations
 
 Both implement the same lazy source language and the same governed document interface; they vary
 one thing, the affine execution boundary. I: Objective Bend on its own Lean demand machine (built,
 with reflection and `perform` in the term language). II: Objective Bend on ordinary Bend leaves
-through the emitter (planned). Both run one report through the same life: independent package
+through the emitter (the emitter built and proved against the machine's object; the translation to
+BendTT terms and its refinement against `Eval` planned, `lean/docs/REPORT-LEAF-20261101.md` §5). Both run one report through the same life: independent package
 extension, a diamond, a protocol from a third package, evidence withdrawal, an offline conflict, a
 law amendment, a schema migration. The comparison is a discussion of where each makes expression,
 explanation, implementation and proof simpler, not a benchmark.
