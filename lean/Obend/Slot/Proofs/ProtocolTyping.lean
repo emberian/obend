@@ -12,7 +12,7 @@ The completion space `Conds.space`, the matcher assignments `Assigns`, the scala
 private `World` went with PROT-6, replaced by Std.offer's deployed fuse (`Lang/StdOffer.lean`).
 -/
 public import Obend.Slot.Protocol
-@[expose] public section
+public section
 
 namespace Obend.Slot.Protocol
 
@@ -26,7 +26,7 @@ inductive Occurs : {i : Ix} → Prot S Hole A i → (j : Ix) → Hole j → Prop
       {j : Ix} {h : Hole j} (r : S.Resp op) : Occurs (k r) j h → Occurs (.call op k) j h
 
 /-- `Δ₁ ≤ Δ₂` as bags: no token occurs more often in `Δ₁`. -/
-def SubBag {Tok : Type} [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : Prop :=
+@[expose] def SubBag {Tok : Type} [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : Prop :=
   ∀ t, Δ₁.count t ≤ Δ₂.count t
 
 /-- `HasProt sp Ω Γ Q Φ Δ P`. A `call` requires its facts from `Γ`, records its obligations in `Φ`,
@@ -62,14 +62,14 @@ inductive HasProt {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact O
 
 /-- A filling satisfies a hole's interface: judged in the hole's own context, tokens, result and
 obligations, and passing the hole's acceptance contract. -/
-def Fills {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
+@[expose] def Fills {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
     (Ω : Ctx S Hole A Tok Fact Ob) {i : Ix} (I : Iface S Hole A Tok Fact Ob i)
     (f : Prot S Hole A i) : Prop :=
   HasProt sp Ω I.ctx I.post I.owes I.need f ∧ I.accepts f
 
 /-- A substitution respects `Ω`: it fills only declared `.me` holes, each with a filling that
 satisfies the hole's interface. -/
-def SubstOK {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
+@[expose] def SubstOK {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
     (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A) : Prop :=
   ∀ i h f, σ i h = some f → ∃ I, Ω i h = some I ∧ I.chooser = .me ∧ Fills sp Ω I f
 
@@ -106,7 +106,7 @@ inductive Started : {i : Ix} → Prot S Hole A i → Hist S → Prop
 
 /-- The history has ENTERED hole `h` of the template: the template's prefix reached `h` and
 something after it was performed or dispatched (the filling's first call left). -/
-def Dispatched {i : Ix} (P : Prot S Hole A i) (H : Hist S) (j : Ix) (h : Hole j) : Prop :=
+@[expose] def Dispatched {i : Ix} (P : Prot S Hole A i) (H : Hist S) (j : Ix) (h : Hole j) : Prop :=
   ∃ t₁ t₂, H.answered = t₁ ++ t₂ ∧ Reach P t₁ ⟨j, .hole h⟩ ∧ (t₂ ≠ [] ∨ H.inflight.isSome = true)
 
 /-- A well-formed open object: the template is judged, the substitution respects `Ω`, the
@@ -119,14 +119,14 @@ structure Open.WF {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact O
 
 /-- The guard on a re-plan: the new substitution agrees with the old one on every hole the history
 has entered (there is no unguarded re-plan in any theorem: each takes this as a hypothesis). -/
-def Open.Replan {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (σ' : Subst S Hole A) : Prop :=
+@[expose] def Open.Replan {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (σ' : Subst S Hole A) : Prop :=
   ∀ j h, Dispatched O.template O.hist j h → σ'.mine O.Ω j h = O.σ.mine O.Ω j h
 
 end
 
 /-- The fragment's check reads only its support (the soundness of a declared dependency set:
 sufficient, not minimal). -/
-def Frag.ReadsOnly {Name Key V : Type} (f : Frag Name Key V) : Prop :=
+@[expose] def Frag.ReadsOnly {Name Key V : Type} (f : Frag Name Key V) : Prop :=
   ∀ w₁ w₂ : Key → V, (∀ k ∈ f.support, w₁ k = w₂ k) → f.check w₁ = f.check w₂
 
 

@@ -35,7 +35,7 @@ blocked by its name there (`stale_blocked_forever`). The tooth is a world whose 
 (`Returning`): it is lawful only through the collision, and no exact version order exists for it.
 -/
 public import Obend.Slot
-@[expose] public section
+public section
 
 namespace Obend.Slot
 
@@ -84,11 +84,11 @@ namespace World
 variable {V Fact : Type} [World V Fact]
 
 /-- Whether a support holds at a view: read off the pin its cell holds there. -/
-def holdsAt (v : V) (f : Fact) : Bool := holdsOfPin (cell f) (pin (Fact := Fact) v (cell f)) f
+@[expose] def holdsAt (v : V) (f : Fact) : Bool := holdsOfPin (cell f) (pin (Fact := Fact) v (cell f)) f
 
 /-- **The read is computed from pins** (`review/GENERATED-20261031.md` §2.4). -/
 theorem holds_pin (v : V) (f : Fact) :
-    holdsAt v f = holdsOfPin (cell f) (pin (Fact := Fact) v (cell f)) f := rfl
+    holdsAt v f = holdsOfPin (cell f) (pin (Fact := Fact) v (cell f)) f := by rfl
 
 /-- A support's truth at a view is a function of the pin its cell holds there (formerly a field). -/
 theorem holds_congr (v v' : V) (f : Fact) (h : pin (Fact := Fact) v (cell f) = pin (Fact := Fact) v' (cell f)) :
@@ -285,7 +285,7 @@ def pinAt (v : Nat) : Nat := v % 2
 /-- The returning world, made lawful the only way it can be: its version state is the height,
 strictly increasing, and its pin a non-injective reading of it. (Local: views `Nat` belong to other
 worlds elsewhere, and `Fact` is an `outParam`.) -/
-@[instance_reducible] def returning : World Nat Nat where
+@[expose, instance_reducible] def returning : World Nat Nat where
   Cell := Unit
   Pin := Nat
   cell := fun _ => ()

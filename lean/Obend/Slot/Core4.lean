@@ -21,7 +21,7 @@ public import Obend.Tactic.Tooth
 public import Obend.Tactic.MonadicReduction
 public import Obend.Elab.Work
 
-@[expose] public section
+public section
 namespace Obend.Slot.Core4
 
 open Obend.Core.Term (Term)
@@ -42,17 +42,17 @@ def var (x : Nat) : AnnotatedTerm := ⟨.bound x, fun _ => none, {}⟩
 
 /-- Semantic typing: a `Checked` certificate of `t` in `Ψ` at type `A`, whether or not the checker
 recognizes it within a grant. -/
-def Typed (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Prop := ∃ c : Checked t Ψ, c.type = A
+@[expose] def Typed (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Prop := ∃ c : Checked t Ψ, c.type = A
 
 /-- What a grant prices: the work the bidirectional checker does on the annotated term. -/
 abbrev checkWork (t : AnnotatedTerm) : Nat := Obend.Elab.Work.checkWork t
 
 /-- Only annotations may change during preparation. -/
-def Reannotates (source target : AnnotatedTerm) : Prop :=
+@[expose] def Reannotates (source target : AnnotatedTerm) : Prop :=
   source.term = target.term ∧ source.assumptions = target.assumptions
 
 /-- One route: a work grant and the equi-recursive bidirectional checker. -/
-def judge (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
+@[expose] def judge (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
   decide (checkWork t ≤ grant) && (Obend.Core.Bidirectional.checkAgainst t Ψ A).toBool
 
 theorem judge_iff (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
@@ -280,13 +280,13 @@ inductive BudgetRefusal where
 variable {Fact : Type}
 
 /-- The slot whose judge is the checker at the grant, at `Ψ ⊢ _ : A`. -/
-def slotOf (budget : Budget) (Ψ : Context) (A : Ty) (supports : AnnotatedTerm → List Fact) :
+@[expose] def slotOf (budget : Budget) (Ψ : Context) (A : Ty) (supports : AnnotatedTerm → List Fact) :
     Slot Fact AnnotatedTerm :=
   ⟨supports, fun t => judge budget.grade Ψ t A⟩
 
 /-- Admission exposes the named budget refusal; the generic slot retains its existing `rejected`
 reading for a failed judge. -/
-def admit (budget : Budget) (Ψ : Context) (A : Ty) (t : AnnotatedTerm) : Except BudgetRefusal AnnotatedTerm :=
+@[expose] def admit (budget : Budget) (Ψ : Context) (A : Ty) (t : AnnotatedTerm) : Except BudgetRefusal AnnotatedTerm :=
   if judge budget.grade Ψ t A then .ok t else .error (.uncovered budget.grade)
 
 theorem slotOf_usable (budget : Budget) (Ψ : Context) (A : Ty)

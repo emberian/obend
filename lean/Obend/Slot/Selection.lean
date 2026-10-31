@@ -11,7 +11,7 @@ policy is SOUNDNESS (whatever it selects is usable at the view), not incumbent r
 own choice law is `incumbent_choice`.
 -/
 public import Obend.Slot.Integrity
-@[expose] public section
+public section
 
 namespace Obend.Slot
 open World

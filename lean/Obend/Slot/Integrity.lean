@@ -37,7 +37,7 @@ there (`toy_repair`, `toy_advance`).
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Slot.World
-@[expose] public section
+public section
 
 namespace Obend.Slot
 open World
@@ -52,7 +52,7 @@ variable {V Fact Cand : Type} [World V Fact]
 
 /-- The slot's own selection at a view: the first usable candidate of the order, or the refusal
 naming every candidate's dead supports. `Slot.resolve` is this with a body (`resolve_eq_select`). -/
-def Slot.select (S : Slot Fact Cand) (holds : Fact → Bool) (order : List Cand) :
+@[expose] def Slot.select (S : Slot Fact Cand) (holds : Fact → Bool) (order : List Cand) :
     Except (Refusal Fact Cand) Cand :=
   match S.alternatives holds order with
   | c :: _ => .ok c
@@ -65,7 +65,7 @@ theorem resolve_eq_select {Ix : Type} {Sg : Protocol.Sig Ix} {Hole : Ix → Type
   cases S.alternatives holds order <;> rfl
 
 /-- The filler a slot gives. -/
-def slotFiller : Filler V Fact Cand := ⟨fun S v order => S.select (holdsAt v) order⟩
+@[expose] def slotFiller : Filler V Fact Cand := ⟨fun S v order => S.select (holdsAt v) order⟩
 
 /-- B4. CONTEXTUAL INTEGRITY. -/
 def Integrity.contextual (F : Filler V Fact Cand) : Prop :=
@@ -92,7 +92,7 @@ structure Advance (V Fact Cand : Type) where
 kept; an advanced selection is usable and is the kept one or the head of the usable order; a refusal
 only when nothing is usable, naming each candidate's dead supports. One preset's law, not the
 policy-independent clause (that is `SelectionSound`, `Obend.Slot.Selection`). -/
-def Integrity.incumbentTransition (A : Advance V Fact Cand) : Prop :=
+@[expose] def Integrity.incumbentTransition (A : Advance V Fact Cand) : Prop :=
   ∀ (S : Slot Fact Cand) (v : V) (order : List Cand) (stored : Option Cand),
     (∀ c, stored = some c → S.usable (holdsAt v) c = true → A.advance S v order stored = .ok c) ∧
     (∀ c, A.advance S v order stored = .ok c → S.usable (holdsAt v) c = true ∧
@@ -108,7 +108,7 @@ def Integrity.incumbentTransition (A : Advance V Fact Cand) : Prop :=
 abbrev Integrity.transition (A : Advance V Fact Cand) : Prop := Integrity.incumbentTransition A
 
 /-- CONTEXTUAL INTEGRITY ∧ TRANSITION. -/
-def Integrity (F : Filler V Fact Cand) (A : Advance V Fact Cand) : Prop :=
+@[expose] def Integrity (F : Filler V Fact Cand) (A : Advance V Fact Cand) : Prop :=
   Integrity.contextual F ∧ Integrity.incumbentTransition A
 
 theorem select_ok {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand} {c : Cand}
@@ -173,13 +173,13 @@ theorem repair_of_contextual {F : Filler V Fact Cand} (h : Integrity.contextual 
       cases hj
 
 /-- The slot's transition of a stored selection: keep it while it is usable, else select. -/
-def Slot.advance (S : Slot Fact Cand) (holds : Fact → Bool) (order : List Cand) :
+@[expose] def Slot.advance (S : Slot Fact Cand) (holds : Fact → Bool) (order : List Cand) :
     Option Cand → Except (Refusal Fact Cand) Cand
   | some c => if S.usable holds c then .ok c else S.select holds order
   | none => S.select holds order
 
 /-- The advance a slot gives. -/
-def slotAdvance : Advance V Fact Cand := ⟨fun S v order stored => S.advance (holdsAt v) order stored⟩
+@[expose] def slotAdvance : Advance V Fact Cand := ⟨fun S v order stored => S.advance (holdsAt v) order stored⟩
 
 /-- `select` fills whenever some candidate of the order is usable. -/
 theorem select_some {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand} {c : Cand}
@@ -279,10 +279,10 @@ def credulousHoles : Filler V Fact Cand :=
     | [] => .error (order.map fun c => (c, []))⟩
 
 /-- Re-selects at every view: forgets the stored selection. -/
-def churn : Advance V Fact Cand := ⟨fun S v order _ => S.select (holdsAt v) order⟩
+@[expose] def churn : Advance V Fact Cand := ⟨fun S v order _ => S.select (holdsAt v) order⟩
 
 /-- Keeps the stored selection whatever the view. -/
-def sticky : Advance V Fact Cand :=
+@[expose] def sticky : Advance V Fact Cand :=
   ⟨fun S v order stored => match stored with
     | some c => .ok c
     | none => S.select (holdsAt v) order⟩
@@ -297,7 +297,7 @@ inductive Member where
   deriving DecidableEq, Repr
 
 /-- Alice's grant is live at height 0 and retired from height 1 on; Bob's is live throughout. -/
-def toyPin : Nat → Member → Option Unit
+@[expose] def toyPin : Nat → Member → Option Unit
   | height, .alice => if height < 1 then some () else none
   | _, .bob => some ()
 
@@ -336,7 +336,7 @@ instance toyWorld : World Nat Member where
     | bob => exact .inl rfl
 
 /-- Each member's candidate cites that member's grant; the judge accepts both. -/
-def toySlot : Slot Member Member := ⟨fun member => [member], fun _ => true⟩
+@[expose] def toySlot : Slot Member Member := ⟨fun member => [member], fun _ => true⟩
 
 /-- The order the chooser names: Alice's candidate first. -/
 def toyOrder : List Member := [.alice, .bob]
@@ -361,7 +361,7 @@ theorem toy_advance :
 
 #tooth toy_advance by mutation toyOrder := []
 
-theorem toy_alice_dead : holdsAt (V := Nat) 1 Member.alice = false := rfl
+theorem toy_alice_dead : holdsAt (V := Nat) 1 Member.alice = false := by rfl
 
 /-- FLOOR. The credulous filler admits Alice's candidate at height 1, where her grant is retired. -/
 theorem not_integrity_credulousHoles :

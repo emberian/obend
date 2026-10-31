@@ -2,7 +2,7 @@ module
 public import Obend.Slot.Core4
 public import Obend.Slot.Integrity
 
-@[expose] public section
+public section
 namespace Obend.Slot
 open Obend.Core.Check Obend.Core.Ty
 open Obend.Core.Proofs.Substitution
@@ -64,7 +64,7 @@ theorem budget_tooth :
   · rfl
 
 theorem budget_uncovered :
-    Core4.admit (toyBudget 0) fuelContext budgetType fuelFilling = .error (.uncovered 1) := rfl
+    Core4.admit (toyBudget 0) fuelContext budgetType fuelFilling = .error (.uncovered 1) := by rfl
 
 theorem budget_filling_typed : Core4.Typed fuelContext fuelFilling budgetType :=
   (Core4.slotOf_usable (toyBudget 1) fuelContext budgetType (fun _ => [Member.bob])

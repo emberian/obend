@@ -27,7 +27,7 @@ then ends `withdrawn` with the resolver's reason. `Slot.resolve` is the resolver
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Slot.Protocol
-@[expose] public section
+public section
 
 namespace Obend.Slot
 
@@ -44,19 +44,19 @@ section
 variable {Fact Cand : Type}
 
 /-- The supports of `c` that do not hold. -/
-def Slot.dead (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) : List Fact :=
+@[expose] def Slot.dead (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) : List Fact :=
   (S.supports c).filter fun f => !holds f
 
 /-- Every support of `c`, with whether it holds: the evidence a read shows. -/
-def Slot.evidence (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) : List (Fact × Bool) :=
+@[expose] def Slot.evidence (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) : List (Fact × Bool) :=
   (S.supports c).map fun f => (f, holds f)
 
 /-- `c` passes the judge and every support it cites holds. -/
-def Slot.usable (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) : Bool :=
+@[expose] def Slot.usable (S : Slot Fact Cand) (holds : Fact → Bool) (c : Cand) : Bool :=
   S.judge c && (S.dead holds c).isEmpty
 
 /-- The candidates usable at the view, in order. -/
-def Slot.alternatives (S : Slot Fact Cand) (holds : Fact → Bool) (cands : List Cand) : List Cand :=
+@[expose] def Slot.alternatives (S : Slot Fact Cand) (holds : Fact → Bool) (cands : List Cand) : List Cand :=
   cands.filter (S.usable holds)
 
 /-- What a read of a slot's stored selection says. -/
@@ -71,7 +71,7 @@ inductive Reading (Fact Cand : Type)
   | blocked (c : Cand) (dead : List Fact)
 
 /-- Read a stored selection at a view. -/
-def Slot.read (S : Slot Fact Cand) (holds : Fact → Bool) : Option Cand → Reading Fact Cand
+@[expose] def Slot.read (S : Slot Fact Cand) (holds : Fact → Bool) : Option Cand → Reading Fact Cand
   | none => .empty
   | some c =>
     if S.judge c then
@@ -123,7 +123,7 @@ theorem read_blocked_names (S : Slot Fact Cand) (holds : Fact → Bool) {c c' : 
 
 /-- A support is PERMANENT along a relation of views when, false at a view, it is false at every view
 the relation reaches from it. -/
-def Permanent {V : Type} (holdsAt : V → Fact → Bool) (later : V → V → Prop) (f : Fact) : Prop :=
+@[expose] def Permanent {V : Type} (holdsAt : V → Fact → Bool) (later : V → V → Prop) (f : Fact) : Prop :=
   ∀ v v', later v v' → holdsAt v f = false → holdsAt v' f = false
 
 /-- A stored selection reads usable iff it passes the judge and every support it cites holds. -/
@@ -256,7 +256,7 @@ abbrev Refusal (Fact Cand : Type) := List (Cand × List Fact)
 
 /-- A slot's resolution at a view: the first usable candidate in the chooser's order, its body as the
 filling; or the refusal naming, for every candidate, what failed. -/
-def Slot.resolve (Sl : Slot Fact Cand) (holds : Fact → Bool) {i : Ix}
+@[expose] def Slot.resolve (Sl : Slot Fact Cand) (holds : Fact → Bool) {i : Ix}
     (body : Cand → Prot S Hole A i) (order : List Cand) :
     Except (Refusal Fact Cand) (Prot S Hole A i) :=
   match Sl.alternatives holds order with
