@@ -209,7 +209,6 @@ import Obend.Judge.Class
 import Obend.Judge.Identity
 import Obend.Judge.Instances
 import Obend.Judge.Lrat
-import Obend.Just
 import Obend.Law
 import Obend.Law.Claim
 import Obend.Law.Fold
@@ -260,7 +259,6 @@ import Obend.Slot.Budget
 import Obend.Slot.Calculus
 import Obend.Slot.Core4
 import Obend.Slot.Integrity
-import Obend.Slot.PolySlot
 import Obend.Slot.Proofs.Negotiation
 import Obend.Slot.Proofs.Protocol
 import Obend.Slot.Proofs.ProtocolTyping

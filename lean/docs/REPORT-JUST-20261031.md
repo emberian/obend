@@ -66,6 +66,11 @@ INFERRED: the restructuring is worth taking into `Slot.lean` on its own (−35% 
 observations by `read_eq`/`select_eq`); I did not, because it changes `Slot.read`'s definition under
 the runner lane and that is not this lane's call.
 
+**Retired 2026-11-01** (lane Parsimony, `REPORT-PARSIMONY-20261101.md`): `Obend/Just.lean`,
+`Obend/Slot/PolySlot.lean` and `tools/just-control.lean` had no consumer but the census, so they are
+deleted; this table is the record. To rerun the measurement, check out `5892944`, where all three
+files and `tools/proofsize.py` still stand.
+
 ## 4. B4′ for the runner
 
 `Advance.advance : Slot → V → order → Option Cand → Except Refusal Cand`, `Integrity.transition`:
