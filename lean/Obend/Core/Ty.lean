@@ -332,7 +332,9 @@ def addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
 /-- At most once for `affine` and `linear`, never for `erased`. A partial computation may still
 retain a linear obligation forever (a divergent body never reaches its use); the checker's part of
 exact discharge is syntactic and lives at the binder (`Quantity.fits`, required by
-`PartialTyping.lambda`) and at the argument (`linearFree`, required by `argumentAllowed`). -/
+`PartialTyping.lambda`), at the argument (`linearFree`, required by `argumentAllowed`), at the joins
+(`branchesAgree`, required by `ifBool`, `ifZero` and the arms of a `case`) and at the projections
+(`linearFree` of the target, required by `get`, `reflect`, `metadata`, `project`). -/
 def safeQuantity : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count | .linear, count => count <= 1
@@ -347,6 +349,24 @@ passed to is itself `linear`. A `linear` hypothesis flows only into a `linear` s
 that may drop its argument (`erased`, `affine`) or share it (`unrestricted`) never receives one. -/
 def linearFree (context : Context) (uses : Uses) : Bool :=
   (context.zip uses).all (fun pair => pair.2 == 0 || pair.1.quantity != .linear)
+
+/-- The uses of two branches of which exactly one runs (`ifBool`, `ifZero`, the arms of a `case`):
+pointwise maximum. With `branchesAgree` this is the additive rule: a `linear` hypothesis is used
+equally often on every branch and the join is that common count; an `affine` one at most once on
+each branch, so at most once; an `unrestricted` one any number of times. The join is the same `max`
+at every quantity, so the uses of a term stay a function of the term alone (`uses_determined`). -/
+def joinUses (first second : Uses) : Uses := List.zipWith max first second
+
+/-- What a binder of this quantity demands of two branches: a `linear` one the same count on both. -/
+def Quantity.agrees : Quantity → Nat → Nat → Bool
+  | .linear, first, second => first == second
+  | _, _, _ => true
+
+/-- The branches agree on every `linear` hypothesis: the premise `joinUses` needs at a join. -/
+def branchesAgree : Context → Uses → Uses → Bool
+  | binding :: context, first :: firsts, second :: seconds =>
+      binding.quantity.agrees first second && branchesAgree context firsts seconds
+  | _, _, _ => true
 
 def reusableCaptures (variables : List Nat) (context : Context) (uses : Uses) : Bool :=
   uses.length == context.length && (context.zip uses).all (fun pair =>
@@ -389,6 +409,24 @@ theorem linearFree_of_reusableCaptures {variables : List Nat} {context : Context
   rcases this with zero | ⟨unrestricted, _⟩
   · exact .inl zero
   · exact .inr (by simp [unrestricted])
+
+/-- A variable that is not `linear` uses no `linear` hypothesis. -/
+theorem linearFree_variableUses {context : Context} {index : Nat} {binding : Binding}
+    (found : context[index]? = some binding) (notLinear : binding.quantity ≠ .linear) :
+    linearFree context (variableUses context index) = true := by
+  unfold linearFree
+  rw [List.all_eq_true]
+  intro pair member
+  obtain ⟨j, hj, rfl⟩ := List.getElem_of_mem member
+  simp only [List.length_zip, variableUses, List.length_map, List.length_range, Nat.min_self] at hj
+  simp only [variableUses, List.getElem_zip, List.getElem_map, List.getElem_range, Bool.or_eq_true,
+    beq_iff_eq, bne_iff_ne, ne_eq]
+  by_cases e : j = index
+  · subst e
+    rename_i hj'
+    rw [List.getElem?_eq_getElem hj', Option.some.injEq] at found
+    exact .inr (found ▸ notLinear)
+  · exact .inl (by simp [e])
 
 /-- An annotation connects source binders to actual checking. `default` must be
 resolved by the source frontend using the type/capture discipline. -/

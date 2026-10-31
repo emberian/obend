@@ -839,7 +839,7 @@ theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : 
     · exact ihb
     · exact ihr field member
   · intro _ result arm member; simp at member
-  · intro _ name body rest payload row result bu ru hb _ _ _ ihb ihr arm member
+  · intro _ name body rest payload row result bu ru hb _ _ _ _ ihb ihr arm member
     simp only [List.mem_cons] at member
     rcases member with rfl | member
     · exact ihb

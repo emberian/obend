@@ -63,7 +63,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
       obtain ⟨data⟩ := focused
       exact ⟨⟨data.current,data.output,data.origin,data.continuation,.step data.result agreement⟩⟩
   case get =>
-    intro context target targetType member uses name fuel targetTyped lookup ih types environment environmentTyped safe valid
+    intro context target targetType member uses name fuel targetTyped lookup _ ih types environment environmentTyped safe valid
     exact ⟨⟨targetType,member,⟨context,uses,environmentTyped,targetTyped,safe,valid⟩,.field lookup,.refl member⟩⟩
   case extend =>
     intro context target fields targetType row targetUses fieldUses rowFuel targetTyped fieldsTyped rowValid ihTarget ihFields types environment environmentTyped safe valid
@@ -74,13 +74,13 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨targetType,overlay row targetType,⟨context,targetUses,environmentTyped,targetTyped,targetSafe,valid⟩,
       .extend environmentTyped fieldsTyped fieldsSafe valid rowValid,.refl _⟩⟩
   case reflect =>
-    intro context target specType targetType uses targetTyped ih types environment environmentTyped safe valid
+    intro context target specType targetType uses targetTyped _ ih types environment environmentTyped safe valid
     exact ⟨⟨.prototype specType targetType,specType,⟨context,uses,environmentTyped,targetTyped,safe,valid⟩,.reflect _ _,.refl _⟩⟩
   case metadata =>
-    intro context target metadataType extensionType uses targetTyped ih types environment environmentTyped safe valid
+    intro context target metadataType extensionType uses targetTyped _ ih types environment environmentTyped safe valid
     exact ⟨⟨.specification metadataType extensionType,metadataType,⟨context,uses,environmentTyped,targetTyped,safe,valid⟩,.metadata _ _,.refl _⟩⟩
   case project =>
-    intro context target specType targetType uses targetTyped ih types environment environmentTyped safe valid
+    intro context target specType targetType uses targetTyped _ ih types environment environmentTyped safe valid
     exact ⟨⟨.prototype specType targetType,targetType,⟨context,uses,environmentTyped,targetTyped,safe,valid⟩,.project _ _,.refl _⟩⟩
   case binary =>
     intro context primitive left right input output lu ru primitiveEq leftTyped rightTyped ihLeft ihRight types environment environmentTyped safe valid
@@ -96,15 +96,15 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
       simpa only [inputEq,outputEq] using FrameTyping.binaryLeft rightOrigin'
     exact ⟨⟨input,output,⟨context,lu,environmentTyped,leftTyped,leftSafe,valid⟩,frame,.refl _⟩⟩
   case ifZero =>
-    intro context value zero successor result vu zu su valueTyped zeroTyped successorTyped successorSafe ihValue ihZero ihSuccessor types environment environmentTyped safe valid
+    intro context value zero successor result vu zu su valueTyped zeroTyped successorTyped successorSafe _ ihValue ihZero ihSuccessor types environment environmentTyped safe valid
     have vuLength := source_uses_length valueTyped
     have zuLength := source_uses_length zeroTyped
     have suLength : su.tail.length = context.length := by simp [List.length_tail,source_uses_length successorTyped]
-    have branchLength : (addUses zu su.tail).length = context.length := by
-      simp [addUses,List.length_zipWith,zuLength,suLength]
-    have valueSafe := safe_add_uses_left context vu (addUses zu su.tail) vuLength branchLength safe
-    have branchSafe := safe_add_uses_right context vu (addUses zu su.tail) vuLength branchLength safe
-    have zeroSafe := safe_add_uses_left context zu su.tail zuLength suLength branchSafe
+    have branchLength : (joinUses zu su.tail).length = context.length := by
+      simp [joinUses,List.length_zipWith,zuLength,suLength]
+    have valueSafe := safe_add_uses_left context vu (joinUses zu su.tail) vuLength branchLength safe
+    have branchSafe := safe_add_uses_right context vu (joinUses zu su.tail) vuLength branchLength safe
+    have zeroSafe := safe_join_uses_left context zu su.tail zuLength suLength branchSafe
     let zeroOrigin : ClosureTyping assumptions types ⟨zero,environment⟩ result :=
       ⟨context,zu,environmentTyped,zeroTyped,zeroSafe,valid⟩
     exact ⟨⟨.natural,result,⟨context,vu,environmentTyped,valueTyped,valueSafe,valid⟩,
@@ -115,16 +115,16 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.variant row,result,⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,
       .case environmentTyped armsTyped valid,.refl _⟩⟩
   case ifBool =>
-    intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped ihCondition ihTrue ihFalse types environment environmentTyped safe valid
+    intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped _ ihCondition ihTrue ihFalse types environment environmentTyped safe valid
     have cuLength := source_uses_length conditionTyped
     have tuLength := source_uses_length trueTyped
     have fuLength := source_uses_length falseTyped
-    have branchLength : (addUses tu fu).length = context.length := by
-      simp [addUses,List.length_zipWith,tuLength,fuLength]
-    have conditionSafe := safe_add_uses_left context cu (addUses tu fu) cuLength branchLength safe
-    have branchSafe := safe_add_uses_right context cu (addUses tu fu) cuLength branchLength safe
-    have trueSafe := safe_add_uses_left context tu fu tuLength fuLength branchSafe
-    have falseSafe := safe_add_uses_right context tu fu tuLength fuLength branchSafe
+    have branchLength : (joinUses tu fu).length = context.length := by
+      simp [joinUses,List.length_zipWith,tuLength,fuLength]
+    have conditionSafe := safe_add_uses_left context cu (joinUses tu fu) cuLength branchLength safe
+    have branchSafe := safe_add_uses_right context cu (joinUses tu fu) cuLength branchLength safe
+    have trueSafe := safe_join_uses_left context tu fu tuLength fuLength branchSafe
+    have falseSafe := safe_join_uses_right context tu fu tuLength fuLength branchSafe
     exact ⟨⟨.boolean,result,⟨context,cu,environmentTyped,conditionTyped,conditionSafe,valid⟩,
       .ifBool ⟨context,tu,environmentTyped,trueTyped,trueSafe,valid⟩ ⟨context,fu,environmentTyped,falseTyped,falseSafe,valid⟩,.refl _⟩⟩
   case effectCase =>

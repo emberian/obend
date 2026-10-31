@@ -22,7 +22,7 @@ set_option autoImplicit false
   type := .arrow .reusable .unrestricted .natural .natural
   uses := []
   derivation := .lambda (annotation := naturalAnnotation) (.natural _ _)
-    (by simp [naturalAnnotation, safeUses, zeroUses, safeQuantity, Quantity.fits, linearFree])
+    (by simp [naturalAnnotation, safeUses, zeroUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees])
     (by simp [naturalAnnotation, validContext, Ty.shareableUnder, Ty.shareable])
     (by simp [naturalAnnotation, reusableAllowed, reusableCaptures, zeroUses])
     rfl
@@ -61,7 +61,7 @@ theorem annotatedConstant_accepted :
     (check annotatedConstant [] 2).isSome = true := by
   simp [check, infer, annotatedConstant, unannotatedConstant, naturalAnnotation,
     agree, sameType_refl, Ty.canonical, Ty.shareable,
-    safeUses, zeroUses, safeQuantity, Quantity.fits, linearFree, validContext, reusableAllowed,
+    safeUses, zeroUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees, validContext, reusableAllowed,
     reusableCaptures, Assumptions.valid]
 
 /-! Correct annotations used not to suffice: a branch could use a declarative
@@ -95,9 +95,9 @@ not reduction of the finite graph decision. -/
     (.ifBool (.boolean _ _)
       (.conversion (.bound (binding := ⟨.variable 0, .unrestricted⟩) (index := 0) (by rfl))
         (naturalAlias_agrees))
-      (.natural _ _))
+      (.natural _ _) rfl)
     (by simp [aliasBranchAnnotation, safeUses, zeroUses, variableUses,
-      addUses, safeQuantity, Quantity.fits, linearFree])
+      addUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees])
     (by simp [aliasBranch, aliasBranchAnnotation, naturalAliasAssumptions, validContext,
       Ty.shareableUnder])
     (by simp [aliasBranchAnnotation, reusableAllowed, reusableCaptures,
@@ -113,7 +113,7 @@ theorem aliasBranch_accepted :
     (check aliasBranch [] 4).map (fun checked => checked.type) = some aliasBranchChecked.type := by
   simp [check, infer, aliasBranch, aliasBranchAnnotation, aliasBranchChecked,
     agree, sameType_refl, naturalAlias_agrees, naturalAlias_agrees_reverse,
-    safeUses, zeroUses, variableUses, addUses, safeQuantity, Quantity.fits, linearFree, validContext,
+    safeUses, zeroUses, variableUses, addUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees, validContext,
     Ty.shareableUnder, Ty.shareable, Ty.isComputation, reusableAllowed, reusableCaptures,
     naturalAliasAssumptions, Assumptions.valid]
 
@@ -142,7 +142,7 @@ algorithm refuses empty arm lists because there is no result type to infer. -/
   derivation := .lambda (annotation := emptyCaseAnnotation)
     (.case (.bound (binding := ⟨.variant .emptyRow, .unrestricted⟩) (index := 0) (by rfl))
       (.nil _ _) rfl)
-    (by simp [emptyCaseAnnotation, safeUses, variableUses, zeroUses, addUses, safeQuantity, Quantity.fits, linearFree])
+    (by simp [emptyCaseAnnotation, safeUses, variableUses, zeroUses, addUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees])
     (by simp [emptyCaseAnnotation, validContext, Ty.shareableUnder, Ty.shareable])
     (by simp [emptyCaseAnnotation, reusableAllowed, reusableCaptures,
       variableUses, zeroUses, addUses])
@@ -245,7 +245,7 @@ local macro "obstruction_check" : tactic => `(tactic|
     emptyCaseBidirectional, emptyCase, emptyCaseChecked, emptyCaseAnnotation,
     duplicateCaseBidirectional, duplicateCase, duplicateInjectionAnnotation, duplicateRow,
     lookupV, lookupW, unvisited, walkRow, Ty.isComputation, Ty.canonical,
-    safeUses, safeQuantity, Quantity.fits, linearFree, validContext, reusableAllowed, reusableCaptures,
+    safeUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees, validContext, reusableAllowed, reusableCaptures,
     zeroUses, variableUses, addUses, Ty.shareableUnder, Ty.shareable,
     Assumptions.valid, naturalAliasAssumptions, labelsDistinct])
 

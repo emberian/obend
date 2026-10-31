@@ -280,7 +280,7 @@ theorem width_field_annotations (source target : Ty) (fields : List (String × T
   | some _ => simpa using plain_lookup rest
 
 theorem get_bound_checks {a : Assumptions} {annotations : Annotations} {path : List Nat} {source found member : Ty}
-    {q : Quantity} {name : String}
+    {q : Quantity} {name : String} (notLinear : q ≠ .linear)
     (here : annotations path = none) (below : annotations (path ++ [0]) = none)
     (lookup : lookupV a.bounds [] source name = some found) (agrees : sameType a found member = true) :
     ∃ r, elaborate a annotations [⟨source, q⟩] path (.get (.bound 0) name) (.check member) = .ok r ∧
@@ -290,10 +290,13 @@ theorem get_bound_checks {a : Assumptions} {annotations : Annotations} {path : L
   split
   · rename_i m h
     rw [lookup] at h; cases h
-    simp [agrees, variableUses]
+    have free : linearFree [⟨source, q⟩] (List.map (fun position => if position = 0 then 1 else 0) [0]) = true := by
+      simp [linearFree, notLinear]
+    simp [agrees, variableUses, need_ok free]
   · rename_i h; rw [lookup] at h; contradiction
 
-theorem width_fields_check {a : Assumptions} {source : Ty} {q : Quantity} (annotations : Annotations)
+theorem width_fields_check {a : Assumptions} {source : Ty} {q : Quantity} (notLinear : q ≠ .linear)
+    (annotations : Annotations)
     (plain : ∀ index rest, annotations ([0, index] ++ rest) = none) :
     ∀ (fields : List (String × Ty)) (index : Nat), KeptAgree a source fields →
     ∃ result, checkFields a annotations [⟨source, q⟩] [0] index
@@ -302,12 +305,12 @@ theorem width_fields_check {a : Assumptions} {source : Ty} {q : Quantity} (annot
   | [], _, _ => ⟨⟨[0], .nil _⟩, rfl, rfl⟩
   | (name, member) :: rest, index, kept => by
     obtain ⟨nonComputation, found, lookup, agrees⟩ := kept name member (by simp)
-    obtain ⟨later, laterOk, laterUses⟩ := width_fields_check (q := q) annotations plain rest (index + 1)
+    obtain ⟨later, laterOk, laterUses⟩ := width_fields_check (q := q) notLinear annotations plain rest (index + 1)
       (fun n m h => kept n m (by simp [h]))
     have atField : annotations [0, index] = none := by simpa using plain index []
     have atBound : annotations [0, index, 0] = none := by simpa using plain index [0]
     have nonActivity : (!member.isComputation) = true := by simp [nonComputation]
-    obtain ⟨field, fieldOk, fieldUses⟩ := get_bound_checks (q := q) atField atBound lookup agrees
+    obtain ⟨field, fieldOk, fieldUses⟩ := get_bound_checks (q := q) notLinear atField atBound lookup agrees
     rw [List.map_cons, rowOf, checkFields]
     simp [fieldOk, laterOk, need_ok nonActivity, bind, Except.bind, pure, Except.pure, fieldUses, laterUses,
       addUses, Nat.add_comm]
@@ -321,7 +324,7 @@ theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × T
     ∃ checked, checkAgainst ⟨widthTerm fields, treeAnnotations (widthTree source (rowOf fields) fields), a⟩ []
       (.arrow .reusable (widthQuantity fields) source (rowOf fields)) = .ok checked := by
   let annotations := treeAnnotations (widthTree source (rowOf fields) fields)
-  obtain ⟨members, membersOk, membersUses⟩ := width_fields_check (q := widthQuantity fields) annotations
+  obtain ⟨members, membersOk, membersUses⟩ := width_fields_check (q := widthQuantity fields) (by unfold widthQuantity; split <;> decide) annotations
     (width_field_annotations source (rowOf fields) fields) fields 0 kept
   have root : annotations [] = some ⟨source, rowOf fields, widthQuantity fields, .reusable⟩ := rfl
   have recordRoot : annotations [0] = some (hint .emptyRow (rowOf fields)) := rfl

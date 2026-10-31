@@ -261,6 +261,43 @@ public theorem safe_add_uses_left (context : Context) (first second : Uses)
           have tail := ih firsts seconds fl sl decomposed.2
           simpa [safeUses,List.zip,List.all_cons,fl,head] using tail
 
+/-- A join is safe only if each branch is: `max` bounds both. -/
+public theorem safe_join_uses_left (context : Context) (first second : Uses)
+    (firstLength : first.length = context.length) (secondLength : second.length = context.length)
+    (safe : safeUses context (joinUses first second) = true) : safeUses context first = true := by
+  induction context generalizing first second with
+  | nil =>
+      cases first with
+      | nil => rfl
+      | cons head tail => simp at firstLength
+  | cons binding context ih =>
+      cases first with
+      | nil => simp at firstLength
+      | cons first firsts =>
+        cases second with
+        | nil => simp at secondLength
+        | cons second seconds =>
+          have fl : firsts.length = context.length := Nat.succ.inj firstLength
+          have sl : seconds.length = context.length := Nat.succ.inj secondLength
+          have decomposed : safeQuantity binding.quantity (max first second) = true ∧
+              safeUses context (joinUses firsts seconds) = true := by
+            simpa [safeUses,joinUses,List.zipWith,List.zip,List.all_cons,fl,sl] using safe
+          have head : safeQuantity binding.quantity first = true := by
+            have joined := decomposed.1
+            have le : first ≤ max first second := Nat.le_max_left _ _
+            cases hq : binding.quantity <;> rw [hq] at joined <;>
+              simp only [safeQuantity, beq_iff_eq, decide_eq_true_eq] at joined ⊢ <;> omega
+          have tail := ih firsts seconds fl sl decomposed.2
+          simpa [safeUses,List.zip,List.all_cons,fl,head] using tail
+
+public theorem safe_join_uses_right (context : Context) (first second : Uses)
+    (firstLength : first.length = context.length) (secondLength : second.length = context.length)
+    (safe : safeUses context (joinUses first second) = true) : safeUses context second = true := by
+  have comm : joinUses first second = joinUses second first := by
+    unfold joinUses; exact List.zipWith_comm_of_comm (fun a b => Nat.max_comm a b)
+  rw [comm] at safe
+  exact safe_join_uses_left context second first secondLength firstLength safe
+
 @[expose] public def isVariable : Ty → Bool
   | .variable _ => true
   | _ => false

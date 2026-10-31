@@ -464,9 +464,13 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
   | record {context : Context} {fields : List (String × Term)} {row : Ty} {uses : Uses} :
       FieldsTyping assumptions context fields row uses →
       PartialTyping assumptions context (.record fields) row uses
+  /-- A projection keeps one component and drops the rest, so (like `reflect`, `metadata` and
+  `project`) its target uses no `linear` hypothesis: records and pairs are multiplicative, and a
+  sibling holding a `linear` obligation would be dropped. -/
   | get {context : Context} {target : Term} {targetType member : Ty} {uses : Uses} {name : String} {fuel : Nat} :
       PartialTyping assumptions context target targetType uses →
       targetType.lookup assumptions.bounds fuel name = some member →
+      linearFree context uses = true →
       PartialTyping assumptions context (.get target name) member uses
   | extend {context : Context} {target : Term} {fields : List (String × Term)}
       {targetType row : Ty} {targetUses fieldUses : Uses} {fuel : Nat} :
@@ -486,12 +490,15 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       PartialTyping assumptions context (.prototype spec target) (.prototype specType targetType) (addUses su tu)
   | reflect {context : Context} {target : Term} {specType targetType : Ty} {uses : Uses} :
       PartialTyping assumptions context target (.prototype specType targetType) uses →
+      linearFree context uses = true →
       PartialTyping assumptions context (.reflect target) specType uses
   | metadata {context : Context} {target : Term} {metadataType extensionType : Ty} {uses : Uses} :
       PartialTyping assumptions context target (.specification metadataType extensionType) uses →
+      linearFree context uses = true →
       PartialTyping assumptions context (.metadata target) metadataType uses
   | project {context : Context} {target : Term} {specType targetType : Ty} {uses : Uses} :
       PartialTyping assumptions context target (.prototype specType targetType) uses →
+      linearFree context uses = true →
       PartialTyping assumptions context (.project target) targetType uses
   | mix {context : Context} {lower upper : Term} {lowerType upperType self inherited middle provided : Ty} {lu uu : Uses} :
       PartialTyping assumptions context lower lowerType lu →
@@ -520,7 +527,8 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       PartialTyping assumptions context value .natural vu → PartialTyping assumptions context zero result zu →
       PartialTyping assumptions (⟨.natural,.unrestricted⟩ :: context) successor result su →
       safeUses (⟨.natural,.unrestricted⟩ :: context) su = true →
-      PartialTyping assumptions context (.ifZero value zero successor) result (addUses vu (addUses zu su.tail))
+      branchesAgree context zu su.tail = true →
+      PartialTyping assumptions context (.ifZero value zero successor) result (addUses vu (joinUses zu su.tail))
   | inject {context : Context} {tag : String} {payload : Term} {payloadType row : Ty} {uses : Uses} {fuel : Nat} :
       PartialTyping assumptions context payload payloadType uses →
       row.lookup assumptions.bounds fuel tag = some payloadType →
@@ -531,11 +539,14 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       ArmsTyping assumptions context arms row result au →
       labelsDistinct arms = true →
       PartialTyping assumptions context (.case scrutinee arms) result (addUses su au)
+  /-- Exactly one branch runs: uses join (`joinUses`) under `branchesAgree`, so a `linear`
+  hypothesis is used equally on both. -/
   | ifBool {context : Context} {condition whenTrue whenFalse : Term} {result : Ty} {cu tu fu : Uses} :
       PartialTyping assumptions context condition .boolean cu →
       PartialTyping assumptions context whenTrue result tu →
       PartialTyping assumptions context whenFalse result fu →
-      PartialTyping assumptions context (.ifBool condition whenTrue whenFalse) result (addUses cu (addUses tu fu))
+      branchesAgree context tu fu = true →
+      PartialTyping assumptions context (.ifBool condition whenTrue whenFalse) result (addUses cu (joinUses tu fu))
   /-- Yield a Plan (a sum of first-order actions); the response is data. -/
   | perform {context : Context} {plan : Term} {planType response : Ty} {uses : Uses} :
       PartialTyping assumptions context plan planType uses →
@@ -570,7 +581,8 @@ inductive ArmsTyping (assumptions : Assumptions) : Context → List (String × T
       safeUses (⟨payload,.unrestricted⟩ :: context) bu = true →
       payload.shareableUnder assumptions.shareableVariables = true →
       ArmsTyping assumptions context rest row result ru →
-      ArmsTyping assumptions context ((name,body) :: rest) (.field name payload row) result (addUses bu.tail ru)
+      (rest.isEmpty || branchesAgree context bu.tail ru) = true →
+      ArmsTyping assumptions context ((name,body) :: rest) (.field name payload row) result (joinUses bu.tail ru)
 end
 
 structure Inferred (assumptions : Assumptions) (context : Context) (term : Term) where
@@ -645,7 +657,9 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let result ← infer assumptions annotations context (position ++ [0]) fuel target
       let member ← result.type.lookup assumptions.bounds (fuel + 1) name
       if hm : result.type.lookup assumptions.bounds (fuel + 1) name = some member then
-        some ⟨member, result.uses, .get result.derivation hm⟩ else none
+        if hl : linearFree context result.uses = true then
+          some ⟨member, result.uses, .get result.derivation hm hl⟩ else none
+      else none
   | fuel + 1, .extend target fields => do
       let prior ← infer assumptions annotations context (position ++ [0]) fuel target
       let members ← inferFields assumptions annotations context (position ++ [1]) 0 fuel fields
@@ -674,19 +688,22 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let result ← infer assumptions annotations context (position ++ [0]) fuel target
       match ht : result.type with
       | .prototype specType targetType =>
-          some ⟨specType, result.uses, .reflect (ht ▸ result.derivation)⟩
+          if hl : linearFree context result.uses = true then
+            some ⟨specType, result.uses, .reflect (ht ▸ result.derivation) hl⟩ else none
       | _ => none
   | fuel + 1, .metadata target => do
       let result ← infer assumptions annotations context (position ++ [0]) fuel target
       match ht : result.type with
       | .specification metadataType extensionType =>
-          some ⟨metadataType, result.uses, .metadata (ht ▸ result.derivation)⟩
+          if hl : linearFree context result.uses = true then
+            some ⟨metadataType, result.uses, .metadata (ht ▸ result.derivation) hl⟩ else none
       | _ => none
   | fuel + 1, .project target => do
       let result ← infer assumptions annotations context (position ++ [0]) fuel target
       match ht : result.type with
       | .prototype specType targetType =>
-          some ⟨targetType, result.uses, .project (ht ▸ result.derivation)⟩
+          if hl : linearFree context result.uses = true then
+            some ⟨targetType, result.uses, .project (ht ▸ result.derivation) hl⟩ else none
       | _ => none
   | fuel + 1, .mix lower upper => do
       let first ← infer assumptions annotations context (position ++ [0]) fuel lower
@@ -745,8 +762,10 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       if ht : condition.type = .natural then
         if hb : agree assumptions s.type z.type = true then
           if hu : safeUses (⟨.natural,.unrestricted⟩ :: context) s.uses = true then
-            some ⟨z.type, addUses condition.uses (addUses z.uses s.uses.tail),
-              .ifZero (ht ▸ condition.derivation) z.derivation (.conversion s.derivation (agree_sameType hb)) hu⟩
+            if hj : branchesAgree context z.uses s.uses.tail = true then
+              some ⟨z.type, addUses condition.uses (joinUses z.uses s.uses.tail),
+                .ifZero (ht ▸ condition.derivation) z.derivation (.conversion s.derivation (agree_sameType hb)) hu hj⟩
+            else none
           else none
         else none
       else none
@@ -814,8 +833,10 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let f ← infer assumptions annotations context (position ++ [2]) fuel whenFalse
       if hc : c.type = .boolean then
         if hb : agree assumptions f.type t.type = true then
-          some ⟨t.type, addUses c.uses (addUses t.uses f.uses),
-            .ifBool (hc ▸ c.derivation) t.derivation (.conversion f.derivation (agree_sameType hb))⟩
+          if hj : branchesAgree context t.uses f.uses = true then
+            some ⟨t.type, addUses c.uses (joinUses t.uses f.uses),
+              .ifBool (hc ▸ c.derivation) t.derivation (.conversion f.derivation (agree_sameType hb)) hj⟩
+          else none
         else none
       else none
   | fuel + 1, .perform plan => do
@@ -871,8 +892,10 @@ def inferArms (assumptions : Assumptions) (annotations : Annotations) (context :
             let later ← inferArms assumptions annotations context position (index + 1) scrutineeRow
               (some (expected.getD first.type)) fuel rest
             if hl : later.result = expected.getD first.type then
-              some ⟨.field name payload later.row, expected.getD first.type, addUses first.uses.tail later.uses,
-                .cons (.conversion first.derivation (agree_sameType ht)) hu hs (hl ▸ later.derivation)⟩
+              if hj : (rest.isEmpty || branchesAgree context first.uses.tail later.uses) = true then
+                some ⟨.field name payload later.row, expected.getD first.type, joinUses first.uses.tail later.uses,
+                  .cons (.conversion first.derivation (agree_sameType ht)) hu hs (hl ▸ later.derivation) hj⟩
+              else none
             else none
           else none
         else none

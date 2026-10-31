@@ -77,7 +77,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
       ∀ term', term.substitute (fillTerm σ Δ.length) = term' →
       ∃ result' : Inferred asm (Δ ++ Ψ) term',
         infer asm ann' (Δ ++ Ψ) pos (fuel + m) term' = some result' ∧
-        result'.type = result.type ∧ UsesLEOn Δ.length result'.uses result.uses) ∧
+        result'.type = result.type ∧ UsesMasked σ Δ.length result'.uses result.uses) ∧
     (∀ (ann ann' : Annotations) (Δ : Context) (pos : List Nat) (index : Nat) (fields : List (String × Term))
         (result : InferredFields asm (Δ ++ Ψ) fields),
       inferFields asm ann (Δ ++ Ψ) pos index fuel fields = some result →
@@ -86,7 +86,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
       ∀ fields', (fields.map fun field => (field.1, field.2.substitute (fillTerm σ Δ.length))) = fields' →
       ∃ result' : InferredFields asm (Δ ++ Ψ) fields',
         inferFields asm ann' (Δ ++ Ψ) pos index (fuel + m) fields' = some result' ∧
-        result'.type = result.type ∧ UsesLEOn Δ.length result'.uses result.uses) ∧
+        result'.type = result.type ∧ UsesMasked σ Δ.length result'.uses result.uses) ∧
     (∀ (ann ann' : Annotations) (Δ : Context) (pos : List Nat) (index : Nat) (row : Ty) (expected : Option Ty)
         (arms : List (String × Term)) (result : InferredArms asm (Δ ++ Ψ) arms),
       inferArms asm ann (Δ ++ Ψ) pos index row expected fuel arms = some result →
@@ -95,7 +95,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
       ∀ arms', (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) = arms' →
       ∃ result' : InferredArms asm (Δ ++ Ψ) arms',
         inferArms asm ann' (Δ ++ Ψ) pos index row expected (fuel + m) arms' = some result' ∧
-        result'.row = result.row ∧ result'.result = result.result ∧ UsesLEOn Δ.length result'.uses result.uses)
+        result'.row = result.row ∧ result'.result = result.result ∧ UsesMasked σ Δ.length result'.uses result.uses)
   | 0 => ⟨fun _ _ _ _ _ _ h => by simp [infer] at h, fun _ _ _ _ _ _ _ h => by simp [inferFields] at h,
       fun _ _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
   | fuel + 1 => by
@@ -115,7 +115,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           simp only [Term.substitute, fillTerm, hfill] at hterm'
           subst hterm'
           simp only [infer, Option.bind_eq_bind, found, Option.bind_some]
-          exact ⟨_, rfl, rfl, by exact UsesLEOn.refl _ _⟩
+          exact ⟨_, rfl, rfl, by exact UsesMasked.variable (keepAt_of_fillingAt_none hfill)⟩
         | some f =>
           simp only [Term.substitute, fillTerm, hfill] at hterm'
           subst hterm'
@@ -144,30 +144,25 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           rw [show m + (fuel + 1) = fuel + m + 1 by omega] at hr'
           refine ⟨r', hr', hty'.trans hty, ?_⟩
           rw [hu'']
-          have := UsesLE.zero (variableUses (Δ ++ Ψ) index)
-          rw [length_variableUses] at this
-          refine ⟨this, ?_⟩
-          have := variableUses_take_zero (Δ ++ Ψ) hle
-          rw [length_variableUses] at this
-          exact this.symm
+          exact UsesMasked.filled (keepAt_of_fillingAt_some hfill)
       | nat value =>
         simp only [infer] at h; cases h
         simp only [Term.substitute] at hterm'
         subst hterm'
         simp only [infer]
-        exact ⟨_, rfl, rfl, by exact UsesLEOn.refl _ _⟩
+        exact ⟨_, rfl, rfl, by exact UsesMasked.zero _ _ _⟩
       | boolean value =>
         simp only [infer] at h; cases h
         simp only [Term.substitute] at hterm'
         subst hterm'
         simp only [infer]
-        exact ⟨_, rfl, rfl, by exact UsesLEOn.refl _ _⟩
+        exact ⟨_, rfl, rfl, by exact UsesMasked.zero _ _ _⟩
       | label value =>
         simp only [infer] at h; cases h
         simp only [Term.substitute] at hterm'
         subst hterm'
         simp only [infer]
-        exact ⟨_, rfl, rfl, by exact UsesLEOn.refl _ _⟩
+        exact ⟨_, rfl, rfl, by exact UsesMasked.zero _ _ _⟩
       | lam body =>
         simp only [Term.substitute, liftSubstitution_fillTerm σ F.closed] at hterm'
         subst hterm'
@@ -201,7 +196,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
                 (body.substitute (fillTerm σ (Δ.length + 1))),
               infer asm ann' (⟨annotation.domain, annotation.parameter⟩ :: (Δ ++ Ψ)) (pos ++ [0]) (fuel + m)
                   (body.substitute (fillTerm σ (Δ.length + 1))) = some inner' ∧
-                inner'.type = inner.type ∧ UsesLEOn (Δ.length + 1) inner'.uses inner.uses :=
+                inner'.type = inner.type ∧ UsesMasked σ (Δ.length + 1) inner'.uses inner.uses :=
           ⟨inner₀, innerTyped₀, innerType₀, innerUses₀⟩
         simp only [infer, Option.bind_eq_bind, here,
           innerTyped', Option.bind_some]
@@ -234,7 +229,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           rw [shape'] at shape''
           cases shape''
           rw [dif_pos (by rw [argType]; exact agreed), dif_pos (argumentAllowed_of_le argUses.le allowed)]
-          exact ⟨_, rfl, rfl, by exact UsesLEOn.add fnUses argUses⟩
+          exact ⟨_, rfl, rfl, by exact UsesMasked.add fnUses argUses⟩
         · rename_i other
           exact (other _ _ _ _ shape').elim
       | record fields =>
@@ -253,12 +248,16 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨prior, priorTyped, member, found, h⟩ := h
         rw [dif_pos found] at h
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨prior', priorTyped', priorType, priorUses⟩ :=
           ih ann ann' Δ _ target prior priorTyped valid (hann.child 0 _ target (fun _ => by simp only [annotationsAt])) _ rfl
         have found' : prior'.type.lookup asm.bounds (fuel + m + 1) name = some member := by
           rw [priorType]; exact Ty.lookup_mono found (by omega)
-        simp only [infer, Option.bind_eq_bind, priorTyped', Option.bind_some, found']
+        simp only [infer, Option.bind_eq_bind, priorTyped', Option.bind_some, found',
+          dif_pos (linearFree_of_le priorUses.le free)]
         exact ⟨_, rfl, rfl, by exact priorUses⟩
       | extend target fields =>
         simp only [Term.substitute] at hterm'
@@ -277,7 +276,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           rw [priorType]; exact Ty.isRow_mono isRow (by omega)
         simp only [infer, Option.bind_eq_bind, priorTyped', membersTyped', Option.bind_some,
           dif_pos isRow']
-        refine ⟨_, rfl, ?_, by exact UsesLEOn.add priorUses membersUses⟩
+        refine ⟨_, rfl, ?_, by exact UsesMasked.add priorUses membersUses⟩
         show overlay members'.type prior'.type = overlay members.type prior.type
         rw [membersType, priorType]
       | specification metadata extension =>
@@ -300,7 +299,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         have p1 : d'.type.isComputation = false := by rw [dType]; exact pureDescriptor
         have p2 : b'.type.isComputation = false := by rw [bType]; exact pureBody
         simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2]
-        refine ⟨_, rfl, ?_, by exact UsesLEOn.add dUses bUses⟩
+        refine ⟨_, rfl, ?_, by exact UsesMasked.add dUses bUses⟩
         show Ty.specification d'.type b'.type = Ty.specification descriptor.type body.type
         rw [dType, bType]
       | prototype spec target =>
@@ -322,7 +321,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         have p1 : c'.type.isComputation = false := by rw [cType]; exact pureCode
         have p2 : v'.type.isComputation = false := by rw [vType]; exact pureValue
         simp only [infer, Option.bind_eq_bind, cTyped', vTyped', Option.bind_some, dif_pos p1, dif_pos p2]
-        refine ⟨_, rfl, ?_, by exact UsesLEOn.add cUses vUses⟩
+        refine ⟨_, rfl, ?_, by exact UsesMasked.add cUses vUses⟩
         show Ty.prototype c'.type v'.type = Ty.prototype code.type value.type
         rw [cType, vType]
       | reflect target =>
@@ -333,6 +332,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i specType targetType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ :=
           ih ann ann' Δ _ target inner innerTyped valid (hann.child 0 _ target (fun _ => by simp only [annotationsAt])) _ rfl
@@ -342,6 +344,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         · rename_i s' t' shape'
           rw [innerType] at shape'
           cases shape'
+          rw [dif_pos (linearFree_of_le innerUses.le free)]
           exact ⟨_, rfl, rfl, by exact innerUses⟩
         · rename_i other
           exact (other _ _ innerType).elim
@@ -353,6 +356,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i metadataType extensionType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ :=
           ih ann ann' Δ _ target inner innerTyped valid (hann.child 0 _ target (fun _ => by simp only [annotationsAt])) _ rfl
@@ -362,6 +368,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         · rename_i m' e' shape'
           rw [innerType] at shape'
           cases shape'
+          rw [dif_pos (linearFree_of_le innerUses.le free)]
           exact ⟨_, rfl, rfl, by exact innerUses⟩
         · rename_i other
           exact (other _ _ innerType).elim
@@ -373,6 +380,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i specType targetType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ :=
           ih ann ann' Δ _ target inner innerTyped valid (hann.child 0 _ target (fun _ => by simp only [annotationsAt])) _ rfl
@@ -382,6 +392,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         · rename_i s' t' shape'
           rw [innerType] at shape'
           cases shape'
+          rw [dif_pos (linearFree_of_le innerUses.le free)]
           exact ⟨_, rfl, rfl, by exact innerUses⟩
         · rename_i other
           exact (other _ _ innerType).elim
@@ -428,9 +439,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           rw [s2] at t2
           cases t1
           cases t2
-          rw [dif_pos rfl, dif_pos rfl, dif_pos (reusableCaptures_of_le (UsesLEOn.add firstUses secondUses).le captures),
+          rw [dif_pos rfl, dif_pos rfl, dif_pos (reusableCaptures_of_le (UsesMasked.add firstUses secondUses).le captures),
             dif_pos shareSelf, dif_pos shareInherited, dif_pos shareMiddle]
-          exact ⟨_, rfl, rfl, by exact UsesLEOn.add firstUses secondUses⟩
+          exact ⟨_, rfl, rfl, by exact UsesMasked.add firstUses secondUses⟩
         · rename_i other
           exact (other _ _ _ _ _ _ s1 s2).elim
       | fix spec inheritedTerm =>
@@ -472,7 +483,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           cases t1
           rw [dif_pos rfl, dif_pos (by rw [baseType]; exact agreed), dif_pos shareTarget,
             dif_pos (argumentAllowed_of_le baseUses.le allowed), dif_pos (reusableCaptures_of_le codeUses.le captures)]
-          exact ⟨_, rfl, rfl, by exact UsesLEOn.add codeUses baseUses⟩
+          exact ⟨_, rfl, rfl, by exact UsesMasked.add codeUses baseUses⟩
         · rename_i other
           exact (other _ _ _ s1).elim
       | binary primitive left right =>
@@ -494,7 +505,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         have l1 : l'.type = (primitiveTypes primitive).1 := by rw [lType, lShape]
         have r1 : r'.type = (primitiveTypes primitive).1 := by rw [rType, rShape]
         simp only [infer, Option.bind_eq_bind, lTyped', rTyped', Option.bind_some, dif_pos l1, dif_pos r1]
-        exact ⟨_, rfl, rfl, by exact UsesLEOn.add lUses rUses⟩
+        exact ⟨_, rfl, rfl, by exact UsesMasked.add lUses rUses⟩
       | ifZero value zero successor =>
         simp only [Term.substitute, liftSubstitution_fillTerm σ F.closed] at hterm'
         subst hterm'
@@ -509,6 +520,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i safe
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         have validN : validContext asm.shareableVariables (⟨.natural, .unrestricted⟩ :: (Δ ++ Ψ)) = true := by
           rw [show (⟨.natural, .unrestricted⟩ :: (Δ ++ Ψ) : Context) = [⟨.natural, .unrestricted⟩] ++ (Δ ++ Ψ) from rfl,
@@ -525,13 +539,14 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
             ∃ s' : Inferred asm (⟨.natural, .unrestricted⟩ :: (Δ ++ Ψ)) (successor.substitute (fillTerm σ (Δ.length + 1))),
               infer asm ann' (⟨.natural, .unrestricted⟩ :: (Δ ++ Ψ)) (pos ++ [2]) (fuel + m)
                   (successor.substitute (fillTerm σ (Δ.length + 1))) = some s' ∧
-                s'.type = s.type ∧ UsesLEOn (Δ.length + 1) s'.uses s.uses :=
+                s'.type = s.type ∧ UsesMasked σ (Δ.length + 1) s'.uses s.uses :=
           ⟨s₀, sTyped₀, sType₀, sUses₀⟩
         have c1 : c'.type = .natural := by rw [cType, cShape]
         have s1 : agree asm s'.type z'.type = true := by rw [sType, zType]; exact same
         simp only [infer, Option.bind_eq_bind, cTyped', zTyped',
-          sTyped', Option.bind_some, dif_pos c1, dif_pos s1, dif_pos (safeUses_of_le sUses.le safe)]
-        exact ⟨_, rfl, by exact zType, by exact UsesLEOn.add cUses (UsesLEOn.add zUses sUses.tail)⟩
+          sTyped', Option.bind_some, dif_pos c1, dif_pos s1, dif_pos (safeUses_of_le sUses.le safe),
+          dif_pos (zUses.agree sUses.tail agreeing)]
+        exact ⟨_, rfl, by exact zType, by exact UsesMasked.add cUses (UsesMasked.join zUses sUses.tail)⟩
       | inject tag payload =>
         simp only [Term.substitute] at hterm'
         subst hterm'
@@ -629,7 +644,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
                 rw [typedRow, valueType]; exact agreed
               rw [dif_pos a1, dif_pos pureResult]
               simp only [labelsDistinct_map, distinct, ↓reduceDIte]
-              exact ⟨_, rfl, rfl, by exact UsesLEOn.add valueUses typedUses⟩
+              exact ⟨_, rfl, rfl, by exact UsesMasked.add valueUses typedUses⟩
             · rename_i other
               exact (other _ _ _ (typedResult.trans resultShape)).elim
           · rename_i other
@@ -655,7 +670,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
             simp only [labelsDistinct_map, distinct, ↓reduceDIte]
-            exact ⟨_, rfl, by exact typedResult, by exact UsesLEOn.add valueUses typedUses⟩
+            exact ⟨_, rfl, by exact typedResult, by exact UsesMasked.add valueUses typedUses⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [Term.substitute] at hterm'
         subst hterm'
@@ -667,6 +682,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i same
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         obtain ⟨c', cTyped', cType, cUses⟩ :=
           ih ann ann' Δ _ condition c cTyped valid (hann.child 0 _ condition (fun _ => by simp only [annotationsAt])) _ rfl
@@ -677,8 +695,8 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         have c1 : c'.type = .boolean := by rw [cType, cShape]
         have s1 : agree asm f'.type t'.type = true := by rw [fType, tType]; exact same
         simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1,
-          dif_pos s1]
-        exact ⟨_, rfl, by exact tType, by exact UsesLEOn.add cUses (UsesLEOn.add tUses fUses)⟩
+          dif_pos s1, dif_pos (tUses.agree fUses agreeing)]
+        exact ⟨_, rfl, by exact tType, by exact UsesMasked.add cUses (UsesMasked.join tUses fUses)⟩
       | perform plan =>
         simp only [Term.substitute] at hterm'
         subst hterm'
@@ -731,7 +749,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         simp only [List.map_nil] at hfields'
         subst hfields'
         simp only [inferFields]
-        exact ⟨_, rfl, rfl, by exact UsesLEOn.refl _ _⟩
+        exact ⟨_, rfl, rfl, by exact UsesMasked.zero _ _ _⟩
       | cons head rest =>
         obtain ⟨name, body⟩ := head
         simp only [List.map_cons] at hfields'
@@ -747,7 +765,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           ihFields ann ann' Δ pos (index + 1) rest later laterTyped valid hann.tail _ rfl
         have p1 : first'.type.isComputation = false := by rw [firstType]; exact pureFirst
         simp only [inferFields, Option.bind_eq_bind, firstTyped', laterTyped', Option.bind_some, dif_pos p1]
-        refine ⟨_, rfl, ?_, by exact UsesLEOn.add firstUses laterUses⟩
+        refine ⟨_, rfl, ?_, by exact UsesMasked.add firstUses laterUses⟩
         show Ty.field name first'.type later'.type = Ty.field name first.type later.type
         rw [firstType, laterType]
     · intro ann ann' Δ pos index row expected arms result h valid hann arms' harms'
@@ -760,7 +778,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           simp only [List.map_nil] at harms'
           subst harms'
           simp only [inferArms]
-          exact ⟨_, rfl, rfl, rfl, by exact UsesLEOn.refl _ _⟩
+          exact ⟨_, rfl, rfl, rfl, by exact UsesMasked.zero _ _ _⟩
       | cons head rest =>
         obtain ⟨name, body⟩ := head
         simp only [List.map_cons] at harms'
@@ -783,6 +801,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i sameResult
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         have validP : validContext asm.shareableVariables (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ)) = true := by
           rw [show (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ) : Context) = [⟨payload, .unrestricted⟩] ++ (Δ ++ Ψ) from rfl,
@@ -794,7 +815,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
             ∃ first' : Inferred asm (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ)) (body.substitute (fillTerm σ (Δ.length + 1))),
               infer asm ann' (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ)) (pos ++ [index]) (fuel + m)
                   (body.substitute (fillTerm σ (Δ.length + 1))) = some first' ∧
-                first'.type = first.type ∧ UsesLEOn (Δ.length + 1) first'.uses first.uses :=
+                first'.type = first.type ∧ UsesMasked σ (Δ.length + 1) first'.uses first.uses :=
           ⟨first₀, firstTyped₀, firstType₀, firstUses₀⟩
         obtain ⟨later', laterTyped', laterRow, laterResult, laterUses⟩ :=
           ihArms ann ann' Δ pos (index + 1) row (some (expected.getD first.type)) rest later laterTyped valid hann.tail _ rfl
@@ -802,9 +823,12 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         rw [← firstType] at laterTyped'
         have hl : later'.result = expected.getD first'.type := by rw [laterResult, firstType]; exact sameResult
         have a1 : agree asm first'.type (expected.getD first'.type) = true := by rw [firstType]; exact agreed
+        have j1 := firstUses.tail.agreeArms
+          (rest' := rest.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) (by simp) laterUses agreeing
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos sharePayload,
-          firstTyped', dif_pos (safeUses_of_le firstUses.le safe), dif_pos a1, laterTyped', dif_pos hl]
-        refine ⟨_, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], by exact UsesLEOn.add firstUses.tail laterUses⟩
+          firstTyped', dif_pos (safeUses_of_le firstUses.le safe), dif_pos a1, laterTyped', dif_pos hl,
+          dif_pos j1]
+        refine ⟨_, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], by exact UsesMasked.join firstUses.tail laterUses⟩
         show Ty.field name payload later'.row = Ty.field name payload later.row
         rw [laterRow]
 

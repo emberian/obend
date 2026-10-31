@@ -85,9 +85,9 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ fields row u d ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_record_iff _ _).mp hs)
     exact ⟨a, ha, hu, .record d'⟩
-  · rintro Γ target tt member u name fuel d found ih Δ rfl hs
+  · rintro Γ target tt member u name fuel d found free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_get_iff _ _ _).mp hs)
-    exact ⟨a, ha, hu, .get d' found⟩
+    exact ⟨a, ha, hu, .get d' found (linearFree_append_zero ha (hu ▸ free))⟩
   · rintro Γ target fields tt row tu fu fuel dt df rowOk ih₁ ih₂ Δ rfl hs
     simp only [scoped_extend_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
@@ -115,15 +115,15 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
       exact .prototype d₁ d₂ sp tp
-  · rintro Γ target t₁ t₂ u d ih Δ rfl hs
+  · rintro Γ target t₁ t₂ u d free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_reflect_iff _ _).mp hs)
-    exact ⟨a, ha, hu, .reflect d'⟩
-  · rintro Γ target t₁ t₂ u d ih Δ rfl hs
+    exact ⟨a, ha, hu, .reflect d' (linearFree_append_zero ha (hu ▸ free))⟩
+  · rintro Γ target t₁ t₂ u d free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_metadata_iff _ _).mp hs)
-    exact ⟨a, ha, hu, .metadata d'⟩
-  · rintro Γ target t₁ t₂ u d ih Δ rfl hs
+    exact ⟨a, ha, hu, .metadata d' (linearFree_append_zero ha (hu ▸ free))⟩
+  · rintro Γ target t₁ t₂ u d free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_project_iff _ _).mp hs)
-    exact ⟨a, ha, hu, .project d'⟩
+    exact ⟨a, ha, hu, .project d' (linearFree_append_zero ha (hu ▸ free))⟩
   · rintro Γ lower upper lt ut self inherited middle provided lu uu dl du sl su cap sh ih mh ih₁ ih₂ Δ rfl hs
     simp only [scoped_mix_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
@@ -151,7 +151,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
       exact .binary shape d₁ d₂
-  · rintro Γ value zero succ result vu zu su dv dz ds safe ih₁ ih₂ ih₃ Δ rfl hs
+  · rintro Γ value zero succ result vu zu su dv dz ds safe agreeing ih₁ ih₂ ih₃ Δ rfl hs
     simp only [scoped_condition_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl hs.1
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl hs.2.1
@@ -159,11 +159,13 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     have hn : c ≠ [] := ne_nil_of_length_succ hc
     have ht : c.tail.length = Δ.length := by simpa using (congrArg (fun n => n - 1) hc).trans (Nat.add_sub_cancel _ _)
     have hbc := hb.trans ht.symm
-    have habc := ha.trans ((length_addUses hbc).trans hb).symm
-    refine ⟨addUses a (addUses b c.tail), (length_addUses habc).trans ha, ?_, ?_⟩
-    · rw [hu, hv, hw, split_tail Ψ hn, split_add Ψ hbc, split_add Ψ habc]
-    · rw [← split_add Ψ' habc, ← split_add Ψ' hbc, ← split_tail Ψ' hn]
-      exact .ifZero d₁ d₂ d₃ (safeUses_append_zero hc (hw ▸ safe))
+    have habc := ha.trans ((length_joinUses hbc).trans hb).symm
+    refine ⟨addUses a (joinUses b c.tail), (length_addUses habc).trans ha, ?_, ?_⟩
+    · rw [hu, hv, hw, split_tail Ψ hn, split_join Ψ hbc, split_add Ψ habc]
+    · rw [← split_add Ψ' habc, ← split_join Ψ' hbc, ← split_tail Ψ' hn]
+      refine .ifZero d₁ d₂ d₃ (safeUses_append_zero hc (hw ▸ safe)) ?_
+      rw [split_tail Ψ' hn, branchesAgree_append_zero hb ht]
+      rw [hv, hw, split_tail Ψ hn, branchesAgree_append_zero hb ht] at agreeing; exact agreeing
   · rintro Γ tag payload pt row u fuel d found pure ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_inject_iff _ _ _).mp hs)
     exact ⟨a, ha, hu, .inject d' found pure⟩
@@ -176,17 +178,19 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
       exact .case d₁ d₂ distinct
-  · rintro Γ cond yes no result cu tu fu dc dt df ih₁ ih₂ ih₃ Δ rfl hs
+  · rintro Γ cond yes no result cu tu fu dc dt df agreeing ih₁ ih₂ ih₃ Δ rfl hs
     simp only [scoped_ifBool_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl hs.1
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl hs.2.1
     obtain ⟨c, hc, hw, d₃⟩ := ih₃ Δ rfl hs.2.2
     have hbc := hb.trans hc.symm
-    have habc := ha.trans ((length_addUses hbc).trans hb).symm
-    refine ⟨addUses a (addUses b c), (length_addUses habc).trans ha, ?_, ?_⟩
-    · rw [hu, hv, hw, split_add Ψ hbc, split_add Ψ habc]
-    · rw [← split_add Ψ' habc, ← split_add Ψ' hbc]
-      exact .ifBool d₁ d₂ d₃
+    have habc := ha.trans ((length_joinUses hbc).trans hb).symm
+    refine ⟨addUses a (joinUses b c), (length_addUses habc).trans ha, ?_, ?_⟩
+    · rw [hu, hv, hw, split_join Ψ hbc, split_add Ψ habc]
+    · rw [← split_add Ψ' habc, ← split_join Ψ' hbc]
+      refine .ifBool d₁ d₂ d₃ ?_
+      rw [branchesAgree_append_zero hb hc]
+      rw [hv, hw, branchesAgree_append_zero hb hc] at agreeing; exact agreeing
   · rintro Γ plan pt response u d isPlan isData ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_perform_iff _ _).mp hs)
     exact ⟨a, ha, hu, .perform d' isPlan isData⟩
@@ -218,16 +222,18 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨zeroUses Δ, length_zeroUses _, zeroUses_append Δ Ψ, ?_⟩
     rw [← zeroUses_append]
     exact .nil _ _
-  · rintro Γ name body rest payload row result bu ru db safe share dr ih₁ ih₂ Δ rfl hs
+  · rintro Γ name body rest payload row result bu ru db safe share dr agreeing ih₁ ih₂ Δ rfl hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ (⟨payload, .unrestricted⟩ :: Δ) rfl (hs _ List.mem_cons_self)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (fun f hf => hs f (List.mem_cons_of_mem _ hf))
     have hn : a ≠ [] := ne_nil_of_length_succ ha
     have ht : a.tail.length = Δ.length := by simpa using (congrArg (fun n => n - 1) ha).trans (Nat.add_sub_cancel _ _)
     have hab := ht.trans hb.symm
-    refine ⟨addUses a.tail b, (length_addUses hab).trans ht, ?_, ?_⟩
-    · rw [hu, hv, split_tail Ψ hn, split_add Ψ hab]
-    · rw [← split_add Ψ' hab, ← split_tail Ψ' hn]
-      exact .cons d₁ (safeUses_append_zero ha (hu ▸ safe)) share d₂
+    refine ⟨joinUses a.tail b, (length_joinUses hab).trans ht, ?_, ?_⟩
+    · rw [hu, hv, split_tail Ψ hn, split_join Ψ hab]
+    · rw [← split_join Ψ' hab, ← split_tail Ψ' hn]
+      refine .cons d₁ (safeUses_append_zero ha (hu ▸ safe)) share d₂ ?_
+      rw [split_tail Ψ' hn, branchesAgree_append_zero ht hb]
+      rw [hu, hv, split_tail Ψ hn, branchesAgree_append_zero ht hb] at agreeing; exact agreeing
 
 /-- A closed derivation has zero uses and transports to every valid context. -/
 public theorem partialTyping_closed_transport {asm : Assumptions} {Γ : Context} {term : Term}
@@ -256,32 +262,32 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     (fillings : ∀ x f, σ x = some f → ∃ (b : Binding) (u : Uses),
       Ψ[x]? = some b ∧ PartialTyping asm Ψ f.term b.type u) :
     ∀ Δ : Context, Γ = Δ ++ Ψ → validContext asm.shareableVariables Γ = true →
-      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesLEOn Δ.length u uses := by
+      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesMasked σ Δ.length u uses := by
   refine PartialTyping.rec
     (motive_1 := fun Γ term type uses _ => ∀ Δ : Context, Γ = Δ ++ Ψ →
       validContext asm.shareableVariables Γ = true →
-      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesLEOn Δ.length u uses)
+      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesMasked σ Δ.length u uses)
     (motive_2 := fun Γ fields row uses _ => ∀ Δ : Context, Γ = Δ ++ Ψ →
       validContext asm.shareableVariables Γ = true →
       ∃ u : Uses, FieldsTyping asm Γ
-        (fields.map fun f => (f.1, f.2.substitute (fillTerm σ Δ.length))) row u ∧ UsesLEOn Δ.length u uses)
+        (fields.map fun f => (f.1, f.2.substitute (fillTerm σ Δ.length))) row u ∧ UsesMasked σ Δ.length u uses)
     (motive_3 := fun Γ arms row result uses _ => ∀ Δ : Context, Γ = Δ ++ Ψ →
       validContext asm.shareableVariables Γ = true →
       ∃ u : Uses, ArmsTyping asm Γ
-        (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) row result u ∧ UsesLEOn Δ.length u uses)
+        (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) row result u ∧ UsesMasked σ Δ.length u uses)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · rintro Γ i b found Δ rfl validΓ
     simp only [Term.substitute]
     by_cases isLocal : i < Δ.length
     · have empty : fillingAt σ Δ.length i = none := by simp [fillingAt, show ¬ Δ.length ≤ i by omega]
       rw [fillTerm, empty]
-      exact ⟨_, .bound found, UsesLEOn.refl _ _⟩
+      exact ⟨_, .bound found, UsesMasked.variable (keepAt_of_fillingAt_none empty)⟩
     · have ge : Δ.length ≤ i := by omega
       cases hf : σ (i - Δ.length) with
       | none =>
         have empty : fillingAt σ Δ.length i = none := by simp [fillingAt, ge, hf]
         rw [fillTerm, empty]
-        exact ⟨_, .bound found, UsesLEOn.refl _ _⟩
+        exact ⟨_, .bound found, UsesMasked.variable (keepAt_of_fillingAt_none empty)⟩
       | some f =>
         obtain ⟨b', u, hb, df⟩ := fillings _ _ hf
         have eqb : b' = b := by
@@ -291,20 +297,16 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
         obtain ⟨_, df'⟩ := partialTyping_closed_transport df (closed _ _ hf) (Δ ++ Ψ) validΓ
         have filled : fillingAt σ Δ.length i = some f := by simp [fillingAt, ge, hf]
         rw [fillTerm, filled]
-        refine ⟨zeroUses (Δ ++ Ψ), df', ?_, ?_⟩
-        · simpa only [zeroUses, length_variableUses] using UsesLE.zero (variableUses (Δ ++ Ψ) i)
-        · have := variableUses_take_zero (Δ ++ Ψ) ge
-          rw [length_variableUses] at this
-          simpa only [zeroUses] using this.symm
+        exact ⟨zeroUses (Δ ++ Ψ), df', UsesMasked.filled (keepAt_of_fillingAt_some filled)⟩
   · rintro Γ value Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .natural _ value, UsesLEOn.refl _ _⟩
+    exact ⟨_, .natural _ value, UsesMasked.zero _ _ _⟩
   · rintro Γ value Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .boolean _ value, UsesLEOn.refl _ _⟩
+    exact ⟨_, .boolean _ value, UsesMasked.zero _ _ _⟩
   · rintro Γ value Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .label _ value, UsesLEOn.refl _ _⟩
+    exact ⟨_, .label _ value, UsesMasked.zero _ _ _⟩
   · rintro Γ body ann u d safe valid captures fits ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih (⟨ann.domain, ann.parameter⟩ :: Δ) rfl valid
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
@@ -317,64 +319,65 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .application d₁ d₂ shape same (argumentAllowed_of_le hv.le allowed), UsesLEOn.add hu hv⟩
+    exact ⟨_, .application d₁ d₂ shape same (argumentAllowed_of_le hv.le allowed), UsesMasked.add hu hv⟩
   · rintro Γ fields row u d ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .record d', hu⟩
-  · rintro Γ target tt member u name fuel d found ih Δ rfl validΓ
+  · rintro Γ target tt member u name fuel d found free ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .get d' found, hu⟩
+    exact ⟨_, .get d' found (linearFree_of_le hu.le free), hu⟩
   · rintro Γ target fields tt row tu fu fuel dt df rowOk ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .extend d₁ d₂ rowOk, UsesLEOn.add hu hv⟩
+    exact ⟨_, .extend d₁ d₂ rowOk, UsesMasked.add hu hv⟩
   · rintro Γ metadataTerm ext mt et mu eu dm de mp ep ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .specification d₁ d₂ mp ep, UsesLEOn.add hu hv⟩
+    exact ⟨_, .specification d₁ d₂ mp ep, UsesMasked.add hu hv⟩
   · rintro Γ spec target st tt su tu ds dt sp tp ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .prototype d₁ d₂ sp tp, UsesLEOn.add hu hv⟩
-  · rintro Γ target t₁ t₂ u d ih Δ rfl validΓ
+    exact ⟨_, .prototype d₁ d₂ sp tp, UsesMasked.add hu hv⟩
+  · rintro Γ target t₁ t₂ u d free ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .reflect d', hu⟩
-  · rintro Γ target t₁ t₂ u d ih Δ rfl validΓ
+    exact ⟨_, .reflect d' (linearFree_of_le hu.le free), hu⟩
+  · rintro Γ target t₁ t₂ u d free ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .metadata d', hu⟩
-  · rintro Γ target t₁ t₂ u d ih Δ rfl validΓ
+    exact ⟨_, .metadata d' (linearFree_of_le hu.le free), hu⟩
+  · rintro Γ target t₁ t₂ u d free ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .project d', hu⟩
+    exact ⟨_, .project d' (linearFree_of_le hu.le free), hu⟩
   · rintro Γ lower upper lt ut self inherited middle provided lu uu dl du sl su cap sh ih mh ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .mix d₁ d₂ sl su (reusableCaptures_of_le (UsesLEOn.add hu hv).le cap) sh ih mh, UsesLEOn.add hu hv⟩
+    exact ⟨_, .mix d₁ d₂ sl su (reusableCaptures_of_le (UsesMasked.add hu hv).le cap) sh ih mh, UsesMasked.add hu hv⟩
   · rintro Γ spec base st inherited target su iu ds shape di sh allowed cap ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .fix d₁ shape d₂ sh (argumentAllowed_of_le hv.le allowed) (reusableCaptures_of_le hu.le cap), UsesLEOn.add hu hv⟩
+    exact ⟨_, .fix d₁ shape d₂ sh (argumentAllowed_of_le hv.le allowed) (reusableCaptures_of_le hu.le cap), UsesMasked.add hu hv⟩
   · rintro Γ prim left right input output lu ru shape dl dr ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .binary shape d₁ d₂, UsesLEOn.add hu hv⟩
-  · rintro Γ value zero succ result vu zu su dv dz ds safe ih₁ ih₂ ih₃ Δ rfl validΓ
+    exact ⟨_, .binary shape d₁ d₂, UsesMasked.add hu hv⟩
+  · rintro Γ value zero succ result vu zu su dv dz ds safe agreeing ih₁ ih₂ ih₃ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     have validS := validContext_cons_unrestricted validΓ (type := .natural) (by rfl)
     obtain ⟨w', d₃, hw⟩ := ih₃ (⟨.natural, .unrestricted⟩ :: Δ) rfl validS
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .ifZero d₁ d₂ d₃ (safeUses_of_le hw.le safe), UsesLEOn.add hu (UsesLEOn.add hv hw.tail)⟩
+    exact ⟨_, .ifZero d₁ d₂ d₃ (safeUses_of_le hw.le safe) (hv.agree hw.tail agreeing),
+      UsesMasked.add hu (UsesMasked.join hv hw.tail)⟩
   · rintro Γ tag payload pt row u fuel d found pure ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
@@ -383,13 +386,13 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .case d₁ d₂ (by simpa using distinct), UsesLEOn.add hu hv⟩
-  · rintro Γ cond yes no result cu tu fu dc dt df ih₁ ih₂ ih₃ Δ rfl validΓ
+    exact ⟨_, .case d₁ d₂ (by simpa using distinct), UsesMasked.add hu hv⟩
+  · rintro Γ cond yes no result cu tu fu dc dt df agreeing ih₁ ih₂ ih₃ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     obtain ⟨w', d₃, hw⟩ := ih₃ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .ifBool d₁ d₂ d₃, UsesLEOn.add hu (UsesLEOn.add hv hw)⟩
+    exact ⟨_, .ifBool d₁ d₂ d₃ (hv.agree hw agreeing), UsesMasked.add hu (UsesMasked.join hv hw)⟩
   · rintro Γ plan pt response u d isPlan isData ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
@@ -402,21 +405,22 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .effectCase d₁ d₂ pure (by simpa using distinct), UsesLEOn.add hu hv⟩
+    exact ⟨_, .effectCase d₁ d₂ pure (by simpa using distinct), UsesMasked.add hu hv⟩
   · rintro Γ Δ rfl validΓ
-    exact ⟨_, .nil _, UsesLEOn.refl _ _⟩
+    exact ⟨_, .nil _, UsesMasked.zero _ _ _⟩
   · rintro Γ name body rest type row bu ru db dr pure ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
-    exact ⟨_, .cons d₁ d₂ pure, UsesLEOn.add hu hv⟩
+    exact ⟨_, .cons d₁ d₂ pure, UsesMasked.add hu hv⟩
   · rintro Γ result Δ rfl validΓ
-    exact ⟨_, .nil _ _, UsesLEOn.refl _ _⟩
-  · rintro Γ name body rest payload row result bu ru db safe share dr ih₁ ih₂ Δ rfl validΓ
+    exact ⟨_, .nil _ _, UsesMasked.zero _ _ _⟩
+  · rintro Γ name body rest payload row result bu ru db safe share dr agreeing ih₁ ih₂ Δ rfl validΓ
     have validB := validContext_cons_unrestricted validΓ share
     obtain ⟨u', d₁, hu⟩ := ih₁ (⟨payload, .unrestricted⟩ :: Δ) rfl validB
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [List.map_cons]
-    exact ⟨_, .cons d₁ (safeUses_of_le hu.le safe) share d₂, UsesLEOn.add hu.tail hv⟩
+    exact ⟨_, .cons d₁ (safeUses_of_le hu.le safe) share d₂ (hu.tail.agreeArms (by simp) hv agreeing),
+      UsesMasked.join hu.tail hv⟩
 
 /-- Semantic substitution for arbitrary Checked evidence: no checker-completeness or
 fuel premise. Closed fillings share the template's assumptions and declared hole types. -/

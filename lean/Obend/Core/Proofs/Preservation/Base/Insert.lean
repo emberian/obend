@@ -56,6 +56,45 @@ theorem add_uses_insert (first second : Uses) (depth : Nat)
               have lengths' : first.length = second.length := Nat.succ.inj lengths
               simpa [addUses,List.insertIdx_succ_cons,List.zipWith] using congrArg (List.cons (a+b)) (ih first second lengths' bound)
 
+theorem join_uses_insert (first second : Uses) (depth : Nat)
+    (lengths : first.length = second.length) (bound : depth ≤ first.length) :
+    joinUses (first.insertIdx depth 0) (second.insertIdx depth 0) = (joinUses first second).insertIdx depth 0 := by
+  induction depth generalizing first second with
+  | zero => rfl
+  | succ depth ih =>
+      cases first with
+      | nil => simp at bound
+      | cons a first =>
+          cases second with
+          | nil => simp at lengths
+          | cons b second =>
+              simp only [List.length_cons,Nat.add_le_add_iff_right] at bound
+              have lengths' : first.length = second.length := Nat.succ.inj lengths
+              simpa [joinUses,List.insertIdx_succ_cons,List.zipWith] using congrArg (List.cons (max a b)) (ih first second lengths' bound)
+
+theorem branches_agree_insert (context : Context) (first second : Uses) (depth : Nat) (binding : Binding)
+    (agreeing : branchesAgree context first second = true) (bound : depth ≤ context.length)
+    (firstLength : first.length = context.length) (secondLength : second.length = context.length) :
+    branchesAgree (context.insertIdx depth binding) (first.insertIdx depth 0) (second.insertIdx depth 0) = true := by
+  induction depth generalizing context first second with
+  | zero =>
+      simp only [List.insertIdx_zero, branchesAgree, Bool.and_eq_true]
+      exact ⟨by cases binding.quantity <;> rfl, agreeing⟩
+  | succ depth ih =>
+      cases context with
+      | nil => simp at bound
+      | cons d context =>
+          cases first with
+          | nil => simp at firstLength
+          | cons a first =>
+              cases second with
+              | nil => simp at secondLength
+              | cons b second =>
+                  simp only [branchesAgree, Bool.and_eq_true] at agreeing
+                  simp only [List.insertIdx_succ_cons, branchesAgree, Bool.and_eq_true]
+                  exact ⟨agreeing.1, ih context first second agreeing.2 (by simpa using bound)
+                    (by simpa using firstLength) (by simpa using secondLength)⟩
+
 theorem variable_uses_lookup (context : Context) (index query : Nat) :
     (variableUses context index)[query]? =
       if query < context.length then some (if query = index then 1 else 0) else none := by
@@ -214,10 +253,10 @@ public theorem arms_uses_length {assumptions : Assumptions} {context : Context}
   | nil => cases typed; simp [zeroUses]
   | cons arm rest ih =>
       cases typed with
-      | cons bodyTyped safe shareable restTyped =>
+      | cons bodyTyped safe shareable restTyped _ =>
           have bodyLength := source_uses_length bodyTyped
           have restLength := ih restTyped
-          simp_all [addUses,List.length_zipWith,List.length_tail]
+          simp_all [addUses,joinUses,List.length_zipWith,List.length_tail]
 
 /-- General capture-sensitive lexical weakening over EVERY source constructor,
 including nested fields and conditional/lambda binders. The inserted slot is
@@ -282,8 +321,9 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     intro context fields row uses fieldsTyped ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.record (ih depth binding bound bindingValid))
   case get =>
-    intro context target targetType member uses name fuel targetTyped lookup ih depth binding bound bindingValid
-    simpa only [Term.rename] using (PartialTyping.get (ih depth binding bound bindingValid) lookup)
+    intro context target targetType member uses name fuel targetTyped lookup free ih depth binding bound bindingValid
+    simpa only [Term.rename] using (PartialTyping.get (ih depth binding bound bindingValid) lookup
+      (linear_free_insert context uses depth binding free bound))
   case extend =>
     intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow ihTarget ihFields depth binding bound bindingValid
     have fieldLength := source_uses_length (PartialTyping.record fieldsTyped)
@@ -301,14 +341,17 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename,counts] using
       (PartialTyping.prototype (ihSpec depth binding bound bindingValid) (ihTarget depth binding bound bindingValid) sPure tPure)
   case reflect =>
-    intro context target specType targetType uses prior ih depth binding bound bindingValid
-    simpa only [Term.rename] using (PartialTyping.reflect (ih depth binding bound bindingValid))
+    intro context target specType targetType uses prior free ih depth binding bound bindingValid
+    simpa only [Term.rename] using (PartialTyping.reflect (ih depth binding bound bindingValid)
+      (linear_free_insert context uses depth binding free bound))
   case metadata =>
-    intro context target metadataType extensionType uses prior ih depth binding bound bindingValid
-    simpa only [Term.rename] using (PartialTyping.metadata (ih depth binding bound bindingValid))
+    intro context target metadataType extensionType uses prior free ih depth binding bound bindingValid
+    simpa only [Term.rename] using (PartialTyping.metadata (ih depth binding bound bindingValid)
+      (linear_free_insert context uses depth binding free bound))
   case project =>
-    intro context target specType targetType uses prior ih depth binding bound bindingValid
-    simpa only [Term.rename] using (PartialTyping.project (ih depth binding bound bindingValid))
+    intro context target specType targetType uses prior free ih depth binding bound bindingValid
+    simpa only [Term.rename] using (PartialTyping.project (ih depth binding bound bindingValid)
+      (linear_free_insert context uses depth binding free bound))
   case mix =>
     intro context lower upper lowerType upperType self inherited middle provided lu uu lowerTyped upperTyped lowerCallable upperCallable captures selfShare inheritedShare middleShare ihLower ihUpper depth binding bound bindingValid
     have counts := add_uses_insert lu uu depth ((source_uses_length lowerTyped).trans (source_uses_length upperTyped).symm) (insert_usage_bound lowerTyped bound)
@@ -329,18 +372,20 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename,counts] using
       (PartialTyping.binary primitiveEq (ihLeft depth binding bound bindingValid) (ihRight depth binding bound bindingValid))
   case ifZero =>
-    intro context value zero successor result vu zu su valueTyped zeroTyped successorTyped successorSafe ihValue ihZero ihSuccessor depth binding bound bindingValid
+    intro context value zero successor result vu zu su valueTyped zeroTyped successorTyped successorSafe agreeing ihValue ihZero ihSuccessor depth binding bound bindingValid
     have successorBound : depth+1 ≤ (⟨.natural,.unrestricted⟩ :: context).length := by simpa using bound
     have nonempty : 0 < su.length := by rw [source_uses_length successorTyped]; simp
     have tailLength : su.tail.length = context.length := by simp [List.length_tail,source_uses_length successorTyped]
     have zeroLength := source_uses_length zeroTyped
-    have firstCounts := add_uses_insert zu su.tail depth (zeroLength.trans tailLength.symm) (insert_usage_bound zeroTyped bound)
-    have sumLength : (addUses zu su.tail).length = context.length := by simp [addUses,List.length_zipWith,zeroLength,tailLength]
-    have allCounts := add_uses_insert vu (addUses zu su.tail) depth ((source_uses_length valueTyped).trans sumLength.symm) (insert_usage_bound valueTyped bound)
+    have firstCounts := join_uses_insert zu su.tail depth (zeroLength.trans tailLength.symm) (insert_usage_bound zeroTyped bound)
+    have sumLength : (joinUses zu su.tail).length = context.length := by simp [joinUses,List.length_zipWith,zeroLength,tailLength]
+    have allCounts := add_uses_insert vu (joinUses zu su.tail) depth ((source_uses_length valueTyped).trans sumLength.symm) (insert_usage_bound valueTyped bound)
+    have agreeNext := branches_agree_insert context zu su.tail depth binding agreeing bound zeroLength tailLength
+    rw [← uses_tail_insert nonempty] at agreeNext
     simpa only [Term.rename,lift_shift_index,List.insertIdx_succ_cons,uses_tail_insert nonempty,firstCounts,allCounts] using
       (PartialTyping.ifZero (ihValue depth binding bound bindingValid) (ihZero depth binding bound bindingValid)
         (ihSuccessor (depth+1) binding successorBound bindingValid)
-        (safe_uses_insert _ su (depth+1) binding successorSafe successorBound))
+        (safe_uses_insert _ su (depth+1) binding successorSafe successorBound) (by simpa only [List.insertIdx_succ_cons] using agreeNext))
   case inject =>
     intro context tag payload payloadType row uses fuel payloadTyped lookup pure ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.inject (ih depth binding bound bindingValid) lookup pure)
@@ -351,15 +396,16 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
       (PartialTyping.case (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid)
         (by simpa using distinct))
   case ifBool =>
-    intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped ihCondition ihTrue ihFalse depth binding bound bindingValid
+    intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped agreeing ihCondition ihTrue ihFalse depth binding bound bindingValid
     have trueLength := source_uses_length trueTyped
     have falseLength := source_uses_length falseTyped
-    have firstCounts := add_uses_insert tu fu depth (trueLength.trans falseLength.symm) (insert_usage_bound trueTyped bound)
-    have sumLength : (addUses tu fu).length = context.length := by simp [addUses,List.length_zipWith,trueLength,falseLength]
-    have allCounts := add_uses_insert cu (addUses tu fu) depth ((source_uses_length conditionTyped).trans sumLength.symm) (insert_usage_bound conditionTyped bound)
+    have firstCounts := join_uses_insert tu fu depth (trueLength.trans falseLength.symm) (insert_usage_bound trueTyped bound)
+    have sumLength : (joinUses tu fu).length = context.length := by simp [joinUses,List.length_zipWith,trueLength,falseLength]
+    have allCounts := add_uses_insert cu (joinUses tu fu) depth ((source_uses_length conditionTyped).trans sumLength.symm) (insert_usage_bound conditionTyped bound)
     simpa only [Term.rename,firstCounts,allCounts] using
       (PartialTyping.ifBool (ihCondition depth binding bound bindingValid) (ihTrue depth binding bound bindingValid)
-        (ihFalse depth binding bound bindingValid))
+        (ihFalse depth binding bound bindingValid)
+        (branches_agree_insert context tu fu depth binding agreeing bound trueLength falseLength))
   case perform =>
     intro context plan planType response uses planTyped isPlan isData ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.perform (ih depth binding bound bindingValid) isPlan isData)
@@ -387,16 +433,22 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [List.map_nil,← zero_uses_insert context binding depth bound] using
       (ArmsTyping.nil (context.insertIdx depth binding) result : ArmsTyping assumptions _ [] .emptyRow result _)
   case cons =>
-    intro context name body rest payload row result bu ru bodyTyped safe shareable restTyped ihBody ihRest depth binding bound bindingValid
+    intro context name body rest payload row result bu ru bodyTyped safe shareable restTyped agreeing ihBody ihRest depth binding bound bindingValid
     have bodyBound : depth+1 ≤ (⟨payload,.unrestricted⟩ :: context).length := by simpa using bound
     have nonempty : 0 < bu.length := by rw [source_uses_length bodyTyped]; simp
     have tailLength : bu.tail.length = context.length := by simp [List.length_tail,source_uses_length bodyTyped]
-    have counts := add_uses_insert bu.tail ru depth (tailLength.trans (arms_uses_length restTyped).symm)
+    have counts := join_uses_insert bu.tail ru depth (tailLength.trans (arms_uses_length restTyped).symm)
       (by rw [tailLength]; exact bound)
     have bodyNext := ihBody (depth+1) binding bodyBound bindingValid
     have safeNext := safe_uses_insert _ bu (depth+1) binding safe bodyBound
     simp only [List.insertIdx_succ_cons] at bodyNext safeNext
-    have combined := ArmsTyping.cons (name := name) bodyNext safeNext shareable (ihRest depth binding bound bindingValid)
+    have agreeNext : ((rest.map fun arm => (arm.1, arm.2.rename (shiftIndex (depth+1)))).isEmpty ||
+        branchesAgree (context.insertIdx depth binding) (bu.insertIdx (depth+1) 0).tail (ru.insertIdx depth 0)) = true := by
+      rw [uses_tail_insert nonempty]
+      simp only [List.isEmpty_map, Bool.or_eq_true] at agreeing ⊢
+      exact agreeing.imp id (fun a => branches_agree_insert context bu.tail ru depth binding a bound tailLength
+        (arms_uses_length restTyped))
+    have combined := ArmsTyping.cons (name := name) bodyNext safeNext shareable (ihRest depth binding bound bindingValid) agreeNext
     rw [uses_tail_insert nonempty,counts] at combined
     simpa only [List.map_cons] using combined
 

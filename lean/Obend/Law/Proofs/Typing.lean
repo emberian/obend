@@ -38,13 +38,42 @@ set_option autoImplicit false
 /-- No annotation anywhere. -/
 @[expose] public def noAnn : Annotations := fun _ => none
 
+/-- No binder of `ctx` is `linear`, so the checker's linear premises (an argument, a projection,
+the branches of a join) hold whatever the uses. Laws bind nothing `linear`. -/
+@[expose] public def NoLinear (ctx : Context) : Prop := ∀ b ∈ ctx, b.quantity ≠ .linear
+
+public theorem NoLinear.cons {ctx : Context} {T : Ty} {q : Quantity} (h : NoLinear ctx) (hq : q ≠ .linear) :
+    NoLinear (⟨T, q⟩ :: ctx) := by
+  intro b hb
+  rcases List.mem_cons.1 hb with rfl | hb
+  · exact hq
+  · exact h b hb
+
+public theorem linearFree_noLinear {ctx : Context} (h : NoLinear ctx) (uses : Uses) : linearFree ctx uses = true := by
+  unfold linearFree
+  rw [List.all_eq_true]
+  intro pair member
+  have := h pair.1 (List.of_mem_zip member).1
+  simp [this]
+
+public theorem branchesAgree_noLinear : ∀ {ctx : Context}, NoLinear ctx → ∀ first second : Uses,
+    branchesAgree ctx first second = true
+  | [], _, _, _ => by cases ‹Uses› <;> rfl
+  | _ :: _, _, [], _ => rfl
+  | _ :: _, _, _ :: _, [] => rfl
+  | b :: ctx, h, _ :: first, _ :: second => by
+    simp only [branchesAgree, Bool.and_eq_true]
+    refine ⟨?_, branchesAgree_noLinear (fun b' hb' => h b' (List.mem_cons_of_mem _ hb')) first second⟩
+    have := h b List.mem_cons_self
+    cases hq : b.quantity <;> simp_all [Quantity.agrees]
+
 /-- `t` synthesizes `T` in `ctx`, at every position, with no annotations. -/
 @[expose] public def Syn (ctx : Context) (t : Term) (T : Ty) : Prop :=
-  ∀ path, ∃ r : Synth {} ctx t, elaborate {} noAnn ctx path t .synth = .ok r ∧ r.type = T
+  NoLinear ctx → ∀ path, ∃ r : Synth {} ctx t, elaborate {} noAnn ctx path t .synth = .ok r ∧ r.type = T
 
 /-- `t` checks against `T` in `ctx`, at every position, with no annotations. -/
 @[expose] public def Chk (ctx : Context) (t : Term) (T : Ty) : Prop :=
-  ∀ path, ∃ r : Against {} ctx t T, elaborate {} noAnn ctx path t (.check T) = .ok r
+  NoLinear ctx → ∀ path, ∃ r : Against {} ctx t T, elaborate {} noAnn ctx path t (.check T) = .ok r
 
 theorem finish_check {ctx : Context} {t : Term} (path : List Nat) (s : Synth {} ctx t) (T : Ty)
     (h : s.type = T) : ∃ r : Against {} ctx t T, finish {} noAnn path s (.check T) = .ok r := by
@@ -60,72 +89,73 @@ theorem lookupV_empty (name : String) : (T : Ty) → lookupV [] [] T name = rowM
     simp [lookupV, unvisited, lookupW, walkRow, rowMember]
 
 public theorem syn_bound {ctx : Context} {i : Nat} {b : Binding} (h : ctx[i]? = some b) : Syn ctx (.bound i) b.type := by
-  intro p
+  intro _ p
   simp only [elaborate]
   split
   · rename_i b' hb; rw [h] at hb; cases hb; exact ⟨_, rfl, rfl⟩
   · rename_i hb; rw [h] at hb; cases hb
 
 public theorem chk_bound {ctx : Context} {i : Nat} {b : Binding} (h : ctx[i]? = some b) : Chk ctx (.bound i) b.type := by
-  intro p
+  intro _ p
   simp only [elaborate]
   split
   · rename_i b' hb; rw [h] at hb; cases hb; exact finish_check _ _ _ rfl
   · rename_i hb; rw [h] at hb; cases hb
 
 public theorem chk_nat (ctx : Context) (k : Nat) : Chk ctx (.nat k) .natural := by
-  intro p; simp only [elaborate]; exact finish_check _ _ _ rfl
+  intro _ p; simp only [elaborate]; exact finish_check _ _ _ rfl
 public theorem chk_boolean (ctx : Context) (b : Bool) : Chk ctx (.boolean b) .boolean := by
-  intro p; simp only [elaborate]; exact finish_check _ _ _ rfl
+  intro _ p; simp only [elaborate]; exact finish_check _ _ _ rfl
 public theorem chk_label (ctx : Context) (s : String) : Chk ctx (.label s) .label := by
-  intro p; simp only [elaborate]; exact finish_check _ _ _ rfl
+  intro _ p; simp only [elaborate]; exact finish_check _ _ _ rfl
 
 public theorem syn_get {ctx : Context} {t : Term} {T M : Ty} {f : String} (h : Syn ctx t T)
     (hm : rowMember T f = some M) : Syn ctx (.get t f) M := by
-  intro p
-  obtain ⟨r, hr, hT⟩ := h (p ++ [0])
+  intro hn p
+  obtain ⟨r, hr, hT⟩ := h hn (p ++ [0])
   simp only [elaborate, noAnn, hr, bind, Except.bind]
   split
   · rename_i m hl
     have : lookupV [] [] r.type f = some M := by rw [hT, lookupV_empty, hm]
     have hm' : m = M := by simp_all
-    subst hm'; exact ⟨_, rfl, rfl⟩
+    subst hm'; rw [need_ok (linearFree_noLinear hn _)]; exact ⟨_, rfl, rfl⟩
   · rename_i hl
     have : lookupV [] [] r.type f = some M := by rw [hT, lookupV_empty, hm]
     simp_all
 
 public theorem chk_get {ctx : Context} {t : Term} {T M : Ty} {f : String} (h : Syn ctx t T)
     (hm : rowMember T f = some M) : Chk ctx (.get t f) M := by
-  intro p
-  obtain ⟨r, hr, hT⟩ := h (p ++ [0])
+  intro hn p
+  obtain ⟨r, hr, hT⟩ := h hn (p ++ [0])
   simp only [elaborate, noAnn, hr, bind, Except.bind]
   have : lookupV [] [] r.type f = some M := by rw [hT, lookupV_empty, hm]
   split
   · rename_i m hl
     have hm' : m = M := by simp_all
-    subst hm'; exact finish_check _ _ _ rfl
+    subst hm'; rw [need_ok (linearFree_noLinear hn _)]; exact finish_check _ _ _ rfl
   · simp_all
 
 public theorem chk_binary {ctx : Context} {p : Primitive} {l r : Term}
     (hl : Chk ctx l (primitiveTypes p).1) (hr : Chk ctx r (primitiveTypes p).1) :
     Chk ctx (.binary p l r) (primitiveTypes p).2 := by
-  intro path
-  obtain ⟨a, ha⟩ := hl (path ++ [0])
-  obtain ⟨b, hb⟩ := hr (path ++ [1])
+  intro hn path
+  obtain ⟨a, ha⟩ := hl hn (path ++ [0])
+  obtain ⟨b, hb⟩ := hr hn (path ++ [1])
   simp only [elaborate, ha, hb, bind, Except.bind]
   exact finish_check _ _ _ rfl
 
 public theorem chk_ifBool {ctx : Context} {c x y : Term} {T : Ty}
     (hc : Chk ctx c .boolean) (hx : Chk ctx x T) (hy : Chk ctx y T) : Chk ctx (.ifBool c x y) T := by
-  intro path
-  obtain ⟨a, ha⟩ := hc (path ++ [0])
-  obtain ⟨b, hb⟩ := hx (path ++ [1])
-  obtain ⟨d, hd⟩ := hy (path ++ [2])
-  simp only [elaborate, introduce, noAnn, ha, hb, hd, bind, Except.bind, pure, Except.pure]
+  intro hn path
+  obtain ⟨a, ha⟩ := hc hn (path ++ [0])
+  obtain ⟨b, hb⟩ := hx hn (path ++ [1])
+  obtain ⟨d, hd⟩ := hy hn (path ++ [2])
+  simp only [elaborate, introduce, noAnn, ha, hb, hd, bind, Except.bind, pure, Except.pure,
+    need_ok (branchesAgree_noLinear hn _ _)]
   exact ⟨_, rfl⟩
 
 public theorem chk_unit (ctx : Context) : Chk ctx (.record []) .emptyRow := by
-  intro path
+  intro _ path
   simp only [elaborate, introduce, noAnn, Option.isSome_none, Bool.false_eq_true, ite_false,
     labelsDistinct, checkFieldsByLabel, bind, Except.bind, pure, Except.pure,
     Obend.Core.Bidirectional.need, sameType_refl]
@@ -134,8 +164,8 @@ public theorem chk_unit (ctx : Context) : Chk ctx (.record []) .emptyRow := by
 public theorem chk_inject {ctx : Context} {tag : String} {payload : Term} {T row P : Ty}
     (hT : T.canonical = .variant row) (hP : rowMember row tag = some P) (hc : P.isComputation = false)
     (h : Chk ctx payload P) : Chk ctx (.inject tag payload) T := by
-  intro path
-  obtain ⟨a, ha⟩ := h (path ++ [0])
+  intro hn path
+  obtain ⟨a, ha⟩ := h hn (path ++ [0])
   simp only [elaborate, introduce, noAnn]
   have hw : Obend.Core.Bidirectional.injectionHead {} noAnn path T = .variant row := by
     have head : representativeHead {} noAnn path T = .variant row := hT
@@ -164,6 +194,9 @@ public theorem Clean.cons {ctx : Context} {T : Ty} (h : Clean ctx) (hT : T.share
   · exact ⟨rfl, hT⟩
   · exact h b hb
 
+public theorem Clean.noLinear {ctx : Context} (h : Clean ctx) : NoLinear ctx := fun b hb => by
+  rw [(h b hb).1]; decide
+
 theorem safeUses_clean {ctx : Context} {uses : Uses} (h : Clean ctx) (hl : uses.length = ctx.length) :
     safeUses ctx uses = true := by
   simp only [safeUses, hl, beq_self_eq_true, Bool.true_and, List.all_eq_true]
@@ -184,8 +217,8 @@ theorem reusableCaptures_clean {ctx : Context} {uses : Uses} (h : Clean ctx) (hl
 
 public theorem chk_lam {ctx : Context} {body : Term} {D C : Ty} (hctx : Clean ctx) (hD : D.canonical.shareable = true)
     (h : Chk (⟨D.canonical, .unrestricted⟩ :: ctx) body C.canonical) : Chk ctx (.lam body) (fnTy D C) := by
-  intro path
-  obtain ⟨a, ha⟩ := h (path ++ [0])
+  intro hn path
+  obtain ⟨a, ha⟩ := h (hn.cons (by decide)) (path ++ [0])
   have hc : Clean (⟨D.canonical, .unrestricted⟩ :: ctx) := hctx.cons hD
   have hl := Obend.Core.MachineTyping.source_uses_length a.derivation
   simp only [elaborate, noAnn]
@@ -217,15 +250,16 @@ theorem checkArms_ok {ctx : Context} {row result : Ty} (hctx : Clean ctx) :
       ∀ path idx, ∃ typed, checkArms {} noAnn ctx path idx row result arms = .ok typed ∧ typed.row = sub
   | _, _, .nil, path, idx => ⟨_, rfl, rfl⟩
   | _, _, .cons (P := P) hm hs hb rest, path, idx => by
-    obtain ⟨a, ha⟩ := hb (path ++ [idx])
-    obtain ⟨t, ht, hr⟩ := checkArms_ok hctx rest path (idx + 1)
     have hc : Clean (⟨P, .unrestricted⟩ :: ctx) := hctx.cons hs
+    obtain ⟨a, ha⟩ := hb hc.noLinear (path ++ [idx])
+    obtain ⟨t, ht, hr⟩ := checkArms_ok hctx rest path (idx + 1)
     have hl := Obend.Core.MachineTyping.source_uses_length a.derivation
     simp only [checkArms, hm, bind, Except.bind]
     rw [need_ok (by simpa using hs)]
     simp only [ha]
     rw [need_ok (safeUses_clean hc hl)]
-    simp only [ht, pure, Except.pure]
+    simp only [ht, pure, Except.pure, need_ok (show (_ || branchesAgree ctx a.uses.tail t.uses) = true by
+      simp [branchesAgree_noLinear hctx.noLinear])]
     exact ⟨_, rfl, by simp [hr]⟩
 
 public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)} {V row result : Ty}
@@ -236,8 +270,8 @@ public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)
   | nil => exact absurd rfl hne
   | cons arm rest =>
     obtain ⟨name, body⟩ := arm
-    intro path
-    obtain ⟨v, hv, hvT⟩ := hs (path ++ [0])
+    intro hn path
+    obtain ⟨v, hv, hvT⟩ := hs hn (path ++ [0])
     obtain ⟨t, ht, hr⟩ := checkArms_ok hctx ha (path ++ [1]) 0
     simp only [elaborate, noAnn, hv, bind, Except.bind]
     rw [need_ok hd]
@@ -346,7 +380,7 @@ public theorem lawOf6_checks {S : Ty} {b ad rl rt wr iv : At → Term} (hS : S.i
         rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical]; exact l3)
   have l1 : Chk [] (lawOf6 b ad rl rt wr iv) (lawTy S) := chk_lam c0 (by rw [hc]; exact hsh) (by
         rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical, hc]; exact l2)
-  obtain ⟨r, hr⟩ := l1 []
+  obtain ⟨r, hr⟩ := l1 c0.noLinear []
   have hl := Obend.Core.MachineTyping.source_uses_length r.derivation
   unfold ChecksAt checkAgainst Obend.Core.Bidirectional.checkAt
   simp only [hr, bind, Except.bind]
@@ -714,9 +748,9 @@ public theorem Clean.append {Γ Δ : Context} (h1 : Clean Γ) (h2 : Clean Δ) : 
 /-- An application: the function synthesizes a reusable arrow, the argument checks at its domain. -/
 public theorem chk_app {ctx : Context} {f a : Term} {D C : Ty} (hctx : Clean ctx) (hD : D.canonical.shareable = true)
     (hf : Syn ctx f (fnTy D C)) (ha : Chk ctx a D.canonical) : Chk ctx (.app f a) C.canonical := by
-  intro path
-  obtain ⟨r, hr, hT⟩ := hf (path ++ [0])
-  obtain ⟨b, hb⟩ := ha (path ++ [1])
+  intro hn path
+  obtain ⟨r, hr, hT⟩ := hf hn (path ++ [0])
+  obtain ⟨b, hb⟩ := ha hn (path ++ [1])
   have hl := Obend.Core.MachineTyping.source_uses_length b.derivation
   simp only [elaborate, noAnn, hr, bind, Except.bind]
   split
@@ -799,7 +833,7 @@ public theorem keepsOpen_checked {S : Ty} (hS : S.isCanonical) (hsh : S.shareabl
   have hk : Chk [invBinding S] (keepsOpen S) (lawTy S) :=
     lawOf6_chk_in hS hsh cΓ ⟨chk_keepsClause hS hsh rfl, chk_keepsClause hS hsh rfl,
       chk_keepsClause hS hsh rfl, chk_okT _, chk_keepsClause hS hsh rfl, chk_keepsClause hS hsh rfl⟩
-  obtain ⟨r, hr⟩ := hk []
+  obtain ⟨r, hr⟩ := hk cΓ.noLinear []
   have hl := Obend.Core.MachineTyping.source_uses_length r.derivation
   have : ∃ c, checkAgainst ⟨keepsOpen S, noAnn, {}⟩ [invBinding S] (lawTy S) = .ok c := by
     unfold checkAgainst Obend.Core.Bidirectional.checkAt

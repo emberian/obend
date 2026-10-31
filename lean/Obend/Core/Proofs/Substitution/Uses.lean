@@ -72,49 +72,170 @@ public theorem UsesLE.add {a a' b b' : Uses} (ha : UsesLE a a') (hb : UsesLE b b
     | nil => exact .nil
     | cons h' hb => exact .cons (Nat.add_le_add h h') (ih hb)
 
-/-- `UsesLE`, and equal on the first `k` positions: the binders above a position, which a closed
-filling never uses, keep their counts exactly. Exact discharge at a binder (`Quantity.fits`) needs
-the count kept, not only bounded. -/
-@[expose] public def UsesLEOn (k : Nat) (u v : Uses) : Prop := UsesLE u v ∧ u.take k = v.take k
+/-! ### Masked uses: what substitution does to a uses vector
 
-public theorem UsesLEOn.le {k : Nat} {u v : Uses} (h : UsesLEOn k u v) : UsesLE u v := h.1
+A closed filling uses nothing, so substituting it for hypothesis `x` turns `x`'s count to zero and
+leaves every other count as it was: the result's uses are the original's with the filled positions
+masked. The mask is a function of the position alone, so two branches are masked alike and a
+`linear` hypothesis on which they agreed still agrees (`UsesMasked.agree`). Bounded is not enough:
+`UsesLE` would let one branch's count fall and not the other's. -/
 
-public theorem UsesLEOn.refl (k : Nat) (u : Uses) : UsesLEOn k u u := ⟨UsesLE.refl u, rfl⟩
+/-- Keep the counts where `keep` holds, zero the rest. -/
+@[expose] public def maskUses (keep : Nat → Bool) : Uses → Uses
+  | [] => []
+  | n :: u => (if keep 0 then n else 0) :: maskUses (fun i => keep (i + 1)) u
 
-public theorem take_addUses : ∀ (k : Nat) (a b : Uses), (addUses a b).take k = addUses (a.take k) (b.take k)
-  | 0, _, _ => rfl
-  | _ + 1, [], _ => rfl
-  | _ + 1, _ :: _, [] => rfl
-  | k + 1, x :: a, y :: b => by
-    have := take_addUses k a b
-    simp only [addUses, List.zipWith_cons_cons, List.take_succ_cons] at this ⊢
-    rw [this]
+public theorem getElem?_maskUses : ∀ (keep : Nat → Bool) (u : Uses) (i : Nat),
+    (maskUses keep u)[i]? = u[i]?.map (fun n => if keep i then n else 0)
+  | _, [], _ => rfl
+  | _, _ :: _, 0 => rfl
+  | keep, _ :: u, i + 1 => by
+    simp only [maskUses, List.getElem?_cons_succ]
+    exact getElem?_maskUses (fun i => keep (i + 1)) u i
 
-public theorem UsesLEOn.add {k : Nat} {a a' b b' : Uses} (ha : UsesLEOn k a a') (hb : UsesLEOn k b b') :
-    UsesLEOn k (addUses a b) (addUses a' b') :=
-  ⟨UsesLE.add ha.1 hb.1, by rw [take_addUses, take_addUses, ha.2, hb.2]⟩
+public theorem length_maskUses (keep : Nat → Bool) (u : Uses) : (maskUses keep u).length = u.length := by
+  induction u generalizing keep with
+  | nil => rfl
+  | cons _ _ ih => simp [maskUses, ih]
 
-public theorem tail_take_succ (k : Nat) : ∀ u : Uses, (u.take (k + 1)).tail = u.tail.take k
-  | [] => by simp
-  | _ :: _ => rfl
+public theorem maskUses_zipWith (keep : Nat → Bool) (f : Nat → Nat → Nat) (zero : f 0 0 = 0) :
+    ∀ a b : Uses, maskUses keep (List.zipWith f a b) = List.zipWith f (maskUses keep a) (maskUses keep b) := by
+  intro a b
+  apply List.ext_getElem?
+  intro i
+  simp only [getElem?_maskUses, List.getElem?_zipWith]
+  cases a[i]? <;> cases b[i]? <;> simp
+  split <;> simp [zero]
 
-public theorem UsesLEOn.tail {k : Nat} {u v : Uses} (h : UsesLEOn (k + 1) u v) : UsesLEOn k u.tail v.tail := by
-  refine ⟨h.1.tail, ?_⟩
-  have := congrArg List.tail h.2
-  rwa [tail_take_succ, tail_take_succ] at this
+public theorem maskUses_add (keep : Nat → Bool) (a b : Uses) :
+    maskUses keep (addUses a b) = addUses (maskUses keep a) (maskUses keep b) :=
+  maskUses_zipWith keep _ rfl a b
 
-public theorem UsesLEOn.headD {k : Nat} {u v : Uses} (h : UsesLEOn (k + 1) u v) : u.headD 0 = v.headD 0 := by
-  have := congrArg (fun l => l.headD 0) h.2
-  cases u <;> cases v <;> simp_all
+public theorem maskUses_join (keep : Nat → Bool) (a b : Uses) :
+    maskUses keep (joinUses a b) = joinUses (maskUses keep a) (maskUses keep b) :=
+  maskUses_zipWith keep _ rfl a b
 
-public theorem variableUses_take_zero (Γ : Context) {k index : Nat} (h : k ≤ index) :
-    (variableUses Γ index).take k = (List.replicate (variableUses Γ index).length 0).take k := by
-  apply List.ext_getElem (by simp)
-  intro n h₁ h₂
-  simp only [List.getElem_take, List.getElem_replicate]
-  simp only [List.length_take] at h₁
-  simp only [variableUses, List.getElem_map, List.getElem_range]
-  rw [if_neg (by omega)]
+public theorem maskUses_zero (keep : Nat → Bool) (Γ : Context) : maskUses keep (zeroUses Γ) = zeroUses Γ := by
+  apply List.ext_getElem?
+  intro i
+  simp only [getElem?_maskUses, zeroUses, List.getElem?_replicate]
+  split <;> simp
+
+public theorem maskUses_variableUses (keep : Nat → Bool) (Γ : Context) (index : Nat) :
+    maskUses keep (variableUses Γ index) = if keep index then variableUses Γ index else zeroUses Γ := by
+  apply List.ext_getElem?
+  intro i
+  rw [getElem?_maskUses]
+  by_cases hi : i < Γ.length
+  · have value : (variableUses Γ index)[i]? = some (if i = index then 1 else 0) := by
+      simp [variableUses, hi]
+    rw [value]
+    by_cases e : i = index
+    · subst e; by_cases hk : keep i <;> simp [hk, value, zeroUses, hi]
+    · by_cases hk : keep index <;> simp [hk, e, value, zeroUses, hi]
+  · have none_ : (variableUses Γ index)[i]? = none := by simp [variableUses, hi]
+    rw [none_]
+    by_cases hk : keep index <;> simp [hk, none_, zeroUses, hi]
+
+public theorem maskUses_le (keep : Nat → Bool) : ∀ u : Uses, UsesLE (maskUses keep u) u
+  | [] => .nil
+  | n :: u => .cons (by split <;> omega) (maskUses_le _ u)
+
+public theorem maskUses_tail (keep : Nat → Bool) (u : Uses) :
+    (maskUses keep u).tail = maskUses (fun i => keep (i + 1)) u.tail := by
+  cases u <;> rfl
+
+public theorem maskUses_headD {keep : Nat → Bool} (kept : keep 0 = true) (u : Uses) :
+    (maskUses keep u).headD 0 = u.headD 0 := by
+  cases u <;> simp [maskUses, kept]
+
+public theorem branchesAgree_maskUses : ∀ (Γ : Context) (keep : Nat → Bool) (a b : Uses),
+    branchesAgree Γ a b = true → branchesAgree Γ (maskUses keep a) (maskUses keep b) = true
+  | [], _, _, _, _ => by cases ‹Uses› <;> rfl
+  | _ :: _, _, [], _, _ => rfl
+  | _ :: _, _, _ :: _, [], _ => by simp [maskUses, branchesAgree]
+  | d :: Γ, keep, x :: a, y :: b, h => by
+    simp only [branchesAgree, Bool.and_eq_true] at h
+    simp only [maskUses, branchesAgree, Bool.and_eq_true]
+    refine ⟨?_, branchesAgree_maskUses Γ _ a b h.2⟩
+    have := h.1
+    cases hq : d.quantity <;> simp_all [Quantity.agrees] <;> split <;> simp_all
+
+/-- What `σ` leaves in place at depth `depth`: the binders above, and every hypothesis it does not fill. -/
+@[expose] public def keepAt (σ : Nat → Option AnnotatedTerm) (depth : Nat) (index : Nat) : Bool :=
+  decide (index < depth) || (σ (index - depth)).isNone
+
+public theorem keepAt_succ (σ : Nat → Option AnnotatedTerm) (depth : Nat) :
+    (fun i => keepAt σ (depth + 1) (i + 1)) = keepAt σ depth := by
+  funext i
+  simp only [keepAt, Nat.add_lt_add_iff_right, Nat.add_sub_add_right]
+
+public theorem keepAt_zero_succ (σ : Nat → Option AnnotatedTerm) (depth : Nat) : keepAt σ (depth + 1) 0 = true := by
+  simp [keepAt]
+
+/-- The uses after substitution are the uses before with the filled hypotheses masked. -/
+@[expose] public def UsesMasked (σ : Nat → Option AnnotatedTerm) (depth : Nat) (u' u : Uses) : Prop :=
+  u' = maskUses (keepAt σ depth) u
+
+public theorem UsesMasked.le {σ : Nat → Option AnnotatedTerm} {depth : Nat} {u' u : Uses}
+    (h : UsesMasked σ depth u' u) : UsesLE u' u := by
+  rw [h]; exact maskUses_le _ u
+
+public theorem UsesMasked.add {σ : Nat → Option AnnotatedTerm} {depth : Nat} {a a' b b' : Uses}
+    (ha : UsesMasked σ depth a' a) (hb : UsesMasked σ depth b' b) :
+    UsesMasked σ depth (addUses a' b') (addUses a b) := by
+  unfold UsesMasked at *; rw [ha, hb, maskUses_add]
+
+public theorem UsesMasked.join {σ : Nat → Option AnnotatedTerm} {depth : Nat} {a a' b b' : Uses}
+    (ha : UsesMasked σ depth a' a) (hb : UsesMasked σ depth b' b) :
+    UsesMasked σ depth (joinUses a' b') (joinUses a b) := by
+  unfold UsesMasked at *; rw [ha, hb, maskUses_join]
+
+public theorem UsesMasked.tail {σ : Nat → Option AnnotatedTerm} {depth : Nat} {u' u : Uses}
+    (h : UsesMasked σ (depth + 1) u' u) : UsesMasked σ depth u'.tail u.tail := by
+  unfold UsesMasked at *; rw [h, maskUses_tail, keepAt_succ]
+
+public theorem UsesMasked.headD {σ : Nat → Option AnnotatedTerm} {depth : Nat} {u' u : Uses}
+    (h : UsesMasked σ (depth + 1) u' u) : u'.headD 0 = u.headD 0 := by
+  rw [h]; exact maskUses_headD (keepAt_zero_succ σ depth) u
+
+public theorem UsesMasked.zero (σ : Nat → Option AnnotatedTerm) (depth : Nat) (Γ : Context) :
+    UsesMasked σ depth (zeroUses Γ) (zeroUses Γ) := (maskUses_zero _ Γ).symm
+
+public theorem UsesMasked.agree {σ : Nat → Option AnnotatedTerm} {depth : Nat} {Γ : Context} {a a' b b' : Uses}
+    (ha : UsesMasked σ depth a' a) (hb : UsesMasked σ depth b' b) (h : branchesAgree Γ a b = true) :
+    branchesAgree Γ a' b' = true := by
+  rw [ha, hb]; exact branchesAgree_maskUses Γ _ a b h
+
+public theorem UsesMasked.agreeArms {σ : Nat → Option AnnotatedTerm} {depth : Nat} {Γ : Context} {a a' b b' : Uses}
+    {rest : List (String × Term)} {rest' : List (String × Term)} (same : rest'.isEmpty = rest.isEmpty)
+    (ha : UsesMasked σ depth a' a) (hb : UsesMasked σ depth b' b) (h : (rest.isEmpty || branchesAgree Γ a b) = true) :
+    (rest'.isEmpty || branchesAgree Γ a' b') = true := by
+  rw [same]
+  simp only [Bool.or_eq_true] at h ⊢
+  exact h.imp id (ha.agree hb)
+
+public theorem UsesMasked.variable {σ : Nat → Option AnnotatedTerm} {depth : Nat} {Γ : Context} {index : Nat}
+    (kept : keepAt σ depth index = true) : UsesMasked σ depth (variableUses Γ index) (variableUses Γ index) := by
+  unfold UsesMasked; rw [maskUses_variableUses, if_pos kept]
+
+public theorem UsesMasked.filled {σ : Nat → Option AnnotatedTerm} {depth : Nat} {Γ : Context} {index : Nat}
+    (dropped : keepAt σ depth index = false) : UsesMasked σ depth (zeroUses Γ) (variableUses Γ index) := by
+  unfold UsesMasked; rw [maskUses_variableUses, if_neg (by simp [dropped])]
+
+public theorem keepAt_of_fillingAt_none {σ : Nat → Option AnnotatedTerm} {depth index : Nat}
+    (h : fillingAt σ depth index = none) : keepAt σ depth index = true := by
+  unfold fillingAt at h; unfold keepAt
+  split at h
+  · simp [h]
+  · rename_i lt; simp; omega
+
+public theorem keepAt_of_fillingAt_some {σ : Nat → Option AnnotatedTerm} {depth index : Nat} {f : AnnotatedTerm}
+    (h : fillingAt σ depth index = some f) : keepAt σ depth index = false := by
+  unfold fillingAt at h; unfold keepAt
+  split at h
+  · rename_i le; simp [h]; omega
+  · cases h
 
 theorem zipAll_of_le {P : Binding × Nat → Bool}
     (hP : ∀ b m n, n ≤ m → P (b, m) = true → P (b, n) = true) {u v : Uses} (h : UsesLE u v) :
@@ -329,6 +450,38 @@ public theorem split_add {a₁ a₂ : Uses} (Ψ : Context) (h : a₁.length = a�
 public theorem split_tail {a : Uses} (Ψ : Context) (h : a ≠ []) :
     (a ++ zeroUses Ψ).tail = a.tail ++ zeroUses Ψ :=
   List.tail_append_of_ne_nil h
+
+public theorem length_joinUses {a b : Uses} (h : a.length = b.length) : (joinUses a b).length = a.length := by
+  simp [joinUses, List.length_zipWith, h]
+
+public theorem joinUses_zeroUses (Ψ : Context) : joinUses (zeroUses Ψ) (zeroUses Ψ) = zeroUses Ψ := by
+  simp [joinUses, zeroUses]
+
+public theorem split_join {a₁ a₂ : Uses} (Ψ : Context) (h : a₁.length = a₂.length) :
+    joinUses (a₁ ++ zeroUses Ψ) (a₂ ++ zeroUses Ψ) = joinUses a₁ a₂ ++ zeroUses Ψ := by
+  unfold joinUses; rw [List.zipWith_append h]; exact congrArg _ (joinUses_zeroUses Ψ)
+
+public theorem branchesAgree_zero : ∀ Ψ : Context, branchesAgree Ψ (zeroUses Ψ) (zeroUses Ψ) = true
+  | [] => rfl
+  | b :: Ψ => by
+    simp only [zeroUses, List.length_cons, List.replicate_succ, branchesAgree, Bool.and_eq_true]
+    exact ⟨by cases b.quantity <;> rfl, branchesAgree_zero Ψ⟩
+
+public theorem branchesAgree_append_zero {Δ Ψ : Context} {a b : Uses} (ha : a.length = Δ.length)
+    (hb : b.length = Δ.length) : branchesAgree (Δ ++ Ψ) (a ++ zeroUses Ψ) (b ++ zeroUses Ψ) = branchesAgree Δ a b := by
+  induction Δ generalizing a b with
+  | nil =>
+    cases a <;> cases b <;> simp_all
+    exact branchesAgree_zero Ψ
+  | cons d Δ ih =>
+    cases a with
+    | nil => simp at ha
+    | cons x a =>
+      cases b with
+      | nil => simp at hb
+      | cons y b =>
+        simp only [List.cons_append, branchesAgree]
+        rw [ih (by simpa using ha) (by simpa using hb)]
 
 public theorem headD_append {a : Uses} (z : Uses) (h : a ≠ []) : (a ++ z).headD 0 = a.headD 0 := by
   cases a with

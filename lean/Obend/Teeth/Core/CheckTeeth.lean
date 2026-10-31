@@ -31,7 +31,7 @@ attribute [local simp] check infer inferFields inferArms checkExtension agree
   zeroUses variableUses addUses safeUses safeQuantity validContext reusableCaptures
   Ty.shareable Ty.shareableUnder Ty.isComputation Ty.isData Ty.isPlan
   Ty.isRow Ty.lookup Ty.supports Ty.canonical Ty.insertCanonical Ty.put Ty.tail
-  Quantity.fits linearFree ExtensionFamilies.functionType
+  Quantity.fits linearFree joinUses branchesAgree Quantity.agrees ExtensionFamilies.functionType
   sameStep legacySameType Assumptions.orbit Assumptions.unfoldHead
   refusalKind relaxQuantities unrestrictedTy ampleFuel
   planType planRow responseType
@@ -318,9 +318,15 @@ theorem nat_primitive_label_operand_refused :
       (check ⟨.binary primitive (.nat 9) (.boolean true), fun _ => none, {}⟩ [] 8).isNone = true := by
   intro primitive choice; rcases choice with rfl | rfl | rfl | rfl | rfl <;> check_reduce
 
-/-- An affine binding used in two arms counts twice: arms are additive. -/
-theorem affine_in_two_arms_refused :
+/-- An affine binding used in two arms is used once on each path: arms join by maximum
+(`joinUses`, 2026-11-01; until then arms added and this was refused). -/
+theorem affine_in_two_arms_accepted :
     (check ⟨.case (.inject "circle" (.nat 4)) [("circle",.bound 1),("square",.bound 1)],
+      fun position => if position = [0] then some shapeInjection else none, {}⟩
+      [⟨.natural,.affine⟩] 16).isSome = true := by check_reduce
+/-- Arms still add with the scrutinee: an affine binding used by the scrutinee and an arm is refused. -/
+theorem affine_in_scrutinee_and_arm_refused :
+    (check ⟨.case (.inject "circle" (.bound 0)) [("circle",.bound 1),("square",.nat 0)],
       fun position => if position = [0] then some shapeInjection else none, {}⟩
       [⟨.natural,.affine⟩] 16).isNone = true := by check_reduce
 theorem affine_in_one_arm_accepted :

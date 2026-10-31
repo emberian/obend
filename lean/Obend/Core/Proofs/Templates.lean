@@ -243,6 +243,15 @@ theorem safeUses_instantiate (context : Context) (uses : Uses) :
   simp only [safeUses, instantiateContext, List.length_map, List.zip_map_left, List.all_map]
   rfl
 
+theorem branchesAgree_instantiate : ∀ (context : Context) (first second : Uses),
+    branchesAgree (instantiateContext σ context) first second = branchesAgree context first second
+  | [], _, _ => rfl
+  | _ :: _, [], _ => rfl
+  | _ :: _, _ :: _, [] => rfl
+  | _ :: context, _ :: first, _ :: second => by
+    simp only [instantiateContext, List.map_cons, branchesAgree] at *
+    rw [← branchesAgree_instantiate context first second]; rfl
+
 theorem linearFree_instantiate (context : Context) (uses : Uses) :
     linearFree (instantiateContext σ context) uses = linearFree context uses := by
   simp only [linearFree, instantiateContext, List.zip_map_left, List.all_map]
@@ -571,12 +580,17 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨prior, priorTyped, member, found, h⟩ := h
         rw [dif_pos found] at h
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨prior', priorTyped', priorType, priorUses⟩ := ih _ _ _ _ _ priorTyped
         have found' : prior'.type.lookup instance_.bounds (fuel + extra + 1) name = some (member.instantiate σ) := by
           rw [priorType, show fuel + extra + 1 = fuel + 1 + extra by omega]
           exact D.lookup_instantiate _ _ _ _ found
-        simp only [infer, Option.bind_eq_bind, priorTyped', Option.bind_some, found', dif_pos found']
+        have free' : linearFree (instantiateContext σ context) prior'.uses = true := by
+          rw [priorUses, linearFree_instantiate]; exact free
+        simp only [infer, Option.bind_eq_bind, priorTyped', Option.bind_some, found', dif_pos found', dif_pos free']
         exact ⟨_, rfl, rfl, priorUses⟩
       | extend target fields =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -632,8 +646,13 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i specType targetType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ := ih _ _ _ _ _ innerTyped
+        have free' : linearFree (instantiateContext σ context) inner'.uses = true := by
+          rw [innerUses, linearFree_instantiate]; exact free
         simp only [infer, Option.bind_eq_bind, innerTyped', Option.bind_some]
         rw [shape] at innerType
         split
@@ -641,6 +660,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           rw [innerType] at shape'
           simp only [Ty.instantiate, Ty.prototype.injEq] at shape'
           obtain ⟨rfl, rfl⟩ := shape'
+          rw [dif_pos free']
           exact ⟨_, rfl, rfl, innerUses⟩
         · rename_i other
           exact (other _ _ (by rw [innerType]; rfl)).elim
@@ -650,8 +670,13 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i metadataType extensionType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ := ih _ _ _ _ _ innerTyped
+        have free' : linearFree (instantiateContext σ context) inner'.uses = true := by
+          rw [innerUses, linearFree_instantiate]; exact free
         simp only [infer, Option.bind_eq_bind, innerTyped', Option.bind_some]
         rw [shape] at innerType
         split
@@ -659,6 +684,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           rw [innerType] at shape'
           simp only [Ty.instantiate, Ty.specification.injEq] at shape'
           obtain ⟨rfl, rfl⟩ := shape'
+          rw [dif_pos free']
           exact ⟨_, rfl, rfl, innerUses⟩
         · rename_i other
           exact (other _ _ (by rw [innerType]; rfl)).elim
@@ -668,8 +694,13 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i specType targetType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ := ih _ _ _ _ _ innerTyped
+        have free' : linearFree (instantiateContext σ context) inner'.uses = true := by
+          rw [innerUses, linearFree_instantiate]; exact free
         simp only [infer, Option.bind_eq_bind, innerTyped', Option.bind_some]
         rw [shape] at innerType
         split
@@ -677,6 +708,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           rw [innerType] at shape'
           simp only [Ty.instantiate, Ty.prototype.injEq] at shape'
           obtain ⟨rfl, rfl⟩ := shape'
+          rw [dif_pos free']
           exact ⟨_, rfl, rfl, innerUses⟩
         · rename_i other
           exact (other _ _ (by rw [innerType]; rfl)).elim
@@ -805,6 +837,9 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i safe
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         obtain ⟨c', cTyped', cType, cUses⟩ := ih _ _ _ _ _ cTyped
         obtain ⟨z', zTyped', zType, zUses⟩ := ih _ _ _ _ _ zTyped
@@ -815,8 +850,10 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         have u1 : safeUses (⟨.natural, .unrestricted⟩ :: instantiateContext σ context) s'.uses = true := by
           rw [sUses, show (⟨.natural, .unrestricted⟩ :: instantiateContext σ context : Context) =
             instantiateContext σ (⟨.natural, .unrestricted⟩ :: context) from rfl, safeUses_instantiate]; exact safe
+        have j1 : branchesAgree (instantiateContext σ context) z'.uses s'.uses.tail = true := by
+          rw [zUses, sUses, branchesAgree_instantiate]; exact agreeing
         simp only [infer, Option.bind_eq_bind, cTyped', zTyped', sTyped', Option.bind_some, dif_pos c1, dif_pos s1,
-          dif_pos u1]
+          dif_pos u1, dif_pos j1]
         exact ⟨_, rfl, zType, by dsimp only; rw [cUses, zUses, sUses]⟩
       | inject tag payload =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -980,13 +1017,19 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i same
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         obtain ⟨c', cTyped', cType, cUses⟩ := ih _ _ _ _ _ cTyped
         obtain ⟨t', tTyped', tType, tUses⟩ := ih _ _ _ _ _ tTyped
         obtain ⟨f', fTyped', fType, fUses⟩ := ih _ _ _ _ _ fTyped
         have c1 : c'.type = .boolean := by rw [cType, cShape]; rfl
         have s1 : agree instance_ f'.type t'.type = true := by rw [fType, tType]; exact D.agree_instantiate instanceValid same
-        simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1]
+        have j1 : branchesAgree (instantiateContext σ context) t'.uses f'.uses = true := by
+          rw [tUses, fUses, branchesAgree_instantiate]; exact agreeing
+        simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1,
+          dif_pos j1]
         exact ⟨_, rfl, tType, by dsimp only; rw [cUses, tUses, fUses]⟩
       | perform plan =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -1072,6 +1115,9 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i same
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         have found' : (row.instantiate σ).lookup instance_.bounds (fuel + extra + 1) name = some (payload.instantiate σ) := by
           rw [show fuel + extra + 1 = fuel + 1 + extra by omega]
@@ -1090,8 +1136,10 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         have l1 : later'.result = (expected.map (Ty.instantiate σ)).getD first'.type := by rw [laterResult, getD, same]
         have a1 : agree instance_ first'.type ((expected.map (Ty.instantiate σ)).getD first'.type) = true := by
           rw [getD, firstType]; exact D.agree_instantiate instanceValid agreed
+        have j1 : (rest.isEmpty || branchesAgree (instantiateContext σ context) first'.uses.tail later'.uses) = true := by
+          rw [firstUses, laterUses, branchesAgree_instantiate]; exact agreeing
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos s1, firstTyped', dif_pos u1,
-          dif_pos a1, laterTyped', dif_pos l1]
+          dif_pos a1, laterTyped', dif_pos l1, dif_pos j1]
         exact ⟨_, rfl, by simp [Ty.instantiate, laterRow], getD, by dsimp only; rw [firstUses, laterUses]⟩
 
 

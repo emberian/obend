@@ -135,6 +135,28 @@ public theorem linearFree_refines {Γ' Γ : Context} (h : Refines a Γ' Γ)
         · rw [affine]; decide
         · rw [unrestricted]; decide
 
+/-- Branches that agree on every `linear` binder of `Γ` agree on every `linear` binder of a
+refinement, which has no `linear` binder `Γ` lacks. -/
+public theorem branchesAgree_refines {Γ' Γ : Context} (h : Refines a Γ' Γ)
+    {first second : Uses} (agreeing : branchesAgree Γ first second = true) : branchesAgree Γ' first second = true := by
+  induction h generalizing first second with
+  | nil => cases first <;> cases second <;> rfl
+  | @cons b' b _ _ head _ ih =>
+    cases first with
+    | nil => rfl
+    | cons x first =>
+      cases second with
+      | nil => rfl
+      | cons y second =>
+        simp only [branchesAgree, Bool.and_eq_true] at agreeing ⊢
+        refine ⟨?_, ih agreeing.2⟩
+        have q := head.2
+        have here := agreeing.1
+        rcases q with same | ⟨affine, _⟩ | ⟨unrestricted, _⟩
+        · rw [same]; exact here
+        · rw [affine]; rfl
+        · rw [unrestricted]; rfl
+
 public theorem argumentAllowed_refines (none_ : a.bounds = []) {Γ' Γ : Context} (h : Refines a Γ' Γ)
     {q : Quantity} {t t' : Ty} {uses : Uses} (agrees : sameType a t' t = true)
     (allowed : argumentAllowed a q Γ t uses = true) : argumentAllowed a q Γ' t' uses = true := by

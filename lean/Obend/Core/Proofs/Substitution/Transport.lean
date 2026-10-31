@@ -170,12 +170,17 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨prior, priorTyped, member, found, h⟩ := h
         rw [dif_pos found] at h
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨a, ha, priorUses, prior', priorTyped', priorType, priorUses'⟩ :=
           ih ann ann' Δ _ _ target prior ((scoped_get_iff _ _ _).1 hs) priorTyped (shift_child hann 0)
         have found' : prior'.type.lookup asm.bounds (fuel + extra + 1) name = some member := by
           rw [priorType]; exact Ty.lookup_mono found (by omega)
-        simp only [infer, Option.bind_eq_bind, priorTyped', Option.bind_some, found']
+        have free' : linearFree (Δ ++ Ψ') prior'.uses = true := by
+          rw [priorUses']; exact linearFree_append_zero ha (by rw [← priorUses]; exact free)
+        simp only [infer, Option.bind_eq_bind, priorTyped', Option.bind_some, found', dif_pos free']
         exact ⟨a, ha, priorUses, _, rfl, rfl, priorUses'⟩
       | extend target fields =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -249,15 +254,21 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i specType targetType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨a, ha, innerUses, inner', innerTyped', innerType, innerUses'⟩ :=
           ih ann ann' Δ _ _ target inner ((scoped_reflect_iff _ _).1 hs) innerTyped (shift_child hann 0)
+        have free' : linearFree (Δ ++ Ψ') inner'.uses = true := by
+          rw [innerUses']; exact linearFree_append_zero ha (by rw [← innerUses]; exact free)
         simp only [infer, Option.bind_eq_bind, innerTyped', Option.bind_some]
         rw [shape] at innerType
         split
         · rename_i s' t' shape'
           rw [innerType] at shape'
           cases shape'
+          rw [dif_pos free']
           exact ⟨a, ha, innerUses, _, rfl, rfl, innerUses'⟩
         · rename_i other
           exact (other _ _ innerType).elim
@@ -267,15 +278,21 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i metadataType extensionType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨a, ha, innerUses, inner', innerTyped', innerType, innerUses'⟩ :=
           ih ann ann' Δ _ _ target inner ((scoped_metadata_iff _ _).1 hs) innerTyped (shift_child hann 0)
+        have free' : linearFree (Δ ++ Ψ') inner'.uses = true := by
+          rw [innerUses']; exact linearFree_append_zero ha (by rw [← innerUses]; exact free)
         simp only [infer, Option.bind_eq_bind, innerTyped', Option.bind_some]
         rw [shape] at innerType
         split
         · rename_i m' e' shape'
           rw [innerType] at shape'
           cases shape'
+          rw [dif_pos free']
           exact ⟨a, ha, innerUses, _, rfl, rfl, innerUses'⟩
         · rename_i other
           exact (other _ _ innerType).elim
@@ -285,15 +302,21 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i specType targetType shape
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨a, ha, innerUses, inner', innerTyped', innerType, innerUses'⟩ :=
           ih ann ann' Δ _ _ target inner ((scoped_project_iff _ _).1 hs) innerTyped (shift_child hann 0)
+        have free' : linearFree (Δ ++ Ψ') inner'.uses = true := by
+          rw [innerUses']; exact linearFree_append_zero ha (by rw [← innerUses]; exact free)
         simp only [infer, Option.bind_eq_bind, innerTyped', Option.bind_some]
         rw [shape] at innerType
         split
         · rename_i s' t' shape'
           rw [innerType] at shape'
           cases shape'
+          rw [dif_pos free']
           exact ⟨a, ha, innerUses, _, rfl, rfl, innerUses'⟩
         · rename_i other
           exact (other _ _ innerType).elim
@@ -428,6 +451,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i safe
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         obtain ⟨hs₁, hs₂, hs₃⟩ := (scoped_condition_iff _ _ _ _).1 hs
         obtain ⟨a₁, ha₁, cUses, c', cTyped', cType, cUses'⟩ :=
@@ -449,13 +475,18 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         have u1 : safeUses (⟨.natural, .unrestricted⟩ :: (Δ ++ Ψ')) s'.uses = true := by
           rw [sUses']
           exact safeUses_append_zero (Δ := ⟨.natural, .unrestricted⟩ :: Δ) ha₃ (by rw [← sUses]; exact safe)
+        have hl₃ : a₃.tail.length = Δ.length := by simp [ha₃]
+        have j1 : branchesAgree (Δ ++ Ψ') z'.uses s'.uses.tail = true := by
+          rw [zUses', sUses', split_tail Ψ' hne, branchesAgree_append_zero ha₂ hl₃]
+          rw [zUses, sUses, split_tail Ψ hne, branchesAgree_append_zero ha₂ hl₃] at agreeing; exact agreeing
+        have hl'' : a₁.length = (joinUses a₂ a₃.tail).length := by rw [length_joinUses hl, ha₂, ha₁]
         simp only [infer, Option.bind_eq_bind, cTyped', zTyped', sTyped', Option.bind_some, dif_pos c1, dif_pos s1,
-          dif_pos u1]
-        refine ⟨addUses a₁ (addUses a₂ a₃.tail), by rw [length_addUses hl', ha₁], ?_, _, rfl, by exact zType, ?_⟩
-        · show addUses c.uses (addUses z.uses s.uses.tail) = _
-          rw [cUses, zUses, sUses, split_tail Ψ hne, split_add Ψ hl, split_add Ψ hl']
-        · show addUses c'.uses (addUses z'.uses s'.uses.tail) = _
-          rw [cUses', zUses', sUses', split_tail Ψ' hne, split_add Ψ' hl, split_add Ψ' hl']
+          dif_pos u1, dif_pos j1]
+        refine ⟨addUses a₁ (joinUses a₂ a₃.tail), by rw [length_addUses hl'', ha₁], ?_, _, rfl, by exact zType, ?_⟩
+        · show addUses c.uses (joinUses z.uses s.uses.tail) = _
+          rw [cUses, zUses, sUses, split_tail Ψ hne, split_join Ψ hl, split_add Ψ hl'']
+        · show addUses c'.uses (joinUses z'.uses s'.uses.tail) = _
+          rw [cUses', zUses', sUses', split_tail Ψ' hne, split_join Ψ' hl, split_add Ψ' hl'']
       | inject tag payload =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨annotation, found, value, valueTyped, h⟩ := h
@@ -589,6 +620,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i same
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         obtain ⟨hs₁, hs₂, hs₃⟩ := (scoped_ifBool_iff _ _ _ _).1 hs
         obtain ⟨a₁, ha₁, cUses, c', cTyped', cType, cUses'⟩ :=
@@ -601,12 +635,17 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         have hl' : a₁.length = (addUses a₂ a₃).length := by rw [length_addUses hl, ha₂, ha₁]
         have c1 : c'.type = .boolean := by rw [cType, cShape]
         have s1 : agree asm f'.type t'.type = true := by rw [fType, tType]; exact same
-        simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1]
-        refine ⟨addUses a₁ (addUses a₂ a₃), by rw [length_addUses hl', ha₁], ?_, _, rfl, by exact tType, ?_⟩
-        · show addUses c.uses (addUses t.uses f.uses) = _
-          rw [cUses, tUses, fUses, split_add Ψ hl, split_add Ψ hl']
-        · show addUses c'.uses (addUses t'.uses f'.uses) = _
-          rw [cUses', tUses', fUses', split_add Ψ' hl, split_add Ψ' hl']
+        have j1 : branchesAgree (Δ ++ Ψ') t'.uses f'.uses = true := by
+          rw [tUses', fUses', branchesAgree_append_zero ha₂ ha₃]
+          rw [tUses, fUses, branchesAgree_append_zero ha₂ ha₃] at agreeing; exact agreeing
+        have hl'' : a₁.length = (joinUses a₂ a₃).length := by rw [length_joinUses hl, ha₂, ha₁]
+        simp only [infer, Option.bind_eq_bind, cTyped', tTyped', fTyped', Option.bind_some, dif_pos c1, dif_pos s1,
+          dif_pos j1]
+        refine ⟨addUses a₁ (joinUses a₂ a₃), by rw [length_addUses hl'', ha₁], ?_, _, rfl, by exact tType, ?_⟩
+        · show addUses c.uses (joinUses t.uses f.uses) = _
+          rw [cUses, tUses, fUses, split_join Ψ hl, split_add Ψ hl'']
+        · show addUses c'.uses (joinUses t'.uses f'.uses) = _
+          rw [cUses', tUses', fUses', split_join Ψ' hl, split_add Ψ' hl'']
       | perform plan =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
         obtain ⟨annotation, found, value, valueTyped, h⟩ := h
@@ -694,6 +733,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i sameResult
+        split at h
+        rotate_left; · cases h
+        rename_i agreeing
         cases h
         obtain ⟨a₁, ha₁, firstUses, first₀, firstTyped₀, firstType₀, firstUses₀⟩ :=
           ih ann ann' (⟨payload, .unrestricted⟩ :: Δ) _ _ body first (hs _ List.mem_cons_self) firstTyped
@@ -715,12 +757,16 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         rw [← firstType] at laterTyped'
         have hl' : later'.result = expected.getD first'.type := by rw [laterResult, firstType]; exact sameResult
         have a1 : agree asm first'.type (expected.getD first'.type) = true := by rw [firstType]; exact agreed
+        have hl₁ : a₁.tail.length = Δ.length := by simp [ha₁]
+        have j1 : (rest.isEmpty || branchesAgree (Δ ++ Ψ') first'.uses.tail later'.uses) = true := by
+          rw [firstUses', laterUses', split_tail Ψ' hne, branchesAgree_append_zero hl₁ ha₂]
+          rw [firstUses, laterUses, split_tail Ψ hne, branchesAgree_append_zero hl₁ ha₂] at agreeing; exact agreeing
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos sharePayload, firstTyped',
-          dif_pos u1, dif_pos a1, laterTyped', dif_pos hl']
-        refine ⟨addUses a₁.tail a₂, by rw [length_addUses hl]; simp [ha₁], ?_, _, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], ?_⟩
-        · show addUses first.uses.tail later.uses = _; rw [firstUses, laterUses, split_tail Ψ hne, split_add Ψ hl]
+          dif_pos u1, dif_pos a1, laterTyped', dif_pos hl', dif_pos j1]
+        refine ⟨joinUses a₁.tail a₂, by rw [length_joinUses hl]; simp [ha₁], ?_, _, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], ?_⟩
+        · show joinUses first.uses.tail later.uses = _; rw [firstUses, laterUses, split_tail Ψ hne, split_join Ψ hl]
         · show Ty.field name payload later'.row = Ty.field name payload later.row; rw [laterRow]
-        · show addUses first'.uses.tail later'.uses = _
-          rw [firstUses', laterUses', split_tail Ψ' hne, split_add Ψ' hl]
+        · show joinUses first'.uses.tail later'.uses = _
+          rw [firstUses', laterUses', split_tail Ψ' hne, split_join Ψ' hl]
 
 end Obend.Core.Proofs.Substitution

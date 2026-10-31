@@ -262,29 +262,29 @@ theorem source_uses_length {assumptions : Assumptions} {context : Context}
   · intros; simp [zeroUses]
   · intros; rename_i ih; simpa using (congrArg (fun n => n-1) ih).trans (Nat.add_sub_cancel _ _)
   · intros; assumption
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; assumption
   · intros; assumption
-  · intros; simp_all [addUses,List.length_zipWith]
-  · intros; simp_all [addUses,List.length_zipWith]
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; assumption
   · intros; assumption
   · intros; assumption
-  · intros; simp_all [addUses,List.length_zipWith]
-  · intros; simp_all [addUses,List.length_zipWith]
-  · intros; simp_all [addUses,List.length_zipWith]
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; assumption
-  · intros; simp_all [addUses,List.length_zipWith]
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; assumption
   · intros; assumption
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; simp [zeroUses]
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; simp [zeroUses]
-  · intros; simp_all [addUses,List.length_zipWith]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
 
 /-- Finite authored record rows are rows at some adequate probe depth.
 The graph value relation therefore imposes no arbitrary 64-member ceiling. -/
@@ -376,7 +376,7 @@ theorem source_scoped {assumptions : Assumptions} {context : Context}
     · exact ihb
     · exact ihr field member
   · intro context result arm member; simp at member
-  · intro context name body rest payload row result bu ru hb _ _ _ ihb ihr arm member
+  · intro context name body rest payload row result bu ru hb _ _ _ _ ihb ihr arm member
     simp only [List.mem_cons] at member
     rcases member with rfl | member
     · simpa using ihb
@@ -427,7 +427,7 @@ theorem source_fields_scoped {assumptions : Assumptions} {context : Context}
     · exact ihb
     · exact ihr field member
   · intro context result arm member; simp at member
-  · intro context name body rest payload row result bu ru hb _ _ _ ihb ihr arm member
+  · intro context name body rest payload row result bu ru hb _ _ _ _ ihb ihr arm member
     simp only [List.mem_cons] at member
     rcases member with rfl | member
     · simpa using ihb

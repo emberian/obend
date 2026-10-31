@@ -580,7 +580,8 @@ theorem motive_application (none_ : a.bounds = []) {Γ : Context} {function argu
 
 theorem motive_get (none_ : a.bounds = []) {Γ : Context} {target : Term} {targetType member : Ty}
     {uses : Uses} {name : String} {fuel : Nat}
-    (found : targetType.lookup a.bounds fuel name = some member) (ih : Motive a Γ target targetType uses) :
+    (found : targetType.lookup a.bounds fuel name = some member) (free : linearFree Γ uses = true)
+    (ih : Motive a Γ target targetType uses) :
     Motive a Γ (.get target name) member uses := by
   have lookup : lookupV a.bounds [] targetType name = some member := (lookupV_iff _ _ _ _).2 ⟨fuel, found⟩
   have synth : Synthable target → ∀ Γ', Refines a Γ' Γ → SynthOK a Γ' (.get target name) member uses ∧
@@ -596,6 +597,7 @@ theorem motive_get (none_ : a.bounds = []) {Γ : Context} {target : Term} {targe
         have root := realizes_root realizes
         obtain ⟨value, ok, vType, vUses⟩ := yields_elim (tRun annotations (realizes_child realizes 0 tt rfl)).1
         simp only [synthAt] at ok
+        have free' : linearFree Γ' value.uses = true := by rw [vUses]; exact linearFree_refines r free
         constructor
         · change Yields (elaborate a annotations Γ' path (.get target name) .synth) _
           rw [elaborate]
@@ -603,7 +605,7 @@ theorem motive_get (none_ : a.bounds = []) {Γ : Context} {target : Term} {targe
           split
           · rename_i m h
             rw [vType, found'] at h; cases h
-            simp [finish, ascribe, root, Yields, vUses]
+            simp [finish, ascribe, root, Yields, vUses, need_ok free']
           · rename_i h; rw [vType, found'] at h; contradiction
         · intro expected agreement
           change Yields (elaborate a annotations Γ' path (.get target name) (.check expected)) _
@@ -612,7 +614,7 @@ theorem motive_get (none_ : a.bounds = []) {Γ : Context} {target : Term} {targe
           split
           · rename_i m h
             rw [vType, found'] at h; cases h
-            simp [finish, agreement, Yields, vUses]
+            simp [finish, agreement, Yields, vUses, need_ok free']
           · rename_i h; rw [vType, found'] at h; contradiction
     · obtain ⟨tt, tT, tPrepared, tSame, _⟩ := ih.1.1 st Γ' r (path ++ [0])
       obtain ⟨member', found', _⟩ := lookupV_transport tSame lookup
@@ -676,8 +678,8 @@ theorem motive_binary {Γ : Context} {primitive : Primitive} {left right : Term}
 
 theorem motive_ifBool {Γ : Context} {condition whenTrue whenFalse : Term} {result : Ty} {cu tu fu : Uses}
     (ihC : Motive a Γ condition .boolean cu) (ihT : Motive a Γ whenTrue result tu)
-    (ihF : Motive a Γ whenFalse result fu) :
-    Motive a Γ (.ifBool condition whenTrue whenFalse) result (addUses cu (addUses tu fu)) := by
+    (ihF : Motive a Γ whenFalse result fu) (agreeing : branchesAgree Γ tu fu = true) :
+    Motive a Γ (.ifBool condition whenTrue whenFalse) result (addUses cu (joinUses tu fu)) := by
   unfold Motive Modes
   refine ⟨⟨fun s => (by cases s), fun c Γ' r expected agreement => ?_⟩, fun body h => by cases h⟩
   obtain ⟨cc, ct, cf⟩ : Checkable condition ∧ Checkable whenTrue ∧ Checkable whenFalse := by
@@ -698,7 +700,10 @@ theorem motive_ifBool {Γ : Context} {condition whenTrue whenFalse : Term} {resu
     simp only [checkAt] at okc okt okf
     change Yields (elaborate a annotations Γ' path (.ifBool condition whenTrue whenFalse) (.check expected)) _
     rw [elaborate]
-    simp [introduce, root, okc, okt, okf, bind, Except.bind, pure, Except.pure, Yields, uc, ut, uf]
+    have agreeing' : branchesAgree Γ' vt.uses vf.uses = true := by
+      rw [ut, uf]; exact branchesAgree_refines r agreeing
+    simp [introduce, root, okc, okt, okf, bind, Except.bind, pure, Except.pure, Yields, uc, ut, uf,
+      need_ok agreeing']
 
 theorem motive_inject (none_ : a.bounds = []) {Γ : Context} {tag : String} {payload : Term}
     {payloadType row : Ty} {uses : Uses} {fuel : Nat}
@@ -930,7 +935,7 @@ theorem membersAgree_of {Γ : Context} {row' : Ty} :
       ∃ member', rowMember row' name = some member' ∧ sameType a member' member = true) →
     MembersAgree a row' row
   | [], _, _, _, .nil _ _, _, _ => trivial
-  | (name, body) :: rest, _, _, _, .cons (payload := payload) (row := tail) _ _ _ restTyped, distinct, transport => by
+  | (name, body) :: rest, _, _, _, .cons (payload := payload) (row := tail) _ _ _ restTyped _, distinct, transport => by
     simp only [labelsDistinct, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true, List.any_eq_false,
       beq_iff_eq] at distinct
     refine ⟨transport name payload (by simp) (lookupV_head name payload tail), ?_⟩
@@ -960,8 +965,9 @@ theorem armsMotive_cons (none_ : a.bounds = []) {Γ : Context} {name : String} {
     {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses}
     (safe : safeUses (⟨payload, .unrestricted⟩ :: Γ) bu = true)
     (share : payload.shareableUnder a.shareableVariables = true)
+    (agreeing : (rest.isEmpty || branchesAgree Γ bu.tail ru) = true)
     (ihB : Motive a (⟨payload, .unrestricted⟩ :: Γ) body result bu) (ihR : ArmsMotive a Γ rest row result ru) :
-    ArmsMotive a Γ ((name, body) :: rest) (.field name payload row) result (addUses bu.tail ru) := by
+    ArmsMotive a Γ ((name, body) :: rest) (.field name payload row) result (joinUses bu.tail ru) := by
   intro fc Γ' r row' agrees result' agreement path index
   have ⟨cb, cr⟩ : Checkable body ∧ FieldsCheckable rest := by
     cases fc with | cons cb cr => exact ⟨cb, cr⟩
@@ -979,9 +985,13 @@ theorem armsMotive_cons (none_ : a.bounds = []) {Γ : Context} {name : String} {
     rw [shareable_congr none_ same]; exact share
   have safe' : safeUses (⟨payload', .unrestricted⟩ :: Γ') vb.uses = true := by
     rw [ub]; exact safeUses_refines binder safe
+  have agreeing' : (rest.isEmpty || branchesAgree Γ' vb.uses.tail vr.uses) = true := by
+    rw [ub, ur]
+    simp only [Bool.or_eq_true] at agreeing ⊢
+    exact agreeing.imp id (branchesAgree_refines r)
   rw [checkArms]
-  simp [found, okb, okr, need_ok share', need_ok safe', bind, Except.bind, pure, Except.pure, Yields, ub, ur,
-    RowAgrees, same, rowR]
+  simp [found, okb, okr, need_ok share', need_ok safe', need_ok agreeing', bind, Except.bind, pure, Except.pure,
+    Yields, ub, ur, RowAgrees, same, rowR]
 
 theorem members_of_variant (none_ : a.bounds = []) {Γ : Context} {arms : List (String × Term)}
     {row result row1 : Ty} {uses : Uses} (typed : ArmsTyping a Γ arms row result uses)
@@ -1142,8 +1152,8 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     intro Γ fields row uses fieldsTyped ih
     exact motive_record fieldsTyped ih
   case get =>
-    intro Γ target targetType member uses name fuel _ found ih
-    exact motive_get none_ found ih
+    intro Γ target targetType member uses name fuel _ found free ih
+    exact motive_get none_ found free ih
   case binary =>
     intro Γ primitive left right input output lu ru shape _ _ ihL ihR
     exact motive_binary shape ihL ihR
@@ -1154,8 +1164,8 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     intro Γ scrutinee arms row result su au _ armsTyped distinct ihS ihA
     exact motive_case none_ armsTyped distinct ihS ihA
   case ifBool =>
-    intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ ihC ihT ihF
-    exact motive_ifBool ihC ihT ihF
+    intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
+    exact motive_ifBool ihC ihT ihF agreeing
   case effectCase =>
     intro Γ scrutinee arms plan response row result su au _ armsTyped nonComputation distinct ihS ihA
     exact motive_effectCase none_ armsTyped nonComputation distinct ihS ihA
@@ -1165,8 +1175,8 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     exact fieldsMotive_cons nonComputation ihB ihR
   case armsNil => intro Γ result; exact armsMotive_nil Γ result
   case armsCons =>
-    intro Γ name body rest payload row result bu ru _ safe share _ ihB ihR
-    exact armsMotive_cons none_ safe share ihB ihR
+    intro Γ name body rest payload row result bu ru _ safe share _ agreeing ihB ihR
+    exact armsMotive_cons none_ safe share agreeing ihB ihR
   all_goals intros
   all_goals refine motive_outside (fun h => ?_) (fun h => ?_) (fun _ h => ?_)
   all_goals cases h

@@ -1,11 +1,14 @@
 module
 /- `linear` separates from `affine` in the kernel (decided 2026-11-01; `lean/docs/REPORT-LINEAR-20261101.md`).
 
-Two premises carry it. `PartialTyping.lambda` requires `Quantity.fits` of the parameter's own count,
-so a `linear` binder is used exactly once; `argumentAllowed` requires `linearFree` of an argument
-passed to a non-`linear` parameter, so a `linear` hypothesis is never handed to a callee that may
-drop it (`erased`, `affine`) or share it (`unrestricted`). Both checkers name the refusal:
-`linearBinderUnused` at the lambda, `linearArgumentDropped` at the argument.
+Four premises carry it. `PartialTyping.lambda` requires `Quantity.fits` of the parameter's own
+count, so a `linear` binder is used exactly once; `argumentAllowed` requires `linearFree` of an
+argument passed to a non-`linear` parameter, so a `linear` hypothesis is never handed to a callee
+that may drop it (`erased`, `affine`) or share it (`unrestricted`); the joins (`ifBool`, `ifZero`,
+`case` arms) require `branchesAgree`, so every branch uses it equally, and join by `joinUses`; the
+projections (`get`, `reflect`, `metadata`, `project`) require `linearFree` of their target, so no
+dropped sibling holds one. Both checkers name the refusal: `linearBinderUnused`,
+`linearArgumentDropped`, `linearBranchesDisagree`, `linearProjected`.
 
 Each tooth below is the same program at `affine` and at `linear`: accepted at one, refused at the
 other, so the refusal is the quantity's and nothing else's. -/
@@ -81,5 +84,59 @@ public theorem handed_to_linear_refused_at_callee :
 
 public theorem passed_linear_custody_accepted :
     (checkAgainst passedCustody [] (.arrow .once .linear (.custody 0) (.custody 0))).toBool = true := by decide
+
+/-! ### The two gaps exact discharge left at the binder, closed
+
+A branch that drops a `linear` hypothesis the other branch uses (`branchesAgree`), and a projection
+that drops a sibling holding one (`linearFree` at `get`, `reflect`, `metadata`, `project`). -/
+
+/-- `λ(h : Nat). if c then h else e`, with `h` of quantity `q`. -/
+@[expose] public def branching (q : Quantity) (whenFalse : Term) : AnnotatedTerm :=
+  ⟨.lam (.ifBool (.boolean true) (.bound 0) whenFalse), fun path =>
+    if path = [] then some ⟨.natural, .natural, q, .once⟩ else none, {}⟩
+
+/-- The false branch of the branch fixture. -/
+@[expose] public def falseBranch : Term := .nat 0
+
+/-- TOOTH (a branch drops a `linear` hypothesis the other uses: refused by name at the join, naming
+hypothesis `0`). Counting by sum this was one use and accepted. -/
+public theorem dropped_on_branch_refused :
+    (match checkAgainst (branching .linear falseBranch) [] (.arrow .once .linear .natural .natural) with
+      | .error (.linearBranchesDisagree [0] 0) => true
+      | _ => false) = true := by decide
+
+#tooth dropped_on_branch_refused by mutation falseBranch := .bound 0
+
+/-- Both branches use it once: one use on every path, accepted (by sum it was two, refused). -/
+public theorem used_on_every_branch_accepted :
+    (checkAgainst (branching .linear (.bound 0)) [] (.arrow .once .linear .natural .natural)).toBool = true := by
+  decide
+
+/-- An `affine` hypothesis joins by maximum: used on one branch, or on both, it is used at most once. -/
+public theorem affine_branches_accepted :
+    (checkAgainst (branching .affine falseBranch) [] (.arrow .once .affine .natural .natural)).toBool = true ∧
+    (checkAgainst (branching .affine (.bound 0)) [] (.arrow .once .affine .natural .natural)).toBool = true := by
+  decide
+
+/-- The quantity of the projected fixture's parameter. -/
+@[expose] public def siblingQuantity : Quantity := .linear
+
+/-- `λ(h : Nat). {kept = 1, held = h}.kept`: the projection keeps `kept` and drops `held`. -/
+@[expose] public def siblingDropped (q : Quantity) : AnnotatedTerm :=
+  ⟨.lam (.get (.record [("kept", .nat 1), ("held", .bound 0)]) "kept"), fun path =>
+    if path = [] then some ⟨.natural, .natural, q, .once⟩ else none, {}⟩
+
+/-- TOOTH (a projection drops a sibling holding a `linear` hypothesis: refused by name at the
+projection, naming hypothesis `0`). The binder count is one, so the binder rule alone accepted it. -/
+public theorem sibling_projection_refused :
+    (match checkAgainst (siblingDropped siblingQuantity) [] (.arrow .once siblingQuantity .natural .natural) with
+      | .error (.linearProjected [0] 0) => true
+      | _ => false) = true := by decide
+
+#tooth sibling_projection_refused by mutation siblingQuantity := .affine
+
+/-- At `affine` the same projection is accepted: the dropped sibling may be dropped. -/
+public theorem sibling_projection_affine_accepted :
+    (checkAgainst (siblingDropped .affine) [] (.arrow .once .affine .natural .natural)).toBool = true := by decide
 
 end Obend.Teeth.Core.LinearTeeth

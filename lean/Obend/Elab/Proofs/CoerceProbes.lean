@@ -90,9 +90,15 @@ def seedRow : Ty := .field "x" .natural (.field "extra" .boolean .emptyRow)
   (.arrow .reusable .affine .natural (.field "x" .natural .emptyRow))).toBool
 #guard (coerce {} (.arrow .reusable .affine .natural seedRow)
   (.arrow .reusable .affine .natural (.field "x" .natural .emptyRow))).toBool
--- `linear` to `linear` with a codomain coercion: the component applied to `f y` is emitted `linear`
-#guard (coerce {} (.arrow .reusable .linear .natural seedRow)
-  (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow))).toBool
+-- `linear` to `linear` with a record codomain coercion: the component applied to `f y` is emitted
+-- `linear`, and a width coercion projects its `linear` parameter, dropping the other fields, which
+-- the projection rule refuses by name (records are multiplicative; checked before 11-01 round 2)
+#guard (match coerce {} (.arrow .reusable .linear .natural seedRow)
+  (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow)) with
+  | .error (.checker (.linearProjected _ 0)) => true | _ => false)
+-- a sum codomain coercion keeps the whole payload: `linear` to `linear` is emitted and checked
+#guard (coerce {} (.arrow .reusable .linear .natural (.variant (.field "a" .natural .emptyRow)))
+  (.arrow .reusable .linear .natural (.variant (.field "a" .natural (.field "b" .boolean .emptyRow))))).toBool
 -- without the relabelling the same component is `affine`, and the kernel names the drop
 #guard (match checkAgainst ⟨.lam (.lam (.app (.lam (.record [("x", .get (.bound 0) "x")])) (.app (.bound 1) (.bound 0)))),
       treeAnnotations (.node (some ⟨.arrow .reusable .linear .natural seedRow,
@@ -105,9 +111,10 @@ def seedRow : Ty := .field "x" .natural (.field "extra" .boolean .emptyRow)
     [] (.arrow .reusable .unrestricted (.arrow .reusable .linear .natural seedRow)
       (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow))) with
   | .error (.linearArgumentDropped _ 0 .affine) => true | _ => false)
--- and with a domain coercion too: `d y` is the `linear` one-field record coercion
-#guard (coerce {} (.arrow .reusable .linear (.field "x" .natural .emptyRow) .natural)
-  (.arrow .reusable .linear seedRow .natural)).toBool
+-- and with a record domain coercion: `d y` projects the `linear` argument, refused by name
+#guard (match coerce {} (.arrow .reusable .linear (.field "x" .natural .emptyRow) .natural)
+  (.arrow .reusable .linear seedRow .natural) with
+  | .error (.checker (.linearProjected _ 0)) => true | _ => false)
 -- a domain coercion that drops every field of the `linear` argument is refused at its binder
 #guard (match coerce {} (.arrow .reusable .linear .emptyRow .natural)
   (.arrow .reusable .linear seedRow .natural) with

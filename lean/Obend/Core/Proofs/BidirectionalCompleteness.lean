@@ -391,6 +391,7 @@ public theorem completes_application {assumptions : Assumptions} {context : Cont
 public theorem completes_get {assumptions : Assumptions} {context : Context} {target : Term}
     {targetType member : Ty} {uses : Uses} {name : String} {fuel : Nat}
     (found : targetType.lookup assumptions.bounds fuel name = some member)
+    (free : linearFree context uses = true)
     (ih : ∃ tree, Completes assumptions context target targetType uses tree) :
     ∃ tree, Completes assumptions context (.get target name) member uses tree := by
   obtain ⟨targetTree, completeTarget⟩ := ih
@@ -405,8 +406,9 @@ public theorem completes_get {assumptions : Assumptions} {context : Context} {ta
     ((completeTarget annotations (path ++ [0]) child).2 targetType (sameType_refl _ _)).elim
   have lookup : lookupV assumptions.bounds [] targetType name = some member :=
     (lookupV_iff _ _ _ _).2 ⟨fuel, found⟩
+  have free' : linearFree context value.uses = true := by rw [sameUses]; exact free
   let synthesized : Synth assumptions context (.get target name) :=
-    ⟨member, value.uses, .get value.derivation found⟩
+    ⟨member, value.uses, .get value.derivation found free'⟩
   apply finish_complete synthesized
   · intro mode
     rw [elaborate]
@@ -415,7 +417,7 @@ public theorem completes_get {assumptions : Assumptions} {context : Context} {ta
     · rename_i disclosed actual
       rw [lookup] at actual
       cases actual
-      rfl
+      rw [need_ok free']
     · rename_i absent
       rw [lookup] at absent
       contradiction
@@ -424,6 +426,7 @@ public theorem completes_get {assumptions : Assumptions} {context : Context} {ta
 
 public theorem completes_reflect {assumptions : Assumptions} {context : Context} {target : Term}
     {specType targetType : Ty} {uses : Uses}
+    (free : linearFree context uses = true)
     (ih : ∃ tree, Completes assumptions context target (.prototype specType targetType) uses tree) :
     ∃ tree, Completes assumptions context (.reflect target) specType uses tree := by
   obtain ⟨targetTree, completeTarget⟩ := ih
@@ -436,8 +439,9 @@ public theorem completes_reflect {assumptions : Assumptions} {context : Context}
     simpa [AnnotationTree.child] using realizes.child 0
   obtain ⟨value, accepted, sameUses⟩ :=
     ((completeTarget annotations (path ++ [0]) child).2 (.prototype specType targetType) (sameType_refl _ _)).elim
+  have free' : linearFree context value.uses = true := by rw [sameUses]; exact free
   let synthesized : Synth assumptions context (.reflect target) :=
-    ⟨specType, value.uses, .reflect value.derivation⟩
+    ⟨specType, value.uses, .reflect value.derivation free'⟩
   apply finish_complete synthesized
   · intro mode
     rw [elaborate]
@@ -447,7 +451,7 @@ public theorem completes_reflect {assumptions : Assumptions} {context : Context}
     · rename_i first second observed
       rw [rawHead] at observed
       cases observed
-      rfl
+      rw [need_ok free']
     · rename_i absent
       exact (absent specType targetType (rawHead (.prototype specType targetType))).elim
   · exact sameType_refl _ _
@@ -455,6 +459,7 @@ public theorem completes_reflect {assumptions : Assumptions} {context : Context}
 
 public theorem completes_metadata {assumptions : Assumptions} {context : Context} {target : Term}
     {metadataType extensionType : Ty} {uses : Uses}
+    (free : linearFree context uses = true)
     (ih : ∃ tree, Completes assumptions context target (.specification metadataType extensionType) uses tree) :
     ∃ tree, Completes assumptions context (.metadata target) metadataType uses tree := by
   obtain ⟨targetTree, completeTarget⟩ := ih
@@ -467,8 +472,9 @@ public theorem completes_metadata {assumptions : Assumptions} {context : Context
     simpa [AnnotationTree.child] using realizes.child 0
   obtain ⟨value, accepted, sameUses⟩ :=
     ((completeTarget annotations (path ++ [0]) child).2 (.specification metadataType extensionType) (sameType_refl _ _)).elim
+  have free' : linearFree context value.uses = true := by rw [sameUses]; exact free
   let synthesized : Synth assumptions context (.metadata target) :=
-    ⟨metadataType, value.uses, .metadata value.derivation⟩
+    ⟨metadataType, value.uses, .metadata value.derivation free'⟩
   apply finish_complete synthesized
   · intro mode
     rw [elaborate]
@@ -478,7 +484,7 @@ public theorem completes_metadata {assumptions : Assumptions} {context : Context
     · rename_i first second observed
       rw [rawHead] at observed
       cases observed
-      rfl
+      rw [need_ok free']
     · rename_i absent
       exact (absent metadataType extensionType (rawHead (.specification metadataType extensionType))).elim
   · exact sameType_refl _ _
@@ -486,6 +492,7 @@ public theorem completes_metadata {assumptions : Assumptions} {context : Context
 
 public theorem completes_project {assumptions : Assumptions} {context : Context} {target : Term}
     {specType targetType : Ty} {uses : Uses}
+    (free : linearFree context uses = true)
     (ih : ∃ tree, Completes assumptions context target (.prototype specType targetType) uses tree) :
     ∃ tree, Completes assumptions context (.project target) targetType uses tree := by
   obtain ⟨targetTree, completeTarget⟩ := ih
@@ -498,8 +505,9 @@ public theorem completes_project {assumptions : Assumptions} {context : Context}
     simpa [AnnotationTree.child] using realizes.child 0
   obtain ⟨value, accepted, sameUses⟩ :=
     ((completeTarget annotations (path ++ [0]) child).2 (.prototype specType targetType) (sameType_refl _ _)).elim
+  have free' : linearFree context value.uses = true := by rw [sameUses]; exact free
   let synthesized : Synth assumptions context (.project target) :=
-    ⟨targetType, value.uses, .project value.derivation⟩
+    ⟨targetType, value.uses, .project value.derivation free'⟩
   apply finish_complete synthesized
   · intro mode
     rw [elaborate]
@@ -509,7 +517,7 @@ public theorem completes_project {assumptions : Assumptions} {context : Context}
     · rename_i first second observed
       rw [rawHead] at observed
       cases observed
-      rfl
+      rw [need_ok free']
     · rename_i absent
       exact (absent specType targetType (rawHead (.prototype specType targetType))).elim
   · exact sameType_refl _ _
@@ -713,9 +721,10 @@ public theorem completes_ifBool {assumptions : Assumptions} {context : Context}
     {condition whenTrue whenFalse : Term} {result : Ty} {cu tu fu : Uses}
     (ihC : ∃ tree, Completes assumptions context condition .boolean cu tree)
     (ihT : ∃ tree, Completes assumptions context whenTrue result tu tree)
-    (ihF : ∃ tree, Completes assumptions context whenFalse result fu tree) :
+    (ihF : ∃ tree, Completes assumptions context whenFalse result fu tree)
+    (agreeing : branchesAgree context tu fu = true) :
     ∃ tree, Completes assumptions context (.ifBool condition whenTrue whenFalse) result
-      (addUses cu (addUses tu fu)) tree := by
+      (addUses cu (joinUses tu fu)) tree := by
   obtain ⟨conditionTree, completeCondition⟩ := ihC
   obtain ⟨trueTree, completeTrue⟩ := ihT
   obtain ⟨falseTree, completeFalse⟩ := ihF
@@ -736,21 +745,23 @@ public theorem completes_ifBool {assumptions : Assumptions} {context : Context}
     ((completeTrue annotations (path ++ [1]) atTrue).2 result (sameType_refl _ _)).elim
   obtain ⟨falseValue, checkedFalse, falseUses⟩ :=
     ((completeFalse annotations (path ++ [2]) atFalse).2 result (sameType_refl _ _)).elim
+  have agreeing' : branchesAgree context trueValue.uses falseValue.uses = true := by
+    rw [trueUses, falseUses]; exact agreeing
   let synthesized : Synth assumptions context (.ifBool condition whenTrue whenFalse) :=
-    ⟨result, addUses conditionValue.uses (addUses trueValue.uses falseValue.uses),
-      .ifBool conditionValue.derivation trueValue.derivation falseValue.derivation⟩
+    ⟨result, addUses conditionValue.uses (joinUses trueValue.uses falseValue.uses),
+      .ifBool conditionValue.derivation trueValue.derivation falseValue.derivation agreeing'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.ifBool condition whenTrue whenFalse) .synth = .ok synthesized
     rw [elaborate]
     simp [introduce, root, hint, checkedCondition, checkedTrue, checkedFalse, bind, Except.bind,
-      Functor.map, Except.map, pure, Except.pure, synthesized]
+      Functor.map, Except.map, pure, Except.pure, synthesized, need_ok agreeing']
   · intro expected
     change elaborate assumptions annotations context path (.ifBool condition whenTrue whenFalse) (.check expected) = _
     rw [elaborate]
     simp [introduce, root, hint, checkedCondition, checkedTrue, checkedFalse, bind, Except.bind,
-      Functor.map, Except.map, pure, Except.pure, synthesized, checkedSynth]
+      Functor.map, Except.map, pure, Except.pure, synthesized, checkedSynth, need_ok agreeing']
   · exact sameType_refl _ _
-  · change addUses conditionValue.uses (addUses trueValue.uses falseValue.uses) = addUses cu (addUses tu fu)
+  · change addUses conditionValue.uses (joinUses trueValue.uses falseValue.uses) = addUses cu (joinUses tu fu)
     rw [conditionUses, trueUses, falseUses]
 
 public theorem completes_perform {assumptions : Assumptions} {context : Context}
@@ -826,11 +837,12 @@ public theorem completes_perform {assumptions : Assumptions} {context : Context}
 public theorem completes_ifZero {assumptions : Assumptions} {context : Context}
     {value zero successor : Term} {result : Ty} {vu zu su : Uses}
     (safe : safeUses (⟨.natural, .unrestricted⟩ :: context) su = true)
+    (agreeing : branchesAgree context zu su.tail = true)
     (ihV : ∃ tree, Completes assumptions context value .natural vu tree)
     (ihZ : ∃ tree, Completes assumptions context zero result zu tree)
     (ihS : ∃ tree, Completes assumptions (⟨.natural, .unrestricted⟩ :: context) successor result su tree) :
     ∃ tree, Completes assumptions context (.ifZero value zero successor) result
-      (addUses vu (addUses zu su.tail)) tree := by
+      (addUses vu (joinUses zu su.tail)) tree := by
   obtain ⟨valueTree, completeValue⟩ := ihV
   obtain ⟨zeroTree, completeZero⟩ := ihZ
   obtain ⟨successorTree, completeSuccessor⟩ := ihS
@@ -853,21 +865,23 @@ public theorem completes_ifZero {assumptions : Assumptions} {context : Context}
     ((completeSuccessor annotations (path ++ [2]) atSuccessor).2 result (sameType_refl _ _)).elim
   have safe' : safeUses (⟨.natural, .unrestricted⟩ :: context) next.uses = true := by
     rw [nextUses]; exact safe
+  have agreeing' : branchesAgree context base.uses next.uses.tail = true := by
+    rw [baseUses, nextUses]; exact agreeing
   let synthesized : Synth assumptions context (.ifZero value zero successor) :=
-    ⟨result, addUses first.uses (addUses base.uses next.uses.tail),
-      .ifZero first.derivation base.derivation next.derivation safe'⟩
+    ⟨result, addUses first.uses (joinUses base.uses next.uses.tail),
+      .ifZero first.derivation base.derivation next.derivation safe' agreeing'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.ifZero value zero successor) .synth = .ok synthesized
     rw [elaborate]
-    simp [introduce, root, hint, checkedFirst, checkedBase, checkedNext, need_ok safe', bind, Except.bind,
-      Functor.map, Except.map, pure, Except.pure, synthesized]
+    simp [introduce, root, hint, checkedFirst, checkedBase, checkedNext, need_ok safe', need_ok agreeing', bind,
+      Except.bind, Functor.map, Except.map, pure, Except.pure, synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.ifZero value zero successor) (.check expected) = _
     rw [elaborate]
-    simp [introduce, root, hint, checkedFirst, checkedBase, checkedNext, need_ok safe', bind, Except.bind,
-      Functor.map, Except.map, pure, Except.pure, synthesized, checkedSynth]
+    simp [introduce, root, hint, checkedFirst, checkedBase, checkedNext, need_ok safe', need_ok agreeing', bind,
+      Except.bind, Functor.map, Except.map, pure, Except.pure, synthesized, checkedSynth]
   · exact sameType_refl _ _
-  · change addUses first.uses (addUses base.uses next.uses.tail) = addUses vu (addUses zu su.tail)
+  · change addUses first.uses (joinUses base.uses next.uses.tail) = addUses vu (joinUses zu su.tail)
     rw [firstUses, baseUses, nextUses]
 
 public theorem completes_extend {assumptions : Assumptions} {context : Context}
@@ -1107,10 +1121,11 @@ public theorem arms_cons_complete {assumptions : Assumptions} {context : Context
     {name : String} {body : Term} {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses}
     (safe : safeUses (⟨payload, .unrestricted⟩ :: context) bu = true)
     (share : payload.shareableUnder assumptions.shareableVariables = true)
+    (agreeing : (rest.isEmpty || branchesAgree context bu.tail ru) = true)
     (ihB : ∃ tree, Completes assumptions (⟨payload, .unrestricted⟩ :: context) body result bu tree)
     (ihR : ∃ trees, ArmsComplete assumptions context rest row result ru trees) :
     ∃ trees, ArmsComplete assumptions context ((name, body) :: rest) (.field name payload row) result
-      (addUses bu.tail ru) trees := by
+      (joinUses bu.tail ru) trees := by
   obtain ⟨bodyTree, completeBody⟩ := ihB
   obtain ⟨restTrees, completeRest⟩ := ihR
   refine ⟨bodyTree :: restTrees, ?_⟩
@@ -1130,11 +1145,13 @@ public theorem arms_cons_complete {assumptions : Assumptions} {context : Context
     simp [rowMember, different]
   obtain ⟨later, checkedLater, laterRow, laterUses⟩ :=
     (completeRest annotations path (index + 1) head realizes.tail restDistinct tailMembers).elim
+  have agreeing' : (rest.isEmpty || branchesAgree context first.uses.tail later.uses) = true := by
+    rw [firstUses, laterUses]; exact agreeing
   rw [checkArms]
-  simp only [found, need_ok share, checkedFirst, need_ok safe', checkedLater,
+  simp only [found, need_ok share, checkedFirst, need_ok safe', checkedLater, need_ok agreeing',
     bind, Except.bind, pure, Except.pure, Yields]
   change Ty.field name payload later.row = Ty.field name payload row ∧
-    addUses first.uses.tail later.uses = addUses bu.tail ru
+    joinUses first.uses.tail later.uses = joinUses bu.tail ru
   constructor
   · rw [laterRow]
   · rw [firstUses, laterUses]
@@ -1266,8 +1283,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ fields row uses _ ih
     exact completes_record ih
   case get =>
-    intro Γ target targetType member uses name fuel _ found ih
-    exact completes_get found ih
+    intro Γ target targetType member uses name fuel _ found free ih
+    exact completes_get found free ih
   case extend =>
     intro Γ target fields targetType row tu fu fuel _ _ isRow ihT ihF
     exact completes_extend isRow ihT ihF
@@ -1278,14 +1295,14 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ spec target specType targetType su tu _ _ pureS pureT ihS ihT
     exact completes_prototype pureS pureT ihS ihT
   case reflect =>
-    intro Γ target specType targetType uses _ ih
-    exact completes_reflect ih
+    intro Γ target specType targetType uses _ free ih
+    exact completes_reflect free ih
   case metadata =>
-    intro Γ target metadataType extensionType uses _ ih
-    exact completes_metadata ih
+    intro Γ target metadataType extensionType uses _ free ih
+    exact completes_metadata free ih
   case project =>
-    intro Γ target specType targetType uses _ ih
-    exact completes_project ih
+    intro Γ target specType targetType uses _ free ih
+    exact completes_project free ih
   case mix =>
     intro Γ lower upper lowerType upperType self inherited middle provided lu uu _ _
       shapeL shapeU captures shareSelf shareInherited shareMiddle ihL ihU
@@ -1297,8 +1314,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ primitive left right input output lu ru shape _ _ ihL ihR
     exact completes_binary shape ihL ihR
   case ifZero =>
-    intro Γ value zero successor result vu zu su _ _ _ safe ihV ihZ ihS
-    exact completes_ifZero safe ihV ihZ ihS
+    intro Γ value zero successor result vu zu su _ _ _ safe agreeing ihV ihZ ihS
+    exact completes_ifZero safe agreeing ihV ihZ ihS
   case inject =>
     intro Γ tag payload payloadType row uses fuel _ found nonComputation ih
     exact completes_inject found nonComputation ih
@@ -1306,8 +1323,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ scrutinee arms row result su au _ _ distinct ihS ihA
     exact completes_case distinct ihS ihA
   case ifBool =>
-    intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ ihC ihT ihF
-    exact completes_ifBool ihC ihT ihF
+    intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
+    exact completes_ifBool ihC ihT ihF agreeing
   case perform =>
     intro Γ plan planType response uses _ isPlan data ih
     exact completes_perform isPlan data ih
@@ -1323,8 +1340,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     exact fields_cons_complete nonComputation ihB ihR
   case armsNil => exact arms_nil_complete assumptions
   case armsCons =>
-    intro Γ name body rest payload row result bu ru _ safe share _ ihB ihR
-    exact arms_cons_complete safe share ihB ihR
+    intro Γ name body rest payload row result bu ru _ safe share _ agreeing ihB ihR
+    exact arms_cons_complete safe share agreeing ihB ihR
 
 /-- Every certified erased term has suitable annotations, without a fragment
 restriction, and the checker reconstructs exactly its occurrence-count vector. -/
@@ -1466,15 +1483,15 @@ context of the given length. -/
   | .get t _ | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t => occurrences n t
   | .record fields => fieldOccurrences n fields
   | .extend target fields => addUses (occurrences n target) (fieldOccurrences n fields)
-  | .ifZero v z s => addUses (occurrences n v) (addUses (occurrences n z) (occurrences (n + 1) s).tail)
+  | .ifZero v z s => addUses (occurrences n v) (joinUses (occurrences n z) (occurrences (n + 1) s).tail)
   | .case scrutinee arms => addUses (occurrences n scrutinee) (armOccurrences n arms)
-  | .ifBool c t f => addUses (occurrences n c) (addUses (occurrences n t) (occurrences n f))
+  | .ifBool c t f => addUses (occurrences n c) (joinUses (occurrences n t) (occurrences n f))
 @[expose] public def fieldOccurrences (n : Nat) : List (String × Term) → Uses
   | [] => List.replicate n 0
   | (_, body) :: rest => addUses (occurrences n body) (fieldOccurrences n rest)
 @[expose] public def armOccurrences (n : Nat) : List (String × Term) → Uses
   | [] => List.replicate n 0
-  | (_, body) :: rest => addUses (occurrences (n + 1) body).tail (armOccurrences n rest)
+  | (_, body) :: rest => joinUses (occurrences (n + 1) body).tail (armOccurrences n rest)
 end
 
 /-- Every derivation of a term computes the same usage vector. -/

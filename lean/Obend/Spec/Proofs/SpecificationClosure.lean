@@ -131,7 +131,7 @@ theorem provenance_typed (T : Ty) (context : Context) (index : Nat) (b : Bool)
       (if b then variableUses context index else zeroUses context) := by
   cases b
   · exact .conversion (.inject (fuel := 4) (.record (.nil context)) (by decide) rfl) meta_conversion
-  · exact .metadata (.bound h)
+  · exact .metadata (.bound h) (linearFree_variableUses h (by simp))
 
 /-- The compose lowering is typable by the Core4 typing relation at EVERY shareable target
 `T`, for every operand kind: the derivation is built here, generically in `T`. -/

@@ -47,6 +47,12 @@ inductive CheckRefusal where
   /-- The argument at `path` uses the `linear` hypothesis `index`, and the parameter it is passed to is
   `quantity`, which may drop or share it. -/
   | linearArgumentDropped (path : List Nat) (index : Nat) (quantity : Quantity)
+  /-- The branches of the join at `path` use the `linear` hypothesis `index` unequally: one path
+  drops it, or uses it more often than another. -/
+  | linearBranchesDisagree (path : List Nat) (index : Nat)
+  /-- The projection at `path` drops the siblings of what it keeps, and its target uses the `linear`
+  hypothesis `index`. -/
+  | linearProjected (path : List Nat) (index : Nat)
   | capturesNotShareable (path : List Nat)
   | notShareable (path : List Nat) (type : Ty)
   | activityMisplaced (path : List Nat) (type : Ty)
@@ -75,6 +81,19 @@ def overuse (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :
 def firstLinearUse (context : Context) (uses : Uses) : Option Nat :=
   ((context.zip uses).zipIdx.find? (fun entry => entry.1.2 != 0 && entry.1.1.quantity == .linear)).map
     (fun entry => entry.2)
+
+/-- The first `linear` hypothesis two branches use unequally (`branchesAgree` fails there). -/
+def firstDisagreement : Context → Uses → Uses → Nat → Option Nat
+  | binding :: context, first :: firsts, second :: seconds, index =>
+      if binding.quantity.agrees first second then firstDisagreement context firsts seconds (index + 1)
+      else some index
+  | _, _, _, _ => none
+
+def disagreement (path : List Nat) (context : Context) (first second : Uses) : CheckRefusal :=
+  .linearBranchesDisagree path ((firstDisagreement context first second 0).getD 0)
+
+def projected (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :=
+  .linearProjected path ((firstLinearUse context uses).getD 0)
 
 /-- Why `argumentAllowed` failed: a `linear` hypothesis passed to a non-`linear` parameter, by name,
 before the sharing and activity premises. -/
@@ -300,9 +319,10 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       | some annotation =>
         (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
     match found : lookupV assumptions.bounds [] value.type name with
-    | some member =>
+    | some member => do
+      let ⟨hl⟩ ← need (linearFree context value.uses) (projected path context value.uses)
       finish assumptions annotations path ⟨member, value.uses,
-        (by obtain ⟨fuel, h⟩ := (lookupV_iff _ _ _ _).1 found; exact .get value.derivation h)⟩ mode
+        (by obtain ⟨fuel, h⟩ := (lookupV_iff _ _ _ _).1 found; exact .get value.derivation h hl)⟩ mode
     | none => throw (.unknownLabel (path ++ [0]) name value.type)
   | .reflect target, mode => do
     let value ← match annotations path with
@@ -310,10 +330,11 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       | some annotation =>
         (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
     match shape : representativeHead assumptions annotations path value.type with
-    | .prototype specType targetType =>
+    | .prototype specType targetType => do
+      let ⟨hl⟩ ← need (linearFree context value.uses) (projected path context value.uses)
       finish assumptions annotations path ⟨specType, value.uses,
         .reflect (PartialTyping.conversion (expected := .prototype specType targetType) value.derivation
-          (shape ▸ sameType_representativeHead assumptions annotations path value.type))⟩ mode
+          (shape ▸ sameType_representativeHead assumptions annotations path value.type)) hl⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "prototype" value.type)
   | .metadata target, mode => do
     let value ← match annotations path with
@@ -321,10 +342,11 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       | some annotation =>
         (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
     match shape : representativeHead assumptions annotations path value.type with
-    | .specification metadataType extensionType =>
+    | .specification metadataType extensionType => do
+      let ⟨hl⟩ ← need (linearFree context value.uses) (projected path context value.uses)
       finish assumptions annotations path ⟨metadataType, value.uses,
         .metadata (PartialTyping.conversion (expected := .specification metadataType extensionType) value.derivation
-          (shape ▸ sameType_representativeHead assumptions annotations path value.type))⟩ mode
+          (shape ▸ sameType_representativeHead assumptions annotations path value.type)) hl⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "specification" value.type)
   | .project target, mode => do
     let value ← match annotations path with
@@ -332,10 +354,11 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       | some annotation =>
         (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
     match shape : representativeHead assumptions annotations path value.type with
-    | .prototype specType targetType =>
+    | .prototype specType targetType => do
+      let ⟨hl⟩ ← need (linearFree context value.uses) (projected path context value.uses)
       finish assumptions annotations path ⟨targetType, value.uses,
         .project (PartialTyping.conversion (expected := .prototype specType targetType) value.derivation
-          (shape ▸ sameType_representativeHead assumptions annotations path value.type))⟩ mode
+          (shape ▸ sameType_representativeHead assumptions annotations path value.type)) hl⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "prototype" value.type)
   | .binary primitive left right, mode => do
     let l ← elaborate assumptions annotations context (path ++ [0]) left (.check (primitiveTypes primitive).1)
@@ -547,12 +570,14 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       let c ← elaborate assumptions annotations context (path ++ [0]) condition (.check .boolean)
       let t ← elaborate assumptions annotations context (path ++ [1]) whenTrue (.check expected)
       let f ← elaborate assumptions annotations context (path ++ [2]) whenFalse (.check expected)
-      pure ⟨addUses c.uses (addUses t.uses f.uses), .ifBool c.derivation t.derivation f.derivation⟩)
+      let ⟨hj⟩ ← need (branchesAgree context t.uses f.uses) (disagreement path context t.uses f.uses)
+      pure ⟨addUses c.uses (joinUses t.uses f.uses), .ifBool c.derivation t.derivation f.derivation hj⟩)
       (do
         let c ← elaborate assumptions annotations context (path ++ [0]) condition (.check .boolean)
         let t ← elaborate assumptions annotations context (path ++ [1]) whenTrue .synth
         let f ← elaborate assumptions annotations context (path ++ [2]) whenFalse (.check t.type)
-        pure ⟨t.type, addUses c.uses (addUses t.uses f.uses), .ifBool c.derivation t.derivation f.derivation⟩) mode
+        let ⟨hj⟩ ← need (branchesAgree context t.uses f.uses) (disagreement path context t.uses f.uses)
+        pure ⟨t.type, addUses c.uses (joinUses t.uses f.uses), .ifBool c.derivation t.derivation f.derivation hj⟩) mode
   | .ifZero value zero successor, mode =>
     let successorContext : Context := ⟨.natural, .unrestricted⟩ :: context
     introduce annotations path (fun expected => do
@@ -560,13 +585,15 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       let z ← elaborate assumptions annotations context (path ++ [1]) zero (.check expected)
       let s ← elaborate assumptions annotations successorContext (path ++ [2]) successor (.check expected)
       let ⟨hu⟩ ← need (safeUses successorContext s.uses) (overuse (path ++ [2]) successorContext s.uses)
-      pure ⟨addUses v.uses (addUses z.uses s.uses.tail), .ifZero v.derivation z.derivation s.derivation hu⟩)
+      let ⟨hj⟩ ← need (branchesAgree context z.uses s.uses.tail) (disagreement path context z.uses s.uses.tail)
+      pure ⟨addUses v.uses (joinUses z.uses s.uses.tail), .ifZero v.derivation z.derivation s.derivation hu hj⟩)
       (do
         let v ← elaborate assumptions annotations context (path ++ [0]) value (.check .natural)
         let z ← elaborate assumptions annotations context (path ++ [1]) zero .synth
         let s ← elaborate assumptions annotations successorContext (path ++ [2]) successor (.check z.type)
         let ⟨hu⟩ ← need (safeUses successorContext s.uses) (overuse (path ++ [2]) successorContext s.uses)
-        pure ⟨z.type, addUses v.uses (addUses z.uses s.uses.tail), .ifZero v.derivation z.derivation s.derivation hu⟩)
+        let ⟨hj⟩ ← need (branchesAgree context z.uses s.uses.tail) (disagreement path context z.uses s.uses.tail)
+        pure ⟨z.type, addUses v.uses (joinUses z.uses s.uses.tail), .ifZero v.derivation z.derivation s.derivation hu hj⟩)
       mode
   | .case scrutinee [], mode => do
     let value ← match annotations path with
@@ -714,8 +741,10 @@ def checkArms (assumptions : Assumptions) (annotations : Annotations) (context :
       let ⟨hu⟩ ← need (safeUses (⟨payload, .unrestricted⟩ :: context) first.uses)
         (overuse (path ++ [index]) (⟨payload, .unrestricted⟩ :: context) first.uses)
       let later ← checkArms assumptions annotations context path (index + 1) row result rest
-      pure ⟨.field name payload later.row, addUses first.uses.tail later.uses,
-        .cons first.derivation hu hs later.derivation⟩
+      let ⟨hj⟩ ← need (rest.isEmpty || branchesAgree context first.uses.tail later.uses)
+        (disagreement (path ++ [index]) context first.uses.tail later.uses)
+      pure ⟨.field name payload later.row, joinUses first.uses.tail later.uses,
+        .cons first.derivation hu hs later.derivation hj⟩
     | none => throw (.unknownLabel (path ++ [index]) name row)
 end
 

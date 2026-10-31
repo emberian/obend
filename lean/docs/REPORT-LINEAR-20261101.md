@@ -111,17 +111,84 @@ The base moved under the lane (split, tiers, Intention, Code, C4, Runner-2), so 
 with unchanged statements. The other revised names (`Data.*_remaining`, `Run.Shared.*`, `Spec.Ecosystem.*`,
 `Law.c4_tooth`, …) are other lanes'.
 
-## What exact discharge does not yet cover (INFERRED)
+## Round 2: joins and projections (Ember's decision, relayed 11-01)
 
-The count is syntactic. A `linear` hypothesis used in one branch of `ifBool`/`ifZero`/`case` counts one
-(branches add), so it passes the binder and is dropped on the other path; used in both it counts two and
-is refused, so a `linear` binder cannot be consumed on every path. A `linear` hypothesis put in a record
-whose sibling is projected (`{a = h, b = 1}.b`) passes too. `GROUNDING.md:60` and
-`paper/objective-bend.md:384` still say "linear means at most once"; not edited (outside `lean/`).
+The decision: at `ifBool`, `ifZero` and the arms of a `case`, a `linear` hypothesis's count is equal
+across every branch and the join is that count; an `affine` one joins by maximum; and the projection
+gap is closed the same way. Landed as follows.
 
-## The decision for Ember
+**The combinator** (`Core/Ty.lean`). `joinUses first second := zipWith max` and `branchesAgree context
+first second`, which is `Quantity.agrees` (equality for `linear`, true otherwise) pointwise over the
+context. The three join rules share them: `ifBool` gives `addUses cu (joinUses tu fu)` under
+`branchesAgree context tu fu`; `ifZero` gives `addUses vu (joinUses zu su.tail)` under
+`branchesAgree context zu su.tail`; `ArmsTyping.cons` gives `joinUses bu.tail ru` under
+`rest.isEmpty || branchesAgree context bu.tail ru` (the last arm agrees with no one, so a nil tail of
+zeros does not demand zero). Refusal: `CheckRefusal.linearBranchesDisagree path index`.
 
-Branches: should a `linear` binder's count combine across `ifBool`/`ifZero`/`case` arms by equality
-(each arm uses it exactly as often as the others, the additive rule of linear logic) instead of by sum?
-That changes `addUses` at three rules for `linear` positions only, closes the branch drop, and is what
-T7's usage composition will otherwise inherit as an unsound case.
+**DEVIATION from the instruction: `unrestricted` joins by `max`, not by sum.** Two reasons, both
+MEASURED as breakage when the join depends on the quantity. (i) `uses_determined`: a term's uses are a
+function of the term alone (`occurrences`), which `Checked.eq_of_type` and `prepare_checks`
+(`argumentUses : au = occurrences Γ.length argument`) rely on; a sum-or-max chosen by quantity makes
+`occurrences` depend on the context. (ii) Preparation refines a binder's quantity
+(`QuantityRefines`: `affine` or `linear` may become `unrestricted` at a let), and `prepare_checks`
+asserts the prepared uses equal the derivation's exactly; a quantity-indexed join changes the vector
+under that refinement. Nothing reads an `unrestricted` count except as zero or nonzero
+(`reusableCaptures`), on which `max` and sum agree. So the combinator is one `max` everywhere and the
+quantity enters only through `branchesAgree`; for `linear` and `affine` it is exactly what was asked.
+
+**Projections.** `get`, `reflect`, `metadata` and `project` require `linearFree context targetUses`:
+records, specifications and prototypes are multiplicative, so keeping one component drops the rest,
+and a dropped sibling may hold a `linear` obligation. The binder count cannot see which sibling a
+hypothesis went into, so the rule is that a projection's target uses no `linear` hypothesis at all.
+Refusal: `CheckRefusal.linearProjected path index`. Consequence: a `linear` record cannot be projected;
+it is consumed whole (passed to a `linear` parameter, put in a record or variant, matched).
+
+**Metatheory re-established (MEASURED green, tier 1 and tier 2).**
+- Substitution needed more than `UsesLEOn`: agreement must survive substitution, and `≤` lets one
+  branch's count fall without the other's. Replaced by `UsesMasked σ depth u' u := u' = maskUses
+  (keepAt σ depth) u` (`Substitution/Uses.lean`): substitution zeroes exactly the filled hypotheses, a
+  function of the position, so both branches are masked alike (`UsesMasked.agree`); `.add`, `.join`,
+  `.tail`, `.headD`, `.le`, `.zero`, `.variable`, `.filled`. `infer_msubst` and `partialTyping_msubst`
+  conclude `UsesMasked` (strengthened; revised); `check_msubst`, `checked_msubst`,
+  `calculus_typed_msubst` unchanged. `UsesLEOn` and its helpers are deleted.
+- Transport (`branchesAgree_append_zero`, `split_join`), weakening (`join_uses_insert`,
+  `branches_agree_insert`), the machine (`safe_join_uses_left/right`: a join is safe only if each branch
+  is), templates (`branchesAgree_instantiate`), refinement (`branchesAgree_refines`).
+- Completeness: `completes_ifBool`, `completes_ifZero`, `arms_cons_complete`, `completes_get`,
+  `completes_reflect/metadata/project` take the new premise (revised); `complete`, `full_annotated`,
+  `prepare_checks` unchanged in statement; `occurrences` joins by `max`; `motive_get`, `motive_ifBool`,
+  `armsMotive_cons` take the premise.
+- Laws (`Law/Proofs/Typing.lean`): `Syn` and `Chk` are now conditional on `NoLinear ctx` (no binder is
+  `linear`), which every law context is (`Clean.noLinear`); only the primitive lemmas changed, the
+  composite ones (`chk_andT`, `chk_anyOf`, …) are untouched.
+- Other lanes' files touched only where the new premise broke a pattern: `Core/Code.lean` (one arms
+  binder), `Spec/Proofs/SpecificationClosure.lean` (`linearFree_variableUses`).
+
+**Coercions.** A record coercion projects its parameter, so a `linear` wrapper's record component is now
+refused `.checker (.linearProjected _ 0)` (`#guard`, both the codomain and the domain case; they were
+accepted in round 1); a sum component keeps the payload whole and still checks at `linear → linear`
+(new `#guard`). `get_bound_checks` and `width_fields_check` take `q ≠ .linear`.
+
+**Teeth** (`Teeth/Core/LinearTeeth.lean`). `dropped_on_branch_refused`: `λ(h : linear Nat). if true then
+h else 0` is `linearBranchesDisagree [0] 0` (`#tooth` by mutating the false branch to `h` bites);
+`used_on_every_branch_accepted` (it was refused by sum); `affine_branches_accepted`.
+`sibling_projection_refused`: `λ(h : linear Nat). {kept = 1, held = h}.kept` is `linearProjected [0] 0`
+(`#tooth` by mutating the quantity to `affine` bites); `sibling_projection_affine_accepted`.
+`CheckTeeth.affine_in_two_arms_refused` (pinning "arms are additive") is now
+`affine_in_two_arms_accepted`, with `affine_in_scrutinee_and_arm_refused` keeping the additive half.
+
+**Cohorts and receipts unchanged**: probes 30/30, tutorial 71/71 (the three chapter-7 deviations of
+round 1 and no new one), preview 161/161, receipts 22/22. Census: 33928 constants, none on `sorryAx`
+or a declared axiom, 27 on the compiler trust.
+
+**Journal** (`3408ea3` → round 2, base moved by `fdf6fc4`): this round's revised statements are
+`infer_msubst`, `partialTyping_msubst`, `completes_get/reflect/metadata/project/ifBool/ifZero`,
+`arms_cons_complete`, `motive_get`, `motive_ifBool`, `armsMotive_cons`, `get_bound_checks`,
+`width_fields_check`; the `Receipt.*` revisions in the same diff are the base's.
+
+## What remains (INFERRED)
+
+The count is still syntactic and the machine does not track it: a divergent body never reaches its
+use (`safeQuantity` docstring), and a `linear` hypothesis put in a record or variant is discharged by
+being stored there, whatever later happens to the record (its type carries no quantity). The paper's
+`paper/objective-bend.md:384` and `GROUNDING.md:60` still say "linear means at most once".
