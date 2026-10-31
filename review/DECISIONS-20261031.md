@@ -40,6 +40,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | Branch uses: a `linear` hypothesis's count must be equal across arms (additive), `affine` combines by max, `unrestricted` by sum; one combinator indexed by quantity | taken by Claude under standing approval, 2026-11-01, closing the Argon-era open item | `lean/docs/REPORT-LINEAR-20261101.md` |
 
+| Tier 2 (teeth and census) runs pre-push: `core.hooksPath lean/tools/hooks` set in the main checkout 2026-11-01; every lane brief sets it in its worktree | taken by Claude under standing approval | `lean/docs/REPORT-BUILD-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
