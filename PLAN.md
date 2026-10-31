@@ -35,6 +35,11 @@ the build is the check. One stranger-usable artifact stays ahead of every platfo
 
 ## Decisions pending
 
+Should the shared ledger's view commit pins (a Merkle map per view), so a World-transition receipt's
+openings check against a root and the view becomes `checked` rather than the host's word? It fixes
+what `dated : View` is; cost: a commitment scheme in `Run/Shared` and an opening proof per read.
+Recommended yes, as part of workstream 6.
+
 Nominal kinds: decided yes (3). `quote` into `Term`: decided yes, gated on the orientation (2). The
 leaf toolchain (vendor `bendtt.lean` at 4.34 or wait): open (5). Sum versus max for branch uses in
 `PartialTyping`: open, recorded in `review/ARGON-RESPONSE-20261030.md`.
