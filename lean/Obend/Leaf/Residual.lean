@@ -27,7 +27,7 @@ def recordBad (bad : List String → Bool) : Term → Bool
   | .bound _ | .nat _ | .boolean _ | .label _ => false
   | .lam b | .reflect b | .metadata b | .project b | .inject _ b | .perform b | .done b | .get b _ =>
     recordBad bad b
-  | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b =>
+  | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b | .split a _ b =>
     recordBad bad a || recordBad bad b
   | .extend i fs => recordBad bad i || fs.attach.any fun f => recordBad bad f.1.2
   | .record fs => bad (fs.map Prod.fst) || fs.attach.any fun f => recordBad bad f.1.2
@@ -52,7 +52,7 @@ def superOnlyProjected (ns : List String) (d : Nat) : Term → Bool
   | .get (.bound i) p => i != d || ns.contains p
   | .reflect b | .metadata b | .project b | .inject _ b | .perform b | .done b | .get b _ =>
     superOnlyProjected ns d b
-  | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b =>
+  | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b | .split a _ b =>
     superOnlyProjected ns d a && superOnlyProjected ns d b
   | .extend i fs => superOnlyProjected ns d i && fs.attach.all fun f => superOnlyProjected ns d f.1.2
   | .record fs => fs.attach.all fun f => superOnlyProjected ns d f.1.2
@@ -113,6 +113,7 @@ theorem recordBad_rename (bad : List String → Bool) : (t : Term) → ∀ f : N
   | .specification a b, f => by simp only [Term.rename, recordBad, recordBad_rename bad a, recordBad_rename bad b]
   | .prototype a b, f => by simp only [Term.rename, recordBad, recordBad_rename bad a, recordBad_rename bad b]
   | .binary _ a b, f => by simp only [Term.rename, recordBad, recordBad_rename bad a, recordBad_rename bad b]
+  | .split a _ b, f => by simp only [Term.rename, recordBad, recordBad_rename bad a, recordBad_rename bad b]
   | .ifZero v z s, f => by
     simp only [Term.rename, recordBad, recordBad_rename bad v, recordBad_rename bad z, recordBad_rename bad s]
   | .ifBool v z s, f => by
@@ -181,6 +182,7 @@ theorem resolve_rename : (t : Term) → ∀ f : Nat → Nat, resolve (t.rename f
   | .specification a b, f => by simp only [Term.rename, resolve, resolve_rename a, resolve_rename b]
   | .prototype a b, f => by simp only [Term.rename, resolve, resolve_rename a, resolve_rename b]
   | .binary _ a b, f => by simp only [Term.rename, resolve, resolve_rename a, resolve_rename b]
+  | .split a _ b, f => by simp only [Term.rename, resolve, resolve_rename a, resolve_rename b]
   | .ifZero v z s, f => by simp only [Term.rename, resolve, resolve_rename v, resolve_rename z, resolve_rename s]
   | .ifBool v z s, f => by simp only [Term.rename, resolve, resolve_rename v, resolve_rename z, resolve_rename s]
   | .extend i fs, f => by
@@ -310,7 +312,7 @@ theorem resolve_subst_clean (bad : List String → Bool) (ns : List String) :
       exact resolveGet_clean p (resolve_subst_clean bad ns g d σ hs' hb hσ)
   | .app a b, d, σ, hs, hb, hσ | .mix a b, d, σ, hs, hb, hσ | .fix a b, d, σ, hs, hb, hσ
   | .specification a b, d, σ, hs, hb, hσ | .prototype a b, d, σ, hs, hb, hσ
-  | .binary _ a b, d, σ, hs, hb, hσ => by
+  | .binary _ a b, d, σ, hs, hb, hσ | .split a _ b, d, σ, hs, hb, hσ => by
     simp only [superOnlyProjected, Bool.and_eq_true] at hs
     simp only [recordBad, Bool.or_eq_false_iff] at hb
     simp only [Term.substitute, resolve, recordBad, Bool.or_eq_false_iff]
@@ -387,7 +389,7 @@ theorem resolve_clean (bad : List String → Bool) : (t : Term) → recordBad ba
     simp only [resolve]
     exact resolveGet_clean p (resolve_clean bad g h)
   | .app a b, h | .mix a b, h | .fix a b, h | .specification a b, h | .prototype a b, h
-  | .binary _ a b, h => by
+  | .binary _ a b, h | .split a _ b, h => by
     simp only [recordBad, Bool.or_eq_false_iff] at h
     simp only [resolve, recordBad, Bool.or_eq_false_iff]
     exact ⟨resolve_clean bad a h.1, resolve_clean bad b h.2⟩
