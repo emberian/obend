@@ -189,10 +189,11 @@ def decodePacketParts (value : Json) (table : Array (Ty × Nat)) : Except String
     | .ok context => (← context.getArr?).toList.mapM fun entry => do
         return (⟨← decodeType table (← entry.getObjVal? "type"),
           ← decodeQuantity (← entry.getObjVal? "quantity")⟩ : Binding)
+  -- the checker's grant: the front end's `limits.checkWork` (`Obend.Elab.Work.checkWork` units)
   let fuel ← match value.getObjVal? "fuel" with
-    | .error _ => pure 4096
+    | .error _ => pure 65536
     | .ok fuel => jsonNat fuel
-  if fuel > 16384 then throw "checker fuel capacity"
+  if fuel > 1048576 then throw "checker work grant capacity"
   return ⟨fun path => (annotations.find? (fun entry => entry.1 == path)).map Prod.snd,
       ⟨bounds,shareable,[]⟩,context,fuel⟩
 

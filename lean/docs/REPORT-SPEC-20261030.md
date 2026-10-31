@@ -65,6 +65,30 @@ I did not touch them (D26).
   under `STALE_PINS`, printing `STALE PIN … (minidregg 1653897b6)`, so a change in OUR behaviour is
   still red; nothing in the port was changed to pass it.
 
+**Deviation from Mini, 2026-10-31 (Lane Elab, `lean/docs/REPORT-ELAB-20261031.md`): the checker's
+grant is work, not nesting.** Mini's requests carry `typeFuel`, the historical checker's recursion
+fuel, which bounds nesting and not the work done (a 1,000-field record nests 3 deep; Astra's
+line-83 criticism). The front end now admits through preparation and `Bidirectional.checkAgainst`,
+and its grant is `limits.checkWork`, the same measure and word as the slot judge's grant
+(`Obend.Elab.Work.checkWork`: one per term node plus the constructors of every annotation the
+checker reads). A request carrying `typeFuel` is refused by name. The re-pin, MEASURED by running
+every cohort program through the gate:
+
+| | Mini (before) | Obend (after) |
+|---|---|---|
+| grant key | `typeFuel` (nesting fuel) | `checkWork` (checker work) |
+| preview cohort `LIMITS` | `typeFuel 4096` | `checkWork 43237`, the most any cohort program needs (`Market-book-*`); 43236 refuses those three by name (MEASURED) |
+| budget mutation | `typeFuel 1` → `checker budget refused` | `checkWork 1` → `checker budget refused` |
+| default (CLI, `lower`) | 4096 | 65536 |
+| ceiling (`lower`, `preview`, packet decoder) | 16384 | 1048576 |
+| probe cohort's largest program | — | 1405 (default suffices) |
+| tutorial's largest program | — | 1755 (default suffices) |
+
+The budget refusal now reads `checker budget refused: checkWork G is too small for this program (its
+checker work is W); raise limits.checkWork`; the cohort pins only its prefix. The packet's `fuel`
+field carries the grant; the open-template check, which still runs `Check.check` for
+`check_instantiate`, takes it as fuel (work bounds nesting, so it is never short).
+
 **Why the terms are Mini's (INFERRED from the tick edges):** `shared` finishing at 8220 ticks and
 suspending at 8219 is a property of the exact elaborated term and the exact machine; both match
 Mini to the tick on four edges, which no namespace rename could arrange.
@@ -91,7 +115,7 @@ definitional Spec module + meta Sha256`. No Spec module imports a Core proof mod
 
 `obend run FILE.obend ENTRY [ARGS_JSON] [RESPONSES_JSON] [--ticks N] [--json]` builds the package in
 memory as `run.ts` does (module name from the file name: `[^A-Za-z0-9_]` → `_`, a leading digit
-prefixed `M`; legacy argument encoding; heap 100000, stack 10000, typeFuel 4096; a bare response
+prefixed `M`; legacy argument encoding; heap 100000, stack 10000, checkWork 65536 (Mini: typeFuel 4096; §2); a bare response
 label is that label with an empty payload), lowers in application mode, previews, and prints the
 short form line for line (`typeText`/`dataText` are `run.ts`'s `ty`/`data`, including a label
 printed as its JSON string literal and a weak-head variant as `label(...)`). `obend check FILE.obend

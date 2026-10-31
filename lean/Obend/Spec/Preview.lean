@@ -194,19 +194,21 @@ def previewCommand (requestPath dirPath : String) : IO UInt32 := do
     let ticks ← count limitsIn "ticks" 100000
     let heap ← count limitsIn "heap" 100000
     let stack ← count limitsIn "stack" 100000
-    let typeFuel ← count limitsIn "typeFuel" 16384
+    if (limitsIn.getObjVal? "typeFuel").toOption.isSome then
+      refuse "Error: typeFuel is retired; the checker's grant is limits.checkWork" "preview-request"
+    let checkWork ← count limitsIn "checkWork" 1048576
     let responses := (request.getObjVal? "responses").toOption.getD (Json.arr #[])
     match responses.getArr? with
     | .ok a => if a.size > 64 then refuse "Error: preview responses must be an array of at most 64 typed data values" "preview-request"
     | .error _ => refuse "Error: preview responses must be an array of at most 64 typed data values" "preview-request"
     let limits := Json.mkObj [("ticks", toJson ticks), ("heap", toJson heap), ("stack", toJson stack)]
     bind "limits" (Json.mkObj [("ticks", toJson ticks), ("heap", toJson heap), ("stack", toJson stack),
-      ("typeFuel", toJson typeFuel)])
+      ("checkWork", toJson checkWork)])
     IO.FS.createDirAll dir
     if !(← dir.readDir).isEmpty then refuse "Error: preview output directory must be empty" "preview-request"
     writeNew (dir / "capture.json") (String.fromUTF8! captureBytes)
     let lowered ← liftFE (lower loaded.modules loaded.entryModule loaded.entryDefinition wire (Json.arr projections)
-      (Json.mkObj [("ticks", toJson ticks), ("heap", toJson heap), ("stack", toJson stack), ("typeFuel", toJson typeFuel)])
+      (Json.mkObj [("ticks", toJson ticks), ("heap", toJson heap), ("stack", toJson stack), ("checkWork", toJson checkWork)])
       "application")
     let coreText := pretty lowered.core
     let packetText := pretty lowered.packet

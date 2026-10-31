@@ -55,8 +55,8 @@ end
 def checkWork (source : AnnotatedTerm) : Nat := termWork source.annotations [] source.term
 
 mutual
-/-- Structural nesting: the measure the retired `Slot.Core4.termDepth` was, kept for the front
-end's `typeFuel`, which bounded the historical checker's recursion and still bounds nesting. -/
+/-- Structural nesting: the measure the retired `Slot.Core4.termDepth` and the front end's
+retired `typeFuel` were. Kept only to state what they missed (`Slot.Core4.wide_record_work`). -/
 def nestingDepth : Term → Nat
   | .hole _ _ | .bound _ | .nat _ | .boolean _ | .label _ => 1
   | .lam t | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t | .get t _ => nestingDepth t + 1

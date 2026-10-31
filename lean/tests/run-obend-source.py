@@ -18,7 +18,11 @@ Three conformance checks, all against outcomes minidregg pinned (commit 092027a2
     drives it; its expectations (`expected`, `expectedStatus`, `expectedRefusal`, `expectedTurns`,
     `expectedLastPlan`, `expectedType`, `expectedData`, `expectedDataStatus`, `expectedRecord`, the
     kernel Plan protocol) are checked as there, and the four request mutations after it (a wrong
-    capture pin refuses, typeFuel 1 is a named budget refusal, ticks 1 and heap 1 suspend).
+    capture pin refuses, checkWork 1 is a named budget refusal, ticks 1 and heap 1 suspend).
+
+Deviation from Mini: requests carry `checkWork` (the checker's work grant, Obend.Elab.Work.checkWork),
+not Mini's nesting `typeFuel`; LIMITS pins 43237, the most any cohort program needs (MEASURED
+2026-10-31, Market-book-*), where Mini pinned typeFuel 4096 (lean/docs/REPORT-SPEC-20261030.md).
 
 A probe or a command whose outcome differs from Mini's is a port defect, not a new truth.
 
@@ -164,7 +168,7 @@ def tutorial():
 
 # ---------------------------------------------------------------- preview cohort (check-preview.ts)
 
-LIMITS = {"ticks": "100000", "heap": "100000", "stack": "10000", "typeFuel": "4096"}
+LIMITS = {"ticks": "100000", "heap": "100000", "stack": "10000", "checkWork": "43237"}
 
 
 def sha256_file(path):
@@ -384,7 +388,7 @@ def preview_cohort():
         first = next(c for c in cohort if c.get("expectedStatus") != "refused")
         for name, change, expect in [
                 ("WrongCapture", {"captureSha256": "0" * 64}, "refused"),
-                ("TypingBudget", {"limits": {**LIMITS, "typeFuel": "1"}}, "refused"),
+                ("TypingBudget", {"limits": {**LIMITS, "checkWork": "1"}}, "refused"),
                 ("Ticks", {"limits": {**LIMITS, "ticks": "1"}}, "suspended"),
                 ("Capacity", {"limits": {**LIMITS, "heap": "1"}}, "suspended")]:
             out, _ = capture_and_preview(first, work, cohort_dir, request_change=change, name="mutation-" + name)

@@ -134,11 +134,11 @@ def positive (value : Json) (cap : Nat) : Option Nat := do
 
 /-- The typed-core packet fields around a typing proposal for `term`, `context` empty. -/
 def packetJson (proposal : Json) (term : ATerm) (sourceEntry : String) (modules : List SourceModule)
-    (typeFuel : Nat) : Json :=
+    (checkWork : Nat) : Json :=
   let field (k : String) := (proposal.getObjVal? k).toOption.getD .null
   Json.mkObj [("schema", toJson "dregg.objective-bend.typed-core.v3"), ("term", term.json),
     ("types", field "types"), ("annotations", field "annotations"), ("bounds", field "bounds"),
-    ("shareableVariables", field "shareableVariables"), ("fuel", toJson (toString typeFuel)),
+    ("shareableVariables", field "shareableVariables"), ("fuel", toJson (toString checkWork)),
     ("context", Json.arr #[]), ("sourceEntry", toJson sourceEntry),
     ("sourceModules", Json.arr (modules.map SourceModule.binding).toArray),
     ("status", toJson "exact core annotation proposal; actual checker must return Checked; no law proof or effect authority")]
@@ -156,7 +156,7 @@ of exactly its bound row is expected, which the alias checker of the whole progr
 accept and only a wider instance would refuse, is refused HERE, naming the declaration.
 `Obend.Core.Proofs.Templates.Discharges.check_instantiate` is what a template accepted
 here buys: acceptance at every instance whose bounds are discharged. -/
-def checkTemplate (output : Output) (sourceEntry : String) (modules : List SourceModule) (typeFuel : Nat)
+def checkTemplate (output : Output) (sourceEntry : String) (modules : List SourceModule) (checkWork : Nat)
     (key : String) (rigidVariables : List Nat) (field : ATerm) : Except Diagnostic Unit := do
   let refuse := fun (why : String) =>
     (throw (elaborationRefusal why) : Except Diagnostic Unit)
@@ -164,7 +164,7 @@ def checkTemplate (output : Output) (sourceEntry : String) (modules : List Sourc
     | .ok proposal => pure proposal
     | .error e => throw (elaborationRefusal ("refused (template-typing): open declaration " ++ key ++
         " has no typed template: " ++ e))
-  let packet ← match decodePacket (packetJson proposal field sourceEntry modules typeFuel) with
+  let packet ← match decodePacket (packetJson proposal field sourceEntry modules checkWork) with
     | .ok packet => pure packet
     | .error e => throw (elaborationRefusal ("refused (template-typing): open declaration " ++ key ++
         " has no typed template: " ++ e))
@@ -187,9 +187,9 @@ def checkTemplate (output : Output) (sourceEntry : String) (modules : List Sourc
     | none => refuse ("refused (template-typing): open declaration " ++ key ++
         " does not type-check against its declared bounds")
 
-def checkTemplates (output : Output) (sourceEntry : String) (modules : List SourceModule) (typeFuel : Nat) :
+def checkTemplates (output : Output) (sourceEntry : String) (modules : List SourceModule) (checkWork : Nat) :
     Except Diagnostic Unit :=
-  output.templates.forM fun (key, rigidVariables, field) => checkTemplate output sourceEntry modules typeFuel key rigidVariables field
+  output.templates.forM fun (key, rigidVariables, field) => checkTemplate output sourceEntry modules checkWork key rigidVariables field
 
 structure Lowering where
   output : Output
@@ -200,7 +200,7 @@ structure Lowering where
   mode : String
   modules : List SourceModule
   limits : Json
-  typeFuel : Nat
+  checkWork : Nat
   /-- The package's enforced laws: the entry module's top-level `law` declarations (a law in any
   other module refuses). The artifact commits them; the kernel installs them on every object
   pinned to the artifact. -/
@@ -218,9 +218,14 @@ def project (term : ATerm) (projections : List Json) : Except Diagnostic ATerm :
     | .ok _ => throw (elaborationRefusal "projection argument must be canonical Nat")
     | .error _ => pure t
 
+/-- The default checker work grant, and its ceiling (`Obend.Elab.Work.checkWork` units). -/
+def defaultCheckWork : Nat := 65536
+def maxCheckWork : Nat := 1048576
+
 /-- Selection mode, projections and limits: `limits` carries `heap`/`stack`/`ticks` (canonical
-positive, at most 1000000) and an optional `typeFuel` (at most 16384, default 4096) that
-travels in the packet. Returns the projections and the type fuel. -/
+positive, at most 1000000) and an optional `checkWork` (at most `maxCheckWork`, default
+`defaultCheckWork`), the checker's work grant, which travels in the packet. The historical
+`typeFuel` (Mini's nesting fuel) is refused by name. Returns the projections and the grant. -/
 def options (projections limits : Json) (mode : String) : Except Diagnostic (List Json × Nat) := do
   if mode != "application" && mode != "definition" then
     throw (elaborationRefusal "selection mode must be application or definition")
@@ -232,18 +237,20 @@ def options (projections limits : Json) (mode : String) : Except Diagnostic (Lis
   for key in ["heap", "stack", "ticks"] do
     if (positive ((limits.getObjVal? key).toOption.getD .null) 1000000).isNone then
       throw (elaborationRefusal "preview limits must be canonical positive decimal strings ≤1000000")
-  let typeFuel ← match limits.getObjVal? "typeFuel" with
-    | .error _ => pure 4096
-    | .ok v => match positive v 16384 with
+  if (limits.getObjVal? "typeFuel").toOption.isSome then
+    throw (elaborationRefusal "typeFuel is retired: the checker's grant is limits.checkWork, its work (one per term node plus the annotation types it reads)")
+  let grant ← match limits.getObjVal? "checkWork" with
+    | .error _ => pure defaultCheckWork
+    | .ok v => match positive v maxCheckWork with
       | some n => pure n
-      | none => throw (elaborationRefusal "typeFuel must be a canonical positive decimal string ≤16384")
-  return (projectionList, typeFuel)
+      | none => throw (elaborationRefusal s!"checkWork must be a canonical positive decimal string ≤{maxCheckWork}")
+  return (projectionList, grant)
 
 /-- The front end on parsed, checked modules: elaborate the selected declaration and project. -/
 def lowerDecoded (modules : List SourceModule) (decoded : List Syntax.Module)
     (entryModule : Nat) (entryDefinition : String) (args projections limits : Json) (mode : String) :
     Except Diagnostic Lowering := do
-  let (projectionList, typeFuel) ← options projections limits mode
+  let (projectionList, checkWork) ← options projections limits mode
   if modules.length > 64 then throw (elaborationRefusal "preview module capacity refused")
   let output ← match Elaborate.elaborate decoded entryModule entryDefinition args mode with
     | .ok o => pure o
@@ -254,13 +261,13 @@ def lowerDecoded (modules : List SourceModule) (decoded : List Syntax.Module)
     else match args with
       | .arr _ => "legacy-canonical-nat-bool-record"
       | _ => "dregg.objective-bend.argument-values.v1"
-  checkTemplates output (entry.name ++ "." ++ entryDefinition) modules typeFuel
+  checkTemplates output (entry.name ++ "." ++ entryDefinition) modules checkWork
   for (m, index) in decoded.zipIdx do
     if index != entryModule && !m.laws.isEmpty then
       throw (elaborationRefusal ("a law belongs to the package's entry module; " ++ m.name ++
         " is imported and declares " ++ toString m.laws.length ++ " law(s)"))
   let laws := (decoded[entryModule]?.map (·.laws)).getD []
-  return ⟨output, term, entry.name ++ "." ++ entryDefinition, argumentCodec, mode, modules, limits, typeFuel, laws⟩
+  return ⟨output, term, entry.name ++ "." ++ entryDefinition, argumentCodec, mode, modules, limits, checkWork, laws⟩
 
 /-- The whole front end on read modules: options, parse and check every module, elaborate,
 project. -/
@@ -294,7 +301,7 @@ proposal is `{status: "unsupported", message}`. -/
 def Lowering.packet (l : Lowering) : Json :=
   match l.proposal with
   | .error message => Json.mkObj [("status", toJson "unsupported"), ("message", toJson message)]
-  | .ok proposal => packetJson proposal l.term l.sourceEntry l.modules l.typeFuel
+  | .ok proposal => packetJson proposal l.term l.sourceEntry l.modules l.checkWork
 
 /-! ## Acceptance: the checker on the front end's own packet -/
 

@@ -146,7 +146,7 @@ def packageOfSpec (spec : String) (entry : Option String) : FE Package := do
   return ⟨c.modules.toList, c.entryModule, entryDefinition, decls.toList.map declarationName⟩
 
 def hostLimits (ticks : String) : Json :=
-  Json.mkObj [("ticks", toJson ticks), ("heap", toJson "100000"), ("stack", toJson "10000"), ("typeFuel", toJson "4096")]
+  Json.mkObj [("ticks", toJson ticks), ("heap", toJson "100000"), ("stack", toJson "10000"), ("checkWork", toJson "65536")]
 
 /-- `run.ts`'s response shorthand: a string is that label with an empty record payload. -/
 def responseOf (r : Json) : Json :=

@@ -125,8 +125,8 @@ still refuses `seedExtra`; nothing in `Spec` calls `Coerce`), and the observatio
 
 ## 4. Convergence
 
-**The gate (`Obend.Elab.Gate.admit`):** nesting within the packet's `typeFuel`, then
-`prepareInferred` with the packet's annotations as hints, then `checkAgainst` at the predicted type.
+**The gate (`Obend.Elab.Gate.admit`):** `prepareInferred` with the packet's annotations as hints,
+`checkAgainst` at the predicted type, then the prepared term's `checkWork` within the packet's grant (§5).
 It now admits for `FrontEnd.accept`, `Preview.preview`, `obend run` on a packet, and
 `obend check-core`. Refusals keep their three sentences (budget / ownership / typing), classified by
 re-running the gate on the same two variations as before; the cohorts pin those prefixes.
@@ -148,7 +148,7 @@ then spent over ten minutes and 1.7 GB in the full bisimulation (MEASURED, `samp
 and `Ty.decEq`), where the checker takes 27 ms once types keep their aliases.
 
 **Not converged: the open-template check** (`FrontEnd.checkTemplate`) still uses `Check.check` with
-rigid variables, because what it buys is `Templates.Discharges.check_instantiate`, a theorem about
+rigid variables (given the work grant as its fuel), because what it buys is `Templates.Discharges.check_instantiate`, a theorem about
 that checker; moving it would cut the theorem off. That is the one remaining second acceptance
 route in the front end.
 
@@ -170,7 +170,8 @@ module's header says so).
 
 | retired or revised | replacement and reason |
 |---|---|
-| `Core4.termDepth`, `fieldsDepth` | `checkWork`; the old measure survives as `Elab.Work.nestingDepth`, the front end's `typeFuel` bound |
+| `Core4.termDepth`, `fieldsDepth` | `checkWork`; the old measure survives as `Elab.Work.nestingDepth`, only to pin what it missed |
+| front end `limits.typeFuel` (default 4096, ceiling 16384) | `limits.checkWork` (default 65536, ceiling 1048576); cohort pin 43237 |
 | `typed_iff_preparable_at_depth` | `typed_iff_preparable_within_work` |
 | `gradedCheck`, `gradedCheck_iff`, `calculus_check_iff`, `calculus_check_msubst`, `calculus_check_msubst_within`, `checkFuel` | none: no caller; the single judge never used them |
 | `wronglyAnnotated_check_refused` | `wronglyAnnotated_judge_refused` (kept) states the judge's refusal |
@@ -178,18 +179,17 @@ module's header says so).
 | `Accepted.sound`, `Accepted.source_eq_packet` | same names, about the gate and the prepared annotations |
 | `budget_filling_admitted` at grant 2 | at grant 4 (`checkWork`) |
 
-## 5. The decision for Ember
+## 5. The front end's grant (decided: work)
 
-**What the front end's `typeFuel` should mean.** It bounded the historical checker's recursion; the
-gate keeps that meaning (nesting depth), because the work measure of real cohort programs exceeds the
-cohort's own limit: the Market program the preview cohort runs at `typeFuel 4096` has nesting well
-under it but **`checkWork` 15,697** (MEASURED). Making `typeFuel` a work grant would refuse it unless
-the pinned requests raise their limits, i.e. a cohort change. Options: (a) keep `typeFuel` as
-nesting and let only the slot judge price work (what is committed); (b) make `typeFuel` a work grant
-and re-pin the cohorts' limits; (c) drop `typeFuel` from admission entirely now that the checker
-needs no fuel, keeping only the decoder's nesting capacity.
+`typeFuel` bounded the historical checker's recursion; keeping it under that name would leave Astra's
+line-83 criticism standing for the front end. It is retired: the grant is `limits.checkWork`, the
+same measure and word as `Slot.Core4.checkWork`, checked on the prepared term after preparation.
+The cohorts' limits were re-pinned to what their programs need (the Market program the preview
+cohort runs has `checkWork` up to 43,237 against the old `typeFuel 4096`); the before/after values
+are recorded as a deviation from Mini in `REPORT-SPEC-20261030.md` §2. `nestingDepth` survives only
+to state what the old measures missed.
 
-Two smaller points that are yours if you want them: whether the fragment of `prepare_checks` should
+Open points for Ember: whether the fragment of `prepare_checks` should
 be extended to aliases by making the resource premises semantic in the checker (the D3 route of
 REPORT-EQUIREC §3, which would make `shareable_congr` hold everywhere), or by requiring every alias
 with a shareable unfolding to be listed (a decidable condition on assumptions under which the same
