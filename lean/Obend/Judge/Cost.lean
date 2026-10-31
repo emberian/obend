@@ -373,8 +373,7 @@ theorem badRound_refused : check 1 (pairOriginal, pairCandidate) badRound = .ref
 /-! ## The cost judge: a demand run as the certificate -/
 
 open Obend.Equiv.Demand (FE obj demand demand_exists demand_minimal)
-open Obend.Core.Machine (runBounded initial)
-open Obend.Core.Proofs.TickCost (finishedNat limits fragment_within)
+open Obend.Core.Proofs.TickCost (Finishes fragment_within)
 
 /-- A certificate that `t` costs at most `k`: `t` is the selection of `field` from the object with
 these fields, whose demand run is total. -/
@@ -389,27 +388,25 @@ inductive CostClause where
   | overBudget
   deriving DecidableEq, Repr
 
-/-- The checker: on the object fragment (the certificate's selection, distinct names, at most 97
-fields) it runs the demand semantics; off it, the verdict is `uncovered`. -/
+/-- The checker: on the object fragment (the certificate's selection, distinct names) it runs the
+demand semantics; off it, the verdict is `uncovered`. -/
 def costCheck (_ : Nat) (o : Term × Nat) (c : DemandCert) : Verdict CostClause :=
   if termBeq o.1 (.get (obj c.fields) c.field) then
     if (c.fields.map Prod.fst).Nodup then
-      if c.fields.length ≤ 97 then
-        match demand c.fields c.field with
-        | some (_, n) => if n ≤ o.2 then .ok else .refused .overBudget []
-        | none => .refused .noDemand []
-      else .uncovered
+      match demand c.fields c.field with
+      | some (_, n) => if n ≤ o.2 then .ok else .refused .overBudget []
+      | none => .refused .noDemand []
     else .uncovered
   else .uncovered
 
 def costRefutes : CostClause → Bool
   | .noDemand | .overBudget => true
 
-/-- The machine finishes `t` with a number within `T` ticks. -/
-def TicksAtMost (t : Term) (T : Nat) : Prop := ∃ n, finishedNat (runBounded limits T (initial t)) = some n
+/-- The raw machine has completed `t` with a number within `T` transitions. -/
+def TicksAtMost (t : Term) (T : Nat) : Prop := ∃ n, Finishes t T n
 
-/-- What an accepted cost certificate establishes: `t` costs at most `k`, and the machine finishes
-it within `4·k` ticks (`Obend.Core.Proofs.TickCost.ticks_within_fragment`). -/
+/-- What an accepted cost certificate establishes: `t` costs at most `k`, and the raw machine
+completes it within `4·k` transitions (`Obend.Core.Proofs.TickCost.ticks_within_fragment`). -/
 def CostMeaning (o : Term × Nat) : Prop := CostAtMost o.1 o.2 ∧ TicksAtMost o.1 (4 * o.2)
 
 theorem cost_sound {r : Nat} {o : Term × Nat} {c : DemandCert} (h : costCheck r o c = .ok) : CostMeaning o := by
@@ -420,15 +417,12 @@ theorem cost_sound {r : Nat} {o : Term × Nat} {c : DemandCert} (h : costCheck r
     split at h
     · rename_i nd
       split at h
-      · rename_i hlen
+      · rename_i v n hd
         split at h
-        · rename_i v n hd
-          split at h
-          · rename_i le
-            unfold CostMeaning TicksAtMost
-            rw [e]
-            exact ⟨⟨_, n, demand_exists nd hd, le⟩, v, fragment_within hlen hd (by omega)⟩
-          · cases h
+        · rename_i le
+          unfold CostMeaning TicksAtMost
+          rw [e]
+          exact ⟨⟨_, n, demand_exists nd hd, le⟩, v, fragment_within hd (by omega)⟩
         · cases h
       · cases h
     · cases h
@@ -448,23 +442,22 @@ theorem cost_refuted {r : Nat} {o : Term × Nat} {c : DemandCert} {k : CostClaus
     · rename_i nd
       obtain ⟨v, n, hd, _, low⟩ := demand_minimal nd run
       split at h
-      · split at h
-        · rename_i v' n' hd'
-          split at h
-          · cases h
-          · rename_i gt
-            rw [hd] at hd'; cases hd'
-            exact gt (by omega)
-        · rename_i hd'
+      · rename_i v' n' hd'
+        split at h
+        · cases h
+        · rename_i gt
           rw [hd] at hd'; cases hd'
-      · cases h
+          exact gt (by omega)
+      · rename_i hd'
+        rw [hd] at hd'; cases hd'
     · cases h
   · cases h
 
 /-- **The cost judge.** Objects are a term and a bound; a certificate names the object and the
 field; the checker runs the demand semantics, which is total, so `cost t ≤ k` is checkable, and a
 demand above `k` (or none) refutes it, by minimality. The receipt of an accepted certificate also
-says the machine finishes within `4·k` ticks; off the fragment the verdict is `uncovered`. -/
+says the raw machine completes within `4·k` transitions; off the fragment the verdict is
+`uncovered`. -/
 instance cost : Judge (Term × Nat) DemandCert where
   Clause := CostClause
   Meaning o _ := CostMeaning o
@@ -474,13 +467,13 @@ instance cost : Judge (Term × Nat) DemandCert where
   refuted := by
     intro r o c k p h _ c' hm
     exact cost_refuted h hm.1
-  Fragment o := ∃ fs x, (fs.map Prod.fst).Nodup ∧ fs.length ≤ 97 ∧ o.1 = .get (obj fs) x
+  Fragment o := ∃ fs x, (fs.map Prod.fst).Nodup ∧ o.1 = .get (obj fs) x
   complete := by
-    rintro o ⟨fs, x, nd, hlen, e⟩ ⟨_, ⟨w, j, run, le⟩, _⟩
+    rintro o ⟨fs, x, nd, e⟩ ⟨_, ⟨w, j, run, le⟩, _⟩
     rw [e] at run
     obtain ⟨v, n, hd, _, low⟩ := demand_minimal nd run
     refine ⟨⟨fs, x⟩, 0, ?_⟩
-    simp only [costCheck, e, termBeq_refl, ite_true, nd, hlen, hd]
+    simp only [costCheck, e, termBeq_refl, ite_true, nd, hd]
     simp [show n ≤ o.2 by omega]
   mono := by
     intro r r' o c _ _
@@ -498,8 +491,8 @@ theorem selfField_cost_checked :
       costCheck 0 (.get CostTests.selfField "b", 6) ⟨Demand.selfFieldFields, "b"⟩ = .refused .overBudget [] := by
   constructor <;> simp [costCheck, Demand.selfField_is_obj, termBeq_refl] <;> decide
 
-/-- **Its receipt**: `{a = 7, b = self.a}.b` costs at most 7 and the machine finishes it within 28
-ticks. -/
+/-- **Its receipt**: `{a = 7, b = self.a}.b` costs at most 7 and the raw machine completes it within
+28 transitions. -/
 theorem selfField_receipt : CostMeaning (.get CostTests.selfField "b", 7) :=
   cost_sound selfField_cost_checked.1
 

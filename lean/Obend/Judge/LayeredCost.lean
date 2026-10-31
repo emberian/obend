@@ -87,9 +87,9 @@ instance layeredCost : Judge (Composition × String × Nat) DemandCert where
   sound := layered_sound
   refutes := layeredRefutes
   refuted := layered_refuted
-  Fragment o := o.1.closedB = true ∧ ∃ fs, (fs.map Prod.fst).Nodup ∧ fs.length ≤ 97 ∧ o.1.flatten = obj fs
+  Fragment o := o.1.closedB = true ∧ ∃ fs, (fs.map Prod.fst).Nodup ∧ o.1.flatten = obj fs
   complete := by
-    rintro ⟨C, m, k⟩ ⟨hc, fs, nd, hlen, e⟩ ⟨_, hm, _⟩
+    rintro ⟨C, m, k⟩ ⟨hc, fs, nd, e⟩ ⟨_, hm, _⟩
     obtain ⟨w, j, run, le⟩ := hm
     change CV (.get C.flatten m) w j at run
     change j ≤ k at le
@@ -98,7 +98,7 @@ instance layeredCost : Judge (Composition × String × Nat) DemandCert where
     obtain ⟨v, n, hd, _, low⟩ := demand_minimal nd run
     refine ⟨⟨fs, m⟩, 0, ?_⟩
     change C.closedB = true at hc
-    simp only [layeredCheck, hc, ite_true, costCheck, e, termBeq_refl, nd, hlen, hd]
+    simp only [layeredCheck, hc, ite_true, costCheck, e, termBeq_refl, nd, hd]
     simp [show n ≤ k by omega]
   mono := by
     intro r r' o c _ _

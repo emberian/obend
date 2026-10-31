@@ -84,3 +84,24 @@ judge (programs past the limits are `uncovered`, as now), or (b) restate both ov
 `rawRun` (or limits as a parameter), which drops the 97 and makes `CostIndexedCompleteness` a
 statement about Core4 rather than about one capacity. I recommend (b) before the general lemma is
 attempted, since `Completeness` already works over `rawRun`.
+
+## Follow-up: (b), the bound over the raw machine (coordinator's decision)
+
+- The bound is now stated over `rawRun` (`Obend.Core.Proofs.Adequacy`), with no limits:
+  `Finishes t T n`, `FirstFinish t T n` (the first completion), and `TicksWithinDemandOn P c d` over
+  them. `TicksWithinDemand c d` is its instance at `P = True`.
+- The limits are a parameter: `TicksWithinDemandUnder L P c d` is the old `runBounded` shape, and
+  **`ticks_within_under`** proves it from the raw bound for every `L` (limits only remove programs;
+  through `runBounded_finished_trace`, `rawRun_trace`, `rawRun_short`). `ticks_within_fragment_under`
+  is its fragment instance.
+- The cap is gone: `InFragment` is a selection from an object with distinct names, nothing more.
+  The size condition is the hypothesis `FragmentFits L fs` (`3 + |fs|` cells and frames) of
+  `fragment_machine`, which `measured_within` discharges for `limits = ⟨100, 100⟩`, now only the default
+  the measured programs run with. `fragment_first`: the raw machine first completes at exactly
+  `fragmentTicks d`.
+- `CostIndexedRun c t` no longer takes limits; it carries its own (`bound`; a finite run has some).
+  `CostIndexedCompleteness c` is a statement about Core4: every program the raw machine completes,
+  with a derivation, has a ledger. The fragment's instance uses `fragmentLimits fs`.
+- The judge: `TicksAtMost t T` is `∃ n, Finishes t T n` (the raw machine has completed within `T`);
+  the 97-field check and `Fragment`'s cap are gone, in `Cost` and `LayeredCost`. `rawRun_stays` gives
+  completion at every larger count.

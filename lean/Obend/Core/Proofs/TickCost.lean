@@ -9,8 +9,11 @@ it has one, and the least cost of each measured program is the demand semantics'
 (`Obend.Equiv.Demand.measured_least`).
 
 **The bound on the object fragment** (`ticks_within_fragment`): for `get (obj fs) x` with distinct
-names and at most 97 fields (so the limits `⟨100, 100⟩` are never hit), the machine's ticks are at
-most 4 times the least clairvoyant cost. The run is traced symbolically
+names, the raw machine's transitions (`rawRun`, no limits) are at most 4 times the least
+clairvoyant cost. Limits only remove programs (`ticks_within_under`), so the bound holds for
+`runBounded` under any limits too; the fragment finishes under limits large enough
+(`FragmentFits`: `3 + |fs|` cells and frames), and `⟨100, 100⟩` is only the default the measured
+programs are run with. The run is traced symbolically
 (`Obend.Core.Proofs.TickTrace`): `16` ticks for a literal, `19 + 6d` for a chase of `d ≥ 1`
 selections, against the least cost `headCost + 2d + 2` (`fragment_ticks`). The measured programs
 are instances (`measured_within`): `.good` 16 ticks at cost 5, `.b` 25 at cost 7; `.bad` has no
@@ -24,7 +27,7 @@ will evaluate for free, a cached cell for its value). The charge is the least co
 the bound follows for any program (`ticks_within_of_runs`); the fragment has one at `c = 4`
 (`fragment_cost_indexed`), and the fragment's bound is proved through it. What is not proved is
 `CostIndexedCompleteness c`: that every program the machine finishes, with a derivation, has a
-ledger. That needs a cost-indexed `Core/Proofs/Completeness` (its descent on source cost and an
+ledger. It is a statement about Core4, not about a capacity. That needs a cost-indexed `Core/Proofs/Completeness` (its descent on source cost and an
 unbounded stutter rank gives completion, no count of transitions per unit, and no relation between
 heap cells and approximants). -/
 public import Obend.Core.Proofs.TickTrace
@@ -33,6 +36,7 @@ namespace Obend.Core.Proofs.TickCost
 open Obend.Core.Term
 open Obend.Core.Machine
 open Obend.Core.Proofs.TickTrace
+open Obend.Core.Proofs.Adequacy (rawRun)
 open Obend.Equiv
 open Obend.Equiv.CostTests
 open Obend.Equiv.Demand
@@ -48,24 +52,61 @@ def blackholed : Outcome → Bool
   | .divergent _ _ => true
   | _ => false
 
-/-- The machine's limits for these runs. -/
+/-- The default limits: the measured programs are run under them. The bound itself is stated over
+the unbounded raw machine (`rawRun`), and under any limits (`ticks_within_under`). -/
 def limits : Limits := ⟨100, 100⟩
 
-/-- The tick bound on the programs `P`: when a program in `P` first finishes after `T` ticks, `T` is
-within `c` times its least clairvoyant cost, plus `d`. -/
+/-- The raw machine has completed `t` with `n` after `T` transitions. -/
+def Finishes (t : Term) (T n : Nat) : Prop := (rawRun T (initial t)).control = .complete (.natural n)
+
+/-- `T` is the first such count. -/
+def FirstFinish (t : Term) (T n : Nat) : Prop :=
+  Finishes t T n ∧ ∀ T' < T, ∀ v, (rawRun T' (initial t)).control ≠ .complete v
+
+/-- The tick bound on the programs `P`: when the raw machine first completes a program in `P` after
+`T` transitions, `T` is within `c` times its least clairvoyant cost, plus `d`. -/
 def TicksWithinDemandOn (P : Term → Prop) (c d : Nat) : Prop :=
-  ∀ (t : Term), P t → ∀ (T n : Nat), finishedNat (runBounded limits T (initial t)) = some n →
-    (∀ T' < T, finishedNat (runBounded limits T' (initial t)) = none) →
+  ∀ (t : Term), P t → ∀ (T n : Nat), FirstFinish t T n →
     ∀ k, CV t (.nat n) k → (∀ w j, CV t w j → k ≤ j) → T ≤ c * k + d
 
 /-- The tick bound, in its true form: for every program whose demand run exists, the machine's
 ticks are within `c` times the least demand cost, plus `d`. -/
 def TicksWithinDemand (c d : Nat) : Prop := TicksWithinDemandOn (fun _ => True) c d
 
+/-- The same bound for the bounded machine under limits `L`, counted in `runBounded`'s ticks. -/
+def TicksWithinDemandUnder (L : Limits) (P : Term → Prop) (c d : Nat) : Prop :=
+  ∀ (t : Term), P t → ∀ (T n : Nat), finishedNat (runBounded L T (initial t)) = some n →
+    (∀ T' < T, finishedNat (runBounded L T' (initial t)) = none) →
+    ∀ k, CV t (.nat n) k → (∀ w j, CV t w j → k ≤ j) → T ≤ c * k + d
+
+/-- **Limits only remove programs**: the raw bound holds under every limits. -/
+theorem ticks_within_under (L : Limits) {P : Term → Prop} {c d : Nat} (h : TicksWithinDemandOn P c d) :
+    TicksWithinDemandUnder L P c d := by
+  intro t hP T n fin minimal k cv least
+  have hfin : ∃ s', runBounded L T (initial t) = .finished (.natural n) s' := by
+    revert fin
+    cases runBounded L T (initial t) with
+    | finished v s' => cases v <;> simp [finishedNat]
+    | _ => simp [finishedNat]
+  obtain ⟨s', hs'⟩ := hfin
+  obtain ⟨j, hj, tr, hc⟩ := runBounded_finished_trace T hs'
+  have hT : T ≤ j := by
+    rcases Nat.lt_or_ge j T with lt | ge
+    · have := minimal j lt
+      rw [show j = j + 0 by omega, runBounded_trace tr, runBounded_complete hc] at this
+      simp [finishedNat] at this
+    · exact ge
+  have first : FirstFinish t j n := by
+    refine ⟨by rw [Finishes, rawRun_trace tr]; exact hc, fun T' lt v e => ?_⟩
+    have a := rawRun_short tr T' lt
+    simp [Active, e] at a
+  have := h t hP j n first k cv least
+  omega
+
 /-- The object fragment: a selection from an object of literals and `self.m` fields, with distinct
-names, small enough for the limits. -/
+names. -/
 def InFragment (t : Term) : Prop :=
-  ∃ (fs : List (String × FE)) (x : String), t = .get (obj fs) x ∧ (fs.map Prod.fst).Nodup ∧ fs.length ≤ 97
+  ∃ (fs : List (String × FE)) (x : String), t = .get (obj fs) x ∧ (fs.map Prod.fst).Nodup
 
 /-! ## The fragment's run against its demand -/
 
@@ -93,29 +134,41 @@ theorem fragment_ticks {fs : List (String × FE)} {x : String} {k u d : Nat} (hc
     have h3 : headCost fs = 3 := by simp [headCost, this]
     simp only [fragmentTicks, hd, ite_false, h3]; omega
 
-/-- **The machine computes the demand**: the run finishes with the chase's value after exactly
+/-- Limits large enough for the fragment's run: the heap holds `3 + |fs|` cells, the stack at most
+`2 + |fs|` frames. -/
+def FragmentFits (L : Limits) (fs : List (String × FE)) : Prop := fs.length + 3 ≤ L.heap ∧ fs.length + 3 ≤ L.stack
+
+/-- The limits the fragment's run needs, exactly. -/
+def fragmentLimits (fs : List (String × FE)) : Limits := ⟨fs.length + 3, fs.length + 3⟩
+
+/-- **The raw machine computes the demand**: it first completes with the chase's value after exactly
+`fragmentTicks d` transitions. -/
+theorem fragment_first {fs : List (String × FE)} {x : String} {k u d : Nat} (hc : chase fs k x = some (u, d)) :
+    FirstFinish (.get (obj fs) x) (fragmentTicks d) u := by
+  obtain ⟨hp, t⟩ := fragment_trace (L := fragmentLimits fs) hc (Nat.le_refl _) (Nat.le_refl _)
+  refine ⟨by rw [Finishes, rawRun_trace t], fun T' lt v e => ?_⟩
+  have a := rawRun_short t T' lt
+  simp [Active, e] at a
+
+/-- **Under limits large enough**, the bounded machine finishes with the chase's value after exactly
 `fragmentTicks d` ticks. -/
-theorem fragment_machine {fs : List (String × FE)} {x : String} {k u d : Nat} (hc : chase fs k x = some (u, d))
-    (hlen : fs.length ≤ 97) :
-    finishedNat (runBounded limits (fragmentTicks d) (initial (.get (obj fs) x))) = some u ∧
-      ∀ T < fragmentTicks d, finishedNat (runBounded limits T (initial (.get (obj fs) x))) = none := by
-  obtain ⟨fin, short⟩ := fragment_run (L := limits) hc (by simp [limits]; omega) (by simp [limits]; omega)
+theorem fragment_machine {L : Limits} {fs : List (String × FE)} {x : String} {k u d : Nat}
+    (hc : chase fs k x = some (u, d)) (fits : FragmentFits L fs) :
+    finishedNat (runBounded L (fragmentTicks d) (initial (.get (obj fs) x))) = some u ∧
+      ∀ T < fragmentTicks d, finishedNat (runBounded L T (initial (.get (obj fs) x))) = none := by
+  obtain ⟨fin, short⟩ := fragment_run (L := L) hc fits.1 fits.2
   obtain ⟨s, hs⟩ := fin _ (Nat.le_refl _)
   refine ⟨by rw [hs]; rfl, fun T lt => ?_⟩
   obtain ⟨r, hr⟩ := short T lt
   rw [hr]; rfl
 
-/-- **Within four times the demand, the run has finished** with the demand's value. -/
-theorem fragment_within {fs : List (String × FE)} {x : String} (hlen : fs.length ≤ 97) {u n : Nat}
-    (hd : demand fs x = some (u, n)) {T : Nat} (hT : 4 * n ≤ T) :
-    finishedNat (runBounded limits T (initial (.get (obj fs) x))) = some u := by
+/-- **Within four times the demand, the raw machine has completed** with the demand's value. -/
+theorem fragment_within {fs : List (String × FE)} {x : String} {u n : Nat}
+    (hd : demand fs x = some (u, n)) {T : Nat} (hT : 4 * n ≤ T) : Finishes (.get (obj fs) x) T u := by
   obtain ⟨⟨u', d⟩, hc, he⟩ := Option.map_eq_some_iff.1 hd
   simp only [Prod.mk.injEq] at he
   obtain ⟨rfl, rfl⟩ := he
-  have short := chase_short hc
-  obtain ⟨fin, _⟩ := fragment_run (L := limits) hc (by simp only [limits]; omega) (by simp only [limits]; omega)
-  obtain ⟨s, hs⟩ := fin T (Nat.le_trans (fragment_ticks hc).2 hT)
-  rw [hs]; rfl
+  exact rawRun_stays _ (fragment_first hc).1 (Nat.le_trans (fragment_ticks hc).2 hT)
 
 /-! ## The precondition of the general bound: a ledger of the run against the waves -/
 
@@ -143,8 +196,9 @@ inductive Ledger (L : Limits) (c : Nat) (cells : List (String × Address))
       Ledger L c cells Approximant s' T K → Ledger L c cells Approximant s (n + T) (j + K)
 
 /-- **What a cost-indexed `Completeness` must provide for `t`**: a ledger of the machine run from
-`t`, charged at most the least clairvoyant cost, against the approximants of `t`'s knot. -/
-structure CostIndexedRun (L : Limits) (c : Nat) (t : Term) where
+`t`, charged at most the least clairvoyant cost, against the approximants of `t`'s knot. The ledger's
+segments are traces within some limits (a finite run has them); the run is the raw machine's. -/
+structure CostIndexedRun (c : Nat) (t : Term) where
   /-- the cost charged -/
   cost : Nat
   /-- a derivation of that cost exists -/
@@ -155,9 +209,11 @@ structure CostIndexedRun (L : Limits) (c : Nat) (t : Term) where
   cells : List (String × Address)
   /-- the knot's approximants -/
   Approximant : List (String × Term) → Prop
+  /-- limits the run stays within -/
+  bound : Limits
   /-- the run's length -/
   ticks : Nat
-  ledger : Ledger L c cells Approximant (initial t) ticks cost
+  ledger : Ledger bound c cells Approximant (initial t) ticks cost
 
 theorem Ledger.run {L : Limits} {c : Nat} {cells : List (String × Address)} {A : List (String × Term) → Prop}
     {s : State} {T K : Nat} (h : Ledger L c cells A s T K) :
@@ -168,29 +224,25 @@ theorem Ledger.run {L : Limits} {c : Nat} {cells : List (String × Address)} {A 
     obtain ⟨le', s'', n', tr', hc⟩ := ih
     exact ⟨by rw [Nat.mul_add]; omega, s'', n', tr.trans tr', hc⟩
 
-/-- **From ledgers, the bound**: if every program in `P` that finishes, with a derivation, has a
-ledger at `c`, its ticks are within `c` times its least cost. -/
+/-- **From ledgers, the bound**: if every program in `P` that completes, with a derivation, has a
+ledger at `c`, its transitions are within `c` times its least cost. -/
 theorem ticks_within_of_runs {P : Term → Prop} {c : Nat}
-    (h : ∀ t, P t → ∀ T n, finishedNat (runBounded limits T (initial t)) = some n →
-      ∀ v k, CV t v k → Nonempty (CostIndexedRun limits c t)) :
+    (h : ∀ t, P t → ∀ T n, FirstFinish t T n → ∀ v k, CV t v k → Nonempty (CostIndexedRun c t)) :
     TicksWithinDemandOn P c 0 := by
-  intro t hP T n fin minimal k cv _
-  obtain ⟨R⟩ := h t hP T n fin _ k cv
+  intro t hP T n first k cv _
+  obtain ⟨R⟩ := h t hP T n first _ k cv
   obtain ⟨le, s', n', tr, hc⟩ := R.ledger.run
-  have fin0 : finishedNat (runBounded limits R.ticks (initial t)) = some n' := by
-    rw [show R.ticks = R.ticks + 0 by omega, runBounded_trace tr, runBounded_complete hc]; rfl
   have hT : T ≤ R.ticks := by
     rcases Nat.lt_or_ge R.ticks T with lt | ge
-    · rw [minimal _ lt] at fin0; cases fin0
+    · exact absurd (by rw [rawRun_trace tr]; exact hc) (first.2 _ lt (.natural n'))
     · exact ge
   have := Nat.mul_le_mul_left c (R.charged_least _ _ cv)
   omega
 
-/-- **The general precondition**, not proved: every program the machine finishes, with a
+/-- **The general precondition**, not proved: every Core4 program the raw machine completes, with a
 clairvoyant derivation, has a ledger at `c`. -/
 def CostIndexedCompleteness (c : Nat) : Prop :=
-  ∀ t T n, finishedNat (runBounded limits T (initial t)) = some n → ∀ v k, CV t v k →
-    Nonempty (CostIndexedRun limits c t)
+  ∀ t T n, FirstFinish t T n → ∀ v k, CV t v k → Nonempty (CostIndexedRun c t)
 
 theorem ticks_within_of_completeness {c : Nat} (h : CostIndexedCompleteness c) : TicksWithinDemand c 0 :=
   ticks_within_of_runs fun t _ => h t
@@ -358,17 +410,17 @@ theorem heapFor_final {fs : List (String × FE)} (nd : (fs.map Prod.fst).Nodup) 
 /-- **The fragment has a ledger at 4**: the template (12 transitions, charged 3) ends where the heap
 stands for the first wave; the chase and the completion (charged the rest) end where it stands for
 the last. -/
-theorem fragment_cost_indexed {fs : List (String × FE)} (nd : (fs.map Prod.fst).Nodup) (hlen : fs.length ≤ 97)
+theorem fragment_cost_indexed {fs : List (String × FE)} (nd : (fs.map Prod.fst).Nodup)
     {x : String} {u n : Nat} (hd : demand fs x = some (u, n)) :
-    Nonempty (CostIndexedRun limits 4 (.get (obj fs) x)) := by
+    Nonempty (CostIndexedRun 4 (.get (obj fs) x)) := by
   obtain ⟨⟨u', d⟩, hc, he⟩ := Option.map_eq_some_iff.1 hd
   simp only [Prod.mk.injEq] at he
   obtain ⟨rfl, rfl⟩ := he
   obtain ⟨ex, hx⟩ := chase_look hc
   have short := chase_short hc
-  have hh : fs.length + 3 ≤ limits.heap := by simp [limits]; omega
-  have t1 := prefix_trace (L := limits) hx hh (by simp only [limits]; omega)
-  obtain ⟨hp, t2, _, cached, frame⟩ := rest_trace (L := limits) hc hh (by simp only [limits]; omega)
+  have hh : fs.length + 3 ≤ (fragmentLimits fs).heap := Nat.le_refl _
+  have t1 := prefix_trace (L := fragmentLimits fs) hx hh (by simp only [fragmentLimits]; omega)
+  obtain ⟨hp, t2, _, cached, frame⟩ := rest_trace (L := fragmentLimits fs) hc hh (Nat.le_refl _)
   have ticks := fragment_ticks hc
   have hhead : 2 ≤ headCost fs := by unfold headCost; split <;> omega
   let κ := ((List.range (d + 1)).filterMap fun j => walk fs j x).map fun z => (z, u')
@@ -381,7 +433,7 @@ theorem fragment_cost_indexed {fs : List (String × FE)} (nd : (fs.map Prod.fst)
       obtain ⟨j, _, hj⟩ := List.mem_filterMap.1 hm
       exact chase_suffix j hc hj
     · cases hl
-  have ledger : Ledger limits 4 (addrs 3 fs) (FragmentWave fs) (initial (.get (obj fs) x))
+  have ledger : Ledger (fragmentLimits fs) 4 (addrs 3 fs) (FragmentWave fs) (initial (.get (obj fs) x))
       (12 + ((fragmentTicks d - 12) + 0)) (3 + ((headCost fs + 2 * d + 2 - 3) + 0)) :=
     .segment (approxL [] fs) t1 (by omega) ⟨[], by intro m v h; simp at h, rfl⟩ (heapFor_template fs)
       (.segment (approxL κ fs) t2 (by have : 12 ≤ fragmentTicks d := (by unfold fragmentTicks; split <;> omega); omega)
@@ -397,15 +449,20 @@ theorem fragment_cost_indexed {fs : List (String × FE)} (nd : (fs.map Prod.fst)
       rw [hd] at hd'; cases hd'; exact le
     cells := addrs 3 fs
     Approximant := FragmentWave fs
+    bound := fragmentLimits fs
     ticks := fragmentTicks d
     ledger := ledger }⟩
 
 /-- **The tick bound on the object fragment, constant 4**, through the fragment's ledger. -/
 theorem ticks_within_fragment : TicksWithinDemandOn InFragment 4 0 := by
   refine ticks_within_of_runs ?_
-  rintro t ⟨fs, x, rfl, nd, hlen⟩ T n _ v k cv
+  rintro t ⟨fs, x, rfl, nd⟩ T n _ v k cv
   obtain ⟨u, m, hd, _, _⟩ := demand_minimal nd cv
-  exact fragment_cost_indexed nd hlen hd
+  exact fragment_cost_indexed nd hd
+
+/-- The same, for the bounded machine under any limits. -/
+theorem ticks_within_fragment_under (L : Limits) : TicksWithinDemandUnder L InFragment 4 0 :=
+  ticks_within_under L ticks_within_fragment
 
 /-! ## The measured programs, as instances -/
 
@@ -414,7 +471,7 @@ theorem self_field_machine :
     finishedNat (runBounded limits 25 (initial (.get selfField "b"))) = some 7 ∧
       finishedNat (runBounded limits 24 (initial (.get selfField "b"))) = none := by
   have hc : chase selfFieldFields 2 "b" = some (7, 1) := rfl
-  obtain ⟨h1, h2⟩ := fragment_machine hc (by decide)
+  obtain ⟨h1, h2⟩ := fragment_machine hc (L := limits) ⟨by decide, by decide⟩
   exact ⟨h1, h2 24 (by decide)⟩
 
 /-- `{good = 7, bad = self.bad}.good` finishes with `7` within 16 ticks, and not within 15. -/
@@ -422,7 +479,7 @@ theorem good_machine :
     finishedNat (runBounded limits 16 (initial (.get FareTests.object "good"))) = some 7 ∧
       finishedNat (runBounded limits 15 (initial (.get FareTests.object "good"))) = none := by
   have hc : chase goodBadFields 2 "good" = some (7, 0) := rfl
-  obtain ⟨h1, h2⟩ := fragment_machine hc (by decide)
+  obtain ⟨h1, h2⟩ := fragment_machine hc (L := limits) ⟨by decide, by decide⟩
   exact ⟨h1, h2 15 (by decide)⟩
 
 /-- `.bad` reaches the blackhole within 21 ticks, and not within 20. -/
@@ -444,12 +501,14 @@ theorem measured_within :
     ((∀ v k, ¬ CV (.get FareTests.object "bad") v k) ∧
       blackholed (runBounded limits 21 (initial (.get FareTests.object "bad"))) = true) := by
   obtain ⟨⟨g1, g2⟩, ⟨b1, b2⟩, bad⟩ := measured_least
-  have frag : ∀ (fs : List (String × FE)) x, (fs.map Prod.fst).Nodup → fs.length ≤ 97 → InFragment (.get (obj fs) x) :=
-    fun fs x nd hl => ⟨fs, x, rfl, nd, hl⟩
-  have g := ticks_within_fragment _ (frag goodBadFields "good" (by decide) (by decide)) 16 7 good_machine.1
-    (fun T' lt => (fragment_machine (rfl : chase goodBadFields 2 "good" = some (7, 0)) (by decide)).2 T' lt) 5 g1 g2
-  have b := ticks_within_fragment _ (frag selfFieldFields "b" (by decide) (by decide)) 25 7 self_field_machine.1
-    (fun T' lt => (fragment_machine (rfl : chase selfFieldFields 2 "b" = some (7, 1)) (by decide)).2 T' lt) 7 b1 b2
+  have frag : ∀ (fs : List (String × FE)) x, (fs.map Prod.fst).Nodup → InFragment (.get (obj fs) x) :=
+    fun fs x nd => ⟨fs, x, rfl, nd⟩
+  have g := ticks_within_fragment_under limits _ (frag goodBadFields "good" (by decide)) 16 7 good_machine.1
+    (fun T' lt => (fragment_machine (L := limits) (rfl : chase goodBadFields 2 "good" = some (7, 0))
+      ⟨by decide, by decide⟩).2 T' lt) 5 g1 g2
+  have b := ticks_within_fragment_under limits _ (frag selfFieldFields "b" (by decide)) 25 7 self_field_machine.1
+    (fun T' lt => (fragment_machine (L := limits) (rfl : chase selfFieldFields 2 "b" = some (7, 1))
+      ⟨by decide, by decide⟩).2 T' lt) 7 b1 b2
   exact ⟨⟨g1, g2, good_machine.1, good_machine.2, by omega, by rw [Nat.add_zero] at g; exact g⟩,
     ⟨b1, b2, self_field_machine.1, self_field_machine.2, by omega, by rw [Nat.add_zero] at b; exact b⟩,
     ⟨bad, bad_machine.1⟩⟩

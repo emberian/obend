@@ -9,10 +9,12 @@ exactly `16` transitions when `d = 0` and `19 + 6d` otherwise (`fragment_run`), 
 value. -/
 public import Obend.Equiv.Demand
 public import Obend.Core.Machine
+public import Obend.Core.Proofs.Adequacy.Defs
 @[expose] public section
 namespace Obend.Core.Proofs.TickTrace
 open Obend.Core.Term
 open Obend.Core.Machine
+open Obend.Core.Proofs.Adequacy (rawRun)
 open Obend.Equiv
 open Obend.Equiv.Demand
 set_option autoImplicit false
@@ -81,6 +83,63 @@ theorem runBounded_short {L : Limits} {s s' : State} {n : Nat} (t : Trace L s n 
     | succ j =>
       simp only [runBounded, step_active a f]
       exact ih j (by omega)
+
+/-- A trace is the unbounded raw machine's run. -/
+theorem rawRun_trace {L : Limits} {s s' : State} {n : Nat} (t : Trace L s n s') : rawRun n s = s' := by
+  induction t with
+  | refl => rfl
+  | cons _ _ _ ih => exact ih
+
+/-- Before a trace ends, the raw run is still active. -/
+theorem rawRun_short {L : Limits} {s s' : State} {n : Nat} (t : Trace L s n s') :
+    ∀ j < n, Active (rawRun j s) := by
+  induction t with
+  | refl => intro j h; omega
+  | @cons s0 s1 k a f _ ih =>
+    intro j hj
+    cases j with
+    | zero => exact a
+    | succ j => exact ih j (by omega)
+
+/-- A completed state stays completed. -/
+theorem rawRun_complete {s : State} {v : RuntimeValue} (h : s.control = .complete v) :
+    ∀ j, rawRun j s = s
+  | 0 => rfl
+  | j + 1 => by
+    have e : stepRaw s = s := by
+      obtain ⟨heap, control, stack⟩ := s
+      simp only at h; subst h; rfl
+    show rawRun j (stepRaw s) = s
+    rw [e]; exact rawRun_complete h j
+
+theorem rawRun_stays {v : RuntimeValue} : ∀ (a : Nat) {s : State} {b : Nat}, (rawRun a s).control = .complete v →
+    a ≤ b → (rawRun b s).control = .complete v
+  | 0, s, b, h, _ => by simp only [rawRun] at h; rw [rawRun_complete h b]; exact h
+  | a + 1, s, b, h, le => by
+    obtain ⟨b, rfl⟩ : ∃ b', b = b' + 1 := ⟨b - 1, by omega⟩
+    exact rawRun_stays a (s := stepRaw s) h (by omega)
+
+/-- A bounded run that finished is a trace within the limits to a completed state. -/
+theorem runBounded_finished_trace {L : Limits} : ∀ (T : Nat) {s s' : State} {v : RuntimeValue},
+    runBounded L T s = .finished v s' → ∃ j ≤ T, Trace L s j s' ∧ s'.control = .complete v
+  | 0, s, s', v, h => by
+    cases hc : s.control <;> simp [runBounded, hc] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨0, by omega, .refl _, hc⟩
+  | T + 1, s, s', v, h => by
+    by_cases a : Active s
+    · by_cases f : Fits L (stepRaw s)
+      · simp only [runBounded, step_active a f] at h
+        obtain ⟨j, hj, t, hc⟩ := runBounded_finished_trace T h
+        exact ⟨j + 1, by omega, .cons a f t, hc⟩
+      · unfold Fits at f
+        have hs : step L s = .suspended .capacity s := by
+          unfold step
+          cases hc : s.control <;> simp [Active, hc] at a ⊢ <;> simp_all
+        simp [runBounded, hs] at h
+    · cases hc : s.control <;> simp [Active, hc] at a <;> simp [runBounded, step, hc] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨0, by omega, .refl _, hc⟩
 
 /-! ## Allocation, as an append -/
 
