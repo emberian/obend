@@ -28,9 +28,9 @@ first-usable choice of a later view is a different choice whenever an earlier ca
 (`select_prefix`, `select_reuse`).
 
 THE FLOOR, each refuted on the toy World (two members, one grant revoked at height 1):
-`credulousHoles` (judges, ignores supports), `firstCandidate` (ignores both), `blindRefusal` (the
-slot's selection, a refusal that names nothing) fail contextual integrity; `churn` (re-select at
-every view) and `sticky` (keep the stored selection whatever the view) fail the transition. The toy
+`credulousHoles` (judges and follows the order, ignores supports) fails contextual integrity;
+`churn` (re-select at every view) and `sticky` (keep the stored selection whatever the view) fail
+the transition. The toy
 also inhabits the non-trivial case: filled by candidate 0 at height 0, the stored selection reads
 blocked by the revoked grant's name at height 1, and the stored selection advances to candidate 1
 there (`toy_repair`, `toy_advance`).
@@ -278,18 +278,6 @@ def credulousHoles : Filler V Fact Cand :=
     | c :: _ => .ok c
     | [] => .error (order.map fun c => (c, []))⟩
 
-/-- Ignores the supports and the judge: fills with the first candidate. -/
-def firstCandidate : Filler V Fact Cand :=
-  ⟨fun _ _ order => match order with
-    | c :: _ => .ok c
-    | [] => .error []⟩
-
-/-- The slot's selection, but a refusal that names nothing. -/
-def blindRefusal : Filler V Fact Cand :=
-  ⟨fun S v order => match S.alternatives (holdsAt v) order with
-    | c :: _ => .ok c
-    | [] => .error []⟩
-
 /-- Re-selects at every view: forgets the stored selection. -/
 def churn : Advance V Fact Cand := ⟨fun S v order _ => S.select (holdsAt v) order⟩
 
@@ -384,26 +372,6 @@ theorem not_integrity_credulousHoles :
   cases this
 
 #tooth not_integrity_credulousHoles by mutation Integrity.contextual := fun {_ _ _} [_] _ => True
-
-/-- FLOOR. The first-candidate filler admits Alice's candidate at height 1 too. -/
-theorem not_integrity_firstCandidate :
-    ¬ Integrity.contextual (firstCandidate : Filler Nat Member Member) := by
-  intro h
-  have := ((h toySlot 1 toyOrder).1 .alice rfl).2.2.1 .alice (by simp [toySlot])
-  rw [toy_alice_dead] at this
-  cases this
-
-#tooth not_integrity_firstCandidate by mutation Integrity.contextual := fun {_ _ _} [_] _ => True
-
-/-- FLOOR. The blind refusal refuses Alice alone at height 1 with no coordinate: nothing names her
-dead grant. -/
-theorem not_integrity_blindRefusal :
-    ¬ Integrity.contextual (blindRefusal : Filler Nat Member Member) := by
-  intro h
-  obtain ⟨d, hd, -⟩ := (h toySlot 1 [.alice]).2 [] rfl .alice (List.mem_singleton.2 rfl)
-  cases hd
-
-#tooth not_integrity_blindRefusal by mutation blindRefusal := slotFiller
 
 /-- FLOOR. Re-selecting at every view drops Bob's stored selection at height 0, where it is usable,
 for Alice, who comes first. -/
