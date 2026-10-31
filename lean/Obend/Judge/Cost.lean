@@ -21,7 +21,7 @@ public import Obend.Equiv.Cost
 public import Obend.Equiv.Demand
 public import Obend.Core.TermTraverse
 
-public section
+@[expose] public section
 namespace Obend.Judge.Cost
 open Obend.Core Obend.Core.Term Obend.Equiv
 open Obend.Core.Traverse (Tree)

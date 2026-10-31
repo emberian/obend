@@ -210,6 +210,7 @@ import Obend.Equiv.Yields
 import Obend.Judge
 import Obend.Judge.Certified
 import Obend.Judge.Cost
+import Obend.Judge.LayeredCost
 import Obend.Judge.Class
 import Obend.Judge.Identity
 import Obend.Judge.Instances
