@@ -16,3 +16,4 @@ review/kimi.pid
 astra/equirec/
 astra/eval/
 astra/select/
+lean/tools/journal/env-*.jsonl
