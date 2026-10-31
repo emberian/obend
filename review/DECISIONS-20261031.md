@@ -38,15 +38,14 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | `BEquiv` (`Equiv/Behaviour`) quantifies over every context including `metadata`, so it is ≈r; the extensional ≈b is `Observed .b` (Quote-1's `observed_r_iff`). Rename queued after the Cost lane lands so no lane rebases across it. | taken by Claude under standing approval, 2026-11-01 | `lean/docs/REPORT-QUOTE1-20261101.md` |
 
-| Branch uses: a `linear` hypothesis's count must be equal across arms (additive), `affine` combines by max, `unrestricted` by sum; one combinator indexed by quantity | taken by Claude under standing approval, 2026-11-01, closing the Argon-era open item | `lean/docs/REPORT-LINEAR-20261101.md` |
+| Branch uses: every branch vector joins by pointwise max (`Ty.joinUses`), with a separate agreement check that a `linear` hypothesis is used equally on every arm; the instruction said unrestricted sums, the lane corrected to max because the count must be term-only for `Checked.eq_of_type` and `prepare_checks` | taken by Claude under standing approval 2026-11-01 (instruction); corrected by the Linear lane (representation); recorded here as the accepted deviation | `lean/docs/REPORT-LINEAR-20261101.md` round 2 |
 
-| Tier 2 (teeth and census) runs pre-push: `core.hooksPath lean/tools/hooks` set in the main checkout 2026-11-01; every lane brief sets it in its worktree | taken by Claude under standing approval | `lean/docs/REPORT-BUILD-20261101.md` |
+| Tier 2 (teeth and census) runs pre-push via `core.hooksPath lean/tools/hooks`; an engineering rule, not a decision; a hook on a clone is not proof it ran | taken by Claude | `lean/docs/REPORT-BUILD-20261101.md` |
 
 ## Still open
 
 | item | where it is written | size |
 |---|---|---|
-| `World` has no version non-return law: pins may alternate and a stale justification can come back true (Kimi §2; lane A's D15 deliberately left nano's forward-only law out) | `Obend/Slot/World.lean` has `holds_congr`, `retired_dead`, `retired_step` only | one field plus the collision stance; the runner's `Legal` does not depend on it |
 | `@[expose]`-all per definitional module is a migration expedient (Kimi §3) | `REPORT-20261030.md` §2 | a tightening pass, measured by the one-edit rebuild check |
 | Rename `slot_repair` (a bundle of reading and permanence lemmas) and `Integrity.transition` | Kimi §1; runner report §9 | names only |
 | Journal baseline `env-b3ddd73.jsonl` (8.9 MB) is committed; ignore or keep | lane B D6 | one `.gitignore` line |
@@ -78,3 +77,26 @@ laws across packages, orthogonal protocols); Vault (`obend open`).
 | expose-all tightening | after ProofEng lands (same files) | queued |
 | Elab leftovers; Simple-sub template elaborator; carry | after Extends lands (Spec files) | queued |
 | Leaf emitter and refinement | after the Equiv spike and the runner adapter | queued |
+
+
+## Decision record, restructured (2026-11-01, after `astra/ASTRA-DECISIONS-20261101.md` §1 and §6)
+
+Each decision from here carries: id; decider and authority (Ember / integrator under standing
+approval / lane); the semantic contract it fixes; status (proposed, taken, built, promoted to a
+relied-on boundary); first consumers; evidence; residual obligations; reversal and migration cost.
+A lane may complete its deliverable while the workstream's gate stays open; when evidence refutes
+a gate, the integrator replaces it with a true one and names the remaining obligation. The PLAN rows
+now carry "deliverable" and "gate" separately.
+
+The four contracts that are the real pending decisions (replacing the four lane epilogues):
+
+| id | contract | recommendation | owner; evidence before promotion |
+|---|---|---|---|
+| C1 | Identity across kinds, checked code and upgrades | nominal kind identity survives every boundary (quotation, import, higher-order crossings, upgrades); stable kind identity distinct from the pinned version of its layout, law and methods; layout/law versions and the typing edition explicit in a portable checked-code artifact; compatibility and migration are judgments, never assumed; anonymous structural records kept as a separate facility | integrator with Kind, Quote and Elab; Ember for what a user means by identity across upgrades; outside read of the equality/import boundary before promotion |
+| C2 | Ownership across aggregates and staging | keep exact-use at binders, branch agreement and transfer restrictions, stated as exactly that (no eventual-fulfilment theorem); add a consuming decomposition that accounts for every resourceful component as the positive counterpart to the projection refusal; a stated contract for dropping, transferring, splitting and returning aggregates and what a terminal machine state owes; syntactic ownership never used to prove the runner's durable spend tokens by vocabulary | typing and resource lane with outside review; Ember only if meaning or ergonomics change materially; required before T7 is advertised as preventing laundering |
+| C3 | Receipt meaning and authoritative history | re-execution proves legality relative to the receipt's inputs; commitments prove binding; membership in an authoritative history is a separate claim relative to an independently selected head under a stated host model; the verifier produces the conclusion it established (allowed quantifier, execution basis, remaining premises) rather than trusting producer metadata; projection invariance of the dial is not proof-strength invariance; non-omission needs a coverage argument | runner and receipt integrator; independent boundary read; Ember chooses deployment and trust commitments, not the hash-tree plumbing; Astra's two probes (clock-shifted receipt verifies; quantifier label trusted) are the countermodels |
+| C4 | Runtime cost and optimization claims | adequate need-based cost first; the clairvoyant cell table if it buys a simpler proof, not as a commitment; directional improvement kept distinct from factor equivalence; no public optimization guarantee before an outside semantic read of the recursive-demand cases | Cost lane; outside semantic review before any charging consumer depends on it |
+
+Engineering tasks kept visible with owners, not decisions: the Leaf toolchain arrangement (one
+emitted program through the intended refinement route; no silent maintained fork); the expose and
+build gates (clean build under two minutes, `Check` edit within twenty modules) still open.
