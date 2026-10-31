@@ -21,3 +21,8 @@ astra/effectlaws/
 astra/vision/
 astra/decisions/
 review/kimi-code.*
+review/kimi-*.out
+review/kimi-*.err
+review/kimi-*.pid
+review/kimi-brief-*
+review/kimi-run/

@@ -34,6 +34,14 @@ the build is the check. One stranger-usable artifact stays ahead of every platfo
 | 11 | **Build speed** | `@[expose]` confined to what reduction needs, the large proof files split, two build tiers, the warm worktree pool, a kernel-evaluable type graph | a leaf proof edit under 10 s; a `Check` edit stopping within twenty modules; a clean build under two minutes | none | deliverable done (`REPORT-BUILD-20261101.md`); **gate open**: private proof edit 5 s met; clean build under two minutes and `Check` edit within twenty modules not met, awaiting the expose pass |
 | 12 | **Contracts** | receipts as proofs at the one-bit position of the dial, replicated settlement | after 6 and 1; the charters say not yet | 1, 6 | deferred |
 
+## Gates before building further (Gemini's five, adopted 2026-11-01)
+
+1. Close the linear soundness holes and the receipt forgery (Sound lane, in progress).
+2. Retire `Check.infer` so `Bidirectional.checkAgainst` is the one executable checker, before C1 and C2 touch `Ty`/`Check`.
+3. Repair `fixLet`'s staging in `Equiv/Clairvoyant` (iterated approximants), connect CV to machine ticks through `Completeness`, prove `runBounded_mono` and delete `Judge.deepen`.
+4. Strip blanket `@[expose]` from Core first (Expose lane, in progress).
+5. The integration scenario at the end of this file as a compiled theorem before WS 5–10.
+
 ## Decisions pending
 
 The four contracts C1–C4 in `review/DECISIONS-20261031.md` (identity across kinds, code and
