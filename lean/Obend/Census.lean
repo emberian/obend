@@ -196,6 +196,7 @@ import Obend.Fold
 import Obend.Intention
 import Obend.Kind
 import Obend.Kind.Proofs
+import Obend.Equiv.Yields
 import Obend.Judge
 import Obend.Judge.Certified
 import Obend.Judge.Class
