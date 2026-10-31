@@ -94,7 +94,7 @@ def lawsText (laws : List (String × LawExpr × String)) : Json :=
 def lawDigest (laws : List (String × LawExpr × String)) : String :=
   Obend.Receipt.Negotiation.digestJson (lawsText laws)
 
-def lawOf (laws : List (String × LawExpr × String)) : Law := kindLaw (laws.map fun (n, e, _) => (n, e)) fun _ => []
+def lawOf (laws : List (String × LawExpr × String)) : Law := kindLaw (laws.map fun (n, e, _) => (n, e))
 
 /-- The text after a prefix. -/
 def after (pre s : String) : Option String :=
@@ -136,7 +136,7 @@ def clauseText (laws : List (String × LawExpr × String)) (g : Reg) (w : Nat) (
       toString w ++ "); post it into an open period: --period " ++ toString (w + 1)
   | .again _ => "refused (again): the register has this posting already"
   | .law n r =>
-    let vals := postingMeasures p
+    let vals := postingMeasures p ++ accountMeasures g p
     let lin := laws.map fun (n, e, _) => (n, e)
     let keys := postingKeys lin vals
     let st := stateOf' keys vals
@@ -154,10 +154,15 @@ def linesText (p : Posting) : String :=
     if m.debit != 0 || m.credit == 0 then "- debit [[" ++ m.account ++ "]] " ++ toString m.debit ++ "\n"
     else "- credit [[" ++ m.account ++ "]] " ++ toString m.credit ++ "\n")
 
-/-- The page of a posting: its fields (what the register's laws read), the document it embeds, its lines. -/
+/-- The page of a posting: its fields (what the register's laws read: its own, and the totals after it
+of the accounts it moves), the document it embeds, its lines. `g` is the register before it. -/
 def postingPage (g : Reg) (p : Posting) : String :=
+  let moved := (p.lines.map (·.account)).eraseDups
+  let after := (accountMeasures g p).filter fun (k, _) => moved.any fun a =>
+    k == shortName a ++ "_debits" || k == shortName a ++ "_credits"
   "---\nperiod: " ++ toString p.period ++ "\ndebits: " ++ toString p.debits ++ "\ncredits: " ++ toString p.credits ++
-  "\nmovements: " ++ toString p.lines.length ++ "\n---\n# " ++ p.id ++ "\n\n" ++
+  "\nmovements: " ++ toString p.lines.length ++ String.join (after.map fun (k, v) => "\n" ++ k ++ ": " ++ toString v) ++
+  "\n---\n# " ++ p.id ++ "\n\n" ++
   (match p.reverses with
     | some o => "Reverses [[register/" ++ numberOf g o ++ "]], of " ++ p.doc ++ ", in period " ++ toString p.period ++ ".\n\n"
     | none => "Posts " ++ p.doc ++ " in period " ++ toString p.period ++ ":\n\n![[" ++ p.doc ++ "]]\n\n") ++
@@ -191,7 +196,7 @@ def commitRow (dir : System.FilePath) (laws : List (String × LawExpr × String)
     IO.FS.createDirAll (receiptsDir dir)
     IO.FS.writeFile (receiptsDir dir / (p.id ++ ".json")) (rj.pretty ++ "\n")
     IO.FS.createDirAll (dir / "register")
-    IO.FS.writeFile (dir / "register" / (p.id ++ ".md")) (postingPage b.2 p)
+    IO.FS.writeFile (dir / "register" / (p.id ++ ".md")) (postingPage a.2 p)
     return { J with rows := J.rows ++ [.post p], head := Obend.Receipt.Negotiation.digestJson rj, last := p0.origin }
   | .close n, _ => return { J with rows := J.rows ++ [.close n] }
   | _, _ => return J
@@ -286,6 +291,8 @@ def status (dir : System.FilePath) : IO UInt32 := do
   | .error e => fail e
   | .ok (_, _, _, (w, g)) =>
     IO.println ("register: " ++ toString g.postings.length ++ " posting(s), closed through period " ++ toString w)
+    if !g.postings.isEmpty then
+      IO.println ("  " ++ pad "number" 8 ++ pad "document" 22 ++ pad "period" 11 ++ lpad "amount" 6)
     for p in g.postings do
       let note := match p.reverses with
         | some o => "reverses " ++ numberOf g o
@@ -342,12 +349,13 @@ def trialBalance (dir : System.FilePath) (P : Nat) (out : Option String) : IO UI
 /-! ## The stitch -/
 
 /-- The rows of another register this one does not have: its postings of origins not here, and its
-closes; `drop` leaves out postings by the other's number. -/
+closes past this one's closed-through period; `drop` leaves out postings by the other's number. -/
 def forkRows (main other : List Row) (drop : List String) : List Row :=
   let here := main.filterMap fun | .post p => some p.origin | .close _ => none
+  let w := (stateOf main).1
   other.filter fun
     | .post p => !here.contains p.origin && !drop.contains p.id
-    | .close _ => true
+    | .close n => decide (w < n)
 
 def rowText : Row → String
   | .post p => p.id ++ " (" ++ (if p.reverses.isSome then "reversal of " else "posting of ") ++ p.doc ++

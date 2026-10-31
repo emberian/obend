@@ -228,12 +228,13 @@ def lawConsts : LawExpr → List Int
   | .not e => lawConsts e
   | .and l r | .or l r | .implies l r => lawConsts l ++ lawConsts r
 
-/-- The values tried for a field: near what it is, near what it was, near the law's constants. -/
-def candidates (e : LawExpr) (cur old : Nat) : List Nat :=
+/-- The values tried for a field: near what it is, near what it was, near the law's constants, and
+near what the other fields the law reads hold (`others`: so `a <= b` can suggest `a = b`). -/
+def candidates (e : LawExpr) (cur old : Nat) (others : List Nat := []) : List Nat :=
   let near (v : Nat) : List Nat := [v, v + 1, v - 1]
   let cs : List Nat := ((lawConsts e).filter (0 ≤ ·)).map Int.toNat
   let dist (v : Nat) : Nat := if v ≤ cur then cur - v else v - cur
-  ((near old ++ cs.flatMap near ++ [0, cur + 1, cur - 1]).eraseDups.filter (· != cur)).mergeSort
+  ((near old ++ cs.flatMap near ++ [0, cur + 1, cur - 1] ++ others.flatMap near).eraseDups.filter (· != cur)).mergeSort
     fun a b => dist a ≤ dist b
 
 /-- **What would pass**: the change of one field the law reads that makes it hold, said as the line
@@ -244,7 +245,7 @@ def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (fron
   let found := fields.findSome? fun f =>
     let cur := natAt new f
     let was := (old.map (natAt · f)).getD cur
-    ((candidates e cur was).find? fun v => e.denote facts (old.map fun o => o) (setNat new f v)).map
+    ((candidates e cur was ((fields.filter (· != f)).map (natAt new))).find? fun v => e.denote facts (old.map fun o => o) (setNat new f v)).map
       fun v => (f, cur, v)
   match found with
   | some (f, cur, v) =>

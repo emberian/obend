@@ -40,9 +40,13 @@ Theorems:
 - the offline door (`Obend.Run.Fork.stitch` over the register's step): `stitch_atomic` and
   `stitch_accounts` hold as they do of every step; `stitch_twice_refused`: a fork's posting of a
   document main has a live posting of is a conflict, and the stitch leaves main as it was.
+
+Tooth: `#tooth step_once` by mutation of `Reg.liveOf` (a register that never finds a document's live
+posting): the proof that posting once is kept no longer checks.
 -/
 public import Obend.Fold
 public import Obend.Run.Fork
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Ledger
@@ -145,6 +149,77 @@ theorem template_balanced (t : Template) (h : (t.debits.map (·.2)).Perm (t.cred
   rw [hd, hc]
   exact (h.map field).sum_nat
 
+/-! ## Totals per account -/
+
+/-- Debit and credit totals per account. -/
+abbrev Totals := List (String × Nat × Nat)
+
+def Totals.get (t : Totals) (a : String) : Nat × Nat := (t.lookup a).getD (0, 0)
+
+/-- Add a debit and a credit to an account. -/
+def bump : Totals → String → Nat → Nat → Totals
+  | [], a, d, c => [(a, d, c)]
+  | (b, x, y) :: rest, a, d, c => if a = b then (b, x + d, y + c) :: rest else (b, x, y) :: bump rest a d c
+
+theorem get_bump : ∀ (t : Totals) (a : String) (d c : Nat) (x : String),
+    (bump t a d c).get x = if x = a then ((t.get x).1 + d, (t.get x).2 + c) else t.get x
+  | [], a, d, c, x => by
+    by_cases h : x = a
+    · subst h; simp [bump, Totals.get, List.lookup]
+    · have hb : (x == a) = false := by simpa using h
+      simp [bump, Totals.get, List.lookup, h, hb]
+  | (b, x0, y0) :: rest, a, d, c, x => by
+    by_cases hab : a = b
+    · subst hab
+      by_cases hx : x = a
+      · subst hx; simp [bump, Totals.get, List.lookup]
+      · have hb : (x == a) = false := by simpa using hx
+        simp [bump, Totals.get, List.lookup, hx, hb]
+    · have ih := get_bump rest a d c x
+      by_cases hx : x = b
+      · subst hx
+        have : ¬ x = a := fun e => hab e.symm
+        simp [bump, Totals.get, List.lookup, hab, this]
+      · simp only [bump, hab, ite_false]
+        simp only [Totals.get, List.lookup, show (x == b) = false from by simpa using hx] at ih ⊢
+        exact ih
+
+/-- What a posting debits an account. -/
+def debitOn (a : String) (p : Posting) : Nat := (p.lines.map fun m => if m.account = a then m.debit else 0).sum
+/-- What a posting credits an account. -/
+def creditOn (a : String) (p : Posting) : Nat := (p.lines.map fun m => if m.account = a then m.credit else 0).sum
+
+/-- Add a posting's lines in. -/
+def addPosting (t : Totals) (p : Posting) : Totals :=
+  p.lines.foldl (fun t m => bump t m.account m.debit m.credit) t
+
+theorem get_addLines (a : String) : ∀ (ls : List Movement) (t : Totals),
+    (ls.foldl (fun t m => bump t m.account m.debit m.credit) t).get a =
+      ((t.get a).1 + (ls.map fun m => if m.account = a then m.debit else 0).sum,
+       (t.get a).2 + (ls.map fun m => if m.account = a then m.credit else 0).sum)
+  | [], t => by simp
+  | m :: ms, t => by
+    simp only [List.foldl_cons, List.map_cons, List.sum_cons]
+    rw [get_addLines a ms, get_bump]
+    by_cases h : a = m.account
+    · subst h; simp; omega
+    · have : ¬ m.account = a := fun e => h e.symm
+      simp [h, this]
+
+theorem get_addPosting (t : Totals) (p : Posting) (a : String) :
+    (addPosting t p).get a = ((t.get a).1 + debitOn a p, (t.get a).2 + creditOn a p) :=
+  get_addLines a p.lines t
+
+theorem get_addAll (a : String) : ∀ (ps : List Posting) (t : Totals),
+    (ps.foldl addPosting t).get a =
+      ((t.get a).1 + (ps.map (debitOn a)).sum, (t.get a).2 + (ps.map (creditOn a)).sum)
+  | [], t => by simp
+  | p :: ps, t => by
+    simp only [List.foldl_cons, List.map_cons, List.sum_cons]
+    rw [get_addAll a ps, get_addPosting]
+    simp only [Prod.mk.injEq]
+    omega
+
 /-! ## The register -/
 
 /-- The postings, in order. -/
@@ -201,13 +276,14 @@ inductive Clause where
   | notInverse (origin : String)
   deriving DecidableEq, Repr
 
-/-- A law of the register's kind: `none` admits a posting; `some (name, text)` refuses it. -/
-abbrev Law := Posting → Option (String × String)
+/-- A law of the register's kind, on a posting at the register before it: `none` admits it;
+`some (name, text)` refuses it. -/
+abbrev Law := Reg → Posting → Option (String × String)
 
 /-- What is checked of a posting once its period is open and its number is fresh: its kind's law,
 then that it posts its document once (or reverses a live posting exactly). -/
 def admitPost (law : Law) (g : Reg) (p : Posting) : Except Clause Reg :=
-  match law p with
+  match law g p with
   | some (n, t) => .error (.law n t)
   | none =>
     match p.reverses with
@@ -234,11 +310,11 @@ def step (law : Law) : Nat × Reg → Row → Except Clause (Nat × Reg)
 /-- What `admitPost` accepts: the posting appended, its law admitting it, and either a reversal of a
 live posting with its lines swapped, or a document with no live posting. -/
 theorem admitPost_ok {law : Law} {g g' : Reg} {p : Posting} (h : admitPost law g p = .ok g') :
-    g' = ⟨g.postings ++ [p]⟩ ∧ law p = none ∧
+    g' = ⟨g.postings ++ [p]⟩ ∧ law g p = none ∧
       (∀ o, p.reverses = some o → ∃ q, g.find o = some q ∧ g.live q = true ∧ p.lines = inverse q.lines ∧ p.doc = q.doc) ∧
       (p.reverses = none → g.liveOf p.doc = none) := by
   unfold admitPost at h
-  cases hl : law p with
+  cases hl : law g p with
   | some x => rw [hl] at h; cases h
   | none =>
     rw [hl] at h
@@ -394,7 +470,7 @@ theorem closed_forever {rows : List Row} {a b : Nat × Reg} (h : runFrom law a r
 
 /-- A posting a step appends passed the kind's law. -/
 theorem step_lawful {a b : Nat × Reg} {r : Row} (h : step law a r = .ok b) :
-    ∀ p ∈ b.2.postings, p ∈ a.2.postings ∨ law p = none := by
+    ∀ p ∈ b.2.postings, p ∈ a.2.postings ∨ law a.2 p = none := by
   obtain ⟨w, g⟩ := a
   cases r with
   | close n => simp only [step] at h; cases h; exact fun p hp => .inl hp
@@ -409,16 +485,16 @@ theorem step_lawful {a b : Nat × Reg} {r : Row} (h : step law a r = .ok b) :
 
 /-- **Every posting a run appends passed the kind's law.** -/
 theorem reach_lawful {rows : List Row} {a b : Nat × Reg} (h : runFrom law a rows = .ok b)
-    (ha : ∀ p ∈ a.2.postings, law p = none) : ∀ p ∈ b.2.postings, law p = none :=
-  run_induct (fun a b => (∀ p ∈ a.2.postings, law p = none) → ∀ p ∈ b.2.postings, law p = none)
+    (ha : ∀ p ∈ a.2.postings, ∃ g, law g p = none) : ∀ p ∈ b.2.postings, ∃ g, law g p = none :=
+  run_induct (fun a b => (∀ p ∈ a.2.postings, ∃ g, law g p = none) → ∀ p ∈ b.2.postings, ∃ g, law g p = none)
     (fun _ h => h) (fun _ _ _ h1 h2 h => h2 (h1 h))
-    (fun _ _ _ hs h p hp => (step_lawful hs p hp).elim (h p) id) rows a b h ha
+    (fun a _ _ hs h p hp => (step_lawful hs p hp).elim (h p) fun e => ⟨a.2, e⟩) rows a b h ha
 
 /-- **Balanced**: when the kind's law admits only balanced postings, every posting of a register
 reached from the empty one is balanced. -/
-theorem reach_balanced (hbal : ∀ p, law p = none → p.debits = p.credits) {rows : List Row} {w : Nat}
+theorem reach_balanced (hbal : ∀ g p, law g p = none → p.debits = p.credits) {rows : List Row} {w : Nat}
     {b : Nat × Reg} (h : runFrom law (w, ⟨[]⟩) rows = .ok b) : ∀ p ∈ b.2.postings, p.debits = p.credits :=
-  fun p hp => hbal p (reach_lawful h (fun _ hp => by cases hp) p hp)
+  fun p hp => let ⟨g, hg⟩ := reach_lawful h (fun _ hp => by cases hp) p hp; hbal g p hg
 
 def Reg.debits (g : Reg) : Nat := (g.postings.map Posting.debits).sum
 def Reg.credits (g : Reg) : Nat := (g.postings.map Posting.credits).sum
@@ -433,7 +509,7 @@ theorem sum_eq_of_each (ps : List Posting) (h : ∀ p ∈ ps, p.debits = p.credi
 
 /-- **Conserved**: the register's total is the sum of its postings, and its total debits are its
 total credits. -/
-theorem conserved (hbal : ∀ p, law p = none → p.debits = p.credits) {rows : List Row} {w : Nat}
+theorem conserved (hbal : ∀ g p, law g p = none → p.debits = p.credits) {rows : List Row} {w : Nat}
     {b : Nat × Reg} (h : runFrom law (w, ⟨[]⟩) rows = .ok b) : b.2.debits = b.2.credits :=
   sum_eq_of_each _ (reach_balanced hbal h)
 
@@ -512,7 +588,7 @@ theorem net_conserved (p : Posting) (hb : p.debits = p.credits) (accts : List St
 
 /-- **A second posting of a document is refused by name**, naming its live posting. -/
 theorem twice_refused (w : Nat) (g : Reg) (p q : Posting) (hopen : w < p.period)
-    (hfresh : ∀ x ∈ g.postings, x.origin ≠ p.origin) (hl : law (p.numbered g.number) = none)
+    (hfresh : ∀ x ∈ g.postings, x.origin ≠ p.origin) (hl : law g (p.numbered g.number) = none)
     (hr : p.reverses = none) (hq : g.liveOf p.doc = some q) :
     step law (w, g) (.post p) = .error (.postedTwice p.doc q.id) := by
   have ha : (g.postings.any fun x => x.origin == p.origin) = false := by
@@ -628,6 +704,9 @@ theorem step_once {a b : Nat × Reg} {r : Row} (h : step law a r = .ok b) (ho : 
         exact liveOf_none hlo q hq hql
 
 theorem once_empty : Once ⟨[]⟩ := ⟨List.nodup_nil, (fun _ h => by cases h), List.nodup_nil⟩
+
+-- Tooth: a register that never finds a document's live posting does not keep "posted once".
+#tooth step_once by mutation Reg.liveOf := fun _ _ => none
 
 /-- **Posted once**: a register reached from the empty one has at most one live posting per
 document (and distinct origins, and every reversal names one of its postings). -/

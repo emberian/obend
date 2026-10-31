@@ -5,8 +5,9 @@ module
 In a vault the register is the folder `register/`, and its kind page `register/_kind.md` carries the
 register's laws as `law NAME: EXPR` lines of the `.obend` law fragment, like any kind's
 (`Obend.Vault.Law`). A posting is judged by those lines as the birth of its page: `kindLaw` builds
-the posting's state (its totals and period first, `postingMeasures`, then whatever else the posting
-page measures) and runs the vault's `judge` on it. So the law the register's fold calls
+the posting's state (its totals, lines and period, `postingMeasures`, then every account's debits and
+credits in the register after it, `accountMeasures`: `Cash_credits <= Cash_debits` is a law a
+register may carry) and runs the vault's `judge` on it. So the law the register's fold calls
 (`Obend.Ledger.Register.Law`) is the vault's, and the refusal is the vault's, naming the kind and
 the clause.
 
@@ -25,10 +26,21 @@ set_option autoImplicit false
 open Obend.Vault
 open Obend.Spec.Law (LawExpr LawRef Facts fieldOf firstScalarField scalarOf)
 
-/-- What the register's laws read of a posting first: its totals, its period, and version 0 (a
-posting is born once). -/
+/-- What the register's laws read of a posting first: its totals, its number of lines, its period,
+and version 0 (a posting is born once). -/
 def postingMeasures (p : Posting) : List (String × Nat) :=
-  [("credits", p.credits), ("debits", p.debits), ("period", p.period), ("version", 0)]
+  [("credits", p.credits), ("debits", p.debits), ("movements", p.lines.length), ("period", p.period), ("version", 0)]
+
+/-- An account's short name: its page name's last part (`accounts/Cash` is `Cash`). -/
+def shortName (a : String) : String := ((a.splitOn "/").getLast?).getD a
+
+/-- The register's totals with the posting added: every account's debits and credits. -/
+def totalsAfter (g : Reg) (p : Posting) : Totals := addPosting (g.postings.foldl addPosting []) p
+
+/-- What the register's laws read of the register: for every account it has moved, with the
+posting, `NAME_debits` and `NAME_credits`, its totals after the posting (NAME its short name). -/
+def accountMeasures (g : Reg) (p : Posting) : List (String × Nat) :=
+  (totalsAfter g p).flatMap fun (a, d, c) => [(shortName a ++ "_debits", d), (shortName a ++ "_credits", c)]
 
 /-- The facts a posting is judged under: the owner posts. -/
 def postFacts : Facts := ⟨some 0, some 0, 0, 0⟩
@@ -37,10 +49,11 @@ def postFacts : Facts := ⟨some 0, some 0, 0, 0⟩
 def postingKeys (lin : List (String × LawExpr)) (vals : List (String × Nat)) : List String :=
   sortNames (vals.map (·.1) ++ lin.flatMap fun l => l.2.fields)
 
-/-- **The register's kind law, on a posting**: its laws judged by the vault's judge as the birth of
-the posting's page. `rest` is what else the page measures. -/
-def kindLaw (lin : List (String × LawExpr)) (rest : Posting → List (String × Nat)) : Law := fun p =>
-  let vals := postingMeasures p ++ rest p
+/-- **The register's kind law, on a posting at a register**: its laws judged by the vault's judge as
+the birth of the posting's page, over the posting's measures and the register's account totals after
+it. -/
+def kindLaw (lin : List (String × LawExpr)) : Law := fun g p =>
+  let vals := postingMeasures p ++ accountMeasures g p
   let keys := postingKeys lin vals
   let st := stateOf keys vals
   match judge (stateTy keys) "register" lin st st (requestOf "owner" .birth postFacts) with
@@ -80,9 +93,9 @@ theorem fieldOf_stateOf (vals : List (String × Nat)) (k : String) :
       exact fieldOf_stateOf vals k ys this
 
 /-- **What the register's kind admits is balanced** when its laws say `new.debits == new.credits`. -/
-theorem kindLaw_balanced (lin : List (String × LawExpr)) (rest : Posting → List (String × Nat))
-    (hb : ∃ name, (name, LawExpr.eqR (.field "debits") (.field "credits")) ∈ lin) (p : Posting)
-    (h : kindLaw lin rest p = none) : p.debits = p.credits := by
+theorem kindLaw_balanced (lin : List (String × LawExpr))
+    (hb : ∃ name, (name, LawExpr.eqR (.field "debits") (.field "credits")) ∈ lin) (g : Reg) (p : Posting)
+    (h : kindLaw lin g p = none) : p.debits = p.credits := by
   obtain ⟨name, hmem⟩ := hb
   simp only [kindLaw] at h
   split at h
@@ -90,9 +103,9 @@ theorem kindLaw_balanced (lin : List (String × LawExpr)) (rest : Posting → Li
     have hall := judge_admits (k := .birth) (who := "owner") (facts := postFacts) hj
     have hd := hall _ hmem
     simp only [LawExpr.denote, LawRef.read] at hd
-    have hkd : "debits" ∈ postingKeys lin (postingMeasures p ++ rest p) := by
+    have hkd : "debits" ∈ postingKeys lin (postingMeasures p ++ accountMeasures g p) := by
       rw [postingKeys, mem_sortNames]; simp [postingMeasures]
-    have hkc : "credits" ∈ postingKeys lin (postingMeasures p ++ rest p) := by
+    have hkc : "credits" ∈ postingKeys lin (postingMeasures p ++ accountMeasures g p) := by
       rw [postingKeys, mem_sortNames]; simp [postingMeasures]
     rw [fieldOf_stateOf _ _ _ hkd, fieldOf_stateOf _ _ _ hkc] at hd
     simp [postingMeasures, List.lookup] at hd
@@ -102,11 +115,11 @@ theorem kindLaw_balanced (lin : List (String × LawExpr)) (rest : Posting → Li
 
 /-- A kind's laws hold of a register's postings: every posting of a register reached from the empty
 one under the kind's law that says it is balanced, is balanced, and the register is conserved. -/
-theorem vault_conserved (lin : List (String × LawExpr)) (rest : Posting → List (String × Nat))
+theorem vault_conserved (lin : List (String × LawExpr))
     (hb : ∃ name, (name, LawExpr.eqR (.field "debits") (.field "credits")) ∈ lin) {rows : List Row}
-    {w : Nat} {b : Nat × Reg} (h : runFrom (kindLaw lin rest) (w, ⟨[]⟩) rows = .ok b) :
+    {w : Nat} {b : Nat × Reg} (h : runFrom (kindLaw lin) (w, ⟨[]⟩) rows = .ok b) :
     b.2.debits = b.2.credits :=
-  conserved (fun p hp => kindLaw_balanced lin rest hb p hp) h
+  conserved (fun g p hp => kindLaw_balanced lin hb g p hp) h
 
 end Obend.Ledger
 
