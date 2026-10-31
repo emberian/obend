@@ -1,11 +1,13 @@
 #!/bin/sh
-# Both tiers before a push: tier 1 (definitions and proofs), then the teeth and the axiom census
-# (lean/README.md, "Build"). Tier 2 alone let a tier-1 break reach dev once (2026-11-01).
+# Tier 1 before a push (definitions and proofs). Tier 2 (the mutation teeth, the kernel-evaluation
+# fixtures and the axiom census) runs on hbox or dregg-build2 where it takes under a minute; on the
+# Mac it took ten under lane load (2026-10-31). Run it there before merging a lane:
+#   ssh hbox 'cd ~/obend/repo && git pull -q && cd lean && swarm-build lake build Obend.Census Teeth 2>&1 | tail -2'
 # Install once per clone: git config core.hooksPath lean/tools/hooks
 cd "$(git rev-parse --show-toplevel)/lean" || exit 1
 log="${TMPDIR:-/tmp}/obend-prepush-$$.log"
-if LEAN_NUM_THREADS=2 lake build >"$log" 2>&1 && LEAN_NUM_THREADS=2 lake build Obend.Census Teeth >>"$log" 2>&1; then
-  grep -E "^(Build completed|✖|error)" "$log" | tail -3; rm -f "$log"
+if LEAN_NUM_THREADS=2 lake build >"$log" 2>&1; then
+  grep -E "^Build completed" "$log" | tail -1; rm -f "$log"
 else
-  grep -E "^(✖|error)" "$log" | head -20; echo "pre-push: build failed; full log at $log"; exit 1
+  grep -E "^(✖|error)" "$log" | head -20; echo "pre-push: tier 1 failed; full log at $log"; exit 1
 fi

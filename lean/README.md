@@ -12,7 +12,7 @@ Tier 1 is the `Obend` library: every definition and proof. Tier 2 is the `Teeth`
 (`Obend/Teeth/`: the checker's `decide` fixtures, the `#tooth` mutation checks, the legacy evaluation
 leaves) and `Obend/Census.lean`, the axiom check over every constant. Nothing in tier 1 imports tier 2,
 so a tooth edit rebuilds one module and a proof edit never waits on a tooth. `tools/hooks/pre-push`
-runs tier 2; `git config core.hooksPath lean/tools/hooks` installs it. A new top-level module or
+runs tier 1; tier 2 (teeth, kernel fixtures, census) runs on hbox or dregg-build2 before a merge, where it takes under a minute (`lean/docs/BUILD-ON-BB2.md`); `git config core.hooksPath lean/tools/hooks` installs the hook. A new top-level module or
 directory under `Obend/` needs a glob in the `Obend` library (`lakefile.toml`); the census refuses one
 that neither tier builds.
 
