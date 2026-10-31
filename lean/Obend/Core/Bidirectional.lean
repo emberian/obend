@@ -498,7 +498,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
           (by obtain ⟨fuel, h⟩ := (isRowV_iff _ _).1 isRow
               exact .extend prior.derivation members.derivation h)⟩
     let typed ← synthesized
-    match mode with
+    match (dependent := true) mode with
     | .synth => pure typed
     | .check expected =>
       if agrees : sameType assumptions typed.type expected = true then
@@ -556,7 +556,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
             (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) rfl) he⟩
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
-    match mode with
+    match (dependent := true) mode with
     | .check expected =>
       match annotations path with
       | none => against expected
@@ -596,7 +596,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
             (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) hd) he⟩
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
-    match mode with
+    match (dependent := true) mode with
     | .check expected =>
       match annotations path with
       | none => against expected

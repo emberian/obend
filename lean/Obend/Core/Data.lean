@@ -91,14 +91,16 @@ def materializeWith (policy : State → Bool) (limits : Limits) : Nat → Budget
       if bytes > remaining.bytes then throw (.budget,state,remaining)
       pure ⟨.label s,state,{remaining with bytes:=remaining.bytes-bytes}⟩
     | .record fields =>
+      -- Each guard names its continuation as the `else` branch, so the elaborated term is a
+      -- nest of `if`s rather than `do` join points (which the proofs would duplicate).
       let headerBytes := (toString fields.length).utf8ByteSize+2
-      if headerBytes > remaining.bytes then throw (.budget,state,remaining)
+      if headerBytes > remaining.bytes then throw (.budget,state,remaining) else
       let remaining := {remaining with bytes:=remaining.bytes-headerBytes}
-      if (fields.map Prod.fst).eraseDups.length != fields.length then throw (.duplicateField,state,remaining)
-      if fields.length > remaining.nodes then throw (.budget,state,remaining)
+      if (fields.map Prod.fst).eraseDups.length != fields.length then throw (.duplicateField,state,remaining) else
+      if fields.length > remaining.nodes then throw (.budget,state,remaining) else
       let pair ← fields.foldlM (fun (prior : List (String × Data) × State × Budget) field => do
         let bytes := field.1.utf8ByteSize+(toString field.1.utf8ByteSize).utf8ByteSize+1
-        if bytes > prior.2.2.bytes || prior.2.2.nodes = 0 then throw (.budget,prior.2.1,prior.2.2)
+        if bytes > prior.2.2.bytes || prior.2.2.nodes = 0 then throw (.budget,prior.2.1,prior.2.2) else
         let entered : State := {prior.2.1 with control:=.enter field.2,stack:=[]}
         let (outcome,ticks) := forceWith policy limits prior.2.2.ticks entered
         let nextBudget := {prior.2.2 with ticks:=ticks,bytes:=prior.2.2.bytes-bytes}

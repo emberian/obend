@@ -374,7 +374,7 @@ def worklist {Label : Type} [DecidableEq Label] {n : Nat} (g : Graph Label n)
         rcases h with seen | impossible
         · exact seen
         · exact False.elim (by simpa [InRelation] using impossible)
-      · intro p hp; simpa using hp)
+      · intro p hp; simpa [InRelation] using hp)
   | p :: pending =>
     if seen : p ∈ visited then
       letI : Decidable (Covered g (visited ++ pending)) :=

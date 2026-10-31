@@ -178,7 +178,7 @@ public theorem eqLabel_bool {a b : Term} {bo : Bool} (h : Evaluates (eqLabel a b
     ∃ s t, Evaluates a (.label s) ∧ Evaluates b (.label t) ∧ decide (s = t) = bo := by
   obtain ⟨x, y, hx, hy, hp⟩ := binary_inv h
   cases x <;> cases y <;> simp [primitiveResult] at hp
-  exact ⟨_, _, hx, hy, by simpa using hp⟩
+  exact ⟨_, _, hx, hy, by simpa [Bool.beq_eq_decide_eq] using hp⟩
 
 public theorem eqLabel_true {a b : Term} (h : Evaluates (eqLabel a b) (.boolean true)) :
     ∃ s, Evaluates a (.label s) ∧ Evaluates b (.label s) := by
@@ -189,7 +189,7 @@ public theorem eqNat_bool {a b : Term} {bo : Bool} (h : Evaluates (eqNat a b) (.
     ∃ m k, Evaluates a (.nat m) ∧ Evaluates b (.nat k) ∧ decide (m = k) = bo := by
   obtain ⟨x, y, hx, hy, hp⟩ := binary_inv h
   cases x <;> cases y <;> simp [primitiveResult] at hp
-  exact ⟨_, _, hx, hy, by simpa using hp⟩
+  exact ⟨_, _, hx, hy, by simpa [Bool.beq_eq_decide_eq] using hp⟩
 
 public theorem eqNat_true {a b : Term} (h : Evaluates (eqNat a b) (.boolean true)) :
     ∃ m, Evaluates a (.nat m) ∧ Evaluates b (.nat m) := by

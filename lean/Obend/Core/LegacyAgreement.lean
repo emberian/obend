@@ -287,7 +287,8 @@ theorem sameStep_legacySameType {assumptions : Assumptions} {actual expected : T
       have positive : 1 ≤ assumptions.bounds.length := by
         have := Assumptions.alias_key aliased
         have := List.length_pos_of_mem this
-        simpa using this
+        rw [List.length_map] at this
+        exact Nat.succ_le_of_lt this
       refine (legacySameType_iff _ _ _).2 ⟨1, 0, positive, Nat.zero_le _, ?_⟩
       simp [Assumptions.chase, Assumptions.unfoldHead, Ty.canonical, aliased, boundPure, equal]
   simp only [sameStep, Bool.or_eq_true] at agreement

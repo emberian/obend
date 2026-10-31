@@ -76,8 +76,8 @@ theorem scopedsB_sound : ∀ {n : Nat} {cs : List (Tree Tag)}, scopedsB n cs = t
   | _, [], _, _, hc => by simp at hc
   | n, c :: cs, h, d, hd => by
       simp only [scopedsB, Bool.and_eq_true] at h
-      rcases List.mem_cons.1 hd with rfl | hd
-      · exact scopedB_sound h.1
+      rcases List.mem_cons.1 hd with same | hd
+      · rw [same]; exact scopedB_sound h.1
       · exact scopedsB_sound h.2 d hd
 end
 

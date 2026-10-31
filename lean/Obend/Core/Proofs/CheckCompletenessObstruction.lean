@@ -229,7 +229,7 @@ The following maps put representatives only where that rule consumes them. -/
 -- decision itself is deliberately opaque in these regression proofs.
 local macro "obstruction_check" : tactic => `(tactic|
   simp [bind, Except.bind, Functor.map, Except.map, pure, Except.pure,
-    throw, Except.toOption, List.getElem?_cons_zero, Bidirectional.checkAgainst, Bidirectional.infer,
+    throw, throwThe, MonadExceptOf.throw, Except.toOption, List.getElem?_cons_zero, Bidirectional.checkAgainst, Bidirectional.infer,
     Bidirectional.checkAt, Bidirectional.synthAt, Bidirectional.elaborate,
     Bidirectional.checkArms, Bidirectional.introduce, Bidirectional.finish,
     Bidirectional.ascribe, Bidirectional.checkedSynth, Bidirectional.need,

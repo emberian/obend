@@ -38,7 +38,7 @@ theorem insertCanonical_sound (laws : Laws E) (row : Ty) (name : String) (member
     · subst prior
       by_cases hs : old.shareable = true
       · simpa only [if_pos rfl, hs, if_true] using laws.shadow name member old tail hs
-      · simpa only [if_pos rfl, if_neg hs] using laws.refl (.field name member (.field name old tail))
+      · simpa only [if_pos rfl, ite_true, if_neg hs] using laws.refl (.field name member (.field name old tail))
     · by_cases hl : name < prior
       · simpa only [if_neg he, if_pos hl] using laws.refl (.field name member (.field prior old tail))
       · simp only [if_neg he, if_neg hl]

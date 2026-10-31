@@ -688,6 +688,9 @@ def rowSyntax : Ty → Bool
   | .variable _ | .field _ _ _ | .emptyRow => true
   | _ => false
 
+/-- The `*_value_form` arms below pass this instantiated (`finiteRow_nonrow (type := …) rfl`): Lean
+v4.35's simp discharger proves `rowSyntax t = false` for a constructor `t` but then fails to assign
+the proof to the hypothesis (`failed to assign proof`), so the conditional rewrite never fires. -/
 theorem finiteRow_nonrow {type : Ty} (nonrow : rowSyntax type = false) :
     TypeGraph.FiniteRow assumptions type ↔ False := by
   constructor
@@ -701,7 +704,7 @@ theorem natural_value_form {types : AddressTypes} {value : RuntimeValue}
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := .natural) rfl]
 
 theorem boolean_value_form {types : AddressTypes} {value : RuntimeValue}
     (typed : ValueTyping assumptions types value .boolean) :
@@ -709,7 +712,7 @@ theorem boolean_value_form {types : AddressTypes} {value : RuntimeValue}
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := .boolean) rfl]
 
 theorem label_value_form {types : AddressTypes} {value : RuntimeValue}
     (typed : ValueTyping assumptions types value .label) :
@@ -717,7 +720,7 @@ theorem label_value_form {types : AddressTypes} {value : RuntimeValue}
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := .label) rfl]
 
 theorem specification_value_form {types : AddressTypes} {value : RuntimeValue} {metadataType extensionType : Ty}
     (typed : ValueTyping assumptions types value (.specification metadataType extensionType)) :
@@ -725,7 +728,7 @@ theorem specification_value_form {types : AddressTypes} {value : RuntimeValue} {
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := (.specification metadataType extensionType)) rfl]
 
 theorem prototype_value_form {types : AddressTypes} {value : RuntimeValue} {specType targetType : Ty}
     (typed : ValueTyping assumptions types value (.prototype specType targetType)) :
@@ -733,7 +736,7 @@ theorem prototype_value_form {types : AddressTypes} {value : RuntimeValue} {spec
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := (.prototype specType targetType)) rfl]
 
 theorem variant_value_form {types : AddressTypes} {value : RuntimeValue} {row : Ty}
     (typed : ValueTyping assumptions types value (.variant row)) :
@@ -741,7 +744,7 @@ theorem variant_value_form {types : AddressTypes} {value : RuntimeValue} {row : 
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := (.variant row)) rfl]
 
 theorem closure_value_form {types : AddressTypes} {value : RuntimeValue} {reuse : Reuse} {quantity : Quantity} {domain codomain : Ty}
     (typed : ValueTyping assumptions types value (.arrow reuse quantity domain codomain)) :
@@ -749,7 +752,7 @@ theorem closure_value_form {types : AddressTypes} {value : RuntimeValue} {reuse 
   have shape := value_head_correct typed
   obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
     AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-    rowSyntax,finiteRow_nonrow]
+    rowSyntax,finiteRow_nonrow (type := (.arrow reuse quantity domain codomain)) rfl]
 
 theorem value_typed_not_computation {types : AddressTypes} {value : RuntimeValue} {type : Ty}
     (typed : ValueTyping assumptions types value type) : type.isComputation = false := by
@@ -758,7 +761,7 @@ theorem value_typed_not_computation {types : AddressTypes} {value : RuntimeValue
     have shape := value_head_correct typed
     obend_cases value with [RuntimeHead,TypeGraph.graph,TypeGraph.observe,TypeGraph.labelHead,literalType,
       AliasExposure.expose,AliasExposure.exposeWalk,AliasExposure.constructorHead,TypeGraph.rowTag,
-      rowSyntax,finiteRow_nonrow]
+      rowSyntax,finiteRow_nonrow (type := (.computation plan response result)) rfl]
   | _ => rfl
 
 theorem value_specification_fields {types : AddressTypes} {value : RuntimeValue} {type : Ty}
@@ -1144,8 +1147,9 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     have safeNext := safe_uses_insert _ uses (depth+1) binding safe bodyBound
     have validNext := valid_context_insert _ _ (depth+1) binding valid bindingValid bodyBound
     have capturesNext := reusable_allowed_insert assumptions annotation.reuse context uses.tail depth binding captures bound
-    simpa only [Term.rename,lift_shift_index,List.insertIdx_succ_cons,uses_tail_insert nonempty] using
-      (PartialTyping.lambda bodyNext safeNext validNext (by simpa only [List.insertIdx_succ_cons,uses_tail_insert nonempty] using capturesNext))
+    rw [List.insertIdx_succ_cons] at bodyNext safeNext validNext
+    simpa only [Term.rename,lift_shift_index,uses_tail_insert nonempty] using
+      (PartialTyping.lambda bodyNext safeNext validNext (by rw [uses_tail_insert nonempty]; exact capturesNext))
   case conversion =>
     intro context term actual expected uses prior agreement ih depth binding bound bindingValid
     exact .conversion (ih depth binding bound bindingValid) agreement

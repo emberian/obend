@@ -1555,7 +1555,7 @@ public theorem appliedLambda_boundary :
       | .error refusal => some refusal
       | .ok _ => none) = some (.missingLambdaAnnotation [0]) := by
   simp [checkCovered, appliedLambda, appliedLambdaChecked, checkAgainst,
-    checkAt, elaborate, bind, Except.bind, Functor.map, Except.map]
+    checkAt, elaborate, bind, Except.bind, Functor.map, Except.map, throw, throwThe, MonadExceptOf.throw]
 
 /-- Historical name retained: the actual obstruction is fixed-source acceptance,
 not a missing syntactic fragment premise. Reannotation is necessary. -/

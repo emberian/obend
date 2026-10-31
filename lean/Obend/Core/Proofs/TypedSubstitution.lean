@@ -53,7 +53,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ body ann u d safe valid captures ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih (⟨ann.domain, ann.parameter⟩ :: Δ) rfl ((scoped_lam_iff _ _).mp hs)
     have hn : a ≠ [] := ne_nil_of_length_succ ha
-    have ht : a.tail.length = Δ.length := by simpa using congrArg (fun n => n - 1) ha
+    have ht : a.tail.length = Δ.length := by simpa using (congrArg (fun n => n - 1) ha).trans (Nat.add_sub_cancel _ _)
     refine ⟨a.tail, ht, by rw [hu, split_tail Ψ hn], ?_⟩
     rw [← split_tail Ψ' hn]
     apply PartialTyping.lambda d'
@@ -152,7 +152,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl hs.2.1
     obtain ⟨c, hc, hw, d₃⟩ := ih₃ (⟨.natural, .unrestricted⟩ :: Δ) rfl hs.2.2
     have hn : c ≠ [] := ne_nil_of_length_succ hc
-    have ht : c.tail.length = Δ.length := by simpa using congrArg (fun n => n - 1) hc
+    have ht : c.tail.length = Δ.length := by simpa using (congrArg (fun n => n - 1) hc).trans (Nat.add_sub_cancel _ _)
     have hbc := hb.trans ht.symm
     have habc := ha.trans ((length_addUses hbc).trans hb).symm
     refine ⟨addUses a (addUses b c.tail), (length_addUses habc).trans ha, ?_, ?_⟩
@@ -217,7 +217,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ (⟨payload, .unrestricted⟩ :: Δ) rfl (hs _ List.mem_cons_self)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (fun f hf => hs f (List.mem_cons_of_mem _ hf))
     have hn : a ≠ [] := ne_nil_of_length_succ ha
-    have ht : a.tail.length = Δ.length := by simpa using congrArg (fun n => n - 1) ha
+    have ht : a.tail.length = Δ.length := by simpa using (congrArg (fun n => n - 1) ha).trans (Nat.add_sub_cancel _ _)
     have hab := ht.trans hb.symm
     refine ⟨addUses a.tail b, (length_addUses hab).trans ht, ?_, ?_⟩
     · rw [hu, hv, split_tail Ψ hn, split_add Ψ hab]

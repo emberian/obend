@@ -173,7 +173,7 @@ theorem valid_instance_agreement :
     Obend.Core.EquiRecursiveAgreement.agrees validInstance
       (actual.instantiate substitution) (expected.instantiate substitution) = true := by
   apply (Obend.Core.EquiRecursiveAgreement.agrees_iff _ _ _).mpr
-  simpa only [actual,expected,Ty.instantiate,substitution,if_pos rfl] using
+  simpa only [actual,expected,Ty.instantiate,substitution,if_pos rfl,ite_true] using
     semantic_field_shadow validInstance "a" .natural (.variable 1) .emptyRow valid_image_resource
 
 #assert_axioms discharged template_agreement invalid_image_resource instance_disagreement

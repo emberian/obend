@@ -171,6 +171,13 @@ open Obend.Core.Check Obend.Core.Term
 @[expose] public def instantiateContext (σ : Nat → Ty) (context : Context) : Context :=
   context.map fun binding => ⟨binding.type.instantiate σ, binding.quantity⟩
 
+/- Lean v4.35 checks implicit arguments at `.implicit` transparency
+(`backward.isDefEq.respectTransparency`): the checker transport below rewrites `infer` results
+whose context index is `instantiateContext σ (b :: Γ)` into goals indexed by
+`⟨b.type.instantiate σ, b.quantity⟩ :: instantiateContext σ Γ`. Those agree by unfolding these
+three definitions, so they are implicit-reducible in this module. -/
+attribute [local implicit_reducible] Ty.instantiate instantiateAnnotation instantiateContext
+
 
 section
 variable {σ : Nat → Ty} {template instance_ : Assumptions} {extra : Nat}

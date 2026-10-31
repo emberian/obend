@@ -154,7 +154,9 @@ private meta def inScratch (env : Environment) (opts : Options) (m : MessageData
 /-- Explicitly bypasses the `debug.skipKernelTC` option and asynchronous checking. -/
 private meta def addChecked (env : Environment) (decl : Declaration) :
     CoreM (Except Kernel.Exception Environment) := do
-  return env.addDeclCore (Core.getMaxHeartbeats (← getOptions)).toUSize decl none (doCheck := true)
+  let opts ← getOptions
+  return env.addDeclCore (Core.getMaxHeartbeats opts).toUSize (maxRecDepth.get opts).toUSize decl none
+    (doCheck := true)
 
 private meta def experiment (env : Environment) (target mutation : Name)
     (replacement : Expr) : CoreM MessageData := do

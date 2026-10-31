@@ -78,7 +78,7 @@ theorem holes_instance :
       (∀ p, holes finite (fill Ω (choose (plan p)) template) = []) ∧
       holes finite (fill Ω (choose cancelPlan) template) = [] := by
   refine ⟨rfl, (mem_holes_iff finite template .reserved ()).mp
-      (by simp [holes, template, finite]; exact ⟨rfl, HEq.rfl⟩),
+      (by simp [holes, template, finite]; exact ⟨(), List.mem_cons_self, rfl⟩),
     fun p => ?_, rfl⟩
   cases p <;> rfl
 
@@ -161,11 +161,10 @@ public theorem lost_reply_blocks_replan :
     fun g => ?_, fun hw => lost_reply_not_started.2 hw.started⟩
   · have := g .reserved () (dispatched_lost .p1)
     simp [obj, Subst.mine, Ω, iface, choose, plan] at this
-    obtain ⟨h, _⟩ := this
-    injection h with h
-    cases h
+    cases this
   · have := g .reserved () (dispatched_lost .p1)
     simp [obj, Subst.mine, Ω, iface, choose, plan, cancelPlan] at this
+    cases this
 
 /-- The provider hole counts as entered once the commitment is ANSWERED too. -/
 theorem dispatched_answered (p : Provider) (b : Bool) :
@@ -186,9 +185,7 @@ public theorem answered_blocks_replan (b : Bool) :
     exact Started.settled (reach_append (reach_reserved (plan .p1)) h2)
   · have := g .reserved () (dispatched_answered .p1 b)
     simp [obj, Subst.mine, Ω, iface, choose, plan] at this
-    obtain ⟨h, _⟩ := this
-    injection h with h
-    cases h
+    cases this
   · have h := hw.started
     change Started (Prot.call (S := sig) Op.reserve fun _ => plan .p2) (answeredH .p1 b) at h
     cases h with
@@ -214,7 +211,8 @@ public theorem guard_stricter_than_wf :
     fun g => ?_⟩
   have := g .reserved () (dispatched_lost .p1)
   simp [obj, Subst.mine, Ω, iface, choose, plan, planFlip] at this
-  have := congrFun this true
+  injection this with _ _ k
+  have := congrFun k true
   simp at this
 
 /-- So every GUARDED re-plan after the dispatch leaves the current protocol exactly as it was. -/

@@ -6,7 +6,7 @@ module
 depends on no axiom outside Lean's three standard ones (`propext`,
 `Classical.choice`, `Quot.sound`), and is an error naming every offender
 otherwise.  `sorryAx`, a declared project axiom and the compiler trust of
-`native_decide` (`Lean.ofReduceBool`, `…._native…`) are therefore refused;
+`native_decide` (its `…._native…` axioms) are therefore refused;
 `#assert_compiled` (Theory/AssertCompiled.lean) is the pin for those.
 
 This module imports only `Lean`, so Mathlib-free modules (the Objective Bend

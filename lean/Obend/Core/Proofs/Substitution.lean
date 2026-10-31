@@ -335,15 +335,13 @@ public theorem typed_scoped {asm : Assumptions} {context : Context} {term : Term
   · intros; rename_i ih; exact .perform ih
   · intros; rename_i ih; exact .done ih
   · intros; rename_i ih₁ ih₂; exact .case ih₁ ih₂
-  · intros; simp
-  · intros; rename_i ih₁ ih₂
-    intro f hf
+  · intros; rename_i hf; simp at hf
+  · intros; rename_i ih₁ ih₂ f hf
     rcases List.mem_cons.mp hf with rfl | hf
     · exact ih₁
     · exact ih₂ f hf
-  · intros; simp
-  · intros; rename_i ih₁ ih₂
-    intro arm harm
+  · intros; rename_i harm; simp at harm
+  · intros; rename_i ih₁ ih₂ arm harm
     rcases List.mem_cons.mp harm with rfl | harm
     · exact ih₁
     · exact ih₂ arm harm

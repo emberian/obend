@@ -583,9 +583,11 @@ def finite : Finite sig where
   complete := by
     intro i op r
     cases op with
-    | reserve => cases r; simp
-    | commit p => cases r <;> simp
-    | cancel => cases r; simp
+    | reserve => cases r; exact List.mem_cons_self
+    | commit p => cases r
+                  · exact List.mem_cons_of_mem _ List.mem_cons_self
+                  · exact List.mem_cons_self
+    | cancel => cases r; exact List.mem_cons_self
 
 /-- The negotiation's hypotheses, tokens and obligation bound. -/
 def Γ₀ : List Fact := [.auth .p1, .auth .p2, .beforeDeadline]

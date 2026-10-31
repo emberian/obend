@@ -365,8 +365,6 @@ the value's source meaning, and leaves a settled heap extending the names. -/
               | suspended _ _ | divergent _ _ | refused _ _ | yielded _ _ => simp [forced] at h
               | finished forcedValue retained =>
                   simp only [forced] at h
-                  obtain ⟨_,_,h⟩ := except_bind_ok h
-                  obtain ⟨_,_,h⟩ := except_bind_ok h
                   obtain ⟨child,childEq,h⟩ := except_bind_ok h
                   cases h
                   obtain ⟨next,same,nextSettled,grows,forcedValid,steps⟩ :=
@@ -387,11 +385,7 @@ the value's source meaning, and leaves a settled heap extending the names. -/
               · cases h
               · split at h
                 · cases h
-                · obtain ⟨_,_,h⟩ := except_bind_ok h
-                  obtain ⟨_,_,h⟩ := except_bind_ok h
-                  obtain ⟨_,_,h⟩ := except_bind_ok h
-                  obtain ⟨_,_,h⟩ := except_bind_ok h
-                  obtain ⟨pair,folded,h⟩ := except_bind_ok h
+                · obtain ⟨pair,folded,h⟩ := except_bind_ok h
                   cases h
                   have fieldsValid : ∀ field ∈ fields, field.2 < state.heap.size := valid
                   have done := foldlM_fieldsInvariant (origin := state) (meaning := meaning) ?stepOk fields [] _ pair
@@ -403,8 +397,7 @@ the value's source meaning, and leaves a settled heap extending the names. -/
                     obtain ⟨deepPrefix,current,agree,currentSettled,grown⟩ := invariant
                     split at body
                     · cases body
-                    · obtain ⟨_,_,body⟩ := except_bind_ok body
-                      cases forced : (forceWith policy limits accumulated.2.2.ticks
+                    · cases forced : (forceWith policy limits accumulated.2.2.ticks
                           {heap := accumulated.2.1.heap,control := .enter field.2,stack := []}).1 with
                       | suspended _ _ | divergent _ _ | refused _ _ | yielded _ _ => rw [forced] at body; cases body
                       | finished forcedValue retained =>

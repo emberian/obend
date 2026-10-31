@@ -149,11 +149,16 @@ proved equations; the visited worklist and its termination proof are unchanged.
 
 Example: `unfold environment actual expected; equirec_reduce`.
 -/
+-- The simp set unfolds definitions that also occur as implicit indices (`ClosedSupport (graph _)`,
+-- membership proofs over `support`), so a partly-unfolded goal is coherent only up to `.default`
+-- transparency. Lean v4.35 checks implicit arguments at `.implicit`
+-- (`backward.isDefEq.respectTransparency`); this tactic keeps the v4.30 check for its own simp
+-- call. Kernel checking of the result is unaffected.
 -- Proof reduction uses the exact graph equation even when the executable
 -- wrapper first tries a sound historical comparison. This keeps its kernel
 -- normalization independent of runtime shortcuts and legacy sorting guards.
 macro "equirec_reduce" : tactic =>
-  `(tactic| simp [ Check.sameType, EquiRecursiveAgreement.agrees_eq_candidate,
+  `(tactic| set_option backward.isDefEq.respectTransparency false in simp [ Check.sameType, EquiRecursiveAgreement.agrees_eq_candidate,
     TypeGraph.candidate,
     TypeGraph.graph, TypeGraph.observe, TypeGraph.rowObservation,
     TypeGraph.rowChildren, TypeGraph.rowTag, TypeGraph.tailKind, TypeGraph.tailChildren,
