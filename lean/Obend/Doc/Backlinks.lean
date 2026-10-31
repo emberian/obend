@@ -19,7 +19,7 @@ every page, each entry naming the citing page, the atom and the cite.
 -/
 public import Obend.Doc.Render
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 
 namespace Obend.Doc
 

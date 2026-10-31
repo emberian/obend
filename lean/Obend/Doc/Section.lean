@@ -41,7 +41,7 @@ public import Obend.Doc.Merge
 public import Obend.Slot
 public import Obend.Intention
 public import Obend.Digest.HashBytes
-@[expose] public section
+public section
 
 namespace Obend.Doc
 
@@ -52,7 +52,7 @@ open Obend.Slot Obend.Digest.HashBytes
 /-! ## A page's bytes -/
 
 /-- The UTF-8 encoding of a character. -/
-def utf8 (c : Char) : List UInt8 :=
+@[expose] def utf8 (c : Char) : List UInt8 :=
   let n := c.toNat
   if n < 0x80 then [n.toUInt8]
   else if n < 0x800 then [(0xC0 + n / 64).toUInt8, (0x80 + n % 64).toUInt8]
@@ -63,13 +63,13 @@ def utf8 (c : Char) : List UInt8 :=
       (0x80 + n % 64).toUInt8]
 
 /-- A string's UTF-8 bytes. -/
-def bytes (s : String) : List UInt8 := s.toList.flatMap utf8
+@[expose] def bytes (s : String) : List UInt8 := s.toList.flatMap utf8
 
 namespace Graph
 
 /-- How one atom reads in the page's source: a run its text, a cite its wikilink (an embed with
 its `!`). -/
-def atomText (G : Graph) (a : AtomId) : String :=
+@[expose] def atomText (G : Graph) (a : AtomId) : String :=
   match G.label a with
   | some (.text s) => s
   | some (.cite n c) => match c.span with
@@ -79,7 +79,7 @@ def atomText (G : Graph) (a : AtomId) : String :=
 
 mutual
 /-- Segments as text, each atom read by `f`. -/
-def segsWith (f : AtomId → String) : List Segment → String
+@[expose] def segsWith (f : AtomId → String) : List Segment → String
   | [] => ""
   | s :: ss => segWith f s ++ segsWith f ss
 /-- A segment as text; a conflict shows every alternative between markers. -/
@@ -94,7 +94,7 @@ def altsWith (f : AtomId → String) : List (AtomId × List Segment) → String
 end
 
 /-- A page version's source text: its content, in order, each atom as written. -/
-def source (G : Graph) : String := segsWith G.atomText G.content
+@[expose] def source (G : Graph) : String := segsWith G.atomText G.content
 
 end Graph
 
@@ -104,37 +104,37 @@ end Graph
 abbrev World := PageId → List Graph
 
 /-- A page's current version. -/
-def World.current (W : World) (p : PageId) : Option Graph := (W p).getLast?
+@[expose] def World.current (W : World) (p : PageId) : Option Graph := (W p).getLast?
 
 /-- The source MOVES: its history grows by at least one version, and nothing else changes. -/
-def SourceMoves (W W' : World) (q : PageId) : Prop :=
+@[expose] def SourceMoves (W W' : World) (q : PageId) : Prop :=
   (∀ p, p ≠ q → W' p = W p) ∧ ∃ ext, ext ≠ [] ∧ W' q = W q ++ ext
 
 /-- A text's lines, without their newlines. -/
-def lines : List Char → List (List Char)
+@[expose] def lines : List Char → List (List Char)
   | [] => [[]]
   | c :: cs => match lines cs with
     | l :: ls => if c = '\n' then [] :: l :: ls else (c :: l) :: ls
     | [] => [[c]]
 
 /-- The block marked `^b`: the first line ending ` ^b` (Obsidian's block identifier). -/
-def blockLine (b : String) (src : List Char) : Option (List Char) :=
+@[expose] def blockLine (b : String) (src : List Char) : Option (List Char) :=
   (lines src).find? fun l => (' ' :: '^' :: b.toList).isSuffixOf l
 
 /-- The bytes a span quotes in a page version: none for an identity cite, or for a block the
 version does not mark. -/
-def quoteOf (G : Graph) : Span → Option (List UInt8)
+@[expose] def quoteOf (G : Graph) : Span → Option (List UInt8)
   | .identity => none
   | .page => some (bytes G.source)
   | .block b => (blockLine b G.source.toList).map fun l => l.flatMap utf8
   | .bytes r => some (((bytes G.source).drop r.start).take r.len)
 
 /-- The bytes a cite quotes, at the version it cites. -/
-def quoted (W : World) (c : Cite) : Option (List UInt8) :=
+@[expose] def quoted (W : World) (c : Cite) : Option (List UInt8) :=
   ((W c.page)[c.version]?).bind fun G => quoteOf G c.span
 
 /-- The bytes the cite's span quotes at its source's current version. -/
-def latestQuote (W : World) (c : Cite) : Option (List UInt8) :=
+@[expose] def latestQuote (W : World) (c : Cite) : Option (List UInt8) :=
   (W.current c.page).bind fun G => quoteOf G c.span
 
 /-- What a view is asked. -/
@@ -152,7 +152,7 @@ inductive Fact
 deriving DecidableEq, Repr
 
 /-- Whether a fact holds in a world, under the byte hash `H`. -/
-def holds (H : Hash) (W : World) : Fact → Bool
+@[expose] def holds (H : Hash) (W : World) : Fact → Bool
   | .live p a => match W.current p with
     | some G => G.run a
     | none => false
@@ -169,7 +169,7 @@ def holds (H : Hash) (W : World) : Fact → Bool
 
 /-- The facts a cite rests on: an identity cite, that its page exists; a byte cite, that its bytes
 verify, and, following, that they are current. -/
-def citeFacts (c : Cite) : List Fact :=
+@[expose] def citeFacts (c : Cite) : List Fact :=
   match c.span, c.mode with
   | .identity, _ => [.present c.page]
   | _, .pinned => [.verifies c]
@@ -284,14 +284,14 @@ structure Run where
 deriving DecidableEq, Repr
 
 /-- The cite facts of a run (none unless it is a cite). -/
-def Run.cites (r : Run) : List Fact :=
+@[expose] def Run.cites (r : Run) : List Fact :=
   match r.content with
   | .cite _ c => citeFacts c
   | _ => []
 
 /-- The section of page `p` at position `x`: candidates are runs, each justified by being live and
 a head there, and by its cite. -/
-def sectionAt (p : PageId) (x : AtomId) : Slot Fact Run where
+@[expose] def sectionAt (p : PageId) (x : AtomId) : Slot Fact Run where
   supports r := [.live r.page r.atom, .head r.page x r.atom] ++ r.cites
   judge r := r.page == p && match r.content with
     | .field .. => false
@@ -528,9 +528,9 @@ theorem following_cite_behind (H : Hash) {W W' : World} {p x : AtomId} {r : Run}
 pinned again at the world. -/
 def recite (H : Hash) (W : World) (c : Cite) : Cite := pinAt H W c.ref
 
-theorem recite_span (H : Hash) (W : World) (c : Cite) : (recite H W c).span = c.span := rfl
-theorem recite_mode (H : Hash) (W : World) (c : Cite) : (recite H W c).mode = c.mode := rfl
-theorem recite_page (H : Hash) (W : World) (c : Cite) : (recite H W c).page = c.page := rfl
+theorem recite_span (H : Hash) (W : World) (c : Cite) : (recite H W c).span = c.span := by rfl
+theorem recite_mode (H : Hash) (W : World) (c : Cite) : (recite H W c).mode = c.mode := by rfl
+theorem recite_page (H : Hash) (W : World) (c : Cite) : (recite H W c).page = c.page := by rfl
 
 /-- Re-citing a cite at a world where its source has a version, and (for a byte cite) quotes its
 span, makes its facts hold there. -/
@@ -564,7 +564,7 @@ theorem cite_stale_iff_blocked (H : Hash) (W : World) (c : Cite) :
 namespace Teeth
 
 /-- A toy byte hash: the byte sum. Every theorem above is for every hash. -/
-def toy : Hash := fun (b : List UInt8) => [(b.foldl (fun s (x : UInt8) => s + x.toNat) 0).toUInt8]
+@[expose] def toy : Hash := fun (b : List UInt8) => [(b.foldl (fun s (x : UInt8) => s + x.toNat) 0).toUInt8]
 
 /-- Page 2, "Beta", one version: `beta`. -/
 def beta : Graph := Graph.empty.apply [.add 1 (.text "beta") root]

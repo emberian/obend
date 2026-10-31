@@ -24,7 +24,7 @@ The round trip (`source (read md) = md` for a vault) is checked on the two-page 
 `lean/tests/doc/` and by `decide` below; it is not proved for every markdown file.
 -/
 public import Obend.Doc.Section
-@[expose] public section
+public section
 
 namespace Obend.Doc
 
@@ -43,18 +43,18 @@ deriving DecidableEq, Repr
 
 /-- The name of a wikilink whose `[[` has been read, and what follows its `]]`; `none` when the
 line ends first. -/
-def takeLink : List Char → List Char → Option (List Char × List Char)
+@[expose] def takeLink : List Char → List Char → Option (List Char × List Char)
   | [], _ => none
   | '\n' :: _, _ => none
   | ']' :: ']' :: rest, acc => some (acc.reverse, rest)
   | c :: rest, acc => takeLink rest (c :: acc)
 
 /-- Close the text read so far (kept reversed) as a run, if any. -/
-def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
+@[expose] def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
 
 /-- Lex markdown: a run per line, split around wikilinks and embeds. An embed of a block
 (`![[P#^b]]`) is read as a `!` and a block reference. `n` bounds the steps. -/
-def lex : Nat → List Char → List Char → List Tok
+@[expose] def lex : Nat → List Char → List Char → List Tok
   | 0, _, acc => flush acc
   | _ + 1, [], acc => flush acc
   | n + 1, '!' :: '[' :: '[' :: rest, acc => match takeLink rest [] with
@@ -69,12 +69,12 @@ def lex : Nat → List Char → List Char → List Tok
   | n + 1, c :: rest, acc => lex n rest (c :: acc)
 
 /-- The tokens of a markdown text. -/
-def tokens (md : String) : List Tok := lex (md.length + 1) md.toList []
+@[expose] def tokens (md : String) : List Tok := lex (md.length + 1) md.toList []
 
 /-- A wikilink's page and what of it the link cites: the text before the first `#` names the page;
 `#^b` after it is the block `b`; any other `#…` (a heading) is still the page's identity. An embed
 cites the page's whole text. -/
-def target (embed : Bool) (name : List Char) : List Char × Span :=
+@[expose] def target (embed : Bool) (name : List Char) : List Char × Span :=
   let page := name.takeWhile (· != '#')
   match name.dropWhile (· != '#') with
   | '#' :: '^' :: b => (page, .block (String.ofList b))
@@ -85,7 +85,7 @@ def target (embed : Bool) (name : List Char) : List Char × Span :=
 abbrev Resolve := String → Span → Option Cite
 
 /-- The contents of a page, from its tokens. -/
-def contents (resolve : Resolve) : List Tok → List Content
+@[expose] def contents (resolve : Resolve) : List Tok → List Content
   | [] => []
   | .text s :: ts => .text (String.ofList s) :: contents resolve ts
   | .link n :: ts =>
@@ -100,7 +100,7 @@ def contents (resolve : Resolve) : List Tok → List Content
       | none => .text ("![[" ++ String.ofList n ++ "]]")) :: contents resolve ts
 
 /-- A chain of `Add`s: atom `i + 1` after atom `i`, the first after `root`. -/
-def chain : Nat → List Content → Patch
+@[expose] def chain : Nat → List Content → Patch
   | _, [] => []
   | i, c :: cs => .add (i + 1) c i :: chain (i + 1) cs
 
@@ -110,17 +110,17 @@ def Patch.insert (id : AtomId) (c : Content) (after before : AtomId) : Patch :=
   [.add id c after, .connect id before]
 
 /-- A markdown page as the patch that writes it from the empty page. -/
-def readPage (resolve : Resolve) (md : String) : Patch := chain root (contents resolve (tokens md))
+@[expose] def readPage (resolve : Resolve) (md : String) : Patch := chain root (contents resolve (tokens md))
 
 /-- A vault: page names with their markdown, in order. Page `i + 1` is the `i`th. -/
 abbrev Vault := List (String × String)
 
 /-- The page id of a name. -/
-def Vault.idOf (V : Vault) (name : String) : Option PageId :=
+@[expose] def Vault.idOf (V : Vault) (name : String) : Option PageId :=
   (V.zipIdx.find? fun e => e.1.1 == name).map (·.2 + 1)
 
 /-- Read a vault into a world of one version per page, its byte cites committed under `H`. -/
-def Vault.read (H : Hash) (V : Vault) : World :=
+@[expose] def Vault.read (H : Hash) (V : Vault) : World :=
   let draft : PageId → Option Graph := fun p =>
     (V[p - 1]?).map fun e => Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2)
   let resolve : Resolve := fun name sp => (V.idOf name).bind fun q => (draft q).bind fun G =>
@@ -187,7 +187,7 @@ namespace Teeth
 
 open Obend.Doc.Teeth (toy)
 
-def vault : Vault :=
+@[expose] def vault : Vault :=
   [("Alpha", "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]\nQuote: [[Beta#^ans]]\n"),
    ("Beta", "# Beta\nBack to [[Alpha]].\nThe answer. ^ans\n")]
 

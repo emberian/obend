@@ -27,7 +27,7 @@ the atoms it touches.
 -/
 public import Obend.Doc.Graph
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 
 namespace Obend.Doc
 
@@ -73,12 +73,12 @@ def dual : Op → Op
 @[simp] theorem dual_dual (o : Op) : o.dual.dual = o := by cases o <;> rfl
 
 /-- An authored operation (one of the four). -/
-def forward : Op → Bool
+@[expose] def forward : Op → Bool
   | .add .. | .delete .. | .connect .. | .setField .. => true
   | _ => false
 
 /-- The atoms an operation touches: whose content, status or incoming order it changes. -/
-def touches : Op → List AtomId
+@[expose] def touches : Op → List AtomId
   | .add i _ a | .unadd i _ a => [i, a]
   | .delete i | .resurrect i => [i]
   | .connect s d | .disconnect s d => [s, d]
@@ -86,7 +86,7 @@ def touches : Op → List AtomId
 
 /-- The operation changes the observation it targets: the RCCS condition under which its dual
 undoes it. -/
-def Effective (G : Graph) : Op → Prop
+@[expose] def Effective (G : Graph) : Op → Prop
   | .add i _ a => G.label i = none ∧ G.edge a i = false
   | .delete i => G.isDead i = false
   | .connect s d => G.edge s d = false
@@ -104,7 +104,7 @@ end Op
 namespace Graph
 
 /-- Apply one operation. -/
-def step (G : Graph) : Op → Graph
+@[expose] def step (G : Graph) : Op → Graph
   | .add i c a => { G with atoms := G.atoms ++ [(i, c)], edges := G.edges ++ [(a, i)] }
   | .delete i => { G with dead := G.dead ++ [i] }
   | .connect s d => { G with edges := G.edges ++ [(s, d)] }
@@ -116,7 +116,7 @@ def step (G : Graph) : Op → Graph
   | .unsetField i _ _ => { G with atoms := G.atoms.filter (·.1 != i) }
 
 /-- Apply a patch. -/
-def apply (G : Graph) (p : Patch) : Graph := p.foldl step G
+@[expose] def apply (G : Graph) (p : Patch) : Graph := p.foldl step G
 
 /-! ### Each operation, read through the observations -/
 
@@ -245,7 +245,7 @@ def compose (p q : Patch) : Patch := p ++ q
 def invert (p : Patch) : Patch := (p.map Op.dual).reverse
 
 /-- Every operation of `p` is effective on the graph it acts on. -/
-def Effective : Graph → Patch → Prop
+@[expose] def Effective : Graph → Patch → Prop
   | _, [] => True
   | G, o :: p => o.Effective G ∧ Effective (G.step o) p
 
@@ -256,10 +256,10 @@ instance decEffective : (G : Graph) → (p : Patch) → Decidable (Effective G p
     inferInstanceAs (Decidable (_ ∧ _))
 
 /-- The atoms a patch touches. -/
-def touches (p : Patch) : List AtomId := p.flatMap Op.touches
+@[expose] def touches (p : Patch) : List AtomId := p.flatMap Op.touches
 
 /-- An authored patch: only the four forward operations. -/
-def forward (p : Patch) : Bool := p.all Op.forward
+@[expose] def forward (p : Patch) : Bool := p.all Op.forward
 
 /-- A field assignment that supersedes the field's live assignments in `G`: assign, and tombstone
 the rest. -/

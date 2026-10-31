@@ -22,7 +22,7 @@ that store the same facts in a different list order are the same page.
 condition `Closed` checks. Statements about a concrete page discharge `Closed` by `decide`; the
 general completeness of the bounded cone (a pigeonhole on the edge count) is not proved here.
 -/
-@[expose] public section
+public section
 
 namespace Obend.Doc
 
@@ -35,7 +35,7 @@ abbrev PageId := Nat
 
 /-- The sentinel every page's order starts from. No atom is stored at it; the first run of a page
 is added after it. -/
-def root : AtomId := 0
+@[expose] def root : AtomId := 0
 
 /-- How a byte cite tracks its source: a PINNED cite quotes a version and stays verified when the
 source moves on; a FOLLOWING cite also claims to be current, and that claim fails when the bytes it
@@ -61,7 +61,7 @@ inductive Span
   | page
   | block (id : String)
   | bytes (r : Range)
-deriving DecidableEq, Repr
+deriving @[expose] DecidableEq, Repr
 
 /-- A cite: `(page, span, version, byte commitment)` of another page (DESIGN §5), with the mode a
 byte cite tracks its source in. An identity cite's version, commitment and mode are inert. -/
@@ -81,7 +81,7 @@ inductive Content
   | cite (name : String) (c : Cite)
   /-- an assignment to a single-valued field (outside the order: it has no edges) -/
   | field (name value : String)
-deriving DecidableEq, Repr
+deriving @[expose] DecidableEq, Repr
 
 /-- A page's state. -/
 structure Graph where
@@ -93,25 +93,25 @@ deriving DecidableEq, Repr
 namespace Graph
 
 /-- The empty page: no atoms, no edges. -/
-def empty : Graph := {}
+@[expose] def empty : Graph := {}
 
 /-- The content stored at an identity (the first stored, if a list holds two). -/
-def label (G : Graph) (a : AtomId) : Option Content := G.atoms.lookup a
+@[expose] def label (G : Graph) (a : AtomId) : Option Content := G.atoms.lookup a
 
 /-- Whether an identity is tombstoned. -/
-def isDead (G : Graph) (a : AtomId) : Bool := G.dead.contains a
+@[expose] def isDead (G : Graph) (a : AtomId) : Bool := G.dead.contains a
 
 /-- Whether the order edge `a → b` is stored. -/
-def edge (G : Graph) (a b : AtomId) : Bool := G.edges.contains (a, b)
+@[expose] def edge (G : Graph) (a b : AtomId) : Bool := G.edges.contains (a, b)
 
 /-- An atom is present when some content is stored at it. -/
-def present (G : Graph) (a : AtomId) : Bool := (G.label a).isSome
+@[expose] def present (G : Graph) (a : AtomId) : Bool := (G.label a).isSome
 
 /-- An atom is alive when it is present and not tombstoned. -/
-def alive (G : Graph) (a : AtomId) : Bool := G.present a && !G.isDead a
+@[expose] def alive (G : Graph) (a : AtomId) : Bool := G.present a && !G.isDead a
 
 /-- Two graphs are the SAME page when every observation agrees. -/
-def Same (G H : Graph) : Prop := G.label = H.label ∧ G.isDead = H.isDead ∧ G.edge = H.edge
+@[expose] def Same (G H : Graph) : Prop := G.label = H.label ∧ G.isDead = H.isDead ∧ G.edge = H.edge
 
 theorem Same.refl (G : Graph) : G.Same G := ⟨rfl, rfl, rfl⟩
 theorem Same.symm {G H : Graph} (h : G.Same H) : H.Same G := ⟨h.1.symm, h.2.1.symm, h.2.2.symm⟩
@@ -138,7 +138,7 @@ theorem Before.trans' {G : Graph} {a b c : AtomId} (h : G.Before a b) (k : G.Bef
   | trans h _ ih => exact .trans h (ih k)
 
 /-- The direct successors of `a`. -/
-def succs (G : Graph) (a : AtomId) : List AtomId :=
+@[expose] def succs (G : Graph) (a : AtomId) : List AtomId :=
   G.edges.filterMap fun e => if e.1 = a then some e.2 else none
 
 theorem mem_succs {G : Graph} {a b : AtomId} : b ∈ G.succs a ↔ G.edge a b = true := by
@@ -151,22 +151,22 @@ theorem mem_succs {G : Graph} {a b : AtomId} : b ∈ G.succs a ↔ G.edge a b = 
   · intro h; exact ⟨(a, b), h, by simp⟩
 
 /-- One step of the forward cone: `S` and every successor of a member of `S`. -/
-def grow (G : Graph) (S : List AtomId) : List AtomId :=
+@[expose] def grow (G : Graph) (S : List AtomId) : List AtomId :=
   S ++ (G.edges.filter fun e => S.contains e.1).map Prod.snd
 
 /-- `n` steps of the forward cone. -/
-def coneN (G : Graph) : Nat → List AtomId → List AtomId
+@[expose] def coneN (G : Graph) : Nat → List AtomId → List AtomId
   | 0, S => S
   | n + 1, S => G.coneN n (G.grow S)
 
 /-- The strict forward cone of `a`, to depth the number of edges. -/
-def cone (G : Graph) (a : AtomId) : List AtomId := G.coneN G.edges.length (G.succs a)
+@[expose] def cone (G : Graph) (a : AtomId) : List AtomId := G.coneN G.edges.length (G.succs a)
 
 /-- The decided order: `b` is in the strict forward cone of `a`. -/
-def beforeB (G : Graph) (a b : AtomId) : Bool := (G.cone a).contains b
+@[expose] def beforeB (G : Graph) (a b : AtomId) : Bool := (G.cone a).contains b
 
 /-- `S` is closed under the order edges. -/
-def Closed (G : Graph) (S : List AtomId) : Bool :=
+@[expose] def Closed (G : Graph) (S : List AtomId) : Bool :=
   G.edges.all fun e => !S.contains e.1 || S.contains e.2
 
 theorem mem_grow {G : Graph} {S : List AtomId} {y : AtomId} :

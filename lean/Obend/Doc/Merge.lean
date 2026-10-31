@@ -37,7 +37,7 @@ are those `heads` (`walk_conflict`), each with its branch, and the walk resumes 
 rejoin.
 -/
 public import Obend.Doc.Patch
-@[expose] public section
+public section
 
 namespace Obend.Doc
 
@@ -106,7 +106,7 @@ theorem Le.before {G H : Graph} (h : G.Le H) {a b : AtomId} (hb : G.Before a b) 
 /-! ## The pushout -/
 
 /-- The union of two pages: every atom, tombstone and edge of either. -/
-def merge (A B : Graph) : Graph :=
+@[expose] def merge (A B : Graph) : Graph :=
   { atoms := A.atoms ++ B.atoms, dead := A.dead ++ B.dead, edges := A.edges ++ B.edges }
 
 theorem lookup_append (l m : List (AtomId × Content)) (a : AtomId) :
@@ -234,7 +234,7 @@ theorem compatible_of_compatB {A B : Graph} (h : compatB A B = true) : Compatibl
 /-! ## The plain category: files -/
 
 /-- A live atom of the order (a run or a cite, not a field assignment). -/
-def run (G : Graph) (a : AtomId) : Bool :=
+@[expose] def run (G : Graph) (a : AtomId) : Bool :=
   G.alive a && match G.label a with
     | some (.field ..) => false
     | _ => true
@@ -255,7 +255,7 @@ theorem file_pushout {A B : Graph} (hc : Compatible A B) (hf : File (merge A B))
   ⟨hf, le_merge_left A B, le_merge_right hc, fun _ _ hA hB => merge_le hA hB⟩
 
 /-- The identities a page stores whose atom is a live run. -/
-def runs (G : Graph) : List AtomId := (G.atoms.map Prod.fst).filter G.run
+@[expose] def runs (G : Graph) : List AtomId := (G.atoms.map Prod.fst).filter G.run
 
 theorem mem_runs {G : Graph} {a : AtomId} (h : G.run a = true) : a ∈ G.runs := by
   simp only [runs, List.mem_filter, List.mem_map]
@@ -284,24 +284,24 @@ theorem file_of_fileB {G : Graph} (h : G.fileB = true) : File G := by
 /-! ## The linearization -/
 
 /-- Remove repeats, keeping first occurrences. -/
-def dedup (l : List AtomId) : List AtomId :=
+@[expose] def dedup (l : List AtomId) : List AtomId :=
   l.foldl (fun acc x => if acc.contains x then acc else acc ++ [x]) []
 
 /-- The atoms met walking forward from `x` until a live run: the dead (or absent) ones crossed, and
 the live runs where each path stops. -/
-def frontN (G : Graph) : Nat → AtomId → List AtomId
+@[expose] def frontN (G : Graph) : Nat → AtomId → List AtomId
   | 0, _ => []
   | n + 1, x => (G.succs x).flatMap fun y => if G.run y then [y] else y :: G.frontN n y
 
 /-- The frontier of `x`. -/
-def front (G : Graph) (x : AtomId) : List AtomId := dedup (G.frontN (G.edges.length + 1) x)
+@[expose] def front (G : Graph) (x : AtomId) : List AtomId := dedup (G.frontN (G.edges.length + 1) x)
 
 /-- `y` is not preceded by another live run of the frontier of `x`. -/
-def isHead (G : Graph) (x y : AtomId) : Bool :=
+@[expose] def isHead (G : Graph) (x y : AtomId) : Bool :=
   !((G.front x).filter G.run).any fun z => z != y && G.beforeB z y
 
 /-- The minimal live runs after `x`. Two or more is a conflict at `x`. -/
-def heads (G : Graph) (x : AtomId) : List AtomId :=
+@[expose] def heads (G : Graph) (x : AtomId) : List AtomId :=
   (G.front x).filter fun y => G.run y && G.isHead x y
 
 /-- The live assignments to a field. Two or more is a field conflict. -/
@@ -319,7 +319,7 @@ deriving Repr
 
 /-- Walk from `x`, ignoring the atoms `stop` excludes (inside a branch: what another alternative
 reaches). -/
-def walk (G : Graph) : Nat → (AtomId → Bool) → AtomId → List Segment
+@[expose] def walk (G : Graph) : Nat → (AtomId → Bool) → AtomId → List Segment
   | 0, _, _ => []
   | n + 1, stop, x =>
     match (G.heads x).filter (fun y => !stop y) with
@@ -335,7 +335,7 @@ def walk (G : Graph) : Nat → (AtomId → Bool) → AtomId → List Segment
       | _ => [.conflict alts]
 
 /-- The page's content: its walk from `root`. -/
-def content (G : Graph) : List Segment := G.walk (G.atoms.length + 1) (fun _ => false) root
+@[expose] def content (G : Graph) : List Segment := G.walk (G.atoms.length + 1) (fun _ => false) root
 
 /-- **A conflict is where the walk meets two or more heads**, and its alternatives are exactly
 those heads. -/
@@ -356,13 +356,13 @@ namespace Teeth
 open Graph
 
 /-- The file `a b`. -/
-def ab : Graph := empty.apply [.add 1 (.text "a") root, .add 2 (.text "b") 1]
+@[expose] def ab : Graph := empty.apply [.add 1 (.text "a") root, .add 2 (.text "b") 1]
 /-- `a c b`: insert `c` between them. -/
-def acb : Graph := ab.apply [.add 3 (.text "c") 1, .connect 3 2]
+@[expose] def acb : Graph := ab.apply [.add 3 (.text "c") 1, .connect 3 2]
 /-- `a d b`: insert `d` between them. -/
-def adb : Graph := ab.apply [.add 4 (.text "d") 1, .connect 4 2]
+@[expose] def adb : Graph := ab.apply [.add 4 (.text "d") 1, .connect 4 2]
 /-- The merge: `c` and `d` both between `a` and `b`, unordered. -/
-def merged : Graph := merge acb adb
+@[expose] def merged : Graph := merge acb adb
 
 theorem compat : Compatible acb adb := compatible_of_compatB (by decide)
 
