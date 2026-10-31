@@ -1,11 +1,9 @@
 module
 /- Semantic substitution for Checked evidence, independently of checker fuel and annotations. -/
-public import Obend.Core.Proofs.Substitution.Msubst
+public import Obend.Core.Proofs.Substitution.Uses
+import all Obend.Core.Check
 import all Obend.Core.Proofs.Substitution.Defs
 import all Obend.Core.Proofs.Substitution.Uses
-import all Obend.Core.Proofs.Substitution.Transport
-import all Obend.Core.Proofs.Substitution.Mono
-import all Obend.Core.Proofs.Substitution.Msubst
 
 namespace Obend.Core.Proofs.TypedSubstitution
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant
@@ -258,7 +256,7 @@ private theorem validContext_cons_unrestricted {asm : Assumptions} {Γ : Context
   exact ⟨share, valid⟩
 
 /-- Simultaneous substitution on typing evidence. The mutual recursor also handles
-fields and arms; conversions and their types are retained without consulting `infer`. -/
+fields and arms; conversions and their types are retained without consulting a checker. -/
 public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : Term}
     {type : Ty} {uses : Uses} (typed : PartialTyping asm Γ term type uses)
     (Ψ : Context) (σ : Nat → Option AnnotatedTerm)

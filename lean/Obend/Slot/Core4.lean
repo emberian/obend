@@ -14,7 +14,6 @@ public import Obend.Core.RecursiveAgreement
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Core.Invariant
-public import Obend.Core.Proofs.Substitution.Mono
 public import Obend.Core.Proofs.TypedSubstitution
 public import Obend.Slot
 public import Obend.Tactic.Tooth

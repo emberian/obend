@@ -1,5 +1,5 @@
 module
-/- Filling hypotheses: `fillingAt`, `annotationsAt`, `fillTerm`, `msubst`, `UsesLE`, `Fillings`, `FilledAnn`. -/
+/- Filling hypotheses: `fillingAt`, `annotationsAt`, `fillTerm`, `msubst`, `UsesLE`, and the fixtures of the substitution teeth. -/
 public import Obend.Tactic.Tooth
 public import Obend.Core.Term
 public import Obend.Core.Ty
@@ -90,26 +90,6 @@ annotations by `annotationsAt`. Assumptions are the template's. -/
 public inductive UsesLE : Uses → Uses → Prop
   | nil : UsesLE [] []
   | cons {a b : Nat} {u v : Uses} : a ≤ b → UsesLE u v → UsesLE (a :: u) (b :: v)
-
-/-- What the lemma asks of the fillings: each is closed, and checks (under the template's assumptions
-`asm`, with its own annotations) in the hole's context `Ψ` at fuel `m`, at exactly the type `Ψ`
-declares for the hypothesis it fills. -/
-public structure Fillings (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → Option AnnotatedTerm) : Prop where
-  closed : ∀ x f, σ x = some f → Scoped 0 f.term
-  typed : ∀ x f, σ x = some f → ∃ (b : Binding) (r : Inferred asm Ψ f.term),
-    Ψ[x]? = some b ∧ infer asm f.annotations Ψ [] m f.term = some r ∧ r.type = b.type
-
-/-- The annotations `ann'` of the filled term agree, below `pos`, with what `annotationsAt` reads off
-`term` at `(depth, pos)`. -/
-@[expose] public def FilledAnn (σ : Nat → Option AnnotatedTerm) (ann ann' : Annotations) (depth : Nat)
-    (pos : List Nat) (term : Term) : Prop :=
-  ∀ rest, ann' (pos ++ rest) = annotationsAt σ ann depth pos term rest
-
-/-- `FilledAnn` for each item of a field or arm list, numbered from `index` under `pos`. -/
-@[expose] public def FilledAnnList (σ : Nat → Option AnnotatedTerm) (ann ann' : Annotations) (depth : Nat)
-    (pos : List Nat) (index : Nat) (items : List (String × Term)) : Prop :=
-  ∀ j rest, (hj : j < items.length) →
-    ann' (pos ++ (index + j) :: rest) = annotationsAt σ ann depth (pos ++ [index + j]) (items[j]).2 rest
 
 /-- `σ` filling hypothesis `0` with `f`, nothing else. -/
 @[expose] public def fillZero (f : AnnotatedTerm) : Nat → Option AnnotatedTerm := fun i => if i = 0 then some f else none

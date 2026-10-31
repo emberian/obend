@@ -123,17 +123,9 @@ theorem typed_runBounded_no_refusal {assumptions : Assumptions} {types : Address
           simpa [fits] using ih next
         · simp [fits]
 
-/-- This is the SAME proof-producing checker and SAME decoded erasure consumed
-by ObjectiveBendPreview: successful closed checking excludes bounded-executor
-refusals at any tick, heap and stack budget. No termination claim is added. -/
-public theorem check_runBounded_no_refusal (source : AnnotatedTerm) (typeFuel : Nat)
-    (checked : Checked source []) (_accepted : check source [] typeFuel = some checked)
-    (limits : Limits) (ticks : Nat) (reason : Refusal) (retained : State) :
-    runBounded limits ticks (initial source.erase) ≠ .refused reason retained := by
-  exact typed_runBounded_no_refusal (checked_initial_state source checked) limits ticks reason retained
-
-/-- Any closed `Checked` certificate, whichever route produced it (the front end's gate
-produces one from `Bidirectional.checkAgainst`), excludes bounded-executor refusals. -/
+/-- Any closed `Checked` certificate (the front end's gate produces one from
+`Bidirectional.checkAgainst`) excludes bounded-executor refusals at any tick, heap and stack
+budget. No termination claim is added. -/
 public theorem checked_runBounded_no_refusal (source : AnnotatedTerm) (checked : Checked source [])
     (limits : Limits) (ticks : Nat) (reason : Refusal) (retained : State) :
     runBounded limits ticks (initial source.erase) ≠ .refused reason retained :=

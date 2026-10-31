@@ -1,23 +1,13 @@
 module
-/- Inert holes are traversable syntax, and are refused when demanded. -/
+/- Inert holes are traversable syntax, and are refused when demanded (the checker refuses one in any
+mode: `Bidirectional.elaborate_refuses_hole`). -/
 public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.Tactic.Cases
-import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.Hole
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant Obend.Core.Machine
 set_option autoImplicit false
-
-public theorem infer_refuses_hole (asm : Assumptions) (ann : Annotations)
-    (Γ : Context) (pos : List Nat) (fuel n : Nat) (σ : List Term) :
-    infer asm ann Γ pos fuel (.hole n σ) = none := by
-  obend_cases fuel with [infer]
-
-public theorem check_refuses_hole (ann : Annotations) (asm : Assumptions)
-    (Γ : Context) (fuel n : Nat) (σ : List Term) :
-    check ⟨.hole n σ, ann, asm⟩ Γ fuel = none := by
-  obend_cases fuel with [check, infer]
 
 public theorem demanded_hole_refused (heap : Array Cell) (env : Environment)
     (stack : List Frame) (n : Nat) (σ : List Term) :

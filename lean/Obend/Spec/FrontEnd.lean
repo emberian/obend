@@ -45,7 +45,7 @@ open Lean (Json toJson)
 open Obend.Spec.Annotated (ATerm CoreTerm)
 open Obend.Spec.Elaborate (Output)
 open Obend.Core.Packet (DecodedPacket decodePacket)
-open Obend.Core.Check (Checked check)
+open Obend.Core.Check (Checked)
 set_option autoImplicit false
 
 /-! ## Diagnostics -/

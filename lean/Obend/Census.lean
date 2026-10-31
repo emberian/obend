@@ -126,9 +126,6 @@ import Obend.Core.Proofs.SubjectReduction
 import Obend.Core.Proofs.SubjectReduction.Substitution
 import Obend.Core.Proofs.Substitution
 import Obend.Core.Proofs.Substitution.Defs
-import Obend.Core.Proofs.Substitution.Mono
-import Obend.Core.Proofs.Substitution.Msubst
-import Obend.Core.Proofs.Substitution.Transport
 import Obend.Core.Proofs.Substitution.Uses
 import Obend.Core.Proofs.Templates
 import Obend.Core.Proofs.TickCost

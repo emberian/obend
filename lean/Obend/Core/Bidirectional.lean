@@ -1,10 +1,10 @@
 module
-/- The bidirectional checker for Core4, beside `Obend.Core.Check`.
+/- The checker of Core4: bidirectional, over the specification in `Obend.Core.Check`
+(`PartialTyping`, `Checked`, the quantity rules, `sameType`, the row machinery).
 
 `synthAt` infers a type for a term; `checkAt` checks a term against an expected type.
 Both recurse on the term (no fuel), return `Except CheckRefusal`, and carry the
-declarative derivation (`PartialTyping`), so soundness is by construction as in
-`Check.check`. Conversion happens only where synthesis meets an expected type: the
+declarative derivation (`PartialTyping`), so soundness is by construction. Conversion happens only where synthesis meets an expected type: the
 mode switch (`checkAt` of an elimination form), an expected type's head unfolded to
 weak-head form (`whnf`), and a join (`ifBool`, `ifZero`, `case` in synthesis, which
 synthesize one branch and check the rest against it). Usage vectors are synthesized
@@ -867,8 +867,7 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
       simp [h1, h2, h3, pure, Except.pure] at accepted
     cases accepted; rfl
 
-/-- The bidirectional checker refuses a hole in any mode, as the fuel checker does
-(`Obend.Core.Proofs.Hole.infer_refuses_hole`). Proved through `elaborate.eq_def`, so the unfolding
+/-- The checker refuses a hole in any mode. Proved through `elaborate.eq_def`, so the unfolding
 equation is generated here once, not again in each of the modules that unfold `elaborate`. -/
 theorem elaborate_refuses_hole (assumptions : Assumptions) (annotations : Annotations)
     (context : Context) (path : List Nat) (n : Nat) (payload : List Term) (mode : Mode) :

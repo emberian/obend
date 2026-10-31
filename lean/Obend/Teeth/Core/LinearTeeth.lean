@@ -7,7 +7,7 @@ argument passed to a non-`linear` parameter, so a `linear` hypothesis is never h
 that may drop it (`erased`, `affine`) or share it (`unrestricted`); the joins (`ifBool`, `ifZero`,
 `case` arms) require `branchesAgree`, so every branch uses it equally, and join by `joinUses`; the
 projections (`get`, `reflect`, `metadata`, `project`) require `linearFree` of their target, so no
-dropped sibling holds one. Both checkers name the refusal: `linearBinderUnused`,
+dropped sibling holds one. The checker names the refusal: `linearBinderUnused`,
 `linearArgumentDropped`, `linearBranchesDisagree`, `linearProjected`.
 
 Each tooth below is the same program at `affine` and at `linear`: accepted at one, refused at the
@@ -37,10 +37,6 @@ public theorem dropped_linear_custody_refused :
     (match checkAgainst (droppedCustody custodyQuantity) [] (droppedCustodyType custodyQuantity) with
       | .error (.linearBinderUnused []) => true
       | _ => false) = true := by decide
-
-/-- The fuel checker refuses it too. -/
-public theorem dropped_linear_custody_refused_by_check :
-    (check (droppedCustody custodyQuantity) [] 4).isNone = true := by decide
 
 /-- The same program with an `affine` custody is accepted: dropping is within "at most once". -/
 public theorem dropped_affine_custody_accepted :
@@ -173,9 +169,6 @@ public theorem specification_metadata_refused :
       | _ => false) = true := by decide
 
 #tooth specification_metadata_refused by mutation heldQuantity := .affine
-
-public theorem specification_metadata_refused_by_check :
-    (check (specificationDrop .linear) [] 16).isNone = true := by decide
 
 /-- `λh. {a = h} with {a = 0}`: the extension overwrites the field holding `h` (`Step.extendRecord`). -/
 @[expose] public def oneField : Ty := .field "a" .natural .emptyRow
