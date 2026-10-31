@@ -302,8 +302,8 @@ public theorem resolveEventBy_keeps {Cand : Type} [World V Fact] {adv : Advance 
 has not ended, the chooser's choice of any candidate for a hole the history has not entered is
 accepted, whether or not the choice it supersedes is still usable. -/
 public theorem override_accepted {Cand : Type} {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob}
-    {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c : Cfg S Hole A Tok Fact Ob V i}
-    (hI : Inv host sp O v₀ c) (hlive : c.ended = none) (Sl : Slot Fact Cand) {j : Ix} {h : Hole j}
+    {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {cs₀ : (j : Ix) → Hole j → List Fact}
+    {c : Cfg S Hole A Tok Fact Ob V i} (hI : Inv host sp O v₀ cs₀ c) (hlive : c.ended = none) (Sl : Slot Fact Cand) {j : Ix} {h : Hole j}
     (body : Cand → Prot S Hole A j) (cand : Cand) (hmine : isMine c.obj.Ω h = true)
     (hnd : ¬ Dispatched c.obj.template c.obj.hist j h) :
     ∃ c', run host sp c (chooseEvent Sl h body cand) = .ok c' ∧ c'.cites j h = Sl.supports cand := by

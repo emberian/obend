@@ -184,7 +184,7 @@ theorem changed :
 #tooth stayed by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
 
 /-- The run's log is `Legal`, by the general theorem. -/
-theorem script_legal : Legal host spec O₀ everything final.log :=
+theorem script_legal : Legal host spec O₀ everything (fun _ _ => []) final.log :=
   reachable_legal (session_reachable .init script)
 
 /-! ## The fixture the library could not refuse -/
@@ -286,7 +286,37 @@ theorem decision_rechecked :
 
 #tooth decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
-#assert_axioms resolvesBy_p2 selects_p1 decision_rechecked
+/-- The initial plan's decision: provider `p1`, citing what the slot's `p1` cites. -/
+def initialCites : (j : Phase) → HoleN j → List Fact
+  | .reserved, () => providers.supports (some .p1)
+  | .idle, h => nomatch h
+  | .done, h => nomatch h
+
+/-- **The initial plan's decision is rechecked too**: a plan built with `p1` from the start,
+`p1`'s grant revoked, an operation account (`laxSpec`) that omits the grant: the commitment is
+refused, naming the provider hole and the grant its initial decision cited. -/
+theorem initial_decision_rechecked :
+    (session host laxSpec (Cfg.init O₀ everything initialCites)
+      (opening ++ [.dispatch (commitOp .p1)])).2 =
+      [none, none, none, some (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1])] :=
+  rfl
+
+#tooth initial_decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
+
+/-- The contrast: started without citations, the same run goes out. -/
+theorem uncited_start_admitted :
+    (session host laxSpec c₀ (opening ++ [.dispatch (commitOp .p1)])).2 = [none, none, none, none] :=
+  rfl
+
+/-- The general theorem at the cited start: its log is `Legal` with those citations. -/
+theorem initial_legal :
+    Legal host laxSpec O₀ everything initialCites
+      (session host laxSpec (Cfg.init O₀ everything initialCites)
+        (opening ++ [.dispatch (commitOp .p1)])).1.log :=
+  reachable_legal (session_reachable .init _)
+
+#assert_axioms resolvesBy_p2 selects_p1 decision_rechecked initial_decision_rechecked
+  uncited_start_admitted initial_legal
 #assert_axioms resolves_p2 receipt reserve_retry_refused abandon_ends lost_instance typed_instance stayed changed script_legal withdrawn_refused everything_delivers
 
 end Obend.Run.Negotiation

@@ -192,7 +192,7 @@ public theorem run_is_trace {host : Host V Tok Fact} {sp : Spec planSig Tok Fact
     let O := activity L ticks budget (t.length + m) s₀ Γ Δ Φ
     let c := session host sp (Cfg.init O v₀) (eventsOf t)
     c.2 = List.replicate (2 * t.length) none ∧ c.1.obj.hist.answered = t ∧
-      c.1.res = ⟨(), unfold L ticks budget m s'⟩ ∧ Legal host sp O v₀ c.1.log := by
+      c.1.res = ⟨(), unfold L ticks budget m s'⟩ ∧ Legal host sp O v₀ (fun _ _ => []) c.1.log := by
   intro O c
   obtain ⟨h1, h2, h3⟩ := session_of_transcript (host := host) ht m (Cfg.init O v₀)
     (congrArg (Sigma.mk ()) (subst_nohole _ _)) rfl rfl hadm
@@ -207,7 +207,7 @@ public theorem trace_is_run {host : Host V Tok Fact} {sp : Spec planSig Tok Fact
     {Γ : List Fact} {Δ : List Tok} {Φ : List Ob} {n : Nat} {s₀ : State} {v₀ : V}
     {c : Cfg planSig NoHole (fun _ => Stop) Tok Fact Ob V ()}
     (hc : Reachable host sp (Cfg.init (activity L ticks budget n s₀ Γ Δ Φ) v₀) c) :
-    Legal host sp (activity L ticks budget n s₀ Γ Δ Φ) v₀ c.log ∧
+    Legal host sp (activity L ticks budget n s₀ Γ Δ Φ) v₀ (fun _ _ => []) c.log ∧
       ∃ s' m, Transcript L ticks budget s₀ c.obj.hist.answered s' ∧
         n = c.obj.hist.answered.length + m ∧ c.res = ⟨(), unfold L ticks budget m s'⟩ ∧
         ∀ o, c.obj.hist.inflight = some o → ∃ y, turn L ticks budget s' = .vis o.2 y := by

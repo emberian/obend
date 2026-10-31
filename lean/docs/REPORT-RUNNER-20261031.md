@@ -260,10 +260,16 @@ Plan requires and spends is a deployment `Spec` over `Data`.
 - **No choice points.** An emitted plan has no holes, so the selection machinery of §8 does not yet
   reach Core4 plans. That needs `Slot.Core4`'s hole fragment as the protocol's holes.
 
-## 10. The one decision for Ember
+## 10. Initial citations (third pass, PROVED)
 
-**Should a decision present at the start be rechecked?** `Cfg.init` gives the initial plan's
-fillings no citations. Only replanned decisions are rechecked at dispatch, so a plan built with
-`p1` from the start dispatches on `p1` under `laxSpec` after `p1`'s grant is gone. The fix is one
-field: `Open` or `Cfg.init` carries the initial citations. It touches `Open`, which every slot
-theorem shares. I left it, and recommend adding it to `Cfg.init` (runner-local), not to `Open`.
+The decision recommended in the previous pass is taken. `Cfg.init O v cites₀` carries what the
+initial plan's decisions cite; the default `fun _ _ => []` keeps every earlier call site. `Open`
+is unchanged. The specification threads the same function: `citesOf cs₀ log`,
+`DecisionsHeld … cs₀`, `Legal host sp O v₀ cs₀ log`. `Inv` and `refines` quantify over `cs₀`, so
+an initial decision is rechecked at dispatch exactly as a replanned one.
+
+The fixture is `initial_decision_rechecked`: a plan built with `p1` from the start (citing `p1`'s
+grant and the deadline), `p1`'s grant revoked, and `laxSpec` omitting the grant. The commitment is
+refused `unsupported (commit p1) provider [auth p1]`, and `#tooth … decisionDead := []` is rejected
+there. `uncited_start_admitted` is the contrast: started without citations, the same run goes out.
+`initial_legal` instantiates `reachable_legal` at the cited start.

@@ -43,7 +43,7 @@ theorem turn_is_trace : ∃ s',
     (session (host true) spec (Cfg.init O ()) (eventsOf [⟨(), .natural 5, .natural 7⟩])).2 = [none, none] ∧
     (session (host true) spec (Cfg.init O ()) (eventsOf [⟨(), .natural 5, .natural 7⟩])).1.res =
       ⟨(), unfold exampleLimits 32 exampleBudget 1 s'⟩ ∧
-    Legal (host true) spec O () (session (host true) spec (Cfg.init O ())
+    Legal (host true) spec O () (fun _ _ => []) (session (host true) spec (Cfg.init O ())
       (eventsOf [⟨(), .natural 5, .natural 7⟩])).1.log := by
   obtain ⟨s', ht⟩ := transcript
   obtain ⟨h1, _, h3, h4⟩ := run_is_trace (host := host true) (sp := spec) (Γ := []) (Δ := [()])

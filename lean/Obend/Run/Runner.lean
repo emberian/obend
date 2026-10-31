@@ -115,10 +115,12 @@ structure Cfg (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob V
   /-- what each hole's decision cites (installed with its filling, frozen with it) -/
   cites : (j : Ix) → Hole j → List Fact
 
-/-- The start: the object with an empty history at world `v`, its current protocol the residual. -/
-def Cfg.init {Tok Fact Ob V : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (v : V) :
-    Cfg S Hole A Tok Fact Ob V i :=
-  ⟨{ O with hist := ⟨[], none⟩ }, v, [], ⟨i, fill O.Ω O.σ O.template⟩, [], none, fun _ _ => []⟩
+/-- The start: the object with an empty history at world `v`, its current protocol the residual,
+and `cites₀` what the initial plan's decisions cite (rechecked at dispatch exactly as a replanned
+decision's; `[]` for a plan that cites nothing). -/
+def Cfg.init {Tok Fact Ob V : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (v : V)
+    (cites₀ : (j : Ix) → Hole j → List Fact := fun _ _ => []) : Cfg S Hole A Tok Fact Ob V i :=
+  ⟨{ O with hist := ⟨[], none⟩ }, v, [], ⟨i, fill O.Ω O.σ O.template⟩, [], none, cites₀⟩
 
 /-- The view admission is judged at: the world's, with the durably spent tokens dead. -/
 def Cfg.admitView {Tok Fact Ob V : Type} [DecidableEq Tok] {i : Ix} (host : Host V Tok Fact)

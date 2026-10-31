@@ -120,19 +120,21 @@ def planOf (σ₀ : Subst S Hole A) (log : List (Event S Hole A Fact V)) : Subst
     | .replan h f _ => setHole σ h f
     | _ => σ) σ₀
 
-/-- What each hole's decision cites after a log: the last replan's citations (`[]` before any). -/
-def citesOf (log : List (Event S Hole A Fact V)) : (j : Ix) → Hole j → List Fact :=
+/-- What each hole's decision cites after a log: the last replan's citations, `cs₀` (the initial
+plan's) before any. -/
+def citesOf (cs₀ : (j : Ix) → Hole j → List Fact) (log : List (Event S Hole A Fact V)) :
+    (j : Ix) → Hole j → List Fact :=
   log.foldl (fun cs e => match e with
     | .replan h _ fs => setCites cs h fs
-    | _ => cs) fun _ _ => []
+    | _ => cs) cs₀
 
 /-- **Every dispatched call's decision held at its dispatch view**: the facts cited by the decision
 of every hole the call enters (`Dispatched` once the call is in flight) hold at the world then. -/
 def DecisionsHeld [DecidableEq Tok] (host : Host V Tok Fact) {i : Ix} (P : Prot S Hole A i)
-    (v₀ : V) : List (Event S Hole A Fact V) → Prop :=
+    (v₀ : V) (cs₀ : (j : Ix) → Hole j → List Fact) : List (Event S Hole A Fact V) → Prop :=
   AtEach fun pre e => ∀ o, e = .dispatch o → ∀ (j : Ix) (h : Hole j),
     Dispatched P ⟨(histOf pre).answered, some o⟩ j h →
-    ∀ f ∈ citesOf pre j h, (host.view (worldOf v₀ pre)).holds f = true
+    ∀ f ∈ citesOf cs₀ pre j h, (host.view (worldOf v₀ pre)).holds f = true
 
 /-- The history is a history of the plan in force. -/
 def Kept {i : Ix} (Ω : Ctx S Hole A Tok Fact Ob) (σ₀ : Subst S Hole A) (P : Prot S Hole A i)
@@ -141,10 +143,11 @@ def Kept {i : Ix} (Ω : Ctx S Hole A Tok Fact Ob) (σ₀ : Subst S Hole A) (P : 
 
 /-- The specification of an accepted log, for a run of the object `O` from world `v₀`. -/
 structure Legal [DecidableEq Tok] (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
-    (O : Open S Hole A Tok Fact Ob i) (v₀ : V) (log : List (Event S Hole A Fact V)) : Prop where
+    (O : Open S Hole A Tok Fact Ob i) (v₀ : V) (cs₀ : (j : Ix) → Hole j → List Fact)
+    (log : List (Event S Hole A Fact V)) : Prop where
   steps : WorldSteps host v₀ log
   authorized : Authorized host sp v₀ log
-  decided : DecisionsHeld host O.template v₀ log
+  decided : DecisionsHeld host O.template v₀ cs₀ log
   once : OnceSpent sp log
   paired : Paired log
   final : AfterAbandon log
