@@ -223,6 +223,7 @@ import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Logic.Claim
+import Obend.Logic.Ground
 import Obend.Logic.LateBinding
 import Obend.Logic.Rewrite
 import Obend.Main

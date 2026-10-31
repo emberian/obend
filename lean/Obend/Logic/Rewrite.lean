@@ -38,7 +38,6 @@ namespace Obend.Logic
 open Obend.Core.Term
 open Obend.Core.Data (Data)
 open Obend.Equiv
-open Obend.Judge.Cost (termBeq termBeq_sound termBeq_refl)
 set_option autoImplicit false
 
 /-! ## Steps -/
@@ -83,7 +82,7 @@ def reassoc : Bool → Term → Option Term
 /-- Read `Equiv.Quote.compose a b` back. -/
 def composeOf : Term → Option (Term × Term)
   | .specification (.inject "composed" (.record [("inherited", .metadata a), ("wrapping", .metadata b)]))
-      (.mix a' b') => if termBeq a a' && termBeq b b' then some (a, b) else none
+      (.mix a' b') => if Obend.Law.termEq a a' && Obend.Law.termEq b b' then some (a, b) else none
   | _ => none
 
 theorem composeOf_some {t a b : Term} (h : composeOf t = some (a, b)) : t = compose a b := by
@@ -92,7 +91,7 @@ theorem composeOf_some {t a b : Term} (h : composeOf t = some (a, b)) : t = comp
   · split at h
     · rename_i hb; cases h
       simp only [Bool.and_eq_true] at hb
-      rw [termBeq_sound hb.1, termBeq_sound hb.2]; rfl
+      rw [termEq_sound' hb.1, termEq_sound' hb.2]; rfl
     · cases h
   · cases h
 
@@ -141,7 +140,7 @@ def apply (R : Resolver) : RStep → Term → Except (List Nat) Term
     | some t' => .ok t'
     | none => .error []
   | .congr C a inner, t =>
-    if termBeq t (instantiate C a) && !observes C then
+    if Obend.Law.termEq t (instantiate C a) && !observes C then
       match replay R inner a with
       | .ok a' => .ok (instantiate C a')
       | .error p => .error p
@@ -326,7 +325,7 @@ theorem apply_sound (R : Resolver) {k : Level} {σ : Nat → Term} (L : Licence 
     split at h
     · rename_i hc
       simp only [Bool.and_eq_true, Bool.not_eq_true'] at hc
-      have e := termBeq_sound hc.1
+      have e := termEq_sound' hc.1
       subst e
       split at h
       · rename_i a' ha
@@ -486,7 +485,7 @@ inductive RClause where
 def rewriteWith (R : Resolver) (k : Nat) (l r : Term) (steps : List RStep) : Judge.Verdict RClause :=
   if sizeList steps ≤ k then
     match replay R steps l with
-    | .ok t => if termBeq t r then .ok else .refused .endMismatch []
+    | .ok t => if Obend.Law.termEq t r then .ok else .refused .endMismatch []
     | .error p => .refused .stepMismatch p
   else .uncovered
 
@@ -497,7 +496,7 @@ theorem rewriteWith_ok {R : Resolver} {k : Nat} {l r : Term} {steps : List RStep
   · split at h
     · rename_i t ht
       split at h
-      · rename_i hb; rw [ht, termBeq_sound hb]
+      · rename_i hb; rw [ht, termEq_sound' hb]
       · cases h
     · cases h
   · cases h
@@ -552,7 +551,7 @@ instance rewrite : Judge (Term × Term) (List RStep) where
   Fragment o := ∃ steps, replay objectResolver steps o.1 = .ok o.2
   complete := by
     rintro o ⟨steps, hrun⟩ _
-    exact ⟨steps, sizeList steps, by simp [rewriteCheck, rewriteWith, hrun, termBeq_refl]⟩
+    exact ⟨steps, sizeList steps, by simp [rewriteCheck, rewriteWith, hrun, termEq_refl']⟩
   mono := by intro r r' o steps le hne; exact rewriteWith_mono le hne
 
 /-! ## A derivation, accepted and planted -/
@@ -582,7 +581,7 @@ theorem goodDerivation_accepted :
     rewriteCheck 1 (.get twoProviders.object "m", .nat 2) goodDerivation = .ok := by
   simp [rewriteCheck, rewriteWith, sizeList, goodDerivation, RStep.size, replay, apply, unfoldAt, objectResolver,
     decodeObject, twoProviders, Composition.object, composeTerm, composeWith, composeStep, decodeCompose,
-    termBeq_refl, constLayer, Layer.term, Layer.extension,
+    termEq_refl', constLayer, Layer.term, Layer.extension,
     Layer.provide, decodeLayer, decodeBody, metaName, Composition.unfold, unfoldIn, Composition.layers,
     providesLast, Layer.provides, bodyAt, Layer.body, layerName, isDelegation, openTerm, Term.substitute]
 

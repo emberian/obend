@@ -35,7 +35,7 @@ public import Obend.Equiv.Quote
 public import Obend.Law.Proofs.Claim
 public import Obend.Law.Proofs.Machine
 public import Obend.Core.Data
-public import Obend.Judge.Cost
+public import Obend.Core.Code
 @[expose] public section
 namespace Obend.Logic
 open Obend.Core.Term
@@ -112,6 +112,12 @@ theorem liftN_apply : ∀ (n : Nat) (σ : Nat → Term) (i : Nat),
         have : i - (n + 1) = k := by omega
         rw [this]
         congr 1; funext x; omega
+
+/-- Syntactic equality of terms is decided by `Law.termEq` (exposed, so the kernel reduces it). -/
+theorem termEq_sound' {a b : Term} (h : Obend.Law.termEq a b = true) : a = b :=
+  Obend.Core.TermTraverse.encode_injective (Obend.Core.Code.treeEq_sound h)
+
+theorem termEq_refl' (a : Term) : Obend.Law.termEq a a = true := Obend.Core.Code.treeEq_refl _
 
 /-- No free index. -/
 abbrev Closed (t : Term) : Prop := Obend.Core.TermTraverse.Scoped 0 t
@@ -242,14 +248,18 @@ def EqKind.accepts : EqKind → Observation → Bool
 def notTerm (x : Term) : Term := .ifBool x (.boolean false) (.boolean true)
 
 /-- Undo the shift past one binder: `some l` when `l'` is `l` renamed past it. -/
+def unshiftSubst : Nat → Term
+  | 0 => .bound 0
+  | k + 1 => .bound k
+
 def unshift (l' : Term) : Option Term :=
-  if Obend.Judge.Cost.termBeq ((l'.substitute fun | 0 => .bound 0 | k + 1 => .bound k).rename Nat.succ) l'
-  then some (l'.substitute fun | 0 => .bound 0 | k + 1 => .bound k) else none
+  if Obend.Law.termEq ((l'.substitute unshiftSubst).rename Nat.succ) l'
+  then some (l'.substitute unshiftSubst) else none
 
 theorem unshift_some {l' l : Term} (h : unshift l' = some l) : l' = l.rename Nat.succ := by
   unfold unshift at h
   split at h
-  · rename_i hb; cases h; exact (Obend.Judge.Cost.termBeq_sound hb).symm
+  · rename_i hb; cases h; exact (termEq_sound' hb).symm
   · cases h
 
 /-- The sides of an elaborated `==`, and its kind. -/
