@@ -55,7 +55,8 @@ theorem stripInv_step {B P : Array Cell} {w : Nat} {s : State} (inv : StripInv B
     · rw [stepRaw_heap_keep s (by omega) reads]; exact heapI a lt ne
   · intro fr mem b isB
     subst isB
-    rcases stepRaw_stack_shape s with same | ⟨fr', push⟩ | ⟨fr0, rest, eq, notUpd, fr', next⟩ | ⟨fr0, rest, eq, next⟩
+    rcases stepRaw_stack_shape s with same | ⟨fr', push⟩ | ⟨fr0, rest, eq, notUpd, fr', next⟩ | ⟨fr0, rest, eq, next⟩ |
+        ⟨fr0, rest, frs, eq, notUpd, frsNo, next, _⟩
     · rw [same] at mem; exact stackI _ mem b rfl
     · rw [push] at mem
       rcases List.mem_cons.mp mem with rfl | mem
@@ -72,6 +73,10 @@ theorem stripInv_step {B P : Array Cell} {w : Nat} {s : State} (inv : StripInv B
         exact stackI _ (by rw [eq]; exact List.mem_cons_self ..) b this
       · exact stackI _ (by rw [eq]; exact List.mem_cons_of_mem _ mem) b rfl
     · rw [next] at mem; exact stackI _ (by rw [eq]; exact List.mem_cons_of_mem _ mem) b rfl
+    · rw [next] at mem
+      rcases List.mem_append.mp mem with m | m
+      · exact absurd rfl (frsNo _ m b)
+      · exact stackI _ (by rw [eq]; exact List.mem_cons_of_mem _ m) b rfl
 
 theorem stripInv_run {B P : Array Cell} {w : Nat} {s : State} (inv : StripInv B P w s) :
     ∀ j, (∀ i, i < j → NoPreEntry B w (exec i s)) → StripInv B P w (exec j s) := by

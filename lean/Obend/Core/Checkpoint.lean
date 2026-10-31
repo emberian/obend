@@ -29,6 +29,17 @@ def primitiveOf : Nat → Option Primitive
   | 4 => some .labelEqual | 5 => some .subtract | 6 => some .divide | 7 => some .less
   | 8 => some .lessEqual | 10 => some .modulo | _ => none
 
+/-- A destructor's names: length-prefixed. -/
+def encodeNames (names : List String) : Tokens := .nat names.length :: names.map .text
+def decodeNamesN : Nat → Tokens → Option (List String × Tokens)
+  | 0, rest => some ([], rest)
+  | count + 1, .text name :: rest => do
+      let (others, rest) ← decodeNamesN count rest; pure (name :: others, rest)
+  | _ + 1, _ => none
+def decodeNames : Tokens → Option (List String × Tokens)
+  | .nat count :: rest => decodeNamesN count rest
+  | _ => none
+
 mutual
 def encodeTerm : Term → Tokens
   | .bound index => [.nat 0, .nat index]
@@ -58,6 +69,7 @@ def encodeTerm : Term → Tokens
   | .perform plan => .nat 21 :: encodeTerm plan
   | .done value => .nat 22 :: encodeTerm value
   | .hole identity payload => .nat 23 :: .nat identity :: encodeTerms payload
+  | .split target names function => .nat 24 :: (encodeNames names ++ encodeTerm target ++ encodeTerm function)
 def encodeFields : List (String × Term) → Tokens
   | [] => [.nat 0]
   | (name,body) :: rest => .nat 1 :: .text name :: (encodeTerm body ++ encodeFields rest)
@@ -112,6 +124,10 @@ def decodeTerm : Nat → Tokens → Option (Term × Tokens)
     | 23, .nat identity :: rest => do
         let (payload, rest) ← decodeTerms fuel rest
         pure (.hole identity payload, rest)
+    | 24, _ => do
+        let (names, rest) ← decodeNames rest
+        let (target, rest) ← decodeTerm fuel rest; let (function, rest) ← decodeTerm fuel rest
+        pure (.split target names function, rest)
     | _, _ => none
   | _ + 1, _ => none
 def decodeFields : Nat → Tokens → Option (List (String × Term) × Tokens)
@@ -208,6 +224,8 @@ def encodeFrame : Frame → Tokens
   | .case arms environment => .nat 10 :: (encodeFields arms ++ encodeAddresses environment)
   | .ifBool whenTrue whenFalse environment =>
       .nat 11 :: (encodeTerm whenTrue ++ encodeTerm whenFalse ++ encodeAddresses environment)
+  | .split names function environment =>
+      .nat 12 :: (encodeNames names ++ encodeTerm function ++ encodeAddresses environment)
 def decodeFrame (fuel : Nat) : Tokens → Option (Frame × Tokens)
   | .nat 0 :: rest => do
       let (term, rest) ← decodeTerm fuel rest; let (environment, rest) ← decodeAddresses rest
@@ -239,6 +257,10 @@ def decodeFrame (fuel : Nat) : Tokens → Option (Frame × Tokens)
       let (whenTrue, rest) ← decodeTerm fuel rest; let (whenFalse, rest) ← decodeTerm fuel rest
       let (environment, rest) ← decodeAddresses rest
       pure (.ifBool whenTrue whenFalse environment, rest)
+  | .nat 12 :: rest => do
+      let (names, rest) ← decodeNames rest
+      let (function, rest) ← decodeTerm fuel rest; let (environment, rest) ← decodeAddresses rest
+      pure (.split names function environment, rest)
   | _ => none
 
 def refusalCode : Refusal → Nat

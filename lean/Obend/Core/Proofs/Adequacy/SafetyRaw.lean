@@ -84,6 +84,38 @@ Fault exclusion is a separate source-termination consequence. -/
   obtain ⟨next,same,current,dispatch⟩ := graph_ifBool_return_execution represented returned head
   exact ⟨next,same,current,graph_execution_demandSafety represented same current (by intro address; simp [returned]) dispatch⟩
 
+ theorem graph_split_return_safety {meaning : AddressMeaning} {state : State} {source : Term}
+    {fields : List (String × Address)} {names : List String} {function : Term} {environment : Environment}
+    {rest : List Frame} {addresses : List Address}
+    (represented : GraphRepresentsBy meaning state source) (successful : ResultControl (stepRaw state).control)
+    (returned : state.control = .returned (.record fields))
+    (head : state.stack = .split names function environment::rest)
+    (found : splitValues fields names = some addresses) :
+    ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧
+      GraphRepresentsBy next (stepRaw state) source ∧ DemandSafety next (stepRaw state) := by
+  cases addresses with
+  | cons address addresses =>
+      refine graph_next_ordinary_safety represented successful
+        (frame := .argument (.bound 0) [state.heap.size]) (rest := splitFrames
+          (((allocateFields state.heap (address :: addresses) (splitCells (address :: addresses).length)).2.map
+            Prod.snd).tail) ++ rest) ?_ (by intro a; simp)
+      simp only [stepRaw, returned, head, found]
+      simp only [splitCells, List.length_cons, List.range_succ_eq_map, List.map_cons, allocateFields_cons,
+        splitFrames, List.cons_append, List.tail_cons]
+  | nil =>
+      obtain ⟨next,same,current,_⟩ := graph_split_return_names represented returned head found
+      have validFrame : FrameValid state.heap.size (.split names function environment) :=
+        represented.1.2.2 _ (head ▸ List.mem_cons_self ..)
+      refine ⟨next,same,current,graph_execution_demandSafety represented same current
+        (by intro address; simp [returned]) ⟨[.split names function environment],
+          valueMeaning meaning (.record fields),closeTerm next environment function,?_,?_,?_,?_⟩⟩
+      · simp [controlMeaning,returned]
+      · simp [stepRaw,returned,head,found,controlMeaning]
+      · simp [stepRaw,returned,head,found,splitFrames,splitCells,allocateFields]
+      · simp only [stackMeaning,List.foldl_cons,List.foldl_nil,frameMeaning]
+        rw [← closeTerm_meaning_congr validFrame.1 validFrame.2 same]
+        exact Step.splitRecord _ _ _ [] (by rw [splitValues_map meaning fields names, found]; rfl)
+
  public theorem graph_stepRaw_safety_names {meaning : AddressMeaning} {state : State} {source : Term}
     (represented : GraphRepresentsBy meaning state source) (safe : DemandSafety meaning state)
     (born : HeapOriginsBorn state.heap) (successful : ResultControl (stepRaw state).control) :
@@ -132,6 +164,7 @@ Fault exclusion is a separate source-termination consequence. -/
       | perform plan =>
           cases shared : forcingShared state.stack <;> simp [stepRaw,control,shared,ResultControl] at successful
       | done value => exact graph_evaluate_done_safety represented control
+      | split target names function => exact graph_evaluate_context_safety (context := .split names function) represented control
   | returned value =>
       cases frames : state.stack with
       | nil => exact graph_next_complete_safety represented successful (by simp [stepRaw,control,frames])
@@ -212,6 +245,14 @@ Fault exclusion is a separate source-termination consequence. -/
               cases value with
               | boolean value => exact graph_ifBool_return_safety represented control frames
               | closure _ _ | specification _ _ | prototype _ _ | natural _ | label _ | record _ | variant _ _ =>
+                  simp [stepRaw,control,frames,ResultControl] at successful
+          | split names function environment =>
+              cases value with
+              | record fields =>
+                  cases found : splitValues fields names with
+                  | none => simp [stepRaw,control,frames,found,ResultControl] at successful
+                  | some addresses => exact graph_split_return_safety represented successful control frames found
+              | closure _ _ | specification _ _ | prototype _ _ | natural _ | boolean _ | label _ | variant _ _ =>
                   simp [stepRaw,control,frames,ResultControl] at successful
 
 

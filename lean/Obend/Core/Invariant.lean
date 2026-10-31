@@ -41,6 +41,8 @@ inductive Scoped : Nat → Term → Prop where
   | ifBool {n : Nat} {c t f : Term} : Scoped n c → Scoped n t → Scoped n f → Scoped n (.ifBool c t f)
   | perform {n : Nat} {plan : Term} : Scoped n plan → Scoped n (.perform plan)
   | done {n : Nat} {value : Term} : Scoped n value → Scoped n (.done value)
+  | split {n : Nat} {target function : Term} {names : List String} :
+      Scoped n target → Scoped n function → Scoped n (.split target names function)
 
 @[simp] theorem scoped_hole_iff (n k : Nat) (σ : List Term) :
     Scoped n (.hole k σ) ↔ ∀ t ∈ σ, Scoped n t := by
@@ -168,6 +170,12 @@ inductive Scoped : Nat → Term → Prop where
   · intro h; cases h; assumption
   · intro h; exact .done h
 
+@[simp] theorem scoped_split_iff (n : Nat) (target : Term) (names : List String) (function : Term) :
+    Scoped n (.split target names function) ↔ Scoped n target ∧ Scoped n function := by
+  constructor
+  · intro h; cases h; exact ⟨by assumption,by assumption⟩
+  · intro h; exact .split h.1 h.2
+
 /-- The syntax encoding's binder has exactly the source lexical policy. -/
 theorem shape_scoped_bind {Tag : Type} (n : Nat) (body : Traverse.Tree Tag) :
     Traverse.Tree.Scoped n (.bind body) ↔ Traverse.Tree.Scoped (n+1) body := by
@@ -287,6 +295,7 @@ and permits mutually reachable cells. It only requires allocated addresses. -/
       ∀ arm ∈ arms, Scoped (environment.length+1) arm.2
   | .ifBool whenTrue whenFalse environment => EnvironmentValid bound environment ∧
       Scoped environment.length whenTrue ∧ Scoped environment.length whenFalse
+  | .split _ function environment => EnvironmentValid bound environment ∧ Scoped environment.length function
 
 @[expose] def ControlValid (bound : Nat) : Control → Prop
   | .evaluate term environment => ClosureValid bound ⟨term,environment⟩
@@ -336,6 +345,7 @@ and permits mutually reachable cells. It only requires allocated addresses. -/
   | binaryRight _ _ => exact runtimeValueValid_mono h hab
   | case _ _ => exact ⟨environmentValid_mono h.1 hab,h.2⟩
   | ifBool _ _ _ => exact ⟨environmentValid_mono h.1 hab,h.2⟩
+  | split _ _ _ => exact ⟨environmentValid_mono h.1 hab,h.2⟩
 
  theorem controlValid_mono {a b : Nat} {control : Control}
     (h : ControlValid a control) (hab : a ≤ b) : ControlValid b control := by
@@ -534,12 +544,12 @@ macro "lexical_discharge" : tactic => `(tactic| (
   all_goals simp_all only [LexicalInvariant, ControlValid, ClosureValid,
     CellValid.eq_1, CellValid.eq_2, CellValid.eq_3,
     RuntimeValueValid.eq_1, RuntimeValueValid.eq_2, RuntimeValueValid.eq_3, RuntimeValueValid.eq_4, RuntimeValueValid.eq_5, RuntimeValueValid.eq_6, RuntimeValueValid.eq_7,
-    FrameValid.eq_1, FrameValid.eq_2, FrameValid.eq_3, FrameValid.eq_4, FrameValid.eq_5, FrameValid.eq_6, FrameValid.eq_7, FrameValid.eq_8, FrameValid.eq_9, FrameValid.eq_10, FrameValid.eq_11, FrameValid.eq_12,
+    FrameValid.eq_1, FrameValid.eq_2, FrameValid.eq_3, FrameValid.eq_4, FrameValid.eq_5, FrameValid.eq_6, FrameValid.eq_7, FrameValid.eq_8, FrameValid.eq_9, FrameValid.eq_10, FrameValid.eq_11, FrameValid.eq_12, FrameValid.eq_13,
     scoped_bound_iff, scoped_lam_iff, scoped_app_iff,
     scoped_mix_iff, scoped_fix_iff, scoped_specification_iff, scoped_prototype_iff,
     scoped_reflect_iff, scoped_metadata_iff, scoped_project_iff, scoped_binary_iff,
     scoped_extend_iff, scoped_record_iff, scoped_get_iff, scoped_condition_iff,
-    scoped_inject_iff, scoped_case_iff, scoped_ifBool_iff, scoped_perform_iff, scoped_done_iff,
+    scoped_inject_iff, scoped_case_iff, scoped_ifBool_iff, scoped_perform_iff, scoped_done_iff, scoped_split_iff,
     List.mem_cons, List.not_mem_nil, false_or, or_false, Array.size_push]
   all_goals try (have lookupValid := environmentValid_lookup hc.2 (by assumption))
   all_goals try (have allocationValid := allocateFields_valid hh hc.2 hc.1)
@@ -743,6 +753,83 @@ theorem lexical_evaluate_done {state : State} {environment : Environment} {value
   lexical_discharge
 
 set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_split {state : State} {environment : Environment} {target : Term} {names : List String} {function : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.split target names function) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+/-- What a destructor passes is among the record's fields. -/
+theorem splitValues_mem {α : Type} {fields : List (String × α)} :
+    ∀ {names : List String} {values : List α}, splitValues fields names = some values →
+      ∀ value ∈ values, ∃ field ∈ fields, field.2 = value
+  | [], values, h => by simp [splitValues] at h; subst h; simp
+  | name :: names, values, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i found heq
+      obtain ⟨label, body⟩ := found
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hrest
+        simp only [pure, Option.some.injEq] at h
+        subst h
+        intro value member
+        simp only [List.mem_cons] at member
+        rcases member with rfl | member
+        · exact ⟨(label, value), List.mem_of_find?_eq_some heq, rfl⟩
+        · exact splitValues_mem hrest value member
+
+theorem frameValid_splitFrames {bound : Nat} {addresses : List Address}
+    (h : ∀ address ∈ addresses, address < bound) : ∀ frame ∈ splitFrames addresses, FrameValid bound frame := by
+  intro frame member
+  simp only [splitFrames, List.mem_map] at member
+  obtain ⟨address, ha, rfl⟩ := member
+  refine ⟨by simp, ?_⟩
+  intro a ma; simp only [List.mem_cons, List.not_mem_nil, or_false] at ma; rw [ma]; exact h address ha
+
+theorem scoped_splitCells (count : Nat) : ∀ field ∈ splitCells count, Scoped count field.2 := by
+  intro field member
+  simp only [splitCells, List.mem_map, List.mem_range] at member
+  obtain ⟨index, below, rfl⟩ := member
+  exact .bound below
+
+theorem lexical_return_split {state : State} {value : RuntimeValue} {rest : List Frame} {names : List String}
+    {function : Term} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .split names function environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  rcases invariant with ⟨hh,hc,hs⟩
+  have headValid : FrameValid state.heap.size (.split names function environment) := hs _ (top ▸ List.mem_cons_self)
+  have restValid : ∀ frame ∈ rest, FrameValid state.heap.size frame := fun f m => hs f (top ▸ List.mem_cons_of_mem _ m)
+  unfold stepRaw
+  simp only [current, top]
+  split
+  · rename_i fields
+    split
+    · rename_i addresses found
+      rw [current] at hc
+      have addressesValid : EnvironmentValid state.heap.size addresses := by
+        intro address ha
+        obtain ⟨field, hf, rfl⟩ := splitValues_mem found address ha
+        exact hc field hf
+      have cellsScoped := scoped_splitCells addresses.length
+      obtain ⟨heapValid, namedValid⟩ := allocateFields_valid hh addressesValid cellsScoped
+      have grows := allocateFields_size_mono state.heap addresses (splitCells addresses.length)
+      refine ⟨heapValid, ⟨headValid.2, environmentValid_mono headValid.1 grows⟩, ?_⟩
+      intro frame member
+      rcases List.mem_append.mp member with m | m
+      · refine frameValid_splitFrames (fun address ha => ?_) frame m
+        obtain ⟨named, hn, rfl⟩ := List.mem_map.mp ha
+        exact namedValid named hn
+      · exact frameValid_mono (restValid frame m) grows
+    · exact ⟨hh, trivial, restValid⟩
+  · exact ⟨hh, trivial, restValid⟩
+
+set_option linter.unusedSimpArgs false in
 theorem lexical_return_argument {state : State} {value : RuntimeValue} {rest : List Frame} {argument : Term} {environment : Environment}
     (invariant : LexicalInvariant state) (current : state.control = .returned value)
     (top : state.stack = .argument argument environment :: rest) :
@@ -903,6 +990,7 @@ theorem stepRaw_lexicalInvariant {state : State} (invariant : LexicalInvariant s
     | ifBool => exact lexical_evaluate_ifBool invariant current
     | perform => exact lexical_evaluate_perform invariant current
     | done => exact lexical_evaluate_done invariant current
+    | split => exact lexical_evaluate_split invariant current
   | .returned _ =>
     match top : state.stack with
     | [] => exact lexical_return_complete invariant current top
@@ -920,6 +1008,7 @@ theorem stepRaw_lexicalInvariant {state : State} (invariant : LexicalInvariant s
       | binaryRight => exact lexical_return_binaryRight invariant current top
       | case => exact lexical_return_case invariant current top
       | ifBool => exact lexical_return_ifBool invariant current top
+      | split => exact lexical_return_split invariant current top
 
 /-- Memoization is permanent: later raw steps cannot overwrite or re-enter an
 already cached cell. This is the operational sharing fact; it makes no native
@@ -1093,6 +1182,12 @@ blackhole before pushing another update frame. -/
       exact busy_push busy (by intro origin equality; cases equality)
   exact loop fields (heap,[]) busy
 
+theorem stackUpdates_splitFrames (addresses : List Address) (rest : List Frame) :
+    stackUpdates (splitFrames addresses ++ rest) = stackUpdates rest := by
+  induction addresses with
+  | nil => rfl
+  | cons a as ih => simpa [splitFrames, stackUpdates] using ih
+
  theorem stepRaw_busyInvariant {state : State} (busy : BusyInvariant state) :
     BusyInvariant (stepRaw state) := by
   change Busy state.heap state.stack at busy
@@ -1111,6 +1206,8 @@ blackhole before pushing another update frame. -/
     | apply busy_stack_eq (busy_push busy (by intro origin equality; cases equality));
       simp [stackUpdates, *]
     | apply busy_stack_eq (allocateFields_busy busy _ _); simp [stackUpdates, *]
+    | apply busy_stack_eq busy; simp [stackUpdates, stackUpdates_splitFrames, *]
+    | apply busy_stack_eq (allocateFields_busy busy _ _); simp [stackUpdates, stackUpdates_splitFrames, *]
     | exfalso
       have marked := busy_update_exists busy (by assumption)
       obtain ⟨origin,found⟩ := marked

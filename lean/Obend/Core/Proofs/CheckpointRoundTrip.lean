@@ -14,6 +14,15 @@ theorem primitive_roundTrip (primitive : Primitive) : primitiveOf (primitiveCode
 theorem refusal_roundTrip (reason : Refusal) : refusalOf (refusalCode reason) = some reason := by
   obend_cases reason with [refusalCode, refusalOf]
 
+theorem namesN_roundTrip : ∀ (names : List String) (rest : Tokens),
+    decodeNamesN names.length (names.map Token.text ++ rest) = some (names,rest)
+  | [], rest => by simp [decodeNamesN]
+  | name :: others, rest => by simp [decodeNamesN,namesN_roundTrip others rest]
+
+theorem names_roundTrip (names : List String) (rest : Tokens) :
+    decodeNames (encodeNames names ++ rest) = some (names,rest) := by
+  simp [encodeNames,decodeNames,namesN_roundTrip]
+
 mutual
 theorem term_roundTrip : ∀ (term : Term) (fuel : Nat) (rest : Tokens),
     (encodeTerm term).length ≤ fuel → decodeTerm fuel (encodeTerm term ++ rest) = some (term,rest)
@@ -88,6 +97,11 @@ theorem term_roundTrip : ∀ (term : Term) (fuel : Nat) (rest : Tokens),
         simp only [encodeTerm, List.length_cons] at h
         omega)
       obend_cases payload with [encodeTerm, decodeTerm, payloadOk]
+  | .split t names f, fuel+1, rest, h => by
+      simp only [encodeTerm,List.length_cons,List.length_append] at h
+      simp only [encodeTerm, decodeTerm, List.cons_append, List.append_assoc]
+      rw [names_roundTrip]
+      simp [term_roundTrip t fuel _ (by omega), term_roundTrip f fuel rest (by omega)]
   | term, 0, rest, h => by obend_cases term with [encodeTerm]
 theorem fields_roundTrip : ∀ (fields : List (String × Term)) (fuel : Nat) (rest : Tokens),
     (encodeFields fields).length ≤ fuel → decodeFields fuel (encodeFields fields ++ rest) = some (fields,rest)
@@ -190,6 +204,11 @@ theorem frame_roundTrip (frame : Frame) (fuel : Nat) (rest : Tokens)
       simp only [encodeFrame,List.length_cons,List.length_append] at enough
       simp [encodeFrame,decodeFrame,List.append_assoc,term_roundTrip whenTrue fuel _ (by omega),
         term_roundTrip whenFalse fuel _ (by omega),addresses_roundTrip]
+  | split names function environment =>
+      simp only [encodeFrame,List.length_cons,List.length_append] at enough
+      simp only [encodeFrame, decodeFrame, List.cons_append, List.append_assoc]
+      rw [names_roundTrip]
+      simp [term_roundTrip function fuel _ (by omega), addresses_roundTrip]
   | _ => simp [encodeFrame,decodeFrame]
 
 theorem control_roundTrip (control : Control) (fuel : Nat) (rest : Tokens)

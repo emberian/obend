@@ -143,6 +143,13 @@ def armResult (path : List Nat) (head expected expectedHead : Ty) : Except Prepa
     | _ => throw (.shape path "activity" expected)
   | _ => pure expected
 
+/-- What remains of a destructor's function type after its named parameters (`checkSpine`'s result). -/
+def spineResult : List String → Ty → Ty
+  | [], functionType => functionType
+  | _ :: names, functionType => match callable functionType with
+    | .arrow _ _ _ codomain => spineResult names codomain
+    | _ => functionType
+
 mutual
 /-- Prepare a term in a mode. In synthesis the type returned is the type `synthAt`
 will produce under the returned tree; in checking it is the expected type. -/
@@ -203,6 +210,11 @@ def prepare (assumptions : Assumptions) (hints : Annotations) (context : Context
       (fun domain => do
         let (tree, _) ← prepare assumptions hints context (path ++ [1]) argument (.check domain)
         pure tree)
+  | .split target names function, mode => do
+    let (targetTree, _) ← prepare assumptions hints context (path ++ [0]) target .synth
+    let (functionTree, functionType) ← prepare assumptions hints context (path ++ [1]) function .synth
+    pure (.node none [targetTree, functionTree], match mode with
+      | .synth => spineResult names functionType | .check expected => expected)
   | .get target name, mode => do
     let (targetTree, targetType) ← prepare assumptions hints context (path ++ [0]) target .synth
     match lookupV assumptions.bounds [] targetType name with

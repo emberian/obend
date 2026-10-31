@@ -408,7 +408,7 @@ public theorem typed_scoped {asm : Assumptions} {context : Context} {term : Term
     (motive_1 := fun context term _ _ _ => Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ f ∈ fields, Scoped context.length f.2)
     (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Scoped (context.length + 1) arm.2)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; rename_i found; exact .bound (List.getElem?_eq_some_iff.mp found).1
   · intros; exact .natural _
   · intros; exact .boolean _
@@ -434,6 +434,7 @@ public theorem typed_scoped {asm : Assumptions} {context : Context} {term : Term
   · intros; rename_i ih; exact .perform ih
   · intros; rename_i ih; exact .done ih
   · intros; rename_i ih₁ ih₂; exact .case ih₁ ih₂
+  · intros; rename_i ih₁ ih₂; exact .split ih₁ ih₂
   · intros; rename_i hf; simp at hf
   · intros; rename_i ih₁ ih₂ f hf
     rcases List.mem_cons.mp hf with rfl | hf

@@ -73,6 +73,7 @@ def selfReads (d : Nat) : Term → List String
   | .ifZero v z s => selfReads d v ++ selfReads d z ++ selfReads (d + 1) s
   | .case sc arms => selfReads d sc ++ (arms.attach.map fun ⟨a, _⟩ => selfReads (d + 1) a.2).flatten
   | .ifBool c x y => selfReads d c ++ selfReads d x ++ selfReads d y
+  | .split t _ f => selfReads d t ++ selfReads d f
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf

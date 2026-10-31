@@ -98,6 +98,7 @@ theorem occurrences_length (n : Nat) : (t : Term) → (occurrences n t).length =
   | .ifBool c t f => by
     simp [occurrences, addUses, joinUses, occurrences_length n c, occurrences_length n t,
       occurrences_length n f]
+  | .split t _ f => by simp [occurrences, addUses, occurrences_length n t, occurrences_length n f]
 theorem fieldOccurrences_length (n : Nat) : (fields : List (String × Term)) → (fieldOccurrences n fields).length = n
   | [] => by simp [fieldOccurrences]
   | (_, body) :: rest => by
@@ -303,17 +304,17 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
     rw [occ_add, image_add ((source_uses_length fnTyped).trans (source_uses_length argTyped).symm),
       ihFn d σ A ua S j lin, ihArg d σ A ua S j lin]
   case record =>
-    intro context fields row uses fieldsTyped ih d σ A ua S j lin
+    intro context fields row uses fieldsTyped _ ih d σ A ua S j lin
     simp only [Term.substitute, occurrences]
     exact ih d σ A ua S j lin
   case get =>
     intro context target targetType member uses name fuel targetTyped lookup free ih d σ A ua S j lin
     simp only [Term.substitute, occurrences]; exact ih d σ A ua S j lin
   case extend =>
-    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow free ihTarget ihFields d σ A ua S j lin
+    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped _ isRow free ihTarget ihFields d σ A ua S j lin
     simp only [Term.substitute, occurrences]
     rw [getD_addUses ((occurrences_length _ _).trans (fieldOccurrences_length _ _).symm),
-      image_add ((source_uses_length targetTyped).trans (source_uses_length (PartialTyping.record fieldsTyped)).symm),
+      image_add ((source_uses_length targetTyped).trans (fields_uses_length fieldsTyped).symm),
       ihTarget d σ A ua S j lin, ihFields d σ A ua S j lin]
   case specification =>
     intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mPure ePure free ihM ihE d σ A ua S j lin
@@ -394,6 +395,11 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
     rw [getD_addUses ((occurrences_length _ _).trans (armOccurrences_length _ _).symm),
       image_add ((source_uses_length scrutineeTyped).trans (Obend.Core.Proofs.Preservation.arms_uses_length armsTyped).symm),
       ihS d σ A ua S j lin, ihA d σ A ua S j lin]
+  case split =>
+    intro context target function names row functionType result tu fu targetTyped functionTyped _ _ _ ihT ihF d σ A ua S j lin
+    simp only [Term.substitute, occurrences]
+    rw [occ_add, image_add ((source_uses_length targetTyped).trans (source_uses_length functionTyped).symm),
+      ihT d σ A ua S j lin, ihF d σ A ua S j lin]
   case nil =>
     intro context d σ A ua S j lin
     simp only [List.map_nil, fieldOccurrences, image_zero]; exact getD_replicate_zero _ _
@@ -401,7 +407,7 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
     intro context name body rest type row bu ru bodyTyped restTyped pure ihBody ihRest d σ A ua S j lin
     simp only [List.map_cons, fieldOccurrences]
     rw [getD_addUses ((occurrences_length _ _).trans (fieldOccurrences_length _ _).symm),
-      image_add ((source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record restTyped)).symm),
+      image_add ((source_uses_length bodyTyped).trans (fields_uses_length restTyped).symm),
       ihBody d σ A ua S j lin, ihRest d σ A ua S j lin]
   case nil =>
     intro context q result d σ A ua S j lin
@@ -491,18 +497,39 @@ theorem prototype_inv {a : Assumptions} {context : Context} {s t : Term} {T : Ty
   all_goals inv_other
 
 theorem record_inv {a : Assumptions} {context : Context} {fields : List (String × Term)} {T : Ty} {u : Uses}
-    (h : PartialTyping a context (.record fields) T u) : ∃ row, FieldsTyping a context fields row u := by
+    (h : PartialTyping a context (.record fields) T u) :
+    ∃ row, FieldsTyping a context fields row u ∧ labelsDistinct fields = true := by
   generalize ht : Term.record fields = t0 at h
   revert ht; revert fields
   apply PartialTyping.rec
-    (motive_1 := fun context term _ u _ => ∀ fields, Term.record fields = term → ∃ row, FieldsTyping a context fields row u)
+    (motive_1 := fun context term _ u _ => ∀ fields, Term.record fields = term →
+      ∃ row, FieldsTyping a context fields row u ∧ labelsDistinct fields = true)
     (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case record =>
-    intro context fields' row u hf _ fields eq
-    cases eq; exact ⟨row, hf⟩
+    intro context fields' row u hf distinct _ fields eq
+    cases eq; exact ⟨row, hf, distinct⟩
   case conversion =>
     intro context term actual expected u _ _ ih fields eq; exact ih fields eq
+  all_goals inv_other
+
+theorem record_inv_same {a : Assumptions} {context : Context} {fields : List (String × Term)} {T : Ty} {u : Uses}
+    (h : PartialTyping a context (.record fields) T u) :
+    ∃ row, FieldsTyping a context fields row u ∧ sameType a row T = true ∧ labelsDistinct fields = true := by
+  generalize ht : Term.record fields = t0 at h
+  revert ht; revert fields
+  apply PartialTyping.rec
+    (motive_1 := fun context term T u _ => ∀ fields, Term.record fields = term →
+      ∃ row, FieldsTyping a context fields row u ∧ sameType a row T = true ∧ labelsDistinct fields = true)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
+    (t := h)
+  case record =>
+    intro context fields' row u hf distinct _ fields eq
+    cases eq; exact ⟨row, hf, sameType_refl _ _, distinct⟩
+  case conversion =>
+    intro context term actual expected u _ same ih fields eq
+    obtain ⟨row, hf, s, d⟩ := ih fields eq
+    exact ⟨row, hf, sameType_trans s same, d⟩
   all_goals inv_other
 
 theorem inject_inv {a : Assumptions} {context : Context} {l : String} {p : Term} {T : Ty} {u : Uses}
@@ -681,6 +708,185 @@ theorem variant_not_activity {a : Assumptions} {row plan response result : Ty}
   simp [TypeGraph.graph, TypeGraph.observe, TypeGraph.labelHead, AliasExposure.expose,
     AliasExposure.exposeWalk, AliasExposure.constructorHead, TypeGraph.rowTag] at heads
 
+/-! ### The destructor passes every field once -/
+
+/-- What a destructor passes, as name-field pairs each found first under its name. -/
+theorem splitValues_pairs {α : Type} {fields : List (String × α)} :
+    ∀ {names : List String} {values : List α}, splitValues fields names = some values →
+      ∃ pairs : List (String × α), pairs.map Prod.fst = names ∧ pairs.map Prod.snd = values ∧
+        ∀ p ∈ pairs, fields.find? (fun field => field.1 == p.1) = some p
+  | [], values, h => by simp [splitValues] at h; subst h; exact ⟨[], rfl, rfl, by simp⟩
+  | name :: names, values, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i found heq
+      obtain ⟨label, body⟩ := found
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hrest
+        simp only [pure, Option.some.injEq] at h
+        subst h
+        obtain ⟨pairs, hn, hv, hp⟩ := splitValues_pairs hrest
+        have hl : label = name := by
+          have := List.find?_some heq; simpa using this
+        subst hl
+        refine ⟨(label, body) :: pairs, by simp [hn], by simp [hv], ?_⟩
+        intro p hp'
+        simp only [List.mem_cons] at hp'
+        rcases hp' with rfl | hp'
+        · exact heq
+        · exact hp p hp'
+
+theorem labelsDistinct_find {fields : List (String × Term)} (distinct : labelsDistinct fields = true) :
+    ∀ {field : String × Term}, field ∈ fields → fields.find? (fun f => f.1 == field.1) = some field := by
+  induction fields with
+  | nil => intro _ h; simp at h
+  | cons head rest ih =>
+    obtain ⟨name, body⟩ := head
+    simp only [labelsDistinct, Bool.and_eq_true, Bool.not_eq_true', List.any_eq_false, beq_iff_eq] at distinct
+    intro field member
+    simp only [List.mem_cons] at member
+    rcases member with rfl | member
+    · simp
+    · have ne : name ≠ field.1 := fun e => distinct.1 field member (e ▸ rfl)
+      simp [ne, ih distinct.2 member]
+
+theorem labelsDistinct_nodup {fields : List (String × Term)} (distinct : labelsDistinct fields = true) :
+    fields.Nodup := by
+  induction fields with
+  | nil => exact List.nodup_nil
+  | cons head rest ih =>
+    obtain ⟨name, body⟩ := head
+    simp only [labelsDistinct, Bool.and_eq_true, Bool.not_eq_true', List.any_eq_false, beq_iff_eq] at distinct
+    refine List.nodup_cons.mpr ⟨fun member => distinct.1 _ member rfl, ih distinct.2⟩
+
+theorem labelsDistinct_iff : ∀ {fields : List (String × Term)},
+    labelsDistinct fields = true ↔ (fields.map Prod.fst).Nodup
+  | [] => by simp [labelsDistinct]
+  | (name, body) :: rest => by
+    simp only [labelsDistinct, Bool.and_eq_true, Bool.not_eq_true', List.any_eq_false, beq_iff_eq,
+      List.map_cons, List.nodup_cons, List.mem_map, labelsDistinct_iff]
+    constructor
+    · rintro ⟨h, n⟩; exact ⟨fun ⟨x, hx, e⟩ => h x hx e, n⟩
+    · rintro ⟨h, n⟩; exact ⟨fun x hx e => h ⟨x, hx, e⟩, n⟩
+
+/-- An extension's fields name each label once when its parts do. -/
+theorem labelsDistinct_extendFields {inherited fields : List (String × Term)}
+    (hi : labelsDistinct inherited = true) (hf : labelsDistinct fields = true) :
+    labelsDistinct (extendFields inherited fields) = true := by
+  rw [labelsDistinct_iff] at hi hf ⊢
+  simp only [extendFields, List.map_append]
+  refine List.nodup_append.mpr ⟨hf, ?_, ?_⟩
+  · exact (List.filter_sublist.map Prod.fst).nodup hi
+  · intro x hx y hy e
+    subst e
+    obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hy
+    obtain ⟨q, hq, hqe⟩ := List.mem_map.mp hx
+    have := (List.mem_filter.mp hp).2
+    simp only [Bool.not_eq_true', List.any_eq_false, beq_iff_eq] at this
+    exact this q hq hqe
+
+theorem nodup_of_map_fst {pairs : List (String × Term)} (h : (pairs.map Prod.fst).Nodup) : pairs.Nodup := by
+  induction pairs with
+  | nil => exact List.nodup_nil
+  | cons p ps ih =>
+    simp only [List.map_cons, List.nodup_cons, List.mem_map] at h
+    exact List.nodup_cons.mpr ⟨fun m => h.1 ⟨p, m, rfl⟩, ih h.2⟩
+
+/-- The destructor's values are a permutation of the record's fields when its names are distinct and
+cover the record's distinct labels. -/
+theorem splitValues_perm {fields : List (String × Term)} {names : List String} {values : List Term}
+    (distinct : labelsDistinct fields = true) (nodup : names.Nodup) (covered : ∀ f ∈ fields, f.1 ∈ names)
+    (found : splitValues fields names = some values) : values.Perm (fields.map Prod.snd) := by
+  obtain ⟨pairs, hn, hv, hp⟩ := splitValues_pairs found
+  have perm : pairs.Perm fields := by
+    refine (List.perm_ext_iff_of_nodup (nodup_of_map_fst (hn ▸ nodup)) (labelsDistinct_nodup distinct)).mpr ?_
+    intro x
+    constructor
+    · intro hx; exact List.mem_of_find?_eq_some (hp x hx)
+    · intro hx
+      have hname : x.1 ∈ names := covered x hx
+      rw [← hn] at hname
+      obtain ⟨y, hy, he⟩ := List.mem_map.mp hname
+      have := hp y hy
+      rw [he, labelsDistinct_find distinct hx] at this
+      cases this; exact hy
+  rw [← hv]; exact perm.map Prod.snd
+
+theorem perm_sum {xs ys : List Nat} (h : xs.Perm ys) : xs.sum = ys.sum := by
+  induction h with
+  | nil => rfl
+  | cons x _ ih => simp [ih]
+  | swap x y l => simp; omega
+  | trans _ _ ih1 ih2 => exact ih1.trans ih2
+
+theorem fieldOcc_sum (n j : Nat) : ∀ fields : List (String × Term),
+    (fieldOccurrences n fields).getD j 0 = ((fields.map Prod.snd).map fun t => (occurrences n t).getD j 0).sum
+  | [] => by simp [fieldOccurrences]; exact getD_replicate_zero n j
+  | (_, b) :: rest => by
+    simp only [fieldOccurrences, List.map_cons, List.sum_cons]
+    rw [getD_addUses ((occurrences_length _ _).trans (fieldOccurrences_length _ _).symm), fieldOcc_sum n j rest]
+
+theorem occ_applyAll (n j : Nat) : ∀ (function : Term) (values : List Term),
+    (occurrences n (applyAll function values)).getD j 0 =
+      (occurrences n function).getD j 0 + (values.map fun t => (occurrences n t).getD j 0).sum
+  | _, [] => by simp [applyAll]
+  | function, value :: values => by
+    simp only [applyAll, List.map_cons, List.sum_cons]
+    rw [occ_applyAll n j (.app function value) values, occ_app]; omega
+
+/-- **The destructor redex counts exactly as the record did.** -/
+theorem split_redex_counts (n j : Nat) {fields : List (String × Term)} {names : List String} {values : List Term}
+    (function : Term) (distinct : labelsDistinct fields = true) (nodup : names.Nodup)
+    (covered : ∀ f ∈ fields, f.1 ∈ names) (found : splitValues fields names = some values) :
+    (occurrences n (applyAll function values)).getD j 0 =
+      (occurrences n function).getD j 0 + (fieldOccurrences n fields).getD j 0 := by
+  rw [occ_applyAll, fieldOcc_sum, perm_sum ((splitValues_perm distinct nodup covered found).map _)]
+
+/-- A record's labels are answered by its row. -/
+theorem fields_member_lookup {a : Assumptions} {context : Context} :
+    ∀ {fields : List (String × Term)} {row : Ty} {uses : Uses}, FieldsTyping a context fields row uses →
+      ∀ field ∈ fields, ∃ fuel member, row.lookup a.bounds fuel field.1 = some member
+  | [], _, _, .nil _ => by simp
+  | (name, _) :: rest, _, _, .cons _ restTyped _ => by
+    intro field member
+    simp only [List.mem_cons] at member
+    by_cases hit : name = field.1
+    · exact ⟨1, _, by simp [Ty.lookup, hit]; rfl⟩
+    · rcases member with rfl | member
+      · exact (hit rfl).elim
+      · obtain ⟨fuel, m, l⟩ := fields_member_lookup restTyped field member
+        exact ⟨fuel + 1, m, by simp [Ty.lookup, hit, l]⟩
+
+/-- A closed explicit row answers only the labels on its spine. -/
+theorem closed_lookup_spine {bounds : Bounds} : ∀ {row : Ty} {fuel : Nat} {name : String} {member : Ty},
+    row.tail = .emptyRow → row.lookup bounds fuel name = some member → name ∈ spineLabels row
+  | .field prior _ tail, fuel + 1, name, member, closed, h => by
+    simp only [Ty.lookup] at h
+    split at h
+    · rename_i e; subst e; simp [spineLabels]
+    · simp [spineLabels, closed_lookup_spine (row := tail) (by simpa [Ty.tail] using closed) h]
+  | _, 0, _, _, _, h => by simp [Ty.lookup] at h
+  | .emptyRow, _ + 1, _, _, _, h | .natural, _ + 1, _, _, _, h | .label, _ + 1, _, _, _, h
+  | .boolean, _ + 1, _, _, _, h | .arrow _ _ _ _, _ + 1, _, _, _, h | .specification _ _, _ + 1, _, _, _, h
+  | .prototype _ _, _ + 1, _, _, _, h | .custody _, _ + 1, _, _, _, h | .variant _, _ + 1, _, _, _, h
+  | .computation _ _ _, _ + 1, _, _, _, h => by simp [Ty.lookup] at h
+  | .variable _, _ + 1, _, _, closed, _ => by simp [Ty.tail] at closed
+
+/-- A record typed (through conversions) at a row its destructor covers has every label named. -/
+theorem record_covered {a : Assumptions} {context : Context} {fields : List (String × Term)} {row : Ty} {u : Uses}
+    {names : List String} (typed : PartialTyping a context (.record fields) row u)
+    (covers : SplitCovers row names = true) :
+    labelsDistinct fields = true ∧ ∀ f ∈ fields, f.1 ∈ names := by
+  obtain ⟨row', fieldsTyped, same, distinct⟩ := record_inv_same typed
+  simp only [SplitCovers, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at covers
+  refine ⟨distinct, fun f hf => ?_⟩
+  obtain ⟨fuel, m, l⟩ := fields_member_lookup fieldsTyped f hf
+  obtain ⟨depth, m', l', _⟩ := Obend.Core.Proofs.Preservation.same_type_lookup_transport (sameType_symm same) fuel _ m l
+  simpa using covers.2 _ (closed_lookup_spine covers.1 l')
+
 /-- **Linear resource conservation.** A `Step` from a term that checks in `context` uses every
 `linear` hypothesis of `context` exactly as often as the term did: none is dropped, none is copied.
 `caseInject` is the arm applied to the payload: a scrutinee that uses a `linear` hypothesis binds the
@@ -742,10 +948,10 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
       rw [linearFree_getD free lin] at total ⊢
       omega
   case extend =>
-    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow free ihTarget ihFields valid t' step j lin
-    have fieldsOcc := occ_of (PartialTyping.record fieldsTyped) j
+    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped distinct isRow free ihTarget ihFields valid t' step j lin
+    have fieldsOcc := occ_of (PartialTyping.record fieldsTyped distinct) j
     simp only [occurrences] at fieldsOcc
-    rw [getD_addUses ((source_uses_length targetTyped).trans (source_uses_length (PartialTyping.record fieldsTyped)).symm)]
+    rw [getD_addUses ((source_uses_length targetTyped).trans (fields_uses_length fieldsTyped).symm)]
     cases step with
     | extendTarget _ s' => rw [occ_extend, ihTarget valid s' lin, fieldsOcc]
     | extendRecord inherited _ =>
@@ -886,6 +1092,20 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
     | caseInject l p _ body found =>
       obtain ⟨_, row', same⟩ := inject_inv scrutineeTyped
       exact (variant_not_activity same).elim
+  case split =>
+    intro context target function names row functionType result tu fu targetTyped functionTyped nodup covers spine
+      ihT ihF valid t' step j lin
+    rw [getD_addUses ((source_uses_length targetTyped).trans (source_uses_length functionTyped).symm)]
+    cases step with
+    | splitTarget _ _ s' =>
+      simp only [occurrences]
+      rw [occ_add, ihT valid s' lin, occ_of functionTyped]
+    | splitRecord fields _ _ values found =>
+      obtain ⟨distinct, covered⟩ := record_covered targetTyped covers
+      rw [split_redex_counts _ _ _ distinct nodup covered found, occ_of functionTyped]
+      have := occ_of targetTyped j
+      simp only [occurrences] at this
+      rw [this]; omega
   all_goals (intros; first | trivial | (rename_i st _ _; cases st))
 
 /-- Along a reduction every term of which checks in the context, every `linear` count is the

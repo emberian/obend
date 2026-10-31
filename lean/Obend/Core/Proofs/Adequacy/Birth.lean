@@ -134,7 +134,7 @@ administrative boundaries from the demanded context. -/
           have rest := ih realizes.2
           exact sourceSteps_trans rest (sourceSteps_stack meaning before head)
       | argument _ _ | field _ | reflect | metadata | project | extend _ _
-      | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ =>
+      | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ | split _ _ _ =>
           exact ih realizes
 
 /-- Every active update bounds the current demanded source budget, derived

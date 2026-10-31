@@ -31,12 +31,16 @@ set_option autoImplicit false
 
 /-! ### Where the reduct's type stands -/
 
-/-- `T'` serves wherever the record type `T` did: both are finite rows, and every lookup of `T`
-is answered by `T'` with an equivalent member. -/
+/-- `T'` serves wherever the record type `T` did: both are finite rows, every lookup of `T` is
+answered by `T'` with an equivalent member, and `T'` is a closed explicit row answering no label `T`
+does not (so a destructor that covers `T` covers `T'`). -/
 @[expose] public def RowRefines (a : Assumptions) (T' T : Ty) : Prop :=
   TypeGraph.FiniteRow a T' ∧ TypeGraph.FiniteRow a T ∧
-    ∀ fuel name member, T.lookup a.bounds fuel name = some member →
-      ∃ depth member', T'.lookup a.bounds depth name = some member' ∧ sameType a member' member = true
+    (∀ fuel name member, T.lookup a.bounds fuel name = some member →
+      ∃ depth member', T'.lookup a.bounds depth name = some member' ∧ sameType a member' member = true) ∧
+    T'.tail = .emptyRow ∧
+    ∀ fuel name member', T'.lookup a.bounds fuel name = some member' →
+      ∃ depth member, T.lookup a.bounds depth name = some member
 
 /-- Pointwise at most, at every position that is not `unrestricted`. -/
 @[expose] public def Below (Γ : Context) (x y : Uses) : Prop :=
@@ -44,11 +48,15 @@ is answered by `T'` with an equivalent member. -/
 
 theorem RowRefines.trans_same {a : Assumptions} {T' T T2 : Ty} (r : RowRefines a T' T)
     (s : sameType a T T2 = true) : RowRefines a T' T2 := by
-  obtain ⟨f', f, h⟩ := r
-  refine ⟨f', (TypeGraph.equivalent_finite_row_iff ((sameType_iff a _ _).mp s)).mp f, fun fuel name m lk => ?_⟩
-  obtain ⟨depth, m1, lk1, s1⟩ := same_type_lookup_transport s fuel name m lk
-  obtain ⟨depth', m2, lk2, s2⟩ := h depth name m1 lk1
-  exact ⟨depth', m2, lk2, sameType_trans s2 s1⟩
+  obtain ⟨f', f, h, closed, back⟩ := r
+  refine ⟨f', (TypeGraph.equivalent_finite_row_iff ((sameType_iff a _ _).mp s)).mp f, fun fuel name m lk => ?_,
+    closed, fun fuel name m' lk => ?_⟩
+  · obtain ⟨depth, m1, lk1, s1⟩ := same_type_lookup_transport s fuel name m lk
+    obtain ⟨depth', m2, lk2, s2⟩ := h depth name m1 lk1
+    exact ⟨depth', m2, lk2, sameType_trans s2 s1⟩
+  · obtain ⟨depth, m, lk1⟩ := back fuel name m' lk
+    obtain ⟨depth', m2, lk2, _⟩ := same_type_lookup_transport (sameType_symm s) depth name m lk1
+    exact ⟨depth', m2, lk2⟩
 
 theorem not_row {a : Assumptions} {T : Ty} (h : rowSyntax T = false) (f : TypeGraph.FiniteRow a T) : False :=
   (finiteRow_nonrow h).mp f
@@ -220,7 +228,7 @@ theorem record_inv' {a : Assumptions} {Γ : Context} {fields : List (String × T
     (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case record =>
-    intro Γ fields' row u hf _ fields eq
+    intro Γ fields' row u hf _ _ fields eq
     cases eq; exact ⟨row, hf, sameType_refl _ _⟩
   case conversion =>
     intro Γ term actual expected u _ same ih fields eq
@@ -261,7 +269,7 @@ theorem fields_lookup {a : Assumptions} {Γ : Context} {fields : List (String ×
     cases typed with
     | cons bodyTyped restTyped pure =>
       rename_i type tail bu ru
-      have l := (source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record restTyped)).symm
+      have l := (source_uses_length bodyTyped).trans (fields_uses_length restTyped).symm
       cases fuel with
       | zero => simp [Ty.lookup] at lookup
       | succ fuel =>
@@ -301,13 +309,13 @@ theorem fields_append {a : Assumptions} {Γ : Context} {ys : List (String × Ter
   induction xs generalizing rx ux with
   | nil =>
     cases typed
-    rw [zero_add_uses Γ (source_uses_length (PartialTyping.record ysTyped))]
+    rw [zero_add_uses Γ (fields_uses_length ysTyped)]
     exact ysTyped
   | cons field rest ih =>
     cases typed with
     | cons bodyTyped restTyped pure =>
-      rw [add_assoc_uses ((source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record restTyped)).symm)
-        ((source_uses_length (PartialTyping.record restTyped)).trans (source_uses_length (PartialTyping.record ysTyped)).symm)]
+      rw [add_assoc_uses ((source_uses_length bodyTyped).trans (fields_uses_length restTyped).symm)
+        ((fields_uses_length restTyped).trans (fields_uses_length ysTyped).symm)]
       exact .cons bodyTyped (ih restTyped) pure
 
 theorem fields_filter {a : Assumptions} {Γ : Context} (p : String → Bool) {fields : List (String × Term)} {row : Ty}
@@ -324,13 +332,13 @@ theorem fields_filter {a : Assumptions} {Γ : Context} (p : String → Bool) {fi
     cases typed with
     | cons bodyTyped restTyped pure =>
       rename_i type tail bu ru
-      have l := (source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record restTyped)).symm
+      have l := (source_uses_length bodyTyped).trans (fields_uses_length restTyped).symm
       obtain ⟨row', u', hr, le, lk⟩ := ih restTyped
       by_cases pn : p n = true
       · refine ⟨.field n type row', addUses bu u', ?_, ?_, ?_⟩
         · simp only [List.filter_cons, pn, if_true]; exact .cons bodyTyped hr pure
         · intro i
-          rw [getD_addUses ((source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record hr)).symm),
+          rw [getD_addUses ((source_uses_length bodyTyped).trans (fields_uses_length hr).symm),
             getD_addUses l]
           have := le i; omega
         · intro fuel name m pm lookup
@@ -386,19 +394,39 @@ theorem overlay_lookup_right {a : Assumptions} {Γ : Context} {X : Ty} {name : S
       obtain ⟨depth, h⟩ := ih restTyped facts.2
       exact ⟨depth + 1, by simp [overlay, Ty.lookup, facts.1, h]⟩
 
+theorem fields_tail {a : Assumptions} {Γ : Context} {fields : List (String × Term)} {row : Ty} {u : Uses}
+    (typed : FieldsTyping a Γ fields row u) (X : Ty) : (overlay row X).tail = X.tail := by
+  induction fields generalizing row u with
+  | nil => cases typed; rfl
+  | cons field rest ih => cases typed with | cons _ restTyped _ => simpa [overlay, Ty.tail] using ih restTyped
+
+theorem fields_row_tail {a : Assumptions} {Γ : Context} {fields : List (String × Term)} {row : Ty} {u : Uses}
+    (typed : FieldsTyping a Γ fields row u) : row.tail = .emptyRow := by
+  induction fields generalizing row u with
+  | nil => cases typed; rfl
+  | cons field rest ih => cases typed with | cons _ restTyped _ => simpa [Ty.tail] using ih restTyped
+
 theorem overlay_refines {a : Assumptions} {Γ : Context} {fields : List (String × Term)} {row : Ty} {u : Uses}
     (fieldsTyped : FieldsTyping a Γ fields row u) {X X' : Ty} {fuelX : Nat}
     (isRowX : X.isRow a.bounds fuelX = true) (rowX' : TypeGraph.FiniteRow a X')
     (h : ∀ fuel name m, fields.any (fun field => field.1 == name) = false → X.lookup a.bounds fuel name = some m →
-      ∃ depth m', X'.lookup a.bounds depth name = some m' ∧ sameType a m' m = true) :
+      ∃ depth m', X'.lookup a.bounds depth name = some m' ∧ sameType a m' m = true)
+    (closedX' : X'.tail = .emptyRow)
+    (back : ∀ fuel name m', X'.lookup a.bounds fuel name = some m' → ∃ depth m, X.lookup a.bounds depth name = some m) :
     RowRefines a (overlay row X') (overlay row X) := by
   obtain ⟨f', r'⟩ := rowX'
-  refine ⟨fields_overlay_row fieldsTyped X' f' r', fields_overlay_row fieldsTyped X fuelX isRowX, fun fuel name m lk => ?_⟩
-  rcases fields_overlay_lookup fieldsTyped X fuel name m lk with ⟨depth, hr⟩ | ⟨absent, depth, hx⟩
-  · exact ⟨depth, m, overlay_lookup_left X' fieldsTyped depth name m hr, sameType_refl _ _⟩
-  · obtain ⟨depth', m', hx', s⟩ := h depth name m absent hx
-    obtain ⟨depth'', h''⟩ := overlay_lookup_right hx' fieldsTyped absent
-    exact ⟨depth'', m', h'', s⟩
+  refine ⟨fields_overlay_row fieldsTyped X' f' r', fields_overlay_row fieldsTyped X fuelX isRowX, fun fuel name m lk => ?_,
+    by rw [fields_tail fieldsTyped]; exact closedX', fun fuel name m' lk => ?_⟩
+  · rcases fields_overlay_lookup fieldsTyped X fuel name m lk with ⟨depth, hr⟩ | ⟨absent, depth, hx⟩
+    · exact ⟨depth, m, overlay_lookup_left X' fieldsTyped depth name m hr, sameType_refl _ _⟩
+    · obtain ⟨depth', m', hx', s⟩ := h depth name m absent hx
+      obtain ⟨depth'', h''⟩ := overlay_lookup_right hx' fieldsTyped absent
+      exact ⟨depth'', m', h'', s⟩
+  · rcases fields_overlay_lookup fieldsTyped X' fuel name m' lk with ⟨depth, hr⟩ | ⟨absent, depth, hx⟩
+    · exact ⟨depth, m', overlay_lookup_left X fieldsTyped depth name m' hr⟩
+    · obtain ⟨depth', m, hx'⟩ := back depth name m' hx
+      obtain ⟨depth'', h''⟩ := overlay_lookup_right hx' fieldsTyped absent
+      exact ⟨depth'', m, h''⟩
 
 
 /-! ### Redexes -/
@@ -527,6 +555,85 @@ theorem congr_fixed {a : Assumptions} {Γ : Context} {s s' : Term} {S : Ty} {u :
   · exact (not_row nr r.2.1).elim
   · exact (done_absurd d pure).elim
 
+/-! ### The destructor -/
+
+theorem spine_lookup {bounds : Bounds} : ∀ {row : Ty} {name : String}, name ∈ spineLabels row →
+    ∃ fuel member, row.lookup bounds fuel name = some member
+  | .field prior m tail, name, h => by
+    by_cases hit : prior = name
+    · exact ⟨1, m, by simp [Ty.lookup, hit]⟩
+    · simp only [spineLabels, List.mem_cons] at h
+      rcases h with e | h
+      · exact (hit e.symm).elim
+      · obtain ⟨fuel, member, l⟩ := spine_lookup (bounds := bounds) h
+        exact ⟨fuel + 1, member, by simp [Ty.lookup, hit, l]⟩
+  | .natural, _, h | .label, _, h | .boolean, _, h | .variable _, _, h | .arrow _ _ _ _, _, h
+  | .emptyRow, _, h | .specification _ _, _, h | .prototype _ _, _, h | .custody _, _, h | .variant _, _, h
+  | .computation _ _ _, _, h => by simp [spineLabels] at h
+
+/-- A destructor that covers a row covers every row that refines it. -/
+theorem covers_refine {a : Assumptions} {T' row : Ty} {names : List String} (r : RowRefines a T' row)
+    (covers : SplitCovers row names = true) : SplitCovers T' names = true := by
+  obtain ⟨_, _, _, closed', back⟩ := r
+  simp only [SplitCovers, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at covers ⊢
+  refine ⟨closed', fun name mem => ?_⟩
+  obtain ⟨fuel, m', l'⟩ := spine_lookup (bounds := a.bounds) mem
+  obtain ⟨depth, m, l⟩ := back fuel name m' l'
+  exact covers.2 name (closed_lookup_spine covers.1 l)
+
+/-- A destructor's spine over a row holds over every row that refines it. -/
+theorem spine_refine {a : Assumptions} {Γ : Context} {u : Uses} {T' row : Ty} (r : RowRefines a T' row) :
+    ∀ {names : List String} {functionType result : Ty},
+      SplitSpine a Γ u row names functionType result → SplitSpine a Γ u T' names functionType result
+  | [], _, _, h => h
+  | _ :: _, _, _, ⟨rr, q, m, c, shape, ⟨fuel, found, l, same⟩, pure, allowed, share, rest⟩ => by
+    obtain ⟨depth, found', l', same'⟩ := r.2.2.1 fuel _ found l
+    exact ⟨rr, q, m, c, shape, ⟨depth, found', l', sameType_trans same' same⟩, pure, allowed, share,
+      spine_refine r rest⟩
+
+/-- The destructor's reduct, typed: each value is its field's body, typed at its parameter's member. -/
+theorem split_apply_typed {a : Assumptions} {Γ : Context} {fields : List (String × Term)} {row' row : Ty} {tu : Uses}
+    (hf : FieldsTyping a Γ fields row' tu) (s : sameType a row' row = true)
+    (valid : validContext a.shareableVariables Γ = true) :
+    ∀ {names : List String} {functionType result : Ty} {function : Term} {fu : Uses} {values : List Term},
+      SplitSpine a Γ tu row names functionType result → PartialTyping a Γ function functionType fu →
+      splitValues fields names = some values → ∃ u', PartialTyping a Γ (applyAll function values) result u'
+  | [], _, _, _, fu, values, spine, hfun, found => by
+    simp [splitValues] at found; subst found; cases spine; exact ⟨fu, hfun⟩
+  | name :: names, _, _, function, fu, values, ⟨rr, q, m, c, shape, ⟨fuel, found, l, same⟩, noAct, allowed, share, rest⟩,
+      hfun, hv => by
+    simp only [splitValues, bind, Option.bind] at hv
+    split at hv
+    · cases hv
+    · rename_i pair hp
+      obtain ⟨label, value⟩ := pair
+      simp only at hv
+      split at hv
+      · cases hv
+      · rename_i vs hvs
+        simp only [pure, Option.some.injEq] at hv
+        subst hv
+        obtain ⟨depth, m0, l0, s0⟩ := same_type_lookup_transport s fuel name found l
+        obtain ⟨body, bu, found', hb, le⟩ := fields_lookup hf depth name m0 l0
+        have hl : label = name := by have := List.find?_some hp; simpa using this
+        subst hl
+        rw [hp] at found'; cases found'
+        have len := source_uses_length hb
+        have below : Below Γ bu tu := below_of_le le
+        obtain ⟨lin, unr⟩ := caseAllowed_parts allowed
+        have argAllowed : argumentAllowed a q Γ m bu = true := by
+          simp only [argumentAllowed, Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq,
+            Bool.not_eq_true']
+          refine ⟨⟨noAct, lin.imp id (fun free => linearFree_below free len below)⟩, ?_⟩
+          by_cases qu : q = .unrestricted
+          · subst qu; simp at share
+            exact .inr ⟨share, captures_below valid (unr rfl) len below⟩
+          · exact .inl qu
+        have happ : PartialTyping a Γ (.app function value) c (addUses fu bu) :=
+          .application hfun (.conversion hb (sameType_trans s0 same)) shape rfl argAllowed
+        obtain ⟨u', h⟩ := split_apply_typed hf s valid rest happ hvs
+        exact ⟨u', by simpa [applyAll] using h⟩
+
 theorem step_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Uses}
     (typed : PartialTyping a Γ t T u) : validContext a.shareableVariables Γ = true → safeUses Γ u = true →
       ∀ t', Step t t' → ∃ T' u', PartialTyping a Γ t' T' u' ∧ Below Γ u' u ∧ Retyped a t t' T' T := by
@@ -589,7 +696,7 @@ theorem step_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Use
       have free' := linearFree_below free (source_uses_length h) b
       rcases r with e | r | ⟨rfl, P, R, d⟩
       · exact ⟨member, u', .get (.conversion h e) lookup free', b, .inl (sameType_refl _ _)⟩
-      · obtain ⟨depth, m', lk, sm⟩ := r.2.2 fuel name member lookup
+      · obtain ⟨depth, m', lk, sm⟩ := r.2.2.1 fuel name member lookup
         exact ⟨member, u', .conversion (.get h lk free') sm, b, .inl (sameType_refl _ _)⟩
       · exact (done_absurd d (lookup_not_computation _ _ _ _ _ lookup)).elim
     | field fields _ body found =>
@@ -599,10 +706,10 @@ theorem step_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Use
       rw [found] at found'; cases found'
       exact ⟨member, bu, .conversion hb sm, below_of_le le, .inl (sameType_refl _ _)⟩
   case extend =>
-    intro Γ target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow free ihTarget ihFields
+    intro Γ target fields targetType row tu fu rowFuel targetTyped fieldsTyped distinct isRow free ihTarget ihFields
       valid safe t' step
     have tl := source_uses_length targetTyped
-    have fl := source_uses_length (PartialTyping.record fieldsTyped)
+    have fl := fields_uses_length fieldsTyped
     cases step with
     | extendTarget _ s' =>
       obtain ⟨T', u', h, b, r⟩ := ihTarget valid (safe_mono safe tl (add_le_left (tl.trans fl.symm))) _ s'
@@ -610,22 +717,29 @@ theorem step_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Use
       have free' := linearFree_below free len b
       have bb := below_add_left b (len.trans fl.symm) (tl.trans fl.symm)
       rcases r with e | r | ⟨rfl, P, R, d⟩
-      · exact ⟨_, _, .extend (.conversion h e) fieldsTyped isRow free', bb, .inl (sameType_refl _ _)⟩
-      · obtain ⟨⟨f', r'⟩, _, hl⟩ := r
-        exact ⟨_, _, .extend h fieldsTyped r' free', bb,
-          .inr (.inl (overlay_refines fieldsTyped isRow ⟨f', r'⟩ fun fuel name m _ lk => hl fuel name m lk))⟩
+      · exact ⟨_, _, .extend (.conversion h e) fieldsTyped distinct isRow free', bb, .inl (sameType_refl _ _)⟩
+      · obtain ⟨⟨f', r'⟩, _, hl, tl, back⟩ := r
+        exact ⟨_, _, .extend h fieldsTyped distinct r' free', bb,
+          .inr (.inl (overlay_refines fieldsTyped isRow ⟨f', r'⟩ (fun fuel name m _ lk => hl fuel name m lk) tl back))⟩
       · exact (done_absurd d (isRow_not_computation _ _ _ isRow)).elim
     | extendRecord inherited _ =>
-      obtain ⟨row0, hi, s⟩ := record_inv' targetTyped
+      obtain ⟨row0, hi, s, inheritedDistinct⟩ := record_inv_same targetTyped
       obtain ⟨rowF, uF, hF, leF, lkF⟩ := fields_filter (fun n => !(fields.any fun field => field.1 == n)) hi
       have happ := fields_append hF fieldsTyped
-      have uFl := source_uses_length (PartialTyping.record hF)
-      refine ⟨overlay row rowF, addUses fu uF, .record happ, below_of_le fun i => ?_, .inr (.inl ?_)⟩
+      have uFl := fields_uses_length hF
+      refine ⟨overlay row rowF, addUses fu uF, .record happ (labelsDistinct_extendFields inheritedDistinct distinct),
+        below_of_le fun i => ?_, .inr (.inl ?_)⟩
       · rw [getD_addUses (fl.trans uFl.symm), getD_addUses (tl.trans fl.symm)]; have := leF i; omega
-      · refine overlay_refines fieldsTyped isRow (fields_isRow hF) fun fuel name m absent lk => ?_
-        obtain ⟨depth, m0, lk0, sm⟩ := same_type_lookup_transport s fuel name m lk
-        obtain ⟨depth', lk'⟩ := lkF depth name m0 (by simp [absent]) lk0
-        exact ⟨depth', m0, lk', sm⟩
+      · refine overlay_refines fieldsTyped isRow (fields_isRow hF) (fun fuel name m absent lk => ?_)
+          (fields_row_tail hF) (fun fuel name m' lk => ?_)
+        · obtain ⟨depth, m0, lk0, sm⟩ := same_type_lookup_transport s fuel name m lk
+          obtain ⟨depth', lk'⟩ := lkF depth name m0 (by simp [absent]) lk0
+          exact ⟨depth', m0, lk', sm⟩
+        · obtain ⟨body, bu, found, _, _⟩ := fields_lookup hF fuel name m' lk
+          have mem := List.mem_of_find?_eq_some found
+          obtain ⟨depth, m0, lk0⟩ := fields_member_lookup hi _ (List.mem_filter.mp mem).1
+          obtain ⟨depth', m1, lk1, _⟩ := same_type_lookup_transport (sameType_symm s) depth name m0 lk0
+          exact ⟨depth', m1, lk1⟩
   case reflect =>
     intro Γ target specType targetType uses prior free ih valid safe t' step
     cases step with
@@ -769,6 +883,34 @@ theorem step_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Use
     | ifFalse _ _ =>
       exact ⟨result, fu, falseTyped,
         below_of_le fun i => Nat.le_trans (join_le_right (tl.trans fl.symm) i) (add_le_right jl i), .inl (sameType_refl _ _)⟩
+  case split =>
+    intro Γ target function names row functionType result tu fu targetTyped functionTyped nodup covers spine
+      ihT ihF valid safe t' step
+    have tl := source_uses_length targetTyped
+    have fl := source_uses_length functionTyped
+    cases step with
+    | splitTarget _ _ s' =>
+      obtain ⟨T', u', h, b, r⟩ := ihT valid (safe_mono safe tl (add_le_left (tl.trans fl.symm))) _ s'
+      have len := source_uses_length h
+      have spine' := spine.transport fun q allowed => caseAllowed_below valid allowed len b
+      have bb := below_add_left b (len.trans fl.symm) (tl.trans fl.symm)
+      rcases r with e | r | ⟨rfl, P, R, d⟩
+      · exact ⟨_, _, .split (.conversion h e) functionTyped nodup covers spine', bb, .inl (sameType_refl _ _)⟩
+      · exact ⟨_, _, .split h functionTyped nodup (covers_refine r covers) (spine_refine r spine'), bb,
+          .inl (sameType_refl _ _)⟩
+      · have closed : row.tail = .emptyRow := by
+          simp only [SplitCovers, Bool.and_eq_true, beq_iff_eq] at covers; exact covers.1
+        exact (done_absurd d (Obend.Core.Proofs.Preservation.tail_empty_not_computation closed)).elim
+    | splitRecord fields _ _ values found =>
+      obtain ⟨row', hf, s, _⟩ := record_inv_same targetTyped
+      obtain ⟨u', h⟩ := split_apply_typed hf s valid spine functionTyped found
+      obtain ⟨distinct, covered⟩ := record_covered targetTyped covers
+      refine ⟨result, u', h, below_of_le fun j => ?_, .inl (sameType_refl _ _)⟩
+      have counts := split_redex_counts Γ.length j function distinct nodup covered found
+      rw [← uses_determined h] at counts
+      have targetOcc := occ_of targetTyped j
+      simp only [occurrences] at targetOcc
+      rw [counts, occ_of functionTyped, targetOcc, getD_addUses (tl.trans fl.symm)]; omega
   case done =>
     intro Γ value planType response result uses valueTyped pure ih valid safe t' step
     cases step with
@@ -867,7 +1009,7 @@ public theorem extendRecord_changes_type :
         sameType {} T' (.field "a" .natural (.field "a" (.custody 0) .emptyRow)) = false := by
   refine ⟨?_, by simpa [extendFields] using Step.extendRecord [("a", .bound 0)] [("a", .nat 0)], ?_⟩
   · refine ⟨_, PartialTyping.extend (fuel := 2) (context := [⟨.custody 0, .affine⟩])
-      (.record (.cons (.bound (index := 0) rfl) (.nil _) rfl)) (.cons (.natural _ 0) (.nil _) rfl) rfl ?_⟩
+      (.record (.cons (.bound (index := 0) rfl) (.nil _) rfl) rfl) (.cons (.natural _ 0) (.nil _) rfl) rfl rfl ?_⟩
     decide
   intro T' u' h
   obtain ⟨row, hf, s⟩ := record_inv' h

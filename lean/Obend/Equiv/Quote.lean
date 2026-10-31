@@ -72,6 +72,8 @@ inductive Blind : Term → Term → Prop where
       Blind (.ifBool c x y) (.ifBool c' x' y')
   | perform {p p' : Term} : Blind p p' → Blind (.perform p) (.perform p')
   | done {v v' : Term} : Blind v v' → Blind (.done v) (.done v')
+  | split (names : List String) {g g' f f' : Term} : Blind g g' → Blind f f' →
+      Blind (.split g names f) (.split g' names f')
 
 /-- A term no context of census `b` could tell from itself by metadata: it never asks. -/
 def ObsFree (t : Term) : Prop := Blind t t
@@ -113,6 +115,7 @@ theorem Blind.symm {t t' : Term} (h : Blind t t') : Blind t' t := by
   | ifBool _ _ _ i1 i2 i3 => exact .ifBool i1 i2 i3
   | perform _ ih => exact .perform ih
   | done _ ih => exact .done ih
+  | split names _ _ i1 i2 => exact .split names i1 i2
 
 /-! ### Closure under renaming and substitution -/
 
@@ -154,6 +157,7 @@ theorem blind_rename {t t' : Term} (h : Blind t t') :
   | ifBool _ _ _ i1 i2 i3 => intro f; simp only [Term.rename]; exact .ifBool (i1 f) (i2 f) (i3 f)
   | perform _ ih => intro f; simp only [Term.rename]; exact .perform (ih f)
   | done _ ih => intro f; simp only [Term.rename]; exact .done (ih f)
+  | split names _ _ i1 i2 => intro f; simp only [Term.rename]; exact .split names (i1 f) (i2 f)
 
 theorem blind_lift {σ σ' : Nat → Term} (h : ∀ n, Blind (σ n) (σ' n)) :
     ∀ n, Blind (liftSubstitution σ n) (liftSubstitution σ' n)
@@ -206,6 +210,7 @@ theorem blind_substitute {t t' : Term} (h : Blind t t') :
     intro σ σ' hσ; simp only [Term.substitute]; exact .ifBool (i1 hσ) (i2 hσ) (i3 hσ)
   | perform _ ih => intro σ σ' hσ; simp only [Term.substitute]; exact .perform (ih hσ)
   | done _ ih => intro σ σ' hσ; simp only [Term.substitute]; exact .done (ih hσ)
+  | split names _ _ i1 i2 => intro σ σ' hσ; simp only [Term.substitute]; exact .split names (i1 hσ) (i2 hσ)
 
 theorem blind_single {a a' : Term} (h : Blind a a') : ∀ n, Blind (single a n) (single a' n)
   | 0 => h
@@ -227,6 +232,29 @@ theorem blind_literal {v v' : Term} (lit : Literal v) (h : Blind v v') : v' = v 
 
 theorem blind_value {v v' : Term} (value : Value v) (h : Blind v v') : Value v' := by
   cases value <;> cases h <;> constructor
+
+/-- Blind records give blind destructor reducts. -/
+theorem splitValues_blind {fs fs' : List (String × Term)} (n1 : fs.map Prod.fst = fs'.map Prod.fst)
+    (r1 : ∀ p ∈ fs.zip fs', Blind p.1.2 p.2.2) :
+    ∀ {names : List String} {f f' : Term} {vs : List Term}, Blind f f' → splitValues fs names = some vs →
+      ∃ vs', splitValues fs' names = some vs' ∧ Blind (applyAll f vs) (applyAll f' vs')
+  | [], _, _, vs, af, h => by simp [splitValues] at h; subst h; exact ⟨[], rfl, af⟩
+  | name :: names, f, f', vs, af, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i pair hp
+      obtain ⟨label, body⟩ := pair
+      have hl : label = name := by have := List.find?_some hp; simpa using this
+      subst hl
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hr
+        simp only [pure, Option.some.injEq] at h; subst h
+        obtain ⟨body', hit', ab⟩ := find_left n1 r1 hp
+        obtain ⟨vs', hv', a⟩ := splitValues_blind n1 r1 (f := .app f body) (f' := .app f' body') (.app af ab) hr
+        exact ⟨body' :: vs', by simp [splitValues, hit', hv'], by simpa [applyAll] using a⟩
 
 /-- A step of one blind term is matched by a step of the other. -/
 theorem step_blind {t t' : Term} (h : Blind t t') :
@@ -313,6 +341,15 @@ theorem step_blind {t t' : Term} (h : Blind t t') :
     | ifFalse => cases hc; exact ⟨_, .ifFalse _ _, hy⟩
   | perform => intro u st; cases st
   | done hv _ => intro u st; cases st; exact ⟨_, .done _, hv⟩
+  | split names hg hf ihg _ =>
+    intro u st
+    cases st with
+    | splitTarget _ _ st' => obtain ⟨_, s, b⟩ := ihg st'; exact ⟨_, .splitTarget _ _ s, .split names b hf⟩
+    | splitRecord _ _ _ _ hit =>
+      cases hg with
+      | record n1 r1 =>
+        obtain ⟨_, hit', b⟩ := splitValues_blind n1 r1 hf hit
+        exact ⟨_, .splitRecord _ _ _ _ hit', b⟩
 
 theorem steps_blind {t t' u : Term} (h : Blind t t') (s : Steps t u) : ∃ u', Steps t' u' ∧ Blind u u' := by
   induction s generalizing t' with
@@ -357,6 +394,7 @@ def observes : Term → Bool
   | .record fs => (fs.map fun f => observes f.2).any id
   | .ifZero a b c | .ifBool a b c => observes a || observes b || observes c
   | .case a arms => observes a || (arms.map fun f => observes f.2).any id
+  | .split a _ b => observes a || observes b
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf
@@ -451,6 +489,9 @@ theorem obsFree_of_observes : (t : Term) → observes t = false → ObsFree t
     have harms := any_fields_false h.2
     exact .case (obsFree_of_observes a h.1) rfl
       (zip_refl (fun (x y : String × Term) => Blind x.2 y.2) arms (fun f hf => obsFree_of_observes f.2 (harms f hf)))
+  | .split a names b, h => by
+    simp only [observes, Bool.or_eq_false_iff] at h
+    exact .split names (obsFree_of_observes a h.1) (obsFree_of_observes b h.2)
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf

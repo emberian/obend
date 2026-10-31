@@ -127,7 +127,7 @@ theorem typed_fields_allocation {assumptions : Assumptions} {context : Context}
       | cons bodyTyped restTyped bodyPure =>
         rename_i bodyType tailRow bodyUses restUses
         have bodyLength := source_uses_length bodyTyped
-        have restLength := source_uses_length (PartialTyping.record restTyped)
+        have restLength := fields_uses_length restTyped
         have bodySafe := safe_add_uses_left context _ _ bodyLength restLength safe
         have restSafe := safe_add_uses_right context _ _ bodyLength restLength safe
         let middle := types ++ [bodyType]
@@ -245,7 +245,7 @@ theorem source_record_decomposition {assumptions : Assumptions} {context : Conte
     obtain ⟨row,fields,path⟩ := ih
     exact ⟨row,fields,.step path agreement⟩
   case record =>
-    intro context fields row uses fieldsTyped ihFields
+    intro context fields row uses fieldsTyped _ ihFields
     exact ⟨row,fieldsTyped,.refl row⟩
   all_goals (intros; trivial)
 

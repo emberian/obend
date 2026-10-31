@@ -126,7 +126,7 @@ theorem provenance_typed (T : Ty) {context : Context} {operand : Term} {uses : U
     PartialTyping metaAssumptions context (provenance b operand) (.variable metaVariable)
       (if b then uses else zeroUses context) := by
   cases b
-  · exact .conversion (.inject (fuel := 4) (.record (.nil context)) (by decide) rfl) meta_conversion
+  · exact .conversion (.inject (fuel := 4) (.record (.nil context) rfl) (by decide) rfl) meta_conversion
   · exact .metadata typed free
 
 /-- The compose lowering is typable by the Core4 typing relation at EVERY shareable target `T`: two
@@ -147,7 +147,7 @@ theorem compose_typed (T : Ty) (shareable : T.shareable = true) {context : Conte
   have metaTyped : PartialTyping metaAssumptions context
       (.inject "composed" (.record [("inherited", inherited), ("wrapping", wrapping)]))
       (.variable metaVariable) (addUses iu (addUses wu (zeroUses context))) :=
-    .conversion (.inject (fuel := 4) (.record (.cons inheritedTyped (.cons wrappingTyped (.nil context) rfl) rfl))
+    .conversion (.inject (fuel := 4) (.record (.cons inheritedTyped (.cons wrappingTyped (.nil context) rfl) rfl) rfl)
       (by decide) rfl) meta_conversion
   have mixTyped : PartialTyping metaAssumptions context (.mix lower upper) (extTy T) (addUses lu uu) :=
     .mix lowerTyped upperTyped (operand_callable T left) (operand_callable T right) captures under under under

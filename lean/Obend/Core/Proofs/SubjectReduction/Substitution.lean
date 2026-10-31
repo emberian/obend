@@ -431,24 +431,24 @@ theorem subst_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Us
       (argumentAllowed_transport S (source_uses_length argTyped) (source_uses_length ha) lea allowed),
       add_image_le l ((source_uses_length hf).trans (source_uses_length ha).symm) lef lea⟩
   case record =>
-    intro Γ fields row uses fieldsTyped ih d σ A ua S budget
+    intro Γ fields row uses fieldsTyped distinct ih d σ A ua S budget
     obtain ⟨u', h, le⟩ := ih d σ A ua S budget
     simp only [Term.substitute]
-    exact ⟨u', .record h, le⟩
+    exact ⟨u', .record h (by simpa using distinct), le⟩
   case get =>
     intro Γ target targetType member uses name fuel targetTyped lookup free ih d σ A ua S budget
     obtain ⟨u', h, le⟩ := ih d σ A ua S budget
     simp only [Term.substitute]
     exact ⟨u', .get h lookup (linearFree_transport S free (source_uses_length h) le), le⟩
   case extend =>
-    intro Γ target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow free ihTarget ihFields
+    intro Γ target fields targetType row tu fu rowFuel targetTyped fieldsTyped distinct isRow free ihTarget ihFields
       d σ A ua S budget
-    have l := (source_uses_length targetTyped).trans (source_uses_length (PartialTyping.record fieldsTyped)).symm
+    have l := (source_uses_length targetTyped).trans (fields_uses_length fieldsTyped).symm
     obtain ⟨tu', ht, let'⟩ := ihTarget d σ A ua S (budget_mono (add_le_left l) budget)
     obtain ⟨fu', hfs, lef⟩ := ihFields d σ A ua S (budget_mono (add_le_right l) budget)
     simp only [Term.substitute]
-    exact ⟨_, .extend ht hfs isRow (linearFree_transport S free (source_uses_length ht) let'),
-      add_image_le l ((source_uses_length ht).trans (source_uses_length (PartialTyping.record hfs)).symm) let' lef⟩
+    exact ⟨_, .extend ht hfs (by simpa using distinct) isRow (linearFree_transport S free (source_uses_length ht) let'),
+      add_image_le l ((source_uses_length ht).trans (fields_uses_length hfs).symm) let' lef⟩
   case specification =>
     intro Γ metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mPure ePure free
       ihM ihE d σ A ua S budget
@@ -589,16 +589,26 @@ theorem subst_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Us
     simp only [Term.substitute]
     exact ⟨_, .effectCase hs ha pure (by simpa using distinct) (caseAllowed_transport S (source_uses_length hs) les allowed),
       add_image_le l ((source_uses_length hs).trans (Obend.Core.Proofs.Preservation.arms_uses_length ha).symm) les lea⟩
+  case split =>
+    intro Γ target function names row functionType result tu fu targetTyped functionTyped nodup covers spine
+      ihT ihF d σ A ua S budget
+    have l := (source_uses_length targetTyped).trans (source_uses_length functionTyped).symm
+    obtain ⟨tu', ht, let'⟩ := ihT d σ A ua S (budget_mono (add_le_left l) budget)
+    obtain ⟨fu', hf, lef⟩ := ihF d σ A ua S (budget_mono (add_le_right l) budget)
+    simp only [Term.substitute]
+    exact ⟨_, .split ht hf nodup covers
+      (spine.transport fun q allowed => caseAllowed_transport S (source_uses_length ht) let' allowed),
+      add_image_le l ((source_uses_length ht).trans (source_uses_length hf).symm) let' lef⟩
   case nil =>
     intro Γ d σ A ua S budget
     exact ⟨_, .nil _, fun j => by rw [getD_zeroUses]; exact Nat.zero_le _⟩
   case cons =>
     intro Γ name body rest type row bu ru bodyTyped restTyped pure ihBody ihRest d σ A ua S budget
-    have l := (source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record restTyped)).symm
+    have l := (source_uses_length bodyTyped).trans (fields_uses_length restTyped).symm
     obtain ⟨bu', hb, leb⟩ := ihBody d σ A ua S (budget_mono (add_le_left l) budget)
     obtain ⟨ru', hr, ler⟩ := ihRest d σ A ua S (budget_mono (add_le_right l) budget)
     exact ⟨_, .cons hb hr pure,
-      add_image_le l ((source_uses_length hb).trans (source_uses_length (PartialTyping.record hr)).symm) leb ler⟩
+      add_image_le l ((source_uses_length hb).trans (fields_uses_length hr).symm) leb ler⟩
   case nil =>
     intro Γ q result d σ A ua S budget
     refine ⟨_, .nil _ q result, fun j => by rw [getD_zeroUses]; exact Nat.zero_le _, fun j _ => ?_⟩

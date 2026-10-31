@@ -432,6 +432,74 @@ give it a payload type no scrutinee determines; both judgments refuse it instead
     simp only [List.map_cons, labelsDistinct, List.any_map, labelsDistinct_map f rest]
     rfl
 
+/-- The labels on a row's spine of explicit fields. -/
+@[expose] def spineLabels : Ty → List String
+  | .field name _ tail => name :: spineLabels tail
+  | _ => []
+
+/-- The parameters a destructor's `function` takes, one per name, against the target's row `row` and
+uses `uses`: each parameter's domain is the row's member of that name (up to `sameType`) and is not an
+activity, its quantity is one the target allows (`caseAllowed`, as a `case` binds its payload: a target
+that uses a `linear` hypothesis gives every field to a `linear` parameter), and an `unrestricted`
+parameter takes a shareable member. What remains after the last name is `result`. -/
+@[expose] def SplitSpine (assumptions : Assumptions) (context : Context) (uses : Uses) (row : Ty) :
+    List String → Ty → Ty → Prop
+  | [], functionType, result => functionType = result
+  | name :: names, functionType, result => ∃ reuse quantity member codomain,
+      callable functionType = .arrow reuse quantity member codomain ∧
+      (∃ fuel found, row.lookup assumptions.bounds fuel name = some found ∧
+        sameType assumptions found member = true) ∧
+      member.isComputation = false ∧
+      caseAllowed assumptions quantity context uses = true ∧
+      (quantity != .unrestricted || member.shareableUnder assumptions.shareableVariables) = true ∧
+      SplitSpine assumptions context uses row names codomain result
+
+/-- `SplitSpine` without the target's uses, its members listed: what the machine's destructor frame
+needs of its function. -/
+@[expose] def SplitShape (assumptions : Assumptions) (row : Ty) : List String → List Ty → Ty → Ty → Prop
+  | [], [], functionType, result => functionType = result
+  | name :: names, member :: members, functionType, result => ∃ reuse quantity codomain,
+      callable functionType = .arrow reuse quantity member codomain ∧
+      (∃ fuel found, row.lookup assumptions.bounds fuel name = some found ∧
+        sameType assumptions found member = true) ∧
+      member.isComputation = false ∧
+      (quantity != .unrestricted || member.shareableUnder assumptions.shareableVariables) = true ∧
+      SplitShape assumptions row names members codomain result
+  | _, _, _, _ => False
+
+theorem SplitShape.length {assumptions : Assumptions} {row : Ty} :
+    ∀ {names : List String} {members : List Ty} {functionType result : Ty},
+      SplitShape assumptions row names members functionType result → members.length = names.length
+  | [], [], _, _, _ => rfl
+  | _ :: _, _ :: _, _, _, ⟨_, _, _, _, _, _, _, rest⟩ => by simp [SplitShape.length rest]
+  | [], _ :: _, _, _, h => h.elim
+  | _ :: _, [], _, _, h => h.elim
+
+/-- A spine depends on the target's uses only through `caseAllowed`. -/
+theorem SplitSpine.transport {assumptions : Assumptions} {context context' : Context} {uses uses' : Uses} {row : Ty}
+    (allowed : ∀ q, caseAllowed assumptions q context uses = true → caseAllowed assumptions q context' uses' = true) :
+    ∀ {names : List String} {functionType result : Ty},
+      SplitSpine assumptions context uses row names functionType result →
+      SplitSpine assumptions context' uses' row names functionType result
+  | [], _, _, h => h
+  | _ :: _, _, _, ⟨r, q, m, c, h1, h2, h3, h4, h5, h6⟩ =>
+    ⟨r, q, m, c, h1, h2, h3, allowed q h4, h5, SplitSpine.transport allowed h6⟩
+
+/-- A spine to its machine shape, with the members it names. -/
+theorem SplitSpine.shape {assumptions : Assumptions} {context : Context} {uses : Uses} {row : Ty} :
+    ∀ {names : List String} {functionType result : Ty},
+      SplitSpine assumptions context uses row names functionType result →
+      ∃ members, SplitShape assumptions row names members functionType result
+  | [], _, _, h => ⟨[], h⟩
+  | _ :: _, _, _, ⟨r, q, m, c, h1, h2, h3, _, h5, h6⟩ =>
+    let ⟨members, rest⟩ := SplitSpine.shape h6
+    ⟨m :: members, r, q, c, h1, h2, h3, h5, rest⟩
+
+/-- A destructor's target row is closed and explicit (its spine of fields ends in `{}`, so no rigid
+`Self` can widen it at instantiation), and `names` names every label on it: no field is dropped. -/
+@[expose] def SplitCovers (row : Ty) (names : List String) : Bool :=
+  row.tail == .emptyRow && (spineLabels row).all names.contains
+
 mutual
 /-- A derivation over the independent runtime syntax. This judges partial
 computations only: Fix is not evaluated by Lean's definitional conversion. -/
@@ -464,8 +532,11 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       callable functionType = .arrow reuse quantity domain codomain → argumentType = domain →
       argumentAllowed assumptions quantity context argumentType argumentUses = true →
       PartialTyping assumptions context (.app function argument) codomain (addUses functionUses argumentUses)
+  /-- A record names each field once: a repeated label would be a field no `get` reaches and no
+  destructor passes, so it would drop what it holds. -/
   | record {context : Context} {fields : List (String × Term)} {row : Ty} {uses : Uses} :
       FieldsTyping assumptions context fields row uses →
+      labelsDistinct fields = true →
       PartialTyping assumptions context (.record fields) row uses
   /-- A projection keeps one component and drops the rest, so (like `reflect`, `metadata` and
   `project`) its target uses no `linear` hypothesis: records and pairs are multiplicative, and a
@@ -481,6 +552,7 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       {targetType row : Ty} {targetUses fieldUses : Uses} {fuel : Nat} :
       PartialTyping assumptions context target targetType targetUses →
       FieldsTyping assumptions context fields row fieldUses →
+      labelsDistinct fields = true →
       targetType.isRow assumptions.bounds fuel = true →
       linearFree context targetUses = true →
       PartialTyping assumptions context (.extend target fields) (overlay row targetType) (addUses targetUses fieldUses)
@@ -579,6 +651,18 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       labelsDistinct arms = true →
       caseAllowed assumptions q context su = true →
       PartialTyping assumptions context (.case scrutinee arms) (.computation planType response result) (addUses su au)
+  /-- The consuming record destructor: the target is consumed once, whole, and each field named goes
+  to its own parameter of `function` (`SplitSpine`), so a `linear` target's fields are each used
+  exactly once; the names are distinct and cover the target's closed row (`SplitCovers`), so no
+  field is dropped. The positive counterpart to the projection refusal (`get`'s `linearFree`). -/
+  | split {context : Context} {target function : Term} {names : List String}
+      {row functionType result : Ty} {tu fu : Uses} :
+      PartialTyping assumptions context target row tu →
+      PartialTyping assumptions context function functionType fu →
+      names.Nodup →
+      SplitCovers row names = true →
+      SplitSpine assumptions context tu row names functionType result →
+      PartialTyping assumptions context (.split target names function) result (addUses tu fu)
 inductive FieldsTyping (assumptions : Assumptions) : Context → List (String × Term) → Ty → Uses → Prop where
   | nil (context : Context) : FieldsTyping assumptions context [] .emptyRow (zeroUses context)
   | cons {context : Context} {name : String} {body : Term} {rest : List (String × Term)} {type row : Ty} {bu ru : Uses} :

@@ -64,6 +64,7 @@ public theorem FrameTyping.weaken {assumptions : Assumptions} {before after : Ad
   | ifBool whenTrue whenFalse =>
       exact .ifBool (ClosureTyping.weaken extension whenTrue) (ClosureTyping.weaken extension whenFalse)
   | effectCase environment arms valid pure => exact .effectCase (environment.weaken extension) arms valid pure
+  | split function closed shape => exact .split (ClosureTyping.weaken extension function) closed shape
 
 public theorem StackTyping.weaken {assumptions : Assumptions} {before after : AddressTypes}
     {stack : List Frame} {input output : Ty} (extension : TypeExtension before after)

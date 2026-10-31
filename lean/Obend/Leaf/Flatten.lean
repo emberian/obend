@@ -95,6 +95,7 @@ def resolve : Term → Term
   | .ifBool c x y => .ifBool (resolve c) (resolve x) (resolve y)
   | .perform p => .perform (resolve p)
   | .done v => .done (resolve v)
+  | .split t names f => .split (resolve t) names (resolve f)
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf
@@ -173,6 +174,7 @@ theorem ahead_resolve : (t : Term) → Ahead t (resolve t)
     simp only [resolve]; exact .ifBool (ahead_resolve c) (ahead_resolve x) (ahead_resolve y)
   | .perform p => by simp only [resolve]; exact .perform (ahead_resolve p)
   | .done v => by simp only [resolve]; exact .done (ahead_resolve v)
+  | .split t names f => by simp only [resolve]; exact .split names (ahead_resolve t) (ahead_resolve f)
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf

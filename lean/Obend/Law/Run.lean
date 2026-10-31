@@ -72,6 +72,10 @@ set_option autoImplicit false
     | .boolean false => some y
     | _ => (step? c).map (fun c' => .ifBool c' x y)
   | .done v => some v
+  | .split t names f =>
+    match t with
+    | .record fs => (splitValues fs names).map (applyAll f)
+    | _ => (step? t).map (fun t' => .split t' names f)
   | _ => none
 
 /-- At most `fuel` steps to a value. -/

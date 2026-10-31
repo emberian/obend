@@ -186,6 +186,13 @@ inductive FrameTyping (assumptions : Assumptions) (types : AddressTypes) : Frame
       ClosureTyping assumptions types ⟨whenTrue,environment⟩ result →
       ClosureTyping assumptions types ⟨whenFalse,environment⟩ result →
       FrameTyping assumptions types (.ifBool whenTrue whenFalse environment) .boolean result
+  /-- A destructor awaiting its target: the function's parameters take the row's named members. -/
+  | split {names : List String} {function : Term} {environment : Environment} {row functionType result : Ty}
+      {members : List Ty} :
+      ClosureTyping assumptions types ⟨function, environment⟩ functionType →
+      row.tail = .emptyRow →
+      SplitShape assumptions row names members functionType result →
+      FrameTyping assumptions types (.split names function environment) row result
   /-- The same case frame sequencing an activity: it consumes the activity's
   produced variant and continues with an activity arm. -/
   | effectCase {arms : List (String × Term)} {environment : Environment}
@@ -255,7 +262,7 @@ theorem source_uses_length {assumptions : Assumptions} {context : Context}
     (motive_1 := fun context _ _ uses _ => uses.length = context.length)
     (motive_2 := fun context _ _ uses _ => uses.length = context.length)
     (motive_3 := fun context _ _ _ _ uses _ => uses.length = context.length)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; simp [variableUses]
   · intros; simp [zeroUses]
   · intros; simp [zeroUses]
@@ -281,10 +288,19 @@ theorem source_uses_length {assumptions : Assumptions} {context : Context}
   · intros; assumption
   · intros; assumption
   · intros; simp_all [addUses,joinUses,List.length_zipWith]
-  · intros; simp [zeroUses]
   · intros; simp_all [addUses,joinUses,List.length_zipWith]
   · intros; simp [zeroUses]
   · intros; simp_all [addUses,joinUses,List.length_zipWith]
+  · intros; simp [zeroUses]
+  · intros; simp_all [addUses,joinUses,List.length_zipWith]
+
+/-- Fields account for every lexical slot (as `source_uses_length` does for terms). -/
+theorem fields_uses_length {assumptions : Assumptions} {context : Context} :
+    ∀ {fields : List (String × Term)} {row : Ty} {uses : Uses},
+      FieldsTyping assumptions context fields row uses → uses.length = context.length
+  | [], _, _, .nil _ => by simp [zeroUses]
+  | _ :: _, _, _, .cons hb hr _ => by
+    simp [addUses, List.length_zipWith, source_uses_length hb, fields_uses_length hr]
 
 /-- Finite authored record rows are rows at some adequate probe depth.
 The graph value relation therefore imposes no arbitrary 64-member ceiling. -/
@@ -296,7 +312,8 @@ theorem source_fields_row {assumptions : Assumptions} {context : Context}
     (motive_1 := fun _ _ _ _ _ => True)
     (motive_2 := fun _ _ row _ _ => ∃ fuel, row.isRow assumptions.bounds fuel = true)
     (motive_3 := fun _ _ _ _ _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+  · intros; trivial
   · intros; trivial
   · intros; trivial
   · intros; trivial
@@ -339,7 +356,7 @@ theorem source_scoped {assumptions : Assumptions} {context : Context}
     (motive_1 := fun context term _ _ _ => Obend.Core.Invariant.Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ field ∈ fields, Obend.Core.Invariant.Scoped context.length field.2)
     (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Obend.Core.Invariant.Scoped (context.length+1) arm.2)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
 
   · intro context index binding found
     exact .bound (List.getElem?_eq_some_iff.mp found).1
@@ -369,6 +386,7 @@ theorem source_scoped {assumptions : Assumptions} {context : Context}
   · intros; exact .perform (by assumption)
   · intros; exact .done (by assumption)
   · intros; exact .case (by assumption) (by assumption)
+  · intros; exact .split (by assumption) (by assumption)
   · intro context field member; simp at member
   · intro context name body rest type row bu ru hb hr _ ihb ihr field member
     simp only [List.mem_cons] at member
@@ -390,7 +408,7 @@ theorem source_fields_scoped {assumptions : Assumptions} {context : Context}
     (motive_1 := fun context term _ _ _ => Obend.Core.Invariant.Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ field ∈ fields, Obend.Core.Invariant.Scoped context.length field.2)
     (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Obend.Core.Invariant.Scoped (context.length+1) arm.2)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
 
   · intro context index binding found
     exact .bound (List.getElem?_eq_some_iff.mp found).1
@@ -420,6 +438,7 @@ theorem source_fields_scoped {assumptions : Assumptions} {context : Context}
   · intros; exact .perform (by assumption)
   · intros; exact .done (by assumption)
   · intros; exact .case (by assumption) (by assumption)
+  · intros; exact .split (by assumption) (by assumption)
   · intro context field member; simp at member
   · intro context name body rest type row bu ru hb hr _ ihb ihr field member
     simp only [List.mem_cons] at member

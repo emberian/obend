@@ -419,6 +419,10 @@ theorem sim_step {r : Tail} {n : Nat} (ih : SimBelow n)
     cases h with
     | value h0 => exact absurd h0 hv
     | headEval h' => exact lift hs0 h' rfl
+  | split names hg hf =>
+    cases h with
+    | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
   | app hf ha =>
     cases h with
     | value h0 => exact absurd h0 hv

@@ -25,7 +25,9 @@ set_option autoImplicit false
 public theorem stepRaw_stack_shape (s : State) :
     (stepRaw s).stack = s.stack ∨ (∃ fr, (stepRaw s).stack = fr :: s.stack) ∨
     (∃ fr rest, s.stack = fr :: rest ∧ (∀ a, fr ≠ .update a) ∧ ∃ fr', (stepRaw s).stack = fr' :: rest) ∨
-    (∃ fr rest, s.stack = fr :: rest ∧ (stepRaw s).stack = rest) := by
+    (∃ fr rest, s.stack = fr :: rest ∧ (stepRaw s).stack = rest) ∨
+    (∃ fr rest frs, s.stack = fr :: rest ∧ (∀ a, fr ≠ .update a) ∧ (∀ f ∈ frs, ∀ a, f ≠ .update a) ∧
+      (stepRaw s).stack = frs ++ rest ∧ ∃ v, s.control = .returned v) := by
   obtain ⟨heap, control, stack⟩ := s
   cases control with
   | complete _ | refused _ | blackhole _ | yielded _ => left; rfl
@@ -38,7 +40,21 @@ public theorem stepRaw_stack_shape (s : State) :
     cases stack with
     | nil => left; rfl
     | cons frame rest =>
-      cases frame <;> simp only [stepRaw] <;> (try split) <;> (try split) <;> (try split) <;> simp
+      cases frame
+      case split names function environment =>
+        simp only [stepRaw]
+        split
+        · split
+          · rename_i addresses _
+            right; right; right; right
+            refine ⟨_, rest, _, rfl, by simp, ?_, rfl, _, rfl⟩
+            intro f mem a
+            simp only [splitFrames, List.mem_map] at mem
+            obtain ⟨_, _, rfl⟩ := mem
+            simp
+          · simp
+        · simp
+      all_goals simp only [stepRaw] <;> (try split) <;> (try split) <;> (try split) <;> simp
 
 @[expose] public def withStack (s : State) (R : List Frame) : State := ⟨s.heap, s.control, s.stack ++ R⟩
 
@@ -241,6 +257,7 @@ public theorem addrValid_stepRaw {s : State} (valid : AddrValid s) : AddrValid (
     case case scrutinee arms => exact ⟨hv, envIn, frames_cons envIn sv⟩
     case ifBool condition whenTrue whenFalse => exact ⟨hv, envIn, frames_cons envIn sv⟩
     case done value => exact ⟨hv, envIn, sv⟩
+    case split target names function => exact ⟨hv, envIn, frames_cons envIn sv⟩
     case perform plan =>
       simp only [stepRaw]
       cases shared : forcingShared stack with
@@ -373,6 +390,29 @@ public theorem addrValid_stepRaw {s : State} (valid : AddrValid s) : AddrValid (
         simp only [stepRaw]
         cases v with
         | boolean b => cases b <;> exact ⟨hv, frameIn, restIn⟩
+        | _ => exact ⟨hv, by simp [controlAddresses], restIn⟩
+      | split names function environment =>
+        simp only [stepRaw]
+        cases v with
+        | record fields =>
+          dsimp only
+          cases found : splitValues fields names with
+          | none => exact ⟨hv, by simp [controlAddresses], restIn⟩
+          | some addresses =>
+            dsimp only
+            have environmentIn : AllIn (· < heap.size) environment := frameIn
+            have addressesIn : AllIn (· < heap.size) addresses := by
+              intro x hx
+              obtain ⟨field, hf, rfl⟩ := Obend.Core.Invariant.splitValues_mem found x hx
+              exact valueIn _ (List.mem_map_of_mem hf)
+            obtain ⟨v', le, inside⟩ := allocateFields_valid' hv addressesIn (splitCells addresses.length)
+            refine ⟨v', allBelow_mono environmentIn le, ?_⟩
+            intro frame member
+            rcases List.mem_append.mp member with m | m
+            · simp only [splitFrames, List.mem_map] at m
+              obtain ⟨a, ha, rfl⟩ := m
+              exact allIn_cons (inside a (List.mem_map.mpr ha)) (allIn_nil _)
+            · exact frames_mono restIn le frame m
         | _ => exact ⟨hv, by simp [controlAddresses], restIn⟩
 
 

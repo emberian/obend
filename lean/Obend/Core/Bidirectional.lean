@@ -66,6 +66,8 @@ inductive CheckRefusal where
   case's annotation says `linear`) and does not use it. -/
   | linearScrutinee (path : List Nat)
   | capturesNotShareable (path : List Nat)
+  /-- The destructor at `path` does not name the field `name` of its target: it would drop it. -/
+  | fieldDropped (path : List Nat) (name : String)
   | notShareable (path : List Nat) (type : Ty)
   | activityMisplaced (path : List Nat) (type : Ty)
   | invalidContext (path : List Nat)
@@ -233,6 +235,34 @@ def caseRefusal (path : List Nat) (quantity : Quantity) (context : Context) (use
   | .linear, _ | _, none => .capturesNotShareable path
   | _, some index => .linearArgumentDropped path index quantity
 
+/-- A destructor's parameters checked against its target's row, name by name (`SplitSpine`): the
+function's type is read as given (its annotation is the parent's codomain), so the walk is exact. -/
+def checkSpine (assumptions : Assumptions) (context : Context) (path : List Nat) (uses : Uses) (row : Ty) :
+    (names : List String) → (functionType : Ty) →
+      Except CheckRefusal ((result : Ty) ×' SplitSpine assumptions context uses row names functionType result)
+  | [], functionType => pure ⟨functionType, rfl⟩
+  | name :: names, functionType =>
+    match shape : callable functionType with
+    | .arrow reuse quantity member codomain =>
+      match found : lookupV assumptions.bounds [] row name with
+      | some actual =>
+        if agrees : sameType assumptions actual member = true then do
+          let ⟨hc⟩ ← need (!member.isComputation) (.activityMisplaced (path ++ [1]) member)
+          let ⟨ha⟩ ← need (caseAllowed assumptions quantity context uses) (caseRefusal path quantity context uses)
+          let ⟨hu⟩ ← need (quantity != .unrestricted || member.shareableUnder assumptions.shareableVariables)
+            (.notShareable (path ++ [1]) member)
+          let rest ← checkSpine assumptions context path uses row names codomain
+          pure ⟨rest.1, reuse, quantity, member, codomain, shape,
+            (by obtain ⟨fuel, l⟩ := (lookupV_iff _ _ _ _).1 found; exact ⟨fuel, actual, l, agrees⟩),
+            by simpa using hc, ha, hu, rest.2⟩
+        else throw (.typeMismatch (path ++ [1]) member actual)
+      | none => throw (.unknownLabel (path ++ [0]) name row)
+    | _ => throw (.shapeMismatch (path ++ [1]) "function" functionType)
+
+/-- The first label on the row's spine a destructor does not name (`""` if the spine is not closed). -/
+def uncoveredLabel (row : Ty) (names : List String) : String :=
+  ((spineLabels row).find? fun name => !names.contains name).getD ""
+
 /-- A synthesized type. -/
 abbrev Synth (assumptions : Assumptions) (context : Context) (term : Term) := Inferred assumptions context term
 
@@ -375,6 +405,22 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       finish assumptions annotations path ⟨member, value.uses,
         (by obtain ⟨fuel, h⟩ := (lookupV_iff _ _ _ _).1 found; exact .get value.derivation h hl)⟩ mode
     | none => throw (.unknownLabel (path ++ [0]) name value.type)
+  | .split target names function, mode => do
+    let value ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [0]) target .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [0]) target (.check annotation.domain)).map checkedSynth
+    let fn ← match annotations path with
+      | none => elaborate assumptions annotations context (path ++ [1]) function .synth
+      | some annotation =>
+        (elaborate assumptions annotations context (path ++ [1]) function (.check annotation.codomain)).map checkedSynth
+    let row := representativeHead assumptions annotations path value.type
+    let ⟨hn⟩ ← need (decide names.Nodup) (.duplicateLabels path)
+    let ⟨hc⟩ ← need (SplitCovers row names) (.fieldDropped path (uncoveredLabel row names))
+    let spine ← checkSpine assumptions context path value.uses row names fn.type
+    finish assumptions annotations path ⟨spine.1, addUses value.uses fn.uses,
+      .split (.conversion value.derivation (sameType_representativeHead assumptions annotations path value.type))
+        fn.derivation (of_decide_eq_true hn) hc spine.2⟩ mode
   | .reflect target, mode => do
     let value ← match annotations path with
       | none => elaborate assumptions annotations context (path ++ [0]) target .synth
@@ -532,23 +578,20 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
             (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
         | _ => throw (.shapeMismatch path "activity" expected)
   | .record fields, mode =>
-    introduce annotations path (fun expected =>
+    introduce annotations path (fun expected => do
+      -- a record names each field once (`PartialTyping.record`)
+      let ⟨hd⟩ ← need (labelsDistinct fields) (.duplicateLabels path)
       if (annotations path).isSome then do
         let members ← checkFields assumptions annotations context path 0 fields expected
-        pure ⟨members.uses, .record members.derivation⟩
-      else if distinct : labelsDistinct fields = true then do
+        pure ⟨members.uses, .record members.derivation hd⟩
+      else do
         let members ← checkFieldsByLabel assumptions annotations context path 0 (representativeHead assumptions annotations path expected) fields
         let ⟨hc⟩ ← need (sameType assumptions members.type expected) (.typeMismatch path expected members.type)
-        pure ⟨members.uses, .conversion (.record members.derivation) hc⟩
-      else do
-        -- a repeated label shadows: the expected row cannot say what the hidden field's type
-        -- is, so the fields are synthesized and the row converted at the mode switch
-        let row ← synthFields assumptions annotations context path 0 fields
-        let ⟨hc⟩ ← need (sameType assumptions row.type expected) (.typeMismatch path expected row.type)
-        pure ⟨row.uses, .conversion (.record row.derivation) hc⟩)
+        pure ⟨members.uses, .conversion (.record members.derivation hd) hc⟩)
       (do
+        let ⟨hd⟩ ← need (labelsDistinct fields) (.duplicateLabels path)
         let row ← synthFields assumptions annotations context path 0 fields
-        pure ⟨row.type, row.uses, .record row.derivation⟩) mode
+        pure ⟨row.type, row.uses, .record row.derivation hd⟩) mode
   | .specification metadata extension, mode =>
     introduce annotations path (fun expected =>
       match shape : representativeHead assumptions annotations path expected with
@@ -602,17 +645,19 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         let ⟨isRow⟩ ← need (isRowV assumptions.bounds [] annotation.domain)
           (.shapeMismatch (path ++ [0]) "row" annotation.domain)
         let members ← checkFields assumptions annotations context (path ++ [1]) 0 fields annotation.codomain
+        let ⟨hd⟩ ← need (labelsDistinct fields) (.duplicateLabels (path ++ [1]))
         let ⟨hl⟩ ← need (linearFree context prior.uses) (linearRefusal .linearOverwritten path context prior.uses)
         pure ⟨overlay annotation.codomain annotation.domain, addUses prior.uses members.uses,
           (by obtain ⟨fuel, h⟩ := (isRowV_iff _ _).1 isRow
-              exact .extend (.conversion prior.derivation agrees) members.derivation h hl)⟩
+              exact .extend (.conversion prior.derivation agrees) members.derivation hd h hl)⟩
       | none => do
         let ⟨isRow⟩ ← need (isRowV assumptions.bounds [] prior.type) (.shapeMismatch (path ++ [0]) "row" prior.type)
         let members ← synthFields assumptions annotations context (path ++ [1]) 0 fields
+        let ⟨hd⟩ ← need (labelsDistinct fields) (.duplicateLabels (path ++ [1]))
         let ⟨hl⟩ ← need (linearFree context prior.uses) (linearRefusal .linearOverwritten path context prior.uses)
         pure ⟨overlay members.type prior.type, addUses prior.uses members.uses,
           (by obtain ⟨fuel, h⟩ := (isRowV_iff _ _).1 isRow
-              exact .extend prior.derivation members.derivation h hl)⟩
+              exact .extend prior.derivation members.derivation hd h hl)⟩
     let typed ← synthesized
     match (dependent := true) mode with
     | .synth => pure typed

@@ -253,6 +253,7 @@ public theorem agree_stepRaw {f : Nat → Nat} {D U : Nat → Prop} {s t : State
     | case scrutinee arms => exact ⟨hr, envIn, rfl, frames_cons envIn stackIn, rfl⟩
     | ifBool condition whenTrue whenFalse => exact ⟨hr, envIn, rfl, frames_cons envIn stackIn, rfl⟩
     | done value => exact ⟨hr, envIn, rfl, stackIn, rfl⟩
+    | split target names function => exact ⟨hr, envIn, rfl, frames_cons envIn stackIn, rfl⟩
     | perform plan =>
       simp only [stepRaw, renameControl, forcingShared_rename]
       cases shared : forcingShared stack with
@@ -378,6 +379,34 @@ public theorem agree_stepRaw {f : Nat → Nat} {D U : Nat → Prop} {s t : State
       | ifBool whenTrue whenFalse environment =>
         cases v with
         | boolean b => cases b <;> exact ⟨hr, frameIn, rfl, restIn, rfl⟩
+        | _ => exact ⟨hr, allIn_nil D, rfl, restIn, rfl⟩
+      | split names function environment =>
+        cases v with
+        | record fields =>
+          simp only [stepRaw, renameControl, renameValue, List.map_cons, renameFrame]
+          rw [splitValues_map f fields names]
+          cases found : splitValues fields names with
+          | none => exact ⟨hr, allIn_nil D, rfl, restIn, rfl⟩
+          | some addresses =>
+            have environmentIn : AllIn D environment := frameIn
+            have addressesIn : AllIn D addresses := by
+              intro address ha
+              obtain ⟨field, hf, he⟩ := Obend.Core.Invariant.splitValues_mem found address ha
+              exact he ▸ valueIn field.2 (List.mem_map_of_mem hf)
+            obtain ⟨hr', same, inside⟩ := allocateFields_agree hr addressesIn (splitCells addresses.length)
+            have lengthEq : (addresses.map f).length = addresses.length := List.length_map ..
+            simp only [Option.map_some]
+            rw [lengthEq]
+            refine ⟨hr', environmentIn, ?_, ?_, ?_⟩
+            · rfl
+            · intro frame member
+              rcases List.mem_append.mp member with m | m
+              · simp only [splitFrames, List.mem_map] at m
+                obtain ⟨address, ha, rfl⟩ := m
+                exact allIn_cons (inside address (List.mem_map.mpr ha)) (allIn_nil D)
+              · exact restIn frame m
+            · simp only [same, splitFrames, List.map_append, List.map_map]
+              rfl
         | _ => exact ⟨hr, allIn_nil D, rfl, restIn, rfl⟩
 
 /-! ## Runs -/

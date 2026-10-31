@@ -229,6 +229,108 @@ set_option autoImplicit false
   · simp [stepRaw,returned,head,controlMeaning,newValue,retained]
   · simpa [stepRaw,returned,head] using advanced
 
+/-- A destructor's argument frames denote applying the focus to their cells, in order. -/
+theorem stackRealizes_splitFrames {meaning : AddressMeaning} {root : Term} {rest : List Frame} :
+    ∀ (cells : List Address) (focus : Term),
+      StackRealizes meaning root focus (splitFrames cells ++ rest) ↔
+        StackRealizes meaning root (applyAll focus (cells.map meaning)) rest
+  | [], focus => by simp [splitFrames, applyAll]
+  | cell :: cells, focus => by
+    have := stackRealizes_splitFrames (meaning := meaning) (root := root) (rest := rest) cells
+      (.app focus (meaning cell))
+    simpa [splitFrames, StackRealizes, frameMeaning, closeTerm, Term.substitute, environmentSubstitution,
+      applyAll] using this
+
+theorem closeTerm_splitCells (meaning : AddressMeaning) (addresses : List Address) :
+    (splitCells addresses.length).map (fun cell => closeTerm meaning addresses cell.2) = addresses.map meaning := by
+  apply List.ext_getElem (by simp [splitCells])
+  intro i h1 h2
+  simp only [splitCells, List.map_map, List.getElem_map, List.getElem_range, Function.comp_apply]
+  have hi : i < addresses.length := by simpa [splitCells] using h1
+  cases addresses with
+  | nil => simp at hi
+  | cons a as =>
+    simp [closeTerm, Term.substitute, environmentSubstitution]
+    rw [List.getElem?_eq_getElem hi]
+
+theorem stackMeaning_splitFrames (meaning : AddressMeaning) (rest : List Frame) :
+    ∀ (cells : List Address) (focus : Term),
+      stackMeaning meaning (splitFrames cells ++ rest) focus =
+        stackMeaning meaning rest (applyAll focus (cells.map meaning))
+  | [], focus => by simp [splitFrames, applyAll]
+  | cell :: cells, focus => by
+    have := stackMeaning_splitFrames meaning rest cells (.app focus (meaning cell))
+    simpa [splitFrames, stackMeaning, frameMeaning, closeTerm, Term.substitute, environmentSubstitution,
+      applyAll] using this
+
+theorem stackMeaning_frames_congr {bound : Nat} {first second : AddressMeaning} :
+    ∀ {frames : List Frame} {focus : Term}, (∀ frame ∈ frames, FrameValid bound frame) →
+      (∀ address, address < bound → first address = second address) →
+      stackMeaning first frames focus = stackMeaning second frames focus
+  | [], _, _, _ => rfl
+  | frame :: frames, focus, valid, same => by
+    simp only [stackMeaning, List.foldl_cons]
+    rw [frameMeaning_congr (valid frame (List.mem_cons_self ..)) same (hole := focus)]
+    exact stackMeaning_frames_congr (fun f m => valid f (List.mem_cons_of_mem _ m)) same
+
+ public theorem graph_split_return_names {meaning : AddressMeaning} {state : State} {source : Term}
+    {fields : List (String × Address)} {names : List String} {function : Term} {environment : Environment}
+    {rest : List Frame} {addresses : List Address}
+    (represented : GraphRepresentsBy meaning state source) (returned : state.control = .returned (.record fields))
+    (head : state.stack = .split names function environment::rest)
+    (found : splitValues fields names = some addresses) :
+    ∃ next : AddressMeaning, SourceNamesAgree state meaning next ∧ GraphRepresentsBy next (stepRaw state) source ∧
+      stackMeaning next (stepRaw state).stack (closeTerm next environment function) =
+        stackMeaning meaning rest (applyAll (closeTerm meaning environment function) (addresses.map meaning)) := by
+  obtain ⟨lexical,busy,final,names',heap,focus,control,stack⟩ := represented
+  have validFrame : FrameValid state.heap.size (.split names function environment) :=
+    lexical.2.2 _ (head ▸ List.mem_cons_self ..)
+  have validRecord : RuntimeValueValid state.heap.size (.record fields) := by
+    simpa only [returned,ControlValid] using lexical.2.1
+  have restValid : ∀ frame ∈ rest, FrameValid state.heap.size frame := by
+    intro frame member
+    apply lexical.2.2 frame
+    rw [head]
+    exact List.mem_cons_of_mem _ member
+  have captures : EnvironmentValid state.heap.size addresses := by
+    intro address ha
+    obtain ⟨field, hf, rfl⟩ := splitValues_mem found address ha
+    exact validRecord field hf
+  obtain ⟨extended,newNames,newHeap,same,cellsEq⟩ :=
+    allocateFields_realizes lexical.1 names' heap captures (scoped_splitCells addresses.length)
+  have freshMeaning : ((allocateFields state.heap addresses (splitCells addresses.length)).2.map Prod.snd).map extended =
+      addresses.map meaning := by
+    have := congrArg (List.map Prod.snd) cellsEq
+    simp only [List.map_map, Function.comp_def] at this
+    rw [List.map_map, Function.comp_def, this, ← closeTerm_splitCells meaning addresses]
+  simp [controlMeaning,returned] at control
+  subst focus
+  have before : StackRealizes meaning source
+      (.split (valueMeaning meaning (.record fields)) names (closeTerm meaning environment function)) rest := by
+    simpa only [head,StackRealizes,frameMeaning] using stack
+  have reduce : Step (.split (valueMeaning meaning (.record fields)) names (closeTerm meaning environment function))
+      (applyAll (closeTerm meaning environment function) (addresses.map meaning)) := by
+    refine Step.splitRecord _ _ _ _ ?_
+    rw [splitValues_map meaning fields names, found]; rfl
+  have advanced := stackRealizes_steps before (Steps.next reduce (Steps.refl _))
+  have consumers := stackRealizes_congr restValid same advanced
+  have functionSame : closeTerm meaning environment function = closeTerm extended environment function :=
+    closeTerm_meaning_congr validFrame.1 validFrame.2 same
+  refine ⟨extended,same,⟨stepRaw_lexicalInvariant lexical,stepRaw_busyInvariant busy,
+    stepRaw_finalStackInvariant final,?_,?_,closeTerm extended environment function,?_,?_⟩,?_⟩
+  · simpa [stepRaw,returned,head,found] using newNames
+  · simpa [stepRaw,returned,head,found] using newHeap
+  · simp [stepRaw,returned,head,found,controlMeaning]
+  · have target := (stackRealizes_splitFrames (meaning := extended) (root := source) (rest := rest)
+      ((allocateFields state.heap addresses (splitCells addresses.length)).2.map Prod.snd)
+      (closeTerm extended environment function)).mpr (by rw [freshMeaning, ← functionSame]; exact consumers)
+    simpa [stepRaw,returned,head,found] using target
+  · have stackEq : (stepRaw state).stack =
+        splitFrames ((allocateFields state.heap addresses (splitCells addresses.length)).2.map Prod.snd) ++ rest := by
+      simp [stepRaw,returned,head,found]
+    rw [stackEq, stackMeaning_splitFrames, freshMeaning, ← functionSame]
+    exact (stackMeaning_frames_congr restValid same).symm
+
  public theorem graph_evaluate_fix_names {meaning : AddressMeaning} {state : State} {source spec inherited : Term} {environment : Environment}
     (represented : GraphRepresentsBy meaning state source)
     (evaluate : state.control = .evaluate (.fix spec inherited) environment) :

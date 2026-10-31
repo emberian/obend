@@ -80,6 +80,7 @@ theorem frameValid_allIn {b : Nat} {fr : Frame} (h : FrameValid b fr) : AllIn (Â
   | binaryRight _ v => simp only [FrameValid] at h; exact valueValid_allIn h
   | case arms env => simp only [FrameValid] at h; exact h.1
   | ifBool t f env => simp only [FrameValid] at h; exact h.1
+  | split _ f env => simp only [FrameValid] at h; exact h.1
 
 theorem controlValid_allIn {b : Nat} {c : Control} (h : ControlValid b c) :
     AllIn (Â· < b) (controlAddresses c) := by

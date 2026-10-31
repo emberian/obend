@@ -61,6 +61,8 @@ public structure StepCases (P : State → Prop) : Prop where
     s.control = .evaluate (.ifBool condition whenTrue whenFalse) env → P s
   evaluate_perform : ∀ s plan env, s.control = .evaluate (.perform plan) env → P s
   evaluate_done : ∀ s value env, s.control = .evaluate (.done value) env → P s
+  evaluate_split : ∀ s target names function env,
+    s.control = .evaluate (.split target names function) env → P s
   return_nil : ∀ s value, s.control = .returned value → s.stack = [] → P s
   return_argument : ∀ s value argument env rest, s.control = .returned value →
     s.stack = .argument argument env :: rest → P s
@@ -83,6 +85,8 @@ public structure StepCases (P : State → Prop) : Prop where
     s.stack = .case arms env :: rest → P s
   return_ifBool : ∀ s value whenTrue whenFalse env rest, s.control = .returned value →
     s.stack = .ifBool whenTrue whenFalse env :: rest → P s
+  return_split : ∀ s value names function env rest, s.control = .returned value →
+    s.stack = .split names function env :: rest → P s
 
 /-- The only copy of the dispatch tree. -/
 public theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : State) : P s := by
@@ -120,6 +124,7 @@ public theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : S
           exact cases.evaluate_ifBool s condition whenTrue whenFalse env control
       case perform plan => exact cases.evaluate_perform s plan env control
       case done value => exact cases.evaluate_done s value env control
+      case split target names function => exact cases.evaluate_split s target names function env control
   | returned value =>
       cases stack : s.stack with
       | nil => exact cases.return_nil s value control stack
@@ -140,5 +145,6 @@ public theorem StepCases.apply {P : State → Prop} (cases : StepCases P) (s : S
           | case arms env => exact cases.return_case s value arms env rest control stack
           | ifBool whenTrue whenFalse env =>
               exact cases.return_ifBool s value whenTrue whenFalse env rest control stack
+          | split names function env => exact cases.return_split s value names function env rest control stack
 
 end Obend.Core.Machine

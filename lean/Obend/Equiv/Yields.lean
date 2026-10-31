@@ -45,6 +45,7 @@ inductive FrameAhead : SourceFrame → SourceFrame → Prop where
   | reflect : FrameAhead .reflect .reflect
   | metadata : FrameAhead .metadata .metadata
   | project : FrameAhead .project .project
+  | split (names : List String) {f f' : Term} : Ahead f f' → FrameAhead (.split names f) (.split names f')
 
 theorem FrameAhead.plug {f f' : SourceFrame} {h h' : Term} (hf : FrameAhead f f') (hh : Ahead h h') :
     Ahead (f.plug h) (f'.plug h') := by
@@ -60,6 +61,7 @@ theorem FrameAhead.plug {f f' : SourceFrame} {h h' : Term} (hf : FrameAhead f f'
   | reflect => exact .reflect hh
   | metadata => exact .metadata hh
   | project => exact .project hh
+  | split names hf => exact .split names hh hf
 
 /-- Contexts related frame by frame. -/
 abbrev ContextAhead (ctx ctx' : List SourceFrame) : Prop := ListRel FrameAhead ctx ctx'
@@ -150,6 +152,12 @@ theorem yields_behind {t t' : Term} (h : Ahead t t') :
     | project inner =>
       obtain ⟨p, c, y', hpl, hc⟩ := ih inner
       exact ⟨p, _, .project y', hpl, hc.snoc .project⟩
+  | split names hg hf ih _ =>
+    intro plan ctx y
+    cases y with
+    | split _ _ inner =>
+      obtain ⟨p, c, y', hp, hc⟩ := ih inner
+      exact ⟨p, _, .split _ _ y', hp, hc.snoc (.split names hf)⟩
   | hole => intro plan ctx y; cases y
   | bound => intro plan ctx y; cases y
   | lam => intro plan ctx y; cases y
@@ -239,6 +247,12 @@ theorem yields_ahead {t t' : Term} (h : Ahead t t') :
     | project inner =>
       obtain ⟨u, p, c, s, y', hpl, hc⟩ := ih inner
       exact ⟨_, p, _, steps_project s, .project y', hpl, hc.snoc .project⟩
+  | split names hg hf ih _ =>
+    intro plan' ctx' y
+    cases y with
+    | split _ _ inner =>
+      obtain ⟨u, p, c, s, y', hp, hc⟩ := ih inner
+      exact ⟨_, p, _, steps_split _ _ s, .split _ _ y', hp, hc.snoc (.split names hf)⟩
   | hole => intro plan' ctx' y; cases y
   | bound => intro plan' ctx' y; cases y
   | lam => intro plan' ctx' y; cases y

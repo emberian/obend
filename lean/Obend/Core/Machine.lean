@@ -49,6 +49,8 @@ inductive Frame where
   | binaryRight (primitive : Primitive) (left : RuntimeValue)
   | case (arms : List (String × Term)) (environment : Environment)
   | ifBool (whenTrue whenFalse : Term) (environment : Environment)
+  /-- A destructor awaiting its target's record: `function` is then applied to the named fields. -/
+  | split (names : List String) (function : Term) (environment : Environment)
   deriving Repr
 inductive Refusal where
   | unbound | missingCell | missingField | wrongValue | invalidUpdate | capacity | missingArm
@@ -91,6 +93,31 @@ structure Limits where
 @[expose] def scalarValue : Term → Option RuntimeValue
   | .nat n => some (.natural n) | .boolean value => some (.boolean value)
   | .label name => some (.label name) | _ => none
+
+/-- Allocation names one address per field. -/
+theorem allocateFields_length (heap : Array Cell) (environment : Environment) (fields : List (String × Term)) :
+    (allocateFields heap environment fields).2.length = fields.length := by
+  unfold allocateFields
+  suffices general : ∀ (fields : List (String × Term)) (init : Array Cell × List (String × Address)),
+      (fields.foldl (fun (prior : Array Cell × List (String × Address)) field =>
+        (prior.1.push (.suspended ⟨field.2,environment⟩),(field.1,prior.1.size)::prior.2)) init).2.length =
+        init.2.length + fields.length by
+    simpa using general fields (heap,[])
+  intro fields
+  induction fields with
+  | nil => intro init; simp
+  | cons field rest ih => intro init; simp [List.foldl, ih]; omega
+
+/-- The cells a destructor allocates over the field addresses `a₀ … aₖ₋₁`: cell `i` is `bound i` in
+`[a₀ … aₖ₋₁]`, an indirection to field `i` typed at the parameter's declared member. -/
+@[expose] def splitCells (count : Nat) : List (String × Term) :=
+  (List.range count).map fun index => ("", .bound index)
+
+theorem splitCells_length (count : Nat) : (splitCells count).length = count := by simp [splitCells]
+
+/-- The argument frames a destructor pushes: parameter `i` is the argument `bound 0` in `[cellᵢ]`. -/
+@[expose] def splitFrames (addresses : List Address) : List Frame :=
+  addresses.map fun address => .argument (.bound 0) [address]
 
 /-- A shared cell is being forced exactly when an update frame is on the stack. -/
 @[expose] def forcingShared (stack : List Frame) : Bool :=
@@ -142,6 +169,8 @@ structure Limits where
     | .case scrutinee arms => {state with control:=.evaluate scrutinee environment, stack:=.case arms environment::state.stack}
     | .ifBool condition whenTrue whenFalse => {state with control:=.evaluate condition environment, stack:=.ifBool whenTrue whenFalse environment::state.stack}
     | .done value => {state with control:=.evaluate value environment}
+    | .split target names function =>
+      {state with control:=.evaluate target environment, stack:=.split names function environment::state.stack}
     | .perform plan =>
       if forcingShared state.stack then {state with control:=.refused .sharedEffect} else
       let address := state.heap.size
@@ -199,6 +228,13 @@ structure Limits where
       | .ifBool whenTrue whenFalse environment => match value with
         | .boolean true => {state with control:=.evaluate whenTrue environment,stack:=rest}
         | .boolean false => {state with control:=.evaluate whenFalse environment,stack:=rest}
+        | _ => {state with control:=.refused .wrongValue,stack:=rest}
+      | .split names function environment => match value with
+        | .record fields => match splitValues fields names with
+          | some addresses =>
+            let allocated := allocateFields state.heap addresses (splitCells addresses.length)
+            {state with heap:=allocated.1, control:=.evaluate function environment, stack:=splitFrames (allocated.2.map Prod.snd) ++ rest}
+          | none => {state with control:=.refused .missingField,stack:=rest}
         | _ => {state with control:=.refused .wrongValue,stack:=rest}
 
 /-- A blackhole is a non-result divergence observation, not a catchable language

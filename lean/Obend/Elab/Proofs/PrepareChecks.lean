@@ -887,7 +887,7 @@ theorem motive_record {Γ : Context} {fields : List (String × Term)} {row : Ty}
     change Yields (elaborate a annotations Γ' path (.record fields) (.check expected)) _
     rw [elaborate]
     simp [introduce, root, selfHint, hint, ok, bind, Except.bind, pure, Except.pure, finish, checkedSynth,
-      toExpected, Yields, vu]
+      toExpected, Yields, vu, need_ok distinct]
 
 /-! ## Cases -/
 
@@ -1214,7 +1214,7 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     (motive_3 := fun Γ q arms row result uses _ => ArmsMotive a Γ q arms row result uses)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
-    ?effectCase ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
+    ?effectCase ?split ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
   case bound => intro Γ index binding found; exact motive_bound found
   case natural => intro Γ value; exact motive_natural Γ value
   case boolean => intro Γ value; exact motive_boolean Γ value
@@ -1231,7 +1231,7 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     subst argumentType
     exact motive_application none_ shape allowed ihF ihA (uses_determined argumentTyped)
   case record =>
-    intro Γ fields row uses fieldsTyped ih
+    intro Γ fields row uses fieldsTyped _ ih
     exact motive_record fieldsTyped ih
   case get =>
     intro Γ target targetType member uses name fuel _ found free ih

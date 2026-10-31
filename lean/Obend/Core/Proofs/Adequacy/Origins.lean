@@ -114,6 +114,9 @@ Fix and sharing, while excluding arbitrary fabricated cyclic suspended aliases. 
       exact environmentValid_mono (by assumption) (by simp)
     | apply heapOriginsBorn_push born; left; intro address member; simp [cellOrigin] at member
     | apply heapOriginsBorn_suspend born; intro address member; simp at member; subst member; assumption
+    | apply allocateFields_originsBorn born; intro address ha
+      obtain ⟨f, hf, rfl⟩ := Obend.Core.Invariant.splitValues_mem (by assumption) address ha
+      first | exact controlValid f.1 f.2 hf | exact controlValid f hf
 
  public theorem initial_originsBorn (source : Term) : HeapOriginsBorn (initial source).heap := by
   intro address cell found

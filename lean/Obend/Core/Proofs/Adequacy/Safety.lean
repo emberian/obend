@@ -247,6 +247,10 @@ finite update budgets is used separately to exclude evaluating re-entry. -/
       | value value => cases value
       | ifTrue first second => exact ⟨_,_,first,by omega⟩
       | ifFalse first second => exact ⟨_,_,first,by omega⟩
+  | split names function environment =>
+      cases derivation with
+      | value value => cases value
+      | split first found second => exact ⟨_,_,first,by omega⟩
 
  theorem stackUpdates_member_split {stack : List Frame} {address : Address}
     (member : address ∈ stackUpdates stack) :

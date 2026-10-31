@@ -51,6 +51,8 @@ inductive Ahead : Term → Term → Prop where
       Ahead (.ifBool c x y) (.ifBool c' x' y')
   | perform {p p' : Term} : Ahead p p' → Ahead (.perform p) (.perform p')
   | done {v v' : Term} : Ahead v v' → Ahead (.done v) (.done v')
+  | split (names : List String) {g g' f f' : Term} : Ahead g g' → Ahead f f' →
+      Ahead (.split g names f) (.split g' names f')
 
 namespace Ahead
 
@@ -85,6 +87,7 @@ theorem refl : (t : Term) → Ahead t t
   | .ifBool c x y => .ifBool (refl c) (refl x) (refl y)
   | .perform p => .perform (refl p)
   | .done v => .done (refl v)
+  | .split g names f => .split names (refl g) (refl f)
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf
@@ -152,6 +155,7 @@ theorem ahead_rename {t t' : Term} (h : Ahead t t') : ∀ f : Nat → Nat, Ahead
   | ifBool _ _ _ i1 i2 i3 => intro f; simp only [Term.rename]; exact .ifBool (i1 f) (i2 f) (i3 f)
   | perform _ ih => intro f; simp only [Term.rename]; exact .perform (ih f)
   | done _ ih => intro f; simp only [Term.rename]; exact .done (ih f)
+  | split names _ _ i1 i2 => intro f; simp only [Term.rename]; exact .split names (i1 f) (i2 f)
 
 theorem lift_rel {σ σ' : Nat → Term} (h : ∀ n, Ahead (σ n) (σ' n)) :
     ∀ n, Ahead (liftSubstitution σ n) (liftSubstitution σ' n)
@@ -200,6 +204,7 @@ theorem ahead_substitute {t t' : Term} (h : Ahead t t') :
     intro σ σ' hσ; simp only [Term.substitute]; exact .ifBool (i1 hσ) (i2 hσ) (i3 hσ)
   | perform _ ih => intro σ σ' hσ; simp only [Term.substitute]; exact .perform (ih hσ)
   | done _ ih => intro σ σ' hσ; simp only [Term.substitute]; exact .done (ih hσ)
+  | split names _ _ i1 i2 => intro σ σ' hσ; simp only [Term.substitute]; exact .split names (i1 hσ) (i2 hσ)
 
 theorem single_rel {a a' : Term} (h : Ahead a a') : ∀ n, Ahead (single a n) (single a' n)
   | 0 => h

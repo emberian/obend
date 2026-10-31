@@ -124,6 +124,18 @@ uses source semantics, without a separate typed-source restriction. -/
           have same := (sourceDerivation_value_inv (valueMeaning_value meaning returnedValue) first).1
           cases returnedValue <;> simp [valueMeaning,closeTerm_lam_form] at same
           case boolean value => subst value; simp [stepRaw,returned,head,ResultControl]
+  | split names function environment =>
+      cases derivation with
+      | value value => cases value
+      | @split target function' result' fields' names' values targetCost resultCost first selected second =>
+          have same := (sourceDerivation_value_inv (valueMeaning_value meaning returnedValue) first).1
+          cases returnedValue <;> simp [valueMeaning,closeTerm_lam_form] at same
+          case record addresses =>
+            subst fields'
+            rw [splitValues_map meaning addresses names] at selected
+            cases found : splitValues addresses names with
+            | none => rw [found] at selected; simp at selected
+            | some _ => simp [stepRaw,returned,head,found,ResultControl]
 
 
 /-- Independent source termination supplies the exact demanded frame operand

@@ -65,6 +65,8 @@ inductive Joins (B : Term → Term → Prop) : Term → Term → Prop where
       Joins B (.ifBool c x y) (.ifBool c' x' y')
   | perform {p p' : Term} : Joins B p p' → Joins B (.perform p) (.perform p')
   | done {v v' : Term} : Joins B v v' → Joins B (.done v) (.done v')
+  | split (names : List String) {g g' f f' : Term} : Joins B g g' → Joins B f f' →
+      Joins B (.split g names f) (.split g' names f')
 
 /-- Every pair of `B` is closed, so substitution leaves it alone. -/
 def ClosedPairs (B : Term → Term → Prop) : Prop := ∀ {o f : Term}, B o f → Closed o ∧ Closed f
@@ -106,6 +108,7 @@ theorem Joins.of_ahead {t t' : Term} (h : Ahead t t') : Joins B t t' := by
   | ifBool _ _ _ i1 i2 i3 => exact .ifBool i1 i2 i3
   | perform _ ih => exact .perform ih
   | done _ ih => exact .done ih
+  | split names _ _ i1 i2 => exact .split names i1 i2
 
 theorem Joins.refl (t : Term) : Joins B t t := .of_ahead (Ahead.refl t)
 
@@ -153,6 +156,7 @@ theorem joins_rename (hB : ClosedPairs B) {t t' : Term} (h : Joins B t t') :
   | ifBool _ _ _ i1 i2 i3 => intro f; simp only [Term.rename]; exact .ifBool (i1 f) (i2 f) (i3 f)
   | perform _ ih => intro f; simp only [Term.rename]; exact .perform (ih f)
   | done _ ih => intro f; simp only [Term.rename]; exact .done (ih f)
+  | split names _ _ i1 i2 => intro f; simp only [Term.rename]; exact .split names (i1 f) (i2 f)
 
 theorem joins_lift (hB : ClosedPairs B) {σ σ' : Nat → Term} (h : ∀ n, Joins B (σ n) (σ' n)) :
     ∀ n, Joins B (liftSubstitution σ n) (liftSubstitution σ' n)
@@ -204,6 +208,7 @@ theorem joins_substitute (hB : ClosedPairs B) {t t' : Term} (h : Joins B t t') :
     intro σ σ' hσ; simp only [Term.substitute]; exact .ifBool (i1 hσ) (i2 hσ) (i3 hσ)
   | perform _ ih => intro σ σ' hσ; simp only [Term.substitute]; exact .perform (ih hσ)
   | done _ ih => intro σ σ' hσ; simp only [Term.substitute]; exact .done (ih hσ)
+  | split names _ _ i1 i2 => intro σ σ' hσ; simp only [Term.substitute]; exact .split names (i1 hσ) (i2 hσ)
 
 theorem joins_single {a a' : Term} (h : Joins B a a') : ∀ n, Joins B (single a n) (single a' n)
   | 0 => h
@@ -515,6 +520,15 @@ theorem step_ahead (hB : Base B) {t t' : Term} (h : Joins B t t') :
       exact ⟨_, steps_snoc (steps_ifBool _ _ (inv_literal_ahead hB (.boolean false) hc)) (.ifFalse _ _), hy⟩
   | perform => intro u' st; cases st
   | done hv _ => intro u' st; cases st; exact ⟨_, steps_one (.done _), hv⟩
+  | split names hg hf ihg _ =>
+    intro u' st
+    cases st with
+    | splitTarget _ _ st' =>
+      obtain ⟨_, s, a⟩ := ihg st'; exact ⟨_, steps_split _ _ s, .split _ a hf⟩
+    | splitRecord _ _ _ _ hit =>
+      obtain ⟨_, s, n1, r1⟩ := inv_record_ahead hB hg
+      obtain ⟨_, hit0, a⟩ := splitValues_rel_right (R := Joins B) (fun x y => .app x y) n1 r1 hf hit
+      exact ⟨_, steps_snoc (steps_split _ _ s) (.splitRecord _ _ _ _ hit0), a⟩
 
 /-- A step of the left side is matched by reduction of the right side. -/
 theorem step_behind (hB : Base B) {t t' : Term} (h : Joins B t t') :
@@ -636,6 +650,15 @@ theorem step_behind (hB : Base B) {t t' : Term} (h : Joins B t t') :
       exact ⟨_, steps_snoc (steps_ifBool _ _ (inv_literal_behind hB (.boolean false) hc)) (.ifFalse _ _), hy⟩
   | perform => intro u st; cases st
   | done hv _ => intro u st; cases st; exact ⟨_, steps_one (.done _), hv⟩
+  | split names hg hf ihg _ =>
+    intro u st
+    cases st with
+    | splitTarget _ _ st' =>
+      obtain ⟨_, s, a⟩ := ihg st'; exact ⟨_, steps_split _ _ s, .split _ a hf⟩
+    | splitRecord _ _ _ _ hit =>
+      obtain ⟨_, s, n1, r1⟩ := inv_record_behind hB hg
+      obtain ⟨_, hit', a⟩ := splitValues_rel_left (R := Joins B) (fun x y => .app x y) n1 r1 hf hit
+      exact ⟨_, steps_snoc (steps_split _ _ s) (.splitRecord _ _ _ _ hit'), a⟩
 
 /-! ## Completed runs, and `≈b` -/
 

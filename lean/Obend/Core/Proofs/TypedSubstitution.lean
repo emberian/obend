@@ -30,7 +30,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
       (∀ arm ∈ arms, Scoped (Δ.length + 1) arm.2) →
       ∃ a : Uses, a.length = Δ.length ∧ uses = a ++ zeroUses Ψ ∧
         ArmsTyping asm (Δ ++ Ψ') q arms row result (a ++ zeroUses Ψ'))
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · rintro Γ i b found Δ rfl hs
     have hi : i < Δ.length := (scoped_bound_iff _ _).mp hs
     have hf : (Δ ++ Ψ')[i]? = some b := by
@@ -80,13 +80,13 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
       exact .application d₁ d₂ shape same (argumentAllowed_append_zero hb (hv ▸ allowed))
-  · rintro Γ fields row u d ih Δ rfl hs
+  · rintro Γ fields row u d distinct ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_record_iff _ _).mp hs)
-    exact ⟨a, ha, hu, .record d'⟩
+    exact ⟨a, ha, hu, .record d' distinct⟩
   · rintro Γ target tt member u name fuel d found free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_get_iff _ _ _).mp hs)
     exact ⟨a, ha, hu, .get d' found (linearFree_append_zero ha (hu ▸ free))⟩
-  · rintro Γ target fields tt row tu fu fuel dt df rowOk free ih₁ ih₂ Δ rfl hs
+  · rintro Γ target fields tt row tu fu fuel dt df distinct rowOk free ih₁ ih₂ Δ rfl hs
     simp only [scoped_extend_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
@@ -94,7 +94,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
-      exact .extend d₁ d₂ rowOk (linearFree_append_zero ha (hu ▸ free))
+      exact .extend d₁ d₂ distinct rowOk (linearFree_append_zero ha (hu ▸ free))
   · rintro Γ metadataTerm ext mt et mu eu dm de mp ep free ih₁ ih₂ Δ rfl hs
     simp only [scoped_specification_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
@@ -204,6 +204,15 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
       exact .effectCase d₁ d₂ pure distinct (caseAllowed_append_zero ha (hu ▸ allowed))
+  · rintro Γ target function names row ft result tu fu dt df nodup covers spine ih₁ ih₂ Δ rfl hs
+    simp only [scoped_split_iff] at hs
+    obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
+    obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
+    have hab := ha.trans hb.symm
+    refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
+    · rw [hu, hv, split_add Ψ hab]
+    · rw [← split_add Ψ' hab]
+      exact .split d₁ d₂ nodup covers (spine.transport fun q allowed => caseAllowed_append_zero ha (hu ▸ allowed))
   · rintro Γ Δ rfl hs
     refine ⟨zeroUses Δ, length_zeroUses _, zeroUses_append Δ Ψ, ?_⟩
     rw [← zeroUses_append]
@@ -277,7 +286,7 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
       validContext asm.shareableVariables Γ = true →
       ∃ u : Uses, ArmsTyping asm Γ q
         (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) row result u ∧ UsesMasked σ Δ.length u uses)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · rintro Γ i b found Δ rfl validΓ
     simp only [Term.substitute]
     by_cases isLocal : i < Δ.length
@@ -322,19 +331,19 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .application d₁ d₂ shape same (argumentAllowed_of_le hv.le allowed), UsesMasked.add hu hv⟩
-  · rintro Γ fields row u d ih Δ rfl validΓ
+  · rintro Γ fields row u d distinct ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .record d', hu⟩
+    exact ⟨_, .record d' (by simpa using distinct), hu⟩
   · rintro Γ target tt member u name fuel d found free ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .get d' found (linearFree_of_le hu.le free), hu⟩
-  · rintro Γ target fields tt row tu fu fuel dt df rowOk free ih₁ ih₂ Δ rfl validΓ
+  · rintro Γ target fields tt row tu fu fuel dt df distinct rowOk free ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .extend d₁ d₂ rowOk (linearFree_of_le hu.le free), UsesMasked.add hu hv⟩
+    exact ⟨_, .extend d₁ d₂ (by simpa using distinct) rowOk (linearFree_of_le hu.le free), UsesMasked.add hu hv⟩
   · rintro Γ metadataTerm ext mt et mu eu dm de mp ep free ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
@@ -408,6 +417,12 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
     exact ⟨_, .effectCase d₁ d₂ pure (by simpa using distinct) (caseAllowed_of_le hu.le allowed), UsesMasked.add hu hv⟩
+  · rintro Γ target function names row ft result tu fu dt df nodup covers spine ih₁ ih₂ Δ rfl validΓ
+    obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
+    obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
+    simp only [Term.substitute]
+    exact ⟨_, .split d₁ d₂ nodup covers (spine.transport fun q allowed => caseAllowed_of_le hu.le allowed),
+      UsesMasked.add hu hv⟩
   · rintro Γ Δ rfl validΓ
     exact ⟨_, .nil _, UsesMasked.zero _ _ _⟩
   · rintro Γ name body rest type row bu ru db dr pure ih₁ ih₂ Δ rfl validΓ

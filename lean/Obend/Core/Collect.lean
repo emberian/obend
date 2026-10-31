@@ -41,7 +41,8 @@ def cellAddresses : Cell → List Nat
 
 def frameAddresses : Frame → List Nat
   | .argument _ environment | .extend _ environment | .condition _ _ environment
-  | .binaryLeft _ _ environment | .case _ environment | .ifBool _ _ environment => environment
+  | .binaryLeft _ _ environment | .case _ environment | .ifBool _ _ environment
+  | .split _ _ environment => environment
   | .update address => [address]
   | .field _ | .reflect | .metadata | .project => []
   | .binaryRight _ value => valueAddresses value
@@ -89,6 +90,7 @@ def renameFrame (f : Nat → Nat) : Frame → Frame
   | .binaryRight primitive left => .binaryRight primitive (renameValue f left)
   | .case arms environment => .case arms (environment.map f)
   | .ifBool whenTrue whenFalse environment => .ifBool whenTrue whenFalse (environment.map f)
+  | .split names function environment => .split names function (environment.map f)
 
 def renameControl (f : Nat → Nat) : Control → Control
   | .evaluate term environment => .evaluate term (environment.map f)

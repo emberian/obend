@@ -8,6 +8,7 @@ public import Obend.Core.Proofs.Preservation.Cases.Records
 public import Obend.Core.Proofs.Preservation.Cases.Arithmetic
 public import Obend.Core.Proofs.Preservation.Cases.Sums
 public import Obend.Core.Proofs.Preservation.Cases.Activities
+public import Obend.Core.Proofs.Preservation.Cases.Split
 public import Obend.Core.Proofs.StepCases
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
@@ -56,6 +57,7 @@ public theorem typed_stepRaw_preserved {assumptions : Assumptions} {types : Addr
       evaluate_ifBool := fun _ _ _ _ _ control types typed => ⟨types, type_extension_refl types, typed_source_focus_preserved typed control rfl⟩
       evaluate_perform := fun _ _ _ control _ typed => typed_perform_preserved typed control
       evaluate_done := fun _ _ _ control types typed => ⟨types, type_extension_refl types, typed_done_preserved typed control⟩
+      evaluate_split := fun _ _ _ _ _ control types typed => ⟨types, type_extension_refl types, typed_source_focus_preserved typed control rfl⟩
       return_nil := fun _ _ control stack types typed => ⟨types, type_extension_refl types, typed_completion_preserved typed control stack⟩
       return_argument := fun _ _ _ _ _ control stack _ typed => typed_argument_return_preserved typed control stack
       return_update := fun _ _ _ _ control stack types typed => ⟨types, type_extension_refl types, typed_update_preserved typed control stack⟩
@@ -73,7 +75,8 @@ public theorem typed_stepRaw_preserved {assumptions : Assumptions} {types : Addr
         ⟨types, type_extension_refl types, typed_binary_right_preserved typed control stack⟩
       return_case := fun _ _ _ _ _ control stack _ typed => typed_case_preserved typed control stack
       return_ifBool := fun _ _ _ _ _ _ control stack types typed =>
-        ⟨types, type_extension_refl types, typed_ifBool_preserved typed control stack⟩ }
+        ⟨types, type_extension_refl types, typed_ifBool_preserved typed control stack⟩
+      return_split := fun _ _ _ _ _ _ control stack _ typed => typed_split_preserved typed control stack }
     state types typed
 
 /-- Every finite reachable state of the SAME checked erasure has a typed heap,

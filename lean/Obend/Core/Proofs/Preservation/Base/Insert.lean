@@ -327,19 +327,19 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
       (PartialTyping.application (ihFn depth binding bound bindingValid) (ihArg depth binding bound bindingValid) callableEq same
         (argument_allowed_insert assumptions quantity context argumentType au depth binding allowed bound))
   case record =>
-    intro context fields row uses fieldsTyped ih depth binding bound bindingValid
-    simpa only [Term.rename] using (PartialTyping.record (ih depth binding bound bindingValid))
+    intro context fields row uses fieldsTyped distinct ih depth binding bound bindingValid
+    simpa only [Term.rename] using (PartialTyping.record (ih depth binding bound bindingValid) (by simpa using distinct))
   case get =>
     intro context target targetType member uses name fuel targetTyped lookup free ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.get (ih depth binding bound bindingValid) lookup
       (linear_free_insert context uses depth binding free bound))
   case extend =>
-    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow free ihTarget ihFields depth binding bound bindingValid
-    have fieldLength := source_uses_length (PartialTyping.record fieldsTyped)
+    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped distinct isRow free ihTarget ihFields depth binding bound bindingValid
+    have fieldLength := fields_uses_length fieldsTyped
     have counts := add_uses_insert tu fu depth ((source_uses_length targetTyped).trans fieldLength.symm) (insert_usage_bound targetTyped bound)
     simpa only [Term.rename,counts] using
-      (PartialTyping.extend (ihTarget depth binding bound bindingValid) (ihFields depth binding bound bindingValid) isRow
-        (linear_free_insert context tu depth binding free bound))
+      (PartialTyping.extend (ihTarget depth binding bound bindingValid) (ihFields depth binding bound bindingValid)
+        (by simpa using distinct) isRow (linear_free_insert context tu depth binding free bound))
   case specification =>
     intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mPure ePure free ihMetadata ihExtension depth binding bound bindingValid
     have counts := add_uses_insert mu eu depth ((source_uses_length metadataTyped).trans (source_uses_length extensionTyped).symm) (insert_usage_bound metadataTyped bound)
@@ -430,12 +430,18 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename,lift_shift_index,counts] using
       (PartialTyping.effectCase (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid) pure
         (by simpa using distinct) (case_allowed_insert assumptions q context su depth binding allowed bound))
+  case split =>
+    intro context target function names row functionType result tu fu targetTyped functionTyped nodup covers spine ihTarget ihFunction depth binding bound bindingValid
+    have counts := add_uses_insert tu fu depth ((source_uses_length targetTyped).trans (source_uses_length functionTyped).symm) (insert_usage_bound targetTyped bound)
+    simpa only [Term.rename,counts] using
+      (PartialTyping.split (ihTarget depth binding bound bindingValid) (ihFunction depth binding bound bindingValid) nodup covers
+        (spine.transport fun q allowed => case_allowed_insert assumptions q context tu depth binding allowed bound))
   case nil =>
     intro context depth binding bound bindingValid
     simpa only [List.map_nil,← zero_uses_insert context binding depth bound] using (FieldsTyping.nil (context.insertIdx depth binding) : FieldsTyping assumptions _ [] .emptyRow _)
   case cons =>
     intro context name body rest type row bu ru bodyTyped restTyped pure ihBody ihRest depth binding bound bindingValid
-    have restLength := source_uses_length (PartialTyping.record restTyped)
+    have restLength := fields_uses_length restTyped
     have counts := add_uses_insert bu ru depth ((source_uses_length bodyTyped).trans restLength.symm) (insert_usage_bound bodyTyped bound)
     simpa only [List.map_cons,counts] using
       (FieldsTyping.cons (ihBody depth binding bound bindingValid) (ihRest depth binding bound bindingValid) pure)

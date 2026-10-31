@@ -41,7 +41,7 @@ def CheckRefusal.path : CheckRefusal → List Nat
   | .typeMismatch p _ _ | .shapeMismatch p _ _ | .unknownLabel p _ _ | .duplicateLabels p
   | .binderOverused p _ _ _ | .linearBinderUnused p | .linearArgumentDropped p _ _ | .linearBranchesDisagree p _
   | .linearProjected p _ | .linearMetadata p _ | .linearOverwritten p _ | .linearScrutinee p
-  | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _
+  | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _ | .fieldDropped p _
   | .invalidContext p => p
   | .invalidAssumptions => []
 

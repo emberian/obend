@@ -292,7 +292,7 @@ public theorem fields_cons_complete {assumptions : Assumptions} {context : Conte
   ⟨domain, codomain, .unrestricted, .reusable⟩
 
 public theorem completes_record {assumptions : Assumptions} {context : Context}
-    {fields : List (String × Term)} {row : Ty} {uses : Uses}
+    {fields : List (String × Term)} {row : Ty} {uses : Uses} (distinct : labelsDistinct fields = true)
     (ih : ∃ trees, FieldsComplete assumptions context fields row uses trees) :
     ∃ tree, Completes assumptions context (.record fields) row uses tree := by
   obtain ⟨trees, completeFields⟩ := ih
@@ -302,16 +302,16 @@ public theorem completes_record {assumptions : Assumptions} {context : Context}
   have rawHead (type : Ty) : representativeHead assumptions annotations path type = type := by
     simp [representativeHead, root]
   obtain ⟨result, accepted, sameUses⟩ := (completeFields annotations path 0 realizes.forest).elim
-  let synthesized : Synth assumptions context (.record fields) := ⟨row, result.uses, .record result.derivation⟩
+  let synthesized : Synth assumptions context (.record fields) := ⟨row, result.uses, .record result.derivation distinct⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.record fields) .synth = .ok synthesized
     rw [elaborate]
-    simp [introduce, root, hint, accepted, bind, Except.bind, Functor.map, Except.map,
+    simp [introduce, root, hint, accepted, need_ok distinct, bind, Except.bind, Functor.map, Except.map,
       pure, Except.pure, synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.record fields) (.check expected) = _
     rw [elaborate]
-    simp [introduce, root, hint, accepted, bind, Except.bind, Functor.map, Except.map,
+    simp [introduce, root, hint, accepted, need_ok distinct, bind, Except.bind, Functor.map, Except.map,
       pure, Except.pure, synthesized, checkedSynth]
   · exact sameType_refl _ _
   · exact sameUses
@@ -889,6 +889,7 @@ public theorem completes_ifZero {assumptions : Assumptions} {context : Context}
 
 public theorem completes_extend {assumptions : Assumptions} {context : Context}
     {target : Term} {fields : List (String × Term)} {targetType row : Ty} {tu fu : Uses} {fuel : Nat}
+    (distinct : labelsDistinct fields = true)
     (isRow : targetType.isRow assumptions.bounds fuel = true)
     (free : linearFree context tu = true)
     (ihT : ∃ tree, Completes assumptions context target targetType tu tree)
@@ -913,17 +914,17 @@ public theorem completes_extend {assumptions : Assumptions} {context : Context}
     (isRowV_iff _ _).2 ⟨fuel, isRow⟩
   have free' : linearFree context prior.uses = true := by rw [priorUses]; exact free
   let synthesized : Synth assumptions context (.extend target fields) :=
-    ⟨overlay row targetType, addUses prior.uses members.uses, .extend prior.derivation members.derivation isRow free'⟩
+    ⟨overlay row targetType, addUses prior.uses members.uses, .extend prior.derivation members.derivation distinct isRow free'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.extend target fields) .synth = .ok synthesized
     rw [elaborate]
     simp [root, hint, checkedPrior, checkedMembers, need_ok rowAccepted, need_ok (sameType_refl assumptions targetType),
-      need_ok free', checkedSynth, bind, Except.bind, Functor.map, Except.map, pure, Except.pure, synthesized]
+      need_ok distinct, need_ok free', checkedSynth, bind, Except.bind, Functor.map, Except.map, pure, Except.pure, synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.extend target fields) (.check expected) = _
     rw [elaborate]
     simp [finish, root, hint, checkedPrior, checkedMembers, need_ok rowAccepted,
-      need_ok (sameType_refl assumptions targetType), need_ok free', checkedSynth, bind, Except.bind,
+      need_ok (sameType_refl assumptions targetType), need_ok distinct, need_ok free', checkedSynth, bind, Except.bind,
       Functor.map, Except.map, pure, Except.pure, synthesized] <;> rfl
   · exact sameType_refl _ _
   · change addUses prior.uses members.uses = addUses tu fu
@@ -1261,6 +1262,75 @@ public theorem completes_effectCase {assumptions : Assumptions} {context : Conte
   · change addUses value.uses armUses = addUses su au
     rw [valueUses, answerUses]
 
+/-- The checker's walk of a destructor's parameters accepts every derivation's spine, with its result. -/
+theorem checkSpine_complete {assumptions : Assumptions} {context : Context} {path : List Nat} {uses : Uses}
+    {row : Ty} : ∀ {names : List String} {functionType result : Ty},
+      SplitSpine assumptions context uses row names functionType result →
+      ∃ walked, checkSpine assumptions context path uses row names functionType = .ok walked ∧ walked.1 = result
+  | [], functionType, result, spine => ⟨⟨functionType, rfl⟩, by simp [checkSpine, pure, Except.pure], spine⟩
+  | name :: names, functionType, result, ⟨reuse, quantity, member, codomain, shape, ⟨fuel, found, l, same⟩,
+      pure', allowed, share, rest⟩ => by
+    obtain ⟨walked, ok, eq⟩ := checkSpine_complete (path := path) rest
+    have lookup : lookupV assumptions.bounds [] row name = some found := (lookupV_iff _ _ _ _).2 ⟨fuel, l⟩
+    have nonActivity : (!member.isComputation) = true := by simp [pure']
+    refine ⟨⟨walked.1, reuse, quantity, member, codomain, shape, ⟨fuel, found, l, same⟩, pure', allowed, share,
+      walked.2⟩, ?_, eq⟩
+    rw [checkSpine]
+    split
+    · rename_i r q m c observed
+      rw [shape] at observed; cases observed
+      split
+      · rename_i actual found'
+        rw [lookup] at found'; cases found'
+        rw [dif_pos same]
+        simp [need_ok nonActivity, need_ok allowed, need_ok share, ok, bind, Except.bind, pure, Except.pure]
+      · rename_i absent; rw [lookup] at absent; cases absent
+    · rename_i absent; exact (absent reuse quantity member codomain shape).elim
+
+public theorem completes_split {assumptions : Assumptions} {context : Context} {target function : Term}
+    {names : List String} {row functionType result : Ty} {tu fu : Uses}
+    (nodup : names.Nodup) (covers : SplitCovers row names = true)
+    (spine : SplitSpine assumptions context tu row names functionType result)
+    (ihT : ∃ tree, Completes assumptions context target row tu tree)
+    (ihF : ∃ tree, Completes assumptions context function functionType fu tree) :
+    ∃ tree, Completes assumptions context (.split target names function) result (addUses tu fu) tree := by
+  obtain ⟨targetTree, completeTarget⟩ := ihT
+  obtain ⟨functionTree, completeFunction⟩ := ihF
+  refine ⟨.node (some (hint row functionType)) [targetTree, functionTree], ?_⟩
+  intro annotations path realizes
+  have root := realizes.root
+  have rawHead (type : Ty) : representativeHead assumptions annotations path type = type := by
+    simp [representativeHead, root]
+  have atTarget : Realizes annotations (path ++ [0]) targetTree := by
+    simpa [AnnotationTree.child] using realizes.child 0
+  have atFunction : Realizes annotations (path ++ [1]) functionTree := by
+    simpa [AnnotationTree.child] using realizes.child 1
+  obtain ⟨value, checkedTarget, targetUses⟩ :=
+    ((completeTarget annotations (path ++ [0]) atTarget).2 row (sameType_refl _ _)).elim
+  obtain ⟨fn, checkedFunction, functionUses⟩ :=
+    ((completeFunction annotations (path ++ [1]) atFunction).2 functionType (sameType_refl _ _)).elim
+  have covers' : SplitCovers (representativeHead assumptions annotations path row) names = true := by
+    rw [rawHead]; exact covers
+  have spine' : SplitSpine assumptions context value.uses (representativeHead assumptions annotations path row) names
+      functionType result := by
+    rw [targetUses, rawHead]; exact spine
+  obtain ⟨walked, walkedOk, walkedResult⟩ := checkSpine_complete (path := path) spine'
+  have nodup' : decide names.Nodup = true := decide_eq_true nodup
+  let synthesized : Synth assumptions context (.split target names function) :=
+    ⟨walked.1, addUses value.uses fn.uses,
+      .split (.conversion value.derivation (sameType_representativeHead assumptions annotations path row))
+        fn.derivation nodup covers' walked.2⟩
+  apply finish_complete synthesized
+  · intro mode
+    rw [elaborate]
+    simp only [root, hint, checkedTarget, checkedFunction, checkedSynth, bind, Except.bind, Functor.map, Except.map,
+      need_ok nodup', need_ok covers', walkedOk]
+    rfl
+  · change sameType assumptions walked.1 result = true
+    rw [walkedResult]; exact sameType_refl _ _
+  · change addUses value.uses fn.uses = addUses tu fu
+    rw [targetUses, functionUses]
+
 /-- The simultaneous induction covers every declarative constructor. Its
 existential result stays in Prop throughout, despite containing a data witness. -/
 public theorem complete {assumptions : Assumptions} {context : Context} {term : Term}
@@ -1272,7 +1342,7 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     (motive_3 := fun context q arms row result uses _ => ∃ trees, ArmsComplete assumptions context q arms row result uses trees)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
-    ?effectCase ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
+    ?effectCase ?split ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
   case bound =>
     intro Γ index binding found
     exact completes_bound found
@@ -1292,14 +1362,14 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     subst argumentType
     exact completes_application shape allowed ihF ihA
   case record =>
-    intro Γ fields row uses _ ih
-    exact completes_record ih
+    intro Γ fields row uses _ distinct ih
+    exact completes_record distinct ih
   case get =>
     intro Γ target targetType member uses name fuel _ found free ih
     exact completes_get found free ih
   case extend =>
-    intro Γ target fields targetType row tu fu fuel _ _ isRow free ihT ihF
-    exact completes_extend isRow free ihT ihF
+    intro Γ target fields targetType row tu fu fuel _ _ distinct isRow free ihT ihF
+    exact completes_extend distinct isRow free ihT ihF
   case specification =>
     intro Γ metadata extension metadataType extensionType mu eu _ _ pureM pureE free ihM ihE
     exact completes_specification pureM pureE free ihM ihE
@@ -1346,6 +1416,9 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
   case effectCase =>
     intro Γ scrutinee arms plan response row result su au q _ _ nonComputation distinct allowed ihS ihA
     exact completes_effectCase nonComputation distinct allowed ihS ihA
+  case split =>
+    intro Γ target function names row functionType result tu fu _ _ nodup covers spine ihT ihF
+    exact completes_split nodup covers spine ihT ihF
   case fieldsNil => exact fields_nil_complete assumptions
   case fieldsCons =>
     intro Γ name body rest type row bu ru _ _ nonComputation ihB ihR
@@ -1414,17 +1487,13 @@ public theorem arrow_alias_agrees :
   apply sameType_extends
   decide
 
-/-- Positional annotations retain the hidden field's source type and select a
-valid binder for the visible lambda before converting to its arrow alias. -/
-public theorem shadow_record_now_checks : (checkAgainst shadowSource [] shadowRow).toBool = true := by
-  have aliases := arrow_alias_agrees
-  dsimp only [shadowAssumptions] at aliases
+/-- A record literal that repeats a label is refused (lane C2: a repeated label is a field no `get`
+reaches and no destructor passes; it was accepted, `shadow_record_now_checks`, before records named
+each field once). Shadowing is what `extend` is for. -/
+public theorem shadow_record_refused :
+    checkAgainst shadowSource [] shadowRow = .error (.duplicateLabels []) := by
   simp [checkAgainst, checkAt, shadowSource, shadowRow, shadowAnnotations, shadowAssumptions,
-    elaborate, introduce, checkFields, hint, finish, need, aliases, sameType_refl,
-    checkedSynth, variableUses, zeroUses, addUses, safeUses, safeQuantity, Quantity.fits, linearFree, validContext,
-    reusableAllowed, reusableCaptures, Assumptions.valid, Ty.isComputation, Ty.shareableUnder,
-    Ty.shareable, List.getElem?_cons_zero, bind, Except.bind, pure, Except.pure,
-    Functor.map, Except.map, Except.toBool]
+    elaborate, introduce, need, labelsDistinct, bind, Except.bind, pure, Except.pure]
 
 
 /-- Canonical syntax laws retained independently of recursive agreement. -/
@@ -1498,6 +1567,7 @@ context of the given length. -/
   | .ifZero v z s => addUses (occurrences n v) (joinUses (occurrences n z) (occurrences (n + 1) s).tail)
   | .case scrutinee arms => addUses (occurrences n scrutinee) (armOccurrences n arms)
   | .ifBool c t f => addUses (occurrences n c) (joinUses (occurrences n t) (occurrences n f))
+  | .split t _ f => addUses (occurrences n t) (occurrences n f)
 @[expose] public def fieldOccurrences (n : Nat) : List (String × Term) → Uses
   | [] => List.replicate n 0
   | (_, body) :: rest => addUses (occurrences n body) (fieldOccurrences n rest)
@@ -1514,7 +1584,7 @@ public theorem uses_determined {assumptions : Assumptions} {context : Context} {
     (motive_1 := fun context term _ uses _ => uses = occurrences context.length term)
     (motive_2 := fun context fields _ uses _ => uses = fieldOccurrences context.length fields)
     (motive_3 := fun context _ arms _ _ uses _ => uses = armOccurrences context.length arms)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   all_goals intros
   all_goals simp_all [occurrences, fieldOccurrences, armOccurrences, variableUses, zeroUses]
 

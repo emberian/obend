@@ -40,6 +40,105 @@ theorem steps_metadata {p p' : Term} (h : Steps p p') : Steps (.metadata p) (.me
 theorem steps_project {p p' : Term} (h : Steps p p') : Steps (.project p) (.project p') :=
   steps_congr _ (fun s => .projectStep s) h
 
+theorem steps_split {g g' : Term} (names : List String) (f : Term) (h : Steps g g') :
+    Steps (.split g names f) (.split g' names f) :=
+  steps_congr (fun x => .split x names f) (fun st => .splitTarget names f st) h
+
+/-- Related values passed by a destructor, left to right, for any relation closed under application. -/
+theorem splitValues_rel_left {R : Term → Term → Prop}
+    (appR : ∀ {f f' a a' : Term}, R f f' → R a a' → R (.app f a) (.app f' a'))
+    {fs fs' : List (String × Term)} (n1 : fs.map Prod.fst = fs'.map Prod.fst)
+    (r1 : ∀ p ∈ fs.zip fs', R p.1.2 p.2.2) :
+    ∀ {names : List String} {f f' : Term} {vs : List Term}, R f f' → splitValues fs names = some vs →
+      ∃ vs', splitValues fs' names = some vs' ∧ R (applyAll f vs) (applyAll f' vs')
+  | [], _, _, vs, af, h => by simp [splitValues] at h; subst h; exact ⟨[], rfl, af⟩
+  | name :: names, f, f', vs, af, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i pair hp
+      obtain ⟨label, body⟩ := pair
+      have hl : label = name := by have := List.find?_some hp; simpa using this
+      subst hl
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hr
+        simp only [pure, Option.some.injEq] at h; subst h
+        obtain ⟨body', hit', ab⟩ := find_left n1 r1 hp
+        obtain ⟨vs', hv', a⟩ := splitValues_rel_left appR n1 r1 (f := .app f body) (f' := .app f' body') (appR af ab) hr
+        exact ⟨body' :: vs', by simp [splitValues, hit', hv'], by simpa [applyAll] using a⟩
+
+/-- Related values passed by a destructor, right to left. -/
+theorem splitValues_rel_right {R : Term → Term → Prop}
+    (appR : ∀ {f f' a a' : Term}, R f f' → R a a' → R (.app f a) (.app f' a'))
+    {fs fs' : List (String × Term)} (n1 : fs.map Prod.fst = fs'.map Prod.fst)
+    (r1 : ∀ p ∈ fs.zip fs', R p.1.2 p.2.2) :
+    ∀ {names : List String} {f f' : Term} {vs' : List Term}, R f f' → splitValues fs' names = some vs' →
+      ∃ vs, splitValues fs names = some vs ∧ R (applyAll f vs) (applyAll f' vs')
+  | [], _, _, vs', af, h => by simp [splitValues] at h; subst h; exact ⟨[], rfl, af⟩
+  | name :: names, f, f', vs', af, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i pair hp
+      obtain ⟨label, body'⟩ := pair
+      have hl : label = name := by have := List.find?_some hp; simpa using this
+      subst hl
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hr
+        simp only [pure, Option.some.injEq] at h; subst h
+        obtain ⟨body, hit, ab⟩ := find_right n1 r1 hp
+        obtain ⟨vs, hv, a⟩ := splitValues_rel_right appR n1 r1 (f := .app f body) (f' := .app f' body') (appR af ab) hr
+        exact ⟨body :: vs, by simp [splitValues, hit, hv], by simpa [applyAll] using a⟩
+
+/-- Related values passed by a destructor, left to right. -/
+theorem splitValues_left {fs fs' : List (String × Term)} (n1 : fs.map Prod.fst = fs'.map Prod.fst)
+    (r1 : ∀ p ∈ fs.zip fs', Ahead p.1.2 p.2.2) :
+    ∀ {names : List String} {f f' : Term} {vs : List Term}, Ahead f f' → splitValues fs names = some vs →
+      ∃ vs', splitValues fs' names = some vs' ∧ Ahead (applyAll f vs) (applyAll f' vs')
+  | [], _, _, vs, af, h => by simp [splitValues] at h; subst h; exact ⟨[], rfl, af⟩
+  | name :: names, f, f', vs, af, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i pair hp
+      obtain ⟨label, body⟩ := pair
+      have hl : label = name := by have := List.find?_some hp; simpa using this
+      subst hl
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hr
+        simp only [pure, Option.some.injEq] at h; subst h
+        obtain ⟨body', hit', ab⟩ := find_left n1 r1 hp
+        obtain ⟨vs', hv', a⟩ := splitValues_left n1 r1 (f := .app f body) (f' := .app f' body') (.app af ab) hr
+        exact ⟨body' :: vs', by simp [splitValues, hit', hv'], by simpa [applyAll] using a⟩
+
+theorem splitValues_right {fs fs' : List (String × Term)} (n1 : fs.map Prod.fst = fs'.map Prod.fst)
+    (r1 : ∀ p ∈ fs.zip fs', Ahead p.1.2 p.2.2) :
+    ∀ {names : List String} {f f' : Term} {vs' : List Term}, Ahead f f' → splitValues fs' names = some vs' →
+      ∃ vs, splitValues fs names = some vs ∧ Ahead (applyAll f vs) (applyAll f' vs')
+  | [], _, _, vs', af, h => by simp [splitValues] at h; subst h; exact ⟨[], rfl, af⟩
+  | name :: names, f, f', vs', af, h => by
+    simp only [splitValues, bind, Option.bind] at h
+    split at h
+    · cases h
+    · rename_i pair hp
+      obtain ⟨label, body'⟩ := pair
+      have hl : label = name := by have := List.find?_some hp; simpa using this
+      subst hl
+      simp only at h
+      split at h
+      · cases h
+      · rename_i rest hr
+        simp only [pure, Option.some.injEq] at h; subst h
+        obtain ⟨body, hit, ab⟩ := find_right n1 r1 hp
+        obtain ⟨vs, hv, a⟩ := splitValues_right n1 r1 (f := .app f body) (f' := .app f' body') (.app af ab) hr
+        exact ⟨body :: vs, by simp [splitValues, hit, hv], by simpa [applyAll] using a⟩
+
 theorem steps_snoc {a b c : Term} (h : Steps a b) (s : Step b c) : Steps a c :=
   steps_trans h (steps_one s)
 
@@ -304,6 +403,15 @@ theorem step_ahead {t t' : Term} (h : Ahead t t') :
       exact ⟨_, steps_snoc (steps_ifBool _ _ (inv_literal_ahead (.boolean false) hc)) (.ifFalse _ _), hy⟩
   | perform => intro u' st; cases st
   | done hv _ => intro u' st; cases st; exact ⟨_, steps_one (.done _), hv⟩
+  | split names hg hf ihg _ =>
+    intro u' st
+    cases st with
+    | splitTarget _ _ st' =>
+      obtain ⟨_, s, a⟩ := ihg st'; exact ⟨_, steps_split _ _ s, .split _ a hf⟩
+    | splitRecord _ _ _ _ hit =>
+      obtain ⟨_, s, n1, r1⟩ := inv_record_ahead hg
+      obtain ⟨_, hit0, a⟩ := splitValues_right n1 r1 hf hit
+      exact ⟨_, steps_snoc (steps_split _ _ s) (.splitRecord _ _ _ _ hit0), a⟩
 
 /-- A step of the term behind is matched by reduction of the term ahead. -/
 theorem step_behind {t t' : Term} (h : Ahead t t') :
@@ -422,6 +530,15 @@ theorem step_behind {t t' : Term} (h : Ahead t t') :
       exact ⟨_, steps_one (.ifFalse _ _), hy⟩
   | perform => intro u st; cases st
   | done hv _ => intro u st; cases st; exact ⟨_, steps_one (.done _), hv⟩
+  | split names hg hf ihg _ =>
+    intro u st
+    cases st with
+    | splitTarget _ _ st' =>
+      obtain ⟨_, s, a⟩ := ihg st'; exact ⟨_, steps_split _ _ s, .split _ a hf⟩
+    | splitRecord _ _ _ _ hit =>
+      obtain ⟨_, rfl, n1, r1⟩ := inv_record_behind hg
+      obtain ⟨_, hit', a⟩ := splitValues_left n1 r1 hf hit
+      exact ⟨_, steps_one (.splitRecord _ _ _ _ hit'), a⟩
 
 /-! ## Completed runs transfer both ways -/
 

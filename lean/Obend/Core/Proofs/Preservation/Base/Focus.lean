@@ -23,6 +23,7 @@ set_option autoImplicit false
   | .ifZero value zero successor => some (value,.condition zero successor environment)
   | .case scrutinee arms => some (scrutinee,.case arms environment)
   | .ifBool condition whenTrue whenFalse => some (condition,.ifBool whenTrue whenFalse environment)
+  | .split target names function => some (target,.split names function environment)
   | _ => none
 
 public structure FocusedSource (assumptions : Assumptions) (types : AddressTypes)
@@ -67,11 +68,11 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     intro context target targetType member uses name fuel targetTyped lookup _ ih types environment environmentTyped safe valid
     exact ⟨⟨targetType,member,⟨context,uses,environmentTyped,targetTyped,safe,valid⟩,.field lookup,.refl member⟩⟩
   case extend =>
-    intro context target fields targetType row targetUses fieldUses rowFuel targetTyped fieldsTyped rowValid _ ihTarget ihFields types environment environmentTyped safe valid
+    intro context target fields targetType row targetUses fieldUses rowFuel targetTyped fieldsTyped _ rowValid _ ihTarget ihFields types environment environmentTyped safe valid
     have targetSafe := safe_add_uses_left context targetUses fieldUses (source_uses_length targetTyped)
-      (source_uses_length (PartialTyping.record fieldsTyped)) safe
+      (fields_uses_length fieldsTyped) safe
     have fieldsSafe := safe_add_uses_right context targetUses fieldUses (source_uses_length targetTyped)
-      (source_uses_length (PartialTyping.record fieldsTyped)) safe
+      (fields_uses_length fieldsTyped) safe
     exact ⟨⟨targetType,overlay row targetType,⟨context,targetUses,environmentTyped,targetTyped,targetSafe,valid⟩,
       .extend environmentTyped fieldsTyped fieldsSafe valid rowValid,.refl _⟩⟩
   case reflect =>
@@ -134,6 +135,15 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.computation planType response (.variant row),.computation planType response result,
       ⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,
       .effectCase environmentTyped armsTyped valid pure,.refl _⟩⟩
+  case split =>
+    intro context target function names row functionType result tu fu targetTyped functionTyped _ covers spine ihTarget ihFunction types environment environmentTyped safe valid
+    have targetSafe := safe_add_uses_left context tu fu (source_uses_length targetTyped) (source_uses_length functionTyped) safe
+    have functionSafe := safe_add_uses_right context tu fu (source_uses_length targetTyped) (source_uses_length functionTyped) safe
+    have closed : row.tail = .emptyRow := by
+      simp only [SplitCovers, Bool.and_eq_true, beq_iff_eq] at covers; exact covers.1
+    obtain ⟨members, shape⟩ := spine.shape
+    exact ⟨⟨row,result,⟨context,tu,environmentTyped,targetTyped,targetSafe,valid⟩,
+      .split ⟨context,fu,environmentTyped,functionTyped,functionSafe,valid⟩ closed shape,.refl _⟩⟩
   case nil =>
     intros; trivial
   case cons =>

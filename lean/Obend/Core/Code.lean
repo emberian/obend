@@ -99,6 +99,7 @@ def tagData : Tag → Data
   | .get name => .variant "get" (.label name)
   | .inject name => .variant "inject" (.label name)
   | .field name => .variant "field" (.label name)
+  | .split names => .variant "split" (.record (names.map fun name => (name, unit)))
 
 @[expose] def tagOf : Data → Option Tag
   | .variant "hole" (.natural n) => some (.hole n)
@@ -124,10 +125,11 @@ def tagData : Tag → Data
   | .variant "get" (.label name) => some (.get name)
   | .variant "inject" (.label name) => some (.inject name)
   | .variant "field" (.label name) => some (.field name)
+  | .variant "split" (.record names) => some (.split (names.map Prod.fst))
   | _ => none
 
 theorem tagOf_tagData (tag : Tag) : tagOf (tagData tag) = some tag := by
-  cases tag <;> simp [tagData, tagOf, unit, primitiveOfName_name]
+  cases tag <;> simp [tagData, tagOf, unit, primitiveOfName_name, Function.comp_def]
 
 mutual
 /-- A `Tree Tag` as `Syntax`: `var` (a de Bruijn index), `bind` (one binder), `node` (a tag and
@@ -250,6 +252,7 @@ def lossyTagData : Tag → Data
   | .get name => .variant "get" (.label name)
   | .inject name => .variant "inject" (.label name)
   | .field name => .variant "field" (.label name)
+  | .split names => .variant "split" (.record (names.map fun name => (name, unit)))
 
 theorem lossy_tags_collapse : lossyTagData .mix = lossyTagData .app ∧ Tag.mix ≠ Tag.app :=
   ⟨rfl, by intro h; cases h⟩
@@ -1092,6 +1095,7 @@ inductive NoHole : Term → Prop where
   | ifBool {c t f : Term} : NoHole c → NoHole t → NoHole f → NoHole (.ifBool c t f)
   | perform {plan : Term} : NoHole plan → NoHole (.perform plan)
   | done {value : Term} : NoHole value → NoHole (.done value)
+  | split {t f : Term} {names : List String} : NoHole t → NoHole f → NoHole (.split t names f)
 
 /-- A typed term has no hole: `PartialTyping` has no rule for one. -/
 theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : Obend.Core.Ty.Uses}
@@ -1100,7 +1104,7 @@ theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : 
     (motive_1 := fun _ term _ _ _ => NoHole term)
     (motive_2 := fun _ fields _ _ _ => ∀ field ∈ fields, NoHole field.2)
     (motive_3 := fun _ _ arms _ _ _ _ => ∀ arm ∈ arms, NoHole arm.2)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; exact .bound _
   · intros; exact .natural _
   · intros; exact .boolean _
@@ -1126,6 +1130,7 @@ theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : 
   · intros; exact .perform (by assumption)
   · intros; exact .done (by assumption)
   · intros; exact .case (by assumption) (by assumption)
+  · intros; rename_i h1 h2; exact .split h1 h2
   · intro _ field member; simp at member
   · intro _ name body rest type row bu ru hb hr _ ihb ihr field member
     simp only [List.mem_cons] at member
@@ -1152,7 +1157,7 @@ theorem noHole_holeOf {t : Term} (h : NoHole t) : holeOf (encode t) = none := by
   | bound => simp [encode, holeOf]
   | lam _ ih => simp [encode, holeOf, ih]
   | app _ _ ih1 ih2 | mix _ _ ih1 ih2 | fix _ _ ih1 ih2 | specification _ _ ih1 ih2
-  | prototype _ _ ih1 ih2 | binary _ _ ih1 ih2 =>
+  | prototype _ _ ih1 ih2 | binary _ _ ih1 ih2 | split _ _ ih1 ih2 =>
     simp only [encode, holeOf]; exact holesOf_none (by simp [ih1, ih2])
   | reflect _ ih | metadata _ ih | project _ ih | get _ ih | inject _ ih | perform _ ih | done _ ih =>
     simp only [encode, holeOf]; exact holesOf_none (by simp [ih])

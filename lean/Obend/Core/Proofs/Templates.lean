@@ -308,6 +308,24 @@ theorem fieldsTyping_tail {assumptions : Assumptions} : ∀ {context : Context} 
     cases typed with
     | cons _ rest _ => simpa [Ty.tail] using fieldsTyping_tail rest
 
+theorem tail_instantiate : ∀ {row : Ty}, row.tail = .emptyRow → (row.instantiate σ).tail = .emptyRow
+  | .field _ _ rest, h => by simpa [Ty.instantiate, Ty.tail] using tail_instantiate (row := rest) (by simpa [Ty.tail] using h)
+  | .emptyRow, _ => rfl
+  | .natural, h | .label, h | .boolean, h | .variable _, h | .arrow _ _ _ _, h | .specification _ _, h
+  | .prototype _ _, h | .custody _, h | .variant _, h | .computation _ _ _, h => by simp [Ty.tail] at h
+
+theorem spineLabels_instantiate : ∀ (row : Ty), row.tail = .emptyRow →
+    spineLabels (row.instantiate σ) = spineLabels row
+  | .field _ _ rest, h => by simp [Ty.instantiate, spineLabels, spineLabels_instantiate rest (by simpa [Ty.tail] using h)]
+  | .emptyRow, _ => rfl
+  | .natural, h | .label, h | .boolean, h | .variable _, h | .arrow _ _ _ _, h | .specification _ _, h
+  | .prototype _ _, h | .custody _, h | .variant _, h | .computation _ _ _, h => by simp [Ty.tail] at h
+
+theorem splitCovers_instantiate' {row : Ty} {names : List String} (covers : SplitCovers row names = true) :
+    SplitCovers (row.instantiate σ) names = true := by
+  simp only [SplitCovers, Bool.and_eq_true, beq_iff_eq] at covers ⊢
+  exact ⟨tail_instantiate (σ := σ) covers.1, by rw [spineLabels_instantiate (σ := σ) _ covers.1]; exact covers.2⟩
+
 variable (D : Discharges σ template instance_ extra)
 include D
 
@@ -427,6 +445,24 @@ theorem Discharges.reusableAllowed_instantiate (reuse : Reuse) (context : Contex
     reusableAllowed instance_ reuse (instantiateContext σ context) uses = reusableAllowed template reuse context uses := by
   simp [reusableAllowed, reusableCaptures_instantiate D.shareable]
 
+theorem Discharges.splitCovers_instantiate {row : Ty} {names : List String} (covers : SplitCovers row names = true) :
+    SplitCovers (row.instantiate σ) names = true := splitCovers_instantiate' (σ := σ) covers
+
+theorem Discharges.splitSpine_instantiate (instanceValid : instance_.valid = true) {context : Context} {uses : Uses}
+    {row : Ty} : ∀ {names : List String} {functionType result : Ty},
+      SplitSpine template context uses row names functionType result →
+      SplitSpine instance_ (instantiateContext σ context) uses (row.instantiate σ) names
+        (functionType.instantiate σ) (result.instantiate σ)
+  | [], _, _, h => by cases h; rfl
+  | _ :: _, _, _, ⟨r, q, m, c, shape, ⟨fuel, found, l, same⟩, pure, allowed, share, rest⟩ =>
+    ⟨r, q, m.instantiate σ, c.instantiate σ, callable_instantiate shape,
+      ⟨fuel + extra, found.instantiate σ, D.lookup_instantiate fuel row _ found l,
+        D.sameType_instantiate instanceValid same⟩,
+      by rw [instantiate_isComputation D.pure]; exact pure,
+      by rw [D.caseAllowed_instantiate]; exact allowed,
+      by rw [shareableUnder_instantiate D.shareable]; exact share,
+      Discharges.splitSpine_instantiate instanceValid rest⟩
+
 /-- **The template theorem on the typing relation** (MODULAR-TYPING §6): a derivation under rigid
 bounds is a derivation at every instance that discharges them, in the instantiated context, at the
 instantiated type, with the same usage. Every lambda's annotation is instantiated with it (the
@@ -444,7 +480,7 @@ public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.v
       ArmsTyping instance_ (instantiateContext σ context) q arms (row.instantiate σ) (result.instantiate σ) uses)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
-    ?effectCase ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
+    ?effectCase ?split ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
   case bound =>
     intro Γ index binding found
     rw [← variableUses_instantiate (σ := σ)]
@@ -471,15 +507,15 @@ public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.v
     subst argumentType
     exact .application ihF ihA (callable_instantiate shape) rfl
       (by rw [D.argumentAllowed_instantiate]; exact allowed)
-  case record => intro Γ fields row uses _ ih; exact .record ih
+  case record => intro Γ fields row uses _ distinct ih; exact .record ih distinct
   case get =>
     intro Γ target targetType member uses name fuel _ found free ih
     exact .get ih (D.lookup_instantiate fuel targetType name member found)
       (by rw [linearFree_instantiate]; exact free)
   case extend =>
-    intro Γ target fields targetType row tu fu fuel _ fieldsTyped isRow free ihT ihF
+    intro Γ target fields targetType row tu fu fuel _ fieldsTyped distinct isRow free ihT ihF
     rw [overlay_instantiate (fieldsTyping_tail fieldsTyped)]
-    exact .extend ihT ihF (D.isRow_instantiate fuel targetType isRow)
+    exact .extend ihT ihF distinct (D.isRow_instantiate fuel targetType isRow)
       (by rw [linearFree_instantiate]; exact free)
   case specification =>
     intro Γ metadata extension metadataType extensionType mu eu _ _ pureM pureE free ihM ihE
@@ -547,6 +583,9 @@ public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.v
     intro Γ scrutinee arms plan response row result su au q _ _ nonComputation distinct allowed ihS ihA
     exact .effectCase ihS ihA (by rw [instantiate_isComputation D.pure]; exact nonComputation) distinct
       (by rw [D.caseAllowed_instantiate]; exact allowed)
+  case split =>
+    intro Γ target function names row functionType result tu fu _ _ nodup covers spine ihT ihF
+    exact .split ihT ihF nodup (D.splitCovers_instantiate covers) (D.splitSpine_instantiate instanceValid spine)
   case fieldsNil =>
     intro Γ; rw [← zeroUses_instantiate (σ := σ)]; exact .nil _
   case fieldsCons =>

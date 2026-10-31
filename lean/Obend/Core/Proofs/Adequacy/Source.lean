@@ -139,6 +139,9 @@ small-step semantics. The value/thunk rules do not force latent fields. -/
       exact ⟨sourceSteps_trans (sourceSteps_lift (fun c => .ifBool c _ _) (fun step => Step.ifCondition _ _ step) iht.1)
         (.next (Step.ifFalse _ _) ihr.1),ihr.2⟩
   | done first ih => exact ⟨.next (Step.done _) ih.1,ih.2⟩
+  | split first found second iht ihr =>
+      exact ⟨sourceSteps_trans (sourceSteps_lift (fun t => .split t _ _) (fun step => Step.splitTarget _ _ step) iht.1)
+        (.next (Step.splitRecord _ _ _ _ found) ihr.1),ihr.2⟩
 
  public theorem sourceDerivation_cost_positive {source result : Term} {cost : Nat}
     (derivation : SourceDerivation source result cost) : 0 < cost := by
@@ -181,6 +184,14 @@ strictly increases demand cost. Context reductions retain the latent terms. -/
   | ifTrue whenTrue whenFalse => exact ⟨_,.ifTrue (.value (.boolean true)) derivation,by omega⟩
   | ifFalse whenTrue whenFalse => exact ⟨_,.ifFalse (.value (.boolean false)) derivation,by omega⟩
   | done value => exact ⟨_,.done derivation,by omega⟩
+  | splitRecord fields names function values found =>
+      exact ⟨_,.split (.value (.record fields)) found derivation,by omega⟩
+  | splitTarget names function step ih =>
+      cases derivation with
+      | value value => cases value
+      | split first found second =>
+          obtain ⟨larger,first',greater⟩ := ih first
+          exact ⟨_,.split first' found second,by omega⟩
   | caseTarget arms step ih =>
       cases derivation with
       | value value => cases value

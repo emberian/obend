@@ -46,6 +46,9 @@ def termWork (annotations : Annotations) (path : List Nat) : Term → Nat
   | .record fields => 1 + annotationWork annotations path + fieldsWork annotations path 0 fields
   | .case t arms =>
     1 + annotationWork annotations path + termWork annotations (path ++ [0]) t + fieldsWork annotations (path ++ [1]) 0 arms
+  | .split t names f =>
+    1 + names.length + annotationWork annotations path + termWork annotations (path ++ [0]) t +
+      termWork annotations (path ++ [1]) f
 def fieldsWork (annotations : Annotations) (path : List Nat) (index : Nat) : List (String × Term) → Nat
   | [] => 0
   | (_, t) :: rest => termWork annotations (path ++ [index]) t + fieldsWork annotations path (index + 1) rest
@@ -66,6 +69,7 @@ def nestingDepth : Term → Nat
   | .extend t fields => max (nestingDepth t) (fieldsDepth fields) + 1
   | .record fields => fieldsDepth fields + 1
   | .case t arms => max (nestingDepth t) (fieldsDepth arms) + 1
+  | .split t _ f => max (nestingDepth t) (nestingDepth f) + 1
 def fieldsDepth : List (String × Term) → Nat
   | [] => 0
   | (_, t) :: rest => max (nestingDepth t + 1) (fieldsDepth rest)

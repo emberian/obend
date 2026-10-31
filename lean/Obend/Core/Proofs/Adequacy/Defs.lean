@@ -69,6 +69,12 @@ public inductive SourceDerivation : Term → Term → Nat → Prop where
       SourceDerivation (.ifBool condition whenTrue whenFalse) result (conditionCost+resultCost+1)
   | done {value result : Term} {cost : Nat} :
       SourceDerivation value result cost → SourceDerivation (.done value) result (cost+1)
+  | split {target function result : Term} {fields : List (String × Term)} {names : List String}
+      {values : List Term} {targetCost resultCost : Nat} :
+      SourceDerivation target (.record fields) targetCost →
+      splitValues fields names = some values →
+      SourceDerivation (applyAll function values) result resultCost →
+      SourceDerivation (.split target names function) result (targetCost+resultCost+1)
 
 /-- The assignment gives each address a finite source computation; it does NOT
 recursively unfold its pointers. In particular a recursive address can denote a
@@ -134,6 +140,7 @@ assignment remains finite syntax even when these computations contain Fix. -/
       (arms.map fun arm => (arm.1,arm.2.substitute (liftSubstitution (environmentSubstitution meaning environment))))
   | .ifBool whenTrue whenFalse environment => .ifBool hole
       (closeTerm meaning environment whenTrue) (closeTerm meaning environment whenFalse)
+  | .split names function environment => .split hole names (closeTerm meaning environment function)
 
 @[expose] public def stackMeaning (meaning : AddressMeaning) (stack : List Frame) (hole : Term) : Term :=
   stack.foldl (fun prior frame => frameMeaning meaning frame prior) hole
@@ -185,6 +192,7 @@ public inductive DemandContext where
   | binary (primitive : Primitive) (right : Term)
   | case (arms : List (String × Term))
   | ifBool (whenTrue whenFalse : Term)
+  | split (names : List String) (function : Term)
 
 @[expose] public def DemandContext.term : DemandContext → Term → Term
   | .argument arg, hole => .app hole arg
@@ -197,6 +205,7 @@ public inductive DemandContext where
   | .binary primitive right, hole => .binary primitive hole right
   | .case arms, hole => .case hole arms
   | .ifBool whenTrue whenFalse, hole => .ifBool hole whenTrue whenFalse
+  | .split names function, hole => .split hole names function
 
 @[expose] public def DemandContext.frame : DemandContext → Environment → Frame
   | .argument arg, environment => .argument arg environment
@@ -209,6 +218,7 @@ public inductive DemandContext where
   | .binary primitive right, environment => .binaryLeft primitive right environment
   | .case arms, environment => .case arms environment
   | .ifBool whenTrue whenFalse, environment => .ifBool whenTrue whenFalse environment
+  | .split names function, environment => .split names function environment
 
 public inductive ImmediateValue where
   | closure (body : Term)

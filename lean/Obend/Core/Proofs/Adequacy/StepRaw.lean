@@ -62,6 +62,17 @@ set_option autoImplicit false
         | true => simp [stepRaw,control,shared,ResultControl] at successful
         | false => exact graph_evaluate_perform_names represented control shared
       evaluate_done := fun state value environment control represented successful => by exact graph_evaluate_done_names represented control
+      evaluate_split := fun state target names function environment control represented successful => by exact graph_evaluate_context_names (context := .split names function) represented control
+      return_split := fun state value names function environment rest control frames represented successful => by
+        cases value with
+        | record fields =>
+            cases found : splitValues fields names with
+            | none => simp [stepRaw,control,frames,found,ResultControl] at successful
+            | some addresses =>
+                obtain ⟨next, same, current, _⟩ := graph_split_return_names represented control frames found
+                exact ⟨next, same, current⟩
+        | closure _ _ | specification _ _ | prototype _ _ | natural _ | boolean _ | label _ | variant _ _ =>
+            simp [stepRaw,control,frames,ResultControl] at successful
       return_nil := fun state value control frames represented successful => by exact graph_complete_return_names represented control frames
       return_update := fun state value address rest control frames represented successful => by exact graph_cache_update_names represented control frames
       return_argument := fun state value argument environment rest control frames represented successful => by
@@ -191,6 +202,8 @@ fault/blackhole successors are proved independently in DemandInvariant. -/
       evaluate_ifBool := fun state _ _ _ environment control represented successful => by exact graph_via_names represented successful
       evaluate_perform := fun state _ environment control represented successful => by exact graph_via_names represented successful
       evaluate_done := fun state _ environment control represented successful => by exact graph_via_names represented successful
+      evaluate_split := fun state _ _ _ environment control represented successful => by exact graph_via_names represented successful
+      return_split := fun state _ _ _ _ _ control frames represented successful => by exact graph_via_names represented successful
       return_nil := fun state value control frames represented successful => by exact graph_complete_return represented control frames
       return_update := fun state value address rest control frames represented successful => by exact graph_cache_update represented control frames
       return_argument := fun state value argument environment rest control frames represented successful => by

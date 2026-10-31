@@ -67,6 +67,10 @@ public theorem argumentAllowed_not_computation {assumptions : Assumptions} {quan
   simp only [argumentAllowed,Bool.and_eq_true] at allowed
   simpa using allowed.1.1
 
+/-- A closed explicit row is not an activity. -/
+public theorem tail_empty_not_computation {row : Ty} (closed : row.tail = .emptyRow) : row.isComputation = false := by
+  cases row <;> simp_all [Ty.tail, Ty.isComputation]
+
 /-- An activity-typed continuation begins with an effect case: no other frame,
 and in particular no update frame (a shared cell being forced), accepts one. -/
 public theorem stack_activity_head {assumptions : Assumptions} {types : AddressTypes}
@@ -89,6 +93,7 @@ public theorem stack_activity_head {assumptions : Assumptions} {types : AddressT
       | binaryRight left => rename_i primitive _; cases primitive <;> simp_all [primitiveTypes,Ty.isComputation]
       | effectCase => exact ⟨_,_,rfl⟩
       | case => exact ⟨_,_,rfl⟩
+      | split _ closed _ => simp [tail_empty_not_computation closed] at activity
       | _ => simp_all [Ty.isComputation]
   | conversion agreement restTyped ih =>
       intro activity; exact ih ((sameType_isComputation agreement) ▸ activity)

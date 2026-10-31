@@ -31,6 +31,7 @@ inductive Tag where
   | get (name : String)
   | inject (name : String)
   | field (name : String)
+  | split (names : List String)
 
 abbrev Shape := Tree Tag
 
@@ -59,6 +60,7 @@ def encode : Term → Shape
   | .ifZero a b c => .node .ifZero [encode a, encode b, .bind (encode c)]
   | .inject n a => .node (.inject n) [encode a]
   | .case a fs => .node .case (encode a :: fs.map (fun f => .node (.field f.1) [.bind (encode f.2)]))
+  | .split a ns b => .node (.split ns) [encode a, encode b]
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf
@@ -103,6 +105,7 @@ def decode : Shape → Term
   | .node .case (a :: fs) => .case (decode a) (fs.map fun f => match decode f with
       | .get (.lam b) n => (n, b)
       | _ => ("", .bound 0))
+  | .node (.split ns) [a, b] => .split (decode a) ns (decode b)
   | _ => .bound 0
 termination_by t => sizeOf t
 decreasing_by

@@ -49,6 +49,8 @@ inductive Sim : Term → Term → Prop where
       Sim (.ifBool c x y) (.ifBool c' x' y')
   | perform {p p' : Term} : Sim p p' → Sim (.perform p) (.perform p')
   | done {v v' : Term} : Sim v v' → Sim (.done v) (.done v')
+  | split (names : List String) {g g' f f' : Term} : Sim g g' → Sim f f' →
+      Sim (.split g names f) (.split g' names f')
   /-- The two associations. -/
   | assocLR {a a' b b' c c' : Term} : Sim a a' → Sim b b' → Sim c c' →
       Sim (.mix (.mix a b) c) (.mix a' (.mix b' c'))
@@ -92,6 +94,7 @@ theorem refl : (t : Term) → Sim t t
   | .ifBool c x y => .ifBool (refl c) (refl x) (refl y)
   | .perform p => .perform (refl p)
   | .done v => .done (refl v)
+  | .split g names f => .split names (refl g) (refl f)
 termination_by t => sizeOf t
 decreasing_by
   all_goals simp_wf
@@ -137,6 +140,7 @@ theorem rename {t t' : Term} (h : Sim t t') : ∀ f : Nat → Nat, Sim (t.rename
   | ifBool _ _ _ i1 i2 i3 => intro f; simp only [Term.rename]; exact .ifBool (i1 f) (i2 f) (i3 f)
   | perform _ ih => intro f; simp only [Term.rename]; exact .perform (ih f)
   | done _ ih => intro f; simp only [Term.rename]; exact .done (ih f)
+  | split names _ _ i1 i2 => intro f; simp only [Term.rename]; exact .split names (i1 f) (i2 f)
   | assocLR _ _ _ i1 i2 i3 => intro f; simp only [Term.rename]; exact .assocLR (i1 f) (i2 f) (i3 f)
   | assocRL _ _ _ i1 i2 i3 => intro f; simp only [Term.rename]; exact .assocRL (i1 f) (i2 f) (i3 f)
   | bodyLR hs _ _ _ _ _ i1 i2 i3 i4 i5 =>
@@ -193,6 +197,8 @@ theorem subst {t t' : Term} (h : Sim t t') :
     intro σ σ' hσ hs; simp only [Term.substitute]; exact .ifBool (i1 hσ hs) (i2 hσ hs) (i3 hσ hs)
   | perform _ ih => intro σ σ' hσ hs; simp only [Term.substitute]; exact .perform (ih hσ hs)
   | done _ ih => intro σ σ' hσ hs; simp only [Term.substitute]; exact .done (ih hσ hs)
+  | split names _ _ i1 i2 =>
+    intro σ σ' hσ hs; simp only [Term.substitute]; exact .split names (i1 hσ hs) (i2 hσ hs)
   | assocLR _ _ _ i1 i2 i3 =>
     intro σ σ' hσ hs; simp only [Term.substitute]; exact .assocLR (i1 hσ hs) (i2 hσ hs) (i3 hσ hs)
   | assocRL _ _ _ i1 i2 i3 =>
@@ -275,6 +281,8 @@ theorem substRefl : (C : Term) → ∀ {σ σ' : Nat → Term}, (∀ n, Sim (σ 
     simp only [Term.substitute]; exact .ifBool (substRefl c h) (substRefl x h) (substRefl y h)
   | .perform p, σ, σ', h => by simp only [Term.substitute]; exact .perform (substRefl p h)
   | .done v, σ, σ', h => by simp only [Term.substitute]; exact .done (substRefl v h)
+  | .split g names f, σ, σ', h => by
+    simp only [Term.substitute]; exact .split names (substRefl g h) (substRefl f h)
 termination_by C => sizeOf C
 decreasing_by
   all_goals simp_wf

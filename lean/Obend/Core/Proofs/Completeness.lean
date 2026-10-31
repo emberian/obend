@@ -53,6 +53,7 @@ set_option autoImplicit false
   | binaryRight primitive left => exact .binaryRight _ _ (valueMeaning_value _ _) step
   | case arms environment => exact .caseTarget _ step
   | ifBool whenTrue whenFalse environment => exact .ifCondition _ _ step
+  | split names function environment => exact .splitTarget _ _ step
 
  theorem sourceStep_stack (meaning : AddressMeaning) (frames : List Frame) {before after : Term} (step : Step before after) :
     Step (stackMeaning meaning frames before) (stackMeaning meaning frames after) := by
@@ -269,6 +270,7 @@ focus closed under the actual continuation (update frames are transparent). -/
   | .extend fields _ => 3 * sizeOf fields
   | .case arms _ => 3 * sizeOf arms
   | .ifBool whenTrue whenFalse _ => 3 * (sizeOf whenTrue + sizeOf whenFalse)
+  | .split _ function _ => 3 * sizeOf function
   | .update _ | .field _ | .reflect | .metadata | .project | .binaryRight _ _ => 0
 
 @[expose] public noncomputable def heapPotential (heap : Array Cell) : Nat := (heap.toList.map cellPotential).sum
@@ -732,6 +734,33 @@ yielding transition leaves the continuation untouched. -/
     simpa [stackMeaning,frameMeaning] using sourceStep_stack meaning rest (Step.applySpecification (meaning descriptor) (meaning extension) (closeTerm meaning environment argument))
   · exact sourceSteps_stack meaning state.stack focused
 
+/-- A destructor's return is a genuine reduction of the whole residual program (`splitRecord`). -/
+ theorem split_return_advance {meaning : AddressMeaning} {state : State} {source : Term}
+    {fields : List (String × Address)} {names : List String} {function : Term} {environment : Environment}
+    {rest : List Frame} {addresses : List Address}
+    (represented : GraphRepresentsBy meaning state source)
+    (control : state.control = .returned (.record fields))
+    (frames : state.stack = .split names function environment::rest)
+    (found : splitValues fields names = some addresses) :
+    ∃ next : AddressMeaning, GraphRepresentsBy next (stepRaw state) source ∧ WholeAdvance meaning next state (stepRaw state) := by
+  obtain ⟨next,_,current,whole⟩ := graph_split_return_names represented control frames found
+  have evaluate : (stepRaw state).control = .evaluate function environment := by simp [stepRaw,control,frames,found]
+  refine ⟨next,current,
+    stackMeaning meaning state.stack (valueMeaning meaning (.record fields)),
+    stackMeaning next (stepRaw state).stack (closeTerm next environment function),?_,?_,
+    Or.inl ⟨stackMeaning meaning rest (applyAll (closeTerm meaning environment function) (addresses.map meaning)),?_,?_⟩⟩
+  · simp [budgetWhole,budgetFocus,control,controlMeaning]
+  · simp [budgetWhole,budgetFocus,evaluate,controlMeaning]
+  · rw [frames]
+    have step := sourceStep_stack meaning rest
+      (Step.splitRecord (fields.map fun field => (field.1, meaning field.2)) names (closeTerm meaning environment function)
+        (addresses.map meaning) (by rw [splitValues_map meaning fields names, found]; rfl))
+    have e : stackMeaning meaning (.split names function environment :: rest) (valueMeaning meaning (.record fields)) =
+        stackMeaning meaning rest (.split (.record (fields.map fun field => (field.1, meaning field.2))) names
+          (closeTerm meaning environment function)) := rfl
+    rw [e]; exact step
+  · rw [whole]; exact .refl _
+
 /-! ## Every raw transition advances the whole program -/
 
  theorem graph_stepRaw_whole {meaning : AddressMeaning} {state : State} {source : Term}
@@ -787,6 +816,7 @@ yielding transition leaves the continuation untouched. -/
       | done value =>
           obtain ⟨next,same,current,dispatch⟩ := graph_evaluate_done_execution represented control
           exact ⟨next,current,dispatch_advance represented same current noEnter dispatch⟩
+      | split target names function => exact context_advance (context := .split names function) represented successful control
   | returned value =>
       have noEnter : ∀ address, state.control ≠ .enter address := by intro address; simp [control]
       cases frames : state.stack with
@@ -882,6 +912,14 @@ yielding transition leaves the continuation untouched. -/
                   obtain ⟨next,same,current,dispatch⟩ := graph_ifBool_return_execution represented control frames
                   exact ⟨next,current,dispatch_advance represented same current noEnter dispatch⟩
               | closure _ _ | specification _ _ | prototype _ _ | natural _ | label _ | record _ | variant _ _ =>
+                  simp [stepRaw,control,frames,ResultControl] at successful
+          | split names function environment =>
+              cases value with
+              | record fields =>
+                  cases found : splitValues fields names with
+                  | none => simp [stepRaw,control,frames,found,ResultControl] at successful
+                  | some addresses => exact split_return_advance represented control frames found
+              | closure _ _ | specification _ _ | prototype _ _ | natural _ | boolean _ | label _ | variant _ _ =>
                   simp [stepRaw,control,frames,ResultControl] at successful
 
 /-! ## Finite completion -/

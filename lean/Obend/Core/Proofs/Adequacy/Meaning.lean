@@ -198,6 +198,8 @@ substitution, even when the environment points into a cyclic heap. -/
   | ifBool whenTrue whenFalse environment =>
       simp only [frameMeaning,closeTerm_meaning_congr valid.1 valid.2.1 same,
         closeTerm_meaning_congr valid.1 valid.2.2 same]
+  | split names function environment =>
+      simp only [frameMeaning,closeTerm_meaning_congr valid.1 valid.2 same]
 
  public theorem valueMeaning_value (meaning : AddressMeaning) (value : RuntimeValue) :
     Value (valueMeaning meaning value) := by
@@ -259,6 +261,7 @@ substitution, even when the environment points into a cyclic heap. -/
       | binaryRight primitive left => exact .binaryRight _ _ (valueMeaning_value _ _) step
       | case arms environment => exact .caseTarget _ step
       | ifBool whenTrue whenFalse environment => exact .ifCondition _ _ step
+      | split names function environment => exact .splitTarget _ _ step
 
  public theorem stackRealizes_congr {bound : Nat} {first second : AddressMeaning} {root focus : Term}
     {stack : List Frame} (valid : ∀ frame ∈ stack, FrameValid bound frame)
@@ -273,7 +276,7 @@ substitution, even when the environment points into a cyclic heap. -/
       | update address =>
           exact ⟨by simpa only [StackRealizes,same _ hv] using realizes.1,
             by simpa only [same _ hv] using ih ht realizes.2⟩
-      | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ =>
+      | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ | split _ _ _ =>
           simpa only [StackRealizes,frameMeaning_congr hv same] using ih ht realizes
 
  public theorem stackRealizes_steps {meaning : AddressMeaning} {root before after : Term}
@@ -284,7 +287,7 @@ substitution, even when the environment points into a cyclic heap. -/
   | cons frame rest ih =>
       cases frame with
       | update address => exact ⟨sourceSteps_trans realizes.1 steps,realizes.2⟩
-      | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ =>
+      | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ | split _ _ _ =>
           exact ih realizes (sourceSteps_frame _ _ steps)
 
  public theorem sourceSteps_stack (meaning : AddressMeaning) (stack : List Frame) {before after : Term}
@@ -303,7 +306,7 @@ provenance: each erased boundary contributes its actual demand derivation. -/
       cases frame with
       | update address =>
           exact sourceSteps_trans (ih realizes.2) (sourceSteps_stack meaning rest realizes.1)
-      | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ =>
+      | argument _ _ | field _ | reflect | metadata | project | extend _ _ | condition _ _ _ | binaryLeft _ _ _ | binaryRight _ _ | case _ _ | ifBool _ _ _ | split _ _ _ =>
           exact ih realizes
 
  public theorem heapRealizes_set {meaning : AddressMeaning} {heap : Array Cell}

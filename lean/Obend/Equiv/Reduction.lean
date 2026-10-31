@@ -110,6 +110,13 @@ theorem extendFields_map (g : Term → Term) (inherited fields : List (String ×
   simp only [extendFields, mapFields, List.map_append, List.filter_map, List.any_map]
   rfl
 
+theorem applyAll_substitute (σ : Nat → Term) : ∀ (function : Term) (values : List Term),
+    (applyAll function values).substitute σ = applyAll (function.substitute σ) (values.map (·.substitute σ))
+  | _, [] => rfl
+  | function, value :: values => by
+    simp only [applyAll, List.map_cons]
+    rw [applyAll_substitute σ (.app function value) values]; simp only [Term.substitute]
+
 /-! ## `Step` is closed under substitution -/
 
 theorem step_substitute {t u : Term} (σ : Nat → Term) (h : Step t u) :
@@ -160,6 +167,12 @@ theorem step_substitute {t u : Term} (σ : Nat → Term) (h : Step t u) :
   | ifTrue => simp only [Term.substitute]; exact .ifTrue _ _
   | ifFalse => simp only [Term.substitute]; exact .ifFalse _ _
   | done value => simp only [Term.substitute]; exact .done _
+  | splitTarget names function _ ih => simp only [Term.substitute]; exact .splitTarget _ _ (ih σ)
+  | splitRecord fields names function values hit =>
+    simp only [Term.substitute]
+    rw [applyAll_substitute]
+    refine .splitRecord _ _ _ _ ?_
+    rw [splitValues_map (fun t => t.substitute σ) fields names, hit]; rfl
 
 theorem steps_substitute {t u : Term} (σ : Nat → Term) (h : Steps t u) :
     Steps (t.substitute σ) (u.substitute σ) := by

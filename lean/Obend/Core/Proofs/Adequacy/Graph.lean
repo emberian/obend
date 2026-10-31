@@ -132,6 +132,10 @@ context therefore supplies a finite derivation for the demanded focus. -/
       | value value => cases value
       | ifTrue first second => exact ⟨_,_,first,by omega⟩
       | ifFalse first second => exact ⟨_,_,first,by omega⟩
+  | split names function environment =>
+      cases derivation with
+      | value value => cases value
+      | split first found second => exact ⟨_,_,first,by omega⟩
 
  public theorem stack_derivation_demand {meaning : AddressMeaning} {stack : List Frame} {focus result : Term} {cost : Nat}
     (derivation : SourceDerivation (stackMeaning meaning stack focus) result cost) :
@@ -185,7 +189,7 @@ constructed by the existing graph theorem, rather than an evaluation oracle. -/
           apply List.map_congr_left
           intro arm member
           exact Prod.ext rfl (scoped_substitute_identity (scopedArms arm member) Term.bound (by intros; rfl))
-      | argument _ | field _ | reflect | metadata | project | binary _ _ | ifBool _ _ => rfl
+      | argument _ | field _ | reflect | metadata | project | binary _ _ | ifBool _ _ | split _ _ => rfl
 
  public theorem demandContext_dispatch {state : State} {context : DemandContext} {hole : Term} {environment : Environment}
     (evaluate : state.control = .evaluate (context.term hole) environment) :

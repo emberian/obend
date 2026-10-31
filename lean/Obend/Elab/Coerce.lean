@@ -317,11 +317,13 @@ theorem width_fields_check {a : Assumptions} {source : Ty} {q : Quantity} (notLi
       addUses, Nat.add_comm]
 
 /-- **A width/representative record coercion checks, by proof.** Each kept member agrees with
-the source's, and two or more kept fields have a shareable source: then the emitted record of
+the source's, two or more kept fields have a shareable source, and the kept labels are distinct (a record
+names each field once): then the emitted record of
 projections is accepted at `source ⇒ target` without running the checker. -/
 theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × Ty)} (valid : a.valid = true)
     (kept : KeptAgree a source fields)
-    (sharing : fields.length ≤ 1 ∨ source.shareableUnder a.shareableVariables = true) :
+    (sharing : fields.length ≤ 1 ∨ source.shareableUnder a.shareableVariables = true)
+    (distinct : labelsDistinct (fields.map fun (name, _) => (name, Term.get (.bound 0) name)) = true) :
     ∃ checked, checkAgainst ⟨widthTerm fields, treeAnnotations (widthTree source (rowOf fields) fields), a⟩ []
       (.arrow .reusable (widthQuantity fields) source (rowOf fields)) = .ok checked := by
   let annotations := treeAnnotations (widthTree source (rowOf fields) fields)
@@ -344,6 +346,7 @@ theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × T
   have topValid : validContext a.shareableVariables [] = true := rfl
   simp [checkAgainst, checkAt, elaborate, widthTerm, root, recordRoot, introduce, membersOk, finish,
     checkedSynth, sameType_refl, need_ok safe, need_ok validCtx, need_ok captures, need_ok fits, need_ok valid, hint,
-    need_ok top, need_ok topValid, bind, Except.bind, pure, Except.pure, annotations, Except.map, Functor.map]
+    need_ok top, need_ok topValid, need_ok distinct, bind, Except.bind, pure, Except.pure, annotations, Except.map,
+    Functor.map]
 
 end Obend.Elab.Coerce

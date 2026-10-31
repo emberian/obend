@@ -446,13 +446,13 @@ theorem shadowed_once_closure_laundering_refused :
       (fun position => if position = [0,0,1] then some ⟨.natural,.natural,.unrestricted,.once⟩ else none))
       []).isNone = true := by check_reduce
 
-/-- Control: the same program with a shareable hidden member is accepted. The member is
-`unrestricted` (lane Sound, 11-01; it was `linear`): at `linear` the shadowed field drops it, and
-this legacy checker binds every case payload `unrestricted`, so its scrutinee's captures must be
-reusable. -/
-theorem shadowed_shareable_member_accepted :
-    (synth (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.unrestricted⟩]).map
-      (fun checked => checked.type) = some .natural := by check_reduce
+/-- REFUSED (lane C2, 11-01; was accepted as the control): the same program with a shareable
+hidden member. A record literal names each field once (`PartialTyping.record`), so the shadowing
+literal `{a = 1, a = h}` is refused before any quantity is consulted; shadowing is `extend`'s
+(`shadowed_override_accepted` below). -/
+theorem shadowed_shareable_member_refused :
+    (synth (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.unrestricted⟩]).isNone = true := by
+  check_reduce
 
 /-- REFUSED (was accepted, pinned as the control above): at `linear` the same program drops the
 hypothesis in two steps (`caseInject` substitutes the record, `field` reads the first `a`); the

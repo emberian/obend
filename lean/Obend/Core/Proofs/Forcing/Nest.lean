@@ -44,7 +44,8 @@ and it is popped only from a returned value. -/
 theorem persist_step {s : State} {w : Nat} {R Y : List Frame} (h : s.stack = Y ++ .update w :: R) :
     (∃ Y', (stepRaw s).stack = Y' ++ .update w :: R) ∨
       (Y = [] ∧ (stepRaw s).stack = R ∧ ∃ v, s.control = .returned v) := by
-  rcases stepRaw_stack_shape s with same | ⟨fr, push⟩ | ⟨fr, rest, eq, notUpdate, fr', next⟩ | ⟨fr, rest, eq, next⟩
+  rcases stepRaw_stack_shape s with same | ⟨fr, push⟩ | ⟨fr, rest, eq, notUpdate, fr', next⟩ | ⟨fr, rest, eq, next⟩ |
+      ⟨fr, rest, frs, eq, notUpdate, _, next, _⟩
   · exact Or.inl ⟨Y, by rw [same, h]⟩
   · exact Or.inl ⟨fr :: Y, by rw [push, h]; rfl⟩
   · cases Y with
@@ -61,7 +62,19 @@ theorem persist_step {s : State} {w : Nat} {R Y : List Frame} (h : s.stack = Y +
     | cons y ys =>
       rw [h] at eq; simp at eq
       exact Or.inl ⟨ys, by rw [next, ← eq.2]⟩
+  · cases Y with
+    | nil =>
+      rw [h] at eq; simp at eq; exact absurd eq.1.symm (notUpdate w)
+    | cons y ys =>
+      rw [h] at eq; simp at eq
+      exact Or.inl ⟨frs ++ ys, by rw [next, ← eq.2]; simp⟩
 
+
+theorem splitFrames_update {cs : List Address} {rest X : List Frame} {a : Nat}
+    (h : splitFrames cs ++ rest = .update a :: X) : cs = [] ∧ rest = .update a :: X := by
+  cases cs with
+  | nil => exact ⟨rfl, by simpa [splitFrames] using h⟩
+  | cons c cs => simp [splitFrames] at h
 
 /-- Only entering a cell pushes its update frame. -/
 public theorem stepRaw_push_update (s : State) {fr : Frame} (push : (stepRaw s).stack = fr :: s.stack)
@@ -88,7 +101,7 @@ public theorem stepRaw_push_update (s : State) {fr : Frame} (push : (stepRaw s).
     | cons frame rest =>
       cases frame <;> simp only [stepRaw] at push <;> (try split at push) <;> (try split at push) <;>
         (try split at push) <;> simp at push <;>
-        first | exact absurd push (lenFalse2 _ _ _) | exact absurd push.2 (lenFalse2 _ _ _) | skip
+        first | exact absurd push (lenFalse2 _ _ _) | exact absurd push.2 (lenFalse2 _ _ _) | exact absurd (splitFrames_update push).2 (lenFalse2 _ _ _) | skip
 
 /-- A transition never writes an update frame over another top frame. -/
 public theorem stepRaw_top_update (s : State) {fr : Frame} {rest : List Frame} (stack : s.stack = fr :: rest)
@@ -99,7 +112,7 @@ public theorem stepRaw_top_update (s : State) {fr : Frame} {rest : List Frame} (
     simp only at stack hv; subst stack hv
     cases fr <;> simp only [stepRaw] at next <;> (try split at next) <;> (try split at next) <;>
       (try split at next) <;> simp at next <;>
-      first | rfl | (have := congrArg List.length next; simp at this) | skip
+      first | rfl | (have := congrArg List.length (splitFrames_update next).2; simp at this; done) | (have := congrArg List.length next; simp at this) | skip
   · have notReturned : ∀ v, s.control ≠ .returned v := fun v h => r ⟨v, h⟩
     rcases stepRaw_stack_grows s notReturned with same | ⟨fr'', push⟩
     · rw [same, stack] at next; simp at next; exact next
@@ -220,7 +233,7 @@ public theorem nested_pop {σ : State} {w : Nat} {o : Closure} {R : List Frame} 
         refine ⟨⟨Y', by rw [exec_succ]; exact hY'', ?_⟩, by rw [exec_succ, keepW]; exact evalW⟩
         -- no update w in Y'
         rcases stepRaw_stack_shape (exec j σ) with same | ⟨fr, push⟩ | ⟨fr, rest, eq, notUpd, fr', next⟩ |
-            ⟨fr, rest, eq, next⟩
+            ⟨fr, rest, eq, next⟩ | ⟨fr, rest, frs, eq, notUpd, frsNo, next, _⟩
         · rw [same, hY] at hY''
           have := List.append_cancel_right hY''
           subst this; exact noW
@@ -260,6 +273,18 @@ public theorem nested_pop {σ : State} {w : Nat} {o : Closure} {R : List Frame} 
             have := List.append_cancel_right hY''
             subst this
             exact fun f mem => noW f (List.mem_cons_of_mem _ mem)
+        · cases Y with
+          | nil => rw [hY] at eq; simp at eq; exact absurd eq.1.symm (notUpd w)
+          | cons y ys =>
+            rw [hY] at eq; simp at eq
+            rw [next, ← eq.2] at hY''
+            have := List.append_cancel_right (show (frs ++ ys) ++ Frame.update w :: R = Y' ++ Frame.update w :: R by
+              simpa using hY'')
+            subst this
+            intro f mem
+            rcases List.mem_append.mp mem with m | m
+            · intro isW; exact frsNo f m w isW
+            · exact noW f (List.mem_cons_of_mem _ m)
   obtain ⟨⟨Yp, hYp, noWp⟩, evalp⟩ := inv p pPos (Nat.le_refl _)
   rcases persist_step hYp with ⟨Y', h⟩ | ⟨rfl, popped, v, ctl⟩
   · exact absurd ⟨Y', by rw [exec_succ]; exact h⟩ pFail

@@ -85,6 +85,7 @@ theorem stack_activity_no_update {assumptions : Assumptions} {types : AddressTyp
       | effectCase =>
           have rest := ih rfl
           simpa [forcingShared] using rest
+      | split _ closed _ => simp [tail_empty_not_computation closed] at activity
       | _ => simp_all [Ty.isComputation]
   | conversion agreement restTyped ih =>
       intro activity; exact ih ((sameType_isComputation agreement) ▸ activity)
@@ -200,6 +201,7 @@ theorem stack_activity_signature {assumptions : Assumptions} {types : AddressTyp
           refine ⟨final,sameType_trans finalEq ?_⟩
           exact (sameType_iff _ _ _).mpr (Obend.Core.TypeGraph.computation_congruence
             components.1 components.2.1 ((Obend.Core.TypeGraph.equivalent_equivalence assumptions).refl _))
+      | split _ closed _ => simp [tail_empty_not_computation closed] at activity
       | _ => simp_all [Ty.isComputation]
   | conversion agreement restTyped ih =>
       intro plan response produced equal
@@ -254,6 +256,6 @@ outcome, as the closed data term a kernel resumes with, is typed at the
 counter's declared Response sum. -/
 theorem written_response_typed :
     PartialTyping {} [] (.inject "written" (.record [])) responseType [] :=
-  .inject (fuel := 1) (.record (.nil [])) (by decide) rfl
+  .inject (fuel := 1) (.record (.nil []) rfl) (by decide) rfl
 
 end Obend.Core.Proofs.Preservation

@@ -50,6 +50,11 @@ inductive Term where
   | perform (plan : Term)
   /-- A pure value where an activity is expected (return). Reduces to its value. -/
   | done (value : Term)
+  /-- The consuming record destructor (`prodrec`-shaped), `let {n₀, …, nₖ₋₁} = target in body` with
+  the body as a curried `function`: the target is forced to a record and `function` is applied to its
+  fields named `names`, in order. It binds no variable itself; each field is bound by `function`'s own
+  parameter, at that parameter's quantity. -/
+  | split (target : Term) (names : List String) (function : Term)
   deriving Repr
 
 @[expose] def liftRename (rename : Nat → Nat) : Nat → Nat
@@ -85,6 +90,7 @@ inductive Term where
       .ifBool (condition.rename rename) (whenTrue.rename rename) (whenFalse.rename rename)
   | .perform plan => .perform (plan.rename rename)
   | .done value => .done (value.rename rename)
+  | .split target names function => .split (target.rename rename) names (function.rename rename)
 
 termination_by source => sizeOf source
 decreasing_by
@@ -134,6 +140,8 @@ decreasing_by
         (whenFalse.substitute substitution)
   | .perform plan => .perform (plan.substitute substitution)
   | .done value => .done (value.substitute substitution)
+  | .split target names function =>
+      .split (target.substitute substitution) names (function.substitute substitution)
 
 termination_by source => sizeOf source
 decreasing_by
@@ -171,6 +179,39 @@ inductive Value : Term → Prop where
 New fields shadow inherited fields; the inherited computation remains super. -/
 @[expose] def extendFields (inherited fields : List (String × Term)) : List (String × Term) :=
   fields ++ inherited.filter (fun prior => !(fields.any fun field => field.1 == prior.1))
+
+/-- The fields a destructor passes, in the order of its names: the first field of each name, as
+`get` selects it. `none` when a name is missing. -/
+@[expose] def splitValues {α : Type} (fields : List (String × α)) : List String → Option (List α)
+  | [] => some []
+  | name :: names => do
+      let (_, body) ← fields.find? (fun field => field.1 == name)
+      let rest ← splitValues fields names
+      pure (body :: rest)
+
+theorem find?_map_snd {α β : Type} (g : α → β) (name : String) :
+    ∀ fields : List (String × α),
+      (fields.map fun field => (field.1, g field.2)).find? (fun field => field.1 == name) =
+        (fields.find? (fun field => field.1 == name)).map fun field => (field.1, g field.2)
+  | [] => rfl
+  | (label, value) :: rest => by
+    by_cases h : label = name
+    · simp [h]
+    · simp [h, find?_map_snd g name rest]
+
+/-- Renaming what the fields hold renames what a destructor passes. -/
+theorem splitValues_map {α β : Type} (g : α → β) (fields : List (String × α)) :
+    ∀ names : List String,
+      splitValues (fields.map fun field => (field.1, g field.2)) names = (splitValues fields names).map (List.map g)
+  | [] => rfl
+  | name :: names => by
+    simp only [splitValues, find?_map_snd, splitValues_map g fields names]
+    cases fields.find? (fun field => field.1 == name) <;> cases splitValues fields names <;> rfl
+
+/-- `function value₀ … valueₖ₋₁`. -/
+@[expose] def applyAll (function : Term) : List Term → Term
+  | [] => function
+  | value :: values => applyAll (.app function value) values
 
 @[expose] def primitiveResult : Primitive → Term → Term → Option Term
   | .add, .nat a, .nat b => some (.nat (a + b))
@@ -298,6 +339,12 @@ inductive Step : Term → Term → Prop where
   | ifFalse (whenTrue whenFalse : Term) : Step (.ifBool (.boolean false) whenTrue whenFalse) whenFalse
   /-- `done` is administrative: the activity returns its pure value. -/
   | done (value : Term) : Step (.done value) value
+  | splitTarget {target next : Term} (names : List String) (function : Term) :
+      Step target next → Step (.split target names function) (.split next names function)
+  /-- The destructor passes the record's fields named `names` to `function`, in order. -/
+  | splitRecord (fields : List (String × Term)) (names : List String) (function : Term) (values : List Term) :
+      splitValues fields names = some values →
+      Step (.split (.record fields) names function) (applyAll function values)
 
 inductive Steps : Term → Term → Prop where
   | refl (term : Term) : Steps term term
@@ -323,6 +370,7 @@ inductive SourceFrame where
   | case (arms : List (String × Term))
   | ifBool (whenTrue whenFalse : Term)
   | reflect | metadata | project
+  | split (names : List String) (function : Term)
   deriving Repr
 
 @[expose] def SourceFrame.plug : SourceFrame → Term → Term
@@ -337,6 +385,7 @@ inductive SourceFrame where
   | .reflect, hole => .reflect hole
   | .metadata, hole => .metadata hole
   | .project, hole => .project hole
+  | .split names function, hole => .split hole names function
 
 /-- Plug a hole into a context listed innermost first. -/
 @[expose] def plug (context : List SourceFrame) (hole : Term) : Term :=
@@ -372,6 +421,9 @@ inductive Yields : Term → Term → List SourceFrame → Prop where
       Yields target plan context → Yields (.metadata target) plan (context ++ [.metadata])
   | project {target plan : Term} {context : List SourceFrame} :
       Yields target plan context → Yields (.project target) plan (context ++ [.project])
+  | split {target plan : Term} {context : List SourceFrame} (names : List String) (function : Term) :
+      Yields target plan context →
+      Yields (.split target names function) plan (context ++ [.split names function])
 
 /-- An activity's run against a list of turns: each turn yields a plan and is
 resumed with the kernel's response; the last segment finishes with a value.
@@ -553,6 +605,10 @@ theorem yields_no_step {term plan : Term} {context : List SourceFrame}
       intro next step; cases step with
       | projectPrototype => cases inner
       | projectStep prior => exact ih _ prior
+  | split names function inner ih =>
+      intro next step; cases step with
+      | splitTarget _ _ prior => exact ih _ prior
+      | splitRecord => cases inner
 
 /-- The yielded plan and its continuation are unique. -/
 theorem yields_deterministic {term plan plan' : Term} {context context' : List SourceFrame}
@@ -595,6 +651,9 @@ theorem yields_deterministic {term plan plan' : Term} {context context' : List S
   | project inner ih =>
       cases second with
       | project inner' => obtain ⟨h1,h2⟩ := ih inner'; exact ⟨h1,by rw [h2]⟩
+  | split names function inner ih =>
+      cases second with
+      | split _ _ inner' => obtain ⟨h1,h2⟩ := ih inner'; exact ⟨h1,by rw [h2]⟩
 
 /-- A one-turn activity: perform a write, resume with `written`, select the arm.
 The plan and the response are both ordinary injected data. -/

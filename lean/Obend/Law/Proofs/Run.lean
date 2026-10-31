@@ -119,6 +119,14 @@ public theorem step?_sound : (t : Term) → ∀ {t' : Term}, step? t = some t' �
       · obtain ⟨c', hc, rfl⟩ := Option.map_eq_some_iff.1 h
         exact .ifCondition _ _ (ih hc)
   | .done v, t', h => by simp only [step?] at h; cases h; exact .done _
+  | .split t names f, t', h => by
+      have ih := @step?_sound t
+      simp only [step?] at h
+      split at h
+      · obtain ⟨vs, hv, rfl⟩ := Option.map_eq_some_iff.1 h
+        exact .splitRecord _ _ _ _ hv
+      · obtain ⟨x, hx, rfl⟩ := Option.map_eq_some_iff.1 h
+        exact .splitTarget _ _ (ih hx)
   | .bound _, _, h | .lam _, _, h | .nat _, _, h | .boolean _, _, h | .label _, _, h
   | .record _, _, h | .specification _ _, _, h | .prototype _ _, _, h | .inject _ _, _, h
   | .perform _, _, h => by simp [step?] at h
@@ -154,6 +162,10 @@ theorem step?_ifBool_cong {t t' x y : Term} (h : step? t = some t') :
     step? (.ifBool t x y) = some (.ifBool t' x y) := by
   simp only [step?]; split <;> simp_all [step?]
 
+theorem step?_split_cong {t t' f : Term} {names : List String} (h : step? t = some t') :
+    step? (.split t names f) = some (.split t' names f) := by
+  simp only [step?]; split <;> simp_all [step?]
+
 public theorem step?_complete {t t' : Term} (s : Step t t') : step? t = some t' := by
   induction s with
   | beta => simp [step?]
@@ -186,6 +198,8 @@ public theorem step?_complete {t t' : Term} (s : Step t t') : step? t = some t' 
   | ifTrue => simp [step?]
   | ifFalse => simp [step?]
   | done => simp [step?]
+  | splitTarget names f hs ih => exact step?_split_cong ih
+  | splitRecord fs names f vs hv => simp [step?, hv]
 
 /-- **`step?` is the step.** -/
 public theorem step_iff {t t' : Term} : Step t t' ↔ step? t = some t' :=

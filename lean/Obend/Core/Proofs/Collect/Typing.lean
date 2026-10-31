@@ -114,6 +114,8 @@ theorem frameTyping_rename (rel : TypesRel f D types types') {frame : Frame} {in
     exact .ifBool (closureTyping_rename rel inside trueTyped) (closureTyping_rename rel inside falseTyped)
   | effectCase environmentTyped armsTyped valid plain =>
     exact .effectCase (environmentTyping_rename rel inside environmentTyped) armsTyped valid plain
+  | split functionTyped closed shape =>
+    exact .split (closureTyping_rename rel inside functionTyped) closed shape
 
 theorem stackTyping_rename (rel : TypesRel f D types types') {stack : List Frame} {input output : Ty}
     (typed : StackTyping assumptions types stack input output) :
@@ -224,6 +226,8 @@ theorem frameValid_rename {heap heap' : Array Cell} (hr : HeapRel f D heap heap'
   | case arms environment =>
     exact ⟨environmentValid_rename hr inside valid.1, by simpa [renameFrame] using valid.2⟩
   | ifBool whenTrue whenFalse environment =>
+    exact ⟨environmentValid_rename hr inside valid.1, by simpa [renameFrame] using valid.2⟩
+  | split names function environment =>
     exact ⟨environmentValid_rename hr inside valid.1, by simpa [renameFrame] using valid.2⟩
 
 theorem controlValid_rename {heap heap' : Array Cell} (hr : HeapRel f D heap heap') {control : Control}
