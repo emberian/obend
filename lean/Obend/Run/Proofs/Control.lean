@@ -266,7 +266,7 @@ variable [DecidableEq Ix] [∀ i, DecidableEq (Hole i)]
 variable {P Cred Cand Tok Fact Ob V : Type} [DecidableEq Tok] [DecidableEq Cand]
 variable [DecidableEq (Σ i, S.Op i)]
 variable {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {au : Authority P Cred}
-variable {k : (j : Ix) → Hole j → Option (SlotCtl S Hole A P Fact Cand j)}
+variable {k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j}
 
 omit [DecidableEq Cand] in
 /-- What `install` does. -/
@@ -285,79 +285,55 @@ theorem install_ok {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i} {j : I
 theorem crun_choose_ok {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i} {p : P} {cred : Cred}
     {j : Ix} {h : Hole j} {cand : Cand} {e : Nat}
     (hr : crun host sp au k c (.choose p cred h cand e) = .ok c') :
-    ∃ K, k j h = some K ∧ au.verify p cred = true ∧
-      (host.view c.cfg.world).holds (K.desc.office p) = true ∧ e = c.rev j h ∧
-      cand ∈ K.desc.domain ∧ K.slot.usable (host.view c.cfg.world).holds cand = true ∧
-      install host sp c h K (some p) cand = .ok c' := by
+    au.verify p cred = true ∧
+      (∀ f ∈ (k j h).desc.office p, (host.view c.cfg.world).holds f = true) ∧ e = c.rev j h ∧
+      cand ∈ (k j h).desc.domain ∧ (k j h).slot.usable (host.view c.cfg.world).holds cand = true ∧
+      install host sp c h (k j h) (some p) cand = .ok c' := by
   simp only [crun] at hr
-  cases hk : k j h with
-  | none => rw [hk] at hr; cases hr
-  | some K =>
-    rw [hk] at hr
-    simp only at hr
-    by_cases hv : au.verify p cred = true
-    · by_cases ho : (host.view c.cfg.world).holds (K.desc.office p) = true
-      · by_cases he : e = c.rev j h
-        · by_cases hd : cand ∈ K.desc.domain
-          · by_cases hu : K.slot.usable (host.view c.cfg.world).holds cand = true
-            · simp only [hv, ho, he, hd, hu, Bool.not_true, Bool.false_eq_true, ↓reduceIte,
-                ne_eq, not_true_eq_false] at hr
-              refine ⟨K, rfl, hv, ho, he, hd, hu, ?_⟩
-              cases hs : c.stored j h with
-              | none => rw [hs] at hr; exact hr
-              | some s =>
-                rw [hs] at hr
-                simp only at hr
-                split at hr
-                · cases hr
-                · exact hr
-            · simp [hv, ho, he, hd, hu] at hr
-          · simp [hv, ho, he, hd] at hr
-        · simp [hv, ho, he] at hr
-      · simp [hv, ho] at hr
-    · simp [hv] at hr
+  by_cases hv : au.verify p cred = true
+  · by_cases ho : ((k j h).desc.office p).all (host.view c.cfg.world).holds = true
+    · by_cases he : e = c.rev j h
+      · by_cases hd : cand ∈ (k j h).desc.domain
+        · by_cases hu : (k j h).slot.usable (host.view c.cfg.world).holds cand = true
+          · simp only [hv, ho, he, hd, hu, Bool.not_true, Bool.false_eq_true, ↓reduceIte,
+              ne_eq, not_true_eq_false] at hr
+            refine ⟨hv, fun f hf => List.all_eq_true.1 ho f hf, he, hd, hu, ?_⟩
+            cases hs : c.stored j h with
+            | none => rw [hs] at hr; exact hr
+            | some s =>
+              rw [hs] at hr
+              simp only at hr
+              split at hr
+              · cases hr
+              · exact hr
+          · simp [hv, ho, he, hd, hu] at hr
+        · simp [hv, ho, he, hd] at hr
+      · simp [hv, ho, he] at hr
+    · simp [hv, ho] at hr
+  · simp [hv] at hr
 
 /-- What an accepted advance establishes. -/
 theorem crun_advance_ok {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i} {j : Ix} {h : Hole j}
     (hr : crun host sp au k c (.advance h) = .ok c') :
-    c' = c ∨ ∃ K cand, k j h = some K ∧
-      propose K.slot K.desc (host.view c.cfg.world).holds (c.stored j h) (latchedOf host k c h) = .chosen cand ∧
-      install host sp c h K none cand = .ok c' := by
+    c' = c ∨ ∃ cand,
+      propose (k j h).slot (k j h).desc (host.view c.cfg.world).holds (c.stored j h) (latchedOf host k c h) = .chosen cand ∧
+      install host sp c h (k j h) none cand = .ok c' := by
   simp only [crun] at hr
-  cases hk : k j h with
-  | none => rw [hk] at hr; cases hr
-  | some K =>
-    rw [hk] at hr
-    simp only at hr
-    split at hr
-    · cases hr; exact .inl rfl
-    · rename_i cand hp; exact .inr ⟨K, cand, rfl, hp, hr⟩
-    · cases hr
-    · cases hr
+  split at hr
+  · cases hr; exact .inl rfl
+  · rename_i cand hp; exact .inr ⟨cand, hp, hr⟩
+  · cases hr
+  · cases hr
 
-/-- What an accepted runner event establishes. -/
+/-- What an accepted runner event establishes: never a replan. -/
 theorem crun_base_ok {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i} {e : Event S Hole A Fact V}
     (hr : crun host sp au k c (.base e) = .ok c') :
     run host sp c.cfg e = .ok c'.cfg ∧ c'.stored = c.stored ∧ c'.rev = c.rev ∧
       c'.decisions = c.decisions ∧
-      ∀ (j : Ix) (h : Hole j) f fs, e = .replan h f fs → k j h = none := by
+      ∀ (j : Ix) (h : Hole j) f fs, e ≠ .replan h f fs := by
   simp only [crun] at hr
   cases e with
-  | replan h f fs =>
-    simp only at hr
-    cases hk : k _ h with
-    | some _ => rw [hk] at hr; cases hr
-    | none =>
-      rw [hk] at hr
-      simp only at hr
-      cases hrun : run host sp c.cfg (.replan h f fs) with
-      | error r => rw [hrun] at hr; cases hr
-      | ok cfg' =>
-        rw [hrun] at hr; cases hr
-        refine ⟨rfl, rfl, rfl, rfl, ?_⟩
-        intro j' h' f' fs' he
-        cases he
-        exact hk
+  | replan h f fs => cases hr
   | world v => ?_
   | dispatch o => ?_
   | respond r => ?_
@@ -377,11 +353,11 @@ public theorem crun_cfg {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i}
   cases ev with
   | base e => exact .inr ⟨e, (crun_base_ok hr).1⟩
   | advance h =>
-    rcases crun_advance_ok hr with rfl | ⟨K, cand, _, _, hi⟩
+    rcases crun_advance_ok hr with rfl | ⟨cand, _, hi⟩
     · exact .inl rfl
     · exact .inr ⟨_, (install_ok hi).1⟩
   | choose p cred h cand e =>
-    obtain ⟨K, _, _, _, _, _, _, hi⟩ := crun_choose_ok hr
+    obtain ⟨_, _, _, _, _, hi⟩ := crun_choose_ok hr
     exact .inr ⟨_, (install_ok hi).1⟩
 
 /-- **The controlled runner's configurations are the runner's.** -/
@@ -406,6 +382,126 @@ public theorem csession_reachable {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok Fa
     | ok c' => exact ih (.step ev hc h)
     | error w => exact ih hc
 
+/-- **What a policy's decision installs** (the former `resolveEvent_ok`, now through the
+descriptor): an accepted advance keeps the configuration, or installs the body of the first usable
+candidate of the domain, citing its supports. -/
+public theorem advance_installs {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i} {j : Ix} {h : Hole j}
+    (hr : crun host sp au k c (.advance h) = .ok c') :
+    c' = c ∨ ∃ cand, (k j h).slot.select (host.view c.cfg.world).holds (k j h).desc.domain = .ok cand ∧
+      cand ∈ (k j h).desc.domain ∧ (k j h).slot.usable (host.view c.cfg.world).holds cand = true ∧
+      c'.cfg.log = c.cfg.log ++ [.replan h ((k j h).body cand) (citesFor (k j h).slot (k j h).desc none cand)] ∧
+      c'.stored j h = some cand := by
+  rcases crun_advance_ok hr with rfl | ⟨cand, hp, hi⟩
+  · exact .inl rfl
+  · obtain ⟨hdom, hu, hsel, _⟩ := propose_chosen hp
+    obtain ⟨hrun, hst, _, _⟩ := install_ok hi
+    refine .inr ⟨cand, hsel, hdom, hu, (run_replan_inv hrun).2.2.2.2.2.2.1, ?_⟩
+    rw [hst]; simp [upd]
+
+/-- **An authorized choice is accepted before dispatch** (the former `override_accepted`, now
+through the descriptor): at a controlled configuration whose run has not ended, a choice by an
+authenticated principal in office, at the current revision, of a permitted candidate usable now,
+for a hole of ours the history has not entered, is accepted, if superseding a keepable stored
+choice is allowed; it installs the candidate citing what its tenure says. -/
+public theorem choose_accepted {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V}
+    {cs₀ : (j : Ix) → Hole j → List Fact} {stored₀ : (j : Ix) → Hole j → Option Cand}
+    {c : CCfg S Hole A P Cand Tok Fact Ob V i}
+    (hc : CReachable host sp au k (CCfg.init (Cfg.init O v₀ cs₀) stored₀) c) (hlive : c.cfg.ended = none)
+    {p : P} {cred : Cred} {j : Ix} {h : Hole j} {cand : Cand}
+    (hv : au.verify p cred = true)
+    (ho : ∀ f ∈ (k j h).desc.office p, (host.view c.cfg.world).holds f = true)
+    (hd : cand ∈ (k j h).desc.domain) (hu : (k j h).slot.usable (host.view c.cfg.world).holds cand = true)
+    (hov : ∀ s, c.stored j h = some s → s ≠ cand →
+      keepable (k j h).slot (k j h).desc (host.view c.cfg.world).holds (latchedOf host k c h) (some s) = true →
+      (k j h).desc.override = true)
+    (hmine : isMine c.cfg.obj.Ω h = true) (hnd : ¬ Dispatched c.cfg.obj.template c.cfg.obj.hist j h) :
+    ∃ c', crun host sp au k c (.choose p cred h cand (c.rev j h)) = .ok c' ∧
+      c'.cfg.cites j h = citesFor (k j h).slot (k j h).desc (some p) cand ∧ c'.stored j h = some cand := by
+  have hI := refines (creachable_reachable hc)
+  obtain ⟨cfg', hrun, _⟩ := replan_accepted hI hlive ((k j h).body cand)
+    (citesFor (k j h).slot (k j h).desc (some p) cand) hmine hnd
+  let c' : CCfg S Hole A P Cand Tok Fact Ob V i :=
+    { cfg := cfg'
+      stored := upd c.stored h (some cand)
+      rev := upd c.rev h (c.rev j h + 1)
+      decisions := c.decisions ++ [⟨⟨j, h⟩, cand, some p, c.rev j h, c.cfg.world, c.cfg.log.length⟩] }
+  have hinst : install host sp c h (k j h) (some p) cand = .ok c' := by
+    unfold install; rw [hrun]
+  have hcites : cfg'.cites j h = citesFor (k j h).slot (k j h).desc (some p) cand := by
+    rw [(run_replan_inv hrun).2.2.2.2.2.2.2.2]; simp [setCites]
+  have hall : ((k j h).desc.office p).all (host.view c.cfg.world).holds = true := List.all_eq_true.2 ho
+  refine ⟨c', ?_, hcites, by simp [c', upd]⟩
+  simp only [crun, hv, hall, hd, hu, Bool.not_true, Bool.false_eq_true, ↓reduceIte, ne_eq,
+    not_true_eq_false, decide_true, Bool.not_true]
+  cases hs : c.stored j h with
+  | none => exact hinst
+  | some s =>
+    simp only
+    by_cases hne : s = cand
+    · subst hne; simp [hinst]
+    · cases hk : keepable (k j h).slot (k j h).desc (host.view c.cfg.world).holds (latchedOf host k c h) (some s)
+      · simp [hne, hk, hinst]
+      · simp [hne, hk, hov s hs hne hk, hinst]
+
+/-- An accepted controlled event that is not a reply is a runner step of an event that is not a
+reply, or leaves the runner's configuration. -/
+theorem crun_cfg_noreply {i : Ix} {c c' : CCfg S Hole A P Cand Tok Fact Ob V i}
+    {ev : CEvent S Hole A P Cred Cand Fact V} (hno : ∀ r, ev ≠ .base (.respond r))
+    (hr : crun host sp au k c ev = .ok c') :
+    c'.cfg = c.cfg ∨ ∃ e, e.isRespond = false ∧ run host sp c.cfg e = .ok c'.cfg := by
+  cases ev with
+  | base e =>
+    refine .inr ⟨e, ?_, (crun_base_ok hr).1⟩
+    cases e with
+    | respond r => exact absurd rfl (hno r)
+    | _ => rfl
+  | advance h =>
+    rcases crun_advance_ok hr with rfl | ⟨cand, _, hi⟩
+    · exact .inl rfl
+    · exact .inr ⟨_, rfl, (install_ok hi).1⟩
+  | choose p cred h cand e =>
+    obtain ⟨_, _, _, _, _, hi⟩ := crun_choose_ok hr
+    exact .inr ⟨_, rfl, (install_ok hi).1⟩
+
+/-- **A missing reply licenses no new commitment, under control**: from a controlled configuration
+with a call in flight, any controlled events but a reply (world moves, advances, choices, proposed
+dispatches) leave the history, the spent tokens and the log's dispatches, and the call in flight
+stays the residual's next call. -/
+public theorem clost_reply_frozen {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V}
+    {cs₀ : (j : Ix) → Hole j → List Fact} {stored₀ : (j : Ix) → Hole j → Option Cand}
+    {c : CCfg S Hole A P Cand Tok Fact Ob V i}
+    (hc : CReachable host sp au k (CCfg.init (Cfg.init O v₀ cs₀) stored₀) c) {o : Σ i, S.Op i}
+    (ho : c.cfg.obj.hist.inflight = some o) (evs : List (CEvent S Hole A P Cred Cand Fact V))
+    (hno : ∀ ev ∈ evs, ∀ r, ev ≠ .base (.respond r)) :
+    (csession host sp au k c evs).1.cfg.obj.hist = c.cfg.obj.hist ∧
+      (csession host sp au k c evs).1.cfg.spent = c.cfg.spent ∧
+      dispatchesOf (csession host sp au k c evs).1.cfg.log = dispatchesOf c.cfg.log ∧
+      IsCall (csession host sp au k c evs).1.cfg.res o := by
+  have key : ∀ (evs : List (CEvent S Hole A P Cred Cand Fact V)) (c : CCfg S Hole A P Cand Tok Fact Ob V i),
+      c.cfg.obj.hist.inflight = some o → (∀ ev ∈ evs, ∀ r, ev ≠ .base (.respond r)) →
+      (csession host sp au k c evs).1.cfg.obj.hist = c.cfg.obj.hist ∧
+        (csession host sp au k c evs).1.cfg.spent = c.cfg.spent ∧
+        dispatchesOf (csession host sp au k c evs).1.cfg.log = dispatchesOf c.cfg.log := by
+    intro evs
+    induction evs with
+    | nil => intro c _ _; exact ⟨rfl, rfl, rfl⟩
+    | cons ev evs ih =>
+      intro c ho hno
+      simp only [csession]
+      cases h : crun host sp au k c ev with
+      | error w => exact ih c ho (fun e he => hno e (List.mem_cons_of_mem _ he))
+      | ok c' =>
+        have hrest := fun e he => hno e (List.mem_cons_of_mem _ he)
+        rcases crun_cfg_noreply (hno ev List.mem_cons_self) h with he | ⟨e, hr, hrun⟩
+        · obtain ⟨h1, h2, h3⟩ := ih c' (by rw [he]; exact ho) hrest
+          rw [he] at h1 h2 h3; exact ⟨h1, h2, h3⟩
+        · obtain ⟨hh, hs, hl, hd⟩ := step_inflight ho hr hrun
+          obtain ⟨hh', hs', hd'⟩ := ih c' (by rw [hh]; exact ho) hrest
+          exact ⟨hh'.trans hh, hs'.trans hs, by rw [hd', hl, hd]⟩
+  obtain ⟨hh, hs, hd⟩ := key evs c ho hno
+  refine ⟨hh, hs, hd, ?_⟩
+  exact (refines (creachable_reachable (csession_reachable hc evs))).next o (by rw [hh]; exact ho)
+
 /-- Every controlled run's runner log is `Legal`. -/
 public theorem creachable_legal {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V}
     {cs₀ : (j : Ix) → Hole j → List Fact} {stored₀ : (j : Ix) → Hole j → Option Cand}
@@ -420,12 +516,12 @@ public theorem creachable_legal {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀
 made at; a principal's decision made while the principal held the slot's office; a policy's
 decision never a `chooserRequired` slot's. Stated of the decision log alone. -/
 public def DecisionsAuthorized (host : Host V Tok Fact)
-    (k : (j : Ix) → Hole j → Option (SlotCtl S Hole A P Fact Cand j))
+    (k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
     (ds : List (Decision Hole P Cand V)) : Prop :=
-  ∀ d ∈ ds, ∃ K, k d.hole.1 d.hole.2 = some K ∧ d.cand ∈ K.desc.domain ∧
-    K.slot.usable (host.view d.world).holds d.cand = true ∧
-    (∀ p, d.by_ = some p → (host.view d.world).holds (K.desc.office p) = true) ∧
-    (d.by_ = none → K.desc.preset ≠ .chooserRequired)
+  ∀ d ∈ ds, d.cand ∈ (k d.hole.1 d.hole.2).desc.domain ∧
+    (k d.hole.1 d.hole.2).slot.usable (host.view d.world).holds d.cand = true ∧
+    (∀ p, d.by_ = some p → ∀ f ∈ (k d.hole.1 d.hole.2).desc.office p, (host.view d.world).holds f = true) ∧
+    (d.by_ = none → (k d.hole.1 d.hole.2).desc.preset ≠ .chooserRequired)
 
 public theorem creachable_authorized {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok Fact Ob V i}
     (h₀ : c₀.decisions = []) (h : CReachable host sp au k c₀ c) :
@@ -436,7 +532,7 @@ public theorem creachable_authorized {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok
     cases ev with
     | base e => rw [(crun_base_ok hs).2.2.2.1]; exact ih
     | advance h =>
-      rcases crun_advance_ok hs with rfl | ⟨K, cand, hk, hp, hi⟩
+      rcases crun_advance_ok hs with rfl | ⟨cand, hp, hi⟩
       · exact ih
       · rw [(install_ok hi).2.2.2]
         intro d hd
@@ -445,18 +541,18 @@ public theorem creachable_authorized {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok
         · simp only [List.mem_singleton] at hd
           subst hd
           obtain ⟨hdom, hu, _, hpre⟩ := propose_chosen hp
-          refine ⟨K, hk, hdom, hu, ?_, fun _ => hpre⟩
+          refine ⟨hdom, hu, ?_, fun _ => hpre⟩
           intro p hp'
           exact absurd hp' (by simp)
     | choose p cred h cand e =>
-      obtain ⟨K, hk, _, ho, _, hdom, hu, hi⟩ := crun_choose_ok hs
+      obtain ⟨_, ho, _, hdom, hu, hi⟩ := crun_choose_ok hs
       rw [(install_ok hi).2.2.2]
       intro d hd
       rcases List.mem_append.1 hd with hd | hd
       · exact ih d hd
       · simp only [List.mem_singleton] at hd
         subst hd
-        refine ⟨K, hk, hdom, hu, ?_, ?_⟩
+        refine ⟨hdom, hu, ?_, ?_⟩
         · intro p' hp'
           obtain rfl : p = p' := by simpa using hp'
           exact ho
@@ -490,11 +586,11 @@ public theorem creachable_revisions {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok 
       obtain ⟨_, _, hrev, hdec, _⟩ := crun_base_ok hs
       intro j h; rw [hrev, hdec]; exact ih j h
     | advance h =>
-      rcases crun_advance_ok hs with rfl | ⟨K, cand, _, _, hi⟩
+      rcases crun_advance_ok hs with rfl | ⟨cand, _, hi⟩
       · exact ih
       · exact inst hi
     | choose p cred h cand e =>
-      obtain ⟨K, _, _, _, _, _, _, hi⟩ := crun_choose_ok hs
+      obtain ⟨_, _, _, _, _, hi⟩ := crun_choose_ok hs
       exact inst hi
 
 /-! ## What a decision cites, and the office rechecked at dispatch -/
@@ -554,16 +650,16 @@ public theorem run_dispatch_decided {i : Ix} {c c' : Cfg S Hole A Tok Fact Ob V 
 supports, and its chooser's office when it was made `whileInOffice` by a principal. -/
 public theorem creachable_cites {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok Fact Ob V i}
     (h₀ : c₀.decisions = []) (h : CReachable host sp au k c₀ c) :
-    ∀ (j : Ix) (h : Hole j) K d, k j h = some K → lastOf c.decisions h = some d →
-      c.cfg.cites j h = citesFor K.slot K.desc d.by_ d.cand := by
+    ∀ (j : Ix) (h : Hole j) d, lastOf c.decisions h = some d →
+      c.cfg.cites j h = citesFor (k j h).slot (k j h).desc d.by_ d.cand := by
   induction h with
-  | init => intro j h K d _ hl; rw [h₀] at hl; cases hl
+  | init => intro j h d hl; rw [h₀] at hl; cases hl
   | @step c c' ev _ hs ih =>
-    have inst : ∀ {j₀} {h₀ : Hole j₀} {K₀ : SlotCtl S Hole A P Fact Cand j₀} {by_} {cand},
-        k j₀ h₀ = some K₀ → install host sp c h₀ K₀ by_ cand = .ok c' →
-        ∀ (j : Ix) (h : Hole j) K d, k j h = some K → lastOf c'.decisions h = some d →
-          c'.cfg.cites j h = citesFor K.slot K.desc d.by_ d.cand := by
-      intro j₀ h₀ K₀ by_ cand hk₀ hi j h K d hk hl
+    have inst : ∀ {j₀} {h₀ : Hole j₀} {by_} {cand},
+        install host sp c h₀ (k j₀ h₀) by_ cand = .ok c' →
+        ∀ (j : Ix) (h : Hole j) d, lastOf c'.decisions h = some d →
+          c'.cfg.cites j h = citesFor (k j h).slot (k j h).desc d.by_ d.cand := by
+      intro j₀ h₀ by_ cand hi j h d hl
       obtain ⟨hrun, _, _, hdec⟩ := install_ok hi
       have hc := (run_replan_inv hrun).2.2.2.2.2.2.2.2
       rw [hdec, lastOf_snoc] at hl
@@ -572,36 +668,25 @@ public theorem creachable_cites {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok Fact
       by_cases e : (⟨j, h⟩ : Σ j, Hole j) = ⟨j₀, h₀⟩
       · cases e
         simp only [↓reduceIte, Option.some.injEq] at hl ⊢
-        rw [hk₀] at hk; cases hk
         rw [← hl]
       · have e' : ¬ (⟨j₀, h₀⟩ : Σ j, Hole j) = ⟨j, h⟩ := fun x => e x.symm
         simp only [e', ↓reduceIte] at hl
         simp only [e, ↓reduceIte]
-        exact ih j h K d hk hl
+        exact ih j h d hl
     cases ev with
     | base e =>
       obtain ⟨hrun, _, _, hdec, hraw⟩ := crun_base_ok hs
-      intro j h K d hk hl
+      intro j h d hl
       rw [hdec] at hl
-      cases e with
-      | replan h' f fs =>
-        have hc := (run_replan_inv hrun).2.2.2.2.2.2.2.2
-        rw [hc]
-        simp only [setCites]
-        have hne : ¬ (⟨j, h⟩ : Σ j, Hole j) = ⟨_, h'⟩ := by
-          intro x; have hn := hraw _ h' f fs rfl; cases x; rw [hn] at hk; cases hk
-        simp only [hne, ↓reduceIte]
-        exact ih j h K d hk hl
-      | _ =>
-        rw [run_cites hrun (fun _ _ _ _ x => by cases x)]
-        exact ih j h K d hk hl
+      rw [run_cites hrun hraw]
+      exact ih j h d hl
     | advance h =>
-      rcases crun_advance_ok hs with rfl | ⟨K, cand, hk, _, hi⟩
+      rcases crun_advance_ok hs with rfl | ⟨cand, _, hi⟩
       · exact ih
-      · exact inst hk hi
+      · exact inst hi
     | choose p cred h cand e =>
-      obtain ⟨K, hk, _, _, _, _, _, hi⟩ := crun_choose_ok hs
-      exact inst hk hi
+      obtain ⟨_, _, _, _, _, hi⟩ := crun_choose_ok hs
+      exact inst hi
 
 /-- **A `whileInOffice` decision is rechecked at every dispatch**: at a controlled configuration,
 a call in a hole whose last decision was made `whileInOffice` by `p` is dispatched only while `p`
@@ -609,14 +694,15 @@ holds the slot's office. A `lasting` decision cites no office, so its chooser's 
 nothing (the fixture `Obend.Run.ControlExample` shows both). -/
 public theorem office_rechecked {i : Ix} {c₀ c : CCfg S Hole A P Cand Tok Fact Ob V i}
     (h₀ : c₀.decisions = []) (hc : CReachable host sp au k c₀ c) {j : Ix} {h : Hole j}
-    {K : SlotCtl S Hole A P Fact Cand j} (hk : k j h = some K) (ht : K.desc.tenure = .whileInOffice)
+    (ht : (k j h).desc.tenure = .whileInOffice)
     {d : Decision Hole P Cand V} {p : P} (hl : lastOf c.decisions h = some d) (hp : d.by_ = some p)
     {o : Σ i, S.Op i} {cfg' : Cfg S Hole A Tok Fact Ob V i}
     (hr : run host sp c.cfg (.dispatch o) = .ok cfg') (ho : owner c.cfg.obj = some ⟨j, h⟩) :
-    (host.view c.cfg.world).holds (K.desc.office p) = true := by
-  have hcite := creachable_cites h₀ hc j h K d hk hl
-  have := run_dispatch_decided hr ho (K.desc.office p) (by
-    rw [hcite]; simp only [citesFor, ht, hp]; simp)
+    ∀ f ∈ (k j h).desc.office p, (host.view c.cfg.world).holds f = true := by
+  intro f hf
+  have hcite := creachable_cites h₀ hc j h d hl
+  have := run_dispatch_decided hr ho f (by
+    rw [hcite]; simp only [citesFor, ht, hp]; simp [hf])
   simpa [Cfg.admitView, View.mask] using this
 
 end

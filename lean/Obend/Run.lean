@@ -5,8 +5,7 @@ module
 An executable runner for open objects that enforces authorization at dispatch and preserves the
 accepted history across replanning, revocation and lost replies.
 
-- `Obend.Run.Runner`: configurations, raw events, named refusals, `run`, `session`, `drive`,
-  `resolveEvent`.
+- `Obend.Run.Runner`: configurations, raw events, named refusals, `run`, `session`, `drive`.
 - `Obend.Run.Spec`: the declarative specification of an accepted log (`Legal`), stated of the log.
 - `Obend.Run.Proofs.Invariant`: `refines` (every reachable configuration satisfies `Inv`, so its log
   is `Legal`), the continuation clauses (`replan_accepted`, `replace_then_dispatch`, `inflight_busy`,
@@ -19,7 +18,7 @@ accepted history across replanning, revocation and lost replies.
   against the declared response type, depth and ticks extended mid-run by re-basing the same log,
   choice points in emitted Plans decided as slots and rechecked at dispatch (`areachable_inv`,
   `plain_trace`; fixtures in `Obend.Run.Core4Example`).
-- `Obend.Run.Control`, `Obend.Run.Proofs.Control`: per-slot selection control (authenticated
+- `Obend.Run.Control`, `Obend.Run.Proofs.Control`: selection control, mandatory for every hole (authenticated
   principals in a chooser office, decision revisions, tenure across an office change, the presets
   first-usable / incumbent-first / chooser-required with their choice laws, honest
   `nothingAdmissible` with exact diagnostics); `Obend.Run.ControlExample`, its fixtures.

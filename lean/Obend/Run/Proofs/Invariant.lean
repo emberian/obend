@@ -579,7 +579,7 @@ public theorem reachable_legal {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob
 /-- **A dispatch that uses a selected choice finds the choice usable at its own view** (Astra's
 `AdmitOperation ∧ UsesChoice → Usable`, `astra/ASTRA-SELECTION-20261031.md` §7.3): if the hole a
 dispatched call enters was decided for candidate `cand` of slot `Sl` (its decision cites `cand`'s
-supports, as `resolveEvent`/`resolveEventBy` record them) and `cand` passes the judge, then `cand` is
+supports, as a decision through `Obend.Run.Control` records them) and `cand` passes the judge, then `cand` is
 usable at the world of that dispatch, however the world moved since the selection. -/
 public theorem dispatch_usable_choice {Cand : Type} {host : Host V Tok Fact}
     {sp : Spec S Tok Fact Ob} {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V}

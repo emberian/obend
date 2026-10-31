@@ -9,7 +9,7 @@ each controlled slot and decides it only through that descriptor:
 
 - **Authenticated principals.** A choice is made by a principal `p` with a credential the
   deployment verifies (`Authority.verify`), and only while `p` holds the slot's chooser OFFICE: the
-  host fact `Descriptor.office p`, judged at the world current when the choice is made.
+  host facts `Descriptor.office p`, judged at the world current when the choice is made.
 - **Decision revisions.** Each controlled slot counts its accepted decisions; a choice names the
   revision it was made against, and a stale one is refused (`staleRevision`): two choosers racing
   on one slot cannot both be accepted against the same revision.
@@ -29,8 +29,10 @@ each controlled slot and decides it only through that descriptor:
   diagnostics of every candidate of the domain (`diagnostics`: rejected by the judge, or its dead
   supports, or usable).
 
-Raw replans of a controlled hole are refused (`rawReplan`); every other event goes to `run`
-unchanged, so the controlled runner's reachable configurations are the runner's
+Selection control is MANDATORY: the controller `k` gives every hole of the protocol a slot and a
+descriptor, and a raw replan of any hole is refused (`rawReplan`). The only decisions are a policy's
+(`advance`) and an authenticated principal's (`choose`). Every other event goes to `run` unchanged,
+so the controlled runner's reachable configurations are the runner's
 (`Obend.Run.Proofs.Control.creachable_reachable`) and every theorem of the runner holds of them.
 -/
 public import Obend.Run.Runner
@@ -65,8 +67,9 @@ inductive Suspension where
 /-- The per-slot selection control descriptor (Astra §8): the chooser office, the policy, the
 admitted candidate domain in preference order, override rights, tenure and suspension. -/
 structure Descriptor (P Fact Cand : Type) where
-  /-- the host fact "principal `p` holds this slot's chooser office" -/
-  office : P → Fact
+  /-- the host facts that make principal `p` hold this slot's chooser office (`[]`: `p` holds it
+  whatever the world says) -/
+  office : P → List Fact
   preset : Preset
   /-- the admitted candidates, in preference order -/
   domain : List Cand
@@ -153,7 +156,7 @@ def citesFor (S : Slot Fact Cand) (D : Descriptor P Fact Cand) (by_ : Option P) 
     List Fact :=
   S.supports c ++
     match D.tenure, by_ with
-    | .whileInOffice, some p => [D.office p]
+    | .whileInOffice, some p => D.office p
     | _, _ => []
 
 end
@@ -187,7 +190,7 @@ structure CCfg (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (P Cand Tok F
 
 /-- A controlled event. -/
 inductive CEvent (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (P Cred Cand Fact V : Type) where
-  /-- a runner event (a replan of a controlled hole is refused) -/
+  /-- a runner event (a raw replan is refused: decisions go through `advance` and `choose`) -/
   | base (e : Event S Hole A Fact V)
   /-- run the slot's policy at the current world -/
   | advance {j : Ix} (h : Hole j)
@@ -198,10 +201,8 @@ inductive CEvent (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (P Cred Can
 inductive CRefusal (S : Sig Ix) (Hole : Ix → Type) (P Cand Tok Fact : Type) where
   /-- the runner's own refusal -/
   | run (r : Refusal S Hole Tok Fact)
-  /-- a controlled hole is decided only through its control -/
+  /-- a hole is decided only through its selection control -/
   | rawReplan (h : Σ j, Hole j)
-  /-- the hole has no selection control -/
-  | uncontrolled (h : Σ j, Hole j)
   /-- the credential does not authenticate the principal -/
   | unauthenticated (p : P)
   /-- the principal does not hold the slot's chooser office now -/
@@ -237,10 +238,11 @@ def worldsOf (log : List (Event S Hole A Fact V)) : List V :=
 
 /-- The stored choice of `h` is LATCHED: under `reapproval`, the slot's world was one at which it
 was not usable at some world event since its decision. -/
-def latchedOf (host : Host V Tok Fact) {i : Ix} (k : (j : Ix) → Hole j → Option (SlotCtl S Hole A P Fact Cand j))
+def latchedOf (host : Host V Tok Fact) {i : Ix} (k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
     (c : CCfg S Hole A P Cand Tok Fact Ob V i) {j : Ix} (h : Hole j) : Bool :=
-  match k j h, c.stored j h with
-  | some K, some s =>
+  let K := k j h
+  match c.stored j h with
+  | some s =>
     match K.desc.suspension with
     | .automatic => false
     | .reapproval =>
@@ -248,7 +250,7 @@ def latchedOf (host : Host V Tok Fact) {i : Ix} (k : (j : Ix) → Hole j → Opt
         | some d => d.at_
         | none => 0
       (worldsOf (c.cfg.log.drop since)).any fun v => !K.slot.usable (host.view v).holds s
-  | _, _ => false
+  | none => false
 
 /-- Install `cand` in `h` by a decision of `by_`: the runner's replan with the decision's
 citations, then the stored choice, the revision and the decision record. -/
@@ -266,39 +268,29 @@ def install (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
 
 /-- One controlled event. -/
 def crun (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Authority P Cred)
-    (k : (j : Ix) → Hole j → Option (SlotCtl S Hole A P Fact Cand j)) {i : Ix}
+    (k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i : Ix}
     (c : CCfg S Hole A P Cand Tok Fact Ob V i) :
     CEvent S Hole A P Cred Cand Fact V →
       Except (CRefusal S Hole P Cand Tok Fact) (CCfg S Hole A P Cand Tok Fact Ob V i)
   | .base e =>
     match e with
-    | .replan (j := j) h f fs =>
-      match k j h with
-      | some _ => .error (.rawReplan ⟨j, h⟩)
-      | none =>
-        match run host sp c.cfg (.replan h f fs) with
-        | .ok cfg' => .ok { c with cfg := cfg' }
-        | .error r => .error (.run r)
+    | .replan (j := j) h _ _ => .error (.rawReplan ⟨j, h⟩)
     | e =>
       match run host sp c.cfg e with
       | .ok cfg' => .ok { c with cfg := cfg' }
       | .error r => .error (.run r)
   | .advance (j := j) h =>
-    match k j h with
-    | none => .error (.uncontrolled ⟨j, h⟩)
-    | some K =>
+      let K := k j h
       match propose K.slot K.desc (host.view c.cfg.world).holds (c.stored j h) (latchedOf host k c h) with
       | .kept _ => .ok c
       | .chosen cand => install host sp c h K none cand
       | .awaiting d => .error (.awaiting ⟨j, h⟩ d)
       | .nothingAdmissible d => .error (.nothingAdmissible ⟨j, h⟩ d)
   | .choose p cred (j := j) h cand expected =>
-    match k j h with
-    | none => .error (.uncontrolled ⟨j, h⟩)
-    | some K =>
+      let K := k j h
       let holds := (host.view c.cfg.world).holds
       if !au.verify p cred then .error (.unauthenticated p)
-      else if !holds (K.desc.office p) then .error (.notChooser p ⟨j, h⟩)
+      else if !(K.desc.office p).all holds then .error (.notChooser p ⟨j, h⟩)
       else if expected ≠ c.rev j h then .error (.staleRevision ⟨j, h⟩ expected (c.rev j h))
       else if cand ∉ K.desc.domain then .error (.notPermitted cand)
       else if !K.slot.usable holds cand then .error (.unusable cand (diagnose K.slot holds cand))
@@ -316,7 +308,7 @@ def CCfg.init {i : Ix} (c : Cfg S Hole A Tok Fact Ob V i) (stored₀ : (j : Ix) 
 
 /-- The controlled configurations reachable from `c₀` by accepted controlled events. -/
 inductive CReachable (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Authority P Cred)
-    (k : (j : Ix) → Hole j → Option (SlotCtl S Hole A P Fact Cand j)) {i : Ix}
+    (k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i : Ix}
     (c₀ : CCfg S Hole A P Cand Tok Fact Ob V i) : CCfg S Hole A P Cand Tok Fact Ob V i → Prop
   | init : CReachable host sp au k c₀ c₀
   | step {c c' : CCfg S Hole A P Cand Tok Fact Ob V i} (ev : CEvent S Hole A P Cred Cand Fact V) :
@@ -324,7 +316,7 @@ inductive CReachable (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Au
 
 /-- A controlled session: each event accepted or refused; a refusal leaves the configuration. -/
 def csession (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Authority P Cred)
-    (k : (j : Ix) → Hole j → Option (SlotCtl S Hole A P Fact Cand j)) {i : Ix} :
+    (k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i : Ix} :
     CCfg S Hole A P Cand Tok Fact Ob V i → List (CEvent S Hole A P Cred Cand Fact V) →
       CCfg S Hole A P Cand Tok Fact Ob V i × List (Option (CRefusal S Hole P Cand Tok Fact))
   | c, [] => (c, [])

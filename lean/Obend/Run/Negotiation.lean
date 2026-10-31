@@ -4,18 +4,24 @@ module
 
 The negotiation of `Obend.Slot.Protocol.Negotiation` (reserve a deposit, then commit a one-use
 capability on a provider the buyer chooses, or cancel), run end to end by the guarded runner against
-a host world in which grants come and go and the deadline, once passed, stays passed.
+a host world in which grants come and go and the deadline, once passed, stays passed. Every
+decision of the provider hole goes through its selection control (`Obend.Run.Control`): the buyer is
+the one principal, the hole's descriptor is incumbent-first over `p1`, `p2`, cancelling (and, last,
+`p2` with the other continuation), and a decision is an `advance` or a `choose`, never a raw replan.
+The handler-driven runs (`drive`) decide nothing and use the runner directly.
 -/
 public import Obend.Run.Proofs.Interpret
+public import Obend.Run.Proofs.Control
 public import Obend.Slot.Proofs.Negotiation
 public import Obend.Tactic.Tooth
 import all Obend.Run.Runner
 import all Obend.Run.Spec
+import all Obend.Run.Control
 @[expose] public section
 
 namespace Obend.Run.Negotiation
 
-open Obend.Slot Obend.Slot.Protocol Obend.Slot.Protocol.Negotiation
+open Obend.Slot Obend.Slot.Protocol Obend.Slot.Protocol.Negotiation Obend.Run.Control
 
 instance decOp : (i : Phase) → DecidableEq (Op i)
   | _, .reserve, .reserve => isTrue rfl
@@ -81,21 +87,59 @@ def O₀ : Open sig HoleN Res Tok Fact Ob .idle := obj (plan .p1) ⟨[], none⟩
 
 def everything : Wv := ⟨true, true, true, true, 0⟩
 
-def c₀ : Cfg sig HoleN Res Tok Fact Ob Wv .idle := Cfg.init O₀ everything
+/-- The provider hole's candidates: a provider, cancelling, or a provider with the other
+continuation (`planFlip`). -/
+inductive NCand where
+  | prov (p : Provider)
+  | cancel
+  | flip (p : Provider)
+  deriving DecidableEq, Repr
 
-/-- The provider hole as a slot: provider `p` cites its grant and the deadline; cancelling cites
-nothing. The buyer prefers `p1`, then `p2`, then cancelling. -/
-def providers : Slot Fact (Option Provider) where
+/-- The provider hole as a slot: a provider (either continuation) cites its grant and the deadline;
+cancelling cites nothing. -/
+def providers : Slot Fact NCand where
   supports := fun
-    | some p => [.auth p, .beforeDeadline]
-    | none => []
+    | .prov p | .flip p => [.auth p, .beforeDeadline]
+    | .cancel => []
   judge := fun _ => true
 
-def body : Option Provider → P .reserved
-  | some p => plan p
-  | none => cancelPlan
+def body : NCand → P .reserved
+  | .prov p => plan p
+  | .cancel => cancelPlan
+  | .flip p => planFlip p
 
-def order : List (Option Provider) := [some .p1, some .p2, none]
+/-- The buyer prefers `p1`, then `p2`, then cancelling; `p2` with the other continuation last. -/
+def order : List NCand := [.prov .p1, .prov .p2, .cancel, .flip .p2]
+
+/-- The hole's descriptor: the buyer (`Unit`) holds the office whatever the world; incumbent-first
+over `order`; a choice may supersede; a choice lasts; recovery is automatic. -/
+def desc : Descriptor Unit Fact NCand := ⟨fun _ => [], .incumbentFirst, order, 1, true, .lasting, .automatic⟩
+
+/-- Selection control, for every hole of the negotiation (there is one). -/
+def ctl : (j : Phase) → HoleN j → SlotCtl sig HoleN Res Unit Fact NCand j
+  | .reserved, () => ⟨providers, desc, body⟩
+  | .idle, h => nomatch h
+  | .done, h => nomatch h
+
+/-- The buyer's credential: nothing to verify, there is one principal. -/
+def au : Authority Unit Unit := ⟨fun _ _ => true⟩
+
+/-- The initial plan's stored choice: `p1`. -/
+def stored₀ : (j : Phase) → HoleN j → Option NCand
+  | .reserved, () => some (.prov .p1)
+  | .idle, h => nomatch h
+  | .done, h => nomatch h
+
+abbrev NCfg := CCfg sig HoleN Res Unit NCand Tok Fact Ob Wv .idle
+abbrev NEv := CEvent sig HoleN Res Unit Unit NCand Fact Wv
+
+def c₀ : NCfg := CCfg.init (Cfg.init O₀ everything) stored₀
+
+/-- The controlled session. -/
+def nsession (sp' : Spec sig Tok Fact Ob) (c : NCfg) (evs : List NEv) := csession host sp' au ctl c evs
+
+/-- The buyer's choice of `c` against revision `r`. -/
+def pick (c : NCand) (r : Nat) : NEv := .choose () () (j := Phase.reserved) () c r
 
 /-! ## The stranger's example -/
 
@@ -103,69 +147,64 @@ def reserveOp : Σ i, sig.Op i := ⟨.idle, Op.reserve⟩
 def commitOp (p : Provider) : Σ i, sig.Op i := ⟨.reserved, Op.commit p⟩
 
 /-- The script up to the revocation: reserve, its reply, `p1`'s grant revoked. -/
-def opening : List (Event sig HoleN Res Fact Wv) :=
-  [.dispatch reserveOp, .respond ⟨.idle, Op.reserve, ()⟩, .world ⟨false, true, true, true, 1⟩]
+def opening : List NEv :=
+  [.base (.dispatch reserveOp), .base (.respond ⟨.idle, Op.reserve, ()⟩),
+   .base (.world ⟨false, true, true, true, 1⟩)]
 
-def c₁ : Cfg sig HoleN Res Tok Fact Ob Wv .idle := (session host spec c₀ opening).1
+def c₁ : NCfg := (nsession spec c₀ opening).1
 
-/-- At the revoked view the slot resolves to `p2`. -/
-theorem resolves_p2 :
-    resolveEvent host c₁ providers (j := Phase.reserved) () body order =
-      .ok (.replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline]) := rfl
+/-- At the revoked view the stored `p1` is no longer usable and the descriptor's policy chooses
+`p2` (the former `resolves_p2` / `resolvesBy_p2`). -/
+theorem advances_p2 :
+    propose providers desc (host.view c₁.cfg.world).holds (c₁.stored .reserved ())
+      (latchedOf host ctl c₁ (j := Phase.reserved) ()) = .chosen (.prov .p2) := rfl
 
-/-- The same replan by the slot's incumbent-first policy (`slotAdvance`), with `p1` stored: the stored
-selection is no longer usable, so the policy selects `p2`; any other policy with TRANSITION would
-be admissible here too (`resolveEventBy_ok`). -/
-theorem resolvesBy_p2 :
-    resolveEventBy slotAdvance c₁ providers (j := Phase.reserved) () body order (some (some .p1)) =
-      .ok (.replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline]) := rfl
+/-- The rest: commit on `p1` (refused, the grant is gone), the policy's advance to `p2`, commit on
+`p2` (accepted: the capability is spent), then its reply is LOST. The world restores `p1`'s grant and
+calls the capability live again; the buyer chooses to cancel, to go back to `p1`, to keep `p2` with
+another continuation, and tries to commit on `p1`; a late reply arrives for the commit on `p1`; the
+deadline passes, and the world tries to un-pass it. The buyer gives up on the commitment
+(`abandon`): the reply that finally arrives, a cancellation and a new commitment are all refused;
+the world still moves. -/
+def rest : List NEv :=
+  [.base (.dispatch (commitOp .p1)),
+   .advance (j := Phase.reserved) (),
+   .base (.dispatch (commitOp .p2)),
+   .base (.world ⟨true, true, true, true, 2⟩),
+   pick .cancel 1,
+   pick (.prov .p1) 1,
+   pick (.flip .p2) 1,
+   .base (.dispatch (commitOp .p1)),
+   .base (.respond ⟨.reserved, Op.commit .p1, true⟩),
+   .base (.world ⟨true, true, false, true, 3⟩),
+   .base (.world ⟨true, true, true, true, 4⟩),
+   .base (.abandon (commitOp .p2)),
+   .base (.respond ⟨.reserved, Op.commit .p2, true⟩),
+   pick .cancel 1,
+   .base (.dispatch (commitOp .p1)),
+   .base (.world ⟨false, false, false, true, 5⟩)]
 
-/-- The rest: commit on `p1` (refused, the grant is gone), the slot's replan to `p2`, commit on `p2`
-(accepted: the capability is spent), then its reply is LOST. The world restores `p1`'s grant and
-calls the capability live again; the buyer tries to cancel, to go back to `p1`, to keep `p2` with
-another continuation, to commit on `p1`; a late reply arrives for the commit on `p1`; the deadline
-passes, and the world tries to un-pass it. The buyer gives up on the commitment (`abandon`): the
-reply that finally arrives, a cancellation and a new commitment are all refused; the world still
-moves. -/
-def rest : List (Event sig HoleN Res Fact Wv) :=
-  [.dispatch (commitOp .p1),
-   .replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline],
-   .dispatch (commitOp .p2),
-   .world ⟨true, true, true, true, 2⟩,
-   .replan (j := Phase.reserved) () cancelPlan [],
-   .replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline],
-   .replan (j := Phase.reserved) () (planFlip .p2) [.auth .p2, .beforeDeadline],
-   .dispatch (commitOp .p1),
-   .respond ⟨.reserved, Op.commit .p1, true⟩,
-   .world ⟨true, true, false, true, 3⟩,
-   .world ⟨true, true, true, true, 4⟩,
-   .abandon (commitOp .p2),
-   .respond ⟨.reserved, Op.commit .p2, true⟩,
-   .replan (j := Phase.reserved) () cancelPlan [],
-   .dispatch (commitOp .p1),
-   .world ⟨false, false, false, true, 5⟩]
+def script : List NEv := opening ++ rest
 
-def script : List (Event sig HoleN Res Fact Wv) := opening ++ rest
-
-def final : Cfg sig HoleN Res Tok Fact Ob Wv .idle := (session host spec c₀ script).1
+def final : NCfg := (nsession spec c₀ script).1
 
 /-- **The receipt**: which events were accepted, and why each refused one was refused. -/
 theorem receipt :
-    (session host spec c₀ script).2 =
+    (nsession spec c₀ script).2 =
       [none, none, none,
-       some (.unadmitted (commitOp .p1) [.auth .p1] none),
+       some (.run (.unadmitted (commitOp .p1) [.auth .p1] none)),
        none, none, none,
-       some (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩),
-       some (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩),
-       some (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩),
-       some (.busy (commitOp .p2)),
-       some (.unsolicited ⟨.reserved, Op.commit .p1, true⟩),
+       some (.run (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩)),
+       some (.run (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩)),
+       some (.run (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩)),
+       some (.run (.busy (commitOp .p2))),
+       some (.run (.unsolicited ⟨.reserved, Op.commit .p1, true⟩)),
        none,
-       some .worldStep,
+       some (.run .worldStep),
        none,
-       some (.abandoned (commitOp .p2)),
-       some (.abandoned (commitOp .p2)),
-       some (.abandoned (commitOp .p2)),
+       some (.run (.abandoned (commitOp .p2))),
+       some (.run (.abandoned (commitOp .p2))),
+       some (.run (.abandoned (commitOp .p2))),
        none] := rfl
 
 /-- **What had to stay**: the accepted history is the reservation answered and the commitment to
@@ -173,20 +212,21 @@ theorem receipt :
 residual's next call is that commitment; the run is ended by abandoning it, and the obligations
 established are the deposit and the payment to `p2`, which the abandonment does not discharge. -/
 theorem stayed :
-    final.obj.hist.answered = [⟨.idle, Op.reserve, ()⟩] ∧
-      final.obj.hist.inflight = some (commitOp .p2) ∧ final.spent = [.cap] ∧
-      final.obj.σ .reserved () = some (plan .p2) ∧ IsCall final.res (commitOp .p2) ∧
-      dispatchesOf final.log = [reserveOp, commitOp .p2] ∧
-      final.ended = some (commitOp .p2) ∧
-      final.obj.hist.established spec = [.holdDeposit, .pay .p2] :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    final.cfg.obj.hist.answered = [⟨.idle, Op.reserve, ()⟩] ∧
+      final.cfg.obj.hist.inflight = some (commitOp .p2) ∧ final.cfg.spent = [.cap] ∧
+      final.cfg.obj.σ .reserved () = some (plan .p2) ∧ IsCall final.cfg.res (commitOp .p2) ∧
+      dispatchesOf final.cfg.log = [reserveOp, commitOp .p2] ∧
+      final.cfg.ended = some (commitOp .p2) ∧
+      final.cfg.obj.hist.established spec = [.holdDeposit, .pay .p2] ∧
+      (final.decisions.map fun d => (d.cand, d.by_, d.rev)) = [(.prov .p2, none, 0)] :=
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- **What changed**: the revocation moved the plan from `p1` to `p2` before anything was
 dispatched in the hole; the world ends past the deadline with both grants revoked (it moves after
 the run has ended). -/
 theorem changed :
-    c₁.obj.σ .reserved () = some (plan .p1) ∧ final.obj.σ .reserved () = some (plan .p2) ∧
-      final.world = ⟨false, false, false, true, 5⟩ := ⟨rfl, rfl, rfl⟩
+    c₁.cfg.obj.σ .reserved () = some (plan .p1) ∧ final.cfg.obj.σ .reserved () = some (plan .p2) ∧
+      final.cfg.world = ⟨false, false, false, true, 5⟩ := ⟨rfl, rfl, rfl⟩
 
 -- Without the replan guard the three replans in flight are not refused by name (the cancellation
 -- and the return to `p1` become `inconsistent`, and the same-first-call `planFlip` is ACCEPTED).
@@ -195,8 +235,12 @@ theorem changed :
 #tooth stayed by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
 
 /-- The run's log is `Legal`, by the general theorem. -/
-theorem script_legal : Legal host spec O₀ everything (fun _ _ => []) final.log :=
-  reachable_legal (session_reachable .init script)
+theorem script_legal : Legal host spec O₀ everything (fun _ _ => []) final.cfg.log :=
+  creachable_legal (csession_reachable .init script)
+
+/-- And its decisions are authorized by the general theorem. -/
+theorem script_authorized : DecisionsAuthorized host ctl final.decisions :=
+  creachable_authorized rfl (csession_reachable .init script)
 
 /-! ## The fixture the library could not refuse -/
 
@@ -219,14 +263,14 @@ theorem withdrawn_refused :
 
 /-- At a world where everything holds, the driven run is `interpret`'s. -/
 theorem everything_delivers :
-    (drive host spec (env true) 3 c₀ 0).result? =
+    (drive host spec (env true) 3 c₀.cfg 0).result? =
       some (interpret (env true) (fill Ω (choose (plan .p1)) template) 0) := rfl
 
 /-- **A lost reply is not retried**: with the reservation in flight, a second reservation (which
 needs no fact and spends no token, so admission alone would let it through) is refused `busy`. -/
 theorem reserve_retry_refused :
-    (session host spec c₀ [.dispatch reserveOp, .dispatch reserveOp]).2 =
-      [none, some (.busy reserveOp)] := rfl
+    (nsession spec c₀ [.base (.dispatch reserveOp), .base (.dispatch reserveOp)]).2 =
+      [none, some (.run (.busy reserveOp))] := rfl
 
 #tooth reserve_retry_refused by mutation awaiting := fun {_ _} _ => none
 
@@ -234,40 +278,39 @@ theorem reserve_retry_refused :
 reply and a commitment on `p1` (admissible: every grant holds) are refused, naming the abandoned
 call. Without the guard the late reply would revive the plan and the commitment would go out. -/
 theorem abandon_ends :
-    (session host spec c₀ [.dispatch reserveOp, .abandon reserveOp,
-      .respond ⟨.idle, Op.reserve, ()⟩, .dispatch (commitOp .p1)]).2 =
-      [none, none, some (.abandoned reserveOp), some (.abandoned reserveOp)] := rfl
+    (nsession spec c₀ [.base (.dispatch reserveOp), .base (.abandon reserveOp),
+      .base (.respond ⟨.idle, Op.reserve, ()⟩), .base (.dispatch (commitOp .p1))]).2 =
+      [none, none, some (.run (.abandoned reserveOp)), some (.run (.abandoned reserveOp))] := rfl
 
 #tooth abandon_ends by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
 
 /-- The commitment to `p2` dispatched, its reply missing. -/
-def c₂ : Cfg sig HoleN Res Tok Fact Ob Wv .idle :=
-  (session host spec c₀ (opening ++ [.dispatch (commitOp .p1),
-    .replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline], .dispatch (commitOp .p2)])).1
+def c₂ : NCfg :=
+  (nsession spec c₀ (opening ++ [.base (.dispatch (commitOp .p1)), .advance (j := Phase.reserved) (),
+    .base (.dispatch (commitOp .p2))])).1
 
 /-- The general lost-reply theorem at the stranger's lost reply: whatever the world and the buyer
-propose short of a reply, the history, the spent capability and the dispatches stay. -/
-theorem lost_instance (evs : List (Event sig HoleN Res Fact Wv)) (hno : ∀ e ∈ evs, e.isRespond = false) :
-    (session host spec c₂ evs).1.obj.hist = c₂.obj.hist ∧ (session host spec c₂ evs).1.spent = [.cap] ∧
-      dispatchesOf (session host spec c₂ evs).1.log = [reserveOp, commitOp .p2] ∧
-      IsCall (session host spec c₂ evs).1.res (commitOp .p2) := by
-  have hc : Reachable host spec (Cfg.init O₀ everything) c₂ := session_reachable .init _
-  have := lost_reply_frozen hc (o := commitOp .p2) rfl evs hno
-  exact this
+propose short of a reply (advances and choices included), the history, the spent capability and
+the dispatches stay. -/
+theorem lost_instance (evs : List NEv) (hno : ∀ ev ∈ evs, ∀ r, ev ≠ .base (.respond r)) :
+    (nsession spec c₂ evs).1.cfg.obj.hist = c₂.cfg.obj.hist ∧ (nsession spec c₂ evs).1.cfg.spent = [.cap] ∧
+      dispatchesOf (nsession spec c₂ evs).1.cfg.log = [reserveOp, commitOp .p2] ∧
+      IsCall (nsession spec c₂ evs).1.cfg.res (commitOp .p2) :=
+  clost_reply_frozen (csession_reachable .init _) (o := commitOp .p2) rfl evs hno
 
 /-- The general completeness theorem at the negotiation: the template filled with `p1` is judged at
 `Γ₀`, `[cap]`; at the world where everything holds, the driven run is `interpret`'s. -/
 theorem typed_instance (H : Handler sig (fun _ => Nat)) (s : Nat) :
-    ∃ n, (drive host spec H n c₀ s).result? =
+    ∃ n, (drive host spec H n c₀.cfg s).result? =
       some (interpret H (fill Ω (choose (plan .p1)) template) s) := by
-  refine drive_complete H _ c₀ s Δ₀ rfl rfl rfl (instantiations_hasProt.1 .p1) ?_ ?_ (by decide)
+  refine drive_complete H _ c₀.cfg s Δ₀ rfl rfl rfl (instantiations_hasProt.1 .p1) ?_ ?_ (by decide)
     (fun _ _ _ h => by cases h)
   · intro f hf
     simp only [Γ₀, List.mem_cons, List.not_mem_nil, or_false] at hf
     rcases hf with rfl | rfl | rfl <;> rfl
   · intro t _
     cases t
-    exact ⟨rfl, by simp [c₀, Cfg.init]⟩
+    exact ⟨rfl, by simp [c₀, Cfg.init, CCfg.init]⟩
 
 /-! ## The selection decision is rechecked at dispatch
 
@@ -278,28 +321,33 @@ for citing `p1`'s grant. -/
 /-- The negotiation's accounts with every requirement dropped. -/
 def laxSpec : Spec sig Tok Fact Ob := { spec with requires := fun _ => [] }
 
-/-- The slot selects `p1` at the world where everything holds, citing its grant and the deadline. -/
-theorem selects_p1 :
-    resolveEvent host (session host laxSpec c₀ (opening.take 2)).1 providers (j := Phase.reserved) ()
-        body order =
-      .ok (.replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline]) := rfl
+/-- Nothing stored: the start for the selection fixtures. -/
+def c₀' : NCfg := CCfg.init (Cfg.init O₀ everything) fun _ _ => none
 
-/-- **Refused by the decision**: reserve, select `p1` (citing its grant), revoke the grant, commit on
-`p1`. `laxSpec` admits the commitment; the runner refuses it, naming the provider hole and the
-grant its decision cited. -/
+/-- With nothing stored, the policy chooses `p1` at the world where everything holds, citing its
+grant and the deadline (the former `selects_p1`). -/
+theorem selects_p1 :
+    let c := (nsession laxSpec c₀' (opening.take 2 ++ [.advance (j := Phase.reserved) ()])).1
+    c.stored .reserved () = some (.prov .p1) ∧ c.cfg.cites .reserved () = [.auth .p1, .beforeDeadline] :=
+  ⟨rfl, rfl⟩
+
+/-- **Refused by the decision**: reserve, the policy chooses `p1` (citing its grant), the grant is
+revoked, commit on `p1`. `laxSpec` admits the commitment; the runner refuses it, naming the provider
+hole and the grant its decision cited. -/
 theorem decision_rechecked :
-    (session host laxSpec c₀ (opening.take 2 ++
-      [.replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline],
-       .world ⟨false, true, true, true, 1⟩,
-       .dispatch (commitOp .p1)])).2 =
-      [none, none, none, none, some (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1])] :=
+    (nsession laxSpec c₀' (opening.take 2 ++
+      [.advance (j := Phase.reserved) (),
+       .base (.world ⟨false, true, true, true, 1⟩),
+       .base (.dispatch (commitOp .p1))])).2 =
+      [none, none, none, none,
+       some (.run (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1]))] :=
   rfl
 
 #tooth decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
 /-- The initial plan's decision: provider `p1`, citing what the slot's `p1` cites. -/
 def initialCites : (j : Phase) → HoleN j → List Fact
-  | .reserved, () => providers.supports (some .p1)
+  | .reserved, () => providers.supports (.prov .p1)
   | .idle, h => nomatch h
   | .done, h => nomatch h
 
@@ -307,24 +355,24 @@ def initialCites : (j : Phase) → HoleN j → List Fact
 `p1`'s grant revoked, an operation account (`laxSpec`) that omits the grant: the commitment is
 refused, naming the provider hole and the grant its initial decision cited. -/
 theorem initial_decision_rechecked :
-    (session host laxSpec (Cfg.init O₀ everything initialCites)
-      (opening ++ [.dispatch (commitOp .p1)])).2 =
-      [none, none, none, some (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1])] :=
+    (nsession laxSpec (CCfg.init (Cfg.init O₀ everything initialCites) stored₀)
+      (opening ++ [.base (.dispatch (commitOp .p1))])).2 =
+      [none, none, none, some (.run (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1]))] :=
   rfl
 
 #tooth initial_decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
 /-- The contrast: started without citations, the same run goes out. -/
 theorem uncited_start_admitted :
-    (session host laxSpec c₀ (opening ++ [.dispatch (commitOp .p1)])).2 = [none, none, none, none] :=
+    (nsession laxSpec c₀ (opening ++ [.base (.dispatch (commitOp .p1))])).2 = [none, none, none, none] :=
   rfl
 
 /-- The general theorem at the cited start: its log is `Legal` with those citations. -/
 theorem initial_legal :
     Legal host laxSpec O₀ everything initialCites
-      (session host laxSpec (Cfg.init O₀ everything initialCites)
-        (opening ++ [.dispatch (commitOp .p1)])).1.log :=
-  reachable_legal (session_reachable .init _)
+      (nsession laxSpec (CCfg.init (Cfg.init O₀ everything initialCites) stored₀)
+        (opening ++ [.base (.dispatch (commitOp .p1))])).1.cfg.log :=
+  creachable_legal (csession_reachable .init _)
 
 end Obend.Run.Negotiation
 

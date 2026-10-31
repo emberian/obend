@@ -382,32 +382,12 @@ def Drive.state {St : Type} {i : Ix} : Drive S Hole A Tok Fact Ob V St i → St
   | .refused _ _ s => s
   | .fuel _ s => s
 
-/-! ## Replanning by a slot -/
+/-! ## Replanning
 
-/-- Re-resolve hole `h` by a slot at the current world: the replan event for the first usable
-candidate's body, or the slot's refusal naming every candidate's dead supports. -/
-def resolveEvent {Cand : Type} (host : Host V Tok Fact) {i : Ix}
-    (c : Cfg S Hole A Tok Fact Ob V i) (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
-    (body : Cand → Prot S Hole A j) (order : List Cand) :
-    Except (Slot.Refusal Fact Cand) (Event S Hole A Fact V) :=
-  (Sl.select (host.view c.world).holds order).map fun cand => Event.replan h (body cand) (Sl.supports cand)
-
-/-- The chooser's explicit choice of `cand` for hole `h` (an OVERRIDE when it supersedes a choice
-that is still usable): its body, citing its supports. Its authority is the hole's chooser
-(`isMine`), checked by `run`; it needs nothing of the choice it replaces. -/
-def chooseEvent {Cand : Type} (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
-    (body : Cand → Prot S Hole A j) (cand : Cand) : Event S Hole A Fact V :=
-  .replan h (body cand) (Sl.supports cand)
-
-/-- Re-resolve hole `h` by a stored-selection POLICY (`Obend.Slot.Advance`: how a stored selection
-moves when the view changes; the slot's own is incumbent-first `slotAdvance`): the replan event for
-the candidate the policy keeps or selects at the current world, or its refusal. -/
-def resolveEventBy {Cand : Type} (adv : Advance V Fact Cand) {i : Ix}
-    (c : Cfg S Hole A Tok Fact Ob V i) (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
-    (body : Cand → Prot S Hole A j) (order : List Cand) (stored : Option Cand) :
-    Except (Slot.Refusal Fact Cand) (Event S Hole A Fact V) :=
-  (adv.advance Sl c.world order stored).map fun cand =>
-    Event.replan h (body cand) (Sl.supports cand)
+A replan event carries a decision; the runner judges the event, not who proposed it. Decisions are
+made only through the selection control every hole carries (`Obend.Run.Control`: the descriptor,
+its preset, its authenticated chooser, its revision and tenure); raw `replan` events are the kernel's
+vocabulary, not an entry point. -/
 
 end
 

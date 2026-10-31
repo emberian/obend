@@ -6,7 +6,7 @@ The negotiation's provider hole (`Obend.Slot.Protocol.Negotiation`) decided by a
 also says who holds the editor's office; the deployment authenticates a principal by a credential
 (here, the principal's own name). Fixtures, each against what the bare runner does:
 
-- `bare_accepts`: the bare runner takes any proposer's choice (`chooseEvent`; authority is the
+- `bare_accepts`: the bare runner kernel takes any proposer's replan (its authority is the
   hole's `.me`), and a choice made by an editor who has since left office still dispatches.
 - `editorial_receipt`: under `whileInOffice`, a choice by someone out of office is refused
   `notChooser`; an unauthenticated one `unauthenticated`; a second choice against the old revision
@@ -120,11 +120,11 @@ def ebody : Option Provider → P .reserved
 def edesc (preset : Preset) (tenure : Tenure) (suspension : Suspension)
     (domain : List (Option Provider) := [some .p1, some .p2, none]) :
     Descriptor Editor EFact (Option Provider) :=
-  ⟨.office, preset, domain, 1, true, tenure, suspension⟩
+  ⟨fun e => [.office e], preset, domain, 1, true, tenure, suspension⟩
 
 def ek (D : Descriptor Editor EFact (Option Provider)) :
-    (j : Phase) → HoleN j → Option (SlotCtl sig HoleN Res Editor EFact (Option Provider) j)
-  | .reserved, () => some ⟨eslot, D, ebody⟩
+    (j : Phase) → HoleN j → SlotCtl sig HoleN Res Editor EFact (Option Provider) j
+  | .reserved, () => ⟨eslot, D, ebody⟩
   | .idle, h => nomatch h
   | .done, h => nomatch h
 
@@ -153,7 +153,7 @@ choice, cited only by its candidate's supports, dispatches after she has left of
 theorem bare_accepts :
     (session ehost espec (Cfg.init (eobj (plan .p1)) w₀)
       [.dispatch reserveOp, .respond ⟨.idle, Op.reserve, ()⟩,
-       chooseEvent eslot (j := Phase.reserved) prov ebody (some .p2),
+       .replan (j := Phase.reserved) prov (ebody (some .p2)) (eslot.supports (some .p2)),
        .world handover, .dispatch (commitOp .p2)]).2 = [none, none, none, none, none] := rfl
 
 /-! ## The editorial slot -/
