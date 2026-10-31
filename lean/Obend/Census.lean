@@ -230,7 +230,6 @@ import Obend.Spec.PackageLaw
 import Obend.Spec.Parse
 import Obend.Spec.Preview
 import Obend.Spec.Proofs.C4
-import Obend.Spec.Proofs.C4Teeth
 import Obend.Spec.Proofs.C4Vectors
 import Obend.Spec.Proofs.Contract
 import Obend.Spec.Proofs.Ecosystem
@@ -259,6 +258,7 @@ import Obend.Teeth.Core.Force
 import Obend.Teeth.Law.LawJudgeTeeth
 import Obend.Teeth.Law.MachineTeeth
 import Obend.Teeth.Law.TypingTeeth
+import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire
 import Obend.Teeth.Tactic.ToothChecks

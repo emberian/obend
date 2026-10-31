@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Spec.Proofs.C4Teeth — the C4 theorems' teeth (a leaf)
+# Obend.Teeth.Spec.C4Teeth — the C4 theorems' teeth (a leaf)
 
 Each mutation breaks the stored proof: a cleaning that drops every candidate (monotonicity), a
 repetition check that accepts everything (no repeats), a suffix tail that is always empty (the
