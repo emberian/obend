@@ -29,6 +29,10 @@ accepted history across replanning, revocation and lost replies.
   log `Legal` by `Obend.Fold.project_moves_run` applied, grants exclusive,
   `OnceSpent` globally, the loser's refusal naming the winner and epoch; `Obend.Run.SharedExample`, two
   buyers and one capability.
+- `Obend.Run.Durable`, `Obend.Run.Proofs.Durable`: the journal-first host (durable journal and outbox,
+  volatile memory; the journal append the linearization point; recovery by replay): it refines the
+  abstract commit, recovery restores the memory, and two exposed effects consuming one token are one,
+  across any crashes; `Obend.Run.DurableExample`, two buyers and a crash between them.
 - `Obend.Run.Negotiation`: the stranger's example (revocation, a slot's replan, a lost reply), the
   fixture `interpret` delivers and the runner refuses, and the durable-spending ticket.
 -/
@@ -48,3 +52,6 @@ public import Obend.Run.ControlExample
 public import Obend.Run.Shared
 public import Obend.Run.Proofs.Shared
 public import Obend.Run.SharedExample
+public import Obend.Run.Durable
+public import Obend.Run.Proofs.Durable
+public import Obend.Run.DurableExample

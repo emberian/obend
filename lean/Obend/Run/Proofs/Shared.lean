@@ -132,19 +132,19 @@ public structure JInv (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : �
     ((L.grants J.led).filter fun g => decide (g.winner = i)).map Grant.tok
 
 omit [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)] in
-theorem ledgerStep_raw {d d' : L.Rec} {w : W} (h : ledgerStep L d (.raw w) = .ok d') :
+public theorem ledgerStep_raw {d d' : L.Rec} {w : W} (h : ledgerStep L d (.raw w) = .ok d') :
     L.stepRaw (L.raw d) w = true ∧ d' = L.setRaw d w := by
   simp only [ledgerStep] at h; split at h
   · cases h; exact ⟨(by assumption), rfl⟩
   · cases h
 
 omit [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)] in
-theorem ledgerStep_abandon {d d' : L.Rec} {i : ι} (h : ledgerStep L d (.abandon i) = .ok d') :
+public theorem ledgerStep_abandon {d d' : L.Rec} {i : ι} (h : ledgerStep L d (.abandon i) = .ok d') :
     d' = L.onAbandon d i := by
   simp only [ledgerStep] at h; cases h; rfl
 
 omit [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)] in
-theorem ledgerStep_rowOf {sp' : Spec S Tok Fact Ob} {d d' : L.Rec} {i : ι} {o : Σ i, S.Op i}
+public theorem ledgerStep_rowOf {sp' : Spec S Tok Fact Ob} {d d' : L.Rec} {i : ι} {o : Σ i, S.Op i}
     (h : ledgerStep L d (ledgerRowOf L sp' d i o) = .ok d') :
     (∀ t, sp'.consumes o.2 = some t → d' = L.commit d i t) ∧ (sp'.consumes o.2 = none → d' = d) := by
   unfold ledgerRowOf at h
