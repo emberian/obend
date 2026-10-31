@@ -107,3 +107,49 @@ discipline must be generalized to "settled or a raw template under the current k
 `bodyLR`/`bodyRL`), or (b) the elaborator flattens layers into one head `extend` chain before
 `fix` (no semantic change; layered objects become single-layer), or (c) `≈c` and the cost judge
 stay silent on layered objects. I recommend (b) if the elaborator can emit it, else (a).
+
+## Follow-up (2), after the coordinator's decision on `super`
+
+**Layered objects, through their flattening** (`Obend/Judge/LayeredCost.lean`). `LayeredCost C m k`:
+the flattening's member costs at most `k` (a clairvoyant derivation exists) and is `≈b` the object's
+(`flatten_sound`). The judge `layeredCost` takes a demand run of `C.flatten` as the certificate;
+`layered_refuted` (a demand above `k`, or none, refutes); complete where the flattening is in the
+object fragment. `layered_b`: `fix (compose {b = self.a, c = super.a} {a = 7}) {}` flattens to
+`{b = self.a, c = 7, a = 7}` (`layered_flatten`, by kernel computation) and `.b` is costed at 7.
+No `Sim` rule and no elaborator change were needed. What this does not claim, plainly: a clairvoyant
+derivation of `C.object` itself (the rule still has none for an inner layer's `self` reads), nor
+that `≈b` preserves cost. The cost is the compiled program's, and the compilation is proved
+observationally faithful. "`≈c` respects `≈b`" is not a fact of this development: `≈c` is proved
+of `Sim`-related terms, and an object and its flattening are not `Sim`-related.
+
+**The fragment tick bound: not proved.** What it needs is a symbolic machine trace over arbitrary
+field lists, which I worked out but did not mechanize. For `get (obj fs) x` with `fs` distinct
+and `|fs| ≤ 40` (so the fixed limits `⟨100, 100⟩` are never hit):
+- 12 transitions take the machine to `enter (3 + i_x)`: `get`, `fix` (cell 0), the two β steps
+  (cells 1 = `self`'s argument `bound 0`, 2 = `super`), the record (`allocateFields`: cells
+  `3 … 2+|fs|`, suspended `eᵢ.at (bound 1)` in `[2, 1, 0]`), the update of cell 0, the selection.
+- Forcing a field along a chase of `d` selections takes `t ≤ 3 + 6d + 3` transitions: a literal is
+  3 (enter, value, update); each selection is 6 (`get`, `bound 1`, enter cell 1, selection, enter,
+  update), plus 3 the first time cell 1 is forced. A cached cell costs 1.
+- One more transition completes. So `T = 13 + t ≤ 22 + 6d`, against the least demand
+  `headCost + 2d + 2`. The constant is 4: `T ≤ 4·k` for `d = 0` (16 ≤ 16 or 20) and for `d ≥ 1`
+  (22 + 6d ≤ 8d + 20). The measured programs sit exactly on it: 16 at cost 5, 25 at cost 7.
+
+The proof needs:
+1. `runBounded (n + j) s = runBounded j s'` along `n` active transitions within limits.
+2. `allocateFields` as an append, with addresses `3 + i`.
+3. A heap invariant: cell 0 is the cached record; cell 1 is suspended or cached at it; each field
+   cell is suspended, evaluating exactly when its name is an ancestor on the forcing stack, or
+   cached at its chase value.
+4. A forcing lemma by induction on the chase. Its ancestors are disjoint from its path by
+   `chase_walk_injective`.
+
+A cycle or a missing field has no demand run (`demand_minimal`), so `TicksWithinDemand` is vacuous
+there.
+
+For the general statement, `Completeness` would need to provide a cost-indexed
+`GraphRepresentsBy`. Each raw transition is a source reduction or a stutter (as now), and the
+stutters between two reductions are bounded by a constant. Under it, a heap cell's state
+corresponds to the wave approximant's entry: suspended to `skipped`, cached to the value. The
+present proof measures termination by a lexicographic descent with an unbounded stutter rank,
+which gives completion but no tick count.
