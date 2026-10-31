@@ -10,6 +10,9 @@ module
   `Override` composed last it is blocked naming exactly the object's pin, and the machine is
   selected, which computes `3` where the stale book would still say `7`; with Augmented at `+ 2` it
   is blocked naming the object's pin and Augmented's;
+* no residual `super` row: ReviewMember projects `super` only, and its vtable holds no record of a
+  suffix row's shape (`vtable_clean`); a layer passing `super` first-class (`Leak`) fails the check,
+  and its vtable does hold the row literal;
 * `#tooth`: with the inner layer winning in the flattened row, the stored proof of `flatten_sound`
   is refused; with the object pin dropped from a book's supports, the stored proof of
   `book_usable_sound` is refused. -/
@@ -18,6 +21,7 @@ public import Obend.Teeth.Logic.FrameTeeth
 import all Obend.Leaf.Flatten
 import all Obend.Leaf.Specialize
 public import Obend.Leaf.Specialize
+public import Obend.Leaf.Residual
 @[expose] public section
 open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Slot Obend.Slot.World Obend.Equiv
 open Obend.Teeth.Logic.Review (base twice augmented override seed)
@@ -106,6 +110,28 @@ theorem augmented_blocks :
     deadCells (specSlot.read (holdsAt (view (comp 2) 1)) (some book)) =
       [.object "twiceOfThree", .layer "ReviewMember.Augmented"] := by
   decide +kernel
+
+/-! ## No residual `super` row -/
+
+/-- The shapes of the suffix rows of a composition. -/
+def rowShapes (C : Composition) (ns : List String) : Bool := (suffixNames C.seed C.layers).contains ns
+
+theorem review_projects_super :
+    superOnlyProjectedRow (comp 1).seed (comp 1).layers = true ∧
+      cleanRow (rowShapes (comp 1)) (comp 1).seed (comp 1).layers = true := by decide +kernel
+
+theorem review_no_residual : ∀ e ∈ (comp 1).vtable, recordBad (rowShapes (comp 1)) e.2 = false :=
+  vtable_clean _ _ review_projects_super.1 review_projects_super.2
+
+/-- `def leak(v): (λx. x)(super)`: `super` passed first-class. -/
+def leak : Obend.Logic.Layer :=
+  Obend.Teeth.Logic.Review.layer "ReviewMember.Leak" [("leak", .lam (.app (.lam (.bound 0)) (.bound 1)))]
+
+def leaky : Composition := ⟨leak, [augmented 1, twice, base], seed⟩
+
+theorem leak_refused_and_residual :
+    superOnlyProjectedRow leaky.seed leaky.layers = false ∧
+      leaky.vtable.any (fun e => recordBad (rowShapes leaky) e.2) = true := by decide +kernel
 
 /-! ## Teeth -/
 

@@ -234,6 +234,7 @@ import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
+import Obend.Leaf.Residual
 import Obend.Leaf.Specialize
 import Obend.Leaf.UpTo
 import Obend.Ledger
