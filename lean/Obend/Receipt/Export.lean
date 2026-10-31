@@ -12,15 +12,19 @@ Two receipts, chained:
   to `p2`, at the `cited` setting of the dial (the accumulator's rest and the row disclosed, the view
   only through pins), or at `full` (the whole log, replayed); `prev` is the identity receipt's digest.
 
-`verify` is what `obend verify RECEIPT [--prev PREV]` runs. It holds no producer state: it decodes the
+`verify` is what `obend verify RECEIPT [--prev PREV] [--root ROOT]` runs. It holds no producer state,
+and it reads no assurance the producer chose: the quantifier is checked against the law's (`forAll` for
+an identity, `existsRun` for a transition), the trust line is the `ceiling` of the supports it ran, and
+a transition is checked against an expected root the verifier supplies, never the receipt's own. It decodes the
 statement, re-encodes it (`encode`), re-runs the checker on the certificate; for a transition it
 decodes the rest and the row, checks their digests against `pre` and `row`, computes each world
-opening from its pin by `holdsOfPin`, builds a view from the pins (`realize`), and runs `recheck`
+opening from its pin by `holdsOfPin`, builds a view from the pins (`realize`; an absent capability
+opening is not live), checks that the openings are exactly the row's reads there, and runs `recheck`
 (`Obend.Receipt.recheck_sound` says what that establishes); then it re-checks every opening against
 the receipt's `dated` root: each proof opens against it (`datedOpens`, cSHAKE256 run as compiled
 code), each opening is the value its proof commits (`Reading.matched`), and each pin is the pin the
-view committed (`pinCode`). `Obend.Receipt.dated_verdict` says what that establishes: the verdict is
-the dated view's, or cSHAKE256 collides. `verifyIdentityCore_sound`: an accepted
+view committed (`pinCode`). `Obend.Receipt.dated_sound` says what that establishes of any receipt it
+accepts: the verdict is the expected view's, or cSHAKE256 collides. `verifyIdentityCore_sound`: an accepted
 identity receipt's statement holds.
 -/
 public import Obend.Receipt.Negotiation
@@ -172,9 +176,25 @@ def identityReceipt (d : Identity) (certText : String) (prev : Digest) : Except 
     ("statement", identityJson d), ("cnf", toJson (digest (encode d).toDimacs)),
     ("certificate", toJson certText)]
 
+/-- What the identity verifier runs itself: the certificate, re-checked by the compiled checker. -/
+def identitySupports : List (String × Trust) := [("lrat-certificate", .checked "lrat" "1" .compiled)]
+
+/-- The quantifier a law establishes, checked against the receipt's label rather than read from it. -/
+def checkQuantifier (j : Json) (established : Shape) : Except String Unit := do
+  let q ← shapeOf (← j.getObjValAs? String "quantifier")
+  unless q == established do
+    throw s!"quantifier: the law establishes {shapeName established}, the receipt says {shapeName q}"
+
+/-- The trust line, from the ceiling the verifier derives (`Obend.Receipt.ceiling`). -/
+def trustLine (ran : List (String × Trust)) (j : Json) : Except String String := do
+  match ← ceiling ran (← supportsOf (← j.getObjVal? "trust")) with
+  | some (s, .attested p r) => pure s!"attested by {p}@{r} (support {s})"
+  | _ => pure "checked"
+
 def verifyIdentity (j : Json) : Except String String := do
   let d ← identityOf (← j.getObjVal? "statement")
   unless (← j.getObjValAs? String "law") == digest identityLaw do throw "law: not lrat@1 over the Tseitin encoding"
+  checkQuantifier j .forAll
   unless (← j.getObjValAs? String "row") == digestJson (identityJson d) do throw "row: the statement's digest differs"
   unless (← j.getObjValAs? String "cnf") == digest (encode d).toDimacs do
     throw "cnf: the certificate was produced for another encoding"
@@ -187,8 +207,9 @@ def verifyIdentity (j : Json) : Except String String := do
     | .uncovered => "uncovered"
   unless claimed.isOk == (v == .ok) do
     throw s!"verdict: the receipt says {if claimed.isOk then "ok" else "not ok"}, the checker says {said}"
+  let trust ← trustLine identitySupports j
   match v with
-  | .ok => return s!"identity {d.name}: holds (lrat@1, {certGrade cert} steps, trust compiled)"
+  | .ok => return s!"identity {d.name}: holds (lrat@1, {certGrade cert} steps, trust {trust}, base compiled)"
   | _ => return s!"identity {d.name}: a refusal, as recorded ({said}); the statement is not established"
 
 /-! ## The world-transition receipt -/
@@ -242,23 +263,36 @@ def worldReceiptOf (j : Json) : Except String (Receipt Fact (Nat × Bool) NRead 
     proofs := ← (← (← j.getObjVal? "proofs").getArr?).toList.mapM openingProofOf,
     prev := ← j.getObjValAs? String "prev" }
 
-/-- Produce the receipt of row 4: `cited` discloses the rest and the row; `full` the log up to it. -/
-def negotiationReceipt (full : Bool) (prev : Digest) : Json :=
-  let R := receipt4 prev
+/-- Produce the receipt of row 4: `cited` discloses the rest and the row; `full` the log up to it.
+`shift` moves the world's clock before issuing (Astra's probe: an honestly issued receipt at another
+view, whose root is not the expected one); `0` is the receipt of the run. -/
+def negotiationReceipt (full : Bool) (prev : Digest) (shift : Nat := 0) : Json :=
+  let R := if shift == 0 then receipt4 prev else
+    issue admission naming ({ acc4.1 with clock := acc4.1.clock + shift }, acc4.2) row4 .existsRun trust4 prev
   let disclosure := if full then
       Json.mkObj [("dial", "full"), ("log", Json.arr ((log.take 5).map rowJson).toArray)]
     else Json.mkObj [("dial", "cited"), ("rest", restJson acc4.2), ("rowData", rowJson row4)]
   worldReceiptJson R disclosure
 
-/-- The token opening the receipt carries (the host's word, not a pin). -/
+/-- The token opening the receipt carries (the host's word, not a pin). Absent, the capability is not
+live: the verifier fails closed. -/
 def capOpening (os : List (NRead × Bool)) : Bool :=
   match os.find? (fun o => o.1 == .inr .cap) with
   | some o => o.2
-  | none => true
+  | none => false
 
-def verifyWorld (j : Json) : Except String String := do
+/-- What the world-transition verifier runs itself: the fold, re-executed (`recheck`, or the replay
+at `full`), and the view, every opening against the dated root. -/
+def worldSupports : List (String × Trust) := trust4
+
+/-- Verify a world-transition receipt against `root`, the expected root of the view (the verifier's,
+from an authority it chose, never the receipt's). -/
+def verifyWorld (j : Json) (root : Option Nat) : Except String String := do
   let R ← worldReceiptOf j
   unless R.law == digest lawId do throw "law: not the negotiation's Legal fold"
+  checkQuantifier j .existsRun
+  let some expected := root | throw "root: no expected root given; a receipt's own root is the producer's word"
+  unless R.dated == expected do throw "root: the receipt is dated at a view whose root is not the expected root"
   let disc ← j.getObjVal? "disclosure"
   let dial ← disc.getObjValAs? String "dial"
   let (rest, row) ← match dial with
@@ -283,6 +317,8 @@ def verifyWorld (j : Json) : Except String String := do
       | none => throw s!"opening {factName f}: no pin"
     | .inr _ => pure ()
   let w' := realize R.pins (capOpening R.openings)
+  unless R.openings.map Prod.fst == admission.reads (w', rest) row do
+    throw "openings: the receipt does not open exactly what the row reads"
   unless recheck admission naming rest row w' R do
     throw "recheck: the row, judged at the view the pins realize, does not give the receipt's verdict and post root"
   -- the view: every opening against the dated root
@@ -296,20 +332,20 @@ def verifyWorld (j : Json) : Except String String := do
       unless pinCode ((R.pins.lookup f).getD none) == p.value do
         throw s!"dated: the pin of {factName f} is not the pin the dated view committed"
     | .inr _ => pure ()
-  let overall := match R.overall with
-    | some (s, .attested p r) => s!"attested by {p}@{r} (support {s})"
-    | _ => "checked"
-  return s!"world-transition ({dial}): {repr R.verdict.isOk} at view {(hex (Obend.Digest.Cshake256.natBytesBE R.dated)).take 16}…; trust {overall}"
+  let overall ← trustLine worldSupports j
+  return s!"world-transition ({dial}): {repr R.verdict.isOk} at the expected view {(hex (Obend.Digest.Cshake256.natBytesBE R.dated)).take 16}…; trust {overall}"
 
 /-! ## The consumer -/
 
-/-- Verify a receipt and, given its predecessor, the link. -/
-def verify (j : Json) (prev : Option Json) : Except String (List String) := do
+/-- Verify a receipt and, given its predecessor, the link. `root` is the expected root of a
+world-transition's view; a predecessor that is a world-transition is checked against its own
+expected root, which this command is not given, so it is refused. -/
+def verify (j : Json) (prev : Option Json) (root : Option Nat) : Except String (List String) := do
   let schema ← j.getObjValAs? String "schema"
   unless schema == "obend.receipt.v1" do throw s!"schema {schema}"
   let line ← match ← j.getObjValAs? String "kind" with
     | "identity" => verifyIdentity j
-    | "world-transition" => verifyWorld j
+    | "world-transition" => verifyWorld j root
     | k => throw s!"unknown kind {k}"
   let p ← j.getObjValAs? String "prev"
   match prev with
@@ -318,7 +354,7 @@ def verify (j : Json) (prev : Option Json) : Except String (List String) := do
     unless receiptDigest pj == p do throw "prev: the predecessor's digest differs"
     let earlier ← match ← pj.getObjValAs? String "kind" with
       | "identity" => verifyIdentity pj
-      | "world-transition" => verifyWorld pj
+      | "world-transition" => verifyWorld pj none
       | k => throw s!"predecessor: unknown kind {k}"
     return [line, s!"prev: {earlier}", "chain: linked"]
 

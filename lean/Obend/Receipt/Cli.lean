@@ -2,13 +2,15 @@ module
 /-
 # Obend.Receipt.Cli — `obend verify`, `obend receipt`, `obend lrat`
 
-    obend verify RECEIPT.json [--prev PREV.json]
+    obend verify RECEIPT.json [--prev PREV.json] [--root ROOT]
         re-check a receipt with no producer state (`Obend.Receipt.Export.verify`); with its
-        predecessor, the chain link too. Exit 0 when it verifies, 3 otherwise.
+        predecessor, the chain link too. A world-transition receipt needs ROOT, the expected root of
+        its view (decimal), from an authority the verifier chose. Exit 0 when it verifies, 3 otherwise.
     obend receipt identity N CERT.lrat OUT.json [--prev PREV.json]
         the receipt of `noCarry N` (x &&& y = 0 → x + y = x ||| y at N bits) with a solver's certificate.
-    obend receipt negotiation OUT.json [--full] [--prev PREV.json]
-        the receipt of the negotiation's admitted dispatch of the commitment to `p2`.
+    obend receipt negotiation OUT.json [--full] [--prev PREV.json] [--shift-clock N]
+        the receipt of the negotiation's admitted dispatch of the commitment to `p2`; with
+        `--shift-clock N`, issued at the view with the world's clock moved by N (a probe for the tests).
     obend receipt cnf N OUT.cnf
         the DIMACS encoding of `noCarry N`, for a solver.
     obend lrat CNF PROOF
@@ -30,12 +32,12 @@ def prevDigest (prev : Option String) : IO Digest := do
   | none => pure Export.genesis
   | some p => pure (Export.receiptDigest (← readJson p))
 
-def verifyCommand (path : String) (prev : Option String) : IO UInt32 := do
+def verifyCommand (path : String) (prev : Option String) (root : Option Nat) : IO UInt32 := do
   let j ← readJson path
   let pj ← match prev with
     | none => pure none
     | some p => pure (some (← readJson p))
-  match Export.verify j pj with
+  match Export.verify j pj root with
   | .ok lines => for l in lines do IO.println l
                  IO.println "verified"; return 0
   | .error e => IO.eprintln s!"refused: {e}"; return 3
@@ -46,9 +48,9 @@ def identityCommand (n : Nat) (cert out : String) (prev : Option String) : IO UI
   | .ok j => IO.FS.writeFile out (j.pretty ++ "\n"); IO.println s!"wrote {out}"; return 0
   | .error e => IO.eprintln e; return 2
 
-def negotiationCommand (out : String) (full : Bool) (prev : Option String) : IO UInt32 := do
+def negotiationCommand (out : String) (full : Bool) (prev : Option String) (shift : Nat := 0) : IO UInt32 := do
   let p ← prevDigest prev
-  IO.FS.writeFile out ((Export.negotiationReceipt full p).pretty ++ "\n")
+  IO.FS.writeFile out ((Export.negotiationReceipt full p shift).pretty ++ "\n")
   IO.println s!"wrote {out}"; return 0
 
 def lratCommand (cnf proof : String) : IO UInt32 := do
@@ -59,15 +61,25 @@ def lratCommand (cnf proof : String) : IO UInt32 := do
   | .refused k path => IO.println s!"refused: {repr k} at {path}"; return 3
   | .uncovered => IO.println "uncovered"; return 3
 
+/-- `--prev P` and `--root R` after the path, in either order. -/
+def verifyArgs (path : String) : List String → Option (IO UInt32)
+  | [] => some (verifyCommand path none none)
+  | ["--prev", prev] => some (verifyCommand path (some prev) none)
+  | ["--root", r] => r.toNat?.map fun r => verifyCommand path none (some r)
+  | ["--prev", prev, "--root", r] | ["--root", r, "--prev", prev] =>
+      r.toNat?.map fun r => verifyCommand path (some prev) (some r)
+  | _ => none
+
 public def main? : List String → Option (IO UInt32)
-  | ["verify", path] => some (verifyCommand path none)
-  | ["verify", path, "--prev", prev] => some (verifyCommand path (some prev))
+  | "verify" :: path :: rest => verifyArgs path rest
   | ["receipt", "identity", n, cert, out] => n.toNat?.map fun n => identityCommand n cert out none
   | ["receipt", "identity", n, cert, out, "--prev", prev] => n.toNat?.map fun n => identityCommand n cert out (some prev)
   | ["receipt", "negotiation", out] => some (negotiationCommand out false none)
   | ["receipt", "negotiation", out, "--full"] => some (negotiationCommand out true none)
   | ["receipt", "negotiation", out, "--prev", prev] => some (negotiationCommand out false (some prev))
   | ["receipt", "negotiation", out, "--full", "--prev", prev] => some (negotiationCommand out true (some prev))
+  | ["receipt", "negotiation", out, "--prev", prev, "--shift-clock", n] =>
+      n.toNat?.map fun n => negotiationCommand out false (some prev) n
   | ["receipt", "cnf", n, out] => n.toNat?.map fun n => do
       IO.FS.writeFile out (Judge.Identity.encode (Judge.Identity.noCarry n)).toDimacs; return 0
   | ["lrat", cnf, proof] => some (lratCommand cnf proof)

@@ -14,6 +14,10 @@
     statement changed after the certificate (its CNF digest differs) are each refused by name; and
     against the dated root: a pin whose clock moved (the verdict unchanged), a moved root, and an
     opening with a proof re-valued to match it.
+  * forgeries (lane Sound): a receipt that omits the capability opening and its proof, one with an
+    empty support list, one issued at a view with the clock moved (Astra's probe), and one whose
+    quantifier is relabelled are each refused by name. A world-transition is verified against an
+    expected root the verifier holds (`--root`), here the root of the run's view (`ROOT`).
 
 usage: python3 tests/run-receipts.py [OBEND_BINARY]      (from lean/, after `lake build obend`)
 exit 0 when every check holds, 1 otherwise; a summary line last.
@@ -86,23 +90,27 @@ with tempfile.TemporaryDirectory() as d:
     rc, out = obend("verify", ident)
     check("identity receipt verifies", rc == 0 and "holds" in out, out)
 
+    # the expected root: the view the run dispatched row 4 at (the verifier's authority, here the run)
+    ROOT = None
     for dial, extra in (("cited", []), ("full", ["--full"])):
         neg = os.path.join(d, f"negotiation-{dial}.json")
         rc, out = obend("receipt", "negotiation", neg, *extra, "--prev", ident)
         check(f"negotiation receipt ({dial}) written", rc == 0, out)
-        rc, out = obend("verify", neg, "--prev", ident)
+        if ROOT is None:
+            ROOT = str(json.load(open(neg))["dated"])
+        rc, out = obend("verify", neg, "--prev", ident, "--root", ROOT)
         check(f"negotiation receipt ({dial}) verifies with its chain", rc == 0 and "chain: linked" in out, out)
         check(f"negotiation receipt ({dial}) is checked, the view included", "trust checked" in out, out)
 
     neg = os.path.join(d, "negotiation-cited.json")
     base = json.load(open(neg))
 
-    def tamper(name, mutate, needle, prev=ident):
+    def tamper(name, mutate, needle, prev=ident, root=None):
         r = json.loads(json.dumps(base))
         mutate(r)
         p = os.path.join(d, "t.json")
         write(p, r)
-        rc, out = obend("verify", p, "--prev", prev)
+        rc, out = obend("verify", p, "--prev", prev, "--root", root or ROOT)
         check(name, rc == 3 and needle in out, out)
 
     def flip_opening(r):
@@ -126,7 +134,10 @@ with tempfile.TemporaryDirectory() as d:
 
     def move_root(r):
         r["dated"] = r["dated"] + 1
-    tamper("a moved dated root is refused", move_root, "dated: an opening proof does not open")
+    tamper("a moved dated root is refused against the expected root", move_root, "root: the receipt is dated")
+    # and against itself as the expected root, by its proofs
+    tamper("a moved dated root does not open its proofs", move_root, "dated: an opening proof does not open",
+           root=str(base["dated"] + 1))
 
     def lie_with_proof(r):
         # a consistent lie: p2's grant denied in the pin, the openings and the proofs' values, and the
@@ -141,6 +152,36 @@ with tempfile.TemporaryDirectory() as d:
                 o["value"] = False
                 pr["value"] = pr["value"] - 1
     tamper("an opening re-valued with its proof does not open", lie_with_proof, "dated: an opening proof does not open")
+
+    # forgeries
+    def omit_cap(r):
+        k = next(i for i, o in enumerate(r["openings"]) if o["read"] == "token cap")
+        del r["openings"][k]
+        del r["proofs"][k]
+    tamper("a receipt omitting the capability opening is refused", omit_cap, "openings: the receipt does not open exactly")
+
+    def no_trust(r):
+        r["trust"] = []
+    tamper("a receipt with an empty support list is refused", no_trust, "trust: the support legal-fold has no entry")
+
+    def relabel(r):
+        r["quantifier"] = "planForAll"
+    tamper("a relabelled quantifier is refused", relabel, "quantifier: the law establishes existsRun")
+
+    def claim_unrun(r):
+        r["trust"].append({"support": "oracle", "trust": {"checked": {"format": "x", "version": "1", "base": "kernel"}}})
+    tamper("a checked support no check stands behind is refused", claim_unrun, "trust: the support oracle claims checked")
+
+    shifted = os.path.join(d, "shifted.json")
+    rc, out = obend("receipt", "negotiation", shifted, "--prev", ident, "--shift-clock", "1000")
+    check("a clock-shifted receipt is written", rc == 0, out)
+    rc, out = obend("verify", shifted, "--prev", ident, "--root", ROOT)
+    check("a clock-shifted receipt is refused against the expected root", rc == 3 and "root: the receipt is dated" in out, out)
+    own = str(json.load(open(shifted))["dated"])
+    rc, out = obend("verify", shifted, "--prev", ident, "--root", own)
+    check("it verifies only relative to its own root", rc == 0 and own != ROOT, out)
+    rc, out = obend("verify", neg, "--prev", ident)
+    check("a world-transition without an expected root is refused", rc == 3 and "root: no expected root" in out, out)
 
     def spend(r):
         r["disclosure"]["rest"]["spent"] = ["cap"]

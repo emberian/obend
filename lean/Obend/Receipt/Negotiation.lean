@@ -401,7 +401,7 @@ theorem realize_openings (prev : Digest) :
 opening it carries): the verdict and the post root are recomputed from the receipt and the rest. -/
 theorem row4_recheck (prev : Digest) :
     recheck admission naming acc4.2 row4 (realize (receipt4 prev).pins true) (receipt4 prev) = true :=
-  recheck_issued admission naming acc4 row4 rfl _ _ _ _ (realize_openings prev)
+  recheck_issued admission naming acc4 row4 rfl _ _ _ _ (realize_openings prev) (by rw [receipt4_pins]; rfl)
 
 /-- **The stranger's checks of the dated root pass** for the receipt of row 4. -/
 theorem receipt4_checks (prev : Digest) :

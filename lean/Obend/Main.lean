@@ -43,7 +43,7 @@ Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
 
 Receipt commands (lane Judge, 2026-10-31; `Obend.Receipt.Cli`):
 
-    obend verify RECEIPT.json [--prev PREV.json]
+    obend verify RECEIPT.json [--prev PREV.json] [--root ROOT]
         re-check a receipt with no producer state; with its predecessor, the chain link. Exit 0 / 3.
     obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full]
           [--prev PREV.json] | receipt cnf N OUT.cnf
@@ -86,7 +86,7 @@ def usage : String :=
   "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
   "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]\n" ++
   "             | create --from KIND PAGE   [-C DIR]\n" ++
-  "       obend verify RECEIPT.json [--prev PREV.json] | obend lrat CNF PROOF\n" ++
+  "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
 /-! ## The typed-core packet path (lane A) -/

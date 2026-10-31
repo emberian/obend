@@ -16,10 +16,15 @@ and `proofs` are the openings of what the row read against it.
   executionFrozen`, `astra/ASTRA-SELECTION-20261031.md` line 225), which a selection reports and a
   judge does not.
 - `Trust` is per support; `Receipt.overall` is `attested` as soon as one support is, and names it.
+  A verifier does not read the ceiling off the list: `ceiling` derives it from the supports the
+  verifier ran, refusing a missing one (so `[]` is never `checked`) and a `checked` claim it did not
+  run (`ceiling_checked`, `ceiling_empty`).
 - `issue`: the receipt of one row of an audited fold (`Obend.Fold.Admission`). `receipt_sufficient`
   (`Obend.Fold.receipt_sufficient`, restated): at any world agreeing with the receipt's openings, the
   row is judged as the receipt says and reaches its `post` root; `recheck` is what a stranger runs,
-  and `recheck_issued` says it accepts every honestly issued receipt at every such world.
+  and `recheck_issued` says it accepts every honestly issued receipt at every such world. `recheck`
+  computes that the openings cover the row's reads (`recheck_covers`), so `dated_sound` holds of ANY
+  receipt the stranger accepts, not only an issued one.
 - With a `World` (`Obend.Slot.World`): the openings are COMPUTED from the pins by `holdsOfPin`
   (`openings_of_pins`, `rfl`), and equal pins suffice (`pins_sufficient`).
 - Dated openings (`datedOpens`, `Reading`, `Reading.matched`): each opening of the receipt is
@@ -31,7 +36,8 @@ and `proofs` are the openings of what the row read against it.
 - `chained`: each receipt names its predecessor's digest; under a binding digest a verified chain is
   determined by its head and length (`chain_binds`).
 - The disclosure dial (`GENERATED` §2.4): `full` (the log, replayed by a follower), `cited` (the
-  receipt with its openings), `bit` (the roots and one bit). `dial_invariant`: the bit is the same
+  receipt with its openings, re-checked: `accepts_cited_sound`), `bit` (the roots and one bit, the
+  only setting that trusts the producer). `dial_invariant`: for an honest receipt the bit is the same
   at all three.
 -/
 public import Obend.Fold
@@ -160,6 +166,87 @@ theorem overall_none_checked (R : Receipt Cell Pin Fact Clause) (h : R.overall =
 
 end Receipt
 
+def Trust.isAttested : Trust → Bool
+  | .attested .. => true
+  | .checked .. => false
+
+/-- A support the verifier ran, as the receipt names it: present, at the mode it ran or lower. -/
+def namedAsRun (claimed : List (String × Trust)) (s : String × Trust) : Bool :=
+  match claimed.lookup s.1 with
+  | some t' => t' == s.2 || t'.isAttested
+  | none => false
+
+/-- A support the receipt names: one the verifier ran, or attested by a named principal. -/
+def standsBehind (ran : List (String × Trust)) (c : String × Trust) : Bool :=
+  (ran.lookup c.1).isSome || c.2.isAttested
+
+/-- Why a receipt's support list is refused, if it is. -/
+def ceilingRefusal (ran claimed : List (String × Trust)) : Option String :=
+  match ran.find? (fun s => !namedAsRun claimed s) with
+  | some (s, _) => some (match claimed.lookup s with
+      | none => s!"trust: the support {s} has no entry"
+      | some _ => s!"trust: the support {s} claims a check this verifier does not run")
+  | none => match claimed.find? (fun c => !standsBehind ran c) with
+    | some (s, _) => some s!"trust: the support {s} claims checked, and this verifier runs no check for it"
+    | none => none
+
+/-- **The trust ceiling a verifier derives.** `ran` is what the verifier itself checked, by support
+name and mode; `claimed` is the receipt's list. Every support the verifier ran must be named by the
+receipt, at the mode it ran or lower (`attested`); a support the receipt names that the verifier did
+not run must be `attested`, by a named principal: a `checked` claim no check stands behind is refused.
+The ceiling is the first attested entry, else `none` (checked throughout). So an empty list never
+reads as `checked` when the verifier ran anything: each of its supports is missing. -/
+def ceiling (ran claimed : List (String × Trust)) : Except String (Option (String × Trust)) :=
+  match ceilingRefusal ran claimed with
+  | some e => .error e
+  | none => .ok (claimed.find? fun p => p.2.isAttested)
+
+theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] : ∀ {l : List (α × β)} {a : α} {b : β},
+    l.lookup a = some b → (a, b) ∈ l
+  | [], _, _, h => by simp at h
+  | (k, v) :: rest, a, b, h => by
+    by_cases e : a = k
+    · subst e; simp [List.lookup] at h; subst h; simp
+    · have : (a == k) = false := by simpa using e
+      simp only [List.lookup, this] at h
+      exact List.mem_cons_of_mem _ (lookup_mem h)
+
+/-- **A `checked` ceiling is earned**: every support the verifier ran is named by the receipt at
+exactly the mode it ran, and nothing the receipt names is attested. With `ran` nonempty, the
+receipt's list is nonempty. -/
+theorem ceiling_checked {ran claimed : List (String × Trust)} (h : ceiling ran claimed = .ok none) :
+    (∀ s ∈ ran, claimed.lookup s.1 = some s.2) ∧ ∀ c ∈ claimed, c.2.isAttested = false := by
+  unfold ceiling at h
+  split at h
+  · cases h
+  rename_i hr
+  simp only [Except.ok.injEq] at h
+  have none_att : ∀ c ∈ claimed, c.2.isAttested = false := by
+    intro c hc
+    have := List.find?_eq_none.1 h c hc
+    simpa using this
+  refine ⟨fun s hs => ?_, none_att⟩
+  unfold ceilingRefusal at hr
+  split at hr
+  · cases hr
+  rename_i hf
+  have := List.find?_eq_none.1 hf s hs
+  simp only [Bool.not_eq_eq_eq_not, Bool.not_true, namedAsRun] at this
+  revert this
+  cases hl : claimed.lookup s.1 with
+  | none => simp
+  | some t' =>
+    have hatt := none_att _ (lookup_mem hl)
+    simp only at hatt
+    simp [hatt]
+
+/-- The empty list is refused whenever the verifier ran a support. -/
+theorem ceiling_empty {ran : List (String × Trust)} (h : ran ≠ []) : ∃ e, ceiling ran [] = .error e := by
+  cases ran with
+  | nil => exact absurd rfl h
+  | cons s rest =>
+    simp [ceiling, ceilingRefusal, namedAsRun]
+
 /-! ## The receipt of a row of an audited fold -/
 
 section Fold
@@ -213,29 +300,55 @@ theorem receipt_sufficient (A : Admission W Rest Row Fact Clause) (N : Naming W 
   rw [h]
   cases A.step a r <;> exact ⟨rfl, rfl⟩
 
-/-- What a stranger runs: the pre root of the rest it was handed, the openings at its world, the
-verdict and the post root recomputed. -/
-def recheck [DecidableEq Clause] (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin)
+/-- What a stranger runs: the pre root of the rest it was handed; the openings COVER the row's reads
+at its world, in order (`R.openings.map Prod.fst = A.reads (w', rest) r`), so a producer cannot omit a
+read it would rather not show; each opening is what its world says; the verdict and the post root
+recomputed. -/
+def recheck [DecidableEq Clause] [DecidableEq Fact] (A : Admission W Rest Row Fact Clause)
+    (N : Naming W Rest Row Fact Cell Pin)
     (rest : Rest) (r : Row) (w' : W) (R : Receipt Cell Pin Fact Clause) : Bool :=
-  N.root rest == R.pre && R.openings.all (fun o => A.look w' o.1 == o.2) &&
+  N.root rest == R.pre && R.openings.map Prod.fst == A.reads (w', rest) r &&
+    R.openings.all (fun o => A.look w' o.1 == o.2) &&
     Outcome.ofExcept (A.step (w', rest) r) == R.verdict && postOf A N (w', rest) r == R.post
 
 /-- What `recheck` establishes: the row, judged at the stranger's world over the handed rest, has
-the receipt's verdict and post root. -/
-theorem recheck_sound [DecidableEq Clause] {A : Admission W Rest Row Fact Clause} {N : Naming W Rest Row Fact Cell Pin}
+the receipt's verdict and post root, and the receipt opens exactly what the row reads there. -/
+theorem recheck_sound [DecidableEq Clause] [DecidableEq Fact] {A : Admission W Rest Row Fact Clause}
+    {N : Naming W Rest Row Fact Cell Pin}
     {rest : Rest} {r : Row} {w' : W} {R : Receipt Cell Pin Fact Clause} (h : recheck A N rest r w' R = true) :
     N.root rest = R.pre ∧ Outcome.ofExcept (A.step (w', rest) r) = R.verdict ∧ postOf A N (w', rest) r = R.post := by
   simp only [recheck, Bool.and_eq_true, beq_iff_eq] at h
-  exact ⟨h.1.1.1, h.1.2, h.2⟩
+  exact ⟨h.1.1.1.1, h.1.2, h.2⟩
 
-/-- **The stranger accepts every honest receipt** at every world agreeing with its openings. -/
-theorem recheck_issued [DecidableEq Clause] (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin)
+/-- The coverage and the openings `recheck` establishes. -/
+theorem recheck_covers [DecidableEq Clause] [DecidableEq Fact] {A : Admission W Rest Row Fact Clause}
+    {N : Naming W Rest Row Fact Cell Pin}
+    {rest : Rest} {r : Row} {w' : W} {R : Receipt Cell Pin Fact Clause} (h : recheck A N rest r w' R = true) :
+    R.openings.map Prod.fst = A.reads (w', rest) r ∧ ∀ o ∈ R.openings, A.look w' o.1 = o.2 := by
+  simp only [recheck, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at h
+  exact ⟨h.1.1.1.2, h.1.1.2⟩
+
+/-- **The stranger accepts every honest receipt** at every world agreeing with its openings, where
+the row reads what it read when issued (`hr`; at the issuing world itself, `rfl`). -/
+theorem recheck_issued [DecidableEq Clause] [DecidableEq Fact] (A : Admission W Rest Row Fact Clause)
+    (N : Naming W Rest Row Fact Cell Pin)
     (a : W × Rest) (r : Row) (hm : A.moves r = false) (q : Shape) (t : List (String × Trust)) (p : Digest)
-    (w' : W) (hw : ∀ o ∈ (issue A N a r q t p).openings, A.look w' o.1 = o.2) :
+    (w' : W) (hw : ∀ o ∈ (issue A N a r q t p).openings, A.look w' o.1 = o.2)
+    (hr : A.reads (w', a.2) r = A.reads a r) :
     recheck A N a.2 r w' (issue A N a r q t p) = true := by
   obtain ⟨hv, hp⟩ := receipt_sufficient A N a r hm w' hw
   simp only [recheck, Bool.and_eq_true, beq_iff_eq, List.all_eq_true]
-  exact ⟨⟨⟨rfl, fun o ho => hw o ho⟩, hv⟩, hp⟩
+  refine ⟨⟨⟨⟨rfl, ?_⟩, fun o ho => hw o ho⟩, hv⟩, hp⟩
+  simp [issue, Admission.openings, hr, Function.comp_def]
+
+/-- At the issuing world the stranger accepts the honest receipt with no further premise. -/
+theorem recheck_issued_self [DecidableEq Clause] [DecidableEq Fact] (A : Admission W Rest Row Fact Clause)
+    (N : Naming W Rest Row Fact Cell Pin)
+    (a : W × Rest) (r : Row) (hm : A.moves r = false) (q : Shape) (t : List (String × Trust)) (p : Digest) :
+    recheck A N a.2 r a.1 (issue A N a r q t p) = true :=
+  recheck_issued A N a r hm q t p a.1 (fun o ho => by
+    simp only [issue, Admission.openings, List.mem_map] at ho
+    obtain ⟨f, _, rfl⟩ := ho; rfl) rfl
 
 end Fold
 
@@ -334,6 +447,33 @@ theorem dated_verdict [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H)
       postOf A N (w, a.2) r = (issue A N a r q t p).post) ∨ Collision H := by
   rcases openings_checked hb D hco w _ hd hc hmt with ho | c
   · exact .inl (receipt_sufficient A N a r hm w ho)
+  · exact .inr c
+
+/-- **A receipt the stranger accepts has the dated view's verdict**, for ANY receipt, not only an
+honestly issued one: when `recheck` passes at the stranger's view `w'` (which computes that the
+openings cover the row's reads there) and the dated checks pass against a root that is the root of
+world `w`'s view, the row judged at `w` has the receipt's verdict and post root, or the hash
+collides. The coverage that `dated_verdict` gets from `issue` is here computed by `recheck`. -/
+theorem dated_sound [DecidableEq Clause] [DecidableEq Fact] [BEq Key] [LawfulBEq Key] {H : Hash}
+    (hb : Bounded H) (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin)
+    (D : Reading W Fact Key) (hco : D.Coherent A.look) (rest : Rest) (r : Row) (hm : A.moves r = false)
+    (w' w : W) (R : Receipt Cell Pin Fact Clause) (hr : recheck A N rest r w' R = true)
+    (hd : R.dated = D.C.dated H w) (hc : datedOpens H R = true) (hmt : D.matched R = true) :
+    (Outcome.ofExcept (A.step (w, rest) r) = R.verdict ∧ postOf A N (w, rest) r = R.post) ∨ Collision H := by
+  rcases openings_checked hb D hco w R hd hc hmt with ho | c
+  · left
+    obtain ⟨_, hv, hp⟩ := recheck_sound hr
+    obtain ⟨hcov, hw'⟩ := recheck_covers hr
+    have agree : ∀ f ∈ A.reads (w', rest) r, A.look (w', rest).1 f = A.look w f := by
+      intro f hf
+      rw [← hcov, List.mem_map] at hf
+      obtain ⟨o, hoR, rfl⟩ := hf
+      exact (hw' o hoR).trans (ho o hoR).symm
+    have hs := A.step_of_reads (w', rest) w r hm agree
+    simp only at hs
+    refine ⟨?_, ?_⟩
+    · rw [hs, ← hv]; cases A.step (w', rest) r <;> rfl
+    · rw [← hp]; simp only [postOf, hs]; cases A.step (w', rest) r <;> rfl
   · exact .inr c
 
 /-- The naming whose dated root and opening proofs come from a committed view. -/
@@ -450,33 +590,81 @@ def issueLast (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact
   | .ok a => some (issue A N a r q t p)
   | .error _ => none
 
-/-- The bit at each setting of the dial: `full` replays the log, `cited` reads the receipt's verdict,
-`bit` reads the one bit. -/
-def accepts (A : Admission W Rest Row Fact Clause) (a₀ : W × Rest) (pre : List Row) (r : Row) :
+/-- What a stranger holds at the `cited` setting: how roots and rows are named, the hash and the
+committed reading of views, the view it realizes, and the supports it runs itself. -/
+structure Stranger (W Rest Row Fact Cell Pin Key : Type) where
+  N : Naming W Rest Row Fact Cell Pin
+  H : Obend.Digest.HashBytes.Hash
+  D : Reading W Fact Key
+  view : W
+  ran : List (String × Trust)
+
+/-- The bit at each setting of the dial. `full` replays the log. `cited` runs the stranger's checks
+(`recheck` with its coverage, the dated openings, the support list's ceiling) over the prefix's
+accumulator and then reads the verdict, skipping only certificate re-execution. `bit` is the only
+setting that takes the producer's bit on trust. -/
+def accepts [DecidableEq Clause] [DecidableEq Fact] {Key : Type} [BEq Key] (A : Admission W Rest Row Fact Clause)
+    (S : Stranger W Rest Row Fact Cell Pin Key) (a₀ : W × Rest) (pre : List Row) (r : Row) :
     Dial → Receipt Cell Pin Fact Clause → Bool
   | .full, _ => (A.run a₀ (pre ++ [r])).toBool
-  | .cited, R => R.verdict.isOk
+  | .cited, R => match A.run a₀ pre with
+    | .ok a => recheck A S.N a.2 r S.view R && datedOpens S.H R && S.D.matched R &&
+        (ceiling S.ran R.trust).toBool && R.verdict.isOk
+    | .error _ => false
   | .bit, R => R.verdict.isOk
 
-/-- **Acceptance is invariant under the dial**: for the receipt of a row whose prefix folds, the
-follower replaying the log, the stranger reading the openings and the holder of one bit agree. -/
-theorem dial_invariant (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (a₀ : W × Rest)
-    (pre : List Row) (r : Row) {q : Shape} {t : List (String × Trust)} {p : Digest}
-    {R : Receipt Cell Pin Fact Clause} (h : issueLast A N a₀ pre r q t p = some R) (dial : Dial) :
-    accepts A a₀ pre r dial R = R.verdict.isOk := by
+/-- **What `cited` acceptance establishes**: the row, judged over the prefix's accumulator at any
+world whose view has the receipt's dated root, is admitted with the receipt's post root, or the hash
+collides. -/
+theorem accepts_cited_sound [DecidableEq Clause] [DecidableEq Fact] {Key : Type} [BEq Key] [LawfulBEq Key]
+    (A : Admission W Rest Row Fact Clause) (S : Stranger W Rest Row Fact Cell Pin Key)
+    (hb : Merkle.Bounded S.H) (hco : S.D.Coherent A.look) (a₀ : W × Rest) (pre : List Row) (r : Row)
+    (hm : A.moves r = false) (R : Receipt Cell Pin Fact Clause) (h : accepts A S a₀ pre r .cited R = true)
+    (w : W) (hd : R.dated = S.D.C.dated S.H w) :
+    ∃ a, A.run a₀ pre = .ok a ∧
+      ((Outcome.ofExcept (A.step (w, a.2) r) = .ok ∧ postOf A S.N (w, a.2) r = R.post) ∨
+        Obend.Digest.HashBytes.Collision S.H) := by
+  simp only [accepts] at h
+  split at h
+  · rename_i a hrun
+    simp only [Bool.and_eq_true] at h
+    obtain ⟨⟨⟨⟨hr, hc⟩, hmt⟩, _⟩, hok⟩ := h
+    refine ⟨a, hrun, ?_⟩
+    rcases dated_sound hb A S.N S.D hco a.2 r hm S.view w R hr hd hc hmt with ⟨hv, hp⟩ | c
+    · left; refine ⟨?_, hp⟩; rw [hv]; revert hok; cases R.verdict <;> simp [Outcome.isOk]
+    · exact .inr c
+  · cases h
+
+/-- **Acceptance is invariant under the dial** for an honestly issued receipt: the follower
+replaying the log, the stranger running the cited checks at a view agreeing with the receipt's
+openings and reads, and the holder of one bit agree, when the receipt's support list meets the
+stranger's ceiling. The cited setting is not a projection of the bit: it re-runs every check but the
+certificate's. -/
+theorem dial_invariant [DecidableEq Clause] [DecidableEq Fact] {Key : Type} [BEq Key] [LawfulBEq Key]
+    (A : Admission W Rest Row Fact Clause) {H : Obend.Digest.HashBytes.Hash} (hb : Merkle.Bounded H)
+    (D : Reading W Fact Key) (hco : D.Coherent A.look) (hs : D.C.keys.length < 2 ^ 256)
+    (root : Rest → Digest) (rowDigest : Row → Digest) (law : Digest) (pinsOf : W → List Fact → List (Cell × Option Pin))
+    (a₀ : W × Rest) (pre : List Row) (r : Row) (hm : A.moves r = false) {q : Shape} {t : List (String × Trust)}
+    {p : Digest} {a : W × Rest} (hrun : A.run a₀ pre = .ok a) (hk : ∀ f ∈ A.reads a r, D.key f ∈ D.C.keys)
+    (view : W) (ran : List (String × Trust))
+    (hw : ∀ o ∈ (issue A (Naming.ofReading H D root rowDigest law pinsOf) a r q t p).openings, A.look view o.1 = o.2)
+    (hr : A.reads (view, a.2) r = A.reads a r) (ht : (ceiling ran t).toBool = true) (dial : Dial) :
+    accepts A ⟨Naming.ofReading H D root rowDigest law pinsOf, H, D, view, ran⟩ a₀ pre r dial
+        (issue A (Naming.ofReading H D root rowDigest law pinsOf) a r q t p) =
+      (issue A (Naming.ofReading H D root rowDigest law pinsOf) a r q t p).verdict.isOk := by
   cases dial with
-  | cited | bit => rfl
+  | bit => rfl
+  | cited =>
+    obtain ⟨hc, hmt⟩ := issue_checks hb A D hco hs root rowDigest law pinsOf a r hk q t p
+    simp only [accepts, hrun, recheck_issued A _ a r hm q t p view hw hr, hc, hmt, Bool.true_and]
+    show ((ceiling ran t).toBool && _) = _
+    rw [ht, Bool.true_and]
   | full =>
-    simp only [issueLast] at h
-    cases hrun : A.run a₀ pre with
-    | error e => rw [hrun] at h; cases h
-    | ok a =>
-      rw [hrun] at h; cases h
-      simp only [accepts, Admission.run, List.foldlM_append] at hrun ⊢
-      rw [hrun]
-      simp only [issue, Outcome.ofExcept_isOk, List.foldlM_cons, List.foldlM_nil]
-      show (A.step a r >>= pure).toBool = (A.step a r).toBool
-      cases A.step a r <;> rfl
+    simp only [accepts, Admission.run, List.foldlM_append] at hrun ⊢
+    rw [hrun]
+    simp only [issue, Outcome.ofExcept_isOk, List.foldlM_cons, List.foldlM_nil]
+    show (A.step a r >>= pure).toBool = (A.step a r).toBool
+    cases A.step a r <;> rfl
 
 end Dial
 
