@@ -15,8 +15,12 @@ module
         `obend verify` re-checks with no producer state. Exit 0 when the list is accepted.
         (`--tooth drop-read`: the producer's index drops each dependent's last read; the checker
         then refuses the list as `missing` wherever that read was the one that moved.)
+    obend analyze replay PAGE@FILE --world DIR
+        the vault's history replayed with PAGE amended to FILE (the owner's write of it): every write
+        of every page PAGE's laws judge, re-judged under the laws in force and under the amended ones;
+        the first write they judge differently, per page (after it the history would differ).
 -/
-public import Obend.Analysis.Worlds
+public import Obend.Analysis.Replay
 public section
 
 namespace Obend.Analysis.Cli
@@ -192,6 +196,37 @@ def impact (args : List String) : IO UInt32 := do
       IO.eprintln (world ++ " is neither a vault (no .obend/world.json) nor a workspace"); return 2
     impactVault world cell spec drop out
 
+def verdictWords : Except String Unit → String
+  | .ok _ => "admitted"
+  | .error e => e
+
+/-- `obend analyze replay PAGE@FILE --world DIR`. -/
+def replay (args : List String) : IO UInt32 := do
+  let (world, args) := flagVal "--world" args
+  let some world := world | IO.eprintln "obend analyze replay PAGE@FILE --world DIR"; return 64
+  let [target] := args | IO.eprintln "obend analyze replay PAGE@FILE --world DIR"; return 64
+  let some (page, file) := splitAt target | IO.eprintln "name the amendment as PAGE@FILE"; return 64
+  if !(← (System.FilePath.mk world / ".obend" / "world.json").pathExists) then
+    IO.eprintln (world ++ " is not a vault (no .obend/world.json)"); return 2
+  let s ← Obend.Vault.Cli.loadStore world
+  let md ← IO.FS.readFile file
+  match VaultWorld.replay s page md with
+  | .error e => IO.eprintln e; return 2
+  | .ok rs =>
+    IO.println ("replay of " ++ page ++ " amended by " ++ file ++ " (vault " ++ world ++ "), each write as the owner's")
+    let mut n := 0
+    for r in rs do
+      match r.divergence with
+      | none => IO.println (r.page ++ ": " ++ toString r.agreed ++ " write(s) judged alike")
+      | some (v, was, would) =>
+        n := n + 1
+        IO.println (r.page ++ ": v" ++ toString v ++ " diverges after " ++ toString r.agreed ++
+          " write(s) judged alike; after it the history would differ")
+        IO.println ("            in force: " ++ verdictWords was)
+        IO.println ("            amended:  " ++ verdictWords would)
+    IO.println (toString n ++ " of " ++ toString rs.length ++ " page(s) diverge")
+    return 0
+
 /-- `obend verify` of an impact receipt: decode the question and the list, and judge them by the
 registered format. -/
 def verifyImpact (j : Json) : IO UInt32 := do
@@ -216,6 +251,7 @@ def verifyOr (path : String) (otherwise : IO UInt32) : IO UInt32 := do
 
 public def main? : List String → Option (IO UInt32)
   | "analyze" :: "impact" :: rest => some (impact rest)
+  | "analyze" :: "replay" :: rest => some (replay rest)
   | _ => none
 
 end Obend.Analysis.Cli

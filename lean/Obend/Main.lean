@@ -58,6 +58,9 @@ Analysis commands (lane Impact, 2026-11-01; `Obend.Analysis.Cli`):
         that go blocked, stale or behind, or are restored, and the law rows to re-judge, each with
         the opening it rests on; checked by the registered `impact@1` judge; `obend verify` re-checks
         the receipt `--out` writes. `CELL@?` lists what could change were CELL unknown.
+    obend analyze replay PAGE@FILE --world DIR
+        a vault's writes re-judged with PAGE amended to FILE: the first write, per page, that the laws
+        in force and the amended ones judge differently.
 
 Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-bend.typed-core.v3`):
 
@@ -103,7 +106,7 @@ def usage : String :=
   "       obend emit --package PACKAGE.json --object ENTRY --out BOOK.json [--call MEMBER NAT]\n" ++
   "       obend specialize --package PACKAGE.json --object ENTRY --book BOOK.json [--call MEMBER NAT]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
-  "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json]\n" ++
+  "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
 /-! ## The typed-core packet path (lane A) -/

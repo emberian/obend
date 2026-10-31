@@ -18,6 +18,10 @@ re-judgment says, and every dependent the re-judgment changes must be predicted.
   * the tooth: `--tooth drop-read` (the index drops each dependent's last read) predicts nothing for
     Alpha's embed, which the re-judgment shows behind; the checker refuses that list `missing`.
   * `CELL@?`: forgetting Beta lists every cite of it as open and every law row reading it.
+  * replay: a journal kind's law amended from `new.words <= 20` to `<= 10` is replayed over the
+    journal's history: Mon's second write (12 words) diverges, refused by the amended law, Tue's
+    writes are judged alike; a vault with the amended kind in force from the start, given the same
+    writes, refuses exactly Mon's second, with the same words.
 
 usage: python3 tests/analysis/run-impact.py [OBEND_BINARY]      (from lean/, after `lake build obend`)
 exit 0 when every check holds, 1 otherwise; a summary line last.
@@ -176,6 +180,40 @@ with tempfile.TemporaryDirectory() as work:
     check("workspace: a move to the pin already named predicts nothing", code == 0 and lines == [], text)
     code, out = obend("admit", "--package", ws, turn)
     check("workspace, re-judged: obend admit says admitted", code == 0 and json.loads(out)["status"] == "admitted", out)
+
+KIND = "---\nlaw brief: new.words <= 20\n---\nA journal.\n"
+KIND10 = "---\nlaw brief: new.words <= 10\n---\nA journal.\n"
+MON = ["one two three\n", "one two three four five six seven eight nine ten eleven twelve\n", "short again\n"]
+
+
+def journal(vault, kind):
+    os.makedirs(os.path.join(vault, "journal"))
+    open(os.path.join(vault, "journal", "_kind.md"), "w").write(kind)
+    open(os.path.join(vault, "journal", "Tue.md"), "w").write("a b c\n")
+    for text in MON:
+        open(os.path.join(vault, "journal", "Mon.md"), "w").write(text)
+        obend("open", vault)
+
+
+with tempfile.TemporaryDirectory() as work:
+    vault = os.path.join(work, "vault")
+    journal(vault, KIND)
+    _, out = obend("-C", vault, "status", "journal/Mon")
+    check("replay: the journal's three writes are admitted under the law in force", out.startswith("journal/Mon v3"), out)
+    amended = os.path.join(work, "kind10.md")
+    open(amended, "w").write(KIND10)
+    code, out = obend("analyze", "replay", "journal/_kind@" + amended, "--world", vault)
+    lines = out.splitlines()
+    mon = [i for i, l in enumerate(lines) if l.startswith("journal/Mon: v2 diverges after 1 write(s) judged alike")]
+    check("replay: Mon's second write diverges", code == 0 and len(mon) == 1, out)
+    would = lines[mon[0] + 2].split("amended:", 1)[1].strip() if mon else ""
+    check("replay: the amended law refuses it, by name", would.startswith("refused by journal/_kind: brief"), out)
+    check("replay: Tue's writes are judged alike", "journal/Tue: 1 write(s) judged alike" in out, out)
+    fresh = os.path.join(work, "fresh")
+    journal(fresh, KIND10)
+    _, out = obend("-C", fresh, "status", "journal/Mon")
+    check("replay, re-judged: with the amended law in force, Mon's second write is refused with the same words",
+          out.startswith("journal/Mon v1; its last write was " + would), out + "\nwanted: " + would)
 
 print(f"{count - len(failures)}/{count} checks hold" + ("" if not failures else "; failing: " + ", ".join(failures)))
 sys.exit(1 if failures else 0)

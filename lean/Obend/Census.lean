@@ -22,6 +22,7 @@ import Obend
 import Obend.Analysis.Cli
 import Obend.Analysis.Format
 import Obend.Analysis.Impact
+import Obend.Analysis.Replay
 import Obend.Analysis.Setup
 import Obend.Analysis.Worlds
 import Obend.AssertAxioms
