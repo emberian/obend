@@ -98,6 +98,7 @@ import Obend.Core.Proofs.Conservation
 import Obend.Core.Proofs.Aggregate
 import Obend.Core.Proofs.DataSoundness
 import Obend.Core.Proofs.DigestChecks
+import Obend.Core.Proofs.JoinReading
 import Obend.Core.Proofs.EquiRecursiveBoundary
 import Obend.Core.Proofs.EquiRecursiveSubstitution
 import Obend.Core.Proofs.Force
@@ -131,6 +132,7 @@ import Obend.Core.Proofs.Preservation.Cases.Pairs
 import Obend.Core.Proofs.Preservation.Cases.Records
 import Obend.Core.Proofs.Preservation.Cases.Sums
 import Obend.Core.Proofs.Settle
+import Obend.Core.Proofs.Splice
 import Obend.Core.Proofs.StepCases
 import Obend.Core.Proofs.SubjectReduction
 import Obend.Core.Proofs.SubjectReduction.Substitution
@@ -336,9 +338,11 @@ import Obend.Teeth.Core.DataBudget
 import Obend.Teeth.Core.DataSoundness
 import Obend.Teeth.Core.EquiRecursiveTeeth
 import Obend.Teeth.Core.Force
+import Obend.Teeth.Core.JoinReadingTeeth
 import Obend.Teeth.Core.LinearTeeth
 import Obend.Teeth.Core.NominalTeeth
 import Obend.Teeth.Core.AggregateTeeth
+import Obend.Teeth.Core.SpliceTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
 import Obend.Teeth.Law.LawJudgeTeeth
