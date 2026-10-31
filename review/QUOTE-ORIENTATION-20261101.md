@@ -746,3 +746,26 @@ globals by name, everything else as a hypothesis of a stage-separated let), and 
 building the other thing first. The runner-up is T7: the usage-composed contextual substitution,
 where ALGEBRAIC-SUBTYPING §5's `affine ≡ linear` collapse means a splice can launder a once-resource
 unless uses are counted on the original binding.
+
+## 8. Expansion after Ember's review (2026-11-01)
+
+Decided by Ember: the shape stands (`quote` a kernel function on held terms, `splice` a turn, no
+new `Term` constructor, program-level quote on values refused); and `linear` separates from
+`affine` in the checker, so exact discharge is enforced in the kernel rather than only in the teeth,
+which is what T7 needs. Three additions, by Claude after reading the papers at the load-bearing
+points:
+
+1. **The `Syntax` encoding is versioned.** `Term` has gained a constructor once (`hole`); a quotation
+   carries the encoding's digest in its theory index, so a quotation taken under an older `Term` is
+   never silently re-read. A quotation from an old encoding is an intention resolved by a declared
+   migration (the `Intention` module's job). T1's tooth (drop one tag) is the local form; the global
+   form is a new theorem, `quote_versioned`: `import` refuses a tree whose encoding digest differs
+   from the importer's, naming both.
+2. **Holes in code are a named refusal.** `hole n σ` has no typing rule, so a term with holes is
+   quotable as `Data` and never `Code`; the importer refuses it as `holeInCode` at the position. When
+   T13 (pattern matching) tempts typing it, it goes through CMTT's contextual typing of the hole
+   (Mœbius), never around it.
+3. **The Gödel–Löb reading closes REFLECTION's open question.** `instantiatePrototype` keeps the
+   stored description unforced (`prototype_metadata_unforced`), which is Löb's rule in a modal
+   context; minidregg's question (`Y(R∘M)` inside the knot or `R(Y M)` outside) is settled by Kavvos
+   toward inside, with the description a term. Recorded in `review/DECISIONS-20261031.md`.

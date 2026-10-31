@@ -86,12 +86,17 @@ methods; reports as judged folds with non-omission receipts.
 
 ## 7. Quotation, staging, specialization
 
-Planned, gated on `review/QUOTE-ORIENTATION-20261101.md`: `quote` as typed represented syntax with a
-checked importer first, `splice` as checked contextual substitution preserving type, stage, effects
-and usage, the observer ladder `≈q ⊆ ≈r ⊆ ≈b` with cost as a refinement, `rewrite_sound_below`,
-reflection through mirror capabilities with depths, stages as views of the World and the tower as a
-sequence of Worlds judged by meta-laws; `quote` enters `Term` only when its erasure and preservation
-theorems exist. Then the specialization slot: an emitted leaf is a candidate whose supports are the
+Decided (`review/QUOTE-ORIENTATION-20261101.md`): `quote : Term → Data` is a function of the kernel on
+terms it holds (a slot's candidates, a law's code, a page's cells, a package member), never on a
+running value; a program that wants code names it through a mirror of depth `code` and yields.
+`Code Ψ A θ` is the checker's typed subtype with the assumptions as theory index and the encoding's
+digest as version; `import` decodes, checks scope and type, and refuses an escaped index, a foreign
+encoding or a hole by name; `splice` is a turn whose response the machine runs closed, guarded by the
+usage-composed contextual substitution. `≈q` is equality of encodings; the ladder `≈q ⊆ ≈r ⊆ ≈b`
+with cost as a refinement; `rewrite_sound_below` is "no congruence under box" as a theorem about
+contexts with an observer census. No new `Term` constructor, no machine frame; a program-level
+quote on values is refused (Taha–Sheard, Kiselyov, Kavvos). Reflection goes through mirrors with
+depths; stages are views of the World. Then the specialization slot: an emitted leaf is a candidate whose supports are the
 pins it assumed, the machine is the always-usable fallback, deoptimization is the withdrawal of a
 support, and an optimization is a candidate justified under `≈c`.
 

@@ -17,6 +17,11 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 | Modularity first: Lean modules and typeclasses from day one | yes | `REPORT-20261030.md` |
 | Build our own thing; depend on Bend, never fork it | yes | `DESIGN.md` §7 |
 
+| `quote` is a kernel function on held terms and `splice` a turn; no new `Term` constructor; program-level quote on values refused | yes (2026-11-01) | `review/QUOTE-ORIENTATION-20261101.md` §3, §8 |
+| `linear` separates from `affine` in the checker: exact discharge enforced in the kernel | yes (2026-11-01) | gates T7; `review/ALGEBRAIC-SUBTYPING-20261031.md` §5.1 |
+| Nominal kinds (the kind cell; every instance tagged; the kind's law an ancestor; dispatch by kind) | yes (2026-11-01) | `lean/docs/REPORT-EXTENDS-20261031.md` |
+| REFLECTION's open question: the intensional fixed point is inside the knot with the description a term (Löb's rule) | taken by Claude from the literature, 2026-11-01 | `review/QUOTE-ORIENTATION-20261101.md` §2.6, §8 |
+
 ## Taken by Claude under standing approval (reversible)
 
 | decision | what was taken | cost to reverse |
