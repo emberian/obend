@@ -219,6 +219,13 @@ import Obend.Tactic.Fuel
 import Obend.Tactic.MonadicReduction
 import Obend.Tactic.Tooth
 import Obend.Tactic.ToothChecks
+import Obend.Vault
+import Obend.Vault.Cli
+import Obend.Vault.Json
+import Obend.Vault.Law
+import Obend.Vault.Page
+import Obend.Vault.Store
+import Obend.Vault.Teeth
 
 open Lean Elab Command in
 run_cmd do

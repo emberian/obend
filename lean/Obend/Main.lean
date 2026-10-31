@@ -22,6 +22,13 @@ Source commands (the front end `Obend.Spec`, 2026-10-30):
           | preview REQUEST NEW_DIR | batch JOBS OUT
         minidregg's `objective-front` commands, unchanged (`Obend.Spec.Capture`, `Obend.Spec.Preview`).
 
+Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
+
+    obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN…
+          | member list | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME]
+          | recite PAGE [--as NAME]          (`-C DIR` runs any of them in DIR)
+        a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`.
+
 Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-bend.typed-core.v3`):
 
     obend check-core FILE.json
@@ -38,6 +45,7 @@ public import Obend.Core.Machine
 public import Obend.Core.MachineFast
 public import Obend.Spec.Capture
 public import Obend.Spec.Preview
+public import Obend.Vault.Cli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -50,7 +58,9 @@ def usage : String :=
   "       obend check --package PACKAGE.json [ENTRY] | obend run --package PACKAGE.json [ARGS_JSON] [RESPONSES_JSON] [--ticks N] [--json]\n" ++
   "       obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]\n" ++
   "             | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition] | preview REQUEST NEW_DIR | batch JOBS OUT\n" ++
-  "       obend check-core FILE.json | obend run-core FILE.json [--ticks N] [--heap N] [--stack N]"
+  "       obend check-core FILE.json | obend run-core FILE.json [--ticks N] [--heap N] [--stack N]\n" ++
+  "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
+  "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]   [-C DIR]"
 
 /-! ## The typed-core packet path (lane A) -/
 
@@ -330,4 +340,6 @@ public def main (args : List String) : IO UInt32 :=
   | ["check", file, entry] => checkSource (packageOfFile file (some entry))
   | "run" :: "--package" :: spec :: rest => runSource (packageOfSpec spec none) rest
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
-  | _ => do IO.eprintln usage; return 64
+  | _ => match Obend.Vault.Cli.main? args with
+    | some act => act
+    | none => do IO.eprintln usage; return 64
