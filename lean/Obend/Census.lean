@@ -187,9 +187,13 @@ import Obend.Elab.Proofs.Refines
 import Obend.Elab.Work
 import Obend.Equiv.Ahead
 import Obend.Equiv.Behaviour
+import Obend.Equiv.Clairvoyant
+import Obend.Equiv.Cost
+import Obend.Equiv.CostTests
 import Obend.Equiv.FareTests
 import Obend.Equiv.Fields
 import Obend.Equiv.Quote
+import Obend.Equiv.Improvement
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
 import Obend.Fold
