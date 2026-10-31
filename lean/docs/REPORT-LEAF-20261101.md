@@ -44,3 +44,14 @@ simulation through the runner's adapter for activities. Order: translation and p
 BendTT enters as a pinned plain file by commit and hash, with the refinement theorem in a tier-2
 plain file (works today); move into the library when upstream adds a `module` header. The attested
 alternative is refused: the refinement is the point.
+
+## Follow-up (`53ce2b4`): the residual-`super` check Gemini asked for
+`Obend/Leaf/Residual.lean`: `superOnlyProjected` (every `super` is `get super p` with `p` in the
+flattened row beneath) and `vtable_clean`: under that check plus `cleanRow` (no body writes a record
+literal of a suffix row's shape itself), the resolved vtable contains no residual `super` row.
+Through `resolve_rename`, `resolve_subst_clean`, `resolve_clean`, `flatRow_clean`. Teeth:
+`ReviewMember` passes both checks (`review_no_residual`); a layer passing `super` first-class fails the
+check and its row literal does remain (`leak_refused_and_residual`). The BendTT translation runs both
+checks first. `cleanRow` is not yet checked for all Elaborate output. Note: when C2's `Term.split`
+lands, Leaf's traversals (`resolve`, `ahead_resolve`, `selfReads`, `recordBad`, `superOnlyProjected`)
+each need a `split` case.
