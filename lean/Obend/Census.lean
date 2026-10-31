@@ -19,6 +19,11 @@ skip it unless something imports it). It runs when this file is rebuilt, that is
 imports changes; a new leaf added alone is caught at the next such rebuild, not at its own.
 -/
 import Obend
+import Obend.Analysis.Cli
+import Obend.Analysis.Format
+import Obend.Analysis.Impact
+import Obend.Analysis.Setup
+import Obend.Analysis.Worlds
 import Obend.AssertAxioms
 import Obend.AssertCompiled
 import Obend.Core.AliasExposure

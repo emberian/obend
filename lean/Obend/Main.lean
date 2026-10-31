@@ -51,6 +51,14 @@ Receipt commands (lane Judge, 2026-10-31; `Obend.Receipt.Cli`):
     obend lrat CNF PROOF
         the registered `lrat@1` format on a DIMACS formula and an LRAT proof or a model.
 
+Analysis commands (lane Impact, 2026-11-01; `Obend.Analysis.Cli`):
+
+    obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json]
+        if CELL (a vault's page, a workspace's record line NAME^MAJOR) moved to PIN, the dependents
+        that go blocked, stale or behind, or are restored, and the law rows to re-judge, each with
+        the opening it rests on; checked by the registered `impact@1` judge; `obend verify` re-checks
+        the receipt `--out` writes. `CELL@?` lists what could change were CELL unknown.
+
 Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-bend.typed-core.v3`):
 
     obend check-core FILE.json
@@ -72,6 +80,7 @@ public import Obend.Spec.Workspace
 public import Obend.Receipt.Cli
 public import Obend.Logic.Receipt
 public import Obend.Leaf.Specialize
+public import Obend.Analysis.Cli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -94,6 +103,7 @@ def usage : String :=
   "       obend emit --package PACKAGE.json --object ENTRY --out BOOK.json [--call MEMBER NAT]\n" ++
   "       obend specialize --package PACKAGE.json --object ENTRY --book BOOK.json [--call MEMBER NAT]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
+  "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json]\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
 /-! ## The typed-core packet path (lane A) -/
@@ -691,6 +701,9 @@ public def main (args : List String) : IO UInt32 :=
   | ["admit", "--package", spec, turn] => admitCommand spec turn
   | ["judge", "--package", spec, old, new] => judgeCommand spec old new
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
+  | "verify" :: path :: rest =>
+    Obend.Analysis.Cli.verifyOr path ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
+  | "analyze" :: _ => (Obend.Analysis.Cli.main? args).getD (do IO.eprintln usage; return 64)
   | _ => match Obend.Receipt.Cli.main? args with
     | some act => act
     | none => match Obend.Vault.Cli.main? args with
