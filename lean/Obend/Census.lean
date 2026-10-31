@@ -95,6 +95,7 @@ import Obend.Core.Proofs.Collect.Statements
 import Obend.Core.Proofs.Collect.Typing
 import Obend.Core.Proofs.Completeness
 import Obend.Core.Proofs.Conservation
+import Obend.Core.Proofs.Aggregate
 import Obend.Core.Proofs.DataSoundness
 import Obend.Core.Proofs.DigestChecks
 import Obend.Core.Proofs.EquiRecursiveBoundary
@@ -337,6 +338,7 @@ import Obend.Teeth.Core.EquiRecursiveTeeth
 import Obend.Teeth.Core.Force
 import Obend.Teeth.Core.LinearTeeth
 import Obend.Teeth.Core.NominalTeeth
+import Obend.Teeth.Core.AggregateTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
 import Obend.Teeth.Law.LawJudgeTeeth
