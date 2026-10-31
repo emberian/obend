@@ -9,18 +9,18 @@ concrete data can be run inside the kernel (`decide +kernel`) and the result rea
 the hypothesis holds, and one where the law refuses.
 -/
 public import Obend.Core.Term
-@[expose] public section
+public section
 namespace Obend.Law
 open Obend.Core.Term
 set_option autoImplicit false
 
-def isValueB : Term → Bool
+@[expose] def isValueB : Term → Bool
   | .lam _ | .nat _ | .boolean _ | .label _ | .record _ | .specification _ _ | .prototype _ _
   | .inject _ _ => true
   | _ => false
 
 /-- The reference semantics' successor, rule by rule (`Term.Step`). -/
-def step? : Term → Option Term
+@[expose] def step? : Term → Option Term
   | .app f a =>
     match f with
     | .lam b => some (instantiate b a)
@@ -75,7 +75,7 @@ def step? : Term → Option Term
   | _ => none
 
 /-- At most `fuel` steps to a value. -/
-def run : Nat → Term → Option Term
+@[expose] def run : Nat → Term → Option Term
   | 0, t => if isValueB t then some t else none
   | fuel + 1, t =>
     if isValueB t then some t else
@@ -84,12 +84,12 @@ def run : Nat → Term → Option Term
     | none => none
 
 /-- The run reached `ok`. -/
-def okB : Option Term → Bool
+@[expose] def okB : Option Term → Bool
   | some (.inject "ok" _) => true
   | _ => false
 
 /-- The run reached a refusal, and its reason. -/
-def refusalOf : Option Term → Option String
+@[expose] def refusalOf : Option Term → Option String
   | some (.inject "refused" (.label why)) => some why
   | _ => none
 

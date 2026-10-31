@@ -19,7 +19,7 @@ type). There are no packages here, so nano's `pkgOf`, `methodOf`, `stepTo` are n
 machine's method index is the method's place in the list the author passes.
 -/
 public import Obend.Law.Syntax
-@[expose] public section
+public section
 namespace Obend.Law
 open Obend.Core.Term (Term)
 open Obend.Core.Ty (Ty)
@@ -45,7 +45,7 @@ inductive StdRefusal
   | unknownMethod (method : String)
   deriving DecidableEq, Repr
 
-def need (c : Bool) (e : StdRefusal) : Except StdRefusal Unit := if c then .ok () else .error e
+@[expose] def need (c : Bool) (e : StdRefusal) : Except StdRefusal Unit := if c then .ok () else .error e
 
 /-! ## Authority narrowing
 
@@ -53,24 +53,24 @@ Authority is the kernel's: every admitted act has as its `principal` the object'
 directly or through a grant chain. A law only NARROWS that authority. -/
 
 /-- The signer is the principal, so no delegate acts through a grant. -/
-def ownerSigns (S : Ty) : Term :=
+@[expose] def ownerSigns (S : Ty) : Term :=
   let c (a : At) := allOf [(eqLabel (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
   lawOf S c c c c c
 
 /-- `agent` is one of `ids`. -/
-def listedT (ids : List String) (a : At) : Term :=
+@[expose] def listedT (ids : List String) (a : At) : Term :=
   anyOf (ids.map fun i => eqLabel (a.reqF "agent") (.label i))
 
 /-- Only the listed members (`agent`, the signer) may create, adopt, re-law, retire or change the
 object. `allowlistLaw` is the unchecked term (what the theorems are about). -/
-def allowlistLaw (S : Ty) (ids : List String) : Term :=
+@[expose] def allowlistLaw (S : Ty) (ids : List String) : Term :=
   let c (a : At) := allOf [(listedT ids a, "not on the allowlist")]
   lawOf S c c c c c
 
 /-- The most ids an allowlist names. -/
-def idsMax : Nat := 256
+@[expose] def idsMax : Nat := 256
 
-def allowlist (S : Ty) (ids : List String) : Except StdRefusal Term := do
+@[expose] def allowlist (S : Ty) (ids : List String) : Except StdRefusal Term := do
   need (ids.length ≤ idsMax) .tooManyIds
   pure (allowlistLaw S ids)
 
@@ -78,11 +78,11 @@ def allowlist (S : Ty) (ids : List String) : Except StdRefusal Term := do
 
 /-- Natural field `f` is at most `maxT` (a term at the clause's depth) in every state the object
 reaches, its seed included. A relaw and a retirement are admitted: neither changes the state. -/
-def boundedWith (S : Ty) (f : String) (maxT : Term) : Term :=
+@[expose] def boundedWith (S : Ty) (f : String) (maxT : Term) : Term :=
   let c (a : At) := allOf [(leNat (a.newF f) maxT, f ++ " over the bound")]
   lawOf S c c (fun _ => okT) (fun _ => okT) c
 
-def bounded (S : Ty) (f : String) (max : Nat) : Term := boundedWith S f (natT max)
+@[expose] def bounded (S : Ty) (f : String) (max : Nat) : Term := boundedWith S f (natT max)
 
 /-! ## Equality at the guarded field's type -/
 
@@ -91,7 +91,7 @@ record type (a row) field by field, each at its own type, in row order; `equal` 
 of a sum, arrow or other type faults the comparison). A record is compared only at the fields its
 type names, so `true` means equal data when the data fits the type
 (`Obend.Law.Proofs.Std.eqAt_data`). -/
-def eqAt (T : Ty) (x y : Term) : Term :=
+@[expose] def eqAt (T : Ty) (x y : Term) : Term :=
   match T with
   | .label => eqLabel x y
   | .boolean => .ifBool x y (notT y)
@@ -110,49 +110,49 @@ changes, by the SIGNER's own unset bit); no-op. Every change and relaw is by a m
 an ADOPTION have no approvals (approvals written under earlier laws prove nothing, LANG-24). A
 retirement is refused `quorum`. -/
 
-def membersMax : Nat := 63
+@[expose] def membersMax : Nat := 63
 
-def proposalTy (T : Ty) : Ty := .variant (.field "laws" .label (.field "set" T .emptyRow))
+@[expose] def proposalTy (T : Ty) : Ty := .variant (.field "laws" .label (.field "set" T .emptyRow))
 
-def pow2 : Nat → Nat
+@[expose] def pow2 : Nat → Nat
   | 0 => 1
   | k + 1 => 2 * pow2 k
 
 /-- Bit `i` of a mask, as `0` or `1`. -/
-def bit (t : Term) (i : Nat) : Term := modNat (divNat t (natT (pow2 i))) (natT 2)
+@[expose] def bit (t : Term) (i : Nat) : Term := modNat (divNat t (natT (pow2 i))) (natT 2)
 
 /-- The number of set bits among the first `cnt`. -/
-def popcount (t : Term) (cnt : Nat) : Term :=
+@[expose] def popcount (t : Term) (cnt : Nat) : Term :=
   (List.range cnt).foldl (fun acc i => addNat acc (bit t i)) (natT 0)
 
 /-- What `popcount` computes, in Lean. -/
-def popcountNat (a cnt : Nat) : Nat :=
+@[expose] def popcountNat (a cnt : Nat) : Nat :=
   (List.range cnt).foldl (fun acc i => acc + a / pow2 i % 2) 0
 
-def isMember (members : List String) (a : At) : Term := listedT members a
+@[expose] def isMember (members : List String) (a : At) : Term := listedT members a
 
 /-- `p` and `q` (proposals, as clauses) are the same proposal. Inside the inner arm `bound 0` is
 `q`'s payload and `bound 1` is `p`'s. -/
-def sameProposal (T : Ty) (a : At) (p q : At → Term) : Term :=
+@[expose] def sameProposal (T : Ty) (a : At) (p q : At → Term) : Term :=
   .case (p a)
     [("laws", .case (q a.under) [("laws", eqLabel (.bound 0) (.bound 1)), ("set", falseT)]),
      ("set", .case (q a.under) [("laws", falseT), ("set", eqAt T (.bound 0) (.bound 1))])]
 
 /-- The old proposal is `set v` with `v` the new value of `guarded`. -/
-def proposedSet (T : Ty) (guarded : String) (a : At) : Term :=
+@[expose] def proposedSet (T : Ty) (guarded : String) (a : At) : Term :=
   .case (a.oldF "proposal") [("laws", falseT), ("set", eqAt T (.bound 0) (a.under.newF guarded))]
 
 /-- The old proposal is `laws L` with `L` the incoming laws (a relaw clause only). -/
-def proposedLaws (a : At) : Term :=
+@[expose] def proposedLaws (a : At) : Term :=
   .case (a.oldF "proposal") [("laws", eqLabel (.bound 0) a.under.payload), ("set", falseT)]
 
 /-- An approval: member `m` (the signer) sets its own bit `i`, which was unset. -/
-def approvalBy (a : At) (m : String) (i : Nat) : Term :=
+@[expose] def approvalBy (a : At) (m : String) (i : Nat) : Term :=
   andT (eqNat (bit (a.oldF "approvals") i) (natT 0))
     (andT (eqNat (a.newF "approvals") (addNat (a.oldF "approvals") (natT (pow2 i))))
       (eqLabel (a.reqF "agent") (.label m)))
 
-def quorumLaw (S T : Ty) (members : List String) (k : Nat) (guarded : String) : Term :=
+@[expose] def quorumLaw (S T : Ty) (members : List String) (k : Nat) (guarded : String) : Term :=
   let cnt := members.length
   let quorate (a : At) := leNat (natT k) (popcount (a.oldF "approvals") cnt)
   let reset (a : At) := eqNat (a.newF "approvals") (natT 0)
@@ -171,7 +171,7 @@ def quorumLaw (S T : Ty) (members : List String) (k : Nat) (guarded : String) : 
   let fresh (a : At) := allOf [(reset a, "approvals at birth")]
   lawOf S fresh fresh relawC (fun _ => refusedT "quorum") change
 
-def quorum (S T : Ty) (members : List String) (k : Nat) (guarded : String) : Except StdRefusal Term := do
+@[expose] def quorum (S T : Ty) (members : List String) (k : Nat) (guarded : String) : Except StdRefusal Term := do
   need (members.length ≤ membersMax) .tooManyMembers
   need (decide members.Nodup) .duplicateMember
   need (1 ≤ k && k ≤ members.length) .badThreshold
@@ -184,12 +184,12 @@ must lie inside one epoch, `notBefore / W`, and the state's epoch is that one; w
 rises by one for each change of `guarded`, up to `limit`; a later epoch restarts it. A relaw and a
 retirement are admitted: neither changes the state. -/
 
-def inOneEpoch (W : Nat) (a : At) : List (Term × String) :=
+@[expose] def inOneEpoch (W : Nat) (a : At) : List (Term × String) :=
   [(eqNat (divNat (a.reqF "validUntil") (natT W)) (divNat (a.reqF "notBefore") (natT W)),
       "window spans epochs"),
    (eqNat (a.newF "epoch") (divNat (a.reqF "notBefore") (natT W)), "epoch is not the call's window")]
 
-def windowedLaw (S T : Ty) (W limit : Nat) (guarded : String) : Term :=
+@[expose] def windowedLaw (S T : Ty) (W limit : Nat) (guarded : String) : Term :=
   let inc (a : At) := Term.ifBool (eqAt T (a.newF guarded) (a.oldF guarded)) (natT 0) (natT 1)
   let fresh (a : At) := guards (inOneEpoch W a) (allOf [(eqNat (a.newF "count") (natT 0), "count at birth")])
   lawOf S fresh fresh
@@ -202,7 +202,7 @@ def windowedLaw (S T : Ty) (W limit : Nat) (guarded : String) : Term :=
                 (eqNat (a.newF "count") (inc a), "count not reset"),
                 (leNat (a.newF "count") (natT limit), "over the rate limit")])))
 
-def windowed (S T : Ty) (W limit : Nat) (guarded : String) : Except StdRefusal Term := do
+@[expose] def windowed (S T : Ty) (W limit : Nat) (guarded : String) : Except StdRefusal Term := do
   need (0 < W) .zeroWidth
   pure (windowedLaw S T W limit guarded)
 
@@ -213,14 +213,14 @@ invoke of method `m` moves `f` from `x` to `y` only along an edge `(x, m, y)`; a
 and a retirement are refused (a machine changes only by its methods, so a machine object is
 permanent). -/
 
-def stateTy (states : List String) : Ty :=
+@[expose] def stateTy (states : List String) : Ty :=
   .variant (states.foldr (fun s row => .field s .emptyRow row) .emptyRow)
 
 /-- `t` (a term of `stateTy states`) is the state `s`. -/
-def isState (states : List String) (t : Term) (s : String) : Term :=
+@[expose] def isState (states : List String) (t : Term) (s : String) : Term :=
   .case t (states.map fun x => (x, .boolean (decide (x = s))))
 
-def machineLaw (S : Ty) (f : String) (states : List String) (initial : String)
+@[expose] def machineLaw (S : Ty) (f : String) (states : List String) (initial : String)
     (edges : List (String × Nat × String)) : Term :=
   let frozen (_ : At) := refusedT "a machine changes only by its methods"
   let start (a : At) := allOf [(isState states (a.newF f) initial, f ++ " does not start at " ++ initial)]
@@ -230,9 +230,9 @@ def machineLaw (S : Ty) (f : String) (states : List String) (initial : String)
         (andT (isState states (a.oldF f) x) (isState states (a.newF f) y))), "no edge")])
 
 /-- A method's index: its place in `methods`. -/
-def methodIndex (methods : List String) (m : String) : Option Nat := methods.idxOf? m
+@[expose] def methodIndex (methods : List String) (m : String) : Option Nat := methods.idxOf? m
 
-def resolveEdges (states methods : List String) (edges : List (String × String × String)) :
+@[expose] def resolveEdges (states methods : List String) (edges : List (String × String × String)) :
     Except StdRefusal (List (String × Nat × String)) :=
   edges.mapM fun (x, m, y) => do
     need (states.contains x) (.unknownState x)
@@ -241,9 +241,9 @@ def resolveEdges (states methods : List String) (edges : List (String × String 
     | some i => pure (x, i, y)
     | none => throw (.unknownMethod m)
 
-def edgesMax : Nat := 256
+@[expose] def edgesMax : Nat := 256
 
-def machine (S : Ty) (f : String) (states : List String) (initial : String) (methods : List String)
+@[expose] def machine (S : Ty) (f : String) (states : List String) (initial : String) (methods : List String)
     (edges : List (String × String × String)) : Except StdRefusal Term := do
   need (decide states.Nodup) .duplicateState
   need (edges.length ≤ edgesMax) .tooManyEdges
@@ -256,7 +256,7 @@ def machine (S : Ty) (f : String) (states : List String) (initial : String) (met
 `inv new` (`inv` a closed `S → boolean`); a relaw admits (the state is unchanged). A retirement
 judges `inv` over the last state: it is the guarded clause rather than `ok` so the law stays in
 certifying shape (`Obend.Law.Proofs.Claim.keeps_guarded`). -/
-def keeps (S : Ty) (inv : Term) : Term :=
+@[expose] def keeps (S : Ty) (inv : Term) : Term :=
   let c (a : At) := guard (.app inv a.new) "invariant" okT
   lawOf S c c (fun _ => okT) c c
 

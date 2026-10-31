@@ -23,7 +23,7 @@ agreeing with that opening.
 -/
 public import Obend.Fold
 public import Obend.Law.Machine
-@[expose] public section
+public section
 
 namespace Obend.Law
 
@@ -176,9 +176,9 @@ theorem lawAdmission_run_cons (policy : State → Bool) (limits : Limits) (budge
         | some (.refused why) => .error (.refused why)
         | none => .error .noVerdict := by
   simp only [Obend.Fold.Admission.run, List.foldlM_cons, lawAdmission, lawStep]
-  split
+  split <;> rename_i heq <;> simp only [heq]
   · rfl
-  · simp only [judgeWrite]; split <;> rfl
+  · simp only [judgeWrite]; split <;> rename_i heq <;> simp only [heq] <;> rfl
 
 end Obend.Law
 

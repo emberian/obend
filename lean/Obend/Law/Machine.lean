@@ -19,7 +19,7 @@ unrestricted `judge` returns it.
 -/
 public import Obend.Law.Inherit
 public import Obend.Core.Data
-@[expose] public section
+public section
 namespace Obend.Law
 open Obend.Core.Term (Term Evaluates)
 open Obend.Core.Data (Data Budget executeWith)
@@ -29,18 +29,18 @@ set_option autoImplicit false
 /-! ## The probe -/
 
 /-- `t`, when `t` is a label (`labelEqual t t` faults on anything else). -/
-def asLabel (t : Term) : Term := .ifBool (.binary .labelEqual t t) t t
+@[expose] def asLabel (t : Term) : Term := .ifBool (.binary .labelEqual t t) t t
 
 /-- Read a verdict `v` as a ground observation: `true` for `ok`; for `refused r`, `read` (a term
 over the payload, `bound 0`) as a label. -/
-def readVerdict (read : Term) (v : Term) : Term :=
+@[expose] def readVerdict (read : Term) (v : Term) : Term :=
   .case v [("ok", .boolean true), ("refused", asLabel read)]
 
 /-- The probe of a law with `verdictTy`: the reason itself. -/
-def verdictProbe (law : Term) (o n rq : Data) : Term := readVerdict (.bound 0) (applyLaw law o n rq)
+@[expose] def verdictProbe (law : Term) (o n rq : Data) : Term := readVerdict (.bound 0) (applyLaw law o n rq)
 
 /-- The probe of an effective law (`inheritedVerdictTy`): field `field` of the refusal record. -/
-def blameProbe (field : String) (law : Term) (o n rq : Data) : Term :=
+@[expose] def blameProbe (field : String) (law : Term) (o n rq : Data) : Term :=
   readVerdict (.get (.bound 0) field) (applyLaw law o n rq)
 
 /-! ## Verdicts -/
@@ -52,13 +52,13 @@ inductive Verdict where
   deriving DecidableEq, Repr
 
 /-- The probe's observation as a verdict: `true` is `ok`, a label is a refusal. -/
-def Verdict.ofData : Data → Option Verdict
+@[expose] def Verdict.ofData : Data → Option Verdict
   | .boolean true => some .ok
   | .label why => some (.refused why)
   | _ => none
 
 /-- The probe's observation for a verdict. -/
-def Verdict.data : Verdict → Data
+@[expose] def Verdict.data : Verdict → Data
   | .ok => .boolean true
   | .refused why => .label why
 
@@ -71,19 +71,19 @@ inductive Blame where
 /-! ## The judge: execute the probe -/
 
 /-- Execute `t` and return the extracted Data. -/
-def runProbe (policy : State → Bool) (limits : Limits) (budget : Budget) (t : Term) : Option Data :=
+@[expose] def runProbe (policy : State → Bool) (limits : Limits) (budget : Budget) (t : Term) : Option Data :=
   match executeWith policy limits budget t with
   | .ok e => some e.extraction.result.value
   | .error _ => none
 
 /-- The machine's verdict on a law: execute its probe and read the observation. `none` when the run
 does not finish within the resources, faults, or observes something else. -/
-def judge (policy : State → Bool) (limits : Limits) (budget : Budget) (law : Term) (o n rq : Data) :
+@[expose] def judge (policy : State → Bool) (limits : Limits) (budget : Budget) (law : Term) (o n rq : Data) :
     Option Verdict :=
   (runProbe policy limits budget (verdictProbe law o n rq)).bind Verdict.ofData
 
 /-- The machine's verdict on an effective law: the `by` probe, and on a refusal the `reason` probe. -/
-def judgeEffective (policy : State → Bool) (limits : Limits) (budget : Budget) (law : Term)
+@[expose] def judgeEffective (policy : State → Bool) (limits : Limits) (budget : Budget) (law : Term)
     (o n rq : Data) : Option Blame :=
   match (runProbe policy limits budget (blameProbe "by" law o n rq)).bind Verdict.ofData with
   | some .ok => some .ok
@@ -97,21 +97,21 @@ def judgeEffective (policy : State → Bool) (limits : Limits) (budget : Budget)
 
 /-- The law refuses `old → new` under `req` with a reason that evaluates to the label `why` (a lazy
 reason; `Refuses` is the case of a literal one). -/
-def RefusesAs (law : Term) (o n rq : Data) (why : String) : Prop :=
+@[expose] def RefusesAs (law : Term) (o n rq : Data) (why : String) : Prop :=
   ∃ p, Evaluates (applyLaw law o n rq) (.inject "refused" p) ∧ Evaluates p (.label why)
 
 /-- The verdict the reference semantics gives. -/
-def Judged (law : Term) (o n rq : Data) : Verdict → Prop
+@[expose] def Judged (law : Term) (o n rq : Data) : Verdict → Prop
   | .ok => Admits law o n rq
   | .refused why => RefusesAs law o n rq why
 
 /-- The effective law refuses, its record's `by` the label `name` and its `reason` the label `why`. -/
-def BlamedAs (law : Term) (o n rq : Data) (name why : String) : Prop :=
+@[expose] def BlamedAs (law : Term) (o n rq : Data) (name why : String) : Prop :=
   ∃ p, Evaluates (applyLaw law o n rq) (.inject "refused" p) ∧
     Evaluates (.get p "by") (.label name) ∧ Evaluates (.get p "reason") (.label why)
 
 /-- The effective verdict the reference semantics gives. -/
-def BlameJudged (law : Term) (o n rq : Data) : Blame → Prop
+@[expose] def BlameJudged (law : Term) (o n rq : Data) : Blame → Prop
   | .ok => Admits law o n rq
   | .refusedBy name why => BlamedAs law o n rq name why
 

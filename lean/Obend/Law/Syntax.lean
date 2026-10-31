@@ -34,7 +34,7 @@ not in nano either), so it is `reqTy`, and `lawTy S` is the only type indexed by
 public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Data
-@[expose] public section
+public section
 namespace Obend.Law
 open Obend.Core.Term (Term Evaluates Primitive)
 open Obend.Core.Ty (Ty Reuse Quantity)
@@ -44,37 +44,37 @@ set_option autoImplicit false
 /-! ## Types -/
 
 /-- The empty record's type: a record's type is its field row. -/
-def unitTy : Ty := .emptyRow
+@[expose] def unitTy : Ty := .emptyRow
 
 /-- One arm per act, in label order (the order a `case` on it states its arms). -/
-def occasionRow : Ty :=
+@[expose] def occasionRow : Ty :=
   .field "adopt" .label (.field "birth" unitTy (.field "invoke" .natural
     (.field "relaw" .label (.field "retire" unitTy (.field "write" unitTy .emptyRow)))))
 
-def occasionTy : Ty := .variant occasionRow
+@[expose] def occasionTy : Ty := .variant occasionRow
 
 /-- `sum {ok : {}, refused : label}` (LANG-8). -/
-def verdictTy : Ty := .variant (.field "ok" unitTy (.field "refused" .label .emptyRow))
+@[expose] def verdictTy : Ty := .variant (.field "ok" unitTy (.field "refused" .label .emptyRow))
 
 /-- An optional natural: `sum {none : {}, some : nat}`. -/
-def optNatTy : Ty := .variant (.field "none" unitTy (.field "some" .natural .emptyRow))
+@[expose] def optNatTy : Ty := .variant (.field "none" unitTy (.field "some" .natural .emptyRow))
 
 /-- The request a law judges: the signer (`agent`), the authority it acts under (`principal`), the
 signed window (`notBefore`, `validUntil`) and the occasion; and the kernel's facts of the act that
 the enforced `law` fragment reads (`Obend.Spec.Law.Facts`): the `subject` whose authority the act
 carries and the `caller` (each absent in a frame that has none), the `height` and the kernel `turn`.
 Fields in label order. -/
-def reqTy : Ty :=
+@[expose] def reqTy : Ty :=
   .field "agent" .label (.field "caller" optNatTy (.field "height" .natural
     (.field "notBefore" .natural (.field "occasion" occasionTy
     (.field "principal" .label (.field "subject" optNatTy (.field "turn" .natural
     (.field "validUntil" .natural .emptyRow))))))))
 
 /-- A reusable, unrestricted arrow: a law may be applied any number of times. -/
-def fnTy (domain codomain : Ty) : Ty := .arrow .reusable .unrestricted domain codomain
+@[expose] def fnTy (domain codomain : Ty) : Ty := .arrow .reusable .unrestricted domain codomain
 
 /-- `S → S → Req → Verdict`. -/
-def lawTy (S : Ty) : Ty := fnTy S (fnTy S (fnTy reqTy verdictTy))
+@[expose] def lawTy (S : Ty) : Ty := fnTy S (fnTy S (fnTy reqTy verdictTy))
 
 /-! ## The cursor -/
 
@@ -83,53 +83,53 @@ structure At where
   depth : Nat
 
 namespace At
-def old (a : At) : Term := .bound (a.depth + 2)
-def new (a : At) : Term := .bound (a.depth + 1)
-def req (a : At) : Term := .bound a.depth
+@[expose] def old (a : At) : Term := .bound (a.depth + 2)
+@[expose] def new (a : At) : Term := .bound (a.depth + 1)
+@[expose] def req (a : At) : Term := .bound a.depth
 /-- One binder further in (inside an arm of a `case` the clause opens itself). -/
-def under (a : At) : At := ⟨a.depth + 1⟩
+@[expose] def under (a : At) : At := ⟨a.depth + 1⟩
 /-- The occasion's payload (`lawOf`'s arm binder, one binder below the law's arguments). -/
-def payload (a : At) : Term := .bound (a.depth - 1)
-def oldF (a : At) (f : String) : Term := .get a.old f
-def newF (a : At) (f : String) : Term := .get a.new f
-def reqF (a : At) (f : String) : Term := .get a.req f
+@[expose] def payload (a : At) : Term := .bound (a.depth - 1)
+@[expose] def oldF (a : At) (f : String) : Term := .get a.old f
+@[expose] def newF (a : At) (f : String) : Term := .get a.new f
+@[expose] def reqF (a : At) (f : String) : Term := .get a.req f
 end At
 
 /-! ## Verdicts and combinators -/
 
-def okT : Term := .inject "ok" (.record [])
-def refusedT (why : String) : Term := .inject "refused" (.label why)
+@[expose] def okT : Term := .inject "ok" (.record [])
+@[expose] def refusedT (why : String) : Term := .inject "refused" (.label why)
 
 /-- `c` must hold, else refuse with `why`; then `rest`. -/
-def guard (c : Term) (why : String) (rest : Term) : Term := .ifBool c rest (refusedT why)
+@[expose] def guard (c : Term) (why : String) (rest : Term) : Term := .ifBool c rest (refusedT why)
 
 /-- Each condition in order, each with its reason; `rest` if all hold. -/
-def guards : List (Term × String) → Term → Term
+@[expose] def guards : List (Term × String) → Term → Term
   | [], t => t
   | (c, w) :: r, t => guard c w (guards r t)
 
 /-- Every condition, then `ok`. -/
-def allOf (l : List (Term × String)) : Term := guards l okT
+@[expose] def allOf (l : List (Term × String)) : Term := guards l okT
 
-def trueT : Term := .boolean true
-def falseT : Term := .boolean false
-def andT (a b : Term) : Term := .ifBool a b falseT
-def notT (a : Term) : Term := .ifBool a falseT trueT
+@[expose] def trueT : Term := .boolean true
+@[expose] def falseT : Term := .boolean false
+@[expose] def andT (a b : Term) : Term := .ifBool a b falseT
+@[expose] def notT (a : Term) : Term := .ifBool a falseT trueT
 
 /-- Some condition holds (`false` for none). -/
-def anyOf : List Term → Term
+@[expose] def anyOf : List Term → Term
   | [] => falseT
   | c :: r => .ifBool c trueT (anyOf r)
 
-def natT (k : Nat) : Term := .nat k
+@[expose] def natT (k : Nat) : Term := .nat k
 
-def eqNat (a b : Term) : Term := .binary .equal a b
-def eqLabel (a b : Term) : Term := .binary .labelEqual a b
-def leNat (a b : Term) : Term := .binary .lessEqual a b
-def ltNat (a b : Term) : Term := .binary .less a b
-def addNat (a b : Term) : Term := .binary .add a b
-def divNat (a b : Term) : Term := .binary .divide a b
-def modNat (a b : Term) : Term := .binary .modulo a b
+@[expose] def eqNat (a b : Term) : Term := .binary .equal a b
+@[expose] def eqLabel (a b : Term) : Term := .binary .labelEqual a b
+@[expose] def leNat (a b : Term) : Term := .binary .lessEqual a b
+@[expose] def ltNat (a b : Term) : Term := .binary .less a b
+@[expose] def addNat (a b : Term) : Term := .binary .add a b
+@[expose] def divNat (a b : Term) : Term := .binary .divide a b
+@[expose] def modNat (a b : Term) : Term := .binary .modulo a b
 
 /-! ## The law skeleton -/
 
@@ -137,59 +137,59 @@ def modNat (a b : Term) : Term := .binary .modulo a b
 is `bound 0` and the clause sits at depth 1. `adopt` is this law judging the state it is being
 ADDED over (KERNEL-27); `relaw` this law, in force, judging its replacement; `retire` this law
 judging the object's end over its last state (`old = new`, KERNEL-70). -/
-def lawCase6 (birth adopt relaw retire write invoke : At → Term) : Term :=
+@[expose] def lawCase6 (birth adopt relaw retire write invoke : At → Term) : Term :=
   let a : At := ⟨1⟩
   .case (.get (.bound 0) "occasion")
     [("adopt", adopt a), ("birth", birth a), ("invoke", invoke a), ("relaw", relaw a),
      ("retire", retire a), ("write", write a)]
 
 /-- `λ old. λ new. λ req. body`. -/
-def law3 (body : Term) : Term := .lam (.lam (.lam body))
+@[expose] def law3 (body : Term) : Term := .lam (.lam (.lam body))
 
 /-- A law with one clause per act. -/
-def lawOf6 (birth adopt relaw retire write invoke : At → Term) : Term :=
+@[expose] def lawOf6 (birth adopt relaw retire write invoke : At → Term) : Term :=
   law3 (lawCase6 birth adopt relaw retire write invoke)
 
 /-- The common case: writes and invokes judged alike, as a CHANGE. -/
-def lawCase (birth adopt relaw retire change : At → Term) : Term :=
+@[expose] def lawCase (birth adopt relaw retire change : At → Term) : Term :=
   lawCase6 birth adopt relaw retire change change
 
 /-- `S` names the state type the law is written for (`lawTy S`); Core4's lambdas carry no
 annotation, so the term does not mention it. -/
-def lawOf (_S : Ty) (birth adopt relaw retire change : At → Term) : Term :=
+@[expose] def lawOf (_S : Ty) (birth adopt relaw retire change : At → Term) : Term :=
   law3 (lawCase birth adopt relaw retire change)
 
 /-- The body under a law's three binders. -/
-def lawBody : Term → Term
+@[expose] def lawBody : Term → Term
   | .lam (.lam (.lam b)) => b
   | t => t
 
 /-! ## Data and what a law means -/
 
 /-- The first field `f` of a record (as the reference semantics' `get` selects it). -/
-def fieldsLookup (f : String) : List (String × Data) → Option Data
+@[expose] def fieldsLookup (f : String) : List (String × Data) → Option Data
   | [] => none
   | (g, d) :: rest => if g == f then some d else fieldsLookup f rest
 
-def _root_.Obend.Core.Data.Data.field (d : Data) (f : String) : Option Data :=
+@[expose] def _root_.Obend.Core.Data.Data.field (d : Data) (f : String) : Option Data :=
   match d with
   | .record fs => fieldsLookup f fs
   | _ => none
 
 /-- The law applied to the old state, the new state and the request. -/
-def applyLaw (law : Term) (old new req : Data) : Term :=
+@[expose] def applyLaw (law : Term) (old new req : Data) : Term :=
   .app (.app (.app law old.term) new.term) req.term
 
 /-- The law ADMITS `old → new` under `req`: applied, it evaluates to `ok`. -/
-def Admits (law : Term) (old new req : Data) : Prop :=
+@[expose] def Admits (law : Term) (old new req : Data) : Prop :=
   ∃ w, Evaluates (applyLaw law old new req) (.inject "ok" w)
 
 /-- The law REFUSES `old → new` under `req` with reason `why`. -/
-def Refuses (law : Term) (old new req : Data) (why : String) : Prop :=
+@[expose] def Refuses (law : Term) (old new req : Data) (why : String) : Prop :=
   Evaluates (applyLaw law old new req) (refusedT why)
 
 /-- An optional natural, as data. -/
-def optNat : Option Nat → Data
+@[expose] def optNat : Option Nat → Data
   | none => .variant "none" (.record [])
   | some k => .variant "some" (.natural k)
 
@@ -202,7 +202,7 @@ structure Consensus where
 /-- A request with the kernel's facts: who signs, under whose authority, in which window, on which
 occasion; the subject and caller (if any), the turn; and the ledger's consensus `c`, whose height is
 the record's `height`. -/
-def requestAt (agent principal : String) (notBefore validUntil : Nat) (occasion : Data)
+@[expose] def requestAt (agent principal : String) (notBefore validUntil : Nat) (occasion : Data)
     (subject caller : Option Nat) (c : Consensus) (turn : Nat) : Data :=
   .record [("agent", .label agent), ("caller", optNat caller), ("height", .natural c.height),
     ("notBefore", .natural notBefore), ("occasion", occasion), ("principal", .label principal),
@@ -210,7 +210,7 @@ def requestAt (agent principal : String) (notBefore validUntil : Nat) (occasion 
 
 /-- A request: who signs, under whose authority, in which window, on which occasion (no subject,
 no caller, turn 0, at the genesis consensus). -/
-def request (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) : Data :=
+@[expose] def request (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) : Data :=
   requestAt agent principal notBefore validUntil occasion none none ⟨0⟩ 0
 
 /-- **What a submitter sends**: everything a request carries except the ledger's facts. `seen` is
@@ -238,7 +238,7 @@ def Submission.request (s : Submission) (c : Consensus) : Data :=
 
 /-- **Seal a submission at the ledger's consensus**: the request's height is the ledger's; a claim of
 a height the ledger has not reached is refused. -/
-def sealAt (c : Consensus) (s : Submission) : Except SealRefusal Data :=
+@[expose] def sealAt (c : Consensus) (s : Submission) : Except SealRefusal Data :=
   match s.seen with
   | some h => if c.height < h then .error (.futureHeight h c.height) else .ok (s.request c)
   | none => .ok (s.request c)
@@ -273,15 +273,15 @@ theorem seal_past {c : Consensus} {s : Submission} {h : Nat} (hs : s.seen = some
   simp [sealAt, hs, Nat.not_lt.2 hle]
 
 /-- The occasions, as data. -/
-def birthO : Data := .variant "birth" (.record [])
-def adoptO (laws : String) : Data := .variant "adopt" (.label laws)
-def relawO (laws : String) : Data := .variant "relaw" (.label laws)
-def retireO : Data := .variant "retire" (.record [])
-def writeO : Data := .variant "write" (.record [])
-def invokeO (method : Nat) : Data := .variant "invoke" (.natural method)
+@[expose] def birthO : Data := .variant "birth" (.record [])
+@[expose] def adoptO (laws : String) : Data := .variant "adopt" (.label laws)
+@[expose] def relawO (laws : String) : Data := .variant "relaw" (.label laws)
+@[expose] def retireO : Data := .variant "retire" (.record [])
+@[expose] def writeO : Data := .variant "write" (.record [])
+@[expose] def invokeO (method : Nat) : Data := .variant "invoke" (.natural method)
 
 /-- Which arm the change clause is: a write or an invoke. -/
-def IsChange (occasion : Data) : Prop :=
+@[expose] def IsChange (occasion : Data) : Prop :=
   (∃ x, occasion = .variant "write" x) ∨ (∃ x, occasion = .variant "invoke" x)
 
 end Obend.Law
