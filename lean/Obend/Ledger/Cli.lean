@@ -121,7 +121,7 @@ def templateOf (src : String) : Template :=
 
 /-- The document's kind that carries a template, and the template. -/
 def templateFor (s : Store) (doc src : String) : Option (String × Template) :=
-  (kindChain doc src).findSome? fun k =>
+  (kindChain s.entries doc src).findSome? fun k =>
     (srcOf s k).bind fun ks =>
       let t := templateOf ks
       if t.debits.isEmpty && t.credits.isEmpty then none else some (k, t)
