@@ -117,10 +117,10 @@ write with the same words.
 
 ## Builds
 
-On dregg-build2 (`~/obend/impact-wt`, a worktree of `~/obend/repo`) at the rebased head: tier 1
+On dregg-build2 (`~/obend/impact-wt2`, a worktree of `~/obend/repo`) at `7e0f4fe`, rebased on `dfc26d6`: tier 1
 `lake build` green, `lake build obend` green; `tests/analysis/run-impact.py` 32/32,
 `run-receipts.py` 31/31, `run-logic.py` 20/20, `run-workspace.py` 30/30 (the `verify` dispatch now
-passes through `Analysis.Cli.verifyOr`). Tier 2: TIER2.
+passes through `Analysis.Cli.verifyOr`). Tier 2 (`lake build Obend.Census Teeth`): green; the census reports 38089 constants, none on sorryAx or a declared axiom (27 on native_decide, none of them new). A first tier-2 run on the pre-`05beecd` base hung in `CheckTeeth`; it was left running (its PID file names a wrapper shell, not `lake`) in `~/obend/impact-wt`.
 
 ## Limits
 
