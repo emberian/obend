@@ -43,11 +43,16 @@ theorem sim_inject_inv {l : String} {p w : Term} (h : Sim (.inject l p) w) : ∃
 theorem sim_literal_inv {v w : Term} (lit : Literal v) (h : Sim v w) : w = v := by
   cases lit <;> cases h <;> rfl
 
-theorem cv_app_pos {f a v : Term} {k : Nat} (h : CV (.app f a) v k) : 1 ≤ k := by
+theorem cv_app_pos {r : Tail} {f a v : Term} {k : Nat} (h : Run (.tail r) (.app f a) v k) : 1 ≤ k := by
   cases h with
   | value h => exact absurd h app_not_ready
   | apply => omega
   | applySpec => omega
+  | headEval h =>
+    cases h with
+    | value h => exact absurd h app_not_ready
+    | apply => omega
+    | applySpec => omega
 
 theorem sim_mixBody {l l' u u' : Term} (hl : Sim l l') (hu : Sim u u') :
     Sim (mixBody l u) (mixBody l' u') :=
@@ -70,9 +75,15 @@ theorem sim_single {x x' : Term} (h : Sim x x') : ∀ n, Sim (single x n) (singl
 than `8k` when `k > 0`. -/
 def Within (k k' : Nat) : Prop := k' + 7 * min k 1 ≤ 8 * k
 
-/-- The simulation, for every derivation cheaper than `n`. -/
+theorem Within.add {a a' b b' : Nat} (h1 : Within a a') (h2 : Within b b') : Within (a + b) (a' + b') := by
+  unfold Within at *; omega
+
+theorem Within.zero : Within 0 0 := by simp [Within]
+
+/-- The simulation, for every evaluation or template derivation cheaper than `n`. -/
 def SimBelow (n : Nat) : Prop :=
-  ∀ j < n, ∀ {t t' v : Term}, Sim t t' → CV t v j → ∃ v' j', CV t' v' j' ∧ Sim v v' ∧ Within j j'
+  ∀ (r : Tail), ∀ j < n, ∀ {t t' v : Term}, Sim t t' → Run (.tail r) t v j →
+    ∃ v' j', Run (.tail r) t' v' j' ∧ Sim v v' ∧ Within j j'
 
 theorem bind_sim {n j : Nat} (ih : SimBelow n) (hj : j ≤ n) {a a' x : Term} (h : Run .bind a x j)
     (hs : Sim a a') : ∃ x' j', Run .bind a' x' j' ∧ Sim x x' ∧ Within j j' := by
@@ -80,7 +91,7 @@ theorem bind_sim {n j : Nat} (ih : SimBelow n) (hj : j ≤ n) {a a' x : Term} (h
   | keep hset => exact ⟨a', 0, .keep (Sim.ready_fwd hset hs), hs, by simp [Within]⟩
   | skip => exact ⟨skipped, 1, .skip _, .refl _, by simp [Within]⟩
   | eval hn e =>
-    obtain ⟨v', j', r, sv, b⟩ := ih _ (by omega) hs e
+    obtain ⟨v', j', r, sv, b⟩ := ih .eval _ (by omega) hs e
     exact ⟨v', j' + 1, .eval (fun c => hn (Sim.ready_bwd c hs)) r, sv, by unfold Within at *; omega⟩
 
 theorem fields_sim {n : Nat} (ih : SimBelow n) :
@@ -138,20 +149,20 @@ theorem bind2_sim {n : Nat} (ih : SimBelow n) {u u' u1 x : Term} {k1 k2 : Nat} (
 
 /-! ## The association cases -/
 
-theorem bodyLR_case {n : Nat} (ih : SimBelow n) {a a' b b' c c' s s' u u' v : Term}
+theorem bodyLR_case {r : Tail} {n : Nat} (ih : SimBelow n) {a a' b b' c c' s s' u u' v : Term}
     (hset : Settled s) (ha : Sim a a') (hb : Sim b b') (hc : Sim c c') (hss : Sim s s') (hu : Sim u u')
-    (h : CV (.app (.app c s) (.app (.app (.mix a b) s) u)) v n) :
-    ∃ v' n', CV (.app (.app (.mix b' c') s') (.app (.app a' s') u')) v' n' ∧ Sim v v' ∧ Within n n' := by
+    (h : Run (.tail r) (.app (.app c s) (.app (.app (.mix a b) s) u)) v n) :
+    ∃ v' n', Run (.tail r) (.app (.app (.mix b' c') s') (.app (.app a' s') u')) v' n' ∧ Sim v v' ∧ Within n n' := by
   have hset' : Settled s' := Sim.ready_fwd hset hss
   obtain ⟨x, kx, k1, hX, hC, rfl⟩ := hoist_arg h
   have k1pos := cv_app_pos hC
   rcases bind_of_unsettled app_not_ready hX with ⟨rfl, rfl⟩ | ⟨j, hXr, rfl⟩
   · -- `mix a b` is skipped: the right skips `a s u` and `b s _`, and pays only the unfolding
-    obtain ⟨v', k1', r1, s1, b1⟩ := ih k1 (by omega) (.app (.app hc hss) (.refl _)) hC
+    obtain ⟨v', k1', r1, s1, b1⟩ := ih r k1 (by omega) (.app (.app hc hss) (.refl _)) hC
     obtain ⟨K, rK, le⟩ := unhoist_arg (Run.skip (Term.app (.app b' s') skipped)) r1
-    have r := mk_mix_app_app (Run.keep hset') (Run.skip (Term.app (.app a' s') u')) rK
-    exact ⟨v', _, r, s1, by unfold Within at *; omega⟩
-  · obtain ⟨s2, ks, u1, ku, kb, hS, hU, hB, rfl⟩ := cv_mix_app_app hXr
+    have run := mk_mix_app_app (Run.keep hset') (Run.skip (Term.app (.app a' s') u')) rK
+    exact ⟨v', _, run, s1, by unfold Within at *; omega⟩
+  · obtain ⟨s2, ks, u1, ku, kb, hS, hU, hB, rfl⟩ := cv_mix_app_app_eval hXr
     obtain ⟨y, ky, k4, hY, hB2, rfl⟩ := hoist_arg hB
     obtain ⟨xb, kxb, k4', hXb, hB3, rfl⟩ := hoist_fun hB2
     obtain ⟨xb', kxb', hXb', sxb, lxb⟩ := bind2_settled hset hss hS hXb
@@ -164,26 +175,26 @@ theorem bodyLR_case {n : Nat} (ih : SimBelow n) {a a' b b' c c' s s' u u' v : Te
         obtain ⟨xu, kxu, j2, hXu, hA2, rfl⟩ := hoist_arg hA1
         obtain ⟨xa', kxa', hXa', sxa, lxa⟩ := bind2_settled hset hss hS hXa
         obtain ⟨xu', kxu', hXu', sxu, bxu⟩ := bind2_sim ih (by omega) hU hXu hu
-        obtain ⟨y', j2', r2, sy, by2⟩ := ih j2 (by omega) (.app (.app ha sxa) sxu) hA2
+        obtain ⟨y', j2', r2, sy, by2⟩ := ih .eval j2 (by omega) (.app (.app ha sxa) sxu) hA2
         have j2pos := cv_app_pos hA2
         obtain ⟨K1, rK1, le1⟩ := unhoist_arg hXu' r2
         obtain ⟨K2, rK2, le2⟩ := unhoist_fun hXa' rK1
         exact ⟨y', K2 + 1, .eval app_not_ready rK2, sy, by unfold Within at *; omega⟩
     obtain ⟨y', ky', hY', sy, by'⟩ := yside
     -- the argument `b s y` on the right, matching `mix a b` applied on the left
-    obtain ⟨z, k4'', rz, sz, bz⟩ := ih k4' (by omega) (.app (.app hb sxb) sy) hB3
+    obtain ⟨z, k4'', rz, sz, bz⟩ := ih .eval k4' (by omega) (.app (.app hb sxb) sy) hB3
     obtain ⟨Kb, rKb, leb⟩ := unhoist_fun hXb' rz
     have hZ' : Run .bind (Term.app (.app b' s') y') z (Kb + 1) := .eval app_not_ready rKb
-    obtain ⟨v', k1', r1, s1, b1⟩ := ih k1 (by omega) (.app (.app hc hss) sz) hC
+    obtain ⟨v', k1', r1, s1, b1⟩ := ih r k1 (by omega) (.app (.app hc hss) sz) hC
     obtain ⟨K, rK, le⟩ := unhoist_arg hZ' r1
-    have r := mk_mix_app_app (Run.keep hset') hY' rK
+    have run := mk_mix_app_app (Run.keep hset') hY' rK
     have hBpos := cv_app_pos hB3
-    exact ⟨v', _, r, s1, by unfold Within at *; omega⟩
+    exact ⟨v', _, run, s1, by unfold Within at *; omega⟩
 
-theorem bodyRL_case {n : Nat} (ih : SimBelow n) {a a' b b' c c' s s' u u' v : Term}
+theorem bodyRL_case {r : Tail} {n : Nat} (ih : SimBelow n) {a a' b b' c c' s s' u u' v : Term}
     (hset : Settled s) (ha : Sim a a') (hb : Sim b b') (hc : Sim c c') (hss : Sim s s') (hu : Sim u u')
-    (h : CV (.app (.app (.mix b c) s) (.app (.app a s) u)) v n) :
-    ∃ v' n', CV (.app (.app c' s') (.app (.app (.mix a' b') s') u')) v' n' ∧ Sim v v' ∧ Within n n' := by
+    (h : Run (.tail r) (.app (.app (.mix b c) s) (.app (.app a s) u)) v n) :
+    ∃ v' n', Run (.tail r) (.app (.app c' s') (.app (.app (.mix a' b') s') u')) v' n' ∧ Sim v v' ∧ Within n n' := by
   have hset' : Settled s' := Sim.ready_fwd hset hss
   obtain ⟨s2, ks, y, ky, kb, hS, hY, hB, rfl⟩ := cv_mix_app_app h
   obtain ⟨z, kz, k1, hZ, hC, rfl⟩ := hoist_arg hB
@@ -210,71 +221,236 @@ theorem bodyRL_case {n : Nat} (ih : SimBelow n) {a a' b b' c c' s s' u u' v : Te
             obtain ⟨xu, kxu, j4, hXu, hA2, rfl⟩ := hoist_arg hA1
             obtain ⟨xa', kxa', hXa', sxa, bxa⟩ := bind_sim ih (by omega) hXa hss
             obtain ⟨xu', kxu', hXu', sxu, bxu⟩ := bind_sim ih (by omega) hXu hu
-            obtain ⟨y', j4', r4, sy, by4⟩ := ih j4 (by omega) (.app (.app ha sxa) sxu) hA2
+            obtain ⟨y', j4', r4, sy, by4⟩ := ih .eval j4 (by omega) (.app (.app ha sxa) sxu) hA2
             obtain ⟨K, rK, le⟩ := unhoist_fun hXa' r4
             exact ⟨xu', kxu', y', K + 1, hXu', .eval app_not_ready rK, sy, by unfold Within at *; omega⟩
         · exact ⟨skipped, 1, skipped, 1, .skip _, .skip _, .refl _, by omega⟩
       obtain ⟨u1', ku1', yb', kyb', hU1', hYb', syb, byb⟩ := yb_side
-      obtain ⟨z', j2', r2, sz, bz⟩ := ih j2 (by omega) (.app (.app hb sxb) syb) hZ3
+      obtain ⟨z', j2', r2, sz, bz⟩ := ih .eval j2 (by omega) (.app (.app hb sxb) syb) hZ3
       obtain ⟨K1, rK1, le1⟩ := unhoist_arg hYb' r2
       obtain ⟨K2, rK2, le2⟩ := unhoist_fun hXb' rK1
-      have r := mk_mix_app_app (Run.keep hset') hU1' rK2
+      have run := mk_mix_app_app (Run.keep hset') hU1' rK2
       have hZpos := cv_app_pos hZ3
-      exact ⟨z', _, .eval app_not_ready r, sz, by unfold Within at *; omega⟩
+      exact ⟨z', _, .eval app_not_ready run, sz, by unfold Within at *; omega⟩
   obtain ⟨x', kx', hX', sx, bx⟩ := xside
-  obtain ⟨v', k1'', r1, s1, b1⟩ := ih k1' (by omega) (.app (.app hc sxc) sx) hC2
+  obtain ⟨v', k1'', r1, s1, b1⟩ := ih r k1' (by omega) (.app (.app hc sxc) sx) hC2
   obtain ⟨K1, rK1, le1⟩ := unhoist_fun hXc' r1
   obtain ⟨K2, rK2, le2⟩ := unhoist_arg hX' rK1
   have hCpos := cv_app_pos hC2
   exact ⟨v', K2, rK2, s1, by unfold Within at *; omega⟩
 
+/-! ## The knot: cells, waves, approximants -/
+
+theorem sim_skipped_right {x : Term} (h : Sim skipped x) : x = skipped := by
+  unfold skipped at h
+  cases h with
+  | hole n len rel =>
+    rename_i σ'
+    cases σ' with
+    | nil => rfl
+    | cons _ _ => simp at len
+
+theorem sim_skipped_left {x : Term} (h : Sim x skipped) : x = skipped := by
+  unfold skipped at h
+  cases h with
+  | hole n len rel =>
+    rename_i σ
+    cases σ with
+    | nil => rfl
+    | cons _ _ => simp at len
+
+theorem pending_names {fs fs' : List (String × Term)} (h : fs.map Prod.fst = fs'.map Prod.fst) :
+    (fs.map fun f => (f.1, skipped)) = fs'.map fun f => (f.1, skipped) := by
+  have e1 : (fs.map fun f => (f.1, skipped)) = (fs.map Prod.fst).map fun n => (n, skipped) := by
+    simp [List.map_map, Function.comp_def]
+  have e2 : (fs'.map fun f => (f.1, skipped)) = (fs'.map Prod.fst).map fun n => (n, skipped) := by
+    simp [List.map_map, Function.comp_def]
+  rw [e1, e2, h]
+
+theorem zip_self_sim : ∀ (l : List (String × Term)), ∀ q ∈ l.zip l, Sim q.1.2 q.2.2
+  | [] => by simp
+  | a :: l => by
+    intro q hq
+    simp only [List.zip_cons_cons, List.mem_cons] at hq
+    rcases hq with rfl | hq
+    · exact .refl _
+    · exact zip_self_sim l q hq
+
+theorem cell_sim {n j : Nat} (ih : SimBelow n) (hj : j ≤ n) {t t' S S' p p' q : Term}
+    (h : Run .cell (.app (.app t S) p) q j) (ht : Sim t t') (hS : Sim S S') (hSs : Settled S)
+    (hp : Sim p p') : ∃ q' j', Run .cell (.app (.app t' S') p') q' j' ∧ Sim q q' ∧ Within j j' := by
+  have hsub : Sim (t.substitute (single S)) (t'.substitute (single S')) :=
+    ht.subst (sim_single hS) (settled_single hSs)
+  cases h with
+  | cellValue hset => exact ⟨_, 0, .cellValue (Sim.ready_fwd hset hsub), hsub, Within.zero⟩
+  | cellKeep hn hset hne =>
+    refine ⟨p', 0, .cellKeep (fun c => hn (Sim.ready_bwd c hsub)) (Sim.ready_fwd hset hp) ?_, hp, Within.zero⟩
+    intro e; subst e; exact hne (sim_skipped_left hp)
+  | cellWait hn =>
+    rw [sim_skipped_right hp]
+    exact ⟨skipped, 0, .cellWait (fun c => hn (Sim.ready_bwd c hsub)), .refl _, Within.zero⟩
+  | cellEval hn e =>
+    rw [sim_skipped_right hp]
+    obtain ⟨v', j', r, sv, b⟩ := ih .eval _ (by omega) hsub e
+    exact ⟨v', j' + 1, .cellEval (fun c => hn (Sim.ready_bwd c hsub)) r, sv, by unfold Within at *; omega⟩
+
+theorem wave_sim {n : Nat} (ih : SimBelow n) {S S' : Term} (hS : Sim S S') (hSs : Settled S) :
+    ∀ {fs fs' ps ps' : List (String × Term)} {P : Term} {j : Nat},
+      Run .wave (.app (.app (.record fs) S) (.record ps)) P j → j ≤ n →
+      fs.map Prod.fst = fs'.map Prod.fst → (∀ q ∈ fs.zip fs', Sim q.1.2 q.2.2) →
+      ps.map Prod.fst = ps'.map Prod.fst → (∀ q ∈ ps.zip ps', Sim q.1.2 q.2.2) →
+      ∃ P' j', Run .wave (.app (.app (.record fs') S') (.record ps')) P' j' ∧ Sim P P' ∧ Within j j'
+  | [], fs', ps, ps', P, j, h, _, nf, _, np, _ => by
+    cases h
+    cases fs' with
+    | cons _ _ => simp at nf
+    | nil =>
+      cases ps' with
+      | cons _ _ => simp at np
+      | nil => exact ⟨_, 0, .waveNil, .refl _, Within.zero⟩
+  | (n0, t) :: fs, fs', ps, ps', P, j, h, hj, nf, rf, np, rp => by
+    cases h with
+    | @waveCons _ _ _ p q _ ps0 qs k1 k2 hc hw =>
+      cases fs' with
+      | nil => simp at nf
+      | cons g fs' =>
+        cases ps' with
+        | nil => simp at np
+        | cons g' ps' =>
+          obtain ⟨gn, gt⟩ := g
+          obtain ⟨gn', gp⟩ := g'
+          simp only [List.map_cons, List.cons.injEq] at nf np
+          obtain ⟨rfl, nf⟩ := nf
+          obtain ⟨rfl, np⟩ := np
+          have rt : Sim t gt := rf ((n0, t), (n0, gt)) (by simp)
+          have rp0 : Sim p gp := rp ((n0, p), (n0, gp)) (by simp)
+          obtain ⟨q', j1, r1, s1, b1⟩ := cell_sim ih (by omega) hc rt hS hSs rp0
+          obtain ⟨P', j2, r2, s2, b2⟩ := wave_sim ih hS hSs hw (by omega) nf
+            (fun x hx => rf x (by simp [hx])) np (fun x hx => rp x (by simp [hx]))
+          obtain ⟨qs', rfl, nq, rq⟩ := sim_record_inv s2
+          refine ⟨_, _, .waveCons r1 r2, .record (by simp [nq]) ?_, Within.add b1 b2⟩
+          intro x hx
+          simp only [List.zip_cons_cons, List.mem_cons] at hx
+          rcases hx with rfl | hx
+          · exact s1
+          · exact rq x hx
+
+theorem knot_sim_aux {n : Nat} (ih : SimBelow n) {m : Mode} {a V : Term} {j : Nat} (h : Run m a V j) :
+    m = .knot → j ≤ n → ∀ {T S T' S' : Term}, a = .app T S → Sim T T' → Sim S S' → Settled S →
+      ∃ V' j', Run .knot (.app T' S') V' j' ∧ Sim V V' ∧ Within j j' := by
+  induction h with
+  | knotDone hP =>
+    intro _ _ T S T' S' e hT hS _
+    cases e
+    exact ⟨S', 0, .knotDone (Sim.ready_fwd hP hS), hS, Within.zero⟩
+  | @knotFirst fs P V k1 k2 hw hk _ ihk =>
+    intro _ hj T S T' S' e hT hS _
+    cases e
+    obtain ⟨fs', rfl, nf, rf⟩ := sim_record_inv hT
+    rw [sim_skipped_right hS]
+    obtain ⟨P', j1, r1, s1, b1⟩ := wave_sim ih (.refl skipped) .skipped hw (by omega) nf rf rfl
+      (zip_self_sim _)
+    have hP : Settled P := by
+      obtain ⟨qs, rfl, hq⟩ := run_produced hw
+      exact .value (.record hq)
+    obtain ⟨V', j2, r2, s2, b2⟩ := ihk rfl (by omega) rfl (.record nf rf) s1 hP
+    have e : pending fs' = pending fs := by unfold pending; rw [pending_names nf]
+    refine ⟨V', _, .knotFirst (by rw [e]; exact r1) r2, s2, Within.add b1 b2⟩
+  | @knotWave fs ps P V k1 k2 hw hk _ ihk =>
+    intro _ hj T S T' S' e hT hS hSs
+    cases e
+    obtain ⟨fs', rfl, nf, rf⟩ := sim_record_inv hT
+    obtain ⟨ps', rfl, np, rp⟩ := sim_record_inv hS
+    obtain ⟨P', j1, r1, s1, b1⟩ := wave_sim ih hS hSs hw (by omega) nf rf np rp
+    have hP : Settled P := by
+      obtain ⟨qs, rfl, hq⟩ := run_produced hw
+      exact .value (.record hq)
+    obtain ⟨V', j2, r2, s2, b2⟩ := ihk rfl (by omega) rfl (.record nf rf) s1 hP
+    exact ⟨V', _, .knotWave r1 r2, s2, Within.add b1 b2⟩
+  | knotUnroll hT0 hk ihk =>
+    intro _ hj T S T' S' e hT hS hSs
+    cases e
+    have hsub := hT.subst (sim_single hS) (settled_single hSs)
+    obtain ⟨V', j', r, sV, b⟩ := ihk rfl hj rfl hT hsub (Ready.substitute hT0 (settled_single hSs)).settled
+    exact ⟨V', j', .knotUnroll (Sim.ready_fwd hT0 hT) r, sV, b⟩
+  | _ => intro hm; cases hm
+
+theorem knot_sim {n j : Nat} (ih : SimBelow n) {T T' S S' V : Term} (h : Run .knot (.app T S) V j)
+    (hj : j ≤ n) (hT : Sim T T') (hS : Sim S S') (hSs : Settled S) :
+    ∃ V' j', Run .knot (.app T' S') V' j' ∧ Sim V V' ∧ Within j j' :=
+  knot_sim_aux ih h rfl hj rfl hT hS hSs
+
 /-! ## The simulation -/
 
-theorem sim_step {n : Nat} (ih : SimBelow n) {t t' v : Term} (hs : Sim t t') (h : CV t v n) :
-    ∃ v' n', CV t' v' n' ∧ Sim v v' ∧ Within n n' := by
+theorem run_value {r : Tail} {v : Term} (hv : CValue v) : Run (.tail r) v v 0 := by
+  cases r
+  · exact .value hv
+  · exact .headEval (.value hv)
+
+/-- One step of the simulation at cost `n`, in either tail mode; a template settled by evaluation
+(`headEval`) is the evaluation at the same cost, given as `heval`. -/
+theorem sim_step {r : Tail} {n : Nat} (ih : SimBelow n)
+    (heval : r = .head → ∀ {t t' v : Term}, Sim t t' → CV t v n → ∃ v' n', CV t' v' n' ∧ Sim v v' ∧ Within n n')
+    {t t' v : Term} (hs : Sim t t') (h : Run (.tail r) t v n) :
+    ∃ v' n', Run (.tail r) t' v' n' ∧ Sim v v' ∧ Within n n' := by
+  have hs0 := hs
+  have lift : ∀ {t t' v : Term}, Sim t t' → CV t v n → r = .head →
+      ∃ v' n', Run .head t' v' n' ∧ Sim v v' ∧ Within n n' := by
+    intro t t' v hs h e
+    obtain ⟨v', n', r', sv, b⟩ := heval e hs h
+    exact ⟨v', n', .headEval r', sv, b⟩
   by_cases hv : CValue t
-  · obtain ⟨rfl, rfl⟩ := cv_of_value hv h
-    exact ⟨t', 0, .value (Sim.ready_fwd hv hs), hs, by simp [Within]⟩
+  · obtain ⟨rfl, rfl⟩ := run_of_value hv h
+    exact ⟨t', 0, run_value (Sim.ready_fwd hv hs), hs, by simp [Within]⟩
   cases hs with
-  | hole n len rel => cases h with | value h0 => exact absurd h0 hv
-  | bound i => cases h with | value h0 => exact absurd h0 hv
+  | hole n len rel =>
+    cases h with
+    | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
+  | bound i =>
+    cases h with
+    | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
   | lam hb => exact absurd (.lam _) hv
   | nat m => exact absurd (.nat m) hv
   | boolean b => exact absurd (.boolean b) hv
   | label l => exact absurd (.label l) hv
-  | perform hp => cases h with | value h0 => exact absurd h0 hv
+  | perform hp =>
+    cases h with
+    | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
   | app hf ha =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | apply h1 h2 h3 =>
-      obtain ⟨w1, k1', r1, s1, b1⟩ := ih _ (by omega) hf h1
+      obtain ⟨w1, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hf h1
       obtain ⟨b', rfl, sb⟩ := sim_lam_inv s1
       obtain ⟨x', k2', r2, s2, b2⟩ := bind_sim ih (by omega) h2 ha
-      obtain ⟨v', k3', r3, s3, b3⟩ := ih _ (by omega) (Sim.instantiate sb s2 (bind_settled h2)) h3
+      obtain ⟨v', k3', r3, s3, b3⟩ := ih r _ (by omega) (Sim.instantiate sb s2 (bind_settled h2)) h3
       exact ⟨v', _, .apply r1 r2 r3, s3, by unfold Within at *; omega⟩
     | applySpec h1 h2 =>
-      obtain ⟨w1, k1', r1, s1, b1⟩ := ih _ (by omega) hf h1
+      obtain ⟨w1, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hf h1
       obtain ⟨m', e', rfl, _, se⟩ := sim_spec_inv s1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) (.app se ha) h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) (.app se ha) h2
       exact ⟨v', _, .applySpec r1 r2, s2, by unfold Within at *; omega⟩
   | mix hl hu =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | mix => exact ⟨_, 1, .mix _ _, sim_mixBody hl hu, by simp [Within]⟩
   | fix hs1 hi =>
     cases h with
     | value h0 => exact absurd h0 hv
-    | fixLet h1 =>
-      obtain ⟨V', k', r, sV, b⟩ := ih _ (by omega) (sim_selfBody hs1 hi) h1
-      refine ⟨_, _, .fixLet r, ?_, by unfold Within at *; omega⟩
-      exact sV.subst (sim_single (sim_knot sV)) (settled_single (knot_settled (cv_value h1)))
-    | fixSkip h1 =>
-      obtain ⟨V', k', r, sV, b⟩ := ih _ (by omega) (sim_selfBody hs1 hi) h1
-      refine ⟨_, _, .fixSkip r, ?_, by unfold Within at *; omega⟩
-      exact sV.subst (sim_single (.refl _)) (settled_single .skipped)
+    | headEval h' => exact lift hs0 h' rfl
+    | fix h1 h2 =>
+      obtain ⟨T', k1', r1, sT, b1⟩ := ih .head _ (by omega) (sim_selfBody hs1 hi) h1
+      obtain ⟨V', k2', r2, sV, b2⟩ := knot_sim ih h2 (by omega) sT (.refl _) .skipped
+      exact ⟨V', _, .fix r1 r2, sV, by unfold Within at *; omega⟩
   | specification hm he =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | specification hn h1 h2 =>
       obtain ⟨m', k1', r1, s1, b1⟩ := bind_sim ih (by omega) h1 hm
       obtain ⟨e', k2', r2, s2, b2⟩ := bind_sim ih (by omega) h2 he
@@ -283,6 +459,7 @@ theorem sim_step {n : Nat} (ih : SimBelow n) {t t' v : Term} (hs : Sim t t') (h 
   | prototype hm he =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | prototype hn h1 h2 =>
       obtain ⟨m', k1', r1, s1, b1⟩ := bind_sim ih (by omega) h1 hm
       obtain ⟨e', k2', r2, s2, b2⟩ := bind_sim ih (by omega) h2 he
@@ -291,6 +468,7 @@ theorem sim_step {n : Nat} (ih : SimBelow n) {t t' v : Term} (hs : Sim t t') (h 
   | inject l hp =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | inject hn h1 =>
       obtain ⟨p', k1', r1, s1, b1⟩ := bind_sim ih (by omega) h1 hp
       exact ⟨_, _, .inject (fun c => hn (Sim.ready_bwd c (.inject l hp))) r1, .inject l s1,
@@ -298,129 +476,154 @@ theorem sim_step {n : Nat} (ih : SimBelow n) {t t' v : Term} (hs : Sim t t') (h 
   | reflect hp =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | reflect h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hp h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hp h1
       obtain ⟨s', g', rfl, ss, _⟩ := sim_proto_inv s1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) ss h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) ss h2
       exact ⟨v', _, .reflect r1 r2, s2, by unfold Within at *; omega⟩
   | metadata hp =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | metadata h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hp h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hp h1
       obtain ⟨m', e', rfl, sm, _⟩ := sim_spec_inv s1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) sm h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) sm h2
       exact ⟨v', _, .metadata r1 r2, s2, by unfold Within at *; omega⟩
   | project hp =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | project h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hp h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hp h1
       obtain ⟨s', g', rfl, _, sg⟩ := sim_proto_inv s1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) sg h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) sg h2
       exact ⟨v', _, .project r1 r2, s2, by unfold Within at *; omega⟩
   | binary op hl hr =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | binary h1 h2 hit =>
       obtain ⟨ll, lr, _⟩ := primitiveResult_literal hit
-      obtain ⟨w1, k1', r1, s1, b1⟩ := ih _ (by omega) hl h1
-      obtain ⟨w2, k2', r2, s2, b2⟩ := ih _ (by omega) hr h2
+      obtain ⟨w1, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hl h1
+      obtain ⟨w2, k2', r2, s2, b2⟩ := ih .eval _ (by omega) hr h2
       rw [sim_literal_inv ll s1] at r1
       rw [sim_literal_inv lr s2] at r2
       exact ⟨_, _, .binary r1 r2 hit, .refl _, by unfold Within at *; omega⟩
   | extend hi names rel =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | extend h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hi h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hi h1
       obtain ⟨inh', rfl, nI, rI⟩ := sim_record_inv s1
       obtain ⟨gs', k2', r2, nF, rF, b2⟩ := fields_sim ih h2 (by omega) names rel
       obtain ⟨n3, r3⟩ := extendFields_rel nI rI nF rF
       exact ⟨_, _, .extend r1 r2, .record n3 r3, by unfold Within at *; omega⟩
+    | headExtend h1 =>
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .head _ (by omega) hi h1
+      obtain ⟨inh', rfl, nI, rI⟩ := sim_record_inv s1
+      obtain ⟨n3, r3⟩ := extendFields_rel nI rI names rel
+      exact ⟨_, _, .headExtend r1, .record n3 r3, by unfold Within at *; omega⟩
   | record names rel =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | record hn h1 =>
       obtain ⟨gs', k1', r1, nF, rF, b1⟩ := fields_sim ih h1 (by omega) names rel
       exact ⟨_, _, .record (fun c => hn (Sim.ready_bwd c (.record names rel))) r1, .record nF rF,
         by unfold Within at *; omega⟩
+    | headRecord hn =>
+      exact ⟨_, 1, .headRecord (fun c => hn (Sim.ready_bwd c (.record names rel))), .record names rel,
+        by simp [Within]⟩
   | get name hg =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | get h1 hit h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hg h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hg h1
       obtain ⟨fs', rfl, n1, rl1⟩ := sim_record_inv s1
       obtain ⟨x', hit', sx⟩ := find_left n1 rl1 hit
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) sx h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) sx h2
       exact ⟨v', _, .get r1 hit' r2, s2, by unfold Within at *; omega⟩
   | ifZero hc hz hsb =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | zero h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hc h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hc h1
       rw [sim_literal_inv (.nat 0) s1] at r1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) hz h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) hz h2
       exact ⟨v', _, .zero r1 r2, s2, by unfold Within at *; omega⟩
     | succ h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hc h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hc h1
       rw [sim_literal_inv (.nat _) s1] at r1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) (Sim.instantiate hsb (.nat _) (.value (.nat _))) h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) (Sim.instantiate hsb (.nat _) (.value (.nat _))) h2
       exact ⟨v', _, .succ r1 r2, s2, by unfold Within at *; omega⟩
   | case hsc names rel =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | case h1 hit h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hsc h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hsc h1
       obtain ⟨p', rfl, sp⟩ := sim_inject_inv s1
       obtain ⟨body', hit', sb⟩ := find_left names rel hit
       obtain ⟨v', k2', r2, s2, b2⟩ :=
-        ih _ (by omega) (Sim.instantiate sb sp (inject_value_payload (cv_value h1))) h2
+        ih r _ (by omega) (Sim.instantiate sb sp (inject_value_payload (cv_value h1))) h2
       exact ⟨v', _, .case r1 hit' r2, s2, by unfold Within at *; omega⟩
   | ifBool hc hx hy =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | ifTrue h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hc h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hc h1
       rw [sim_literal_inv (.boolean true) s1] at r1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) hx h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) hx h2
       exact ⟨v', _, .ifTrue r1 r2, s2, by unfold Within at *; omega⟩
     | ifFalse h1 h2 =>
-      obtain ⟨w, k1', r1, s1, b1⟩ := ih _ (by omega) hc h1
+      obtain ⟨w, k1', r1, s1, b1⟩ := ih .eval _ (by omega) hc h1
       rw [sim_literal_inv (.boolean false) s1] at r1
-      obtain ⟨v', k2', r2, s2, b2⟩ := ih _ (by omega) hy h2
+      obtain ⟨v', k2', r2, s2, b2⟩ := ih r _ (by omega) hy h2
       exact ⟨v', _, .ifFalse r1 r2, s2, by unfold Within at *; omega⟩
   | done hd =>
     cases h with
     | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
     | done h1 =>
-      obtain ⟨v', k1', r1, s1, b1⟩ := ih _ (by omega) hd h1
+      obtain ⟨v', k1', r1, s1, b1⟩ := ih r _ (by omega) hd h1
       exact ⟨v', _, .done r1, s1, by unfold Within at *; omega⟩
   | assocLR ha hb hc =>
-    obtain ⟨rfl, rfl⟩ := cv_mix h
-    refine ⟨_, 1, .mix _ _, ?_, by simp [Within]⟩
-    simp only [mixBody, Term.rename]
-    exact .lam (.lam (.bodyLR (.bound 1) (ha.rename _) (hb.rename _) (hc.rename _) (.bound 1) (.bound 0)))
+    cases h with
+    | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
+    | mix =>
+      refine ⟨_, 1, .mix _ _, ?_, by simp [Within]⟩
+      simp only [mixBody, Term.rename]
+      exact .lam (.lam (.bodyLR (.bound 1) (ha.rename _) (hb.rename _) (hc.rename _) (.bound 1) (.bound 0)))
   | assocRL ha hb hc =>
-    obtain ⟨rfl, rfl⟩ := cv_mix h
-    refine ⟨_, 1, .mix _ _, ?_, by simp [Within]⟩
-    simp only [mixBody, Term.rename]
-    exact .lam (.lam (.bodyRL (.bound 1) (ha.rename _) (hb.rename _) (hc.rename _) (.bound 1) (.bound 0)))
+    cases h with
+    | value h0 => exact absurd h0 hv
+    | headEval h' => exact lift hs0 h' rfl
+    | mix =>
+      refine ⟨_, 1, .mix _ _, ?_, by simp [Within]⟩
+      simp only [mixBody, Term.rename]
+      exact .lam (.lam (.bodyRL (.bound 1) (ha.rename _) (hb.rename _) (hc.rename _) (.bound 1) (.bound 0)))
   | bodyLR hset ha hb hc hss hu => exact bodyLR_case ih hset ha hb hc hss hu h
   | bodyRL hset ha hb hc hss hu => exact bodyRL_case ih hset ha hb hc hss hu h
 
 theorem sim_below : ∀ n, SimBelow n
-  | 0 => fun j hj => absurd hj (Nat.not_lt_zero _)
-  | n + 1 => fun j hj _ _ _ hs h => by
+  | 0 => fun _ j hj => absurd hj (Nat.not_lt_zero _)
+  | n + 1 => fun r j hj _ _ _ hs h => by
     rcases Nat.lt_succ_iff_lt_or_eq.1 hj with lt | rfl
-    · exact sim_below n j lt hs h
-    · exact sim_step (sim_below j) hs h
+    · exact sim_below n r j lt hs h
+    · exact sim_step (sim_below j) (fun _ {_ _ _} hs h => sim_step (sim_below j) (fun e' => by cases e') hs h) hs h
 
 /-- **`Sim` is a cost simulation**: a derivation of cost `k` is matched by one of cost at most
 `8k` (and `8k - 7` when `k > 0`), with related results. -/
 theorem sim_cv {t t' v : Term} {k : Nat} (hs : Sim t t') (h : CV t v k) :
     ∃ v' k', CV t' v' k' ∧ Sim v v' ∧ k' + 7 * min k 1 ≤ 8 * k :=
-  sim_below (k + 1) k (Nat.lt_succ_self k) hs h
+  sim_below (k + 1) .eval k (Nat.lt_succ_self k) hs h
 
 /-! ## `≈c` -/
 

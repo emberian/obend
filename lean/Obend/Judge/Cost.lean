@@ -18,6 +18,7 @@ language's. The judge never refutes: a rejected certificate says nothing about t
 -/
 public import Obend.Judge.Class
 public import Obend.Equiv.Cost
+public import Obend.Equiv.Demand
 public import Obend.Core.TermTraverse
 
 public section
@@ -164,35 +165,107 @@ theorem runSteps_sound : ∀ (steps : List Step) {t t' : Term}, runSteps t steps
       exact ⟨CostWithin.trans s1 r1, by have := CostWithin.trans r2 s2; rwa [Nat.mul_comm] at this⟩
     · cases h
 
+/-! ## Parallel rounds: a flat factor per round -/
+
+/-- Directional improvement within a factor (Moran–Sands Def. 4.1, one way): in every substitution
+and context, the candidate `t'` costs at most `A` times the original `t`, with the same literal
+result. -/
+def Improves (A : Nat) (t t' : Term) : Prop := CostWithin A t t'
+
+/-- One association to re-associate, and which way. -/
+structure Assoc where
+  a : Term
+  b : Term
+  c : Term
+  leftToRight : Bool
+
+def Assoc.source (s : Assoc) : Term := if s.leftToRight then .mix (.mix s.a s.b) s.c else .mix s.a (.mix s.b s.c)
+def Assoc.target (s : Assoc) : Term := if s.leftToRight then .mix s.a (.mix s.b s.c) else .mix (.mix s.a s.b) s.c
+
+/-- One round: a context whose indices `0 … n-1` are holes, and an association for each, all
+re-associated at once. -/
+structure Round where
+  context : Term
+  assocs : List Assoc
+
+/-- The `n`-th hole's filler, one side; the context's other free indices are shifted down. -/
+def pick (l : List Assoc) (side : Assoc → Term) (n : Nat) : Term :=
+  match l[n]? with
+  | some s => side s
+  | none => .bound (n - l.length)
+
+def Round.source (r : Round) : Term := r.context.substitute (pick r.assocs Assoc.source)
+def Round.target (r : Round) : Term := r.context.substitute (pick r.assocs Assoc.target)
+
+theorem pick_sim (l : List Assoc) (ρ : Nat → Term) (n : Nat) :
+    Sim ((pick l Assoc.source n).substitute ρ) ((pick l Assoc.target n).substitute ρ) := by
+  unfold pick
+  split
+  · rename_i s _
+    cases hd : s.leftToRight <;> simp only [Assoc.source, Assoc.target, hd, Bool.false_eq_true, ite_true,
+      ite_false, Term.substitute]
+    · exact .assocRL (.refl _) (.refl _) (.refl _)
+    · exact .assocLR (.refl _) (.refl _) (.refl _)
+  · exact .refl _
+
+/-- **A round is within a flat 8**, however many associations it re-associates. -/
+theorem Round.sound (r : Round) : Improves 8 r.source r.target := by
+  refine CostWithin.of_sim fun ρ => ?_
+  simp only [Round.source, Round.target, substitute_comp]
+  exact Sim.substRefl r.context (pick_sim r.assocs ρ)
+
+/-- Run the rounds from a term: each must start where the previous one ended. -/
+def runRounds : Term → List Round → Option Term
+  | t, [] => some t
+  | t, r :: rest => if termBeq t r.source then runRounds r.target rest else none
+
+theorem runRounds_sound : ∀ (rounds : List Round) {t t' : Term}, runRounds t rounds = some t' →
+    Improves (8 ^ rounds.length) t t'
+  | [], t, t', h => by
+    simp only [runRounds, Option.some.injEq] at h
+    subst h
+    exact CostWithin.refl t
+  | r :: rest, t, t', h => by
+    simp only [runRounds] at h
+    split at h
+    · rename_i hb
+      have e := termBeq_sound hb
+      subst e
+      have f : 8 ^ (r :: rest).length = 8 ^ rest.length * 8 := by
+        simp [List.length_cons, Nat.pow_succ]
+      rw [f]
+      exact CostWithin.trans r.sound (runRounds_sound rest h)
+    · cases h
+
 /-! ## The judge -/
 
 /-- Why a certificate is rejected. -/
 inductive Clause where
-  /-- step `i` does not start where the previous one ended -/
+  /-- round `i` does not start where the previous one ended -/
   | stepMismatch
-  /-- the steps end elsewhere than the candidate -/
+  /-- the rounds end elsewhere than the candidate -/
   | endMismatch
   deriving DecidableEq, Repr
 
-def check (r : Nat) (o : Term × Term) (steps : List Step) : Verdict Clause :=
-  if steps.length ≤ r then
-    match runSteps o.1 steps with
+def check (r : Nat) (o : Term × Term) (rounds : List Round) : Verdict Clause :=
+  if rounds.length ≤ r then
+    match runRounds o.1 rounds with
     | some t => if termBeq t o.2 then .ok else .refused .endMismatch []
     | none => .refused .stepMismatch []
   else .uncovered
 
-/-- What an accepted certificate establishes: the charge difference, both ways. -/
-def Meaning (o : Term × Term) (steps : List Step) : Prop :=
-  CostWithin (8 ^ steps.length) o.1 o.2 ∧ CostWithin (8 ^ steps.length) o.2 o.1
+/-- What an accepted certificate establishes: the candidate improves on the original within `8`
+per round. -/
+def Meaning (o : Term × Term) (rounds : List Round) : Prop := Improves (8 ^ rounds.length) o.1 o.2
 
 /-- **The improvement judge.** Objects are an original term and a candidate; certificates are
-re-association derivations; the grade bounds their length. -/
-instance improvement : Judge (Term × Term) (List Step) where
+rounds of parallel re-association; the grade bounds the number of rounds. -/
+instance improvement : Judge (Term × Term) (List Round) where
   Clause := Clause
   Meaning := Meaning
   check := check
   sound := by
-    intro r o steps h
+    intro r o rounds h
     simp only [check] at h
     split at h
     · split at h
@@ -201,34 +274,33 @@ instance improvement : Judge (Term × Term) (List Step) where
         · rename_i hb
           have e := termBeq_sound hb
           subst e
-          exact runSteps_sound steps ht
+          exact runRounds_sound rounds ht
         · cases h
       · cases h
     · cases h
   refutes _ := false
   refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment o := ∃ steps, runSteps o.1 steps = some o.2
+  Fragment o := ∃ rounds, runRounds o.1 rounds = some o.2
   complete := by
-    rintro o ⟨steps, hrun⟩ _
-    exact ⟨steps, steps.length, by simp [check, hrun, termBeq_refl]⟩
+    rintro o ⟨rounds, hrun⟩ _
+    exact ⟨rounds, rounds.length, by simp [check, hrun, termBeq_refl]⟩
   mono := by
-    intro r r' o steps le hne
+    intro r r' o rounds le hne
     simp only [check] at hne ⊢
     split at hne
     · rename_i h; simp [Nat.le_trans h le, h]
     · exact absurd rfl hne
 
-/-- **A member's charge difference is a theorem**: an accepted rewrite bounds the clairvoyant cost
-of the candidate by `8 ^ n` times the original's, in every context, with the same literal result
-(and the original by the candidate's, the same way). -/
-theorem charge_bound {r : Nat} {t t' : Term} {steps : List Step}
-    (h : improvement.check r (t, t') steps = .ok) (ρ : Nat → Term) (C v : Term) (k : Nat)
+/-- **A member's charge is a theorem**: an accepted rewrite bounds the clairvoyant cost of the
+candidate by `8` per round times the original's, in every context, with the same literal result. -/
+theorem charge_bound {r : Nat} {t t' : Term} {rounds : List Round}
+    (h : improvement.check r (t, t') rounds = .ok) (ρ : Nat → Term) (C v : Term) (k : Nat)
     (run : CV (instantiate C (t.substitute ρ)) v k) :
-    ∃ v' k', CV (instantiate C (t'.substitute ρ)) v' k' ∧ k' ≤ 8 ^ steps.length * k ∧
+    ∃ v' k', CV (instantiate C (t'.substitute ρ)) v' k' ∧ k' ≤ 8 ^ rounds.length * k ∧
       (Literal v → v' = v) :=
-  (improvement.sound h).1 ρ C v k run
+  (improvement.sound h) ρ C v k run
 
-/-! ## A certificate, accepted and planted -/
+/-! ## Certificates, accepted and planted -/
 
 /-- `mix (mix (mix 1 2) 3) 4`, re-associated in two steps to `mix 1 (mix 2 (mix 3 4))`. -/
 def original : Term := .mix (.mix (.mix (.nat 1) (.nat 2)) (.nat 3)) (.nat 4)
@@ -238,22 +310,164 @@ def twoSteps : List Step :=
   [⟨.bound 0, .mix (.nat 1) (.nat 2), .nat 3, .nat 4, true⟩,
    ⟨.bound 0, .nat 1, .nat 2, .mix (.nat 3) (.nat 4), true⟩]
 
-theorem twoSteps_accepted : check 2 (original, candidate) twoSteps = .ok := by
-  simp [check, runSteps, twoSteps, original, candidate, Step.source, Step.target, Step.left, Step.right,
+theorem twoSteps_accepted : runSteps original twoSteps = some candidate := by
+  simp [runSteps, twoSteps, original, candidate, Step.source, Step.target, Step.left, Step.right,
     instantiate, Term.substitute, termBeq, encode, treeBeq, listBeq]
 
-/-- Its meaning: within a factor of 64 both ways. -/
+/-- Sequential steps, both ways: within a factor of 64. -/
 theorem original_candidate : CostWithin 64 original candidate ∧ CostWithin 64 candidate original :=
-  improvement.sound (r := 2) twoSteps_accepted
+  runSteps_sound twoSteps twoSteps_accepted
 
-/-- A planted bad certificate: the second step re-associates the wrong way round. -/
+/-- A planted bad sequence: the second step re-associates the wrong way round. -/
 def badSteps : List Step :=
   [⟨.bound 0, .mix (.nat 1) (.nat 2), .nat 3, .nat 4, true⟩,
    ⟨.bound 0, .nat 1, .nat 2, .mix (.nat 3) (.nat 4), false⟩]
 
-theorem badSteps_refused : check 2 (original, candidate) badSteps = .refused .stepMismatch [] := by
-  simp [check, runSteps, badSteps, original, Step.source, Step.target, Step.left, Step.right,
+theorem badSteps_refused : runSteps original badSteps = none := by
+  simp [runSteps, badSteps, original, Step.source, Step.target, Step.left, Step.right,
     instantiate, Term.substitute, termBeq, encode, treeBeq, listBeq]
+
+/-- The same rewrite as two rounds (the second association exists only after the first). -/
+def twoRounds : List Round :=
+  [⟨.bound 0, [⟨.mix (.nat 1) (.nat 2), .nat 3, .nat 4, true⟩]⟩,
+   ⟨.bound 0, [⟨.nat 1, .nat 2, .mix (.nat 3) (.nat 4), true⟩]⟩]
+
+theorem twoRounds_accepted : check 2 (original, candidate) twoRounds = .ok := by
+  simp [check, runRounds, twoRounds, original, candidate, Round.source, Round.target, pick, Assoc.source,
+    Assoc.target, Term.substitute, termBeq, encode, treeBeq, listBeq]
+
+theorem original_improves : Improves 64 original candidate :=
+  improvement.sound (r := 2) twoRounds_accepted
+
+/-- Two independent associations in one record. -/
+def pairOriginal : Term :=
+  .record [("x", .mix (.mix (.nat 1) (.nat 2)) (.nat 3)), ("y", .mix (.mix (.nat 4) (.nat 5)) (.nat 6))]
+def pairCandidate : Term :=
+  .record [("x", .mix (.nat 1) (.mix (.nat 2) (.nat 3))), ("y", .mix (.nat 4) (.mix (.nat 5) (.nat 6)))]
+
+/-- Both re-associated in one round. -/
+def pairRound : List Round :=
+  [⟨.record [("x", .bound 0), ("y", .bound 1)],
+    [⟨.nat 1, .nat 2, .nat 3, true⟩, ⟨.nat 4, .nat 5, .nat 6, true⟩]⟩]
+
+theorem pairRound_accepted : check 1 (pairOriginal, pairCandidate) pairRound = .ok := by
+  simp [check, runRounds, pairRound, pairOriginal, pairCandidate, Round.source, Round.target, pick,
+    Assoc.source, Assoc.target, Term.substitute, termBeq, encode, treeBeq, listBeq]
+
+/-- **A flat factor**: two re-associations in one round cost a factor of 8, where two sequential
+steps cost 64. -/
+theorem pair_flat : Improves 8 pairOriginal pairCandidate := by
+  have h : Meaning (pairOriginal, pairCandidate) pairRound := improvement.sound (r := 1) pairRound_accepted
+  exact h
+
+/-- A planted bad round: the second association is the wrong way round. -/
+def badRound : List Round :=
+  [⟨.record [("x", .bound 0), ("y", .bound 1)],
+    [⟨.nat 1, .nat 2, .nat 3, true⟩, ⟨.nat 4, .nat 5, .nat 6, false⟩]⟩]
+
+theorem badRound_refused : check 1 (pairOriginal, pairCandidate) badRound = .refused .stepMismatch [] := by
+  simp [check, runRounds, badRound, pairOriginal, Round.source, pick, Assoc.source,
+    Term.substitute, termBeq, encode, treeBeq, listBeq]
+
+/-! ## The cost judge: a demand run as the certificate -/
+
+open Obend.Equiv.Demand (FE obj demand demand_exists demand_minimal)
+
+/-- A certificate that `t` costs at most `k`: `t` is the selection of `field` from the object with
+these fields, whose demand run is total. -/
+structure DemandCert where
+  fields : List (String × FE)
+  field : String
+
+inductive CostClause where
+  /-- the term is not the certificate's selection -/
+  | notTheProgram
+  /-- two fields share a name -/
+  | duplicateField
+  /-- the selection has no demand run: no derivation exists -/
+  | noDemand
+  /-- the demand exceeds the bound: no derivation is that cheap -/
+  | overBudget
+  deriving DecidableEq, Repr
+
+def costCheck (_ : Nat) (o : Term × Nat) (c : DemandCert) : Verdict CostClause :=
+  if termBeq o.1 (.get (obj c.fields) c.field) then
+    if (c.fields.map Prod.fst).Nodup then
+      match demand c.fields c.field with
+      | some (_, n) => if n ≤ o.2 then .ok else .refused .overBudget []
+      | none => .refused .noDemand []
+    else .refused .duplicateField []
+  else .refused .notTheProgram []
+
+def costRefutes : CostClause → Bool
+  | .noDemand | .overBudget => true
+  | _ => false
+
+/-- **The cost judge.** Objects are a term and a bound; a certificate names the object and the
+field; the checker runs the demand semantics, which is total, so `cost t ≤ k` is checkable, and a
+demand above `k` (or none) refutes it, by minimality. -/
+instance cost : Judge (Term × Nat) DemandCert where
+  Clause := CostClause
+  Meaning o _ := CostAtMost o.1 o.2
+  check := costCheck
+  sound := by
+    intro r o c h
+    simp only [costCheck] at h
+    split at h
+    · rename_i hb
+      have e := termBeq_sound hb
+      split at h
+      · rename_i nd
+        split at h
+        · rename_i v n hd
+          split at h
+          · rename_i le
+            rw [e]
+            exact ⟨_, n, demand_exists nd hd, le⟩
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  refutes := costRefutes
+  refuted := by
+    intro r o c k p h hk c' hm
+    obtain ⟨w, j, run, le⟩ := hm
+    simp only [costCheck] at h
+    split at h
+    · rename_i hb
+      have e := termBeq_sound hb
+      rw [e] at run
+      split at h
+      · rename_i nd
+        obtain ⟨v, n, hd, _, low⟩ := demand_minimal nd run
+        split at h
+        · rename_i v' n' hd'
+          split at h
+          · cases h
+          · rename_i gt
+            rw [hd] at hd'; cases hd'
+            exact gt (by omega)
+        · rename_i hd'
+          rw [hd] at hd'; cases hd'
+      · cases h; simp [costRefutes] at hk
+    · cases h; simp [costRefutes] at hk
+  Fragment o := ∃ fs x, (fs.map Prod.fst).Nodup ∧ o.1 = .get (obj fs) x
+  complete := by
+    rintro o ⟨fs, x, nd, e⟩ ⟨_, w, j, run, le⟩
+    rw [e] at run
+    obtain ⟨v, n, hd, _, low⟩ := demand_minimal nd run
+    refine ⟨⟨fs, x⟩, 0, ?_⟩
+    simp only [costCheck, e, termBeq_refl, ite_true, nd, hd]
+    simp [show n ≤ o.2 by omega]
+  mono := by
+    intro r r' o c _ _
+    rfl
+
+/-- `{a = 7, b = self.a}.b` costs at most 7, checked; at most 6 is refuted. -/
+theorem selfField_cost_checked :
+    costCheck 0 (.get CostTests.selfField "b", 7) ⟨Demand.selfFieldFields, "b"⟩ = .ok ∧
+      costCheck 0 (.get CostTests.selfField "b", 6) ⟨Demand.selfFieldFields, "b"⟩ = .refused .overBudget [] := by
+  constructor <;> simp [costCheck, Demand.selfField_is_obj, termBeq_refl] <;> decide
 
 end Obend.Judge.Cost
 end

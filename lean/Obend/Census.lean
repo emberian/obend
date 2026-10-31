@@ -195,6 +195,7 @@ import Obend.Equiv.Behaviour
 import Obend.Equiv.Clairvoyant
 import Obend.Equiv.Cost
 import Obend.Equiv.CostTests
+import Obend.Equiv.Demand
 import Obend.Equiv.FareTests
 import Obend.Equiv.Fields
 import Obend.Equiv.Quote
