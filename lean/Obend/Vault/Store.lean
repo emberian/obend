@@ -747,8 +747,8 @@ theorem post_needs_grant (H : Hash) (s : Store) (m : Member) (page text : String
 
 /-! ### Re-citing -/
 
-/-- Whether a cite holds at the store's world. -/
-def Store.citeHolds (H : Hash) (s : Store) (c : Cite) : Bool := (citeFacts c).all (holds H s.world)
+/-- Whether a cite holds at the store's world: the cite intention's `current` (`Obend.Doc.cites`). -/
+def Store.citeHolds (H : Hash) (s : Store) (c : Cite) : Bool := (cites H).current s.world c
 
 /-- What an atom should hold now: a cite re-justified against its source's current version, or a
 dangling wikilink resolved; `none` when it is fine as it is. -/

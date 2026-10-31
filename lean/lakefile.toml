@@ -11,7 +11,7 @@ defaultTargets = ["Obend"]
 [[lean_lib]]
 name = "Obend"
 globs = [
-  "Obend", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Fold", "Obend.Just", "Obend.Main",
+  "Obend", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Fold", "Obend.Intention", "Obend.Just", "Obend.Main",
   "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Judge.*",
   "Obend.Law.*", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
   "Obend.Vault.*",

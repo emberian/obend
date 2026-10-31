@@ -28,11 +28,18 @@ pinned cite run usable before its source moves is usable after; so is an identit
 changed reads `blocked` after its source moves, naming its `current` fact; and re-citing the new
 version (`recite`) makes its facts hold again (`recite_holds`).
 
+A cite is an INTENTION (`Obend.Intention`): `cites H` resolves a cite's reference (`CiteRef`: page,
+span, mode) at a world by pinning it at the page's current version (`pinAt`); its supports are the
+cite's facts. `recite` is that intention's renewal (`recite_renew`), and `recite_holds`,
+`cite_stale_iff_blocked`, `pinned_cite_stays` and `following_cite_behind` are its generic
+theorems (`resolve_fill`, `stale_iff_blocked`, `stays`, `blocked_within`) at cites.
+
 The commitment is taken under any byte hash `H`; nothing here assumes anything of it. Teeth use a
 toy additive hash, which is as good as any for a statement that holds for every hash.
 -/
 public import Obend.Doc.Merge
 public import Obend.Slot
+public import Obend.Intention
 public import Obend.Digest.HashBytes
 @[expose] public section
 
@@ -167,6 +174,105 @@ def citeFacts (c : Cite) : List Fact :=
   | .identity, _ => [.present c.page]
   | _, .pinned => [.verifies c]
   | _, .following => [.verifies c, .current c]
+
+/-! ### The cite intention -/
+
+/-- What a cite refers to before it is pinned to a version: a page, a span of it, how it tracks it. -/
+structure CiteRef where
+  page : PageId
+  span : Span
+  mode : Mode
+deriving DecidableEq, Repr
+
+/-- The reference a cite resolves. -/
+def Cite.ref (c : Cite) : CiteRef := ⟨c.page, c.span, c.mode⟩
+
+/-- The bytes a reference's span quotes at its page's current version. -/
+def currentQuote (W : World) (r : CiteRef) : Option (List UInt8) :=
+  (W.current r.page).bind fun G => quoteOf G r.span
+
+/-- The cite of `r` at its page's current version, its bytes committed under `H`. -/
+def pinAt (H : Hash) (W : World) (r : CiteRef) : Cite :=
+  ⟨r.page, r.span, (W r.page).length - 1, H ((currentQuote W r).getD []), r.mode⟩
+
+/-- A cite pinned at a world where its page has a version, and (for a byte cite) its span quotes
+bytes, has every fact it cites hold there. -/
+theorem pinAt_holds (H : Hash) (W : World) (r : CiteRef) (hne : W r.page ≠ [])
+    (hq : r.span = .identity ∨ (currentQuote W r).isSome = true) :
+    ∀ f ∈ citeFacts (pinAt H W r), holds H W f = true := by
+  have hlen : 0 < (W r.page).length := List.length_pos_iff.2 hne
+  have hq' : quoted W (pinAt H W r) = currentQuote W r := by
+    simp only [quoted, currentQuote, pinAt, World.current, List.getLast?_eq_getElem?]
+  have hl : latestQuote W (pinAt H W r) = currentQuote W r := by simp [latestQuote, currentQuote, pinAt]
+  have hps : (pinAt H W r).span = r.span := rfl
+  have hpm : (pinAt H W r).mode = r.mode := rfl
+  have hpp : (pinAt H W r).page = r.page := rfl
+  intro f hf
+  unfold citeFacts at hf
+  cases hs : r.span with
+  | identity =>
+    simp only [hps, hpp, hs, List.mem_cons, List.not_mem_nil, or_false] at hf; subst hf
+    simp [holds, pinAt, hne]
+  | page | block _ | bytes _ =>
+    have : (currentQuote W r).isSome = true := hq.resolve_left (by simp [hs])
+    obtain ⟨b, hb⟩ := Option.isSome_iff_exists.1 this
+    have hv : holds H W (.verifies (pinAt H W r)) = true := by
+      simp only [holds, hq', hb]; simp [pinAt, hb]
+    have hc : holds H W (.current (pinAt H W r)) = true := by
+      simp only [holds, hq', hl, hb, beq_self_eq_true]
+    cases hmo : r.mode with
+    | pinned =>
+      simp only [hps, hpm, hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
+      rw [hf]; exact hv
+    | following =>
+      simp only [hps, hpm, hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
+      rcases hf with rfl | rfl
+      · exact hv
+      · exact hc
+
+/-- Why a cite cannot be pinned at a world: its page has no version, or its span quotes nothing
+there. -/
+inductive CiteRefusal
+  | missing (page : PageId)
+  | unquoted (page : PageId) (span : Span)
+deriving DecidableEq, Repr
+
+/-- Resolve a cite reference at a world: pin it at its page's current version, when the page has
+one and (for a byte cite) the span quotes bytes there. -/
+def resolveCite (H : Hash) (W : World) (r : CiteRef) : Except CiteRefusal Cite :=
+  if (W r.page).isEmpty then .error (.missing r.page)
+  else if r.span = .identity ∨ (currentQuote W r).isSome = true then .ok (pinAt H W r)
+  else .error (.unquoted r.page r.span)
+
+theorem resolveCite_ok {H : Hash} {W : World} {r : CiteRef} {c : Cite} (h : resolveCite H W r = .ok c) :
+    c = pinAt H W r ∧ W r.page ≠ [] ∧ (r.span = .identity ∨ (currentQuote W r).isSome = true) := by
+  unfold resolveCite at h
+  split at h
+  · cases h
+  · rename_i hne
+    split at h
+    · rename_i hq; cases h; exact ⟨rfl, by simpa using hne, hq⟩
+    · cases h
+
+theorem resolveCite_of {H : Hash} {W : World} {r : CiteRef} (hne : W r.page ≠ [])
+    (hq : r.span = .identity ∨ (currentQuote W r).isSome = true) : resolveCite H W r = .ok (pinAt H W r) := by
+  unfold resolveCite
+  have he : (W r.page).isEmpty = false := by simpa using hne
+  rw [if_neg (by simp [he]), if_pos hq]
+
+/-- **The cite intention** (`Obend.Intention`): a cite's reference resolved at a world of page
+histories. Its pins are cites, a pin cites its facts (`citeFacts`), the chooser is the cited page's
+owner (whoever writes its next version), and resolving is pinning at the current version. -/
+def cites (H : Hash) : Obend.Intention World CiteRef Cite Fact CiteRefusal where
+  ref := Cite.ref
+  supports := citeFacts
+  holds := holds H
+  resolve := resolveCite H
+  resolve_ref W r c h := by
+    obtain ⟨rfl, _, _⟩ := resolveCite_ok h; rfl
+  resolve_holds W r c h := by
+    obtain ⟨rfl, hne, hq⟩ := resolveCite_ok h
+    exact pinAt_holds H W r hne hq
 
 /-! ## The section -/
 
@@ -338,11 +444,22 @@ theorem pinned_cite_stays (H : Hash) {W W' : World} {p x : AtomId} {r : Run} {na
     (hm : SourceMoves W W' c.page) (hu : (sectionAt p x).usable (holds H W) r = true) :
     (sectionAt p x).usable (holds H W') r = true := by
   refine cite_run_stays H hr hq hm hu fun f hf hh => ?_
-  unfold citeFacts at hf
-  cases hs : c.span <;> simp only [hs, hpin, List.mem_cons, List.not_mem_nil, or_false] at hf <;>
-    subst hf
-  · exact present_stays H hm hh
-  all_goals exact verifies_stays H hm hh
+  -- the cite's own slot stays usable (`Obend.Intention.stays`): each of its facts survives the move
+  have keep : ∀ f ∈ (cites H).supports c, (cites H).holds W f = true → (cites H).holds W' f = true := by
+    intro f hf hh
+    show holds H W' f = true
+    change f ∈ citeFacts c at hf
+    unfold citeFacts at hf
+    cases hs : c.span <;> simp only [hs, hpin, List.mem_cons, List.not_mem_nil, or_false] at hf <;>
+      subst hf
+    · exact present_stays H hm hh
+    all_goals exact verifies_stays H hm hh
+  have hcur : (cites H).current W c = true := by
+    refine ((cites H).current_iff W c).2 fun g hg => ?_
+    have hall := ((usable_iff _ _ _).1 hu).2
+    exact hall g (by simp [sectionAt, Run.cites, hr]; exact .inr (.inr hg))
+  exact ((cites H).current_iff W' c).1
+    (((cites H).current_iff_usable rfl W').2 ((cites H).stays rfl keep (((cites H).current_iff_usable rfl W).1 hcur))) f hf
 
 /-- **An identity cite stays usable when its source moves**: it quotes no bytes, so no edit of the
 page puts it behind. -/
@@ -403,17 +520,13 @@ theorem following_cite_behind (H : Hash) {W W' : World} {p x : AtomId} {r : Run}
   have hfacts : Fact.current c ∈ citeFacts c := by
     unfold citeFacts
     cases hs : c.span <;> simp [hs, hfol] at hspan ⊢
-  have hmem : Fact.current c ∈ (sectionAt p x).dead (holds H W') r :=
-    (mem_dead_iff _ _ _ _).2 ⟨by simp [sectionAt, Run.cites, hr, hfacts], hcur'⟩
-  unfold Slot.read
-  simp only [hj, ite_true]
-  cases hd : (sectionAt p x).dead (holds H W') r with
-  | nil => rw [hd] at hmem; cases hmem
-  | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩
+  -- the cite's dead fact is named by the section that carries the cite (`Obend.Intention.blocked_within`)
+  exact (cites H).blocked_within (sectionAt p x) hj (p := c)
+    (fun f hf => by simp [sectionAt, Run.cites, hr]; exact .inr (.inr hf)) hfacts hcur'
 
-/-- Re-justify a cite against its source's current version (under the hash `H`). -/
-def recite (H : Hash) (W : World) (c : Cite) : Cite :=
-  { c with version := (W c.page).length - 1, commitment := H ((latestQuote W c).getD []) }
+/-- Re-justify a cite against its source's current version (under the hash `H`): its reference,
+pinned again at the world. -/
+def recite (H : Hash) (W : World) (c : Cite) : Cite := pinAt H W c.ref
 
 theorem recite_span (H : Hash) (W : World) (c : Cite) : (recite H W c).span = c.span := rfl
 theorem recite_mode (H : Hash) (W : World) (c : Cite) : (recite H W c).mode = c.mode := rfl
@@ -424,33 +537,27 @@ span, makes its facts hold there. -/
 theorem recite_holds (H : Hash) (W : World) (c : Cite) (hne : W c.page ≠ [])
     (hq : c.span = .identity ∨ (latestQuote W c).isSome = true) :
     ∀ f ∈ citeFacts (recite H W c), holds H W f = true := by
-  have hlen : 0 < (W c.page).length := List.length_pos_iff.2 hne
-  have hv : ((W c.page).length - 1) < (W c.page).length := by omega
-  have hq' : quoted W (recite H W c) = latestQuote W c := by
-    simp only [quoted, latestQuote, recite, World.current, List.getLast?_eq_getElem?]
-  have hl : latestQuote W (recite H W c) = latestQuote W c := by simp [latestQuote, recite]
-  intro f hf
-  unfold citeFacts at hf
-  cases hs : c.span with
-  | identity =>
-    simp only [recite_span, recite_page, hs, List.mem_cons, List.not_mem_nil, or_false] at hf; subst hf
-    simp [holds, hne]
-  | page | block _ | bytes _ =>
-    have : (latestQuote W c).isSome = true := hq.resolve_left (by simp [hs])
-    obtain ⟨b, hb⟩ := Option.isSome_iff_exists.1 this
-    have hv : holds H W (.verifies (recite H W c)) = true := by
-      simp only [holds, hq', hb]; simp [recite, hb]
-    have hc : holds H W (.current (recite H W c)) = true := by
-      simp only [holds, hq', hl, hb, beq_self_eq_true]
-    cases hmo : c.mode with
-    | pinned =>
-      simp only [recite_span, recite_mode, hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
-      rw [hf]; exact hv
-    | following =>
-      simp only [recite_span, recite_mode, hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
-      rcases hf with rfl | rfl
-      · exact hv
-      · exact hc
+  have h : (cites H).renew W c = .ok (recite H W c) := resolveCite_of (r := c.ref) hne hq
+  exact ((cites H).current_iff W _).1 ((cites H).renew_fill h).2.2
+
+/-- **`recite` is the intention's renewal**: re-citing a cite that can be pinned is renewing it. -/
+theorem recite_renew (H : Hash) {W : World} {c c' : Cite} (h : (cites H).renew W c = .ok c') :
+    c' = recite H W c := (resolveCite_ok h).1
+
+/-- **A re-cite is a usable fill of the cite's slot** (`Obend.Intention.renew_fill`): after
+`recite`, the cite's slot reads usable at the world. -/
+theorem recite_usable (H : Hash) {W : World} {c c' : Cite} (h : (cites H).renew W c = .ok c') :
+    ((cites H).slot c.ref).read (holds H W) (some c') =
+      .usable c' (((cites H).slot c.ref).evidence (holds H W) c') :=
+  (cites H).renew_repairs h
+
+/-- **Staleness of a cite is a blocked read** (`Obend.Intention.stale_iff_blocked`): a cite's facts
+fail at a world exactly when its slot's read there is blocked, naming exactly the failing facts. -/
+theorem cite_stale_iff_blocked (H : Hash) (W : World) (c : Cite) :
+    (cites H).current W c = false ↔
+      ((cites H).slot c.ref).read (holds H W) (some c) = .blocked c ((citeFacts c).filter fun f => !holds H W f) :=
+  (cites H).stale_iff_blocked rfl W
+
 
 /-! ### Teeth -/
 

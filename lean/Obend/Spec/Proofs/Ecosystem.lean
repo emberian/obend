@@ -80,43 +80,48 @@ public theorem turn_pins_every_root {v : View} {e : Release} {cl : Closure} (h :
       exact ⟨rfl, covered_none hc⟩
 
 /-- Resolving an intention is a fill of its slot: the pin passes the slot's judge, and the support
-it cites holds at the view it was resolved at. -/
+it cites holds at the view it was resolved at (`Obend.Intention.resolve_fill` for `packages`). -/
 public theorem resolve_fill {v : View} {n : String} {m : Nat} {r : Release} {p : Pin}
     (h : resolve v (.intention n m) = .ok (r, p)) :
     (intentionSlot n m).usable (holds v) p = true ∧ p.current v = true ∧ p.name = n ∧ r.major = m := by
-  simp only [resolve] at h
-  split at h
-  · cases h
-  · rename_i l hl
+  have hp : packages.resolve v (.intention n m) = .ok p := by
+    show (resolve v _).map _ = _; rw [h]; rfl
+  obtain ⟨href, hu, hc⟩ := packages.resolve_fill hp
+  refine ⟨hu, hc, ?_, ?_⟩
+  · cases p with
+    | intention n' _ _ _ _ => simp [packages, Pin.ref] at href; simp [Pin.name, href.1]
+    | extension _ _ => simp [packages, Pin.ref] at href
+  · simp only [resolve] at h
     split at h
     · cases h
-    · rename_i version hv
-      split at h
+    · split at h
       · cases h
-      · rename_i r' _
-        split at h
-        · rename_i hm
-          cases h
-          have hm' : r.major = m := by simpa using hm
-          refine ⟨?_, ?_, rfl, hm'⟩
-          · simp [Slot.usable, Slot.dead, intentionSlot, holds, hl, hv]
-          · simp [Pin.current, hl, hv]
+      · split at h
         · cases h
+        · split at h
+          · rename_i hm; cases h; simpa using hm
+          · cases h
 
 /-- **Staleness is a blocked slot read**: an intention pin is not current at a view exactly when the
-read of its slot there is blocked, naming its one support. -/
+read of its slot there is blocked, naming its one support (`Obend.Intention.stale_iff_blocked` for
+`packages`). -/
 public theorem stale_iff_blocked (v : View) (n : String) (m pin : Nat) (version hash : String) :
     (Pin.intention n m pin version hash).current v = false ↔
       (intentionSlot n m).read (holds v) (some (.intention n m pin version hash)) =
         .blocked (.intention n m pin version hash) [⟨n, m, pin, version⟩] := by
-  have hc : (Pin.intention n m pin version hash).current v = holds v ⟨n, m, pin, version⟩ := by
-    simp only [Pin.current, holds]
-  rw [hc]
+  have hg := packages.stale_iff_blocked (r := .intention n m) (p := .intention n m pin version hash) rfl v
+  unfold Pin.current intentionSlot
+  rw [hg]
   cases hh : holds v ⟨n, m, pin, version⟩ <;>
-    simp [Slot.read, Slot.dead, intentionSlot, hh]
+    simp [packages, Pin.supports, Pin.ref, hh, Obend.Intention.slot, Slot.read, Slot.dead]
 
 /-- An extension pin is current at every view: a hash is fixed forever. -/
 public theorem extension_current (v : View) (n h : String) : (Pin.extension n h).current v = true := rfl
+
+/-- A pin of an intention is current exactly when the record line it read still holds. -/
+theorem intention_current (v : View) (n : String) (m pin : Nat) (version hash : String) :
+    (Pin.intention n m pin version hash).current v = holds v ⟨n, m, pin, version⟩ := by
+  simp [Pin.current, Obend.Intention.current, packages, Pin.supports]
 
 /-- **Admission names a moved pin**: `stale p` only for a pin of the turn that is not current. -/
 public theorem admit_stale_names_moved {v : View} {t : Turn} {p : Pin} (h : admit v t = .stale p) :
@@ -188,7 +193,7 @@ public theorem moved_pin_stale_forever {v v' : View} (hr : Reaches Step v v') {n
     (Pin.intention n m pin version hash).current v' = false := by
   obtain ⟨l', h', hp, _⟩ := line_later hr hl
   have hne : l'.pin ≠ pin := by omega
-  simp [Pin.current, h', hne]
+  simp [intention_current, holds, h', hne]
 
 /-- **A retired line stays stale**: a pin of a line its owner retired is not current at any later
 view. -/
@@ -196,7 +201,7 @@ public theorem retired_stale_forever {v v' : View} (hr : Reaches Step v v') {n :
     {version hash : String} {l : RecordLine} (hl : v.line n m = some l) (hret : l.fill = none) :
     (Pin.intention n m pin version hash).current v' = false := by
   obtain ⟨l', h', _, hf⟩ := line_later hr hl
-  simp [Pin.current, h', hf hret]
+  simp [intention_current, holds, h', hf hret]
 
 /-- A turn pinning a line the record has moved past is refused `stale` at every later view. -/
 public theorem turn_stale_forever {v v' : View} (hr : Reaches Step v v') {t : Turn} {n : String}

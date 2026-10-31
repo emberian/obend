@@ -193,6 +193,7 @@ import Obend.Equiv.Fields
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
 import Obend.Fold
+import Obend.Intention
 import Obend.Judge
 import Obend.Judge.Certified
 import Obend.Judge.Class

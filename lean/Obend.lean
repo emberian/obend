@@ -25,6 +25,7 @@ public import Obend.Slot.World
 public import Obend.Slot.Integrity
 public import Obend.Slot.Budget
 public import Obend.Slot.Repair
+public import Obend.Intention
 public import Obend.Just
 public import Obend.Judge
 public import Obend.Receipt
