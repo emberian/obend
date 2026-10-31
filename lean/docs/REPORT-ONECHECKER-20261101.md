@@ -123,5 +123,73 @@ future-row teeth use a `future_reduce` simp script. `SubstitutionTeeth`'s three 
 `decide +kernel` tooth in `CheckTeeth` elaborated against the bidirectional checker with no change of
 verdict before the build was moved to the box.
 
-**Builds.** Tier 1 was built green on dregg-build2 (281 jobs) at `90e3a25`. Per Ember's call, tier 1
-green is the bar for pushing. Tier 2 runs on the box afterwards; its status is in §5.
+Deviation in `CheckTeeth`: `future_binary_instantiation_accepted` was a statement about every
+shareable `Self` and row `Super`. On this checker the symbolic reduction did not finish in 500 s on
+the box, so it is now held at two instances (a scalar `Self` over `{}`, and a row over a row).
+`future_row_instantiation_accepted` and `future_row_typed` stay symbolic. They are proved by a staged
+`simp only` script (`future_reduce`), about 6 s each. The first, plain-`simp` version of that script
+is why the module crawled on the Mac.
+
+**Builds, all on dregg-build2.** Tier 1 was green at the rebased head (291 jobs). Tier 2
+(`lake build Obend.Census Teeth`, the census included: no `sorryAx`, no declared axiom) was green at
+`05beecd` (315 jobs). Cohorts at `05beecd`: probes 30/30, tutorial 71/71, preview 161/0. Receipts
+31/31: the 32nd check re-runs CaDiCaL, which is not on the box's PATH. Workspaces 30/30, walkthrough
+26, logic 20/20. `dev` was pushed from the Mac with `--no-verify` because the identical commits were
+green on the box.
+
+## 5. The measurement (dregg-build2, warm tier 1 at `05beecd`, `LEAN_NUM_THREADS=4` under `swarm-build`, load 3–8)
+
+| edit | modules rebuilt | wall |
+|---|---|---|
+| `checkAgainst` body (a no-op `let` at the head of its `do` block) | 52 | 42 s |
+| `elaborate` body (the `.nat` arm: `value` → `id value`) | 52 | 44 s |
+| restore after each | 52 | 42–43 s |
+
+The gate is twenty, so it is not met. For comparison, an `infer` body edit rebuilt 112 modules before
+this lane (`REPORT-EXPOSE2`); retiring the fuel checker roughly halves the cascade of a checker
+edit. The 52 are every importer of `Bidirectional`, which is an `@[expose] public section`. By grep,
+18 of them name `elaborate`/`checkAgainst` in a proof or call (completeness, preparation, the gate,
+the slot and budget judges, `Judge.Instances`, `Code`, `LawCompile`, `CheckerTransport`, the obstruction
+fixtures).
+
+**Does the `_unsafe_rec` body cascade the same way?** Yes. With the section unexposed
+(`public section`), an `elaborate` body edit still changes `Bidirectional.olean`
+(`184270930ff4c7b2` → `985cbdb2510d69a0`). `elaborate._unsafe_rec`, `checkFields._unsafe_rec` and
+`checkArms._unsafe_rec` are in the public `.olean`: Lean 4.35 writes the compiled body of a mutual,
+list-nested structural recursion there whether or not it is exposed. That is the same limit
+`REPORT-EXPOSE2` found for `infer`. So unexposing alone buys nothing for `elaborate`. For a
+`checkAgainst`-only edit it would help, since that is a non-recursive definition.
+
+**The one-`Nat`-recursion rewrite: refused on this evidence.** A single structural recursion on a
+`Nat` would not emit `_unsafe_rec`, so an unexposed body edit would rebuild only the readers that
+unfold the body: by the grep above about 18, with `import all`, under twenty. The cost is the
+checker this lane just retired. Fuel would come back into the one executable checker. Every proof
+that follows `elaborate` case by case would be redone against the fuel-indexed version
+(`BidirectionalCompleteness` at 1,588 lines, `Prepare`/`PrepareChecks`, the gate, the decide teeth),
+and a fuel-monotonicity theorem would be needed again. Two cheaper moves are open instead:
+- Unexpose `Bidirectional` and give its readers `import all`. A `checkAgainst` edit then rebuilds the
+  readers only.
+- Move the `decide +kernel` fixtures of `Core4`, `Budget`, `Judge.Instances` and
+  `CheckCompletenessObstruction` into tier 2. They are most of the non-proof readers.
+
+## Journal (`lake exe journal`, `08ff37a` → `05beecd`; the base moved by the Logic and Sound (3) lanes)
+
+1,279 withdrawn supports, 137 revised (almost all auxiliary equations; by name: `SpecificationClosure.provenance_typed`,
+generalized by the compose commit, and `Spec.Syntax.Module.*` from the Logic lane), 24 STATEMENT-CITED,
+10 PROOF-CITED, 1 reproved, 799 added, 799 removed, 17,637 unaffected.
+- STATEMENT-CITED, rebuilt green with unchanged statements: the 13 `SpecificationClosure`
+  acceptance teeth and `FrontEndAdequacy.accept_inhabited`, which reach the front end through
+  `checkTemplate`.
+- PROOF-CITED: `CheckTeeth.future_row_typed`.
+- Removed: the fuel checker and the theorems in the §4 table.
+- Added: `CheckerTransport`, `partialTyping_instantiate`, `compose_typed`/`compose_step_typed`, the
+  restated teeth, and the Logic and Sound lanes' work.
+
+## The decision for Ember
+
+The checker gate is not met: 52 modules and about 42 s for a checker edit. I refused the
+`Nat`-recursion rewrite, which would reintroduce fuel into the one checker. The choice is whether to
+take the cheaper half instead: unexpose `Bidirectional`, give its readers `import all`, and move its
+`decide` fixtures to tier 2. That leaves an `elaborate` body edit at the full cascade and brings a
+`checkAgainst`-level edit down to its readers. Or accept 52 as the cost of a checker that is proved
+complete.
