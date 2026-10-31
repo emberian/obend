@@ -169,3 +169,9 @@ a person still sees every differing double posting refused by name.
 
 ## 7. Builds
 
+On hbox (`~/obend/ledger`, under `swarm-build`, 48G), at `e73e0f1` (the lane's code; this section is
+the only later change): tier 1 `lake build` green (310 jobs, cold); tier 2 `lake build Obend
+Obend.Census Teeth obend` green (524 jobs), the census `#assert_axioms_tree`: 39615 constants, none
+on sorryAx or a declared axiom, 27 on the compiler trust as before (none of them the ledger's). Tests
+on hbox and on the Mac: the ledger walkthrough 24/24, the vault walkthrough 26/26 (unchanged by the
+`suggest` edit), `tests/analysis/run-impact.py` 32/32.
