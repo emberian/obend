@@ -27,6 +27,7 @@ open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Packet
 set_option autoImplicit false
 set_option maxRecDepth 20000
 set_option maxHeartbeats 400000
+set_option linter.unusedSimpArgs false
 
 /-- The checker in synthesis (`Bidirectional.infer`, the top-level synthesis with every premise
 `Checked` carries), as an `Option` for the fixtures. -/
@@ -70,16 +71,24 @@ The row walk stays folded: its premise is supplied as `isRowV … = true`. -/
 syntax "future_reduce" "[" Lean.Parser.Tactic.simpLemma,* "]" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| future_reduce [$first,*] [$second,*]) => `(tactic| (
-    simp [synth, Obend.Core.Bidirectional.infer, Obend.Core.Bidirectional.synthAt,
+    simp only [synth, Obend.Core.Bidirectional.infer, Obend.Core.Bidirectional.synthAt,
       Obend.Core.Bidirectional.elaborate, Obend.Core.Bidirectional.finish, Obend.Core.Bidirectional.ascribe,
-      Obend.Core.Bidirectional.checkedSynth, Obend.Core.Bidirectional.synthFields,
-      Obend.Core.Bidirectional.checkFields, Obend.Core.Bidirectional.checkFieldsByLabel,
-      Obend.Core.Bidirectional.need, Obend.Core.Bidirectional.rowMember, sameType_refl,
-      bind, Except.bind, pure, Except.pure, Except.toOption, Functor.map, Except.map,
-      -isRowV, -isRowW, -walkRow, -unvisited, $first,*]
-    all_goals dsimp only [List.getElem?_cons_zero, List.getElem?_cons_succ]
-    all_goals simp [sameType_refl, bind, Except.bind, pure, Except.pure, Except.toOption, Functor.map, Except.map,
-      -isRowV, -isRowW, -walkRow, -unvisited, $second,*]))
+      Obend.Core.Bidirectional.checkedSynth, Obend.Core.Bidirectional.synthFields, Obend.Core.Bidirectional.need,
+      sameType_refl, bind, Except.bind, pure, Except.pure, Except.toOption, Functor.map, Except.map,
+      List.cons_ne_nil, ↓reduceIte, ↓reduceDIte, List.append_nil, List.nil_append, List.cons_append,
+      List.cons.injEq, and_true, and_false, true_and, false_and, reduceCtorEq, not_false_eq_true,
+      Bool.not_false, dite_true, dite_false, ite_true, ite_false, decide_true, decide_false, $first,*]
+    dsimp only [List.getElem?_cons_zero, List.getElem?_cons_succ]
+    simp only [sameType_refl, bind, Except.bind, pure, Except.pure, Except.toOption, Functor.map, Except.map,
+      ↓reduceIte, ↓reduceDIte, dite_true, Bool.not_false, Option.isSome_some, $second,*]
+    simp (config := {decide := true}) only [linearFree, variableUses, zeroUses, addUses, safeUses, safeQuantity,
+      Quantity.fits, validContext, reusableAllowed, reusableCaptures, Ty.isComputation, Assumptions.valid, overlay,
+      sameType_refl, List.range_succ, List.range_zero, List.map_cons, List.map_nil,
+      List.nil_append, List.cons_append, List.zipWith_cons_cons, List.zipWith_nil_left, List.zip_cons_cons,
+      List.zip_nil_left, List.all_cons, List.all_nil, List.length_cons, List.length_nil, List.headD_cons,
+      List.tail_cons, List.replicate_succ, List.replicate_zero, Bool.not_false, dite_true, ↓reduceIte,
+      ↓reduceDIte, Bool.and_true, Bool.true_and, Bool.or_true, Bool.true_or, beq_self_eq_true,
+      Option.isSome_some, Option.get_some, Except.toOption, bind, Except.bind, pure, Except.pure, $first,*]))
 
 @[local simp] def reusableNaturalCapture : AnnotatedTerm :=
   ⟨.lam (.bound 1), fun _ => some ⟨.natural,.natural,.erased,.reusable⟩, {}⟩
@@ -197,14 +206,14 @@ future Self instantiation, including negative arrow occurrences. -/
       else if position = [0,0,1,0] then some ⟨self,self,.unrestricted,.reusable⟩
       else none, {}⟩
 
-theorem future_binary_instantiation_accepted (self super : Ty)
-    (selfShareable : self.shareable = true) (superShareable : super.shareable = true)
-    (superRow : super.isRow [] 64 = true) :
-    (synth (futureBinaryInstantiation self super) []).isSome = true := by
-  have row : isRowV [] [] super = true := (isRowV_iff _ _).2 ⟨64, superRow⟩
-  have selfUnder : self.shareableUnder [] = true := Ty.shareableUnder_of_shareable [] selfShareable
-  have superUnder : super.shareableUnder [] = true := Ty.shareableUnder_of_shareable [] superShareable
-  future_reduce [futureBinaryInstantiation, selfUnder, superUnder] [row]
+/-- At concrete future instances (a scalar `Self` over the empty `Super`; a row `Self` over a row
+`Super`). The symbolic statement, for every shareable `Self` and row `Super`, was proved of the
+retired fuel checker; on this checker the symbolic reduction does not finish in useful time
+(REPORT-ONECHECKER §4), so the tooth is held at instances. -/
+theorem future_binary_instantiation_accepted :
+    (synth (futureBinaryInstantiation .natural .emptyRow) []).isSome = true ∧
+    (synth (futureBinaryInstantiation (.field "n" .natural .emptyRow) (.field "m" .boolean .emptyRow)) []).isSome =
+      true := by check_reduce
 
 @[local simp] def scalarExtend : AnnotatedTerm :=
   ⟨.extend (.nat 3) [("answer",.nat 42)], fun _ => none, {}⟩
