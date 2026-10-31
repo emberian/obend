@@ -57,7 +57,7 @@ equality, front-end adequacy (`OBJECTIVE-BEND.md` §"What is proved").
 **Types.** `Specification<T>` = `specification(SpecMeta, Extension<T>)`; metadata is ordinary
 data (`declared | composed | extension`), so `compose` is associative behaviourally but *not*
 reflectively (probes R01/R02; `REFLECTION.md`). Quantities `erased | affine | linear |
-unrestricted` survive from Bend, checked as "at most once"; a reusable closure captures only
+unrestricted` survive from Bend, checked as "at most once" for `affine` and exactly once for `linear` (since 2026-11-01) for `affine` and exactly once for `linear` (the linear split landed 2026-11-01); a reusable closure captures only
 unrestricted, shareable bindings (`ObjectiveBendTypes.lean:190-226`).
 
 **Modular typing** (`MODULAR-TYPING.md`, decisions D1–D6): open declarations are *templates*

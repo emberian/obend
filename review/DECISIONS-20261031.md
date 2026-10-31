@@ -38,6 +38,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | `BEquiv` (`Equiv/Behaviour`) quantifies over every context including `metadata`, so it is ≈r; the extensional ≈b is `Observed .b` (Quote-1's `observed_r_iff`). Rename queued after the Cost lane lands so no lane rebases across it. | taken by Claude under standing approval, 2026-11-01 | `lean/docs/REPORT-QUOTE1-20261101.md` |
 
+| Branch uses: a `linear` hypothesis's count must be equal across arms (additive), `affine` combines by max, `unrestricted` by sum; one combinator indexed by quantity | taken by Claude under standing approval, 2026-11-01, closing the Argon-era open item | `lean/docs/REPORT-LINEAR-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
