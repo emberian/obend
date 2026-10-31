@@ -8,9 +8,11 @@ the PIN a cell holds there (`none` once the cell is retired), a support `Fact` n
 or not at a view, and views are joined by an audited `Step`. The laws are fields, each the abstract
 shape of a nano kernel theorem:
 
-- `holds_congr` (`receive_congr`, `Kernel/Proofs/Receive.lean`): a support's truth at a view is a
-  function of the pin its cell holds there, so a derivation depends only on the pinned view;
-- `retired_dead`: a support of a retired cell does not hold;
+- `holdsOfPin`: a support's truth is read off the pin its cell holds (`holdsAt` is defined from it,
+  `holds_pin` is `rfl`), so `holds_congr` (`receive_congr`, `Kernel/Proofs/Receive.lean`: a
+  derivation depends only on the pinned view) is a congruence, and a stranger holding pins computes
+  every read;
+- `dead_none` (whence `retired_dead`): a support of a retired cell does not hold;
 - `retired_step` (the retirement case of `stale_behind_forever`): a tombstone is terminal;
 - the VERSION law (`stale_behind_forever`, `Kernel/Proofs/Versions.lean`): a cell's pin is read off
   its VERSION STATE (`Ver`, nano's entry: absent, live at a version, tombstone) by `pinOf`, and an
@@ -54,14 +56,14 @@ class World (V : Type) (Fact : outParam Type) where
   cell : Fact → Cell
   /-- what a view holds for a cell: its pin, or `none` once the cell is retired -/
   pin : V → Cell → Option Pin
-  /-- whether a support holds at a view -/
-  holdsAt : V → Fact → Bool
+  /-- whether a support holds, read off the pin its cell holds (`none`: retired). A stranger holding
+  the pins computes every read with this; `holdsAt` is defined from it, so `holds_congr` is a
+  congruence, not a law. -/
+  holdsOfPin : Cell → Option Pin → Fact → Bool
   /-- one audited step between views -/
   Step : V → V → Prop
-  /-- a support's truth at a view is a function of the pin its cell holds there -/
-  holds_congr : ∀ (v v' : V) (f : Fact), pin v (cell f) = pin v' (cell f) → holdsAt v f = holdsAt v' f
   /-- a support of a retired cell does not hold -/
-  retired_dead : ∀ (v : V) (f : Fact), pin v (cell f) = none → holdsAt v f = false
+  dead_none : ∀ (f : Fact), holdsOfPin (cell f) none f = false
   /-- a tombstone is terminal: a cell retired at a view is retired after a step -/
   retired_step : ∀ (v v' : V) (c : Cell), Step v v' → pin v c = none → pin v' c = none
   /-- a cell's version state at a view: what its pin is read off (nano's entry) -/
@@ -80,6 +82,22 @@ class World (V : Type) (Fact : outParam Type) where
 namespace World
 
 variable {V Fact : Type} [World V Fact]
+
+/-- Whether a support holds at a view: read off the pin its cell holds there. -/
+def holdsAt (v : V) (f : Fact) : Bool := holdsOfPin (cell f) (pin (Fact := Fact) v (cell f)) f
+
+/-- **The read is computed from pins** (`review/GENERATED-20261031.md` §2.4). -/
+theorem holds_pin (v : V) (f : Fact) :
+    holdsAt v f = holdsOfPin (cell f) (pin (Fact := Fact) v (cell f)) f := rfl
+
+/-- A support's truth at a view is a function of the pin its cell holds there (formerly a field). -/
+theorem holds_congr (v v' : V) (f : Fact) (h : pin (Fact := Fact) v (cell f) = pin (Fact := Fact) v' (cell f)) :
+    holdsAt v f = holdsAt v' f := by
+  unfold holdsAt; rw [h]
+
+/-- A support of a retired cell does not hold (formerly a field). -/
+theorem retired_dead (v : V) (f : Fact) (h : pin (Fact := Fact) v (cell f) = none) : holdsAt v f = false := by
+  unfold holdsAt; rw [h]; exact dead_none f
 
 /-- Views reachable by zero or more audited steps. -/
 abbrev Later (v v' : V) : Prop := Reaches (World.Step (V := V) (Fact := Fact)) v v'
@@ -272,10 +290,11 @@ worlds elsewhere, and `Fact` is an `outParam`.) -/
   Pin := Nat
   cell := fun _ => ()
   pin v _ := some (pinAt v)
-  holdsAt v n := pinAt v == n
+  holdsOfPin _ p n := match p with
+    | some m => m == n
+    | none => false
   Step v v' := v' = v + 1
-  holds_congr := fun v v' n h => by simp only [Option.some.injEq] at h; simp [h]
-  retired_dead := fun _ _ h => by cases h
+  dead_none := fun _ => rfl
   retired_step := fun _ _ _ _ h => by cases h
   Ver := Nat
   ver v _ := v

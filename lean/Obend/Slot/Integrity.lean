@@ -350,10 +350,9 @@ instance toyWorld : World Nat Member where
   Pin := Unit
   cell := id
   pin := toyPin
-  holdsAt height member := (toyPin height member).isSome
+  holdsOfPin _ p _ := p.isSome
   Step height height' := height' = height + 1
-  holds_congr := fun _ _ _ h => by simp only [id] at h; rw [h]
-  retired_dead := fun _ _ h => by simp only [id] at h; rw [h]; rfl
+  dead_none := fun _ => rfl
   retired_step := fun v v' c step h => by
     subst step
     cases c with

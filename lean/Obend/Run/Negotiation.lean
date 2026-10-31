@@ -61,10 +61,11 @@ instance : World Wv Fact where
   Pin := Nat × Bool
   cell := id
   pin := fun v f => some (v.clock, holdsW v f)
-  holdsAt := holdsW
+  holdsOfPin _ p _ := match p with
+    | some (_, b) => b
+    | none => false
   Step := fun v v' => stepW v v' = true
-  holds_congr := fun _ _ _ h => (Prod.mk.inj (Option.some.inj h)).2
-  retired_dead := fun _ _ h => by cases h
+  dead_none := fun _ => rfl
   retired_step := fun _ _ _ _ h => by cases h
   Ver := Nat × Bool
   ver := fun v f => (v.clock, holdsW v f)

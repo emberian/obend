@@ -118,10 +118,11 @@ instance pinWorld : World (Bool → Nat × Nat) (Bool × Nat) where
   Pin := Nat × Nat
   cell := Prod.fst
   pin v c := some (v c)
-  holdsAt v f := (v f.1).2 == f.2
+  holdsOfPin _ p f := match p with
+    | some (_, n) => n == f.2
+    | none => false
   Step v v' := ∀ c, v c = v' c ∨ (v c).1 < (v' c).1
-  holds_congr := fun v v' f h => by simp only [Option.some.injEq] at h; simp [h]
-  retired_dead := fun _ _ h => by cases h
+  dead_none := fun _ => rfl
   retired_step := fun _ _ _ _ h => by cases h
   Ver := Nat × Nat
   ver v c := v c
@@ -141,7 +142,7 @@ def pinRepair (c : Bool) (n : Nat) : Repair (Bool → Nat × Nat) (Bool × Nat) 
       by_cases hb : b = c
       · subst hb; exact .inr (by simp [setPin])
       · exact .inl (by simp [setPin, hb]),
-    fun v => by simp [holdsAt, setPin]⟩
+    fun v => by simp [holdsAt, holdsOfPin, pin, cell, setPin]⟩
 
 theorem pinRepair_local (c : Bool) (n : Nat) : (pinRepair c n).Local := by
   intro v b hb
@@ -157,7 +158,7 @@ theorem clash_unsat (v : Bool → Nat × Nat) : clash.usable (holdsAt v) () = fa
   · have := ((usable_iff clash _ ()).1 h).2
     have h0 := this (false, 0) (by simp [clash])
     have h1 := this (false, 1) (by simp [clash])
-    simp [holdsAt] at h0 h1
+    simp [holdsAt, holdsOfPin, pin, cell] at h0 h1
     omega
 
 /-- The naive repair law (each repair an allowed step establishing its fact; every dead support
@@ -171,7 +172,7 @@ theorem clash_naive :
 theorem clash_refused : ¬ (pinRepair false 0).Compatible clash () := by
   intro h
   have := h (fun (_ : Bool) => (0, 1)) (false, 1) (by simp [clash]) rfl
-  simp [holdsAt, pinRepair, setPin] at this
+  simp [holdsAt, holdsOfPin, pin, cell, pinRepair, setPin] at this
 
 /-- Two requirements on two cells: the local repairs are compatible and repair the candidate. -/
 def apart : Slot (Bool × Nat) Unit := ⟨fun _ => [(false, 0), (true, 1)], fun _ => true⟩
