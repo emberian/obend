@@ -8,8 +8,10 @@ reference semantics, to `ok` exactly when the fragment's meaning `LawExpr.denote
 `refused name` exactly when it does not:
 
 * `compile_change`: a write or an invoke, judged with the old state;
-* `compile_first`: a birth or an adoption, judged as a first write (no old state);
-* `compile_inert`: a relaw or a retirement, admitted;
+* `compile_birth`: a birth, judged as a first write (no old state);
+* `compile_adopt`: an adoption, judged as the identity write of the state (old = new);
+* `compile_relaw`: a relaw of a package law, refused naming the package (a package law changes by a
+  package upgrade, the carry, not by relaw); `compile_retire`: a retirement, admitted;
 
 and so `compile_admits_*` / `compile_refuses_*` state `Admits` and `Refuses` as iffs with
 `denote`. Each is proved by building the evaluation (`cond_eval`: the condition evaluates to the
@@ -296,17 +298,33 @@ theorem contains_filter (m : Nat) : ∀ cs : List Int,
         rw [beq_eq_false_iff_ne, Int.ofNat_eq_natCast]; omega
       rw [this]; rfl
 
-theorem old_left {o : Data} {hasOld : Bool} {l r : List String} {S : Ty}
-    (h : hasOld = true → ∃ ofs, o = .record ofs ∧ ∀ f ∈ l ++ r, fitsField S ofs f = true) :
-    hasOld = true → ∃ ofs, o = .record ofs ∧ ∀ f ∈ l, fitsField S ofs f = true := fun hh => by
+theorem old_left {o : Data} {src : OldSrc} {l r : List String} {S : Ty}
+    (h : src = .prior → ∃ ofs, o = .record ofs ∧ ∀ f ∈ l ++ r, fitsField S ofs f = true) :
+    src = .prior → ∃ ofs, o = .record ofs ∧ ∀ f ∈ l, fitsField S ofs f = true := fun hh => by
   obtain ⟨ofs, ho, hf⟩ := h hh
   exact ⟨ofs, ho, fun f hm => hf f (List.mem_append_left _ hm)⟩
 
-theorem old_right {o : Data} {hasOld : Bool} {l r : List String} {S : Ty}
-    (h : hasOld = true → ∃ ofs, o = .record ofs ∧ ∀ f ∈ l ++ r, fitsField S ofs f = true) :
-    hasOld = true → ∃ ofs, o = .record ofs ∧ ∀ f ∈ r, fitsField S ofs f = true := fun hh => by
+theorem old_right {o : Data} {src : OldSrc} {l r : List String} {S : Ty}
+    (h : src = .prior → ∃ ofs, o = .record ofs ∧ ∀ f ∈ l ++ r, fitsField S ofs f = true) :
+    src = .prior → ∃ ofs, o = .record ofs ∧ ∀ f ∈ r, fitsField S ofs f = true := fun hh => by
   obtain ⟨ofs, ho, hf⟩ := h hh
   exact ⟨ofs, ho, fun f hm => hf f (List.mem_append_right _ hm)⟩
+
+/-- Where an act has an old state, it is a fitting record and the clause reads its fields. -/
+theorem old_spec {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {fs : List (String × Data)}
+    {src : OldSrc} {f : String} {fields : List String} (hσ : EnvAt d σ o (.record fs) rq)
+    (hs : src ≠ .none)
+    (ho : src = .prior → ∃ ofs, o = .record ofs ∧ ∀ g ∈ fields, fitsField S ofs g = true)
+    (hfs : ∀ g ∈ fields, fitsField S fs g = true) (hf : f ∈ fields) :
+    ∃ ofs, oldOf src o (.record fs) = some (.record ofs) ∧ fitsField S ofs f = true ∧
+      (oldRead src ⟨d⟩ f).substitute σ = .get (Data.record ofs).term f := by
+  cases src with
+  | none => exact absurd rfl hs
+  | prior =>
+    obtain ⟨ofs, rfl, hfo⟩ := ho rfl
+    exact ⟨ofs, rfl, hfo f hf, by simp only [oldRead, At.oldF, At.old, subst_get, subst_bound, hσ.2.2]⟩
+  | same =>
+    exact ⟨fs, rfl, hfs f hf, by simp only [oldRead, At.newF, At.new, subst_get, subst_bound, hσ.2.1]⟩
 
 -- Each atom's last step closes a Boolean equation with one shared simp set; not every lemma in it
 -- fires at every atom.
@@ -316,11 +334,11 @@ at the fields the law reads (and an old one, when the act has one), under the cl
 of any depth. -/
 public theorem cond_eval {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {fs : List (String × Data)}
     {ag pr : String} {nb vu : Nat} {occ : Data} {facts : Facts}
-    (hσ : EnvAt d σ o (.record fs) rq) (hrq : rq = reqOf ag pr nb vu occ facts) (hasOld : Bool) :
+    (hσ : EnvAt d σ o (.record fs) rq) (hrq : rq = reqOf ag pr nb vu occ facts) (src : OldSrc) :
     ∀ (e : LawExpr), (∀ f ∈ e.fields, fitsField S fs f = true) →
-      (hasOld = true → ∃ ofs, o = .record ofs ∧ ∀ f ∈ e.fields, fitsField S ofs f = true) →
-      Evaluates ((cond S hasOld ⟨d⟩ e).substitute σ)
-        (.boolean (e.denote facts (if hasOld then some o else none) (.record fs)))
+      (src = .prior → ∃ ofs, o = .record ofs ∧ ∀ f ∈ e.fields, fitsField S ofs f = true) →
+      Evaluates ((cond S src ⟨d⟩ e).substitute σ)
+        (.boolean (e.denote facts (oldOf src o (.record fs)) (.record fs)))
   | .eqC r c, hf, _ => by
     obtain ⟨ro, hr, hp, hv⟩ := read_spec (S := S) r hσ hrq hf
     simp only [cond, LawExpr.denote, hr]
@@ -386,40 +404,36 @@ public theorem cond_eval {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {f
       cases rx <;> cases ry <;> simp only [Option.map_some, Option.map_none]
       (apply Bool.eq_iff_iff.2; simp only [beq_iff_eq, decide_eq_true_eq, Option.some.injEq, Option.map_some, Option.map_none, Bool.false_eq_true, false_iff, Int.ofNat_eq_natCast]; omega)
   | .monotone f, hf, ho => by
-    cases hasOld with
-    | false => simp only [cond, Bool.false_eq_true, ite_false, subst_falseT, LawExpr.denote,
-        Option.bind_none]; exact ev_bool false
-    | true =>
-      obtain ⟨ofs, rfl, hfo⟩ := ho rfl
-      have hfn := hf f (by simp [LawExpr.fields])
-      have hfo := hfo f (by simp [LawExpr.fields])
-      simp only [cond, ite_true, LawExpr.denote, Option.bind_some]
+    have hfn := hf f (by simp [LawExpr.fields])
+    by_cases hs : src = .none
+    · subst hs
+      simp only [cond, ite_true, subst_falseT, LawExpr.denote, oldOf, Option.bind_none]; exact ev_bool false
+    · obtain ⟨ofs, hod, hfo, hread⟩ := old_spec hσ hs ho hf (f := f) (by simp [LawExpr.fields])
+      simp only [cond, hs, ite_false, LawExpr.denote, hod, Option.bind_some]
       cases hk : fieldKind S f with
       | none =>
         simp only [subst_falseT, field_absent hk hfn, field_absent hk hfo]; exact ev_bool false
       | some k =>
         obtain ⟨m, hm, hev⟩ := field_read hk hfn
         obtain ⟨m', hm', hev'⟩ := field_read hk hfo
-        simp only [hm, hm', subst_leNat, subst_scalarRead, At.oldF, At.newF, At.old, At.new, subst_get,
-          subst_bound, hσ.2.1, hσ.2.2]
+        simp only [hm, hm', subst_leNat, subst_scalarRead, hread, At.newF, At.new, subst_get,
+          subst_bound, hσ.2.1]
         refine ev_eq (ev_leNat hev' hev) ?_
         (apply Bool.eq_iff_iff.2; simp only [beq_iff_eq, decide_eq_true_eq, Option.some.injEq, Option.map_some, Option.map_none, Bool.false_eq_true, false_iff, Int.ofNat_eq_natCast]; omega)
   | .writeOnce f, hf, ho => by
-    cases hasOld with
-    | false => simp only [cond, Bool.false_eq_true, ite_false, subst_trueT, LawExpr.denote,
-        Option.bind_none]; exact ev_bool true
-    | true =>
-      obtain ⟨ofs, rfl, hfo⟩ := ho rfl
-      have hfn := hf f (by simp [LawExpr.fields])
-      have hfo := hfo f (by simp [LawExpr.fields])
-      simp only [cond, ite_true, LawExpr.denote, Option.bind_some]
+    have hfn := hf f (by simp [LawExpr.fields])
+    by_cases hs : src = .none
+    · subst hs
+      simp only [cond, ite_true, subst_trueT, LawExpr.denote, oldOf, Option.bind_none]; exact ev_bool true
+    · obtain ⟨ofs, hod, hfo, hread⟩ := old_spec hσ hs ho hf (f := f) (by simp [LawExpr.fields])
+      simp only [cond, hs, ite_false, LawExpr.denote, hod, Option.bind_some]
       cases hk : fieldKind S f with
       | none => simp only [subst_trueT, field_absent hk hfo]; exact ev_bool true
       | some k =>
         obtain ⟨m, hm, hev⟩ := field_read hk hfn
         obtain ⟨m', hm', hev'⟩ := field_read hk hfo
-        simp only [hm, hm', subst_ifBool, subst_eqNat, subst_trueT, subst_natT, subst_scalarRead, At.oldF,
-          At.newF, At.old, At.new, subst_get, subst_bound, hσ.2.1, hσ.2.2]
+        simp only [hm, hm', subst_ifBool, subst_eqNat, subst_trueT, subst_natT, subst_scalarRead, hread,
+          At.newF, At.new, subst_get, subst_bound, hσ.2.1]
         by_cases h0 : m' = 0
         · subst h0
           refine evaluates_ifBool (ev_eqNat hev' (ev_nat 0)) (ev_eq (ev_bool true) ?_)
@@ -431,19 +445,19 @@ public theorem cond_eval {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {f
           (apply Bool.eq_iff_iff.2; simp only [beq_iff_eq, decide_eq_true_eq, Option.some.injEq, Option.map_some, Option.map_none, Bool.false_eq_true, false_iff, Int.ofNat_eq_natCast]; omega)
   | .not e, hf, ho => by
     simp only [cond, LawExpr.denote, subst_notT]
-    exact ev_notT (cond_eval hσ hrq hasOld e hf ho)
+    exact ev_notT (cond_eval hσ hrq src e hf ho)
   | .and l r, hf, ho => by
     simp only [cond, LawExpr.denote, subst_andT]
-    exact ev_andT (cond_eval hσ hrq hasOld l (fun f h => hf f (List.mem_append_left _ h)) (old_left ho))
-      fun _ => cond_eval hσ hrq hasOld r (fun f h => hf f (List.mem_append_right _ h)) (old_right ho)
+    exact ev_andT (cond_eval hσ hrq src l (fun f h => hf f (List.mem_append_left _ h)) (old_left ho))
+      fun _ => cond_eval hσ hrq src r (fun f h => hf f (List.mem_append_right _ h)) (old_right ho)
   | .or l r, hf, ho => by
     simp only [cond, LawExpr.denote, subst_orT]
-    exact ev_orT (cond_eval hσ hrq hasOld l (fun f h => hf f (List.mem_append_left _ h)) (old_left ho))
-      (cond_eval hσ hrq hasOld r (fun f h => hf f (List.mem_append_right _ h)) (old_right ho))
+    exact ev_orT (cond_eval hσ hrq src l (fun f h => hf f (List.mem_append_left _ h)) (old_left ho))
+      (cond_eval hσ hrq src r (fun f h => hf f (List.mem_append_right _ h)) (old_right ho))
   | .implies l r, hf, ho => by
     simp only [cond, LawExpr.denote, subst_impliesT]
-    exact ev_impliesT (cond_eval hσ hrq hasOld l (fun f h => hf f (List.mem_append_left _ h)) (old_left ho))
-      (cond_eval hσ hrq hasOld r (fun f h => hf f (List.mem_append_right _ h)) (old_right ho))
+    exact ev_impliesT (cond_eval hσ hrq src l (fun f h => hf f (List.mem_append_left _ h)) (old_left ho))
+      (cond_eval hσ hrq src r (fun f h => hf f (List.mem_append_right _ h)) (old_right ho))
 
 /-! ## The law -/
 
@@ -458,9 +472,9 @@ public theorem lawOf6_eval {b ad rl rt wr iv : At → Term} {o n rq x : Data} {�
   simp only [subst_get, subst_bound, lawEnv, scons_zero]
   exact ev_get ho
 
-theorem clause_eval {S : Ty} {name : String} {e : LawExpr} {hasOld : Bool} {σ : Nat → Term} {b : Bool}
-    (h : Evaluates ((cond S hasOld ⟨1⟩ e).substitute σ) (.boolean b)) :
-    Evaluates ((clause S name e hasOld ⟨1⟩).substitute σ) (verdictOf name b) := by
+theorem clause_eval {S : Ty} {name : String} {e : LawExpr} {src : OldSrc} {σ : Nat → Term} {b : Bool}
+    (h : Evaluates ((cond S src ⟨1⟩ e).substitute σ) (.boolean b)) :
+    Evaluates ((clause S name e src ⟨1⟩).substitute σ) (verdictOf name b) := by
   simp only [clause, subst_guard, subst_okT]
   cases b
   · exact evaluates_ifBool h (evaluates_self (.inject _ _))
@@ -471,9 +485,9 @@ theorem armEnv_at {x o n rq : Data} : EnvAt 1 (armEnv x.term o.term n.term rq.te
 
 /-- **A write or an invoke**: the compiled law evaluates to the verdict `denote` gives with the old
 state. -/
-public theorem compile_change {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
+public theorem compile_change {S : Ty} {pkg name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
     {ag pr : String} {nb vu : Nat} (hc : IsChange occ) (hfo : Fits S e o = true) (hfn : Fits S e n = true) :
-    Evaluates (applyLaw (compile S name e) o n (reqOf ag pr nb vu occ facts))
+    Evaluates (applyLaw (compile S pkg name e) o n (reqOf ag pr nb vu occ facts))
       (verdictOf name (e.denote facts (some o) n)) := by
   cases n with
   | record fs =>
@@ -484,41 +498,58 @@ public theorem compile_change {S : Ty} {name : String} {e : LawExpr} {o n occ : 
       have hocc := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := occ) (facts := facts)).2.2.2.2
       rcases hc with ⟨x, rfl⟩ | ⟨x, rfl⟩
       · have hcx := cond_eval (S := S) (armEnv_at (x := x) (o := .record ofs) (n := .record fs)
-          (rq := reqOf ag pr nb vu (.variant "write" x) facts)) rfl true e hfn' fun _ => ⟨ofs, rfl, hfo'⟩
+          (rq := reqOf ag pr nb vu (.variant "write" x) facts)) rfl .prior e hfn' fun _ => ⟨ofs, rfl, hfo'⟩
         exact lawOf6_eval hocc rfl (clause_eval hcx)
       · have hcx := cond_eval (S := S) (armEnv_at (x := x) (o := .record ofs) (n := .record fs)
-          (rq := reqOf ag pr nb vu (.variant "invoke" x) facts)) rfl true e hfn' fun _ => ⟨ofs, rfl, hfo'⟩
+          (rq := reqOf ag pr nb vu (.variant "invoke" x) facts)) rfl .prior e hfn' fun _ => ⟨ofs, rfl, hfo'⟩
         exact lawOf6_eval hocc rfl (clause_eval hcx)
     | _ => simp [Fits] at hfo
   | _ => simp [Fits] at hfn
 
-/-- **A birth or an adoption**: judged as a first write, with no old state. -/
-public theorem compile_first {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
-    {ag pr : String} {nb vu : Nat} (hocc : (∃ x, occ = .variant "birth" x) ∨ ∃ x, occ = .variant "adopt" x)
-    (hfn : Fits S e n = true) :
-    Evaluates (applyLaw (compile S name e) o n (reqOf ag pr nb vu occ facts))
+/-- **A birth**: judged as a first write, with no old state. -/
+public theorem compile_birth {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} (hfn : Fits S e n = true) :
+    Evaluates (applyLaw (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "birth" x) facts))
       (verdictOf name (e.denote facts none n)) := by
   cases n with
   | record fs =>
     have hfn' : ∀ f ∈ e.fields, fitsField S fs f = true := by simpa [Fits] using hfn
-    have ho := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := occ) (facts := facts)).2.2.2.2
-    rcases hocc with ⟨x, rfl⟩ | ⟨x, rfl⟩
-    · have hcx := cond_eval (S := S) (armEnv_at (x := x) (o := o) (n := .record fs)
-        (rq := reqOf ag pr nb vu (.variant "birth" x) facts)) rfl false e hfn' (fun h => by cases h)
-      exact lawOf6_eval ho rfl (clause_eval hcx)
-    · have hcx := cond_eval (S := S) (armEnv_at (x := x) (o := o) (n := .record fs)
-        (rq := reqOf ag pr nb vu (.variant "adopt" x) facts)) rfl false e hfn' (fun h => by cases h)
-      exact lawOf6_eval ho rfl (clause_eval hcx)
+    have ho := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := .variant "birth" x) (facts := facts)).2.2.2.2
+    have hcx := cond_eval (S := S) (armEnv_at (x := x) (o := o) (n := .record fs)
+      (rq := reqOf ag pr nb vu (.variant "birth" x) facts)) rfl .none e hfn' (fun h => by cases h)
+    exact lawOf6_eval ho rfl (clause_eval hcx)
   | _ => simp [Fits] at hfn
 
-/-- **A relaw or a retirement** writes no state: admitted, whatever the states. -/
-public theorem compile_inert {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
-    {ag pr : String} {nb vu : Nat} (hocc : (∃ x, occ = .variant "relaw" x) ∨ ∃ x, occ = .variant "retire" x) :
-    Evaluates (applyLaw (compile S name e) o n (reqOf ag pr nb vu occ facts)) okT := by
-  have ho := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := occ) (facts := facts)).2.2.2.2
-  rcases hocc with ⟨x, rfl⟩ | ⟨x, rfl⟩
-  · exact lawOf6_eval ho rfl (by rw [subst_okT]; exact evaluates_self (.inject _ _))
-  · exact lawOf6_eval ho rfl (by rw [subst_okT]; exact evaluates_self (.inject _ _))
+/-- **An adoption**: judged as the identity write of the state the law is added over (old = new). -/
+public theorem compile_adopt {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} (hfn : Fits S e n = true) :
+    Evaluates (applyLaw (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "adopt" x) facts))
+      (verdictOf name (e.denote facts (some n) n)) := by
+  cases n with
+  | record fs =>
+    have hfn' : ∀ f ∈ e.fields, fitsField S fs f = true := by simpa [Fits] using hfn
+    have ho := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := .variant "adopt" x) (facts := facts)).2.2.2.2
+    have hcx := cond_eval (S := S) (armEnv_at (x := x) (o := o) (n := .record fs)
+      (rq := reqOf ag pr nb vu (.variant "adopt" x) facts)) rfl .same e hfn' (fun h => by cases h)
+    exact lawOf6_eval ho rfl (clause_eval hcx)
+  | _ => simp [Fits] at hfn
+
+/-- **A relaw of a package law is refused, naming the package**: a package law is part of the
+pinned program a receiver re-executes byte for byte, so it changes by a package upgrade (the
+carry), not a relaw. -/
+public theorem compile_relaw {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} :
+    Evaluates (applyLaw (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "relaw" x) facts))
+      (refusedT (relawRefusal pkg)) := by
+  have ho := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := .variant "relaw" x) (facts := facts)).2.2.2.2
+  exact lawOf6_eval ho rfl (by rw [subst_refusedT]; exact evaluates_self (.inject _ _))
+
+/-- **A retirement** writes no state: admitted, whatever the states. -/
+public theorem compile_retire {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} :
+    Evaluates (applyLaw (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "retire" x) facts)) okT := by
+  have ho := (req_field_opt (ag := ag) (pr := pr) (nb := nb) (vu := vu) (occ := .variant "retire" x) (facts := facts)).2.2.2.2
+  exact lawOf6_eval ho rfl (by rw [subst_okT]; exact evaluates_self (.inject _ _))
 
 /-- A law that evaluates to a predicted verdict admits exactly when it is `ok`, and refuses with
 the name exactly when it is not. -/
@@ -534,33 +565,49 @@ theorem verdict_iff {L : Term} {o n rq : Data} {name : String} {b : Bool}
     simp [verdictOf, okT, refusedT] at this
 
 /-- **Admits iff the fragment holds**, at a write or an invoke. -/
-public theorem compile_admits_change {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
+public theorem compile_admits_change {S : Ty} {pkg name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
     {ag pr : String} {nb vu : Nat} (hc : IsChange occ) (hfo : Fits S e o = true) (hfn : Fits S e n = true) :
-    Admits (compile S name e) o n (reqOf ag pr nb vu occ facts) ↔ e.denote facts (some o) n = true :=
+    Admits (compile S pkg name e) o n (reqOf ag pr nb vu occ facts) ↔ e.denote facts (some o) n = true :=
   (verdict_iff (compile_change hc hfo hfn)).1
 
 /-- **Refuses, naming the law, iff the fragment fails**, at a write or an invoke. -/
-public theorem compile_refuses_change {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
+public theorem compile_refuses_change {S : Ty} {pkg name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
     {ag pr : String} {nb vu : Nat} (hc : IsChange occ) (hfo : Fits S e o = true) (hfn : Fits S e n = true) :
-    Refuses (compile S name e) o n (reqOf ag pr nb vu occ facts) name ↔ e.denote facts (some o) n = false :=
+    Refuses (compile S pkg name e) o n (reqOf ag pr nb vu occ facts) name ↔ e.denote facts (some o) n = false :=
   (verdict_iff (compile_change hc hfo hfn)).2
 
-public theorem compile_admits_first {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
-    {ag pr : String} {nb vu : Nat} (hocc : (∃ x, occ = .variant "birth" x) ∨ ∃ x, occ = .variant "adopt" x)
-    (hfn : Fits S e n = true) :
-    Admits (compile S name e) o n (reqOf ag pr nb vu occ facts) ↔ e.denote facts none n = true :=
-  (verdict_iff (compile_first hocc hfn)).1
+public theorem compile_admits_birth {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} (hfn : Fits S e n = true) :
+    Admits (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "birth" x) facts) ↔ e.denote facts none n = true :=
+  (verdict_iff (compile_birth hfn)).1
 
-public theorem compile_refuses_first {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
-    {ag pr : String} {nb vu : Nat} (hocc : (∃ x, occ = .variant "birth" x) ∨ ∃ x, occ = .variant "adopt" x)
-    (hfn : Fits S e n = true) :
-    Refuses (compile S name e) o n (reqOf ag pr nb vu occ facts) name ↔ e.denote facts none n = false :=
-  (verdict_iff (compile_first hocc hfn)).2
+public theorem compile_refuses_birth {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} (hfn : Fits S e n = true) :
+    Refuses (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "birth" x) facts) name ↔
+      e.denote facts none n = false :=
+  (verdict_iff (compile_birth hfn)).2
 
-public theorem compile_admits_inert {S : Ty} {name : String} {e : LawExpr} {o n occ : Data} {facts : Facts}
-    {ag pr : String} {nb vu : Nat} (hocc : (∃ x, occ = .variant "relaw" x) ∨ ∃ x, occ = .variant "retire" x) :
-    Admits (compile S name e) o n (reqOf ag pr nb vu occ facts) :=
-  ⟨_, compile_inert hocc⟩
+public theorem compile_admits_adopt {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} (hfn : Fits S e n = true) :
+    Admits (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "adopt" x) facts) ↔
+      e.denote facts (some n) n = true :=
+  (verdict_iff (compile_adopt hfn)).1
+
+public theorem compile_refuses_adopt {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} (hfn : Fits S e n = true) :
+    Refuses (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "adopt" x) facts) name ↔
+      e.denote facts (some n) n = false :=
+  (verdict_iff (compile_adopt hfn)).2
+
+public theorem compile_refuses_relaw {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} :
+    Refuses (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "relaw" x) facts) (relawRefusal pkg) :=
+  compile_relaw
+
+public theorem compile_admits_retire {S : Ty} {pkg name : String} {e : LawExpr} {o n x : Data} {facts : Facts}
+    {ag pr : String} {nb vu : Nat} :
+    Admits (compile S pkg name e) o n (reqOf ag pr nb vu (.variant "retire" x) facts) :=
+  ⟨_, compile_retire⟩
 
 /-! ## The compiled law checks at `lawTy S` -/
 
@@ -596,8 +643,15 @@ theorem chk_read {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true)
   | height => exact ⟨chk_boolean _ _, chk_field rfl rfl⟩
   | turn => exact ⟨chk_boolean _ _, chk_field rfl rfl⟩
 
-theorem chk_cond {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true) (hasOld : Bool) :
-    ∀ e : LawExpr, Chk (clauseCtx S P) (cond S hasOld ⟨1⟩ e) .boolean
+theorem chk_oldRead {S P : Ty} {f : String} {k : Kind} (src : OldSrc) (hk : fieldKind S f = some k) :
+    Chk (clauseCtx S P) (scalarRead k (oldRead src ⟨1⟩ f)) .natural := by
+  cases src
+  · exact chk_scalarRead hk rfl
+  · exact chk_scalarRead hk rfl
+  · exact chk_scalarRead hk rfl
+
+theorem chk_cond {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true) (src : OldSrc) :
+    ∀ e : LawExpr, Chk (clauseCtx S P) (cond S src ⟨1⟩ e) .boolean
   | .eqC r c => by
     have := chk_read (P := P) hsh hP r
     simp only [cond]; split
@@ -630,38 +684,39 @@ theorem chk_cond {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true)
     · exact chk_andT hl.1 (chk_andT hr.1 (chk_bin rfl (chk_bin rfl hl.2 (chk_nat _ _)) hr.2))
   | .monotone f => by
     simp only [cond]; split
-    · split
-      · rename_i k hk; exact chk_bin rfl (chk_scalarRead hk rfl) (chk_scalarRead hk rfl)
-      · exact chk_boolean _ _
     · exact chk_boolean _ _
+    · cases hk : fieldKind S f with
+      | some k => exact chk_bin rfl (chk_oldRead src hk) (chk_scalarRead hk rfl)
+      | none => exact chk_boolean _ _
   | .writeOnce f => by
     simp only [cond]; split
-    · split
-      · rename_i k hk
-        exact chk_ifBool (chk_bin rfl (chk_scalarRead hk rfl) (chk_nat _ _)) (chk_boolean _ _)
-          (chk_bin rfl (chk_scalarRead hk rfl) (chk_scalarRead hk rfl))
-      · exact chk_boolean _ _
     · exact chk_boolean _ _
-  | .not e => chk_notT (chk_cond hsh hP hasOld e)
-  | .and l r => chk_andT (chk_cond hsh hP hasOld l) (chk_cond hsh hP hasOld r)
-  | .or l r => chk_ifBool (chk_cond hsh hP hasOld l) (chk_boolean _ _) (chk_cond hsh hP hasOld r)
-  | .implies l r => chk_ifBool (chk_cond hsh hP hasOld l) (chk_cond hsh hP hasOld r) (chk_boolean _ _)
+    · cases hk : fieldKind S f with
+      | some k =>
+        exact chk_ifBool (chk_bin rfl (chk_oldRead src hk) (chk_nat _ _)) (chk_boolean _ _)
+          (chk_bin rfl (chk_scalarRead hk rfl) (chk_oldRead src hk))
+      | none => exact chk_boolean _ _
+  | .not e => chk_notT (chk_cond hsh hP src e)
+  | .and l r => chk_andT (chk_cond hsh hP src l) (chk_cond hsh hP src r)
+  | .or l r => chk_ifBool (chk_cond hsh hP src l) (chk_boolean _ _) (chk_cond hsh hP src r)
+  | .implies l r => chk_ifBool (chk_cond hsh hP src l) (chk_cond hsh hP src r) (chk_boolean _ _)
 
 /-- **The compiled law checks at `lawTy S`** under `Bidirectional.checkAgainst`, with no
 annotations, for every canonical shareable state type: whatever fields the law names (a field `S`
 lacks reads as absent, statically). -/
-public theorem compile_checks {S : Ty} (name : String) (e : LawExpr) (hS : S.isCanonical)
-    (hsh : S.shareable = true) : ChecksAt (compile S name e) S := by
-  have cl (P : Ty) (hP : P.shareable = true) (h : Bool) : Chk (clauseCtx S P) (clause S name e h ⟨1⟩) verdictTy :=
+public theorem compile_checks {S : Ty} (pkg name : String) (e : LawExpr) (hS : S.isCanonical)
+    (hsh : S.shareable = true) : ChecksAt (compile S pkg name e) S := by
+  have cl (P : Ty) (hP : P.shareable = true) (h : OldSrc) : Chk (clauseCtx S P) (clause S name e h ⟨1⟩) verdictTy :=
     chk_guard (chk_cond hsh hP h e) (chk_okT _)
-  exact lawOf6_checks hS hsh ⟨cl _ rfl false, cl _ rfl false, cl _ rfl true, chk_okT _, chk_okT _, cl _ rfl true⟩
+  exact lawOf6_checks hS hsh ⟨cl _ rfl .same, cl _ rfl .none, cl _ rfl .prior, chk_refusedT _ _, chk_okT _,
+    cl _ rfl .prior⟩
 
 /-- Every law of a package, compiled, checks. -/
-public theorem compilePackage_checks {S : Ty} (laws : List (String × LawExpr)) (hS : S.isCanonical)
-    (hsh : S.shareable = true) : ∀ p ∈ compilePackage S laws, ChecksAt p.2 S := by
+public theorem compilePackage_checks {S : Ty} (pkg : String) (laws : List (String × LawExpr))
+    (hS : S.isCanonical) (hsh : S.shareable = true) : ∀ p ∈ compilePackage S pkg laws, ChecksAt p.2 S := by
   intro p hp
   obtain ⟨⟨name, e⟩, _, rfl⟩ := List.mem_map.1 hp
-  exact compile_checks name e hS hsh
+  exact compile_checks pkg name e hS hsh
 
 /-! ## Teeth
 
@@ -683,56 +738,77 @@ namespace Teeth
     (.implies (.eqC (.field "flag") 1) (.eqR .caller (.field "total")))
 
 theorem tally_write_admitted :
-    Admits (compile flagTotal "tally" tally) (st false 5) (st true 7) (reqOf "ann" "ann" 0 9 writeO facts) :=
+    Admits (compile flagTotal "Tally" "tally" tally) (st false 5) (st true 7) (reqOf "ann" "ann" 0 9 writeO facts) :=
   (compile_admits_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide)
 
 theorem tally_write_refused :
-    Refuses (compile flagTotal "tally" tally) (st false 5) (st true 6) (reqOf "ann" "ann" 0 9 writeO facts) "tally" ∧
-      Refuses (compile flagTotal "tally" tally) (st false 5) (st false 4) (reqOf "ann" "ann" 0 9 (invokeO 1) facts)
+    Refuses (compile flagTotal "Tally" "tally" tally) (st false 5) (st true 6) (reqOf "ann" "ann" 0 9 writeO facts) "tally" ∧
+      Refuses (compile flagTotal "Tally" "tally" tally) (st false 5) (st false 4) (reqOf "ann" "ann" 0 9 (invokeO 1) facts)
         "tally" :=
   ⟨(compile_refuses_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_refuses_change (.inr ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide)⟩
 
 theorem first_write_teeth :
-    Refuses (compile flagTotal "m" (.monotone "total")) (st false 0) (st false 5)
+    Refuses (compile flagTotal "Tally" "m" (.monotone "total")) (st false 0) (st false 5)
         (reqOf "ann" "ann" 0 9 birthO facts) "m" ∧
-      Admits (compile flagTotal "w" (.writeOnce "total")) (st false 9) (st false 5)
+      Admits (compile flagTotal "Tally" "w" (.writeOnce "total")) (st false 9) (st false 5)
         (reqOf "ann" "ann" 0 9 (adoptO "L") facts) ∧
-      Refuses (compile flagTotal "w" (.writeOnce "total")) (st false 9) (st false 5)
+      Refuses (compile flagTotal "Tally" "w" (.writeOnce "total")) (st false 9) (st false 5)
         (reqOf "ann" "ann" 0 9 writeO facts) "w" ∧
-      Admits (compile flagTotal "w" (.writeOnce "total")) (st false 0) (st false 5)
+      Admits (compile flagTotal "Tally" "w" (.writeOnce "total")) (st false 0) (st false 5)
         (reqOf "ann" "ann" 0 9 writeO facts) :=
-  ⟨(compile_refuses_first (.inl ⟨_, rfl⟩) (by decide)).2 (by decide),
-    (compile_admits_first (.inr ⟨_, rfl⟩) (by decide)).2 (by decide),
+  ⟨(compile_refuses_birth (by decide)).2 (by decide),
+    (compile_admits_adopt (by decide)).2 (by decide),
     (compile_refuses_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_admits_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide)⟩
 
 theorem static_teeth :
-    Refuses (compile flagTotal "neg" (.leC (.field "total") (-1))) (st false 0) (st false 0)
+    Refuses (compile flagTotal "Tally" "neg" (.leC (.field "total") (-1))) (st false 0) (st false 0)
         (reqOf "ann" "ann" 0 9 writeO facts) "neg" ∧
-      Refuses (compile flagTotal "sub" (.eqC .subject 3)) (st false 0) (st false 0)
+      Refuses (compile flagTotal "Tally" "sub" (.eqC .subject 3)) (st false 0) (st false 0)
         (reqOf "ann" "ann" 0 9 writeO ⟨none, none, 0, 0⟩) "sub" ∧
-      Admits (compile flagTotal "sub" (.eqC .subject 3)) (st false 0) (st false 0)
+      Admits (compile flagTotal "Tally" "sub" (.eqC .subject 3)) (st false 0) (st false 0)
         (reqOf "ann" "ann" 0 9 writeO facts) ∧
-      Refuses (compile flagTotal "gap" (.leC (.field "missing") 5)) (st false 0) (st false 0)
+      Refuses (compile flagTotal "Tally" "gap" (.leC (.field "missing") 5)) (st false 0) (st false 0)
         (reqOf "ann" "ann" 0 9 writeO facts) "gap" ∧
-      Admits (compile flagTotal "off" (.leROff (.field "total") .height (-3))) (st false 0) (st false 7)
+      Admits (compile flagTotal "Tally" "off" (.leROff (.field "total") .height (-3))) (st false 0) (st false 7)
         (reqOf "ann" "ann" 0 9 writeO facts) ∧
-      Admits (compile flagTotal "tally" tally) (st false 5) (st false 0) (reqOf "ann" "ann" 0 9 (relawO "L") facts) :=
+      Admits (compile flagTotal "Tally" "tally" tally) (st false 5) (st false 0) (reqOf "ann" "ann" 0 9 retireO facts) :=
   ⟨(compile_refuses_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_refuses_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_admits_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_refuses_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_admits_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
-    compile_admits_inert (.inl ⟨_, rfl⟩)⟩
+    compile_admits_retire⟩
+
+/-- **Adoption, before and after.** Judged as a first write (no old state), `monotone(total)`
+refused EVERY adoption, whatever the state; judged as the identity write it admits the adoption of
+`total = 5`, and the law's bound still bites an adoption over a state that breaks it. -/
+theorem adopt_teeth :
+    (LawExpr.monotone "total").denote facts none (st false 5) = false ∧
+      Admits (compile flagTotal "Tally" "m" (.monotone "total")) (st false 0) (st false 5)
+        (reqOf "ann" "ann" 0 9 (adoptO "L") facts) ∧
+      Refuses (compile flagTotal "Tally" "tally" tally) (st false 0) (st false 2000)
+        (reqOf "ann" "ann" 0 9 (adoptO "L") facts) "tally" :=
+  ⟨by decide, (compile_admits_adopt (by decide)).2 (by decide),
+    (compile_refuses_adopt (by decide)).2 (by decide)⟩
+
+/-- **A relaw of a package law is refused, naming the package**, and is not admitted. -/
+theorem relaw_teeth :
+    Refuses (compile flagTotal "Tally" "tally" tally) (st false 5) (st false 5)
+        (reqOf "ann" "ann" 0 9 (relawO "L") facts)
+        "package law of Tally: changed by a package upgrade, not a relaw" ∧
+      ¬ Admits (compile flagTotal "Tally" "tally" tally) (st false 5) (st false 5)
+        (reqOf "ann" "ann" 0 9 (relawO "L") facts) :=
+  ⟨compile_refuses_relaw, refuses_not_admits compile_refuses_relaw⟩
 
 /-- The kernel's own run agrees with the theorem on the refused tally write. -/
 theorem tally_run_agrees :
-    refusalOf (run 4000 (applyLaw (compile flagTotal "tally" tally) (st false 5) (st true 6)
+    refusalOf (run 4000 (applyLaw (compile flagTotal "Tally" "tally" tally) (st false 5) (st true 6)
       (reqOf "ann" "ann" 0 9 writeO facts))) = some "tally" := by decide +kernel
 
-theorem tally_typed : ChecksAt (compile flagTotal "tally" tally) flagTotal :=
-  compile_checks "tally" tally (Obend.Law.Typing.Teeth.isCanonical_of (by decide)) rfl
+theorem tally_typed : ChecksAt (compile flagTotal "Tally" "tally" tally) flagTotal :=
+  compile_checks "Tally" "tally" tally (Obend.Law.Typing.Teeth.isCanonical_of (by decide)) rfl
 
 end Teeth
 
@@ -740,10 +816,11 @@ end Teeth
   ev_orT ev_impliesT ev_anyOf ev_eqNat ev_leNat ev_addNat ev_case_subst firstScalar_of_lookup
   kind_member subst_scalarRead field_read field_absent req_field_opt opt_read read_spec ev_eq
   ev_guarded ev_both subst_orT subst_impliesT subst_both contains_filter old_left old_right cond_eval
-  lawOf6_eval clause_eval armEnv_at compile_change compile_first compile_inert verdict_iff
-  compile_admits_change compile_refuses_change compile_admits_first compile_refuses_first
-  compile_admits_inert chk_opt chk_scalarRead chk_read chk_cond compile_checks compilePackage_checks
+  old_spec lawOf6_eval clause_eval armEnv_at compile_change compile_birth compile_adopt compile_relaw
+  compile_retire verdict_iff
+  compile_admits_change compile_refuses_change compile_admits_birth compile_refuses_birth
+  compile_admits_adopt compile_refuses_adopt compile_refuses_relaw compile_admits_retire chk_oldRead chk_opt chk_scalarRead chk_read chk_cond compile_checks compilePackage_checks
   Teeth.tally_write_admitted Teeth.tally_write_refused Teeth.first_write_teeth Teeth.static_teeth
-  Teeth.tally_run_agrees Teeth.tally_typed
+  Teeth.tally_run_agrees Teeth.tally_typed Teeth.adopt_teeth Teeth.relaw_teeth
 
 end Obend.Spec.LawCompile

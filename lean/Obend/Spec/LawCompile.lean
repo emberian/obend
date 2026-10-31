@@ -24,9 +24,15 @@ What the fragment reads, and how the compiled term reads it:
 
 The occasions (`lawOf6`, LANG-19/24, KERNEL-70): a `write` and an `invoke` are writes of the state,
 judged with the old state; a `birth` is a first write, judged with none; an `adopt` (this law being
-added over a state the object already has) is judged as a first write of that state, so a law is
-never installed over a state it would refuse; a `relaw` and a `retire` write no state and are
-admitted. A refusal's reason is the law's name.
+added over a state the object already has) is judged as the identity write of that state, old =
+new, so a law is never installed over a state it would refuse and `monotone` does not refuse it for
+want of a prior state; a `retire` writes no state and is admitted. A refusal's reason is the law's
+name.
+
+A `relaw` of a package law is REFUSED, naming the package (`relawRefusal`). A package law is part
+of the pinned program a receiver re-executes byte for byte, so the path to change it is a package
+upgrade (the carry), not a relaw. Relaw remains the path for object-level laws, and the metarule (a
+law must admit its own amendment) is satisfied for package laws by the upgrade path, not by relaw.
 -/
 public import Obend.Spec.Law
 public import Obend.Law.Std
@@ -97,9 +103,23 @@ def both (x y : Read) (cmp : Term → Term → Term) : Term :=
 
 /-! ## The condition and the law -/
 
-/-- The fragment as a boolean Core4 term at cursor `a`; `hasOld` says whether the act has an old
-state (`monotone`, `writeOnce` read it). -/
-def cond (S : Ty) (hasOld : Bool) (a : At) : LawExpr → Term
+/-- Where an act's old state comes from: none (a first write), the prior state (a write), or the
+new state itself (an adoption: the identity write of the state the law is added over). -/
+inductive OldSrc where
+  | none
+  | prior
+  | same
+  deriving DecidableEq, Repr
+
+/-- The old state's field `f` at cursor `a`. -/
+def oldRead (src : OldSrc) (a : At) (f : String) : Term :=
+  match src with
+  | .same => a.newF f
+  | _ => a.oldF f
+
+/-- The fragment as a boolean Core4 term at cursor `a`; `src` says where the act's old state comes
+from (`monotone`, `writeOnce` read it). -/
+def cond (S : Ty) (src : OldSrc) (a : At) : LawExpr → Term
   | .eqC r c =>
     if 0 ≤ c then andT (refRead S a r).present (eqNat (refRead S a r).value (natT c.toNat)) else falseT
   | .leC r c =>
@@ -113,37 +133,47 @@ def cond (S : Ty) (hasOld : Bool) (a : At) : LawExpr → Term
     if 0 ≤ k then both (refRead S a l) (refRead S a r) fun x y => leNat x (addNat y (natT k.toNat))
     else both (refRead S a l) (refRead S a r) fun x y => leNat (addNat x (natT (-k).toNat)) y
   | .monotone f =>
-    if hasOld then
+    if src = .none then falseT else
       match fieldKind S f with
-      | some k => leNat (scalarRead k (a.oldF f)) (scalarRead k (a.newF f))
+      | some k => leNat (scalarRead k (oldRead src a f)) (scalarRead k (a.newF f))
       | none => falseT
-    else falseT
   | .writeOnce f =>
-    if hasOld then
+    if src = .none then trueT else
       match fieldKind S f with
-      | some k => .ifBool (eqNat (scalarRead k (a.oldF f)) (natT 0)) trueT
-          (eqNat (scalarRead k (a.newF f)) (scalarRead k (a.oldF f)))
+      | some k => .ifBool (eqNat (scalarRead k (oldRead src a f)) (natT 0)) trueT
+          (eqNat (scalarRead k (a.newF f)) (scalarRead k (oldRead src a f)))
       | none => trueT
-    else trueT
-  | .not e => notT (cond S hasOld a e)
-  | .and l r => andT (cond S hasOld a l) (cond S hasOld a r)
-  | .or l r => orT (cond S hasOld a l) (cond S hasOld a r)
-  | .implies l r => impliesT (cond S hasOld a l) (cond S hasOld a r)
+  | .not e => notT (cond S src a e)
+  | .and l r => andT (cond S src a l) (cond S src a r)
+  | .or l r => orT (cond S src a l) (cond S src a r)
+  | .implies l r => impliesT (cond S src a l) (cond S src a r)
 
 /-- The clause: the condition, else refuse with the law's name. -/
-def clause (S : Ty) (name : String) (e : LawExpr) (hasOld : Bool) (a : At) : Term :=
-  guard (cond S hasOld a e) name okT
+def clause (S : Ty) (name : String) (e : LawExpr) (src : OldSrc) (a : At) : Term :=
+  guard (cond S src a e) name okT
 
-/-- **The compiled law** `name` over the state type `S`: a write or an invoke is judged with the
-old state, a birth or an adoption as a first write; a relaw and a retirement are admitted. -/
-def compile (S : Ty) (name : String) (e : LawExpr) : Term :=
-  lawOf6 (clause S name e false) (clause S name e false) (fun _ => okT) (fun _ => okT)
-    (clause S name e true) (clause S name e true)
+/-- Why a relaw of a package law is refused: it names the package, whose upgrade is the path. -/
+def relawRefusal (pkg : String) : String :=
+  "package law of " ++ pkg ++ ": changed by a package upgrade, not a relaw"
+
+/-- **The compiled law** `name` of package `pkg` over the state type `S`: a write or an invoke is
+judged with the old state, a birth as a first write, an adoption as the identity write; a relaw is
+refused naming the package; a retirement is admitted. -/
+def compile (S : Ty) (pkg name : String) (e : LawExpr) : Term :=
+  lawOf6 (clause S name e .none) (clause S name e .same) (fun _ => refusedT (relawRefusal pkg))
+    (fun _ => okT) (clause S name e .prior) (clause S name e .prior)
 
 /-- A package's laws, each compiled, by name (the kernel installs every one: an act is admitted
 when each admits). -/
-def compilePackage (S : Ty) (laws : List (String × LawExpr)) : List (String × Term) :=
-  laws.map fun (name, e) => (name, compile S name e)
+def compilePackage (S : Ty) (pkg : String) (laws : List (String × LawExpr)) : List (String × Term) :=
+  laws.map fun (name, e) => (name, compile S pkg name e)
+
+/-- The old state an act is judged with, as `denote` takes it. -/
+def oldOf (src : OldSrc) (o n : Data) : Option Data :=
+  match src with
+  | .none => none
+  | .prior => some o
+  | .same => some n
 
 /-! ## What the theorems quantify over -/
 

@@ -64,7 +64,13 @@ def verdict (law : Obend.Core.Term.Term) (o n rq : Data) : Option Bool :=
         let rb := reqOf "ann" "ann" 0 9 birthO fs
         check s!"{name}: birth {repr (e.denote fs none n)}"
           (verdict t o n rb == some (e.denote fs none n))
-      check s!"{name}: relaw admitted" (verdict t (st false 1) (st false 1) (reqOf "ann" "ann" 0 9 (relawO "L") fs) == some true)
+      check s!"{name}: relaw refused, naming the package"
+        (refusalOf (run 20000 (applyLaw t (st false 1) (st false 1) (reqOf "ann" "ann" 0 9 (relawO "L") fs))) ==
+          some (relawRefusal "Tally.seed"))
+      for (_, n) in writes do
+        let ra := reqOf "ann" "ann" 0 9 (adoptO "L") fs
+        check s!"{name}: adopt {repr (e.denote fs (some n) n)}"
+          (verdict t (st true 0) n ra == some (e.denote fs (some n) n))
   -- A law outside the fragment refuses at lowering, by name of the construct.
   let bad : SourceModule := ⟨"Bad", source.replace "law once: writeOnce(total)" "law once: old.total == 1", "", []⟩
   check "a law outside the fragment refuses"
