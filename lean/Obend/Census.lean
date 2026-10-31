@@ -279,6 +279,7 @@ import Obend.Run.Proofs.Durable
 import Obend.Run.Proofs.Interpret
 import Obend.Run.Proofs.Invariant
 import Obend.Run.Proofs.Shared
+import Obend.Run.Reflect
 import Obend.Run.Runner
 import Obend.Run.Shared
 import Obend.Run.SharedExample
@@ -326,6 +327,7 @@ import Obend.Tactic.MonadicReduction
 import Obend.Tactic.Tooth
 import Obend.Teeth.Core.BackFail
 import Obend.Teeth.Core.CheckTeeth
+import Obend.Teeth.Core.CodeTeeth
 import Obend.Teeth.Core.Collect
 import Obend.Teeth.Core.CollectTyping
 import Obend.Teeth.Core.CollectYield

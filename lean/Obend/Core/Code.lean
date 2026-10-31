@@ -14,8 +14,20 @@ of the machine and never applied to a `RuntimeValue`; no `Term` constructor is a
   node). `address t := dataDigest deployed (quote t)`, and `digest_of_quote` (T2): equal addresses
   are equal terms, or cSHAKE256 collides. Under a length-only hash two terms share one address
   (`lengthHash_address_collapses`).
-* `encodingVersion` is the digest of the `Syntax` schema (`syntaxSchema`, built from `tagData`
-  itself), so a change to the rendering of any tag changes the version (or collides).
+* `encodingVersion` is the digest of the whole schema (§5b): every codec a quotation crosses with
+  (the syntax, types, quantities, annotations, trees, theories, kind pins, the envelope) as a table
+  of rules each deployed codec is proved to be on every value, and the checker's edition
+  (`checkerEdition`). `version_fixes_codecs`: a reader with this version renders every value as this
+  edition does, or cSHAKE256 collides (C1; Kimi A: the old digest hashed one representative per tag).
+* `Code Ψ A θ` is a held term the importer's checker accepts (`checkAgainst`), so `import_complete`
+  is exact (a code's quotation imports back to it) with no re-synthesis; `typed_has_code` is the
+  completeness that used to sit inside it. A quotation carries the kinds its types name at the
+  versions it was checked against (`Held.kinds`); a `Reader` holds today's versions, a migration
+  judgment and a work grant: a revised kind is refused by name (`kindVersion`) unless the reader's
+  judgment migrates it, and a migrated quotation is rechecked under the reader's rules, never
+  replayed; checking beyond the grant is refused by name (`overBudget`).
+* §7 mirrors are descriptors: a service answers them through `Obend.Run.Reflect.answer`, admitted
+  like every action (principal, target, grant, view, depth), never by holding the record.
 -/
 public import Obend.Core.TermTraverse
 public import Obend.Core.Data
@@ -27,6 +39,9 @@ public import Obend.Core.Invariant
 public import Obend.Core.MachineTyping
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Slot.Core4
+public import Obend.Kind
+public import Obend.Elab.Work
+public import Obend.Core.Nominal
 public import Obend.Tactic.Tooth
 import all Obend.Core.Check
 public section
@@ -439,7 +454,9 @@ theorem lengthHash_address_collapses :
 
 `Term` has gained a constructor once (`hole`). A quotation crosses with the digest of the encoding
 it was written in, and a reader refuses a tree from another encoding, naming both digests: a
-quotation taken under an older `Term` is never silently re-read (orientation §8.1). -/
+quotation taken under an older `Term` is never silently re-read (orientation §8.1). The digest
+(`encodingVersion`, §5b) covers every rule of every codec a quotation crosses with (the syntax, the
+typed envelope) and the checker's edition. -/
 
 /-- A `Syntax` list: `nil` / `cons{head, tail}`. -/
 def listData : List Data → Data
@@ -454,35 +471,6 @@ def listOf : Data → Option (List Data)
 theorem listOf_listData : ∀ ds : List Data, listOf (listData ds) = some ds
   | [] => rfl
   | d :: ds => by simp [listData, listOf, listOf_listData ds]
-
-/-- One representative of every tag constructor, in declaration order. -/
-def tagRepresentatives : List Tag :=
-  [.hole 0, .app, .mix, .fix, .specification, .prototype, .reflect, .metadata, .project, .ifBool,
-    .perform, .done, .nat 0, .boolean false, .label "", .binary .add, .extend, .record, .ifZero,
-    .case, .get "", .inject "", .field ""]
-
-/-- The schema of an encoding: how it renders each tag, in order. -/
-def schemaWith (render : Tag → Data) : Data := listData (tagRepresentatives.map render)
-
-/-- The `Syntax` schema of this edition. -/
-def syntaxSchema : Data := schemaWith tagData
-
-/-- **The encoding's digest.** Never evaluated by a proof (one cSHAKE256 per node). -/
-def encodingVersion : Nat := dataDigest deployed syntaxSchema
-
-/-- Two encodings with one version render every tag alike, or cSHAKE256 collides. -/
-theorem encodingVersion_binds {render : Tag → Data}
-    (h : dataDigest deployed (schemaWith render) = encodingVersion) :
-    schemaWith render = syntaxSchema ∨ Collision deployed :=
-  dataDigest_binds deployed_short h
-
-/-- The lossy rendering (`mix` as `app`) is another encoding: its schema differs from this
-edition's, so its version differs or cSHAKE256 collides. -/
-theorem lossy_schema_differs : schemaWith lossyTagData ≠ syntaxSchema := by
-  intro h
-  simp only [schemaWith, syntaxSchema, tagRepresentatives, List.map, listData, lossyTagData,
-    tagData, Data.variant.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq] at h
-  simp at h
 
 /-- A quotation as it crosses: the encoding's digest, then the body. -/
 def versioned (version : Nat) (body : Data) : Data :=
@@ -533,6 +521,7 @@ quotation checked under another theory, by name. Lists are `Syntax` lists (`list
 open Obend.Core.Ty (Ty Quantity Reuse LambdaAnnotation Context Binding)
 open Obend.Core.Check (Assumptions AnnotatedTerm Checked PartialTyping)
 open Obend.Core.Bidirectional (CheckRefusal checkAgainst checkAgainst_sound)
+open Obend.Elab.Work (checkWork)
 open Obend.Core.Proofs.BidirectionalCompleteness (AnnotationTree treeAnnotations)
 
 deriving instance DecidableEq for Obend.Core.Check.Assumptions
@@ -694,34 +683,338 @@ theorem assumptionsOf_assumptionsData (θ : Assumptions) :
   simp [assumptionsData, assumptionsOf, listOfWith_listWith boundOf boundData boundOf_boundData,
     listOfWith_listWith naturalOf Data.natural (fun _ => rfl)]
 
+/-! ## §5b. The schema: every rule of every codec, and the checker's edition
+
+Kimi A (2026-11-01): a digest of one representative per tag leaves a renderer changed at `.hole 1`
+or at a nonempty label under the same version. Here every codec a quotation crosses with is a TABLE
+of rules, one per constructor: the constructor's rendering with a numbered `hole` where each
+argument's own rendering goes (`fill`). `view` says which rule a value uses and what fills its holes
+(the arguments' renderings, in declaration order); each deployed codec is proved to BE its table
+(`*_conforms`, for every value, not for representatives). The schema is every table, the kinds'
+pin codec, the envelope's, and the checker's edition (`checkerEdition`: the typing rules a reader
+must hold to re-read a quotation as it was checked; rechecking under another edition is a
+migration, never a replay). `encodingVersion` is the schema's digest, and `version_fixes_codecs`:
+a reader whose tables have this version renders every value of every sort as this edition does,
+or cSHAKE256 collides. -/
+
+/-- Where argument `i` of a rule goes. No codec renders the label `?`. -/
+@[expose] def hole (i : Nat) : Data := .variant "?" (.natural i)
+
+mutual
+/-- A rule with its holes filled by the arguments' renderings. -/
+@[expose] def fill (args : List Data) : Data → Data
+  | .variant l p => if l = "?" then (match p with
+      | .natural i => args.getD i unit
+      | _ => .variant l (fill args p))
+    else .variant l (fill args p)
+  | .record fs => .record (fillFields args fs)
+  | d => d
+@[expose] def fillFields (args : List Data) : List (String × Data) → List (String × Data)
+  | [] => []
+  | (n, d) :: rest => (n, fill args d) :: fillFields args rest
+end
+
+/-- The rule a table gives constructor `i`. -/
+@[expose] def ruleOf (table : List Data) (i : Nat) : Data := table.getD i unit
+
+/-- A value rendered by a table: its constructor's rule, filled. -/
+@[expose] def byTable (table : List Data) (view : Nat × List Data) : Data := fill view.2 (ruleOf table view.1)
+
+def unitRule (name : String) : Data := .variant name unit
+def oneRule (name : String) : Data := .variant name (hole 0)
+
+/-! ### Primitives and tags -/
+
+def primitiveIndex : Primitive → Nat
+  | .add => 0 | .multiply => 1 | .equal => 2 | .conjunction => 3 | .labelEqual => 4
+  | .subtract => 5 | .divide => 6 | .less => 7 | .lessEqual => 8 | .modulo => 9
+
+def primitiveRules : List Data :=
+  ["add", "multiply", "equal", "conjunction", "labelEqual", "subtract", "divide", "less", "lessEqual",
+    "modulo"].map Data.label
+
+theorem primitive_conforms (p : Primitive) :
+    Data.label (primitiveName p) = byTable primitiveRules (primitiveIndex p, []) := by
+  cases p <;> rfl
+
+def tagView : Tag → Nat × List Data
+  | .hole n => (0, [.natural n]) | .app => (1, []) | .mix => (2, []) | .fix => (3, [])
+  | .specification => (4, []) | .prototype => (5, []) | .reflect => (6, []) | .metadata => (7, [])
+  | .project => (8, []) | .ifBool => (9, []) | .perform => (10, []) | .done => (11, [])
+  | .nat v => (12, [.natural v]) | .boolean v => (13, [.boolean v]) | .label v => (14, [.label v])
+  | .binary p => (15, [.label (primitiveName p)]) | .extend => (16, []) | .record => (17, [])
+  | .ifZero => (18, []) | .case => (19, []) | .get n => (20, [.label n]) | .inject n => (21, [.label n])
+  | .field n => (22, [.label n])
+
+def tagRules : List Data :=
+  [oneRule "hole", unitRule "app", unitRule "mix", unitRule "fix", unitRule "specification",
+    unitRule "prototype", unitRule "reflect", unitRule "metadata", unitRule "project", unitRule "ifBool",
+    unitRule "perform", unitRule "done", oneRule "nat", oneRule "boolean", oneRule "label",
+    oneRule "binary", unitRule "extend", unitRule "record", unitRule "ifZero", unitRule "case",
+    oneRule "get", oneRule "inject", oneRule "field"]
+
+theorem tag_conforms (t : Tag) : tagData t = byTable tagRules (tagView t) := by
+  cases t <;> rfl
+
+/-! ### Shapes and lists -/
+
+def listRules : List Data :=
+  [unitRule "nil", .variant "cons" (.record [("head", hole 0), ("tail", hole 1)])]
+
+def shapeView : Shape → Nat × List Data
+  | .var i => (0, [.natural i])
+  | .bind b => (1, [shapeData b])
+  | .node tag cs => (2, [tagData tag, childrenData cs])
+
+def shapeRules : List Data :=
+  [oneRule "var", oneRule "bind", .variant "node" (.record [("tag", hole 0), ("children", hole 1)])]
+
+theorem shape_conforms (s : Shape) : shapeData s = byTable shapeRules (shapeView s) := by
+  cases s <;> simp [shapeData, shapeView, byTable, ruleOf, shapeRules, fill, fillFields, hole, oneRule]
+
+def childrenView : List Shape → Nat × List Data
+  | [] => (0, [])
+  | c :: cs => (1, [shapeData c, childrenData cs])
+
+theorem children_conforms (cs : List Shape) : childrenData cs = byTable listRules (childrenView cs) := by
+  cases cs <;> simp [childrenData, childrenView, byTable, ruleOf, listRules, fill, fillFields, hole, unitRule, unit]
+
+def listView : List Data → Nat × List Data
+  | [] => (0, [])
+  | d :: ds => (1, [d, listData ds])
+
+theorem list_conforms (ds : List Data) : listData ds = byTable listRules (listView ds) := by
+  cases ds <;> simp [listData, listView, byTable, ruleOf, listRules, fill, fillFields, hole, unitRule, unit]
+
+/-! ### The typed envelope: types, quantities, annotations, trees, theories -/
+
+def quantityView : Quantity → Nat × List Data
+  | .erased => (0, []) | .affine => (1, []) | .linear => (2, []) | .unrestricted => (3, [])
+def quantityRules : List Data := ["erased", "affine", "linear", "unrestricted"].map Data.label
+theorem quantity_conforms (q : Quantity) : quantityData q = byTable quantityRules (quantityView q) := by
+  cases q <;> rfl
+
+def reuseView : Reuse → Nat × List Data
+  | .once => (0, []) | .reusable => (1, [])
+def reuseRules : List Data := ["once", "reusable"].map Data.label
+theorem reuse_conforms (r : Reuse) : reuseData r = byTable reuseRules (reuseView r) := by
+  cases r <;> rfl
+
+def tyView : Ty → Nat × List Data
+  | .natural => (0, []) | .label => (1, []) | .boolean => (2, []) | .variable i => (3, [.natural i])
+  | .arrow r q d c => (4, [reuseData r, quantityData q, tyData d, tyData c])
+  | .emptyRow => (5, []) | .field n m t => (6, [.label n, tyData m, tyData t])
+  | .specification m e => (7, [tyData m, tyData e]) | .prototype s t => (8, [tyData s, tyData t])
+  | .custody i => (9, [.natural i]) | .variant r => (10, [tyData r])
+  | .computation p r c => (11, [tyData p, tyData r, tyData c])
+
+def tyRules : List Data :=
+  [unitRule "natural", unitRule "label", unitRule "boolean", oneRule "variable",
+    .variant "arrow" (.record [("reuse", hole 0), ("parameter", hole 1), ("domain", hole 2), ("codomain", hole 3)]),
+    unitRule "emptyRow", .variant "field" (.record [("name", hole 0), ("member", hole 1), ("tail", hole 2)]),
+    .variant "specification" (.record [("metadata", hole 0), ("extension", hole 1)]),
+    .variant "prototype" (.record [("spec", hole 0), ("target", hole 1)]), oneRule "custody", oneRule "variant",
+    .variant "computation" (.record [("plan", hole 0), ("response", hole 1), ("result", hole 2)])]
+
+theorem ty_conforms (t : Ty) : tyData t = byTable tyRules (tyView t) := by
+  cases t <;> simp [tyData, tyView, byTable, ruleOf, tyRules, fill, fillFields, hole, oneRule, unitRule, unit]
+
+def annotationRules : List Data :=
+  [.record [("domain", hole 0), ("codomain", hole 1), ("parameter", hole 2), ("reuse", hole 3)]]
+def annotationView (a : LambdaAnnotation) : Nat × List Data :=
+  (0, [tyData a.domain, tyData a.codomain, quantityData a.parameter, reuseData a.reuse])
+theorem annotation_conforms (a : LambdaAnnotation) :
+    annotationData a = byTable annotationRules (annotationView a) := by
+  simp [annotationData, annotationView, byTable, ruleOf, annotationRules, fill, fillFields, hole]
+
+def optionRules : List Data := [unitRule "none", oneRule "some"]
+def optionView {α : Type} (g : α → Data) : Option α → Nat × List Data
+  | none => (0, []) | some x => (1, [g x])
+theorem option_conforms {α : Type} (g : α → Data) (o : Option α) :
+    optionData g o = byTable optionRules (optionView g o) := by
+  cases o <;> simp [optionData, optionView, byTable, ruleOf, optionRules, fill, fillFields, hole, oneRule, unitRule, unit]
+
+def treeRules : List Data := [.record [("here", hole 0), ("children", hole 1)]]
+def treeView : AnnotationTree → Nat × List Data
+  | .node here children => (0, [optionData annotationData here, forestData children])
+theorem tree_conforms (t : AnnotationTree) : treeData t = byTable treeRules (treeView t) := by
+  cases t <;> simp [treeData, treeView, byTable, ruleOf, treeRules, fill, fillFields, hole]
+def forestView : List AnnotationTree → Nat × List Data
+  | [] => (0, []) | t :: ts => (1, [treeData t, forestData ts])
+theorem forest_conforms (ts : List AnnotationTree) : forestData ts = byTable listRules (forestView ts) := by
+  cases ts <;> simp [forestData, forestView, byTable, ruleOf, listRules, fill, fillFields, hole, unitRule, unit]
+
+def boundRules : List Data := [.record [("index", hole 0), ("bound", hole 1)]]
+theorem bound_conforms (b : Nat × Ty) : boundData b = byTable boundRules (0, [.natural b.1, tyData b.2]) := by
+  simp [boundData, byTable, ruleOf, boundRules, fill, fillFields, hole]
+
+def assumptionsRules : List Data :=
+  [.record [("bounds", hole 0), ("shareableVariables", hole 1), ("rigid", hole 2)]]
+theorem assumptions_conforms (θ : Assumptions) :
+    assumptionsData θ = byTable assumptionsRules (0, [listWith boundData θ.bounds,
+      listWith Data.natural θ.shareableVariables, listWith Data.natural θ.rigid]) := by
+  simp [assumptionsData, byTable, ruleOf, assumptionsRules, fill, fillFields, hole]
+
+/-- A kind at a version: what a quotation pins of each kind its types name. -/
+def kindVersionData (kv : Obend.Kind.KindVersion) : Data :=
+  .record [("kind", .label kv.name), ("version", .natural kv.version)]
+def kindVersionOf : Data → Option Obend.Kind.KindVersion
+  | .record [("kind", .label k), ("version", .natural v)] => some ⟨k, v⟩
+  | _ => none
+theorem kindVersionOf_kindVersionData (kv : Obend.Kind.KindVersion) :
+    kindVersionOf (kindVersionData kv) = some kv := by
+  cases kv; rfl
+def kindVersionRules : List Data := [.record [("kind", hole 0), ("version", hole 1)]]
+theorem kindVersion_conforms (kv : Obend.Kind.KindVersion) :
+    kindVersionData kv = byTable kindVersionRules (0, [.label kv.name, .natural kv.version]) := by
+  simp [kindVersionData, byTable, ruleOf, kindVersionRules, fill, fillFields, hole]
+
+def heldRules : List Data :=
+  [.record [("term", hole 0), ("annotations", hole 1), ("assumptions", hole 2), ("kinds", hole 3)]]
+def versionedRules : List Data := [.record [("encoding", hole 0), ("body", hole 1)]]
+theorem versioned_conforms (v : Nat) (body : Data) :
+    versioned v body = byTable versionedRules (0, [.natural v, body]) := by
+  simp [versioned, byTable, ruleOf, versionedRules, fill, fillFields, hole]
+
+/-! ### The schema and its digest -/
+
+/-- **The checker's edition**: the typing rules a quotation was checked by. A reader re-reads a
+quotation as it was checked only under this edition; under another it may recheck it (a migration,
+by its own judgment), never replay it. Bumped with every change to what `checkAgainst` accepts. -/
+def checkerEdition : String := "obend-core4-bidirectional/2026-11-01 (C1: kinds nominal by brand)"
+
+/-- A schema: the edition and every codec table, in a fixed order. -/
+structure Schema where
+  edition : String
+  primitive : List Data
+  tag : List Data
+  shape : List Data
+  list : List Data
+  quantity : List Data
+  reuse : List Data
+  ty : List Data
+  annotation : List Data
+  option : List Data
+  tree : List Data
+  bound : List Data
+  assumptions : List Data
+  kindVersion : List Data
+  held : List Data
+  versioned : List Data
+
+/-- This edition's schema. -/
+def schema : Schema :=
+  ⟨checkerEdition, primitiveRules, tagRules, shapeRules, listRules, quantityRules, reuseRules, tyRules,
+    annotationRules, optionRules, treeRules, boundRules, assumptionsRules, kindVersionRules, heldRules,
+    versionedRules⟩
+
+def Schema.tables (s : Schema) : List (List Data) :=
+  [s.primitive, s.tag, s.shape, s.list, s.quantity, s.reuse, s.ty, s.annotation, s.option, s.tree,
+    s.bound, s.assumptions, s.kindVersion, s.held, s.versioned]
+
+/-- A schema as data: its edition, then its tables. -/
+def schemaData (s : Schema) : Data :=
+  .record [("edition", .label s.edition), ("tables", listData (s.tables.map listData))]
+
+def schemaOf : Data → Option Schema
+  | .record [("edition", .label e), ("tables", ts)] => do
+      match (← listOfWith listOf ts) with
+      | [p, t, sh, l, q, r, ty, a, o, tr, b, th, kv, h, v] => pure ⟨e, p, t, sh, l, q, r, ty, a, o, tr, b, th, kv, h, v⟩
+      | _ => none
+  | _ => none
+
+theorem schemaOf_schemaData (s : Schema) : schemaOf (schemaData s) = some s := by
+  have h : listOfWith listOf (listData (s.tables.map listData)) = some s.tables :=
+    listOfWith_listWith listOf listData listOf_listData s.tables
+  simp only [schemaData, schemaOf]
+  rw [h]
+  rfl
+
+theorem schemaData_injective {s s' : Schema} (h : schemaData s = schemaData s') : s = s' := by
+  have := schemaOf_schemaData s
+  rw [h, schemaOf_schemaData] at this
+  exact (Option.some.inj this).symm
+
+/-- **The encoding's digest**: of the whole schema. Never evaluated by a proof (one cSHAKE256 per
+node). -/
+def encodingVersion : Nat := dataDigest deployed (schemaData schema)
+
+/-- **Equal versions, equal schemas**: a schema with this edition's version is this edition's
+schema (its edition and every rule of every table), or cSHAKE256 collides. -/
+theorem encodingVersion_binds {s : Schema} (h : dataDigest deployed (schemaData s) = encodingVersion) :
+    s = schema ∨ Collision deployed := by
+  rcases dataDigest_binds deployed_short h with same | collides
+  · exact .inl (schemaData_injective same)
+  · exact .inr collides
+
+/-- **The version fixes every codec on every value**: a reader whose tables have this edition's
+version renders every tag, shape, type, annotation tree and theory as this edition does (and holds
+its checker edition), or cSHAKE256 collides. Not representatives: every value. -/
+theorem version_fixes_codecs {s : Schema} (h : dataDigest deployed (schemaData s) = encodingVersion) :
+    (s.edition = checkerEdition ∧
+      (∀ t, byTable s.tag (tagView t) = tagData t) ∧ (∀ x, byTable s.shape (shapeView x) = shapeData x) ∧
+      (∀ cs, byTable s.list (childrenView cs) = childrenData cs) ∧ (∀ ty, byTable s.ty (tyView ty) = tyData ty) ∧
+      (∀ q, byTable s.quantity (quantityView q) = quantityData q) ∧ (∀ r, byTable s.reuse (reuseView r) = reuseData r) ∧
+      (∀ a, byTable s.annotation (annotationView a) = annotationData a) ∧
+      (∀ t, byTable s.tree (treeView t) = treeData t) ∧ (∀ ts, byTable s.list (forestView ts) = forestData ts) ∧
+      (∀ kv : Obend.Kind.KindVersion, byTable s.kindVersion (0, [.label kv.name, .natural kv.version]) = kindVersionData kv)) ∨
+      Collision deployed := by
+  rcases encodingVersion_binds h with rfl | collides
+  · exact .inl ⟨rfl, fun t => (tag_conforms t).symm, fun x => (shape_conforms x).symm,
+      fun cs => (children_conforms cs).symm, fun ty => (ty_conforms ty).symm, fun q => (quantity_conforms q).symm,
+      fun r => (reuse_conforms r).symm, fun a => (annotation_conforms a).symm, fun t => (tree_conforms t).symm,
+      fun ts => (forest_conforms ts).symm, fun kv => (kindVersion_conforms kv).symm⟩
+  · exact .inr collides
+
+/-- The lossy rendering (`mix` as `app`) is another table: its schema differs from this edition's,
+so its version differs or cSHAKE256 collides. -/
+theorem lossy_schema_differs :
+    { schema with tag := tagRules.set 2 (unitRule "app") } ≠ schema := by
+  intro h
+  have := congrArg Schema.tag h
+  simp [schema, tagRules, unitRule] at this
+
 /-! ## §6. `Code Ψ A θ` and the checked importer -/
 
-/-- A term as the kernel holds it: its finite annotation tree and the theory it is checked under. -/
+/-- A term as the kernel holds it: its finite annotation tree, the theory it is checked under, and
+the kinds its types name, each at the version of its layout, law and methods it was checked
+against (its pins; the identity itself is in the types, `Obend.Core.Nominal`). -/
 structure Held where
   term : Term
   tree : AnnotationTree
   assumptions : Assumptions
+  kinds : List Obend.Kind.KindVersion := []
 
 @[expose] def Held.annotated (h : Held) : AnnotatedTerm := ⟨h.term, treeAnnotations h.tree, h.assumptions⟩
 
-/-- **`Code Ψ A θ`**: a term typed at `A` in hypotheses `Ψ` under the theory `θ`. The typing is
-`Typed` of the slot calculus (`Slot/Core4.lean`): a `Checked` certificate at type `A`. -/
+/-- **`Code Ψ A θ`**: a held term the importer's own judgment accepts at `A` in hypotheses `Ψ` under
+the theory `θ` (`checkAgainst`, the checker the importer runs). Defined by that judgment, not by a
+derivation found some other way, so the quotation of a code imports back to exactly it with no
+re-synthesis (`import_complete`), and every code is typed (`Code.typed`). -/
 @[expose] def Code (Ψ : Context) (A : Ty) (θ : Assumptions) : Type :=
-  { t : AnnotatedTerm // t.assumptions = θ ∧ ∃ c : Checked t Ψ, c.type = A }
+  { h : Held // h.assumptions = θ ∧ ∃ k : Checked h.annotated Ψ, checkAgainst h.annotated Ψ A = .ok k }
 
 theorem Code.typed {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
-    Obend.Slot.Core4.Typed Ψ c.val A := c.2.2
+    Obend.Slot.Core4.Typed Ψ c.val.annotated A := by
+  obtain ⟨_, k, hk⟩ := c.2
+  exact ⟨k, (checkAgainst_sound hk).1⟩
 
 /-- The body of a quotation of held code. -/
 def heldData (h : Held) : Data :=
   .record [("term", quote h.term), ("annotations", treeData h.tree),
-    ("assumptions", assumptionsData h.assumptions)]
+    ("assumptions", assumptionsData h.assumptions), ("kinds", listWith kindVersionData h.kinds)]
 def heldOf : Data → Option Held
-  | .record [("term", t), ("annotations", a), ("assumptions", θ)] => do
-      pure ⟨← unquote t, ← treeOf a, ← assumptionsOf θ⟩
+  | .record [("term", t), ("annotations", a), ("assumptions", θ), ("kinds", ks)] => do
+      pure ⟨← unquote t, ← treeOf a, ← assumptionsOf θ, ← listOfWith kindVersionOf ks⟩
   | _ => none
 theorem heldOf_heldData (h : Held) : heldOf (heldData h) = some h := by
-  simp [heldData, heldOf, quote_roundtrip, treeOf_treeData, assumptionsOf_assumptionsData]
+  simp [heldData, heldOf, quote_roundtrip, treeOf_treeData, assumptionsOf_assumptionsData,
+    listOfWith_listWith kindVersionOf kindVersionData kindVersionOf_kindVersionData]
+
+theorem held_conforms (h : Held) :
+    heldData h = byTable heldRules (0, [quote h.term, treeData h.tree, assumptionsData h.assumptions,
+      listWith kindVersionData h.kinds]) := by
+  simp [heldData, byTable, ruleOf, heldRules, fill, fillFields, hole]
 
 /-- A quotation of held code as it crosses: the encoding version, then the body. -/
 def quotation (version : Nat) (h : Held) : Data := versioned version (heldData h)
@@ -892,53 +1185,123 @@ theorem noHole_holeOf {t : Term} (h : NoHole t) : holeOf (encode t) = none := by
 /-! ### The importer -/
 
 inductive ImportRefusal where
-  /-- Not a versioned quotation, or one written in another encoding (both digests named). -/
+  /-- Not a versioned quotation, or one written in another encoding or checker edition (both
+  digests named). -/
   | version (refusal : VersionRefusal)
-  /-- The body is not a term, an annotation tree and a theory in this encoding. -/
+  /-- The body is not a term, an annotation tree, a theory and kind pins in this encoding. -/
   | malformed
+  /-- The quotation names a kind this reader does not hold. -/
+  | unknownKind (kind : String)
+  /-- The quotation was checked against version `found` of a kind this reader holds at `expected`,
+  and the reader's migration judgment does not take the one to the other. -/
+  | kindVersion (kind : String) (found expected : Nat)
+  /-- Checking it would cost `work` units of the checker's work; this reader grants `grant`. -/
+  | overBudget (work grant : Nat)
   /-- Checked under `found`; this import is at `expected`. -/
   | assumptionsDiffer (found expected : Assumptions)
   /-- A free index escapes the hypotheses (counted at the root). -/
   | escapedIndex (index : Nat)
   /-- A hole, at its `Syntax` position: a term with a hole is data, never code. -/
   | holeInCode (position : List Nat) (identity : Nat)
+  /-- The checker refused where two kinds crossed, Mile expected and Kilo given, at `position`. -/
+  | kindsCrossed (position : List Nat) (expected actual : String)
   /-- The checker's own refusal, with its position. -/
   | rejected (refusal : CheckRefusal)
 
-/-- Why the checker refused: an escaped index first, then a hole, else the checker's words. -/
+/-- Why the checker refused: an escaped index first, then a hole, then two kinds crossed, else the
+checker's words. -/
 def diagnose (Ψ : Context) (t : Term) (refusal : CheckRefusal) : ImportRefusal :=
   match escapeOf Ψ.length (encode t) with
   | some i => .escapedIndex i
   | none => match holeOf (encode t) with
     | some found => .holeInCode found.1 found.2
-    | none => .rejected refusal
+    | none => match Obend.Core.Nominal.crossedKinds refusal with
+      | some (p, k, k') => .kindsCrossed p k k'
+      | none => .rejected refusal
 
 /-- Check a held term at `A` in `Ψ` under `θ`. -/
 def checkHeld (Ψ : Context) (A : Ty) (θ : Assumptions) (h : Held) :
     Except ImportRefusal (Code Ψ A θ) :=
   if hθ : h.assumptions = θ then
     match accepted : checkAgainst h.annotated Ψ A with
-    | .ok c => .ok ⟨h.annotated, hθ, c, (checkAgainst_sound accepted).1⟩
+    | .ok c => .ok ⟨h, hθ, c, accepted⟩
     | .error e => .error (diagnose Ψ h.term e)
   else .error (.assumptionsDiffer h.assumptions θ)
 
-/-- **The checked importer** of a reader of encoding `version`. -/
-def importWith (version : Nat) (Ψ : Context) (A : Ty) (θ : Assumptions) (d : Data) :
+/-- **A reader**: the encoding (with the checker edition) it reads, the checker work it grants one
+import, the kinds it holds now with their versions, and its migration judgment (whether it takes a
+quotation checked against version `v` of kind `k` to the version it holds, by rechecking under its
+own rules). The default judges no migration. -/
+structure Reader where
+  version : Nat
+  grant : Nat
+  kinds : List Obend.Kind.KindVersion := []
+  migrate : String → Nat → Nat → Bool := fun _ _ _ => false
+
+/-- The kind pins of a quotation against a reader: each kind held at the pinned version, or taken
+to the reader's by its migration judgment (then `true`: the quotation is migrated), or refused by
+name. -/
+def pinsAgainst (r : Reader) : List Obend.Kind.KindVersion → Except ImportRefusal Bool
+  | [] => .ok false
+  | kv :: rest =>
+    match r.kinds.find? (·.name == kv.name) with
+    | none => .error (.unknownKind kv.name)
+    | some now =>
+      if now.version = kv.version then pinsAgainst r rest
+      else if r.migrate kv.name kv.version now.version then (pinsAgainst r rest).map fun _ => true
+      else .error (.kindVersion kv.name kv.version now.version)
+
+/-- A migrated quotation's pins: the reader's versions of its kinds. -/
+def repin (r : Reader) (h : Held) : Held :=
+  { h with kinds := h.kinds.map fun kv => (r.kinds.find? (·.name == kv.name)).getD kv }
+
+/-- Within the reader's grant, check; beyond it, refuse by the work. -/
+def admitHeld (r : Reader) (Ψ : Context) (A : Ty) (θ : Assumptions) (h : Held) : Except ImportRefusal (Code Ψ A θ) :=
+  if checkWork h.annotated ≤ r.grant then checkHeld Ψ A θ h
+  else .error (.overBudget (checkWork h.annotated) r.grant)
+
+/-- **The checked importer** of a reader: read the version (encoding and checker edition), read the
+body, judge the kind pins (held, or migrated by the reader's judgment, or refused by name), bound
+the checker's work by the reader's grant, compare the theory, then check. A migrated quotation is
+rechecked under the reader's rules and kinds and pinned at its versions: a migration, never a
+replay of how it was checked. -/
+def importWith (r : Reader) (Ψ : Context) (A : Ty) (θ : Assumptions) (d : Data) :
     Except ImportRefusal (Code Ψ A θ) :=
-  match readVersioned version d with
+  match readVersioned r.version d with
   | .error e => .error (.version e)
   | .ok body => match heldOf body with
     | none => .error .malformed
-    | some h => checkHeld Ψ A θ h
+    | some h =>
+      match pinsAgainst r h.kinds with
+      | .error e => .error e
+      | .ok migrated => admitHeld r Ψ A θ (if migrated then repin r h else h)
 
 /-- The deployed importer reads this edition's encoding. -/
-def «import» (Ψ : Context) (A : Ty) (θ : Assumptions) (d : Data) : Except ImportRefusal (Code Ψ A θ) :=
-  importWith encodingVersion Ψ A θ d
+def «import» (grant : Nat) (kinds : List Obend.Kind.KindVersion) (Ψ : Context) (A : Ty) (θ : Assumptions)
+    (d : Data) : Except ImportRefusal (Code Ψ A θ) :=
+  importWith ⟨encodingVersion, grant, kinds, fun _ _ _ => false⟩ Ψ A θ d
 
-theorem importWith_ok {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
-    {c : Code Ψ A θ} (h : importWith version Ψ A θ d = .ok c) :
-    ∃ body held, readVersioned version d = .ok body ∧ heldOf body = some held ∧
-      c.val = held.annotated ∧ ∃ k, checkAgainst held.annotated Ψ A = .ok k := by
+theorem checkHeld_ok {Ψ : Context} {A : Ty} {θ : Assumptions} {h : Held} {c : Code Ψ A θ}
+    (ok : checkHeld Ψ A θ h = .ok c) : c.val = h := by
+  unfold checkHeld at ok
+  split at ok
+  · split at ok
+    · cases ok; rfl
+    · cases ok
+  · cases ok
+
+theorem admitHeld_ok {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {h : Held} {c : Code Ψ A θ}
+    (ok : admitHeld r Ψ A θ h = .ok c) : c.val = h ∧ checkWork h.annotated ≤ r.grant := by
+  unfold admitHeld at ok
+  by_cases within : checkWork h.annotated ≤ r.grant
+  · rw [if_pos within] at ok; exact ⟨checkHeld_ok ok, within⟩
+  · rw [if_neg within] at ok; cases ok
+
+theorem importWith_ok {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
+    {c : Code Ψ A θ} (h : importWith r Ψ A θ d = .ok c) :
+    ∃ body held migrated, readVersioned r.version d = .ok body ∧ heldOf body = some held ∧
+      pinsAgainst r held.kinds = .ok migrated ∧ c.val = (if migrated then repin r held else held) ∧
+      checkWork c.val.annotated ≤ r.grant := by
   unfold importWith at h
   split at h
   · cases h
@@ -946,40 +1309,36 @@ theorem importWith_ok {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions}
     split at h
     · cases h
     · rename_i held hb
-      unfold checkHeld at h
       split at h
-      · split at h
-        · rename_i k hk
-          cases h
-          exact ⟨body, held, hv, hb, rfl, k, hk⟩
-        · cases h
       · cases h
+      · rename_i migrated hp
+        obtain ⟨same, within⟩ := admitHeld_ok h
+        exact ⟨body, held, migrated, hv, hb, hp, same, same ▸ within⟩
 
-/-- **T6 `import_sound`.** An import is code under exactly the importer's theory, and the checker
-accepted exactly the imported annotated term. -/
-theorem import_sound {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
-    {c : Code Ψ A θ} (h : importWith version Ψ A θ d = .ok c) :
-    c.val.assumptions = θ ∧ Obend.Slot.Core4.Typed Ψ c.val A ∧
-      ∃ k, checkAgainst c.val Ψ A = .ok k := by
-  obtain ⟨_, held, _, _, hc, k, hk⟩ := importWith_ok h
-  refine ⟨c.2.1, c.typed, ?_⟩
-  rw [hc]
-  exact ⟨k, hk⟩
+/-- **T6 `import_sound`.** An import is code under exactly the importer's theory, the checker the
+importer runs accepted exactly the imported annotated term, and its work was within the grant. -/
+theorem import_sound {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
+    {c : Code Ψ A θ} (h : importWith r Ψ A θ d = .ok c) :
+    c.val.assumptions = θ ∧ Obend.Slot.Core4.Typed Ψ c.val.annotated A ∧
+      (∃ k, checkAgainst c.val.annotated Ψ A = .ok k) ∧ checkWork c.val.annotated ≤ r.grant := by
+  obtain ⟨_, _, _, _, _, _, _, within⟩ := importWith_ok h
+  obtain ⟨hθ, k, hk⟩ := c.2
+  exact ⟨hθ, c.typed, ⟨k, hk⟩, within⟩
 
 /-- **T8 `import_scoped`.** Code is scoped by its hypotheses: no index escapes `Ψ`. Every import is
 code, so every import is scoped. -/
 theorem code_scoped {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
     Obend.Core.Invariant.Scoped Ψ.length c.val.term := by
-  obtain ⟨k, _⟩ := c.2.2
+  obtain ⟨_, k, _⟩ := c.2
   exact Obend.Core.MachineTyping.source_scoped k.derivation
 
-theorem import_scoped {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
-    {c : Code Ψ A θ} (_ : importWith version Ψ A θ d = .ok c) :
+theorem import_scoped {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
+    {c : Code Ψ A θ} (_ : importWith r Ψ A θ d = .ok c) :
     Obend.Core.Invariant.Scoped Ψ.length c.val.term := code_scoped c
 
 /-- Holes are never code (orientation §8.2). -/
 theorem code_noHole {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) : NoHole c.val.term := by
-  obtain ⟨k, _⟩ := c.2.2
+  obtain ⟨_, k, _⟩ := c.2
   exact typed_noHole k.derivation
 
 /-- **`splice_scoped`** (T8's second half): hypotheses `Scoped |Ψ|` substituted by fillings
@@ -991,16 +1350,27 @@ theorem splice_scoped {n m : Nat} {t : Term} (ht : Obend.Core.Invariant.Scoped n
   exact Obend.Core.TermTraverse.scoped_substitute t n m ht σ
     (fun i hi => (Obend.Core.Invariant.scoped_encode_iff m (σ i)).1 (hσ i hi))
 
-/-- The quotation of an accepted held term imports to exactly that term. -/
-theorem import_roundtrip (version : Nat) {Ψ : Context} {A : Ty} {θ : Assumptions} (held : Held)
-    (hθ : held.assumptions = θ) {k : Checked held.annotated Ψ}
-    (accepted : checkAgainst held.annotated Ψ A = .ok k) :
-    ∃ c : Code Ψ A θ, importWith version Ψ A θ (quotation version held) = .ok c ∧
-      c.val = held.annotated := by
-  refine ⟨⟨held.annotated, hθ, k, (checkAgainst_sound accepted).1⟩, ?_, rfl⟩
+/-- The reader holds every kind a quotation pins, at the pinned version. -/
+def Reader.holdsPins (r : Reader) (kinds : List Obend.Kind.KindVersion) : Prop :=
+  ∀ kv ∈ kinds, r.kinds.find? (·.name == kv.name) = some kv
+
+theorem pinsAgainst_held {r : Reader} : ∀ {kinds : List Obend.Kind.KindVersion},
+    r.holdsPins kinds → pinsAgainst r kinds = .ok false
+  | [], _ => rfl
+  | kv :: rest, held => by
+    have here := held kv List.mem_cons_self
+    have later : r.holdsPins rest := fun k hk => held k (List.mem_cons_of_mem _ hk)
+    simp [pinsAgainst, here, pinsAgainst_held later]
+
+/-- The quotation of an accepted held term, under a reader holding its pins and granting its work,
+imports to exactly it. -/
+theorem import_roundtrip (r : Reader) {Ψ : Context} {A : Ty} {θ : Assumptions} (held : Held)
+    (hθ : held.assumptions = θ) (pins : r.holdsPins held.kinds) (within : checkWork held.annotated ≤ r.grant)
+    {k : Checked held.annotated Ψ} (accepted : checkAgainst held.annotated Ψ A = .ok k) :
+    importWith r Ψ A θ (quotation r.version held) = .ok ⟨held, hθ, k, accepted⟩ := by
   unfold importWith quotation
   rw [readVersioned_versioned]
-  simp only [heldOf_heldData]
+  simp only [heldOf_heldData, pinsAgainst_held pins, Bool.false_eq_true, ite_false, admitHeld, within, ite_true]
   unfold checkHeld
   rw [dite_eq_left_of_eq_true (eq_true hθ)]
   split
@@ -1009,6 +1379,15 @@ theorem import_roundtrip (version : Nat) {Ψ : Context} {A : Ty} {θ : Assumptio
   · rename_i e he
     rw [accepted] at he
     cases he
+
+/-- **T6 `import_complete`.** Every code's quotation imports back to exactly that code, under a
+reader holding its kind pins and granting its checker work. No re-synthesis: a code is what the
+importer's own judgment accepted. -/
+theorem import_complete (r : Reader) {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ)
+    (pins : r.holdsPins c.val.kinds) (within : checkWork c.val.annotated ≤ r.grant) :
+    importWith r Ψ A θ (quotation r.version c.val) = .ok c := by
+  obtain ⟨held, hθ, k, accepted⟩ := c
+  exact import_roundtrip r held hθ pins within accepted
 
 /-- Realizing an annotation tree at the root needs nothing: it is the tree's own lookup. -/
 theorem treeAnnotations_realizes (tree : AnnotationTree) :
@@ -1035,41 +1414,57 @@ theorem tree_complete {θ : Assumptions} {Ψ : Context} {t : Term} {A : Ty} {u :
       pure, Except.pure]
   · exact yielded.elim
 
-/-- **T6 `import_complete`.** Every code has a quotation (its term, under a finite annotation tree,
-at its own theory) that imports back to its term. The tree is the importer's witness, not the
-supplied annotations: an importer that trusted those would not be complete
-(`annotation_presence_not_coverage`, and `empty_tree_refused` below). -/
-theorem import_complete (version : Nat) {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
-    ∃ tree, ∃ c' : Code Ψ A θ,
-      importWith version Ψ A θ (quotation version ⟨c.val.term, tree, θ⟩) = .ok c' ∧
-        c'.val.term = c.val.term := by
-  obtain ⟨hθ, k, hk⟩ := c.2
-  have derivation := k.derivation
-  have safe := k.safe
-  have valid := k.contextValid
-  have av := k.assumptionsValid
-  rw [hθ] at derivation valid av
-  rw [hk] at derivation
-  simp only [AnnotatedTerm.erase] at derivation
-  obtain ⟨tree, k', accepted⟩ := tree_complete derivation safe valid av
-  obtain ⟨c', hc', same⟩ := import_roundtrip version ⟨c.val.term, tree, θ⟩ rfl accepted
-  exact ⟨tree, c', hc', by rw [same]; rfl⟩
+/-- **Every typed term has code** (what `import_complete` re-synthesized before 2026-11-01, now
+where it belongs): a derivation under a valid theory and context, at any pins, is the term of a
+code under the annotations of some finite tree. -/
+theorem typed_has_code {θ : Assumptions} {Ψ : Context} {t : Term} {A : Ty} {u : Obend.Core.Ty.Uses}
+    (typed : PartialTyping θ Ψ t A u) (safe : Obend.Core.Ty.safeUses Ψ u = true)
+    (valid : Obend.Core.Ty.validContext θ.shareableVariables Ψ = true)
+    (assumptionsValid : θ.valid = true) (kinds : List Obend.Kind.KindVersion) :
+    ∃ c : Code Ψ A θ, c.val.term = t ∧ c.val.kinds = kinds := by
+  obtain ⟨tree, k, accepted⟩ := tree_complete typed safe valid assumptionsValid
+  exact ⟨⟨⟨t, tree, θ, kinds⟩, rfl, k, accepted⟩, rfl, rfl⟩
 
 /-! ### The refusals, each by name -/
 
-theorem import_foreignEncoding {found version : Nat} (differ : found ≠ version) (Ψ : Context) (A : Ty)
+theorem import_foreignEncoding {found : Nat} (r : Reader) (differ : found ≠ r.version) (Ψ : Context) (A : Ty)
     (θ : Assumptions) (held : Held) :
-    importWith version Ψ A θ (quotation found held) =
-      .error (.version (.foreignEncoding found version)) := by
+    importWith r Ψ A θ (quotation found held) =
+      .error (.version (.foreignEncoding found r.version)) := by
   unfold importWith quotation
   rw [quote_versioned differ]
 
-theorem import_assumptionsDiffer (version : Nat) (Ψ : Context) (A : Ty) {θ : Assumptions} {held : Held}
-    (differ : held.assumptions ≠ θ) :
-    importWith version Ψ A θ (quotation version held) = .error (.assumptionsDiffer held.assumptions θ) := by
+/-- The body of a pinned quotation, read: the held term. -/
+theorem import_reads (r : Reader) (Ψ : Context) (A : Ty) (θ : Assumptions) (held : Held) :
+    importWith r Ψ A θ (quotation r.version held) =
+      match pinsAgainst r held.kinds with
+      | .error e => .error e
+      | .ok migrated => admitHeld r Ψ A θ (if migrated then repin r held else held) := by
   unfold importWith quotation
   rw [readVersioned_versioned]
   simp only [heldOf_heldData]
+  rfl
+
+/-- **A kind revised since the quotation was checked is refused by name**, unless the reader's
+migration judgment takes the one version to the other: the quotation's version and the reader's. -/
+theorem import_kindVersion (r : Reader) (Ψ : Context) (A : Ty) (θ : Assumptions) {held : Held}
+    {k : String} {found expected : Nat} (pins : pinsAgainst r held.kinds = .error (.kindVersion k found expected)) :
+    importWith r Ψ A θ (quotation r.version held) = .error (.kindVersion k found expected) := by
+  rw [import_reads, pins]
+
+/-- **Work beyond the grant is refused by name**, before the checker runs. -/
+theorem import_overBudget (r : Reader) (Ψ : Context) (A : Ty) (θ : Assumptions) {held : Held}
+    (pins : r.holdsPins held.kinds) (over : r.grant < checkWork held.annotated) :
+    importWith r Ψ A θ (quotation r.version held) = .error (.overBudget (checkWork held.annotated) r.grant) := by
+  rw [import_reads, pinsAgainst_held pins]
+  simp [admitHeld, Nat.not_le.2 over]
+
+theorem import_assumptionsDiffer (r : Reader) (Ψ : Context) (A : Ty) {θ : Assumptions} {held : Held}
+    (pins : r.holdsPins held.kinds) (within : checkWork held.annotated ≤ r.grant)
+    (differ : held.assumptions ≠ θ) :
+    importWith r Ψ A θ (quotation r.version held) = .error (.assumptionsDiffer held.assumptions θ) := by
+  rw [import_reads, pinsAgainst_held pins]
+  simp only [Bool.false_eq_true, ite_false, admitHeld, within, ite_true]
   unfold checkHeld
   rw [dite_eq_right_of_eq_false (eq_false differ)]
 
@@ -1091,9 +1486,10 @@ theorem accepted_typed {Ψ : Context} {A : Ty} {held : Held} {k : Checked held.a
 
 /-- **`escapedIndex`.** A quotation whose term has an index escaping `Ψ` is refused, naming the
 index (counted at the root). -/
-theorem import_escapedIndex (version : Nat) {Ψ : Context} (A : Ty) {θ : Assumptions} {held : Held}
+theorem import_escapedIndex (r : Reader) {Ψ : Context} (A : Ty) {θ : Assumptions} {held : Held}
+    (pins : r.holdsPins held.kinds) (within : checkWork held.annotated ≤ r.grant)
     (hθ : held.assumptions = θ) {i : Nat} (escapes : escapeOf Ψ.length (encode held.term) = some i) :
-    importWith version Ψ A θ (quotation version held) = .error (.escapedIndex i) := by
+    importWith r Ψ A θ (quotation r.version held) = .error (.escapedIndex i) := by
   have refused : ∀ k, checkAgainst held.annotated Ψ A ≠ .ok k := by
     intro k accepted
     have inScope := Obend.Core.MachineTyping.source_scoped (accepted_typed accepted)
@@ -1101,23 +1497,22 @@ theorem import_escapedIndex (version : Nat) {Ψ : Context} (A : Ty) {θ : Assump
     rw [escapeOf_scoped _ _ inScope] at escapes
     cases escapes
   obtain ⟨e, he⟩ := checkHeld_refused hθ refused
-  unfold importWith quotation
-  rw [readVersioned_versioned]
-  simp only [heldOf_heldData, he, diagnose, escapes]
+  rw [import_reads, pinsAgainst_held pins]
+  simp only [Bool.false_eq_true, ite_false, admitHeld, within, ite_true, he, diagnose, escapes]
 
 /-- **`holeInCode`.** A quotation whose term has a hole is refused, naming its position. -/
-theorem import_holeInCode (version : Nat) {Ψ : Context} (A : Ty) {θ : Assumptions} {held : Held}
+theorem import_holeInCode (r : Reader) {Ψ : Context} (A : Ty) {θ : Assumptions} {held : Held}
+    (pins : r.holdsPins held.kinds) (within : checkWork held.annotated ≤ r.grant)
     (hθ : held.assumptions = θ) (inScope : escapeOf Ψ.length (encode held.term) = none)
     {found : List Nat × Nat} (hole : holeOf (encode held.term) = some found) :
-    importWith version Ψ A θ (quotation version held) = .error (.holeInCode found.1 found.2) := by
+    importWith r Ψ A θ (quotation r.version held) = .error (.holeInCode found.1 found.2) := by
   have refused : ∀ k, checkAgainst held.annotated Ψ A ≠ .ok k := by
     intro k accepted
     rw [noHole_holeOf (typed_noHole (accepted_typed accepted))] at hole
     cases hole
   obtain ⟨e, he⟩ := checkHeld_refused hθ refused
-  unfold importWith quotation
-  rw [readVersioned_versioned]
-  simp only [heldOf_heldData, he, diagnose, inScope, hole]
+  rw [import_reads, pinsAgainst_held pins]
+  simp only [Bool.false_eq_true, ite_false, admitHeld, within, ite_true, he, diagnose, inScope, hole]
 
 /-! ### Teeth: every refusal is reachable, and the tree is the importer's witness -/
 
@@ -1125,20 +1520,34 @@ theorem escape_tooth : escapeOf 0 (encode (.bound 0)) = some 0 := by simp [encod
 
 theorem hole_tooth : holeOf (encode (.lam (.hole 3 []))) = some ([0], 3) := by simp [encode, holeOf]
 
+/-- A reader of encoding `v` granting a thousand units of work, holding no kinds. -/
+def plainReader (v : Nat) : Reader := ⟨v, 1000, [], fun _ _ _ => false⟩
+
+theorem plain_holds (v : Nat) : (plainReader v).holdsPins [] := fun _ h => by cases h
+
 /-- The tooth of T8: `bound 0` quoted for an empty context is refused, naming index 0. -/
-theorem escaped_import_tooth (version : Nat) :
-    importWith version [] .natural {} (quotation version ⟨.bound 0, .node none [], {}⟩) =
+theorem escaped_import_tooth (v : Nat) :
+    importWith (plainReader v) [] .natural {} (quotation v ⟨.bound 0, .node none [], {}, []⟩) =
       .error (.escapedIndex 0) :=
-  import_escapedIndex (Ψ := []) (held := ⟨.bound 0, .node none [], {}⟩) version .natural rfl escape_tooth
+  import_escapedIndex (Ψ := []) (held := ⟨.bound 0, .node none [], {}, []⟩) (plainReader v) .natural
+    (plain_holds v) (by show checkWork _ ≤ 1000; decide) rfl escape_tooth
 
 theorem hole_scoped : escapeOf 0 (encode (.lam (.hole 3 []))) = none := by simp [encode, escapeOf, escapesOf]
 
 /-- The tooth of `holeInCode`: a lambda over a hole is refused at the hole's position. -/
-theorem hole_import_tooth (version : Nat) :
-    importWith version [] .natural {} (quotation version ⟨.lam (.hole 3 []), .node none [], {}⟩) =
+theorem hole_import_tooth (v : Nat) :
+    importWith (plainReader v) [] .natural {} (quotation v ⟨.lam (.hole 3 []), .node none [], {}, []⟩) =
       .error (.holeInCode [0] 3) :=
-  import_holeInCode (Ψ := []) (held := ⟨.lam (.hole 3 []), .node none [], {}⟩) version .natural rfl
-    hole_scoped hole_tooth
+  import_holeInCode (Ψ := []) (held := ⟨.lam (.hole 3 []), .node none [], {}, []⟩) (plainReader v) .natural
+    (plain_holds v) (by show checkWork _ ≤ 1000; decide) rfl hole_scoped hole_tooth
+
+/-- The tooth of `overBudget`: the same lambda under a reader granting one unit is refused by its
+work, before any checking. -/
+theorem budget_import_tooth (v : Nat) :
+    importWith ⟨v, 1, [], fun _ _ _ => false⟩ [] .natural {} (quotation v ⟨.lam (.hole 3 []), .node none [], {}, []⟩) =
+      .error (.overBudget (checkWork (Held.annotated ⟨.lam (.hole 3 []), .node none [], {}, []⟩)) 1) :=
+  import_overBudget (held := ⟨.lam (.hole 3 []), .node none [], {}, []⟩) _ [] .natural {}
+    (fun _ h => by cases h) (by show 1 < checkWork _; decide)
 
 /-- `λx. x` applied to `0`, typed at `Nat`: the lambda needs its annotation in synthesis. -/
 def identityApplied : Term := .app (.lam (.bound 0)) (.nat 0)
@@ -1148,8 +1557,8 @@ theorem empty_tree_refused :
     (checkAgainst ⟨identityApplied, treeAnnotations (.node none []), {}⟩ [] .natural).toBool = false := by
   decide +kernel
 
-/-- Under the tree that annotates the lambda, it is accepted: the witness of `import_complete`
-is the tree, and it exists. -/
+/-- Under the tree that annotates the lambda, it is accepted: the tree is the witness a code
+carries, and it exists. -/
 def identityTree : AnnotationTree :=
   .node none [.node (some ⟨.natural, .natural, .unrestricted, .once⟩) []]
 
@@ -1157,11 +1566,14 @@ theorem identity_tree_accepted :
     (checkAgainst ⟨identityApplied, treeAnnotations identityTree, {}⟩ [] .natural).toBool = true := by
   decide +kernel
 
-/-! ## §7. Mirrors: reflection is reached through a value one must hold
+/-! ## §7. Mirrors: reflection is reached through a descriptor, admitted by a grant
 
 Bracha–Ungar's stratification as a lattice (orientation §2.10, §3.5): a `Mirror` is data naming a
 held term and a depth `structure ⊑ metadata ⊑ code`; the kernel's `quote` answers only a mirror of
-depth `code`; a mirror derived from a mirror is never deeper than its parent. -/
+depth `code`; a mirror derived from a mirror is never deeper than its parent. A mirror is a
+DESCRIPTOR, not an authority (Astra, 2026-11-01: any code-depth record was answered): a service
+answers one only through `Obend.Run.Reflect.answer`, which admits the request by the grant of the
+world to its principal over its target at its depth, in the route every runner dispatch takes. -/
 
 inductive Depth where
   | structure | metadata | code
