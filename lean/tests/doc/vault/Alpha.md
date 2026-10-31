@@ -5,3 +5,9 @@ that does not exist yet, [[Gamma]].
 
 - a list item
 - another, with [[Beta]] again
+
+It embeds Beta whole:
+
+![[Beta]]
+
+and quotes one of its blocks: [[Beta#^answer]].

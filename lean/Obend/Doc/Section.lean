@@ -3,24 +3,30 @@ module
 # Obend.Doc.Section — a section is a slot over runs; a cite is a support
 
 DESIGN §5: a SECTION is a slot at type `Run` whose candidates are the runs members posted at a
-position, and a CITE is a support `(page, range, version, byte commitment)` of another page's bytes.
-This module builds both on `Obend.Slot` without adding to it:
+position, and a CITE is a support of another page. This module builds both on `Obend.Slot`
+without adding to it:
 
 * a `World` is every page's history of versions, oldest first; the last is current. A source MOVES
   when its history grows and nothing else changes (`SourceMoves`).
+* what a cite quotes (`quoteOf`): nothing for an IDENTITY cite (`[[Beta]]`), the page's bytes for an
+  embed (`![[Beta]]`), the line marked `^b` for a block reference (`[[Beta#^b]]`), or a byte range.
 * the facts a view is asked about: a run is `live`; it is a `head` at its position (no other live
-  run there precedes it); a cite `verifies` (the cited version's bytes over the range hash to the
-  commitment); a cite is `current` (it cites the source's current version).
+  run there precedes it); a page is `present` (it has a version); a byte cite `verifies` (the cited
+  version's quoted bytes hash to the commitment); a byte cite is `current` (rule (b): the bytes it
+  quotes are the same at the source's current version).
 * `sectionAt p x` is `Slot Fact Run`: a run's supports are `live`, `head`, and, for a cite run, the
-  cite's facts: `verifies` for a pinned cite, `verifies` and `current` for a following one.
+  cite's facts: `present` for an identity cite, `verifies` for a pinned byte cite, `verifies` and
+  `current` for a following one.
 
 `section_alternatives`: the slot's `alternatives` at a position are exactly the page's `heads`
 there (less any cite run whose cite fails). `conflict_is_section`: where the walk shows a conflict
 (two or more heads, `walk_conflict`), the section's read is `empty` (no selection) and its
 alternatives are that conflict's alternatives: the conflict IS the section. `pinned_cite_stays`: a
-pinned cite run usable before its source moves is usable after. `following_cite_behind`: a selected
-following cite run reads `blocked` after its source moves, naming its `current` fact; and
-re-citing the new version (`recite`) makes its facts hold again (`recite_holds`).
+pinned cite run usable before its source moves is usable after; so is an identity cite run
+(`identity_cite_stays`) and a following one whose quoted bytes did not change
+(`following_cite_stays`). `following_cite_behind`: a selected following cite run whose quoted bytes
+changed reads `blocked` after its source moves, naming its `current` fact; and re-citing the new
+version (`recite`) makes its facts hold again (`recite_holds`).
 
 The commitment is taken under any byte hash `H`; nothing here assumes anything of it. Teeth use a
 toy additive hash, which is as good as any for a statement that holds for every hash.
@@ -54,11 +60,14 @@ def bytes (s : String) : List UInt8 := s.toList.flatMap utf8
 
 namespace Graph
 
-/-- How one atom reads in the page's source: a run its text, a cite its wikilink. -/
+/-- How one atom reads in the page's source: a run its text, a cite its wikilink (an embed with
+its `!`). -/
 def atomText (G : Graph) (a : AtomId) : String :=
   match G.label a with
   | some (.text s) => s
-  | some (.cite n _) => "[[" ++ n ++ "]]"
+  | some (.cite n c) => match c.span with
+    | .page => "![[" ++ n ++ "]]"
+    | _ => "[[" ++ n ++ "]]"
   | _ => ""
 
 mutual
@@ -94,9 +103,32 @@ def World.current (W : World) (p : PageId) : Option Graph := (W p).getLast?
 def SourceMoves (W W' : World) (q : PageId) : Prop :=
   (∀ p, p ≠ q → W' p = W p) ∧ ∃ ext, ext ≠ [] ∧ W' q = W q ++ ext
 
-/-- The bytes a cite quotes, if its version exists. -/
+/-- A text's lines, without their newlines. -/
+def lines : List Char → List (List Char)
+  | [] => [[]]
+  | c :: cs => match lines cs with
+    | l :: ls => if c = '\n' then [] :: l :: ls else (c :: l) :: ls
+    | [] => [[c]]
+
+/-- The block marked `^b`: the first line ending ` ^b` (Obsidian's block identifier). -/
+def blockLine (b : String) (src : List Char) : Option (List Char) :=
+  (lines src).find? fun l => (' ' :: '^' :: b.toList).isSuffixOf l
+
+/-- The bytes a span quotes in a page version: none for an identity cite, or for a block the
+version does not mark. -/
+def quoteOf (G : Graph) : Span → Option (List UInt8)
+  | .identity => none
+  | .page => some (bytes G.source)
+  | .block b => (blockLine b G.source.toList).map fun l => l.flatMap utf8
+  | .bytes r => some (((bytes G.source).drop r.start).take r.len)
+
+/-- The bytes a cite quotes, at the version it cites. -/
 def quoted (W : World) (c : Cite) : Option (List UInt8) :=
-  ((W c.page)[c.version]?).map fun G => ((bytes G.source).drop c.range.start).take c.range.len
+  ((W c.page)[c.version]?).bind fun G => quoteOf G c.span
+
+/-- The bytes the cite's span quotes at its source's current version. -/
+def latestQuote (W : World) (c : Cite) : Option (List UInt8) :=
+  (W.current c.page).bind fun G => quoteOf G c.span
 
 /-- What a view is asked. -/
 inductive Fact
@@ -104,9 +136,11 @@ inductive Fact
   | live (page : PageId) (atom : AtomId)
   /-- no other live run at position `pos` of the page precedes it -/
   | head (page : PageId) (pos : AtomId) (atom : AtomId)
+  /-- the page has a version (what an identity cite rests on) -/
+  | present (page : PageId)
   /-- the cited bytes hash to the commitment -/
   | verifies (c : Cite)
-  /-- the cite cites its source's current version -/
+  /-- the bytes the cite quotes are the same at its source's current version (rule (b)) -/
   | current (c : Cite)
 deriving DecidableEq, Repr
 
@@ -118,16 +152,21 @@ def holds (H : Hash) (W : World) : Fact → Bool
   | .head p x a => match W.current p with
     | some G => G.isHead x a
     | none => false
+  | .present p => !(W p).isEmpty
   | .verifies c => match quoted W c with
     | some b => H b == c.commitment
     | none => false
-  | .current c => (W c.page).length == c.version + 1
+  | .current c => match quoted W c, latestQuote W c with
+    | some b, some b' => b == b'
+    | _, _ => false
 
-/-- The facts a cite rests on. -/
+/-- The facts a cite rests on: an identity cite, that its page exists; a byte cite, that its bytes
+verify, and, following, that they are current. -/
 def citeFacts (c : Cite) : List Fact :=
-  match c.mode with
-  | .pinned => [.verifies c]
-  | .following => [.verifies c, .current c]
+  match c.span, c.mode with
+  | .identity, _ => [.present c.page]
+  | _, .pinned => [.verifies c]
+  | _, .following => [.verifies c, .current c]
 
 /-! ## The section -/
 
@@ -238,21 +277,59 @@ theorem getElem?_append_of_isSome {α : Type} {l ext : List α} {i : Nat} (h : (
     · simp [List.getElem?_eq_none hi] at h
   exact List.getElem?_append_left this
 
+/-- The page's history only grows when a source moves. -/
+theorem moves_extends {W W' : World} {q : PageId} (hm : SourceMoves W W' q) (p : PageId) :
+    ∃ ext, W' p = W p ++ ext := by
+  by_cases hp : p = q
+  · obtain ⟨ext, _, he⟩ := hm.2; exact ⟨ext, hp ▸ he⟩
+  · exact ⟨[], by rw [hm.1 _ hp, List.append_nil]⟩
+
+/-- What a cite quotes at its version is not rewritten when a source moves. -/
+theorem quoted_stays {W W' : World} {q : PageId} (hm : SourceMoves W W' q) {c : Cite}
+    (h : (quoted W c).isSome) : quoted W' c = quoted W c := by
+  obtain ⟨ext, he⟩ := moves_extends hm c.page
+  simp only [quoted] at h ⊢
+  cases hv : (W c.page)[c.version]? with
+  | none => rw [hv] at h; cases h
+  | some G => rw [he, getElem?_append_of_isSome (by simp [hv]), hv]
+
 /-- A cite that verifies keeps verifying when any page's history grows: versions are never
 rewritten. -/
 theorem verifies_stays (H : Hash) {W W' : World} {q : PageId} (hm : SourceMoves W W' q)
     {c : Cite} (h : holds H W (.verifies c) = true) : holds H W' (.verifies c) = true := by
-  have hq : ∃ ext, W' c.page = W c.page ++ ext := by
-    by_cases hp : c.page = q
-    · obtain ⟨ext, _, he⟩ := hm.2; exact ⟨ext, hp ▸ he⟩
-    · exact ⟨[], by rw [hm.1 _ hp, List.append_nil]⟩
-  obtain ⟨ext, he⟩ := hq
-  simp only [holds, quoted] at h ⊢
-  cases hv : (W c.page)[c.version]? with
+  simp only [holds] at h ⊢
+  cases hv : quoted W c with
   | none => rw [hv] at h; cases h
-  | some G =>
-    rw [he, getElem?_append_of_isSome (by simp [hv]), hv]
-    rw [hv] at h; exact h
+  | some b => rw [quoted_stays hm (by simp [hv]), hv]; rw [hv] at h; exact h
+
+/-- A page that exists keeps existing. -/
+theorem present_stays (H : Hash) {W W' : World} {q : PageId} (hm : SourceMoves W W' q)
+    {p : PageId} (h : holds H W (.present p) = true) : holds H W' (.present p) = true := by
+  obtain ⟨ext, he⟩ := moves_extends hm p
+  simp only [holds] at h ⊢
+  rw [he]
+  cases hw : W p with
+  | nil => rw [hw] at h; cases h
+  | cons a l => simp
+
+/-- A cite run stays usable when its source (another page) moves, if every one of its cite facts
+does. -/
+theorem cite_run_stays (H : Hash) {W W' : World} {p x : AtomId} {r : Run} {name : String}
+    {c : Cite} (hr : r.content = .cite name c) (hq : c.page ≠ p)
+    (hm : SourceMoves W W' c.page) (hu : (sectionAt p x).usable (holds H W) r = true)
+    (hc : ∀ f ∈ citeFacts c, holds H W f = true → holds H W' f = true) :
+    (sectionAt p x).usable (holds H W') r = true := by
+  rw [usable_iff] at hu ⊢
+  refine ⟨hu.1, fun f hf => ?_⟩
+  have hp : r.page = p := by
+    have := hu.1; simp only [sectionAt, Bool.and_eq_true, beq_iff_eq] at this; exact this.1
+  have same : W' p = W p := hm.1 p (Ne.symm hq)
+  have hf' := hu.2 f hf
+  simp only [sectionAt, Run.cites, hr, List.cons_append, List.nil_append, List.mem_cons] at hf
+  rcases hf with rfl | rfl | hf
+  · simpa [holds, World.current, hp, same] using hf'
+  · simpa [holds, World.current, hp, same] using hf'
+  · exact hc f hf hf'
 
 /-- **A pinned cite stays usable when its source moves.** A pinned cite run on page `p`, usable
 in its section before the cited page `q ≠ p` moves, is usable after. -/
@@ -260,62 +337,120 @@ theorem pinned_cite_stays (H : Hash) {W W' : World} {p x : AtomId} {r : Run} {na
     {c : Cite} (hr : r.content = .cite name c) (hpin : c.mode = .pinned) (hq : c.page ≠ p)
     (hm : SourceMoves W W' c.page) (hu : (sectionAt p x).usable (holds H W) r = true) :
     (sectionAt p x).usable (holds H W') r = true := by
-  rw [usable_iff] at hu ⊢
-  refine ⟨hu.1, fun f hf => ?_⟩
-  have hp : r.page = p := by
-    have := hu.1; simp only [sectionAt, Bool.and_eq_true, beq_iff_eq] at this; exact this.1
-  have same : W' p = W p := hm.1 p (Ne.symm hq)
-  simp only [sectionAt, Run.cites, hr, citeFacts, hpin, List.cons_append, List.nil_append,
-    List.mem_cons, List.not_mem_nil, or_false] at hf
-  have hf' := hu.2 f (by simp [sectionAt, Run.cites, hr, citeFacts, hpin, hf])
-  rcases hf with rfl | rfl | rfl
-  · simpa [holds, World.current, hp, same] using hf'
-  · simpa [holds, World.current, hp, same] using hf'
-  · exact verifies_stays H hm hf'
+  refine cite_run_stays H hr hq hm hu fun f hf hh => ?_
+  unfold citeFacts at hf
+  cases hs : c.span <;> simp only [hs, hpin, List.mem_cons, List.not_mem_nil, or_false] at hf <;>
+    subst hf
+  · exact present_stays H hm hh
+  all_goals exact verifies_stays H hm hh
 
-/-- **A following cite falls behind when its source moves.** A following cite run, current before
-the cited page moves, reads `blocked` once selected after, and the read names its `current` fact. -/
+/-- **An identity cite stays usable when its source moves**: it quotes no bytes, so no edit of the
+page puts it behind. -/
+theorem identity_cite_stays (H : Hash) {W W' : World} {p x : AtomId} {r : Run} {name : String}
+    {c : Cite} (hr : r.content = .cite name c) (hid : c.span = .identity) (hq : c.page ≠ p)
+    (hm : SourceMoves W W' c.page) (hu : (sectionAt p x).usable (holds H W) r = true) :
+    (sectionAt p x).usable (holds H W') r = true := by
+  refine cite_run_stays H hr hq hm hu fun f hf hh => ?_
+  simp only [citeFacts, hid, List.mem_cons, List.not_mem_nil, or_false] at hf
+  subst hf; exact present_stays H hm hh
+
+/-- **A following byte cite stays current while the bytes it quotes are unchanged** (rule (b)):
+usable before its source moves, it is usable after if the source's new current version quotes the
+same bytes at its span. -/
+theorem following_cite_stays (H : Hash) {W W' : World} {p x : AtomId} {r : Run} {name : String}
+    {c : Cite} (hr : r.content = .cite name c) (hq : c.page ≠ p) (hm : SourceMoves W W' c.page)
+    (hsame : latestQuote W' c = quoted W c) (hu : (sectionAt p x).usable (holds H W) r = true) :
+    (sectionAt p x).usable (holds H W') r = true := by
+  have hcur : holds H W (.current c) = true → holds H W' (.current c) = true := by
+    intro hh
+    simp only [holds] at hh ⊢
+    cases hv : quoted W c with
+    | none => rw [hv] at hh; cases hh
+    | some b => rw [quoted_stays hm (by simp [hv]), hv, hsame, hv]; simp
+  refine cite_run_stays H hr hq hm hu fun f hf hh => ?_
+  unfold citeFacts at hf
+  cases hs : c.span with
+  | identity =>
+    simp only [hs, List.mem_cons, List.not_mem_nil, or_false] at hf; subst hf
+    exact present_stays H hm hh
+  | page | block _ | bytes _ =>
+    cases hmo : c.mode <;> simp only [hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
+    · subst hf; exact verifies_stays H hm hh
+    · rcases hf with rfl | rfl
+      · exact verifies_stays H hm hh
+      · exact hcur hh
+
+/-- **A following cite falls behind when the bytes it quotes change.** A following byte cite run,
+current before the cited page moves, reads `blocked` once selected after if the new current
+version quotes other bytes at its span; the read names its `current` fact. -/
 theorem following_cite_behind (H : Hash) {W W' : World} {p x : AtomId} {r : Run} {name : String}
-    {c : Cite} (hr : r.content = .cite name c) (hfol : c.mode = .following)
+    {c : Cite} (hr : r.content = .cite name c) (hfol : c.mode = .following) (hspan : c.span ≠ .identity)
     (hm : SourceMoves W W' c.page) (hj : (sectionAt p x).judge r = true)
-    (hcur : holds H W (.current c) = true) :
+    (hcur : holds H W (.current c) = true) (hchg : latestQuote W' c ≠ quoted W c) :
     ∃ d, (sectionAt p x).read (holds H W') (some r) = .blocked r d ∧ Fact.current c ∈ d := by
   have hcur' : holds H W' (.current c) = false := by
-    obtain ⟨ext, hne, he⟩ := hm.2
-    simp only [holds, he, List.length_append, beq_iff_eq] at hcur ⊢
-    cases ext with
-    | nil => exact absurd rfl hne
-    | cons _ _ => simp; omega
+    simp only [holds] at hcur ⊢
+    cases hv : quoted W c with
+    | none => rw [hv] at hcur; cases hcur
+    | some b =>
+      rw [quoted_stays hm (by simp [hv]), hv]
+      cases hl : latestQuote W' c with
+      | none => rfl
+      | some b' =>
+        rw [hv, hl] at hchg
+        simp only [beq_eq_false_iff_ne, ne_eq]
+        exact fun h => hchg (h ▸ rfl)
+  have hfacts : Fact.current c ∈ citeFacts c := by
+    unfold citeFacts
+    cases hs : c.span <;> simp [hs, hfol] at hspan ⊢
   have hmem : Fact.current c ∈ (sectionAt p x).dead (holds H W') r :=
-    (mem_dead_iff _ _ _ _).2 ⟨by simp [sectionAt, Run.cites, hr, citeFacts, hfol], hcur'⟩
+    (mem_dead_iff _ _ _ _).2 ⟨by simp [sectionAt, Run.cites, hr, hfacts], hcur'⟩
   unfold Slot.read
-  simp only [hj, if_true]
+  simp only [hj, ite_true]
   cases hd : (sectionAt p x).dead (holds H W') r with
   | nil => rw [hd] at hmem; cases hmem
   | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩
 
 /-- Re-justify a cite against its source's current version (under the hash `H`). -/
 def recite (H : Hash) (W : World) (c : Cite) : Cite :=
-  let v := (W c.page).length - 1
-  { c with version := v,
-           commitment := H ((((W c.page)[v]?).map fun G =>
-             ((bytes G.source).drop c.range.start).take c.range.len).getD []) }
+  { c with version := (W c.page).length - 1, commitment := H ((latestQuote W c).getD []) }
 
-/-- Re-citing a following cite at a world where its source has a version makes it hold there. -/
-theorem recite_holds (H : Hash) (W : World) (c : Cite) (hne : W c.page ≠ []) :
+theorem recite_span (H : Hash) (W : World) (c : Cite) : (recite H W c).span = c.span := rfl
+theorem recite_mode (H : Hash) (W : World) (c : Cite) : (recite H W c).mode = c.mode := rfl
+theorem recite_page (H : Hash) (W : World) (c : Cite) : (recite H W c).page = c.page := rfl
+
+/-- Re-citing a cite at a world where its source has a version, and (for a byte cite) quotes its
+span, makes its facts hold there. -/
+theorem recite_holds (H : Hash) (W : World) (c : Cite) (hne : W c.page ≠ [])
+    (hq : c.span = .identity ∨ (latestQuote W c).isSome = true) :
     ∀ f ∈ citeFacts (recite H W c), holds H W f = true := by
   have hlen : 0 < (W c.page).length := List.length_pos_iff.2 hne
   have hv : ((W c.page).length - 1) < (W c.page).length := by omega
+  have hq' : quoted W (recite H W c) = latestQuote W c := by
+    simp only [quoted, latestQuote, recite, World.current, List.getLast?_eq_getElem?]
+  have hl : latestQuote W (recite H W c) = latestQuote W c := by simp [latestQuote, recite]
   intro f hf
-  have hfacts : f = .verifies (recite H W c) ∨ f = .current (recite H W c) := by
-    unfold citeFacts at hf
-    split at hf <;> simp only [List.mem_cons, List.not_mem_nil, or_false] at hf
-    · exact .inl hf
-    · exact hf
-  rcases hfacts with rfl | rfl
-  · simp only [holds, quoted, recite, List.getElem?_eq_getElem hv, Option.map_some, Option.getD_some,
-      beq_self_eq_true]
-  · simp only [holds, recite, beq_iff_eq]; omega
+  unfold citeFacts at hf
+  cases hs : c.span with
+  | identity =>
+    simp only [recite_span, recite_page, hs, List.mem_cons, List.not_mem_nil, or_false] at hf; subst hf
+    simp [holds, hne]
+  | page | block _ | bytes _ =>
+    have : (latestQuote W c).isSome = true := hq.resolve_left (by simp [hs])
+    obtain ⟨b, hb⟩ := Option.isSome_iff_exists.1 this
+    have hv : holds H W (.verifies (recite H W c)) = true := by
+      simp only [holds, hq', hb]; simp [recite, hb]
+    have hc : holds H W (.current (recite H W c)) = true := by
+      simp only [holds, hq', hl, hb, beq_self_eq_true]
+    cases hmo : c.mode with
+    | pinned =>
+      simp only [recite_span, recite_mode, hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
+      rw [hf]; exact hv
+    | following =>
+      simp only [recite_span, recite_mode, hs, hmo, List.mem_cons, List.not_mem_nil, or_false] at hf
+      rcases hf with rfl | rfl
+      · exact hv
+      · exact hc
 
 /-! ### Teeth -/
 
@@ -329,8 +464,12 @@ def beta : Graph := Graph.empty.apply [.add 1 (.text "beta") root]
 /-- Beta after an edit. -/
 def beta' : Graph := beta.apply [.add 2 (.text "!") 1]
 
-/-- A cite of Beta's first four bytes at version 0. -/
-def citeOf (m : Mode) : Cite := ⟨2, ⟨0, 4⟩, 0, toy (bytes "beta"), m⟩
+/-- An embed of Beta (its whole text) at version 0. -/
+def citeOf (m : Mode) : Cite := ⟨2, .page, 0, toy (bytes "beta"), m⟩
+
+/-- A following cite of Beta's first four bytes, and a cite of Beta's identity. -/
+def rangeCite : Cite := ⟨2, .bytes ⟨0, 4⟩, 0, toy (bytes "beta"), .following⟩
+def idCite : Cite := ⟨2, .identity, 0, [], .following⟩
 
 /-- Page 1, "Alpha": a run, then a transclusion of Beta. -/
 def alpha (m : Mode) : Graph :=
@@ -358,12 +497,19 @@ example : (sectionAt 1 1).usable (holds toy (moved .pinned)) (citeRun .pinned) =
 example : (sectionAt 1 1).read (holds toy (moved .following)) (some (citeRun .following)) =
     .blocked (citeRun .following) [.current (citeOf .following)] := rfl
 
+/-- Rule (b): a following cite of bytes the edit did not touch stays usable (the theorem, and the
+kernel agreeing); so does a cite of Beta's identity. -/
+example : (sectionAt 1 1).usable (holds toy (moved .following)) ⟨1, 2, .cite "Beta" rangeCite⟩ = true :=
+  following_cite_stays toy rfl (by decide) (moves .following) (by decide) (by decide)
+example : (sectionAt 1 1).usable (holds toy (moved .following)) ⟨1, 2, .cite "Beta" idCite⟩ = true :=
+  identity_cite_stays toy rfl rfl (by decide) (moves .following) (by decide)
+
 /-- Re-cited at the new version, it is usable again. -/
 example : (sectionAt 1 1).usable (holds toy (moved .following))
     ⟨1, 2, .cite "Beta" (recite toy (moved .following) (citeOf .following))⟩ = true := by decide
 
 /-- A cite whose bytes do not match its commitment is dead even pinned. -/
-example : holds toy (world .pinned) (.verifies { citeOf .pinned with range := ⟨1, 3⟩ }) = false := by
+example : holds toy (world .pinned) (.verifies { citeOf .pinned with span := .bytes ⟨1, 3⟩ }) = false := by
   decide
 
 /-- The section of a conflicted page: at `a`, the heads `c` and `d`, read with nothing selected. -/
@@ -378,6 +524,9 @@ end Teeth
 #tooth pinned_cite_stays by mutation citeFacts := fun c => [.current c]
 #tooth following_cite_behind by mutation citeFacts := fun c => [.verifies c]
 #tooth section_alternatives by mutation posted := fun _ _ _ => []
+#tooth identity_cite_stays by mutation citeFacts := fun c => [.current c]
+#tooth following_cite_stays by mutation quoted := fun _ _ => none
+#tooth recite_holds by mutation recite := fun _ _ c => c
 
 end Obend.Doc
 

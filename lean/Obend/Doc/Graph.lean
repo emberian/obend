@@ -37,24 +37,37 @@ abbrev PageId := Nat
 is added after it. -/
 def root : AtomId := 0
 
-/-- How a cite tracks its source: a PINNED cite quotes a version and stays verified when the source
-moves on; a FOLLOWING cite also claims to be current, and that claim fails when the source moves. -/
+/-- How a byte cite tracks its source: a PINNED cite quotes a version and stays verified when the
+source moves on; a FOLLOWING cite also claims to be current, and that claim fails when the bytes it
+quotes change at the source's current version (`Obend.Doc.Section`, rule (b)). -/
 inductive Mode
   | pinned
   | following
 deriving DecidableEq, Repr
 
-/-- A range of a page's rendered text, in characters. -/
+/-- A range of a page's rendered text, in bytes. -/
 structure Range where
   start : Nat
   len : Nat
 deriving DecidableEq, Repr
 
-/-- A cite: `(page, range, version, byte commitment)` of another page's bytes (DESIGN §5), with the
-mode it tracks its source in. -/
+/-- What of its source a cite quotes (the range of DESIGN §5's cite, made optional and addressable).
+`identity` quotes no bytes: `[[Beta]]`, a cite of the page itself, current while the page exists.
+The others are BYTE cites: `page` the page's whole text (`![[Beta]]`, an embed), `block b` the line
+marked `^b` (`[[Beta#^b]]`, a block reference, found by its marker in each version, so an edit
+elsewhere in the page does not move it), `bytes r` a byte range. -/
+inductive Span
+  | identity
+  | page
+  | block (id : String)
+  | bytes (r : Range)
+deriving DecidableEq, Repr
+
+/-- A cite: `(page, span, version, byte commitment)` of another page (DESIGN §5), with the mode a
+byte cite tracks its source in. An identity cite's version, commitment and mode are inert. -/
 structure Cite where
   page : PageId
-  range : Range
+  span : Span
   version : Nat
   commitment : List UInt8
   mode : Mode
@@ -64,7 +77,7 @@ deriving DecidableEq, Repr
 inductive Content
   /-- a run of text -/
   | text (s : String)
-  /-- a cite; `name` is the wikilink text it was written as -/
+  /-- a cite; `name` is the wikilink's text between its brackets, as written (`Beta`, `Beta#^b`) -/
   | cite (name : String) (c : Cite)
   /-- an assignment to a single-valued field (outside the order: it has no edges) -/
   | field (name value : String)

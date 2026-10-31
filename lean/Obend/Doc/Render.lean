@@ -2,18 +2,23 @@ module
 /-
 # Obend.Doc.Render — a page at a view, and a vault of markdown read into pages and cites
 
-DESIGN §5, the Obsidian-shaped person's day one: every `.md` is a page, every `[[wikilink]]` a cite.
+DESIGN §5, the Obsidian-shaped person's day one: every `.md` is a page, every wikilink a cite.
 
 * `readPage` lexes markdown into runs (one per line, split around wikilinks) and wikilinks, and
   builds the page as a PATCH from the empty page: a chain of `Add`s, so a page read from disk is
-  one authored patch like any other. A wikilink to a page of the vault becomes a FOLLOWING cite of
-  that page's whole current text (a link tracks the page); one to no page stays text.
+  one authored patch like any other. What a wikilink to a page of the vault becomes (Ember's
+  decision (c), REPORT-DOC-20261030 §5): `[[Beta]]` (and `[[Beta#Heading]]`) cites Beta's IDENTITY
+  only, no bytes, current while Beta exists; `![[Beta]]`, an embed, is a following cite of Beta's
+  whole text; `[[Beta#^b]]`, a block reference, a following cite of the line Beta marks `^b`. A
+  following byte cite stays current while the bytes it quotes are unchanged (rule (b),
+  `Obend.Doc.Section`). A wikilink to no page, or to a block its page does not mark, stays text.
 * `readVault` reads every page twice: once to learn each page's bytes (a page's source does not
-  depend on its cites' commitments, only on their names), once to commit each cite to its target's
-  bytes under the hash `H`.
-* `renderAt` renders a page at a view: a cite whose facts hold reads as it was written, `[[Name]]`;
-  one whose facts fail carries their names, `[[Name]]{behind}` or `[[Name]]{unverified}`.
+  depend on its cites' commitments, only on their names and spans), once to commit each byte cite
+  to its target's bytes under the hash `H`.
+* `renderAt` renders a page at a view: a cite whose facts hold reads as it was written; one whose
+  facts fail carries their names, `![[Name]]{behind}`, `[[Name]]{missing}`, `[[Name#^b]]{unverified}`.
   `renderAt_fresh`: where every cite of the page holds, the view is the source.
+* `Obend.Doc.Backlinks`: the reverse index of cites.
 
 The round trip (`source (read md) = md` for a vault) is checked on the two-page vault in
 `lean/tests/doc/` and by `decide` below; it is not proved for every markdown file.
@@ -33,6 +38,7 @@ open Obend.Digest.HashBytes
 inductive Tok
   | text (s : List Char)
   | link (name : List Char)
+  | embed (name : List Char)
 deriving DecidableEq, Repr
 
 /-- The name of a wikilink whose `[[` has been read, and what follows its `]]`; `none` when the
@@ -46,10 +52,16 @@ def takeLink : List Char → List Char → Option (List Char × List Char)
 /-- Close the text read so far (kept reversed) as a run, if any. -/
 def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
 
-/-- Lex markdown: a run per line, split around wikilinks. `n` bounds the steps. -/
+/-- Lex markdown: a run per line, split around wikilinks and embeds. An embed of a block
+(`![[P#^b]]`) is read as a `!` and a block reference. `n` bounds the steps. -/
 def lex : Nat → List Char → List Char → List Tok
   | 0, _, acc => flush acc
   | _ + 1, [], acc => flush acc
+  | n + 1, '!' :: '[' :: '[' :: rest, acc => match takeLink rest [] with
+    | some (name, rest') =>
+      if name.contains '#' then lex n ('[' :: '[' :: rest) ('!' :: acc)
+      else flush acc ++ .embed name :: lex n rest' []
+    | none => lex n ('[' :: '[' :: rest) ('!' :: acc)
   | n + 1, '[' :: '[' :: rest, acc => match takeLink rest [] with
     | some (name, rest') => flush acc ++ .link name :: lex n rest' []
     | none => lex n ('[' :: rest) ('[' :: acc)
@@ -59,18 +71,33 @@ def lex : Nat → List Char → List Char → List Tok
 /-- The tokens of a markdown text. -/
 def tokens (md : String) : List Tok := lex (md.length + 1) md.toList []
 
-/-- How a wikilink is resolved: to the cite it becomes, or to nothing (it stays text). -/
-abbrev Resolve := String → Option Cite
+/-- A wikilink's page and what of it the link cites: the text before the first `#` names the page;
+`#^b` after it is the block `b`; any other `#…` (a heading) is still the page's identity. An embed
+cites the page's whole text. -/
+def target (embed : Bool) (name : List Char) : List Char × Span :=
+  let page := name.takeWhile (· != '#')
+  match name.dropWhile (· != '#') with
+  | '#' :: '^' :: b => (page, .block (String.ofList b))
+  | _ => (page, if embed then .page else .identity)
+
+/-- How a wikilink is resolved: from its page name and span to the cite it becomes, or to nothing
+(it stays text). -/
+abbrev Resolve := String → Span → Option Cite
 
 /-- The contents of a page, from its tokens. -/
 def contents (resolve : Resolve) : List Tok → List Content
   | [] => []
   | .text s :: ts => .text (String.ofList s) :: contents resolve ts
   | .link n :: ts =>
-    let name := String.ofList n
-    (match resolve name with
-      | some c => .cite name c
-      | none => .text ("[[" ++ name ++ "]]")) :: contents resolve ts
+    let (p, sp) := target false n
+    (match resolve (String.ofList p) sp with
+      | some c => .cite (String.ofList n) c
+      | none => .text ("[[" ++ String.ofList n ++ "]]")) :: contents resolve ts
+  | .embed n :: ts =>
+    let (p, sp) := target true n
+    (match resolve (String.ofList p) sp with
+      | some c => .cite (String.ofList n) c
+      | none => .text ("![[" ++ String.ofList n ++ "]]")) :: contents resolve ts
 
 /-- A chain of `Add`s: atom `i + 1` after atom `i`, the first after `root`. -/
 def chain : Nat → List Content → Patch
@@ -92,13 +119,14 @@ abbrev Vault := List (String × String)
 def Vault.idOf (V : Vault) (name : String) : Option PageId :=
   (V.zipIdx.find? fun e => e.1.1 == name).map (·.2 + 1)
 
-/-- Read a vault into a world of one version per page, its wikilinks committed under `H`. -/
+/-- Read a vault into a world of one version per page, its byte cites committed under `H`. -/
 def Vault.read (H : Hash) (V : Vault) : World :=
   let draft : PageId → Option Graph := fun p =>
-    (V[p - 1]?).map fun e => Graph.empty.apply (readPage (fun _ => some ⟨0, ⟨0, 0⟩, 0, [], .following⟩) e.2)
-  let resolve : Resolve := fun name => (V.idOf name).bind fun q => (draft q).map fun G =>
-    let b := bytes G.source
-    ⟨q, ⟨0, b.length⟩, 0, H b, .following⟩
+    (V[p - 1]?).map fun e => Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) e.2)
+  let resolve : Resolve := fun name sp => (V.idOf name).bind fun q => (draft q).bind fun G =>
+    match sp with
+    | .identity => some ⟨q, .identity, 0, [], .following⟩
+    | _ => (quoteOf G sp).map fun b => ⟨q, sp, 0, H b, .following⟩
   fun p => if p = 0 then [] else match V[p - 1]? with
     | some e => [Graph.empty.apply (readPage resolve e.2)]
     | none => []
@@ -109,6 +137,7 @@ def Vault.read (H : Hash) (V : Vault) : World :=
 def Fact.reason : Fact → String
   | .verifies _ => "unverified"
   | .current _ => "behind"
+  | .present _ => "missing"
   | .live .. => "dead"
   | .head .. => "unordered"
 
@@ -159,30 +188,51 @@ namespace Teeth
 open Obend.Doc.Teeth (toy)
 
 def vault : Vault :=
-  [("Alpha", "# Alpha\nSee [[Beta]] and [[Gamma]].\n"), ("Beta", "# Beta\nBack to [[Alpha]].\n")]
+  [("Alpha", "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]\nQuote: [[Beta#^ans]]\n"),
+   ("Beta", "# Beta\nBack to [[Alpha]].\nThe answer. ^ans\n")]
 
-/-- The tokens: a heading line, then a line split around its links. -/
-example : tokens "a [[B]] c\n" = [.text "a ".toList, .link ['B'], .text " c\n".toList] := by decide
+/-- The tokens: a heading line, then a line split around its links; an embed; a block reference. -/
+example : tokens "a [[B]] c\n![[B]] [[B#^x]]" =
+    [.text "a ".toList, .link ['B'], .text " c\n".toList, .embed ['B'], .text " ".toList,
+     .link "B#^x".toList] := by decide
 
 /-- The vault round trip, page by page, in the kernel. -/
 example : ((vault.read toy 1).map Graph.source, (vault.read toy 2).map Graph.source) =
-    (["# Alpha\nSee [[Beta]] and [[Gamma]].\n"], ["# Beta\nBack to [[Alpha]].\n"]) := by decide
+    (["# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]\nQuote: [[Beta#^ans]]\n"],
+     ["# Beta\nBack to [[Alpha]].\nThe answer. ^ans\n"]) := by decide
 
-/-- `[[Beta]]` became a cite of page 2; `[[Gamma]]` (no such page) stayed text. -/
-example : ((vault.read toy 1).head?.bind fun G => G.label 3).map (fun
-    | .cite n c => (n, c.page, c.mode == .following)
-    | _ => ("", 0, false)) = some ("Beta", 2, true) := by decide
+/-- `[[Beta]]` became a cite of page 2's identity; `[[Gamma]]` (no such page) stayed text;
+`![[Beta]]` a following cite of Beta's whole text; `[[Beta#^ans]]` one of its marked line. -/
+example : ((vault.read toy 1).head?.map fun G => [3, 7, 10].map fun a => (G.label a).map (fun
+    | .cite n c => (n, c.page, c.span, c.mode == .following)
+    | _ => ("", 0, .identity, false))) =
+    some [some ("Beta", 2, .identity, true), some ("Beta", 2, .page, true),
+      some ("Beta#^ans", 2, .block "ans", true)] := by decide
 
 /-- At the view it was read in, each page renders as its source. -/
-example : renderAt toy (vault.read toy) 1 = "# Alpha\nSee [[Beta]] and [[Gamma]].\n" := by decide
+example : renderAt toy (vault.read toy) 1 = "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]\nQuote: [[Beta#^ans]]\n" := by
+  decide
 
-/-- Beta moves on: Alpha's following cite now reads behind. -/
+/-- Beta moves on (a line appended): the embed reads behind; the identity link and the block
+reference, whose bytes did not change, do not. -/
 def movedVault : World := fun p =>
   if p = 2 then vault.read toy 2 ++
-    (vault.read toy 2).map (·.apply [.add 9 (.text "More.\n") 4])
+    (vault.read toy 2).map (·.apply [.add 9 (.text "More.\n") 5])
   else vault.read toy p
-example : renderAt toy movedVault 1 = "# Alpha\nSee [[Beta]]{behind} and [[Gamma]].\n" := by decide
-example : renderAt toy movedVault 2 = "# Beta\nBack to [[Alpha]].\nMore.\n" := by decide
+example : renderAt toy movedVault 1 =
+    "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]{behind}\nQuote: [[Beta#^ans]]\n" := by decide
+example : renderAt toy movedVault 2 = "# Beta\nBack to [[Alpha]].\nThe answer. ^ans\nMore.\n" := by decide
+
+/-- Beta's marked line is rewritten: now the block reference reads behind too. -/
+def revisedVault : World := fun p =>
+  if p = 2 then movedVault 2 ++
+    (vault.read toy 2).map (·.apply [.add 9 (.text "More.\n") 5, .delete 5,
+      .add 10 (.text "The answer, revised. ^ans\n") 5, .connect 10 9])
+  else vault.read toy p
+example : renderAt toy revisedVault 2 = "# Beta\nBack to [[Alpha]].\nThe answer, revised. ^ans\nMore.\n" := by
+  decide
+example : renderAt toy revisedVault 1 =
+    "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]{behind}\nQuote: [[Beta#^ans]]{behind}\n" := by decide
 
 end Teeth
 
