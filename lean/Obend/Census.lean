@@ -161,6 +161,12 @@ import Obend.Equiv.FareTests
 import Obend.Equiv.Fields
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
+import Obend.Judge
+import Obend.Judge.Certified
+import Obend.Judge.Class
+import Obend.Judge.Identity
+import Obend.Judge.Instances
+import Obend.Judge.Lrat
 import Obend.Just
 import Obend.Law
 import Obend.Law.Claim
@@ -181,6 +187,10 @@ import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Main
+import Obend.Receipt
+import Obend.Receipt.Cli
+import Obend.Receipt.Export
+import Obend.Receipt.Negotiation
 import Obend.Run
 import Obend.Run.Fold
 import Obend.Run.Adapter

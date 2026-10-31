@@ -41,6 +41,16 @@ Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
           | recite PAGE [--as NAME]          (`-C DIR` runs any of them in DIR)
         a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`.
 
+Receipt commands (lane Judge, 2026-10-31; `Obend.Receipt.Cli`):
+
+    obend verify RECEIPT.json [--prev PREV.json]
+        re-check a receipt with no producer state; with its predecessor, the chain link. Exit 0 / 3.
+    obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full]
+          [--prev PREV.json] | receipt cnf N OUT.cnf
+        produce receipts (an identity through an LRAT certificate; the negotiation's admitted dispatch).
+    obend lrat CNF PROOF
+        the registered `lrat@1` format on a DIMACS formula and an LRAT proof or a model.
+
 Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-bend.typed-core.v3`):
 
     obend check-core FILE.json
@@ -59,6 +69,7 @@ public import Obend.Spec.Capture
 public import Obend.Spec.Preview
 public import Obend.Vault.Cli
 public import Obend.Spec.Workspace
+public import Obend.Receipt.Cli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -73,7 +84,9 @@ def usage : String :=
   "             | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition] | preview REQUEST NEW_DIR | batch JOBS OUT\n" ++
   "       obend check-core FILE.json | obend run-core FILE.json [--ticks N] [--heap N] [--stack N]\n" ++
   "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
-  "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]   [-C DIR]"
+  "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]   [-C DIR]\n" ++
+  "       obend verify RECEIPT.json [--prev PREV.json] | obend lrat CNF PROOF\n" ++
+  "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
 /-! ## The typed-core packet path (lane A) -/
 
@@ -424,6 +437,8 @@ public def main (args : List String) : IO UInt32 :=
   | ["admit", "--package", spec, turn] => admitCommand spec turn
   | ["judge", "--package", spec, old, new] => judgeCommand spec old new
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
-  | _ => match Obend.Vault.Cli.main? args with
+  | _ => match Obend.Receipt.Cli.main? args with
     | some act => act
-    | none => do IO.eprintln usage; return 64
+    | none => match Obend.Vault.Cli.main? args with
+      | some act => act
+      | none => do IO.eprintln usage; return 64
