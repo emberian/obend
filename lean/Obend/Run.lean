@@ -34,9 +34,10 @@ accepted history across replanning, revocation and lost replies.
   abstract commit, recovery restores the memory, and two exposed effects consuming one token are one,
   across any crashes; `Obend.Run.DurableExample`, two buyers and a crash between them.
 - `Obend.Run.Fork`: the World fork for offline work (no token of the shared ledger, `notMine`;
-  monotone rows merge by union; bounded rows escalate) and `stitch`, a commit through the ledger's
-  own step whose refusals are conflicts kept as sections; a ticket double-spent across fork and main
-  names the winner and the epoch. `Obend.Run.ForkExample`, Bob offline.
+  monotone rows merge by union; bounded rows escalate unjudged) and `stitch`, which replays each
+  escalated dispatch through the joint transition at stitch time (the runner's `crun`, then the
+  ledger's commit), atomically: one refusal leaves main unchanged and every refusal is a conflict kept
+  as a section; a ticket double-spent across fork and main names the winner and the epoch. `Obend.Run.ForkExample`, Bob offline.
 - `Obend.Run.Negotiation`: the stranger's example (revocation, a slot's replan, a lost reply), the
   fixture `interpret` delivers and the runner refuses, and the durable-spending ticket.
 -/

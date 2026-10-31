@@ -186,7 +186,7 @@ theorem general_instances :
 #tooth ledgerAbandon_durable by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants, d.height⟩
 -- Without propagating the ledger's moves, Bob does not see Alice's commit.
 #tooth coupled_after_commit by mutation propagate :=
-  fun {_ _ _ _ _ _ _ _ _ _ _ _} [_] [_] [_] [_] [_] _ _ _ _ _ {_} _ cs => cs
+  fun {_ _ _ _ _ _ _ _ _ _ _} _ {_} _ _ cs => .ok cs
 
 end Obend.Run.SharedExample
 

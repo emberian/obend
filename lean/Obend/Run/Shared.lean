@@ -240,14 +240,19 @@ inductive JRefusal (ι Tok : Type) (S : Sig Ix) (Hole : Ix → Type) (P Cand Fac
 variable [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok]
 variable [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)]
 
-/-- Every runner sees the ledger's new record (a `#tooth` mutation target): its world event, at
-its local host. -/
-def propagate (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
-    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i₀ : Ix}
-    (d : L.Rec) (cs : ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀) : ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀ :=
-  fun i => match crun (localHost L base) (sp i) (au i) (k i) (cs i) (.base (.world d)) with
-    | .ok c => c
-    | .error _ => cs i
+/-- Every runner observes the ledger's new record `d` as its world event: its log gains `.world d`
+and its world is `d`. This is exactly the controlled runner's own acceptance of that event
+(`Obend.Run.Proofs.Shared.crun_propagated`) at a runner coupled to an allowed move. -/
+def propagated (L : Ledger ι W Tok) {i₀ : Ix} (d : L.Rec) (cs : ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀) :
+    ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀ :=
+  fun i => { cs i with cfg := { (cs i).cfg with world := d, log := (cs i).cfg.log ++ [.world d] } }
+
+/-- Propagate the ledger's move from `prev` to `d` to every runner (a `#tooth` mutation target). The
+move is judged once, by the ledger's `allowed`, which is every runner's host; a move it does not
+allow is returned as the ledger's refusal, never swallowed. -/
+def propagate (L : Ledger ι W Tok) {i₀ : Ix} (prev d : L.Rec) (cs : ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀) :
+    Except (JRefusal ι Tok S Hole P Cand Fact) (ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀) :=
+  if L.allowed prev d then .ok (propagated L d cs) else .error (.ledger .notAllowed)
 
 /-- Replace runner `i`'s configuration. -/
 def setCfg {i₀ : Ix} (cs : ι → CCfg S Hole A P Cand Tok Fact Ob W i₀) (i : ι)
@@ -269,13 +274,13 @@ def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S 
     JEvent ι W S Hole A P Cred Cand Fact L.Rec → Except (JRefusal ι Tok S Hole P Cand Fact) (JCfg L S Hole A P Cand Fact Ob i₀)
   | .world w =>
     match ledgerStep L J.led (.raw w) with
-    | .ok d => .ok ⟨d, propagate L base sp au k d J.cfgs⟩
+    | .ok d => (propagate L J.led d J.cfgs).map (JCfg.mk d)
     | .error c => .error (.ledger c)
   | .dispatch i o =>
     match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) (.base (.dispatch o)) with
     | .ok c₁ =>
       match ledgerStep L J.led (ledgerRowOf L (sp i) J.led i o) with
-      | .ok d => .ok ⟨d, propagate L base sp au k d (setCfg J.cfgs i c₁)⟩
+      | .ok d => (propagate L J.led d (setCfg J.cfgs i c₁)).map (JCfg.mk d)
       | .error c => .error (.ledger c)
     | .error (.run (.unadmitted o' m (some t))) =>
       match grantOf L J.led t with
@@ -286,7 +291,7 @@ def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S 
     match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) (.base (.abandon o)) with
     | .ok c₁ =>
       match ledgerStep L J.led (.abandon i) with
-      | .ok d => .ok ⟨d, propagate L base sp au k d (setCfg J.cfgs i c₁)⟩
+      | .ok d => (propagate L J.led d (setCfg J.cfgs i c₁)).map (JCfg.mk d)
       | .error c => .error (.ledger c)
     | .error r => .error (.runner i r)
   | .own i ev =>

@@ -52,14 +52,14 @@ theorem jrun_toks {J J' : JCfg L S Hole A P Cand Fact Ob i₀} {ev : JEv L S Hol
   cases ev with
   | world w =>
     simp only [jrun] at h; split at h
-    · rename_i d hd; cases h
+    · rename_i d hd; rw [propagate_allowed _ (ledgerStep_allowed L hd)] at h; simp only [Except.map] at h; cases h
       obtain ⟨_, rfl⟩ := ledgerStep_raw hd
       simp [L.setRaw_grants, consumedBy]
     · cases h
   | dispatch i o =>
     simp only [jrun] at h; split at h
     · split at h
-      · rename_i d hd; cases h
+      · rename_i d hd; rw [propagate_allowed _ (ledgerStep_allowed L hd)] at h; simp only [Except.map] at h; cases h
         obtain ⟨hdc, hdn⟩ := ledgerStep_rowOf hd
         cases ht : (sp i).consumes o.2 with
         | some t => rw [hdc t ht, L.commit_grants]; simp [consumedBy, ht]
@@ -70,7 +70,7 @@ theorem jrun_toks {J J' : JCfg L S Hole A P Cand Fact Ob i₀} {ev : JEv L S Hol
   | abandon i o =>
     simp only [jrun] at h; split at h
     · split at h
-      · rename_i d hd; cases h
+      · rename_i d hd; rw [propagate_allowed _ (ledgerStep_allowed L hd)] at h; simp only [Except.map] at h; cases h
         rw [ledgerStep_abandon hd, L.abandon_grants]; simp [consumedBy]
       · cases h
     · cases h

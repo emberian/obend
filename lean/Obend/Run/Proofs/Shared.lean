@@ -158,6 +158,24 @@ public theorem ledgerStep_rowOf {sp' : Spec S Tok Fact Ob} {d d' : L.Rec} {i : �
     · cases h; exact ⟨fun t ht => (by rw [hn] at ht; cases ht), fun _ => rfl⟩
     · cases h
 
+omit [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok] [DecidableEq Cand]
+  [DecidableEq (Σ i, S.Op i)] in
+/-- An allowed move propagates. -/
+public theorem propagate_allowed {i₀ : Ix} {d d' : L.Rec} (cs : ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀)
+    (ha : L.allowed d d' = true) :
+    propagate (S := S) (P := P) (Cand := Cand) (Fact := Fact) L d d' cs = .ok (propagated L d' cs) := by
+  simp [propagate, ha]
+
+omit [DecidableEq ι] in
+/-- **Propagation is the runner's own acceptance**: at a runner whose world is `d`, for a move the
+ledger allows, the controlled runner accepts the world event and reaches the propagated config. -/
+public theorem crun_propagated {i₀ : Ix} (cs : ι → CCfg S Hole A P Cand Tok Fact Ob L.Rec i₀) (d d' : L.Rec)
+    (i : ι) (hc : (cs i).cfg.world = d) (ha : L.allowed d d' = true) :
+    crun (localHost L base) (sp i) (au i) (k i) (cs i) (.base (.world d')) = .ok (propagated L d' cs i) := by
+  have hal : (localHost L base).allowed (cs i).cfg.world d' = true := by
+    show L.allowed _ _ = true; rw [hc]; exact ha
+  simp only [crun, run, hal, ↓reduceIte]; rfl
+
 /-- Propagating an allowed move of the ledger to coupled runners: each takes the world event. -/
 theorem propagate_ok {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole A Tok Fact Ob i₀}
     {stored₀ : ι → (j : Ix) → Hole j → Option Cand}
@@ -166,18 +184,11 @@ theorem propagate_ok {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole A Tok Fa
       (CCfg.init (Cfg.init (O i) d₀) (stored₀ i)) (cs i))
     (hc : ∀ i, (cs i).cfg.world = d) (ha : L.allowed d d' = true) :
     ∀ i, CReachable (localHost L base) (sp i) (au i) (k i)
-        (CCfg.init (Cfg.init (O i) d₀) (stored₀ i)) (propagate L base sp au k d' cs i) ∧
-      (propagate L base sp au k d' cs i).cfg.world = d' ∧
-      (propagate L base sp au k d' cs i).cfg.log = (cs i).cfg.log ++ [.world d'] := by
-  intro i
-  have hal : (localHost L base).allowed (cs i).cfg.world d' = true := by
-    show L.allowed _ _ = true; rw [hc i]; exact ha
-  obtain ⟨c', hc'⟩ := crun_world_ok (sp' := sp i) (au' := au i) (k' := k i) (cs i) hal
-  have hp : propagate L base sp au k d' cs i = c' := by
-    simp only [propagate, hc']
-  rw [hp]
-  obtain ⟨hl, hw, _⟩ := crun_world hc'
-  exact ⟨.step _ (hreach i) hc', hw, hl⟩
+        (CCfg.init (Cfg.init (O i) d₀) (stored₀ i)) (propagated L d' cs i) ∧
+      (propagated L d' cs i).cfg.world = d' ∧
+      (propagated L d' cs i).cfg.log = (cs i).cfg.log ++ [.world d'] :=
+  fun i => ⟨.step _ (hreach i) (crun_propagated (base := base) (sp := sp) (au := au) (k := k) cs d d' i (hc i) ha),
+    rfl, rfl⟩
 
 theorem setCfg_same {W' : Type} {i₀ : Ix} (cs : ι → CCfg S Hole A P Cand Tok Fact Ob W' i₀) (i : ι) (c) :
     setCfg cs i c i = c := by simp [setCfg]
@@ -221,6 +232,7 @@ public theorem jreachable_inv {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole
       simp only [jrun] at hs
       split at hs
       · rename_i d hd
+        rw [propagate_allowed _ (ledgerStep_allowed L hd)] at hs; simp only [Except.map] at hs
         cases hs
         obtain ⟨hstep, rfl⟩ := ledgerStep_raw hd
         have hp := propagate_ok (O := O) (stored₀ := stored₀) J.cfgs J.led (L.setRaw J.led w) ih.reach ih.coupled
@@ -238,6 +250,7 @@ public theorem jreachable_inv {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole
         rotate_left
         · cases hs
         rename_i d hd
+        rw [propagate_allowed _ (ledgerStep_allowed L hd)] at hs; simp only [Except.map] at hs
         cases hs
         have hdd := ledgerStep_abandon hd; subst hdd
         obtain ⟨hrun, _, _, _, _⟩ := crun_base_ok hc₁
@@ -314,6 +327,7 @@ public theorem jreachable_inv {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole
         rotate_left
         · cases hs
         rename_i d hd
+        rw [propagate_allowed _ (ledgerStep_allowed L hd)] at hs; simp only [Except.map] at hs
         cases hs
         obtain ⟨hrun, _, _, _, _⟩ := crun_base_ok hc₂
         obtain ⟨hl₂, hw₂⟩ := run_basic hrun
@@ -540,19 +554,19 @@ public theorem jrun_height_mono {i₀ : Ix} {J J' : JCfg L S Hole A P Cand Fact 
   cases ev with
   | world w =>
     simp only [jrun] at h; split at h
-    · rename_i d hd; cases h; exact ledgerStep_height hd
+    · rename_i d hd; rw [propagate_allowed _ (ledgerStep_allowed L hd)] at h; simp only [Except.map] at h; cases h; exact ledgerStep_height hd
     · cases h
   | dispatch i o =>
     simp only [jrun] at h; split at h
     · split at h
-      · rename_i d hd; cases h; exact ledgerStep_height hd
+      · rename_i d hd; rw [propagate_allowed _ (ledgerStep_allowed L hd)] at h; simp only [Except.map] at h; cases h; exact ledgerStep_height hd
       · cases h
     · split at h <;> cases h
     · cases h
   | abandon i o =>
     simp only [jrun] at h; split at h
     · split at h
-      · rename_i d hd; cases h; exact ledgerStep_height hd
+      · rename_i d hd; rw [propagate_allowed _ (ledgerStep_allowed L hd)] at h; simp only [Except.map] at h; cases h; exact ledgerStep_height hd
       · cases h
     · cases h
   | own i ev =>
@@ -602,6 +616,7 @@ public theorem jreachable_fold {J : JCfg L S Hole A P Cand Fact Ob i₀}
       simp only [jrun] at hs
       split at hs
       · rename_i d hd
+        rw [propagate_allowed _ (ledgerStep_allowed L hd)] at hs; simp only [Except.map] at hs
         cases hs
         have hall := ledgerStep_allowed L hd
         have hp' := propagate_ok (O := O) (stored₀ := stored₀) J.cfgs J.led d hI.reach hI.coupled hall
@@ -618,9 +633,9 @@ public theorem jreachable_fold {J : JCfg L S Hole A P Cand Fact Ob i₀}
           | ledger => rfl
           | run i =>
             rw [Obend.Fold.dupd_ne _ _ (by simp)]
-            show _ = (accOf _ _ _ _ (propagate L base sp au k d J.cfgs i).cfg.log).rest
+            show _ = (accOf _ _ _ _ (propagated L d J.cfgs i).cfg.log).rest
             rw [(hp' i).2.2, rest_world_snoc]; rfl
-        · show (propagate L base sp au k d J.cfgs i).cfg.log = _
+        · show (propagated L d J.cfgs i).cfg.log = _
           rw [(hp' i).2.2]
           have hm : (members L base sp O Mem.ledger).moves (.raw w) = true := rfl
           simp only [Obend.Fold.projectMoves, hs₁, hm, reduceCtorEq, ↓reduceDIte, ↓reduceIte, List.append_nil]
@@ -634,6 +649,7 @@ public theorem jreachable_fold {J : JCfg L S Hole A P Cand Fact Ob i₀}
         rotate_left
         · cases hs
         rename_i d hd
+        rw [propagate_allowed _ (ledgerStep_allowed L hd)] at hs; simp only [Except.map] at hs
         cases hs
         obtain ⟨hrun, _, _, _, _⟩ := crun_base_ok hc₂
         obtain ⟨hl₂, _⟩ := run_basic hrun
@@ -676,7 +692,7 @@ public theorem jreachable_fold {J : JCfg L S Hole A P Cand Fact Ob i₀}
           cases m with
           | ledger => rfl
           | run j =>
-            show Obend.Fold.dupd s₁.2 Mem.ledger () (Mem.run j) = (accOf _ _ _ _ (propagate L base sp au k d (setCfg J.cfgs i c₂) j).cfg.log).rest
+            show Obend.Fold.dupd s₁.2 Mem.ledger () (Mem.run j) = (accOf _ _ _ _ (propagated L d (setCfg J.cfgs i c₂) j).cfg.log).rest
             rw [Obend.Fold.dupd_ne _ _ (by simp), (hp' j).2.2, rest_world_snoc]
             by_cases e : j = i
             · subst e
@@ -700,6 +716,7 @@ public theorem jreachable_fold {J : JCfg L S Hole A P Cand Fact Ob i₀}
         rotate_left
         · cases hs
         rename_i d hd
+        rw [propagate_allowed _ (ledgerStep_allowed L hd)] at hs; simp only [Except.map] at hs
         cases hs
         obtain ⟨hrun, _, _, _, _⟩ := crun_base_ok hc₁
         obtain ⟨hl₁, hw₁⟩ := run_basic hrun
@@ -738,7 +755,7 @@ public theorem jreachable_fold {J : JCfg L S Hole A P Cand Fact Ob i₀}
           cases m with
           | ledger => rfl
           | run j =>
-            show Obend.Fold.dupd s₁.2 Mem.ledger () (Mem.run j) = (accOf _ _ _ _ (propagate L base sp au k d (setCfg J.cfgs i c₁) j).cfg.log).rest
+            show Obend.Fold.dupd s₁.2 Mem.ledger () (Mem.run j) = (accOf _ _ _ _ (propagated L d (setCfg J.cfgs i c₁) j).cfg.log).rest
             rw [Obend.Fold.dupd_ne _ _ (by simp), (hp' j).2.2, rest_world_snoc]
             by_cases e : j = i
             · subst e
