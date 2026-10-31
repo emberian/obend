@@ -14,7 +14,8 @@ the permanent address meanings of `GraphRepresentsBy`; Fix by its tied origin.
 Lemmas marked "(leaf intake)" are copied verbatim from the unlanded lane source
 /tank/dregg-build/codex-objective-demand-bool-20261003/src/Theory/
 Obend.Core.Proofs.Adequacy.lean (sha256 489b1527…ed1fcd, hbox leaf78 log). -/
-public import Obend.Core.Proofs.Adequacy
+public import Obend.Core.Proofs.Adequacy.Progress
+public import Obend.Core.Proofs.Adequacy.Sound
 namespace Obend.Core.Proofs.Completeness
 open Obend.Core.Term
 open Obend.Core.Machine

@@ -17,6 +17,7 @@ the yielded state (sharing transparency). That is `Kernel.ObjectiveResumeContrac
 forcingTransparent_of_yieldedPlan`, over `Obend.Core.Proofs.Forcing.*`. -/
 public import Obend.Core.Proofs.Settle
 public import Obend.Core.Proofs.Preservation
+public import Obend.Core.Proofs.Collect.Statements
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine

@@ -11,7 +11,7 @@ public import Obend.Core.DecisionReduction
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Core.Invariant
-public import Obend.Core.Proofs.Substitution
+public import Obend.Core.Proofs.Substitution.Mono
 public import Obend.Core.Proofs.TypedSubstitution
 public import Obend.Slot.Calculus
 public import Obend.Tactic.Fuel

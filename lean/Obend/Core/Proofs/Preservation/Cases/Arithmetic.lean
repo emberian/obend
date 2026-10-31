@@ -1,7 +1,7 @@
 module
 /- Preservation cases: Arithmetic. Imports only the shared Base; the dispatcher in
 Obend/Core/DemandPreservation.lean assembles every case module. -/
-public import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base.Values
 namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false

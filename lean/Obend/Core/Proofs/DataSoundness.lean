@@ -18,6 +18,8 @@ extracts by re-entering lazy record fields.
 public import Obend.Core.Proofs.Completeness
 public import Obend.Core.Data
 public import Obend.Core.Capacity
+public import Obend.Core.Proofs.Adequacy.Progress
+public import Obend.Core.Proofs.Adequacy.Reach
 namespace Obend.Core.Proofs.DataSoundness
 open Obend.Core.Term
 open Obend.Core.Machine

@@ -58,4 +58,5 @@ through the compiled evaluator. There are no per-theorem axiom lists. Teeth that
 legacy (non-`module`) leaves under `Obend/Teeth/`.
 
 **Records.** `docs/`: the dated reports, module graphs, the one measurement. `tools/`: the split
-scripts (`modularize.py`, `publicize.py`), `modgraph.py`, `measure.sh`.
+scripts (`modularize.py`, `publicize.py`, `split.py`: a proof file into piece modules at declaration
+boundaries), `modgraph.py`, `measure.sh`, `hooks/pre-push`.

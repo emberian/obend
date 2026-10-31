@@ -1,7 +1,11 @@
 module
 /- Semantic substitution for Checked evidence, independently of checker fuel and annotations. -/
-public import Obend.Core.Proofs.Substitution
-import all Obend.Core.Proofs.Substitution
+public import Obend.Core.Proofs.Substitution.Msubst
+import all Obend.Core.Proofs.Substitution.Defs
+import all Obend.Core.Proofs.Substitution.Uses
+import all Obend.Core.Proofs.Substitution.Transport
+import all Obend.Core.Proofs.Substitution.Mono
+import all Obend.Core.Proofs.Substitution.Msubst
 
 namespace Obend.Core.Proofs.TypedSubstitution
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Invariant

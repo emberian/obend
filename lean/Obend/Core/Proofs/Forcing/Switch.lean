@@ -14,6 +14,8 @@ module
   exactly with equal heaps, the forced run then strictly shorter, under a map that extends
   the pending one on every address the lazy state held. -/
 public import Obend.Core.Proofs.Forcing.Pend
+public import Obend.Core.Proofs.Collect.Segment
+public import Obend.Core.Proofs.Collect.Typing
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine

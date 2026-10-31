@@ -16,7 +16,7 @@ relation is `Agree s t`: erasing every cached origin (`eraseState`) makes them e
   same address types (the self origin is typed at the cell's own type).
 * `settle_resume_segment`: the kernel's segment from a settled state agrees with the
   segment from the state it settled. -/
-public import Obend.Core.Proofs.Collect
+public import Obend.Core.Proofs.Collect.Segment
 namespace Obend.Core.Collect
 open Obend.Core.Term
 open Obend.Core.Machine

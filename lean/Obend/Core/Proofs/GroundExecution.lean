@@ -16,7 +16,24 @@ A structured result (a record, a sum) is read by the kernel only through a groun
 (`Obend.Law.Machine`); deep completeness of `materializeWith` (re-entering field cells from a
 settled heap) is not proved here. -/
 public import Obend.Core.Proofs.DataSoundness
-import all Obend.Core.Proofs.Adequacy
+import all Obend.Core.Proofs.Adequacy.Defs
+import all Obend.Core.Proofs.Adequacy.Source
+import all Obend.Core.Proofs.Adequacy.Scoped
+import all Obend.Core.Proofs.Adequacy.Meaning
+import all Obend.Core.Proofs.Adequacy.Graph
+import all Obend.Core.Proofs.Adequacy.Origins
+import all Obend.Core.Proofs.Adequacy.CasesEval
+import all Obend.Core.Proofs.Adequacy.CasesReturn
+import all Obend.Core.Proofs.Adequacy.CasesControl
+import all Obend.Core.Proofs.Adequacy.StepRaw
+import all Obend.Core.Proofs.Adequacy.Run
+import all Obend.Core.Proofs.Adequacy.Examples
+import all Obend.Core.Proofs.Adequacy.Reach
+import all Obend.Core.Proofs.Adequacy.Birth
+import all Obend.Core.Proofs.Adequacy.Safety
+import all Obend.Core.Proofs.Adequacy.SafetyRaw
+import all Obend.Core.Proofs.Adequacy.Progress
+import all Obend.Core.Proofs.Adequacy.Sound
 import all Obend.Core.Proofs.Completeness
 namespace Obend.Core.Proofs.GroundExecution
 open Obend.Core.Term

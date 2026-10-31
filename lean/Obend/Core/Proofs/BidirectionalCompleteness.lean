@@ -4,7 +4,8 @@ witnesses are finite trees produced inside existential propositions, never by
 eliminating a typing proof into data. Rule representatives preserve the exact
 usage vector while conversion composes agreement without changing annotations. -/
 public import Obend.Core.Bidirectional
-public import Obend.Core.Proofs.Preservation.Base
+public import Obend.Core.Proofs.Preservation.Base.Reusable
+public import Obend.Core.Proofs.Preservation.Base.Values
 
 namespace Obend.Core.Proofs.BidirectionalCompleteness
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional

@@ -11,7 +11,8 @@ This generalizes `Obend.Core.Collect.Related` (the collect relation, `U` empty,
 the image heap no larger) to the shapes the forcing-transparency proof needs: the forced
 heap may be LARGER (it holds the cells a demand allocated), and a cell may be suspended
 on one side and cached on the other while nothing reads it. -/
-public import Obend.Core.Proofs.Collect
+public import Obend.Core.Proofs.Collect.Runs
+public import Obend.Core.Proofs.Collect.Typing
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term
 open Obend.Core.Machine
