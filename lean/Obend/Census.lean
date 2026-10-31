@@ -311,6 +311,7 @@ import Obend.Teeth.Core.EquiRecursiveTeeth
 import Obend.Teeth.Core.Force
 import Obend.Teeth.Core.LinearTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
+import Obend.Teeth.Equiv.CostTeeth
 import Obend.Teeth.Law.LawJudgeTeeth
 import Obend.Teeth.Law.MachineTeeth
 import Obend.Teeth.Law.TypingTeeth

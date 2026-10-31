@@ -14,7 +14,6 @@ module
 public import Obend.Equiv.Cost
 public import Obend.Equiv.FareTests
 public import Obend.Core.Machine
-public import Obend.Tactic.Tooth
 @[expose] public section
 namespace Obend.Equiv.CostTests
 open Obend.Core.Term
@@ -233,11 +232,6 @@ theorem selfField_steps (name : String) :
 theorem self_field_evaluates : Evaluates (.get selfField "b") (.nat 7) := by
   refine ⟨steps_trans (selfField_steps "b") (.next (.field _ _ (.get selfField "a") (by simp)) ?_), .natural 7⟩
   exact steps_trans (selfField_steps "a") (.next (.field _ _ (.nat 7) (by simp)) (.refl _))
-
-/- The tooth: with the second field not reading `self`, the selection has a derivation, and the
-stored proof of `self_field_no_cv` no longer checks. -/
-#tooth self_field_no_cv by mutation selfObject := fun n1 n2 _ =>
-  Term.fix (.lam (.lam (.record [(n1, .nat 7), (n2, .nat 7)]))) (.record [])
 
 /-! ## `mix_assoc_cost` is not vacuous -/
 
