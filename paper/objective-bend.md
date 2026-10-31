@@ -381,7 +381,7 @@ checked separately for terminal ownership protocols. What is proved is the safe 
 (`Obend.Core.Ty.safe_use_bound`) and that duplicating an affine use is refused
 (`Obend.Core.Proofs.CheckTeeth.duplicate_affine_refused`). The tutorial program `twice(affine x)`
 returning `x + x` is refused with "ownership refused" when run; `droppedLinear(linear y)` returning
-`0` is accepted, since "linear" means at most once here.
+`0` was accepted while "linear" meant at most once; since 2026-11-01 a `linear` binder must be used exactly once (`linearBinderUnused`), and this example is held as a deviation from Mini.
 
 *A reusable closure captures only unrestricted, shareable bindings*
 (`Obend.Core.Check.reusable_lambda_capture_rule`). Shareability looks through wrappers: a record
@@ -1244,7 +1244,7 @@ Stated plainly, from the tree's own lists.
 when everything it captures is Data", and the one freely reusable thing is a top-level definition.
 That is what lets a `match` free its node and makes fork-join parallelism free; Taelin has said the
 affine core is a placeholder pending an answer to higher-order contraction (`THESIS.md` §1, from
-his posts). Core4 keeps the quantities and checks the same at-most-once discipline for variables,
+his posts). Core4 keeps the quantities, checks at-most-once for `affine` and exactly-once for `linear` variables,
 and gives `self` a source semantics that is reusable on purpose, at the price that a reusable
 closure captures only unrestricted, shareable bindings. Whether lazy `fix` and parallel leaves
 compose in practice is a claim about cost that this paper does not prove.
@@ -1312,7 +1312,7 @@ linearity to function arrows in GHC to keep backwards compatibility. Core4 attac
 reuse flag to arrows (§3.5) and synthesizes usage bottom-up, the shape Wood and Atkey exploit, and
 the tree proves a certificate's usage vector is determined by the term (`uses_determined`). It adds
 no dependent types and no usage-polymorphism over a semiring: its quantities are the fixed four
-(erased, affine, linear, unrestricted), with at-most-once enforced for both affine and linear, and
+(erased, affine, linear, unrestricted), with at-most-once enforced for affine and exactly-once for linear (since 2026-11-01), and
 the rule that a reusable closure captures only shareable bindings is its own.
 
 **Recursive type equality.** Amadio and Cardelli (1993) relate equality and subtyping of recursive
