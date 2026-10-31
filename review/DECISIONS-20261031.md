@@ -36,6 +36,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 | `Accepted`'s constructor public; wire theorems in a proof module (lane C, D21) | kept | none; Kimi's D5 argument covers it |
 | Public constructors on execution evidence (lane A, D5) | kept, closed by Kimi's review | none |
 
+| `BEquiv` (`Equiv/Behaviour`) quantifies over every context including `metadata`, so it is ≈r; the extensional ≈b is `Observed .b` (Quote-1's `observed_r_iff`). Rename queued after the Cost lane lands so no lane rebases across it. | taken by Claude under standing approval, 2026-11-01 | `lean/docs/REPORT-QUOTE1-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
