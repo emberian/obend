@@ -21,7 +21,10 @@ Source commands (the front end `Obend.Spec`, 2026-10-30):
         the same over a `dregg.objective-bend.workspace.v1` (`Obend.Spec.Workspace`): the entry
         package's closure is resolved in the workspace's ecosystem root and lowered as one knot of
         package layers; `run` also prints the closure (`package` order, one `pin` line per resolved
-        root).
+        root) and, with `--json`, the recorded `turn`.
+    obend admit --package WORKSPACE.json TURN.json
+        re-derive a recorded turn at the workspace's records: `admitted`, or `stale` naming the
+        moved pin (`Obend.Spec.Ecosystem.admit`). Exit 0 when admitted, 3 otherwise.
     obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]
           | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition]
           | preview REQUEST NEW_DIR | batch JOBS OUT
@@ -319,7 +322,7 @@ def runSource (package : FE Package) (rest : List String) : IO UInt32 := do
     | some c =>
       let cl := c.closure
       if options.json then
-        IO.println p.pretty
+        IO.println (p.setObjVal! "turn" (Obend.Spec.Workspace.turnJson cl)).pretty
       else
         IO.println (shortForm p status)
         IO.println ("package: " ++ " > ".intercalate cl.order)
@@ -356,6 +359,21 @@ def checkSource (package : FE Package) : IO UInt32 := do
         IO.println (Json.mkObj [("declaration", toJson key), ("status", toJson "refused"), ("diagnostic", d.json)]).compress
     return (if failed then 2 else 0)
 
+/-! ## Workspace commands -/
+
+def admitCommand (spec turnPath : String) : IO UInt32 := do
+  let result ← (do
+    let w ← Obend.Spec.Workspace.readWorkspace spec
+    let (_, j) ← readJson turnPath
+    let j := (j.getObjVal? "turn").toOption.getD j
+    let t ← Obend.Spec.Workspace.turnOfJson w j
+    return Obend.Spec.Ecosystem.admit w.view t : FE Obend.Spec.Ecosystem.Admission).run
+  match result with
+  | .error d => IO.println (Json.mkObj [("status", toJson "refused"), ("diagnostic", d.json)]).pretty; return 2
+  | .ok a =>
+    IO.println (Obend.Spec.Workspace.admissionJson a).pretty
+    return (match a with | .admitted _ => 0 | _ => 3)
+
 /-! ## Dispatch -/
 
 public def main (args : List String) : IO UInt32 :=
@@ -383,6 +401,7 @@ public def main (args : List String) : IO UInt32 :=
   | ["check", file] => checkSource (packageOfFile file none)
   | ["check", file, entry] => checkSource (packageOfFile file (some entry))
   | "run" :: "--package" :: spec :: rest => runSource (packageOfSpec spec none) rest
+  | ["admit", "--package", spec, turn] => admitCommand spec turn
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
   | _ => match Obend.Vault.Cli.main? args with
     | some act => act

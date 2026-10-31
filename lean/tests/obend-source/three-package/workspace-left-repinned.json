@@ -1,0 +1,17 @@
+{
+  "schema": "dregg.objective-bend.workspace.v1",
+  "edition": "objective-bend-1",
+  "releases": [
+    {"name": "commons/counter", "version": "1.0.0", "modules": [{"name": "Counter", "sourcePath": "counter/Counter.obend"}]},
+    {"name": "commons/counter", "version": "1.1.0", "modules": [{"name": "Counter", "sourcePath": "counter-1.1/Counter.obend"}]},
+    {"name": "ext/left", "version": "1.0.0", "modules": [{"name": "Left", "sourcePath": "left/Left.obend"}]},
+    {"name": "ext/right", "version": "1.0.0", "modules": [{"name": "Right", "sourcePath": "right/Right.obend"}]}
+  ],
+  "records": [
+    {"name": "commons/counter", "major": 1, "pin": 3, "names": "1.0.0", "owner": "ada"},
+    {"name": "ext/left", "major": 1, "pin": 2, "names": "1.0.0", "owner": "bo"},
+    {"name": "ext/right", "major": 1, "pin": 1, "names": "1.0.0", "owner": "cy"}
+  ],
+  "entry": {"name": "app/both", "version": "0.1.0", "modules": [{"name": "Both", "sourcePath": "both/Both.obend"}],
+            "entryModule": "Both", "entryDefinition": "counted"}
+}

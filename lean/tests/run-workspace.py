@@ -82,5 +82,20 @@ expect_run("a moved record: two routes reach two releases, refused by name", os.
            ["status: refused", "stage: objective-workspace",
             "message: refused (incompatible-revisions): commons/counter is resolved to 1.1.0 by one route and 1.0.0 by another"])
 
+with tempfile.TemporaryDirectory() as work:
+    _, out = obend("run", "--package", ws, "--json")
+    turn = json.loads(out)["turn"]
+    path = os.path.join(work, "turn.json")
+    with open(path, "w") as f:
+        json.dump(turn, f)
+    code, out = obend("admit", "--package", ws, path)
+    check("a turn re-derives at its own records: admitted", code == 0 and json.loads(out)["status"] == "admitted", out)
+    code, out = obend("admit", "--package", os.path.join(T, "workspace-left-repinned.json"), path)
+    a = json.loads(out)
+    check("a re-pinned record: the turn is stale, by name", code == 3 and a["status"] == "stale" and a["name"] == "ext/left", out)
+    code, out = obend("admit", "--package", os.path.join(T, "workspace-moved.json"), path)
+    a = json.loads(out)
+    check("a moved base: stale before anything is re-derived", code == 3 and a["status"] == "stale" and a["name"] == "commons/counter", out)
+
 print(f"WORKSPACES: {count - len(failures)}/{count} checks hold")
 sys.exit(1 if failures else 0)

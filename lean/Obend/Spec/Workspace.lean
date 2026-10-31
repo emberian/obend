@@ -215,6 +215,41 @@ def pinText : Pin → String
   | .intention n m p v _ => n ++ "@^" ++ toString m ++ " = " ++ v ++ " (record pin " ++ toString p ++ ")"
   | .extension n h => n ++ "@0x" ++ String.ofList (h.toList.take 12) ++ "… (fixed)"
 
+/-- The turn a run records: the entry's content hash, every pin, the precedence order. -/
+def turnJson (cl : Closure) : Json :=
+  Json.mkObj [("schema", toJson "dregg.objective-bend.turn.v1"), ("entry", toJson cl.entry.name),
+    ("entryHash", toJson cl.entry.hash), ("order", toJson cl.order), ("pins", Json.arr (cl.pins.map pinJson).toArray)]
+
+def pinOfJson (j : Json) : Except String Pin := do
+  if let some intention := text j "intention" then
+    let pin ← j.getObjValAs? Nat "pin"
+    let version ← j.getObjValAs? String "version"
+    let hash ← j.getObjValAs? String "hash"
+    match intention.splitOn "@^" with
+    | [n, m] => return .intention n m.toNat! pin version hash
+    | _ => throw "turn pin: intention"
+  match (text j "extension").map (·.splitOn "@0x") with
+  | some [n, h] => return .extension n h
+  | _ => throw "turn pin: intention or extension"
+
+/-- A recorded turn against a workspace: its entry must be the workspace's entry (same content). -/
+def turnOfJson (w : Workspace) (j : Json) : FE Turn := do
+  if text j "entryHash" != some w.entry.release.hash then
+    wsRefuse "refused (turn-entry): the turn was recorded against other content of the entry package"
+  let pins ← match (((j.getObjVal? "pins").bind Json.getArr?).toOption.getD #[]).toList.mapM pinOfJson with
+    | .ok ps => pure ps
+    | .error e => wsRefuse e
+  let order := (((j.getObjVal? "order").bind Json.getArr?).toOption.getD #[]).toList.filterMap (·.getStr?.toOption)
+  return ⟨w.entry.release, pins, order⟩
+
+def admissionJson : Admission → Json
+  | .admitted cl => Json.mkObj [("status", toJson "admitted"), ("order", toJson cl.order)]
+  | .stale p => Json.mkObj [("status", toJson "stale"), ("name", toJson p.name), ("pin", pinJson p),
+      ("message", toJson ("stale: " ++ pinText p ++ " moved; the record names another fill now"))]
+  | .refused r => Json.mkObj [("status", toJson "refused"), ("message", toJson r.message)]
+  | .diverged => Json.mkObj [("status", toJson "diverged"),
+      ("message", toJson "every pin is current, but the re-derived closure differs from the turn's")]
+
 end Obend.Spec.Workspace
 
 end
