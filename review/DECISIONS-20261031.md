@@ -45,6 +45,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 | World resolution has no shared semantics with term-level `fix`: policies are history-dependent choice functions inside the monotone envelope of the invariants (Gemini Experiment 1, kernel-verified); the support-set generalization is adopted as per-cell admissible-pin domains | decided 2026-11-01 | `review/GEMINI-CHECKPOINT-20261101b.md` §3 |
 | The equation judgment of the claim logic is partial (`HoldsEq`); ground and Lean certificates prove total convergence; the receipt names which | taken 2026-11-01 from Gemini's finding | §1 |
 
+| `extendRecord` preserves typing up to `RowRefines`, not `sameType`: kept as stated in `step_preserves_typing` (Gemini, 2026-11-01). Dropping shadowed fields in `Ty.overlay` was refused: it breaks `overlay_instantiate` on open row templates, row congruence across recursive unfoldings, and the W25 shareability audit. If exact `sameType` is ever wanted, the route is a shareability premise on shadowed fields in `PartialTyping.extend`, not `overlay`. | decided 2026-11-01 | `review/GEMINI-CHECKPOINT-20261101b.md`; `REPORT-SOUND-20261101.md` §6 |
+
 ## Still open
 
 | item | where it is written | size |
