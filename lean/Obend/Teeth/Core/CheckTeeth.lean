@@ -5,7 +5,7 @@ module
 Every executable tooth of `Obend.Core.Check`: programs the checker accepts and programs it refuses, by
 name (captures, custody, affine use, rows, sums, shadowing, activities), the template fixtures
 (`futureRowSource` and its instantiations), and the classification teeth on
-`Obend.Core.Packet.refusalKind`. Moved out of `Obend.Core.Check` on 2026-10-30: a tooth edit
+`Obend.Elab.Gate.refusalKind`. Moved out of `Obend.Core.Check` on 2026-10-30: a tooth edit
 rebuilt every importer of the checker; here nothing imports this module. Historical refusal of arrow congruence is retained
 explicitly for legacySameType and replaced by a positive public-agreement tooth.
 -/
@@ -13,6 +13,7 @@ public import Obend.Core.Ty
 public import Obend.Core.Term
 public import Obend.Core.Check
 public import Obend.Core.Packet
+public import Obend.Elab.Gate
 public import Obend.Core.RecursiveAgreement
 public import Obend.Tactic.MonadicReduction
 import all Obend.Core.Ty
@@ -36,7 +37,7 @@ attribute [local simp] check infer inferFields inferArms checkExtension agree
   Ty.isRow Ty.lookup Ty.supports Ty.canonical Ty.insertCanonical Ty.put Ty.tail
   Quantity.fits linearFree joinUses branchesAgree Quantity.agrees ExtensionFamilies.functionType
   sameStep legacySameType Assumptions.orbit Assumptions.unfoldHead
-  refusalKind relaxQuantities unrestrictedTy ampleFuel
+  relaxQuantities unrestrictedTy
   planType planRow responseType
   List.range_succ List.replicate_succ List.zipWith List.lookup
   lookupV isRowV lookupW isRowW walkRow unvisited
@@ -432,20 +433,20 @@ theorem shadowed_override_accepted :
       fun position => if position = [0] then some ⟨shadowRow, shadowSum, .unrestricted, .reusable⟩ else none, {}⟩
       [] 32).map (fun checked => checked.type) = some .natural := by check_reduce
 
-/-- The classification on this module's own refused fixtures, each also refused
-by `check` above: an affine binding used twice is ownership, an accepted
-program given too little fuel is the budget, a conjunction of labels is typing,
-and capturing custody in a reusable closure is typing (relaxing quantities
-cannot make custody shareable). -/
+/-- The classification (`Obend.Elab.Gate.refusalKind`, the gate the front end and `obend check-core`
+run) on this module's own refused fixtures: an affine binding used twice is ownership, a program the
+gate accepts given a work grant below its `checkWork` is the budget, a conjunction of labels is typing,
+and capturing custody in a reusable closure is typing (relaxing quantities cannot make custody
+shareable). -/
 theorem refusal_kind_duplicate_affine :
-    refusalKind ⟨duplicateAffine, [⟨.natural,.affine⟩], 8⟩ = .ownership := by check_reduce
-theorem refusal_kind_starved_fuel :
-    (check (custodyCapture .once) [⟨.custody 17,.linear⟩] 1).isNone = true ∧
-      refusalKind ⟨custodyCapture .once, [⟨.custody 17,.linear⟩], 1⟩ = .budget := by check_reduce
+    Obend.Elab.Gate.refusalKind ⟨duplicateAffine, [⟨.natural,.affine⟩], 64⟩ = .ownership := by check_reduce
+theorem refusal_kind_starved_work :
+    (Obend.Elab.Gate.admit ⟨custodyCapture .once, [⟨.custody 17,.linear⟩], 64⟩).toBool = true ∧
+      Obend.Elab.Gate.refusalKind ⟨custodyCapture .once, [⟨.custody 17,.linear⟩], 1⟩ = .budget := by check_reduce
 theorem refusal_kind_label_conjunction :
-    refusalKind ⟨stringConjunction, [], 8⟩ = .typing := by check_reduce
+    Obend.Elab.Gate.refusalKind ⟨stringConjunction, [], 64⟩ = .typing := by check_reduce
 theorem refusal_kind_custody_in_reusable_closure :
-    refusalKind ⟨custodyCapture .reusable, [⟨.custody 17,.linear⟩], 8⟩ = .typing := by check_reduce
+    Obend.Elab.Gate.refusalKind ⟨custodyCapture .reusable, [⟨.custody 17,.linear⟩], 64⟩ = .typing := by check_reduce
 
 /-! ## Activities: effects as a type, never in a shared position -/
 

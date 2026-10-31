@@ -157,8 +157,11 @@ checked here by the checker with its `Self` variable RIGID: `Self`'s bound is a 
 (members are read through it) and never an alias, so a body that uses `self` where a value
 of exactly its bound row is expected, which the alias checker of the whole program would
 accept and only a wider instance would refuse, is refused HERE, naming the declaration.
-`Obend.Core.Proofs.Templates.Discharges.check_instantiate` is what a template accepted
-here buys: acceptance at every instance whose bounds are discharged. -/
+The check is the front end's gate (`Obend.Elab.Gate.admitSource`: preparation, then
+`Bidirectional.checkAgainst`, within the request's `checkWork`) under the rigid assumptions.
+`Obend.Core.Proofs.CheckerTransport.Discharges.checked_instantiate` is what a template accepted
+here buys: acceptance by the checker at every instance whose bounds are discharged, at the
+instantiated type. -/
 def checkTemplate (output : Output) (sourceEntry : String) (modules : List SourceModule) (checkWork : Nat)
     (key : String) (rigidVariables : List Nat) (field : ATerm) : Except Diagnostic Unit := do
   let refuse := fun (why : String) =>
@@ -173,21 +176,21 @@ def checkTemplate (output : Output) (sourceEntry : String) (modules : List Sourc
         " has no typed template: " ++ e))
   let source := packet.source
   let rigidAt := fun (vars : List Nat) => { source with assumptions := { source.assumptions with rigid := vars } }
-  match check (rigidAt rigidVariables) knotContext packet.fuel with
-  | some _ => pure ()
-  | none =>
+  let accepts := fun (template : Obend.Core.Check.AnnotatedTerm) =>
+    (Obend.Elab.Gate.admitSource template knotContext packet.fuel).toBool
+  if accepts (rigidAt rigidVariables) then pure ()
+  else
     -- Which variable only an alias would accept: Self (the first) or Super (the second).
-    if (check (rigidAt (rigidVariables.take 1)) knotContext packet.fuel).isSome then
+    if accepts (rigidAt (rigidVariables.take 1)) then
       refuse ("refused (super-rigid): open declaration " ++ key ++ " uses super as a value of its " ++
         "Super bound row; Super ranges over every row beneath that HAS those members (a lower bound), so " ++
         "a value of type Super is not a value of the bound row. Read the members it needs (super.m), or " ++
         "extend super (Super with {...})")
     else
-    match check source knotContext packet.fuel with
-    | some _ => refuse ("refused (self-rigid): open declaration " ++ key ++ " uses self as a value of its " ++
+    if accepts source then refuse ("refused (self-rigid): open declaration " ++ key ++ " uses self as a value of its " ++
         "Self bound row; Self ranges over every type that HAS that row (a lower bound), so a value of type " ++
         "Self is not a value of the row. Read the members it needs (self.m) instead")
-    | none => refuse ("refused (template-typing): open declaration " ++ key ++
+    else refuse ("refused (template-typing): open declaration " ++ key ++
         " does not type-check against its declared bounds")
 
 def checkTemplates (output : Output) (sourceEntry : String) (modules : List SourceModule) (checkWork : Nat) :

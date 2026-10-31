@@ -1,16 +1,14 @@
 module
 /-
-# Obend.Core.Packet — typed-core packets on the wire: decode, check, receipt
+# Obend.Core.Packet — typed-core packets on the wire: decode and render
 
 The JSON edition `dregg.objective-bend.typed-core.v3` (a term, a type table, lambda annotations by
-position, bounds, shareability premises, a context, the checker fuel), decoded into an
-`AnnotatedTerm` with its context (`decodePacket`), checked (`packetReceipt`), and the kind of rule a
-refused packet broke, read off the SAME checker on two variations of the packet (`refusalKind`: ample
-fuel, then every quantity unrestricted). `checkPacketFile` is the native entry point the `obend`
-executable calls. Split out of `Obend.Core.Check` on 2026-10-30 so the checker's module holds the
-checker: no proof reads the wire. The teeth on `refusalKind` are in `Obend.Core.Proofs.CheckTeeth`.
--/
-public import Obend.Core.Ty
+position, bounds, shareability premises, a context, the checker's work grant), decoded into an
+`AnnotatedTerm` with its context (`decodePacket`), the type renderer (`typeJson`), and the packet
+with every quantity relaxed (`relaxQuantities`) on which `Obend.Elab.Gate.refusalKind` classifies a
+refusal. Checking, the receipt and the native entry point are `Obend.Elab.Gate`'s. Split out of
+`Obend.Core.Check` on 2026-10-30 so the checker's module holds the checker: no proof reads the wire.
+-/public import Obend.Core.Ty
 public import Obend.Core.Term
 public import Obend.Core.Check
 @[expose] public section
@@ -248,10 +246,6 @@ inductive RefusalKind where
   | budget | ownership | typing
   deriving Repr, DecidableEq
 
-/-- Type fuel that bounds only the checker's depth, generous enough that a
-program refused with it was not refused for depth. -/
-def ampleFuel (fuel : Nat) : Nat := max (fuel * 4) 65536
-
 /-- The same packet with every quantity relaxed to `unrestricted`: lambda
 parameters, every arrow in the declared types and bounds, and the context. -/
 def relaxQuantities (packet : DecodedPacket) : DecodedPacket :=
@@ -266,53 +260,6 @@ def relaxQuantities (packet : DecodedPacket) : DecodedPacket :=
     context := packet.context.map fun binding =>
       ({ type := unrestrictedTy binding.type, quantity := .unrestricted } : Binding),
     fuel := packet.fuel }
-
-/-- The checker answers accepted or refused; it does not name the rule. To say
-which KIND of rule refused, this re-runs the SAME checker on two variations of
-the same packet, in order: (1) ample fuel — if that accepts, the refusal was
-the checker budget; (2) every quantity relaxed to `unrestricted` — if that
-accepts, the refusal was ownership (an affine or linear binding used more than
-once, or captured by a closure that may run again). Otherwise it was a typing
-or activity rule. No second checker is written: the classification is what the
-real checker says about the variations. Meaningful only for a packet `check`
-refused. -/
-def refusalKind (packet : DecodedPacket) : RefusalKind :=
-  if (check packet.source packet.context (ampleFuel packet.fuel)).isSome then .budget
-  else
-    let relaxed := relaxQuantities packet
-    if (check relaxed.source relaxed.context relaxed.fuel).isSome then .ownership else .typing
-
-def refusalReason (packet : DecodedPacket) : String :=
-  match refusalKind packet with
-  | .budget => s!"checker budget refused: typeFuel {packet.fuel} is too small for this program (it checks with {ampleFuel packet.fuel}); raise limits.typeFuel"
-  | .ownership => "ownership refused: an affine or linear parameter is used more than once (both mean at most once), or one is captured by a closure that may run again (the program checks with every quantity unrestricted)"
-  | .typing => "typing refused: types disagree, a custody value is shared or captured, or an activity rule (an Activity is refused as an argument, record/extend field, specification or prototype component, or sum payload; a Plan must be a sum of first-order data; a response must be first-order data)"
-
-def packetReceipt (value : Json) : Except String Json := do
-  let packet ← decodePacket value
-  let result ← requireSome (refusalReason packet) (check packet.source packet.context packet.fuel)
-  return Json.mkObj [
-    ("schema", toJson "dregg.objective-bend.typing-receipt.v1"),
-    ("status", toJson "accepted"),
-    ("type", typeJson result.type), ("uses", toJson result.uses),
-    ("typingScope", toJson "compiled proof-producing annotated partial checker; preservation and demand adequacy separate"),
-    ("laws", toJson "undischarged unless independent total law providers are supplied"),
-    ("authority", toJson "no current native authority granted")]
-
-/-- Native entry point for the exact core packet produced by the world lowerer.
-Its executable result relies on Lean compilation; it is not a kernel certificate
-for the parsed bytes or an executor/authority qualification. -/
-def checkPacketFile (path : String) : IO UInt32 := do
-  let input ← IO.FS.readFile path
-  let result := do
-    let parsed ← Json.parse input
-    packetReceipt parsed
-  match result with
-  | .ok receipt => IO.println receipt.compress; return 0
-  | .error message =>
-      IO.eprintln (Json.mkObj [("schema",toJson "dregg.objective-bend.typing-receipt.v1"),
-        ("status",toJson "refused"),("stage",toJson "objective-source-type-check"),("message",toJson message)]).compress
-      return 2
 
 end Obend.Core.Packet
 end

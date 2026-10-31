@@ -55,7 +55,7 @@ Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-ben
 
     obend check-core FILE.json
         the typing receipt on stdout (exit 0), or the refusal with the kind of rule it broke on
-        stderr (exit 2): `Obend.Core.Packet.checkPacketFile`.
+        stderr (exit 2): `Obend.Elab.Gate.checkPacketFile`.
     obend run-core FILE.json [--ticks N] [--heap N] [--stack N]
         checks the packet, refuses an open program, runs the term on the demand machine within the
         limits (defaults 100000 ticks, 65536 heap cells, 4096 frames) and prints the outcome as JSON.

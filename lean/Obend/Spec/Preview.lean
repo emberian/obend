@@ -30,7 +30,7 @@ public section
 namespace Obend.Spec.Preview
 open Lean (Json toJson)
 open Obend.Core.Check
-open Obend.Core.Packet (decodePacket refusalReason typeJson jsonNat)
+open Obend.Core.Packet (decodePacket typeJson jsonNat)
 open Obend.Core.Machine
 open Obend.Core.Ty (Ty)
 open Obend.Core.Data (Data Failure)
