@@ -663,6 +663,17 @@ def fieldRe : Re := seqs [group 1 (.alt ident quoted), chr ':', many space, grou
 /-- `law NAME: EXPR`, a top-level ENFORCED law of the package (`Obend.Spec.Law`). -/
 def lawRe : Re := seqs [str "law", many1 space, group 1 ident, many space, chr ':', many space, group 2 (many1 dot), .done]
 
+/-- A package name: identifier segments joined by `/` (`commons/record`). -/
+def packageNameRe : Re := seqs [ident, many (.seq (chr '/') ident)]
+/-- `package NAME [extends REF, ...]`: the package this module is the root of, and the roots it
+extends (DESIGN §4). -/
+def packageRe : Re := seqs [str "package", many1 space, group 1 packageNameRe,
+  opt (seqs [many1 space, str "extends", many1 space, group 2 (many1 dot)]), many space, .done]
+def hexDigit (c : Char) : Bool := asciiDigit c || ('a' ≤ c && c ≤ 'f')
+/-- A parent root: `NAME@^MAJOR` (an intention: the versions of MAJOR its owner's record names) or
+`NAME@0xHASH` (an extension: the package whose content hash is HASH, 64 lowercase hex digits). -/
+def packageRefRe : Re := seqs [group 1 packageNameRe, chr '@',
+  alts [.seq (chr '^') (group 2 (many1 (.char asciiDigit))), .seq (str "0x") (group 3 (many1 (.char hexDigit)))], .done]
 /-- `String.prototype.split` on one character. -/
 def splitChar (s : List Char) (sep : Char) : List (List Char) :=
   let (finished, current) := s.foldl (fun (acc : List (List Char) × List Char) c =>
@@ -805,6 +816,25 @@ def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
       if let .error message := Law.parse text then fail line message
       decls := decls.push (Json.mkObj [("kind", toJson "law"), ("name", toJson (cap line.text caps 1)),
         ("source", toJson text), ("span", line.span.json)])
+      continue
+    if let some (_, caps) ← matchAt line packageRe line.text then
+      let refs := match capture line.text caps 2 with
+        | none => []
+        | some raw => (splitChar raw ',').map jsTrim
+      let mut parents : Array Json := #[]
+      for ref in refs do
+        let some (_, r) ← matchAt line packageRefRe ref
+          | fail line "a parent root is NAME@^MAJOR (an intention) or NAME@0xHASH (an extension, 64 hex digits)"
+        match capture ref r 2, capture ref r 3 with
+        | some major, _ => parents := parents.push (Json.mkObj [("name", toJson (cap ref r 1)), ("major", toJson (String.ofList major))])
+        | _, some hash =>
+          if hash.length != 64 then fail line "an extension parent names its whole content hash: 0x and 64 hex digits"
+          parents := parents.push (Json.mkObj [("name", toJson (cap ref r 1)), ("hash", toJson (String.ofList hash))])
+        | none, none => fail line "a parent root is NAME@^MAJOR or NAME@0xHASH"
+      let names := parents.toList.map fun j => (j.getObjValAs? String "name").toOption.getD ""
+      if names.eraseDups.length != names.length then fail line "duplicate parent root"
+      decls := decls.push (Json.mkObj [("kind", toJson "package"), ("name", toJson (cap line.text caps 1)),
+        ("parents", Json.arr parents), ("span", line.span.json)])
       continue
     if startsWith line.text "law " || line.text == "law".toList || startsWith line.text "law:" then
       fail line (Law.refusalPrefix ++ "expected `law NAME: EXPR` (a top-level law has a name and no parameters)")

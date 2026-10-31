@@ -37,12 +37,24 @@ structure Binding where
   quantity : String
   deriving Inhabited
 
+/-- A package of a workspace closure (`Obend.Spec.Ecosystem`): its intention name, its modules'
+qualified names (`NAME::Module`), and its own C4 precedence list over packages (itself first). -/
+structure PackageInfo where
+  name : String
+  modules : List String
+  precedence : List String
+  deriving Inhabited, Repr
+
 structure Ctx where
   /-- The user's modules. -/
   modules : List Module
   decls : List (String × Decl × Module)
   records : List (String × Decl)
   sums : List (String × Decl)
+  /-- The packages of a workspace closure, the entry's first; empty for a single package. -/
+  packages : List PackageInfo := []
+  /-- The entry package's C4 precedence list over packages (most specific first). -/
+  order : List String := []
 
 structure St where
   globalTypes : List (String × Option PTy) := []
@@ -249,6 +261,19 @@ def withTypes {α : Type} (bindings : List (String × PTy)) (k : M α) : M α :=
   let r ← k
   modify fun st => { st with typeBindings := saved }
   return r
+
+/-! ## Packages and protocols -/
+
+/-- The package a module belongs to: the intention before `::` of its qualified name, `""` for a
+module of a single package. -/
+def packageOfModule (moduleName : String) : String :=
+  match moduleName.splitOn "::" with
+  | [p, _] => p
+  | _ => ""
+
+/-- The package's own precedence list (itself first), or `[name]`. -/
+def packagePrecedence (c : Ctx) (name : String) : List String :=
+  ((c.packages.find? (·.name == name)).map (·.precedence)).getD [name]
 
 mutual
 def sourceType (c : Ctx) : Nat → String → String → List String → M (Option PTy)
@@ -1471,13 +1496,50 @@ def emitDecl (c : Ctx) (fuel : Nat) (m : Module) (d : Decl) (fields : List (Stri
   modify fun st => { st with hidden := #[] }
   return fields
 
+/-- The knot of a workspace closure: one layer per package, in C4 order, each package's root
+extension `λ$globals. λ$seed. extend $seed {its fields}` over the row of the packages beneath it,
+mixed least specific first, so `mix` applies each ancestor once (`(intention, declaration)` keys)
+and `fix` closes the whole ecosystem: every package's `$globals` is the final row. -/
+def packageKnot (layered : List (String × List (String × ATerm))) (rowFields : List (String × PTy))
+    (reason : Option String) : M ATerm := do
+  let typeOf := fun (fs : List (String × ATerm)) => fs.map fun (n, _) => (n, (rowFields.lookup n).getD .emptyRow)
+  let rows := layered.map fun (p, fs) => (p, fs, typeOf fs)
+  let mut below : List (String × PTy) := []
+  let mut chain : Option ATerm := none
+  for ((p, fs, row), i) in rows.reverse.zipIdx do
+    let result := row ++ below
+    let top := i + 1 == rows.length
+    let resultTy := if top then PTy.variable 0 else PTy.row result
+    let belowTy := if below.isEmpty then PTy.emptyRow else PTy.row below
+    let layer := ATerm.lam ⟨some (.variable 0), some (arrowTy belowTy resultTy), "unrestricted", "reusable", reason⟩
+      (.lam ⟨some belowTy, some resultTy, "unrestricted", "reusable", reason⟩ (.extend (.bound 0) fs))
+    let spec := ATerm.specification (.record [("package", .label p)]) layer
+    chain := some (match chain with
+      | none => spec
+      | some lower => .mix lower spec)
+    below := result
+  let some extension := chain | fail "internal: a closure has a package"
+  let precedence := (toJson (layered.map (·.1))).compress
+  return .fix (.specification (.record [("package", .label (layered.head?.map (·.1) |>.getD "")),
+    ("precedence", .label precedence)]) extension) (.record [])
+
 def elaborateM (c : Ctx) (entryModule : Nat) (entryDefinition : String) (args : Json) (mode : String) : M Output := do
   let fuel := 100000
   let userModules := c.modules
   let mut fields : List (String × ATerm) := []
+  -- The package each knot field belongs to: the package of the module whose declaration emitted it.
+  let mut owners : List String := []
   for m in userModules do
     for d in m.decls do
+      let before := fields.length
       fields ← emitDecl c fuel m d fields
+      owners := owners ++ List.replicate (fields.length - before) (packageOfModule m.name)
+  -- Across packages the knot is one row over the whole closure, most specific package first (the
+  -- order the package layers overlay it in).
+  let tagged := fields.zip owners
+  let layered : List (String × List (String × ATerm)) :=
+    c.order.map fun p => (p, (tagged.filter (·.2 == p)).map (·.1))
+  if !c.order.isEmpty then fields := layered.flatMap (·.2)
   let mut rowFields : List (String × PTy) := []
   let mut unresolved : List String := []
   for (name, _) in fields do
@@ -1489,7 +1551,10 @@ def elaborateM (c : Ctx) (entryModule : Nat) (entryDefinition : String) (args : 
   let rootExtension := ATerm.lam ⟨some (.variable 0), some (arrowTy .emptyRow (.variable 0)), "unrestricted", "reusable", reason⟩
     (.lam ⟨some .emptyRow, some (.variable 0), "unrestricted", "reusable", reason⟩ (.extend (.bound 0) fields))
   let packageLabel := (toJson (userModules.map (·.name))).compress
-  let root := ATerm.fix (.specification (.record [("package", .label packageLabel)]) rootExtension) (.record [])
+  let root ← if c.order.isEmpty then
+      pure (ATerm.fix (.specification (.record [("package", .label packageLabel)]) rootExtension) (.record []))
+    else packageKnot layered rowFields reason
+  let root := root
   let some entry := userModules[entryModule]? | fail "missing selected entry"
   let entryKey := entry.name ++ "." ++ entryDefinition
   if (declOf c entryKey).isNone then fail "missing selected entry"
@@ -1548,11 +1613,15 @@ def context (modules : List Module) : Except String Ctx := do
         | .record .. => records := records ++ [(key, d)]
         | _ => sums := sums ++ [(key, d)]
       | _ => pure ()
-  return ⟨modules, decls, records, sums⟩
+  return { modules, decls, records, sums }
 
-def elaborate (modules : List Module) (entryModule : Nat) (entryDefinition : String) (args : Json) (mode : String) :
-    Except String Output := do
+/-- Elaborate. `packages` is a workspace closure's packages, the entry's first (its `precedence`
+the closure's C4 order); empty for a single package, which elaborates exactly as before. -/
+def elaborate (modules : List Module) (entryModule : Nat) (entryDefinition : String) (args : Json) (mode : String)
+    (packages : List PackageInfo := []) : Except String Output := do
   let c ← context modules
+  let order := (packages.head?.map (·.precedence)).getD []
+  let c := { c with packages, order }
   let (out, _) ← (elaborateM c entryModule entryDefinition args mode).run {}
   return out
 

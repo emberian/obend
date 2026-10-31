@@ -1,0 +1,33 @@
+edition ObjectiveBend 1
+package app/both extends ext/left@^1, ext/right@^1
+# A fourth package extending both: commons/counter is reached by two routes and applied once.
+import commons/counter/Counter.obend as C
+import ext/left/Left.obend as L
+import ext/right/Right.obend as R
+
+spec Both extends L.Left, R.Right for C.Tally:
+  def count() -> Nat:
+    super.count() * 10n + 4n
+  combine + weight() -> Nat:
+    1000n
+
+# C4 over the spec diamond: Both, Left, Right, Base: ((1*10+3)*10+2)*10+4.
+def counted() -> Nat:
+  fix(Both, C.blank()).count
+
+# Base's weight is counted once through the diamond: 1000 + 10 + 100 + 1.
+def weighed() -> Nat:
+  fix(Both, C.blank()).weight
+
+# compose(E, E) still applies E twice, across the package boundary.
+def twice(seed: Nat) -> Nat:
+  fix(compose(C.AddOne, C.AddOne), seed)
+
+# Reflection: the precedence list names each spec by (intention, declaration).
+def interface() -> String:
+  match metadata(Both):
+    case declared(d): d.interface
+    case composed(c): ""
+    case extension(e): ""
+
+law unlucky: not (new.total == 13)

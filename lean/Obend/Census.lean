@@ -208,6 +208,7 @@ import Obend.Spec.C4
 import Obend.Spec.Capture
 import Obend.Spec.Contract
 import Obend.Spec.DataWire
+import Obend.Spec.Ecosystem
 import Obend.Spec.Elaborate
 import Obend.Spec.FrontEnd
 import Obend.Spec.Identity
@@ -226,6 +227,7 @@ import Obend.Spec.Proofs.TermWire
 import Obend.Spec.Sha256
 import Obend.Spec.Syntax
 import Obend.Spec.Types
+import Obend.Spec.Workspace
 import Obend.Tactic.Cases
 import Obend.Tactic.Fuel
 import Obend.Tactic.MonadicReduction

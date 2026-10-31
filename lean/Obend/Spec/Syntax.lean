@@ -95,6 +95,26 @@ structure Signature where
   resultType : String
   deriving Inhabited
 
+/-- A parent root of a package: an intention (`NAME@^MAJOR`, resolved in a workspace's ecosystem
+root) or an extension (`NAME@0xHASH`, fixed forever). -/
+inductive ParentRef where
+  | intention (name : String) (major : Nat)
+  | extension (name : String) (hash : String)
+  deriving Inhabited, Repr, BEq, DecidableEq
+
+def ParentRef.name : ParentRef → String
+  | .intention n _ => n | .extension n _ => n
+
+def ParentRef.text : ParentRef → String
+  | .intention n major => n ++ "@^" ++ toString major
+  | .extension n hash => n ++ "@0x" ++ hash
+
+/-- `package NAME extends REF, ...`. -/
+structure PackageHeader where
+  name : String
+  parents : List ParentRef
+  deriving Inhabited, Repr
+
 inductive Decl where
   | spec (s : Spec)
   | extension (name : String) (params : List Param) (targetType : String) (body : Body) (binders : String)
@@ -119,6 +139,8 @@ structure Module where
   /-- The module's top-level enforced laws (`law NAME: EXPR`), in source order. They are not
   terms: the elaborator never sees them; the front end hands the entry module's to the artifact. -/
   laws : List (String × Law.LawExpr) := []
+  /-- `package NAME extends ...`, when this module is a package's root module. -/
+  header : Option PackageHeader := none
   deriving Inhabited
 
 /-! ## Decoding the parser's AST JSON -/
@@ -237,13 +259,24 @@ def decodeModule (j : Json) : Except String Module := do
   let ast ← j.getObjVal? "ast"
   let mut decls : List Decl := []
   let mut laws : List (String × Law.LawExpr) := []
+  let mut header : Option PackageHeader := none
   for d in ← arr ast "declarations" do
     if (str d "kind").toOption == some "law" then
       laws := laws ++ [(← str d "name", ← Law.parse (← str d "source"))]
+    else if (str d "kind").toOption == some "package" then
+      if header.isSome then throw "a module declares one package"
+      let parents ← (← arr d "parents").mapM fun p => do
+        match (str p "major").toOption, (str p "hash").toOption with
+        | some major, _ => match major.toNat? with
+          | some n => pure (ParentRef.intention (← str p "name") n)
+          | none => throw "package parent major version"
+        | _, some hash => pure (ParentRef.extension (← str p "name") hash)
+        | none, none => throw "package parent: major or hash"
+      header := some ⟨← str d "name", parents⟩
     else decls := decls ++ [← decodeDecl d]
   Law.checkNames laws
   return ⟨← str j "name", ← (← arr j "imports").mapM (fun i => do return (← str i "alias", ← str i "moduleName")),
-    decls, laws⟩
+    decls, laws, header⟩
 
 end Obend.Spec.Syntax
 

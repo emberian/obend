@@ -99,6 +99,7 @@ def SourceModule.binding (m : SourceModule) : Json :=
 def declarationName (d : Json) : String :=
   match (d.getObjValAs? String "kind").toOption with
   | some "function" => ((d.getObjVal? "signature").bind (·.getObjValAs? String "name")).toOption.getD ""
+  | some "package" => "package " ++ (d.getObjValAs? String "name").toOption.getD ""
   | _ => (d.getObjValAs? String "name").toOption.getD ""
 
 /-- A parsed module, checked: its locked import transcript is exactly the parsed one, and its
@@ -248,11 +249,11 @@ def options (projections limits : Json) (mode : String) : Except Diagnostic (Lis
 
 /-- The front end on parsed, checked modules: elaborate the selected declaration and project. -/
 def lowerDecoded (modules : List SourceModule) (decoded : List Syntax.Module)
-    (entryModule : Nat) (entryDefinition : String) (args projections limits : Json) (mode : String) :
-    Except Diagnostic Lowering := do
+    (entryModule : Nat) (entryDefinition : String) (args projections limits : Json) (mode : String)
+    (packages : List Elaborate.PackageInfo := []) : Except Diagnostic Lowering := do
   let (projectionList, checkWork) ← options projections limits mode
   if modules.length > 64 then throw (elaborationRefusal "preview module capacity refused")
-  let output ← match Elaborate.elaborate decoded entryModule entryDefinition args mode with
+  let output ← match Elaborate.elaborate decoded entryModule entryDefinition args mode packages with
     | .ok o => pure o
     | .error e => throw (elaborationRefusal e)
   let term ← project output.term projectionList
@@ -263,8 +264,11 @@ def lowerDecoded (modules : List SourceModule) (decoded : List Syntax.Module)
       | _ => "dregg.objective-bend.argument-values.v1"
   checkTemplates output (entry.name ++ "." ++ entryDefinition) modules checkWork
   for (m, index) in decoded.zipIdx do
-    if index != entryModule && !m.laws.isEmpty then
-      throw (elaborationRefusal ("a law belongs to the package's entry module; " ++ m.name ++
+    -- In a workspace each package's root module (the one declaring `package`) holds its laws.
+    let lawful := if packages.isEmpty then index == entryModule else m.header.isSome
+    if !lawful && !m.laws.isEmpty then
+      throw (elaborationRefusal ((if packages.isEmpty then "a law belongs to the package's entry module; "
+        else "a law belongs to its package's root module; ") ++ m.name ++
         " is imported and declares " ++ toString m.laws.length ++ " law(s)"))
   let laws := (decoded[entryModule]?.map (·.laws)).getD []
   return ⟨output, term, entry.name ++ "." ++ entryDefinition, argumentCodec, mode, modules, limits, checkWork, laws⟩

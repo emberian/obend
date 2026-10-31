@@ -1,0 +1,12 @@
+edition ObjectiveBend 1
+package ext/right extends commons/counter@0xec8cee438239f0562f24c5ea2aeb312b38333999a520397d9904ceb28af5d7b2
+# A second independent extension of the base, by its content hash (an extension, fixed forever).
+import commons/counter/Counter.obend as C
+
+spec Right extends C.Base for C.Tally:
+  def count() -> Nat:
+    super.count() * 10n + 3n
+  combine + weight() -> Nat:
+    100n
+
+law capped: new.total <= 50 or request.caller == 7

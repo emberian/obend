@@ -38,5 +38,6 @@ public import Obend.Spec.Sha256
 public import Obend.Spec.FrontEnd
 public import Obend.Spec.DataWire
 public import Obend.Spec.Identity
+public import Obend.Spec.Ecosystem
 public import Obend.Spec.Capture
 public import Obend.Spec.Preview

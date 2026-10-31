@@ -17,6 +17,11 @@ Source commands (the front end `Obend.Spec`, 2026-10-30):
         `status: refused`, `stage`, `message` and exit 2.
     obend check --package PACKAGE.json [ENTRY] | obend run --package PACKAGE.json [ARGS] [RESPONSES] [--ticks N] [--json]
         the same over a `dregg.objective-bend.package-input.v1` (multi-module; the entry is the package's).
+    obend run --package WORKSPACE.json [ARGS] [RESPONSES] [--entry NAME] ... | obend check --package WORKSPACE.json [ENTRY]
+        the same over a `dregg.objective-bend.workspace.v1` (`Obend.Spec.Workspace`): the entry
+        package's closure is resolved in the workspace's ecosystem root and lowered as one knot of
+        package layers; `run` also prints the closure (`package` order, one `pin` line per resolved
+        root).
     obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]
           | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition]
           | preview REQUEST NEW_DIR | batch JOBS OUT
@@ -46,6 +51,7 @@ public import Obend.Core.MachineFast
 public import Obend.Spec.Capture
 public import Obend.Spec.Preview
 public import Obend.Vault.Cli
+public import Obend.Spec.Workspace
 
 open Lean (Json toJson)
 open Obend.Core
@@ -139,21 +145,36 @@ structure Package where
   entryDefinition : String
   /-- The entry module's declaration names (for `check` without an ENTRY). -/
   declarations : List String
+  /-- A workspace's closure, when the package is one (`Obend.Spec.Workspace`). -/
+  closed : Option Obend.Spec.Workspace.Closed := none
 
 /-- One `.obend` file as a package, as `run.ts` builds it. -/
 def packageOfFile (file : String) (entry : Option String) : FE Package := do
   let bytes ← readBytes file
   let (m, names) ← captureModule #[] (moduleNameOf file) bytes none [] false
-  return ⟨[m], 0, entry.getD "", names⟩
+  return ⟨[m], 0, entry.getD "", names, none⟩
 
-/-- A `dregg.objective-bend.package-input.v1` as a package (`captureSpec`, nothing written). -/
+/-- A workspace as a package: its closure's modules, the entry the workspace names. -/
+def packageOfWorkspace (spec : String) (entry : Option String) : FE Package := do
+  let c ← Obend.Spec.Workspace.readClosed spec
+  let entryDefinition := entry.getD c.entryDefinition
+  let m := c.modules[c.entryModule]!
+  let ast ← liftFE (parseSource m.name m.source)
+  let decls := ((ast.getObjVal? "declarations").bind Json.getArr?).toOption.getD #[]
+  return ⟨c.modules, c.entryModule, entryDefinition, decls.toList.map declarationName, some c⟩
+
+/-- A `dregg.objective-bend.package-input.v1` as a package (`captureSpec`, nothing written), or a
+workspace (`packageOfWorkspace`). -/
 def packageOfSpec (spec : String) (entry : Option String) : FE Package := do
+  let (_, j) ← readJson spec
+  if (j.getObjValAs? String "schema").toOption == some Obend.Spec.Workspace.workspaceSchema then
+    return ← packageOfWorkspace spec entry
   let c ← captureSpec spec false
   let entryDefinition := entry.getD c.entryDefinition
   let m := c.modules[c.entryModule]!
   let ast ← liftFE (parseSource m.name m.source)
   let decls := ((ast.getObjVal? "declarations").bind Json.getArr?).toOption.getD #[]
-  return ⟨c.modules.toList, c.entryModule, entryDefinition, decls.toList.map declarationName⟩
+  return ⟨c.modules.toList, c.entryModule, entryDefinition, decls.toList.map declarationName, none⟩
 
 def hostLimits (ticks : String) : Json :=
   Json.mkObj [("ticks", toJson ticks), ("heap", toJson "100000"), ("stack", toJson "10000"), ("checkWork", toJson "65536")]
@@ -165,10 +186,17 @@ def responseOf (r : Json) : Json :=
       ("payload", Json.mkObj [("tag", toJson "record"), ("fields", Json.arr #[])])]
   | other => other
 
+/-- Lower a package: a workspace's closure with its packages, else the package alone. -/
+def lowerPackage (p : Package) (entryDefinition : String) (args : Json) (limits : Json) (mode : String) :
+    Except Diagnostic Lowering :=
+  match p.closed with
+  | some c => lowerDecoded p.modules c.decoded p.entryModule entryDefinition args (Json.arr #[]) limits mode c.packages
+  | none => lower p.modules p.entryModule entryDefinition args (Json.arr #[]) limits mode
+
 /-- The preview of `entry` applied to `args`, resumed with `responses`: the typed-preview JSON, or
 the diagnostic that refused. The same stages `previewCommand` reports. -/
 def previewPackage (p : Package) (args responses : Json) (ticks : String) : FE Json := do
-  let lowered ← liftFE (lower p.modules p.entryModule p.entryDefinition args (Json.arr #[]) (hostLimits ticks) "application")
+  let lowered ← liftFE (lowerPackage p p.entryDefinition args (hostLimits ticks) "application")
   if let .error message := lowered.proposal then refuse message "objective-source-type-proposal"
   let limits := Json.mkObj [("ticks", toJson ticks), ("heap", toJson "100000"), ("stack", toJson "10000")]
   match preview lowered.packet limits responses with
@@ -249,6 +277,8 @@ structure RunArgs where
   responses : Json := Json.arr #[]
   ticks : String := "100000"
   json : Bool := false
+  /-- `--entry NAME`: run another definition of the entry module than the package names. -/
+  entry : Option String := none
 
 /-- `[ARGS_JSON] [RESPONSES_JSON] [--ticks N] [--json]` in any order of flags, as `run.ts` reads them. -/
 def parseRunArgs : List String → RunArgs → List String → Except String (RunArgs × List String)
@@ -256,6 +286,8 @@ def parseRunArgs : List String → RunArgs → List String → Except String (Ru
   | "--json" :: rest, r, positional => parseRunArgs rest { r with json := true } positional
   | "--ticks" :: n :: rest, r, positional => parseRunArgs rest { r with ticks := n } positional
   | ["--ticks"], _, _ => .error "--ticks needs a value"
+  | "--entry" :: e :: rest, r, positional => parseRunArgs rest { r with entry := some e } positional
+  | ["--entry"], _, _ => .error "--entry needs a definition name"
   | x :: rest, r, positional => parseRunArgs rest r (x :: positional)
 
 def runSource (package : FE Package) (rest : List String) : IO UInt32 := do
@@ -274,12 +306,24 @@ def runSource (package : FE Package) (rest : List String) : IO UInt32 := do
     | .error e => do IO.eprintln ("arguments and responses must be JSON arrays: " ++ e); return 64
   let result ← (do
     let p ← package
+    let p := match options.entry with
+      | some e => { p with entryDefinition := e }
+      | none => p
     if p.entryDefinition.isEmpty then refuse "usage: run needs an ENTRY (one def of the file)" "preview-request"
-    previewPackage p args responses options.ticks : FE Json).run
+    return (← previewPackage p args responses options.ticks, p.closed) : FE (Json × Option Obend.Spec.Workspace.Closed)).run
   match result with
-  | .ok p =>
+  | .ok (p, closed) =>
     let status := (p.getObjValAs? String "status").toOption.getD ""
-    if options.json then IO.println p.pretty else IO.println (shortForm p status)
+    match closed with
+    | none => if options.json then IO.println p.pretty else IO.println (shortForm p status)
+    | some c =>
+      let cl := c.closure
+      if options.json then
+        IO.println p.pretty
+      else
+        IO.println (shortForm p status)
+        IO.println ("package: " ++ " > ".intercalate cl.order)
+        for pin in cl.pins do IO.println ("pin: " ++ Obend.Spec.Workspace.pinText pin)
     return 0
   | .error d =>
     if options.json then
@@ -299,7 +343,7 @@ def checkSource (package : FE Package) : IO UInt32 := do
     for name in names do
       let key := entryName ++ "." ++ name
       let outcome : Except Diagnostic Json := do
-        let lowered ← lower p.modules p.entryModule name (Json.arr #[]) (Json.arr #[]) (hostLimits "100000") "definition"
+        let lowered ← lowerPackage p name (Json.arr #[]) (hostLimits "100000") "definition"
         let accepted ← accept lowered
         pure (Json.mkObj [("declaration", toJson key), ("status", toJson "accepted"),
           ("type", Packet.typeJson accepted.typed.type), ("uses", toJson accepted.typed.uses)])

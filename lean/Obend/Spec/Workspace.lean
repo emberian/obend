@@ -1,0 +1,220 @@
+module
+/-
+# Obend.Spec.Workspace — read a workspace, close it, lower it as one ecosystem knot
+
+A `dregg.objective-bend.workspace.v1` is a workspace's ecosystem root (DESIGN §4): the releases it
+reaches, the owners' records it reads, and the entry package being run:
+
+    { "schema": "dregg.objective-bend.workspace.v1", "edition": "objective-bend-1",
+      "releases": [ { "name": "commons/record", "version": "2.1.0",
+                      "modules": [ { "name": "Record", "sourcePath": "record/Record.obend" } ] } ],
+      "records":  [ { "name": "commons/record", "major": 2, "pin": 3, "names": "2.1.0", "owner": "ada" } ],
+      "entry":    { "name": "garden", "version": "0.1.0", "modules": [ ... ],
+                    "entryModule": "Garden", "entryDefinition": "main" } }
+
+Paths are relative to the workspace file. Each release has exactly one ROOT module, the one whose
+first declaration-level line is `package NAME [extends ...]` with its own name; its `law` lines are
+the package law. A release's content hash is SHA-256 of `contentManifest` (its name and each
+module's name and SHA-256), the hash an extension parent `NAME@0xHASH` names. A `names` of `null`
+is a retired line.
+
+Imports: `./NAME.obend` is a module of the same release (an earlier one); `PKG/NAME.obend` is
+module `NAME` of package `PKG`, which must be on the importing package's precedence list. No lock
+is written for a cross-package edge: the closure's pins are the lock.
+
+The closure (`Obend.Spec.Ecosystem.close`) orders the modules base first (the reverse of the
+entry's precedence list), names each `PKG::Module`, and hands the elaborator the packages with their
+precedence lists (`Elaborate.PackageInfo`), so the root is one knot of package layers
+(`Elaborate.packageKnot`).
+-/
+public import Lean
+public import Obend.Spec.Capture
+public import Obend.Spec.Ecosystem
+@[expose] public section
+namespace Obend.Spec.Workspace
+open Lean (Json toJson)
+open Obend.Spec.FrontEnd
+open Obend.Spec.Capture
+open Obend.Spec.Ecosystem
+set_option autoImplicit false
+
+def workspaceSchema : String := "dregg.objective-bend.workspace.v1"
+def manifestHeader : String := "DREGG/OBJECTIVE-BEND/PACKAGE/v1"
+def workspaceStage : String := "objective-workspace"
+
+/-- One module of a release as read: its name, source text and SHA-256, and its parsed AST. -/
+structure ReadModule where
+  name : String
+  source : String
+  sha256 : String
+  ast : Json
+
+/-- A release as read: what the ecosystem resolves (`release`) and its modules. -/
+structure ReadRelease where
+  release : Release
+  modules : List ReadModule
+
+/-- The text whose SHA-256 is a release's content hash. -/
+def contentManifest (name : String) (modules : List ReadModule) : String :=
+  manifestHeader ++ "\n" ++ name ++ "\n" ++ String.join (modules.map fun m => m.name ++ " " ++ m.sha256 ++ "\n")
+
+def contentHash (name : String) (modules : List ReadModule) : String :=
+  Sha256.hexString (contentManifest name modules)
+
+def wsRefuse {α : Type} (message : String) : FE α := refuse message workspaceStage
+
+def declarations (ast : Json) : Array Json :=
+  ((ast.getObjVal? "declarations").bind Json.getArr?).toOption.getD #[]
+
+def parentOf (j : Json) : FE Syntax.ParentRef := do
+  let some name := text j "name" | wsRefuse "package parent: name"
+  match text j "major", text j "hash" with
+  | some major, _ => match major.toNat? with
+    | some n => pure (.intention name n)
+    | none => wsRefuse "package parent major"
+  | _, some hash => pure (.extension name hash)
+  | none, none => wsRefuse "package parent: major or hash"
+
+/-- The major line of a version: its first dot-separated component. -/
+def majorOf (version : String) : Option Nat := ((version.splitOn ".").head?).bind String.toNat?
+
+/-- Read one release: every module (strict UTF-8, parsed, distinct declarations), its one root
+module, its parents, its content hash. -/
+def readRelease (dir : System.FilePath) (j : Json) : FE ReadRelease := do
+  let some name := text j "name" | wsRefuse "release: name"
+  let some version := text j "version" | wsRefuse ("release " ++ name ++ ": version")
+  let some major := majorOf version | wsRefuse ("release " ++ name ++ ": version " ++ version ++ " has no major")
+  let rows := ((j.getObjVal? "modules").bind Json.getArr?).toOption.getD #[]
+  if rows.isEmpty then wsRefuse ("release " ++ name ++ ": no modules")
+  let mut modules : List ReadModule := []
+  for row in rows do
+    let some m := text row "name" | wsRefuse ("release " ++ name ++ ": module name")
+    if !isIdentifier m then wsRefuse ("release " ++ name ++ ": module name " ++ m ++ " is not an identifier")
+    let some path := text row "sourcePath" | wsRefuse ("release " ++ name ++ ": module " ++ m ++ " sourcePath")
+    let bytes ← readBytes (dir / path).toString
+    let sha256 := sha bytes
+    if let some expected := text row "sha256" then
+      if expected != sha256 then wsRefuse ("Error: changed module bytes: " ++ name ++ "::" ++ m)
+    let some source := Parse.decodeSource bytes | throw (notUtf8 (name ++ "::" ++ m))
+    let ast ← match Parse.parseObjective source with
+      | .ok ast => pure ast
+      | .error d => throw ⟨"objective-source-parse", d.message, d.span, some (name ++ "::" ++ m)⟩
+    let names := (declarations ast).toList.map declarationName
+    if names.eraseDups.length != names.length then wsRefuse ("Error: duplicate declaration in " ++ name ++ "::" ++ m)
+    modules := modules ++ [⟨m, source, sha256, ast⟩]
+  if (modules.map (·.name)).eraseDups.length != modules.length then wsRefuse ("release " ++ name ++ ": duplicate module name")
+  let headers := modules.filterMap fun m =>
+    ((declarations m.ast).toList.find? fun d => text d "kind" == some "package").map (m.name, ·)
+  let [(_, header)] := headers
+    | wsRefuse ("release " ++ name ++ " has " ++ toString headers.length ++ " root modules; exactly one module declares `package " ++ name ++ "`")
+  if text header "name" != some name then
+    wsRefuse ("release " ++ name ++ ": its root module declares package " ++ (text header "name").getD "")
+  let parents ← (((header.getObjVal? "parents").bind Json.getArr?).toOption.getD #[]).toList.mapM parentOf
+  return ⟨⟨name, version, major, contentHash name modules, parents⟩, modules⟩
+
+def recordLine (j : Json) : FE RecordLine := do
+  let some name := text j "name" | wsRefuse "record: name"
+  let some major := (j.getObjValAs? Nat "major").toOption | wsRefuse ("record " ++ name ++ ": major")
+  let some pin := (j.getObjValAs? Nat "pin").toOption | wsRefuse ("record " ++ name ++ ": pin")
+  let fill := text j "names"
+  return ⟨name, major, pin, fill, (text j "owner").getD ""⟩
+
+/-- A workspace as read. -/
+structure Workspace where
+  view : View
+  releases : List ReadRelease
+  entry : ReadRelease
+  entryModule : String
+  entryDefinition : String
+
+def readWorkspace (path : String) : FE Workspace := do
+  let (_, j) ← readJson path
+  if text j "schema" != some workspaceSchema || text j "edition" != some "objective-bend-1" then
+    wsRefuse "Error: workspace schema/edition required"
+  let dir := (System.FilePath.mk path).parent.getD "."
+  let releases ← (((j.getObjVal? "releases").bind Json.getArr?).toOption.getD #[]).toList.mapM (readRelease dir)
+  let lines ← (((j.getObjVal? "records").bind Json.getArr?).toOption.getD #[]).toList.mapM recordLine
+  let some e := (j.getObjVal? "entry").toOption | wsRefuse "workspace: entry"
+  let entry ← readRelease dir e
+  let some entryModule := text e "entryModule" | wsRefuse "workspace entry: entryModule"
+  let some entryDefinition := text e "entryDefinition" | wsRefuse "workspace entry: entryDefinition"
+  return ⟨⟨releases.map (·.release), lines⟩, releases, entry, entryModule, entryDefinition⟩
+
+def Workspace.sourceOf (w : Workspace) (r : Release) : Option ReadRelease :=
+  if r == w.entry.release then some w.entry else w.releases.find? (·.release == r)
+
+/-- The closed workspace, ready to lower: the modules base first, each `PKG::Module`, every import
+edge locked to the module the closure resolved, and the packages with their precedence lists. -/
+structure Closed where
+  closure : Closure
+  modules : List SourceModule
+  decoded : List Syntax.Module
+  packages : List Elaborate.PackageInfo
+  entryModule : Nat
+  entryDefinition : String
+
+def qualified (pkg m : String) : String := pkg ++ "::" ++ m
+
+/-- `PKG/NAME.obend` as `(PKG, NAME)`. -/
+def packageImport (path : String) : Option (String × String) :=
+  if !path.endsWith ".obend" || path.startsWith "./" then none else
+  let stem := String.ofList (path.toList.take (path.length - 6))
+  match stem.splitOn "/" with
+  | [] | [_] => none
+  | parts => some ("/".intercalate parts.dropLast, parts.getLast!)
+
+def close' (w : Workspace) : FE Closed := do
+  let cl ← match close w.view w.entry.release with
+    | .ok cl => pure cl
+    | .error r => wsRefuse r.message
+  let mut modules : Array SourceModule := #[]
+  let mut packages : List Elaborate.PackageInfo := []
+  for pkg in cl.order.reverse do
+    let some r := cl.chosen.find? (·.name == pkg) | wsRefuse ("internal: " ++ pkg ++ " is not chosen")
+    let some rr := w.sourceOf r | wsRefuse ("internal: no source for " ++ pkg)
+    let precedence := (cl.precedence.lookup pkg).getD [pkg]
+    for m in rr.modules do
+      let edges := ((m.ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
+      let mut imports : List LockedImport := []
+      for edge in edges do
+        let path := (text edge "path").getD ""
+        let importAlias := (text edge "alias").getD ""
+        let span := (edge.getObjVal? "span").toOption.getD .null
+        let (targetPkg, targetModule) ← if path.startsWith "./" && path.endsWith ".obend" then
+            pure (pkg, String.ofList ((path.toList.drop 2).take (path.length - 8)))
+          else match packageImport path with
+            | some (p, n) =>
+              if !precedence.contains p || p == pkg then
+                wsRefuse ("refused (import-outside-ancestry): " ++ qualified pkg m.name ++ " imports " ++ path ++
+                  ", but " ++ p ++ " is not an ancestor of " ++ pkg)
+              pure (p, n)
+            | none => wsRefuse ("Error: a workspace import is ./NAME.obend or PACKAGE/NAME.obend: " ++ path)
+        let key := qualified targetPkg targetModule
+        let some target := modules.findIdx? (·.name == key)
+          | wsRefuse ("Error: imports must reference an earlier module: " ++ qualified pkg m.name ++ " imports " ++ path)
+        imports := imports ++ [⟨path, importAlias, span, target, key, modules[target]!.sha256⟩]
+      modules := modules.push ⟨qualified pkg m.name, m.source, m.sha256, imports⟩
+    packages := ⟨pkg, rr.modules.map (qualified pkg ·.name), precedence⟩ :: packages
+  let moduleList := modules.toList
+  let decoded ← liftFE (moduleList.mapM parseModule)
+  let entryKey := qualified w.entry.release.name w.entryModule
+  let some entryModule := moduleList.findIdx? (·.name == entryKey)
+    | wsRefuse ("Error: entry module absent: " ++ entryKey)
+  return ⟨cl, moduleList, decoded, packages, entryModule, w.entryDefinition⟩
+
+def readClosed (path : String) : FE Closed := do close' (← readWorkspace path)
+
+/-! ## Reports -/
+
+def pinJson : Pin → Json
+  | .intention n m p v h => Json.mkObj [("intention", toJson (n ++ "@^" ++ toString m)), ("pin", toJson p),
+      ("version", toJson v), ("hash", toJson h)]
+  | .extension n h => Json.mkObj [("extension", toJson (n ++ "@0x" ++ h)), ("hash", toJson h)]
+
+def pinText : Pin → String
+  | .intention n m p v _ => n ++ "@^" ++ toString m ++ " = " ++ v ++ " (record pin " ++ toString p ++ ")"
+  | .extension n h => n ++ "@0x" ++ String.ofList (h.toList.take 12) ++ "… (fixed)"
+
+end Obend.Spec.Workspace
+
+end

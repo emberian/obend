@@ -1,0 +1,20 @@
+edition ObjectiveBend 1
+package commons/counter
+# The base, a later release: Base counts 5.
+record Tally:
+  count() -> Nat
+  weight() -> Nat
+
+spec Base for Tally:
+  def count() -> Nat:
+    5n
+  combine + weight() -> Nat:
+    1n
+
+extension AddOne(self: Nat, super: Nat) -> Nat:
+  super + 1n
+
+def blank() -> Tally:
+  {count: 0n, weight: 0n}
+
+law bounded: new.total <= 100

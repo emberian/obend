@@ -1,0 +1,12 @@
+edition ObjectiveBend 1
+package ext/left extends commons/counter@^1
+# An independent extension of the base, by its name (an intention).
+import commons/counter/Counter.obend as C
+
+spec Left extends C.Base for C.Tally:
+  def count() -> Nat:
+    super.count() * 10n + 2n
+  combine + weight() -> Nat:
+    10n
+
+law monotone: monotone(total)
