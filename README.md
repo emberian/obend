@@ -39,12 +39,25 @@ piece are written up here:
 
 ## State
 
-Early. The Lean core (the calculus, its proof-producing checker, the demand machine, and about
-twenty-five thousand lines of proofs) builds standalone in [`lean/`](lean/) with no Mathlib and no
-native code. It is being restructured for the Lean 4.30 module system so that iteration stays
-fast as it grows. Nothing here is usable by a stranger yet; when it is, the first thing you will
-be able to do is open a folder of markdown as pages, cite across them, write a law on one, and
-invite a second author.
+The Lean library in [`lean/`](lean/) builds at Lean 4.35 with no Mathlib and no native code: about
+two hundred modules, twenty-five hundred theorems, every proof module pinned to Lean's three
+standard axioms, seventy-odd mutation teeth that fail their theorem under a planted fault. It holds
+the calculus and its demand machine with their proofs; a bidirectional checker complete for a stated
+fragment of the declarative typing, with equi-recursive type agreement decided by finite
+bisimulation and executable annotation preparation; laws by occasion with inheritance along the
+linearized ancestry, and the `.obend` law fragment compiled to them; the slot (deferred decisions
+with justifications, repair under a stated compatibility condition, stored selection with an
+incumbent-first default and chooser override); a guarded runner proving that every dispatched
+operation was admitted at its own view, no token is spent twice, and nothing in flight can be
+replanned or re-sent, with a Core4 activity adapted to it; and documents as page graphs with
+patches, pushout merge, conflicts as objects, sections as slots, identity and byte cites, and
+backlinks. The `.obend` front end from minidregg is ported and conformant on its cohorts; `obend
+check` and `obend run` read source. A declaration-level journal computes the exact set of theorems
+a change affects.
+
+Not yet: the Bend leaf emitter and its refinement against BendTT; a markdown vault a stranger
+opens; carry between package versions. The reports under `lean/docs/` say, per module, what is
+proved and what is not.
 
 ## Who
 

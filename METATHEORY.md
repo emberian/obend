@@ -79,21 +79,26 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
 - `grind` configurations per module (`Core.Proofs.Preservation`, `Collect`) for the arithmetic and
   row lemmas; Aesop as a Mathlib-free dependency only if `grind` falls short.
 
-## 5. Order
+## 5. Order (revised 2026-10-31)
 
-1. Landed: meaning/procedure/budget split, fuel-free semantic substitution, generic traversal
-   laws used by existing metatheory, and `obend_cases`/`fuel_lift`/`#tooth` used in the library.
-   D12 is closed at meaning; procedural completeness is explicitly conditional, with pinned
-   obstructions to the stronger claim. See `astra/ASTRA-IMPL-REPORT-20261030.md`.
-2. Landed: the `hole-exercise` branch, merged after the whole exercise and its pins passed.
-   The before/after journal comparison and actual proof repairs are recorded separately in
-   `astra/HOLE-REPAIR-SET-20261030.md`. The corrected journal closure is used for the comparison.
-3. `Obend.Spec` is landed by lane C. Law and inheritance are the concurrent active lane;
-   B4/B4′ already have the toy World, with production history instances still to integrate.
-4. Decide the checker coverage design: align procedure with declarative typing, or state an
-   independently characterized checking fragment. More fuel cannot fix the proved obstructions.
-5. `≈b` via Iris-Lean, as its own lane with its own toolchain decision.
-6. Leaf refinement against `bendtt.lean`.
+1. Landed: meaning/procedure/budget split; generic traversal; `obend_cases`, `fuel_lift`, `#tooth`
+   in use; the hole exercise under the journal (`astra/ASTRA-IMPL-REPORT-20261030.md`).
+2. Landed: `Obend.Spec` (lane C); `Obend.Law` with inheritance and the compiled fragment;
+   `Obend.Doc`; `Obend.Slot.World`/`Integrity` with `repair_of_contextual` and the stored-selection
+   transition replacing B4′; `Slot/Repair` with the compatibility condition.
+3. Landed: checker alignment (§6): `sameType` an equi-recursive equivalence by finite bisimulation,
+   the bidirectional checker with `complete` on its fragment, full annotated completeness
+   (`REPORT-EQUIREC-20261031.md`), executable preparation on the alias-free fragment (`REPORT-ELAB-20261031.md`).
+4. Landed: the guarded runner and `refines` (`REPORT-RUNNER-20261031.md`), Astra's contribution
+   theorem, with the Core4 adapter. Open there: the reference-tree statement, response typing,
+   holes in emitted plans, decision authority beyond the hole's chooser.
+5. Next: the template elaborator by Simple-sub over Core4 heads with coercions emitted
+   (`review/ALGEBRAIC-SUBTYPING-20261031.md` §3–§4), now that preparation and coercions exist.
+6. `≈b` via Iris-Lean as its own lane; Leaf refinement against `bendtt.lean` through the runner's
+   adapter.
+7. Refused after experiment: the single semiring of justifications as the slot's construction
+   (`REPORT-JUST-20261031.md` §3: no shorter proofs against a control); kept as provenance of
+   eligibility for explanations.
 
 ## 6. Checker alignment (added 2026-10-30, after Gemini Argon's analysis)
 
