@@ -11,9 +11,12 @@ module
   naming it (`Obend.Intention.stale_iff_blocked`, the third instance); `effective_refuses_stale`: a
   stale kind is refused by name before anything is judged; `renew_kind`: renewing re-resolves the
   kind (`Obend.Intention.renew`), and the renewed pin is current and its slot reads usable.
-* `dispatch_by_kind`: dispatch reads the instance's kind and nothing else: instances of one kind
+* `dispatch_by_kind`: dispatch reads the instance's kind pin and nothing else: instances of one pin
   dispatch alike whatever their states, laws or names; `dispatch_sound`: the implementation chosen
-  is the first kind on the kind's precedence list that implements the generic.
+  is the first kind on the pinned precedence list that implements the generic;
+  `dispatch_refuses_stale`: a stale pin does not dispatch.
+* `ancestor_revised_stale`: a pin rests on its kind's version and every ancestor's, so revising any
+  of them stales it, naming that kind; `create_refuses_clash`: no instance is named like a kind.
 * `nominal_tooth`: two kinds with the same layout and initial state, two instances in the same state,
   one generic implemented for each kind: the two calls reach the two implementations.
 -/
@@ -35,25 +38,52 @@ open Obend.Law (Admits)
 /-- **A stale kind is a blocked read** (`Obend.Intention.stale_iff_blocked` at kinds). -/
 public theorem kind_stale_iff_blocked (ks : Kinds) (p : KindPin) :
     kindRefs.current ks p = false ↔
-      (kindRefs.slot p.name).read (holds ks) (some p) = .blocked p ([p].filter fun f => !holds ks f) :=
+      (kindRefs.slot p.name).read (holds ks) (some p) = .blocked p (p.lineage.filter fun f => !holds ks f) :=
   kindRefs.stale_iff_blocked rfl ks
 
-theorem current_kind (ks : Kinds) (p : KindPin) : kindRefs.current ks p = holds ks p := by
+theorem current_kind (ks : Kinds) (p : KindPin) : kindRefs.current ks p = p.lineage.all (holds ks) := by
   simp [Obend.Intention.current, kindRefs]
 
-/-- **`create --from K` births under `K`.** -/
+/-- **Revising an ancestor stales the pin, naming it.** A pin resting on version `v` of kind `a`
+(its own kind or any kind on its precedence list) is not current at a registry that holds another
+version of `a`, and its blocked read names `⟨a, v⟩`. -/
+public theorem ancestor_revised_stale {ks : Kinds} {p : KindPin} {f : KindVersion} (hf : f ∈ p.lineage)
+    {c : KindCell} (hc : ks.find f.name = some c) (hv : c.version ≠ f.version) :
+    kindRefs.current ks p = false ∧ f ∈ p.lineage.filter fun f => !holds ks f := by
+  have hd : holds ks f = false := by simp [holds, hc, hv]
+  refine ⟨?_, List.mem_filter.2 ⟨hf, by simp [hd]⟩⟩
+  rw [current_kind]
+  exact List.all_eq_false.2 ⟨f, hf, by simp [hd]⟩
+
+/-- **`create --from K` births under `K`**: the instance carries `K`'s pin as the registry resolves
+it (its identity `K`, `K`'s version and every ancestor's), current there, and `K`'s initial state;
+its name is not a kind's. -/
 public theorem create_carries {ks : Kinds} {k name : String} {law : Term} {i : Instance}
     (h : create ks k name law = .ok i) :
-    ∃ c, ks.find k = some c ∧ i.kind = ⟨k, c.version⟩ ∧ i.state = c.init ∧ i.name = name ∧ i.law = law ∧
+    ∃ c, ks.find k = some c ∧ i.kind.name = k ∧ i.kind.version = c.version ∧ i.state = c.init ∧
+      i.name = name ∧ i.law = law ∧ (ks.find name).isSome = false ∧
       kindRefs.resolve ks k = .ok i.kind ∧ kindRefs.current ks i.kind = true := by
   unfold create at h
-  split at h
-  · rename_i c hc
-    cases h
-    refine ⟨c, hc, rfl, rfl, rfl, rfl, ?_, ?_⟩
-    · show resolve ks k = _; simp [resolve, hc]
-    · rw [current_kind]; simp [holds, hc]
-  · cases h
+  by_cases hn : (ks.find name).isSome = true
+  · simp [hn] at h
+  · rw [if_neg hn] at h
+    cases hp : resolve ks k with
+    | error e => rw [hp] at h; cases h
+    | ok p =>
+      cases hc : ks.find k with
+      | none => rw [hp, hc] at h; cases h
+      | some c =>
+        rw [hp, hc] at h
+        cases h
+        obtain ⟨_, c', _, hc', rfl⟩ := resolve_ok hp
+        rw [hc] at hc'; cases hc'
+        exact ⟨c, rfl, rfl, rfl, rfl, rfl, rfl, by simpa using hn, hp,
+          (kindRefs.current_iff _ _).2 (kindRefs.resolve_holds ks k _ hp)⟩
+
+/-- **`create` refuses a name clash**: an instance is never named like a kind of the registry. -/
+public theorem create_refuses_clash {ks : Kinds} {k name : String} {law : Term} (h : (ks.find name).isSome = true) :
+    create ks k name law = .error (.clash name) := by
+  simp [create, h]
 
 /-- **A revised kind is refused by name**: an instance whose kind pin is not current has no
 effective law; the refusal names the pin. -/
@@ -215,9 +245,27 @@ theorem lookup_table_self {ks : Kinds} {i : Instance} (h : (ks.find i.name).isSo
 
 /-! ## The kind's law is an ancestor of the instance's -/
 
+theorem pinnedPrecedence_ok {ks : Kinds} {p : KindPin} {lk : List String} (h : pinnedPrecedence ks p = .ok lk) :
+    kindRefs.current ks p = true ∧ kindPrecedence ks ks.depth p.name = .ok lk ∧ lk = p.lineage.map (·.name) := by
+  unfold pinnedPrecedence at h
+  split at h
+  · cases h
+  · rename_i hc
+    split at h
+    · cases h
+    · rename_i lk' hlk
+      split at h
+      · rename_i he; cases h; exact ⟨by simpa using hc, hlk, by simpa using he⟩
+      · cases h
+
+/-- A stale pin has no precedence list. -/
+theorem pinnedPrecedence_stale {ks : Kinds} {p : KindPin} (h : kindRefs.current ks p = false) :
+    pinnedPrecedence ks p = .error (.stale p) := by
+  simp [pinnedPrecedence, h]
+
 theorem effectiveOf_ok {ks : Kinds} {i : Instance} {t : Term} (h : effectiveOf ks i = .ok t) :
     kindRefs.current ks i.kind = true ∧ (ks.find i.name).isSome = false ∧
-      ∃ lk, kindPrecedence ks ks.depth i.kind.name = .ok lk ∧
+      ∃ lk, kindPrecedence ks ks.depth i.kind.name = .ok lk ∧ lk = i.kind.lineage.map (·.name) ∧
         Obend.Law.effectiveVia (instanceGraph i.kind.name lk) (lawTable ks i) i.name [[i.kind.name]] = .ok t := by
   unfold effectiveOf at h
   split at h
@@ -229,10 +277,11 @@ theorem effectiveOf_ok {ks : Kinds} {i : Instance} {t : Term} (h : effectiveOf k
       split at h
       · cases h
       · rename_i lk hlk
+        obtain ⟨_, hk, hl⟩ := pinnedPrecedence_ok hlk
         split at h
         · rename_i t' ht
           cases h
-          exact ⟨by simpa using hc, by simpa using hn, lk, hlk, ht⟩
+          exact ⟨by simpa using hc, by simpa using hn, lk, hk, hl, ht⟩
         · cases h
 
 /-- **The kind's law is an ancestor of each instance's law.** Whatever an instance's effective law
@@ -241,7 +290,7 @@ public theorem kind_law_inherited {ks : Kinds} {i : Instance} {t : Term} (h : ef
     {o n rq : Data} (ha : Admits t o n rq) :
     ∃ lk, kindPrecedence ks ks.depth i.kind.name = .ok lk ∧ lk.head? = some i.kind.name ∧
       ∀ k ∈ lk, ∃ c, ks.find k = some c ∧ Admits c.law o n rq := by
-  obtain ⟨_, _, lk, hlk, hev⟩ := effectiveOf_ok h
+  obtain ⟨_, _, lk, hlk, _, hev⟩ := effectiveOf_ok h
   have hpar := Obend.Law.effectiveVia_parent hev ha [i.kind.name] (by simp) i.kind.name (by simp)
   obtain ⟨_, rest, hr⟩ := kindPrecedence_head hlk
   refine ⟨lk, hlk, by simp [hr], fun k hk => ?_⟩
@@ -255,7 +304,7 @@ public theorem kind_law_inherited {ks : Kinds} {i : Instance} {t : Term} (h : ef
 /-- The instance's own law admits what its effective law admits. -/
 public theorem instance_law_admitted {ks : Kinds} {i : Instance} {t : Term} (h : effectiveOf ks i = .ok t)
     {o n rq : Data} (ha : Admits t o n rq) : Admits i.law o n rq := by
-  obtain ⟨_, hn, lk, _, hev⟩ := effectiveOf_ok h
+  obtain ⟨_, hn, lk, _, _, hev⟩ := effectiveOf_ok h
   obtain ⟨names, hnames, hall⟩ := Obend.Law.effectiveVia_eval hev
   have hhead := (Obend.Law.precedence_ok hnames).1
   obtain ⟨L, hL, hadm⟩ := (hall o n rq).1 ha i.name (List.mem_of_mem_head? hhead)
@@ -265,26 +314,33 @@ public theorem instance_law_admitted {ks : Kinds} {i : Instance} {t : Term} (h :
 
 /-! ## Dispatch by kind -/
 
-/-- **Dispatch reads the kind and nothing else**: two instances of one kind dispatch every generic
-alike, whatever their names, laws and states. -/
+/-- **Dispatch reads the kind and nothing else**: two instances carrying one kind pin dispatch every
+generic alike, whatever their names, laws and states. -/
 public theorem dispatch_by_kind {Body : Type} (ks : Kinds) (impls : List (Impl Body)) (generic : String)
-    {i j : Instance} (h : i.kind.name = j.kind.name) :
+    {i j : Instance} (h : i.kind = j.kind) :
     dispatch ks impls generic i = dispatch ks impls generic j := by
   simp [dispatch, h]
+
+/-- **A stale pin does not dispatch**: refused by name, as its effective law is (Kimi A, 2026-11-01). -/
+public theorem dispatch_refuses_stale {Body : Type} {ks : Kinds} {impls : List (Impl Body)} {generic : String}
+    {i : Instance} (h : kindRefs.current ks i.kind = false) :
+    dispatch ks impls generic i = .error (.stale i.kind) := by
+  simp [dispatch, pinnedPrecedence_stale h]
 
 /-- **Dispatch is the most specific kind's implementation**: the body dispatched is the
 implementation for a kind on the instance's kind's precedence list, and no kind before it there
 implements the generic. -/
 public theorem dispatch_sound {Body : Type} {ks : Kinds} {impls : List (Impl Body)} {generic : String}
     {i : Instance} {b : Body} (h : dispatch ks impls generic i = .ok (some b)) :
-    ∃ lk pre k post, kindPrecedence ks ks.depth i.kind.name = .ok lk ∧ lk = pre ++ k :: post ∧
-      implFor impls generic k = some b ∧ ∀ k' ∈ pre, implFor impls generic k' = none := by
+    ∃ lk pre k post, kindPrecedence ks ks.depth i.kind.name = .ok lk ∧ lk = i.kind.lineage.map (·.name) ∧
+      lk = pre ++ k :: post ∧ implFor impls generic k = some b ∧ ∀ k' ∈ pre, implFor impls generic k' = none := by
   unfold dispatch at h
   split at h
   · rename_i lk hlk
+    obtain ⟨_, hk', hl'⟩ := pinnedPrecedence_ok hlk
     have hf : lk.findSome? (implFor impls generic) = some b := by injection h
     obtain ⟨pre, k, post, hl, hk, hpre⟩ := List.findSome?_eq_some_iff.1 hf
-    exact ⟨lk, pre, k, post, hlk, hl, hk, hpre⟩
+    exact ⟨lk, pre, k, post, hk', hl', hl, hk, hpre⟩
   · cases h
 
 /-! ## Teeth -/
@@ -329,20 +385,32 @@ theorem nominal_tooth :
     (kindPrecedence tooth tooth.depth "Trip").toOption = some ["Trip", "Mile"] := by
   decide +kernel
 
-/-- A `Trip` born before `Mile` was revised: its effective law exists at birth; after the revision of
-`Mile` it is still current (it pinned `Trip`, not `Mile`), while a `Mile` born before is stale by
-name, and renewing it makes it current. -/
+/-- A `Trip` born before `Mile` was revised: its effective law exists at birth. After the revision of
+`Mile` it is stale, naming `Mile` at version 1 (its pin rests on its ancestor's version as well as its
+own), and so is a `Mile` born before; neither dispatches; renewing makes each current, at `Mile`'s
+version 2. A `Kilo` is untouched. An instance named like a kind is refused at birth. -/
 theorem stale_tooth :
     ((create tooth "Trip" "t" lawAdmit).toOption.map fun t => (effectiveOf tooth t).toOption.isSome) = some true ∧
+    ((create tooth "Trip" "t" lawAdmit).toOption.map fun t =>
+      match effectiveOf revised t with
+      | .error (.stale p) => decide (p.lineage.filter (fun f => !holds revised f) = [⟨"Mile", 1⟩])
+      | _ => false) = some true ∧
+    ((create tooth "Trip" "t" lawAdmit).toOption.map fun t =>
+      match dispatch revised shows "show" t with | .error (.stale _) => true | _ => false) = some true ∧
     ((create tooth "Mile" "a" lawAdmit).toOption.map fun a =>
-      match effectiveOf revised a with | .error (.stale p) => decide (p = ⟨"Mile", 1⟩) | _ => false) = some true ∧
-    ((create tooth "Mile" "a" lawAdmit).toOption.bind fun a =>
-      (renewKind revised a).toOption.map fun a' => (decide (a'.kind = ⟨"Mile", 2⟩), kindRefs.current revised a'.kind)) =
-      some (true, true) := by
+      match effectiveOf revised a with | .error (.stale p) => decide (p.name = "Mile" ∧ p.version = 1) | _ => false) = some true ∧
+    ((create tooth "Trip" "t" lawAdmit).toOption.bind fun t =>
+      (renewKind revised t).toOption.map fun t' =>
+        (decide (t'.kind.lineage = [⟨"Trip", 3⟩, ⟨"Mile", 2⟩]), kindRefs.current revised t'.kind)) =
+      some (true, true) ∧
+    ((create tooth "Kilo" "b" lawAdmit).toOption.map fun b => kindRefs.current revised b.kind) = some true ∧
+    (match create tooth "Mile" "Kilo" lawAdmit with | .error (.clash "Kilo") => true | _ => false) = true := by
   decide +kernel
 
 #tooth dispatch_sound by mutation dispatch := fun _ _ _ _ => .ok none
 #tooth effectiveOf_ok by mutation effectiveOf := fun _ _ => .ok lawAdmit
-#tooth create_carries by mutation create := fun _ k n l => .ok ⟨n, ⟨k, 0⟩, l, .natural 0⟩
+#tooth create_carries by mutation create := fun _ k n l => .ok ⟨n, ⟨k, 0, []⟩, l, .natural 0⟩
+-- A pin of the kind's own version alone (the pre-2026-11-01 pin) stays current when an ancestor moves.
+#tooth stale_tooth by mutation KindPin.lineage := fun p => [⟨p.name, p.version⟩]
 
 end Obend.Kind
