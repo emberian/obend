@@ -77,7 +77,12 @@ def refusalReason (packet : DecodedPacket) : String :=
       | .error (.budget work _) => toString work
       | _ => "more"
     s!"checker budget refused: checkWork {packet.fuel} is too small for this program (its checker work is {work}); raise limits.checkWork"
-  | .ownership => "ownership refused: an affine or linear parameter is used more than once (both mean at most once), or one is captured by a closure that may run again (the program checks with every quantity unrestricted)"
+  | .ownership =>
+    match admit packet with
+    | .error (.prepare (.checker (.linearBinderUnused _)))
+    | .error (.prepare (.checker (.linearArgumentDropped _ _ _))) =>
+      "ownership refused: a linear parameter is used exactly once, and only by a linear parameter; one is not used, or is passed where it may be dropped or shared (the program checks with every quantity unrestricted)"
+    | _ => "ownership refused: an affine or linear parameter is used more than once (both mean at most once), or one is captured by a closure that may run again (the program checks with every quantity unrestricted)"
   | .typing => "typing refused: types disagree, a custody value is shared or captured, or an activity rule (an Activity is refused as an argument, record/extend field, specification or prototype component, or sum payload; a Plan must be a sum of first-order data; a response must be first-order data)"
 
 def packetReceipt (value : Json) : Except String Json := do

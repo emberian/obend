@@ -79,11 +79,14 @@ def exposeCallable (assumptions : Assumptions) : Nat → Ty → Ty
     | other => other
 
 /-- The quantity a let-bound parameter gets: unrestricted when the argument may be
-shared (its type is shareable and every capture it uses is), otherwise affine. -/
+shared (its type is shareable and every capture it uses is), affine when it uses no `linear`
+hypothesis, and otherwise `linear`: a `linear` hypothesis is passed only to a `linear` parameter
+(`argumentAllowed`), which the body must then use exactly once. -/
 def letQuantity (assumptions : Assumptions) (context : Context) (argumentType : Ty) (argument : Term) : Quantity :=
   if argumentType.shareableUnder assumptions.shareableVariables &&
       reusableCaptures assumptions.shareableVariables context (occurrences context.length argument)
-  then .unrestricted else .affine
+  then .unrestricted
+  else if linearFree context (occurrences context.length argument) then .affine else .linear
 
 /-- The lambda annotation that makes an introduction form in synthesis position
 check against its own predicted type in both modes. -/

@@ -15,12 +15,12 @@ set_option autoImplicit false
 /-! ## Teeth: the three corners, each a refusal `decide` computes -/
 
 theorem fuel_template_checks : (check fuelTemplate fuelContext 2).isSome = true := by
-  simp [fuelTemplate, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+  simp [fuelTemplate, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity, Quantity.fits, List.headD,
     validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
     addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
     Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
 theorem fuel_filling_checks : (check fuelFilling fuelContext 2).isSome = true := by
-  simp [fuelFilling, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+  simp [fuelFilling, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity, Quantity.fits, List.headD,
     validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
     addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
     Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
@@ -49,7 +49,7 @@ theorem fuel_tooth :
     have inner : annotationsAt (fillZero fuelFilling) fuelTemplate.annotations 0 []
         fuelTemplate.term [0] =
         some ⟨.natural, .natural, .unrestricted, .reusable⟩ := rfl
-    simp [outer, inner, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+    simp [outer, inner, fuelContext, check, infer, agree, sameType_refl, safeUses, safeQuantity, Quantity.fits, List.headD,
     validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
     addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
     Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]
@@ -79,7 +79,7 @@ theorem alias_filling_checks : (check aliasFilling aliasContext 4).isSome = true
       (.variant sumRow) (.variable 0) = true := sameType_extends (by decide)
   dsimp only [sumRow] at aliased
   simp [aliasFilling, aliasContext, sumAssumptions, sumRow, Assumptions.alias,
-    Ty.lookup, List.lookup, aliased, check, infer, agree, sameType_refl, safeUses, safeQuantity,
+    Ty.lookup, List.lookup, aliased, check, infer, agree, sameType_refl, safeUses, safeQuantity, Quantity.fits, List.headD,
     validContext, reusableAllowed, reusableCaptures, zeroUses, variableUses,
     addUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
     Assumptions.valid, List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ]

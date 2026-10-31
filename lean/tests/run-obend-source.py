@@ -136,9 +136,27 @@ def tutorial_commands():
     return commands
 
 
+# Decided deviations from Mini's tutorial, held by name at Obend's outcome so that a change in either
+# is still red. Ember decided on 2026-11-01 that `linear` separates from `affine` in the checker
+# (exact discharge; lean/docs/REPORT-LINEAR-20261101.md). Mini's chapter 7 says "`linear y: Nat` is
+# checked the same way: at most once, not exactly once" and pins `droppedLinear` (a linear parameter
+# never used) as finished; the checker now refuses it, and since the checker refuses the whole
+# program, the file's two other commands are refused with it.
+LINEAR_REFUSAL = ["status: refused", "stage: objective-typed-preview",
+                  "message: ownership refused: a linear parameter is used exactly once, and only by a linear "
+                  "parameter; one is not used, or is passed where it may be dropped or shared (the program "
+                  "checks with every quantity unrestricted)", "(exit status 2)"]
+DECIDED_DEVIATIONS = {
+    "bun docs/tutorial/run.ts docs/tutorial/ch7-once.obend once '[\"4\"]'": (LINEAR_REFUSAL, "linear separates from affine, 2026-11-01"),
+    "bun docs/tutorial/run.ts docs/tutorial/ch7-once.obend dropped '[\"4\"]'": (LINEAR_REFUSAL, "linear separates from affine, 2026-11-01"),
+    "bun docs/tutorial/run.ts docs/tutorial/ch7-once.obend droppedLinear '[\"4\"]'": (LINEAR_REFUSAL, "linear separates from affine, 2026-11-01"),
+}
+
+
 def tutorial():
     commands = tutorial_commands()
     red = []
+    deviations = 0
     for command, expected in commands:
         words = shlex.split(command)  # bun docs/tutorial/run.ts FILE ENTRY ...
         file = os.path.join(SOURCE, "tutorial", os.path.basename(words[2]))
@@ -146,6 +164,11 @@ def tutorial():
         code, out, err = run(args)
         got = out.rstrip("\n").split("\n") if out else []
         want = [e.replace(*RENAME) for e in expected]
+        if command in DECIDED_DEVIATIONS:
+            deviations += 1
+            held, reason = DECIDED_DEVIATIONS[command]
+            print("     DEVIATION (%s): Mini printed %s" % (reason, " | ".join(want)))
+            want = held
         exit_line = [e for e in want if e.startswith("(exit status ")]
         want_lines = [e for e in want if not e.startswith("(exit status ")]
         want_code = int(exit_line[0][len("(exit status "):-1]) if exit_line else 0
@@ -161,8 +184,8 @@ def tutorial():
                 print("     " + g)
             if err.strip():
                 print("   stderr: " + err.strip()[:300])
-    print(f"TUTORIAL: {len(commands)} commands, {len(commands) - len(red)} equal to Mini's printed output "
-          f"(after the one renaming), {len(red)} differ")
+    print(f"TUTORIAL: {len(commands)} commands, {len(commands) - len(red) - deviations} equal to Mini's printed output "
+          f"(after the one renaming), {deviations} at a decided deviation, {len(red)} differ")
     return len(red) == 0, len(commands), len(red)
 
 

@@ -12,6 +12,22 @@ namespace Obend.Core.Proofs.Preservation
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Term Obend.Core.Machine Obend.Core.MachineTyping
 set_option autoImplicit false
 
+/-- A binder of a body with reusable captures is used only if `unrestricted`, so it fits every
+quantity but `linear`, which demands one use. -/
+public theorem reusable_binder_fits {variables : List Nat} {binding : Binding} {context : Context} {uses : Uses}
+    (captures : reusableCaptures variables (binding :: context) uses = true) (notLinear : binding.quantity ≠ .linear) :
+    binding.quantity.fits (uses.headD 0) = true := by
+  cases uses with
+  | nil => cases h : binding.quantity <;> simp_all [Quantity.fits]
+  | cons head tail =>
+      have facts : (head == 0 || (binding.quantity == .unrestricted && binding.type.shareableUnder variables)) = true := by
+        simp only [reusableCaptures, Bool.and_eq_true, List.zip_cons_cons, List.all_cons] at captures
+        exact captures.2.1
+      simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true] at facts
+      rcases facts with zero | ⟨unrestricted, _⟩
+      · cases h : binding.quantity <;> simp_all [Quantity.fits]
+      · simp [unrestricted, Quantity.fits]
+
 public structure ReusableTerm (assumptions : Assumptions) (context : Context) (term : Term) (type : Ty) where
   uses : Uses
   derivation : PartialTyping assumptions context term type uses
@@ -37,16 +53,19 @@ public structure ReusableTerm (assumptions : Assumptions) (context : Context) (t
     (shareable : domain.shareableUnder assumptions.shareableVariables = true) :
     ReusableTerm assumptions context (.app function argument) codomain :=
   ⟨addUses fn.uses arg.uses,.application fn.derivation arg.derivation callableEq rfl
-    (by simpa [argumentAllowed,shareable,Ty.shareableUnder_not_computation _ _ shareable] using arg.captures),
+    (by simpa [argumentAllowed,shareable,Ty.shareableUnder_not_computation _ _ shareable,
+      linearFree_of_reusableCaptures arg.captures] using arg.captures),
     reusable_add_uses assumptions.shareableVariables context fn.uses arg.uses fn.captures arg.captures⟩
 
 @[expose] public def ReusableTerm.abstraction {assumptions : Assumptions} {context : Context} {body : Term}
     {domain codomain : Ty} {quantity : Quantity}
     (bodyTyped : ReusableTerm assumptions (⟨domain,quantity⟩ :: context) body codomain)
-    (valid : validContext assumptions.shareableVariables (⟨domain,quantity⟩ :: context) = true) :
+    (valid : validContext assumptions.shareableVariables (⟨domain,quantity⟩ :: context) = true)
+    (notLinear : quantity ≠ .linear := by decide) :
     ReusableTerm assumptions context (.lam body) (.arrow .reusable quantity domain codomain) :=
   ⟨bodyTyped.uses.tail,.lambda (annotation := ⟨domain,codomain,quantity,.reusable⟩) bodyTyped.derivation (reusable_uses_safe _ _ _ bodyTyped.captures) valid
-    (by simpa [reusableAllowed] using reusable_tail bodyTyped.captures),reusable_tail bodyTyped.captures⟩
+    (by simpa [reusableAllowed] using reusable_tail bodyTyped.captures) (reusable_binder_fits bodyTyped.captures notLinear),
+    reusable_tail bodyTyped.captures⟩
 
 public theorem source_weaken_twice {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty} {uses : Uses}
     (typed : PartialTyping assumptions context term type uses) (first second : Binding)

@@ -309,6 +309,8 @@ def Ty.supports (bounds : Bounds) : Nat → Ty → Ty → Bool
       actual.lookup bounds (fuel + 1) name == some member && actual.supports bounds fuel tail
   | _ + 1, actual, required => actual == required
 
+/-- What a binder of this quantity promises about its own uses: `linear` exactly once. The lambda
+rule (`PartialTyping.lambda`) requires it of the parameter's count. -/
 def Quantity.fits : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count => count <= 1
@@ -327,9 +329,10 @@ def variableUses (context : Context) (index : Nat) : Uses :=
   (List.range context.length).map (fun position => if position = index then 1 else 0)
 def addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
 
-/-- Partial computations may retain a linear obligation forever. Thus this
-safety checker enforces at-most-once use; exact discharge is checked separately
-for terminal ownership protocols, never inferred from arbitrary recursion. -/
+/-- At most once for `affine` and `linear`, never for `erased`. A partial computation may still
+retain a linear obligation forever (a divergent body never reaches its use); the checker's part of
+exact discharge is syntactic and lives at the binder (`Quantity.fits`, required by
+`PartialTyping.lambda`) and at the argument (`linearFree`, required by `argumentAllowed`). -/
 def safeQuantity : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count | .linear, count => count <= 1
@@ -338,6 +341,12 @@ def safeQuantity : Quantity → Nat → Bool
 def safeUses (context : Context) (uses : Uses) : Bool :=
   uses.length == context.length &&
     (context.zip uses).all (fun pair => safeQuantity pair.1.quantity pair.2)
+
+/-- No `linear` hypothesis is used: what an argument must satisfy unless the parameter it is
+passed to is itself `linear`. A `linear` hypothesis flows only into a `linear` slot, so a callee
+that may drop its argument (`erased`, `affine`) or share it (`unrestricted`) never receives one. -/
+def linearFree (context : Context) (uses : Uses) : Bool :=
+  (context.zip uses).all (fun pair => pair.2 == 0 || pair.1.quantity != .linear)
 
 def reusableCaptures (variables : List Nat) (context : Context) (uses : Uses) : Bool :=
   uses.length == context.length && (context.zip uses).all (fun pair =>
@@ -367,6 +376,19 @@ theorem reusable_capture_member (variables : List Nat) (context : Context) (uses
   have all := (Bool.and_eq_true_iff.mp qualified).2
   have checked := (List.all_eq_true.mp all) (binding,count) member
   simpa [used] using checked
+
+/-- Reusable captures use only `unrestricted` hypotheses, so no `linear` one. -/
+theorem linearFree_of_reusableCaptures {variables : List Nat} {context : Context} {uses : Uses}
+    (captures : reusableCaptures variables context uses = true) : linearFree context uses = true := by
+  have all := (Bool.and_eq_true_iff.mp captures).2
+  unfold linearFree
+  rw [List.all_eq_true] at all ⊢
+  intro pair member
+  have := all pair member
+  simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true] at this ⊢
+  rcases this with zero | ⟨unrestricted, _⟩
+  · exact .inl zero
+  · exact .inr (by simp [unrestricted])
 
 /-- An annotation connects source binders to actual checking. `default` must be
 resolved by the source frontend using the type/capture discipline. -/

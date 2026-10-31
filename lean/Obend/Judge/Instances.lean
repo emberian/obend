@@ -74,7 +74,7 @@ open Obend.Core.Ty Obend.Core.Check Obend.Core.Bidirectional
 def CheckRefusal.path : CheckRefusal → List Nat
   | .unboundVariable p _ | .missingLambdaAnnotation p | .missingAnnotation p | .emptyCaseInSynthMode p
   | .typeMismatch p _ _ | .shapeMismatch p _ _ | .unknownLabel p _ _ | .duplicateLabels p
-  | .affineBinderOverused p _ _ | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _
+  | .affineBinderOverused p _ _ | .linearBinderUnused p | .linearArgumentDropped p _ _ | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _
   | .invalidContext p => p
   | .invalidAssumptions => []
 

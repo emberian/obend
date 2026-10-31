@@ -80,6 +80,7 @@ with the derived one, and check at every type agreeing with it. -/
     sameType a (.arrow reuse quantity domain codomain) derived = true ∧ uses = bodyUses.tail ∧
     safeUses (⟨domain, quantity⟩ :: Γ) bodyUses = true ∧
     validContext a.shareableVariables (⟨domain, quantity⟩ :: Γ) = true ∧
+    quantity.fits (bodyUses.headD 0) = true ∧
     Modes a (⟨domain, quantity⟩ :: Γ) body codomain bodyUses
 
 @[expose] public def Motive (a : Assumptions) (Γ : Context) (t : Term) (derived : Ty) (uses : Uses) : Prop :=
@@ -227,6 +228,7 @@ theorem motive_lambda (none_ : a.bounds = []) {Γ : Context} {body : Term} {anno
     (safe : safeUses (⟨annotation.domain, annotation.parameter⟩ :: Γ) uses = true)
     (valid : validContext a.shareableVariables (⟨annotation.domain, annotation.parameter⟩ :: Γ) = true)
     (captures : reusableAllowed a annotation.reuse Γ uses.tail = true)
+    (fits : annotation.parameter.fits (uses.headD 0) = true)
     (ih : Motive a (⟨annotation.domain, annotation.parameter⟩ :: Γ) body annotation.codomain uses) :
     Motive a Γ (.lam body) (.arrow annotation.reuse annotation.parameter annotation.domain annotation.codomain)
       uses.tail := by
@@ -257,6 +259,7 @@ theorem motive_lambda (none_ : a.bounds = []) {Γ : Context} {body : Term} {anno
       have captures' : reusableAllowed a annotation.reuse Γ' checked.uses.tail = true := by
         rw [sameUses]
         exact reusableAllowed_refines none_ (match binder with | .cons _ tail => tail) captures
+      have fits' : annotation.parameter.fits (checked.uses.headD 0) = true := by rw [sameUses]; exact fits
       change Yields (elaborate a annotations Γ' path (.lam body) (.check _)) _
       rw [elaborate]
       simp only [root]
@@ -266,7 +269,7 @@ theorem motive_lambda (none_ : a.bounds = []) {Γ : Context} {body : Term} {anno
           whnf_eq none_, Ty.canonical, Ty.arrow.injEq] at shape
         obtain ⟨rfl, rfl, rfl, rfl⟩ := shape
         simp [checkAt] at accepted
-        simp [accepted, need_ok safe', need_ok valid', need_ok captures', bind, Except.bind, pure,
+        simp [accepted, need_ok safe', need_ok valid', need_ok captures', need_ok fits', bind, Except.bind, pure,
           Except.pure, Yields]
         exact congrArg List.tail sameUses
       · rename_i hne
@@ -275,7 +278,15 @@ theorem motive_lambda (none_ : a.bounds = []) {Γ : Context} {body : Term} {anno
           (by simp [representativeHead, root, whnf_eq none_, Ty.canonical])
   · cases h
     exact ⟨annotation.reuse, annotation.parameter, annotation.domain, annotation.codomain, uses,
-      sameType_refl _ _, rfl, safe, valid, ih.1⟩
+      sameType_refl _ _, rfl, safe, valid, fits, ih.1⟩
+
+theorem safeUses_head {b : Binding} {Γ : Context} {uses : Uses} (safe : safeUses (b :: Γ) uses = true) :
+    safeQuantity b.quantity (uses.headD 0) = true := by
+  cases uses with
+  | nil => simp [safeUses] at safe
+  | cons head tail =>
+    simp only [safeUses, Bool.and_eq_true, List.zip_cons_cons, List.all_cons] at safe
+    exact safe.2.1
 
 /-! ## Applications -/
 
@@ -329,7 +340,8 @@ theorem lam_run {annotations : Annotations} {Γ : Context} {path : List Nat} {bo
       body annotation.codomain) (fun r => r.uses = bodyUses))
     (safe : safeUses (⟨annotation.domain, annotation.parameter⟩ :: Γ) bodyUses = true)
     (valid : validContext a.shareableVariables (⟨annotation.domain, annotation.parameter⟩ :: Γ) = true)
-    (captures : reusableAllowed a annotation.reuse Γ bodyUses.tail = true) :
+    (captures : reusableAllowed a annotation.reuse Γ bodyUses.tail = true)
+    (fits : annotation.parameter.fits (bodyUses.headD 0) = true) :
     Yields (checkAt a annotations Γ path (.lam body)
       (.arrow annotation.reuse annotation.parameter annotation.domain annotation.codomain))
       (fun r => r.uses = bodyUses.tail) := by
@@ -338,11 +350,13 @@ theorem lam_run {annotations : Annotations} {Γ : Context} {path : List Nat} {bo
     rw [sameUses]; exact safe
   have captures' : reusableAllowed a annotation.reuse Γ checked.uses.tail = true := by
     rw [sameUses]; exact captures
+  have fits' : annotation.parameter.fits (checked.uses.headD 0) = true := by
+    rw [sameUses]; exact fits
   simp only [checkAt] at ok
   change Yields (elaborate a annotations Γ path (.lam body) (.check _)) _
   rw [elaborate]
-  simp [root, ok, need_ok safe', need_ok valid, need_ok captures', bind, Except.bind, pure, Except.pure,
-    finish, checkedSynth, sameType_refl, Yields, sameUses]
+  simp [root, ok, need_ok safe', need_ok valid, need_ok captures', need_ok fits', bind, Except.bind, pure,
+    Except.pure, finish, checkedSynth, sameType_refl, Yields, sameUses]
 
 theorem applyPrepared_arrow {hints : Annotations} {Γ : Context} {path : List Nat} {argument : Term} {mode : Mode}
     {functionTree : AnnotationTree} {functionType domain codomain : Ty} {reuse : Reuse} {quantity : Quantity}
@@ -417,13 +431,19 @@ theorem motive_application (none_ : a.bounds = []) {Γ : Context} {function argu
       (Checkable body → ∀ expected, sameType a codomain expected = true →
         CheckOK a Γ' (.app (.lam body) argument) expected (addUses fu au)) := by
     intro body isLam sx Γ' r
-    obtain ⟨reuse0, q0, d0, c0, bodyUses, same, fuEq, safe, valid, bodyModes⟩ := ihF.2 body isLam
+    obtain ⟨reuse0, q0, d0, c0, bodyUses, same, fuEq, safe, valid, fits0, bodyModes⟩ := ihF.2 body isLam
     obtain ⟨d1, c1, rfl, hd1, hc1⟩ := arrow_inv none_ (sameType_symm same)
     simp only [callable, Ty.arrow.injEq] at shape
     obtain ⟨rfl, rfl, rfl, rfl⟩ := shape
     have xOK := ihA.1.1 sx Γ' r
     have lengths := refines_length r
     -- the parameter's q0 refines the derivation's
+    have linear_of_used : ¬ (linearFree Γ' (occurrences Γ'.length argument) = true) → q0 = .linear := by
+      intro used
+      rw [lengths, ← argumentUses] at used
+      have notFree : ¬ (linearFree Γ au = true) := fun free => used (linearFree_refines r free)
+      simp only [argumentAllowed, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at allowed
+      exact allowed.1.2.resolve_right notFree
     have binderOf : ∀ argumentType, sameType a argumentType d1 = true →
         BindingRefines a ⟨argumentType, letQuantity a Γ' argumentType argument⟩ ⟨d0, q0⟩ := by
       intro argumentType agrees
@@ -433,25 +453,61 @@ theorem motive_application (none_ : a.bounds = []) {Γ : Context} {function argu
       · rename_i condition
         exact .inr (.inr ⟨rfl, (Bool.and_eq_true_iff.mp condition).1⟩)
       · rename_i condition
-        refine .inr (.inl ⟨rfl, fun unrestricted => condition ?_⟩)
-        simp only at unrestricted
-        subst unrestricted
-        simp only [argumentAllowed, Bool.and_eq_true, bne_self_eq_false, Bool.false_or] at allowed
-        rw [Bool.and_eq_true_iff, shareable_congr none_ agrees, lengths, ← argumentUses]
-        exact ⟨allowed.2.1, reusableCaptures_refines none_ r allowed.2.2⟩
+        split
+        · refine .inr (.inl ⟨rfl, fun unrestricted => condition ?_⟩)
+          simp only at unrestricted
+          subst unrestricted
+          simp only [argumentAllowed, Bool.and_eq_true, bne_self_eq_false, Bool.false_or] at allowed
+          rw [Bool.and_eq_true_iff, shareable_congr none_ agrees, lengths, ← argumentUses]
+          exact ⟨allowed.2.1, reusableCaptures_refines none_ r allowed.2.2⟩
+        · rename_i used
+          exact .inl (linear_of_used used).symm
+    have qOf : ∀ argumentType, letQuantity a Γ' argumentType argument = .linear → q0 = .linear := by
+      intro argumentType isLinear
+      unfold letQuantity at isLinear
+      split at isLinear
+      · cases isLinear
+      · split at isLinear
+        · cases isLinear
+        · rename_i used; exact linear_of_used used
+    have fitsOf : ∀ argumentType, sameType a argumentType d1 = true →
+        (letQuantity a Γ' argumentType argument).fits (bodyUses.headD 0) = true := by
+      intro argumentType agrees
+      have refines := (binderOf argumentType agrees).2
+      cases hq : letQuantity a Γ' argumentType argument with
+      | linear => rw [qOf argumentType hq] at fits0; exact fits0
+      | unrestricted => rfl
+      | erased =>
+        unfold letQuantity at hq
+        split at hq
+        · cases hq
+        · split at hq <;> cases hq
+      | affine =>
+        rw [hq] at refines
+        have head := safeUses_head safe
+        rcases refines with same | ⟨_, notU⟩ | ⟨h, _⟩
+        · rw [← same] at head; simpa [Quantity.fits, safeQuantity] using head
+        · cases q0 <;> simp_all [Quantity.fits, safeQuantity]
+        · cases h
     have allowedOf : ∀ argumentType, sameType a argumentType d1 = true →
         argumentAllowed a (letQuantity a Γ' argumentType argument) Γ' argumentType au = true := by
       intro argumentType agrees
       have notActivity : (!argumentType.isComputation) = true := by
         simp only [argumentAllowed, Bool.and_eq_true] at allowed
-        rw [sameType_isComputation agrees]; exact allowed.1
+        rw [sameType_isComputation agrees]; exact allowed.1.1
       unfold letQuantity
       split
       · rename_i condition
         rw [lengths, ← argumentUses] at condition
-        simp only [argumentAllowed, notActivity, Bool.true_and, bne_self_eq_false, Bool.false_or]
+        have free := linearFree_of_reusableCaptures (Bool.and_eq_true_iff.mp condition).2
+        simp only [argumentAllowed, notActivity, Bool.true_and, bne_self_eq_false, Bool.false_or, free,
+          Bool.or_true]
         exact condition
-      · simp [argumentAllowed, notActivity]
+      · split
+        · rename_i free
+          rw [lengths, ← argumentUses] at free
+          simp [argumentAllowed, notActivity, free]
+        · simp [argumentAllowed, notActivity]
     have once : ∀ Γ'' uses, reusableAllowed a .once Γ'' uses = true := by intros; rfl
     refine ⟨fun sb => ?_, fun cb expected agreement => ?_⟩
     · intro path
@@ -474,6 +530,7 @@ theorem motive_application (none_ : a.bounds = []) {Γ : Context} {function argu
         have bodyChecks := (bRun annotations bChild).2 bT (sameType_refl _ _)
         have fnChecks := lam_run (annotation := annotation) (realizes_root fChild) bodyChecks
           (safeUses_refines binderRefines safe) (validContext_refines none_ binderRefines valid) (once _ _)
+          (fitsOf xT xSame)
         have run := app_run (realizes_root realizes) rfl fnChecks
           ((xRun annotations xChild).2 xT (sameType_refl _ _)) (allowedOf xT xSame)
         rw [fuEq]
@@ -500,6 +557,7 @@ theorem motive_application (none_ : a.bounds = []) {Γ : Context} {function argu
         have bodyChecks := bRun annotations bChild
         have fnChecks := lam_run (annotation := annotation) (realizes_root fChild) bodyChecks
           (safeUses_refines binderRefines safe) (validContext_refines none_ binderRefines valid) (once _ _)
+          (fitsOf xT xSame)
         have run := app_run (realizes_root realizes) rfl fnChecks
           ((xRun annotations xChild).2 xT (sameType_refl _ _)) (allowedOf xT xSame)
         rw [fuEq]
@@ -1070,8 +1128,8 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
   case boolean => intro Γ value; exact motive_boolean Γ value
   case label => intro Γ value; exact motive_label Γ value
   case lambda =>
-    intro Γ body annotation bodyUses _ safe valid captures ih
-    exact motive_lambda none_ safe valid captures ih
+    intro Γ body annotation bodyUses _ safe valid captures fits ih
+    exact motive_lambda none_ safe valid captures fits ih
   case conversion =>
     intro Γ term actual expected uses _ agreement ih
     exact motive_conversion ih agreement

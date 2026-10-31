@@ -730,7 +730,8 @@ public theorem chk_app {ctx : Context} {f a : Term} {D C : Ty} (hctx : Clean ctx
     have hallow : argumentAllowed {} .unrestricted ctx D.canonical b.uses = true := by
       have hcomp : D.canonical.isComputation = false := by
         cases hc : D.canonical <;> simp_all [Ty.isComputation, Ty.shareable]
-      simp [argumentAllowed, hcomp, hD, reusableCaptures_clean hctx hl]
+      simp [argumentAllowed, hcomp, hD, reusableCaptures_clean hctx hl,
+        linearFree_of_reusableCaptures (reusableCaptures_clean hctx hl)]
     rw [need_ok hallow]
     exact finish_check _ _ _ rfl
   · rename_i hs

@@ -19,9 +19,23 @@ def wrapperMeasured (q q' : Quantity) : Bool :=
     [⟨.arrow .reusable q .natural .natural, .unrestricted⟩]
     (.arrow .reusable q' .natural .natural)).toBool
 
--- the measured matrix, row by row, is Astra's: [[F,T,T,T],[F,T,T,T],[F,T,T,T],[F,F,F,T]]
+-- The measured matrix, row by row. Astra's (and this checker's until `linear` separated from
+-- `affine`, 2026-11-01) was [[F,T,T,T],[F,T,T,T],[F,T,T,T],[F,F,F,T]]. Exactly two cells change,
+-- (erased, linear) and (affine, linear): a wrapper whose parameter is `linear` hands it to a callee
+-- that may drop it, and `argumentAllowed` now refuses a `linear` hypothesis as the argument of a
+-- non-`linear` parameter. Every other cell, (linear, affine) among them, is unchanged.
 #guard (quantities.map fun q => quantities.map fun q' => wrapperMeasured q q') =
-  [[false, true, true, true], [false, true, true, true], [false, true, true, true], [false, false, false, true]]
+  [[false, true, false, true], [false, true, false, true], [false, true, true, true], [false, false, false, true]]
+-- the two changed cells are refused by name: the argument at [0, 1] uses the linear hypothesis 0
+#guard (quantities.filter fun q => wrapperMeasured q .linear) = [.linear]
+#guard [Quantity.erased, .affine].all fun q =>
+  match checkAgainst ⟨.lam (.app (.bound 1) (.bound 0)),
+      fun path => if path = [] then some ⟨.natural, .natural, .linear, .reusable⟩ else none, {}⟩
+    [⟨.arrow .reusable q .natural .natural, .unrestricted⟩] (.arrow .reusable .linear .natural .natural) with
+  | .error (.linearArgumentDropped [0, 1] 0 q') => q' == q
+  | _ => false
+-- the cells `launders` names are exactly the cells that changed
+#guard quantities.all fun q => quantities.all fun q' => launders q q' == (q' == .linear && q != .linear && q != .unrestricted)
 -- and `wrapperAllowed` is that matrix
 #guard quantities.all fun q => quantities.all fun q' => wrapperMeasured q q' == wrapperAllowed q q'
 
@@ -64,9 +78,40 @@ def seedRow : Ty := .field "x" .natural (.field "extra" .boolean .emptyRow)
   (.variant (.field "a" .natural .emptyRow)) with
   | .error (.missingLabel "b" _) => true | _ => false)
 
--- functions: the η-wrapper inside the measured matrix, refusals outside it
+-- functions: the η-wrapper inside the measured matrix, refusals outside it. Relabelling a `linear`
+-- parameter as `affine` launders a once-resource: refused by name (it was emitted before 11-01)
+#guard (match coerce {} (.arrow .reusable .affine .natural seedRow)
+  (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow)) with
+  | .error (.launders .affine .linear) => true | _ => false)
+#guard (match coerce {} (.arrow .reusable .erased .natural .natural) (.arrow .reusable .linear .natural .natural) with
+  | .error (.launders .erased .linear) => true | _ => false)
+-- the converse direction keeps the once-resource in a `linear` slot: emitted and checked
+#guard (coerce {} (.arrow .reusable .linear .natural seedRow)
+  (.arrow .reusable .affine .natural (.field "x" .natural .emptyRow))).toBool
 #guard (coerce {} (.arrow .reusable .affine .natural seedRow)
+  (.arrow .reusable .affine .natural (.field "x" .natural .emptyRow))).toBool
+-- `linear` to `linear` with a codomain coercion: the component applied to `f y` is emitted `linear`
+#guard (coerce {} (.arrow .reusable .linear .natural seedRow)
   (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow))).toBool
+-- without the relabelling the same component is `affine`, and the kernel names the drop
+#guard (match checkAgainst ⟨.lam (.lam (.app (.lam (.record [("x", .get (.bound 0) "x")])) (.app (.bound 1) (.bound 0)))),
+      treeAnnotations (.node (some ⟨.arrow .reusable .linear .natural seedRow,
+          .arrow .reusable .linear .natural (.field "x" .natural .emptyRow), .unrestricted, .reusable⟩)
+        [.node (some ⟨.natural, .field "x" .natural .emptyRow, .linear, .reusable⟩)
+          [.node (some (hint (.arrow .reusable .affine seedRow (.field "x" .natural .emptyRow)) (.field "x" .natural .emptyRow)))
+            [.node (some ⟨seedRow, .field "x" .natural .emptyRow, .affine, .reusable⟩)
+              [.node (some (hint .emptyRow (.field "x" .natural .emptyRow))) [.node none [.node none []]]],
+             .node (some (hint (.arrow .reusable .linear .natural seedRow) seedRow)) [.node none [], .node none []]]]]), {}⟩
+    [] (.arrow .reusable .unrestricted (.arrow .reusable .linear .natural seedRow)
+      (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow))) with
+  | .error (.linearArgumentDropped _ 0 .affine) => true | _ => false)
+-- and with a domain coercion too: `d y` is the `linear` one-field record coercion
+#guard (coerce {} (.arrow .reusable .linear (.field "x" .natural .emptyRow) .natural)
+  (.arrow .reusable .linear seedRow .natural)).toBool
+-- a domain coercion that drops every field of the `linear` argument is refused at its binder
+#guard (match coerce {} (.arrow .reusable .linear .emptyRow .natural)
+  (.arrow .reusable .linear seedRow .natural) with
+  | .error (.checker (.linearBinderUnused _)) => true | _ => false)
 #guard (match coerce {} (.arrow .reusable .unrestricted .natural .natural) (.arrow .reusable .affine .natural .natural) with
   | .error (.quantityNotWrappable .unrestricted .affine) => true | _ => false)
 #guard (match coerce {} (.arrow .reusable .affine .natural .natural) (.arrow .reusable .erased .natural .natural) with

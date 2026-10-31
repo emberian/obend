@@ -113,12 +113,35 @@ public theorem reusableAllowed_refines (none_ : a.bounds = []) {Γ' Γ : Context
   simp only [reusableAllowed, Bool.or_eq_true] at allowed ⊢
   exact allowed.imp id (reusableCaptures_refines none_ h)
 
+/-- A refinement never makes a binder `linear` that was not (`QuantityRefines`), so an argument
+that uses no `linear` hypothesis still uses none. -/
+public theorem linearFree_refines {Γ' Γ : Context} (h : Refines a Γ' Γ)
+    {uses : Uses} (free : linearFree Γ uses = true) : linearFree Γ' uses = true := by
+  induction h generalizing uses with
+  | nil => exact free
+  | @cons b' b _ _ head _ ih =>
+    cases uses with
+    | nil => rfl
+    | cons count rest =>
+      simp only [linearFree, List.zip_cons_cons, List.all_cons, Bool.and_eq_true] at free ⊢
+      refine ⟨?_, ih free.2⟩
+      have q := head.2
+      simp only [Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq] at free ⊢
+      rcases free.1 with zero | notLinear
+      · exact .inl zero
+      · refine .inr ?_
+        rcases q with same | ⟨affine, _⟩ | ⟨unrestricted, _⟩
+        · rw [same]; exact notLinear
+        · rw [affine]; decide
+        · rw [unrestricted]; decide
+
 public theorem argumentAllowed_refines (none_ : a.bounds = []) {Γ' Γ : Context} (h : Refines a Γ' Γ)
     {q : Quantity} {t t' : Ty} {uses : Uses} (agrees : sameType a t' t = true)
     (allowed : argumentAllowed a q Γ t uses = true) : argumentAllowed a q Γ' t' uses = true := by
   simp only [argumentAllowed, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true, Bool.or_eq_true,
     bne_iff_ne, ne_eq] at allowed ⊢
-  refine ⟨by rw [sameType_isComputation agrees]; exact allowed.1, ?_⟩
+  refine ⟨⟨by rw [sameType_isComputation agrees]; exact allowed.1.1,
+    allowed.1.2.imp id (linearFree_refines h)⟩, ?_⟩
   rcases allowed.2 with notU | ⟨share, captures⟩
   · exact .inl notU
   · exact .inr ⟨by rw [shareable_congr none_ agrees]; exact share, reusableCaptures_refines none_ h captures⟩

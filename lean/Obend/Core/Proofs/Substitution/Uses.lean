@@ -72,6 +72,50 @@ public theorem UsesLE.add {a a' b b' : Uses} (ha : UsesLE a a') (hb : UsesLE b b
     | nil => exact .nil
     | cons h' hb => exact .cons (Nat.add_le_add h h') (ih hb)
 
+/-- `UsesLE`, and equal on the first `k` positions: the binders above a position, which a closed
+filling never uses, keep their counts exactly. Exact discharge at a binder (`Quantity.fits`) needs
+the count kept, not only bounded. -/
+@[expose] public def UsesLEOn (k : Nat) (u v : Uses) : Prop := UsesLE u v ∧ u.take k = v.take k
+
+public theorem UsesLEOn.le {k : Nat} {u v : Uses} (h : UsesLEOn k u v) : UsesLE u v := h.1
+
+public theorem UsesLEOn.refl (k : Nat) (u : Uses) : UsesLEOn k u u := ⟨UsesLE.refl u, rfl⟩
+
+public theorem take_addUses : ∀ (k : Nat) (a b : Uses), (addUses a b).take k = addUses (a.take k) (b.take k)
+  | 0, _, _ => rfl
+  | _ + 1, [], _ => rfl
+  | _ + 1, _ :: _, [] => rfl
+  | k + 1, x :: a, y :: b => by
+    have := take_addUses k a b
+    simp only [addUses, List.zipWith_cons_cons, List.take_succ_cons] at this ⊢
+    rw [this]
+
+public theorem UsesLEOn.add {k : Nat} {a a' b b' : Uses} (ha : UsesLEOn k a a') (hb : UsesLEOn k b b') :
+    UsesLEOn k (addUses a b) (addUses a' b') :=
+  ⟨UsesLE.add ha.1 hb.1, by rw [take_addUses, take_addUses, ha.2, hb.2]⟩
+
+public theorem tail_take_succ (k : Nat) : ∀ u : Uses, (u.take (k + 1)).tail = u.tail.take k
+  | [] => by simp
+  | _ :: _ => rfl
+
+public theorem UsesLEOn.tail {k : Nat} {u v : Uses} (h : UsesLEOn (k + 1) u v) : UsesLEOn k u.tail v.tail := by
+  refine ⟨h.1.tail, ?_⟩
+  have := congrArg List.tail h.2
+  rwa [tail_take_succ, tail_take_succ] at this
+
+public theorem UsesLEOn.headD {k : Nat} {u v : Uses} (h : UsesLEOn (k + 1) u v) : u.headD 0 = v.headD 0 := by
+  have := congrArg (fun l => l.headD 0) h.2
+  cases u <;> cases v <;> simp_all
+
+public theorem variableUses_take_zero (Γ : Context) {k index : Nat} (h : k ≤ index) :
+    (variableUses Γ index).take k = (List.replicate (variableUses Γ index).length 0).take k := by
+  apply List.ext_getElem (by simp)
+  intro n h₁ h₂
+  simp only [List.getElem_take, List.getElem_replicate]
+  simp only [List.length_take] at h₁
+  simp only [variableUses, List.getElem_map, List.getElem_range]
+  rw [if_neg (by omega)]
+
 theorem zipAll_of_le {P : Binding × Nat → Bool}
     (hP : ∀ b m n, n ≤ m → P (b, m) = true → P (b, n) = true) {u v : Uses} (h : UsesLE u v) :
     ∀ Γ : Context, (Γ.zip v).all P = true → (Γ.zip u).all P = true := by
@@ -111,11 +155,24 @@ public theorem reusableAllowed_of_le {asm : Assumptions} {reuse : Reuse} {Γ : C
   · exact .inl hv
   · exact .inr (reusableCaptures_of_le h hv)
 
+public theorem linearFree_of_le {Γ : Context} {u v : Uses} (h : UsesLE u v) (hv : linearFree Γ v = true) :
+    linearFree Γ u = true := by
+  unfold linearFree at hv ⊢
+  refine zipAll_of_le ?_ h Γ hv
+  intro b m n hnm hm
+  simp only [Bool.or_eq_true, beq_iff_eq] at hm ⊢
+  rcases hm with hm | hm
+  · exact .inl (by omega)
+  · exact .inr hm
+
 public theorem argumentAllowed_of_le {asm : Assumptions} {quantity : Quantity} {Γ : Context} {type : Ty}
     {u v : Uses} (h : UsesLE u v) (hv : argumentAllowed asm quantity Γ type v = true) :
     argumentAllowed asm quantity Γ type u = true := by
   simp only [argumentAllowed, Bool.and_eq_true, Bool.or_eq_true] at hv ⊢
-  refine ⟨hv.1, ?_⟩
+  refine ⟨⟨hv.1.1, ?_⟩, ?_⟩
+  · rcases hv.1.2 with hq | hl
+    · exact .inl hq
+    · exact .inr (linearFree_of_le h hl)
   rcases hv.2 with hq | ⟨hs, hc⟩
   · exact .inl hq
   · exact .inr ⟨hs, reusableCaptures_of_le h hc⟩
@@ -188,12 +245,21 @@ public theorem reusableAllowed_append_zero {asm : Assumptions} {reuse : Reuse} {
   · exact .inl h
   · exact .inr (reusableCaptures_append_zero ha h)
 
+public theorem linearFree_append_zero {Δ Ψ Ψ' : Context} {a : Uses} (ha : a.length = Δ.length)
+    (h : linearFree (Δ ++ Ψ) (a ++ zeroUses Ψ) = true) : linearFree (Δ ++ Ψ') (a ++ zeroUses Ψ') = true := by
+  unfold linearFree at h ⊢
+  rw [zipAll_append_zero (fun b => by simp) Δ Ψ Ψ' ha]
+  exact h
+
 public theorem argumentAllowed_append_zero {asm : Assumptions} {quantity : Quantity} {type : Ty}
     {Δ Ψ Ψ' : Context} {a : Uses} (ha : a.length = Δ.length)
     (h : argumentAllowed asm quantity (Δ ++ Ψ) type (a ++ zeroUses Ψ) = true) :
     argumentAllowed asm quantity (Δ ++ Ψ') type (a ++ zeroUses Ψ') = true := by
   simp only [argumentAllowed, Bool.and_eq_true, Bool.or_eq_true] at h ⊢
-  refine ⟨h.1, ?_⟩
+  refine ⟨⟨h.1.1, ?_⟩, ?_⟩
+  · rcases h.1.2 with hq | hl
+    · exact .inl hq
+    · exact .inr (linearFree_append_zero ha hl)
   rcases h.2 with hq | ⟨hs, hc⟩
   · exact .inl hq
   · exact .inr ⟨hs, reusableCaptures_append_zero ha hc⟩
@@ -263,6 +329,11 @@ public theorem split_add {a₁ a₂ : Uses} (Ψ : Context) (h : a₁.length = a�
 public theorem split_tail {a : Uses} (Ψ : Context) (h : a ≠ []) :
     (a ++ zeroUses Ψ).tail = a.tail ++ zeroUses Ψ :=
   List.tail_append_of_ne_nil h
+
+public theorem headD_append {a : Uses} (z : Uses) (h : a ≠ []) : (a ++ z).headD 0 = a.headD 0 := by
+  cases a with
+  | nil => exact absurd rfl h
+  | cons => rfl
 
 public theorem ne_nil_of_length_succ {a : Uses} {n : Nat} (h : a.length = n + 1) : a ≠ [] := by
   intro e; subst e; simp at h

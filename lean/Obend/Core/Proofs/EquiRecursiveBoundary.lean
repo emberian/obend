@@ -49,7 +49,7 @@ public theorem alias_binder_invalid :
 
 public theorem identity_derivation : PartialTyping natAlias [] identityTerm naturalArrow [] :=
   .lambda (annotation := ⟨.natural, .natural, .unrestricted, .reusable⟩)
-    (.bound (binding := ⟨.natural, .unrestricted⟩) rfl) (by decide) (by decide) (by decide)
+    (.bound (binding := ⟨.natural, .unrestricted⟩) rfl) (by decide) (by decide) (by decide) (by decide)
 
 @[expose] public def naturalIdentityAnnotation : LambdaAnnotation :=
   ⟨.natural, .natural, .unrestricted, .reusable⟩
@@ -73,10 +73,10 @@ public theorem identity_alias_check_refused (annotations : Annotations)
   have aliases := alias_agrees_reverse
   dsimp only [natAlias] at aliases
   simp [checkAt, elaborate, identityTerm, missing, head, aliasDomainArrow, natAlias,
-    finish, aliases, need, variableUses, safeUses, safeQuantity,
+    finish, aliases, need, variableUses, safeUses, safeQuantity, Quantity.fits, linearFree,
     validContext, reusableAllowed, reusableCaptures, List.getElem?_cons_zero,
     bind, Except.bind, pure, Except.pure, Functor.map, Except.map, Ty.shareable, checkedSynth]
-  split <;> simp_all [need, safeUses, safeQuantity, validContext, reusableAllowed,
+  split <;> simp_all [need, safeUses, safeQuantity, Quantity.fits, linearFree, validContext, reusableAllowed,
     reusableCaptures, bind, Except.bind, pure, Except.pure, Ty.shareable]
   rename_i impossible
   exact False.elim (impossible .reusable .unrestricted (.variable 0) .natural rfl rfl rfl rfl)
@@ -97,7 +97,7 @@ public theorem identity_bad_annotation_refused (annotations : Annotations)
   have aliases := alias_agrees_reverse
   dsimp only [natAlias] at aliases
   simp [checkAt, elaborate, identityTerm, aliasDomainArrow, aliasIdentityAnnotation, bad,
-    finish, aliases, need, variableUses, safeUses, safeQuantity,
+    finish, aliases, need, variableUses, safeUses, safeQuantity, Quantity.fits, linearFree,
     validContext, natAlias, reusableAllowed, reusableCaptures, List.getElem?_cons_zero,
     bind, Except.bind, pure, Except.pure, Functor.map, Except.map, Ty.shareable, checkedSynth]
 
@@ -121,7 +121,7 @@ public theorem identity_annotated_check_exact :
   dsimp only [natAlias, naturalArrow, aliasDomainArrow] at arrows
   simp [checkAt, elaborate, identityTerm, aliasDomainArrow, identityAnnotations,
     naturalIdentityAnnotation, finish, sameType_refl, arrows,
-    need, variableUses, safeUses, safeQuantity, validContext, natAlias, reusableAllowed,
+    need, variableUses, safeUses, safeQuantity, Quantity.fits, linearFree, validContext, natAlias, reusableAllowed,
     reusableCaptures, naturalArrow, List.getElem?_cons_zero,
     bind, Except.bind, pure, Except.pure, Functor.map, Except.map, Ty.shareable, checkedSynth]
 

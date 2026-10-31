@@ -37,7 +37,7 @@ theorem budget_filling_admitted : Core4.judge 4 fuelContext fuelFilling budgetTy
     Obend.Core.Bidirectional.checkAgainst, Obend.Core.Bidirectional.checkAt,
     Obend.Core.Bidirectional.elaborate, Obend.Core.Bidirectional.finish,
     Obend.Core.Bidirectional.checkedSynth, Obend.Core.Bidirectional.need,
-    sameType_refl, safeUses, safeQuantity, validContext, reusableAllowed,
+    sameType_refl, safeUses, safeQuantity, Quantity.fits, linearFree, validContext, reusableAllowed,
     reusableCaptures, zeroUses, variableUses, addUses, Ty.shareableUnder,
     Ty.shareable, Ty.isComputation, Assumptions.valid,
     List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ,

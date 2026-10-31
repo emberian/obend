@@ -89,6 +89,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i captures
+        split at h
+        rotate_left; · cases h
+        rename_i fits
         cases h
         have hsb : Scoped (⟨annotation.domain, annotation.parameter⟩ :: Δ).length body := (scoped_lam_iff _ _).1 hs
         obtain ⟨a, ha, innerUses, inner₀, innerTyped₀, innerType₀, innerUses₀⟩ :=
@@ -115,7 +118,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           rw [innerUses', split_tail Ψ' hne]
           exact reusableAllowed_append_zero (Ψ := Ψ) (by simp [ha])
             (by rw [← split_tail Ψ hne, ← innerUses]; exact captures)
-        rw [dif_pos a1, dif_pos a2, dif_pos a3, dif_pos a4]
+        have a5 : annotation.parameter.fits (inner'.uses.headD 0) = true := by
+          rw [innerUses', headD_append _ hne]; rw [innerUses, headD_append _ hne] at fits; exact fits
+        rw [dif_pos a1, dif_pos a2, dif_pos a3, dif_pos a4, dif_pos a5]
         refine ⟨a.tail, by simp [ha], ?_, _, rfl, rfl, ?_⟩
         · show inner.uses.tail = _; rw [innerUses, split_tail Ψ hne]
         · show inner'.uses.tail = _; rw [innerUses', split_tail Ψ' hne]

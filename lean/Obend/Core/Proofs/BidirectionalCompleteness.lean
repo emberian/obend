@@ -222,6 +222,7 @@ public theorem completes_lambda {assumptions : Assumptions} {context : Context} 
     (safe : safeUses (⟨annotation.domain, annotation.parameter⟩ :: context) uses = true)
     (valid : validContext assumptions.shareableVariables (⟨annotation.domain, annotation.parameter⟩ :: context) = true)
     (captures : reusableAllowed assumptions annotation.reuse context uses.tail = true)
+    (fits : annotation.parameter.fits (uses.headD 0) = true)
     (ih : ∃ tree, Completes assumptions (⟨annotation.domain, annotation.parameter⟩ :: context)
       body annotation.codomain uses tree) :
     ∃ tree, Completes assumptions context (.lam body)
@@ -240,19 +241,21 @@ public theorem completes_lambda {assumptions : Assumptions} {context : Context} 
     rw [sameUses]; exact safe
   have captures' : reusableAllowed assumptions annotation.reuse context result.uses.tail = true := by
     rw [sameUses]; exact captures
+  have fits' : annotation.parameter.fits (result.uses.headD 0) = true := by
+    rw [sameUses]; exact fits
   let synthesized : Synth assumptions context (.lam body) :=
     ⟨.arrow annotation.reuse annotation.parameter annotation.domain annotation.codomain,
-      result.uses.tail, .lambda result.derivation safe' valid captures'⟩
+      result.uses.tail, .lambda result.derivation safe' valid captures' fits'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.lam body) .synth = .ok synthesized
     rw [elaborate]
     simp [root, accepted, bind, Except.bind, Functor.map, Except.map,
-      pure, Except.pure, need_ok safe', need_ok valid, need_ok captures', synthesized]
+      pure, Except.pure, need_ok safe', need_ok valid, need_ok captures', need_ok fits', synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.lam body) (.check expected) = _
     rw [elaborate]
     simp [root, accepted, bind, Except.bind, Functor.map, Except.map,
-      pure, Except.pure, need_ok safe', need_ok valid, need_ok captures', synthesized, checkedSynth]
+      pure, Except.pure, need_ok safe', need_ok valid, need_ok captures', need_ok fits', synthesized, checkedSynth]
   · exact sameType_refl _ _
   · exact congrArg List.tail sameUses
 
@@ -1248,8 +1251,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
   case boolean => exact completes_boolean assumptions
   case label => exact completes_label assumptions
   case lambda =>
-    intro Γ body annotation bodyUses _ safe valid captures ih
-    exact completes_lambda safe valid captures ih
+    intro Γ body annotation bodyUses _ safe valid captures fits ih
+    exact completes_lambda safe valid captures fits ih
   case conversion =>
     intro Γ term actual expected uses _ agreement ih
     obtain ⟨tree, completeTerm⟩ := ih
@@ -1389,7 +1392,7 @@ public theorem shadow_record_now_checks : (checkAgainst shadowSource [] shadowRo
   dsimp only [shadowAssumptions] at aliases
   simp [checkAgainst, checkAt, shadowSource, shadowRow, shadowAnnotations, shadowAssumptions,
     elaborate, introduce, checkFields, hint, finish, need, aliases, sameType_refl,
-    checkedSynth, variableUses, zeroUses, addUses, safeUses, safeQuantity, validContext,
+    checkedSynth, variableUses, zeroUses, addUses, safeUses, safeQuantity, Quantity.fits, linearFree, validContext,
     reusableAllowed, reusableCaptures, Assumptions.valid, Ty.isComputation, Ty.shareableUnder,
     Ty.shareable, List.getElem?_cons_zero, bind, Except.bind, pure, Except.pure,
     Functor.map, Except.map, Except.toBool]
@@ -1509,7 +1512,7 @@ needed to synthesize the lambda in function position. -/
   ⟨.natural, [], .application (functionType := .arrow .reusable .unrestricted .natural .natural)
     (.lambda (annotation := ⟨.natural, .natural, .unrestricted, .reusable⟩)
       (.bound (binding := ⟨.natural, .unrestricted⟩) rfl)
-      (by decide) (by decide) (by decide))
+      (by decide) (by decide) (by decide) (by decide))
     (.natural _ _) rfl rfl (by decide), rfl, rfl, rfl⟩
 
 /-- The application chooses its function representative at the root; the lambda
@@ -1527,7 +1530,7 @@ public theorem appliedLambda_annotated_checks :
   simp [checkAgainst, checkAt, appliedLambda, appliedLambdaAnnotations,
     elaborate, finish, need, sameType_refl, checkedSynth, representativeHead,
     argumentAllowed, callable, variableUses, zeroUses, addUses, safeUses,
-    safeQuantity, validContext, reusableAllowed, reusableCaptures,
+    safeQuantity, Quantity.fits, linearFree, validContext, reusableAllowed, reusableCaptures,
     Assumptions.valid, Ty.isComputation, Ty.shareableUnder, Ty.shareable,
     List.getElem?_cons_zero, bind, Except.bind, pure, Except.pure,
     Functor.map, Except.map, Except.toOption]

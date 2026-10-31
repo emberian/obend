@@ -64,7 +64,7 @@ public theorem argumentAllowed_not_computation {assumptions : Assumptions} {quan
     {context : Context} {type : Ty} {uses : Uses}
     (allowed : argumentAllowed assumptions quantity context type uses = true) : type.isComputation = false := by
   simp only [argumentAllowed,Bool.and_eq_true] at allowed
-  simpa using allowed.1
+  simpa using allowed.1.1
 
 /-- An activity-typed continuation begins with an effect case: no other frame,
 and in particular no update frame (a shared cell being forced), accepts one. -/

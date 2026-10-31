@@ -166,9 +166,9 @@ theorem compose_wrapper_typed (T : Ty) (shareable : T.shareable = true) (left ri
     .specification metaTyped mixTyped rfl rfl
   refine ⟨_, .lambda (annotation := ⟨coreOperandTy T left,
       .arrow .reusable .unrestricted (coreOperandTy T right) (specTy T), .unrestricted, .reusable⟩)
-    (.lambda (annotation := ⟨coreOperandTy T right, specTy T, .unrestricted, .reusable⟩) body ?_ ?_ ?_) ?_ ?_ ?_⟩ <;>
+    (.lambda (annotation := ⟨coreOperandTy T right, specTy T, .unrestricted, .reusable⟩) body ?_ ?_ ?_ ?_) ?_ ?_ ?_ ?_⟩ <;>
   cases left <;> cases right <;>
-  simp_all [safeUses, safeQuantity, validContext, reusableAllowed, reusableCaptures, addUses, variableUses,
+  simp_all [safeUses, safeQuantity, Quantity.fits, validContext, reusableAllowed, reusableCaptures, addUses, variableUses,
     zeroUses, inner, List.range_succ, List.zipWith]
 
 /-! ## Surface programs the old metadata typing refused, now accepted -/

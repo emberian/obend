@@ -31,7 +31,7 @@ attribute [local simp] check infer inferFields inferArms checkExtension agree
   zeroUses variableUses addUses safeUses safeQuantity validContext reusableCaptures
   Ty.shareable Ty.shareableUnder Ty.isComputation Ty.isData Ty.isPlan
   Ty.isRow Ty.lookup Ty.supports Ty.canonical Ty.insertCanonical Ty.put Ty.tail
-  Quantity.fits ExtensionFamilies.functionType
+  Quantity.fits linearFree ExtensionFamilies.functionType
   sameStep legacySameType Assumptions.orbit Assumptions.unfoldHead
   refusalKind relaxQuantities unrestrictedTy ampleFuel
   planType planRow responseType

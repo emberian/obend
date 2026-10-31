@@ -243,6 +243,11 @@ theorem safeUses_instantiate (context : Context) (uses : Uses) :
   simp only [safeUses, instantiateContext, List.length_map, List.zip_map_left, List.all_map]
   rfl
 
+theorem linearFree_instantiate (context : Context) (uses : Uses) :
+    linearFree (instantiateContext σ context) uses = linearFree context uses := by
+  simp only [linearFree, instantiateContext, List.zip_map_left, List.all_map]
+  rfl
+
 theorem reusableCaptures_instantiate {vars vars' : List Nat}
     (shareable : ∀ j, (σ j).shareableUnder vars' = vars.contains j) (context : Context) (uses : Uses) :
     reusableCaptures vars' (instantiateContext σ context) uses = reusableCaptures vars context uses := by
@@ -422,7 +427,7 @@ theorem Discharges.argumentAllowed_instantiate (quantity : Quantity) (context : 
     argumentAllowed instance_ quantity (instantiateContext σ context) (type.instantiate σ) uses =
       argumentAllowed template quantity context type uses := by
   simp [argumentAllowed, instantiate_isComputation D.pure, shareableUnder_instantiate D.shareable,
-    reusableCaptures_instantiate D.shareable]
+    reusableCaptures_instantiate D.shareable, linearFree_instantiate]
 
 theorem Discharges.reusableAllowed_instantiate (reuse : Reuse) (context : Context) (uses : Uses) :
     reusableAllowed instance_ reuse (instantiateContext σ context) uses = reusableAllowed template reuse context uses := by
@@ -501,6 +506,9 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i captures
+        split at h
+        rotate_left; · cases h
+        rename_i fits
         cases h
         obtain ⟨inner', innerTyped', innerType, innerUses⟩ := ih _ _ _ _ _ innerTyped
         have found' : instantiateAnnotations σ annotations position = some (instantiateAnnotation σ annotation) := by
@@ -519,7 +527,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           rw [← instantiateContext_cons, validContext_instantiate D.shareable]; exact valid
         have a4 : reusableAllowed instance_ annotation.reuse (instantiateContext σ context) inner'.uses.tail = true := by
           rw [innerUses, D.reusableAllowed_instantiate]; exact captures
-        rw [dif_pos a1, dif_pos a2, dif_pos a3, dif_pos a4]
+        rw [dif_pos a1, dif_pos a2, dif_pos a3, dif_pos a4, dif_pos (by rw [innerUses]; exact fits)]
         exact ⟨_, rfl, rfl, congrArg List.tail innerUses⟩
       | app function argument =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -1142,7 +1150,7 @@ theorem weight_template_type :
     (check weightTemplate [] 8).map Checked.type =
       some (.arrow .reusable .unrestricted (.variable 5) .natural) := by
   simp [check, infer, weightTemplate, templateAssumptions, weightBound,
-    Ty.lookup, List.lookup, agree, sameType_refl, safeUses, safeQuantity, validContext,
+    Ty.lookup, List.lookup, agree, sameType_refl, safeUses, safeQuantity, Quantity.fits, linearFree, validContext,
     reusableAllowed, reusableCaptures, zeroUses, variableUses, addUses,
     Ty.shareableUnder, Ty.shareable, Ty.isComputation, Assumptions.valid,
     List.getElem?_cons_zero]
@@ -1228,7 +1236,7 @@ theorem self_as_bound_row_alias_accepted : (check (selfAsBoundRow []) [] 8).isSo
       (.variable 5) weightBound = true := sameType_extends (by decide)
   dsimp only [weightBound] at aliased
   simp [check, infer, selfAsBoundRow, agree, aliased,
-    safeUses, safeQuantity, validContext, reusableAllowed, reusableCaptures,
+    safeUses, safeQuantity, Quantity.fits, linearFree, validContext, reusableAllowed, reusableCaptures,
     zeroUses, variableUses, Ty.shareableUnder, Ty.shareable, Ty.isComputation,
     weightBound, Assumptions.valid, List.getElem?_cons_zero]
 

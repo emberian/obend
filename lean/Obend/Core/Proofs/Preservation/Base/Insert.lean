@@ -127,6 +127,30 @@ public theorem reusable_captures_insert (variables : List Nat) (context : Contex
               have tail := ih context uses facts.2 tailBound
               simpa [reusableCaptures,List.insertIdx_succ_cons,List.zip,List.all_cons,Bool.and_assoc,Bool.and_left_comm,Bool.and_comm,and_assoc,and_left_comm,and_comm] using And.intro facts.1 tail
 
+theorem headD_insert_succ {uses : Uses} {depth : Nat} : (uses.insertIdx (depth + 1) 0).headD 0 = uses.headD 0 := by
+  cases uses with
+  | nil => simp [List.insertIdx_succ_nil]
+  | cons => simp [List.insertIdx_succ_cons]
+
+theorem linear_free_insert (context : Context) (uses : Uses) (depth : Nat) (binding : Binding)
+    (free : linearFree context uses = true) (bound : depth ≤ context.length) :
+    linearFree (context.insertIdx depth binding) (uses.insertIdx depth 0) = true := by
+  induction depth generalizing context uses with
+  | zero => simpa [linearFree,List.insertIdx_zero] using free
+  | succ depth ih =>
+      cases context with
+      | nil => simp at bound
+      | cons first context =>
+          cases uses with
+          | nil => simp [linearFree, List.insertIdx_succ_nil]
+          | cons count uses =>
+              have tailBound : depth ≤ context.length := by simpa using bound
+              have facts : (count == 0 || first.quantity != .linear) = true ∧ linearFree context uses = true := by
+                simpa [linearFree,List.zip,List.all_cons] using free
+              have tail := ih context uses facts.2 tailBound
+              simp only [linearFree, List.insertIdx_succ_cons, List.zip_cons_cons, List.all_cons, Bool.and_eq_true]
+              exact ⟨facts.1, tail⟩
+
 theorem valid_context_insert (variables : List Nat) (context : Context) (depth : Nat) (binding : Binding)
     (valid : validContext variables context = true) (bindingValid : validContext variables [binding] = true)
     (bound : depth ≤ context.length) : validContext variables (context.insertIdx depth binding) = true := by
@@ -159,10 +183,16 @@ theorem argument_allowed_insert (assumptions : Assumptions) (quantity : Quantity
   cases quantity with
   | unrestricted =>
       have facts : type.shareableUnder assumptions.shareableVariables = true ∧
-          reusableCaptures assumptions.shareableVariables context uses = true := by simpa [argumentAllowed,pure] using allowed
-      simpa [argumentAllowed,pure] using And.intro facts.1
-        (reusable_captures_insert assumptions.shareableVariables context uses depth binding facts.2 bound)
-  | _ => simp [argumentAllowed,pure]
+          reusableCaptures assumptions.shareableVariables context uses = true := by
+        have := allowed
+        simp [argumentAllowed, pure] at this
+        exact this.2
+      have captures := reusable_captures_insert assumptions.shareableVariables context uses depth binding facts.2 bound
+      simp [argumentAllowed, pure, facts.1, captures, linearFree_of_reusableCaptures captures]
+  | linear => simp [argumentAllowed,pure]
+  | _ =>
+      have free : linearFree context uses = true := by simpa [argumentAllowed,pure] using allowed
+      simp [argumentAllowed, pure, linear_free_insert context uses depth binding free bound]
 
 /-- Under a lambda/conditional binder the inserted free slot is one place
 farther down; dropping that original binder restores the outer use vector. -/
@@ -228,7 +258,7 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename,← zero_uses_insert context binding depth bound] using
       (PartialTyping.label (context.insertIdx depth binding) value : PartialTyping assumptions _ (.label value) (literalType value) _)
   case lambda =>
-    intro context body annotation uses bodyTyped safe valid captures ih depth binding bound bindingValid
+    intro context body annotation uses bodyTyped safe valid captures fits ih depth binding bound bindingValid
     have bodyBound : depth+1 ≤ (⟨annotation.domain,annotation.parameter⟩ :: context).length := by simpa using bound
     have nonempty : 0 < uses.length := by rw [source_uses_length bodyTyped]; simp
     have bodyNext := ih (depth+1) binding bodyBound bindingValid
@@ -237,7 +267,8 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     have capturesNext := reusable_allowed_insert assumptions annotation.reuse context uses.tail depth binding captures bound
     rw [List.insertIdx_succ_cons] at bodyNext safeNext validNext
     simpa only [Term.rename,lift_shift_index,uses_tail_insert nonempty] using
-      (PartialTyping.lambda bodyNext safeNext validNext (by rw [uses_tail_insert nonempty]; exact capturesNext))
+      (PartialTyping.lambda bodyNext safeNext validNext (by rw [uses_tail_insert nonempty]; exact capturesNext)
+        (by rw [headD_insert_succ]; exact fits))
   case conversion =>
     intro context term actual expected uses prior agreement ih depth binding bound bindingValid
     exact .conversion (ih depth binding bound bindingValid) agreement

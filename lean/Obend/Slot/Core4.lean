@@ -175,7 +175,8 @@ theorem extend_filling_admitted : judge 4 [] extendFilling extendType = true := 
     Obend.Core.Check.Assumptions.valid, Obend.Core.Check.argumentAllowed,
     Obend.Core.Check.reusableAllowed, Obend.Core.Ty.Ty.canonical,
     Obend.Core.Ty.safeUses, Obend.Core.Ty.variableUses, Obend.Core.Ty.zeroUses,
-    Obend.Core.Ty.addUses, Obend.Core.Ty.safeQuantity, Obend.Core.Ty.validContext,
+    Obend.Core.Ty.addUses, Obend.Core.Ty.safeQuantity, Obend.Core.Ty.Quantity.fits,
+    Obend.Core.Ty.linearFree, Obend.Core.Ty.validContext,
     Obend.Core.Ty.reusableCaptures, Obend.Core.Ty.Ty.shareableUnder,
     Obend.Core.Ty.Ty.shareable, Obend.Core.Ty.Ty.isComputation,
     List.range_succ, List.zipWith,
@@ -212,7 +213,7 @@ def wronglyAnnotated : AnnotatedTerm :=
 def wronglyAnnotatedChecked : Checked wronglyAnnotated [] :=
   ⟨.natural, [], .application (functionType := .arrow .reusable .unrestricted .natural .natural)
     (.lambda (annotation := ⟨.natural, .natural, .unrestricted, .reusable⟩) (.bound (binding := ⟨.natural, .unrestricted⟩) rfl)
-      (by decide) (by decide) (by decide))
+      (by decide) (by decide) (by decide) (by decide))
     (.natural _ _) rfl rfl (by decide), rfl, rfl, rfl⟩
 
 theorem wronglyAnnotated_judge_refused (grant : Nat) :
@@ -243,7 +244,8 @@ theorem wronglyAnnotated_judge_refused (grant : Nat) :
     Obend.Core.Check.Assumptions.valid, Obend.Core.Check.argumentAllowed,
     Obend.Core.Check.reusableAllowed, Obend.Core.Ty.Ty.canonical,
     Obend.Core.Ty.safeUses, Obend.Core.Ty.variableUses, Obend.Core.Ty.zeroUses,
-    Obend.Core.Ty.addUses, Obend.Core.Ty.safeQuantity, Obend.Core.Ty.validContext,
+    Obend.Core.Ty.addUses, Obend.Core.Ty.safeQuantity, Obend.Core.Ty.Quantity.fits,
+    Obend.Core.Ty.linearFree, Obend.Core.Ty.validContext,
     Obend.Core.Ty.reusableCaptures, Obend.Core.Ty.Ty.shareableUnder,
     Obend.Core.Ty.Ty.shareable, Obend.Core.Ty.Ty.isComputation,
     List.range_succ, List.zipWith, List.getElem?_cons_zero, List.getElem?_cons_succ,

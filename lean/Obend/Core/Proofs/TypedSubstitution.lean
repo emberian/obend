@@ -54,7 +54,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨zeroUses Δ, length_zeroUses _, zeroUses_append Δ Ψ, ?_⟩
     rw [← zeroUses_append]
     exact .label _ value
-  · rintro Γ body ann u d safe valid captures ih Δ rfl hs
+  · rintro Γ body ann u d safe valid captures fits ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih (⟨ann.domain, ann.parameter⟩ :: Δ) rfl ((scoped_lam_iff _ _).mp hs)
     have hn : a ≠ [] := ne_nil_of_length_succ ha
     have ht : a.tail.length = Δ.length := by simpa using (congrArg (fun n => n - 1) ha).trans (Nat.add_sub_cancel _ _)
@@ -69,6 +69,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [split_tail Ψ' hn]
       apply reusableAllowed_append_zero (Ψ := Ψ) ht
       simpa only [hu, split_tail Ψ hn] using captures
+    · rw [headD_append _ hn]; rw [hu, headD_append _ hn] at fits; exact fits
   · rintro Γ term actual expected u d same ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl (hs)
     exact ⟨a, ha, hu, .conversion d' same⟩
@@ -255,32 +256,32 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     (fillings : ∀ x f, σ x = some f → ∃ (b : Binding) (u : Uses),
       Ψ[x]? = some b ∧ PartialTyping asm Ψ f.term b.type u) :
     ∀ Δ : Context, Γ = Δ ++ Ψ → validContext asm.shareableVariables Γ = true →
-      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesLE u uses := by
+      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesLEOn Δ.length u uses := by
   refine PartialTyping.rec
     (motive_1 := fun Γ term type uses _ => ∀ Δ : Context, Γ = Δ ++ Ψ →
       validContext asm.shareableVariables Γ = true →
-      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesLE u uses)
+      ∃ u : Uses, PartialTyping asm Γ (term.substitute (fillTerm σ Δ.length)) type u ∧ UsesLEOn Δ.length u uses)
     (motive_2 := fun Γ fields row uses _ => ∀ Δ : Context, Γ = Δ ++ Ψ →
       validContext asm.shareableVariables Γ = true →
       ∃ u : Uses, FieldsTyping asm Γ
-        (fields.map fun f => (f.1, f.2.substitute (fillTerm σ Δ.length))) row u ∧ UsesLE u uses)
+        (fields.map fun f => (f.1, f.2.substitute (fillTerm σ Δ.length))) row u ∧ UsesLEOn Δ.length u uses)
     (motive_3 := fun Γ arms row result uses _ => ∀ Δ : Context, Γ = Δ ++ Ψ →
       validContext asm.shareableVariables Γ = true →
       ∃ u : Uses, ArmsTyping asm Γ
-        (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) row result u ∧ UsesLE u uses)
+        (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) row result u ∧ UsesLEOn Δ.length u uses)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · rintro Γ i b found Δ rfl validΓ
     simp only [Term.substitute]
     by_cases isLocal : i < Δ.length
     · have empty : fillingAt σ Δ.length i = none := by simp [fillingAt, show ¬ Δ.length ≤ i by omega]
       rw [fillTerm, empty]
-      exact ⟨_, .bound found, UsesLE.refl _⟩
+      exact ⟨_, .bound found, UsesLEOn.refl _ _⟩
     · have ge : Δ.length ≤ i := by omega
       cases hf : σ (i - Δ.length) with
       | none =>
         have empty : fillingAt σ Δ.length i = none := by simp [fillingAt, ge, hf]
         rw [fillTerm, empty]
-        exact ⟨_, .bound found, UsesLE.refl _⟩
+        exact ⟨_, .bound found, UsesLEOn.refl _ _⟩
       | some f =>
         obtain ⟨b', u, hb, df⟩ := fillings _ _ hf
         have eqb : b' = b := by
@@ -290,22 +291,25 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
         obtain ⟨_, df'⟩ := partialTyping_closed_transport df (closed _ _ hf) (Δ ++ Ψ) validΓ
         have filled : fillingAt σ Δ.length i = some f := by simp [fillingAt, ge, hf]
         rw [fillTerm, filled]
-        refine ⟨zeroUses (Δ ++ Ψ), df', ?_⟩
-        simpa only [zeroUses, length_variableUses] using UsesLE.zero (variableUses (Δ ++ Ψ) i)
+        refine ⟨zeroUses (Δ ++ Ψ), df', ?_, ?_⟩
+        · simpa only [zeroUses, length_variableUses] using UsesLE.zero (variableUses (Δ ++ Ψ) i)
+        · have := variableUses_take_zero (Δ ++ Ψ) ge
+          rw [length_variableUses] at this
+          simpa only [zeroUses] using this.symm
   · rintro Γ value Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .natural _ value, UsesLE.refl _⟩
+    exact ⟨_, .natural _ value, UsesLEOn.refl _ _⟩
   · rintro Γ value Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .boolean _ value, UsesLE.refl _⟩
+    exact ⟨_, .boolean _ value, UsesLEOn.refl _ _⟩
   · rintro Γ value Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .label _ value, UsesLE.refl _⟩
-  · rintro Γ body ann u d safe valid captures ih Δ rfl validΓ
+    exact ⟨_, .label _ value, UsesLEOn.refl _ _⟩
+  · rintro Γ body ann u d safe valid captures fits ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih (⟨ann.domain, ann.parameter⟩ :: Δ) rfl valid
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨u'.tail, .lambda d' (safeUses_of_le hu safe) valid
-      (reusableAllowed_of_le hu.tail captures), hu.tail⟩
+    exact ⟨u'.tail, .lambda d' (safeUses_of_le hu.le safe) valid
+      (reusableAllowed_of_le hu.tail.le captures) (by rw [hu.headD]; exact fits), hu.tail⟩
   · rintro Γ term actual expected u d same ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     exact ⟨u', .conversion d' same, hu⟩
@@ -313,7 +317,7 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .application d₁ d₂ shape same (argumentAllowed_of_le hv allowed), UsesLE.add hu hv⟩
+    exact ⟨_, .application d₁ d₂ shape same (argumentAllowed_of_le hv.le allowed), UsesLEOn.add hu hv⟩
   · rintro Γ fields row u d ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
@@ -326,17 +330,17 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .extend d₁ d₂ rowOk, UsesLE.add hu hv⟩
+    exact ⟨_, .extend d₁ d₂ rowOk, UsesLEOn.add hu hv⟩
   · rintro Γ metadataTerm ext mt et mu eu dm de mp ep ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .specification d₁ d₂ mp ep, UsesLE.add hu hv⟩
+    exact ⟨_, .specification d₁ d₂ mp ep, UsesLEOn.add hu hv⟩
   · rintro Γ spec target st tt su tu ds dt sp tp ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .prototype d₁ d₂ sp tp, UsesLE.add hu hv⟩
+    exact ⟨_, .prototype d₁ d₂ sp tp, UsesLEOn.add hu hv⟩
   · rintro Γ target t₁ t₂ u d ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
@@ -353,24 +357,24 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .mix d₁ d₂ sl su (reusableCaptures_of_le (UsesLE.add hu hv) cap) sh ih mh, UsesLE.add hu hv⟩
+    exact ⟨_, .mix d₁ d₂ sl su (reusableCaptures_of_le (UsesLEOn.add hu hv).le cap) sh ih mh, UsesLEOn.add hu hv⟩
   · rintro Γ spec base st inherited target su iu ds shape di sh allowed cap ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .fix d₁ shape d₂ sh (argumentAllowed_of_le hv allowed) (reusableCaptures_of_le hu cap), UsesLE.add hu hv⟩
+    exact ⟨_, .fix d₁ shape d₂ sh (argumentAllowed_of_le hv.le allowed) (reusableCaptures_of_le hu.le cap), UsesLEOn.add hu hv⟩
   · rintro Γ prim left right input output lu ru shape dl dr ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .binary shape d₁ d₂, UsesLE.add hu hv⟩
+    exact ⟨_, .binary shape d₁ d₂, UsesLEOn.add hu hv⟩
   · rintro Γ value zero succ result vu zu su dv dz ds safe ih₁ ih₂ ih₃ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     have validS := validContext_cons_unrestricted validΓ (type := .natural) (by rfl)
     obtain ⟨w', d₃, hw⟩ := ih₃ (⟨.natural, .unrestricted⟩ :: Δ) rfl validS
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .ifZero d₁ d₂ d₃ (safeUses_of_le hw safe), UsesLE.add hu (UsesLE.add hv hw.tail)⟩
+    exact ⟨_, .ifZero d₁ d₂ d₃ (safeUses_of_le hw.le safe), UsesLEOn.add hu (UsesLEOn.add hv hw.tail)⟩
   · rintro Γ tag payload pt row u fuel d found pure ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
@@ -379,13 +383,13 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .case d₁ d₂ (by simpa using distinct), UsesLE.add hu hv⟩
+    exact ⟨_, .case d₁ d₂ (by simpa using distinct), UsesLEOn.add hu hv⟩
   · rintro Γ cond yes no result cu tu fu dc dt df ih₁ ih₂ ih₃ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     obtain ⟨w', d₃, hw⟩ := ih₃ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .ifBool d₁ d₂ d₃, UsesLE.add hu (UsesLE.add hv hw)⟩
+    exact ⟨_, .ifBool d₁ d₂ d₃, UsesLEOn.add hu (UsesLEOn.add hv hw)⟩
   · rintro Γ plan pt response u d isPlan isData ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
@@ -398,21 +402,21 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .effectCase d₁ d₂ pure (by simpa using distinct), UsesLE.add hu hv⟩
+    exact ⟨_, .effectCase d₁ d₂ pure (by simpa using distinct), UsesLEOn.add hu hv⟩
   · rintro Γ Δ rfl validΓ
-    exact ⟨_, .nil _, UsesLE.refl _⟩
+    exact ⟨_, .nil _, UsesLEOn.refl _ _⟩
   · rintro Γ name body rest type row bu ru db dr pure ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
-    exact ⟨_, .cons d₁ d₂ pure, UsesLE.add hu hv⟩
+    exact ⟨_, .cons d₁ d₂ pure, UsesLEOn.add hu hv⟩
   · rintro Γ result Δ rfl validΓ
-    exact ⟨_, .nil _ _, UsesLE.refl _⟩
+    exact ⟨_, .nil _ _, UsesLEOn.refl _ _⟩
   · rintro Γ name body rest payload row result bu ru db safe share dr ih₁ ih₂ Δ rfl validΓ
     have validB := validContext_cons_unrestricted validΓ share
     obtain ⟨u', d₁, hu⟩ := ih₁ (⟨payload, .unrestricted⟩ :: Δ) rfl validB
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [List.map_cons]
-    exact ⟨_, .cons d₁ (safeUses_of_le hu safe) share d₂, UsesLE.add hu.tail hv⟩
+    exact ⟨_, .cons d₁ (safeUses_of_le hu.le safe) share d₂, UsesLEOn.add hu.tail hv⟩
 
 /-- Semantic substitution for arbitrary Checked evidence: no checker-completeness or
 fuel premise. Closed fillings share the template's assumptions and declared hole types. -/
@@ -429,6 +433,6 @@ public theorem checked_msubst {t : AnnotatedTerm} {Ψ : Context} (c : Checked t 
     simpa only [AnnotatedTerm.erase, same, hd] using d.derivation
   obtain ⟨u, derivation, le⟩ := partialTyping_msubst c.derivation Ψ σ
     (fun x f found => (hσ x f found).1) fillings [] rfl c.contextValid
-  exact ⟨⟨c.type, u, derivation, safeUses_of_le le c.safe, c.contextValid, c.assumptionsValid⟩, rfl, le⟩
+  exact ⟨⟨c.type, u, derivation, safeUses_of_le le.le c.safe, c.contextValid, c.assumptionsValid⟩, rfl, le.le⟩
 
 end Obend.Core.Proofs.TypedSubstitution

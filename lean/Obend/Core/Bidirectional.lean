@@ -42,6 +42,11 @@ inductive CheckRefusal where
   | unknownLabel (path : List Nat) (name : String) (row : Ty)
   | duplicateLabels (path : List Nat)
   | affineBinderOverused (path : List Nat) (index count : Nat)
+  /-- The `linear` parameter of the lambda at `path` is not used: exact discharge fails at its binder. -/
+  | linearBinderUnused (path : List Nat)
+  /-- The argument at `path` uses the `linear` hypothesis `index`, and the parameter it is passed to is
+  `quantity`, which may drop or share it. -/
+  | linearArgumentDropped (path : List Nat) (index : Nat) (quantity : Quantity)
   | capturesNotShareable (path : List Nat)
   | notShareable (path : List Nat) (type : Ty)
   | activityMisplaced (path : List Nat) (type : Ty)
@@ -65,6 +70,19 @@ def overuse (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :
   match firstOveruse context uses with
   | some (index, count) => .affineBinderOverused path index count
   | none => .invalidContext path
+
+/-- The first `linear` hypothesis a usage vector uses. -/
+def firstLinearUse (context : Context) (uses : Uses) : Option Nat :=
+  ((context.zip uses).zipIdx.find? (fun entry => entry.1.2 != 0 && entry.1.1.quantity == .linear)).map
+    (fun entry => entry.2)
+
+/-- Why `argumentAllowed` failed: a `linear` hypothesis passed to a non-`linear` parameter, by name,
+before the sharing and activity premises. -/
+def argumentRefusal (path : List Nat) (quantity : Quantity) (context : Context) (type : Ty) (uses : Uses) :
+    CheckRefusal :=
+  match quantity, firstLinearUse context uses with
+  | .linear, _ | _, none => .notShareable path type
+  | _, some index => .linearArgumentDropped path index quantity
 
 /-- A type with its declared alias head unfolded as far as it goes: the canonical
 point of its orbit after as many steps as there are bounds. -/
@@ -244,7 +262,8 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
       let ⟨hv⟩ ← need (validContext assumptions.shareableVariables (binder :: context)) (.invalidContext path)
       let ⟨hc⟩ ← need (reusableAllowed assumptions annotation.reuse context checked.uses.tail)
         (.capturesNotShareable path)
-      pure ⟨checked.uses.tail, .lambda checked.derivation hs hv hc⟩
+      let ⟨hf⟩ ← need (annotation.parameter.fits (checked.uses.headD 0)) (.linearBinderUnused path)
+      pure ⟨checked.uses.tail, .lambda checked.derivation hs hv hc hf⟩
     match mode with
     | .synth =>
       match annotations path with
@@ -270,7 +289,8 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
     match shape : callable (representativeHead assumptions annotations path fn.type) with
     | .arrow reuse quantity domain codomain =>
       let arg ← elaborate assumptions annotations context (path ++ [1]) argument (.check domain)
-      let ⟨ha⟩ ← need (argumentAllowed assumptions quantity context domain arg.uses) (.notShareable (path ++ [1]) domain)
+      let ⟨ha⟩ ← need (argumentAllowed assumptions quantity context domain arg.uses)
+        (argumentRefusal (path ++ [1]) quantity context domain arg.uses)
       finish assumptions annotations path ⟨codomain, addUses fn.uses arg.uses,
         .application (.conversion fn.derivation (sameType_representativeHead _ annotations path _)) arg.derivation shape rfl ha⟩ mode
     | _ => throw (.shapeMismatch (path ++ [0]) "function" fn.type)

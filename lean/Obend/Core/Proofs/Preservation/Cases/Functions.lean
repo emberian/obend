@@ -44,7 +44,7 @@ theorem immediate_value_typed {assumptions : Assumptions} {context : Context}
     simp only [immediateValue,scalarValue,Option.some.injEq] at found
     subst value; exact .label label
   case lambda =>
-    intro context body annotation uses bodyTyped safe valid captures ih types env envTyped value found
+    intro context body annotation uses bodyTyped safe valid captures _fits ih types env envTyped value found
     simp only [immediateValue,Option.some.injEq] at found
     subst value; exact .closure envTyped bodyTyped safe valid captures
   case conversion =>
@@ -197,7 +197,8 @@ termination of that knot is required by this construction. -/
     (specCaptures : reusableCaptures assumptions.shareableVariables context su = true) :
     ReusableTerm assumptions (⟨target,.unrestricted⟩ :: context)
       (.app (.app (spec.rename Nat.succ) (.bound 0)) (seed.rename Nat.succ)) target := by
-  obtain ⟨-,seedFacts⟩ : inherited.isComputation = false ∧ (inherited.shareableUnder assumptions.shareableVariables = true ∧
+  obtain ⟨-,seedFacts⟩ : (inherited.isComputation = false ∧ linearFree context iu = true) ∧
+      (inherited.shareableUnder assumptions.shareableVariables = true ∧
       reusableCaptures assumptions.shareableVariables context iu = true) := by
     simpa [argumentAllowed] using seedAllowed
   let binding : Binding := ⟨target,.unrestricted⟩

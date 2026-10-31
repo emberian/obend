@@ -394,10 +394,11 @@ def reusableAllowed (assumptions : Assumptions) (reuse : Reuse)
   reuse != .reusable || reusableCaptures assumptions.shareableVariables context uses
 
 /-- An argument becomes a shared heap thunk, so it is never an activity (rule
-`effect-as-argument`); an unrestricted one must also be shareable. -/
+`effect-as-argument`); an unrestricted one must also be shareable; one that uses a `linear`
+hypothesis goes only to a `linear` parameter (`linearFree`). -/
 def argumentAllowed (assumptions : Assumptions) (quantity : Quantity)
     (context : Context) (type : Ty) (uses : Uses) : Bool :=
-  !type.isComputation && (quantity != .unrestricted ||
+  !type.isComputation && (quantity == .linear || linearFree context uses) && (quantity != .unrestricted ||
     (type.shareableUnder assumptions.shareableVariables &&
       reusableCaptures assumptions.shareableVariables context uses))
 
@@ -447,6 +448,7 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       safeUses (⟨annotation.domain, annotation.parameter⟩ :: context) uses = true →
       validContext assumptions.shareableVariables (⟨annotation.domain, annotation.parameter⟩ :: context) = true →
       reusableAllowed assumptions annotation.reuse context uses.tail = true →
+      annotation.parameter.fits (uses.headD 0) = true →
       PartialTyping assumptions context (.lam body)
         (.arrow annotation.reuse annotation.parameter annotation.domain annotation.codomain) uses.tail
   | conversion {context : Context} {term : Term} {actual expected : Ty} {uses : Uses} :
@@ -617,8 +619,10 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
         if hs : safeUses (⟨annotation.domain, annotation.parameter⟩ :: context) result.uses = true then
           if hv : validContext assumptions.shareableVariables (⟨annotation.domain, annotation.parameter⟩ :: context) = true then
             if hc : reusableAllowed assumptions annotation.reuse context result.uses.tail = true then
-              some ⟨.arrow annotation.reuse annotation.parameter annotation.domain annotation.codomain, result.uses.tail,
-                .lambda (.conversion result.derivation (agree_sameType ht)) hs hv hc⟩
+              if hf : annotation.parameter.fits (result.uses.headD 0) = true then
+                some ⟨.arrow annotation.reuse annotation.parameter annotation.domain annotation.codomain, result.uses.tail,
+                  .lambda (.conversion result.derivation (agree_sameType ht)) hs hv hc hf⟩
+              else none
             else none
           else none
         else none

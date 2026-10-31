@@ -12,8 +12,13 @@ astra/ASTRA-EVAL-20261031.md lines 55–67 propose).
 * sums: `A` an explicit closed sum whose every label `B` has, each payload coerced inside its
   arm and re-injected. Arm payloads are bound unrestricted, so they must be shareable;
 * functions: the η-wrapper `λf. λy. c (f (d y))`, with the reuse fixed and the parameter
-  quantities gated by `wrapperAllowed`, the matrix Astra measured on the actual checker
-  (line 55); `wrapper_matrix_measured` re-measures every cell;
+  quantities gated by `wrapperAllowed`, the matrix the actual checker admits
+  (`Obend.Elab.Proofs.CoerceProbes` re-measures every cell). Since `linear` separates from
+  `affine` in the kernel (`PartialTyping.lambda` requires `Quantity.fits`, `argumentAllowed`
+  requires `linearFree` for a non-`linear` parameter), a wrapper whose parameter is `linear`
+  must hand it to a `linear` parameter: relabelling a `linear` hypothesis as `affine` (or
+  `erased`) is refused by name (`launders`). When the wrapper's parameter is `linear`, its
+  domain and codomain components are emitted at `linear` too (`Emitted.once`);
 * nothing else: activities, custody, scalars of different heads, and recursive coercions
   between aliases whose unfoldings differ are refused by name.
 
@@ -41,6 +46,9 @@ inductive CoercionRefusal where
   | activityField (name : String) (member : Ty)
   /-- A quantity pair outside the measured η-wrapper matrix, or a change of reuse. -/
   | quantityNotWrappable (source target : Quantity)
+  /-- The wrapper's `linear` parameter would be handed to a `source` parameter that may drop it:
+  a once-resource laundered through a coercion. -/
+  | launders (source target : Quantity)
   | reuseChanged (source target : Reuse)
   /-- Two aliases, or an alias and a constructor, that agree on no finite unfolding here. -/
   | recursive (source target : Ty)
@@ -49,12 +57,22 @@ inductive CoercionRefusal where
   | fuel (source target : Ty)
   deriving Repr
 
+/-- A wrapper with a `linear` parameter around a callee that may drop its argument. -/
+def launders : Quantity → Quantity → Bool
+  | .erased, .linear | .affine, .linear => true
+  | _, _ => false
+
 /-- The η-wrapper matrix: `λy. f y` wraps `f : q → C` as a `q' → C` (rows `q`, columns `q'`,
-order erased, affine, linear, unrestricted). Measured: `wrapper_matrix_measured`. -/
+order erased, affine, linear, unrestricted). Measured in `CoerceProbes`: `erased` is never a
+wrapper's parameter (it is used), `unrestricted` only wraps `unrestricted`, and a `linear`
+parameter only wraps a `linear` one (`launders` names the two cells that changed when `linear`
+separated from `affine`). -/
 def wrapperAllowed : Quantity → Quantity → Bool
   | _, .erased => false
   | .unrestricted, .unrestricted => true
   | .unrestricted, _ => false
+  | .linear, _ => true
+  | _, .linear => false
   | _, _ => true
 
 /-- An emitted coercion: a closed lambda, its annotations, and its parameter's quantity. -/
@@ -65,6 +83,16 @@ structure Emitted where
 
 /-- Its type. -/
 def Emitted.type (e : Emitted) (source target : Ty) : Ty := .arrow .reusable e.quantity source target
+
+/-- The same coercion with an `affine` parameter declared `linear`: it is applied to an expression
+that uses a `linear` hypothesis, so its parameter must be `linear` too. The kernel then demands
+exact discharge of it (a coercion that drops it is refused at its binder); an `unrestricted`
+parameter is left as is and refused by the kernel at the application. -/
+def Emitted.once (e : Emitted) : Emitted :=
+  match e.quantity, e.tree with
+  | .affine, .node (some annotation) children =>
+    ⟨e.term, .node (some { annotation with parameter := .linear }) children, .linear⟩
+  | _, _ => e
 
 /-- The explicit fields of a closed row, or nothing. -/
 def closedFields : Ty → Option (List (String × Ty))
@@ -116,12 +144,13 @@ def emit (a : Assumptions) : Nat → Ty → Ty → Except CoercionRefusal Emitte
             [.node none [.node none [], .node none (parts.map fun (_, c) => .node none [c.tree])]], .affine⟩
     | .arrow r q d c, .arrow r' q' d' c' =>
       if r ≠ r' then .error (.reuseChanged r r')
+      else if launders q q' then .error (.launders q q')
       else if !wrapperAllowed q q' then .error (.quantityNotWrappable q q')
       else do
-        let domainPart ← component a fuel d' d (.bound 0) (.node none [])
+        let domainPart ← component a fuel d' d (.bound 0) (.node none []) (q' == .linear)
         let codomainPart ← component a fuel c c'
           (.app (.bound 1) domainPart.term)
-          (.node (some (hint source c)) [.node none [], domainPart.tree])
+          (.node (some (hint source c)) [.node none [], domainPart.tree]) (q' == .linear)
         let outer : Quantity := if r == .reusable then .unrestricted else .affine
         pure ⟨.lam (.lam codomainPart.term),
           .node (some ⟨source, target, outer, .reusable⟩)
@@ -129,12 +158,14 @@ def emit (a : Assumptions) : Nat → Ty → Ty → Except CoercionRefusal Emitte
     | .variable _, _ | _, .variable _ => .error (.recursive source target)
     | _, _ => .error (.notCoercible source target)
 
-/-- A component `source → target` applied to `expression` (with its tree). -/
+/-- A component `source → target` applied to `expression` (with its tree); `once` when the
+expression uses a `linear` hypothesis. -/
 def component (a : Assumptions) (fuel : Nat) (source target : Ty) (expression : Term)
-    (expressionTree : AnnotationTree) : Except CoercionRefusal Component :=
+    (expressionTree : AnnotationTree) (once : Bool := false) : Except CoercionRefusal Component :=
   if sameType a source target then .ok ⟨expression, expressionTree, false⟩
   else do
-    let nested ← emit a fuel source target
+    let emitted ← emit a fuel source target
+    let nested := if once then emitted.once else emitted
     pure ⟨.app nested.term expression,
       .node (some (hint (nested.type source target) target)) [nested.tree, expressionTree],
       nested.quantity == .unrestricted⟩
@@ -199,9 +230,10 @@ theorem emit_identity_checks {a : Assumptions} {source target : Ty} (valid : a.v
   have safe : safeUses [⟨source, .affine⟩] [1] = true := rfl
   have validCtx : validContext a.shareableVariables [⟨source, .affine⟩] = true := rfl
   have captures : reusableAllowed a .reusable [] [] = true := rfl
+  have fits : Quantity.affine.fits 1 = true := rfl
   simp [checkAgainst, checkAt, elaborate, identityEmitted, Emitted.type, treeAnnotations,
     AnnotationTree.lookup, AnnotationTree.child, emptyTree, finish, agrees, sameType_refl, need_ok, safe,
-    validCtx, captures, valid, bind, Except.bind, pure, Except.pure, variableUses, checkedSynth,
+    validCtx, captures, need_ok fits, valid, bind, Except.bind, pure, Except.pure, variableUses, checkedSynth,
     safeUses, validContext, zeroUses, List.getElem?_cons_zero, List.range_succ, safeQuantity, reusableAllowed,
     reusableCaptures, Except.map, Functor.map]
 
@@ -302,10 +334,12 @@ theorem width_checks {a : Assumptions} {source : Ty} {fields : List (String × T
       simp [validContext, sharing.resolve_left long]
   have captures : reusableAllowed a .reusable [] members.uses.tail = true := by
     rw [membersUses]; rfl
+  have fits : (widthQuantity fields).fits (members.uses.headD 0) = true := by
+    rw [membersUses]; unfold widthQuantity; split <;> simp_all [Quantity.fits]
   have top : safeUses [] members.uses.tail = true := by rw [membersUses]; rfl
   have topValid : validContext a.shareableVariables [] = true := rfl
   simp [checkAgainst, checkAt, elaborate, widthTerm, root, recordRoot, introduce, membersOk, finish,
-    checkedSynth, sameType_refl, need_ok safe, need_ok validCtx, need_ok captures, need_ok valid, hint,
+    checkedSynth, sameType_refl, need_ok safe, need_ok validCtx, need_ok captures, need_ok fits, need_ok valid, hint,
     need_ok top, need_ok topValid, bind, Except.bind, pure, Except.pure, annotations, Except.map, Functor.map]
 
 end Obend.Elab.Coerce
