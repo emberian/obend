@@ -26,7 +26,7 @@ public import Obend.Core.Data
 public import Obend.Core.Checkpoint
 public import Obend.Spec.DataWire
 public import Obend.Spec.Capture
-@[expose] public section
+public section
 namespace Obend.Spec.Preview
 open Lean (Json toJson)
 open Obend.Core.Check

@@ -25,7 +25,7 @@ public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Term
 public import Obend.AssertCompiled
-@[expose] public section
+public section
 namespace Obend.Spec.Proofs.SpecificationClosure
 open Lean (Json toJson)
 open Obend.Core.Ty

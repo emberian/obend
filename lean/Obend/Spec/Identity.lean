@@ -27,7 +27,7 @@ public import Obend.Spec.Elaborate
 public import Obend.Spec.FrontEnd
 public import Obend.Spec.Sha256
 meta import Obend.Spec.Sha256
-@[expose] public section
+public section
 namespace Obend.Spec.Identity
 open Lean Elab Term
 set_option autoImplicit false

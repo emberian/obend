@@ -14,7 +14,7 @@ implementation against pommette's published outputs). Each is a compiled theorem
 public import Obend.Spec.C4
 public meta import Obend.Spec.C4
 public import Obend.AssertCompiled
-@[expose] public section
+public section
 namespace Obend.Spec.Proofs.C4Vectors
 open Obend.Spec.C4
 set_option autoImplicit false

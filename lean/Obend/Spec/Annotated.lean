@@ -14,7 +14,7 @@ commit 092027a2.
 public import Lean
 public import Obend.Core.Term
 public import Obend.Spec.Types
-@[expose] public section
+public section
 namespace Obend.Spec.Annotated
 open Lean (Json toJson)
 open Obend.Spec.Types

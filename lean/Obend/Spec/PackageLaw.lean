@@ -13,18 +13,18 @@ refusal names the ancestor package and its clause; and a child only narrows
 of the child.
 -/
 public import Obend.Law.Inherit
-@[expose] public section
+public section
 namespace Obend.Spec.PackageLaw
 open Obend.Law
 open Obend.Core.Term (Term)
 set_option autoImplicit false
 
 /-- The name a refusal gives clause `clause` of package `pkg`. -/
-def clauseName (pkg clause : String) : String := pkg ++ " law " ++ clause
+@[expose] def clauseName (pkg clause : String) : String := pkg ++ " law " ++ clause
 
 /-- The named clauses of a precedence list of packages, each package's laws (`laws pkg`, in its
 source order) under `clauseName`. -/
-def packageClauses (laws : String → List (String × Term)) (order : List String) : List (String × Term) :=
+@[expose] def packageClauses (laws : String → List (String × Term)) (order : List String) : List (String × Term) :=
   order.flatMap fun pkg => (laws pkg).map fun (clause, t) => (clauseName pkg clause, t)
 
 /-- Why the effective package law is not built: a clause with a free index would mean something
@@ -34,7 +34,7 @@ structure OpenClause where
   deriving DecidableEq, Repr
 
 /-- The effective law of a precedence list of packages: every clause closed, then `effective`. -/
-def effectivePackages (laws : String → List (String × Term)) (order : List String) : Except OpenClause Term :=
+@[expose] def effectivePackages (laws : String → List (String × Term)) (order : List String) : Except OpenClause Term :=
   let clauses := packageClauses laws order
   match clauses.find? (fun p => !closedB p.2) with
   | some p => .error ⟨p.1⟩

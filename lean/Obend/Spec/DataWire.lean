@@ -9,7 +9,7 @@ there and is structural here (SHIP §5: no `partial def` on a deployed path).
 -/
 public import Lean
 public import Obend.Core.Data
-@[expose] public section
+public section
 namespace Obend.Spec.DataWire
 open Lean (Json toJson)
 open Obend.Core.Data (Data)

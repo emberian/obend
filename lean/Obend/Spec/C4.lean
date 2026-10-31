@@ -28,14 +28,14 @@ every suffix node after the head has its whole precedence list as a suffix of th
 SUFFIX PROPERTY). pommette's published vectors, its refusals and 4000 seeded DAGs are compiled
 tests in `Obend.Spec.Proofs.C4Vectors`.
 -/
-@[expose] public section
+public section
 namespace Obend.Spec.C4
 set_option autoImplicit false
 
 /-- Why a linearization refuses: the graph has no C4 linearization at `head`. -/
 inductive Refusal where
   | inconsistent (head : List String) (detail : String)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 def Refusal.message : Refusal → String
   | .inconsistent head detail => "inconsistent precedence graph at " ++ String.intercalate "," head ++ ": " ++ detail
@@ -50,24 +50,24 @@ structure Graph where
   isSuffix : String → Bool
 
 /-- A list from its first suffix node on. -/
-def Graph.suffixPart (g : Graph) (l : List String) : List String := l.dropWhile fun x => !g.isSuffix x
+@[expose] def Graph.suffixPart (g : Graph) (l : List String) : List String := l.dropWhile fun x => !g.isSuffix x
 
 /-- A parent's suffix tail: its precedence list from its first suffix node on. -/
-def Graph.tailAt (g : Graph) (p : String) : List String := g.suffixPart (g.precedence p)
+@[expose] def Graph.tailAt (g : Graph) (p : String) : List String := g.suffixPart (g.precedence p)
 
 /-- No name twice. -/
-def nodupB : List String → Bool
+@[expose] def nodupB : List String → Bool
   | [] => true
   | x :: xs => !xs.contains x && nodupB xs
 
 /-! ## 1. The suffix tail -/
 
 /-- Two suffix tails on one chain: the longer, which has the other as a list suffix. -/
-def joinTail (a b : List String) : Option (List String) :=
+@[expose] def joinTail (a b : List String) : Option (List String) :=
   if b.isSuffixOf a then some a else if a.isSuffixOf b then some b else none
 
 /-- The suffix tail of a node with these parents: every parent's tail joined, in order. -/
-def tailOf (g : Graph) (head : List String) : List String → List String → Except Refusal (List String)
+@[expose] def tailOf (g : Graph) (head : List String) : List String → List String → Except Refusal (List String)
   | acc, [] => .ok acc
   | acc, p :: ps =>
     match joinTail acc (g.tailAt p) with
@@ -79,11 +79,11 @@ def tailOf (g : Graph) (head : List String) : List String → List String → Ex
 
 /-- A candidate with its trailing suffix-tail part removed, when that part keeps the tail's order
 and nothing before it is in the tail. -/
-def clean (tail l : List String) : Option (List String) :=
+@[expose] def clean (tail l : List String) : Option (List String) :=
   if (l.dropWhile fun x => !tail.contains x).isSublist tail then some (l.takeWhile fun x => !tail.contains x)
   else none
 
-def cleanAll (tail : List String) : List (List String) → Option (List (List String))
+@[expose] def cleanAll (tail : List String) : List (List String) → Option (List (List String))
   | [] => some []
   | l :: ls =>
     match clean tail l, cleanAll tail ls with
@@ -93,22 +93,22 @@ def cleanAll (tail : List String) : List (List String) → Option (List (List St
 /-! ## 3. The C3 merge -/
 
 /-- The first head, in candidate order, that is in no candidate's tail. -/
-def nextHead (ls : List (List String)) : Option String :=
+@[expose] def nextHead (ls : List (List String)) : Option String :=
   ls.findSome? fun l => match l with
     | c :: _ => if ls.any (fun l' => l'.tail.contains c) then none else some c
     | [] => none
 
 /-- `l` without `c` at its front. -/
-def popOne (c : String) : List String → List String
+@[expose] def popOne (c : String) : List String → List String
   | x :: t => if x == c then t else x :: t
   | [] => []
 
 /-- Remove `c` from the front of every candidate it heads. -/
-def pop (c : String) (ls : List (List String)) : List (List String) := ls.map (popOne c)
+@[expose] def pop (c : String) (ls : List (List String)) : List (List String) := ls.map (popOne c)
 
 /-- The merge, bounded by `n`; `merge` passes the candidates' total length, which no merge exceeds
 (each step removes an element). -/
-def mergeN (head : List String) : Nat → List (List String) → Except Refusal (List String)
+@[expose] def mergeN (head : List String) : Nat → List (List String) → Except Refusal (List String)
   | 0, ls => if ls.all List.isEmpty then .ok [] else inconsistent head "merge bound"
   | n + 1, ls =>
     if ls.all List.isEmpty then .ok [] else
@@ -120,14 +120,14 @@ def mergeN (head : List String) : Nat → List (List String) → Except Refusal 
       | .error e => .error e
 
 /-- The C3 merge of the candidates. -/
-def merge (head : List String) (ls : List (List String)) : Except Refusal (List String) :=
+@[expose] def merge (head : List String) (ls : List (List String)) : Except Refusal (List String) :=
   mergeN head (ls.map List.length).sum ls
 
 /-! ## 4. The linearization -/
 
 /-- The C4 precedence list of `head` (usually `[x]`) whose parents are given as local chains, and
 its most specific suffix node. -/
-def linearize (g : Graph) (head : List String) (parents : List (List String)) :
+@[expose] def linearize (g : Graph) (head : List String) (parents : List (List String)) :
     Except Refusal (List String × Option String) :=
   let ps := parents.flatten
   match tailOf g head [] ps with

@@ -116,7 +116,7 @@ public theorem stale_iff_blocked (v : View) (n : String) (m pin : Nat) (version 
     simp [packages, Pin.supports, Pin.ref, hh, Obend.Intention.slot, Slot.read, Slot.dead]
 
 /-- An extension pin is current at every view: a hash is fixed forever. -/
-public theorem extension_current (v : View) (n h : String) : (Pin.extension n h).current v = true := rfl
+public theorem extension_current (v : View) (n h : String) : (Pin.extension n h).current v = true := by rfl
 
 /-- A pin of an intention is current exactly when the record line it read still holds. -/
 theorem intention_current (v : View) (n : String) (m pin : Nat) (version hash : String) :

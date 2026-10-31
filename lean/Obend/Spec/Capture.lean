@@ -22,7 +22,7 @@ public import Obend.Spec.Elaborate
 public import Obend.Spec.FrontEnd
 public import Obend.Spec.Sha256
 public import Obend.Spec.Identity
-@[expose] public section
+public section
 namespace Obend.Spec.Capture
 open Lean (Json toJson)
 open Obend.Spec.FrontEnd

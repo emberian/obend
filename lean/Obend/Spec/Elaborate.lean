@@ -24,7 +24,7 @@ public import Obend.Spec.Annotated
 public import Obend.Spec.C4
 public import Obend.Spec.Contract
 public import Obend.Core.Code
-@[expose] public section
+public section
 namespace Obend.Spec.Elaborate
 open Lean (Json toJson)
 open Obend.Spec.Syntax Obend.Spec.Types Obend.Spec.Annotated

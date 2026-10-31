@@ -29,7 +29,7 @@ public import Obend.Core.Proofs.Preservation
 public import Obend.Core.Proofs.DataSoundness
 public import Obend.Core.MachineTyping
 public import Obend.AssertCompiled
-@[expose] public section
+public section
 namespace Obend.Spec.Proofs.FrontEndAdequacy
 open Lean (Json toJson)
 open Obend.Spec.FrontEnd

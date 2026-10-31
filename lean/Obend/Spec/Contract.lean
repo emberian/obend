@@ -24,7 +24,7 @@ so the theorems (`Obend.Spec.Proofs.Contract`) are about the checks that run. Po
 Rows are lists of `(name, type)`; the elaborator passes canonical types, so `==` on a type is
 the elaborator's `sameTy`. -/
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Spec.Contract
 set_option autoImplicit false
 
@@ -33,11 +33,11 @@ abbrev Row (τ : Type) := List (String × τ)
 variable {τ : Type} [BEq τ]
 
 /-- The type a row gives `name`: its first entry of that name. -/
-def get? (row : Row τ) (name : String) : Option τ :=
+@[expose] def get? (row : Row τ) (name : String) : Option τ :=
   (row.find? (·.1 == name)).map (·.2)
 
 /-- The members of `required` that `actual` lacks or has at another type. -/
-def missing (actual required : Row τ) : List String :=
+@[expose] def missing (actual required : Row τ) : List String :=
   required.filterMap fun (n, t) => if get? actual n == some t then none else some n
 
 /-- The members a layer provides at a type other than the one the row beneath gives them:
@@ -73,7 +73,7 @@ def Layer.leaves (layer : Layer τ) (beneath : Row τ) : Row τ :=
 
 /-- The clauses of `C_L(S, I)` about what the layer READS: its assumptions about the final self,
 then what it consumes from the row beneath. -/
-def checkBounds (self beneath : Row τ) (layer : Layer τ) : Except Refusal Unit :=
+@[expose] def checkBounds (self beneath : Row τ) (layer : Layer τ) : Except Refusal Unit :=
   let unmetSelf := missing self layer.assumes
   if !unmetSelf.isEmpty then .error (.selfBound layer.name unmetSelf) else
   let unmetSuper := missing beneath layer.consumes
@@ -83,17 +83,17 @@ def checkBounds (self beneath : Row τ) (layer : Layer τ) : Except Refusal Unit
 /-- The clause of `C_L(S, I)` about what the layer WRITES: an addition needs the member absent
 beneath, an override needs it at the same type, and a type change is a replacement, which no
 source form declares, so it is refused by name. On success, `F_L(S, I)`. -/
-def checkProvides (beneath : Row τ) (layer : Layer τ) : Except Refusal (Row τ) :=
+@[expose] def checkProvides (beneath : Row τ) (layer : Layer τ) : Except Refusal (Row τ) :=
   let changed := replaced beneath layer.provides
   if !changed.isEmpty then .error (.replaceUndeclared layer.name changed) else
   .ok (layer.leaves beneath)
 
 /-- `C_L(S, I)`, deciding which clause fails first; on success, `F_L(S, I)`. -/
-def checkLayer (self beneath : Row τ) (layer : Layer τ) : Except Refusal (Row τ) :=
+@[expose] def checkLayer (self beneath : Row τ) (layer : Layer τ) : Except Refusal (Row τ) :=
   (checkBounds self beneath layer).bind fun _ => checkProvides beneath layer
 
 /-- The chain's contract threaded from `seed`: the row every layer leaves, or the first refusal. -/
-def run (self : Row τ) : Row τ → List (Layer τ) → Except Refusal (Row τ)
+@[expose] def run (self : Row τ) : Row τ → List (Layer τ) → Except Refusal (Row τ)
   | beneath, [] => .ok beneath
   | beneath, layer :: rest => (checkLayer self beneath layer).bind fun next => run self next rest
 
@@ -101,7 +101,7 @@ def run (self : Row τ) : Row τ → List (Layer τ) → Except Refusal (Row τ)
 else a type mismatch. `names` lists a row's member names without repetition. -/
 def names (row : Row τ) : List String := (row.map (·.1)).eraseDups
 
-def close (self final : Row τ) : Except Refusal Unit :=
+@[expose] def close (self final : Row τ) : Except Refusal Unit :=
   if missing final self |>.isEmpty then
     if (names final).all (fun n => (get? self n).isSome) then .ok ()
     else .error (.seedExtra ((names final).filter fun n => (get? self n).isNone))
@@ -113,7 +113,7 @@ def close (self final : Row τ) : Except Refusal Unit :=
       if !extra.isEmpty then .error (.seedExtra extra) else .error .providedMismatch
 
 /-- The composition contract discharged at `fix`. -/
-def discharge (self seed : Row τ) (chain : List (Layer τ)) : Except Refusal Unit :=
+@[expose] def discharge (self seed : Row τ) (chain : List (Layer τ)) : Except Refusal Unit :=
   (run self seed chain).bind (close self)
 
 end Obend.Spec.Contract

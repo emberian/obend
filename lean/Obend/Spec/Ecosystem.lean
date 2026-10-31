@@ -32,7 +32,7 @@ public import Obend.Spec.Syntax
 public import Obend.Spec.C4
 public import Obend.Slot
 public import Obend.Intention
-@[expose] public section
+public section
 namespace Obend.Spec.Ecosystem
 open Obend.Spec.Syntax (ParentRef)
 set_option autoImplicit false
@@ -72,7 +72,7 @@ inductive Pin where
   | intention (name : String) (major pin : Nat) (version hash : String)
   /-- `name@0xhash`: no record is read -/
   | extension (name hash : String)
-  deriving Inhabited, Repr, DecidableEq
+  deriving Inhabited, Repr, @[expose] DecidableEq
 
 def Pin.name : Pin → String
   | .intention n .. => n
@@ -96,7 +96,7 @@ inductive Refusal where
   | fuel
   /-- the closure's own check (`covered`) failed: a package on the precedence list is unpinned -/
   | unpinned (name : String)
-  deriving Inhabited, Repr, DecidableEq
+  deriving Inhabited, Repr, @[expose] DecidableEq
 
 def Refusal.message : Refusal → String
   | .unknownIntention n m => "refused (unknown-intention): " ++ n ++ "@^" ++ toString m ++ " has no record line in this workspace"
@@ -280,7 +280,7 @@ end
 
 /-- Every package on the precedence list other than the entry is pinned, every chosen release is on
 it, and every pin is current: the check `close` makes before it returns. -/
-def covered (v : View) (entry : String) (cl : Closure) (order : List String) : Option Refusal :=
+@[expose] def covered (v : View) (entry : String) (cl : Closure) (order : List String) : Option Refusal :=
   match order.find? (fun n => n != entry && !cl.pins.any (·.name == n)) with
   | some n => some (.unpinned n)
   | none =>
@@ -292,7 +292,7 @@ def covered (v : View) (entry : String) (cl : Closure) (order : List String) : O
       | none => none
 
 /-- The workspace closure of `entry` at view `v`. -/
-def close (v : View) (entry : Release) : Except Refusal Closure := do
+@[expose] def close (v : View) (entry : Release) : Except Refusal Closure := do
   -- A recursion path visits each package at most once (the cycle check) and walks at most every
   -- parent list once per package on it: the fuel is that bound, from the input.
   let parentCount := ((entry :: v.releases).map (·.parents.length)).sum
@@ -323,7 +323,7 @@ inductive Admission where
   /-- every pin current, yet the re-derived closure differs (the record grew a parent the turn did
   not resolve) -/
   | diverged
-  deriving Inhabited, Repr, DecidableEq
+  deriving Inhabited, Repr, @[expose] DecidableEq
 
 /-- Admission re-derives the turn's closure at the view: a moved pin is stale by name; otherwise the
 closure at the view must be the turn's. -/

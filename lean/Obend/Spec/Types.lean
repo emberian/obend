@@ -11,7 +11,7 @@ row lookup and overlay, substitution of type variables (`PTy.subst`) and the typ
 type computation, not the elaborator.
 -/
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Spec.Types
 open Lean (Json toJson)
 set_option autoImplicit false
@@ -30,8 +30,8 @@ def PTy.row : List (String × PTy) → PTy
   | [] => .emptyRow
   | (n, t) :: rest => .field n t (PTy.row rest)
 
-def arrowTy (d c : PTy) (parameter := "unrestricted") (reuse := "reusable") : PTy := .arrow reuse parameter d c
-def extensionTy (t : PTy) : PTy := arrowTy t (arrowTy t t)
+@[expose] def arrowTy (d c : PTy) (parameter := "unrestricted") (reuse := "reusable") : PTy := .arrow reuse parameter d c
+@[expose] def extensionTy (t : PTy) : PTy := arrowTy t (arrowTy t t)
 
 def PTy.insertCanonical : PTy → String → PTy → PTy
   | .field prior old tail, name, member =>
@@ -52,7 +52,7 @@ def sameTy : Option PTy → Option PTy → Bool
   | some a, some b => a.canonical == b.canonical
   | _, _ => false
 
-def callable : Option PTy → Option PTy
+@[expose] def callable : Option PTy → Option PTy
   | some (.specification _ e) => callable (some e)
   | t => t
 
@@ -109,7 +109,7 @@ one SpecMeta type, whatever the operands' metadata) and whose extension runs `ri
 over `left` under one final self. It depends on the operands only through their
 callable extension types, so composing two `Specification<T>`/`Extension<T>` values
 gives `Specification<T>` (`composeTy_closed`). -/
-def composeTy (metaTy : PTy) (left right : Option PTy) : Option PTy :=
+@[expose] def composeTy (metaTy : PTy) (left right : Option PTy) : Option PTy :=
   match callable left, callable right with
   | some (.arrow _ _ ld (.arrow _ _ li _)), some (.arrow _ _ _ (.arrow _ _ _ rp)) =>
     some (.specification metaTy (arrowTy ld (arrowTy li rp)))

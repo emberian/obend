@@ -38,7 +38,7 @@ law must admit its own amendment) is satisfied for package laws by the upgrade p
 public import Obend.Spec.Law
 public import Obend.Law.Std
 public import Obend.Core.Bidirectional
-@[expose] public section
+public section
 namespace Obend.Spec.LawCompile
 open Obend.Law
 open Obend.Spec.Law (LawRef LawExpr Facts)
@@ -56,14 +56,14 @@ inductive Kind where
   deriving DecidableEq, Repr
 
 /-- How field `f` of the state type `S` reads: a natural, a boolean, or not at all. -/
-def fieldKind (S : Ty) (f : String) : Option Kind :=
+@[expose] def fieldKind (S : Ty) (f : String) : Option Kind :=
   match Obend.Core.Bidirectional.rowMember S f with
   | some .natural => some .nat
   | some .boolean => some .bool
   | _ => none
 
 /-- A field's term as the natural `scalarOf` reads: a boolean is `1` or `0`. -/
-def scalarRead : Kind → Term → Term
+@[expose] def scalarRead : Kind → Term → Term
   | .nat, t => t
   | .bool, t => .ifBool t (natT 1) (natT 0)
 
@@ -74,32 +74,32 @@ structure Read where
   value : Term
 
 /-- `t : optNatTy` is `some`. -/
-def isSomeT (t : Term) : Term := .case t [("none", falseT), ("some", trueT)]
+@[expose] def isSomeT (t : Term) : Term := .case t [("none", falseT), ("some", trueT)]
 /-- The payload of `t : optNatTy` (`0` at `none`). -/
-def payloadT (t : Term) : Term := .case t [("none", natT 0), ("some", .bound 0)]
+@[expose] def payloadT (t : Term) : Term := .case t [("none", natT 0), ("some", .bound 0)]
 
 /-- A field read at the type `S` gives it. -/
-def fieldRead (S : Ty) (f : String) (t : Term) : Read :=
+@[expose] def fieldRead (S : Ty) (f : String) (t : Term) : Read :=
   match fieldKind S f with
   | some k => ⟨trueT, scalarRead k t⟩
   | none => ⟨falseT, natT 0⟩
 
 /-- An optional request fact. -/
-def optRead (t : Term) : Read := ⟨isSomeT t, payloadT t⟩
+@[expose] def optRead (t : Term) : Read := ⟨isSomeT t, payloadT t⟩
 
 /-- What a reference reads at cursor `a`. -/
-def refRead (S : Ty) (a : At) : LawRef → Read
+@[expose] def refRead (S : Ty) (a : At) : LawRef → Read
   | .field f => fieldRead S f (a.newF f)
   | .subject => optRead (a.reqF "subject")
   | .caller => optRead (a.reqF "caller")
   | .height => ⟨trueT, a.reqF "height"⟩
   | .turn => ⟨trueT, a.reqF "turn"⟩
 
-def orT (a b : Term) : Term := .ifBool a trueT b
-def impliesT (a b : Term) : Term := .ifBool a b trueT
+@[expose] def orT (a b : Term) : Term := .ifBool a trueT b
+@[expose] def impliesT (a b : Term) : Term := .ifBool a b trueT
 
 /-- Both readings present, and `cmp` of their values. -/
-def both (x y : Read) (cmp : Term → Term → Term) : Term :=
+@[expose] def both (x y : Read) (cmp : Term → Term → Term) : Term :=
   andT x.present (andT y.present (cmp x.value y.value))
 
 /-! ## The condition and the law -/
@@ -113,14 +113,14 @@ inductive OldSrc where
   deriving DecidableEq, Repr
 
 /-- The old state's field `f` at cursor `a`. -/
-def oldRead (src : OldSrc) (a : At) (f : String) : Term :=
+@[expose] def oldRead (src : OldSrc) (a : At) (f : String) : Term :=
   match src with
   | .same => a.newF f
   | _ => a.oldF f
 
 /-- The fragment as a boolean Core4 term at cursor `a`; `src` says where the act's old state comes
 from (`monotone`, `writeOnce` read it). -/
-def cond (S : Ty) (src : OldSrc) (a : At) : LawExpr → Term
+@[expose] def cond (S : Ty) (src : OldSrc) (a : At) : LawExpr → Term
   | .eqC r c =>
     if 0 ≤ c then andT (refRead S a r).present (eqNat (refRead S a r).value (natT c.toNat)) else falseT
   | .leC r c =>
@@ -150,27 +150,27 @@ def cond (S : Ty) (src : OldSrc) (a : At) : LawExpr → Term
   | .implies l r => impliesT (cond S src a l) (cond S src a r)
 
 /-- The clause: the condition, else refuse with the law's name. -/
-def clause (S : Ty) (name : String) (e : LawExpr) (src : OldSrc) (a : At) : Term :=
+@[expose] def clause (S : Ty) (name : String) (e : LawExpr) (src : OldSrc) (a : At) : Term :=
   guard (cond S src a e) name okT
 
 /-- Why a relaw of a package law is refused: it names the package, whose upgrade is the path. -/
-def relawRefusal (pkg : String) : String :=
+@[expose] def relawRefusal (pkg : String) : String :=
   "package law of " ++ pkg ++ ": changed by a package upgrade, not a relaw"
 
 /-- **The compiled law** `name` of package `pkg` over the state type `S`: a write or an invoke is
 judged with the old state, a birth as a first write, an adoption as the identity write; a relaw is
 refused naming the package; a retirement is admitted. -/
-def compile (S : Ty) (pkg name : String) (e : LawExpr) : Term :=
+@[expose] def compile (S : Ty) (pkg name : String) (e : LawExpr) : Term :=
   lawOf6 (clause S name e .none) (clause S name e .same) (fun _ => refusedT (relawRefusal pkg))
     (fun _ => okT) (clause S name e .prior) (clause S name e .prior)
 
 /-- A package's laws, each compiled, by name (the kernel installs every one: an act is admitted
 when each admits). -/
-def compilePackage (S : Ty) (pkg : String) (laws : List (String × LawExpr)) : List (String × Term) :=
+@[expose] def compilePackage (S : Ty) (pkg : String) (laws : List (String × LawExpr)) : List (String × Term) :=
   laws.map fun (name, e) => (name, compile S pkg name e)
 
 /-- The old state an act is judged with, as `denote` takes it. -/
-def oldOf (src : OldSrc) (o n : Data) : Option Data :=
+@[expose] def oldOf (src : OldSrc) (o n : Data) : Option Data :=
   match src with
   | .none => none
   | .prior => some o
@@ -179,12 +179,12 @@ def oldOf (src : OldSrc) (o n : Data) : Option Data :=
 /-! ## What the theorems quantify over -/
 
 /-- The request a kernel builds for an act with the fragment's facts. -/
-def reqOf (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) (facts : Facts) : Data :=
+@[expose] def reqOf (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) (facts : Facts) : Data :=
   requestAt agent principal notBefore validUntil occasion facts.subject facts.caller ⟨facts.height⟩ facts.turn
 
 /-- The state's fields fit `S` at field `f`: a natural or boolean field of `S` holds a natural or
 boolean (the first field so named), and a field `S` does not read as a scalar holds no scalar. -/
-def fitsField (S : Ty) (fs : List (String × Data)) (f : String) : Bool :=
+@[expose] def fitsField (S : Ty) (fs : List (String × Data)) (f : String) : Bool :=
   match fieldKind S f, fieldsLookup f fs with
   | some .nat, some (.natural _) => true
   | some .bool, some (.boolean _) => true
@@ -192,12 +192,12 @@ def fitsField (S : Ty) (fs : List (String × Data)) (f : String) : Bool :=
   | _, _ => false
 
 /-- A state FITS `S` for the law `e`: a record whose fields fit `S` at every field `e` reads. -/
-def Fits (S : Ty) (e : LawExpr) : Data → Bool
+@[expose] def Fits (S : Ty) (e : LawExpr) : Data → Bool
   | .record fs => e.fields.all (fitsField S fs)
   | _ => false
 
 /-- The verdict a meaning predicts. -/
-def verdictOf (name : String) : Bool → Term
+@[expose] def verdictOf (name : String) : Bool → Term
   | true => okT
   | false => refusedT name
 

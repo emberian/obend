@@ -33,7 +33,7 @@ public import Obend.Spec.Ecosystem
 public import Obend.Spec.LawCompile
 public import Obend.Spec.PackageLaw
 public import Obend.Law.Run
-@[expose] public section
+public section
 namespace Obend.Spec.Workspace
 open Lean (Json toJson)
 open Obend.Spec.FrontEnd

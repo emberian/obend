@@ -39,7 +39,7 @@ public import Obend.Spec.Annotated
 public import Obend.Spec.Elaborate
 public import Obend.Spec.Sha256
 public import Obend.Elab.Gate
-@[expose] public section
+public section
 namespace Obend.Spec.FrontEnd
 open Lean (Json toJson)
 open Obend.Spec.Annotated (ATerm CoreTerm)

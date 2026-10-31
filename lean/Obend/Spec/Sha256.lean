@@ -8,7 +8,7 @@ The captured source fingerprints of the front end and the front-end identity
 vectors (FIPS 180-4 / NIST CAVP, `Compiler/Sha256Vectors.lean`) are not ported here.
 -/
 public import Lean
-@[expose] public section
+public section
 namespace Obend.Spec.Sha256
 set_option autoImplicit false
 

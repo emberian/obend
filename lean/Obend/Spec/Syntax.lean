@@ -10,7 +10,7 @@ AST is a leaf the elaborator, the front end and the tests can import without the
 -/
 public import Lean
 public import Obend.Spec.Law
-@[expose] public section
+public section
 namespace Obend.Spec.Syntax
 open Lean
 set_option autoImplicit false
@@ -111,7 +111,7 @@ inductive ParentRef where
   | extension (name : String) (hash : String)
   deriving Inhabited, Repr, BEq, DecidableEq
 
-def ParentRef.name : ParentRef → String
+@[expose] def ParentRef.name : ParentRef → String
   | .intention n _ => n | .extension n _ => n
 
 def ParentRef.text : ParentRef → String

@@ -20,7 +20,7 @@ Every recursion is fuel-bounded with fuel proportional to the input; running out
 -/
 public import Lean
 public import Obend.Spec.Law
-@[expose] public section
+public section
 namespace Obend.Spec.Parse
 open Lean
 set_option autoImplicit false

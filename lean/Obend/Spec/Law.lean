@@ -27,7 +27,7 @@ fields only: `new.a.b` refuses by name. `old.` is readable only through `monoton
 -/
 public import Lean
 public import Obend.Core.Data
-@[expose] public section
+public section
 namespace Obend.Spec.Law
 open Obend.Core.Data (Data)
 set_option autoImplicit false
@@ -61,11 +61,11 @@ inductive LawExpr where
   deriving DecidableEq, Repr, Inhabited
 
 /-- The fields a law reads, in source order (with repetition). -/
-def LawRef.fields : LawRef → List String
+@[expose] def LawRef.fields : LawRef → List String
   | .field name => [name]
   | _ => []
 
-def LawExpr.fields : LawExpr → List String
+@[expose] def LawExpr.fields : LawExpr → List String
   | .eqC ref _ | .leC ref _ | .inC ref _ => ref.fields
   | .eqR left right | .leR left right | .leROff left right _ => left.fields ++ right.fields
   | .monotone field | .writeOnce field => [field]
@@ -105,13 +105,13 @@ structure Facts where
   deriving Repr, DecidableEq
 
 /-- The scalar a value projects to, if it is a scalar: a natural is itself, a boolean 0 or 1. -/
-def scalarOf : Data → Option Int
+@[expose] def scalarOf : Data → Option Int
   | .natural value => some (Int.ofNat value)
   | .boolean value => some (if value then 1 else 0)
   | _ => none
 
 /-- The first scalar field called `name` of a record's fields. -/
-def firstScalarField (name : String) : List (String × Data) → Option Int
+@[expose] def firstScalarField (name : String) : List (String × Data) → Option Int
   | [] => none
   | (field, value) :: rest =>
       if field = name then
@@ -121,12 +121,12 @@ def firstScalarField (name : String) : List (String × Data) → Option Int
       else firstScalarField name rest
 
 /-- The field `name` of a declared state: only a record has fields. -/
-def fieldOf (name : String) : Data → Option Int
+@[expose] def fieldOf (name : String) : Data → Option Int
   | .record fields => firstScalarField name fields
   | _ => none
 
 /-- What a reference reads on the new state of a write under `facts`. -/
-def LawRef.read (facts : Facts) (new : Data) : LawRef → Option Int
+@[expose] def LawRef.read (facts : Facts) (new : Data) : LawRef → Option Int
   | .field name => fieldOf name new
   | .subject => facts.subject.map Int.ofNat
   | .caller => facts.caller.map Int.ofNat
@@ -136,7 +136,7 @@ def LawRef.read (facts : Facts) (new : Data) : LawRef → Option Int
 /-- **The meaning of a law**: does the write from `old` (absent at a first write) to `new`,
 under `facts`, satisfy it? A comparison with an absent reading is false; `monotone` needs both
 readings; `writeOnce` holds when the old reading is absent or 0, else the new one must equal it. -/
-def LawExpr.denote (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
+@[expose] def LawExpr.denote (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
   | .eqC ref value => decide (ref.read facts new = some value)
   | .leC ref value =>
       match ref.read facts new with
