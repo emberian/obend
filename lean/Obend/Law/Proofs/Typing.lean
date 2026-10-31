@@ -388,6 +388,52 @@ theorem chk_eqAt {ctx : Context} {T : Ty} {x y : Term} (hT : Scalar T) (hx : Chk
   · exact chk_bin rfl hx hy
   · exact chk_ifBool hx hy (chk_notT hy)
 
+mutual
+/-- A type `eqAt` compares at: a scalar, or a record type each of whose fields is one. -/
+public inductive EqTy : Ty → Prop
+  | scalar {T : Ty} : Scalar T → EqTy T
+  | row {T : Ty} : EqRow T T → EqTy T
+/-- `EqRow T R`: every field of the row `R` is a field of `T` (as `get` finds it) at an `EqTy` type. -/
+public inductive EqRow : Ty → Ty → Prop
+  | nil {T : Ty} : EqRow T .emptyRow
+  | cons {T : Ty} {f : String} {M tail : Ty} : rowMember T f = some M → EqTy M → EqRow T tail →
+      EqRow T (.field f M tail)
+end
+
+/-- A term both synthesizes and checks at `T`, as a variable and a field selection do. -/
+@[expose] public def SynChk (ctx : Context) (t : Term) (T : Ty) : Prop := Syn ctx t T ∧ Chk ctx t T
+
+public theorem synChk_bound {ctx : Context} {i : Nat} {b : Binding} (h : ctx[i]? = some b) :
+    SynChk ctx (.bound i) b.type := ⟨syn_bound h, chk_bound h⟩
+
+public theorem synChk_get {ctx : Context} {t : Term} {T M : Ty} {f : String} (h : Syn ctx t T)
+    (hm : rowMember T f = some M) : SynChk ctx (.get t f) M := ⟨syn_get h hm, chk_get h hm⟩
+
+public theorem synChk_field {ctx : Context} {i : Nat} {b : Binding} {f : String} {M : Ty}
+    (h : ctx[i]? = some b) (hm : rowMember b.type f = some M) : SynChk ctx (.get (.bound i) f) M :=
+  synChk_get (syn_bound h) hm
+
+mutual
+/-- **`eqAt T` checks at `boolean`** for every `EqTy` type, records included. -/
+public theorem chk_eqTy {ctx : Context} {T : Ty} {x y : Term} : EqTy T → SynChk ctx x T → SynChk ctx y T →
+    Chk ctx (eqAt T x y) .boolean
+  | .scalar hs, hx, hy => chk_eqAt hs hx.2 hy.2
+  | .row hr, hx, hy => chk_eqRow hr hx.1 hy.1
+public theorem chk_eqRow {ctx : Context} {T R : Ty} {x y : Term} : EqRow T R → Syn ctx x T → Syn ctx y T →
+    Chk ctx (eqAt R x y) .boolean
+  | .nil, _, _ => chk_boolean _ _
+  | .cons hm hM ht, hx, hy => chk_andT (chk_eqTy hM (synChk_get hx hm) (synChk_get hy hm)) (chk_eqRow ht hx hy)
+end
+
+mutual
+public theorem EqTy.shareable {T : Ty} : EqTy T → T.shareable = true
+  | .scalar hs => hs.shareable
+  | .row hr => EqRow.shareable hr
+public theorem EqRow.shareable {T R : Ty} : EqRow T R → R.shareable = true
+  | .nil => rfl
+  | .cons _ hM ht => by simp [Ty.shareable, EqTy.shareable hM, EqRow.shareable ht]
+end
+
 /-- **`ownerSigns S` checks at `lawTy S`** for every canonical, shareable `S`. -/
 public theorem ownerSigns_checks {S : Ty} (hS : S.isCanonical) (hsh : S.shareable = true) :
     ChecksAt (ownerSigns S) S := by
@@ -419,9 +465,9 @@ public theorem bounded_checks {S : Ty} (f : String) (max : Nat) (hS : S.isCanoni
   exact lawOf_checks hS hsh ⟨c _, c _, c _, chk_okT _, chk_okT _, c _⟩
 
 /-- **`windowedLaw S T W limit g` checks at `lawTy S`** when `S` has natural `count` and `epoch`
-and a field `g` of the scalar type `T`. -/
+and a field `g` of a type `eqAt` compares (`EqTy`: a scalar, or a record of such). -/
 public theorem windowed_checks {S T : Ty} (W limit : Nat) (g : String) (hS : S.isCanonical)
-    (hsh : S.shareable = true) (hT : Scalar T) (hcount : rowMember S "count" = some .natural)
+    (hsh : S.shareable = true) (hT : EqTy T) (hcount : rowMember S "count" = some .natural)
     (hepoch : rowMember S "epoch" = some .natural) (hg : rowMember S g = some T) :
     ChecksAt (windowedLaw S T W limit g) S := by
   have epoch (P : Ty) : ∀ q ∈ inOneEpoch W ⟨1⟩, Chk (clauseCtx S P) q.1 .boolean :=
@@ -429,7 +475,7 @@ public theorem windowed_checks {S T : Ty} (W limit : Nat) (g : String) (hS : S.i
       (forall_pair (chk_bin rfl (chk_field rfl hepoch) (chk_bin rfl (chk_field rfl rfl) (chk_nat _ _))) forall_nil)
   have inc (P : Ty) : Chk (clauseCtx S P)
       (Term.ifBool (eqAt T ((⟨1⟩ : At).newF g) ((⟨1⟩ : At).oldF g)) (natT 0) (natT 1)) .natural :=
-    chk_ifBool (chk_eqAt hT (chk_field rfl hg) (chk_field rfl hg)) (chk_nat _ _) (chk_nat _ _)
+    chk_ifBool (chk_eqTy hT (synChk_field rfl hg) (synChk_field rfl hg)) (chk_nat _ _) (chk_nat _ _)
   have fresh (P : Ty) : Chk (clauseCtx S P) (guards (inOneEpoch W ⟨1⟩)
       (allOf [(eqNat ((⟨1⟩ : At).newF "count") (natT 0), "count at birth")])) verdictTy :=
     chk_guards (epoch P) (chk_allOf (forall_pair (chk_bin rfl (chk_field rfl hcount) (chk_nat _ _)) forall_nil))
@@ -551,17 +597,17 @@ theorem chk_popcount {ctx : Context} {t : Term} (cnt : Nat) (h : Chk ctx t .natu
     Chk ctx (popcount t cnt) .natural :=
   chk_foldl_bits h _ (chk_nat _ _)
 
-theorem proposalTy_canonical {T : Ty} (hT : Scalar T) : (proposalTy T).canonical = proposalTy T := by
-  rcases hT with rfl | rfl | rfl <;> decide
+theorem proposalTy_canonical {T : Ty} (hT : T.isCanonical) : (proposalTy T).canonical = proposalTy T := by
+  simp [proposalTy, Ty.canonical, Ty.canonical_of_isCanonical hT, Ty.insertCanonical]
 
 /-- **`quorumLaw S T members k g` checks at `lawTy S`** when `S` has a natural `approvals`, a
-`proposal` of `proposalTy T` and a field `g` of the scalar type `T`. -/
+`proposal` of `proposalTy T` and a field `g` of a type `eqAt` compares (`EqTy`: a scalar, or a record of such). -/
 public theorem quorum_checks {S T : Ty} (members : List String) (k : Nat) (g : String)
-    (hS : S.isCanonical) (hsh : S.shareable = true) (hT : Scalar T)
+    (hS : S.isCanonical) (hsh : S.shareable = true) (hT : EqTy T)
     (hap : rowMember S "approvals" = some .natural) (hpr : rowMember S "proposal" = some (proposalTy T))
     (hg : rowMember S g = some T) : ChecksAt (quorumLaw S T members k g) S := by
   have hTs := hT.shareable
-  have pc := proposalTy_canonical hT
+  have pc := proposalTy_canonical (rowMember_isCanonical hS hg)
   have reset (P : Ty) : Chk (clauseCtx S P) (eqNat ((⟨1⟩ : At).newF "approvals") (natT 0)) .boolean :=
     chk_bin rfl (chk_field rfl hap) (chk_nat _ _)
   have fresh (P : Ty) : Chk (clauseCtx S P) (allOf [(eqNat ((⟨1⟩ : At).newF "approvals") (natT 0),
@@ -597,11 +643,11 @@ public theorem quorum_checks {S T : Ty} (members : List String) (k : Nat) (g : S
     have clT := cl.cons hTs
     refine chk_guards (forall_pair (member _) (forall_pair
       (chk_bin rfl (chk_field rfl hap) (chk_nat _ _)) forall_nil)) ?_
-    refine chk_ifBool (chk_notT (chk_eqAt hT (chk_field rfl hg) (chk_field rfl hg))) ?_ ?_
+    refine chk_ifBool (chk_notT (chk_eqTy hT (synChk_field rfl hg) (synChk_field rfl hg))) ?_ ?_
     · refine chk_allOf (forall_pair (quorate _) (forall_pair ?_ (forall_pair (reset _) forall_nil)))
       refine chk_case cl (syn_get (syn_bound rfl) hpr) pc ?_ rfl (by simp)
       exact .cons rfl rfl (chk_boolean _ _) (.cons rfl hTs
-        (chk_eqAt hT (chk_bound (i := 0) (b := ⟨T, .unrestricted⟩) rfl) (chk_field rfl hg)) .nil)
+        (chk_eqTy hT (synChk_bound (i := 0) (b := ⟨T, .unrestricted⟩) rfl) (synChk_field rfl hg)) .nil)
     refine chk_ifBool (chk_notT ?_) (chk_allOf (forall_pair (reset _) forall_nil)) ?_
     · refine chk_case cl (syn_get (syn_bound rfl) hpr) pc ?_ rfl (by simp)
       refine .cons rfl rfl ?_ (.cons rfl hTs ?_ .nil)
@@ -611,8 +657,8 @@ public theorem quorum_checks {S T : Ty} (members : List String) (k : Nat) (g : S
           (.cons rfl hTs (chk_boolean _ _) .nil)
       · refine chk_case clT (syn_get (syn_bound rfl) hpr) pc ?_ rfl (by simp)
         exact .cons rfl rfl (chk_boolean _ _) (.cons rfl hTs
-          (chk_eqAt hT (chk_bound (i := 0) (b := ⟨T, .unrestricted⟩) rfl)
-            (chk_bound (i := 1) (b := ⟨T, .unrestricted⟩) rfl)) .nil)
+          (chk_eqTy hT (synChk_bound (i := 0) (b := ⟨T, .unrestricted⟩) rfl)
+            (synChk_bound (i := 1) (b := ⟨T, .unrestricted⟩) rfl)) .nil)
     refine chk_ifBool (chk_bin rfl (chk_field rfl hap) (chk_field rfl hap)) (chk_okT _)
       (chk_guard (chk_anyOf ?_) (chk_okT _))
     intro c hc
@@ -631,7 +677,7 @@ public theorem allowlist_ok_checks {S : Ty} {ids : List String} {law : Term} (hS
   cases h; exact allowlist_checks ids hS hsh
 
 public theorem windowed_ok_checks {S T : Ty} {W limit : Nat} {g : String} {law : Term}
-    (hS : S.isCanonical) (hsh : S.shareable = true) (hT : Scalar T)
+    (hS : S.isCanonical) (hsh : S.shareable = true) (hT : EqTy T)
     (hcount : rowMember S "count" = some .natural) (hepoch : rowMember S "epoch" = some .natural)
     (hg : rowMember S g = some T) (h : windowed S T W limit g = .ok law) : ChecksAt law S := by
   unfold windowed Obend.Law.need at h
@@ -640,7 +686,7 @@ public theorem windowed_ok_checks {S T : Ty} {W limit : Nat} {g : String} {law :
   cases h; exact windowed_checks W limit g hS hsh hT hcount hepoch hg
 
 public theorem quorum_ok_checks {S T : Ty} {members : List String} {k : Nat} {g : String} {law : Term}
-    (hS : S.isCanonical) (hsh : S.shareable = true) (hT : Scalar T)
+    (hS : S.isCanonical) (hsh : S.shareable = true) (hT : EqTy T)
     (hap : rowMember S "approvals" = some .natural) (hpr : rowMember S "proposal" = some (proposalTy T))
     (hg : rowMember S g = some T) (h : quorum S T members k g = .ok law) : ChecksAt law S := by
   unfold quorum Obend.Law.need at h
@@ -873,10 +919,10 @@ theorem bounded_typed : ChecksAt (bounded totalTy "total" 5) totalTy :=
   bounded_checks "total" 5 (isCanonical_of (by decide)) rfl rfl
 
 theorem quorum_typed : ChecksAt (quorumLaw councilTy .natural ["ann", "bob", "cy"] 2 "total") councilTy :=
-  quorum_checks _ 2 "total" (isCanonical_of (by decide)) rfl (.inl rfl) rfl rfl rfl
+  quorum_checks _ 2 "total" (isCanonical_of (by decide)) rfl (.scalar (.inl rfl)) rfl rfl rfl
 
 theorem windowed_typed : ChecksAt (windowedLaw ratedTy .natural 10 1 "total") ratedTy :=
-  windowed_checks 10 1 "total" (isCanonical_of (by decide)) rfl (.inl rfl) rfl rfl rfl
+  windowed_checks 10 1 "total" (isCanonical_of (by decide)) rfl (.scalar (.inl rfl)) rfl rfl rfl
 
 theorem machine_typed : ChecksAt (machineLaw doorTy "door" ["open", "shut"] "shut"
     [("shut", 0, "open"), ("open", 1, "shut")]) doorTy :=
@@ -888,6 +934,23 @@ theorem bounded_missing_refused :
 /-- And the type is the law's: `bounded` does not check at a type whose verdict is not `verdictTy`. -/
 theorem bounded_not_at_state :
     (checkAgainst ⟨bounded totalTy "total" 5, noAnn, {}⟩ [] (fnTy totalTy totalTy)).toBool = false := by decide
+
+/-- A record type: a pair of naturals. -/
+@[expose] public def pairTy : Ty := .field "hi" .natural (.field "lo" .natural .emptyRow)
+@[expose] public def councilPairTy : Ty :=
+  .field "approvals" .natural (.field "proposal" (proposalTy pairTy) (.field "total" pairTy .emptyRow))
+@[expose] public def ratedPairTy : Ty :=
+  .field "count" .natural (.field "epoch" .natural (.field "total" pairTy .emptyRow))
+
+public theorem pairTy_eq : EqTy pairTy :=
+  .row (.cons rfl (.scalar (.inl rfl)) (.cons rfl (.scalar (.inl rfl)) .nil))
+
+/-- **Beyond scalars**: a quorum and a rate limit guarding a RECORD field check. -/
+public theorem quorum_typed_record : ChecksAt (quorumLaw councilPairTy pairTy ["ann", "bob", "cy"] 2 "total") councilPairTy :=
+  quorum_checks _ 2 "total" (isCanonical_of (by decide)) rfl pairTy_eq rfl rfl rfl
+
+theorem windowed_typed_record : ChecksAt (windowedLaw ratedPairTy pairTy 10 1 "total") ratedPairTy :=
+  windowed_checks 10 1 "total" (isCanonical_of (by decide)) rfl pairTy_eq rfl rfl rfl
 
 /-- A closed invariant: the total is at most 5. -/
 @[expose] public def totalAtMost5 : Term := .lam (leNat (.get (.bound 0) "total") (natT 5))

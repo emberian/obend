@@ -18,7 +18,7 @@ public import Obend.Law.Proofs.Eval
 namespace Obend.Law
 open Obend.Core.Term
 open Obend.Core.Ty (Ty)
-open Obend.Core.Data (Data)
+open Obend.Core.Data (Data rowMember)
 set_option autoImplicit false
 
 /-! ## Substitution through the combinators -/
@@ -644,10 +644,32 @@ public theorem quorum_relaw_needs_k {S T : Ty} {ms : List String} {k : Nat} {g :
 
 theorem subst_eqAt (σ : Nat → Term) (T : Ty) (a b : Term) :
     (eqAt T a b).substitute σ = eqAt T (a.substitute σ) (b.substitute σ) := by
-  cases T <;> simp [eqAt]
+  induction T generalizing a b <;> simp_all [eqAt, trueT, Term.substitute]
 
-/-- `eqAt` that says `true` of two terms: both evaluate to one scalar. -/
-public theorem eqAt_true {T : Ty} {a b : Term} (h : Evaluates (eqAt T a b) (.boolean true)) :
+/-- `T` is a record type (a row). -/
+@[expose] public def rowTy : Ty → Bool
+  | .field .. | .emptyRow => true
+  | _ => false
+
+/-- The labels of a row, in order. -/
+@[expose] public def rowLabels : Ty → List String
+  | .field f _ tail => f :: rowLabels tail
+  | _ => []
+
+/-- Data FITS a type as `eqAt` compares it: anything at a non-record type; at a record type, a
+record with exactly the row's labels, in order and without repeats, each field fitting its type. -/
+public inductive EqFits : Ty → Data → Prop
+  | other {T : Ty} {d : Data} : rowTy T = false → EqFits T d
+  | record {T : Ty} {fs : List (String × Data)} : rowTy T = true → fs.map Prod.fst = rowLabels T →
+      (rowLabels T).Nodup →
+      (∀ f M d, rowMember T f = some M → fieldsLookup f fs = some d → EqFits M d) → EqFits T (.record fs)
+
+/-- The field `g` of `n` fits `T`: always at a non-record type; at a record type, present and fitting. -/
+@[expose] public def FieldEqFits (T : Ty) (n : Data) (g : String) : Prop :=
+  rowTy T = false ∨ ∃ d, n.field g = some d ∧ EqFits T d
+
+/-- `eqAt` that says `true` of two terms at a non-record type: both evaluate to one scalar. -/
+public theorem eqAt_true {T : Ty} (hT : rowTy T = false) {a b : Term} (h : Evaluates (eqAt T a b) (.boolean true)) :
     ∃ v, Evaluates a v ∧ Evaluates b v ∧ ((∃ m, v = .nat m) ∨ (∃ s, v = .label s) ∨ ∃ c, v = .boolean c) := by
   cases T with
   | label =>
@@ -660,28 +682,211 @@ public theorem eqAt_true {T : Ty} {a b : Term} (h : Evaluates (eqAt T a b) (.boo
         exact ⟨_, ha, notT_true hr, .inr (.inr ⟨false, rfl⟩)⟩
       · simp only [↓reduceIte] at hr
         exact ⟨_, ha, hr, .inr (.inr ⟨true, rfl⟩)⟩
+  | field _ _ _ => simp [rowTy] at hT
+  | emptyRow => simp [rowTy] at hT
   | _ =>
       obtain ⟨m, ha, hb⟩ := eqNat_true h
       exact ⟨_, ha, hb, .inl ⟨m, rfl⟩⟩
 
-/-- `eqAt` of the new and old value of a field, `true`: the field is unchanged. -/
-theorem eqAt_fields_true {T : Ty} {g : String} {o n : Data}
-    (h : Evaluates (eqAt T (.get n.term g) (.get o.term g)) (.boolean true)) : n.field g = o.field g := by
-  obtain ⟨v, ha, hb, hs⟩ := eqAt_true h
-  obtain ⟨e1, h1, rfl⟩ := get_data ha
-  obtain ⟨e2, h2, he⟩ := get_data hb
-  rw [h1, h2]
+theorem steps_get {t t' : Term} {f : String} (h : Steps t t') : Steps (.get t f) (.get t' f) := by
+  induction h with
+  | refl => exact .refl _
+  | next s _ ih => exact .next (.target _ s) ih
+
+/-- Selecting a field of a term that evaluates to a record of data. -/
+theorem evaluates_get_record {x : Term} {fs : List (String × Data)} {f : String} {d : Data}
+    (hx : Evaluates x (Data.record fs).term) (hf : fieldsLookup f fs = some d) :
+    Evaluates (.get x f) d.term := by
+  refine evaluates_steps (steps_get hx.1) (evaluates_step (.field _ f d.term ?_) (evaluates_self (data_value d)))
+  rw [fieldsTerm_find, hf]; rfl
+
+theorem rowMember_mem_labels {f : String} {M : Ty} : ∀ {R : Ty}, rowMember R f = some M → f ∈ rowLabels R
+  | .field g _ tail, h => by
+      simp only [rowMember] at h
+      split at h
+      · rename_i e; subst e; simp [rowLabels]
+      · exact List.mem_cons_of_mem _ (rowMember_mem_labels h)
+  | .natural, h | .label, h | .boolean, h | .variable _, h | .arrow .., h | .emptyRow, h
+  | .specification .., h | .prototype .., h | .custody _, h | .variant _, h | .computation .., h => by
+      simp [rowMember] at h
+
+theorem mem_labels_rowMember {f : String} : ∀ {R : Ty}, f ∈ rowLabels R → ∃ M, rowMember R f = some M
+  | .field g M tail, h => by
+      simp only [rowMember]
+      split
+      · exact ⟨_, rfl⟩
+      · rename_i ne
+        simp only [rowLabels, List.mem_cons] at h
+        rcases h with rfl | h
+        · exact absurd rfl ne
+        · exact mem_labels_rowMember h
+  | .natural, h | .label, h | .boolean, h | .variable _, h | .arrow .., h | .emptyRow, h
+  | .specification .., h | .prototype .., h | .custody _, h | .variant _, h | .computation .., h => by
+      simp [rowLabels] at h
+
+theorem lookup_of_mem {f : String} : ∀ {fs : List (String × Data)}, f ∈ fs.map Prod.fst →
+    ∃ d, fieldsLookup f fs = some d
+  | (g, d) :: rest, h => by
+      simp only [fieldsLookup]
+      split
+      · exact ⟨_, rfl⟩
+      · rename_i ne
+        simp only [List.map_cons, List.mem_cons] at h
+        rcases h with rfl | h
+        · simp at ne
+        · exact lookup_of_mem h
+
+/-- Two association lists with the same labels, without repeats, that agree at every label are equal. -/
+theorem assoc_ext : ∀ {fs gs : List (String × Data)}, fs.map Prod.fst = gs.map Prod.fst →
+    (fs.map Prod.fst).Nodup → (∀ f ∈ fs.map Prod.fst, fieldsLookup f fs = fieldsLookup f gs) → fs = gs
+  | [], [], _, _, _ => rfl
+  | (f, d) :: fs, (g, e) :: gs, hl, hn, ha => by
+      simp only [List.map_cons, List.cons.injEq] at hl
+      obtain ⟨rfl, hl⟩ := hl
+      have hd := ha f (by simp)
+      simp only [fieldsLookup, beq_self_eq_true, ↓reduceIte, Option.some.injEq] at hd
+      subst hd
+      obtain ⟨hf, hn'⟩ := List.nodup_cons.1 hn
+      congr 1
+      refine assoc_ext hl hn' fun f' hf' => ?_
+      have hne : (f == f') = false := by
+        simp only [beq_eq_false_iff_ne]; rintro rfl; exact hf hf'
+      have := ha f' (List.mem_cons_of_mem _ hf')
+      simpa [fieldsLookup, hne] using this
+  | [], _ :: _, hl, _, _ | _ :: _, [], hl, _, _ => by simp at hl
+
+/-- What `eqAt` at a row says of two records whose fields fit it: every field the row names is
+equal. -/
+@[expose] public def RowEqStmt (R : Ty) : Prop :=
+  ∀ {x y : Term} {fs gs : List (String × Data)}, Evaluates x (Data.record fs).term →
+    Evaluates y (Data.record gs).term → (rowLabels R).Nodup →
+    (∀ f ∈ rowLabels R, f ∈ fs.map Prod.fst ∧ f ∈ gs.map Prod.fst) →
+    (∀ f M d, rowMember R f = some M → fieldsLookup f fs = some d → EqFits M d) →
+    (∀ f M d, rowMember R f = some M → fieldsLookup f gs = some d → EqFits M d) →
+    Evaluates (eqAt R x y) (.boolean true) → ∀ f M, rowMember R f = some M → fieldsLookup f fs = fieldsLookup f gs
+
+/-- What `eqAt` says of two terms whose data fit the type: they are equal. -/
+@[expose] public def EqDataStmt (T : Ty) : Prop :=
+  ∀ {x y : Term} {d e : Data}, Evaluates x d.term → Evaluates y e.term → EqFits T d → EqFits T e →
+    Evaluates (eqAt T x y) (.boolean true) → d = e
+
+theorem fits_record {T : Ty} (hT : rowTy T = true) {d : Data} (h : EqFits T d) :
+    ∃ fs, d = .record fs ∧ fs.map Prod.fst = rowLabels T ∧ (rowLabels T).Nodup ∧
+      ∀ f M d, rowMember T f = some M → fieldsLookup f fs = some d → EqFits M d := by
+  cases h with
+  | other h => rw [hT] at h; cases h
+  | record _ hl hn hm => exact ⟨_, rfl, hl, hn, hm⟩
+
+theorem eqData_of_row {T : Ty} (hT : rowTy T = true) (hrow : RowEqStmt T) : EqDataStmt T := by
+  intro x y d e hx hy hd he h
+  obtain ⟨fs, rfl, hfl, hn, hfm⟩ := fits_record hT hd
+  obtain ⟨gs, rfl, hgl, _, hgm⟩ := fits_record hT he
+  have hall := hrow hx hy hn (fun f hf => ⟨hfl ▸ hf, hgl ▸ hf⟩) hfm hgm h
   congr 1
-  rcases hs with ⟨m, hm⟩ | ⟨s, hm⟩ | ⟨c, hm⟩
-  · rw [data_term_nat hm, data_term_nat (he.symm.trans hm)]
-  · rw [data_term_label hm, data_term_label (he.symm.trans hm)]
-  · rw [data_term_boolean hm, data_term_boolean (he.symm.trans hm)]
+  refine assoc_ext (hfl.trans hgl.symm) (hfl ▸ hn) fun f hf => ?_
+  obtain ⟨M, hM⟩ := mem_labels_rowMember (hfl ▸ hf)
+  exact hall f M hM
+
+theorem rowEq_other {R : Ty} (hR : ∀ f, rowMember R f = none) : RowEqStmt R := by
+  intro _ _ _ _ _ _ _ _ _ _ _ f M hM
+  rw [hR f] at hM; cases hM
+
+theorem eqData_other {T : Ty} (hT : rowTy T = false) : EqDataStmt T := by
+  intro x y d e hx hy _ _ h
+  obtain ⟨v, ha, hb, hs⟩ := eqAt_true hT h
+  have e1 := evaluates_unique hx ha
+  have e2 := evaluates_unique hy hb
+  rcases hs with ⟨m, rfl⟩ | ⟨s, rfl⟩ | ⟨c, rfl⟩
+  · rw [data_term_nat e1, data_term_nat e2]
+  · rw [data_term_label e1, data_term_label e2]
+  · rw [data_term_boolean e1, data_term_boolean e2]
+
+theorem eqAt_data_and_row : ∀ T : Ty, EqDataStmt T ∧ RowEqStmt T
+  | .field f M tail => by
+      have ihM : EqDataStmt M := (eqAt_data_and_row M).1
+      have ihT : RowEqStmt tail := (eqAt_data_and_row tail).2
+      have row : RowEqStmt (.field f M tail) := by
+        intro x y fs gs hx hy hn hmem hfm hgm h f' M' hM'
+        simp only [eqAt] at h
+        obtain ⟨h1, h2⟩ := andT_true h
+        obtain ⟨hf, hnt⟩ := List.nodup_cons.1 (by simpa [rowLabels] using hn)
+        by_cases e : f' = f
+        · subst e
+          have hMM : rowMember (.field f' M tail) f' = some M := by simp [rowMember]
+          rw [hMM] at hM'; cases hM'
+          obtain ⟨d, hd⟩ := lookup_of_mem (hmem f' (by simp [rowLabels])).1
+          obtain ⟨d', hd'⟩ := lookup_of_mem (hmem f' (by simp [rowLabels])).2
+          rw [hd, hd', ihM (evaluates_get_record hx hd) (evaluates_get_record hy hd')
+            (hfm _ _ _ hMM hd) (hgm _ _ _ hMM hd') h1]
+        · have hrest : ∀ f'', f'' ∈ rowLabels tail → rowMember (.field f M tail) f'' = rowMember tail f'' := by
+            intro f'' h''
+            have : f ≠ f'' := by rintro rfl; exact hf h''
+            simp [rowMember, this]
+          have htail : rowMember tail f' = some M' := by
+            have : f ≠ f' := fun h => e h.symm
+            simpa [rowMember, this] using hM'
+          refine ihT hx hy hnt (fun g hg => hmem g (List.mem_cons_of_mem _ hg)) ?_ ?_ h2 f' M' htail
+          · intro g N d hg hd
+            exact hfm g N d ((hrest g (rowMember_mem_labels hg)).trans hg) hd
+          · intro g N d hg hd
+            exact hgm g N d ((hrest g (rowMember_mem_labels hg)).trans hg) hd
+      exact ⟨eqData_of_row rfl row, row⟩
+  | .emptyRow => ⟨eqData_of_row rfl (rowEq_other fun _ => rfl), rowEq_other fun _ => rfl⟩
+  | .natural => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .label => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .boolean => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .variable _ => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .arrow .. => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .specification .. => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .prototype .. => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .custody _ => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .variant _ => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+  | .computation .. => ⟨eqData_other rfl, rowEq_other fun _ => rfl⟩
+
+/-- **`eqAt` decides equality of data that fits its type**: when two terms evaluate to data fitting
+`T` and `eqAt T` says `true` of them, the data are equal. -/
+public theorem eqAt_data {T : Ty} {x y : Term} {d e : Data} (hx : Evaluates x d.term) (hy : Evaluates y e.term)
+    (hd : EqFits T d) (he : EqFits T e) (h : Evaluates (eqAt T x y) (.boolean true)) : d = e :=
+  (eqAt_data_and_row T).1 hx hy hd he h
+
+theorem field_data {n : Data} {g : String} {d : Data} (h : n.field g = some d) : Evaluates (.get n.term g) d.term := by
+  cases n with
+  | record fs => exact evaluates_get_record (evaluates_self (data_value _)) h
+  | _ => simp [Data.field] at h
+
+/-- `eqAt` of the new and old value of a field, `true`: the field is unchanged (at a record type,
+when both fit it). -/
+theorem eqAt_fields_true {T : Ty} {g : String} {o n : Data} (hn : FieldEqFits T n g) (ho : FieldEqFits T o g)
+    (h : Evaluates (eqAt T (.get n.term g) (.get o.term g)) (.boolean true)) : n.field g = o.field g := by
+  rcases hn with hT | ⟨d, hnd, hd⟩
+  · obtain ⟨v, ha, hb, hs⟩ := eqAt_true hT h
+    obtain ⟨e1, h1, rfl⟩ := get_data ha
+    obtain ⟨e2, h2, he⟩ := get_data hb
+    rw [h1, h2]
+    congr 1
+    rcases hs with ⟨m, hm⟩ | ⟨s, hm⟩ | ⟨c, hm⟩
+    · rw [data_term_nat hm, data_term_nat (he.symm.trans hm)]
+    · rw [data_term_label hm, data_term_label (he.symm.trans hm)]
+    · rw [data_term_boolean hm, data_term_boolean (he.symm.trans hm)]
+  · rcases ho with hT | ⟨e, hoe, he⟩
+    · cases hd with
+      | other h' => obtain ⟨v, ha, hb, hs⟩ := eqAt_true h' h
+                    obtain ⟨e1, h1, rfl⟩ := get_data ha
+                    obtain ⟨e2, h2, he⟩ := get_data hb
+                    rw [h1, h2]
+                    congr 1
+                    rcases hs with ⟨m, hm⟩ | ⟨s, hm⟩ | ⟨c, hm⟩
+                    · rw [data_term_nat hm, data_term_nat (he.symm.trans hm)]
+                    · rw [data_term_label hm, data_term_label (he.symm.trans hm)]
+                    · rw [data_term_boolean hm, data_term_boolean (he.symm.trans hm)]
+      | record hr _ _ _ => rw [hr] at hT; cases hT
+    · rw [hnd, hoe, eqAt_data (field_data hnd) (field_data hoe) hd he h]
 
 /-- **The commit needs k**: an admitted write or invoke that changes the guarded field is by a
 member, with `k` approvals among the old ones, and resets the approvals. -/
 public theorem quorum_change_needs_k {S T : Ty} {ms : List String} {k : Nat} {g : String} {o n rq occ : Data}
     (h : Admits (quorumLaw S T ms k g) o n rq) (ho : rq.field "occasion" = some occ) (hc : IsChange occ)
-    (hne : n.field g ≠ o.field g) :
+    (hne : n.field g ≠ o.field g) (hfn : FieldEqFits T n g) (hfo : FieldEqFits T o g) :
     (∃ m ∈ ms, rq.field "agent" = some (.label m)) ∧
       (∃ a, o.field "approvals" = some (.natural a) ∧ k ≤ popcountNat a ms.length) ∧
       n.field "approvals" = some (.natural 0) := by
@@ -695,7 +900,7 @@ public theorem quorum_change_needs_k {S T : Ty} {ms : List String} {k : Nat} {g 
   simp only [subst_ifBool, subst_notT, subst_eqAt] at hrest
   obtain ⟨b, hb, hr⟩ := ifBool_inv hrest
   cases b
-  · have := eqAt_fields_true (by simpa using notT_false hb)
+  · have := eqAt_fields_true hfn hfo (by simpa using notT_false hb)
     exact (hne this).elim
   · simp only [↓reduceIte, subst_allOf, List.map_cons, List.map_nil] at hr
     refine ⟨hmem, quorate_true rfl hpos (allOf_ok hr _ (List.mem_cons_self ..)), ?_⟩
@@ -896,5 +1101,45 @@ theorem windowed_tooth :
   ⟨admits_of_run 1000 (by decide +kernel), admits_of_run 1000 (by decide +kernel),
     refuses_of_run 1000 (by decide +kernel), refuses_of_run 1000 (by decide +kernel),
     refuses_of_run 1000 (by decide +kernel)⟩
+
+/-! ### A record-guarded quorum -/
+
+/-- A pair of naturals, as a record type and as data. -/
+@[expose] public def pairT : Ty := .field "hi" .natural (.field "lo" .natural .emptyRow)
+@[expose] public def pairD (h l : Nat) : Data := .record [("hi", .natural h), ("lo", .natural l)]
+
+@[expose] public def pairCouncilLaw : Term := quorumLaw unitTy pairT ["ann", "bob", "cy"] 2 "total"
+
+@[expose] public def pairCouncil (total : Data) (approvals : Nat) (proposal : Data) : Data :=
+  .record [("approvals", .natural approvals), ("proposal", proposal), ("total", total)]
+
+/-- A quorum guarding a RECORD field: a commit of the proposed pair with two approvals is admitted;
+the same commit with one approval, or of another pair, is refused; rewriting the pair to an equal
+pair is no change and needs no quorum. -/
+theorem quorum_record_tooth :
+    Admits pairCouncilLaw (pairCouncil (pairD 0 0) 3 (.variant "set" (pairD 1 2)))
+      (pairCouncil (pairD 1 2) 0 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) ∧
+    Refuses pairCouncilLaw (pairCouncil (pairD 0 0) 1 (.variant "set" (pairD 1 2)))
+      (pairCouncil (pairD 1 2) 0 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) "no quorum" ∧
+    Refuses pairCouncilLaw (pairCouncil (pairD 0 0) 3 (.variant "set" (pairD 1 2)))
+      (pairCouncil (pairD 1 3) 0 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) "not the proposal" ∧
+    Admits pairCouncilLaw (pairCouncil (pairD 1 2) 1 (.variant "set" (pairD 1 2)))
+      (pairCouncil (pairD 1 2) 1 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) :=
+  ⟨admits_of_run 4000 (by decide +kernel), refuses_of_run 4000 (by decide +kernel),
+    refuses_of_run 4000 (by decide +kernel), admits_of_run 4000 (by decide +kernel)⟩
+
+/-- The run's boolean, if it ends in one. -/
+@[expose] public def runBool : Option Term → Option Bool
+  | some (.boolean b) => some b
+  | _ => none
+
+/-- `FieldEqFits` is needed: `eqAt` compares a record only at the fields its type names, so data with a
+field the type does not name compares equal to data without it. -/
+theorem eqAt_fits_tooth :
+    runBool (run 200 (eqAt pairT (pairD 1 2).term (pairD 1 2).term)) = some true ∧
+      runBool (run 200 (eqAt pairT (pairD 1 2).term (pairD 1 3).term)) = some false ∧
+      runBool (run 200 (eqAt pairT (Data.record [("hi", .natural 1), ("lo", .natural 2), ("x", .natural 9)]).term
+        (pairD 1 2).term)) = some true :=
+  ⟨by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 end Obend.Law

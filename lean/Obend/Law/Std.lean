@@ -84,14 +84,19 @@ def boundedWith (S : Ty) (f : String) (maxT : Term) : Term :=
 
 def bounded (S : Ty) (f : String) (max : Nat) : Term := boundedWith S f (natT max)
 
-/-! ## Equality at a scalar type -/
+/-! ## Equality at the guarded field's type -/
 
-/-- Equality at the guarded field's type: `labelEqual` at `label`, an `ifBool` at `boolean`,
-`equal` otherwise (a field of any other type faults the comparison). -/
+/-- Equality at the guarded field's type: `labelEqual` at `label`, an `ifBool` at `boolean`; at a
+record type (a row) field by field, each at its own type, in row order; `equal` otherwise (a field
+of a sum, arrow or other type faults the comparison). A record is compared only at the fields its
+type names, so `true` means equal data when the data fits the type
+(`Obend.Law.Proofs.Std.eqAt_data`). -/
 def eqAt (T : Ty) (x y : Term) : Term :=
   match T with
   | .label => eqLabel x y
   | .boolean => .ifBool x y (notT y)
+  | .field f M tail => andT (eqAt M (.get x f) (.get y f)) (eqAt tail x y)
+  | .emptyRow => trueT
   | _ => eqNat x y
 
 /-! ## Quorum: k of n members approve one proposal, which is then the only change admitted

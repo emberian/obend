@@ -210,7 +210,7 @@ public theorem data_value : (d : Data) → Value d.term
 public theorem evaluates_data {d : Data} {v : Term} (h : Evaluates d.term v) : v = d.term :=
   evaluates_value (data_value d) h
 
-theorem fieldsTerm_find (f : String) : (fs : List (String × Data)) →
+public theorem fieldsTerm_find (f : String) : (fs : List (String × Data)) →
     (fieldsTerm fs).find? (fun field => field.1 == f) = (fieldsLookup f fs).map (fun d => (f, d.term))
   | [] => by simp [fieldsTerm, fieldsLookup]
   | (g, d) :: rest => by

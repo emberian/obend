@@ -19,3 +19,8 @@ open Obend.Law Obend.Law.Typing
 #tooth machine_checks by mutation stateTy := fun _ => .natural
 -- A `keeps` invariant is a predicate on the state: typed at another codomain, the proof no longer checks.
 #tooth keeps_typed by mutation invBinding := fun S => ⟨fnTy S .natural, .unrestricted⟩
+-- Records are compared field by field: with the scalar-only `eqAt` a record-guarded quorum does not check.
+#tooth Teeth.quorum_typed_record by mutation eqAt := fun T x y => match T with
+  | .label => eqLabel x y
+  | .boolean => .ifBool x y (notT y)
+  | _ => eqNat x y
