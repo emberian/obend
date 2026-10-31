@@ -21,6 +21,12 @@ public import Obend.Core.TermTraverse
 public import Obend.Core.Data
 public import Obend.Core.Digest
 public import Obend.Law.Claim
+public import Obend.Core.Check
+public import Obend.Core.Bidirectional
+public import Obend.Core.Invariant
+public import Obend.Core.MachineTyping
+public import Obend.Core.Proofs.BidirectionalCompleteness
+public import Obend.Slot.Core4
 public import Obend.Tactic.Tooth
 @[expose] public section
 namespace Obend.Core.Code
@@ -515,6 +521,640 @@ def syntaxSource : String :=
   "  prototype: {}\n  reflect: {}\n  metadata: {}\n  project: {}\n  ifBool: {}\n  perform: {}\n" ++
   "  done: {}\n  nat: Nat\n  boolean: Bool\n  label: String\n  binary: String\n  extend: {}\n" ++
   "  record: {}\n  ifZero: {}\n  case: {}\n  get: String\n  inject: String\n  field: String\n"
+
+/-! ## §5. Codecs for what a quotation carries besides its term
+
+A held term is checked against annotations and assumptions. The annotations the kernel holds are a
+finite `AnnotationTree` (the form full annotated completeness produces and the wire carries), so a
+quotation carries them exactly; the assumptions are carried so that an importer can refuse a
+quotation checked under another theory, by name. Lists are `Syntax` lists (`listData`). -/
+
+open Obend.Core.Ty (Ty Quantity Reuse LambdaAnnotation Context Binding)
+open Obend.Core.Check (Assumptions AnnotatedTerm Checked PartialTyping)
+open Obend.Core.Bidirectional (CheckRefusal checkAgainst checkAgainst_sound)
+open Obend.Core.Proofs.BidirectionalCompleteness (AnnotationTree treeAnnotations)
+
+deriving instance DecidableEq for Obend.Core.Check.Assumptions
+
+theorem mapM_roundtrip {α : Type} (f : Data → Option α) (g : α → Data)
+    (h : ∀ x, f (g x) = some x) : ∀ xs : List α, (xs.map g).mapM f = some xs
+  | [] => rfl
+  | x :: xs => by simp [List.mapM_cons, h x, mapM_roundtrip f g h xs]
+
+/-- A list of anything with a codec. -/
+def listWith {α : Type} (g : α → Data) (xs : List α) : Data := listData (xs.map g)
+def listOfWith {α : Type} (f : Data → Option α) (d : Data) : Option (List α) :=
+  (listOf d).bind (·.mapM f)
+
+theorem listOfWith_listWith {α : Type} (f : Data → Option α) (g : α → Data)
+    (h : ∀ x, f (g x) = some x) (xs : List α) : listOfWith f (listWith g xs) = some xs := by
+  simp [listOfWith, listWith, listOf_listData, mapM_roundtrip f g h xs]
+
+def quantityData : Quantity → Data
+  | .erased => .label "erased" | .affine => .label "affine"
+  | .linear => .label "linear" | .unrestricted => .label "unrestricted"
+def quantityOf : Data → Option Quantity
+  | .label "erased" => some .erased | .label "affine" => some .affine
+  | .label "linear" => some .linear | .label "unrestricted" => some .unrestricted
+  | _ => none
+theorem quantityOf_quantityData (q : Quantity) : quantityOf (quantityData q) = some q := by
+  cases q <;> rfl
+
+def reuseData : Reuse → Data
+  | .once => .label "once" | .reusable => .label "reusable"
+def reuseOf : Data → Option Reuse
+  | .label "once" => some .once | .label "reusable" => some .reusable
+  | _ => none
+theorem reuseOf_reuseData (r : Reuse) : reuseOf (reuseData r) = some r := by
+  cases r <;> rfl
+
+def tyData : Ty → Data
+  | .natural => .variant "natural" unit
+  | .label => .variant "label" unit
+  | .boolean => .variant "boolean" unit
+  | .variable i => .variant "variable" (.natural i)
+  | .arrow r q d c => .variant "arrow" (.record [("reuse", reuseData r), ("parameter", quantityData q),
+      ("domain", tyData d), ("codomain", tyData c)])
+  | .emptyRow => .variant "emptyRow" unit
+  | .field n m t => .variant "field" (.record [("name", .label n), ("member", tyData m), ("tail", tyData t)])
+  | .specification m e => .variant "specification" (.record [("metadata", tyData m), ("extension", tyData e)])
+  | .prototype s t => .variant "prototype" (.record [("spec", tyData s), ("target", tyData t)])
+  | .custody i => .variant "custody" (.natural i)
+  | .variant r => .variant "variant" (tyData r)
+  | .computation p r c => .variant "computation" (.record [("plan", tyData p), ("response", tyData r),
+      ("result", tyData c)])
+
+def tyOf : Data → Option Ty
+  | .variant "natural" (.record []) => some .natural
+  | .variant "label" (.record []) => some .label
+  | .variant "boolean" (.record []) => some .boolean
+  | .variant "variable" (.natural i) => some (.variable i)
+  | .variant "arrow" (.record [("reuse", r), ("parameter", q), ("domain", d), ("codomain", c)]) => do
+      pure (.arrow (← reuseOf r) (← quantityOf q) (← tyOf d) (← tyOf c))
+  | .variant "emptyRow" (.record []) => some .emptyRow
+  | .variant "field" (.record [("name", .label n), ("member", m), ("tail", t)]) => do
+      pure (.field n (← tyOf m) (← tyOf t))
+  | .variant "specification" (.record [("metadata", m), ("extension", e)]) => do
+      pure (.specification (← tyOf m) (← tyOf e))
+  | .variant "prototype" (.record [("spec", s), ("target", t)]) => do
+      pure (.prototype (← tyOf s) (← tyOf t))
+  | .variant "custody" (.natural i) => some (.custody i)
+  | .variant "variant" r => (tyOf r).map .variant
+  | .variant "computation" (.record [("plan", p), ("response", r), ("result", c)]) => do
+      pure (.computation (← tyOf p) (← tyOf r) (← tyOf c))
+  | _ => none
+
+theorem tyOf_tyData : ∀ ty : Ty, tyOf (tyData ty) = some ty
+  | .natural | .label | .boolean | .emptyRow => rfl
+  | .variable i | .custody i => rfl
+  | .arrow r q d c => by
+    simp [tyData, tyOf, reuseOf_reuseData, quantityOf_quantityData, tyOf_tyData d, tyOf_tyData c]
+  | .field n m t => by simp [tyData, tyOf, tyOf_tyData m, tyOf_tyData t]
+  | .specification m e => by simp [tyData, tyOf, tyOf_tyData m, tyOf_tyData e]
+  | .prototype s t => by simp [tyData, tyOf, tyOf_tyData s, tyOf_tyData t]
+  | .variant r => by simp [tyData, tyOf, tyOf_tyData r]
+  | .computation p r c => by simp [tyData, tyOf, tyOf_tyData p, tyOf_tyData r, tyOf_tyData c]
+
+def annotationData (a : LambdaAnnotation) : Data :=
+  .record [("domain", tyData a.domain), ("codomain", tyData a.codomain),
+    ("parameter", quantityData a.parameter), ("reuse", reuseData a.reuse)]
+def annotationOf : Data → Option LambdaAnnotation
+  | .record [("domain", d), ("codomain", c), ("parameter", q), ("reuse", r)] => do
+      pure ⟨← tyOf d, ← tyOf c, ← quantityOf q, ← reuseOf r⟩
+  | _ => none
+theorem annotationOf_annotationData (a : LambdaAnnotation) :
+    annotationOf (annotationData a) = some a := by
+  simp [annotationData, annotationOf, tyOf_tyData, quantityOf_quantityData, reuseOf_reuseData]
+
+def optionData {α : Type} (g : α → Data) : Option α → Data
+  | none => .variant "none" unit
+  | some x => .variant "some" (g x)
+def optionOf {α : Type} (f : Data → Option α) : Data → Option (Option α)
+  | .variant "none" (.record []) => some none
+  | .variant "some" x => (f x).map some
+  | _ => none
+theorem optionOf_optionData {α : Type} (f : Data → Option α) (g : α → Data)
+    (h : ∀ x, f (g x) = some x) : ∀ o : Option α, optionOf f (optionData g o) = some o
+  | none => rfl
+  | some x => by simp [optionData, optionOf, h x]
+
+mutual
+def treeData : AnnotationTree → Data
+  | .node here children => .record [("here", optionData annotationData here),
+      ("children", forestData children)]
+def forestData : List AnnotationTree → Data
+  | [] => .variant "nil" unit
+  | t :: ts => .variant "cons" (.record [("head", treeData t), ("tail", forestData ts)])
+end
+
+mutual
+def treeOf : Data → Option AnnotationTree
+  | .record [("here", here), ("children", children)] => do
+      pure (.node (← optionOf annotationOf here) (← forestOf children))
+  | _ => none
+def forestOf : Data → Option (List AnnotationTree)
+  | .variant "nil" (.record []) => some []
+  | .variant "cons" (.record [("head", h), ("tail", t)]) => do
+      pure ((← treeOf h) :: (← forestOf t))
+  | _ => none
+end
+
+mutual
+theorem treeOf_treeData : ∀ t : AnnotationTree, treeOf (treeData t) = some t
+  | .node here children => by
+    simp [treeData, treeOf, optionOf_optionData annotationOf annotationData
+      annotationOf_annotationData, forestOf_forestData children]
+theorem forestOf_forestData : ∀ ts : List AnnotationTree, forestOf (forestData ts) = some ts
+  | [] => rfl
+  | t :: ts => by simp [forestData, forestOf, treeOf_treeData t, forestOf_forestData ts]
+end
+
+def boundData (b : Nat × Ty) : Data := .record [("index", .natural b.1), ("bound", tyData b.2)]
+def boundOf : Data → Option (Nat × Ty)
+  | .record [("index", .natural i), ("bound", ty)] => (tyOf ty).map (i, ·)
+  | _ => none
+theorem boundOf_boundData (b : Nat × Ty) : boundOf (boundData b) = some b := by
+  simp [boundData, boundOf, tyOf_tyData]
+
+def naturalOf : Data → Option Nat
+  | .natural n => some n
+  | _ => none
+
+def assumptionsData (θ : Assumptions) : Data :=
+  .record [("bounds", listWith boundData θ.bounds),
+    ("shareableVariables", listWith Data.natural θ.shareableVariables),
+    ("rigid", listWith Data.natural θ.rigid)]
+def assumptionsOf : Data → Option Assumptions
+  | .record [("bounds", b), ("shareableVariables", s), ("rigid", r)] => do
+      pure ⟨← listOfWith boundOf b, ← listOfWith naturalOf s, ← listOfWith naturalOf r⟩
+  | _ => none
+theorem assumptionsOf_assumptionsData (θ : Assumptions) :
+    assumptionsOf (assumptionsData θ) = some θ := by
+  simp [assumptionsData, assumptionsOf, listOfWith_listWith boundOf boundData boundOf_boundData,
+    listOfWith_listWith naturalOf Data.natural (fun _ => rfl)]
+
+/-! ## §6. `Code Ψ A θ` and the checked importer -/
+
+/-- A term as the kernel holds it: its finite annotation tree and the theory it is checked under. -/
+structure Held where
+  term : Term
+  tree : AnnotationTree
+  assumptions : Assumptions
+
+def Held.annotated (h : Held) : AnnotatedTerm := ⟨h.term, treeAnnotations h.tree, h.assumptions⟩
+
+/-- **`Code Ψ A θ`**: a term typed at `A` in hypotheses `Ψ` under the theory `θ`. The typing is
+`Calculus.Typed` of the slot calculus (`Slot/Core4.lean`): a `Checked` certificate at type `A`. -/
+def Code (Ψ : Context) (A : Ty) (θ : Assumptions) : Type :=
+  { t : AnnotatedTerm // t.assumptions = θ ∧ ∃ c : Checked t Ψ, c.type = A }
+
+theorem Code.typed {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
+    Obend.Slot.Calculus.Typed (Tm := AnnotatedTerm) Ψ c.val A := c.2.2
+
+/-- The body of a quotation of held code. -/
+def heldData (h : Held) : Data :=
+  .record [("term", quote h.term), ("annotations", treeData h.tree),
+    ("assumptions", assumptionsData h.assumptions)]
+def heldOf : Data → Option Held
+  | .record [("term", t), ("annotations", a), ("assumptions", θ)] => do
+      pure ⟨← unquote t, ← treeOf a, ← assumptionsOf θ⟩
+  | _ => none
+theorem heldOf_heldData (h : Held) : heldOf (heldData h) = some h := by
+  simp [heldData, heldOf, quote_roundtrip, treeOf_treeData, assumptionsOf_assumptionsData]
+
+/-- A quotation of held code as it crosses: the encoding version, then the body. -/
+def quotation (version : Nat) (h : Held) : Data := versioned version (heldData h)
+
+/-! ### Diagnosis: the index that escaped, the hole that was found -/
+
+mutual
+/-- The first free index of a tree that escapes `n` hypotheses, counted at the root. -/
+def escapeOf : Nat → Shape → Option Nat
+  | n, .var i => if i < n then none else some i
+  | n, .bind b => (escapeOf (n + 1) b).map (· - 1)
+  | n, .node _ cs => escapesOf n cs
+def escapesOf : Nat → List Shape → Option Nat
+  | _, [] => none
+  | n, c :: cs => match escapeOf n c with
+    | some i => some i
+    | none => escapesOf n cs
+end
+
+mutual
+theorem escapeOf_scoped : ∀ (n : Nat) (s : Shape), Tree.Scoped n s → escapeOf n s = none
+  | n, .var i, h => by simp only [Tree.Scoped, Tree.All] at h; simp [escapeOf, h]
+  | n, .bind b, h => by
+    rw [Obend.Core.Invariant.shape_scoped_bind] at h
+    simp [escapeOf, escapeOf_scoped (n + 1) b h]
+  | n, .node tag cs, h => by
+    rw [Obend.Core.Invariant.shape_scoped_node] at h
+    simp only [escapeOf]; exact escapesOf_scoped n cs h
+theorem escapesOf_scoped : ∀ (n : Nat) (cs : List Shape), (∀ c ∈ cs, Tree.Scoped n c) →
+    escapesOf n cs = none
+  | _, [], _ => rfl
+  | n, c :: cs, h => by
+    simp only [escapesOf, escapeOf_scoped n c (h c (by simp))]
+    exact escapesOf_scoped n cs (fun c' m => h c' (by simp [m]))
+end
+
+mutual
+/-- The position (in the `Syntax` tree) and identity of the first hole. -/
+def holeOf : Shape → Option (List Nat × Nat)
+  | .var _ => none
+  | .bind b => (holeOf b).map fun found => (0 :: found.1, found.2)
+  | .node (.hole n) _ => some ([], n)
+  | .node _ cs => holesOf 0 cs
+def holesOf : Nat → List Shape → Option (List Nat × Nat)
+  | _, [] => none
+  | i, c :: cs => match holeOf c with
+    | some found => some (i :: found.1, found.2)
+    | none => holesOf (i + 1) cs
+end
+
+/-- A term with no hole anywhere: the shape of `Scoped`, without the `hole` rule. -/
+inductive NoHole : Term → Prop where
+  | bound (i : Nat) : NoHole (.bound i)
+  | lam {b : Term} : NoHole b → NoHole (.lam b)
+  | app {f a : Term} : NoHole f → NoHole a → NoHole (.app f a)
+  | mix {a b : Term} : NoHole a → NoHole b → NoHole (.mix a b)
+  | fix {a b : Term} : NoHole a → NoHole b → NoHole (.fix a b)
+  | specification {a b : Term} : NoHole a → NoHole b → NoHole (.specification a b)
+  | prototype {a b : Term} : NoHole a → NoHole b → NoHole (.prototype a b)
+  | reflect {t : Term} : NoHole t → NoHole (.reflect t)
+  | metadata {t : Term} : NoHole t → NoHole (.metadata t)
+  | project {t : Term} : NoHole t → NoHole (.project t)
+  | natural (v : Nat) : NoHole (.nat v)
+  | boolean (v : Bool) : NoHole (.boolean v)
+  | label (v : String) : NoHole (.label v)
+  | binary {p : Primitive} {a b : Term} : NoHole a → NoHole b → NoHole (.binary p a b)
+  | extend {t : Term} {fs : List (String × Term)} :
+      NoHole t → (∀ f ∈ fs, NoHole f.2) → NoHole (.extend t fs)
+  | record {fs : List (String × Term)} : (∀ f ∈ fs, NoHole f.2) → NoHole (.record fs)
+  | get {t : Term} {name : String} : NoHole t → NoHole (.get t name)
+  | condition {t z s : Term} : NoHole t → NoHole z → NoHole s → NoHole (.ifZero t z s)
+  | inject {tag : String} {p : Term} : NoHole p → NoHole (.inject tag p)
+  | case {t : Term} {arms : List (String × Term)} :
+      NoHole t → (∀ arm ∈ arms, NoHole arm.2) → NoHole (.case t arms)
+  | ifBool {c t f : Term} : NoHole c → NoHole t → NoHole f → NoHole (.ifBool c t f)
+  | perform {plan : Term} : NoHole plan → NoHole (.perform plan)
+  | done {value : Term} : NoHole value → NoHole (.done value)
+
+/-- A typed term has no hole: `PartialTyping` has no rule for one. -/
+theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : Obend.Core.Ty.Uses}
+    (typed : PartialTyping θ Γ t A u) : NoHole t := by
+  refine PartialTyping.rec
+    (motive_1 := fun _ term _ _ _ => NoHole term)
+    (motive_2 := fun _ fields _ _ _ => ∀ field ∈ fields, NoHole field.2)
+    (motive_3 := fun _ arms _ _ _ _ => ∀ arm ∈ arms, NoHole arm.2)
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+  · intros; exact .bound _
+  · intros; exact .natural _
+  · intros; exact .boolean _
+  · intros; exact .label _
+  · intros; exact .lam (by assumption)
+  · intros; assumption
+  · intros; exact .app (by assumption) (by assumption)
+  · intros; exact .record (by assumption)
+  · intros; exact .get (by assumption)
+  · intros; exact .extend (by assumption) (by assumption)
+  · intros; exact .specification (by assumption) (by assumption)
+  · intros; exact .prototype (by assumption) (by assumption)
+  · intros; exact .reflect (by assumption)
+  · intros; exact .metadata (by assumption)
+  · intros; exact .project (by assumption)
+  · intros; exact .mix (by assumption) (by assumption)
+  · intros; exact .fix (by assumption) (by assumption)
+  · intros; exact .binary (by assumption) (by assumption)
+  · intros; exact .condition (by assumption) (by assumption) (by assumption)
+  · intros; exact .inject (by assumption)
+  · intros; exact .case (by assumption) (by assumption)
+  · intros; exact .ifBool (by assumption) (by assumption) (by assumption)
+  · intros; exact .perform (by assumption)
+  · intros; exact .done (by assumption)
+  · intros; exact .case (by assumption) (by assumption)
+  · intro _ field member; simp at member
+  · intro _ name body rest type row bu ru hb hr _ ihb ihr field member
+    simp only [List.mem_cons] at member
+    rcases member with rfl | member
+    · exact ihb
+    · exact ihr field member
+  · intro _ result arm member; simp at member
+  · intro _ name body rest payload row result bu ru hb _ _ _ ihb ihr arm member
+    simp only [List.mem_cons] at member
+    rcases member with rfl | member
+    · exact ihb
+    · exact ihr arm member
+
+theorem holesOf_none {i : Nat} {cs : List Shape} (h : ∀ c ∈ cs, holeOf c = none) :
+    holesOf i cs = none := by
+  induction cs generalizing i with
+  | nil => rfl
+  | cons c cs ih =>
+    simp only [holesOf, h c (by simp)]
+    exact ih (fun c' m => h c' (by simp [m]))
+
+theorem noHole_holeOf {t : Term} (h : NoHole t) : holeOf (encode t) = none := by
+  induction h with
+  | bound => simp [encode, holeOf]
+  | lam _ ih => simp [encode, holeOf, ih]
+  | app _ _ ih1 ih2 | mix _ _ ih1 ih2 | fix _ _ ih1 ih2 | specification _ _ ih1 ih2
+  | prototype _ _ ih1 ih2 | binary _ _ ih1 ih2 =>
+    simp only [encode, holeOf]; exact holesOf_none (by simp [ih1, ih2])
+  | reflect _ ih | metadata _ ih | project _ ih | get _ ih | inject _ ih | perform _ ih | done _ ih =>
+    simp only [encode, holeOf]; exact holesOf_none (by simp [ih])
+  | natural | boolean | label => simp [encode, holeOf, holesOf]
+  | extend _ _ iht ihf =>
+    simp only [encode, holeOf]
+    refine holesOf_none ?_
+    simp only [List.mem_cons, List.mem_map]
+    rintro c (rfl | ⟨f, hf, rfl⟩)
+    · exact iht
+    · simp only [holeOf]; exact holesOf_none (by simp [ihf f hf])
+  | record _ ihf =>
+    simp only [encode, holeOf]
+    refine holesOf_none ?_
+    simp only [List.mem_map]
+    rintro c ⟨f, hf, rfl⟩
+    simp only [holeOf]; exact holesOf_none (by simp [ihf f hf])
+  | condition _ _ _ ih1 ih2 ih3 =>
+    simp only [encode, holeOf]; exact holesOf_none (by simp [holeOf, ih1, ih2, ih3])
+  | case _ _ iht iha =>
+    simp only [encode, holeOf]
+    refine holesOf_none ?_
+    simp only [List.mem_cons, List.mem_map]
+    rintro c (rfl | ⟨f, hf, rfl⟩)
+    · exact iht
+    · simp only [holeOf]; exact holesOf_none (by simp [holeOf, iha f hf])
+  | ifBool _ _ _ ih1 ih2 ih3 =>
+    simp only [encode, holeOf]; exact holesOf_none (by simp [ih1, ih2, ih3])
+
+/-! ### The importer -/
+
+inductive ImportRefusal where
+  /-- Not a versioned quotation, or one written in another encoding (both digests named). -/
+  | version (refusal : VersionRefusal)
+  /-- The body is not a term, an annotation tree and a theory in this encoding. -/
+  | malformed
+  /-- Checked under `found`; this import is at `expected`. -/
+  | assumptionsDiffer (found expected : Assumptions)
+  /-- A free index escapes the hypotheses (counted at the root). -/
+  | escapedIndex (index : Nat)
+  /-- A hole, at its `Syntax` position: a term with a hole is data, never code. -/
+  | holeInCode (position : List Nat) (identity : Nat)
+  /-- The checker's own refusal, with its position. -/
+  | rejected (refusal : CheckRefusal)
+
+/-- Why the checker refused: an escaped index first, then a hole, else the checker's words. -/
+def diagnose (Ψ : Context) (t : Term) (refusal : CheckRefusal) : ImportRefusal :=
+  match escapeOf Ψ.length (encode t) with
+  | some i => .escapedIndex i
+  | none => match holeOf (encode t) with
+    | some found => .holeInCode found.1 found.2
+    | none => .rejected refusal
+
+/-- Check a held term at `A` in `Ψ` under `θ`. -/
+def checkHeld (Ψ : Context) (A : Ty) (θ : Assumptions) (h : Held) :
+    Except ImportRefusal (Code Ψ A θ) :=
+  if hθ : h.assumptions = θ then
+    match accepted : checkAgainst h.annotated Ψ A with
+    | .ok c => .ok ⟨h.annotated, hθ, c, (checkAgainst_sound accepted).1⟩
+    | .error e => .error (diagnose Ψ h.term e)
+  else .error (.assumptionsDiffer h.assumptions θ)
+
+/-- **The checked importer** of a reader of encoding `version`. -/
+def importWith (version : Nat) (Ψ : Context) (A : Ty) (θ : Assumptions) (d : Data) :
+    Except ImportRefusal (Code Ψ A θ) :=
+  match readVersioned version d with
+  | .error e => .error (.version e)
+  | .ok body => match heldOf body with
+    | none => .error .malformed
+    | some h => checkHeld Ψ A θ h
+
+/-- The deployed importer reads this edition's encoding. -/
+def «import» (Ψ : Context) (A : Ty) (θ : Assumptions) (d : Data) : Except ImportRefusal (Code Ψ A θ) :=
+  importWith encodingVersion Ψ A θ d
+
+theorem importWith_ok {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
+    {c : Code Ψ A θ} (h : importWith version Ψ A θ d = .ok c) :
+    ∃ body held, readVersioned version d = .ok body ∧ heldOf body = some held ∧
+      c.val = held.annotated ∧ ∃ k, checkAgainst held.annotated Ψ A = .ok k := by
+  unfold importWith at h
+  split at h
+  · cases h
+  · rename_i body hv
+    split at h
+    · cases h
+    · rename_i held hb
+      unfold checkHeld at h
+      split at h
+      · split at h
+        · rename_i k hk
+          cases h
+          exact ⟨body, held, hv, hb, rfl, k, hk⟩
+        · cases h
+      · cases h
+
+/-- **T6 `import_sound`.** An import is code under exactly the importer's theory, and the checker
+accepted exactly the imported annotated term. -/
+theorem import_sound {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
+    {c : Code Ψ A θ} (h : importWith version Ψ A θ d = .ok c) :
+    c.val.assumptions = θ ∧ Obend.Slot.Calculus.Typed (Tm := AnnotatedTerm) Ψ c.val A ∧
+      ∃ k, checkAgainst c.val Ψ A = .ok k := by
+  obtain ⟨_, held, _, _, hc, k, hk⟩ := importWith_ok h
+  refine ⟨c.2.1, c.typed, ?_⟩
+  rw [hc]
+  exact ⟨k, hk⟩
+
+/-- **T8 `import_scoped`.** Code is scoped by its hypotheses: no index escapes `Ψ`. Every import is
+code, so every import is scoped. -/
+theorem code_scoped {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
+    Obend.Core.Invariant.Scoped Ψ.length c.val.term := by
+  obtain ⟨k, _⟩ := c.2.2
+  exact Obend.Core.MachineTyping.source_scoped k.derivation
+
+theorem import_scoped {version : Nat} {Ψ : Context} {A : Ty} {θ : Assumptions} {d : Data}
+    {c : Code Ψ A θ} (_ : importWith version Ψ A θ d = .ok c) :
+    Obend.Core.Invariant.Scoped Ψ.length c.val.term := code_scoped c
+
+/-- Holes are never code (orientation §8.2). -/
+theorem code_noHole {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) : NoHole c.val.term := by
+  obtain ⟨k, _⟩ := c.2.2
+  exact typed_noHole k.derivation
+
+/-- **`splice_scoped`** (T8's second half): hypotheses `Scoped |Ψ|` substituted by fillings
+`Scoped |Ψ′|` give a term `Scoped |Ψ′|`. -/
+theorem splice_scoped {n m : Nat} {t : Term} (ht : Obend.Core.Invariant.Scoped n t)
+    (σ : Nat → Term) (hσ : ∀ i, i < n → Obend.Core.Invariant.Scoped m (σ i)) :
+    Obend.Core.Invariant.Scoped m (t.substitute σ) := by
+  rw [Obend.Core.Invariant.scoped_encode_iff] at ht ⊢
+  exact Obend.Core.TermTraverse.scoped_substitute t n m ht σ
+    (fun i hi => (Obend.Core.Invariant.scoped_encode_iff m (σ i)).1 (hσ i hi))
+
+/-- The quotation of an accepted held term imports to exactly that term. -/
+theorem import_roundtrip (version : Nat) {Ψ : Context} {A : Ty} {θ : Assumptions} (held : Held)
+    (hθ : held.assumptions = θ) {k : Checked held.annotated Ψ}
+    (accepted : checkAgainst held.annotated Ψ A = .ok k) :
+    ∃ c : Code Ψ A θ, importWith version Ψ A θ (quotation version held) = .ok c ∧
+      c.val = held.annotated := by
+  refine ⟨⟨held.annotated, hθ, k, (checkAgainst_sound accepted).1⟩, ?_, rfl⟩
+  unfold importWith quotation
+  rw [readVersioned_versioned]
+  simp only [heldOf_heldData]
+  unfold checkHeld
+  rw [dite_eq_left_of_eq_true (eq_true hθ)]
+  split
+  · rename_i k' hk'
+    rw [accepted] at hk'
+  · rename_i e he
+    rw [accepted] at he
+    cases he
+
+/-- Realizing an annotation tree at the root needs nothing: it is the tree's own lookup. -/
+theorem treeAnnotations_realizes (tree : AnnotationTree) :
+    Obend.Core.Proofs.BidirectionalCompleteness.Realizes (treeAnnotations tree) [] tree := by
+  intro suffix; rfl
+
+/-- Full annotated completeness with its witness in view: a derivation is accepted by the checker
+under the annotations of some finite tree. -/
+theorem tree_complete {θ : Assumptions} {Ψ : Context} {t : Term} {A : Ty} {u : Obend.Core.Ty.Uses}
+    (typed : PartialTyping θ Ψ t A u) (safe : Obend.Core.Ty.safeUses Ψ u = true)
+    (valid : Obend.Core.Ty.validContext θ.shareableVariables Ψ = true)
+    (assumptionsValid : θ.valid = true) :
+    ∃ tree k, checkAgainst ⟨t, treeAnnotations tree, θ⟩ Ψ A = .ok k := by
+  obtain ⟨tree, completeTerm⟩ := Obend.Core.Proofs.BidirectionalCompleteness.complete typed
+  have yielded := ((completeTerm (treeAnnotations tree) [] (treeAnnotations_realizes tree)).2 A
+    (Obend.Core.Check.sameType_refl _ _))
+  unfold Obend.Core.Proofs.BidirectionalCompleteness.Yields at yielded
+  split at yielded
+  · rename_i result accepted
+    have safe' : Obend.Core.Ty.safeUses Ψ result.uses = true := by rw [yielded]; exact safe
+    refine ⟨tree, ⟨A, result.uses, result.derivation, safe', valid, assumptionsValid⟩, ?_⟩
+    simp only [checkAgainst, accepted, bind, Except.bind, Obend.Core.Bidirectional.need_ok safe',
+      Obend.Core.Bidirectional.need_ok valid, Obend.Core.Bidirectional.need_ok assumptionsValid,
+      pure, Except.pure]
+  · exact yielded.elim
+
+/-- **T6 `import_complete`.** Every code has a quotation (its term, under a finite annotation tree,
+at its own theory) that imports back to its term. The tree is the importer's witness, not the
+supplied annotations: an importer that trusted those would not be complete
+(`annotation_presence_not_coverage`, and `empty_tree_refused` below). -/
+theorem import_complete (version : Nat) {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) :
+    ∃ tree, ∃ c' : Code Ψ A θ,
+      importWith version Ψ A θ (quotation version ⟨c.val.term, tree, θ⟩) = .ok c' ∧
+        c'.val.term = c.val.term := by
+  obtain ⟨hθ, k, hk⟩ := c.2
+  have derivation := k.derivation
+  have safe := k.safe
+  have valid := k.contextValid
+  have av := k.assumptionsValid
+  rw [hθ] at derivation valid av
+  rw [hk] at derivation
+  simp only [AnnotatedTerm.erase] at derivation
+  obtain ⟨tree, k', accepted⟩ := tree_complete derivation safe valid av
+  obtain ⟨c', hc', same⟩ := import_roundtrip version ⟨c.val.term, tree, θ⟩ rfl accepted
+  exact ⟨tree, c', hc', by rw [same]; rfl⟩
+
+/-! ### The refusals, each by name -/
+
+theorem import_foreignEncoding {found version : Nat} (differ : found ≠ version) (Ψ : Context) (A : Ty)
+    (θ : Assumptions) (held : Held) :
+    importWith version Ψ A θ (quotation found held) =
+      .error (.version (.foreignEncoding found version)) := by
+  unfold importWith quotation
+  rw [quote_versioned differ]
+
+theorem import_assumptionsDiffer (version : Nat) (Ψ : Context) (A : Ty) {θ : Assumptions} {held : Held}
+    (differ : held.assumptions ≠ θ) :
+    importWith version Ψ A θ (quotation version held) = .error (.assumptionsDiffer held.assumptions θ) := by
+  unfold importWith quotation
+  rw [readVersioned_versioned]
+  simp only [heldOf_heldData]
+  unfold checkHeld
+  rw [dite_eq_right_of_eq_false (eq_false differ)]
+
+theorem checkHeld_refused {Ψ : Context} {A : Ty} {θ : Assumptions} {held : Held}
+    (hθ : held.assumptions = θ) (refused : ∀ k, checkAgainst held.annotated Ψ A ≠ .ok k) :
+    ∃ e, checkHeld Ψ A θ held = .error (diagnose Ψ held.term e) := by
+  unfold checkHeld
+  rw [dite_eq_left_of_eq_true (eq_true hθ)]
+  split
+  · rename_i k hk; exact absurd hk (refused k)
+  · rename_i e _; exact ⟨e, rfl⟩
+
+theorem accepted_typed {Ψ : Context} {A : Ty} {held : Held} {k : Checked held.annotated Ψ}
+    (accepted : checkAgainst held.annotated Ψ A = .ok k) :
+    PartialTyping held.assumptions Ψ held.term A k.uses := by
+  have := (checkAgainst_sound accepted)
+  rw [this.1] at this
+  exact this.2
+
+/-- **`escapedIndex`.** A quotation whose term has an index escaping `Ψ` is refused, naming the
+index (counted at the root). -/
+theorem import_escapedIndex (version : Nat) {Ψ : Context} (A : Ty) {θ : Assumptions} {held : Held}
+    (hθ : held.assumptions = θ) {i : Nat} (escapes : escapeOf Ψ.length (encode held.term) = some i) :
+    importWith version Ψ A θ (quotation version held) = .error (.escapedIndex i) := by
+  have refused : ∀ k, checkAgainst held.annotated Ψ A ≠ .ok k := by
+    intro k accepted
+    have inScope := Obend.Core.MachineTyping.source_scoped (accepted_typed accepted)
+    rw [Obend.Core.Invariant.scoped_encode_iff] at inScope
+    rw [escapeOf_scoped _ _ inScope] at escapes
+    cases escapes
+  obtain ⟨e, he⟩ := checkHeld_refused hθ refused
+  unfold importWith quotation
+  rw [readVersioned_versioned]
+  simp only [heldOf_heldData, he, diagnose, escapes]
+
+/-- **`holeInCode`.** A quotation whose term has a hole is refused, naming its position. -/
+theorem import_holeInCode (version : Nat) {Ψ : Context} (A : Ty) {θ : Assumptions} {held : Held}
+    (hθ : held.assumptions = θ) (inScope : escapeOf Ψ.length (encode held.term) = none)
+    {found : List Nat × Nat} (hole : holeOf (encode held.term) = some found) :
+    importWith version Ψ A θ (quotation version held) = .error (.holeInCode found.1 found.2) := by
+  have refused : ∀ k, checkAgainst held.annotated Ψ A ≠ .ok k := by
+    intro k accepted
+    rw [noHole_holeOf (typed_noHole (accepted_typed accepted))] at hole
+    cases hole
+  obtain ⟨e, he⟩ := checkHeld_refused hθ refused
+  unfold importWith quotation
+  rw [readVersioned_versioned]
+  simp only [heldOf_heldData, he, diagnose, inScope, hole]
+
+/-! ### Teeth: every refusal is reachable, and the tree is the importer's witness -/
+
+theorem escape_tooth : escapeOf 0 (encode (.bound 0)) = some 0 := by simp [encode, escapeOf]
+
+theorem hole_tooth : holeOf (encode (.lam (.hole 3 []))) = some ([0], 3) := by simp [encode, holeOf]
+
+/-- The tooth of T8: `bound 0` quoted for an empty context is refused, naming index 0. -/
+theorem escaped_import_tooth (version : Nat) :
+    importWith version [] .natural {} (quotation version ⟨.bound 0, .node none [], {}⟩) =
+      .error (.escapedIndex 0) :=
+  import_escapedIndex (Ψ := []) (held := ⟨.bound 0, .node none [], {}⟩) version .natural rfl escape_tooth
+
+theorem hole_scoped : escapeOf 0 (encode (.lam (.hole 3 []))) = none := by simp [encode, escapeOf, escapesOf]
+
+/-- The tooth of `holeInCode`: a lambda over a hole is refused at the hole's position. -/
+theorem hole_import_tooth (version : Nat) :
+    importWith version [] .natural {} (quotation version ⟨.lam (.hole 3 []), .node none [], {}⟩) =
+      .error (.holeInCode [0] 3) :=
+  import_holeInCode (Ψ := []) (held := ⟨.lam (.hole 3 []), .node none [], {}⟩) version .natural rfl
+    hole_scoped hole_tooth
+
+/-- `λx. x` applied to `0`, typed at `Nat`: the lambda needs its annotation in synthesis. -/
+def identityApplied : Term := .app (.lam (.bound 0)) (.nat 0)
+
+/-- Under the empty tree the checker refuses it (no lambda annotation in synthesis position). -/
+theorem empty_tree_refused :
+    (checkAgainst ⟨identityApplied, treeAnnotations (.node none []), {}⟩ [] .natural).toBool = false := by
+  decide +kernel
+
+/-- Under the tree that annotates the lambda, it is accepted: the witness of `import_complete`
+is the tree, and it exists. -/
+def identityTree : AnnotationTree :=
+  .node none [.node (some ⟨.natural, .natural, .unrestricted, .once⟩) []]
+
+theorem identity_tree_accepted :
+    (checkAgainst ⟨identityApplied, treeAnnotations identityTree, {}⟩ [] .natural).toBool = true := by
+  decide +kernel
 
 end Obend.Core.Code
 end
