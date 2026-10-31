@@ -20,3 +20,6 @@ open Obend.Law Obend.Spec.LawCompile Obend.Vault Obend.Doc
 #tooth mem_writes by mutation writeOf := fun V p => V.lookup p.name
 -- A selection deletes the other candidates' runs only: deleting the kept one's too breaks it.
 #tooth select_keeps by mutation selectPatch := fun alts _ => (alts.flatMap fun x => segAtoms x.2).map Op.delete
+-- The reader strips the view's marks: a strip that keeps them reads `{behind}` back as an edit.
+#tooth dropMark_mark by mutation dropMark := fun l => l
+#tooth stripToks_mark by mutation dropMark := fun l => l

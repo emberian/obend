@@ -133,7 +133,8 @@ def resolveIn (H : Hash) (es : List Entry) : Resolve := fun name sp =>
     | _ => (quoteOf e.graph sp).map fun b => ⟨e.id, sp, e.version, H b, .following⟩
 
 /-- The page a markdown text reads as, before its cites are committed (its bytes are its text's). -/
-def draft (md : String) : Graph := Graph.empty.apply (readPage (fun _ sp => some ⟨0, sp, 0, [], .following⟩) md)
+def draft (md : String) : Graph :=
+  Graph.empty.apply (chain root (contents (fun _ sp => some ⟨0, sp, 0, [], .following⟩) (stripToks (tokens md))))
 
 /-- The entries of a store's pages at their current versions. -/
 def Store.entries (s : Store) : List Entry :=
@@ -250,12 +251,14 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
 /-- The owner's write of the text `md` to page `p`: the file lined up against the current rendering,
 or a birth. A refused write records the refusal and the text it refused. -/
 def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String) : Change :=
-  let cs := contents (resolveIn H es) (tokens md)
-  let (G', added) : Graph × List AtomId := match p.current with
-    | none => (Graph.empty.apply (chain root cs), [])
+  let cs := contents (resolveIn H es) (stripToks (tokens md))
+  let (G', added, same) : Graph × List AtomId × Bool := match p.current with
+    | none => (Graph.empty.apply (chain root cs), [], false)
     | some G =>
       let b := editPatch H G (align (pieces G p.name p.who) cs) "owner"
-      (G.apply b.ops, b.added)
+      (G.apply b.ops, b.added, b.ops.isEmpty)
+  -- Only the view's marks changed (one deleted, say): nothing to write; the view is redrawn.
+  if same then ⟨p.history, md, p.authors, p.note⟩ else
   match commit es p G' (added.map (·, "owner")) .owner turn with
   | .ok ch => ch
   | .error msg => ⟨p.history, md, p.authors, some msg⟩
@@ -303,6 +306,94 @@ def openEntries (pages : List Page) (V : List (String × String)) : List Entry :
       else some ⟨p.name, p.id, draft md, p.history.length⟩
     | none => p.current.map fun G => ⟨p.name, p.id, G, p.history.length - 1⟩
 
+/-! ### Settling: links that resolve now, and the view redrawn -/
+
+/-- What a link written as text should become now that its page may exist: the cite it resolves
+to, or nothing. -/
+def danglingOf (H : Hash) (es : List Entry) : Content → Option Content
+  | .text t =>
+    match tokens t with
+    | [.link n] => let (pg, sp) := target false n
+      (resolveIn H es (String.ofList pg) sp).map fun ct => .cite (String.ofList n) ct
+    | [.embed n] => let (pg, sp) := target true n
+      (resolveIn H es (String.ofList pg) sp).map fun ct => .cite (String.ofList n) ct
+    | _ => none
+  | _ => none
+
+/-- Replace each atom of a version that `sel` says should hold something else, in place. -/
+def replaceAll (H : Hash) (G : Graph) (ps : List Piece) (sel : Content → Option Content) (who : String) :
+    Graph × List AtomId × Nat :=
+  ps.foldl (fun (acc : Graph × List AtomId × Nat) pc =>
+    match pc with
+    | .atom a _ => match (G.label a).bind sel with
+      | some c => let b := replacePatch H acc.1 a (atomAfter ps a) c who
+        (acc.1.apply b.ops, acc.2.1 ++ b.added, acc.2.2 + 1)
+      | none => acc
+    | _ => acc) (G, [], 0)
+
+/-- A page whose links dangled when written and whose pages now exist: those links resolved, a
+write by the owner (judged like any). A page whose last write was refused is left alone, so the
+text the person typed stays in its file. -/
+def fixDangling (H : Hash) (s : Store) (p : Page) : Page :=
+  if p.note.isSome then p else
+  match p.current with
+  | none => p
+  | some G =>
+    let (G', added, n) := replaceAll H G (pieces G p.name p.who) (danglingOf H s.entries) "owner"
+    if n = 0 then p else
+    match commit s.entries p G' (added.map (·, "owner")) .owner s.turn with
+    | .ok ch => p.withChange ch
+    | .error _ => p
+
+/-- The page's text at the current view: its current version, each cite whose facts fail marked
+with their names (`Obend.Doc.viewAtom`: `![[Beta]]{behind}`). -/
+def Page.view (H : Hash) (s : Store) (p : Page) : Option String :=
+  p.current.map fun G => renderWith (viewAtom H s.world G) G p.name p.who
+
+/-- The text the store holds for a page's file becomes its view (unless its last write was refused:
+then the file keeps what the person typed). -/
+def remarkPage (H : Hash) (s : Store) (p : Page) : Page :=
+  if p.note.isSome then p else
+  match p.view H s with
+  | some t => { p with seen := some t }
+  | none => p
+
+/-- **Settle** a store: resolve the links that now resolve, then redraw every page's view. -/
+def settle (H : Hash) (s : Store) : Store :=
+  let s1 : Store := { s with pages := s.pages.map (fixDangling H s) }
+  { s1 with pages := s1.pages.map (remarkPage H s1) }
+
+theorem fixDangling_name (H : Hash) (s : Store) (p : Page) : (fixDangling H s p).name = p.name := by
+  unfold fixDangling
+  repeat (first | rfl | split)
+
+theorem fixDangling_seen (H : Hash) (s : Store) (p : Page) (h : p.seen.isSome) :
+    (fixDangling H s p).seen.isSome := by
+  unfold fixDangling
+  repeat (first | exact h | rfl | split)
+
+theorem remarkPage_name (H : Hash) (s : Store) (p : Page) : (remarkPage H s p).name = p.name := by
+  unfold remarkPage; split; · rfl
+  split <;> rfl
+
+theorem remarkPage_seen (H : Hash) (s : Store) (p : Page) (h : p.seen.isSome) :
+    (remarkPage H s p).seen.isSome := by
+  unfold remarkPage; split; · exact h
+  split
+  · rfl
+  · exact h
+
+theorem settle_names (H : Hash) (s : Store) : (settle H s).pages.map (·.name) = s.pages.map (·.name) := by
+  simp [settle, List.map_map, Function.comp_def, remarkPage_name, fixDangling_name]
+
+theorem settle_seen (H : Hash) (s : Store) :
+    ∀ q ∈ (settle H s).pages, ∃ p ∈ s.pages, q.name = p.name ∧ (p.seen.isSome → q.seen.isSome) := by
+  intro q hq
+  simp only [settle, List.map_map, List.mem_map, Function.comp_apply] at hq
+  obtain ⟨p, hp, rfl⟩ := hq
+  exact ⟨p, hp, by rw [remarkPage_name, fixDangling_name],
+    fun h => remarkPage_seen _ _ _ (fixDangling_seen _ _ _ h)⟩
+
 /-- What an open did. -/
 structure Opened where
   store : Store
@@ -315,7 +406,7 @@ def openVault (H : Hash) (s : Store) (V : List (String × String)) : Opened :=
   let all := s.pages ++ freshPages H s fresh
   let es := openEntries all V
   let pages := all.zipIdx.map fun (p, i) => openPage H es (s.turn + i) p (V.lookup p.name)
-  let s' : Store := { s with pages := pages, turn := s.turn + all.length }
+  let s' : Store := settle H { s with pages := pages, turn := s.turn + all.length }
   ⟨s', writesFor s' V⟩
 
 /-! ### Opening twice is a no-op -/
@@ -425,6 +516,17 @@ theorem nodup_fresh (s : Store) (V : List (String × String)) (hV : (V.map (·.1
     (((V.filter fun e => !s.pages.any (·.name == e.1)).map (·.1))).Nodup :=
   hV.sublist (List.Sublist.map _ List.filter_sublist)
 
+/-- After settling and the writes, the vault is quiet: the view is what each file holds. -/
+theorem quiet_after_settle (H : Hash) (s : Store) (V : List (String × String))
+    (hnd : (s.pages.map (·.name)).Nodup)
+    (hseen : ∀ p ∈ s.pages, (V.lookup p.name).isSome → p.seen.isSome)
+    (hcover : ∀ e ∈ V, e.1 ∈ s.pages.map (·.name)) :
+    quiet (settle H s) (overwrite V (writesFor (settle H s) V)) = true := by
+  refine quiet_after_writes _ V (by rw [settle_names]; exact hnd) (fun q hq hl => ?_)
+    (fun e he => by rw [settle_names]; exact hcover e he)
+  obtain ⟨p, hp, hn, hs⟩ := settle_seen H s q hq
+  exact hs (hseen p hp (hn ▸ hl))
+
 /-- **Opening twice is a no-op.** For every store whose page names are distinct and every vault the
 reader accepts (file names distinct, as a directory's are): open it, write the files the open says
 to write, and open again; the second open changes neither the store nor any file. -/
@@ -447,9 +549,9 @@ theorem open_idem (H : Hash) (s : Store) (V : List (String × String))
           (·.name) ∘ Prod.fst := by
         funext x; simp [openPage_name]
       rw [this, ← List.map_map, List.zipIdx_map_fst, List.map_append, freshPages_names]
-    have hq2 : quiet { s with pages := pages, turn := s.turn + all.length }
-        (overwrite V (writesFor { s with pages := pages, turn := s.turn + all.length } V)) = true := by
-      refine quiet_after_writes _ V ?_ ?_ ?_
+    have hq2 : quiet (settle H { s with pages := pages, turn := s.turn + all.length })
+        (overwrite V (writesFor (settle H { s with pages := pages, turn := s.turn + all.length }) V)) = true := by
+      refine quiet_after_settle H _ V ?_ ?_ ?_
       · show (pages.map (·.name)).Nodup
         rw [hnames, List.nodup_append]
         refine ⟨hs, hfresh ▸ nodup_fresh s V hV, ?_⟩
@@ -592,7 +694,7 @@ def postAs (H : Hash) (s : Store) (who : Actor) (page text : String) : Except St
   unless who.may "post" page do
     throw (who.name ++ " may not post to " ++ page ++ " (no post grant)")
   let some G := p.current | throw (page ++ " has no version yet")
-  let cs := contents (resolveIn H s.entries) (tokens text)
+  let cs := contents (resolveIn H s.entries) (stripToks (tokens text))
   let b := postPatch H G (align (pieces G p.name p.who) cs) who.name
   if b.ops.isEmpty then throw ("nothing to post: the text is " ++ page ++ "'s")
   let added := b.added.map fun a => (a, if b.asIs.contains a then "as it is" else who.name)
@@ -672,14 +774,7 @@ def reciteIn (H : Hash) (s : Store) (who : Actor) (page : String) : Except Strin
   let some p := s.page? page | throw ("no page named " ++ page)
   unless who.may "write" page do throw (who.name ++ " may not write " ++ page)
   let some G := p.current | throw (page ++ " has no version yet")
-  let ps := pieces G p.name p.who
-  let (G', added, n) := ps.foldl (fun (acc : Graph × List AtomId × Nat) pc =>
-    match pc with
-    | .atom a _ => match (G.label a).bind (reciteOf H s) with
-      | some c => let b := replacePatch H acc.1 a (atomAfter ps a) c who.name
-        (acc.1.apply b.ops, acc.2.1 ++ b.added, acc.2.2 + 1)
-      | none => acc
-    | _ => acc) (G, [], 0)
+  let (G', added, n) := replaceAll H G (pieces G p.name p.who) (reciteOf H s) who.name
   if n = 0 then return (s, 0)
   let s' ← s.write p G' (added.map (·, who.name)) who
   return (s', n)

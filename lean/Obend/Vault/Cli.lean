@@ -4,9 +4,11 @@ module
 
     obend open [DIR]
         read every `.md` under DIR (default `.`; directories starting with `.` are skipped) as a page,
-        keep the world beside it in DIR/.obend/world.json, render each page at its current version
-        back to its file, and report what changed, what was refused, which cites are behind and
-        which sections wait for a selection. Twice in a row, the second changes nothing.
+        keep the world beside it in DIR/.obend/world.json, resolve links whose pages now exist, render
+        each page at the current view back to its file (a cite that does not hold is marked,
+        `![[Beta]]{behind}`; the reader strips the marks, so a mark is never read as an edit), and
+        report what changed, what was refused, which cites are behind and which sections wait for a
+        selection. Twice in a row, the second changes nothing.
     obend status [PAGE]
         open, then every page (or PAGE) with its version, each cite and whether it holds, its sections.
     obend merge OTHER_DIR
@@ -103,6 +105,7 @@ def openDir (dir : System.FilePath) (verbose : Bool) : IO (Store × List (String
 
 /-- Save a store a command made, and write the files it renders. -/
 def finish (dir : System.FilePath) (s : Store) (V : List (String × String)) : IO Unit := do
+  let s := settle H s
   let w := writesFor s V
   let missing := s.pages.filterMap fun p => if V.any (·.1 == p.name) then none else
     match p.seen, p.history with

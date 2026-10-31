@@ -153,31 +153,36 @@ def closeLine (k : Nat) : String := ">>>>>>> section " ++ toString k ++ "\n"
 mutual
 /-- Segments as pieces; `n` is the number of sections met so far, sections numbered in the order
 they are met. -/
-def segPieces (G : Graph) (page : String) (who : AtomId → String) :
+def segPieces (f : AtomId → String) (page : String) (who : AtomId → String) :
     List Segment → Nat → List Piece × Nat
   | [], n => ([], n)
   | s :: ss, n =>
-    let (p, n1) := onePiece G page who s n
-    let (q, n2) := segPieces G page who ss n1
+    let (p, n1) := onePiece f page who s n
+    let (q, n2) := segPieces f page who ss n1
     (p ++ q, n2)
-def onePiece (G : Graph) (page : String) (who : AtomId → String) : Segment → Nat → List Piece × Nat
-  | .run a, n => ([.atom a (G.atomText a)], n)
-  | .conflict alts, n => altPieces G page who (n + 1) 1 alts (n + 1)
+def onePiece (f : AtomId → String) (page : String) (who : AtomId → String) : Segment → Nat → List Piece × Nat
+  | .run a, n => ([.atom a (f a)], n)
+  | .conflict alts, n => altPieces f page who (n + 1) 1 alts (n + 1)
 /-- The candidates of section `k`, the `i`th first. -/
-def altPieces (G : Graph) (page : String) (who : AtomId → String) (k : Nat) :
+def altPieces (f : AtomId → String) (page : String) (who : AtomId → String) (k : Nat) :
     Nat → List (AtomId × List Segment) → Nat → List Piece × Nat
   | _, [], n => ([.mark .closing (closeLine k)], n)
   | i, (h, ss) :: rest, n =>
     let hdr : Piece := if i = 1 then .mark .opening (openLine page k (who h))
       else .mark .separator (sepLine page k i (who h))
-    let (p, n1) := segPieces G page who ss n
-    let (q, n2) := altPieces G page who k (i + 1) rest n1
+    let (p, n1) := segPieces f page who ss n
+    let (q, n2) := altPieces f page who k (i + 1) rest n1
     (hdr :: p ++ q, n2)
 end
 
 /-- A version's rendering, piece by piece. -/
 def pieces (G : Graph) (page : String) (who : AtomId → String) : List Piece :=
-  (segPieces G page who G.content 0).1
+  (segPieces G.atomText page who G.content 0).1
+
+/-- A version's rendering with each atom read by `f` (the view: `Obend.Doc.viewAtom` marks a cite
+whose facts fail, `![[Beta]]{behind}`). -/
+def renderWith (f : AtomId → String) (G : Graph) (page : String) (who : AtomId → String) : String :=
+  String.join ((segPieces f page who G.content 0).1.map Piece.text)
 
 /-- A version's rendering as text. -/
 def render (G : Graph) (page : String) (who : AtomId → String) : String :=
@@ -206,6 +211,75 @@ def altAtoms : List (AtomId × List Segment) → List AtomId
   | [] => []
   | (_, ss) :: rest => segAtoms ss ++ altAtoms rest
 end
+
+/-! ## The view's marks, and the reader that strips them
+
+A file shows its page at the current view: a cite whose facts fail carries their names,
+`![[Beta]]{behind}`, `[[Beta#^b]]{behind}`, `[[Gamma]]{missing}` (`Obend.Doc.viewAtom`). The reader
+strips exactly those marks before it reads a file (`stripToks`), so a mark is never read as an edit:
+`dropMark_mark` (a mark followed by anything strips to that anything) and `stripToks_mark` (a mark
+after a wikilink is gone from what the reader reads). -/
+
+/-- The marks the view writes: the reasons of the facts a cite rests on, in `citeFacts`'s order. -/
+def allMarks : List (List Char) :=
+  ["behind".toList, "unverified".toList, "missing".toList, "unverified,behind".toList]
+
+/-- A mark as written after a wikilink. -/
+def markChars (m : List Char) : List Char := '{' :: m ++ ['}']
+
+/-- Read up to the first `}`: what is before it and what is after. -/
+def closeAt : List Char → List Char → Option (List Char × List Char)
+  | [], _ => none
+  | c :: r, acc => if c = '}' then some (acc.reverse, r) else closeAt r (c :: acc)
+
+/-- Drop a mark of the view at the head of a text. -/
+def dropMark (l : List Char) : List Char :=
+  match l with
+  | c :: rest =>
+    if c = '{' then
+      match closeAt rest [] with
+      | some (body, after) => if allMarks.contains body then after else l
+      | none => l
+    else l
+  | [] => l
+
+/-- The tokens of a file with the view's marks stripped: a mark right after a wikilink or an embed. -/
+def stripToks : List Tok → List Tok
+  | [] => []
+  | .link n :: .text t :: rest =>
+    let t' := dropMark t
+    .link n :: (if t' = [] then stripToks rest else .text t' :: stripToks rest)
+  | .embed n :: .text t :: rest =>
+    let t' := dropMark t
+    .embed n :: (if t' = [] then stripToks rest else .text t' :: stripToks rest)
+  | t :: rest => t :: stripToks rest
+
+theorem closeAt_append {m : List Char} (hm : '}' ∉ m) (s acc : List Char) :
+    closeAt (m ++ '}' :: s) acc = some (acc.reverse ++ m, s) := by
+  induction m generalizing acc with
+  | nil => simp [closeAt]
+  | cons c m ih =>
+    have hc : c ≠ '}' := fun h => hm (h ▸ List.mem_cons_self)
+    simp only [List.cons_append, closeAt, hc, ite_false]
+    rw [ih (fun h => hm (List.mem_cons_of_mem _ h))]
+    simp
+
+/-- **A mark strips away.** A mark of the view (one of `allMarks`, which hold no `}`) followed by any
+text strips to that text. -/
+theorem dropMark_mark {m : List Char} (hm : m ∈ allMarks) (hc : '}' ∉ m) (s : List Char) :
+    dropMark (markChars m ++ s) = s := by
+  have : markChars m ++ s = '{' :: (m ++ '}' :: s) := by simp [markChars]
+  rw [this]
+  simp only [dropMark, ite_true]
+  rw [closeAt_append hc]
+  simp [hm]
+
+/-- **What the reader reads of a marked wikilink is the wikilink.** -/
+theorem stripToks_mark {m : List Char} (hm : m ∈ allMarks) (hc : '}' ∉ m) (n s : List Char)
+    (rest : List Tok) (hs : s ≠ []) :
+    stripToks (.embed n :: .text (markChars m ++ s) :: rest) = .embed n :: .text s :: stripToks rest ∧
+    stripToks (.link n :: .text (markChars m ++ s) :: rest) = .link n :: .text s :: stripToks rest := by
+  simp [stripToks, dropMark_mark hm hc, hs]
 
 /-! ## Measures -/
 

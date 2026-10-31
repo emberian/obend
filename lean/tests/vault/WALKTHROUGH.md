@@ -37,7 +37,7 @@ EOF
 cat > Gamma.md <<'EOF'
 # Gamma
 
-Gamma is a stub. See [[Alpha]].
+Gamma is a stub. See [[Alpha]], and [[Delta]], which I have not written yet.
 EOF
 obend open
 ```
@@ -46,6 +46,21 @@ obend open
 Alpha: new page (v1)
 Beta: new page (v1)
 Gamma: new page (v1)
+Gamma: [[Delta]] (link) is dangling: no page of that name
+```
+
+`[[Delta]]` dangles: there is no Delta yet. Write it, and the next open makes the link a cite.
+
+```sh
+cd vault && printf '# Delta\n\nDelta, at last.\n' > Delta.md && obend open && obend status Gamma
+```
+
+```text
+Gamma: v2 written
+Delta: new page (v1)
+Gamma v2
+  [[Alpha]] (link) ✓ current: Alpha exists
+  [[Delta]] (link) ✓ current: Delta exists
 ```
 
 Opening again changes nothing, and the files are byte for byte what you wrote.
@@ -59,6 +74,7 @@ nothing changed
 .obend
 Alpha.md
 Beta.md
+Delta.md
 Gamma.md
 ```
 
@@ -76,8 +92,10 @@ Alpha v1
   [[Beta#^answer]] (block quote) ✓ current: the bytes it quotes are Beta's now
 Beta v1
   [[Alpha]] (link) ✓ current: Alpha exists
-Gamma v1
+Gamma v2
   [[Alpha]] (link) ✓ current: Alpha exists
+  [[Delta]] (link) ✓ current: Delta exists
+Delta v1
 ```
 
 ## 2. A law
@@ -103,11 +121,31 @@ obend open
 
 ```text
 Beta: v2 written
+rendered Alpha.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v2) and the bytes it quotes changed
 ```
 
 The law line is part of Beta's text, so Alpha's embed of Beta (which quotes all of it) is now
-behind; step 5 comes back to that.
+behind, and Alpha's file says so where you read it. The mark is the view's, not your text: delete it
+and the next open draws it again without counting an edit.
+
+```sh
+cd vault && grep 'Beta]]' Alpha.md
+sed -i.bak 's/{behind}//' Alpha.md && rm Alpha.md.bak && obend open && grep 'Beta]]' Alpha.md && obend status Alpha | head -1
+```
+
+```text
+Alpha is where I start. It links to [[Beta]] and to [[Gamma]].
+![[Beta]]{behind}
+nothing changed
+rendered Alpha.md
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v2) and the bytes it quotes changed
+Alpha is where I start. It links to [[Beta]] and to [[Gamma]].
+![[Beta]]{behind}
+Alpha v1
+```
+
+Step 5 comes back to the embed.
 
 Now an edit that breaks the law. The file keeps what you typed; the world does not take it, and says
 which law refused and what would pass.
@@ -202,7 +240,7 @@ Alpha is where everything starts. It links to [[Beta]] and to [[Gamma]].
 
 It embeds Beta whole:
 
-![[Beta]]
+![[Beta]]{behind}
 
 and quotes one of its lines: [[Beta#^answer]].
 ```
@@ -240,7 +278,7 @@ Alpha is where everything starts. It links to [[Beta]] and to [[Gamma]].
 
 It embeds Beta whole:
 
-![[Beta]]
+![[Beta]]{behind}
 
 and quotes one of its lines: [[Beta#^answer]].
 ```
@@ -255,7 +293,7 @@ cd laptop && sed -i.bak 's/^Gamma is a stub./Gamma, written on the train./' Gamm
 ```
 
 ```text
-Gamma: v2 written
+Gamma: v3 written
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
@@ -264,7 +302,7 @@ cd vault && sed -i.bak 's/^Gamma is a stub./Gamma, written at my desk./' Gamma.m
 ```
 
 ```text
-Gamma: v2 written
+Gamma: v3 written
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
@@ -283,9 +321,9 @@ Gamma: section 1: 2 candidates (owner, owner@laptop); keep one with: obend selec
 # Gamma
 
 <<<<<<< section 1 · candidate 1 (owner) · keep it: obend select Gamma 1 1
-Gamma, written at my desk. See [[Alpha]].
+Gamma, written at my desk. See [[Alpha]], and [[Delta]], which I have not written yet.
 ======= candidate 2 (owner@laptop) · keep it: obend select Gamma 1 2
-Gamma, written on the train. See [[Alpha]].
+Gamma, written on the train. See [[Alpha]], and [[Delta]], which I have not written yet.
 >>>>>>> section 1
 ```
 
@@ -300,7 +338,7 @@ kept candidate 2 of section 1 of Gamma
 rendered Gamma.md
 # Gamma
 
-Gamma, written on the train. See [[Alpha]].
+Gamma, written on the train. See [[Alpha]], and [[Delta]], which I have not written yet.
 nothing changed
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
@@ -315,21 +353,21 @@ obend open && obend open && cat Gamma.md
 ```
 
 ```text
-Gamma: v3 written
+Gamma: v4 written
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
-Gamma: v5 written
+Gamma: v6 written
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 Gamma: merged from laptop, 1 section(s) to select
 rendered Gamma.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 Gamma: section 1: 2 candidates (owner, owner@laptop); keep one with: obend select Gamma 1 N
-Gamma: v7 written
+Gamma: v8 written
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 nothing changed
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 # Gamma
 
-Gamma, written on the train. See [[Alpha]].
+Gamma, written on the train. See [[Alpha]], and [[Delta]], which I have not written yet.
 A line from the desk.
 A line from the train.
 ```
@@ -345,6 +383,7 @@ cd vault && obend recite Alpha && obend status Alpha
 
 ```text
 re-cited 1 cite(s) of Alpha
+rendered Alpha.md
 Alpha v4
   [[Beta]] (link) ✓ current: Beta exists
   [[Gamma]] (link) ✓ current: Gamma exists
@@ -363,6 +402,7 @@ cd vault && echo 'Beta has grown a line.' >> Beta.md && obend open && obend stat
 
 ```text
 Beta: v4 written
+rendered Alpha.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v4) and the bytes it quotes changed
 Alpha v4
   [[Beta]] (link) ✓ current: Beta exists
@@ -374,13 +414,18 @@ Alpha v4
 Change the marked line itself, and the line quote goes behind as well:
 
 ```sh
-cd vault && sed -i.bak 's/forty-two/42/' Beta.md && rm Beta.md.bak && obend open
+cd vault && sed -i.bak 's/forty-two/42/' Beta.md && rm Beta.md.bak && obend open && grep 'Beta' Alpha.md
 ```
 
 ```text
 Beta: v5 written
+rendered Alpha.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v5) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v5) and the bytes it quotes changed
+Alpha is where everything starts. It links to [[Beta]] and to [[Gamma]].
+It embeds Beta whole:
+![[Beta]]{behind}
+and quotes one of its lines: [[Beta#^answer]]{behind}.
 ```
 
 ## 6. Nothing else moved
