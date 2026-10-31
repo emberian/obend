@@ -23,7 +23,7 @@ public import Obend.Judge.Lrat
 public import Obend.Judge.Identity
 public import Obend.Judge.Certified
 
-@[expose] public section
+public section
 namespace Obend.Judge
 
 /-- The registered formats. -/

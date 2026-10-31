@@ -30,7 +30,7 @@ statement a byte-level acceptance establishes is the one the bytes decode to. A 
 a domain into a format's objects carries `encode_sound`; `Translation.sound` composes it with the
 checker.
 -/
-@[expose] public section
+public section
 namespace Obend
 set_option autoImplicit false
 
@@ -39,7 +39,7 @@ inductive Judge.Verdict (Clause : Type) where
   | ok
   | refused (clause : Clause) (path : List Nat)
   | uncovered
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 namespace Judge.Verdict
 variable {Clause : Type}
@@ -50,7 +50,7 @@ def map {Clause' : Type} (f : Clause → Clause') : Verdict Clause → Verdict C
   | .refused k p => .refused (f k) p
   | .uncovered => .uncovered
 
-@[simp] theorem map_ok {Clause' : Type} (f : Clause → Clause') : (Verdict.ok : Verdict Clause).map f = .ok := rfl
+@[simp] theorem map_ok {Clause' : Type} (f : Clause → Clause') : (Verdict.ok : Verdict Clause).map f = .ok := by rfl
 
 theorem map_eq_ok {Clause' : Type} {f : Clause → Clause'} {v : Verdict Clause} (h : v.map f = .ok) : v = .ok := by
   cases v <;> simp_all [map]

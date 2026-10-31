@@ -20,7 +20,7 @@ public import Obend.Judge.Class
 public import Obend.Equiv.Cost
 public import Obend.Core.TermTraverse
 
-@[expose] public section
+public section
 namespace Obend.Judge.Cost
 open Obend.Core Obend.Core.Term Obend.Equiv
 open Obend.Core.Traverse (Tree)

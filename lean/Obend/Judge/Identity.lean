@@ -22,7 +22,7 @@ The instance exercised (`noCarry n`): for `n`-bit `x` and `y` with `x AND y = 0`
 -/
 public import Obend.Judge.Lrat
 
-@[expose] public section
+public section
 namespace Obend.Judge.Identity
 open Obend.Judge.Lrat
 set_option autoImplicit false
@@ -47,7 +47,7 @@ def BExp.eval (σ : Nat → Bool) : BExp → Bool
   | .xor a b => Bool.xor (a.eval σ) (b.eval σ)
 
 /-- Every variable is in `[1, n)`. -/
-def BExp.varsIn (n : Nat) : BExp → Bool
+@[expose] def BExp.varsIn (n : Nat) : BExp → Bool
   | .var i => 0 < i && i < n
   | .const _ => true
   | .not a => a.varsIn n
@@ -55,12 +55,12 @@ def BExp.varsIn (n : Nat) : BExp → Bool
 
 /-! ## The Tseitin encoding -/
 
-def andGate (o a b : Int) : List Lrat.Clause := [[-o, a], [-o, b], [o, -a, -b]]
-def orGate (o a b : Int) : List Lrat.Clause := [[o, -a], [o, -b], [-o, a, b]]
-def xorGate (o a b : Int) : List Lrat.Clause := [[-o, a, b], [-o, -a, -b], [o, -a, b], [o, a, -b]]
+@[expose] def andGate (o a b : Int) : List Lrat.Clause := [[-o, a], [-o, b], [o, -a, -b]]
+@[expose] def orGate (o a b : Int) : List Lrat.Clause := [[o, -a], [o, -b], [-o, a, b]]
+@[expose] def xorGate (o a b : Int) : List Lrat.Clause := [[-o, a, b], [-o, -a, -b], [o, -a, b], [o, a, -b]]
 
 /-- The literal standing for an expression, its clauses, and the next fresh variable. -/
-def tseitin : BExp → Nat → Int × List Lrat.Clause × Nat
+@[expose] def tseitin : BExp → Nat → Int × List Lrat.Clause × Nat
   | .var i, n => ((i : Int), [], n)
   | .const b, n => ((n : Int), [[if b then (n : Int) else -(n : Int)]], n + 1)
   | .not a, n =>
@@ -308,7 +308,7 @@ def Identity.Holds (d : Identity) : Prop :=
   ∀ σ : Nat → Bool, d.hyp.eval σ = true → d.lhs.map (BExp.eval σ) = d.rhs.map (BExp.eval σ)
 
 /-- Some pair differs (or the lists have different lengths). -/
-def differ : List BExp → List BExp → BExp
+@[expose] def differ : List BExp → List BExp → BExp
   | [], [] => .const false
   | a :: as, b :: bs => .or (.xor a b) (differ as bs)
   | _, _ => .const true
@@ -325,16 +325,16 @@ theorem differ_false (σ : Nat → Bool) : ∀ (l r : List BExp),
     · rintro ⟨h, h'⟩; exact ⟨by rw [h]; simp, h'⟩
 
 /-- The violation: the hypothesis holds and some pair differs. -/
-def Identity.violation (d : Identity) : BExp := .and d.hyp (differ d.lhs d.rhs)
+@[expose] def Identity.violation (d : Identity) : BExp := .and d.hyp (differ d.lhs d.rhs)
 
 def differ_varsIn (n : Nat) : List BExp → List BExp → Bool
   | l, r => (l ++ r).all (·.varsIn n)
 
-def Identity.wellFormed (d : Identity) : Bool := d.violation.varsIn (d.inputs + 1)
+@[expose] def Identity.wellFormed (d : Identity) : Bool := d.violation.varsIn (d.inputs + 1)
 
 /-- **The encoding**: the violation's Tseitin clauses and its literal asserted; the empty formula for
 an identity that is not well-formed. -/
-def encode (d : Identity) : Cnf :=
+@[expose] def encode (d : Identity) : Cnf :=
   if d.wellFormed then
     let r := tseitin d.violation (d.inputs + 1)
     ⟨r.2.2 - 1, r.2.1 ++ [[r.1]]⟩
@@ -361,18 +361,18 @@ theorem encode_sound (d : Identity) (h : Unsat (encode d)) : d.Holds := by
   · exact absurd (fun _ h => by cases h) (h (fun _ => false))
 
 /-- The translation of conditional identities into LRAT's objects. -/
-def translation : Judge.Translation Lrat.format Identity Identity.Holds where
+@[expose] def translation : Judge.Translation Lrat.format Identity Identity.Holds where
   encode := encode
   encode_sound d _ h := encode_sound d h
 
 /-! ## The instance: no-carry addition is OR -/
 
 /-- Bit `i` of `x` (variables `1 … n`) and of `y` (variables `n+1 … 2n`). -/
-def xBit (i : Nat) : BExp := .var (i + 1)
-def yBit (n i : Nat) : BExp := .var (n + i + 1)
+@[expose] def xBit (i : Nat) : BExp := .var (i + 1)
+@[expose] def yBit (n i : Nat) : BExp := .var (n + i + 1)
 
 /-- The ripple-carry sum bits of `x + y` and the carry out. -/
-def adder (n : Nat) : List BExp :=
+@[expose] def adder (n : Nat) : List BExp :=
   let step := fun (acc : List BExp × BExp) (i : Nat) =>
     let x := xBit i; let y := yBit n i; let c := acc.2
     (acc.1 ++ [.xor (.xor x y) c], .or (.and x y) (.and c (.xor x y)))
@@ -380,14 +380,14 @@ def adder (n : Nat) : List BExp :=
   r.1 ++ [r.2]
 
 /-- `x &&& y = 0`. -/
-def disjoint (n : Nat) : BExp :=
+@[expose] def disjoint (n : Nat) : BExp :=
   (List.range n).foldl (fun acc i => .and acc (.not (.and (xBit i) (yBit n i)))) (.const true)
 
 /-- `x ||| y` with a zero top bit. -/
-def orBits (n : Nat) : List BExp := (List.range n).map (fun i => .or (xBit i) (yBit n i)) ++ [.const false]
+@[expose] def orBits (n : Nat) : List BExp := (List.range n).map (fun i => .or (xBit i) (yBit n i)) ++ [.const false]
 
 /-- **`x &&& y = 0 → x + y = x ||| y`** for `n`-bit `x` and `y`. -/
-def noCarry (n : Nat) : Identity := ⟨s!"no-carry-add-is-or-{n}", 2 * n, disjoint n, adder n, orBits n⟩
+@[expose] def noCarry (n : Nat) : Identity := ⟨s!"no-carry-add-is-or-{n}", 2 * n, disjoint n, adder n, orBits n⟩
 
 end Obend.Judge.Identity
 end

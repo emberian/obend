@@ -16,7 +16,7 @@ addition of `688` cites) is refused by `missingHint 687` at that step (index 10)
 -/
 public import Obend.Judge.Identity
 
-@[expose] public section
+public section
 namespace Obend.Judge.Certified
 open Obend.Judge.Lrat Obend.Judge.Identity
 set_option autoImplicit false

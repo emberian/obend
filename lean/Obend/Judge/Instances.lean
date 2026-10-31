@@ -25,7 +25,7 @@ public import Obend.Law.Proofs.Inherit
 public import Obend.Elab.Coerce
 public import Obend.Slot.Proofs.Protocol
 
-@[expose] public section
+public section
 namespace Obend.Judge.Instances
 open Obend.Core
 set_option autoImplicit false
@@ -314,7 +314,7 @@ structure Envelope (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact
   postB : (i : Ix) → Hole i → (j : Ix) → A j → Bool
   post_iff : ∀ i h I, Ω i h = some I → ∀ j a, I.post j a ↔ postB i h j a = true
 
-def subBagB [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : Bool := Δ₁.all fun t => Δ₁.count t ≤ Δ₂.count t
+@[expose] def subBagB [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : Bool := Δ₁.all fun t => Δ₁.count t ≤ Δ₂.count t
 
 theorem subBagB_iff [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : subBagB Δ₁ Δ₂ = true ↔ SubBag Δ₁ Δ₂ := by
   unfold subBagB SubBag
@@ -326,7 +326,7 @@ theorem subBagB_iff [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : subBagB Δ₁ �
   · intro h; exact List.all_eq_true.2 fun t _ => by simpa using h t
 
 /-- The hole's declared post implies the result predicate, over every index and result. -/
-def Envelope.entails (E : Envelope S Hole A Tok Fact Ob) (i : Ix) (h : Hole i) : Bool :=
+@[expose] def Envelope.entails (E : Envelope S Hole A Tok Fact Ob) (i : Ix) (h : Hole i) : Bool :=
   E.ixs.all fun j => (E.res j).all fun a => !E.postB i h j a || E.Qb j a
 
 theorem Envelope.entails_iff (E : Envelope S Hole A Tok Fact Ob) {i : Ix} {h : Hole i}
@@ -345,7 +345,7 @@ theorem Envelope.entails_iff (E : Envelope S Hole A Tok Fact Ob) {i : Ix} {h : H
     · exact .inr (H j a ((E.post_iff i h I hI j a).2 hb))
 
 /-- The envelope check. -/
-def checkProt [DecidableEq Tok] [DecidableEq Fact] [DecidableEq Ob] (E : Envelope S Hole A Tok Fact Ob) : (Δ : List Tok) → {i : Ix} → Prot S Hole A i → Bool
+@[expose] def checkProt [DecidableEq Tok] [DecidableEq Fact] [DecidableEq Ob] (E : Envelope S Hole A Tok Fact Ob) : (Δ : List Tok) → {i : Ix} → Prot S Hole A i → Bool
   | _, _, .ret a => E.Qb _ a
   | Δ, _, .call op k =>
     (E.sp.requires op).all (· ∈ E.Γ) && (E.sp.establishes op).all (· ∈ E.Φ) &&
@@ -412,7 +412,7 @@ inductive EnvelopeClause where
 
 /-- **The protocol envelope** over an `Envelope`: decided, so a refusal refutes. The meaning is
 `HasProt`; its consequences are `hasProt_runs`, `hasProt_reach` and `started_obligations`. -/
-def envelope [DecidableEq Tok] [DecidableEq Fact] [DecidableEq Ob] (E : Envelope S Hole A Tok Fact Ob) : Judge (ProtObj S Hole A Tok) Unit where
+@[expose] def envelope [DecidableEq Tok] [DecidableEq Fact] [DecidableEq Ob] (E : Envelope S Hole A Tok Fact Ob) : Judge (ProtObj S Hole A Tok) Unit where
   Clause := EnvelopeClause
   Meaning o _ := E.Typed o.Δ o.P
   check _ o _ := if checkProt E o.Δ o.P then .ok else .refused .untyped []

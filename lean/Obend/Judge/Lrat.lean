@@ -25,7 +25,7 @@ RAT steps (negative hints) are refused as `ratHint`: CaDiCaL's LRAT is RUP-only.
 -/
 public import Obend.Judge.Class
 
-@[expose] public section
+public section
 namespace Obend.Judge.Lrat
 set_option autoImplicit false
 
@@ -40,13 +40,13 @@ structure Cnf where
   deriving DecidableEq, Repr, Inhabited
 
 /-- A literal's value under an assignment of the variables. -/
-def litTrue (σ : Nat → Bool) (l : Int) : Bool := if 0 < l then σ l.natAbs else !σ l.natAbs
+@[expose] def litTrue (σ : Nat → Bool) (l : Int) : Bool := if 0 < l then σ l.natAbs else !σ l.natAbs
 
-def Sat (σ : Nat → Bool) (c : Clause) : Prop := ∃ l ∈ c, litTrue σ l = true
+@[expose] def Sat (σ : Nat → Bool) (c : Clause) : Prop := ∃ l ∈ c, litTrue σ l = true
 
-def Models (σ : Nat → Bool) (F : Cnf) : Prop := ∀ c ∈ F.clauses, Sat σ c
+@[expose] def Models (σ : Nat → Bool) (F : Cnf) : Prop := ∀ c ∈ F.clauses, Sat σ c
 
-def Unsat (F : Cnf) : Prop := ∀ σ, ¬ Models σ F
+@[expose] def Unsat (F : Cnf) : Prop := ∀ σ, ¬ Models σ F
 
 theorem litTrue_neg (σ : Nat → Bool) {l : Int} (h : l ≠ 0) : litTrue σ (-l) = !litTrue σ l := by
   unfold litTrue
@@ -60,7 +60,7 @@ theorem litTrue_neg (σ : Nat → Bool) {l : Int} (h : l ≠ 0) : litTrue σ (-l
 inductive Step where
   | add (id : Nat) (clause : Clause) (hints : List Int)
   | del (ids : List Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- A certificate: a refutation, or a model (a list of true literals) refuting unsatisfiability. -/
 inductive Cert where
@@ -83,16 +83,16 @@ inductive Refusal where
   | satisfiable
   /-- the model leaves this clause (by number) unsatisfied -/
   | notAModel (clause : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- The held clauses. -/
 abbrev Db := List (Nat × Clause)
 
 /-- `l` is falsified by the literals `α` taken true. -/
-def falsified (α : List Int) (l : Int) : Bool := l != 0 && α.contains (-l)
+@[expose] def falsified (α : List Int) (l : Int) : Bool := l != 0 && α.contains (-l)
 
 /-- Reverse unit propagation along `hints`, from the literals `α` taken true: `ok` on a conflict. -/
-def propagate (db : Db) : List Int → List Int → Except Refusal Unit
+@[expose] def propagate (db : Db) : List Int → List Int → Except Refusal Unit
   | _, [] => .error .noConflict
   | α, h :: hs =>
     if h ≤ 0 then .error (.ratHint h) else
@@ -105,11 +105,11 @@ def propagate (db : Db) : List Int → List Int → Except Refusal Unit
       | _ => .error (.notUnit h)
 
 /-- The literals a clause's negation takes true. -/
-def negation (c : Clause) : List Int := (c.filter (· != 0)).map (- ·)
+@[expose] def negation (c : Clause) : List Int := (c.filter (· != 0)).map (- ·)
 
 /-- Run the steps from the held clauses; `ok` when the empty clause is added. The refusal carries
 the step's index. -/
-def run : Db → List Step → Nat → Except (Refusal × Nat) Unit
+@[expose] def run : Db → List Step → Nat → Except (Refusal × Nat) Unit
   | _, [], i => .error (.noEmptyClause, i)
   | db, .del ids :: rest, i => run (db.filter fun p => !ids.contains p.1) rest (i + 1)
   | db, .add id c hints :: rest, i =>
@@ -118,7 +118,7 @@ def run : Db → List Step → Nat → Except (Refusal × Nat) Unit
     | .ok () => if c.isEmpty then .ok () else run ((id, c) :: db) rest (i + 1)
 
 /-- The formula's clauses, numbered from 1. -/
-def initial (F : Cnf) : Db := (List.range F.clauses.length).zip F.clauses |>.map fun p => (p.1 + 1, p.2)
+@[expose] def initial (F : Cnf) : Db := (List.range F.clauses.length).zip F.clauses |>.map fun p => (p.1 + 1, p.2)
 
 /-- The first clause (by number) a model leaves unsatisfied. -/
 def firstUnsat (lits : List Int) (F : Cnf) : Option Nat :=
@@ -129,7 +129,7 @@ def firstUnsat (lits : List Int) (F : Cnf) : Option Nat :=
 def assignmentOf (lits : List Int) (v : Nat) : Bool := lits.contains (v : Int)
 
 /-- The checker, at a grade bounding the number of steps. -/
-def check (r : Nat) (F : Cnf) : Cert → Verdict Refusal
+@[expose] def check (r : Nat) (F : Cnf) : Cert → Verdict Refusal
   | .refutation steps =>
     if steps.length ≤ r then
       match run (initial F) steps 0 with
@@ -492,7 +492,7 @@ theorem planted_refused : check 1 contradiction planted = .refused .noConflict [
 
 /-- **The registered format**: LRAT 1 over DIMACS, CaDiCaL's text output, the checker above run as
 compiled code on bytes (its theorems are the kernel's). -/
-def format : Format where
+@[expose] def format : Format where
   name := "lrat"
   version := "1"
   Obj := Cnf
