@@ -72,6 +72,7 @@ import Obend.Core.Proofs.Adequacy.Source
 import Obend.Core.Proofs.Adequacy.StepRaw
 import Obend.Core.Proofs.BidirectionalCompleteness
 import Obend.Core.Proofs.CheckCompletenessObstruction
+import Obend.Core.Proofs.CheckerTransport
 import Obend.Core.Proofs.CheckpointRoundTrip
 import Obend.Core.Proofs.Collect
 import Obend.Core.Proofs.Collect.Compact

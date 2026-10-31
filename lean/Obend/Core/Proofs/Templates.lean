@@ -243,7 +243,7 @@ theorem variableUses_instantiate (context : Context) (index : Nat) :
     variableUses (instantiateContext σ context) index = variableUses context index := by
   simp [variableUses, instantiateContext_length]
 
-theorem safeUses_instantiate (context : Context) (uses : Uses) :
+public theorem safeUses_instantiate (context : Context) (uses : Uses) :
     safeUses (instantiateContext σ context) uses = safeUses context uses := by
   simp only [safeUses, instantiateContext, List.length_map, List.zip_map_left, List.all_map]
   rfl
@@ -270,7 +270,7 @@ theorem reusableCaptures_instantiate {vars vars' : List Nat}
   funext pair
   simp [shareableUnder_instantiate shareable]
 
-theorem validContext_instantiate {vars vars' : List Nat}
+public theorem validContext_instantiate {vars vars' : List Nat}
     (shareable : ∀ j, (σ j).shareableUnder vars' = vars.contains j) (context : Context) :
     validContext vars' (instantiateContext σ context) = validContext vars context := by
   simp only [validContext, instantiateContext, List.all_map]
@@ -311,6 +311,14 @@ theorem inferFields_tail {assumptions : Assumptions} {annotations : Annotations}
     split at h
     · cases h; simpa [Ty.tail] using inferFields_tail laterTyped
     · cases h
+
+/-- A record's row is closed: fields typed in order build a row ending in `{}`. -/
+theorem fieldsTyping_tail {assumptions : Assumptions} : ∀ {context : Context} {fields : List (String × Term)}
+    {row : Ty} {uses : Uses}, FieldsTyping assumptions context fields row uses → row.tail = .emptyRow
+  | _, [], _, _, typed => by cases typed; rfl
+  | _, _ :: _, _, _, typed => by
+    cases typed with
+    | cons _ rest _ => simpa [Ty.tail] using fieldsTyping_tail rest
 
 variable (D : Discharges σ template instance_ extra)
 include D
@@ -455,6 +463,139 @@ theorem Discharges.validBinder_instantiate (payload : Ty) (quantity : Quantity) 
 theorem Discharges.reusableAllowed_instantiate (reuse : Reuse) (context : Context) (uses : Uses) :
     reusableAllowed instance_ reuse (instantiateContext σ context) uses = reusableAllowed template reuse context uses := by
   simp [reusableAllowed, reusableCaptures_instantiate D.shareable]
+
+/-- **The template theorem on the typing relation** (MODULAR-TYPING §6): a derivation under rigid
+bounds is a derivation at every instance that discharges them, in the instantiated context, at the
+instantiated type, with the same usage. Every lambda's annotation is instantiated with it (the
+relation names each binder's annotation; `instantiateAnnotation`). By induction on the derivation. -/
+public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.valid = true)
+    {context : Context} {term : Term} {type : Ty} {uses : Uses}
+    (typed : PartialTyping template context term type uses) :
+    PartialTyping instance_ (instantiateContext σ context) term (type.instantiate σ) uses := by
+  refine PartialTyping.rec
+    (motive_1 := fun context term type uses _ =>
+      PartialTyping instance_ (instantiateContext σ context) term (type.instantiate σ) uses)
+    (motive_2 := fun context fields row uses _ =>
+      FieldsTyping instance_ (instantiateContext σ context) fields (row.instantiate σ) uses)
+    (motive_3 := fun context q arms row result uses _ =>
+      ArmsTyping instance_ (instantiateContext σ context) q arms (row.instantiate σ) (result.instantiate σ) uses)
+    ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
+    ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
+    ?effectCase ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
+  case bound =>
+    intro Γ index binding found
+    rw [← variableUses_instantiate (σ := σ)]
+    exact .bound (binding := ⟨binding.type.instantiate σ, binding.quantity⟩)
+      (by rw [getElem?_instantiateContext, found]; rfl)
+  case natural =>
+    intro Γ value; rw [← zeroUses_instantiate (σ := σ)]; exact .natural _ value
+  case boolean =>
+    intro Γ value; rw [← zeroUses_instantiate (σ := σ)]; exact .boolean _ value
+  case label =>
+    intro Γ value; rw [← zeroUses_instantiate (σ := σ)]; exact .label _ value
+  case lambda =>
+    intro Γ body annotation bodyUses _ safe valid captures fits ih
+    exact .lambda (annotation := instantiateAnnotation σ annotation) ih
+      ((safeUses_instantiate (σ := σ) (⟨annotation.domain, annotation.parameter⟩ :: Γ) bodyUses).trans safe)
+      ((validContext_instantiate D.shareable (⟨annotation.domain, annotation.parameter⟩ :: Γ)).trans valid)
+      (by rw [D.reusableAllowed_instantiate]; exact captures) fits
+  case conversion =>
+    intro Γ term actual expected uses _ agreement ih
+    exact .conversion ih (D.sameType_instantiate instanceValid agreement)
+  case application =>
+    intro Γ function argument functionType argumentType domain codomain fu au reuse quantity
+      _ _ shape argumentEq allowed ihF ihA
+    subst argumentType
+    exact .application ihF ihA (callable_instantiate shape) rfl
+      (by rw [D.argumentAllowed_instantiate]; exact allowed)
+  case record => intro Γ fields row uses _ ih; exact .record ih
+  case get =>
+    intro Γ target targetType member uses name fuel _ found free ih
+    exact .get ih (D.lookup_instantiate fuel targetType name member found)
+      (by rw [linearFree_instantiate]; exact free)
+  case extend =>
+    intro Γ target fields targetType row tu fu fuel _ fieldsTyped isRow free ihT ihF
+    rw [overlay_instantiate (fieldsTyping_tail fieldsTyped)]
+    exact .extend ihT ihF (D.isRow_instantiate fuel targetType isRow)
+      (by rw [linearFree_instantiate]; exact free)
+  case specification =>
+    intro Γ metadata extension metadataType extensionType mu eu _ _ pureM pureE free ihM ihE
+    exact .specification ihM ihE (by rw [instantiate_isComputation D.pure]; exact pureM)
+      (by rw [instantiate_isComputation D.pure]; exact pureE) (by rw [linearFree_instantiate]; exact free)
+  case prototype =>
+    intro Γ spec target specType targetType su tu _ _ pureS pureT ihS ihT
+    exact .prototype ihS ihT (by rw [instantiate_isComputation D.pure]; exact pureS)
+      (by rw [instantiate_isComputation D.pure]; exact pureT)
+  case reflect =>
+    intro Γ target specType targetType uses _ free ih
+    exact .reflect ih (by rw [linearFree_instantiate]; exact free)
+  case metadata =>
+    intro Γ target metadataType extensionType uses _ free ih
+    exact .metadata ih (by rw [linearFree_instantiate]; exact free)
+  case project =>
+    intro Γ target specType targetType uses _ free ih
+    exact .project ih (by rw [linearFree_instantiate]; exact free)
+  case mix =>
+    intro Γ lower upper lowerType upperType self inherited middle provided lu uu _ _
+      shapeL shapeU captures shareSelf shareInherited shareMiddle ihL ihU
+    exact .mix ihL ihU (callable_instantiate shapeL) (callable_instantiate shapeU)
+      (by rw [reusableCaptures_instantiate D.shareable]; exact captures)
+      (by rw [shareableUnder_instantiate D.shareable]; exact shareSelf)
+      (by rw [shareableUnder_instantiate D.shareable]; exact shareInherited)
+      (by rw [shareableUnder_instantiate D.shareable]; exact shareMiddle)
+  case fix =>
+    intro Γ spec inheritedTerm specType inherited target su iu _ shape _ share allowed captures ihS ihI
+    exact .fix ihS (callable_instantiate shape) ihI
+      (by rw [shareableUnder_instantiate D.shareable]; exact share)
+      (by rw [D.argumentAllowed_instantiate]; exact allowed)
+      (by rw [reusableCaptures_instantiate D.shareable]; exact captures)
+  case binary =>
+    intro Γ primitive left right input output lu ru shape _ _ ihL ihR
+    have fixed := primitiveTypes_instantiate (σ := σ) primitive
+    rw [shape] at fixed
+    rw [fixed.2]; rw [fixed.1] at ihL ihR
+    exact .binary shape ihL ihR
+  case ifZero =>
+    intro Γ value zero successor result vu zu su _ _ _ safe agreeing ihV ihZ ihS
+    exact .ifZero ihV ihZ ihS ((safeUses_instantiate (σ := σ) (⟨.natural, .unrestricted⟩ :: Γ) su).trans safe)
+      (by rw [branchesAgree_instantiate]; exact agreeing)
+  case inject =>
+    intro Γ tag payload payloadType row uses fuel _ found nonComputation ih
+    exact .inject ih (D.lookup_instantiate fuel row tag payloadType found)
+      (by rw [instantiate_isComputation D.pure]; exact nonComputation)
+  case case =>
+    intro Γ scrutinee arms row result su au q _ _ distinct allowed ihS ihA
+    exact .case ihS ihA distinct (by rw [D.caseAllowed_instantiate]; exact allowed)
+  case ifBool =>
+    intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
+    exact .ifBool ihC ihT ihF (by rw [branchesAgree_instantiate]; exact agreeing)
+  case perform =>
+    intro Γ plan planType response uses _ isPlan data ih
+    have planFixed : planType.instantiate σ = planType := isPlan_instantiate isPlan
+    have responseFixed : response.instantiate σ = response := instantiate_of_isData data
+    show PartialTyping _ _ _ (.computation (planType.instantiate σ) (response.instantiate σ)
+      (response.instantiate σ)) _
+    rw [planFixed, responseFixed]; rw [planFixed] at ih
+    exact .perform ih isPlan data
+  case done =>
+    intro Γ value plan response result uses _ nonComputation ih
+    exact .done ih (by rw [instantiate_isComputation D.pure]; exact nonComputation)
+  case effectCase =>
+    intro Γ scrutinee arms plan response row result su au q _ _ nonComputation distinct allowed ihS ihA
+    exact .effectCase ihS ihA (by rw [instantiate_isComputation D.pure]; exact nonComputation) distinct
+      (by rw [D.caseAllowed_instantiate]; exact allowed)
+  case fieldsNil =>
+    intro Γ; rw [← zeroUses_instantiate (σ := σ)]; exact .nil _
+  case fieldsCons =>
+    intro Γ name body rest type row bu ru _ _ nonComputation ihB ihR
+    exact .cons ihB ihR (by rw [instantiate_isComputation D.pure]; exact nonComputation)
+  case armsNil =>
+    intro Γ q result; rw [← zeroUses_instantiate (σ := σ)]; exact .nil _ q _
+  case armsCons =>
+    intro Γ q name body rest payload row result bu ru _ safe share fits _ agreeing ihB ihR
+    exact .cons ihB ((safeUses_instantiate (σ := σ) (⟨payload, q⟩ :: Γ) bu).trans safe)
+      (by rw [D.validBinder_instantiate]; exact share) fits ihR
+      (by rw [branchesAgree_instantiate]; exact agreeing)
 
 -- Agreement is consumed through its semantic transport theorem below. Keeping
 -- the executable finite graph opaque prevents elaboration from traversing it
@@ -1242,7 +1383,7 @@ theorem weight_template_accepted : (check weightTemplate [] 8).isSome = true := 
   have accepted := congrArg Option.isSome weight_template_type
   simpa using accepted
 
-theorem coloured_discharges : Discharges colouredSelf templateAssumptions {} 1 where
+public theorem coloured_discharges : Discharges colouredSelf templateAssumptions {} 1 where
   fixed j rigid := by
     have : j ≠ 5 := fun e => rigid (by simp [templateAssumptions, e])
     simp [colouredSelf, this]
