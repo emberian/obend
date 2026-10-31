@@ -745,6 +745,15 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
       simp [h1, h2, h3, pure, Except.pure] at accepted
     cases accepted; rfl
 
+/-- The bidirectional checker refuses a hole in any mode, as the fuel checker does
+(`Obend.Core.Proofs.Hole.infer_refuses_hole`). Proved through `elaborate.eq_def`, so the unfolding
+equation is generated here once, not again in each of the modules that unfold `elaborate`. -/
+theorem elaborate_refuses_hole (assumptions : Assumptions) (annotations : Annotations)
+    (context : Context) (path : List Nat) (n : Nat) (payload : List Term) (mode : Mode) :
+    elaborate assumptions annotations context path (.hole n payload) mode =
+      throw (.shapeMismatch path "term" .emptyRow) := by
+  rw [elaborate.eq_def]
+
 end Obend.Core.Bidirectional
 
 end

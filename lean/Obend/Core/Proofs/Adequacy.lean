@@ -150,8 +150,9 @@ theorem sourceDerivation_hole_false {n : Nat} {payload : List Term} {v : Term} {
 
  theorem primitiveResult_value {primitive : Primitive} {left right result : Term}
     (found : primitiveResult primitive left right = some result) : Value result := by
-  cases primitive <;> cases left <;> cases right <;> simp [primitiveResult] at found
-  all_goals subst result; first | exact .natural _ | exact .boolean _
+  unfold primitiveResult at found
+  split at found <;> cases found
+  all_goals first | exact .natural _ | exact .boolean _
 
 /-- Every cost derivation is a genuine evaluation in the independent source
 small-step semantics. The value/thunk rules do not force latent fields. -/

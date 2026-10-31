@@ -84,12 +84,19 @@ def mirrorSupport {α : Type} {g : Graph α Bool} (P : ClosedSupport g) : Closed
     obtain ⟨y,inside,rfl⟩ := List.mem_map.mp found
     exact (mem_mirrorNodes P.nodes y mode).mpr (P.closed x present y inside)
 
+/-- Membership in the mirrored support, stated over `mirrorSupport` (not over `mirrorNodes`, which
+it equals only by unfolding `mirrorSupport`), so a reduction that keeps the support folded finds
+the membership proofs at the type it expects. -/
+theorem mem_mirrorSupport {α : Type} {g : Graph α Bool} (P : ClosedSupport g) (x : α) (mode : Bool) :
+    (x,mode) ∈ (mirrorSupport P).nodes ↔ x ∈ P.nodes :=
+  mem_mirrorNodes P.nodes x mode
+
 /-- The implementation is the existing finite visited-pair worklist. Both
 copies share each original successor graph, so siblings share visited pairs. -/
 def decision {α : Type} [DecidableEq α] {g : Graph α Bool}
     (P : ClosedSupport g) (x : α) (member : x ∈ P.nodes) : Bool :=
   (mirrorSupport P).agreement (x,false) (x,true)
-    ((mem_mirrorNodes _ _ _).mpr member) ((mem_mirrorNodes _ _ _).mpr member)
+    ((mem_mirrorSupport _ _ _).mpr member) ((mem_mirrorSupport _ _ _).mpr member)
 
 theorem decision_iff {α : Type} [DecidableEq α] {g : Graph α Bool}
     (P : ClosedSupport g) (x : α) (member : x ∈ P.nodes) :
@@ -150,10 +157,17 @@ def presentation (assumptions : Assumptions) (t : Ty) :
     intro node present child inside
     exact dependencies_support present child inside
 
+/-- The root is a node of its own presentation, stated over the presentation (not over
+`support`, which it equals only by unfolding `presentation`), so a reduction that keeps the
+presentation folded finds the membership proof at the type it expects. -/
+theorem root_mem_presentation (assumptions : Assumptions) (t : Ty) :
+    t ∈ (presentation assumptions t).nodes :=
+  left_mem_support _ _ _
+
 /-- Replacement candidate for RecursiveRows.shareable, with a universal
 greatest-safe-predicate characterization and no user-supplied fuel. -/
 def shareable (assumptions : Assumptions) (t : Ty) : Bool :=
-  Obend.Core.FiniteSafety.decision (presentation assumptions t) t (left_mem_support _ _ _)
+  Obend.Core.FiniteSafety.decision (presentation assumptions t) t (root_mem_presentation _ _)
 
 theorem shareable_iff (assumptions : Assumptions) (t : Ty) :
     shareable assumptions t = true ↔ Obend.Core.FiniteSafety.Safe (graph assumptions) t :=

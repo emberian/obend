@@ -956,6 +956,12 @@ unrestricted binder either. -/
 theorem computation_not_shareable (plan response result : Ty) (variables : List Nat) :
     (Ty.computation plan response result).shareableUnder variables = false := rfl
 
+/-- At no fuel the checker gives no verdict, for every term. Proved through `infer.eq_def`, so the
+unfolding equation is generated here once, not again in each module that unfolds `infer`. -/
+theorem infer_zero (assumptions : Assumptions) (annotations : Annotations) (context : Context)
+    (position : List Nat) (term : Term) : infer assumptions annotations context position 0 term = none := by
+  rw [infer.eq_def]
+
 end Obend.Core.Check
 
 end

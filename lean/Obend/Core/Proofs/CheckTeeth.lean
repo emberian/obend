@@ -48,12 +48,15 @@ attribute [local irreducible] sameType Obend.Core.EquiRecursiveAgreement.agrees
   Obend.Core.TypeGraph.candidate
 attribute [local simp] sameType_refl sameType_extends
 
-/-- First expose the checker with comparison opaque. Keep that simplification
-when graph equations are needed for a remaining closed comparison. -/
+/-- First let the kernel evaluate the closed run (`decide +kernel`: most teeth here, at no
+elaboration cost). A run that reaches the well-founded type-graph worklist is stuck for the
+kernel; then expose the checker with comparison opaque, and keep that simplification when graph
+equations are needed for a remaining closed comparison. -/
 -- `maxSteps` was 10000 at Lean v4.30. The v4.35 `do` elaborator compiles `if … then throw …`
 -- into join points that the evaluation duplicates, so the same checker runs take more steps.
 macro "check_reduce" : tactic =>
   `(tactic| first
+    | decide +kernel
     | decide
     | (simp (config := { maxSteps := 200000, failIfUnchanged := false })
        all_goals equirec_reduce))
@@ -279,17 +282,12 @@ theorem absent_future_requirement_refused :
 theorem exhaustive_case_accepted :
     (check (shapeCase shapeArms "square") [] 16).map (fun checked => checked.type) = some .natural := by check_reduce
 theorem reordered_arms_accepted :
-    (check (shapeCase shapeArms.reverse "circle") [] 16).isSome = true := by
-  change (check (shapeCase [("square", .binary .add (.bound 0) (.nat 1)),
-    ("circle", .bound 0)] "circle") [] 16).isSome = true
-  simp (config := { maxSteps := 200000, failIfUnchanged := false })
+    (check (shapeCase shapeArms.reverse "circle") [] 16).isSome = true := by decide +kernel
 theorem missing_arm_refused :
     (check (shapeCase [("circle",.bound 0)] "circle") [] 16).isNone = true := by check_reduce
 theorem extra_arm_refused :
     (check (shapeCase (shapeArms ++ [("triangle",.bound 0)]) "circle") [] 16).isNone = true := by
-  change (check (shapeCase [("circle", .bound 0),
-    ("square", .binary .add (.bound 0) (.nat 1)), ("triangle", .bound 0)] "circle") [] 16).isNone = true
-  simp (config := { maxSteps := 100000, failIfUnchanged := false })
+  decide +kernel
 theorem undeclared_injection_refused :
     (check (shapeCase shapeArms "triangle") [] 16).isNone = true := by check_reduce
 theorem unannotated_injection_refused :

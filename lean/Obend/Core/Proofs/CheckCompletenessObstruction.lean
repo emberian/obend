@@ -192,7 +192,9 @@ public theorem case_labels_distinct {assumptions : Assumptions} {context : Conte
     (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed) _ _ rfl
   all_goals intros
-  all_goals first | trivial | simp_all
+  -- A constructor other than `case` or a conversion meets `term = .case s a` as a constructor
+  -- clash: `cases` closes it at once (`trivial`'s `contradiction` took 150 ms a goal here).
+  all_goals first | exact True.intro | (rename_i h; cases h; done) | simp_all
 
 /-- The duplicate-arm program has no certificate at all, so no checker is incomplete on it. -/
 public theorem duplicate_arms_have_no_derivation : ¬ Nonempty (Checked duplicateCase []) := by

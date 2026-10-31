@@ -141,24 +141,47 @@ open Obend.Core.FiniteBisimulation
 open Obend.Core.FinitePresentation.ClosedSupport
 open Obend.Core.AliasExposure
 
+/-! Field equations for the observation graphs. The reduction below rewrites a graph's `label` and
+`successors` by these and never unfolds the graph itself: `TypeGraph.graph`, `ResourceSemantics.graph`
+and `FiniteSafety.mirror` also occur as the index of the closed supports (`ClosedSupport (graph _)`)
+whose `finiteGraph`, `index` and membership proofs the worklist carries, and unfolding them there
+leaves terms that agree only at `.default` transparency. -/
+
+@[simp] theorem typeGraph_label (assumptions : Check.Assumptions) (node : TypeGraph.Node) :
+    (TypeGraph.graph assumptions).label node = (TypeGraph.observe assumptions node).1 := rfl
+
+@[simp] theorem typeGraph_successors (assumptions : Check.Assumptions) (node : TypeGraph.Node) :
+    (TypeGraph.graph assumptions).successors node = (TypeGraph.observe assumptions node).2 := rfl
+
+@[simp] theorem resourceGraph_label (assumptions : Check.Assumptions) (t : Ty.Ty) :
+    (ResourceSemantics.graph assumptions).label t = (ResourceSemantics.head assumptions t).1 := rfl
+
+@[simp] theorem resourceGraph_successors (assumptions : Check.Assumptions) (t : Ty.Ty) :
+    (ResourceSemantics.graph assumptions).successors t = (ResourceSemantics.head assumptions t).2 := rfl
+
+@[simp] theorem mirror_label {α : Type} (g : FinitePresentation.Graph α Bool) (node : α × Bool) :
+    (FiniteSafety.mirror g).label node = if node.2 then true else g.label node.1 := rfl
+
+@[simp] theorem mirror_successors {α : Type} (g : FinitePresentation.Graph α Bool) (node : α × Bool) :
+    (FiniteSafety.mirror g).successors node = (g.successors node.1).map (fun child => (child, node.2)) := rfl
+
 /-- Kernel-checked computation for closed graph queries. Supply the local
 constants defining the environment and roots. All recursion goes through
 proved equations; the visited worklist and its termination proof are unchanged.
+The graphs, the supports (`support`, `subterms`, the node lists) and the presentations are never
+unfolded: they stay in the closed-support indices as written, and only the field equations above
+and the index lemmas (`finite_label`, `successors_index_pmap`, `decode_index`, `index_eq_iff`)
+touch them.
 
 Example: `unfold environment actual expected; equirec_reduce`.
 -/
--- The simp set unfolds definitions that also occur as implicit indices (`ClosedSupport (graph _)`,
--- membership proofs over `support`), so a partly-unfolded goal is coherent only up to `.default`
--- transparency. Lean v4.35 checks implicit arguments at `.implicit`
--- (`backward.isDefEq.respectTransparency`); this tactic keeps the v4.30 check for its own simp
--- call. Kernel checking of the result is unaffected.
 -- Proof reduction uses the exact graph equation even when the executable
 -- wrapper first tries a sound historical comparison. This keeps its kernel
 -- normalization independent of runtime shortcuts and legacy sorting guards.
 macro "equirec_reduce" : tactic =>
-  `(tactic| set_option backward.isDefEq.respectTransparency false in simp [ Check.sameType, EquiRecursiveAgreement.agrees_eq_candidate,
+  `(tactic| simp [ Check.sameType, EquiRecursiveAgreement.agrees_eq_candidate,
     TypeGraph.candidate,
-    TypeGraph.graph, TypeGraph.observe, TypeGraph.rowObservation,
+    typeGraph_label, typeGraph_successors, TypeGraph.observe, TypeGraph.rowObservation,
     TypeGraph.rowChildren, TypeGraph.rowTag, TypeGraph.tailKind, TypeGraph.tailChildren,
     agreement, finite_label, successors_index_pmap, decode_index, index_eq_iff,
     visitedSame_eq_worklistBool, worklistBool_cons,
@@ -166,9 +189,9 @@ macro "equirec_reduce" : tactic =>
     RecursiveRows.residual, RecursiveRows.scanResidual,
     RecursiveRows.streamStep, RecursiveRows.scanStream, RecursiveRows.fieldLabels,
     RecursiveRows.shareable, ResourceSemantics.shareable,
-    ResourceSemantics.graph, ResourceSemantics.head,
+    resourceGraph_label, resourceGraph_successors, ResourceSemantics.head,
     FiniteSafety.decision,
-    FiniteSafety.mirror,
+    mirror_label, mirror_successors,
     expose, exposeWalk, constructorHead, cycleRepresentative, support, subterms,
     Obend.Core.Check.Assumptions.alias, Obend.Core.Ty.Ty.isComputation, List.lookup, Fin.ofNat])
 end Obend.Core.DecisionReduction
@@ -193,3 +216,4 @@ theorem checker_atomic_mismatch :
   equirec_reduce
 
 end Obend.Core.DecisionReduction.Probes
+
