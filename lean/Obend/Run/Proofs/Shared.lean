@@ -474,6 +474,57 @@ theorem project_pair {i₀ : Ix} {O : ι → Open S Hole A Tok Fact Ob i₀} {s�
     simp only [this, ↓reduceDIte, hk, ↓reduceIte, reduceCtorEq]
     rfl
 
+/-! ## Receipts of a member's row, dated by the ledger's committed view -/
+
+omit [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)] in
+theorem viewReading_coherent (keys : List (Fact ⊕ Tok)) :
+    (viewReading L base keys).Coherent (Obend.Run.hostLook (localHost L base)) := by
+  intro d k
+  show ((if Obend.Run.hostLook (localHost L base) d k then 1 else 0) == 1) = _
+  cases Obend.Run.hostLook (localHost L base) d k <;> rfl
+
+omit [DecidableEq Cand] in
+/-- **A receipt of a runner's row at the ledger's record passes the stranger's checks**: issued under
+the naming of the ledger's committed view, every opening opens against the dated root and is the bit
+its proof commits, when the schema covers what the row reads. -/
+public theorem member_receipt_checks [DecidableEq Fact] {i₀ : Ix} (O : ι → Open S Hole A Tok Fact Ob i₀) (i : ι)
+    (keys : List (Fact ⊕ Tok)) (hs : keys.length < 2 ^ 256)
+    {Cell Pin : Type} (root : Obend.Run.Rest S Hole A Tok Fact → Obend.Receipt.Digest)
+    (rowDigest : Event S Hole A Fact L.Rec → Obend.Receipt.Digest) (law : Obend.Receipt.Digest)
+    (pinsOf : L.Rec → List (Fact ⊕ Tok) → List (Cell × Option Pin))
+    (a : L.Rec × Obend.Run.Rest S Hole A Tok Fact) (r : Event S Hole A Fact L.Rec)
+    (hk : ∀ f ∈ (members L base sp O (.run i)).reads a r, f ∈ keys)
+    (q : Obend.Receipt.Shape) (t : List (String × Obend.Receipt.Trust)) (p : Obend.Receipt.Digest) :
+    let N := Obend.Receipt.Naming.ofReading Obend.Core.Digest.deployed (viewReading L base keys) root rowDigest law pinsOf
+    Obend.Receipt.datedOpens Obend.Core.Digest.deployed (Obend.Receipt.issue (members L base sp O (.run i)) N a r q t p) = true ∧
+      (viewReading L base keys).matched (Obend.Receipt.issue (members L base sp O (.run i)) N a r q t p) = true :=
+  Obend.Receipt.issue_checks Obend.Receipt.Merkle.deployed_bounded (members L base sp O (.run i)) (viewReading L base keys)
+    (viewReading_coherent keys) hs root rowDigest law pinsOf a r hk q t p
+
+omit [DecidableEq Cand] in
+/-- **The verdict of a member's receipt is the ledger view's**: at any record whose committed view has
+the receipt's dated root, the runner's row has the receipt's verdict and post root, or cSHAKE256
+collides. The view the row read is a checked support. -/
+public theorem member_receipt_dated_verdict [DecidableEq Fact] {i₀ : Ix} (O : ι → Open S Hole A Tok Fact Ob i₀) (i : ι)
+    (keys : List (Fact ⊕ Tok)) (hs : keys.length < 2 ^ 256)
+    {Cell Pin : Type} (root : Obend.Run.Rest S Hole A Tok Fact → Obend.Receipt.Digest)
+    (rowDigest : Event S Hole A Fact L.Rec → Obend.Receipt.Digest) (law : Obend.Receipt.Digest)
+    (pinsOf : L.Rec → List (Fact ⊕ Tok) → List (Cell × Option Pin))
+    (a : L.Rec × Obend.Run.Rest S Hole A Tok Fact) (r : Event S Hole A Fact L.Rec) (hm : r.isWorld = false)
+    (hk : ∀ f ∈ (members L base sp O (.run i)).reads a r, f ∈ keys)
+    (q : Obend.Receipt.Shape) (t : List (String × Obend.Receipt.Trust)) (p : Obend.Receipt.Digest) (d : L.Rec)
+    (hd : dated Obend.Core.Digest.deployed L base keys a.1 = dated Obend.Core.Digest.deployed L base keys d) :
+    let N := Obend.Receipt.Naming.ofReading Obend.Core.Digest.deployed (viewReading L base keys) root rowDigest law pinsOf
+    (Obend.Receipt.Outcome.ofExcept ((members L base sp O (.run i)).step (d, a.2) r) =
+        (Obend.Receipt.issue (members L base sp O (.run i)) N a r q t p).verdict ∧
+      Obend.Receipt.postOf (members L base sp O (.run i)) N (d, a.2) r =
+        (Obend.Receipt.issue (members L base sp O (.run i)) N a r q t p).post) ∨
+      Obend.Digest.HashBytes.Collision Obend.Core.Digest.deployed := by
+  intro N
+  obtain ⟨hc, hmt⟩ := member_receipt_checks (sp := sp) O i keys hs root rowDigest law pinsOf a r hk q t p
+  exact Obend.Receipt.dated_verdict Obend.Receipt.Merkle.deployed_bounded _ N (viewReading L base keys)
+    (viewReading_coherent keys) a r hm d (by exact hd) hc hmt
+
 /-! ## The headline -/
 
 variable {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole A Tok Fact Ob i₀}

@@ -16,7 +16,11 @@ Two receipts, chained:
 statement, re-encodes it (`encode`), re-runs the checker on the certificate; for a transition it
 decodes the rest and the row, checks their digests against `pre` and `row`, computes each world
 opening from its pin by `holdsOfPin`, builds a view from the pins (`realize`), and runs `recheck`
-(`Obend.Receipt.recheck_sound` says what that establishes). `verifyIdentityCore_sound`: an accepted
+(`Obend.Receipt.recheck_sound` says what that establishes); then it re-checks every opening against
+the receipt's `dated` root: each proof opens against it (`datedOpens`, cSHAKE256 run as compiled
+code), each opening is the value its proof commits (`Reading.matched`), and each pin is the pin the
+view committed (`pinCode`). `Obend.Receipt.dated_verdict` says what that establishes: the verdict is
+the dated view's, or cSHAKE256 collides. `verifyIdentityCore_sound`: an accepted
 identity receipt's statement holds.
 -/
 public import Obend.Receipt.Negotiation
@@ -207,13 +211,22 @@ def openingJson (o : NRead × Bool) : Json := Json.mkObj [("read", toJson (readN
 def openingOf (j : Json) : Except String (NRead × Bool) := do
   pure (← readOf (← j.getObjValAs? String "read"), ← j.getObjValAs? Bool "value")
 
+def openingProofJson (o : Merkle.Opening) : Json :=
+  Json.mkObj [("size", toJson o.size), ("index", toJson o.index), ("value", toJson o.value),
+    ("path", Json.arr (o.path.map toJson).toArray)]
+
+def openingProofOf (j : Json) : Except String Merkle.Opening := do
+  pure ⟨← j.getObjValAs? Nat "size", ← j.getObjValAs? Nat "index", ← j.getObjValAs? Nat "value",
+    ← (← (← j.getObjVal? "path").getArr?).toList.mapM (·.getNat?)⟩
+
 def worldReceiptJson (R : Receipt Fact (Nat × Bool) NRead Obend.Run.Clause) (disclosure : Json) : Json :=
   Json.mkObj [
     ("schema", "obend.receipt.v1"), ("kind", "world-transition"),
     ("law", toJson R.law), ("pre", toJson R.pre), ("post", toJson R.post), ("row", toJson R.row),
     ("pins", Json.arr (R.pins.map pinJson).toArray), ("openings", Json.arr (R.openings.map openingJson).toArray),
     ("verdict", outcomeJson clauseName R.verdict), ("quantifier", toJson (shapeName R.quantifier)),
-    ("trust", supportsJson R.trust), ("dated", toJson R.dated), ("prev", toJson R.prev),
+    ("trust", supportsJson R.trust), ("dated", toJson R.dated),
+    ("proofs", Json.arr (R.proofs.map openingProofJson).toArray), ("prev", toJson R.prev),
     ("disclosure", disclosure)]
 
 def worldReceiptOf (j : Json) : Except String (Receipt Fact (Nat × Bool) NRead Obend.Run.Clause) := do
@@ -225,7 +238,9 @@ def worldReceiptOf (j : Json) : Except String (Receipt Fact (Nat × Bool) NRead 
     verdict := ← outcomeOf clauseOf (← j.getObjVal? "verdict"),
     quantifier := ← shapeOf (← j.getObjValAs? String "quantifier"),
     trust := ← supportsOf (← j.getObjVal? "trust"),
-    dated := ← j.getObjValAs? Nat "dated", prev := ← j.getObjValAs? String "prev" }
+    dated := ← j.getObjValAs? Nat "dated",
+    proofs := ← (← (← j.getObjVal? "proofs").getArr?).toList.mapM openingProofOf,
+    prev := ← j.getObjValAs? String "prev" }
 
 /-- Produce the receipt of row 4: `cited` discloses the rest and the row; `full` the log up to it. -/
 def negotiationReceipt (full : Bool) (prev : Digest) : Json :=
@@ -270,10 +285,21 @@ def verifyWorld (j : Json) : Except String String := do
   let w' := realize R.pins (capOpening R.openings)
   unless recheck admission naming rest row w' R do
     throw "recheck: the row, judged at the view the pins realize, does not give the receipt's verdict and post root"
+  -- the view: every opening against the dated root
+  unless datedOpens Obend.Core.Digest.deployed R do
+    throw "dated: an opening proof does not open against the dated root"
+  unless nreading.matched R do
+    throw "dated: an opening is not the value its proof commits"
+  for (o, p) in R.openings.zip R.proofs do
+    match o.1 with
+    | .inl f =>
+      unless pinCode ((R.pins.lookup f).getD none) == p.value do
+        throw s!"dated: the pin of {factName f} is not the pin the dated view committed"
+    | .inr _ => pure ()
   let overall := match R.overall with
     | some (s, .attested p r) => s!"attested by {p}@{r} (support {s})"
     | _ => "checked"
-  return s!"world-transition ({dial}): {repr R.verdict.isOk} at view {R.dated}; trust {overall}"
+  return s!"world-transition ({dial}): {repr R.verdict.isOk} at view {(hex (Obend.Digest.Cshake256.natBytesBE R.dated)).take 16}…; trust {overall}"
 
 /-! ## The consumer -/
 

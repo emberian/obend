@@ -15,6 +15,11 @@ by a consumer holding no producer state.
 - `row4_admitted`, `row4_openings`, `row4_recheck`: the row is admitted; its receipt's openings are
   exactly those the pins compute; at the realized view the stranger's `recheck` accepts it
   (`Obend.Receipt.recheck_issued`, an instance of `Obend.Fold.receipt_sufficient`).
+- The view is committed (`nreading`): a Merkle map (cSHAKE256, `Obend.Receipt.Merkle`) over the
+  three fact cells, each at its pin (`pinCode`), and the capability's liveness. The receipt is dated
+  by its root and carries an opening proof per read: `receipt4_checks` (the stranger's checks pass)
+  and `receipt4_dated_verdict` (the verdict is the dated view's, or cSHAKE256 collides). The view
+  support is `checked`.
 - `envelope`: the protocol envelope judge (`Obend.Judge.Instances.envelope`) on the negotiation's
   template: accepted with the one capability, refused (a refutation: no derivation exists) without it.
 -/
@@ -274,11 +279,59 @@ def pinsOfReads (w : Wv) (rs : List NRead) : List (Fact × Option (Nat × Bool))
     | .inl f => some (f, World.pin (Fact := Fact) w (World.cell f))
     | .inr _ => none
 
-def naming : Naming Wv NRest NRow NRead Fact (Nat × Bool) where
-  root r := digestJson (restJson r)
-  rowDigest r := digestJson (rowJson r)
-  law := digest lawId
-  pinsOf := pinsOfReads
+/-! ## The committed view -/
+
+/-- A pin as a number: none is 0, `(clock, value)` is `2·clock + value + 1`. -/
+def pinCode : Option (Nat × Bool) → Nat
+  | none => 0
+  | some (c, b) => 2 * c + (if b then 1 else 0) + 1
+
+def pinDecode : Nat → Option (Nat × Bool)
+  | 0 => none
+  | n + 1 => some (n / 2, n % 2 == 1)
+
+theorem pinDecode_code (p : Option (Nat × Bool)) : pinDecode (pinCode p) = p := by
+  match p with
+  | none => rfl
+  | some (c, false) =>
+    show some ((2 * c + 0) / 2, (2 * c + 0) % 2 == 1) = some (c, false)
+    have h1 : (2 * c + 0) / 2 = c := by omega
+    have h2 : (2 * c + 0) % 2 = 0 := by omega
+    rw [h1, h2]; rfl
+  | some (c, true) =>
+    show some ((2 * c + 1) / 2, (2 * c + 1) % 2 == 1) = some (c, true)
+    have h1 : (2 * c + 1) / 2 = c := by omega
+    have h2 : (2 * c + 1) % 2 = 1 := by omega
+    rw [h1, h2]; rfl
+
+/-- The schema of the view: the three fact cells and the capability. -/
+def viewKeys : List NRead := [.inl (.auth .p1), .inl (.auth .p2), .inl .beforeDeadline, .inr .cap]
+
+/-- **The committed view**: each fact cell at its pin, the capability at its liveness; a committed
+value reads as an opening through `holdsOfPin` of the decoded pin, or as the liveness bit. -/
+def nreading : Reading Wv NRead NRead where
+  C := ⟨viewKeys, fun w k => match k with
+    | .inl f => pinCode (World.pin (Fact := Fact) w (World.cell f))
+    | .inr _ => if w.capLive then 1 else 0⟩
+  key := id
+  bit k v := match k with
+    | .inl f => World.holdsOfPin (V := Wv) (World.cell f) (pinDecode v) f
+    | .inr _ => v == 1
+
+theorem nreading_coherent : nreading.Coherent admission.look := by
+  intro w k
+  cases k with
+  | inl f =>
+    show World.holdsOfPin (V := Wv) (World.cell f) (pinDecode (pinCode (World.pin (Fact := Fact) w (World.cell f)))) f =
+      admission.look w (.inl f)
+    rw [pinDecode_code]; rfl
+  | inr t =>
+    show ((if w.capLive then 1 else 0) == 1) = w.capLive
+    cases w.capLive <;> rfl
+
+def naming : Naming Wv NRest NRow NRead Fact (Nat × Bool) :=
+  Naming.ofReading Obend.Core.Digest.deployed nreading (fun r => digestJson (restJson r))
+    (fun r => digestJson (rowJson r)) (digest lawId) pinsOfReads
 
 /-! ## The receipt of row 4 -/
 
@@ -298,13 +351,13 @@ theorem prefix_runs : admission.run start (log.take 4) = .ok acc4 := rfl
 theorem row4_admitted : (admission.step acc4 row4).toBool = true := rfl
 
 /-- The supports of the receipt: the fold's verdict is a checked re-execution; the view it read is
-the host's, attested at its clock. -/
+checked against the dated root (each opening's proof, cSHAKE256 run as compiled code). -/
 def trust4 : List (String × Trust) :=
-  [("legal-fold", .checked "obend.legal-fold" "1" .compiled), ("view", .attested "host" "clock 1")]
+  [("legal-fold", .checked "obend.legal-fold" "1" .compiled), ("view", .checked "obend.merkle-view" "1" .compiled)]
 
 /-- The receipt. `prev` is supplied by the producer's chain. -/
 def receipt4 (prev : Digest) : Receipt Fact (Nat × Bool) NRead Obend.Run.Clause :=
-  issue admission naming acc4 row4 .existsRun trust4 4 prev
+  issue admission naming acc4 row4 .existsRun trust4 prev
 
 /-- What it read: `p2`'s grant and the deadline (from the pins), and the capability's liveness. -/
 theorem row4_reads : admission.reads acc4 row4 = [.inl (.auth .p2), .inl .beforeDeadline, .inl (.auth .p2),
@@ -348,7 +401,23 @@ theorem realize_openings (prev : Digest) :
 opening it carries): the verdict and the post root are recomputed from the receipt and the rest. -/
 theorem row4_recheck (prev : Digest) :
     recheck admission naming acc4.2 row4 (realize (receipt4 prev).pins true) (receipt4 prev) = true :=
-  recheck_issued admission naming acc4 row4 rfl _ _ _ _ _ (realize_openings prev)
+  recheck_issued admission naming acc4 row4 rfl _ _ _ _ (realize_openings prev)
+
+/-- **The stranger's checks of the dated root pass** for the receipt of row 4. -/
+theorem receipt4_checks (prev : Digest) :
+    datedOpens Obend.Core.Digest.deployed (receipt4 prev) = true ∧ nreading.matched (receipt4 prev) = true :=
+  issue_checks Obend.Receipt.Merkle.deployed_bounded admission nreading nreading_coherent (by decide) _ _ _ _
+    acc4 row4 (by intro f hf; rw [row4_reads] at hf; simp [nreading, viewKeys] at hf ⊢; rcases hf with h | h | h <;> simp [h])
+    _ _ _
+
+/-- **The receipt's verdict is the dated view's**: at any world whose committed view has the
+receipt's dated root, row 4 has the receipt's verdict and post root, or cSHAKE256 collides. -/
+theorem receipt4_dated_verdict (prev : Digest) (w : Wv) (hd : (receipt4 prev).dated = nreading.C.dated Obend.Core.Digest.deployed w) :
+    (Outcome.ofExcept (admission.step (w, acc4.2) row4) = (receipt4 prev).verdict ∧
+      postOf admission naming (w, acc4.2) row4 = (receipt4 prev).post) ∨
+      Obend.Digest.HashBytes.Collision Obend.Core.Digest.deployed :=
+  dated_verdict Obend.Receipt.Merkle.deployed_bounded admission naming nreading nreading_coherent acc4 row4 rfl w hd
+    (receipt4_checks prev).1 (receipt4_checks prev).2
 
 /-! ## Astra's outcomes, where they apply -/
 

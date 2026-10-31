@@ -221,6 +221,7 @@ import Obend.Main
 import Obend.Receipt
 import Obend.Receipt.Cli
 import Obend.Receipt.Export
+import Obend.Receipt.Merkle
 import Obend.Receipt.Negotiation
 import Obend.Run
 import Obend.Run.Adapter

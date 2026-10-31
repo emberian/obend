@@ -7,9 +7,13 @@
     tests/judge/nocarry32.lrat; `obend lrat` accepts it; a proof with a needed clause deleted is refused.
   * the negotiation's admitted dispatch of the commitment to p2, chained to the identity receipt, at
     the `cited` and `full` settings of the dial: both verify, with the chain link.
+  * the view is checked: the transition receipt is dated by the root of its view's Merkle map, and
+    every opening carries a proof against it; its trust is `checked` throughout.
   * teeth: an opening its pin does not read, a pin and opening both flipped (the recomputed verdict
     differs), a tampered rest (the pre root differs), a tampered certificate, a wrong predecessor, a
-    statement changed after the certificate (its CNF digest differs) are each refused by name.
+    statement changed after the certificate (its CNF digest differs) are each refused by name; and
+    against the dated root: a pin whose clock moved (the verdict unchanged), a moved root, and an
+    opening with a proof re-valued to match it.
 
 usage: python3 tests/run-receipts.py [OBEND_BINARY]      (from lean/, after `lake build obend`)
 exit 0 when every check holds, 1 otherwise; a summary line last.
@@ -88,6 +92,7 @@ with tempfile.TemporaryDirectory() as d:
         check(f"negotiation receipt ({dial}) written", rc == 0, out)
         rc, out = obend("verify", neg, "--prev", ident)
         check(f"negotiation receipt ({dial}) verifies with its chain", rc == 0 and "chain: linked" in out, out)
+        check(f"negotiation receipt ({dial}) is checked, the view included", "trust checked" in out, out)
 
     neg = os.path.join(d, "negotiation-cited.json")
     base = json.load(open(neg))
@@ -112,6 +117,30 @@ with tempfile.TemporaryDirectory() as d:
             if o["read"] == "auth p2":
                 o["value"] = False
     tamper("flipped pins recompute another verdict", flip_both, "recheck")
+
+    def move_clock(r):
+        for p in r["pins"]:
+            if p["cell"] == "auth p2":
+                p["pin"][0] = 7
+    tamper("a pin whose clock moved is not the dated view's", move_clock, "dated: the pin of auth p2")
+
+    def move_root(r):
+        r["dated"] = r["dated"] + 1
+    tamper("a moved dated root is refused", move_root, "dated: an opening proof does not open")
+
+    def lie_with_proof(r):
+        # a consistent lie: p2's grant denied in the pin, the openings and the proofs' values, and the
+        # verdict and post root the row then has; only the dated root can refuse it
+        r["verdict"] = {"refused": "authorized", "path": []}
+        r["post"] = r["pre"]
+        for p in r["pins"]:
+            if p["cell"] == "auth p2":
+                p["pin"][1] = False
+        for o, pr in zip(r["openings"], r["proofs"]):
+            if o["read"] == "auth p2":
+                o["value"] = False
+                pr["value"] = pr["value"] - 1
+    tamper("an opening re-valued with its proof does not open", lie_with_proof, "dated: an opening proof does not open")
 
     def spend(r):
         r["disclosure"]["rest"]["spent"] = ["cap"]

@@ -6,7 +6,10 @@ module
 receipt type) and §2.4; `review/VISION-CLAUDE-20261031.md` §8. A receipt is a claim with evidence:
 
     { pre post : Root; row; law : Digest; pins : List (Cell × Option Pin); openings; verdict;
-      quantifier : Shape; trust : per support, checked | attested; dated : View; prev : Digest }
+      quantifier : Shape; trust : per support, checked | attested; dated : View; proofs; prev : Digest }
+
+`dated` is the VIEW: the root of the Merkle map the ledger's view commits (`Obend.Receipt.Merkle`),
+and `proofs` are the openings of what the row read against it.
 
 - `Outcome`: a judge's verdict (`ok | refused clause path | uncovered`) and Astra's refusal outcomes
   (`noAdmissible | awaitingChoice | preferenceKept | candidateRejected | staleEvidence |
@@ -19,6 +22,12 @@ receipt type) and §2.4; `review/VISION-CLAUDE-20261031.md` §8. A receipt is a 
   and `recheck_issued` says it accepts every honestly issued receipt at every such world.
 - With a `World` (`Obend.Slot.World`): the openings are COMPUTED from the pins by `holdsOfPin`
   (`openings_of_pins`, `rfl`), and equal pins suffice (`pins_sufficient`).
+- Dated openings (`datedOpens`, `Reading`, `Reading.matched`): each opening of the receipt is
+  matched by a proof that opens against `dated` at its key's position. `openings_checked`: when
+  `dated` is the root of a world's view, the openings are that world's, or the hash collides;
+  `dated_verdict`: the receipt's verdict and post root are the row's at that world, or the hash
+  collides. So the view a receipt read is a CHECKED support: a stranger holding the root needs no
+  word from the host. `issue_checks`: an honestly issued receipt passes both checks.
 - `chained`: each receipt names its predecessor's digest; under a binding digest a verified chain is
   determined by its head and length (`chain_binds`).
 - The disclosure dial (`GENERATED` §2.4): `full` (the log, replayed by a follower), `cited` (the
@@ -28,6 +37,7 @@ receipt type) and §2.4; `review/VISION-CLAUDE-20261031.md` §8. A receipt is a 
 public import Obend.Fold
 public import Obend.Judge.Class
 public import Obend.Slot.World
+public import Obend.Receipt.Merkle
 
 @[expose] public section
 namespace Obend.Receipt
@@ -120,8 +130,11 @@ structure Receipt (Cell Pin Fact Clause : Type) where
   quantifier : Shape
   /-- each support's trust, by name -/
   trust : List (String × Trust)
-  /-- the shared ledger's view it was issued at (never a local clock) -/
+  /-- the VIEW it was issued at: the root of the ledger view's commitment (`Merkle.Commit.dated`),
+  never a local clock -/
   dated : Nat
+  /-- the openings of what the row read, against `dated` -/
+  proofs : List Merkle.Opening
   /-- the producer's previous receipt -/
   prev : Digest
   deriving Repr
@@ -158,10 +171,14 @@ structure Naming (W Rest Row Fact Cell Pin : Type) where
   rowDigest : Row → Digest
   law : Digest
   pinsOf : W → List Fact → List (Cell × Option Pin)
+  /-- the view's root at a world -/
+  dated : W → Nat
+  /-- the openings of the facts read, against the root -/
+  proofsOf : W → List Fact → List Merkle.Opening
 
 /-- The receipt of row `r` judged at accumulator `a`. -/
 def issue (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (a : W × Rest) (r : Row)
-    (quantifier : Shape) (trust : List (String × Trust)) (dated : Nat) (prev : Digest) :
+    (quantifier : Shape) (trust : List (String × Trust)) (prev : Digest) :
     Receipt Cell Pin Fact Clause where
   pre := N.root a.2
   post := match A.step a r with
@@ -174,7 +191,8 @@ def issue (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cel
   verdict := Outcome.ofExcept (A.step a r)
   quantifier := quantifier
   trust := trust
-  dated := dated
+  dated := N.dated a.1
+  proofs := N.proofsOf a.1 (A.reads a r)
   prev := prev
 
 /-- The post root a step reaches. -/
@@ -186,10 +204,10 @@ def postOf (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Ce
 /-- **A receipt suffices** (`Obend.Fold.receipt_sufficient`): at any world agreeing with the
 receipt's openings, the row is judged as the receipt says, reaching its post root. -/
 theorem receipt_sufficient (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin)
-    (a : W × Rest) (r : Row) (hm : A.moves r = false) {q : Shape} {t : List (String × Trust)} {d : Nat} {p : Digest}
-    (w' : W) (hw : ∀ o ∈ (issue A N a r q t d p).openings, A.look w' o.1 = o.2) :
-    Outcome.ofExcept (A.step (w', a.2) r) = (issue A N a r q t d p).verdict ∧
-      postOf A N (w', a.2) r = (issue A N a r q t d p).post := by
+    (a : W × Rest) (r : Row) (hm : A.moves r = false) {q : Shape} {t : List (String × Trust)} {p : Digest}
+    (w' : W) (hw : ∀ o ∈ (issue A N a r q t p).openings, A.look w' o.1 = o.2) :
+    Outcome.ofExcept (A.step (w', a.2) r) = (issue A N a r q t p).verdict ∧
+      postOf A N (w', a.2) r = (issue A N a r q t p).post := by
   have h := Fold.receipt_sufficient A a r hm w' hw
   simp only [issue, postOf]
   rw [h]
@@ -212,9 +230,9 @@ theorem recheck_sound [DecidableEq Clause] {A : Admission W Rest Row Fact Clause
 
 /-- **The stranger accepts every honest receipt** at every world agreeing with its openings. -/
 theorem recheck_issued [DecidableEq Clause] (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin)
-    (a : W × Rest) (r : Row) (hm : A.moves r = false) (q : Shape) (t : List (String × Trust)) (d : Nat) (p : Digest)
-    (w' : W) (hw : ∀ o ∈ (issue A N a r q t d p).openings, A.look w' o.1 = o.2) :
-    recheck A N a.2 r w' (issue A N a r q t d p) = true := by
+    (a : W × Rest) (r : Row) (hm : A.moves r = false) (q : Shape) (t : List (String × Trust)) (p : Digest)
+    (w' : W) (hw : ∀ o ∈ (issue A N a r q t p).openings, A.look w' o.1 = o.2) :
+    recheck A N a.2 r w' (issue A N a r q t p) = true := by
   obtain ⟨hv, hp⟩ := receipt_sufficient A N a r hm w' hw
   simp only [recheck, Bool.and_eq_true, beq_iff_eq, List.all_eq_true]
   exact ⟨⟨⟨rfl, fun o ho => hw o ho⟩, hv⟩, hp⟩
@@ -246,6 +264,138 @@ theorem pins_sufficient (A : Admission V Rest Row Fact Clause) (hlook : A.look =
     (fun w w' f h => by rw [hlook]; exact World.holds_congr w w' f h) a r hm w' hp
 
 end Pins
+
+/-! ## The dated view: openings checked against the root -/
+
+section Dated
+open Obend.Receipt.Merkle
+open Obend.Digest.HashBytes (Hash Collision)
+variable {W Rest Row Fact Clause Cell Pin Key : Type}
+
+/-- **What a stranger checks of the dated root**: every opening proof opens against it. -/
+def datedOpens (H : Hash) (R : Receipt Cell Pin Fact Clause) : Bool :=
+  R.proofs.all fun o => opens H o R.dated
+
+/-- How a committed view is read: the committed map, the key of the fact an opening reads, and how a
+committed value reads as that opening. -/
+structure Reading (W Fact Key : Type) where
+  C : Commit W Key
+  key : Fact → Key
+  bit : Fact → Nat → Bool
+
+/-- The committed values read as the admission's look. -/
+def Reading.Coherent (D : Reading W Fact Key) (look : W → Fact → Bool) : Prop :=
+  ∀ w f, D.bit f (D.C.val w (D.key f)) = look w f
+
+/-- Each opening is matched, in order, by its proof: the key's position in the schema, the map's
+size, a value that reads as the opening. -/
+def Reading.matched [BEq Key] (D : Reading W Fact Key) (R : Receipt Cell Pin Fact Clause) : Bool :=
+  R.openings.length == R.proofs.length &&
+  (R.openings.zip R.proofs).all fun op =>
+    D.C.keys.idxOf? (D.key op.1.1) == some op.2.index && op.2.size == D.C.keys.length &&
+      D.bit op.1.1 op.2.value == op.1.2
+
+/-- **The openings are the dated view's**: when `dated` is the root of world `w`'s view and the
+stranger's two checks pass, every opening is what `w` says of its fact, or the hash collides. -/
+theorem openings_checked [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H) (D : Reading W Fact Key)
+    {look : W → Fact → Bool} (hco : D.Coherent look) (w : W) (R : Receipt Cell Pin Fact Clause)
+    (hd : R.dated = D.C.dated H w) (hc : datedOpens H R = true) (hm : D.matched R = true) :
+    (∀ o ∈ R.openings, look w o.1 = o.2) ∨ Collision H := by
+  by_cases hcol : Collision H
+  · exact .inr hcol
+  left
+  intro o ho
+  simp only [Reading.matched, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at hm
+  obtain ⟨hlen, hall⟩ := hm
+  obtain ⟨k, hk, rfl⟩ := List.getElem_of_mem ho
+  have hk' : k < R.proofs.length := hlen ▸ hk
+  have hz : (R.openings[k], R.proofs[k]) ∈ R.openings.zip R.proofs := by
+    have := List.getElem_mem (l := R.openings.zip R.proofs) (n := k) (by simp; omega)
+    simpa using this
+  obtain ⟨⟨hidx, hsize⟩, hbit⟩ := hall _ hz
+  have hp : opens H R.proofs[k] R.dated = true := by
+    simp only [datedOpens, List.all_eq_true] at hc; exact hc _ (List.getElem_mem hk')
+  obtain ⟨hlt, hkey, _⟩ := List.idxOf?_eq_some_iff.1 hidx
+  rw [hd] at hp
+  rcases Commit.opens_val hb D.C w hp hsize hlt with hv | c
+  · rw [← hbit, hv, hkey, hco]
+  · exact absurd c hcol
+
+/-- **The receipt's verdict is the dated view's**: a receipt issued for a row, whose dated root is
+the root of world `w`'s view and whose openings pass the stranger's checks, has the verdict and the
+post root the row has at `w`, or the hash collides. -/
+theorem dated_verdict [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H)
+    (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (D : Reading W Fact Key)
+    (hco : D.Coherent A.look) (a : W × Rest) (r : Row) (hm : A.moves r = false)
+    {q : Shape} {t : List (String × Trust)} {p : Digest} (w : W)
+    (hd : (issue A N a r q t p).dated = D.C.dated H w) (hc : datedOpens H (issue A N a r q t p) = true)
+    (hmt : D.matched (issue A N a r q t p) = true) :
+    (Outcome.ofExcept (A.step (w, a.2) r) = (issue A N a r q t p).verdict ∧
+      postOf A N (w, a.2) r = (issue A N a r q t p).post) ∨ Collision H := by
+  rcases openings_checked hb D hco w _ hd hc hmt with ho | c
+  · exact .inl (receipt_sufficient A N a r hm w ho)
+  · exact .inr c
+
+/-- The naming whose dated root and opening proofs come from a committed view. -/
+def Naming.ofReading [BEq Key] (H : Hash) (D : Reading W Fact Key) (root : Rest → Digest) (rowDigest : Row → Digest)
+    (law : Digest) (pinsOf : W → List Fact → List (Cell × Option Pin)) : Naming W Rest Row Fact Cell Pin where
+  root := root
+  rowDigest := rowDigest
+  law := law
+  pinsOf := pinsOf
+  dated := D.C.dated H
+  proofsOf w fs := fs.filterMap fun f => D.C.opening H w (D.key f)
+
+theorem filterMap_eq_map_of {α β : Type} {f : α → Option β} {g : α → β} :
+    ∀ (l : List α), (∀ x ∈ l, f x = some (g x)) → l.filterMap f = l.map g
+  | [], _ => rfl
+  | x :: xs, h => by
+    rw [List.filterMap_cons, h x (by simp), List.map_cons,
+      filterMap_eq_map_of xs (fun y hy => h y (by simp [hy]))]
+
+/-- **An honestly issued receipt passes both checks**, when every fact the row reads has its key in
+the schema and the committed values read as the admission's look. -/
+theorem issue_checks [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H) (A : Admission W Rest Row Fact Clause)
+    (D : Reading W Fact Key) (hco : D.Coherent A.look) (hs : D.C.keys.length < 2 ^ 256)
+    (root : Rest → Digest) (rowDigest : Row → Digest) (law : Digest) (pinsOf : W → List Fact → List (Cell × Option Pin))
+    (a : W × Rest) (r : Row) (hk : ∀ f ∈ A.reads a r, D.key f ∈ D.C.keys)
+    (q : Shape) (t : List (String × Trust)) (p : Digest) :
+    datedOpens H (issue A (Naming.ofReading H D root rowDigest law pinsOf) a r q t p) = true ∧
+      D.matched (issue A (Naming.ofReading H D root rowDigest law pinsOf) a r q t p) = true := by
+  have hsome : ∀ f ∈ A.reads a r, ∃ j, D.C.keys.idxOf? (D.key f) = some j := fun f hf => by
+    have := (List.isSome_idxOf? (l := D.C.keys) (a := D.key f)).2 (hk f hf)
+    exact Option.isSome_iff_exists.1 this
+  constructor
+  · simp only [datedOpens, issue, Naming.ofReading, List.all_eq_true, List.mem_filterMap]
+    rintro o ⟨f, _, ho⟩
+    exact Commit.opening_opens hb D.C a.1 (D.key f) ho hs
+  · simp only [Reading.matched, issue, Naming.ofReading, Admission.openings, Bool.and_eq_true, beq_iff_eq,
+      List.all_eq_true]
+    -- the proofs are one per read, in order
+    have hfm : (A.reads a r).filterMap (fun f => D.C.opening H a.1 (D.key f)) =
+        (A.reads a r).map fun f => mapOpening H (D.C.values a.1) ((D.C.keys.idxOf? (D.key f)).getD 0) := by
+      apply filterMap_eq_map_of
+      intro f hf
+      obtain ⟨j, hj⟩ := hsome f hf
+      simp [Commit.opening, hj]
+    rw [hfm]
+    refine ⟨by simp, ?_⟩
+    intro op hop
+    rw [List.zip_map, List.mem_map] at hop
+    obtain ⟨⟨f, f'⟩, hff, rfl⟩ := hop
+    have hff' : f = f' := by
+      obtain ⟨k, hk, he⟩ := List.getElem_of_mem hff
+      simp only [List.getElem_zip, Prod.mk.injEq] at he
+      rw [← he.1, ← he.2]
+    subst hff'
+    have hf := (List.of_mem_zip hff).1
+    obtain ⟨j, hj⟩ := hsome f hf
+    obtain ⟨hlt, hkey, _⟩ := List.idxOf?_eq_some_iff.1 hj
+    simp only [Prod.map, hj, Option.getD_some, mapOpening, Commit.values, List.length_map, true_and,
+      List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_eq_getElem hlt, Option.map_some, hkey]
+    exact hco a.1 f
+
+end Dated
 
 /-! ## Chaining -/
 
@@ -294,10 +444,10 @@ inductive Dial where
 
 /-- The receipt of the last row of a log folded from `a₀`, when its prefix folds. -/
 def issueLast (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (a₀ : W × Rest)
-    (pre : List Row) (r : Row) (q : Shape) (t : List (String × Trust)) (d : Nat) (p : Digest) :
+    (pre : List Row) (r : Row) (q : Shape) (t : List (String × Trust)) (p : Digest) :
     Option (Receipt Cell Pin Fact Clause) :=
   match A.run a₀ pre with
-  | .ok a => some (issue A N a r q t d p)
+  | .ok a => some (issue A N a r q t p)
   | .error _ => none
 
 /-- The bit at each setting of the dial: `full` replays the log, `cited` reads the receipt's verdict,
@@ -311,8 +461,8 @@ def accepts (A : Admission W Rest Row Fact Clause) (a₀ : W × Rest) (pre : Lis
 /-- **Acceptance is invariant under the dial**: for the receipt of a row whose prefix folds, the
 follower replaying the log, the stranger reading the openings and the holder of one bit agree. -/
 theorem dial_invariant (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (a₀ : W × Rest)
-    (pre : List Row) (r : Row) {q : Shape} {t : List (String × Trust)} {d : Nat} {p : Digest}
-    {R : Receipt Cell Pin Fact Clause} (h : issueLast A N a₀ pre r q t d p = some R) (dial : Dial) :
+    (pre : List Row) (r : Row) {q : Shape} {t : List (String × Trust)} {p : Digest}
+    {R : Receipt Cell Pin Fact Clause} (h : issueLast A N a₀ pre r q t p = some R) (dial : Dial) :
     accepts A a₀ pre r dial R = R.verdict.isOk := by
   cases dial with
   | cited | bit => rfl

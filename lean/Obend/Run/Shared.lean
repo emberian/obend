@@ -28,6 +28,12 @@ interleaved rows:
 - every other controlled event (`replyTo`, `advance`, `choose`) is `i`'s alone, a row of `i` that
   moves nothing, so no other member sees it.
 
+The ledger's VIEW is committed (`viewReading`, `dated`): a Merkle map (`Obend.Receipt.Merkle`,
+cSHAKE256 at `deployed`) over a public schema of facts and tokens, each at its bit at the shared view
+(the raw world's fact; the token at the shared mask). A receipt of a member's row is dated by that
+root and carries an opening proof per read (`Obend.Receipt.Naming.ofReading`), so the view a row
+read is a checked support (`member_receipt_checks`, `member_receipt_dated_verdict`).
+
 The theorems (`Obend.Run.Proofs.Shared`): the joint rows fold under the family (`jreachable_fold`),
 so each runner's log is `Legal` by `Obend.Fold.project_moves_run` applied (projection), the ledger's
 own rows fold from the start (`joint_ledger_fold`), the grants are exclusive and the consumption is
@@ -35,6 +41,7 @@ once globally, and the loser's refusal names the winner and the epoch.
 -/
 public import Obend.Run.Proofs.Control
 public import Obend.Run.Fold
+public import Obend.Receipt
 @[expose] public section
 
 namespace Obend.Run.Shared
@@ -276,6 +283,27 @@ def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S 
       match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) ev with
       | .ok c₁ => .ok ⟨J.led, setCfg J.cfgs i c₁⟩
       | .error r => .error (.runner i r)
+
+/-! ## The ledger's view, committed -/
+
+section
+variable {ι W Tok Fact : Type} [DecidableEq Tok]
+
+/-- **The ledger's view, committed**: the facts and tokens of the schema `keys` at a record, each as
+its bit at the shared view (`hostLook` at the local host: the raw world's fact, the token at the
+shared mask). A committed value `1` reads as an opening `true`. -/
+def viewReading (L : Ledger ι W Tok) (base : W → View Tok Fact) (keys : List (Fact ⊕ Tok)) :
+    Obend.Receipt.Reading L.Rec (Fact ⊕ Tok) (Fact ⊕ Tok) where
+  C := ⟨keys, fun d k => if Obend.Run.hostLook (localHost L base) d k then 1 else 0⟩
+  key := id
+  bit _ v := v == 1
+
+/-- **`dated : View`**: the root of the ledger's committed view at a record. -/
+def dated (H : Obend.Digest.HashBytes.Hash) (L : Ledger ι W Tok) (base : W → View Tok Fact)
+    (keys : List (Fact ⊕ Tok)) (d : L.Rec) : Nat :=
+  (viewReading L base keys).C.dated H d
+
+end
 
 /-! ## The members of the joint fold -/
 
