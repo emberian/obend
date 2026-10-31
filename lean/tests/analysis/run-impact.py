@@ -186,11 +186,11 @@ KIND10 = "---\nlaw brief: new.words <= 10\n---\nA journal.\n"
 MON = ["one two three\n", "one two three four five six seven eight nine ten eleven twelve\n", "short again\n"]
 
 
-def journal(vault, kind):
+def journal(vault, kind, writes=len(MON)):
     os.makedirs(os.path.join(vault, "journal"))
     open(os.path.join(vault, "journal", "_kind.md"), "w").write(kind)
     open(os.path.join(vault, "journal", "Tue.md"), "w").write("a b c\n")
-    for text in MON:
+    for text in MON[:writes]:
         open(os.path.join(vault, "journal", "Mon.md"), "w").write(text)
         obend("open", vault)
 
@@ -210,7 +210,7 @@ with tempfile.TemporaryDirectory() as work:
     check("replay: the amended law refuses it, by name", would.startswith("refused by journal/_kind: brief"), out)
     check("replay: Tue's writes are judged alike", "journal/Tue: 1 write(s) judged alike" in out, out)
     fresh = os.path.join(work, "fresh")
-    journal(fresh, KIND10)
+    journal(fresh, KIND10, writes=2)
     _, out = obend("-C", fresh, "status", "journal/Mon")
     check("replay, re-judged: with the amended law in force, Mon's second write is refused with the same words",
           out.startswith("journal/Mon v1; its last write was " + would), out + "\nwanted: " + would)
