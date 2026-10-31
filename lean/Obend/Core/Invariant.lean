@@ -508,18 +508,27 @@ adequacy oracle is a premise. -/
     (h : EnvironmentValid bound environment) (found : environment[index]? = some address) :
     address < bound := h address (List.mem_of_getElem? found)
 
-set_option linter.unusedSimpArgs false in
-set_option maxHeartbeats 1200000 in
- theorem stepRaw_lexicalInvariant {state : State} (invariant : LexicalInvariant state) :
-    LexicalInvariant (stepRaw state) := by
+/-! ### `stepRaw` keeps the lexical invariant, one lemma per transition
+
+Each lemma fixes the control (and, for a return, the top frame) and runs the same discharge,
+`lexical_unfold` and `lexical_discharge`; `stepRaw_lexicalInvariant` dispatches on the state. -/
+
+set_option hygiene false in
+/-- Open `invariant` and unfold `stepRaw`; the caller then fixes the transition by `simp only` at
+its control (and for a return its top frame) and closes it with `lexical_discharge`. -/
+macro "lexical_unfold" : tactic => `(tactic| (
   rcases invariant with ⟨hh,hc,hs⟩
   have stackHead : ∀ frame rest, state.stack = frame::rest → FrameValid state.heap.size frame := by
     intro frame rest eq
     exact hs frame (eq ▸ List.mem_cons_self)
   have hp := stepRaw_preservesOrigins state
   have hg : state.heap.size ≤ (stepRaw state).heap.size := hp.1
-  unfold stepRaw
-  split <;> repeat' first | split
+  unfold stepRaw))
+
+set_option hygiene false in
+/-- Split what is left of the transition and discharge `LexicalInvariant` of each result. -/
+macro "lexical_discharge" : tactic => `(tactic| (
+  repeat' first | split
   all_goals try dsimp only at *
   all_goals try (have headValid := stackHead _ _ (by assumption))
   all_goals simp_all only [LexicalInvariant, ControlValid, ClosureValid,
@@ -539,6 +548,378 @@ set_option maxHeartbeats 1200000 in
     ClosureValid, CellValid, FrameValid, RuntimeValueValid, EnvironmentValid, environmentValid_lookup, Scoped.app, Scoped.bound, Scoped.natural, Scoped.boolean, Scoped.label, List.length_cons, List.mem_of_getElem?, List.mem_of_find?_eq_some,
     environmentValid_mono,environmentValid_tied,cellValid_mono,frameValid_mono,
     runtimeValueValid_mono,scoped_weaken,scoped_mixBody]
+  ))
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_hole {state : State} {environment : Environment} {n : Nat} {σ : List Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.hole n σ) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_bound {state : State} {environment : Environment} {index : Nat}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.bound index) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_lam {state : State} {environment : Environment} {body : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.lam body) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_app {state : State} {environment : Environment} {function : Term} {argument : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.app function argument) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_mix {state : State} {environment : Environment} {lower : Term} {upper : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.mix lower upper) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_fix {state : State} {environment : Environment} {spec : Term} {inherited : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.fix spec inherited) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_specification {state : State} {environment : Environment} {descriptor : Term} {extension : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.specification descriptor extension) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_prototype {state : State} {environment : Environment} {spec : Term} {target : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.prototype spec target) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_reflect {state : State} {environment : Environment} {term : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.reflect term) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_metadata {state : State} {environment : Environment} {term : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.metadata term) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_project {state : State} {environment : Environment} {term : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.project term) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_nat {state : State} {environment : Environment} {n : Nat}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.nat n) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_boolean {state : State} {environment : Environment} {value : Bool}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.boolean value) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_label {state : State} {environment : Environment} {name : String}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.label name) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_binary {state : State} {environment : Environment} {primitive : Primitive} {left : Term} {right : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.binary primitive left right) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_extend {state : State} {environment : Environment} {inherited : Term} {fields : List (String × Term)}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.extend inherited fields) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_record {state : State} {environment : Environment} {fields : List (String × Term)}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.record fields) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_get {state : State} {environment : Environment} {target : Term} {name : String}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.get target name) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_ifZero {state : State} {environment : Environment} {value : Term} {zero : Term} {successorBody : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.ifZero value zero successorBody) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_inject {state : State} {environment : Environment} {tag : String} {payload : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.inject tag payload) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_case {state : State} {environment : Environment} {scrutinee : Term} {arms : List (String × Term)}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.case scrutinee arms) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_ifBool {state : State} {environment : Environment} {condition : Term} {whenTrue : Term} {whenFalse : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.ifBool condition whenTrue whenFalse) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_perform {state : State} {environment : Environment} {plan : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.perform plan) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_evaluate_done {state : State} {environment : Environment} {value : Term}
+    (invariant : LexicalInvariant state) (current : state.control = .evaluate (.done value) environment) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_argument {state : State} {value : RuntimeValue} {rest : List Frame} {argument : Term} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .argument argument environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_update {state : State} {value : RuntimeValue} {rest : List Frame} {address : Address}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .update address :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_field {state : State} {value : RuntimeValue} {rest : List Frame} {name : String}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .field name :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_reflect {state : State} {value : RuntimeValue} {rest : List Frame} 
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .reflect :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_metadata {state : State} {value : RuntimeValue} {rest : List Frame} 
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .metadata :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_project {state : State} {value : RuntimeValue} {rest : List Frame} 
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .project :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_extend {state : State} {value : RuntimeValue} {rest : List Frame} {fields : List (String × Term)} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .extend fields environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_condition {state : State} {value : RuntimeValue} {rest : List Frame} {zero : Term} {successorBody : Term} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .condition zero successorBody environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_binaryLeft {state : State} {value : RuntimeValue} {rest : List Frame} {primitive : Primitive} {right : Term} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .binaryLeft primitive right environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_binaryRight {state : State} {value : RuntimeValue} {rest : List Frame} {primitive : Primitive} {left : RuntimeValue}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .binaryRight primitive left :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_case {state : State} {value : RuntimeValue} {rest : List Frame} {arms : List (String × Term)} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .case arms environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_ifBool {state : State} {value : RuntimeValue} {rest : List Frame} {whenTrue : Term} {whenFalse : Term} {environment : Environment}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = .ifBool whenTrue whenFalse environment :: rest) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_enter {state : State} {address : Address}
+    (invariant : LexicalInvariant state) (current : state.control = .enter address) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current]
+  lexical_discharge
+
+set_option linter.unusedSimpArgs false in
+theorem lexical_return_complete {state : State} {value : RuntimeValue}
+    (invariant : LexicalInvariant state) (current : state.control = .returned value)
+    (top : state.stack = []) :
+    LexicalInvariant (stepRaw state) := by
+  lexical_unfold
+  simp only [current, top]
+  lexical_discharge
+
+theorem lexical_terminal {state : State} (invariant : LexicalInvariant state)
+    (terminal : stepRaw state = state) : LexicalInvariant (stepRaw state) :=
+  by rw [terminal]; exact invariant
+
+theorem stepRaw_lexicalInvariant {state : State} (invariant : LexicalInvariant state) :
+    LexicalInvariant (stepRaw state) := by
+  match current : state.control with
+  | .complete _ | .refused _ | .blackhole _ | .yielded _ =>
+    exact lexical_terminal invariant (by unfold stepRaw; rw [current])
+  | .enter _ => exact lexical_enter invariant current
+  | .evaluate term _ =>
+    cases term with
+    | hole => exact lexical_evaluate_hole invariant current
+    | bound => exact lexical_evaluate_bound invariant current
+    | lam => exact lexical_evaluate_lam invariant current
+    | app => exact lexical_evaluate_app invariant current
+    | mix => exact lexical_evaluate_mix invariant current
+    | fix => exact lexical_evaluate_fix invariant current
+    | specification => exact lexical_evaluate_specification invariant current
+    | prototype => exact lexical_evaluate_prototype invariant current
+    | reflect => exact lexical_evaluate_reflect invariant current
+    | metadata => exact lexical_evaluate_metadata invariant current
+    | project => exact lexical_evaluate_project invariant current
+    | nat => exact lexical_evaluate_nat invariant current
+    | boolean => exact lexical_evaluate_boolean invariant current
+    | label => exact lexical_evaluate_label invariant current
+    | binary => exact lexical_evaluate_binary invariant current
+    | extend => exact lexical_evaluate_extend invariant current
+    | record => exact lexical_evaluate_record invariant current
+    | get => exact lexical_evaluate_get invariant current
+    | ifZero => exact lexical_evaluate_ifZero invariant current
+    | inject => exact lexical_evaluate_inject invariant current
+    | case => exact lexical_evaluate_case invariant current
+    | ifBool => exact lexical_evaluate_ifBool invariant current
+    | perform => exact lexical_evaluate_perform invariant current
+    | done => exact lexical_evaluate_done invariant current
+  | .returned _ =>
+    match top : state.stack with
+    | [] => exact lexical_return_complete invariant current top
+    | frame :: _ =>
+      cases frame with
+      | argument => exact lexical_return_argument invariant current top
+      | update => exact lexical_return_update invariant current top
+      | field => exact lexical_return_field invariant current top
+      | reflect => exact lexical_return_reflect invariant current top
+      | metadata => exact lexical_return_metadata invariant current top
+      | project => exact lexical_return_project invariant current top
+      | extend => exact lexical_return_extend invariant current top
+      | condition => exact lexical_return_condition invariant current top
+      | binaryLeft => exact lexical_return_binaryLeft invariant current top
+      | binaryRight => exact lexical_return_binaryRight invariant current top
+      | case => exact lexical_return_case invariant current top
+      | ifBool => exact lexical_return_ifBool invariant current top
 
 /-- Memoization is permanent: later raw steps cannot overwrite or re-enter an
 already cached cell. This is the operational sharing fact; it makes no native
