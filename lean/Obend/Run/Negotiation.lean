@@ -92,7 +92,7 @@ def reserveOp : Σ i, sig.Op i := ⟨.idle, Op.reserve⟩
 def commitOp (p : Provider) : Σ i, sig.Op i := ⟨.reserved, Op.commit p⟩
 
 /-- The script up to the revocation: reserve, its reply, `p1`'s grant revoked. -/
-def opening : List (Event sig HoleN Res Wv) :=
+def opening : List (Event sig HoleN Res Fact Wv) :=
   [.dispatch reserveOp, .respond ⟨.idle, Op.reserve, ()⟩, .world ⟨false, true, true, true⟩]
 
 def c₁ : Cfg sig HoleN Res Tok Fact Ob Wv .idle := (session host spec c₀ opening).1
@@ -100,14 +100,14 @@ def c₁ : Cfg sig HoleN Res Tok Fact Ob Wv .idle := (session host spec c₀ ope
 /-- At the revoked view the slot resolves to `p2`. -/
 theorem resolves_p2 :
     resolveEvent host c₁ providers (j := Phase.reserved) () body order =
-      .ok (.replan (j := Phase.reserved) () (plan .p2)) := rfl
+      .ok (.replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline]) := rfl
 
 /-- The same replan by the slot's incumbent-first policy (`slotAdvance`), with `p1` stored: the stored
 selection is no longer usable, so the policy selects `p2`; any other policy with TRANSITION would
 be admissible here too (`resolveEventBy_ok`). -/
 theorem resolvesBy_p2 :
     resolveEventBy slotAdvance c₁ providers (j := Phase.reserved) () body order (some (some .p1)) =
-      .ok (.replan (j := Phase.reserved) () (plan .p2)) := rfl
+      .ok (.replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline]) := rfl
 
 /-- The rest: commit on `p1` (refused, the grant is gone), the slot's replan to `p2`, commit on `p2`
 (accepted: the capability is spent), then its reply is LOST. The world restores `p1`'s grant and
@@ -116,25 +116,25 @@ another continuation, to commit on `p1`; a late reply arrives for the commit on 
 passes, and the world tries to un-pass it. The buyer gives up on the commitment (`abandon`): the
 reply that finally arrives, a cancellation and a new commitment are all refused; the world still
 moves. -/
-def rest : List (Event sig HoleN Res Wv) :=
+def rest : List (Event sig HoleN Res Fact Wv) :=
   [.dispatch (commitOp .p1),
-   .replan (j := Phase.reserved) () (plan .p2),
+   .replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline],
    .dispatch (commitOp .p2),
    .world everything,
-   .replan (j := Phase.reserved) () cancelPlan,
-   .replan (j := Phase.reserved) () (plan .p1),
-   .replan (j := Phase.reserved) () (planFlip .p2),
+   .replan (j := Phase.reserved) () cancelPlan [],
+   .replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline],
+   .replan (j := Phase.reserved) () (planFlip .p2) [.auth .p2, .beforeDeadline],
    .dispatch (commitOp .p1),
    .respond ⟨.reserved, Op.commit .p1, true⟩,
    .world ⟨true, true, false, true⟩,
    .world everything,
    .abandon (commitOp .p2),
    .respond ⟨.reserved, Op.commit .p2, true⟩,
-   .replan (j := Phase.reserved) () cancelPlan,
+   .replan (j := Phase.reserved) () cancelPlan [],
    .dispatch (commitOp .p1),
    .world ⟨false, false, false, true⟩]
 
-def script : List (Event sig HoleN Res Wv) := opening ++ rest
+def script : List (Event sig HoleN Res Fact Wv) := opening ++ rest
 
 def final : Cfg sig HoleN Res Tok Fact Ob Wv .idle := (session host spec c₀ script).1
 
@@ -232,11 +232,11 @@ theorem abandon_ends :
 /-- The commitment to `p2` dispatched, its reply missing. -/
 def c₂ : Cfg sig HoleN Res Tok Fact Ob Wv .idle :=
   (session host spec c₀ (opening ++ [.dispatch (commitOp .p1),
-    .replan (j := Phase.reserved) () (plan .p2), .dispatch (commitOp .p2)])).1
+    .replan (j := Phase.reserved) () (plan .p2) [.auth .p2, .beforeDeadline], .dispatch (commitOp .p2)])).1
 
 /-- The general lost-reply theorem at the stranger's lost reply: whatever the world and the buyer
 propose short of a reply, the history, the spent capability and the dispatches stay. -/
-theorem lost_instance (evs : List (Event sig HoleN Res Wv)) (hno : ∀ e ∈ evs, e.isRespond = false) :
+theorem lost_instance (evs : List (Event sig HoleN Res Fact Wv)) (hno : ∀ e ∈ evs, e.isRespond = false) :
     (session host spec c₂ evs).1.obj.hist = c₂.obj.hist ∧ (session host spec c₂ evs).1.spent = [.cap] ∧
       dispatchesOf (session host spec c₂ evs).1.log = [reserveOp, commitOp .p2] ∧
       IsCall (session host spec c₂ evs).1.res (commitOp .p2) := by
@@ -250,6 +250,7 @@ theorem typed_instance (H : Handler sig (fun _ => Nat)) (s : Nat) :
     ∃ n, (drive host spec H n c₀ s).result? =
       some (interpret H (fill Ω (choose (plan .p1)) template) s) := by
   refine drive_complete H _ c₀ s Δ₀ rfl rfl rfl (instantiations_hasProt.1 .p1) ?_ ?_ (by decide)
+    (fun _ _ _ h => by cases h)
   · intro f hf
     simp only [Γ₀, List.mem_cons, List.not_mem_nil, or_false] at hf
     rcases hf with rfl | rfl | rfl <;> rfl
@@ -257,7 +258,35 @@ theorem typed_instance (H : Handler sig (fun _ => Nat)) (s : Nat) :
     cases t
     exact ⟨rfl, by simp [c₀, Cfg.init]⟩
 
-#assert_axioms resolvesBy_p2
+/-! ## The selection decision is rechecked at dispatch
+
+Astra's gap (`astra/ASTRA-SELECTION-20261031.md` §7.3): an operation account that omits a grant the
+selected candidate cites. `laxSpec` requires nothing of a commitment; the slot still selects `p1`
+for citing `p1`'s grant. -/
+
+/-- The negotiation's accounts with every requirement dropped. -/
+def laxSpec : Spec sig Tok Fact Ob := { spec with requires := fun _ => [] }
+
+/-- The slot selects `p1` at the world where everything holds, citing its grant and the deadline. -/
+theorem selects_p1 :
+    resolveEvent host (session host laxSpec c₀ (opening.take 2)).1 providers (j := Phase.reserved) ()
+        body order =
+      .ok (.replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline]) := rfl
+
+/-- **Refused by the decision**: reserve, select `p1` (citing its grant), revoke the grant, commit on
+`p1`. `laxSpec` admits the commitment; the runner refuses it, naming the provider hole and the
+grant its decision cited. -/
+theorem decision_rechecked :
+    (session host laxSpec c₀ (opening.take 2 ++
+      [.replan (j := Phase.reserved) () (plan .p1) [.auth .p1, .beforeDeadline],
+       .world ⟨false, true, true, true⟩,
+       .dispatch (commitOp .p1)])).2 =
+      [none, none, none, none, some (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1])] :=
+  rfl
+
+#tooth decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
+
+#assert_axioms resolvesBy_p2 selects_p1 decision_rechecked
 #assert_axioms resolves_p2 receipt reserve_retry_refused abandon_ends lost_instance typed_instance stayed changed script_legal withdrawn_refused everything_delivers
 
 end Obend.Run.Negotiation

@@ -235,6 +235,9 @@ public structure Inv (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
   next : ∀ o, c.obj.hist.inflight = some o → IsCall c.res o
   /-- the run is ended by the call the log abandoned, if any -/
   ended : c.ended = endedOf c.log
+  decided : DecisionsHeld host O.template v₀ c.log
+  /-- each hole's decision cites what the log's last replan of it cited -/
+  cites : c.cites = citesOf c.log
 
 omit [DecidableEq (Σ i, S.Op i)] in
 public theorem Inv.started {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
@@ -254,7 +257,7 @@ omit [DecidableEq (Σ i, S.Op i)] in
 public theorem Inv.legal {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c : Cfg S Hole A Tok Fact Ob V i}
     (hI : Inv host sp O v₀ c) : Legal host sp O v₀ c.log := by
-  refine ⟨hI.steps, hI.authorized, hI.once, hI.paired, hI.final, hI.frozen, ?_⟩
+  refine ⟨hI.steps, hI.authorized, hI.decided, hI.once, hI.paired, hI.final, hI.frozen, ?_⟩
   have h := hI.started
   rw [hI.obj] at h
   exact h
@@ -274,16 +277,18 @@ theorem inv_init (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
   residual := .here _
   next := fun _ h => by cases h
   ended := rfl
+  decided := AtEach.nil _
+  cites := rfl
 
 omit [DecidableEq (Σ i, S.Op i)] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok] in
-theorem endedOf_snoc_live {log : List (Event S Hole A V)} {e : Event S Hole A V}
+theorem endedOf_snoc_live {log : List (Event S Hole A Fact V)} {e : Event S Hole A Fact V}
     (he : ∀ o, e ≠ .abandon o) : endedOf (log ++ [e]) = endedOf log := by
   cases e with
   | abandon o => exact absurd rfl (he o)
   | _ => simp [endedOf, List.foldl_append]
 
 theorem run_live {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
-    {c c' : Cfg S Hole A Tok Fact Ob V i} {ev : Event S Hole A V}
+    {c c' : Cfg S Hole A Tok Fact Ob V i} {ev : Event S Hole A Fact V}
     (hev : ∀ v, ev ≠ .world v) (h : run host sp c ev = .ok c') : closedBy c = none := by
   cases hcl : closedBy c with
   | none => rfl
@@ -303,7 +308,8 @@ theorem inv_world {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
       AtEach.snoc.mpr ⟨hI.paired, ?_, ?_, fun _ e => by cases e⟩,
       AtEach.snoc.mpr ⟨hI.final, fun _ => ⟨_, rfl⟩⟩, AtEach.snoc.mpr ⟨hI.frozen, ?_⟩, ?_, ?_, ?_,
       hI.residual, hI.next,
-      by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended⟩
+      by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended, AtEach.snoc.mpr ⟨hI.decided, fun _ e => by cases e⟩,
+      by simpa [citesOf, List.foldl_append] using hI.cites⟩
     · intro v' e
       cases e
       rw [← hI.world]
@@ -312,7 +318,7 @@ theorem inv_world {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     · simpa [OnceSpent, spentBy, List.filterMap_append] using hI.once
     · intro o e; cases e
     · intro r e; cases e
-    · intro j h f e; cases e
+    · intro j h f cs e; cases e
     · simpa [planOf, histOf, List.foldl_append] using hI.obj
     · simp [worldOf, List.foldl_append]
     · simpa [spentBy, List.filterMap_append] using hI.spent
@@ -337,13 +343,19 @@ theorem inv_dispatch {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
       · simp only [ho, ↓reduceIte] at h
         by_cases hg : dispatchGuard sp (c.admitView host) op = true
         · simp only [hg, ↓reduceIte] at h
+          have hdd : decisionDead c.obj c.cites (c.admitView host) = [] := by
+            cases hdd : decisionDead c.obj c.cites (c.admitView host) with
+            | nil => rfl
+            | cons d ds => simp [hdd] at h
+          simp only [hdd] at h
           cases h
           have hg' : admitOp sp (viewAt host sp v₀ c.log) op = true := by
             rw [viewAt, ← hI.world, ← hI.spent]; exact hg
           refine ⟨AtEach.snoc.mpr ⟨hI.steps, ?_⟩, AtEach.snoc.mpr ⟨hI.authorized, ?_⟩, ?_,
             AtEach.snoc.mpr ⟨hI.paired, ?_, ?_, fun _ e => by cases e⟩,
             AtEach.snoc.mpr ⟨hI.final, fun hne => absurd (hI.ended.symm.trans hcl) hne⟩, AtEach.snoc.mpr ⟨hI.frozen, ?_⟩, ?_, ?_, ?_,
-            hres ▸ hI.residual, ?_, by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended⟩
+            hres ▸ hI.residual, ?_, by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended, AtEach.snoc.mpr ⟨hI.decided, ?_⟩,
+            by simpa [citesOf, List.foldl_append] using hI.cites⟩
           · intro v' e; cases e
           · intro o' e; cases e; exact hg'
           · have hsp : spentBy sp (c.log ++ [Event.dispatch ⟨j, op⟩]) =
@@ -367,7 +379,7 @@ theorem inv_dispatch {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
             rw [hinf] at this
             exact this.symm
           · intro r e; cases e
-          · intro j h f e; cases e
+          · intro j h f cs e; cases e
           · show { c.obj with hist := ⟨c.obj.hist.answered, some ⟨j, op⟩⟩ } = _
             rw [hI.obj]
             simp [planOf, histOf, List.foldl_append]
@@ -379,6 +391,21 @@ theorem inv_dispatch {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
           · intro o' e
             cases e
             rfl
+          · intro o' e j' h' hd f hf
+            cases e
+            have hent := entered_iff.mp hd
+            have hown : owner c.obj = some ⟨j', h'⟩ := by
+              show entered c.obj.template c.obj.hist.answered true = _
+              rw [hI.obj]
+              exact hent
+            have hz : (match owner c.obj with
+                | some ⟨j, h⟩ => (c.cites j h).filter fun f => !(c.admitView host).holds f
+                | none => []) = [] := hdd
+            rw [hown] at hz
+            have hf' : f ∈ c.cites j' h' := by rw [hI.cites]; exact hf
+            have := List.filter_eq_nil_iff.mp hz f hf'
+            rw [← hI.world]
+            simpa [Cfg.admitView, View.mask] using this
         · simp only [hg] at h; cases h
       · simp only [ho, ↓reduceIte] at h; cases h
     · simp only [hres] at h; cases h
@@ -403,7 +430,8 @@ theorem inv_respond {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
         refine ⟨AtEach.snoc.mpr ⟨hI.steps, ?_⟩, AtEach.snoc.mpr ⟨hI.authorized, ?_⟩, ?_,
           AtEach.snoc.mpr ⟨hI.paired, ?_, ?_, fun _ e => by cases e⟩,
           AtEach.snoc.mpr ⟨hI.final, fun hne => absurd (hI.ended.symm.trans hcl) hne⟩, AtEach.snoc.mpr ⟨hI.frozen, ?_⟩, ?_, ?_, ?_, ?_, ?_,
-          by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended⟩
+          by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended, AtEach.snoc.mpr ⟨hI.decided, fun _ e => by cases e⟩,
+            by simpa [citesOf, List.foldl_append] using hI.cites⟩
         · intro v' e; cases e
         · intro o' e; cases e
         · simpa [OnceSpent, spentBy, List.filterMap_append] using hI.once
@@ -413,7 +441,7 @@ theorem inv_respond {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
           have := congrArg (fun O => O.hist.inflight) hI.obj
           rw [hinf] at this
           rw [← this, ho]
-        · intro j h f e; cases e
+        · intro j h f cs e; cases e
         · show { c.obj with hist := ⟨c.obj.hist.answered ++ [e], none⟩ } = _
           rw [hI.obj]
           simp [planOf, histOf, List.foldl_append]
@@ -425,8 +453,8 @@ theorem inv_respond {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
 
 theorem inv_replan {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c c' : Cfg S Hole A Tok Fact Ob V i}
-    {j : Ix} {h : Hole j} {f : Prot S Hole A j}
-    (hI : Inv host sp O v₀ c) (hr : run host sp c (.replan h f) = .ok c') :
+    {j : Ix} {h : Hole j} {f : Prot S Hole A j} {fs : List Fact}
+    (hI : Inv host sp O v₀ c) (hr : run host sp c (.replan h f fs) = .ok c') :
     Inv host sp O v₀ c' := by
   have hcl := run_live (fun _ e => by cases e) hr
   simp only [run, hcl] at hr
@@ -448,13 +476,14 @@ theorem inv_replan {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
           refine ⟨AtEach.snoc.mpr ⟨hI.steps, ?_⟩, AtEach.snoc.mpr ⟨hI.authorized, ?_⟩, ?_,
             AtEach.snoc.mpr ⟨hI.paired, ?_, ?_, fun _ e => by cases e⟩,
             AtEach.snoc.mpr ⟨hI.final, fun hne => absurd (hI.ended.symm.trans hcl) hne⟩, AtEach.snoc.mpr ⟨hI.frozen, ?_⟩, ?_, ?_, ?_,
-            advance_reach hadv, ?_, by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended⟩
+            advance_reach hadv, ?_, by rw [endedOf_snoc_live (fun _ h => by cases h)]; exact hI.ended, AtEach.snoc.mpr ⟨hI.decided, fun _ e => by cases e⟩,
+            by show setCites c.cites h fs = _; rw [hI.cites]; simp [citesOf, List.foldl_append]⟩
           · intro v' e; cases e
           · intro o' e; cases e
           · simpa [OnceSpent, spentBy, List.filterMap_append] using hI.once
           · intro o' e; cases e
           · intro r e; cases e
-          · intro j' h' f' e
+          · intro j' h' f' cs' e
             cases e
             intro hd
             apply hz
@@ -498,8 +527,9 @@ theorem inv_abandon {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
   refine ⟨AtEach.snoc.mpr ⟨hI.steps, fun _ e => by cases e⟩,
     AtEach.snoc.mpr ⟨hI.authorized, fun _ e => by cases e⟩, ?_,
     AtEach.snoc.mpr ⟨hI.paired, (fun _ e => by cases e), (fun _ e => by cases e), ?_⟩,
-    AtEach.snoc.mpr ⟨hI.final, fun hne => absurd (hI.ended.symm.trans hcl) hne⟩, AtEach.snoc.mpr ⟨hI.frozen, fun _ _ _ e => by cases e⟩, ?_, ?_, ?_,
-    hI.residual, hI.next, ?_⟩
+    AtEach.snoc.mpr ⟨hI.final, fun hne => absurd (hI.ended.symm.trans hcl) hne⟩, AtEach.snoc.mpr ⟨hI.frozen, fun _ _ _ _ e => by cases e⟩, ?_, ?_, ?_,
+    hI.residual, hI.next, ?_, AtEach.snoc.mpr ⟨hI.decided, fun _ e => by cases e⟩,
+    by simpa [citesOf, List.foldl_append] using hI.cites⟩
   · simpa [OnceSpent, spentBy, List.filterMap_append] using hI.once
   · intro o' e
     cases e
@@ -514,11 +544,11 @@ theorem inv_abandon {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
 /-- **The induction step**: every event the runner accepts preserves the invariant. -/
 public theorem step_inv {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c c' : Cfg S Hole A Tok Fact Ob V i}
-    {ev : Event S Hole A V}
+    {ev : Event S Hole A Fact V}
     (hI : Inv host sp O v₀ c) (h : run host sp c ev = .ok c') : Inv host sp O v₀ c' := by
   cases ev with
   | world v => exact inv_world hI h
-  | replan h f => exact inv_replan hI h
+  | replan h f fs => exact inv_replan hI h
   | dispatch o => exact inv_dispatch hI h
   | respond e => exact inv_respond hI h
   | abandon o => exact inv_abandon hI h
@@ -528,6 +558,7 @@ public theorem step_inv {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : 
 #tooth step_inv by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
 #tooth step_inv by mutation frozenHole := fun {_ _ _ _} [_] {_ _ _ _} _ => none
 #tooth step_inv by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
+#tooth step_inv by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
 /-- **The runner refines its specification**: every configuration reachable from `Cfg.init O v₀`
 satisfies the invariant. -/
@@ -544,15 +575,33 @@ public theorem reachable_legal {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob
     (h : Reachable host sp (Cfg.init O v₀) c) : Legal host sp O v₀ c.log :=
   (refines h).legal
 
+/-- **A dispatch that uses a selected choice finds the choice usable at its own view** (Astra's
+`AdmitOperation ∧ UsesChoice → Usable`, `astra/ASTRA-SELECTION-20261031.md` §7.3): if the hole a
+dispatched call enters was decided for candidate `cand` of slot `Sl` (its decision cites `cand`'s
+supports, as `resolveEvent`/`resolveEventBy` record them) and `cand` passes the judge, then `cand` is
+usable at the world of that dispatch, however the world moved since the selection. -/
+public theorem dispatch_usable_choice {Cand : Type} {host : Host V Tok Fact}
+    {sp : Spec S Tok Fact Ob} {i : Ix} {O : Open S Hole A Tok Fact Ob i} {v₀ : V}
+    {c : Cfg S Hole A Tok Fact Ob V i} (hc : Reachable host sp (Cfg.init O v₀) c) {n : Nat}
+    {o : Σ i, S.Op i} (hn : c.log[n]? = some (.dispatch o)) {j : Ix} {h : Hole j}
+    (hd : Dispatched O.template ⟨(histOf (c.log.take n)).answered, some o⟩ j h)
+    (Sl : Slot Fact Cand) (cand : Cand) (hcite : citesOf (c.log.take n) j h = Sl.supports cand)
+    (hjudge : Sl.judge cand = true) :
+    Sl.usable (host.view (worldOf v₀ (c.log.take n))).holds cand = true := by
+  have hheld := (reachable_legal hc).decided n _ hn o rfl j h hd
+  rw [hcite] at hheld
+  exact (Slot.usable_iff Sl _ cand).2 ⟨hjudge, hheld⟩
+
 /-! ## What a replan may change, and the continuation clause -/
 
 theorem run_replan_inv {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
-    {c c' : Cfg S Hole A Tok Fact Ob V i} {j : Ix} {h : Hole j} {f : Prot S Hole A j}
-    (hr : run host sp c (.replan h f) = .ok c') :
+    {c c' : Cfg S Hole A Tok Fact Ob V i} {j : Ix} {h : Hole j} {f : Prot S Hole A j} {fs : List Fact}
+    (hr : run host sp c (.replan h f fs) = .ok c') :
     isMine c.obj.Ω h = true ∧ frozenHole c.obj ≠ some ⟨j, h⟩ ∧
       advance ⟨i, (c.obj.replan (setHole c.obj.σ h f)).current⟩ c.obj.hist.answered = some c'.res ∧
       c'.obj = c.obj.replan (setHole c.obj.σ h f) ∧ c'.world = c.world ∧ c'.spent = c.spent ∧
-      c'.log = c.log ++ [Event.replan h f] ∧ c'.ended = c.ended := by
+      c'.log = c.log ++ [Event.replan h f fs] ∧ c'.ended = c.ended ∧
+      c'.cites = setCites c.cites h fs := by
   have hcl := run_live (fun _ e => by cases e) hr
   simp only [run, hcl] at hr
   cases hmine : isMine c.obj.Ω h with
@@ -570,14 +619,14 @@ theorem run_replan_inv {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : I
         by_cases hn : nextIs R c.obj.hist.inflight = true
         · simp only [hn, ↓reduceIte] at hr
           cases hr
-          exact ⟨rfl, hz, rfl, rfl, rfl, rfl, rfl, rfl⟩
+          exact ⟨rfl, hz, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
         · simp only [hn] at hr; cases hr
 
 /-- **An accepted replan is guarded**: it satisfies the open object's own guard `Open.Replan` (it
 agrees with the old plan on every hole the history has entered) and keeps the accepted history. -/
 public theorem run_replan_guard {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
-    {c c' : Cfg S Hole A Tok Fact Ob V i} {j : Ix} {h : Hole j} {f : Prot S Hole A j}
-    (hr : run host sp c (.replan h f) = .ok c') :
+    {c c' : Cfg S Hole A Tok Fact Ob V i} {j : Ix} {h : Hole j} {f : Prot S Hole A j} {fs : List Fact}
+    (hr : run host sp c (.replan h f fs) = .ok c') :
     c.obj.Replan c'.obj.σ ∧ c'.obj.hist = c.obj.hist := by
   obtain ⟨_, hz, _, hobj, _⟩ := run_replan_inv hr
   rw [hobj]
@@ -593,9 +642,9 @@ filling, at every reachable configuration (with a call in flight or not). -/
 public theorem replan_accepted {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c : Cfg S Hole A Tok Fact Ob V i}
     (hI : Inv host sp O v₀ c) (hlive : c.ended = none) {j : Ix} {h : Hole j}
-    (f : Prot S Hole A j) (hmine : isMine c.obj.Ω h = true)
+    (f : Prot S Hole A j) (fs : List Fact) (hmine : isMine c.obj.Ω h = true)
     (hnd : ¬ Dispatched c.obj.template c.obj.hist j h) :
-    ∃ c', run host sp c (.replan h f) = .ok c' ∧
+    ∃ c', run host sp c (.replan h f fs) = .ok c' ∧
       Reach (fill c.obj.Ω (setHole c.obj.σ h f) c.obj.template) c.obj.hist.answered c'.res := by
   have hz : frozenHole c.obj ≠ some ⟨j, h⟩ := fun e => hnd (entered_iff.mpr e)
   have hg : ∀ j' (h' : Hole j'), Dispatched c.obj.template c.obj.hist j' h' →
@@ -623,7 +672,8 @@ public theorem replan_accepted {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob
   refine ⟨{ c with
       obj := c.obj.replan (setHole c.obj.σ h f)
       res := R
-      log := c.log ++ [Event.replan h f] }, ?_, hR⟩
+      cites := setCites c.cites h fs
+      log := c.log ++ [Event.replan h f fs] }, ?_, hR⟩
   have hcl : closedBy c = none := hlive
   simp only [run, hcl, hmine, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hz, hadv, hn]
 
@@ -634,15 +684,17 @@ public theorem replace_then_dispatch {host : Host V Tok Fact} {sp : Spec S Tok F
     {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c : Cfg S Hole A Tok Fact Ob V i}
     (hI : Inv host sp O v₀ c) (hlive : c.ended = none) (hnone : c.obj.hist.inflight = none)
     {j : Ix} {h : Hole j}
-    (f : Prot S Hole A j) (hmine : isMine c.obj.Ω h = true)
+    (f : Prot S Hole A j) (fs : List Fact) (hmine : isMine c.obj.Ω h = true)
     (hnd : ¬ Dispatched c.obj.template c.obj.hist j h) {j' : Ix} {op : S.Op j'}
     {k : (r : S.Resp op) → Prot S Hole A (S.next op r)}
     (hR : Reach (fill c.obj.Ω (setHole c.obj.σ h f) c.obj.template) c.obj.hist.answered
       ⟨j', .call op k⟩)
-    (hadm : admitOp sp (c.admitView host) op = true) :
-    ∃ c', run host sp c (.replan h f) = .ok c' ∧ c'.res = ⟨j', .call op k⟩ ∧
+    (hadm : admitOp sp (c.admitView host) op = true)
+    (hdec : decisionDead (c.obj.replan (setHole c.obj.σ h f)) (setCites c.cites h fs)
+      (c.admitView host) = []) :
+    ∃ c', run host sp c (.replan h f fs) = .ok c' ∧ c'.res = ⟨j', .call op k⟩ ∧
       ∃ c'', run host sp c' (.dispatch ⟨j', op⟩) = .ok c'' := by
-  obtain ⟨c', hc', _⟩ := replan_accepted hI hlive f hmine hnd
+  obtain ⟨c', hc', _⟩ := replan_accepted hI hlive f fs hmine hnd
   obtain ⟨_, _, hadv, hobj, hw, hsp, _⟩ := run_replan_inv hc'
   have hres : c'.res = ⟨j', .call op k⟩ := by
     have := reach_advance hR
@@ -655,8 +707,12 @@ public theorem replace_then_dispatch {host : Host V Tok Fact} {sp : Spec S Tok F
     simp only [Cfg.admitView, hw, hsp]; exact hadm
   refine ⟨c', hc', hres, ?_⟩
   have haw : awaiting c'.obj.hist = c'.obj.hist.inflight := rfl
-  have hcl : closedBy c' = none := (run_replan_inv hc').2.2.2.2.2.2.2.trans hlive
-  simp only [run, hcl, haw, hinf, hres, ↓reduceIte, hg]
+  have hcl : closedBy c' = none := (run_replan_inv hc').2.2.2.2.2.2.2.1.trans hlive
+  have hdd : decisionDead c'.obj c'.cites (c'.admitView host) = [] := by
+    rw [hobj, (run_replan_inv hc').2.2.2.2.2.2.2.2]
+    simp only [Cfg.admitView, hw, hsp]
+    exact hdec
+  simp only [run, hcl, haw, hinf, hres, ↓reduceIte, hg, hdd]
   exact ⟨_, rfl⟩
 
 /-- **After dispatch, no new commitment**: with a call in flight every dispatch is refused, naming
@@ -674,9 +730,9 @@ hole the history has entered is refused `replacesInflight`. -/
 public theorem inflight_replan_refused {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c : Cfg S Hole A Tok Fact Ob V i} (hlive : c.ended = none) {o : Σ i, S.Op i}
     (ho : c.obj.hist.inflight = some o)
-    {j : Ix} {h : Hole j} (f : Prot S Hole A j) (hmine : isMine c.obj.Ω h = true)
+    {j : Ix} {h : Hole j} (f : Prot S Hole A j) (fs : List Fact) (hmine : isMine c.obj.Ω h = true)
     (hd : Dispatched c.obj.template c.obj.hist j h) :
-    run host sp c (.replan h f) = .error (.replacesInflight o ⟨j, h⟩) := by
+    run host sp c (.replan h f fs) = .error (.replacesInflight o ⟨j, h⟩) := by
   have hz : frozenHole c.obj = some ⟨j, h⟩ := entered_iff.mp hd
   have hcl : closedBy c = none := hlive
   simp [run, hcl, hmine, hz, ho]
@@ -684,9 +740,9 @@ public theorem inflight_replan_refused {host : Host V Tok Fact} {sp : Spec S Tok
 /-- An answered hole is not replanned either, by name. -/
 public theorem answered_replan_refused {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c : Cfg S Hole A Tok Fact Ob V i} (hlive : c.ended = none) (ho : c.obj.hist.inflight = none)
-    {j : Ix} {h : Hole j} (f : Prot S Hole A j) (hmine : isMine c.obj.Ω h = true)
+    {j : Ix} {h : Hole j} (f : Prot S Hole A j) (fs : List Fact) (hmine : isMine c.obj.Ω h = true)
     (hd : Dispatched c.obj.template c.obj.hist j h) :
-    run host sp c (.replan h f) = .error (.replacesAnswered ⟨j, h⟩) := by
+    run host sp c (.replan h f fs) = .error (.replacesAnswered ⟨j, h⟩) := by
   have hz : frozenHole c.obj = some ⟨j, h⟩ := entered_iff.mp hd
   have hcl : closedBy c = none := hlive
   simp [run, hcl, hmine, hz, ho]
@@ -726,7 +782,7 @@ public theorem abandon_keeps_obligation {host : Host V Tok Fact} {sp : Spec S To
 abandoned call: no dispatch, no reply (a late one included), no replan, no second abandonment. -/
 public theorem ended_frozen {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c : Cfg S Hole A Tok Fact Ob V i} {o : Σ i, S.Op i} (he : c.ended = some o)
-    (ev : Event S Hole A V) (hev : ∀ v, ev ≠ .world v) :
+    (ev : Event S Hole A Fact V) (hev : ∀ v, ev ≠ .world v) :
     run host sp c ev = .error (.abandoned o) := by
   have hcl : closedBy c = some o := he
   cases ev with
@@ -739,7 +795,7 @@ public theorem ended_frozen {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {
 
 theorem step_inflight {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c c' : Cfg S Hole A Tok Fact Ob V i} {o : Σ i, S.Op i} (ho : c.obj.hist.inflight = some o)
-    {ev : Event S Hole A V} (hev : ev.isRespond = false) (h : run host sp c ev = .ok c') :
+    {ev : Event S Hole A Fact V} (hev : ev.isRespond = false) (h : run host sp c ev = .ok c') :
     c'.obj.hist = c.obj.hist ∧ c'.spent = c.spent ∧ c'.log = c.log ++ [ev] ∧
       dispatchesOf (c.log ++ [ev]) = dispatchesOf c.log := by
   cases ev with
@@ -759,13 +815,13 @@ theorem step_inflight {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix
       cases h
       exact ⟨rfl, rfl, rfl, by simp [dispatchesOf, List.filterMap_append]⟩
     · simp only [ha] at h; cases h
-  | replan h' f =>
+  | replan h' f fs =>
     obtain ⟨_, _, _, hobj, _, hsp, hlog, _⟩ := run_replan_inv h
     exact ⟨by rw [hobj]; rfl, hsp, hlog, by simp [dispatchesOf, List.filterMap_append]⟩
 
 public theorem session_reachable {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c₀ c : Cfg S Hole A Tok Fact Ob V i} (hc : Reachable host sp c₀ c)
-    (evs : List (Event S Hole A V)) : Reachable host sp c₀ (session host sp c evs).1 := by
+    (evs : List (Event S Hole A Fact V)) : Reachable host sp c₀ (session host sp c evs).1 := by
   induction evs generalizing c with
   | nil => exact hc
   | cons ev evs ih =>
@@ -781,12 +837,12 @@ stays the residual's next call. -/
 public theorem lost_reply_frozen {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {O : Open S Hole A Tok Fact Ob i} {v₀ : V} {c : Cfg S Hole A Tok Fact Ob V i}
     (hc : Reachable host sp (Cfg.init O v₀) c) {o : Σ i, S.Op i}
-    (ho : c.obj.hist.inflight = some o) (evs : List (Event S Hole A V))
+    (ho : c.obj.hist.inflight = some o) (evs : List (Event S Hole A Fact V))
     (hno : ∀ e ∈ evs, e.isRespond = false) :
     (session host sp c evs).1.obj.hist = c.obj.hist ∧ (session host sp c evs).1.spent = c.spent ∧
       dispatchesOf (session host sp c evs).1.log = dispatchesOf c.log ∧
       IsCall (session host sp c evs).1.res o := by
-  have key : ∀ (evs : List (Event S Hole A V)) (c : Cfg S Hole A Tok Fact Ob V i),
+  have key : ∀ (evs : List (Event S Hole A Fact V)) (c : Cfg S Hole A Tok Fact Ob V i),
       c.obj.hist.inflight = some o → (∀ e ∈ evs, e.isRespond = false) →
       (session host sp c evs).1.obj.hist = c.obj.hist ∧ (session host sp c evs).1.spent = c.spent ∧
         dispatchesOf (session host sp c evs).1.log = dispatchesOf c.log := by
@@ -808,7 +864,7 @@ public theorem lost_reply_frozen {host : Host V Tok Fact} {sp : Spec S Tok Fact 
   exact (refines (session_reachable hc evs)).next o (by rw [hh]; exact ho)
 
 #assert_axioms abandon_accepted abandon_keeps_obligation ended_frozen
-#assert_axioms refines reachable_legal step_inv run_replan_guard replan_accepted
+#assert_axioms refines reachable_legal step_inv dispatch_usable_choice run_replan_guard replan_accepted
   replace_then_dispatch inflight_busy inflight_replan_refused answered_replan_refused lost_reply_frozen
   entered_iff advance_reach reach_advance
 

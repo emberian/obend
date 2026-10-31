@@ -10,13 +10,16 @@ returns the next configuration or a named refusal:
 
 - `world v'`: the host's world moves, if `Host.allowed` says the step is one its world takes. Nothing
   else moves: in particular a world that says a spent token is live again does not unspend it.
-- `replan h f`: put `f` in hole `h`. Refused unless `h` is a hole this party chooses and the history
+- `replan h f cites`: put `f` in hole `h`, a decision citing `cites` (the selected candidate's
+  supports; body and citations are installed by the one event and frozen together). Refused unless `h` is a hole this party chooses and the history
   has not entered it (`entered`, the executable `Dispatched`); refused BY NAME when the entered hole
   holds the in-flight call (`replacesInflight`) or answered calls (`replacesAnswered`).
 - `dispatch o`: expose `o` to the handler. Refused while a call is in flight (`busy`), unless `o` is
   the residual's next call (`notNext`), and unless `admitOp` accepts it at the CURRENT view: the
   world's view with every durably spent token dead (`unadmitted`, naming the facts that do not hold
-  and the token that is not live). On acceptance the token is spent before anything else happens.
+  and the token that is not live), and `unsupported` unless every fact the decision of the call's
+  hole cites holds now (`decisionDead`): a selection is a proposal rechecked at every exposure, not
+  a permit. On acceptance the token is spent before anything else happens.
 - `respond e`: the reply `e`, accepted only for the recorded in-flight call (`unsolicited`).
 - `abandon o`: give up on the call `o` in flight (`notInflight` otherwise). The call stays in the
   history as dispatched and never answered, so its obligation stands (`Hist.established`); the run is
@@ -56,11 +59,13 @@ section
 variable {Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type}
 
 /-- A raw proposed event. -/
-inductive Event (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (V : Type) where
+inductive Event (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Fact V : Type) where
   /-- the host's world moves to `v` -/
   | world (v : V)
-  /-- fill hole `h` with `f` from now on -/
-  | replan {j : Ix} (h : Hole j) (f : Prot S Hole A j)
+  /-- fill hole `h` with `f` from now on, a decision citing the facts `cites` (a selected
+  candidate's supports; `[]` for a decision that cites nothing): every later dispatch of a call
+  in that hole rechecks them at its own view -/
+  | replan {j : Ix} (h : Hole j) (f : Prot S Hole A j) (cites : List Fact)
   /-- expose the call `o` to the handler -/
   | dispatch (o : Σ i, S.Op i)
   /-- the reply `e` arrives -/
@@ -94,6 +99,8 @@ inductive Refusal (S : Sig Ix) (Hole : Ix → Type) (Tok Fact : Type) where
   | abandoned (o : Σ i, S.Op i)
   /-- abandoning a call that is not the one in flight -/
   | notInflight (o : Σ i, S.Op i)
+  /-- the call lies in a hole whose decision cites facts that do not hold now -/
+  | unsupported (o : Σ i, S.Op i) (h : Option (Σ j, Hole j)) (dead : List Fact)
 
 /-- A configuration: the open object, the host's world, the durable spent tokens, the residual
 protocol, and the accepted events in order. -/
@@ -102,14 +109,16 @@ structure Cfg (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob V
   world : V
   spent : List Tok
   res : Σ j, Prot S Hole A j
-  log : List (Event S Hole A V)
+  log : List (Event S Hole A Fact V)
   /-- the call abandoned, if the run was ended that way -/
   ended : Option (Σ i, S.Op i)
+  /-- what each hole's decision cites (installed with its filling, frozen with it) -/
+  cites : (j : Ix) → Hole j → List Fact
 
 /-- The start: the object with an empty history at world `v`, its current protocol the residual. -/
 def Cfg.init {Tok Fact Ob V : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (v : V) :
     Cfg S Hole A Tok Fact Ob V i :=
-  ⟨{ O with hist := ⟨[], none⟩ }, v, [], ⟨i, fill O.Ω O.σ O.template⟩, [], none⟩
+  ⟨{ O with hist := ⟨[], none⟩ }, v, [], ⟨i, fill O.Ω O.σ O.template⟩, [], none, fun _ _ => []⟩
 
 /-- The view admission is judged at: the world's, with the durably spent tokens dead. -/
 def Cfg.admitView {Tok Fact Ob V : Type} [DecidableEq Tok] {i : Ix} (host : Host V Tok Fact)
@@ -187,7 +196,25 @@ def frozenHole {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) :
     Option (Σ j, Hole j) :=
   entered O.template O.hist.answered O.hist.inflight.isSome
 
+/-- The hole a dispatch of the residual's next call would enter: the call belongs to that hole's
+decision (`UsesChoice`). -/
+def owner {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) : Option (Σ j, Hole j) :=
+  entered O.template O.hist.answered true
+
+/-- The decision guard (a `#tooth` mutation target): the cited facts of the hole the call
+belongs to that do not hold now. -/
+def decisionDead {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i)
+    (cites : (j : Ix) → Hole j → List Fact) (v : View Tok Fact) : List Fact :=
+  match owner O with
+  | some ⟨j, h⟩ => (cites j h).filter fun f => !v.holds f
+  | none => []
+
 variable [DecidableEq Ix] [∀ i, DecidableEq (Hole i)]
+
+/-- The citations with hole `h`'s replaced. -/
+def setCites {Fact : Type} (cs : (j : Ix) → Hole j → List Fact) {j : Ix} (h : Hole j)
+    (fs : List Fact) : (j : Ix) → Hole j → List Fact :=
+  fun i h' => if (⟨i, h'⟩ : Σ j, Hole j) = ⟨j, h⟩ then fs else cs i h'
 
 /-- `σ` with hole `h` filled by `f`. -/
 def setHole (σ : Subst S Hole A) {j : Ix} (h : Hole j) (f : Prot S Hole A j) : Subst S Hole A :=
@@ -209,11 +236,11 @@ variable {Tok Fact Ob V : Type} [DecidableEq Tok]
 /-- One raw proposed event: the next configuration, or a refusal. -/
 def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
     (c : Cfg S Hole A Tok Fact Ob V i) :
-    Event S Hole A V → Except (Refusal S Hole Tok Fact) (Cfg S Hole A Tok Fact Ob V i)
+    Event S Hole A Fact V → Except (Refusal S Hole Tok Fact) (Cfg S Hole A Tok Fact Ob V i)
   | .world v' =>
     if host.allowed c.world v' then .ok { c with world := v', log := c.log ++ [.world v'] }
     else .error .worldStep
-  | .replan (j := j) h f =>
+  | .replan (j := j) h f fs =>
     match closedBy c with
     | some e => .error (.abandoned e)
     | none =>
@@ -227,7 +254,11 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
       match advance ⟨i, O'.current⟩ c.obj.hist.answered with
       | some R =>
         if nextIs R c.obj.hist.inflight then
-          .ok { c with obj := O', res := R, log := c.log ++ [.replan h f] }
+          .ok { c with
+            obj := O'
+            res := R
+            cites := setCites c.cites h fs
+            log := c.log ++ [.replan h f fs] }
         else .error .inconsistent
       | none => .error .inconsistent
   | .dispatch o =>
@@ -241,10 +272,13 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
       | ⟨j, .call op _⟩ =>
         if o = ⟨j, op⟩ then
           if dispatchGuard sp (c.admitView host) op then
-            .ok { c with
+            match decisionDead c.obj c.cites (c.admitView host) with
+            | [] => .ok { c with
               obj := { c.obj with hist := ⟨c.obj.hist.answered, some ⟨j, op⟩⟩ }
               spent := spendOn sp c.spent op
               log := c.log ++ [.dispatch ⟨j, op⟩] }
+            | d =>
+              .error (.unsupported ⟨j, op⟩ (owner c.obj) d)
           else
             let m := missingOf sp (c.admitView host) op
             .error (.unadmitted ⟨j, op⟩ m.1 m.2)
@@ -280,13 +314,13 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
 inductive Reachable (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
     (c₀ : Cfg S Hole A Tok Fact Ob V i) : Cfg S Hole A Tok Fact Ob V i → Prop
   | init : Reachable host sp c₀ c₀
-  | step {c c' : Cfg S Hole A Tok Fact Ob V i} (ev : Event S Hole A V) :
+  | step {c c' : Cfg S Hole A Tok Fact Ob V i} (ev : Event S Hole A Fact V) :
       Reachable host sp c₀ c → run host sp c ev = .ok c' → Reachable host sp c₀ c'
 
 /-- A session: every proposed event in order, each accepted or refused; a refused event leaves the
 configuration as it was. The receipt pairs each event's index with its refusal, if any. -/
 def session (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix} :
-    Cfg S Hole A Tok Fact Ob V i → List (Event S Hole A V) →
+    Cfg S Hole A Tok Fact Ob V i → List (Event S Hole A Fact V) →
       Cfg S Hole A Tok Fact Ob V i × List (Option (Refusal S Hole Tok Fact))
   | c, [] => (c, [])
   | c, ev :: evs =>
@@ -353,8 +387,15 @@ candidate's body, or the slot's refusal naming every candidate's dead supports. 
 def resolveEvent {Cand : Type} (host : Host V Tok Fact) {i : Ix}
     (c : Cfg S Hole A Tok Fact Ob V i) (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
     (body : Cand → Prot S Hole A j) (order : List Cand) :
-    Except (Slot.Refusal Fact Cand) (Event S Hole A V) :=
-  (Sl.resolve (host.view c.world).holds body order).map (Event.replan h)
+    Except (Slot.Refusal Fact Cand) (Event S Hole A Fact V) :=
+  (Sl.select (host.view c.world).holds order).map fun cand => Event.replan h (body cand) (Sl.supports cand)
+
+/-- The chooser's explicit choice of `cand` for hole `h` (an OVERRIDE when it supersedes a choice
+that is still usable): its body, citing its supports. Its authority is the hole's chooser
+(`isMine`), checked by `run`; it needs nothing of the choice it replaces. -/
+def chooseEvent {Cand : Type} (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
+    (body : Cand → Prot S Hole A j) (cand : Cand) : Event S Hole A Fact V :=
+  .replan h (body cand) (Sl.supports cand)
 
 /-- Re-resolve hole `h` by a stored-selection POLICY (`Obend.Slot.Advance`: how a stored selection
 moves when the view changes; the slot's own is incumbent-first `slotAdvance`): the replan event for
@@ -362,8 +403,9 @@ the candidate the policy keeps or selects at the current world, or its refusal. 
 def resolveEventBy {Cand : Type} (adv : Advance V Fact Cand) {i : Ix}
     (c : Cfg S Hole A Tok Fact Ob V i) (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
     (body : Cand → Prot S Hole A j) (order : List Cand) (stored : Option Cand) :
-    Except (Slot.Refusal Fact Cand) (Event S Hole A V) :=
-  (adv.advance Sl c.world order stored).map fun cand => Event.replan h (body cand)
+    Except (Slot.Refusal Fact Cand) (Event S Hole A Fact V) :=
+  (adv.advance Sl c.world order stored).map fun cand =>
+    Event.replan h (body cand) (Sl.supports cand)
 
 end
 

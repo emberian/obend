@@ -11,6 +11,8 @@ plan at a point of the log are recomputed from the log's prefix (`worldOf`, `spe
 - `WorldSteps`: every world event is a step the host's world takes from the world then current;
 - `Authorized`: every dispatched call was admitted (`admitOp`) at the view current when it was
   dispatched: the world's view then, with every token an earlier dispatch spent dead;
+- `DecisionsHeld`: every dispatched call's selection decision (the facts its hole's replan cited)
+  held at the view of its dispatch;
 - `OnceSpent`: no token is spent by two dispatches;
 - `Paired`: a call is dispatched only with nothing in flight, and a reply is accepted (or the call
   abandoned) only for the call in flight;
@@ -40,94 +42,109 @@ section
 variable {Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type} {Tok Fact Ob V : Type}
 
 /-- The world after a log, from `v₀`: the last world event's. -/
-def worldOf (v₀ : V) (log : List (Event S Hole A V)) : V :=
+def worldOf (v₀ : V) (log : List (Event S Hole A Fact V)) : V :=
   log.foldl (fun v e => match e with
     | .world v' => v'
     | _ => v) v₀
 
 /-- The tokens a log's dispatches spent, in order. -/
-def spentBy (sp : Spec S Tok Fact Ob) (log : List (Event S Hole A V)) : List Tok :=
+def spentBy (sp : Spec S Tok Fact Ob) (log : List (Event S Hole A Fact V)) : List Tok :=
   log.filterMap fun e => match e with
     | .dispatch o => sp.consumes o.2
     | _ => none
 
 /-- The view current after a log: the world's view, with every spent token dead. -/
 def viewAt [DecidableEq Tok] (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (v₀ : V)
-    (log : List (Event S Hole A V)) : View Tok Fact :=
+    (log : List (Event S Hole A Fact V)) : View Tok Fact :=
   View.mask (host.view (worldOf v₀ log)) (spentBy sp log)
 
 /-- The history after a log: the replies, in order, and the call dispatched and not yet answered. -/
-def histOf (log : List (Event S Hole A V)) : Hist S :=
+def histOf (log : List (Event S Hole A Fact V)) : Hist S :=
   log.foldl (fun H e => match e with
     | .dispatch o => ⟨H.answered, some o⟩
     | .respond r => ⟨H.answered ++ [r], none⟩
     | _ => H) ⟨[], none⟩
 
 /-- The call a log abandoned, if it was ended that way. -/
-def endedOf (log : List (Event S Hole A V)) : Option (Σ i, S.Op i) :=
+def endedOf (log : List (Event S Hole A Fact V)) : Option (Σ i, S.Op i) :=
   log.foldl (fun x e => match e with
     | .abandon o => some o
     | _ => x) none
 
 /-- The calls a log dispatched, in order. -/
-def dispatchesOf (log : List (Event S Hole A V)) : List (Σ i, S.Op i) :=
+def dispatchesOf (log : List (Event S Hole A Fact V)) : List (Σ i, S.Op i) :=
   log.filterMap fun e => match e with
     | .dispatch o => some o
     | _ => none
 
 /-- A reply event. -/
-def Event.isRespond : Event S Hole A V → Bool
+def Event.isRespond : Event S Hole A Fact V → Bool
   | .respond _ => true
   | _ => false
 
 /-- Every world event is a step the host's world takes. -/
-def WorldSteps (host : Host V Tok Fact) (v₀ : V) : List (Event S Hole A V) → Prop :=
+def WorldSteps (host : Host V Tok Fact) (v₀ : V) : List (Event S Hole A Fact V) → Prop :=
   AtEach fun pre e => ∀ v, e = .world v → host.allowed (worldOf v₀ pre) v = true
 
 /-- Every dispatched call was admitted at the view current when it was dispatched. -/
 def Authorized [DecidableEq Tok] (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (v₀ : V) :
-    List (Event S Hole A V) → Prop :=
+    List (Event S Hole A Fact V) → Prop :=
   AtEach fun pre e => ∀ o, e = .dispatch o → admitOp sp (viewAt host sp v₀ pre) o.2 = true
 
 /-- No token is spent twice. -/
-def OnceSpent (sp : Spec S Tok Fact Ob) (log : List (Event S Hole A V)) : Prop :=
+def OnceSpent (sp : Spec S Tok Fact Ob) (log : List (Event S Hole A Fact V)) : Prop :=
   (spentBy sp log).Nodup
 
 /-- Dispatch only with nothing in flight; a reply only to the call in flight; abandon only the call
 in flight. -/
-def Paired : List (Event S Hole A V) → Prop :=
+def Paired : List (Event S Hole A Fact V) → Prop :=
   AtEach fun pre e =>
     (∀ o, e = .dispatch o → (histOf pre).inflight = none) ∧
       (∀ r, e = .respond r → (histOf pre).inflight = some ⟨r.1, r.2.1⟩) ∧
       (∀ o, e = .abandon o → (histOf pre).inflight = some o)
 
 /-- After an abandonment only the world moves: no dispatch, reply, replan or second abandonment. -/
-def AfterAbandon : List (Event S Hole A V) → Prop :=
+def AfterAbandon : List (Event S Hole A Fact V) → Prop :=
   AtEach fun pre e => endedOf pre ≠ none → ∃ v, e = .world v
 
 /-- No replan touched a hole the history had entered when it was accepted. -/
-def ReplansUnentered {i : Ix} (P : Prot S Hole A i) : List (Event S Hole A V) → Prop :=
+def ReplansUnentered {i : Ix} (P : Prot S Hole A i) : List (Event S Hole A Fact V) → Prop :=
   AtEach fun pre e => ∀ (j : Ix) (h : Hole j) (f : Prot S Hole A j),
-    e = .replan h f → ¬ Dispatched P (histOf pre) j h
+    ∀ cs, e = .replan h f cs → ¬ Dispatched P (histOf pre) j h
 
 variable [DecidableEq Ix] [∀ i, DecidableEq (Hole i)]
 
 /-- The plan in force after a log: `σ₀` with each replan's filling installed. -/
-def planOf (σ₀ : Subst S Hole A) (log : List (Event S Hole A V)) : Subst S Hole A :=
+def planOf (σ₀ : Subst S Hole A) (log : List (Event S Hole A Fact V)) : Subst S Hole A :=
   log.foldl (fun σ e => match e with
-    | .replan h f => setHole σ h f
+    | .replan h f _ => setHole σ h f
     | _ => σ) σ₀
+
+/-- What each hole's decision cites after a log: the last replan's citations (`[]` before any). -/
+def citesOf (log : List (Event S Hole A Fact V)) : (j : Ix) → Hole j → List Fact :=
+  log.foldl (fun cs e => match e with
+    | .replan h _ fs => setCites cs h fs
+    | _ => cs) fun _ _ => []
+
+/-- **Every dispatched call's decision held at its dispatch view**: the facts cited by the decision
+of every hole the call enters (`Dispatched` once the call is in flight) hold at the world then. -/
+def DecisionsHeld [DecidableEq Tok] (host : Host V Tok Fact) {i : Ix} (P : Prot S Hole A i)
+    (v₀ : V) : List (Event S Hole A Fact V) → Prop :=
+  AtEach fun pre e => ∀ o, e = .dispatch o → ∀ (j : Ix) (h : Hole j),
+    Dispatched P ⟨(histOf pre).answered, some o⟩ j h →
+    ∀ f ∈ citesOf pre j h, (host.view (worldOf v₀ pre)).holds f = true
 
 /-- The history is a history of the plan in force. -/
 def Kept {i : Ix} (Ω : Ctx S Hole A Tok Fact Ob) (σ₀ : Subst S Hole A) (P : Prot S Hole A i)
-    (log : List (Event S Hole A V)) : Prop :=
+    (log : List (Event S Hole A Fact V)) : Prop :=
   Started (fill Ω (planOf σ₀ log) P) (histOf log)
 
 /-- The specification of an accepted log, for a run of the object `O` from world `v₀`. -/
 structure Legal [DecidableEq Tok] (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
-    (O : Open S Hole A Tok Fact Ob i) (v₀ : V) (log : List (Event S Hole A V)) : Prop where
+    (O : Open S Hole A Tok Fact Ob i) (v₀ : V) (log : List (Event S Hole A Fact V)) : Prop where
   steps : WorldSteps host v₀ log
   authorized : Authorized host sp v₀ log
+  decided : DecisionsHeld host O.template v₀ log
   once : OnceSpent sp log
   paired : Paired log
   final : AfterAbandon log
