@@ -49,6 +49,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | Accept 52 modules per checker edit for now; the half-measure (unexpose `Bidirectional`, its readers `import all`, `decide` fixtures to tier 2) is queued for the Build list, not taken, since an `elaborate` edit would still rebuild all 52 | taken by Claude under standing approval, 2026-11-01 | `REPORT-ONECHECKER-20261101.md` |
 
+| An impact receipt names the world's root (digest of `.obend/world.json` or of the workspace's records and releases), so `obend verify --world` re-exports the question and refuses a receipt whose table is not the world's; the same move as chaining the view roots (C3) | taken by Claude under standing approval, 2026-11-01; queued with the C3 chaining work | `REPORT-IMPACT-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
