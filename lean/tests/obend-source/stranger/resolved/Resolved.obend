@@ -1,0 +1,12 @@
+edition ObjectiveBend 1
+package notes/resolved extends kit/pdf@^1, kit/html@^1
+# A package extending both decides, by implementing the method itself.
+import papers/report/Report.obend as P
+import kit/export/Export.obend as E
+
+protocol E.Export for P.Page:
+  def export(self: P.Page) -> Nat:
+    self.cited * 7n
+
+def published() -> Nat:
+  E.Export.export(fix(P.Report, P.blank()))

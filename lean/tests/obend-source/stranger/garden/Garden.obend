@@ -1,0 +1,16 @@
+edition ObjectiveBend 1
+package notes/garden extends lab/review@^1, kit/export@^1
+# The stranger's notebook: Ada's report, extended by Bo's review, exported by Cy's protocol.
+import papers/report/Report.obend as P
+import lab/review/Review.obend as V
+import kit/export/Export.obend as E
+
+def page() -> P.Page:
+  fix(V.Reviewed, P.blank())
+
+# 120 cited bytes, two sections (Ada's and Bo's): 120 * 100 + 2.
+def published() -> Nat:
+  E.Export.export(page())
+
+def sections() -> Nat:
+  page().sections

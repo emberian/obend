@@ -1,0 +1,8 @@
+edition ObjectiveBend 1
+package notes/print extends kit/pdf@^1
+# One exporter more specific than Cy's: kit/pdf's implementation is selected.
+import papers/report/Report.obend as P
+import kit/export/Export.obend as E
+
+def published() -> Nat:
+  E.Export.export(fix(P.Report, P.blank()))

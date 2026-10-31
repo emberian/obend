@@ -1,0 +1,21 @@
+edition ObjectiveBend 1
+package papers/report
+# Ada's report kind: a page with a cited section, and a publication law.
+record Page:
+  title() -> String
+  cited() -> Nat
+  sections() -> Nat
+
+spec Report for Page:
+  def title() -> String:
+    "Field notes"
+  def cited() -> Nat:
+    120n
+  combine + sections() -> Nat:
+    1n
+
+def blank() -> Page:
+  {title: "", cited: 0n, sections: 0n}
+
+# A page is published only with its cited section's bytes verified.
+law cited: not (new.cited == 0)

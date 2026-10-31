@@ -674,6 +674,12 @@ def hexDigit (c : Char) : Bool := asciiDigit c || ('a' ≤ c && c ≤ 'f')
 `NAME@0xHASH` (an extension: the package whose content hash is HASH, 64 lowercase hex digits). -/
 def packageRefRe : Re := seqs [group 1 packageNameRe, chr '@',
   alts [.seq (chr '^') (group 2 (many1 (.char asciiDigit))), .seq (str "0x") (group 3 (many1 (.char hexDigit)))], .done]
+/-- `protocol GENERIC for KIND:` with indented `def` methods: an implementation of a generic (a
+new one when GENERIC is a bare name, an imported one when `Alias.Name`) for a kind it need not
+be an ancestor of (LTUO §9.2.9). -/
+def protocolRe : Re := seqs [str "protocol", many1 space, group 1 (seqs [ident, opt (.seq (chr '.') ident)]), many1 space,
+  str "for", many1 space, group 2 (seqs [ident, opt (.seq (chr '.') ident)]), many space, chr ':', .done]
+
 /-- `String.prototype.split` on one character. -/
 def splitChar (s : List Char) (sep : Char) : List (List Char) :=
   let (finished, current) := s.foldl (fun (acc : List (List Char) × List Char) c =>
@@ -835,6 +841,21 @@ def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
       if names.eraseDups.length != names.length then fail line "duplicate parent root"
       decls := decls.push (Json.mkObj [("kind", toJson "package"), ("name", toJson (cap line.text caps 1)),
         ("parents", Json.arr parents), ("span", line.span.json)])
+      continue
+    if let some (_, caps) ← matchAt line protocolRe line.text then
+      let mut methods : Array Json := #[]
+      for _ in [0:lines.size] do
+        let j ← get
+        let some m := lines[j]? | break
+        if m.indent == 0 then break
+        set (j + 1)
+        if !(startsWith m.text "def " && endsWith m.text ":") then fail m "a protocol holds `def name(self: T, ...) -> R:` methods"
+        let sig ← signature ((m.text.drop 4).take (m.text.length - 5)) m
+        let methodBody ← body lines fuel m.indent
+        methods := methods.push (Json.mkObj (signatureJson sig ++ [("body", methodBody)]))
+      if methods.isEmpty then fail line "empty protocol"
+      decls := decls.push (Json.mkObj [("kind", toJson "protocol"), ("generic", toJson (cap line.text caps 1)),
+        ("for", toJson (cap line.text caps 2)), ("methods", Json.arr methods), ("span", line.span.json)])
       continue
     if startsWith line.text "law " || line.text == "law".toList || startsWith line.text "law:" then
       fail line (Law.refusalPrefix ++ "expected `law NAME: EXPR` (a top-level law has a name and no parameters)")

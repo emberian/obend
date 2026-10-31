@@ -95,6 +95,15 @@ structure Signature where
   resultType : String
   deriving Inhabited
 
+/-- One method of a protocol implementation: a function whose first parameter is the kind's
+instance. -/
+structure ProtocolMethod where
+  name : String
+  params : List Param
+  resultType : String
+  body : Body
+  deriving Inhabited
+
 /-- A parent root of a package: an intention (`NAME@^MAJOR`, resolved in a workspace's ecosystem
 root) or an extension (`NAME@0xHASH`, fixed forever). -/
 inductive ParentRef where
@@ -121,10 +130,14 @@ inductive Decl where
   | function (name : String) (params : List Param) (resultType : String) (body : Body)
   | record (name : String) (fields : List (String × String)) (methods : List Signature)
   | sum (name : String) (cases : List (String × String))
+  /-- `protocol GENERIC for KIND:`; expanded into functions before elaboration
+  (`Obend.Spec.Elaborate.expandProtocols`). -/
+  | protocol (generic kind : String) (methods : List ProtocolMethod)
   deriving Inhabited
 
 def Decl.name : Decl → String
   | .spec s => s.name | .extension n .. => n | .function n .. => n | .record n .. => n | .sum n .. => n
+  | .protocol g k _ => "protocol " ++ g ++ " for " ++ k
 
 def Decl.binders : Decl → String
   | .spec s => s.binders
@@ -252,6 +265,11 @@ def decodeDecl (j : Json) : Except String Decl := do
     let methods ← (← arr j "methods").mapM decodeSignature
     return .record name fields methods
   | "sum" => return .sum (← str j "name") (← (← arr j "cases").mapM fun c => do return (← str c "label", ← str c "type"))
+  | "protocol" =>
+    let methods ← (← arr j "methods").mapM fun m => do
+      return ProtocolMethod.mk (← str m "name") (← (← arr m "parameters").mapM decodeParam) (← str m "resultType")
+        (← decodeBody fuel (← m.getObjVal? "body"))
+    return .protocol (← str j "generic") (← str j "for") methods
   | other => .error ("unknown AST declaration " ++ other)
 
 /-- `{name, imports:[{alias, moduleName}], ast}` as the TS elaborator received it. -/

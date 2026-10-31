@@ -45,6 +45,17 @@ structure PackageInfo where
   precedence : List String
   deriving Inhabited, Repr
 
+/-- One method of a protocol implementation: the generic (the key of the protocol declaration that
+introduced it), the method name, the kind it is for, the knot field holding it, the module that
+wrote it. A method lives on the pair (generic, kind) (LTUO §9.2.10). -/
+structure ProtocolImpl where
+  generic : String
+  method : String
+  kind : String
+  key : String
+  module : String
+  deriving Inhabited, Repr
+
 structure Ctx where
   /-- The user's modules. -/
   modules : List Module
@@ -55,6 +66,10 @@ structure Ctx where
   packages : List PackageInfo := []
   /-- The entry package's C4 precedence list over packages (most specific first). -/
   order : List String := []
+  /-- Every protocol implementation of the closure. -/
+  protocols : List ProtocolImpl := []
+  /-- Every declared generic: its key and its method names. -/
+  generics : List (String × List String) := []
 
 structure St where
   globalTypes : List (String × Option PTy) := []
@@ -274,6 +289,43 @@ def packageOfModule (moduleName : String) : String :=
 /-- The package's own precedence list (itself first), or `[name]`. -/
 def packagePrecedence (c : Ctx) (name : String) : List String :=
   ((c.packages.find? (·.name == name)).map (·.precedence)).getD [name]
+
+/-- The generic a callee names, with the method: `Render.render` (a generic declared in this
+module) or `A.Render.render` (one declared in imported module `A`). -/
+def protocolGeneric (c : Ctx) (callee : Expr) (env : List Binding) (m : Module) : Option (String × String) :=
+  let declared := fun (key method : String) =>
+    match c.generics.lookup key with
+    | some methods => if methods.contains method then some (key, method) else none
+    | none => none
+  match callee with
+  | .member (.var n) method =>
+    if env.any (·.name == n) || (importOf m n).isSome then none else declared (m.name ++ "." ++ n) method
+  | .member (.member (.var a) n) method =>
+    if env.any (·.name == a) then none else
+    match importOf m a with
+    | some mod => declared (mod ++ "." ++ n) method
+    | none => none
+  | _ => none
+
+/-- Of the implementations that apply, the one the closure selects: the provider earliest on the
+entry's precedence list, which must extend every other provider. Two providers neither of which
+extends the other are COMPETING: no import order decides between them, a package extending both
+does, by implementing the method itself. -/
+def selectImplementation (c : Ctx) (generic method : String) (kinds : List ProtocolImpl) : M String := do
+  let some first := kinds.head? | fail ("refused (protocol-unimplemented): no implementation of " ++ generic ++ "." ++
+    method ++ " applies to this argument's type in this workspace")
+  if kinds.length == 1 then return first.key
+  let rank := fun (i : ProtocolImpl) => (c.order.findIdx? (· == packageOfModule i.module)).getD c.order.length
+  let winner := (kinds.mergeSort (fun a b => rank a ≤ rank b)).head!
+  let above := packagePrecedence c (packageOfModule winner.module)
+  let rivals := kinds.filter fun i => i.key != winner.key && !(above.contains (packageOfModule i.module) &&
+    packageOfModule i.module != packageOfModule winner.module)
+  match rivals.head? with
+  | none => return winner.key
+  | some rival => fail ("refused (competing-protocol): " ++ generic ++ "." ++ method ++ " for " ++ winner.kind ++
+      " is implemented by " ++ winner.module ++ " and by " ++ rival.module ++
+      (if rival.kind == winner.kind then "" else " (for " ++ rival.kind ++ ")") ++
+      ", neither package extending the other; a package extending both decides by implementing it")
 
 mutual
 def sourceType (c : Ctx) : Nat → String → String → List String → M (Option PTy)
@@ -535,6 +587,21 @@ def specProvided (c : Ctx) : Nat → Spec → String → PTy → M (Option PTy)
     let some defs ← specDefs c fuel s moduleName | return none
     return some (overDefs defs inherited)
 
+/-- The knot field a protocol call `G.m(x, ...)` dispatches to: the implementations of `G.m` whose
+instance parameter has `x`'s type, selected along the closure's precedence. -/
+def protocolKey (c : Ctx) : Nat → String → String → List Expr → List Binding → Module → M String
+  | 0, _, _, _, _, _ => fail "type synthesis fuel"
+  | fuel + 1, generic, method, args, env, m => do
+    let some x := args.head? | fail ("a protocol method takes its instance first: " ++ generic ++ "." ++ method)
+    let argTy ← synth c fuel x env m
+    if argTy.isNone then fail ("protocol call " ++ generic ++ "." ++ method ++ ": its instance's type does not resolve")
+    let mut applies : List ProtocolImpl := []
+    for i in c.protocols.filter (fun i => i.generic == generic && i.method == method) do
+      match callable (← globalType c fuel i.key) with
+      | some (.arrow _ _ d _) => if sameTy (some d) argTy then applies := applies ++ [i]
+      | _ => pure ()
+    selectImplementation c generic method applies
+
 def synth (c : Ctx) : Nat → Expr → List Binding → Module → M (Option PTy)
   | 0, _, _, _ => fail "type synthesis fuel"
   | fuel + 1, e, env, m => do
@@ -592,6 +659,14 @@ def synth (c : Ctx) : Nat → Expr → List Binding → Module → M (Option PTy
     | .call callee args =>
       if isPerform c e env m then
         return (← get).effect.map fun (p, r) => .computation p r r
+      if let some (generic, method) := protocolGeneric c callee env m then
+        let key ← protocolKey c fuel generic method args env m
+        let mut t ← globalType c fuel key
+        for _ in args do
+          match callable t with
+          | some (.arrow _ _ _ codomain) => t := some codomain
+          | _ => return none
+        return t
       if let some sc := sumCase c callee env m then return ← sourceType c fuel sc.2.2 sc.2.1 []
       if let .var name := callee then
         if ["reflect", "metadata", "targetOf", "prototype"].contains name && !env.any (·.name == name) then
@@ -1016,6 +1091,10 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
               return .prototype st tt
             | _ => fail "prototype expects spec and lazy target"
       for a in args do noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+      if let some (generic, method) := protocolGeneric c callee env m then
+        let mut fn ← globalRef env (← protocolKey c fuel generic method args env m)
+        for a in args do fn := .app fn (← expression c fuel a env m)
+        return fn
       let mut fn ← expression c fuel callee env m
       for a in args do fn := .app fn (← expression c fuel a env m)
       return fn
@@ -1587,6 +1666,56 @@ def builtinModule : Except String Module := do
     | .error d => throw ("builtin: " ++ d.message)
   decodeModule (Json.mkObj [("name", toJson builtinModuleName), ("imports", Json.arr #[]), ("ast", ast)])
 
+/-- The knot field name of method `method` of generic `generic` for kind `kind`. -/
+def protocolFieldName (generic method kind : String) : String :=
+  generic ++ "." ++ method ++ " for " ++ kind
+
+/-- A source name `N` or `Alias.N` of module `m` as a declaration key. -/
+def declKeyOf (m : Module) (name : String) : Except String String :=
+  match qualifiedName name with
+  | some (alias, n) => match importOf m alias with
+    | some mod => .ok (mod ++ "." ++ n)
+    | none => .error ("unknown import alias " ++ alias ++ " in " ++ name)
+  | none => .ok (m.name ++ "." ++ name)
+
+/-- Protocols become functions: each method of `protocol G for K` is the knot field
+`G.method for K` (both keys resolved), whose first parameter is the instance. A bare `G` declares
+the generic `m.G` with these methods; `Alias.G` implements a generic declared elsewhere, and may
+name only its methods. Returns the modules with every protocol replaced, the implementations and
+the generics. -/
+def expandProtocols (modules : List Module) :
+    Except String (List Module × List ProtocolImpl × List (String × List String)) := do
+  let mut generics : List (String × List String) := []
+  for m in modules do
+    for d in m.decls do
+      if let .protocol g _ methods := d then
+        if (qualifiedName g).isNone then
+          let key := m.name ++ "." ++ g
+          if (generics.lookup key).isSome then throw ("generic " ++ key ++ " is declared twice; implement it as Alias." ++ g)
+          generics := generics ++ [(key, methods.map (·.name))]
+  let mut impls : List ProtocolImpl := []
+  let mut out : List Module := []
+  for m in modules do
+    let mut decls : List Decl := []
+    for d in m.decls do
+      match d with
+      | .protocol g k methods =>
+        let generic ← declKeyOf m g
+        let kind ← declKeyOf m k
+        let some declared := generics.lookup generic
+          | throw ("protocol " ++ g ++ " for " ++ k ++ ": " ++ generic ++ " is not a declared protocol")
+        for method in methods do
+          if !declared.contains method.name then
+            throw ("protocol " ++ g ++ " for " ++ k ++ ": " ++ generic ++ " has no method " ++ method.name)
+          if method.params.isEmpty then
+            throw ("protocol " ++ g ++ " for " ++ k ++ ": method " ++ method.name ++ " takes the instance first")
+          let name := protocolFieldName generic method.name kind
+          decls := decls ++ [.function name method.params method.resultType method.body]
+          impls := impls ++ [⟨generic, method.name, kind, m.name ++ "." ++ name, m.name⟩]
+      | other => decls := decls ++ [other]
+    out := out ++ [{ m with decls }]
+  return (out, impls, generics)
+
 /-- Build the context; duplicate declarations / types refuse as in the TS. The built-in
 module contributes types only (no declaration of it is emitted). -/
 def context (modules : List Module) : Except String Ctx := do
@@ -1619,9 +1748,14 @@ def context (modules : List Module) : Except String Ctx := do
 the closure's C4 order); empty for a single package, which elaborates exactly as before. -/
 def elaborate (modules : List Module) (entryModule : Nat) (entryDefinition : String) (args : Json) (mode : String)
     (packages : List PackageInfo := []) : Except String Output := do
+  let (modules, protocols, generics) ← expandProtocols modules
   let c ← context modules
   let order := (packages.head?.map (·.precedence)).getD []
-  let c := { c with packages, order }
+  let c := { c with packages, order, protocols, generics }
+  -- A protocol's kind is a declaration or a type of the closure.
+  for i in protocols do
+    if (declOf c i.kind).isNone && (c.records.find? (·.1 == i.kind)).isNone && (c.sums.find? (·.1 == i.kind)).isNone then
+      throw ("protocol " ++ i.generic ++ " for " ++ i.kind ++ ": " ++ i.kind ++ " is not a declaration or type of this workspace")
   let (out, _) ← (elaborateM c entryModule entryDefinition args mode).run {}
   return out
 

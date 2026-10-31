@@ -1,0 +1,105 @@
+{
+  "schema": "dregg.objective-bend.workspace.v1",
+  "edition": "objective-bend-1",
+  "releases": [
+    {
+      "name": "papers/report",
+      "version": "1.0.0",
+      "modules": [
+        {
+          "name": "Report",
+          "sourcePath": "report/Report.obend"
+        }
+      ]
+    },
+    {
+      "name": "lab/review",
+      "version": "1.0.0",
+      "modules": [
+        {
+          "name": "Review",
+          "sourcePath": "review/Review.obend"
+        }
+      ]
+    },
+    {
+      "name": "kit/export",
+      "version": "1.0.0",
+      "modules": [
+        {
+          "name": "Export",
+          "sourcePath": "export/Export.obend"
+        }
+      ]
+    },
+    {
+      "name": "kit/pdf",
+      "version": "1.0.0",
+      "modules": [
+        {
+          "name": "Pdf",
+          "sourcePath": "pdf/Pdf.obend"
+        }
+      ]
+    },
+    {
+      "name": "kit/html",
+      "version": "1.0.0",
+      "modules": [
+        {
+          "name": "Html",
+          "sourcePath": "html/Html.obend"
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "name": "papers/report",
+      "major": 1,
+      "pin": 1,
+      "names": "1.0.0",
+      "owner": "ada"
+    },
+    {
+      "name": "lab/review",
+      "major": 1,
+      "pin": 1,
+      "names": "1.0.0",
+      "owner": "bo"
+    },
+    {
+      "name": "kit/export",
+      "major": 1,
+      "pin": 1,
+      "names": "1.0.0",
+      "owner": "cy"
+    },
+    {
+      "name": "kit/pdf",
+      "major": 1,
+      "pin": 1,
+      "names": "1.0.0",
+      "owner": "cy"
+    },
+    {
+      "name": "kit/html",
+      "major": 1,
+      "pin": 1,
+      "names": "1.0.0",
+      "owner": "dee"
+    }
+  ],
+  "entry": {
+    "name": "notes/resolved",
+    "version": "0.1.0",
+    "modules": [
+      {
+        "name": "Resolved",
+        "sourcePath": "resolved/Resolved.obend"
+      }
+    ],
+    "entryModule": "Resolved",
+    "entryDefinition": "published"
+  }
+}

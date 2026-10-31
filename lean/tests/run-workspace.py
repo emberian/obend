@@ -106,5 +106,31 @@ for old, new, by in [(3, 13, "app/both law unlucky"), (5, 3, "ext/left law monot
     j = judge(ws, {"total": old}, {"total": new})
     check(f"refusal {old} -> {new} names {by}", j.get("status") == "refused" and j.get("by") == by, repr(j))
 
+# ---------------------------------------------------------------- the stranger
+
+S = os.path.join(SOURCE, "stranger")
+ws = os.path.join(S, "workspace.json")
+expect_run("the stranger's notebook: report + review + export protocol", ws,
+           ["status: finished", "type: Nat", "result: 12002",
+            "package: notes/garden > lab/review > kit/export > papers/report"])
+expect_run("the review section is a section of the report", ws, ["status: finished", "type: Nat", "result: 2"],
+           "--entry", "sections")
+expect_run("one implementation more specific than the protocol's own: selected", os.path.join(S, "workspace-print.json"),
+           ["status: finished", "type: Nat", "result: 120001"])
+code, got = run_lines(os.path.join(S, "workspace-competing.json"))
+check("two implementations, neither extending the other: refused",
+      len(got) > 2 and got[2].startswith("message: refused (competing-protocol): kit/export::Export.Export.export for "
+                                         "papers/report::Report.Page is implemented by kit/pdf::Pdf and by kit/html::Html"),
+      repr(got))
+expect_run("a package extending both decides by implementing it", os.path.join(S, "workspace-resolved.json"),
+           ["status: finished", "type: Nat", "result: 840"])
+j = judge(ws, {"cited": 120, "sections": 1}, {"cited": 0, "sections": 2})
+check("an ancestor's law refuses the stranger's write, by name",
+      j.get("status") == "refused" and j.get("by") == "papers/report law cited", repr(j))
+j = judge(ws, {"cited": 120, "sections": 1}, {"cited": 120, "sections": 10})
+check("the reviewer's law narrows the report's", j.get("status") == "refused" and j.get("by") == "lab/review law reviewed", repr(j))
+j = judge(ws, {"cited": 120, "sections": 1}, {"cited": 120, "sections": 2})
+check("a write every ancestor admits", j.get("status") == "admitted", repr(j))
+
 print(f"WORKSPACES: {count - len(failures)}/{count} checks hold")
 sys.exit(1 if failures else 0)

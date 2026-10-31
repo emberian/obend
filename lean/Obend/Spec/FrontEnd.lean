@@ -99,6 +99,8 @@ def SourceModule.binding (m : SourceModule) : Json :=
 def declarationName (d : Json) : String :=
   match (d.getObjValAs? String "kind").toOption with
   | some "function" => ((d.getObjVal? "signature").bind (·.getObjValAs? String "name")).toOption.getD ""
+  | some "protocol" => "protocol " ++ (d.getObjValAs? String "generic").toOption.getD "" ++ " for " ++
+      (d.getObjValAs? String "for").toOption.getD ""
   | some "package" => "package " ++ (d.getObjValAs? String "name").toOption.getD ""
   | _ => (d.getObjValAs? String "name").toOption.getD ""
 

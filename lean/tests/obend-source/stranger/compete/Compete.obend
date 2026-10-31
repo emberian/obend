@@ -1,0 +1,8 @@
+edition ObjectiveBend 1
+package notes/compete extends kit/pdf@^1, kit/html@^1
+# Two exporters neither of which extends the other: no import order decides.
+import papers/report/Report.obend as P
+import kit/export/Export.obend as E
+
+def published() -> Nat:
+  E.Export.export(fix(P.Report, P.blank()))
