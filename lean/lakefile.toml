@@ -13,7 +13,7 @@ name = "Obend"
 globs = [
   "Obend", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Fold", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main",
   "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Judge.*",
-  "Obend.Law.*", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
+  "Obend.Law.*", "Obend.Logic.*", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
   "Obend.Vault.*",
 ]
 
