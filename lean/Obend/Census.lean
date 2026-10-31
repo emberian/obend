@@ -214,6 +214,7 @@ import Obend.Spec.FrontEnd
 import Obend.Spec.Identity
 import Obend.Spec.Law
 import Obend.Spec.LawCompile
+import Obend.Spec.PackageLaw
 import Obend.Spec.Parse
 import Obend.Spec.Preview
 import Obend.Spec.Proofs.C4Vectors
@@ -223,6 +224,7 @@ import Obend.Spec.Proofs.FrontEndAdequacy
 import Obend.Spec.Proofs.Law
 import Obend.Spec.Proofs.LawCompile
 import Obend.Spec.Proofs.LawCompileTeeth
+import Obend.Spec.Proofs.PackageLaw
 import Obend.Spec.Proofs.SpecificationClosure
 import Obend.Spec.Proofs.TermWire
 import Obend.Spec.Sha256

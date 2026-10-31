@@ -97,5 +97,14 @@ with tempfile.TemporaryDirectory() as work:
     a = json.loads(out)
     check("a moved base: stale before anything is re-derived", code == 3 and a["status"] == "stale" and a["name"] == "commons/counter", out)
 
+j = judge(ws, {"total": 3}, {"total": 5})
+check("the effective law: every package's clauses, in precedence order",
+      j["status"] == "admitted" and j["clauses"] == ["app/both law unlucky", "ext/left law monotone",
+                                                     "ext/right law capped", "commons/counter law bounded"], repr(j))
+for old, new, by in [(3, 13, "app/both law unlucky"), (5, 3, "ext/left law monotone"),
+                     (5, 60, "ext/right law capped"), (60, 200, "ext/right law capped")]:
+    j = judge(ws, {"total": old}, {"total": new})
+    check(f"refusal {old} -> {new} names {by}", j.get("status") == "refused" and j.get("by") == by, repr(j))
+
 print(f"WORKSPACES: {count - len(failures)}/{count} checks hold")
 sys.exit(1 if failures else 0)

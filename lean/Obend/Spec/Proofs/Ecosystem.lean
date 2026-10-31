@@ -20,12 +20,18 @@ About `Obend.Spec.Ecosystem`:
 * `moved_pin_stale_forever` / `retired_stale_forever`: along record steps (pins never go back, a
   retirement is terminal) a pin the record has moved past, or a retired line, is stale at every
   later view, and so is every turn that pins it (`turn_stale_forever`).
+* `closure_law_inherited`: the effective package law of a closure (`Obend.Spec.PackageLaw.effectivePackages`
+  over its precedence list) admits a write only if every clause of every chosen package does: a
+  parent's package law is an ancestor of the child's, across the package boundary.
+
 `ecosystem_tooth` runs `close` and `admit` on a concrete diamond (a base, two independent
 extensions, a fourth extending both) and a record step that moves the base's pin.
 -/
 public import Obend.Spec.Ecosystem
 import all Obend.Spec.Ecosystem
 public import Obend.Slot.World
+public import Obend.Spec.PackageLaw
+public import Obend.Spec.Proofs.PackageLaw
 public import Obend.Tactic.Tooth
 namespace Obend.Spec.Ecosystem
 open Obend.Slot
@@ -198,6 +204,17 @@ public theorem turn_stale_forever {v v' : View} (hr : Reaches Step v v') {t : Tu
     (hp : Pin.intention n m pin version hash ∈ t.pins) (hl : v.line n m = some l) (hpast : pin < l.pin) :
     ∃ q, admit v' t = .stale q ∧ q ∈ t.pins ∧ q.current v' = false :=
   admit_refuses_moved ⟨_, hp, moved_pin_stale_forever hr hl hpast⟩
+
+/-- **Package laws inherit across the package boundary**: the effective law of a closure admits a
+write only if every clause of every package the closure chose admits it. -/
+public theorem closure_law_inherited {v : View} {e : Release} {cl : Closure} (hc : close v e = .ok cl)
+    {laws : String → List (String × Obend.Core.Term.Term)} {law : Obend.Core.Term.Term}
+    (hl : Obend.Spec.PackageLaw.effectivePackages laws cl.order = .ok law) {o n rq : Obend.Core.Data.Data}
+    (ha : Obend.Law.Admits law o n rq) :
+    ∀ r ∈ cl.chosen, ∀ c ∈ laws r.name, Obend.Law.Admits c.2 o n rq := by
+  obtain ⟨_, _, hchosen, _⟩ := turn_pins_every_root hc
+  intro r hr c hcl
+  exact (Obend.Spec.PackageLaw.package_law_eval hl o n rq).1 ha r.name (hchosen r hr) c hcl
 
 /-! ## Teeth: a chain closed and admitted; a record step that moves the base; a diamond that
 reaches its base twice. (A two-parent C4 merge does not reduce in the kernel: its hash map hashes

@@ -25,6 +25,10 @@ Source commands (the front end `Obend.Spec`, 2026-10-30):
     obend admit --package WORKSPACE.json TURN.json
         re-derive a recorded turn at the workspace's records: `admitted`, or `stale` naming the
         moved pin (`Obend.Spec.Ecosystem.admit`). Exit 0 when admitted, 3 otherwise.
+    obend judge --package WORKSPACE.json OLD_JSON NEW_JSON
+        judge the write OLD → NEW (records of naturals and booleans) by the closure's effective
+        package law: `admitted`, or the refusal naming the ancestor package and clause. Exit 0 when
+        admitted, 3 when refused.
     obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]
           | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition]
           | preview REQUEST NEW_DIR | batch JOBS OUT
@@ -374,6 +378,22 @@ def admitCommand (spec turnPath : String) : IO UInt32 := do
     IO.println (Obend.Spec.Workspace.admissionJson a).pretty
     return (match a with | .admitted _ => 0 | _ => 3)
 
+def judgeCommand (spec old new : String) : IO UInt32 := do
+  let result ← (do
+    let c ← Obend.Spec.Workspace.readClosed spec
+    let parsed : Except String Json := do
+      let o ← Json.parse old
+      let n ← Json.parse new
+      Obend.Spec.Workspace.judge c o n
+    match parsed with
+    | .ok j => pure j
+    | .error e => refuse e "objective-law" : FE Json).run
+  match result with
+  | .error d => IO.println (Json.mkObj [("status", toJson "refused"), ("diagnostic", d.json)]).pretty; return 2
+  | .ok j =>
+    IO.println j.pretty
+    return (if (j.getObjValAs? String "status").toOption == some "admitted" then 0 else 3)
+
 /-! ## Dispatch -/
 
 public def main (args : List String) : IO UInt32 :=
@@ -402,6 +422,7 @@ public def main (args : List String) : IO UInt32 :=
   | ["check", file, entry] => checkSource (packageOfFile file (some entry))
   | "run" :: "--package" :: spec :: rest => runSource (packageOfSpec spec none) rest
   | ["admit", "--package", spec, turn] => admitCommand spec turn
+  | ["judge", "--package", spec, old, new] => judgeCommand spec old new
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
   | _ => match Obend.Vault.Cli.main? args with
     | some act => act

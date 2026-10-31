@@ -30,6 +30,9 @@ precedence lists (`Elaborate.PackageInfo`), so the root is one knot of package l
 public import Lean
 public import Obend.Spec.Capture
 public import Obend.Spec.Ecosystem
+public import Obend.Spec.LawCompile
+public import Obend.Spec.PackageLaw
+public import Obend.Law.Run
 @[expose] public section
 namespace Obend.Spec.Workspace
 open Lean (Json toJson)
@@ -152,6 +155,8 @@ structure Closed where
   packages : List Elaborate.PackageInfo
   entryModule : Nat
   entryDefinition : String
+  /-- each package's law clauses, from its root module -/
+  laws : List (String × List (String × Law.LawExpr))
 
 def qualified (pkg m : String) : String := pkg ++ "::" ++ m
 
@@ -169,6 +174,7 @@ def close' (w : Workspace) : FE Closed := do
     | .error r => wsRefuse r.message
   let mut modules : Array SourceModule := #[]
   let mut packages : List Elaborate.PackageInfo := []
+  let mut laws : List (String × List (String × Law.LawExpr)) := []
   for pkg in cl.order.reverse do
     let some r := cl.chosen.find? (·.name == pkg) | wsRefuse ("internal: " ++ pkg ++ " is not chosen")
     let some rr := w.sourceOf r | wsRefuse ("internal: no source for " ++ pkg)
@@ -197,10 +203,12 @@ def close' (w : Workspace) : FE Closed := do
     packages := ⟨pkg, rr.modules.map (qualified pkg ·.name), precedence⟩ :: packages
   let moduleList := modules.toList
   let decoded ← liftFE (moduleList.mapM parseModule)
+  for (m, d) in moduleList.zip decoded do
+    if d.header.isSome then laws := laws ++ [(Elaborate.packageOfModule m.name, d.laws)]
   let entryKey := qualified w.entry.release.name w.entryModule
   let some entryModule := moduleList.findIdx? (·.name == entryKey)
     | wsRefuse ("Error: entry module absent: " ++ entryKey)
-  return ⟨cl, moduleList, decoded, packages, entryModule, w.entryDefinition⟩
+  return ⟨cl, moduleList, decoded, packages, entryModule, w.entryDefinition, laws⟩
 
 def readClosed (path : String) : FE Closed := do close' (← readWorkspace path)
 
@@ -249,6 +257,48 @@ def admissionJson : Admission → Json
   | .refused r => Json.mkObj [("status", toJson "refused"), ("message", toJson r.message)]
   | .diverged => Json.mkObj [("status", toJson "diverged"),
       ("message", toJson "every pin is current, but the re-derived closure differs from the turn's")]
+
+/-! ## Judging a write by the effective package law -/
+
+/-- The state type a JSON record of naturals and booleans has (fields in canonical order). -/
+def stateOf (j : Json) : Except String (Obend.Core.Data.Data × Obend.Core.Ty.Ty) := do
+  let .obj kvs := j | throw "a state is a JSON object of naturals and booleans"
+  let fields := (kvs.toList.map fun (k, v) => (k, v)).mergeSort (fun a b => a.1 ≤ b.1)
+  let mut data : List (String × Obend.Core.Data.Data) := []
+  let mut ty : Obend.Core.Ty.Ty := .emptyRow
+  for (k, v) in fields.reverse do
+    match v with
+    | .bool b => data := (k, .boolean b) :: data; ty := .field k .boolean ty
+    | .num n => match n.mantissa.toNat, n.exponent with
+      | m, 0 => data := (k, .natural m) :: data; ty := .field k .natural ty
+      | _, _ => throw ("state field " ++ k ++ ": a natural")
+    | _ => throw ("state field " ++ k ++ ": a natural or a boolean")
+  return (.record data, ty)
+
+/-- The effective law of the closure over state type `S`: each package's laws compiled
+(`LawCompile.compilePackage`, named by the package), combined along the precedence list
+(`Obend.Spec.PackageLaw.effectivePackages`). -/
+def effectiveLaw (c : Closed) (S : Obend.Core.Ty.Ty) : Except PackageLaw.OpenClause Obend.Core.Term.Term :=
+  PackageLaw.effectivePackages (fun pkg => LawCompile.compilePackage S pkg ((c.laws.lookup pkg).getD [])) c.closure.order
+
+/-- Judge `old → new` as a write by member `agent`: `admitted`, or the refusal naming the
+ancestor package and clause, or `undecided` when the reference step runs out. -/
+def judge (c : Closed) (old new : Json) : Except String Json := do
+  let (o, S) ← stateOf old
+  let (n, S') ← stateOf new
+  if S != S' then throw "old and new states have different fields"
+  let law ← match effectiveLaw c S with
+    | .ok t => pure t
+    | .error e => throw ("open clause " ++ e.name)
+  let rq := Law.requestAt "member" "member" 0 1000000 Law.writeO none none 0 0
+  let r := Law.run 200000 (Law.applyLaw law o n rq)
+  let clauses := c.closure.order.flatMap fun pkg => ((c.laws.lookup pkg).getD []).map (PackageLaw.clauseName pkg ·.1)
+  if Law.okB r then return Json.mkObj [("status", toJson "admitted"), ("clauses", toJson clauses)]
+  match r with
+  | some (.inject "refused" (.record [("by", .label by_), ("reason", .label why)])) =>
+    return Json.mkObj [("status", toJson "refused"), ("by", toJson by_), ("reason", toJson why),
+      ("message", toJson ("refused: " ++ by_ ++ " (" ++ why ++ ")")), ("clauses", toJson clauses)]
+  | _ => return Json.mkObj [("status", toJson "undecided"), ("clauses", toJson clauses)]
 
 end Obend.Spec.Workspace
 
