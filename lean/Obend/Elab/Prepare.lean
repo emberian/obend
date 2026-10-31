@@ -22,7 +22,9 @@ alias-free assumptions, every `Typed` term is prepared and accepted. Where local
 inference is silent (a lambda, injection, `perform`, `done` or empty `case` in
 synthesis position with no hint), `prepareSearch` tries a bounded set of
 candidate annotations at the named path and rechecks; exhaustion is a refusal
-that names the path and the number of candidates tried, never "untypable". -/
+that names the path and the number of candidates tried, never "untypable".
+Search is not covered by `prepare_checks`; it is the fallback, and every answer
+it returns is still the checker's. -/
 public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Elab.Work
@@ -456,6 +458,51 @@ def prepareInferred (source : AnnotatedTerm) (context : Context) :
   match checkAgainst { source with annotations := annotations } context type with
   | .ok checked => pure ⟨annotations, checked⟩
   | .error refusal => throw (.checker refusal)
+
+/-! ## Bounded search where local inference is silent -/
+
+/-- The candidate types at a silent position: the scalars and the context's binder types. -/
+def candidateTypes (context : Context) : List Ty :=
+  [.natural, .boolean, .label] ++ context.map (·.type)
+
+/-- Candidate annotations: for a lambda every scalar or context domain and codomain at every
+quantity and reuse (72 for an empty context, the set Astra searched); for the other silent forms
+the same pairs as unrestricted reusable hints. -/
+def candidates (context : Context) (what : String) : List LambdaAnnotation :=
+  let types := candidateTypes context
+  let pairs := types.flatMap fun d => types.map fun c => (d, c)
+  if what == "lambda" then
+    pairs.flatMap fun (d, c) =>
+      [Quantity.erased, .affine, .linear, .unrestricted].flatMap fun q =>
+        [Reuse.once, .reusable].map fun r => (⟨d, c, q, r⟩ : LambdaAnnotation)
+  else pairs.map fun (d, c) => hint d c
+
+/-- One more hint at one path. -/
+def withHint (hints : Annotations) (path : List Nat) (annotation : LambdaAnnotation) : Annotations :=
+  fun p => if p = path then some annotation else hints p
+
+mutual
+/-- Prepare and check; where preparation is silent at a path, try each candidate there, with at
+most `depth` silent positions filled. Every result is the checker's acceptance. -/
+def prepareSearch (depth : Nat) (source : AnnotatedTerm) (context : Context) (expected : Ty) :
+    Except PrepareRefusal (Σ annotations : Annotations, Checked { source with annotations := annotations } context) :=
+  match prepareChecked source context expected with
+  | .ok result => .ok result
+  | .error (.silent path what) =>
+    match depth with
+    | 0 => .error (.silent path what)
+    | depth + 1 => tryCandidates depth source context expected path (candidates context what) 0
+  | .error refusal => .error refusal
+
+def tryCandidates (depth : Nat) (source : AnnotatedTerm) (context : Context) (expected : Ty) (path : List Nat) :
+    List LambdaAnnotation → Nat →
+      Except PrepareRefusal (Σ annotations : Annotations, Checked { source with annotations := annotations } context)
+  | [], tried => .error (.searchExhausted path tried)
+  | candidate :: rest, tried =>
+    match prepareSearch depth { source with annotations := withHint source.annotations path candidate } context expected with
+    | .ok ⟨annotations, checked⟩ => .ok ⟨annotations, checked⟩
+    | .error _ => tryCandidates depth source context expected path rest (tried + 1)
+end
 
 end Obend.Elab.Prepare
 end
