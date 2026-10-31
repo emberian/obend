@@ -15,13 +15,17 @@ type alone: three lambdas against `lawTy S` (`chk_lam`), `case` on a synthesized
 arms cover its closed row in order (`chk_case`), `ifBool`, injections into a sum (`chk_inject`),
 field selection on a variable (`syn_get`), the primitives. `lawOf6_checks` reduces a law to its
 six clauses, each checked at `verdictTy` in the context `clauseCtx S P` (the occasion's payload,
-the request, the new state, the old state). `keeps` is not covered: its invariant is an arbitrary
-closed term applied in the clause, and a closed lambda synthesizes only with an annotation.
+the request, the new state, the old state). `keeps S I` applies an arbitrary closed invariant in
+the clause, and a closed lambda synthesizes only with an annotation, so the algorithmic checker
+refuses it unannotated (`Teeth.keeps_unannotated_refused`); `keeps_typed` gives it a derivation in
+the declarative system (`PartialTyping`) whenever `I` is checked at `S → boolean`, by typing
+`keepsOpen S` (the invariant a variable) with the checker and substituting `I` for the variable.
 -/
 public import Obend.Law.Std
 public import Obend.Core.Bidirectional
 public import Obend.Core.MachineTyping
 public import Obend.Tactic.Tooth
+public import Obend.Core.Proofs.TypedSubstitution
 namespace Obend.Law.Typing
 open Obend.Law
 open Obend.Core.Ty
@@ -646,6 +650,206 @@ public theorem quorum_ok_checks {S T : Ty} {members : List String} {k : Nat} {g 
   split at h <;> try (simp at h)
   cases h; exact quorum_checks members k g hS hsh hT hap hpr hg
 
+/-! ## Laws in an outer context, application, and `keeps`
+
+`keeps S I` applies a closed invariant `I` in each clause. An unannotated lambda does not
+synthesize, so the algorithmic checker cannot type `keeps S I` without an annotation at the
+application; the declarative system can. `keeps_typed` says: when `I` is checked (with whatever
+annotations it carries) at `S → boolean`, `keeps S I` has a derivation at `lawTy S`. The proof
+types `keepsOpen S`, the law with the invariant a VARIABLE of that type, by the checker itself
+(`keepsOpen_checked`), and substitutes `I` for it (`TypedSubstitution.checked_msubst`). -/
+
+public theorem Clean.append {Γ Δ : Context} (h1 : Clean Γ) (h2 : Clean Δ) : Clean (Γ ++ Δ) := by
+  intro b hb
+  rcases List.mem_append.1 hb with hb | hb
+  · exact h1 b hb
+  · exact h2 b hb
+
+/-- An application: the function synthesizes a reusable arrow, the argument checks at its domain. -/
+public theorem chk_app {ctx : Context} {f a : Term} {D C : Ty} (hctx : Clean ctx) (hD : D.canonical.shareable = true)
+    (hf : Syn ctx f (fnTy D C)) (ha : Chk ctx a D.canonical) : Chk ctx (.app f a) C.canonical := by
+  intro path
+  obtain ⟨r, hr, hT⟩ := hf (path ++ [0])
+  obtain ⟨b, hb⟩ := ha (path ++ [1])
+  have hl := Obend.Core.MachineTyping.source_uses_length b.derivation
+  simp only [elaborate, noAnn, hr, bind, Except.bind]
+  split
+  · rename_i reuse q dom cod hs
+    have hw : representativeHead {} noAnn path r.type = .arrow .reusable .unrestricted D.canonical C.canonical := by
+      rw [hT]; rfl
+    rw [hw] at hs
+    simp only [Obend.Core.Check.callable] at hs
+    cases hs
+    simp only [hb]
+    have hallow : argumentAllowed {} .unrestricted ctx D.canonical b.uses = true := by
+      have hcomp : D.canonical.isComputation = false := by
+        cases hc : D.canonical <;> simp_all [Ty.isComputation, Ty.shareable]
+      simp [argumentAllowed, hcomp, hD, reusableCaptures_clean hctx hl]
+    rw [need_ok hallow]
+    exact finish_check _ _ _ rfl
+  · rename_i hs
+    have hw : representativeHead {} noAnn path r.type = .arrow .reusable .unrestricted D.canonical C.canonical := by
+      rw [hT]; rfl
+    rw [hw] at hs
+    exact absurd rfl (hs .reusable .unrestricted D.canonical C.canonical)
+
+/-- Each of the six clauses checks at `verdictTy` under its payload, with `Γ` outside the law. -/
+@[expose] public def ClausesIn (Γ : Context) (S : Ty) (b ad rl rt wr iv : At → Term) : Prop :=
+  Chk (clauseCtx S .label ++ Γ) (ad ⟨1⟩) verdictTy ∧ Chk (clauseCtx S unitTy ++ Γ) (b ⟨1⟩) verdictTy ∧
+  Chk (clauseCtx S .natural ++ Γ) (iv ⟨1⟩) verdictTy ∧ Chk (clauseCtx S .label ++ Γ) (rl ⟨1⟩) verdictTy ∧
+  Chk (clauseCtx S unitTy ++ Γ) (rt ⟨1⟩) verdictTy ∧ Chk (clauseCtx S unitTy ++ Γ) (wr ⟨1⟩) verdictTy
+
+/-- **A law built by `lawOf6` checks at `lawTy S` in an outer context `Γ`** when its clauses do. -/
+public theorem lawOf6_chk_in {S : Ty} {Γ : Context} {b ad rl rt wr iv : At → Term} (hS : S.isCanonical)
+    (hsh : S.shareable = true) (hΓ : Clean Γ) (h : ClausesIn Γ S b ad rl rt wr iv) :
+    Chk Γ (lawOf6 b ad rl rt wr iv) (lawTy S) := by
+  obtain ⟨had, hb, hiv, hrl, hrt, hwr⟩ := h
+  have hc := Ty.canonical_of_isCanonical hS
+  have c1 : Clean (⟨S, .unrestricted⟩ :: Γ) := hΓ.cons hsh
+  have c2 : Clean (⟨S, .unrestricted⟩ :: ⟨S, .unrestricted⟩ :: Γ) := c1.cons hsh
+  have c3 : Clean (⟨reqTy, .unrestricted⟩ :: ⟨S, .unrestricted⟩ :: ⟨S, .unrestricted⟩ :: Γ) := c2.cons rfl
+  have body : Chk (⟨reqTy, .unrestricted⟩ :: ⟨S, .unrestricted⟩ :: ⟨S, .unrestricted⟩ :: Γ)
+      (lawCase6 b ad rl rt wr iv) verdictTy := by
+    refine chk_case c3 (syn_get (syn_bound rfl) rfl) rfl ?_ rfl (by simp)
+    refine .cons rfl rfl had (.cons rfl rfl hb (.cons rfl rfl hiv (.cons rfl rfl hrl
+      (.cons rfl rfl hrt (.cons rfl rfl hwr .nil)))))
+  have l3 : Chk (⟨S, .unrestricted⟩ :: ⟨S, .unrestricted⟩ :: Γ) (.lam (lawCase6 b ad rl rt wr iv))
+      (fnTy reqTy verdictTy) := chk_lam c2 (by rw [reqTy_canonical]; rfl)
+        (by rw [reqTy_canonical, verdictTy_canonical]; exact body)
+  have l2 : Chk (⟨S, .unrestricted⟩ :: Γ) (.lam (.lam (lawCase6 b ad rl rt wr iv)))
+      (fnTy S (fnTy reqTy verdictTy)) := chk_lam c1 (by rw [hc]; exact hsh) (by
+        rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical]; exact l3)
+  exact chk_lam hΓ (by rw [hc]; exact hsh) (by
+        rw [hc]; simp only [fnTy, Ty.canonical, reqTy_canonical, verdictTy_canonical, hc]; exact l2)
+
+/-- The binding of a `keeps` invariant: a reusable `S → boolean`. -/
+@[expose] public def invBinding (S : Ty) : Binding := ⟨fnTy S .boolean, .unrestricted⟩
+
+/-- `keeps S` with its invariant a free variable (index `0` outside the law). -/
+@[expose] public def keepsOpen (S : Ty) : Term :=
+  let c (a : At) := guard (.app (.bound (a.depth + 3)) a.new) "invariant" okT
+  lawOf S c c (fun _ => okT) c c
+
+theorem chk_keepsClause {S P : Ty} (hS : S.isCanonical) (hsh : S.shareable = true) (hP : P.shareable = true) :
+    Chk (clauseCtx S P ++ [invBinding S])
+      (guard (.app (.bound ((⟨1⟩ : At).depth + 3)) (⟨1⟩ : At).new) "invariant" okT) verdictTy := by
+  have hc := Ty.canonical_of_isCanonical hS
+  have cl : Clean (clauseCtx S P ++ [invBinding S]) :=
+    (clean_clause hsh hP).append (fun b hb => by
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
+      subst hb; exact ⟨rfl, by simp [invBinding, fnTy, Ty.shareable]⟩)
+  refine chk_guard ?_ (chk_okT _)
+  have := chk_app (D := S) (C := .boolean) cl (by rw [hc]; exact hsh)
+    (syn_bound (i := 4) (b := invBinding S) rfl) (by rw [hc]; exact chk_bound (i := 2) (b := ⟨S, .unrestricted⟩) rfl)
+  exact this
+
+/-- **`keepsOpen S` checks at `lawTy S` with the invariant a variable of type `S → boolean`.** -/
+public theorem keepsOpen_checked {S : Ty} (hS : S.isCanonical) (hsh : S.shareable = true) :
+    ∃ c : Checked ⟨keepsOpen S, noAnn, {}⟩ [invBinding S], c.type = lawTy S := by
+  have cΓ : Clean [invBinding S] := fun b hb => by
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
+    subst hb; exact ⟨rfl, by simp [invBinding, fnTy, Ty.shareable]⟩
+  have hk : Chk [invBinding S] (keepsOpen S) (lawTy S) :=
+    lawOf6_chk_in hS hsh cΓ ⟨chk_keepsClause hS hsh rfl, chk_keepsClause hS hsh rfl,
+      chk_keepsClause hS hsh rfl, chk_okT _, chk_keepsClause hS hsh rfl, chk_keepsClause hS hsh rfl⟩
+  obtain ⟨r, hr⟩ := hk []
+  have hl := Obend.Core.MachineTyping.source_uses_length r.derivation
+  have : ∃ c, checkAgainst ⟨keepsOpen S, noAnn, {}⟩ [invBinding S] (lawTy S) = .ok c := by
+    unfold checkAgainst Obend.Core.Bidirectional.checkAt
+    simp only [hr, bind, Except.bind]
+    rw [need_ok (safeUses_clean cΓ hl), need_ok (validContext_clean cΓ), need_ok (by decide)]
+    exact ⟨_, rfl⟩
+  obtain ⟨c, hc⟩ := this
+  refine ⟨c, ?_⟩
+  unfold checkAgainst at hc
+  simp only [bind, Except.bind] at hc
+  split at hc
+  · cases hc
+  · split at hc
+    · cases hc
+    · split at hc
+      · cases hc
+      · split at hc
+        · cases hc
+        · cases hc; rfl
+
+theorem checkAgainst_type {src : AnnotatedTerm} {ctx : Context} {T : Ty} {c : Checked src ctx}
+    (h : checkAgainst src ctx T = .ok c) : c.type = T := by
+  unfold checkAgainst at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · cases h; rfl
+
+/-- A law has a derivation at `lawTy S` in the declarative system (`PartialTyping`), closed. -/
+@[expose] public def Typed (law : Term) (S : Ty) : Prop :=
+  ∃ uses, Obend.Core.Check.PartialTyping {} [] law (lawTy S) uses
+
+/-- What the checker accepts has a derivation. -/
+public theorem ChecksAt.typed {law : Term} {S : Ty} (h : ChecksAt law S) : Typed law S := by
+  obtain ⟨c, hc⟩ := h
+  exact ⟨c.uses, checkAgainst_type hc ▸ c.derivation⟩
+
+/-- **`keeps S I` is typed at `lawTy S`** whenever its invariant `I` (a closed term, with whatever
+annotations it carries) is checked at `S → boolean`. -/
+public theorem keeps_typed {S : Ty} (hS : S.isCanonical) (hsh : S.shareable = true) {I : AnnotatedTerm}
+    (hasm : I.assumptions = {}) (closed : Obend.Core.Invariant.Scoped 0 I.term)
+    (hI : ∃ c : Checked I [], c.type = fnTy S .boolean) : Typed (keeps S I.term) S := by
+  obtain ⟨c, hc⟩ := keepsOpen_checked hS hsh
+  obtain ⟨ci, hci⟩ := hI
+  let σ : Nat → Option AnnotatedTerm := fun x => if x = 0 then some I else none
+  have hσ : ∀ x f, σ x = some f → Obend.Core.Invariant.Scoped 0 f.term ∧
+      f.assumptions = (⟨keepsOpen S, noAnn, {}⟩ : AnnotatedTerm).assumptions ∧
+      ∃ b : Binding, [invBinding S][x]? = some b ∧ ∃ d : Checked f [invBinding S], d.type = b.type := by
+    intro x f hf
+    by_cases hx : x = 0
+    · subst hx
+      simp only [σ, if_pos rfl, Option.some.injEq] at hf
+      subst hf
+      refine ⟨closed, hasm, invBinding S, rfl, ?_⟩
+      have hv : validContext I.assumptions.shareableVariables [invBinding S] = true := by
+        rw [hasm]; simp [validContext, invBinding, fnTy, Ty.shareable]
+      obtain ⟨_, d⟩ := Obend.Core.Proofs.TypedSubstitution.partialTyping_closed_transport ci.derivation
+        closed [invBinding S] hv
+      refine ⟨⟨ci.type, zeroUses [invBinding S], d, by simp [safeUses, zeroUses, invBinding, safeQuantity], hv,
+        ci.assumptionsValid⟩, ?_⟩
+      simp [hci, invBinding]
+    · simp [σ, hx] at hf
+  obtain ⟨c', hc', _⟩ := Obend.Core.Proofs.TypedSubstitution.checked_msubst c σ hσ
+  have hren : ∀ f, I.term.rename f = I.term := fun f =>
+    Obend.Core.Invariant.scoped_rename_identity closed f (fun _ h => absurd h (Nat.not_lt_zero _))
+  have hfill : Obend.Core.Proofs.Substitution.fillTerm σ 0 = fun i => if i = 0 then I.term else .bound i := by
+    funext i
+    rw [Obend.Core.Proofs.Substitution.fillTerm_zero]
+    by_cases hi : i = 0
+    · subst hi; simp [σ]
+    · simp [σ, hi]
+  have heq : (Obend.Core.Proofs.Substitution.msubst σ ⟨keepsOpen S, noAnn, {}⟩).term = keeps S I.term := by
+    simp only [Obend.Core.Proofs.Substitution.msubst, hfill]
+    simp [keepsOpen, keeps, lawOf, lawCase, lawCase6, law3, guard, refusedT, okT, At.new, Term.substitute,
+      Obend.Core.Term.liftSubstitution, hren, Term.rename]
+  have hsc : Obend.Core.Invariant.Scoped 0 (keeps S I.term) := by
+    rw [← heq]
+    have h1 := Obend.Core.Proofs.Substitution.typed_scoped c.derivation
+    simp only [Obend.Core.Proofs.Substitution.msubst, hfill]
+    refine Obend.Core.Invariant.scoped_substitute h1 _ 0 ?_
+    intro i hi
+    simp only [List.length_cons, List.length_nil] at hi
+    have : i = 0 := by omega
+    subst this
+    simpa using closed
+  have d := c'.derivation
+  simp only [AnnotatedTerm.erase, heq] at d
+  obtain ⟨_, d'⟩ := Obend.Core.Proofs.TypedSubstitution.partialTyping_closed_transport d hsc [] rfl
+  rw [hc', hc] at d'
+  exact ⟨_, d'⟩
+
 /-! ## Teeth
 
 The hypotheses are inhabited (concrete canonical state types the stdlib teeth use, typed at the
@@ -684,6 +888,27 @@ theorem bounded_missing_refused :
 /-- And the type is the law's: `bounded` does not check at a type whose verdict is not `verdictTy`. -/
 theorem bounded_not_at_state :
     (checkAgainst ⟨bounded totalTy "total" 5, noAnn, {}⟩ [] (fnTy totalTy totalTy)).toBool = false := by decide
+
+/-- A closed invariant: the total is at most 5. -/
+@[expose] public def totalAtMost5 : Term := .lam (leNat (.get (.bound 0) "total") (natT 5))
+
+theorem totalAtMost5_checked :
+    ∃ c, checkAgainst ⟨totalAtMost5, noAnn, {}⟩ [] (fnTy totalTy .boolean) = .ok c := by
+  cases h : checkAgainst ⟨totalAtMost5, noAnn, {}⟩ [] (fnTy totalTy .boolean) with
+  | ok c => exact ⟨c, rfl⟩
+  | error e =>
+      have : (checkAgainst ⟨totalAtMost5, noAnn, {}⟩ [] (fnTy totalTy .boolean)).toBool = true := by decide
+      rw [h] at this; cases this
+
+/-- `keeps` with a real invariant is typed. -/
+theorem keeps_typed_tooth : Typed (keeps totalTy totalAtMost5) totalTy := by
+  obtain ⟨c, hc⟩ := totalAtMost5_checked
+  exact keeps_typed (I := ⟨totalAtMost5, noAnn, {}⟩) (isCanonical_of (by decide)) rfl rfl
+    (.lam (.binary (.get (.bound (by decide))) (.natural _))) ⟨c, checkAgainst_type hc⟩
+
+/-- The algorithmic checker refuses `keeps` unannotated: the invariant's lambda does not synthesize. -/
+theorem keeps_unannotated_refused :
+    (checkAgainst ⟨keeps totalTy totalAtMost5, noAnn, {}⟩ [] (lawTy totalTy)).toBool = false := by decide
 
 end Teeth
 

@@ -17,3 +17,5 @@ open Obend.Law Obend.Law.Typing
 -- A quorum's proposal and a machine's state are the sums the clauses eliminate.
 #tooth quorum_checks by mutation proposalTy := fun _ => .natural
 #tooth machine_checks by mutation stateTy := fun _ => .natural
+-- A `keeps` invariant is a predicate on the state: typed at another codomain, the proof no longer checks.
+#tooth keeps_typed by mutation invBinding := fun S => ⟨fnTy S .natural, .unrestricted⟩
