@@ -154,6 +154,9 @@ structure Module where
   laws : List (String × Law.LawExpr) := []
   /-- `package NAME extends ...`, when this module is a package's root module. -/
   header : Option PackageHeader := none
+  /-- `keeps INV by LAW` lines: the law `LAW` of this module keeps the invariant `INV`
+  (`Law.Claim.keeps`), an obligation `obend check --obligations` lists. -/
+  keeps : List (String × String) := []
   deriving Inhabited
 
 /-! ## Decoding the parser's AST JSON -/
@@ -238,7 +241,10 @@ def decodeDecl (j : Json) : Except String Decl := do
       let name ← str l "name"
       let params ← (← arr l "parameters").mapM decodeParam
       let body ← decodeExpr fuel (← l.getObjVal? "body")
-      return (Claim.mk name params body)
+      -- `claim … given COND: BODY` is `if COND then BODY else true`: no new elaboration.
+      match l.getObjVal? "given" with
+      | .ok g => return (Claim.mk name params (.ite (← decodeExpr fuel g) body (.bool true)))
+      | .error _ => return (Claim.mk name params body)
     let name ← str j "name"
     let suffix := (j.getObjValAs? Bool "suffix").toOption.getD false
     let parents ← (← arr j "parents").mapM (fun p => p.getStr?)
@@ -278,8 +284,11 @@ def decodeModule (j : Json) : Except String Module := do
   let mut decls : List Decl := []
   let mut laws : List (String × Law.LawExpr) := []
   let mut header : Option PackageHeader := none
+  let mut keeps : List (String × String) := []
   for d in ← arr ast "declarations" do
-    if (str d "kind").toOption == some "law" then
+    if (str d "kind").toOption == some "keeps" then
+      keeps := keeps ++ [(← str d "invariant", ← str d "law")]
+    else if (str d "kind").toOption == some "law" then
       laws := laws ++ [(← str d "name", ← Law.parse (← str d "source"))]
     else if (str d "kind").toOption == some "package" then
       if header.isSome then throw "a module declares one package"
@@ -293,8 +302,11 @@ def decodeModule (j : Json) : Except String Module := do
       header := some ⟨← str d "name", parents⟩
     else decls := decls ++ [← decodeDecl d]
   Law.checkNames laws
+  for (inv, law) in keeps do
+    unless laws.any (·.1 == law) do throw s!"keeps {inv} by {law}: {law} is not a law of this module"
+    unless decls.any (fun d => d.name == inv) do throw s!"keeps {inv} by {law}: {inv} is not declared in this module"
   return ⟨← str j "name", ← (← arr j "imports").mapM (fun i => do return (← str i "alias", ← str i "moduleName")),
-    decls, laws, header⟩
+    decls, laws, header, keeps⟩
 
 end Obend.Spec.Syntax
 

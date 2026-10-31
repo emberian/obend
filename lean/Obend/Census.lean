@@ -228,6 +228,9 @@ import Obend.Logic.Claim
 import Obend.Logic.Frame
 import Obend.Logic.Ground
 import Obend.Logic.LateBinding
+import Obend.Logic.Obligation
+import Obend.Logic.Program
+import Obend.Logic.Receipt
 import Obend.Logic.Rewrite
 import Obend.Main
 import Obend.Receipt

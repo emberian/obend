@@ -653,6 +653,12 @@ def qualifiedRe : Re := seqs [group 1 (alts [str "def", str "around", str "befor
   chr ':', .done]
 def claimRe : Re := seqs [str "claim", many1 space, group 1 ident, opt (seqs [chr '(', group 2 (many dot), chr ')']),
   many space, chr ':', many space, group 3 (many1 dot), .done]
+/-- `claim NAME(params) given COND: BODY`: a precondition, lowered as `if COND then BODY else true`. -/
+def claimGivenRe : Re := seqs [str "claim", many1 space, group 1 ident, opt (seqs [chr '(', group 2 (many dot), chr ')']),
+  many1 space, str "given", many1 space, group 4 (many1 dot), many space, chr ':', many space, group 3 (many1 dot), .done]
+/-- `keeps INV by LAW`: the module's law `LAW` keeps the invariant `INV` (`Law.Claim.keeps`). -/
+def keepsRe : Re := seqs [str "keeps", many1 space, group 1 ident, many1 space, str "by", many1 space, group 2 ident,
+  many space, .done]
 def extensionRe : Re := seqs [str "extension", many1 space, group 1 ident,
   opt (seqs [chr '[', group 4 (many1 (.char (· != ']'))), chr ']']), chr '(', group 2 (many dot), chr ')',
   many space, str "->", many space, group 3 (many1 dot), chr ':', .done]
@@ -752,6 +758,13 @@ def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
           let methodBody ← body lines fuel clause.indent
           methods := methods.push (Json.mkObj (signatureJson method ++ [("qualifier", toJson qualifier), ("body", methodBody)]))
           continue
+        if let some (_, l) ← matchAt clause claimGivenRe clause.text then
+          let parameters ← liftBare (splitParameters ((capture clause.text l 2).getD []))
+          let condition ← lineExpr clause ((capture clause.text l 4).getD [])
+          let claimBody ← lineExpr clause ((capture clause.text l 3).getD [])
+          claims := claims.push (Json.mkObj [("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
+            ("given", condition), ("body", claimBody), ("span", clause.span.json)])
+          continue
         if let some (_, l) ← matchAt clause claimRe clause.text then
           let parameters ← liftBare (splitParameters ((capture clause.text l 2).getD []))
           let claimBody ← lineExpr clause ((capture clause.text l 3).getD [])
@@ -822,6 +835,10 @@ def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
       if let .error message := Law.parse text then fail line message
       decls := decls.push (Json.mkObj [("kind", toJson "law"), ("name", toJson (cap line.text caps 1)),
         ("source", toJson text), ("span", line.span.json)])
+      continue
+    if let some (_, caps) ← matchAt line keepsRe line.text then
+      decls := decls.push (Json.mkObj [("kind", toJson "keeps"), ("invariant", toJson (cap line.text caps 1)),
+        ("law", toJson (cap line.text caps 2)), ("span", line.span.json)])
       continue
     if let some (_, caps) ← matchAt line packageRe line.text then
       let refs := match capture line.text caps 2 with

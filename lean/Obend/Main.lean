@@ -70,6 +70,7 @@ public import Obend.Spec.Preview
 public import Obend.Vault.Cli
 public import Obend.Spec.Workspace
 public import Obend.Receipt.Cli
+public import Obend.Logic.Receipt
 
 open Lean (Json toJson)
 open Obend.Core
@@ -86,6 +87,9 @@ def usage : String :=
   "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
   "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]\n" ++
   "             | create --from KIND PAGE   [-C DIR]\n" ++
+  "       obend check --obligations --package PACKAGE.json --object ENTRY [--receipts DIR]\n" ++
+  "       obend prove --package PACKAGE.json SPEC.CLAIM --object ENTRY --out RECEIPT.json [--ground N,N,…]\n" ++
+  "       obend ground --package PACKAGE.json ENTRY EXPECTED_NAT\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
@@ -408,6 +412,140 @@ def judgeCommand (spec old new : String) : IO UInt32 := do
     IO.println j.pretty
     return (if (j.getObjValAs? String "status").toOption == some "admitted" then 0 else 3)
 
+
+/-! ## Claims: obligations, proofs, ground runs (lane Logic, `Obend.Logic`) -/
+
+/-- The erased selection `get knot ENTRY` of a package, in definition mode. -/
+def selection (p : Package) (entry : String) : Except Diagnostic Obend.Core.Term.Term := do
+  let lowered ← lowerPackage p entry (Json.arr #[]) (hostLimits "100000") "definition"
+  match lowered.term.erase with
+  | .ok t => pure t
+  | .error e => throw (elaborationRefusal e)
+
+/-- `SPEC.CLAIM` split at its last dot. -/
+def splitClaim (name : String) : Option (String × String) :=
+  match (name.splitOn ".").reverse with
+  | claim :: spec@(_ :: _) => some (".".intercalate spec.reverse, claim)
+  | _ => none
+
+def readReceiptSteps (path : String) : IO (Option (List Obend.Logic.RStep)) := do
+  if !(← System.FilePath.pathExists path) then return none
+  let j ← match Json.parse (← IO.FS.readFile path) with
+    | .ok j => pure j
+    | .error _ => return none
+  match (j.getObjVal? "certificate").toOption with
+  | none => return none
+  | some cert => return (Obend.Logic.certificateOf cert.compress).toOption
+
+/-- `obend check --obligations`: every claim of the package, its object, and its status, the slot's
+read of the certificate in `DIR/SPEC.CLAIM.json` (when given) at this program's object. -/
+def obligationsCommand (spec entry : String) (receipts : Option String) : IO UInt32 := do
+  let p ← match ← (packageOfSpec spec none).run with
+    | .ok p => pure p
+    | .error d => IO.eprintln d.json.compress; return 2
+  let t ← match selection p entry with
+    | .ok t => pure t
+    | .error d => IO.eprintln d.json.compress; return 2
+  let some root := Obend.Logic.Program.knotOf t | IO.eprintln "the selection is not a knot field"; return 2
+  -- `keeps INV by LAW` lines: listed; their certifying-shape check (`Law.checkClaim`) needs the
+  -- compiled law at the object's state type, which the installing kernel holds, not this listing.
+  for m in p.modules do
+    if let .ok decoded := parseModule m then
+      for (inv, law) in decoded.keeps do
+        IO.println (Json.mkObj [("keeps", toJson (m.name ++ "." ++ inv)), ("law", toJson (m.name ++ "." ++ law)),
+          ("status", toJson "unchecked")]).compress
+  for (specKey, name) in Obend.Logic.Program.claimFields root do
+    let full := specKey ++ "." ++ name
+    match Obend.Logic.Program.objectFor specKey t with
+    | none => IO.println (Json.mkObj [("claim", toJson full), ("status", toJson "no-object"),
+        ("entry", toJson entry)]).compress
+    | some C =>
+      match Obend.Logic.Program.claimObj root C specKey name with
+      | .error e => IO.println (Json.mkObj [("claim", toJson full), ("status", toJson "refused"), ("message", toJson e)]).compress
+      | .ok o =>
+        let selected ← match receipts with
+          | some dir => readReceiptSteps (dir ++ "/" ++ full ++ ".json")
+          | none => pure none
+        -- The slot is the certified claim's (its statement), read at this program's object.
+        let certified ← match receipts with
+          | some dir => do
+            let path := dir ++ "/" ++ full ++ ".json"
+            if !(← System.FilePath.pathExists path) then pure o else
+            match Json.parse (← IO.FS.readFile path) with
+            | .ok j => match (j.getObjVal? "statement").toOption with
+              | some st => pure ((Obend.Logic.statementOf st.compress).toOption.getD o)
+              | none => pure o
+            | .error _ => pure o
+          | none => pure o
+        let status := Obend.Logic.readStatus certified 1000000 C selected none none
+        let extra : List (String × Json) := match status with
+          | .blocked ms => [("blocked", toJson ms)]
+          | .checked f tr a => [("format", toJson f), ("trust", toJson tr), ("address", toJson (toString a))]
+          | _ => []
+        let layers := C.layers.map (·.name)
+        IO.println (Json.mkObj ([("claim", toJson full), ("status", toJson status.label),
+          ("object", toJson layers)] ++ extra)).compress
+  return 0
+
+def parseNats (s : String) : Option (List Nat) := (s.splitOn ",").mapM String.toNat?
+
+/-- `obend prove`: ground instances first (a `false` refutes and stops), then the rewriter; the
+first certificate the claim checker accepts is installed as the receipt. -/
+def proveCommand (spec name entry out : String) (ground : List Nat) : IO UInt32 := do
+  let p ← match ← (packageOfSpec spec none).run with
+    | .ok p => pure p
+    | .error d => IO.eprintln d.json.compress; return 2
+  let t ← match selection p entry with
+    | .ok t => pure t
+    | .error d => IO.eprintln d.json.compress; return 2
+  let some root := Obend.Logic.Program.knotOf t | IO.eprintln "the selection is not a knot field"; return 2
+  let some (specKey, claim) := splitClaim name | IO.eprintln s!"{name}: name a claim as SPEC.CLAIM"; return 64
+  let some C := Obend.Logic.Program.objectFor specKey t
+    | IO.eprintln s!"no object of {specKey} is reached from {entry}"; return 2
+  let o ← match Obend.Logic.Program.claimObj root C specKey claim with
+    | .ok o => pure o
+    | .error e => IO.eprintln e; return 2
+  IO.println s!"object: fix(compose({", ".intercalate (C.layers.reverse.map (·.name))}), seed) from {entry}"
+  let instances := if o.arity == 1 then ground.map (fun n => [n]) else if o.arity == 0 then [[]] else []
+  for ds in instances do
+    match Obend.Logic.groundCheck Obend.Logic.Receipt.groundFuel
+        ⟨Obend.Logic.instantiateClaim o.claim o.comp o.layer, ds.map .natural⟩ () with
+    | .refused _ _ =>
+      IO.FS.writeFile out ((Obend.Logic.Receipt.refutedReceipt name o ds).pretty ++ "\n")
+      IO.println s!"refuted: {name} runs to false at {ds}; wrote {out}"
+      return 3
+    | .ok => IO.println s!"ground {ds}: true"
+    | .uncovered => IO.println s!"ground {ds}: uncovered"
+  match Obend.Logic.Program.proposeDerivation o with
+  | none => IO.println s!"unchecked: no producer found a certificate for {name}"; return 3
+  | some steps =>
+    match Obend.Logic.claimCheck (Obend.Logic.sizeList steps) o steps with
+    | .ok =>
+      IO.FS.writeFile out ((Obend.Logic.Receipt.checkedReceipt name o steps instances).pretty ++ "\n")
+      IO.println s!"checked: {name} by rewrite@1 ({Obend.Logic.sizeList steps} steps); wrote {out}"
+      return 0
+    | _ => IO.println s!"unchecked: the proposed derivation for {name} is refused"; return 3
+
+/-- `obend ground`: the ground judge on `ENTRY() == EXPECTED`. -/
+def groundCommand (spec entry expected : String) : IO UInt32 := do
+  let p ← match ← (packageOfSpec spec none).run with
+    | .ok p => pure p
+    | .error d => IO.eprintln d.json.compress; return 2
+  let t ← match selection p entry with
+    | .ok t => pure t
+    | .error d => IO.eprintln d.json.compress; return 2
+  let some n := expected.toNat? | IO.eprintln "EXPECTED must be a natural"; return 64
+  let claim := Obend.Core.Term.Term.binary .equal t (.nat n)
+  match Obend.Logic.groundCheck Obend.Logic.Receipt.groundFuel ⟨claim, []⟩ () with
+  | .ok => IO.println s!"ok: {entry}() == {n} (ground, decidable, Holds)"; return 0
+  | .refused _ _ => IO.println s!"refuted: {entry}() == {n} runs to false (ground, decidable)"; return 3
+  | .uncovered => IO.println s!"uncovered: {entry}() == {n} did not finish within the grade"; return 3
+
+def proveArgs (spec name : String) : List String → Option (IO UInt32)
+  | ["--object", entry, "--out", out] => some (proveCommand spec name entry out [0, 3, 41])
+  | ["--object", entry, "--out", out, "--ground", g] => (parseNats g).map (proveCommand spec name entry out ·)
+  | _ => none
+
 /-! ## Dispatch -/
 
 public def main (args : List String) : IO UInt32 :=
@@ -430,6 +568,11 @@ public def main (args : List String) : IO UInt32 :=
     match parseOptions rest {} with
     | .ok options => runPacket path options
     | .error message => do IO.eprintln message; return 1
+  | ["check", "--obligations", "--package", spec, "--object", entry] => obligationsCommand spec entry none
+  | ["check", "--obligations", "--package", spec, "--object", entry, "--receipts", dir] =>
+    obligationsCommand spec entry (some dir)
+  | "prove" :: "--package" :: spec :: name :: rest => (proveArgs spec name rest).getD (do IO.eprintln usage; return 64)
+  | ["ground", "--package", spec, entry, expected] => groundCommand spec entry expected
   | ["check", "--package", spec] => checkSource (packageOfSpec spec none)
   | ["check", "--package", spec, entry] => checkSource (packageOfSpec spec (some entry))
   | ["check", file] => checkSource (packageOfFile file none)

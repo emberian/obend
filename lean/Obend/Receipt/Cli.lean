@@ -3,7 +3,7 @@ module
 # Obend.Receipt.Cli — `obend verify`, `obend receipt`, `obend lrat`
 
     obend verify RECEIPT.json [--prev PREV.json] [--root ROOT]
-        re-check a receipt with no producer state (`Obend.Receipt.Export.verify`); with its
+        re-check a receipt with no producer state (a claim receipt: `Obend.Logic.Receipt.verifyClaim`) (`Obend.Receipt.Export.verify`); with its
         predecessor, the chain link too. A world-transition receipt needs ROOT, the expected root of
         its view (decimal), from an authority the verifier chose. Exit 0 when it verifies, 3 otherwise.
     obend receipt identity N CERT.lrat OUT.json [--prev PREV.json]
@@ -17,6 +17,7 @@ module
         check a DIMACS formula and an LRAT proof (or a `v`-line model): the registered `lrat@1` format.
 -/
 public import Obend.Receipt.Export
+public import Obend.Logic.Receipt
 
 open Lean (Json)
 
@@ -34,6 +35,12 @@ def prevDigest (prev : Option String) : IO Digest := do
 
 def verifyCommand (path : String) (prev : Option String) (root : Option Nat) : IO UInt32 := do
   let j ← readJson path
+  -- A claim receipt (`Obend.Logic.Receipt`): re-checked from the receipt and its quoted statement.
+  if (j.getObjValAs? String "kind").toOption == some "claim" then
+    match Obend.Logic.Receipt.verifyClaim j with
+    | .ok lines => for l in lines do IO.println l
+                   IO.println "verified"; return 0
+    | .error e => IO.eprintln s!"refused: {e}"; return 3
   let pj ← match prev with
     | none => pure none
     | some p => pure (some (← readJson p))

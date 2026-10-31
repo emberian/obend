@@ -10,7 +10,7 @@ elaborator's own output is `tests/run-logic.py`).
   `twice` composed last instead, it is accepted unchanged (`claim_frame`'s positive direction).
 * The mutation of `Augmented` to `+ 2` keeps the derivation (the claim is about open recursion and
   never unfolds `review`), which is why the ground judge carries that tooth (`GroundTeeth`). -/
-public import Obend.Logic.Frame
+public import Obend.Logic.Obligation
 @[expose] public section
 open Obend.Core.Term Obend.Logic
 
@@ -63,6 +63,18 @@ def extended : ClaimObj := ⟨⟨unrelated, [augmented 1, twice, base], seed⟩,
 theorem frame_kept : claimCheck 4 extended derivation = .ok :=
   claim_frame accepted (C' := extended.comp) (j' := 2)
     (by intro m hm; simp [derivation, membersList, RStep.members] at hm; subst hm; rfl) (by decide +kernel)
+
+/-- The members a status names as blocked. -/
+def blockedOf : Status → List String
+  | .blocked ms => ms
+  | _ => []
+
+theorem slot_blocked_twice : blockedOf (readStatus (object 1) 4 overridden.comp (some derivation) none none) = ["twice"] := by
+  decide +kernel
+
+theorem slot_checked : (readStatus (object 1) 4 (object 1).comp (some derivation) none none).label = "checked" ∧
+    (readStatus (object 1) 4 extended.comp (some derivation) none none).label = "checked" := by
+  decide +kernel
 
 end Obend.Teeth.Logic.Review
 end
