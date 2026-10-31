@@ -36,6 +36,7 @@ per-fact reading misses this, Gemini §3), `undecided`, or the refusal `contradi
 (`holds3_move_one`).
 -/
 public import Obend.Slot.World
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Analysis
@@ -577,6 +578,9 @@ theorem read3_contradiction (σ : Setup V) (S : Slot Fact Cand) {c : Cand} {f : 
   rintro ⟨v, hv⟩
   have := σ.read3_sound S (some c) hv
   rw [h] at this; exact this
+
+-- Tooth: a reading that calls every support known true is unsound; the bracket's proof is refused.
+#tooth read3_sound by mutation Setup.holds3 := fun {_ _} [_] [_] [_] _ _ => .known true
 
 end Setup
 

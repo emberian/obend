@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory() as work:
     # forget
     code, out = obend("analyze", "impact", "Beta@?", "--world", vault)
     opened = sorted(l.split(None, 2)[2] for l in out.splitlines() if l.startswith("open "))
-    check("forget Beta: every cite of Beta could change", opened == ["Alpha: ![[Beta]]", "Delta: ![[Beta#^b]]", "Gamma: [[Beta]]"], out)
+    check("forget Beta: every cite of Beta could change", opened == ["Alpha: ![[Beta]]", "Delta: [[Beta#^b]]", "Gamma: [[Beta]]"], out)
 
     # the actual move
     shutil.copy(new, os.path.join(vault, "Beta.md"))
