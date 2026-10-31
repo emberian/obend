@@ -27,3 +27,4 @@ public import Obend.Slot.Repair
 public import Obend.Just
 public import Obend.Law
 public import Obend.Doc
+public import Obend.Elab

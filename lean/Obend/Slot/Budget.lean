@@ -8,8 +8,10 @@ open Obend.Core.Check Obend.Core.Ty
 open Obend.Core.Proofs.Substitution
 
 /-- The toy World declares the grant available at a view. Retirement and typing
-remain their existing meanings; this grant prices one checker invocation. -/
-def toyBudget (view : Nat) : Budget Nat := ⟨if view = 0 then 1 else 1 + 1⟩
+remain their existing meanings; this grant prices one checker invocation in
+`Obend.Elab.Work.checkWork` units: the filling's two nodes plus the two types of the
+annotation the checker reads at its lambda cost four. -/
+def toyBudget (view : Nat) : Budget Nat := ⟨if view = 0 then 1 else 1 + 3⟩
 
 def budgetType : Ty := .arrow .reusable .unrestricted .natural .natural
 
@@ -28,9 +30,10 @@ attribute [local simp] Obend.Tactic.MonadicReduction.except_bind_ok
   Obend.Tactic.MonadicReduction.except_map_ok
   Obend.Tactic.MonadicReduction.except_map_error
 
-/-- The two-unit grant admits the filling through the single bidirectional judge. -/
-theorem budget_filling_admitted : Core4.judge 2 fuelContext fuelFilling budgetType = true := by
-  simp [Core4.judge, Core4.termDepth, fuelContext, fuelFilling, budgetType,
+/-- The four-unit grant admits the filling through the single bidirectional judge. -/
+theorem budget_filling_admitted : Core4.judge 4 fuelContext fuelFilling budgetType = true := by
+  simp [Core4.judge, Core4.checkWork, Obend.Elab.Work.checkWork, Obend.Elab.Work.termWork,
+    Obend.Elab.Work.annotationWork, Obend.Elab.Work.tyNodes, fuelContext, fuelFilling, budgetType,
     Obend.Core.Bidirectional.checkAgainst, Obend.Core.Bidirectional.checkAt,
     Obend.Core.Bidirectional.elaborate, Obend.Core.Bidirectional.finish,
     Obend.Core.Bidirectional.checkedSynth, Obend.Core.Bidirectional.need,
@@ -51,7 +54,7 @@ theorem budget_tooth :
   constructor
   · apply (usable_iff _ _ _).2
     constructor
-    · change Core4.judge 2 fuelContext fuelFilling budgetType = true
+    · change Core4.judge 4 fuelContext fuelFilling budgetType = true
       exact budget_filling_admitted
     · intro member supported
       change member ∈ [Member.bob] at supported

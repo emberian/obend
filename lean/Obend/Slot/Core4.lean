@@ -1,5 +1,6 @@
 module
-/- The single judge is the bidirectional checker, bounded by structural depth.
+/- The single judge is the bidirectional checker, bounded by the checker's work
+(`Obend.Elab.Work.checkWork`: one per node plus the annotations it reads).
 Full completeness prepares annotations while preserving the erased program and
 assumptions. Arbitrary fixed annotations need not be accepted. -/
 public import Obend.Core.Term
@@ -16,25 +17,23 @@ public import Obend.Slot.Calculus
 public import Obend.Tactic.Fuel
 public import Obend.Tactic.Tooth
 public import Obend.Tactic.MonadicReduction
+public import Obend.Elab.Work
 
 @[expose] public section
 namespace Obend.Slot.Core4
 
 open Obend.Core.Term (Term)
 open Obend.Core.Ty (Ty Context Binding)
-open Obend.Core.Check (AnnotatedTerm Annotations Checked check)
+open Obend.Core.Check (AnnotatedTerm Annotations Checked)
 open Obend.Core.Ty (LambdaAnnotation)
 open Obend.Core.Invariant (Scoped)
-open Obend.Core.Proofs.Substitution (fillingAt annotationsAt fillTerm msubst fillTerm_zero check_msubst check_mono)
+open Obend.Core.Proofs.Substitution (fillingAt annotationsAt fillTerm msubst fillTerm_zero)
 set_option autoImplicit false
 
 /-- Does hypothesis `x` (a free de Bruijn index, counted at the root) occur in `t`? Each binder
 shifts the index sought by one: `lam`, the successor arm of `ifZero`, every `case` arm. -/
 def freeIn (x : Nat) (t : Term) : Bool :=
   Obend.Core.Traverse.Tree.uses x (Obend.Core.TermTraverse.encode t)
-
-/-- The front end's type fuel (`Obend.Core.Check`'s preview wire caps `typeFuel` at 16384). -/
-def checkFuel : Nat := 16384
 
 /-- Hypothesis `x` as a term: a bare `bound x`, no annotations. -/
 def var (x : Nat) : AnnotatedTerm := ⟨.bound x, fun _ => none, {}⟩
@@ -57,39 +56,8 @@ instance : Obend.Slot.Calculus AnnotatedTerm where
   var := var
   lookup Ψ x := (Ψ[x]?).map (·.type)
 
-/- Historical annotation-directed checking API. These definitions and pinned laws
-remain available to existing callers; the single `judge` below never calls them. -/
-/-- Exact-result recognition at a supplied grade. -/
-def gradedCheck (fuel : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
-  match check t Ψ fuel with
-  | some c => decide (c.type = A)
-  | none => false
-
-theorem gradedCheck_iff (fuel : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
-    gradedCheck fuel Ψ t A = true ↔ ∃ c : Checked t Ψ, check t Ψ fuel = some c ∧ c.type = A := by
-  unfold gradedCheck
-  cases h : check t Ψ fuel with
-  | none => simp
-  | some c =>
-    simp only [decide_eq_true_eq]
-    constructor
-    · intro hc; exact ⟨c, rfl, hc⟩
-    · rintro ⟨c', hc', hA⟩; cases hc'; exact hA
-
-mutual
-/-- The checker's recursion depth on a term: what a grant prices. -/
-def termDepth : Term → Nat
-  | .hole _ _ | .bound _ | .nat _ | .boolean _ | .label _ => 1
-  | .lam t | .reflect t | .metadata t | .project t | .inject _ t | .perform t | .done t | .get t _ => termDepth t + 1
-  | .app a b | .mix a b | .fix a b | .specification a b | .prototype a b | .binary _ a b => max (termDepth a) (termDepth b) + 1
-  | .ifZero a b c | .ifBool a b c => max (termDepth a) (max (termDepth b) (termDepth c)) + 1
-  | .extend t fields => max (termDepth t) (fieldsDepth fields) + 1
-  | .record fields => fieldsDepth fields + 1
-  | .case t arms => max (termDepth t) (fieldsDepth arms) + 1
-def fieldsDepth : List (String × Term) → Nat
-  | [] => 0
-  | (_, t) :: rest => max (termDepth t + 1) (fieldsDepth rest)
-end
+/-- What a grant prices: the work the bidirectional checker does on the annotated term. -/
+abbrev checkWork (t : AnnotatedTerm) : Nat := Obend.Elab.Work.checkWork t
 
 /-- Only annotations may change during preparation. -/
 def Reannotates (source target : AnnotatedTerm) : Prop :=
@@ -99,12 +67,12 @@ def Reannotates (source target : AnnotatedTerm) : Prop :=
 Typing remains an independent premise of completeness, so this includes ill-typed syntax. -/
 def Covered (_ : Context) (_ : AnnotatedTerm) (_ : Ty) : Prop := True
 
-/-- One route: a depth grant and the equi-recursive bidirectional checker. -/
+/-- One route: a work grant and the equi-recursive bidirectional checker. -/
 def judge (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) : Bool :=
-  decide (termDepth t.term ≤ grant) && (Obend.Core.Bidirectional.checkAgainst t Ψ A).toBool
+  decide (checkWork t ≤ grant) && (Obend.Core.Bidirectional.checkAgainst t Ψ A).toBool
 
 theorem judge_iff (grant : Nat) (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
-    judge grant Ψ t A = true ↔ termDepth t.term ≤ grant ∧
+    judge grant Ψ t A = true ↔ checkWork t ≤ grant ∧
       ∃ c, Obend.Core.Bidirectional.checkAgainst t Ψ A = .ok c := by
   unfold judge
   cases h : Obend.Core.Bidirectional.checkAgainst t Ψ A with
@@ -138,15 +106,15 @@ instance : Decides Nat AnnotatedTerm where
     obtain ⟨c, same⟩ := typed
     obtain ⟨annotations, checked, accepted⟩ :=
       Obend.Core.Proofs.BidirectionalCompleteness.full_annotated c
-    refine ⟨{ t with annotations := annotations }, termDepth t.term, ⟨rfl, rfl⟩, ?_⟩
+    refine ⟨{ t with annotations := annotations }, checkWork { t with annotations := annotations }, ⟨rfl, rfl⟩, ?_⟩
     exact (judge_iff _ _ _ _).2 ⟨Nat.le_refl _, checked, same ▸ accepted⟩
   check_covered := by intros; trivial
 
-/-- Exact-depth completeness for the erased program: annotations can be prepared,
-and no grant larger than the source term's own structural depth is needed. -/
-theorem typed_iff_preparable_at_depth (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
+/-- Exact-work completeness for the erased program: annotations can be prepared, and no
+grant larger than the prepared term's own work is needed. -/
+theorem typed_iff_preparable_within_work (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
     Calculus.Typed Ψ t A ↔ ∃ annotations,
-      judge (termDepth t.term) Ψ { t with annotations := annotations } A = true := by
+      judge (checkWork { t with annotations := annotations }) Ψ { t with annotations := annotations } A = true := by
   constructor
   · rintro ⟨certificate, same⟩
     obtain ⟨annotations, checked, accepted⟩ :=
@@ -184,7 +152,8 @@ def extendFilling : AnnotatedTerm := ⟨.extend (.record [("a", .nat 1)]) [("b",
 def extendType : Ty := .field "b" .natural (.field "a" .natural .emptyRow)
 
 theorem extend_filling_admitted : judge 4 [] extendFilling extendType = true := by
-  simp [judge, extendFilling, extendType, termDepth, fieldsDepth,
+  simp [judge, extendFilling, extendType, checkWork, Obend.Elab.Work.checkWork,
+    Obend.Elab.Work.termWork, Obend.Elab.Work.fieldsWork, Obend.Elab.Work.annotationWork,
     Obend.Core.Bidirectional.checkAgainst,
     Obend.Core.Bidirectional.checkAt,
     Obend.Core.Bidirectional.elaborate,
@@ -216,9 +185,21 @@ theorem extend_filling_admitted : judge 4 [] extendFilling extendType = true := 
 theorem extend_filling_decided : Decides.check (R := Nat) 4 ([] : Context) extendFilling extendType = true :=
   extend_filling_admitted
 
-/-- The exact same filling is refused below its structural depth. -/
+/-- The exact same filling is refused below its work. -/
 theorem extend_filling_budget_refused : judge 3 [] extendFilling extendType = false := by
-  simp [judge, extendFilling, termDepth, fieldsDepth]
+  simp [judge, extendFilling, checkWork, Obend.Elab.Work.checkWork, Obend.Elab.Work.termWork,
+    Obend.Elab.Work.fieldsWork, Obend.Elab.Work.annotationWork]
+
+/-- A record of 1,000 literal fields: the retired structural depth said 3; the work is 1,001. -/
+def wideRecord : AnnotatedTerm := ⟨.record (List.replicate 1000 ("a", .nat 0)), fun _ => none, {}⟩
+
+theorem wide_record_work : Obend.Elab.Work.nestingDepth wideRecord.term = 3 ∧ checkWork wideRecord = 1001 := by
+  constructor <;> decide +kernel
+
+/-- The grant now refuses the wide record where a depth of 3 would have admitted it. -/
+theorem wide_record_refused_at_depth_grant (A : Ty) : judge 3 [] wideRecord A = false := by
+  have : checkWork wideRecord = 1001 := wide_record_work.2
+  simp [judge, this]
 
 #tooth extend_filling_admitted by mutation judge := fun _ _ _ _ => false
 #tooth extend_filling_budget_refused by mutation judge := fun _ Ψ t A =>
@@ -233,23 +214,6 @@ def wronglyAnnotatedChecked : Checked wronglyAnnotated [] :=
     (.lambda (annotation := ⟨.natural, .natural, .unrestricted, .reusable⟩) (.bound (binding := ⟨.natural, .unrestricted⟩) rfl)
       (by decide) (by decide) (by decide))
     (.natural _ _) rfl rfl (by decide), rfl, rfl, rfl⟩
-
-/-- The historical annotation-directed checker also refuses these supplied annotations
-at every fuel; retaining its original pinned API does not add a judge route. -/
-theorem wronglyAnnotated_check_refused (fuel : Nat) : check wronglyAnnotated [] fuel = none := by
-  have mismatch : Obend.Core.Check.sameType {} .natural .boolean = false := by
-    equirec_reduce
-  cases fuel with
-  | zero => rfl
-  | succ fuel =>
-    cases fuel with
-    | zero => rfl
-    | succ fuel => cases fuel <;> simp [check, Obend.Core.Check.infer, wronglyAnnotated,
-      Obend.Core.Check.agree, mismatch, Obend.Core.Check.sameType_refl,
-      Obend.Core.Ty.Ty.canonical, Obend.Core.Ty.safeUses, Obend.Core.Ty.variableUses,
-      Obend.Core.Ty.validContext, Obend.Core.Check.reusableAllowed, Obend.Core.Ty.reusableCaptures,
-      Obend.Core.Ty.Ty.shareableUnder, Obend.Core.Ty.Ty.shareable, Obend.Core.Ty.safeQuantity,
-      Obend.Core.Check.callable, Obend.Core.Ty.zeroUses, Obend.Core.Ty.addUses]
 
 theorem wronglyAnnotated_judge_refused (grant : Nat) :
     judge grant [] wronglyAnnotated .natural = false := by
@@ -337,62 +301,9 @@ theorem msubst_var_open (σ : Nat → Option AnnotatedTerm) (x : Nat) (h : σ x 
 theorem uses_var (x : Nat) : Obend.Slot.Calculus.uses (var x) x = true := by
   simp [Obend.Slot.Calculus.uses, var, freeIn, Obend.Core.Traverse.Tree.uses, Obend.Core.Traverse.Tree.all, Obend.Core.TermTraverse.encode]
 
-/- Historical annotation-directed budget and substitution API. These laws refer
-only to `gradedCheck`/`Check.check`, independently of the primary bidirectional judge. -/
-/-- Historical annotation-directed recognition at the fixed fuel, then exact type comparison. -/
-theorem calculus_check_iff (Ψ : Context) (t : AnnotatedTerm) (A : Ty) :
-    gradedCheck checkFuel Ψ t A = true ↔ ∃ c : Checked t Ψ, check t Ψ checkFuel = some c ∧ c.type = A := by
-  show (match check t Ψ checkFuel with
-    | some checked => decide (checked.type = A)
-    | none => false) = true ↔ _
-  cases h : check t Ψ checkFuel with
-  | none => simp
-  | some c =>
-    simp only [decide_eq_true_eq]
-    constructor
-    · intro hc; exact ⟨c, rfl, hc⟩
-    · rintro ⟨c', hc', hA⟩; cases hc'; exact hA
-
-/-- **The historical annotation-directed substitution law.** A template passing `gradedCheck` at `A`, with every filling
-closed, sharing the template's assumptions, and passing `gradedCheck` at the type `Ψ` declares for its
-hypothesis, gives a filled term that `check` accepts at `A` with twice the historical checker's fuel (the
-template's budget plus a filling's: `fuel_tooth` is why the fuel adds). -/
-theorem calculus_check_msubst (Ψ : Context) (t : AnnotatedTerm) (A : Ty) (σ : Nat → Option AnnotatedTerm)
-    (ht : gradedCheck checkFuel Ψ t A = true)
-    (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
-      ∃ b : Binding, Ψ[x]? = some b ∧ gradedCheck checkFuel Ψ f b.type = true) :
-    ∃ c : Checked (msubst σ t) Ψ, check (msubst σ t) Ψ (2 * checkFuel) = some c ∧ c.type = A := by
-  obtain ⟨c, hc, hA⟩ := (calculus_check_iff Ψ t A).1 ht
-  obtain ⟨c', hc', hty, -⟩ := check_msubst σ hc (fun x f hx => by
-    obtain ⟨closed, hfa, b, hb, hf⟩ := hσ x f hx
-    obtain ⟨d, hd, hdt⟩ := (calculus_check_iff Ψ f b.type).1 hf
-    have e : { f with assumptions := t.assumptions } = f := by rw [← hfa]
-    refine ⟨closed, b, ?_⟩
-    rw [e]
-    exact ⟨d, hb, hd, hdt⟩)
-  refine ⟨c', ?_, hty.trans hA⟩
-  fuel_lift hc' using check_mono
-
-/-- The law at the historical checker's own fuel: when the template checks at fuel `n` and every filling at fuel
-`m` with `n + m ≤ checkFuel`, the filled term passes `gradedCheck`. Fuel is the one corner where the law
-is conditional; the premise is the budget. -/
-theorem calculus_check_msubst_within (Ψ : Context) (t : AnnotatedTerm) (A : Ty) (σ : Nat → Option AnnotatedTerm)
-    (n m : Nat) (budget : n + m ≤ checkFuel) (c : Checked t Ψ) (ht : check t Ψ n = some c) (hA : c.type = A)
-    (hσ : ∀ x f, σ x = some f → Scoped 0 f.term ∧ f.assumptions = t.assumptions ∧
-      ∃ (b : Binding) (d : Checked f Ψ), Ψ[x]? = some b ∧ check f Ψ m = some d ∧ d.type = b.type) :
-    gradedCheck checkFuel Ψ (msubst σ t) A = true := by
-  obtain ⟨c', hc', hty, -⟩ := check_msubst σ ht (fun x f hx => by
-    obtain ⟨closed, hfa, b, d, hb, hd, hdt⟩ := hσ x f hx
-    have e : { f with assumptions := t.assumptions } = f := by rw [← hfa]
-    refine ⟨closed, b, ?_⟩
-    rw [e]
-    exact ⟨d, hb, hd, hdt⟩)
-  refine (calculus_check_iff Ψ _ A).2 ⟨c', ?_, hty.trans hA⟩
-  fuel_lift hc' using check_mono
-
-#assert_axioms gradedCheck_iff calculus_check_iff calculus_check_msubst calculus_check_msubst_within
-  judge_iff reannotates_typed typed_iff_preparable_at_depth extend_filling_admitted extend_filling_decided
-  extend_filling_budget_refused wronglyAnnotated_check_refused wronglyAnnotated_judge_refused annotation_presence_not_coverage calculus_typed_msubst annotationsAt_root msubst_var_filled
+#assert_axioms judge_iff reannotates_typed typed_iff_preparable_within_work extend_filling_admitted
+  extend_filling_decided extend_filling_budget_refused wide_record_work wide_record_refused_at_depth_grant
+  wronglyAnnotated_judge_refused annotation_presence_not_coverage calculus_typed_msubst annotationsAt_root msubst_var_filled
   msubst_var_open uses_var
 
 end Obend.Slot.Core4
