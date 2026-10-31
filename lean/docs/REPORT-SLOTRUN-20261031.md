@@ -51,3 +51,37 @@ report records); fixture teeth stand in.
 Selection control is mandatory for every runner hole: the bare `chooseEvent`/`resolveEvent` entry
 points retire, every decision is authenticated, revisioned and tenured. Reversal: one refusal in
 `crun` and the negotiation fixtures back off descriptors.
+
+## Follow-up (commits `f10d1e7`, `ccb6501`, `c32af5d`; 241 jobs green, 110 teeth, cohorts unchanged)
+
+**Mandatory control.** Every hole has a slot, a descriptor and candidate bodies; every raw replan is
+refused; `resolveEvent`, `resolveEventBy`, `chooseEvent` retired (`advance_installs`,
+`incumbentFirst_law`, `choose_accepted` replace their theorems); `clost_reply_frozen` is the
+lost-reply theorem over controlled events; the negotiation fixtures run on a descriptor.
+
+**The audited fold** (`Obend/Fold.lean`): `Admission` with laws `keeps_world`, `step_of_reads`,
+`observe_ok`; proved once: `receipt_sufficient`, `step_of_pins`, `Family.step` (interleaved members
+sharing the world component), `project_run` (each member's own fold, under a per-row rely–guarantee
+condition). Instances: `Legal` (`Run/Fold.lean`: `legal_iff_fold` both ways; `DecisionsHeld` is
+per-row through the accumulator's `entered`) and the law judge (`Law/Fold.lean`, world `Unit`,
+rows read nothing).
+
+**The shared-World layer** (`Run/Shared.lean`): `Ledger` is the authoritative record with commit
+laws as fields (consumption and grant recorded atomically; raw-world moves leave both); any number
+of runners share it; dispatch syncs the runner's view to the ledger, lets the runner judge, commits,
+propagates to every runner, then exposes. Proved: `joint_reachable_projects_legal`,
+`joint_reachable_ticket_exclusive`, `joint_once` (global `OnceSpent`), `joint_coupled`,
+`loser_refused_names_winner_and_epoch`. First instance: two buyers over one capability
+(`local_legal_does_not_imply_global_once`, `alice_wins`, `bob_wins`, `lost_reply_receipt` with a
+revived live flag and an abandonment). The three mutation teeth bite at fixtures: shared mask
+removed gives a second grant; abandonment erasing consumption is rejected; omitted propagation is
+rejected. The pass criterion held: once-spending is derived, not assumed; the wrapper instantiates
+the runner; dispatch views are the shared view.
+
+**Not covered.** Projection comes from each runner's own reachability, not from `project_run`
+applied (the ledger's commit is the wrapper's update, not a member row; making the ledger a fold
+member is designed, not done). Durability is a separate law (`Ledger.Durable`) rather than a
+structure field, so that an erasing ledger can be stated as a tooth. All runners share one
+signature. A token's liveness is the host's reading, not a pin. `#tooth` cannot attach to the
+general theorems (compiler-generated match splitters); teeth sit at fixtures. No durable-commit or
+network refinement. A re-base is still not proved never refused.
