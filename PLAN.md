@@ -40,7 +40,7 @@ the build is the check. One stranger-usable artifact stays ahead of every platfo
 
 1. Close the linear soundness holes and the receipt forgery (Sound lane, in progress).
 2. **Done** (`REPORT-ONECHECKER-20261101.md`, `1e039ff..da7af0b`): `Check.infer` deleted; `checkAgainst` is the one checker; every fuel-checker theorem has a bidirectional counterpart or is named as retired with its deleted subject; a checker edit rebuilds 52 modules (was 112); the twenty-module gate stays open because Lean 4.35 writes `elaborate._unsafe_rec` into the `.olean`.
-3. In progress (Demand lane): the two-stage demand semantics for knots, the tick bound in its true form, a demand derivation as a cost certificate.
+3. **Done in substance** (`REPORT-DEMAND-20261101.md`, `c124e04..3d66a29`): the two-stage rule (template once, field waves, each field paid in its first wave); Xia's Thms 3.8/3.9 (`demand` total and computable, `demand_is_least`) on the literal-and-`self.m` fragment; `self_field_no_cv` and `ticks_not_within_cv` retired; `measured_within` (1× to 4× ticks on the measured programs); the improvement judge flat factor 8 per round and one-directional; a demand run as a checkable `cost t ≤ k` certificate. Open: the general tick theorem (`TicksWithinDemand`, needs a cost-indexed `Completeness`); layered objects through the rule (via `flatten_sound`, decided).
 4. Strip blanket `@[expose]` from Core first (Expose lane, in progress).
 5. The integration scenario at the end of this file as a compiled theorem before WS 5–10.
 

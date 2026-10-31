@@ -51,6 +51,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | An impact receipt names the world's root (digest of `.obend/world.json` or of the workspace's records and releases), so `obend verify --world` re-exports the question and refuses a receipt whose table is not the world's; the same move as chaining the view roots (C3) | taken by Claude under standing approval, 2026-11-01; queued with the C3 chaining work | `REPORT-IMPACT-20261101.md` |
 
+| The cost semantics' `fix` stage passes a raw record as `super` (Demand lane's option (a)), not elaborator flattening: the Leaf lane's `flatten_sound` already proves flattening is `≈b`-sound, so the cost of a layered object can be stated through its flattening without changing the elaborator or the semantics; the Demand lane generalizes `Sim`'s settled-substitution rule where needed. Layered objects get derivations through `flatten`; option (b) is refused because the elaborator's output is what Logic and Leaf prove about. | taken by Claude under standing approval, 2026-11-01 | `REPORT-DEMAND-20261101.md`, `REPORT-LEAF-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
