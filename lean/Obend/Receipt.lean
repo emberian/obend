@@ -300,25 +300,27 @@ theorem receipt_sufficient (A : Admission W Rest Row Fact Clause) (N : Naming W 
   rw [h]
   cases A.step a r <;> exact ⟨rfl, rfl⟩
 
-/-- What a stranger runs: the pre root of the rest it was handed; the openings COVER the row's reads
+/-- What a stranger runs: the receipt names the row being replayed (`N.rowDigest r = R.row`, so a
+receipt is never replayed against another row); the pre root of the rest it was handed; the openings COVER the row's reads
 at its world, in order (`R.openings.map Prod.fst = A.reads (w', rest) r`), so a producer cannot omit a
 read it would rather not show; each opening is what its world says; the verdict and the post root
 recomputed. -/
 def recheck [DecidableEq Clause] [DecidableEq Fact] (A : Admission W Rest Row Fact Clause)
     (N : Naming W Rest Row Fact Cell Pin)
     (rest : Rest) (r : Row) (w' : W) (R : Receipt Cell Pin Fact Clause) : Bool :=
-  N.root rest == R.pre && R.openings.map Prod.fst == A.reads (w', rest) r &&
+  N.rowDigest r == R.row && N.root rest == R.pre && R.openings.map Prod.fst == A.reads (w', rest) r &&
     R.openings.all (fun o => A.look w' o.1 == o.2) &&
     Outcome.ofExcept (A.step (w', rest) r) == R.verdict && postOf A N (w', rest) r == R.post
 
-/-- What `recheck` establishes: the row, judged at the stranger's world over the handed rest, has
-the receipt's verdict and post root, and the receipt opens exactly what the row reads there. -/
+/-- What `recheck` establishes: the receipt names the row replayed and the rest handed, and the row,
+judged at the stranger's world over that rest, has the receipt's verdict and post root. -/
 theorem recheck_sound [DecidableEq Clause] [DecidableEq Fact] {A : Admission W Rest Row Fact Clause}
     {N : Naming W Rest Row Fact Cell Pin}
     {rest : Rest} {r : Row} {w' : W} {R : Receipt Cell Pin Fact Clause} (h : recheck A N rest r w' R = true) :
-    N.root rest = R.pre ∧ Outcome.ofExcept (A.step (w', rest) r) = R.verdict ∧ postOf A N (w', rest) r = R.post := by
+    N.rowDigest r = R.row ∧ N.root rest = R.pre ∧ Outcome.ofExcept (A.step (w', rest) r) = R.verdict ∧
+      postOf A N (w', rest) r = R.post := by
   simp only [recheck, Bool.and_eq_true, beq_iff_eq] at h
-  exact ⟨h.1.1.1.1, h.1.2, h.2⟩
+  exact ⟨h.1.1.1.1.1, h.1.1.1.1.2, h.1.2, h.2⟩
 
 /-- The coverage and the openings `recheck` establishes. -/
 theorem recheck_covers [DecidableEq Clause] [DecidableEq Fact] {A : Admission W Rest Row Fact Clause}
@@ -338,7 +340,7 @@ theorem recheck_issued [DecidableEq Clause] [DecidableEq Fact] (A : Admission W 
     recheck A N a.2 r w' (issue A N a r q t p) = true := by
   obtain ⟨hv, hp⟩ := receipt_sufficient A N a r hm w' hw
   simp only [recheck, Bool.and_eq_true, beq_iff_eq, List.all_eq_true]
-  refine ⟨⟨⟨⟨rfl, ?_⟩, fun o ho => hw o ho⟩, hv⟩, hp⟩
+  refine ⟨⟨⟨⟨⟨rfl, rfl⟩, ?_⟩, fun o ho => hw o ho⟩, hv⟩, hp⟩
   simp [issue, Admission.openings, hr, Function.comp_def]
 
 /-- At the issuing world the stranger accepts the honest receipt with no further premise. -/
@@ -462,7 +464,7 @@ theorem dated_sound [DecidableEq Clause] [DecidableEq Fact] [BEq Key] [LawfulBEq
     (Outcome.ofExcept (A.step (w, rest) r) = R.verdict ∧ postOf A N (w, rest) r = R.post) ∨ Collision H := by
   rcases openings_checked hb D hco w R hd hc hmt with ho | c
   · left
-    obtain ⟨_, hv, hp⟩ := recheck_sound hr
+    obtain ⟨_, _, hv, hp⟩ := recheck_sound hr
     obtain ⟨hcov, hw'⟩ := recheck_covers hr
     have agree : ∀ f ∈ A.reads (w', rest) r, A.look (w', rest).1 f = A.look w f := by
       intro f hf

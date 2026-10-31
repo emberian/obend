@@ -278,6 +278,27 @@ theorem kind_law_inherited {es : List Entry} {name : String} {G : Graph} {laws :
   intro kk hkk e he kl hkl x hx
   exact judge_admits hj (x.1, x.2.1) (List.mem_map.2 ⟨x, lawsFor_kinds hl kk hkk e he kl hkl x hx, rfl⟩)
 
+/-- **A write keeps the page's laws** when its law lines and the kind it names are as they were. The
+kind line is compared, not only the law lines: retargeting `kind:` changes the kind chain
+(`kindChain`), and so the laws a page is judged by (Kimi's review, 2026-11-01). -/
+def lawsKept (old new : String) : Bool :=
+  lawLines old == lawLines new && kindLine old == kindLine new
+
+/-- A page's laws read its source only through its law lines and its kind line. -/
+theorem lawsFor_of_kept (es : List Entry) (name : String) {G G' : Graph}
+    (h : lawsKept (settled G) (settled G') = true) : lawsFor es name G = lawsFor es name G' := by
+  simp only [lawsKept, Bool.and_eq_true, beq_iff_eq] at h
+  simp only [lawsFor, lawsIn, kindChain, h.1, h.2]
+
+/-- Kept laws keep the kind chain. -/
+theorem kindChain_of_kept (name : String) {old new : String} (h : lawsKept old new = true) :
+    kindChain name old = kindChain name new := by
+  simp only [lawsKept, Bool.and_eq_true, beq_iff_eq] at h
+  simp only [kindChain, h.2]
+
+-- Comparing the law lines alone lets a write retarget its kind and be judged by the old kind's laws.
+#tooth lawsFor_of_kept by mutation lawsKept := fun old new => lawLines old == lawLines new
+
 /-- What a write leaves of a page. -/
 structure Change where
   history : List Graph
@@ -304,8 +325,10 @@ def refusalText (pageName : String) (laws : List (String × LawExpr × String)) 
   | none => "refused by " ++ who ++ ": " ++ reason
 
 /-- **Commit a write**: judge the new version `G'` of page `p` by its laws, and on admission append
-it. A change of a law line is the owner's, or a member's granted `relaw`; it is judged as the
-adoption of the new laws over the page as written. A birth is judged as a first write. -/
+it. A change of a law line or of the kind the page names is the owner's, or a member's granted
+`relaw`; it is judged as the adoption of the new laws over the page as written. Otherwise the laws
+are kept (`lawsKept`), and the new laws are the old ones (`lawsFor_of_kept`). A birth is judged as
+a first write. -/
 def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
     (turn : Nat) : Except String Change := do
   let authors := p.authors ++ added
@@ -315,10 +338,9 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   let (occ, laws, oldMs) ← match p.current with
     | none => pure (Occ.birth, newLaws, [])
     | some G =>
-      let oldLaws ← lawsFor es p.name G
-      if lawLines (settled G) == lawLines (settled G') then pure (Occ.write, oldLaws, measures G (v - 1))
+      if lawsKept (settled G) (settled G') then pure (Occ.write, newLaws, measures G (v - 1))
       else if who.may "relaw" p.name then pure (Occ.adopt, newLaws, measures G (v - 1))
-      else throw ("refused: changing a law line is the owner's (" ++ who.name ++
+      else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
   let newMs := measures G' v
   let lin := laws.map fun (n, e, _) => (n, e)
@@ -334,6 +356,20 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
     throw (refusalText p.name laws law reason facts (occ.old o n) n
       ((scalarFields (settled G')).map (·.1)))
   | .undecided why => throw ("undecided: " ++ why)
+
+/-- **Retargeting the kind needs the grant**: a write that changes the kind a page names, by an actor
+without `relaw` on the page, is refused, whatever its law lines. -/
+theorem commit_kind_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (added : List (AtomId × String))
+    (who : Actor) (turn : Nat) (hc : p.current = some G) (hk : kindLine (settled G) ≠ kindLine (settled G'))
+    (hw : who.may "relaw" p.name = false) : ∃ msg, commit es p G' added who turn = .error msg := by
+  have hkept : lawsKept (settled G) (settled G') = false := by
+    simp [lawsKept, hk]
+  unfold commit
+  cases lawsFor es p.name G' with
+  | error m => exact ⟨m, rfl⟩
+  | ok newLaws =>
+    simp only [bind, Except.bind, hc, hkept, hw, Bool.false_eq_true, if_false]
+    exact ⟨_, rfl⟩
 
 /-! ## Open -/
 
@@ -789,16 +825,38 @@ def postAs (H : Hash) (s : Store) (who : Actor) (page text : String) : Except St
   let added := b.added.map fun a => (a, if b.asIs.contains a then "as it is" else who.name)
   s.write p (G.apply b.ops) added who
 
+/-- Section `k`, counted from 1: there is no section 0 (it would alias section 1). -/
+def sectionAt (G : Graph) (k : Nat) : Option (List (AtomId × List Segment)) :=
+  if 1 ≤ k then (sections G)[k - 1]? else none
+
+theorem sectionAt_zero (G : Graph) : sectionAt G 0 = none := rfl
+
 /-- **Select** candidate `i` (from 1) of section `k` (from 1) of a page. -/
 def selectIn (s : Store) (who : Actor) (page : String) (k i : Nat) : Except String Store := do
   let some p := s.page? page | throw ("no page named " ++ page)
   unless who.may "select" page do
     throw (who.name ++ " may post to " ++ page ++ " but not select on it (no select grant)")
   let some G := p.current | throw (page ++ " has no version yet")
-  let some alts := (sections G)[k - 1]? | throw (page ++ " has no section " ++ toString k)
+  let some alts := sectionAt G k | throw (page ++ " has no section " ++ toString k)
   unless 1 ≤ i && i ≤ alts.length do
     throw ("section " ++ toString k ++ " of " ++ page ++ " has " ++ toString alts.length ++ " candidates")
   s.write p (G.apply (selectPatch alts (i - 1))) [] who
+
+/-- **There is no section 0**: selecting in it is refused, whatever the page. -/
+theorem select_section_zero_refused (s : Store) (who : Actor) (page : String) (i : Nat) :
+    ∃ msg, selectIn s who page 0 i = .error msg := by
+  unfold selectIn
+  cases s.page? page with
+  | none => exact ⟨_, rfl⟩
+  | some p =>
+    simp only
+    split
+    · cases p.current with
+      | none => exact ⟨_, rfl⟩
+      | some G => exact ⟨_, rfl⟩
+    · exact ⟨_, rfl⟩
+
+#tooth select_section_zero_refused by mutation sectionAt := fun G k => (sections G)[k - 1]?
 
 /-- **A selection keeps its candidate**: every run the kept candidate shows is as it was. -/
 theorem select_keeps (G : Graph) (alts : List (AtomId × List Segment)) (i : Nat) {a : AtomId}

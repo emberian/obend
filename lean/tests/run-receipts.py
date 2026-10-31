@@ -15,9 +15,10 @@
     against the dated root: a pin whose clock moved (the verdict unchanged), a moved root, and an
     opening with a proof re-valued to match it.
   * forgeries (lane Sound): a receipt that omits the capability opening and its proof, one with an
-    empty support list, one issued at a view with the clock moved (Astra's probe), and one whose
-    quantifier is relabelled are each refused by name. A world-transition is verified against an
-    expected root the verifier holds (`--root`), here the root of the run's view (`ROOT`).
+    empty support list, one issued at a view with the clock moved (Astra's probe), one whose
+    quantifier is relabelled, and one replayed against another row are each refused by name. A
+    world-transition is verified against an expected root the verifier holds (`--root`), here the
+    root of the run's view (`ROOT`).
 
 usage: python3 tests/run-receipts.py [OBEND_BINARY]      (from lean/, after `lake build obend`)
 exit 0 when every check holds, 1 otherwise; a summary line last.
@@ -182,6 +183,11 @@ with tempfile.TemporaryDirectory() as d:
     check("it verifies only relative to its own root", rc == 0 and own != ROOT, out)
     rc, out = obend("verify", neg, "--prev", ident)
     check("a world-transition without an expected root is refused", rc == 3 and "root: no expected root" in out, out)
+
+    def other_row(r):
+        # the receipt replayed against another row: the commitment to p1 instead of p2
+        r["disclosure"]["rowData"] = {"dispatch": "commit p1"}
+    tamper("a receipt replayed against another row is refused", other_row, "row: the disclosed row is not the receipt's")
 
     def spend(r):
         r["disclosure"]["rest"]["spent"] = ["cap"]
