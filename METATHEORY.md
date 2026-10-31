@@ -1,4 +1,7 @@
-# The mechanized metatheory: what finished looks like, and the compositional shape
+# The mechanized metatheory: what is proved, what remains, and the tools
+
+Revised 2026-11-01. §1 (the meaning/procedure/budget split) and §6 (checker alignment) are landed and
+kept as the record of why; §2 is the live table; §3 and §4 are the extension and tactic disciplines.
 
 Draft 1, 2026-10-30, after lanes A and B. Companion to `DESIGN.md` and `SHIP.md`. Ember's ask:
 "a kickass mechanized metatheory for this whole thing and hook up custom tactics, program
@@ -34,21 +37,23 @@ the substitution law on `Typed`) and `Decides R` (the graded procedure with soun
 and completeness-at-some-grade under an explicit coverage premise). The slot's theorems quantify over `Typed`; admission quantifies
 over the grade the world granted. Nothing about fuel appears in a statement about meaning again.
 
-## 2. The remaining theorems, and the tool each wants
+## 2. The remaining theorems, and the tool each wants (revised 2026-11-01)
 
-| theorem | tool | reference | why that tool |
-|---|---|---|---|
-| `mix` associative up to `≈b`; `≈b` itself | a step-indexed logical relation over the lazy heap, in **Iris-Lean** | Moran–Sands, *Improvement in a lazy context* (1999); Hackett–Hutton, *Call-by-need is clairvoyant call-by-value* (2019); Iris-Lean core ported, adequacy layer in progress (arXiv 2609.24252, PR #394) | the demand machine has update frames, blackholes and cyclic heaps; the Representation docstring already says "cyclic heaps require a graph logical relation"; Iris's later modality is the standard way to hide the step arithmetic, and improvement theory is the cost-sensitive equivalence we want, since `≈b` on completed runs is too weak for a resource-priced world |
-| surface semantics (LT3), C4 ordered-presentation invariance | the lowering as the definition, proofs by induction on the AST; **proof by reflection** (`decide`) for C4 and the contract algebra | `OBJECTIVE-BEND-FRONTEND.md`; fareoo `ltuo-objective-bend` §5 | finite combinatorics; the 4000 seeded vectors become one decidable statement |
-| bounded completeness; `prototype` provenance | ordinary induction over `Steps`/`MachineSteps` | `OBJECTIVE-BEND.md` §Open | nothing new |
-| Law inheritance (`effective_law_eval`, `inherited_never_widens`, `c3_tree_is_chain`), `keeps` | ports of nano's and the Faré audit's statements over Core4 laws | nano LANG-20/92; `AUDIT.md` §1 | well-specified already |
-| B4/B4′ at a real kernel | the `World` class lane A built, instantiated by minidregg's and nano's histories | DESIGN-CTX §2.4 | the class exists; the instances are the trees' own theorems (`receive_congr`, `stale_behind_forever`, `ObjectHistory`) |
-| Leaf refinement: a Core4 run equals BendTT's `Eval` of the emitted book | **interaction-tree simulation** (Core4's `Interaction` is already itree-shaped) against `bendtt.lean`'s big-step `Eval`; **Pyrosome** for the modular compilation structure | Xia et al., *Interaction Trees* (2020); *Pyrosome: Verified Compilation for Modular Metatheory* (2025); `bendtt.lean` (4043 lines, Lean 4.34) | the one theorem that needs another tree's semantics; forces the toolchain decision (4.30 → 4.34, or vendor BendTT) |
-| Doc: pushout universal property for the patch representation | definitions, then one universal-property proof | Mimram–Di Giusto (2013) | new but small |
-
-Iris-Lean is called for in exactly one row, the first, and it is the row that gives the thesis its
-teeth: it is where "laziness is a semantic choice" becomes a proved cost-sensitive equivalence over
-a shared heap rather than a slogan. It is not called for in Core typing, Spec, Law or Slot.
+| theorem | status | tool |
+|---|---|---|
+| `mix_assoc` under `≈b` (completed-run equality) | PROVED, `Obend/Equiv` (needed `Ahead`, reduction under binders; the "few β steps" premise was false) | parallel reduction, determinism |
+| `≈c`: cost equivalence with explicit constants; ticks within a constant of clairvoyant call-by-value cost | OPEN; `review/EQUIV-PLAN-20261031.md` definition 2; `mix_assoc` differs by at most 7 ticks on the machine | Hackett–Hutton over Core4's binding sites; no heap |
+| the heap-indexed relation (sharing identity, effects under update frames, space) | OPEN; Iris-Lean is usable from this tree (4.35, modules, adequacy landed) but has no binary logic or time credits | Iris-Lean, only when a statement needs it |
+| source-to-machine completeness of the demand machine (`Representation`) | PARTLY: `coreRepresentation` inhabited for closed sources (`Core/Proofs/Completeness`); administrative progress open | induction over `Chain` |
+| checker completeness | PROVED on the stated fragment (`complete`), full annotated completeness (`full_annotated`), executable preparation on the alias-free fragment (`prepare_checks`) | bidirectional checker, finite bisimulation |
+| law inheritance, `keeps`, machine-judges-relation | PROVED (`package_never_widens`, `judgeEffective_names`, `chain_keeps`, `judge_sound`/`judge_complete`, `legal_law_admitted`) | Core4 terms, machine probe |
+| C4 `linearize` correct on general graphs | OPEN; proved on trees (`c3_tree_is_chain`), checked elsewhere (`precedence`, refused `unordered`) | structural rewrite of `linearize`, then monotonicity and local precedence proved |
+| B4/B4′: `Integrity.contextual`, `repair_sound`, `incumbentTransition` | PROVED over every `World`; `repair_of_contextual` shows B4′ was a corollary | the slot calculus |
+| shared-World exclusion | PROVED (`joint_reachable_ticket_exclusive`, `joint_once`, `loser_refused_names_winner_and_epoch`); projection by each runner's reachability, not yet the generic `project_run` | the audited fold |
+| Doc pushout universal property | PROVED (`merge_isPushout`, `pushout_unique`, `no_cocone`, `files_no_pushout`) | thin category, join |
+| leaf refinement: a Core4 run equals BendTT's `Eval` of the emitted book | OPEN; toolchain decision (BendTT at 4.34) pending | interaction-tree simulation through the runner's adapter |
+| `quote`: observer ladder, `rewrite_sound_below`, erasure and preservation | OPEN; gated on `review/QUOTE-ORIENTATION-20261101.md` | typed represented syntax first; CMTT substitution; two-level staging results |
+| judgment class soundness per format; one foreign certificate format | IN PROGRESS (Judge lane) | `Decides` generalized; LRAT or PBLean |
 
 ## 3. The extension problem, and what keeps it from being a rewrite
 
@@ -79,26 +84,9 @@ Every `cases`/`induction` over `Term` (24 constructors) gains a case when CARD 9
 - `grind` configurations per module (`Core.Proofs.Preservation`, `Collect`) for the arithmetic and
   row lemmas; Aesop as a Mathlib-free dependency only if `grind` falls short.
 
-## 5. Order (revised 2026-10-31)
+## 5. Order
 
-1. Landed: meaning/procedure/budget split; generic traversal; `obend_cases`, `fuel_lift`, `#tooth`
-   in use; the hole exercise under the journal (`astra/ASTRA-IMPL-REPORT-20261030.md`).
-2. Landed: `Obend.Spec` (lane C); `Obend.Law` with inheritance and the compiled fragment;
-   `Obend.Doc`; `Obend.Slot.World`/`Integrity` with `repair_of_contextual` and the stored-selection
-   transition replacing B4′; `Slot/Repair` with the compatibility condition.
-3. Landed: checker alignment (§6): `sameType` an equi-recursive equivalence by finite bisimulation,
-   the bidirectional checker with `complete` on its fragment, full annotated completeness
-   (`REPORT-EQUIREC-20261031.md`), executable preparation on the alias-free fragment (`REPORT-ELAB-20261031.md`).
-4. Landed: the guarded runner and `refines` (`REPORT-RUNNER-20261031.md`), Astra's contribution
-   theorem, with the Core4 adapter. Open there: the reference-tree statement, response typing,
-   holes in emitted plans, decision authority beyond the hole's chooser.
-5. Next: the template elaborator by Simple-sub over Core4 heads with coercions emitted
-   (`review/ALGEBRAIC-SUBTYPING-20261031.md` §3–§4), now that preparation and coercions exist.
-6. `≈b` via Iris-Lean as its own lane; Leaf refinement against `bendtt.lean` through the runner's
-   adapter.
-7. Refused after experiment: the single semiring of justifications as the slot's construction
-   (`REPORT-JUST-20261031.md` §3: no shorter proofs against a control); kept as provenance of
-   eligibility for explanations.
+The order is kept in `PLAN.md`.
 
 ## 6. Checker alignment (added 2026-10-30, after Gemini Argon's analysis)
 

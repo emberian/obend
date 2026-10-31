@@ -1,4 +1,7 @@
-# Grounding: where "Objective Bend" has been explored, and what each exploration learned
+# Grounding: where "Objective Bend" was explored before this library, and what each exploration learned
+
+Historical (written 2026-10-29). The library has since surpassed the trees it was extracted from; this
+file is kept as the record of where each idea came from.
 
 Written 2026-10-29 by Claude (Fable 5.1) after reading the source trees directly. Every claim
 names the file it came from. Dates are the files' own. Nothing here was built or run.
