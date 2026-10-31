@@ -223,7 +223,7 @@ theorem callable_value_form {types : AddressTypes} {value : RuntimeValue}
   | specification metadata extension => exact Or.inr (specification_value_form typed)
   | _ => simp [callable] at callableEq
 
-theorem closure_callable_type {functionType : Ty}
+public theorem closure_callable_type {functionType : Ty}
     {reuse actualReuse : Reuse} {quantity actualQuantity : Quantity}
     {domain codomain actualDomain actualCodomain : Ty}
     (related : TypeGraph.Equivalent assumptions (.arrow actualReuse actualQuantity actualDomain actualCodomain) functionType)
