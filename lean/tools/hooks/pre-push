@@ -1,0 +1,5 @@
+#!/bin/sh
+# Tier 2 before a push: the teeth and the axiom census (lean/README.md, "Build").
+# Install once per clone: git config core.hooksPath lean/tools/hooks
+cd "$(git rev-parse --show-toplevel)/lean" || exit 1
+LEAN_NUM_THREADS=2 lake build Obend.Census Teeth

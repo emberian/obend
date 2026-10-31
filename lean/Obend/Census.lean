@@ -7,14 +7,16 @@ a declared axiom. The compiled trust (`native_decide`'s `…._native…` axioms)
 reported in the verdict line, not refused; each such theorem carries its own `#assert_compiled`.
 
 This file is deliberately not a `module`. A `module` may import only modules, so it could not
-see the legacy leaves (`Core/Teeth/*`, `Core/Proofs/DataBudget`, …), and it sees an imported
+see the legacy leaves (`Teeth/Core/*`, `Teeth/Law/*`, …), and it sees an imported
 theorem whose body is not exposed only as an axiom, which the census would refuse; `import all`
 fixes the second and not the first. A plain file imports every module with its private part.
-`Obend.lean` does not import this file; `lake build` builds it with the rest of the `Obend` glob.
+`Obend.lean` does not import this file. It is tier 2 with the teeth: `lake build Obend.Census Teeth`
+(`lakefile.toml`), run before a push; `lake build` does not build it.
 
-The first command refuses a file under `Obend/` that this list does not import. It runs when this
-file is rebuilt, that is, when anything it imports changes; a new leaf added alone is caught at the
-next such rebuild, not at its own.
+The first command refuses a file under `Obend/` that this list does not import, and a module outside
+`Obend/Teeth/` that the `Obend` library's globs in `lakefile.toml` do not name (`lake build` would
+skip it unless something imports it). It runs when this file is rebuilt, that is, when anything it
+imports changes; a new leaf added alone is caught at the next such rebuild, not at its own.
 -/
 import Obend
 import Obend.AssertAxioms
@@ -54,16 +56,13 @@ import Obend.Core.Packet
 import Obend.Core.Proofs.Adequacy
 import Obend.Core.Proofs.BidirectionalCompleteness
 import Obend.Core.Proofs.CheckCompletenessObstruction
-import Obend.Core.Proofs.CheckTeeth
 import Obend.Core.Proofs.CheckpointRoundTrip
 import Obend.Core.Proofs.Collect
 import Obend.Core.Proofs.Completeness
-import Obend.Core.Proofs.DataBudget
 import Obend.Core.Proofs.DataSoundness
 import Obend.Core.Proofs.DigestChecks
 import Obend.Core.Proofs.EquiRecursiveBoundary
 import Obend.Core.Proofs.EquiRecursiveSubstitution
-import Obend.Core.Proofs.EquiRecursiveTeeth
 import Obend.Core.Proofs.Force
 import Obend.Core.Proofs.Forcing.Agree
 import Obend.Core.Proofs.Forcing.Back
@@ -114,12 +113,6 @@ import Obend.Core.SubstitutionResidualTransport
 import Obend.Core.SubstitutionResourceCongruence
 import Obend.Core.SubstitutionRows
 import Obend.Core.SubstitutionStreamSteps
-import Obend.Core.Teeth.BackFail
-import Obend.Core.Teeth.Collect
-import Obend.Core.Teeth.CollectTyping
-import Obend.Core.Teeth.CollectYield
-import Obend.Core.Teeth.DataSoundness
-import Obend.Core.Teeth.Force
 import Obend.Core.TemplateDischarge
 import Obend.Core.Term
 import Obend.Core.TermTraverse
@@ -132,7 +125,6 @@ import Obend.Core.TypeGraphResource
 import Obend.Core.WeightedResource
 import Obend.Core.WeightedRowSafety
 import Obend.Digest.Class
-import Obend.Fold
 import Obend.Digest.Cshake256
 import Obend.Digest.Cshake256.Fast
 import Obend.Digest.Cshake256.Seam
@@ -161,6 +153,7 @@ import Obend.Equiv.FareTests
 import Obend.Equiv.Fields
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
+import Obend.Fold
 import Obend.Judge
 import Obend.Judge.Certified
 import Obend.Judge.Class
@@ -172,17 +165,14 @@ import Obend.Law
 import Obend.Law.Claim
 import Obend.Law.Fold
 import Obend.Law.Inherit
+import Obend.Law.Machine
 import Obend.Law.Proofs.Claim
 import Obend.Law.Proofs.Eval
-import Obend.Law.Machine
 import Obend.Law.Proofs.Inherit
-import Obend.Law.Proofs.LawJudgeTeeth
 import Obend.Law.Proofs.Machine
-import Obend.Law.Proofs.MachineTeeth
 import Obend.Law.Proofs.Run
 import Obend.Law.Proofs.Std
 import Obend.Law.Proofs.Typing
-import Obend.Law.Proofs.TypingTeeth
 import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
@@ -192,20 +182,20 @@ import Obend.Receipt.Cli
 import Obend.Receipt.Export
 import Obend.Receipt.Negotiation
 import Obend.Run
-import Obend.Run.Fold
 import Obend.Run.Adapter
 import Obend.Run.Control
 import Obend.Run.ControlExample
 import Obend.Run.Core4
 import Obend.Run.Core4Example
+import Obend.Run.Fold
 import Obend.Run.LawJudge
 import Obend.Run.Negotiation
 import Obend.Run.Proofs.Adapter
 import Obend.Run.Proofs.Control
 import Obend.Run.Proofs.Core4
 import Obend.Run.Proofs.Interpret
-import Obend.Run.Proofs.Shared
 import Obend.Run.Proofs.Invariant
+import Obend.Run.Proofs.Shared
 import Obend.Run.Runner
 import Obend.Run.Shared
 import Obend.Run.SharedExample
@@ -244,10 +234,8 @@ import Obend.Spec.Proofs.Ecosystem
 import Obend.Spec.Proofs.FrontEndAdequacy
 import Obend.Spec.Proofs.Law
 import Obend.Spec.Proofs.LawCompile
-import Obend.Spec.Proofs.LawCompileTeeth
 import Obend.Spec.Proofs.PackageLaw
 import Obend.Spec.Proofs.SpecificationClosure
-import Obend.Spec.Proofs.TermWire
 import Obend.Spec.Sha256
 import Obend.Spec.Syntax
 import Obend.Spec.Types
@@ -256,14 +244,28 @@ import Obend.Tactic.Cases
 import Obend.Tactic.Fuel
 import Obend.Tactic.MonadicReduction
 import Obend.Tactic.Tooth
-import Obend.Tactic.ToothChecks
+import Obend.Teeth.Core.BackFail
+import Obend.Teeth.Core.CheckTeeth
+import Obend.Teeth.Core.Collect
+import Obend.Teeth.Core.CollectTyping
+import Obend.Teeth.Core.CollectYield
+import Obend.Teeth.Core.DataBudget
+import Obend.Teeth.Core.DataSoundness
+import Obend.Teeth.Core.EquiRecursiveTeeth
+import Obend.Teeth.Core.Force
+import Obend.Teeth.Law.LawJudgeTeeth
+import Obend.Teeth.Law.MachineTeeth
+import Obend.Teeth.Law.TypingTeeth
+import Obend.Teeth.Spec.LawCompileTeeth
+import Obend.Teeth.Spec.TermWire
+import Obend.Teeth.Tactic.ToothChecks
+import Obend.Teeth.Vault
 import Obend.Vault
 import Obend.Vault.Cli
 import Obend.Vault.Json
 import Obend.Vault.Law
 import Obend.Vault.Page
 import Obend.Vault.Store
-import Obend.Vault.Teeth
 
 open Lean Elab Command in
 run_cmd do
@@ -279,5 +281,26 @@ run_cmd do
       missing := missing.push module
   unless missing.isEmpty do
     throwError "census: {missing.size} library modules are not imported here: {missing.toList}"
+  -- Tier 1 is the `Obend` library's `globs` array in `lakefile.toml`: `"M"` names one module, `"M.+"`
+  -- its submodules, `"M.*"` both. Read the array between `name = "Obend"` and the next table.
+  let lakefile ← IO.FS.readFile "lakefile.toml"
+  let some library := (lakefile.splitOn "name = \"Obend\"")[1]?
+    | throwError "census: no `Obend` library in lakefile.toml"
+  let library := (library.splitOn "[[")[0]!
+  let globs := ((library.splitOn "globs = [")[1]?.getD "").splitOn "]" |>.head!
+    |>.splitOn "," |>.map (·.trimAscii.toString) |>.filter (· != "")
+    |>.map (fun g => (g.drop 1).dropRight 1 |>.toString)
+  let base (g : String) : Name := (String.ofList (g.toList.take (g.length - 2))).toName
+  let tier1 (module : Name) : Bool := globs.any fun g =>
+    if g.endsWith ".+" then (base g).isPrefixOf module && base g != module
+    else if g.endsWith ".*" then (base g).isPrefixOf module
+    else g.toName == module
+  let mut unbuilt : Array Name := #[]
+  for file in sources do
+    let module := (file.withExtension "").components.foldl Name.str .anonymous
+    unless module == `Obend.Census || (`Obend.Teeth).isPrefixOf module || tier1 module do
+      unbuilt := unbuilt.push module
+  unless unbuilt.isEmpty do
+    throwError "census: {unbuilt.size} modules are in neither tier (add a glob to the `Obend` library in lakefile.toml): {unbuilt.toList}"
 
 #assert_axioms_tree

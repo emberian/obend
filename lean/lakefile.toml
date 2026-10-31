@@ -2,9 +2,24 @@ name = "obend"
 version = "0.0.1"
 defaultTargets = ["Obend"]
 
+# Two build tiers (2026-11-01). `lake build` builds tier 1, the library: every definition and proof
+# under `Obend/`. Tier 2 is the teeth (`Obend/Teeth/`: evaluation fixtures, mutation teeth, the legacy
+# leaves) and the axiom census (`Obend/Census.lean`); it is run before a push as
+# `lake build Obend.Census Teeth`. Nothing in tier 1 imports tier 2.
+# Lake globs cannot exclude, so tier 1 names each top-level module and directory of `Obend/` except
+# `Teeth` and `Census`; the census refuses a module under `Obend/` that neither tier builds.
 [[lean_lib]]
 name = "Obend"
-globs = ["Obend", "Obend.+"]
+globs = [
+  "Obend", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Fold", "Obend.Just", "Obend.Main",
+  "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Judge.*",
+  "Obend.Law.*", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
+  "Obend.Vault.*",
+]
+
+[[lean_lib]]
+name = "Teeth"
+globs = ["Obend.Teeth.+", "Obend.Census"]
 
 # Lane B (2026-10-30): the declaration-level obligation journal. `Journal.Export` walks the built
 # environment; `Journal.Journal` reads two exports as slots. The tool does not `needs` the `Obend`

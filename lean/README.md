@@ -1,14 +1,23 @@
 # `lean/` — the Objective Bend library
 
-**Toolchain.** Lean `v4.30.0`, Lake, no Mathlib, no Rust. Every file is a `module`, except the
-seven evaluation leaves named below.
+**Toolchain.** Lean `v4.35.0`, Lake, no Mathlib, no Rust. Every file is a `module`, except the
+legacy evaluation leaves under `Obend/Teeth/` and the census.
 
-**Build.** From this directory:
+**Build.** Two tiers, from this directory:
 
-    LEAN_NUM_THREADS=2 lake build 2>&1 | tee build.log
+    LEAN_NUM_THREADS=2 lake build 2>&1 | tee build.log          # tier 1: definitions and proofs
+    LEAN_NUM_THREADS=2 lake build Obend.Census Teeth            # tier 2: teeth and the census, before a push
 
-A no-op is half a second; a full rebuild about 80 s. `lake build obend` then
-`python3 tests/run-obend-source.py` runs the front end's conformance cohorts. The `Journal` library and `lake exe journal`
+Tier 1 is the `Obend` library: every definition and proof. Tier 2 is the `Teeth` library
+(`Obend/Teeth/`: the checker's `decide` fixtures, the `#tooth` mutation checks, the legacy evaluation
+leaves) and `Obend/Census.lean`, the axiom check over every constant. Nothing in tier 1 imports tier 2,
+so a tooth edit rebuilds one module and a proof edit never waits on a tooth. `tools/hooks/pre-push`
+runs tier 2; `git config core.hooksPath lean/tools/hooks` installs it. A new top-level module or
+directory under `Obend/` needs a glob in the `Obend` library (`lakefile.toml`); the census refuses one
+that neither tier builds.
+
+`lake build obend` then `python3 tests/run-obend-source.py` runs the front end's conformance cohorts,
+and `python3 tests/run-receipts.py` the receipt tests. The `Journal` library and `lake exe journal`
 (the obligation journal, `Journal/`, `tools/journal/`) build on demand.
 
 **Library map** (`Obend.lean` re-exports the definitional modules).
@@ -18,7 +27,9 @@ A no-op is half a second; a full rebuild about 80 s. `lake build obend` then
   `Checkpoint`, `Extensions`, `Interaction`, `Digest`, the executor typeclass `Backend`.
 - `Obend/Core/Proofs/` — the theorems about Core: `Adequacy`, `Completeness`, `Preservation.*`,
   `Forcing.*`, `Collect`, `Settle`, `Templates`, `DataSoundness`, `Substitution` (the substitution
-  lemma for `check`), `CheckTeeth` (the checker's `decide` fixtures), …
+  lemma for `check`), …
+- `Obend/Teeth/` — tier 2: `Core/CheckTeeth` (the checker's `decide` fixtures), the evaluation leaves,
+  the law and vault teeth, `Tactic/ToothChecks`.
 - `Obend/Digest/` — `HashBytes`, cSHAKE256 (`Spec`, `Fast`, `Seam`), the `Digest` typeclass.
 - `Obend/Slot/` — the slot (`Obend.Slot`), open protocols (`Protocol`), their proofs, the calculus
   typeclass (`Calculus`), Core4 as its instance (`Core4`), the abstract `World` and `Integrity`.
@@ -26,7 +37,7 @@ A no-op is half a second; a full rebuild about 80 s. `lake build obend` then
   `Law`, `Syntax`, `Parse`, `Types`, `Annotated`, `C4`, `Contract`, `Elaborate`, `Sha256`, `FrontEnd`
   (`lower`, `accept`), `DataWire`, `Identity`, `Capture`, `Preview`.
 - `Obend/Spec/Proofs/` — what is proved of its output: `Contract`, `C4Vectors`, `SpecificationClosure`,
-  `FrontEndAdequacy`, `Law`, and the legacy leaf `TermWire` (`decode_json`: it unfolds `Lean.Json`).
+  `FrontEndAdequacy`, `Law`; the legacy leaf `Teeth/Spec/TermWire` (`decode_json`: it unfolds `Lean.Json`).
 - `Obend/Main.lean` — `lake exe obend check|run FILE.obend …` (the shape of Mini's `run.ts`; `--package`
   for multi-module), Mini's `capture`/`preview`/`identity` commands, and `check-core`/`run-core` on
   typed-core JSON.
@@ -39,12 +50,12 @@ with selective `public`: a theorem is public only if another module cites it, an
 theorem's proof edit rebuilds nothing downstream. Imports are `public import` throughout, since a
 public statement may mention anything its module imports.
 
-**Census and teeth.** `Obend/Census.lean` (built by `lake build`) runs `#assert_axioms_tree`
+**Census and teeth.** `Obend/Census.lean` (tier 2) runs `#assert_axioms_tree`
 (`Obend/AssertAxioms.lean`) over every constant of the library, private ones included, and fails
 the build on `sorryAx` or a declared axiom; it counts the `native_decide` theorems separately, and
 each of those carries `#assert_compiled` (`Obend/AssertCompiled.lean`), which re-runs its claim
-through the compiled evaluator. There are no per-theorem axiom lists. Teeth that need `Array.map`/`String.toUTF8` reduced are the
-legacy (non-`module`) leaves `Obend/Core/Teeth/*.lean` and `Core/Proofs/DataBudget.lean`.
+through the compiled evaluator. There are no per-theorem axiom lists. Teeth that need `Array.map`/`String.toUTF8` reduced are
+legacy (non-`module`) leaves under `Obend/Teeth/`.
 
 **Records.** `docs/`: the dated reports, module graphs, the one measurement. `tools/`: the split
 scripts (`modularize.py`, `publicize.py`), `modgraph.py`, `measure.sh`.

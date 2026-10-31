@@ -1,7 +1,7 @@
 module
 -- The public face of the Objective Bend library: the definitional modules, re-exported. The proofs
--- (Obend.Core.Proofs.*, Obend.Slot.Proofs.*) and the legacy evaluation teeth (Obend.Core.Teeth.*,
--- Obend.Core.Proofs.DataBudget) are built by `lake build Obend` too, but nothing imports them.
+-- (Obend.Core.Proofs.*, Obend.Slot.Proofs.*, …) are built by `lake build` too, but nothing imports
+-- them; the teeth (Obend.Teeth.*) and the census are tier 2, `lake build Obend.Census Teeth`.
 public import Obend.Core.Graded
 public import Obend.Core.Term
 public import Obend.Core.Ty
