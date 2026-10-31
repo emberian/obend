@@ -71,6 +71,7 @@ public import Obend.Vault.Cli
 public import Obend.Spec.Workspace
 public import Obend.Receipt.Cli
 public import Obend.Logic.Receipt
+public import Obend.Leaf.Specialize
 
 open Lean (Json toJson)
 open Obend.Core
@@ -90,6 +91,8 @@ def usage : String :=
   "       obend check --obligations --package PACKAGE.json --object ENTRY [--receipts DIR]\n" ++
   "       obend prove --package PACKAGE.json SPEC.CLAIM --object ENTRY --out RECEIPT.json [--ground N,N,…]\n" ++
   "       obend ground --package PACKAGE.json ENTRY EXPECTED_NAT\n" ++
+  "       obend emit --package PACKAGE.json --object ENTRY --out BOOK.json [--call MEMBER NAT]\n" ++
+  "       obend specialize --package PACKAGE.json --object ENTRY --book BOOK.json [--call MEMBER NAT]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
@@ -541,6 +544,105 @@ def groundCommand (spec entry expected : String) : IO UInt32 := do
   | .refused _ _ => IO.println s!"refuted: {entry}() == {n} runs to false (ground, decidable)"; return 3
   | .uncovered => IO.println s!"uncovered: {entry}() == {n} did not finish within the grade"; return 3
 
+/-! ## The leaf emitter (lane Leaf, `Obend.Leaf`) -/
+
+/-- The program's selection and the composition of spec layers reached from it. -/
+def leafObject (spec entry : String) : IO (Except String (Obend.Core.Term.Term × Obend.Logic.Composition)) := do
+  let p ← match ← (packageOfSpec spec none).run with
+    | .ok p => pure p
+    | .error d => return .error d.json.compress
+  let t ← match selection p entry with
+    | .ok t => pure t
+    | .error d => return .error d.json.compress
+  -- the first composition of named spec layers (the package knot's own layer is unnamed)
+  match Obend.Logic.Program.findObject (fun C => C.layers.all (·.name != "")) 100000 t with
+  | some C => return .ok (t, C)
+  | none => return .error s!"no fix (compose …) {"{"}seed{"}"} is reached from {entry}"
+
+/-- The natural the demand machine finishes `t` with. -/
+def machineNat (t : Obend.Core.Term.Term) : Option Nat :=
+  match Obend.Core.Machine.runBounded ⟨1000000, 1000000⟩ 10000000 (Obend.Core.Machine.initial t) with
+  | .finished (.natural n) _ => some n
+  | _ => none
+
+def showNat : Option Nat → String
+  | some n => toString n
+  | none => "no natural"
+
+def kindName : Obend.Leaf.DefKind → String
+  | .method => "method"
+  | .cell => "cell"
+
+def cellName : Obend.Leaf.LeafCell → String
+  | .layer k => "layer " ++ k
+  | .object n => "object " ++ n
+
+/-- `MEMBER(N)` read from the term `obj` and run on the demand machine. -/
+def callOn (obj : Obend.Core.Term.Term) (m : String) (n : Nat) : Option Nat :=
+  machineNat (.app (.get obj m) (.nat n))
+
+/-- `obend emit`: flatten the composition reached from ENTRY, emit its book, write it with the
+composition it pins. -/
+def emitCommand (spec entry out : String) (call : Option (String × Nat)) : IO UInt32 := do
+  let (t, C) ← match ← leafObject spec entry with
+    | .ok r => pure r
+    | .error e => IO.eprintln e; return 2
+  IO.println s!"object: fix(compose({", ".intercalate (C.layers.reverse.map (·.name))}), seed) from {entry}"
+  unless C.closedB do
+    IO.println "refused: the composition is not closed, outside flatten_sound's scope"; return 3
+  let B := Obend.Leaf.emit C
+  IO.println s!"slots: {B.slots}"
+  for d in B.defs do
+    IO.println s!"def {d.slot} {d.member}: {kindName d.kind}, reads {d.reads}"
+  IO.println s!"closed: {B.closedB}"
+  let defs := B.defs.map fun d => Json.mkObj [("member", toJson d.member), ("slot", toJson d.slot),
+    ("kind", toJson (kindName d.kind)), ("reads", toJson d.reads), ("code", Obend.Logic.termJson d.code)]
+  IO.FS.writeFile out ((Json.mkObj [("object", toJson entry), ("composition", Obend.Logic.termJson C.code),
+    ("slots", toJson B.slots), ("defs", Json.arr defs.toArray)]).pretty ++ "\n")
+  IO.println s!"wrote {out}"
+  if let some (m, n) := call then
+    IO.println s!"book: {m}({n}) = {showNat (callOn B.link m n)}"
+    IO.println s!"machine: {m}({n}) = {showNat (callOn C.object m n)}; {entry}() = {showNat (machineNat t)}"
+  return 0
+
+/-- `obend specialize`: the specialization slot at the program's current view, with the recorded
+book as the stored selection: the book while every pin it assumed holds, else the machine, the
+blocked read naming the moved pins. -/
+def specializeCommand (spec entry bookPath : String) (call : Option (String × Nat)) : IO UInt32 := do
+  let (_, now) ← match ← leafObject spec entry with
+    | .ok r => pure r
+    | .error e => IO.eprintln e; return 2
+  let j ← match Json.parse (← IO.FS.readFile bookPath) with
+    | .ok j => pure j
+    | .error e => IO.eprintln e; return 2
+  let some name := (j.getObjValAs? String "object").toOption | IO.eprintln "the book names no object"; return 2
+  let some code := ((j.getObjVal? "composition").toOption).bind fun c => (Obend.Logic.termOf c).toOption
+    | IO.eprintln "the book pins no composition"; return 2
+  let some C := Obend.Leaf.compositionOfCode code | IO.eprintln "the pinned composition does not decode"; return 2
+  let v := Obend.Leaf.viewOf 0 entry now
+  let book := Obend.Leaf.Candidate.book name C
+  match Obend.Leaf.specSlot.read (Obend.Slot.World.holdsAt v) (some book) with
+  | .usable _ _ => IO.println "book: usable"
+  | .blocked _ d => IO.println s!"book: blocked by {", ".intercalate (d.map (cellName ·.cell))}"
+  | .rejected _ => IO.println "book: rejected (outside flatten_sound's scope)"
+  | .empty => pure ()
+  let selected := (Obend.Slot.slotAdvance : Obend.Slot.Advance Obend.Leaf.LeafView Obend.Leaf.LeafPin
+    Obend.Leaf.Candidate).advance Obend.Leaf.specSlot v (Obend.Leaf.specOrder name C) (some book)
+  match selected with
+  | .ok (.book _ C') =>
+    IO.println "selected: book"
+    if let some (m, n) := call then IO.println s!"book: {m}({n}) = {showNat (callOn (Obend.Leaf.emit C').link m n)}"
+  | .ok .machine =>
+    IO.println "selected: machine"
+    if let some (m, n) := call then IO.println s!"machine: {m}({n}) = {showNat (callOn now.object m n)}"
+  | .error _ => IO.println "selected: none"
+  return 0
+
+def leafCall : List String → Option (Option (String × Nat))
+  | [] => some none
+  | ["--call", m, n] => n.toNat?.map fun n => some (m, n)
+  | _ => none
+
 def proveArgs (spec name : String) : List String → Option (IO UInt32)
   | ["--object", entry, "--out", out] => some (proveCommand spec name entry out [0, 3, 41])
   | ["--object", entry, "--out", out, "--ground", g] => (parseNats g).map (proveCommand spec name entry out ·)
@@ -573,6 +675,14 @@ public def main (args : List String) : IO UInt32 :=
     obligationsCommand spec entry (some dir)
   | "prove" :: "--package" :: spec :: name :: rest => (proveArgs spec name rest).getD (do IO.eprintln usage; return 64)
   | ["ground", "--package", spec, entry, expected] => groundCommand spec entry expected
+  | "emit" :: "--package" :: spec :: "--object" :: entry :: "--out" :: out :: rest =>
+    match leafCall rest with
+    | some call => emitCommand spec entry out call
+    | none => do IO.eprintln usage; return 64
+  | "specialize" :: "--package" :: spec :: "--object" :: entry :: "--book" :: book :: rest =>
+    match leafCall rest with
+    | some call => specializeCommand spec entry book call
+    | none => do IO.eprintln usage; return 64
   | ["check", "--package", spec] => checkSource (packageOfSpec spec none)
   | ["check", "--package", spec, entry] => checkSource (packageOfSpec spec (some entry))
   | ["check", file] => checkSource (packageOfFile file none)
