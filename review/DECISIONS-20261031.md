@@ -13,6 +13,7 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 | Stored selection: incumbent-first default, chooser override, policies per slot | yes, after Astra's analysis | `astra/ASTRA-SELECTION-20261031.md`, `Obend/Slot/Selection.lean` |
 | No per-theorem axiom lists; one crawling census | yes | `393eb2b`, memory `feedback-no-manual-axiom-lists` |
 | Statements may be restructured for compositionality | yes | ProofEng lane |
+| The 15 choice-free `#print axioms` pins stay: they pin something nonstandard (a choice-free set), which the census cannot state | yes | `lean/docs/REPORT-PROOFENG-20261031.md` |
 | Modularity first: Lean modules and typeclasses from day one | yes | `REPORT-20261030.md` |
 | Build our own thing; depend on Bend, never fork it | yes | `DESIGN.md` §7 |
 
