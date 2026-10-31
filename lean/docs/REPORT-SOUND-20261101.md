@@ -171,3 +171,71 @@ Not bugs: all four findings real. Nuance: the CLI's cited path (`verifyWorld`) a
 **(3) Section 0 aliasing section 1** (`Store.lean`, `selectIn`). New `sectionAt G k := if 1 ≤ k then (sections G)[k - 1]? else none`; `sectionAt_zero`, `select_section_zero_refused`; tooth by mutating `sectionAt` to the unguarded form bites.
 
 Controls: receipts 32/32 (one new); cohorts 30/30, 71/71, 161/0; workspaces 30/30; walkthrough 26; tier 1 282, tier 2 303; census 35,194 constants, 27 on compiler trust, none on sorryAx or an axiom. No deviations.
+
+## 5. Round 2: the arm binds the payload at the scrutinee's quantity (decided 11-01)
+
+The coordinator took the alternative named in §1: matching passes the payload to the selected arm as
+an argument, so the arms bind it at a quantity the scrutinee allows, and a `linear` sum is matched.
+This replaces round 1's `linearFree` scrutinee premise and its `done` premise.
+
+**The rule** (`Core/Check.lean`). `ArmsTyping` gains a quantity index `q`; each arm binds
+`⟨payload, q⟩`, with `validContext [⟨payload, q⟩]` (a shareable payload type when `unrestricted`,
+replacing the old unconditional shareability premise) and `q.fits (bu.headD 0)` (exactly once when
+`linear`). `case` and `effectCase` require `caseAllowed q context su`:
+`(q == .linear || linearFree context su) && (q != .unrestricted || reusableCaptures … su)`, the quantity
+clauses of `argumentAllowed`. A `linear` scrutinee therefore binds a `linear` payload used once; one
+with `affine` captures binds at most `affine`; `unrestricted` needs reusable captures. `done` has no
+premise again: `case (done (l h)) of l x. done 0` is refused at the arm, whose payload is `linear`.
+
+**The checkers.** The bidirectional checker takes `q` from the case annotation's `parameter` when the
+case is annotated, and otherwise computes `caseQuantity` (`linear` if the scrutinee uses a `linear`
+hypothesis, else `unrestricted` if its captures are reusable and every arm's payload is shareable
+(`armsShareable`), else `affine`), the most permissive quantity `caseAllowed` admits (`caseQuantity_allowed`).
+`ArmsAgainst` records the quantity its arms were checked at, so the `caseAllowed` premise is checked on
+the answer (a dependency on the computed quantity broke the completeness rewriting otherwise).
+Refusals: an arm that does not use its `linear` payload is `linearScrutinee path` (the arm's path; the
+constructor lost its index); an annotation whose quantity the scrutinee does not allow is
+`linearArgumentDropped path index q` or `capturesNotShareable path` (`caseRefusal`). `linearReturned`
+is gone. Preparation (`Elab/Prepare.lean`) computes the same `caseQuantity` from
+`occurrences context.length scrutinee` and prepares the arms in that context. The legacy fuel checker
+`Check.infer` binds every payload `unrestricted` (so it accepts only scrutinees with reusable captures):
+a quantity computed from the uses would move under substitution, and `infer_msubst`/`infer_instantiate`
+are proofs about that executable function.
+
+**Metatheory (all green, tier 1 283 jobs, tier 2 304).** Weakening (`case_allowed_insert`), closed
+substitution (`caseAllowed_append_zero`, `caseAllowed_of_le`; the arm's `fits` through `UsesMasked.headD`),
+templates (`Discharges.caseAllowed_instantiate`, `validBinder_instantiate`), the machine
+(`MachineTyping.FrameTyping.case`/`effectCase` carry `q`; `typed_case_preserved` binds the payload
+cell at `q`, its non-computation from the heap's address type instead of shareability), bidirectional
+completeness (`completes_case`/`effectCase` annotate the case node with the derivation's `q`;
+`arms_cons_complete` takes `fits`), preparation (`ArmsMotive` is quantified over a checker quantity
+`q'` that refines the derivation's, `ArmRefines`, arm by arm `QuantityRefines`; `caseQuantity_refines`
+and `armsShareable_of_unrestricted` show the computed quantity refines any derivation's), Law typing
+(`chk_case`: a clean context computes `unrestricted`). `complete`, `full_annotated`, `prepare_checks`,
+`check_msubst`, `checked_msubst` and `step_conserves_linear` keep their statements (STATEMENT-CITED in
+the journal, rebuilt green). In `step_conserves_linear`'s `caseInject` case the binder is now `q`, and
+`fits_once` with `caseAllowed` gives the argument's count once, as in beta.
+
+**Revised** (journal, `08bc950` → round 2): `completes_case`, `completes_effectCase`, `completes_done`,
+`arms_cons_complete`, `arms_nil_complete`, `arms_typing_find`, `arms_uses_length`, `stack_effect_case`,
+`infer_transport`, and the private `arms_find`, `arms_row_closed`, `arms_typing_absent`,
+`stack_case_value`, `infer_msubst`, `Discharges.infer_instantiate`, `armsMotive_cons/nil`,
+`membersAgree_of`, `members_of_variant`, `motive_case`, `motive_effectCase`, `checkArms_ok` (Law); plus
+`CheckTeeth.shadowed_shareable_member_accepted`.
+
+**Teeth** (`LinearTeeth`). `case_scrutinee_refused`: `λh. case l h of l x. 0` at `linear` is
+`linearScrutinee [0, 1, 0]` (`#tooth` to `affine` bites); `case_scrutinee_refused_unannotated` (the
+checker computes `linear` itself); `linear_sum_matched`: `λh. case l h of l x. x` is accepted at
+`linear`; `linear_scrutinee_unrestricted_payload_refused`: annotating the payload `unrestricted` is
+`linearArgumentDropped [0] 0 .unrestricted`; `done_value_refused` is now the arm's `linearScrutinee
+[0, 1, 0]`. The one- and two-step drop witnesses are unchanged.
+
+**Deviations.** `CoerceProbes`: the `linear → linear` sum codomain coercion checks again (round 1
+refused it). `CheckTeeth.shadowed_shareable_member_accepted`'s hypothesis is now `unrestricted` (the
+legacy checker needs reusable scrutinee captures; `shadowed_linear_member_refused` stays refused).
+Controls unchanged: cohorts 30/30, 71/71, 161/0; receipts 32/32; workspaces 30/30; walkthrough 26.
+Census after rebasing onto `39932d9` (the Expose lane's per-definition `@[expose]` in `Check` and `Ty`, kept; `caseAllowed` and `caseQuantity` exposed): 35,625 constants, 27 on compiler trust, none on `sorryAx` or a declared axiom.
+
+**What remains.** `Check.infer` is stricter than the relation (only reusable scrutinee captures); it is
+the checker Gemini's review says to retire. `affine` copying through `case` is closed by the same rule
+(an `affine` scrutinee binds an `affine` payload).

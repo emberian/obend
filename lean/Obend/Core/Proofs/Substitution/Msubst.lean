@@ -88,16 +88,16 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         inferFields asm ann' (Δ ++ Ψ) pos index (fuel + m) fields' = some result' ∧
         result'.type = result.type ∧ UsesMasked σ Δ.length result'.uses result.uses) ∧
     (∀ (ann ann' : Annotations) (Δ : Context) (pos : List Nat) (index : Nat) (row : Ty) (expected : Option Ty)
-        (arms : List (String × Term)) (result : InferredArms asm (Δ ++ Ψ) arms),
-      inferArms asm ann (Δ ++ Ψ) pos index row expected fuel arms = some result →
+        (q : Quantity) (arms : List (String × Term)) (result : InferredArms asm (Δ ++ Ψ) q arms),
+      inferArms asm ann (Δ ++ Ψ) q pos index row expected fuel arms = some result →
       validContext asm.shareableVariables (Δ ++ Ψ) = true →
       FilledAnnList σ ann ann' (Δ.length + 1) pos index arms →
       ∀ arms', (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) = arms' →
-      ∃ result' : InferredArms asm (Δ ++ Ψ) arms',
-        inferArms asm ann' (Δ ++ Ψ) pos index row expected (fuel + m) arms' = some result' ∧
+      ∃ result' : InferredArms asm (Δ ++ Ψ) q arms',
+        inferArms asm ann' (Δ ++ Ψ) q pos index row expected (fuel + m) arms' = some result' ∧
         result'.row = result.row ∧ result'.result = result.result ∧ UsesMasked σ Δ.length result'.uses result.uses)
   | 0 => ⟨fun _ _ _ _ _ _ h => by simp [infer] at h, fun _ _ _ _ _ _ _ h => by simp [inferFields] at h,
-      fun _ _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
+      fun _ _ _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
   | fuel + 1 => by
     obtain ⟨ih, ihFields, ihArms⟩ := infer_msubst asm Ψ m σ F fuel
     rw [show fuel + 1 + m = (fuel + m) + 1 by omega]
@@ -619,6 +619,10 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         simp only [infer, Option.bind_eq_bind, valueTyped',
           Option.bind_some]
         split at h
+        rotate_left; · cases h
+        rename_i allowed
+        rw [dif_pos (caseAllowed_of_le valueUses.le allowed)]
+        split at h
         · rename_i plan response produced activity
           simp only [Option.bind_eq_some_iff] at h
           obtain ⟨row, rowFound, typed, armsTyped, h⟩ := h
@@ -636,7 +640,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           rename_i distinct
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ :=
-            ihArms ann ann' Δ (pos ++ [1]) 0 row none arms typed armsTyped valid hann.arms _ rfl
+            ihArms ann ann' Δ (pos ++ [1]) 0 row none _ arms typed armsTyped valid hann.arms _ rfl
           have activity' : value'.type = .computation plan response produced := by rw [valueType, activity]
           split
           · rename_i p r pr activity''
@@ -665,12 +669,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           split at h
           rotate_left; · cases h
           rename_i distinct
-          split at h
-          rotate_left; · cases h
-          rename_i free
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ :=
-            ihArms ann ann' Δ (pos ++ [1]) 0 row none arms typed armsTyped valid hann.arms _ rfl
+            ihArms ann ann' Δ (pos ++ [1]) 0 row none _ arms typed armsTyped valid hann.arms _ rfl
           split
           · rename_i p r pr activity
             rw [valueType] at activity
@@ -679,7 +680,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
-            simp only [labelsDistinct_map, distinct, ↓reduceDIte, dif_pos (linearFree_of_le valueUses.le free)]
+            simp only [labelsDistinct_map, distinct, ↓reduceDIte]
             exact ⟨_, rfl, by exact typedResult, by exact UsesMasked.add valueUses typedUses⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [Term.substitute] at hterm'
@@ -740,9 +741,6 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i pureValue
-        split at h
-        rotate_left; · cases h
-        rename_i free
         cases h
         obtain ⟨value', valueTyped', valueType, valueUses⟩ :=
           ih ann ann' Δ _ inner value valueTyped valid (hann.child 0 _ inner (fun _ => by simp only [annotationsAt])) _ rfl
@@ -751,8 +749,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           simp only [annotationsAt, List.append_nil] at this
           rw [this]; exact found
         have p1 : value'.type.isComputation = false := by rw [valueType]; exact pureValue
-        simp only [infer, Option.bind_eq_bind, here, valueTyped', Option.bind_some, dif_pos p1,
-          dif_pos (linearFree_of_le valueUses.le free)]
+        simp only [infer, Option.bind_eq_bind, here, valueTyped', Option.bind_some, dif_pos p1]
         refine ⟨_, rfl, ?_, by exact valueUses⟩
         show Ty.computation annotation.domain annotation.codomain value'.type = _
         rw [valueType]
@@ -782,7 +779,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         refine ⟨_, rfl, ?_, by exact UsesMasked.add firstUses laterUses⟩
         show Ty.field name first'.type later'.type = Ty.field name first.type later.type
         rw [firstType, laterType]
-    · intro ann ann' Δ pos index row expected arms result h valid hann arms' harms'
+    · intro ann ann' Δ pos index row expected q arms result h valid hann arms' harms'
       cases arms with
       | nil =>
         cases expected with
@@ -809,6 +806,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         rename_i safe
         split at h
         rotate_left; · cases h
+        rename_i fits
+        split at h
+        rotate_left; · cases h
         rename_i agreed
         simp only [Option.bind_eq_some_iff] at h
         obtain ⟨later, laterTyped, h⟩ := h
@@ -819,28 +819,30 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         rotate_left; · cases h
         rename_i agreeing
         cases h
-        have validP : validContext asm.shareableVariables (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ)) = true := by
-          rw [show (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ) : Context) = [⟨payload, .unrestricted⟩] ++ (Δ ++ Ψ) from rfl,
+        have validP : validContext asm.shareableVariables (⟨payload, q⟩ :: (Δ ++ Ψ)) = true := by
+          rw [show (⟨payload, q⟩ :: (Δ ++ Ψ) : Context) = [⟨payload, q⟩] ++ (Δ ++ Ψ) from rfl,
             validContext_append, valid]
-          simp [validContext, sharePayload]
+          simpa [validContext] using sharePayload
         obtain ⟨first₀, firstTyped₀, firstType₀, firstUses₀⟩ :=
-          ih ann ann' (⟨payload, .unrestricted⟩ :: Δ) (pos ++ [index]) body first firstTyped validP hann.head _ rfl
+          ih ann ann' (⟨payload, q⟩ :: Δ) (pos ++ [index]) body first firstTyped validP hann.head _ rfl
         obtain ⟨first', firstTyped', firstType, firstUses⟩ :
-            ∃ first' : Inferred asm (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ)) (body.substitute (fillTerm σ (Δ.length + 1))),
-              infer asm ann' (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ)) (pos ++ [index]) (fuel + m)
+            ∃ first' : Inferred asm (⟨payload, q⟩ :: (Δ ++ Ψ)) (body.substitute (fillTerm σ (Δ.length + 1))),
+              infer asm ann' (⟨payload, q⟩ :: (Δ ++ Ψ)) (pos ++ [index]) (fuel + m)
                   (body.substitute (fillTerm σ (Δ.length + 1))) = some first' ∧
                 first'.type = first.type ∧ UsesMasked σ (Δ.length + 1) first'.uses first.uses :=
           ⟨first₀, firstTyped₀, firstType₀, firstUses₀⟩
         obtain ⟨later', laterTyped', laterRow, laterResult, laterUses⟩ :=
-          ihArms ann ann' Δ pos (index + 1) row (some (expected.getD first.type)) rest later laterTyped valid hann.tail _ rfl
+          ihArms ann ann' Δ pos (index + 1) row (some (expected.getD first.type)) q rest later laterTyped valid hann.tail _ rfl
         have found' : row.lookup asm.bounds (fuel + m + 1) name = some payload := Ty.lookup_mono found (by omega)
         rw [← firstType] at laterTyped'
         have hl : later'.result = expected.getD first'.type := by rw [laterResult, firstType]; exact sameResult
         have a1 : agree asm first'.type (expected.getD first'.type) = true := by rw [firstType]; exact agreed
+        have f1 : q.fits (first'.uses.headD 0) = true := by rw [firstUses.headD]; exact fits
         have j1 := firstUses.tail.agreeArms
           (rest' := rest.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) (by simp) laterUses agreeing
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos sharePayload,
-          firstTyped', dif_pos (safeUses_of_le firstUses.le safe), dif_pos a1, laterTyped', dif_pos hl,
+          firstTyped', dif_pos (safeUses_of_le firstUses.le safe), dif_pos f1,
+          dif_pos a1, laterTyped', dif_pos hl,
           dif_pos j1]
         refine ⟨_, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], by exact UsesMasked.join firstUses.tail laterUses⟩
         show Ty.field name payload later'.row = Ty.field name payload later.row

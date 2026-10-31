@@ -96,12 +96,10 @@ def seedRow : Ty := .field "x" .natural (.field "extra" .boolean .emptyRow)
 #guard (match coerce {} (.arrow .reusable .linear .natural seedRow)
   (.arrow .reusable .linear .natural (.field "x" .natural .emptyRow)) with
   | .error (.checker (.linearProjected _ 0)) => true | _ => false)
--- a sum codomain coercion matches its `linear` component, whose payload the arm binds `unrestricted`;
--- the case rule refuses a scrutinee that uses a `linear` hypothesis (lane Sound, 11-01; it was
--- accepted before): a `linear` sum, like a `linear` record, is consumed whole
-#guard (match coerce {} (.arrow .reusable .linear .natural (.variant (.field "a" .natural .emptyRow)))
-  (.arrow .reusable .linear .natural (.variant (.field "a" .natural (.field "b" .boolean .emptyRow)))) with
-  | .error (.checker (.linearScrutinee _ 0)) => true | _ => false)
+-- a sum codomain coercion keeps the whole payload: `linear` to `linear` is emitted and checked (the
+-- case over the `linear` component binds its payload `linear`, used once by the re-injection)
+#guard (coerce {} (.arrow .reusable .linear .natural (.variant (.field "a" .natural .emptyRow)))
+  (.arrow .reusable .linear .natural (.variant (.field "a" .natural (.field "b" .boolean .emptyRow))))).toBool
 -- without the relabelling the same component is `affine`, and the kernel names the drop
 #guard (match checkAgainst ⟨.lam (.lam (.app (.lam (.record [("x", .get (.bound 0) "x")])) (.app (.bound 1) (.bound 0)))),
       treeAnnotations (.node (some ⟨.arrow .reusable .linear .natural seedRow,

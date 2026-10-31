@@ -333,9 +333,10 @@ abbrev Uses := List Nat
 retain a linear obligation forever (a divergent body never reaches its use); the checker's part of
 exact discharge is syntactic and lives at the binder (`Quantity.fits`, required by
 `PartialTyping.lambda`), at the argument (`linearFree`, required by `argumentAllowed`), at the joins
-(`branchesAgree`, required by `ifBool`, `ifZero` and the arms of a `case`), and wherever a step may
+(`branchesAgree`, required by `ifBool`, `ifZero` and the arms of a `case`), wherever a step may
 discard what a subterm holds (`linearFree`: the target of `get`, `reflect`, `metadata`, `project` and
-`extend`, a specification's metadata, a `case` scrutinee, a `done` value). -/
+`extend`, a specification's metadata), and at a `case`, whose arms bind the payload at a quantity the
+scrutinee allows (`caseAllowed`: `linear` for a scrutinee that uses a `linear` hypothesis). -/
 @[expose] def safeQuantity : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count | .linear, count => count <= 1

@@ -317,7 +317,6 @@ public theorem completes_record {assumptions : Assumptions} {context : Context}
 
 public theorem completes_done {assumptions : Assumptions} {context : Context} {value : Term}
     {plan response result : Ty} {uses : Uses} (nonComputation : result.isComputation = false)
-    (free : linearFree context uses = true)
     (ih : ∃ tree, Completes assumptions context value result uses tree) :
     ∃ tree, Completes assumptions context (.done value) (.computation plan response result) uses tree := by
   obtain ⟨valueTree, completeValue⟩ := ih
@@ -331,18 +330,17 @@ public theorem completes_done {assumptions : Assumptions} {context : Context} {v
   obtain ⟨inner, accepted, sameUses⟩ :=
     ((completeValue annotations (path ++ [0]) child).2 result (sameType_refl _ _)).elim
   have nonActivity : (!result.isComputation) = true := by simp [nonComputation]
-  have free' : linearFree context inner.uses = true := by rw [sameUses]; exact free
   let synthesized : Synth assumptions context (.done value) :=
-    ⟨.computation plan response result, inner.uses, .done inner.derivation nonComputation free'⟩
+    ⟨.computation plan response result, inner.uses, .done inner.derivation nonComputation⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.done value) .synth = .ok synthesized
     rw [elaborate]
-    simp [root, hint, accepted, need_ok nonActivity, need_ok free', bind, Except.bind, Functor.map, Except.map,
+    simp [root, hint, accepted, need_ok nonActivity, bind, Except.bind, Functor.map, Except.map,
       pure, Except.pure, synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.done value) (.check expected) = _
     rw [elaborate]
-    simp [root, hint, accepted, need_ok nonActivity, need_ok free', bind, Except.bind, Functor.map, Except.map,
+    simp [root, hint, accepted, need_ok nonActivity, bind, Except.bind, Functor.map, Except.map,
       pure, Except.pure, synthesized]
   · exact sameType_refl _ _
   · exact sameUses
@@ -1100,13 +1098,13 @@ public theorem completes_fix {assumptions : Assumptions} {context : Context}
   · change addUses code.uses base.uses = addUses su iu
     rw [codeUses, baseUses]
 
-@[expose] public def ArmsComplete (assumptions : Assumptions) (context : Context)
+@[expose] public def ArmsComplete (assumptions : Assumptions) (context : Context) (q : Quantity)
     (arms : List (String × Term)) (row result : Ty) (uses : Uses) (trees : List AnnotationTree) : Prop :=
   ∀ annotations path index head, ForestRealizes annotations path index trees →
     labelsDistinct arms = true →
     (∀ name, name ∈ arms.map Prod.fst → rowMember head name = rowMember row name) →
-    Yields (checkArms assumptions annotations context path index head result arms)
-      (fun answer => answer.row = row ∧ answer.uses = uses)
+    Yields (checkArms assumptions annotations context q path index head result arms)
+      (fun answer => answer.row = row ∧ answer.uses = uses ∧ answer.quantity = q)
 
 theorem labelsDistinct_cons {name : String} {body : Term} {rest : List (String × Term)}
     (distinct : labelsDistinct ((name, body) :: rest) = true) :
@@ -1117,20 +1115,21 @@ theorem labelsDistinct_cons {name : String} {body : Term} {rest : List (String �
   obtain ⟨⟨label, term⟩, inside, rfl⟩ := List.mem_map.mp member
   exact distinct.1 _ inside rfl
 
-public theorem arms_nil_complete (assumptions : Assumptions) (context : Context) (result : Ty) :
-    ∃ trees, ArmsComplete assumptions context [] .emptyRow result (zeroUses context) trees := by
+public theorem arms_nil_complete (assumptions : Assumptions) (context : Context) (q : Quantity) (result : Ty) :
+    ∃ trees, ArmsComplete assumptions context q [] .emptyRow result (zeroUses context) trees := by
   refine ⟨[], ?_⟩
   intro annotations path index head _ _ _
-  exact ⟨rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl⟩
 
 public theorem arms_cons_complete {assumptions : Assumptions} {context : Context}
-    {name : String} {body : Term} {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses}
-    (safe : safeUses (⟨payload, .unrestricted⟩ :: context) bu = true)
-    (share : payload.shareableUnder assumptions.shareableVariables = true)
+    {q : Quantity} {name : String} {body : Term} {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses}
+    (safe : safeUses (⟨payload, q⟩ :: context) bu = true)
+    (share : validContext assumptions.shareableVariables [⟨payload, q⟩] = true)
+    (fits : q.fits (bu.headD 0) = true)
     (agreeing : (rest.isEmpty || branchesAgree context bu.tail ru) = true)
-    (ihB : ∃ tree, Completes assumptions (⟨payload, .unrestricted⟩ :: context) body result bu tree)
-    (ihR : ∃ trees, ArmsComplete assumptions context rest row result ru trees) :
-    ∃ trees, ArmsComplete assumptions context ((name, body) :: rest) (.field name payload row) result
+    (ihB : ∃ tree, Completes assumptions (⟨payload, q⟩ :: context) body result bu tree)
+    (ihR : ∃ trees, ArmsComplete assumptions context q rest row result ru trees) :
+    ∃ trees, ArmsComplete assumptions context q ((name, body) :: rest) (.field name payload row) result
       (joinUses bu.tail ru) trees := by
   obtain ⟨bodyTree, completeBody⟩ := ihB
   obtain ⟨restTrees, completeRest⟩ := ihR
@@ -1142,35 +1141,34 @@ public theorem arms_cons_complete {assumptions : Assumptions} {context : Context
     simp [rowMember]
   obtain ⟨first, checkedFirst, firstUses⟩ :=
     ((completeBody annotations (path ++ [index]) realizes.head).2 result (sameType_refl _ _)).elim
-  have safe' : safeUses (⟨payload, .unrestricted⟩ :: context) first.uses = true := by
+  have safe' : safeUses (⟨payload, q⟩ :: context) first.uses = true := by
     rw [firstUses]; exact safe
+  have fits' : q.fits (first.uses.headD 0) = true := by rw [firstUses]; exact fits
   have tailMembers : ∀ label, label ∈ rest.map Prod.fst → rowMember head label = rowMember row label := by
     intro label inside
     rw [members label (by simp [inside])]
     have different : name ≠ label := fun same => fresh (same ▸ inside)
     simp [rowMember, different]
-  obtain ⟨later, checkedLater, laterRow, laterUses⟩ :=
+  obtain ⟨later, checkedLater, laterRow, laterUses, laterQ⟩ :=
     (completeRest annotations path (index + 1) head realizes.tail restDistinct tailMembers).elim
   have agreeing' : (rest.isEmpty || branchesAgree context first.uses.tail later.uses) = true := by
     rw [firstUses, laterUses]; exact agreeing
   rw [checkArms]
-  simp only [found, need_ok share, checkedFirst, need_ok safe', checkedLater, need_ok agreeing',
-    bind, Except.bind, pure, Except.pure, Yields]
-  change Ty.field name payload later.row = Ty.field name payload row ∧
-    joinUses first.uses.tail later.uses = joinUses bu.tail ru
-  constructor
-  · rw [laterRow]
-  · rw [firstUses, laterUses]
+  simp only [found, need_ok share, checkedFirst, need_ok safe', need_ok fits', checkedLater, need_ok agreeing',
+    dif_pos laterQ, bind, Except.bind, pure, Except.pure, Yields]
+  refine ⟨?_, ?_, trivial⟩
+  · show Ty.field name payload later.row = Ty.field name payload row; rw [laterRow]
+  · show joinUses first.uses.tail later.uses = joinUses bu.tail ru; rw [firstUses, laterUses]
 
 public theorem completes_case {assumptions : Assumptions} {context : Context}
-    {scrutinee : Term} {arms : List (String × Term)} {row result : Ty} {su au : Uses}
-    (distinct : labelsDistinct arms = true) (free : linearFree context su = true)
+    {scrutinee : Term} {arms : List (String × Term)} {row result : Ty} {su au : Uses} {q : Quantity}
+    (distinct : labelsDistinct arms = true) (allowed : caseAllowed assumptions q context su = true)
     (ihS : ∃ tree, Completes assumptions context scrutinee (.variant row) su tree)
-    (ihA : ∃ trees, ArmsComplete assumptions context arms row result au trees) :
+    (ihA : ∃ trees, ArmsComplete assumptions context q arms row result au trees) :
     ∃ tree, Completes assumptions context (.case scrutinee arms) result (addUses su au) tree := by
   obtain ⟨scrutineeTree, completeScrutinee⟩ := ihS
   obtain ⟨armTrees, completeArms⟩ := ihA
-  refine ⟨.node (some (hint (.variant row) result)) [scrutineeTree, .node none armTrees], ?_⟩
+  refine ⟨.node (some ⟨.variant row, result, q, .reusable⟩) [scrutineeTree, .node none armTrees], ?_⟩
   intro annotations path realizes
   have root := realizes.root
   have rawHead (type : Ty) : representativeHead assumptions annotations path type = type := by
@@ -1181,41 +1179,44 @@ public theorem completes_case {assumptions : Assumptions} {context : Context}
     simpa [AnnotationTree.child] using realizes.child 1
   obtain ⟨value, checkedValue, valueUses⟩ :=
     ((completeScrutinee annotations (path ++ [0]) atScrutinee).2 (.variant row) (sameType_refl _ _)).elim
-  obtain ⟨answer, checkedArms, answerRow, answerUses⟩ :=
+  obtain ⟨answer, checkedArms, answerRow, answerUses, answerQ⟩ :=
     (completeArms annotations (path ++ [1]) 0 row atArms.forest distinct (fun _ _ => rfl)).elim
-  rcases answer with ⟨actualRow, armUses, armDerivation⟩
+  rcases answer with ⟨actualRow, armUses, actualQ, armDerivation⟩
   change actualRow = row at answerRow
   subst actualRow
+  change actualQ = q at answerQ
+  subst actualQ
   change armUses = au at answerUses
-  have free' : linearFree context value.uses = true := by rw [valueUses]; exact free
+  have allowed' : caseAllowed assumptions q context value.uses = true := by rw [valueUses]; exact allowed
   let synthesized : Synth assumptions context (.case scrutinee arms) :=
-    ⟨result, addUses value.uses armUses, .case value.derivation armDerivation distinct free'⟩
+    ⟨result, addUses value.uses armUses, .case value.derivation armDerivation distinct allowed'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.case scrutinee arms) .synth = .ok synthesized
     cases arms <;> rw [elaborate] <;>
       simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct,
-        need_ok (sameType_refl assumptions (.variant row)), need_ok free', bind, Except.bind, Functor.map, Except.map,
+        need_ok (sameType_refl assumptions (.variant row)), need_ok allowed', caseQuantityAt_some root, bind, Except.bind, Functor.map, Except.map,
         pure, Except.pure, synthesized, checkedSynth]
   · intro expected
     change elaborate assumptions annotations context path (.case scrutinee arms) (.check expected) = _
     cases arms <;> rw [elaborate] <;>
       simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct,
-        need_ok (sameType_refl assumptions (.variant row)), need_ok free', bind, Except.bind, Functor.map, Except.map,
+        need_ok (sameType_refl assumptions (.variant row)), need_ok allowed', caseQuantityAt_some root, bind, Except.bind, Functor.map, Except.map,
         pure, Except.pure, synthesized, checkedSynth]
   · exact sameType_refl _ _
   · change addUses value.uses armUses = addUses su au
     rw [valueUses, answerUses]
 
 public theorem completes_effectCase {assumptions : Assumptions} {context : Context}
-    {scrutinee : Term} {arms : List (String × Term)} {plan response row result : Ty} {su au : Uses}
+    {scrutinee : Term} {arms : List (String × Term)} {plan response row result : Ty} {su au : Uses} {q : Quantity}
     (nonComputation : result.isComputation = false) (distinct : labelsDistinct arms = true)
+    (allowed : caseAllowed assumptions q context su = true)
     (ihS : ∃ tree, Completes assumptions context scrutinee (.computation plan response (.variant row)) su tree)
-    (ihA : ∃ trees, ArmsComplete assumptions context arms row (.computation plan response result) au trees) :
+    (ihA : ∃ trees, ArmsComplete assumptions context q arms row (.computation plan response result) au trees) :
     ∃ tree, Completes assumptions context (.case scrutinee arms) (.computation plan response result)
       (addUses su au) tree := by
   obtain ⟨scrutineeTree, completeScrutinee⟩ := ihS
   obtain ⟨armTrees, completeArms⟩ := ihA
-  refine ⟨.node (some (hint (.computation plan response (.variant row)) (.computation plan response result)))
+  refine ⟨.node (some ⟨.computation plan response (.variant row), .computation plan response result, q, .reusable⟩)
     [scrutineeTree, .node none armTrees], ?_⟩
   intro annotations path realizes
   have root := realizes.root
@@ -1228,27 +1229,30 @@ public theorem completes_effectCase {assumptions : Assumptions} {context : Conte
   obtain ⟨value, checkedValue, valueUses⟩ :=
     ((completeScrutinee annotations (path ++ [0]) atScrutinee).2
       (.computation plan response (.variant row)) (sameType_refl _ _)).elim
-  obtain ⟨answer, checkedArms, answerRow, answerUses⟩ :=
+  obtain ⟨answer, checkedArms, answerRow, answerUses, answerQ⟩ :=
     (completeArms annotations (path ++ [1]) 0 row atArms.forest distinct (fun _ _ => rfl)).elim
-  rcases answer with ⟨actualRow, armUses, armDerivation⟩
+  rcases answer with ⟨actualRow, armUses, actualQ, armDerivation⟩
   change actualRow = row at answerRow
   subst actualRow
+  change actualQ = q at answerQ
+  subst actualQ
   change armUses = au at answerUses
   have nonActivity : (!result.isComputation) = true := by simp [nonComputation]
+  have allowed' : caseAllowed assumptions q context value.uses = true := by rw [valueUses]; exact allowed
   let synthesized : Synth assumptions context (.case scrutinee arms) :=
     ⟨.computation plan response result, addUses value.uses armUses,
-      .effectCase value.derivation armDerivation nonComputation distinct⟩
+      .effectCase value.derivation armDerivation nonComputation distinct allowed'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.case scrutinee arms) .synth = .ok synthesized
     cases arms <;> rw [elaborate] <;>
-      simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct, need_ok nonActivity,
+      simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct, need_ok nonActivity, need_ok allowed', caseQuantityAt_some root,
         need_ok (sameType_refl assumptions (.computation plan response (.variant row))),
         need_ok (sameType_refl assumptions (.computation plan response result)), bind, Except.bind,
         Functor.map, Except.map, pure, Except.pure, synthesized, checkedSynth]
   · intro expected
     change elaborate assumptions annotations context path (.case scrutinee arms) (.check expected) = _
     cases arms <;> rw [elaborate] <;>
-      simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct, need_ok nonActivity,
+      simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct, need_ok nonActivity, need_ok allowed', caseQuantityAt_some root,
         need_ok (sameType_refl assumptions (.computation plan response (.variant row))),
         need_ok (sameType_refl assumptions (.computation plan response result)), bind, Except.bind,
         Functor.map, Except.map, pure, Except.pure, synthesized, checkedSynth]
@@ -1264,7 +1268,7 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
   refine PartialTyping.rec
     (motive_1 := fun context term derived uses _ => ∃ tree, Completes assumptions context term derived uses tree)
     (motive_2 := fun context fields row uses _ => ∃ trees, FieldsComplete assumptions context fields row uses trees)
-    (motive_3 := fun context arms row result uses _ => ∃ trees, ArmsComplete assumptions context arms row result uses trees)
+    (motive_3 := fun context q arms row result uses _ => ∃ trees, ArmsComplete assumptions context q arms row result uses trees)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
     ?effectCase ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
@@ -1327,8 +1331,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ tag payload payloadType row uses fuel _ found nonComputation ih
     exact completes_inject found nonComputation ih
   case case =>
-    intro Γ scrutinee arms row result su au _ _ distinct free ihS ihA
-    exact completes_case distinct free ihS ihA
+    intro Γ scrutinee arms row result su au q _ _ distinct allowed ihS ihA
+    exact completes_case distinct allowed ihS ihA
   case ifBool =>
     intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
     exact completes_ifBool ihC ihT ihF agreeing
@@ -1336,19 +1340,19 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ plan planType response uses _ isPlan data ih
     exact completes_perform isPlan data ih
   case done =>
-    intro Γ value plan response result uses _ nonComputation free ih
-    exact completes_done nonComputation free ih
+    intro Γ value plan response result uses _ nonComputation ih
+    exact completes_done nonComputation ih
   case effectCase =>
-    intro Γ scrutinee arms plan response row result su au _ _ nonComputation distinct ihS ihA
-    exact completes_effectCase nonComputation distinct ihS ihA
+    intro Γ scrutinee arms plan response row result su au q _ _ nonComputation distinct allowed ihS ihA
+    exact completes_effectCase nonComputation distinct allowed ihS ihA
   case fieldsNil => exact fields_nil_complete assumptions
   case fieldsCons =>
     intro Γ name body rest type row bu ru _ _ nonComputation ihB ihR
     exact fields_cons_complete nonComputation ihB ihR
-  case armsNil => exact arms_nil_complete assumptions
+  case armsNil => intro Γ q result; exact arms_nil_complete assumptions Γ q result
   case armsCons =>
-    intro Γ name body rest payload row result bu ru _ safe share _ agreeing ihB ihR
-    exact arms_cons_complete safe share agreeing ihB ihR
+    intro Γ q name body rest payload row result bu ru _ safe share fits _ agreeing ihB ihR
+    exact arms_cons_complete safe share fits agreeing ihB ihR
 
 /-- Every certified erased term has suitable annotations, without a fragment
 restriction, and the checker reconstructs exactly its occurrence-count vector. -/
@@ -1508,7 +1512,7 @@ public theorem uses_determined {assumptions : Assumptions} {context : Context} {
   refine PartialTyping.rec
     (motive_1 := fun context term _ uses _ => uses = occurrences context.length term)
     (motive_2 := fun context fields _ uses _ => uses = fieldOccurrences context.length fields)
-    (motive_3 := fun context arms _ _ uses _ => uses = armOccurrences context.length arms)
+    (motive_3 := fun context _ arms _ _ uses _ => uses = armOccurrences context.length arms)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   all_goals intros
   all_goals simp_all [occurrences, fieldOccurrences, armOccurrences, variableUses, zeroUses]

@@ -402,6 +402,33 @@ hypothesis goes only to a `linear` parameter (`linearFree`). -/
     (type.shareableUnder assumptions.shareableVariables &&
       reusableCaptures assumptions.shareableVariables context uses))
 
+/-- The quantity `q` at which a `case`'s arms bind the payload is allowed for a scrutinee of uses
+`uses`: matching passes the payload to the selected arm as an argument (`caseInject` substitutes
+it), so this is `argumentAllowed`'s quantity clauses. A scrutinee that uses a `linear` hypothesis
+binds a `linear` payload, which the arm uses exactly once; one whose captures are not all reusable
+binds at most `affine`; an `unrestricted` payload needs reusable captures (and, per arm, a
+shareable payload type: `validContext`). -/
+@[expose] def caseAllowed (assumptions : Assumptions) (quantity : Quantity) (context : Context) (uses : Uses) : Bool :=
+  (quantity == .linear || linearFree context uses) &&
+    (quantity != .unrestricted || reusableCaptures assumptions.shareableVariables context uses)
+
+/-- The quantity a `case` binds its payload at when no annotation names one: `linear` for a
+scrutinee that uses a `linear` hypothesis, `unrestricted` for one whose captures are reusable when
+every payload is shareable, `affine` otherwise. The most permissive quantity `caseAllowed` admits. -/
+@[expose] def caseQuantity (assumptions : Assumptions) (context : Context) (uses : Uses) (shareable : Bool) : Quantity :=
+  if !linearFree context uses then .linear
+  else if reusableCaptures assumptions.shareableVariables context uses && shareable then .unrestricted
+  else .affine
+
+theorem caseQuantity_allowed (assumptions : Assumptions) (context : Context) (uses : Uses) (shareable : Bool) :
+    caseAllowed assumptions (caseQuantity assumptions context uses shareable) context uses = true := by
+  unfold caseQuantity caseAllowed
+  by_cases hl : linearFree context uses = true
+  · by_cases hr : (reusableCaptures assumptions.shareableVariables context uses && shareable) = true
+    · simp [hl, hr]; simp at hr; exact hr.1
+    · simp [hl, hr]
+  · simp [hl]
+
 @[expose] def overlay : Ty → Ty → Ty
   | .field name member rest, inherited => .field name member (overlay rest inherited)
   | _, inherited => inherited
@@ -540,13 +567,14 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       row.lookup assumptions.bounds fuel tag = some payloadType →
       payloadType.isComputation = false →
       PartialTyping assumptions context (.inject tag payload) (.variant row) uses
-  /-- The selected arm binds the payload `unrestricted` (`caseInject` substitutes it as often as
-  the arm uses it, possibly never), so the scrutinee uses no `linear` hypothesis. -/
-  | case {context : Context} {scrutinee : Term} {arms : List (String × Term)} {row result : Ty} {su au : Uses} :
+  /-- The arms bind the payload at a quantity `q` the scrutinee allows (`caseAllowed`): a `linear`
+  scrutinee's payload is bound `linear` and used exactly once by the selected arm. -/
+  | case {context : Context} {scrutinee : Term} {arms : List (String × Term)} {row result : Ty} {su au : Uses}
+      {q : Quantity} :
       PartialTyping assumptions context scrutinee (.variant row) su →
-      ArmsTyping assumptions context arms row result au →
+      ArmsTyping assumptions context q arms row result au →
       labelsDistinct arms = true →
-      linearFree context su = true →
+      caseAllowed assumptions q context su = true →
       PartialTyping assumptions context (.case scrutinee arms) result (addUses su au)
   /-- Exactly one branch runs: uses join (`joinUses`) under `branchesAgree`, so a `linear`
   hypothesis is used equally on both. -/
@@ -561,20 +589,19 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       PartialTyping assumptions context plan planType uses →
       planType.isPlan = true → response.isData = true →
       PartialTyping assumptions context (.perform plan) (.computation planType response response) uses
-  /-- A pure value where an activity is expected. Its value reaches the arms of a sequencing
-  `case`, which bind it `unrestricted`, so it uses no `linear` hypothesis. -/
+  /-- A pure value where an activity is expected. -/
   | done {context : Context} {value : Term} {planType response result : Ty} {uses : Uses} :
       PartialTyping assumptions context value result uses → result.isComputation = false →
-      linearFree context uses = true →
       PartialTyping assumptions context (.done value) (.computation planType response result) uses
   /-- Sequencing: the activity's result selects an arm; every arm is an activity
   over the same plan/response types. This is the only `bind`. -/
   | effectCase {context : Context} {scrutinee : Term} {arms : List (String × Term)}
-      {planType response row result : Ty} {su au : Uses} :
+      {planType response row result : Ty} {su au : Uses} {q : Quantity} :
       PartialTyping assumptions context scrutinee (.computation planType response (.variant row)) su →
-      ArmsTyping assumptions context arms row (.computation planType response result) au →
+      ArmsTyping assumptions context q arms row (.computation planType response result) au →
       result.isComputation = false →
       labelsDistinct arms = true →
+      caseAllowed assumptions q context su = true →
       PartialTyping assumptions context (.case scrutinee arms) (.computation planType response result) (addUses su au)
 inductive FieldsTyping (assumptions : Assumptions) : Context → List (String × Term) → Ty → Uses → Prop where
   | nil (context : Context) : FieldsTyping assumptions context [] .emptyRow (zeroUses context)
@@ -584,16 +611,18 @@ inductive FieldsTyping (assumptions : Assumptions) : Context → List (String ×
       FieldsTyping assumptions context ((name,body) :: rest) (.field name type row) (addUses bu ru)
 /-- Arms in source order build a CLOSED row: with the scrutinee at that variant
 row, every label has exactly the arm the machine's first-match lookup selects.
-Each body binds the payload unrestricted (so its type must be shareable). -/
-inductive ArmsTyping (assumptions : Assumptions) : Context → List (String × Term) → Ty → Ty → Uses → Prop where
-  | nil (context : Context) (result : Ty) : ArmsTyping assumptions context [] .emptyRow result (zeroUses context)
-  | cons {context : Context} {name : String} {body : Term} {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses} :
-      PartialTyping assumptions (⟨payload,.unrestricted⟩ :: context) body result bu →
-      safeUses (⟨payload,.unrestricted⟩ :: context) bu = true →
-      payload.shareableUnder assumptions.shareableVariables = true →
-      ArmsTyping assumptions context rest row result ru →
+Each body binds the payload at the case's quantity `q`: used as `q` allows (`Quantity.fits`:
+exactly once when `linear`), and at a shareable type when `unrestricted` (`validContext`). -/
+inductive ArmsTyping (assumptions : Assumptions) : Context → Quantity → List (String × Term) → Ty → Ty → Uses → Prop where
+  | nil (context : Context) (q : Quantity) (result : Ty) : ArmsTyping assumptions context q [] .emptyRow result (zeroUses context)
+  | cons {context : Context} {q : Quantity} {name : String} {body : Term} {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses} :
+      PartialTyping assumptions (⟨payload,q⟩ :: context) body result bu →
+      safeUses (⟨payload,q⟩ :: context) bu = true →
+      validContext assumptions.shareableVariables [⟨payload,q⟩] = true →
+      q.fits (bu.headD 0) = true →
+      ArmsTyping assumptions context q rest row result ru →
       (rest.isEmpty || branchesAgree context bu.tail ru) = true →
-      ArmsTyping assumptions context ((name,body) :: rest) (.field name payload row) result (joinUses bu.tail ru)
+      ArmsTyping assumptions context q ((name,body) :: rest) (.field name payload row) result (joinUses bu.tail ru)
 end
 
 structure Inferred (assumptions : Assumptions) (context : Context) (term : Term) where
@@ -604,11 +633,11 @@ structure InferredFields (assumptions : Assumptions) (context : Context) (fields
   type : Ty
   uses : Uses
   derivation : FieldsTyping assumptions context fields type uses
-structure InferredArms (assumptions : Assumptions) (context : Context) (arms : List (String × Term)) where
+structure InferredArms (assumptions : Assumptions) (context : Context) (q : Quantity) (arms : List (String × Term)) where
   row : Ty
   result : Ty
   uses : Uses
-  derivation : ArmsTyping assumptions context arms row result uses
+  derivation : ArmsTyping assumptions context q arms row result uses
 
 /-- The historical annotation-directed checker obtains arm binder types from
 a variant head or one declared alias step. Its final `sameType` premise validates
@@ -818,31 +847,34 @@ any stronger language. The result carries a runtime-syntax derivation. -/
       else none
   | fuel + 1, .case scrutinee arms => do
       let value ← infer assumptions annotations context (position ++ [0]) fuel scrutinee
-      match value.type with
-      | .computation _ _ produced =>
-        let row ← variantRow assumptions produced
-        let typed ← inferArms assumptions annotations context (position ++ [1]) 0 row none fuel arms
-        match hr : typed.result with
-        | .computation planType response result =>
-          if hc : agree assumptions value.type (.computation planType response (.variant typed.row)) = true then
-            if hn : result.isComputation = false then
-              if hd : labelsDistinct arms = true then
-                some ⟨.computation planType response result, addUses value.uses typed.uses,
-                  .effectCase (.conversion value.derivation (agree_sameType hc)) (hr ▸ typed.derivation) hn hd⟩
+      -- this legacy checker binds every payload `unrestricted` (so the scrutinee's captures are
+      -- reusable); the bidirectional checker binds it at the scrutinee's quantity
+      let q := Quantity.unrestricted
+      if hq : caseAllowed assumptions q context value.uses = true then
+        match value.type with
+        | .computation _ _ produced => do
+          let row ← variantRow assumptions produced
+          let typed ← inferArms assumptions annotations context q (position ++ [1]) 0 row none fuel arms
+          match hr : typed.result with
+          | .computation planType response result =>
+            if hc : agree assumptions value.type (.computation planType response (.variant typed.row)) = true then
+              if hn : result.isComputation = false then
+                if hd : labelsDistinct arms = true then
+                  some ⟨.computation planType response result, addUses value.uses typed.uses,
+                    .effectCase (.conversion value.derivation (agree_sameType hc)) (hr ▸ typed.derivation) hn hd hq⟩
+                else none
               else none
             else none
+          | _ => none
+        | _ => do
+          let row ← variantRow assumptions value.type
+          let typed ← inferArms assumptions annotations context q (position ++ [1]) 0 row none fuel arms
+          if hc : agree assumptions value.type (.variant typed.row) = true then
+            if hd : labelsDistinct arms = true then
+              some ⟨typed.result, addUses value.uses typed.uses,
+                .case (.conversion value.derivation (agree_sameType hc)) typed.derivation hd hq⟩
+            else none
           else none
-        | _ => none
-      | _ =>
-      let row ← variantRow assumptions value.type
-      let typed ← inferArms assumptions annotations context (position ++ [1]) 0 row none fuel arms
-      if hc : agree assumptions value.type (.variant typed.row) = true then
-        if hd : labelsDistinct arms = true then
-          if hl : linearFree context value.uses = true then
-            some ⟨typed.result, addUses value.uses typed.uses,
-              .case (.conversion value.derivation (agree_sameType hc)) typed.derivation hd hl⟩
-          else none
-        else none
       else none
   | fuel + 1, .ifBool condition whenTrue whenFalse => do
       let c ← infer assumptions annotations context (position ++ [0]) fuel condition
@@ -874,10 +906,8 @@ any stronger language. The result carries a runtime-syntax derivation. -/
       let annotation ← annotations position
       let value ← infer assumptions annotations context (position ++ [0]) fuel inner
       if hn : value.type.isComputation = false then
-        if hl : linearFree context value.uses = true then
-          some ⟨.computation annotation.domain annotation.codomain value.type, value.uses,
-            .done value.derivation hn hl⟩
-        else none
+        some ⟨.computation annotation.domain annotation.codomain value.type, value.uses,
+          .done value.derivation hn⟩
       else none
 
 def inferFields (assumptions : Assumptions) (annotations : Annotations) (context : Context)
@@ -895,27 +925,29 @@ def inferFields (assumptions : Assumptions) (annotations : Annotations) (context
 row; every later arm is converted to the first arm's type (`agree`). Empty arm
 lists have no result type to infer and are refused here (the relation itself
 permits them; the bidirectional checker checks them against an expected type). -/
-def inferArms (assumptions : Assumptions) (annotations : Annotations) (context : Context)
+def inferArms (assumptions : Assumptions) (annotations : Annotations) (context : Context) (q : Quantity)
     (position : List Nat) (index : Nat) (scrutineeRow : Ty) (expected : Option Ty) :
-    Nat → (arms : List (String × Term)) → Option (InferredArms assumptions context arms)
+    Nat → (arms : List (String × Term)) → Option (InferredArms assumptions context q arms)
   | 0, _ => none
   | _ + 1, [] => match expected with
-    | some result => some ⟨.emptyRow, result, zeroUses context, .nil context result⟩
+    | some result => some ⟨.emptyRow, result, zeroUses context, .nil context q result⟩
     | none => none
   | fuel + 1, (name,body) :: rest => do
       let payload ← scrutineeRow.lookup assumptions.bounds (fuel + 1) name
-      if hs : payload.shareableUnder assumptions.shareableVariables = true then
-        let first ← infer assumptions annotations (⟨payload,.unrestricted⟩ :: context) (position ++ [index]) fuel body
-        if hu : safeUses (⟨payload,.unrestricted⟩ :: context) first.uses = true then
+      if hs : validContext assumptions.shareableVariables [⟨payload,q⟩] = true then
+        let first ← infer assumptions annotations (⟨payload,q⟩ :: context) (position ++ [index]) fuel body
+        if hu : safeUses (⟨payload,q⟩ :: context) first.uses = true then
+          if hf : q.fits (first.uses.headD 0) = true then
           if ht : agree assumptions first.type (expected.getD first.type) = true then
-            let later ← inferArms assumptions annotations context position (index + 1) scrutineeRow
+            let later ← inferArms assumptions annotations context q position (index + 1) scrutineeRow
               (some (expected.getD first.type)) fuel rest
             if hl : later.result = expected.getD first.type then
               if hj : (rest.isEmpty || branchesAgree context first.uses.tail later.uses) = true then
                 some ⟨.field name payload later.row, expected.getD first.type, joinUses first.uses.tail later.uses,
-                  .cons (.conversion first.derivation (agree_sameType ht)) hu hs (hl ▸ later.derivation) hj⟩
+                  .cons (.conversion first.derivation (agree_sameType ht)) hu hs hf (hl ▸ later.derivation) hj⟩
               else none
             else none
+          else none
           else none
         else none
       else none

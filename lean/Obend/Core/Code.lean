@@ -805,7 +805,7 @@ theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : 
   refine PartialTyping.rec
     (motive_1 := fun _ term _ _ _ => NoHole term)
     (motive_2 := fun _ fields _ _ _ => ∀ field ∈ fields, NoHole field.2)
-    (motive_3 := fun _ arms _ _ _ _ => ∀ arm ∈ arms, NoHole arm.2)
+    (motive_3 := fun _ _ arms _ _ _ _ => ∀ arm ∈ arms, NoHole arm.2)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; exact .bound _
   · intros; exact .natural _
@@ -838,8 +838,8 @@ theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : 
     rcases member with rfl | member
     · exact ihb
     · exact ihr field member
-  · intro _ result arm member; simp at member
-  · intro _ name body rest payload row result bu ru hb _ _ _ _ ihb ihr arm member
+  · intro _ _ result arm member; simp at member
+  · intro _ _ name body rest payload row result bu ru hb _ _ _ _ _ ihb ihr arm member
     simp only [List.mem_cons] at member
     rcases member with rfl | member
     · exact ihb

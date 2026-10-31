@@ -385,6 +385,19 @@ public theorem argumentAllowed_append_zero {asm : Assumptions} {quantity : Quant
   · exact .inl hq
   · exact .inr ⟨hs, reusableCaptures_append_zero ha hc⟩
 
+public theorem caseAllowed_append_zero {asm : Assumptions} {quantity : Quantity}
+    {Δ Ψ Ψ' : Context} {a : Uses} (ha : a.length = Δ.length)
+    (h : caseAllowed asm quantity (Δ ++ Ψ) (a ++ zeroUses Ψ) = true) :
+    caseAllowed asm quantity (Δ ++ Ψ') (a ++ zeroUses Ψ') = true := by
+  simp only [caseAllowed, Bool.and_eq_true, Bool.or_eq_true] at h ⊢
+  exact ⟨h.1.imp id (linearFree_append_zero ha), h.2.imp id (reusableCaptures_append_zero ha)⟩
+
+public theorem caseAllowed_of_le {asm : Assumptions} {quantity : Quantity} {Γ : Context}
+    {u v : Uses} (h : UsesLE u v) (hv : caseAllowed asm quantity Γ v = true) :
+    caseAllowed asm quantity Γ u = true := by
+  simp only [caseAllowed, Bool.and_eq_true, Bool.or_eq_true] at hv ⊢
+  exact ⟨hv.1.imp id (linearFree_of_le h), hv.2.imp id (reusableCaptures_of_le h)⟩
+
 /-! ## A checked term is scoped by its context -/
 
 /-- Every hypothesis a typed term mentions is bound by its context. -/
@@ -393,7 +406,7 @@ public theorem typed_scoped {asm : Assumptions} {context : Context} {term : Term
   refine PartialTyping.rec
     (motive_1 := fun context term _ _ _ => Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ f ∈ fields, Scoped context.length f.2)
-    (motive_3 := fun context arms _ _ _ _ => ∀ arm ∈ arms, Scoped (context.length + 1) arm.2)
+    (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Scoped (context.length + 1) arm.2)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; rename_i found; exact .bound (List.getElem?_eq_some_iff.mp found).1
   · intros; exact .natural _

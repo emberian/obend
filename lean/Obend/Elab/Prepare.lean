@@ -390,10 +390,13 @@ def prepare (assumptions : Assumptions) (hints : Annotations) (context : Context
     match caseRow head with
     | none => throw (.shape (path ++ [0]) "sum or activity" scrutineeType)
     | some row =>
+      -- the payload quantity the checker computes for an unannotated case (`caseQuantityAt`)
+      let q := caseQuantity assumptions context (occurrences context.length scrutinee)
+        (armsShareable assumptions row ((name, body) :: rest))
       match mode with
       | .check expected => do
         let result ← armResult path head expected (whnf assumptions expected)
-        let trees ← prepareArms assumptions hints context (path ++ [1]) 0 row result ((name, body) :: rest)
+        let trees ← prepareArms assumptions hints context q (path ++ [1]) 0 row result ((name, body) :: rest)
         pure (.node none [scrutineeTree, .node none trees], expected)
       | .synth =>
         match rowMember row name with
@@ -401,10 +404,10 @@ def prepare (assumptions : Assumptions) (hints : Annotations) (context : Context
         | some payload => do
           -- the first arm's synthesis tree also checks at its own type; the case is annotated
           -- with its scrutinee's head and that type, so every arm is checked against it
-          let (firstTree, first) ← prepare assumptions hints (⟨payload, .unrestricted⟩ :: context) (path ++ [1, 0]) body .synth
+          let (firstTree, first) ← prepare assumptions hints (⟨payload, q⟩ :: context) (path ++ [1, 0]) body .synth
           let result ← armResult path head first first
-          let trees ← prepareArms assumptions hints context (path ++ [1]) 1 row result rest
-          pure (.node (some ⟨head, first, .unrestricted, .reusable⟩) [scrutineeTree, .node none (firstTree :: trees)], first)
+          let trees ← prepareArms assumptions hints context q (path ++ [1]) 1 row result rest
+          pure (.node (some ⟨head, first, q, .reusable⟩) [scrutineeTree, .node none (firstTree :: trees)], first)
 
 def prepareFieldsSynth (assumptions : Assumptions) (hints : Annotations) (context : Context) (path : List Nat)
     (index : Nat) : List (String × Term) → Except PrepareRefusal (List AnnotationTree × Ty)
@@ -423,15 +426,15 @@ def prepareFieldsCheck (assumptions : Assumptions) (hints : Annotations) (contex
     pure (tree :: trees)
   | (name, _) :: _, row => throw (.unknownLabel (path ++ [index]) name row)
 
-def prepareArms (assumptions : Assumptions) (hints : Annotations) (context : Context) (path : List Nat)
+def prepareArms (assumptions : Assumptions) (hints : Annotations) (context : Context) (q : Quantity) (path : List Nat)
     (index : Nat) (row result : Ty) : List (String × Term) → Except PrepareRefusal (List AnnotationTree)
   | [] => pure []
   | (name, body) :: rest =>
     match rowMember row name with
     | some payload => do
-      let (tree, _) ← prepare assumptions hints (⟨payload, .unrestricted⟩ :: context) (path ++ [index]) body
+      let (tree, _) ← prepare assumptions hints (⟨payload, q⟩ :: context) (path ++ [index]) body
         (.check result)
-      let trees ← prepareArms assumptions hints context path (index + 1) row result rest
+      let trees ← prepareArms assumptions hints context q path (index + 1) row result rest
       pure (tree :: trees)
     | none => throw (.unknownLabel (path ++ [index]) name row)
 end

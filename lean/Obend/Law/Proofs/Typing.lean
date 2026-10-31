@@ -245,22 +245,40 @@ public inductive ArmsChk (ctx : Context) (row result : Ty) : Ty → List (String
       Chk (⟨P, .unrestricted⟩ :: ctx) body result → ArmsChk ctx row result tail rest →
       ArmsChk ctx row result (.field l P tail) ((l, body) :: rest)
 
+theorem reusable_clean {ctx : Context} {uses : Uses} (h : Clean ctx) (hl : uses.length = ctx.length) :
+    reusableCaptures ([] : List Nat) ctx uses = true := by
+  simp only [reusableCaptures, hl, beq_self_eq_true, Bool.true_and, List.all_eq_true]
+  intro x hx
+  obtain ⟨q, sh⟩ := h x.1 (List.of_mem_zip hx).1
+  simp only [Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq]
+  exact .inr ⟨q, by simpa using sh⟩
+
+theorem armsShareable_chk {ctx : Context} {row result : Ty} :
+    ∀ {sub : Ty} {arms : List (String × Term)}, ArmsChk ctx row result sub arms →
+      Obend.Core.Bidirectional.armsShareable {} row arms = true
+  | _, _, .nil => rfl
+  | _, _, .cons hm hs _ rest => by
+    have tail := armsShareable_chk rest
+    simp only [Obend.Core.Bidirectional.armsShareable, List.all_cons, hm, Bool.and_eq_true] at tail ⊢
+    exact ⟨by simpa using hs, tail⟩
+
 theorem checkArms_ok {ctx : Context} {row result : Ty} (hctx : Clean ctx) :
     ∀ {sub : Ty} {arms : List (String × Term)}, ArmsChk ctx row result sub arms →
-      ∀ path idx, ∃ typed, checkArms {} noAnn ctx path idx row result arms = .ok typed ∧ typed.row = sub
-  | _, _, .nil, path, idx => ⟨_, rfl, rfl⟩
+      ∀ path idx, ∃ typed, checkArms {} noAnn ctx .unrestricted path idx row result arms = .ok typed ∧
+        typed.row = sub ∧ typed.quantity = .unrestricted
+  | _, _, .nil, path, idx => ⟨_, rfl, rfl, rfl⟩
   | _, _, .cons (P := P) hm hs hb rest, path, idx => by
     have hc : Clean (⟨P, .unrestricted⟩ :: ctx) := hctx.cons hs
     obtain ⟨a, ha⟩ := hb hc.noLinear (path ++ [idx])
-    obtain ⟨t, ht, hr⟩ := checkArms_ok hctx rest path (idx + 1)
+    obtain ⟨t, ht, hr, hq⟩ := checkArms_ok hctx rest path (idx + 1)
     have hl := Obend.Core.MachineTyping.source_uses_length a.derivation
     simp only [checkArms, hm, bind, Except.bind]
-    rw [need_ok (by simpa using hs)]
+    rw [need_ok (by simpa [validContext] using hs)]
     simp only [ha]
-    rw [need_ok (safeUses_clean hc hl)]
+    rw [need_ok (safeUses_clean hc hl), need_ok (show Quantity.unrestricted.fits (a.uses.headD 0) = true from rfl)]
     simp only [ht, pure, Except.pure, need_ok (show (_ || branchesAgree ctx a.uses.tail t.uses) = true by
-      simp [branchesAgree_noLinear hctx.noLinear])]
-    exact ⟨_, rfl, by simp [hr]⟩
+      simp [branchesAgree_noLinear hctx.noLinear]), dif_pos hq]
+    exact ⟨_, rfl, by simp [hr], rfl⟩
 
 public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)} {V row result : Ty}
     (hctx : Clean ctx) (hs : Syn ctx s V) (hV : V.canonical = .variant row)
@@ -272,14 +290,22 @@ public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)
     obtain ⟨name, body⟩ := arm
     intro hn path
     obtain ⟨v, hv, hvT⟩ := hs hn (path ++ [0])
-    obtain ⟨t, ht, hr⟩ := checkArms_ok hctx ha (path ++ [1]) 0
+    obtain ⟨t, ht, hr, hq⟩ := checkArms_ok hctx ha (path ++ [1]) 0
+    have vl := Obend.Core.MachineTyping.source_uses_length v.derivation
+    have quantity : Obend.Core.Bidirectional.caseQuantityAt {} noAnn path ctx v.uses row ((name, body) :: rest) = .unrestricted := by
+      simp [Obend.Core.Bidirectional.caseQuantityAt, noAnn, caseQuantity, linearFree_noLinear hctx.noLinear, reusable_clean hctx vl,
+        armsShareable_chk ha]
     simp only [elaborate, noAnn, hv, bind, Except.bind]
     rw [need_ok hd]
     have hw : representativeHead {} noAnn path v.type = .variant row := by rw [hvT]; exact hV
-    simp only [hw, ht]
+    simp only [hw]
+    rw [quantity]
+    simp only [ht]
     have : sameType {} v.type (.variant t.row) = true := by
       rw [hr, ← hV, hvT]; exact sameType_whnf {} V
-    rw [need_ok this, need_ok (linearFree_noLinear hctx.noLinear _)]
+    have allowed : caseAllowed {} t.quantity ctx v.uses = true := by
+      simp [hq, caseAllowed, linearFree_noLinear hctx.noLinear, reusable_clean hctx vl]
+    rw [need_ok allowed, need_ok this]
     exact ⟨_, rfl⟩
 
 /-! ## Derived forms -/

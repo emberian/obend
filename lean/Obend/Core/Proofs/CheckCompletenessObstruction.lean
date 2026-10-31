@@ -141,7 +141,7 @@ algorithm refuses empty arm lists because there is no result type to infer. -/
   uses := []
   derivation := .lambda (annotation := emptyCaseAnnotation)
     (.case (.bound (binding := ⟨.variant .emptyRow, .unrestricted⟩) (index := 0) (by rfl))
-      (.nil _ _) rfl (by simp [emptyCaseAnnotation, linearFree, variableUses]))
+      (.nil _ .unrestricted _) rfl (by simp [emptyCaseAnnotation, caseAllowed, linearFree, reusableCaptures, variableUses, Ty.shareableUnder, Ty.shareable]))
     (by simp [emptyCaseAnnotation, safeUses, variableUses, zeroUses, addUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees])
     (by simp [emptyCaseAnnotation, validContext, Ty.shareableUnder, Ty.shareable])
     (by simp [emptyCaseAnnotation, reusableAllowed, reusableCaptures,
@@ -192,7 +192,7 @@ public theorem case_labels_distinct {assumptions : Assumptions} {context : Conte
     labelsDistinct arms = true := by
   refine (PartialTyping.rec
     (motive_1 := fun _ term _ _ _ => ∀ s a, term = Term.case s a → labelsDistinct a = true)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed) _ _ rfl
   all_goals intros
   -- A constructor other than `case` or a conversion meets `term = .case s a` as a constructor
@@ -247,7 +247,8 @@ local macro "obstruction_check" : tactic => `(tactic|
     lookupV, lookupW, unvisited, walkRow, Ty.isComputation, Ty.canonical,
     safeUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees, validContext, reusableAllowed, reusableCaptures,
     zeroUses, variableUses, addUses, Ty.shareableUnder, Ty.shareable,
-    Assumptions.valid, naturalAliasAssumptions, labelsDistinct])
+    Assumptions.valid, naturalAliasAssumptions, labelsDistinct, caseAllowed, Bidirectional.caseQuantityAt,
+    caseQuantity, Bidirectional.armsShareable])
 
 /-- An absent annotation permits expected-directed checking. -/
 theorem unannotatedConstant_checks :

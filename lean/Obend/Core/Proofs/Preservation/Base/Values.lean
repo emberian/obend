@@ -256,9 +256,9 @@ theorem stack_effect_case {types : AddressTypes} {stack : List Frame} {input res
     (typed : StackTyping assumptions types stack input result) :
     ∀ arms environment rest plan response produced, stack = .case arms environment :: rest →
       TypeGraph.Equivalent assumptions input (.computation plan response produced) →
-      ∃ row planType responseType branch context uses,
+      ∃ row planType responseType branch context q uses,
         EnvironmentTyping types context environment ∧
-        ArmsTyping assumptions context arms row (.computation planType responseType branch) uses ∧
+        ArmsTyping assumptions context q arms row (.computation planType responseType branch) uses ∧
         validContext assumptions.shareableVariables context = true ∧
         TypeGraph.Equivalent assumptions produced (.variant row) ∧
         StackTyping assumptions types rest (.computation planType responseType branch) result := by
@@ -273,7 +273,7 @@ theorem stack_effect_case {types : AddressTypes} {stack : List Frame} {input res
       simp [Ty.isComputation] at activity
     | effectCase environmentTyped armsTyped valid pure =>
       have producedRelated := (TypeGraph.computation_components related).2.2
-      exact ⟨_,_,_,_,_,_,environmentTyped,armsTyped,valid,
+      exact ⟨_,_,_,_,_,_,_,environmentTyped,armsTyped,valid,
         (TypeGraph.equivalent_equivalence assumptions).symm producedRelated,restTyped⟩
   | conversion converted restTyped ih =>
     intro arms environment rest plan response produced same related

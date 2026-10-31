@@ -24,7 +24,7 @@ theorem source_inject_decomposition {assumptions : Assumptions} {context : Conte
       | .inject tag payload => InjectDerivation assumptions context tag payload type uses
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -54,7 +54,7 @@ theorem source_inject_decomposition_pure {assumptions : Assumptions} {context : 
       | .inject tag payload => InjectPureDerivation assumptions context tag payload type uses
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -97,28 +97,28 @@ public theorem typed_inject_preserved {assumptions : Assumptions} {types : Addre
 
 /-- Arms typed in source order denote a closed row whose first visible member
 for a label is exactly the binder type of the first matching arm. -/
-theorem arms_row_closed {assumptions : Assumptions} {context : Context} {arms : List (String × Term)}
-    {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context arms row result uses) :
+theorem arms_row_closed {assumptions : Assumptions} {context : Context} {q : Quantity} {arms : List (String × Term)}
+    {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context q arms row result uses) :
     row.tail = .emptyRow := by
   induction arms generalizing row uses with
   | nil => cases typed; rfl
   | cons arm rest ih =>
       cases typed with
-      | cons bodyTyped safe shareable restTyped => simpa [Ty.tail] using ih restTyped
+      | cons bodyTyped safe shareable _ restTyped => simpa [Ty.tail] using ih restTyped
 
-public theorem arms_typing_find {assumptions : Assumptions} {context : Context} {arms : List (String × Term)}
-    {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context arms row result uses)
+public theorem arms_typing_find {assumptions : Assumptions} {context : Context} {q : Quantity} {arms : List (String × Term)}
+    {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context q arms row result uses)
     {tag key : String} {body : Term} (found : arms.find? (fun arm => arm.1 == tag) = some (key,body)) :
     key = tag ∧ ∃ payload bodyUses, finiteLookup row tag = some payload ∧
-      PartialTyping assumptions (⟨payload,.unrestricted⟩ :: context) body result bodyUses ∧
-      safeUses (⟨payload,.unrestricted⟩ :: context) bodyUses = true ∧
-      payload.shareableUnder assumptions.shareableVariables = true := by
+      PartialTyping assumptions (⟨payload,q⟩ :: context) body result bodyUses ∧
+      safeUses (⟨payload,q⟩ :: context) bodyUses = true ∧
+      validContext assumptions.shareableVariables [⟨payload,q⟩] = true := by
   induction arms generalizing row uses with
   | nil => simp at found
   | cons arm rest ih =>
       obtain ⟨name,armBody⟩ := arm
       cases typed with
-      | cons bodyTyped safe shareable restTyped =>
+      | cons bodyTyped safe shareable _ restTyped =>
         by_cases hit : name = tag
         · subst hit
           simp at found
@@ -128,15 +128,15 @@ public theorem arms_typing_find {assumptions : Assumptions} {context : Context} 
           obtain ⟨keyEq,payload,bodyUses,lookup,typedBody,safeBody,share⟩ := ih restTyped next
           exact ⟨keyEq,payload,bodyUses,by simpa [finiteLookup,hit] using lookup,typedBody,safeBody,share⟩
 
-theorem arms_typing_absent {assumptions : Assumptions} {context : Context} {arms : List (String × Term)}
-    {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context arms row result uses)
+theorem arms_typing_absent {assumptions : Assumptions} {context : Context} {q : Quantity} {arms : List (String × Term)}
+    {row result : Ty} {uses : Uses} (typed : ArmsTyping assumptions context q arms row result uses)
     {tag : String} (absent : arms.find? (fun arm => arm.1 == tag) = none) : finiteLookup row tag = none := by
   induction arms generalizing row uses with
   | nil => cases typed; rfl
   | cons arm rest ih =>
       obtain ⟨name,armBody⟩ := arm
       cases typed with
-      | cons bodyTyped safe shareable restTyped =>
+      | cons bodyTyped safe shareable _ restTyped =>
         have hit : name ≠ tag := by intro same; subst same; simp at absent
         have next : rest.find? (fun arm => arm.1 == tag) = none := by simpa [hit] using absent
         simpa [finiteLookup,hit] using ih restTyped next
@@ -153,8 +153,8 @@ theorem stack_case_value {assumptions : Assumptions} {types : AddressTypes}
     (continuation : StackTyping assumptions types stack input result)
     (valueTyped : ValueTyping assumptions types value input) :
     ∀ arms environment rest, stack = .case arms environment :: rest →
-      ∃ row branchType context uses, EnvironmentTyping types context environment ∧
-        ArmsTyping assumptions context arms row branchType uses ∧
+      ∃ row branchType context q uses, EnvironmentTyping types context environment ∧
+        ArmsTyping assumptions context q arms row branchType uses ∧
         validContext assumptions.shareableVariables context = true ∧
         ValueTyping assumptions types value (.variant row) ∧
         StackTyping assumptions types rest branchType result := by
@@ -164,15 +164,15 @@ theorem stack_case_value {assumptions : Assumptions} {types : AddressTypes}
       intro arms environment rest same
       cases same
       cases frame with
-      | case environmentTyped armsTyped valid => exact ⟨_,_,_,_,environmentTyped,armsTyped,valid,valueTyped,restTyped⟩
+      | case environmentTyped armsTyped valid => exact ⟨_,_,_,_,_,environmentTyped,armsTyped,valid,valueTyped,restTyped⟩
       | effectCase => exact absurd (value_typed_not_computation valueTyped) (by simp [Ty.isComputation])
   | conversion agreement restTyped ih => exact ih (.conversion valueTyped agreement)
   | returns pure restTyped ih =>
       intro arms environment rest same
-      obtain ⟨row,planType,responseType,branch,context,uses,environmentTyped,armsTyped,valid,produced,restTyped'⟩ :=
+      obtain ⟨row,planType,responseType,branch,context,q,uses,environmentTyped,armsTyped,valid,produced,restTyped'⟩ :=
         stack_effect_case restTyped arms environment rest _ _ _ same
           ((TypeGraph.equivalent_equivalence assumptions).refl _)
-      exact ⟨row,.computation planType responseType branch,context,uses,environmentTyped,armsTyped,valid,
+      exact ⟨row,.computation planType responseType branch,context,q,uses,environmentTyped,armsTyped,valid,
         .conversion valueTyped ((sameType_iff _ _ _).mpr produced),restTyped'⟩
 
 /-- A typed returned variant always has its arm (no missingArm), and the arm
@@ -190,7 +190,7 @@ public theorem typed_case_preserved {assumptions : Assumptions} {types : Address
     have control := typed.control
     rw [returned] at control
     cases control with | returned valueTyped => exact valueTyped
-  obtain ⟨row,branchType,context,uses,environmentTyped,armsTyped,valid,variantTyped,restTyped⟩ :=
+  obtain ⟨row,branchType,context,q,uses,environmentTyped,armsTyped,valid,variantTyped,restTyped⟩ :=
     stack_case_value typed.stack valueTyped arms environment rest stack
   obtain ⟨tag,address,rfl⟩ := variant_value_form variantTyped
   obtain ⟨valueRow,member,actual,fuel,lookup,assigned,path,normal⟩ := value_variant_fields variantTyped tag address rfl
@@ -228,15 +228,17 @@ public theorem typed_case_preserved {assumptions : Assumptions} {types : Address
     let binder : ClosureTyping assumptions after ⟨.bound 0,[address]⟩ armMember :=
       ⟨bindingContext,variableUses bindingContext 0,(EnvironmentTyping.empty after).cons addressAssigned,
         bindingSource,bindingSafe,bindingValid⟩
-    have bodyValid : validContext assumptions.shareableVariables (⟨armMember,.unrestricted⟩ :: context) = true := by
-      simp only [validContext,List.all_cons] at valid ⊢
+    have bodyValid : validContext assumptions.shareableVariables (⟨armMember,q⟩ :: context) = true := by
+      simp only [validContext,List.all_cons,List.all_nil,Bool.and_true] at valid shareable ⊢
       simp [shareable,valid]
+    have pure : armMember.isComputation = false := by
+      rw [← conversionPath_isComputation toPayload]; exact heap_type_pure typed.heap assigned
     let next : ClosureTyping assumptions after ⟨body,state.heap.size :: environment⟩ branchType :=
-      ⟨⟨armMember,.unrestricted⟩ :: context,bodyUses,(environmentTyped.weaken extension).cons freshAssigned,
+      ⟨⟨armMember,q⟩ :: context,bodyUses,(environmentTyped.weaken extension).cons freshAssigned,
         bodyTyped,bodySafe,bodyValid⟩
     refine ⟨after,extension,⟨step_alloc_certificate typed after branchType ?_ ?_ ?_⟩⟩
     · simpa [stepRaw,returned,stack,found,after] using
-        heap_typed_push typed.heap (CellTyping.suspended binder (Ty.shareableUnder_not_computation _ _ shareable))
+        heap_typed_push typed.heap (CellTyping.suspended binder pure)
     · simpa [stepRaw,returned,stack,found] using ControlTyping.evaluate next
     · simpa [stepRaw,returned,stack,found] using StackTyping.weaken extension restTyped
 

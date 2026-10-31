@@ -29,7 +29,7 @@ theorem immediate_value_typed {assumptions : Assumptions} {context : Context}
       ∀ value, immediateValue term environment = some value →
         ValueTyping assumptions types value type)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case natural =>
     intro context n types env envTyped value found
@@ -223,7 +223,7 @@ theorem source_mix_expansion {assumptions : Assumptions} {context : Context}
           Nonempty (ReusableTerm assumptions context (mixBody lower upper) type)
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -275,7 +275,7 @@ theorem source_fix_expansion {assumptions : Assumptions} {context : Context}
           ConversionPath assumptions target type
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -361,7 +361,7 @@ theorem source_application_decomposition {assumptions : Assumptions} {context : 
           uses = addUses functionUses argumentUses ∧ ConversionPath assumptions codomain type
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih

@@ -236,7 +236,7 @@ theorem source_record_decomposition {assumptions : Assumptions} {context : Conte
       | .record fields => ∃ row, FieldsTyping assumptions context fields row uses ∧ ConversionPath assumptions row type
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih

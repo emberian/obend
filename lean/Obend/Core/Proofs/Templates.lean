@@ -164,6 +164,10 @@ open Obend.Core.Check Obend.Core.Term
 @[expose] public def instantiateAnnotations (σ : Nat → Ty) (annotations : Annotations) : Annotations :=
   fun position => (annotations position).map (instantiateAnnotation σ)
 
+theorem instantiate_parameter (σ : Nat → Ty) (annotations : Annotations) (position : List Nat) :
+    ((instantiateAnnotations σ annotations position).map (·.parameter)) = (annotations position).map (·.parameter) := by
+  simp only [instantiateAnnotations, Option.map_map]; rfl
+
 @[expose] public def instantiateContext (σ : Nat → Ty) (context : Context) : Context :=
   context.map fun binding => ⟨binding.type.instantiate σ, binding.quantity⟩
 
@@ -438,6 +442,15 @@ theorem Discharges.argumentAllowed_instantiate (quantity : Quantity) (context : 
   simp [argumentAllowed, instantiate_isComputation D.pure, shareableUnder_instantiate D.shareable,
     reusableCaptures_instantiate D.shareable, linearFree_instantiate]
 
+theorem Discharges.caseAllowed_instantiate (quantity : Quantity) (context : Context) (uses : Uses) :
+    caseAllowed instance_ quantity (instantiateContext σ context) uses = caseAllowed template quantity context uses := by
+  simp [caseAllowed, reusableCaptures_instantiate D.shareable, linearFree_instantiate]
+
+theorem Discharges.validBinder_instantiate (payload : Ty) (quantity : Quantity) :
+    validContext instance_.shareableVariables [⟨payload.instantiate σ, quantity⟩] =
+      validContext template.shareableVariables [⟨payload, quantity⟩] := by
+  simp [validContext, shareableUnder_instantiate D.shareable]
+
 theorem Discharges.reusableAllowed_instantiate (reuse : Reuse) (context : Context) (uses : Uses) :
     reusableAllowed instance_ reuse (instantiateContext σ context) uses = reusableAllowed template reuse context uses := by
   simp [reusableAllowed, reusableCaptures_instantiate D.shareable]
@@ -466,15 +479,15 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           (fuel + extra) fields = some result' ∧
         result'.type = result.type.instantiate σ ∧ result'.uses = result.uses) ∧
     (∀ (annotations : Annotations) (context : Context) (position : List Nat) (index : Nat) (row : Ty)
-        (expected : Option Ty) (arms : List (String × Term)) (result : InferredArms template context arms),
-      inferArms template annotations context position index row expected fuel arms = some result →
-      ∃ result' : InferredArms instance_ (instantiateContext σ context) arms,
-        inferArms instance_ (instantiateAnnotations σ annotations) (instantiateContext σ context) position index
+        (expected : Option Ty) (q : Quantity) (arms : List (String × Term)) (result : InferredArms template context q arms),
+      inferArms template annotations context q position index row expected fuel arms = some result →
+      ∃ result' : InferredArms instance_ (instantiateContext σ context) q arms,
+        inferArms instance_ (instantiateAnnotations σ annotations) (instantiateContext σ context) q position index
           (row.instantiate σ) (expected.map (Ty.instantiate σ)) (fuel + extra) arms = some result' ∧
         result'.row = result.row.instantiate σ ∧ result'.result = result.result.instantiate σ ∧
         result'.uses = result.uses)
   | 0 => ⟨fun _ _ _ _ _ h => by simp [infer] at h, fun _ _ _ _ _ _ h => by simp [inferFields] at h,
-      fun _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
+      fun _ _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
   | fuel + 1 => by
     obtain ⟨ih, ihFields, ihArms⟩ := Discharges.infer_instantiate instanceValid fuel
     rw [show fuel + 1 + extra = (fuel + extra) + 1 by omega]
@@ -946,6 +959,13 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         obtain ⟨value', valueTyped', valueType, valueUses⟩ := ih _ _ _ _ _ valueTyped
         simp only [infer, Option.bind_eq_bind, valueTyped', Option.bind_some]
         split at h
+        rotate_left; · cases h
+        rename_i allowed
+        have allowed' : caseAllowed instance_ .unrestricted
+            (instantiateContext σ context) value'.uses = true := by
+          rw [valueUses, D.caseAllowed_instantiate]; exact allowed
+        rw [dif_pos allowed']
+        split at h
         · rename_i plan response produced activity
           simp only [Option.bind_eq_some_iff] at h
           obtain ⟨row, rowFound, typed, armsTyped, h⟩ := h
@@ -964,7 +984,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           cases h
           have activity' : value'.type = .computation (plan.instantiate σ) (response.instantiate σ)
               (produced.instantiate σ) := by rw [valueType, activity]; rfl
-          obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ := ihArms _ _ _ _ _ _ _ _ armsTyped
+          obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ := ihArms _ _ _ _ _ _ _ _ _ armsTyped
           simp only [Option.map_none] at armsTyped'
           rw [resultShape] at typedResult
           split
@@ -998,11 +1018,8 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           split at h
           rotate_left; · cases h
           rename_i distinct
-          split at h
-          rotate_left; · cases h
-          rename_i free
           cases h
-          obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ := ihArms _ _ _ _ _ _ _ _ armsTyped
+          obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ := ihArms _ _ _ _ _ _ _ _ _ armsTyped
           simp only [Option.map_none] at armsTyped'
           have pureValue : value.type.isComputation = false := by
             cases shape : value.type with
@@ -1019,9 +1036,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
             have a1 : agree instance_ value'.type (.variant typed'.row) = true := by
               rw [typedRow, valueType]
               exact D.agree_instantiate instanceValid agreed
-            have free' : linearFree (instantiateContext σ context) value'.uses = true := by
-              rw [valueUses, linearFree_instantiate]; exact free
-            rw [dif_pos a1, dif_pos distinct, dif_pos free']
+            rw [dif_pos a1, dif_pos distinct]
             exact ⟨_, rfl, typedResult, by dsimp only; rw [valueUses, typedUses]⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -1075,18 +1090,13 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i pureValue
-        split at h
-        rotate_left; · cases h
-        rename_i free
         cases h
         obtain ⟨value', valueTyped', valueType, valueUses⟩ := ih _ _ _ _ _ valueTyped
         have found' : instantiateAnnotations σ annotations position = some (instantiateAnnotation σ annotation) := by
           simp [instantiateAnnotations, found]
         have p1 : value'.type.isComputation = false := by
           rw [valueType, instantiate_isComputation D.pure]; exact pureValue
-        have free' : linearFree (instantiateContext σ context) value'.uses = true := by
-          rw [valueUses, linearFree_instantiate]; exact free
-        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1, dif_pos free']
+        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1]
         exact ⟨_, rfl, by simp [Ty.instantiate, instantiateAnnotation, valueType], valueUses⟩
     · intro annotations context position index fields result h
       cases fields with
@@ -1107,7 +1117,7 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           rw [firstType, instantiate_isComputation D.pure]; exact pureFirst
         simp only [inferFields, Option.bind_eq_bind, firstTyped', laterTyped', Option.bind_some, dif_pos p1]
         exact ⟨_, rfl, by simp [Ty.instantiate, firstType, laterType], by dsimp only; rw [firstUses, laterUses]⟩
-    · intro annotations context position index row expected arms result h
+    · intro annotations context position index row expected q arms result h
       cases arms with
       | nil =>
         cases expected with
@@ -1129,6 +1139,9 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         rename_i safe
         split at h
         rotate_left; · cases h
+        rename_i fits
+        split at h
+        rotate_left; · cases h
         rename_i agreed
         simp only [Option.bind_eq_some_iff] at h
         obtain ⟨later, laterTyped, h⟩ := h
@@ -1142,24 +1155,25 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         have found' : (row.instantiate σ).lookup instance_.bounds (fuel + extra + 1) name = some (payload.instantiate σ) := by
           rw [show fuel + extra + 1 = fuel + 1 + extra by omega]
           exact D.lookup_instantiate _ _ _ _ found
-        have s1 : (payload.instantiate σ).shareableUnder instance_.shareableVariables = true := by
-          rw [shareableUnder_instantiate D.shareable]; exact sharePayload
+        have s1 : validContext instance_.shareableVariables [⟨payload.instantiate σ, q⟩] = true := by
+          rw [D.validBinder_instantiate]; exact sharePayload
         obtain ⟨first', firstTyped', firstType, firstUses⟩ := ih _ _ _ _ _ firstTyped
         simp only [instantiateContext_cons] at firstTyped'
-        obtain ⟨later', laterTyped', laterRow, laterResult, laterUses⟩ := ihArms _ _ _ _ _ _ _ _ laterTyped
+        obtain ⟨later', laterTyped', laterRow, laterResult, laterUses⟩ := ihArms _ _ _ _ _ _ _ _ _ laterTyped
         simp only [Option.map_some] at laterTyped'
         have getD : ((expected.map (Ty.instantiate σ)).getD first'.type) = (expected.getD first.type).instantiate σ := by
           rw [firstType]; cases expected <;> rfl
         rw [← getD] at laterTyped'
-        have u1 : safeUses (⟨payload.instantiate σ, .unrestricted⟩ :: instantiateContext σ context) first'.uses = true := by
+        have u1 : safeUses (⟨payload.instantiate σ, q⟩ :: instantiateContext σ context) first'.uses = true := by
           rw [firstUses, ← instantiateContext_cons, safeUses_instantiate]; exact safe
+        have f1 : q.fits (first'.uses.headD 0) = true := by rw [firstUses]; exact fits
         have l1 : later'.result = (expected.map (Ty.instantiate σ)).getD first'.type := by rw [laterResult, getD, same]
         have a1 : agree instance_ first'.type ((expected.map (Ty.instantiate σ)).getD first'.type) = true := by
           rw [getD, firstType]; exact D.agree_instantiate instanceValid agreed
         have j1 : (rest.isEmpty || branchesAgree (instantiateContext σ context) first'.uses.tail later'.uses) = true := by
           rw [firstUses, laterUses, branchesAgree_instantiate]; exact agreeing
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos s1, firstTyped', dif_pos u1,
-          dif_pos a1, laterTyped', dif_pos l1, dif_pos j1]
+          dif_pos f1, dif_pos a1, laterTyped', dif_pos l1, dif_pos j1]
         exact ⟨_, rfl, by simp [Ty.instantiate, laterRow], getD, by dsimp only; rw [firstUses, laterUses]⟩
 
 

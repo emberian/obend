@@ -36,16 +36,16 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           inferFields asm ann' (Δ ++ Ψ') pos' index (fuel + extra) fields = some result' ∧
           result'.type = result.type ∧ result'.uses = a ++ zeroUses Ψ') ∧
     (∀ (ann ann' : Annotations) (Δ : Context) (pos pos' : List Nat) (index : Nat) (row : Ty)
-        (expected : Option Ty) (arms : List (String × Term)) (result : InferredArms asm (Δ ++ Ψ) arms),
+        (expected : Option Ty) (q : Quantity) (arms : List (String × Term)) (result : InferredArms asm (Δ ++ Ψ) q arms),
       (∀ arm ∈ arms, Scoped (Δ.length + 1) arm.2) →
-      inferArms asm ann (Δ ++ Ψ) pos index row expected fuel arms = some result →
+      inferArms asm ann (Δ ++ Ψ) q pos index row expected fuel arms = some result →
       (∀ rest, ann' (pos' ++ rest) = ann (pos ++ rest)) →
       ∃ a : Uses, a.length = Δ.length ∧ result.uses = a ++ zeroUses Ψ ∧
-        ∃ result' : InferredArms asm (Δ ++ Ψ') arms,
-          inferArms asm ann' (Δ ++ Ψ') pos' index row expected (fuel + extra) arms = some result' ∧
+        ∃ result' : InferredArms asm (Δ ++ Ψ') q arms,
+          inferArms asm ann' (Δ ++ Ψ') q pos' index row expected (fuel + extra) arms = some result' ∧
           result'.row = result.row ∧ result'.result = result.result ∧ result'.uses = a ++ zeroUses Ψ')
   | 0 => ⟨fun _ _ _ _ _ _ _ _ h => by simp [infer] at h, fun _ _ _ _ _ _ _ _ _ h => by simp [inferFields] at h,
-      fun _ _ _ _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
+      fun _ _ _ _ _ _ _ _ _ _ _ _ h => by simp [inferArms] at h⟩
   | fuel + 1 => by
     obtain ⟨ih, ihFields, ihArms⟩ := infer_transport asm Ψ Ψ' valid' extra fuel
     rw [show fuel + 1 + extra = (fuel + extra) + 1 by omega]
@@ -556,6 +556,12 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           ih ann ann' Δ _ _ scrutinee value hs₁ valueTyped (shift_child hann 0)
         simp only [infer, Option.bind_eq_bind, valueTyped', Option.bind_some]
         split at h
+        rotate_left; · cases h
+        rename_i allowed
+        have allowed' : caseAllowed asm .unrestricted (Δ ++ Ψ') value'.uses = true := by
+          rw [valueUses']; exact caseAllowed_append_zero ha₁ (by rw [← valueUses]; exact allowed)
+        rw [dif_pos allowed']
+        split at h
         · rename_i plan response produced activity
           simp only [Option.bind_eq_some_iff] at h
           obtain ⟨row, rowFound, typed, armsTyped, h⟩ := h
@@ -573,7 +579,7 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           rename_i distinct
           cases h
           obtain ⟨a₂, ha₂, typedUses, typed', armsTyped', typedRow, typedResult, typedUses'⟩ :=
-            ihArms ann ann' Δ _ _ 0 row none arms typed hs₂ armsTyped (shift_child hann 1)
+            ihArms ann ann' Δ _ _ 0 row none _ arms typed hs₂ armsTyped (shift_child hann 1)
           have hl : a₁.length = a₂.length := ha₁.trans ha₂.symm
           have activity' : value'.type = .computation plan response produced := by rw [valueType, activity]
           split
@@ -605,12 +611,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           split at h
           rotate_left; · cases h
           rename_i distinct
-          split at h
-          rotate_left; · cases h
-          rename_i free
           cases h
           obtain ⟨a₂, ha₂, typedUses, typed', armsTyped', typedRow, typedResult, typedUses'⟩ :=
-            ihArms ann ann' Δ _ _ 0 row none arms typed hs₂ armsTyped (shift_child hann 1)
+            ihArms ann ann' Δ _ _ 0 row none _ arms typed hs₂ armsTyped (shift_child hann 1)
           have hl : a₁.length = a₂.length := ha₁.trans ha₂.symm
           split
           · rename_i p r pr activity
@@ -620,9 +623,7 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
-            have free' : linearFree (Δ ++ Ψ') value'.uses = true := by
-              rw [valueUses']; exact linearFree_append_zero ha₁ (by rw [← valueUses]; exact free)
-            simp only [labelsDistinct_map, distinct, ↓reduceDIte, dif_pos free']
+            simp only [labelsDistinct_map, distinct, ↓reduceDIte]
             refine ⟨addUses a₁ a₂, by rw [length_addUses hl, ha₁], ?_, _, rfl, by exact typedResult, ?_⟩
             · show addUses value.uses typed.uses = _; rw [valueUses, typedUses, split_add Ψ hl]
             · show addUses value'.uses typed'.uses = _; rw [valueUses', typedUses', split_add Ψ' hl]
@@ -687,17 +688,12 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i pureValue
-        split at h
-        rotate_left; · cases h
-        rename_i free
         cases h
         obtain ⟨a, ha, valueUses, value', valueTyped', valueType, valueUses'⟩ :=
           ih ann ann' Δ _ _ inner value ((scoped_done_iff _ _).1 hs) valueTyped (shift_child hann 0)
         have found' : ann' pos' = some annotation := by rw [shift_here hann]; exact found
         have p1 : value'.type.isComputation = false := by rw [valueType]; exact pureValue
-        have free' : linearFree (Δ ++ Ψ') value'.uses = true := by
-          rw [valueUses']; exact linearFree_append_zero ha (by rw [← valueUses]; exact free)
-        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1, dif_pos free']
+        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1]
         refine ⟨a, ha, valueUses, _, rfl, ?_, valueUses'⟩
         show Ty.computation annotation.domain annotation.codomain value'.type = _; rw [valueType]
     · intro ann ann' Δ pos pos' index fields result hs h hann
@@ -725,7 +721,7 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         · show addUses first.uses later.uses = _; rw [firstUses, laterUses, split_add Ψ hl]
         · show Ty.field name first'.type later'.type = Ty.field name first.type later.type; rw [firstType, laterType]
         · show addUses first'.uses later'.uses = _; rw [firstUses', laterUses', split_add Ψ' hl]
-    · intro ann ann' Δ pos pos' index row expected arms result hs h hann
+    · intro ann ann' Δ pos pos' index row expected q arms result hs h hann
       cases arms with
       | nil =>
         cases expected with
@@ -747,6 +743,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         rename_i safe
         split at h
         rotate_left; · cases h
+        rename_i fits
+        split at h
+        rotate_left; · cases h
         rename_i agreed
         simp only [Option.bind_eq_some_iff] at h
         obtain ⟨later, laterTyped, h⟩ := h
@@ -758,22 +757,27 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         rename_i agreeing
         cases h
         obtain ⟨a₁, ha₁, firstUses, first₀, firstTyped₀, firstType₀, firstUses₀⟩ :=
-          ih ann ann' (⟨payload, .unrestricted⟩ :: Δ) _ _ body first (hs _ List.mem_cons_self) firstTyped
+          ih ann ann' (⟨payload, q⟩ :: Δ) _ _ body first (hs _ List.mem_cons_self) firstTyped
             (shift_child hann index)
         obtain ⟨first', firstTyped', firstType, firstUses'⟩ :
-            ∃ first' : Inferred asm (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ')) body,
-              infer asm ann' (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ')) (pos' ++ [index]) (fuel + extra) body =
+            ∃ first' : Inferred asm (⟨payload, q⟩ :: (Δ ++ Ψ')) body,
+              infer asm ann' (⟨payload, q⟩ :: (Δ ++ Ψ')) (pos' ++ [index]) (fuel + extra) body =
                 some first' ∧ first'.type = first.type ∧ first'.uses = a₁ ++ zeroUses Ψ' :=
           ⟨first₀, firstTyped₀, firstType₀, firstUses₀⟩
         obtain ⟨a₂, ha₂, laterUses, later', laterTyped', laterRow, laterResult, laterUses'⟩ :=
-          ihArms ann ann' Δ pos pos' (index + 1) row (some (expected.getD first.type)) rest later
+          ihArms ann ann' Δ pos pos' (index + 1) row (some (expected.getD first.type)) q rest later
             (fun arm harm => hs arm (List.mem_cons_of_mem _ harm)) laterTyped hann
         have hne : a₁ ≠ [] := ne_nil_of_length_succ ha₁
         have hl : a₁.tail.length = a₂.length := by simp [ha₁, ha₂]
         have found' : row.lookup asm.bounds (fuel + extra + 1) name = some payload := Ty.lookup_mono found (by omega)
-        have u1 : safeUses (⟨payload, .unrestricted⟩ :: (Δ ++ Ψ')) first'.uses = true := by
+        have u1 : safeUses (⟨payload, q⟩ :: (Δ ++ Ψ')) first'.uses = true := by
           rw [firstUses']
-          exact safeUses_append_zero (Δ := ⟨payload, .unrestricted⟩ :: Δ) ha₁ (by rw [← firstUses]; exact safe)
+          exact safeUses_append_zero (Δ := ⟨payload, q⟩ :: Δ) ha₁ (by rw [← firstUses]; exact safe)
+        have f1 : q.fits (first'.uses.headD 0) = true := by
+          rw [firstUses']; rw [firstUses] at fits
+          cases a₁ with
+          | nil => simp at hne
+          | cons x xs => simpa using fits
         rw [← firstType] at laterTyped'
         have hl' : later'.result = expected.getD first'.type := by rw [laterResult, firstType]; exact sameResult
         have a1 : agree asm first'.type (expected.getD first'.type) = true := by rw [firstType]; exact agreed
@@ -782,7 +786,7 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           rw [firstUses', laterUses', split_tail Ψ' hne, branchesAgree_append_zero hl₁ ha₂]
           rw [firstUses, laterUses, split_tail Ψ hne, branchesAgree_append_zero hl₁ ha₂] at agreeing; exact agreeing
         simp only [inferArms, Option.bind_eq_bind, found', Option.bind_some, dif_pos sharePayload, firstTyped',
-          dif_pos u1, dif_pos a1, laterTyped', dif_pos hl', dif_pos j1]
+          dif_pos u1, dif_pos f1, dif_pos a1, laterTyped', dif_pos hl', dif_pos j1]
         refine ⟨joinUses a₁.tail a₂, by rw [length_joinUses hl]; simp [ha₁], ?_, _, rfl, ?_, by show expected.getD first'.type = expected.getD first.type; rw [firstType], ?_⟩
         · show joinUses first.uses.tail later.uses = _; rw [firstUses, laterUses, split_tail Ψ hne, split_join Ψ hl]
         · show Ty.field name payload later'.row = Ty.field name payload later.row; rw [laterRow]

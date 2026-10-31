@@ -128,7 +128,7 @@ public theorem source_not_hole {assumptions : Assumptions} {context : Context}
   apply PartialTyping.rec
     (motive_1 := fun _ term _ _ _ => ∀ n σ, term ≠ .hole n σ)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -150,7 +150,7 @@ public theorem source_bound_assignment {assumptions : Assumptions} {context : Co
           ConversionPath assumptions binding.type type
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case bound =>
     intro context index binding found; exact ⟨binding,found,.refl binding.type⟩

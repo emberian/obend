@@ -195,23 +195,50 @@ public theorem extend_overwrite_refused :
 
 #tooth extend_overwrite_refused by mutation heldQuantity := .affine
 
-/-- `λh. case l h of l x. 0`: the arm binds the payload `unrestricted` and drops it
-(`Step.caseInject`). -/
+/-- `λh. case l h of l x. 0`: the arm drops the payload (`Step.caseInject`). Before 11-01 the arm
+bound it `unrestricted`; the arm now binds it at the case's quantity (here `q`, the hypothesis's),
+and a `linear` payload is used exactly once. -/
 @[expose] public def oneLabel : Ty := .variant (.field "l" .natural .emptyRow)
 @[expose] public def caseBody : Term := .case (.inject "l" (.bound 0)) [("l", .nat 0)]
 @[expose] public def caseDrop (q : Quantity) : AnnotatedTerm :=
   ⟨.lam caseBody, fun p => if p = [] then some ⟨.natural, .natural, q, .once⟩
-    else if p = [0] then some ⟨oneLabel, .natural, .unrestricted, .reusable⟩ else none, {}⟩
+    else if p = [0] then some ⟨oneLabel, .natural, q, .reusable⟩ else none, {}⟩
 
 public theorem case_drops_in_one_step :
     Step caseBody (.nat 0) ∧ occurrences 1 caseBody = [1] ∧ occurrences 1 (.nat 0) = [0] :=
   ⟨by simpa [caseBody, instantiate, Term.substitute] using Step.caseInject "l" (.bound 0) [("l", .nat 0)] (.nat 0) rfl,
     by decide, by decide⟩
 
-/-- TOOTH: the scrutinee of the `case` at `[0]` uses `h`. -/
+/-- TOOTH: the arm at `[0, 1, 0]` binds the `linear` payload and does not use it. -/
 public theorem case_scrutinee_refused :
     (match checkAgainst (caseDrop heldQuantity) [] (.arrow .once heldQuantity .natural .natural) with
-      | .error (.linearScrutinee [0] 0) => true
+      | .error (.linearScrutinee [0, 1, 0]) => true
+      | _ => false) = true := by decide
+
+/-- The same scrutinee with no case annotation: the checker binds the payload `linear` itself
+(`caseQuantity`), and refuses the same arm. -/
+public theorem case_scrutinee_refused_unannotated :
+    (match checkAgainst ⟨.lam (.case (.inject "l" (.bound 0)) [("l", .nat 0)]), fun p =>
+        if p = [] then some ⟨.natural, .natural, .linear, .once⟩
+        else if p = [0, 0] then some ⟨.natural, oneLabel, .unrestricted, .reusable⟩ else none, {}⟩
+        [] (.arrow .once .linear .natural .natural) with
+      | .error (.linearScrutinee [0, 1, 0]) => true
+      | _ => false) = true := by decide
+
+/-- A `linear` sum is matched: the arm uses its `linear` payload once, `λh. case l h of l x. x`. -/
+public theorem linear_sum_matched :
+    (checkAgainst ⟨.lam (.case (.inject "l" (.bound 0)) [("l", .bound 0)]), fun p =>
+        if p = [] then some ⟨.natural, .natural, .linear, .once⟩
+        else if p = [0] then some ⟨oneLabel, .natural, .linear, .reusable⟩ else none, {}⟩
+        [] (.arrow .once .linear .natural .natural)).toBool = true := by decide
+
+/-- An annotation that binds a `linear` scrutinee's payload `unrestricted` is refused at the case. -/
+public theorem linear_scrutinee_unrestricted_payload_refused :
+    (match checkAgainst ⟨.lam (.case (.inject "l" (.bound 0)) [("l", .bound 0)]), fun p =>
+        if p = [] then some ⟨.natural, .natural, .linear, .once⟩
+        else if p = [0] then some ⟨oneLabel, .natural, .unrestricted, .reusable⟩ else none, {}⟩
+        [] (.arrow .once .linear .natural .natural) with
+      | .error (.linearArgumentDropped [0] 0 .unrestricted) => true
       | _ => false) = true := by decide
 
 #tooth case_scrutinee_refused by mutation heldQuantity := .affine
@@ -226,12 +253,13 @@ public theorem case_copies_in_one_step :
     by decide⟩
 
 /-- `λh. case (done (l h)) of l x. done 0`, a sequencing `case`: `done` steps to its value, and the
-plain `case` then drops it. Two steps; a fifth rule beside Gemini's four. -/
+plain `case` then drops it. Two steps; the same arm rule closes it (a `done` premise did, before the
+arm rule). -/
 @[expose] public def activity (result : Ty) : Ty := .computation (.variant .emptyRow) .natural result
 @[expose] public def doneBody : Term := .case (.done (.inject "l" (.bound 0))) [("l", .done (.nat 0))]
 @[expose] public def doneDrop (q : Quantity) : AnnotatedTerm :=
   ⟨.lam doneBody, fun p => if p = [] then some ⟨.natural, activity .natural, q, .once⟩
-    else if p = [0] then some ⟨activity oneLabel, activity .natural, .unrestricted, .reusable⟩ else none, {}⟩
+    else if p = [0] then some ⟨activity oneLabel, activity .natural, q, .reusable⟩ else none, {}⟩
 
 public theorem done_drops_in_two_steps :
     Steps doneBody (.done (.nat 0)) ∧ occurrences 1 doneBody = [1] ∧ occurrences 1 (.done (.nat 0)) = [0] :=
@@ -240,10 +268,10 @@ public theorem done_drops_in_two_steps :
         Step.caseInject "l" (.bound 0) [("l", .done (.nat 0))] (.done (.nat 0)) rfl) (.refl _)),
     by decide, by decide⟩
 
-/-- TOOTH: the value of the `done` at `[0, 0]` uses `h`. -/
+/-- TOOTH: the sequencing arm at `[0, 1, 0]` binds the `linear` payload and does not use it. -/
 public theorem done_value_refused :
     (match checkAgainst (doneDrop heldQuantity) [] (.arrow .once heldQuantity .natural (activity .natural)) with
-      | .error (.linearReturned [0, 0] 0) => true
+      | .error (.linearScrutinee [0, 1, 0]) => true
       | _ => false) = true := by decide
 
 #tooth done_value_refused by mutation heldQuantity := .affine

@@ -269,7 +269,7 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
     (motive_2 := fun context fields _ u _ => ∀ d σ A ua, Sub a context d σ A ua → ∀ j, LinearAt (context.eraseIdx d) j →
       (fieldOccurrences (context.eraseIdx d).length (fields.map fun field => (field.1, field.2.substitute σ))).getD j 0 =
         Image d ua u j)
-    (motive_3 := fun context arms _ _ u _ => ∀ d σ A ua, Sub a context d σ A ua → ∀ j, LinearAt (context.eraseIdx d) j →
+    (motive_3 := fun context _ arms _ _ u _ => ∀ d σ A ua, Sub a context d σ A ua → ∀ j, LinearAt (context.eraseIdx d) j →
       (armOccurrences (context.eraseIdx d).length
         (arms.map fun field => (field.1, field.2.substitute (liftSubstitution σ)))).getD j 0 = Image d ua u j)
     (t := typed)
@@ -366,7 +366,7 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
     intro context tag payload payloadType row uses fuel payloadTyped lookup pure ih d σ A ua S j lin
     simp only [Term.substitute, occurrences]; exact ih d σ A ua S j lin
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped distinct free ihS ihA d σ A ua S j lin
+    intro context scrutinee arms row result su au q scrutineeTyped armsTyped distinct allowed ihS ihA d σ A ua S j lin
     simp only [Term.substitute, occurrences]
     rw [getD_addUses ((occurrences_length _ _).trans (armOccurrences_length _ _).symm),
       image_add ((source_uses_length scrutineeTyped).trans (Obend.Core.Proofs.Preservation.arms_uses_length armsTyped).symm),
@@ -385,10 +385,10 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
     intro context plan planType response uses planTyped isPlan isData ih d σ A ua S j lin
     simp only [Term.substitute, occurrences]; exact ih d σ A ua S j lin
   case done =>
-    intro context value planType response result uses valueTyped pure free ih d σ A ua S j lin
+    intro context value planType response result uses valueTyped pure ih d σ A ua S j lin
     simp only [Term.substitute, occurrences]; exact ih d σ A ua S j lin
   case effectCase =>
-    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure distinct ihS ihA d σ A ua S j lin
+    intro context scrutinee arms planType response row result su au q scrutineeTyped armsTyped pure distinct allowed ihS ihA d σ A ua S j lin
     simp only [Term.substitute, occurrences]
     rw [getD_addUses ((occurrences_length _ _).trans (armOccurrences_length _ _).symm),
       image_add ((source_uses_length scrutineeTyped).trans (Obend.Core.Proofs.Preservation.arms_uses_length armsTyped).symm),
@@ -403,12 +403,11 @@ theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {
       image_add ((source_uses_length bodyTyped).trans (source_uses_length (PartialTyping.record restTyped)).symm),
       ihBody d σ A ua S j lin, ihRest d σ A ua S j lin]
   case nil =>
-    intro context result d σ A ua S j lin
+    intro context q result d σ A ua S j lin
     simp only [List.map_nil, armOccurrences, image_zero]; exact getD_replicate_zero _ _
   case cons =>
-    intro context name body rest payload row result bu ru bodyTyped safe shareable restTyped agreeing ihBody ihRest d σ A ua S j lin
-    have vx : validContext a.shareableVariables [⟨payload, .unrestricted⟩] = true := by
-      simp [validContext, shareable]
+    intro context q name body rest payload row result bu ru bodyTyped safe shareable fits restTyped agreeing ihBody ihRest d σ A ua S j lin
+    have vx : validContext a.shareableVariables [⟨payload, q⟩] = true := shareable
     have hb := ihBody (d + 1) _ _ _ (S.lift _ vx) (j + 1) (by simpa using linearAt_cons.mpr lin)
     simp only [List.eraseIdx_cons_succ, List.length_cons] at hb
     have bl : bu.tail.length = context.length := by simp [source_uses_length bodyTyped]
@@ -443,7 +442,7 @@ theorem lam_inv {a : Assumptions} {context : Context} {body : Term} {T : Ty} {u 
       ann.parameter.fits (ub.headD 0) = true ∧
       validContext a.shareableVariables (⟨ann.domain, ann.parameter⟩ :: context) = true ∧
       sameType a (.arrow ann.reuse ann.parameter ann.domain ann.codomain) T = true ∧ u = ub.tail)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case lambda =>
     intro context body' ann ub hb _ valid _ fits _ body e
@@ -464,7 +463,7 @@ theorem specification_inv {a : Assumptions} {context : Context} {m e : Term} {T 
     (motive_1 := fun context t _ u _ => ∀ m e, Term.specification m e = t → ∃ mu eu,
       (∃ M, PartialTyping a context m M mu) ∧ (∃ E, PartialTyping a context e E eu) ∧
       linearFree context mu = true ∧ u = addUses mu eu)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case specification =>
     intro context m' e' M E mu eu hm he _ _ free _ _ m e eq
@@ -481,7 +480,7 @@ theorem prototype_inv {a : Assumptions} {context : Context} {s t : Term} {T : Ty
   apply PartialTyping.rec
     (motive_1 := fun context term _ u _ => ∀ s t, Term.prototype s t = term → ∃ su tu,
       (∃ S, PartialTyping a context s S su) ∧ (∃ T', PartialTyping a context t T' tu) ∧ u = addUses su tu)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case prototype =>
     intro context s' t' S T' su tu hs ht _ _ _ _ s t eq
@@ -496,7 +495,7 @@ theorem record_inv {a : Assumptions} {context : Context} {fields : List (String 
   revert ht; revert fields
   apply PartialTyping.rec
     (motive_1 := fun context term _ u _ => ∀ fields, Term.record fields = term → ∃ row, FieldsTyping a context fields row u)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case record =>
     intro context fields' row u hf _ fields eq
@@ -513,7 +512,7 @@ theorem inject_inv {a : Assumptions} {context : Context} {l : String} {p : Term}
   apply PartialTyping.rec
     (motive_1 := fun context term T u _ => ∀ l p, Term.inject l p = term →
       (∃ P, PartialTyping a context p P u) ∧ ∃ row, sameType a (.variant row) T = true)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := h)
   case inject =>
     intro context tag payload P row u fuel hp _ _ _ l p eq
@@ -525,21 +524,21 @@ theorem inject_inv {a : Assumptions} {context : Context} {l : String} {p : Term}
   all_goals inv_other
 
 theorem arms_find {a : Assumptions} {context : Context} {l : String} {body : Term} :
-    ∀ {arms : List (String × Term)} {row result : Ty} {au : Uses}, ArmsTyping a context arms row result au →
+    ∀ {q : Quantity} {arms : List (String × Term)} {row result : Ty} {au : Uses}, ArmsTyping a context q arms row result au →
       arms.find? (fun arm => arm.1 == l) = some (l, body) → ∃ payload bu,
-        PartialTyping a (⟨payload, .unrestricted⟩ :: context) body result bu ∧
-        payload.shareableUnder a.shareableVariables = true ∧
+        PartialTyping a (⟨payload, q⟩ :: context) body result bu ∧
+        validContext a.shareableVariables [⟨payload, q⟩] = true ∧ q.fits (bu.headD 0) = true ∧
         ∀ j, LinearAt context j → bu.tail.getD j 0 = au.getD j 0
-  | [], _, _, _, _, found => by simp at found
-  | (name, b) :: rest, _, _, _, typed, found => by
+  | _, [], _, _, _, _, found => by simp at found
+  | _, (name, b) :: rest, _, _, _, typed, found => by
     cases typed with
-    | @cons _ _ _ _ payload _ _ bu ru hb _ share restTyped agreeing =>
+    | @cons _ _ _ _ _ payload _ _ bu ru hb _ share fits restTyped agreeing =>
       have bl : bu.tail.length = context.length := by simp [source_uses_length hb]
       have rl := Obend.Core.Proofs.Preservation.arms_uses_length restTyped
       by_cases hn : (name == l) = true
       · simp only [List.find?_cons, hn] at found
         cases found
-        refine ⟨payload, bu, hb, share, fun j lin => ?_⟩
+        refine ⟨payload, bu, hb, share, fits, fun j lin => ?_⟩
         rw [getD_joinUses (bl.trans rl.symm)]
         cases rest with
         | nil => cases restTyped; rw [getD_zeroUses, Nat.max_zero]
@@ -547,8 +546,8 @@ theorem arms_find {a : Assumptions} {context : Context} {l : String} {body : Ter
           simp only [List.isEmpty_cons, Bool.false_or] at agreeing
           rw [branchesAgree_getD agreeing bl rl lin]; simp
       · simp only [List.find?_cons, hn] at found
-        obtain ⟨payload', bu', hb', share', counts⟩ := arms_find restTyped found
-        refine ⟨payload', bu', hb', share', fun j lin => ?_⟩
+        obtain ⟨payload', bu', hb', share', fits', counts⟩ := arms_find restTyped found
+        refine ⟨payload', bu', hb', share', fits', fun j lin => ?_⟩
         rw [getD_joinUses (bl.trans rl.symm), counts j lin]
         cases rest with
         | nil => simp at found
@@ -683,6 +682,8 @@ theorem variant_not_activity {a : Assumptions} {row plan response result : Ty}
 
 /-- **Linear resource conservation.** A `Step` from a term that checks in `context` uses every
 `linear` hypothesis of `context` exactly as often as the term did: none is dropped, none is copied.
+`caseInject` is the arm applied to the payload: a scrutinee that uses a `linear` hypothesis binds the
+payload `linear` (`caseAllowed`), and the arm uses it once (`Quantity.fits`).
 The context is what the term holds; nothing in `Step` discharges a hypothesis (a `perform` does not
 step: it yields to the kernel, which is the explicit discharge). -/
 public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : Term} {T : Ty} {u : Uses}
@@ -693,7 +694,7 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
   apply PartialTyping.rec
     (motive_1 := fun context t _ u _ => validContext a.shareableVariables context = true → ∀ {t'}, Step t t' →
       ∀ {j}, LinearAt context j → (occurrences context.length t').getD j 0 = u.getD j 0)
-    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := typed)
   case conversion =>
     intro context term actual expected u _ _ ih valid t' step j lin
@@ -832,28 +833,28 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
         Image 0 (zeroUses context) su j := h
       rw [h', image_zero_index, getD_zeroUses, ← occ_of valueTyped, occ_literal_nat, ← agree]; simp
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped distinct free ihS ihA valid t' step j lin
+    intro context scrutinee arms row result su au q scrutineeTyped armsTyped distinct allowed ihS ihA valid t' step j lin
     have sl := source_uses_length scrutineeTyped
     have al := Obend.Core.Proofs.Preservation.arms_uses_length armsTyped
     rw [getD_addUses (sl.trans al.symm)]
     cases step with
     | caseTarget _ s' =>
       have ha : (armOccurrences context.length arms).getD j 0 = au.getD j 0 := by
-        have := occ_of (PartialTyping.case scrutineeTyped armsTyped distinct free) j
+        have := occ_of (PartialTyping.case scrutineeTyped armsTyped distinct allowed) j
         rw [occ_case, getD_addUses (sl.trans al.symm), occ_of scrutineeTyped] at this; omega
       rw [occ_case, ihS valid s' lin, ha]
     | caseInject l p _ body found =>
       obtain ⟨⟨P, hp⟩, _⟩ := inject_inv scrutineeTyped
-      obtain ⟨payload, bu, hb, share, counts⟩ := arms_find armsTyped found
-      have vx : validContext a.shareableVariables [⟨payload, .unrestricted⟩] = true := by
-        simp [validContext, share]
-      have S : Sub a (⟨payload, .unrestricted⟩ :: context) 0
+      obtain ⟨payload, bu, hb, share, fits, counts⟩ := arms_find armsTyped found
+      have cond : q = .linear ∨ linearFree context su = true := by
+        simp only [caseAllowed, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at allowed; exact allowed.1
+      have S : Sub a (⟨payload, q⟩ :: context) 0
           (fun index => match index with | 0 => p | k + 1 => .bound k) p su :=
-        ⟨⟨_, rfl, .inr (by simpa using free)⟩, substAt_instantiate _, ⟨_, by simpa using hp⟩⟩
+        ⟨⟨_, rfl, by simpa using cond⟩, substAt_instantiate _, ⟨_, by simpa using hp⟩⟩
       have h := subst_counts hb 0 _ _ _ S j (by simpa using lin)
       simp only [List.eraseIdx_cons_zero] at h
       have h' : (occurrences context.length (instantiate body p)).getD j 0 = Image 0 su bu j := h
-      rw [h', image_zero_index, linearFree_getD free lin, counts j lin]; simp
+      rw [h', image_zero_index, fits_once fits cond lin, counts j lin]; omega
   case ifBool =>
     intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped agreeing
       ihC ihT ihF valid t' step j lin
@@ -866,11 +867,11 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
     | ifTrue _ _ => rw [← occ_of conditionTyped, occ_literal_boolean, occ_of trueTyped, agree]; simp
     | ifFalse _ _ => rw [← occ_of conditionTyped, occ_literal_boolean, occ_of falseTyped, ← agree]; simp
   case done =>
-    intro context value planType response result uses valueTyped pure free ih valid t' step j lin
+    intro context value planType response result uses valueTyped pure ih valid t' step j lin
     cases step with
     | done _ => exact occ_of valueTyped j
   case effectCase =>
-    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure distinct ihS ihA
+    intro context scrutinee arms planType response row result su au q scrutineeTyped armsTyped pure distinct allowed ihS ihA
       valid t' step j lin
     have sl := source_uses_length scrutineeTyped
     have al := Obend.Core.Proofs.Preservation.arms_uses_length armsTyped
@@ -878,7 +879,7 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
     cases step with
     | caseTarget _ s' =>
       have ha : (armOccurrences context.length arms).getD j 0 = au.getD j 0 := by
-        have := occ_of (PartialTyping.effectCase scrutineeTyped armsTyped pure distinct) j
+        have := occ_of (PartialTyping.effectCase scrutineeTyped armsTyped pure distinct allowed) j
         rw [occ_case, getD_addUses (sl.trans al.symm), occ_of scrutineeTyped] at this; omega
       rw [occ_case, ihS valid s' lin, ha]
     | caseInject l p _ body found =>

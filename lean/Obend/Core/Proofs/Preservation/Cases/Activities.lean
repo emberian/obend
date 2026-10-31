@@ -28,7 +28,7 @@ theorem source_perform_decomposition {assumptions : Assumptions} {context : Cont
       | .perform plan => PerformDerivation assumptions context plan type uses
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -51,7 +51,7 @@ theorem source_done_decomposition {assumptions : Assumptions} {context : Context
       | .done value => DoneDerivation assumptions context value type uses
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -59,7 +59,7 @@ theorem source_done_decomposition {assumptions : Assumptions} {context : Context
     obtain ⟨planType,response,result,valueTyped,pure,path⟩ := ih
     exact ⟨planType,response,result,valueTyped,pure,.step path agreement⟩
   case done =>
-    intro context value planType response result uses valueTyped pure _ ih
+    intro context value planType response result uses valueTyped pure ih
     exact ⟨planType,response,result,valueTyped,pure,.refl _⟩
   all_goals (intros; trivial)
 

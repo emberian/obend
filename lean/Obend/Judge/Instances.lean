@@ -40,8 +40,8 @@ def CheckRefusal.path : CheckRefusal → List Nat
   | .unboundVariable p _ | .missingLambdaAnnotation p | .missingAnnotation p | .emptyCaseInSynthMode p
   | .typeMismatch p _ _ | .shapeMismatch p _ _ | .unknownLabel p _ _ | .duplicateLabels p
   | .binderOverused p _ _ _ | .linearBinderUnused p | .linearArgumentDropped p _ _ | .linearBranchesDisagree p _
-  | .linearProjected p _ | .linearMetadata p _ | .linearOverwritten p _ | .linearScrutinee p _
-  | .linearReturned p _ | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _
+  | .linearProjected p _ | .linearMetadata p _ | .linearOverwritten p _ | .linearScrutinee p
+  | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _
   | .invalidContext p => p
   | .invalidAssumptions => []
 

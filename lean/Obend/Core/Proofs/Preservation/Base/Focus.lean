@@ -50,7 +50,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
       | some (target,frame) => Nonempty (FocusedSource assumptions types target environment frame type)
       | none => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih types environment environmentTyped safe valid
@@ -110,7 +110,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.natural,result,⟨context,vu,environmentTyped,valueTyped,valueSafe,valid⟩,
       .condition zeroOrigin environmentTyped successorTyped successorSafe valid,.refl _⟩⟩
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped _ _ ihScrutinee ihArms types environment environmentTyped safe valid
+    intro context scrutinee arms row result su au q scrutineeTyped armsTyped _ _ ihScrutinee ihArms types environment environmentTyped safe valid
     have scrutineeSafe := safe_add_uses_left context su au (source_uses_length scrutineeTyped) (arms_uses_length armsTyped) safe
     exact ⟨⟨.variant row,result,⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,
       .case environmentTyped armsTyped valid,.refl _⟩⟩
@@ -128,7 +128,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.boolean,result,⟨context,cu,environmentTyped,conditionTyped,conditionSafe,valid⟩,
       .ifBool ⟨context,tu,environmentTyped,trueTyped,trueSafe,valid⟩ ⟨context,fu,environmentTyped,falseTyped,falseSafe,valid⟩,.refl _⟩⟩
   case effectCase =>
-    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure _ ihScrutinee ihArms types environment environmentTyped safe valid
+    intro context scrutinee arms planType response row result su au q scrutineeTyped armsTyped pure _ _ ihScrutinee ihArms types environment environmentTyped safe valid
     have scrutineeSafe := safe_add_uses_left context su au (source_uses_length scrutineeTyped) (arms_uses_length armsTyped) safe
     exact ⟨⟨.computation planType response (.variant row),.computation planType response result,
       ⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,

@@ -929,13 +929,13 @@ theorem rowMember_eq (none_ : a.bounds = []) : ∀ (row : Ty) (name : String),
   | _ => True
 
 theorem membersAgree_of {Γ : Context} {row' : Ty} :
-    ∀ {arms : List (String × Term)} {row result : Ty} {uses : Uses}, ArmsTyping a Γ arms row result uses →
+    ∀ {q : Quantity} {arms : List (String × Term)} {row result : Ty} {uses : Uses}, ArmsTyping a Γ q arms row result uses →
     labelsDistinct arms = true →
     (∀ name member, name ∈ arms.map Prod.fst → lookupV a.bounds [] row name = some member →
       ∃ member', rowMember row' name = some member' ∧ sameType a member' member = true) →
     MembersAgree a row' row
-  | [], _, _, _, .nil _ _, _, _ => trivial
-  | (name, body) :: rest, _, _, _, .cons (payload := payload) (row := tail) _ _ _ restTyped _, distinct, transport => by
+  | _, [], _, _, _, .nil _ _ _, _, _ => trivial
+  | _, (name, body) :: rest, _, _, _, .cons (payload := payload) (row := tail) _ _ _ _ restTyped _, distinct, transport => by
     simp only [labelsDistinct, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true, List.any_eq_false,
       beq_iff_eq] at distinct
     refine ⟨transport name payload (by simp) (lookupV_head name payload tail), ?_⟩
@@ -947,64 +947,131 @@ theorem membersAgree_of {Γ : Context} {row' : Ty} :
         exact distinct.1 arm inside eq
       exact transport other member (by simp [mem]) ((lookupV_field_ne ne).2 found'))
 
-@[expose] public def ArmsMotive (a : Assumptions) (Γ : Context) (arms : List (String × Term)) (row result : Ty)
-    (uses : Uses) : Prop :=
-  FieldsCheckable arms → ∀ Γ', Refines a Γ' Γ → ∀ row', MembersAgree a row' row →
-    ∀ result', sameType a result result' = true → ∀ path index,
-    ∃ trees, prepareArms a noHints Γ' path index row' result' arms = .ok trees ∧
-      ∀ annotations, ForestRealizes annotations path index trees →
-        Yields (checkArms a annotations Γ' path index row' result' arms)
-          (fun r => r.uses = uses ∧ RowAgrees a r.row row)
+/-- The payload quantity the checker binds (`q'`) refines the derivation's (`q`): the same, or
+`affine` where the derivation's was not `unrestricted`, or `unrestricted` when every payload is
+shareable (`QuantityRefines`, arm by arm). -/
+@[expose] public def ArmRefines (a : Assumptions) (q' q : Quantity) (row' : Ty) (arms : List (String × Term)) : Prop :=
+  q' = q ∨ (q' = .affine ∧ q ≠ .unrestricted) ∨ (q' = .unrestricted ∧ armsShareable a row' arms = true)
 
-theorem armsMotive_nil (Γ : Context) (result : Ty) : ArmsMotive a Γ [] .emptyRow result (zeroUses Γ) := by
-  intro _ Γ' r row' _ result' _ path index
+theorem armRefines_tail {q' q : Quantity} {row' : Ty} {arm : String × Term} {rest : List (String × Term)}
+    (h : ArmRefines a q' q row' (arm :: rest)) : ArmRefines a q' q row' rest := by
+  rcases h with same | affine | ⟨unr, sh⟩
+  · exact .inl same
+  · exact .inr (.inl affine)
+  · refine .inr (.inr ⟨unr, ?_⟩)
+    simp only [armsShareable, List.all_cons, Bool.and_eq_true] at sh
+    simpa [armsShareable] using sh.2
+
+@[expose] public def ArmsMotive (a : Assumptions) (Γ : Context) (q : Quantity) (arms : List (String × Term)) (row result : Ty)
+    (uses : Uses) : Prop :=
+  FieldsCheckable arms → ∀ Γ', Refines a Γ' Γ → ∀ row', MembersAgree a row' row → ∀ q', ArmRefines a q' q row' arms →
+    ∀ result', sameType a result result' = true → ∀ path index,
+    ∃ trees, prepareArms a noHints Γ' q' path index row' result' arms = .ok trees ∧
+      ∀ annotations, ForestRealizes annotations path index trees →
+        Yields (checkArms a annotations Γ' q' path index row' result' arms)
+          (fun r => r.uses = uses ∧ RowAgrees a r.row row ∧ r.quantity = q')
+
+theorem armsMotive_nil (Γ : Context) (q : Quantity) (result : Ty) : ArmsMotive a Γ q [] .emptyRow result (zeroUses Γ) := by
+  intro _ Γ' r row' _ q' _ result' _ path index
   refine ⟨[], rfl, fun annotations _ => ?_⟩
   simp [checkArms, pure, Except.pure, Yields, zeroUses_length (refines_length r), RowAgrees]
 
 theorem armsMotive_cons (none_ : a.bounds = []) {Γ : Context} {name : String} {body : Term}
-    {rest : List (String × Term)} {payload row result : Ty} {bu ru : Uses}
-    (safe : safeUses (⟨payload, .unrestricted⟩ :: Γ) bu = true)
-    (share : payload.shareableUnder a.shareableVariables = true)
+    {rest : List (String × Term)} {q : Quantity} {payload row result : Ty} {bu ru : Uses}
+    (safe : safeUses (⟨payload, q⟩ :: Γ) bu = true)
+    (share : validContext a.shareableVariables [⟨payload, q⟩] = true)
+    (fits : q.fits (bu.headD 0) = true)
     (agreeing : (rest.isEmpty || branchesAgree Γ bu.tail ru) = true)
-    (ihB : Motive a (⟨payload, .unrestricted⟩ :: Γ) body result bu) (ihR : ArmsMotive a Γ rest row result ru) :
-    ArmsMotive a Γ ((name, body) :: rest) (.field name payload row) result (joinUses bu.tail ru) := by
-  intro fc Γ' r row' agrees result' agreement path index
+    (ihB : Motive a (⟨payload, q⟩ :: Γ) body result bu) (ihR : ArmsMotive a Γ q rest row result ru) :
+    ArmsMotive a Γ q ((name, body) :: rest) (.field name payload row) result (joinUses bu.tail ru) := by
+  intro fc Γ' r row' agrees q' qr result' agreement path index
   have ⟨cb, cr⟩ : Checkable body ∧ FieldsCheckable rest := by
     cases fc with | cons cb cr => exact ⟨cb, cr⟩
   obtain ⟨⟨payload', found, same⟩, agreesRest⟩ := agrees
-  have binder : Refines a (⟨payload', .unrestricted⟩ :: Γ') (⟨payload, .unrestricted⟩ :: Γ) :=
-    refines_same_quantity same r
+  have headQ : QuantityRefines a ⟨payload', q'⟩ ⟨payload, q⟩ := by
+    rcases qr with same' | ⟨affine, notU⟩ | ⟨unr, sh⟩
+    · exact .inl same'
+    · exact .inr (.inl ⟨affine, notU⟩)
+    · refine .inr (.inr ⟨unr, ?_⟩)
+      simp only [armsShareable, List.all_cons, Bool.and_eq_true, found] at sh
+      exact sh.1
+  have binder : Refines a (⟨payload', q'⟩ :: Γ') (⟨payload, q⟩ :: Γ) := .cons ⟨same, headQ⟩ r
   obtain ⟨tree, _, pb, rb⟩ := ihB.1.2 cb _ binder result' agreement (path ++ [index])
-  obtain ⟨trees, pr, rr⟩ := ihR cr Γ' r row' agreesRest result' agreement path (index + 1)
+  obtain ⟨trees, pr, rr⟩ := ihR cr Γ' r row' agreesRest q' (armRefines_tail qr) result' agreement path (index + 1)
   refine ⟨tree :: trees, by simp [prepareArms, found, pb, pr, bind, Except.bind, pure, Except.pure], ?_⟩
   intro annotations realizes
   obtain ⟨vb, okb, ub⟩ := yields_elim (rb annotations (forest_head realizes))
-  obtain ⟨vr, okr, ur, rowR⟩ := yields_elim (rr annotations (forest_tail realizes))
+  obtain ⟨vr, okr, ur, rowR, qR⟩ := yields_elim (rr annotations (forest_tail realizes))
   simp only [checkAt] at okb
-  have share' : payload'.shareableUnder a.shareableVariables = true := by
-    rw [shareable_congr none_ same]; exact share
-  have safe' : safeUses (⟨payload', .unrestricted⟩ :: Γ') vb.uses = true := by
+  have share' : validContext a.shareableVariables [⟨payload', q'⟩] = true :=
+    validContext_refines none_ (.cons ⟨same, headQ⟩ .nil) share
+  have safe' : safeUses (⟨payload', q'⟩ :: Γ') vb.uses = true := by
     rw [ub]; exact safeUses_refines binder safe
+  have fits' : q'.fits (vb.uses.headD 0) = true := by
+    rw [ub]
+    rcases headQ with same' | ⟨affine, notU⟩ | ⟨unr, _⟩
+    · simp only at same'; rw [same']; exact fits
+    · simp only at affine notU; rw [affine]
+      cases q <;> simp_all [Quantity.fits] <;> omega
+    · simp only at unr; rw [unr]; rfl
   have agreeing' : (rest.isEmpty || branchesAgree Γ' vb.uses.tail vr.uses) = true := by
     rw [ub, ur]
     simp only [Bool.or_eq_true] at agreeing ⊢
     exact agreeing.imp id (branchesAgree_refines r)
   rw [checkArms]
-  simp [found, okb, okr, need_ok share', need_ok safe', need_ok agreeing', bind, Except.bind, pure, Except.pure,
-    Yields, ub, ur, RowAgrees, same, rowR]
+  simp [found, okb, okr, need_ok share', need_ok safe', need_ok fits', need_ok agreeing', qR, bind, Except.bind,
+    pure, Except.pure, Yields, ub, ur, RowAgrees, same, rowR]
 
 theorem members_of_variant (none_ : a.bounds = []) {Γ : Context} {arms : List (String × Term)}
-    {row result row1 : Ty} {uses : Uses} (typed : ArmsTyping a Γ arms row result uses)
+    {q : Quantity} {row result row1 : Ty} {uses : Uses} (typed : ArmsTyping a Γ q arms row result uses)
     (distinct : labelsDistinct arms = true) (agrees : sameType a row1 row = true) :
     MembersAgree a row1.canonical row :=
   membersAgree_of typed distinct (fun name member _ found => by
     rw [rowMember_eq none_]
     exact lookupV_transport (sameType_trans (sameType_symm (sameType_canonical a row1)) agrees) found)
 
+theorem armsShareable_of_unrestricted (none_ : a.bounds = []) {Γ : Context} {row' : Ty} :
+    ∀ {arms : List (String × Term)} {row result : Ty} {uses : Uses},
+      ArmsTyping a Γ .unrestricted arms row result uses → MembersAgree a row' row → labelsDistinct arms = true →
+      armsShareable a row' arms = true
+  | [], _, _, _, .nil _ _ _, _, _ => rfl
+  | (name, body) :: rest, _, _, _, .cons (payload := payload) _ _ share _ restTyped _, agrees, distinct => by
+    obtain ⟨⟨payload', found, same⟩, agreesRest⟩ := agrees
+    simp only [labelsDistinct, Bool.and_eq_true] at distinct
+    have tail := armsShareable_of_unrestricted none_ restTyped agreesRest distinct.2
+    simp only [validContext, List.all_cons, List.all_nil, Bool.and_true] at share
+    simp only [armsShareable, List.all_cons, found, Bool.and_eq_true] at tail ⊢
+    refine ⟨?_, tail⟩
+    rw [shareable_congr none_ same]; simpa using share
+
+/-- The checker's payload quantity for an unannotated case refines the derivation's. -/
+theorem caseQuantity_refines (none_ : a.bounds = []) {Γ Γ' : Context} (r : Refines a Γ' Γ) {q : Quantity}
+    {su : Uses} (allowed : caseAllowed a q Γ su = true) {arms : List (String × Term)} {row result row' : Ty}
+    {uses : Uses} (typed : ArmsTyping a Γ q arms row result uses) (agrees : MembersAgree a row' row)
+    (distinct : labelsDistinct arms = true) :
+    ArmRefines a (caseQuantity a Γ' su (armsShareable a row' arms)) q row' arms := by
+  simp only [caseAllowed, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq] at allowed
+  unfold caseQuantity
+  by_cases hl : linearFree Γ' su = true
+  · by_cases hr : (reusableCaptures a.shareableVariables Γ' su && armsShareable a row' arms) = true
+    · simp only [hl, hr, Bool.not_true, Bool.false_eq_true, if_false, if_true]
+      exact .inr (.inr ⟨rfl, (Bool.and_eq_true_iff.mp hr).2⟩)
+    · simp only [hl, hr, Bool.not_true, Bool.false_eq_true, if_false]
+      refine .inr (.inl ⟨rfl, fun isU => hr ?_⟩)
+      subst isU
+      have captures := allowed.2.resolve_left (by simp)
+      rw [Bool.and_eq_true]
+      exact ⟨reusableCaptures_refines none_ r captures, armsShareable_of_unrestricted none_ typed agrees distinct⟩
+  · simp only [hl, Bool.not_false, if_true]
+    rcases allowed.1 with isL | free
+    · exact .inl isL.symm
+    · exact absurd (linearFree_refines r free) hl
+
 theorem motive_case (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {arms : List (String × Term)}
-    {row result : Ty} {su au : Uses} (typed : ArmsTyping a Γ arms row result au)
-    (distinct : labelsDistinct arms = true) (free : linearFree Γ su = true)
-    (ihS : Motive a Γ scrutinee (.variant row) su) (ihA : ArmsMotive a Γ arms row result au) :
+    {row result : Ty} {su au : Uses} {q : Quantity}
+    (scrutineeTyped : PartialTyping a Γ scrutinee (.variant row) su) (typed : ArmsTyping a Γ q arms row result au)
+    (distinct : labelsDistinct arms = true) (allowed : caseAllowed a q Γ su = true)
+    (ihS : Motive a Γ scrutinee (.variant row) su) (ihA : ArmsMotive a Γ q arms row result au) :
     Motive a Γ (.case scrutinee arms) result (addUses su au) := by
   unfold Motive Modes
   refine ⟨⟨fun s => (by cases s), fun c Γ' r expected agreement => ?_⟩, fun body h => by cases h⟩
@@ -1016,7 +1083,10 @@ theorem motive_case (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {a
   obtain ⟨st, sT, sp, sSame, sRun⟩ := ihS.1.1 ss Γ' r (path ++ [0])
   obtain ⟨row1, rfl, hrow⟩ := variant_inv none_ sSame
   have ma := members_of_variant none_ typed distinct hrow
-  obtain ⟨trees, pa, ra⟩ := ihA fa Γ' r row1.canonical ma expected agreement (path ++ [1]) 0
+  have suOcc : su = occurrences Γ'.length scrutinee := by
+    rw [refines_length r]; exact uses_determined scrutineeTyped
+  obtain ⟨trees, pa, ra⟩ := ihA fa Γ' r row1.canonical ma _
+    (suOcc ▸ caseQuantity_refines none_ r allowed typed ma distinct) expected agreement (path ++ [1]) 0
   refine ⟨.node none [st, .node none trees], expected, ?_, ?_⟩
   · cases arms with
     | nil =>
@@ -1030,30 +1100,34 @@ theorem motive_case (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {a
     have root := realizes_root realizes
     have armsForest := forest_of_node (realizes_child realizes 1 _ rfl)
     obtain ⟨v, ok, vType, vUses⟩ := yields_elim (sRun annotations (realizes_child realizes 0 st rfl)).1
-    obtain ⟨ta, okA, uA, rowA⟩ := yields_elim (ra annotations armsForest)
+    obtain ⟨ta, okA, uA, rowA, qA⟩ := yields_elim (ra annotations armsForest)
     have hHead : representativeHead a annotations path v.type = .variant row1.canonical := by
       rw [vType]; simp [representativeHead, root, whnf_eq none_, Ty.canonical]
     have agreesScrutinee : sameType a v.type (.variant ta.row) = true := by
       rw [vType]; exact sameType_variant (sameType_trans hrow (sameType_symm (rowAgrees_sameType rowA)))
-    have free' : linearFree Γ' v.uses = true := by rw [vUses]; exact linearFree_refines r free
+    have vOcc : v.uses = occurrences Γ'.length scrutinee := by rw [vUses, suOcc]
+    have allowed' : caseAllowed a ta.quantity Γ' v.uses = true := by
+      rw [qA, vOcc]; exact caseQuantity_allowed _ _ _ _
     simp only [synthAt] at ok
     change Yields (elaborate a annotations Γ' path (.case scrutinee arms) (.check expected)) _
     cases arms with
     | nil =>
       rw [elaborate]
-      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok free', bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
+      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok allowed', caseQuantityAt, vOcc, suOcc, bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
     | cons arm rest =>
       obtain ⟨name, body⟩ := arm
       rw [elaborate]
-      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok distinct, need_ok free', bind, Except.bind, pure,
+      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok distinct, need_ok allowed', caseQuantityAt, vOcc, suOcc, bind, Except.bind, pure,
         Except.pure, Yields, vUses, uA]
 
 theorem motive_effectCase (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {arms : List (String × Term)}
-    {planType response row result : Ty} {su au : Uses}
-    (typed : ArmsTyping a Γ arms row (.computation planType response result) au)
+    {planType response row result : Ty} {su au : Uses} {q : Quantity}
+    (scrutineeTyped : PartialTyping a Γ scrutinee (.computation planType response (.variant row)) su)
+    (typed : ArmsTyping a Γ q arms row (.computation planType response result) au)
     (nonComputation : result.isComputation = false) (distinct : labelsDistinct arms = true)
+    (allowed : caseAllowed a q Γ su = true)
     (ihS : Motive a Γ scrutinee (.computation planType response (.variant row)) su)
-    (ihA : ArmsMotive a Γ arms row (.computation planType response result) au) :
+    (ihA : ArmsMotive a Γ q arms row (.computation planType response result) au) :
     Motive a Γ (.case scrutinee arms) (.computation planType response result) (addUses su au) := by
   unfold Motive Modes
   refine ⟨⟨fun s => (by cases s), fun c Γ' r expected agreement => ?_⟩, fun body h => by cases h⟩
@@ -1072,7 +1146,10 @@ theorem motive_effectCase (none_ : a.bounds = []) {Γ : Context} {scrutinee : Te
       (.computation p1.canonical r1.canonical x2.canonical) = true :=
     sameType_computation (sameType_symm (sameType_trans (canon p1) hp1))
       (sameType_symm (sameType_trans (canon r1) hr1)) (sameType_symm (sameType_trans (canon x2) hx2))
-  obtain ⟨trees, pa, ra⟩ := ihA fa Γ' r row1.canonical ma _ resultAgrees (path ++ [1]) 0
+  have suOcc : su = occurrences Γ'.length scrutinee := by
+    rw [refines_length r]; exact uses_determined scrutineeTyped
+  obtain ⟨trees, pa, ra⟩ := ihA fa Γ' r row1.canonical ma _
+    (suOcc ▸ caseQuantity_refines none_ r allowed typed ma distinct) _ resultAgrees (path ++ [1]) 0
   refine ⟨.node none [st, .node none trees], .computation p2 r2 x2, ?_, ?_⟩
   · cases arms with
     | nil =>
@@ -1086,7 +1163,7 @@ theorem motive_effectCase (none_ : a.bounds = []) {Γ : Context} {scrutinee : Te
     have root := realizes_root realizes
     have armsForest := forest_of_node (realizes_child realizes 1 _ rfl)
     obtain ⟨v, ok, vType, vUses⟩ := yields_elim (sRun annotations (realizes_child realizes 0 st rfl)).1
-    obtain ⟨ta, okA, uA, rowA⟩ := yields_elim (ra annotations armsForest)
+    obtain ⟨ta, okA, uA, rowA, qA⟩ := yields_elim (ra annotations armsForest)
     have hHead : representativeHead a annotations path v.type =
         .computation p1.canonical r1.canonical (.variant row1.canonical) := by
       rw [vType]; simp [representativeHead, root, whnf_eq none_, Ty.canonical]
@@ -1104,18 +1181,21 @@ theorem motive_effectCase (none_ : a.bounds = []) {Γ : Context} {scrutinee : Te
         (.computation p2 r2 x2) = true :=
       sameType_computation (sameType_trans (canon p1) (sameType_trans hp1 (sameType_symm hp2)))
         (sameType_trans (canon r1) (sameType_trans hr1 (sameType_symm hr2))) (canon x2)
+    have vOcc : v.uses = occurrences Γ'.length scrutinee := by rw [vUses, suOcc]
+    have allowed' : caseAllowed a ta.quantity Γ' v.uses = true := by
+      rw [qA, vOcc]; exact caseQuantity_allowed _ _ _ _
     simp only [synthAt] at ok
     change Yields (elaborate a annotations Γ' path (.case scrutinee arms) (.check _)) _
     cases arms with
     | nil =>
       rw [elaborate]
       simp [root, ok, hHead, hExpected, okA, need_ok agreesScrutinee, need_ok nonActivity,
-        need_ok agreesExpected, bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
+        need_ok agreesExpected, need_ok allowed', caseQuantityAt, vOcc, suOcc, bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
     | cons arm rest =>
       obtain ⟨name, body⟩ := arm
       rw [elaborate]
       simp [root, ok, hHead, hExpected, okA, need_ok agreesScrutinee, need_ok distinct, need_ok nonActivity,
-        need_ok agreesExpected, bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
+        need_ok agreesExpected, need_ok allowed', caseQuantityAt, vOcc, suOcc, bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
 
 /-! ## The induction -/
 
@@ -1130,7 +1210,7 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
   refine PartialTyping.rec
     (motive_1 := fun Γ t derived uses _ => Motive a Γ t derived uses)
     (motive_2 := fun Γ fields row uses _ => FieldsMotive a Γ fields row uses)
-    (motive_3 := fun Γ arms row result uses _ => ArmsMotive a Γ arms row result uses)
+    (motive_3 := fun Γ q arms row result uses _ => ArmsMotive a Γ q arms row result uses)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
     ?effectCase ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
@@ -1162,22 +1242,22 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     intro Γ tag payload payloadType row uses fuel _ found nonComputation ih
     exact motive_inject none_ found nonComputation ih
   case case =>
-    intro Γ scrutinee arms row result su au _ armsTyped distinct free ihS ihA
-    exact motive_case none_ armsTyped distinct free ihS ihA
+    intro Γ scrutinee arms row result su au q scrutineeTyped armsTyped distinct allowed ihS ihA
+    exact motive_case none_ scrutineeTyped armsTyped distinct allowed ihS ihA
   case ifBool =>
     intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
     exact motive_ifBool ihC ihT ihF agreeing
   case effectCase =>
-    intro Γ scrutinee arms plan response row result su au _ armsTyped nonComputation distinct ihS ihA
-    exact motive_effectCase none_ armsTyped nonComputation distinct ihS ihA
+    intro Γ scrutinee arms plan response row result su au q scrutineeTyped armsTyped nonComputation distinct allowed ihS ihA
+    exact motive_effectCase none_ scrutineeTyped armsTyped nonComputation distinct allowed ihS ihA
   case fieldsNil => intro Γ; exact fieldsMotive_nil Γ
   case fieldsCons =>
     intro Γ name body rest type row bu ru _ _ nonComputation ihB ihR
     exact fieldsMotive_cons nonComputation ihB ihR
-  case armsNil => intro Γ result; exact armsMotive_nil Γ result
+  case armsNil => intro Γ q result; exact armsMotive_nil Γ q result
   case armsCons =>
-    intro Γ name body rest payload row result bu ru _ safe share _ agreeing ihB ihR
-    exact armsMotive_cons none_ safe share agreeing ihB ihR
+    intro Γ q name body rest payload row result bu ru _ safe share fits _ agreeing ihB ihR
+    exact armsMotive_cons none_ safe share fits agreeing ihB ihR
   all_goals intros
   all_goals refine motive_outside (fun h => ?_) (fun h => ?_) (fun _ h => ?_)
   all_goals cases h

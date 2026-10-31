@@ -214,6 +214,14 @@ theorem reusable_allowed_insert (assumptions : Assumptions) (reuse : Reuse)
       have captures : reusableCaptures assumptions.shareableVariables context uses = true := by simpa [reusableAllowed] using allowed
       simpa [reusableAllowed] using reusable_captures_insert assumptions.shareableVariables context uses depth binding captures bound
 
+theorem case_allowed_insert (assumptions : Assumptions) (quantity : Quantity)
+    (context : Context) (uses : Uses) (depth : Nat) (binding : Binding)
+    (allowed : caseAllowed assumptions quantity context uses = true) (bound : depth ≤ context.length) :
+    caseAllowed assumptions quantity (context.insertIdx depth binding) (uses.insertIdx depth 0) = true := by
+  simp only [caseAllowed, Bool.and_eq_true, Bool.or_eq_true] at allowed ⊢
+  exact ⟨allowed.1.imp id (fun free => linear_free_insert context uses depth binding free bound),
+    allowed.2.imp id (fun captures => reusable_captures_insert assumptions.shareableVariables context uses depth binding captures bound)⟩
+
 theorem argument_allowed_insert (assumptions : Assumptions) (quantity : Quantity)
     (context : Context) (type : Ty) (uses : Uses) (depth : Nat) (binding : Binding)
     (allowed : argumentAllowed assumptions quantity context type uses = true) (bound : depth ≤ context.length) :
@@ -247,13 +255,13 @@ theorem insert_usage_bound {assumptions : Assumptions} {context : Context}
 
 /-- Arms account for every lexical slot of the enclosing context. -/
 public theorem arms_uses_length {assumptions : Assumptions} {context : Context}
-    {arms : List (String × Term)} {row result : Ty} {uses : Uses}
-    (typed : ArmsTyping assumptions context arms row result uses) : uses.length = context.length := by
+    {q : Quantity} {arms : List (String × Term)} {row result : Ty} {uses : Uses}
+    (typed : ArmsTyping assumptions context q arms row result uses) : uses.length = context.length := by
   induction arms generalizing row uses with
   | nil => cases typed; simp [zeroUses]
   | cons arm rest ih =>
       cases typed with
-      | cons bodyTyped safe shareable restTyped _ =>
+      | cons bodyTyped safe shareable _ restTyped _ =>
           have bodyLength := source_uses_length bodyTyped
           have restLength := ih restTyped
           simp_all [addUses,joinUses,List.length_zipWith,List.length_tail]
@@ -274,9 +282,9 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
       depth ≤ context.length → validContext assumptions.shareableVariables [binding] = true →
       FieldsTyping assumptions (context.insertIdx depth binding)
         (fields.map fun field => (field.1,field.2.rename (shiftIndex depth))) row (uses.insertIdx depth 0))
-    (motive_3 := fun context arms row result uses _ => ∀ depth binding,
+    (motive_3 := fun context q arms row result uses _ => ∀ depth binding,
       depth ≤ context.length → validContext assumptions.shareableVariables [binding] = true →
-      ArmsTyping assumptions (context.insertIdx depth binding)
+      ArmsTyping assumptions (context.insertIdx depth binding) q
         (arms.map fun arm => (arm.1,arm.2.rename (shiftIndex (depth+1)))) row result (uses.insertIdx depth 0))
     (t := typed)
   case bound =>
@@ -392,11 +400,11 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     intro context tag payload payloadType row uses fuel payloadTyped lookup pure ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.inject (ih depth binding bound bindingValid) lookup pure)
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped distinct free ihScrutinee ihArms depth binding bound bindingValid
+    intro context scrutinee arms row result su au q scrutineeTyped armsTyped distinct allowed ihScrutinee ihArms depth binding bound bindingValid
     have counts := add_uses_insert su au depth ((source_uses_length scrutineeTyped).trans (arms_uses_length armsTyped).symm) (insert_usage_bound scrutineeTyped bound)
     simpa only [Term.rename,lift_shift_index,counts] using
       (PartialTyping.case (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid)
-        (by simpa using distinct) (linear_free_insert context su depth binding free bound))
+        (by simpa using distinct) (case_allowed_insert assumptions q context su depth binding allowed bound))
   case ifBool =>
     intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped agreeing ihCondition ihTrue ihFalse depth binding bound bindingValid
     have trueLength := source_uses_length trueTyped
@@ -412,16 +420,15 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     intro context plan planType response uses planTyped isPlan isData ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.perform (ih depth binding bound bindingValid) isPlan isData)
   case done =>
-    intro context value planType response result uses valueTyped pure free ih depth binding bound bindingValid
+    intro context value planType response result uses valueTyped pure ih depth binding bound bindingValid
     simpa only [Term.rename] using
-      (PartialTyping.done (planType := planType) (response := response) (ih depth binding bound bindingValid) pure
-        (linear_free_insert context uses depth binding free bound))
+      (PartialTyping.done (planType := planType) (response := response) (ih depth binding bound bindingValid) pure)
   case effectCase =>
-    intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure distinct ihScrutinee ihArms depth binding bound bindingValid
+    intro context scrutinee arms planType response row result su au q scrutineeTyped armsTyped pure distinct allowed ihScrutinee ihArms depth binding bound bindingValid
     have counts := add_uses_insert su au depth ((source_uses_length scrutineeTyped).trans (arms_uses_length armsTyped).symm) (insert_usage_bound scrutineeTyped bound)
     simpa only [Term.rename,lift_shift_index,counts] using
       (PartialTyping.effectCase (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid) pure
-        (by simpa using distinct))
+        (by simpa using distinct) (case_allowed_insert assumptions q context su depth binding allowed bound))
   case nil =>
     intro context depth binding bound bindingValid
     simpa only [List.map_nil,← zero_uses_insert context binding depth bound] using (FieldsTyping.nil (context.insertIdx depth binding) : FieldsTyping assumptions _ [] .emptyRow _)
@@ -432,12 +439,12 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [List.map_cons,counts] using
       (FieldsTyping.cons (ihBody depth binding bound bindingValid) (ihRest depth binding bound bindingValid) pure)
   case nil =>
-    intro context result depth binding bound bindingValid
+    intro context q result depth binding bound bindingValid
     simpa only [List.map_nil,← zero_uses_insert context binding depth bound] using
-      (ArmsTyping.nil (context.insertIdx depth binding) result : ArmsTyping assumptions _ [] .emptyRow result _)
+      (ArmsTyping.nil (context.insertIdx depth binding) q result : ArmsTyping assumptions _ q [] .emptyRow result _)
   case cons =>
-    intro context name body rest payload row result bu ru bodyTyped safe shareable restTyped agreeing ihBody ihRest depth binding bound bindingValid
-    have bodyBound : depth+1 ≤ (⟨payload,.unrestricted⟩ :: context).length := by simpa using bound
+    intro context q name body rest payload row result bu ru bodyTyped safe shareable fits restTyped agreeing ihBody ihRest depth binding bound bindingValid
+    have bodyBound : depth+1 ≤ (⟨payload,q⟩ :: context).length := by simpa using bound
     have nonempty : 0 < bu.length := by rw [source_uses_length bodyTyped]; simp
     have tailLength : bu.tail.length = context.length := by simp [List.length_tail,source_uses_length bodyTyped]
     have counts := join_uses_insert bu.tail ru depth (tailLength.trans (arms_uses_length restTyped).symm)
@@ -451,7 +458,8 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
       simp only [List.isEmpty_map, Bool.or_eq_true] at agreeing ⊢
       exact agreeing.imp id (fun a => branches_agree_insert context bu.tail ru depth binding a bound tailLength
         (arms_uses_length restTyped))
-    have combined := ArmsTyping.cons (name := name) bodyNext safeNext shareable (ihRest depth binding bound bindingValid) agreeNext
+    have combined := ArmsTyping.cons (name := name) bodyNext safeNext shareable (by rw [headD_insert_succ]; exact fits)
+      (ihRest depth binding bound bindingValid) agreeNext
     rw [uses_tail_insert nonempty,counts] at combined
     simpa only [List.map_cons] using combined
 

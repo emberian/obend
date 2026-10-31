@@ -410,10 +410,11 @@ theorem shadowed_once_closure_laundering_refused :
       [] 32).isNone = true := by check_reduce
 
 /-- Control: the same program with a shareable hidden member is accepted. The member is
-`affine` (lane Sound, 11-01; it was `linear`): the shadowed field is never read, so the hypothesis
-is dropped, which an `affine` one may be. -/
+`unrestricted` (lane Sound, 11-01; it was `linear`): at `linear` the shadowed field drops it, and
+this legacy checker binds every case payload `unrestricted`, so its scrutinee's captures must be
+reusable. -/
 theorem shadowed_shareable_member_accepted :
-    (check (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.affine⟩] 32).map
+    (check (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.unrestricted⟩] 32).map
       (fun checked => checked.type) = some .natural := by check_reduce
 
 /-- REFUSED (was accepted, pinned as the control above): at `linear` the same program drops the

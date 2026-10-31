@@ -177,9 +177,9 @@ inductive FrameTyping (assumptions : Assumptions) (types : AddressTypes) : Frame
       FrameTyping assumptions types (.binaryRight primitive left)
         (primitiveTypes primitive).1 (primitiveTypes primitive).2
   | case {arms : List (String × Term)} {environment : Environment} {row result : Ty}
-      {context : Context} {uses : Uses} :
+      {context : Context} {q : Quantity} {uses : Uses} :
       EnvironmentTyping types context environment →
-      ArmsTyping assumptions context arms row result uses →
+      ArmsTyping assumptions context q arms row result uses →
       validContext assumptions.shareableVariables context = true →
       FrameTyping assumptions types (.case arms environment) (.variant row) result
   | ifBool {whenTrue whenFalse : Term} {environment : Environment} {result : Ty} :
@@ -189,9 +189,9 @@ inductive FrameTyping (assumptions : Assumptions) (types : AddressTypes) : Frame
   /-- The same case frame sequencing an activity: it consumes the activity's
   produced variant and continues with an activity arm. -/
   | effectCase {arms : List (String × Term)} {environment : Environment}
-      {planType response row result : Ty} {context : Context} {uses : Uses} :
+      {planType response row result : Ty} {context : Context} {q : Quantity} {uses : Uses} :
       EnvironmentTyping types context environment →
-      ArmsTyping assumptions context arms row (.computation planType response result) uses →
+      ArmsTyping assumptions context q arms row (.computation planType response result) uses →
       validContext assumptions.shareableVariables context = true →
       result.isComputation = false →
       FrameTyping assumptions types (.case arms environment)
@@ -254,7 +254,7 @@ theorem source_uses_length {assumptions : Assumptions} {context : Context}
   refine PartialTyping.rec
     (motive_1 := fun context _ _ uses _ => uses.length = context.length)
     (motive_2 := fun context _ _ uses _ => uses.length = context.length)
-    (motive_3 := fun context _ _ _ uses _ => uses.length = context.length)
+    (motive_3 := fun context _ _ _ _ uses _ => uses.length = context.length)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; simp [variableUses]
   · intros; simp [zeroUses]
@@ -295,7 +295,7 @@ theorem source_fields_row {assumptions : Assumptions} {context : Context}
   refine FieldsTyping.rec
     (motive_1 := fun _ _ _ _ _ => True)
     (motive_2 := fun _ _ row _ _ => ∃ fuel, row.isRow assumptions.bounds fuel = true)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; trivial
   · intros; trivial
@@ -338,7 +338,7 @@ theorem source_scoped {assumptions : Assumptions} {context : Context}
   refine PartialTyping.rec
     (motive_1 := fun context term _ _ _ => Obend.Core.Invariant.Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ field ∈ fields, Obend.Core.Invariant.Scoped context.length field.2)
-    (motive_3 := fun context arms _ _ _ _ => ∀ arm ∈ arms, Obend.Core.Invariant.Scoped (context.length+1) arm.2)
+    (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Obend.Core.Invariant.Scoped (context.length+1) arm.2)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
 
   · intro context index binding found
@@ -375,8 +375,8 @@ theorem source_scoped {assumptions : Assumptions} {context : Context}
     rcases member with rfl | member
     · exact ihb
     · exact ihr field member
-  · intro context result arm member; simp at member
-  · intro context name body rest payload row result bu ru hb _ _ _ _ ihb ihr arm member
+  · intro context q result arm member; simp at member
+  · intro context q name body rest payload row result bu ru hb _ _ _ _ _ ihb ihr arm member
     simp only [List.mem_cons] at member
     rcases member with rfl | member
     · simpa using ihb
@@ -389,7 +389,7 @@ theorem source_fields_scoped {assumptions : Assumptions} {context : Context}
   refine FieldsTyping.rec
     (motive_1 := fun context term _ _ _ => Obend.Core.Invariant.Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ field ∈ fields, Obend.Core.Invariant.Scoped context.length field.2)
-    (motive_3 := fun context arms _ _ _ _ => ∀ arm ∈ arms, Obend.Core.Invariant.Scoped (context.length+1) arm.2)
+    (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Obend.Core.Invariant.Scoped (context.length+1) arm.2)
     ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
 
   · intro context index binding found
@@ -426,8 +426,8 @@ theorem source_fields_scoped {assumptions : Assumptions} {context : Context}
     rcases member with rfl | member
     · exact ihb
     · exact ihr field member
-  · intro context result arm member; simp at member
-  · intro context name body rest payload row result bu ru hb _ _ _ _ ihb ihr arm member
+  · intro context q result arm member; simp at member
+  · intro context q name body rest payload row result bu ru hb _ _ _ _ _ ihb ihr arm member
     simp only [List.mem_cons] at member
     rcases member with rfl | member
     · simpa using ihb

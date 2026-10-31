@@ -131,7 +131,7 @@ theorem source_pair_decomposition {assumptions : Assumptions} {context : Context
       | .prototype left right => PairDerivation assumptions context false left right type uses
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih
@@ -170,7 +170,7 @@ theorem source_pair_decomposition_pure {assumptions : Assumptions} {context : Co
       | .prototype left right => PairPureDerivation assumptions context false left right type uses
       | _ => True)
     (motive_2 := fun _ _ _ _ _ => True)
-    (motive_3 := fun _ _ _ _ _ _ => True)
+    (motive_3 := fun _ _ _ _ _ _ _ => True)
     (t := source)
   case conversion =>
     intro context term actual expected uses prior agreement ih

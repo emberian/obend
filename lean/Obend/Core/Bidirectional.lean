@@ -61,12 +61,9 @@ inductive CheckRefusal where
   /-- The target of the extension at `path` uses the `linear` hypothesis `index`; the extension may
   overwrite the field that holds it. -/
   | linearOverwritten (path : List Nat) (index : Nat)
-  /-- The scrutinee of the `case` at `path` uses the `linear` hypothesis `index`; the arm binds the
-  payload `unrestricted`, so it may drop or copy it. -/
-  | linearScrutinee (path : List Nat) (index : Nat)
-  /-- The value of the `done` at `path` uses the `linear` hypothesis `index`; a sequencing arm binds
-  it `unrestricted`, so it may drop or copy it. -/
-  | linearReturned (path : List Nat) (index : Nat)
+  /-- The arm at `path` binds a `linear` payload (its scrutinee uses a `linear` hypothesis, or the
+  case's annotation says `linear`) and does not use it. -/
+  | linearScrutinee (path : List Nat)
   | capturesNotShareable (path : List Nat)
   | notShareable (path : List Nat) (type : Ty)
   | activityMisplaced (path : List Nat) (type : Ty)
@@ -209,6 +206,32 @@ def rowMember : Ty → String → Option Ty
   | .field prior member tail, name => if prior = name then some member else rowMember tail name
   | _, _ => none
 
+/-- Every arm's payload, as `rowMember` finds it, is shareable: what an `unrestricted` payload needs. -/
+def armsShareable (assumptions : Assumptions) (row : Ty) (arms : List (String × Term)) : Bool :=
+  arms.all fun arm => match rowMember row arm.1 with
+    | some payload => payload.shareableUnder assumptions.shareableVariables
+    | none => true
+
+/-- The case's payload quantity: its annotation's, else `caseQuantity`. -/
+def caseQuantityAt (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) (context : Context)
+    (uses : Uses) (row : Ty) (arms : List (String × Term)) : Quantity :=
+  match annotations path with
+  | some annotation => annotation.parameter
+  | none => caseQuantity assumptions context uses (armsShareable assumptions row arms)
+
+theorem caseQuantityAt_some {assumptions : Assumptions} {annotations : Annotations} {path : List Nat}
+    {annotation : LambdaAnnotation} (h : annotations path = some annotation) (context : Context) (uses : Uses)
+    (row : Ty) (arms : List (String × Term)) :
+    caseQuantityAt assumptions annotations path context uses row arms = annotation.parameter := by
+  simp [caseQuantityAt, h]
+
+/-- Why `caseAllowed` failed for an annotated quantity: the scrutinee's `linear` hypothesis would be
+bound at `quantity`, or its captures are not reusable for an `unrestricted` payload. -/
+def caseRefusal (path : List Nat) (quantity : Quantity) (context : Context) (uses : Uses) : CheckRefusal :=
+  match quantity, firstLinearUse context uses with
+  | .linear, _ | _, none => .capturesNotShareable path
+  | _, some index => .linearArgumentDropped path index quantity
+
 /-- A synthesized type. -/
 abbrev Synth (assumptions : Assumptions) (context : Context) (term : Term) := Inferred assumptions context term
 
@@ -217,11 +240,13 @@ structure Against (assumptions : Assumptions) (context : Context) (term : Term) 
   uses : Uses
   derivation : PartialTyping assumptions context term expected uses
 
-/-- Arms checked against one result type, with the closed row they build. -/
+/-- Arms checked against one result type, with the closed row they build, at one payload quantity,
+which the answer records (`quantity`): the case then checks that its scrutinee allows it. -/
 structure ArmsAgainst (assumptions : Assumptions) (context : Context) (arms : List (String × Term)) (result : Ty) where
   row : Ty
   uses : Uses
-  derivation : ArmsTyping assumptions context arms row result uses
+  quantity : Quantity
+  derivation : ArmsTyping assumptions context quantity arms row result uses
 
 /-- Fields checked against a given row, entry by entry. -/
 structure FieldsAgainst (assumptions : Assumptions) (context : Context) (fields : List (String × Term)) (row : Ty) where
@@ -483,14 +508,12 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         | .computation planType response result => do
           let inner ← elaborate assumptions annotations context (path ++ [0]) value (.check result)
           let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced (path ++ [0]) result)
-          let ⟨hl⟩ ← need (linearFree context inner.uses) (linearRefusal .linearReturned path context inner.uses)
-          pure ⟨.computation planType response result, inner.uses, .done inner.derivation (by simpa using hn) hl⟩
+          pure ⟨.computation planType response result, inner.uses, .done inner.derivation (by simpa using hn)⟩
         | _ => do
           let inner ← elaborate assumptions annotations context (path ++ [0]) value .synth
           let ⟨hn⟩ ← need (!inner.type.isComputation) (.activityMisplaced (path ++ [0]) inner.type)
-          let ⟨hl⟩ ← need (linearFree context inner.uses) (linearRefusal .linearReturned path context inner.uses)
           pure ⟨.computation annotation.domain annotation.codomain inner.type, inner.uses,
-            .done inner.derivation (by simpa using hn) hl⟩
+            .done inner.derivation (by simpa using hn)⟩
       | none => throw (.missingAnnotation path)
     match mode with
     | .synth => synthesized
@@ -504,8 +527,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         | .computation planType response result => do
           let inner ← elaborate assumptions annotations context (path ++ [0]) value (.check result)
           let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced (path ++ [0]) result)
-          let ⟨hl⟩ ← need (linearFree context inner.uses) (linearRefusal .linearReturned path context inner.uses)
-          pure ⟨inner.uses, .conversion (.done inner.derivation (by simpa using hn) hl)
+          pure ⟨inner.uses, .conversion (.done inner.derivation (by simpa using hn))
             (shape ▸ representativeHead_sameType assumptions annotations path expected)⟩
         | _ => throw (.shapeMismatch path "activity" expected)
   | .record fields, mode =>
@@ -635,23 +657,28 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
     let against (expected : Ty) : Except CheckRefusal (Against assumptions context (.case scrutinee []) expected) :=
       match representativeHead assumptions annotations path value.type with
       | .variant row => do
-        let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected []
+        let typed ← checkArms assumptions annotations context
+          (caseQuantityAt assumptions annotations path context value.uses row []) (path ++ [1]) 0 row expected []
+        let ⟨hq⟩ ← need (caseAllowed assumptions typed.quantity context value.uses)
+          (caseRefusal path typed.quantity context value.uses)
         let ⟨hc⟩ ← need (sameType assumptions value.type (.variant typed.row))
           (.typeMismatch (path ++ [0]) (.variant typed.row) value.type)
-        let ⟨hl⟩ ← need (linearFree context value.uses) (linearRefusal .linearScrutinee path context value.uses)
-        pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation rfl hl⟩
+        pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation rfl hq⟩
       | .computation planType response (.variant row) =>
         match representativeHead assumptions annotations path expected with
         | .computation _ _ result => do
-          let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row
+          let typed ← checkArms assumptions annotations context
+            (caseQuantityAt assumptions annotations path context value.uses row []) (path ++ [1]) 0 row
             (.computation planType response result) []
+          let ⟨hq⟩ ← need (caseAllowed assumptions typed.quantity context value.uses)
+            (caseRefusal path typed.quantity context value.uses)
           let ⟨hc⟩ ← need (sameType assumptions value.type (.computation planType response (.variant typed.row)))
             (.typeMismatch (path ++ [0]) (.computation planType response (.variant typed.row)) value.type)
           let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced path result)
           let ⟨he⟩ ← need (sameType assumptions (.computation planType response result) expected)
             (.typeMismatch path expected (.computation planType response result))
           pure ⟨addUses value.uses typed.uses, .conversion
-            (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) rfl) he⟩
+            (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) rfl hq) he⟩
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
     match (dependent := true) mode with
@@ -676,23 +703,29 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         Except CheckRefusal (Against assumptions context (.case scrutinee ((name, body) :: rest)) expected) :=
       match representativeHead assumptions annotations path value.type with
       | .variant row => do
-        let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row expected ((name, body) :: rest)
+        let typed ← checkArms assumptions annotations context
+          (caseQuantityAt assumptions annotations path context value.uses row ((name, body) :: rest)) (path ++ [1]) 0 row
+          expected ((name, body) :: rest)
+        let ⟨hq⟩ ← need (caseAllowed assumptions typed.quantity context value.uses)
+          (caseRefusal path typed.quantity context value.uses)
         let ⟨hc⟩ ← need (sameType assumptions value.type (.variant typed.row))
           (.typeMismatch (path ++ [0]) (.variant typed.row) value.type)
-        let ⟨hl⟩ ← need (linearFree context value.uses) (linearRefusal .linearScrutinee path context value.uses)
-        pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation hd hl⟩
+        pure ⟨addUses value.uses typed.uses, .case (.conversion value.derivation hc) typed.derivation hd hq⟩
       | .computation planType response (.variant row) =>
         match representativeHead assumptions annotations path expected with
         | .computation _ _ result => do
-          let typed ← checkArms assumptions annotations context (path ++ [1]) 0 row
+          let typed ← checkArms assumptions annotations context
+            (caseQuantityAt assumptions annotations path context value.uses row ((name, body) :: rest)) (path ++ [1]) 0 row
             (.computation planType response result) ((name, body) :: rest)
+          let ⟨hq⟩ ← need (caseAllowed assumptions typed.quantity context value.uses)
+            (caseRefusal path typed.quantity context value.uses)
           let ⟨hc⟩ ← need (sameType assumptions value.type (.computation planType response (.variant typed.row)))
             (.typeMismatch (path ++ [0]) (.computation planType response (.variant typed.row)) value.type)
           let ⟨hn⟩ ← need (!result.isComputation) (.activityMisplaced path result)
           let ⟨he⟩ ← need (sameType assumptions (.computation planType response result) expected)
             (.typeMismatch path expected (.computation planType response result))
           pure ⟨addUses value.uses typed.uses, .conversion
-            (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) hd) he⟩
+            (.effectCase (.conversion value.derivation hc) typed.derivation (by simpa using hn) hd hq) he⟩
         | _ => throw (.shapeMismatch path "activity" expected)
       | _ => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
     match (dependent := true) mode with
@@ -716,7 +749,8 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         | some row =>
           match rowMember row name with
           | some payload => do
-            let first ← elaborate assumptions annotations (⟨payload, .unrestricted⟩ :: context)
+            let first ← elaborate assumptions annotations
+              (⟨payload, caseQuantityAt assumptions annotations path context value.uses row ((name, body) :: rest)⟩ :: context)
               (path ++ [1] ++ [0]) body .synth
             let checked ← against first.type
             pure ⟨first.type, checked.uses, checked.derivation⟩
@@ -763,22 +797,26 @@ def checkFieldsByLabel (assumptions : Assumptions) (annotations : Annotations) (
     | none => throw (.unknownLabel (path ++ [index]) name row)
 
 /-- Arms checked against one result type, each under its label's payload in `row`. -/
-def checkArms (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
-    (index : Nat) (row result : Ty) : (arms : List (String × Term)) → Except CheckRefusal (ArmsAgainst assumptions context arms result)
-  | [] => pure ⟨.emptyRow, zeroUses context, .nil context result⟩
+def checkArms (assumptions : Assumptions) (annotations : Annotations) (context : Context) (q : Quantity)
+    (path : List Nat) (index : Nat) (row result : Ty) :
+    (arms : List (String × Term)) → Except CheckRefusal (ArmsAgainst assumptions context arms result)
+  | [] => pure ⟨.emptyRow, zeroUses context, q, .nil context q result⟩
   | (name, body) :: rest =>
     match rowMember row name with
     | some payload => do
-      let ⟨hs⟩ ← need (payload.shareableUnder assumptions.shareableVariables) (.notShareable (path ++ [index]) payload)
-      let first ← elaborate assumptions annotations (⟨payload, .unrestricted⟩ :: context) (path ++ [index]) body
+      let ⟨hs⟩ ← need (validContext assumptions.shareableVariables [⟨payload, q⟩]) (.notShareable (path ++ [index]) payload)
+      let first ← elaborate assumptions annotations (⟨payload, q⟩ :: context) (path ++ [index]) body
         (.check result)
-      let ⟨hu⟩ ← need (safeUses (⟨payload, .unrestricted⟩ :: context) first.uses)
-        (overuse (path ++ [index]) (⟨payload, .unrestricted⟩ :: context) first.uses)
-      let later ← checkArms assumptions annotations context path (index + 1) row result rest
+      let ⟨hu⟩ ← need (safeUses (⟨payload, q⟩ :: context) first.uses)
+        (overuse (path ++ [index]) (⟨payload, q⟩ :: context) first.uses)
+      let ⟨hf⟩ ← need (q.fits (first.uses.headD 0)) (.linearScrutinee (path ++ [index]))
+      let later ← checkArms assumptions annotations context q path (index + 1) row result rest
       let ⟨hj⟩ ← need (rest.isEmpty || branchesAgree context first.uses.tail later.uses)
         (disagreement (path ++ [index]) context first.uses.tail later.uses)
-      pure ⟨.field name payload later.row, joinUses first.uses.tail later.uses,
-        .cons first.derivation hu hs later.derivation hj⟩
+      if hq : later.quantity = q then
+        pure ⟨.field name payload later.row, joinUses first.uses.tail later.uses, q,
+          .cons first.derivation hu hs hf (hq ▸ later.derivation) hj⟩
+      else throw (.invalidContext (path ++ [index]))
     | none => throw (.unknownLabel (path ++ [index]) name row)
 end
 
