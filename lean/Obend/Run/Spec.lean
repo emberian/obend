@@ -12,8 +12,10 @@ plan at a point of the log are recomputed from the log's prefix (`worldOf`, `spe
 - `Authorized`: every dispatched call was admitted (`admitOp`) at the view current when it was
   dispatched: the world's view then, with every token an earlier dispatch spent dead;
 - `OnceSpent`: no token is spent by two dispatches;
-- `Paired`: a call is dispatched only with nothing in flight, and a reply is accepted only for the
-  call in flight;
+- `Paired`: a call is dispatched only with nothing in flight, and a reply is accepted (or the call
+  abandoned) only for the call in flight;
+- `AfterAbandon`: once a call is abandoned only the world moves (the abandoned call stays in the
+  history, in flight and never answered, so its obligation stands);
 - `ReplansUnentered`: no replan touched a hole the history had entered (`Dispatched`) when the replan
   was accepted;
 - `Kept`: the history is a history (`Started`) of the plan in force.
@@ -61,6 +63,12 @@ def histOf (log : List (Event S Hole A V)) : Hist S :=
     | .respond r => ⟨H.answered ++ [r], none⟩
     | _ => H) ⟨[], none⟩
 
+/-- The call a log abandoned, if it was ended that way. -/
+def endedOf (log : List (Event S Hole A V)) : Option (Σ i, S.Op i) :=
+  log.foldl (fun x e => match e with
+    | .abandon o => some o
+    | _ => x) none
+
 /-- The calls a log dispatched, in order. -/
 def dispatchesOf (log : List (Event S Hole A V)) : List (Σ i, S.Op i) :=
   log.filterMap fun e => match e with
@@ -85,11 +93,17 @@ def Authorized [DecidableEq Tok] (host : Host V Tok Fact) (sp : Spec S Tok Fact 
 def OnceSpent (sp : Spec S Tok Fact Ob) (log : List (Event S Hole A V)) : Prop :=
   (spentBy sp log).Nodup
 
-/-- Dispatch only with nothing in flight; a reply only to the call in flight. -/
+/-- Dispatch only with nothing in flight; a reply only to the call in flight; abandon only the call
+in flight. -/
 def Paired : List (Event S Hole A V) → Prop :=
   AtEach fun pre e =>
     (∀ o, e = .dispatch o → (histOf pre).inflight = none) ∧
-      (∀ r, e = .respond r → (histOf pre).inflight = some ⟨r.1, r.2.1⟩)
+      (∀ r, e = .respond r → (histOf pre).inflight = some ⟨r.1, r.2.1⟩) ∧
+      (∀ o, e = .abandon o → (histOf pre).inflight = some o)
+
+/-- After an abandonment only the world moves: no dispatch, reply, replan or second abandonment. -/
+def AfterAbandon : List (Event S Hole A V) → Prop :=
+  AtEach fun pre e => endedOf pre ≠ none → ∃ v, e = .world v
 
 /-- No replan touched a hole the history had entered when it was accepted. -/
 def ReplansUnentered {i : Ix} (P : Prot S Hole A i) : List (Event S Hole A V) → Prop :=
@@ -116,6 +130,7 @@ structure Legal [DecidableEq Tok] (host : Host V Tok Fact) (sp : Spec S Tok Fact
   authorized : Authorized host sp v₀ log
   once : OnceSpent sp log
   paired : Paired log
+  final : AfterAbandon log
   frozen : ReplansUnentered O.template log
   kept : Kept O.Ω O.σ O.template log
 

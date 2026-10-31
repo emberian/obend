@@ -35,7 +35,8 @@ variable [DecidableEq (Σ i, S.Op i)] [DecidableEq Ix] [∀ i, DecidableEq (Hole
 theorem run_dispatch_res {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c c' : Cfg S Hole A Tok Fact Ob V i} {o : Σ i, S.Op i}
     (h : run host sp c (.dispatch o) = .ok c') : c'.res = c.res := by
-  simp only [run] at h
+  have hcl := run_live (fun _ e => by cases e) h
+  simp only [run, hcl] at h
   have haw : awaiting c.obj.hist = c.obj.hist.inflight := rfl
   rw [haw] at h
   cases hinf : c.obj.hist.inflight with
@@ -55,7 +56,8 @@ theorem run_dispatch_res {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i :
 theorem run_respond_res {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
     {c c' : Cfg S Hole A Tok Fact Ob V i} {e : Entry S}
     (h : run host sp c (.respond e) = .ok c') : follow c.res e = some c'.res := by
-  simp only [run] at h
+  have hcl := run_live (fun _ e => by cases e) h
+  simp only [run, hcl] at h
   cases hinf : c.obj.hist.inflight with
   | none => simp [hinf] at h
   | some o =>
@@ -119,20 +121,21 @@ public theorem drive_complete {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob}
     (H : Handler S (fun _ => St)) {i : Ix} {Ω : Ctx S Hole A Tok Fact Ob} {Γ : List Fact}
     {Q : (j : Ix) → A j → Prop} {Φ : List Ob} :
     ∀ {j : Ix} (P : Prot S Hole A j) (c : Cfg S Hole A Tok Fact Ob V i) (s : St) (Δ : List Tok),
-      c.res = ⟨j, P⟩ → c.obj.hist.inflight = none → HasProt sp Ω Γ Q Φ Δ P →
+      c.res = ⟨j, P⟩ → c.ended = none → c.obj.hist.inflight = none → HasProt sp Ω Γ Q Φ Δ P →
       (∀ f ∈ Γ, (host.view c.world).holds f = true) →
       (∀ t ∈ Δ, (host.view c.world).live t = true ∧ t ∉ c.spent) → Δ.Nodup →
       ∃ n, (drive host sp H n c s).result? = some (interpret H P s) := by
   intro j P
   induction P with
   | ret a =>
-    intro c s Δ hres _ _ _ _ _
+    intro c s Δ hres _ _ _ _ _ _
     exact ⟨1, by simp [drive, hres, Drive.result?]; rfl⟩
   | hole hl =>
-    intro c s Δ hres _ _ _ _ _
+    intro c s Δ hres _ _ _ _ _ _
     exact ⟨1, by simp [drive, hres, Drive.result?]; rfl⟩
   | @call j op k ih =>
-    intro c s Δ hres hinf hP hΓ hΔ hnd
+    intro c s Δ hres hlive hinf hP hΓ hΔ hnd
+    have hcl : closedBy c = none := hlive
     -- the dispatch is admitted, and the runner's next configurations
     have hreq : (sp.requires op).all (View.mask (host.view c.world) c.spent).holds = true := by
       have hsub : ∀ f ∈ sp.requires op, f ∈ Γ := by
@@ -148,7 +151,7 @@ public theorem drive_complete {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob}
     have hg : dispatchGuard sp (c.admitView host) op = true → run host sp c (.dispatch ⟨j, op⟩) = .ok c' := by
       intro hg
       have haw : awaiting c.obj.hist = c.obj.hist.inflight := rfl
-      simp only [run, haw, hinf, hres, ↓reduceIte, hg]
+      simp only [run, hcl, haw, hinf, hres, ↓reduceIte, hg]
       rfl
     cases hH : H.handle op s with
     | mk r s' =>
@@ -159,13 +162,14 @@ public theorem drive_complete {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob}
       have h2 : run host sp c' (.respond ⟨j, op, r⟩) = .ok c'' := by
         have hf : follow c'.res ⟨j, op, r⟩ = some ⟨_, k r⟩ := follow_call op k r
         have hinf' : c'.obj.hist.inflight = some ⟨j, op⟩ := rfl
-        simp only [run, hf, hinf', ↓reduceIte]
+        have hcl' : closedBy c' = none := hlive
+        simp only [run, hcl', hf, hinf', ↓reduceIte]
         rfl
       have hfin : ∀ Δ', HasProt sp Ω Γ Q Φ Δ' (k r) → (∀ t ∈ Δ', (host.view c''.world).live t = true ∧ t ∉ c''.spent) →
           Δ'.Nodup → dispatchGuard sp (c.admitView host) op = true →
           ∃ n, (drive host sp H n c s).result? = some (interpret H (.call op k) s) := by
         intro Δ' hk hΔ' hnd' hgd
-        obtain ⟨n, hn⟩ := ih r c'' s' Δ' rfl rfl hk hΓ hΔ' hnd'
+        obtain ⟨n, hn⟩ := ih r c'' s' Δ' rfl hlive rfl hk hΓ hΔ' hnd'
         refine ⟨n + 1, ?_⟩
         rw [drive_call hres (hg hgd) hH h2]
         show _ = some (match H.handle op s with | ⟨r, s'⟩ => interpret H (k r) s')
@@ -210,7 +214,34 @@ public theorem resolveEvent_ok {Cand : Type} {host : Host V Tok Fact} {i : Ix}
     obtain ⟨cand, rest, ha, hm, hu, hf⟩ := resolve_ok hr
     exact ⟨cand, rest, ha, hm, hu, by rw [hf]⟩
 
-#assert_axioms drive_sound drive_complete resolveEvent_ok
+omit [DecidableEq (Σ i, S.Op i)] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok] in
+/-- **Replanning by any stored-selection policy with TRANSITION** (`Integrity.transition`: keep a
+usable stored selection, otherwise only a usable candidate, the first of the order unless it is
+the stored one): the replan event installs a candidate usable at the current world, keeps the
+stored one while it is usable, and is the policy's own choice. Nothing here fixes the policy. -/
+public theorem resolveEventBy_ok {Cand : Type} [World V Fact] {adv : Advance V Fact Cand}
+    (hA : Integrity.transition adv) {i : Ix} {c : Cfg S Hole A Tok Fact Ob V i}
+    {Sl : Slot Fact Cand} {j : Ix} {h : Hole j} {body : Cand → Prot S Hole A j}
+    {order : List Cand} {stored : Option Cand} :
+    (∀ ev, resolveEventBy adv c Sl h body order stored = .ok ev →
+      ∃ cand, ev = .replan h (body cand) ∧ Sl.usable (World.holdsAt c.world) cand = true ∧
+        (stored = some cand ∨ ∃ rest, Sl.alternatives (World.holdsAt c.world) order = cand :: rest)) ∧
+    (∀ cand, stored = some cand → Sl.usable (World.holdsAt c.world) cand = true →
+      resolveEventBy adv c Sl h body order stored = .ok (.replan h (body cand))) := by
+  obtain ⟨keep, ok, _⟩ := hA Sl c.world order stored
+  refine ⟨fun ev he => ?_, fun cand hs hu => ?_⟩
+  · unfold resolveEventBy at he
+    cases ha : adv.advance Sl c.world order stored with
+    | error w => rw [ha] at he; cases he
+    | ok cand =>
+      rw [ha] at he
+      cases he
+      exact ⟨cand, rfl, (ok cand ha).1, (ok cand ha).2⟩
+  · unfold resolveEventBy
+    rw [keep cand hs hu]
+    rfl
+
+#assert_axioms drive_sound drive_complete resolveEvent_ok resolveEventBy_ok
 
 end
 

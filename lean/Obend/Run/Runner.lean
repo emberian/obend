@@ -18,6 +18,10 @@ returns the next configuration or a named refusal:
   world's view with every durably spent token dead (`unadmitted`, naming the facts that do not hold
   and the token that is not live). On acceptance the token is spent before anything else happens.
 - `respond e`: the reply `e`, accepted only for the recorded in-flight call (`unsolicited`).
+- `abandon o`: give up on the call `o` in flight (`notInflight` otherwise). The call stays in the
+  history as dispatched and never answered, so its obligation stands (`Hist.established`); the run is
+  ENDED (`closedBy`): every later replan, dispatch, reply or abandonment is refused `abandoned`, and
+  only the world still moves.
 
 The declarative specification the runner refines is `Obend.Run.Spec`; the invariant and its proof
 are `Obend.Run.Proofs.Invariant`; the handler-driven loop and its agreement with `interpret` are
@@ -61,6 +65,9 @@ inductive Event (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (V : Type) w
   | dispatch (o : Σ i, S.Op i)
   /-- the reply `e` arrives -/
   | respond (e : Entry S)
+  /-- give up on the call `o` in flight: it is settled as permanently unanswered (its obligation
+  stands), the plan ends, and nothing more is committed or replanned -/
+  | abandon (o : Σ i, S.Op i)
 
 /-- Why the runner refused an event. -/
 inductive Refusal (S : Sig Ix) (Hole : Ix → Type) (Tok Fact : Type) where
@@ -83,6 +90,10 @@ inductive Refusal (S : Sig Ix) (Hole : Ix → Type) (Tok Fact : Type) where
   /-- the replanned protocol does not have the history (never, at a reachable configuration whose
   replan is otherwise accepted: `Proofs.Invariant.replan_accepted`) -/
   | inconsistent
+  /-- the run was ended by abandoning this call: only the world still moves -/
+  | abandoned (o : Σ i, S.Op i)
+  /-- abandoning a call that is not the one in flight -/
+  | notInflight (o : Σ i, S.Op i)
 
 /-- A configuration: the open object, the host's world, the durable spent tokens, the residual
 protocol, and the accepted events in order. -/
@@ -92,11 +103,13 @@ structure Cfg (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob V
   spent : List Tok
   res : Σ j, Prot S Hole A j
   log : List (Event S Hole A V)
+  /-- the call abandoned, if the run was ended that way -/
+  ended : Option (Σ i, S.Op i)
 
 /-- The start: the object with an empty history at world `v`, its current protocol the residual. -/
 def Cfg.init {Tok Fact Ob V : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (v : V) :
     Cfg S Hole A Tok Fact Ob V i :=
-  ⟨{ O with hist := ⟨[], none⟩ }, v, [], ⟨i, fill O.Ω O.σ O.template⟩, []⟩
+  ⟨{ O with hist := ⟨[], none⟩ }, v, [], ⟨i, fill O.Ω O.σ O.template⟩, [], none⟩
 
 /-- The view admission is judged at: the world's, with the durably spent tokens dead. -/
 def Cfg.admitView {Tok Fact Ob V : Type} [DecidableEq Tok] {i : Ix} (host : Host V Tok Fact)
@@ -117,6 +130,11 @@ def spendOn {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (spent : List Tok) {i
 
 /-- The no-new-commitment guard: the call in flight, which a dispatch must wait for. -/
 def awaiting (H : Hist S) : Option (Σ i, S.Op i) := H.inflight
+
+/-- The no-new-commitment-after-abandon guard: the call the run was ended by, if any. -/
+def closedBy {Tok Fact Ob V : Type} {i : Ix} (c : Cfg S Hole A Tok Fact Ob V i) :
+    Option (Σ i, S.Op i) :=
+  c.ended
 
 /-- What a refused admission names. -/
 def missingOf {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (v : View Tok Fact) {i : Ix}
@@ -196,6 +214,9 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
     if host.allowed c.world v' then .ok { c with world := v', log := c.log ++ [.world v'] }
     else .error .worldStep
   | .replan (j := j) h f =>
+    match closedBy c with
+    | some e => .error (.abandoned e)
+    | none =>
     if !isMine c.obj.Ω h then .error (.notMine ⟨j, h⟩)
     else if frozenHole c.obj = some ⟨j, h⟩ then
       match c.obj.hist.inflight with
@@ -210,6 +231,9 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
         else .error .inconsistent
       | none => .error .inconsistent
   | .dispatch o =>
+    match closedBy c with
+    | some e => .error (.abandoned e)
+    | none =>
     match awaiting c.obj.hist with
     | some o' => .error (.busy o')
     | none =>
@@ -227,6 +251,9 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
         else .error (.notNext o)
       | _ => .error (.notNext o)
   | .respond e =>
+    match closedBy c with
+    | some e' => .error (.abandoned e')
+    | none =>
     match c.obj.hist.inflight with
     | none => .error (.unsolicited e)
     | some o =>
@@ -239,6 +266,15 @@ def run (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
             log := c.log ++ [.respond e] }
         | none => .error (.unsolicited e)
       else .error (.unsolicited e)
+  | .abandon o =>
+    match closedBy c with
+    | some e => .error (.abandoned e)
+    | none =>
+      match awaiting c.obj.hist with
+      | some o' =>
+        if o = o' then .ok { c with ended := some o, log := c.log ++ [.abandon o] }
+        else .error (.notInflight o)
+      | none => .error (.notInflight o)
 
 /-- The configurations the runner reaches from `c₀` by accepted events. -/
 inductive Reachable (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix}
@@ -319,6 +355,15 @@ def resolveEvent {Cand : Type} (host : Host V Tok Fact) {i : Ix}
     (body : Cand → Prot S Hole A j) (order : List Cand) :
     Except (Slot.Refusal Fact Cand) (Event S Hole A V) :=
   (Sl.resolve (host.view c.world).holds body order).map (Event.replan h)
+
+/-- Re-resolve hole `h` by a stored-selection POLICY (`Obend.Slot.Advance`: how a stored selection
+moves when the view changes; the slot's own is incumbent-first `slotAdvance`): the replan event for
+the candidate the policy keeps or selects at the current world, or its refusal. -/
+def resolveEventBy {Cand : Type} (adv : Advance V Fact Cand) {i : Ix}
+    (c : Cfg S Hole A Tok Fact Ob V i) (Sl : Slot Fact Cand) {j : Ix} (h : Hole j)
+    (body : Cand → Prot S Hole A j) (order : List Cand) (stored : Option Cand) :
+    Except (Slot.Refusal Fact Cand) (Event S Hole A V) :=
+  (adv.advance Sl c.world order stored).map fun cand => Event.replan h (body cand)
 
 end
 

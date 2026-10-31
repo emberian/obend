@@ -102,11 +102,20 @@ theorem resolves_p2 :
     resolveEvent host c₁ providers (j := Phase.reserved) () body order =
       .ok (.replan (j := Phase.reserved) () (plan .p2)) := rfl
 
+/-- The same replan by the slot's incumbent-first policy (`slotAdvance`), with `p1` stored: the stored
+selection is no longer usable, so the policy selects `p2`; any other policy with TRANSITION would
+be admissible here too (`resolveEventBy_ok`). -/
+theorem resolvesBy_p2 :
+    resolveEventBy slotAdvance c₁ providers (j := Phase.reserved) () body order (some (some .p1)) =
+      .ok (.replan (j := Phase.reserved) () (plan .p2)) := rfl
+
 /-- The rest: commit on `p1` (refused, the grant is gone), the slot's replan to `p2`, commit on `p2`
 (accepted: the capability is spent), then its reply is LOST. The world restores `p1`'s grant and
 calls the capability live again; the buyer tries to cancel, to go back to `p1`, to keep `p2` with
 another continuation, to commit on `p1`; a late reply arrives for the commit on `p1`; the deadline
-passes, and the world tries to un-pass it. -/
+passes, and the world tries to un-pass it. The buyer gives up on the commitment (`abandon`): the
+reply that finally arrives, a cancellation and a new commitment are all refused; the world still
+moves. -/
 def rest : List (Event sig HoleN Res Wv) :=
   [.dispatch (commitOp .p1),
    .replan (j := Phase.reserved) () (plan .p2),
@@ -118,7 +127,12 @@ def rest : List (Event sig HoleN Res Wv) :=
    .dispatch (commitOp .p1),
    .respond ⟨.reserved, Op.commit .p1, true⟩,
    .world ⟨true, true, false, true⟩,
-   .world everything]
+   .world everything,
+   .abandon (commitOp .p2),
+   .respond ⟨.reserved, Op.commit .p2, true⟩,
+   .replan (j := Phase.reserved) () cancelPlan,
+   .dispatch (commitOp .p1),
+   .world ⟨false, false, false, true⟩]
 
 def script : List (Event sig HoleN Res Wv) := opening ++ rest
 
@@ -136,22 +150,32 @@ theorem receipt :
        some (.busy (commitOp .p2)),
        some (.unsolicited ⟨.reserved, Op.commit .p1, true⟩),
        none,
-       some .worldStep] := rfl
+       some .worldStep,
+       none,
+       some (.abandoned (commitOp .p2)),
+       some (.abandoned (commitOp .p2)),
+       some (.abandoned (commitOp .p2)),
+       none] := rfl
 
 /-- **What had to stay**: the accepted history is the reservation answered and the commitment to
-`p2` in flight; the capability is spent once; the plan in force is `p2`'s; the residual's next call
-is the commitment in flight. -/
+`p2` dispatched and never answered; the capability is spent once; the plan in force is `p2`'s; the
+residual's next call is that commitment; the run is ended by abandoning it, and the obligations
+established are the deposit and the payment to `p2`, which the abandonment does not discharge. -/
 theorem stayed :
     final.obj.hist.answered = [⟨.idle, Op.reserve, ()⟩] ∧
       final.obj.hist.inflight = some (commitOp .p2) ∧ final.spent = [.cap] ∧
       final.obj.σ .reserved () = some (plan .p2) ∧ IsCall final.res (commitOp .p2) ∧
-      dispatchesOf final.log = [reserveOp, commitOp .p2] := ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+      dispatchesOf final.log = [reserveOp, commitOp .p2] ∧
+      final.ended = some (commitOp .p2) ∧
+      final.obj.hist.established spec = [.holdDeposit, .pay .p2] :=
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- **What changed**: the revocation moved the plan from `p1` to `p2` before anything was
-dispatched in the hole, and the world ends past the deadline. -/
+dispatched in the hole; the world ends past the deadline with both grants revoked (it moves after
+the run has ended). -/
 theorem changed :
     c₁.obj.σ .reserved () = some (plan .p1) ∧ final.obj.σ .reserved () = some (plan .p2) ∧
-      final.world = ⟨true, true, false, true⟩ := ⟨rfl, rfl, rfl⟩
+      final.world = ⟨false, false, false, true⟩ := ⟨rfl, rfl, rfl⟩
 
 -- Without the replan guard the three replans in flight are not refused by name (the cancellation
 -- and the return to `p1` become `inconsistent`, and the same-first-call `planFlip` is ACCEPTED).
@@ -195,6 +219,16 @@ theorem reserve_retry_refused :
 
 #tooth reserve_retry_refused by mutation awaiting := fun {_ _} _ => none
 
+/-- **After abandonment, no new commitment**: the reservation is abandoned in flight; its late
+reply and a commitment on `p1` (admissible: every grant holds) are refused, naming the abandoned
+call. Without the guard the late reply would revive the plan and the commitment would go out. -/
+theorem abandon_ends :
+    (session host spec c₀ [.dispatch reserveOp, .abandon reserveOp,
+      .respond ⟨.idle, Op.reserve, ()⟩, .dispatch (commitOp .p1)]).2 =
+      [none, none, some (.abandoned reserveOp), some (.abandoned reserveOp)] := rfl
+
+#tooth abandon_ends by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
+
 /-- The commitment to `p2` dispatched, its reply missing. -/
 def c₂ : Cfg sig HoleN Res Tok Fact Ob Wv .idle :=
   (session host spec c₀ (opening ++ [.dispatch (commitOp .p1),
@@ -215,7 +249,7 @@ theorem lost_instance (evs : List (Event sig HoleN Res Wv)) (hno : ∀ e ∈ evs
 theorem typed_instance (H : Handler sig (fun _ => Nat)) (s : Nat) :
     ∃ n, (drive host spec H n c₀ s).result? =
       some (interpret H (fill Ω (choose (plan .p1)) template) s) := by
-  refine drive_complete H _ c₀ s Δ₀ rfl rfl (instantiations_hasProt.1 .p1) ?_ ?_ (by decide)
+  refine drive_complete H _ c₀ s Δ₀ rfl rfl rfl (instantiations_hasProt.1 .p1) ?_ ?_ (by decide)
   · intro f hf
     simp only [Γ₀, List.mem_cons, List.not_mem_nil, or_false] at hf
     rcases hf with rfl | rfl | rfl <;> rfl
@@ -223,7 +257,8 @@ theorem typed_instance (H : Handler sig (fun _ => Nat)) (s : Nat) :
     cases t
     exact ⟨rfl, by simp [c₀, Cfg.init]⟩
 
-#assert_axioms resolves_p2 receipt reserve_retry_refused lost_instance typed_instance stayed changed script_legal withdrawn_refused everything_delivers
+#assert_axioms resolvesBy_p2
+#assert_axioms resolves_p2 receipt reserve_retry_refused abandon_ends lost_instance typed_instance stayed changed script_legal withdrawn_refused everything_delivers
 
 end Obend.Run.Negotiation
 
