@@ -239,3 +239,89 @@ Census after rebasing onto `39932d9` (the Expose lane's per-definition `@[expose
 **What remains.** `Check.infer` is stricter than the relation (only reusable scrutinee captures); it is
 the checker Gemini's review says to retire. `affine` copying through `case` is closed by the same rule
 (an `affine` scrutinee binds an `affine` payload).
+
+## 6. Pass 3: source subject reduction (Gemini's second review §6)
+
+Brief: `scratchpad/sound/SUBJECT-REDUCTION-BRIEF.md`. Worktree `scratchpad/kinds`, branch `lane-sound`
+on `2e70070`. Two new tier-1 modules beside `Conservation`, theorems only: `Core/Proofs/SubjectReduction/Substitution.lean`
+(typed open substitution, 646 lines) and `Core/Proofs/SubjectReduction.lean` (inversions, the step
+theorem, the chain, the custody corollary, 914 lines); both in the census. No rule, checker or
+executable changed. `steps_conserve_linear`'s docstring now points at its discharged form.
+
+**Typed open substitution** (`subst_typed`, private). The induction of `subst_counts`, producing a
+derivation: if `σ` puts `A` at `d` (`SubstAt`), `A` checks in `Γ.eraseIdx d` at the binder's type and
+uses its hypotheses as an argument to that binder may (`TSub`: `linear` binder or `linearFree`;
+`unrestricted` binder only with reusable captures), and `Image d ua u` is safe in `Γ.eraseIdx d`
+(`Budget`), then `t.substitute σ` checks in `Γ.eraseIdx d` at the same type with uses pointwise
+`≤ Image d ua u` (equal at `linear` positions by `subst_counts`). Every premise transports:
+`linearFree`, `reusableCaptures`, `argumentAllowed`, `caseAllowed`, `reusableAllowed` from `≤ Image`
+and the binder's quantity condition; `safeUses` of inner binders from the budget (it passes under a
+binder as `ub[0] :: Image`, from the binder's own `safeUses`); `fits` from `≤` plus equality at a
+`linear` binder; `branchesAgree` from equality at `linear` positions. All cases proved, none isolated.
+
+**The step theorem** (`Core/Proofs/SubjectReduction.lean`):
+
+```lean
+public theorem step_preserves_typing {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Uses}
+    (typed : PartialTyping a Γ t T u) (valid : validContext a.shareableVariables Γ = true)
+    (safe : safeUses Γ u = true) {t' : Term} (step : Step t t') :
+    ∃ T' u', PartialTyping a Γ t' T' u' ∧ safeUses Γ u' = true ∧ Below Γ u' u ∧
+      (∀ j, LinearAt Γ j → u'.getD j 0 = u.getD j 0) ∧
+      (sameType a T' T = true ∨ RowRefines a T' T ∨
+        (t = .done t' ∧ ∃ P R, sameType a (.computation P R T') T = true))
+```
+
+`Below Γ x y`: `x[j] ≤ y[j]` at every position not `unrestricted`. `RowRefines a T' T`: both finite
+rows, and every `T.lookup` is answered by `T'.lookup` with a `sameType` member. Every rule is
+proved; the redexes: `beta` and `caseInject` by `subst_typed` (the budget from `safe`: the binder is
+used at most once unless `unrestricted`, in which case the argument's captures are reusable), the
+arm's payload type transported to the injection's through `variant_components` and lookup
+transport; `successor` the same with a literal; `field` through lookup transport and the first
+field found; `applySpecification`, `reflect`/`metadata`/`project` through `*_components`; `fix`
+builds `app (app spec (fix spec inh)) inh` from its own derivation (reusable captures, so
+`Below` everywhere); `mix` is `reusable_mix_body`; `primitive` types its literal. Congruences: a
+`done` that steps under `effectCase`'s scrutinee turns it into a plain `case` (the arms already
+return the activity); under any other frame it is refuted (`isComputation`).
+
+**What resisted, and is stated instead: `extendRecord` does not preserve the type up to
+`sameType`.** The brief's statement (`∃ u', PartialTyping a Γ t' T u'` except at a root `done`) is
+false: `extendRecord_changes_type` proves that `{a = h} with {a = 0}`, `h` an `affine` custody
+handle, checks at `{a : ℕ, a : custody 0}`, steps to `{a = 0}`, and no type of `{a = 0}` is
+`sameType` to the old one (`TypeGraph.equivalent_shareable`: the old type is not shareable, every
+type of the reduct is). `overlay` keeps a shadowed member, and canonical rows forget it only when it
+is shareable (`Ty.insertCanonical`), so the old type remembers what the new record dropped. The
+machine never meets this: its record values are typed by lookup (`ValueTyping.record`), not by
+row structure. So the theorem's second disjunct is `RowRefines`, which is exactly what the
+frames that can hold a record need (`get` looks up, `extend` needs a finite row and lifts it through
+`overlay`: `overlay_refines`), and is refuted under every other frame (`finiteRow_nonrow`). This
+needs no change to the rules; whether `extendRecord` should be type-preserving (e.g. an `extend`
+that requires shareable shadowed members, or `overlay` that drops them) is a language decision.
+
+**The chain** (no typing premise on intermediate terms):
+
+```lean
+public theorem steps_conserve_linear' {a : Assumptions} {Γ : Context} {t t' : Term} {T : Ty} {u : Uses}
+    (typed : PartialTyping a Γ t T u) (valid : validContext a.shareableVariables Γ = true)
+    (safe : safeUses Γ u = true) (steps : Steps t t') {j : Nat} (lin : LinearAt Γ j) :
+    (occurrences Γ.length t').getD j 0 = (occurrences Γ.length t).getD j 0
+```
+
+from `steps_preserve_typing` (every term along the reduction checks, within budget, with the initial
+`linear` counts).
+
+**Closed programs over custody handles** (`custodyContext k`: handle `n` is `⟨.custody n, .linear⟩` at
+index `n`):
+
+```lean
+public theorem custody_conserved {a : Assumptions} {k : Nat} {t t' : Term} {T : Ty} {u : Uses}
+    (typed : PartialTyping a (custodyContext k) t T u) (safe : safeUses (custodyContext k) u = true)
+    (steps : Steps t t') {j : Nat} (hj : j < k) :
+    (occurrences k t').getD j 0 = u.getD j 0
+```
+
+**Builds and controls.** On `2e70070`: tier 1 285 jobs, tier 2 306, green; census 36,242 constants, 27
+on compiler trust, none on `sorryAx` or a declared axiom. After rebasing onto `c67f197`: tier 1 290,
+tier 2 314, census 37,299 constants, 27 on compiler trust, none on `sorryAx` or an axiom. Cohorts 30/30, 71/71, 161/0; receipts 32/32; workspaces
+30/30; walkthrough 26: unchanged. Added public: `step_preserves_typing`, `steps_preserve_typing`,
+`steps_conserve_linear'`, `custody_conserved`, `extendRecord_changes_type`, `RowRefines`, `Below`,
+`Retyped`, `custodyContext`. Revised: none (one docstring).

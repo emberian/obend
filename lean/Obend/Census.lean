@@ -121,6 +121,8 @@ import Obend.Core.Proofs.Preservation.Cases.Records
 import Obend.Core.Proofs.Preservation.Cases.Sums
 import Obend.Core.Proofs.Settle
 import Obend.Core.Proofs.StepCases
+import Obend.Core.Proofs.SubjectReduction
+import Obend.Core.Proofs.SubjectReduction.Substitution
 import Obend.Core.Proofs.Substitution
 import Obend.Core.Proofs.Substitution.Defs
 import Obend.Core.Proofs.Substitution.Mono

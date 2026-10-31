@@ -889,8 +889,8 @@ public theorem step_conserves_linear {a : Assumptions} {context : Context} {t : 
   all_goals (intros; first | trivial | (rename_i st _ _; cases st))
 
 /-- Along a reduction every term of which checks in the context, every `linear` count is the
-initial one. Source subject reduction is not proved here (the proved preservation is the machine's,
-`typed_stepRaw_preserved`), so typing along the path is a premise. -/
+initial one. Typing along the path is a premise here; `SubjectReduction.steps_conserve_linear'`
+discharges it from the typing of the first term (source subject reduction). -/
 public theorem steps_conserve_linear {a : Assumptions} {context : Context} {t t' : Term}
     (valid : validContext a.shareableVariables context = true) (steps : Steps t t')
     (typed : ∀ s, Steps t s → Steps s t' → ∃ T us, PartialTyping a context s T us)
