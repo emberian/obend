@@ -15,6 +15,7 @@ public import Obend.Core.Checkpoint
 public import Obend.Core.Collect
 public import Obend.Core.Interaction
 public import Obend.Core.Digest
+public import Obend.Core.Code
 public import Obend.Core.Backend
 public import Obend.Digest.Class
 public import Obend.Slot

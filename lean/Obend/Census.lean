@@ -29,6 +29,7 @@ import Obend.Core.CanonicalExtension
 import Obend.Core.Capacity
 import Obend.Core.Check
 import Obend.Core.Checkpoint
+import Obend.Core.Code
 import Obend.Core.Collect
 import Obend.Core.Data
 import Obend.Core.DecisionReduction
