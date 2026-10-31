@@ -37,3 +37,19 @@ Full text held in the conversation; this file records what it found and what was
    (~150 lines in `Conservation.lean`): custody is parametric, every `Step` rule but `primitive` is
    call-by-name, and every usage constraint is exact-one, at-most-one or zero, each already
    preserved by `step_conserves_linear` and the substitution lemma; `TypedChain` is then discharged.
+
+## Third round (pasted by Ember, 2026-11-01, after `0500969..f02c6e5`)
+
+All five landed lanes reviewed and confirmed (OneChecker, Leaf, Impact, Demand, Ticks); no new holes.
+Recommendations taken: OneChecker's two cheap moves (`import all` for the ~18 proof readers of
+`Bidirectional`; the `decide +kernel` fixtures in `Core4`, `Budget`, `Judge.Instances`,
+`CheckCompletenessObstruction` to tier 2), accepting Lean 4.35's `_unsafe_rec` for `elaborate` itself;
+impact receipts name the world root (already queued with C3). For the BendTT translation: a syntactic
+`SuperOnlyProjected` check and the theorem that the vtable has no residual `super` literal. Early audit
+of the in-flight branches: `lane-c2-t7` (T7 `splice_typed` as a corollary of `subst_typed`; `joinUses`
+proved to be all-path maximum usage) done with teeth; `lane-c1`'s `KindPin.lineage` closes Kimi A's
+ancestor-revision gap; `lane-ledger`'s `Register.lean` theorems and 536-line walkthrough well shaped.
+Two issues handed to `lane-c2` before it reaches `SubjectReduction.lean`: `RowRefines` must carry
+`SplitCovers` preservation for the `splitTarget` case, and `SplitSpine` must not force every field of a
+record with one linear custody to `linear` (fix: `FieldsTyping.cons` forbids a linear variable in a
+shareable field, so split binds shareable fields at their own quantity).

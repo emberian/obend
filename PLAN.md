@@ -44,6 +44,12 @@ the build is the check. One stranger-usable artifact stays ahead of every platfo
 4. Strip blanket `@[expose]` from Core first (Expose lane, in progress).
 5. The integration scenario at the end of this file as a compiled theorem before WS 5–10.
 
+## Build list (queued, after C1/C2/Ledger land)
+
+- OneChecker's two cheap moves (Gemini round 3): `import all Obend.Core.Bidirectional` for its ~18 proof readers and the `decide +kernel` fixtures in `Core4`, `Budget`, `Judge.Instances`, `CheckCompletenessObstruction` moved to tier 2; expected `checkAgainst` edit about 18 modules, `elaborate` edit stays 52 (`_unsafe_rec`).
+- The remaining exposed sections (`Core/*` not yet passed, `Equiv`, `Digest`, `Vault`, `Elab`); the one-at-a-time pruning of the 536 exposures.
+- `Joins` merged into `Ahead` (`Ahead := Joins ⊥`), a parsimony item from the Leaf lane.
+
 ## Decisions pending
 
 The four contracts C1–C4 in `review/DECISIONS-20261031.md` (identity across kinds, code and
