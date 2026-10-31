@@ -233,6 +233,8 @@ import Obend.Run.Core4Example
 import Obend.Run.Durable
 import Obend.Run.DurableExample
 import Obend.Run.Fold
+import Obend.Run.Fork
+import Obend.Run.ForkExample
 import Obend.Run.LawJudge
 import Obend.Run.Negotiation
 import Obend.Run.Proofs.Adapter

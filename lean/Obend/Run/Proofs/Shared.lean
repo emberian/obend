@@ -366,7 +366,7 @@ public theorem jreachable_inv {i₀ : Ix} {d₀ : L.Rec} {O : ι → Open S Hole
       · split at hs <;> cases hs
       · cases hs
 
-theorem nodup_map_inj {α β : Type} {f : α → β} : ∀ {l : List α}, (l.map f).Nodup →
+public theorem nodup_map_inj {α β : Type} {f : α → β} : ∀ {l : List α}, (l.map f).Nodup →
     ∀ a ∈ l, ∀ b ∈ l, f a = f b → a = b
   | [], _, a, ha, _, _, _ => by cases ha
   | x :: t, h, a, ha, b, hb, e => by
