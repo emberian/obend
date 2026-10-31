@@ -224,6 +224,7 @@ import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Logic.Claim
 import Obend.Logic.LateBinding
+import Obend.Logic.Rewrite
 import Obend.Main
 import Obend.Receipt
 import Obend.Receipt.Cli
