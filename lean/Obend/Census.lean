@@ -190,6 +190,7 @@ import Obend.Equiv.Ahead
 import Obend.Equiv.Behaviour
 import Obend.Equiv.FareTests
 import Obend.Equiv.Fields
+import Obend.Equiv.Quote
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
 import Obend.Fold
