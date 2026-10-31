@@ -132,6 +132,7 @@ import Obend.Core.TypeGraphResource
 import Obend.Core.WeightedResource
 import Obend.Core.WeightedRowSafety
 import Obend.Digest.Class
+import Obend.Fold
 import Obend.Digest.Cshake256
 import Obend.Digest.Cshake256.Fast
 import Obend.Digest.Cshake256.Seam
@@ -163,6 +164,7 @@ import Obend.Equiv.Simulation
 import Obend.Just
 import Obend.Law
 import Obend.Law.Claim
+import Obend.Law.Fold
 import Obend.Law.Inherit
 import Obend.Law.Proofs.Claim
 import Obend.Law.Proofs.Eval
@@ -180,6 +182,7 @@ import Obend.Law.Std
 import Obend.Law.Syntax
 import Obend.Main
 import Obend.Run
+import Obend.Run.Fold
 import Obend.Run.Adapter
 import Obend.Run.Control
 import Obend.Run.ControlExample

@@ -7,6 +7,8 @@ accepted history across replanning, revocation and lost replies.
 
 - `Obend.Run.Runner`: configurations, raw events, named refusals, `run`, `session`, `drive`.
 - `Obend.Run.Spec`: the declarative specification of an accepted log (`Legal`), stated of the log.
+- `Obend.Run.Fold`: `Legal` as one fold over an accumulator (`legal_iff_fold`), an instance of the
+  audited fold `Obend.Fold.Admission` (`legal_iff_admission`, `legal_step_of_pins`).
 - `Obend.Run.Proofs.Invariant`: `refines` (every reachable configuration satisfies `Inv`, so its log
   is `Legal`), the continuation clauses (`replan_accepted`, `replace_then_dispatch`, `inflight_busy`,
   `inflight_replan_refused`, `lost_reply_frozen`) and the guard (`run_replan_guard`).
@@ -27,6 +29,7 @@ accepted history across replanning, revocation and lost replies.
 -/
 public import Obend.Run.Runner
 public import Obend.Run.Spec
+public import Obend.Run.Fold
 public import Obend.Run.Proofs.Invariant
 public import Obend.Run.Proofs.Interpret
 public import Obend.Run.Negotiation
