@@ -36,7 +36,7 @@ round-trip byte for byte).
 
 ## Decisions
 
-D1 files hold the text, "behind" is reported by the command. D2 a refused write leaves the file as
+D1 (revised in `9304fc2`) files hold the text and carry behind-marks (`![[Beta]]{behind}`, `[[Beta#^id]]{behind}`, `{unverified}`, `{missing}`) that the reader strips exactly before reading, so a mark is never an edit (`dropMark_mark`, `stripToks_mark`, two teeth); a hand-deleted mark writes no version and is redrawn at the next open. D2 a refused write leaves the file as
 typed and records the refusal. D3 changes widened to whole lines. D4 line and page ids are content
 and name hashes, so identical edits merge cleanly. D5 a member's post deletes nothing. D6 the opener
 is caller 0; changing a law needs the opener or a `relaw` grant. D7 cite version numbers are not
@@ -46,11 +46,10 @@ file is a non-module leaf.
 ## Limitations
 
 Line-granular conflicts; 32-bit name hashes (a collision refuses, never merges wrongly; a rename is
-a new page); a cite made on a diverged copy reads unverified until `obend recite`. Not done: merging
-members across copies, members paying for writes, re-resolving dangling links on open, recreating
-deleted files.
+a new page); a cite made on a diverged copy reads unverified until `obend recite`. Dangling links resolve on open once the target exists (`9304fc2`). Not done: merging members
+across copies, members paying for writes, recreating deleted files.
 
-## Decision (taken by Claude under standing approval, 10-31)
+## Decision (taken by Claude under standing approval, 10-31; built in `9304fc2`)
 
 Where a page shows it is behind: (b) marks written into the file (`![[Beta]]{behind}`) that the
 reader strips exactly, so the round trip stays a theorem and you see it where you read. Alternatives
