@@ -17,13 +17,13 @@ public section
 namespace Obend.Tactic.Tooth
 open Lean Elab Command
 
-private meta def exprDeps (e : Expr) : CoreM NameSet := do
-  let refs ← IO.mkRef ({} : NameSet)
-  e.forEach fun e => do
-    match e with
-    | .const n _ | .proj n .. => refs.modify (·.insert n)
-    | _ => pure ()
-  refs.get
+/-- The constants `e` mentions, by the compiled `Expr.getUsedConstantsAsSet` (a per-node callback
+from this interpreted `meta` code cost about a millisecond per declaration of the closure). A
+projection `.proj S i x` adds no edge of its own: `x`'s type is `S …` up to unfolding, and is
+inferred from constants and binder types inside `e`, whose types and bodies the graph also walks,
+so `S` is reached anyway (and refused by `clone` if the mutation reaches it). -/
+private meta def exprDeps (e : Expr) : CoreM NameSet :=
+  pure e.getUsedConstantsAsSet
 
 /-- Includes proof bodies, opaque bodies, and inductive declaration groups. -/
 private meta def deps (info : ConstantInfo) (mutation : Name) : CoreM NameSet := do
@@ -40,6 +40,15 @@ private meta def deps (info : ConstantInfo) (mutation : Name) : CoreM NameSet :=
   | _ => pure ()
   return ds
 
+/-- `n` was declared in a module strictly before the mutation's. Imported module order is
+topological, so such a declaration cannot depend on a definition introduced later: it is never
+affected by the mutation, and its body is never replayed. -/
+private meta def earlier (env : Environment) (n mutation : Name) : Bool :=
+  match env.getModuleIdxFor? n, env.getModuleIdxFor? mutation with
+  | some ni, some mi => ni.toNat < mi.toNat
+  | some _, none => true
+  | _, _ => false
+
 private meta def getInfo (env : Environment) (n : Name) (mutation : Option Name := none) : CoreM ConstantInfo := do
   let some info := env.find? n
     | throwError "#tooth: missing dependency {n}; use `import all` to make its body available"
@@ -50,13 +59,7 @@ private meta def getInfo (env : Environment) (n : Name) (mutation : Option Name 
       -- Imported module order is topological. A declaration from a strictly
       -- earlier module cannot depend on a definition introduced later. Its
       -- hidden body can therefore be reused without trusting a mutated proof.
-      let earlier := match mutation with
-        | none => false
-        | some m => match env.getModuleIdxFor? n, env.getModuleIdxFor? m with
-          | some ni, some mi => ni.toNat < mi.toNat
-          | some _, none => true
-          | _, _ => false
-      unless earlier do
+      unless mutation.any (earlier env n ·) do
         throwError "#tooth: hidden body for {n}; use `import all` for its module"
   return info
 
@@ -69,6 +72,11 @@ private meta def graph (env : Environment) (target mutation : Name) (value : Exp
     let n :: rest := todo | unreachable!
     todo := rest
     if result.contains n then continue
+    -- An earlier module's declaration is a leaf here: it cannot reach the mutation, so neither
+    -- `affected` nor the replay order can include it, and its closure need not be walked.
+    if earlier env n mutation then
+      result := result.insert n {}
+      continue
     let info ← getInfo env n (some mutation)
     let mut ds ← deps info mutation
     if n == mutation then ds := ds ++ replacementDeps
