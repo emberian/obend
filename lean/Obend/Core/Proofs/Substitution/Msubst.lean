@@ -267,6 +267,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i isRow
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨prior', priorTyped', priorType, priorUses⟩ :=
           ih ann ann' Δ _ target prior priorTyped valid (hann.child 0 _ target (fun _ => by simp only [annotationsAt])) _ rfl
@@ -275,7 +278,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         have isRow' : prior'.type.isRow asm.bounds (fuel + m + 64) = true := by
           rw [priorType]; exact Ty.isRow_mono isRow (by omega)
         simp only [infer, Option.bind_eq_bind, priorTyped', membersTyped', Option.bind_some,
-          dif_pos isRow']
+          dif_pos isRow', dif_pos (linearFree_of_le priorUses.le free)]
         refine ⟨_, rfl, ?_, by exact UsesMasked.add priorUses membersUses⟩
         show overlay members'.type prior'.type = overlay members.type prior.type
         rw [membersType, priorType]
@@ -290,6 +293,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i pureBody
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨d', dTyped', dType, dUses⟩ :=
           ih ann ann' Δ _ metadata descriptor descriptorTyped valid
@@ -298,7 +304,8 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           ih ann ann' Δ _ extension body bodyTyped valid (hann.child 1 _ extension (fun _ => by simp only [annotationsAt])) _ rfl
         have p1 : d'.type.isComputation = false := by rw [dType]; exact pureDescriptor
         have p2 : b'.type.isComputation = false := by rw [bType]; exact pureBody
-        simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2]
+        simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2,
+          dif_pos (linearFree_of_le dUses.le free)]
         refine ⟨_, rfl, ?_, by exact UsesMasked.add dUses bUses⟩
         show Ty.specification d'.type b'.type = Ty.specification descriptor.type body.type
         rw [dType, bType]
@@ -658,6 +665,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           split at h
           rotate_left; · cases h
           rename_i distinct
+          split at h
+          rotate_left; · cases h
+          rename_i free
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ :=
             ihArms ann ann' Δ (pos ++ [1]) 0 row none arms typed armsTyped valid hann.arms _ rfl
@@ -669,7 +679,7 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
-            simp only [labelsDistinct_map, distinct, ↓reduceDIte]
+            simp only [labelsDistinct_map, distinct, ↓reduceDIte, dif_pos (linearFree_of_le valueUses.le free)]
             exact ⟨_, rfl, by exact typedResult, by exact UsesMasked.add valueUses typedUses⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [Term.substitute] at hterm'
@@ -730,6 +740,9 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
         split at h
         rotate_left; · cases h
         rename_i pureValue
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨value', valueTyped', valueType, valueUses⟩ :=
           ih ann ann' Δ _ inner value valueTyped valid (hann.child 0 _ inner (fun _ => by simp only [annotationsAt])) _ rfl
@@ -738,7 +751,8 @@ theorem infer_msubst (asm : Assumptions) (Ψ : Context) (m : Nat) (σ : Nat → 
           simp only [annotationsAt, List.append_nil] at this
           rw [this]; exact found
         have p1 : value'.type.isComputation = false := by rw [valueType]; exact pureValue
-        simp only [infer, Option.bind_eq_bind, here, valueTyped', Option.bind_some, dif_pos p1]
+        simp only [infer, Option.bind_eq_bind, here, valueTyped', Option.bind_some, dif_pos p1,
+          dif_pos (linearFree_of_le valueUses.le free)]
         refine ⟨_, rfl, ?_, by exact valueUses⟩
         show Ty.computation annotation.domain annotation.codomain value'.type = _
         rw [valueType]

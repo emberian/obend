@@ -141,7 +141,7 @@ algorithm refuses empty arm lists because there is no result type to infer. -/
   uses := []
   derivation := .lambda (annotation := emptyCaseAnnotation)
     (.case (.bound (binding := ⟨.variant .emptyRow, .unrestricted⟩) (index := 0) (by rfl))
-      (.nil _ _) rfl)
+      (.nil _ _) rfl (by simp [emptyCaseAnnotation, linearFree, variableUses]))
     (by simp [emptyCaseAnnotation, safeUses, variableUses, zeroUses, addUses, safeQuantity, Quantity.fits, linearFree, joinUses, branchesAgree, Quantity.agrees])
     (by simp [emptyCaseAnnotation, validContext, Ty.shareableUnder, Ty.shareable])
     (by simp [emptyCaseAnnotation, reusableAllowed, reusableCaptures,

@@ -317,6 +317,7 @@ public theorem completes_record {assumptions : Assumptions} {context : Context}
 
 public theorem completes_done {assumptions : Assumptions} {context : Context} {value : Term}
     {plan response result : Ty} {uses : Uses} (nonComputation : result.isComputation = false)
+    (free : linearFree context uses = true)
     (ih : ∃ tree, Completes assumptions context value result uses tree) :
     ∃ tree, Completes assumptions context (.done value) (.computation plan response result) uses tree := by
   obtain ⟨valueTree, completeValue⟩ := ih
@@ -330,17 +331,18 @@ public theorem completes_done {assumptions : Assumptions} {context : Context} {v
   obtain ⟨inner, accepted, sameUses⟩ :=
     ((completeValue annotations (path ++ [0]) child).2 result (sameType_refl _ _)).elim
   have nonActivity : (!result.isComputation) = true := by simp [nonComputation]
+  have free' : linearFree context inner.uses = true := by rw [sameUses]; exact free
   let synthesized : Synth assumptions context (.done value) :=
-    ⟨.computation plan response result, inner.uses, .done inner.derivation nonComputation⟩
+    ⟨.computation plan response result, inner.uses, .done inner.derivation nonComputation free'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.done value) .synth = .ok synthesized
     rw [elaborate]
-    simp [root, hint, accepted, need_ok nonActivity, bind, Except.bind, Functor.map, Except.map,
+    simp [root, hint, accepted, need_ok nonActivity, need_ok free', bind, Except.bind, Functor.map, Except.map,
       pure, Except.pure, synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.done value) (.check expected) = _
     rw [elaborate]
-    simp [root, hint, accepted, need_ok nonActivity, bind, Except.bind, Functor.map, Except.map,
+    simp [root, hint, accepted, need_ok nonActivity, need_ok free', bind, Except.bind, Functor.map, Except.map,
       pure, Except.pure, synthesized]
   · exact sameType_refl _ _
   · exact sameUses
@@ -526,6 +528,7 @@ public theorem completes_project {assumptions : Assumptions} {context : Context}
 public theorem completes_specification {assumptions : Assumptions} {context : Context}
     {metadata extension : Term} {metadataType extensionType : Ty} {mu eu : Uses}
     (pureFirst : metadataType.isComputation = false) (pureSecond : extensionType.isComputation = false)
+    (free : linearFree context mu = true)
     (ihFirst : ∃ tree, Completes assumptions context metadata metadataType mu tree)
     (ihSecond : ∃ tree, Completes assumptions context extension extensionType eu tree) :
     ∃ tree, Completes assumptions context (.specification metadata extension)
@@ -547,13 +550,14 @@ public theorem completes_specification {assumptions : Assumptions} {context : Co
     ((completeSecond annotations (path ++ [1]) atSecond).2 extensionType (sameType_refl _ _)).elim
   have firstPure : (!metadataType.isComputation) = true := by simp [pureFirst]
   have secondPure : (!extensionType.isComputation) = true := by simp [pureSecond]
+  have free' : linearFree context first.uses = true := by rw [firstUses]; exact free
   let synthesized : Synth assumptions context (.specification metadata extension) :=
     ⟨.specification metadataType extensionType, addUses first.uses second.uses,
-      .specification first.derivation second.derivation pureFirst pureSecond⟩
+      .specification first.derivation second.derivation pureFirst pureSecond free'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.specification metadata extension) .synth = .ok synthesized
     rw [elaborate]
-    simp [introduce, root, hint, checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, bind, Except.bind, Functor.map,
+    simp [introduce, root, hint, checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, need_ok free', bind, Except.bind, Functor.map,
       Except.map, pure, Except.pure, synthesized, checkedSynth]
     split
     · rename_i failed equation
@@ -561,7 +565,7 @@ public theorem completes_specification {assumptions : Assumptions} {context : Co
       · rename_i firstType secondType observed
         rw [rawHead] at observed
         cases observed
-        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
+        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, need_ok free', bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
         cases equation
       · rename_i absent
         exact (absent metadataType extensionType (rawHead (.specification metadataType extensionType))).elim
@@ -570,7 +574,7 @@ public theorem completes_specification {assumptions : Assumptions} {context : Co
       · rename_i firstType secondType observed
         rw [rawHead] at observed
         cases observed
-        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
+        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, need_ok free', bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
         cases equation
         rfl
       · rename_i absent
@@ -578,7 +582,7 @@ public theorem completes_specification {assumptions : Assumptions} {context : Co
   · intro expected
     change elaborate assumptions annotations context path (.specification metadata extension) (.check expected) = _
     rw [elaborate]
-    simp [introduce, root, hint, checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, bind, Except.bind, Functor.map,
+    simp [introduce, root, hint, checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, need_ok free', bind, Except.bind, Functor.map,
       Except.map, pure, Except.pure, synthesized, checkedSynth]
     split
     · rename_i failed equation
@@ -586,7 +590,7 @@ public theorem completes_specification {assumptions : Assumptions} {context : Co
       · rename_i firstType secondType observed
         rw [rawHead] at observed
         cases observed
-        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
+        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, need_ok free', bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
         cases equation
       · rename_i absent
         exact (absent metadataType extensionType (rawHead (.specification metadataType extensionType))).elim
@@ -595,7 +599,7 @@ public theorem completes_specification {assumptions : Assumptions} {context : Co
       · rename_i firstType secondType observed
         rw [rawHead] at observed
         cases observed
-        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
+        simp only [checkedFirst, checkedSecond, need_ok firstPure, need_ok secondPure, need_ok free', bind, Except.bind, pure, Except.pure, dif_pos rfl] at equation
         cases equation
         rfl
       · rename_i absent
@@ -887,6 +891,7 @@ public theorem completes_ifZero {assumptions : Assumptions} {context : Context}
 public theorem completes_extend {assumptions : Assumptions} {context : Context}
     {target : Term} {fields : List (String × Term)} {targetType row : Ty} {tu fu : Uses} {fuel : Nat}
     (isRow : targetType.isRow assumptions.bounds fuel = true)
+    (free : linearFree context tu = true)
     (ihT : ∃ tree, Completes assumptions context target targetType tu tree)
     (ihF : ∃ trees, FieldsComplete assumptions context fields row fu trees) :
     ∃ tree, Completes assumptions context (.extend target fields) (overlay row targetType) (addUses tu fu) tree := by
@@ -907,18 +912,19 @@ public theorem completes_extend {assumptions : Assumptions} {context : Context}
     (completeFields annotations (path ++ [1]) 0 atFields.forest).elim
   have rowAccepted : isRowV assumptions.bounds [] targetType = true :=
     (isRowV_iff _ _).2 ⟨fuel, isRow⟩
+  have free' : linearFree context prior.uses = true := by rw [priorUses]; exact free
   let synthesized : Synth assumptions context (.extend target fields) :=
-    ⟨overlay row targetType, addUses prior.uses members.uses, .extend prior.derivation members.derivation isRow⟩
+    ⟨overlay row targetType, addUses prior.uses members.uses, .extend prior.derivation members.derivation isRow free'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.extend target fields) .synth = .ok synthesized
     rw [elaborate]
     simp [root, hint, checkedPrior, checkedMembers, need_ok rowAccepted, need_ok (sameType_refl assumptions targetType),
-      checkedSynth, bind, Except.bind, Functor.map, Except.map, pure, Except.pure, synthesized]
+      need_ok free', checkedSynth, bind, Except.bind, Functor.map, Except.map, pure, Except.pure, synthesized]
   · intro expected
     change elaborate assumptions annotations context path (.extend target fields) (.check expected) = _
     rw [elaborate]
     simp [finish, root, hint, checkedPrior, checkedMembers, need_ok rowAccepted,
-      need_ok (sameType_refl assumptions targetType), checkedSynth, bind, Except.bind,
+      need_ok (sameType_refl assumptions targetType), need_ok free', checkedSynth, bind, Except.bind,
       Functor.map, Except.map, pure, Except.pure, synthesized] <;> rfl
   · exact sameType_refl _ _
   · change addUses prior.uses members.uses = addUses tu fu
@@ -1158,7 +1164,7 @@ public theorem arms_cons_complete {assumptions : Assumptions} {context : Context
 
 public theorem completes_case {assumptions : Assumptions} {context : Context}
     {scrutinee : Term} {arms : List (String × Term)} {row result : Ty} {su au : Uses}
-    (distinct : labelsDistinct arms = true)
+    (distinct : labelsDistinct arms = true) (free : linearFree context su = true)
     (ihS : ∃ tree, Completes assumptions context scrutinee (.variant row) su tree)
     (ihA : ∃ trees, ArmsComplete assumptions context arms row result au trees) :
     ∃ tree, Completes assumptions context (.case scrutinee arms) result (addUses su au) tree := by
@@ -1181,19 +1187,20 @@ public theorem completes_case {assumptions : Assumptions} {context : Context}
   change actualRow = row at answerRow
   subst actualRow
   change armUses = au at answerUses
+  have free' : linearFree context value.uses = true := by rw [valueUses]; exact free
   let synthesized : Synth assumptions context (.case scrutinee arms) :=
-    ⟨result, addUses value.uses armUses, .case value.derivation armDerivation distinct⟩
+    ⟨result, addUses value.uses armUses, .case value.derivation armDerivation distinct free'⟩
   apply modes_complete synthesized
   · change elaborate assumptions annotations context path (.case scrutinee arms) .synth = .ok synthesized
     cases arms <;> rw [elaborate] <;>
       simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct,
-        need_ok (sameType_refl assumptions (.variant row)), bind, Except.bind, Functor.map, Except.map,
+        need_ok (sameType_refl assumptions (.variant row)), need_ok free', bind, Except.bind, Functor.map, Except.map,
         pure, Except.pure, synthesized, checkedSynth]
   · intro expected
     change elaborate assumptions annotations context path (.case scrutinee arms) (.check expected) = _
     cases arms <;> rw [elaborate] <;>
       simp [root, hint, checkedValue, checkedArms, rawHead, need_ok distinct,
-        need_ok (sameType_refl assumptions (.variant row)), bind, Except.bind, Functor.map, Except.map,
+        need_ok (sameType_refl assumptions (.variant row)), need_ok free', bind, Except.bind, Functor.map, Except.map,
         pure, Except.pure, synthesized, checkedSynth]
   · exact sameType_refl _ _
   · change addUses value.uses armUses = addUses su au
@@ -1286,11 +1293,11 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ target targetType member uses name fuel _ found free ih
     exact completes_get found free ih
   case extend =>
-    intro Γ target fields targetType row tu fu fuel _ _ isRow ihT ihF
-    exact completes_extend isRow ihT ihF
+    intro Γ target fields targetType row tu fu fuel _ _ isRow free ihT ihF
+    exact completes_extend isRow free ihT ihF
   case specification =>
-    intro Γ metadata extension metadataType extensionType mu eu _ _ pureM pureE ihM ihE
-    exact completes_specification pureM pureE ihM ihE
+    intro Γ metadata extension metadataType extensionType mu eu _ _ pureM pureE free ihM ihE
+    exact completes_specification pureM pureE free ihM ihE
   case prototype =>
     intro Γ spec target specType targetType su tu _ _ pureS pureT ihS ihT
     exact completes_prototype pureS pureT ihS ihT
@@ -1320,8 +1327,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ tag payload payloadType row uses fuel _ found nonComputation ih
     exact completes_inject found nonComputation ih
   case case =>
-    intro Γ scrutinee arms row result su au _ _ distinct ihS ihA
-    exact completes_case distinct ihS ihA
+    intro Γ scrutinee arms row result su au _ _ distinct free ihS ihA
+    exact completes_case distinct free ihS ihA
   case ifBool =>
     intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
     exact completes_ifBool ihC ihT ihF agreeing
@@ -1329,8 +1336,8 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     intro Γ plan planType response uses _ isPlan data ih
     exact completes_perform isPlan data ih
   case done =>
-    intro Γ value plan response result uses _ nonComputation ih
-    exact completes_done nonComputation ih
+    intro Γ value plan response result uses _ nonComputation free ih
+    exact completes_done nonComputation free ih
   case effectCase =>
     intro Γ scrutinee arms plan response row result su au _ _ nonComputation distinct ihS ihA
     exact completes_effectCase nonComputation distinct ihS ihA

@@ -66,7 +66,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     intro context target targetType member uses name fuel targetTyped lookup _ ih types environment environmentTyped safe valid
     exact ⟨⟨targetType,member,⟨context,uses,environmentTyped,targetTyped,safe,valid⟩,.field lookup,.refl member⟩⟩
   case extend =>
-    intro context target fields targetType row targetUses fieldUses rowFuel targetTyped fieldsTyped rowValid ihTarget ihFields types environment environmentTyped safe valid
+    intro context target fields targetType row targetUses fieldUses rowFuel targetTyped fieldsTyped rowValid _ ihTarget ihFields types environment environmentTyped safe valid
     have targetSafe := safe_add_uses_left context targetUses fieldUses (source_uses_length targetTyped)
       (source_uses_length (PartialTyping.record fieldsTyped)) safe
     have fieldsSafe := safe_add_uses_right context targetUses fieldUses (source_uses_length targetTyped)
@@ -110,7 +110,7 @@ theorem source_focus_typed {assumptions : Assumptions} {context : Context}
     exact ⟨⟨.natural,result,⟨context,vu,environmentTyped,valueTyped,valueSafe,valid⟩,
       .condition zeroOrigin environmentTyped successorTyped successorSafe valid,.refl _⟩⟩
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped _ ihScrutinee ihArms types environment environmentTyped safe valid
+    intro context scrutinee arms row result su au scrutineeTyped armsTyped _ _ ihScrutinee ihArms types environment environmentTyped safe valid
     have scrutineeSafe := safe_add_uses_left context su au (source_uses_length scrutineeTyped) (arms_uses_length armsTyped) safe
     exact ⟨⟨.variant row,result,⟨context,su,environmentTyped,scrutineeTyped,scrutineeSafe,valid⟩,
       .case environmentTyped armsTyped valid,.refl _⟩⟩

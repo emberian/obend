@@ -325,16 +325,18 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename] using (PartialTyping.get (ih depth binding bound bindingValid) lookup
       (linear_free_insert context uses depth binding free bound))
   case extend =>
-    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow ihTarget ihFields depth binding bound bindingValid
+    intro context target fields targetType row tu fu rowFuel targetTyped fieldsTyped isRow free ihTarget ihFields depth binding bound bindingValid
     have fieldLength := source_uses_length (PartialTyping.record fieldsTyped)
     have counts := add_uses_insert tu fu depth ((source_uses_length targetTyped).trans fieldLength.symm) (insert_usage_bound targetTyped bound)
     simpa only [Term.rename,counts] using
-      (PartialTyping.extend (ihTarget depth binding bound bindingValid) (ihFields depth binding bound bindingValid) isRow)
+      (PartialTyping.extend (ihTarget depth binding bound bindingValid) (ihFields depth binding bound bindingValid) isRow
+        (linear_free_insert context tu depth binding free bound))
   case specification =>
-    intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mPure ePure ihMetadata ihExtension depth binding bound bindingValid
+    intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mPure ePure free ihMetadata ihExtension depth binding bound bindingValid
     have counts := add_uses_insert mu eu depth ((source_uses_length metadataTyped).trans (source_uses_length extensionTyped).symm) (insert_usage_bound metadataTyped bound)
     simpa only [Term.rename,counts] using
-      (PartialTyping.specification (ihMetadata depth binding bound bindingValid) (ihExtension depth binding bound bindingValid) mPure ePure)
+      (PartialTyping.specification (ihMetadata depth binding bound bindingValid) (ihExtension depth binding bound bindingValid) mPure ePure
+        (linear_free_insert context mu depth binding free bound))
   case prototype =>
     intro context spec target specType targetType su tu specTyped targetTyped sPure tPure ihSpec ihTarget depth binding bound bindingValid
     have counts := add_uses_insert su tu depth ((source_uses_length specTyped).trans (source_uses_length targetTyped).symm) (insert_usage_bound specTyped bound)
@@ -390,11 +392,11 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     intro context tag payload payloadType row uses fuel payloadTyped lookup pure ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.inject (ih depth binding bound bindingValid) lookup pure)
   case case =>
-    intro context scrutinee arms row result su au scrutineeTyped armsTyped distinct ihScrutinee ihArms depth binding bound bindingValid
+    intro context scrutinee arms row result su au scrutineeTyped armsTyped distinct free ihScrutinee ihArms depth binding bound bindingValid
     have counts := add_uses_insert su au depth ((source_uses_length scrutineeTyped).trans (arms_uses_length armsTyped).symm) (insert_usage_bound scrutineeTyped bound)
     simpa only [Term.rename,lift_shift_index,counts] using
       (PartialTyping.case (ihScrutinee depth binding bound bindingValid) (ihArms depth binding bound bindingValid)
-        (by simpa using distinct))
+        (by simpa using distinct) (linear_free_insert context su depth binding free bound))
   case ifBool =>
     intro context condition whenTrue whenFalse result cu tu fu conditionTyped trueTyped falseTyped agreeing ihCondition ihTrue ihFalse depth binding bound bindingValid
     have trueLength := source_uses_length trueTyped
@@ -410,9 +412,10 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     intro context plan planType response uses planTyped isPlan isData ih depth binding bound bindingValid
     simpa only [Term.rename] using (PartialTyping.perform (ih depth binding bound bindingValid) isPlan isData)
   case done =>
-    intro context value planType response result uses valueTyped pure ih depth binding bound bindingValid
+    intro context value planType response result uses valueTyped pure free ih depth binding bound bindingValid
     simpa only [Term.rename] using
-      (PartialTyping.done (planType := planType) (response := response) (ih depth binding bound bindingValid) pure)
+      (PartialTyping.done (planType := planType) (response := response) (ih depth binding bound bindingValid) pure
+        (linear_free_insert context uses depth binding free bound))
   case effectCase =>
     intro context scrutinee arms planType response row result su au scrutineeTyped armsTyped pure distinct ihScrutinee ihArms depth binding bound bindingValid
     have counts := add_uses_insert su au depth ((source_uses_length scrutineeTyped).trans (arms_uses_length armsTyped).symm) (insert_usage_bound scrutineeTyped bound)

@@ -333,8 +333,9 @@ def addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
 retain a linear obligation forever (a divergent body never reaches its use); the checker's part of
 exact discharge is syntactic and lives at the binder (`Quantity.fits`, required by
 `PartialTyping.lambda`), at the argument (`linearFree`, required by `argumentAllowed`), at the joins
-(`branchesAgree`, required by `ifBool`, `ifZero` and the arms of a `case`) and at the projections
-(`linearFree` of the target, required by `get`, `reflect`, `metadata`, `project`). -/
+(`branchesAgree`, required by `ifBool`, `ifZero` and the arms of a `case`), and wherever a step may
+discard what a subterm holds (`linearFree`: the target of `get`, `reflect`, `metadata`, `project` and
+`extend`, a specification's metadata, a `case` scrutinee, a `done` value). -/
 def safeQuantity : Quantity → Nat → Bool
   | .erased, count => count == 0
   | .affine, count | .linear, count => count <= 1

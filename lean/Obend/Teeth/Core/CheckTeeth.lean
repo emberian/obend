@@ -406,10 +406,19 @@ theorem shadowed_once_closure_laundering_refused :
       (fun position => if position = [0,0,1] then some ⟨.natural,.natural,.unrestricted,.once⟩ else none))
       [] 32).isNone = true := by check_reduce
 
-/-- Control: the same program with a shareable hidden member is accepted. -/
+/-- Control: the same program with a shareable hidden member is accepted. The member is
+`affine` (lane Sound, 11-01; it was `linear`): the shadowed field is never read, so the hypothesis
+is dropped, which an `affine` one may be. -/
 theorem shadowed_shareable_member_accepted :
-    (check (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.linear⟩] 32).map
+    (check (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.affine⟩] 32).map
       (fun checked => checked.type) = some .natural := by check_reduce
+
+/-- REFUSED (was accepted, pinned as the control above): at `linear` the same program drops the
+hypothesis in two steps (`caseInject` substitutes the record, `field` reads the first `a`); the
+`case` scrutinee may use no `linear` hypothesis. -/
+theorem shadowed_linear_member_refused :
+    (check (shadowProgram (.bound 0) (fun _ => none)) [⟨.natural,.linear⟩] 32).isNone = true := by
+  check_reduce
 
 /-- Control: overriding a field through `extend` (the shadowing's purpose) still
 agrees at the shareable row. -/

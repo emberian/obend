@@ -1003,7 +1003,7 @@ theorem members_of_variant (none_ : a.bounds = []) {Γ : Context} {arms : List (
 
 theorem motive_case (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {arms : List (String × Term)}
     {row result : Ty} {su au : Uses} (typed : ArmsTyping a Γ arms row result au)
-    (distinct : labelsDistinct arms = true)
+    (distinct : labelsDistinct arms = true) (free : linearFree Γ su = true)
     (ihS : Motive a Γ scrutinee (.variant row) su) (ihA : ArmsMotive a Γ arms row result au) :
     Motive a Γ (.case scrutinee arms) result (addUses su au) := by
   unfold Motive Modes
@@ -1035,16 +1035,17 @@ theorem motive_case (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {a
       rw [vType]; simp [representativeHead, root, whnf_eq none_, Ty.canonical]
     have agreesScrutinee : sameType a v.type (.variant ta.row) = true := by
       rw [vType]; exact sameType_variant (sameType_trans hrow (sameType_symm (rowAgrees_sameType rowA)))
+    have free' : linearFree Γ' v.uses = true := by rw [vUses]; exact linearFree_refines r free
     simp only [synthAt] at ok
     change Yields (elaborate a annotations Γ' path (.case scrutinee arms) (.check expected)) _
     cases arms with
     | nil =>
       rw [elaborate]
-      simp [root, ok, hHead, okA, need_ok agreesScrutinee, bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
+      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok free', bind, Except.bind, pure, Except.pure, Yields, vUses, uA]
     | cons arm rest =>
       obtain ⟨name, body⟩ := arm
       rw [elaborate]
-      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok distinct, bind, Except.bind, pure,
+      simp [root, ok, hHead, okA, need_ok agreesScrutinee, need_ok distinct, need_ok free', bind, Except.bind, pure,
         Except.pure, Yields, vUses, uA]
 
 theorem motive_effectCase (none_ : a.bounds = []) {Γ : Context} {scrutinee : Term} {arms : List (String × Term)}
@@ -1161,8 +1162,8 @@ public theorem motive_of_typing (none_ : a.bounds = []) {Γ : Context} {t : Term
     intro Γ tag payload payloadType row uses fuel _ found nonComputation ih
     exact motive_inject none_ found nonComputation ih
   case case =>
-    intro Γ scrutinee arms row result su au _ armsTyped distinct ihS ihA
-    exact motive_case none_ armsTyped distinct ihS ihA
+    intro Γ scrutinee arms row result su au _ armsTyped distinct free ihS ihA
+    exact motive_case none_ armsTyped distinct free ihS ihA
   case ifBool =>
     intro Γ condition whenTrue whenFalse result cu tu fu _ _ _ agreeing ihC ihT ihF
     exact motive_ifBool ihC ihT ihF agreeing

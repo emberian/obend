@@ -279,7 +279,7 @@ public theorem chk_case {ctx : Context} {s : Term} {arms : List (String × Term)
     simp only [hw, ht]
     have : sameType {} v.type (.variant t.row) = true := by
       rw [hr, ← hV, hvT]; exact sameType_whnf {} V
-    rw [need_ok this]
+    rw [need_ok this, need_ok (linearFree_noLinear hctx.noLinear _)]
     exact ⟨_, rfl⟩
 
 /-! ## Derived forms -/

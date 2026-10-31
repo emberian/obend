@@ -188,6 +188,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i isRow
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨hst, hsf⟩ := (scoped_extend_iff _ _ _).1 hs
         obtain ⟨a₁, ha₁, priorUses, prior', priorTyped', priorType, priorUses'⟩ :=
@@ -197,7 +200,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         have hl : a₁.length = a₂.length := ha₁.trans ha₂.symm
         have isRow' : prior'.type.isRow asm.bounds (fuel + extra + 64) = true := by
           rw [priorType]; exact Ty.isRow_mono isRow (by omega)
-        simp only [infer, Option.bind_eq_bind, priorTyped', membersTyped', Option.bind_some, dif_pos isRow']
+        have free' : linearFree (Δ ++ Ψ') prior'.uses = true := by
+          rw [priorUses']; exact linearFree_append_zero ha₁ (by rw [← priorUses]; exact free)
+        simp only [infer, Option.bind_eq_bind, priorTyped', membersTyped', Option.bind_some, dif_pos isRow', dif_pos free']
         refine ⟨addUses a₁ a₂, by rw [length_addUses hl, ha₁], ?_, _, rfl, ?_, ?_⟩
         · show addUses prior.uses members.uses = _; rw [priorUses, membersUses, split_add Ψ hl]
         · show overlay members'.type prior'.type = overlay members.type prior.type; rw [membersType, priorType]
@@ -211,6 +216,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i pureBody
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨hs₁, hs₂⟩ := (scoped_specification_iff _ _ _).1 hs
         obtain ⟨a₁, ha₁, dUses, d', dTyped', dType, dUses'⟩ :=
@@ -220,7 +228,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         have hl : a₁.length = a₂.length := ha₁.trans ha₂.symm
         have p1 : d'.type.isComputation = false := by rw [dType]; exact pureDescriptor
         have p2 : b'.type.isComputation = false := by rw [bType]; exact pureBody
-        simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2]
+        have free' : linearFree (Δ ++ Ψ') d'.uses = true := by
+          rw [dUses']; exact linearFree_append_zero ha₁ (by rw [← dUses]; exact free)
+        simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2, dif_pos free']
         refine ⟨addUses a₁ a₂, by rw [length_addUses hl, ha₁], ?_, _, rfl, ?_, ?_⟩
         · show addUses descriptor.uses body.uses = _; rw [dUses, bUses, split_add Ψ hl]
         · show Ty.specification d'.type b'.type = Ty.specification descriptor.type body.type; rw [dType, bType]
@@ -595,6 +605,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
           split at h
           rotate_left; · cases h
           rename_i distinct
+          split at h
+          rotate_left; · cases h
+          rename_i free
           cases h
           obtain ⟨a₂, ha₂, typedUses, typed', armsTyped', typedRow, typedResult, typedUses'⟩ :=
             ihArms ann ann' Δ _ _ 0 row none arms typed hs₂ armsTyped (shift_child hann 1)
@@ -607,7 +620,9 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
             simp only [vr, Option.bind_some, armsTyped']
             have a1 : agree asm value'.type (.variant typed'.row) = true := by rw [typedRow, valueType]; exact agreed
             rw [dif_pos a1]
-            simp only [labelsDistinct_map, distinct, ↓reduceDIte]
+            have free' : linearFree (Δ ++ Ψ') value'.uses = true := by
+              rw [valueUses']; exact linearFree_append_zero ha₁ (by rw [← valueUses]; exact free)
+            simp only [labelsDistinct_map, distinct, ↓reduceDIte, dif_pos free']
             refine ⟨addUses a₁ a₂, by rw [length_addUses hl, ha₁], ?_, _, rfl, by exact typedResult, ?_⟩
             · show addUses value.uses typed.uses = _; rw [valueUses, typedUses, split_add Ψ hl]
             · show addUses value'.uses typed'.uses = _; rw [valueUses', typedUses', split_add Ψ' hl]
@@ -672,12 +687,17 @@ public theorem infer_transport (asm : Assumptions) (Ψ Ψ' : Context)
         split at h
         rotate_left; · cases h
         rename_i pureValue
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨a, ha, valueUses, value', valueTyped', valueType, valueUses'⟩ :=
           ih ann ann' Δ _ _ inner value ((scoped_done_iff _ _).1 hs) valueTyped (shift_child hann 0)
         have found' : ann' pos' = some annotation := by rw [shift_here hann]; exact found
         have p1 : value'.type.isComputation = false := by rw [valueType]; exact pureValue
-        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1]
+        have free' : linearFree (Δ ++ Ψ') value'.uses = true := by
+          rw [valueUses']; exact linearFree_append_zero ha (by rw [← valueUses]; exact free)
+        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1, dif_pos free']
         refine ⟨a, ha, valueUses, _, rfl, ?_, valueUses'⟩
         show Ty.computation annotation.domain annotation.codomain value'.type = _; rw [valueType]
     · intro ann ann' Δ pos pos' index fields result hs h hann

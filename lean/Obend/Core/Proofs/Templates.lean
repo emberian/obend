@@ -598,13 +598,18 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i isRow
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨prior', priorTyped', priorType, priorUses⟩ := ih _ _ _ _ _ priorTyped
         obtain ⟨members', membersTyped', membersType, membersUses⟩ := ihFields _ _ _ _ _ _ membersTyped
         have isRow' : prior'.type.isRow instance_.bounds (fuel + extra + 64) = true := by
           rw [priorType, show fuel + extra + 64 = fuel + 64 + extra by omega]
           exact D.isRow_instantiate _ _ isRow
-        simp only [infer, Option.bind_eq_bind, priorTyped', membersTyped', Option.bind_some, dif_pos isRow']
+        have free' : linearFree (instantiateContext σ context) prior'.uses = true := by
+          rw [priorUses, linearFree_instantiate]; exact free
+        simp only [infer, Option.bind_eq_bind, priorTyped', membersTyped', Option.bind_some, dif_pos isRow', dif_pos free']
         refine ⟨_, rfl, ?_, by dsimp only; rw [priorUses, membersUses]⟩
         show overlay members'.type prior'.type = _
         rw [membersType, priorType, overlay_instantiate (inferFields_tail membersTyped)]
@@ -617,12 +622,17 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i pureBody
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨d', dTyped', dType, dUses⟩ := ih _ _ _ _ _ descriptorTyped
         obtain ⟨b', bTyped', bType, bUses⟩ := ih _ _ _ _ _ bodyTyped
         have p1 : d'.type.isComputation = false := by rw [dType, instantiate_isComputation D.pure]; exact pureDescriptor
         have p2 : b'.type.isComputation = false := by rw [bType, instantiate_isComputation D.pure]; exact pureBody
-        simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2]
+        have free' : linearFree (instantiateContext σ context) d'.uses = true := by
+          rw [dUses, linearFree_instantiate]; exact free
+        simp only [infer, Option.bind_eq_bind, dTyped', bTyped', Option.bind_some, dif_pos p1, dif_pos p2, dif_pos free']
         exact ⟨_, rfl, by simp [dType, bType, Ty.instantiate], by dsimp only; rw [dUses, bUses]⟩
       | prototype spec target =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -988,6 +998,9 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
           split at h
           rotate_left; · cases h
           rename_i distinct
+          split at h
+          rotate_left; · cases h
+          rename_i free
           cases h
           obtain ⟨typed', armsTyped', typedRow, typedResult, typedUses⟩ := ihArms _ _ _ _ _ _ _ _ armsTyped
           simp only [Option.map_none] at armsTyped'
@@ -1006,7 +1019,9 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
             have a1 : agree instance_ value'.type (.variant typed'.row) = true := by
               rw [typedRow, valueType]
               exact D.agree_instantiate instanceValid agreed
-            rw [dif_pos a1, dif_pos distinct]
+            have free' : linearFree (instantiateContext σ context) value'.uses = true := by
+              rw [valueUses, linearFree_instantiate]; exact free
+            rw [dif_pos a1, dif_pos distinct, dif_pos free']
             exact ⟨_, rfl, typedResult, by dsimp only; rw [valueUses, typedUses]⟩
       | ifBool condition whenTrue whenFalse =>
         simp only [infer, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
@@ -1060,13 +1075,18 @@ theorem Discharges.infer_instantiate (instanceValid : instance_.valid = true) : 
         split at h
         rotate_left; · cases h
         rename_i pureValue
+        split at h
+        rotate_left; · cases h
+        rename_i free
         cases h
         obtain ⟨value', valueTyped', valueType, valueUses⟩ := ih _ _ _ _ _ valueTyped
         have found' : instantiateAnnotations σ annotations position = some (instantiateAnnotation σ annotation) := by
           simp [instantiateAnnotations, found]
         have p1 : value'.type.isComputation = false := by
           rw [valueType, instantiate_isComputation D.pure]; exact pureValue
-        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1]
+        have free' : linearFree (instantiateContext σ context) value'.uses = true := by
+          rw [valueUses, linearFree_instantiate]; exact free
+        simp only [infer, Option.bind_eq_bind, found', valueTyped', Option.bind_some, dif_pos p1, dif_pos free']
         exact ⟨_, rfl, by simp [Ty.instantiate, instantiateAnnotation, valueType], valueUses⟩
     · intro annotations context position index fields result h
       cases fields with

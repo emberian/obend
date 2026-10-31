@@ -140,7 +140,7 @@ theorem source_pair_decomposition {assumptions : Assumptions} {context : Context
       obtain ⟨lt,rt,lu,ru,leftTyped,rightTyped,counts,path⟩ := ih
       exact ⟨lt,rt,lu,ru,leftTyped,rightTyped,counts,.step path agreement⟩
   case specification =>
-    intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped _ _ ihMetadata ihExtension
+    intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped _ _ _ ihMetadata ihExtension
     exact ⟨metadataType,extensionType,mu,eu,metadataTyped,extensionTyped,rfl,.refl _⟩
   case prototype =>
     intro context spec target specType targetType su tu specTyped targetTyped _ _ ihSpec ihTarget
@@ -179,7 +179,7 @@ theorem source_pair_decomposition_pure {assumptions : Assumptions} {context : Co
       obtain ⟨lt,rt,lu,ru,leftTyped,rightTyped,lp,rp,counts,path⟩ := ih
       exact ⟨lt,rt,lu,ru,leftTyped,rightTyped,lp,rp,counts,.step path agreement⟩
   case specification =>
-    intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mp ep ihMetadata ihExtension
+    intro context metadata extension metadataType extensionType mu eu metadataTyped extensionTyped mp ep _ ihMetadata ihExtension
     exact ⟨metadataType,extensionType,mu,eu,metadataTyped,extensionTyped,mp,ep,rfl,.refl _⟩
   case prototype =>
     intro context spec target specType targetType su tu specTyped targetTyped sp tp ihSpec ihTarget

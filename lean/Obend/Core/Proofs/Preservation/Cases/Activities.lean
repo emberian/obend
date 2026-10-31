@@ -59,7 +59,7 @@ theorem source_done_decomposition {assumptions : Assumptions} {context : Context
     obtain ⟨planType,response,result,valueTyped,pure,path⟩ := ih
     exact ⟨planType,response,result,valueTyped,pure,.step path agreement⟩
   case done =>
-    intro context value planType response result uses valueTyped pure ih
+    intro context value planType response result uses valueTyped pure _ ih
     exact ⟨planType,response,result,valueTyped,pure,.refl _⟩
   all_goals (intros; trivial)
 

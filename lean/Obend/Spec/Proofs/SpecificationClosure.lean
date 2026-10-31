@@ -160,10 +160,12 @@ theorem compose_wrapper_typed (T : Ty) (shareable : T.shareable = true) (left ri
       (by cases left <;> cases right <;>
         simp_all [reusableCaptures, addUses, variableUses, zeroUses, inner, List.range_succ, List.zipWith])
       under under under
+  have innerFree : ∀ u : Uses, linearFree inner u = true := by
+    intro u; rcases u with _ | ⟨_, _ | ⟨_, _⟩⟩ <;> simp [linearFree, inner]
   have body : PartialTyping metaAssumptions inner
       (.specification (.inject "composed" (.record [("inherited", provenance left (.bound 1)),
         ("wrapping", provenance right (.bound 0))])) (.mix (.bound 1) (.bound 0))) (specTy T) _ :=
-    .specification metaTyped mixTyped rfl rfl
+    .specification metaTyped mixTyped rfl rfl (innerFree _)
   refine ⟨_, .lambda (annotation := ⟨coreOperandTy T left,
       .arrow .reusable .unrestricted (coreOperandTy T right) (specTy T), .unrestricted, .reusable⟩)
     (.lambda (annotation := ⟨coreOperandTy T right, specTy T, .unrestricted, .reusable⟩) body ?_ ?_ ?_ ?_) ?_ ?_ ?_ ?_⟩ <;>

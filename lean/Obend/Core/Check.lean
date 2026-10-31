@@ -472,16 +472,22 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       targetType.lookup assumptions.bounds fuel name = some member →
       linearFree context uses = true →
       PartialTyping assumptions context (.get target name) member uses
+  /-- An extension may overwrite a field of its target (`extendRecord` keeps the new one), so the
+  target uses no `linear` hypothesis: an overwritten field holding one would be dropped. -/
   | extend {context : Context} {target : Term} {fields : List (String × Term)}
       {targetType row : Ty} {targetUses fieldUses : Uses} {fuel : Nat} :
       PartialTyping assumptions context target targetType targetUses →
       FieldsTyping assumptions context fields row fieldUses →
       targetType.isRow assumptions.bounds fuel = true →
+      linearFree context targetUses = true →
       PartialTyping assumptions context (.extend target fields) (overlay row targetType) (addUses targetUses fieldUses)
+  /-- Applying a specification calls its extension and discards its metadata
+  (`applySpecification`), so the metadata uses no `linear` hypothesis. -/
   | specification {context : Context} {metadata extension : Term} {metadataType extensionType : Ty} {mu eu : Uses} :
       PartialTyping assumptions context metadata metadataType mu →
       PartialTyping assumptions context extension extensionType eu →
       metadataType.isComputation = false → extensionType.isComputation = false →
+      linearFree context mu = true →
       PartialTyping assumptions context (.specification metadata extension)
         (.specification metadataType extensionType) (addUses mu eu)
   | prototype {context : Context} {spec target : Term} {specType targetType : Ty} {su tu : Uses} :
@@ -534,10 +540,13 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       row.lookup assumptions.bounds fuel tag = some payloadType →
       payloadType.isComputation = false →
       PartialTyping assumptions context (.inject tag payload) (.variant row) uses
+  /-- The selected arm binds the payload `unrestricted` (`caseInject` substitutes it as often as
+  the arm uses it, possibly never), so the scrutinee uses no `linear` hypothesis. -/
   | case {context : Context} {scrutinee : Term} {arms : List (String × Term)} {row result : Ty} {su au : Uses} :
       PartialTyping assumptions context scrutinee (.variant row) su →
       ArmsTyping assumptions context arms row result au →
       labelsDistinct arms = true →
+      linearFree context su = true →
       PartialTyping assumptions context (.case scrutinee arms) result (addUses su au)
   /-- Exactly one branch runs: uses join (`joinUses`) under `branchesAgree`, so a `linear`
   hypothesis is used equally on both. -/
@@ -552,9 +561,11 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       PartialTyping assumptions context plan planType uses →
       planType.isPlan = true → response.isData = true →
       PartialTyping assumptions context (.perform plan) (.computation planType response response) uses
-  /-- A pure value where an activity is expected. -/
+  /-- A pure value where an activity is expected. Its value reaches the arms of a sequencing
+  `case`, which bind it `unrestricted`, so it uses no `linear` hypothesis. -/
   | done {context : Context} {value : Term} {planType response result : Ty} {uses : Uses} :
       PartialTyping assumptions context value result uses → result.isComputation = false →
+      linearFree context uses = true →
       PartialTyping assumptions context (.done value) (.computation planType response result) uses
   /-- Sequencing: the activity's result selects an arm; every arm is an activity
   over the same plan/response types. This is the only `bind`. -/
@@ -664,15 +675,19 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let prior ← infer assumptions annotations context (position ++ [0]) fuel target
       let members ← inferFields assumptions annotations context (position ++ [1]) 0 fuel fields
       if hr : prior.type.isRow assumptions.bounds (fuel + 64) = true then
-        some ⟨overlay members.type prior.type, addUses prior.uses members.uses,
-          .extend prior.derivation members.derivation hr⟩ else none
+        if hl : linearFree context prior.uses = true then
+          some ⟨overlay members.type prior.type, addUses prior.uses members.uses,
+            .extend prior.derivation members.derivation hr hl⟩ else none
+      else none
   | fuel + 1, .specification metadata extension => do
       let descriptor ← infer assumptions annotations context (position ++ [0]) fuel metadata
       let body ← infer assumptions annotations context (position ++ [1]) fuel extension
       if hm : descriptor.type.isComputation = false then
         if he : body.type.isComputation = false then
-          some ⟨.specification descriptor.type body.type, addUses descriptor.uses body.uses,
-            .specification descriptor.derivation body.derivation hm he⟩
+          if hl : linearFree context descriptor.uses = true then
+            some ⟨.specification descriptor.type body.type, addUses descriptor.uses body.uses,
+              .specification descriptor.derivation body.derivation hm he hl⟩
+          else none
         else none
       else none
   | fuel + 1, .prototype spec target => do
@@ -823,8 +838,10 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let typed ← inferArms assumptions annotations context (position ++ [1]) 0 row none fuel arms
       if hc : agree assumptions value.type (.variant typed.row) = true then
         if hd : labelsDistinct arms = true then
-          some ⟨typed.result, addUses value.uses typed.uses,
-            .case (.conversion value.derivation (agree_sameType hc)) typed.derivation hd⟩
+          if hl : linearFree context value.uses = true then
+            some ⟨typed.result, addUses value.uses typed.uses,
+              .case (.conversion value.derivation (agree_sameType hc)) typed.derivation hd hl⟩
+          else none
         else none
       else none
   | fuel + 1, .ifBool condition whenTrue whenFalse => do
@@ -857,8 +874,10 @@ def infer (assumptions : Assumptions) (annotations : Annotations) (context : Con
       let annotation ← annotations position
       let value ← infer assumptions annotations context (position ++ [0]) fuel inner
       if hn : value.type.isComputation = false then
-        some ⟨.computation annotation.domain annotation.codomain value.type, value.uses,
-          .done value.derivation hn⟩
+        if hl : linearFree context value.uses = true then
+          some ⟨.computation annotation.domain annotation.codomain value.type, value.uses,
+            .done value.derivation hn hl⟩
+        else none
       else none
 
 def inferFields (assumptions : Assumptions) (annotations : Annotations) (context : Context)

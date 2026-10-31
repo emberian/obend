@@ -88,7 +88,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ target tt member u name fuel d found free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_get_iff _ _ _).mp hs)
     exact ⟨a, ha, hu, .get d' found (linearFree_append_zero ha (hu ▸ free))⟩
-  · rintro Γ target fields tt row tu fu fuel dt df rowOk ih₁ ih₂ Δ rfl hs
+  · rintro Γ target fields tt row tu fu fuel dt df rowOk free ih₁ ih₂ Δ rfl hs
     simp only [scoped_extend_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
@@ -96,8 +96,8 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
-      exact .extend d₁ d₂ rowOk
-  · rintro Γ metadataTerm ext mt et mu eu dm de mp ep ih₁ ih₂ Δ rfl hs
+      exact .extend d₁ d₂ rowOk (linearFree_append_zero ha (hu ▸ free))
+  · rintro Γ metadataTerm ext mt et mu eu dm de mp ep free ih₁ ih₂ Δ rfl hs
     simp only [scoped_specification_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
@@ -105,7 +105,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
-      exact .specification d₁ d₂ mp ep
+      exact .specification d₁ d₂ mp ep (linearFree_append_zero ha (hu ▸ free))
   · rintro Γ spec target st tt su tu ds dt sp tp ih₁ ih₂ Δ rfl hs
     simp only [scoped_prototype_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
@@ -169,7 +169,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ tag payload pt row u fuel d found pure ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_inject_iff _ _ _).mp hs)
     exact ⟨a, ha, hu, .inject d' found pure⟩
-  · rintro Γ scrut arms row result su au ds da distinct ih₁ ih₂ Δ rfl hs
+  · rintro Γ scrut arms row result su au ds da distinct free ih₁ ih₂ Δ rfl hs
     simp only [scoped_case_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
     obtain ⟨b, hb, hv, d₂⟩ := ih₂ Δ rfl (hs.2)
@@ -177,7 +177,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     refine ⟨addUses a b, (length_addUses hab).trans ha, ?_, ?_⟩
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
-      exact .case d₁ d₂ distinct
+      exact .case d₁ d₂ distinct (linearFree_append_zero ha (hu ▸ free))
   · rintro Γ cond yes no result cu tu fu dc dt df agreeing ih₁ ih₂ ih₃ Δ rfl hs
     simp only [scoped_ifBool_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl hs.1
@@ -194,9 +194,9 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
   · rintro Γ plan pt response u d isPlan isData ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_perform_iff _ _).mp hs)
     exact ⟨a, ha, hu, .perform d' isPlan isData⟩
-  · rintro Γ value pt response result u d pure ih Δ rfl hs
+  · rintro Γ value pt response result u d pure free ih Δ rfl hs
     obtain ⟨a, ha, hu, d'⟩ := ih Δ rfl ((scoped_done_iff _ _).mp hs)
-    exact ⟨a, ha, hu, .done d' pure⟩
+    exact ⟨a, ha, hu, .done d' pure (linearFree_append_zero ha (hu ▸ free))⟩
   · rintro Γ scrut arms plan response row result su au ds da pure distinct ih₁ ih₂ Δ rfl hs
     simp only [scoped_case_iff] at hs
     obtain ⟨a, ha, hu, d₁⟩ := ih₁ Δ rfl (hs.1)
@@ -328,16 +328,16 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .get d' found (linearFree_of_le hu.le free), hu⟩
-  · rintro Γ target fields tt row tu fu fuel dt df rowOk ih₁ ih₂ Δ rfl validΓ
+  · rintro Γ target fields tt row tu fu fuel dt df rowOk free ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .extend d₁ d₂ rowOk, UsesMasked.add hu hv⟩
-  · rintro Γ metadataTerm ext mt et mu eu dm de mp ep ih₁ ih₂ Δ rfl validΓ
+    exact ⟨_, .extend d₁ d₂ rowOk (linearFree_of_le hu.le free), UsesMasked.add hu hv⟩
+  · rintro Γ metadataTerm ext mt et mu eu dm de mp ep free ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .specification d₁ d₂ mp ep, UsesMasked.add hu hv⟩
+    exact ⟨_, .specification d₁ d₂ mp ep (linearFree_of_le hu.le free), UsesMasked.add hu hv⟩
   · rintro Γ spec target st tt su tu ds dt sp tp ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
@@ -382,11 +382,11 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .inject d' found pure, hu⟩
-  · rintro Γ scrut arms row result su au ds da distinct ih₁ ih₂ Δ rfl validΓ
+  · rintro Γ scrut arms row result su au ds da distinct free ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
     simp only [Term.substitute, liftSubstitution_fillTerm σ closed]
-    exact ⟨_, .case d₁ d₂ (by simpa using distinct), UsesMasked.add hu hv⟩
+    exact ⟨_, .case d₁ d₂ (by simpa using distinct) (linearFree_of_le hu.le free), UsesMasked.add hu hv⟩
   · rintro Γ cond yes no result cu tu fu dc dt df agreeing ih₁ ih₂ ih₃ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
@@ -397,10 +397,10 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
     exact ⟨_, .perform d' isPlan isData, hu⟩
-  · rintro Γ value pt response result u d pure ih Δ rfl validΓ
+  · rintro Γ value pt response result u d pure free ih Δ rfl validΓ
     obtain ⟨u', d', hu⟩ := ih Δ rfl validΓ
     simp only [Term.substitute]
-    exact ⟨_, .done d' pure, hu⟩
+    exact ⟨_, .done d' pure (linearFree_of_le hu.le free), hu⟩
   · rintro Γ scrut arms plan response row result su au ds da pure distinct ih₁ ih₂ Δ rfl validΓ
     obtain ⟨u', d₁, hu⟩ := ih₁ Δ rfl validΓ
     obtain ⟨v', d₂, hv⟩ := ih₂ Δ rfl validΓ
