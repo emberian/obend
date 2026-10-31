@@ -1156,5 +1156,108 @@ theorem identity_tree_accepted :
     (checkAgainst ⟨identityApplied, treeAnnotations identityTree, {}⟩ [] .natural).toBool = true := by
   decide +kernel
 
+/-! ## §7. Mirrors: reflection is reached through a value one must hold
+
+Bracha–Ungar's stratification as a lattice (orientation §2.10, §3.5): a `Mirror` is data naming a
+held term and a depth `structure ⊑ metadata ⊑ code`; the kernel's `quote` answers only a mirror of
+depth `code`; a mirror derived from a mirror is never deeper than its parent. -/
+
+inductive Depth where
+  | structure | metadata | code
+  deriving DecidableEq, Repr
+
+def Depth.rank : Depth → Nat
+  | .structure => 0 | .metadata => 1 | .code => 2
+
+instance : LE Depth := ⟨fun x y => x.rank ≤ y.rank⟩
+instance (x y : Depth) : Decidable (x ≤ y) := inferInstanceAs (Decidable (x.rank ≤ y.rank))
+
+theorem Depth.le_refl (d : Depth) : d ≤ d := Nat.le_refl d.rank
+theorem Depth.le_trans {a b c : Depth} (h : a ≤ b) (h' : b ≤ c) : a ≤ c := Nat.le_trans h h'
+theorem Depth.le_code (d : Depth) : d ≤ .code := by cases d <;> decide
+
+structure Mirror where
+  over : String
+  depth : Depth
+  deriving DecidableEq, Repr
+
+/-- A mirror for `wanted`, derived from `m`: never deeper than `m`. -/
+def Mirror.derive (m : Mirror) (wanted : Depth) : Mirror :=
+  ⟨m.over, if wanted ≤ m.depth then wanted else m.depth⟩
+
+/-- **T14 `mirror_attenuates`.** A derived mirror names the same target and is no deeper than its
+parent, nor than what was asked for. -/
+theorem mirror_attenuates (m : Mirror) (wanted : Depth) :
+    (m.derive wanted).over = m.over ∧ (m.derive wanted).depth ≤ m.depth ∧
+      (m.derive wanted).depth ≤ wanted := by
+  refine ⟨rfl, ?_, ?_⟩ <;> simp only [Mirror.derive] <;> split
+  · assumption
+  · exact Depth.le_refl _
+  · exact Depth.le_refl _
+  · rename_i h
+    have : ¬ wanted.rank ≤ m.depth.rank := h
+    show m.depth.rank ≤ wanted.rank
+    omega
+
+/-- No chain of derivations amplifies. -/
+theorem derive_chain (m : Mirror) : ∀ ds : List Depth, (ds.foldl Mirror.derive m).depth ≤ m.depth
+  | [] => Depth.le_refl _
+  | d :: ds => Depth.le_trans (derive_chain (m.derive d) ds) (mirror_attenuates m d).2.1
+
+def depthData : Depth → Data
+  | .structure => .label "structure" | .metadata => .label "metadata" | .code => .label "code"
+def depthOf : Data → Option Depth
+  | .label "structure" => some .structure | .label "metadata" => some .metadata
+  | .label "code" => some .code | _ => none
+
+/-- A mirror is data: a program holds it and hands it back. -/
+def mirrorData (m : Mirror) : Data := .record [("over", .label m.over), ("depth", depthData m.depth)]
+def mirrorOf : Data → Option Mirror
+  | .record [("over", .label over), ("depth", d)] => (depthOf d).map (⟨over, ·⟩)
+  | _ => none
+theorem mirrorOf_mirrorData (m : Mirror) : mirrorOf (mirrorData m) = some m := by
+  cases m with | mk over depth => cases depth <;> rfl
+
+inductive MirrorRefusal where
+  /-- No held term has this name. -/
+  | unknown (over : String)
+  /-- The mirror held is too shallow for the operation (named with its depth). -/
+  | shallow (over : String) (held : Depth)
+  deriving DecidableEq, Repr
+
+/-- **The kernel's `quote` through a mirror**: only a mirror of depth `code` is answered. -/
+def quoteVia (store : String → Option Held) (version : Nat) (m : Mirror) : Except MirrorRefusal Data :=
+  match store m.over with
+  | none => .error (.unknown m.over)
+  | some h => if m.depth = .code then .ok (quotation version h) else .error (.shallow m.over m.depth)
+
+theorem quoteVia_ok {store : String → Option Held} {version : Nat} {m : Mirror} {d : Data}
+    (h : quoteVia store version m = .ok d) :
+    m.depth = .code ∧ ∃ held, store m.over = some held ∧ d = quotation version held := by
+  unfold quoteVia at h
+  split at h
+  · cases h
+  · rename_i held hs
+    split at h
+    · cases h; exact ⟨by assumption, held, hs, rfl⟩
+    · cases h
+
+theorem quoteVia_code {store : String → Option Held} {version : Nat} {m : Mirror} {held : Held}
+    (hs : store m.over = some held) (hd : m.depth = .code) :
+    quoteVia store version m = .ok (quotation version held) := by
+  simp [quoteVia, hs, hd]
+
+/-- The tooth of T14: a `metadata` mirror cannot quote, whatever it names, and nothing derived
+from it can. -/
+theorem metadata_mirror_cannot_quote (store : String → Option Held) (version : Nat) (over : String)
+    (held : Held) (hs : store over = some held) (ds : List Depth) :
+    quoteVia store version ⟨over, .metadata⟩ = .error (.shallow over .metadata) ∧
+      ∀ d, quoteVia store version (ds.foldl Mirror.derive ⟨over, .metadata⟩) ≠ .ok d := by
+  refine ⟨by simp [quoteVia, hs], fun d h => ?_⟩
+  have := (quoteVia_ok h).1
+  have chain := derive_chain ⟨over, .metadata⟩ ds
+  rw [this] at chain
+  exact absurd chain (by show ¬ (2 ≤ 1); decide)
+
 end Obend.Core.Code
 end
