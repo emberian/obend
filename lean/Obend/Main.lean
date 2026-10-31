@@ -62,6 +62,16 @@ Analysis commands (lane Impact, 2026-11-01; `Obend.Analysis.Cli`):
         a vault's writes re-judged with PAGE amended to FILE: the first write, per page, that the laws
         in force and the amended ones judge differently.
 
+Ledger commands (lane Ledger, 2026-11-01; `Obend.Ledger.Cli`):
+
+    obend ledger post DOC [--period N] | ledger reverse P-NNNN [--period N] | ledger close N
+          | ledger status | ledger root | report trial-balance P [--out FILE]
+        a vault with a register kind (`register/_kind.md`): a document posted by its kind's template,
+        judged by the register's laws, with its receipt; a correction as a reversing posting; a period
+        closed for good; the trial balance as a judged fold whose receipt names every posting of the
+        period. `obend merge OTHER [--drop P-NNNN]` stitches the other replica's register through this
+        one's, atomically; `obend verify` re-checks posting and trial-balance receipts.
+
 Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-bend.typed-core.v3`):
 
     obend check-core FILE.json
@@ -84,6 +94,7 @@ public import Obend.Receipt.Cli
 public import Obend.Logic.Receipt
 public import Obend.Leaf.Specialize
 public import Obend.Analysis.Cli
+public import Obend.Ledger.Cli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -100,6 +111,8 @@ def usage : String :=
   "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
   "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]\n" ++
   "             | create --from KIND PAGE   [-C DIR]\n" ++
+  "       obend ledger post DOC [--period N] | ledger reverse P-NNNN [--period N] | ledger close N | ledger status | ledger root\n" ++
+  "             | report trial-balance P [--out FILE]   (a vault with register/_kind.md; merge stitches its register)\n" ++
   "       obend check --obligations --package PACKAGE.json --object ENTRY [--receipts DIR]\n" ++
   "       obend prove --package PACKAGE.json SPEC.CLAIM --object ENTRY --out RECEIPT.json [--ground N,N,…]\n" ++
   "       obend ground --package PACKAGE.json ENTRY EXPECTED_NAT\n" ++
@@ -705,9 +718,12 @@ public def main (args : List String) : IO UInt32 :=
   | ["judge", "--package", spec, old, new] => judgeCommand spec old new
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
   | "verify" :: path :: rest =>
-    Obend.Analysis.Cli.verifyOr path ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
+    Obend.Ledger.Cli.verifyOr path rest <|
+      Obend.Analysis.Cli.verifyOr path ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
   | "analyze" :: _ => (Obend.Analysis.Cli.main? args).getD (do IO.eprintln usage; return 64)
   | _ => match Obend.Receipt.Cli.main? args with
+    | some act => act
+    | none => match Obend.Ledger.Cli.main? args with
     | some act => act
     | none => match Obend.Vault.Cli.main? args with
       | some act => act

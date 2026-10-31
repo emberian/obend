@@ -272,6 +272,34 @@ theorem stitch_atomic (step : St → E → Except R St) (main : St × List M) (F
   | nil => exact .inl ⟨rfl, accepted_all step _ _ h, by simp⟩
   | cons c cs => exact .inr ⟨by simp, by simp⟩
 
+/-- The conflicts a stitch returns are the replay's. -/
+theorem stitch_conflicts (step : St → E → Except R St) (main : St × List M) (F : Fork Tok M E) :
+    (stitch step main F).2 = (replay step main.1 F.escalated).2 := by simp only [stitch]
+
+/-- Replayed rows that fail at every state where `P` holds are conflicts, when every row replayed
+keeps `P` where accepted. -/
+theorem replay_conflicts {St E R : Type} (step : St → E → Except R St) (P : St → Prop) (Q : E → Prop) :
+    ∀ (es : List E), (∀ s e s', e ∈ es → P s → step s e = .ok s' → P s') →
+      (∀ s e, e ∈ es → P s → Q e → ∃ c, step s e = .error c) →
+      ∀ (s : St), P s → ∀ e ∈ es, Q e → ∃ c, (e, c) ∈ (replay step s es).2
+  | [], _, _, _, _, e, he, _ => by cases he
+  | x :: rest, keep, fails, s, hs, e, he, hq => by
+    have keep' : ∀ s e s', e ∈ rest → P s → step s e = .ok s' → P s' :=
+      fun s e s' h => keep s e s' (List.mem_cons_of_mem _ h)
+    have fails' : ∀ s e, e ∈ rest → P s → Q e → ∃ c, step s e = .error c :=
+      fun s e h => fails s e (List.mem_cons_of_mem _ h)
+    simp only [replay]
+    cases hx : step s x with
+    | ok s' =>
+      rcases List.mem_cons.1 he with rfl | he
+      · obtain ⟨c, hc⟩ := fails s e List.mem_cons_self hs hq; rw [hc] at hx; cases hx
+      · exact replay_conflicts step P Q rest keep' fails' s' (keep s x s' List.mem_cons_self hs hx) e he hq
+    | error c =>
+      rcases List.mem_cons.1 he with rfl | he
+      · exact ⟨c, List.mem_cons_self ..⟩
+      · obtain ⟨c', hc'⟩ := replay_conflicts step P Q rest keep' fails' s hs e he hq
+        exact ⟨c', List.mem_cons_of_mem _ hc'⟩
+
 end
 
 /-! ## The joint stitch: escalated dispatches judged by the runners and committed by the ledger -/

@@ -20,6 +20,7 @@ imports changes; a new leaf added alone is caught at the next such rebuild, not 
 -/
 import Obend
 import Obend.Analysis.Cli
+import Obend.Analysis.Coverage
 import Obend.Analysis.Format
 import Obend.Analysis.Impact
 import Obend.Analysis.Replay
@@ -235,6 +236,12 @@ import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
 import Obend.Leaf.Specialize
 import Obend.Leaf.UpTo
+import Obend.Ledger
+import Obend.Ledger.Cli
+import Obend.Ledger.Json
+import Obend.Ledger.Register
+import Obend.Ledger.Report
+import Obend.Ledger.Vault
 import Obend.Logic.Claim
 import Obend.Logic.Frame
 import Obend.Logic.Ground
