@@ -401,7 +401,7 @@ public theorem started_some_iff {i : Ix} {P : Prot S Hole A i} {t : Trace S} {o 
 
 /-- **History preservation** (doc 2 section 8): replacing the filling of every hole the history has
 NOT entered preserves the accepted history, answered calls and the in-flight call alike. -/
-theorem resubst_preserves_started {σ σ' : Subst S Hole A} {i : Ix} {P : Prot S Hole A i}
+public theorem resubst_preserves_started {σ σ' : Subst S Hole A} {i : Ix} {P : Prot S Hole A i}
     {H : Hist S} (hs : Started (subst σ P) H)
     (hg : ∀ j h, Dispatched P H j h → σ' j h = σ j h) : Started (subst σ' P) H := by
   obtain ⟨t, o⟩ := H

@@ -56,7 +56,7 @@ theorem choose_ok {f : P .reserved} (hf : Fills spec Ω iface f) : SubstOK spec 
     exact ⟨iface, rfl, rfl, hf⟩
 
 /-- Family 1, instance: every candidate's instantiation is judged at the template's judgment. -/
-theorem instantiations_hasProt :
+public theorem instantiations_hasProt :
     (∀ p, HasProt spec Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ (fill Ω (choose (plan p)) template)) ∧
       HasProt spec Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ (fill Ω (choose cancelPlan) template) :=
   ⟨fun p => fill_preserves_hasProt (choose_ok (plan_fills p)) template_hasProt,
