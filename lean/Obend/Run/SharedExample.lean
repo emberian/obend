@@ -13,8 +13,10 @@ consumed tokens, the grants.
   naming the winner and the epoch. Both orderings.
 - `lost_reply_receipt`: Alice's commitment is dispatched and its reply lost; the raw world calls the
   capability dead and then live again; Alice abandons; Bob is still refused, naming Alice.
-- Teeth: without the shared mask (`sharedLive`) Bob is granted too; with an abandonment that erases
-  the ledger's consumption (`ledgerAbandon`) Bob is granted after Alice abandons.
+- Teeth: without the shared mask (`sharedLive`) Bob is granted too; an abandonment that erases the
+  ledger's consumption (`ledgerAbandon`) is not a `Ledger` at all (durability is a field, and the
+  record `nledger` fails to be one), and run as a bare record it lets Bob through after Alice
+  abandons.
 -/
 public import Obend.Run.Proofs.Shared
 public import Obend.Run.Negotiation
@@ -46,6 +48,12 @@ structure NRec where
 is durable. -/
 def ledgerAbandon (d : NRec) : NRec := d
 
+/-- **What `Ledger`'s durability fields ask of this record**: an abandonment keeps the consumption
+and the grants. The structure consumes exactly this (`nledger.abandon_spent`, `abandon_grants`); the
+tooth below is the erasing record, which fails it, so it is not a `Ledger`. -/
+theorem ledgerAbandon_durable (d : NRec) : (ledgerAbandon d).spent = d.spent ∧ (ledgerAbandon d).grants = d.grants :=
+  ⟨rfl, rfl⟩
+
 /-- The negotiation's ledger. -/
 def nledger : Ledger Buyer Wv Tok where
   Rec := NRec
@@ -68,9 +76,11 @@ def nledger : Ledger Buyer Wv Tok where
   allowed_commit _ _ _ := by simp
   allowed_setRaw _ _ h := by simp [h]
   allowed_onAbandon _ _ := by simp [ledgerAbandon]
+  abandon_spent d _ := (ledgerAbandon_durable d).1
+  abandon_grants d _ := (ledgerAbandon_durable d).2
 
-/-- The negotiation's ledger is durable. -/
-theorem nledger_durable : nledger.Durable := ⟨fun _ _ => rfl, fun _ _ => rfl⟩
+/-- The negotiation's ledger is durable (a field: every `Ledger` is). -/
+theorem nledger_durable : nledger.Durable := nledger.durable
 
 def base : Wv → View Tok Fact := host.view
 
@@ -161,18 +171,18 @@ theorem general_instances :
   have h : JReachable nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl)
       (JCfg.init nledger d₀ (fun _ => O₀) (fun _ => stored₀)) (bsession lostReply).1 :=
     jsession_reachable .init _
-  ⟨fun b => joint_reachable_projects_legal nledger_durable rfl rfl h b,
-    (joint_reachable_ticket_exclusive nledger_durable rfl rfl h).1,
-    (joint_once nledger_durable rfl rfl h).2⟩
+  ⟨fun b => joint_reachable_projects_legal rfl rfl h b,
+    (joint_reachable_ticket_exclusive rfl rfl h).1,
+    (joint_once rfl rfl h).2⟩
 
 -- Without the shared mask, Bob's commitment is admitted at his own view: two grants.
 #tooth alice_wins by mutation sharedLive := fun {_ _ _ _} [_] _ base d t => (base (Ledger.raw _ d)).live t
--- An abandonment that erases the ledger's consumption lets Bob's commitment through.
-#tooth lost_reply_receipt by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants⟩
+-- Durability is a field: a record whose abandonment erases the consumption fails the obligation the
+-- structure consumes, so it is not a `Ledger` (and `nledger` cannot be rebuilt over it).
+#tooth ledgerAbandon_durable by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants⟩
 -- Without propagating the ledger's moves, Bob does not see Alice's commit.
 #tooth coupled_after_commit by mutation propagate :=
   fun {_ _ _ _ _ _ _ _ _ _ _ _} [_] [_] [_] [_] [_] _ _ _ _ _ {_} _ cs => cs
-#tooth nledger_durable by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants⟩
 
 end Obend.Run.SharedExample
 

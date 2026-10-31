@@ -6,25 +6,35 @@ module
 number of controlled runners (`Obend.Run.Control`, indexed by `ι`) share one authoritative record,
 the LEDGER, whose laws are fields (`Ledger`): a commit records a token's consumption and its grant
 (winner and epoch) in one step; a move of the raw world and an abandonment leave the consumption and
-the grants as they were (the raw world may call a spent token live again; it cannot unspend it). Each
-runner's host is built from the ledger (`localHost`): it reads facts from the raw world and a token
-as live only while the raw world says so AND the ledger has not consumed it (`sharedLive`, the shared
-mask). The joint transition (`jrun`):
+the grants as they were (the raw world may call a spent token live again; it cannot unspend it).
+Durability is a field (`abandon_spent`, `abandon_grants`): a record that releases on abandonment is
+not a `Ledger` (the tooth `nledger` in `Obend.Run.SharedExample`). Each runner's host is built from
+the ledger (`localHost`): it reads facts from the raw world and a token as live only while the raw
+world says so AND the ledger has not consumed it (`sharedLive`, the shared mask).
 
-- a raw world move is applied to the ledger and propagated to every runner as a world event;
-- a dispatch by runner `i` (1) brings `i`'s view to the ledger (a world event), (2) is judged by `i`'s
-  own runner at that view (operation facts, decision citations, the token at the shared mask), (3) on
-  acceptance records the consumption and the grant in the ledger and the dispatch in `i`'s log, in
-  one joint step, and (4) only then is the call exposed; every runner sees the new ledger. A refusal
-  for a token another runner holds names the winner and the epoch (`taken`);
-- an abandonment is `i`'s own, applied to the ledger by `onAbandon` (durable: nothing is released);
-- every other controlled event (`replyTo`, `advance`, `choose`) is `i`'s alone.
+The ledger is itself a member of the audited fold (`ledgerAdmission`, an `Obend.Fold.Admission`
+over the record, whose rows are its moves: `commit`, `raw`, `abandon`, `observe`), with refusals of
+its own (`LClause`: a commit of a consumed token is refused `taken`, naming the winner and the
+epoch). The joint transition (`jrun`) is the family `members` (the ledger and every runner) stepping
+interleaved rows:
 
-The theorems (`Obend.Run.Proofs.Shared`): each runner's log is `Legal` for its own object at its
-local host (projection), the grants are exclusive and the consumption is once globally, and the
-loser's refusal names the winner and the epoch.
+- a raw world move is the ledger's row `raw w`; every runner observes the new record;
+- a dispatch by runner `i` is (1) judged by `i`'s own runner at its view, which is the ledger's
+  record (operation facts, decision citations, the token at the shared mask), then (2) the ledger's
+  row: `commit i t` for the token the call consumes, `observe` (the record as it is) for a call
+  that consumes none; (3) only then is the call exposed; every runner observes the ledger's record.
+  A refusal for a token another runner holds names the winner and the epoch (`taken`);
+- an abandonment is `i`'s own row, then the ledger's row `abandon i` (durable: nothing released);
+- every other controlled event (`replyTo`, `advance`, `choose`) is `i`'s alone, a row of `i` that
+  moves nothing, so no other member sees it.
+
+The theorems (`Obend.Run.Proofs.Shared`): the joint rows fold under the family (`jreachable_fold`),
+so each runner's log is `Legal` by `Obend.Fold.project_moves_run` applied (projection), the ledger's
+own rows fold from the start (`joint_ledger_fold`), the grants are exclusive and the consumption is
+once globally, and the loser's refusal names the winner and the epoch.
 -/
 public import Obend.Run.Proofs.Control
+public import Obend.Run.Fold
 @[expose] public section
 
 namespace Obend.Run.Shared
@@ -66,13 +76,19 @@ structure Ledger (ι W Tok : Type) where
   allowed_commit : ∀ d i t, allowed d (commit d i t) = true
   allowed_setRaw : ∀ d w, stepRaw (raw d) w = true → allowed d (setRaw d w) = true
   allowed_onAbandon : ∀ d i, allowed d (onAbandon d i) = true
+  /-- DURABLE: an abandonment releases nothing (the call abandoned stays dispatched, its
+  consumption and its grant stand) -/
+  abandon_spent : ∀ d i, spent (onAbandon d i) = spent d
+  abandon_grants : ∀ d i, grants (onAbandon d i) = grants d
 
-/-- The ledger is DURABLE: an abandonment releases nothing (the call abandoned stays dispatched, its
-consumption and its grant stand). A law the exclusion theorems take, kept apart from the structure so
-that a ledger that releases on abandonment is a ledger, and the theorems say what it breaks. -/
+/-- The ledger is DURABLE (an abandonment releases nothing), as one proposition. Every `Ledger` is
+(`Ledger.durable`): the law is a field. -/
 structure Ledger.Durable {ι W Tok : Type} (L : Ledger ι W Tok) : Prop where
   spent : ∀ d i, L.spent (L.onAbandon d i) = L.spent d
   grants : ∀ d i, L.grants (L.onAbandon d i) = L.grants d
+
+theorem Ledger.durable {ι W Tok : Type} (L : Ledger ι W Tok) : L.Durable :=
+  ⟨L.abandon_spent, L.abandon_grants⟩
 
 section
 variable {ι W Tok Fact : Type} [DecidableEq Tok]
@@ -90,6 +106,82 @@ def localHost (L : Ledger ι W Tok) (base : W → View Tok Fact) : Host L.Rec To
 /-- The grant of `t`, if any. -/
 def grantOf (L : Ledger ι W Tok) (d : L.Rec) (t : Tok) : Option (Grant ι Tok) :=
   (L.grants d).find? fun g => decide (g.tok = t)
+
+end
+
+/-! ## The ledger as a member of the audited fold -/
+
+/-- A row of the ledger: each one moves the record. -/
+inductive LRow (ι W Tok R : Type) where
+  /-- consume `t` for runner `i` and grant it -/
+  | commit (i : ι) (t : Tok)
+  /-- move the raw world to `w` -/
+  | raw (w : W)
+  /-- runner `i` abandoned its call in flight -/
+  | abandon (i : ι)
+  /-- the record moved to `d` by a move the ledger allows (`Obend.Fold.Admission.observe`) -/
+  | observe (d : R)
+
+/-- Why the ledger refused a row. -/
+inductive LClause (ι Tok : Type) where
+  /-- the token is consumed: granted to `winner` at `epoch` -/
+  | taken (t : Tok) (winner : ι) (epoch : Nat)
+  /-- the token is consumed and no grant names it (never, at a record a joint run reaches) -/
+  | consumed (t : Tok)
+  /-- the raw world does not step so -/
+  | worldStep
+  /-- the ledger does not allow the move -/
+  | notAllowed
+  deriving DecidableEq, Repr
+
+section
+variable {ι W Tok Fact : Type} [DecidableEq Tok]
+
+/-- The ledger's step on one of its rows. -/
+def ledgerStep (L : Ledger ι W Tok) (d : L.Rec) : LRow ι W Tok L.Rec → Except (LClause ι Tok) L.Rec
+  | .commit i t =>
+    if t ∈ L.spent d then
+      match grantOf L d t with
+      | some g => .error (.taken t g.winner g.epoch)
+      | none => .error (.consumed t)
+    else .ok (L.commit d i t)
+  | .raw w => if L.stepRaw (L.raw d) w then .ok (L.setRaw d w) else .error .worldStep
+  | .abandon i => .ok (L.onAbandon d i)
+  | .observe d' => if L.allowed d d' then .ok d' else .error .notAllowed
+
+theorem ledgerStep_allowed (L : Ledger ι W Tok) {d d' : L.Rec} {r : LRow ι W Tok L.Rec}
+    (h : ledgerStep L d r = .ok d') : L.allowed d d' = true := by
+  cases r with
+  | commit i t =>
+    simp only [ledgerStep] at h; split at h
+    · split at h <;> cases h
+    · cases h; exact L.allowed_commit _ _ _
+  | raw w =>
+    simp only [ledgerStep] at h; split at h
+    · cases h; exact L.allowed_setRaw _ _ (by assumption)
+    · cases h
+  | abandon i => simp only [ledgerStep] at h; cases h; exact L.allowed_onAbandon _ _
+  | observe d'' =>
+    simp only [ledgerStep] at h; split at h
+    · cases h; assumption
+    · cases h
+
+/-- **The ledger as an audited fold**: its world component is its record, its rest is nothing, and
+every row is a move. It reads no fact; it shares its fact type with the runners (`Fact ⊕ Tok`) so
+that it can be a member of their family. -/
+def ledgerAdmission (L : Ledger ι W Tok) (base : W → View Tok Fact) :
+    Obend.Fold.Admission L.Rec Unit (LRow ι W Tok L.Rec) (Fact ⊕ Tok) (LClause ι Tok) where
+  step a r := (ledgerStep L a.1 r).map fun d => (d, ())
+  reads _ _ := []
+  look d := fun
+    | .inl f => (base (L.raw d)).holds f
+    | .inr t => sharedLive L base d t
+  moves _ := true
+  observe := .observe
+  allowed := L.allowed
+  keeps_world _ _ _ h := by cases h
+  step_of_reads _ _ _ h := by cases h
+  observe_ok w w' l ha := by cases l; simp [ledgerStep, ha]; rfl
 
 end
 
@@ -116,15 +208,14 @@ inductive JEvent (ι W : Type) (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Typ
 
 /-- Why the joint transition refused. -/
 inductive JRefusal (ι Tok : Type) (S : Sig Ix) (Hole : Ix → Type) (P Cand Fact : Type) where
-  | worldStep
+  /-- the ledger refused its row -/
+  | ledger (c : LClause ι Tok)
   /-- runner `i` refused, for its own reason -/
   | runner (i : ι) (r : CRefusal S Hole P Cand Tok Fact)
   /-- the token is held: committed to `winner` at `epoch` -/
   | taken (t : Tok) (winner : ι) (epoch : Nat)
   /-- a world move, a dispatch or an abandonment of a runner goes through the joint arm -/
   | notOwn (i : ι)
-  /-- a runner did not accept the ledger's move (never, at a joint-reachable configuration) -/
-  | propagation (i : ι)
 
 variable [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok]
 variable [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)]
@@ -143,11 +234,13 @@ def setCfg {i₀ : Ix} (cs : ι → CCfg S Hole A P Cand Tok Fact Ob W i₀) (i 
     (c : CCfg S Hole A P Cand Tok Fact Ob W i₀) : ι → CCfg S Hole A P Cand Tok Fact Ob W i₀ :=
   fun j => if j = i then c else cs j
 
-/-- The ledger after runner `i` dispatched `o`: its token, if any, consumed and granted to `i`. -/
-def commitOf (L : Ledger ι W Tok) (sp : Spec S Tok Fact Ob) (d : L.Rec) (i : ι) (o : Σ i, S.Op i) : L.Rec :=
+/-- The ledger's row for runner `i`'s dispatch of `o`: the commit of the token it consumes, or the
+record observed as it is. -/
+def ledgerRowOf (L : Ledger ι W Tok) (sp : Spec S Tok Fact Ob) (d : L.Rec) (i : ι) (o : Σ i, S.Op i) :
+    LRow ι W Tok L.Rec :=
   match sp.consumes o.2 with
-  | some t => L.commit d i t
-  | none => d
+  | some t => .commit i t
+  | none => .observe d
 
 /-- One joint transition. -/
 def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
@@ -155,28 +248,26 @@ def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S 
     (J : JCfg L S Hole A P Cand Fact Ob i₀) :
     JEvent ι W S Hole A P Cred Cand Fact L.Rec → Except (JRefusal ι Tok S Hole P Cand Fact) (JCfg L S Hole A P Cand Fact Ob i₀)
   | .world w =>
-    if L.stepRaw (L.raw J.led) w then
-      let d := L.setRaw J.led w
-      .ok ⟨d, propagate L base sp au k d J.cfgs⟩
-    else .error .worldStep
+    match ledgerStep L J.led (.raw w) with
+    | .ok d => .ok ⟨d, propagate L base sp au k d J.cfgs⟩
+    | .error c => .error (.ledger c)
   | .dispatch i o =>
-    match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) (.base (.world J.led)) with
-    | .error _ => .error (.propagation i)
+    match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) (.base (.dispatch o)) with
     | .ok c₁ =>
-      match crun (localHost L base) (sp i) (au i) (k i) c₁ (.base (.dispatch o)) with
-      | .ok c₂ =>
-        let d := commitOf L (sp i) J.led i o
-        .ok ⟨d, propagate L base sp au k d (setCfg J.cfgs i c₂)⟩
-      | .error (.run (.unadmitted o' m (some t))) =>
-        match grantOf L J.led t with
-        | some g => .error (.taken t g.winner g.epoch)
-        | none => .error (.runner i (.run (.unadmitted o' m (some t))))
-      | .error r => .error (.runner i r)
+      match ledgerStep L J.led (ledgerRowOf L (sp i) J.led i o) with
+      | .ok d => .ok ⟨d, propagate L base sp au k d (setCfg J.cfgs i c₁)⟩
+      | .error c => .error (.ledger c)
+    | .error (.run (.unadmitted o' m (some t))) =>
+      match grantOf L J.led t with
+      | some g => .error (.taken t g.winner g.epoch)
+      | none => .error (.runner i (.run (.unadmitted o' m (some t))))
+    | .error r => .error (.runner i r)
   | .abandon i o =>
     match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) (.base (.abandon o)) with
     | .ok c₁ =>
-      let d := L.onAbandon J.led i
-      .ok ⟨d, propagate L base sp au k d (setCfg J.cfgs i c₁)⟩
+      match ledgerStep L J.led (.abandon i) with
+      | .ok d => .ok ⟨d, propagate L base sp au k d (setCfg J.cfgs i c₁)⟩
+      | .error c => .error (.ledger c)
     | .error r => .error (.runner i r)
   | .own i ev =>
     match ev with
@@ -185,6 +276,45 @@ def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S 
       match crun (localHost L base) (sp i) (au i) (k i) (J.cfgs i) ev with
       | .ok c₁ => .ok ⟨J.led, setCfg J.cfgs i c₁⟩
       | .error r => .error (.runner i r)
+
+/-! ## The members of the joint fold -/
+
+/-- A member of the joint fold: the ledger, or a runner. -/
+inductive Mem (ι : Type) where
+  | ledger
+  | run (i : ι)
+  deriving DecidableEq, Repr
+
+/-- A member's rows. -/
+abbrev MRow (ι W Tok R : Type) (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Fact : Type) : Mem ι → Type
+  | .ledger => LRow ι W Tok R
+  | .run _ => Event S Hole A Fact R
+
+/-- A member's rest of the accumulator. -/
+abbrev MRest (ι : Type) (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact : Type) : Mem ι → Type
+  | .ledger => Unit
+  | .run _ => Obend.Run.Rest S Hole A Tok Fact
+
+/-- A member's refusals. -/
+abbrev MClause (ι Tok : Type) : Mem ι → Type
+  | .ledger => LClause ι Tok
+  | .run _ => Obend.Run.Clause
+
+/-- **The members**: the ledger's admission, and each runner's `Legal` as an audited fold at its
+local host (`Obend.Run.Fold.legalAdmission`), all over the ledger's record. -/
+def members (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob) {i₀ : Ix}
+    (O : ι → Open S Hole A Tok Fact Ob i₀) :
+    (m : Mem ι) → Obend.Fold.Admission L.Rec (MRest ι S Hole A Tok Fact m)
+      (MRow ι W Tok L.Rec S Hole A Fact m) (Fact ⊕ Tok) (MClause ι Tok m)
+  | .ledger => ledgerAdmission L base
+  | .run i => Obend.Run.legalAdmission (localHost L base) (sp i) (O i).template
+
+/-- Each member's rest at a joint configuration: nothing for the ledger; for a runner, the rest of
+the accumulator its log folds to (`Obend.Run.accOf`, from the start `d₀`). -/
+def mrestOf {L : Ledger ι W Tok} (sp : ι → Spec S Tok Fact Ob) {i₀ : Ix} (O : ι → Open S Hole A Tok Fact Ob i₀) (d₀ : L.Rec)
+    (J : JCfg L S Hole A P Cand Fact Ob i₀) : (m : Mem ι) → MRest ι S Hole A Tok Fact m
+  | .ledger => ()
+  | .run i => (Obend.Run.accOf (sp i) (O i).σ d₀ (fun _ _ => []) (J.cfgs i).cfg.log).rest
 
 /-- The joint configurations reachable from `J₀`. -/
 inductive JReachable (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)

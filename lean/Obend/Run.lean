@@ -25,7 +25,8 @@ accepted history across replanning, revocation and lost replies.
   first-usable / incumbent-first / chooser-required with their choice laws, honest
   `nothingAdmissible` with exact diagnostics); `Obend.Run.ControlExample`, its fixtures.
 - `Obend.Run.Shared`, `Obend.Run.Proofs.Shared`: any number of controlled runners over one World through a
-  ledger with an atomic commit boundary; each runner's log `Legal` by projection, grants exclusive,
+  ledger with an atomic commit boundary, the ledger itself a member of the audited fold; each runner's
+  log `Legal` by `Obend.Fold.project_moves_run` applied, grants exclusive,
   `OnceSpent` globally, the loser's refusal naming the winner and epoch; `Obend.Run.SharedExample`, two
   buyers and one capability.
 - `Obend.Run.Negotiation`: the stranger's example (revocation, a slot's replan, a lost reply), the
