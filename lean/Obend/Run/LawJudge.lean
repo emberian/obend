@@ -39,7 +39,7 @@ public import Obend.Law.Proofs.Machine
 public import Obend.Run.Proofs.Invariant
 import all Obend.Run.Runner
 import all Obend.Run.Spec
-@[expose] public section
+public section
 
 namespace Obend.Run
 
@@ -134,7 +134,7 @@ theorem lawHost_holds_embed {host : Host V Tok Fact} {J : LawJudge V Fact (Σ i,
   simp [lawHost, J.classify_embed]
 
 theorem mask_holds {v : View Tok Fact} {spent : List Tok} [DecidableEq Tok] :
-    (View.mask v spent).holds = v.holds := rfl
+    (View.mask v spent).holds = v.holds := by rfl
 
 /-- A law-judged admission at a world's view has the machine's `ok` on the write. -/
 public theorem admitOp_lawSpec_ok [DecidableEq Tok] {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob}
@@ -170,7 +170,7 @@ public theorem legal_law_admitted [DecidableEq Tok] [DecidableEq Ix] [∀ i, Dec
 
 /-- The tokens the law-judged spec spends are the deployment's. -/
 theorem spentBy_lawSpec {sp : Spec S Tok Fact Ob} {J : LawJudge V Fact (Σ i, S.Op i)}
-    (log : List (Event S Hole A Fact V)) : spentBy (lawSpec sp J) log = spentBy sp log := rfl
+    (log : List (Event S Hole A Fact V)) : spentBy (lawSpec sp J) log = spentBy sp log := by rfl
 
 /-- **The deployment's authority is still enforced**: when none of its requirements is a law fact,
 every dispatch of a law-judged `Legal` log was admitted by the deployment's spec too. -/

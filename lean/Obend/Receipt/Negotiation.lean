@@ -29,8 +29,12 @@ public import Obend.Run.Fold
 public import Obend.Judge.Instances
 public import Obend.Digest.Cshake256
 public import Lean.Data.Json
+import all Obend.Run.Runner
+import all Obend.Run.Control
+import all Obend.Run.Fold
+import all Obend.Run.Negotiation
 
-@[expose] public section
+public section
 namespace Obend.Receipt.Negotiation
 open Lean (Json ToJson toJson)
 open Obend.Slot Obend.Slot.Protocol Obend.Slot.Protocol.Negotiation Obend.Run Obend.Run.Negotiation
@@ -343,12 +347,12 @@ def acc4 : Wv × NRest :=
 
 def row4 : NRow := .dispatch (commitOp .p2)
 
-theorem log_row4 : log[4]? = some row4 := rfl
+theorem log_row4 : log[4]? = some row4 := by rfl
 
-theorem prefix_runs : admission.run start (log.take 4) = .ok acc4 := rfl
+theorem prefix_runs : admission.run start (log.take 4) = .ok acc4 := by rfl
 
 /-- **The dispatch of the commitment to `p2` is admitted.** -/
-theorem row4_admitted : (admission.step acc4 row4).toBool = true := rfl
+theorem row4_admitted : (admission.step acc4 row4).toBool = true := by rfl
 
 /-- The supports of the receipt: the fold's verdict is a checked re-execution; the view it read is
 checked against the dated root (each opening's proof, cSHAKE256 run as compiled code). -/
@@ -361,7 +365,7 @@ def receipt4 (prev : Digest) : Receipt Fact (Nat × Bool) NRead Obend.Run.Clause
 
 /-- What it read: `p2`'s grant and the deadline (from the pins), and the capability's liveness. -/
 theorem row4_reads : admission.reads acc4 row4 = [.inl (.auth .p2), .inl .beforeDeadline, .inl (.auth .p2),
-    .inl .beforeDeadline, .inr .cap] := rfl
+    .inl .beforeDeadline, .inr .cap] := by rfl
 
 /-! ## The stranger's view, from the pins -/
 
@@ -379,10 +383,10 @@ def realize (pins : List (Fact × Option (Nat × Bool))) (capLive : Bool) : Wv :
 /-- The pins of row 4's receipt. -/
 def pins4 : List (Fact × Option (Nat × Bool)) := pinsOfReads acc4.1 (admission.reads acc4 row4)
 
-theorem receipt4_pins (prev : Digest) : (receipt4 prev).pins = pins4 := rfl
+theorem receipt4_pins (prev : Digest) : (receipt4 prev).pins = pins4 := by rfl
 
 theorem pins4_eq : pins4 = [(.auth .p2, some (1, true)), (.beforeDeadline, some (1, true)),
-    (.auth .p2, some (1, true)), (.beforeDeadline, some (1, true))] := rfl
+    (.auth .p2, some (1, true)), (.beforeDeadline, some (1, true))] := by rfl
 
 /-- **The realized view's reads are the pins'**: every world fact the receipt pins reads, at the
 realized view, as `holdsOfPin` of its recorded pin. -/

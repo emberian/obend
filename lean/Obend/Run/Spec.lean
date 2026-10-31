@@ -28,7 +28,7 @@ recomputed ones), is `Obend.Run.Proofs.Invariant.refines`.
 -/
 public import Obend.Run.Runner
 public import Obend.Slot.Proofs.ProtocolTyping
-@[expose] public section
+public section
 
 namespace Obend.Run
 

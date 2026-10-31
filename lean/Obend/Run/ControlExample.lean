@@ -29,7 +29,7 @@ import all Obend.Run.Runner
 import all Obend.Run.Negotiation
 import all Obend.Run.Control
 import all Obend.Run.Proofs.Control
-@[expose] public section
+public section
 
 namespace Obend.Run.ControlExample
 
@@ -154,7 +154,7 @@ theorem bare_accepts :
     (session ehost espec (Cfg.init (eobj (plan .p1)) w₀)
       [.dispatch reserveOp, .respond ⟨.idle, Op.reserve, ()⟩,
        .replan (j := Phase.reserved) prov (ebody (some .p2)) (eslot.supports (some .p2)),
-       .world handover, .dispatch (commitOp .p2)]).2 = [none, none, none, none, none] := rfl
+       .world handover, .dispatch (commitOp .p2)]).2 = [none, none, none, none, none] := by rfl
 
 /-! ## The editorial slot -/
 
@@ -185,7 +185,7 @@ theorem editorial_receipt :
        none,
        some (.run (.unsupported (commitOp .p2) (some ⟨.reserved, ()⟩) [.office .alice])),
        none,
-       none] := rfl
+       none] := by rfl
 
 /-- **Under `lasting`**: Alice's choice survives her leaving office; the commitment goes out at
 once, and Bob's re-decision is a new decision at revision 1 (the call is then in flight, so the
@@ -201,12 +201,12 @@ theorem lasting_receipt :
        none,
        none,
        some (.run (.replacesInflight (commitOp .p2) ⟨.reserved, ()⟩)),
-       some (.run (.busy (commitOp .p2)))] := rfl
+       some (.run (.busy (commitOp .p2)))] := by rfl
 
 /-- The decisions recorded under `whileInOffice`: Alice's at revision 0 and Bob's at revision 1. -/
 theorem editorial_decisions :
     ((esession (edesc .incumbentFirst .whileInOffice .automatic) w₀ editorial).1.decisions.map
-      fun d => (d.cand, d.by_, d.rev)) = [(some .p2, some .alice, 0), (some .p2, some .bob, 1)] := rfl
+      fun d => (d.cand, d.by_, d.rev)) = [(some .p2, some .alice, 0), (some .p2, some .bob, 1)] := by rfl
 
 /-- The general theorems at this run: its runner log is `Legal`, and both decisions are authorized
 (permitted, usable when made, each made by its principal in office). -/
@@ -233,7 +233,7 @@ theorem awaiting_receipt :
       (afterReserve ++ [.base (.world revoked1), .advance (j := Phase.reserved) prov])).2 =
       [none, none, none,
        some (.awaiting ⟨.reserved, ()⟩
-         [(some .p1, .dead [.base (.auth .p1)]), (some .p2, .usable), (none, .usable)])] := rfl
+         [(some .p1, .dead [.base (.auth .p1)]), (some .p2, .usable), (none, .usable)])] := by rfl
 
 /-- The same under incumbent-first: the policy moves to `p2`. -/
 theorem incumbent_receipt :
@@ -249,7 +249,7 @@ theorem nothing_receipt :
       (afterReserve ++ [.base (.world revokedAll), .advance (j := Phase.reserved) prov])).2 =
       [none, none, none,
        some (.nothingAdmissible ⟨.reserved, ()⟩
-         [(some .p1, .dead [.base (.auth .p1)]), (some .p2, .dead [.base (.auth .p2)])])] := rfl
+         [(some .p1, .dead [.base (.auth .p1)]), (some .p2, .dead [.base (.auth .p2)])])] := by rfl
 
 /-- **The latch**: `p1` revoked, then restored. Under `reapproval` the editor's slot does not take
 `p1` back on its own; under `automatic` it keeps it. -/

@@ -32,7 +32,7 @@ public import Obend.Fold
 import all Obend.Run.Runner
 import all Obend.Run.Spec
 import all Obend.Run.Proofs.Invariant
-@[expose] public section
+public section
 
 namespace Obend.Run
 
@@ -73,7 +73,7 @@ def acc₀ (σ₀ : Subst S Hole A) (v₀ : V) (cs₀ : (j : Ix) → Hole j → 
   ⟨v₀, [], ⟨[], none⟩, none, σ₀, cs₀⟩
 
 /-- A world event. -/
-def Event.isWorld : Event S Hole A Fact V → Bool
+@[expose] def Event.isWorld : Event S Hole A Fact V → Bool
   | .world _ => true
   | _ => false
 
@@ -87,7 +87,7 @@ def decisionReads {i : Ix} (P : Prot S Hole A i) (acc : Acc S Hole A Tok Fact V)
   | none => []
 
 /-- The facts row `e` reads at the view. -/
-def reads {i : Ix} (sp : Spec S Tok Fact Ob) (P : Prot S Hole A i) (acc : Acc S Hole A Tok Fact V) :
+@[expose] def reads {i : Ix} (sp : Spec S Tok Fact Ob) (P : Prot S Hole A i) (acc : Acc S Hole A Tok Fact V) :
     Event S Hole A Fact V → List Fact
   | .dispatch o => sp.requires o.2 ++ decisionReads P acc
   | _ => []
@@ -584,18 +584,18 @@ def Acc.rest (a : Acc S Hole A Tok Fact V) : Rest S Hole A Tok Fact := ⟨a.spen
 def Acc.toPair (a : Acc S Hole A Tok Fact V) : V × Rest S Hole A Tok Fact := (a.world, a.rest)
 
 /-- What the host says of a fact (`inl`) or of a token's liveness (`inr`): the openings of a row. -/
-def hostLook (host : Host V Tok Fact) (w : V) : Fact ⊕ Tok → Bool
+@[expose] def hostLook (host : Host V Tok Fact) (w : V) : Fact ⊕ Tok → Bool
   | .inl f => (host.view w).holds f
   | .inr t => (host.view w).live t
 
 /-- A row's reads as openings: the facts, and the token it consumes. -/
-def legalReads (sp : Spec S Tok Fact Ob) {i : Ix} (P : Prot S Hole A i) (a : V × Rest S Hole A Tok Fact) :
+@[expose] def legalReads (sp : Spec S Tok Fact Ob) {i : Ix} (P : Prot S Hole A i) (a : V × Rest S Hole A Tok Fact) :
     Event S Hole A Fact V → List (Fact ⊕ Tok)
   | .dispatch o => (reads sp P (Acc.ofPair a.1 a.2) (.dispatch o)).map .inl ++ (sp.consumes o.2).toList.map .inr
   | _ => []
 
 /-- **`Legal` as an audited fold.** -/
-def legalAdmission (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix} (P : Prot S Hole A i) :
+@[expose] def legalAdmission (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) {i : Ix} (P : Prot S Hole A i) :
     Obend.Fold.Admission V (Rest S Hole A Tok Fact) (Event S Hole A Fact V) (Fact ⊕ Tok) Clause where
   step a e := (step host sp P (Acc.ofPair a.1 a.2) e).map Acc.toPair
   reads := legalReads sp P

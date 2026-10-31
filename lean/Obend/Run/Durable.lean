@@ -37,7 +37,7 @@ exposures, crashes and recoveries (`HReachable`, `hreach_inv`):
   exposed under their original identities, never re-issued under new ones.
 -/
 public import Obend.Run.Proofs.Shared
-@[expose] public section
+public section
 
 namespace Obend.Run.Durable
 

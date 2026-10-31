@@ -17,7 +17,7 @@ public import Obend.Tactic.Tooth
 import all Obend.Run.Runner
 import all Obend.Run.Spec
 import all Obend.Run.Control
-@[expose] public section
+public section
 
 namespace Obend.Run.Negotiation
 
@@ -44,9 +44,9 @@ structure Wv where
   beforeDeadline : Bool
   capLive : Bool
   clock : Nat
-deriving DecidableEq, Repr
+deriving @[expose] DecidableEq, Repr
 
-def holdsW (v : Wv) : Fact → Bool
+@[expose] def holdsW (v : Wv) : Fact → Bool
   | .auth .p1 => v.grant1
   | .auth .p2 => v.grant2
   | .beforeDeadline => v.beforeDeadline
@@ -94,7 +94,7 @@ inductive NCand where
   | prov (p : Provider)
   | cancel
   | flip (p : Provider)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- The provider hole as a slot: a provider (either continuation) cites its grant and the deadline;
 cancelling cites nothing. -/
@@ -137,7 +137,7 @@ abbrev NEv := CEvent sig HoleN Res Unit Unit NCand Fact Wv
 def c₀ : NCfg := CCfg.init (Cfg.init O₀ everything) stored₀
 
 /-- The controlled session. -/
-def nsession (sp' : Spec sig Tok Fact Ob) (c : NCfg) (evs : List NEv) := csession host sp' au ctl c evs
+@[expose] def nsession (sp' : Spec sig Tok Fact Ob) (c : NCfg) (evs : List NEv) := csession host sp' au ctl c evs
 
 /-- The buyer's choice of `c` against revision `r`. -/
 def pick (c : NCand) (r : Nat) : NEv := .choose () () (j := Phase.reserved) () c r
@@ -158,7 +158,7 @@ def c₁ : NCfg := (nsession spec c₀ opening).1
 `p2` (the former `resolves_p2` / `resolvesBy_p2`). -/
 theorem advances_p2 :
     propose providers desc (host.view c₁.cfg.world).holds (c₁.stored .reserved ())
-      (latchedOf host ctl c₁ (j := Phase.reserved) ()) = .chosen (.prov .p2) := rfl
+      (latchedOf host ctl c₁ (j := Phase.reserved) ()) = .chosen (.prov .p2) := by rfl
 
 /-- The rest: commit on `p1` (refused, the grant is gone), the policy's advance to `p2`, commit on
 `p2` (accepted: the capability is spent), then its reply is LOST. The world restores `p1`'s grant and
@@ -185,9 +185,9 @@ def rest : List NEv :=
    .base (.dispatch (commitOp .p1)),
    .base (.world ⟨false, false, false, true, 5⟩)]
 
-def script : List NEv := opening ++ rest
+@[expose] def script : List NEv := opening ++ rest
 
-def final : NCfg := (nsession spec c₀ script).1
+@[expose] def final : NCfg := (nsession spec c₀ script).1
 
 /-- **The receipt**: which events were accepted, and why each refused one was refused. -/
 theorem receipt :
@@ -206,7 +206,7 @@ theorem receipt :
        some (.run (.abandoned (commitOp .p2))),
        some (.run (.abandoned (commitOp .p2))),
        some (.run (.abandoned (commitOp .p2))),
-       none] := rfl
+       none] := by rfl
 
 /-- **What had to stay**: the accepted history is the reservation answered and the commitment to
 `p2` dispatched and never answered; the capability is spent once; the plan in force is `p2`'s; the
@@ -265,13 +265,13 @@ theorem withdrawn_refused :
 /-- At a world where everything holds, the driven run is `interpret`'s. -/
 theorem everything_delivers :
     (drive host spec (env true) 3 c₀.cfg 0).result? =
-      some (interpret (env true) (fill Ω (choose (plan .p1)) template) 0) := rfl
+      some (interpret (env true) (fill Ω (choose (plan .p1)) template) 0) := by rfl
 
 /-- **A lost reply is not retried**: with the reservation in flight, a second reservation (which
 needs no fact and spends no token, so admission alone would let it through) is refused `busy`. -/
 theorem reserve_retry_refused :
     (nsession spec c₀ [.base (.dispatch reserveOp), .base (.dispatch reserveOp)]).2 =
-      [none, some (.run (.busy reserveOp))] := rfl
+      [none, some (.run (.busy reserveOp))] := by rfl
 
 #tooth reserve_retry_refused by mutation awaiting := fun {_ _} _ => none
 
@@ -281,7 +281,7 @@ call. Without the guard the late reply would revive the plan and the commitment 
 theorem abandon_ends :
     (nsession spec c₀ [.base (.dispatch reserveOp), .base (.abandon reserveOp),
       .base (.respond ⟨.idle, Op.reserve, ()⟩), .base (.dispatch (commitOp .p1))]).2 =
-      [none, none, some (.run (.abandoned reserveOp)), some (.run (.abandoned reserveOp))] := rfl
+      [none, none, some (.run (.abandoned reserveOp)), some (.run (.abandoned reserveOp))] := by rfl
 
 #tooth abandon_ends by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
 
@@ -342,7 +342,7 @@ theorem decision_rechecked :
        .base (.dispatch (commitOp .p1))])).2 =
       [none, none, none, none,
        some (.run (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1]))] :=
-  rfl
+  by rfl
 
 #tooth decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
@@ -359,14 +359,14 @@ theorem initial_decision_rechecked :
     (nsession laxSpec (CCfg.init (Cfg.init O₀ everything initialCites) stored₀)
       (opening ++ [.base (.dispatch (commitOp .p1))])).2 =
       [none, none, none, some (.run (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1]))] :=
-  rfl
+  by rfl
 
 #tooth initial_decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
 /-- The contrast: started without citations, the same run goes out. -/
 theorem uncited_start_admitted :
     (nsession laxSpec c₀ (opening ++ [.base (.dispatch (commitOp .p1))])).2 = [none, none, none, none] :=
-  rfl
+  by rfl
 
 /-- The general theorem at the cited start: its log is `Legal` with those citations. -/
 theorem initial_legal :
@@ -387,7 +387,7 @@ inductive Op : Unit → Type
   | use : Op ()
 
 /-- One operation, spending the ticket, used again and again. -/
-def sig : Sig Unit where
+@[expose] def sig : Sig Unit where
   Op := Op
   Resp := fun _ => Unit
   next := fun _ _ => ()
@@ -395,7 +395,7 @@ def sig : Sig Unit where
 instance : DecidableEq (Σ i, sig.Op i) := fun
   | ⟨(), .use⟩, ⟨(), .use⟩ => isTrue rfl
 
-def NoHole : Unit → Type := fun _ => Empty
+@[expose] def NoHole : Unit → Type := fun _ => Empty
 
 instance : ∀ i, DecidableEq (NoHole i) := fun _ => inferInstanceAs (DecidableEq Empty)
 
@@ -430,7 +430,7 @@ def useOp : Σ i, sig.Op i := ⟨(), Op.use⟩
 /-- **Spent once**: the second use is refused, naming the ticket, although the world calls it live. -/
 theorem second_use_refused :
     (session host spec (Cfg.init O ()) [.dispatch useOp, .respond ⟨(), Op.use, ()⟩, .dispatch useOp]).2 =
-      [none, none, some (.unadmitted useOp [] (some ()))] := rfl
+      [none, none, some (.unadmitted useOp [] (some ()))] := by rfl
 
 #tooth second_use_refused by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
 

@@ -37,7 +37,7 @@ so the controlled runner's reachable configurations are the runner's
 -/
 public import Obend.Run.Runner
 public import Obend.Slot.Selection
-@[expose] public section
+public section
 
 namespace Obend.Run.Control
 
@@ -315,7 +315,7 @@ inductive CReachable (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Au
       CReachable host sp au k c₀ c → crun host sp au k c ev = .ok c' → CReachable host sp au k c₀ c'
 
 /-- A controlled session: each event accepted or refused; a refusal leaves the configuration. -/
-def csession (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Authority P Cred)
+@[expose] def csession (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob) (au : Authority P Cred)
     (k : (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i : Ix} :
     CCfg S Hole A P Cand Tok Fact Ob V i → List (CEvent S Hole A P Cred Cand Fact V) →
       CCfg S Hole A P Cand Tok Fact Ob V i × List (Option (CRefusal S Hole P Cand Tok Fact))

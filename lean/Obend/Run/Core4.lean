@@ -16,7 +16,7 @@ are closed by the adapter over it, `Obend.Run.Adapter`.
 -/
 public import Obend.Run.Runner
 public import Obend.Core.Data
-@[expose] public section
+public section
 
 namespace Obend.Run.Core4
 
@@ -73,7 +73,7 @@ end
 instance : DecidableEq Data := decData
 
 /-- One operation per Plan; the response is `Data`; the protocol has one index. -/
-def planSig : Sig Unit where
+@[expose] def planSig : Sig Unit where
   Op := fun _ => Data
   Resp := fun _ => Data
   next := fun _ _ => ()
@@ -81,7 +81,7 @@ def planSig : Sig Unit where
 instance : DecidableEq (Σ i, planSig.Op i) := inferInstanceAs (DecidableEq (Σ _ : Unit, Data))
 
 /-- A Core4 activity's protocol has no holes: its plan is the program. -/
-def NoHole : Unit → Type := fun _ => Empty
+@[expose] def NoHole : Unit → Type := fun _ => Empty
 
 instance : ∀ i, DecidableEq (NoHole i) := fun _ => inferInstanceAs (DecidableEq Empty)
 

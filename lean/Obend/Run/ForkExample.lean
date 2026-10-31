@@ -22,7 +22,7 @@ public import Obend.Tactic.Tooth
 import all Obend.Run.Fork
 import all Obend.Run.Shared
 import all Obend.Run.SharedExample
-@[expose] public section
+public section
 
 namespace Obend.Run.ForkExample
 

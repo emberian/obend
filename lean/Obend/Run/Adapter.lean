@@ -29,7 +29,7 @@ re-base is refused (`replay`); `Obend.Run.Proofs.Adapter` proves what holds of e
 -/
 public import Obend.Run.Core4
 public import Obend.Slot.Integrity
-@[expose] public section
+public section
 
 namespace Obend.Run.Core4
 

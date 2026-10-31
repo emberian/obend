@@ -29,7 +29,7 @@ merges by union, conflicts are objects). Over the shared runners (`Obend.Run.Sha
   the fork, is a conflict naming the winner and the epoch of the grant.
 -/
 public import Obend.Run.Proofs.Shared
-@[expose] public section
+public section
 
 namespace Obend.Run.Fork
 

@@ -25,7 +25,7 @@ import all Obend.Run.Runner
 import all Obend.Run.Control
 import all Obend.Run.Shared
 import all Obend.Run.Negotiation
-@[expose] public section
+public section
 
 namespace Obend.Run.SharedExample
 
@@ -47,7 +47,7 @@ structure NRec where
 
 /-- What an abandonment does to the record (a `#tooth` mutation target): nothing; the consumption
 is durable. -/
-def ledgerAbandon (d : NRec) : NRec := d
+@[expose] def ledgerAbandon (d : NRec) : NRec := d
 
 /-- **What `Ledger`'s durability fields ask of this record**: an abandonment keeps the consumption
 and the grants. The structure consumes exactly this (`nledger.abandon_spent`, `abandon_grants`); the
@@ -56,7 +56,7 @@ theorem ledgerAbandon_durable (d : NRec) : (ledgerAbandon d).spent = d.spent ∧
   ⟨rfl, rfl⟩
 
 /-- The negotiation's ledger. -/
-def nledger : Ledger Buyer Wv Tok where
+@[expose] def nledger : Ledger Buyer Wv Tok where
   Rec := NRec
   raw := NRec.raw
   spent := NRec.spent
@@ -158,7 +158,7 @@ theorem lost_reply_receipt :
     (bsession lostReply).2 =
       [none, none, none, none, none, none, none, none,
        some (.runner .alice (.run (.abandoned (commitOp .p1)))),
-       some (.taken .cap .alice 0), none, some (.taken .cap .alice 0)] := rfl
+       some (.taken .cap .alice 0), none, some (.taken .cap .alice 0)] := by rfl
 
 /-- **Coupling**, at Alice's win: Bob's world is the ledger after Alice's commit (he saw it). -/
 theorem coupled_after_commit :

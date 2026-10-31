@@ -31,7 +31,7 @@ are `Obend.Run.Proofs.Invariant`; the handler-driven loop and its agreement with
 `drive` here and `Obend.Run.Proofs.Interpret`.
 -/
 public import Obend.Slot.Integrity
-@[expose] public section
+public section
 
 namespace Obend.Run
 
@@ -169,7 +169,7 @@ def follow : (Σ j, Prot S Hole A j) → Entry S → Option (Σ j, Prot S Hole A
   | _, _ => none
 
 /-- A trace through a residual (`Proofs.Invariant.advance_iff`: exactly `Reach`). -/
-def advance (R : Σ j, Prot S Hole A j) : Trace S → Option (Σ j, Prot S Hole A j)
+@[expose] def advance (R : Σ j, Prot S Hole A j) : Trace S → Option (Σ j, Prot S Hole A j)
   | [] => some R
   | e :: t => match follow R e with
     | some R' => advance R' t
@@ -178,7 +178,7 @@ def advance (R : Σ j, Prot S Hole A j) : Trace S → Option (Σ j, Prot S Hole 
 /-- The hole of the template the history has entered, if any: the template's prefix along the
 answered calls reaches it and something after it was answered or is in flight
 (`Proofs.Invariant.entered_iff`: exactly `Dispatched`). -/
-def entered : {i : Ix} → Prot S Hole A i → Trace S → Bool → Option (Σ j, Hole j)
+@[expose] def entered : {i : Ix} → Prot S Hole A i → Trace S → Bool → Option (Σ j, Hole j)
   | _, .ret _, _, _ => none
   | j, .hole h, t, infl => if t.isEmpty && !infl then none else some ⟨j, h⟩
   | _, .call _ _, [], _ => none

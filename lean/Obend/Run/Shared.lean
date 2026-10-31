@@ -46,7 +46,7 @@ public import Obend.Run.Proofs.Control
 public import Obend.Run.Fold
 public import Obend.Receipt
 public import Obend.Law.Syntax
-@[expose] public section
+public section
 
 namespace Obend.Run.Shared
 
@@ -124,7 +124,7 @@ def localHost (L : Ledger ι W Tok) (base : W → View Tok Fact) : Host L.Rec To
   view := fun d => ⟨(base (L.raw d)).holds, sharedLive L base d⟩
 
 /-- The grant of `t`, if any. -/
-def grantOf (L : Ledger ι W Tok) (d : L.Rec) (t : Tok) : Option (Grant ι Tok) :=
+@[expose] def grantOf (L : Ledger ι W Tok) (d : L.Rec) (t : Tok) : Option (Grant ι Tok) :=
   (L.grants d).find? fun g => decide (g.tok = t)
 
 end
@@ -158,7 +158,7 @@ section
 variable {ι W Tok Fact : Type} [DecidableEq Tok]
 
 /-- The ledger's step on one of its rows. -/
-def ledgerStep (L : Ledger ι W Tok) (d : L.Rec) : LRow ι W Tok L.Rec → Except (LClause ι Tok) L.Rec
+@[expose] def ledgerStep (L : Ledger ι W Tok) (d : L.Rec) : LRow ι W Tok L.Rec → Except (LClause ι Tok) L.Rec
   | .commit i t =>
     if t ∈ L.spent d then
       match grantOf L d t with
@@ -189,7 +189,7 @@ theorem ledgerStep_allowed (L : Ledger ι W Tok) {d d' : L.Rec} {r : LRow ι W T
 /-- **The ledger as an audited fold**: its world component is its record, its rest is nothing, and
 every row is a move. It reads no fact; it shares its fact type with the runners (`Fact ⊕ Tok`) so
 that it can be a member of their family. -/
-def ledgerAdmission (L : Ledger ι W Tok) (base : W → View Tok Fact) :
+@[expose] def ledgerAdmission (L : Ledger ι W Tok) (base : W → View Tok Fact) :
     Obend.Fold.Admission L.Rec Unit (LRow ι W Tok L.Rec) (Fact ⊕ Tok) (LClause ι Tok) where
   step a r := (ledgerStep L a.1 r).map fun d => (d, ())
   reads _ _ := []
@@ -261,14 +261,14 @@ def setCfg {i₀ : Ix} (cs : ι → CCfg S Hole A P Cand Tok Fact Ob W i₀) (i 
 
 /-- The ledger's row for runner `i`'s dispatch of `o`: the commit of the token it consumes, or the
 record observed as it is. -/
-def ledgerRowOf (L : Ledger ι W Tok) (sp : Spec S Tok Fact Ob) (d : L.Rec) (i : ι) (o : Σ i, S.Op i) :
+@[expose] def ledgerRowOf (L : Ledger ι W Tok) (sp : Spec S Tok Fact Ob) (d : L.Rec) (i : ι) (o : Σ i, S.Op i) :
     LRow ι W Tok L.Rec :=
   match sp.consumes o.2 with
   | some t => .commit i t
   | none => .observe d
 
 /-- One joint transition. -/
-def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+@[expose] def jrun (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
     (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i₀ : Ix}
     (J : JCfg L S Hole A P Cand Fact Ob i₀) :
     JEvent ι W S Hole A P Cred Cand Fact L.Rec → Except (JRefusal ι Tok S Hole P Cand Fact) (JCfg L S Hole A P Cand Fact Ob i₀)
@@ -382,7 +382,7 @@ def jsession (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spe
     | .error w => let r := jsession L base sp au k J evs; (r.1, some w :: r.2)
 
 /-- The start: an initial ledger, each runner at its object's start at that ledger. -/
-def JCfg.init (L : Ledger ι W Tok) {i₀ : Ix} (d₀ : L.Rec) (O : ι → Open S Hole A Tok Fact Ob i₀)
+@[expose] def JCfg.init (L : Ledger ι W Tok) {i₀ : Ix} (d₀ : L.Rec) (O : ι → Open S Hole A Tok Fact Ob i₀)
     (stored₀ : ι → (j : Ix) → Hole j → Option Cand) : JCfg L S Hole A P Cand Fact Ob i₀ :=
   ⟨d₀, fun i => CCfg.init (Cfg.init (O i) d₀) (stored₀ i)⟩
 
