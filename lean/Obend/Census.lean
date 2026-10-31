@@ -154,6 +154,12 @@ import Obend.Elab.Proofs.PrepareChecks
 import Obend.Elab.Proofs.PrepareProbes
 import Obend.Elab.Proofs.Refines
 import Obend.Elab.Work
+import Obend.Equiv.Ahead
+import Obend.Equiv.Behaviour
+import Obend.Equiv.FareTests
+import Obend.Equiv.Fields
+import Obend.Equiv.Reduction
+import Obend.Equiv.Simulation
 import Obend.Just
 import Obend.Law
 import Obend.Law.Claim
