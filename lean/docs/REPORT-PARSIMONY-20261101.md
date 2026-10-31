@@ -10,7 +10,7 @@ counts 35,127 package constants: 27 rest on compiler trust, none on `sorryAx` or
 Controls were run at the end and match the Kinds lane's counts: cohorts (probes 30/30, tutorial 71/71,
 preview 161 with 0 failures), receipts 22/22, workspaces 30/30, the vault walkthrough 26/26, and
 `tests/doc/RoundTrip.lean` (edited, below). Net change under `lean/Obend` and `lean/tools`: +177 and
-−1,872 lines; seven modules fewer.
+−2,065 lines; eight modules fewer (282 jobs after the sixth commit).
 
 ## What changed, and what each removal had consuming it
 
@@ -32,9 +32,13 @@ New classes: none. Classes remaining in the tree: `World` (five instances), `Jud
 ### (1) Just and PolySlot
 I deleted them as the brief asked. `Slot/Repair.lean` stays, as the brief said, but the brief's
 reason does not hold. Nothing imports it except `Obend.lean` and the census; nothing names
-`repair_sound`, `Compatible` or `pinWorld` outside it. It is the record of the repair-needs-compatibility
-countermodel (REPORT-JUST §1), which is the same standing as `PolySlot` had. I left it in place for
-Ember to rule on (Not done).
+`repair_sound`, `Compatible` or `pinWorld` outside it. It was the record of the repair-needs-compatibility
+countermodel (REPORT-JUST §1), the same standing `PolySlot` had. On the coordinator's word it is
+deleted in a sixth commit (191 lines; 9 theorems, 1 tooth). The record (`repair_sound`'s statement,
+`Compatible`, `compatible_of_local`, the clash and `apart`) is written into `REPORT-JUST`, not into
+`Integrity`: `repair_of_contextual`'s REPAIR is withdrawal plus fillability, not a plan of steps, and
+does not want the compatibility condition. `THESIS.md` and `METATHEORY.md` no longer list
+`repair_sound` as proved in the tree.
 `REPORT-JUST` §3 already held the gate table. I added a paragraph there that names the commit
 holding all three files and `tools/proofsize.py`, so the measurement can be rerun.
 
@@ -132,8 +136,6 @@ class was introduced.
   - `Core/Proofs/Substitution.lean`'s header
 
 ## Not done
-- `Slot/Repair.lean` (191 lines): it has no consumer either (see (1)). I kept it because the brief
-  names it; deleting it is one more commit if Ember agrees.
 - `Run/Control`'s presets and descriptor. The census said they had one consumer, but
   `Run.Shared`, `Run.Negotiation`, `Run.Proofs.Shared` and the example all import them. They are not
   a deletion candidate.
@@ -142,7 +144,7 @@ class was introduced.
   rebuild).
 
 ## The one decision for Ember
-**Should the vault's kinds be kind cells?** Today two resolutions compute "the laws a write is judged
+**Should the vault's kinds be kind cells?** (Queued with the nominal-typing lane.) Today two resolutions compute "the laws a write is judged
 by, its kind's first". One is the vault's folder chain over `LawExpr`, which is a chain, so its C4
 list is itself. The other is `Kind.effectiveOf` over registered `KindCell`s with C4 over multiple
 parents.

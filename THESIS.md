@@ -61,8 +61,7 @@ bearing wall, and Faré's object model is the right one.** Specifically:
    whose meaning depends on a world the author never saw?" and answer with the literature: CMTT
    for the typing, ATMS/Doyle for selection, provenance semirings for the refusal, stable models
    for alternatives, from-scratch consistency for repair. Five existing nano things turned out to
-   be one object (the SLOT). PROVED as `Obend.Slot` with `World`, `Integrity.contextual`, `repair_sound` under a stated
-   compatibility condition, stored selection and the runner's `refines`; USABLE as `obend open DIR`
+   be one object (the SLOT). PROVED as `Obend.Slot` with `World`, `Integrity.contextual`, stored selection and the runner's `refines`; USABLE as `obend open DIR`
    on a folder of markdown, where a section is a slot, a cite is a support, and a law line is judged
    on every write.
 

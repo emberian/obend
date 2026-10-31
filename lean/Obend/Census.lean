@@ -259,7 +259,6 @@ import Obend.Slot.Proofs.Negotiation
 import Obend.Slot.Proofs.Protocol
 import Obend.Slot.Proofs.ProtocolTyping
 import Obend.Slot.Protocol
-import Obend.Slot.Repair
 import Obend.Slot.Selection
 import Obend.Slot.World
 import Obend.Spec

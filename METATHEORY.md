@@ -51,7 +51,7 @@ over the grade the world granted. Nothing about fuel appears in a statement abou
 | checker completeness | PROVED on the stated fragment (`complete`), full annotated completeness (`full_annotated`), executable preparation on the alias-free fragment (`prepare_checks`) | bidirectional checker, finite bisimulation |
 | law inheritance, `keeps`, machine-judges-relation | PROVED (`package_never_widens`, `judgeEffective_names`, `chain_keeps`, `judge_sound`/`judge_complete`, `legal_law_admitted`) | Core4 terms, machine probe |
 | C4 `linearize` correct on general graphs | OPEN; proved on trees (`c3_tree_is_chain`), checked elsewhere (`precedence`, refused `unordered`) | structural rewrite of `linearize`, then monotonicity and local precedence proved |
-| B4/B4′: `Integrity.contextual`, `repair_sound`, `incumbentTransition` | PROVED over every `World`; `repair_of_contextual` shows B4′ was a corollary | the slot calculus |
+| B4/B4′: `Integrity.contextual`, `incumbentTransition` | PROVED over every `World`; `repair_of_contextual` shows B4′ was a corollary (`repair_sound` under compatibility was proved and, unconsumed, retired 2026-11-01; record in REPORT-JUST) | the slot calculus |
 | shared-World exclusion | PROVED (`joint_reachable_ticket_exclusive`, `joint_once`, `loser_refused_names_winner_and_epoch`); projection by each runner's reachability, not yet the generic `project_run` | the audited fold |
 | Doc pushout universal property | PROVED (`merge_isPushout`, `pushout_unique`, `no_cocone`, `files_no_pushout`) | thin category, join |
 | leaf refinement: a Core4 run equals BendTT's `Eval` of the emitted book | OPEN; toolchain decision (BendTT at 4.34) pending | interaction-tree simulation through the runner's adapter |

@@ -71,6 +71,27 @@ the runner lane and that is not this lane's call.
 deleted; this table is the record. To rerun the measurement, check out `5892944`, where all three
 files and `tools/proofsize.py` still stand.
 
+**`Slot/Repair.lean` retired too** (same lane, on the coordinator's word): nothing imported it but the
+root and the census. It stands at `4753f62`. Its record, stated over any `World`:
+
+- `Repair` = an audited step `act : V → V` with `step : ∀ v, Step v (act v)` and
+  `establishes : ∀ v, holdsAt (act v) fact = true`; `Compatible r S c` = every requirement of `c` that
+  holds at `v` still holds at `act v`; `applyPlan` applies a plan in order.
+- `repair_sound`: if `S.judge c = true`, every repair of the plan is `Compatible S c`, and every dead
+  support of `c` at `v` is some repair's `fact`, then `Later v (applyPlan plan v)` and `c` is usable
+  there. Tooth: `Compatible := True` breaks it.
+- `compatible_of_local`: a repair that moves only its own fact's cell is compatible with a candidate
+  none of whose other requirements is about that cell.
+- The clash (Astra, `ASTRA-EVAL` line 27), on `pinWorld` (cells `Bool`, a pin `Nat × Nat`, fact
+  `(cell, n)` = "the pin is `n`"): `clash` needs `(false, 0)` and `(false, 1)`. `clash_unsat`: no view
+  makes it usable; `clash_naive`: the plan `[pin false := 0, pin false := 1]` covers both dead supports
+  and the candidate stays unusable; `clash_refused`: `pin false := 0` is not `Compatible` (it retires
+  `(false, 1)` where it held). `apart` (`(false, 0)`, `(true, 1)`): `apart_repaired`, the two local
+  repairs make it usable, via `repair_sound` and `compatible_of_local`.
+
+`repair_of_contextual` (`Integrity`) does not want the condition: its REPAIR is withdrawal plus
+fillability, not a plan of steps, so the record lives here rather than beside it.
+
 ## 4. B4′ for the runner
 
 `Advance.advance : Slot → V → order → Option Cand → Except Refusal Cand`, `Integrity.transition`:
