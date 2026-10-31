@@ -53,6 +53,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | The cost semantics' `fix` stage passes a raw record as `super` (Demand lane's option (a)), not elaborator flattening: the Leaf lane's `flatten_sound` already proves flattening is `≈b`-sound, so the cost of a layered object can be stated through its flattening without changing the elaborator or the semantics; the Demand lane generalizes `Sim`'s settled-substitution rule where needed. Layered objects get derivations through `flatten`; option (b) is refused because the elaborator's output is what Logic and Leaf prove about. | taken by Claude under standing approval, 2026-11-01 | `REPORT-DEMAND-20261101.md`, `REPORT-LEAF-20261101.md` |
 
+| Posting identity across machines is a digest of the posting's content plus the history it was made on, numbered by the receiving register (Ledger lane's option A): the same invoice posted identically on the same history by two machines is one posting, merging twice is harmless; a different history is a conflict | taken by Claude under standing approval, 2026-11-01 | `REPORT-LEDGER-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
