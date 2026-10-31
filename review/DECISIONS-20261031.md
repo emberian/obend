@@ -47,6 +47,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | `extendRecord` preserves typing up to `RowRefines`, not `sameType`: kept as stated in `step_preserves_typing` (Gemini, 2026-11-01). Dropping shadowed fields in `Ty.overlay` was refused: it breaks `overlay_instantiate` on open row templates, row congruence across recursive unfoldings, and the W25 shareability audit. If exact `sameType` is ever wanted, the route is a shareability premise on shadowed fields in `PartialTyping.extend`, not `overlay`. | decided 2026-11-01 | `review/GEMINI-CHECKPOINT-20261101b.md`; `REPORT-SOUND-20261101.md` §6 |
 
+| Accept 52 modules per checker edit for now; the half-measure (unexpose `Bidirectional`, its readers `import all`, `decide` fixtures to tier 2) is queued for the Build list, not taken, since an `elaborate` edit would still rebuild all 52 | taken by Claude under standing approval, 2026-11-01 | `REPORT-ONECHECKER-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |

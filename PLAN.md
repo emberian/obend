@@ -37,8 +37,8 @@ the build is the check. One stranger-usable artifact stays ahead of every platfo
 ## Gates before building further (Gemini's five, adopted 2026-11-01)
 
 1. Close the linear soundness holes and the receipt forgery (Sound lane, in progress).
-2. Retire `Check.infer` so `Bidirectional.checkAgainst` is the one executable checker, before C1 and C2 touch `Ty`/`Check`.
-3. Repair `fixLet`'s staging in `Equiv/Clairvoyant` (iterated approximants), connect CV to machine ticks through `Completeness`, prove `runBounded_mono` and delete `Judge.deepen`.
+2. **Done** (`REPORT-ONECHECKER-20261101.md`, `1e039ff..da7af0b`): `Check.infer` deleted; `checkAgainst` is the one checker; every fuel-checker theorem has a bidirectional counterpart or is named as retired with its deleted subject; a checker edit rebuilds 52 modules (was 112); the twenty-module gate stays open because Lean 4.35 writes `elaborate._unsafe_rec` into the `.olean`.
+3. In progress (Demand lane): the two-stage demand semantics for knots, the tick bound in its true form, a demand derivation as a cost certificate.
 4. Strip blanket `@[expose]` from Core first (Expose lane, in progress).
 5. The integration scenario at the end of this file as a compiled theorem before WS 5–10.
 
