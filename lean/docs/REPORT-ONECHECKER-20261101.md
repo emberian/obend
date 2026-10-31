@@ -51,3 +51,77 @@ Already on `checkAgainst` before this lane (step 3 of the brief needs nothing th
 `budget_*` (`Slot/Budget`), `Judge/Instances.judge_iff_check` (its `check` is the `Judge` class's
 method, not `Check.check`), `Elab/Gate` (front end admission, `obend check-core`, `run-core`,
 preview). `routes_agree` was retired by the equi-recursive migration (`89bd283`).
+
+## 2. The missing counterparts (`2aa048e`)
+
+- `Templates.Discharges.partialTyping_instantiate` (public): the template theorem on the typing
+  relation, by induction on the derivation. A derivation under rigid bounds is one at every
+  discharging instance, in the instantiated context, at the instantiated type, with the same uses.
+- `Core/Proofs/CheckerTransport` (new, tier 1):
+  - `checkAgainst_msubst`: `checked_msubst` then `annotated_complete`. The filled term is accepted at
+    `A` under prepared annotations, with no more uses (`UsesLE`).
+  - `Discharges.checked_instantiate` and `Discharges.checkAgainst_instantiate`: `check_instantiate`
+    over the checker. The instance is accepted at the instantiated type, with the same uses, under
+    re-prepared annotations.
+  - The template fixtures on the checker: `weight_template_checks`, `coloured_instance_checks` (by the
+    theorem), `self_as_bound_row_alias_checks`, `self_as_bound_row_rigid_refused_by_checker`.
+
+**Why prepared annotations rather than the template's annotations instantiated alongside** (decided by
+the coordinator). `infer` only asked `agree` yes or no and kept its own synthesized type, so the
+template's instantiated annotations stayed valid. The bidirectional checker's `ascribe` takes an
+annotation's type when it agrees with the synthesized one and keeps its own otherwise, and the choice
+drives the `whnf` heads and row lookups downstream. A rigid `Self` changes that branch under
+instantiation: `variable Self` and its bound row disagree in the template (rigid, never an alias), and
+the instance row and the instantiated bound may agree. So the instance run can take a branch the
+template run never took, and no theorem of the form "the instantiated annotations are accepted"
+follows from the template run. Acceptance under re-prepared annotations does follow, for every
+instance. The module docstring records this.
+
+## 3. Consumers moved (`268806e`)
+
+- `Spec/FrontEnd.checkTemplate` was the last executable consumer. It now runs
+  `Elab.Gate.admitSource` (preparation, then `checkAgainst` within the request's `checkWork`) for the
+  same three named refusals (`super-rigid`, `self-rigid`, `template-typing`). Its docstring cites
+  `Discharges.checked_instantiate`.
+- `Core/Packet` keeps decoding, `typeJson`, `RefusalKind` and `relaxQuantities`. Its dead check-based
+  receipt functions are deleted. The refusal-kind teeth are on `Gate.refusalKind`
+  (`refusal_kind_starved_fuel` became `refusal_kind_starved_work`).
+- Already on `checkAgainst` before this lane: the slot judge, the budget judge, `judge_iff_check` and
+  the gate (§1). The slot judge has no annotation-directed route left.
+- Controls: the cohort runner's output is byte-identical (30/30, 71/71, 161/0); `obend check` output
+  is identical on all 117 sources under `tests/obend-source`; receipts 32/32, workspaces 30/30,
+  walkthrough 26.
+
+## 4. The fuel checker deleted (`90e3a25`)
+
+`Core/Check` keeps the specification: `PartialTyping`/`FieldsTyping`/`ArmsTyping`, `Checked`,
+`Inferred`/`InferredFields` (the checker's result types), the quantity rules (`argumentAllowed`,
+`caseAllowed`, `caseQuantity`, …), `sameType` and the row machinery. Deleted with the fuel checker:
+`infer`, `inferFields`, `inferArms`, `check`, `InferredArms`, `variantRow`, `agree` and its lemmas
+(its nominal shareability guard; the checker converts by `sameType`), `CheckedExtension`/`checkExtension`,
+`infer_zero`.
+
+**Theorems whose statement went with their subject, and the counterpart of each:**
+
+| deleted | counterpart |
+|---|---|
+| `check_msubst`, `infer_msubst` | `CheckerTransport.checkAgainst_msubst`; `TypedSubstitution.checked_msubst`; `Core4.calculus_typed_msubst` |
+| `check_instantiate`, `infer_instantiate`, `inferFields_tail` | `CheckerTransport.Discharges.checkAgainst_instantiate` / `checked_instantiate`; `Templates.Discharges.partialTyping_instantiate`, `fieldsTyping_tail` |
+| `check_mono`, `infer_mono` | the judge's grant monotonicity (`Judge.Instances.bidirectional.mono`); `checkAgainst` has no fuel |
+| `infer_transport` | `TypedSubstitution.partialTyping_closed_transport` |
+| `check_runBounded_no_refusal` | `Preservation.checked_runBounded_no_refusal` |
+| `infer_refuses_hole`, `check_refuses_hole` | `Bidirectional.elaborate_refuses_hole` |
+| `agree_instantiate`, `variantRow_instantiate`, `agree_never_manufactures_shareability` | none: their subjects (`agree`, `variantRow`) were the fuel checker's own. Shareability is now kept by agreement itself (`CheckTeeth.canonical_agreement_keeps_shareability`) |
+| `weight_template_type`/`_accepted`, `coloured_instance_accepted`, `self_as_bound_row_*` | `CheckerTransport.weight_template_checks`, `coloured_instance_checks`, `self_as_bound_row_alias_checks`, `self_as_bound_row_rigid_refused_by_checker` |
+| `CheckCompletenessObstruction`: `unannotatedConstant_refused`, `checked_lambda_without_annotations_never_checks`, `checked_does_not_imply_eventual_success`, `annotatedConstant_accepted`, `aliasBranch_accepted`, `correct_lambda_annotation_now_checks`, `emptyCase_refused`, `annotated_empty_eliminator_still_incomplete`, `duplicateCase_refused` | `checked_lambda_without_annotations_synthesis_refused`, `checked_does_not_imply_synthesis`, `annotatedConstant_synthesizes` (new), `aliasBranch_checks`, `emptyCase_checks`, `duplicateCase_names_duplicate_labels` (existing). The alias-branch and empty-eliminator obstructions do not exist for this checker |
+| `LinearTeeth.*_refused_by_check` (two) | the same file's bidirectional teeth, which were already there |
+
+Teeth: `CheckTeeth`'s 55 runs are on the checker in synthesis (`synth`, the top-level
+`Bidirectional.infer`). The extension teeth check at the family's function type. The symbolic
+future-row teeth use a `future_reduce` simp script. `SubstitutionTeeth`'s three corners are on
+`checkAgainst`; its fuel corner is now the slot judge's work grant (`fuel_tooth`). On the Mac, every
+`decide +kernel` tooth in `CheckTeeth` elaborated against the bidirectional checker with no change of
+verdict before the build was moved to the box.
+
+**Builds.** Tier 1 was built green on dregg-build2 (281 jobs) at `90e3a25`. Per Ember's call, tier 1
+green is the bar for pushing. Tier 2 runs on the box afterwards; its status is in §5.

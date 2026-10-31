@@ -25,7 +25,6 @@ namespace Obend.Spec.Proofs.TermWire
 open Lean
 open Obend.Spec.Types Obend.Spec.Annotated Obend.Spec.FrontEnd
 open Obend.Core.Packet (DecodedPacket decodePacket decodeTerm decodePrimitive jsonNat termNestingCapacity requireSome)
-open Obend.Core.Check (check)
 set_option autoImplicit false
 
 /-- A rendered object answers each of its (distinct) keys with the value it was built with. -/
