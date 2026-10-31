@@ -44,8 +44,12 @@ and `python3 tests/run-receipts.py` the receipt tests. The `Journal` library and
 - `tests/` — `run-obend-source.py` runs Mini's cohorts (`tests/obend-source/`: LTUO probes, tutorial,
   preview cohort) through the built `obend`; a differing outcome is a port defect.
 
-**The module discipline.** A definitional module is `module` + `@[expose] public section`: its
-bodies are its interface, so a change there rebuilds every importer. A proof module is `module`
+**The module discipline.** A definitional module is `module` + `public section`, and a definition
+carries `@[expose]` exactly when another module's `rfl`, `decide`, `simp`/`unfold` or kernel
+reduction needs its body (an exposed body is interface: editing it rebuilds every importer; editing
+an unexposed body rebuilds the module alone). Tier-2 teeth and runner examples that evaluate private
+bodies `import all` the module instead. A derived `DecidableEq` that evaluation compares through is
+`deriving @[expose] DecidableEq`. A proof module is `module`
 with selective `public`: a theorem is public only if another module cites it, and a private
 theorem's proof edit rebuilds nothing downstream. Imports are `public import` throughout, since a
 public statement may mention anything its module imports.
