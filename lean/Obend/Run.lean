@@ -38,6 +38,10 @@ accepted history across replanning, revocation and lost replies.
   escalated dispatch through the joint transition at stitch time (the runner's `crun`, then the
   ledger's commit), atomically: one refusal leaves main unchanged and every refusal is a conflict kept
   as a section; a ticket double-spent across fork and main names the winner and the epoch. `Obend.Run.ForkExample`, Bob offline.
+- `Obend.Run.Reflect`: mirrors are capabilities. A reflective request is an operation whose
+  admission requires the world's grant to its principal over its target at its depth, admitted by
+  the dispatch guard every action passes (`answer_admitted`, `forged_descriptor_refused`,
+  `metadata_grant_cannot_quote`, `derived_admitted`, `runner_reflect_admitted`).
 - `Obend.Run.Negotiation`: the stranger's example (revocation, a slot's replan, a lost reply), the
   fixture `interpret` delivers and the runner refuses, and the durable-spending ticket.
 -/
@@ -62,3 +66,4 @@ public import Obend.Run.Proofs.Durable
 public import Obend.Run.DurableExample
 public import Obend.Run.Fork
 public import Obend.Run.ForkExample
+public import Obend.Run.Reflect
