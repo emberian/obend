@@ -11,7 +11,8 @@ protocol of the activity to depth `n`. What a Plan requires, spends and establis
 Plans the DEPLOYMENT supplies (`Core4` Plans carry no authority of their own); the runner enforces it
 at dispatch exactly as for any protocol.
 
-Theorems: `Obend.Run.Proofs.Core4`.
+Theorems: `Obend.Run.Proofs.Core4`. The gaps this leaves (depth, ticks, response typing, choice points)
+are closed by the adapter over it, `Obend.Run.Adapter`.
 -/
 public import Obend.Run.Runner
 public import Obend.Core.Data
@@ -94,6 +95,9 @@ inductive Stop where
   | unresumable
   /-- the unfolding's depth -/
   | depth
+  /-- a yielded Plan that is a choice among these alternatives, none chosen at its position yet
+  (the adapter's frontier, `Obend.Run.Adapter`) -/
+  | choice (alts : List Data)
 
 /-- One turn of the machine: a yield with its extracted Plan and the state to resume, or a stop. -/
 inductive Turn where

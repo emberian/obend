@@ -148,7 +148,7 @@ theorem permanent_blocked_forever {V : Type} (S : Slot Fact Cand) (holdsAt : V �
   have hf' : holdsAt v' f = false := hperm v v' hv' hdead
   have hmem : f ∈ S.dead (holdsAt v') c := (mem_dead_iff S _ c f).2 ⟨hf, hf'⟩
   unfold Slot.read
-  simp only [hj, if_true]
+  simp only [hj, ite_true]
   cases hd : S.dead (holdsAt v') c with
   | nil => rw [hd] at hmem; cases hmem
   | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩

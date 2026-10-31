@@ -15,6 +15,10 @@ accepted history across replanning, revocation and lost replies.
 - `Obend.Run.Core4`, `Obend.Run.Proofs.Core4`: an emitted Core4 activity as the runner's protocol;
   `run_is_trace`, `trace_is_run` (its instance at a real program is the legacy leaf
   `Obend.Run.Core4Example`).
+- `Obend.Run.Adapter`, `Obend.Run.Proofs.Adapter`: the Core4 adapter completed: replies typed
+  against the declared response type, depth and ticks extended mid-run by re-basing the same log,
+  choice points in emitted Plans decided as slots and rechecked at dispatch (`areachable_inv`,
+  `plain_trace`; fixtures in `Obend.Run.Core4Example`).
 - `Obend.Run.Control`, `Obend.Run.Proofs.Control`: per-slot selection control (authenticated
   principals in a chooser office, decision revisions, tenure across an office change, the presets
   first-usable / incumbent-first / chooser-required with their choice laws, honest
@@ -29,6 +33,8 @@ public import Obend.Run.Proofs.Interpret
 public import Obend.Run.Negotiation
 public import Obend.Run.Core4
 public import Obend.Run.Proofs.Core4
+public import Obend.Run.Adapter
+public import Obend.Run.Proofs.Adapter
 public import Obend.Run.Control
 public import Obend.Run.Proofs.Control
 public import Obend.Run.ControlExample
