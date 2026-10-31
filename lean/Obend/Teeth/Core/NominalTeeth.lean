@@ -2,9 +2,11 @@ module
 /-
 # Obend.Teeth.Core.NominalTeeth — the higher-order Kilo-to-Mile crossing, refused by name
 
-The checker at work on `Obend.Core.Nominal`'s fixtures: `λf. f` annotated over `Kilo → Nat` is
-refused at `(Kilo → Nat) → (Mile → Nat)` and the refusal names Mile expected and Kilo given; the
-same term is accepted within the kind. (Evaluated here, in an importer: the kernel reduces the
+The checker at work on `Obend.Core.Nominal`'s fixtures: a function over Kilos used where a function
+over Miles is expected is refused, and the refusal names Mile expected and Kilo given; `λf. f` over
+Kilo functions is accepted within the kind; anonymous records are neither kind; an extension that
+writes another kind's brand is that kind. (The general statements are `Obend.Core.Nominal`'s
+`kinded_refuses`, `kinds_never_agree` and `kinded_domain_refuses`.) (Evaluated here, in an importer: the kernel reduces the
 checker on these fixtures from the imported, exposed bodies.)
 -/
 public import Obend.Core.Nominal
@@ -21,15 +23,20 @@ open Obend.Core.Ty Obend.Core.Check
 set_option autoImplicit false
 
 /-- What a checker run refused, if it refused. -/
-@[expose] def refusalOf {α : Type} : Except Obend.Core.Bidirectional.CheckRefusal α → Option Obend.Core.Bidirectional.CheckRefusal
+def refusalOf {α : Type} : Except Obend.Core.Bidirectional.CheckRefusal α → Option Obend.Core.Bidirectional.CheckRefusal
   | .error e => some e
   | .ok _ => none
 
-/-- **The tooth**: the checker refuses the higher-order crossing, and the refusal names the two kinds
-at the root, Mile expected and Kilo given. -/
+/-- A function over Kilos held as a hypothesis, `f : Kilo → Nat`. -/
+def kiloFunction : Context := [⟨.arrow .reusable .unrestricted kilo .natural, .unrestricted⟩]
+
+/-- **The tooth**: `f : Kilo → Nat` used where a `Mile → Nat` is expected, the higher-order
+Kilo-to-Mile crossing, is refused by the checker, and the refusal names the two kinds, Mile expected
+and Kilo given. (The two kinds' layouts are equal.) -/
 theorem crossing_refused_by_name :
-    ((refusalOf (Obend.Core.Bidirectional.checkAgainst crossing [] crossingType)).bind crossedKinds).map
-      (·.2) = some ("Units.Mile", "Units.Kilo") := by
+    ((refusalOf (Obend.Core.Bidirectional.checkAgainst ⟨.bound 0, fun _ => none, {}⟩ kiloFunction
+      (.arrow .reusable .unrestricted mile .natural))).bind crossedKinds).map (·.2) =
+      some ("Units.Mile", "Units.Kilo") := by
   decide +kernel
 
 /-- The same term at `(Kilo → Nat) → (Kilo → Nat)` is accepted. -/
