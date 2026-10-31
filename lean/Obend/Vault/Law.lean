@@ -8,9 +8,12 @@ fragment (`Obend.Spec.Law`: comparisons of `new.FIELD` and `request.FACT`, `mono
 measures and its frontmatter's scalar fields), every field a natural, every field any law reads
 present (at 0 where the page does not have it).
 
-A folder's `_kind.md` is the folder's KIND: its law lines are laws of every page in the folder, and
-in every folder below it. The laws a write is judged by are the page's own, then its folder's kind's,
-then each enclosing folder's (the C4 precedence list of a chain is the chain), each compiled by
+A folder's `_kind.md` is a KIND (the kind cell, `Obend.Kind`): its law lines are laws of every page
+born under it, and its `key: value` lines the fields such a page starts with. A page carries its
+kind's identity in its frontmatter (`kind: K`, written by `obend create --from K`); a page that names
+none is an instance of its folder's kind and each enclosing folder's. The laws a write is judged by
+are the page's own, then its kind's, then the kind's ancestors' (`Obend.Vault.kindChain`; the C4
+precedence list of a chain is the chain), each compiled by
 `Obend.Spec.LawCompile.compile` for the page's state type and combined by `Obend.Law.effective`: one
 closed Core4 term, run by Core4's reference step (`Obend.Law.run`). A refusal names the law that
 refused, the page or kind that wrote it, and (`suggest`) the change of one field that would pass, or

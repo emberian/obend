@@ -194,6 +194,8 @@ import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
 import Obend.Fold
 import Obend.Intention
+import Obend.Kind
+import Obend.Kind.Proofs
 import Obend.Judge
 import Obend.Judge.Certified
 import Obend.Judge.Class

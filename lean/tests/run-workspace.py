@@ -15,6 +15,10 @@ Two workspaces under tests/obend-source/, each a `dregg.objective-bend.workspace
     notes/garden (the notebook that uses all three); kit/pdf and kit/html, two independent
     implementations of Export for Page: competing (refused), resolved by a package extending both,
     and the more specific one selected when only one is in the closure.
+  * kinds/: kinds are nominal. Two record kinds with the same fields, a protocol implemented for each:
+    a call reaches its instance's kind's implementation; an instance that names no kind is refused,
+    and so is a Kilo passed where a Mile is declared.
+  * builtin/: a program names the built-in `Syntax` sum (Obend.Core.Code.syntaxSource) as a type.
 
 usage: python3 tests/run-workspace.py [OBEND_BINARY]      (from lean/, after `lake build obend`)
 exit 0 when every check holds, 1 otherwise; a summary line last.
@@ -131,6 +135,39 @@ j = judge(ws, {"cited": 120, "sections": 1}, {"cited": 120, "sections": 10})
 check("the reviewer's law narrows the report's", j.get("status") == "refused" and j.get("by") == "lab/review law reviewed", repr(j))
 j = judge(ws, {"cited": 120, "sections": 1}, {"cited": 120, "sections": 2})
 check("a write every ancestor admits", j.get("status") == "admitted", repr(j))
+
+# ---------------------------------------------------------------- kinds are nominal
+
+K = os.path.join(SOURCE, "kinds")
+
+
+def run_file(path, entry):
+    code, out = obend("run", path, entry)
+    return out.splitlines()
+
+
+nominal = os.path.join(K, "Nominal.obend")
+for entry, value, what in [("miles", "1609", "a Mile reaches Mile's implementation"),
+                           ("kilometres", "1000", "a Kilo with the same fields reaches Kilo's"),
+                           ("passed", "1609", "through a parameter declared Mile"),
+                           ("bound", "2000", "through a let annotated Kilo")]:
+    got = run_file(nominal, entry)
+    check("kinds: " + what, got[:3] == ["status: finished", "type: Nat", "result: " + value], repr(got))
+got = run_file(os.path.join(K, "Unnamed.obend"), "unnamed")
+check("kinds: an instance that names no kind is refused, never resolved by its fields",
+      len(got) > 2 and got[2].startswith("message: refused (unnamed-kind)"), repr(got))
+got = run_file(os.path.join(K, "Crossed.obend"), "crossed")
+check("kinds: a Kilo where a Mile is declared is refused",
+      len(got) > 2 and got[2].startswith("message: refused (kind-mismatch)"), repr(got))
+
+# ---------------------------------------------------------------- built-in types
+
+syn = os.path.join(SOURCE, "builtin", "SyntaxType.obend")
+got = run_file(syn, "seven")
+check("builtin: a program names Syntax, the quotation's sum",
+      got[:3] == ["status: finished", "type: variable 1", "result: node({tag: nat(7), children: nil({})})"], repr(got))
+got = run_file(syn, "readBack")
+check("builtin: a Syntax value is read back by case", got[:3] == ["status: finished", "type: Nat", "result: 7"], repr(got))
 
 print(f"WORKSPACES: {count - len(failures)}/{count} checks hold")
 sys.exit(1 if failures else 0)

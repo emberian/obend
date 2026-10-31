@@ -1,0 +1,16 @@
+edition ObjectiveBend 1
+# A Kilo passed where a Mile is declared is refused, though the two kinds have the same fields.
+record Mile:
+  n: Nat
+
+record Kilo:
+  n: Nat
+
+def kilo() -> Kilo:
+  {n: 1n}
+
+def through(m: Mile) -> Nat:
+  m.n
+
+def crossed() -> Nat:
+  through(kilo())

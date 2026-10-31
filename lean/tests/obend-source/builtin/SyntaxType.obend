@@ -1,0 +1,40 @@
+edition ObjectiveBend 1
+# The built-in `Syntax` sum of a quotation is a type a program may name: here the quotation of the
+# natural 7 (a `node` tagged `nat 7` with no children), and its tag read back.
+def seven() -> Syntax:
+  Syntax.node({tag: SyntaxTag.nat(7n), children: SyntaxList.nil()})
+
+def natTag(t: SyntaxTag) -> Nat:
+  match t:
+    case nat(n): n
+    case hole(h): 0n
+    case app(_): 0n
+    case mix(_): 0n
+    case fix(_): 0n
+    case specification(_): 0n
+    case prototype(_): 0n
+    case reflect(_): 0n
+    case metadata(_): 0n
+    case project(_): 0n
+    case ifBool(_): 0n
+    case perform(_): 0n
+    case done(_): 0n
+    case boolean(_): 0n
+    case label(_): 0n
+    case binary(_): 0n
+    case extend(_): 0n
+    case record(_): 0n
+    case ifZero(_): 0n
+    case case(_): 0n
+    case get(_): 0n
+    case inject(_): 0n
+    case field(_): 0n
+
+def tagOf(s: Syntax) -> Nat:
+  match s:
+    case var(n): n
+    case bind(_): 0n
+    case node(r): natTag(r.tag)
+
+def readBack() -> Nat:
+  tagOf(seven())

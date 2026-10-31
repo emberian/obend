@@ -1,0 +1,19 @@
+edition ObjectiveBend 1
+# A record literal names no kind: with two kinds of its fields implementing the protocol, the call
+# is refused, never resolved by structure.
+record Mile:
+  n: Nat
+
+record Kilo:
+  n: Nat
+
+protocol Metres for Mile:
+  def metres(self: Mile) -> Nat:
+    self.n * 1609n
+
+protocol Metres for Kilo:
+  def metres(self: Kilo) -> Nat:
+    self.n * 1000n
+
+def unnamed() -> Nat:
+  Metres.metres({n: 1n})

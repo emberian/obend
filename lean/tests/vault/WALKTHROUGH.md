@@ -202,6 +202,40 @@ journal/_kind: new page (v1)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
+A kind is a page of its own, with its own laws and the fields a page starts with, and a page born
+under it carries its identity: `kind:` in its frontmatter names the kind, wherever the page lives,
+and the kind's laws judge every write to it, the kind first among its ancestors.
+
+```sh
+cd vault && mkdir recipes
+printf -- '---\nlaw serves: not (new.servings == 0)\nservings: 2\n---\nA recipe serves someone.\n' > recipes/_kind.md
+obend open && obend create --from recipes recipes/Soup && cat recipes/Soup.md
+```
+
+```text
+recipes/_kind: new page (v1)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
+created recipes/Soup (kind recipes/_kind)
+---
+kind: recipes/_kind
+servings: 2
+---
+```
+
+A page outside the folder that names the kind is its instance too; one that serves nobody is refused
+by the kind's law, by name:
+
+```sh
+cd vault
+printf -- '---\nkind: recipes\nservings: 0\n---\nToast.\n' > Toast.md
+obend open
+```
+
+```text
+Toast: not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
+```
+
 ## 3. A member
 
 Invite someone (a person, or an agent) as a member who may post to Alpha. A member's post never

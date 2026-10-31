@@ -23,6 +23,9 @@ module
         keep one candidate of a section; the owner, or a member granted select on PAGE.
     obend recite PAGE [--as NAME]
         re-justify PAGE's cites that are behind against their sources' current versions.
+    obend create --from KIND PAGE
+        a new page born under KIND (a kind page `folder/_kind`, or the folder): it names KIND in its
+        frontmatter, starts with KIND's fields, and its birth is judged by KIND's laws.
 
 Every command but `member` opens the vault first (an edit on disk is the owner's write, judged by
 the page's laws), so no command overwrites a file the person changed. `-C DIR` before or after a
@@ -201,6 +204,21 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     | .ok (s', n) => IO.println ("re-cited " ++ toString n ++ " cite(s) of " ++ page); finish dir s' V
                      return 0
     | .error e => fail ("refused: " ++ e)
+  | ["create", "--from", k, page] => some do
+    let (s, _) ← openDir dir false
+    match createFrom s k page with
+    | .error e => fail e
+    | .ok text =>
+      writeFiles dir [(page, text)]
+      let (s', _) ← openDir dir false
+      match s'.page? page with
+      | some p =>
+        if p.history.isEmpty then
+          fail (page ++ ": not born: " ++ p.note.getD "")
+        else
+          IO.println ("created " ++ page ++ " (kind " ++ kindName k ++ ")")
+          return 0
+      | none => fail (page ++ ": not born")
   | _ => none
 
 /-- `obend` vault commands: `-C DIR` anywhere, `open DIR`. -/

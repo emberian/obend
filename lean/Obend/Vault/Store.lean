@@ -93,16 +93,37 @@ def baseName (name : String) : String := ((name.splitOn "/").getLast?).getD name
 /-- The folder of a page (`""` at the vault's top). -/
 def folderOf (name : String) : String := "/".intercalate (name.splitOn "/").dropLast
 
-/-- A page is a kind when it is a folder's `_kind`. -/
+/-- A page is a kind when it is a folder's `_kind`: a kind cell, with its own law lines, and the
+initial fields of the pages born under it. -/
 def isKind (name : String) : Bool := baseName name == "_kind"
 
-/-- The kinds a page is an instance of, innermost first: its folder's `_kind`, then each enclosing
+/-- The folder kinds of a page, innermost first: its folder's `_kind`, then each enclosing
 folder's. A kind page itself is an instance of none. -/
 def kindsOf (name : String) : List String :=
   if isKind name then [] else
   let parts := (name.splitOn "/").dropLast
   ((List.range (parts.length + 1)).reverse.map fun k =>
     "/".intercalate (parts.take k ++ ["_kind"]))
+
+/-- A kind's own ancestors: the kinds of the folders enclosing its folder. -/
+def kindParents (k : String) : List String :=
+  if folderOf k == "" then [] else kindsOf (folderOf k)
+
+/-- The kind a page names in its frontmatter (`kind: K`): the identity it carries. -/
+def kindLine (src : String) : Option String :=
+  ((frontFields src).find? (·.1 == "kind")).map (·.2)
+
+/-- A kind named by a person: the kind page `K` itself, or a folder `K`'s `_kind`. -/
+def kindName (k : String) : String := if isKind k then k else (if k == "" then "_kind" else k ++ "/_kind")
+
+/-- **A page's kinds**, its kind first: the kind it names (`kind: K`, carried by every page born
+under `K`), then that kind's ancestors; a page that names none is an instance of its folders'
+kinds. A kind page is an instance of none. -/
+def kindChain (name : String) (src : String) : List String :=
+  if isKind name then [] else
+  match kindLine src with
+  | some k => kindName k :: kindParents (kindName k)
+  | none => kindsOf name
 
 /-- A page's id: a hash of its name (so two replicas name a page alike), the first not taken. -/
 def pageIdFor (H : Hash) (taken : PageId → Bool) (name : String) : PageId :=
@@ -179,15 +200,83 @@ def lawsIn (pageName : String) (G : Graph) : Except String (List (String × LawE
     | .ok e => .ok (pageName ++ ": " ++ n, e, txt)
     | .error msg => .error (pageName ++ ": law " ++ n ++ ": " ++ msg)
 
-/-- The laws a write of `pageName` (at version `G`) is judged by: its own, then each kind's,
-innermost first. -/
+/-- The laws of each kind on the list, in order; a kind the page names explicitly (`named`) must
+exist, a folder's kind may be absent. -/
+def kindLaws (es : List Entry) (named : Option String) : List String → Except String (List (String × LawExpr × String))
+  | [] => .ok []
+  | k :: ks =>
+    match es.find? (·.name == k) with
+    | some e =>
+      match lawsIn k e.graph, kindLaws es named ks with
+      | .ok ls, .ok rest => .ok (ls ++ rest)
+      | .error m, _ => .error m
+      | _, .error m => .error m
+    | none =>
+      if named == some k then .error ("refused (unknown-kind): no kind page " ++ k)
+      else kindLaws es named ks
+
+/-- The laws a write of `pageName` (at version `G`) is judged by: its own, then each of its kinds'
+(`kindChain`), its kind first. -/
 def lawsFor (es : List Entry) (pageName : String) (G : Graph) : Except String (List (String × LawExpr × String)) := do
   let own ← lawsIn pageName G
-  let kinds ← (kindsOf pageName).mapM fun k =>
-    match es.find? (·.name == k) with
-    | some e => lawsIn k e.graph
-    | none => .ok []
-  return own ++ kinds.flatten
+  let src := settled G
+  let kinds ← kindLaws es ((kindLine src).map kindName) (kindChain pageName src)
+  return own ++ kinds
+
+theorem kindLaws_mem {es : List Entry} {named : Option String} :
+    ∀ {chain : List String} {ls : List (String × LawExpr × String)}, kindLaws es named chain = .ok ls →
+      ∀ k ∈ chain, ∀ e, es.find? (·.name == k) = some e → ∀ kl, lawsIn k e.graph = .ok kl → ∀ x ∈ kl, x ∈ ls := by
+  intro chain
+  induction chain with
+  | nil => intro ls _ k hk; cases hk
+  | cons c cs ih =>
+    intro ls h k hk e he kl hkl x hx
+    simp only [kindLaws] at h
+    split at h
+    · rename_i e' he'
+      split at h
+      · rename_i a b ha hb
+        cases h
+        rcases List.mem_cons.1 hk with rfl | hk
+        · rw [he] at he'; cases he'; rw [hkl] at ha; cases ha; exact List.mem_append_left _ hx
+        · exact List.mem_append_right _ (ih hb k hk e he kl hkl x hx)
+      · cases h
+      · cases h
+    · rename_i hn
+      split at h
+      · cases h
+      · rcases List.mem_cons.1 hk with rfl | hk
+        · rw [he] at hn; cases hn
+        · exact ih h k hk e he kl hkl x hx
+
+/-- **A kind's laws are an ancestor's**: every law of every kind of a page (its kind first, then the
+kind's ancestors, `kindChain`) is among the laws its writes are judged by. -/
+theorem lawsFor_kinds {es : List Entry} {name : String} {G : Graph} {laws : List (String × LawExpr × String)}
+    (h : lawsFor es name G = .ok laws) :
+    ∀ k ∈ kindChain name (settled G), ∀ e, es.find? (·.name == k) = some e →
+      ∀ kl, lawsIn k e.graph = .ok kl → ∀ x ∈ kl, x ∈ laws := by
+  unfold lawsFor at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  · rename_i own _
+    split at h
+    · cases h
+    · rename_i kinds hk
+      cases h
+      intro k hkc e he kl hkl x hx
+      exact List.mem_append_right _ (kindLaws_mem hk k hkc e he kl hkl x hx)
+
+/-- **What a vault write is admitted by, its kinds' laws hold of** (`judge_admits`): a write judged
+by a page's laws and admitted satisfies, by the fragment's meaning, every law of every kind of the
+page, its own kind first. -/
+theorem kind_law_inherited {es : List Entry} {name : String} {G : Graph} {laws : List (String × LawExpr × String)}
+    (hl : lawsFor es name G = .ok laws) {S : Obend.Core.Ty.Ty} {o n : Obend.Core.Data.Data} {facts : Facts} {who : String} {k : Occ}
+    (hj : judge S name (laws.map fun x => (x.1, x.2.1)) o n (requestOf who k facts) = .admitted) :
+    ∀ kk ∈ kindChain name (settled G), ∀ e, es.find? (·.name == kk) = some e →
+      ∀ kl, lawsIn kk e.graph = .ok kl → ∀ x ∈ kl, x.2.1.denote facts (k.old o n) n = true := by
+  intro kk hkk e he kl hkl x hx
+  exact judge_admits hj (x.1, x.2.1) (List.mem_map.2 ⟨x, lawsFor_kinds hl kk hkk e he kl hkl x hx, rfl⟩)
 
 /-- What a write leaves of a page. -/
 structure Change where
@@ -744,6 +833,21 @@ theorem post_needs_grant (H : Hash) (s : Store) (m : Member) (page text : String
 #tooth mergePage_pushout by mutation mergePage := fun A _ => some A
 #tooth select_needs_grant by mutation Actor.may := fun _ _ _ => true
 #tooth post_needs_grant by mutation Actor.may := fun _ _ _ => true
+
+/-! ### Birth under a kind -/
+
+/-- **`create --from K PAGE`**: the text of a page born under kind `K`: its frontmatter names `K`
+(the kind's identity, which every page born under it carries) and starts with `K`'s fields (its
+frontmatter's `key: value` lines other than laws and its own kind line); its body is empty. The
+birth is then an ordinary write, judged by the page's kinds' laws, `K`'s first. -/
+def createFrom (s : Store) (k page : String) : Except String String := do
+  let kn := kindName k
+  if (s.page? page).isSome then throw ("refused: " ++ page ++ " exists")
+  if isKind page then throw ("refused: " ++ page ++ " is a kind page; a kind is not born under a kind")
+  let some kp := s.page? kn | throw ("refused (unknown-kind): no kind page " ++ kn)
+  let some G := kp.current | throw ("refused (unknown-kind): " ++ kn ++ " has no version")
+  let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind"
+  return "---\nkind: " ++ kn ++ "\n" ++ String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++ "---\n"
 
 /-! ### Re-citing -/
 

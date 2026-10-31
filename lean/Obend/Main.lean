@@ -38,7 +38,7 @@ Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
 
     obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN…
           | member list | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME]
-          | recite PAGE [--as NAME]          (`-C DIR` runs any of them in DIR)
+          | recite PAGE [--as NAME] | create --from KIND PAGE   (`-C DIR` runs any of them in DIR)
         a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`.
 
 Receipt commands (lane Judge, 2026-10-31; `Obend.Receipt.Cli`):
@@ -84,7 +84,8 @@ def usage : String :=
   "             | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition] | preview REQUEST NEW_DIR | batch JOBS OUT\n" ++
   "       obend check-core FILE.json | obend run-core FILE.json [--ticks N] [--heap N] [--stack N]\n" ++
   "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
-  "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]   [-C DIR]\n" ++
+  "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]\n" ++
+  "             | create --from KIND PAGE   [-C DIR]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] | obend lrat CNF PROOF\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 

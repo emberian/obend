@@ -23,6 +23,7 @@ public import Obend.Spec.Types
 public import Obend.Spec.Annotated
 public import Obend.Spec.C4
 public import Obend.Spec.Contract
+public import Obend.Core.Code
 @[expose] public section
 namespace Obend.Spec.Elaborate
 open Lean (Json toJson)
@@ -35,6 +36,8 @@ structure Binding where
   name : String
   ty : Option PTy
   quantity : String
+  /-- the declared kind (a record declaration's key) the binder's type names, for dispatch by kind -/
+  kind : Option String
   deriving Inhabited
 
 /-- A package of a workspace closure (`Obend.Spec.Ecosystem`): its intention name, its modules'
@@ -164,12 +167,16 @@ def specClaimsName : String := "SpecClaims"
 /-- The built-in module: types every module resolves by bare name; no module may declare
 them, and it has no definitions (nothing of it is emitted). Not a legal source module name. -/
 def builtinModuleName : String := "$builtin"
-def builtinTypeNames : List String := [specMetaName, specClaimsName]
+/-- The built-in `Syntax` sums of a quotation (`Obend.Core.Code.syntaxSource`): a program may name
+`Syntax`, `SyntaxList` and `SyntaxTag` as types. -/
+def syntaxTypeNames : List String := ["Syntax", "SyntaxList", "SyntaxTag"]
+def builtinTypeNames : List String := [specMetaName, specClaimsName] ++ syntaxTypeNames
 def builtinSource : String :=
   "edition ObjectiveBend 1\n" ++
   "sum SpecClaims:\n  none: {}\n  claim: {name: String, status: String, rest: SpecClaims}\n\n" ++
   "sum SpecMeta:\n  declared: {name: String, interface: String, claims: SpecClaims}\n" ++
-  "  composed: {inherited: SpecMeta, wrapping: SpecMeta}\n  extension: {}\n"
+  "  composed: {inherited: SpecMeta, wrapping: SpecMeta}\n  extension: {}\n\n" ++
+  Obend.Core.Code.syntaxSource
 
 def lookupGlobal (c : Ctx) (name : String) (m : Module) : Option String :=
   let key := m.name ++ "." ++ name
@@ -278,6 +285,52 @@ def withTypes {α : Type} (bindings : List (String × PTy)) (k : M α) : M α :=
   return r
 
 /-! ## Packages and protocols -/
+
+/-! ## Kinds are nominal -/
+
+/-- The kind a source type names: the key of a record declaration (`Page`, `P.Page`), or none. -/
+def kindKey (c : Ctx) (text : String) (moduleName : String) : Option String :=
+  let name := trimStr text
+  let key := match qualifiedName name with
+    | some (alias, n) => ((moduleNamed c moduleName).bind (importOf · alias)).map (· ++ "." ++ n)
+    | none => if isIdent name then some (moduleName ++ "." ++ name) else none
+  key.bind fun k => if (c.records.find? (·.1 == k)).isSome then some k else none
+
+/-- The global declaration a callee names (`f`, `A.f`). -/
+def calleeDecl (c : Ctx) (callee : Expr) (env : List Binding) (m : Module) : Option (Decl × Module) :=
+  match callee with
+  | .var n => if env.any (·.name == n) then none else (lookupGlobal c n m).bind (declOf c)
+  | .member (.var a) n =>
+    if env.any (·.name == a) then none else (importOf m a).bind fun mod => declOf c (mod ++ "." ++ n)
+  | _ => none
+
+/-- The declared kind of an instance expression: a binder's declared kind, a call's declared result
+kind, a `fix` of a specification's target kind, through `let` and both branches of an `if`. A record
+literal names no kind: its kind is unknown, and dispatch falls back to its structure. -/
+def kindOf (c : Ctx) : Nat → Expr → List Binding → Module → Option String
+  | 0, _, _, _ => none
+  | fuel + 1, e, env, m =>
+    match e with
+    | .var n => match env.find? (·.name == n) with
+      | some b => b.kind
+      | none => none
+    | .call callee _ => match calleeDecl c callee env m with
+      | some (.function _ _ resultType _, dm) => kindKey c resultType dm.name
+      | _ => none
+    | .fix spec _ => match calleeDecl c spec env m with
+      | some (.spec s, dm) => kindKey c s.targetType dm.name
+      | _ => none
+    | .letE name type value body =>
+      let k := if type == "_" then kindOf c fuel value env m else kindKey c type m.name
+      kindOf c fuel body (⟨name, none, "unrestricted", k⟩ :: env) m
+    | .ite _ a b =>
+      let ka := kindOf c fuel a env m
+      if ka == kindOf c fuel b env m then ka else none
+    | _ => none
+
+/-- A `let` binder's kind: its annotation's, or its value's. -/
+def letKind (c : Ctx) (type : String) (value : Expr) (env : List Binding) (m : Module) : Option String :=
+  if type == "_" then kindOf c 64 value env m else kindKey c type m.name
 
 /-- The package a module belongs to: the intention before `::` of its qualified name, `""` for a
 module of a single package. -/
@@ -503,7 +556,7 @@ def globalType (c : Ctx) : Nat → String → M (Option PTy)
         if resultType == "_" then
           let mut env : List Binding := []
           for p in params do
-            env := ⟨p.name, ← sourceType c fuel p.type m.name [], ← quantityOf p⟩ :: env
+            env := ⟨p.name, ← sourceType c fuel p.type m.name [], ← quantityOf p, kindKey c p.type m.name⟩ :: env
           result ← synthBody c fuel body env m
           if result.isNone then typeError ("result inference requires an annotation for " ++ key)
         signatureTy c fuel params (.given result) m.name []
@@ -600,7 +653,22 @@ def protocolKey (c : Ctx) : Nat → String → String → List Expr → List Bin
       match callable (← globalType c fuel i.key) with
       | some (.arrow _ _ d _) => if sameTy (some d) argTy then applies := applies ++ [i]
       | _ => pure ()
-    selectImplementation c generic method applies
+    -- Dispatch is by kind: when the instance's kind is declared, only implementations for that kind
+    -- apply, so two kinds with the same fields are two kinds.
+    match kindOf c 64 x env m with
+    | some k =>
+      let own := applies.filter (·.kind == k)
+      if own.isEmpty && !applies.isEmpty then
+        fail ("refused (protocol-unimplemented): no implementation of " ++ generic ++ "." ++ method ++
+          " is for kind " ++ k ++ " (" ++ ", ".intercalate (applies.map (·.kind)).eraseDups ++
+          " have its fields, and kinds are nominal)")
+      selectImplementation c generic method own
+    | none =>
+      let kinds := (applies.map (·.kind)).eraseDups
+      if kinds.length > 1 then
+        fail ("refused (unnamed-kind): the instance of " ++ generic ++ "." ++ method ++ " names no kind, and " ++
+          " and ".intercalate kinds ++ " have its fields; name its kind by a declared type")
+      selectImplementation c generic method applies
 
 def synth (c : Ctx) : Nat → Expr → List Binding → Module → M (Option PTy)
   | 0, _, _, _ => fail "type synthesis fuel"
@@ -638,7 +706,7 @@ def synth (c : Ctx) : Nat → Expr → List Binding → Module → M (Option PTy
         then some output else none
     | .letE name type value body =>
       let ty ← if type == "_" then synth c fuel value env m else sourceType c fuel type m.name []
-      synth c fuel body (⟨name, ty, "unrestricted"⟩ :: env) m
+      synth c fuel body (⟨name, ty, "unrestricted", none⟩ :: env) m
     | .ite _ whenTrue whenFalse =>
       let a ← synth c fuel whenTrue env m
       let b ← synth c fuel whenFalse env m
@@ -689,7 +757,7 @@ def synthBody (c : Ctx) : Nat → Body → List Binding → Module → M (Option
   | fuel + 1, .expr e, env, m => synth c fuel e env m
   | fuel + 1, .letB name type value rest, env, m => do
     let ty ← if type == "_" then synth c fuel value env m else sourceType c fuel type m.name []
-    synthBody c fuel rest (⟨name, ty, "unrestricted"⟩ :: env) m
+    synthBody c fuel rest (⟨name, ty, "unrestricted", none⟩ :: env) m
   | fuel + 1, .cases scrutinee branches, env, m => do
     if branches.any (fun b => match b.1 with | .ctor .. | .bool _ => true | _ => false) then
       let scrutineeTy ← synth c fuel scrutinee env m
@@ -697,7 +765,7 @@ def synthBody (c : Ctx) : Nat → Body → List Binding → Module → M (Option
       let mut types : List (Option PTy) := []
       for (pattern, b) in branches do
         let env' := match pattern with
-          | .ctor l binder => ⟨binder, lookupRow row l, "unrestricted"⟩ :: env
+          | .ctor l binder => ⟨binder, lookupRow row l, "unrestricted", none⟩ :: env
           | _ => env
         types := types ++ [← synthBody c fuel b env' m]
       -- An activity scrutinee makes the whole match an activity; pure arms are lifted.
@@ -714,7 +782,7 @@ def synthBody (c : Ctx) : Nat → Body → List Binding → Module → M (Option
     match zero, succ with
     | some (_, zb), some (.succ binder, sb) =>
       let z ← synthBody c fuel zb env m
-      let s ← synthBody c fuel sb (⟨binder, some .natural, "unrestricted"⟩ :: env) m
+      let s ← synthBody c fuel sb (⟨binder, some .natural, "unrestricted", none⟩ :: env) m
       return if z.isSome && s.isSome && sameTy z s then z else none
     | _, _ => return none
 end
@@ -741,7 +809,7 @@ def abstractWith (c : Ctx) (fuel : Nat) (params : List Param) (domains : Option 
     let domain ← match given with
       | some d => pure (some d)
       | none => sourceType c fuel p.type moduleName []
-    bindings := bindings ++ [⟨p.name, domain, ← quantityOf p⟩]
+    bindings := bindings ++ [⟨p.name, domain, ← quantityOf p, kindKey c p.type moduleName⟩]
   let initial : Option PTy ← (match result with
     | .source text => sourceType c fuel text moduleName []
     | .given given => pure given)
@@ -795,7 +863,7 @@ def lowerLet (c : Ctx) (fuel : Nat) (name type : String) (value : Expr) (env : L
     (bodyType : List Binding → M (Option PTy)) : M ATerm := do
   noActivity c fuel value env m "effect-in-let" "a let-bound value is a shared lazy thunk"
   let ty ← if type == "_" then synth c fuel value env m else sourceType c fuel type m.name []
-  let mut codomain ← bodyType (⟨name, ty, "unrestricted"⟩ :: env)
+  let mut codomain ← bodyType (⟨name, ty, "unrestricted", letKind c type value env m⟩ :: env)
   if tailPosition then
     if let (some (p, r), some cod) := ((← get).effect, codomain) then
       if !isComputation (some cod) then codomain := some (.computation p r cod)
@@ -806,7 +874,7 @@ def lowerLet (c : Ctx) (fuel : Nat) (name type : String) (value : Expr) (env : L
 
 /-! ## Specifications, declared ancestry and method combination -/
 
-def outerEnv : List Binding := [⟨"$seed", some .emptyRow, "unrestricted"⟩, ⟨"$globals", some (.variable 0), "unrestricted"⟩]
+def outerEnv : List Binding := [⟨"$seed", some .emptyRow, "unrestricted", none⟩, ⟨"$globals", some (.variable 0), "unrestricted", none⟩]
 
 def specOf (c : Ctx) (key : String) : Option (Spec × Module) :=
   match declOf c key with
@@ -862,7 +930,7 @@ def selfSuperParams (s : Spec) : List Param :=
   if s.binders.isEmpty then [⟨"self", s.targetType, "default"⟩, ⟨"super", s.targetType, "default"⟩]
   else [⟨"self", "Self", "default"⟩, ⟨"super", "Super", "default"⟩]
 def selfSuperEnv (target : Option PTy) : List Binding :=
-  ⟨"super", target, "unrestricted"⟩ :: ⟨"self", target, "unrestricted"⟩ :: outerEnv
+  ⟨"super", target, "unrestricted", none⟩ :: ⟨"self", target, "unrestricted", none⟩ :: outerEnv
 
 
 /-- A declaration named in a `fix` chain (bare or `Alias.Name`, not shadowed): a plain spec
@@ -998,7 +1066,7 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
         let r ← synth c fuel right env m
         if sameTy l (some .boolean) && sameTy r (some .boolean) then
           let rightTerm ← expression c fuel right env m
-          let leftTerm ← expression c fuel left (⟨"$right", some .boolean, "unrestricted"⟩ :: env) m
+          let leftTerm ← expression c fuel left (⟨"$right", some .boolean, "unrestricted", none⟩ :: env) m
           let reuse := if env.any (fun b => restricted b.quantity) then "once" else "reusable"
           let eq := ATerm.app (.lam ⟨some .boolean, some .boolean, "unrestricted", reuse, none⟩
             (.ifBool leftTerm (.bound 0) (notTerm (.bound 0)))) rightTerm
@@ -1054,6 +1122,14 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
       let it ← expression c fuel inherited env m
       return .fix st it
     | .call callee args =>
+      -- Kinds are nominal: an argument of a declared kind is refused where a parameter declares
+      -- another, even when the two kinds have the same fields.
+      if let some (.function fname params _ _, dm) := calleeDecl c callee env m then
+        for (p, a) in params.zip args do
+          if let (some want, some got) := (kindKey c p.type dm.name, kindOf c 64 a env m) then
+            if want != got then
+              fail ("refused (kind-mismatch): " ++ fname ++ " takes " ++ p.name ++ " of kind " ++ want ++
+                ", and the argument is of kind " ++ got)
       if isPerform c e env m then
         let some (p, r) := (← get).effect
           | fail "refused (perform-outside-activity): perform needs an enclosing definition whose result type is Activity<Plan, Response, Result>"
@@ -1149,7 +1225,7 @@ target → inherited → provided (provided = overlay(defs, inherited), canonica
 def layerAt (c : Ctx) : Nat → Spec → Module → PTy → PTy → PTy → M ATerm
   | 0, _, _, _, _, _ => fail "elaboration fuel"
   | fuel + 1, s, m, target, inherited, provided => do
-    let env : List Binding := ⟨"super", some inherited, "unrestricted"⟩ :: ⟨"self", some target, "unrestricted"⟩ :: outerEnv
+    let env : List Binding := ⟨"super", some inherited, "unrestricted", none⟩ :: ⟨"self", some target, "unrestricted", none⟩ :: outerEnv
     let mut methods : List (String × ATerm) := []
     for method in s.methods do
       let value ← abstract c fuel method.params env (fun inner => body c fuel method.body inner m)
@@ -1349,7 +1425,7 @@ def body (c : Ctx) : Nat → Body → List Binding → Module → M ATerm
       let mut arms : List (String × ATerm) := []
       for (pattern, b) in branches do
         match pattern with
-        | .ctor l binder => arms := arms ++ [(l, ← body c fuel b (⟨binder, lookupRow row l, "unrestricted"⟩ :: env) m)]
+        | .ctor l binder => arms := arms ++ [(l, ← body c fuel b (⟨binder, lookupRow row l, "unrestricted", none⟩ :: env) m)]
         | _ => pure ()
       return .case st arms
     let zero := branches.find? (fun b => b.1 == .zero)
@@ -1359,7 +1435,7 @@ def body (c : Ctx) : Nat → Body → List Binding → Module → M ATerm
       if branches.length != 2 then fail "Nat match currently requires exactly zero and successor branches"
       let vt ← expression c fuel scrutinee env m
       let zt ← body c fuel zb env m
-      let st ← body c fuel sb (⟨binder, some .natural, "unrestricted"⟩ :: env) m
+      let st ← body c fuel sb (⟨binder, some .natural, "unrestricted", none⟩ :: env) m
       return .ifZero vt zt st
     | _, _ => fail "Nat match currently requires exactly zero and successor branches"
 end
@@ -1691,8 +1767,13 @@ def expandProtocols (modules : List Module) :
       if let .protocol g _ methods := d then
         if (qualifiedName g).isNone then
           let key := m.name ++ "." ++ g
-          if (generics.lookup key).isSome then throw ("generic " ++ key ++ " is declared twice; implement it as Alias." ++ g)
-          generics := generics ++ [(key, methods.map (·.name))]
+          -- One module may implement its own generic for several kinds: each `protocol G for K` names
+          -- the same methods. A different method set is a second generic of the same name.
+          match generics.lookup key with
+          | some names =>
+            if names != methods.map (·.name) then
+              throw ("generic " ++ key ++ " is declared twice with different methods; implement it as Alias." ++ g)
+          | none => generics := generics ++ [(key, methods.map (·.name))]
   let mut impls : List ProtocolImpl := []
   let mut out : List Module := []
   for m in modules do

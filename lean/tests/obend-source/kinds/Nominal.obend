@@ -1,0 +1,37 @@
+edition ObjectiveBend 1
+# Kinds are nominal. A Mile and a Kilo have the same fields; a protocol implemented for each
+# reaches each kind's own implementation, so the two are never confused.
+record Mile:
+  n: Nat
+
+record Kilo:
+  n: Nat
+
+protocol Metres for Mile:
+  def metres(self: Mile) -> Nat:
+    self.n * 1609n
+
+protocol Metres for Kilo:
+  def metres(self: Kilo) -> Nat:
+    self.n * 1000n
+
+def mile() -> Mile:
+  {n: 1n}
+
+def kilo() -> Kilo:
+  {n: 1n}
+
+def miles() -> Nat:
+  Metres.metres(mile())
+
+def kilometres() -> Nat:
+  Metres.metres(kilo())
+
+def through(m: Mile) -> Nat:
+  Metres.metres(m)
+
+def passed() -> Nat:
+  through(mile())
+
+def bound() -> Nat:
+  let k: Kilo = {n: 2n} in Metres.metres(k)
