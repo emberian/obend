@@ -1234,9 +1234,8 @@ Stated plainly, from the tree's own lists.
   digest term); `before` and `after` methods, which the elaborator refuses.
 - **The leaf.** Refinement of a Core4 run against Bend's own `Eval` of the emitted book is a stated
   future theorem (`METATHEORY.md` §2) that needs another tree's semantics and a toolchain decision;
-  `Obend/Leaf` is not started. The library has one executor, the Lean machine, behind the
-  `Obend.Core.Backend` typeclass; refinement to any other, and any private or oblivious backend, is
-  unproved.
+  `Obend/Leaf` is not started. The library has one executor, the Lean machine; refinement to any other, and any private or
+  oblivious backend, is unproved.
 
 ## 11. Related work
 

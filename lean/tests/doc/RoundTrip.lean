@@ -12,11 +12,11 @@ of Alpha into a conflict whose section alternatives are the two edits. It fails 
 mismatch.
 -/
 import Obend.Doc
-import Obend.Digest.Class
+import Obend.Digest.Cshake256
 
 open Obend.Doc Obend.Slot
 
-def H : Obend.Digest.HashBytes.Hash := Obend.Digest.Digest.hash []
+def H : Obend.Digest.HashBytes.Hash := Obend.Digest.Cshake256.cshake256Bytes []
 
 def check (what : String) (ok : Bool) : IO Unit :=
   if ok then IO.println s!"ok   {what}" else throw (IO.userError s!"FAIL {what}")

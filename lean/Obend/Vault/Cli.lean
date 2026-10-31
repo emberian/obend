@@ -32,7 +32,7 @@ the page's laws), so no command overwrites a file the person changed. `-C DIR` b
 command runs it in DIR.
 -/
 public import Obend.Vault.Json
-public import Obend.Digest.Class
+public import Obend.Digest.Cshake256
 public section
 
 namespace Obend.Vault.Cli
@@ -40,7 +40,7 @@ namespace Obend.Vault.Cli
 open Obend.Doc Obend.Vault Obend.Vault.Json
 
 /-- The deployed byte hash (cSHAKE256, as `lean/tests/doc/RoundTrip.lean`). -/
-def H : Obend.Digest.HashBytes.Hash := Obend.Digest.Digest.hash []
+def H : Obend.Digest.HashBytes.Hash := Obend.Digest.Cshake256.cshake256Bytes []
 
 /-- Every `.md` under `dir`, by name (its path from `dir` without `.md`), sorted. -/
 def readVault (dir : System.FilePath) : IO (List (String × String)) := do

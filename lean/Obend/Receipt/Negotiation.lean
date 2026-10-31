@@ -27,7 +27,7 @@ public import Obend.Receipt
 public import Obend.Run.Negotiation
 public import Obend.Run.Fold
 public import Obend.Judge.Instances
-public import Obend.Digest.Class
+public import Obend.Digest.Cshake256
 public import Lean.Data.Json
 
 @[expose] public section
@@ -63,7 +63,7 @@ def hex (bytes : List UInt8) : String :=
 def customization : List UInt8 := "OBEND.RECEIPT/v1".toUTF8.toList
 
 /-- The digest of a canonical text. -/
-def digest (s : String) : Digest := hex (Obend.Digest.Digest.hash customization s.toUTF8.toList)
+def digest (s : String) : Digest := hex (Obend.Digest.Cshake256.cshake256Bytes customization s.toUTF8.toList)
 
 /-- The digest of a JSON value's canonical form (object keys sorted, no whitespace). -/
 def digestJson (j : Json) : Digest := digest j.compress

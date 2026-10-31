@@ -24,13 +24,13 @@ and `python3 tests/run-receipts.py` the receipt tests. The `Journal` library and
 
 - `Obend/Core/` — Core4: `Term`, `Ty`, the checker `Check`, the typed-core wire `Packet`, the
   demand `Machine` (`MachineFast`, `Invariant`, `MachineTyping`), `Data`, `Capacity`, `Collect`,
-  `Checkpoint`, `Extensions`, `Interaction`, `Digest`, the executor typeclass `Backend`.
+  `Checkpoint`, `Extensions`, `Interaction`, `Digest`.
 - `Obend/Core/Proofs/` — the theorems about Core: `Adequacy`, `Completeness`, `Preservation.*`,
   `Forcing.*`, `Collect`, `Settle`, `Templates`, `DataSoundness`, `Substitution` (the substitution
   lemma for `check`), …
 - `Obend/Teeth/` — tier 2: `Core/CheckTeeth` (the checker's `decide` fixtures), the evaluation leaves,
   the law and vault teeth, `Tactic/ToothChecks`.
-- `Obend/Digest/` — `HashBytes`, cSHAKE256 (`Spec`, `Fast`, `Seam`), the `Digest` typeclass.
+- `Obend/Digest/` — `HashBytes`, cSHAKE256 (`Spec`, `Fast`, `Seam`).
 - `Obend/Slot/` — the slot (`Obend.Slot`), open protocols (`Protocol`), their proofs, Core4's slot
   calculus (`Core4`: `Typed`, the checker as the slot's judge, `slotOf`), the abstract `World` and `Integrity`.
 - `Obend/Spec/` — the `.obend` front end (trusted, no theorem: `Spec.lean` states the boundary):

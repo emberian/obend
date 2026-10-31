@@ -255,7 +255,7 @@ theorem short_admissible {H : Hash} (hH : Short H) (a b : Nat) : Admissible (dig
   omega
 
 theorem deployed_short : Short deployed := by
-  intro bytes; simp [deployed, Obend.Digest.cshake_hash]
+  intro bytes; simp [deployed]
 
 theorem lengthHash_short : Short lengthHash := by
   intro bytes; simp [lengthHash]

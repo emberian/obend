@@ -23,7 +23,6 @@ import Obend.AssertAxioms
 import Obend.AssertCompiled
 import Obend.Core.AliasExposure
 import Obend.Core.Assumptions
-import Obend.Core.Backend
 import Obend.Core.Bidirectional
 import Obend.Core.CanonicalExtension
 import Obend.Core.Capacity
@@ -162,7 +161,6 @@ import Obend.Core.TypeGraphHead
 import Obend.Core.TypeGraphResource
 import Obend.Core.WeightedResource
 import Obend.Core.WeightedRowSafety
-import Obend.Digest.Class
 import Obend.Digest.Cshake256
 import Obend.Digest.Cshake256.Fast
 import Obend.Digest.Cshake256.Seam
