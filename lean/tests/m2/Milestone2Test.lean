@@ -75,15 +75,15 @@ def testVaultTurnFootprint : IO Unit := do
     else none
 
   let fpGood : Footprint := [
-    ⟨"cellAlpha", some (.natural 42), none⟩,
-    ⟨"cellBeta", some (.natural 99), none⟩
+    ⟨"cellAlpha", some (.natural 42)⟩,
+    ⟨"cellBeta", some (.natural 99)⟩
   ]
   let admitGood := admitFootprint s fpGood
   assertOk "Footprint admission passes on matching store" (admitGood matches .ok ())
 
   let fpStale : Footprint := [
-    ⟨"cellAlpha", some (.natural 42), none⟩,
-    ⟨"cellBeta", some (.natural 100), none⟩
+    ⟨"cellAlpha", some (.natural 42)⟩,
+    ⟨"cellBeta", some (.natural 100)⟩
   ]
   let admitStale := admitFootprint s fpStale
   assertOk "Footprint admission catches stale pin" (admitStale matches .error (.footprintStale "cellBeta" _ _))
@@ -130,11 +130,16 @@ def testVaultTurnFootprint : IO Unit := do
     balanced := by
       intro _
       rfl
+    nodup_cells := by decide
   }
   let sAfter := applyTurn s dummyTurn
   assertOk "applyTurn writes postState for cellAlpha" (dataEq (sAfter "cellAlpha") (some (.natural 52)))
   assertOk "applyTurn writes postState for cellBeta" (dataEq (sAfter "cellBeta") (some (.natural 89)))
   assertOk "applyTurn preserves unwritten cells" (dataEq (sAfter "cellGamma") none)
+  assertOk "checkNodupCells catches duplicate write cell"
+    (checkNodupCells ["cellAlpha", "cellAlpha", "cellBeta"] matches .error (.duplicateWriteCell "cellAlpha"))
+  assertOk "checkNodupCells accepts distinct cells"
+    (checkNodupCells ["cellAlpha", "cellBeta"] matches .ok ())
 
 /-! =========================================================================
     Feature 19: Book Multi-Asset Ledger & 9 Operations Conservation
@@ -274,6 +279,23 @@ def testSeatOfferSafety : IO Unit := do
   assertOk "Exit payout moves seat balance to payee" (bExit.balance payeeAcc 1 == 10)
   assertOk "Exit payout zeroes seat balance" (bExit.balance seatAcc 1 == 0)
 
+  -- Multi-asset exact payout via applyPostings
+  let bMulti : Book := {
+    accounts := [seatAcc, payeeAcc]
+    balances := fun a ast =>
+      if a = seatAcc ∧ ast = 1 then 10
+      else if a = seatAcc ∧ ast = 2 then 20
+      else 0
+    leaseRecords := fun _ => none
+    floors := fun _ _ => 0
+  }
+  let ps := payoutPostings bMulti seatAcc payeeAcc [1, 2]
+  let bMultiExit := applyPostings bMulti ps
+  assertOk "payoutPostings zeroes seat balance for asset 1" (bMultiExit.balance seatAcc 1 == 0)
+  assertOk "payoutPostings zeroes seat balance for asset 2" (bMultiExit.balance seatAcc 2 == 0)
+  assertOk "payoutPostings credits payee balance for asset 1" (bMultiExit.balance payeeAcc 1 == 10)
+  assertOk "payoutPostings credits payee balance for asset 2" (bMultiExit.balance payeeAcc 2 == 20)
+
 /-! =========================================================================
     Feature 21: DrEX Certified Primal-Dual LP Clearing Judge
     ========================================================================= -/
@@ -344,6 +366,27 @@ def testClearingJudge : IO Unit := do
   assertOk "Clearing judge catches non-uniform execution price"
     (verdictNonUniform matches .error (.notUniform 1))
 
+  -- Negative test: price outside crossing interval
+  let certOffMarket : Certificate := { price := 200, potentials := (0, -1), slacks := [2, 0, 0, 0] }
+  let verdictOffMarket := judge market orders [] certOffMarket
+  assertOk "Clearing judge catches off-market price with invalidPrice"
+    (verdictOffMarket matches .error (.invalidPrice 200))
+
+  -- Negative test: unserved crossing on 0 trades with crossing orders
+  let marketEps100 : Market := { currency := 1, goods := 2, epsilon := 100 }
+  let oAlice : Order := { account := 101, side := .bid, qty := 10, total := 1000 }
+  let oBob : Order := { account := 102, side := .ask, qty := 10, total := 500 }
+  let freezeCert : Certificate := { price := 75, potentials := (0, 1), slacks := [0, 2] }
+  let verdictZeroTrade := judge marketEps100 [oAlice, oBob] [] freezeCert
+  assertOk "Clearing judge catches zero-trade freeze on crossing orders with unservedCrossing"
+    (verdictZeroTrade matches .error .unservedCrossing)
+
+  -- Negative test: foreign transfer not from an order account
+  let badForeignTransfer : List ResourcePosting := [⟨999, 1, 2, 1⟩]
+  let verdictForeign := judge market orders badForeignTransfer certValid
+  assertOk "Clearing judge rejects non-order account transfer with notAnOrder"
+    (verdictForeign matches .error (.notAnOrder _))
+
 /-! =========================================================================
     Main Runner
     ========================================================================= -/
@@ -363,3 +406,11 @@ def main : IO Unit := do
 #print axioms test_hyperedge_binding_is_proper
 #print axioms test_vaultTurn_legs_agree
 #print axioms test_vaultTurn_disjoint_commutes
+#print axioms Obend.Vault.VaultTurn.store_post_invariants_hold
+#print axioms Obend.Vault.admits_after_disjoint
+#print axioms Obend.Vault.disjoint_both_orders
+#print axioms Obend.Ledger.ordinary_ne_seat_account
+#print axioms Obend.Ledger.payout_exact
+#print axioms Obend.Ledger.exit_recovery_all
+#print axioms Obend.Ledger.payout_conserves
+#print axioms Obend.Judge.judge_certifies_epsilon_optimal

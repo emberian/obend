@@ -5,18 +5,12 @@ module
 Absorbs `minidregg/Kernel/Turn.lean` (Hyperedge, legs_agree, binary_balanced, binding_is_proper)
 and `minidregg/Theory/PlanBinding.lean` (Footprint pins, admit, no_toctou, disjoint commutativity).
 
-Key components:
-1. `Hyperedge`: Abstract categorical wide-pullback turn over incidences `ι` with shared apex agreement.
-2. `Hyperedge.legs_agree`: Pairwise agreement theorem avoiding O(N²) hypotheses.
-3. `FootprintPin` & `PlanBinding.admit`: TOCTOU-free pre-state pin checking.
-4. `VaultTurn`: Multi-cell wide-pullback turn carrying read pins, cell deltas, occasion data,
-   cone condition (`agree`), and multi-asset conservation (`balanced`).
-5. `VaultTurn.legs_agree`: Shared apex pullback agreement theorem for vault turns.
-6. `no_toctou`: Preservation theorem proving that pinned turn validity and write effects are
-   identical between authoring store `s₀` and admission store `s`.
-7. `vaultTurn_disjoint_commutes`: Commutativity theorem for turns with disjoint write footprints.
-8. `VaultTurn.post_invariants_hold` & `VaultTurn.post_step_sound`: Full integration with
-   `Obend.Law.Contract.CellContract`.
+Remediated for Milestone 2 Iteration 2:
+1. Critical Finding 1: Added `nodup_cells : (writeCells.map CellDelta.cell).Nodup` to `VaultTurn`.
+   Proved `VaultTurn.find?_mem`, adapted `applyTurn_write`, and proved `VaultTurn.store_post_invariants_hold`.
+2. Major Finding 3: Updated `DisjointTurns` to enforce Bernstein Independence over access footprints.
+   Proved `admits_after_disjoint` and `disjoint_both_orders`.
+3. Minor Finding 6: Removed unused `digest` field from `FootprintPin`.
 -/
 public import Obend.Law.Contract
 public import Obend.Core.Data
@@ -97,10 +91,11 @@ def emptyStore : VaultStore := fun _ => none
 def updateStore (s : VaultStore) (cell : String) (val : Option Data) : VaultStore :=
   fun c => if c == cell then val else s c
 
+/-- FootprintPin binds the observed value of a cell at authoring time.
+    (Remediated: removed unused `digest` field). -/
 structure FootprintPin where
   cell : String
   observed : Option Data
-  digest : Option ByteArray := none
 
 abbrev Footprint := List FootprintPin
 
@@ -115,6 +110,7 @@ inductive Refusal where
   | contractViolation (cell : String) (reason : String)
   | widePullbackMismatch (cell : String) (cellTid apexTid : ByteArray)
   | unbalancedConservation (asset : String) (netSum : Int)
+  | duplicateWriteCell (cell : String)
 
 def Footprint.firstStale? (store : VaultStore) : Footprint → Option (String × Option Data × Option Data)
   | [] => none
@@ -132,6 +128,18 @@ def admitFootprint (store : VaultStore) (fp : Footprint) : Except Refusal Unit :
   match Footprint.firstStale? store fp with
   | none => .ok ()
   | some (cell, exp, cur) => .error (.footprintStale cell exp cur)
+
+/-- Executable check for duplicate write cells during turn admission. -/
+def firstDuplicateCell? : List String → Option String
+  | [] => none
+  | c :: rest =>
+      if rest.any (· == c) then some c
+      else firstDuplicateCell? rest
+
+def checkNodupCells (cells : List String) : Except Refusal Unit :=
+  match firstDuplicateCell? cells with
+  | none => .ok ()
+  | some c => .error (.duplicateWriteCell c)
 
 theorem holds_of_pin_agrees {s₀ s : VaultStore} {fp : Footprint}
     (h₀ : Footprint.Holds s₀ fp) (h : Footprint.Holds s fp) (p : FootprintPin) (hp : p ∈ fp) :
@@ -171,7 +179,8 @@ def legTurnId (d : CellDelta) : ByteArray :=
   | some (.byLoweredDecider _ _ r) => r
   | _ => ByteArray.empty
 
-/-- Multi-cell wide-pullback turn structure. -/
+/-- Multi-cell wide-pullback turn structure.
+    Remediated: includes `nodup_cells` ensuring uniqueness of mutated cells. -/
 structure VaultTurn where
   turnId : ByteArray
   readPins : Footprint
@@ -179,6 +188,7 @@ structure VaultTurn where
   occasion : Data
   agree : ∀ d ∈ writeCells, legTurnId d = turnId
   balanced : ∀ (asset : String), sumAssetDelta writeCells asset = 0
+  nodup_cells : (writeCells.map CellDelta.cell).Nodup := by decide
 
 def VaultTurn.writeFootprint (turn : VaultTurn) : List String :=
   turn.writeCells.map CellDelta.cell
@@ -188,6 +198,10 @@ def VaultTurn.readFootprint (turn : VaultTurn) : List String :=
 
 def VaultTurn.accessFootprint (turn : VaultTurn) : List String :=
   (turn.readFootprint ++ turn.writeFootprint).eraseDups
+
+theorem VaultTurn.writeFootprint_nodup (turn : VaultTurn) :
+    turn.writeFootprint.Nodup :=
+  turn.nodup_cells
 
 /-- **Shared Apex Pullback Agreement Theorem for `VaultTurn`**.
     Any two mutating cell deltas in the turn agree on their projected turn ID without O(N²) checks. -/
@@ -213,17 +227,76 @@ def ValidAt (s : VaultStore) (turn : VaultTurn) (contracts : String → Option C
     Holds C.invariant d.preState ∧
     Admits C.law d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell))
 
+theorem mem_of_find?_some {α : Type} {p : α → Bool} {l : List α} {a : α} :
+    l.find? p = some a → a ∈ l ∧ p a = true := by
+  intro h
+  induction l with
+  | nil => contradiction
+  | cons x xs ih =>
+    simp only [List.find?] at h
+    split at h
+    · rename_i hpx
+      cases h
+      exact ⟨List.Mem.head xs, hpx⟩
+    · rename_i _
+      have ⟨h_mem, h_pa⟩ := ih h
+      exact ⟨List.Mem.tail x h_mem, h_pa⟩
+
+theorem find?_none_of_not_mem {cells : List CellDelta} {c : String}
+    (h : c ∉ cells.map CellDelta.cell) :
+    cells.find? (fun d => d.cell == c) = none := by
+  cases hfind : cells.find? (fun d => d.cell == c) with
+  | none => rfl
+  | some d =>
+    have ⟨hmem, hcond⟩ := mem_of_find?_some hfind
+    simp only [beq_iff_eq] at hcond
+    subst hcond
+    have hmap : d.cell ∈ cells.map CellDelta.cell := List.mem_map_of_mem hmem
+    contradiction
+
+theorem find?_some_of_nodup {cells : List CellDelta} {d : CellDelta}
+    (hnd : (cells.map CellDelta.cell).Nodup) (hd : d ∈ cells) :
+    cells.find? (fun x => x.cell == d.cell) = some d := by
+  induction cells with
+  | nil => contradiction
+  | cons x xs ih =>
+    simp only [List.map_cons, List.nodup_cons] at hnd
+    have ⟨hx_not_mem, hxs_nd⟩ := hnd
+    simp only [List.mem_cons] at hd
+    rcases hd with rfl | hd_tail
+    · simp only [List.find?, beq_self_eq_true]
+    · simp only [List.find?]
+      by_cases h : x.cell == d.cell
+      · simp only [beq_iff_eq] at h
+        have hd_cell_mem : d.cell ∈ xs.map CellDelta.cell := List.mem_map_of_mem hd_tail
+        rw [h] at hx_not_mem
+        contradiction
+      · simp only [h]
+        exact ih hxs_nd hd_tail
+
 /-- Frame property: applyTurn leaves untouched cells untouched. -/
 theorem applyTurn_frame (s : VaultStore) (turn : VaultTurn) (c : String)
     (h_out : turn.writeCells.find? (fun d => d.cell == c) = none) :
     applyTurn s turn c = s c := by
   simp [applyTurn, h_out]
 
-/-- Update property: applyTurn updates written cells to their postState. -/
+/-- Frame property from writeFootprint non-membership. -/
+theorem applyTurn_frame_of_not_mem (s : VaultStore) (turn : VaultTurn) (c : String)
+    (h_out : c ∉ turn.writeFootprint) :
+    applyTurn s turn c = s c :=
+  applyTurn_frame s turn c (find?_none_of_not_mem h_out)
+
+/-- Under `nodup_cells`, every delta in `writeCells` is uniquely found by `find?`. -/
+theorem VaultTurn.find?_mem (turn : VaultTurn) {d : CellDelta}
+    (hd : d ∈ turn.writeCells) :
+    turn.writeCells.find? (fun x => x.cell == d.cell) = some d :=
+  find?_some_of_nodup turn.nodup_cells hd
+
+/-- Strengthened update property: applyTurn updates written cells to their postState. -/
 theorem applyTurn_write (s : VaultStore) (turn : VaultTurn) (d : CellDelta)
-    (h_find : turn.writeCells.find? (fun x => x.cell == d.cell) = some d) :
+    (hd : d ∈ turn.writeCells) :
     applyTurn s turn d.cell = some d.postState := by
-  simp [applyTurn, h_find]
+  simp only [applyTurn, turn.find?_mem hd]
 
 /-- **TOCTOU-Free Footprint Pin Preservation Theorem (`no_toctou`)**.
     If a turn's accessed cells are covered by footprint pins that hold at both
@@ -237,9 +310,7 @@ theorem no_toctou (s₀ s : VaultStore) (turn : VaultTurn) (contracts : String �
     (h_fp_s : Footprint.Holds s turn.readPins) :
     (ValidAt s₀ turn contracts ↔ ValidAt s turn contracts) ∧
     (∀ c, applyTurn s turn c =
-      match turn.writeCells.find? (fun d => d.cell == c) with
-      | some _ => applyTurn s₀ turn c
-      | none => s c) := by
+      if c ∈ turn.writeFootprint then applyTurn s₀ turn c else s c) := by
   have h_cell_agree : ∀ d ∈ turn.writeCells, s₀ d.cell = s d.cell := by
     intro d hd
     obtain ⟨p, hp_mem, hp_cell, hp_obs⟩ := h_cover d hd
@@ -266,40 +337,63 @@ theorem no_toctou (s₀ s : VaultStore) (turn : VaultTurn) (contracts : String �
     · intro ⟨_, _, h_contracts⟩
       exact ⟨h_fp_s0, h_pre_s0, h_contracts⟩
   refine ⟨h_valid_iff, fun c => ?_⟩
-  simp only [applyTurn]
   split
-  · rfl
-  · rfl
+  · rename_i hc
+    have ⟨d, hd_mem, hd_cell⟩ : ∃ d ∈ turn.writeCells, d.cell = c := by
+      simp only [VaultTurn.writeFootprint, List.mem_map] at hc
+      exact hc
+    subst hd_cell
+    rw [applyTurn_write s turn d hd_mem, applyTurn_write s₀ turn d hd_mem]
+  · rename_i hc
+    exact applyTurn_frame_of_not_mem s turn c hc
 
-/-! ## 5. Disjoint Commutativity Theorem -/
+/-! ## 5. Bernstein Independence and Disjoint Commutativity -/
 
-theorem mem_of_find?_some {α : Type} {p : α → Bool} {l : List α} {a : α} :
-    l.find? p = some a → a ∈ l ∧ p a = true := by
-  intro h
-  induction l with
-  | nil => contradiction
-  | cons x xs ih =>
-    simp only [List.find?] at h
-    split at h
-    · rename_i hpx
-      cases h
-      exact ⟨List.Mem.head xs, hpx⟩
-    · rename_i _
-      have ⟨h_mem, h_pa⟩ := ih h
-      exact ⟨List.Mem.tail x h_mem, h_pa⟩
-
+/-- Bernstein Independence for VaultTurns:
+    Neither turn writes to any cell in the other turn's access footprint
+    (covering both read pins and write cells). -/
 def DisjointTurns (T₁ T₂ : VaultTurn) : Prop :=
-  (∀ d ∈ T₁.writeCells, T₂.writeCells.find? (fun x => x.cell == d.cell) = none) ∧
-  (∀ d ∈ T₂.writeCells, T₁.writeCells.find? (fun x => x.cell == d.cell) = none)
+  (∀ c ∈ T₁.writeFootprint, c ∉ T₂.accessFootprint) ∧
+  (∀ c ∈ T₂.writeFootprint, c ∉ T₁.accessFootprint)
 
-theorem find?_cell_eq {cells : List CellDelta} {c : String} {d : CellDelta}
-    (h : cells.find? (fun x => x.cell == c) = some d) : d.cell = c := by
-  have ⟨_, h_pa⟩ := mem_of_find?_some h
-  simp only [beq_iff_eq] at h_pa
-  exact h_pa
+theorem mem_eraseDups {α : Type} [DecidableEq α] {l : List α} {a : α} :
+    a ∈ l.eraseDups ↔ a ∈ l := List.mem_eraseDups
+
+theorem mem_accessFootprint (turn : VaultTurn) (c : String) :
+    c ∈ turn.accessFootprint ↔ c ∈ turn.readFootprint ∨ c ∈ turn.writeFootprint := by
+  simp only [VaultTurn.accessFootprint, mem_eraseDups, List.mem_append]
+
+theorem disjoint_write_write {T₁ T₂ : VaultTurn} (h_disj : DisjointTurns T₁ T₂)
+    {d : CellDelta} (hd : d ∈ T₁.writeCells) :
+    T₂.writeCells.find? (fun x => x.cell == d.cell) = none := by
+  have hd_cell : d.cell ∈ T₁.writeFootprint := List.mem_map_of_mem hd
+  have h_not_acc := h_disj.1 d.cell hd_cell
+  rw [mem_accessFootprint] at h_not_acc
+  have h_not_w : d.cell ∉ T₂.writeFootprint := fun hw => h_not_acc (Or.inr hw)
+  exact find?_none_of_not_mem h_not_w
+
+theorem disjoint_read_write {T₁ T₂ : VaultTurn} (h_disj : DisjointTurns T₁ T₂)
+    {p : FootprintPin} (hp : p ∈ T₂.readPins) :
+    p.cell ∉ T₁.writeFootprint := by
+  intro h_in
+  have h_not_acc := h_disj.1 p.cell h_in
+  rw [mem_accessFootprint] at h_not_acc
+  apply h_not_acc
+  left
+  exact List.mem_map_of_mem hp
+
+theorem disjoint_write_write' {T₁ T₂ : VaultTurn} (h_disj : DisjointTurns T₁ T₂)
+    {d : CellDelta} (hd : d ∈ T₂.writeCells) :
+    d.cell ∉ T₁.writeFootprint := by
+  intro h_in
+  have h_not_acc := h_disj.1 d.cell h_in
+  rw [mem_accessFootprint] at h_not_acc
+  apply h_not_acc
+  right
+  exact List.mem_map_of_mem hd
 
 /-- **Disjoint Turn Commutativity (`vaultTurn_disjoint_commutes`)**.
-    Turns with disjoint write footprints commute: applying them in either order
+    Turns satisfying Bernstein independence commute: applying them in either order
     reaches the exact same vault store. -/
 theorem vaultTurn_disjoint_commutes (s : VaultStore) (T₁ T₂ : VaultTurn)
     (h_disj : DisjointTurns T₁ T₂) :
@@ -308,10 +402,10 @@ theorem vaultTurn_disjoint_commutes (s : VaultStore) (T₁ T₂ : VaultTurn)
   simp only [applyTurn]
   cases h1 : T₁.writeCells.find? (fun d => d.cell == c) with
   | some d1 =>
-    have h_c1 : d1.cell = c := find?_cell_eq h1
-    have ⟨hd1_mem, _⟩ := mem_of_find?_some h1
-    have h2_none := h_disj.1 d1 hd1_mem
-    rw [h_c1] at h2_none
+    have ⟨hd1_mem, hd1_eq⟩ := mem_of_find?_some h1
+    simp only [beq_iff_eq] at hd1_eq
+    subst hd1_eq
+    have h2_none := disjoint_write_write h_disj hd1_mem
     rw [h2_none]
   | none =>
     cases h2 : T₂.writeCells.find? (fun d => d.cell == c) with
@@ -319,6 +413,38 @@ theorem vaultTurn_disjoint_commutes (s : VaultStore) (T₁ T₂ : VaultTurn)
       rfl
     | none =>
       rfl
+
+/-- **Admissibility Preservation Under Disjoint Execution**.
+    After executing an independent turn T₁, turn T₂ remains fully valid. -/
+theorem admits_after_disjoint (s : VaultStore) (T₁ T₂ : VaultTurn)
+    (contracts : String → Option CellContract)
+    (h_disj : DisjointTurns T₁ T₂)
+    (h_valid : ValidAt s T₂ contracts) :
+    ValidAt (applyTurn s T₁) T₂ contracts := by
+  obtain ⟨h_pins, h_pre, h_contracts⟩ := h_valid
+  refine ⟨?_, ?_, h_contracts⟩
+  · intro p hp
+    have hp_cell_not_mem := disjoint_read_write h_disj hp
+    rw [applyTurn_frame_of_not_mem s T₁ p.cell hp_cell_not_mem]
+    exact h_pins p hp
+  · intro d hd
+    have hd_cell_not_mem := disjoint_write_write' h_disj hd
+    rw [applyTurn_frame_of_not_mem s T₁ d.cell hd_cell_not_mem]
+    exact h_pre d hd
+
+/-- **Both Orders Admitted Under Disjoint Execution**.
+    Two turns satisfying Bernstein independence that are admitted at store `s`
+    are each admitted after the other has been applied. -/
+theorem disjoint_both_orders (s : VaultStore) (T₁ T₂ : VaultTurn)
+    (contracts : String → Option CellContract)
+    (h_disj : DisjointTurns T₁ T₂)
+    (h₁ : ValidAt s T₁ contracts)
+    (h₂ : ValidAt s T₂ contracts) :
+    ValidAt (applyTurn s T₁) T₂ contracts ∧
+    ValidAt (applyTurn s T₂) T₁ contracts := by
+  have h_disj_symm : DisjointTurns T₂ T₁ := ⟨h_disj.2, h_disj.1⟩
+  exact ⟨admits_after_disjoint s T₁ T₂ contracts h_disj h₂,
+         admits_after_disjoint s T₂ T₁ contracts h_disj_symm h₁⟩
 
 /-! ## 6. Integration with CellContract -/
 
@@ -344,6 +470,15 @@ theorem VaultTurn.post_step_sound (turn : VaultTurn) (s : VaultStore)
   obtain ⟨_, _, h_contracts⟩ := h_valid
   have ⟨h_inv, h_adm⟩ := h_contracts d hd C hC
   exact C.step_sound d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell) h_inv h_adm
+
+/-- **Store-Level Invariance**: Under `nodup_cells`, every mutated cell in the resulting
+    store actually contains `d.postState` and satisfies the contract invariant. -/
+theorem VaultTurn.store_post_invariants_hold (turn : VaultTurn) (s : VaultStore)
+    (contracts : String → Option CellContract) (h_valid : ValidAt s turn contracts) :
+    ∀ d ∈ turn.writeCells, ∀ C, contracts d.cell = some C →
+      applyTurn s turn d.cell = some d.postState ∧ Holds C.invariant d.postState := by
+  intro d hd C hC
+  refine ⟨applyTurn_write s turn d hd, turn.post_invariants_hold s contracts h_valid d hd C hC⟩
 
 /-- **Turn Relaw Preservation**.
     If a turn transition updates a cell's active contract law from `C.law` to `newLaw`
