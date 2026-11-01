@@ -6,6 +6,9 @@ The leaf language (Bend, checked by BendTT) is strict and affine, and its books 
 definitions whose calls go to earlier definitions or descend. The vtable of `Obend.Leaf.Flatten`
 becomes such a book (`emit`):
 
+* **the kind's brand is metadata**: a kind's identity (`#kind`, `Obend.Core.Brand`) is one constant
+  for every instance, so it takes no slot; the book holds it as a static entry (`Book.statics`) and
+  the dispatcher answers it, so `book_sound` holds for it as for every member of the row;
 * **slot indices**: rows are static, so member names are positions (`Book.slots`); a definition
   records the slots its body reads through `self` (`LeafDef.reads`), which is all a leaf dispatcher
   needs to route them;
@@ -32,6 +35,7 @@ the hash collides.
 -/
 public import Obend.Leaf.Flatten
 public import Obend.Core.Ty
+public import Obend.Core.Brand
 @[expose] public section
 namespace Obend.Leaf
 open Obend.Core.Term
@@ -92,10 +96,33 @@ structure LeafDef where
   /-- the slots the body reads through `self`, in order of first read -/
   reads : List Nat
 
-/-- A leaf book: the slot table and one definition per slot, in slot order. -/
+/-- An entry of the book, in row order: a slot's definition, or a static member. The kind's brand
+(`#kind`, `Obend.Core.Brand`) is static: one constant for every instance of the kind, so it is the
+book's metadata, served by the dispatcher, and takes no slot. -/
+inductive BookItem where
+  | slot (d : LeafDef)
+  | static (member : String) (value : Term)
+
+/-- A leaf book: its entries in row order. -/
 structure Book where
-  slots : List String
-  defs : List LeafDef
+  items : List BookItem
+
+def BookItem.def? : BookItem → Option LeafDef
+  | .slot d => some d
+  | .static _ _ => none
+
+def BookItem.static? : BookItem → Option (String × Term)
+  | .slot _ => none
+  | .static m v => some (m, v)
+
+/-- One definition per slot, in slot order. -/
+def Book.defs (B : Book) : List LeafDef := B.items.filterMap BookItem.def?
+
+/-- The slot table: member names in slot order. -/
+def Book.slots (B : Book) : List String := B.defs.map (·.member)
+
+/-- The static members (the kind's brand), with their values under `self`. -/
+def Book.statics (B : Book) : List (String × Term) := B.items.filterMap BookItem.static?
 
 /-- The definition of a vtable entry at a slot. -/
 def emitDef (slots : List String) (i : Nat) (f : String × Term) : LeafDef where
@@ -111,9 +138,19 @@ def emitDefs (slots : List String) : Nat → List (String × Term) → List Leaf
   | _, [] => []
   | i, f :: rest => emitDef slots i f :: emitDefs slots (i + 1) rest
 
+/-- The entries: the brand static, every other member the next slot. -/
+def emitItems (slots : List String) : Nat → List (String × Term) → List BookItem
+  | _, [] => []
+  | i, f :: rest =>
+    if Obend.Core.Brand.isBrand f.1 then .static f.1 f.2 :: emitItems slots i rest
+    else .slot (emitDef slots i f) :: emitItems slots (i + 1) rest
+
+/-- The members that take a slot. -/
+def slotted (vt : List (String × Term)) : List (String × Term) := vt.filter fun f => !Obend.Core.Brand.isBrand f.1
+
 /-- **The emitter.** -/
 def emitVtable (vt : List (String × Term)) : Book :=
-  { slots := vt.map (·.1), defs := emitDefs (vt.map (·.1)) 0 vt }
+  { items := emitItems ((slotted vt).map (·.1)) 0 vt }
 
 /-- The book of a composition: its vtable, emitted. -/
 def emit (C : Composition) : Book := emitVtable C.vtable
@@ -124,16 +161,17 @@ def LeafDef.call (d : LeafDef) : Term :=
   | .method => .app (d.code.rename (· + 2)) (.bound 1)
   | .cell => .app (.app (d.code.rename (· + 2)) (.bound 1)) (.record [])
 
-/-- **The dispatcher**: the book linked into one term, `fix (λself. λ_. {m = def self, …}) {}`. -/
+/-- The dispatcher's entry for an item: a slot's call, or the static value. -/
+def BookItem.entry : BookItem → String × Term
+  | .slot d => (d.member, d.call)
+  | .static m v => (m, v.rename Nat.succ)
+
+/-- **The dispatcher**: the book linked into one term, `fix (λself. λ_. {m = def self, …}) {}`, with
+the static members answered from the book's metadata. -/
 def Book.link (B : Book) : Term :=
-  .fix (.lam (.lam (.record (B.defs.map fun d => (d.member, d.call))))) (.record [])
+  .fix (.lam (.lam (.record (B.items.map BookItem.entry)))) (.record [])
 
 /-! ## The book computes the vtable -/
-
-theorem emitDefs_members (slots : List String) :
-    ∀ (i : Nat) (vt : List (String × Term)), (emitDefs slots i vt).map (·.member) = vt.map (·.1)
-  | _, [] => rfl
-  | i, f :: rest => by simp only [emitDefs, List.map_cons, emitDef, emitDefs_members slots (i + 1) rest]
 
 /-- A definition's call β-reduces to its entry, as the flattened object's spec body holds it. -/
 theorem call_steps (slots : List String) (i : Nat) (f : String × Term) :
@@ -160,25 +198,32 @@ theorem call_steps (slots : List String) (i : Nat) (f : String × Term) :
     have := beta_two ((f.2.rename Nat.succ).rename (liftRename (liftRename (· + 2)))) (.bound 1) (.record [])
     rwa [e] at this
 
-theorem emitDefs_ahead (slots : List String) :
+theorem emitItems_ahead (slots : List String) :
     ∀ (i : Nat) (vt : List (String × Term)),
-      ((emitDefs slots i vt).map fun d => (d.member, d.call)).map Prod.fst =
-        (mapFields (·.rename Nat.succ) vt).map Prod.fst ∧
-      ∀ p ∈ ((emitDefs slots i vt).map fun d => (d.member, d.call)).zip (mapFields (·.rename Nat.succ) vt),
+      ((emitItems slots i vt).map BookItem.entry).map Prod.fst = (mapFields (·.rename Nat.succ) vt).map Prod.fst ∧
+      ∀ p ∈ ((emitItems slots i vt).map BookItem.entry).zip (mapFields (·.rename Nat.succ) vt),
         Ahead p.1.2 p.2.2
-  | _, [] => ⟨rfl, by simp [emitDefs, mapFields]⟩
+  | _, [] => ⟨rfl, by simp [emitItems, mapFields]⟩
   | i, f :: rest => by
-    obtain ⟨n, r⟩ := emitDefs_ahead slots (i + 1) rest
-    simp only [emitDefs, mapFields, List.map_cons, List.zip_cons_cons, List.mem_cons] at n r ⊢
-    refine ⟨by simp only [emitDef, n], ?_⟩
-    rintro p (rfl | hp)
-    · exact Ahead.ofStepsRefl (call_steps slots i f)
-    · exact r p hp
+    unfold emitItems
+    split
+    · obtain ⟨n, r⟩ := emitItems_ahead slots i rest
+      simp only [mapFields, List.map_cons, List.zip_cons_cons, List.mem_cons, BookItem.entry] at n r ⊢
+      refine ⟨by simp only [n], ?_⟩
+      rintro p (rfl | hp)
+      · exact Ahead.refl _
+      · exact r p hp
+    · obtain ⟨n, r⟩ := emitItems_ahead slots (i + 1) rest
+      simp only [mapFields, List.map_cons, List.zip_cons_cons, List.mem_cons, BookItem.entry] at n r ⊢
+      refine ⟨by simp only [emitDef, n], ?_⟩
+      rintro p (rfl | hp)
+      · exact Ahead.ofStepsRefl (call_steps slots i f)
+      · exact r p hp
 
 /-- **The dispatcher is the flattened object, run ahead**: each entry `def self` β-reduces to the
 vtable's entry. -/
 theorem link_ahead (vt : List (String × Term)) : Ahead (emitVtable vt).link (flatObject vt) := by
-  obtain ⟨n, r⟩ := emitDefs_ahead (vt.map (·.1)) 0 vt
+  obtain ⟨n, r⟩ := emitItems_ahead ((slotted vt).map (·.1)) 0 vt
   exact .fix (.lam (.lam (.record n r))) (.refl _)
 
 /-- The linked book is `≈b` the flattened object. -/
@@ -204,12 +249,31 @@ theorem emitDefs_get (slots : List String) :
     obtain ⟨hs, hm⟩ := emitDefs_get slots (i + 1) rest k d h
     exact ⟨by omega, by simpa using hm⟩
 
-/-- **Slot indices**: the `k`-th definition is slot `k` and serves the `k`-th member of the row. -/
+theorem emitItems_defs (slots : List String) :
+    ∀ (i : Nat) (vt : List (String × Term)),
+      (emitItems slots i vt).filterMap BookItem.def? = emitDefs slots i (slotted vt)
+  | _, [] => rfl
+  | i, f :: rest => by
+    unfold emitItems
+    split
+    · rename_i hb
+      simp only [List.filterMap_cons, BookItem.def?, slotted, List.filter_cons, hb, Bool.not_true,
+        Bool.false_eq_true, ite_false]
+      exact emitItems_defs slots i rest
+    · rename_i hb
+      have hb' : Obend.Core.Brand.isBrand f.1 = false := by simpa using hb
+      simp only [List.filterMap_cons, BookItem.def?, slotted, List.filter_cons, hb', Bool.not_false, ite_true,
+        emitDefs, List.cons.injEq, true_and]
+      exact emitItems_defs slots (i + 1) rest
+
+/-- **Slot indices**: the `k`-th definition is slot `k` and serves the `k`-th member of the slot
+table, the row without its static members. -/
 theorem emit_slot (C : Composition) (k : Nat) (d : LeafDef) (h : (emit C).defs[k]? = some d) :
     d.slot = k ∧ (emit C).slots[k]? = some d.member := by
+  simp only [Book.defs, emit, emitVtable, emitItems_defs] at h
   obtain ⟨hs, hm⟩ := emitDefs_get _ 0 _ k d h
   refine ⟨by omega, ?_⟩
-  simpa [emit, emitVtable, List.getElem?_map] using hm
+  simp only [Book.slots, Book.defs, emit, emitVtable, emitItems_defs, List.getElem?_map, h, Option.map_some]
 
 /-- A well-formed book: every definition is closed, so no definition names another and the
 dispatcher is the only place they meet. -/

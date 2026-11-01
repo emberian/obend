@@ -51,6 +51,20 @@ theorem augmented_resolved :
       some true := by
   decide +kernel
 
+/-- Branded at its kind, as the front end constructs it (`REPORT-C1-20261101.md` §1). -/
+def branded : Composition :=
+  ⟨augmented 1, [twice, base], ("#kind", .inject "ReviewBase.Review" (.record [])) :: seed⟩
+
+/-- The brand is the book's static metadata, not a slot; the dispatcher answers it. -/
+theorem brand_static :
+    (emit branded).slots = ["review", "twice"] ∧ (emit branded).statics.map (·.1) = ["#kind"] ∧
+      (Obend.Law.run 50 (.get (emit branded).link "#kind")).map
+        (Obend.Law.termEq · (.inject "ReviewBase.Review" (.record []))) = some true := by
+  decide +kernel
+
+theorem brand_sound : .get (emit branded).link "#kind" ≈b .get branded.object "#kind" :=
+  book_sound branded (by decide +kernel) "#kind"
+
 /-- `twiceOfThree() = twice(3)`, read from the linked book. -/
 def bookTwiceOfThree (C : Composition) : Term := .app (.get (emit C).link "twice") (.nat 3)
 

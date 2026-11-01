@@ -55,3 +55,29 @@ check and its row literal does remain (`leak_refused_and_residual`). The BendTT 
 checks first. `cleanRow` is not yet checked for all Elaborate output. Note: when C2's `Term.split`
 lands, Leaf's traversals (`resolve`, `ahead_resolve`, `selfReads`, `recordBad`, `superOnlyProjected`)
 each need a `split` case.
+
+## Addendum: the kind's brand (after C1, 2026-11-01)
+
+C1 writes a `#kind` brand on every record built at a kind, so the elaborated ReviewMember row is
+`[#kind, review, twice]` and the emitter gave the brand slot 0 (`run-leaf` 9/13 on `5f425a5`).
+
+Decision: **the brand is book metadata, not a slot.** It is one constant per kind, the same for
+every instance and independent of `self`, so a slot and a dispatch per read is pure cost, and its
+identity is static (it belongs beside the content address, as Gemini's argument says of
+reflection). `Book` is now its entries in row order (`BookItem.slot` | `BookItem.static`):
+`emitItems` makes the brand a static entry and numbers the slots over the rest (`slotted`);
+`Book.defs`, `Book.slots`, `Book.statics` read them off. The dispatcher (`Book.link`) answers
+the static entry from the book's own record, so the row the checker sees is unchanged and
+`book_sound` is stated, unchanged, for every member of the row, `#kind` included: `link_ahead`
+covers a static entry by reflexivity. `emit_slot` now says the `k`-th definition serves the
+`k`-th member of the slot table, the row without its static members (`emitItems_defs`). Reads of
+`self.#kind` map to no slot (the dispatcher serves them statically).
+
+`flatRow` is unchanged and keeps the brand: it is a member of every flattened row, so
+`super.#kind` resolves like any member, and the flattened object and the linked book have the
+row type the nominal checker compares (`Core/Nominal`), brand included. The brand is in
+`Composition.code` as a field, so a re-branded composition moves the object's pin.
+
+Teeth: `brand_static` (a branded ReviewMember: slots `[review, twice]`, statics `[#kind]`, the
+dispatcher answers the brand), `brand_sound` (`book_sound` at `#kind`). `obend emit` prints
+`static #kind` and writes `statics` in the book file; `run-leaf` 14/14.

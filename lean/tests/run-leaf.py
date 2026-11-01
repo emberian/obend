@@ -2,7 +2,8 @@
 """The leaf emitter end to end through `obend` (Obend.Leaf), on tests/obend-source/ReviewMember.obend.
 
   * `obend emit` reaches fix(compose(Base, Twice, Augmented), seed) from `twiceOfThree`, flattens and
-    emits it: two method slots, `review` and `twice`, `twice` reading slot 0 through `self`, every
+    emits it: two method slots, `review` and `twice`, `twice` reading slot 0 through `self`, the
+    kind's brand `#kind` a static entry of the book (no slot), every
     definition closed; the book computes twice(3) = 7, as the demand machine does on the object and
     on `twiceOfThree()`;
   * `obend specialize` reads the specialization slot at the program's view with the emitted book
@@ -85,13 +86,15 @@ with tempfile.TemporaryDirectory() as root:
     check("emit: two slots, review and twice", 'slots: [review, twice]' in out, out)
     check("emit: twice is a method reading slot 0", "def 1 twice: method, reads [0]" in out, out)
     check("emit: review is a method reading nothing (super.review resolved)", "def 0 review: method, reads []" in out, out)
+    check("emit: the kind's brand is static metadata, not a slot", "static #kind" in out, out)
     check("emit: every definition closed", "closed: true" in out, out)
     check("emit: the book computes twice(3) = 7", "book: twice(3) = 7" in out, out)
     check("emit: the machine computes 7 on the object and on twiceOfThree()",
           "machine: twice(3) = 7; twiceOfThree() = 7" in out, out)
     recorded = json.load(open(book)) if os.path.exists(book) else {}
     check("emit: the book file pins the composition", recorded.get("object") == "twiceOfThree"
-          and "composition" in recorded and [d["member"] for d in recorded.get("defs", [])] == ["review", "twice"], book)
+          and "composition" in recorded and [d["member"] for d in recorded.get("defs", [])] == ["review", "twice"]
+          and [s["member"] for s in recorded.get("statics", [])] == ["#kind"], book)
 
     rc, out = obend("specialize", "--package", pkg, "--object", "twiceOfThree", "--book", book, "--call", "twice", "3")
     check("specialize: same program, book usable and selected",

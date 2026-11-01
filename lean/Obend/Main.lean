@@ -623,11 +623,15 @@ def emitCommand (spec entry out : String) (call : Option (String × Nat)) : IO U
   IO.println s!"slots: {B.slots}"
   for d in B.defs do
     IO.println s!"def {d.slot} {d.member}: {kindName d.kind}, reads {d.reads}"
+  for (m, _) in B.statics do
+    IO.println s!"static {m}"
   IO.println s!"closed: {B.closedB}"
   let defs := B.defs.map fun d => Json.mkObj [("member", toJson d.member), ("slot", toJson d.slot),
     ("kind", toJson (kindName d.kind)), ("reads", toJson d.reads), ("code", Obend.Logic.termJson d.code)]
   IO.FS.writeFile out ((Json.mkObj [("object", toJson entry), ("composition", Obend.Logic.termJson C.code),
-    ("slots", toJson B.slots), ("defs", Json.arr defs.toArray)]).pretty ++ "\n")
+    ("slots", toJson B.slots), ("defs", Json.arr defs.toArray),
+    ("statics", Json.arr (B.statics.map fun (m, v) => Json.mkObj [("member", toJson m),
+      ("value", Obend.Logic.termJson v)]).toArray)]).pretty ++ "\n")
   IO.println s!"wrote {out}"
   if let some (m, n) := call then
     IO.println s!"book: {m}({n}) = {showNat (callOn B.link m n)}"
