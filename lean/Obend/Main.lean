@@ -95,6 +95,8 @@ public import Obend.Logic.Receipt
 public import Obend.Leaf.Specialize
 public import Obend.Analysis.Cli
 public import Obend.Ledger.Cli
+public import Obend.Hardware.Cli
+public import Obend.Lower.Cli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -726,11 +728,16 @@ public def main (args : List String) : IO UInt32 :=
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
   | "verify" :: path :: rest =>
     Obend.Ledger.Cli.verifyOr path rest <|
-      Obend.Analysis.Cli.verifyOr path ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
+      Obend.Analysis.Cli.verifyOr path <|
+        Obend.Hardware.Cli.verifyOr path
+          ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
   | "analyze" :: _ => (Obend.Analysis.Cli.main? args).getD (do IO.eprintln usage; return 64)
+  | "lower" :: _ => (Obend.Lower.Cli.main? args).getD (do IO.eprintln usage; return 64)
   | _ => match Obend.Receipt.Cli.main? args with
     | some act => act
     | none => match Obend.Ledger.Cli.main? args with
+    | some act => act
+    | none => match Obend.Hardware.Cli.main? args with
     | some act => act
     | none => match Obend.Vault.Cli.main? args with
       | some act => act

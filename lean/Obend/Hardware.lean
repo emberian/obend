@@ -3,6 +3,16 @@ public import Obend.Hardware.Silicon
 public import Obend.Hardware.Process
 public import Obend.Hardware.Fabric
 public import Obend.Hardware.HDL
+public import Obend.Hardware.Types
+public import Obend.Hardware.Rules
+public import Obend.Hardware.FSM
 public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
+public import Obend.Hardware.Retiming
+public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.FabuBlox
+public import Obend.Hardware.DRC
+public import Obend.Hardware.Analog
+public import Obend.Hardware.WaferSpace
+public import Obend.Hardware.Judge
+public import Obend.Hardware.Cli

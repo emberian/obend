@@ -413,5 +413,102 @@ def compileBookToRtl (modName : String) (B : Book) : Option RtlModule :=
       outputs    := outs
     }
 
+/-! ## 5. Saturating `Nat`-Compatible Mode (`compilePrimSat`, `compileTermSat`) for `Obend.Lower` -/
+
+/-- Saturating 64-bit hardware semantics for `Obend.Core.Term.Primitive`:
+`.subtract` saturates at `0#64` when `a < b` (`BitVec.ult a b`), matching `Lean` and `Core4`
+truncated `Nat` subtraction (`0 - 1 = 0`). -/
+def evalPrimHwSat (op : Primitive) (a b : BitVec 64) : Option (BitVec 64) :=
+  match op with
+  | .add         => some (a + b)
+  | .multiply    => some (a * b)
+  | .subtract    => some (if BitVec.ult a b then 0#64 else a - b)
+  | .equal       => some (if a == b then 1#64 else 0#64)
+  | .conjunction => some (a &&& b)
+  | .less        => some (if BitVec.ult a b then 1#64 else 0#64)
+  | .lessEqual   => some (if BitVec.ult b a then 0#64 else 1#64)
+  | _            => none
+
+/-- Compile `Primitive` with saturating subtraction `(l < r) ? 64'd0 : (l - r)`. -/
+def compilePrimSat (op : Primitive) (l r : RtlExpr) : Option RtlExpr :=
+  match op with
+  | .add         => some (.alu .add l r)
+  | .multiply    => some (.alu .mul l r)
+  | .subtract    => some (.mux (.alu .ult l r) (.const 0#64) (.alu .sub l r))
+  | .equal       => some (.alu .eq l r)
+  | .conjunction => some (.alu .bitAnd l r)
+  | .less        => some (.alu .ult l r)
+  | .lessEqual   => some (.mux (.alu .ult r l) (.const 0#64) (.const 1#64))
+  | _            => none
+
+/-- Soundness of `compilePrimSat`: evaluating the compiled `RtlExpr` matches `evalPrimHwSat`. -/
+theorem compilePrimSat_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (op : Primitive) (l r e : RtlExpr)
+    (h : compilePrimSat op l r = some e) :
+    evalPrimHwSat op (evalRtlExpr inputs wires regs l) (evalRtlExpr inputs wires regs r) =
+      some (evalRtlExpr inputs wires regs e) := by
+  cases op <;> simp [compilePrimSat, evalPrimHwSat] at h ⊢
+  all_goals
+    subst h
+    simp [evalRtlExpr, evalAluOp]
+
+/-- Compile `Term` in saturating `Nat`-compatible mode, also accepting `box = .record []` (the
+lowered representation of `LExpr.erased` from `Obend.Lower`) as `0#64`. -/
+def compileTermSat
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (selfDepth : Nat)
+    (varEnv : List RtlExpr) : Term → Option RtlExpr
+  | .nat n => some (.const (BitVec.ofNat 64 n))
+  | .boolean b => some (.const (if b then 1#64 else 0#64))
+  | .record [] => some (.const 0#64)
+  | .bound idx => varEnv[idx]?
+  | .get (.bound idx) member =>
+    if idx == selfDepth then
+      match slots.idxOf? member with
+      | some slotIdx => some (.wireRef slotIdx)
+      | none => none
+    else none
+  | .app fn arg =>
+    match fn with
+    | .lam subBody =>
+      match compileTermSat slots slotBodies selfDepth varEnv arg with
+      | some eArg =>
+        compileTermSat slots slotBodies (selfDepth + 1) (eArg :: varEnv) subBody
+      | none => none
+    | .get (.bound idx) member =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              compileTermSat slots slotBodies selfDepth varEnv arg with
+        | some slotIdx, some eArg =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr => some (substInputPort0 eArg slotExpr)
+          | none => none
+        | _, _ => none
+      else none
+    | _ => none
+  | .binary op l r =>
+    match compileTermSat slots slotBodies selfDepth varEnv l,
+          compileTermSat slots slotBodies selfDepth varEnv r with
+    | some el, some er => compilePrimSat op el er
+    | _, _ => none
+  | .ifBool c t f =>
+    match compileTermSat slots slotBodies selfDepth varEnv c,
+          compileTermSat slots slotBodies selfDepth varEnv t,
+          compileTermSat slots slotBodies selfDepth varEnv f with
+    | some ec, some et, some ef => some (.mux ec et ef)
+    | _, _, _ => none
+  | .ifZero v z s =>
+    match compileTermSat slots slotBodies selfDepth varEnv v,
+          compileTermSat slots slotBodies selfDepth varEnv z with
+    | some ev, some ez =>
+      let predExpr := RtlExpr.alu .sub ev (.const 1#64)
+      match compileTermSat slots slotBodies (selfDepth + 1) (predExpr :: varEnv) s with
+      | some es => some (.mux (.alu .eq ev (.const 0#64)) ez es)
+      | none => none
+    | _, _ => none
+  | _ => none
+
 end Obend.Hardware.Compiler
 end

@@ -64,7 +64,12 @@ r_lec3 = subprocess.run([Z3, os.path.join(HW_SIM, "lec_compiler_fabublox.smt2")]
 check("z3 lec_compiler_fabublox.smt2: compileBookToRtl, CARRY8 sub & FabuBlox Facility OS (unsat)",
       r_lec3.returncode == 0 and r_lec3.stdout.strip() == "unsat", r_lec3.stdout + r_lec3.stderr)
 
-# 3. Verilator 5.050 RTL Elaboration & Lint Check
+# 4. Z3 Types Slice Lenses, Leiserson-Saxe Retiming, Analog ABBA Common-Centroid & 4-bit SAR ADC Check
+r_lec4 = subprocess.run([Z3, os.path.join(HW_SIM, "lec_ams_waferspace.smt2")], capture_output=True, text=True)
+check("z3 lec_ams_waferspace.smt2: Types slices, Retiming MAC, ABBA centroid & 4b SAR ADC (unsat)",
+      r_lec4.returncode == 0 and r_lec4.stdout.strip() == "unsat", r_lec4.stdout + r_lec4.stderr)
+
+# 5. Verilator 5.050 RTL Elaboration & Lint Check
 obj_dir = os.path.join(HW_SIM, "obj_dir")
 r_verilate = subprocess.run([
     VERILATOR, "--cc", "--exe", "--top-module", "tb_top",
@@ -115,6 +120,39 @@ check("sim suite 9: Hardware Merkle-View Receipt Verifier (4/4 accepted, 4/4 tam
       "9. Merkle-View Receipt Verifier (Obend/Receipt/Merkle.lean): 4/4 openings accepted, 4/4 tampered rejected" in out, out)
 check("sim suite 10: DeosCounter.obend + Vault.Law Capability-Guarded Register Bank",
       "10. DeosCounter.obend + Vault.Law Guard: uncred reset=REFUSED(count=35), writeOnce=0xbeef, cred reset=0" in out, out)
+
+# 6. Obend CLI Hardware & FabuBlox & wafer.space Judge Receipt Checks
+OBEND_BIN = os.path.join(LEAN, ".lake", "build", "bin", "obend")
+if os.path.exists(OBEND_BIN):
+    pnr_receipt = os.path.join(obj_dir, "pnr_receipt.json")
+    r_pnr = subprocess.run([OBEND_BIN, "hardware", "verify-pnr", "--mode", "valid", "--out", pnr_receipt], capture_output=True, text=True)
+    r_pnr_ver = subprocess.run([OBEND_BIN, "verify", pnr_receipt], capture_output=True, text=True)
+    r_pnr_bad = subprocess.run([OBEND_BIN, "hardware", "verify-pnr", "--mode", "collision"], capture_output=True, text=True)
+    check("obend hardware verify-pnr + obend verify (hw-pnr-bitstream@1 valid & collision refused)",
+          r_pnr.returncode == 0 and r_pnr_ver.returncode == 0 and r_pnr_bad.returncode == 3,
+          r_pnr.stdout + r_pnr_ver.stdout + r_pnr_bad.stderr)
+
+    r_ret = subprocess.run([OBEND_BIN, "hardware", "verify-retime", "--lag1", "1"], capture_output=True, text=True)
+    r_ret_bad = subprocess.run([OBEND_BIN, "hardware", "verify-retime", "--lag1", "3"], capture_output=True, text=True)
+    check("obend hardware verify-retime (hw-retime-sta@1 lag=1 accepted & lag=3 refused)",
+          r_ret.returncode == 0 and r_ret_bad.returncode == 3,
+          r_ret.stdout + r_ret_bad.stderr)
+
+    ws_receipt = os.path.join(obj_dir, "waferspace_receipt.json")
+    r_ws = subprocess.run([OBEND_BIN, "hardware", "waferspace-signoff", "--mode", "golden", "--out", ws_receipt], capture_output=True, text=True)
+    r_ws_ver = subprocess.run([OBEND_BIN, "verify", ws_receipt], capture_output=True, text=True)
+    r_ws_bad = subprocess.run([OBEND_BIN, "hardware", "waferspace-signoff", "--mode", "bad_antenna"], capture_output=True, text=True)
+    check("obend hardware waferspace-signoff + obend verify (waferspace-signoff@1 GF180MCU golden & antenna refused)",
+          r_ws.returncode == 0 and r_ws_ver.returncode == 0 and r_ws_bad.returncode == 3,
+          r_ws.stdout + r_ws_ver.stdout + r_ws_bad.stderr)
+
+    fb_receipt = os.path.join(obj_dir, "fabublox_receipt.json")
+    r_fb = subprocess.run([OBEND_BIN, "fabublox", "check", "--recipe", "damascene", "--out", fb_receipt], capture_output=True, text=True)
+    r_fb_ver = subprocess.run([OBEND_BIN, "verify", fb_receipt], capture_output=True, text=True)
+    r_fb_bad = subprocess.run([OBEND_BIN, "fabublox", "check", "--recipe", "post_cu_anneal"], capture_output=True, text=True)
+    check("obend fabublox check + obend verify (fabublox-run@1 damascene & post-Cu contamination refused)",
+          r_fb.returncode == 0 and r_fb_ver.returncode == 0 and r_fb_bad.returncode == 3,
+          r_fb.stdout + r_fb_ver.stdout + r_fb_bad.stderr)
 
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)
