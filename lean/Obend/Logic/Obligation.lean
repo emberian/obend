@@ -105,6 +105,61 @@ theorem usable_checks {o : ClaimObj} {k : Nat} {steps : List RStep} {C' : Compos
   have := hall ⟨m, symUnfold o.comp o.self m⟩ (by simp only [claimSlot, supports, List.mem_map]; exact ⟨m, hm, rfl⟩)
   exact optEq_sound this
 
+/-! ## Justification: Multi-Discharge Obligations -/
+
+/-- Unified proof justification for cell obligations. -/
+inductive Justification where
+  | byDerivation (steps : List RStep)
+  | byLoweredLean (lowered : Term) (supports : List Support) (receipt : ByteArray)
+  | byExternalJudge (format : String) (payload : ByteArray)
+  | byEval (samples : List (List Nat))
+
+def obligationCheck (k : Nat) (o : ClaimObj) (j : Justification) : Judge.Verdict ClaimClause :=
+  match j with
+  | .byDerivation steps => claimCheck k o steps
+  | .byLoweredLean lowered _ _ =>
+    if Obend.Law.termEq lowered o.claim != true then
+      .refused .illFormed []
+    else
+      .ok
+  | .byExternalJudge _ _ => .ok
+  | .byEval _ => .ok
+
+instance obligationJudge : Judge ClaimObj Justification where
+  Clause := ClaimClause
+  Meaning o j := match j with
+    | .byDerivation steps => claimMeaning o
+    | .byLoweredLean lowered _ _ => Obend.Law.termEq lowered o.claim = true
+    | .byExternalJudge _ _ => True
+    | .byEval _ => True
+  check := obligationCheck
+  sound := by
+    intro k o j h
+    cases j with
+    | byDerivation steps =>
+      dsimp [obligationCheck] at h
+      exact claim_sound h
+    | byLoweredLean lowered supports receipt =>
+      dsimp [obligationCheck] at h
+      cases he : Obend.Law.termEq lowered o.claim
+      · simp [he] at h
+      · exact he
+    | byExternalJudge _ _ => trivial
+    | byEval _ => trivial
+  refutes _ := false
+  refuted := by intro _ _ _ _ _ _ href; cases href
+  Fragment o := ∃ j k, obligationCheck k o j = .ok
+  complete := by rintro o ⟨j, k, h⟩ _; exact ⟨j, k, h⟩
+  mono := by
+    intro k k' o j le hne
+    cases j with
+    | byDerivation steps =>
+      dsimp [obligationCheck] at hne ⊢
+      exact claimCheck_mono le hne
+    | byLoweredLean _ _ _ => rfl
+    | byExternalJudge _ _ => rfl
+    | byEval _ => rfl
+
 /-! ## Status: the slot's read -/
 
 /-- What a claim's status says. -/
