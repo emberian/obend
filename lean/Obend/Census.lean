@@ -270,6 +270,8 @@ import Obend.Lower.Semantics
 import Obend.Lower.Lower
 import Obend.Lower.Typing
 import Obend.Lower.Proofs.Checks
+import Obend.Lower.Proofs.Subst
+import Obend.Lower.Proofs.Sound
 import Obend.Main
 import Obend.Receipt
 import Obend.Receipt.Cli
