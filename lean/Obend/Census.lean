@@ -211,9 +211,13 @@ import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
 import Obend.Fold
 import Obend.Hardware
+import Obend.Hardware.Compiler
 import Obend.Hardware.Fabric
+import Obend.Hardware.FabuBlox
+import Obend.Hardware.HDL
 import Obend.Hardware.Process
 import Obend.Hardware.Silicon
+import Obend.Hardware.Synth
 import Obend.Intention
 import Obend.Kind
 import Obend.Kind.Proofs

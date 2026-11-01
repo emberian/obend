@@ -2,7 +2,7 @@ module
 /-
 # Obend.Hardware.Fabric — Linear Wire-Fanout, 2D eFPGA Mesh, Merkle/Vault Silicon & Hardware Slot
 
-Connects Objective Bend's resource system, 2D eFPGA fabric bitstreams (FABulous / fabublox),
+Connects Objective Bend's resource system, 2D eFPGA fabric bitstreams (FABulous eFPGA),
 Merkle-dated Receipt verification (`Obend.Receipt.Merkle`), capability-guarded `Vault.Law`
 registers (`DeosCounter.obend`), and the 3-tier Hardware Specialization Slot (`Obend.Slot`):
 

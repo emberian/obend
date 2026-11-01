@@ -2,7 +2,7 @@ module
 /-
 # Obend.Hardware.Process — Gate-Level BELs, eFPGA Bitstreams, PVT Timing Signoff & Ledger Silicon
 
-Formalizes physical technology mapping, configurable eFPGA BLE bitstreams (FABulous / fabublox
+Formalizes physical technology mapping, configurable eFPGA BLE bitstreams (FABulous eFPGA
 architecture), multi-node PVT static timing analysis (7nm FinFET, 16nm UltraScale+, 130nm SkyWater
 CMOS), and application-level hardware pipelines (`ReviewMember.obend` and `Obend.Ledger`):
 
@@ -71,7 +71,7 @@ theorem carryBel_eq_fullAdderSpec (a b ci : Bool) :
     evalCarryBel a b ci = fullAdderSpec a b ci := by
   cases a <;> cases b <;> cases ci <;> rfl
 
-/-! ## 2. Configurable eFPGA BLE Tile & Bitstream Synthesis (FABulous / fabublox Model) -/
+/-! ## 2. Configurable eFPGA BLE Tile & Bitstream Synthesis (FABulous eFPGA Model) -/
 
 abbrev TileBitstream := BitVec 9
 

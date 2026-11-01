@@ -1,57 +1,107 @@
-# Report: lane Hardware (Antigravity, 2026-11-01)
+# Report — Hardware Lane (`Obend.Hardware`): Synchronous HDL, Whole-Book Compiler, Technology Mapping, FABulous eFPGA & FabuBlox Nanofabrication
 
-Verified FPGA (Xilinx UltraScale+ `VU9P` / Versal `VH1582`), eFPGA (FABulous / fabublox), and ASIC
-(`7nm` FinFET / `16nm` FinFET / `130nm` SkyWater CMOS) compilation, physical floorplanning, and
-silicon-process stack for Objective Bend. Verified in the Lean 4 kernel (`0 sorry`, 6 `#tooth`
-kernel mutation checks), **Z3** (`lec_check.smt2` `unsat`, `lec_fabric.smt2` `unsat`), and
-**Verilator 5.050** (`tests/run-hardware.py` 14/14 across 15 SystemVerilog modules and 10
-cycle-accurate silicon co-simulation suites under `--x-assign unique --x-initial unique` and
-`Verilated::randReset(2)`).
+## 1. Architecture & First-Class Library Modules (`lean/Obend/Hardware/`)
 
-## What landed
-| item | where | state |
-|---|---|---|
-| Bit-exact packing & phase erasure (`unpackVal_packVal`, `packVal_unpackVal`, `lowerTy_prototype_erases_cold_spine`, `lowerTy_custody_zero_bits`) | `Obend/Hardware/Silicon.lean` | proved |
-| Reset-free silicon macros: `stepDataReg` (`SRLC32E` / `DFFQ`+`ICG`), 2-stage Laguna crossing `pipe2_x_free`, 4-stage `DSP48E2`/`DSP58` MAC `dspMac_latency_4`, `URAM288`/`SRAM` Boot Zero-Sweep `bootSweep_clears_all`, RDW collision bypass `bypassRAM_exact_latest_write`, 2-slot AXI4-Stream skid buffer `stepSkid_wf` & `stepSkid_queue_conserved` | `Obend/Hardware/Silicon.lean` | proved; 3 teeth |
-| Multi-SLR & ASIC floorplanning (`Coord`, `checkChannelHop`, `comb_channel_is_tile_local`, `slr_crossing_has_laguna_pair`) | `Obend/Hardware/Silicon.lean` | proved; refusal pole |
-| Demand-driven wave chip refinement (`chip_lookup_iff_chase`, `chip_computes_demand`, `chip_never_valid_of_divergent`) | `Obend/Hardware/Silicon.lean` | proved |
-| Gate-level BEL mapping (`LUT2`/`LUT6` + `CARRY8`: `lut2_xor_sound`, `lut2_and_sound`, `carryBel_eq_fullAdderSpec`) | `Obend/Hardware/Process.lean` | proved; tooth + Z3 |
-| Configurable eFPGA BLE tile & 9-bit bitstream synthesis (`evalEfpgaTile`, `compileTileBitstream`, `efpga_bitstream_fullAdder_sound`, `efpga_bitstream_and_sound`) | `Obend/Hardware/Process.lean` | proved; Verilator |
-| Multi-node PVT static timing signoff (`corner7nm_SS` 500 MHz, `corner16nm_SS` 400 MHz, `corner130nm_SS` 200 MHz; `timingSignoff_sound`, `obend_multi_process_timing_signoff`) | `Obend/Hardware/Process.lean` | proved; refusal pole |
-| `ReviewMember.obend` 2-stage silicon pipeline (`reviewMember_silicon_claim_holds`) & streaming `Obend.Ledger` co-processor (`hwLedger_period_monotone`, `hwLedger_closed_refused`, `hwLedger_balanced_conserved`, `hwLedger_twice_refused`) | `Obend/Hardware/Process.lean` | proved; Z3 + Verilator |
-| Linear & affine wire-fanout typechecker (`linear_or_affine_zero_forks`, `quantityOnce_accepted_and_duplicated_refused`) | `Obend/Hardware/Fabric.lean` | proved; refusal pole |
-| 2x2 multi-tile eFPGA mesh + sequential Frame Loader with hardware lock (`frameLoader_immutable_when_locked`, `efpga_mesh_twiceReview_sound`) | `Obend/Hardware/Fabric.lean` | proved; Z3 + Verilator |
-| Hardware Merkle-View Receipt verifier (`hwMerkle_climb_complete`) & `DeosCounter.obend` + `Vault.Law` register bank (`deosHw_reset_without_cred_preserves_count`, `deosHw_writeOnce_immutable`) | `Obend/Hardware/Fabric.lean` | proved; tooth + Z3 + Verilator |
-| 3-tier Hardware Specialization Slot (`HwCandidate`: `.bitstream` -> `.book` -> `.machine`; `hwBitstream_usable_sound`, `hwMoved_pin_blocks_bitstream`) | `Obend/Hardware/Fabric.lean`, `Teeth/Hardware/SiliconTeeth.lean` | proved; tooth |
-| Standalone RTL / XDC / TCL / OpenLane / SMT emitters & 10-suite Verilator + Z3 test runner | `hardware/`, `tests/run-hardware.py` | 14/14 passing |
+The `Obend.Hardware` library connects Objective Bend's demand machine (`Obend.Equiv.Demand`),
+quantity & reuse discipline (`Obend.Core.Ty`), leaf object books (`Obend.Leaf.Emit`), specialization
+slots (`Obend.Slot` / `Obend.Leaf.Specialize`), capability laws (`Obend.Vault.Law`), and streaming
+ledger (`Obend.Ledger`) to a verified synchronous Hardware Description Language, technology mapper,
+FABulous eFPGA bitstream fabric, and FabuBlox (`fabublox.com`) cleanroom nanofabrication engine:
 
-## Decisions, with critique
-- **Control-reset vs. datapath-enable separation**: Only control valid bits (`slot_valid`,
-  `m_valid`, `s_valid`, `boot_done`, `cfg_locked`) receive synchronous reset. All wide datapaths
-  (`SRLC32E` / `DFFQ`), `DSP48E2` / `DSP58` internal pipeline registers (`A1/B1`, `A2/B2/C2`,
-  `MREG/C3`, `PREG`), and `URAM288` / `RAMB36E2` / ASIC `1R1W` SRAM arrays are modeled with
-  arbitrary power-on state (`∀ st₀`, `∀ mem₀`) and verified under `Verilated::randReset(2)`.
-  Connecting a reset net to FPGA `SRLC32E` or `DSP48E2` inference templates either blocks packing
-  or forces high-fanout synchronous reset routing trees that fail timing above 350 MHz.
-- **Hardware Boot Zero-Sweep + RAW Collision Bypass for URAM/SRAM**: FPGA `URAM288` and ASIC SRAM
-  macros have no reset pin for the memory array and exhibit Read-During-Write (`RDW`) bitline
-  contention when simultaneous read and write hit the same address. We wrap every RAM instance in a
-  verified `DEPTH`-cycle Boot Zero-Sweep FSM (`bootSweep_clears_all`) and a 1-cycle RAW forwarding
-  bypass that suppresses physical `rdEn` on collision (`bypassRAM_exact_latest_write`).
-- **3-tier Hardware Specialization Slot (`HwCandidate`)**: Rather than inventing a separate
-  invalidation protocol for FPGA/eFPGA bitstreams, `HwCandidate` reuses `Obend.Slot` and
-  `Obend.Leaf.Specialize` with candidate order `[.bitstream, .book, .machine]`. `.bitstream`
-  requires both `C.closedB` and PVT static timing closure (`checkTimingSignoff corner periodPs
-  critPath`). When target timing fails (e.g. 500 MHz on 130nm Sky130 CMOS,
-  `sky130_overclock_rejects_bitstream_keeps_book`), `.bitstream` is refused and `.book` is selected;
-  when a layer or object pin moves (`override_blocks_bitstream`), both `.bitstream` and `.book` are
-  blocked by name and `.machine` is selected.
+1. **[`Obend.Hardware.HDL`](file:///Users/ember/dev/obend/lean/Obend/Hardware/HDL.lean)** —
+   * **Core Synchronous HDL (`RtlAluOp`, `RtlExpr`, `WireAssign`, `RegSpec`, `RtlModule`)**:
+     64-bit combinational expressions and sequential registers with explicit clock domains
+     (`ClkDomain.coreClk`, `.axiIoClk`, `.cfgJtagClk`) and reset discipline
+     (`ResetKind.resetFree` vs `ResetKind.syncReset initVal`).
+   * **Topological Combinational DAG Verifier (`checkExprDAG`, `checkWireTableDAG`)**:
+     Statically rules out combinational loops and proves `evalRtlExpr_dag_locality` (wire `i`
+     depends only on wires `< i`, guaranteeing single-pass deterministic evaluation).
+   * **Static Clock-Domain Crossing (CDC) Verifier (`checkRegCdc`, `checkModuleCdc`)**:
+     Proves `cdcSafe_no_unsynchronized_crossing`: no register in `dstReg.domain` may read a
+     register from `srcDom ≠ dstReg.domain` unless `dstReg.isSynchronizer = true` and `nextExpr` is
+     a direct `.regRead` with no intermediate combinational logic.
+   * **AST-Driven SystemVerilog-2012 Emitter (`emitModuleSV`)**:
+     Directly pretty-prints any verified `RtlModule` AST into synthesizable SystemVerilog-2012,
+     separating reset-free datapath registers from synchronous-reset control registers.
 
-## What is not proved
-- The gate-level BEL (`evalCarryBel`) and 2x2 eFPGA mesh (`evalMesh2x2Snake`) are proved for fixed
-  datapath widths (`BitVec 64`) and concrete compositions (`ReviewMember.obend`,
-  `TwiceReview.obend`), rather than a general compiler pass from arbitrary recursive `Obend.Core.Term`
-  into multi-tile place-and-route graphs.
-- Static timing analysis (`checkTimingSignoff`) uses Manhattan tile-hop and carry-chain linear delay
-  bounds per PVT corner (`corner7nm_SS`, `corner16nm_SS`, `corner130nm_SS`) rather than parasitic RC
-  SPEF extraction after physical routing.
+2. **[`Obend.Hardware.Compiler`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Compiler.lean)** —
+   * **Hardware Input-Port Substitution (`substInputPort0`, `substInputPort0_sound`)**:
+     Specializes compiled slot bodies at call sites `self.m(arg)` with universal soundness proof.
+   * **General `Term` → `RtlExpr` Compiler (`compileTerm`, `compileTerm_sound`)**:
+     Compiles `.nat`, `.boolean`, `.bound`, `.get (.bound selfDepth) member`,
+     `.app (.lam subBody) arg` (flattened `super`/`let` β-redexes),
+     `.app (.get (.bound selfDepth) member) arg` (method calls through `self`),
+     `.binary` (`add`, `multiply`, `subtract`, `equal`, `conjunction`, `less`, `lessEqual`),
+     `.ifBool`, and `.ifZero` (with de Bruijn environment shifting `predExpr :: varEnv`).
+     Proves universal structural soundness `compileTerm_sound` by recursion over `t : Term`.
+   * **Whole-Book Compiler (`compileBookToRtl`)**:
+     Compiles an `Obend.Leaf.Book` (such as `emit (comp 1)` from `ReviewMember.obend`) directly
+     into a DAG- and CDC-verified `RtlModule`.
+
+3. **[`Obend.Hardware.Synth`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Synth.lean)** —
+   * **Verified `LUT2`/`LUT3` & `CARRY8` Technology Mapping**:
+     Proves `lut2_or_sound` (`0xE`), `lut3_mux_sound` (`0xCA`), `evalLut3MuxBits_sound`, and
+     two's-complement subtractor mapping `carrySubBel_eq_fullSubStageSpec` (`a + !b + cin`).
+   * **Verified Pipeline Retiming (`stepRetime2`, `retime2Stage_sound`, `retiming_closes_16nm_500MHz`)**:
+     Splits a deep combinational tree `f (g x) (h y)` across a register cutset, proving 2-cycle
+     latency-shifted equivalence from any initial `X` state and closing 500 MHz (`2000 ps`) timing
+     on 16nm FinFET SS (`2718 ps` un-retimed → `1084 ps` retimed).
+
+4. **[`Obend.Hardware.FabuBlox`](file:///Users/ember/dev/obend/lean/Obend/Hardware/FabuBlox.lean)** —
+   * **FabuBlox (`fabublox.com`) Cleanroom Process Intelligence & 2D Cutline Layer-Stack Emulator**:
+     Models multi-material wafer cross-sections (`CutlineColumn`, `WaferState`) along a GDS layout
+     cutline under sequential cleanroom fabrication steps (`lithoWindow`, `anisotropicRieOxide`,
+     `stripPhotoresist`, `depositMetal`, `cmpMetal`, `feolThermalAnneal`).
+   * **`Facility OS` Cleanroom Contamination, Thermal & Etch-Stop Rules (`checkFacilityStep`)**:
+     - `facilityCheck_prevents_scorched_resist`: prevents steps `> 150°C` while photoresist is present;
+     - `facilityCheck_prevents_feol_contamination`: prevents wafers with exposed `Cu` or `Au` from
+       entering `.feolFurnace` or `.aldChamber`;
+     - `rie_masked_column_invariant` & `rie_selective_via_landing_sound`: proves anisotropic RIE
+       preserves masked dielectric columns while clearing unmasked contact windows and preserving
+       the underlying $\text{TiN}$ barrier layer under finite selectivity;
+     - `fabublox_damascene_flow_verified` & `extractCornerFromWafer_closes_500MHz`: verifies a
+       6-step CMOS contact-via + copper damascene flow and extracts PDK timing parameters that
+       close 500 MHz static timing signoff.
+
+5. **[`Obend.Hardware.Silicon`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Silicon.lean)** —
+   * 1-hot hardware wave refinement of `Obend.Equiv.Demand` (`waveHw_divergent_fires`),
+   * Linear/affine wire fanout and `.cap bankId` SRAM access tokens (`quantityDuplicated_refused`),
+   * Reset-free 2-stage Laguna crossing (`pipe2_x_free`), 4-stage `DSP48E2` MAC (`dspMac_latency_4`),
+     and `URAM288` with RAW collision bypass (`bypassRAM_exact_latest_write`),
+   * 2-slot AXI4-Stream skid buffer (`skid2_conservation`, `skid2_preserve_under_stall`),
+   * Inter-SLR die crossing & Manhattan wirelength bounds (`checkChannelHop`).
+
+6. **[`Obend.Hardware.Process`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Process.lean)** —
+   * `LUT2`/`LUT6` + `CARRY8` full-adder BEL equivalence (`carryBel_eq_fullAdderSpec`),
+   * FABulous eFPGA BLE tile bitstream synthesis (`efpga_bitstream_fullAdder_sound`),
+   * Multi-corner PVT static timing signoff (`corner7nm_SS`, `corner16nm_SS`, `corner130nm_SS`,
+     `timingSignoff_sound`, `obend_multi_process_timing_signoff`),
+   * Cycle-accurate `Obend.Ledger` co-processor (`hwLedger_balanced_conserved`).
+
+7. **[`Obend.Hardware.Fabric`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Fabric.lean)** —
+   * $2\times 2$ FABulous eFPGA tile mesh & configuration frame loader (`frameLoader_immutable_when_locked`,
+     `efpga_mesh_twiceReview_sound`),
+   * Hardware Merkle-view receipt climber (`hwMerkle_climb_complete`),
+   * `DeosCounter.obend` + `Obend.Vault.Law` register bank (`deosHw_writeOnce_immutable`),
+   * 3-tier hardware specialization slot (`HwCandidate`: `.bitstream` → `.book` → `.machine`,
+     `hwBitstream_usable_sound`, `hwMoved_pin_blocks_bitstream`).
+
+## 2. Teeth, Refusal Poles & Mutation Verification ([`SiliconTeeth.lean`](file:///Users/ember/dev/obend/lean/Obend/Teeth/Hardware/SiliconTeeth.lean))
+
+* **Refusal Poles**: `duplicated_affine_refused`, `sky130_overclock_500mhz_refused`,
+  `unregistered_slr_crossing_refused`, `combinational_loop_refused`, `unsynchronized_cdc_refused`,
+  `fabublox_under_and_over_etch_refused`.
+* **End-to-End Book → RTL Compilation**: `review_book_compiled_rtl_verified` compiles the actual
+  `emit (comp 1)` book of `ReviewMember.obend`, verifies `checkRtlModule = true`, and evaluates
+  `out_review(3) = 5` and `out_twice(3) = 7`.
+* **10 `#tooth` Kernel Mutation Checks**:
+  1. `Obend.Hardware.Silicon.pipe2_x_free`
+  2. `Obend.Hardware.Silicon.dspMac_latency_4`
+  3. `Obend.Hardware.Silicon.bypassRAM_exact_latest_write`
+  4. `Obend.Hardware.Process.carryBel_eq_fullAdderSpec`
+  5. `Obend.Hardware.Fabric.deosHw_writeOnce_immutable`
+  6. `Obend.Hardware.Fabric.hwBitstream_usable_sound`
+  7. `Obend.Hardware.HDL.cdcSafe_no_unsynchronized_crossing`
+  8. `Obend.Hardware.Compiler.compilePrim_sound`
+  9. `Obend.Hardware.Synth.lut3_mux_sound`
+  10. `Obend.Hardware.FabuBlox.facilityCheck_prevents_feol_contamination`

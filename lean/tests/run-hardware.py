@@ -59,6 +59,11 @@ r_lec2 = subprocess.run([Z3, os.path.join(HW_SIM, "lec_fabric.smt2")], capture_o
 check("z3 lec_fabric.smt2: 2x2 eFPGA TwiceReview mesh & Vault.Law writeOnce security (unsat)",
       r_lec2.returncode == 0 and r_lec2.stdout.strip() == "unsat", r_lec2.stdout + r_lec2.stderr)
 
+# 3. Z3 Compiler (compileBookToRtl), Synth (CARRY8 sub) & FabuBlox Facility OS Safety Check
+r_lec3 = subprocess.run([Z3, os.path.join(HW_SIM, "lec_compiler_fabublox.smt2")], capture_output=True, text=True)
+check("z3 lec_compiler_fabublox.smt2: compileBookToRtl, CARRY8 sub & FabuBlox Facility OS (unsat)",
+      r_lec3.returncode == 0 and r_lec3.stdout.strip() == "unsat", r_lec3.stdout + r_lec3.stderr)
+
 # 3. Verilator 5.050 RTL Elaboration & Lint Check
 obj_dir = os.path.join(HW_SIM, "obj_dir")
 r_verilate = subprocess.run([
