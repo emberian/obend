@@ -269,6 +269,9 @@ import Obend.Lower.Fragment
 import Obend.Lower.Semantics
 import Obend.Lower.Lower
 import Obend.Lower.Typing
+import Obend.Lower.Judge
+import Obend.Lower.Cli
+import Obend.Lower.Proofs.Book
 import Obend.Lower.Proofs.Checks
 import Obend.Lower.Proofs.Subst
 import Obend.Lower.Proofs.Sound

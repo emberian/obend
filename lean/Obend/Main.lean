@@ -72,6 +72,16 @@ Ledger commands (lane Ledger, 2026-11-01; `Obend.Ledger.Cli`):
         period. `obend merge OTHER [--drop P-NNNN]` stitches the other replica's register through this
         one's, atomically; `obend verify` re-checks posting and trial-balance receipts.
 
+Lowering commands (lane Lower, 2026-11-01; `Obend.Lower.Cli`):
+
+    obend lower NAME [--module M] [--arg N] [--out DIR] [--emit BOOK.json]
+        read the declaration NAME of a built Lean module (default `Programs`, `tests/lower/Programs.lean`,
+        `lake build LowerPrograms`) into Lean-lite,
+        lower it to Core4, check it, print it; write the held code and the `lower@1` certificate; run
+        it on the machine; emit it as a Leaf book.
+    obend lower --verify CERT.json SOURCE.json
+        judge a `lower@1` certificate by re-lowering its source. Exit 0 / 3.
+
 Typed-core packet commands (lane A, 2026-10-31; a packet is `dregg.objective-bend.typed-core.v3`):
 
     obend check-core FILE.json
@@ -95,6 +105,7 @@ public import Obend.Logic.Receipt
 public import Obend.Leaf.Specialize
 public import Obend.Analysis.Cli
 public import Obend.Ledger.Cli
+public import Obend.Lower.Cli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -119,6 +130,7 @@ def usage : String :=
   "       obend emit --package PACKAGE.json --object ENTRY --out BOOK.json [--call MEMBER NAT]\n" ++
   "       obend specialize --package PACKAGE.json --object ENTRY --book BOOK.json [--call MEMBER NAT]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
+  "       obend lower NAME [--module M] [--arg N] [--out DIR] [--emit BOOK.json] | obend lower --verify CERT.json SOURCE.json\n" ++
   "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
 
@@ -728,6 +740,7 @@ public def main (args : List String) : IO UInt32 :=
     Obend.Ledger.Cli.verifyOr path rest <|
       Obend.Analysis.Cli.verifyOr path ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
   | "analyze" :: _ => (Obend.Analysis.Cli.main? args).getD (do IO.eprintln usage; return 64)
+  | "lower" :: _ => (Obend.Lower.Cli.main? args).getD (do IO.eprintln usage; return 64)
   | _ => match Obend.Receipt.Cli.main? args with
     | some act => act
     | none => match Obend.Ledger.Cli.main? args with
