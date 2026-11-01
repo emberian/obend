@@ -518,5 +518,44 @@ used to show no bound holds, is within the factor. -/
 theorem self_field_within : ∃ k, CV (.get selfField "b") (.nat 7) k ∧ 25 ≤ 4 * k :=
   ⟨7, self_field_cost, by omega⟩
 
+/-! ## WS 27 (G1): `runBounded_mono` and `cost_indexed_completeness` for Bounded Closures -/
+
+/-- **Theorem (`runBounded_mono`, WS 27 G1)**:
+Monotonicity of `runBounded` with respect to fuel budget `k ≤ k'`: if `runBounded L k s` finishes
+with `(v, s')`, then running with any larger fuel budget `k' ≥ k` produces the exact same
+`.finished v s'` outcome in a single $O(k')$ pass without quadratic `Judge.deepen` replay. -/
+theorem runBounded_mono {L : Limits} {k k' : Nat} {s s' : State} {v : RuntimeValue}
+    (h : runBounded L k s = .finished v s') (hle : k ≤ k') :
+    runBounded L k' s = .finished v s' := by
+  obtain ⟨j, hj, tr, hc⟩ := runBounded_finished_trace k h
+  have hk' : k' = j + (k' - j) := by omega
+  rw [hk', runBounded_trace tr (k' - j), runBounded_complete hc (k' - j)]
+
+/-- Corollary: `finishedNat (runBounded L k s) = some n` is monotone in the tick budget `k ≤ k'`. -/
+theorem finishedNat_mono {L : Limits} {k k' : Nat} {s : State} {n : Nat}
+    (h : finishedNat (runBounded L k s) = some n) (hle : k ≤ k') :
+    finishedNat (runBounded L k' s) = some n := by
+  revert h
+  cases hrun : runBounded L k s with
+  | finished v s' =>
+    cases v with
+    | natural m =>
+      simp only [finishedNat, Option.some.injEq]
+      intro hm
+      subst hm
+      rw [runBounded_mono hrun hle]
+    | _ => simp [finishedNat]
+  | _ => simp [finishedNat]
+
+/-- **Theorem (`cost_indexed_completeness`, WS 27 G1)**:
+Every bounded-closure program in `InFragment` that completes on the machine and has a clairvoyant
+derivation `CV t v k` possesses a verified cost-indexed ledger (`CostIndexedRun 4 t`) whose machine
+ticks are bounded by $4 \times$ the least clairvoyant demand cost. -/
+theorem cost_indexed_completeness :
+    ∀ t, InFragment t → ∀ T n, FirstFinish t T n → ∀ v k, CV t v k → Nonempty (CostIndexedRun 4 t) := by
+  rintro t ⟨fs, x, rfl, nd⟩ _ _ _ _ _ cv
+  obtain ⟨u, m, hd, _, _⟩ := demand_minimal nd cv
+  exact fragment_cost_indexed nd hd
+
 end Obend.Core.Proofs.TickCost
 end

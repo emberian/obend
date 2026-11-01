@@ -21,6 +21,8 @@ imports changes; a new leaf added alone is caught at the next such rebuild, not 
 import Obend
 import Obend.Analysis.Cli
 import Obend.Analysis.Coverage
+import Obend.Analysis.Diff
+import Obend.Analysis.Flowpipe
 import Obend.Analysis.Format
 import Obend.Analysis.Impact
 import Obend.Analysis.Replay
@@ -97,6 +99,7 @@ import Obend.Core.Proofs.Collect.Typing
 import Obend.Core.Proofs.Completeness
 import Obend.Core.Proofs.Conservation
 import Obend.Core.Proofs.Aggregate
+import Obend.Core.Proofs.GradedRecord
 import Obend.Core.Proofs.DataSoundness
 import Obend.Core.Proofs.DigestChecks
 import Obend.Core.Proofs.JoinReading
@@ -250,6 +253,7 @@ import Obend.Hardware.WaferSpace
 import Obend.Intention
 import Obend.Kind
 import Obend.Kind.Proofs
+import Obend.Kind.Registry
 import Obend.Equiv.Yields
 import Obend.Judge
 import Obend.Judge.Certified
@@ -280,6 +284,7 @@ import Obend.Law.Syntax
 import Obend.Leaf.BendTT
 import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
+import Obend.Leaf.Futamura
 import Obend.Leaf.Residual
 import Obend.Leaf.Specialize
 import Obend.Leaf.UpTo
@@ -301,14 +306,18 @@ import Obend.Logic.Receipt
 import Obend.Logic.Rewrite
 import Obend.Logic.Turn
 import Obend.Lower.Cli
+import Obend.Lower.ExprCAM
 import Obend.Lower.Fragment
+import Obend.Lower.Inductive
 import Obend.Lower.Judge
+import Obend.Lower.LeanKernel
 import Obend.Lower.Lower
 import Obend.Lower.Proofs.Book
 import Obend.Lower.Proofs.Checks
 import Obend.Lower.Proofs.Complete
 import Obend.Lower.Proofs.Hardware
 import Obend.Lower.Proofs.SelfAccelerate
+import Obend.Lower.Proofs.SiliconKernel
 import Obend.Lower.Proofs.Sound
 import Obend.Lower.Proofs.Subst
 import Obend.Lower.Reflect
@@ -347,6 +356,7 @@ import Obend.Run.Runner
 import Obend.Run.Shared
 import Obend.Run.SharedExample
 import Obend.Run.Spec
+import Obend.Run.Ticks
 import Obend.Slot
 import Obend.Slot.Budget
 import Obend.Slot.Core4

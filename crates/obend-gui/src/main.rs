@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 use obend_ffi::session::ObendSession;
+use obend_gui::viewport::{render_projection_viewport, LawDialControl, LawDialMode, ProjectionKind};
 use std::fs;
 use std::path::PathBuf;
 
@@ -26,6 +27,13 @@ enum Commands {
     /// Preview read-only hardware projections (schematics, timing slack, GDSII)
     ProjectHw {
         cert_path: PathBuf,
+    },
+    /// Render an interactive SVG/HTML/terminal viewport for any of the 10 ProjectionKinds
+    Viewport {
+        #[arg(short, long, default_value = "waveform")]
+        kind: String,
+        #[arg(short, long, default_value = "ThermalCoolingOde")]
+        title: String,
     },
 }
 
@@ -53,6 +61,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let hw_raw = fs::read(&cert_path)?;
             let projected_cell = session.project_hardware(&hw_raw)?;
             println!("{} Projected cell: {} bytes (.obnb Content.cell)", "[OK]".bold().green(), projected_cell.len());
+        }
+        Commands::Viewport { kind, title } => {
+            let proj_kind = ProjectionKind::from_label(&kind)
+                .ok_or_else(|| format!("unknown ProjectionKind: {kind}"))?;
+            let dial = LawDialControl {
+                cell_id: "cell-0".to_string(),
+                mode: LawDialMode::Locked,
+                invariant_expr: "T in [15.0, 35.0]".to_string(),
+                margin_lo: 15.0,
+                margin_hi: 35.0,
+                current_value: 25.0,
+            };
+            let vp = render_projection_viewport(proj_kind, &title, &dial);
+            println!("{}", vp.terminal_canvas);
         }
     }
 

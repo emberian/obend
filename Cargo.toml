@@ -3,5 +3,6 @@ members = [
     "crates/obend-sandbox",
     "crates/obend-ffi",
     "crates/obend-gui",
+    "crates/obend-node",
 ]
 resolver = "2"

@@ -500,5 +500,32 @@ theorem vtable_clean (bad : List String → Bool) (C : Composition)
   obtain ⟨x, hx, rfl⟩ := he
   exact flatRow_clean bad C.seed C.layers hs hc x hx
 
+/-- Open vtable flattening over arbitrary (not necessarily closed) `seed` and `layers`. -/
+def openVtable (seed : List (String × Term)) (ls : List Layer) : List (String × Term) :=
+  mapFields resolve (flatRow seed ls)
+
+/-- **`openVtable_no_residual_super` (`G6`)**: Open vtable flattening of any `(seed, ls)` stack
+satisfying `superOnlyProjectedRow` and `cleanRow` leaves zero residual `super` suffix-row records,
+without requiring `Composition.closedB`. -/
+theorem openVtable_no_residual_super (seed : List (String × Term)) (ls : List Layer)
+    (hs : superOnlyProjectedRow seed ls = true)
+    (hc : cleanRow (fun ns => (suffixNames seed ls).contains ns) seed ls = true) :
+    ∀ e ∈ openVtable seed ls,
+      recordBad (fun ns => (suffixNames seed ls).contains ns) e.2 = false := by
+  intro e he
+  simp only [openVtable, mapFields, List.mem_map] at he
+  obtain ⟨x, hx, rfl⟩ := he
+  exact flatRow_clean (fun ns => (suffixNames seed ls).contains ns) seed ls hs hc x hx
+
+/-- **`no_residual_super` (`G6`)**: Specializing `vtable_clean` to `suffixNames C.seed C.layers`
+certifies that no `super` suffix-row record literal remains anywhere in `C.vtable` (for open or
+closed compositions `C`). -/
+theorem no_residual_super (C : Composition)
+    (hs : superOnlyProjectedRow C.seed C.layers = true)
+    (hc : cleanRow (fun ns => (suffixNames C.seed C.layers).contains ns) C.seed C.layers = true) :
+    ∀ e ∈ C.vtable,
+      recordBad (fun ns => (suffixNames C.seed C.layers).contains ns) e.2 = false :=
+  vtable_clean (fun ns => (suffixNames C.seed C.layers).contains ns) C hs hc
+
 end Obend.Leaf
 end

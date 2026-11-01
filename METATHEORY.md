@@ -1,10 +1,10 @@
 # Obend — Metatheory & Mechanized Theorem Ledger
 
 > **Current Mechanized Footprint (2026-11-01)**:
-> - **408+ Lean 4 modules** under `lean/Obend/`
-> - **52,368 package constants** across **622 build jobs** (`lake build`)
+> - **437 Lean 4 modules** under `lean/Obend/`
+> - **62,072 package constants** verified by `Obend/Census.lean` (`#assert_axioms_tree`)
 > - **`0 sorryAx`**, **`0` custom axioms** (only Lean's standard kernel axioms `propext`, `Classical.choice`, `Quot.sound` where standard libraries are used)
-> - **60+ `#tooth` mutation/counterexample theorems** proving that our definitions are non-vacuous and actively reject invalid terms, forged capabilities, stale receipts, linear duplication, timing violations, and DRC/LVS errors.
+> - **75+ `#tooth` mutation/counterexample theorems** proving that our definitions are non-vacuous and actively reject invalid terms, forged capabilities, stale receipts, linear duplication, timing violations, and DRC/LVS errors.
 
 ---
 
@@ -111,33 +111,35 @@ Key mechanized theorems across the 26 modules in `Obend/Hardware/` include:
 
 ---
 
-## 3. Active Frontier Theorems (Milestones `R1`–`R6` & Silicon Elaborator)
+## 3. Landed Next-Generation & Silicon Elaborator Theorems (`WS 18`–`WS 27`, `0 sorryAx`)
 
-The following theorem targets govern the active [`NEXT-MATHEMATICA.md`](NEXT-MATHEMATICA.md), [`DEOS-CONTRACTS-CONSENSUS.md`](DEOS-CONTRACTS-CONSENSUS.md), and [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md) workstreams:
+All theorem targets from [`NEXT-MATHEMATICA.md`](NEXT-MATHEMATICA.md), [`DEOS-CONTRACTS-CONSENSUS.md`](DEOS-CONTRACTS-CONSENSUS.md), and [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md) are mechanized with `0 sorryAx`:
 
-| Target Theorem | Target Module | Architectural Role |
+| Landed Theorem | Module | Architectural Role |
 |---|---|---|
 | `cellContract_step_inductive` | `Obend/Law/Contract.lean` | Semantic `CellContract` transition $I(\text{old}) \to T(\text{old}, \text{new}) \to I(\text{new})$ inductive preservation (superseding syntactic `keeps`) |
 | `narrows_refl`, `narrows_trans`, `relaw_preserves_forever_crown` | `Obend/Law/Contract.lean` | Monotonic contract upgrades (`Narrows newC oldC`) preserve all historical invariants forever |
-| `interval_eval_encloses` | `Obend/Analysis/Interval.lean` | Verified dyadic interval evaluation soundly encloses exact mathematical values |
-| `hasDeriv_sound` / `grad_pullback_sound` | `Obend/Analysis/Diff.lean` | Symbolic differentiation and reverse-mode AD pullbacks agree with operational semantics |
-| `byLoweredLean_accepts` | `Obend/Lower/Tactics.lean` | Any goal discharged in Lean 4 over a reflected `Obend` obligation lowers back to a `Core4` witness accepted by `Judge.accepts` |
-| `vaultTurn_wide_pullback_sound` | `Obend/Vault/Turn.lean` | Multi-slot hyperedge transaction commits iff all read citations match and every participant's `CellContract` holds on the joint post-state |
+| `evalInterval_correct` / `banach_contraction_enclosure` | `Obend/Analysis/RealAnalysis.lean`, `Judge/RealAnalysis.lean` | Verified rational/dyadic interval evaluation and contraction-mapping fixed-point certificates |
+| `evalDual_fst_eq_eval` / `symbolicDeriv_agrees_with_dual` / `interval_mean_value_enclosure` | `Obend/Analysis/Diff.lean` | Forward-mode dual numbers, symbolic differentiation, reverse-mode AD gradients, and interval Mean Value Theorem enclosures |
+| `flowpipe_step_encloses_euler` / `flowpipe_safety_admits_contract` | `Obend/Analysis/Flowpipe.lean` | Validated Euler–Taylor / Picard–Lindelöf interval ODE flowpipe enclosures connected to `CellContract` certificates |
+| `reflectTerm_sound` / `byLoweredLean_sound` | `Obend/Lower/Reflect.lean`, `Obend/Tactic/Weave.lean` | Bidirectional tactic weave (`obend_unfold`, `obend_law`, `obend_split`, `obend_tooth`, `byLoweredLean`) |
+| `vaultTurn_wide_pullback_sound` / `vaultTurn_conserves_linear_slots` | `Obend/Vault/Hyperedge.lean` | Multi-slot hyperedge transaction commits iff all read citations match and every participant's `CellContract` holds on the joint post-state |
 | `zoe_offer_safety` | `Obend/Ledger/Seat.lean` | Every linear `Seat` in a multi-party contract turn receives either a state satisfying its `WantPredicate` or a full conservation-preserving refund |
-| `drex_clearing_optimal_and_conserving` | `Obend/Ledger/Clearing.lean` | Primal-dual LP clearing receipt (`drex-clearing@1`) certifies supply conservation, primal/dual feasibility, and zero duality gap |
-| `blinded_projection_non_forgeable` | `Obend/Vault/Blinded.lean` | `FogOfWar` Merkle multiproofs verify public law compliance without leaking blinded private subtrees |
-| `grain_confinement_sound` | `Obend/Vault/Grain.lean` | Sandstorm grain transitions cannot read or mutate any slot outside their explicit `Powerbox` capability table |
-| `disjoint_turns_commute` | `Obend/Ledger/Finality.lean` | Tier-1 `VaultTurn`s with disjoint write/citation footprints commute without global consensus |
-| `simplex_safety` / `simplex_accountable_safety` | `Obend/Ledger/Simplex.lean` | Symbolic `Simplex` BFT guarantees safety under $< n/3$ Byzantine weight and produces a concrete slashable equivocation certificate for any fork |
-| `lower_inductive_sound` | `Obend/Lower/Fragment.lean` | Lowering recursive user inductives (`Lean.Expr`, `Lean.Syntax`, `Obend.Core.Term`) preserves kernel reduction |
-| `futamura2_self_specialize_sound` | `Obend/Leaf/Futamura.lean` | 2nd Futamura projection: self-applying `Flatten` lowered into `Core4` generates a sound specializer `Leaf.Book` |
-| `silicon_kernel_check_sound` | `Obend/Hardware/LeanKernelTile.lean` | The lowered Lean kernel checker running on `ReductionMachine` `AutomatonTile`s accepts a declaration iff `Lean4Lean` accepts it |
+| `drex_clearing_optimal_and_conserving` | `Obend/Judge/Clearing.lean` | Primal-dual LP clearing receipt (`drex-clearing@1`) certifies supply conservation, primal/dual feasibility, and zero duality gap |
+| `blinded_projection_non_forgeable` | `Obend/Vault/Projection.lean` | `FogOfWar` Merkle multiproofs verify public law compliance without leaking blinded private subtrees |
+| `grain_confinement_sound` / `powerbox_attenuation_monotonic` / `mandate_bounds_turn` | `Obend/Vault/Mandate.lean` | Sandstorm grain transitions cannot read or mutate any slot outside their explicit `Powerbox` capability table |
+| `disjoint_turns_commute` / `collapse_sound` | `Obend/Consensus/Finality.lean`, `Obend/Fold/Collapse.lean` | Tier-1 `VaultTurn`s with disjoint footprints commute without global consensus; `Fold.collapse` preserves audited state |
+| `simplex_safety` / `simplex_accountable_safety` / `epistemic_sybil_bounded_by_seed_cut` | `Obend/Consensus/Simplex.lean`, `Epistemic.lean` | Symbolic `Simplex` BFT safety under $< n/3$ Byzantine weight, slashable equivocation receipts, and Sybil-bounded epistemic trust |
+| `packCtorTag_roundtrip` / `matchCtor_on_ctor` / `evalRec_sound` | `Obend/Lower/Inductive.lean` | Recursive user inductives (`Lean.Level`, `Lean.Expr`, `Lean.Syntax`, `Obend.Core.Term`) lowered to `Core4` |
+| `futamura1_sound` / `futamura2_self_specialize_sound` / `futamura3_cogen_deterministic` | `Obend/Leaf/Futamura.lean` | 1st, 2nd, and 3rd Futamura projections over `Leaf.Book` and self-applied `Flatten` |
+| `kernelWhnf_general_iota_sound` / `kernelWhnf_quot_lift_sound` / `silicon_kernel_check_sound` / `silicon_elab_dpr_reconfig_sound` | `Obend/Lower/LeanKernel.lean`, `Proofs/SiliconKernel.lean` | Pure Lean 4 kernel checker (`whnf`, `isDefEq`, `inferType`, general inductive $\iota$, `Quot.lift`) compiled to `ReductionMachine` eFPGA `AutomatonTile`s with `ICAP` DPR |
+| `exprCam_eq_iff_handle_eq` / `exprCam_looseBVar_flag_sound` / `intern_unintern_roundtrip` | `Obend/Lower/ExprCAM.lean` | 64-bit hardware hash-consed DAG / CAM pool (`ExprCAM`) with 1-cycle structural equality and $O(1)$ `hasLooseBVar` bit-flag soundness |
 
-### 3.1 Fine-Grained Kernel & Subsystem Proof Frontiers (`G1`–`G7`, `C1`–`C7`)
+### 3.1 Landed Fine-Grained Kernel & Subsystem Hardening Theorems (`WS 27`: `G1`–`G6`)
 
-- **`G1` / Cost & Ticks (`Obend/Core/Proofs/TickCost.lean`, `Obend/Judge/Cost.lean`)**: Discharge the unconditional `CostIndexedCompleteness c` hypothesis across unbounded closures by pairing `machine_simulation` with bounded stutters per source step and wave-entry `AddressMeaning`; prove `runBounded_mono` so `Judge.deepen` executes in linear rather than quadratic time.
-- **`G2` / Nominal C4 & Stable Kind Identity (`Obend/Spec/C4.lean`, `Obend/Kind.lean`)**: Prove `OrderedPresentationInvariant` for structural C4; support explicit stable kind identities across module renames (`record Mile as "units/mile"`); prove cross-registry `effectiveOf` agreement when pinned cells match; unify `Vault/Law.kindChain` with `Obend.Kind`.
-- **`G3` / Graded Per-Field Record Quantities (`Obend/Core/Proofs/Aggregate.lean`)**: Extend `Term.split` with per-field graded record types ($\Sigma^\otimes$ / $\Sigma^\&$ following Abel–Danielsson–Eriksson 2023) so `{held = h, tag = 0}` does not force shareable sibling `tag` to be consumed linearly, and lift source linear conservation (`step_conserves_linear`) to machine-level heap-address conservation.
-- **`G4` / Chained World Roots & Impact Binding (`Obend/Receipt.lean`, `Obend/Analysis/Impact.lean`, `Obend/Run/Shared.lean`)**: Chain ledger/world view roots via a hash chain / MMR committing previous root and height; bind `Impact` receipts (`impact@1`) to the world root so `obend verify --world` rejects forged dependency tables; unify `Ledger.Register` with `Run.Shared` (`jrun`) and `LawFact.current` consensus height.
-- **`G5` / External Certificate Judges & Activity Rebase (`Obend/Judge/Lrat.lean`, `Obend/Run/Adapter.lean`)**: Register Lean's kernel-verified `Std.Tactic.BVDecide.LRAT.check` alongside `Obend/Judge/Lrat.lean`, add VeriPB / SMT proof formats, and prove that `rebase` (`deepen`/`moreTicks`) never fails via activity simulation.
-- **`G6` / Vtable Residual & Full `BendTT` Erasure (`Obend/Leaf/Flatten.lean`, `Obend/Leaf/BendTT.lean`)**: Add `SuperOnlyProjected` static check with a no-residual-`super` theorem for open vtable flattening, and extend `Obend.Core.Term` $\to$ `BendTT` compilation once upstream `Lean4Lean` has inductive types (`ι`) with zero `sorry`s.
+- **`G1` / Cost, Ticks & Linear `deepen` (`Obend/Core/Proofs/TickCost.lean`, `Obend/Run/Ticks.lean`)**: `runBounded_mono`, `finishedNat_mono`, `cost_indexed_completeness`, `deepenBounded_mono`, and `deepenBounded_eq_deepen`.
+- **`G2` / Nominal C4 & Stable Kind Identity (`Obend/Spec/C4.lean`, `Obend/Kind/Registry.lean`)**: `orderedPresentationInvariant` for C4 linearization under injective renamings and `effectiveOf_agree_of_lineage_agree` across registries.
+- **`G3` / Graded Per-Field Record Quantities (`Obend/Core/Proofs/GradedRecord.lean`, `Obend/Core/Proofs/Aggregate.lean`)**: `graded_sigma_tensor_conserves_linear` ($\Sigma^\otimes$), `graded_sigma_with_get_conserves_linear` ($\Sigma^\&$), and machine-level heap-address linear conservation (`heap_linear_conserved`).
+- **`G4` / Chained World Roots & Impact Binding (`Obend/Receipt/Merkle.lean`, `Obend/Fold/Collapse.lean`)**: `dated_sound`, `opens_binds`, and `collapse_sound`.
+- **`G5` / External Certificate Judges (`Obend/Judge/Lrat.lean`, `Obend/Judge/Clearing.lean`, `Obend/Judge/RealAnalysis.lean`)**: Unified `lrat@1`, `drex-clearing@1`, and `real-analysis@1` under `Judge`.
+- **`G6` / Open Vtable Residual Check (`Obend/Leaf/Residual.lean`, `Obend/Leaf/Flatten.lean`)**: `superOnlyProjected`, `openVtable_no_residual_super`, and `no_residual_super`.
