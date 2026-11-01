@@ -20,7 +20,9 @@ the checker needs. Every node of `LExpr` is one kernel form:
 * `record`, `split`, `proj`: a structure's constructor applied to its fields, its recursor
   (`S.rec F major ↦ F field₀ … fieldₖ₋₁`), and `Expr.proj` (by field name);
 * `inject`, `cases`: a non-recursive inductive's constructor applied to its fields, and its recursor
-  over the arms in constructor order (each arm's minor premise takes the constructor's fields).
+  over the arms in constructor order (each arm's minor premise takes the constructor's fields);
+* `recConst name T body`: a recursive definition read from its unfolding equation (`f.eq_def`), the
+  body binding the definition itself, so recursive δ is `recConst ↦ body[recConst]`.
 
 Parameters of a constructor or recursor are types and are erased with the motive.
 -/
@@ -76,6 +78,9 @@ inductive LExpr where
   | inject (label : String) (fields : List (String × LExpr))
   /-- Arms in constructor order: the label, the constructor's field names, the minor premise. -/
   | cases (result : Ty) (arms : List (String × List String × LExpr)) (major : LExpr)
+  /-- A recursive definition, read from its unfolding equation `f.eq_def : f = fun xs => rhs[f]`: the
+  body binds the definition itself at index 0 (recursive δ unfolds it into its body). -/
+  | recConst (name : String) (type : Ty) (body : LExpr)
   deriving Repr, Inhabited
 
 namespace LExpr
@@ -110,6 +115,7 @@ def rename (f : Nat → Nat) : LExpr → LExpr
   | .proj n t => .proj n (t.rename f)
   | .inject l fs => .inject l (fs.map fun x => (x.1, x.2.rename f))
   | .cases T arms m => .cases T (arms.map fun x => (x.1, x.2.1, x.2.2.rename f)) (m.rename f)
+  | .recConst n T b => .recConst n T (b.rename (Obend.Core.Term.liftRename f))
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -140,6 +146,7 @@ def subst (σ : Nat → LExpr) : LExpr → LExpr
   | .proj n t => .proj n (t.subst σ)
   | .inject l fs => .inject l (fs.map fun x => (x.1, x.2.subst σ))
   | .cases T arms m => .cases T (arms.map fun x => (x.1, x.2.1, x.2.2.subst σ)) (m.subst σ)
+  | .recConst n T b => .recConst n T (b.subst (liftSubst σ))
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf

@@ -61,6 +61,7 @@ def lexprData : LExpr → Data
   | .cases T arms m => .variant "cases" (.record [("result", tyData T),
       ("arms", listData (arms.map fun a => .record [("label", .label a.1), ("names", listData (a.2.1.map .label)),
         ("minor", lexprData a.2.2)])), ("major", lexprData m)])
+  | .recConst n T b => .variant "recConst" (.record [("name", .label n), ("type", tyData T), ("body", lexprData b)])
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -103,6 +104,8 @@ partial def lexprOf : Data → Option LExpr
             pure (l, ← (← listOf ns).mapM labelOf, ← lexprOf M)
         | _ => none
       pure (.cases (← tyOf T) arms (← lexprOf m))
+  | .variant "recConst" (.record [("name", .label n), ("type", T), ("body", b)]) => do
+      pure (.recConst n (← tyOf T) (← lexprOf b))
   | _ => none
 
 /-- The source's content address: cSHAKE256 of its wire form. -/
@@ -226,7 +229,7 @@ def typeOf (Γ : List Ty) : LExpr → Option Ty
   | .lit _ | .natSucc _ => some .natural
   | .natBin op _ _ => some op.resultTy
   | .boolLit _ => some .boolean
-  | .natRec T _ _ _ | .boolRec T _ _ _ | .cases T _ _ => some T
+  | .natRec T _ _ _ | .boolRec T _ _ _ | .cases T _ _ | .recConst _ T _ => some T
   | .record fs => do
     let ts ← fs.attach.mapM fun ⟨f, _⟩ => do pure (f.1, ← typeOf Γ f.2)
     pure (fieldRow ts)
@@ -274,6 +277,9 @@ def annotate (Γ : List Ty) : LExpr → AnnotationTree
   | .inject _ fs => .node none [.node none (fs.attach.map fun ⟨f, _⟩ => annotate Γ f.2)]
   | .cases _ arms m => .node none [annotate Γ m,
       .node none (arms.attach.map fun ⟨a, _⟩ => .node none [leaf, annotate Γ a.2.2])]
+  | .recConst _ T b =>
+    .node none [.node (some (lamAnn T (fn .emptyRow T))) [.node (some (lamAnn .emptyRow T)) [annotate (T :: Γ) b]],
+      leaf]
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf

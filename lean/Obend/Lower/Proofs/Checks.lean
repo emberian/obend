@@ -293,6 +293,19 @@ theorem natRec_typed {Γ : List Ty} (hΓ : ∀ T ∈ Γ, good T = true) {T : Ty}
       (ctx_reusable hΓ (by simpa [ctxOf] using sl))
   exact ⟨_, app_typed hΓ gN fixT hM⟩
 
+/-- A lowered recursive definition is typed at its type. -/
+theorem recConst_typed {Γ : List Ty} (hΓ : ∀ T ∈ Γ, good T = true) {T : Ty} (hT : good T = true)
+    {B : Term} {u : Uses} (hB : PartialTyping {} (ctxOf (T :: Γ)) B T u) :
+    ∃ v, PartialTyping {} (ctxOf Γ) (.fix (recSpec B) box) T v := by
+  have gE : good .emptyRow = true := rfl
+  have Γ1 := cons_good hT hΓ
+  have body := weaken1 gE hB
+  have spec := lam_typed hΓ hT (lam_typed Γ1 gE body)
+  have boxT : PartialTyping {} (ctxOf Γ) box .emptyRow (zeroUses (ctxOf Γ)) := .record (.nil _) rfl
+  have sl := Obend.Core.MachineTyping.source_uses_length spec
+  exact ⟨_, .fix spec rfl boxT (by simp [good_shareable hT])
+    (argument_ok hΓ gE (by simp [zeroUses, ctxOf])) (ctx_reusable hΓ (by simpa [ctxOf] using sl))⟩
+
 /-- **The lowering is type-correct**: a fragment term of type `T` lowers to a Core4 term of type `T`
 in the lowered context. -/
 theorem lower_typed {Γ : List Ty} {e : LExpr} {T : Ty} (h : LTyped Γ e T) :
@@ -355,6 +368,10 @@ theorem lower_typed {Γ : List Ty} {e : LExpr} {T : Ty} (h : LTyped Γ e T) :
     have hu := Obend.Core.MachineTyping.source_uses_length hm
     exact ⟨_, .case hm ha (labels_of_nodup (by simpa [List.map_map, Function.comp_def] using nd))
       (caseAllowed_ok hΓ (by simpa [ctxOf] using hu))⟩
+  | recConst hT _ ih =>
+    intro hΓ; simp only [lowerT]
+    obtain ⟨_, hb⟩ := ih (cons_good hT hΓ)
+    exact recConst_typed hΓ hT hb
 
 /-- **`lower_checks`**: a closed fragment term of type `T` lowers to a term `checkAgainst` accepts at
 `T`, with every binder unrestricted and every λ reusable. -/

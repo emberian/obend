@@ -44,12 +44,29 @@ def halvings (n : Nat) : Nat := if h : n = 0 then 0 else halvings (n / 2) + 1
 termination_by n
 decreasing_by omega
 
-/-- Out of the fragment: well-founded recursion on a lexicographic measure (`WellFounded.fix`, `Acc.rec`). -/
+/-- A proposition with no fields, and a recursor on its (erased) proof: Lean's kernel reduces it (K);
+Core4 runs its lowering; the source semantics is stuck (`lower_complete_fails`). -/
+structure Witness : Prop
+
+noncomputable def kTooth (n : Nat) : Nat := Witness.rec (motive := fun _ => Nat) n Witness.mk
+
+/-- The kernel reduces it (the recursor of a field-less proposition is K-like). -/
+theorem kTooth_three : kTooth 3 = 3 := rfl
+
+/-- Well-founded recursion on a lexicographic measure: in, through its unfolding equation (`ack.eq_def`,
+proved by `WellFounded.fix_eq`); its kernel value goes through `Acc.rec`, which is out. -/
 def ack : Nat → Nat → Nat
   | 0, n => n + 1
   | m + 1, 0 => ack m 1
   | m + 1, n + 1 => ack m (ack (m + 1) n)
 termination_by m n => (m, n)
+
+def ackTwo (n : Nat) : Nat := ack 2 n
+
+/-- Out of the fragment: `WellFounded.fix` used directly, whose value is `Acc.rec` on a proof. -/
+def countDown (n : Nat) : Nat :=
+  WellFounded.fix (measure id).wf (fun n ih => if h : n = 0 then 0 else ih (n - 1) (by
+    show n - 1 < n; omega) + 1) n
 
 /-- Out of the fragment: a string. -/
 def greeting (n : Nat) : String := toString n

@@ -77,6 +77,8 @@ inductive LTyped : List Ty → LExpr → Ty → Prop where
       (∀ p ∈ arms.zip sig, ∀ T ∈ p.2, good T = true) → good R = true →
       (∀ p ∈ arms.zip sig, LTyped Γ p.1.2.2 (curry p.2 R)) →
       LTyped Γ (.cases R arms m) R
+  | recConst {Γ : List Ty} {name : String} {T : Ty} {body : LExpr} : good T = true → LTyped (T :: Γ) body T →
+      LTyped Γ (.recConst name T body) T
 
 end Obend.Lower
 end

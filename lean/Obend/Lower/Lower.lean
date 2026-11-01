@@ -16,7 +16,8 @@ Lean's `Expr` (`lower : Environment → Expr → Option Term`, in `MetaM`):
 * `Nat` literals to `nat`, `Nat.succ` to `+ 1`, the literal operations to `binary`;
 * `Bool.rec` to `ifBool`;
 * `Nat.rec` to `fix`: `Nat.rec z s m` is `(fix (λself. λ_. λk. ifZero k z (s (k-1) (self (k-1)))) {}) m`;
-* `let` to `(λx. body) value`.
+* `let` to `(λx. body) value`;
+* a recursive definition to `fix (λself. λ_. body) {}`.
 -/
 public import Obend.Lower.Semantics
 public import Obend.Lower.Fragment
@@ -38,6 +39,9 @@ def natRecSpec (Z S : Term) : Term :=
 minor premise. -/
 def caseArm (names : List String) (M : Term) : Term := .split (.bound 0) names (M.rename Nat.succ)
 
+/-- The `fix` specification of a recursive definition: `λself. λ_. body` (the body binds `self` at 0). -/
+def recSpec (B : Term) : Term := .lam (.lam (B.rename Nat.succ))
+
 def lowerT : LExpr → Term
   | .bvar i => .bound i
   | .erased => box
@@ -56,6 +60,7 @@ def lowerT : LExpr → Term
   | .proj n t => .get (lowerT t) n
   | .inject l fs => .inject l (.record (fs.map fun x => (x.1, lowerT x.2)))
   | .cases _ arms m => .case (lowerT m) (arms.map fun x => (x.1, caseArm x.2.1 (lowerT x.2.2)))
+  | .recConst _ _ b => .fix (recSpec (lowerT b)) box
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf

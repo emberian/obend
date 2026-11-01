@@ -273,6 +273,7 @@ import Obend.Lower.Judge
 import Obend.Lower.Cli
 import Obend.Lower.Proofs.Book
 import Obend.Lower.Proofs.Checks
+import Obend.Lower.Proofs.Complete
 import Obend.Lower.Proofs.Subst
 import Obend.Lower.Proofs.Sound
 import Obend.Main

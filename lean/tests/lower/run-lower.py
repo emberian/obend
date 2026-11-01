@@ -4,21 +4,24 @@
   * every first program (`double`, `fib` by structural recursion, `pointNorm` through `structure Point`
     and its methods, `shapeArea` through `inductive Shape` and a `match`, `addLit` through the kernel's
     `Nat.add` on literals, `sumTo` by `Nat.rec`, `small` through `if`/`Decidable`, `isEven` to `Bool`,
-    `halvings` by well-founded recursion on a `Nat` measure, `WellFounded.Nat.fix`)
+    `halvings` by well-founded recursion on a `Nat` measure, `ackTwo` by well-founded recursion on a
+    lexicographic one)
     is read into the fragment, lowered, run on the demand machine at several arguments, and compared
     with `#eval` of the Lean original;
-  * every one but `fib` and `halvings` is accepted by Core4's checker at the type its Lean type lowers
-    to (their elaborated forms compute a type by recursion, `Nat.below` in `Nat.brecOn` and the motive
-    of `WellFounded.Nat.fix`, outside the simply typed fragment; the checker refuses them, as
-    `lower_checks` predicts nothing for them);
+  * every one is accepted by Core4's checker at the type its Lean type lowers to; `fib` and
+    `halvings` are read from their unfolding equations (`f.eq_def`, the reader reports it) and lowered
+    to a simply typed `fix`; with `--kernel-recursion`, `fib` is read through `Nat.brecOn`, which runs
+    but computes a type by recursion (`Nat.below`) and is refused by the checker;
+  * `kTooth` (the K-like recursor of a field-less proposition on its erased proof, `lower_complete_fails`)
+    runs to the value the kernel computes (`kTooth_three : kTooth 3 = 3 := rfl`);
   * every lowering's `lower@1` certificate is accepted by `obend lower --verify`;
   * `double` is emitted as a Leaf book and the book computes what the machine computes.
 
 Teeth (each must be refused):
   * a certificate checked against another program's source (`otherSource`/`notTheLowering`);
   * a certificate whose lowered term is mutated (`Nat.add` turned to `subtract`);
-  * `ack` (well-founded recursion on a lexicographic measure, through `Acc.rec`) and `greeting` (a
-    string) are outside the fragment.
+  * `countDown` (`WellFounded.fix` used directly: `Acc.rec` on a proof) and `greeting` (a string) are
+    outside the fragment.
 
 usage: python3 tests/lower/run-lower.py [OBEND_BINARY]   (from lean/, after `lake build LowerPrograms obend`)
 exit 0 when every check holds, 1 otherwise; a summary line last.
@@ -59,8 +62,9 @@ CASES = {
     "small": [0, 2, 3, 10],
     "isEven": [0, 7, 10],
     "halvings": [0, 1, 10, 1000],
+    "ackTwo": [0, 3, 5],
 }
-TYPED = {"double", "pointNorm", "shapeArea", "addLit", "sumTo", "small", "isEven"}
+TYPED = set(CASES)
 
 
 def lean_evals():
@@ -101,6 +105,16 @@ with tempfile.TemporaryDirectory() as out:
                          os.path.join(out, f"{name}.source.json"))
         check(f"{name}: certificate verified", rc == 0 and "accepted" in text, text)
 
+        rc, text = obend("lower", "fib", "--arg", "10", "--kernel-recursion")
+    check("fib through Nat.brecOn: reported, runs, refused by the checker",
+          "read through its kernel value" in text and "checked: refused" in text
+          and re.search(r"^machine: fib 10 = 55$", text, re.M) is not None, text[-300:])
+    rc, text = obend("lower", "fib")
+    check("fib is read from fib.eq_def", "read from fib.eq_def" in text, text[-300:])
+    rc, text = obend("lower", "kTooth", "--arg", "3")
+    check("kTooth: Core4 computes what the kernel computes (3)", re.search(r"^machine: kTooth 3 = 3$", text, re.M)
+          is not None and "checked: accepted" in text, text[-300:])
+
     # teeth on the certificate
     rc, text = obend("lower", "--verify", os.path.join(out, "double.lower.json"),
                      os.path.join(out, "addLit.source.json"))
@@ -124,7 +138,7 @@ with tempfile.TemporaryDirectory() as out:
           rc == 0 and m1 and m2 and m1.group(1) == m2.group(1) == want[("double", 21)], text[-400:])
     check("the book is written", os.path.exists(book))
 
-for name in ["ack", "greeting"]:
+for name in ["countDown", "greeting"]:
     rc, text = obend("lower", name)
     check(f"tooth: {name} is outside the fragment", rc == 3 and "outside the fragment" in text, text[-300:])
 

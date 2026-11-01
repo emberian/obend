@@ -93,6 +93,9 @@ theorem lowerT_rename : ∀ (e : LExpr) (f : Nat → Nat), lowerT (e.rename f) =
     simp only [LExpr.rename, lowerT, Term.rename, List.map_map, lowerT_rename m f]
     congr 1; apply List.map_congr_left; intro x hx
     simp only [Function.comp_apply, lowerT_rename x.2.2 f, caseArm_rename]
+  | .recConst n T b, f => by
+    simp only [LExpr.rename, lowerT, Term.rename, lowerT_rename b, recSpec, box, rename_shift1]
+    rfl
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -143,6 +146,10 @@ theorem lowerT_subst : ∀ (e : LExpr) (σ : Nat → LExpr),
     simp only [LExpr.subst, lowerT, Term.substitute, List.map_map, lowerT_subst m σ]
     congr 1; apply List.map_congr_left; intro x hx
     simp only [Function.comp_apply, lowerT_subst x.2.2 σ, caseArm_substitute]
+  | .recConst n T b, σ => by
+    simp only [LExpr.subst, lowerT, Term.substitute, lowerT_subst b, lowerT_liftSubst, recSpec, box,
+      subst_shift1]
+    rfl
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
