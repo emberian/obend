@@ -4,10 +4,11 @@ pub mod viewport;
 
 pub use evaluator::{NotebookCell, NotebookRunner};
 pub use server::{
-    obend_cell_pop_lean, obend_cell_weave_cert, suggest_multi_field_admits, DialRequest,
-    DialResponse, EvalRequest, EvalResponse, FieldRepairDelta, FieldRepairSuggestion,
-    LeanBridgeRequest, LeanBridgeResponse, LeanGoalView, NotebookStateResponse, WorkbenchCellState,
-    WorkbenchCommand, WorkbenchEngine, WorkbenchEvent, WorkbenchServer, WovenCertificate,
+    evaluate_multi_field_admitted, obend_cell_pop_lean, obend_cell_weave_cert,
+    suggest_multi_field_admits, DialRequest, DialResponse, EvalRequest, EvalResponse,
+    FieldRepairDelta, FieldRepairSuggestion, LeanBridgeRequest, LeanBridgeResponse, LeanGoalView,
+    NotebookStateResponse, WorkbenchCellState, WorkbenchCommand, WorkbenchEngine, WorkbenchEvent,
+    WorkbenchServer, WovenCertificate,
 };
 pub use viewport::{
     golden_cnc_5axis_waypoints, golden_openusd_prims, golden_stator_flowpipe_slices,

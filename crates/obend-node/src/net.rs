@@ -361,12 +361,17 @@ pub struct FastPathCert {
     pub turn_digest: [u8; 32],
     pub acks: Vec<SignedFastPathAck>,
     pub post_state_root: [u8; 32],
+    #[serde(default)]
+    pub anchor_height: u64,
     pub tier: FinalityTier,
 }
 
 impl FastPathCert {
     pub fn verify(&self, quorum_size: usize) -> bool {
-        if self.tier != FinalityTier::AttestedFastPath || self.turn.digest() != self.turn_digest {
+        if self.tier != FinalityTier::AttestedFastPath
+            || self.turn.digest() != self.turn_digest
+            || self.turn.has_duplicate_write_slots()
+        {
             return false;
         }
         let mut seen = BTreeSet::new();
@@ -561,6 +566,8 @@ impl Powerbox {
     }
 
     /// Strictly attenuate an existing parent mandate to a child agent (`subDelegate_attenuates`).
+    /// Requires the parent mandate to hold `IpcAuth::Grant` and clamps the delegated quota
+    /// to the parent's remaining unspent budget.
     pub fn delegate(
         &mut self,
         parent_holder: &str,
@@ -576,10 +583,18 @@ impl Powerbox {
                 agent: parent_holder.to_string(),
             }
         })?;
+        if !parent.rights.contains(&IpcAuth::Grant) {
+            return Err(SandboxViolation::MissingCapability {
+                agent: parent_holder.to_string(),
+                required: IpcAuth::Grant,
+            });
+        }
+        let parent_remaining = self.remaining_budget(parent_holder).unwrap_or(0);
+        let clamped_quota = quota.min(parent_remaining);
         let child = parent.sub_delegate(
             child_holder,
             req_rights,
-            quota,
+            clamped_quota,
             slot_mask,
             term,
             allowed_methods,
@@ -656,9 +671,15 @@ impl GrainConfig {
             || !self.policy.disable_userns
             || !self.policy.unshare_user
             || !self.policy.unshare_pid
+            || !self.policy.unshare_ipc
+            || !self.policy.unshare_uts
+            || !self.policy.unshare_cgroup
+            || !self.policy.die_with_parent
+            || !self.policy.new_session
+            || !self.policy.clearenv
         {
             return Err(SandboxViolation::InsecureConfinementPolicy {
-                reason: "untrusted Grain must drop all capabilities and isolate user/pid namespaces"
+                reason: "untrusted Grain must drop all capabilities and isolate user/pid/ipc/uts/cgroup namespaces"
                     .to_string(),
             });
         }
@@ -836,6 +857,8 @@ pub struct FinalizedBlockRecord {
     pub prop_cert: Option<PropCert>,
     pub fin_cert: FinCert,
     pub payload: BlockPayload,
+    #[serde(default)]
+    pub pre_block_fast_path_turns: Vec<VaultTurn>,
     pub clearing_cert: Option<DrexClearingCertificate>,
     pub clearing_kernel_verified: bool,
     pub pre_state_root: [u8; 32],
@@ -939,6 +962,22 @@ impl Fold {
             ));
         }
 
+        for pair in blocks.windows(2) {
+            if pair[1].height != pair[0].height + 1 || pair[1].parent_hash != pair[0].block_hash {
+                return Err(NodeError::ConsensusVerification(
+                    "epoch blocks are not height-contiguous or hash-linked".to_string(),
+                ));
+            }
+        }
+        for blk in blocks {
+            if blk.fin_cert.block_hash != blk.block_hash || !blk.fin_cert.verify(1) {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "block at height {} has invalid FinCert",
+                    blk.height
+                )));
+            }
+        }
+
         let start_height = blocks.first().unwrap().height;
         let end_height = blocks.last().unwrap().height;
         let initial_leaves: Vec<[u8; 32]> = initial_cells.iter().map(|c| c.leaf_hash()).collect();
@@ -950,19 +989,41 @@ impl Fold {
             ));
         }
 
-        // Fold full trace (including empty/skip blocks)
+        // Fold full trace (including empty/skip blocks and any interleaved Tier 1 fast-path turns)
         let mut full_folded = initial_cells.to_vec();
-        for blk in blocks {
+        for (idx, blk) in blocks.iter().enumerate() {
+            if idx > 0 {
+                for fp_turn in &blk.pre_block_fast_path_turns {
+                    fp_turn.apply_to_cells(&mut full_folded);
+                }
+            }
+            let pre_leaves: Vec<[u8; 32]> = full_folded.iter().map(|c| c.leaf_hash()).collect();
+            if merkle_root_from_leaves(&pre_leaves) != blk.pre_state_root {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "block height {} pre_state_root mismatch during Fold.collapse",
+                    blk.height
+                )));
+            }
             Self::apply_block_to_cells(&mut full_folded, &blk.payload, blk.clearing_cert.as_ref());
         }
         let full_leaves: Vec<[u8; 32]> = full_folded.iter().map(|c| c.leaf_hash()).collect();
         let full_root = merkle_root_from_leaves(&full_leaves);
 
         // Fold pruned active trace (`filterActive` / `collapseTrace_prune_empty` in `Obend/Fold/Collapse.lean`)
-        let active_blocks: Vec<&FinalizedBlockRecord> =
-            blocks.iter().filter(|b| !b.payload.is_empty()).collect();
+        let active_blocks: Vec<(usize, &FinalizedBlockRecord)> = blocks
+            .iter()
+            .enumerate()
+            .filter(|(idx, b)| {
+                !b.payload.is_empty() || (*idx > 0 && !b.pre_block_fast_path_turns.is_empty())
+            })
+            .collect();
         let mut pruned_folded = initial_cells.to_vec();
-        for blk in &active_blocks {
+        for &(idx, blk) in &active_blocks {
+            if idx > 0 {
+                for fp_turn in &blk.pre_block_fast_path_turns {
+                    fp_turn.apply_to_cells(&mut pruned_folded);
+                }
+            }
             Self::apply_block_to_cells(&mut pruned_folded, &blk.payload, blk.clearing_cert.as_ref());
         }
         let pruned_leaves: Vec<[u8; 32]> = pruned_folded.iter().map(|c| c.leaf_hash()).collect();
@@ -1020,7 +1081,7 @@ impl Fold {
         }
 
         let active_block_hashes: Vec<[u8; 32]> =
-            active_blocks.iter().map(|b| b.block_hash).collect();
+            active_blocks.iter().map(|(_, b)| b.block_hash).collect();
         let fin_cert_hashes: Vec<[u8; 32]> = blocks.iter().map(|b| b.fin_cert.block_hash).collect();
         let collapsed_root = CollapsedEpochReceipt::compute_collapsed_root(
             epoch_id,
@@ -1232,6 +1293,8 @@ pub struct ValidatorNodeState {
     pub fast_path_acks: BTreeMap<[u8; 32], Vec<SignedFastPathAck>>,
     /// Finalized Tier 1 fast-path certificates.
     pub fast_path_certs: Vec<FastPathCert>,
+    /// Tier 1 fast-path turns committed since the previous finalized block height.
+    pub pending_fast_path_turns: Vec<VaultTurn>,
 
     /// Finality tier tracking per `turn_id` (`FinalityGate`).
     pub turn_finality: BTreeMap<[u8; 32], FinalityTier>,
@@ -1322,6 +1385,7 @@ impl NetworkedValidatorNode {
             inflight_turns: BTreeMap::new(),
             fast_path_acks: BTreeMap::new(),
             fast_path_certs: Vec::new(),
+            pending_fast_path_turns: Vec::new(),
             turn_finality: BTreeMap::new(),
             epoch_receipts: Vec::new(),
             wire_frames_received: 0,
@@ -1491,7 +1555,17 @@ impl NetworkedValidatorNode {
 
         match msg {
             ConsensusNetMessage::Propose(prop_cert, payload) => {
-                // Also inspect the leader's proposal vote for potential equivocation
+                let Some(expected_pk) = st.peer_public_keys.get(prop_cert.leader_vote.voter_id) else {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                };
+                if &prop_cert.leader_vote.public_key != expected_pk
+                    || !prop_cert.leader_vote.verify_signature()
+                {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                // Inspect the authenticated leader's proposal vote for potential equivocation
                 if let Some(slash) = Self::record_vote_and_check_equivocation(st, &prop_cert.leader_vote) {
                     outbound.push(ConsensusNetMessage::Slashing(slash));
                     return outbound;
@@ -1499,11 +1573,11 @@ impl NetworkedValidatorNode {
                 if st.slashed_validators.contains(&prop_cert.leader_vote.voter_id) {
                     return outbound;
                 }
-                if !prop_cert.verify(st.total_parties) {
-                    st.rejected_wire_frames += 1;
-                    return outbound;
-                }
-                if prop_cert.turn_payload != payload.to_bytes() {
+                if !prop_cert.verify(st.total_parties)
+                    || prop_cert.view != payload.view
+                    || prop_cert.height != payload.height
+                    || prop_cert.turn_payload != payload.to_bytes()
+                {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 }
@@ -1584,39 +1658,88 @@ impl NetworkedValidatorNode {
             }
 
             ConsensusNetMessage::SkipCertificate(skip_cert) => {
-                if !st.skip_certs.iter().any(|c| c.view == skip_cert.view)
-                    && skip_cert.verify(st.quorum_size)
-                {
+                let valid_peer_votes = skip_cert
+                    .votes
+                    .iter()
+                    .filter(|v| {
+                        st.peer_public_keys.get(v.voter_id) == Some(&v.public_key)
+                            && !st.slashed_validators.contains(&v.voter_id)
+                    })
+                    .count();
+                if !skip_cert.verify(st.quorum_size) || valid_peer_votes < st.quorum_size {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                if !st.skip_certs.iter().any(|c| c.view == skip_cert.view) {
                     st.skip_certs.push(skip_cert.clone());
-                    if st.current_view <= skip_cert.view {
-                        st.current_view = skip_cert.view + 1;
-                    }
+                }
+                if st.current_view <= skip_cert.view {
+                    st.current_view = skip_cert.view + 1;
                 }
             }
 
             ConsensusNetMessage::FinalizationCertificate(fin_cert, payload) => {
-                if !st.finalized_blocks.iter().any(|b| b.height == payload.height)
-                    && fin_cert.verify(st.quorum_size)
+                let valid_peer_votes = fin_cert
+                    .votes
+                    .iter()
+                    .filter(|v| {
+                        st.peer_public_keys.get(v.voter_id) == Some(&v.public_key)
+                            && !st.slashed_validators.contains(&v.voter_id)
+                    })
+                    .count();
+                if !fin_cert.verify(st.quorum_size)
+                    || valid_peer_votes < st.quorum_size
+                    || payload.view != fin_cert.view
                 {
-                    Self::apply_finalized_block(st, None, fin_cert, payload);
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                let stored_prop = st
+                    .proposals
+                    .get(&(fin_cert.view, fin_cert.block_hash))
+                    .map(|(p, _)| p.clone());
+                let parent_hash = stored_prop
+                    .as_ref()
+                    .map(|p| p.parent_hash)
+                    .unwrap_or(st.committed_tip_hash);
+                let expected_hash = cshake256_domain(
+                    b"obend.simplex.block",
+                    &[
+                        &fin_cert.view.to_be_bytes()[..],
+                        &payload.height.to_be_bytes()[..],
+                        &parent_hash[..],
+                    ]
+                    .concat(),
+                    &payload.to_bytes(),
+                );
+                if fin_cert.block_hash != expected_hash {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                if !st.finalized_blocks.iter().any(|b| b.height == payload.height) {
+                    Self::apply_finalized_block(st, stored_prop, fin_cert, payload);
                 }
             }
 
             ConsensusNetMessage::Slashing(receipt) => {
-                if receipt.verify() {
-                    if let Some(expected_pk) = st.peer_public_keys.get(receipt.offender_id) {
-                        if &receipt.vote_a.public_key == expected_pk {
-                            st.slashed_validators.insert(receipt.offender_id);
-                            if !st
-                                .slashing_receipts
-                                .iter()
-                                .any(|r| r.offender_id == receipt.offender_id && r.view == receipt.view)
-                            {
-                                st.slashing_receipts.push(receipt.clone());
-                                outbound.push(ConsensusNetMessage::Slashing(receipt));
-                            }
-                        }
-                    }
+                let Some(expected_pk) = st.peer_public_keys.get(receipt.offender_id) else {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                };
+                if !receipt.verify() || &receipt.vote_a.public_key != expected_pk {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                st.slashed_validators.insert(receipt.offender_id);
+                st.proposals
+                    .retain(|_, (p, _)| p.leader_vote.voter_id != receipt.offender_id);
+                if !st
+                    .slashing_receipts
+                    .iter()
+                    .any(|r| r.offender_id == receipt.offender_id && r.view == receipt.view)
+                {
+                    st.slashing_receipts.push(receipt.clone());
+                    outbound.push(ConsensusNetMessage::Slashing(receipt));
                 }
             }
 
@@ -1641,34 +1764,47 @@ impl NetworkedValidatorNode {
             }
 
             ConsensusNetMessage::FastPathAck(ack) => {
-                if ack.verify() {
-                    if let Some(expected_pk) = st.peer_public_keys.get(ack.voter_id) {
-                        if &ack.public_key == expected_pk
-                            && !st.slashed_validators.contains(&ack.voter_id)
-                        {
-                            let turn_id = ack.turn_id;
-                            Self::record_fast_path_ack(st, ack);
-                            if let Some(commit_msg) = Self::try_finalize_fast_path(st, &turn_id) {
-                                outbound.push(commit_msg);
-                            }
-                        }
+                let Some(expected_pk) = st.peer_public_keys.get(ack.voter_id) else {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                };
+                if !ack.verify() || &ack.public_key != expected_pk {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                if !st.slashed_validators.contains(&ack.voter_id) {
+                    let turn_id = ack.turn_id;
+                    Self::record_fast_path_ack(st, ack);
+                    if let Some(commit_msg) = Self::try_finalize_fast_path(st, &turn_id) {
+                        outbound.push(commit_msg);
                     }
                 }
             }
 
             ConsensusNetMessage::FastPathCommit(cert) => {
-                if cert.verify(st.quorum_size) {
-                    if !st
-                        .fast_path_certs
-                        .iter()
-                        .any(|c| c.turn.turn_id == cert.turn.turn_id)
-                    {
-                        cert.turn.apply_to_cells(&mut st.vault_cells);
-                        st.recompute_state_root();
-                        st.inflight_turns.remove(&cert.turn.turn_id);
-                        st.promote_turn_tier(cert.turn.turn_id, FinalityTier::AttestedFastPath);
-                        st.fast_path_certs.push(cert);
-                    }
+                let valid_peer_acks = cert
+                    .acks
+                    .iter()
+                    .filter(|a| {
+                        st.peer_public_keys.get(a.voter_id) == Some(&a.public_key)
+                            && !st.slashed_validators.contains(&a.voter_id)
+                    })
+                    .count();
+                if !cert.verify(st.quorum_size) || valid_peer_acks < st.quorum_size {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
+                if !st
+                    .fast_path_certs
+                    .iter()
+                    .any(|c| c.turn.turn_id == cert.turn.turn_id)
+                {
+                    cert.turn.apply_to_cells(&mut st.vault_cells);
+                    st.recompute_state_root();
+                    st.inflight_turns.remove(&cert.turn.turn_id);
+                    st.pending_fast_path_turns.push(cert.turn.clone());
+                    st.promote_turn_tier(cert.turn.turn_id, FinalityTier::AttestedFastPath);
+                    st.fast_path_certs.push(cert);
                 }
             }
         }
@@ -1694,6 +1830,8 @@ impl NetworkedValidatorNode {
             };
             if receipt.verify() {
                 st.slashed_validators.insert(vote.voter_id);
+                st.proposals
+                    .retain(|_, (p, _)| p.leader_vote.voter_id != vote.voter_id);
                 if !st
                     .slashing_receipts
                     .iter()
@@ -1766,6 +1904,9 @@ impl NetworkedValidatorNode {
         let Some((prop_cert, payload)) = st.proposals.get(&(view, block_hash)).cloned() else {
             return None;
         };
+        if st.slashed_validators.contains(&prop_cert.leader_vote.voter_id) {
+            return None;
+        }
 
         let mut fin_votes = Vec::new();
         let mut voters = BTreeSet::new();
@@ -1812,6 +1953,8 @@ impl NetworkedValidatorNode {
             return;
         }
 
+        let pre_block_fast_path_turns: Vec<VaultTurn> =
+            st.pending_fast_path_turns.drain(..).collect();
         let pre_state_root = st.recompute_state_root();
 
         // Automatically solve `drex-clearing@1` batch if limit orders are present
@@ -1831,13 +1974,15 @@ impl NetworkedValidatorNode {
                         .unwrap_or(false)
                 };
                 clearing_kernel_verified = verified;
-                clearing_cert = Some(cert);
+                if verified {
+                    clearing_cert = Some(cert);
+                }
             } else {
                 clearing_kernel_verified = false;
             }
         }
 
-        // Apply turns & clearing digest to VaultCellRecord state
+        // Apply turns & verified clearing digest to VaultCellRecord state
         Fold::apply_block_to_cells(&mut st.vault_cells, &payload, clearing_cert.as_ref());
         for turn in &payload.turns {
             st.inflight_turns.remove(&turn.turn_id);
@@ -1870,6 +2015,7 @@ impl NetworkedValidatorNode {
             prop_cert,
             fin_cert,
             payload,
+            pre_block_fast_path_turns,
             clearing_cert,
             clearing_kernel_verified,
             pre_state_root,
@@ -1901,13 +2047,18 @@ impl NetworkedValidatorNode {
         let acks = st.fast_path_acks.get(turn_id)?.clone();
         let valid_acks: Vec<SignedFastPathAck> = acks
             .into_iter()
-            .filter(|a| !st.slashed_validators.contains(&a.voter_id) && a.verify())
+            .filter(|a| {
+                st.peer_public_keys.get(a.voter_id) == Some(&a.public_key)
+                    && !st.slashed_validators.contains(&a.voter_id)
+                    && a.verify()
+            })
             .collect();
 
         if valid_acks.len() >= st.quorum_size {
             turn.apply_to_cells(&mut st.vault_cells);
             let post_state_root = st.recompute_state_root();
             st.inflight_turns.remove(turn_id);
+            st.pending_fast_path_turns.push(turn.clone());
             st.promote_turn_tier(*turn_id, FinalityTier::AttestedFastPath);
 
             let cert = FastPathCert {
@@ -1915,6 +2066,7 @@ impl NetworkedValidatorNode {
                 turn,
                 acks: valid_acks,
                 post_state_root,
+                anchor_height: st.committed_height,
                 tier: FinalityTier::AttestedFastPath,
             };
             st.fast_path_certs.push(cert.clone());
@@ -2049,6 +2201,13 @@ impl SimplexCluster {
         initial_cells: Vec<VaultCellRecord>,
         transport: TransportProtocol,
     ) -> Result<Self, NodeError> {
+        let quorum_size = 2 * fault_tolerance + 1;
+        if num_validators == 0 || num_validators < quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "invalid BFT parameters: num_validators ({num_validators}) must be >= 2*f + 1 ({quorum_size})"
+            )));
+        }
+
         let keypairs: Vec<ValidatorKeypair> = (0..num_validators)
             .map(|id| {
                 let seed = format!("obend-ws32-validator-seed-{id}");
@@ -2080,7 +2239,7 @@ impl SimplexCluster {
         Ok(Self {
             nodes,
             fault_tolerance,
-            quorum_size: 2 * fault_tolerance + 1,
+            quorum_size,
             transport,
             genesis_cells: initial_cells,
             sandbox: None,
@@ -2115,6 +2274,11 @@ impl SimplexCluster {
     pub fn stage_contended_or_inflight_turn(&mut self, turn: VaultTurn) -> Result<(), NodeError> {
         if let Some(sandbox) = &mut self.sandbox {
             sandbox.validate_and_meter_turn(&turn, 100)?;
+        }
+        if turn.has_duplicate_write_slots() {
+            return Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot {
+                agent: turn.agent,
+            }));
         }
         self.mempool_turns.push(turn);
         Ok(())
@@ -2181,18 +2345,27 @@ impl SimplexCluster {
             if let Some(sandbox) = &mut self.sandbox {
                 sandbox.validate_and_meter_turn(turn, 250)?;
             }
+            if turn.has_duplicate_write_slots() {
+                return Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot {
+                    agent: turn.agent.clone(),
+                }));
+            }
             // Check if `turn` is disjoint from every other turn in the concurrent batch
-            // as well as existing queued mempool turns
+            // as well as active in-flight and existing queued mempool turns
             let disjoint_in_batch = turns
                 .iter()
                 .enumerate()
                 .all(|(j, other)| i == j || disjoint_turns_commute(turn, other));
+            let disjoint_from_inflight = self
+                .active_inflight_turns
+                .iter()
+                .all(|other| disjoint_turns_commute(turn, other));
             let disjoint_from_mempool = self
                 .mempool_turns
                 .iter()
                 .all(|other| disjoint_turns_commute(turn, other));
 
-            if disjoint_in_batch && disjoint_from_mempool {
+            if disjoint_in_batch && disjoint_from_inflight && disjoint_from_mempool {
                 let cert = self.execute_fast_path_turn(turn.clone())?;
                 outcomes.push(TurnSubmissionOutcome::FastPathCommitted {
                     cert,
@@ -2307,7 +2480,8 @@ impl SimplexCluster {
         };
         let leader_id = ((view.saturating_sub(1)) as usize) % self.nodes.len();
 
-        let turns: Vec<VaultTurn> = self.mempool_turns.drain(..).collect();
+        let mut turns: Vec<VaultTurn> = self.active_inflight_turns.drain(..).collect();
+        turns.extend(self.mempool_turns.drain(..));
         let drex_orders: Vec<LimitOrder> = self.mempool_orders.drain(..).collect();
         let payload = BlockPayload {
             height: next_height,
@@ -2445,6 +2619,18 @@ impl SimplexCluster {
         block_hash_a: [u8; 32],
         block_hash_b: [u8; 32],
     ) -> Result<SlashingReceipt, NodeError> {
+        if faulty_validator_id >= self.nodes.len() {
+            return Err(NodeError::ConsensusVerification(format!(
+                "faulty_validator_id {faulty_validator_id} out of range (num_validators = {})",
+                self.nodes.len()
+            )));
+        }
+        if block_hash_a == block_hash_b {
+            return Err(NodeError::ConsensusVerification(
+                "Byzantine equivocation requires two distinct block hashes".to_string(),
+            ));
+        }
+
         let kp = self.nodes[faulty_validator_id].keypair.clone();
         let vote_a = SignedSimplexVote::new(&kp, view, SimplexVoteKind::Vote, block_hash_a);
         let vote_b = SignedSimplexVote::new(&kp, view, SimplexVoteKind::Vote, block_hash_b);
@@ -2509,6 +2695,12 @@ impl SimplexCluster {
         start_height: u64,
         end_height: u64,
     ) -> Result<CollapsedEpochReceipt, NodeError> {
+        if start_height == 0 || start_height > end_height {
+            return Err(NodeError::ConsensusVerification(format!(
+                "invalid epoch height range [{start_height}..={end_height}]"
+            )));
+        }
+
         let honest_ids = self.honest_validator_ids();
         let ref_node = *honest_ids.first().ok_or_else(|| {
             NodeError::ConsensusVerification("no honest validators available".to_string())
@@ -2520,27 +2712,32 @@ impl SimplexCluster {
             .filter(|b| b.height >= start_height && b.height <= end_height)
             .collect();
 
-        if blocks.is_empty() {
-            return Err(NodeError::ConsensusVerification(
-                "no finalized blocks in requested epoch range".to_string(),
-            ));
+        let expected_count = (end_height - start_height + 1) as usize;
+        if blocks.len() != expected_count {
+            return Err(NodeError::ConsensusVerification(format!(
+                "incomplete finalized blocks in requested epoch range [{start_height}..={end_height}]: found {}, expected {expected_count}",
+                blocks.len()
+            )));
         }
 
-        // Reconstruct the vault state right before `start_height`
+        // Reconstruct the vault state right before `start_height` in exact chronological order
         let mut initial_cells = self.genesis_cells.clone();
-        for fast_cert in self.nodes[ref_node].fast_path_certs() {
-            fast_cert.turn.apply_to_cells(&mut initial_cells);
-        }
         for prior_blk in self.nodes[ref_node]
             .finalized_blocks()
             .into_iter()
             .filter(|b| b.height < start_height)
         {
+            for fp_turn in &prior_blk.pre_block_fast_path_turns {
+                fp_turn.apply_to_cells(&mut initial_cells);
+            }
             Fold::apply_block_to_cells(
                 &mut initial_cells,
                 &prior_blk.payload,
                 prior_blk.clearing_cert.as_ref(),
             );
+        }
+        for fp_turn in &blocks[0].pre_block_fast_path_turns {
+            fp_turn.apply_to_cells(&mut initial_cells);
         }
 
         let mut session = {
@@ -2549,13 +2746,17 @@ impl SimplexCluster {
         };
         let receipt = Fold::collapse(epoch_id, &initial_cells, &blocks, &mut session)?;
 
-        // Promote all blocks and turns in [start_height..=end_height] to FinalityTier::Collapsed on all honest nodes
+        // Promote all blocks and turns (including settled Tier 1 fast-path turns) in [start_height..=end_height]
+        // to FinalityTier::Collapsed on all honest nodes
         for &id in &honest_ids {
             let mut st = self.nodes[id].state.lock().unwrap();
             let mut promoted_turns = Vec::new();
             for blk in &mut st.finalized_blocks {
                 if blk.height >= start_height && blk.height <= end_height {
                     blk.tier = FinalityTier::Collapsed;
+                    for t in &blk.pre_block_fast_path_turns {
+                        promoted_turns.push(t.turn_id);
+                    }
                     for t in &blk.payload.turns {
                         promoted_turns.push(t.turn_id);
                     }

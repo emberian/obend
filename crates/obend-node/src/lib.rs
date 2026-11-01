@@ -2389,4 +2389,271 @@ mod tests {
             Err(NodeError::ConsensusVerification(_))
         ));
     }
+
+    #[test]
+    fn test_ws32_multi_epoch_interleaved_fast_path_and_consensus_spoofing_rejection() {
+        let genesis = sample_genesis_cells();
+
+        // 0. Invalid BFT cluster parameters (N < 2f + 1 or N == 0) must be rejected immediately
+        assert!(matches!(
+            SimplexCluster::new(0, 0, genesis.clone()),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+        assert!(matches!(
+            SimplexCluster::new(2, 1, genesis.clone()),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+
+        let mut cluster =
+            SimplexCluster::new(4, 1, genesis.clone()).expect("spawn 4-validator cluster");
+
+        // 1. Reject duplicate write slots in `submit_concurrent_batch` and `stage_contended_or_inflight_turn`
+        // even when no SandboxRunner is configured (must fail immediately without hanging)
+        let dup_turn = VaultTurn::new(
+            [0xD0; 32],
+            "alice",
+            vec![1],
+            vec![(1, b"dup-a".to_vec()), (1, b"dup-b".to_vec())],
+        );
+        assert!(matches!(
+            cluster.submit_concurrent_batch(vec![dup_turn.clone()]),
+            Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot { .. }))
+        ));
+        assert!(matches!(
+            cluster.stage_contended_or_inflight_turn(dup_turn),
+            Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot { .. }))
+        ));
+
+        // 2. Interleaved Tier 1 FastPathCert + Tier 2 Simplex blocks + multi-epoch Tier 3 Fold::collapse:
+        // (a) Commit FastPathCert `fp0` before block 1 (anchor_height == 0) on slot 2
+        let fp0 = VaultTurn::new(
+            [0xF0; 32],
+            "fp_agent",
+            vec![2],
+            vec![(2, b"fp-before-h1".to_vec())],
+        );
+        let out_fp0 = cluster.submit_turn(fp0.clone()).expect("commit fp0");
+        match out_fp0 {
+            TurnSubmissionOutcome::FastPathCommitted { cert, .. } => {
+                assert_eq!(cert.anchor_height, 0);
+            }
+            other => panic!("expected FastPathCommitted, got {other:?}"),
+        }
+
+        // (b) Block 1 (height 1): contended write to slot 1
+        let t_h1 = VaultTurn::new(
+            [0xB1; 32],
+            "block_agent",
+            vec![1],
+            vec![(1, b"block-h1-slot1".to_vec())],
+        );
+        cluster
+            .stage_contended_or_inflight_turn(t_h1.clone())
+            .expect("stage t_h1");
+        let b1 = cluster.run_simplex_block().expect("finalize height 1");
+        assert_eq!(b1.height, 1);
+
+        // (c) Commit FastPathCert `fp1` INSIDE Epoch 1 between height 1 and height 2 (anchor_height == 1)
+        let fp1 = VaultTurn::new(
+            [0xF1; 32],
+            "fp_agent",
+            vec![3],
+            vec![(3, b"fp-between-h1-h2".to_vec())],
+        );
+        let out_fp1 = cluster.submit_turn(fp1.clone()).expect("commit fp1");
+        match out_fp1 {
+            TurnSubmissionOutcome::FastPathCommitted { cert, .. } => {
+                assert_eq!(cert.anchor_height, 1);
+            }
+            other => panic!("expected FastPathCommitted, got {other:?}"),
+        }
+
+        // (d) Block 2 (height 2): contended write to slot 2
+        let t_h2 = VaultTurn::new(
+            [0xB2; 32],
+            "block_agent",
+            vec![2],
+            vec![(2, b"block-h2-slot2".to_vec())],
+        );
+        cluster
+            .stage_contended_or_inflight_turn(t_h2.clone())
+            .expect("stage t_h2");
+        let b2 = cluster.run_simplex_block().expect("finalize height 2");
+        assert_eq!(b2.height, 2);
+
+        // (e) Commit FastPathCert `fp2` BETWEEN Epoch 1 [1..=2] and Epoch 2 [3..=4] (anchor_height == 2)
+        // writing to slot 1 (which `b1` at height 1 also wrote to, testing chronological replay order!)
+        let fp2 = VaultTurn::new(
+            [0xF2; 32],
+            "fp_agent",
+            vec![1],
+            vec![(1, b"fp-between-epochs-slot1-override".to_vec())],
+        );
+        let fp2_cert = match cluster.submit_turn(fp2.clone()).expect("commit fp2") {
+            TurnSubmissionOutcome::FastPathCommitted { cert, .. } => {
+                assert_eq!(cert.anchor_height, 2);
+                cert
+            }
+            other => panic!("expected FastPathCommitted, got {other:?}"),
+        };
+
+        // (f) Block 3 (height 3, empty heartbeat block) and Block 4 (height 4, contended write to slot 3)
+        let b3 = cluster.run_simplex_block().expect("finalize empty height 3");
+        assert_eq!(b3.height, 3);
+        let t_h4 = VaultTurn::new(
+            [0xB4; 32],
+            "block_agent",
+            vec![3],
+            vec![(3, b"block-h4-slot3".to_vec())],
+        );
+        cluster
+            .stage_contended_or_inflight_turn(t_h4.clone())
+            .expect("stage t_h4");
+        let b4 = cluster.run_simplex_block().expect("finalize height 4");
+        assert_eq!(b4.height, 4);
+
+        // Collapse Epoch 1 [1..=2] (even after fp2 and blocks 3..=4 have already committed!)
+        let epoch1 = cluster
+            .collapse_epoch(1, 1, 2)
+            .expect("collapse epoch 1 [1..=2] with interleaved fast-path turns");
+        assert_eq!(epoch1.initial_state_root, b1.pre_state_root);
+        assert_eq!(epoch1.final_state_root, b2.post_state_root);
+        assert_eq!(epoch1.total_block_count, 2);
+        assert_eq!(epoch1.active_block_count, 2);
+
+        // Collapse Epoch 2 [3..=4] and verify state root continuity across the interleaved `fp2` transition
+        let epoch2 = cluster
+            .collapse_epoch(2, 3, 4)
+            .expect("collapse epoch 2 [3..=4] after interleaved fast-path turn");
+        assert_eq!(epoch2.initial_state_root, fp2_cert.post_state_root);
+        assert_eq!(epoch2.initial_state_root, b3.pre_state_root);
+        assert_eq!(epoch2.final_state_root, b4.post_state_root);
+        assert_eq!(epoch2.total_block_count, 2);
+        assert_eq!(epoch2.active_block_count, 1);
+        assert_eq!(epoch2.pruned_empty_block_count, 1);
+
+        let mut session = ObendSession::new().expect("session");
+        assert!(epoch1.verify(&mut session).expect("verify epoch1"));
+        assert!(epoch2.verify(&mut session).expect("verify epoch2"));
+
+        // Verify all turns (both FastPath and Simplex block turns) in [1..=4] promoted to Collapsed
+        for node in &cluster.nodes {
+            for tid in [
+                &fp0.turn_id,
+                &t_h1.turn_id,
+                &fp1.turn_id,
+                &t_h2.turn_id,
+                &fp2.turn_id,
+                &t_h4.turn_id,
+            ] {
+                assert_eq!(node.turn_tier(tid), Some(FinalityTier::Collapsed));
+            }
+        }
+
+        // Non-contiguous blocks or incomplete epoch ranges must be rejected
+        assert!(matches!(
+            Fold::collapse(99, &genesis, &[b1.clone(), b3.clone()], &mut session),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+        assert!(matches!(
+            cluster.collapse_epoch(3, 1, 10),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+        assert!(matches!(
+            cluster.collapse_epoch(3, 0, 2),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+
+        // 3. Consensus spoofing / impersonation rejection on NetworkedValidatorNode:
+        // Non-leader validator 1 attempts to spoof leader 0 in view 5 by setting `voter_id = 0`
+        // while signing with validator 1's keypair
+        let rejected_before = cluster.nodes[0].state.lock().unwrap().rejected_wire_frames;
+        let kp1 = cluster.nodes[1].keypair.clone();
+        let fake_payload = BlockPayload {
+            height: 5,
+            view: 5,
+            turns: vec![],
+            drex_currency: "USDC".to_string(),
+            drex_goods: "WAFER".to_string(),
+            drex_epsilon: 0,
+            drex_orders: vec![],
+        };
+        let mut spoofed_prop = PropCert::create(
+            &kp1,
+            5,
+            5,
+            b4.block_hash,
+            fake_payload.to_bytes(),
+        );
+        spoofed_prop.leader_vote.voter_id = 0; // Claim to be validator 0 (leader for view 5)
+        cluster.nodes[1]
+            .broadcast(ConsensusNetMessage::Propose(
+                spoofed_prop,
+                fake_payload.clone(),
+            ))
+            .expect("broadcast spoofed proposal");
+
+        // Also broadcast a FinCert signed by unknown ephemeral keys
+        let rogue_votes: Vec<SignedSimplexVote> = (0..3)
+            .map(|id| {
+                let rogue_kp = ValidatorKeypair::from_seed(id, b"rogue-outsider-seed");
+                SignedSimplexVote::new(&rogue_kp, 5, SimplexVoteKind::Finalize, [0x99; 32])
+            })
+            .collect();
+        let rogue_fin = FinCert {
+            view: 5,
+            block_hash: [0x99; 32],
+            votes: rogue_votes,
+        };
+        cluster.nodes[1]
+            .broadcast(ConsensusNetMessage::FinalizationCertificate(
+                rogue_fin,
+                fake_payload,
+            ))
+            .expect("broadcast rogue FinCert");
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let rejected_after = cluster.nodes[0].state.lock().unwrap().rejected_wire_frames;
+        assert!(rejected_after >= rejected_before + 2);
+        assert_eq!(cluster.nodes[0].committed_height(), 4);
+
+        // 4. `inject_byzantine_equivocation` boundary checks
+        assert!(matches!(
+            cluster.inject_byzantine_equivocation(99, 5, [0x11; 32], [0x22; 32]),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+        assert!(matches!(
+            cluster.inject_byzantine_equivocation(1, 5, [0x11; 32], [0x11; 32]),
+            Err(NodeError::ConsensusVerification(_))
+        ));
+
+        // 5. Powerbox::delegate requires IpcAuth::Grant and clamps to remaining unspent budget
+        let mut pb = Powerbox::new("obend.vault");
+        pb.grant_mandate(Mandate {
+            grantor: "kernel".to_string(),
+            holder: "no_grant_agent".to_string(),
+            target: "obend.vault".to_string(),
+            rights: vec![IpcAuth::Read, IpcAuth::Write],
+            budget: 50,
+            allowed_slots: vec![1],
+            expires_at: 10,
+            allowed_methods: None,
+        })
+        .unwrap();
+        assert!(matches!(
+            pb.delegate("no_grant_agent", "child", &[IpcAuth::Read], 10, &[1], 5, None),
+            Err(SandboxViolation::MissingCapability {
+                required: IpcAuth::Grant,
+                ..
+            })
+        ));
+
+        // 6. GrainConfig::verify_strict_policy rejects weakened namespace/process flags
+        let mut weak_grain = GrainConfig::strict_for_agent("w", std::env::temp_dir());
+        weak_grain.policy.die_with_parent = false;
+        assert!(matches!(
+            weak_grain.verify_strict_policy(),
+            Err(SandboxViolation::InsecureConfinementPolicy { .. })
+        ));
+    }
 }

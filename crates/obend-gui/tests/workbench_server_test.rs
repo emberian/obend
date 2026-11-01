@@ -310,3 +310,177 @@ fn test_ws30_cli_physical_viewport_subcommands() {
         );
     }
 }
+
+#[test]
+fn test_ws31_unsatisfiable_negative_cycle_and_conflicting_bounds_refused() {
+    use obend_gui::{evaluate_multi_field_admitted, suggest_multi_field_admits};
+    use std::collections::BTreeMap;
+
+    // 1. Negative cyclic difference constraint: `a < b && b < a` (`a <= b - 1 && b <= a - 1`)
+    let neg_cycle_dial = LawDialControl {
+        cell_id: "cell-neg-cycle".to_string(),
+        mode: LawDialMode::Press,
+        invariant_expr: "a < b && b < a".to_string(),
+        margin_lo: 0.0,
+        margin_hi: 10.0,
+        current_value: 4.0,
+    };
+    let mut old_fields = BTreeMap::new();
+    old_fields.insert("a".to_string(), 4);
+    old_fields.insert("b".to_string(), 4);
+    let new_fields = old_fields.clone();
+
+    assert!(
+        !evaluate_multi_field_admitted(&neg_cycle_dial, &old_fields, &new_fields),
+        "Negative cycle `a < b && b < a` must never be admitted"
+    );
+    let (repairs, summary) =
+        suggest_multi_field_admits(&neg_cycle_dial, &old_fields, &new_fields);
+    assert!(
+        repairs.is_empty(),
+        "Unsatisfiable negative cycle must not emit a bogus repair suggestion"
+    );
+    assert_eq!(
+        summary.as_deref(),
+        Some("no change of one field passes")
+    );
+
+    // 2. Conflicting monotonicity + upper bound: `monotone(a) && a <= b && b <= 2` when `old.a = 4`
+    let conflict_dial = LawDialControl {
+        cell_id: "cell-conflict".to_string(),
+        mode: LawDialMode::Press,
+        invariant_expr: "monotone(a) && a <= b && b <= 2".to_string(),
+        margin_lo: 0.0,
+        margin_hi: 2.0,
+        current_value: 2.0,
+    };
+    let mut old_conflict = BTreeMap::new();
+    old_conflict.insert("a".to_string(), 4);
+    old_conflict.insert("b".to_string(), 1);
+    let mut new_conflict = BTreeMap::new();
+    new_conflict.insert("a".to_string(), 2);
+    new_conflict.insert("b".to_string(), 1);
+
+    assert!(!evaluate_multi_field_admitted(
+        &conflict_dial,
+        &old_conflict,
+        &new_conflict
+    ));
+    let (repairs2, summary2) =
+        suggest_multi_field_admits(&conflict_dial, &old_conflict, &new_conflict);
+    assert!(
+        repairs2.is_empty(),
+        "Conflicting `monotone(a)` (old=4) vs `b <= 2` must not emit a repair that violates `monotone(a)`"
+    );
+    assert_eq!(
+        summary2.as_deref(),
+        Some("no change of one field passes")
+    );
+}
+
+#[test]
+fn test_ws31_real_lean_subprocess_rejects_false_theorems_and_chunked_concurrent_http() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let server = WorkbenchServer::start_ephemeral().expect("Start ephemeral server");
+
+    // 1. Real `lean --stdin` subprocess verification must REJECT a false theorem `1 = 2`
+    let false_bridge_req = r#"{
+        "cell_id": "cell-cnc-5axis",
+        "action": "pop_and_weave",
+        "custom_lean_snippet": "theorem bogus_claim : (1 : Int) = 2 := by decide",
+        "verify_subprocess": true
+    }"#;
+    let (status, body) = server
+        .request("POST", "/lean-bridge", Some(false_bridge_req))
+        .expect("POST /lean-bridge with false theorem");
+    assert_eq!(status, 200);
+    let false_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+    assert!(
+        !false_resp.verified,
+        "Real Lean 4 subprocess verification must reject `(1 : Int) = 2`"
+    );
+    assert!(false_resp.woven_cert.is_none());
+
+    // 2. Invalid action on `/lean-bridge` -> 400 Bad Request
+    let (status, _) = server
+        .request(
+            "POST",
+            "/lean-bridge",
+            Some(r#"{"cell_id": "cell-cnc-5axis", "action": "bogus_action"}"#),
+        )
+        .unwrap();
+    assert_eq!(status, 400);
+
+    // 3. Concurrent non-blocking HTTP connections: holding an idle socket open must not block a second client
+    let _idle_stream = TcpStream::connect(server.local_addr()).expect("Open idle stream");
+    let t0 = Instant::now();
+    let (status, _) = server
+        .request("GET", "/notebook", None)
+        .expect("Concurrent GET /notebook");
+    assert_eq!(status, 200);
+    assert!(
+        t0.elapsed() < Duration::from_millis(500),
+        "Idle TCP client must not head-of-line block concurrent HTTP requests"
+    );
+
+    // 4. `Transfer-Encoding: chunked` request body on `POST /dial`
+    let mut chunk_stream = TcpStream::connect(server.local_addr()).expect("Connect chunked");
+    let payload = br#"{"cell_id":"cell-thermal-ode","mode":"press","current_value":27.0}"#;
+    let chunk1 = &payload[..24];
+    let chunk2 = &payload[24..];
+    let raw_req = format!(
+        "POST /dial HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+        server.local_addr(),
+        chunk1.len(),
+        std::str::from_utf8(chunk1).unwrap(),
+        chunk2.len(),
+        std::str::from_utf8(chunk2).unwrap(),
+    );
+    chunk_stream.write_all(raw_req.as_bytes()).unwrap();
+    chunk_stream.flush().unwrap();
+    let mut resp_buf = Vec::new();
+    chunk_stream.read_to_end(&mut resp_buf).unwrap();
+    let resp_str = String::from_utf8_lossy(&resp_buf);
+    assert!(
+        resp_str.starts_with("HTTP/1.1 200 OK"),
+        "Chunked POST /dial must return 200 OK, got: {resp_str}"
+    );
+    let (_, json_body) = resp_str.split_once("\r\n\r\n").unwrap();
+    let dial_resp: DialResponse = serde_json::from_str(json_body).unwrap();
+    assert!(dial_resp.admitted);
+
+    // 5. Physical viewport violation badges when `LawDialControl` is out of bounds (`Cnc5Axis`, `OpenUsdScene`, `StatorMultiphysics`)
+    let violating_cnc_dial = LawDialControl {
+        cell_id: "cell-cnc-5axis".to_string(),
+        mode: LawDialMode::Locked,
+        invariant_expr: "abbe_err_nm in [0.0, 5.0]".to_string(),
+        margin_lo: 0.0,
+        margin_hi: 5.0,
+        current_value: 45.0,
+    };
+    let cnc_viol_vp = render_physical_viewport(
+        PhysicalViewportKind::Cnc5Axis,
+        "Hermle_C42U_5Axis",
+        &violating_cnc_dial,
+    );
+    assert!(cnc_viol_vp.svg.contains("Abbe-Uncompensated"));
+
+    let violating_usd_dial = LawDialControl {
+        cell_id: "cell-openusd-sdf".to_string(),
+        mode: LawDialMode::Locked,
+        invariant_expr: "wall_um in [1200.0, 5000.0]".to_string(),
+        margin_lo: 1200.0,
+        margin_hi: 5000.0,
+        current_value: 50.0, // < 100.0 and < 1200.0
+    };
+    let usd_viol_vp = render_physical_viewport(
+        PhysicalViewportKind::OpenUsdScene,
+        "LcDrives_Production_Stator",
+        &violating_usd_dial,
+    );
+    assert!(usd_viol_vp.svg.contains("LCA VIOLATION"));
+}
+

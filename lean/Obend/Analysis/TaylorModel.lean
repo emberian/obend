@@ -195,16 +195,50 @@ def tmSqrt1p (dom lagrangeRem : Interval) : TaylorModel where
   domain := dom
   rem    := lagrangeRem
 
+/-- Certified Lagrange remainder bound for degree-4 $\exp(x)$ over `dom` ($\subseteq [-1, 1]$, where $e^{\xi} \le 3$):
+$R_4(\exp, \text{dom}) = \frac{3}{120} \cdot \text{dom}^5 = \frac{1}{40} \cdot \text{dom}^5$. -/
+def lagrangeRemExp4 (dom : Interval) : Interval :=
+  Interval.mul (Interval.ofPoint (CanonicalRat.mk 1 40)) (intervalPow dom 5)
+
+/-- Certified Lagrange remainder bound for degree-5 $\sin(x)$ over `dom` ($|\sin^{(6)}(\xi)| \le 1$):
+$R_5(\sin, \text{dom}) = \frac{1}{720} \cdot \text{dom}^6$. -/
+def lagrangeRemSin5 (dom : Interval) : Interval :=
+  Interval.mul (Interval.ofPoint (CanonicalRat.mk 1 720)) (intervalPow dom 6)
+
+/-- Certified Lagrange remainder bound for degree-4 $\cos(x)$ over `dom` ($|\cos^{(5)}(\xi)| \le 1$):
+$R_4(\cos, \text{dom}) = \frac{1}{120} \cdot \text{dom}^5$. -/
+def lagrangeRemCos4 (dom : Interval) : Interval :=
+  Interval.mul (Interval.ofPoint (CanonicalRat.mk 1 120)) (intervalPow dom 5)
+
+/-- Certified Lagrange remainder bound for degree-4 $\ln(1 + x)$ over `dom` ($\subseteq [-1/2, 1/2]$, where $(1+\xi)^{-5} \le 32$):
+$R_4(\ln(1+\cdot), \text{dom}) = \frac{32}{5} \cdot \text{dom}^5$. -/
+def lagrangeRemLn1p4 (dom : Interval) : Interval :=
+  Interval.mul (Interval.ofPoint (CanonicalRat.mk 32 5)) (intervalPow dom 5)
+
+/-- Certified Lagrange remainder bound for degree-3 $\sqrt{1 + x}$ over `dom` ($\subseteq [-1/2, 1/2]$):
+$R_3(\sqrt{1+\cdot}, \text{dom}) = \frac{15}{24} \cdot \text{dom}^4 = \frac{5}{8} \cdot \text{dom}^4$. -/
+def lagrangeRemSqrt1p3 (dom : Interval) : Interval :=
+  Interval.mul (Interval.ofPoint (CanonicalRat.mk 5 8)) (intervalPow dom 4)
+
+/-- Certified single-argument Taylor models computing Lagrange remainder intervals directly from `dom`. -/
+def tmExpCertified (dom : Interval) : TaylorModel := tmExp dom (lagrangeRemExp4 dom)
+def tmSinCertified (dom : Interval) : TaylorModel := tmSin dom (lagrangeRemSin5 dom)
+def tmCosCertified (dom : Interval) : TaylorModel := tmCos dom (lagrangeRemCos4 dom)
+def tmLn1pCertified (dom : Interval) : TaylorModel := tmLn1p dom (lagrangeRemLn1p4 dom)
+def tmSqrt1pCertified (dom : Interval) : TaylorModel := tmSqrt1p dom (lagrangeRemSqrt1p3 dom)
+
 /-- **Theorem (`taylorModel_transcendental_enclosure_sound`)**:
 1. **Dependency Cancellation (`tmSub x x = [0, 0]`)**:
    For $x \in [-1/10, 1/10]$, naive interval subtraction `Interval.sub dom dom` yields
    $[-1/5, 1/5]$, whereas `evalTaylorModelRange (tmSub (tmVar 0 dom) (tmVar 0 dom))` cancels
    the linear coefficients and yields the exact point interval $[0, 0]$.
-2. **Transcendental Value & Pythagorean Identity Enclosures**:
+2. **Certified Domain-Derived Lagrange Remainders & Transcendental Enclosures**:
+   - Over $x \in [-1/10, 1/10]$, `lagrangeRemExp4 dom`, `lagrangeRemSin5 dom`, and `lagrangeRemCos4 dom`
+     compute rigorous remainder intervals directly from `dom` that are strict subintervals of $[-10^{-5}, 10^{-5}]$.
    - At $x = 0$, $\exp(0) \in [1 - 10^{-5}, 1 + 10^{-5}]$, $\sin(0) \in [-10^{-6}, 10^{-6}]$,
-     $\cos(0) \in [1 - 10^{-5}, 1 + 10^{-5}]$, $\ln(1+0) \in [-10^{-5}, 10^{-5}]$, and
+     $\cos(0) \in [1 - 10^{-5}, 1 + 10^{-5}]$, $\ln(1+0) \in [-10^{-4}, 10^{-4}]$, and
      $\sqrt{1+0} \in [1 - 10^{-4}, 1 + 10^{-4}]$.
-   - At $x = 1/10$, `evalTaylorModelPoint expTM (1/10)` encloses the degree-4 rational
+   - At $x = 1/10$, `evalTaylorModelPoint (tmExpCertified dom) (1/10)` encloses the degree-4 rational
      approximation $265241 / 240000$.
    - Over $x \in [-1/10, 1/10]$, the degree-4 Taylor model for $\sin^2(x) + \cos^2(x)$
      (`tmAdd (tmMul 4 sinTM sinTM) (tmMul 4 cosTM cosTM)`) cancels the $-x^2 + x^2$ quadratic
@@ -213,23 +247,27 @@ theorem taylorModel_transcendental_enclosure_sound :
     let dom : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
     let xTM := tmVar 0 dom
     let rem5 : Interval := ⟨CanonicalRat.mk (-1) 100000, CanonicalRat.mk 1 100000⟩
-    let expTM := tmExp dom rem5
-    let sinTM := tmSin dom rem5
-    let cosTM := tmCos dom rem5
-    let lnTM := tmLn1p dom rem5
-    let sqrtTM := tmSqrt1p dom rem5
+    let expTM := tmExpCertified dom
+    let sinTM := tmSinCertified dom
+    let cosTM := tmCosCertified dom
+    let lnTM := tmLn1pCertified dom
+    let sqrtTM := tmSqrt1pCertified dom
     let pythagTM := tmAdd (tmMul 4 sinTM sinTM) (tmMul 4 cosTM cosTM)
     -- 1. Dependency cancellation vs. naive interval subtraction
     evalTaylorModelRange (tmSub xTM xTM) = ⟨0, 0⟩ ∧
     Interval.sub dom dom = ⟨CanonicalRat.mk (-1) 5, CanonicalRat.mk 1 5⟩ ∧
-    -- 2. Verified transcendental enclosures at x = 0 and x = 1/10
+    -- 2. Certified Lagrange remainders derived from dom
+    Interval.isSubintervalOf expTM.rem rem5 = true ∧
+    Interval.isSubintervalOf sinTM.rem rem5 = true ∧
+    Interval.isSubintervalOf cosTM.rem rem5 = true ∧
+    -- 3. Verified transcendental enclosures at x = 0 and x = 1/10
     Interval.containsRat (evalTaylorModelPoint expTM 0) 1 = true ∧
     Interval.containsRat (evalTaylorModelPoint sinTM 0) 0 = true ∧
     Interval.containsRat (evalTaylorModelPoint cosTM 0) 1 = true ∧
     Interval.containsRat (evalTaylorModelPoint lnTM 0) 0 = true ∧
     Interval.containsRat (evalTaylorModelPoint sqrtTM 0) 1 = true ∧
     Interval.containsRat (evalTaylorModelPoint expTM (CanonicalRat.mk 1 10)) (CanonicalRat.mk 265241 240000) = true ∧
-    -- 3. Pythagorean identity sin^2(x) + cos^2(x) cancels degree-2 and degree-4 terms and encloses 1
+    -- 4. Pythagorean identity sin^2(x) + cos^2(x) cancels degree-2 and degree-4 terms and encloses 1
     pythagTM.coeffs = [1, 0, 0, 0, 0] ∧
     Interval.containsRat (evalTaylorModelRange pythagTM) 1 = true := by
   decide +kernel

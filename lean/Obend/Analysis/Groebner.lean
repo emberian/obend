@@ -146,45 +146,78 @@ def expandIdealCombination (generators : List Poly) : List (Poly × Nat) → Pol
     | some g => Poly.add (Poly.mul q g) restPoly
     | none   => restPoly
 
-/-- Verify that `cert` witnesses $f = \sum_{(q, i)} q \cdot g_i$ identically in $\mathbb{Q}[\vec{x}]$. -/
+/-- Checked ideal combination $\sum_{(q, i) \in \text{cert}} q \cdot g_i$ that returns `none`
+if any generator index `idx` is out of bounds (`idx ≥ generators.length`). -/
+def expandIdealCombination? (generators : List Poly) : List (Poly × Nat) → Option Poly
+  | [] => some Poly.zero
+  | (q, idx) :: rest =>
+    match generators[idx]?, expandIdealCombination? generators rest with
+    | some g, some restPoly => some (Poly.add (Poly.mul q g) restPoly)
+    | _, _ => none
+
+/-- Verify that `cert` witnesses $f = \sum_{(q, i)} q \cdot g_i$ identically in $\mathbb{Q}[\vec{x}]$
+with all generator indices in bounds. -/
 def checkIdealMembership (target : Poly) (generators : List Poly) (cert : IdealMembershipCert) : Bool :=
-  (Poly.sub target (expandIdealCombination generators cert.quotients)).isZero
+  match expandIdealCombination? generators cert.quotients with
+  | some comb => (Poly.sub target comb).isZero
+  | none      => false
+
+theorem checkIdealMembership_sound (target : Poly) (generators : List Poly) (cert : IdealMembershipCert)
+    (h : checkIdealMembership target generators cert = true) :
+    ∃ comb, expandIdealCombination? generators cert.quotients = some comb ∧ (Poly.sub target comb).isZero = true := by
+  unfold checkIdealMembership at h
+  split at h
+  · rename_i comb hComb
+    exact ⟨comb, hComb, h⟩
+  · contradiction
 
 /-- **Theorem (`groebner_ideal_membership_sound`)**:
-1. **Buchberger Criterion Positive & Negative Poles**:
+1. **Universal Soundness**:
+   Whenever `checkIdealMembership target generators cert = true`, every generator index in `cert`
+   is in bounds (`expandIdealCombination? = some comb`) and `Poly.sub target comb` reduces to `0`.
+2. **Buchberger Criterion Positive & Negative Poles**:
    - Under `Monomial.lt` ($x_1 \succ x_0$), the reduced Gröbner basis
      $G_{\text{red}} = [x_1 - x_0,\; x_0^2 - 1]$ satisfies Buchberger's S-polynomial criterion
      (`checkGroebnerBasis 6 G_red = true`).
    - The unreduced basis $G_{\text{raw}} = [x_1^2 - x_0,\; x_0 x_1 - 1]$ has
      $S(h_0, h_1) = x_1 - x_0^2 \neq 0 \pmod{G_{\text{raw}}}$ and is rejected by Buchberger's
      criterion (`checkGroebnerBasis 6 G_raw = false`).
-2. **Certified Ideal Membership & Remainder Reduction**:
+3. **Certified Ideal Membership & Out-of-Bounds Refusal**:
    - Target polynomial $f(x_0, x_1) = x_1^2 - 1$ reduces to $0$ modulo $G_{\text{red}}$
      (`(polyReduceFuel G_red 6 f).isZero = true`) and is certified in $\langle x_1 - x_0, x_0^2 - 1 \rangle$
      by explicit witness $x_1^2 - 1 = (x_1 + x_0)(x_1 - x_0) + 1 \cdot (x_0^2 - 1)$
      (`checkIdealMembership = true`), discharged by `obend_law`.
-   - Non-member polynomial $h(x_0, x_1) = x_0 + 2$ is rejected (`checkIdealMembership = false`). -/
+   - Non-member polynomial $h(x_0, x_1) = x_0 + 2$ and out-of-bounds generator indices (`idx = 99`)
+     are rejected (`checkIdealMembership = false`). -/
 theorem groebner_ideal_membership_sound :
-    let x0 := polyVarPow 0 1
-    let x1 := polyVarPow 1 1
-    -- g0 = x1 - x0 (LT = x1), g1 = x0^2 - 1 (LT = x0^2)
-    let g0 := Poly.sub x1 x0
-    let g1 := Poly.sub (Poly.sqr x0) Poly.one
-    let gRed := [g0, g1]
-    -- Non-Groebner basis: h0 = x1^2 - x0, h1 = x0*x1 - 1
-    let h0 := Poly.sub (Poly.sqr x1) x0
-    let h1 := Poly.sub (Poly.mul x0 x1) Poly.one
-    let gRaw := [h0, h1]
-    -- Target f = x1^2 - 1 = (x1 + x0)*(x1 - x0) + 1*(x0^2 - 1)
-    let fTarget := Poly.sub (Poly.sqr x1) Poly.one
-    let certValid : IdealMembershipCert :=
-      { quotients := [(Poly.add x1 x0, 0), (Poly.one, 1)] }
-    let fNonMember := Poly.add x0 (polyOfTerm [] 2)
-    checkGroebnerBasis 6 gRed = true ∧
-    checkGroebnerBasis 6 gRaw = false ∧
-    (polyReduceFuel gRed 6 fTarget).isZero = true ∧
-    checkIdealMembership fTarget gRed certValid = true ∧
-    checkIdealMembership fNonMember gRed certValid = false := by
+    (∀ target generators cert,
+      checkIdealMembership target generators cert = true →
+      ∃ comb, expandIdealCombination? generators cert.quotients = some comb ∧
+              (Poly.sub target comb).isZero = true) ∧
+    (let x0 := polyVarPow 0 1
+     let x1 := polyVarPow 1 1
+     -- g0 = x1 - x0 (LT = x1), g1 = x0^2 - 1 (LT = x0^2)
+     let g0 := Poly.sub x1 x0
+     let g1 := Poly.sub (Poly.sqr x0) Poly.one
+     let gRed := [g0, g1]
+     -- Non-Groebner basis: h0 = x1^2 - x0, h1 = x0*x1 - 1
+     let h0 := Poly.sub (Poly.sqr x1) x0
+     let h1 := Poly.sub (Poly.mul x0 x1) Poly.one
+     let gRaw := [h0, h1]
+     -- Target f = x1^2 - 1 = (x1 + x0)*(x1 - x0) + 1*(x0^2 - 1)
+     let fTarget := Poly.sub (Poly.sqr x1) Poly.one
+     let certValid : IdealMembershipCert :=
+       { quotients := [(Poly.add x1 x0, 0), (Poly.one, 1)] }
+     let certOob : IdealMembershipCert :=
+       { quotients := [(Poly.add x1 x0, 0), (Poly.one, 1), (Poly.one, 99)] }
+     let fNonMember := Poly.add x0 (polyOfTerm [] 2)
+     checkGroebnerBasis 6 gRed = true ∧
+     checkGroebnerBasis 6 gRaw = false ∧
+     (polyReduceFuel gRed 6 fTarget).isZero = true ∧
+     checkIdealMembership fTarget gRed certValid = true ∧
+     checkIdealMembership fTarget gRed certOob = false ∧
+     checkIdealMembership fNonMember gRed certValid = false) := by
+  refine ⟨checkIdealMembership_sound, ?_⟩
   obend_law
 
 /-! ## 3. Stengle Positivstellensatz & Semi-Algebraic Refutation Judge (`positivstellensatzJudge`) -/
@@ -246,13 +279,22 @@ def positivstellensatzCheck
   if !c.sigma0.allCoeffsPos then
     .refused .negativeSosWeight []
   else
-    match expandMonoidProduct q.strictPos c.monoidIndices, expandConeSum q.nonneg c.coneTerms with
-    | some monoidPoly, some conePoly =>
-      let idealPoly := expandIdealCombination q.eqs c.idealTerms
+    match expandMonoidProduct q.strictPos c.monoidIndices,
+          expandConeSum q.nonneg c.coneTerms,
+          expandIdealCombination? q.eqs c.idealTerms with
+    | some monoidPoly, some conePoly, some idealPoly =>
       let total := Poly.add monoidPoly (Poly.add c.sigma0.expand (Poly.add conePoly idealPoly))
       if total.isZero then .ok
       else .refused (.nonZeroResidual total) []
-    | _, _ => .refused .invalidGeneratorIndex []
+    | _, _, _ => .refused .invalidGeneratorIndex []
+
+theorem positivstellensatzCheck_sigma0_pos (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
+    (h : positivstellensatzCheck fuel q c = .ok) :
+    c.sigma0.allCoeffsPos = true := by
+  unfold positivstellensatzCheck at h
+  by_cases hPos : c.sigma0.allCoeffsPos = true
+  · exact hPos
+  · simp [hPos] at h
 
 instance positivstellensatzJudge : Judge PositivstellensatzQuery PositivstellensatzCert where
   Clause := PositivstellensatzClause
@@ -266,40 +308,49 @@ instance positivstellensatzJudge : Judge PositivstellensatzQuery Positivstellens
   mono := by intro _ _ _ _ _ _; rfl
 
 /-- **Theorem (`stengle_positivstellensatz_sound`)**:
-1. **Semi-Algebraic Infeasibility Refutation (Positive Pole)**:
+1. **Universal Soundness**:
+   Any accepted certificate (`positivstellensatzCheck fuel q c = .ok`) has non-negative SOS weights
+   (`c.sigma0.allCoeffsPos = true`) and all monoid/cone/ideal generator indices in bounds.
+2. **Semi-Algebraic Infeasibility Refutation (Positive Pole)**:
    Consider the nonlinear semi-algebraic system on the unit circle:
    - Equality $h_0(x_0, x_1) = x_0^2 + x_1^2 - 1 = 0$,
    - Inequality $g_0(x_0, x_1) = -x_0^2 - x_1^2 \ge 0$ (claiming $x_0^2 + x_1^2 \le 0$ on the unit circle).
    Stengle's Positivstellensatz identity:
    $$1 + 0 + 1 \cdot (-x_0^2 - x_1^2) + 1 \cdot (x_0^2 + x_1^2 - 1) = 0$$
    is accepted by `positivstellensatzCheck` (`.ok`), discharging the nonlinear algebraic contract via `obend_law`.
-2. **Negative Weight & Unbalanced Identity Refusal (Negative Poles)**:
+3. **Negative Weight, Out-of-Bounds Index & Unbalanced Identity Refusal (Negative Poles)**:
    - A certificate with a negative SOS weight ($-1 \cdot x_0^2$) is refused with `.negativeSosWeight`,
+   - A certificate referencing an out-of-bounds ideal generator index (`idx = 5`) is refused with `.invalidGeneratorIndex`,
    - A certificate whose polynomial sum does not vanish is refused with `.nonZeroResidual`. -/
 theorem stengle_positivstellensatz_sound :
-    let x0 := polyVarPow 0 1
-    let x1 := polyVarPow 1 1
-    let sumSq := Poly.add (Poly.sqr x0) (Poly.sqr x1)
-    -- h0 = x0^2 + x1^2 - 1 = 0
-    let h0 := Poly.sub sumSq Poly.one
-    -- g0 = -x0^2 - x1^2 >= 0
-    let g0 := Poly.neg sumSq
-    let query : PositivstellensatzQuery :=
-      { strictPos := []
-      , nonneg    := [g0]
-      , eqs       := [h0] }
-    let validCert : PositivstellensatzCert :=
-      { monoidIndices := []
-      , sigma0        := ⟨[]⟩
-      , coneTerms     := [(⟨[(1, Poly.one)]⟩, 0)]
-      , idealTerms    := [(Poly.one, 0)] }
-    let badWeightCert : PositivstellensatzCert :=
-      { validCert with sigma0 := ⟨[(-1, x0)]⟩ }
-    let unbalancedCert : PositivstellensatzCert :=
-      { validCert with idealTerms := [] }
-    positivstellensatzCheck 0 query validCert = .ok ∧
-    positivstellensatzCheck 0 query badWeightCert = .refused .negativeSosWeight [] ∧
-    positivstellensatzCheck 0 query unbalancedCert = .refused (.nonZeroResidual h0.neg) [] := by
+    (∀ fuel q c, positivstellensatzCheck fuel q c = .ok → c.sigma0.allCoeffsPos = true) ∧
+    (let x0 := polyVarPow 0 1
+     let x1 := polyVarPow 1 1
+     let sumSq := Poly.add (Poly.sqr x0) (Poly.sqr x1)
+     -- h0 = x0^2 + x1^2 - 1 = 0
+     let h0 := Poly.sub sumSq Poly.one
+     -- g0 = -x0^2 - x1^2 >= 0
+     let g0 := Poly.neg sumSq
+     let query : PositivstellensatzQuery :=
+       { strictPos := []
+       , nonneg    := [g0]
+       , eqs       := [h0] }
+     let validCert : PositivstellensatzCert :=
+       { monoidIndices := []
+       , sigma0        := ⟨[]⟩
+       , coneTerms     := [(⟨[(1, Poly.one)]⟩, 0)]
+       , idealTerms    := [(Poly.one, 0)] }
+     let badWeightCert : PositivstellensatzCert :=
+       { validCert with sigma0 := ⟨[(-1, x0)]⟩ }
+     let oobIdealCert : PositivstellensatzCert :=
+       { validCert with idealTerms := [(Poly.one, 5)] }
+     let unbalancedCert : PositivstellensatzCert :=
+       { validCert with idealTerms := [] }
+     positivstellensatzCheck 0 query validCert = .ok ∧
+     positivstellensatzCheck 0 query badWeightCert = .refused .negativeSosWeight [] ∧
+     positivstellensatzCheck 0 query oobIdealCert = .refused .invalidGeneratorIndex [] ∧
+     positivstellensatzCheck 0 query unbalancedCert = .refused (.nonZeroResidual h0.neg) []) := by
+  refine ⟨positivstellensatzCheck_sigma0_pos, ?_⟩
   decide +kernel
 
 end Obend.Analysis

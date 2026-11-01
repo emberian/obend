@@ -731,7 +731,7 @@ enum SessionCommand {
         reply: Sender<Result<(Vec<u8>, Vec<u8>), String>>,
     },
     ViewAffordances {
-        query: Vec<u8>,
+        payload: Vec<u8>,
         reply: Sender<Result<Vec<u8>, String>>,
     },
     PopLean {
@@ -786,9 +786,9 @@ impl PersistentSessionWorker {
                         })();
                         let _ = reply.send(res);
                     }
-                    SessionCommand::ViewAffordances { query, reply } => {
+                    SessionCommand::ViewAffordances { payload, reply } => {
                         let res = session
-                            .view_affordances(&query)
+                            .view_affordances(&payload)
                             .map_err(|e| format!("view_affordances error: {e}"));
                         let _ = reply.send(res);
                     }
@@ -844,11 +844,11 @@ impl PersistentSessionWorker {
             .map_err(|e| format!("Worker recv failed: {e}"))?
     }
 
-    fn view_affordances(&self, query: Vec<u8>) -> Result<Vec<u8>, String> {
+    fn view_affordances(&self, payload: Vec<u8>) -> Result<Vec<u8>, String> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(SessionCommand::ViewAffordances {
-                query,
+                payload,
                 reply: reply_tx,
             })
             .map_err(|e| format!("Worker send failed: {e}"))?;
@@ -1106,9 +1106,12 @@ impl WorkbenchServer {
                     if shutdown_clone.load(Ordering::SeqCst) {
                         break;
                     }
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                    handle_http_connection(&mut stream, &state);
+                    let state_conn = Arc::clone(&state);
+                    thread::spawn(move || {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                        handle_http_connection(&mut stream, &state_conn);
+                    });
                 }
             }
         });
@@ -1184,6 +1187,30 @@ impl Drop for WorkbenchServer {
     }
 }
 
+fn decode_chunked_body(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos < raw.len() {
+        let rel_end = raw[pos..].windows(2).position(|w| w == b"\r\n")?;
+        let line_str = std::str::from_utf8(&raw[pos..pos + rel_end]).ok()?;
+        let size_hex = line_str.split(';').next().unwrap_or("").trim();
+        let chunk_size = usize::from_str_radix(size_hex, 16).ok()?;
+        pos += rel_end + 2;
+        if chunk_size == 0 {
+            if pos + 2 <= raw.len() && &raw[pos..pos + 2] == b"\r\n" {
+                return Some(out);
+            }
+            return None;
+        }
+        if pos + chunk_size + 2 > raw.len() {
+            return None;
+        }
+        out.extend_from_slice(&raw[pos..pos + chunk_size]);
+        pos += chunk_size + 2;
+    }
+    None
+}
+
 fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String), String> {
     let mut buf = Vec::with_capacity(4096);
     let mut temp = [0u8; 2048];
@@ -1213,28 +1240,55 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
     let path = parts.next().unwrap_or("/").to_string();
 
     let mut content_length = 0usize;
+    let mut is_chunked = false;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             if k.trim().eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse::<usize>().unwrap_or(0);
+            } else if k.trim().eq_ignore_ascii_case("transfer-encoding")
+                && v.to_ascii_lowercase().contains("chunked")
+            {
+                is_chunked = true;
             }
         }
     }
 
     let body_start = header_end_pos + 4;
-    while buf.len() < body_start + content_length {
-        let n = stream
-            .read(&mut temp)
-            .map_err(|e| format!("Body read error: {e}"))?;
-        if n == 0 {
-            break;
+    if is_chunked {
+        loop {
+            if let Some(decoded) = decode_chunked_body(&buf[body_start..]) {
+                let body = String::from_utf8_lossy(&decoded).into_owned();
+                return Ok((method, path, body));
+            }
+            let n = stream
+                .read(&mut temp)
+                .map_err(|e| format!("Chunked body read error: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&temp[..n]);
+            if buf.len() > 1024 * 1024 {
+                return Err("Chunked body too large".to_string());
+            }
         }
-        buf.extend_from_slice(&temp[..n]);
-    }
+        let decoded = decode_chunked_body(&buf[body_start..]).unwrap_or_default();
+        let body = String::from_utf8_lossy(&decoded).into_owned();
+        Ok((method, path, body))
+    } else {
+        while buf.len() < body_start + content_length {
+            let n = stream
+                .read(&mut temp)
+                .map_err(|e| format!("Body read error: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&temp[..n]);
+        }
 
-    let body_end = (body_start + content_length).min(buf.len());
-    let body = String::from_utf8_lossy(&buf[body_start..body_end]).into_owned();
-    Ok((method, path, body))
+        let body_end = (body_start + content_length).min(buf.len());
+        let body = String::from_utf8_lossy(&buf[body_start..body_end]).into_owned();
+        Ok((method, path, body))
+    }
 }
 
 fn write_json_response(stream: &mut TcpStream, status: u16, status_text: &str, json_body: &str) {
@@ -1274,6 +1328,9 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
             };
 
             let mut guard = state.lock().unwrap();
+            let _ = guard.worker.view_affordances(
+                format!("{}:{:?}", req.cell_id, req.mode).into_bytes(),
+            );
             let Some(cell) = guard.cells.iter_mut().find(|c| c.id == req.cell_id) else {
                 let err_json = serde_json::json!({ "error": format!("Unknown cell_id: {}", req.cell_id) }).to_string();
                 write_json_response(stream, 404, "Not Found", &err_json);
@@ -1292,27 +1349,35 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                 }
             }
 
+            let strict_dial = LawDialControl {
+                mode: LawDialMode::Press,
+                ..cell.dial.clone()
+            };
+            let strictly_valid =
+                evaluate_multi_field_admitted(&strict_dial, &cell.old_fields, &cell.fields);
             let (repair_suggestions, repair_summary) =
                 suggest_multi_field_admits(&cell.dial, &cell.old_fields, &cell.fields);
-            let single_admitted = cell.dial.is_admitted();
             let multi_admitted = match cell.dial.mode {
                 LawDialMode::Free => true,
-                LawDialMode::Press | LawDialMode::Locked => {
-                    single_admitted && repair_suggestions.is_empty()
-                }
+                LawDialMode::Press | LawDialMode::Locked => strictly_valid,
             };
 
-            let verdict = match (cell.dial.mode, multi_admitted) {
-                (LawDialMode::Free, _) => {
-                    if single_admitted && repair_suggestions.is_empty() {
-                        "ADMITTED".to_string()
-                    } else {
-                        "FREE_WARNING".to_string()
-                    }
-                }
+            let verdict = match (cell.dial.mode, strictly_valid) {
+                (LawDialMode::Free, true) => "ADMITTED".to_string(),
+                (LawDialMode::Free, false) => "FREE_WARNING".to_string(),
                 (LawDialMode::Press, true) | (LawDialMode::Locked, true) => "ADMITTED".to_string(),
                 (LawDialMode::Press, false) => "PRESS_VIOLATION_REPAIR_SUGGESTED".to_string(),
                 (LawDialMode::Locked, false) => "LOCKED_REFUSED".to_string(),
+            };
+
+            cell.status = if multi_admitted {
+                if strictly_valid {
+                    "admitted".to_string()
+                } else {
+                    "warning".to_string()
+                }
+            } else {
+                "violation".to_string()
             };
 
             cell.rerender_viewport();
@@ -1410,14 +1475,18 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                 if let Some(src) = &req.source {
                     cell.source = src.clone();
                 }
+                if req.value.is_some() || req.fields.is_some() {
+                    cell.old_fields = cell.fields.clone();
+                }
                 if let Some(val) = req.value {
                     cell.dial.current_value = val;
                     if let Some(param) = &req.parameter {
                         cell.fields.insert(param.clone(), val.round() as i64);
+                    } else if let Some(first_key) = cell.fields.keys().next().cloned() {
+                        cell.fields.insert(first_key, val.round() as i64);
                     }
                 }
                 if let Some(fields) = &req.fields {
-                    cell.old_fields = cell.fields.clone();
                     cell.fields = fields.clone();
                 }
                 if let Some(kind_str) = &req.kind {
@@ -1428,7 +1497,12 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                         cell.kind = k;
                     }
                 }
-                cell.status = if cell.dial.is_admitted() {
+                cell.woven_cert = None;
+                cell.status = if evaluate_multi_field_admitted(
+                    &cell.dial,
+                    &cell.old_fields,
+                    &cell.fields,
+                ) {
                     "evaluated".to_string()
                 } else {
                     "violation".to_string()
@@ -1455,7 +1529,8 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                             .unwrap_or(false)
                 });
                 if depends {
-                    if other.woven_cert.is_some() {
+                    if let Some(cert) = &mut other.woven_cert {
+                        cert.verified = false;
                         other.status = format!("blocked (stale support: {mutated_id})");
                     }
                     other.rerender_viewport();
@@ -1484,6 +1559,16 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                 }
             };
 
+            let action = req.action.as_deref().unwrap_or("pop_and_weave");
+            if !matches!(action, "pop" | "weave" | "pop_and_weave") {
+                let err_json = serde_json::json!({
+                    "error": format!("Unsupported lean-bridge action: {action}")
+                })
+                .to_string();
+                write_json_response(stream, 400, "Bad Request", &err_json);
+                return;
+            }
+
             let mut guard = state.lock().unwrap();
             let Some(cell_idx) = guard.cells.iter().position(|c| c.id == req.cell_id) else {
                 let err_json = serde_json::json!({ "error": format!("Unknown cell_id: {}", req.cell_id) }).to_string();
@@ -1491,23 +1576,34 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                 return;
             };
 
-            let action = req.action.as_deref().unwrap_or("pop_and_weave");
+            let _ = guard
+                .worker
+                .pop_lean(guard.cells[cell_idx].source.as_bytes().to_vec());
+
             let (mut lean_snippet, tactic_used, tooth_counterexample) =
                 obend_cell_pop_lean(&guard.cells[cell_idx], req.tactic.as_deref());
             if let Some(custom) = &req.custom_lean_snippet {
                 lean_snippet = custom.clone();
             }
 
-            let snippet_has_sorry = lean_snippet.contains("sorry");
-            let cell_admitted = guard.cells[cell_idx].dial.is_admitted()
-                && tooth_counterexample.is_none()
-                && !snippet_has_sorry;
+            let snippet_structurally_valid = lean_snippet.contains("theorem ")
+                && lean_snippet.contains(":= by")
+                && !lean_snippet.contains("sorry")
+                && !lean_snippet.contains("admit");
+            let cell_admitted = evaluate_multi_field_admitted(
+                &guard.cells[cell_idx].dial,
+                &guard.cells[cell_idx].old_fields,
+                &guard.cells[cell_idx].fields,
+            ) && tooth_counterexample.is_none()
+                && snippet_structurally_valid;
 
-            // Optional subprocess check if requested
-            let subprocess_ok = if req.verify_subprocess.unwrap_or(false) {
+            // Subprocess verification via `lean --stdin` when requested (or when custom snippet provided)
+            let subprocess_ok = if req.verify_subprocess.unwrap_or(false)
+                || req.custom_lean_snippet.is_some()
+            {
                 verify_lean_snippet_subprocess(&lean_snippet)
             } else {
-                true
+                snippet_structurally_valid
             };
 
             let mut verified = false;
@@ -1559,17 +1655,56 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
 }
 
 fn verify_lean_snippet_subprocess(snippet: &str) -> bool {
-    if snippet.trim().is_empty() || snippet.contains("sorry") {
+    let trimmed = snippet.trim();
+    if trimmed.is_empty()
+        || trimmed.contains("sorry")
+        || trimmed.contains("admit")
+        || !trimmed.contains("theorem ")
+        || !trimmed.contains(":= by")
+    {
         return false;
     }
-    // Check if `lean --version` is available on the host; for self-contained core snippets without
-    // external package imports we can invoke `lean --stdin`, otherwise validate structural syntax.
-    if let Ok(out) = Command::new("lean").arg("--version").output() {
-        if out.status.success() {
-            return snippet.contains("theorem ") && snippet.contains(":= by");
+
+    // Replace `import Obend.Tactic.Weave` / `open Obend.Tactic.Weave` with self-contained
+    // Lean 4 macro definitions so `lean --stdin` can kernel-check the theorem in ~1s without
+    // requiring external `.olean` module loading.
+    let mut standalone = String::from(
+        "macro \"obend_unfold\" : tactic => `(tactic| try dsimp only)\n\
+         macro \"obend_split\" : tactic => `(tactic| (split <;> try rfl <;> try contradiction))\n\
+         macro \"poly_ring\" : tactic => `(tactic| try omega)\n\
+         macro \"obend_law\" : tactic => `(tactic| first | decide +kernel | decide | omega | trivial)\n\n",
+    );
+    for line in trimmed.lines() {
+        let l = line.trim();
+        if l.starts_with("import Obend.") || l.starts_with("open Obend.") {
+            continue;
+        }
+        standalone.push_str(line);
+        standalone.push('\n');
+    }
+
+    if let Ok(mut child) = Command::new("lean")
+        .arg("--stdin")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(standalone.as_bytes());
+        }
+        if let Ok(output) = child.wait_with_output() {
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            let stderr_str = String::from_utf8_lossy(&output.stderr);
+            return output.status.success()
+                && !stdout_str.contains("declaration uses 'sorry'")
+                && !stderr_str.contains("declaration uses 'sorry'")
+                && !stdout_str.contains("error:")
+                && !stderr_str.contains("error:");
         }
     }
-    snippet.contains("theorem ") && snippet.contains(":= by")
+
+    false
 }
 
 #[cfg(test)]
