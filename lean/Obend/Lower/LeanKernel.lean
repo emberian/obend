@@ -438,8 +438,12 @@ def kernelWhnf (env : KEnv) : Nat → KExpr → KExpr
       match kernelWhnf env fuel f with
       | .lam _ body => kernelWhnf env fuel (KExpr.instantiate1 body a)
       | f' =>
+        let fNorm :=
+          match f' with
+          | .app (.const fn us) arg1 => .app (.const fn us) (kernelWhnf env fuel arg1)
+          | _ => f'
         let a' := kernelWhnf env fuel a
-        match reduceNatIota? f' a' with
+        match reduceNatIota? fNorm a' with
         | some reduced => kernelWhnf env fuel reduced
         | none =>
           match reduceQuotLift? f' a' with
@@ -1254,19 +1258,53 @@ def pairNatInductDecl : KInductDecl where
       , rhs           := .lam (kArrow kNatConst (kArrow kNatConst kNatConst))
                            (.lam kNatConst (.lam kNatConst (.app (.app (.bvar 2) (.bvar 1)) (.bvar 0)))) } ]
 
+/-- User-defined recursive inductive family `ListNat : Type 0` with constructors:
+- `ListNat.nil : ListNat` (`0` fields),
+- `ListNat.cons : Nat → ListNat → ListNat` (`2` fields: `head` and recursive `tail`),
+and recursor `ListNat.rec` whose `cons` rule recursively invokes `ListNat.rec onNil onCons tail`. -/
+def listNatInductDecl : KInductDecl where
+  name        := KName.mkSimple "ListNat"
+  levelParams := []
+  numParams   := 0
+  numIndices  := 0
+  type        := kType0
+  ctors       :=
+    [ (KName.mkSimple "ListNat.nil", .const (KName.mkSimple "ListNat") [], 0)
+    , (KName.mkSimple "ListNat.cons",
+        kArrow kNatConst (kArrow (.const (KName.mkSimple "ListNat") []) (.const (KName.mkSimple "ListNat") [])), 2) ]
+  recRules    :=
+    [ { recName       := KName.mkSimple "ListNat.rec"
+      , ctorName      := KName.mkSimple "ListNat.nil"
+      , numPrefixArgs := 2
+      , numFields     := 0
+      , rhs           := .lam kNatConst (.lam kNatConst (.bvar 1)) }
+    , { recName       := KName.mkSimple "ListNat.rec"
+      , ctorName      := KName.mkSimple "ListNat.cons"
+      , numPrefixArgs := 2
+      , numFields     := 2
+      , rhs           :=
+          -- λ onNil (bvar 3) onCons (bvar 2) head (bvar 1) tail (bvar 0) =>
+          --   onCons head tail (ListNat.rec onNil onCons tail)
+          .lam kNatConst (.lam kNatConst (.lam kNatConst (.lam (.const (KName.mkSimple "ListNat") [])
+            (.app (.app (.app (.bvar 2) (.bvar 1)) (.bvar 0))
+              (.app (.app (.app (.const (KName.mkSimple "ListNat.rec") []) (.bvar 3)) (.bvar 2)) (.bvar 0)))))) } ]
+
 /-- Extended kernel environment containing `stdKernelEnv` plus user-defined inductive families
-`OptionNat` and `PairNat` with their dynamic recursor $\iota$-rules. -/
+`OptionNat`, `PairNat`, and recursive `ListNat` with their dynamic recursor $\iota$-rules. -/
 def inductKernelEnv : KEnv :=
-  (stdKernelEnv.addInductDecl optionNatInductDecl).addInductDecl pairNatInductDecl
+  ((stdKernelEnv.addInductDecl optionNatInductDecl).addInductDecl pairNatInductDecl).addInductDecl listNatInductDecl
 
 /-- **Theorem (`kernelWhnf_general_iota_sound`)**:
-Dynamic $\iota$-reduction over user-defined inductive families (`OptionNat`, `PairNat`) in `kernelWhnf`:
+Dynamic $\iota$-reduction over user-defined inductive families (`OptionNat`, `PairNat`, and recursive `ListNat`) in `kernelWhnf`:
 1. `OptionNat.rec defaultVal (λ x => Nat.succ x) OptionNat.none` reduces dynamically to `defaultVal`,
 2. `OptionNat.rec defaultVal (λ x => Nat.succ x) (OptionNat.some n)` extracts the constructor field `n`,
    applies the `onSome` minor premise, and reduces to `.lit (.natVal (n + 1))`,
 3. `PairNat.rec (λ a b => Nat.add a b) (PairNat.mk 40 2)` extracts both constructor fields `(40, 2)`
    and reduces via $\iota + \beta$ to `.lit (.natVal 42)`,
-4. Negative Pole: Applying `OptionNat.rec` to a non-matching constructor (`PairNat.mk 1 2`) does not
+4. Recursive `ListNat.rec 0 (λ h _ ih => Nat.add ih h) (ListNat.cons 40 (ListNat.cons 2 ListNat.nil))`
+   recursively unfolds both `ListNat.cons` spines and `ListNat.nil` (with the recursive hypothesis `ih`
+   in the first argument of `Nat.add`) to `.lit (.natVal 42)`,
+5. Negative Pole: Applying `OptionNat.rec` to a non-matching constructor (`PairNat.mk 1 2`) does not
    trigger a bogus $\iota$-reduction (`reduceGeneralIota? = none`). -/
 theorem kernelWhnf_general_iota_sound (defaultVal n : Nat) :
     let onNone := KExpr.lit (.natVal defaultVal)
@@ -1276,14 +1314,22 @@ theorem kernelWhnf_general_iota_sound (defaultVal n : Nat) :
       (.app (.app (.const (KName.mkSimple "Nat.add") []) (.bvar 1)) (.bvar 0)))
     let pairSpine := KExpr.app (.const (KName.mkSimple "PairNat.rec") []) pairAdd
     let pairVal := KExpr.app (.app (.const (KName.mkSimple "PairNat.mk") []) (.lit (.natVal 40))) (.lit (.natVal 2))
+    let listOnCons := KExpr.lam kNatConst (.lam (.const (KName.mkSimple "ListNat") []) (.lam kNatConst
+      (.app (.app (.const (KName.mkSimple "Nat.add") []) (.bvar 0)) (.bvar 2))))
+    let listRecSpine := KExpr.app (.app (.const (KName.mkSimple "ListNat.rec") []) (.lit (.natVal 0))) listOnCons
+    let listVal := KExpr.app (.app (.const (KName.mkSimple "ListNat.cons") []) (.lit (.natVal 40)))
+      (.app (.app (.const (KName.mkSimple "ListNat.cons") []) (.lit (.natVal 2)))
+        (.const (KName.mkSimple "ListNat.nil") []))
     kernelWhnf inductKernelEnv 8 (.app recSpine (.const (KName.mkSimple "OptionNat.none") [])) =
       .lit (.natVal defaultVal) ∧
     kernelWhnf inductKernelEnv 8 (.app recSpine (.app (.const (KName.mkSimple "OptionNat.some") []) (.lit (.natVal n)))) =
       .lit (.natVal (n + 1)) ∧
     kernelWhnf inductKernelEnv 8 (.app pairSpine pairVal) =
       .lit (.natVal 42) ∧
+    kernelWhnf inductKernelEnv 16 (.app listRecSpine listVal) =
+      .lit (.natVal 42) ∧
     reduceGeneralIota? inductKernelEnv recSpine pairVal = none := by
-  exact ⟨rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 /-- **Theorem (`kernelWhnf_quot_lift_sound`)**:
 Quotient computation rule (`Quot.lift` on `Quot.mk`) in `kernelWhnf`:

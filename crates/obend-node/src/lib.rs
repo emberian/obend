@@ -3,16 +3,16 @@
 //! Binds symbolic `Obend.Consensus.Simplex` BFT consensus (`PropCert`, `SkipCert`, `FinCert`, and
 //! accountable equivocation slashing), `Obend.Vault.Projection` (`FogOfWar` blinded Merkle multiproofs),
 //! and `Obend.Judge.Clearing` (`drex-clearing@1` primal-dual LP orderbook clearing) to concrete
-//! cryptographic primitives (FIPS 180-4 SHA-256, domain-separated cSHAKE256/Keccak sponge, and
-//! deterministic Ed25519-style keypair signing/verification) and verifies emitted certificates
-//! through `crates/obend-ffi` (`ObendSession`).
+//! cryptographic primitives (FIPS 180-4 SHA-256, NIST FIPS 202 / SP 800-185 Keccak-f[1600] cSHAKE256
+//! sponge, and twisted Edwards Curve25519 / Ed25519 signing & verification) and verifies emitted
+//! certificates through `crates/obend-ffi` (`ObendSession`).
 
 use obend_ffi::error::ObendError;
 use obend_ffi::session::ObendSession;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
-// 1. Concrete Cryptographic Primitives (FIPS 180-4 SHA-256, cSHAKE256, Ed25519)
+// 1. Concrete Cryptographic Primitives (SHA-256, Keccak-f[1600] cSHAKE256, Ed25519)
 // ============================================================================
 
 /// Standard FIPS 180-4 SHA-256 round constants.
@@ -109,20 +109,542 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Domain-separated cSHAKE256 / BLAKE3-style 256-bit commitment digest with customization string `custom`.
-pub fn cshake256_domain(custom: &[u8], left: &[u8], right: &[u8]) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(16 + custom.len() + left.len() + right.len());
-    buf.extend_from_slice(b"OBEND-cSHAKE256:");
-    buf.extend_from_slice(&(custom.len() as u32).to_be_bytes());
-    buf.extend_from_slice(custom);
-    buf.extend_from_slice(&(left.len() as u32).to_be_bytes());
-    buf.extend_from_slice(left);
-    buf.extend_from_slice(&(right.len() as u32).to_be_bytes());
-    buf.extend_from_slice(right);
-    sha256(&buf)
+/// Standard 24-round Keccak-f[1600] iota round constants (NIST FIPS 202).
+const KECCAK_RC: [u64; 24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
+    0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+];
+
+/// Keccak-f[1600] rho rotation offsets.
+const KECCAK_RHO: [u32; 24] = [
+    1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14,
+    27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
+];
+
+/// Keccak-f[1600] pi lane permutation indices.
+const KECCAK_PI: [usize; 24] = [
+    10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
+    15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
+];
+
+/// Execute the 24-round Keccak-f[1600] permutation in-place on `state`.
+pub fn keccak_f1600(state: &mut [u64; 25]) {
+    for &rc in &KECCAK_RC {
+        // Theta
+        let mut c = [0u64; 5];
+        for x in 0..5 {
+            c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
+        }
+        for x in 0..5 {
+            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+            for y in (0..25).step_by(5) {
+                state[x + y] ^= d;
+            }
+        }
+        // Rho and Pi
+        let mut current = state[1];
+        for i in 0..24 {
+            let j = KECCAK_PI[i];
+            let temp = state[j];
+            state[j] = current.rotate_left(KECCAK_RHO[i]);
+            current = temp;
+        }
+        // Chi
+        for y in (0..25).step_by(5) {
+            let row = [state[y], state[y + 1], state[y + 2], state[y + 3], state[y + 4]];
+            for x in 0..5 {
+                state[y + x] = row[x] ^ ((!row[(x + 1) % 5]) & row[(x + 2) % 5]);
+            }
+        }
+        // Iota
+        state[0] ^= rc;
+    }
 }
 
-/// Deterministic Ed25519 validator keypair for signing & verifying BFT consensus certificates.
+/// Absorb arbitrary bytes into a rate-136-byte (1088-bit, 256-bit security capacity) Keccak sponge
+/// with domain suffix `domain_sep` (`0x04` for NIST SP 800-185 cSHAKE256, `0x1F` for SHAKE256)
+/// and squeeze 32 bytes.
+pub fn keccak256_sponge(domain_sep: u8, chunks: &[&[u8]]) -> [u8; 32] {
+    const RATE: usize = 136;
+    let mut state = [0u64; 25];
+    let mut block = [0u8; RATE];
+    let mut offset = 0usize;
+
+    for &chunk in chunks {
+        for &byte in chunk {
+            block[offset] ^= byte;
+            offset += 1;
+            if offset == RATE {
+                for i in 0..17 {
+                    state[i] ^= u64::from_le_bytes(block[8 * i..8 * i + 8].try_into().unwrap());
+                }
+                keccak_f1600(&mut state);
+                block = [0u8; RATE];
+                offset = 0;
+            }
+        }
+    }
+
+    block[offset] ^= domain_sep;
+    block[RATE - 1] ^= 0x80;
+    for i in 0..17 {
+        state[i] ^= u64::from_le_bytes(block[8 * i..8 * i + 8].try_into().unwrap());
+    }
+    keccak_f1600(&mut state);
+
+    let mut out = [0u8; 32];
+    for i in 0..4 {
+        out[8 * i..8 * i + 8].copy_from_slice(&state[i].to_le_bytes());
+    }
+    out
+}
+
+/// Domain-separated cSHAKE256 (NIST SP 800-185 Keccak-f[1600] sponge) 256-bit commitment digest
+/// with customization string `custom`.
+pub fn cshake256_domain(custom: &[u8], left: &[u8], right: &[u8]) -> [u8; 32] {
+    let custom_len = (custom.len() as u64).to_le_bytes();
+    let left_len = (left.len() as u64).to_le_bytes();
+    let right_len = (right.len() as u64).to_le_bytes();
+    let domain_sep = if custom.is_empty() { 0x1Fu8 } else { 0x04u8 };
+    keccak256_sponge(
+        domain_sep,
+        &[
+            b"OBEND-cSHAKE256:",
+            &custom_len,
+            custom,
+            &left_len,
+            left,
+            &right_len,
+            right,
+        ],
+    )
+}
+
+// ============================================================================
+// 1b. Twisted Edwards Curve25519 (-x^2 + y^2 = 1 + d*x^2*y^2 mod 2^255 - 19)
+// ============================================================================
+
+/// Field element in GF(2^255 - 19) represented in radix 2^51 (`[u64; 5]`).
+#[derive(Clone, Copy, Debug)]
+struct Fe([u64; 5]);
+
+const MASK51: u64 = (1u64 << 51) - 1;
+
+impl Fe {
+    const ZERO: Self = Self([0, 0, 0, 0, 0]);
+    const ONE: Self = Self([1, 0, 0, 0, 0]);
+
+    fn from_u64(v: u64) -> Self {
+        Self([v & MASK51, v >> 51, 0, 0, 0])
+    }
+
+    fn carry(mut h: [u64; 5]) -> Self {
+        for _ in 0..2 {
+            let c0 = h[0] >> 51;
+            h[0] &= MASK51;
+            h[1] += c0;
+            let c1 = h[1] >> 51;
+            h[1] &= MASK51;
+            h[2] += c1;
+            let c2 = h[2] >> 51;
+            h[2] &= MASK51;
+            h[3] += c2;
+            let c3 = h[3] >> 51;
+            h[3] &= MASK51;
+            h[4] += c3;
+            let c4 = h[4] >> 51;
+            h[4] &= MASK51;
+            h[0] += c4 * 19;
+        }
+        Self(h)
+    }
+
+    fn add(self, rhs: Self) -> Self {
+        Self::carry([
+            self.0[0] + rhs.0[0],
+            self.0[1] + rhs.0[1],
+            self.0[2] + rhs.0[2],
+            self.0[3] + rhs.0[3],
+            self.0[4] + rhs.0[4],
+        ])
+    }
+
+    fn sub(self, rhs: Self) -> Self {
+        // Add 2*p in radix 2^51 before subtracting to avoid underflow
+        Self::carry([
+            (self.0[0] + 0xfffffffffffda) - rhs.0[0],
+            (self.0[1] + 0xffffffffffffe) - rhs.0[1],
+            (self.0[2] + 0xffffffffffffe) - rhs.0[2],
+            (self.0[3] + 0xffffffffffffe) - rhs.0[3],
+            (self.0[4] + 0xffffffffffffe) - rhs.0[4],
+        ])
+    }
+
+    fn neg(self) -> Self {
+        Self::ZERO.sub(self)
+    }
+
+    fn mul(self, rhs: Self) -> Self {
+        let a = self.0;
+        let b = rhs.0;
+        let a0 = a[0] as u128;
+        let a1 = a[1] as u128;
+        let a2 = a[2] as u128;
+        let a3 = a[3] as u128;
+        let a4 = a[4] as u128;
+        let b0 = b[0] as u128;
+        let b1 = b[1] as u128;
+        let b2 = b[2] as u128;
+        let b3 = b[3] as u128;
+        let b4 = b[4] as u128;
+
+        let mut r0 = a0 * b0 + 19 * (a1 * b4 + a2 * b3 + a3 * b2 + a4 * b1);
+        let mut r1 = a0 * b1 + a1 * b0 + 19 * (a2 * b4 + a3 * b3 + a4 * b2);
+        let mut r2 = a0 * b2 + a1 * b1 + a2 * b0 + 19 * (a3 * b4 + a4 * b3);
+        let mut r3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0 + 19 * (a4 * b4);
+        let mut r4 = a0 * b4 + a1 * b3 + a2 * b2 + a3 * b1 + a4 * b0;
+
+        let c0 = r0 >> 51;
+        r0 &= MASK51 as u128;
+        r1 += c0;
+        let c1 = r1 >> 51;
+        r1 &= MASK51 as u128;
+        r2 += c1;
+        let c2 = r2 >> 51;
+        r2 &= MASK51 as u128;
+        r3 += c2;
+        let c3 = r3 >> 51;
+        r3 &= MASK51 as u128;
+        r4 += c3;
+        let c4 = r4 >> 51;
+        r4 &= MASK51 as u128;
+        r0 += c4 * 19;
+
+        Self::carry([r0 as u64, r1 as u64, r2 as u64, r3 as u64, r4 as u64])
+    }
+
+    fn sq(self) -> Self {
+        self.mul(self)
+    }
+
+    /// Canonical 32-byte little-endian encoding in [0, 2^255 - 19).
+    fn to_bytes(self) -> [u8; 32] {
+        let mut h = Self::carry(self.0).0;
+        // Compute h + 19; if it overflows 2^255, h >= 2^255 - 19
+        let mut q = (h[0] + 19) >> 51;
+        q = (h[1] + q) >> 51;
+        q = (h[2] + q) >> 51;
+        q = (h[3] + q) >> 51;
+        q = (h[4] + q) >> 51;
+
+        h[0] += 19 * q;
+        let c0 = h[0] >> 51;
+        h[0] &= MASK51;
+        h[1] += c0;
+        let c1 = h[1] >> 51;
+        h[1] &= MASK51;
+        h[2] += c1;
+        let c2 = h[2] >> 51;
+        h[2] &= MASK51;
+        h[3] += c2;
+        let c3 = h[3] >> 51;
+        h[3] &= MASK51;
+        h[4] = (h[4] + c3) & MASK51;
+
+        // Pack five 51-bit limbs into 256 bits
+        let mut out = [0u8; 32];
+        let mut acc = 0u128;
+        let mut acc_bits = 0u32;
+        let mut byte_idx = 0usize;
+        for &limb in &h {
+            acc |= (limb as u128) << acc_bits;
+            acc_bits += 51;
+            while acc_bits >= 8 && byte_idx < 32 {
+                out[byte_idx] = (acc & 0xFF) as u8;
+                acc >>= 8;
+                acc_bits -= 8;
+                byte_idx += 1;
+            }
+        }
+        if byte_idx < 32 {
+            out[byte_idx] = (acc & 0xFF) as u8;
+        }
+        out
+    }
+
+    fn from_bytes(bytes: &[u8; 32]) -> Self {
+        let mut h = [0u64; 5];
+        let mut acc = 0u128;
+        let mut acc_bits = 0u32;
+        let mut limb_idx = 0usize;
+        for &b in bytes {
+            acc |= (b as u128) << acc_bits;
+            acc_bits += 8;
+            if acc_bits >= 51 && limb_idx < 4 {
+                h[limb_idx] = (acc & (MASK51 as u128)) as u64;
+                acc >>= 51;
+                acc_bits -= 51;
+                limb_idx += 1;
+            }
+        }
+        h[4] = (acc & ((1u128 << 51) - 1)) as u64 & ((1u64 << 51) - 1);
+        h[4] &= (1u64 << 51) - 1;
+        Self::carry(h)
+    }
+
+    /// Exponentiation by a 256-bit little-endian byte array.
+    fn pow_bytes(self, exp_le: &[u8; 32]) -> Self {
+        let mut res = Self::ONE;
+        let mut base = self;
+        for &byte in exp_le {
+            for bit in 0..8 {
+                if ((byte >> bit) & 1) == 1 {
+                    res = res.mul(base);
+                }
+                base = base.sq();
+            }
+        }
+        res
+    }
+
+    /// Multiplicative inverse a^(p - 2) mod (2^255 - 19).
+    fn inv(self) -> Self {
+        // p - 2 = 2^255 - 21
+        let mut exp = [0xFFu8; 32];
+        exp[0] = 256u16.wrapping_sub(21) as u8; // 0xEB = 235
+        exp[31] = 0x7F;
+        self.pow_bytes(&exp)
+    }
+}
+
+impl PartialEq for Fe {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_bytes() == other.to_bytes()
+    }
+}
+impl Eq for Fe {}
+
+/// Extended twisted Edwards point (X : Y : Z : T) with X*Y = Z*T on -x^2 + y^2 = 1 + d*x^2*y^2.
+#[derive(Clone, Copy, Debug)]
+struct EdwardsPoint {
+    x: Fe,
+    y: Fe,
+    z: Fe,
+    t: Fe,
+}
+
+impl EdwardsPoint {
+    const IDENTITY: Self = Self {
+        x: Fe::ZERO,
+        y: Fe::ONE,
+        z: Fe::ONE,
+        t: Fe::ZERO,
+    };
+
+    /// Curve constant d = -121665 / 121666 mod (2^255 - 19).
+    fn curve_d() -> Fe {
+        Fe::from_u64(121665).neg().mul(Fe::from_u64(121666).inv())
+    }
+
+    /// Principal square root of -1: 2^((p - 1) / 4) mod (2^255 - 19).
+    fn sqrt_m1() -> Fe {
+        // (p - 1) / 4 = (2^255 - 20) / 4 = 2^253 - 5
+        let mut exp = [0xFFu8; 32];
+        exp[0] = 0xFB; // 256 - 5 = 251
+        exp[31] = 0x1F;
+        Fe::from_u64(2).pow_bytes(&exp)
+    }
+
+    /// Complete unified twisted Edwards addition (Hisil et al. 2008 / RFC 8032 §5.1.4).
+    fn add(self, rhs: Self) -> Self {
+        let d = Self::curve_d();
+        let a = self.y.sub(self.x).mul(rhs.y.sub(rhs.x));
+        let b = self.y.add(self.x).mul(rhs.y.add(rhs.x));
+        let c = self.t.mul(rhs.t).mul(d).mul(Fe::from_u64(2));
+        let dd = self.z.mul(rhs.z).mul(Fe::from_u64(2));
+        let e = b.sub(a);
+        let f = dd.sub(c);
+        let g = dd.add(c);
+        let h = b.add(a);
+        Self {
+            x: e.mul(f),
+            y: g.mul(h),
+            z: f.mul(g),
+            t: e.mul(h),
+        }
+    }
+
+    fn scalar_mul(self, scalar_le: &[u8; 32]) -> Self {
+        let mut res = Self::IDENTITY;
+        let mut temp = self;
+        for &byte in scalar_le {
+            for bit in 0..8 {
+                if ((byte >> bit) & 1) == 1 {
+                    res = res.add(temp);
+                }
+                temp = temp.add(temp);
+            }
+        }
+        res
+    }
+
+    /// Compress to 32 bytes (little-endian `y` with the low bit of `x` in bit 255).
+    fn encode(self) -> [u8; 32] {
+        let z_inv = self.z.inv();
+        let x = self.x.mul(z_inv).to_bytes();
+        let mut y = self.y.mul(z_inv).to_bytes();
+        y[31] |= (x[0] & 1) << 7;
+        y
+    }
+
+    /// Decompress a 32-byte point and verify it lies on -x^2 + y^2 = 1 + d*x^2*y^2.
+    fn decode(bytes: &[u8; 32]) -> Option<Self> {
+        let x_sign = (bytes[31] >> 7) & 1;
+        let mut y_bytes = *bytes;
+        y_bytes[31] &= 0x7F;
+        let y = Fe::from_bytes(&y_bytes);
+        // Require canonical y < p
+        if y.to_bytes() != y_bytes {
+            return None;
+        }
+        let d = Self::curve_d();
+        let y2 = y.sq();
+        let u = y2.sub(Fe::ONE);
+        let v = d.mul(y2).add(Fe::ONE);
+        let w = u.mul(v.inv());
+
+        // Candidate root x = w^((p + 3) / 8) mod p, where (p + 3) / 8 = 2^252 - 2
+        let mut exp = [0xFFu8; 32];
+        exp[0] = 0xFE;
+        exp[31] = 0x0F;
+        let mut x = w.pow_bytes(&exp);
+        if x.sq() != w {
+            let x_alt = x.mul(Self::sqrt_m1());
+            if x_alt.sq() == w {
+                x = x_alt;
+            } else {
+                return None;
+            }
+        }
+        if x == Fe::ZERO && x_sign == 1 {
+            return None;
+        }
+        if (x.to_bytes()[0] & 1) != x_sign {
+            x = x.neg();
+        }
+        Some(Self {
+            x,
+            y,
+            z: Fe::ONE,
+            t: x.mul(y),
+        })
+    }
+
+    /// RFC 8032 Ed25519 basepoint B (y = 4/5 mod p, x >= 0 even).
+    fn basepoint() -> Self {
+        let by = Fe::from_u64(4).mul(Fe::from_u64(5).inv()).to_bytes();
+        Self::decode(&by).expect("valid Ed25519 basepoint B")
+    }
+}
+
+/// Prime order L = 2^252 + 27742317777372353535851937790883648493 of the Ed25519 basepoint B.
+const ED25519_L: [u64; 4] = [
+    0x5812631a5cf5d3ed,
+    0x14def9dea2f79cd6,
+    0x0000000000000000,
+    0x1000000000000000,
+];
+
+fn u256_ge(a: &[u64; 4], b: &[u64; 4]) -> bool {
+    for i in (0..4).rev() {
+        if a[i] != b[i] {
+            return a[i] > b[i];
+        }
+    }
+    true
+}
+
+fn u256_sub(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    let mut borrow = 0u64;
+    for i in 0..4 {
+        let (d1, b1) = a[i].overflowing_sub(b[i]);
+        let (d2, b2) = d1.overflowing_sub(borrow);
+        out[i] = d2;
+        borrow = (b1 as u64) + (b2 as u64);
+    }
+    out
+}
+
+fn scalar_add_mod_l(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    let mut carry = 0u64;
+    for i in 0..4 {
+        let (s1, c1) = a[i].overflowing_add(b[i]);
+        let (s2, c2) = s1.overflowing_add(carry);
+        out[i] = s2;
+        carry = (c1 as u64) + (c2 as u64);
+    }
+    if carry > 0 || u256_ge(&out, &ED25519_L) {
+        out = u256_sub(&out, &ED25519_L);
+    }
+    out
+}
+
+fn scalar_from_bytes_mod_l(bytes_le: &[u8; 32]) -> [u64; 4] {
+    let mut acc = [0u64; 4];
+    for &byte in bytes_le.iter().rev() {
+        for bit in (0..8).rev() {
+            acc = scalar_add_mod_l(&acc, &acc);
+            if ((byte >> bit) & 1) == 1 {
+                acc = scalar_add_mod_l(&acc, &[1, 0, 0, 0]);
+            }
+        }
+    }
+    acc
+}
+
+fn scalar_mul_mod_l(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut res = [0u64; 4];
+    let mut base = *a;
+    for i in 0..4 {
+        let word = b[i];
+        for bit in 0..64 {
+            if ((word >> bit) & 1) == 1 {
+                res = scalar_add_mod_l(&res, &base);
+            }
+            base = scalar_add_mod_l(&base, &base);
+        }
+    }
+    res
+}
+
+fn scalar_to_bytes_le(s: &[u64; 4]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for i in 0..4 {
+        out[8 * i..8 * i + 8].copy_from_slice(&s[i].to_le_bytes());
+    }
+    out
+}
+
+fn scalar_from_canonical_bytes_le(bytes: &[u8; 32]) -> Option<[u64; 4]> {
+    let mut s = [0u64; 4];
+    for i in 0..4 {
+        s[i] = u64::from_le_bytes(bytes[8 * i..8 * i + 8].try_into().unwrap());
+    }
+    if u256_ge(&s, &ED25519_L) {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Deterministic Ed25519 validator keypair over twisted Edwards Curve25519 for signing & verifying
+/// BFT consensus certificates (`[S]B = R + [k]A`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidatorKeypair {
     pub node_id: usize,
@@ -131,10 +653,16 @@ pub struct ValidatorKeypair {
 }
 
 impl ValidatorKeypair {
-    /// Deterministically derive a validator keypair from `node_id` and seed bytes.
+    /// Deterministically derive a validator Curve25519 keypair from `node_id` and seed bytes.
     pub fn from_seed(node_id: usize, seed: &[u8]) -> Self {
-        let secret_key = cshake256_domain(b"obend.ed25519.sk", &node_id.to_be_bytes(), seed);
-        let public_key = cshake256_domain(b"obend.ed25519.pk", &node_id.to_be_bytes(), &secret_key);
+        let raw_sk = cshake256_domain(b"obend.ed25519.sk", &node_id.to_be_bytes(), seed);
+        let mut a_scalar = scalar_from_bytes_mod_l(&raw_sk);
+        if a_scalar == [0, 0, 0, 0] {
+            a_scalar[0] = 1;
+        }
+        let secret_key = scalar_to_bytes_le(&a_scalar);
+        let a_point = EdwardsPoint::basepoint().scalar_mul(&secret_key);
+        let public_key = a_point.encode();
         Self {
             node_id,
             public_key,
@@ -142,24 +670,69 @@ impl ValidatorKeypair {
         }
     }
 
-    /// Sign a domain-separated consensus message payload.
+    /// Sign a domain-separated consensus message payload using Schnorr/Ed25519 (`S = (r + k*a) mod L`).
     pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
-        let r = cshake256_domain(b"obend.ed25519.r", &self.secret_key, msg);
-        let s = cshake256_domain(b"obend.ed25519.s", &self.public_key, &[&r[..], msg].concat());
+        let a_scalar = scalar_from_bytes_mod_l(&self.secret_key);
+        let r_hash = cshake256_domain(b"obend.ed25519.r", &self.secret_key, msg);
+        let mut r_scalar = scalar_from_bytes_mod_l(&r_hash);
+        if r_scalar == [0, 0, 0, 0] {
+            r_scalar[0] = 1;
+        }
+        let r_bytes_scalar = scalar_to_bytes_le(&r_scalar);
+        let r_point = EdwardsPoint::basepoint().scalar_mul(&r_bytes_scalar);
+        let r_encoded = r_point.encode();
+
+        let k_hash = cshake256_domain(
+            b"obend.ed25519.k",
+            &r_encoded,
+            &[&self.public_key[..], msg].concat(),
+        );
+        let k_scalar = scalar_from_bytes_mod_l(&k_hash);
+        let ka = scalar_mul_mod_l(&k_scalar, &a_scalar);
+        let s_scalar = scalar_add_mod_l(&r_scalar, &ka);
+        let s_encoded = scalar_to_bytes_le(&s_scalar);
+
         let mut sig = [0u8; 64];
-        sig[..32].copy_from_slice(&r);
-        sig[32..].copy_from_slice(&s);
+        sig[..32].copy_from_slice(&r_encoded);
+        sig[32..].copy_from_slice(&s_encoded);
         sig
     }
 
-    /// Verify a 64-byte signature against `public_key` and `msg`.
+    /// Verify a 64-byte Ed25519 signature `(R, S)` against `public_key` (`A`) and `msg`
+    /// by checking the Curve25519 group equation `[S]B == R + [k]A`.
     pub fn verify(public_key: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
-        let mut r = [0u8; 32];
-        let mut s = [0u8; 32];
-        r.copy_from_slice(&sig[..32]);
-        s.copy_from_slice(&sig[32..]);
-        let expected_s = cshake256_domain(b"obend.ed25519.s", public_key, &[&r[..], msg].concat());
-        s == expected_s && r != [0u8; 32]
+        let mut r_encoded = [0u8; 32];
+        let mut s_encoded = [0u8; 32];
+        r_encoded.copy_from_slice(&sig[..32]);
+        s_encoded.copy_from_slice(&sig[32..]);
+
+        let Some(_s_scalar) = scalar_from_canonical_bytes_le(&s_encoded) else {
+            return false;
+        };
+        let Some(a_point) = EdwardsPoint::decode(public_key) else {
+            return false;
+        };
+        let Some(r_point) = EdwardsPoint::decode(&r_encoded) else {
+            return false;
+        };
+        // Reject identity public key or identity R
+        if a_point.encode() == EdwardsPoint::IDENTITY.encode()
+            || r_point.encode() == EdwardsPoint::IDENTITY.encode()
+        {
+            return false;
+        }
+
+        let k_hash = cshake256_domain(
+            b"obend.ed25519.k",
+            &r_encoded,
+            &[&public_key[..], msg].concat(),
+        );
+        let k_scalar = scalar_from_bytes_mod_l(&k_hash);
+        let k_bytes = scalar_to_bytes_le(&k_scalar);
+
+        let lhs = EdwardsPoint::basepoint().scalar_mul(&s_encoded);
+        let rhs = r_point.add(a_point.scalar_mul(&k_bytes));
+        lhs.encode() == rhs.encode()
     }
 }
 
@@ -521,9 +1094,70 @@ impl LimitOrder {
     /// - `.Ask`: `total <= price * qty`
     pub fn crosses(&self, price: u64) -> bool {
         match self.side {
-            OrderSide::Bid => price.saturating_mul(self.qty) <= self.total,
-            OrderSide::Ask => self.total <= price.saturating_mul(self.qty),
+            OrderSide::Bid => (price as u128) * (self.qty as u128) <= (self.total as u128),
+            OrderSide::Ask => (self.total as u128) <= (price as u128) * (self.qty as u128),
         }
+    }
+}
+
+/// Mirrors `highestBid?` in `Obend/Judge/Clearing.lean`.
+pub fn highest_bid(orders: &[LimitOrder]) -> Option<&LimitOrder> {
+    orders
+        .iter()
+        .filter(|o| o.side == OrderSide::Bid && o.qty > 0)
+        .fold(None, |best: Option<&LimitOrder>, b| match best {
+            None => Some(b),
+            Some(cur) => {
+                if (cur.total as u128) * (b.qty as u128) < (b.total as u128) * (cur.qty as u128) {
+                    Some(b)
+                } else {
+                    Some(cur)
+                }
+            }
+        })
+}
+
+/// Mirrors `lowestAsk?` in `Obend/Judge/Clearing.lean`.
+pub fn lowest_ask(orders: &[LimitOrder]) -> Option<&LimitOrder> {
+    orders
+        .iter()
+        .filter(|o| o.side == OrderSide::Ask && o.qty > 0)
+        .fold(None, |best: Option<&LimitOrder>, a| match best {
+            None => Some(a),
+            Some(cur) => {
+                if (a.total as u128) * (cur.qty as u128) < (cur.total as u128) * (a.qty as u128) {
+                    Some(a)
+                } else {
+                    Some(cur)
+                }
+            }
+        })
+}
+
+/// Mirrors `hasCrossingPair` in `Obend/Judge/Clearing.lean`.
+pub fn has_crossing_pair(orders: &[LimitOrder]) -> bool {
+    match (highest_bid(orders), lowest_ask(orders)) {
+        (Some(b_max), Some(a_min)) => {
+            (a_min.total as u128) * (b_max.qty as u128)
+                <= (b_max.total as u128) * (a_min.qty as u128)
+        }
+        _ => false,
+    }
+}
+
+/// Mirrors `priceInCrossingInterval` in `Obend/Judge/Clearing.lean`.
+pub fn price_in_crossing_interval(orders: &[LimitOrder], price: u64) -> bool {
+    match (highest_bid(orders), lowest_ask(orders)) {
+        (Some(b_max), Some(a_min)) => {
+            if (a_min.total as u128) * (b_max.qty as u128)
+                <= (b_max.total as u128) * (a_min.qty as u128)
+            {
+                a_min.crosses(price) && b_max.crosses(price)
+            } else {
+                true
+            }
+        }
+        _ => true,
     }
 }
 
@@ -533,6 +1167,26 @@ pub struct ResourceTransfer {
     pub destination: String,
     pub asset: String,
     pub amount: u64,
+}
+
+/// Mirrors `netFlow` in `Obend/Judge/Clearing.lean`.
+pub fn net_flow(transfers: &[ResourceTransfer], account: &str, asset: &str) -> i64 {
+    transfers
+        .iter()
+        .map(|t| {
+            let inflow = if t.destination == account && t.asset == asset {
+                t.amount as i64
+            } else {
+                0
+            };
+            let outflow = if t.source == account && t.asset == asset {
+                t.amount as i64
+            } else {
+                0
+            };
+            inflow - outflow
+        })
+        .sum()
 }
 
 /// `drex-clearing@1` certificate matching `Obend.Judge.Certificate` (`Obend/Judge/Clearing.lean`).
@@ -565,35 +1219,7 @@ pub fn solve_primal_dual_clearing(
     }
 
     // 1. Find highest bid and lowest ask (`highestBid?` and `lowestAsk?` in `Obend/Judge/Clearing.lean`)
-    let highest_bid = orders
-        .iter()
-        .filter(|o| o.side == OrderSide::Bid && o.qty > 0)
-        .fold(None, |best: Option<&LimitOrder>, b| match best {
-            None => Some(b),
-            Some(cur) => {
-                if (cur.total as u128) * (b.qty as u128) < (b.total as u128) * (cur.qty as u128) {
-                    Some(b)
-                } else {
-                    Some(cur)
-                }
-            }
-        });
-
-    let lowest_ask = orders
-        .iter()
-        .filter(|o| o.side == OrderSide::Ask && o.qty > 0)
-        .fold(None, |best: Option<&LimitOrder>, a| match best {
-            None => Some(a),
-            Some(cur) => {
-                if (a.total as u128) * (cur.qty as u128) < (cur.total as u128) * (a.qty as u128) {
-                    Some(a)
-                } else {
-                    Some(cur)
-                }
-            }
-        });
-
-    let price = match (highest_bid, lowest_ask) {
+    let price = match (highest_bid(orders), lowest_ask(orders)) {
         (Some(b_max), Some(a_min)) => {
             if (a_min.total as u128) * (b_max.qty as u128)
                 <= (b_max.total as u128) * (a_min.qty as u128)
@@ -761,27 +1387,82 @@ pub fn solve_primal_dual_clearing(
 }
 
 impl DrexClearingCertificate {
-    /// Mirror every check of `Obend.Judge.Clearing.judge` (`Obend/Judge/Clearing.lean`) and verify
-    /// the resulting receipt digest via `ObendSession` FFI.
-    pub fn verify_with_kernel(&self, orders: &[LimitOrder], session: &mut ObendSession) -> Result<bool, ObendError> {
+    /// Mirror all 13 checks of `Obend.Judge.Clearing.judge` (`Obend/Judge/Clearing.lean` lines 136-196)
+    /// and verify the resulting receipt digest via `ObendSession` FFI.
+    pub fn verify_with_kernel(
+        &self,
+        orders: &[LimitOrder],
+        session: &mut ObendSession,
+    ) -> Result<bool, ObendError> {
+        // 1. marketMalformed (`m.currency = m.goods`)
         if self.schema != "drex-clearing@1" || self.currency == self.goods {
             return Ok(false);
         }
+        // 2. foreignAsset (`t.asset != m.currency && t.asset != m.goods`)
+        if self
+            .transfers
+            .iter()
+            .any(|t| t.asset != self.currency && t.asset != self.goods)
+        {
+            return Ok(false);
+        }
+        // 3. notAnOrder (`!isOrderAccount orders t.source || !isOrderAccount orders t.destination`)
+        let is_order_account = |acct: &str| orders.iter().any(|o| o.account == acct);
+        if self
+            .transfers
+            .iter()
+            .any(|t| !is_order_account(&t.source) || !is_order_account(&t.destination))
+        {
+            return Ok(false);
+        }
+        // 4. invalidPrice (`!priceInCrossingInterval orders c.price`)
+        if !price_in_crossing_interval(orders, self.price) {
+            return Ok(false);
+        }
+        // 5. slackCount (`c.slacks.length != orders.length`)
         if self.slacks.len() != orders.len() || self.fills.len() != orders.len() {
             return Ok(false);
         }
+
+        // Compute `Order.fill` and `Order.paid` from `self.transfers` (`Obend/Judge/Clearing.lean` lines 99-112)
+        let order_fill = |o: &LimitOrder| -> i64 {
+            let nf = net_flow(&self.transfers, &o.account, &self.goods);
+            match o.side {
+                OrderSide::Bid => nf,
+                OrderSide::Ask => -nf,
+            }
+        };
+        let order_paid = |o: &LimitOrder| -> i64 {
+            let nf = net_flow(&self.transfers, &o.account, &self.currency);
+            match o.side {
+                OrderSide::Bid => -nf,
+                OrderSide::Ask => nf,
+            }
+        };
+
+        // 6. notUniform (`o.paid m transfers != c.price * o.fill m transfers`)
+        for (i, o) in orders.iter().enumerate() {
+            let f = order_fill(o);
+            let paid = order_paid(o);
+            if f != (self.fills[i] as i64) || paid != (self.price as i64) * f {
+                return Ok(false);
+            }
+        }
+
         let dual_diff = self.potentials.1 - self.potentials.0;
         let mut obj_vol = 0i64;
         let mut dual_cap = 0i64;
         let mut signed_flow = 0i64;
 
         for (i, o) in orders.iter().enumerate() {
-            let f = self.fills[i] as i64;
+            let f = order_fill(o);
             let cap = if o.crosses(self.price) { o.qty as i64 } else { 0 };
+            // 7. negativeFill / capacityExceeded
             if f < 0 || f > cap {
                 return Ok(false);
             }
             let s = self.slacks[i];
+            // 8. negativeSlack / dualInfeasible
             if s < 0 {
                 return Ok(false);
             }
@@ -803,11 +1484,30 @@ impl DrexClearingCertificate {
             dual_cap += cap * s;
         }
 
+        // 9. nonConserving (`finSum ... != 0`)
         if signed_flow != 0 {
             return Ok(false);
         }
+        // 10. uncertified (`gap <= m.epsilon`)
         let gap = dual_cap - obj_vol;
-        if gap > (self.epsilon as i64) || gap != self.duality_gap {
+        if obj_vol != self.objective_volume
+            || dual_cap != self.dual_capacity
+            || gap != self.duality_gap
+            || gap > (self.epsilon as i64)
+        {
+            return Ok(false);
+        }
+        // 11. unservedCrossing (`objVol == 0 && hasCrossingPair orders`)
+        if obj_vol == 0 && has_crossing_pair(orders) {
+            return Ok(false);
+        }
+
+        let expected_digest = cshake256_domain(
+            b"drex-clearing@1",
+            &self.price.to_be_bytes(),
+            &self.objective_volume.to_be_bytes(),
+        );
+        if self.digest != expected_digest {
             return Ok(false);
         }
 
@@ -824,7 +1524,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sha256_nist_vector() {
+    fn test_sha256_nist_vector_and_keccak_sponge() {
         // NIST test vector for "abc":
         // ba7816bf 8f01cfea 414140de 5dae2223 b00361a3 96177a9c b410ff61 f20015ad
         let digest = sha256(b"abc");
@@ -835,6 +1535,43 @@ mod tests {
             0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
         ];
         assert_eq!(digest, expected);
+
+        // NIST FIPS 202 SHAKE256("", 256) test vector:
+        // 46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f
+        let shake_empty = keccak256_sponge(0x1F, &[]);
+        let expected_shake: [u8; 32] = [
+            0x46, 0xb9, 0xdd, 0x2b, 0x0b, 0xa8, 0x8d, 0x13,
+            0x23, 0x3b, 0x3f, 0xeb, 0x74, 0x3e, 0xeb, 0x24,
+            0x3f, 0xcd, 0x52, 0xea, 0x62, 0xb8, 0x1b, 0x82,
+            0xb5, 0x0c, 0x27, 0x64, 0x6e, 0xd5, 0x76, 0x2f,
+        ];
+        assert_eq!(shake_empty, expected_shake);
+    }
+
+    #[test]
+    fn test_ed25519_unforgeable_without_secret_key() {
+        let kp = ValidatorKeypair::from_seed(0, b"validator-0-seed");
+        let msg = b"propose-block-height-42";
+        let sig = kp.sign(msg);
+        assert!(ValidatorKeypair::verify(&kp.public_key, msg, &sig));
+
+        // 1. Attempting the old forgery attack (choosing arbitrary R and hashing public_key + R + msg)
+        // must be strictly rejected because the Curve25519 discrete log of A = [a]B is unknown:
+        let fake_r = EdwardsPoint::basepoint().encode();
+        let fake_s = cshake256_domain(
+            b"obend.ed25519.s",
+            &kp.public_key,
+            &[&fake_r[..], &msg[..]].concat(),
+        );
+        let mut forged_sig = [0u8; 64];
+        forged_sig[..32].copy_from_slice(&fake_r);
+        forged_sig[32..].copy_from_slice(&fake_s);
+        assert!(!ValidatorKeypair::verify(&kp.public_key, msg, &forged_sig));
+
+        // 2. Wrong message or wrong public key must fail verification
+        assert!(!ValidatorKeypair::verify(&kp.public_key, b"tampered-msg", &sig));
+        let other_kp = ValidatorKeypair::from_seed(1, b"validator-1-seed");
+        assert!(!ValidatorKeypair::verify(&other_kp.public_key, msg, &sig));
     }
 
     #[test]
@@ -973,10 +1710,61 @@ mod tests {
             .verify_with_kernel(&orders, &mut session)
             .expect("kernel check"));
 
-        // Negative pole: corrupting dual slacks to violate zero duality gap is refused
-        let mut bad_cert = cert.clone();
-        bad_cert.slacks[2] = 0;
-        assert!(!bad_cert
+        // Negative pole 1: corrupting dual slacks to violate zero duality gap is refused
+        let mut bad_slacks = cert.clone();
+        bad_slacks.slacks[2] = 0;
+        assert!(!bad_slacks
+            .verify_with_kernel(&orders, &mut session)
+            .expect("kernel check"));
+
+        // Negative pole 2: wiping or tampering with `transfers` while keeping `fills` is refused (`notUniform` / `Order.fill`)
+        let mut empty_transfers = cert.clone();
+        empty_transfers.transfers.clear();
+        assert!(!empty_transfers
+            .verify_with_kernel(&orders, &mut session)
+            .expect("kernel check"));
+
+        // Negative pole 3: foreign asset posting is refused (`foreignAsset`)
+        let mut foreign_asset = cert.clone();
+        foreign_asset.transfers.push(ResourceTransfer {
+            source: "alice_buyer".to_string(),
+            destination: "carol_seller".to_string(),
+            asset: "DOGE".to_string(),
+            amount: 1,
+        });
+        assert!(!foreign_asset
+            .verify_with_kernel(&orders, &mut session)
+            .expect("kernel check"));
+
+        // Negative pole 4: non-order account posting is refused (`notAnOrder`)
+        let mut non_order = cert.clone();
+        non_order.transfers.push(ResourceTransfer {
+            source: "mallory_outsider".to_string(),
+            destination: "carol_seller".to_string(),
+            asset: "USDC".to_string(),
+            amount: 1,
+        });
+        assert!(!non_order
+            .verify_with_kernel(&orders, &mut session)
+            .expect("kernel check"));
+
+        // Negative pole 5: unserved crossing (zero volume when a crossing pair exists) is refused (`unservedCrossing`)
+        let unserved = DrexClearingCertificate {
+            schema: "drex-clearing@1".to_string(),
+            currency: "USDC".to_string(),
+            goods: "WAFER".to_string(),
+            epsilon: 100,
+            price: 110,
+            potentials: (1, 0),
+            slacks: vec![2, 2, 0],
+            fills: vec![0, 0, 0],
+            transfers: vec![],
+            objective_volume: 0,
+            dual_capacity: 30,
+            duality_gap: 30,
+            digest: cshake256_domain(b"drex-clearing@1", &110u64.to_be_bytes(), &0i64.to_be_bytes()),
+        };
+        assert!(!unserved
             .verify_with_kernel(&orders, &mut session)
             .expect("kernel check"));
     }

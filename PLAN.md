@@ -1,6 +1,6 @@
 # Obend — Engineering Plan & Workstream Status
 
-> **Current Build**: **437 Lean modules**, **62,072 package constants** across **437+ build jobs**, **4 Rust crates** (`obend-sandbox`, `obend-ffi`, `obend-gui`, `obend-node`), **`0 sorryAx`**, **`0` custom axioms**.
+> **Current Build**: **437 Lean modules**, **62,167+ package constants** across **437+ build jobs**, **4 Rust crates** (`obend-sandbox`, `obend-ffi`, `obend-gui`, `obend-node`), **`0 sorryAx`**, **`0` custom axioms**.
 
 ---
 

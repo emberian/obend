@@ -163,6 +163,9 @@ def odeSafetyCellContract (maxTemp : Nat) : CellContract where
     exact (guard_ok hw).1
   step_sound := fun _ _ _ _ hAdm => hAdm
 
+/-- Alias for `runFlowpipe` matching `METATHEORY.md` nomenclature. -/
+abbrev computeFlowpipeTrajectory := runFlowpipe
+
 /-- **Theorem (`flowpipe_safety_implies_contract_holds`)**:
 1. When `verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨15, 35⟩)] = true`,
    every state in the flowpipe tube satisfies the `35`°C safety bound,
@@ -176,6 +179,15 @@ theorem flowpipe_safety_implies_contract_holds
     verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨15, 35⟩)] = true ∧
     Holds (odeSafetyCellContract maxTemp).invariant s_final := by
   exact ⟨by decide +kernel, cellContract_trace_sound (odeSafetyCellContract maxTemp) s₀ s_final steps h_init h_tr⟩
+
+/-- Alias for `flowpipe_safety_implies_contract_holds` matching `METATHEORY.md` §3. -/
+theorem flowpipe_safety_admits_contract
+    (maxTemp : Nat) (s₀ s_final : Data) (steps : List (Data × Data))
+    (h_init : Holds (odeSafetyCellContract maxTemp).invariant s₀)
+    (h_tr : CellTrace (odeSafetyCellContract maxTemp).law s₀ steps s_final) :
+    verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨15, 35⟩)] = true ∧
+    Holds (odeSafetyCellContract maxTemp).invariant s_final :=
+  flowpipe_safety_implies_contract_holds maxTemp s₀ s_final steps h_init h_tr
 
 end Obend.Analysis
 end

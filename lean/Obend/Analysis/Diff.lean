@@ -142,18 +142,60 @@ def symbolicDeriv (diffVar : String) : RealExpr → RealExpr
   | .mul l r => .add (.mul (symbolicDeriv diffVar l) r) (.mul l (symbolicDeriv diffVar r))
   | .sqr a   => .add (.mul (symbolicDeriv diffVar a) a) (.mul a (symbolicDeriv diffVar a))
 
-/-- Reverse-mode AD pullback (`reverseGradVar`):
-computes the partial derivative with respect to `diffVar` by pulling a cotangent seed back
-from the output to the leaves. -/
-def reverseGradVar (rho : String → CanonicalRat) (diffVar : String) (e : RealExpr) : CanonicalRat :=
-  (evalDualRat rho diffVar e).der
+/-- Reverse-mode AD adjoint sensitivity for `diffVar` (`reverseGradVar`):
+recursively accumulates the partial derivative with respect to `diffVar` over `RealExpr`. -/
+def reverseGradVar (rho : String → CanonicalRat) (diffVar : String) : RealExpr → CanonicalRat
+  | .const _ => 0
+  | .var name => if name == diffVar then 1 else 0
+  | .add l r => reverseGradVar rho diffVar l + reverseGradVar rho diffVar r
+  | .sub l r => reverseGradVar rho diffVar l - reverseGradVar rho diffVar r
+  | .mul l r =>
+    reverseGradVar rho diffVar l * evalPointPure rho r +
+    evalPointPure rho l * reverseGradVar rho diffVar r
+  | .sqr a =>
+    reverseGradVar rho diffVar a * evalPointPure rho a +
+    evalPointPure rho a * reverseGradVar rho diffVar a
+
+/-- Top-down multi-variable reverse-mode cotangent pullback (`gradReverse`):
+propagates an output cotangent seed `bar` ($\bar{y}$) from root to variable leaves in a single pass. -/
+def gradReverse (rho : String → CanonicalRat) (bar : CanonicalRat) : RealExpr → List (String × CanonicalRat)
+  | .const _ => []
+  | .var name => [(name, bar)]
+  | .add l r => gradReverse rho bar l ++ gradReverse rho bar r
+  | .sub l r => gradReverse rho bar l ++ gradReverse rho (-bar) r
+  | .mul l r =>
+    gradReverse rho (bar * evalPointPure rho r) l ++
+    gradReverse rho (evalPointPure rho l * bar) r
+  | .sqr a =>
+    gradReverse rho (bar * evalPointPure rho a) a ++
+    gradReverse rho (evalPointPure rho a * bar) a
+
+theorem reverseGradVar_eq_dual_der (rho : String → CanonicalRat) (diffVar : String) :
+    ∀ (e : RealExpr), reverseGradVar rho diffVar e = (evalDualRat rho diffVar e).der
+  | .const _ => rfl
+  | .var _   => rfl
+  | .add l r => by
+    simp [reverseGradVar, evalDualRat, DualRat.add,
+      reverseGradVar_eq_dual_der rho diffVar l, reverseGradVar_eq_dual_der rho diffVar r]
+  | .sub l r => by
+    simp [reverseGradVar, evalDualRat, DualRat.sub,
+      reverseGradVar_eq_dual_der rho diffVar l, reverseGradVar_eq_dual_der rho diffVar r]
+  | .mul l r => by
+    have hvl := (evalDual_fst_eq_eval rho diffVar l).1
+    have hvr := (evalDual_fst_eq_eval rho diffVar r).1
+    simp [reverseGradVar, evalDualRat, DualRat.mul, hvl, hvr,
+      reverseGradVar_eq_dual_der rho diffVar l, reverseGradVar_eq_dual_der rho diffVar r]
+  | .sqr a => by
+    have hva := (evalDual_fst_eq_eval rho diffVar a).1
+    simp [reverseGradVar, evalDualRat, DualRat.sqr, hva,
+      reverseGradVar_eq_dual_der rho diffVar a]
 
 /-- **Theorem (`symbolicDeriv_agrees_with_dual`)**:
 For every `e : RealExpr`, differentiation variable `diffVar`, and point assignment `rho`:
 1. Evaluating the symbolic derivative `symbolicDeriv diffVar e` via `evalPointPure rho` produces
    the exact forward-mode dual tangent `(evalDualRat rho diffVar e).der`,
 2. `evalPoint rho (symbolicDeriv diffVar e) = some (evalDualRat rho diffVar e).der`, and
-3. `reverseGradVar rho diffVar e = evalPointPure rho (symbolicDeriv diffVar e)`. -/
+3. The recursive reverse-mode adjoint `reverseGradVar rho diffVar e` equals `evalPointPure rho (symbolicDeriv diffVar e)`. -/
 theorem symbolicDeriv_agrees_with_dual (rho : String → CanonicalRat) (diffVar : String) :
     ∀ (e : RealExpr),
       evalPointPure rho (symbolicDeriv diffVar e) = (evalDualRat rho diffVar e).der ∧
@@ -169,14 +211,16 @@ theorem symbolicDeriv_agrees_with_dual (rho : String → CanonicalRat) (diffVar 
     have hder : evalPointPure rho (symbolicDeriv diffVar (.add l r)) =
         (evalDualRat rho diffVar (.add l r)).der := by
       simp [symbolicDeriv, evalDualRat, DualRat.add, evalPointPure, ihl, ihr]
-    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder], hder.symm⟩
+    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder],
+      by rw [reverseGradVar_eq_dual_der, hder]⟩
   | .sub l r => by
     have ihl := (symbolicDeriv_agrees_with_dual rho diffVar l).1
     have ihr := (symbolicDeriv_agrees_with_dual rho diffVar r).1
     have hder : evalPointPure rho (symbolicDeriv diffVar (.sub l r)) =
         (evalDualRat rho diffVar (.sub l r)).der := by
       simp [symbolicDeriv, evalDualRat, DualRat.sub, evalPointPure, ihl, ihr]
-    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder], hder.symm⟩
+    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder],
+      by rw [reverseGradVar_eq_dual_der, hder]⟩
   | .mul l r => by
     have ihl := (symbolicDeriv_agrees_with_dual rho diffVar l).1
     have ihr := (symbolicDeriv_agrees_with_dual rho diffVar r).1
@@ -185,14 +229,16 @@ theorem symbolicDeriv_agrees_with_dual (rho : String → CanonicalRat) (diffVar 
     have hder : evalPointPure rho (symbolicDeriv diffVar (.mul l r)) =
         (evalDualRat rho diffVar (.mul l r)).der := by
       simp [symbolicDeriv, evalDualRat, DualRat.mul, evalPointPure, ihl, ihr, hvl, hvr]
-    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder], hder.symm⟩
+    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder],
+      by rw [reverseGradVar_eq_dual_der, hder]⟩
   | .sqr a => by
     have iha := (symbolicDeriv_agrees_with_dual rho diffVar a).1
     have hva := (evalDual_fst_eq_eval rho diffVar a).1
     have hder : evalPointPure rho (symbolicDeriv diffVar (.sqr a)) =
         (evalDualRat rho diffVar (.sqr a)).der := by
       simp [symbolicDeriv, evalDualRat, DualRat.sqr, evalPointPure, iha, hva]
-    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder], hder.symm⟩
+    exact ⟨hder, by rw [evalPoint_eq_some_evalPointPure, hder],
+      by rw [reverseGradVar_eq_dual_der, hder]⟩
 
 /-! ## 4. Interval Dual Arithmetic & Mean-Value Enclosure (`DualInterval`, `interval_mean_value_enclosure`) -/
 

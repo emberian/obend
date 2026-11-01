@@ -28,8 +28,12 @@ import all Obend.Lower.LeanKernel
 import all Obend.Lower.ExprCAM
 import all Obend.Lower.Proofs.SiliconKernel
 import all Obend.Hardware.ReductionMachine
+import all Obend.Analysis.Diff
+import all Obend.Analysis.Flowpipe
 public import Obend.Lower.ExprCAM
 public import Obend.Lower.Proofs.SiliconKernel
+public import Obend.Analysis.Diff
+public import Obend.Analysis.Flowpipe
 @[expose] public section
 
 namespace Obend.Tests.SiliconElab
@@ -279,6 +283,24 @@ def internRootNodeNoDedup (cam : ExprCAM) (e : KExpr) (leftH rightH : Nat) : Exp
 
 #tooth Obend.Lower.ExprCAM.exprCam_eq_iff_handle_eq by mutation Obend.Lower.ExprCAM.internRootNode := internRootNodeNoDedup
 
+/-- 14. Broken `DualRat.mul` in `Obend.Analysis.Diff` that drops the second Leibniz product term
+(`a.der * b.val` instead of `a.der * b.val + a.val * b.der`). -/
+def dualRatMulBroken (a b : Obend.Analysis.DualRat) : Obend.Analysis.DualRat :=
+  ⟨a.val * b.val, a.der * b.val⟩
+
+#tooth Obend.Analysis.interval_mean_value_enclosure by mutation Obend.Analysis.DualRat.mul := dualRatMulBroken
+
+/-- 15. Broken `verifyTrajectorySafety` in `Obend.Analysis.Flowpipe` that rubber-stamps unsafe
+thermal-runaway trajectories (`true`). -/
+def verifyTrajectorySafetyRubberStamp
+    (_sys : Obend.Analysis.OdeSystem)
+    (_initBox : List (String × Obend.Analysis.Interval))
+    (_steps : Nat)
+    (_safeBounds : List (String × Obend.Analysis.Interval)) : Bool :=
+  true
+
+#tooth Obend.Analysis.flowpipe_step_encloses_euler by mutation Obend.Analysis.verifyTrajectorySafety := verifyTrajectorySafetyRubberStamp
+
 /-! ## 4. Axiom Hygiene Verification (`0 sorryAx`, `0` Custom Axioms) -/
 
 #print axioms Obend.Lower.Inductive.lower_inductive_sound
@@ -298,8 +320,16 @@ def internRootNodeNoDedup (cam : ExprCAM) (e : KExpr) (leftH rightH : Nat) : Exp
 #print axioms Obend.Lower.ExprCAM.unpack_pack_camWord64
 #print axioms Obend.Lower.ExprCAM.exprCam_looseBVar_flag_sound
 #print axioms Obend.Lower.ExprCAM.exprCam_eq_iff_handle_eq
+#print axioms Obend.Lower.ExprCAM.intern_unintern_roundtrip
+#print axioms Obend.Lower.ExprCAM.exprCam_handle_eq_imp_expr_eq
+#print axioms Obend.Lower.ExprCAM.exprCam_hash26_collision_and_capacity_sound
 #print axioms Obend.Lower.ExprCAM.exprCam_roundtrip_sound
 #print axioms Obend.Lower.ExprCAM.silicon_live_env_decl_check_sound
+#print axioms Obend.Analysis.evalDual_fst_eq_eval
+#print axioms Obend.Analysis.symbolicDeriv_agrees_with_dual
+#print axioms Obend.Analysis.interval_mean_value_enclosure
+#print axioms Obend.Analysis.flowpipe_step_encloses_euler
+#print axioms Obend.Analysis.flowpipe_safety_implies_contract_holds
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_futamura_dpr_specialize_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_env_mutation_fallback_sound

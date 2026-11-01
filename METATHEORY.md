@@ -2,7 +2,7 @@
 
 > **Current Mechanized Footprint (2026-11-01)**:
 > - **437 Lean 4 modules** under `lean/Obend/`
-> - **62,072 package constants** verified by `Obend/Census.lean` (`#assert_axioms_tree`)
+> - **62,167+ package constants** verified by `Obend/Census.lean` (`#assert_axioms_tree`)
 > - **`0 sorryAx`**, **`0` custom axioms** (only Lean's standard kernel axioms `propext`, `Classical.choice`, `Quot.sound` where standard libraries are used)
 > - **75+ `#tooth` mutation/counterexample theorems** proving that our definitions are non-vacuous and actively reject invalid terms, forged capabilities, stale receipts, linear duplication, timing violations, and DRC/LVS errors.
 
