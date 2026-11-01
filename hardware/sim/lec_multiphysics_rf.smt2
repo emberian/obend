@@ -71,6 +71,42 @@
   (- (* gainI (- (* cosRf cosLo) (* sinRf sinLo)))
      (* gainQ (- (* cosLo cosRf) (* sinLo sinRf)))))
 
+; 6. 2D Oxide Curvature: 1D ABBA Bow Residual (4 * cxx * pitch^2) & 8-Cell Prouhet-Thue-Morse (ABBABAAB) Exact Cancellation:
+(declare-const p0Ox    Real)
+(declare-const gxOx    Real)
+(declare-const cxxOx   Real)
+(declare-const pitchOx Real)
+(define-fun q1d ((k Real)) Real
+  (+ p0Ox (* k (* gxOx pitchOx)) (* (* k k) (* cxxOx (* pitchOx pitchOx)))))
+(define-fun abba_mismatch () Real
+  (- (+ (q1d 0.0) (q1d 3.0))
+     (+ (q1d 1.0) (q1d 2.0))))
+(define-fun ptm8_mismatch () Real
+  (- (+ (q1d 0.0) (q1d 3.0) (q1d 5.0) (q1d 6.0))
+     (+ (q1d 1.0) (q1d 2.0) (q1d 4.0) (q1d 7.0))))
+
+; 7. Silicon Photonics CMT 2x2 Coupler Power Conservation & Microring Critical Coupling (r = a <=> (r - a)^2 = 0):
+(declare-const tSqCmt   Real)
+(declare-const kapSqCmt Real)
+(declare-const pIn1Opt  Real)
+(declare-const pIn2Opt  Real)
+(declare-const rMrr     Real)
+(declare-const aMrr     Real)
+(assert (= (+ tSqCmt kapSqCmt) 1.0))
+(define-fun p_out1_opt () Real (+ (* tSqCmt pIn1Opt) (* kapSqCmt pIn2Opt)))
+(define-fun p_out2_opt () Real (+ (* kapSqCmt pIn1Opt) (* tSqCmt pIn2Opt)))
+(define-fun mrr_thru_num () Real (* (- rMrr aMrr) (- rMrr aMrr)))
+
+; 8. DSP CORDIC Stage-0 Norm Scaling & Phased-Array Coherent N^2 Main-Lobe Power Gain:
+(declare-const cordicX Real)
+(declare-const cordicY Real)
+(declare-const nElem   Real)
+(declare-const ampElem Real)
+(define-fun cordic_norm0 () Real (+ (* cordicX cordicX) (* cordicY cordicY)))
+(define-fun cordic_norm1 () Real (+ (* (- cordicX cordicY) (- cordicX cordicY))
+                                    (* (+ cordicY cordicX) (+ cordicY cordicX))))
+(define-fun ula_power () Real (* (* nElem ampElem) (* nElem ampElem)))
+
 (assert
   (or ; 1a. Violate Maximum Power Transfer bound 4*rS*rL <= (rS+rL)^2 + (xS+xL)^2
       (> p_transfer_num p_transfer_den)
@@ -87,6 +123,15 @@
       (< nm_high_74ls_to_74hct 700.0)
       (>= nm_high_74ls_to_74hc 0.0)
       ; 5. Violate Tayloe I/Q two-angle image cancellation
-      (distinct iq_image_cancel 0.0)))
+      (distinct iq_image_cancel 0.0)
+      ; 6. Violate ABBA quadratic bow residual or Prouhet-Thue-Morse (ABBABAAB) 2nd-order cancellation
+      (distinct abba_mismatch (* 4.0 (* cxxOx (* pitchOx pitchOx))))
+      (distinct ptm8_mismatch 0.0)
+      ; 7. Violate CMT 2x2 coupler optical power conservation or Microring critical coupling
+      (distinct (+ p_out1_opt p_out2_opt) (+ pIn1Opt pIn2Opt))
+      (not (= (= mrr_thru_num 0.0) (= rMrr aMrr)))
+      ; 8. Violate CORDIC stage-0 norm scaling or Phased-Array N^2 coherent main-lobe power gain
+      (distinct cordic_norm1 (* 2.0 cordic_norm0))
+      (distinct ula_power (* (* nElem nElem) (* ampElem ampElem)))))
 
 (check-sat)

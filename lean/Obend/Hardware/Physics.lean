@@ -132,8 +132,7 @@ theorem pdd_steady_state_recomb_balances_terminal_current
     (hSs1 : evalCellContinuityRate (makeThreeCellPddChain jAnode j01 j12 jCathode r0 r1 r2).2.1 = 0)
     (hSs2 : evalCellContinuityRate (makeThreeCellPddChain jAnode j01 j12 jCathode r0 r1 r2).2.2 = 0) :
     jAnode - jCathode = r0 + r1 + r2 := by
-  have hCon := pdd_total_charge_conserved jAnode j01 j12 jCathode r0 r1 r2
-  dsimp only at hCon
+  dsimp only [makeThreeCellPddChain, evalCellContinuityRate] at hSs0 hSs1 hSs2
   omega
 
 /-! ## 2. Fourier Heat PDE to Cauer RC Model-Order Reduction via PRIMA Congruence Projection -/
@@ -308,7 +307,7 @@ def checkAldSelfLimiting (spec : AldProcessSpec) (doseMs purgeMs chamberTempC : 
   exactly one saturated monolayer (`gpcPm`), independent of excess precursor dose!
 * In the sub-saturated regime (`doseMs < spec.satDoseMs`), growth scales proportionally to `doseMs / satDoseMs`. -/
 def evalAldFilmThicknessPm (spec : AldProcessSpec) (cycles doseMs : Nat) : Nat :=
-  if decide (spec.satDoseMs ≤ doseMs) then
+  if spec.satDoseMs ≤ doseMs then
     cycles * spec.gpcPm
   else
     (cycles * spec.gpcPm * doseMs) / spec.satDoseMs
@@ -325,9 +324,7 @@ theorem ald_saturation_invariant
     evalAldFilmThicknessPm spec cycles dose1 = evalAldFilmThicknessPm spec cycles dose2 ∧
     evalAldFilmThicknessPm spec cycles dose1 = cycles * spec.gpcPm := by
   dsimp only [evalAldFilmThicknessPm]
-  have hD1 : decide (spec.satDoseMs ≤ dose1) = true := decide_eq_true hSat1
-  have hD2 : decide (spec.satDoseMs ≤ dose2) = true := decide_eq_true hSat2
-  rw [if_pos hD1, if_pos hD2]
+  rw [if_pos hSat1, if_pos hSat2]
   exact ⟨rfl, rfl⟩
 
 /-- Theorem (`ald_insufficient_purge_refused`):
@@ -367,7 +364,7 @@ def evalFourPointSheetRhoMohm (vUv iUa : Nat) : Nat :=
 
 /-- Absolute difference $|a - b|$ on natural numbers. -/
 def natAbsDiff (a b : Nat) : Nat :=
-  if decide (b ≤ a) then a - b else b - a
+  if b ≤ a then a - b else b - a
 
 /-- Complete inline metrology signoff check for an open nanofab (`HackerFab` / `AtomicSemi` /
 `FabuBlox` / `FABμBOX`) process module:

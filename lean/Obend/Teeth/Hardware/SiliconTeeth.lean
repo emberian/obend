@@ -55,6 +55,12 @@ import all Obend.Hardware.Thermal
 import all Obend.Hardware.Datasheet
 import all Obend.Hardware.Circuits
 import all Obend.Hardware.RF
+import all Obend.Hardware.Physics
+import all Obend.Hardware.Photonics
+import all Obend.Hardware.PCB
+import all Obend.Hardware.ReductionMachine
+import all Obend.Hardware.DSP
+import all Obend.Hardware.AgenticEDA
 import all Obend.Hardware.Judge
 public import Obend.Hardware
 @[expose] public section
@@ -66,6 +72,8 @@ open Obend.Hardware.HDL Obend.Hardware.Types Obend.Hardware.Rules Obend.Hardware
 open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hardware.WaferSpace
 open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
+open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
+open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
 open Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
@@ -407,6 +415,54 @@ def evalQuadratureImageSumInsteadOfDiff (gainI gainQ phaseErr sigAmp : Int) : In
   (gainI + gainQ) * sigAmp + phaseErr * sigAmp
 
 #tooth Obend.Hardware.RF.tayloe_iq_cancels_image_sideband by mutation Obend.Hardware.RF.evalQuadratureImagePhaseCancel := evalQuadratureImageSumInsteadOfDiff
+
+/-- 26. Broken `prouhetThueMorseMismatch1D` in `Obend.Hardware.Analog` that falls back to 4-cell `ABBA` (leaving a non-zero $4 c_{xx} d^2$ quadratic oxide bow residual instead of `0`). -/
+def ptm8BrokenAsAbba4 (p0 gx cxx pitch : Int) : Int :=
+  abbaQuadraticMismatch1D p0 gx cxx pitch
+
+#tooth Obend.Hardware.Analog.prouhetThueMorse_cancels_linear_and_quadratic_bow by mutation Obend.Hardware.Analog.prouhetThueMorseMismatch1D := ptm8BrokenAsAbba4
+
+/-- 27. Broken `evalCellContinuityRate` in `Obend.Hardware.Physics` that adds `cell.fluxOut` instead of subtracting it (violating finite-volume Scharfetter-Gummel flux conservation). -/
+def evalCellContinuityAddFluxOut (cell : PddControlVolume) : Int :=
+  cell.fluxIn + cell.fluxOut - cell.recombRate
+
+#tooth Obend.Hardware.Physics.pdd_total_charge_conserved by mutation Obend.Hardware.Physics.evalCellContinuityRate := evalCellContinuityAddFluxOut
+
+/-- 28. Broken `evalCouplerOut1Power` in `Obend.Hardware.Photonics` that drops the cross-coupled `dc.kappaSqPpm * pIn2Uw` term (violating CMT $2 \times 2$ coupler unitarity). -/
+def evalCouplerOut1DropCross (dc : DirectionalCoupler) (pIn1Uw _pIn2Uw : Int) : Int :=
+  dc.tSqPpm * pIn1Uw
+
+#tooth Obend.Hardware.Photonics.directionalCoupler_conserves_optical_power by mutation Obend.Hardware.Photonics.evalCouplerOut1Power := evalCouplerOut1DropCross
+
+/-- 29. Broken `evalOddModeZ0MilliOhm` in `Obend.Hardware.PCB` that adds `dp.couplingPermille` instead of subtracting it (confusing even-mode $Z_{0e}$ with odd-mode $Z_{0o}$). -/
+def evalOddModeAsEvenMode (dp : DiffPairSpec) : Nat :=
+  (dp.z0MilliOhm * (1000 + dp.couplingPermille)) / 1000
+
+#tooth Obend.Hardware.PCB.diffImpedance_monotone_uncoupled by mutation Obend.Hardware.PCB.evalOddModeZ0MilliOhm := evalOddModeAsEvenMode
+
+/-- 30. Broken `dprPhase2LoadFrame` in `Obend.Hardware.ReductionMachine` that loads `frame.newTile` without checking `frame.computedDigest == frame.expectedDigest` (allowing corrupt bitstreams onto the eFPGA). -/
+def dprPhase2IgnoreCrc (frame : IcapBitstreamFrame) (t : ReconfigTileState) : ReconfigTileState :=
+  if t.tileId == frame.targetTileId then
+    { t with activeTile := frame.newTile, frameDigest := frame.computedDigest }
+  else
+    t
+
+#tooth Obend.Hardware.ReductionMachine.dpr_corrupt_crc_keeps_tile_isolated by mutation Obend.Hardware.ReductionMachine.dprPhase2LoadFrame := dprPhase2IgnoreCrc
+
+/-- 31. Broken `checkRollettUnconditionalStability` in `Obend.Hardware.DSP` that omits the $K > 1$ (`evalRollettDenominator sp < evalRollettNumerator sp`) check (admitting potentially oscillating LNAs). -/
+def checkRollettIgnoreK (sp : TwoPortSParams) : Bool :=
+  decide (0 ≤ sp.s11MagSqPermilleSq ∧ sp.s11MagSqPermilleSq < 1000000) &&
+  decide (0 ≤ sp.s22MagSqPermilleSq ∧ sp.s22MagSqPermilleSq < 1000000) &&
+  decide (0 ≤ sp.deltaMagSqPermilleSq ∧ sp.deltaMagSqPermilleSq < 1000000) &&
+  decide (0 < evalRollettDenominator sp)
+
+#tooth Obend.Hardware.DSP.rollettStability_sound by mutation Obend.Hardware.DSP.checkRollettUnconditionalStability := checkRollettIgnoreK
+
+/-- 32. Broken `checkDatasheetCiteFresh` in `Obend.Hardware.AgenticEDA` that checks only `0 < cite.currentDatasheetHash` and ignores `cite.pinnedBlockHash = cite.currentDatasheetHash`. -/
+def checkDatasheetCiteIgnoreHash (cite : DatasheetCitePin) : Bool :=
+  decide (0 < cite.currentDatasheetHash)
+
+#tooth Obend.Hardware.AgenticEDA.staleDatasheetCite_refused by mutation Obend.Hardware.AgenticEDA.checkDatasheetCiteFresh := checkDatasheetCiteIgnoreHash
 
 end Obend.Teeth.Hardware
 end

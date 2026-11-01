@@ -372,7 +372,7 @@ the first-order linear gradient ($0 + 3 + 5 + 6 = 1 + 2 + 4 + 7 = 14$) AND the s
 quadratic curvature bow ($0^2 + 3^2 + 5^2 + 6^2 = 1^2 + 2^2 + 4^2 + 7^2 = 70$) identically to ZERO! -/
 theorem prouhetThueMorse_cancels_linear_and_quadratic_bow (p0 gx cxx pitch : Int) :
     prouhetThueMorseMismatch1D p0 gx cxx pitch = 0 := by
-  simp only [prouhetThueMorseMismatch1D, evalQuadratic1D]
+  dsimp only [prouhetThueMorseMismatch1D, evalQuadratic1D]
   omega
 
 /-- 2D Cross-Coupled Common-Centroid Quad (`[[A, B], [B, A]]`) placed at $(\pm d_x, \pm d_y)$:

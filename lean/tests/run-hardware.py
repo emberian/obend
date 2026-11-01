@@ -202,5 +202,37 @@ if os.path.exists(OBEND_BIN):
               r_rf.returncode == 0 and r_rf_ver.returncode == 0 and r_rf_bad.returncode == 3,
               r_rf.stdout + r_rf_ver.stdout + r_rf_bad.stderr)
 
+        pic_receipt = os.path.join(obj_dir, "photonics_receipt.json")
+        r_pic = subprocess.run([OBEND_BIN, "hardware", "photonics-signoff", "--mode", "golden", "--out", pic_receipt], capture_output=True, text=True)
+        r_pic_ver = subprocess.run([OBEND_BIN, "verify", pic_receipt], capture_output=True, text=True)
+        r_pic_bad = subprocess.run([OBEND_BIN, "hardware", "photonics-signoff", "--mode", "tight_bend"], capture_output=True, text=True)
+        check("obend hardware photonics-signoff + obend verify (photonics-pic-signoff@1 SiEPIC SOI golden & tight bend refused)",
+              r_pic.returncode == 0 and r_pic_ver.returncode == 0 and r_pic_bad.returncode == 3,
+              r_pic.stdout + r_pic_ver.stdout + r_pic_bad.stderr)
+
+        pcb_receipt = os.path.join(obj_dir, "pcb_receipt.json")
+        r_pcb = subprocess.run([OBEND_BIN, "hardware", "pcb-signoff", "--mode", "golden", "--out", pcb_receipt], capture_output=True, text=True)
+        r_pcb_ver = subprocess.run([OBEND_BIN, "verify", pcb_receipt], capture_output=True, text=True)
+        r_pcb_bad = subprocess.run([OBEND_BIN, "hardware", "pcb-signoff", "--mode", "skew_mismatch"], capture_output=True, text=True)
+        check("obend hardware pcb-signoff + obend verify (pcb-board-signoff@1 Rogers+FR4 golden & skew mismatch refused)",
+              r_pcb.returncode == 0 and r_pcb_ver.returncode == 0 and r_pcb_bad.returncode == 3,
+              r_pcb.stdout + r_pcb_ver.stdout + r_pcb_bad.stderr)
+
+        eda_receipt = os.path.join(obj_dir, "eda_vault_receipt.json")
+        r_eda = subprocess.run([OBEND_BIN, "hardware", "eda-vault-check", "--mode", "golden", "--out", eda_receipt], capture_output=True, text=True)
+        r_eda_ver = subprocess.run([OBEND_BIN, "verify", eda_receipt], capture_output=True, text=True)
+        r_eda_bad = subprocess.run([OBEND_BIN, "hardware", "eda-vault-check", "--mode", "overbudget"], capture_output=True, text=True)
+        check("obend hardware eda-vault-check + obend verify (agentic-eda-swap@1 Vault smart-contract golden & overbudget refused)",
+              r_eda.returncode == 0 and r_eda_ver.returncode == 0 and r_eda_bad.returncode == 3,
+              r_eda.stdout + r_eda_ver.stdout + r_eda_bad.stderr)
+
+        seq_sv_path = os.path.join(obj_dir, "lean_sumTo_seq_rtl.sv")
+        lower_env = {**os.environ, "LEAN_SYSROOT": os.path.expanduser("~/.elan/toolchains/leanprover--lean4---v4.35.0")}
+        r_seq = subprocess.run([OBEND_BIN, "lower", "sumTo", "--arg", "10", "--rtl", seq_sv_path],
+                               cwd=LEAN, env=lower_env, capture_output=True, text=True)
+        check("obend lower sumTo --arg 10 --rtl (sequential Nat.rec FSM synthesis & 10-cycle simulation sumTo 10 = 55)",
+              r_seq.returncode == 0 and "sequential module lean_sumTo_seq_rtl verified" in r_seq.stdout and "rtl: sumTo 10 = 55 (cycles=10, done=1)" in r_seq.stdout,
+              r_seq.stdout + r_seq.stderr)
+
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)

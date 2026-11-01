@@ -257,7 +257,8 @@ theorem mzi_constructive_at_zero_phase
     evalMziBarOutput mzi pInUw 0 = mzi.pPiMw * pInUw ∧
     evalMziCrossOutput mzi pInUw 0 = 0 := by
   dsimp only [evalMziBarOutput, evalMziCrossOutput]
-  refine ⟨by omega, by omega⟩
+  rw [Int.sub_zero, Int.zero_mul]
+  exact ⟨rfl, rfl⟩
 
 /-- Theorem (`mzi_destructive_at_pi_phase`):
 When the TiN micro-heater is driven at the half-wave switching power `heaterPowerMw = mzi.pPiMw`
@@ -316,14 +317,15 @@ def evalMrrResonantThruDen (mrr : MicroringResonator) : Int :=
   (1000000 - mrr.rSelfPermille * mrr.aRoundTripPermille)
 
 /-- Helper lemma: for any integer `d : Int`, if `d * d = 0`, then `d = 0`.
-Proved by direct constructor analysis on `Int` and `Nat` with zero external algebra tactics. -/
+Proved by case analysis on `Int` and `Nat` with zero external algebra tactics. -/
 theorem int_sq_eq_zero (d : Int) (h : d * d = 0) : d = 0 := by
   cases d with
   | ofNat n =>
     cases n with
     | zero => rfl
     | succ k => cases h
-  | negSucc n => cases h
+  | negSucc n =>
+    cases h
 
 /-- Theorem (`mrr_thru_numerator_nonneg`):
 For any microring resonator parameters `r, a : Int`, the resonant through-port transmission

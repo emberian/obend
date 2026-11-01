@@ -42,6 +42,12 @@ public import Obend.Hardware.Thermal
 public import Obend.Hardware.Datasheet
 public import Obend.Hardware.Circuits
 public import Obend.Hardware.RF
+public import Obend.Hardware.Physics
+public import Obend.Hardware.Photonics
+public import Obend.Hardware.PCB
+public import Obend.Hardware.ReductionMachine
+public import Obend.Hardware.DSP
+public import Obend.Hardware.AgenticEDA
 @[expose] public section
 
 namespace Obend.Hardware.Judge
@@ -51,11 +57,13 @@ open Obend.Hardware.Process Obend.Hardware.HDL Obend.Hardware.Compiler
 open Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hardware.WaferSpace
 open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
+open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
+open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
 set_option autoImplicit false
 
-/-! ## 1. Refusal Clauses for Hardware, FabuBlox, `wafer.space`, Datasheet Calibration & RF Judges -/
+/-! ## 1. Refusal Clauses for Hardware, FabuBlox, `wafer.space`, Datasheet, RF, Photonics, PCB & Agentic EDA Judges -/
 
-/-- Refusal vocabulary across the 7 hardware, silicon, datasheet & RF certificate judges. -/
+/-- Refusal vocabulary across the 10 hardware, silicon, photonics, PCB & agentic EDA certificate judges. -/
 inductive HwClause where
   | rtlInvalidDagOrCdc (modName : String)
   | retimeInvalidLagOrTiming (graphName : String)
@@ -64,6 +72,9 @@ inductive HwClause where
   | waferSpaceSignoffViolation (projectName : String)
   | datasheetCalibrationOrMarginViolation (suiteName : String)
   | rfTransceiverSignoffViolation (rigName : String)
+  | photonicsPicSignoffViolation (ringName : String)
+  | pcbBoardSignoffViolation (netName : String)
+  | agenticEdaSwapViolation (partName : String)
   deriving DecidableEq, Repr
 
 /-! ## 2. Format 1: `hw-rtl-synth@1` (`RtlModule` DAG + CDC Judge) -/
@@ -610,7 +621,237 @@ theorem rfTransceiverFormat_complete {o : HamBand}
     ∃ c r, rfTransceiverJudge.check r o c = .ok :=
   rfTransceiverJudge.complete trivial h
 
-/-- Complete list of registered hardware, FabuBlox, `wafer.space`, datasheet-fit, and RF transceiver formats. -/
+/-! ## 9. Format 8: `photonics-pic-signoff@1` (`SiEPIC 220nm SOI` / `IHP SG13G2 EPIC` Photonic IC Judge) -/
+
+/-- Judge check function for `photonics-pic-signoff@1`: verifies waveguide geometry, 3 dB coupler
+unitarity, critical microring coupling ($r = a$), minimum bend radius, and Free Spectral Range. -/
+def checkPhotonicsPicJudge (_grade : Nat) (minFsrPm : Nat) (mrr : MicroringResonator) : Verdict HwClause :=
+  if checkPhotonicDrc soi220StripWaveguide1550 coupler3dB mrr minFsrPm then
+    .ok
+  else
+    .refused (.photonicsPicSignoffViolation mrr.ringName) []
+
+instance photonicsPicJudge : Obend.Judge Nat MicroringResonator where
+  Clause := HwClause
+  Meaning minFsrPm mrr := checkPhotonicDrc soi220StripWaveguide1550 coupler3dB mrr minFsrPm = true
+  check := checkPhotonicsPicJudge
+  sound := by
+    intro _ o c h
+    unfold checkPhotonicsPicJudge at h
+    by_cases hOk : checkPhotonicDrc soi220StripWaveguide1550 coupler3dB c o = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkPhotonicsPicJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badPhotonicsPic_refused :
+    checkPhotonicsPicJudge 0 15000 leakyTightBendMicroring =
+      .refused (.photonicsPicSignoffViolation "mrr_leaky_r2um") [] :=
+  rfl
+
+def decodePhotonicsObj (s : String) : Except String Nat := do
+  let j ← Json.parse s
+  return (j.getObjValAs? Nat "minFsrPm").toOption.getD 15000
+
+def decodePhotonicsCert (s : String) : Except String MicroringResonator := do
+  let j ← Json.parse s
+  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
+  if mode == "tight_bend" then
+    return leakyTightBendMicroring
+  else
+    return goldenSoi220Microring
+
+/-- Registered `Obend.Judge.Format` for `photonics-pic-signoff@1`. -/
+def photonicsPicFormat : Format where
+  name        := "photonics-pic-signoff"
+  version     := "1"
+  Obj         := Nat
+  Cert        := MicroringResonator
+  judge       := photonicsPicJudge
+  decodeObj   := decodePhotonicsObj
+  decodeCert  := decodePhotonicsCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (15000, leakyTightBendMicroring)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badPhotonicsPic_refused⟩
+
+theorem photonicsPicFormat_sound {r : Nat} {obj cert : String}
+    (h : photonicsPicFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodePhotonicsObj obj = .ok o ∧ decodePhotonicsCert cert = .ok c ∧
+      checkPhotonicDrc soi220StripWaveguide1550 coupler3dB c o = true :=
+  photonicsPicFormat.checkBytes_sound h
+
+/-! ## 10. Format 9: `pcb-board-signoff@1` (4-Layer `Rogers RO4350B` + `FR-4` SDR / FPGA Carrier PCB Judge) -/
+
+/-- Planted bad serpentine meander with uncompensated $6\,\text{mm}$ length mismatch ($36\,\text{ps}$ flight skew). -/
+def badUnmatchedDdrMeander : SerpentineMeander :=
+  { goldenDdrMeander with numSegments := 0 }
+
+/-- Judge check function for `pcb-board-signoff@1`. -/
+def checkPcbBoardJudge (_grade : Nat) (maxSkewFs : Nat) (meander : SerpentineMeander) : Verdict HwClause :=
+  if checkPcbBoardSignoff goldenRf50OhmTrace goldenLvds100OhmPair meander 30000 maxSkewFs
+      goldenPaSupplyRail goldenGndViaStitch goldenBoardClearance then
+    .ok
+  else
+    .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []
+
+instance pcbBoardJudge : Obend.Judge Nat SerpentineMeander where
+  Clause := HwClause
+  Meaning maxSkewFs meander :=
+    checkPcbBoardSignoff goldenRf50OhmTrace goldenLvds100OhmPair meander 30000 maxSkewFs
+      goldenPaSupplyRail goldenGndViaStitch goldenBoardClearance = true
+  check := checkPcbBoardJudge
+  sound := by
+    intro _ o c h
+    unfold checkPcbBoardJudge at h
+    by_cases hOk : checkPcbBoardSignoff goldenRf50OhmTrace goldenLvds100OhmPair c 30000 o
+        goldenPaSupplyRail goldenGndViaStitch goldenBoardClearance = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkPcbBoardJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badPcbBoard_refused :
+    checkPcbBoardJudge 0 50 badUnmatchedDdrMeander =
+      .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") [] :=
+  rfl
+
+def decodePcbBoardObj (s : String) : Except String Nat := do
+  let j ← Json.parse s
+  return (j.getObjValAs? Nat "maxSkewFs").toOption.getD 50
+
+def decodePcbBoardCert (s : String) : Except String SerpentineMeander := do
+  let j ← Json.parse s
+  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
+  if mode == "skew_mismatch" then
+    return badUnmatchedDdrMeander
+  else
+    return goldenDdrMeander
+
+/-- Registered `Obend.Judge.Format` for `pcb-board-signoff@1`. -/
+def pcbBoardFormat : Format where
+  name        := "pcb-board-signoff"
+  version     := "1"
+  Obj         := Nat
+  Cert        := SerpentineMeander
+  judge       := pcbBoardJudge
+  decodeObj   := decodePcbBoardObj
+  decodeCert  := decodePcbBoardCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (50, badUnmatchedDdrMeander)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badPcbBoard_refused⟩
+
+theorem pcbBoardFormat_sound {r : Nat} {obj cert : String}
+    (h : pcbBoardFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodePcbBoardObj obj = .ok o ∧ decodePcbBoardCert cert = .ok c ∧
+      checkPcbBoardSignoff goldenRf50OhmTrace goldenLvds100OhmPair c 30000 o
+        goldenPaSupplyRail goldenGndViaStitch goldenBoardClearance = true :=
+  pcbBoardFormat.checkBytes_sound h
+
+/-! ## 11. Format 10: `agentic-eda-swap@1` (Smart-Contract Markdown Vault + 2D Footprint BOM Swap Judge) -/
+
+/-- Boolean wrapper checking whether `judgeAgenticEdaProposal` admits `candidatePart` at `minMarginMv`. -/
+def checkAgenticEdaSwapBool (minMarginMv : Int) (candidatePart : EdaVaultPart) : Bool :=
+  judgeAgenticEdaProposal
+    goldenEdaLaws
+    goldenBaselinePart
+    candidatePart
+    lvcmos33ReceiverSpec
+    minMarginMv
+    goldenQfn16Courtyard
+    goldenFreshDatasheetCite
+    "procurement_scout"
+    defaultEdaFacts == .admitted
+
+/-- Judge check function for `agentic-eda-swap@1`. -/
+def checkAgenticEdaJudge (_grade : Nat) (minMarginMv : Int) (candidatePart : EdaVaultPart) : Verdict HwClause :=
+  if checkAgenticEdaSwapBool minMarginMv candidatePart then
+    .ok
+  else
+    .refused (.agenticEdaSwapViolation candidatePart.pageName) []
+
+instance agenticEdaJudge : Obend.Judge Int EdaVaultPart where
+  Clause := HwClause
+  Meaning minMarginMv candidatePart := checkAgenticEdaSwapBool minMarginMv candidatePart = true
+  check := checkAgenticEdaJudge
+  sound := by
+    intro _ o c h
+    unfold checkAgenticEdaJudge at h
+    by_cases hOk : checkAgenticEdaSwapBool o c = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkAgenticEdaJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badAgenticEdaSwap_refused :
+    checkAgenticEdaJudge 0 400 overbudgetSecondSourcePart =
+      .refused (.agenticEdaSwapViolation "U4_LDO") [] := by
+  decide +kernel
+
+def decodeAgenticEdaObj (s : String) : Except String Int := do
+  let j ← Json.parse s
+  return (j.getObjValAs? Int "minMarginMv").toOption.getD 400
+
+def decodeAgenticEdaCert (s : String) : Except String EdaVaultPart := do
+  let j ← Json.parse s
+  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
+  if mode == "overbudget" then
+    return overbudgetSecondSourcePart
+  else
+    return goldenSecondSourcePart
+
+/-- Registered `Obend.Judge.Format` for `agentic-eda-swap@1`. -/
+def agenticEdaFormat : Format where
+  name        := "agentic-eda-swap"
+  version     := "1"
+  Obj         := Int
+  Cert        := EdaVaultPart
+  judge       := agenticEdaJudge
+  decodeObj   := decodeAgenticEdaObj
+  decodeCert  := decodeAgenticEdaCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (400, overbudgetSecondSourcePart)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badAgenticEdaSwap_refused⟩
+
+theorem agenticEdaFormat_sound {r : Nat} {obj cert : String}
+    (h : agenticEdaFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeAgenticEdaObj obj = .ok o ∧ decodeAgenticEdaCert cert = .ok c ∧
+      checkAgenticEdaSwapBool o c = true :=
+  agenticEdaFormat.checkBytes_sound h
+
+/-- Complete list of 10 registered hardware, FabuBlox, `wafer.space`, datasheet-fit, RF, photonics, PCB, and agentic EDA formats. -/
 def hardwareFormats : List Format :=
   [ hwSynthFormat
   , hwRetimeFormat
@@ -618,7 +859,10 @@ def hardwareFormats : List Format :=
   , fabubloxFormat
   , waferSpaceFormat
   , datasheetFitFormat
-  , rfTransceiverFormat ]
+  , rfTransceiverFormat
+  , photonicsPicFormat
+  , pcbBoardFormat
+  , agenticEdaFormat ]
 
 /-- Look up a hardware certificate format by `name@version` string (e.g. `"hw-pnr-bitstream@1"`). -/
 def findHardwareFormat? (tag : String) : Option Format :=

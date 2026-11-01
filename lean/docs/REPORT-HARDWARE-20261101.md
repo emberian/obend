@@ -1,16 +1,13 @@
-# Report — Hardware Lane (`Obend.Hardware`): Synchronous & Guarded-Action HDL, Whole-Book Compiler, Technology Mapping, FABulous eFPGA, FabuBlox Nanofabrication, `wafer.space` Mixed-Signal ASIC Signoff, Electro-Thermal Multiphysics, Automated Datasheet Calibration & Ham Radio RF Transceiver
+# Report — Hardware Lane (`Obend.Hardware`): Synchronous & Guarded-Action HDL, Whole-Book & Sequential `Nat.rec` Compiler, Technology Mapping, FABulous eFPGA & Self-Reconfiguring Automaton, FabuBlox / Neofab Metrology, `wafer.space` ASIC Signoff, First-Principles Multiphysics & Silicon Photonics, High-Speed PCB Geometry, SDR DSP/Phased-Array RF & Smart-Contract Agentic EDA
 
-## 1. Architecture & First-Class Library Modules (`lean/Obend/Hardware/` — 20 Modules)
+## 1. Architecture & First-Class Library Modules (`lean/Obend/Hardware/` — 26 Modules)
 
 The `Obend.Hardware` library connects Objective Bend's demand machine (`Obend.Equiv.Demand`),
 quantity & reuse discipline (`Obend.Core.Ty`), leaf object books (`Obend.Leaf.Emit`), specialization
-slots (`Obend.Slot` / `Obend.Leaf.Specialize`), capability laws (`Obend.Vault.Law`), streaming
-ledger (`Obend.Ledger`), and receipt judge (`Obend.Judge` / `Obend.Receipt`) to a 20-module verified
-hardware description language, whole-book compiler, technology mapper, FABulous eFPGA bitstream
-fabric, FabuBlox (`fabublox.com`) cleanroom nanofabrication engine, Analog/Mixed-Signal (AMS)
-verifier, `wafer.space` (`wafer.space`) MPW ASIC signoff suite, coupled electro-thermal multiphysics
-engine, automated datasheet capture & calibration verifier, classic TTL / op-amp / sensor / power
-circuitry, and amateur radio RF transceiver chain:
+slots (`Obend.Slot` / `Obend.Leaf.Specialize`), Markdown Vaults & capability smart-contract laws
+(`Obend.Vault.Page` / `Obend.Vault.Law`), streaming ledger (`Obend.Ledger`), and receipt judge
+(`Obend.Judge` / `Obend.Receipt`) to a 26-module verified hardware, multiphysics, photonics, PCB,
+RF/DSP, and agentic CAD/EDA suite:
 
 1. **[`Obend.Hardware.HDL`](file:///Users/ember/dev/obend/lean/Obend/Hardware/HDL.lean)** —
    * **Core Synchronous HDL (`RtlAluOp`, `RtlExpr`, `WireAssign`, `RegSpec`, `RtlModule`)**:
@@ -43,10 +40,12 @@ circuitry, and amateur radio RF transceiver chain:
      Proves `fixLoopHw_unroll_sound`, `fixLoopHw_busy_rejects_req`, and `performHandshake_resume_exact`.
 
 5. **[`Obend.Hardware.Compiler`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Compiler.lean)** —
-   * **Total Structural `Term` → `RtlExpr` Compiler (`compileTerm`, `compileTermSat`, `compileTerm_sound`)**:
+   * **Total Structural `Term` → `RtlExpr` Compiler & Multi-Cycle `Nat.rec` FSM Synthesizer**:
      Compiles `.nat`, `.boolean`, `.bound`, `.get`, `.app (.lam ..)`, `.app (.get self m) arg`,
      `.binary`, `.ifBool`, `.ifZero`, `.construct` / `.match`, `.letRec`, and `.perform`, plus
-     whole-Book synthesis (`compileBookToRtl`, `compileBookToRtlSat`).
+     single-cycle whole-Book synthesis (`compileBookToRtl`, `compileBookToRtlSat`) and verified
+     multi-cycle sequential `Nat.rec` loop synthesis (`compileBookToSeqRtlSat`, `evalSeqModuleAfterCycles`,
+     `lean_sumTo_seq_rtl_verified`).
 
 6. **[`Obend.Hardware.Synth`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Synth.lean)** —
    * **Verified `LUT2`/`LUT3` & `CARRY8` Technology Mapping & 2-Stage Cutset Retiming**:
@@ -71,8 +70,11 @@ circuitry, and amateur radio RF transceiver chain:
       Proves `stepContamZone_monotone`, `ald_high_aspect_trench_void_free`, and `pvd_high_aspect_trench_keyhole_detected`.
 
 11. **[`Obend.Hardware.Analog`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Analog.lean)** —
-    * **Kirchhoff Bilateral Networks, `ABBA` Common-Centroid Matching, Multi-Voltage UPF & 4-Bit SAR ADC**:
+    * **Kirchhoff Bilateral Networks, 2D Oxide Curvature ($\nabla^2 P$), Prouhet-Thue-Morse (`ABBABAAB`) 2nd-Order Cancellation, Pelgrom Mismatch, UPF & 4-Bit SAR ADC**:
       Proves `switchedCap_charge_conserved`, `commonCentroid_cancels_linear_gradient`,
+      `abba1D_quadratic_bow_residual` ($4 c_{xx} d^2$), `prouhetThueMorse_cancels_linear_and_quadratic_bow` ($= 0$),
+      `crossCoupledQuad2D_cancels_gradients_and_axial_bow` ($4 c_{xy} d_x d_y$),
+      `chiralityBalanced2D_cancels_full_hessian` ($= 0$), `pelgrom_variance_monotone_area`,
       `powerSafe_no_oxide_overvoltage`, and `sarAdc4_exact_convergence`.
 
 12. **[`Obend.Hardware.WaferSpace`](file:///Users/ember/dev/obend/lean/Obend/Hardware/WaferSpace.lean)** —
@@ -119,19 +121,54 @@ circuitry, and amateur radio RF transceiver chain:
       - **Cascaded Friis Noise Figure** (`lna_gain_reduces_cascaded_noise_figure`) and **Class-E HF PA +
         7-Element Chebyshev LPF** harmonic suppression ($\ge 43\,\text{dBc}$ for **FCC Part 97.307** compliance).
 
-17. **[`Obend.Hardware.Judge`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Judge.lean)** & **[`Obend.Hardware.Cli`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Cli.lean)** —
-    * **7 Kernel-Verified `Obend.Judge.Format` Certificates**:
-      `hw-rtl-synth@1`, `hw-retime-sta@1`, `hw-pnr-bitstream@1`, `fabublox-run@1`, `waferspace-signoff@1`,
-      `datasheet-fit@1`, and `rf-transceiver-signoff@1`.
+17. **[`Obend.Hardware.Physics`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Physics.lean)** —
+    * **First-Principles Semiconductor PDD, Cauer PRIMA Model-Order Reduction & Open Neofab Metrology**:
+      - Finite-volume Scharfetter-Gummel Poisson-Drift-Diffusion charge conservation (`pdd_discrete_flux_telescopes`, `pdd_total_charge_conserved`),
+      - Fourier heat PDE to Cauer RC PRIMA congruence projection passivity preservation (`prima_congruence_preserves_passivity`, `mor_truncation_preserves_safety_margin`) for Lanyon AI multiphysics interoperability,
+      - Open neofab (`Hacker Fab`, `Atomic Semi`, `FabuBlox`) Rayleigh lithography resolution (`rayleigh_cd_monotone_wavelength`), self-limiting ALD linearity (`ald_thickness_linear_and_conformal`), and 4-point-probe metrology (`metrology_sheet_resistance_scales_thickness`).
 
-18. **[`Obend.Hardware.Silicon`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Silicon.lean)**, **[`Obend.Hardware.Process`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Process.lean)**, **[`Obend.Hardware.Fabric`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Fabric.lean)** —
+18. **[`Obend.Hardware.Photonics`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Photonics.lean)** —
+    * **Open-Foundry Silicon Photonics (`SiEPIC 220nm SOI`, `IHP SG13G2 EPIC`, `400nm SiN`)**:
+      - Waveguide effective/group index & thermo-optic phase shift (`thermoOptic_phase_monotone_temp`),
+      - Coupled-Mode Theory $2 \times 2$ directional coupler optical power conservation (`directionalCoupler_conserves_optical_power`, `coupler_3db_equal_split`),
+      - Balanced Mach-Zehnder Interferometer modulator extinction (`mzi_quadrature_and_null_extinction`) and Microring Resonator critical coupling (`mrr_critical_coupling_zero_through`, `photonicDrc_sound`).
+
+19. **[`Obend.Hardware.PCB`](file:///Users/ember/dev/obend/lean/Obend/Hardware/PCB.lean)** —
+    * **High-Speed PCB Stackups (`FR-4`, `Rogers RO4350B`), Differential Pairs, Serpentine Skew & IPC-2152**:
+      - Edge-coupled differential pair odd-mode impedance monotonicity (`diffImpedance_monotone_uncoupled`, `diffImpedance_uncoupled_limit`),
+      - Serpentine trombone length-matching flight-time skew elimination (`serpentine_eliminates_length_skew`),
+      - IPC-2152 trace/via ampacity & parallel via inductance reduction (`viaArray_reduces_inductance_and_shares_current`, `pcbBoardSignoff_sound`).
+
+20. **[`Obend.Hardware.ReductionMachine`](file:///Users/ember/dev/obend/lean/Obend/Hardware/ReductionMachine.lean)** —
+    * **Distributed Slot-Reduction Automaton & Self-Reconfiguring eFPGA (`ICAP` Glitch-Free DPR)**:
+      - Compiles `Obend.Leaf.Book` and `Obend.Lower.LExpr` to hardware `AutomatonTile`s (`automaton_simulates_book`),
+      - 3-phase Glitch-Free Dynamic Partial Reconfiguration (`dpr_preserves_neighbor_tiles_and_packets`, `dpr_corrupt_crc_keeps_tile_isolated`, `dpr_specialized_tile_executes_new_book`).
+
+21. **[`Obend.Hardware.DSP`](file:///Users/ember/dev/obend/lean/Obend/Hardware/DSP.lean)** —
+    * **Synchronous CORDIC, Hogenauer CIC Decimator, Linear-Phase FIR, Phased-Array ULA & Rollett LNA Stability**:
+      - CORDIC stage-0 norm scaling (`cordic_stage0_norm_scaling`) and NCO modular phase safety (`nco_phase_in_bounds`),
+      - Hogenauer CIC overflow-free bit-growth (`cic_register_width_sound`) and symmetric FIR multiplier folding (`firSymmetric_folds_multipliers`),
+      - Uniform Linear Array coherent $N^2$ main-lobe power gain (`phasedArray_coherent_gain_sq`), null steering (`phasedArray_null_steering`), and 2-port S-parameter Rollett unconditional stability $K > 1, |\Delta| < 1$ (`rollettStability_sound`).
+
+22. **[`Obend.Hardware.AgenticEDA`](file:///Users/ember/dev/obend/lean/Obend/Hardware/AgenticEDA.lean)** —
+    * **Smart-Contract Markdown Vaults (`Obend.Vault.Page` + `Obend.Vault.Law`) for Multi-Agent CAD/EDA**:
+      - Parses Markdown Vault component/board frontmatter and `law:` smart contracts (`extractEdaVaultPart`, `parseVaultPageLaws`),
+      - Verifies 2D PCB courtyard/pin-pitch drop-in replacement (`footprintDropIn_sound`) and content-addressed datasheet block-cite freshness (`staleDatasheetCite_refused`),
+      - Judges multi-agent BOM/layout proposals via compiled `Core4` smart contracts (`Obend.Vault.judge`) + physical noise margins (`agenticEdaProposal_admits_sound`, `goldenAgenticBomSwap_admitted_and_overbudget_refused`).
+
+23. **[`Obend.Hardware.Judge`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Judge.lean)** & **[`Obend.Hardware.Cli`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Cli.lean)** —
+    * **10 Kernel-Verified `Obend.Judge.Format` Certificates**:
+      `hw-rtl-synth@1`, `hw-retime-sta@1`, `hw-pnr-bitstream@1`, `fabublox-run@1`, `waferspace-signoff@1`,
+      `datasheet-fit@1`, `rf-transceiver-signoff@1`, `photonics-pic-signoff@1`, `pcb-board-signoff@1`, and `agentic-eda-swap@1`.
+
+24. **[`Obend.Hardware.Silicon`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Silicon.lean)**, **[`Obend.Hardware.Process`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Process.lean)**, **[`Obend.Hardware.Fabric`](file:///Users/ember/dev/obend/lean/Obend/Hardware/Fabric.lean)** —
     * 1-hot demand wave chip, `DSP48E2` 4-stage MAC, `URAM288` with RAW bypass, 2-slot AXI4-Stream skid
       buffer, `LUT2`/`CARRY8` BELs, FABulous $2\times 2$ eFPGA mesh, Merkle-view receipt climber,
       `DeosCounter.obend` + `Vault.Law` register bank, and 3-tier hardware specialization slot.
 
 ## 2. Teeth, Refusal Poles & Mutation Verification ([`SiliconTeeth.lean`](file:///Users/ember/dev/obend/lean/Obend/Teeth/Hardware/SiliconTeeth.lean))
 
-* **25 `#tooth` Kernel Mutation Checks**:
+* **32 `#tooth` Kernel Mutation Checks**:
   1. `Obend.Hardware.Silicon.pipe2_x_free`
   2. `Obend.Hardware.Silicon.dspMac_latency_4`
   3. `Obend.Hardware.Silicon.bypassRAM_exact_latest_write`
@@ -142,12 +179,12 @@ circuitry, and amateur radio RF transceiver chain:
   8. `Obend.Hardware.Compiler.compilePrim_sound`
   9. `Obend.Hardware.Synth.lut3_mux_sound`
   10. `Obend.Hardware.FabuBlox.facilityCheck_prevents_feol_contamination`
-  11. `Obend.Hardware.Types.extractLo32_packPair32In64`
-  12. `Obend.Hardware.Rules.oraat_two_rule_refinement`
-  13. `Obend.Hardware.FSM.fixLoop_sound_at_budget`
-  14. `Obend.Hardware.Retiming.retimeCycle_weight_invariant_3`
-  15. `Obend.Hardware.PlaceRoute.fabulous_frame_roundtrip`
-  16. `Obend.Hardware.DRC.pvd_high_aspect_trench_causes_keyhole`
+  11. `Obend.Hardware.Types.struct_slice_extract_sound`
+  12. `Obend.Hardware.Rules.write0_before_read0_refused`
+  13. `Obend.Hardware.FSM.fsm_no_overwrite_while_busy`
+  14. `Obend.Hardware.Retiming.leiserson_saxe_shift_sound`
+  15. `Obend.Hardware.PlaceRoute.bitstream_decode_roundtrip_sound`
+  16. `Obend.Hardware.DRC.pvd_high_ar_keyhole_refused`
   17. `Obend.Hardware.Analog.switchedCap_charge_conserved`
   18. `Obend.Hardware.Analog.commonCentroid_cancels_linear_gradient`
   19. `Obend.Hardware.WaferSpace.waferspace_gf180mcu_signoff_poles`
@@ -157,12 +194,20 @@ circuitry, and amateur radio RF transceiver chain:
   23. `Obend.Hardware.Circuits.ina_common_mode_cancelled_at_matched_bridge`
   24. `Obend.Hardware.RF.conjugate_match_zero_reflection`
   25. `Obend.Hardware.RF.tayloe_iq_cancels_image_sideband`
+  26. `Obend.Hardware.Analog.prouhetThueMorse_cancels_linear_and_quadratic_bow`
+  27. `Obend.Hardware.Physics.pdd_total_charge_conserved`
+  28. `Obend.Hardware.Photonics.directionalCoupler_conserves_optical_power`
+  29. `Obend.Hardware.PCB.diffImpedance_monotone_uncoupled`
+  30. `Obend.Hardware.ReductionMachine.dpr_corrupt_crc_keeps_tile_isolated`
+  31. `Obend.Hardware.DSP.rollettStability_sound`
+  32. `Obend.Hardware.AgenticEDA.staleDatasheetCite_refused`
 
 ## 3. End-to-End Verification Summary
 
-* **Lean 4 Kernel Census (`Obend.Census`)**: `49,429` package constants across `603` build jobs, `0 sorryAx`, `0` declared axioms.
-* **Hardware, Multiphysics & RF Co-Simulation Suite (`python3 lean/tests/run-hardware.py`)**: `28/28` passed:
+* **Lean 4 Kernel Census (`Obend.Census`)**: `52,368` package constants across `622` build jobs, `0 sorryAx`, `0` declared axioms.
+* **Hardware, Multiphysics, Photonics, PCB, RF & Agentic EDA Co-Simulation Suite (`python3 lean/tests/run-hardware.py`)**: `32/32` passed:
   - 5 Z3 SMT-LIB2 equivalence & nonlinear real physics (`QF_NRA`) suites (`lec_check.smt2`, `lec_fabric.smt2`, `lec_compiler_fabublox.smt2`, `lec_ams_waferspace.smt2`, `lec_multiphysics_rf.smt2`),
   - Verilator 5.050 15-module `-Wall` X-randomized elaboration + 10 C++ cycle-accurate digital/eFPGA simulation suites,
   - C++20 continuous-time multiphysics & RF simulator (`multiphysics_sim.cpp`: RK4 electro-thermal BJT + Schmitt TSD, `SN74LS00` totem-pole NAND datasheet curve calibration with $L_\infty = 14.2\,\text{mV} \le 25\,\text{mV}$, Pt100 RTD bridge + 3-op-amp INA with $100\,\text{dB}$ CMRR hum rejection, and 40m `7.074 MHz` FT8 ham radio transceiver with $\text{VSWR}=1.002$, Tayloe $\text{IRR}=52.4\,\text{dB}$, Friis $\text{NF}=1.84\,\text{dB}$, and $-58.6\,\text{dBc}$ Chebyshev LPF harmonic suppression),
-  - 6 `obend hardware` / `obend fabublox` / `obend verify` CLI certificate & refusal checks (`hw-pnr-bitstream@1`, `hw-retime-sta@1`, `waferspace-signoff@1`, `fabublox-run@1`, `datasheet-fit@1`, `rf-transceiver-signoff@1`).
+  - 9 `obend hardware` / `obend fabublox` / `obend verify` CLI certificate & refusal checks (`hw-pnr-bitstream@1`, `hw-retime-sta@1`, `waferspace-signoff@1`, `fabublox-run@1`, `datasheet-fit@1`, `rf-transceiver-signoff@1`, `photonics-pic-signoff@1`, `pcb-board-signoff@1`, `agentic-eda-swap@1`),
+  - Verified sequential `Nat.rec` FSM synthesis via `obend lower sumTo --arg 10 --rtl` (`sumTo 10 = 55`, `cycles = 10`, `done = 1`).

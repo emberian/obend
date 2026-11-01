@@ -161,6 +161,45 @@ def cmdRfSignoff (args : List String) : IO UInt32 := do
     IO.println s!"wrote {outPath}"
   verifyHardware recJson
 
+/-- Run `photonics-pic-signoff@1` CLI check and optionally emit a receipt. -/
+def cmdPhotonicsSignoff (args : List String) : IO UInt32 := do
+  let (modeOpt, args1) := extractFlag "--mode" args
+  let (outOpt, _)      := extractFlag "--out" args1
+  let mode := modeOpt.getD "golden"
+  let objJson  := Json.mkObj [("minFsrPm", toJson (15000 : Nat))]
+  let certJson := Json.mkObj [("mode", toJson mode)]
+  let recJson  := mkHwReceiptJson "photonics-pic-signoff@1" objJson certJson
+  if let some outPath := outOpt then
+    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
+    IO.println s!"wrote {outPath}"
+  verifyHardware recJson
+
+/-- Run `pcb-board-signoff@1` CLI check and optionally emit a receipt. -/
+def cmdPcbSignoff (args : List String) : IO UInt32 := do
+  let (modeOpt, args1) := extractFlag "--mode" args
+  let (outOpt, _)      := extractFlag "--out" args1
+  let mode := modeOpt.getD "golden"
+  let objJson  := Json.mkObj [("maxSkewFs", toJson (50 : Nat))]
+  let certJson := Json.mkObj [("mode", toJson mode)]
+  let recJson  := mkHwReceiptJson "pcb-board-signoff@1" objJson certJson
+  if let some outPath := outOpt then
+    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
+    IO.println s!"wrote {outPath}"
+  verifyHardware recJson
+
+/-- Run `agentic-eda-swap@1` CLI check and optionally emit a receipt. -/
+def cmdEdaVaultCheck (args : List String) : IO UInt32 := do
+  let (modeOpt, args1) := extractFlag "--mode" args
+  let (outOpt, _)      := extractFlag "--out" args1
+  let mode := modeOpt.getD "golden"
+  let objJson  := Json.mkObj [("minMarginMv", toJson (400 : Int))]
+  let certJson := Json.mkObj [("mode", toJson mode)]
+  let recJson  := mkHwReceiptJson "agentic-eda-swap@1" objJson certJson
+  if let some outPath := outOpt then
+    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
+    IO.println s!"wrote {outPath}"
+  verifyHardware recJson
+
 /-- CLI entry point for `obend hardware ...` and `obend fabublox ...`. -/
 public def main? : List String → Option (IO UInt32)
   | "hardware" :: "verify-pnr" :: rest         => some (cmdVerifyPnr rest)
@@ -168,6 +207,9 @@ public def main? : List String → Option (IO UInt32)
   | "hardware" :: "waferspace-signoff" :: rest => some (cmdWaferSpaceSignoff rest)
   | "hardware" :: "datasheet-check" :: rest    => some (cmdDatasheetCheck rest)
   | "hardware" :: "rf-signoff" :: rest         => some (cmdRfSignoff rest)
+  | "hardware" :: "photonics-signoff" :: rest  => some (cmdPhotonicsSignoff rest)
+  | "hardware" :: "pcb-signoff" :: rest        => some (cmdPcbSignoff rest)
+  | "hardware" :: "eda-vault-check" :: rest    => some (cmdEdaVaultCheck rest)
   | "fabublox" :: "check" :: rest              => some (cmdFabuBloxCheck rest)
   | _ => none
 
