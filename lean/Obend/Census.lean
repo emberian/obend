@@ -432,6 +432,11 @@ import Obend.Vault.Escrow
 import Obend.Vault.Affordance
 import Obend.Vault.Projection
 import Obend.Vault.Mandate
+import Obend.Consensus
+import Obend.Consensus.Simplex
+import Obend.Consensus.Finality
+import Obend.Consensus.Epistemic
+import Obend.Fold.Collapse
 
 open Lean Elab Command in
 run_cmd do
