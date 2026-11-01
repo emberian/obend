@@ -234,5 +234,51 @@ if os.path.exists(OBEND_BIN):
               r_seq.returncode == 0 and "sequential module lean_sumTo_seq_rtl verified" in r_seq.stdout and "rtl: sumTo 10 = 55 (cycles=10, done=1)" in r_seq.stdout,
               r_seq.stdout + r_seq.stderr)
 
+        fib_sv_path = os.path.join(obj_dir, "lean_fib_seq_rtl.sv")
+        r_fib = subprocess.run([OBEND_BIN, "lower", "fib", "--arg", "10", "--rtl", fib_sv_path],
+                               cwd=LEAN, env=lower_env, capture_output=True, text=True)
+        check("obend lower fib --arg 10 --rtl (2-state tuple Nat.rec FSM synthesis & 10-cycle simulation fib 10 = 55)",
+              r_fib.returncode == 0 and "sequential module lean_fib_seq_rtl verified" in r_fib.stdout and "rtl: fib 10 = 55 (cycles=10, done=1)" in r_fib.stdout,
+              r_fib.stdout + r_fib.stderr)
+
+        # 10. Binary RFC 8949 CBOR (hw-binary-cbor@1, Tag 0x0BED) + .obnb Core.Data + Rust FFI Interop Checks
+        cbor_bin_path = os.path.join(obj_dir, "hw_cert.cbor")
+        obnb_cell_path = os.path.join(obj_dir, "hw_cell.obnb")
+        for dom in ["pnr", "photonics", "dpr", "eda", "magnetics", "fluid", "power", "mechanics"]:
+            r_cbor = subprocess.run(
+                [OBEND_BIN, "hardware", "verify-cbor", "--domain", dom, "--out-bin", cbor_bin_path, "--out-obnb", obnb_cell_path],
+                capture_output=True, text=True,
+            )
+            check(f"obend hardware verify-cbor --domain {dom} (39-byte RFC 8949 CBOR Tag 0x0BED + .obnb Core.Data cell)",
+                  r_cbor.returncode == 0 and f"verified (hw-binary-cbor@1, domain={dom}, bytes=39, decidable, kernel)" in r_cbor.stdout,
+                  r_cbor.stdout + r_cbor.stderr)
+
+        r_cbor_bad = subprocess.run(
+            [OBEND_BIN, "hardware", "verify-cbor", "--domain", "pnr", "--mode", "corrupt"],
+            capture_output=True, text=True,
+        )
+        check("obend hardware verify-cbor --mode corrupt (refused by hw-binary-cbor@1 on real decoded parameters)",
+              r_cbor_bad.returncode == 3, r_cbor_bad.stdout + r_cbor_bad.stderr)
+
+        RUST_HOST_BIN = os.path.join(REPO, "hardware", "rust-ffi", "target", "debug", "obend_hw_host")
+        if os.path.exists(RUST_HOST_BIN):
+            rust_cbor_path = os.path.join(obj_dir, "rust_femm.cbor")
+            r_rust_emit = subprocess.run(
+                [RUST_HOST_BIN, "emit-cbor", "--domain", "magnetics", "--out", rust_cbor_path],
+                capture_output=True, text=True,
+            )
+            r_lean_ver_rust = subprocess.run(
+                [OBEND_BIN, "hardware", "verify-cbor", "--domain", "magnetics", "--in-bin", rust_cbor_path, "--out-obnb", obnb_cell_path],
+                capture_output=True, text=True,
+            )
+            r_rust_obnb = subprocess.run(
+                [RUST_HOST_BIN, "inspect-obnb", "--in", obnb_cell_path],
+                capture_output=True, text=True,
+            )
+            check("Rust FFI <-> Lean Kernel binary CBOR + .obnb Core.Data round-trip (zero JSON)",
+                  r_rust_emit.returncode == 0 and r_lean_ver_rust.returncode == 0 and r_rust_obnb.returncode == 0
+                  and "Variant(\"hardwareSchematic\"" in r_rust_obnb.stdout,
+                  r_rust_emit.stdout + r_lean_ver_rust.stdout + r_rust_obnb.stdout)
+
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)

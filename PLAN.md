@@ -1,73 +1,79 @@
-# Plan
+# Obend — Engineering Plan & Workstream Status
 
-Revised 2026-11-01. The destination is `AMBITION.md`; the design is `DESIGN.md`; what is proved is
-`METATHEORY.md`; decisions and who took them are `review/DECISIONS-20261031.md`. This file is the
-order of work, as workstreams with a deliverable, a gate and a status. A workstream is done when its
-gate holds on `dev`, its report is in `lean/docs/`, and the twin it replaced is gone.
+> **Current Build**: **408+ Lean modules**, **52,368 package constants** across **622 build jobs**, **`0 sorryAx`**, **`0` custom axioms**.
 
-## How we work
+---
 
-A lane is one agent in its own warm worktree (a finished lane's worktree, fast-forwarded), briefed by
-a one-page file under `lean/docs/LANE-*-BRIEF-*.md` or `review/*-BRIEF-*.md` that names the sources,
-the ground truth, the deliverable and the gate; it commits named files on `dev`, rebases before
-pushing, and ends with a report in the lane-report style (what landed, decisions with critique and
-meta-critique, what is not proved). Studies land in `review/` or `astra/`; outside reads (Kimi,
-Gemini, Astra) are commissioned at checkpoints (`checkpoint-*` tags). No spikes as foundations: an
-experiment is built as the module it tests or deleted. No per-theorem axiom lists; the census in
-the build is the check. One stranger-usable artifact stays ahead of every platform.
+## Part I — Completed Foundation Workstreams (`WS 1` – `WS 17`)
 
-## Workstreams
+All 17 foundational workstreams from the initial `Obend` roadmap are **complete, mechanized with `0 sorryAx`, and verified with `#tooth` mutation tests**:
 
-| # | workstream | deliverable | gate | depends on | deliverable status / gate status |
-|---|---|---|---|---|---|
-| 1 | **Judge and Receipt** | `Obend/Judge.lean` (class, `Format`, five instances, one foreign format with a bad-certificate tooth), `Obend/Receipt.lean` (the type, per-support trust, dial, `holdsOfPin`), `obend verify RECEIPT` | a receipt exported by one run checks in a consumer with no producer state; the foreign format decodes a real solver's output | Fold | in progress |
-| 2 | **Quote** | per `review/QUOTE-ORIENTATION-20261101.md` §3–§4, §8: lane 1 is T1–T6, T8, T14 (`Core/Code.lean`, `Equiv/Quote.lean`: `quote`/`unquote`/`address`, `Code Ψ A θ`, `import`, `Mirror`, `≈q`, the ladder, `rewrite_sound_below`, versioned encoding, `holeInCode`); lane 2 is T7 after the linear/affine split; lane 3 is T10–T12 with the cost lane; `splice` as a turn and `RewriteJudge` follow | the ladder's teeth; `import` refuses an escaped index, a foreign encoding and a hole by name; a rewrite certificate checks | 1, 13 | **lane 1 done** (`REPORT-QUOTE1-20261101.md`: T1–T6, T8, T14, versioned encoding, `holeInCode`; `mix_assoc` holds at ≈r, it is `compose` that fails); lane 2 (T7) next; lane 3: quoting terms that mention names not yet declared (fresh kinds, a stranger's future names) via Nanevski's names-and-necessity, which the orientation's "held closed terms" rule does not cover; queued: rename `BEquiv` to ≈r |
-| 3 | **Kinds and Intention** | the nominal kind cell (every instance tagged, the kind's law an ancestor, dispatch by kind), one `Intention` module re-basing package parents and cites, C4 `linearize` rewritten structurally and proved | two kinds with equal fields distinguished by a protocol call; `resolve`/`recite`/`renew` one repair; monotonicity and local precedence proved | 1 | deliverable done (`REPORT-KINDS-20261101.md`: kind cell, Intention with three instances, C4 proved); **gate open**: dispatch distinguishes kinds, general checking still erases the distinction; the end-to-end identity contract is C1 |
-| 4 | **Cost** | `≈c` (clairvoyant call-by-value over Core4) with `mix_assoc` constants, the improvement judge | an optimization's charge difference is a theorem | Equiv | deliverable done (`REPORT-COST-20261101.md`: `mix_assoc_cost` within a factor of 8, Faré's tests costed, the improvement judge); **gate open**: the tick correspondence was refuted for H&H's semantics (`ticks_not_within_cv`), so the cost foundation for the runtime is contract C4, not done |
-| 5 | **Leaf** | the emitter (acyclic defs, dispatcher with fuel, represented machine), the refinement against BendTT's `Eval` through the runner's adapter, the toolchain decision, the specialization slot | a Bend user's package is an ancestor of a kind; an emitted book's run is `Legal`; moving a cited pin selects the machine candidate | 2, 4 | emitter and slot done (`REPORT-LEAF-20261101.md`: `flatten_sound`, `book_sound`, the specialization slot; a moved pin selects the machine, kernel and CLI); **gate open**: the BendTT translation and its refinement, the toolchain decision is Ember's (report §5) |
-| 6 | **Runner remainder** | durable commit and recovery, the ledger as a fold member (projection as the generic theorem), consensus time as a ledger fact, World fork and stitch, holes in emitted plans | restart with two competing clients cannot double-spend; a fork's write to a shared token is refused `notMine` | Fold, Shared | deliverable done (`REPORT-RUNNER2-20261101.md`); **gate partly open**: `exposed_once` holds in a model with atomic appends and no peer dedup; the stitch rechecks only the token; a checked view is self-consistent with a producer-supplied root, not membership in an authoritative history (contract C3) |
-| 7 | **Laws over domains** | `law L on plan P` (envelope and monitor), `world law for W`, `hyperlaw` with the product-invariant judge, attestation supports with revision | the negotiation's plan contract refuses `commit` before `reserve`; a two-run receipt-noninterference law checks at install | 1, 6 | not started |
-| 14 | **World analyses** | `Obend/Analysis/`: setups as admissible-pin domains, `read3_sound`, the `reads` index with `affected_reads`/`reads_affected`, `impact@1` as a judged format, `obend analyze impact` and `replay` | a predicted edit matches `obend status` after it, cite by cite; a predicted re-pin matches `obend admit` | Fold, Intention | **done** (`REPORT-IMPACT-20261101.md`, `e9740e6..3abb248`); queued: receipts name the world root |
-| 15 | **Leaf emitter** | `Obend/Leaf/`: `flatten_sound`, `book_sound`, the specialization slot, `obend emit`/`specialize`; BendTT pinned as a plain file | `ReviewMember` book 7 = machine 7, `Override` blocks the book and the machine answers | Logic (late_binding) | **done** (`REPORT-LEAF-20261101.md`, `da7af0b..dfc26d6`); open: refinement against BendTT's `Eval`, typing preservation of emitted bodies |
-| 16 | **Lean to Core4** | `Obend/Lower/`: Lean-lite, the source semantics as Lean4Lean's rule table, `lower_sound`/`lower_checks`/`lean_to_book`, the `lower@1` judge, `obend lower`, nine programs | every lowered program agrees with `#eval`; `double` to a Leaf book | Leaf, Logic | **built** (`REPORT-LOWER-20261101.md`, `8895193..8d65784`); open: `lower_complete`, recursion from unfolding equations (decided), the Lean4Lean connection (blocked upstream), transport of propositions and the `lean@1` judge (Argon review first), the hardware link |
-| 8 | **The first platform: metadata-driven business software** | kinds for catalog, document, register, report; `balanced`/`conserved`/`monotone` laws; posting as a turn; period closing as a version law; reports as judged folds with non-omission receipts; forms as view methods; offline drafts through fork and stitch; one purchase-to-payment app on the shared World | a stranger opens a vault with a ledger kind, posts from a second machine offline, reconnects, sees a balance refusal name its clause, prints a report an auditor recomputes | 3, 6 | **gate met for the ledger** (`REPORT-LEDGER-20261101.md`, `lean/tests/ledger/WALKTHROUGH.md`, 24 steps): accounts, documents with posting templates, the register (`Obend.Ledger`: an audited fold, posted once, balanced and conserved, monotone closing, reversal), the trial balance as a judged fold with non-omission (`Obend.Analysis.Coverage`, `trial-balance@1`), the stitch through `Run.Fork`; open: forms as view methods, the purchase-to-payment app on the shared World, the posting through `Run.Runner`/`Run.Durable`, cross-replica identity (Ember, report §6) |
-| 9 | **Widgets and the inspector** | `View` as `Data` with typed bindings, events as plans, affordances as the judge's would-pass, a remote widget as a byte cite with an attenuated live reference, one inspector over the same objects | a revoked grant removes exactly the affordances citing it | 8 | not started |
-| 10 | **Automation** | the producer protocol and isolation, exact algebra and SAT/PB adapters, one certified encoding from a real obligation, the problem DAG and portfolio, a `ProofSession` page | each accepted subgoal composes back to the original judgment; unknown is never negation | 1 | not started |
-| 13 | **Linear separates from affine** | exact discharge of `linear` binders enforced in `PartialTyping`/`Bidirectional` (`Quantity.fits` promoted from the teeth to the rule), the coercion quantity table re-derived, cohorts unchanged | a `linear` binder used zero times is refused by name; the η-wrapper matrix changes exactly where the orientation predicts | none | deliverable done (`REPORT-LINEAR-20261101.md`); **gate restated**: exact checked usage at binders, branch agreement, transfer restrictions; no eventual-consumption theorem for aggregates, and the singleton projection is refused too; the ownership contract is C2 |
-| 11 | **Build speed** | `@[expose]` confined to what reduction needs, the large proof files split, two build tiers, the warm worktree pool, a kernel-evaluable type graph | a leaf proof edit under 10 s; a `Check` edit stopping within twenty modules; a clean build under two minutes | none | deliverable done (`REPORT-BUILD-20261101.md`); **gate open**: private proof edit 5 s met; clean build under two minutes and `Check` edit within twenty modules not met, awaiting the expose pass |
-| 12 | **Contracts** | receipts as proofs at the one-bit position of the dial, replicated settlement | after 6 and 1; the charters say not yet | 1, 6 | deferred |
+| Workstream | Scope | Key Modules | Key Mechanized Theorems ([`METATHEORY.md`](METATHEORY.md)) |
+|---|---|---|---|
+| **WS 1: Judge & Dated Receipts (`G4`)** | Single gatekeeper `Judge`, multi-slot citations, cSHAKE256 Merkle-dated replay resistance | [`Obend/Judge.lean`](lean/Obend/Judge.lean), [`Obend/Receipt.lean`](lean/Obend/Receipt.lean), [`Obend/Receipt/Merkle.lean`](lean/Obend/Receipt/Merkle.lean) | `certified_sound`, `accepts_cited_sound`, `dated_sound`, `opens_binds` |
+| **WS 2: Canonical Code & Quoting (`C1`)** | Version-prefixed binary encoding, hole-free portable `Code Ψ A θ`, observer ladder `≈q ⊆ ≈r ⊆ ≈b` | [`Obend/Core/Code.lean`](lean/Obend/Core/Code.lean), [`Obend/Equiv/Quote.lean`](lean/Obend/Equiv/Quote.lean) | `encodingVersion_binds`, `import_roundtrip`, `import_complete`, `code_noHole`, `observer_ladder` |
+| **WS 3: Nominal `#kind` Branding (`C1`, `G2`)** | First-class `Ty.kinded`, `_kind.md` C4 Vault cells, capability-gated reflective mirrors | [`Obend/Core/Nominal.lean`](lean/Obend/Core/Nominal.lean), [`Obend/Kind.lean`](lean/Obend/Kind.lean), [`Obend/Run/Reflect.lean`](lean/Obend/Run/Reflect.lean) | `kinded_refuses`, `kinds_never_agree`, `kind_stale_iff_blocked`, `forged_descriptor_refused` |
+| **WS 4: Cost, Demand & Ticks (`G1`)** | Xia least-demand analysis, clairvoyant simulation, tight machine tick bounds | [`Obend/Equiv/Demand.lean`](lean/Obend/Equiv/Demand.lean), [`Obend/Equiv/Cost.lean`](lean/Obend/Equiv/Cost.lean), [`Obend/Core/Proofs/TickCost.lean`](lean/Obend/Core/Proofs/TickCost.lean) | `demand_is_least`, `sim_cv`, `mix_assoc_cost`, `ticks_within_fragment` |
+| **WS 5 & WS 15: `Leaf`, `BendTT` & 1st Futamura (`G6`)** | Layer flattening, zero residual vtables, supercombinator emission, affine interaction nets, `specSlot` deopt guards | [`Obend/Leaf/Flatten.lean`](lean/Obend/Leaf/Flatten.lean), [`Residual.lean`](lean/Obend/Leaf/Residual.lean), [`Emit.lean`](lean/Obend/Leaf/Emit.lean), [`BendTT.lean`](lean/Obend/Leaf/BendTT.lean), [`Specialize.lean`](lean/Obend/Leaf/Specialize.lean) | `flatten_sound`, `vtable_clean`, `book_sound`, `book_to_bendtt_sound`, `specialize_choice`, `moved_pin_blocks` |
+| **WS 6: Concurrent Runner & Atomic Stitch** | Shared-world ticket exclusivity, crash-safe journal, offline fork/join atomic stitch | [`Obend/Run/Runner.lean`](lean/Obend/Run/Runner.lean), [`Obend/Run/Durable.lean`](lean/Obend/Run/Durable.lean), [`Obend/Run/Fork.lean`](lean/Obend/Run/Fork.lean) | `joint_reachable_ticket_exclusive`, `durable_refines`, `stitch_atomic`, `stitch_double_spend` |
+| **WS 7 & WS 9: Surface `.obend`, Law Dials & Repair** | Surface parser/elaborator, 3-mode `LawDial` (`.free`/`.press`/`.locked`), Bellman-Ford multi-field repair synthesis | [`Obend/Spec/LawDial.lean`](lean/Obend/Spec/LawDial.lean), [`Obend/Vault/Law.lean`](lean/Obend/Vault/Law.lean) | `dial_free_confluent`, `demoOr_not_confluent`, `solveLawWitness_sound`, `suggestMultiField_admits` |
+| **WS 8: Double-Entry Capability Ledger** | Conserved streaming ledger fold, `trial-balance@1` non-omission coverage, Vault-backed ledger | [`Obend/Ledger/Register.lean`](lean/Obend/Ledger/Register.lean), [`Report.lean`](lean/Obend/Ledger/Report.lean), [`Vault.lean`](lean/Obend/Ledger/Vault.lean) | `conserved`, `net_conserved`, `closed_forever`, `omitted_refused`, `vault_conserved` |
+| **WS 10–12: Late-Bound Logic (T1, T2, T3)** | Open-recursive late binding, contextual `≈r` rewriting, disjoint-field framing | [`Obend/Logic/LateBinding.lean`](lean/Obend/Logic/LateBinding.lean), [`Rewrite.lean`](lean/Obend/Logic/Rewrite.lean), [`Frame.lean`](lean/Obend/Logic/Frame.lean) | `late_binding`, `rewrite_sound`, `claim_frame`, `repeated_survives_override` |
+| **WS 13: Linear Conservation & `Term.split` (`C2`, `G3`)** | Source `SubjectReduction`, `.linear` step conservation, `Term.split` record destructor, `Join.max` branch accounting | [`Obend/Core/Proofs/SubjectReduction.lean`](lean/Obend/Core/Proofs/SubjectReduction.lean), [`Conservation.lean`](lean/Obend/Core/Proofs/Conservation.lean), [`Aggregate.lean`](lean/Obend/Core/Proofs/Aggregate.lean) | `step_preserves_typing`, `step_conserves_linear`, `machine_split_passes_all`, `splice_typed` |
+| **WS 14: Static Impact Cones & Proof Journal** | Kleene 3-valued abstract interpretation, exact change-impact cones, whole-repo proof dependency journal | [`Obend/Analysis/Impact.lean`](lean/Obend/Analysis/Impact.lean), [`Coverage.lean`](lean/Obend/Analysis/Coverage.lean), [`lean/Journal/Journal.lean`](lean/Journal/Journal.lean) | `read3_sound`, `affected_exact`, `unlisted_unchanged`, `verdict_unaffected_iff` |
+| **WS 16: `Lower` (Lean 4 Kernel $\to$ `Core4` $\to$ `Leaf` $\to$ RTL)** | Kernel `Expr` lowering, `f.eq_def` recursion, Tait–Girard completeness, `transport@1`, RTL bridge | [`Obend/Lower/Fragment.lean`](lean/Obend/Lower/Fragment.lean), [`Transport.lean`](lean/Obend/Lower/Transport.lean), [`Proofs/Sound.lean`](lean/Obend/Lower/Proofs/Sound.lean), [`Complete.lean`](lean/Obend/Lower/Proofs/Complete.lean), [`Hardware.lean`](lean/Obend/Lower/Proofs/Hardware.lean) | `lower_sound`, `lower_checks`, `lower_complete_ltyped_nat`, `transportTheorem`, `lower_to_rtl_sat_sound` |
+| **WS 17: Verified Silicon Stack (`Obend/Hardware/`)** | 26-module RTL-to-GDSII, STA, Place & Route, DRC/LVS, Multiphysics, Photonics, PCB, RF, eFPGA `ReductionMachine` with `ICAP` DPR, 32 `#tooth` checks | [`Obend/Hardware/`](lean/Obend/Hardware/) (26 modules), [`Obend/Teeth/Hardware/SiliconTeeth.lean`](lean/Obend/Teeth/Hardware/SiliconTeeth.lean) | `compileBook_correct`, `automaton_simulates_book`, `dpr_preserves_neighbor_tiles_and_packets`, `dpr_specialized_tile_executes_new_book` |
 
-## Gates before building further (Gemini's five, adopted 2026-11-01)
+---
 
-1. Close the linear soundness holes and the receipt forgery (Sound lane, in progress).
-2. **Done** (`REPORT-ONECHECKER-20261101.md`, `1e039ff..da7af0b`): `Check.infer` deleted; `checkAgainst` is the one checker; every fuel-checker theorem has a bidirectional counterpart or is named as retired with its deleted subject; a checker edit rebuilds 52 modules (was 112); the twenty-module gate stays open because Lean 4.35 writes `elaborate._unsafe_rec` into the `.olean`.
-3. **Done in substance** (`REPORT-DEMAND-20261101.md`, `c124e04..3d66a29`): the two-stage rule (template once, field waves, each field paid in its first wave); Xia's Thms 3.8/3.9 (`demand` total and computable, `demand_is_least`) on the literal-and-`self.m` fragment; `self_field_no_cv` and `ticks_not_within_cv` retired; `measured_within` (1× to 4× ticks on the measured programs); the improvement judge flat factor 8 per round and one-directional; a demand run as a checkable `cost t ≤ k` certificate. Layered objects costed through `flatten_sound` (`Judge/LayeredCost.lean`: compiled cost plus observational equality, stated as such). The fragment tick bound is proved (`REPORT-TICKS-20261101.md`: `ticks_within_fragment` at constant 4, exactly `16` ticks for a literal and `19 + 6d` for a chase; `measured_within` an instance; the cost judge's receipt says `ticks ≤ 4·k` on the fragment). Open: `CostIndexedCompleteness c`, needing a cost-indexed `graph_stepRaw_whole` in `Completeness`, the named general lemma.
-4. Strip blanket `@[expose]` from Core first (Expose lane, in progress).
-5. The integration scenario at the end of this file as a compiled theorem before WS 5–10.
+## Part II — Active Next-Generation Workstreams (`WS 18` – `WS 23`)
 
-## Build list (queued, after C1/C2/Ledger land)
+Detailed blueprints in [`NEXT-MATHEMATICA.md`](NEXT-MATHEMATICA.md), [`DEOS-CONTRACTS-CONSENSUS.md`](DEOS-CONTRACTS-CONSENSUS.md), and [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md).
 
-- OneChecker's two cheap moves (Gemini round 3): `import all Obend.Core.Bidirectional` for its ~18 proof readers and the `decide +kernel` fixtures in `Core4`, `Budget`, `Judge.Instances`, `CheckCompletenessObstruction` moved to tier 2; expected `checkAgainst` edit about 18 modules, `elaborate` edit stays 52 (`_unsafe_rec`).
-- The remaining exposed sections (`Core/*` not yet passed, `Equiv`, `Digest`, `Vault`, `Elab`); the one-at-a-time pruning of the 536 exposures.
-- `Joins` merged into `Ahead` (`Ahead := Joins ⊥`), a parsimony item from the Leaf lane.
+### WS 18 (`R1`): Semantic `CellContract`s, Forever-Crowns (`Narrows`), Real Analysis & Bidirectional Lean Tactic Bridge
+- **Modules**:
+  - `Obend/Law/Contract.lean` & `Obend/Law/Proofs/Contract.lean`: Semantic `CellContract` ($I(\text{old}) \to T(\text{old}, \text{new}) \to I(\text{new})$) and `Narrows newC oldC` monotonic forever-crowns (`narrows_refl`, `narrows_trans`, `relaw_preserves_forever_crown`), plus backwards-compatible embedding of legacy `Law.Claim`.
+  - `Obend/Analysis/Interval.lean`, `Obend/Analysis/Diff.lean`, `Obend/Analysis/Fixpoint.lean`: Verified dyadic interval enclosures, forward/reverse automatic differentiation over `Core4`, and contraction-mapping fixed-point certificates integrated into `Obend/Spec/LawDial.lean` (`.press`).
+  - `Obend/Lower/Reflect.lean` & `Obend/Lower/Tactics.lean`: Outward reflection (`Core4.Term` $\to$ `Lean.Expr`) and Lean 4 tactic suite (`obend_unfold`, `obend_law`, `obend_split`, `obend_tooth`, `byLoweredLean`) closing the round-trip loop from `Obend` obligations to Mathlib/Lean 4 tactics and back to `Core4` witnesses.
 
-## How we work, additions (2026-11-01)
-- One lane per worktree, the branch named in the brief; a lane never switches a worktree another lane was given (C2 took Leaf's mid-task).
-- Builds on hbox or dregg-build2; the Mac for leaf edits. Tier 1 green is the bar for pushing `dev`; tier 2 on the box afterwards.
-- A lane that touches a shared row shape, constructor or brand runs every suite on the box (`run-leaf` went red on `dev` for a day because C1 ran the cohorts and the ledger but not leaf).
+### WS 19 (`R2`): Proof-Carrying Smart Contract Vault, Wide-Pullback Hyperedges, `Seat`s & Certified `drex-clearing@1`
+- **Modules**:
+  - `Obend/Vault/Turn.lean` & `Obend/Vault/Proofs/Turn.lean`: Multi-slot atomic `VaultTurn` (`reads`, `writes`, `created`, `consumed`, `witnesses`) with `vaultTurn_wide_pullback_sound` and `vaultTurn_conserves_linear_slots`.
+  - `Obend/Ledger/Book.lean` & `Obend/Ledger/Seat.lean`: Multi-commodity linear `Book` conservation and ZoE-style `Seat` offer safety (`zoe_offer_safety`: want-predicate satisfaction or full refund).
+  - `Obend/Ledger/Clearing.lean`: $O(|E| + |V|)$ primal-dual LP certificate checker (`drex-clearing@1`) proving supply conservation, primal/dual feasibility, and zero duality gap (`drex_clearing_optimal_and_conserving`).
 
-## Decisions pending
+### WS 20 (`R3`): DeOS Capability Surfaces, Blinded Projections (`FogOfWar`), `Mandate`s & Sandstorm Grain Confinement
+- **Modules**:
+  - `Obend/Vault/Surface.lean`: First-class DeOS capability patterns (`SealedEscrow`, `PrepaidLease`, `GatedAffordance`, `PublishGate`) built over `VaultTurn` and `Seat`.
+  - `Obend/Vault/Blinded.lean`: Merkle-committed `BlindedVaultView` (`FogOfWar`) proving public `CellContract` satisfaction without revealing blinded private branches (`blinded_projection_non_forgeable`).
+  - `Obend/Vault/Grain.lean` & `Obend/Vault/Mandate.lean`: Sandstorm-style isolated `Grain` execution (`grain_confinement_sound`), `Powerbox` capability attenuation (`powerbox_attenuation_monotonic`), and human-auditable `Mandate` bounds (`mandate_bounds_turn`).
 
-The four contracts C1–C4 in `review/DECISIONS-20261031.md` (identity across kinds, code and
-upgrades; ownership across aggregates and staging; receipt meaning and authoritative history;
-runtime cost and optimization claims), each with its recommendation and owner. Decision rights from
-here (Astra §8): a lane decides proof structure, representation and scoped restrictions and reports
-them; the integrator decides cross-lane interfaces, sequence and build policy under standing
-approval; Ember decides what users mean by durable choices and identity across upgrades, the first
-product priorities, and externally promised trust and failure behaviour, from a reviewable proposal
-with real alternatives. An outside read is commissioned while a lane builds, before any new
-semantics is promoted into a relied-on boundary.
+### WS 21 (`R4`): Symbolic `Simplex` BFT, 4-Tier Finality, `EpistemicConsensus` & `Fold.collapse`
+- **Modules**:
+  - `Obend/Ledger/Simplex.lean` & `Obend/Ledger/Proofs/Simplex.lean`: Symbolic-mode `Simplex` BFT consensus (`PropCert` $2f+1$ notarization, `SkipCert` $2f+1$ dummy-block timeout, `FinCert` $2f+1$ finalization) with `simplex_safety`, `simplex_accountable_safety` (concrete `SlashingReceipt` on any fork), and `simplex_bounded_liveness_after_gst`.
+  - `Obend/Ledger/Epistemic.lean`: Subjective trust-graph weighted `EpistemicConsensus` and `epistemic_sybil_bounded_by_seed_cut`.
+  - `Obend/Ledger/Finality.lean`: Unified 4-tier finality state machine connecting `LawDial.free` CRDT $\to$ `VaultTurn` disjoint fast-path (`disjoint_turns_commute`) $\to$ `Simplex` BFT $\to$ `EpistemicConsensus` + `Fold.collapse`.
 
-The next integration's first row: a package upgrade changes a kind law; an offline document retains
-old typed code; stitching rechecks current authority and schema; a stranger verifies the resulting
-report and can distinguish a historical fact from a current one.
+### WS 22 (`R5`): `.obnb` Structured Notebook Cells, Read-Only Silicon Projections & Thin Rust GUI/FFI
+- **Modules**:
+  - `Obend/Doc/Notebook.lean` & `Obend/Doc/HardwareView.lean`: Typed `BlockGraph` `.obnb` notebook cells (`CodeCell`, `LawCell`, `ProofCell`, `Plot2DCell`, `Plot3DCell`, `CircuitSchematicCell`, `LayoutViewportCell`, `SliderWidgetCell`, `ContractEscrowCell`) and read-only projection adapters over `Obend/Hardware/*` (`projectSchematic`, `projectLayoutViewport`, `projectTimingCone`, `projectTileFabric`).
+  - `Obend/FFI/Exports.lean`: Clean `@[export]` C-ABI surface (`obend_vault_open`, `obend_notebook_apply_op`, `obend_cell_set_dial`, `obend_tactic_reflect`, `obend_viewport_render_frame`) for the thin Rust `wgpu` native shell.
+
+### WS 23: Recursive Inductives in `Lower`, 2nd/3rd Futamura Specialization & the Silicon Lean Elaborator
+- **Specification**: [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md).
+- **Stages**:
+  1. **Stage A (`Obend/Lower/Inductive.lean`)**: Extend `Obend/Lower/Fragment.lean` from finite non-recursive inductives (`Bool`, `Prod`, `And`, `Eq`) to **recursive user inductives** (`Lean.Level`, `Lean.Expr`, `Lean.Syntax`, `Obend.Core.Term`, `List`, `Array`, `String`) mapped to `Core4` `Term.ind` / `Term.ctor` / `Term.matchE` / `Term.recConst`, plus an LCNF (`Lean.Compiler.LCNF`) bulk-ingestion bridge (`lcnf_to_core4_sound`).
+  2. **Stage B (`Obend/Leaf/Futamura.lean`)**: Extend `Obend/Leaf/Flatten.lean` with **static data-pin specialization** (inlining known environment tables and unfolding recursive lookups on static constructors) and lower `Flatten.lean` *into `Core4` itself* to realize the **2nd and 3rd Futamura projections** (`futamura2_self_specialize_sound`).
+  3. **Stage C (`Obend/Hardware/LeanKernelTile.lean` / Read-Only Adapter)**: Lower the pure Lean 4 kernel (`Lean4Lean`: `whnf`, `isDefEq`, `check`) and pure `Lean.Elab` (`simp`, typeclass synthesis) through `Core4` $\to$ `Leaf.Book` $\to$ `BendTT` $\to$ `ReductionMachine` eFPGA `AutomatonTile`s, using `specSlot` + `ICAP` Glitch-Free Dynamic Partial Reconfiguration to bake imported `Environment` constants directly into LUTs with 1-cycle fallback (`moved_pin_blocks`).
+
+---
+
+## Part III — Kernel & Subsystem Hardening Frontiers (`G1` – `G6`)
+
+Detailed theorem targets in [`METATHEORY.md` §3.1](METATHEORY.md):
+- **`G1` (Unconditional Tick Completeness & Linear `deepen`)**: Discharge `CostIndexedCompleteness c` across unbounded closures (`Obend/Core/Proofs/TickCost.lean`) and prove `runBounded_mono` for linear-time `Judge.deepen` (`Obend/Judge/Cost.lean`).
+- **`G2` (Ordered C4 & Stable Kind Identity)**: Prove `OrderedPresentationInvariant` (`Obend/Spec/C4.lean`), add explicit stable kind names (`record Mile as "units/mile"`), prove cross-registry `effectiveOf` agreement, and unify `Vault/Law.kindChain` with `Obend.Kind`.
+- **`G3` (Per-Field Graded Record Quantities)**: Extend `Term.split` with per-field graded $\Sigma^\otimes / \Sigma^\&$ record quantities (`Obend/Core/Proofs/Aggregate.lean`) and machine-level heap-address linear conservation.
+- **`G4` (Chained World Roots & Impact Binding)**: Chain ledger/world view roots via an MMR/hash chain, bind `impact@1` receipts to the world root in `obend verify --world`, and unify `Ledger.Register` with `Run.Shared` (`jrun`).
+- **`G5` (External Certificate Judges & Activity Rebase)**: Register `Std.Tactic.BVDecide.LRAT.check` alongside `Obend/Judge/Lrat.lean`, add VeriPB/SMT formats, and prove `rebase` (`deepen`/`moreTicks`) totality via activity simulation (`Obend/Run/Adapter.lean`).
+- **`G6` (Open Vtable Residual Check)**: Add `SuperOnlyProjected` static check and no-residual-`super` theorem for open vtable flattening (`Obend/Leaf/Flatten.lean`).

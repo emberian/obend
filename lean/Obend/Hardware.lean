@@ -24,5 +24,12 @@ public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.DSP
 public import Obend.Hardware.AgenticEDA
+public import Obend.Hardware.Magnetics
+public import Obend.Hardware.FluidThermal
+public import Obend.Hardware.PowerElectronics
+public import Obend.Hardware.Mechanics
+public import Obend.Hardware.Accelerators
+public import Obend.Hardware.GeometryCAM
+public import Obend.Hardware.Codec
 public import Obend.Hardware.Judge
 public import Obend.Hardware.Cli

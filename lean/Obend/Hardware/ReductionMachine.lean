@@ -477,5 +477,450 @@ theorem dpr_specialized_tile_executes_new_book
   rw [hAll]
   exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
+/-! ## 5. True Interaction-Net / Graph-Reduction Tile Arena (`INetNode`, `ActivePair`, `reduceActivePair`) -/
+
+/-- Hardware node kinds in the Interaction-Net / Graph-Reduction Tile Arena. -/
+inductive INetNodeKind where
+  | era
+  | con
+  | dup
+  | sup
+  | app
+  | lam
+  | nat64
+  deriving DecidableEq, Repr
+
+/-- Hardware port reference (`nodeId`, `slot` where `0` = principal port, `1` = `aux1`, `2` = `aux2`). -/
+structure PortRef where
+  nodeId : Nat
+  slot   : Nat
+  deriving DecidableEq, Repr
+
+/-- Interaction-net node stored in a tile's local node arena:
+* `id`: unique arena node index,
+* `kind`: interaction combinator / lambda / scalar node kind,
+* `label`: interaction combinator label (or affine `slope` for `lam`),
+* `immVal`: 64-bit scalar payload (or affine `offset` for `lam`),
+* `aux1`, `aux2`: auxiliary port pointers. -/
+structure INetNode where
+  id     : Nat
+  kind   : INetNodeKind
+  label  : Nat
+  immVal : Nat
+  aux1   : PortRef
+  aux2   : PortRef
+  deriving DecidableEq, Repr
+
+/-- Active pair of two interaction-net nodes connected principal-port to principal-port. -/
+structure ActivePair where
+  left  : INetNode
+  right : INetNode
+  deriving DecidableEq, Repr
+
+/-- Single-cycle hardware rewrite outcome for an `ActivePair` in the tile arena. -/
+inductive INetRewriteOutcome where
+  | annihilate (wire1 : PortRef × PortRef) (wire2 : PortRef × PortRef)
+  | commute    (spawned : List INetNode)
+  | erase      (erasedAux : List PortRef)
+  | betaNat64  (resultNode : INetNode)
+  deriving DecidableEq, Repr
+
+/-- The 4 cross-wired nodes (`dupA`, `dupB`, `supA`, `supB`) spawned when `l` and `r` commute (`l.label ≠ r.label`). -/
+def commuteSpawnedNodes (l r : INetNode) (nextFreeId : Nat) : List INetNode :=
+  let dupAId := nextFreeId
+  let dupBId := nextFreeId + 1
+  let supAId := nextFreeId + 2
+  let supBId := nextFreeId + 3
+  [ { id := dupAId, kind := l.kind, label := l.label, immVal := 0
+    , aux1 := { nodeId := supAId, slot := 1 }, aux2 := { nodeId := supBId, slot := 1 } }
+  , { id := dupBId, kind := l.kind, label := l.label, immVal := 0
+    , aux1 := { nodeId := supAId, slot := 2 }, aux2 := { nodeId := supBId, slot := 2 } }
+  , { id := supAId, kind := r.kind, label := r.label, immVal := 0
+    , aux1 := l.aux1, aux2 := r.aux1 }
+  , { id := supBId, kind := r.kind, label := r.label, immVal := 0
+    , aux1 := l.aux2, aux2 := r.aux2 } ]
+
+/-- Single-cycle hardware interaction-net rewrite rule engine (`reduceActivePair`):
+* **Erasure**: `era` interacting with any node propagates `era` to its auxiliary ports,
+* **Hardware $\beta$-Nat64**: `lam` (`label = slope`, `immVal = offset`) interacting with `nat64` (`immVal = x`)
+  reduces in 1 cycle to `nat64 (slope * x + offset)`,
+* **$\beta$-Application**: `lam` interacting with `app` annihilates and wires `(l.aux1, r.aux1)` and `(l.aux2, r.aux2)`,
+* **Annihilation vs. Commutation**: two combinators (`dup`, `sup`, `con`) with identical `label` annihilate;
+  distinct labels (`l.label ≠ r.label`) commute and spawn 4 cross-wired nodes. -/
+def reduceActivePair (pair : ActivePair) (nextFreeId : Nat) : INetRewriteOutcome :=
+  let l := pair.left
+  let r := pair.right
+  match l.kind, r.kind with
+  | .era, .era => .erase []
+  | .era, _    => .erase [r.aux1, r.aux2]
+  | _, .era    => .erase [l.aux1, l.aux2]
+  | .lam, .nat64 =>
+    .betaNat64 {
+      id     := nextFreeId
+      kind   := .nat64
+      label  := 0
+      immVal := l.label * r.immVal + l.immVal
+      aux1   := l.aux1
+      aux2   := l.aux2
+    }
+  | .nat64, .lam =>
+    .betaNat64 {
+      id     := nextFreeId
+      kind   := .nat64
+      label  := 0
+      immVal := r.label * l.immVal + r.immVal
+      aux1   := r.aux1
+      aux2   := r.aux2
+    }
+  | .lam, .app => .annihilate (l.aux1, r.aux1) (l.aux2, r.aux2)
+  | .app, .lam => .annihilate (l.aux1, r.aux1) (l.aux2, r.aux2)
+  | _, _ =>
+    if l.label == r.label then
+      .annihilate (l.aux1, r.aux1) (l.aux2, r.aux2)
+    else
+      .commute (commuteSpawnedNodes l r nextFreeId)
+
+/-- Theorem (`inet_annihilation_same_label`):
+Two `dup` (or `sup` or `con`) nodes with identical label `lbl` connected at their principal ports
+annihilate in 1 cycle into `.annihilate (a1, b1) (a2, b2)`. -/
+theorem inet_annihilation_same_label
+    (id1 id2 lbl : Nat) (a1 a2 b1 b2 : PortRef) (nextId : Nat) :
+    let n1 : INetNode := { id := id1, kind := .dup, label := lbl, immVal := 0, aux1 := a1, aux2 := a2 }
+    let n2 : INetNode := { id := id2, kind := .dup, label := lbl, immVal := 0, aux1 := b1, aux2 := b2 }
+    let s1 : INetNode := { id := id1, kind := .sup, label := lbl, immVal := 0, aux1 := a1, aux2 := a2 }
+    let s2 : INetNode := { id := id2, kind := .sup, label := lbl, immVal := 0, aux1 := b1, aux2 := b2 }
+    reduceActivePair { left := n1, right := n2 } nextId = .annihilate (a1, b1) (a2, b2) ∧
+    reduceActivePair { left := s1, right := s2 } nextId = .annihilate (a1, b1) (a2, b2) := by
+  simp [reduceActivePair]
+
+/-- Theorem (`inet_commutation_distinct_labels_spawns_four`):
+When a `dup` node with label `l1` interacts with a `sup` node with label `l2` (`l1 ≠ l2`),
+`reduceActivePair` produces `.commute spawned` with `spawned.length = 4`. -/
+theorem inet_commutation_distinct_labels_spawns_four
+    (id1 id2 l1 l2 : Nat) (a1 a2 b1 b2 : PortRef) (nextId : Nat)
+    (hNe : l1 ≠ l2) :
+    let n1 : INetNode := { id := id1, kind := .dup, label := l1, immVal := 0, aux1 := a1, aux2 := a2 }
+    let n2 : INetNode := { id := id2, kind := .sup, label := l2, immVal := 0, aux1 := b1, aux2 := b2 }
+    let spawned := commuteSpawnedNodes n1 n2 nextId
+    reduceActivePair { left := n1, right := n2 } nextId = .commute spawned ∧
+    spawned.length = 4 := by
+  intro n1 n2 spawned
+  refine ⟨?_, rfl⟩
+  dsimp only [reduceActivePair, n1, n2, spawned]
+  simp [hNe]
+
+/-- Theorem (`inet_beta_nat64_sound`):
+Reducing a linear `lam` node (`label = slope`, `immVal = offset`) against a `nat64` node (`immVal = x`)
+produces `.betaNat64` carrying `immVal = slope * x + offset` in a single cycle. -/
+theorem inet_beta_nat64_sound
+    (id1 id2 slope offset x : Nat) (a1 a2 b1 b2 : PortRef) (nextId : Nat) :
+    let lamNode : INetNode := { id := id1, kind := .lam, label := slope, immVal := offset, aux1 := a1, aux2 := a2 }
+    let argNode : INetNode := { id := id2, kind := .nat64, label := 0, immVal := x, aux1 := b1, aux2 := b2 }
+    reduceActivePair { left := lamNode, right := argNode } nextId =
+      .betaNat64 { id := nextId, kind := .nat64, label := 0, immVal := slope * x + offset, aux1 := a1, aux2 := a2 } := by
+  rfl
+
+/-! ## 6. Multi-Hop 2D Mesh XY Dimension-Ordered Routing (`MeshXyPacket`, `stepMeshXy`) -/
+
+/-- Packet routed across the 2D silicon tile mesh under deadlock-free XY dimension-ordered routing. -/
+structure MeshXyPacket where
+  srcX    : Nat
+  srcY    : Nat
+  dstX    : Nat
+  dstY    : Nat
+  curX    : Nat
+  curY    : Nat
+  payload : Nat
+  deriving DecidableEq, Repr
+
+/-- Manhattan distance ($L_1$ metric) from `(p.curX, p.curY)` to `(p.dstX, p.dstY)`. -/
+def manhattanDist (p : MeshXyPacket) : Nat :=
+  (if p.curX ≤ p.dstX then p.dstX - p.curX else p.curX - p.dstX) +
+  (if p.curY ≤ p.dstY then p.dstY - p.curY else p.curY - p.dstY)
+
+/-- Single-hop 2D Mesh XY dimension-ordered router:
+routes 1 hop along X (`curX + 1` if `curX < dstX`, `curX - 1` if `dstX < curX`) when `curX ≠ dstX`,
+and otherwise routes 1 hop along Y (`curY + 1` if `curY < dstY`, `curY - 1` if `dstY < curY`),
+strictly preserving `srcX`, `srcY`, `dstX`, `dstY`, and `payload`. -/
+def stepMeshXy (p : MeshXyPacket) : MeshXyPacket :=
+  if p.curX < p.dstX then
+    { p with curX := p.curX + 1 }
+  else if p.dstX < p.curX then
+    { p with curX := p.curX - 1 }
+  else if p.curY < p.dstY then
+    { p with curY := p.curY + 1 }
+  else if p.dstY < p.curY then
+    { p with curY := p.curY - 1 }
+  else
+    p
+
+/-- Theorem (`stepMeshXy_preserves_payload`):
+For every `p : MeshXyPacket`, a single XY routing hop preserves `payload`, `dstX`, and `dstY`. -/
+theorem stepMeshXy_preserves_payload (p : MeshXyPacket) :
+    (stepMeshXy p).payload = p.payload ∧
+    (stepMeshXy p).dstX = p.dstX ∧
+    (stepMeshXy p).dstY = p.dstY := by
+  dsimp only [stepMeshXy]
+  by_cases h1 : p.curX < p.dstX
+  · simp [h1]
+  · by_cases h2 : p.dstX < p.curX
+    · simp [h1, h2]
+    · by_cases h3 : p.curY < p.dstY
+      · simp [h1, h2, h3]
+      · by_cases h4 : p.dstY < p.curY
+        · simp [h1, h2, h3, h4]
+        · simp [h1, h2, h3, h4]
+
+/-- Theorem (`stepMeshXy_decreases_manhattanDist`):
+For every `p : MeshXyPacket` not yet at its destination (`p.curX ≠ p.dstX ∨ p.curY ≠ p.dstY`),
+`stepMeshXy` strictly decreases the $L_1$ Manhattan distance `manhattanDist` by 1. -/
+theorem stepMeshXy_decreases_manhattanDist
+    (p : MeshXyPacket)
+    (hNotAtDst : p.curX ≠ p.dstX ∨ p.curY ≠ p.dstY) :
+    manhattanDist (stepMeshXy p) < manhattanDist p := by
+  dsimp only [stepMeshXy, manhattanDist]
+  by_cases h1 : p.curX < p.dstX
+  · have hle1 : p.curX + 1 ≤ p.dstX := h1
+    have hle0 : p.curX ≤ p.dstX := Nat.le_of_lt h1
+    simp only [h1, hle1, hle0, ↓reduceIte]
+    omega
+  · by_cases h2 : p.dstX < p.curX
+    · have hle0 : ¬ (p.curX ≤ p.dstX) := by omega
+      simp only [h1, h2, hle0, ↓reduceIte]
+      split <;> omega
+    · have hleX : p.curX ≤ p.dstX := by omega
+      by_cases h3 : p.curY < p.dstY
+      · have hle1 : p.curY + 1 ≤ p.dstY := h3
+        have hle0 : p.curY ≤ p.dstY := Nat.le_of_lt h3
+        simp only [h1, h2, h3, hleX, hle1, hle0, ↓reduceIte]
+        omega
+      · by_cases h4 : p.dstY < p.curY
+        · have hle0 : ¬ (p.curY ≤ p.dstY) := by omega
+          by_cases hle1 : p.curY - 1 ≤ p.dstY <;>
+            simp only [h1, h2, h3, h4, hleX, hle0, hle1, ↓reduceIte] <;> omega
+        · exfalso
+          omega
+
+/-- Theorem (`stepMeshXy_at_dest_fixed`):
+When a packet has reached its destination (`p.curX = p.dstX` and `p.curY = p.dstY`),
+`stepMeshXy p = p` is a fixed point. -/
+theorem stepMeshXy_at_dest_fixed
+    (p : MeshXyPacket)
+    (hx : p.curX = p.dstX)
+    (hy : p.curY = p.dstY) :
+    stepMeshXy p = p := by
+  dsimp only [stepMeshXy]
+  simp [hx, hy]
+
+/-! ## 7. 32-Bit ICAP Configuration Frame Bitstream Codec (`encodeTileIcapWords`, `decodeTileIcapWords`) -/
+
+/-- Standard 32-bit ICAP configuration frame synchronization word (`0xAA995566`). -/
+def icapSyncWord : BitVec 32 := 0xAA995566#32
+
+/-- Hardware ALU / reduction rule opcode encoded in an ICAP configuration bitstream frame. -/
+inductive RuleOpcode where
+  | addImm
+  | subImm
+  | mulImm
+  | bitAndImm
+  | bitOrImm
+  | bitXorImm
+  | shlImm
+  | lshrImm
+  | eqImm
+  | ultImm
+  deriving DecidableEq, Repr
+
+/-- Encode a `RuleOpcode` into its 4-bit hardware opcode index (`0..9`). -/
+def encodeRuleOpcodeBits : RuleOpcode → Nat
+  | .addImm    => 0
+  | .subImm    => 1
+  | .mulImm    => 2
+  | .bitAndImm => 3
+  | .bitOrImm  => 4
+  | .bitXorImm => 5
+  | .shlImm    => 6
+  | .lshrImm   => 7
+  | .eqImm     => 8
+  | .ultImm    => 9
+
+/-- Decode a hardware opcode index into `Option RuleOpcode`. -/
+def decodeRuleOpcodeBits : Nat → Option RuleOpcode
+  | 0 => some .addImm
+  | 1 => some .subImm
+  | 2 => some .mulImm
+  | 3 => some .bitAndImm
+  | 4 => some .bitOrImm
+  | 5 => some .bitXorImm
+  | 6 => some .shlImm
+  | 7 => some .lshrImm
+  | 8 => some .eqImm
+  | 9 => some .ultImm
+  | _ => none
+
+/-- Round-trip lemma (`decode_encode_opcode`): decoding the encoded bits of any `RuleOpcode` recovers `some op`. -/
+theorem decode_encode_opcode (op : RuleOpcode) :
+    decodeRuleOpcodeBits (encodeRuleOpcodeBits op) = some op := by
+  cases op <;> rfl
+
+/-- Map a `RuleOpcode` to the corresponding `Obend.Hardware.HDL.RtlAluOp`. -/
+def ruleOpcodeToAluOp : RuleOpcode → RtlAluOp
+  | .addImm    => .add
+  | .subImm    => .sub
+  | .mulImm    => .mul
+  | .bitAndImm => .bitAnd
+  | .bitOrImm  => .bitOr
+  | .bitXorImm => .bitXor
+  | .shlImm    => .shl
+  | .lshrImm   => .lshr
+  | .eqImm     => .eq
+  | .ultImm    => .ult
+
+/-- Map an `RtlAluOp` to its corresponding `RuleOpcode`. -/
+def aluOpToRuleOpcode : RtlAluOp → RuleOpcode
+  | .add    => .addImm
+  | .sub    => .subImm
+  | .mul    => .mulImm
+  | .bitAnd => .bitAndImm
+  | .bitOr  => .bitOrImm
+  | .bitXor => .bitXorImm
+  | .shl    => .shlImm
+  | .lshr   => .lshrImm
+  | .eq     => .eqImm
+  | .ult    => .ultImm
+
+/-- Round-trip lemma between `ruleOpcodeToAluOp` and `aluOpToRuleOpcode`. -/
+theorem aluOpToRuleOpcode_ruleOpcodeToAluOp (op : RuleOpcode) :
+    aluOpToRuleOpcode (ruleOpcodeToAluOp op) = op := by
+  cases op <;> rfl
+
+/-- Canonical member name associated with a `RuleOpcode` tile. -/
+def ruleOpcodeName : RuleOpcode → String
+  | .addImm    => "inc"
+  | .subImm    => "subImm"
+  | .mulImm    => "mul4"
+  | .bitAndImm => "bitAndImm"
+  | .bitOrImm  => "bitOrImm"
+  | .bitXorImm => "bitXorImm"
+  | .shlImm    => "shlImm"
+  | .lshrImm   => "lshrImm"
+  | .eqImm     => "eqImm"
+  | .ultImm    => "ultImm"
+
+/-- Encode `TileOpKind` into a 2-bit integer (`0..2`). -/
+def encodeTileOpKindBits : TileOpKind → Nat
+  | .methodSlot      => 0
+  | .cellSlot        => 1
+  | .loweredLeanLite => 2
+
+/-- Decode a 2-bit integer into `Option TileOpKind`. -/
+def decodeTileOpKindBits : Nat → Option TileOpKind
+  | 0 => some .methodSlot
+  | 1 => some .cellSlot
+  | 2 => some .loweredLeanLite
+  | _ => none
+
+/-- Round-trip lemma for `TileOpKind` through a 32-bit `BitVec` word. -/
+theorem decode_encode_opKind_bv (opKind : TileOpKind) :
+    decodeTileOpKindBits (BitVec.ofNat 32 (encodeTileOpKindBits opKind)).toNat = some opKind := by
+  cases opKind <;> rfl
+
+/-- Round-trip lemma for `RuleOpcode` through a 32-bit `BitVec` word. -/
+theorem decode_encode_opcode_bv (op : RuleOpcode) :
+    decodeRuleOpcodeBits (BitVec.ofNat 32 (encodeRuleOpcodeBits op)).toNat = some op := by
+  cases op <;> rfl
+
+/-- Construct a canonical ICAP-reconfigurable `AutomatonTile` from `(slotIdx, opKind, ruleOp, immVal)`. -/
+def mkIcapRuleTile
+    (slotIdx : Nat)
+    (opKind : TileOpKind)
+    (ruleOp : RuleOpcode)
+    (immVal : Nat) : AutomatonTile where
+  slotIdx    := slotIdx
+  memberName := ruleOpcodeName ruleOp
+  opKind     := opKind
+  datapath   := .alu (ruleOpcodeToAluOp ruleOp) (.inputPort 0) (.const (BitVec.ofNat 64 immVal))
+  readsSlots := []
+
+/-- Extract `(ruleOp, immVal)` from an `AutomatonTile` datapath when it is in canonical ALU-immediate form. -/
+def extractTileRuleAndImm (t : AutomatonTile) : RuleOpcode × Nat :=
+  match t.datapath with
+  | .alu aluOp (.inputPort 0) (.const immBv) =>
+    (aluOpToRuleOpcode aluOp, immBv.toNat)
+  | _ => (.addImm, 0)
+
+/-- Serialize an `AutomatonTile` into a 5-word 32-bit ICAP bitstream frame:
+`[icapSyncWord, word1_slotIdx, word2_opKind, word3_ruleOpcode, word4_immVal]`. -/
+def encodeTileIcapWords (t : AutomatonTile) : List (BitVec 32) :=
+  let (ruleOp, immVal) := extractTileRuleAndImm t
+  [ icapSyncWord
+  , BitVec.ofNat 32 t.slotIdx
+  , BitVec.ofNat 32 (encodeTileOpKindBits t.opKind)
+  , BitVec.ofNat 32 (encodeRuleOpcodeBits ruleOp)
+  , BitVec.ofNat 32 immVal ]
+
+/-- Deserialize a 5-word 32-bit ICAP bitstream frame into an `Option AutomatonTile`,
+verifying the leading `icapSyncWord` (`0xAA995566#32`). -/
+def decodeTileIcapWords (words : List (BitVec 32)) : Option AutomatonTile :=
+  match words with
+  | [w0, w1, w2, w3, w4] =>
+    if w0 == icapSyncWord then
+      match decodeTileOpKindBits w2.toNat, decodeRuleOpcodeBits w3.toNat with
+      | some opKind, some ruleOp =>
+        some (mkIcapRuleTile w1.toNat opKind ruleOp w4.toNat)
+      | _, _ => none
+    else
+      none
+  | _ => none
+
+/-- Helper lemma: `(BitVec.ofNat w n).toNat = n` whenever `n < 2 ^ w`. -/
+theorem bitvec_toNat_ofNat_lt (w n : Nat) (h : n < 2 ^ w) :
+    (BitVec.ofNat w n).toNat = n := by
+  rw [BitVec.toNat_ofNat]
+  exact Nat.mod_eq_of_lt h
+
+theorem extractTileRuleAndImm_mkIcapRuleTile
+    (slotIdx : Nat) (opKind : TileOpKind) (ruleOp : RuleOpcode) (immVal : Nat) :
+    extractTileRuleAndImm (mkIcapRuleTile slotIdx opKind ruleOp immVal) =
+      (ruleOp, (BitVec.ofNat 64 immVal).toNat) := by
+  cases ruleOp <;> rfl
+
+/-- Theorem (`decode_encode_icap_words_roundtrip`):
+For every canonical ICAP `AutomatonTile` `t = mkIcapRuleTile slotIdx opKind ruleOp immVal`
+with 32-bit bounded `slotIdx < 2^32` and `immVal < 2^32`, serializing `t` via `encodeTileIcapWords`
+into a 5-word 32-bit ICAP bitstream frame and deserializing via `decodeTileIcapWords` recovers `some t`. -/
+theorem decode_encode_icap_words_roundtrip
+    (slotIdx : Nat) (opKind : TileOpKind) (ruleOp : RuleOpcode) (immVal : Nat)
+    (hSlot : slotIdx < 2 ^ 32)
+    (hImm  : immVal < 2 ^ 32) :
+    let t := mkIcapRuleTile slotIdx opKind ruleOp immVal
+    decodeTileIcapWords (encodeTileIcapWords t) = some t := by
+  intro t
+  have hImm64 : immVal < 2 ^ 64 := by omega
+  have h1 : (BitVec.ofNat 64 immVal).toNat = immVal :=
+    bitvec_toNat_ofNat_lt 64 immVal hImm64
+  have h2 : (BitVec.ofNat 32 slotIdx).toNat = slotIdx :=
+    bitvec_toNat_ofNat_lt 32 slotIdx hSlot
+  have h3 : (BitVec.ofNat 32 immVal).toNat = immVal :=
+    bitvec_toNat_ofNat_lt 32 immVal hImm
+  have hSync : (icapSyncWord == icapSyncWord) = true := rfl
+  dsimp only [t, encodeTileIcapWords]
+  rw [extractTileRuleAndImm_mkIcapRuleTile]
+  dsimp only [mkIcapRuleTile, decodeTileIcapWords]
+  rw [h1, hSync, if_pos rfl]
+  rw [decode_encode_opKind_bv, decode_encode_opcode_bv, h2, h3]
+
+/-- Theorem (`golden_icap_bitstream_roundtrip`):
+Kernel-checked (`decide +kernel`) verification that `incAutomatonTile` and `mul4AutomatonTile`
+round-trip cleanly through 5-word 32-bit ICAP configuration frames headed by `icapSyncWord`,
+while a frame with a corrupted sync word (`0xDEADBEEF#32`) is rejected (`none`). -/
+theorem golden_icap_bitstream_roundtrip :
+    (encodeTileIcapWords incAutomatonTile).length = 5 ∧
+    (encodeTileIcapWords incAutomatonTile).head? = some icapSyncWord ∧
+    decodeTileIcapWords (encodeTileIcapWords incAutomatonTile) = some incAutomatonTile ∧
+    decodeTileIcapWords (encodeTileIcapWords mul4AutomatonTile) = some mul4AutomatonTile ∧
+    decodeTileIcapWords [0xDEADBEEF#32, 0#32, 0#32, 0#32, 1#32] = none := by
+  decide +kernel
+
 end Obend.Hardware.ReductionMachine
 end

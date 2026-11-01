@@ -226,4 +226,22 @@ This is the Flavors innovation (1979). It is a property of *composition*, not of
 obend night · 10-16 nanodregg charter and Lang core · 10-17 DELVETALK-LEARNINGS · 10-20 GPT-6
 docs; LANG-66..68; literature audit · 10-22 ACTIVITIES-DESIGN, REORIENTATION, LANG-75 promotion
 program · 10-26 DESIGN-CTX, LANG-83/84/92 · 10-27 Mini demo definition; OVERLOOKED · 10-29 o7vn
-experiments review.
+experiments review · 11-01 `obend` reaches 408+ Lean modules (52,368 constants, `0 sorryAx`),
+full RTL-to-GDSII + eFPGA DPR hardware suite, bidirectional Lean 4 lowering, and the Next Mathematica
+/ Dregg2 / DeOS / Simplex synthesis.
+
+## 10. What `obend` (2026-10-30 → 2026-11-01) Synthesized and Surpassed
+
+Where the earlier trees each held one piece of the elephant, `obend` unifies and proves them in a single `0 sorryAx` Lean 4 codebase:
+
+1. **Closing the Faré Audit & C1/C2/Sound Gaps**:
+   - First-class nominal `#kind` branding (`Obend/Core/Nominal.lean`) and `_kind.md` C4 Vault cells (`Obend/Vault/Store.lean`) answer Faré's `K-KIND-CELL` critique.
+   - `Term.split` (`Obend/Core/Proofs/Aggregate.lean`) and `step_conserves_linear` (`Obend/Core/Proofs/Linear.lean`) unite Taelin's `.one` resource linearity with dependent $\Sigma$-types and Faré's C4 modular layer composition (`Obend/Leaf/Flatten.lean`, `BendTT.lean`).
+   - Semantic `CellContract`s and `Narrows` forever-crowns (`Obend/Law/Contract.lean`) replace nanodregg's syntactic `keeps` shape check with true inductive invariant preservation and monotonic contract upgrades (`K-LAW-INHERIT`).
+2. **Absorbing Dregg2 (`breadstuffs/src/lib/dregg2`), DeOS (`deos-*`, `starbridge-v2`), and `minidregg` Consensus/Grains**:
+   - **Dregg2 (`drex.ml`, `epistemic_consensus.ml`, `forever_crown.ml`)**: Reborn as proof-carrying multi-slot `VaultTurn` wide-pullback hyperedges, linear `Book` & ZoE `Seat` offer safety, $O(|E|+|V|)$ primal-dual LP clearing verification (`drex-clearing@1`), and trust-graph `EpistemicConsensus` (see [`DEOS-CONTRACTS-CONSENSUS.md`](DEOS-CONTRACTS-CONSENSUS.md)).
+   - **DeOS & `minidregg` Sandstorm Grains**: Reborn as `SealedEscrow`, `PrepaidLease`, `GatedAffordance`, `FogOfWar` blinded Merkle multiproofs, human-auditable `Mandate`s, and Sandstorm `Grain` confinement with `Powerbox` capability attenuation.
+   - **`minidregg` `Simplex` BFT**: Mechanized in symbolic mode as Tier 2 of the 4-tier finality ladder (`LawDial.free` CRDT $\to$ disjoint `VaultTurn` fast-path $\to$ `Simplex` BFT with accountable slashing $\to$ `EpistemicConsensus` + `Fold.collapse`).
+3. **The Bidirectional Lean 4 Bridge, Real Analysis & Silicon Lean Elaborator**:
+   - `Obend/Lower/` lowers Lean 4 kernel terms (including `f.eq_def` recursion) into `Core4` (`lower_sound`, `lower_checks`, `lower_complete_ltyped_nat`) and reflects `Obend` obligations back into Lean 4 tactics (`obend_law`, `byLoweredLean`) and verified interval/automatic-differentiation analysis (`Obend/Analysis/`).
+   - `Obend/Hardware/` (26 modules, 32 `#tooth` checks) compiles `Leaf.Book` to synthesizable RTL, LUT netlists, STA, Place & Route, DRC/LVS, GDSII, multiphysics/photonics/PCB/RF signoff, and the self-reconfiguring `ReductionMachine` eFPGA where `Leaf/Specialize.specSlot` drives 3-phase Glitch-Free `ICAP` Dynamic Partial Reconfiguration—laying the direct path to the **Silicon Lean Kernel & Elaborator** (see [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md)).

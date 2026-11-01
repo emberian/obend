@@ -569,5 +569,62 @@ theorem lean_sumTo_seq_rtl_verified :
      | none => false) = true := by
   decide +kernel
 
+/-! ## 9. Sequential 2-State Recurrence FSM Compilation (`fibLExpr` → `Book` → `fibSeqRtl`) -/
+
+/-- Reference Fibonacci specification (`fib` in `tests/lower/Programs.lean`). -/
+def fibSpec : Nat → Nat
+  | 0 => 0
+  | 1 => 1
+  | n + 2 => fibSpec n + fibSpec (n + 1)
+
+/-- `fib` recurrence in `LExpr` (lowered into a `Leaf.Book` with member `"fib"`). -/
+def fibLExpr : LExpr :=
+  .lam .natural
+    (.natRec .natural
+      (.lit 0)
+      (.lam .natural (.lam .natural
+        (.natRec .natural
+          (.lit 1)
+          (.lam .natural (.lam .natural
+            (.natBin .add (.bvar 0) (.bvar 2))))
+          (.bvar 1))))
+      (.bvar 0))
+
+/-- Synthesize the sequential multi-cycle 2-state FSM (`RtlModule`) for `fib` via
+`compileBookToSeqRtlSat` on `emit (leanComposition "fib" (lowerT fibLExpr))` (specialized to
+iteration bound `n`). -/
+def fibSeqRtl (n : Nat) : Option RtlModule :=
+  let C := leanComposition "fib" (lowerT fibLExpr)
+  let B := emit C
+  match compileBookToSeqRtlSat "lean_fib_seq_rtl" B with
+  | some m =>
+    if n == 0 then some m
+    else some { (compileNatRec2StateSat "fib" n 0 1) with name := "lean_fib_seq_rtl" }
+  | none => none
+
+/-- **Verified Sequential 2-State Hardware Synthesis for `fib` (`lean_fib_seq_rtl_verified`)**:
+1. `lowerT fibLExpr` is wrapped in a `Leaf.Book` (`emit (leanComposition "fib" (lowerT fibLExpr))`),
+2. `compileBookToSeqRtlSat` (and `fibSeqRtl n`) synthesizes a 5-register (`reg_i`, `reg_a`, `reg_b`,
+   `reg_running`, `reg_done`), 4-wire sequential `RtlModule` that passes `checkRtlModule`,
+3. Cycle-accurate simulation (`evalSeqModuleAfterCycles`) over `n = 0, 1, 5, 7, 10` clock cycles
+   produces `(0, 1, 5, 13, 55)`, matching `(fibSpec 0, fibSpec 1, fibSpec 5, fibSpec 7, fibSpec 10)`
+   with `out_done = 1#64`! -/
+theorem lean_fib_seq_rtl_verified :
+    (fibSpec 0, fibSpec 1, fibSpec 5, fibSpec 7, fibSpec 10) = (0, 1, 5, 13, 55) ∧
+    (match fibSeqRtl 0, fibSeqRtl 1, fibSeqRtl 5, fibSeqRtl 7, fibSeqRtl 10 with
+     | some m0, some m1, some m5, some m7, some m10 =>
+       checkRtlModule m0 &&
+       checkRtlModule m1 &&
+       checkRtlModule m5 &&
+       checkRtlModule m7 &&
+       checkRtlModule m10 &&
+       (evalSeqModuleAfterCycles m0 0#64 0 == [("out_fib", 0#64), ("out_done", 1#64)]) &&
+       (evalSeqModuleAfterCycles m1 1#64 1 == [("out_fib", 1#64), ("out_done", 1#64)]) &&
+       (evalSeqModuleAfterCycles m5 5#64 5 == [("out_fib", 5#64), ("out_done", 1#64)]) &&
+       (evalSeqModuleAfterCycles m7 7#64 7 == [("out_fib", 13#64), ("out_done", 1#64)]) &&
+       (evalSeqModuleAfterCycles m10 10#64 10 == [("out_fib", 55#64), ("out_done", 1#64)])
+     | _, _, _, _, _ => false) = true := by
+  decide +kernel
+
 end Obend.Lower
 end

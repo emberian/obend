@@ -29,6 +29,7 @@ for agentic CAD/EDA coordination"** by bridging `Obend.Vault.Page`, `Obend.Vault
      every `.obend` smart-contract law holds by `Obend.Vault.judge_admits` AND the physical footprint,
      electrical noise margins, and datasheet block citations are verified!
 -/
+public import Obend.Core.Data
 public import Obend.Vault.Page
 public import Obend.Vault.Law
 public import Obend.Hardware.Datasheet
@@ -318,61 +319,17 @@ theorem agenticEdaProposal_admits_sound
 embeds four executable `.obend` smart-contract laws (`drc_zero`, `thermal_cap`, `rf_vswr_cap`,
 `bom_budget`) alongside electrical, 2D package, thermal, and BOM scalar fields. -/
 def goldenEdaPartMarkdown : String :=
-  "---\n" ++
-  "voh_min_mv: 2900\n" ++
-  "vih_min_mv: 2000\n" ++
-  "vol_max_mv: 200\n" ++
-  "vil_max_mv: 800\n" ++
-  "pkg_width_um: 3000\n" ++
-  "pkg_length_um: 3000\n" ++
-  "pin_count: 16\n" ++
-  "pin_pitch_um: 500\n" ++
-  "max_temp_mc: 72000\n" ++
-  "vswr_milli: 1350\n" ++
-  "drc_errors: 0\n" ++
-  "cost_cents: 145\n" ++
-  "law drc_zero: new.drc_errors == 0\n" ++
-  "law thermal_cap: new.max_temp_mc <= 85000\n" ++
-  "law rf_vswr_cap: new.vswr_milli <= 1500\n" ++
-  "law bom_budget: new.cost_cents <= 250\n" ++
-  "---\n" ++
-  "# U4: Low-Noise RF LDO & CMOS Level-Shifter (`[[TI_TPS7A47#^elec_spec]]`)\n"
+  "---\nvoh_min_mv: 2900\nvih_min_mv: 2000\nvol_max_mv: 200\nvil_max_mv: 800\npkg_width_um: 3000\npkg_length_um: 3000\npin_count: 16\npin_pitch_um: 500\nmax_temp_mc: 72000\nvswr_milli: 1350\ndrc_errors: 0\ncost_cents: 145\nlaw drc_zero: new.drc_errors == 0\nlaw thermal_cap: new.max_temp_mc <= 85000\nlaw rf_vswr_cap: new.vswr_milli <= 1500\nlaw bom_budget: new.cost_cents <= 250\n---\n# U4: Low-Noise RF LDO & CMOS Level-Shifter (`[[TI_TPS7A47#^elec_spec]]`)\n"
 
 /-- Agent `procurement_scout`'s proposed second-source swap that lowers cost to `120` cents,
 reduces peak temperature to `68000` mC, and preserves the 16-pin QFN-16 ($3\text{mm} \times 3\text{mm}$,
 $0.5\text{mm}$ pitch) courtyard and $3.3\text{V}$ CMOS noise margins. -/
 def goldenSecondSourceMarkdown : String :=
-  "---\n" ++
-  "voh_min_mv: 2950\n" ++
-  "vih_min_mv: 2000\n" ++
-  "vol_max_mv: 180\n" ++
-  "vil_max_mv: 800\n" ++
-  "pkg_width_um: 3000\n" ++
-  "pkg_length_um: 3000\n" ++
-  "pin_count: 16\n" ++
-  "pin_pitch_um: 500\n" ++
-  "max_temp_mc: 68000\n" ++
-  "vswr_milli: 1280\n" ++
-  "drc_errors: 0\n" ++
-  "cost_cents: 120\n" ++
-  "---\n"
+  "---\nvoh_min_mv: 2950\nvih_min_mv: 2000\nvol_max_mv: 180\nvil_max_mv: 800\npkg_width_um: 3000\npkg_length_um: 3000\npin_count: 16\npin_pitch_um: 500\nmax_temp_mc: 68000\nvswr_milli: 1280\ndrc_errors: 0\ncost_cents: 120\n---\n"
 
 /-- Over-budget / thermally excessive agent proposal (`cost_cents: 320 > 250`). -/
 def overbudgetSecondSourceMarkdown : String :=
-  "---\n" ++
-  "voh_min_mv: 2950\n" ++
-  "vih_min_mv: 2000\n" ++
-  "vol_max_mv: 180\n" ++
-  "vil_max_mv: 800\n" ++
-  "pkg_width_um: 3000\n" ++
-  "pkg_length_um: 3000\n" ++
-  "pin_count: 16\n" ++
-  "pin_pitch_um: 500\n" ++
-  "max_temp_mc: 68000\n" ++
-  "vswr_milli: 1280\n" ++
-  "drc_errors: 0\n" ++
-  "cost_cents: 320\n" ++
-  "---\n"
+  "---\nvoh_min_mv: 2950\nvih_min_mv: 2000\nvol_max_mv: 180\nvil_max_mv: 800\npkg_width_um: 3000\npkg_length_um: 3000\npin_count: 16\npin_pitch_um: 500\nmax_temp_mc: 68000\nvswr_milli: 1280\ndrc_errors: 0\ncost_cents: 320\n---\n"
 
 /-- Baseline U4 Low-Noise RF LDO & CMOS Level-Shifter part specification (`[[TI_TPS7A47#^elec_spec]]`). -/
 def goldenBaselinePart : EdaVaultPart :=
@@ -478,6 +435,310 @@ theorem goldenAgenticBomSwap_admitted_and_overbudget_refused :
       "procurement_scout"
       defaultEdaFacts = .refusedByPhysics "stale-datasheet-cite" := by
   decide +kernel
+
+/-! ## 5. 100% Kernel-Reducible `List Char` Frontmatter & `law:` Parser (`extractEdaVaultPartKernel`) -/
+
+/-- Structural character-list equality (avoids `String` slice/byte-array operations in the kernel). -/
+@[expose] def charsEq : List Char → List Char → Bool
+  | [], [] => true
+  | c1 :: r1, c2 :: r2 => (c1 == c2) && charsEq r1 r2
+  | _, _ => false
+
+/-- Kernel-reducible line splitter over `List Char` (structural recursion accumulating the current
+line in reverse in `curRev`, avoiding `String.splitOn` and `String.Slice`). -/
+@[expose] def splitLinesByNewline (curRev : List Char) : List Char → List (List Char)
+  | [] =>
+    match curRev with
+    | [] => []
+    | _ => [curRev.reverse]
+  | c :: rest =>
+    if c == '\n' then
+      curRev.reverse :: splitLinesByNewline [] rest
+    else
+      splitLinesByNewline (c :: curRev) rest
+
+/-- Inline horizontal whitespace predicate on `Char`. -/
+@[expose] def isInlineWs (c : Char) : Bool :=
+  c == ' ' || c == '\t' || c == '\r'
+
+/-- Trim leading and trailing horizontal whitespace from a `List Char` line. -/
+@[expose] def trimLineChars (cs : List Char) : List Char :=
+  ((cs.dropWhile isInlineWs).reverse.dropWhile isInlineWs).reverse
+
+/-- Check whether a `List Char` line is a YAML frontmatter delimiter `---`. -/
+@[expose] def isFrontmatterDelimChars (cs : List Char) : Bool :=
+  match trimLineChars cs with
+  | ['-', '-', '-'] => true
+  | _ => false
+
+/-- Collect all lines up to the closing `---` frontmatter delimiter. -/
+@[expose] def takeFrontmatterLines : List (List Char) → Option (List (List Char))
+  | [] => none
+  | line :: rest =>
+    if isFrontmatterDelimChars line then
+      some []
+    else
+      match takeFrontmatterLines rest with
+      | some tail => some (line :: tail)
+      | none => none
+
+/-- Extract the YAML frontmatter lines (`--- ... ---`) from a Markdown string as `List (List Char)`. -/
+@[expose] def extractFrontmatterCharLines (s : String) : Option (List (List Char)) :=
+  match splitLinesByNewline [] s.toList with
+  | first :: rest =>
+    if isFrontmatterDelimChars first then
+      takeFrontmatterLines rest
+    else
+      none
+  | [] => none
+
+/-- Split a frontmatter `key: value` line at its first `':'` character. -/
+@[expose] def splitKeyValAtColon (accRev : List Char) : List Char → Option (List Char × List Char)
+  | [] => none
+  | c :: rest =>
+    if c == ':' then
+      some (trimLineChars accRev.reverse, trimLineChars rest)
+    else
+      splitKeyValAtColon (c :: accRev) rest
+
+/-- Accumulate a base-10 natural number from a non-empty list of ASCII digits. -/
+@[expose] def parseDecimalCharsAux (acc : Nat) : List Char → Option Nat
+  | [] => some acc
+  | c :: rest =>
+    if '0' ≤ c && c ≤ '9' then
+      parseDecimalCharsAux (10 * acc + (c.toNat - '0'.toNat)) rest
+    else
+      none
+
+/-- Parse a non-empty `List Char` of ASCII digits into `Option Nat`. -/
+@[expose] def parseDecimalChars (cs : List Char) : Option Nat :=
+  match cs with
+  | [] => none
+  | _ => parseDecimalCharsAux 0 cs
+
+/-- Extract all `(keyChars, natVal)` scalar pairs from frontmatter lines. -/
+@[expose] def parseFrontmatterScalarsChars : List (List Char) → List (List Char × Nat)
+  | [] => []
+  | line :: rest =>
+    let tail := parseFrontmatterScalarsChars rest
+    match splitKeyValAtColon [] line with
+    | some (kChars, vChars) =>
+      match parseDecimalChars vChars with
+      | some n => (kChars, n) :: tail
+      | none => tail
+    | none => tail
+
+/-- Look up a `List Char` field key in `fields`, defaulting to `0`. -/
+@[expose] def lookupCharField : List (List Char × Nat) → List Char → Nat
+  | [], _ => 0
+  | (k, v) :: rest, key =>
+    if charsEq k key then v else lookupCharField rest key
+
+/-- Map a parsed `List Char` identifier to its canonical `String` name in the kernel. -/
+@[expose] def charsToCanonicalName (cs : List Char) : String :=
+  if charsEq cs ['d', 'r', 'c', '_', 'z', 'e', 'r', 'o'] then "drc_zero"
+  else if charsEq cs ['t', 'h', 'e', 'r', 'm', 'a', 'l', '_', 'c', 'a', 'p'] then "thermal_cap"
+  else if charsEq cs ['r', 'f', '_', 'v', 's', 'w', 'r', '_', 'c', 'a', 'p'] then "rf_vswr_cap"
+  else if charsEq cs ['b', 'o', 'm', '_', 'b', 'u', 'd', 'g', 'e', 't'] then "bom_budget"
+  else if charsEq cs ['d', 'r', 'c', '_', 'e', 'r', 'r', 'o', 'r', 's'] then "drc_errors"
+  else if charsEq cs ['m', 'a', 'x', '_', 't', 'e', 'm', 'p', '_', 'm', 'c'] then "max_temp_mc"
+  else if charsEq cs ['v', 's', 'w', 'r', '_', 'm', 'i', 'l', 'l', 'i'] then "vswr_milli"
+  else if charsEq cs ['c', 'o', 's', 't', '_', 'c', 'e', 'n', 't', 's'] then "cost_cents"
+  else String.ofList cs
+
+/-- Identifier character predicate for `.obend` law field names. -/
+@[expose] def isLawIdentChar (c : Char) : Bool :=
+  ('a' ≤ c && c ≤ 'z') || ('A' ≤ c && c ≤ 'Z') || ('0' ≤ c && c ≤ '9') || c == '_'
+
+/-- Kernel-reducible parser for `new.FIELD == INT` and `new.FIELD <= INT` `.obend` law expressions
+directly on `List Char`. -/
+@[expose] def parseLawExprFromChars (vChars : List Char) : Option LawExpr :=
+  match trimLineChars vChars with
+  | 'n' :: 'e' :: 'w' :: '.' :: afterNew =>
+    let fieldChars := afterNew.takeWhile isLawIdentChar
+    let rem := trimLineChars (afterNew.dropWhile isLawIdentChar)
+    if fieldChars.isEmpty then none
+    else
+      let fieldName := charsToCanonicalName fieldChars
+      match rem with
+      | '=' :: '=' :: rhs =>
+        match parseDecimalChars (trimLineChars rhs) with
+        | some n => some (.eqC (.field fieldName) (Int.ofNat n))
+        | none => none
+      | '<' :: '=' :: rhs =>
+        match parseDecimalChars (trimLineChars rhs) with
+        | some n => some (.leC (.field fieldName) (Int.ofNat n))
+        | none => none
+      | _ => none
+  | _ => none
+
+/-- Extract all `(lawName, LawExpr)` smart-contract lines from frontmatter `List (List Char)`. -/
+@[expose] def parseFrontmatterLawsChars : List (List Char) → List (String × LawExpr)
+  | [] => []
+  | line :: rest =>
+    let tail := parseFrontmatterLawsChars rest
+    match splitKeyValAtColon [] line with
+    | some ('l' :: 'a' :: 'w' :: ' ' :: nameChars, vChars) =>
+      let lawName := charsToCanonicalName (trimLineChars nameChars)
+      match parseLawExprFromChars vChars with
+      | some lawExpr => (lawName, lawExpr) :: tail
+      | none => tail
+    | _ => tail
+
+/-- Kernel-reducible extractor for all `law NAME: EXPR` lines in a Markdown Vault page. -/
+@[expose] def extractVaultLawsKernel (markdownSrc : String) : List (String × LawExpr) :=
+  match extractFrontmatterCharLines markdownSrc with
+  | some fmLines => parseFrontmatterLawsChars fmLines
+  | none => []
+
+/-- **100% Kernel-Reducible Markdown Vault Part Parser (`extractEdaVaultPartKernel`)**:
+parses `markdownSrc.toList` into `Option EdaVaultPart` using structural recursion on `List Char`
+without calling `String.splitOn` or `String.Slice`. -/
+@[expose] def extractEdaVaultPartKernel (markdownSrc : String) : Option EdaVaultPart :=
+  match extractFrontmatterCharLines markdownSrc with
+  | none => none
+  | some fmLines =>
+    let fs := parseFrontmatterScalarsChars fmLines
+    some
+      { pageName    := "U4_LDO"
+        vohMinMv    := lookupCharField fs ['v', 'o', 'h', '_', 'm', 'i', 'n', '_', 'm', 'v']
+        vihMinMv    := lookupCharField fs ['v', 'i', 'h', '_', 'm', 'i', 'n', '_', 'm', 'v']
+        volMaxMv    := lookupCharField fs ['v', 'o', 'l', '_', 'm', 'a', 'x', '_', 'm', 'v']
+        vilMaxMv    := lookupCharField fs ['v', 'i', 'l', '_', 'm', 'a', 'x', '_', 'm', 'v']
+        pkgWidthUm  := lookupCharField fs ['p', 'k', 'g', '_', 'w', 'i', 'd', 't', 'h', '_', 'u', 'm']
+        pkgLengthUm := lookupCharField fs ['p', 'k', 'g', '_', 'l', 'e', 'n', 'g', 't', 'h', '_', 'u', 'm']
+        pinCount    := lookupCharField fs ['p', 'i', 'n', '_', 'c', 'o', 'u', 'n', 't']
+        pinPitchUm  := lookupCharField fs ['p', 'i', 'n', '_', 'p', 'i', 't', 'c', 'h', '_', 'u', 'm']
+        maxTempMc   := lookupCharField fs ['m', 'a', 'x', '_', 't', 'e', 'm', 'p', '_', 'm', 'c']
+        vswrMilli   := lookupCharField fs ['v', 's', 'w', 'r', '_', 'm', 'i', 'l', 'l', 'i']
+        drcErrors   := lookupCharField fs ['d', 'r', 'c', '_', 'e', 'r', 'r', 'o', 'r', 's']
+        costCents   := lookupCharField fs ['c', 'o', 's', 't', '_', 'c', 'e', 'n', 't', 's'] }
+
+/-- End-to-end kernel-reducible BOM swap judge (`verifyAgenticBomSwap`):
+parses the baseline Markdown vault page, its embedded `.obend` `law:` smart contracts, and the
+candidate Markdown page directly in the kernel, then runs `judgeAgenticEdaProposal`. -/
+@[expose] def verifyAgenticBomSwap
+    (baselineMarkdown candidateMarkdown : String)
+    (minNoiseMarginMv : Int)
+    (citePin : DatasheetCitePin) : AgenticEdaVerdict :=
+  match extractEdaVaultPartKernel baselineMarkdown,
+        extractEdaVaultPartKernel candidateMarkdown with
+  | some oldPart, some newPart =>
+    let laws := extractVaultLawsKernel baselineMarkdown
+    judgeAgenticEdaProposal
+      laws
+      oldPart
+      newPart
+      lvcmos33ReceiverSpec
+      minNoiseMarginMv
+      goldenQfn16Courtyard
+      citePin
+      "procurement_scout"
+      defaultEdaFacts
+  | _, _ => .undecided "markdown-frontmatter-parse-error"
+
+/-- Theorem (`goldenEdaPartMarkdown_kernel_parsed`):
+`extractEdaVaultPartKernel` parses the raw Markdown string `goldenEdaPartMarkdown` inside the
+Lean 4 kernel (`decide +kernel`) to `some goldenBaselinePart`! -/
+theorem goldenEdaPartMarkdown_kernel_parsed :
+    extractEdaVaultPartKernel goldenEdaPartMarkdown = some goldenBaselinePart := by
+  decide +kernel
+
+/-- Theorem (`goldenMarkdown_to_bom_swap_kernel_verified`):
+End-to-end kernel verification (`decide +kernel`) starting from the raw Markdown strings
+`goldenEdaPartMarkdown`, `goldenSecondSourceMarkdown`, and `overbudgetSecondSourceMarkdown`:
+1. Parses the baseline and candidate parts via `extractEdaVaultPartKernel`,
+2. Parses the 4 `.obend` `law:` smart contracts from `goldenEdaPartMarkdown` via `extractVaultLawsKernel`,
+3. Compiles and executes the `Core4` smart contracts and physical CMOS/footprint/datasheet checks via
+   `verifyAgenticBomSwap`, admitting `goldenSecondSourceMarkdown` and refusing `overbudgetSecondSourceMarkdown`! -/
+theorem goldenMarkdown_to_bom_swap_kernel_verified :
+    extractEdaVaultPartKernel goldenEdaPartMarkdown = some goldenBaselinePart ∧
+    extractEdaVaultPartKernel goldenSecondSourceMarkdown = some goldenSecondSourcePart ∧
+    (extractVaultLawsKernel goldenEdaPartMarkdown).length = 4 ∧
+    verifyAgenticBomSwap
+      goldenEdaPartMarkdown
+      goldenSecondSourceMarkdown
+      400
+      goldenFreshDatasheetCite = .admitted ∧
+    verifyAgenticBomSwap
+      goldenEdaPartMarkdown
+      overbudgetSecondSourceMarkdown
+      400
+      goldenFreshDatasheetCite = .refusedBySmartContract "bom_budget" "bom_budget" := by
+  decide +kernel
+
+/-! ## 6. `.obnb` (`NEXT-MATHEMATICA.md` §5) `Obend.Core.Data.Data` Structured Cell Projections -/
+
+/-- `.obnb` (`NEXT-MATHEMATICA.md` §5) structured hardware cell projection kind. -/
+inductive HardwareProjectionKind where
+  | hardwareSchematic
+  | hardwareTiming
+  | hardwareLayout
+  deriving DecidableEq, Repr
+
+/-- Canonical `.obnb` variant tag label for a `HardwareProjectionKind`. -/
+@[expose] def HardwareProjectionKind.toLabel : HardwareProjectionKind → String
+  | .hardwareSchematic => "hardwareSchematic"
+  | .hardwareTiming    => "hardwareTiming"
+  | .hardwareLayout    => "hardwareLayout"
+
+/-- Project an `EdaVaultPart` into a canonical `Obend.Core.Data.Data` `.obnb` cell
+(`"hardwareSchematic"` variant wrapping the 13-field component record). -/
+@[expose] def projectEdaPartToCoreData (p : EdaVaultPart) : Obend.Core.Data.Data :=
+  .variant "hardwareSchematic" (.record
+    [ ("page_name", .label p.pageName)
+    , ("voh_min_mv", .natural p.vohMinMv)
+    , ("vih_min_mv", .natural p.vihMinMv)
+    , ("vol_max_mv", .natural p.volMaxMv)
+    , ("vil_max_mv", .natural p.vilMaxMv)
+    , ("pkg_width_um", .natural p.pkgWidthUm)
+    , ("pkg_length_um", .natural p.pkgLengthUm)
+    , ("pin_count", .natural p.pinCount)
+    , ("pin_pitch_um", .natural p.pinPitchUm)
+    , ("max_temp_mc", .natural p.maxTempMc)
+    , ("vswr_milli", .natural p.vswrMilli)
+    , ("drc_errors", .natural p.drcErrors)
+    , ("cost_cents", .natural p.costCents) ])
+
+/-- Decode an `EdaVaultPart` from its canonical `Obend.Core.Data.Data` `.obnb` cell representation. -/
+@[expose] def decodeEdaPartFromCoreData : Obend.Core.Data.Data → Option EdaVaultPart
+  | .variant _ (.record
+      [ (_, .label pageName)
+      , (_, .natural vohMinMv)
+      , (_, .natural vihMinMv)
+      , (_, .natural volMaxMv)
+      , (_, .natural vilMaxMv)
+      , (_, .natural pkgWidthUm)
+      , (_, .natural pkgLengthUm)
+      , (_, .natural pinCount)
+      , (_, .natural pinPitchUm)
+      , (_, .natural maxTempMc)
+      , (_, .natural vswrMilli)
+      , (_, .natural drcErrors)
+      , (_, .natural costCents) ]) =>
+    some
+      { pageName    := pageName
+        vohMinMv    := vohMinMv
+        vihMinMv    := vihMinMv
+        volMaxMv    := volMaxMv
+        vilMaxMv    := vilMaxMv
+        pkgWidthUm  := pkgWidthUm
+        pkgLengthUm := pkgLengthUm
+        pinCount    := pinCount
+        pinPitchUm  := pinPitchUm
+        maxTempMc   := maxTempMc
+        vswrMilli   := vswrMilli
+        drcErrors   := drcErrors
+        costCents   := costCents }
+  | _ => none
+
+/-- Theorem (`decode_project_edaPart_coreData_roundtrip`):
+Universally for all `p : EdaVaultPart`, projecting `p` to `Obend.Core.Data.Data` and decoding back
+recovers `some p` identically! -/
+theorem decode_project_edaPart_coreData_roundtrip (p : EdaVaultPart) :
+    decodeEdaPartFromCoreData (projectEdaPartToCoreData p) = some p := by
+  cases p
+  rfl
 
 end Obend.Hardware.AgenticEDA
 end

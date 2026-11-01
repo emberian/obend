@@ -459,5 +459,143 @@ theorem goldenSdrCarrierPcb_passes :
       goldenBoardClearance = true :=
   rfl
 
+/-! ## 5. Geometry-Derived Microstrip Characteristic Impedance (`computeMicrostripZ0MilliOhm`) -/
+
+/-- Rational Hammerstad-Jensen / IPC-2141 microstrip characteristic impedance $Z_0$ (in milliohms $\text{m}\Omega$)
+computed directly from physical trace geometry `(widthUm, heightUm, copperThickUm, erPermille)`
+rather than an external oracle field:
+$$W_{\text{eff}} = W + T, \qquad Z_0 \approx \frac{87000 \cdot 1000 \cdot (4 H + W_{\text{eff}})}{(\varepsilon_r + 1410) \cdot (W_{\text{eff}} + 2 H)}.$$ -/
+@[expose] def computeMicrostripZ0MilliOhm (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
+  let effWidthUm := widthUm + copperThickUm
+  let denom := (erPermille + 1410) * (effWidthUm + 2 * heightUm)
+  if denom == 0 then 0
+  else (87000 * 1000 * (4 * heightUm + effWidthUm)) / denom
+
+/-- Denominator $(\varepsilon_r + 1410) \cdot ((W + T) + 2 H)$ of the geometry-derived microstrip
+characteristic impedance formula. -/
+@[expose] def microstripZ0Denom (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
+  (erPermille + 1410) * ((widthUm + copperThickUm) + 2 * heightUm)
+
+/-- Theorem (`microstrip_z0_geom_50ohm_in_band`):
+1. A controlled-impedance PTFE microstrip (`widthUm = 80`, `heightUm = 500`, `copperThickUm = 20`,
+   `erPermille = 2000`) has geometry-derived impedance $Z_0 = 48707\,\text{m}\Omega \in [47500, 52500]$
+   ($50\,\Omega \pm 5\%$),
+2. Widening the copper trace from $80\,\mu\text{m}$ to $380\,\mu\text{m}$ and $980\,\mu\text{m}$
+   strictly decreases $Z_0$ from $48.707\,\Omega$ to $43.736\,\Omega$ to $38.269\,\Omega$. -/
+theorem microstrip_z0_geom_50ohm_in_band :
+    computeMicrostripZ0MilliOhm 80 500 20 2000 = 48707 ∧
+    47500 ≤ computeMicrostripZ0MilliOhm 80 500 20 2000 ∧
+    computeMicrostripZ0MilliOhm 80 500 20 2000 ≤ 52500 ∧
+    computeMicrostripZ0MilliOhm 380 500 20 2000 < computeMicrostripZ0MilliOhm 80 500 20 2000 ∧
+    computeMicrostripZ0MilliOhm 980 500 20 2000 < computeMicrostripZ0MilliOhm 380 500 20 2000 := by
+  decide +kernel
+
+/-- Theorem (`microstrip_wider_trace_decreases_z0`):
+Universally for any positive trace width `0 < w1` and wider trace `w1 ≤ w2`, increasing the trace
+width monotonically increases the Hammerstad-Jensen denominator `microstripZ0Denom` and monotonically
+decreases (or preserves) the divided characteristic impedance `num / microstripZ0Denom`:
+$$W_1 \le W_2 \implies Z_0(W_2) \le Z_0(W_1).$$ -/
+theorem microstrip_wider_trace_decreases_z0
+    (num w1 w2 heightUm copperThickUm erPermille : Nat)
+    (hPos : 0 < w1)
+    (hWider : w1 ≤ w2) :
+    microstripZ0Denom w1 heightUm copperThickUm erPermille ≤
+      microstripZ0Denom w2 heightUm copperThickUm erPermille ∧
+    num / microstripZ0Denom w2 heightUm copperThickUm erPermille ≤
+      num / microstripZ0Denom w1 heightUm copperThickUm erPermille := by
+  dsimp only [microstripZ0Denom]
+  have h1 : 0 < erPermille + 1410 := by omega
+  have h2 : 0 < (w1 + copperThickUm) + 2 * heightUm := by omega
+  have hDenomPos : 0 < (erPermille + 1410) * ((w1 + copperThickUm) + 2 * heightUm) :=
+    Nat.mul_pos h1 h2
+  have hWidthLe : (w1 + copperThickUm) + 2 * heightUm ≤ (w2 + copperThickUm) + 2 * heightUm := by
+    omega
+  have hDenomLe :
+      (erPermille + 1410) * ((w1 + copperThickUm) + 2 * heightUm) ≤
+      (erPermille + 1410) * ((w2 + copperThickUm) + 2 * heightUm) :=
+    Nat.mul_le_mul_left (erPermille + 1410) hWidthLe
+  exact ⟨hDenomLe, Nat.div_le_div_left hDenomLe hDenomPos⟩
+
+/-! ## 6. 2D Axis-Aligned Bounding Box (`PcbBBox`) Geometric Clearance DRC -/
+
+/-- 2D axis-aligned copper obstacle bounding box on a PCB layer (coordinates in micrometers $\mu\text{m}$):
+* `id`: unique obstacle identifier,
+* `netId`: electrical net identifier (obstacles on the same net may legally touch or overlap),
+* `xMinUm`, `yMinUm`, `xMaxUm`, `yMaxUm`: bounding-box coordinates $[x_{\min}, x_{\max}] \times [y_{\min}, y_{\max}]$. -/
+structure PcbBBox where
+  id     : Nat
+  netId  : Nat
+  xMinUm : Int
+  yMinUm : Int
+  xMaxUm : Int
+  yMaxUm : Int
+  deriving DecidableEq, Repr
+
+/-- 1D interval separation gap between $[a_{\min}, a_{\max}]$ and $[b_{\min}, b_{\max}]$ in micrometers ($\mu\text{m}$):
+returns `0` when the intervals overlap or touch, and the positive edge-to-edge gap otherwise. -/
+def intervalGapUm (aMin aMax bMin bMax : Int) : Int :=
+  max (bMin - aMax) (max (aMin - bMax) 0)
+
+/-- 2D Chebyshev ($L_\infty$) bounding-box clearance gap between two `PcbBBox` copper features:
+$$\text{gap}(A, B) = \max\bigl(\text{intervalGapUm}(A_x, B_x),\; \text{intervalGapUm}(A_y, B_y)\bigr).$$ -/
+def bboxClearanceUm (a b : PcbBBox) : Int :=
+  max (intervalGapUm a.xMinUm a.xMaxUm b.xMinUm b.xMaxUm)
+      (intervalGapUm a.yMinUm a.yMaxUm b.yMinUm b.yMaxUm)
+
+/-- Theorem (`bboxClearanceUm_nonneg`):
+Universally for all bounding boxes `a b : PcbBBox`, the 2D geometric clearance gap is non-negative:
+`0 ≤ bboxClearanceUm a b`. -/
+theorem bboxClearanceUm_nonneg (a b : PcbBBox) :
+    0 ≤ bboxClearanceUm a b := by
+  dsimp only [bboxClearanceUm, intervalGapUm]
+  omega
+
+theorem intervalGapUm_symm (aMin aMax bMin bMax : Int) :
+    intervalGapUm aMin aMax bMin bMax = intervalGapUm bMin bMax aMin aMax := by
+  dsimp only [intervalGapUm]
+  omega
+
+/-- Theorem (`bboxClearanceUm_symm`):
+Universally for all bounding boxes `a b : PcbBBox`, the 2D geometric clearance gap is symmetric:
+`bboxClearanceUm a b = bboxClearanceUm b a`. -/
+theorem bboxClearanceUm_symm (a b : PcbBBox) :
+    bboxClearanceUm a b = bboxClearanceUm b a := by
+  dsimp only [bboxClearanceUm]
+  rw [intervalGapUm_symm a.xMinUm a.xMaxUm b.xMinUm b.xMaxUm]
+  rw [intervalGapUm_symm a.yMinUm a.yMaxUm b.yMinUm b.yMaxUm]
+
+/-- Pairwise 2D bounding-box DRC check: distinct obstacles on different electrical nets (`a.netId != b.netId`)
+must be separated by at least `minClearanceUm`. -/
+@[expose] def checkBBoxPairDrc (minClearanceUm : Int) (a b : PcbBBox) : Bool :=
+  if a.id == b.id || a.netId == b.netId then true
+  else decide (minClearanceUm ≤ bboxClearanceUm a b)
+
+/-- Complete board-level 2D bounding-box DRC checker over a list of copper obstacles `boxes`. -/
+@[expose] def checkBoardBBoxDrc (boxes : List PcbBBox) (minClearanceUm : Int) : Bool :=
+  boxes.all fun a => boxes.all fun b => checkBBoxPairDrc minClearanceUm a b
+
+/-- Golden 4-obstacle PCB layout with two nets (`netId = 1` RF trace + pad, `netId = 2` GND shield + via)
+separated by $\ge 150\,\mu\text{m}$ clearance. -/
+def goldenPcbBBoxLayout : List PcbBBox :=
+  [ { id := 0, netId := 1, xMinUm := 0,   yMinUm := 0,   xMaxUm := 500, yMaxUm := 200 }
+  , { id := 1, netId := 1, xMinUm := 450, yMinUm := 0,   xMaxUm := 800, yMaxUm := 200 } -- same net overlap legal
+  , { id := 2, netId := 2, xMinUm := 0,   yMinUm := 380, xMaxUm := 800, yMaxUm := 600 } -- 180 um Y gap to net 1
+  , { id := 3, netId := 2, xMinUm := 960, yMinUm := 0,   xMaxUm := 1200, yMaxUm := 600 } ] -- 160 um X gap to net 1
+
+/-- Violating PCB layout where obstacle `id = 4` (`netId = 3`) encroaches within $40\,\mu\text{m} < 150\,\mu\text{m}$
+of net 1 (`xMinUm = 840` vs `xMaxUm = 800`). -/
+def violatingPcbBBoxLayout : List PcbBBox :=
+  goldenPcbBBoxLayout ++
+    [ { id := 4, netId := 3, xMinUm := 840, yMinUm := 0, xMaxUm := 1000, yMaxUm := 200 } ]
+
+/-- Theorem (`board_bbox_drc_multi_obstacle_verified`):
+`checkBoardBBoxDrc` accepts `goldenPcbBBoxLayout` at $150\,\mu\text{m}$ fab clearance (allowing
+same-net pad-to-trace overlap while enforcing cross-net gaps $\ge 160\,\mu\text{m}$) and refuses
+`violatingPcbBBoxLayout` ($40\,\mu\text{m} < 150\,\mu\text{m}$ encroachment)! -/
+theorem board_bbox_drc_multi_obstacle_verified :
+    checkBoardBBoxDrc goldenPcbBBoxLayout 150 = true ∧
+    checkBoardBBoxDrc violatingPcbBBoxLayout 150 = false := by
+  decide +kernel
+
 end Obend.Hardware.PCB
 end

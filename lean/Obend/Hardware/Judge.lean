@@ -48,6 +48,7 @@ public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.DSP
 public import Obend.Hardware.AgenticEDA
+public import Obend.Hardware.Codec
 @[expose] public section
 
 namespace Obend.Hardware.Judge
@@ -59,11 +60,12 @@ open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hard
 open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
 open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
+open Obend.Hardware.Codec
 set_option autoImplicit false
 
 /-! ## 1. Refusal Clauses for Hardware, FabuBlox, `wafer.space`, Datasheet, RF, Photonics, PCB & Agentic EDA Judges -/
 
-/-- Refusal vocabulary across the 10 hardware, silicon, photonics, PCB & agentic EDA certificate judges. -/
+/-- Refusal vocabulary across the 11 hardware, silicon, photonics, PCB, agentic EDA & binary CBOR certificate judges. -/
 inductive HwClause where
   | rtlInvalidDagOrCdc (modName : String)
   | retimeInvalidLagOrTiming (graphName : String)
@@ -75,6 +77,7 @@ inductive HwClause where
   | photonicsPicSignoffViolation (ringName : String)
   | pcbBoardSignoffViolation (netName : String)
   | agenticEdaSwapViolation (partName : String)
+  | binaryCborCertViolation (domainId : Nat)
   deriving DecidableEq, Repr
 
 /-! ## 2. Format 1: `hw-rtl-synth@1` (`RtlModule` DAG + CDC Judge) -/
@@ -851,7 +854,114 @@ theorem agenticEdaFormat_sound {r : Nat} {obj cert : String}
       checkAgenticEdaSwapBool o c = true :=
   agenticEdaFormat.checkBytes_sound h
 
-/-- Complete list of 10 registered hardware, FabuBlox, `wafer.space`, datasheet-fit, RF, photonics, PCB, and agentic EDA formats. -/
+/-! ## 12. Format 11: `hw-binary-cbor@1` (RFC 8949 Binary CBOR Hardware Certificate Judge via `BinaryCodec`) -/
+
+/-- Judge check function for `hw-binary-cbor@1`: checks domain match and runs `verifyBinaryHwCert`
+    on the decoded binary CBOR parameters `(p0 .. p5)`. -/
+def checkBinaryCborJudge (_grade : Nat) (expectedDom : HwCertDomain) (cert : BinaryHwCert) : Verdict HwClause :=
+  if (cert.domain == expectedDom) && verifyBinaryHwCert cert then
+    .ok
+  else
+    .refused (.binaryCborCertViolation cert.domain.toCode) []
+
+instance binaryCborJudge : Obend.Judge HwCertDomain BinaryHwCert where
+  Clause := HwClause
+  Meaning expectedDom cert := ((cert.domain == expectedDom) && verifyBinaryHwCert cert) = true
+  check := checkBinaryCborJudge
+  sound := by
+    intro _ o c h
+    unfold checkBinaryCborJudge at h
+    by_cases hOk : ((c.domain == o) && verifyBinaryHwCert c) = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkBinaryCborJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+/-- Planted bad binary CBOR certificate: PnR with 100ps clock period (fails STA slack). -/
+def badBinaryPnrCert : BinaryHwCert :=
+  { goldenBinaryPnrCert with p5 := 100 }
+
+theorem badBinaryCborCert_refused :
+    checkBinaryCborJudge 0 .pnr badBinaryPnrCert =
+      .refused (.binaryCborCertViolation 1) [] := by
+  decide +kernel
+
+/-- Decode hex-encoded byte string (`"d90bed87..."`) into `List UInt8` for text-bridged Format tests,
+    while `verifyBinaryCborBytes` operates directly on raw `ByteArray` / `List UInt8`. -/
+def hexCharVal (c : Char) : Option Nat :=
+  if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
+  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
+  else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
+  else none
+
+def decodeHexChars : List Char → Option (List UInt8)
+  | [] => some []
+  | hi :: lo :: rest =>
+    match hexCharVal hi, hexCharVal lo, decodeHexChars rest with
+    | some h, some l, some tail => some (UInt8.ofNat (h * 16 + l) :: tail)
+    | _, _, _ => none
+  | [_] => none
+
+def encodeHexBytes (bytes : List UInt8) : String :=
+  let hexDigits : Array Char := #['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']
+  String.ofList (bytes.flatMap fun b =>
+    let n := b.toNat
+    [hexDigits.getD (n / 16) '0', hexDigits.getD (n % 16) '0'])
+
+def decodeBinaryCborObj (s : String) : Except String HwCertDomain :=
+  match s.trimAscii.toString.toNat? with
+  | some n =>
+    match HwCertDomain.fromCode n with
+    | some d => .ok d
+    | none => .error s!"unknown binary CBOR domain id: {n}"
+  | none => .ok .pnr
+
+def decodeBinaryCborCert (s : String) : Except String BinaryHwCert := do
+  let trimmed := s.trimAscii.toString
+  match decodeHexChars trimmed.toList with
+  | some rawBytes =>
+    match decodeBinaryHwCert rawBytes with
+    | some cert => .ok cert
+    | none => .error "invalid RFC 8949 CBOR BinaryHwCert frame"
+  | none => .error "invalid hex-encoded CBOR byte stream"
+
+/-- Direct raw-byte binary CBOR judge entry point (no JSON, no hex string). -/
+def verifyRawBinaryCborCert (expectedDom : HwCertDomain) (raw : ByteArray) : Verdict HwClause :=
+  match decodeFromByteArray (α := BinaryHwCert) raw with
+  | some cert => checkBinaryCborJudge 0 expectedDom cert
+  | none => .refused (.binaryCborCertViolation expectedDom.toCode) []
+
+/-- Registered `Obend.Judge.Format` for `hw-binary-cbor@1`. -/
+def binaryCborFormat : Format where
+  name        := "hw-binary-cbor"
+  version     := "1"
+  Obj         := HwCertDomain
+  Cert        := BinaryHwCert
+  judge       := binaryCborJudge
+  decodeObj   := decodeBinaryCborObj
+  decodeCert  := decodeBinaryCborCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (.pnr, badBinaryPnrCert)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badBinaryCborCert_refused⟩
+
+theorem binaryCborFormat_sound {r : Nat} {obj cert : String}
+    (h : binaryCborFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeBinaryCborObj obj = .ok o ∧ decodeBinaryCborCert cert = .ok c ∧
+      ((c.domain == o) && verifyBinaryHwCert c) = true :=
+  binaryCborFormat.checkBytes_sound h
+
+/-- Complete list of 11 registered hardware, FabuBlox, `wafer.space`, datasheet-fit, RF, photonics, PCB, agentic EDA, and binary CBOR formats. -/
 def hardwareFormats : List Format :=
   [ hwSynthFormat
   , hwRetimeFormat
@@ -862,7 +972,8 @@ def hardwareFormats : List Format :=
   , rfTransceiverFormat
   , photonicsPicFormat
   , pcbBoardFormat
-  , agenticEdaFormat ]
+  , agenticEdaFormat
+  , binaryCborFormat ]
 
 /-- Look up a hardware certificate format by `name@version` string (e.g. `"hw-pnr-bitstream@1"`). -/
 def findHardwareFormat? (tag : String) : Option Format :=

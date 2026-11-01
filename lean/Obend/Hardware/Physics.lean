@@ -440,5 +440,165 @@ theorem goldenNeofabBaseline_passes :
     checkNeofabMetrology goldenHackerFabLitho 500 goldenAl2O3AldSpec 200 2500 250 goldenNeofabMetrology = true := by
   rfl
 
+/-! ## 4. N-Node Graph-Laplacian Thermal Network & Universal Quadratic Passivity -/
+
+/-- A diffusive thermal edge $e = (u, v)$ in an arbitrary $N$-node 3D IC / package thermal graph:
+* `nodeU`, `nodeV`: endpoint thermal node indices,
+* `conductanceMwPerK`: diffusive thermal conductance $g_{uv}$ (in $\text{mW/K}$ or $\mu\text{W/K}$). -/
+structure ThermalEdge where
+  nodeU             : Nat
+  nodeV             : Nat
+  conductanceMwPerK : Int
+  deriving DecidableEq, Repr
+
+/-- Quadratic power dissipation across a single diffusive thermal edge $e = (u, v)$:
+$$E_e(T) = g_{uv} \cdot (T_u - T_v)^2.$$ -/
+@[expose] def evalEdgeQuadratic (tempsMk : List Int) (e : ThermalEdge) : Int :=
+  let dT := tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0
+  e.conductanceMwPerK * (dT * dT)
+
+/-- Total Graph-Laplacian quadratic form $T^\top L T = \sum_{e=(u,v) \in E} g_{uv} (T_u - T_v)^2$
+evaluated by structural recursion over an arbitrary edge list `edges : List ThermalEdge`. -/
+@[expose] def evalLaplacianQuadratic (tempsMk : List Int) : List ThermalEdge → Int
+  | [] => 0
+  | e :: rest => evalEdgeQuadratic tempsMk e + evalLaplacianQuadratic tempsMk rest
+
+/-- Propositional passivity predicate: every edge in `edges` has non-negative thermal conductance. -/
+def AllEdgesPassive (edges : List ThermalEdge) : Prop :=
+  ∀ e ∈ edges, 0 ≤ e.conductanceMwPerK
+
+/-- Executable boolean checker verifying that every edge in `edges` has non-negative thermal conductance. -/
+def checkAllEdgesPassive (edges : List ThermalEdge) : Bool :=
+  edges.all (fun e => decide (0 ≤ e.conductanceMwPerK))
+
+/-- Theorem (`checkAllEdgesPassive_sound`):
+If `checkAllEdgesPassive edges = true`, then `AllEdgesPassive edges` holds. -/
+theorem checkAllEdgesPassive_sound
+    (edges : List ThermalEdge)
+    (hOk : checkAllEdgesPassive edges = true) :
+    ∀ e ∈ edges, 0 ≤ e.conductanceMwPerK := by
+  intro e hMem
+  simp only [checkAllEdgesPassive, List.all_eq_true, decide_eq_true_eq] at hOk
+  exact hOk e hMem
+
+/-- Helper lemma: a single thermal edge with non-negative conductance `0 ≤ e.conductanceMwPerK`
+always dissipates non-negative quadratic power `0 ≤ evalEdgeQuadratic tempsMk e`. -/
+theorem edge_quadratic_passive
+    (tempsMk : List Int) (e : ThermalEdge)
+    (hGe : 0 ≤ e.conductanceMwPerK) :
+    0 ≤ evalEdgeQuadratic tempsMk e := by
+  dsimp only [evalEdgeQuadratic]
+  have hSq : 0 ≤ (tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0) *
+      (tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0) :=
+    int_sq_nonneg (tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0)
+  exact int_mul_nonneg e.conductanceMwPerK
+    ((tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0) *
+      (tempsMk.getD e.nodeU 0 - tempsMk.getD e.nodeV 0))
+    hGe hSq
+
+/-- Theorem (`laplacian_quadratic_passive_universal`):
+For ALL nodal temperature vectors `tempsMk : List Int` and ALL $N$-node thermal graphs
+`edges : List ThermalEdge` with passive edge conductances (`∀ e ∈ edges, 0 ≤ e.conductanceMwPerK`),
+the Graph-Laplacian quadratic form $T^\top L T$ is universally positive semidefinite:
+$$0 \le \text{evalLaplacianQuadratic}(\text{tempsMk}, \text{edges}).$$ -/
+theorem laplacian_quadratic_passive_universal
+    (tempsMk : List Int) (edges : List ThermalEdge)
+    (hPassive : ∀ e ∈ edges, 0 ≤ e.conductanceMwPerK) :
+    0 ≤ evalLaplacianQuadratic tempsMk edges := by
+  induction edges with
+  | nil =>
+    dsimp only [evalLaplacianQuadratic]
+    decide
+  | cons e rest ih =>
+    dsimp only [evalLaplacianQuadratic]
+    have hHead : 0 ≤ e.conductanceMwPerK := hPassive e List.mem_cons_self
+    have hRestPassive : ∀ e' ∈ rest, 0 ≤ e'.conductanceMwPerK :=
+      fun e' hMem => hPassive e' (List.mem_cons_of_mem _ hMem)
+    have hEdge : 0 ≤ evalEdgeQuadratic tempsMk e := edge_quadratic_passive tempsMk e hHead
+    have hTail : 0 ≤ evalLaplacianQuadratic tempsMk rest := ih hRestPassive
+    omega
+
+/-! ## 5. Multi-Column ($N \times 2$) PRIMA Krylov Congruence Passivity -/
+
+/-- Reconstruct the full $N$-node temperature state $T = V \alpha = \alpha_0 v^{(0)} + \alpha_1 v^{(1)}$
+from an $N \times 2$ Krylov / POD projection basis `(col0, col1)` and 2D reduced state `(alpha0, alpha1)`. -/
+@[expose] def reconstructPrima2ColState
+    (col0 col1 : List Int) (alpha0 alpha1 : Int) : List Int :=
+  List.zipWith (fun v0 v1 => alpha0 * v0 + alpha1 * v1) col0 col1
+
+/-- Evaluate the reduced $2 \times 2$ PRIMA macromodel quadratic form
+$\alpha^\top \hat{G} \alpha = (V \alpha)^\top L (V \alpha)$ on an $N$-node thermal network `edges`. -/
+@[expose] def evalPrima2ColReducedQuadratic
+    (col0 col1 : List Int) (edges : List ThermalEdge) (alpha0 alpha1 : Int) : Int :=
+  evalLaplacianQuadratic (reconstructPrima2ColState col0 col1 alpha0 alpha1) edges
+
+/-- Theorem (`prima_2col_congruence_preserves_passivity`):
+Multi-column ($N \times 2$) PRIMA congruence projection $\hat{G} = V^\top L V$ universally preserves
+passivity: for ANY $N$-node passive thermal graph `edges`, ANY Krylov basis columns `col0 col1 : List Int`,
+and ANY reduced coordinate vector `(alpha0, alpha1) : Int × Int`, the reduced quadratic dissipation is
+strictly non-negative:
+$$0 \le \alpha^\top (V^\top L V) \alpha = \text{evalPrima2ColReducedQuadratic}(\text{col0}, \text{col1}, \text{edges}, \alpha_0, \alpha_1).$$ -/
+theorem prima_2col_congruence_preserves_passivity
+    (col0 col1 : List Int) (edges : List ThermalEdge) (alpha0 alpha1 : Int)
+    (hPassive : ∀ e ∈ edges, 0 ≤ e.conductanceMwPerK) :
+    0 ≤ evalPrima2ColReducedQuadratic col0 col1 edges alpha0 alpha1 := by
+  dsimp only [evalPrima2ColReducedQuadratic]
+  exact laplacian_quadratic_passive_universal
+    (reconstructPrima2ColState col0 col1 alpha0 alpha1) edges hPassive
+
+/-! ## 6. Scharfetter-Gummel Discrete Drift-Diffusion Edge Current -/
+
+/-- Discrete Scharfetter-Gummel interface current density across a semiconductor mesh edge:
+$$J_{i+1/2} = \frac{\mu \cdot \left(n_{i+1} B(\Delta\psi / V_T) - n_i B(-\Delta\psi / V_T)\right)}{1000},$$
+where `bernoulliPosPermille` represents $B(+\Delta\psi / V_T)$ and `bernoulliNegPermille` represents
+$B(-\Delta\psi / V_T)$ with $B(x) = \frac{x}{e^x - 1}$. -/
+@[expose] def evalScharfetterGummelCurrent
+    (mobilityPermille nLeft nRight bernoulliPosPermille bernoulliNegPermille : Int) : Int :=
+  (mobilityPermille * (nRight * bernoulliPosPermille - nLeft * bernoulliNegPermille)) / 1000
+
+/-- Theorem (`scharfetter_gummel_equilibrium_zero_flux`):
+In thermal equilibrium where the Boltzmann carrier ratio matches the Bernoulli weight ratio
+(`nRight * bernoulliPosPermille = nLeft * bernoulliNegPermille`, i.e., $n_{i+1} / n_i = B(-x)/B(x) = e^x$),
+the Scharfetter-Gummel discrete drift and diffusion currents cancel identically to zero
+(`evalScharfetterGummelCurrent ... = 0`), preventing spurious numerical dark current! -/
+theorem scharfetter_gummel_equilibrium_zero_flux
+    (mobilityPermille nLeft nRight bernoulliPosPermille bernoulliNegPermille : Int)
+    (hEquil : nRight * bernoulliPosPermille = nLeft * bernoulliNegPermille) :
+    evalScharfetterGummelCurrent mobilityPermille nLeft nRight
+      bernoulliPosPermille bernoulliNegPermille = 0 := by
+  dsimp only [evalScharfetterGummelCurrent]
+  have hDiff : nRight * bernoulliPosPermille - nLeft * bernoulliNegPermille = 0 := by omega
+  rw [hDiff, Int.mul_zero]
+  rfl
+
+/-- Theorem (`scharfetter_gummel_monotone_right_carrier`):
+For non-negative mobility `0 ≤ mobilityPermille` and non-negative Bernoulli weight
+`0 ≤ bernoulliPosPermille`, increasing the right-cell carrier density `nRight1 ≤ nRight2`
+monotonically increases the Scharfetter-Gummel interface current `evalScharfetterGummelCurrent`. -/
+theorem scharfetter_gummel_monotone_right_carrier
+    (mobilityPermille nLeft nRight1 nRight2 bernoulliPosPermille bernoulliNegPermille : Int)
+    (hMob : 0 ≤ mobilityPermille)
+    (hBernPos : 0 ≤ bernoulliPosPermille)
+    (hCarrier : nRight1 ≤ nRight2) :
+    evalScharfetterGummelCurrent mobilityPermille nLeft nRight1
+      bernoulliPosPermille bernoulliNegPermille ≤
+    evalScharfetterGummelCurrent mobilityPermille nLeft nRight2
+      bernoulliPosPermille bernoulliNegPermille := by
+  dsimp only [evalScharfetterGummelCurrent]
+  have hProd : nRight1 * bernoulliPosPermille ≤ nRight2 * bernoulliPosPermille :=
+    int_mul_le_mul_of_nonneg_right nRight1 nRight2 bernoulliPosPermille hCarrier hBernPos
+  have hSub :
+      nRight1 * bernoulliPosPermille - nLeft * bernoulliNegPermille ≤
+      nRight2 * bernoulliPosPermille - nLeft * bernoulliNegPermille := by
+    omega
+  have hNum :
+      mobilityPermille * (nRight1 * bernoulliPosPermille - nLeft * bernoulliNegPermille) ≤
+      mobilityPermille * (nRight2 * bernoulliPosPermille - nLeft * bernoulliNegPermille) :=
+    int_mul_le_mul_of_nonneg_left
+      (nRight1 * bernoulliPosPermille - nLeft * bernoulliNegPermille)
+      (nRight2 * bernoulliPosPermille - nLeft * bernoulliNegPermille)
+      mobilityPermille hSub hMob
+  omega
+
 end Obend.Hardware.Physics
 end

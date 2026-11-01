@@ -18,10 +18,11 @@ operations to physical FPGA/eFPGA primitives and retimed pipeline stages:
      the exact combinational specification shifted by 2 clock cycles.
 -/
 public import Obend.Hardware.Process
+public import Obend.Hardware.HDL
 @[expose] public section
 
 namespace Obend.Hardware.Synth
-open Obend.Hardware.Process
+open Obend.Hardware.Process Obend.Hardware.HDL
 set_option autoImplicit false
 
 /-! ## 1. Verified `LUT2` & `LUT3` Technology Mapping -/
@@ -141,6 +142,241 @@ theorem retiming_closes_16nm_500MHz :
     checkTimingSignoff corner16nm_SS 2000 unretimedDeepPath = false ∧
     checkTimingSignoff corner16nm_SS 2000 retimedStagePath = true := by
   decide +kernel
+
+/-! ## 4. General `RtlModule` → `BelNetlist` Technology Mapping & Soundness Theorems -/
+
+/-- Physical FPGA Basic Element of Logic (BEL) primitive kinds targeted by technology mapping. -/
+inductive BelKind where
+  | constBel (val : BitVec 64)
+  | portIn   (portIdx : Nat)
+  | wireTap  (wireIdx : Nat)
+  | lut1     (initMask : Nat)   -- 1-input LUT (e.g., `0x1` inverter for `.bitNot`, `0x2` buffer)
+  | lut2     (initMask : Nat)   -- 2-input LUT (`0x8` AND, `0xE` OR, `0x6` XOR)
+  | lut3     (initMask : Nat)   -- 3-input LUT (`0xCA` 2:1 MUX)
+  | carry4                      -- Fast lookahead carry chain primitive (`CARRY4` / `CARRY8`)
+  | dspMul                      -- Hard DSP multiplier slice (`DSP48E2` / `DSP58`)
+  | ff       (resetKind : ResetKind) -- Synchronous flip-flop BEL (`FDRE` / `FDPE`)
+  deriving DecidableEq, Repr
+
+/-- A technology-mapped Basic Element of Logic (`BelCell`) in the post-synthesis FPGA netlist. -/
+structure BelCell where
+  dstName : String
+  kind    : BelKind
+  inputs  : List String
+  deriving DecidableEq, Repr
+
+/-- Complete technology-mapped BEL netlist synthesized from an `RtlModule`. -/
+structure BelNetlist where
+  moduleName  : String
+  inputNames  : List String
+  cells       : List BelCell
+  outputNames : List String
+  deriving DecidableEq, Repr
+
+/-- Compute the binary truth-table address $\sum_k b_k 2^k$ of a list of boolean LUT inputs. -/
+def lutInputIndex : List Bool → Nat
+  | [] => 0
+  | b :: rest => (if b then 1 else 0) + 2 * lutInputIndex rest
+
+/-- Evaluate an arbitrary $k$-input LUT with configuration mask `initMask` on `inputs`. -/
+def evalLut (initMask : Nat) (inputs : List Bool) : Bool :=
+  ((initMask >>> lutInputIndex inputs) &&& 1) == 1
+
+/-- **Universal Bitwise `LUT2` Technology-Mapping Soundness (`lut2_bitwise_synth_sound`)**:
+For all `a, b : Bool`, `LUT2` mask `0x8` computes `a && b`, `0xE` computes `a || b`, and `0x6`
+computes `xor a b`. -/
+theorem lut2_bitwise_synth_sound (a b : Bool) :
+    evalLut 0x8 [a, b] = (a && b) ∧
+    evalLut 0xE [a, b] = (a || b) ∧
+    evalLut 0x6 [a, b] = xor a b := by
+  cases a <;> cases b <;> decide
+
+/-- **Universal 2:1 Multiplexer `LUT3` Technology-Mapping Soundness (`lut3_mux_synth_sound`)**:
+For all `d0, d1, sel : Bool`, `LUT3` mask `0xCA` computes `if sel then d1 else d0`. -/
+theorem lut3_mux_synth_sound (d0 d1 sel : Bool) :
+    evalLut 0xCA [d0, d1, sel] = (if sel then d1 else d0) := by
+  cases d0 <;> cases d1 <;> cases sel <;> decide
+
+/-- Synthesize a combinational `RtlExpr` driving net `dstName` into a topologically ordered list of
+FPGA `BelCell` primitives:
+* `.alu .bitAnd` $\mapsto$ `BelKind.lut2 0x8`,
+* `.alu .bitOr` $\mapsto$ `BelKind.lut2 0xE`,
+* `.alu .bitXor` $\mapsto$ `BelKind.lut2 0x6`,
+* `.alu .add` $\mapsto$ `BelKind.lut2 0x6` (propagate XOR) + `BelKind.carry4`,
+* `.mux` $\mapsto$ `BelKind.lut3 0xCA`,
+* `.bitNot` $\mapsto$ `BelKind.lut1 0x1`. -/
+def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
+  | .const v       => [{ dstName := dstName, kind := .constBel v, inputs := [] }]
+  | .inputPort idx => [{ dstName := dstName, kind := .portIn idx, inputs := [s!"in_{idx}"] }]
+  | .wireRef idx   => [{ dstName := dstName, kind := .wireTap idx, inputs := [s!"w_{idx}"] }]
+  | .regRead idx   => [{ dstName := dstName, kind := .lut1 0x2, inputs := [s!"r_{idx}"] }]
+  | .bitNot a      =>
+    let aName := dstName ++ "_not_in"
+    synthesizeExprToBels aName a ++
+      [{ dstName := dstName, kind := .lut1 0x1, inputs := [aName] }]
+  | .mux c t f     =>
+    let fName := dstName ++ "_d0"
+    let tName := dstName ++ "_d1"
+    let cName := dstName ++ "_sel"
+    synthesizeExprToBels fName f ++
+      synthesizeExprToBels tName t ++
+      synthesizeExprToBels cName c ++
+      [{ dstName := dstName, kind := .lut3 0xCA, inputs := [fName, tName, cName] }]
+  | .alu op a b    =>
+    let aName := dstName ++ "_lhs"
+    let bName := dstName ++ "_rhs"
+    let subBels := synthesizeExprToBels aName a ++ synthesizeExprToBels bName b
+    match op with
+    | .bitAnd =>
+      subBels ++ [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
+    | .bitOr =>
+      subBels ++ [{ dstName := dstName, kind := .lut2 0xE, inputs := [aName, bName] }]
+    | .bitXor =>
+      subBels ++ [{ dstName := dstName, kind := .lut2 0x6, inputs := [aName, bName] }]
+    | .add =>
+      let propName := dstName ++ "_xor"
+      subBels ++
+        [ { dstName := propName, kind := .lut2 0x6, inputs := [aName, bName] }
+        , { dstName := dstName,  kind := .carry4,   inputs := [aName, bName, propName] } ]
+    | .sub =>
+      let invName := dstName ++ "_binv"
+      let propName := dstName ++ "_xor"
+      subBels ++
+        [ { dstName := invName,  kind := .lut1 0x1, inputs := [bName] }
+        , { dstName := propName, kind := .lut2 0x6, inputs := [aName, invName] }
+        , { dstName := dstName,  kind := .carry4,   inputs := [aName, invName, propName] } ]
+    | .mul =>
+      subBels ++ [{ dstName := dstName, kind := .dspMul, inputs := [aName, bName] }]
+    | .eq =>
+      let xorName := dstName ++ "_xor"
+      subBels ++
+        [ { dstName := xorName, kind := .lut2 0x6, inputs := [aName, bName] }
+        , { dstName := dstName, kind := .lut1 0x1, inputs := [xorName] } ]
+    | .ult =>
+      let invName := dstName ++ "_binv"
+      subBels ++
+        [ { dstName := invName, kind := .lut1 0x1, inputs := [bName] }
+        , { dstName := dstName, kind := .carry4,   inputs := [aName, invName] } ]
+    | .shl =>
+      subBels ++ [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
+    | .lshr =>
+      subBels ++ [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
+
+/-- Synthesize an entire synchronous `RtlModule` into a technology-mapped `BelNetlist`, mapping all
+internal wires, register next-state trees, and output trees via `synthesizeExprToBels`, and mapping
+each sequential `RegSpec` to a dedicated `BelKind.ff` flip-flop BEL. -/
+def synthesizeModuleToBels (m : RtlModule) : BelNetlist :=
+  let wireBels := m.wires.flatMap (fun w => synthesizeExprToBels s!"w_{w.wireIdx}" w.expr)
+  let regCombBels := m.regs.flatMap (fun r => synthesizeExprToBels s!"{r.name}_din" r.nextExpr)
+  let outBels := m.outputs.flatMap (fun o => synthesizeExprToBels o.name o.expr)
+  let ffBels : List BelCell :=
+    m.regs.map (fun r => { dstName := r.name, kind := .ff r.resetKind, inputs := [s!"{r.name}_din"] })
+  { moduleName  := m.name
+  , inputNames  := m.inputNames
+  , cells       := wireBels ++ regCombBels ++ outBels ++ ffBels
+  , outputNames := m.outputs.map (·.name) }
+
+/-- Check whether a `BelCell` is a sequential flip-flop (`BelKind.ff`). -/
+def isFfBel (c : BelCell) : Bool :=
+  match c.kind with
+  | .ff _ => true
+  | _     => false
+
+/-- Count the number of sequential flip-flop (`BelKind.ff`) cells in a `BelNetlist`. -/
+def countFfBels (nl : BelNetlist) : Nat :=
+  (nl.cells.filter isFfBel).length
+
+/-- Check whether a `BelCell` has a valid input pin arity for its `BelKind`. -/
+def checkBelCellValid (c : BelCell) : Bool :=
+  match c.kind with
+  | .constBel _ => c.inputs.length == 0
+  | .portIn _   => c.inputs.length == 1
+  | .wireTap _  => c.inputs.length == 1
+  | .lut1 _     => c.inputs.length == 1
+  | .lut2 _     => c.inputs.length == 2
+  | .lut3 _     => c.inputs.length == 3
+  | .carry4     => c.inputs.length == 2 || c.inputs.length == 3
+  | .dspMul     => c.inputs.length == 2
+  | .ff _       => c.inputs.length == 1
+
+/-- Check that every cell in a `BelNetlist` satisfies `checkBelCellValid`. -/
+def checkBelNetlistValid (nl : BelNetlist) : Bool :=
+  nl.cells.all checkBelCellValid
+
+theorem synthesizeExprToBels_no_ff (dstName : String) (e : RtlExpr) :
+    (synthesizeExprToBels dstName e).filter isFfBel = [] := by
+  induction e generalizing dstName with
+  | const _ => rfl
+  | inputPort _ => rfl
+  | wireRef _ => rfl
+  | regRead _ => rfl
+  | bitNot a iha =>
+    simp [synthesizeExprToBels, List.filter_append, iha, isFfBel]
+  | mux c t f ihc iht ihf =>
+    simp [synthesizeExprToBels, List.filter_append, ihc, iht, ihf, isFfBel]
+  | alu op a b iha ihb =>
+    cases op <;> simp [synthesizeExprToBels, List.filter_append, iha, ihb, isFfBel]
+
+theorem flatMap_synthesizeExprToBels_no_ff {α : Type}
+    (f : α → String) (g : α → RtlExpr) (xs : List α) :
+    (xs.flatMap (fun x => synthesizeExprToBels (f x) (g x))).filter isFfBel = [] := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp [List.flatMap_cons, List.filter_append, synthesizeExprToBels_no_ff, ih]
+
+theorem map_reg_ff_filter (regs : List RegSpec) :
+    (regs.map (fun r => ({ dstName := r.name, kind := .ff r.resetKind, inputs := [s!"{r.name}_din"] } : BelCell))).filter isFfBel =
+      regs.map (fun r => { dstName := r.name, kind := .ff r.resetKind, inputs := [s!"{r.name}_din"] }) := by
+  induction regs with
+  | nil => rfl
+  | cons r rest ih =>
+    simp [List.map_cons, List.filter_cons, isFfBel, ih]
+
+theorem synthesizeExprToBels_valid (dstName : String) (e : RtlExpr) :
+    (synthesizeExprToBels dstName e).all checkBelCellValid = true := by
+  induction e generalizing dstName with
+  | const _ => rfl
+  | inputPort _ => rfl
+  | wireRef _ => rfl
+  | regRead _ => rfl
+  | bitNot a iha =>
+    simp [synthesizeExprToBels, List.all_append, iha, checkBelCellValid]
+  | mux c t f ihc iht ihf =>
+    simp [synthesizeExprToBels, List.all_append, ihc, iht, ihf, checkBelCellValid]
+  | alu op a b iha ihb =>
+    cases op <;> simp [synthesizeExprToBels, List.all_append, iha, ihb, checkBelCellValid]
+
+theorem flatMap_synthesizeExprToBels_valid {α : Type}
+    (f : α → String) (g : α → RtlExpr) (xs : List α) :
+    (xs.flatMap (fun x => synthesizeExprToBels (f x) (g x))).all checkBelCellValid = true := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp [List.flatMap_cons, List.all_append, synthesizeExprToBels_valid, ih]
+
+theorem map_reg_ff_valid (regs : List RegSpec) :
+    (regs.map (fun r => ({ dstName := r.name, kind := .ff r.resetKind, inputs := [s!"{r.name}_din"] } : BelCell))).all checkBelCellValid = true := by
+  induction regs with
+  | nil => rfl
+  | cons r rest ih =>
+    simp [List.map_cons, List.all_cons, checkBelCellValid, ih]
+
+/-- **Universal BEL Netlist Validity & Flip-Flop Count Preservation (`synthesizeModuleToBels_valid_and_ff_count`)**:
+For EVERY `m : RtlModule`, `synthesizeModuleToBels m` produces a structurally valid `BelNetlist`
+(`checkBelNetlistValid (synthesizeModuleToBels m) = true`) whose sequential flip-flop count
+`countFfBels (synthesizeModuleToBels m)` equals `m.regs.length`! -/
+theorem synthesizeModuleToBels_valid_and_ff_count (m : RtlModule) :
+    checkBelNetlistValid (synthesizeModuleToBels m) = true ∧
+    countFfBels (synthesizeModuleToBels m) = m.regs.length := by
+  refine ⟨?_, ?_⟩
+  · dsimp only [checkBelNetlistValid, synthesizeModuleToBels]
+    rw [List.all_append, List.all_append, List.all_append,
+        flatMap_synthesizeExprToBels_valid, flatMap_synthesizeExprToBels_valid,
+        flatMap_synthesizeExprToBels_valid, map_reg_ff_valid]
+    rfl
+  · simp [countFfBels, synthesizeModuleToBels, List.filter_append,
+      flatMap_synthesizeExprToBels_no_ff, map_reg_ff_filter]
 
 end Obend.Hardware.Synth
 end

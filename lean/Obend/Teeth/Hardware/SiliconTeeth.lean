@@ -61,6 +61,13 @@ import all Obend.Hardware.PCB
 import all Obend.Hardware.ReductionMachine
 import all Obend.Hardware.DSP
 import all Obend.Hardware.AgenticEDA
+import all Obend.Hardware.Magnetics
+import all Obend.Hardware.FluidThermal
+import all Obend.Hardware.PowerElectronics
+import all Obend.Hardware.Mechanics
+import all Obend.Hardware.Accelerators
+import all Obend.Hardware.GeometryCAM
+import all Obend.Hardware.Codec
 import all Obend.Hardware.Judge
 public import Obend.Hardware
 @[expose] public section
@@ -74,7 +81,9 @@ open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hard
 open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
 open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
-open Obend.Hardware.Judge
+open Obend.Hardware.Magnetics Obend.Hardware.FluidThermal
+open Obend.Hardware.PowerElectronics Obend.Hardware.Mechanics Obend.Hardware.Accelerators Obend.Hardware.GeometryCAM
+open Obend.Hardware.Codec Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
 
@@ -463,6 +472,91 @@ def checkDatasheetCiteIgnoreHash (cite : DatasheetCitePin) : Bool :=
   decide (0 < cite.currentDatasheetHash)
 
 #tooth Obend.Hardware.AgenticEDA.staleDatasheetCite_refused by mutation Obend.Hardware.AgenticEDA.checkDatasheetCiteFresh := checkDatasheetCiteIgnoreHash
+
+/-- 33. Broken `encodeBinaryHwCert` in `Obend.Hardware.Codec` that emits wrong CBOR tag byte `0xEE` instead of `0xED`. -/
+def encodeBinaryHwCertBadTag (c : BinaryHwCert) : List UInt8 :=
+  (0xD9 : UInt8) :: (0x0B : UInt8) :: (0xEE : UInt8) :: (0x87 : UInt8) ::
+    (cborEncodeU32 c.domain.toCode ++
+      (cborEncodeI32 c.p0 ++
+        (cborEncodeI32 c.p1 ++
+          (cborEncodeI32 c.p2 ++
+            (cborEncodeI32 c.p3 ++
+              (cborEncodeI32 c.p4 ++ cborEncodeI32 c.p5))))))
+
+#tooth Obend.Hardware.Codec.decode_encode_binaryHwCert by mutation Obend.Hardware.Codec.encodeBinaryHwCert := encodeBinaryHwCertBadTag
+
+/-- 34. Broken `FemmTriangle2D.b0` in `Obend.Hardware.Magnetics` that adds `tri.y1 + tri.y2` instead of subtracting `tri.y1 - tri.y2` (violating 2D FEMM vector-potential gauge invariance). -/
+def femmB0AddInsteadOfSub (tri : FemmTriangle2D) : Int :=
+  tri.y1 + tri.y2
+
+#tooth Obend.Hardware.Magnetics.femm_gauge_invariance by mutation Obend.Hardware.Magnetics.FemmTriangle2D.b0 := femmB0AddInsteadOfSub
+
+/-- 35. Broken `evalIpmTorqueScaled` in `Obend.Hardware.Magnetics` that subtracts `(ld - lq) * id * iq` instead of adding it (reversing the IPM reluctance torque sign). -/
+def evalIpmTorqueInvertReluctance (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
+  m.polePairs * (m.psiPmMilliWb * iqAmp - (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp)
+
+#tooth Obend.Hardware.Magnetics.ipm_reluctance_torque_boost by mutation Obend.Hardware.Magnetics.evalIpmTorqueScaled := evalIpmTorqueInvertReluctance
+
+/-- 36. Broken `evalPeakWindingTempMilliC` in `Obend.Hardware.FluidThermal` that subtracts `rCaloricMilliKPerW` instead of adding it (violating series thermal resistance monotonicity). -/
+def evalPeakWindingTempSubCaloric (tInletMilliC powerLossW rCaloricMilliKPerW rConvMilliKPerW rCondMilliKPerW : Int) : Int :=
+  tInletMilliC + powerLossW * (-rCaloricMilliKPerW + rConvMilliKPerW + rCondMilliKPerW)
+
+#tooth Obend.Hardware.FluidThermal.higher_flow_and_convection_lowers_winding_temp by mutation Obend.Hardware.FluidThermal.evalPeakWindingTempMilliC := evalPeakWindingTempSubCaloric
+
+/-- 37. Broken `evalSourceCurrent` in `Obend.Hardware.PowerElectronics` that adds `gs * v` instead of subtracting `gs * v` (destroying MPPT concavity and global maximum). -/
+def evalSourceCurrentPositiveSlope (isc gs v : Int) : Int :=
+  isc + gs * v
+
+#tooth Obend.Hardware.PowerElectronics.mppt_incremental_conductance_global_max by mutation Obend.Hardware.PowerElectronics.evalSourceCurrent := evalSourceCurrentPositiveSlope
+
+/-- 38. Broken `evalDroopFrequencyMilliHz` in `Obend.Hardware.PowerElectronics` that ignores the droop slope `droopGainMilliHzPerKw` (destroying autonomous proportional power sharing). -/
+def evalDroopFrequencyNoDroop (omegaNomMilliHz _droopGainMilliHzPerKw activePowerKw : Int) : Int :=
+  omegaNomMilliHz - activePowerKw
+
+#tooth Obend.Hardware.PowerElectronics.distributed_droop_proportional_power_sharing by mutation Obend.Hardware.PowerElectronics.evalDroopFrequencyMilliHz := evalDroopFrequencyNoDroop
+
+/-- 39. Broken `evalHotAirGapUm` in `Obend.Hardware.Mechanics` that adds `thermalGrowthUm` instead of subtracting it (claiming rotor heating widens the air gap instead of shrinking it). -/
+def evalHotAirGapAddThermal (coldAirGapUm thermalGrowthUm centrifugalGrowthUm bearingRunoutUm : Int) : Int :=
+  coldAirGapUm + thermalGrowthUm - (centrifugalGrowthUm + bearingRunoutUm)
+
+#tooth Obend.Hardware.Mechanics.hot_air_gap_no_rub_sound by mutation Obend.Hardware.Mechanics.evalHotAirGapUm := evalHotAirGapAddThermal
+
+/-- 40. Broken `checkReflexiveSelfClosure` in `Obend.Hardware.Mechanics` that skips checking `cells.all (checkCellSelfCovered cells)` (admitting non-self-reproducing open-loop factories). -/
+def checkReflexiveSelfClosureIgnoreBom (cells : List FactoryCell) : Bool :=
+  !cells.isEmpty && decide (0 ≤ evalNetFactoryPowerKw cells)
+
+#tooth Obend.Hardware.Mechanics.von_neumann_reflexive_closure_sound by mutation Obend.Hardware.Mechanics.checkReflexiveSelfClosure := checkReflexiveSelfClosureIgnoreBom
+
+/-- 41. Broken `evalOzakiBase13Product2` in `Obend.Hardware.Accelerators` that drops the cross-limb Tensor-Core products `a0 * b1 + a1 * b0`. -/
+def evalOzakiBase13DropCross (a0 a1 b0 b1 : Int) : Int :=
+  a0 * b0 + 169 * (a1 * b1)
+
+#tooth Obend.Hardware.Accelerators.ozaki_base13_2limb_product_exact by mutation Obend.Hardware.Accelerators.evalOzakiBase13Product2 := evalOzakiBase13DropCross
+
+/-- 42. Broken `stepSystolicPe` in `Obend.Hardware.Accelerators` that overwrites `partialSumIn` instead of accumulating `partialSumIn + act * weight`. -/
+def stepSystolicPeNoAccum (_partialSumIn act weight : Int) : Int :=
+  act * weight
+
+#tooth Obend.Hardware.Accelerators.systolic_tpu_eq_dsp58_cascade_eq_kulisch_dot by mutation Obend.Hardware.Accelerators.stepSystolicPe := stepSystolicPeNoAccum
+
+/-- 43. Broken `ivSub` in `Obend.Hardware.GeometryCAM` that subtracts `b.lo` from `a.lo` instead of `b.hi` (violating 3D F-Rep interval enclosure and causing octree pruning to miss thin walls). -/
+def ivSubBrokenEndpoints (a b : FloatInterval) : FloatInterval where
+  lo := a.lo - b.lo
+  hi := a.hi - b.hi
+
+#tooth Obend.Hardware.GeometryCAM.frep_interval_enclosure_sound by mutation Obend.Hardware.GeometryCAM.ivSub := ivSubBrokenEndpoints
+
+/-- 44. Broken `evalActualCutterPosNm` in `Obend.Hardware.GeometryCAM` that ignores end-mill cantilever deflection `toolComplianceNmPerMn * radialForceMn` (pretending the cutter is infinitely rigid). -/
+def evalActualCutterIgnoreDeflection (xCmdNm feedVelMmPerS servoLagNsPerMm _toolComplianceNmPerMn _radialForceMn : Int) : Int :=
+  xCmdNm - feedVelMmPerS * servoLagNsPerMm
+
+#tooth Obend.Hardware.GeometryCAM.machining_dimensional_error_identity by mutation Obend.Hardware.GeometryCAM.evalActualCutterPosNm := evalActualCutterIgnoreDeflection
+
+/-- 45. Broken `resolveLiverpsPair` in `Obend.Hardware.GeometryCAM` that picks the weaker opinion `b` instead of the stronger opinion `a` (inverting OpenUSD `LIVERPS` composition strength). -/
+def resolveLiverpsPairInverted {α : Type} (a b : UsdOpinion α) : UsdOpinion α :=
+  if usdOpinionStrongerOrEq a b then b else a
+
+#tooth Obend.Hardware.GeometryCAM.liverps_local_dominates_nonlocal by mutation Obend.Hardware.GeometryCAM.resolveLiverpsPair := resolveLiverpsPairInverted
 
 end Obend.Teeth.Hardware
 end

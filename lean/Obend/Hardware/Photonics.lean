@@ -435,5 +435,214 @@ theorem goldenSoi220Pic_accepted_and_tight_bend_refused :
     checkPhotonicDrc soi220StripWaveguide1550 coupler3dB leakyTightBendMicroring 15000 = false :=
   ⟨rfl, rfl⟩
 
+/-! ## 5. Complex Gaussian-Integer ($\mathbb{Z}[i]$) Optical Field Phasors & $2 \times 2$ Unitary Directional Coupler -/
+
+/-- Exact Gaussian-integer ($\mathbb{Z}[i]$) complex optical electric field phasor $E = E_{\text{re}} + i E_{\text{im}}$:
+* `re`: in-phase ($I$) optical field amplitude component,
+* `im`: quadrature ($Q$) optical field amplitude component. -/
+structure ComplexField where
+  re : Int
+  im : Int
+  deriving DecidableEq, Repr
+
+namespace ComplexField
+
+/-- Zero optical electric field phasor $0 + 0i$. -/
+@[expose] def zero : ComplexField := ⟨0, 0⟩
+
+/-- Coherent superposition (complex addition) of two optical field phasors. -/
+@[expose] def add (z w : ComplexField) : ComplexField :=
+  ⟨z.re + w.re, z.im + w.im⟩
+
+/-- Coherent subtraction of two optical field phasors. -/
+@[expose] def sub (z w : ComplexField) : ComplexField :=
+  ⟨z.re - w.re, z.im - w.im⟩
+
+/-- Complex multiplication $(a + ib)(c + id) = (ac - bd) + i(ad + bc)$ of two optical phasors. -/
+@[expose] def mul (z w : ComplexField) : ComplexField :=
+  ⟨z.re * w.re - z.im * w.im, z.re * w.im + z.im * w.re⟩
+
+/-- Real scalar field attenuation or gain $c \cdot (E_{\text{re}} + i E_{\text{im}})$. -/
+@[expose] def scale (c : Int) (z : ComplexField) : ComplexField :=
+  ⟨c * z.re, c * z.im⟩
+
+/-- Quarter-wave ($+\pi/2$ radian, factor of $i$) optical phase rotation $i \cdot (E_{\text{re}} + i E_{\text{im}}) = -E_{\text{im}} + i E_{\text{re}}$. -/
+@[expose] def mulI (z : ComplexField) : ComplexField :=
+  ⟨-z.im, z.re⟩
+
+/-- Optical intensity / power $|E|^2 = E_{\text{re}}^2 + E_{\text{im}}^2$ of a complex field phasor. -/
+@[expose] def normSq (z : ComplexField) : Int :=
+  z.re * z.re + z.im * z.im
+
+end ComplexField
+
+/-- Theorem (`complexField_normSq_nonneg`):
+Optical power $|E|^2 = \text{re}^2 + \text{im}^2$ is universally non-negative for all `z : ComplexField`. -/
+theorem complexField_normSq_nonneg (z : ComplexField) :
+    0 ≤ z.normSq := by
+  dsimp only [ComplexField.normSq]
+  have hRe : 0 ≤ z.re * z.re := int_sq_nonneg z.re
+  have hIm : 0 ≤ z.im * z.im := int_sq_nonneg z.im
+  omega
+
+/-- Helper algebraic identities on `Int` for ring normalization without external algebra tactics. -/
+theorem int_one_mul (a : Int) : 1 * a = a := by omega
+
+theorem int_neg_one_mul (a : Int) : (-1) * a = -a := by omega
+
+theorem int_neg_neg (a : Int) : -(-a) = a := by omega
+
+theorem int_add_neg_self (a : Int) : a + (-a) = 0 := by omega
+
+theorem int_neg_add_self (a : Int) : (-a) + a = 0 := by omega
+
+theorem int_neg_mul_left (a b : Int) : (-a) * b = -(a * b) := by
+  have hDist : (a + (-a)) * b = a * b + (-a) * b := Int.add_mul a (-a) b
+  rw [int_add_neg_self a, Int.zero_mul] at hDist
+  omega
+
+theorem int_mul_neg_right (a b : Int) : a * (-b) = -(a * b) := by
+  rw [Int.mul_comm a (-b), Int.mul_comm a b]
+  exact int_neg_mul_left b a
+
+/-- Four-factor integer multiplication swap $(p q)(r s) = (p r)(q s)$. -/
+theorem int_mul_four_swap (p q r s : Int) :
+    (p * q) * (r * s) = (p * r) * (q * s) := by
+  rw [Int.mul_assoc p q (r * s)]
+  rw [← Int.mul_assoc q r s]
+  rw [Int.mul_comm q r]
+  rw [Int.mul_assoc r q s]
+  rw [← Int.mul_assoc p r (q * s)]
+
+/-- **Brahmagupta-Fibonacci Two-Square Identity** (`brahmagupta_cancel`):
+$$(t a - k b)^2 + (k a + t b)^2 = (t^2 + k^2)(a^2 + b^2),$$
+where the opposite-sign evanescent cross-interference terms $-2 t k a b$ and $+2 t k a b$
+cancel identically across all `t, k, a, b : Int`. -/
+theorem brahmagupta_cancel (t k a b : Int) :
+    (t * a - k * b) * (t * a - k * b) + (k * a + t * b) * (k * a + t * b) =
+      (t * t + k * k) * (a * a + b * b) := by
+  have hSubSq : (t * a - k * b) * (t * a - k * b) =
+      (t * a) * (t * a) - (t * a) * (k * b) - (k * b) * (t * a) + (k * b) * (k * b) := by
+    rw [Int.mul_sub, Int.sub_mul, Int.sub_mul]
+    omega
+  have hAddSq : (k * a + t * b) * (k * a + t * b) =
+      (k * a) * (k * a) + (k * a) * (t * b) + (t * b) * (k * a) + (t * b) * (t * b) := by
+    rw [Int.mul_add, Int.add_mul, Int.add_mul]
+    omega
+  have hRhs : (t * t + k * k) * (a * a + b * b) =
+      (t * t) * (a * a) + (k * k) * (a * a) + (t * t) * (b * b) + (k * k) * (b * b) := by
+    rw [Int.mul_add, Int.add_mul, Int.add_mul]
+    omega
+  have hTA : (t * a) * (t * a) = (t * t) * (a * a) := int_mul_four_swap t a t a
+  have hKB : (k * b) * (k * b) = (k * k) * (b * b) := int_mul_four_swap k b k b
+  have hKA : (k * a) * (k * a) = (k * k) * (a * a) := int_mul_four_swap k a k a
+  have hTB : (t * b) * (t * b) = (t * t) * (b * b) := int_mul_four_swap t b t b
+  have hCross1 : (t * a) * (k * b) = (k * a) * (t * b) := by
+    rw [int_mul_four_swap t a k b, int_mul_four_swap k a t b, Int.mul_comm t k]
+  have hCross2 : (k * b) * (t * a) = (t * b) * (k * a) := by
+    rw [Int.mul_comm (k * b) (t * a), Int.mul_comm (t * b) (k * a), hCross1]
+  omega
+
+/-- Coherent $2 \times 2$ evanescent directional coupler transfer matrix over $\mathbb{Z}[i]$:
+$$\begin{pmatrix} E_{\text{out},1} \\ E_{\text{out},2} \end{pmatrix}
+  = \begin{pmatrix} t & i \kappa \\ i \kappa & t \end{pmatrix}
+    \begin{pmatrix} E_1 \\ E_2 \end{pmatrix}
+  = \begin{pmatrix} t E_1 + i \kappa E_2 \\ i \kappa E_1 + t E_2 \end{pmatrix}.$$ -/
+@[expose] def evalDirectionalCoupler2x2
+    (t kappa : Int) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
+  let out1 : ComplexField := ⟨t * e1.re - kappa * e2.im, t * e1.im + kappa * e2.re⟩
+  let out2 : ComplexField := ⟨-kappa * e1.im + t * e2.re, kappa * e1.re + t * e2.im⟩
+  (out1, out2)
+
+/-- Theorem (`directional_coupler_2x2_power_conservation`):
+For ALL straight-through and cross-coupling field coefficients `t, kappa : Int` and ALL complex
+input optical field phasors `e1, e2 : ComplexField` (arbitrary relative phase and amplitude), the
+$2 \times 2$ directional coupler transfer matrix $\begin{pmatrix} t & i\kappa \\ i\kappa & t \end{pmatrix}$
+strictly conserves total optical power up to the unitary scale factor $t^2 + \kappa^2$:
+$$|E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 = (t^2 + \kappa^2)\left(|E_1|^2 + |E_2|^2\right).$$ -/
+theorem directional_coupler_2x2_power_conservation
+    (t kappa : Int) (e1 e2 : ComplexField) :
+    let (out1, out2) := evalDirectionalCoupler2x2 t kappa e1 e2
+    out1.normSq + out2.normSq = (t * t + kappa * kappa) * (e1.normSq + e2.normSq) := by
+  dsimp only [evalDirectionalCoupler2x2, ComplexField.normSq]
+  have hSwapSub : -kappa * e1.im + t * e2.re = t * e2.re - kappa * e1.im := by
+    rw [int_neg_mul_left kappa e1.im]
+    omega
+  have hSwapAdd : t * e1.im + kappa * e2.re = kappa * e2.re + t * e1.im := by omega
+  rw [hSwapSub, hSwapAdd]
+  have hB1 :
+      (t * e1.re - kappa * e2.im) * (t * e1.re - kappa * e2.im) +
+        (kappa * e1.re + t * e2.im) * (kappa * e1.re + t * e2.im) =
+      (t * t + kappa * kappa) * (e1.re * e1.re + e2.im * e2.im) :=
+    brahmagupta_cancel t kappa e1.re e2.im
+  have hB2 :
+      (t * e2.re - kappa * e1.im) * (t * e2.re - kappa * e1.im) +
+        (kappa * e2.re + t * e1.im) * (kappa * e2.re + t * e1.im) =
+      (t * t + kappa * kappa) * (e2.re * e2.re + e1.im * e1.im) :=
+    brahmagupta_cancel t kappa e2.re e1.im
+  have hDist1 :
+      (t * t + kappa * kappa) * (e1.re * e1.re + e2.im * e2.im) =
+      (t * t + kappa * kappa) * (e1.re * e1.re) + (t * t + kappa * kappa) * (e2.im * e2.im) :=
+    Int.mul_add (t * t + kappa * kappa) (e1.re * e1.re) (e2.im * e2.im)
+  have hDist2 :
+      (t * t + kappa * kappa) * (e2.re * e2.re + e1.im * e1.im) =
+      (t * t + kappa * kappa) * (e2.re * e2.re) + (t * t + kappa * kappa) * (e1.im * e1.im) :=
+    Int.mul_add (t * t + kappa * kappa) (e2.re * e2.re) (e1.im * e1.im)
+  have hDistGoal :
+      (t * t + kappa * kappa) * ((e1.re * e1.re + e1.im * e1.im) + (e2.re * e2.re + e2.im * e2.im)) =
+      (t * t + kappa * kappa) * (e1.re * e1.re) +
+        (t * t + kappa * kappa) * (e1.im * e1.im) +
+        (t * t + kappa * kappa) * (e2.re * e2.re) +
+        (t * t + kappa * kappa) * (e2.im * e2.im) := by
+    rw [Int.mul_add, Int.mul_add, Int.mul_add]
+    omega
+  omega
+
+/-! ## 6. Cascaded $2 \times 2$ Complex MZI Transfer Matrix -/
+
+/-- Upper-arm optical phase shifter transfer matrix $\begin{pmatrix} e^{i\Delta\phi} & 0 \\ 0 & 1 \end{pmatrix}$
+represented by a complex phase phasor `phasePhasor : ComplexField` ($1 + 0i$ for $\Delta\phi = 0$,
+$-1 + 0i$ for $\Delta\phi = \pi$, $0 + 1i$ for $\Delta\phi = \pi/2$). -/
+@[expose] def evalPhaseShifter2x2
+    (phasePhasor : ComplexField) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
+  (ComplexField.mul phasePhasor e1, e2)
+
+/-- Complete cascaded $2 \times 2$ Mach-Zehnder Interferometer (MZI) complex field transfer matrix
+$$T_{\text{MZI}} = U_{\text{DC}}(t, \kappa) \cdot \Phi(\Delta\phi) \cdot U_{\text{DC}}(t, \kappa)$$
+formed by composing the input $2 \times 2$ directional coupler, the upper-arm thermo-optic phase
+shifter `phasePhasor`, and the output $2 \times 2$ directional coupler. -/
+@[expose] def evalCascadedMzi2x2
+    (t kappa : Int) (phasePhasor : ComplexField) (eIn1 eIn2 : ComplexField) :
+    ComplexField × ComplexField :=
+  let (m1, m2) := evalDirectionalCoupler2x2 t kappa eIn1 eIn2
+  let (p1, p2) := evalPhaseShifter2x2 phasePhasor m1 m2
+  evalDirectionalCoupler2x2 t kappa p1 p2
+
+/-- Theorem (`cascaded_mzi_zero_phase_pure_cross`):
+For ANY symmetric 50:50 directional coupler (`t = kappa`) and ANY complex input optical field
+`eIn : ComplexField` injected into Port 1 (`eIn2 = ⟨0, 0⟩`), when the phase shifter is unshifted
+($\Delta\phi = 0$, `phasePhasor = ⟨1, 0⟩`), the two cascaded $i\kappa$ cross-couplings interfere
+destructively at the bar port (`out1 = ⟨0, 0⟩`), routing 100% of the optical field to the cross port! -/
+theorem cascaded_mzi_zero_phase_pure_cross
+    (t : Int) (eIn : ComplexField) :
+    (evalCascadedMzi2x2 t t ⟨1, 0⟩ eIn ⟨0, 0⟩).1 = ⟨0, 0⟩ := by
+  simp only [evalCascadedMzi2x2, evalDirectionalCoupler2x2, evalPhaseShifter2x2, ComplexField.mul,
+    Int.mul_zero, Int.zero_mul, Int.sub_zero, Int.add_zero, Int.sub_self,
+    int_one_mul, int_neg_one_mul, int_neg_mul_left, int_mul_neg_right,
+    int_neg_neg, int_add_neg_self, int_neg_add_self]
+
+/-- Theorem (`cascaded_mzi_pi_phase_pure_bar`):
+For ANY symmetric 50:50 directional coupler (`t = kappa`) and ANY complex input optical field
+`eIn : ComplexField` injected into Port 1 (`eIn2 = ⟨0, 0⟩`), when the upper-arm phase shifter induces
+a half-wave shift ($\Delta\phi = \pi$, `phasePhasor = ⟨-1, 0⟩`), destructive interference completely
+extinguishes the cross port (`out2 = ⟨0, 0⟩`), routing 100% of the optical field to the bar port! -/
+theorem cascaded_mzi_pi_phase_pure_bar
+    (t : Int) (eIn : ComplexField) :
+    (evalCascadedMzi2x2 t t ⟨-1, 0⟩ eIn ⟨0, 0⟩).2 = ⟨0, 0⟩ := by
+  simp only [evalCascadedMzi2x2, evalDirectionalCoupler2x2, evalPhaseShifter2x2, ComplexField.mul,
+    Int.mul_zero, Int.zero_mul, Int.sub_zero, Int.add_zero, Int.sub_self,
+    int_one_mul, int_neg_one_mul, int_neg_mul_left, int_mul_neg_right,
+    int_neg_neg, int_add_neg_self, int_neg_add_self]
+
 end Obend.Hardware.Photonics
 end

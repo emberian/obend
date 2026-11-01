@@ -200,6 +200,57 @@ def cmdEdaVaultCheck (args : List String) : IO UInt32 := do
     IO.println s!"wrote {outPath}"
   verifyHardware recJson
 
+/-- Run `hw-binary-cbor@1` binary CBOR certificate encode/decode/verify and `.obnb` projection (NO JSON). -/
+def cmdVerifyCbor (args : List String) : IO UInt32 := do
+  let (domOpt, args1)  := extractFlag "--domain" args
+  let (modeOpt, args2) := extractFlag "--mode" args1
+  let (binInOpt, args3) := extractFlag "--in-bin" args2
+  let (binOutOpt, args4) := extractFlag "--out-bin" args3
+  let (obnbOutOpt, _)  := extractFlag "--out-obnb" args4
+  let domName := domOpt.getD "pnr"
+  let mode := modeOpt.getD "golden"
+  let expectedDom : Obend.Hardware.Codec.HwCertDomain :=
+    if domName == "photonics" then .photonics
+    else if domName == "dpr" then .dpr
+    else if domName == "eda" then .edaBomSwap
+    else if domName == "magnetics" || domName == "femm" then .magnetics
+    else if domName == "fluid" || domName == "cooling" then .fluidThermal
+    else if domName == "power" || domName == "ms350" then .powerElectronics
+    else if domName == "mechanics" || domName == "von_neumann" then .mechanicsVonNeumann
+    else .pnr
+  let baseCert : Obend.Hardware.Codec.BinaryHwCert :=
+    match expectedDom with
+    | .photonics => Obend.Hardware.Codec.goldenBinaryPhotonicsCert
+    | .dpr => Obend.Hardware.Codec.goldenBinaryDprCert
+    | .edaBomSwap => Obend.Hardware.Codec.goldenBinaryEdaSwapCert
+    | .magnetics => Obend.Hardware.Codec.goldenBinaryMagneticsCert
+    | .fluidThermal => Obend.Hardware.Codec.goldenBinaryFluidThermalCert
+    | .powerElectronics => Obend.Hardware.Codec.goldenBinaryPowerElectronicsCert
+    | .mechanicsVonNeumann => Obend.Hardware.Codec.goldenBinaryMechanicsCert
+    | _ =>
+      if mode == "corrupt" then badBinaryPnrCert
+      else Obend.Hardware.Codec.goldenBinaryPnrCert
+  let rawBytes : ByteArray ← match binInOpt with
+    | some inPath => IO.FS.readBinFile inPath
+    | none => pure (Obend.Hardware.Codec.encodeToByteArray baseCert)
+  if let some outBinPath := binOutOpt then
+    IO.FS.writeBinFile outBinPath rawBytes
+    IO.println s!"wrote binary CBOR ({rawBytes.size} bytes) to {outBinPath}"
+  if let some obnbPath := obnbOutOpt then
+    let obnbBytes := Obend.Hardware.Codec.obendHwCborProjectCell rawBytes
+    IO.FS.writeBinFile obnbPath obnbBytes
+    IO.println s!"wrote binary .obnb Core.Data cell ({obnbBytes.size} bytes) to {obnbPath}"
+  match verifyRawBinaryCborCert expectedDom rawBytes with
+  | .ok =>
+    IO.println s!"verified (hw-binary-cbor@1, domain={domName}, bytes={rawBytes.size}, decidable, kernel)"
+    return 0
+  | .refused _ _ =>
+    IO.eprintln s!"refused: binary CBOR certificate rejected by hw-binary-cbor@1 (domain={domName})"
+    return 3
+  | .uncovered =>
+    IO.eprintln s!"uncovered: binary CBOR certificate obligations uncovered (domain={domName})"
+    return 3
+
 /-- CLI entry point for `obend hardware ...` and `obend fabublox ...`. -/
 public def main? : List String → Option (IO UInt32)
   | "hardware" :: "verify-pnr" :: rest         => some (cmdVerifyPnr rest)
@@ -210,6 +261,7 @@ public def main? : List String → Option (IO UInt32)
   | "hardware" :: "photonics-signoff" :: rest  => some (cmdPhotonicsSignoff rest)
   | "hardware" :: "pcb-signoff" :: rest        => some (cmdPcbSignoff rest)
   | "hardware" :: "eda-vault-check" :: rest    => some (cmdEdaVaultCheck rest)
+  | "hardware" :: "verify-cbor" :: rest        => some (cmdVerifyCbor rest)
   | "fabublox" :: "check" :: rest              => some (cmdFabuBloxCheck rest)
   | _ => none
 

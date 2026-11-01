@@ -358,5 +358,140 @@ theorem golden2mHamLna_stable_and_unstable_refused :
         elementAmplitudeMv := 100 } = 160000 := by
   decide +kernel
 
+/-! ## 5. Multi-Stage Unrolled CORDIC Pipeline (`CordicMicroStage`, `runCordicPipeline`) -/
+
+/-- Unrolled CORDIC micro-rotation stage parameters:
+* `shiftPow2`: barrel-shifter exponent $i$ so the stage divisor is $2^i$ (`shiftPow2 = 0, 1, 2, 3`),
+* `atanAngleMrad`: elementary arctangent angle $\arctan(2^{-i})$ in milliradians ($\text{mrad}$, e.g. `785, 464, 245, 124`),
+* `signPositive`: micro-rotation direction $d_i \in \{+1, -1\}$. -/
+structure CordicMicroStage where
+  shiftPow2     : Nat
+  atanAngleMrad : Int
+  signPositive  : Bool
+  deriving DecidableEq, Repr
+
+/-- Single unrolled CORDIC micro-rotation step updating $(x, y, z)$ across `st : CordicMicroStage`
+with shift divisor $2^{\text{shiftPow2}}$. -/
+@[expose] def cordicRotateStep (x y z : Int) (st : CordicMicroStage) : Int × Int × Int :=
+  let sf : Int := Int.ofNat (2 ^ st.shiftPow2)
+  if st.signPositive then
+    (x - y / sf, y + x / sf, z - st.atanAngleMrad)
+  else
+    (x + y / sf, y - x / sf, z + st.atanAngleMrad)
+
+/-- Recursively execute a multi-stage unrolled CORDIC pipeline from initial state `(x0, y0, z0)`. -/
+@[expose] def runCordicPipeline (x0 y0 z0 : Int) : List CordicMicroStage → Int × Int × Int
+  | [] => (x0, y0, z0)
+  | st :: rest =>
+    let (x1, y1, z1) := cordicRotateStep x0 y0 z0 st
+    runCordicPipeline x1 y1 z1 rest
+
+/-- Theorem (`runCordicPipeline_append`):
+Executing a concatenated multi-stage CORDIC pipeline `stages1 ++ stages2` is identical to executing
+`stages1` followed by `stages2` from the intermediate pipeline register state. -/
+theorem runCordicPipeline_append
+    (stages1 stages2 : List CordicMicroStage) (x0 y0 z0 : Int) :
+    runCordicPipeline x0 y0 z0 (stages1 ++ stages2) =
+      let (x1, y1, z1) := runCordicPipeline x0 y0 z0 stages1
+      runCordicPipeline x1 y1 z1 stages2 := by
+  induction stages1 generalizing x0 y0 z0 with
+  | nil => rfl
+  | cons st rest ih =>
+    dsimp only [List.cons_append, runCordicPipeline]
+    exact ih (cordicRotateStep x0 y0 z0 st).1 (cordicRotateStep x0 y0 z0 st).2.1 (cordicRotateStep x0 y0 z0 st).2.2
+
+/-- Concrete 4-stage unrolled CORDIC micro-rotation pipeline:
+* Stage 0: $2^0 = 1$, $\arctan(1) \approx 785\,\text{mrad}$ ($+45.0^\circ$), `signPositive = true`,
+* Stage 1: $2^1 = 2$, $\arctan(1/2) \approx 464\,\text{mrad}$ ($-26.6^\circ$), `signPositive = false`,
+* Stage 2: $2^2 = 4$, $\arctan(1/4) \approx 245\,\text{mrad}$ ($+14.0^\circ$), `signPositive = true`,
+* Stage 3: $2^3 = 8$, $\arctan(1/8) \approx 124\,\text{mrad}$ ($-7.1^\circ$), `signPositive = false`. -/
+def goldenCordic4Stages : List CordicMicroStage :=
+  [ { shiftPow2 := 0, atanAngleMrad := 785, signPositive := true }
+  , { shiftPow2 := 1, atanAngleMrad := 464, signPositive := false }
+  , { shiftPow2 := 2, atanAngleMrad := 245, signPositive := true }
+  , { shiftPow2 := 3, atanAngleMrad := 124, signPositive := false } ]
+
+/-- Theorem (`cordic_4stage_pipeline_verified`):
+Starting from $(x_0, y_0, z_0) = (1000, 0, 442)$ ($442\,\text{mrad} \approx 25.3^\circ$), the 4-stage
+unrolled CORDIC pipeline `goldenCordic4Stages` converges to `(1484, 704, 0)` with zero residual
+angle error (`z4 = 0`) and processing norm gain $x_4^2 + y_4^2 = 2697872 > x_0^2 + y_0^2 = 1000000$. -/
+theorem cordic_4stage_pipeline_verified :
+    runCordicPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0) ∧
+    (let (x4, y4, z4) := runCordicPipeline 1000 0 442 goldenCordic4Stages
+     z4 = 0 ∧ 1000 * 1000 < x4 * x4 + y4 * y4) := by
+  decide +kernel
+
+/-! ## 6. 2D Complex IQ Phasor Beamforming Summation (`IqPhasor`, `evalUlaIqBeamformer`) -/
+
+/-- 2D complex baseband IQ phasor $s = I + j Q$. -/
+structure IqPhasor where
+  i : Int
+  q : Int
+  deriving DecidableEq, Repr
+
+/-- Complex conjugate weight multiplication for phased-array matched filtering:
+$$(I_{\text{sig}} + j Q_{\text{sig}}) \cdot (I_w - j Q_w) =
+  (I_{\text{sig}} I_w + Q_{\text{sig}} Q_w) + j (Q_{\text{sig}} I_w - I_{\text{sig}} Q_w).$$ -/
+@[expose] def iqConjMul (sig weight : IqPhasor) : IqPhasor :=
+  ⟨sig.i * weight.i + sig.q * weight.q, sig.q * weight.i - sig.i * weight.q⟩
+
+/-- Uniform Linear Array (ULA) complex IQ beamformer summation across `(sig, weight)` antenna elements:
+$$Y = \sum_{k=0}^{N-1} s_k \cdot w_k^*.$$ -/
+@[expose] def evalUlaIqBeamformer : List (IqPhasor × IqPhasor) → IqPhasor
+  | [] => ⟨0, 0⟩
+  | (sig, weight) :: rest =>
+    let prod := iqConjMul sig weight
+    let tail := evalUlaIqBeamformer rest
+    ⟨prod.i + tail.i, prod.q + tail.q⟩
+
+/-- Theorem (`iq_matched_filter_quadrature_zero`):
+Universally for any antenna element IQ signal `s : IqPhasor`, applying its phase-matched complex
+conjugate steering weight `w = s` annihilates the quadrature phase error identically:
+`(iqConjMul s s).q = 0`. -/
+theorem iq_matched_filter_quadrature_zero (s : IqPhasor) :
+    (iqConjMul s s).q = 0 := by
+  dsimp only [iqConjMul]
+  rw [Int.mul_comm s.q s.i, Int.sub_self]
+
+/-- Theorem (`iq_matched_filter_inphase_nonneg`):
+Universally for any antenna element IQ signal `s : IqPhasor`, the phase-matched in-phase output
+`(iqConjMul s s).i = s.i * s.i + s.q * s.q` is non-negative (`0 ≤ (iqConjMul s s).i`). -/
+theorem iq_matched_filter_inphase_nonneg (s : IqPhasor) :
+    0 ≤ (iqConjMul s s).i := by
+  dsimp only [iqConjMul]
+  have hI := Obend.Hardware.Thermal.int_sq_nonneg s.i
+  have hQ := Obend.Hardware.Thermal.int_sq_nonneg s.q
+  omega
+
+/-- Theorem (`ula_4elem_matched_beamformer_coherent`):
+Universally for any element signal `s : IqPhasor`, a 4-element uniform linear array with conjugate
+phase-matched weights `(s, s)` sums coherently to `4 * (s.i * s.i + s.q * s.q) ≥ 0` in the in-phase
+channel and `0` in the quadrature channel! -/
+theorem ula_4elem_matched_beamformer_coherent (s : IqPhasor) :
+    (evalUlaIqBeamformer [(s, s), (s, s), (s, s), (s, s)]).i =
+      4 * (s.i * s.i + s.q * s.q) ∧
+    0 ≤ (evalUlaIqBeamformer [(s, s), (s, s), (s, s), (s, s)]).i ∧
+    (evalUlaIqBeamformer [(s, s), (s, s), (s, s), (s, s)]).q = 0 := by
+  dsimp only [evalUlaIqBeamformer, iqConjMul]
+  have hq : s.q * s.i - s.i * s.q = 0 := by
+    rw [Int.mul_comm s.q s.i, Int.sub_self]
+  have hI := Obend.Hardware.Thermal.int_sq_nonneg s.i
+  have hQ := Obend.Hardware.Thermal.int_sq_nonneg s.q
+  rw [hq]
+  refine ⟨by omega, by omega, by omega⟩
+
+/-- Theorem (`ula_4elem_progressive_phase_beamformer_verified`):
+For a 4-element ULA receiving a wavefront with $90^\circ$ progressive inter-element phase shift
+(`⟨80, 60⟩`, `⟨-60, 80⟩`, `⟨-80, -60⟩`, `⟨60, -80⟩`, each of envelope squared $80^2 + 60^2 = 10000$),
+applying conjugate steering weights aligns all 4 elements to `⟨40000, 0⟩` ($4\times$ coherent amplitude,
+$16\times$ power gain)! -/
+theorem ula_4elem_progressive_phase_beamformer_verified :
+    evalUlaIqBeamformer
+      [ (⟨80, 60⟩, ⟨80, 60⟩)
+      , (⟨-60, 80⟩, ⟨-60, 80⟩)
+      , (⟨-80, -60⟩, ⟨-80, -60⟩)
+      , (⟨60, -80⟩, ⟨60, -80⟩) ] = ⟨40000, 0⟩ := by
+  decide +kernel
+
 end Obend.Hardware.DSP
 end
