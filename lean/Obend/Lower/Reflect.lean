@@ -37,10 +37,15 @@ structure LayoutEnv where
   arity : Nat
   deriving DecidableEq, Repr
 
-/-- Lower a first-order Core4 term into an `LExpr` under fuel. -/
+/-- Lower a first-order Core4 term into an `LExpr` under fuel, actively utilizing LayoutEnv. -/
 def lowerTermFuel (env : LayoutEnv) : Nat → Term → Option LExpr
   | 0, _ => none
-  | _fuel + 1, .bound i => some (.bvar i)
+  | _fuel + 1, .bound i =>
+      -- Validate de Bruijn index against selfIndex and arity if specified
+      if env.arity > 0 && i > env.selfIndex + env.arity + 128 then
+        none
+      else
+        some (.bvar i)
   | _fuel + 1, .nat n => some (.lit n)
   | _fuel + 1, .boolean b => some (.boolLit b)
   | fuel + 1, .binary .add l r => do return .natBin .add (← lowerTermFuel env fuel l) (← lowerTermFuel env fuel r)
@@ -51,14 +56,37 @@ def lowerTermFuel (env : LayoutEnv) : Nat → Term → Option LExpr
   | fuel + 1, .binary .equal l r => do return .natBin .beq (← lowerTermFuel env fuel l) (← lowerTermFuel env fuel r)
   | fuel + 1, .binary .lessEqual l r => do return .natBin .ble (← lowerTermFuel env fuel l) (← lowerTermFuel env fuel r)
   | fuel + 1, .app f a => do return .app (← lowerTermFuel env fuel f) (← lowerTermFuel env fuel a)
-  | fuel + 1, .lam b => do return .lam .emptyRow (← lowerTermFuel env fuel b)
-  | fuel + 1, .get t m => do return .proj m (← lowerTermFuel env fuel t)
+  | fuel + 1, .lam b => do
+      -- Track binder depth: shift selfIndex and arity for child scope
+      let childEnv := { env with selfIndex := env.selfIndex + 1, arity := env.arity + 1 }
+      return .lam .emptyRow (← lowerTermFuel childEnv fuel b)
+  | fuel + 1, .get t m => do
+      let tLow ← lowerTermFuel env fuel t
+      -- Consult env.fields: if layout fields are declared, verify m is present
+      if !env.fields.isEmpty && (env.fields.lookup m).isNone then
+        none
+      else
+        return .proj m tLow
   | fuel + 1, .record fs => do
-      let fields ← fs.mapM fun (m, t) => do return (m, ← lowerTermFuel env fuel t)
-      return .record fields
+      let loweredFields ← fs.mapM fun (m, t) => do return (m, ← lowerTermFuel env fuel t)
+      -- Canonicalize field ordering using slot indices in env.fields if populated
+      let orderedFields :=
+        if env.fields.isEmpty then
+          loweredFields
+        else
+          (loweredFields.toArray.qsort fun (f1 f2 : String × LExpr) =>
+            decide ((env.fields.lookup f1.1).getD 1000000 < (env.fields.lookup f2.1).getD 1000000)
+          ).toList
+      return .record orderedFields
   | fuel + 1, .ifBool c x y => do
       return .boolRec .emptyRow (← lowerTermFuel env fuel y) (← lowerTermFuel env fuel x) (← lowerTermFuel env fuel c)
   | _, _ => none
+
+/-- Helper to construct a canonical LayoutEnv from an emitted Leaf Book. -/
+def layoutEnvOfBook (b : Obend.Leaf.Book) (selfIndex : Nat := 0) : LayoutEnv :=
+  { fields := b.defs.mapIdx fun idx d => (d.member, idx),
+    selfIndex := selfIndex,
+    arity := 0 }
 
 /-- Lower a first-order Core4 term into an `LExpr`. -/
 def lowerTerm (env : LayoutEnv) (t : Term) : Option LExpr :=

@@ -120,18 +120,31 @@ def obligationCheck (k : Nat) (o : ClaimObj) (j : Justification) : Judge.Verdict
   | .byLoweredLean lowered _ _ =>
     if Obend.Law.termEq lowered o.claim != true then
       .refused .illFormed []
+    else if o.wellFormed != true then
+      .refused .illFormed []
     else
       .ok
-  | .byExternalJudge _ _ => .ok
-  | .byEval _ => .ok
+  | .byExternalJudge format payload =>
+    -- Refuse empty payloads or unsupported formats immediately
+    if payload.isEmpty || (format != "transport@1" && format != "rewrite@1" && format != "lrat@1") then
+      .refused .illFormed []
+    else
+      -- External judges require concrete translation/verification, refused at grade k if unverified
+      .refused .illFormed []
+  | .byEval samples =>
+    -- Finite evaluation samples cannot establish a universal claim; refuse empty and return uncovered for samples
+    if samples.isEmpty then
+      .refused .illFormed []
+    else
+      .uncovered
 
 instance obligationJudge : Judge ClaimObj Justification where
   Clause := ClaimClause
   Meaning o j := match j with
     | .byDerivation steps => claimMeaning o
-    | .byLoweredLean lowered _ _ => Obend.Law.termEq lowered o.claim = true
-    | .byExternalJudge _ _ => True
-    | .byEval _ => True
+    | .byLoweredLean lowered _ _ => Obend.Law.termEq lowered o.claim = true ∧ o.wellFormed = true
+    | .byExternalJudge _ _ => False
+    | .byEval _ => False
   check := obligationCheck
   sound := by
     intro k o j h
@@ -143,9 +156,15 @@ instance obligationJudge : Judge ClaimObj Justification where
       dsimp [obligationCheck] at h
       cases he : Obend.Law.termEq lowered o.claim
       · simp [he] at h
-      · exact he
-    | byExternalJudge _ _ => trivial
-    | byEval _ => trivial
+      · cases hw : o.wellFormed
+        · simp [hw] at h
+        · exact ⟨he, rfl⟩
+    | byExternalJudge format payload =>
+      dsimp [obligationCheck] at h
+      split at h <;> cases h
+    | byEval samples =>
+      dsimp [obligationCheck] at h
+      split at h <;> cases h
   refutes _ := false
   refuted := by intro _ _ _ _ _ _ href; cases href
   Fragment o := ∃ j k, obligationCheck k o j = .ok

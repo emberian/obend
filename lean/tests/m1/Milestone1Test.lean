@@ -49,13 +49,29 @@ theorem test_trace_sound (C : CellContract) (s0 sf : Data) (steps : List (Data �
 def testContractCertTiers : IO Unit := do
   let g1 : ContractGoal := .preserves (.boolean true) (.boolean true)
   let lawEx : Obend.Spec.Law.LawExpr := .eqC (.field "total") 0
-  let c1 : ContractCert := .byLawDial lawEx lawEx [] true
+  let c1 : ContractCert := .byLawDial lawEx lawEx ["total"]
   assertOk "Tier 1 LawDial certificate check" (checkContractCert g1 c1 matches .valid)
 
-  let certT : TransportCert := { digest := 0, claim := .boolean true, argTys := [] }
+  let decJson := Lean.Json.mkObj [
+    ("schema", "obend.receipt.v1"),
+    ("format", "transport@1"),
+    ("claim", "testDeciderThm"),
+    ("verdict", "ok")
+  ]
+  let c2a : ContractCert := .byLoweredDecider "testDeciderThm" [] decJson.compress.toUTF8
+  assertOk "Tier 2a LoweredDecider certificate check" (checkContractCert g1 c2a matches .valid)
+
+  let objT : TransportObj := { decideExpr := .boolLit true, argTys := [] }
+  let certT : TransportCert := { digest := Obend.Lower.sourceDigest (.boolLit true), claim := .boolean true, argTys := [] }
   let pin : Obend.Leaf.LeafPin := { cell := .layer "L1", code := .boolean true }
-  let c3 : ContractCert := .byLoweredLean certT [pin]
+  let c3 : ContractCert := .byLoweredLean objT certT [pin]
   assertOk "Tier 3 LoweredLean certificate check" (checkContractCert g1 c3 matches .valid)
+
+  -- obend_tooth counterexample synthesis
+  let lawPermissive : Obend.Spec.Law.LawExpr := .eqC (.field "bal") 75
+  let invStrict : Obend.Spec.Law.LawExpr := .leC (.field "bal") 50
+  let cex := Obend.Tactic.Weave.solveLawCounterexample ["bal"] lawPermissive invStrict
+  assertOk "obend_tooth synthesized violating Data record" (cex.isSome == true)
 
 -- 3. Test RealAnalysis CanonicalRat & Interval
 def testRealAnalysis : IO Unit := do
@@ -91,6 +107,10 @@ def testJudges : IO Unit := do
   let v1 := intervalJudge.check 0 q .direct
   assertOk "intervalJudge verdict on valid bounds" (v1 matches .ok)
 
+  -- Counterexample outside domain x = 20 must be returned as .uncovered, not .refused
+  let vOutDomain := intervalJudge.check 0 q (.counterexample [("x", CanonicalRat.mk 20 1)])
+  assertOk "intervalCheck rejects out-of-domain counterexample" (vOutDomain matches .uncovered)
+
   let pX : Poly := ⟨[([(0, 1)], 1)]⟩
   let pGoal := Poly.sqr pX
   let s0 : SOSPoly := ⟨[(1, pX)]⟩
@@ -118,6 +138,13 @@ def testLowerReflect : IO Unit := do
 def testObligation : IO Unit := do
   let just := Justification.byLoweredLean (.boolean true) [] ByteArray.empty
   assertOk "Justification.byLoweredLean constructed" (just matches .byLoweredLean _ _ _)
+
+  let vExt := obligationJudge.check 0 badClaim (.byExternalJudge "" ByteArray.empty)
+  assertOk "obligationCheck rejects empty byExternalJudge" (vExt matches .refused .illFormed _)
+  let vEval := obligationJudge.check 0 badClaim (.byEval [])
+  assertOk "obligationCheck rejects empty byEval" (vEval matches .refused .illFormed _)
+  let vEvalSome := obligationJudge.check 0 badClaim (.byEval [[1, 2]])
+  assertOk "obligationCheck returns uncovered for non-empty byEval" (vEvalSome matches .uncovered)
 
 def main : IO Unit := do
   IO.println "=== Running Milestone 1 Verification Suite ==="

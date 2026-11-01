@@ -47,16 +47,24 @@ def intervalCheck (_fuel : Nat) (q : IntervalQuery) (c : IntervalCert) : Judge.V
       else .refused (.boundViolated comp q.claimedBound) []
     | none => .refused .domainUndefined []
   | .counterexample pt =>
-    let rho (s : String) : CanonicalRat :=
+    -- Domain Validation: verify every declared variable in q.env is assigned a value inside its interval
+    let inDomain := q.env.all fun (s, iv) =>
       match pt.find? (·.1 == s) with
-      | some (_, v) => v
-      | none => 0
-    match evalPoint rho q.expr with
-    | some v =>
-      if decide (v < q.claimedBound.lo ∨ q.claimedBound.hi < v) then
-        .refused (.refutationWitness pt) []
-      else .uncovered
-    | none => .refused .domainUndefined []
+      | some (_, v) => iv.containsRat v
+      | none => false
+    if !inDomain then
+      .uncovered
+    else
+      let rho (s : String) : CanonicalRat :=
+        match pt.find? (·.1 == s) with
+        | some (_, v) => v
+        | none => 0
+      match evalPoint rho q.expr with
+      | some v =>
+        if decide (v < q.claimedBound.lo ∨ q.claimedBound.hi < v) then
+          .refused (.refutationWitness pt) []
+        else .uncovered
+      | none => .refused .domainUndefined []
 
 instance intervalJudge : Judge IntervalQuery IntervalCert where
   Clause := IntervalClause
