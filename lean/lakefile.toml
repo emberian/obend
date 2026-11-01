@@ -46,3 +46,6 @@ root = "Main"
 [[lean_exe]]
 name = "obend"
 root = "Obend.Main"
+# Lane Lower: `obend lower` imports a module with its environment extensions (Lean's equation
+# compiler reads them), whose initializers the interpreter runs; Linux needs the symbols exported.
+supportInterpreter = true

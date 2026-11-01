@@ -55,8 +55,10 @@ CASES = {
     "sumTo": [0, 1, 10, 100],
     "small": [0, 2, 3, 10],
     "isEven": [0, 7, 10],
+    "halvings": [0, 1, 10, 1000],
+    "ackTwo": [0, 3, 5],
 }
-TYPED = {"double", "pointNorm", "shapeArea", "addLit", "sumTo", "small", "isEven"}
+TYPED = set(CASES)
 
 
 def lean_evals():
@@ -96,6 +98,16 @@ with tempfile.TemporaryDirectory() as out:
         rc, text = obend("lower", "--verify", os.path.join(out, f"{name}.lower.json"),
                          os.path.join(out, f"{name}.source.json"))
         check(f"{name}: certificate verified", rc == 0 and "accepted" in text, text)
+
+    rc, text = obend("lower", "fib", "--arg", "10", "--kernel-recursion")
+    check("fib through Nat.brecOn: reported, runs, refused by the checker",
+          "read through its kernel value" in text and "checked: refused" in text
+          and re.search(r"^machine: fib 10 = 55$", text, re.M) is not None, text[-300:])
+    rc, text = obend("lower", "fib")
+    check("fib is read from fib.eq_def", "read from fib.eq_def" in text, text[-300:])
+    rc, text = obend("lower", "kTooth", "--arg", "3")
+    check("kTooth: Core4 computes what the kernel computes (3)", re.search(r"^machine: kTooth 3 = 3$", text, re.M)
+          is not None and "checked: accepted" in text, text[-300:])
 
     # teeth on the certificate
     rc, text = obend("lower", "--verify", os.path.join(out, "double.lower.json"),
@@ -181,7 +193,7 @@ with tempfile.TemporaryDirectory() as out:
     check("tooth: theorem depending on custom axiom is refused by --transport",
           rc == 3 and "disallowed axiom" in text, text)
 
-for name in ["halvings", "greeting", "propElim"]:
+for name in ["countDown", "greeting", "propElim"]:
     rc, text = obend("lower", name)
     check(f"tooth: {name} is outside the fragment", rc == 3 and "outside the fragment" in text, text[-300:])
 

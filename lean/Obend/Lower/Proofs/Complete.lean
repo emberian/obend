@@ -63,6 +63,29 @@ theorem raw_lower_complete_refuted :
 theorem erasedElim_ltyped : LTyped [] erasedElim .natural :=
   .split (Ts := []) rfl List.nodup_nil (by simp) (.erased []) (.lit [] 42)
 
+/-- `Witness.rec 5 Witness.mk`, read: the destructor of a field-less structure on an erased proof. -/
+def erasedRec : LExpr := .split [] (.lit 5) .erased
+
+theorem erasedRec_typed : LTyped [] erasedRec .natural :=
+  .split (Ts := []) rfl List.nodup_nil (by simp) (.erased _) (.lit _ _)
+
+theorem erasedRec_lowered : Evaluates (lowerT erasedRec) (.nat 5) := by
+  simp only [erasedRec, lowerT, box]
+  exact ⟨.next (.splitRecord _ _ _ [] rfl) (.refl _), .natural 5⟩
+
+theorem erasedRec_stuck : ∀ e', ¬ SStep erasedRec e' := by
+  intro e' h
+  cases h with
+  | splitMajor _ _ s => cases s
+
+/-- **The converse fails on the typed fragment without `nonEmptySplits`, at an erasure.** -/
+theorem lower_complete_fails :
+    ¬ ∀ (e : LExpr) (n : Nat), LTyped [] e .natural → Evaluates (lowerT e) (.nat n) → SSteps e (.lit n) := by
+  intro claim
+  have run := claim erasedRec 5 erasedRec_typed erasedRec_lowered
+  cases run with
+  | next s _ => exact erasedRec_stuck _ s
+
 /-! ## 2. `lower_complete` and Exact Bi-Simulation under Source Canonicity -/
 
 /-- A closed source term of type `Nat` reduces to some canonical `Nat` literal. -/
@@ -206,6 +229,8 @@ theorem LExpr.rename_comp : ∀ (e : LExpr) (f g : Nat → Nat),
     simp only [LExpr.rename, List.map_map, LExpr.rename_comp m f g]
     congr 1; apply List.map_congr_left; intro x hx
     simp only [Function.comp_apply, LExpr.rename_comp x.2.2 f g]
+  | .recConst n T b, f, g => by
+    simp only [LExpr.rename, LExpr.rename_comp b (liftRename f) (liftRename g), liftRename_comp]
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -254,6 +279,9 @@ theorem LExpr.rename_subst : ∀ (e : LExpr) (f : Nat → Nat) (σ : Nat → LEx
     simp only [LExpr.rename, LExpr.subst, List.map_map, LExpr.rename_subst m f σ]
     congr 1; apply List.map_congr_left; intro x hx
     simp only [Function.comp_apply, LExpr.rename_subst x.2.2 f σ]
+  | .recConst n T b, f, σ => by
+    simp only [LExpr.rename, LExpr.subst, LExpr.rename_subst b (liftRename f) (LExpr.liftSubst σ),
+      liftSubst_liftRename]
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -305,6 +333,9 @@ theorem LExpr.subst_rename : ∀ (e : LExpr) (σ : Nat → LExpr) (f : Nat → N
     simp only [LExpr.subst, LExpr.rename, List.map_map, LExpr.subst_rename m σ f]
     congr 1; apply List.map_congr_left; intro x hx
     simp only [Function.comp_apply, LExpr.subst_rename x.2.2 σ f]
+  | .recConst n T b, σ, f => by
+    simp only [LExpr.subst, LExpr.rename, LExpr.subst_rename b (LExpr.liftSubst σ) (liftRename f),
+      liftSubst_rename]
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -351,6 +382,8 @@ theorem LExpr.subst_comp : ∀ (e : LExpr) (σ τ : Nat → LExpr),
     simp only [LExpr.subst, List.map_map, LExpr.subst_comp m σ τ]
     congr 1; apply List.map_congr_left; intro x hx
     simp only [Function.comp_apply, LExpr.subst_comp x.2.2 σ τ]
+  | .recConst n T b, σ, τ => by
+    simp only [LExpr.subst, LExpr.subst_comp b (LExpr.liftSubst σ) (LExpr.liftSubst τ), liftSubst_comp]
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -397,6 +430,7 @@ theorem LExpr.subst_bvar : ∀ (e : LExpr), e.subst LExpr.bvar = e
       apply List.map_congr_left; intro x hx
       simp only [id, LExpr.subst_bvar x.2.2]
     simpa using hmap
+  | .recConst n T b => by simp only [LExpr.subst, liftSubst_bvar, LExpr.subst_bvar b]
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -431,6 +465,7 @@ def nonEmptySplits : LExpr → Bool
   | .record fs | .inject _ fs => fs.attach.all fun ⟨f, _⟩ => nonEmptySplits f.2
   | .split names F m => !names.isEmpty && nonEmptySplits F && nonEmptySplits m
   | .cases _ arms m => nonEmptySplits m && arms.attach.all fun ⟨a, _⟩ => nonEmptySplits a.2.2
+  | .recConst _ _ _ => false
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -804,6 +839,8 @@ theorem ltyped_reducible {Γ : List Ty} {e : LExpr} {T : Ty}
       (fun x => .cases R (arms.map fun a => (a.1, a.2.1, a.2.2.subst σ)) x)
       (fun st => .casesMajor R (arms.map fun a => (a.1, a.2.1, a.2.2.subst σ)) st) smaj
     exact red_ssteps R s1 (red_sstep R (.casesInject R _ label fs names minor values hfind hvs) hspine)
+  | recConst _ _ _ =>
+    simp [nonEmptySplits] at hne
 
 /-- Every closed `LTyped [] e T` term with `nonEmptySplits e = true` is reducible (`Red T e`). -/
 theorem ltyped_red {e : LExpr} {T : Ty}
@@ -980,6 +1017,10 @@ def inferL (Γ : List Ty) (expected? : Option Ty) : LExpr → Option Ty
         some R
       else none
     | none => none
+  | .recConst _ T b =>
+    if good T && inferL (T :: Γ) (some T) b == some T then
+      some T
+    else none
 
 def inferFields (Γ : List Ty) : List (String × LExpr) → Option (List Ty)
   | [] => some []
@@ -1154,6 +1195,13 @@ theorem inferL_sound (Γ : List Ty) :
           (inferL_sound Γ m (some (.variant (armsRow arms sig))) (.variant (armsRow arms sig)) hcond.2)
           hlen hnd hg hcond.1.2 htyped
       · cases h
+  | .recConst _ T b, _, _, h => by
+    simp only [inferL, Bool.and_eq_true, beq_iff_eq] at h
+    split at h <;> rename_i hcond
+    · simp only [Option.some.injEq] at h
+      subst h
+      exact .recConst hcond.1 (inferL_sound (T :: Γ) b (some T) T hcond.2)
+    · cases h
 
 theorem inferFields_sound (Γ : List Ty) :
     ∀ (fs : List (String × LExpr)) (Ts : List Ty),
@@ -1287,6 +1335,7 @@ def synthClean (hasExp : Bool) : LExpr → Bool
   | .proj _ t => synthClean false t
   | .inject _ fs => hasExp && synthCleanFields fs
   | .cases _ arms m => synthCleanArms arms && synthClean true m
+  | .recConst _ _ b => synthClean true b
 
 def synthCleanFields : List (String × LExpr) → Bool
   | [] => true
@@ -1457,6 +1506,11 @@ theorem ltyped_inferL_complete {Γ : List Ty} {e : LExpr} {T : Ty}
     simp only [cond] at hm'
     have hnd' := nodupStrings_complete hnd
     simp [inferL, harms', hnd', hR, hm']
+  | recConst hT _ ihb =>
+    intro _ hc
+    have hb' := ihb true hc
+    simp only [cond] at hb'
+    simp [inferL, hT, hb']
 
 /-- **Completeness of `checkL`**: for any `synthClean true e = true`, `LTyped Γ e T` implies
 `checkL Γ e T = true`. -/

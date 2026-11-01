@@ -79,6 +79,23 @@ theorem natRec_unfold_positive (Z S K : Term) :
   cases h with
   | next s r => exact .begin s r
 
+/-- A lowered recursive definition unfolds in three steps to its body with itself for `self`. -/
+theorem recConst_unfold (B : Term) :
+    PositiveSteps (.fix (recSpec B) box) (instantiate B (.fix (recSpec B) box)) := by
+  refine .begin (Step.fix _ _) ?_
+  generalize Term.fix (recSpec B) box = X
+  have hs : recSpec B = .lam (.lam (B.rename Nat.succ)) := rfl
+  rw [hs]
+  refine .next (.application _ (.beta _ _)) ?_
+  rw [instantiate_eq]; simp only [Term.substitute]
+  refine .next (.beta _ _) ?_
+  rw [instantiate_eq, instantiate_eq, rename_substitute, substitute_comp]
+  have : (fun i => ((liftSubstitution (single X)) (Nat.succ i)).substitute (single box)) = single X := by
+    funext i; cases i with
+    | zero => simp only [liftSubstitution, single]; exact shift_one_cancel _ _
+    | succ n => simp [liftSubstitution, single, Term.substitute, Term.rename]
+  rw [this]; exact .refl _
+
 theorem natOp_result (op : NatOp) (a b : Nat) :
     primitiveResult op.prim (.nat a) (.nat b) = some (lowerT (op.eval a b)) := by
   cases op <;> simp [NatOp.prim, NatOp.eval, primitiveResult, lowerT]
@@ -224,6 +241,10 @@ theorem lower_step {s s' : LExpr} (h : SStep s s') :
     · rw [caseArm_open]
       exact .next (.splitRecord _ _ _ _ (lowerFields_splitValues fields names values hit)) (.refl _)
     · rw [lowerT_spine]; exact Ahead.refl _
+  | unfold name T body =>
+    simp only [lowerT]
+    right; refine ⟨_, recConst_unfold _, ?_⟩
+    rw [lowerT_inst]; simp only [lowerT]; exact Ahead.refl _
   | casesMajor T arms _ ih =>
     simp only [lowerT]
     rcases ih with ⟨e, lt⟩ | ⟨m, pos, ah⟩

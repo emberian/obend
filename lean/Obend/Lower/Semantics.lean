@@ -12,6 +12,7 @@ fragment. Each constructor says which kernel rule it is:
 | `beta`, `appFun` | `whnfCore`: `Expr.app` with a `lam` head is `instantiate`d; otherwise the head is reduced | `whnfCore` `.app` case, `IsDefEq.beta` |
 | `zeta` | `whnfCore`: `letE` is `instantiate1`d | `whnfCore` `.letE` case, `IsDefEq.zeta` (Lean4Lean's VExpr has no `let`; `TrExpr` unfolds it) |
 | `delta` | `whnf`: `unfoldDefinition?` of a definition | `whnf` `unfoldDefinition`, `IsDefEq.delta` |
+| `unfold` | a recursive definition replaced by the right-hand side of its unfolding equation `f.eq_def` (Meta's smart unfolding; the compiler's `_unsafe_rec` view) | `unfoldDefinition` followed by the ι steps through `brecOn` that make `f.eq_def` hold by `rfl` (structural recursion); for well-founded recursion `f.eq_def` is a propositional equation (`WellFounded.fix_eq`), not a kernel reduction |
 | `succFold`, `succArg` | `whnf`/`reduceNat`: `Nat.succ` of an argument whose `whnf` is a literal folds to a literal | `reduceNat` (`Nat.succ` case) |
 | `binLit`, `binLeft`, `binRight` | `reduceNat`/`reduceBinNatOp`: both arguments are `whnf`ed, left first, and computed when literals | `reduceBinNatOp` |
 | `natRecZero`, `natRecSucc`, `natRecMajor` | `inductiveReduceRec` for `Nat.rec`: the major premise is `whnf`ed; a literal is turned into `Nat.zero`/`Nat.succ (lit n)` (`natLitExt`, `toCtorIfLit`) and the rule applied | `inductiveReduceRec`, `toCtorIfLit`, `IsDefEq.iota` |
@@ -67,6 +68,9 @@ inductive SStep : LExpr → LExpr → Prop where
       SStep (.cases T arms (.inject label fields)) (minor.spine values)
   | casesMajor {m m' : LExpr} (T : Ty) (arms : List (String × List String × LExpr)) :
       SStep m m' → SStep (.cases T arms m) (.cases T arms m')
+  /-- Recursive δ: a recursive definition unfolds by its unfolding equation (`f.eq_def`). -/
+  | unfold (name : String) (T : Ty) (body : LExpr) :
+      SStep (.recConst name T body) (body.inst (.recConst name T body))
 
 inductive SSteps : LExpr → LExpr → Prop where
   | refl (e : LExpr) : SSteps e e
