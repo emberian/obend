@@ -146,6 +146,29 @@ with tempfile.TemporaryDirectory() as out:
                          os.path.join(out, f"{thm}.statement.json"))
         check(f"transport {thm}: certificate verified by --verify-transport",
               rc == 0 and "transport@1: accepted" in text, text)
+        rc, text = obend("verify", os.path.join(out, f"{thm}.receipt.json"))
+        check(f"transport {thm}: universal receipt verified by `obend verify`",
+              rc == 0 and "transport@1: verified" in text, text)
+
+    # theorem transport to SystemVerilog RTL hardware assertion monitor (--transport --rtl)
+    rtl_thm = os.path.join(out, "small_lt_three.sv")
+    for n in [0, 2, 3, 10]:
+        rc, text = obend("lower", "--transport", "small_lt_three", "--arg", str(n), "--rtl", rtl_thm)
+        m_rtl = re.search(rf"^rtl: small_lt_three {n} = (\S+)", text, re.M)
+        check(f"transport small_lt_three {n} to RTL assertion monitor (--rtl): output {m_rtl.group(1) if m_rtl else None} = 1",
+              rc == 0 and m_rtl and m_rtl.group(1) == "1", text[-400:])
+    check("small_lt_three.sv contains SystemVerilog module lean_small_lt_three_rtl",
+          os.path.exists(rtl_thm) and "module lean_small_lt_three_rtl" in open(rtl_thm).read())
+
+    # Verilator lint on generated SystemVerilog modules if verilator is installed
+    import shutil
+    if shutil.which("verilator"):
+        for sv_file in [rtl_double, rtl_small, rtl_thm]:
+            r_v = subprocess.run(
+                ["verilator", "--lint-only", "-sv", "-Wall", "-Wno-DECLFILENAME", "-Wno-UNUSED", sv_file],
+                capture_output=True, text=True,
+            )
+            check(f"verilator --lint-only -Wall {os.path.basename(sv_file)}", r_v.returncode == 0, r_v.stdout + r_v.stderr)
 
     # teeth on transport@1
     rc, text = obend("lower", "--verify-transport",

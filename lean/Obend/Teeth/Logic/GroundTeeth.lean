@@ -8,7 +8,10 @@ cohort's `twiceOfThree() == 7` (preview-cohort row `ImportedReview`):
 * with `Override` composed last, the claim `repeated` itself runs to `false` at `3` (`3 == 7`):
   refuted of that object, as its rewrite certificate was refused there (`FrameTeeth.frame_refused`). -/
 public import Obend.Logic.Ground
+public import Obend.Logic.Turn
+public import Obend.Tactic.Tooth
 public import Obend.Teeth.Logic.FrameTeeth
+import all Obend.Logic.Turn
 @[expose] public section
 open Obend.Core.Term Obend.Logic
 open Obend.Core.Data (Data)
@@ -41,6 +44,19 @@ theorem repeated_ground_0 : groundCheck 400 ⟨instantiateClaim repeated (object
   decide +kernel
 theorem repeated_ground_41 : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 41]⟩ () = .ok := by
   decide +kernel
+
+/-- Accepting a turn without checking `termEq v p.expectedResult.term` breaks `turn_sound`. -/
+def turnCheckUncheckedResult (k : Nat) (p : TurnProblem) (_ : Unit) : Judge.Verdict TurnClause :=
+  match runToYield k p.term with
+  | none => .uncovered
+  | some (plan, ctx) =>
+    if Obend.Law.termEq plan p.expectedPlan then
+      match Obend.Law.run k (plug ctx p.response.term) with
+      | none => .uncovered
+      | some _ => .ok
+    else .refused .planMismatch []
+
+#tooth Obend.Logic.turn_sound by mutation Obend.Logic.turnCheck := turnCheckUncheckedResult
 
 end Obend.Teeth.Logic.Review
 end

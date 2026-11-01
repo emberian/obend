@@ -1233,6 +1233,246 @@ theorem checkL_sound {Γ : List Ty} {e : LExpr} {T : Ty} (h : checkL Γ e T = tr
   simp only [checkL, beq_iff_eq] at h
   exact inferL_sound Γ e (some T) T h
 
+/-! ### Completeness of `inferL` and `checkL` (`ltyped_iff_checkL`) -/
+
+theorem nodupStrings_complete : ∀ {xs : List String}, xs.Nodup → nodupStrings xs = true
+  | [], _ => rfl
+  | x :: xs, h => by
+    have ⟨hx, hxs⟩ := List.nodup_cons.mp h
+    simp [nodupStrings, hx, nodupStrings_complete hxs]
+
+theorem peelArrows_curry : ∀ (Ts : List Ty) (R : Ty),
+    peelArrows Ts.length (curry Ts R) = some (Ts, R)
+  | [], R => rfl
+  | A :: Ts, R => by
+    simp [List.length_cons, curry, fn, peelArrows, peelArrows_curry Ts R]
+
+theorem lookup_empty_rowFuel : ∀ (row : Ty) (fuel : Nat) (name : String) (T : Ty),
+    row.lookup [] fuel name = some T → row.lookup [] (rowFuel row) name = some T
+  | .field prior member tail, 0, _, _, h => by simp [Ty.lookup] at h
+  | .field prior member tail, f + 1, name, T, h => by
+    simp only [Ty.lookup, rowFuel] at h ⊢
+    split at h <;> rename_i heq
+    · simp [heq, h]
+    · simp [heq, lookup_empty_rowFuel tail f name T h]
+  | .variable _, 0, _, _, h | .variable _, _ + 1, _, _, h => by simp [Ty.lookup, List.lookup] at h
+  | .natural, 0, _, _, h | .natural, _ + 1, _, _, h
+  | .label, 0, _, _, h | .label, _ + 1, _, _, h
+  | .boolean, 0, _, _, h | .boolean, _ + 1, _, _, h
+  | .emptyRow, 0, _, _, h | .emptyRow, _ + 1, _, _, h
+  | .arrow _ _ _ _, 0, _, _, h | .arrow _ _ _ _, _ + 1, _, _, h
+  | .specification _ _, 0, _, _, h | .specification _ _, _ + 1, _, _, h
+  | .prototype _ _, 0, _, _, h | .prototype _ _, _ + 1, _, _, h
+  | .custody _, 0, _, _, h | .custody _, _ + 1, _, _, h
+  | .variant _, 0, _, _, h | .variant _, _ + 1, _, _, h
+  | .computation _ _ _, 0, _, _, h | .computation _ _ _, _ + 1, _, _, h => by
+    simp [Ty.lookup] at h
+
+mutual
+/-- Syntactic bidirectional checkability predicate: every `.inject` occurs in a checking position
+(`hasExp = true`) where the expected `.variant row` is known, and synthesis positions (`hasExp = false`)
+do not contain unannotated `.inject`s. -/
+def synthClean (hasExp : Bool) : LExpr → Bool
+  | .bvar _ | .erased | .lit _ | .boolLit _ => true
+  | .const _ b => synthClean hasExp b
+  | .app f a => synthClean false f && synthClean true a
+  | .lam _ b => synthClean hasExp b
+  | .letE _ v b => synthClean true v && synthClean hasExp b
+  | .natSucc a => synthClean true a
+  | .natBin _ l r => synthClean true l && synthClean true r
+  | .natRec _ z s m => synthClean true z && synthClean true s && synthClean true m
+  | .boolRec _ x y m => synthClean true x && synthClean true y && synthClean true m
+  | .record fs => synthCleanFields fs
+  | .split _ F m => synthClean false F && synthClean true m
+  | .proj _ t => synthClean false t
+  | .inject _ fs => hasExp && synthCleanFields fs
+  | .cases _ arms m => synthCleanArms arms && synthClean true m
+
+def synthCleanFields : List (String × LExpr) → Bool
+  | [] => true
+  | (_, e) :: rest => synthClean false e && synthCleanFields rest
+
+def synthCleanArms : List (String × List String × LExpr) → Bool
+  | [] => true
+  | (_, _, M) :: rest => synthClean false M && synthCleanArms rest
+end
+
+theorem inferFields_complete {Γ : List Ty} :
+    ∀ {fs : List (String × LExpr)} {Ts : List Ty},
+      fs.length = Ts.length →
+      (∀ p ∈ fs.zip Ts, inferL Γ none p.1.2 = some p.2) →
+      inferFields Γ fs = some Ts
+  | [], [], _, _ => rfl
+  | [], _ :: _, h, _ | _ :: _, [], h, _ => by simp at h
+  | (n, e) :: fs, T :: Ts, hlen, hrec => by
+    have he : inferL Γ none e = some T := hrec ((n, e), T) (by simp)
+    have hrest : inferFields Γ fs = some Ts :=
+      inferFields_complete (by simpa using hlen) (fun p hp => hrec p (by simp [hp]))
+    simp [inferFields, he, hrest]
+
+theorem inferArms_complete {Γ : List Ty} {R : Ty} :
+    ∀ {arms : List (String × List String × LExpr)} {sig : List (List Ty)},
+      arms.length = sig.length →
+      (∀ p ∈ arms.zip sig, p.1.2.1.length = p.2.length) →
+      (∀ p ∈ arms.zip sig, p.1.2.1.Nodup) →
+      (∀ p ∈ arms.zip sig, ∀ T ∈ p.2, good T = true) →
+      (∀ p ∈ arms.zip sig, inferL Γ none p.1.2.2 = some (curry p.2 R)) →
+      inferArms Γ R arms = some sig
+  | [], [], _, _, _, _, _ => rfl
+  | [], _ :: _, h, _, _, _, _ | _ :: _, [], h, _, _, _, _ => by simp at h
+  | (lbl, names, M) :: arms, Ts :: sig, hlen, hnames, hnd, hg, hM => by
+    have hM0 : inferL Γ none M = some (curry Ts R) := hM ((lbl, names, M), Ts) (by simp)
+    have hn0 : names.length = Ts.length := hnames ((lbl, names, M), Ts) (by simp)
+    have hnd0 : nodupStrings names = true := nodupStrings_complete (hnd ((lbl, names, M), Ts) (by simp))
+    have hg0 : Ts.all good = true := List.all_eq_true.mpr (hg ((lbl, names, M), Ts) (by simp))
+    have hrest : inferArms Γ R arms = some sig :=
+      inferArms_complete (by simpa using hlen)
+        (fun p hp => hnames p (by simp [hp]))
+        (fun p hp => hnd p (by simp [hp]))
+        (fun p hp => hg p (by simp [hp]))
+        (fun p hp => hM p (by simp [hp]))
+    simp [inferArms, hM0, hn0, peelArrows_curry, hnd0, hg0, hrest]
+
+theorem synthCleanFields_mem :
+    ∀ {fs : List (String × LExpr)} {Ts : List Ty},
+      synthCleanFields fs = true →
+      ∀ p ∈ fs.zip Ts, synthClean false p.1.2 = true
+  | [], _, _, p, hp => by simp at hp
+  | (_, _) :: _, [], _, p, hp => by simp at hp
+  | (_, e) :: fs, _ :: Ts, hc, p, hp => by
+    simp only [synthCleanFields, Bool.and_eq_true] at hc
+    rcases List.mem_cons.mp hp with rfl | hp'
+    · exact hc.1
+    · exact synthCleanFields_mem hc.2 p hp'
+
+theorem synthCleanArms_mem :
+    ∀ {arms : List (String × List String × LExpr)} {sig : List (List Ty)},
+      synthCleanArms arms = true →
+      ∀ p ∈ arms.zip sig, synthClean false p.1.2.2 = true
+  | [], _, _, p, hp => by simp at hp
+  | _ :: _, [], _, p, hp => by simp at hp
+  | (_, _, M) :: arms, _ :: sig, hc, p, hp => by
+    simp only [synthCleanArms, Bool.and_eq_true] at hc
+    rcases List.mem_cons.mp hp with rfl | hp'
+    · exact hc.1
+    · exact synthCleanArms_mem hc.2 p hp'
+
+/-- **Completeness of `inferL` (`ltyped_inferL_complete`)**: every `LTyped Γ e T` derivation on a
+`synthClean hasExp e` term is inferred as `some T` by `inferL Γ (cond hasExp (some T) none) e`. -/
+theorem ltyped_inferL_complete {Γ : List Ty} {e : LExpr} {T : Ty}
+    (h : LTyped Γ e T) :
+    ∀ (hasExp : Bool), synthClean hasExp e = true →
+      inferL Γ (cond hasExp (some T) none) e = some T := by
+  induction h with
+  | bvar hb => intro _ _; exact hb
+  | erased _ => intro _ _; rfl
+  | const _ ih => intro hasExp hc; exact ih hasExp hc
+  | app _ _ hA ihf iha =>
+    intro hasExp hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have hf' := ihf false hc.1
+    have ha' := iha true hc.2
+    simp only [cond] at hf' ha'
+    simp [inferL, hf', ha', hA]
+  | lam hA _ ihb =>
+    intro hasExp hc
+    have hb' := ihb hasExp hc
+    cases hasExp <;> simp_all [inferL, cond]
+  | letE hA _ _ ihv ihb =>
+    intro hasExp hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have hv' := ihv true hc.1
+    have hb' := ihb hasExp hc.2
+    simp only [cond] at hv'
+    simp only [inferL, hA, hv', beq_self_eq_true, Bool.and_self, ↓reduceIte]
+    exact hb'
+  | lit _ _ => intro _ _; rfl
+  | natSucc _ iha =>
+    intro _ hc
+    have ha' := iha true hc
+    simp only [cond] at ha'
+    simp [inferL, ha']
+  | natBin op _ _ ihl ihr =>
+    intro _ hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have hl' := ihl true hc.1
+    have hr' := ihr true hc.2
+    simp only [cond] at hl' hr'
+    simp [inferL, hl', hr']
+  | boolLit _ _ => intro _ _; rfl
+  | natRec hT _ _ _ ihz ihs ihm =>
+    intro _ hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have hz' := ihz true hc.1.1
+    have hs' := ihs true hc.1.2
+    have hm' := ihm true hc.2
+    simp only [cond] at hz' hs' hm'
+    simp [inferL, hT, hz', hs', hm']
+  | boolRec _ _ _ ihx ihy ihm =>
+    intro _ hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have hx' := ihx true hc.1.1
+    have hy' := ihy true hc.1.2
+    have hm' := ihm true hc.2
+    simp only [cond] at hx' hy' hm'
+    simp [inferL, hx', hy', hm']
+  | @record Γ' fs' Ts' hlen hnd hg _ ihfs =>
+    intro _ hc
+    have hfields : inferFields Γ' fs' = some Ts' :=
+      inferFields_complete hlen (fun p hp => ihfs p hp false (synthCleanFields_mem hc p hp))
+    have hnd' := nodupStrings_complete hnd
+    simp [inferL, hfields, hnd']
+    exact hg
+  | @split Γ' names' F' m' Ts' R' hlen hnd hg _ _ ihm ihF =>
+    intro _ hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have hF' := ihF false hc.1
+    have hm' := ihm true hc.2
+    simp only [cond] at hF' hm'
+    have hnd' := nodupStrings_complete hnd
+    simp [inferL, hF', hlen, peelArrows_curry, hnd', hm']
+    exact hg
+  | proj _ hlook iht =>
+    intro _ hc
+    have ht' := iht false hc
+    simp only [cond] at ht'
+    simp [inferL, ht', lookup_empty_rowFuel _ _ _ _ hlook]
+  | @inject Γ' label' fs' Ts' row' fuel' hlen hnd hg _ hlook ihfs =>
+    intro hasExp hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    rcases hc with ⟨rfl, hcfs⟩
+    have hfields : inferFields Γ' fs' = some Ts' :=
+      inferFields_complete hlen (fun p hp => ihfs p hp false (synthCleanFields_mem hcfs p hp))
+    have hnd' := nodupStrings_complete hnd
+    have hlook' := lookup_empty_rowFuel _ _ _ _ hlook
+    simp [inferL, cond, hfields, hnd', hlook']
+    exact hg
+  | @cases Γ' R' arms' sig' m' hlen hnd _ hnames hnd_arms hg hR _ ihm iharms =>
+    intro _ hc
+    simp only [synthClean, Bool.and_eq_true] at hc
+    have harms' : inferArms Γ' R' arms' = some sig' :=
+      inferArms_complete hlen hnames hnd_arms hg
+        (fun p hp => iharms p hp false (synthCleanArms_mem hc.1 p hp))
+    have hm' := ihm true hc.2
+    simp only [cond] at hm'
+    have hnd' := nodupStrings_complete hnd
+    simp [inferL, harms', hnd', hR, hm']
+
+/-- **Completeness of `checkL`**: for any `synthClean true e = true`, `LTyped Γ e T` implies
+`checkL Γ e T = true`. -/
+theorem checkL_complete {Γ : List Ty} {e : LExpr} {T : Ty}
+    (hc : synthClean true e = true) (h : LTyped Γ e T) :
+    checkL Γ e T = true := by
+  simp only [checkL, beq_iff_eq]
+  exact ltyped_inferL_complete h true hc
+
+/-- **Exact Characterization / Decidability of `LTyped` (`ltyped_iff_checkL`)**:
+On any `synthClean true e = true` term, `LTyped Γ e T` holds if and only if `checkL Γ e T = true`. -/
+theorem ltyped_iff_checkL {Γ : List Ty} {e : LExpr} {T : Ty}
+    (hc : synthClean true e = true) :
+    LTyped Γ e T ↔ checkL Γ e T = true :=
+  ⟨checkL_complete hc, checkL_sound⟩
+
 /-- Apply a source expression `f` to a list of argument expressions `args`. -/
 def lapps (f : LExpr) (args : List LExpr) : LExpr := args.foldl .app f
 

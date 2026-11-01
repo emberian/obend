@@ -18,6 +18,7 @@ module
 -/
 public import Obend.Receipt.Export
 public import Obend.Logic.Receipt
+public import Obend.Lower.Transport
 
 open Lean (Json)
 
@@ -41,6 +42,20 @@ def verifyCommand (path : String) (prev : Option String) (root : Option Nat) : I
     | .ok lines => for l in lines do IO.println l
                    IO.println "verified"; return 0
     | .error e => IO.eprintln s!"refused: {e}"; return 3
+  -- A transported theorem receipt (`Obend.Lower.Transport`, format `transport@1`).
+  if (j.getObjValAs? String "kind").toOption == some "transport" then
+    let some stmt := (j.getObjVal? "statement").toOption
+      | do IO.eprintln "refused: missing statement"; return 3
+    let some cert := (j.getObjVal? "certificate").toOption
+      | do IO.eprintln "refused: missing certificate"; return 3
+    match Obend.Lower.transportFormat.checkBytes 0 stmt.compress cert.compress with
+    | .ok =>
+      IO.println "transport@1: verified"
+      IO.println "verified"
+      return 0
+    | .refused (.judge _) _ => IO.eprintln "refused: transport@1 refused by judge"; return 3
+    | .refused (.malformed m) _ => IO.eprintln s!"refused: transport@1 malformed ({m})"; return 3
+    | .uncovered => IO.eprintln "refused: transport@1 uncovered"; return 3
   let pj ← match prev with
     | none => pure none
     | some p => pure (some (← readJson p))

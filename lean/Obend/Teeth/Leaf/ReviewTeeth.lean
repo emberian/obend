@@ -20,10 +20,12 @@ public import Obend.Tactic.Tooth
 public import Obend.Teeth.Logic.FrameTeeth
 import all Obend.Leaf.Flatten
 import all Obend.Leaf.Specialize
+import all Obend.Leaf.BendTT
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Residual
+public import Obend.Leaf.BendTT
 @[expose] public section
-open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Slot Obend.Slot.World Obend.Equiv
+open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Leaf.BendTT Obend.Slot Obend.Slot.World Obend.Equiv
 open Obend.Teeth.Logic.Review (base twice augmented override seed)
 
 namespace Obend.Teeth.Leaf.Review
@@ -147,6 +149,48 @@ theorem leak_refused_and_residual :
     superOnlyProjectedRow leaky.seed leaky.layers = false ∧
       leaky.vtable.any (fun e => recordBad (rowShapes leaky) e.2) = true := by decide +kernel
 
+/-! ## BendTT Target Emission & Soundness (`Obend.Leaf.BendTT`) -/
+
+/-- The natural a `BendTT` run reaches. -/
+def natOfB : Option BTerm → Option Nat
+  | some (.nat n) => some n
+  | _ => none
+
+/-- `ReviewMember` (`comp 1`) emits cleanly to `BendTT` (`emitBendTT (emit (comp 1))`) with an
+acyclic leaf call graph (`bb.acyclicDefs = true`, zero `.fix` knots inside its method bodies),
+evaluating `twice(3) = 7` and `review(3) = 5` under `BendTT.runB`. -/
+theorem review_bendtt_verified :
+    (match emitBendTT (emit (comp 1)) with
+     | some bb =>
+       bb.acyclicDefs &&
+       (natOfB (runB 200 (.app (.get bb.dispatch "twice") (BTerm.nat 3))) == some 7) &&
+       (natOfB (runB 200 (.app (.get bb.dispatch "review") (BTerm.nat 3))) == some 5)
+     | none => false) = true := by
+  decide +kernel
+
+/-- End-to-end `book_to_bendtt_sound` on `ReviewMember`: `BendTT.runB` on `emitBendTT (emit (comp 1))`
+establishes `Halts (.app (.get (comp 1).object "twice") (.nat 3)) (.natural 7)` on the source
+Core4 object. -/
+theorem review_bendtt_halts_object :
+    ∃ bb : BBook,
+      emitBendTT (emit (comp 1)) = some bb ∧
+      Halts (.app (.get (comp 1).object "twice") (Term.nat 3)) (.natural 7) := by
+  have hver := review_bendtt_verified
+  cases h : emitBendTT (emit (comp 1)) with
+  | none => simp [h] at hver
+  | some bb =>
+    rw [h] at hver
+    simp only [Bool.and_eq_true, beq_iff_eq] at hver
+    have h7 : natOfB (runB 200 (.app (.get bb.dispatch "twice") (BTerm.nat 3))) = some 7 := hver.1.2
+    unfold natOfB at h7
+    cases hr : runB 200 (.app (.get bb.dispatch "twice") (BTerm.nat 3)) with
+    | none => simp [hr] at h7
+    | some v =>
+      rw [hr] at h7
+      cases v <;> simp at h7
+      subst h7
+      exact ⟨bb, rfl, (book_to_bendtt_sound (comp 1) comp_closed h "twice" 3 200 7 hr).2⟩
+
 /-! ## Teeth -/
 
 /-- `self` left at the wrong binder: the vtable's entries see the `{}` argument as `self`. -/
@@ -160,6 +204,12 @@ def supportsLayersOnly : Candidate → List LeafPin
   | .machine => []
 
 #tooth Obend.Leaf.book_usable_sound by mutation Obend.Leaf.Candidate.supports := supportsLayersOnly
+
+/-- Dropping the outer `.fix` knot in `BBook.dispatch` breaks `emitBendTT_dispatch`. -/
+def bbookDispatchUnfixed (B : BBook) : BTerm :=
+  .record (B.items.map BBookItem.entry)
+
+#tooth Obend.Leaf.BendTT.emitBendTT_dispatch by mutation Obend.Leaf.BendTT.BBook.dispatch := bbookDispatchUnfixed
 
 end Obend.Teeth.Leaf.Review
 end

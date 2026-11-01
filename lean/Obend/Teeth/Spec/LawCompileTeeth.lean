@@ -6,8 +6,9 @@ library's and the checker's, whose bodies a `module` cannot see; a legacy file c
 imports this file.
 -/
 import Obend.Spec.Proofs.LawCompile
+import Obend.Spec.LawDial
 import Obend.Tactic.Tooth
-open Obend.Law Obend.Spec.LawCompile
+open Obend.Law Obend.Spec.LawCompile Obend.Spec.LawDial
 
 -- A boolean field reads as `1`/`0`; read raw, the meaning is lost.
 #tooth compile_change by mutation scalarRead := fun _ t => t
@@ -23,3 +24,5 @@ open Obend.Law Obend.Spec.LawCompile
     (clause S name e .prior) (clause S name e .prior)
 -- The request's optional facts are sums the reads eliminate.
 #tooth compile_checks by mutation optNatTy := .natural
+-- Returning the old state without checking `e.denote` breaks `solveLawWitness_sound`.
+#tooth solveLawWitness_sound by mutation solveLawWitness := fun _ _ _ old => old

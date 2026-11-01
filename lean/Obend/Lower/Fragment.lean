@@ -286,11 +286,90 @@ are rejected. -/
 def allowedAxiom (n : Name) : Bool :=
   n == ``propext || n == ``Quot.sound || n == ``Classical.choice
 
+/-- Synthesize the `Bool`-valued decision expression for proposition `p` in the fragment
+(supporting `Eq` and `Ne` on `Nat` and `Bool`, `<`, `≤`, `>`, and `≥` on `Nat`, `And`, `Or`, `Not`,
+`Iff`, `True`, `False`, and propositional implication `P → Q`), working even in standalone
+`importModules` environments where typeclass extensions are not initialized. -/
+partial def synthFragmentDeciderBool (p : Expr) : MetaM Expr := do
+  let boolTy := mkConst ``Bool
+  let motive := mkLambda `_ .default boolTy boolTy
+  let bTrue := mkConst ``Bool.true
+  let bFalse := mkConst ``Bool.false
+  if let .forallE _ P Q _ := p then
+    if (← isProp P) && !Q.hasLooseBVars then
+      let dp ← synthFragmentDeciderBool P
+      let dq ← synthFragmentDeciderBool Q
+      return mkApp4 (mkConst ``Bool.rec [Level.one]) motive bTrue dq dp
+  let fn := p.getAppFn
+  let args := p.getAppArgs
+  if fn.isConstOf ``True && args.size == 0 then
+    return bTrue
+  if fn.isConstOf ``False && args.size == 0 then
+    return bFalse
+  if fn.isConstOf ``Eq && args.size == 3 then
+    let ty ← whnf args[0]!
+    let lhs := args[1]!
+    let rhs := args[2]!
+    if ty.isConstOf ``Nat then
+      let inst := mkApp2 (mkConst ``Nat.decEq) lhs rhs
+      return mkApp2 (mkConst ``Decidable.decide) p inst
+    if ty.isConstOf ``Bool then
+      let inst := mkApp2 (mkConst ``Bool.decEq) lhs rhs
+      return mkApp2 (mkConst ``Decidable.decide) p inst
+  if fn.isConstOf ``Ne && args.size == 3 then
+    let eqProp := mkApp3 (mkConst ``Eq fn.constLevels!) args[0]! args[1]! args[2]!
+    let dp ← synthFragmentDeciderBool eqProp
+    return mkApp4 (mkConst ``Bool.rec [Level.one]) motive bTrue bFalse dp
+  if (fn.isConstOf ``LT.lt && args.size == 4) then
+    let ty ← whnf args[0]!
+    if ty.isConstOf ``Nat then
+      let inst := mkApp2 (mkConst ``Nat.decLt) args[2]! args[3]!
+      return mkApp2 (mkConst ``Decidable.decide) p inst
+  if (fn.isConstOf ``LE.le && args.size == 4) then
+    let ty ← whnf args[0]!
+    if ty.isConstOf ``Nat then
+      let inst := mkApp2 (mkConst ``Nat.decLe) args[2]! args[3]!
+      return mkApp2 (mkConst ``Decidable.decide) p inst
+  if (fn.isConstOf ``GT.gt && args.size == 4) then
+    let ty ← whnf args[0]!
+    if ty.isConstOf ``Nat then
+      let inst := mkApp2 (mkConst ``Nat.decLt) args[3]! args[2]!
+      return mkApp2 (mkConst ``Decidable.decide) (mkApp2 (mkConst ``Nat.lt) args[3]! args[2]!) inst
+  if (fn.isConstOf ``GE.ge && args.size == 4) then
+    let ty ← whnf args[0]!
+    if ty.isConstOf ``Nat then
+      let inst := mkApp2 (mkConst ``Nat.decLe) args[3]! args[2]!
+      return mkApp2 (mkConst ``Decidable.decide) (mkApp2 (mkConst ``Nat.le) args[3]! args[2]!) inst
+  if fn.isConstOf ``Nat.lt && args.size == 2 then
+    let inst := mkApp2 (mkConst ``Nat.decLt) args[0]! args[1]!
+    return mkApp2 (mkConst ``Decidable.decide) p inst
+  if fn.isConstOf ``Nat.le && args.size == 2 then
+    let inst := mkApp2 (mkConst ``Nat.decLe) args[0]! args[1]!
+    return mkApp2 (mkConst ``Decidable.decide) p inst
+  if fn.isConstOf ``And && args.size == 2 then
+    let dp ← synthFragmentDeciderBool args[0]!
+    let dq ← synthFragmentDeciderBool args[1]!
+    return mkApp4 (mkConst ``Bool.rec [Level.one]) motive bFalse dq dp
+  if fn.isConstOf ``Or && args.size == 2 then
+    let dp ← synthFragmentDeciderBool args[0]!
+    let dq ← synthFragmentDeciderBool args[1]!
+    return mkApp4 (mkConst ``Bool.rec [Level.one]) motive dq bTrue dp
+  if fn.isConstOf ``Iff && args.size == 2 then
+    let dp ← synthFragmentDeciderBool args[0]!
+    let dq ← synthFragmentDeciderBool args[1]!
+    let eqProp := mkApp3 (mkConst ``Eq [Level.one]) boolTy dp dq
+    let inst := mkApp2 (mkConst ``Bool.decEq) dp dq
+    return mkApp2 (mkConst ``Decidable.decide) eqProp inst
+  if fn.isConstOf ``Not && args.size == 1 then
+    let dp ← synthFragmentDeciderBool args[0]!
+    return mkApp4 (mkConst ``Bool.rec [Level.one]) motive bTrue bFalse dp
+  let inst ← synthInstance (mkApp (mkConst ``Decidable) p)
+  return mkApp2 (mkConst ``Decidable.decide) p inst
+
 /-- Peel leading computational universal quantifiers `∀ (x₁ : A₁) ... (xₖ : Aₖ), P` and synthesize
 `Decidable.decide P` at the propositional body `P`. -/
 partial def buildDeciderExpr (ty : Expr) : MetaM (Expr × List Ty) := do
-  let tyWhnf ← whnf ty
-  match tyWhnf with
+  match ty with
   | .forallE n A B bi =>
     let aIsProp ← isProp A
     let aIsType ← isTypeFormerType A
@@ -302,11 +381,9 @@ partial def buildDeciderExpr (ty : Expr) : MetaM (Expr × List Ty) := do
         let lamExpr ← mkLambdaFVars #[x] bodyDec
         return (lamExpr, argTy :: restTys)
     else
-      let inst ← synthInstance (mkApp (mkConst ``Decidable) ty)
-      return (mkApp2 (mkConst ``Decidable.decide) ty inst, [])
+      return (← synthFragmentDeciderBool ty, [])
   | _ =>
-    let inst ← synthInstance (mkApp (mkConst ``Decidable) ty)
-    return (mkApp2 (mkConst ``Decidable.decide) ty inst, [])
+    return (← synthFragmentDeciderBool ty, [])
 
 /-- **`readTheoremDecider`**: given a theorem or proposition declaration `declName` in the
 environment:
@@ -322,8 +399,11 @@ def readTheoremDecider (declName : Name) : MetaM (Except String (LExpr × List T
     | return .error s!"unknown declaration {declName}"
   if info.isUnsafe then
     return .error s!"declaration {declName} is unsafe"
-  unless info.hasValue do
-    return .error s!"declaration {declName} has no proof term (axiom or opaque)"
+  match info with
+  | .thmInfo _ | .defnInfo _ => pure ()
+  | .axiomInfo _ => return .error s!"declaration {declName} is an unproved axiom"
+  | .opaqueInfo _ => return .error s!"declaration {declName} is opaque"
+  | _ => return .error s!"declaration {declName} has no proof term"
   let axioms ← Lean.collectAxioms declName
   for ax in axioms do
     unless allowedAxiom ax do

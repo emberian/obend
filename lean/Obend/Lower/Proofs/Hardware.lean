@@ -261,5 +261,313 @@ theorem lean_small_to_book_to_rtl :
   · exact lean_to_book "small" smallUnderflowLExpr 10 7 (by decide +kernel) smallUnderflow_runs_10
   · decide +kernel
 
+/-! ## 5. Typeclass Dictionary & Structure Inlining for Combinational RTL Compilation (`inlineDict`) -/
+
+/-- One bottom-up structural pass of beta-reduction (`.app (.lam b) a ↦ instantiate b a`),
+record projection (`.get (.record fs) k`), record splitting (`.split (.record fs) ns fn`), and
+variant case-splitting (`.case (.inject lbl payload) arms`). -/
+def inlinePass : Term → Term
+  | .lam b => .lam (inlinePass b)
+  | .app f a =>
+    let f' := inlinePass f
+    let a' := inlinePass a
+    match f' with
+    | .lam b => instantiate b a'
+    | .ifBool c t e => .ifBool c (.app t a') (.app e a')
+    | _ => .app f' a'
+  | .get target name =>
+    let t' := inlinePass target
+    match t' with
+    | .record fs =>
+      match fs.find? (fun field => field.1 == name) with
+      | some (_, body) => body
+      | none => .get t' name
+    | _ => .get t' name
+  | .split target names fn =>
+    let t' := inlinePass target
+    let fn' := inlinePass fn
+    match t' with
+    | .record fs =>
+      match splitValues fs names with
+      | some vals => applyAll fn' vals
+      | none => .split t' names fn'
+    | _ => .split t' names fn'
+  | .case scrut arms =>
+    let s' := inlinePass scrut
+    let arms' := arms.map fun a => (a.1, inlinePass a.2)
+    match s' with
+    | .inject lbl payload =>
+      match arms'.find? (fun a => a.1 == lbl) with
+      | some (_, body) => instantiate body payload
+      | none => .case s' arms'
+    | _ => .case s' arms'
+  | .record fs => .record (fs.map fun f => (f.1, inlinePass f.2))
+  | .inject lbl p => .inject lbl (inlinePass p)
+  | .binary op l r => .binary op (inlinePass l) (inlinePass r)
+  | .ifBool c t f => .ifBool (inlinePass c) (inlinePass t) (inlinePass f)
+  | .ifZero v z s => .ifZero (inlinePass v) (inlinePass z) (inlinePass s)
+  | .fix s i => .fix (inlinePass s) (inlinePass i)
+  | other => other
+termination_by t => sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals first
+    | omega
+    | (rename_i hmem
+       have hlist := List.sizeOf_lt_of_mem hmem
+       have hpair : sizeOf a.snd < sizeOf a := by cases a; simp +arith
+       omega)
+    | (rename_i hmem
+       have hlist := List.sizeOf_lt_of_mem hmem
+       have hpair : sizeOf f.snd < sizeOf f := by cases f; simp +arith
+       omega)
+
+/-- Iterate `inlinePass` `k` times to eliminate nested Lean 4 typeclass dictionary wrappers
+(`HAdd.hAdd`, `HSub.hSub`, `OfNat.ofNat`, `Decidable.decide`, `ite`) prior to combinational RTL
+compilation. -/
+def inlineDict : Nat → Term → Term
+  | 0, t => t
+  | k + 1, t => inlineDict k (inlinePass t)
+
+/-- `inlinePass` is the identity on already-direct lowered terms (`doubleLExpr` and
+`smallUnderflowLExpr`). -/
+theorem inlinePass_direct_idempotent :
+    inlinePass (lowerT doubleLExpr) = lowerT doubleLExpr ∧
+    inlinePass (lowerT smallUnderflowLExpr) = lowerT smallUnderflowLExpr := by
+  simp [inlinePass, doubleLExpr, smallUnderflowLExpr, lowerT, NatOp.prim]
+
+/-! ## 6. Contextual Equivalence (`Ahead` and `≈b`) of Beta + Record + Split Dictionary Inlining -/
+
+/-- Static beta-resolution: `(.lam b) a ↦ instantiate b a`. -/
+def resolveApp : Term → Term → Term
+  | .lam b, a => instantiate b a
+  | f, a => .app f a
+
+theorem ahead_resolveApp {f f' a a' : Term} (hf : Ahead f f') (ha : Ahead a a') :
+    Ahead (.app f a) (resolveApp f' a') := by
+  unfold resolveApp
+  split
+  · rename_i b'
+    obtain ⟨b, s, ab⟩ := Obend.Equiv.inv_lam_ahead hf
+    exact .run (steps_snoc (Obend.Equiv.steps_app a s) (.beta b a)) (ahead_instantiate ab ha)
+  · exact .app hf ha
+
+/-- Static record-split resolution: `.split (.record fs) names fn ↦ applyAll fn vals`. -/
+def resolveSplit : Term → List String → Term → Term
+  | .record fs, names, fn =>
+    match splitValues fs names with
+    | some vals => applyAll fn vals
+    | none => .split (.record fs) names fn
+  | t, names, fn => .split t names fn
+
+theorem ahead_resolveSplit {t t' fn fn' : Term} (names : List String)
+    (ht : Ahead t t') (hfn : Ahead fn fn') :
+    Ahead (.split t names fn) (resolveSplit t' names fn') := by
+  unfold resolveSplit
+  split
+  · rename_i fs'
+    split
+    · rename_i vals' hit
+      obtain ⟨fs, s, n1, r1⟩ := Obend.Equiv.inv_record_ahead ht
+      obtain ⟨vals, hit0, a⟩ := Obend.Equiv.splitValues_right n1 r1 hfn hit
+      exact .run (steps_snoc (Obend.Equiv.steps_split names fn s) (.splitRecord fs names fn vals hit0)) a
+    · exact .split names ht hfn
+  · exact .split names ht hfn
+
+/-- One bottom-up pass of verified `Core4` beta, record-projection (`resolveGet`), and record-split
+(`resolveSplit`) reduction in any context. -/
+def betaRecordPass : Term → Term
+  | .hole n σ => .hole n (σ.map betaRecordPass)
+  | .bound i => .bound i
+  | .lam b => .lam (betaRecordPass b)
+  | .app f a => resolveApp (betaRecordPass f) (betaRecordPass a)
+  | .mix l u => .mix (betaRecordPass l) (betaRecordPass u)
+  | .fix s i => .fix (betaRecordPass s) (betaRecordPass i)
+  | .specification m e => .specification (betaRecordPass m) (betaRecordPass e)
+  | .prototype s g => .prototype (betaRecordPass s) (betaRecordPass g)
+  | .reflect p => .reflect (betaRecordPass p)
+  | .metadata p => .metadata (betaRecordPass p)
+  | .project p => .project (betaRecordPass p)
+  | .nat n => .nat n
+  | .boolean b => .boolean b
+  | .label l => .label l
+  | .binary op l r => .binary op (betaRecordPass l) (betaRecordPass r)
+  | .extend i fs => .extend (betaRecordPass i) (fs.map fun f => (f.1, betaRecordPass f.2))
+  | .record fs => .record (fs.map fun f => (f.1, betaRecordPass f.2))
+  | .get g p => resolveGet (betaRecordPass g) p
+  | .ifZero v z s => .ifZero (betaRecordPass v) (betaRecordPass z) (betaRecordPass s)
+  | .inject l p => .inject l (betaRecordPass p)
+  | .case sc arms => .case (betaRecordPass sc) (arms.map fun a => (a.1, betaRecordPass a.2))
+  | .ifBool c x y => .ifBool (betaRecordPass c) (betaRecordPass x) (betaRecordPass y)
+  | .perform p => .perform (betaRecordPass p)
+  | .done v => .done (betaRecordPass v)
+  | .split t names f => resolveSplit (betaRecordPass t) names (betaRecordPass f)
+termination_by t => sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals first
+    | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
+    | (rename_i hmem; have := sizeOf_snd_lt_of_mem hmem; omega)
+
+/-- **Soundness of `betaRecordPass` (`ahead_betaRecordPass`)**: `betaRecordPass t` is an `Ahead`
+reduction-in-context of `t` for every `Term`. -/
+theorem ahead_betaRecordPass : (t : Term) → Ahead t (betaRecordPass t)
+  | .hole n σ => by
+    simp only [betaRecordPass]
+    refine .hole n (by simp) ?_
+    intro p hp
+    rw [List.zip_map_right] at hp
+    obtain ⟨⟨a, b⟩, hab, rfl⟩ := List.mem_map.1 hp
+    obtain ⟨he, ha⟩ := zip_self σ (a, b) hab
+    have hb : a = b := he
+    subst hb
+    have _ : a ∈ σ := ha
+    exact ahead_betaRecordPass a
+  | .bound i => by simp only [betaRecordPass]; exact .bound i
+  | .lam b => by simp only [betaRecordPass]; exact .lam (ahead_betaRecordPass b)
+  | .app f a => by simp only [betaRecordPass]; exact ahead_resolveApp (ahead_betaRecordPass f) (ahead_betaRecordPass a)
+  | .mix l u => by simp only [betaRecordPass]; exact .mix (ahead_betaRecordPass l) (ahead_betaRecordPass u)
+  | .fix s i => by simp only [betaRecordPass]; exact .fix (ahead_betaRecordPass s) (ahead_betaRecordPass i)
+  | .specification m e => by simp only [betaRecordPass]; exact .specification (ahead_betaRecordPass m) (ahead_betaRecordPass e)
+  | .prototype s g => by simp only [betaRecordPass]; exact .prototype (ahead_betaRecordPass s) (ahead_betaRecordPass g)
+  | .reflect p => by simp only [betaRecordPass]; exact .reflect (ahead_betaRecordPass p)
+  | .metadata p => by simp only [betaRecordPass]; exact .metadata (ahead_betaRecordPass p)
+  | .project p => by simp only [betaRecordPass]; exact .project (ahead_betaRecordPass p)
+  | .nat n => by simp only [betaRecordPass]; exact .nat n
+  | .boolean b => by simp only [betaRecordPass]; exact .boolean b
+  | .label l => by simp only [betaRecordPass]; exact .label l
+  | .binary op l r => by simp only [betaRecordPass]; exact .binary op (ahead_betaRecordPass l) (ahead_betaRecordPass r)
+  | .extend i fs => by
+    simp only [betaRecordPass]
+    exact .extend (ahead_betaRecordPass i) (names_map _ fs).symm
+      (zip_map_self_rel betaRecordPass fs fun x _ => ahead_betaRecordPass x.2)
+  | .record fs => by
+    simp only [betaRecordPass]
+    exact .record (names_map _ fs).symm
+      (zip_map_self_rel betaRecordPass fs fun x _ => ahead_betaRecordPass x.2)
+  | .get g p => by simp only [betaRecordPass]; exact ahead_resolveGet p (ahead_betaRecordPass g)
+  | .ifZero v z s => by simp only [betaRecordPass]; exact .ifZero (ahead_betaRecordPass v) (ahead_betaRecordPass z) (ahead_betaRecordPass s)
+  | .inject l p => by simp only [betaRecordPass]; exact .inject l (ahead_betaRecordPass p)
+  | .case sc arms => by
+    simp only [betaRecordPass]
+    exact .case (ahead_betaRecordPass sc) (names_map _ arms).symm
+      (zip_map_self_rel betaRecordPass arms fun x _ => ahead_betaRecordPass x.2)
+  | .ifBool c x y => by simp only [betaRecordPass]; exact .ifBool (ahead_betaRecordPass c) (ahead_betaRecordPass x) (ahead_betaRecordPass y)
+  | .perform p => by simp only [betaRecordPass]; exact .perform (ahead_betaRecordPass p)
+  | .done v => by simp only [betaRecordPass]; exact .done (ahead_betaRecordPass v)
+  | .split t names f => by simp only [betaRecordPass]; exact ahead_resolveSplit names (ahead_betaRecordPass t) (ahead_betaRecordPass f)
+termination_by t => sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals first
+    | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
+    | (rename_i hmem; have := sizeOf_snd_lt_of_mem hmem; omega)
+
+/-- **`betaRecordPass` preserves contextual behavioural equivalence (`≈b`)**. -/
+theorem bequiv_betaRecordPass (t : Term) : t ≈b betaRecordPass t :=
+  bequiv_of_ahead (ahead_betaRecordPass t)
+
+/-- Iterate `betaRecordPass` `k` times. -/
+def betaRecordDict : Nat → Term → Term
+  | 0, t => t
+  | k + 1, t => betaRecordDict k (betaRecordPass t)
+
+/-- **Multi-pass dictionary inlining preserves contextual behavioural equivalence (`≈b`)** for
+every pass count `k` and every term `t`. -/
+theorem bequiv_betaRecordDict : ∀ (k : Nat) (t : Term), t ≈b betaRecordDict k t
+  | 0, t => BEquiv.refl t
+  | k + 1, t => (bequiv_betaRecordPass t).trans (bequiv_betaRecordDict k (betaRecordPass t))
+
+/-- **Contextual Behavioural Equivalence of `.ifBool`-Application Distribution (`bequiv_app_ifBool_bool`)**:
+Whenever the condition `c` reduces to a Boolean `b` (`Steps c (.boolean b)`), distributing
+application across `.ifBool` (`(.ifBool c t e) a` ↔ `.ifBool c (t a) (e a)`) is a full contextual
+behavioural equivalence (`≈b`) in every context and under every substitution! -/
+theorem bequiv_app_ifBool_bool {c t e a : Term} {b : Bool} (hc : Steps c (.boolean b)) :
+    (.app (.ifBool c t e) a) ≈b (.ifBool c (.app t a) (.app e a)) := by
+  have hcond1 : Steps (.app (.ifBool c t e) a) (.app (.ifBool (.boolean b) t e) a) :=
+    Obend.Equiv.steps_app a (Obend.Equiv.steps_ifBool t e hc)
+  have hcond2 : Steps (.ifBool c (.app t a) (.app e a)) (.ifBool (.boolean b) (.app t a) (.app e a)) :=
+    Obend.Equiv.steps_ifBool (.app t a) (.app e a) hc
+  cases b
+  · have h1 : Steps (.app (.ifBool c t e) a) (.app e a) :=
+      steps_snoc hcond1 (.application a (.ifFalse t e))
+    have h2 : Steps (.ifBool c (.app t a) (.app e a)) (.app e a) :=
+      steps_snoc hcond2 (.ifFalse (.app t a) (.app e a))
+    exact (bequiv_of_steps h1).trans (bequiv_of_steps h2).symm
+  · have h1 : Steps (.app (.ifBool c t e) a) (.app t a) :=
+      steps_snoc hcond1 (.application a (.ifTrue t e))
+    have h2 : Steps (.ifBool c (.app t a) (.app e a)) (.app t a) :=
+      steps_snoc hcond2 (.ifTrue (.app t a) (.app e a))
+    exact (bequiv_of_steps h1).trans (bequiv_of_steps h2).symm
+
+/-! ## 7. Transported Theorem to Combinational Hardware Assertion Monitor (`transport_monitor_rtl`) -/
+
+/-- `LExpr` decision procedure for `∀ n : Nat, if n ≤ 2 then small n == 1 else true`
+(`small_lt_three` in `Programs.lean`). -/
+def smallLtThreeDeciderLExpr : LExpr :=
+  .lam .natural
+    (.boolRec .boolean
+      (.boolLit true)
+      (.natBin .beq
+        (.boolRec .natural
+          (.natBin .sub (.bvar 0) (.lit 3))
+          (.natBin .add (.natBin .sub (.bvar 0) (.lit 3)) (.lit 1))
+          (.natBin .ble (.bvar 0) (.lit 2)))
+        (.lit 1))
+      (.natBin .ble (.bvar 0) (.lit 2)))
+
+/-- **Hardware Assertion Monitor Synthesis (`small_lt_three_rtl_monitor_verified`)**:
+The lowered decision procedure `lowerT smallLtThreeDeciderLExpr` compiles via `compileBookToRtlSat`
+into a verified SystemVerilog assertion monitor `RtlModule` (`checkRtlModule m = true`) whose output
+wire `out_small_lt_three` evaluates to `1#64` (`true`) across both underflowing (`n = 0, 1, 2`) and
+non-underflowing (`n = 3, 10`) hardware inputs! -/
+theorem small_lt_three_rtl_monitor_verified :
+    let C := leanComposition "small_lt_three" (lowerT smallLtThreeDeciderLExpr)
+    let B := emit C
+    (match compileBookToRtlSat "lean_small_lt_three_rtl" B with
+     | some m =>
+       checkRtlModule m &&
+       (evalModuleOutputs m (fun _ => 0#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
+       (evalModuleOutputs m (fun _ => 1#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
+       (evalModuleOutputs m (fun _ => 2#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
+       (evalModuleOutputs m (fun _ => 3#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
+       (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)])
+     | none => false) = true := by
+  decide +kernel
+
+/-! ## 8. Sequential Multi-Cycle `Nat.rec` FSM Compilation (`sumToLExpr` → `Book` → `compileBookToSeqRtlSat`) -/
+
+/-- `fun n : Nat => Nat.rec 0 (fun k acc => acc + k + 1) n` (`sumTo` in `Programs.lean`). -/
+def sumToLExpr : LExpr :=
+  .lam .natural
+    (.natRec .natural
+      (.lit 0)
+      (.lam .natural (.lam .natural
+        (.natBin .add (.natBin .add (.bvar 0) (.bvar 1)) (.lit 1))))
+      (.bvar 0))
+
+/-- **Verified Sequential Multi-Cycle Hardware Synthesis for `sumTo` (`lean_sumTo_seq_rtl_verified`)**:
+1. `lowerT sumToLExpr` is wrapped in a `Leaf.Book` (`emit (leanComposition "sumTo" ...)`),
+2. `compileBookToSeqRtlSat` synthesizes a 2-register (`reg_idx`, `reg_acc`), 5-wire sequential
+   `RtlModule` that passes `checkRtlModule` (`checkWireTableDAG` + `checkModuleCdc`),
+3. Cycle-accurate simulation (`evalSeqModuleAfterCycles`) over `n` clock cycles matches
+   `sumTo n = n * (n + 1) / 2` and asserts `out_done = 1#64` for `n = 0` (`0`), `n = 5` (`15`),
+   and `n = 10` (`55`), while after only `4` cycles on `n = 5` (`reg_idx = 4 < 5`), `out_done`
+   remains `0#64`! -/
+theorem lean_sumTo_seq_rtl_verified :
+    let C := leanComposition "sumTo" (lowerT sumToLExpr)
+    let B := emit C
+    (match compileBookToSeqRtlSat "lean_sumTo_seq_rtl" B with
+     | some m =>
+       checkRtlModule m &&
+       (evalSeqModuleAfterCycles m 0#64 0 == [("out_sumTo", 0#64), ("out_done", 1#64)]) &&
+       (evalSeqModuleAfterCycles m 5#64 4 == [("out_sumTo", 10#64), ("out_done", 0#64)]) &&
+       (evalSeqModuleAfterCycles m 5#64 5 == [("out_sumTo", 15#64), ("out_done", 1#64)]) &&
+       (evalSeqModuleAfterCycles m 10#64 10 == [("out_sumTo", 55#64), ("out_done", 1#64)])
+     | none => false) = true := by
+  decide +kernel
+
 end Obend.Lower
 end

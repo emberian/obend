@@ -172,5 +172,15 @@ def compileTermSatRefuseBox
 
 #tooth Obend.Lower.saturating_accepts_erased by mutation Obend.Hardware.Compiler.compileTermSat := compileTermSatRefuseBox
 
+/-- 10. Broken `checkL` that refuses every expression (`false`), caught by `checkL_complete`. -/
+def checkLAlwaysFalse (_ : List Ty) (_ : LExpr) (_ : Ty) : Bool := false
+
+#tooth Obend.Lower.checkL_complete by mutation Obend.Lower.checkL := checkLAlwaysFalse
+
+/-- 11. Broken `betaRecordPass` that drops the term to `.nat 0`, caught by `ahead_betaRecordPass`. -/
+def betaRecordPassConstZero (_ : Term) : Term := .nat 0
+
+#tooth Obend.Lower.ahead_betaRecordPass by mutation Obend.Lower.betaRecordPass := betaRecordPassConstZero
+
 end Obend.Teeth.Lower
 end

@@ -27,6 +27,7 @@ What is proved, for every list of laws, state type, pair of states and request: 
 -/
 public import Obend.Vault.Page
 public import Obend.Spec.Proofs.LawCompile
+public import Obend.Spec.LawDial
 public import Obend.Law.Proofs.Inherit
 public import Obend.Law.Proofs.Run
 @[expose] public section
@@ -238,9 +239,24 @@ def candidates (e : LawExpr) (cur old : Nat) (others : List Nat := []) : List Na
   ((near old ++ cs.flatMap near ++ [0, cur + 1, cur - 1] ++ others.flatMap near).eraseDups.filter (· != cur)).mergeSort
     fun a b => dist a ≤ dist b
 
+/-- Multi-field edit suggestion via `Obend.Spec.LawDial.solveLawWitness`: returns the list of
+`(field, newValue)` pairs that differ from `new` in the solved satisfying witness `w`. -/
+def suggestMultiField (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) :
+    Option (List (String × Nat)) :=
+  let fields := e.fields.eraseDups
+  match Obend.Spec.LawDial.solveLawWitness fields e facts old with
+  | some w =>
+    let edits := fields.filterMap fun f =>
+      let cur := natAt new f
+      let wv := natAt w f
+      if wv != cur then some (f, wv) else none
+    if edits.isEmpty then none else some edits
+  | none => none
+
 /-- **What would pass**: the change of one field the law reads that makes it hold, said as the line
 of frontmatter that would pass (for a field the page writes there) or as the measure that would
-pass; else a request from the owner, if that passes; else that nothing near does. -/
+pass; else a request from the owner, if that passes; else a multi-field change found by
+`suggestMultiField` (`Obend.Spec.LawDial.solveLawWitness`); else that nothing near does. -/
 def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (front : List String) : String :=
   let fields := e.fields.eraseDups
   let found := fields.findSome? fun f =>
@@ -256,7 +272,22 @@ def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (fron
   | none =>
     if e.denote { facts with caller := some 0, subject := some 0 } old new then
       "the same write by the owner would pass"
-    else "no change of one field passes"
+    else
+      match suggestMultiField e facts old new with
+      | some edits =>
+        let parts := edits.map fun (f, wv) => f ++ " = " ++ toString wv
+        "the multi-field change `" ++ String.intercalate ", " parts ++ "` would pass"
+      | none => "no change of one field passes"
+
+/-- On a coupled multi-field law (`monotone(a) and new.a <= new.b and new.b <= 10`) where no
+single-field edit from `{a: 2, b: 1}` (against `old = {a: 4, b: 1}`) passes, `suggestMultiField`
+uses `Obend.Spec.LawDial.solveLawWitness` to synthesize the multi-field edit `[("a", 4), ("b", 4)]`. -/
+theorem suggestMultiField_coupledMultiFieldLaw :
+    suggestMultiField Obend.Spec.LawDial.coupledMultiFieldLaw Obend.Spec.LawDial.demoFacts
+      (some Obend.Spec.LawDial.coupledOldState)
+      (.record [("a", .natural 2), ("b", .natural 1)]) =
+    some [("a", 4), ("b", 4)] := by
+  decide +kernel
 
 end Obend.Vault
 

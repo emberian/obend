@@ -259,6 +259,7 @@ import Obend.Law.Proofs.Typing
 import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
+import Obend.Leaf.BendTT
 import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
 import Obend.Leaf.Residual
@@ -278,6 +279,7 @@ import Obend.Logic.Obligation
 import Obend.Logic.Program
 import Obend.Logic.Receipt
 import Obend.Logic.Rewrite
+import Obend.Logic.Turn
 import Obend.Lower.Cli
 import Obend.Lower.Fragment
 import Obend.Lower.Judge
@@ -345,6 +347,7 @@ import Obend.Spec.FrontEnd
 import Obend.Spec.Identity
 import Obend.Spec.Law
 import Obend.Spec.LawCompile
+import Obend.Spec.LawDial
 import Obend.Spec.PackageLaw
 import Obend.Spec.Parse
 import Obend.Spec.Preview

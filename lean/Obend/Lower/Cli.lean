@@ -77,7 +77,7 @@ def parse : List String → Options → Except String Options
 /-- The environment of a built module (`importModules`; the build directory on the search path). -/
 def importModule (module : String) : IO Environment := do
   initSearchPath (← findSysroot) [".lake/build/lib/lean"]
-  importModules #[{ module := module.toName }] {} (level := .private)
+  importModules #[{ module := module.toName, importAll := true }] {} (level := .private)
 
 def runMeta {α : Type} (env : Environment) (x : MetaM α) : IO α := do
   let (a, _) ← (x.run' {}).toIO { fileName := "obend-lower", fileMap := default } { env := env }
@@ -133,22 +133,37 @@ def lowerCommand (name : String) (o : Options) : IO UInt32 := do
     if let some n := o.arg then
       IO.println s!"book: {name} {n} = {machine (.app (.get B.link name) (.nat n))}"
   if let some rtlPath := o.rtl then
-    let C := Obend.Lower.leanComposition name term
+    let C := Obend.Lower.leanComposition name (Obend.Lower.inlineDict 16 term)
     unless C.closedB do IO.println "refused: the composition is not closed"; return 3
     let B := Obend.Leaf.emit C
-    let some rtlMod := compileBookToRtlSat s!"lean_{name}_rtl" B
-      | do IO.println "refused: outside the combinational hardware fragment"; return 3
-    unless checkRtlModule rtlMod do
-      IO.println "refused: RtlModule failed DAG/CDC verification"
-      return 3
-    IO.println s!"rtl: module {rtlMod.name} verified (DAG + CDC)"
-    IO.FS.writeFile rtlPath (emitModuleSV rtlMod)
-    IO.println s!"wrote {rtlPath}"
-    if let some n := o.arg then
-      let outs := evalModuleOutputs rtlMod (fun _ => BitVec.ofNat 64 n) (fun _ => 0#64)
-      match outs with
-      | [(_, v)] => IO.println s!"rtl: {name} {n} = {v.toNat}"
-      | _ => pure ()
+    match compileBookToRtlSat s!"lean_{name}_rtl" B with
+    | some rtlMod =>
+      unless checkRtlModule rtlMod do
+        IO.println "refused: RtlModule failed DAG/CDC verification"
+        return 3
+      IO.println s!"rtl: module {rtlMod.name} verified (DAG + CDC)"
+      IO.FS.writeFile rtlPath (emitModuleSV rtlMod)
+      IO.println s!"wrote {rtlPath}"
+      if let some n := o.arg then
+        let outs := evalModuleOutputs rtlMod (fun _ => BitVec.ofNat 64 n) (fun _ => 0#64)
+        match outs with
+        | [(_, v)] => IO.println s!"rtl: {name} {n} = {v.toNat}"
+        | _ => pure ()
+    | none =>
+      let some seqMod := compileBookToSeqRtlSat s!"lean_{name}_seq_rtl" B
+        | do IO.println "refused: outside the combinational and sequential Nat.rec hardware fragments"; return 3
+      unless checkRtlModule seqMod do
+        IO.println "refused: sequential RtlModule failed DAG/CDC verification"
+        return 3
+      IO.println s!"rtl: sequential module {seqMod.name} verified (DAG + CDC)"
+      IO.FS.writeFile rtlPath (emitModuleSV seqMod)
+      IO.println s!"wrote {rtlPath}"
+      if let some n := o.arg then
+        let outs := evalSeqModuleAfterCycles seqMod (BitVec.ofNat 64 n) n
+        match outs with
+        | [(_, v), (_, doneVal)] =>
+          IO.println s!"rtl: {name} {n} = {v.toNat} (cycles={n}, done={doneVal.toNat})"
+        | _ => pure ()
   return 0
 
 def verifyCommand (certPath sourcePath : String) : IO UInt32 := do
@@ -185,9 +200,36 @@ def transportCommand (thmName : String) (o : Options) : IO UInt32 := do
     IO.FS.createDirAll dir
     IO.FS.writeFile s!"{dir}/{thmName}.transport.json" ((Obend.Lower.transportCertJson cert).pretty ++ "\n")
     IO.FS.writeFile s!"{dir}/{thmName}.statement.json" ((Obend.Lower.transportObjJson obj).pretty ++ "\n")
-    IO.println s!"wrote {dir}/{thmName}.transport.json {dir}/{thmName}.statement.json"
+    let receiptJson := Json.mkObj [
+      ("schema", toJson "obend.receipt.v1"),
+      ("kind", toJson "transport"),
+      ("format", toJson "transport@1"),
+      ("claim", toJson thmName),
+      ("statement", Obend.Lower.transportObjJson obj),
+      ("certificate", Obend.Lower.transportCertJson cert),
+      ("verdict", toJson "ok")
+    ]
+    IO.FS.writeFile s!"{dir}/{thmName}.receipt.json" (receiptJson.pretty ++ "\n")
+    IO.println s!"wrote {dir}/{thmName}.transport.json {dir}/{thmName}.statement.json {dir}/{thmName}.receipt.json"
   if let some n := o.arg then
     IO.println s!"claim: {thmName} {n} = {machine (.app claim (.nat n))}"
+  if let some rtlPath := o.rtl then
+    let C := Obend.Lower.leanComposition thmName (Obend.Lower.inlineDict 16 claim)
+    unless C.closedB do IO.println "refused: the composition is not closed"; return 3
+    let B := Obend.Leaf.emit C
+    let some rtlMod := compileBookToRtlSat s!"lean_{thmName}_rtl" B
+      | do IO.println "refused: outside the combinational hardware fragment"; return 3
+    unless checkRtlModule rtlMod do
+      IO.println "refused: RtlModule failed DAG/CDC verification"
+      return 3
+    IO.println s!"rtl: module {rtlMod.name} verified (DAG + CDC)"
+    IO.FS.writeFile rtlPath (emitModuleSV rtlMod)
+    IO.println s!"wrote {rtlPath}"
+    if let some n := o.arg then
+      let outs := evalModuleOutputs rtlMod (fun _ => BitVec.ofNat 64 n) (fun _ => 0#64)
+      match outs with
+      | [(_, v)] => IO.println s!"rtl: {thmName} {n} = {v.toNat}"
+      | _ => pure ()
   return 0
 
 def verifyTransportCommand (certPath objPath : String) : IO UInt32 := do

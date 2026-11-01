@@ -781,5 +781,155 @@ def compileBookToRtlSat (modName : String) (B : Book) : Option RtlModule :=
       outputs    := outs
     }
 
+/-! ## 6. Sequential Multi-Cycle FSM Synthesis for `Nat.rec` Loops (`compileBookToSeqRtlSat`) -/
+
+/-- Compile the successor step body of a lowered `Nat.rec z s count` (`fix (natRecSpec Z S) {} count`):
+* `recFnDepth` tracks the de Bruijn index of the `fix` self-binder (`3` at the top of the `ifZero`
+  successor arm),
+* `predDepth` tracks the de Bruijn index of the `ifZero` predecessor variable `p` (`0` at the top
+  of the `ifZero` successor arm),
+* Any recursive accumulator reference `.app (.bound rIdx) (.bound pIdx)` with `rIdx == recFnDepth`
+  and `pIdx == predDepth` compiles to `.wireRef 1` (`w_eff_acc`),
+* Curried 2-argument step functions `.app (.app (.lam (.lam subBody)) arg1) arg2` are beta-reduced
+  on the fly so both un-inlined (`lowerT`) and dictionary-inlined (`inlineDict`) `Nat.rec` terms
+  compile to identical hardware! -/
+def compileNatRecStepSat
+    (recFnDepth predDepth : Nat)
+    (varEnv : List RtlExpr) : Term → Option RtlExpr
+  | .nat n => some (.const (BitVec.ofNat 64 n))
+  | .boolean b => some (.const (if b then 1#64 else 0#64))
+  | .record [] => some (.const 0#64)
+  | .bound idx => varEnv[idx]?
+  | .app fn arg =>
+    match fn with
+    | .bound rIdx =>
+      match arg with
+      | .bound pIdx =>
+        if rIdx == recFnDepth && pIdx == predDepth then
+          some (.wireRef 1)
+        else
+          none
+      | _ => none
+    | .lam subBody =>
+      match compileNatRecStepSat recFnDepth predDepth varEnv arg with
+      | some eArg =>
+        compileNatRecStepSat (recFnDepth + 1) (predDepth + 1) (eArg :: varEnv) subBody
+      | none => none
+    | _ => none
+  | .binary op l r =>
+    match compileNatRecStepSat recFnDepth predDepth varEnv l,
+          compileNatRecStepSat recFnDepth predDepth varEnv r with
+    | some el, some er => compilePrimSat op el er
+    | _, _ => none
+  | .ifBool c t f =>
+    match compileNatRecStepSat recFnDepth predDepth varEnv c,
+          compileNatRecStepSat recFnDepth predDepth varEnv t,
+          compileNatRecStepSat recFnDepth predDepth varEnv f with
+    | some ec, some et, some ef => some (.mux ec et ef)
+    | _, _, _ => none
+  | _ => none
+
+/-- Recognize a lowered `Nat.rec` slot definition
+`λself. λarg. (.app (.fix (.lam (.lam (.lam (.ifZero (.bound 0) zTerm sTerm)))) _) countTerm)`
+(supporting both the un-inlined curried form `.app (.app (.lam (.lam subBody)) (.bound 0)) (.app (.bound 3) (.bound 0))`
+and the dictionary-inlined form) and synthesize its `(zExpr, stepExpr, countExpr)` datapath tuple. -/
+def extractSeqNatRecDefSat (d : LeafDef) : Option (RtlExpr × RtlExpr × RtlExpr) :=
+  match d.code with
+  | .lam (.lam (.app (.fix (.lam (.lam (.lam (.ifZero (.bound 0) zTerm sTerm)))) _) countTerm)) =>
+    let zEnv : List RtlExpr := [.const 0#64, .const 0#64, .const 0#64, .inputPort 0]
+    let sEnv : List RtlExpr := [.regRead 0, .const 0#64, .const 0#64, .const 0#64, .inputPort 0]
+    let stepOpt : Option RtlExpr :=
+      match sTerm with
+      | .app (.app (.lam (.lam subBody)) (.bound 0)) (.app (.bound 3) (.bound 0)) =>
+        let subEnv : List RtlExpr :=
+          [.wireRef 1, .regRead 0, .const 0#64, .const 0#64, .const 0#64, .inputPort 0]
+        compileNatRecStepSat 5 2 subEnv subBody
+      | _ =>
+        compileNatRecStepSat 3 0 sEnv sTerm
+    match compileTermSat [] [] 4 zEnv zTerm,
+          stepOpt,
+          compileTermSat [] [] 1 [.inputPort 0] countTerm with
+    | some zExpr, some stepExpr, some countExpr => some (zExpr, stepExpr, countExpr)
+    | _, _, _ => none
+  | _ => none
+
+/-- Compile a single-slot `Obend.Leaf.Book` containing a `Nat.rec` loop into a verified multi-cycle
+synchronous `RtlModule` with:
+* `reg 0` (`reg_idx`, `.syncReset 0#64`): loop counter $i \in [0, N]$,
+* `reg 1` (`reg_acc`, `.syncReset 0#64`): loop accumulator holding `Nat.rec z s i`,
+* `wire 0` (`w_count`): iteration bound $N$,
+* `wire 1` (`w_eff_acc`): `(reg_idx == 0) ? zExpr : reg_acc`,
+* `wire 2` (`w_step`): `stepExpr(k = reg_idx, acc = w_eff_acc)`,
+* `wire 3` (`d.member`): `w_eff_acc`,
+* `wire 4` (`done`): `(reg_idx < w_count) ? 0 : 1`,
+* Outputs `out_{d.member}` and `out_done`. -/
+def compileBookToSeqRtlSat (modName : String) (B : Book) : Option RtlModule :=
+  match B.defs with
+  | [d] =>
+    match extractSeqNatRecDefSat d with
+    | none => none
+    | some (zExpr, stepExpr, countExpr) =>
+      let w0 : WireAssign := { wireIdx := 0, name := "w_count", expr := countExpr }
+      let w1 : WireAssign :=
+        { wireIdx := 1
+        , name    := "w_eff_acc"
+        , expr    := .mux (.alu .eq (.regRead 0) (.const 0#64)) zExpr (.regRead 1) }
+      let w2 : WireAssign := { wireIdx := 2, name := "w_step", expr := stepExpr }
+      let w3 : WireAssign := { wireIdx := 3, name := d.member, expr := .wireRef 1 }
+      let w4 : WireAssign :=
+        { wireIdx := 4
+        , name    := "done"
+        , expr    := .mux (.alu .ult (.regRead 0) (.wireRef 0)) (.const 0#64) (.const 1#64) }
+      let r0 : RegSpec :=
+        { regIdx         := 0
+        , name           := "reg_idx"
+        , domain         := .coreClk
+        , resetKind      := .syncReset 0#64
+        , isSynchronizer := false
+        , nextExpr       :=
+            .mux (.alu .ult (.regRead 0) (.wireRef 0))
+              (.alu .add (.regRead 0) (.const 1#64))
+              (.regRead 0) }
+      let r1 : RegSpec :=
+        { regIdx         := 1
+        , name           := "reg_acc"
+        , domain         := .coreClk
+        , resetKind      := .syncReset 0#64
+        , isSynchronizer := false
+        , nextExpr       :=
+            .mux (.alu .ult (.regRead 0) (.wireRef 0))
+              (.wireRef 2)
+              (.regRead 1) }
+      some {
+        name       := modName
+        inputNames := ["arg"]
+        wires      := [w0, w1, w2, w3, w4]
+        regs       := [r0, r1]
+        outputs    := [
+          { name := s!"out_{d.member}", expr := .wireRef 3 },
+          { name := "out_done",         expr := .wireRef 4 }
+        ]
+      }
+  | _ => none
+
+/-- Step a sequential `RtlModule` for `numCycles` clock edges (`rst = false`). -/
+def stepSeqModuleN
+    (m : RtlModule)
+    (inputs : Nat → BitVec 64) : Nat → (Nat → BitVec 64) → (Nat → BitVec 64)
+  | 0, regSt => regSt
+  | k + 1, regSt => stepSeqModuleN m inputs k (stepModuleRegs m false inputs regSt)
+
+/-- Reset a sequential `RtlModule` (`rst = true` for 1 cycle) and then step it for `numCycles`
+active clock cycles (`rst = false`) with input port 0 driven by `argVal`, returning the resulting
+module output port table. -/
+def evalSeqModuleAfterCycles
+    (m : RtlModule)
+    (argVal : BitVec 64)
+    (numCycles : Nat) : List (String × BitVec 64) :=
+  let ins : Nat → BitVec 64 := fun _ => argVal
+  let initSt := stepModuleRegs m true ins (fun _ => 0#64)
+  let finalSt := stepSeqModuleN m ins numCycles initSt
+  evalModuleOutputs m ins finalSt
+
 end Obend.Hardware.Compiler
 end
