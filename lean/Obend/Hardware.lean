@@ -30,6 +30,9 @@ public import Obend.Hardware.PowerElectronics
 public import Obend.Hardware.Mechanics
 public import Obend.Hardware.Accelerators
 public import Obend.Hardware.GeometryCAM
+public import Obend.Hardware.Kinematics
+public import Obend.Hardware.OpenUSD
+public import Obend.Hardware.UserspacePhysical
 public import Obend.Hardware.Codec
 public import Obend.Hardware.Judge
 public import Obend.Hardware.Cli

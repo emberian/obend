@@ -228,6 +228,32 @@ examples:
      IPM retention sleeves, Jeffcott supercritical rotor-bearing whirl margin, hot running air-gap
      clearance under combined thermal + centrifugal radial growth ([`hot_air_gap_no_rub_sound`](lean/Obend/Hardware/Mechanics.lean#L156-L163)),
      and self-reproducing robotic factory cell closure ([`von_neumann_reflexive_closure_sound`](lean/Obend/Hardware/Mechanics.lean#L219-L234)).
+5. **Featherstone 6D Spatial Vector Algebra ($se(3)/se^*(3)$) & Ruckig Jerk-Limited Trajectory Profiles ([`Kinematics.lean`](lean/Obend/Hardware/Kinematics.lean))**:
+   - Mechanizes Featherstone's 6D Spatial Vector Algebra (`SpatialTwist` $\in se(3)$, `SpatialWrench` $\in se^*(3)$,
+     `spatialDualProduct`, `transformTwist`, `transformWrench`) with machine-checked proofs of the
+     **Spatial Power Invariance / D'Alembert Virtual Work Duality Theorem** ([`featherstone_joint_power_duality`](lean/Obend/Hardware/Kinematics.lean#L168-L185):
+     $\langle X_f^*(w), v \rangle = \langle w, X_v(v) \rangle$) and Recursive Newton-Euler (`RNEA`) dynamic link
+     balance ([`rnea_joint_torque_projection_identity`](lean/Obend/Hardware/Kinematics.lean#L214-L221)).
+   - Mechanizes **Ruckig (`arXiv:2105.04830`) third-order jerk-limited ($C^2$) trajectory segments**
+     (`evalJerkSegment`) and proves that symmetric jerk-pulse (`+j`, `-j`) S-curve transitions return
+     acceleration to zero while advancing velocity by $j \cdot \Delta t^2$, eliminating step-acceleration
+     excitation of machine-tool structural modes ([`ruckig_symmetric_pulse_exact`](lean/Obend/Hardware/Kinematics.lean#L266-L287)).
+6. **Persistent OpenUSD Assemblies, `timeSamples`, & Affine Arithmetic CSG Tape Pruning ([`OpenUSD.lean`](lean/Obend/Hardware/OpenUSD.lean))**:
+   - Mechanizes temporally persistent OpenUSD attributes (`UsdTimeTrack`) with proved time-monotonicity
+     ([`usd_time_track_insert_preserves_sorted`](lean/Obend/Hardware/OpenUSD.lean#L61-L82)) and
+     1st-order **Affine Arithmetic** (`AffineForm`: $x_0 + x_1 \epsilon_1 + x_2 \epsilon_2 + r_{\text{err}} \epsilon_e$,
+     $\epsilon_i \in [-1, 1]$) that tracks correlated spatial variations across CSG trees and cancels
+     first-order self-subtraction $a - a = 0$ (`affine_sub_self_cancels_first_order`), unlike naive
+     interval arithmetic (`(a - a).width = 2 * a.width`).
+7. **Idiomatic `.obend` Userspace Physical Engineering & Hardware Lowering ([`UserspacePhysical.lean`](lean/Obend/Hardware/UserspacePhysical.lean))**:
+   - Physical assemblies are authored directly in idiomatic `.obend` userspace using `spec`, `def`,
+     `super`, `self`, and `#law` contracts ([`LcDrivesStatorUsd.obend`](lean/tests/obend-source/world/physical/LcDrivesStatorUsd.obend),
+     [`Cnc5AxisMill.obend`](lean/tests/obend-source/world/physical/Cnc5AxisMill.obend)).
+   - [`stator_userspace_book_fpga_gpu_equiv`](lean/Obend/Hardware/UserspacePhysical.lean#L195-L216) and
+     [`cnc5axis_userspace_book_fpga_gpu_equiv`](lean/Obend/Hardware/UserspacePhysical.lean#L345-L366) prove
+     that `.obend` physical models flatten via `Obend.Leaf.Flatten.flatten` into `Leaf.Book` interaction nets
+     and compile via `compileBookToRtlSat` and `compileRtlModuleToAmdGpu` into bit-exact FPGA SystemVerilog
+     and AMD `CDNA3` GPU wavefront kernels!
 
 ---
 

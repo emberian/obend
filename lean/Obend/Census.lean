@@ -233,8 +233,10 @@ import Obend.Hardware.FluidThermal
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.HDL
 import Obend.Hardware.Judge
+import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
 import Obend.Hardware.Mechanics
+import Obend.Hardware.OpenUSD
 import Obend.Hardware.PCB
 import Obend.Hardware.Photonics
 import Obend.Hardware.Physics
@@ -249,6 +251,7 @@ import Obend.Hardware.Silicon
 import Obend.Hardware.Synth
 import Obend.Hardware.Thermal
 import Obend.Hardware.Types
+import Obend.Hardware.UserspacePhysical
 import Obend.Hardware.WaferSpace
 import Obend.Intention
 import Obend.Kind

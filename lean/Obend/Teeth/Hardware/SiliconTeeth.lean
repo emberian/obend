@@ -67,6 +67,9 @@ import all Obend.Hardware.PowerElectronics
 import all Obend.Hardware.Mechanics
 import all Obend.Hardware.Accelerators
 import all Obend.Hardware.GeometryCAM
+import all Obend.Hardware.Kinematics
+import all Obend.Hardware.OpenUSD
+import all Obend.Hardware.UserspacePhysical
 import all Obend.Hardware.Codec
 import all Obend.Hardware.Judge
 public import Obend.Hardware
@@ -83,6 +86,7 @@ open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
 open Obend.Hardware.Magnetics Obend.Hardware.FluidThermal
 open Obend.Hardware.PowerElectronics Obend.Hardware.Mechanics Obend.Hardware.Accelerators Obend.Hardware.GeometryCAM
+open Obend.Hardware.Kinematics Obend.Hardware.OpenUSD Obend.Hardware.UserspacePhysical
 open Obend.Hardware.Codec Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
@@ -557,6 +561,31 @@ def resolveLiverpsPairInverted {α : Type} (a b : UsdOpinion α) : UsdOpinion α
   if usdOpinionStrongerOrEq a b then b else a
 
 #tooth Obend.Hardware.GeometryCAM.liverps_local_dominates_nonlocal by mutation Obend.Hardware.GeometryCAM.resolveLiverpsPair := resolveLiverpsPairInverted
+
+/-- 46. Broken `spatialPower` in `Obend.Hardware.Kinematics` that subtracts the linear power `dot3 f.force v.lin` instead of adding it (breaking Featherstone spatial adjoint-coadjoint duality and D'Alembert virtual work). -/
+def spatialPowerBrokenLinear (f : SpatialWrench6D) (v : SpatialTwist6D) : Int :=
+  dot3 f.torque v.ang - dot3 f.force v.lin
+
+#tooth Obend.Hardware.Kinematics.featherstone_spatial_adjoint_duality by mutation Obend.Hardware.Kinematics.spatialPower := spatialPowerBrokenLinear
+
+/-- 47. Broken `AffineForm1D.toInterval` in `Obend.Hardware.OpenUSD` that forgets to negate `radius` on the lower bound (collapsing the affine interval enclosure to a degenerate point and missing CSG surfaces). -/
+def affineToIntervalCollapsed (af : AffineForm1D) : FloatInterval where
+  lo := af.c0 + af.radius
+  hi := af.c0 + af.radius
+
+#tooth Obend.Hardware.OpenUSD.affine_to_interval_encloses_eval by mutation Obend.Hardware.OpenUSD.AffineForm1D.toInterval := affineToIntervalCollapsed
+
+/-- 48. Broken `lcDrivesInSlotUpgradeLayer` in `Obend.Hardware.UserspacePhysical` that keeps outer-jacket `thermalResistance = 29` instead of `9` (breaking `.obend` userspace `LcDrivesStatorUsd.obend` -> `Leaf.Book` -> FPGA RTL lowering). -/
+def lcDrivesInSlotUpgradeBrokenLayer : Layer where
+  name := "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
+  metadata := .label "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
+  fields :=
+    [ ("thermalResistance", .nat 29)
+    , ("sdfMargin",
+        .lam (.binary .add (.app (.get (.bound 1) "sdfMargin") (.bound 0)) (.nat 6)))
+    ]
+
+#tooth Obend.Hardware.UserspacePhysical.userspace_physical_stator_to_fpga_verified by mutation Obend.Hardware.UserspacePhysical.lcDrivesInSlotUpgradeLayer := lcDrivesInSlotUpgradeBrokenLayer
 
 end Obend.Teeth.Hardware
 end

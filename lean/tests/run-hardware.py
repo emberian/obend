@@ -280,5 +280,17 @@ if os.path.exists(OBEND_BIN):
                   and "Variant(\"hardwareSchematic\"" in r_rust_obnb.stdout,
                   r_rust_emit.stdout + r_lean_ver_rust.stdout + r_rust_obnb.stdout)
 
+        # 11. Userspace .obend Physical Engineering Suite (LcDrivesStatorUsd.obend & Cnc5AxisMill.obend)
+        for ob_name, expected_val in [
+            ("LcDrivesStatorUsd.obend", "90n"),
+            ("Cnc5AxisMill.obend", "2100n"),
+        ]:
+            ob_path = os.path.join(HERE, "obend-source", "world", "physical", ob_name)
+            r_ob_chk = subprocess.run([OBEND_BIN, "check", ob_path], capture_output=True, text=True)
+            r_ob_run = subprocess.run([OBEND_BIN, "run", ob_path], capture_output=True, text=True)
+            check(f"obend check + run world/physical/{ob_name} (userspace OpenUSD/CAM #law contracts & evaluation = {expected_val})",
+                  r_ob_chk.returncode == 0 and r_ob_run.returncode == 0 and r_ob_run.stdout.strip() == expected_val,
+                  r_ob_chk.stdout + r_ob_chk.stderr + r_ob_run.stdout + r_ob_run.stderr)
+
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)
