@@ -428,6 +428,10 @@ import Obend.Vault.Json
 import Obend.Vault.Law
 import Obend.Vault.Page
 import Obend.Vault.Store
+import Obend.Vault.Escrow
+import Obend.Vault.Affordance
+import Obend.Vault.Projection
+import Obend.Vault.Mandate
 
 open Lean Elab Command in
 run_cmd do
