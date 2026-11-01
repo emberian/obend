@@ -1,5 +1,9 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../../lean/c/obend_bridge.c");
+    println!("cargo:rerun-if-env-changed=LEAN_SYSROOT");
+    println!("cargo:rerun-if-env-changed=OBEND_LEAN_LINK");
+
     if std::env::var("CARGO_FEATURE_STUB").is_ok() {
         return;
     }
@@ -19,20 +23,36 @@ fn main() {
 
     let has_native = lib_so.exists() || lib_dylib.exists() || lib_a.exists() || lib_so2.exists() || lib_dylib2.exists();
     if !has_native {
+        println!("cargo:warning=Native Lean libraries not found at {}. Using stub fallback.", lake_lib_dir.display());
         println!("cargo:rustc-cfg=feature=\"stub\"");
         return;
     }
 
-    println!("cargo:rustc-link-search=native={}", lake_lib_dir.display());
-
     let lean_sysroot = std::env::var("LEAN_SYSROOT").unwrap_or_else(|_| {
         let out = std::process::Command::new("lean")
             .arg("--print-prefix")
+            .current_dir(workspace_root.join("lean"))
             .output()
+            .or_else(|_| {
+                std::process::Command::new("elan")
+                    .args(["run", "leanprover/lean4:v4.35.0", "lean", "--print-prefix"])
+                    .current_dir(workspace_root.join("lean"))
+                    .output()
+            })
             .expect("Failed to locate Lean sysroot via lean --print-prefix");
         String::from_utf8(out.stdout).expect("Valid UTF8").trim().to_string()
     });
 
+    let lean_include = std::path::PathBuf::from(&lean_sysroot).join("include");
+    let bridge_c = workspace_root.join("lean/c/obend_bridge.c");
+
+    cc::Build::new()
+        .file(&bridge_c)
+        .include(&lean_include)
+        .warnings(false)
+        .compile("obend_bridge");
+
+    println!("cargo:rustc-link-search=native={}", lake_lib_dir.display());
     println!("cargo:rustc-link-search=native={}/lib/lean", lean_sysroot);
 
     let link_mode = std::env::var("OBEND_LEAN_LINK").unwrap_or_else(|_| "shared".into());
@@ -49,14 +69,6 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=leanshared");
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lake_lib_dir.display());
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}/lib/lean", lean_sysroot);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lake_lib_dir.display());
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}/lib/lean", lean_sysroot);
-    }
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lake_lib_dir.display());
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}/lib/lean", lean_sysroot);
 }

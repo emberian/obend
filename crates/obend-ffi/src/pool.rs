@@ -1,4 +1,5 @@
-use std::sync::mpsc::{channel, SyncSender};
+use std::sync::mpsc::{channel, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread::{spawn, JoinHandle};
 
 thread_local! {
@@ -21,16 +22,17 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 pub struct LeanWorkerPool {
     tx: SyncSender<Option<Job>>,
     workers: Vec<JoinHandle<()>>,
+    _unconsumed_rx: Option<Arc<Mutex<Receiver<Option<Job>>>>>,
 }
 
 impl LeanWorkerPool {
     pub fn new(num_threads: usize) -> Self {
         let (tx, rx) = std::sync::mpsc::sync_channel::<Option<Job>>(64);
-        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        let rx = Arc::new(Mutex::new(rx));
         let mut workers = Vec::with_capacity(num_threads);
 
         for _ in 0..num_threads {
-            let rx_clone = std::sync::Arc::clone(&rx);
+            let rx_clone = Arc::clone(&rx);
             workers.push(spawn(move || {
                 unsafe { crate::sys::lean_initialize_thread() };
 
@@ -42,10 +44,20 @@ impl LeanWorkerPool {
             }));
         }
 
-        Self { tx, workers }
+        let unconsumed_rx = if num_threads == 0 {
+            Some(rx)
+        } else {
+            None
+        };
+
+        Self {
+            tx,
+            workers,
+            _unconsumed_rx: unconsumed_rx,
+        }
     }
 
-    pub fn execute<F, R>(&self, f: F) -> std::sync::mpsc::Receiver<R>
+    pub fn execute<F, R>(&self, f: F) -> Receiver<R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -70,3 +82,4 @@ impl Drop for LeanWorkerPool {
         }
     }
 }
+

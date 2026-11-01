@@ -36,14 +36,18 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_eval_cell(
                 self.handle,
-                cell_bytes.as_ptr(),
+                if cell_bytes.is_empty() { ptr::null() } else { cell_bytes.as_ptr() },
                 cell_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
             )
         };
         if rc == 0 {
-            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            let slice = if out_len == 0 || out_ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+            };
             Ok(slice.to_vec())
         } else {
             Err(self.last_error_or(ObendError::from_code(rc)))
@@ -57,14 +61,18 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_turn_propose(
                 self.handle,
-                turn_bytes.as_ptr(),
+                if turn_bytes.is_empty() { ptr::null() } else { turn_bytes.as_ptr() },
                 turn_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
             )
         };
         if rc == 0 {
-            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            let slice = if out_len == 0 || out_ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+            };
             Ok(slice.to_vec())
         } else {
             Err(self.last_error_or(ObendError::from_code(rc)))
@@ -74,7 +82,11 @@ impl ObendSession {
     pub fn commit_turn(&mut self, turn_id: &[u8]) -> Result<(), ObendError> {
         ensure_lean_thread_initialized();
         let rc = unsafe {
-            sys::obend_turn_commit(self.handle, turn_id.as_ptr(), turn_id.len())
+            sys::obend_turn_commit(
+                self.handle,
+                if turn_id.is_empty() { ptr::null() } else { turn_id.as_ptr() },
+                turn_id.len(),
+            )
         };
         if rc == 0 {
             Ok(())
@@ -90,14 +102,18 @@ impl ObendSession {
         let rc = unsafe {
             sys::obend_project_hardware(
                 self.handle,
-                hw_bytes.as_ptr(),
+                if hw_bytes.is_empty() { ptr::null() } else { hw_bytes.as_ptr() },
                 hw_bytes.len(),
                 &mut out_ptr,
                 &mut out_len,
             )
         };
         if rc == 0 {
-            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            let slice = if out_len == 0 || out_ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+            };
             Ok(slice.to_vec())
         } else {
             Err(self.last_error_or(ObendError::from_code(rc)))
@@ -107,7 +123,11 @@ impl ObendSession {
     pub fn verify_receipt(&mut self, receipt_bytes: &[u8]) -> Result<bool, ObendError> {
         ensure_lean_thread_initialized();
         let rc = unsafe {
-            sys::obend_verify_receipt(self.handle, receipt_bytes.as_ptr(), receipt_bytes.len())
+            sys::obend_verify_receipt(
+                self.handle,
+                if receipt_bytes.is_empty() { ptr::null() } else { receipt_bytes.as_ptr() },
+                receipt_bytes.len(),
+            )
         };
         match rc {
             0 => Ok(true),
