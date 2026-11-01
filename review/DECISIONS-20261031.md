@@ -57,6 +57,8 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | A kind's identity is its declaring module plus name; a declaration may carry its own stable identity (`record Mile as "units/mile"`) that survives a move, with the module path only the default (C1 lane's question). Taken as yes: an identity that dies when a file is renamed is the wrong identity for a thing with instances in other people's vaults; the explicit name is an intention like a package parent. Deferred to the next C1 pass. | taken by Claude under standing approval, 2026-11-01 | `REPORT-C1-20261101.md` |
 
+| A split binds every field at a quantity the whole record allows (coarse); the per-field `FieldsTyping.cons` guard refused (rejects `{held = h}` at `linear Nat`; sound only under semantic shareability); direction: per-field graded record types (`Σ⊗`), next C2 pass, outside read before promotion | taken by Claude under standing approval, 2026-11-01 | `REPORT-C2-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
