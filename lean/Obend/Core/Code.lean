@@ -748,13 +748,14 @@ def tagView : Tag → Nat × List Data
   | .binary p => (15, [.label (primitiveName p)]) | .extend => (16, []) | .record => (17, [])
   | .ifZero => (18, []) | .case => (19, []) | .get n => (20, [.label n]) | .inject n => (21, [.label n])
   | .field n => (22, [.label n])
+  | .split names => (23, [.record (names.map fun name => (name, unit))])
 
 def tagRules : List Data :=
   [oneRule "hole", unitRule "app", unitRule "mix", unitRule "fix", unitRule "specification",
     unitRule "prototype", unitRule "reflect", unitRule "metadata", unitRule "project", unitRule "ifBool",
     unitRule "perform", unitRule "done", oneRule "nat", oneRule "boolean", oneRule "label",
     oneRule "binary", unitRule "extend", unitRule "record", unitRule "ifZero", unitRule "case",
-    oneRule "get", oneRule "inject", oneRule "field"]
+    oneRule "get", oneRule "inject", oneRule "field", oneRule "split"]
 
 theorem tag_conforms (t : Tag) : tagData t = byTable tagRules (tagView t) := by
   cases t <;> rfl
@@ -884,7 +885,7 @@ theorem versioned_conforms (v : Nat) (body : Data) :
 /-- **The checker's edition**: the typing rules a quotation was checked by. A reader re-reads a
 quotation as it was checked only under this edition; under another it may recheck it (a migration,
 by its own judgment), never replay it. Bumped with every change to what `checkAgainst` accepts. -/
-def checkerEdition : String := "obend-core4-bidirectional/2026-11-01 (C1: kinds nominal by brand)"
+def checkerEdition : String := "obend-core4-bidirectional/2026-11-01 (C1: kinds nominal by brand; C2: the record destructor)"
 
 /-- A schema: the edition and every codec table, in a fixed order. -/
 structure Schema where
