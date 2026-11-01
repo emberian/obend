@@ -53,6 +53,30 @@ extern "C" {
         out_ptr: *mut *mut u8,
         out_len: *mut usize,
     ) -> i32;
+
+    pub fn obend_view_affordances(
+        session: *mut Session,
+        query_ptr: *const u8,
+        query_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
+
+    pub fn obend_cell_pop_lean(
+        session: *mut Session,
+        cell_ptr: *const u8,
+        cell_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
+
+    pub fn obend_cell_weave_cert(
+        session: *mut Session,
+        cert_ptr: *const u8,
+        cert_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
 }
 
 #[cfg(feature = "stub")]
@@ -213,7 +237,80 @@ pub mod stub {
         *out_len = buf.len() - 1;
         0
     }
+
+    pub unsafe fn obend_view_affordances(
+        session: *mut Session,
+        query_ptr: *const u8,
+        query_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32 {
+        if session.is_null() || out_ptr.is_null() || out_len.is_null() {
+            return -1;
+        }
+        if query_len > 0 && query_ptr.is_null() {
+            return -1;
+        }
+        if query_len == 0 {
+            return -3;
+        }
+        let stub = &*(session as *mut StubSession);
+        let mut buf = stub.scratch_buf.lock().unwrap();
+        *buf = b"{\"cellCount\":1,\"turn\":0,\"lawDial\":\"locked\",\"repairSuggestion\":\"suggestMultiField_admits: Bellman-Ford shortest repair delta=0\"}".to_vec();
+        *out_ptr = buf.as_mut_ptr();
+        *out_len = buf.len();
+        0
+    }
+
+    pub unsafe fn obend_cell_pop_lean(
+        session: *mut Session,
+        cell_ptr: *const u8,
+        cell_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32 {
+        if session.is_null() || out_ptr.is_null() || out_len.is_null() {
+            return -1;
+        }
+        if cell_len > 0 && cell_ptr.is_null() {
+            return -1;
+        }
+        if cell_len == 0 {
+            return -3;
+        }
+        let stub = &*(session as *mut StubSession);
+        let mut buf = stub.scratch_buf.lock().unwrap();
+        *buf = b"import Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb cell_1 -/\ntheorem cell_1_law : True := by\n  obend_law\n".to_vec();
+        *out_ptr = buf.as_mut_ptr();
+        *out_len = buf.len();
+        0
+    }
+
+    pub unsafe fn obend_cell_weave_cert(
+        session: *mut Session,
+        cert_ptr: *const u8,
+        cert_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32 {
+        if session.is_null() || out_ptr.is_null() || out_len.is_null() {
+            return -1;
+        }
+        if cert_len > 0 && cert_ptr.is_null() {
+            return -1;
+        }
+        if cert_len == 0 {
+            return -8;
+        }
+        let stub = &*(session as *mut StubSession);
+        let mut buf = stub.scratch_buf.lock().unwrap();
+        *buf = vec![0xA5u8; 32];
+        *out_ptr = buf.as_mut_ptr();
+        *out_len = 32;
+        0
+    }
 }
 
 #[cfg(feature = "stub")]
 pub use stub::*;
+

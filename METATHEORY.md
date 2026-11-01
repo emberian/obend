@@ -143,3 +143,14 @@ All theorem targets from [`NEXT-MATHEMATICA.md`](NEXT-MATHEMATICA.md), [`DEOS-CO
 - **`G4` / Chained World Roots & Impact Binding (`Obend/Receipt/Merkle.lean`, `Obend/Fold/Collapse.lean`)**: `dated_sound`, `opens_binds`, and `collapse_sound`.
 - **`G5` / External Certificate Judges (`Obend/Judge/Lrat.lean`, `Obend/Judge/Clearing.lean`, `Obend/Judge/RealAnalysis.lean`)**: Unified `lrat@1`, `drex-clearing@1`, and `real-analysis@1` under `Judge`.
 - **`G6` / Open Vtable Residual Check (`Obend/Leaf/Residual.lean`, `Obend/Leaf/Flatten.lean`)**: `superOnlyProjected`, `openVtable_no_residual_super`, and `no_residual_super`.
+
+### 3.2 Landed Stage 5/6 Silicon Elaborator, Next Mathematica II & Physical Projection Theorems (`WS 28`–`WS 32`, `0 sorryAx`)
+
+| Landed Theorem | Module | Architectural Role |
+|---|---|---|
+| `metaUnify_assign_sound` / `lowerMetaUnifyToBook_sound` / `metaUnify_occurs_check_rejects_cycle` | `Obend/Lower/MetaUnify.lean` | Lowered `MetavarContext` + higher-order Miller pattern unification + postponed constraint solving lowered to `Leaf.Book`, proving every elaborated declaration checks under `kernelCheckDecl` |
+| `discrTree_futamura2_lut_sound` / `discrTree_epoch_slot_guard_blocks` / `exprCam_siliconKernel_sv_cosim_sound` | `Obend/Lower/DiscrTreeLUT.lean` | 2nd Futamura specialization of Lean's `DiscrTree` tries (`simp` & `SynthInstance`) into Zone-3 `AutomatonTile` LUT pipelines guarded by `SlotGuardReg` + Verilator 5.046 SystemVerilog co-simulation |
+| `taylorModel_transcendental_enclosure_sound` / `taylorModel_picard_sound` / `taylorModel_eliminates_wrapping_effect` | `Obend/Analysis/TaylorModel.lean` | High-order Taylor models $(p(x), I_{\text{rem}})$ with verified $\exp, \sin, \cos, \ln(1+x), \sqrt{1+x}$ enclosures and contractive Picard–Lindelöf ODE integration eliminating the interval wrapping effect |
+| `groebner_ideal_membership_sound` / `stengle_positivstellensatz_sound` / `buchberger_criterion_2var_certified` | `Obend/Analysis/Groebner.lean`, `Tactic/Weave.lean` | Certified Buchberger Gröbner bases, ideal membership ($f = \sum q_i g_i$), and Stengle Positivstellensatz semi-algebraic infeasibility witnesses wired into `obend_law` |
+| `hybrid_flowpipe_safety_admits_contract` / `bouncingBall_hybrid_trajectory_certified` | `Obend/Analysis/Hybrid.lean` | Hybrid automata coupling continuous `Flowpipe` ODE integration with discrete guarded mode transitions and affine reset maps |
+| `physical_projection_deterministic` / `physical_cnc_abbe_projection_sound` / `physical_openusd_lifecycle_projection_sound` / `physical_projection_doc_noninterference` | `Obend/Vault/PhysicalProjection.lean` | Read-only `.obnb` cell projections for 5-axis CNC toolpaths (Featherstone 6D + 21-param Abbe compensation), OpenUSD scene graphs (`LIVERPS` relocates + `AffineForm1D` SDFs), and coupled LC/stator multiphysics |

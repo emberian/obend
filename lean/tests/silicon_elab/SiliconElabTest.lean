@@ -26,14 +26,26 @@ import all Obend.Lower.Inductive
 import all Obend.Leaf.Futamura
 import all Obend.Lower.LeanKernel
 import all Obend.Lower.ExprCAM
+import all Obend.Lower.MetaUnify
+import all Obend.Lower.DiscrTreeLUT
 import all Obend.Lower.Proofs.SiliconKernel
 import all Obend.Hardware.ReductionMachine
 import all Obend.Analysis.Diff
 import all Obend.Analysis.Flowpipe
+import all Obend.Analysis.TaylorModel
+import all Obend.Analysis.Groebner
+import all Obend.Analysis.Hybrid
+import all Obend.Vault.PhysicalProjection
 public import Obend.Lower.ExprCAM
+public import Obend.Lower.MetaUnify
+public import Obend.Lower.DiscrTreeLUT
 public import Obend.Lower.Proofs.SiliconKernel
 public import Obend.Analysis.Diff
 public import Obend.Analysis.Flowpipe
+public import Obend.Analysis.TaylorModel
+public import Obend.Analysis.Groebner
+public import Obend.Analysis.Hybrid
+public import Obend.Vault.PhysicalProjection
 @[expose] public section
 
 namespace Obend.Tests.SiliconElab
@@ -301,6 +313,55 @@ def verifyTrajectorySafetyRubberStamp
 
 #tooth Obend.Analysis.flowpipe_step_encloses_euler by mutation Obend.Analysis.verifyTrajectorySafety := verifyTrajectorySafetyRubberStamp
 
+/-- 16. Broken `occursMVar` in `Obend.Lower.MetaUnify` that skips the cyclic occurs-check (`false`),
+allowing cyclic metavariable assignments `?m := f ?m` to pass unification. -/
+def occursMVarSkip (_targetId : Obend.Lower.MetaUnify.MVarId) (_e : KExpr) : Bool :=
+  false
+
+#tooth Obend.Lower.MetaUnify.metaUnify_occurs_check_and_scope_refusal by mutation Obend.Lower.MetaUnify.occursMVar := occursMVarSkip
+
+/-- 17. Broken `matchDiscrPath` in `Obend.Lower.DiscrTreeLUT` that ignores path mismatches (`true`),
+causing the `DiscrTree` trie compiler to fire spurious rewrite/instance rules. -/
+def matchDiscrPathAcceptAll
+    (_pat _q : Obend.Lower.DiscrTreeLUT.DiscrPath) : Bool :=
+  true
+
+#tooth Obend.Lower.DiscrTreeLUT.discrTree_lut_compile_sound by mutation Obend.Lower.DiscrTreeLUT.matchDiscrPath := matchDiscrPathAcceptAll
+
+/-- 18. Broken `tmSub` in `Obend.Analysis.TaylorModel` that adds instead of subtracting polynomial
+coefficients, destroying symbolic dependency cancellation (`tmSub x x = [0, 0]`). -/
+def tmSubBroken (a b : Obend.Analysis.TaylorModel) : Obend.Analysis.TaylorModel :=
+  Obend.Analysis.tmAdd a b
+
+#tooth Obend.Analysis.taylorModel_transcendental_enclosure_sound by mutation Obend.Analysis.tmSub := tmSubBroken
+
+/-- 19. Broken `checkGroebnerBasis` in `Obend.Analysis.Groebner` that rubber-stamps non-Gröbner bases (`true`). -/
+def checkGroebnerBasisRubberStamp (_fuel : Nat) (_basis : List Obend.Judge.SOS.Poly) : Bool :=
+  true
+
+#tooth Obend.Analysis.groebner_ideal_membership_sound by mutation Obend.Analysis.checkGroebnerBasis := checkGroebnerBasisRubberStamp
+
+/-- 20. Broken `positivstellensatzCheck` in `Obend.Analysis.Groebner` that accepts certificates with
+negative SOS weights or non-zero polynomial residuals (`.ok`). -/
+def positivstellensatzCheckRubberStamp
+    (_fuel : Nat)
+    (_q : Obend.Analysis.PositivstellensatzQuery)
+    (_c : Obend.Analysis.PositivstellensatzCert) :
+    Obend.Judge.Verdict Obend.Analysis.PositivstellensatzClause :=
+  .ok
+
+#tooth Obend.Analysis.stengle_positivstellensatz_sound by mutation Obend.Analysis.positivstellensatzCheck := positivstellensatzCheckRubberStamp
+
+/-- 21. Broken `verifyHybridScheduleSafety` in `Obend.Analysis.Hybrid` that rubber-stamps premature
+out-of-guard discrete jumps and thermal-runaway schedules (`true`). -/
+def verifyHybridScheduleSafetyRubberStamp
+    (_aut : Obend.Analysis.HybridAutomaton)
+    (_initSt : Obend.Analysis.HybridState)
+    (_sched : List Obend.Analysis.HybridAction) : Bool :=
+  true
+
+#tooth Obend.Analysis.hybrid_flowpipe_safety_admits_contract by mutation Obend.Analysis.verifyHybridScheduleSafety := verifyHybridScheduleSafetyRubberStamp
+
 /-! ## 4. Axiom Hygiene Verification (`0 sorryAx`, `0` Custom Axioms) -/
 
 #print axioms Obend.Lower.Inductive.lower_inductive_sound
@@ -325,11 +386,25 @@ def verifyTrajectorySafetyRubberStamp
 #print axioms Obend.Lower.ExprCAM.exprCam_hash26_collision_and_capacity_sound
 #print axioms Obend.Lower.ExprCAM.exprCam_roundtrip_sound
 #print axioms Obend.Lower.ExprCAM.silicon_live_env_decl_check_sound
+#print axioms Obend.Lower.MetaUnify.metaUnify_assign_sound
+#print axioms Obend.Lower.MetaUnify.metaUnify_miller_pattern_sound
+#print axioms Obend.Lower.MetaUnify.metaUnify_occurs_check_and_scope_refusal
+#print axioms Obend.Lower.DiscrTreeLUT.discrTree_lut_compile_sound
+#print axioms Obend.Lower.DiscrTreeLUT.exprCam_siliconKernel_sv_cosim_sound
 #print axioms Obend.Analysis.evalDual_fst_eq_eval
 #print axioms Obend.Analysis.symbolicDeriv_agrees_with_dual
 #print axioms Obend.Analysis.interval_mean_value_enclosure
 #print axioms Obend.Analysis.flowpipe_step_encloses_euler
 #print axioms Obend.Analysis.flowpipe_safety_implies_contract_holds
+#print axioms Obend.Analysis.taylorModel_transcendental_enclosure_sound
+#print axioms Obend.Analysis.taylorModel_picard_sound
+#print axioms Obend.Analysis.groebner_ideal_membership_sound
+#print axioms Obend.Analysis.stengle_positivstellensatz_sound
+#print axioms Obend.Analysis.hybrid_flowpipe_safety_admits_contract
+#print axioms Obend.Vault.PhysicalProjection.physical_projection_deterministic
+#print axioms Obend.Vault.PhysicalProjection.physical_cnc_abbe_projection_sound
+#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_projection_sound
+#print axioms Obend.Vault.PhysicalProjection.physical_projection_doc_noninterference
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_futamura_dpr_specialize_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_env_mutation_fallback_sound

@@ -67,17 +67,20 @@ macro "poly_ring" : tactic =>
 
 macro "obend_law" : tactic =>
   `(tactic| (
-      intros
-      obend_unfold
-      try obend_split
-      all_goals (
-        first
-        | decide
-        | omega
-        | poly_ring
-        | contradiction
-        | trivial
-      )
+      first
+      | decide +kernel
+      | (intros
+         obend_unfold
+         try obend_split
+         all_goals (
+           first
+           | decide
+           | decide +kernel
+           | omega
+           | poly_ring
+           | contradiction
+           | trivial
+         ))
   ))
 
 /-! ### 5. Interactive Counterexample Synthesizer: obend_tooth -/

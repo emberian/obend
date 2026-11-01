@@ -24,10 +24,13 @@ import Obend.Analysis.Coverage
 import Obend.Analysis.Diff
 import Obend.Analysis.Flowpipe
 import Obend.Analysis.Format
+import Obend.Analysis.Groebner
+import Obend.Analysis.Hybrid
 import Obend.Analysis.Impact
 import Obend.Analysis.Replay
 import Obend.Analysis.RealAnalysis
 import Obend.Analysis.Setup
+import Obend.Analysis.TaylorModel
 import Obend.Analysis.Worlds
 import Obend.AssertAxioms
 import Obend.AssertCompiled
@@ -309,12 +312,14 @@ import Obend.Logic.Receipt
 import Obend.Logic.Rewrite
 import Obend.Logic.Turn
 import Obend.Lower.Cli
+import Obend.Lower.DiscrTreeLUT
 import Obend.Lower.ExprCAM
 import Obend.Lower.Fragment
 import Obend.Lower.Inductive
 import Obend.Lower.Judge
 import Obend.Lower.LeanKernel
 import Obend.Lower.Lower
+import Obend.Lower.MetaUnify
 import Obend.Lower.Proofs.Book
 import Obend.Lower.Proofs.Checks
 import Obend.Lower.Proofs.Complete
@@ -447,6 +452,7 @@ import Obend.Vault.Affordance
 import Obend.Vault.Projection
 import Obend.Vault.Mandate
 import Obend.Vault.HardwareProjection
+import Obend.Vault.PhysicalProjection
 import Obend.Consensus
 import Obend.Consensus.Simplex
 import Obend.Consensus.Finality

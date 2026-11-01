@@ -44,6 +44,9 @@ extern lean_object *obend_turn_commit_core(lean_object *s, lean_object *tid_byte
 extern lean_object *obend_project_hardware_core(lean_object *s, lean_object *hw_bytes);
 extern lean_object *obend_verify_receipt_core(lean_object *s, lean_object *rcpt_bytes);
 extern lean_object *obend_get_last_error_core(lean_object *s);
+extern lean_object *obend_view_affordances_core(lean_object *s, lean_object *query_bytes);
+extern lean_object *obend_cell_pop_lean_core(lean_object *s, lean_object *cell_bytes);
+extern lean_object *obend_cell_weave_cert_core(lean_object *s, lean_object *cert_bytes);
 
 static inline lean_object *lean_mk_byte_array_from_buf(const uint8_t *buf, size_t len) {
     lean_object *ba = lean_alloc_sarray(1, len, len);
@@ -272,4 +275,101 @@ int32_t obend_get_last_error(
     lean_dec(err_ba);
     return 0;
 }
+
+int32_t obend_view_affordances(
+    ObendSessionHandle *session_ptr,
+    const uint8_t *query_ptr,
+    size_t query_len,
+    uint8_t **out_ptr,
+    size_t *out_len
+) {
+    if (!session_ptr || !out_ptr || !out_len) return -1;
+    if (query_len > 0 && !query_ptr) return -1;
+    ensure_lean_initialized();
+    lean_object *query_ba = lean_mk_byte_array_from_buf(query_ptr, query_len);
+    lean_object *res = obend_view_affordances_core(session_ptr->lean_state, query_ba);
+
+    lean_object *new_state = lean_ctor_get(res, 0);
+    lean_object *inner = lean_ctor_get(res, 1);
+    lean_object *out_ba = lean_ctor_get(inner, 0);
+    int32_t code = (int32_t)lean_unbox_uint32(lean_ctor_get(inner, 1));
+
+    lean_inc(new_state);
+    session_ptr->lean_state = new_state;
+
+    if (session_sync_scratch(session_ptr, out_ba) != 0) {
+        lean_dec(res);
+        return -1;
+    }
+    *out_ptr = session_ptr->scratch_buf;
+    *out_len = session_ptr->scratch_len;
+
+    lean_dec(res);
+    return code;
+}
+
+int32_t obend_cell_pop_lean(
+    ObendSessionHandle *session_ptr,
+    const uint8_t *cell_ptr,
+    size_t cell_len,
+    uint8_t **out_ptr,
+    size_t *out_len
+) {
+    if (!session_ptr || !out_ptr || !out_len) return -1;
+    if (cell_len > 0 && !cell_ptr) return -1;
+    ensure_lean_initialized();
+    lean_object *cell_ba = lean_mk_byte_array_from_buf(cell_ptr, cell_len);
+    lean_object *res = obend_cell_pop_lean_core(session_ptr->lean_state, cell_ba);
+
+    lean_object *new_state = lean_ctor_get(res, 0);
+    lean_object *inner = lean_ctor_get(res, 1);
+    lean_object *out_ba = lean_ctor_get(inner, 0);
+    int32_t code = (int32_t)lean_unbox_uint32(lean_ctor_get(inner, 1));
+
+    lean_inc(new_state);
+    session_ptr->lean_state = new_state;
+
+    if (session_sync_scratch(session_ptr, out_ba) != 0) {
+        lean_dec(res);
+        return -1;
+    }
+    *out_ptr = session_ptr->scratch_buf;
+    *out_len = session_ptr->scratch_len;
+
+    lean_dec(res);
+    return code;
+}
+
+int32_t obend_cell_weave_cert(
+    ObendSessionHandle *session_ptr,
+    const uint8_t *cert_ptr,
+    size_t cert_len,
+    uint8_t **out_ptr,
+    size_t *out_len
+) {
+    if (!session_ptr || !out_ptr || !out_len) return -1;
+    if (cert_len > 0 && !cert_ptr) return -1;
+    ensure_lean_initialized();
+    lean_object *cert_ba = lean_mk_byte_array_from_buf(cert_ptr, cert_len);
+    lean_object *res = obend_cell_weave_cert_core(session_ptr->lean_state, cert_ba);
+
+    lean_object *new_state = lean_ctor_get(res, 0);
+    lean_object *inner = lean_ctor_get(res, 1);
+    lean_object *out_ba = lean_ctor_get(inner, 0);
+    int32_t code = (int32_t)lean_unbox_uint32(lean_ctor_get(inner, 1));
+
+    lean_inc(new_state);
+    session_ptr->lean_state = new_state;
+
+    if (session_sync_scratch(session_ptr, out_ba) != 0) {
+        lean_dec(res);
+        return -1;
+    }
+    *out_ptr = session_ptr->scratch_buf;
+    *out_len = session_ptr->scratch_len;
+
+    lean_dec(res);
+    return code;
+}
+
 

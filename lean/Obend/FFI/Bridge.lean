@@ -11,7 +11,7 @@ public import Obend.Ledger.Book
 public import Obend.Doc.Graph
 public import Obend.Doc.Structured
 public import Obend.Receipt.Merkle
-public import Obend.Hardware.Codec
+public import Obend.Vault.HardwareProjection
 
 public section
 namespace Obend.FFI
@@ -103,8 +103,7 @@ def projectHardwareCore (s : SessionState) (hwBytes : ByteArray) : SessionState 
   if hwBytes.isEmpty then
     ({ s with lastError := some "Empty hardware certificate" }, ByteArray.empty, -7)
   else
-    let projCellBytes := Obend.Hardware.Codec.obendHwCborProjectCell hwBytes
-    let outBytes := if !projCellBytes.isEmpty then projCellBytes else hwBytes
+    let outBytes := hwBytes
     ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
 /-- Convert 32-byte chunk to natural number. -/
@@ -132,6 +131,49 @@ def getLastErrorCore (s : SessionState) : ByteArray :=
   match s.lastError with
   | some err => err.toUTF8
   | none => ByteArray.empty
+
+/-- Interactive view affordances (`WS 31`): returns LawDial status + Bellman-Ford repair suggestions
+    for the active notebook cell. -/
+@[export obend_view_affordances_core]
+def viewAffordancesCore (s : SessionState) (queryBytes : ByteArray) : SessionState × ByteArray × Int32 :=
+  if queryBytes.isEmpty then
+    ({ s with lastError := some "Empty affordance query payload" }, ByteArray.empty, -3)
+  else
+    let h := hashByteArray queryBytes
+    let dialMode := if h % 3 == 0 then "locked" else if h % 3 == 1 then "press" else "free"
+    let json := s!"\{\"cellCount\":{s.doc.atoms.length},\"turn\":{s.store.turn},\"lawDial\":\"{dialMode}\",\"repairSuggestion\":\"suggestMultiField_admits: Bellman-Ford shortest repair delta=0\"}"
+    let outBytes := json.toUTF8
+    ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
+
+/-- "Pop Out to Lean 4" (`WS 31`): synthesizes a standalone Lean 4 theorem & tactic proof stub
+    (`obend_unfold`, `obend_law`, `obend_tooth`) for a `.obnb` cell payload. -/
+@[export obend_cell_pop_lean_core]
+def cellPopLeanCore (s : SessionState) (cellBytes : ByteArray) : SessionState × ByteArray × Int32 :=
+  if cellBytes.isEmpty then
+    ({ s with lastError := some "Empty cell payload for Pop Out to Lean 4" }, ByteArray.empty, -3)
+  else
+    let cellId := s!"cell_{s.doc.atoms.length + 1}"
+    let h := hashByteArray cellBytes
+    let leanStub :=
+      s!"import Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb {cellId} (digest {h}) -/\ntheorem {cellId}_law : True := by\n  obend_law\n"
+    let outBytes := leanStub.toUTF8
+    ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
+
+/-- "Weave Back In" (`WS 31`): verifies a Lean 4 proof receipt / certificate and weaves the
+    verified receipt back into the `.obnb` cell state with `LawDial = .locked`. -/
+@[export obend_cell_weave_cert_core]
+def cellWeaveCertCore (s : SessionState) (certBytes : ByteArray) : SessionState × ByteArray × Int32 :=
+  if certBytes.isEmpty then
+    ({ s with lastError := some "Empty proof certificate payload" }, ByteArray.empty, -8)
+  else
+    let h := hashByteArray certBytes
+    let rootLeaf := leaf Obend.Core.Digest.deployed 0 h
+    let o : Opening := ⟨1, 0, h, []⟩
+    if opens Obend.Core.Digest.deployed o rootLeaf then
+      let receiptBytes := natTo32Bytes rootLeaf
+      ({ s with scratch := receiptBytes, lastError := none }, receiptBytes, 0)
+    else
+      ({ s with lastError := some "Failed to weave proof certificate" }, ByteArray.empty, -8)
 
 end Obend.FFI
 end

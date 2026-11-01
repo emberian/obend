@@ -150,6 +150,81 @@ impl ObendSession {
         }
     }
 
+    pub fn view_affordances(&mut self, query_bytes: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_view_affordances(
+                self.handle,
+                if query_bytes.is_empty() { ptr::null() } else { query_bytes.as_ptr() },
+                query_bytes.len(),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            let slice = if out_len == 0 || out_ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+            };
+            Ok(slice.to_vec())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
+    pub fn pop_lean(&mut self, cell_bytes: &[u8]) -> Result<String, ObendError> {
+        ensure_lean_thread_initialized();
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_cell_pop_lean(
+                self.handle,
+                if cell_bytes.is_empty() { ptr::null() } else { cell_bytes.as_ptr() },
+                cell_bytes.len(),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            let slice = if out_len == 0 || out_ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+            };
+            Ok(String::from_utf8_lossy(slice).into_owned())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
+    pub fn weave_cert(&mut self, cert_bytes: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_cell_weave_cert(
+                self.handle,
+                if cert_bytes.is_empty() { ptr::null() } else { cert_bytes.as_ptr() },
+                cert_bytes.len(),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            let slice = if out_len == 0 || out_ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+            };
+            Ok(slice.to_vec())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
     fn last_error_or(&self, default: ObendError) -> ObendError {
         let msg = self.get_last_error();
         if msg.is_empty() {
@@ -168,3 +243,4 @@ impl Drop for ObendSession {
         }
     }
 }
+

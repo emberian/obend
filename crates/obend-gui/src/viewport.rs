@@ -75,13 +75,21 @@ impl ProjectionKind {
         }
     }
 
-    /// Parse from either the 10 viewport labels or the 10 `Obend.Doc.ProjectionKind` labels.
+    /// Parse from either the 10 viewport labels, the 10 `Obend.Doc.ProjectionKind` labels,
+    /// or the `WS 30` physical-world projection labels.
     pub fn from_label(label: &str) -> Option<Self> {
         match label {
             "circuit" | "hardwareSchematic" => Some(ProjectionKind::Circuit),
             "netlist" | "deosAffordance" => Some(ProjectionKind::Netlist),
-            "timing" | "hardwareTiming" => Some(ProjectionKind::Timing),
-            "gdsii" | "hardwareLayout" => Some(ProjectionKind::Gdsii),
+            "timing" | "hardwareTiming" | "stator_multiphysics" | "physical_stator_multiphysics" => {
+                Some(ProjectionKind::Timing)
+            }
+            "gdsii"
+            | "hardwareLayout"
+            | "cnc_5axis"
+            | "physical_cnc_5axis"
+            | "openusd_scene"
+            | "physical_openusd_scene" => Some(ProjectionKind::Gdsii),
             "waveform" | "casSymbolic" => Some(ProjectionKind::Waveform),
             "cellQuote" | "obendCode" => Some(ProjectionKind::CellQuote),
             "notebookCell" | "prose" => Some(ProjectionKind::NotebookCell),
@@ -97,10 +105,13 @@ impl ProjectionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LawDialMode {
     /// Exploratory mode: invariant violations are recorded as warnings without blocking transitions.
+    #[serde(alias = "free", alias = ".free", alias = "FREE")]
     Free,
     /// Soft backpressure mode: invariant margin is tracked with dual slack warnings.
+    #[serde(alias = "press", alias = ".press", alias = "PRESS")]
     Press,
     /// Hard verified enforcement: transition is admitted iff the 4-tier `ContractCert` discharges.
+    #[serde(alias = "locked", alias = ".locked", alias = "LOCKED")]
     Locked,
 }
 
@@ -110,6 +121,15 @@ impl LawDialMode {
             LawDialMode::Free => "free",
             LawDialMode::Press => "press",
             LawDialMode::Locked => "locked",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+            "free" => Some(LawDialMode::Free),
+            "press" => Some(LawDialMode::Press),
+            "locked" => Some(LawDialMode::Locked),
+            _ => None,
         }
     }
 
@@ -201,6 +221,260 @@ pub struct EfpgaTileActivity {
     pub utilization_pct: u8,
     pub beta_steps: u32,
     pub cam_hits: u32,
+}
+
+/// Physical-world projection kinds for `WS 30` (`PhysicalProjection.lean`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PhysicalViewportKind {
+    /// 5-axis CNC kinematic toolpath with Featherstone 6D spatial twists/wrenches, Ruckig S-curves,
+    /// and 21-parameter Abbe volumetric error pre-compensation (`cnc_5axis` / `physical_cnc_5axis`).
+    Cnc5Axis,
+    /// Apple/Pixar OpenUSD scene hierarchy (`SdfPath`), non-destructive `LIVERPS` `relocates`,
+    /// `AffineForm1D` SDF intervals, and `timeSamples` lifecycle tracks (`openusd_scene` / `physical_openusd_scene`).
+    OpenUsdScene,
+    /// Coupled LC-Drive stator multiphysics combining Darcy-Weisbach microchannel cooling and
+    /// validated continuous ODE flowpipes (`stator_multiphysics` / `physical_stator_multiphysics`).
+    StatorMultiphysics,
+}
+
+impl PhysicalViewportKind {
+    pub const ALL: [PhysicalViewportKind; 3] = [
+        PhysicalViewportKind::Cnc5Axis,
+        PhysicalViewportKind::OpenUsdScene,
+        PhysicalViewportKind::StatorMultiphysics,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PhysicalViewportKind::Cnc5Axis => "cnc_5axis",
+            PhysicalViewportKind::OpenUsdScene => "openusd_scene",
+            PhysicalViewportKind::StatorMultiphysics => "stator_multiphysics",
+        }
+    }
+
+    pub fn lean_kind_label(self) -> &'static str {
+        match self {
+            PhysicalViewportKind::Cnc5Axis => "physical_cnc_5axis",
+            PhysicalViewportKind::OpenUsdScene => "physical_openusd_scene",
+            PhysicalViewportKind::StatorMultiphysics => "physical_stator_multiphysics",
+        }
+    }
+
+    pub fn doc_projection_kind(self) -> ProjectionKind {
+        match self {
+            PhysicalViewportKind::Cnc5Axis => ProjectionKind::Gdsii,
+            PhysicalViewportKind::OpenUsdScene => ProjectionKind::Gdsii,
+            PhysicalViewportKind::StatorMultiphysics => ProjectionKind::Timing,
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label.trim() {
+            "cnc_5axis" | "physical_cnc_5axis" | "cncToolpath" => {
+                Some(PhysicalViewportKind::Cnc5Axis)
+            }
+            "openusd_scene" | "physical_openusd_scene" | "openUsdScene" => {
+                Some(PhysicalViewportKind::OpenUsdScene)
+            }
+            "stator_multiphysics" | "physical_stator_multiphysics" | "statorMultiphysics" => {
+                Some(PhysicalViewportKind::StatorMultiphysics)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// 5-axis CNC kinematic toolpath waypoint with 21-parameter Abbe volumetric error compensation (`WS 30`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cnc5AxisWaypoint {
+    pub step: usize,
+    pub target_nm: (i64, i64, i64),
+    pub volumetric_error_nm: (i64, i64, i64),
+    pub abbe_compensated_cmd_nm: (i64, i64, i64),
+    pub ruckig_vel_scaled2: i64,
+    pub coriolis_power: i64,
+}
+
+impl Cnc5AxisWaypoint {
+    /// Actual tip position after applying the Abbe-compensated command in the presence of volumetric error.
+    pub fn actual_tip_nm(&self) -> (i64, i64, i64) {
+        (
+            self.abbe_compensated_cmd_nm.0 + self.volumetric_error_nm.0,
+            self.abbe_compensated_cmd_nm.1 + self.volumetric_error_nm.1,
+            self.abbe_compensated_cmd_nm.2 + self.volumetric_error_nm.2,
+        )
+    }
+
+    /// True iff 21-parameter Abbe pre-compensation exactly cancels the volumetric + lever-arm error.
+    pub fn is_abbe_exact_cancelled(&self) -> bool {
+        self.actual_tip_nm() == self.target_nm
+    }
+
+    /// True iff the Featherstone gyroscopic/Coriolis spatial wrench performs zero mechanical work.
+    pub fn is_coriolis_workless(&self) -> bool {
+        self.coriolis_power == 0
+    }
+}
+
+/// OpenUSD hierarchical `SdfPath` scene-graph node with `AffineForm1D` SDF bounds and `timeSamples` state (`WS 30`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenUsdPrimNode {
+    pub prim_path: String,
+    pub relocated_path: String,
+    pub affine_c0_um: i64,
+    pub affine_radius_um: i64,
+    pub time_code: u64,
+    pub peak_temp_milli_c: i64,
+    pub lifecycle_invariant_ok: bool,
+}
+
+impl OpenUsdPrimNode {
+    /// Validated `AffineForm1D` interval enclosure `[c0 - radius, c0 + radius]` in micrometers.
+    pub fn sdf_interval_um(&self) -> (i64, i64) {
+        (
+            self.affine_c0_um - self.affine_radius_um,
+            self.affine_c0_um + self.affine_radius_um,
+        )
+    }
+}
+
+/// Coupled LC-drive stator multiphysics telemetry combining microchannel hydraulics and ODE flowpipe bounds (`WS 30`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatorChannelTelemetry {
+    pub part_name: String,
+    pub darcy_pressure_drop_scaled: i64,
+    pub winding_temp_c_lo: f64,
+    pub winding_temp_c_hi: f64,
+    pub max_temp_limit_c: f64,
+    pub flowpipe_certified: bool,
+}
+
+impl StatorChannelTelemetry {
+    pub fn is_multiphysics_certified(&self) -> bool {
+        self.flowpipe_certified && self.winding_temp_c_hi <= self.max_temp_limit_c
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        if self.is_multiphysics_certified() {
+            "MULTIPHYSICS_CERTIFIED"
+        } else {
+            "UNSAFE"
+        }
+    }
+}
+
+/// Golden 5-axis CNC toolpath waypoints matching `Obend.Vault.PhysicalProjection.goldenCncViewportSpec` (`Hermle_C42U_5Axis`).
+pub fn golden_cnc_5axis_waypoints() -> Vec<Cnc5AxisWaypoint> {
+    vec![
+        Cnc5AxisWaypoint {
+            step: 0,
+            target_nm: (100_000, 200_000, 50_000),
+            volumetric_error_nm: (-438, -308, 5),
+            abbe_compensated_cmd_nm: (100_438, 200_308, 49_995),
+            ruckig_vel_scaled2: 0,
+            coriolis_power: 0,
+        },
+        Cnc5AxisWaypoint {
+            step: 1,
+            target_nm: (125_000, 215_000, 48_000),
+            volumetric_error_nm: (-410, -290, 8),
+            abbe_compensated_cmd_nm: (125_410, 215_290, 47_992),
+            ruckig_vel_scaled2: 80,
+            coriolis_power: 0,
+        },
+        Cnc5AxisWaypoint {
+            step: 2,
+            target_nm: (150_000, 230_000, 45_000),
+            volumetric_error_nm: (-395, -275, 4),
+            abbe_compensated_cmd_nm: (150_395, 230_275, 44_996),
+            ruckig_vel_scaled2: 160,
+            coriolis_power: 0,
+        },
+    ]
+}
+
+/// Golden OpenUSD scene-graph nodes matching `Obend.Vault.PhysicalProjection.goldenOpenUsdViewportSpec` (`LcDrives_Production_Stator`).
+pub fn golden_openusd_prims() -> Vec<OpenUsdPrimNode> {
+    vec![
+        OpenUsdPrimNode {
+            prim_path: "/Factory/Draft/Stator/Slot01".to_string(),
+            relocated_path: "/Prod/LCDrives/Stator/Slot01".to_string(),
+            affine_c0_um: 1500,
+            affine_radius_um: 25,
+            time_code: 0,
+            peak_temp_milli_c: 25_000,
+            lifecycle_invariant_ok: true,
+        },
+        OpenUsdPrimNode {
+            prim_path: "/Factory/Draft/Stator/Slot02".to_string(),
+            relocated_path: "/Prod/LCDrives/Stator/Slot02".to_string(),
+            affine_c0_um: 1500,
+            affine_radius_um: 25,
+            time_code: 20,
+            peak_temp_milli_c: 55_000,
+            lifecycle_invariant_ok: true,
+        },
+        OpenUsdPrimNode {
+            prim_path: "/Factory/Draft/Stator/Slot03".to_string(),
+            relocated_path: "/Prod/LCDrives/Stator/Slot03".to_string(),
+            affine_c0_um: 1500,
+            affine_radius_um: 25,
+            time_code: 100,
+            peak_temp_milli_c: 122_000,
+            lifecycle_invariant_ok: true,
+        },
+    ]
+}
+
+/// Golden coupled LC-drive stator telemetry matching `Obend.Vault.PhysicalProjection.goldenStatorMultiphysicsSpec`.
+pub fn golden_stator_telemetry() -> StatorChannelTelemetry {
+    StatorChannelTelemetry {
+        part_name: "LC_Drives_InSlot_Stator_Assy".to_string(),
+        darcy_pressure_drop_scaled: 4_992_187_500,
+        winding_temp_c_lo: 22.9,
+        winding_temp_c_hi: 30.0,
+        max_temp_limit_c: 35.0,
+        flowpipe_certified: true,
+    }
+}
+
+/// Golden continuous ODE flowpipe slices for the coupled LC-drive stator thermal cooling trajectory.
+pub fn golden_stator_flowpipe_slices() -> Vec<FlowpipeSlice> {
+    vec![
+        FlowpipeSlice {
+            step: 0,
+            t_lo: 0.0,
+            t_hi: 0.5,
+            x_lo: 28.0,
+            x_hi: 30.0,
+            y_lo: -10.0,
+            y_hi: -8.0,
+            z_lo: 0.0,
+            z_hi: 1.0,
+        },
+        FlowpipeSlice {
+            step: 1,
+            t_lo: 0.5,
+            t_hi: 1.0,
+            x_lo: 25.2,
+            x_hi: 27.8,
+            y_lo: -7.8,
+            y_hi: -5.2,
+            z_lo: 0.5,
+            z_hi: 1.5,
+        },
+        FlowpipeSlice {
+            step: 2,
+            t_lo: 1.0,
+            t_hi: 1.5,
+            x_lo: 22.9,
+            x_hi: 26.1,
+            y_lo: -6.1,
+            y_hi: -2.9,
+            z_lo: 1.0,
+            z_hi: 2.0,
+        },
+    ]
 }
 
 /// Rendered multi-modal viewport output (SVG, HTML control panel, and terminal ASCII canvas).
@@ -309,6 +583,296 @@ pub fn render_efpga_heatmap_svg(tiles: &[EfpgaTileActivity]) -> String {
     }
     svg.push_str("</svg>");
     svg
+}
+
+/// Render a 5-axis CNC kinematic toolpath viewport SVG with Abbe volumetric compensation & Ruckig S-curve telemetry (`WS 30`).
+pub fn render_cnc_5axis_toolpath_svg(machine_name: &str, waypoints: &[Cnc5AxisWaypoint]) -> String {
+    let all_certified = waypoints
+        .iter()
+        .all(|wp| wp.is_abbe_exact_cancelled() && wp.is_coriolis_workless());
+    let badge = if all_certified {
+        "Abbe-Certified"
+    } else {
+        "Abbe-Uncompensated"
+    };
+    let mut svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" data-projection="physical-cnc-5axis" data-machine="{machine_name}" data-badge="{badge}"><text x="20" y="26" fill="#f8fafc">5-Axis CNC Toolpath ({machine_name}) [{badge}]</text>"##,
+    );
+    let mut poly_pts = String::new();
+    for wp in waypoints {
+        let abbe_cancelled = wp.is_abbe_exact_cancelled();
+        let cx = 60 + (wp.step as i64) * 110;
+        let cy = 180 - (wp.ruckig_vel_scaled2 / 4);
+        if !poly_pts.is_empty() {
+            poly_pts.push(' ');
+        }
+        poly_pts.push_str(&format!("{cx},{cy}"));
+        let err_dx = (wp.volumetric_error_nm.0 / 25).clamp(-36, 36);
+        let err_dy = (wp.volumetric_error_nm.1 / 25).clamp(-36, 36);
+        svg.push_str(&format!(
+            r##"<g class="cnc-waypoint" data-step="{step}" data-abbe-cancelled="{abbe}" data-coriolis-power="{cp}" data-ruckig-vel="{vel}"><rect class="abbe-corridor" x="{bx}" y="{by}" width="24" height="24" fill="#10b98122" stroke="#10b981" /><circle cx="{cx}" cy="{cy}" r="6" fill="#10b981" /><line class="abbe-error-vector" x1="{cx}" y1="{cy}" x2="{ex}" y2="{ey}" stroke="#f59e0b" stroke-width="1.5" /><line class="ruckig-scurve-vec" x1="{cx}" y1="{cy}" x2="{cx2}" y2="{cy2}" stroke="#38bdf8" stroke-width="2" /></g>"##,
+            step = wp.step,
+            abbe = abbe_cancelled,
+            cp = wp.coriolis_power,
+            vel = wp.ruckig_vel_scaled2,
+            bx = cx - 12,
+            by = cy - 12,
+            cx = cx,
+            cy = cy,
+            ex = cx + err_dx,
+            ey = cy + err_dy,
+            cx2 = cx + 18,
+            cy2 = cy - 12,
+        ));
+    }
+    svg.push_str(&format!(
+        r##"<polyline class="cnc-toolpath-xy" fill="none" stroke="#38bdf8" stroke-width="2" points="{poly_pts}" />"##,
+    ));
+    svg.push_str("</svg>");
+    svg
+}
+
+/// Render an Apple/Pixar OpenUSD `SdfPath` scene-graph, `LIVERPS` relocates, and `AffineForm1D` SDF enclosure SVG (`WS 30`).
+pub fn render_openusd_scene_svg(stage_name: &str, prims: &[OpenUsdPrimNode]) -> String {
+    let all_ok = prims.iter().all(|p| p.lifecycle_invariant_ok);
+    let lca_badge = if all_ok { "LCA PASS" } else { "LCA VIOLATION" };
+    let mut svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" data-projection="physical-openusd-scene" data-stage="{stage_name}" data-lca="{lca_badge}"><text x="24" y="24" fill="#f8fafc">OpenUSD Scene Graph ({stage_name}) [{lca_badge}]</text>"##,
+    );
+    for (idx, prim) in prims.iter().enumerate() {
+        let y = 40 + (idx as u32) * 70;
+        let (lo, hi) = prim.sdf_interval_um();
+        let color = if prim.lifecycle_invariant_ok {
+            "#10b981"
+        } else {
+            "#ef4444"
+        };
+        svg.push_str(&format!(
+            r##"<g class="openusd-prim" data-sdf-path="{path}" data-relocated="{rel}" data-sdf-interval="[{lo},{hi}]" data-self-cancel="[0,0]" data-time="{tc}"><rect x="32" y="{y}" width="560" height="52" rx="6" fill="#0f172a" stroke="{color}" /><text x="48" y="{ty}" fill="#f8fafc">{path} -&gt; {rel} (SDF [{lo}, {hi}] um, t={tc}, T={temp_c:.1}C)</text></g>"##,
+            path = prim.prim_path,
+            rel = prim.relocated_path,
+            lo = lo,
+            hi = hi,
+            tc = prim.time_code,
+            temp_c = (prim.peak_temp_milli_c as f64) / 1000.0,
+            y = y,
+            ty = y + 30,
+            color = color,
+        ));
+    }
+    svg.push_str("</svg>");
+    svg
+}
+
+/// Render a coupled LC-drive stator multiphysics + continuous ODE flowpipe SVG (`WS 30`).
+pub fn render_stator_multiphysics_svg(
+    telemetry: &StatorChannelTelemetry,
+    flowpipe_slices: &[FlowpipeSlice],
+) -> String {
+    let status = telemetry.status_label();
+    let thermal_badge = if telemetry.is_multiphysics_certified() {
+        "THERMAL SAFE"
+    } else {
+        "THERMAL EXCURSION"
+    };
+    let fp_inner = render_flowpipe_svg(
+        &telemetry.part_name,
+        flowpipe_slices,
+        15.0,
+        telemetry.max_temp_limit_c,
+    );
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" data-projection="physical-stator-multiphysics" data-part="{part}" data-status="{status}" data-darcy="{darcy}"><g class="stator-header"><text x="24" y="28" fill="#10b981">Coupled LC/Stator Multiphysics {part}: {status} [{thermal_badge}] (Darcy drop={darcy}, S0/S1 T=[{tlo:.1}, {thi:.1}]C &lt;= {tmax:.1}C)</text></g>{fp}</svg>"##,
+        part = telemetry.part_name,
+        status = status,
+        thermal_badge = thermal_badge,
+        darcy = telemetry.darcy_pressure_drop_scaled,
+        tlo = telemetry.winding_temp_c_lo,
+        thi = telemetry.winding_temp_c_hi,
+        tmax = telemetry.max_temp_limit_c,
+        fp = fp_inner,
+    )
+}
+
+/// Render an ANSI-colored terminal canvas for a 5-axis CNC kinematic toolpath (`WS 30`).
+pub fn render_cnc_5axis_ansi(
+    machine_name: &str,
+    waypoints: &[Cnc5AxisWaypoint],
+    dial: &LawDialControl,
+) -> String {
+    let all_abbe = waypoints.iter().all(|w| w.is_abbe_exact_cancelled());
+    let all_coriolis = waypoints.iter().all(|w| w.is_coriolis_workless());
+    format!(
+        "\x1b[1;36m+-[physical_cnc_5axis]-[{machine}]------------------------------+\x1b[0m\n\
+         | Waypoints: {:<4} | Abbe Exact Cancelled: \x1b[32m{:<5}\x1b[0m | Coriolis W=0: \x1b[32m{:<5}\x1b[0m |\n\
+         | Dial     : .{:<6} | Admitted: {:<5} | Value: {:>8.2}              |\n\
+         \x1b[1;36m+------------------------------------------------------------------+\x1b[0m",
+        waypoints.len(),
+        all_abbe,
+        all_coriolis,
+        dial.mode.as_str(),
+        dial.is_admitted(),
+        dial.current_value,
+        machine = machine_name,
+    )
+}
+
+/// Render an ANSI-colored terminal canvas for an OpenUSD scene hierarchy & `AffineForm1D` SDF track (`WS 30`).
+pub fn render_openusd_scene_ansi(
+    stage_name: &str,
+    prims: &[OpenUsdPrimNode],
+    dial: &LawDialControl,
+) -> String {
+    let all_ok = prims.iter().all(|p| p.lifecycle_invariant_ok);
+    let first_sdf = prims.first().map(|p| p.sdf_interval_um()).unwrap_or((0, 0));
+    format!(
+        "\x1b[1;35m+-[physical_openusd_scene]-[{stage}]-------------------------+\x1b[0m\n\
+         | Prims: {:<4} | Affine SDF: [{:>5}, {:>5}] um | Lifecycle OK: \x1b[32m{:<5}\x1b[0m |\n\
+         | Dial : .{:<6} | Admitted: {:<5} | Value: {:>8.2}                  |\n\
+         \x1b[1;35m+------------------------------------------------------------------+\x1b[0m",
+        prims.len(),
+        first_sdf.0,
+        first_sdf.1,
+        all_ok,
+        dial.mode.as_str(),
+        dial.is_admitted(),
+        dial.current_value,
+        stage = stage_name,
+    )
+}
+
+/// Render an ANSI-colored terminal canvas for coupled LC-Drive stator multiphysics (`WS 30`).
+pub fn render_stator_multiphysics_ansi(
+    telemetry: &StatorChannelTelemetry,
+    flowpipe_slices: &[FlowpipeSlice],
+    dial: &LawDialControl,
+) -> String {
+    format!(
+        "\x1b[1;32m+-[physical_stator_multiphysics]-[{part}]-------------------+\x1b[0m\n\
+         | Status: {:<22} | Darcy Drop: {:<12} | Slices: {:<2} |\n\
+         | Winding T: [{:>5.1}, {:>5.1}]C <= {:>5.1}C | Dial: .{:<6} (Admitted: {:<5}) |\n\
+         \x1b[1;32m+------------------------------------------------------------------+\x1b[0m",
+        telemetry.status_label(),
+        telemetry.darcy_pressure_drop_scaled,
+        flowpipe_slices.len(),
+        telemetry.winding_temp_c_lo,
+        telemetry.winding_temp_c_hi,
+        telemetry.max_temp_limit_c,
+        dial.mode.as_str(),
+        dial.is_admitted(),
+        part = telemetry.part_name,
+    )
+}
+
+/// Construct a full multi-modal `RenderedViewport` (SVG + HTML + ANSI) for a 5-axis CNC toolpath (`WS 30`).
+pub fn render_cnc_5axis_viewport(
+    machine_name: &str,
+    waypoints: &[Cnc5AxisWaypoint],
+    dial: &LawDialControl,
+) -> RenderedViewport {
+    let svg = render_cnc_5axis_toolpath_svg(machine_name, waypoints);
+    let html_controls = format!(
+        r#"<div class="obend-physical-panel" data-physical-kind="cnc_5axis" data-machine="{machine_name}">{}</div>"#,
+        dial.render_html()
+    );
+    let terminal_canvas = render_cnc_5axis_ansi(machine_name, waypoints, dial);
+    RenderedViewport {
+        kind: ProjectionKind::Gdsii,
+        title: machine_name.to_string(),
+        svg,
+        html_controls,
+        terminal_canvas,
+    }
+}
+
+/// Construct a full multi-modal `RenderedViewport` (SVG + HTML + ANSI) for an OpenUSD scene graph (`WS 30`).
+pub fn render_openusd_scene_viewport(
+    stage_name: &str,
+    prims: &[OpenUsdPrimNode],
+    dial: &LawDialControl,
+) -> RenderedViewport {
+    let svg = render_openusd_scene_svg(stage_name, prims);
+    let html_controls = format!(
+        r#"<div class="obend-physical-panel" data-physical-kind="openusd_scene" data-stage="{stage_name}">{}</div>"#,
+        dial.render_html()
+    );
+    let terminal_canvas = render_openusd_scene_ansi(stage_name, prims, dial);
+    RenderedViewport {
+        kind: ProjectionKind::Gdsii,
+        title: stage_name.to_string(),
+        svg,
+        html_controls,
+        terminal_canvas,
+    }
+}
+
+/// Construct a full multi-modal `RenderedViewport` (SVG + HTML + ANSI) for coupled LC-Drive stator multiphysics (`WS 30`).
+pub fn render_stator_multiphysics_viewport(
+    telemetry: &StatorChannelTelemetry,
+    flowpipe_slices: &[FlowpipeSlice],
+    dial: &LawDialControl,
+) -> RenderedViewport {
+    let svg = render_stator_multiphysics_svg(telemetry, flowpipe_slices);
+    let html_controls = format!(
+        r#"<div class="obend-physical-panel" data-physical-kind="stator_multiphysics" data-part="{}">{}</div>"#,
+        telemetry.part_name,
+        dial.render_html()
+    );
+    let terminal_canvas = render_stator_multiphysics_ansi(telemetry, flowpipe_slices, dial);
+    RenderedViewport {
+        kind: ProjectionKind::Timing,
+        title: telemetry.part_name.clone(),
+        svg,
+        html_controls,
+        terminal_canvas,
+    }
+}
+
+/// Render any of the 3 `PhysicalViewportKind`s (`cnc_5axis`, `openusd_scene`, `stator_multiphysics`)
+/// using golden physical-world telemetry adjusted by the active `LawDialControl` (`WS 30`).
+pub fn render_physical_viewport(
+    kind: PhysicalViewportKind,
+    title: &str,
+    dial: &LawDialControl,
+) -> RenderedViewport {
+    match kind {
+        PhysicalViewportKind::Cnc5Axis => {
+            let mut waypoints = golden_cnc_5axis_waypoints();
+            if !dial.is_admitted() {
+                if let Some(first) = waypoints.first_mut() {
+                    let residual = dial.current_value.round() as i64;
+                    first.abbe_compensated_cmd_nm.0 += if residual == 0 { 1 } else { residual };
+                }
+            }
+            render_cnc_5axis_viewport(title, &waypoints, dial)
+        }
+        PhysicalViewportKind::OpenUsdScene => {
+            let mut prims = golden_openusd_prims();
+            let affects_wall = dial.invariant_expr.contains("wall")
+                || dial.margin_hi >= 1000.0
+                || !dial.is_admitted();
+            if affects_wall {
+                if let Some(first) = prims.first_mut() {
+                    first.affine_c0_um = dial.current_value.round() as i64;
+                    first.lifecycle_invariant_ok = dial.is_admitted();
+                }
+            }
+            render_openusd_scene_viewport(title, &prims, dial)
+        }
+        PhysicalViewportKind::StatorMultiphysics => {
+            let mut telemetry = golden_stator_telemetry();
+            telemetry.part_name = title.to_string();
+            telemetry.winding_temp_c_hi = dial.current_value;
+            telemetry.max_temp_limit_c = dial.margin_hi;
+            telemetry.flowpipe_certified = dial.is_admitted();
+            let mut slices = golden_stator_flowpipe_slices();
+            if let Some(first) = slices.first_mut() {
+                first.x_hi = dial.current_value;
+                first.x_lo = (dial.current_value - 2.0).max(0.0);
+            }
+            render_stator_multiphysics_viewport(&telemetry, &slices, dial)
+        }
+    }
 }
 
 /// Render any of the 10 `ProjectionKind`s into a complete `RenderedViewport` with SVG, HTML `LawDial`
@@ -530,4 +1094,57 @@ mod tests {
         assert!(hm_svg.contains("efpga-tile"));
         assert!(hm_svg.contains("data-cam-hits=\"256\""));
     }
+
+    #[test]
+    fn test_physical_world_mechatronic_renderers() {
+        let dial = LawDialControl {
+            cell_id: "cell-phys-01".to_string(),
+            mode: LawDialMode::Locked,
+            invariant_expr: "T <= 35.0".to_string(),
+            margin_lo: 15.0,
+            margin_hi: 35.0,
+            current_value: 28.0,
+        };
+
+        let waypoints = golden_cnc_5axis_waypoints();
+        assert!(waypoints.iter().all(|w| w.is_abbe_exact_cancelled() && w.is_coriolis_workless()));
+        let cnc_vp = render_cnc_5axis_viewport("Hermle_C42U_5Axis", &waypoints, &dial);
+        assert!(cnc_vp.svg.contains("5-Axis CNC Toolpath"));
+        assert!(cnc_vp.svg.contains("cnc-toolpath-xy"));
+        assert!(cnc_vp.svg.contains("abbe-corridor"));
+        assert!(cnc_vp.svg.contains("Abbe-Certified"));
+        assert!(cnc_vp.svg.contains("data-abbe-cancelled=\"true\""));
+        assert!(cnc_vp.terminal_canvas.contains("Hermle_C42U_5Axis"));
+
+        let prims = golden_openusd_prims();
+        let usd_vp = render_openusd_scene_viewport("LcDrives_Production_Stator", &prims, &dial);
+        assert!(usd_vp.svg.contains("OpenUSD Scene Graph"));
+        assert!(usd_vp.svg.contains("/Factory/Draft/Stator/Slot01"));
+        assert!(usd_vp.svg.contains("/Prod/LCDrives/Stator/Slot01"));
+        assert!(usd_vp.svg.contains("SDF [1475, 1525]"));
+        assert!(usd_vp.svg.contains("LCA PASS"));
+        assert!(usd_vp.terminal_canvas.contains("LcDrives_Production_Stator"));
+
+        let telemetry = golden_stator_telemetry();
+        let slices = golden_stator_flowpipe_slices();
+        let stator_vp = render_stator_multiphysics_viewport(&telemetry, &slices, &dial);
+        assert!(stator_vp.svg.contains("Coupled LC/Stator Multiphysics"));
+        assert!(stator_vp.svg.contains("MULTIPHYSICS_CERTIFIED"));
+        assert!(stator_vp.svg.contains("THERMAL SAFE"));
+        assert!(stator_vp.svg.contains("flowpipe-box"));
+        assert!(stator_vp.terminal_canvas.contains("LC_Drives_InSlot_Stator_Assy"));
+
+        for pkind in PhysicalViewportKind::ALL {
+            assert_eq!(PhysicalViewportKind::from_label(pkind.as_str()), Some(pkind));
+            assert_eq!(
+                PhysicalViewportKind::from_label(pkind.lean_kind_label()),
+                Some(pkind)
+            );
+            let vp = render_physical_viewport(pkind, "WS30-Physical", &dial);
+            assert!(vp.svg.starts_with("<svg"));
+            assert!(vp.svg.ends_with("</svg>"));
+            assert!(vp.html_controls.contains("obend-physical-panel"));
+        }
+    }
 }
+

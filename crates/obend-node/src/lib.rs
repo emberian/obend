@@ -11,6 +11,9 @@ use obend_ffi::error::ObendError;
 use obend_ffi::session::ObendSession;
 use serde::{Deserialize, Serialize};
 
+pub mod net;
+pub use net::*;
+
 // ============================================================================
 // 1. Concrete Cryptographic Primitives (SHA-256, Keccak-f[1600] cSHAKE256, Ed25519)
 // ============================================================================
@@ -447,16 +450,20 @@ impl EdwardsPoint {
 
     /// Curve constant d = -121665 / 121666 mod (2^255 - 19).
     fn curve_d() -> Fe {
-        Fe::from_u64(121665).neg().mul(Fe::from_u64(121666).inv())
+        static CURVE_D: std::sync::OnceLock<Fe> = std::sync::OnceLock::new();
+        *CURVE_D.get_or_init(|| Fe::from_u64(121665).neg().mul(Fe::from_u64(121666).inv()))
     }
 
     /// Principal square root of -1: 2^((p - 1) / 4) mod (2^255 - 19).
     fn sqrt_m1() -> Fe {
-        // (p - 1) / 4 = (2^255 - 20) / 4 = 2^253 - 5
-        let mut exp = [0xFFu8; 32];
-        exp[0] = 0xFB; // 256 - 5 = 251
-        exp[31] = 0x1F;
-        Fe::from_u64(2).pow_bytes(&exp)
+        static SQRT_M1: std::sync::OnceLock<Fe> = std::sync::OnceLock::new();
+        *SQRT_M1.get_or_init(|| {
+            // (p - 1) / 4 = (2^255 - 20) / 4 = 2^253 - 5
+            let mut exp = [0xFFu8; 32];
+            exp[0] = 0xFB; // 256 - 5 = 251
+            exp[31] = 0x1F;
+            Fe::from_u64(2).pow_bytes(&exp)
+        })
     }
 
     /// Complete unified twisted Edwards addition (Hisil et al. 2008 / RFC 8032 §5.1.4).
@@ -546,8 +553,11 @@ impl EdwardsPoint {
 
     /// RFC 8032 Ed25519 basepoint B (y = 4/5 mod p, x >= 0 even).
     fn basepoint() -> Self {
-        let by = Fe::from_u64(4).mul(Fe::from_u64(5).inv()).to_bytes();
-        Self::decode(&by).expect("valid Ed25519 basepoint B")
+        static BASEPOINT: std::sync::OnceLock<EdwardsPoint> = std::sync::OnceLock::new();
+        *BASEPOINT.get_or_init(|| {
+            let by = Fe::from_u64(4).mul(Fe::from_u64(5).inv()).to_bytes();
+            Self::decode(&by).expect("valid Ed25519 basepoint B")
+        })
     }
 }
 
@@ -1767,5 +1777,616 @@ mod tests {
         assert!(!unserved
             .verify_with_kernel(&orders, &mut session)
             .expect("kernel check"));
+    }
+
+    fn sample_genesis_cells() -> Vec<VaultCellRecord> {
+        vec![
+            VaultCellRecord {
+                id: 1,
+                required: vec![IpcAuth::Read],
+                salt: [0x11; 32],
+                content: b"slot-1-genesis".to_vec(),
+            },
+            VaultCellRecord {
+                id: 2,
+                required: vec![IpcAuth::Read],
+                salt: [0x22; 32],
+                content: b"slot-2-genesis".to_vec(),
+            },
+            VaultCellRecord {
+                id: 3,
+                required: vec![IpcAuth::Read, IpcAuth::Control],
+                salt: [0x33; 32],
+                content: b"slot-3-dark-pool".to_vec(),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_ws32_e2e_multi_validator_networked_simplex_bft_tcp_and_udp() {
+        for transport in [TransportProtocol::Tcp, TransportProtocol::Udp] {
+            let mut cluster =
+                SimplexCluster::with_transport(4, 1, sample_genesis_cells(), transport)
+                    .expect("spawn 4-validator cluster");
+
+            // Verify all 4 nodes bound real ephemeral 127.0.0.1 ports
+            for node in &cluster.nodes {
+                assert!(node.tcp_addr.ip().is_loopback());
+                assert!(node.udp_addr.ip().is_loopback());
+                assert_ne!(node.tcp_addr.port(), 0);
+                assert_ne!(node.udp_addr.port(), 0);
+            }
+
+            // Stage a contended turn and run height 1 over real loopback sockets
+            let turn_h1 = VaultTurn::new(
+                [0x01; 32],
+                "alice",
+                vec![1],
+                vec![(1, b"slot-1-height-1".to_vec())],
+            );
+            cluster
+                .stage_contended_or_inflight_turn(turn_h1.clone())
+                .expect("stage turn h1");
+
+            let blk1 = cluster.run_simplex_block().expect("finalize block 1");
+            assert_eq!(blk1.height, 1);
+            assert_eq!(blk1.view, 1);
+            assert!(blk1.fin_cert.verify(3));
+            assert!(blk1.multiproof.verify_stranger());
+
+            // Stage another turn and run height 2 (leader rotates to validator 1)
+            let turn_h2 = VaultTurn::new(
+                [0x02; 32],
+                "bob",
+                vec![2],
+                vec![(2, b"slot-2-height-2".to_vec())],
+            );
+            cluster
+                .stage_contended_or_inflight_turn(turn_h2.clone())
+                .expect("stage turn h2");
+
+            let blk2 = cluster.run_simplex_block().expect("finalize block 2");
+            assert_eq!(blk2.height, 2);
+            assert_eq!(blk2.view, 2);
+            assert_eq!(blk2.parent_hash, blk1.block_hash);
+            assert!(blk2.fin_cert.verify(3));
+
+            // All 4 networked validators must agree on height 2 and identical FogOfWar Merkle state root
+            let root0 = cluster.nodes[0].state_root();
+            for node in &cluster.nodes {
+                assert_eq!(node.committed_height(), 2);
+                assert_eq!(node.state_root(), root0);
+                assert!(node.wire_frames_received() > 0);
+                assert_eq!(
+                    node.turn_tier(&turn_h1.turn_id),
+                    Some(FinalityTier::QuorumFinal)
+                );
+                assert_eq!(
+                    node.turn_tier(&turn_h2.turn_id),
+                    Some(FinalityTier::QuorumFinal)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ws32_e2e_byzantine_equivocation_detection_and_slashing_broadcast() {
+        let mut cluster =
+            SimplexCluster::new(4, 1, sample_genesis_cells()).expect("spawn 4-validator cluster");
+
+        // Validator 1 (faulty) double-signs two conflicting block hashes in view 2 over real sockets
+        let slash_receipt = cluster
+            .inject_byzantine_equivocation(1, 2, [0xA1; 32], [0xB2; 32])
+            .expect("detect and broadcast SlashingReceipt");
+
+        assert_eq!(slash_receipt.offender_id, 1);
+        assert_eq!(slash_receipt.view, 2);
+        assert!(slash_receipt.verify());
+
+        // Every honest validator (0, 2, 3) must hold the verified SlashingReceipt and mark validator 1 slashed
+        for &honest_id in &[0usize, 2, 3] {
+            let receipts = cluster.nodes[honest_id].slashing_receipts();
+            assert!(receipts
+                .iter()
+                .any(|r| r.offender_id == 1 && r.view == 2 && r.verify()));
+            assert!(cluster.nodes[honest_id].slashed_validators().contains(&1));
+        }
+
+        // Block 1 (view 1, leader 0 is honest) finalizes with the 3 honest validators
+        let turn1 = VaultTurn::new([0x10; 32], "alice", vec![1], vec![(1, b"post-slash-1".to_vec())]);
+        cluster
+            .stage_contended_or_inflight_turn(turn1)
+            .expect("stage turn1");
+        let blk1 = cluster.run_simplex_block().expect("finalize block 1");
+        assert_eq!(blk1.height, 1);
+        assert_eq!(blk1.view, 1);
+
+        // Next view is view 2, whose leader would be validator 1 ((2 - 1) % 4 == 1), which is slashed!
+        // `run_simplex_block` automatically executes a networked `SkipCert` view-change to view 3 (leader 2)
+        // and finalizes block 2!
+        let turn2 = VaultTurn::new([0x20; 32], "alice", vec![2], vec![(2, b"post-slash-2".to_vec())]);
+        cluster
+            .stage_contended_or_inflight_turn(turn2)
+            .expect("stage turn2");
+        let blk2 = cluster
+            .run_simplex_block()
+            .expect("finalize block 2 after SkipCert over slashed leader");
+        assert_eq!(blk2.height, 2);
+        assert_eq!(blk2.view, 3);
+        assert!(blk2.fin_cert.verify(3));
+
+        // Verify all honest nodes recorded the SkipCert for view 2
+        for &honest_id in &[0usize, 2, 3] {
+            let skips = cluster.nodes[honest_id].skip_certs();
+            assert!(skips.iter().any(|s| s.view == 2 && s.verify(3)));
+        }
+    }
+
+    #[test]
+    fn test_ws32_e2e_tier1_disjoint_fast_path_vs_tier2_contended_drex_clearing() {
+        let genesis = sample_genesis_cells();
+        let mut cluster =
+            SimplexCluster::new(4, 1, genesis.clone()).expect("spawn 4-validator cluster");
+
+        // 1. Disjoint turns touching slot 1 and slot 2 commute (`disjoint_turns_commute`)
+        let t_disjoint_a = VaultTurn::new(
+            [0xD1; 32],
+            "agent_a",
+            vec![1],
+            vec![(1, b"fast-slot-1".to_vec())],
+        );
+        let t_disjoint_b = VaultTurn::new(
+            [0xD2; 32],
+            "agent_b",
+            vec![2],
+            vec![(2, b"fast-slot-2".to_vec())],
+        );
+        assert!(disjoint_turns_commute(&t_disjoint_a, &t_disjoint_b));
+        assert!(verify_turns_commute_on_vault(
+            &genesis,
+            &t_disjoint_a,
+            &t_disjoint_b
+        ));
+
+        // Submit `t_disjoint_a` -> commits immediately on Tier 1 Fast-Path at block height 0!
+        let out_a = cluster
+            .submit_turn(t_disjoint_a.clone())
+            .expect("submit disjoint turn A");
+        match out_a {
+            TurnSubmissionOutcome::FastPathCommitted { cert, tier } => {
+                assert_eq!(tier, FinalityTier::AttestedFastPath);
+                assert!(cert.verify(3));
+            }
+            other => panic!("expected FastPathCommitted, got {other:?}"),
+        }
+        assert_eq!(cluster.nodes[0].committed_height(), 0);
+        assert_eq!(
+            cluster.nodes[0].turn_tier(&t_disjoint_a.turn_id),
+            Some(FinalityTier::AttestedFastPath)
+        );
+
+        // 2. Contended turns both writing to slot 1 DO NOT commute (`!disjoint_turns_commute`)
+        let t_contended_1 = VaultTurn::new(
+            [0xC1; 32],
+            "trader_1",
+            vec![1],
+            vec![(1, b"contended-slot-1-v1".to_vec())],
+        );
+        let t_contended_2 = VaultTurn::new(
+            [0xC2; 32],
+            "trader_2",
+            vec![1],
+            vec![(1, b"contended-slot-1-v2".to_vec())],
+        );
+        assert!(!disjoint_turns_commute(&t_contended_1, &t_contended_2));
+
+        // Submit concurrent batch with [t_disjoint_b, t_contended_1, t_contended_2]:
+        // `t_disjoint_b` (slot 2) takes Tier 1 Fast-Path, while `t_contended_1` & `t_contended_2` (slot 1)
+        // are routed to Tier 2 Contended Simplex BFT mempool!
+        let batch_outcomes = cluster
+            .submit_concurrent_batch(vec![
+                t_disjoint_b.clone(),
+                t_contended_1.clone(),
+                t_contended_2.clone(),
+            ])
+            .expect("submit concurrent batch");
+        assert!(matches!(
+            batch_outcomes[0],
+            TurnSubmissionOutcome::FastPathCommitted {
+                tier: FinalityTier::AttestedFastPath,
+                ..
+            }
+        ));
+        assert!(matches!(
+            batch_outcomes[1],
+            TurnSubmissionOutcome::RoutedToContendedSimplex {
+                tier: FinalityTier::Speculative,
+                ..
+            }
+        ));
+        assert!(matches!(
+            batch_outcomes[2],
+            TurnSubmissionOutcome::RoutedToContendedSimplex {
+                tier: FinalityTier::Speculative,
+                ..
+            }
+        ));
+
+        // Submit `drex-clearing@1` limit orders into the Tier 2 mempool
+        cluster.set_drex_market("USDC", "WAFER", 0);
+        cluster.submit_drex_order(LimitOrder {
+            account: "alice_buyer".to_string(),
+            side: OrderSide::Bid,
+            qty: 10,
+            total: 1200,
+        });
+        cluster.submit_drex_order(LimitOrder {
+            account: "bob_buyer".to_string(),
+            side: OrderSide::Bid,
+            qty: 5,
+            total: 550,
+        });
+        cluster.submit_drex_order(LimitOrder {
+            account: "carol_seller".to_string(),
+            side: OrderSide::Ask,
+            qty: 12,
+            total: 1200,
+        });
+
+        // Finalize Tier 2 Simplex BFT block -> executes contended turns + `solve_drex_batch` + FFI verification
+        let blk = cluster
+            .run_simplex_block()
+            .expect("finalize contended Simplex block with DREX clearing");
+        assert_eq!(blk.height, 1);
+        assert!(blk.clearing_kernel_verified);
+        let clearing_cert = blk.clearing_cert.expect("DrexClearingCertificate present");
+        assert_eq!(clearing_cert.price, 110);
+        assert_eq!(clearing_cert.objective_volume, 24);
+        assert_eq!(clearing_cert.duality_gap, 0);
+
+        for node in &cluster.nodes {
+            assert_eq!(
+                node.turn_tier(&t_contended_1.turn_id),
+                Some(FinalityTier::QuorumFinal)
+            );
+            assert_eq!(
+                node.turn_tier(&t_contended_2.turn_id),
+                Some(FinalityTier::QuorumFinal)
+            );
+        }
+    }
+
+    #[test]
+    fn test_ws32_e2e_sandboxed_grain_powerbox_confinement_enforcement() {
+        let tmp_dir =
+            std::env::temp_dir().join(format!("obend_ws32_grain_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = std::fs::create_dir_all(&tmp_dir);
+
+        let mut powerbox = Powerbox::new("obend.vault.prod");
+        // Root mandate for `root_agent` covering slots [1, 2] with budget 100
+        let root_mandate = Mandate {
+            grantor: "kernel".to_string(),
+            holder: "root_agent".to_string(),
+            target: "obend.vault.prod".to_string(),
+            rights: vec![IpcAuth::Read, IpcAuth::Write, IpcAuth::Grant],
+            budget: 100,
+            allowed_slots: vec![1, 2],
+            expires_at: 10,
+            allowed_methods: Some(vec![0, 1]),
+        };
+        powerbox
+            .grant_mandate(root_mandate.clone())
+            .expect("grant root mandate");
+
+        // Sub-delegate a strictly attenuated mandate to `grain_worker` covering ONLY slot [1] and budget 10
+        let child_mandate = powerbox
+            .delegate(
+                "root_agent",
+                "grain_worker",
+                &[IpcAuth::Read, IpcAuth::Write],
+                10,
+                &[1, 3], // Slot 3 is NOT in parent's allowed_slots [1, 2], so intersection yields only [1]!
+                5,
+                Some(vec![0]),
+            )
+            .expect("delegate child mandate");
+        assert!(child_mandate.attenuates(&root_mandate));
+        assert_eq!(child_mandate.allowed_slots, vec![1]);
+        assert_eq!(child_mandate.budget, 10);
+
+        let mut runner = SandboxRunner::new(powerbox);
+        let grain_cfg = GrainConfig::strict_for_agent("grain_worker", tmp_dir.clone());
+        assert!(grain_cfg
+            .bwrap_flags()
+            .contains(&"--unshare-net".to_string()));
+        let gate_status = runner
+            .register_grain("grain_worker", grain_cfg)
+            .expect("register strict grain");
+        assert_eq!(gate_status, GateStatus::Started);
+
+        let mut cluster =
+            SimplexCluster::new(4, 1, sample_genesis_cells()).expect("spawn 4-validator cluster");
+        cluster.configure_sandbox(runner);
+
+        // 1. Authorized turn on slot 1 succeeds and commits on Tier 1 Fast-Path
+        let authorized_turn = VaultTurn::new(
+            [0xA1; 32],
+            "grain_worker",
+            vec![1],
+            vec![(1, b"authorized-grain-write".to_vec())],
+        )
+        .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 4, 2, 0);
+
+        let ok_outcome = cluster
+            .submit_turn(authorized_turn)
+            .expect("authorized grain turn should succeed");
+        assert!(matches!(
+            ok_outcome,
+            TurnSubmissionOutcome::FastPathCommitted { .. }
+        ));
+
+        // 2. Unauthorized slot access (attempting to read/write slot 2 or dark-pool slot 3) is REJECTED
+        // by `obend-sandbox` Powerbox before admission and fences the Grain LaunchGate!
+        let unauthorized_slot_turn = VaultTurn::new(
+            [0xB1; 32],
+            "grain_worker",
+            vec![3],
+            vec![(3, b"exfiltrate-dark-pool".to_vec())],
+        )
+        .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 2, 2, 0);
+
+        let err = cluster
+            .submit_turn(unauthorized_slot_turn)
+            .expect_err("unauthorized slot access must be rejected");
+        match err {
+            NodeError::Sandbox(SandboxViolation::UnauthorizedSlotAccess { agent, slot_id }) => {
+                assert_eq!(agent, "grain_worker");
+                assert_eq!(slot_id, 3);
+            }
+            other => panic!("expected UnauthorizedSlotAccess, got {other:?}"),
+        }
+
+        // Verify the grain's LaunchGate was automatically fenced upon violation
+        let sbx = cluster.sandbox.as_ref().unwrap();
+        assert_eq!(
+            sbx.grain_gate_status("grain_worker"),
+            Some(GateStatus::Fenced)
+        );
+        assert_eq!(sbx.rejected_turns.len(), 1);
+
+        // 3. Subsequent turn from the fenced grain is rejected immediately by LaunchGate
+        let post_fence_turn = VaultTurn::new(
+            [0xC1; 32],
+            "grain_worker",
+            vec![1],
+            vec![(1, b"retry-after-fence".to_vec())],
+        );
+        let fence_err = cluster
+            .submit_turn(post_fence_turn)
+            .expect_err("fenced grain must not admit turns");
+        assert!(matches!(
+            fence_err,
+            NodeError::Sandbox(SandboxViolation::GateNotOperational { .. })
+        ));
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_ws32_e2e_fold_collapse_epoch_checkpoint_compression() {
+        let mut cluster =
+            SimplexCluster::new(4, 1, sample_genesis_cells()).expect("spawn 4-validator cluster");
+        let initial_root = cluster.nodes[0].state_root();
+
+        // Height 1: Contended VaultTurn + DREX batch clearing
+        let t1 = VaultTurn::new([0xE1; 32], "alice", vec![1], vec![(1, b"epoch-h1".to_vec())]);
+        cluster
+            .stage_contended_or_inflight_turn(t1.clone())
+            .expect("stage t1");
+        cluster.submit_drex_order(LimitOrder {
+            account: "buyer_1".to_string(),
+            side: OrderSide::Bid,
+            qty: 8,
+            total: 800, // price 100
+        });
+        cluster.submit_drex_order(LimitOrder {
+            account: "seller_1".to_string(),
+            side: OrderSide::Ask,
+            qty: 8,
+            total: 800, // price 100
+        });
+        let b1 = cluster.run_simplex_block().expect("finalize height 1");
+        assert_eq!(b1.height, 1);
+
+        // Height 2: Empty block (simulating a heartbeat/timeout block with no turns or orders)
+        // to exercise `collapseTrace_prune_empty` invariance
+        let b2 = cluster.run_simplex_block().expect("finalize empty height 2");
+        assert_eq!(b2.height, 2);
+        assert!(b2.payload.is_empty());
+        assert_eq!(b2.pre_state_root, b2.post_state_root);
+
+        // Height 3: Contended VaultTurn + second DREX batch clearing
+        let t3 = VaultTurn::new([0xE3; 32], "bob", vec![2], vec![(2, b"epoch-h3".to_vec())]);
+        cluster
+            .stage_contended_or_inflight_turn(t3.clone())
+            .expect("stage t3");
+        cluster.submit_drex_order(LimitOrder {
+            account: "buyer_2".to_string(),
+            side: OrderSide::Bid,
+            qty: 5,
+            total: 600, // price 120
+        });
+        cluster.submit_drex_order(LimitOrder {
+            account: "seller_2".to_string(),
+            side: OrderSide::Ask,
+            qty: 5,
+            total: 500, // price 100 -> midpoint 110
+        });
+        let b3 = cluster.run_simplex_block().expect("finalize height 3");
+        assert_eq!(b3.height, 3);
+
+        // Compress heights [1..=3] into a Tier 3 `CollapsedEpochReceipt` via `Fold.collapse`
+        let epoch_receipt = cluster
+            .collapse_epoch(1, 1, 3)
+            .expect("collapse epoch [1..=3]");
+
+        assert_eq!(epoch_receipt.epoch_id, 1);
+        assert_eq!(epoch_receipt.start_height, 1);
+        assert_eq!(epoch_receipt.end_height, 3);
+        assert_eq!(epoch_receipt.total_block_count, 3);
+        assert_eq!(epoch_receipt.active_block_count, 2);
+        assert_eq!(epoch_receipt.pruned_empty_block_count, 1);
+        assert_eq!(epoch_receipt.initial_state_root, initial_root);
+        assert_eq!(epoch_receipt.final_state_root, b3.post_state_root);
+        assert_eq!(epoch_receipt.cumulative_clearing_volume, 16 + 10);
+        assert_eq!(epoch_receipt.cumulative_currency_net_flow, 0);
+        assert_eq!(epoch_receipt.cumulative_goods_net_flow, 0);
+        assert!(epoch_receipt.clearing_conserved);
+        assert!(epoch_receipt.ffi_verified);
+        assert_eq!(epoch_receipt.tier, FinalityTier::Collapsed);
+
+        let mut session = ObendSession::new().expect("session init");
+        assert!(epoch_receipt
+            .verify(&mut session)
+            .expect("verify collapsed epoch receipt via FFI"));
+
+        // Tampering with cumulative_currency_net_flow or final_state_root must fail verification
+        let mut tampered = epoch_receipt.clone();
+        tampered.cumulative_currency_net_flow = 1;
+        assert!(!tampered.verify(&mut session).expect("verify tampered"));
+
+        // Verify all turns in the collapsed epoch were promoted to `FinalityTier::Collapsed` (Tier 3)
+        for node in &cluster.nodes {
+            assert_eq!(node.turn_tier(&t1.turn_id), Some(FinalityTier::Collapsed));
+            assert_eq!(node.turn_tier(&t3.turn_id), Some(FinalityTier::Collapsed));
+            assert_eq!(node.epoch_receipts().len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_ws32_edge_cases_wire_tampering_duplicate_slots_and_fold_boundaries() {
+        let genesis = sample_genesis_cells();
+        let mut cluster =
+            SimplexCluster::new(4, 1, genesis.clone()).expect("spawn 4-validator cluster");
+
+        // 1. Duplicate write slots in a VaultTurn must be rejected by `disjoint_turns_commute` and `submit_turn`
+        let dup_turn = VaultTurn::new(
+            [0xDD; 32],
+            "alice",
+            vec![1],
+            vec![(1, b"v1".to_vec()), (1, b"v2".to_vec())],
+        );
+        let normal_turn = VaultTurn::new([0xEE; 32], "bob", vec![2], vec![(2, b"ok".to_vec())]);
+        assert!(dup_turn.has_duplicate_write_slots());
+        assert!(!disjoint_turns_commute(&dup_turn, &normal_turn));
+        assert!(matches!(
+            cluster.submit_turn(dup_turn),
+            Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot { .. }))
+        ));
+
+        // 2. Read-read on the same slot without writing commutes under Bernstein independence
+        let read_only_1 = VaultTurn::new([0xF1; 32], "r1", vec![1], vec![]);
+        let read_only_2 = VaultTurn::new([0xF2; 32], "r2", vec![1], vec![]);
+        assert!(disjoint_turns_commute(&read_only_1, &read_only_2));
+
+        // 3. Insecure GrainConfig (network enabled) must be rejected by `verify_strict_policy`
+        let tmp_dir =
+            std::env::temp_dir().join(format!("obend_ws32_edge_{}", std::process::id()));
+        let mut insecure_grain = GrainConfig::strict_for_agent("bad_grain", tmp_dir.clone());
+        insecure_grain.sandbox_config.allow_network = true;
+        assert!(matches!(
+            insecure_grain.verify_strict_policy(),
+            Err(SandboxViolation::InsecureConfinementPolicy { .. })
+        ));
+
+        // 4. Mandate boundary checks: expired epoch, disallowed method, missing Write capability, budget exceeded
+        let mandate = Mandate {
+            grantor: "root".to_string(),
+            holder: "worker".to_string(),
+            target: "obend".to_string(),
+            rights: vec![IpcAuth::Read], // Read-only!
+            budget: 5,
+            allowed_slots: vec![1],
+            expires_at: 3,
+            allowed_methods: Some(vec![7]),
+        };
+        let expired_turn =
+            VaultTurn::new([0x01; 32], "worker", vec![1], vec![]).with_mandate_params(
+                vec![IpcAuth::Read],
+                1,
+                4, // > expires_at (3)
+                7,
+            );
+        assert!(matches!(
+            mandate.check_turn(&expired_turn),
+            Err(SandboxViolation::MandateExpired { .. })
+        ));
+
+        let bad_method_turn =
+            VaultTurn::new([0x02; 32], "worker", vec![1], vec![]).with_mandate_params(
+                vec![IpcAuth::Read],
+                1,
+                2,
+                99, // != 7
+            );
+        assert!(matches!(
+            mandate.check_turn(&bad_method_turn),
+            Err(SandboxViolation::MethodDisallowed { .. })
+        ));
+
+        let missing_write_turn = VaultTurn::new(
+            [0x03; 32],
+            "worker",
+            vec![1],
+            vec![(1, b"illegal-write".to_vec())],
+        )
+        .with_mandate_params(vec![IpcAuth::Read], 1, 2, 7);
+        assert!(matches!(
+            mandate.check_turn(&missing_write_turn),
+            Err(SandboxViolation::MissingCapability {
+                required: IpcAuth::Write,
+                ..
+            })
+        ));
+
+        let over_budget_turn =
+            VaultTurn::new([0x04; 32], "worker", vec![1], vec![]).with_mandate_params(
+                vec![IpcAuth::Read],
+                6, // > budget (5)
+                2,
+                7,
+            );
+        assert!(matches!(
+            mandate.check_turn(&over_budget_turn),
+            Err(SandboxViolation::BudgetExceeded { .. })
+        ));
+
+        // 5. Tampered WireEnvelope sent over real TCP socket to validator 0 must be rejected
+        use std::io::Write;
+        let kp0 = cluster.nodes[0].keypair.clone();
+        let mut forged_env = WireEnvelope::create(
+            &kp0,
+            ConsensusNetMessage::FastPathPropose(normal_turn.clone()),
+        );
+        forged_env.signature[0] ^= 0xFF;
+        let forged_bytes = serde_json::to_vec(&forged_env).unwrap();
+        let mut stream =
+             std::net::TcpStream::connect(cluster.nodes[0].tcp_addr).expect("connect node 0");
+        stream
+            .write_all(&(forged_bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&forged_bytes).unwrap();
+        stream.flush().unwrap();
+        drop(stream);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(cluster.nodes[0].state.lock().unwrap().rejected_wire_frames >= 1);
+
+        // 6. Fold::collapse on empty block slice must return ConsensusVerification error
+        let mut session = ObendSession::new().expect("session");
+        assert!(matches!(
+            Fold::collapse(1, &genesis, &[], &mut session),
+            Err(NodeError::ConsensusVerification(_))
+        ));
     }
 }

@@ -87,3 +87,33 @@ All fine-grained kernel hardening targets (`G1`–`G6`, [`METATHEORY.md` §3.1](
 - **`G4` (`Obend/Receipt/Merkle.lean` & `Obend/Fold/Collapse.lean`)**: Chained world/epoch roots via cSHAKE256 Merkle proofs (`dated_sound`, `opens_binds`, `collapse_sound`).
 - **`G5` (`Obend/Judge/Lrat.lean`, `Obend/Judge/Clearing.lean`, `Obend/Judge/RealAnalysis.lean`)**: Unified external certificate judges (`lrat@1`, `drex-clearing@1`, `real-analysis@1`) under `Judge`.
 - **`G6` (`Obend/Leaf/Residual.lean` & `Obend/Leaf/Flatten.lean`)**: Formalized `superOnlyProjected` / `superOnlyProjectedRow` and proved `openVtable_no_residual_super` and `no_residual_super` for open and closed vtable flattening.
+
+---
+
+## Part IV — Completed 5-Horizon Full Slate (`WS 28` – `WS 32`)
+
+### WS 28: Silicon Elaborator Stage 5 & 6 — `MetaM` Unification, `DiscrTree` LUT Compiler & Verilator Co-Sim (`SILICON-ELABORATOR.md` §6–7) — **COMPLETE**
+- **Modules**:
+  - [`Obend/Lower/MetaUnify.lean`](lean/Obend/Lower/MetaUnify.lean): Pure `MetavarContext` state (`MVarId`, `MVarDecl`, `PostponedConstraint`), occurs-check (`occursMVar`), contextual substitution (`instantiateMVars`), higher-order Miller pattern unification (`millerProjectBody?`, `solveMillerPattern?`), structural unification (`metaUnifyFuel`), postponed constraint solving (`resolvePostponedConstraints`), and kernel-certified elaboration (`elaborateWithMetaUnify`, `metaUnify_assign_sound`, `lowerMetaUnifyToBook`, `lowerMetaUnifyToBook_sound`).
+  - [`Obend/Lower/DiscrTreeLUT.lean`](lean/Obend/Lower/DiscrTreeLUT.lean): Discrimination-tree key & trie formalization (`DiscrKey`, `DiscrTrie`, `extractLeanDiscrKeys`), 2nd Futamura specialization into Zone-3 eFPGA LUT pipelines (`compileDiscrTrieToLutPipeline`, `compileDiscrTrieToTile`, `discrTree_futamura2_lut_sound`), `SlotGuardReg` epoch pin invalidation (`discrTree_epoch_slot_guard_blocks`), and synthesizable SystemVerilog emission (`emitExprCamKernelLutSV`, `exprCam_siliconKernel_sv_cosim_sound`).
+  - [`tests/silicon_elab/run_verilator_cosim.py`](tests/silicon_elab/run_verilator_cosim.py): Cycle-accurate Verilator 5.046 SystemVerilog testbench verifying the 64-bit `ExprCAM` + `SiliconKernel` + Zone-3 `DiscrTree` LUT FSM across 5 clock cycles.
+
+### WS 29: The Next Mathematica II — Taylor Models, Gröbner / Positivstellensatz CAS & Hybrid Systems (`NEXT-MATHEMATICA.md`) — **COMPLETE**
+- **Modules**:
+  - [`Obend/Analysis/TaylorModel.lean`](lean/Obend/Analysis/TaylorModel.lean): High-order Taylor models $(p(x), I_{\text{rem}})$ (`TaylorModel1D`), degree-$k$ truncated arithmetic (`tmAdd`, `tmSub`, `tmMul`), verified transcendental enclosures (`tmExp`, `tmSin`, `tmCos`, `tmLn1p`, `tmSqrt1p`, `taylorModel_transcendental_enclosure_sound`), and contractive Picard–Lindelöf ODE integration (`stepTaylorModelPicardLinear1D`, `taylorModel_picard_sound`, `taylorModel_eliminates_wrapping_effect`).
+  - [`Obend/Analysis/Groebner.lean`](lean/Obend/Analysis/Groebner.lean): Multivariate polynomial division (`polyReduceStep`, `polyNormalForm`), Buchberger S-polynomials (`sPolynomial`, `checkGroebnerBasis`), certified ideal membership ($f = \sum q_i g_i$, `checkIdealMembershipCert`, `groebner_ideal_membership_sound`), and Stengle Positivstellensatz semi-algebraic certificates (`PositivstellensatzCert`, `positivstellensatzJudge`, `stengle_positivstellensatz_sound`) wired into `obend_law` ([`Obend/Tactic/Weave.lean`](lean/Obend/Tactic/Weave.lean)).
+  - [`Obend/Analysis/Hybrid.lean`](lean/Obend/Analysis/Hybrid.lean): Hybrid automata (`HybridMode`, `GuardBox3D`, `AffineReset3D`, `HybridAutomaton`) coupling continuous `Flowpipe` ODE integration with discrete guarded transitions and affine reset maps (`stepHybridTrace`, `hybrid_flowpipe_safety_admits_contract`, `bouncingBall_hybrid_trajectory_certified`).
+
+### WS 30: Physical-World & Mechatronic Co-Design Bridge (`PHYSICAL.md` $\leftrightarrow$ `.obnb` Notebooks) — **COMPLETE**
+- **Modules**:
+  - [`Obend/Vault/PhysicalProjection.lean`](lean/Obend/Vault/PhysicalProjection.lean): Strictly read-only `.obnb` cell projections (`Doc.Content.cell`) for 5-axis CNC kinematic toolpaths with Featherstone 6D twists/wrenches and 21-parameter Abbe compensation (`projectCncToolpath`, `physical_cnc_abbe_projection_sound`), OpenUSD `SdfPath` scene graphs with `LIVERPS` relocates and `AffineForm1D` SDF enclosures (`projectOpenUsdScene`, `physical_openusd_lifecycle_projection_sound`), and coupled LC-drive stator multiphysics (`projectStatorMultiphysics`, `physical_projection_deterministic`, `physical_projection_doc_noninterference`).
+  - [`crates/obend-gui/src/viewport.rs`](crates/obend-gui/src/viewport.rs): Interactive SVG, HTML `LawDial`, and ANSI terminal renderers (`render_cnc_5axis_toolpath_svg`, `render_openusd_scene_svg`, `render_stator_multiphysics_svg`, `render_physical_viewport`).
+
+### WS 31: Live Interactive `.obnb` Workbench Daemon & Lean 4 LSP Bridge (`crates/obend-gui` & `crates/obend-ffi`) — **COMPLETE**
+- **Modules**:
+  - [`Obend/FFI/Bridge.lean`](lean/Obend/FFI/Bridge.lean), [`lean/c/obend_bridge.c`](lean/c/obend_bridge.c), & [`crates/obend-ffi`](crates/obend-ffi): Extended C-ABI with `obend_view_affordances`, `obend_cell_pop_lean`, and `obend_cell_weave_cert`.
+  - [`crates/obend-gui/src/server.rs`](crates/obend-gui/src/server.rs): Sub-5ms interactive HTTP/JSON `.obnb` workbench daemon (`WorkbenchServer`, `GET /notebook`, `POST /dial`, `POST /eval`, `POST /lean-bridge`) backed by a persistent `mimalloc`-safe `ObendSession` worker thread, Bellman–Ford multi-field repair synthesis (`suggest_multi_field_admits`), and live `"Pop Out to Lean 4"` / `"Weave Certificate"` verification.
+
+### WS 32: Multi-Node Networked `obend-node` Cluster & Sandboxed Grain Execution (`crates/obend-node` & `crates/obend-sandbox`) — **COMPLETE**
+- **Modules**:
+  - [`crates/obend-node/src/net.rs`](crates/obend-node/src/net.rs) & [`crates/obend-node/src/lib.rs`](crates/obend-node/src/lib.rs): Multi-validator `SimplexCluster` running $N$ `NetworkedValidatorNode`s over real `127.0.0.1:0` loopback TCP and UDP sockets, exchanging signed `PropCert` / `SkipCert` / `FinCert` / `SlashingReceipt` wire frames, routing disjoint `VaultTurn`s via Tier 1 Fast-Path (`disjoint_turns_commute`) and contended turns via Tier 2 `Simplex` BFT + automated per-epoch `solve_drex_batch` LP clearing + Tier 3 `Fold::collapse` epoch checkpointing, gated by `crates/obend-sandbox` (`Powerbox`, `Mandate`, `BubblewrapRunner`, `ConfinementPolicy`, `LaunchGate`, `CpuMeter`).

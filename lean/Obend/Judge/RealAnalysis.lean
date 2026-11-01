@@ -84,23 +84,30 @@ namespace SOS
 abbrev Monomial := List (Nat × Nat)
 
 def Monomial.lt : Monomial → Monomial → Bool
-  | [], [] => false
-  | [], _ :: _ => true
-  | _ :: _, [] => false
-  | (v1, d1) :: r1, (v2, d2) :: r2 =>
-    if v1 < v2 then true
-    else if v2 < v1 then false
-    else if d1 < d2 then true
-    else if d2 < d1 then false
-    else Monomial.lt r1 r2
+  | [], m2 =>
+    match m2 with
+    | [] => false
+    | _ :: _ => true
+  | (v1, d1) :: r1, m2 =>
+    match m2 with
+    | [] => false
+    | (v2, d2) :: r2 =>
+      if v1 < v2 then true
+      else if v2 < v1 then false
+      else if d1 < d2 then true
+      else if d2 < d1 then false
+      else Monomial.lt r1 r2
+
+def mulVarPow (v d : Nat) : Monomial → Monomial
+  | [] => [(v, d)]
+  | (v2, d2) :: r2 =>
+    if v < v2 then (v, d) :: (v2, d2) :: r2
+    else if v2 < v then (v2, d2) :: mulVarPow v d r2
+    else (v, d + d2) :: r2
 
 def Monomial.mul : Monomial → Monomial → Monomial
   | [], m2 => m2
-  | m1, [] => m1
-  | (v1, d1) :: r1, (v2, d2) :: r2 =>
-    if v1 < v2 then (v1, d1) :: Monomial.mul r1 ((v2, d2) :: r2)
-    else if v2 < v1 then (v2, d2) :: Monomial.mul ((v1, d1) :: r1) r2
-    else (v1, d1 + d2) :: Monomial.mul r1 r2
+  | (v1, d1) :: r1, m2 => mulVarPow v1 d1 (Monomial.mul r1 m2)
 
 def insertTerm (m : Monomial) (c : CanonicalRat) : List (Monomial × CanonicalRat) → List (Monomial × CanonicalRat)
   | [] => if c == 0 then [] else [(m, c)]

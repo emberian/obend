@@ -35,6 +35,11 @@ enum Commands {
         #[arg(short, long, default_value = "ThermalCoolingOde")]
         title: String,
     },
+    /// Start the live interactive .obnb HTTP/WebSocket workbench server (`WS 31`)
+    Serve {
+        #[arg(short, long, default_value = "127.0.0.1:7878")]
+        bind: String,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,8 +68,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{} Projected cell: {} bytes (.obnb Content.cell)", "[OK]".bold().green(), projected_cell.len());
         }
         Commands::Viewport { kind, title } => {
-            let proj_kind = ProjectionKind::from_label(&kind)
-                .ok_or_else(|| format!("unknown ProjectionKind: {kind}"))?;
             let dial = LawDialControl {
                 cell_id: "cell-0".to_string(),
                 mode: LawDialMode::Locked,
@@ -73,10 +76,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 margin_hi: 35.0,
                 current_value: 25.0,
             };
-            let vp = render_projection_viewport(proj_kind, &title, &dial);
-            println!("{}", vp.terminal_canvas);
+            if let Some(phys_kind) = obend_gui::viewport::PhysicalViewportKind::from_label(&kind) {
+                let vp = obend_gui::viewport::render_physical_viewport(phys_kind, &title, &dial);
+                println!("{}", vp.terminal_canvas);
+            } else {
+                let proj_kind = ProjectionKind::from_label(&kind)
+                    .ok_or_else(|| format!("unknown ProjectionKind: {kind}"))?;
+                let vp = render_projection_viewport(proj_kind, &title, &dial);
+                println!("{}", vp.terminal_canvas);
+            }
+        }
+        Commands::Serve { bind } => {
+            let server = obend_gui::server::WorkbenchServer::bind(&bind)?;
+            println!(
+                "{} Live .obnb HTTP/JSON workbench listening on {}",
+                "[WORKBENCH]".bold().green(),
+                server.base_url()
+            );
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            }
         }
     }
 
     Ok(())
 }
+
