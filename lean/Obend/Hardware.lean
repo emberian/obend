@@ -14,5 +14,9 @@ public import Obend.Hardware.FabuBlox
 public import Obend.Hardware.DRC
 public import Obend.Hardware.Analog
 public import Obend.Hardware.WaferSpace
+public import Obend.Hardware.Thermal
+public import Obend.Hardware.Datasheet
+public import Obend.Hardware.Circuits
+public import Obend.Hardware.RF
 public import Obend.Hardware.Judge
 public import Obend.Hardware.Cli

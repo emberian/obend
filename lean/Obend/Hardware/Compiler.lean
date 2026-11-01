@@ -453,6 +453,88 @@ theorem compilePrimSat_sound
     subst h
     simp [evalRtlExpr, evalAluOp]
 
+/-- **Exact `Nat` Subtraction Correspondence (`evalPrimHwSat_subtract_eq_ofNat_sub`)**:
+For all `a, b < 2^64`, saturating 64-bit hardware subtraction `evalPrimHwSat .subtract` agrees
+with Lean/Core4 truncated `Nat` subtraction `a - b`. -/
+theorem evalPrimHwSat_subtract_eq_ofNat_sub {a b : Nat}
+    (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
+    evalPrimHwSat .subtract (BitVec.ofNat 64 a) (BitVec.ofNat 64 b) =
+      some (BitVec.ofNat 64 (a - b)) := by
+  simp only [evalPrimHwSat, Option.some.injEq]
+  by_cases hlt : BitVec.ult (BitVec.ofNat 64 a) (BitVec.ofNat 64 b) = true
+  · simp only [hlt, ite_true]
+    have hab : a < b := by
+      simpa [BitVec.ult, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb] using hlt
+    have hsub : a - b = 0 := by omega
+    rw [hsub]
+  · simp only [hlt, Bool.false_eq_true, ite_false]
+    have hle : b ≤ a := by
+      simpa [BitVec.ult, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb] using hlt
+    apply BitVec.eq_of_toNat_eq
+    have hsub_lt : a - b < 2 ^ 64 := by omega
+    simp [BitVec.toNat_sub, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb,
+      Nat.mod_eq_of_lt hsub_lt]
+    omega
+
+/-- Reference 64-bit saturating hardware semantics for `Obend.Core.Term`:
+matches `evalTermHw`, except `.record []` (`box` for `LExpr.erased`) evaluates to `0#64` and
+binary primitives use `evalPrimHwSat`. -/
+def evalTermHwSat
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (inputs slotWires regs : Nat → BitVec 64)
+    (selfDepth : Nat)
+    (varVals : List (BitVec 64)) : Term → Option (BitVec 64)
+  | .nat n => some (BitVec.ofNat 64 n)
+  | .boolean b => some (if b then 1#64 else 0#64)
+  | .record [] => some 0#64
+  | .bound idx => varVals[idx]?
+  | .get (.bound idx) member =>
+    if idx == selfDepth then
+      match slots.idxOf? member with
+      | some slotIdx => some (slotWires slotIdx)
+      | none => none
+    else none
+  | .app fn arg =>
+    match fn with
+    | .lam subBody =>
+      match evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals arg with
+      | some vArg =>
+        evalTermHwSat slots slotBodies inputs slotWires regs (selfDepth + 1) (vArg :: varVals) subBody
+      | none => none
+    | .get (.bound idx) member =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals arg with
+        | some slotIdx, some vArg =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr =>
+            some (evalRtlExpr (fun i => if i == 0 then vArg else inputs i) slotWires regs slotExpr)
+          | none => none
+        | _, _ => none
+      else none
+    | _ => none
+  | .binary op l r =>
+    match evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals l,
+          evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals r with
+    | some vl, some vr => evalPrimHwSat op vl vr
+    | _, _ => none
+  | .ifBool c t f =>
+    match evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals c,
+          evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals t,
+          evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals f with
+    | some vc, some vt, some vf => some (if vc != 0#64 then vt else vf)
+    | _, _, _ => none
+  | .ifZero v z s =>
+    match evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals v,
+          evalTermHwSat slots slotBodies inputs slotWires regs selfDepth varVals z with
+    | some vv, some vz =>
+      match evalTermHwSat slots slotBodies inputs slotWires regs (selfDepth + 1) ((vv - 1#64) :: varVals) s with
+      | some vs => some (if (if vv == 0#64 then 1#64 else 0#64) != 0#64 then vz else vs)
+      | none => none
+    | _, _ => none
+  | _ => none
+
 /-- Compile `Term` in saturating `Nat`-compatible mode, also accepting `box = .record []` (the
 lowered representation of `LExpr.erased` from `Obend.Lower`) as `0#64`. -/
 def compileTermSat
@@ -509,6 +591,195 @@ def compileTermSat
       | none => none
     | _, _ => none
   | _ => none
+
+/-- **Universal Structural Soundness of `compileTermSat` (`compileTermSat_sound`)**:
+For EVERY `t : Term`, if `compileTermSat slots slotBodies selfDepth varEnv t = some e`, then
+evaluating `e` in `evalRtlExpr` produces the exact same 64-bit value as `evalTermHwSat` under
+`varEnv.map (evalRtlExpr inputs wires regs)`. -/
+theorem compileTermSat_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (t : Term)
+    (selfDepth : Nat) (varEnv : List RtlExpr) (e : RtlExpr)
+    (h : compileTermSat slots slotBodies selfDepth varEnv t = some e) :
+    evalTermHwSat slots slotBodies inputs wires regs selfDepth (varEnv.map (evalRtlExpr inputs wires regs)) t =
+      some (evalRtlExpr inputs wires regs e) := by
+  match t with
+  | .hole _ _ | .lam _ | .mix _ _ | .fix _ _ | .specification _ _
+  | .prototype _ _ | .reflect _ | .metadata _ | .project _ | .label _
+  | .extend _ _ | .inject _ _ | .case _ _ | .perform _ | .done _ | .split _ _ _ =>
+    simp [compileTermSat] at h
+  | .record fs =>
+    cases fs with
+    | nil =>
+      simp only [compileTermSat, Option.some.injEq] at h
+      subst h
+      rfl
+    | cons _ _ =>
+      simp [compileTermSat] at h
+  | .nat n =>
+    simp only [compileTermSat, Option.some.injEq] at h
+    subst h
+    rfl
+  | .boolean b =>
+    simp only [compileTermSat, Option.some.injEq] at h
+    subst h
+    rfl
+  | .bound idx =>
+    simp only [compileTermSat] at h
+    simp only [evalTermHwSat, List.getElem?_map, h, Option.map_some]
+  | .get target member =>
+    cases target with
+    | bound idx =>
+      simp only [compileTermSat] at h
+      simp only [evalTermHwSat]
+      by_cases hEq : idx == selfDepth
+      · simp only [hEq, ↓reduceIte] at h ⊢
+        cases hSlot : slots.idxOf? member with
+        | none => simp [hSlot] at h
+        | some slotIdx =>
+          simp only [hSlot, Option.some.injEq] at h
+          subst h
+          rfl
+      · simp [hEq] at h
+    | _ =>
+      simp [compileTermSat] at h
+  | .app fn arg =>
+    cases fn with
+    | lam subBody =>
+      simp only [compileTermSat] at h
+      cases hArg : compileTermSat slots slotBodies selfDepth varEnv arg with
+      | none => simp [hArg] at h
+      | some eArg =>
+        simp only [hArg] at h
+        have ihArg := compileTermSat_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg hArg
+        have ihBody := compileTermSat_sound inputs wires regs slots slotBodies subBody
+          (selfDepth + 1) (eArg :: varEnv) e h
+        simp only [List.map_cons] at ihBody
+        simp only [evalTermHwSat, ihArg, ihBody]
+    | get target member =>
+      cases target with
+      | bound idx =>
+        simp only [compileTermSat] at h
+        simp only [evalTermHwSat]
+        by_cases hEq : idx == selfDepth
+        · simp only [hEq, ↓reduceIte] at h ⊢
+          cases hSlot : slots.idxOf? member with
+          | none => simp [hSlot] at h
+          | some slotIdx =>
+            cases hArg : compileTermSat slots slotBodies selfDepth varEnv arg with
+            | none => simp [hSlot, hArg] at h
+            | some eArg =>
+              simp only [hSlot, hArg] at h
+              cases hBody : slotBodies[slotIdx]? with
+              | none => simp [hBody] at h
+              | some slotExpr =>
+                simp only [hBody, Option.some.injEq] at h
+                subst h
+                have ihArg := compileTermSat_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg hArg
+                simp only [ihArg, hBody, substInputPort0_sound]
+        · simp [hEq] at h
+      | _ =>
+        simp [compileTermSat] at h
+    | _ =>
+      simp [compileTermSat] at h
+  | .binary op l r =>
+    simp only [compileTermSat] at h
+    cases hl : compileTermSat slots slotBodies selfDepth varEnv l with
+    | none => simp [hl] at h
+    | some el =>
+      cases hr : compileTermSat slots slotBodies selfDepth varEnv r with
+      | none => simp [hl, hr] at h
+      | some er =>
+        simp only [hl, hr] at h
+        have ihl := compileTermSat_sound inputs wires regs slots slotBodies l selfDepth varEnv el hl
+        have ihr := compileTermSat_sound inputs wires regs slots slotBodies r selfDepth varEnv er hr
+        simp only [evalTermHwSat, ihl, ihr]
+        exact compilePrimSat_sound inputs wires regs op el er e h
+  | .ifBool c t f =>
+    simp only [compileTermSat] at h
+    cases hc : compileTermSat slots slotBodies selfDepth varEnv c with
+    | none => simp [hc] at h
+    | some ec =>
+      cases ht : compileTermSat slots slotBodies selfDepth varEnv t with
+      | none => simp [hc, ht] at h
+      | some et =>
+        cases hf : compileTermSat slots slotBodies selfDepth varEnv f with
+        | none => simp [hc, ht, hf] at h
+        | some ef =>
+          simp only [hc, ht, hf, Option.some.injEq] at h
+          subst h
+          have ihc := compileTermSat_sound inputs wires regs slots slotBodies c selfDepth varEnv ec hc
+          have iht := compileTermSat_sound inputs wires regs slots slotBodies t selfDepth varEnv et ht
+          have ihf := compileTermSat_sound inputs wires regs slots slotBodies f selfDepth varEnv ef hf
+          simp only [evalTermHwSat, ihc, iht, ihf, evalRtlExpr]
+  | .ifZero v z s =>
+    simp only [compileTermSat] at h
+    cases hv : compileTermSat slots slotBodies selfDepth varEnv v with
+    | none => simp [hv] at h
+    | some ev =>
+      cases hz : compileTermSat slots slotBodies selfDepth varEnv z with
+      | none => simp [hv, hz] at h
+      | some ez =>
+        cases hs : compileTermSat slots slotBodies (selfDepth + 1)
+            (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) s with
+        | none => simp [hv, hz, hs] at h
+        | some es =>
+          simp only [hv, hz, hs, Option.some.injEq] at h
+          subst h
+          have hv' := compileTermSat_sound inputs wires regs slots slotBodies v selfDepth varEnv ev hv
+          have hz' := compileTermSat_sound inputs wires regs slots slotBodies z selfDepth varEnv ez hz
+          have hs' := compileTermSat_sound inputs wires regs slots slotBodies s (selfDepth + 1)
+            (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) es hs
+          simp only [List.map_cons, evalRtlExpr, evalAluOp] at hs'
+          simp only [evalTermHwSat, hv', hz', hs', evalRtlExpr, evalAluOp]
+          rfl
+
+/-- Extract the inner body of a `LeafDef`'s `code` (`λself. λarg. body`) and compile it via
+`compileTermSat`. -/
+def compileLeafDefSat (slots : List String) (slotBodies : List RtlExpr) (d : LeafDef) : Option RtlExpr :=
+  match d.code with
+  | .lam (.lam body) => compileTermSat slots slotBodies 1 [.inputPort 0] body
+  | _ => none
+
+/-- Structurally recursive slot-list compiler using `compileLeafDefSat`. -/
+def compileBookDefsSat
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (wires : List WireAssign)
+    (regs : List RegSpec)
+    (outs : List OutputPort) :
+    List LeafDef → Option (List WireAssign × List RegSpec × List OutputPort)
+  | [] => some (wires, regs, outs)
+  | d :: rest =>
+    match compileLeafDefSat slots slotBodies d with
+    | none => none
+    | some expr =>
+      let w : WireAssign := { wireIdx := d.slot, name := d.member, expr := expr }
+      let r : RegSpec :=
+        { regIdx         := d.slot
+        , name           := s!"reg_{d.member}"
+        , domain         := .coreClk
+        , resetKind      := .resetFree
+        , isSynchronizer := false
+        , nextExpr       := .wireRef d.slot }
+      let o : OutputPort := { name := s!"out_{d.member}", expr := .wireRef d.slot }
+      compileBookDefsSat slots (slotBodies ++ [expr]) (wires ++ [w]) (regs ++ [r]) (outs ++ [o]) rest
+
+/-- Compile an entire `Obend.Leaf.Book` into a synchronous `RtlModule` using saturating `Nat`-compatible
+arithmetic (`compileBookDefsSat`). -/
+def compileBookToRtlSat (modName : String) (B : Book) : Option RtlModule :=
+  match compileBookDefsSat B.slots [] [] [] [] B.defs with
+  | none => none
+  | some (wires, regs, outs) =>
+    some {
+      name       := modName
+      inputNames := ["arg"]
+      wires      := wires
+      regs       := regs
+      outputs    := outs
+    }
 
 end Obend.Hardware.Compiler
 end

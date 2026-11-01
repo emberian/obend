@@ -51,6 +51,10 @@ import all Obend.Hardware.FabuBlox
 import all Obend.Hardware.DRC
 import all Obend.Hardware.Analog
 import all Obend.Hardware.WaferSpace
+import all Obend.Hardware.Thermal
+import all Obend.Hardware.Datasheet
+import all Obend.Hardware.Circuits
+import all Obend.Hardware.RF
 import all Obend.Hardware.Judge
 public import Obend.Hardware
 @[expose] public section
@@ -61,6 +65,7 @@ open Obend.Hardware.Silicon Obend.Hardware.Process Obend.Hardware.Fabric
 open Obend.Hardware.HDL Obend.Hardware.Types Obend.Hardware.Rules Obend.Hardware.FSM
 open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hardware.WaferSpace
+open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
 open Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
@@ -137,6 +142,41 @@ theorem waferspace_refusal_and_acceptance_poles :
     checkWaferSpaceSignoff badAntennaSignoffCert = false ∧
     checkWaferSpaceSignoff badCmpDensitySignoffCert = false := by
   decide +kernel
+
+/-- Unballasted power BJT electro-thermal feedback ($\gamma_{\text{th}} = 1440 \ge 1000$) is refused
+by `checkThermalLoopStable`, and $155^\circ\text{C}$ junction temperature trips Schmitt TSD cutoff. -/
+theorem thermal_runaway_and_tsd_overtemp_refused :
+    checkThermalLoopStable unballastedPowerBjt = false ∧
+    checkThermalLoopStable emitterBallastedPowerBjt = true ∧
+    (stepTsdProtection standardTsdSpec ⟨true, 0⟩ 155000).stageEnabled = false :=
+  ⟨rfl, rfl, rfl⟩
+
+/-- Direct `SN74LS00` TTL $\to$ `CD74HC00` CMOS interfacing ($\text{NM}_H = -800\,\text{mV}$) and
+uncalibrated model drift ($\varepsilon_\infty = 620\,\text{mV} > 25\,\text{mV}$) are refused. -/
+theorem datasheet_ttl_to_hc_and_drift_refused :
+    checkLogicInterface sn74ls00Datasheet.logic cd74hc00Datasheet.logic 0 400 = false ∧
+    checkModelCalibration uncalibratedDrifted74ls00Preds sn74ls00Datasheet.transferCurve 25 = false ∧
+    checkDatasheetFitSignoff goldenDatasheetFitCert = true ∧
+    checkDatasheetFitSignoff badDirect74HcFitCert = false ∧
+    checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
+  ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+/-- `SN74LS00` fanout overload (`25 > 10`) and synchronous Buck inductor saturation (`3691 mA > 3500 mA`)
+are refused by `checkTtlFanout` and `checkBuckCcmSafe`. -/
+theorem circuits_fanout_and_buck_saturation_refused :
+    checkTtlFanout sn74ls00TotemParams 25 = false ∧
+    checkBuckCcmSafe overloadedSaturatingBuckSpec = false :=
+  ⟨rfl, rfl⟩
+
+/-- Unmatched $300\,\Omega$ twin-lead on $50\,\Omega$ coax ($\text{VSWR} = 6:1$) and unfiltered Class-E
+PA harmonics ($-18\,\text{dBc}$ vs $-43\,\text{dBc}$ FCC Part 97.307 limit) are refused. -/
+theorem rf_vswr_and_unfiltered_pa_harmonics_refused :
+    checkVswrUnder2To1 50 ⟨300, 0⟩ = false ∧
+    checkFccPart97Harmonics unfilteredClassEPaSpec = false ∧
+    checkRfTransceiverSignoff golden40mFt8TransceiverCert = true ∧
+    checkRfTransceiverSignoff unfilteredPaTransceiverCert = false ∧
+    checkRfTransceiverSignoff highVswrTransceiverCert = false :=
+  ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## 2. End-to-End Compilation of `Obend.Leaf.emit (comp 1)` to `RtlModule` -/
 
@@ -335,6 +375,38 @@ def checkRtlSynthAcceptAll (_grade : Nat) (_expectedName : String) (_m : RtlModu
   .ok
 
 #tooth Obend.Hardware.Judge.badLoopRtlModule_refused by mutation Obend.Hardware.Judge.checkRtlSynth := checkRtlSynthAcceptAll
+
+/-- 21. Broken `evalBandgapRef` in `Obend.Hardware.Thermal` that subtracts the PTAT term instead of adding it (`-2 * alphaCtat * deltaT` drift instead of `0` drift!). -/
+def evalBandgapRefInvertPtat (vbg0 alphaCtat alphaPtat weightK _temp deltaT : Int) : Int :=
+  (vbg0 - alphaCtat * deltaT) - weightK * (alphaPtat * deltaT)
+
+#tooth Obend.Hardware.Thermal.bandgap_zero_tempco_cancellation by mutation Obend.Hardware.Thermal.evalBandgapRef := evalBandgapRefInvertPtat
+
+/-- 22. Broken `checkLogicInterface` in `Obend.Hardware.Datasheet` that forgets to verify `noiseMarginHigh` (allowing `74LS` $\to$ `74HC` direct negative margin). -/
+def checkLogicInterfaceIgnoreHigh (drv rcv : LogicFamilySpec) (_pullupBoostMv minMarginMv : Int) : Bool :=
+  decide (minMarginMv ≤ noiseMarginLow drv rcv) &&
+  decide (drv.volMaxMv < rcv.vihMinMv)
+
+#tooth Obend.Hardware.Datasheet.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.Datasheet.checkLogicInterface := checkLogicInterfaceIgnoreHigh
+
+/-- 23. Broken `evalInaOutputUv` in `Obend.Hardware.Circuits` that forgets to apply `trimCmCancel` (leaking 60 Hz common-mode hum into the output). -/
+def evalInaOutputUvNoTrim (p : InaParams) (vDiffUv vCmUv deltaTC : Int) : Int :=
+  p.gainDiff * (vDiffUv + p.vos0Uv + p.dVosDtUvPerC * deltaTC) +
+  p.gainCmRaw * vCmUv
+
+#tooth Obend.Hardware.Circuits.ina_common_mode_cancelled_at_matched_bridge by mutation Obend.Hardware.Circuits.evalInaOutputUv := evalInaOutputUvNoTrim
+
+/-- 24. Broken `gammaMagSqNum` in `Obend.Hardware.RF` that uses `zL.rOhm + z0` instead of `zL.rOhm - z0`. -/
+def gammaMagSqNumAddInsteadOfSub (z0 : Int) (zL : Impedance) : Int :=
+  (zL.rOhm + z0) * (zL.rOhm + z0) + zL.xOhm * zL.xOhm
+
+#tooth Obend.Hardware.RF.conjugate_match_zero_reflection by mutation Obend.Hardware.RF.gammaMagSqNum := gammaMagSqNumAddInsteadOfSub
+
+/-- 25. Broken `evalQuadratureImagePhaseCancel` in `Obend.Hardware.RF` that adds `gainI + gainQ` instead of subtracting `gainI - gainQ` (failing to reject the image sideband). -/
+def evalQuadratureImageSumInsteadOfDiff (gainI gainQ phaseErr sigAmp : Int) : Int :=
+  (gainI + gainQ) * sigAmp + phaseErr * sigAmp
+
+#tooth Obend.Hardware.RF.tayloe_iq_cancels_image_sideband by mutation Obend.Hardware.RF.evalQuadratureImagePhaseCancel := evalQuadratureImageSumInsteadOfDiff
 
 end Obend.Teeth.Hardware
 end

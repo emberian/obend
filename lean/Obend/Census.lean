@@ -212,9 +212,11 @@ import Obend.Equiv.Simulation
 import Obend.Fold
 import Obend.Hardware
 import Obend.Hardware.Analog
+import Obend.Hardware.Circuits
 import Obend.Hardware.Cli
 import Obend.Hardware.Compiler
 import Obend.Hardware.DRC
+import Obend.Hardware.Datasheet
 import Obend.Hardware.FSM
 import Obend.Hardware.Fabric
 import Obend.Hardware.FabuBlox
@@ -222,10 +224,12 @@ import Obend.Hardware.HDL
 import Obend.Hardware.Judge
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.Process
+import Obend.Hardware.RF
 import Obend.Hardware.Retiming
 import Obend.Hardware.Rules
 import Obend.Hardware.Silicon
 import Obend.Hardware.Synth
+import Obend.Hardware.Thermal
 import Obend.Hardware.Types
 import Obend.Hardware.WaferSpace
 import Obend.Intention
@@ -386,6 +390,7 @@ import Obend.Teeth.Leaf.ReviewTeeth
 import Obend.Teeth.Logic.FrameTeeth
 import Obend.Teeth.Logic.GroundTeeth
 import Obend.Teeth.Logic.LateBindingTeeth
+import Obend.Teeth.Lower.LowerTeeth
 import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire

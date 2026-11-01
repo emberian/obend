@@ -120,6 +120,44 @@ with tempfile.TemporaryDirectory() as out:
           rc == 0 and m1 and m2 and m1.group(1) == m2.group(1) == want[("double", 21)], text[-400:])
     check("the book is written", os.path.exists(book))
 
+    # 4-stage pipeline: Lean -> Core4 -> Leaf.Book -> SystemVerilog RTL (--rtl)
+    rtl_double = os.path.join(out, "double.sv")
+    rc, text = obend("lower", "double", "--arg", "21", "--emit", book, "--rtl", rtl_double)
+    m_rtl = re.search(r"^rtl: double 21 = (\S+)", text, re.M)
+    check("double to RTL (--rtl): hardware simulation matches machine and book",
+          rc == 0 and m_rtl and m_rtl.group(1) == want[("double", 21)] and os.path.exists(rtl_double), text[-400:])
+
+    rtl_small = os.path.join(out, "small.sv")
+    for n in [0, 2, 3, 10]:
+        rc, text = obend("lower", "small", "--arg", str(n), "--rtl", rtl_small)
+        m_rtl = re.search(rf"^rtl: small {n} = (\S+)", text, re.M)
+        check(f"small {n} to saturating RTL (--rtl): hardware {m_rtl.group(1) if m_rtl else None} = {want[('small', n)]}",
+              rc == 0 and m_rtl and m_rtl.group(1) == want[("small", n)], text[-400:])
+    check("small.sv contains SystemVerilog module lean_small_rtl",
+          os.path.exists(rtl_small) and "module lean_small_rtl" in open(rtl_small).read())
+
+    # theorem transport: Lean theorem -> Decidable decision procedure -> transport@1 certificate
+    for thm in ["double_even", "small_lt_three", "pointSwap_norm_eq"]:
+        rc, text = obend("lower", "--transport", thm, "--arg", "2", "--out", out)
+        check(f"transport {thm}: accepted by transport@1 and evaluates to true at 2",
+              rc == 0 and "transport@1: accepted" in text and f"claim: {thm} 2 = true" in text, text[-400:])
+        rc, text = obend("lower", "--verify-transport",
+                         os.path.join(out, f"{thm}.transport.json"),
+                         os.path.join(out, f"{thm}.statement.json"))
+        check(f"transport {thm}: certificate verified by --verify-transport",
+              rc == 0 and "transport@1: accepted" in text, text)
+
+    # teeth on transport@1
+    rc, text = obend("lower", "--verify-transport",
+                     os.path.join(out, "double_even.transport.json"),
+                     os.path.join(out, "small_lt_three.statement.json"))
+    check("tooth: mismatched statement refuses transport@1 certificate",
+          rc == 3 and "refused" in text, text)
+
+    rc, text = obend("lower", "--transport", "uses_axiom_claim")
+    check("tooth: theorem depending on custom axiom is refused by --transport",
+          rc == 3 and "disallowed axiom" in text, text)
+
 for name in ["halvings", "greeting", "propElim"]:
     rc, text = obend("lower", name)
     check(f"tooth: {name} is outside the fragment", rc == 3 and "outside the fragment" in text, text[-300:])

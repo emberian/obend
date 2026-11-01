@@ -69,7 +69,12 @@ r_lec4 = subprocess.run([Z3, os.path.join(HW_SIM, "lec_ams_waferspace.smt2")], c
 check("z3 lec_ams_waferspace.smt2: Types slices, Retiming MAC, ABBA centroid & 4b SAR ADC (unsat)",
       r_lec4.returncode == 0 and r_lec4.stdout.strip() == "unsat", r_lec4.stdout + r_lec4.stderr)
 
-# 5. Verilator 5.050 RTL Elaboration & Lint Check
+# 5. Z3 QF_NRA Real Multiphysics, Bandgap Zero-TC, 74LS/74HCT Calibration & RF Conjugate Match Check
+r_lec5 = subprocess.run([Z3, os.path.join(HW_SIM, "lec_multiphysics_rf.smt2")], capture_output=True, text=True)
+check("z3 lec_multiphysics_rf.smt2: QF_NRA RF conjugate match, Bandgap zero-TC, 74LS fit & Tayloe I/Q (unsat)",
+      r_lec5.returncode == 0 and r_lec5.stdout.strip() == "unsat", r_lec5.stdout + r_lec5.stderr)
+
+# 6. Verilator 5.050 RTL Elaboration & Lint Check
 obj_dir = os.path.join(HW_SIM, "obj_dir")
 r_verilate = subprocess.run([
     VERILATOR, "--cc", "--exe", "--top-module", "tb_top",
@@ -83,14 +88,19 @@ r_verilate = subprocess.run([
 check("verilator 5.050: 15-module SystemVerilog elaboration with -Wall & X-randomization",
       r_verilate.returncode == 0, r_verilate.stdout + r_verilate.stderr)
 
-# 4. C++ Compilation & Execution of Verilated Silicon Model
+# 7. C++ Compilation & Execution of Verilated Silicon Model
 sim_bin = os.path.join(obj_dir, "sim_obend")
+vtb_cpps = [
+    os.path.join(obj_dir, f)
+    for f in sorted(os.listdir(obj_dir))
+    if f.startswith("Vtb_top") and f.endswith(".cpp") and f != "Vtb_top__ALL.cpp"
+]
 r_cxx = subprocess.run([
     CXX, "-Os", "-std=c++20",
     f"-I{obj_dir}", f"-I{VL_INC}", f"-I{VL_INC}/vltstd",
     "-Wl,-U,__Z15vl_time_stamp64v,-U,__Z13sc_time_stampv,-U,_vlog_startup_routines",
     os.path.join(HW_SIM, "sim_main.cpp"),
-    os.path.join(obj_dir, "Vtb_top__ALL.cpp"),
+    *vtb_cpps,
     os.path.join(VL_INC, "verilated.cpp"),
     os.path.join(VL_INC, "verilated_threads.cpp"),
     "-o", sim_bin,
@@ -121,7 +131,28 @@ check("sim suite 9: Hardware Merkle-View Receipt Verifier (4/4 accepted, 4/4 tam
 check("sim suite 10: DeosCounter.obend + Vault.Law Capability-Guarded Register Bank",
       "10. DeosCounter.obend + Vault.Law Guard: uncred reset=REFUSED(count=35), writeOnce=0xbeef, cred reset=0" in out, out)
 
-# 6. Obend CLI Hardware & FabuBlox & wafer.space Judge Receipt Checks
+# 8. C++20 Continuous-Time Multiphysics (Electro-Thermal RK4, SN74LS00 Datasheet, Pt100 INA & 40m FT8 RF)
+mp_bin = os.path.join(obj_dir, "multiphysics_sim")
+r_mp_cxx = subprocess.run([
+    CXX, "-Os", "-std=c++20",
+    os.path.join(HW_SIM, "multiphysics_sim.cpp"),
+    "-o", mp_bin,
+], capture_output=True, text=True)
+check("c++ build: Continuous-time multiphysics & RF simulator compiled",
+      r_mp_cxx.returncode == 0, r_mp_cxx.stdout + r_mp_cxx.stderr)
+
+r_mp = subprocess.run([mp_bin], capture_output=True, text=True)
+mp_out = r_mp.stdout + r_mp.stderr
+check("multiphysics suite A: Electro-Thermal RK4 BJT + Schmitt TSD (Tj=84.2 C, trip=150 C, recover=130 C, chatter=0)",
+      r_mp.returncode == 0 and "A. Electro-Thermal RK4 + Schmitt TSD: ballasted Tj=84.2 C, TSD trip=150.0 C, recover=130.0 C, chatter=0, Vbg=1.220 V" in mp_out, mp_out)
+check("multiphysics suite B: SN74LS00 Totem-Pole NAND Datasheet Fit (VOL=0.34 V, VOH=3.38 V, L_inf=14.2 mV)",
+      "B. SN74LS00 Datasheet Calibration: VOL=0.34 V, VOH=3.38 V, tpLH=9.2 ns, tpHL=8.4 ns, L_inf=14.2 mV <= 25.0 mV" in mp_out, mp_out)
+check("multiphysics suite C: Pt100 RTD Bridge + 3-Op-Amp INA (CMRR=100 dB, 60Hz hum=5.0 uV, err=0.013 C)",
+      "C. Pt100 Bridge + 3-Op-Amp INA: CMRR=100 dB, 60Hz hum=5.0 uV < 10 uV, max temp err=0.013 C < 0.05 C" in mp_out, mp_out)
+check("multiphysics suite D: 40m (7.074 MHz FT8) Ham Radio Transceiver (VSWR=1.002, IRR=52.4 dB, Harmonics=-58.6 dBc)",
+      "D. 40m (7.074 MHz FT8) RF Transceiver: Zin=50.0+j0.0 Ohm, VSWR=1.002, Tayloe IRR=52.4 dB, Friis NF=1.84 dB, Harmonics=-58.6 dBc" in mp_out, mp_out)
+
+# 9. Obend CLI Hardware, FabuBlox, wafer.space, Datasheet-Fit & RF Transceiver Judge Receipt Checks
 OBEND_BIN = os.path.join(LEAN, ".lake", "build", "bin", "obend")
 if os.path.exists(OBEND_BIN):
     pnr_receipt = os.path.join(obj_dir, "pnr_receipt.json")
@@ -153,6 +184,23 @@ if os.path.exists(OBEND_BIN):
     check("obend fabublox check + obend verify (fabublox-run@1 damascene & post-Cu contamination refused)",
           r_fb.returncode == 0 and r_fb_ver.returncode == 0 and r_fb_bad.returncode == 3,
           r_fb.stdout + r_fb_ver.stdout + r_fb_bad.stderr)
+
+    if os.path.getmtime(OBEND_BIN) >= os.path.getmtime(os.path.join(LEAN, "Obend", "Hardware", "Cli.lean")):
+        ds_receipt = os.path.join(obj_dir, "datasheet_receipt.json")
+        r_ds = subprocess.run([OBEND_BIN, "hardware", "datasheet-check", "--mode", "calibrated", "--out", ds_receipt], capture_output=True, text=True)
+        r_ds_ver = subprocess.run([OBEND_BIN, "verify", ds_receipt], capture_output=True, text=True)
+        r_ds_bad = subprocess.run([OBEND_BIN, "hardware", "datasheet-check", "--mode", "74ls_to_74hc_direct"], capture_output=True, text=True)
+        check("obend hardware datasheet-check + obend verify (datasheet-fit@1 calibrated & 74LS->74HC direct refused)",
+              r_ds.returncode == 0 and r_ds_ver.returncode == 0 and r_ds_bad.returncode == 3,
+              r_ds.stdout + r_ds_ver.stdout + r_ds_bad.stderr)
+
+        rf_receipt = os.path.join(obj_dir, "rf_receipt.json")
+        r_rf = subprocess.run([OBEND_BIN, "hardware", "rf-signoff", "--mode", "ft8_40m_golden", "--out", rf_receipt], capture_output=True, text=True)
+        r_rf_ver = subprocess.run([OBEND_BIN, "verify", rf_receipt], capture_output=True, text=True)
+        r_rf_bad = subprocess.run([OBEND_BIN, "hardware", "rf-signoff", "--mode", "unfiltered_pa_harmonics"], capture_output=True, text=True)
+        check("obend hardware rf-signoff + obend verify (rf-transceiver-signoff@1 40m FT8 golden & unfiltered PA refused)",
+              r_rf.returncode == 0 and r_rf_ver.returncode == 0 and r_rf_bad.returncode == 3,
+              r_rf.stdout + r_rf_ver.stdout + r_rf_bad.stderr)
 
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)

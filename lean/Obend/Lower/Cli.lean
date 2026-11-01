@@ -1,8 +1,8 @@
 module
 /-
-# Obend.Lower.Cli — `obend lower NAME`
+# Obend.Lower.Cli — `obend lower NAME` / `obend lower --transport THM`
 
-    obend lower NAME [--module M] [--arg N] [--out DIR] [--emit BOOK.json]
+    obend lower NAME [--module M] [--arg N] [--out DIR] [--emit BOOK.json] [--rtl OUT.sv]
         import the built module M (default `Programs`, `tests/lower/Programs.lean`, built by
         `lake build LowerPrograms`; run from `lean/`), read the declaration NAME into Lean-lite (`Fragment.read`; refused with the reason
         when it is outside the fragment), lower it, run Core4's checker on it at the type its Lean type
@@ -12,15 +12,26 @@ module
         its digest, the lowered term). With `--arg N`, run `NAME N` on the demand machine. With
         `--emit`, emit the one-layer composition holding the lowered program as a Leaf book
         (`Obend.Lower.leanComposition`, `Obend.Leaf.emit`), write it, and with `--arg` run the book's
-        member too.
+        member too. With `--rtl`, compile the Leaf book via `compileBookToRtlSat` into a verified
+        SystemVerilog RTL module, write `OUT.sv`, and with `--arg` simulate `evalModuleOutputs`.
     obend lower --verify CERT.json SOURCE.json
         judge a certificate with the registered `lower@1` format (re-lowering the source): exit 0 when
+        accepted, 3 when refused.
+    obend lower --transport THM [--module M] [--arg N] [--out DIR]
+        read the theorem THM's `Decidable` decision procedure via `Fragment.readTheoremDecider`
+        (refusing `sorryAx` or custom axioms), lower it to a `Core4` claim term, judge it with the
+        registered `transport@1` format (`checkL` + `nonEmptySplits`), and with `--out` write
+        `DIR/THM.transport.json` and `DIR/THM.statement.json`.
+    obend lower --verify-transport CERT.json STATEMENT.json
+        judge a transported certificate with the registered `transport@1` format: exit 0 when
         accepted, 3 when refused.
 -/
 public import Lean
 public import Obend.Lower.Fragment
 public import Obend.Lower.Judge
+public import Obend.Lower.Transport
 public import Obend.Lower.Proofs.Book
+public import Obend.Lower.Proofs.Hardware
 public import Obend.Core.Machine
 public section
 namespace Obend.Lower.Cli
@@ -28,6 +39,7 @@ open Lean Meta Elab
 open Obend.Core.Term Obend.Core.Ty
 open Obend.Core.Check (AnnotatedTerm)
 open Obend.Core.Proofs.BidirectionalCompleteness (treeAnnotations AnnotationTree)
+open Obend.Hardware.HDL Obend.Hardware.Compiler
 set_option autoImplicit false
 
 
@@ -49,6 +61,7 @@ structure Options where
   arg : Option Nat := none
   out : Option String := none
   emit : Option String := none
+  rtl : Option String := none
 
 def parse : List String → Options → Except String Options
   | [], o => .ok o
@@ -58,6 +71,7 @@ def parse : List String → Options → Except String Options
     | none => .error s!"--arg needs a natural, not {n}"
   | "--out" :: d :: rest, o => parse rest { o with out := some d }
   | "--emit" :: b :: rest, o => parse rest { o with emit := some b }
+  | "--rtl" :: r :: rest, o => parse rest { o with rtl := some r }
   | flag :: _, _ => .error s!"unknown argument {flag}"
 
 /-- The environment of a built module (`importModules`; the build directory on the search path). -/
@@ -118,6 +132,23 @@ def lowerCommand (name : String) (o : Options) : IO UInt32 := do
     IO.println s!"wrote {bookPath}"
     if let some n := o.arg then
       IO.println s!"book: {name} {n} = {machine (.app (.get B.link name) (.nat n))}"
+  if let some rtlPath := o.rtl then
+    let C := Obend.Lower.leanComposition name term
+    unless C.closedB do IO.println "refused: the composition is not closed"; return 3
+    let B := Obend.Leaf.emit C
+    let some rtlMod := compileBookToRtlSat s!"lean_{name}_rtl" B
+      | do IO.println "refused: outside the combinational hardware fragment"; return 3
+    unless checkRtlModule rtlMod do
+      IO.println "refused: RtlModule failed DAG/CDC verification"
+      return 3
+    IO.println s!"rtl: module {rtlMod.name} verified (DAG + CDC)"
+    IO.FS.writeFile rtlPath (emitModuleSV rtlMod)
+    IO.println s!"wrote {rtlPath}"
+    if let some n := o.arg then
+      let outs := evalModuleOutputs rtlMod (fun _ => BitVec.ofNat 64 n) (fun _ => 0#64)
+      match outs with
+      | [(_, v)] => IO.println s!"rtl: {name} {n} = {v.toNat}"
+      | _ => pure ()
   return 0
 
 def verifyCommand (certPath sourcePath : String) : IO UInt32 := do
@@ -128,9 +159,52 @@ def verifyCommand (certPath sourcePath : String) : IO UInt32 := do
   | .refused (.malformed m) _ => IO.println s!"lower@1: malformed, {m}"; return 3
   | .uncovered => IO.println "lower@1: uncovered"; return 3
 
+def transportCommand (thmName : String) (o : Options) : IO UInt32 := do
+  let env ← importModule o.module
+  let decl := thmName.toName
+  let res ← runMeta env (Obend.Lower.Fragment.readTheoremDecider decl)
+  let (decideExpr, argTys) ← match res with
+    | .ok p => pure p
+    | .error m => do IO.println s!"refused: {m}"; return 3
+  let claim := Obend.Lower.lowerProp decideExpr
+  let digest := Obend.Lower.sourceDigest decideExpr
+  let obj : Obend.Lower.TransportObj := ⟨decideExpr, argTys⟩
+  let cert : Obend.Lower.TransportCert := ⟨digest, claim, argTys, []⟩
+  IO.println s!"argTys: {(repr argTys).pretty 1000000000}"
+  IO.println s!"claim: {(repr claim).pretty 1000000000}"
+  IO.println s!"source digest: {digest}"
+  match Obend.Lower.transportCheck 0 obj cert with
+  | .ok => IO.println "transport@1: accepted"
+  | .refused cl _ => do
+    IO.println s!"transport@1: refused ({repr cl})"
+    return 3
+  | .uncovered => do
+    IO.println "transport@1: uncovered"
+    return 3
+  if let some dir := o.out then
+    IO.FS.createDirAll dir
+    IO.FS.writeFile s!"{dir}/{thmName}.transport.json" ((Obend.Lower.transportCertJson cert).pretty ++ "\n")
+    IO.FS.writeFile s!"{dir}/{thmName}.statement.json" ((Obend.Lower.transportObjJson obj).pretty ++ "\n")
+    IO.println s!"wrote {dir}/{thmName}.transport.json {dir}/{thmName}.statement.json"
+  if let some n := o.arg then
+    IO.println s!"claim: {thmName} {n} = {machine (.app claim (.nat n))}"
+  return 0
+
+def verifyTransportCommand (certPath objPath : String) : IO UInt32 := do
+  let verdict := Obend.Lower.transportFormat.checkBytes 0 (← IO.FS.readFile objPath) (← IO.FS.readFile certPath)
+  match verdict with
+  | .ok => IO.println "transport@1: accepted"; return 0
+  | .refused (.judge _) _ => IO.println "transport@1: refused by the judge"; return 3
+  | .refused (.malformed m) _ => IO.println s!"transport@1: malformed, {m}"; return 3
+  | .uncovered => IO.println "transport@1: uncovered"; return 3
+
 /-- The `lower` subcommands, or `none` when `args` is not one. -/
 def main? : List String → Option (IO UInt32)
   | ["lower", "--verify", cert, source] => some (verifyCommand cert source)
+  | ["lower", "--verify-transport", cert, stmt] => some (verifyTransportCommand cert stmt)
+  | "lower" :: "--transport" :: thm :: rest => some (match parse rest {} with
+    | .ok o => transportCommand thm o
+    | .error m => do IO.eprintln m; return 64)
   | "lower" :: name :: rest => some (match parse rest {} with
     | .ok o => lowerCommand name o
     | .error m => do IO.eprintln m; return 64)

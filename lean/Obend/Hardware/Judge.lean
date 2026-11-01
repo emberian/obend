@@ -38,6 +38,10 @@ public import Obend.Hardware.FabuBlox
 public import Obend.Hardware.DRC
 public import Obend.Hardware.Analog
 public import Obend.Hardware.WaferSpace
+public import Obend.Hardware.Thermal
+public import Obend.Hardware.Datasheet
+public import Obend.Hardware.Circuits
+public import Obend.Hardware.RF
 @[expose] public section
 
 namespace Obend.Hardware.Judge
@@ -46,17 +50,20 @@ open Obend.Judge
 open Obend.Hardware.Process Obend.Hardware.HDL Obend.Hardware.Compiler
 open Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hardware.WaferSpace
+open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
 set_option autoImplicit false
 
-/-! ## 1. Refusal Clauses for Hardware, FabuBlox & `wafer.space` Judges -/
+/-! ## 1. Refusal Clauses for Hardware, FabuBlox, `wafer.space`, Datasheet Calibration & RF Judges -/
 
-/-- Refusal vocabulary across the 5 hardware & silicon certificate judges. -/
+/-- Refusal vocabulary across the 7 hardware, silicon, datasheet & RF certificate judges. -/
 inductive HwClause where
   | rtlInvalidDagOrCdc (modName : String)
   | retimeInvalidLagOrTiming (graphName : String)
   | pnrCollisionShortOrTiming (designName : String)
   | fabubloxFacilityViolation (detail : String)
   | waferSpaceSignoffViolation (projectName : String)
+  | datasheetCalibrationOrMarginViolation (suiteName : String)
+  | rfTransceiverSignoffViolation (rigName : String)
   deriving DecidableEq, Repr
 
 /-! ## 2. Format 1: `hw-rtl-synth@1` (`RtlModule` DAG + CDC Judge) -/
@@ -445,9 +452,173 @@ theorem waferSpaceFormat_sound {r : Nat} {obj cert : String}
       ((c.pdk == o) && checkWaferSpaceSignoff c) = true :=
   waferSpaceFormat.checkBytes_sound h
 
-/-- Complete list of registered hardware, FabuBlox, and `wafer.space` certificate formats. -/
+/-! ## 7. Format 6: `datasheet-fit@1` (Automated Datasheet Calibration, `74LS00` + `74HCT00` + INA + Buck Judge) -/
+
+/-- Judge check function for `datasheet-fit@1`. -/
+def checkDatasheetFitJudge (_grade : Nat) (expectedSuite : String) (cert : DatasheetFitCert) : Verdict HwClause :=
+  if (cert.suiteName == expectedSuite) && checkDatasheetFitSignoff cert then
+    .ok
+  else
+    .refused (.datasheetCalibrationOrMarginViolation cert.suiteName) []
+
+instance datasheetFitJudge : Obend.Judge String DatasheetFitCert where
+  Clause := HwClause
+  Meaning expectedSuite cert := ((cert.suiteName == expectedSuite) && checkDatasheetFitSignoff cert) = true
+  check := checkDatasheetFitJudge
+  sound := by
+    intro _ o c h
+    unfold checkDatasheetFitJudge at h
+    by_cases hOk : ((c.suiteName == o) && checkDatasheetFitSignoff c) = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkDatasheetFitJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badDatasheetFitCert_refused :
+    checkDatasheetFitJudge 0 "obend_74ls_hct_ina_calibrated" badDirect74HcFitCert =
+      .refused (.datasheetCalibrationOrMarginViolation "obend_74ls_hct_ina_calibrated") [] :=
+  rfl
+
+def decodeDatasheetFitObj (s : String) : Except String String := do
+  let j ← Json.parse s
+  return (j.getObjValAs? String "suite").toOption.getD "obend_74ls_hct_ina_calibrated"
+
+def decodeDatasheetFitCert (s : String) : Except String DatasheetFitCert := do
+  let j ← Json.parse s
+  let mode := (j.getObjValAs? String "mode").toOption.getD "calibrated"
+  if mode == "74ls_to_74hc_direct" then
+    return badDirect74HcFitCert
+  else if mode == "uncalibrated_drift" then
+    return badUncalibratedDriftFitCert
+  else
+    return goldenDatasheetFitCert
+
+/-- Registered `Obend.Judge.Format` for `datasheet-fit@1`. -/
+def datasheetFitFormat : Format where
+  name        := "datasheet-fit"
+  version     := "1"
+  Obj         := String
+  Cert        := DatasheetFitCert
+  judge       := datasheetFitJudge
+  decodeObj   := decodeDatasheetFitObj
+  decodeCert  := decodeDatasheetFitCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := ("obend_74ls_hct_ina_calibrated", badDirect74HcFitCert)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badDatasheetFitCert_refused⟩
+
+theorem datasheetFitFormat_sound {r : Nat} {obj cert : String}
+    (h : datasheetFitFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeDatasheetFitObj obj = .ok o ∧ decodeDatasheetFitCert cert = .ok c ∧
+      ((c.suiteName == o) && checkDatasheetFitSignoff c) = true :=
+  datasheetFitFormat.checkBytes_sound h
+
+theorem datasheetFitFormat_complete {o : String}
+    (h : ∃ c : DatasheetFitCert, ((c.suiteName == o) && checkDatasheetFitSignoff c) = true) :
+    ∃ c r, datasheetFitJudge.check r o c = .ok :=
+  datasheetFitJudge.complete trivial h
+
+/-! ## 8. Format 7: `rf-transceiver-signoff@1` (40m FT8 Ham Radio Transceiver, Tayloe IQ, VSWR & FCC Part 97 Judge) -/
+
+/-- Judge check function for `rf-transceiver-signoff@1`. -/
+def checkRfTransceiverJudge (_grade : Nat) (expectedBand : HamBand) (cert : RfTransceiverCert) : Verdict HwClause :=
+  if (cert.band == expectedBand) && checkRfTransceiverSignoff cert then
+    .ok
+  else
+    .refused (.rfTransceiverSignoffViolation cert.rigName) []
+
+instance rfTransceiverJudge : Obend.Judge HamBand RfTransceiverCert where
+  Clause := HwClause
+  Meaning expectedBand cert := ((cert.band == expectedBand) && checkRfTransceiverSignoff cert) = true
+  check := checkRfTransceiverJudge
+  sound := by
+    intro _ o c h
+    unfold checkRfTransceiverJudge at h
+    by_cases hOk : ((c.band == o) && checkRfTransceiverSignoff c) = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkRfTransceiverJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badRfTransceiverCert_refused :
+    checkRfTransceiverJudge 0 .band40m unfilteredPaTransceiverCert =
+      .refused (.rfTransceiverSignoffViolation "obend_qcx_unfiltered_pa") [] :=
+  rfl
+
+def decodeRfTransceiverObj (s : String) : Except String HamBand := do
+  let j ← Json.parse s
+  let bandStr := (j.getObjValAs? String "band").toOption.getD "40m"
+  if bandStr == "160m" then return .band160m
+  else if bandStr == "80m" then return .band80m
+  else if bandStr == "20m" then return .band20m
+  else if bandStr == "2m" then return .band2m
+  else if bandStr == "70cm" then return .band70cm
+  else return .band40m
+
+def decodeRfTransceiverCert (s : String) : Except String RfTransceiverCert := do
+  let j ← Json.parse s
+  let mode := (j.getObjValAs? String "mode").toOption.getD "ft8_40m_golden"
+  if mode == "unfiltered_pa_harmonics" then
+    return unfilteredPaTransceiverCert
+  else if mode == "high_vswr_mismatch" then
+    return highVswrTransceiverCert
+  else
+    return golden40mFt8TransceiverCert
+
+/-- Registered `Obend.Judge.Format` for `rf-transceiver-signoff@1`. -/
+def rfTransceiverFormat : Format where
+  name        := "rf-transceiver-signoff"
+  version     := "1"
+  Obj         := HamBand
+  Cert        := RfTransceiverCert
+  judge       := rfTransceiverJudge
+  decodeObj   := decodeRfTransceiverObj
+  decodeCert  := decodeRfTransceiverCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (.band40m, unfilteredPaTransceiverCert)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badRfTransceiverCert_refused⟩
+
+theorem rfTransceiverFormat_sound {r : Nat} {obj cert : String}
+    (h : rfTransceiverFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeRfTransceiverObj obj = .ok o ∧ decodeRfTransceiverCert cert = .ok c ∧
+      ((c.band == o) && checkRfTransceiverSignoff c) = true :=
+  rfTransceiverFormat.checkBytes_sound h
+
+theorem rfTransceiverFormat_complete {o : HamBand}
+    (h : ∃ c : RfTransceiverCert, ((c.band == o) && checkRfTransceiverSignoff c) = true) :
+    ∃ c r, rfTransceiverJudge.check r o c = .ok :=
+  rfTransceiverJudge.complete trivial h
+
+/-- Complete list of registered hardware, FabuBlox, `wafer.space`, datasheet-fit, and RF transceiver formats. -/
 def hardwareFormats : List Format :=
-  [hwSynthFormat, hwRetimeFormat, hwPnrFormat, fabubloxFormat, waferSpaceFormat]
+  [ hwSynthFormat
+  , hwRetimeFormat
+  , hwPnrFormat
+  , fabubloxFormat
+  , waferSpaceFormat
+  , datasheetFitFormat
+  , rfTransceiverFormat ]
 
 /-- Look up a hardware certificate format by `name@version` string (e.g. `"hw-pnr-bitstream@1"`). -/
 def findHardwareFormat? (tag : String) : Option Format :=

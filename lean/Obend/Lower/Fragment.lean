@@ -279,5 +279,65 @@ def lower (e : Expr) : MetaM (Option Obend.Core.Term.Term) := do
   | .ok l => return some (lowerT l)
   | .error _ => return none
 
+/-! ## Reading Theorem Decision Procedures (`readTheoremDecider`) -/
+
+/-- Standard axioms permitted in a source theorem prior to `transport`. `sorryAx` and custom axioms
+are rejected. -/
+def allowedAxiom (n : Name) : Bool :=
+  n == ``propext || n == ``Quot.sound || n == ``Classical.choice
+
+/-- Peel leading computational universal quantifiers `∀ (x₁ : A₁) ... (xₖ : Aₖ), P` and synthesize
+`Decidable.decide P` at the propositional body `P`. -/
+partial def buildDeciderExpr (ty : Expr) : MetaM (Expr × List Ty) := do
+  let tyWhnf ← whnf ty
+  match tyWhnf with
+  | .forallE n A B bi =>
+    let aIsProp ← isProp A
+    let aIsType ← isTypeFormerType A
+    if !aIsProp && !aIsType then
+      let some argTy ← lowerTy A
+        | throwError "quantifier domain {A} has no Core4 type in the fragment"
+      withLocalDecl n bi A fun x => do
+        let (bodyDec, restTys) ← buildDeciderExpr (B.instantiate1 x)
+        let lamExpr ← mkLambdaFVars #[x] bodyDec
+        return (lamExpr, argTy :: restTys)
+    else
+      let inst ← synthInstance (mkApp (mkConst ``Decidable) ty)
+      return (mkApp2 (mkConst ``Decidable.decide) ty inst, [])
+  | _ =>
+    let inst ← synthInstance (mkApp (mkConst ``Decidable) ty)
+    return (mkApp2 (mkConst ``Decidable.decide) ty inst, [])
+
+/-- **`readTheoremDecider`**: given a theorem or proposition declaration `declName` in the
+environment:
+1. verifies `declName` has a kernel proof term, is not `unsafe`, and does not depend on `sorryAx` or
+   non-standard axioms (`Lean.collectAxioms`),
+2. verifies its type is a `Prop`,
+3. strips leading computational universal quantifiers and synthesizes `Decidable` for the body, and
+4. reads the resulting decision procedure `fun x₁ ... xₖ => decide P` into `LExpr` along with the
+   lowered argument types `argTys : List Ty`. -/
+def readTheoremDecider (declName : Name) : MetaM (Except String (LExpr × List Ty)) := do
+  let env ← getEnv
+  let some info := env.find? declName
+    | return .error s!"unknown declaration {declName}"
+  if info.isUnsafe then
+    return .error s!"declaration {declName} is unsafe"
+  unless info.hasValue do
+    return .error s!"declaration {declName} has no proof term (axiom or opaque)"
+  let axioms ← Lean.collectAxioms declName
+  for ax in axioms do
+    unless allowedAxiom ax do
+      return .error s!"declaration {declName} depends on disallowed axiom {ax}"
+  let ty := info.type.instantiateLevelParams info.levelParams (info.levelParams.map fun _ => Level.zero)
+  unless (← isProp ty) do
+    return .error s!"declaration {declName} is not a proposition"
+  try
+    let (decExpr, argTys) ← buildDeciderExpr ty
+    match ← read decExpr with
+    | .ok lexpr => return .ok (lexpr, argTys)
+    | .error msg => return .error msg
+  catch ex =>
+    return .error (← ex.toMessageData.toString)
+
 end Obend.Lower.Fragment
 end

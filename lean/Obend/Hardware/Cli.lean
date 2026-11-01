@@ -135,12 +135,40 @@ def cmdFabuBloxCheck (args : List String) : IO UInt32 := do
     IO.println s!"wrote {outPath}"
   verifyHardware recJson
 
+/-- Run `datasheet-fit@1` CLI check and optionally emit a receipt. -/
+def cmdDatasheetCheck (args : List String) : IO UInt32 := do
+  let (modeOpt, args1) := extractFlag "--mode" args
+  let (outOpt, _)      := extractFlag "--out" args1
+  let mode := modeOpt.getD "calibrated"
+  let objJson  := Json.mkObj [("suite", toJson "obend_74ls_hct_ina_calibrated")]
+  let certJson := Json.mkObj [("mode", toJson mode)]
+  let recJson  := mkHwReceiptJson "datasheet-fit@1" objJson certJson
+  if let some outPath := outOpt then
+    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
+    IO.println s!"wrote {outPath}"
+  verifyHardware recJson
+
+/-- Run `rf-transceiver-signoff@1` CLI check and optionally emit a receipt. -/
+def cmdRfSignoff (args : List String) : IO UInt32 := do
+  let (modeOpt, args1) := extractFlag "--mode" args
+  let (outOpt, _)      := extractFlag "--out" args1
+  let mode := modeOpt.getD "ft8_40m_golden"
+  let objJson  := Json.mkObj [("band", toJson "40m")]
+  let certJson := Json.mkObj [("mode", toJson mode)]
+  let recJson  := mkHwReceiptJson "rf-transceiver-signoff@1" objJson certJson
+  if let some outPath := outOpt then
+    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
+    IO.println s!"wrote {outPath}"
+  verifyHardware recJson
+
 /-- CLI entry point for `obend hardware ...` and `obend fabublox ...`. -/
 public def main? : List String → Option (IO UInt32)
-  | "hardware" :: "verify-pnr" :: rest        => some (cmdVerifyPnr rest)
-  | "hardware" :: "verify-retime" :: rest     => some (cmdVerifyRetime rest)
+  | "hardware" :: "verify-pnr" :: rest         => some (cmdVerifyPnr rest)
+  | "hardware" :: "verify-retime" :: rest      => some (cmdVerifyRetime rest)
   | "hardware" :: "waferspace-signoff" :: rest => some (cmdWaferSpaceSignoff rest)
-  | "fabublox" :: "check" :: rest             => some (cmdFabuBloxCheck rest)
+  | "hardware" :: "datasheet-check" :: rest    => some (cmdDatasheetCheck rest)
+  | "hardware" :: "rf-signoff" :: rest         => some (cmdRfSignoff rest)
+  | "fabublox" :: "check" :: rest              => some (cmdFabuBloxCheck rest)
   | _ => none
 
 end Obend.Hardware.Cli

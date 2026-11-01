@@ -47,4 +47,23 @@ decreasing_by omega
 def greeting (n : Nat) : String := toString n
 
 /-- Out of the fragment: eliminating a `Prop` inductive (`And.rec`) into `Type` (`Nat`). -/
-def propElim (n : Nat) : Nat := @And.rec True True (fun _ => Nat) (fun _ _ => n) ⟨trivial, trivial⟩
+def propElim (n : Nat) : Nat := @And.rec True True (fun _ => Nat) (fun _ => fun _ => n) ⟨trivial, trivial⟩
+
+/-! ## Theorems for `obend lower --transport` (`transport@1`) -/
+
+theorem double_even (n : Nat) : isEven (double n) = true := by
+  simp [double, isEven]
+  omega
+
+theorem small_lt_three (n : Nat) : n < 3 → small n = 1 := by
+  intro h
+  simp [small, h]
+
+theorem pointSwap_norm_eq (n : Nat) : pointNorm n = 3 * n := by
+  simp [pointNorm, Point.swap, Point.norm1]
+  omega
+
+/-- Negative pole: theorem depending on a custom axiom must be refused by `readTheoremDecider`. -/
+axiom unproved_claim (n : Nat) : double n = n
+
+theorem uses_axiom_claim (n : Nat) : double n = n := unproved_claim n
