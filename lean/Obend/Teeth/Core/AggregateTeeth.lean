@@ -13,6 +13,7 @@ public import Obend.Tactic.Tooth
 import all Obend.Core.Ty
 import all Obend.Core.Check
 import all Obend.Core.Bidirectional
+import all Obend.Core.Code
 
 namespace Obend.Teeth.Core.AggregateTeeth
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional
@@ -187,7 +188,10 @@ public theorem round_trip_accepted_certificate :
 @[expose] public def roundTripHeld : Obend.Core.Code.Held :=
   ⟨(roundTrip .linear).term,
     .node (some handleAnnotation) [.node none [Obend.Core.Proofs.BidirectionalCompleteness.emptyTree,
-      .node (some ⟨custody, custody, .linear, .once⟩) []]], {}⟩
+      .node (some ⟨custody, custody, .linear, .once⟩) []]], {}, []⟩
+
+/-- A reader of this encoding with no kinds and a grant the round trip is within. -/
+@[expose] public def roundTripReader : Obend.Core.Code.Reader := ⟨0, 1000, [], fun _ _ _ => false⟩
 
 public theorem roundTripHeld_accepted :
     (checkAgainst roundTripHeld.annotated [] handleType).toBool = true := by decide
@@ -195,12 +199,17 @@ public theorem roundTripHeld_accepted :
 /-- **Crossing a quotation.** The checked round trip, quoted and imported back at its type, is the
 same program: a destructor crosses the code boundary intact (`Code.import_roundtrip`). -/
 public theorem round_trip_crosses_quotation :
-    ∃ c, Obend.Core.Code.importWith 0 [] handleType {} (Obend.Core.Code.quotation 0 roundTripHeld) = .ok c ∧
-      c.val = roundTripHeld.annotated := by
+    ∃ c, Obend.Core.Code.importWith roundTripReader [] handleType {}
+        (Obend.Core.Code.quotation 0 roundTripHeld) = .ok c ∧ c.val = roundTripHeld := by
   have accepted := roundTripHeld_accepted
+  have within : Obend.Elab.Work.checkWork roundTripHeld.annotated ≤ roundTripReader.grant := by
+    decide +kernel
   revert accepted
   cases h : checkAgainst roundTripHeld.annotated [] handleType with
-  | ok k => intro _; exact Obend.Core.Code.import_roundtrip 0 roundTripHeld rfl h
+  | ok k =>
+    intro _
+    exact ⟨_, Obend.Core.Code.import_roundtrip roundTripReader roundTripHeld rfl
+      (fun _ hk => by simp [roundTripHeld] at hk) within h, rfl⟩
   | error e => intro hb; simp [Except.toBool] at hb
 
 public theorem round_trip_quote_roundtrip :

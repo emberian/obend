@@ -175,19 +175,19 @@ public theorem contextual_msubst_uses {Ψ : Context} {A : Ty} {θ : Assumptions}
   obtain ⟨cv, cθ, k, kA⟩ := c
   obtain ⟨fv, fθ, kf, kfB⟩ := f
   subst cθ
-  have dc := k.derivation
-  rw [kA] at dc
-  have df := kf.derivation
-  rw [kfB, fθ] at df
+  have dc : PartialTyping cv.assumptions Ψ cv.term A k.uses := by
+    rw [← (Obend.Core.Bidirectional.checkAgainst_sound kA).1]; exact k.derivation
+  have df : PartialTyping cv.assumptions Ψ fv.term b.type kf.uses := by
+    rw [← fθ, ← (Obend.Core.Bidirectional.checkAgainst_sound kfB).1]; exact kf.derivation
   have uc := uses_determined dc
   have uf := uses_determined df
-  simp only [AnnotatedTerm.erase] at dc df uc uf
+  dsimp only at safe allowed ⊢
   rw [← uc, ← uf] at safe ⊢
   rw [← uf] at allowed
   obtain ⟨u', h, sf, le, lin⟩ := splice_typed dc k.contextValid hx df allowed safe
-  refine ⟨⟨⟨splice x cv.term fv.term, cv.annotations, cv.assumptions⟩, rfl,
-    ⟨⟨A, u', h, sf, k.contextValid, k.assumptionsValid⟩, rfl⟩⟩, rfl, ?_, ?_⟩
-  · intro j; rw [← uses_determined h]; exact le j
-  · intro j l; rw [← uses_determined h]; exact lin j l
+  obtain ⟨s, hs, -⟩ := Obend.Core.Code.typed_has_code h sf k.contextValid k.assumptionsValid cv.kinds
+  refine ⟨s, hs, ?_, ?_⟩
+  · intro j; rw [hs, ← uses_determined h]; exact le j
+  · intro j l; rw [hs, ← uses_determined h]; exact lin j l
 
 end Obend.Core.Proofs.Splice
