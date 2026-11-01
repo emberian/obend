@@ -440,6 +440,7 @@ import Obend.Consensus.Finality
 import Obend.Consensus.Epistemic
 import Obend.Fold.Collapse
 import Obend.FFI.Bridge
+import Obend.FFI
 
 open Lean Elab Command in
 run_cmd do

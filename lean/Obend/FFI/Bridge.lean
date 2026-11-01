@@ -56,7 +56,8 @@ def turnProposeCore (s : SessionState) (turnBytes : ByteArray) : SessionState ×
     ({ s with lastError := some "Empty turn payload" }, ByteArray.empty, -3)
   else
     let tid := Obend.Core.Digest.digestWith Obend.Core.Digest.deployed 0 (turnBytes.size)
-    let tidBytes := ByteArray.mk ((toString tid).toUTF8.take 32).toArray
+    let utf := (toString tid).toUTF8
+    let tidBytes := if utf.size ≥ 32 then utf.extract 0 32 else utf ++ ByteArray.mk (Array.mk (List.replicate (32 - utf.size) 0))
     ({ s with scratch := tidBytes, lastError := none }, tidBytes, 0)
 
 /-- Turn commit: advances finality to collapsed and writes deltas to store. -/
@@ -94,7 +95,7 @@ def verifyReceiptCore (s : SessionState) (rcptBytes : ByteArray) : SessionState 
 @[export obend_get_last_error_core]
 def getLastErrorCore (s : SessionState) : ByteArray :=
   match s.lastError with
-  | some err => ByteArray.mk err.toUTF8.toArray
+  | some err => err.toUTF8
   | none => ByteArray.empty
 
 end Obend.FFI

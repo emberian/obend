@@ -14,7 +14,7 @@ globs = [
   "Obend", "Obend.Analysis.+", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Consensus.*", "Obend.Fold.*", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main",
   "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Hardware.*", "Obend.Judge.*",
   "Obend.Law.*", "Obend.Leaf.+", "Obend.Lower.+", "Obend.Ledger", "Obend.Ledger.*", "Obend.Logic.+", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
-  "Obend.Vault.*", "Obend.FFI.*",
+  "Obend.Vault.*", "Obend.FFI", "Obend.FFI.*",
 ]
 
 # Lane Lower (2026-11-01): the first Lean programs `obend lower` reads (`tests/lower/Programs.lean`, plain

@@ -24,6 +24,7 @@ public import Obend.Hardware.WaferSpace
 public import Obend.Hardware.Circuits
 public import Obend.Hardware.Retiming
 public import Obend.Hardware.Fabric
+public import Obend.Hardware.Analog
 
 @[expose] public section
 
@@ -38,6 +39,7 @@ open Obend.Hardware.DRC
 open Obend.Hardware.WaferSpace
 open Obend.Hardware.Circuits
 open Obend.Hardware.Retiming
+open Obend.Hardware.Analog
 open Obend.Hardware.Fabric
 
 set_option autoImplicit false
@@ -59,6 +61,12 @@ structure TimingReport where
 
 /-- Primary physical layout representation: untrusted PnR placement, routing, and bitstream certificate. -/
 abbrev GdsLayout := Obend.Hardware.PlaceRoute.PnrCertificate
+
+instance : ToString WaferSpacePdk where
+  toString
+    | .gf180mcuD => "gf180mcuD"
+    | .sky130A   => "sky130A"
+    | .ihpSg13g2 => "ihpSg13g2"
 
 /-! ## 2. Data AST Encoding Helpers -/
 
@@ -149,13 +157,13 @@ def circuitToData (m : RtlModule) : Data :=
     ("type", .label "rtl_module"),
     ("name", .label m.name),
     ("input_count", .natural m.inputNames.length),
-    ("inputs", .record (m.inputNames.enum.map fun (i, name) => (toString i, .label name))),
+    ("inputs", .record (m.inputNames.zipIdx.map fun (name, i) => (toString i, .label name))),
     ("wire_count", .natural m.wires.length),
     ("wires", .record (m.wires.map fun w => (toString w.wireIdx, wireAssignToData w))),
     ("reg_count", .natural m.regs.length),
     ("regs", .record (m.regs.map fun r => (toString r.regIdx, regSpecToData r))),
     ("output_count", .natural m.outputs.length),
-    ("outputs", .record (m.outputs.enum.map fun (i, o) => (toString i, outputPortToData o))),
+    ("outputs", .record (m.outputs.zipIdx.map fun (o, i) => (toString i, outputPortToData o))),
     ("dag_valid", .boolean (checkRtlModule m))
   ]
 
@@ -165,9 +173,9 @@ def syncGraphToData (g : SyncGraph) : Data :=
     ("kind", .label "circuit"),
     ("type", .label "sync_graph"),
     ("name", .label g.name),
-    ("inputs", .record (g.primaryInputs.enum.map fun (i, v) => (toString i, .natural v))),
-    ("outputs", .record (g.primaryOutputs.enum.map fun (i, v) => (toString i, .natural v))),
-    ("edges", .record (g.edges.enum.map fun (i, e) => (toString i, .record [
+    ("inputs", .record (g.primaryInputs.zipIdx.map fun (v, i) => (toString i, .natural v))),
+    ("outputs", .record (g.primaryOutputs.zipIdx.map fun (v, i) => (toString i, .natural v))),
+    ("edges", .record (g.edges.zipIdx.map fun (e, i) => (toString i, .record [
       ("src", .natural e.src),
       ("dst", .natural e.dst),
       ("orig_regs", .natural e.origRegs),
@@ -185,7 +193,7 @@ def lvsNetlistToData (sig : LvsNetlistSig) : Data :=
     ("pfet_count", .natural sig.pfetCount),
     ("mim_cap_count", .natural sig.mimCapCount),
     ("total_cap_ff", .natural sig.totalCapFf),
-    ("connections", .record (sig.pinConnections.enum.map fun (i, (pin, net)) =>
+    ("connections", .record (sig.pinConnections.zipIdx.map fun ((pin, net), i) =>
       (toString i, .record [("pin", .label pin), ("net", .label net)])))
   ]
 
@@ -195,7 +203,7 @@ def routedNetToData (net : RoutedNet) : Data :=
     ("net_id", .natural net.netId),
     ("src_wire", .natural net.srcWire),
     ("dst_wire", .natural net.dstWire),
-    ("hops", .record (net.hops.enum.map fun (i, h) =>
+    ("hops", .record (net.hops.zipIdx.map fun (h, i) =>
       (toString i, .record [
         ("src_wire", .natural h.srcWire),
         ("dst_wire", .natural h.dstWire),
@@ -210,7 +218,7 @@ def routedNetlistToData (nets : List RoutedNet) : Data :=
   .record [
     ("kind", .label "routed_netlist"),
     ("net_count", .natural nets.length),
-    ("nets", .record (nets.enum.map fun (i, n) => (toString i, routedNetToData n))),
+    ("nets", .record (nets.zipIdx.map fun (n, i) => (toString i, routedNetToData n))),
     ("is_disjoint", .boolean (checkRoutingDisjoint nets))
   ]
 
@@ -262,7 +270,7 @@ def pnrLayoutToData (cert : PnrCertificate) : Data :=
     ("sink_cap_ff", .natural cert.sinkCapFf),
     ("placement_injective", .boolean (checkPlacementInjective cert.placedCells)),
     ("routing_disjoint", .boolean (checkRoutingDisjoint cert.routedNets)),
-    ("cells", .record (cert.placedCells.enum.map fun (i, c) =>
+    ("cells", .record (cert.placedCells.zipIdx.map fun (c, i) =>
       (toString i, .record [
         ("cell_id", .natural c.cellId),
         ("tile_x", .natural c.tileX),
@@ -270,7 +278,7 @@ def pnrLayoutToData (cert : PnrCertificate) : Data :=
         ("bel_slot", .natural c.belSlot),
         ("lut_init", .natural c.lutInit)
       ]))),
-    ("tile_configs", .record (cert.expectedConfigs.enum.map fun (i, cfg) =>
+    ("tile_configs", .record (cert.expectedConfigs.zipIdx.map fun (cfg, i) =>
       (toString i, .record [
         ("tile_x", .natural cfg.tileX),
         ("tile_y", .natural cfg.tileY),
@@ -467,7 +475,7 @@ theorem timing_projection_closed_sound
         ("max_arrival_ps", .natural (maxArrivalPs corner path)),
         ("min_arrival_ps", .natural (minArrivalPs corner path)),
         ("required_period_ps", .natural (requiredPeriodPs corner path)),
-        ("setup_slack_ps", dInt (if (requiredPeriodPs corner path) ≤ clockPeriodPs then ((clockPeriodPs - requiredPeriodPs corner path : Nat) : Int) else -((requiredPeriodPs corner path - clockPeriodPs : Nat) : Int))),
+        ("setup_slack_ps", dInt (if (requiredPeriodPs corner path) ≤ clockPeriodPs then (clockPeriodPs - requiredPeriodPs corner path : Int) else -((requiredPeriodPs corner path - clockPeriodPs : Nat) : Int))),
         ("hold_slack_ps", dInt (if corner.tHoldPs + corner.tSkewPs ≤ minArrivalPs corner path then ((minArrivalPs corner path - (corner.tHoldPs + corner.tSkewPs) : Nat) : Int) else -(((corner.tHoldPs + corner.tSkewPs) - minArrivalPs corner path : Nat) : Int))),
         ("logic_levels", .natural path.logicLevels),
         ("carry_bits", .natural path.carryBits),

@@ -131,6 +131,7 @@ def contentText : Content → String
     | .page => "![[" ++ n ++ "]]"
     | _ => "[[" ++ n ++ "]]"
   | .field _ _ => ""
+  | .cell _ _ _ _ _ => ""
 
 theorem atomText_eq (G : Graph) (a : AtomId) :
     G.atomText a = match G.label a with | some c => contentText c | none => "" := by
@@ -421,6 +422,7 @@ def contentKey : Content → String
   | .text s => "t:" ++ s
   | .cite n c => "c:" ++ n ++ ":" ++ toString c.page
   | .field n v => "f:" ++ n ++ "=" ++ v
+  | .cell id _ _ _ _ => "cell:" ++ id
 
 /-- An atom identity named by a hash of `salt`, the first not `taken` (probing with a counter). -/
 def freshId (H : Hash) (taken : AtomId → Bool) (salt : String) : AtomId :=

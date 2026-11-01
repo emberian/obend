@@ -84,6 +84,7 @@ theorem mem_citesOf {G : Graph} {p q : PageId} {b : Backlink} :
         · simp [hc] at h
       | text => simp [hl] at h
       | field => simp [hl] at h
+      | cell => simp [hl] at h
   · rintro ⟨hs, n, hl, hr, hq⟩
     refine ⟨b.atom, mem_atoms_of_label hl, ?_⟩
     simp only [hl, hq, hr, and_self, ite_true]
@@ -167,6 +168,7 @@ theorem usable_unmoved (H : Hash) {W W' : World} {q : PageId} (hm : SourceMoves 
       | cite n c => rw [hc] at hf; rw [citeFacts_page hf]; exact hnot n c hc
       | text => rw [hc] at hf; cases hf
       | field => rw [hc] at hf; cases hf
+      | cell => rw [hc] at hf; cases hf
   apply Bool.eq_iff_iff.2
   rw [usable_iff, usable_iff]
   exact ⟨fun ⟨hj, hs⟩ => ⟨hj, fun f hf => (key f hf) ▸ hs f hf⟩,

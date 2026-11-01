@@ -143,8 +143,8 @@ def hexToBytes : List Char → Option (List UInt8)
   | [_] => none
 
 def hexToByteArray (s : String) : Option ByteArray := do
-  let stripped := if s.startsWith "0x" || s.startsWith "0X" then s.drop 2 else s
-  let bytes ← hexToBytes stripped.toList
+  let chars := if s.startsWith "0x" || s.startsWith "0X" then s.toList.drop 2 else s.toList
+  let bytes ← hexToBytes chars
   return ByteArray.mk bytes.toArray
 
 /-- Structured non-markdown cell record inside a notebook. -/
@@ -193,9 +193,7 @@ def receiptToData : Option ByteArray → Data
 
 def receiptOfData : Data → Option (Option ByteArray)
   | .variant "none" _ => some none
-  | .variant "some" (.label h) => do
-    let b ← hexToByteArray h
-    return some (some b)
+  | .variant "some" (.label h) => (hexToByteArray h).map some
   | _ => none
 
 /-- Serialize a `StructuredCell` into canonical `Obend.Core.Data`. -/
@@ -234,13 +232,13 @@ theorem projection_preservation (c : StructuredCell) :
   | none =>
     simp [hp] at hc'
   | some ps =>
-    simp only [hp, Option.bind_some] at hc'
+    simp only [hp] at hc'
     cases hr : receiptOfData (receiptToData c.receipt) with
     | none =>
       simp [hr] at hc'
     | some rc =>
-      simp only [hr, Option.bind_some, Option.mem_def, Option.some.injEq] at hc'
-      subst hc'
+      simp only [hr] at hc'
+      cases hc'
       rfl
 
 
@@ -271,9 +269,9 @@ deriving @[expose] DecidableEq, Repr
 /-- Metatheorem: Adding a cell at a distinct atom ID preserves an existing cell's label. -/
 theorem cell_preserved_under_add (G : Graph) (a i : AtomId) (c : StructuredCell) (content' : Content) (prev : AtomId)
     (h_label : G.label a = some (StructuredCell.toContent c))
-    (h_ne : a ≠ i) :
+    (_h_ne : a ≠ i) :
     (G.step (Op.add i content' prev)).label a = some (StructuredCell.toContent c) := by
-  unfold Graph.step Graph.label
+  unfold Graph.step Graph.label at *
   dsimp only
   rw [Graph.lookup_append_single]
   rw [h_label]

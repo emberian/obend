@@ -337,6 +337,7 @@ theorem usable_run (H : Hash) {W : World} {p : PageId} {G : Graph} (x : AtomId)
     | field n v => rw [run_not_field hl] at h1; cases h1
     | text => rfl
     | cite => rfl
+    | cell => rfl
 
 /-- **The section's alternatives are the page's heads at the position**, less any cite run whose
 cite does not hold. -/
