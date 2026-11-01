@@ -4,6 +4,7 @@ import Obend.Law.Contract
 import Obend.Lower.Reflect
 import Obend.Tactic.Weave
 import Obend.Logic.Obligation
+import Obend.Spec.Sha256
 
 open Obend.Analysis
 open Obend.Judge
@@ -52,11 +53,13 @@ def testContractCertTiers : IO Unit := do
   let c1 : ContractCert := .byLawDial lawEx lawEx ["total"]
   assertOk "Tier 1 LawDial certificate check" (checkContractCert g1 c1 matches .valid)
 
+  let decDigest := Obend.Spec.Sha256.hex "testDeciderThm:transport@1:ok".toUTF8
   let decJson := Lean.Json.mkObj [
     ("schema", "obend.receipt.v1"),
     ("format", "transport@1"),
     ("claim", "testDeciderThm"),
-    ("verdict", "ok")
+    ("verdict", "ok"),
+    ("digest", decDigest)
   ]
   let c2a : ContractCert := .byLoweredDecider "testDeciderThm" [] decJson.compress.toUTF8
   assertOk "Tier 2a LoweredDecider certificate check" (checkContractCert g1 c2a matches .valid)

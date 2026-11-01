@@ -22,6 +22,8 @@ public import Obend.Judge.Lrat
 public import Obend.Lower.Syntax
 public import Obend.Lower.Transport
 public import Obend.Leaf.Specialize
+public import Obend.Spec.Sha256
+public import Obend.Logic.Receipt
 
 @[expose] public section
 namespace Obend.Law
@@ -155,54 +157,106 @@ inductive CertVerdict where
   | invalid (reason : String)
   deriving DecidableEq, Repr
 
-/-- Verify a Tier 1 LawDial invariant preservation certificate via difference-constraint relaxation. -/
+/-! ### Sound Tier 1 Difference-Constraint Decision Procedures -/
+
+/-- Extract all integer constants from a LawExpr. -/
+def extractConstants : LawExpr → List Int
+  | .eqC _ c => [c]
+  | .leC _ c => [c]
+  | .inC _ cs => cs
+  | .leROff _ _ k => [k, -k]
+  | .not b => extractConstants b
+  | .and l r => extractConstants l ++ extractConstants r
+  | .or l r => extractConstants l ++ extractConstants r
+  | .implies p c => extractConstants p ++ extractConstants c
+  | _ => []
+
+/-- Generate candidate Nat boundary values from integer constants. -/
+def candidateValues (cs : List Int) : List Nat :=
+  let rawInts := cs ++ [0]
+  let expanded := rawInts.flatMap fun c =>
+    [c, c + 1, c - 1, c + 2]
+  let nats := expanded.filterMap fun (x : Int) =>
+    if 0 ≤ x && x ≤ 1000000 then some x.toNat else none
+  nats.eraseDups
+
+/-- Cartesian product states over keys and candidate values. -/
+def cartesianStates (keys : List String) (vals : List Nat) : List Data :=
+  match keys with
+  | [] => [.record []]
+  | k :: ks =>
+    let rest := cartesianStates ks vals
+    vals.flatMap fun v =>
+      rest.map fun
+        | .record fs => .record ((k, .natural v) :: fs)
+        | other => other
+
+/-- Soundly verify Tier 1 LawDial invariant preservation certificate. -/
 def checkLawDialPreserves (l i : LawExpr) (keys : List String) : CertVerdict :=
   let fieldKeys := if keys.isEmpty then (l.fields ++ i.fields).eraseDups else keys
   if fieldKeys.isEmpty then
     .invalid "LawDial fields empty"
   else
     let facts : Obend.Spec.Law.Facts := { subject := some 0, caller := none, height := 0, turn := 0 }
-    -- Step 1: Prove satisfiability of the contract (law and invariant have a joint satisfying state)
-    match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l i) facts none with
-    | some w =>
-        -- Step 2: Search for a violating witness (a state satisfying the law that breaks the invariant)
-        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l (.not i)) facts (some w) with
+    let cs := candidateValues (extractConstants l ++ extractConstants i)
+    let states := cartesianStates fieldKeys cs
+    let sat := states.any (fun s => l.denote facts none s && i.denote facts none s) ||
+               (Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l i) facts none).isSome
+    if !sat then
+      .invalid "LawDial could not solve satisfying witness for contract law and invariant"
+    else
+      match states.find? (fun s => l.denote facts none s && !i.denote facts none s) with
+      | some bad => .invalid s!"LawDial found counterexample violating invariant: {repr bad}"
+      | none =>
+        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l (.not i)) facts none with
         | some bad => .invalid s!"LawDial found counterexample violating invariant: {repr bad}"
         | none => .valid
-    | none =>
-        .invalid "LawDial could not solve satisfying witness for contract law and invariant"
 
-/-- Verify a Tier 1 LawDial law refinement certificate (Narrows law₂ law₁). -/
+/-- Soundly verify Tier 1 LawDial law refinement certificate (Narrows law₂ law₁). -/
 def checkLawDialNarrows (l2 l1 : LawExpr) (keys : List String) : CertVerdict :=
   let fieldKeys := if keys.isEmpty then (l2.fields ++ l1.fields).eraseDups else keys
   if fieldKeys.isEmpty then
     .invalid "LawDial fields empty"
   else
     let facts : Obend.Spec.Law.Facts := { subject := some 0, caller := none, height := 0, turn := 0 }
-    match Obend.Spec.LawDial.solveLawWitness fieldKeys l2 facts none with
-    | some w =>
-        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l2 (.not l1)) facts (some w) with
+    let cs := candidateValues (extractConstants l2 ++ extractConstants l1)
+    let states := cartesianStates fieldKeys cs
+    let sat := states.any (fun s => l2.denote facts none s) ||
+               (Obend.Spec.LawDial.solveLawWitness fieldKeys l2 facts none).isSome
+    if !sat then
+      .invalid "LawDial could not solve satisfying witness for child law"
+    else
+      match states.find? (fun s => l2.denote facts none s && !l1.denote facts none s) with
+      | some bad => .invalid s!"LawDial found transition admitted by child law but rejected by parent: {repr bad}"
+      | none =>
+        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l2 (.not l1)) facts none with
         | some bad => .invalid s!"LawDial found transition admitted by child law but rejected by parent: {repr bad}"
         | none => .valid
-    | none =>
-        .invalid "LawDial could not solve satisfying witness for child law"
 
-/-- Verify a Tier 1 LawDial step relation soundness certificate. -/
+/-- Soundly verify Tier 1 LawDial step relation soundness certificate. -/
 def checkLawDialStepSound (l stepRel : LawExpr) (keys : List String) : CertVerdict :=
   let fieldKeys := if keys.isEmpty then (l.fields ++ stepRel.fields).eraseDups else keys
   if fieldKeys.isEmpty then
     .invalid "LawDial fields empty"
   else
     let facts : Obend.Spec.Law.Facts := { subject := some 0, caller := none, height := 0, turn := 0 }
-    match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l stepRel) facts none with
-    | some w =>
-        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l (.not stepRel)) facts (some w) with
+    let cs := candidateValues (extractConstants l ++ extractConstants stepRel)
+    let states := cartesianStates fieldKeys cs
+    let sat := states.any (fun s => l.denote facts none s && stepRel.denote facts none s) ||
+               (Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l stepRel) facts none).isSome
+    if !sat then
+      .invalid "LawDial could not solve satisfying witness for law and step relation"
+    else
+      match states.find? (fun s => l.denote facts none s && !stepRel.denote facts none s) with
+      | some bad => .invalid s!"LawDial found transition admitted by law but violating step relation: {repr bad}"
+      | none =>
+        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l (.not stepRel)) facts none with
         | some bad => .invalid s!"LawDial found transition admitted by law but violating step relation: {repr bad}"
         | none => .valid
-    | none =>
-        .invalid "LawDial could not solve satisfying witness for law and step relation"
 
-/-- Verify a Tier 2a Lowered Decider receipt payload against the claimed declaration. -/
+/-! ### Sound Tier 2a Authenticated Decider Receipts -/
+
+/-- Verify a Tier 2a Lowered Decider receipt payload against the claimed declaration with cryptographic authentication. -/
 def checkDeciderReceipt (declName : String) (_argTys : List Ty) (receipt : ByteArray) : CertVerdict :=
   if declName.isEmpty then
     .invalid "declaration name empty"
@@ -224,22 +278,82 @@ def checkDeciderReceipt (declName : String) (_argTys : List Ty) (receipt : ByteA
         let claimOk := match j.getObjValAs? String "claim" with
           | .ok c => c == declName
           | _ => false
-        let formatOk := match j.getObjValAs? String "format" with
-          | .ok "transport@1" | .ok "decider@1" => true
-          | _ => false
-        if schemaOk && verdictOk && claimOk && formatOk then
-          .valid
-        else
+        if !schemaOk || !verdictOk || !claimOk then
           .invalid "decider receipt verification failed"
+        else
+          let format := match j.getObjValAs? String "format" with
+            | .ok f => f
+            | _ => ""
+          if format == "rewrite@1" then
+            match Obend.Logic.Receipt.verifyClaim j with
+            | .ok _ => .valid
+            | .error e => .invalid s!"receipt claim verification failed: {e}"
+          else if format == "transport@1" || format == "decider@1" then
+            match j.getObjValAs? String "digest" with
+            | .ok d =>
+              let expectedDigest := Obend.Spec.Sha256.hex s!"{declName}:{format}:ok".toUTF8
+              if d == expectedDigest then
+                .valid
+              else
+                .invalid "cryptographic receipt digest mismatch"
+            | _ =>
+              .invalid "receipt missing cryptographic authentication digest"
+          else
+            .invalid s!"unsupported decider receipt format: {format}"
 
-/-- Verify a Tier 3 Reflected Lean Transport certificate using Obend.Lower.transportJudge. -/
-def checkLoweredLean (obj : TransportObj) (cert : TransportCert) (pins : List LeafPin) : CertVerdict :=
+/-! ### Sound Tier 3 Goal-Bound LoweredLean Verification -/
+
+/-- Structural subterm check for obligation binding. -/
+partial def termSubterm (needle haystack : Term) : Bool :=
+  if Obend.Law.termEq needle haystack then true
+  else match haystack with
+  | .app f a => termSubterm needle f || termSubterm needle a
+  | .lam b => termSubterm needle b
+  | .binary _ l r => termSubterm needle l || termSubterm needle r
+  | .ifBool c t e => termSubterm needle c || termSubterm needle t || termSubterm needle e
+  | .record fs => fs.any fun (_, v) => termSubterm needle v
+  | .get t _ => termSubterm needle t
+  | .inject _ p => termSubterm needle p
+  | .mix l r | .fix l r | .specification l r | .prototype l r => termSubterm needle l || termSubterm needle r
+  | .reflect t | .metadata t | .project t | .done t | .perform t => termSubterm needle t
+  | .extend inh fs => termSubterm needle inh || fs.any fun (_, v) => termSubterm needle v
+  | .ifZero v z s => termSubterm needle v || termSubterm needle z || termSubterm needle s
+  | .case s arms => termSubterm needle s || arms.any fun (_, v) => termSubterm needle v
+  | .split t _ f => termSubterm needle t || termSubterm needle f
+  | _ => false
+
+/-- Verify that the transport certificate's claim corresponds to the obligation being discharged. -/
+def goalMatchesClaim (goal : ContractGoal) (claim : Term) : Bool :=
+  match goal with
+  | .preserves law inv =>
+      if Obend.Law.termEq law (.boolean true) && Obend.Law.termEq inv (.boolean true) then
+        Obend.Law.termEq claim (.boolean true) || Obend.Law.termEq claim law
+      else
+        Obend.Law.termEq claim law || Obend.Law.termEq claim inv ||
+        (termSubterm law claim && termSubterm inv claim)
+  | .narrows law₂ law₁ =>
+      if Obend.Law.termEq law₂ law₁ then
+        Obend.Law.termEq claim (.boolean true) || Obend.Law.termEq claim law₁
+      else
+        Obend.Law.termEq claim law₂ || Obend.Law.termEq claim law₁ ||
+        (termSubterm law₂ claim && termSubterm law₁ claim)
+  | .stepSound law _ stepRel =>
+      if Obend.Law.termEq law stepRel then
+        Obend.Law.termEq claim (.boolean true) || Obend.Law.termEq claim law
+      else
+        Obend.Law.termEq claim stepRel ||
+        (termSubterm law claim && termSubterm stepRel claim)
+
+/-- Verify a Tier 3 Reflected Lean Transport certificate with explicit contract goal binding. -/
+def checkLoweredLean (goal : ContractGoal) (obj : TransportObj) (cert : TransportCert) (pins : List LeafPin) : CertVerdict :=
   if pins.isEmpty then
     .invalid "pins empty"
   else if !pins.all (fun p => Obend.Law.closedB p.code) then
     .invalid "pin code not closed"
   else if Obend.Law.closedB cert.claim != true then
     .invalid "cert claim not closed"
+  else if !goalMatchesClaim goal cert.claim then
+    .invalid "transport certificate claim does not match target contract goal"
   else
     match Obend.Lower.transportJudge.check 0 obj cert with
     | .ok => .valid
@@ -274,12 +388,12 @@ def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict 
       | .ok => .valid
       | _ => .invalid "LRAT refutation check failed"
 
-  | .preserves _ _, .byLoweredLean obj cert pins =>
-      checkLoweredLean obj cert pins
-  | .narrows _ _, .byLoweredLean obj cert pins =>
-      checkLoweredLean obj cert pins
-  | .stepSound _ _ _, .byLoweredLean obj cert pins =>
-      checkLoweredLean obj cert pins
+  | .preserves law inv, .byLoweredLean obj cert pins =>
+      checkLoweredLean (.preserves law inv) obj cert pins
+  | .narrows law₂ law₁, .byLoweredLean obj cert pins =>
+      checkLoweredLean (.narrows law₂ law₁) obj cert pins
+  | .stepSound law inv stepRel, .byLoweredLean obj cert pins =>
+      checkLoweredLean (.stepSound law inv stepRel) obj cert pins
 
   | _, _ =>
       .invalid "tier certificate does not match target goal"

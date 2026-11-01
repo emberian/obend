@@ -79,9 +79,15 @@ theorem test_obend_law_trivial : True := by
 
 
 -- 5. obend_tooth diagnostic tactic
-theorem test_obend_tooth_diagnostic (x : Nat) (h : x + 1 = x) : False := by
+theorem test_obend_tooth_diagnostic (h : 1 = 2) : 1 = 2 := by
   obend_tooth
-  omega
+  guard_hyp cex : Obend.Core.Data.Data
+  exact h
+
+theorem test_obend_tooth_forall (h : ∀ n : Nat, n < 5) : ∀ n : Nat, n < 5 := by
+  obend_tooth
+  guard_hyp cex : Obend.Core.Data.Data
+  exact h
 
 -- 6. reflect_override_blocks formal theorem instantiation
 theorem test_formal_reflect_override_blocks

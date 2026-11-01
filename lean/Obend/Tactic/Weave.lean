@@ -129,19 +129,23 @@ elab "obend_tooth" : tactic => do
         pure (some (Data.record [("status", .label "counterexample"), ("lhs", .label s!"{lhsV}"), ("rhs", .label s!"{rhsV}")]))
       else
         pure none
-    | .forallE _ (.const `Nat _) body _ =>
+    | .forallE _ (.const ``Nat _) body _ =>
       let mut found : Option Data := none
       for k in [0:20] do
         let testVal := mkNatLit k
         let instBody := body.instantiate1 testVal
-        let redBody ← whnf instBody
-        if redBody == Lean.mkConst ``False || redBody == Lean.mkConst ``Bool.false then
-          found := some (.natural k)
-          break
+        try
+          let decInst ← synthInstance (← mkAppM ``Decidable #[instBody])
+          let decApp := mkApp2 (Lean.mkConst ``Decidable.decide) instBody decInst
+          let red ← Meta.withDefault (whnf decApp)
+          if red == Lean.mkConst ``Bool.false then
+            found := some (.natural k)
+            break
+        catch _ =>
+          pure ()
       pure found
     | _ =>
-      let facts : Facts := { subject := some 0, caller := none, height := 0, turn := 0 }
-      pure (solveLawWitness ["violating_state"] (.eqC (.field "violating_state") 42) facts none)
+      pure none
 
   match cexOpt with
   | some cex =>
