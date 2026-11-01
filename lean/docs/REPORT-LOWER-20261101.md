@@ -83,3 +83,26 @@ literals or `self` references. A lowered program uses functions, records and `fi
 Structural recursion is typed by lowering a recursive definition from its unfolding equation
 (`f.eq_def`, as Dima 2025 does) to a `fix` with a simple type, adding a recursive-δ rule to the
 source semantics (option A); Core4's `Ty` is not extended with a type for the `below` tower.
+
+## Addendum: recursion from the unfolding equation (option A), and the converse (`0394e9d..3417f86`)
+Recursive definitions are read from `f.eq_def` into `recConst name T body` (body binds the definition
+at 0). `SStep.unfold` is recursive δ, cited against Lean4Lean's `unfoldDefinition`. For structural
+recursion `f.eq_def` is `rfl` (δ plus the ι steps through `brecOn`); for well-founded recursion it is
+the propositional `WellFounded.fix_eq`, so on that path the source rule is an equation, not a kernel
+reduction. It lowers to `fix (λself. λ_. body) {}`, typed by `LTyped.recConst`; `lower_step` matches
+it in three steps (`recConst_unfold`); `lower_typed` covers it (`recConst_typed`). `fib`, `halvings`
+and `ackTwo` (well-founded on a lexicographic measure) now pass the checker and agree with `#eval`;
+the `Nat.brecOn` value remains the reported, untyped fallback (`--kernel-recursion`, or no equation).
+Out of the fragment now: `WellFounded.fix` used directly (`countDown`, `Acc.rec`). `obend` gains
+`supportInterpreter` (Linux needs the executable's symbols for the environment extensions'
+initializers; every program failed on hbox with `IO.getRandomBytes` unresolved until then).
+
+**The converse is false as stated** (`Proofs/Complete.lean`, `lower_complete_fails`):
+`Evaluates (lowerT e) (nat n) → SSteps e (lit n)` fails on `LTyped` at an erasure. `Witness.rec n
+Witness.mk` for a field-less `structure Witness : Prop` lowers to `split {} [] n`, which Core4 runs
+(the erased proof is exactly the empty record the destructor expects), while `SStep` is stuck; Lean's
+kernel reduces it (K, `toCtorWhenK`; `kTooth_three` is `rfl`). So the gap is in the source semantics,
+not Core4: adding the kernel's K rule for field-less structures closes this case. The remaining
+obstacle to `lower_complete` is proof technique: a step-indexed `Ahead`, since the behind term may
+take more steps than the term ahead. run-lower 86/86 on the Mac and on hbox; tiers 1 and 2 green on
+hbox at `3417f86`; other suites unchanged.
