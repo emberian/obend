@@ -50,6 +50,11 @@ the build is the check. One stranger-usable artifact stays ahead of every platfo
 - The remaining exposed sections (`Core/*` not yet passed, `Equiv`, `Digest`, `Vault`, `Elab`); the one-at-a-time pruning of the 536 exposures.
 - `Joins` merged into `Ahead` (`Ahead := Joins ⊥`), a parsimony item from the Leaf lane.
 
+## How we work, additions (2026-11-01)
+- One lane per worktree, the branch named in the brief; a lane never switches a worktree another lane was given (C2 took Leaf's mid-task).
+- Builds on hbox or dregg-build2; the Mac for leaf edits. Tier 1 green is the bar for pushing `dev`; tier 2 on the box afterwards.
+- A lane that touches a shared row shape, constructor or brand runs every suite on the box (`run-leaf` went red on `dev` for a day because C1 ran the cohorts and the ledger but not leaf).
+
 ## Decisions pending
 
 The four contracts C1–C4 in `review/DECISIONS-20261031.md` (identity across kinds, code and
