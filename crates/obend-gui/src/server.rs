@@ -1302,6 +1302,740 @@ fn write_json_response(stream: &mut TcpStream, status: u16, status_text: &str, j
     let _ = stream.flush();
 }
 
+fn write_html_response(stream: &mut TcpStream, status: u16, status_text: &str, html_body: &str) {
+    let bytes = html_body.as_bytes();
+    let header = format!(
+        "HTTP/1.1 {status} {status_text}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(bytes);
+    let _ = stream.flush();
+}
+
+fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
+    let initial_json =
+        serde_json::to_string(&state.snapshot_response()).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Obend Interactive Workbench (.obnb) — WS 30 / WS 31 / WS 33</title>
+<style>
+  :root {{
+    --bg: #0b0f17;
+    --panel: #131b2e;
+    --panel-border: #243252;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #a855f7;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }}
+  header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 24px;
+    background: #0f172a;
+    border-bottom: 1px solid var(--panel-border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }}
+  .brand {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }}
+  .brand h1 {{
+    font-size: 16px;
+    margin: 0;
+    color: #f8fafc;
+    letter-spacing: 0.4px;
+  }}
+  .badge {{
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }}
+  .badge-turn {{ background: #1e293b; color: var(--accent); border: 1px solid #334155; }}
+  .badge-ready, .badge-evaluated, .badge-admitted, .badge-certified {{ background: rgba(34,197,94,0.16); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }}
+  .badge-warning {{ background: rgba(245,158,11,0.16); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }}
+  .badge-violation, .badge-refused, .badge-blocked {{ background: rgba(239,68,68,0.16); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }}
+  .tabs {{
+    display: flex;
+    gap: 8px;
+  }}
+  .tab-btn {{
+    background: #1e293b;
+    color: var(--muted);
+    border: 1px solid #334155;
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+  }}
+  .tab-btn.active {{
+    background: var(--accent);
+    color: #0f172a;
+    border-color: var(--accent);
+  }}
+  main {{
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 20px 24px 60px;
+  }}
+  .grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(620px, 1fr));
+    gap: 20px;
+  }}
+  .card {{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }}
+  .card-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+  }}
+  .card-title {{
+    margin: 0;
+    font-size: 15px;
+    color: #f8fafc;
+  }}
+  .card-sub {{
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+  }}
+  .viewport-box {{
+    background: #090d16;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 10px;
+    overflow-x: auto;
+    display: flex;
+    justify-content: center;
+  }}
+  .viewport-box svg {{
+    max-width: 100%;
+    height: auto;
+  }}
+  .controls-row {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    background: #0f172a;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #1e293b;
+  }}
+  .mode-group {{
+    display: inline-flex;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #334155;
+  }}
+  .mode-btn {{
+    background: #1e293b;
+    color: var(--muted);
+    border: none;
+    padding: 5px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }}
+  .mode-btn.active-free {{ background: #3b82f6; color: #fff; font-weight: 700; }}
+  .mode-btn.active-press {{ background: var(--amber); color: #0f172a; font-weight: 700; }}
+  .mode-btn.active-locked {{ background: var(--green); color: #0f172a; font-weight: 700; }}
+  input[type="range"] {{
+    flex: 1;
+    min-width: 130px;
+    accent-color: var(--accent);
+  }}
+  input[type="number"], input[type="text"], select, textarea {{
+    background: #090d16;
+    color: var(--text);
+    border: 1px solid #334155;
+    border-radius: 5px;
+    padding: 5px 8px;
+    font-family: inherit;
+    font-size: 12px;
+  }}
+  .btn {{
+    background: #1e293b;
+    color: var(--text);
+    border: 1px solid #475569;
+    border-radius: 6px;
+    padding: 6px 11px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }}
+  .btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .btn-primary {{ background: #0284c7; border-color: #38bdf8; color: #fff; font-weight: 600; }}
+  .btn-primary:hover {{ background: #0369a1; color: #fff; }}
+  .btn-purple {{ background: #6b21a8; border-color: #a855f7; color: #fff; font-weight: 600; }}
+  .btn-amber {{ background: #b45309; border-color: #f59e0b; color: #fff; font-weight: 600; }}
+  .repair-banner {{
+    background: rgba(245, 158, 11, 0.14);
+    border: 1px solid var(--amber);
+    color: #fde68a;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }}
+  .lean-drawer {{
+    background: #090d16;
+    border: 1px solid #3b0764;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }}
+  .lean-drawer textarea {{
+    width: 100%;
+    min-height: 115px;
+    resize: vertical;
+    color: #e9d5ff;
+  }}
+  .field-pills {{
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }}
+  .field-pill {{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    background: #131b2e;
+    padding: 3px 7px;
+    border-radius: 5px;
+    border: 1px solid #243252;
+  }}
+  .hidden {{ display: none !important; }}
+  .membrane-box {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }}
+  pre {{
+    margin: 0;
+    background: #090d16;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid #1e293b;
+    overflow-x: auto;
+    font-size: 11px;
+  }}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>OBEND INTERACTIVE WORKBENCH (.obnb)</h1>
+    <span id="hdr-notebook" class="badge badge-turn"></span>
+    <span id="hdr-turn" class="badge badge-turn"></span>
+    <span id="hdr-latency" class="badge badge-ready">FFI SESSION LIVE</span>
+  </div>
+  <div class="tabs">
+    <button id="tab-btn-nb" class="tab-btn active" onclick="switchTab('nb')">1. .obnb Cells &amp; Lean 4 Bridge (WS 30–31)</button>
+    <button id="tab-btn-mem" class="tab-btn" onclick="switchTab('mem')">2. Rehydratable Membranes &amp; 3D Affordances (WS 33)</button>
+  </div>
+</header>
+<main>
+  <div id="tab-nb">
+    <div style="margin-bottom:14px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;">
+      <span>Drag any <b>LawDial</b> slider or edit coupled fields (`a`, `b`) to trigger live `&lt; 5ms` Bellman–Ford repair, commit an FFI turn (`POST /eval`), or pop out &amp; weave a Lean 4 certificate (`POST /lean-bridge`).</span>
+      <button class="btn" onclick="refreshNotebook()">Refresh State</button>
+    </div>
+    <div id="cells-grid" class="grid"></div>
+  </div>
+
+  <div id="tab-mem" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">A. Derived Liveness: Confinement vs. Ambient Nondeterminism</h2>
+            <div class="card-sub">Theorem: <code>replayedDeterministic_iff_confined</code> &amp; <code>unconfined_chain_drops_interactions</code> (Obend/Vault/Rehydration.lean)</div>
+          </div>
+          <span id="mem-conf-badge" class="badge badge-certified">CONFINED = TRUE</span>
+        </div>
+        <div class="controls-row">
+          <label style="font-size:12px;"><input type="checkbox" id="mem-confined-chk" checked onchange="renderMembraneSim()"/> All Inputs Confined to Causal Chain (<code>origin != .ambientUnconfined</code>)</label>
+          <button class="btn btn-amber" onclick="injectAmbientEvent()">Inject Unconfined Wall-Clock Event</button>
+          <button class="btn" onclick="resetMembraneSim()">Reset Chain</button>
+        </div>
+        <pre id="mem-conf-output"></pre>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">B. Relational Membrane &amp; Multi-Hop Reshare Attenuation</h2>
+            <div class="card-sub">Theorems: <code>membrane_two_viewers_distinct</code>, <code>reshare_chain_attenuates</code>, <code>reshare_chain_blocks_delayed_permits_amplification</code></div>
+          </div>
+          <span id="mem-reshare-badge" class="badge badge-ready">HOP DEPTH = 2</span>
+        </div>
+        <div class="controls-row">
+          <button class="btn btn-primary" onclick="stepReshare('attenuate')">Reshare Hop (Attenuate Permits &amp; Tighten LawDial)</button>
+          <button class="btn btn-amber" onclick="stepReshare('amplify')">Attempt Delayed-Permits Amplification Attack</button>
+          <button class="btn" onclick="stepReshare('reset')">Reset Root Sturdyref</button>
+        </div>
+        <div class="membrane-box">
+          <pre id="mem-viewer-alice"></pre>
+          <pre id="mem-viewer-bob"></pre>
+        </div>
+      </div>
+
+      <div class="card" style="grid-column: 1 / -1;">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">C. 3D Reactive Affordances (Auth × Causal CAS `expectedOld` × Epoch Window × LawDial)</h2>
+            <div class="card-sub">Theorems: <code>fireReactive_iff</code>, <code>fireReactive_wrong_old_refuses</code>, <code>fireReactive_after_deadline_refuses</code></div>
+          </div>
+          <span id="mem-react-badge" class="badge badge-certified">READY TO FIRE</span>
+        </div>
+        <div class="controls-row">
+          <div class="field-pill">Vault Current Value: <input type="number" id="react-vault-val" value="28" style="width:65px" onchange="updateReactivePreview()"/></div>
+          <div class="field-pill">Client <code>expectedOld</code>: <input type="number" id="react-exp-old" value="28" style="width:65px" onchange="updateReactivePreview()"/></div>
+          <div class="field-pill">Proposed <code>newVal</code>: <input type="number" id="react-new-val" value="31" style="width:65px" onchange="updateReactivePreview()"/></div>
+          <div class="field-pill">Current Epoch: <input type="number" id="react-cur-epoch" value="10" style="width:60px" onchange="updateReactivePreview()"/></div>
+          <div class="field-pill">Deadline Epoch: <input type="number" id="react-max-epoch" value="15" style="width:60px" onchange="updateReactivePreview()"/></div>
+          <div class="field-pill">Auth:
+            <select id="react-auth" onchange="updateReactivePreview()">
+              <option value="write">Permitted (.write)</option>
+              <option value="read_only">Denied (.read only)</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="fireReactiveSim()">Fire 3D ReactiveAffordance</button>
+        </div>
+        <pre id="mem-react-output"></pre>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+let STATE = {initial_json};
+let OPEN_DRAWERS = {{}};
+let DRAWER_DATA = {{}};
+let LAST_REPAIRS = {{}};
+
+function switchTab(tab) {{
+  document.getElementById('tab-nb').classList.toggle('hidden', tab !== 'nb');
+  document.getElementById('tab-mem').classList.toggle('hidden', tab !== 'mem');
+  document.getElementById('tab-btn-nb').classList.toggle('active', tab === 'nb');
+  document.getElementById('tab-btn-mem').classList.toggle('active', tab === 'mem');
+  if (tab === 'mem') {{
+    renderMembraneSim();
+    stepReshare('init');
+    updateReactivePreview();
+  }}
+}}
+
+function statusBadgeClass(status) {{
+  if (status.includes('violation') || status.includes('refused') || status.includes('blocked')) return 'badge-violation';
+  if (status.includes('warning')) return 'badge-warning';
+  return 'badge-certified';
+}}
+
+function renderCells() {{
+  document.getElementById('hdr-notebook').textContent = STATE.notebook_id;
+  document.getElementById('hdr-turn').textContent = 'TURN #' + STATE.turn;
+  const grid = document.getElementById('cells-grid');
+  grid.innerHTML = '';
+
+  for (const cell of STATE.cells) {{
+    const card = document.createElement('section');
+    card.className = 'card obnb-cell';
+    card.dataset.cellId = cell.id;
+    card.dataset.status = cell.status;
+
+    const certText = cell.woven_cert && cell.woven_cert.verified
+      ? 'CERTIFIED:' + cell.woven_cert.receipt_hex.slice(0, 12)
+      : (cell.woven_cert ? 'STALE-CERT (BLOCKED)' : 'UNCERTIFIED');
+    const certCls = (cell.woven_cert && cell.woven_cert.verified) ? 'badge-certified' : (cell.woven_cert ? 'badge-violation' : 'badge-turn');
+
+    const mode = cell.dial.mode;
+    const lo = cell.dial.margin_lo;
+    const hi = cell.dial.margin_hi;
+    const sliderMin = Math.floor(lo - Math.max(10, (hi - lo) * 0.5));
+    const sliderMax = Math.ceil(hi + Math.max(10, (hi - lo) * 0.5));
+
+    let fieldsHtml = '';
+    for (const [k, v] of Object.entries(cell.fields || {{}})) {{
+      const oldV = (cell.old_fields && cell.old_fields[k] !== undefined) ? cell.old_fields[k] : v;
+      fieldsHtml += `<div class="field-pill"><span>${{k}} (old=${{oldV}}):</span><input type="number" style="width:68px" value="${{v}}" onchange="onFieldEdit('${{cell.id}}', '${{k}}', this.value)"/></div>`;
+    }}
+
+    const rep = LAST_REPAIRS[cell.id];
+    let repairBannerHtml = '';
+    if (rep && rep.summary) {{
+      repairBannerHtml = `
+        <div class="repair-banner">
+          <span><b>Bellman–Ford Repair:</b> ${{rep.summary}} (invariant: <code>${{cell.dial.invariant_expr}}</code>)</span>
+          <button class="btn btn-amber" onclick="applyRepair('${{cell.id}}')">Apply Suggested Repair</button>
+        </div>`;
+    }}
+
+    const drawerOpen = !!OPEN_DRAWERS[cell.id];
+    const dData = DRAWER_DATA[cell.id] || {{
+      lean_snippet: `-- Click 'Pop Out Theorem' to synthesize Lean 4 proof obligation for ${{cell.id}}`,
+      tactic_used: 'obend_law',
+      verified: false,
+      tooth_counterexample: null
+    }};
+
+    card.innerHTML = `
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">${{cell.title}} <span style="color:var(--muted);font-weight:400;">(${{cell.id}})</span></h2>
+          <div class="card-sub">Source: <code>${{cell.source}}</code> | Invariant: <code>${{cell.dial.invariant_expr}}</code> | Support: <code>[${{(cell.support_pins || []).join(', ')}}]</code></div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span class="badge ${{statusBadgeClass(cell.status)}}">${{cell.status}}</span>
+          <span class="badge ${{certCls}}">${{certText}}</span>
+        </div>
+      </div>
+
+      <div class="viewport-box obnb-viewport">${{cell.viewport.svg}}</div>
+
+      <div class="controls-row">
+        <div class="mode-group">
+          <button class="mode-btn ${{mode==='free'?'active-free':''}}" onclick="setDial('${{cell.id}}', 'free', ${{cell.dial.current_value}})">.free</button>
+          <button class="mode-btn ${{mode==='press'?'active-press':''}}" onclick="setDial('${{cell.id}}', 'press', ${{cell.dial.current_value}})">.press</button>
+          <button class="mode-btn ${{mode==='locked'?'active-locked':''}}" onclick="setDial('${{cell.id}}', 'locked', ${{cell.dial.current_value}})">.locked</button>
+        </div>
+        <input type="range" min="${{sliderMin}}" max="${{sliderMax}}" step="1" value="${{cell.dial.current_value}}"
+          oninput="setDial('${{cell.id}}', '${{mode}}', parseFloat(this.value))"/>
+        <span style="font-size:12px;min-width:60px;">val: <b>${{cell.dial.current_value}}</b></span>
+        <button class="btn btn-primary" onclick="commitEvalTurn('${{cell.id}}')">Commit Turn (FFI)</button>
+        <button class="btn btn-purple pop-out-lean4" data-cell-id="${{cell.id}}" onclick="toggleLeanDrawer('${{cell.id}}')">Pop Out to Lean 4</button>
+      </div>
+
+      <div class="field-pills">${{fieldsHtml}}</div>
+      ${{repairBannerHtml}}
+
+      <div class="lean-drawer ${{drawerOpen ? '' : 'hidden'}}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:12px;color:#d8b4fe;font-weight:700;">Lean 4 Proof Bridge &amp; Weave Certificate</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="tactic-${{cell.id}}">
+              <option value="obend_law" ${{dData.tactic_used==='obend_law'?'selected':''}}>tactic: obend_law</option>
+              <option value="obend_unfold" ${{dData.tactic_used==='obend_unfold'?'selected':''}}>tactic: obend_unfold</option>
+              <option value="poly_ring" ${{dData.tactic_used==='poly_ring'?'selected':''}}>tactic: poly_ring</option>
+            </select>
+            <label style="font-size:11px;color:var(--muted);"><input type="checkbox" id="subproc-${{cell.id}}"/> Run <code>lean --stdin</code> kernel check</label>
+            <button class="btn" onclick="runLeanBridge('${{cell.id}}', 'pop')">Pop Theorem</button>
+            <button class="btn btn-purple" onclick="runLeanBridge('${{cell.id}}', 'pop_and_weave')">Weave Certificate</button>
+          </div>
+        </div>
+        <textarea id="snippet-${{cell.id}}">${{dData.lean_snippet}}</textarea>
+        <div style="font-size:11px;color:${{dData.tooth_counterexample ? '#f87171' : '#4ade80'}};">
+          ${{dData.tooth_counterexample ? ('Refused: ' + dData.tooth_counterexample) : (dData.verified ? 'Verified & Woven into .obnb cell!' : 'Ready to verify.')}}
+        </div>
+      </div>
+    `;
+    grid.appendChild(card);
+  }}
+}}
+
+async function refreshNotebook() {{
+  const res = await fetch('/notebook');
+  STATE = await res.json();
+  renderCells();
+}}
+
+async function setDial(cellId, mode, val, customFields) {{
+  const cell = STATE.cells.find(c => c.id === cellId);
+  if (!cell) return;
+  const payload = {{ cell_id: cellId, mode: mode, current_value: val }};
+  if (customFields) payload.fields = customFields;
+  const res = await fetch('/dial', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify(payload)
+  }});
+  const data = await res.json();
+  document.getElementById('hdr-latency').textContent = `DIAL: ${{data.verdict}} (${{data.elapsed_micros}} µs)`;
+  if (data.repair_summary) {{
+    LAST_REPAIRS[cellId] = {{ summary: data.repair_summary, suggestions: data.repair_suggestions }};
+  }} else {{
+    delete LAST_REPAIRS[cellId];
+  }}
+  await refreshNotebook();
+}}
+
+async function onFieldEdit(cellId, fieldKey, rawVal) {{
+  const cell = STATE.cells.find(c => c.id === cellId);
+  if (!cell) return;
+  const nextFields = Object.assign({{}}, cell.fields);
+  nextFields[fieldKey] = parseInt(rawVal, 10) || 0;
+  await setDial(cellId, cell.dial.mode, nextFields[fieldKey], nextFields);
+}}
+
+async function applyRepair(cellId) {{
+  const cell = STATE.cells.find(c => c.id === cellId);
+  const rep = LAST_REPAIRS[cellId];
+  if (!cell || !rep || !rep.suggestions) return;
+  const nextFields = Object.assign({{}}, cell.fields);
+  let firstVal = cell.dial.current_value;
+  for (const s of rep.suggestions) {{
+    nextFields[s.field] = s.suggested_value;
+    firstVal = s.suggested_value;
+  }}
+  delete LAST_REPAIRS[cellId];
+  await setDial(cellId, cell.dial.mode, firstVal, nextFields);
+}}
+
+async function commitEvalTurn(cellId) {{
+  const cell = STATE.cells.find(c => c.id === cellId);
+  if (!cell) return;
+  const firstKey = Object.keys(cell.fields || {{}})[0] || 'val';
+  const res = await fetch('/eval', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{
+      cell_id: cellId,
+      parameter: firstKey,
+      value: cell.dial.current_value,
+      fields: cell.fields
+    }})
+  }});
+  const data = await res.json();
+  document.getElementById('hdr-latency').textContent =
+    `TURN RECEIPT: ${{data.turn_receipt_hex.slice(0,16)}}… (rerendered: ${{data.rerendered_cells.join(', ')}})`;
+  await refreshNotebook();
+}}
+
+async function toggleLeanDrawer(cellId) {{
+  OPEN_DRAWERS[cellId] = !OPEN_DRAWERS[cellId];
+  if (OPEN_DRAWERS[cellId] && !DRAWER_DATA[cellId]) {{
+    await runLeanBridge(cellId, 'pop');
+  }} else {{
+    renderCells();
+  }}
+}}
+
+async function runLeanBridge(cellId, action) {{
+  OPEN_DRAWERS[cellId] = true;
+  const tacticEl = document.getElementById('tactic-' + cellId);
+  const subprocEl = document.getElementById('subproc-' + cellId);
+  const tactic = tacticEl ? tacticEl.value : 'obend_law';
+  const verifySub = subprocEl ? subprocEl.checked : false;
+  const res = await fetch('/lean-bridge', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{
+      cell_id: cellId,
+      action: action,
+      tactic: tactic,
+      verify_subprocess: verifySub
+    }})
+  }});
+  const data = await res.json();
+  DRAWER_DATA[cellId] = data;
+  document.getElementById('hdr-latency').textContent =
+    `LEAN BRIDGE (${{action}}): ${{data.verified ? 'VERIFIED' : 'REFUSED'}}`;
+  await refreshNotebook();
+}}
+
+// --- Tab 2: WS 33 Rehydratable Membranes & 3D Reactive Affordances ---
+let MEM_EVENTS = [
+  {{ seq: 1, origin: '.sturdyrefToken', label: 'turn_1: set T = 26', delta: 26, confined: true }},
+  {{ seq: 2, origin: '.membraneChannel', label: 'turn_2: adjust T = 28', delta: 28, confined: true }}
+];
+let RESHARE_HOPS = [];
+
+function injectAmbientEvent() {{
+  document.getElementById('mem-confined-chk').checked = false;
+  MEM_EVENTS.push({{
+    seq: MEM_EVENTS.length + 1,
+    origin: '.ambientUnconfined',
+    label: 'ambient_wallclock_jitter: T = 99 (unpinned)',
+    delta: 99,
+    confined: false
+  }});
+  renderMembraneSim();
+}}
+
+function resetMembraneSim() {{
+  document.getElementById('mem-confined-chk').checked = true;
+  MEM_EVENTS = [
+    {{ seq: 1, origin: '.sturdyrefToken', label: 'turn_1: set T = 26', delta: 26, confined: true }},
+    {{ seq: 2, origin: '.membraneChannel', label: 'turn_2: adjust T = 28', delta: 28, confined: true }}
+  ];
+  renderMembraneSim();
+}}
+
+function renderMembraneSim() {{
+  const chk = document.getElementById('mem-confined-chk').checked;
+  const activeEvents = chk ? MEM_EVENTS.filter(e => e.confined) : MEM_EVENTS;
+  const allConfined = activeEvents.every(e => e.confined);
+  const liveVal = activeEvents.length ? activeEvents[activeEvents.length - 1].delta : 20;
+  const replayedEvents = activeEvents.filter(e => e.confined);
+  const replayVal = replayedEvents.length ? replayedEvents[replayedEvents.length - 1].delta : 20;
+  const det = (liveVal === replayVal) && allConfined;
+
+  const badge = document.getElementById('mem-conf-badge');
+  badge.textContent = det ? 'REPLAYED_DETERMINISTIC = TRUE' : 'UNCONFINED DRIFT (REFUSED)';
+  badge.className = 'badge ' + (det ? 'badge-certified' : 'badge-violation');
+
+  document.getElementById('mem-conf-output').textContent = JSON.stringify({{
+    theorem: 'replayedDeterministic_iff_confined (Obend/Vault/Rehydration.lean)',
+    allInputsConfined: allConfined,
+    replayedDeterministic: det,
+    liveExecutionState: {{ T: liveVal, totalEvents: activeEvents.length }},
+    causalReplayState: {{ T: replayVal, replayedConfinedEvents: replayedEvents.length }},
+    droppedUnconfinedInteractions: activeEvents.filter(e => !e.confined).map(e => e.label)
+  }}, null, 2);
+}}
+
+function stepReshare(mode) {{
+  if (mode === 'reset' || mode === 'init') {{
+    RESHARE_HOPS = [
+      {{ holder: 'alice (root)', permits: ['read', 'write', 'reshare'], dialMode: '.free', hopDepth: 2, status: 'ADMITTED' }}
+    ];
+  }} else if (mode === 'attenuate') {{
+    const prev = RESHARE_HOPS[RESHARE_HOPS.length - 1];
+    if (prev.hopDepth === 0 || !prev.permits.includes('reshare')) {{
+      RESHARE_HOPS.push({{
+        holder: 'exhausted_delegate',
+        permits: [],
+        dialMode: prev.dialMode,
+        hopDepth: 0,
+        status: 'REFUSED (hopDepth == 0 or .reshare missing — reshare_without_permit_none)'
+      }});
+    }} else {{
+      const nextDepth = prev.hopDepth - 1;
+      const nextDial = prev.dialMode === '.free' ? '.press' : '.locked';
+      const nextPermits = nextDepth === 1 ? ['read', 'reshare'] : ['read'];
+      RESHARE_HOPS.push({{
+        holder: nextDepth === 1 ? 'carol (hop 1)' : 'dave (hop 2)',
+        permits: nextPermits,
+        dialMode: nextDial,
+        hopDepth: nextDepth,
+        status: 'ADMITTED (permits ⊆ parent, dial tightened, hopDepth - 1)'
+      }});
+    }}
+  }} else if (mode === 'amplify') {{
+    RESHARE_HOPS.push({{
+      holder: 'mallory (delayed-permits amplification attempt)',
+      requestedPermits: ['read', 'write', 'execute'],
+      effectivePermitsAfterIntersection: ['read'],
+      status: 'AMPLIFICATION_BLOCKED (reshare_chain_blocks_delayed_permits_amplification: effectivePermits ⊆ parent)'
+    }});
+  }}
+  const last = RESHARE_HOPS[RESHARE_HOPS.length - 1];
+  const badge = document.getElementById('mem-reshare-badge');
+  badge.textContent = last.status.startsWith('ADMITTED') ? ('HOP DEPTH = ' + last.hopDepth) : 'ATTENUATION GUARD FIRED';
+  badge.className = 'badge ' + (last.status.startsWith('ADMITTED') ? 'badge-certified' : 'badge-warning');
+
+  document.getElementById('mem-viewer-alice').textContent =
+    "// Viewer 1: Alice (Full Membrane View)\n" +
+    JSON.stringify({{
+      viewer: "alice",
+      sturdyrefTokenHash: "0x91a4f8c2e01b37d5",
+      permits: ["read", "write", "reshare"],
+      visibleFields: {{ T: 28, secret_calibration_key: 4096, abbe_err_nm: 0 }},
+      reshareChain: RESHARE_HOPS
+    }}, null, 2);
+
+  document.getElementById('mem-viewer-bob').textContent =
+    "// Viewer 2: Bob / Delegate (Attenuated Membrane Projection)\n" +
+    JSON.stringify({{
+      viewer: "bob_delegate",
+      sturdyrefTokenHash: "0x3e77c012b9a54401",
+      distinctFromAlice: true,
+      permits: ["read"],
+      visibleFields: {{ T: 28, secret_calibration_key: "<REDACTED_BY_MEMBRANE>" }},
+      functorialRerenderCommutes: true
+    }}, null, 2);
+}}
+
+function updateReactivePreview() {{
+  fireReactiveSim();
+}}
+
+function fireReactiveSim() {{
+  const vaultVal = parseInt(document.getElementById('react-vault-val').value, 10) || 0;
+  const expOld = parseInt(document.getElementById('react-exp-old').value, 10) || 0;
+  const newVal = parseInt(document.getElementById('react-new-val').value, 10) || 0;
+  const curEpoch = parseInt(document.getElementById('react-cur-epoch').value, 10) || 0;
+  const maxEpoch = parseInt(document.getElementById('react-max-epoch').value, 10) || 0;
+  const auth = document.getElementById('react-auth').value;
+
+  const authOk = (auth === 'write');
+  const casOk = (expOld === vaultVal);
+  const epochOk = (curEpoch <= maxEpoch);
+  const lawOk = (newVal >= 15 && newVal <= 35);
+  const admitted = authOk && casOk && epochOk && lawOk;
+
+  let reason = 'ADMITTED: 3D ReactiveAffordance transition committed (T := ' + newVal + ')';
+  if (!authOk) reason = 'REFUSED (fireReactive_denied_refuses): Auth lacks .write permission';
+  else if (!casOk) reason = `REFUSED (fireReactive_wrong_old_refuses): CAS mismatch expectedOld(${{expOld}}) != currentVal(${{vaultVal}})`;
+  else if (!epochOk) reason = `REFUSED (fireReactive_after_deadline_refuses): currentEpoch(${{curEpoch}}) > deadlineEpoch(${{maxEpoch}})`;
+  else if (!lawOk) reason = `REFUSED (LawDial .locked): proposed newVal(${{newVal}}) outside T in [15, 35]`;
+
+  const badge = document.getElementById('mem-react-badge');
+  badge.textContent = admitted ? 'FIRED & ADMITTED' : 'REFUSED BY GUARD';
+  badge.className = 'badge ' + (admitted ? 'badge-certified' : 'badge-violation');
+
+  document.getElementById('mem-react-output').textContent = JSON.stringify({{
+    verdict: reason,
+    gates: {{
+      "1_capabilityAuth": authOk,
+      "2_causalCasExpectedOld": casOk,
+      "3_epochDeadlineWindow": epochOk,
+      "4_lawDialContract": lawOk
+    }},
+    resultingVaultValue: admitted ? newVal : vaultVal
+  }}, null, 2);
+}}
+
+renderCells();
+</script>
+</body>
+</html>"##,
+        initial_json = initial_json
+    )
+}
+
 fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchState>>) {
     let (method, raw_path, body) = match read_http_request(stream) {
         Ok(req) => req,
@@ -1310,6 +2044,11 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
     let path = raw_path.split('?').next().unwrap_or(&raw_path);
 
     match (method.as_str(), path) {
+        ("GET", "/") | ("GET", "/index.html") => {
+            let guard = state.lock().unwrap();
+            let html = render_interactive_workbench_spa(&guard);
+            write_html_response(stream, 200, "OK", &html);
+        }
         ("GET", "/notebook") => {
             let guard = state.lock().unwrap();
             let snap = guard.snapshot_response();
