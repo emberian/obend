@@ -59,6 +59,9 @@ Every decision a lane or reviewer addressed to Ember, with who took it and on wh
 
 | A split binds every field at a quantity the whole record allows (coarse); the per-field `FieldsTyping.cons` guard refused (rejects `{held = h}` at `linear Nat`; sound only under semantic shareability); direction: per-field graded record types (`Σ⊗`), next C2 pass, outside read before promotion | taken by Claude under standing approval, 2026-11-01 | `REPORT-C2-20261101.md` |
 
+| Recursive Lean definitions lower from their unfolding equation to a simply typed `fix` (recursive-δ in the source semantics), not by giving Core4 a type for the `Nat.below` tower | taken by Claude under standing approval, 2026-11-01 | `REPORT-LOWER-20261101.md` |
+| Lean4Lean is not a dependency yet: its theory has 9 `sorry`s and no inductive types at HEAD, and its kernel port does not build at 4.35; the connection theorem is stated as a rule table until upstream has ι | finding, 2026-11-01 | `REPORT-LOWER-20261101.md` |
+
 ## Still open
 
 | item | where it is written | size |
