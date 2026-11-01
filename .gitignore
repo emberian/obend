@@ -26,3 +26,4 @@ review/kimi-*.err
 review/kimi-*.pid
 review/kimi-brief-*
 review/kimi-run/
+hardware/sim/obj_dir/

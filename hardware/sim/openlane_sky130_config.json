@@ -1,0 +1,17 @@
+{
+  "DESIGN_NAME": "obend_silicon_top",
+  "VERILOG_FILES": [
+    "dir::obend_hw.sv",
+    "dir::obend_silicon_process.sv",
+    "dir::obend_efpga_fabric.sv"
+  ],
+  "CLOCK_PORT": "clk",
+  "CLOCK_PERIOD": 5.0,
+  "PDK": "sky130A",
+  "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+  "FP_CORE_UTIL": 45,
+  "PL_TARGET_DENSITY": 0.55,
+  "SYNTH_STRATEGY": "DELAY 1",
+  "CTS_CLK_MAX_WIRE_LENGTH": 250,
+  "ROUTING_CORES": 8
+}

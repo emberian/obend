@@ -210,6 +210,10 @@ import Obend.Equiv.Improvement
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
 import Obend.Fold
+import Obend.Hardware
+import Obend.Hardware.Fabric
+import Obend.Hardware.Process
+import Obend.Hardware.Silicon
 import Obend.Intention
 import Obend.Kind
 import Obend.Kind.Proofs
@@ -345,6 +349,7 @@ import Obend.Teeth.Core.AggregateTeeth
 import Obend.Teeth.Core.SpliceTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
+import Obend.Teeth.Hardware.SiliconTeeth
 import Obend.Teeth.Law.LawJudgeTeeth
 import Obend.Teeth.Law.MachineTeeth
 import Obend.Teeth.Law.TypingTeeth
