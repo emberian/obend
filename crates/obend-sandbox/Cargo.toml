@@ -1,0 +1,11 @@
+[package]
+name = "obend-sandbox"
+version = "0.1.0"
+edition = "2021"
+description = "Grain host Bubblewrap confinement runner for Obend"
+license = "Apache-2.0"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

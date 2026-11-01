@@ -25,3 +25,7 @@ public import Obend.Vault.Law
 public import Obend.Vault.Store
 public import Obend.Vault.Json
 public import Obend.Vault.Hyperedge
+public import Obend.Vault.Escrow
+public import Obend.Vault.Affordance
+public import Obend.Vault.Projection
+public import Obend.Vault.Mandate
