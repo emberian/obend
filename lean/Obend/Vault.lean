@@ -24,3 +24,4 @@ public import Obend.Vault.Page
 public import Obend.Vault.Law
 public import Obend.Vault.Store
 public import Obend.Vault.Json
+public import Obend.Vault.Hyperedge
