@@ -130,6 +130,13 @@ Inspired by `minidregg`'s Sandstorm grain architecture and DeOS `starbridge-v2`:
   - **`powerbox_attenuation_monotonic`**: Delegating a capability through the `Powerbox` can only **narrow** permissions (`Narrows attenuatedContract parentContract`), never widen them.
 - **`Mandate`**: Every autonomous subagent operates under a `Mandate`—a human-readable, machine-checked envelope bounding maximum asset spend (`Book`), allowed `SlotId` impact cone (`Obend/Vault/Impact.lean`), and maximum `Ticks` budget (`mandate_bounds_turn`).
 
+### 4.4 Rehydratable Membranes, `Sturdyref`, Derived Liveness-Types & 3D `ReactiveAffordance` (`Obend/Vault/Rehydration.lean`)
+Absorbing `REHYDRATABLE-SURFACES.md` and `Dregg2/Deos/{Rehydration,Rerender,Reactive}.lean`:
+- **The Derived `Rehydration` Liveness-Type (`Live | ReplayedDeterministic | ReconstructedApproximate`)**: Computed directly from a context's `InteractionLog` (`classify log reachable`). **`replayedDeterministic_iff_confined`** proves that for a non-`Live` context, `ReplayedDeterministic` holds *if and only if* every external interaction was a structurally holding attested turn inside the membrane (`confined log = true`), and **`replayedDeterministic_replays`** proves that its replayed receipt chain is both tamper-evident and complete (`confined_chain_covers_log` vs. `unconfined_chain_drops_interactions`).
+- **`Sturdyref` & Chained Multi-Hop `Membrane.reshare`**: A rendered frame or `.obnb` snapshot embeds a `Sturdyref` behind a relational `Membrane` (`membrane_two_viewers_distinct`). Chained reacquisitions ($A \to B \to C$) compose attenuation via `Membrane.reshare` (`reshare_chain_attenuates`, `amplifying_reshare_refused`, `reshare_chain_blocks_delayed_permits_amplification`).
+- **The Functorial Rerender Square & Frustum-Snapshot Re-Expansion**: Proves `rerender_square` (`projectFor held (stepContent f affs) = stepContent f (projectFor held affs)`) and `snapshot_roundtrip_attenuated` (rehydrating one snapshot for two viewers re-expands into each viewer's own confined, liveness-typed interactive surface).
+- **3-Dimensional `ReactiveAffordance` (`TransitionGate` + `[openHeight, closeHeight]` Window + `Membrane`)**: Gates action firing on WHO (`fireGate`), WHAT TRANSITION (`TransitionGate`: `pre old ∧ post new ∧ link old new`), and WHEN (`[openHeight, closeHeight]`), verified with 6 cross-polarity teeth (`fireReactive_iff`, `fireReactive_wrong_old_refuses`, `fireReactive_after_deadline_refuses`).
+
 ---
 
 ## 5. The 4-Tier Finality Ladder: From Local CRDT to Symbolic `Simplex` BFT & `EpistemicConsensus`

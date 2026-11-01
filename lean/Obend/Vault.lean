@@ -29,3 +29,4 @@ public import Obend.Vault.Escrow
 public import Obend.Vault.Affordance
 public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
+public import Obend.Vault.Rehydration

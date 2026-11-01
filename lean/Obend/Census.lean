@@ -451,6 +451,7 @@ import Obend.Vault.Escrow
 import Obend.Vault.Affordance
 import Obend.Vault.Projection
 import Obend.Vault.Mandate
+import Obend.Vault.Rehydration
 import Obend.Vault.HardwareProjection
 import Obend.Vault.PhysicalProjection
 import Obend.Consensus
