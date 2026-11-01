@@ -267,6 +267,9 @@ import Obend.Logic.Rewrite
 import Obend.Lower.Syntax
 import Obend.Lower.Fragment
 import Obend.Lower.Semantics
+import Obend.Lower.Lower
+import Obend.Lower.Typing
+import Obend.Lower.Proofs.Checks
 import Obend.Main
 import Obend.Receipt
 import Obend.Receipt.Cli
