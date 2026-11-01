@@ -1,0 +1,150 @@
+use crate::error::ObendError;
+use crate::pool::ensure_lean_thread_initialized;
+use crate::sys;
+use std::ptr;
+
+pub struct ObendSession {
+    handle: *mut sys::Session,
+}
+
+unsafe impl Send for ObendSession {}
+
+impl ObendSession {
+    pub fn new() -> Result<Self, ObendError> {
+        Self::with_config(&[])
+    }
+
+    pub fn with_config(config: &[u8]) -> Result<Self, ObendError> {
+        ensure_lean_thread_initialized();
+        let handle = unsafe {
+            sys::obend_session_init(
+                if config.is_empty() { ptr::null() } else { config.as_ptr() },
+                config.len(),
+            )
+        };
+        if handle.is_null() {
+            Err(ObendError::InitializationFailed)
+        } else {
+            Ok(Self { handle })
+        }
+    }
+
+    pub fn eval_cell(&mut self, cell_bytes: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_eval_cell(
+                self.handle,
+                cell_bytes.as_ptr(),
+                cell_bytes.len(),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            Ok(slice.to_vec())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
+    pub fn propose_turn(&mut self, turn_bytes: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_turn_propose(
+                self.handle,
+                turn_bytes.as_ptr(),
+                turn_bytes.len(),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            Ok(slice.to_vec())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
+    pub fn commit_turn(&mut self, turn_id: &[u8]) -> Result<(), ObendError> {
+        ensure_lean_thread_initialized();
+        let rc = unsafe {
+            sys::obend_turn_commit(self.handle, turn_id.as_ptr(), turn_id.len())
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
+    pub fn project_hardware(&mut self, hw_bytes: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_project_hardware(
+                self.handle,
+                hw_bytes.as_ptr(),
+                hw_bytes.len(),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            Ok(slice.to_vec())
+        } else {
+            Err(self.last_error_or(ObendError::from_code(rc)))
+        }
+    }
+
+    pub fn verify_receipt(&mut self, receipt_bytes: &[u8]) -> Result<bool, ObendError> {
+        ensure_lean_thread_initialized();
+        let rc = unsafe {
+            sys::obend_verify_receipt(self.handle, receipt_bytes.as_ptr(), receipt_bytes.len())
+        };
+        match rc {
+            0 => Ok(true),
+            -8 => Ok(false),
+            code => Err(self.last_error_or(ObendError::from_code(code))),
+        }
+    }
+
+    pub fn get_last_error(&self) -> String {
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            sys::obend_get_last_error(self.handle, &mut out_ptr, &mut out_len)
+        };
+        if rc == 0 && !out_ptr.is_null() && out_len > 0 {
+            let slice = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+            String::from_utf8_lossy(slice).into_owned()
+        } else {
+            String::new()
+        }
+    }
+
+    fn last_error_or(&self, default: ObendError) -> ObendError {
+        let msg = self.get_last_error();
+        if msg.is_empty() {
+            default
+        } else {
+            ObendError::WithDetail(Box::new(default), msg)
+        }
+    }
+}
+
+impl Drop for ObendSession {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { sys::obend_session_free(self.handle) };
+            self.handle = ptr::null_mut();
+        }
+    }
+}

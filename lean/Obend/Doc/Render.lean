@@ -180,6 +180,7 @@ theorem renderAt_fresh (H : Hash) {W : World} {p : PageId} {G : Graph} (hG : W.c
       simp only [this]
     | text => rfl
     | field => rfl
+    | cell => rfl
 
 /-! ### Teeth -/
 

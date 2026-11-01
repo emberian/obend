@@ -8,6 +8,8 @@ stored whole: its page, span, version, mode and byte commitment (hex), so a pinn
 checkable against the version it names.
 -/
 public import Obend.Vault.Store
+public import Obend.Doc.Structured
+public import Obend.Spec.DataWire
 public import Lean.Data.Json
 @[expose] public section
 
@@ -61,23 +63,49 @@ def contentJson : Content → Json
       ("v", toJson c.version), ("h", hex c.commitment),
       ("mode", if c.mode == .pinned then "pinned" else "following")]
   | .field n v => Json.mkObj [("f", n), ("value", v)]
+  | .cell id k ast pins receipt => Json.mkObj [
+      ("cell", toJson id),
+      ("kind", toJson (ProjectionKind.toLabel k)),
+      ("ast", Obend.Spec.DataWire.dataJson ast),
+      ("pins", Json.arr (pins.map fun p => Json.mkObj [("name", toJson p.1), ("hash", toJson (byteArrayToHex p.2))]).toArray),
+      ("receipt", match receipt with | some r => toJson (byteArrayToHex r) | none => Json.null)
+    ]
 
 def contentOf (j : Json) : Except String Content :=
-  match j.getObjValAs? String "t" with
-  | .ok s => .ok (.text s)
-  | .error _ => match j.getObjValAs? String "c" with
-    | .ok n => do
-      let page ← j.getObjValAs? Nat "page"
-      let span ← spanOf (← j.getObjVal? "span")
-      let v ← j.getObjValAs? Nat "v"
-      let h ← j.getObjValAs? String "h"
-      let some bytes := unhex h.toList | .error "bad commitment"
-      let mode ← j.getObjValAs? String "mode"
-      .ok (.cite n ⟨page, span, v, bytes, if mode == "pinned" then .pinned else .following⟩)
-    | .error _ => do
-      let n ← j.getObjValAs? String "f"
-      let v ← j.getObjValAs? String "value"
-      .ok (.field n v)
+  match j.getObjValAs? String "cell" with
+  | .ok id => do
+    let kindStr ← j.getObjValAs? String "kind"
+    let some kind := ProjectionKind.ofLabel kindStr | .error "unknown projection kind"
+    let astJson ← j.getObjVal? "ast"
+    let ast ← Obend.Spec.DataWire.decodeData 100 astJson
+    let pinsJson ← j.getObjValAs? (Array Json) "pins"
+    let pins ← pinsJson.toList.mapM fun pj => do
+      let name ← pj.getObjValAs? String "name"
+      let h ← pj.getObjValAs? String "hash"
+      let some bytes := hexToByteArray h | .error "bad pin hash"
+      return (name, bytes)
+    let receipt ← match j.getObjVal? "receipt" with
+      | .ok (.str r) => match hexToByteArray r with
+        | some b => pure (some b)
+        | none => .error "bad receipt hex"
+      | _ => pure none
+    .ok (.cell id kind ast pins receipt)
+  | .error _ =>
+    match j.getObjValAs? String "t" with
+    | .ok s => .ok (.text s)
+    | .error _ => match j.getObjValAs? String "c" with
+      | .ok n => do
+        let page ← j.getObjValAs? Nat "page"
+        let span ← spanOf (← j.getObjVal? "span")
+        let v ← j.getObjValAs? Nat "v"
+        let h ← j.getObjValAs? String "h"
+        let some bytes := unhex h.toList | .error "bad commitment"
+        let mode ← j.getObjValAs? String "mode"
+        .ok (.cite n ⟨page, span, v, bytes, if mode == "pinned" then .pinned else .following⟩)
+      | .error _ => do
+        let n ← j.getObjValAs? String "f"
+        let v ← j.getObjValAs? String "value"
+        .ok (.field n v)
 
 def graphJson (G : Graph) : Json :=
   Json.mkObj [

@@ -22,6 +22,8 @@ that store the same facts in a different list order are the same page.
 condition `Closed` checks. Statements about a concrete page discharge `Closed` by `decide`; the
 general completeness of the bounded cone (a pigeonhole on the edge count) is not proved here.
 -/
+public import Obend.Core.Data
+public import Obend.Run.Core4
 public section
 
 namespace Obend.Doc
@@ -73,6 +75,31 @@ structure Cite where
   mode : Mode
 deriving DecidableEq, Repr
 
+/-- Constructive decidable equality on `ByteArray`. -/
+def decByteArray (a b : ByteArray) : Decidable (a = b) :=
+  match decEq a.data b.data with
+  | isTrue h => isTrue (by cases a; cases b; simp at h; subst h; rfl)
+  | isFalse h => isFalse (by intro e; cases e; exact h rfl)
+
+instance : DecidableEq ByteArray := decByteArray
+
+instance : Repr ByteArray where
+  reprPrec b p := reprPrec b.data p
+
+/-- Discriminated structured cell projection kinds (Milestone 5 Feature 34). -/
+inductive ProjectionKind where
+  | prose
+  | obendCode
+  | casSymbolic
+  | leanBridge
+  | lawContract
+  | deosAffordance
+  | hardwareSchematic
+  | hardwareTiming
+  | hardwareLayout
+  | ledgerSeat
+deriving @[expose] DecidableEq, Repr
+
 /-- What an atom carries. -/
 inductive Content
   /-- a run of text -/
@@ -81,6 +108,9 @@ inductive Content
   | cite (name : String) (c : Cite)
   /-- an assignment to a single-valued field (outside the order: it has no edges) -/
   | field (name value : String)
+  /-- a structured quotation cell carrying Core.Data, footprint pins, and Merkle receipt -/
+  | cell (id : String) (kind : ProjectionKind) (ast : Obend.Core.Data.Data)
+         (pins : List (String × ByteArray)) (receipt : Option ByteArray)
 deriving @[expose] DecidableEq, Repr
 
 /-- A page's state. -/

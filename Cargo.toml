@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/obend-sandbox",
+    "crates/obend-ffi",
+    "crates/obend-gui",
+]
+resolver = "2"

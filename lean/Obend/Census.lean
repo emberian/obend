@@ -188,6 +188,7 @@ import Obend.Doc.Merge
 import Obend.Doc.Patch
 import Obend.Doc.Render
 import Obend.Doc.Section
+import Obend.Doc.Structured
 import Obend.Elab
 import Obend.Elab.Coerce
 import Obend.Elab.Gate
@@ -432,11 +433,13 @@ import Obend.Vault.Escrow
 import Obend.Vault.Affordance
 import Obend.Vault.Projection
 import Obend.Vault.Mandate
+import Obend.Vault.HardwareProjection
 import Obend.Consensus
 import Obend.Consensus.Simplex
 import Obend.Consensus.Finality
 import Obend.Consensus.Epistemic
 import Obend.Fold.Collapse
+import Obend.FFI.Bridge
 
 open Lean Elab Command in
 run_cmd do
