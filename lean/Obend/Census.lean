@@ -264,6 +264,8 @@ import Obend.Logic.Obligation
 import Obend.Logic.Program
 import Obend.Logic.Receipt
 import Obend.Logic.Rewrite
+import Obend.Lower.Syntax
+import Obend.Lower.Fragment
 import Obend.Main
 import Obend.Receipt
 import Obend.Receipt.Cli
