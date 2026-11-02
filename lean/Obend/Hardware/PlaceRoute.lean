@@ -154,15 +154,15 @@ theorem routing_disjoint_no_short
 /-! ## 3. Elmore RC Interconnect Delay & Timing Signoff (`computeElmoreDelayPs`) -/
 
 /-- Total downstream capacitance $\sum C_i$ (in $\text{fF}$) of a PIP hop chain plus load `sinkCapFf`. -/
-def downstreamCapFf (sinkCapFf : Nat) : List PipHop → Nat
+def pipDownstreamCapFf (sinkCapFf : Nat) : List PipHop → Nat
   | [] => sinkCapFf
-  | h :: rest => h.capFf + downstreamCapFf sinkCapFf rest
+  | h :: rest => h.capFf + pipDownstreamCapFf sinkCapFf rest
 
 /-- Distributed Elmore RC delay $\sum_{e} R_e \cdot C_{\text{downstream}}(e)$ (in $\text{fF}\cdot\Omega = \text{fs}$). -/
 def computeElmoreDelayFs (sinkCapFf : Nat) : List PipHop → Nat
   | [] => 0
   | h :: rest =>
-    let cDown := h.capFf + downstreamCapFf sinkCapFf rest
+    let cDown := h.capFf + pipDownstreamCapFf sinkCapFf rest
     (h.resOhm * cDown) + computeElmoreDelayFs sinkCapFf rest
 
 /-- Convert Elmore delay from femtoseconds ($\text{fF}\cdot\Omega$) to picoseconds (ceiling division by 1000). -/
@@ -307,5 +307,151 @@ theorem pnr_certificate_verification_poles :
     checkPnrCertificate corner7nm_SS 2000 collidingBelPnrCert = false ∧
     checkPnrCertificate corner7nm_SS 2000 shortedWirePnrCert = false :=
   ⟨rfl, rfl, rfl⟩
+
+/-! ## 6. Multi-Sink Steiner Fanout Trees & Exact Recursive Elmore RC Delay (`SteinerTree`) -/
+
+/-- Multi-sink Steiner routing tree modeling high-fanout clock/data interconnects:
+* `.sink wireId loadCapFf`: leaf receiver pin with input gate capacitance `loadCapFf` ($\text{fF}$),
+* `.branch wireId segResOhm segCapFf left right`: internal wire segment of resistance `segResOhm` ($\Omega$)
+  and lumped capacitance `segCapFf` ($\text{fF}$) driving subtrees `left` and `right`. -/
+inductive SteinerTree where
+  | sink (wireId : Nat) (loadCapFf : Nat)
+  | branch (wireId : Nat) (segResOhm segCapFf : Nat) (left right : SteinerTree)
+  deriving DecidableEq, Repr
+
+/-- Exact total downstream lump capacitance $C_{\text{down}}(u)$ (in $\text{fF}$) of a `SteinerTree`:
+$$C_{\text{down}}(u) = C_{\text{seg}}(u) + C_{\text{down}}(\text{left}) + C_{\text{down}}(\text{right}).$$ -/
+def downstreamCapFf : SteinerTree → Nat
+  | .sink _ loadCapFf => loadCapFf
+  | .branch _ _ segCapFf left right =>
+    segCapFf + downstreamCapFf left + downstreamCapFf right
+
+/-- Exact worst-case root-to-sink Elmore RC delay (in $\text{fF}\cdot\Omega = \text{fs}$) of a `SteinerTree`:
+$$T_{\text{Elmore}}(u) = R_{\text{seg}}(u) \cdot C_{\text{down}}(u) + \max(T_{\text{Elmore}}(\text{left}), T_{\text{Elmore}}(\text{right})).$$ -/
+def maxSteinerElmoreDelayFsOhm : SteinerTree → Nat
+  | .sink _ _ => 0
+  | .branch _ segResOhm segCapFf left right =>
+    let cDown := segCapFf + downstreamCapFf left + downstreamCapFf right
+    segResOhm * cDown + max (maxSteinerElmoreDelayFsOhm left) (maxSteinerElmoreDelayFsOhm right)
+
+/-- Convert worst-case Steiner Elmore delay from femtoseconds ($\text{fF}\cdot\Omega$) to picoseconds. -/
+def maxSteinerElmoreDelayPs (t : SteinerTree) : Nat :=
+  (maxSteinerElmoreDelayFsOhm t + 999) / 1000
+
+/-- Check whether a multi-sink `SteinerTree` meets setup timing closure at `corner` within `clockPeriodPs`. -/
+def checkSteinerTimingClosure (corner : ProcessCorner) (clockPeriodPs : Nat) (t : SteinerTree) : Bool :=
+  let wireDelayPs := maxSteinerElmoreDelayPs t
+  decide (corner.tCqMaxPs + corner.tGateMaxPs + wireDelayPs + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs)
+
+/-- Add `deltaCapFf` of load capacitance to every leaf sink in a `SteinerTree`. -/
+def inflateSinkLoads (deltaCapFf : Nat) : SteinerTree → SteinerTree
+  | .sink wireId loadCapFf => .sink wireId (loadCapFf + deltaCapFf)
+  | .branch wireId segResOhm segCapFf left right =>
+    .branch wireId segResOhm segCapFf
+      (inflateSinkLoads deltaCapFf left)
+      (inflateSinkLoads deltaCapFf right)
+
+/-- **Theorem (`downstreamCapFf_monotone_load`)**:
+Increasing leaf sink load capacitance by `deltaCapFf` across any `SteinerTree` monotonically
+increases (or preserves) both the total downstream lump capacitance `downstreamCapFf` and the
+worst-case root-to-sink Elmore delay `maxSteinerElmoreDelayFsOhm`. -/
+theorem downstreamCapFf_monotone_load (deltaCapFf : Nat) (t : SteinerTree) :
+    downstreamCapFf t ≤ downstreamCapFf (inflateSinkLoads deltaCapFf t) ∧
+    maxSteinerElmoreDelayFsOhm t ≤ maxSteinerElmoreDelayFsOhm (inflateSinkLoads deltaCapFf t) := by
+  induction t with
+  | sink wireId loadCapFf =>
+    simp only [downstreamCapFf, inflateSinkLoads, maxSteinerElmoreDelayFsOhm]
+    omega
+  | branch wireId segResOhm segCapFf left right ihl ihr =>
+    simp only [downstreamCapFf, inflateSinkLoads, maxSteinerElmoreDelayFsOhm]
+    have hCapLe :
+        segCapFf + downstreamCapFf left + downstreamCapFf right ≤
+          segCapFf + downstreamCapFf (inflateSinkLoads deltaCapFf left) +
+            downstreamCapFf (inflateSinkLoads deltaCapFf right) := by
+      omega
+    have hMulLe :
+        segResOhm * (segCapFf + downstreamCapFf left + downstreamCapFf right) ≤
+          segResOhm *
+            (segCapFf + downstreamCapFf (inflateSinkLoads deltaCapFf left) +
+              downstreamCapFf (inflateSinkLoads deltaCapFf right)) :=
+      Nat.mul_le_mul_left segResOhm hCapLe
+    constructor
+    · exact hCapLe
+    · omega
+
+/-- **Theorem (`maxSteinerElmoreDelay_nonneg`)**:
+For any `t : SteinerTree`, the worst-case Elmore RC delay is non-negative, and at any `.branch`
+node it is bounded below by the trunk segment's $R_{\text{seg}} \cdot C_{\text{down}}$ product and
+by both child subtrees' Elmore delays. -/
+theorem maxSteinerElmoreDelay_nonneg (t : SteinerTree) :
+    0 ≤ maxSteinerElmoreDelayFsOhm t ∧
+    match t with
+    | .sink _ _ => maxSteinerElmoreDelayFsOhm t = 0
+    | .branch w r c l rgt =>
+      r * downstreamCapFf (.branch w r c l rgt) ≤ maxSteinerElmoreDelayFsOhm (.branch w r c l rgt) ∧
+      maxSteinerElmoreDelayFsOhm l ≤ maxSteinerElmoreDelayFsOhm (.branch w r c l rgt) ∧
+      maxSteinerElmoreDelayFsOhm rgt ≤ maxSteinerElmoreDelayFsOhm (.branch w r c l rgt) := by
+  refine ⟨Nat.zero_le _, ?_⟩
+  cases t with
+  | sink w c => rfl
+  | branch w r c l rgt =>
+    simp only [maxSteinerElmoreDelayFsOhm, downstreamCapFf]
+    omega
+
+/-- Insert a repeater buffer with input gate capacitance `bufInputCapFf` at the right fanout branch
+of a 2-branch `SteinerTree`, electrically decoupling the heavy right subtree from the upstream trunk. -/
+def decoupleRightBranchWithBuffer (bufWireId bufInputCapFf : Nat) : SteinerTree → SteinerTree
+  | .sink w c => .sink w c
+  | .branch w r c left _right =>
+    .branch w r c left (.sink bufWireId bufInputCapFf)
+
+/-- Unbuffered 2-branch Steiner clock/data fanout tree:
+* Global trunk driver segment (`wireId = 0`, `R = 2000 Ω`, `C = 50 fF`),
+* Left critical sink (`wireId = 1`, `C_load = 100 fF`),
+* Right high-capacitance fanout branch (`wireId = 2`, `R = 1500 Ω`, `C = 100 fF`, driving two `400 fF`
+  sinks for a total right-branch lump load of `900 fF` and total trunk load `1050 fF`). -/
+def unbufferedFanoutTree : SteinerTree :=
+  .branch 0 2000 50
+    (.sink 1 100)
+    (.branch 2 1500 100 (.sink 3 400) (.sink 4 400))
+
+/-- Buffered 2-branch Steiner fanout tree where a repeater buffer (`bufInputCapFf = 25 fF`) isolates
+the heavy right subtree (`900 fF`) from the upstream trunk driver (`175 fF` total trunk load). -/
+def bufferedFanoutTree : SteinerTree :=
+  decoupleRightBranchWithBuffer 2 25 unbufferedFanoutTree
+
+/-- **Theorem (`steiner_fanout_buffer_insertion_reduces_elmore_delay`)**:
+1. On the concrete 2-branch clock/data tree `unbufferedFanoutTree`, inserting a repeater buffer
+   (`bufferedFanoutTree`) strictly reduces total upstream lump capacitance (`175 fF < 1050 fF`),
+   strictly reduces root-to-sink Elmore RC delay (`350000 fs < 3450000 fs`, i.e. `350 ps < 3450 ps`),
+   and flips 500 MHz (`2000 ps`) timing closure from `false` (`unbufferedFanoutTree`) to `true` (`bufferedFanoutTree`)!
+2. Universally, for any trunk `.branch w r c left right` with `0 < r` and `bufCap < downstreamCapFf right`,
+   decoupling the right branch with a repeater of input capacitance `bufCap` strictly reduces both
+   `downstreamCapFf` and `maxSteinerElmoreDelayFsOhm`. -/
+theorem steiner_fanout_buffer_insertion_reduces_elmore_delay :
+    downstreamCapFf bufferedFanoutTree < downstreamCapFf unbufferedFanoutTree ∧
+    maxSteinerElmoreDelayFsOhm bufferedFanoutTree < maxSteinerElmoreDelayFsOhm unbufferedFanoutTree ∧
+    checkSteinerTimingClosure corner7nm_SS 2000 unbufferedFanoutTree = false ∧
+    checkSteinerTimingClosure corner7nm_SS 2000 bufferedFanoutTree = true ∧
+    (∀ (w r c bufW bufCap : Nat) (left right : SteinerTree),
+      0 < r →
+      bufCap < downstreamCapFf right →
+      downstreamCapFf (decoupleRightBranchWithBuffer bufW bufCap (.branch w r c left right)) <
+        downstreamCapFf (.branch w r c left right) ∧
+      maxSteinerElmoreDelayFsOhm (decoupleRightBranchWithBuffer bufW bufCap (.branch w r c left right)) <
+        maxSteinerElmoreDelayFsOhm (.branch w r c left right)) := by
+  refine ⟨by decide, by decide, by decide, by decide, ?_⟩
+  intro w r c bufW bufCap left right hRPos hBufLt
+  simp only [decoupleRightBranchWithBuffer, downstreamCapFf, maxSteinerElmoreDelayFsOhm]
+  have hCapStrict :
+      c + downstreamCapFf left + bufCap < c + downstreamCapFf left + downstreamCapFf right := by
+    omega
+  have hMulStrict :
+      r * (c + downstreamCapFf left + bufCap) <
+        r * (c + downstreamCapFf left + downstreamCapFf right) :=
+    Nat.mul_lt_mul_of_pos_left hCapStrict hRPos
+  constructor
+  · exact hCapStrict
+  · omega
 
 end Obend.Hardware.PlaceRoute

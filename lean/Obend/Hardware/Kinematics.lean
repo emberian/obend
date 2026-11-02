@@ -549,6 +549,154 @@ theorem ruckig_7phase_symmetric_rest_to_rest
     Int.mul_pos hPeakVel hDur
   omega
 
+/-! ## 7. Serial Kinematic Chain Forward Twist Propagator (`propagateSerialChainTwists`) -/
+
+/-- Propagates and accumulates relative 6D joint motion twists $v_{\text{tip}} = \sum_{i=1}^N v_i \in \mathfrak{se}(3)$
+along an $N$-link serial kinematic chain (`List SpatialTwist6D`). -/
+def propagateSerialChainTwists : List SpatialTwist6D → SpatialTwist6D
+  | [] => SpatialTwist6D.zero
+  | v :: rest => SpatialTwist6D.add v (propagateSerialChainTwists rest)
+
+theorem Vec3.add_zero (a : Vec3) : Vec3.add a Vec3.zero = a := by
+  cases a
+  dsimp only [Vec3.add, Vec3.zero]
+  congr 1 <;> omega
+
+theorem Vec3.zero_add (a : Vec3) : Vec3.add Vec3.zero a = a := by
+  cases a
+  dsimp only [Vec3.add, Vec3.zero]
+  congr 1 <;> omega
+
+theorem Vec3.add_assoc (a b c : Vec3) :
+    Vec3.add (Vec3.add a b) c = Vec3.add a (Vec3.add b c) := by
+  cases a; cases b; cases c
+  dsimp only [Vec3.add]
+  congr 1 <;> omega
+
+theorem Vec3.scale_zero (s : Int) : Vec3.scale s Vec3.zero = Vec3.zero := by
+  dsimp only [Vec3.scale, Vec3.zero]
+  congr 1 <;> omega
+
+theorem Vec3.scale_add (s : Int) (a b : Vec3) :
+    Vec3.scale s (Vec3.add a b) = Vec3.add (Vec3.scale s a) (Vec3.scale s b) := by
+  cases a; cases b
+  dsimp only [Vec3.scale, Vec3.add]
+  congr 1 <;> grind
+
+theorem SpatialTwist6D.add_zero (v : SpatialTwist6D) :
+    SpatialTwist6D.add v SpatialTwist6D.zero = v := by
+  cases v
+  dsimp only [SpatialTwist6D.add, SpatialTwist6D.zero]
+  rw [Vec3.add_zero, Vec3.add_zero]
+
+theorem SpatialTwist6D.zero_add (v : SpatialTwist6D) :
+    SpatialTwist6D.add SpatialTwist6D.zero v = v := by
+  cases v
+  dsimp only [SpatialTwist6D.add, SpatialTwist6D.zero]
+  rw [Vec3.zero_add, Vec3.zero_add]
+
+theorem SpatialTwist6D.add_assoc (u v w : SpatialTwist6D) :
+    SpatialTwist6D.add (SpatialTwist6D.add u v) w =
+      SpatialTwist6D.add u (SpatialTwist6D.add v w) := by
+  cases u; cases v; cases w
+  dsimp only [SpatialTwist6D.add]
+  rw [Vec3.add_assoc, Vec3.add_assoc]
+
+theorem SpatialTwist6D.scale_zero (s : Int) :
+    SpatialTwist6D.scale s SpatialTwist6D.zero = SpatialTwist6D.zero := by
+  dsimp only [SpatialTwist6D.scale, SpatialTwist6D.zero]
+  rw [Vec3.scale_zero]
+
+theorem SpatialTwist6D.scale_add (s : Int) (u v : SpatialTwist6D) :
+    SpatialTwist6D.scale s (SpatialTwist6D.add u v) =
+      SpatialTwist6D.add (SpatialTwist6D.scale s u) (SpatialTwist6D.scale s v) := by
+  cases u; cases v
+  dsimp only [SpatialTwist6D.scale, SpatialTwist6D.add]
+  rw [Vec3.scale_add, Vec3.scale_add]
+
+/-- **Serial Chain Twist Concatenation Additivity (`propagateSerialChainTwists_append`)**:
+Propagating joint twists along a concatenated kinematic chain `chain1 ++ chain2` equals the
+spatial sum of the sub-chain twists. -/
+theorem propagateSerialChainTwists_append
+    (chain1 chain2 : List SpatialTwist6D) :
+    propagateSerialChainTwists (chain1 ++ chain2) =
+      SpatialTwist6D.add (propagateSerialChainTwists chain1) (propagateSerialChainTwists chain2) := by
+  induction chain1 with
+  | nil =>
+    dsimp only [List.nil_append, propagateSerialChainTwists]
+    rw [SpatialTwist6D.zero_add]
+  | cons v rest ih =>
+    dsimp only [List.cons_append, propagateSerialChainTwists]
+    rw [ih, SpatialTwist6D.add_assoc]
+
+/-- **Serial Chain Twist Velocity Scaling Linearity (`propagateSerialChainTwists_scale`)**:
+Uniformly scaling all joint twists in `chain` by `s` scales the propagated end-effector twist by `s`. -/
+theorem propagateSerialChainTwists_scale
+    (s : Int) (chain : List SpatialTwist6D) :
+    propagateSerialChainTwists (chain.map (SpatialTwist6D.scale s)) =
+      SpatialTwist6D.scale s (propagateSerialChainTwists chain) := by
+  induction chain with
+  | nil =>
+    dsimp only [List.map, propagateSerialChainTwists]
+    rw [SpatialTwist6D.scale_zero]
+  | cons v rest ih =>
+    dsimp only [List.map, propagateSerialChainTwists]
+    rw [ih, SpatialTwist6D.scale_add]
+
+theorem Vec3.add_comm (a b : Vec3) : Vec3.add a b = Vec3.add b a := by
+  cases a; cases b
+  dsimp only [Vec3.add]
+  congr 1 <;> omega
+
+theorem SpatialTwist6D.add_comm (u v : SpatialTwist6D) :
+    SpatialTwist6D.add u v = SpatialTwist6D.add v u := by
+  dsimp only [SpatialTwist6D.add]
+  rw [Vec3.add_comm u.ang v.ang, Vec3.add_comm u.lin v.lin]
+
+theorem SpatialTwist6D.add_add_add_comm (a b c d : SpatialTwist6D) :
+    SpatialTwist6D.add (SpatialTwist6D.add a b) (SpatialTwist6D.add c d) =
+      SpatialTwist6D.add (SpatialTwist6D.add a c) (SpatialTwist6D.add b d) := by
+  rw [SpatialTwist6D.add_assoc, ← SpatialTwist6D.add_assoc b c d,
+      SpatialTwist6D.add_comm b c, SpatialTwist6D.add_assoc c b d,
+      ← SpatialTwist6D.add_assoc]
+
+/-- **Pointwise Joint-Twist Superposition Additivity (`propagateSerialChainTwists_zipWith_add`)**:
+For any two joint-twist profiles `chain1` and `chain2` of equal length (`chain1.length = chain2.length`),
+propagating the pointwise sum `List.zipWith SpatialTwist6D.add chain1 chain2` equals the spatial sum
+of the individually propagated end-effector twists. -/
+theorem propagateSerialChainTwists_zipWith_add
+    (chain1 chain2 : List SpatialTwist6D)
+    (hLen : chain1.length = chain2.length) :
+    propagateSerialChainTwists (List.zipWith SpatialTwist6D.add chain1 chain2) =
+      SpatialTwist6D.add (propagateSerialChainTwists chain1) (propagateSerialChainTwists chain2) := by
+  induction chain1 generalizing chain2 with
+  | nil =>
+    cases chain2 with
+    | nil =>
+      dsimp only [List.zipWith, propagateSerialChainTwists]
+      rw [SpatialTwist6D.zero_add]
+    | cons _ _ => contradiction
+  | cons u1 rest1 ih =>
+    cases chain2 with
+    | nil => contradiction
+    | cons u2 rest2 =>
+      dsimp only [List.zipWith, propagateSerialChainTwists]
+      have hRestLen : rest1.length = rest2.length := by
+        simp only [List.length_cons] at hLen
+        omega
+      rw [ih rest2 hRestLen, SpatialTwist6D.add_add_add_comm]
+
+/-- **Virtual Mechanical Power Additivity Across Serial Kinematic Chains
+(`spatialPower_propagateSerialChainTwists_append`)**:
+For any tip wrench `f` and concatenated serial twist chain `chain1 ++ chain2`, the virtual
+mechanical power $\langle f, v_{\text{tip}} \rangle$ distributes additively across `chain1` and `chain2`. -/
+theorem spatialPower_propagateSerialChainTwists_append
+    (f : SpatialWrench6D) (chain1 chain2 : List SpatialTwist6D) :
+    spatialPower f (propagateSerialChainTwists (chain1 ++ chain2)) =
+      spatialPower f (propagateSerialChainTwists chain1) +
+      spatialPower f (propagateSerialChainTwists chain2) := by
+  rw [propagateSerialChainTwists_append, spatialPower_bilinear_add_right]
+
 end Obend.Hardware.Kinematics
 end
 

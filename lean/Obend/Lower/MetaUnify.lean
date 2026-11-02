@@ -611,5 +611,187 @@ theorem metaUnify_occurs_check_and_scope_refusal :
     millerPatternUnify? sampleMetaCtx 8 0 [.fvar 10] (.fvar 99) = none :=
   ⟨rfl, rfl, rfl⟩
 
+/-! ## 8. `ExprCAM` Bit-58/59 $O(1)$ Scope Filter, Transitive MVar Chain Compression & Ternary Miller Unification -/
+
+/-- Extract hardware bit 58 (`hasFVar`) from a 64-bit `ExprCAM` node word (`mkExprCamWord64`)
+for $O(1)$ hardware scope/occurs filtering. -/
+def checkMVarOccursBit58 (w : BitVec 64) : Bool :=
+  (unpackCamWord64 w).hasFVar
+
+/-- Extract hardware bit 59 (`looseBVar`) from a 64-bit `ExprCAM` node word (`mkExprCamWord64`). -/
+def checkLooseBVarBit59 (w : BitVec 64) : Bool :=
+  (unpackCamWord64 w).looseBVar
+
+/-- When `KExpr.hasFVar e = false` (bit 58 = `0`), `scopeCheckFVars allowedFVars e = true` holds
+automatically for any allowed local context without traversing `e`. -/
+theorem scopeCheckFVars_of_hasFVar_false (allowedFVars : List Nat) : ∀ (e : KExpr),
+    KExpr.hasFVar e = false →
+    scopeCheckFVars allowedFVars e = true
+  | .bvar _, _ => rfl
+  | .fvar _, h => by simp [KExpr.hasFVar] at h
+  | .sort _, _ => rfl
+  | .const _ _, _ => rfl
+  | .app f a, h => by
+    simp only [KExpr.hasFVar, Bool.or_eq_false_iff] at h
+    simp [scopeCheckFVars, scopeCheckFVars_of_hasFVar_false allowedFVars f h.1,
+      scopeCheckFVars_of_hasFVar_false allowedFVars a h.2]
+  | .lam d b, h => by
+    simp only [KExpr.hasFVar, Bool.or_eq_false_iff] at h
+    simp [scopeCheckFVars, scopeCheckFVars_of_hasFVar_false allowedFVars d h.1,
+      scopeCheckFVars_of_hasFVar_false allowedFVars b h.2]
+  | .forallE d b, h => by
+    simp only [KExpr.hasFVar, Bool.or_eq_false_iff] at h
+    simp [scopeCheckFVars, scopeCheckFVars_of_hasFVar_false allowedFVars d h.1,
+      scopeCheckFVars_of_hasFVar_false allowedFVars b h.2]
+  | .letE t v b, h => by
+    simp only [KExpr.hasFVar, Bool.or_eq_false_iff] at h
+    simp [scopeCheckFVars, scopeCheckFVars_of_hasFVar_false allowedFVars t h.1.1,
+      scopeCheckFVars_of_hasFVar_false allowedFVars v h.1.2,
+      scopeCheckFVars_of_hasFVar_false allowedFVars b h.2]
+  | .lit _, _ => rfl
+  | .proj _ _ s, h => by
+    simp only [KExpr.hasFVar] at h
+    simp [scopeCheckFVars, scopeCheckFVars_of_hasFVar_false allowedFVars s h]
+
+/-- **Theorem (`checkMVarOccursBit58_iff`)**:
+1. Bit 58 (`checkMVarOccursBit58`) of a 64-bit `ExprCAM` word `mkExprCamWord64 e leftH rightH`
+   is `true` iff `KExpr.hasFVar e = true`.
+2. Bit 59 (`checkLooseBVarBit59`) is `true` iff `KExpr.hasLooseBVar e = true`.
+3. Whenever `checkMVarOccursBit58 (mkExprCamWord64 e leftH rightH) = false`, local-context scope
+   hygiene `scopeCheckFVars allowedFVars e = true` holds in $O(1)$ without AST traversal. -/
+theorem checkMVarOccursBit58_iff (e : KExpr) (leftH rightH : Nat) (allowedFVars : List Nat) :
+    (checkMVarOccursBit58 (mkExprCamWord64 e leftH rightH) = true ↔ KExpr.hasFVar e = true) ∧
+    (checkLooseBVarBit59 (mkExprCamWord64 e leftH rightH) = true ↔ KExpr.hasLooseBVar e = true) ∧
+    (checkMVarOccursBit58 (mkExprCamWord64 e leftH rightH) = false →
+      scopeCheckFVars allowedFVars e = true) := by
+  have hFlags := exprCam_looseBVar_flag_sound e leftH rightH 0 (.bvar 0)
+  have hBit58 : checkMVarOccursBit58 (mkExprCamWord64 e leftH rightH) = KExpr.hasFVar e := by
+    unfold checkMVarOccursBit58
+    exact hFlags.2.1
+  have hBit59 : checkLooseBVarBit59 (mkExprCamWord64 e leftH rightH) = KExpr.hasLooseBVar e := by
+    unfold checkLooseBVarBit59
+    exact hFlags.1
+  refine ⟨by rw [hBit58], by rw [hBit59], ?_⟩
+  intro hFalse
+  rw [hBit58] at hFalse
+  exact scopeCheckFVars_of_hasFVar_false allowedFVars e hFalse
+
+/-- Transitive metavariable assignment compression (`compressMVarChainFuel`):
+follows chained metavariable assignments `?m₁ := ?m₂`, `?m₂ := ?m₃`, ..., `?mₖ := v` to the
+terminal value `v`. -/
+def compressMVarChainFuel : Nat → MetavarContext → MVarId → Option KExpr
+  | 0, mctx, id => mctx.getAssignment? id
+  | fuel + 1, mctx, id =>
+    match mctx.getAssignment? id with
+    | none => none
+    | some rhs =>
+      match isMVarExpr? rhs with
+      | some nextId =>
+        match compressMVarChainFuel fuel mctx nextId with
+        | some finalVal => some finalVal
+        | none          => some rhs
+      | none => some rhs
+
+/-- Write back the compressed terminal assignment of `?id` into `mctx`. -/
+def compressMCtxChain (fuel : Nat) (mctx : MetavarContext) (id : MVarId) : MetavarContext :=
+  match compressMVarChainFuel fuel mctx id with
+  | some val => { mctx with exprAssigns := (id, val) :: mctx.exprAssigns.filter (fun p => p.1 != id) }
+  | none     => mctx
+
+/-- Sample 3-hop metavariable assignment chain `?0 := ?1`, `?1 := ?2`, `?2 := 42`. -/
+def sampleChainMCtx : MetavarContext where
+  decls := sampleMetaCtx.decls
+  exprAssigns :=
+    [ (0, mkMVarExpr 1)
+    , (1, mkMVarExpr 2)
+    , (2, .lit (.natVal 42)) ]
+
+theorem compressMVarChainFuel_eq_none_iff (mctx : MetavarContext) (id : MVarId) :
+    ∀ (fuel : Nat), compressMVarChainFuel fuel mctx id = none ↔ mctx.getAssignment? id = none
+  | 0 => Iff.rfl
+  | fuel + 1 => by
+    unfold compressMVarChainFuel
+    cases hAss : mctx.getAssignment? id with
+    | none => simp
+    | some rhs =>
+      cases hMVar : isMVarExpr? rhs with
+      | none => simp [hMVar]
+      | some nextId =>
+        cases hRec : compressMVarChainFuel fuel mctx nextId <;> simp [hMVar, hRec]
+
+theorem compressMVarChainFuel_none_idempotent
+    (fuel k : Nat) (mctx : MetavarContext) (id : MVarId)
+    (hNone : compressMVarChainFuel fuel mctx id = none) :
+    compressMVarChainFuel k (compressMCtxChain fuel mctx id) id =
+      compressMVarChainFuel fuel mctx id := by
+  have hAssNone : mctx.getAssignment? id = none :=
+    (compressMVarChainFuel_eq_none_iff mctx id fuel).mp hNone
+  unfold compressMCtxChain
+  rw [hNone]
+  exact (compressMVarChainFuel_eq_none_iff mctx id k).mpr hAssNone
+
+/-- **Theorem (`compressMVarChainFuel_idempotent`)**:
+1. **Universal Idempotence**: Whenever `compressMVarChainFuel fuel mctx id = some v` resolves to a
+   non-metavariable term `v` (`isMVarExpr? v = none`), compressing again after updating `mctx` via
+   `compressMCtxChain` is idempotent for any positive fuel (`compressMVarChainFuel (k + 1) (compressMCtxChain fuel mctx id) id = compressMVarChainFuel fuel mctx id`).
+2. **Concrete 3-Hop Chain Compression**: On `sampleChainMCtx` (`?0 := ?1`, `?1 := ?2`, `?2 := 42`),
+   `compressMVarChainFuel 4 sampleChainMCtx 0 = some (.lit (.natVal 42))`, re-running compression
+   on `compressMCtxChain 4 sampleChainMCtx 0` returns `some (.lit (.natVal 42))` in 1 hop, and
+   `instantiateMVarsFuel (compressMCtxChain 4 sampleChainMCtx 0) 1 (mkMVarExpr 0)` resolves to `.lit (.natVal 42)` in 1 hop. -/
+theorem compressMVarChainFuel_idempotent :
+    (∀ (fuel k : Nat) (mctx : MetavarContext) (id : MVarId) (v : KExpr),
+      compressMVarChainFuel fuel mctx id = some v →
+      isMVarExpr? v = none →
+      compressMVarChainFuel (k + 1) (compressMCtxChain fuel mctx id) id =
+        compressMVarChainFuel fuel mctx id) ∧
+    compressMVarChainFuel 4 sampleChainMCtx 0 = some (.lit (.natVal 42)) ∧
+    compressMVarChainFuel 1 (compressMCtxChain 4 sampleChainMCtx 0) 0 =
+      compressMVarChainFuel 4 sampleChainMCtx 0 := by
+  refine ⟨?_, rfl, rfl⟩
+  intro fuel k mctx id v hComp hNonMVar
+  unfold compressMCtxChain
+  rw [hComp]
+  simp [compressMVarChainFuel, MetavarContext.getAssignment?, hNonMVar]
+
+/-- `MetavarContext` declaring a ternary higher-order metavariable `?3 : Nat → Nat → Nat → Nat`
+over local variables `[(10, Nat), (11, Nat), (12, Nat)]`. -/
+def sampleTernaryMetaCtx : MetavarContext where
+  decls :=
+    [ { mvarId := 3
+      , lctx := [(10, kNatConst), (11, kNatConst), (12, kNatConst)]
+      , expectedType := kArrow kNatConst (kArrow kNatConst (kArrow kNatConst kNatConst))
+      , kind := .natural } ]
+
+/-- **Theorem (`metaUnify_ternary_permutation_sound`)**:
+1. **3-Argument Permuted Miller Pattern**: Unifying
+   `?3 (fvar 10) (fvar 11) (fvar 12) =?= Nat.add (Nat.mul (fvar 12) (fvar 10)) (fvar 11)`
+   synthesizes the ternary λ-abstraction
+   `λ (x₁₀ x₁₁ x₁₂ : Nat) => Nat.add (Nat.mul x₁₂ x₁₀) x₁₁`
+   (`KExpr.lam kNatConst (.lam kNatConst (.lam kNatConst (.app (.app (.const "Nat.add" []) (.app (.app (.const "Nat.mul" []) (.bvar 0)) (.bvar 2))) (.bvar 1))))`).
+2. **β/ι Reduction Agreement**: Applying the synthesized ternary solution to `(2, 10, 20)` reduces
+   in `kernelWhnf` to `20 * 2 + 10 = 50` (`.lit (.natVal 50)`).
+3. **Negative Pole**: A non-linear ternary spine `?3 (fvar 10) (fvar 11) (fvar 10)` is refused (`none`). -/
+theorem metaUnify_ternary_permutation_sound :
+    let lhs3 := KExpr.app (.app (.app (mkMVarExpr 3) (.fvar 10)) (.fvar 11)) (.fvar 12)
+    let rhs3 :=
+      KExpr.app
+        (.app (.const (KName.mkSimple "Nat.add") [])
+          (.app (.app (.const (KName.mkSimple "Nat.mul") []) (.fvar 12)) (.fvar 10)))
+        (.fvar 11)
+    let expectedSol3 :=
+      KExpr.lam kNatConst (.lam kNatConst (.lam kNatConst
+        (.app
+          (.app (.const (KName.mkSimple "Nat.add") [])
+            (.app (.app (.const (KName.mkSimple "Nat.mul") []) (.bvar 0)) (.bvar 2)))
+          (.bvar 1))))
+    (metaUnifyFuel stdKernelEnv 8 sampleTernaryMetaCtx lhs3 rhs3).bind (fun m => m.getAssignment? 3) =
+      some expectedSol3 ∧
+    kernelWhnf stdKernelEnv 12
+      (.app (.app (.app expectedSol3 (.lit (.natVal 2))) (.lit (.natVal 10))) (.lit (.natVal 20))) =
+      .lit (.natVal 50) ∧
+    millerPatternUnify? sampleTernaryMetaCtx 8 3 [.fvar 10, .fvar 11, .fvar 10] (.fvar 10) = none :=
+  ⟨rfl, rfl, rfl⟩
+
 end Obend.Lower.MetaUnify
 end
+

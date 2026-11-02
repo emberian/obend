@@ -386,6 +386,19 @@ def jsession (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spe
     (stored₀ : ι → (j : Ix) → Hole j → Option Cand) : JCfg L S Hole A P Cand Fact Ob i₀ :=
   ⟨d₀, fun i => CCfg.init (Cfg.init (O i) d₀) (stored₀ i)⟩
 
+/-- Running a concatenated joint session equals running the second trace from the first's ending state. -/
+theorem jsession_fst_append (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j) {i₀ : Ix} :
+    ∀ (evs₁ evs₂ : List (JEvent ι W S Hole A P Cred Cand Fact L.Rec)) (J : JCfg L S Hole A P Cand Fact Ob i₀),
+      (jsession L base sp au k J (evs₁ ++ evs₂)).1 =
+        (jsession L base sp au k (jsession L base sp au k J evs₁).1 evs₂).1
+  | [], _, _ => rfl
+  | ev :: evs₁, evs₂, J => by
+    simp only [List.cons_append, jsession]
+    cases jrun L base sp au k J ev with
+    | ok J' => exact jsession_fst_append L base sp au k evs₁ evs₂ J'
+    | error _ => exact jsession_fst_append L base sp au k evs₁ evs₂ J
+
 end
 
 end Obend.Run.Shared

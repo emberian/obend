@@ -104,6 +104,36 @@ theorem quantityOnce_accepted_and_duplicated_refused :
     checkNetlistMult quantityDuplicatedInputs quantityDuplicatedNet = false :=
   ⟨rfl, rfl⟩
 
+/-- Wire resource multiplicity (`WireMult`) for elastic handshake synthesis:
+* `.linear`: consumed by exactly 1 sink (`fanout == 1`),
+* `.affine`: consumed by at most 1 sink (`fanout ≤ 1`),
+* `.unrestricted`: consumed by `k` sinks (requires `k - 1` elastic `Fork` synchronizers when `k > 1`). -/
+abbrev WireMult := Mult
+
+/-- Hardware netlist fanout expression (`NetFanoutExpr`) for sink-fanout accounting. -/
+abbrev NetFanoutExpr := NetExpr
+
+/-- Count the number of downstream hardware sink ports reading wire `w` in `e`. -/
+def countSinkFanout (w : String) (e : NetFanoutExpr) : Nat :=
+  countFanout w e
+
+/-- Compute the number of 2-output elastic `Fork` handshake synchronizer cells required to distribute
+wire `w` across all its sinks in `e` (`0` when `countSinkFanout w e ≤ 1`, else `fanout - 1`). -/
+def requiredElasticForks (w : String) (e : NetFanoutExpr) : Nat :=
+  requiredForkCells w e
+
+/-- **Theorem (`linear_or_affine_wire_zero_elastic_forks`)**:
+Every `.linear` or `.affine` wire `w` that passes `checkWireMult m (countSinkFanout w e) = true`
+has sink fanout `≤ 1` and therefore requires **0** elastic `Fork` handshake synchronizer cells
+(`requiredElasticForks w e = 0`), compiling to a direct point-to-point valid/ready wire! -/
+theorem linear_or_affine_wire_zero_elastic_forks
+    (w : String) (m : WireMult) (e : NetFanoutExpr)
+    (hm : m = .linear ∨ m = .affine)
+    (hok : checkWireMult m (countSinkFanout w e) = true) :
+    requiredElasticForks w e = 0 :=
+  linear_or_affine_zero_forks w m e hm hok
+
+
 /-! ## 2. 2D Multi-Tile eFPGA Mesh, Switch Matrix & Frame Loader -/
 
 inductive SwitchSrc where

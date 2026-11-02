@@ -115,6 +115,249 @@ def queryDiscrTrie (trie : DiscrTreeTrie) (depth : Nat) (target : KExpr) : List 
 def queryBestDiscrEntry? (trie : DiscrTreeTrie) (depth : Nat) (target : KExpr) : Option DiscrTreeEntry :=
   (queryDiscrTrie trie depth target).head?
 
+/-! ## 1b. True Branched Radix `DiscrTree` Trie (`DiscrTrieNode`, `insertDiscrTrieNode`, `queryDiscrTrieNode`) -/
+
+@[simp] theorem DiscrTreeKey.beq_refl (k : DiscrTreeKey) : (k == k) = true := by
+  cases k <;> simp [BEq.beq, DiscrTreeKey.beq, KName.beq_refl, KLiteral.beq_refl]
+
+theorem KName.eq_of_beq : ∀ {n1 n2 : KName}, KName.beq n1 n2 = true → n1 = n2
+  | .anonymous, .anonymous, _ => rfl
+  | .str p1 s1, .str p2 s2, h => by
+    simp only [KName.beq, Bool.and_eq_true, beq_iff_eq] at h
+    rw [h.1, KName.eq_of_beq h.2]
+  | .num p1 i1, .num p2 i2, h => by
+    simp only [KName.beq, Bool.and_eq_true, beq_iff_eq] at h
+    rw [h.1, KName.eq_of_beq h.2]
+
+theorem KLiteral.eq_of_beq : ∀ {l1 l2 : KLiteral}, KLiteral.beq l1 l2 = true → l1 = l2
+  | .natVal n1, .natVal n2, h => by
+    simp only [KLiteral.beq, beq_iff_eq] at h
+    rw [h]
+  | .strVal s1, .strVal s2, h => by
+    simp only [KLiteral.beq, beq_iff_eq] at h
+    rw [h]
+
+theorem DiscrTreeKey.eq_of_beq : ∀ {k1 k2 : DiscrTreeKey}, (k1 == k2) = true → k1 = k2
+  | .const n1, .const n2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq] at h
+    rw [KName.eq_of_beq h]
+  | .app n1, .app n2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq] at h
+    rw [KName.eq_of_beq h]
+  | .lit l1, .lit l2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq] at h
+    rw [KLiteral.eq_of_beq h]
+  | .star, .star, _ => rfl
+
+/-- Priority score of a `DiscrTreeEntry` for priority-sorted leaf rule lists. -/
+def DiscrTreeEntry.priority : DiscrTreeEntry → Nat
+  | { kind := .synthInstance _ _ prio, .. } => prio
+  | { kind := .simpLemma _ gain _, .. }     => gain
+
+/-- Insert a `DiscrTreeEntry` into a priority-sorted list of leaf rules (highest priority first). -/
+def insertRuleByPriority (entry : DiscrTreeEntry) : List DiscrTreeEntry → List DiscrTreeEntry
+  | [] => [entry]
+  | r :: rs =>
+    if entry.priority ≥ r.priority then
+      entry :: r :: rs
+    else
+      r :: insertRuleByPriority entry rs
+
+theorem mem_insertRuleByPriority (entry : DiscrTreeEntry) : ∀ (rules : List DiscrTreeEntry),
+    entry ∈ insertRuleByPriority entry rules
+  | [] => by simp [insertRuleByPriority]
+  | r :: rs => by
+    simp only [insertRuleByPriority]
+    split
+    · simp
+    · exact List.mem_cons_of_mem r (mem_insertRuleByPriority entry rs)
+
+theorem mem_insertRuleByPriority_of_mem (entry x : DiscrTreeEntry) :
+    ∀ (rules : List DiscrTreeEntry), x ∈ rules → x ∈ insertRuleByPriority entry rules
+  | [], h => nomatch h
+  | r :: rs, h => by
+    simp only [insertRuleByPriority]
+    split
+    · exact List.mem_cons_of_mem entry h
+    · rcases List.mem_cons.mp h with rfl | hrs
+      · exact List.Mem.head _
+      · exact List.mem_cons_of_mem r (mem_insertRuleByPriority_of_mem entry x rs hrs)
+
+/-- Merge two priority-sorted candidate rule lists into a single priority-ordered list (highest priority first). -/
+def mergeRulesByPriority (xs ys : List DiscrTreeEntry) : List DiscrTreeEntry :=
+  xs.foldr insertRuleByPriority ys
+
+theorem mem_mergeRulesByPriority_right (ys : List DiscrTreeEntry) (x : DiscrTreeEntry) (h : x ∈ ys) :
+    ∀ (xs : List DiscrTreeEntry), x ∈ mergeRulesByPriority xs ys
+  | [] => h
+  | r :: rs =>
+    mem_insertRuleByPriority_of_mem r x (mergeRulesByPriority rs ys)
+      (mem_mergeRulesByPriority_right ys x h rs)
+
+theorem mem_mergeRulesByPriority_left (ys : List DiscrTreeEntry) (x : DiscrTreeEntry) :
+    ∀ (xs : List DiscrTreeEntry), x ∈ xs → x ∈ mergeRulesByPriority xs ys
+  | [], h => nomatch h
+  | r :: rs, h => by
+    simp only [mergeRulesByPriority, List.foldr_cons]
+    rcases List.mem_cons.mp h with rfl | hrs
+    · exact mem_insertRuleByPriority x (mergeRulesByPriority rs ys)
+    · exact mem_insertRuleByPriority_of_mem r x (mergeRulesByPriority rs ys)
+        (mem_mergeRulesByPriority_left ys x rs hrs)
+
+/-- Inductive branched radix discrimination trie node (`Lean.Meta.DiscrTree.Trie`):
+* `leafRules`: priority-ordered candidate rules terminating at this node,
+* `children`: outgoing key edges `(edgeKey, childNode)` branching on `DiscrTreeKey` tokens
+  (including both exact `.const` / `.app` / `.lit` keys and wildcard `.star` keys). -/
+inductive DiscrTrieNode where
+  | mk (leafRules : List DiscrTreeEntry) (children : List (DiscrTreeKey × DiscrTrieNode))
+  deriving Repr, Inhabited
+
+/-- Empty `DiscrTrieNode`. -/
+def DiscrTrieNode.empty : DiscrTrieNode := .mk [] []
+
+/-- Extract the priority-sorted leaf rules at a `DiscrTrieNode`. -/
+def DiscrTrieNode.leafRules : DiscrTrieNode → List DiscrTreeEntry
+  | .mk rules _ => rules
+
+/-- Extract the outgoing `(DiscrTreeKey × DiscrTrieNode)` edges of a `DiscrTrieNode`. -/
+def DiscrTrieNode.children : DiscrTrieNode → List (DiscrTreeKey × DiscrTrieNode)
+  | .mk _ ch => ch
+
+/-- Update the first outgoing child edge matching `k` via `upd`, or append a new edge `(k, upd .empty)`
+when no edge for `k` exists yet (sharing common radix prefixes). -/
+def modifyOrInsertChild (k : DiscrTreeKey) (upd : DiscrTrieNode → DiscrTrieNode) :
+    List (DiscrTreeKey × DiscrTrieNode) → List (DiscrTreeKey × DiscrTrieNode)
+  | [] => [(k, upd .empty)]
+  | (ek, child) :: rest =>
+    if ek == k then
+      (ek, upd child) :: rest
+    else
+      (ek, child) :: modifyOrInsertChild k upd rest
+
+/-- Insert `(path, entry)` into a branched radix `DiscrTrieNode`, sharing common `DiscrTreeKey`
+prefix edges and inserting `entry` into `leafRules` in priority order at the terminal node. -/
+def insertDiscrTrieNode : DiscrPath → DiscrTreeEntry → DiscrTrieNode → DiscrTrieNode
+  | [], entry, .mk rules children =>
+    .mk (insertRuleByPriority entry rules) children
+  | k :: ks, entry, .mk rules children =>
+    .mk rules (modifyOrInsertChild k (insertDiscrTrieNode ks entry) children)
+
+/-- Build a branched radix `DiscrTrieNode` from a list of `DiscrTreeEntry` rules. -/
+def buildDiscrTrieNode (entries : List DiscrTreeEntry) : DiscrTrieNode :=
+  entries.foldl (fun trie entry => insertDiscrTrieNode entry.path entry trie) .empty
+
+/-- Explore all outgoing child edges in `children` that match query key `k` either by exact key
+equality (`ek == k`) or via a `.star` wildcard branch (`ek == .star`), merging matching branch
+results in descending priority order via `mergeRulesByPriority`. -/
+def queryChildrenWith (queryK : DiscrTrieNode → List DiscrTreeEntry) (k : DiscrTreeKey) :
+    List (DiscrTreeKey × DiscrTrieNode) → List DiscrTreeEntry
+  | [] => []
+  | (ek, child) :: rest =>
+    if ek == k || ek == .star then
+      mergeRulesByPriority (queryK child) (queryChildrenWith queryK k rest)
+    else
+      queryChildrenWith queryK k rest
+
+/-- Query a branched radix `DiscrTrieNode` along `DiscrPath`, exploring both exact key edges
+(`ek == k`) and wildcard `.star` branches (`ek == .star`) at every trie level and returning
+candidates merged in descending priority order. -/
+def queryDiscrTrieNode : DiscrTrieNode → DiscrPath → List DiscrTreeEntry
+  | .mk rules _, [] => rules
+  | .mk _ children, k :: ks =>
+    queryChildrenWith (fun child => queryDiscrTrieNode child ks) k children
+
+theorem mem_queryChildrenWith_modifyOrInsertChild_match
+    (queryK : DiscrTrieNode → List DiscrTreeEntry)
+    (upd : DiscrTrieNode → DiscrTrieNode)
+    (patKey qKey : DiscrTreeKey)
+    (entry : DiscrTreeEntry)
+    (hKeyMatch : (patKey == qKey || patKey == .star) = true)
+    (hUpd : ∀ n : DiscrTrieNode, entry ∈ queryK (upd n)) :
+    ∀ (children : List (DiscrTreeKey × DiscrTrieNode)),
+      entry ∈ queryChildrenWith queryK qKey (modifyOrInsertChild patKey upd children)
+  | [] => by
+    simp [modifyOrInsertChild, queryChildrenWith, hKeyMatch]
+    exact mem_mergeRulesByPriority_left [] entry (queryK (upd .empty)) (hUpd .empty)
+  | (ek, child) :: rest => by
+    simp only [modifyOrInsertChild]
+    cases hek : ek == patKey
+    · simp only [Bool.false_eq_true, ↓reduceIte, queryChildrenWith]
+      split
+      · exact mem_mergeRulesByPriority_right
+          (queryChildrenWith queryK qKey (modifyOrInsertChild patKey upd rest))
+          entry
+          (mem_queryChildrenWith_modifyOrInsertChild_match queryK upd patKey qKey entry hKeyMatch hUpd rest)
+          (queryK child)
+      · exact mem_queryChildrenWith_modifyOrInsertChild_match queryK upd patKey qKey entry hKeyMatch hUpd rest
+    · have hekEq : ek = patKey := DiscrTreeKey.eq_of_beq hek
+      subst hekEq
+      simp only [↓reduceIte, queryChildrenWith, hKeyMatch]
+      exact mem_mergeRulesByPriority_left
+        (queryChildrenWith queryK qKey rest)
+        entry
+        (queryK (upd child))
+        (hUpd child)
+
+/-- **Theorem (`queryDiscrTrieNode_insert_mem_of_matchDiscrPath`)**:
+Whenever a rule pattern path `patPath` matches a query path `qPath` (`matchDiscrPath patPath qPath = true`,
+supporting both `.star` wildcard tokens in `patPath` and exact key equality), inserting `(patPath, entry)`
+into `node` guarantees `entry ∈ queryDiscrTrieNode (insertDiscrTrieNode patPath entry node) qPath`. -/
+theorem queryDiscrTrieNode_insert_mem_of_matchDiscrPath :
+    ∀ (patPath qPath : DiscrPath) (entry : DiscrTreeEntry) (node : DiscrTrieNode),
+      matchDiscrPath patPath qPath = true →
+      entry ∈ queryDiscrTrieNode (insertDiscrTrieNode patPath entry node) qPath
+  | [], [], entry, .mk rules children, _ => by
+    simp only [insertDiscrTrieNode, queryDiscrTrieNode]
+    exact mem_insertRuleByPriority entry rules
+  | [], _ :: _, _, _, hMatch => by
+    simp [matchDiscrPath] at hMatch
+  | patKey :: _, [], _, _, hMatch => by
+    cases patKey <;> simp [matchDiscrPath] at hMatch
+  | patKey :: patRest, qKey :: qRest, entry, .mk rules children, hMatch => by
+    simp only [insertDiscrTrieNode, queryDiscrTrieNode]
+    have hStep : (patKey == qKey || patKey == .star) = true ∧ matchDiscrPath patRest qRest = true := by
+      cases patKey <;> simp [matchDiscrPath, BEq.beq, DiscrTreeKey.beq] at hMatch ⊢ <;> exact hMatch
+    exact mem_queryChildrenWith_modifyOrInsertChild_match
+      (fun child => queryDiscrTrieNode child qRest)
+      (insertDiscrTrieNode patRest entry)
+      patKey
+      qKey
+      entry
+      hStep.1
+      (fun n => queryDiscrTrieNode_insert_mem_of_matchDiscrPath patRest qRest entry n hStep.2)
+      children
+
+/-- **Theorem (`queryDiscrTrieNode_insert_mem`)**:
+Inserting `(path, entry)` into any branched radix trie node `node` guarantees that querying the
+updated trie along `path` returns `entry` (`entry ∈ queryDiscrTrieNode (insertDiscrTrieNode path entry node) path`). -/
+theorem queryDiscrTrieNode_insert_mem
+    (path : DiscrPath) (entry : DiscrTreeEntry) (node : DiscrTrieNode) :
+    entry ∈ queryDiscrTrieNode (insertDiscrTrieNode path entry node) path :=
+  queryDiscrTrieNode_insert_mem_of_matchDiscrPath path path entry node (matchDiscrPath_refl path)
+
+/-- **Theorem (`queryDiscrTrieNode_star_and_exact_priority_sound`)**:
+When both a lower-priority wildcard `.star` rule (`lutTag = 101`, `priority = 4`) and a higher-priority
+exact-key rule (`lutTag = 303`, `priority = 50`) match the same query path `[.app "scaleAdd", .lit 10]`,
+`queryDiscrTrieNode` returns `[303, 101]` (highest priority first) regardless of whether the `.star`
+rule was inserted before or after the exact-key rule. -/
+theorem queryDiscrTrieNode_star_and_exact_priority_sound :
+    let rWild : DiscrTreeEntry :=
+      { ruleName := KName.mkSimple "simp_scale_wild"
+      , path     := [.app (KName.mkSimple "scaleAdd"), .star]
+      , lutTag   := 101
+      , kind     := .simpLemma (.lit (.natVal 42)) 4 2 }
+    let rExact : DiscrTreeEntry :=
+      { ruleName := KName.mkSimple "simp_scale_exact10"
+      , path     := [.app (KName.mkSimple "scaleAdd"), .lit (.natVal 10)]
+      , lutTag   := 303
+      , kind     := .simpLemma (.lit (.natVal 500)) 50 0 }
+    let qPath : DiscrPath := [.app (KName.mkSimple "scaleAdd"), .lit (.natVal 10)]
+    let trieWildFirst := buildDiscrTrieNode [rWild, rExact]
+    let trieExactFirst := buildDiscrTrieNode [rExact, rWild]
+    (queryDiscrTrieNode trieWildFirst qPath).map (·.lutTag) = [303, 101] ∧
+    (queryDiscrTrieNode trieExactFirst qPath).map (·.lutTag) = [303, 101] :=
+  ⟨rfl, rfl⟩
+
 /-! ## 2. 2nd Futamura Specialization of `DiscrTree` Epochs to Zone-3 `AutomatonTile` LUTs -/
 
 /-- Hardware `SlotGuardReg` (`SILICON-ELABORATOR.md` §5.3) binding a Zone-3 `AutomatonTile` to a
@@ -390,6 +633,99 @@ theorem exprCam_siliconKernel_sv_cosim_sound :
       , ("out_lut_result", 0#64) ] := by
   decide +kernel
 
+/-! ## 4. Multi-Rule Priority TCAM Synthesis (`compileDiscrTrieToRtl`, `compileDiscrTrieToRtl_dag_valid`, `compileDiscrTrieToRtl_matches_first_rule`) -/
+
+/-- Synthesize a combinational priority-encoder `.mux` cascade (`RtlExpr`) for a priority-ordered list
+of `(patternTag, gain, offset)` rules:
+* Compares `inputPort 0` (`in_tag`) against `BitVec.ofNat 64 patternTag`,
+* When matched, computes `gain * inputPort 1 + offset` (`inputPort 1 * gain + offset`),
+* Otherwise falls through to the next lower-priority rule (defaulting to `0#64` on `[]`). -/
+def compileDiscrRulesExpr : List (Nat × Nat × Nat) → RtlExpr
+  | [] => .const 0#64
+  | (patTag, gain, offset) :: rest =>
+    let cond := .alu .eq (.inputPort 0) (.const (BitVec.ofNat 64 patTag))
+    let action :=
+      .alu .add
+        (.alu .mul (.inputPort 1) (.const (BitVec.ofNat 64 gain)))
+        (.const (BitVec.ofNat 64 offset))
+    .mux cond action (compileDiscrRulesExpr rest)
+
+/-- Pure reference specification for evaluating a priority-ordered list of `(patternTag, gain, offset)`
+TCAM rules on `(inTag, inArg)`. -/
+def evalDiscrRulesSpec (inTag inArg : BitVec 64) : List (Nat × Nat × Nat) → BitVec 64
+  | [] => 0#64
+  | (patTag, gain, offset) :: rest =>
+    if inTag == BitVec.ofNat 64 patTag then
+      inArg * BitVec.ofNat 64 gain + BitVec.ofNat 64 offset
+    else
+      evalDiscrRulesSpec inTag inArg rest
+
+/-- Synthesize a combinational multi-rule priority TCAM `RtlModule` (`compileDiscrTrieToRtl`)
+from a priority-ordered list of `(patternTag, gain, offset)` rules. -/
+def compileDiscrTrieToRtl (name : String) (rules : List (Nat × Nat × Nat)) : RtlModule where
+  name       := name
+  inputNames := ["in_tag", "in_arg"]
+  wires      :=
+    [ { wireIdx := 0
+      , name    := "w_tcam_out"
+      , expr    := compileDiscrRulesExpr rules } ]
+  regs       := []
+  outputs    := [ { name := "out_tcam", expr := .wireRef 0 } ]
+
+theorem checkExprDAG_compileDiscrRulesExpr : ∀ (rules : List (Nat × Nat × Nat)),
+    checkExprDAG 2 0 0 (compileDiscrRulesExpr rules) = true
+  | [] => rfl
+  | (_, _, _) :: rest => by
+    simp [compileDiscrRulesExpr, checkExprDAG, checkExprDAG_compileDiscrRulesExpr rest]
+
+/-- **Theorem (`compileDiscrTrieToRtl_dag_valid`)**:
+For every module name `name` and every priority-ordered rule list `rules`, `compileDiscrTrieToRtl name rules`
+passes `checkRtlModule` (`checkWireTableDAG` + output DAG bounds + `checkModuleCdc`). -/
+theorem compileDiscrTrieToRtl_dag_valid (name : String) (rules : List (Nat × Nat × Nat)) :
+    checkRtlModule (compileDiscrTrieToRtl name rules) = true := by
+  simp [compileDiscrTrieToRtl, checkRtlModule, checkWireTableDAG, checkWireTableDAG.go,
+    checkExprDAG, checkModuleCdc, checkExprDAG_compileDiscrRulesExpr rules]
+
+theorem evalRtlExpr_compileDiscrRulesExpr
+    (inputs wires regs : Nat → BitVec 64) :
+    ∀ (rules : List (Nat × Nat × Nat)),
+      evalRtlExpr inputs wires regs (compileDiscrRulesExpr rules) =
+        evalDiscrRulesSpec (inputs 0) (inputs 1) rules
+  | [] => rfl
+  | (patTag, gain, offset) :: rest => by
+    simp only [compileDiscrRulesExpr, evalRtlExpr, evalAluOp, evalDiscrRulesSpec,
+      evalRtlExpr_compileDiscrRulesExpr inputs wires regs rest]
+    by_cases hEq : (inputs 0 == BitVec.ofNat 64 patTag) = true <;> simp [hEq]
+
+/-- **Theorem (`compileDiscrTrieToRtl_matches_first_rule`)**:
+1. For *any* priority-ordered rule list `rules` and input/register state `(inputs, regs)`,
+   `evalModuleOutputs (compileDiscrTrieToRtl name rules) inputs regs` evaluates to
+   `[("out_tcam", evalDiscrRulesSpec (inputs 0) (inputs 1) rules)]`.
+2. In particular, when the highest-priority rule `(patTag, gain, offset)` matches `inputs 0`
+   (`inputs 0 = BitVec.ofNat 64 patTag`), `evalModuleOutputs` immediately selects that first
+   matching rule and outputs `inputs 1 * BitVec.ofNat 64 gain + BitVec.ofNat 64 offset` regardless
+   of any subsequent shadowed rules `rest`. -/
+theorem compileDiscrTrieToRtl_matches_first_rule
+    (name : String)
+    (patTag gain offset : Nat)
+    (rest : List (Nat × Nat × Nat))
+    (inputs regs : Nat → BitVec 64) :
+    evalModuleOutputs (compileDiscrTrieToRtl name ((patTag, gain, offset) :: rest)) inputs regs =
+      [("out_tcam", evalDiscrRulesSpec (inputs 0) (inputs 1) ((patTag, gain, offset) :: rest))] ∧
+    (inputs 0 = BitVec.ofNat 64 patTag →
+      evalModuleOutputs (compileDiscrTrieToRtl name ((patTag, gain, offset) :: rest)) inputs regs =
+        [("out_tcam", inputs 1 * BitVec.ofNat 64 gain + BitVec.ofNat 64 offset)]) := by
+  have hEval :
+      evalModuleOutputs (compileDiscrTrieToRtl name ((patTag, gain, offset) :: rest)) inputs regs =
+        [("out_tcam", evalDiscrRulesSpec (inputs 0) (inputs 1) ((patTag, gain, offset) :: rest))] := by
+    simp [compileDiscrTrieToRtl, evalModuleOutputs, evalWireTable, evalRtlExpr,
+      evalRtlExpr_compileDiscrRulesExpr]
+  refine ⟨hEval, ?_⟩
+  intro hMatch
+  rw [hEval]
+  simp [evalDiscrRulesSpec, hMatch]
+
 end Obend.Lower.DiscrTreeLUT
 end
+
 

@@ -388,4 +388,109 @@ theorem setup_hold_violation_refused :
       , outputValidAfterPs := 9200, measuredOvershootMv := 180 } = false :=
   rfl
 
+/-! ## 5. High-Speed Differential LVDS (`ANSI/TIA/EIA-644A`) & 3.3V ASIC Pad-Ring I/O Specifications -/
+
+/-- Canonical `3.3V` (`3300 mV`) JEDEC LVCMOS33 ASIC Pad-Ring `LogicFamilySpec`:
+* $V_{\text{DDIO}} \in [3000, 3600]\,\text{mV}$, $V_{IH,\min} = 2000\,\text{mV}$, $V_{IL,\max} = 800\,\text{mV}$,
+* $V_{OH,\min} = 2800\,\text{mV}$, $V_{OL,\max} = 200\,\text{mV}$. -/
+def cmos3v3AsicIoSpec : LogicFamilySpec where
+  familyName := "JEDEC_LVCMOS33_ASIC_IO"
+  vccMinMv   := 3000
+  vccNomMv   := 3300
+  vccMaxMv   := 3600
+  vihMinMv   := 2000
+  vilMaxMv   := 800
+  vohMinMv   := 2800
+  volMaxMv   := 200
+  iihMaxUa   := 5
+  iilMaxUa   := 5
+  iohMaxUa   := 8000
+  iolMaxUa   := 8000
+
+/-- High-speed Low-Voltage Differential Signaling (`ANSI/TIA/EIA-644A` LVDS / `CML` SerDes)
+electrical I/O specification (voltages in millivolts $\text{mV}$):
+* `standardName`: differential I/O standard identifier,
+* `vodMinMv`, `vodMaxMv`: driver differential output voltage magnitude $|V_{OD}|$ window ($247..454\,\text{mV}$ for LVDS across $100\,\Omega$),
+* `vocmMinMv`, `vocmMaxMv`: driver common-mode offset voltage $V_{OS}$ window ($1125..1375\,\text{mV}$ around $1.25\,\text{V}$),
+* `vthMaxMv`: receiver differential input sensitivity threshold $|V_{ID,\text{th}}|$ ($100\,\text{mV}$ for LVDS),
+* `vicmMinMv`, `vicmMaxMv`: receiver allowable common-mode input range ($0..2400\,\text{mV}$). -/
+structure LvdsIoSpec where
+  standardName : String
+  vodMinMv     : Int
+  vodMaxMv     : Int
+  vocmMinMv    : Int
+  vocmMaxMv    : Int
+  vthMaxMv     : Int
+  vicmMinMv    : Int
+  vicmMaxMv    : Int
+  deriving DecidableEq, Repr
+
+/-- Canonical `ANSI/TIA/EIA-644A` $3.5\,\text{mA}$ current-steering LVDS transceiver electrical spec. -/
+def lvdsAnsi644Spec : LvdsIoSpec where
+  standardName := "ANSI_TIA_EIA_644A_LVDS"
+  vodMinMv     := 247
+  vodMaxMv     := 454
+  vocmMinMv    := 1125
+  vocmMaxMv    := 1375
+  vthMaxMv     := 100
+  vicmMinMv    := 0
+  vicmMaxMv    := 2400
+
+/-- Verify that a differential LVDS / SerDes link with attenuated receiver eye height `rxEyeHeightMv`
+and worst-case common-mode ground-shift magnitude `gndShiftMv` ($\ge 0$) satisfies `LvdsIoSpec`
+differential sensitivity and common-mode input windows with non-negative differential slicer margin
+`minDiffMarginMv` ($\ge 0$). -/
+def checkLvdsIoCompatibility
+    (spec : LvdsIoSpec) (rxEyeHeightMv gndShiftMv minDiffMarginMv : Int) : Bool :=
+  decide (0 ≤ gndShiftMv) &&
+  decide (0 ≤ minDiffMarginMv) &&
+  decide (spec.vodMinMv ≤ spec.vodMaxMv) &&
+  decide (spec.vocmMinMv ≤ spec.vocmMaxMv) &&
+  decide (spec.vthMaxMv + minDiffMarginMv ≤ spec.vodMinMv) &&
+  decide (spec.vthMaxMv + minDiffMarginMv ≤ rxEyeHeightMv) &&
+  decide (spec.vicmMinMv ≤ spec.vocmMinMv - gndShiftMv) &&
+  decide (spec.vocmMaxMv + gndShiftMv ≤ spec.vicmMaxMv)
+
+/-- Theorem (`lvdsIoCompatibility_sound`):
+Whenever `checkLvdsIoCompatibility spec rxEyeHeightMv gndShiftMv minDiffMarginMv = true`, both the
+driver minimum differential swing `spec.vodMinMv` and the attenuated PCB receiver eye height
+`rxEyeHeightMv` exceed the receiver threshold `spec.vthMaxMv` by at least `minDiffMarginMv`, and
+the shifted common-mode window stays inside `[spec.vicmMinMv, spec.vicmMaxMv]`. -/
+theorem lvdsIoCompatibility_sound
+    (spec : LvdsIoSpec) (rxEyeHeightMv gndShiftMv minDiffMarginMv : Int)
+    (hOk : checkLvdsIoCompatibility spec rxEyeHeightMv gndShiftMv minDiffMarginMv = true) :
+    spec.vthMaxMv + minDiffMarginMv ≤ spec.vodMinMv ∧
+    spec.vthMaxMv + minDiffMarginMv ≤ rxEyeHeightMv ∧
+    spec.vicmMinMv ≤ spec.vocmMinMv - gndShiftMv ∧
+    spec.vocmMaxMv + gndShiftMv ≤ spec.vicmMaxMv := by
+  dsimp only [checkLvdsIoCompatibility] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true,
+      Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq,
+      decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
+  exact ⟨hOk.1.1.1.2, hOk.1.1.2, hOk.1.2, hOk.2⟩
+
+/-- Theorem (`lvdsIoCompatibility_commonMode_enclosure`):
+Whenever `checkLvdsIoCompatibility spec rxEyeHeightMv gndShiftMv minDiffMarginMv = true`, for any
+driver common-mode voltage `vOcmMv ∈ [spec.vocmMinMv, spec.vocmMaxMv]` and any signed ground offset
+`deltaGndMv ∈ [-gndShiftMv, +gndShiftMv]`, the receiver common-mode voltage `vOcmMv + deltaGndMv`
+is guaranteed to lie within `[spec.vicmMinMv, spec.vicmMaxMv]`. -/
+theorem lvdsIoCompatibility_commonMode_enclosure
+    (spec : LvdsIoSpec) (rxEyeHeightMv gndShiftMv minDiffMarginMv vOcmMv deltaGndMv : Int)
+    (hOk : checkLvdsIoCompatibility spec rxEyeHeightMv gndShiftMv minDiffMarginMv = true)
+    (hVocm : spec.vocmMinMv ≤ vOcmMv ∧ vOcmMv ≤ spec.vocmMaxMv)
+    (hDelta : -gndShiftMv ≤ deltaGndMv ∧ deltaGndMv ≤ gndShiftMv) :
+    0 ≤ gndShiftMv ∧
+    spec.vicmMinMv ≤ vOcmMv + deltaGndMv ∧
+    vOcmMv + deltaGndMv ≤ spec.vicmMaxMv := by
+  dsimp only [checkLvdsIoCompatibility] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true,
+      Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq,
+      decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
+  have hNonneg : 0 ≤ gndShiftMv := hOk.1.1.1.1.1.1.1
+  have hLow : spec.vicmMinMv ≤ spec.vocmMinMv - gndShiftMv := hOk.1.2
+  have hHigh : spec.vocmMaxMv + gndShiftMv ≤ spec.vicmMaxMv := hOk.2
+  refine ⟨hNonneg, by omega, by omega⟩
+
 end Obend.Hardware.Datasheet

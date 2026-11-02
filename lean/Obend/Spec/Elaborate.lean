@@ -2345,7 +2345,534 @@ def elaborateIsarSource (modName : String) (source : String) :
   let m ← decodeModule wrapper
   return (m, elaborateIsarProofTree m, elaborateModuleContracts m)
 
+/-! ## Structured Isar Proof-Step Verification & External Judge Dispatch Hooks -/
+
+/-- Surface proof-step alias for `Obend.Spec.Syntax.IsarStep`. -/
+abbrev ProofStep := Obend.Spec.Syntax.IsarStep
+
+/-- Surface proof-method alias for `Obend.Spec.Syntax.IsarMethod`. -/
+abbrev ProofMethod := Obend.Spec.Syntax.IsarMethod
+
+/-- Compatibility alias for `elaborateCellContract`. -/
+abbrev elaborateContractDecl := elaborateCellContract
+
+/-- Compatibility alias for `elaborateModuleContracts`. -/
+abbrev elaborateContracts := elaborateModuleContracts
+
+/-- Shorthand constructor for an external judge method `IsarMethod.judge formatTag`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarMethod.byJudge (formatTag : String) : IsarMethod :=
+  .judge formatTag
+
+/-- Shorthand constructor for an executable evaluation method `IsarMethod.decide`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarMethod.byEval : IsarMethod :=
+  .decide
+
+/-- Shorthand constructor for a linear arithmetic method `IsarMethod.omega`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarMethod.byOmega : IsarMethod :=
+  .omega
+
+/-- Shorthand constructor for a `#weave` method `IsarMethod.weave`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarMethod.byWeave : IsarMethod :=
+  .weave
+
+/-- Shorthand constructor for a `#frame` method `IsarMethod.frame`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarMethod.byFrame : IsarMethod :=
+  .frame
+
+/-- Shorthand constructor for a terminal external judge step `by judge(formatTag)`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarStep.byJudge (formatTag : String) : IsarStep :=
+  .byMethod (.judge formatTag)
+
+/-- Shorthand constructor for a terminal evaluation step `by decide`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarStep.byEval : IsarStep :=
+  .byMethod .decide
+
+/-- Shorthand constructor for a terminal linear-arithmetic step `by omega`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarStep.byOmega : IsarStep :=
+  .byMethod .omega
+
+/-- Shorthand constructor for a terminal `#weave` step `by weave`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarStep.byWeave : IsarStep :=
+  .byMethod .weave
+
+/-- Shorthand constructor for a terminal `#frame` step `by frame`. -/
+abbrev _root_.Obend.Spec.Syntax.IsarStep.byFrame : IsarStep :=
+  .byMethod .frame
+
+namespace ProofMethod
+abbrev weave : ProofMethod := IsarMethod.weave
+abbrev frame : ProofMethod := IsarMethod.frame
+abbrev decide : ProofMethod := IsarMethod.decide
+abbrev omega : ProofMethod := IsarMethod.omega
+abbrev lean (decl : String) : ProofMethod := IsarMethod.lean decl
+abbrev judge (formatTag : String) : ProofMethod := IsarMethod.judge formatTag
+abbrev byJudge (formatTag : String) : ProofMethod := IsarMethod.judge formatTag
+abbrev byEval : ProofMethod := IsarMethod.decide
+abbrev byOmega : ProofMethod := IsarMethod.omega
+abbrev byWeave : ProofMethod := IsarMethod.weave
+abbrev byFrame : ProofMethod := IsarMethod.frame
+end ProofMethod
+
+namespace ProofStep
+abbrev haveStep (label : String) (prop : Expr) (method : IsarMethod) : ProofStep :=
+  IsarStep.haveStep label prop method
+abbrev showStep (prop : Expr) (method : IsarMethod) : ProofStep :=
+  IsarStep.showStep prop method
+abbrev obtainStep (binder : String) (prop : Expr) (method : IsarMethod) : ProofStep :=
+  IsarStep.obtainStep binder prop method
+abbrev byMethod (method : IsarMethod) : ProofStep :=
+  IsarStep.byMethod method
+abbrev byJudge (formatTag : String) : ProofStep :=
+  IsarStep.byMethod (IsarMethod.judge formatTag)
+abbrev byEval : ProofStep :=
+  IsarStep.byMethod IsarMethod.decide
+abbrev byOmega : ProofStep :=
+  IsarStep.byMethod IsarMethod.omega
+abbrev byWeave : ProofStep :=
+  IsarStep.byMethod IsarMethod.weave
+abbrev byFrame : ProofStep :=
+  IsarStep.byMethod IsarMethod.frame
+end ProofStep
+
+/-- The target conclusion proposition of a `ContractDecl` (its declared `invariant`,
+    defaulting to `.bool true` when omitted). -/
+@[expose] def _root_.Obend.Spec.Syntax.ContractDecl.conclusion (c : ContractDecl) : Expr :=
+  c.invariant.getD (.bool true)
+
+/-- Constructive boolean equality on `String` (`0 Classical.choice`). -/
+@[expose] def strEq (a b : String) : Bool :=
+  decide (a = b)
+
+theorem strEq_eq_true {a b : String} (h : strEq a b = true) : a = b := by
+  unfold strEq at h
+  exact of_decide_eq_true h
+
+@[simp] theorem strEq_self (a : String) : strEq a a = true := by
+  unfold strEq
+  exact decide_eq_true rfl
+
+theorem strEq_eq_false {a b : String} (h : strEq a b = false) : a ≠ b := by
+  intro heq
+  subst heq
+  rw [strEq_self] at h
+  cases h
+
+/-- Constructive boolean equality for `Param` (`0 Classical.choice`). -/
+@[expose] def paramEq (a b : Param) : Bool :=
+  strEq a.name b.name && strEq a.type b.type && strEq a.quantity b.quantity
+
+theorem paramEq_eq_true {a b : Param} (h : paramEq a b = true) : a = b := by
+  cases a
+  cases b
+  simp only [paramEq, Bool.and_eq_true] at h
+  rcases h with ⟨⟨h1, h2⟩, h3⟩
+  rw [strEq_eq_true h1, strEq_eq_true h2, strEq_eq_true h3]
+
+@[expose] def paramListEq : List Param → List Param → Bool
+  | [], [] => true
+  | p1 :: ps1, p2 :: ps2 => paramEq p1 p2 && paramListEq ps1 ps2
+  | _, _ => false
+
+theorem paramListEq_eq_true : ∀ {a b : List Param}, paramListEq a b = true → a = b
+  | [], [], _ => rfl
+  | [], _ :: _, h => by cases h
+  | _ :: _, [], h => by cases h
+  | _ :: _, _ :: _, h => by
+    simp only [paramListEq, Bool.and_eq_true] at h
+    rw [paramEq_eq_true h.1, paramListEq_eq_true h.2]
+
+mutual
+/-- Structural boolean equality on surface `Expr` (`0 Classical.choice`). -/
+@[expose] def exprEq : Expr → Expr → Bool
+  | .var n1, .var n2 => strEq n1 n2
+  | .nat v1, .nat v2 => strEq v1 v2
+  | .bool b1, .bool b2 => decide (b1 = b2)
+  | .str s1, .str s2 => strEq s1 s2
+  | .unit, .unit => true
+  | .record fs1, .record fs2 => exprFieldsEq fs1 fs2
+  | .extend i1 fs1, .extend i2 fs2 => exprEq i1 i2 && exprFieldsEq fs1 fs2
+  | .member t1 n1, .member t2 n2 => exprEq t1 t2 && strEq n1 n2
+  | .call c1 as1, .call c2 as2 => exprEq c1 c2 && exprListEq as1 as2
+  | .compose ss1, .compose ss2 => exprListEq ss1 ss2
+  | .fix s1 i1, .fix s2 i2 => exprEq s1 s2 && exprEq i1 i2
+  | .closure ps1 r1 b1, .closure ps2 r2 b2 => paramListEq ps1 ps2 && strEq r1 r2 && exprEq b1 b2
+  | .binary op1 l1 r1, .binary op2 l2 r2 => strEq op1 op2 && exprEq l1 l2 && exprEq r1 r2
+  | .ite c1 t1 f1, .ite c2 t2 f2 => exprEq c1 c2 && exprEq t1 t2 && exprEq f1 f2
+  | .letE n1 ty1 v1 b1, .letE n2 ty2 v2 b2 =>
+      strEq n1 n2 && strEq ty1 ty2 && exprEq v1 v2 && exprEq b1 b2
+  | _, _ => false
+
+@[expose] def exprFieldsEq : List (String × Expr) → List (String × Expr) → Bool
+  | [], [] => true
+  | f1 :: fs1, f2 :: fs2 => exprFieldEq f1 f2 && exprFieldsEq fs1 fs2
+  | _, _ => false
+
+@[expose] def exprFieldEq : (String × Expr) → (String × Expr) → Bool
+  | (k1, v1), (k2, v2) => strEq k1 k2 && exprEq v1 v2
+
+@[expose] def exprListEq : List Expr → List Expr → Bool
+  | [], [] => true
+  | e1 :: es1, e2 :: es2 => exprEq e1 e2 && exprListEq es1 es2
+  | _, _ => false
+end
+
+mutual
+theorem exprEq_eq_true : ∀ (a b : Expr), exprEq a b = true → a = b
+  | .var _, b, h => by
+    cases b <;> simp only [exprEq] at h <;> try contradiction
+    rw [strEq_eq_true h]
+  | .nat _, b, h => by
+    cases b <;> simp only [exprEq] at h <;> try contradiction
+    rw [strEq_eq_true h]
+  | .bool _, b, h => by
+    cases b <;> simp only [exprEq, decide_eq_true_eq] at h <;> try contradiction
+    subst h; rfl
+  | .str _, b, h => by
+    cases b <;> simp only [exprEq] at h <;> try contradiction
+    rw [strEq_eq_true h]
+  | .unit, b, h => by
+    cases b <;> simp only [exprEq] at h <;> try contradiction
+    rfl
+  | .record fs1, b, h => by
+    cases b <;> simp only [exprEq] at h <;> try contradiction
+    rw [exprFieldsEq_eq_true fs1 _ h]
+  | .extend i1 fs1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprEq_eq_true i1 _ h.1, exprFieldsEq_eq_true fs1 _ h.2]
+  | .member t1 _, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprEq_eq_true t1 _ h.1, strEq_eq_true h.2]
+  | .call c1 as1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprEq_eq_true c1 _ h.1, exprListEq_eq_true as1 _ h.2]
+  | .compose ss1, b, h => by
+    cases b <;> simp only [exprEq] at h <;> try contradiction
+    rw [exprListEq_eq_true ss1 _ h]
+  | .fix s1 i1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprEq_eq_true s1 _ h.1, exprEq_eq_true i1 _ h.2]
+  | .closure _ _ b1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [paramListEq_eq_true h.1.1, strEq_eq_true h.1.2, exprEq_eq_true b1 _ h.2]
+  | .binary _ l1 r1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [strEq_eq_true h.1.1, exprEq_eq_true l1 _ h.1.2, exprEq_eq_true r1 _ h.2]
+  | .ite c1 t1 f1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprEq_eq_true c1 _ h.1.1, exprEq_eq_true t1 _ h.1.2, exprEq_eq_true f1 _ h.2]
+  | .letE _ _ v1 b1, b, h => by
+    cases b <;> simp only [exprEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [strEq_eq_true h.1.1.1, strEq_eq_true h.1.1.2, exprEq_eq_true v1 _ h.1.2, exprEq_eq_true b1 _ h.2]
+
+theorem exprFieldsEq_eq_true : ∀ (a b : List (String × Expr)), exprFieldsEq a b = true → a = b
+  | [], b, h => by
+    cases b <;> simp only [exprFieldsEq] at h <;> try contradiction
+    rfl
+  | f1 :: fs1, b, h => by
+    cases b <;> simp only [exprFieldsEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprFieldEq_eq_true f1 _ h.1, exprFieldsEq_eq_true fs1 _ h.2]
+
+theorem exprFieldEq_eq_true : ∀ (a b : String × Expr), exprFieldEq a b = true → a = b
+  | (_, v1), (_, v2), h => by
+    simp only [exprFieldEq, Bool.and_eq_true] at h
+    rw [strEq_eq_true h.1, exprEq_eq_true v1 v2 h.2]
+
+theorem exprListEq_eq_true : ∀ (a b : List Expr), exprListEq a b = true → a = b
+  | [], b, h => by
+    cases b <;> simp only [exprListEq] at h <;> try contradiction
+    rfl
+  | e1 :: es1, b, h => by
+    cases b <;> simp only [exprListEq, Bool.and_eq_true] at h <;> try contradiction
+    rw [exprEq_eq_true e1 _ h.1, exprListEq_eq_true es1 _ h.2]
+end
+
+theorem paramEq_self (a : Param) : paramEq a a = true := by
+  simp [paramEq]
+
+theorem paramListEq_self : ∀ (ps : List Param), paramListEq ps ps = true
+  | [] => rfl
+  | p :: ps => by simp [paramListEq, paramEq_self, paramListEq_self ps]
+
+mutual
+@[simp] theorem exprEq_self : ∀ (a : Expr), exprEq a a = true
+  | .var _ => by simp [exprEq]
+  | .nat _ => by simp [exprEq]
+  | .bool _ => by simp [exprEq]
+  | .str _ => by simp [exprEq]
+  | .unit => by simp [exprEq]
+  | .record fs => by simp [exprEq, exprFieldsEq_self fs]
+  | .extend i fs => by simp [exprEq, exprEq_self i, exprFieldsEq_self fs]
+  | .member t _ => by simp [exprEq, exprEq_self t]
+  | .call c as => by simp [exprEq, exprEq_self c, exprListEq_self as]
+  | .compose ss => by simp [exprEq, exprListEq_self ss]
+  | .fix s i => by simp [exprEq, exprEq_self s, exprEq_self i]
+  | .closure ps _ b => by simp [exprEq, paramListEq_self ps, exprEq_self b]
+  | .binary _ l r => by simp [exprEq, exprEq_self l, exprEq_self r]
+  | .ite c t f => by simp [exprEq, exprEq_self c, exprEq_self t, exprEq_self f]
+  | .letE _ _ v b => by simp [exprEq, exprEq_self v, exprEq_self b]
+
+theorem exprFieldsEq_self : ∀ (fs : List (String × Expr)), exprFieldsEq fs fs = true
+  | [] => by simp [exprFieldsEq]
+  | f :: fs => by simp [exprFieldsEq, exprFieldEq_self f, exprFieldsEq_self fs]
+
+theorem exprFieldEq_self : ∀ (f : String × Expr), exprFieldEq f f = true
+  | (_, v) => by simp [exprFieldEq, exprEq_self v]
+
+theorem exprListEq_self : ∀ (es : List Expr), exprListEq es es = true
+  | [] => by simp [exprListEq]
+  | e :: es => by simp [exprListEq, exprEq_self e, exprListEq_self es]
+end
+
+/-- An `IsarMethod` has a valid non-empty justification when any `.lean` or `.judge` tag is non-empty
+    (`0 Classical.choice`). -/
+@[expose] def validIsarMethod : IsarMethod → Bool
+  | .weave | .frame | .decide | .omega => true
+  | .lean decl => !strEq decl ""
+  | .judge fmt => !strEq fmt ""
+
+/-- Every structured Isar step carries a non-empty label/binder (where applicable) and a
+    valid non-empty `IsarMethod` justification (`0 Classical.choice`). -/
+@[expose] def validIsarStep : IsarStep → Bool
+  | .haveStep label _ m => !strEq label "" && validIsarMethod m
+  | .showStep _ m => validIsarMethod m
+  | .obtainStep binder _ m => !strEq binder "" && validIsarMethod m
+  | .byMethod m => validIsarMethod m
+
+/-- A step is a valid terminal discharge step for `conclusion` iff it is either:
+    - `ProofStep.showStep prop m` with `exprEq prop conclusion = true` and `validIsarMethod m`, or
+    - `ProofStep.byMethod m` (including `byJudge`, `byEval`, `byOmega`, `byWeave`, `byFrame`)
+      with `validIsarMethod m` (`0 Classical.choice`). -/
+@[expose] def isTerminalDischargeStep (conclusion : Expr) : IsarStep → Bool
+  | .showStep prop m => exprEq prop conclusion && validIsarMethod m
+  | .byMethod m => validIsarMethod m
+  | _ => false
+
+/-- Return the final element of a list by structural recursion (`0 Classical.choice`). -/
+@[expose] def lastStepOf {α : Type} : List α → Option α
+  | [] => none
+  | [x] => some x
+  | _ :: y :: ys => lastStepOf (y :: ys)
+
+theorem lastStepOf_mem {α : Type} : ∀ {xs : List α} {x : α},
+    lastStepOf xs = some x → x ∈ xs
+  | [], _, h => by cases h
+  | [_], _, h => by cases h; exact List.Mem.head []
+  | a :: _ :: _, _, h => List.Mem.tail a (lastStepOf_mem h)
+
+theorem lastStepOf_ne_nil {α : Type} {xs : List α} {x : α}
+    (h : lastStepOf xs = some x) : xs ≠ [] := by
+  intro hnil
+  subst hnil
+  cases h
+
+/-- Check that every step in `steps` satisfies `validIsarStep` by structural recursion. -/
+@[expose] def allStepsValid : List IsarStep → Bool
+  | [] => true
+  | s :: ss => validIsarStep s && allStepsValid ss
+
+theorem allStepsValid_mem : ∀ {steps : List IsarStep} {s : IsarStep},
+    allStepsValid steps = true → s ∈ steps → validIsarStep s = true
+  | [], _, _, hmem => by cases hmem
+  | x :: xs, s, hall, hmem => by
+    simp only [allStepsValid, Bool.and_eq_true] at hall
+    cases hmem with
+    | head _ => exact hall.1
+    | tail _ htail => exact allStepsValid_mem hall.2 htail
+
+/-- Verify an Isar step list against target `conclusion`: `steps` must be non-empty, every step
+    must have a valid non-empty justification, and the terminal step must discharge `conclusion`. -/
+@[expose] def verifyIsarSteps (conclusion : Expr) (steps : List IsarStep) : Bool :=
+  match lastStepOf steps with
+  | none => false
+  | some lastStep => allStepsValid steps && isTerminalDischargeStep conclusion lastStep
+
+/-- Executable Isar Proof-Script Structural & Judge-Tag Verifier for a `ContractDecl`. -/
+@[expose] def verifyIsarProofScript (c : ContractDecl) : Bool :=
+  verifyIsarSteps c.conclusion c.steps
+
+/-- Executable Isar Proof-Script Verifier for a `Claim`. -/
+@[expose] def verifyClaimProofScript (c : Claim) : Bool :=
+  verifyIsarSteps c.body c.steps
+
+/-- Extract the external judge format tag from an `IsarMethod`, if any. -/
+@[expose] def isarMethodJudgeTag? : IsarMethod → Option String
+  | .judge tag => some tag
+  | _ => none
+
+/-- Extract the external judge format tag from a single `ProofStep` / `IsarStep`, if any. -/
+@[expose] def isarStepJudgeTag? : IsarStep → Option String
+  | .haveStep _ _ m => isarMethodJudgeTag? m
+  | .showStep _ m => isarMethodJudgeTag? m
+  | .obtainStep _ _ m => isarMethodJudgeTag? m
+  | .byMethod m => isarMethodJudgeTag? m
+
+/-- Extract all external judge format tags referenced by any step in an Isar proof script
+    (`ProofStep.byJudge tag`, `ProofStep.haveStep _ _ (.byJudge tag)`, `showStep`, or `obtainStep`). -/
+@[expose] def extractIsarJudgeTags : List ProofStep → List String
+  | [] => []
+  | s :: ss =>
+    match isarStepJudgeTag? s with
+    | some tag => tag :: extractIsarJudgeTags ss
+    | none => extractIsarJudgeTags ss
+
+/-- Elaborated certificate bundle for a contract's Isar proof script, recording its
+    structural verification verdict, extracted external judge format tags, and `Law.Claim`
+    (`0 Classical.choice`). -/
+structure ElaboratedIsarCert where
+  contractName : String
+  targetType   : String
+  conclusion   : Expr
+  steps        : List ProofStep
+  scriptValid  : Bool
+  judgeTags    : List String
+  claim        : Obend.Law.Claim
+
+/-- Elaborate a `ContractDecl` into an `ElaboratedIsarCert` (`0 Classical.choice`). -/
+@[expose] def elaborateContractIsarCert (_m : Module) (c : ContractDecl) : ElaboratedIsarCert :=
+  { contractName := c.name
+    targetType   := c.targetType
+    conclusion   := c.conclusion
+    steps        := c.steps
+    scriptValid  := verifyIsarProofScript c
+    judgeTags    := extractIsarJudgeTags c.steps
+    claim        := .keeps c.targetType c.name }
+
+/-- Elaborate all `ContractDecl`s in a `Syntax.Module` into `ElaboratedIsarCert`s. -/
+@[expose] def elaborateModuleIsarCerts (m : Module) : List ElaboratedIsarCert :=
+  m.contracts.map (elaborateContractIsarCert m)
+
+/-- Soundness of `isTerminalDischargeStep` on a `showStep`: the shown proposition equals `conclusion`
+    and its method is valid (`0 sorry`, `0 Classical.choice`). -/
+theorem isTerminalDischargeStep_showStep_eq {conclusion prop : Expr} {m : IsarMethod}
+    (h : isTerminalDischargeStep conclusion (.showStep prop m) = true) :
+    prop = conclusion ∧ validIsarMethod m = true := by
+  simp only [isTerminalDischargeStep, Bool.and_eq_true] at h
+  exact ⟨exprEq_eq_true prop conclusion h.1, h.2⟩
+
+/-- Soundness of `validIsarStep` on a `haveStep`: the step label is non-empty and its
+    justification method is valid (`0 sorry`, `0 Classical.choice`). -/
+theorem validIsarStep_haveStep {label : String} {prop : Expr} {m : IsarMethod}
+    (h : validIsarStep (.haveStep label prop m) = true) :
+    label ≠ "" ∧ validIsarMethod m = true := by
+  simp only [validIsarStep, Bool.and_eq_true, Bool.not_eq_true'] at h
+  exact ⟨strEq_eq_false h.1, h.2⟩
+
+/-- Complete characterization of `isTerminalDischargeStep` (`0 sorry`, `0 Classical.choice`):
+    whenever `isTerminalDischargeStep conclusion s = true`, `s` is either a `showStep` whose
+    proposition equals `conclusion` (proved via `exprEq_eq_true`) or a `byMethod` step, and in
+    both cases its method is valid. -/
+theorem isTerminalDischargeStep_sound {conclusion : Expr} {s : IsarStep}
+    (h : isTerminalDischargeStep conclusion s = true) :
+    (∃ m, s = .showStep conclusion m ∧ validIsarMethod m = true) ∨
+    (∃ m, s = .byMethod m ∧ validIsarMethod m = true) := by
+  cases s with
+  | haveStep _ _ _ => cases h
+  | obtainStep _ _ _ => cases h
+  | showStep prop m =>
+    have hshow := isTerminalDischargeStep_showStep_eq h
+    left
+    refine ⟨m, ?_, hshow.2⟩
+    rw [hshow.1]
+  | byMethod m =>
+    simp only [isTerminalDischargeStep] at h
+    right
+    exact ⟨m, rfl, h⟩
+
+/-- Characterization of `extractIsarJudgeTags`: a format tag appears in `extractIsarJudgeTags steps`
+    iff some step `s ∈ steps` cites `judge(tag)` (`0 sorry`, `0 Classical.choice`). -/
+theorem mem_extractIsarJudgeTags_iff {steps : List ProofStep} {tag : String} :
+    tag ∈ extractIsarJudgeTags steps ↔ ∃ s ∈ steps, isarStepJudgeTag? s = some tag := by
+  induction steps with
+  | nil =>
+    simp only [extractIsarJudgeTags, List.not_mem_nil, false_iff]
+    rintro ⟨_, hmem, _⟩
+    cases hmem
+  | cons s ss ih =>
+    simp only [extractIsarJudgeTags]
+    cases hs : isarStepJudgeTag? s with
+    | none =>
+      rw [ih]
+      constructor
+      · rintro ⟨s', hs', htag⟩
+        exact ⟨s', List.Mem.tail s hs', htag⟩
+      · rintro ⟨s', hmem, htag⟩
+        cases hmem with
+        | head _ =>
+          rw [hs] at htag
+          cases htag
+        | tail _ htail =>
+          exact ⟨s', htail, htag⟩
+    | some t =>
+      constructor
+      · intro hmem
+        cases hmem with
+        | head _ =>
+          exact ⟨s, List.Mem.head ss, hs⟩
+        | tail _ htail =>
+          obtain ⟨s', hs', htag⟩ := ih.mp htail
+          exact ⟨s', List.Mem.tail s hs', htag⟩
+      · rintro ⟨s', hmem, htag⟩
+        cases hmem with
+        | head _ =>
+          rw [hs] at htag
+          injection htag with hteq
+          subst hteq
+          exact List.Mem.head _
+        | tail _ htail =>
+          exact List.Mem.tail t (ih.mpr ⟨s', htail, htag⟩)
+
+/-- Every `ProofStep.byJudge tag ∈ steps` is extracted into `extractIsarJudgeTags steps`
+    (`0 sorry`, `0 Classical.choice`). -/
+theorem byJudge_mem_extractIsarJudgeTags {steps : List ProofStep} {tag : String}
+    (hmem : ProofStep.byJudge tag ∈ steps) :
+    tag ∈ extractIsarJudgeTags steps :=
+  mem_extractIsarJudgeTags_iff.mpr ⟨ProofStep.byJudge tag, hmem, rfl⟩
+
+/-- Every `ProofStep.haveStep label prop (.byJudge tag) ∈ steps` is extracted into
+    `extractIsarJudgeTags steps` (`0 sorry`, `0 Classical.choice`). -/
+theorem haveStep_byJudge_mem_extractIsarJudgeTags {steps : List ProofStep}
+    {label : String} {prop : Expr} {tag : String}
+    (hmem : ProofStep.haveStep label prop (.byJudge tag) ∈ steps) :
+    tag ∈ extractIsarJudgeTags steps :=
+  mem_extractIsarJudgeTags_iff.mpr ⟨ProofStep.haveStep label prop (.byJudge tag), hmem, rfl⟩
+
+/-- **Soundness of `verifyIsarProofScript`** (`0 sorry`, `0 Classical.choice`):
+    whenever `verifyIsarProofScript c = true`:
+    1. `c.steps` is non-empty (`c.steps ≠ []`),
+    2. every step in `c.steps` is structurally valid (`validIsarStep s = true`),
+    3. every `ProofStep.haveStep label prop m ∈ c.steps` has a non-empty label and valid method, and
+    4. `c.steps` terminates with a discharging step `lastStep` for `c.conclusion` that is either
+       `ProofStep.showStep c.conclusion m` (with proposition equal to `c.conclusion` via `exprEq_eq_true`)
+       or `ProofStep.byMethod m` with `validIsarMethod m = true`. -/
+theorem verifyIsarProofScript_sound (c : ContractDecl)
+    (h : verifyIsarProofScript c = true) :
+    c.steps ≠ [] ∧
+    (∀ s ∈ c.steps, validIsarStep s = true) ∧
+    (∀ label prop m, ProofStep.haveStep label prop m ∈ c.steps →
+      label ≠ "" ∧ validIsarMethod m = true) ∧
+    ∃ lastStep ∈ c.steps,
+      lastStepOf c.steps = some lastStep ∧
+      isTerminalDischargeStep c.conclusion lastStep = true ∧
+      ((∃ m, lastStep = ProofStep.showStep c.conclusion m ∧ validIsarMethod m = true) ∨
+       (∃ m, lastStep = ProofStep.byMethod m ∧ validIsarMethod m = true)) := by
+  unfold verifyIsarProofScript verifyIsarSteps at h
+  cases hlast : lastStepOf c.steps with
+  | none =>
+    rw [hlast] at h
+    cases h
+  | some lastStep =>
+    rw [hlast] at h
+    simp only [Bool.and_eq_true] at h
+    refine ⟨lastStepOf_ne_nil hlast, ?_, ?_, lastStep, lastStepOf_mem hlast, rfl, h.2,
+            isTerminalDischargeStep_sound h.2⟩
+    · intro s hs
+      exact allStepsValid_mem h.1 hs
+    · intro label prop m hmem
+      exact validIsarStep_haveStep (allStepsValid_mem h.1 hmem)
+
 end Obend.Spec.Elaborate
 
 end
+
+
 

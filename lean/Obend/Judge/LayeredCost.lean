@@ -131,5 +131,55 @@ theorem layered_b_cost :
 
 theorem layered_b : LayeredCost layered "b" 7 := layered_sound layered_b_cost.1
 
+/-! ## Clairvoyant Sharing Cost Certificate Integration for Layered Objects -/
+
+export Obend.Judge.Cost (SharingCostCert verifySharingCostCert SharingCostMeaning
+  verifySharingCostCert_sound sharingCostCheck sharingCostJudge)
+
+/-- Combined certificate for a layered object's demand cost and a clairvoyant sharing cost
+certificate on a method/expression. -/
+structure LayeredSharingCostCert where
+  composition : Composition
+  member : String
+  layeredBound : Nat
+  demandCert : DemandCert
+  sharingCert : SharingCostCert
+
+/-- Constructive `CostAtMost` soundness for `layeredCheck` (`0 Classical.choice`). -/
+theorem layeredCheck_costAtMost {r : Nat} {o : Composition × String × Nat} {c : DemandCert}
+    (h : layeredCheck r o c = .ok) :
+    o.1.closedB = true ∧ CostAtMost (.get o.1.flatten o.2.1) o.2.2 := by
+  simp only [layeredCheck] at h
+  split at h
+  · rename_i hc
+    split at h
+    · rename_i hk
+      exact ⟨hc, costCheck_costAtMost (o := (_, _)) hk⟩
+    · cases h
+    · cases h
+  · cases h
+
+/-- Verify both the layered object's flattened demand cost and the clairvoyant sharing cost
+certificate (`0 Classical.choice`). -/
+def verifyLayeredSharingCostCert (c : LayeredSharingCostCert) : Bool :=
+  c.composition.closedB &&
+    (layeredCheck 0 (c.composition, c.member, c.layeredBound) c.demandCert == .ok) &&
+    verifySharingCostCert c.sharingCert
+
+theorem verifyLayeredSharingCostCert_sound {c : LayeredSharingCostCert}
+    (h : verifyLayeredSharingCostCert c = true) :
+    c.composition.closedB = true ∧
+      layeredCheck 0 (c.composition, c.member, c.layeredBound) c.demandCert = .ok ∧
+      SharingCostMeaning c.sharingCert := by
+  unfold verifyLayeredSharingCostCert at h
+  simp only [Bool.and_eq_true, beq_iff_eq] at h
+  exact ⟨h.1.1, h.1.2, verifySharingCostCert_sound h.2⟩
+
+theorem verifyLayeredSharingCostCert_layeredCost {c : LayeredSharingCostCert}
+    (h : verifyLayeredSharingCostCert c = true) :
+    LayeredCost c.composition c.member c.layeredBound ∧ SharingCostMeaning c.sharingCert := by
+  have hs := verifyLayeredSharingCostCert_sound h
+  exact ⟨layered_sound hs.2.1, hs.2.2⟩
+
 end Obend.Judge.LayeredCost
 end

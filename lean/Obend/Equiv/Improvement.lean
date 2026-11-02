@@ -392,5 +392,123 @@ theorem Sim.ready_bwd {b : Bool} {t' : Term} (h : Ready b t') : ∀ {t : Term}, 
 theorem Sim.ready_iff {b : Bool} {t t' : Term} (hs : Sim t t') : Ready b t ↔ Ready b t' :=
   ⟨fun h => Sim.ready_fwd h hs, fun h => Sim.ready_bwd h hs⟩
 
+/-! ## Sands Improvement Algebra & β-Value Pre-Reduction Cost Improvement -/
+
+/-- Sands' evaluation improvement (`EvalImproves t t'`): every clairvoyant evaluation
+`CV t v k` of `t` is matched by an evaluation `CV t' v k'` of `t'` to the same value `v`
+with `k' ≤ k`. -/
+def EvalImproves (t t' : Term) : Prop :=
+  ∀ v k, CV t v k → ∃ k', CV t' v k' ∧ k' ≤ k
+
+theorem EvalImproves.refl (t : Term) : EvalImproves t t :=
+  fun _ k h => ⟨k, h, Nat.le_refl k⟩
+
+theorem EvalImproves.trans {t1 t2 t3 : Term}
+    (h12 : EvalImproves t1 t2) (h23 : EvalImproves t2 t3) : EvalImproves t1 t3 := by
+  intro v k h1
+  obtain ⟨k2, r2, le12⟩ := h12 v k h1
+  obtain ⟨k3, r3, le23⟩ := h23 v k2 r2
+  exact ⟨k3, r3, Nat.le_trans le23 le12⟩
+
+/-- Contextual Sands improvement (`SandsImproves t t'`): in every substitution `ρ` and
+context `C`, every clairvoyant derivation of `C[t[ρ]]` at cost `k` is matched by a
+derivation of `C[t'[ρ]]` at cost `k' ≤ k`, preserving literal results. -/
+def SandsImproves (t t' : Term) : Prop :=
+  ∀ (ρ : Nat → Term) (C v : Term) (k : Nat), CV (instantiate C (t.substitute ρ)) v k →
+    ∃ v' k', CV (instantiate C (t'.substitute ρ)) v' k' ∧ k' ≤ k ∧ (Literal v → v' = v)
+
+theorem SandsImproves.refl (t : Term) : SandsImproves t t :=
+  fun _ _ v k h => ⟨v, k, h, Nat.le_refl k, fun _ => rfl⟩
+
+theorem SandsImproves.trans {t1 t2 t3 : Term}
+    (h12 : SandsImproves t1 t2) (h23 : SandsImproves t2 t3) : SandsImproves t1 t3 := by
+  intro ρ C v k h1
+  obtain ⟨v2, k2, r2, le12, lit12⟩ := h12 ρ C v k h1
+  obtain ⟨v3, k3, r3, le23, lit23⟩ := h23 ρ C v2 k2 r2
+  refine ⟨v3, k3, r3, Nat.le_trans le23 le12, fun hlit => ?_⟩
+  have hv2 := lit12 hlit
+  subst hv2
+  exact lit23 hlit
+
+/-- Exact additive evaluation improvement (`StrictEvalImproves d t t'`): every derivation
+of the optimized term `t'` at cost `k` corresponds to a derivation of the unoptimized
+term `t` at cost `k + d` (so replacing `t` by `t'` saves `d` ticks). -/
+def StrictEvalImproves (d : Nat) (t t' : Term) : Prop :=
+  ∀ v k, CV t' v k → CV t v (k + d)
+
+theorem StrictEvalImproves.refl (t : Term) : StrictEvalImproves 0 t t :=
+  fun _ _ h => h
+
+theorem StrictEvalImproves.trans {d1 d2 : Nat} {t1 t2 t3 : Term}
+    (h12 : StrictEvalImproves d1 t1 t2) (h23 : StrictEvalImproves d2 t2 t3) :
+    StrictEvalImproves (d2 + d1) t1 t3 := by
+  intro v k h3
+  have h2 := h23 v k h3
+  have h1 := h12 v (k + d2) h2
+  rwa [Nat.add_assoc] at h1
+
+/-- Pre-reducing `(.app (.lam body) v)` to `instantiate body v` (`body[0 := v]`) for a settled
+term `v` saves 1 tick: any derivation of `instantiate body v` at cost `k` lifts to a derivation
+of `(.app (.lam body) v)` at cost `k + 1`. -/
+theorem cv_beta_settled_step {body v u : Term} {k : Nat}
+    (hv : Settled v) (h : CV (instantiate body v) u k) :
+    CV (.app (.lam body) v) u (k + 1) := by
+  have happ := Run.apply (Run.value (.lam body)) (Run.keep hv) h
+  simpa using happ
+
+theorem cv_beta_value_step {body v u : Term} {k : Nat}
+    (hv : CValue v) (h : CV (instantiate body v) u k) :
+    CV (.app (.lam body) v) u (k + 1) :=
+  cv_beta_settled_step hv.settled h
+
+/-- **`beta_value_improves_cost`**: Replacing a β-value redex `(.app (.lam body) v)` (where
+`CValue v`) by its contractum `instantiate body v` (`body[0 := v]`) strictly reduces evaluation
+cost by 1 tick (`k` vs `k + 1`). -/
+theorem beta_value_improves_cost {body v u : Term} {k : Nat}
+    (hv : CValue v) (h : CV (instantiate body v) u k) :
+    CV (.app (.lam body) v) u (k + 1) ∧
+      CV (instantiate body v) u k ∧
+      k < k + 1 ∧
+      StrictEvalImproves 1 (.app (.lam body) v) (instantiate body v) :=
+  ⟨cv_beta_value_step hv h, h, Nat.lt_succ_self k, fun _ _ hr => cv_beta_value_step hv hr⟩
+
+/-- In Call-By-Value (`evalCBV`), replacing `(.app (.lam body) v)` (for `CValue v`) by
+`instantiate body v` strictly reduces the evaluated cost from `k + 1` to `k`. -/
+theorem evalCBV_beta_value_improves_cost {body v u : Term} {k fuel : Nat}
+    (hv : CValue v) (h : evalCBV fuel (instantiate body v) = some (u, k)) :
+    evalCBV (fuel + 1) (.app (.lam body) v) = some (u, k + 1) ∧ k < k + 1 := by
+  refine ⟨?_, Nat.lt_succ_self k⟩
+  have hncv : isCValue (.app (.lam body) v) = false := isCValue_app (.lam body) v
+  have hlam : evalCBV fuel (.lam body) = some (.lam body, 0) := by
+    unfold evalCBV; simp [CValue.isCValue_eq_true (.lam body)]
+  have hsv : isSettled v = true := hv.settled.isSettled_eq_true
+  unfold evalCBV
+  simp [hncv, hlam, hsv, h]
+
+/-- When `body` demands its argument (`instantiate body skipped` has no derivation), every
+clairvoyant derivation of `(.app (.lam body) v)` (with `Settled v`) comes from `Run.keep`
+and strictly improves by 1 tick when pre-reduced to `instantiate body v`. -/
+theorem beta_demanded_evalImproves {body v : Term} (hv : Settled v)
+    (hdem : ∀ w j, ¬ CV (instantiate body skipped) w j) :
+    (∀ u k, CV (.app (.lam body) v) u k → 0 < k ∧ CV (instantiate body v) u (k - 1)) ∧
+      EvalImproves (.app (.lam body) v) (instantiate body v) := by
+  have hinv : ∀ u k, CV (.app (.lam body) v) u k → 0 < k ∧ CV (instantiate body v) u (k - 1) := by
+    intro u k h
+    cases h with
+    | value h0 => exact absurd h0 app_not_ready
+    | apply hf hb hbody =>
+      obtain ⟨heq, rfl⟩ := cv_lam hf
+      injection heq with hbeq
+      subst hbeq
+      rcases bind_of_settled hv hb with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+      · exact ⟨by omega, by simpa using hbody⟩
+      · exact absurd hbody (hdem u _)
+    | applySpec hf _ =>
+      obtain ⟨heq, _⟩ := cv_lam hf
+      cases heq
+  refine ⟨hinv, fun u k h => ?_⟩
+  obtain ⟨hpos, hbody⟩ := hinv u k h
+  exact ⟨k - 1, hbody, by omega⟩
+
 end Obend.Equiv
 end

@@ -234,6 +234,138 @@ def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
     let isOdd  := indices.all (fun w => decide (E.entry w u = -E.entry w v))
     isEven || isOdd)
 
+/-- Matrix trace $\operatorname{tr}(A) = \sum_{i=0}^{n-1} A_{i, i}$. -/
+def IntMatrix.trace (A : IntMatrix) : Int :=
+  sumIntOver (fun i => A.entry i i) (List.range A.dim)
+
+/-- Auxiliary step for Faddeev–LeVerrier trace recurrence:
+Given matrix `A`, current auxiliary matrix `B_{k-1}`, previous coefficient `c_{n-k+1}`,
+current step `k`, and remaining steps `rem`, computes the list of lower coefficients
+`[c_{n-k}, ..., c_0]`. -/
+def faddeevLeVerrierAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → List Int
+  | 0 => []
+  | rem + 1 =>
+    let bNext := A.mul (B.add (IntMatrix.scaledIdentity A.dim cPrev))
+    let cCurr := -(bNext.trace) / (k : Int)
+    cCurr :: faddeevLeVerrierAux A bNext cCurr (k + 1) rem
+
+/-- Compute the descending coefficient list `[1, c_{n-1}, ..., c_1, c_0]` of the monic
+characteristic polynomial $\det(\lambda I - A) = \lambda^n + c_{n-1}\lambda^{n-1} + \dots + c_0$
+via the Faddeev–LeVerrier trace recurrence. -/
+def faddeevLeVerrierCoeffs (A : IntMatrix) : List Int :=
+  1 :: faddeevLeVerrierAux A (IntMatrix.zero A.dim) 1 1 A.dim
+
+/-- Convert a list of descending polynomial coefficients `[c_d, ..., c_0]` into a `Poly` in variable `0` ($\lambda$). -/
+def coeffsToPolyDesc : List Int → Poly
+  | [] => Poly.zero
+  | c :: cs =>
+    let deg := cs.length
+    let term :=
+      if c == 0 then Poly.zero
+      else if deg == 0 then polyOfTerm [] (CanonicalRat.ofInt c)
+      else polyOfTerm [(0, deg)] (CanonicalRat.ofInt c)
+    Poly.add term (coeffsToPolyDesc cs)
+
+/-- **Faddeev–LeVerrier Characteristic Polynomial Synthesis** (`faddeevLeVerrier`):
+Computes $\det(\lambda I - A) \in \mathbb{Q}[\lambda]$ directly from the matrix entries of `A`. -/
+def faddeevLeVerrier (A : IntMatrix) : Poly :=
+  coeffsToPolyDesc (faddeevLeVerrierCoeffs A)
+
+/-- Characteristic polynomial $\det(\lambda I - A)$ for $2 \times 2$ integer matrices via Faddeev–LeVerrier. -/
+def charPoly2x2 (A : IntMatrix) : Poly :=
+  faddeevLeVerrier A
+
+/-- Characteristic polynomial $\det(\lambda I - A)$ for $3 \times 3$ integer matrices via Faddeev–LeVerrier. -/
+def charPoly3x3 (A : IntMatrix) : Poly :=
+  faddeevLeVerrier A
+
+/-- Characteristic polynomial $\det(\lambda I - A)$ for $4 \times 4$ integer matrices via Faddeev–LeVerrier. -/
+def charPoly4x4 (A : IntMatrix) : Poly :=
+  faddeevLeVerrier A
+
+/-- Sum a list of `dim × dim` integer matrices: $\sum_{P \in \text{ms}} P$. -/
+def sumIntMatrices (dim : Nat) : List IntMatrix → IntMatrix
+  | [] => IntMatrix.zero dim
+  | P :: Ps => P.add (sumIntMatrices dim Ps)
+
+/-- Weighted linear combination of `dim × dim` integer matrices: $\sum_{i} \lambda_i P_i$. -/
+def weightedSumIntMatrices (dim : Nat) : List Int → List IntMatrix → IntMatrix
+  | [], _ => IntMatrix.zero dim
+  | _, [] => IntMatrix.zero dim
+  | c :: cs, P :: Ps => (P.scale c).add (weightedSumIntMatrices dim cs Ps)
+
+/-- **Lagrange–Sylvester Spectral Projector Synthesis over $\mathbb{Z}$** (`synthesizeSylvesterProjector`):
+Constructs the scaled spectral projector for eigenvalue index `i`:
+$$P_i(Q) = \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I).$$ -/
+def synthesizeSylvesterProjector
+    (Q : IntMatrix)
+    (eigs : List Int)
+    (i : Nat)
+    (cofactor : Int) : IntMatrix :=
+  let indices := List.range eigs.length
+  let prodMat := indices.foldl (fun acc j =>
+    if j == i then acc
+    else
+      let lamJ := listGetInt eigs j
+      acc.mul (Q.add (IntMatrix.scaledIdentity Q.dim (-lamJ))))
+    (IntMatrix.scaledIdentity Q.dim 1)
+  prodMat.scale cofactor
+
+/-- Computable checker for a scaled spectral projector decomposition $(Q, s, \{\lambda_i\}, \{P_i\})$:
+1. **Completeness**: $\sum_i P_i = s \cdot I$,
+2. **Scaled Idempotence**: $\forall P \in \text{projs},\; P^2 = s \cdot P$,
+3. **Pairwise Orthogonality**: $\forall i \neq j,\; P_i P_j = 0$,
+4. **Spectral Reconstruction**: $\sum_i \lambda_i P_i = s \cdot Q$. -/
+def checkSpectralDecomposition
+    (Q : IntMatrix)
+    (scale : Int)
+    (eigs : List Int)
+    (projs : List IntMatrix) : Bool :=
+  let indices := List.range projs.length
+  decide (sumIntMatrices Q.dim projs = IntMatrix.scaledIdentity Q.dim scale) &&
+  projs.all (fun P => decide (P.mul P = P.scale scale)) &&
+  indices.all (fun i =>
+    indices.all (fun j =>
+      if i == j then true
+      else
+        let pI := projs[i]?.getD (IntMatrix.zero Q.dim)
+        let pJ := projs[j]?.getD (IntMatrix.zero Q.dim)
+        decide (pI.mul pJ = IntMatrix.zero Q.dim))) &&
+  decide (weightedSumIntMatrices Q.dim eigs projs = Q.scale scale)
+
+/-- **Theorem (`checkSpectralDecomposition_sound`)**:
+When `checkSpectralDecomposition Q scale eigs projs = true`, the projectors satisfy:
+1. **Completeness**: `sumIntMatrices Q.dim projs = IntMatrix.scaledIdentity Q.dim scale` ($\sum P_i = s I$),
+2. **Idempotence**: `∀ P ∈ projs, P.mul P = P.scale scale` ($P_i^2 = s P_i$),
+3. **Orthogonality**: `∀ i j < projs.length, i ≠ j → P_i P_j = 0`,
+4. **Spectral Reconstruction**: `weightedSumIntMatrices Q.dim eigs projs = Q.scale scale` ($\sum \lambda_i P_i = s Q$). -/
+theorem checkSpectralDecomposition_sound
+    (Q : IntMatrix)
+    (scale : Int)
+    (eigs : List Int)
+    (projs : List IntMatrix)
+    (hCheck : checkSpectralDecomposition Q scale eigs projs = true) :
+    sumIntMatrices Q.dim projs = IntMatrix.scaledIdentity Q.dim scale ∧
+    (∀ P, P ∈ projs → P.mul P = P.scale scale) ∧
+    (∀ i j, i < projs.length → j < projs.length → i ≠ j →
+      (projs[i]?.getD (IntMatrix.zero Q.dim)).mul (projs[j]?.getD (IntMatrix.zero Q.dim)) =
+        IntMatrix.zero Q.dim) ∧
+    weightedSumIntMatrices Q.dim eigs projs = Q.scale scale := by
+  unfold checkSpectralDecomposition at hCheck
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hCheck
+  rcases hCheck with ⟨⟨⟨hComp, hIdemp⟩, hOrth⟩, hRecon⟩
+  rw [list_all_iff_forall] at hIdemp hOrth
+  refine ⟨hComp, ?_, ?_, hRecon⟩
+  · intro P hP
+    exact of_decide_eq_true (hIdemp P hP)
+  · intro i j hi hj hNe
+    have hiMem : i ∈ List.range projs.length := List.mem_range.mpr hi
+    have hjMem : j ∈ List.range projs.length := List.mem_range.mpr hj
+    have hRow := (list_all_iff_forall _ (List.range projs.length)).mp (hOrth i hiMem) j hjMem
+    have hBeq : (i == j) = false := beq_false_of_ne hNe
+    rw [hBeq] at hRow
+    exact of_decide_eq_true hRow
+
 /-! ## 3. Exact $K_2$ Antipodal PST (`ctqw_k2_antipodal_pst_exact`) -/
 
 /-- Adjacency matrix of $K_2$ ($H_{K_2} = X = \begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}$). -/
@@ -241,15 +373,15 @@ def k2Matrix : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, 0]]
 
-/-- Scaled symmetric projector $2 E_+ = \begin{pmatrix} 1 & 1 \\ 1 & 1 \end{pmatrix}$ ($\lambda_+ = +1$). -/
-def k2ProjPlus : IntMatrix where
-  dim  := 2
-  rows := [[1, 1], [1, 1]]
+/-- Scaled symmetric projector $2 E_+ = Q + I = \begin{pmatrix} 1 & 1 \\ 1 & 1 \end{pmatrix}$ ($\lambda_+ = +1$),
+synthesized via `synthesizeSylvesterProjector`. -/
+def k2ProjPlus : IntMatrix :=
+  synthesizeSylvesterProjector k2Matrix [1, -1] 0 1
 
-/-- Scaled antisymmetric projector $2 E_- = \begin{pmatrix} 1 & -1 \\ -1 & 1 \end{pmatrix}$ ($\lambda_- = -1$). -/
-def k2ProjMinus : IntMatrix where
-  dim  := 2
-  rows := [[1, -1], [-1, 1]]
+/-- Scaled antisymmetric projector $2 E_- = -(Q - I) = \begin{pmatrix} 1 & -1 \\ -1 & 1 \end{pmatrix}$ ($\lambda_- = -1$),
+synthesized via `synthesizeSylvesterProjector`. -/
+def k2ProjMinus : IntMatrix :=
+  synthesizeSylvesterProjector k2Matrix [1, -1] 1 (-1)
 
 /-- **Theorem (`ctqw_k2_antipodal_pst_exact`)**:
 On $K_2$ with scale $s = 2$:
@@ -279,7 +411,7 @@ theorem ctqw_k2_antipodal_pst_exact :
     amp10.normSq = 4 := by
   decide +kernel
 
-/-! ## 4. Algebraic Number Field Spectral Projectors on $P_3$ via `Groebner.lean` (`ctqw_p3_end_to_end_pst_algebraic`) -/
+/-! ## 4. Algebraic Number Field Spectral Projectors on $P_3$ & $P_4$ via `Groebner.lean` (`ctqw_p3_end_to_end_pst_algebraic`) -/
 
 /-- Matrix with polynomial entries in $\mathbb{Q}[\alpha]$ (`Obend.Judge.SOS.Poly`), used to represent
 operators over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$. -/
@@ -345,54 +477,304 @@ def ofIntMatrix (m : IntMatrix) : PolyMatrix :=
   , rows := m.rows.map (fun row =>
       row.map (fun c => polyOfTerm [] (CanonicalRat.ofInt c))) }
 
+/-- Scaled $n \times n$ polynomial identity matrix $c \cdot I_n$. -/
+def scaledIdentity (dim : Nat) (c : Poly) : PolyMatrix :=
+  let indices := List.range dim
+  { dim  := dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => if u == v then c else Poly.zero)) }
+
 end PolyMatrix
+
+/-- **Lagrange–Sylvester Spectral Projector Synthesis over $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$**
+(`synthesizeSylvesterProjectorPoly`):
+Constructs the scaled spectral projector for eigenvalue index `i`:
+$$P_i(Q) \equiv \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I) \pmod{\text{basis}}.$$ -/
+def synthesizeSylvesterProjectorPoly
+    (basis : List Poly)
+    (fuel : Nat)
+    (Q : PolyMatrix)
+    (eigs : List Poly)
+    (i : Nat)
+    (cofactor : Poly := Poly.one) : PolyMatrix :=
+  let indices := List.range eigs.length
+  let prodMat := indices.foldl (fun acc j =>
+    if j == i then acc
+    else
+      let lamJ := eigs[j]?.getD Poly.zero
+      let shifted := PolyMatrix.sub Q (PolyMatrix.scaledIdentity Q.dim lamJ)
+      PolyMatrix.mulMod basis fuel acc shifted)
+    (PolyMatrix.scaledIdentity Q.dim Poly.one)
+  PolyMatrix.scalePolyMod basis fuel cofactor prodMat
 
 /-- Minimal polynomial $m(\alpha) = \alpha^2 - 2$ of $\alpha = \sqrt{2}$ (using variable $0$ for $\alpha$). -/
 def p3MinPolyAlphaSqMinus2 : Poly :=
   Poly.sub ( polyVarPow 0 2 ) ( polyOfTerm [] 2 )
 
-/-- Scaled spectral projector $4 P_0 = \begin{pmatrix} 2 & 0 & -2 \\ 0 & 0 & 0 \\ -2 & 0 & 2 \end{pmatrix}$
-for eigenvalue $\lambda_0 = 0$ of $P_3$. -/
+/-- Eigenvalue list $[\lambda_0, \lambda_+, \lambda_-] = [0, +\alpha, -\alpha]$ of $P_3$ over $\mathbb{Q}(\alpha)/\langle \alpha^2 - 2 \rangle$. -/
+def p3AlgebraicEigenvalues : List Poly :=
+  [Poly.zero, polyVarPow 0 1, polyOfTerm [(0, 1)] (-1)]
+
+/-- Scaled spectral projector $4 P_0 = -2 (H_{P_3} - \alpha I)(H_{P_3} + \alpha I) = \begin{pmatrix} 2 & 0 & -2 \\ 0 & 0 & 0 \\ -2 & 0 & 2 \end{pmatrix}$
+for eigenvalue $\lambda_0 = 0$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
 def p3AlgebraicProj0 : PolyMatrix :=
-  PolyMatrix.ofIntMatrix { dim := 3, rows := [[2, 0, -2], [0, 0, 0], [-2, 0, 2]] }
+  synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
+    (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 0 (polyOfTerm [] (-2))
 
-/-- Scaled spectral projector $4 P_+ = \begin{pmatrix} 1 & \alpha & 1 \\ \alpha & 2 & \alpha \\ 1 & \alpha & 1 \end{pmatrix}$
-for eigenvalue $\lambda_+ = +\alpha = +\sqrt{2}$ of $P_3$ in $\mathbb{Q}(\alpha)/\langle \alpha^2 - 2 \rangle$. -/
+/-- Scaled spectral projector $4 P_+ = (H_{P_3} - 0 I)(H_{P_3} + \alpha I) = \begin{pmatrix} 1 & \alpha & 1 \\ \alpha & 2 & \alpha \\ 1 & \alpha & 1 \end{pmatrix}$
+for eigenvalue $\lambda_+ = +\alpha = +\sqrt{2}$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
 def p3AlgebraicProjPlus : PolyMatrix :=
-  let c1 := polyOfTerm [] 1
-  let c2 := polyOfTerm [] 2
-  let alpha := polyVarPow 0 1
-  { dim  := 3
-  , rows :=
-      [ [c1, alpha, c1]
-      , [alpha, c2, alpha]
-      , [c1, alpha, c1] ] }
+  synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
+    (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 1 Poly.one
 
-/-- Scaled spectral projector $4 P_- = \begin{pmatrix} 1 & -\alpha & 1 \\ -\alpha & 2 & -\alpha \\ 1 & -\alpha & 1 \end{pmatrix}$
-for eigenvalue $\lambda_- = -\alpha = -\sqrt{2}$ of $P_3$ in $\mathbb{Q}(\alpha)/\langle \alpha^2 - 2 \rangle$. -/
+/-- Scaled spectral projector $4 P_- = (H_{P_3} - 0 I)(H_{P_3} - \alpha I) = \begin{pmatrix} 1 & -\alpha & 1 \\ -\alpha & 2 & -\alpha \\ 1 & -\alpha & 1 \end{pmatrix}$
+for eigenvalue $\lambda_- = -\alpha = -\sqrt{2}$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
 def p3AlgebraicProjMinus : PolyMatrix :=
-  let c1 := polyOfTerm [] 1
-  let c2 := polyOfTerm [] 2
-  let negAlpha := polyOfTerm [(0, 1)] (-1)
-  { dim  := 3
-  , rows :=
-      [ [c1, negAlpha, c1]
-      , [negAlpha, c2, negAlpha]
-      , [c1, negAlpha, c1] ] }
+  synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
+    (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 2 Poly.one
 
-/-- Check Godsil's eigenvalue parity-ratio condition for antipodal PST:
-Given integer-scaled squared differences or rationalized eigenvalue ratios, verifies whether all
-odd-parity vs. even-parity eigenvalue differences share a common odd integer ratio multiple.
-On $P_3$, $(\lambda_+ - \lambda_0) : (\lambda_0 - \lambda_-) = \sqrt{2} : \sqrt{2} = 1 : 1$ (odd/odd, passes!).
-On $P_4$, eigenvalues are $\pm \frac{\sqrt{5}+1}{2}, \pm \frac{\sqrt{5}-1}{2}$ whose ratio
-$\frac{\sqrt{5}+1}{\sqrt{5}-1} = \frac{3 + \sqrt{5}}{2} \notin \mathbb{Q}$ is irrational (`= false`). -/
+/-- $4 \times 4$ adjacency matrix of the 4-vertex path graph $P_4$ ($0 - 1 - 2 - 3$). -/
+def path4Matrix : IntMatrix where
+  dim  := 4
+  rows :=
+    [ [0, 1, 0, 0]
+    , [1, 0, 1, 0]
+    , [0, 1, 0, 1]
+    , [0, 0, 1, 0] ]
+
+/-- Antipodal reflection-even $2 \times 2$ quotient block of $P_4$ on $\{e_0 + e_3, e_1 + e_2\}$:
+$$Q_{\text{even}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & 1 \end{pmatrix}, \qquad \det(\lambda I - Q_{\text{even}}) = \lambda^2 - \lambda - 1.$$ -/
+def p4EvenQuotient2x2 : IntMatrix where
+  dim  := 2
+  rows := [[0, 1], [1, 1]]
+
+/-- Antipodal reflection-odd $2 \times 2$ quotient block of $P_4$ on $\{e_0 - e_3, e_1 - e_2\}$:
+$$Q_{\text{odd}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & -1 \end{pmatrix}, \qquad \det(\lambda I - Q_{\text{odd}}) = \lambda^2 + \lambda - 1.$$ -/
+def p4OddQuotient2x2 : IntMatrix where
+  dim  := 2
+  rows := [[0, 1], [1, -1]]
+
+/-- Signed antipodal $2 \times 2$ block $\begin{pmatrix} -1 & 1 \\ 1 & 1 \end{pmatrix}$ with trace $0$ and determinant $-2$. -/
+def p4AntipodalOddBlock2x2 : IntMatrix where
+  dim  := 2
+  rows := [[-1, 1], [1, 1]]
+
+/-- Polynomial power $p^k$ in $\mathbb{Q}[x]$. -/
+def polyPow (p : Poly) : Nat → Poly
+  | 0 => Poly.one
+  | k + 1 => Poly.mul p (polyPow p k)
+
+/-- Substitute $\lambda \mapsto q$ into a polynomial given by descending coefficients `[c_d, ..., c_0]`. -/
+def evalCoeffsAtPoly ( q : Poly ) : List Int → Poly
+  | [] => Poly.zero
+  | c :: cs =>
+    let deg := cs.length
+    let term := Poly.scale (CanonicalRat.ofInt c) (polyPow q deg)
+    Poly.add term (evalCoeffsAtPoly q cs)
+
+/-- Multiply two polynomials given by descending integer coefficient lists `[c_d, ..., c_0]`
+via exact Cauchy convolution over `Int` (zero `Rat` and zero `Classical.choice` dependency). -/
+def intPolyMulDesc (p q : List Int) : List Int :=
+  match p, q with
+  | [], _ => []
+  | _, [] => []
+  | _, _ =>
+    let degP := p.length - 1
+    let degQ := q.length - 1
+    let totalLen := degP + degQ + 1
+    (List.range totalLen).map (fun k =>
+      sumIntOver (fun i =>
+        if Nat.ble i k && Nat.blt (k - i) q.length then
+          listGetInt p i * listGetInt q (k - i)
+        else 0) (List.range p.length))
+
+/-- Pad the shorter of two descending integer coefficient lists on the left with leading zeros
+and add them termwise over `Int`. -/
+def intPolyAddDesc (p q : List Int) : List Int :=
+  let len := max p.length q.length
+  let padP := List.replicate (len - p.length) (0 : Int) ++ p
+  let padQ := List.replicate (len - q.length) (0 : Int) ++ q
+  List.zipWith (· + ·) padP padQ
+
+/-- Exact polynomial power $q^k$ over descending integer coefficient lists `List Int`. -/
+def intPolyPowDesc (q : List Int) : Nat → List Int
+  | 0 => [1]
+  | k + 1 => intPolyMulDesc q (intPolyPowDesc q k)
+
+/-- Substitute $\lambda \mapsto q(\lambda_+)$ into a polynomial given by descending integer coefficients
+`[c_d, ..., c_0]` over `List Int`. -/
+def evalIntPolyAtPolyDesc (q : List Int) : List Int → List Int
+  | [] => []
+  | c :: cs =>
+    let deg := cs.length
+    let term := (intPolyPowDesc q deg).map (fun x => c * x)
+    intPolyAddDesc term (evalIntPolyAtPolyDesc q cs)
+
+/-- Evaluate a polynomial with descending integer coefficients `[c_d, ..., c_0]` at `x : Int` via Horner's rule. -/
+def evalIntPolyDesc (coeffs : List Int) (x : Int) : Int :=
+  coeffs.foldl (fun acc c => acc * x + c) 0
+
+/-- Synthesize the descending integer coefficients `[1, -3, 1]` ($r^2 - 3r + 1$) of $P_4$'s
+eigenvalue ratio minimal polynomial directly from `faddeevLeVerrierCoeffs p4EvenQuotient2x2`
+($[c_2, c_1, c_0] = [1, -1, -1]$ for $\lambda^2 - \lambda - 1$) via the substitution $\lambda = r - 1$:
+$$c_2 (r - 1)^2 + c_1 (r - 1) + c_0 = c_2 r^2 + (-2 c_2 + c_1) r + (c_2 - c_1 + c_0).$$ -/
+def synthesizeP4RatioMinPolyCoeffs : List Int :=
+  let cs := faddeevLeVerrierCoeffs p4EvenQuotient2x2
+  let c2 := listGetInt cs 0
+  let c1 := listGetInt cs 1
+  let c0 := listGetInt cs 2
+  [c2, -2 * c2 + c1, c2 - c1 + c0]
+
+/-- Synthesize the minimal polynomial of $P_4$'s eigenvalue ratio $r = \lambda_+ / \lambda_-$ directly
+from the Faddeev–LeVerrier characteristic polynomial of `p4EvenQuotient2x2`:
+Since $\lambda_+ \lambda_- = 1$, $r = \lambda_+ / \lambda_- = \lambda_+^2 = \lambda_+ + 1$, so $\lambda_+ = r - 1$.
+Substituting $\lambda = r - 1$ into `faddeevLeVerrierCoeffs p4EvenQuotient2x2` ($\lambda^2 - \lambda - 1$)
+synthesizes $r^2 - 3r + 1$ directly from $P_4$'s matrix entries! -/
+def synthesizeP4RatioMinPoly : Poly :=
+  coeffsToPolyDesc synthesizeP4RatioMinPolyCoeffs
+
+/-- Backwards-compatible alias for `synthesizeP4RatioMinPoly`. -/
+abbrev p4RatioMinPolyR2Minus3RPlus1 : Poly :=
+  synthesizeP4RatioMinPoly
+
+/-- Check Godsil's eigenvalue parity-ratio condition for antipodal PST on $P_4$ by synthesizing
+the ratio minimal polynomial `synthesizeP4RatioMinPoly` via Faddeev–LeVerrier from $P_4$'s quotient
+and verifying that $r = 1$ (and rational parity ratios) cannot divide $r^2 - 3r + 1$. -/
 def checkP4IrrationalRatioObstruction : Bool :=
-  -- Minimal polynomial of ratio r on P4 is r^2 - 3*r + 1 = 0, which has no rational root:
-  -- discriminant is 9 - 4 = 5 (not a square in Q), and r = 1 gives 1 - 3 + 1 = -1 ≠ 0.
   let rVar := polyVarPow 0 1
-  let p4RatioMinPoly := Poly.add (Poly.sub (polyVarPow 0 2) (Poly.scale 3 rVar)) Poly.one
+  let p4RatioMinPoly := synthesizeP4RatioMinPoly
   let linearFactorRMinus1 := Poly.sub rVar Poly.one
   !(polyReduceFuel [linearFactorRMinus1] 4 p4RatioMinPoly).isZero
+
+/-- General $2 \times 2$ integer matrix $\begin{pmatrix} a & b \\ c & d \end{pmatrix}$. -/
+def mat2x2 (a b c d : Int) : IntMatrix where
+  dim  := 2
+  rows := [[a, b], [c, d]]
+
+theorem mat2x2_scaledIdentity (s : Int) :
+    IntMatrix.scaledIdentity 2 s = mat2x2 s 0 0 s := rfl
+
+theorem mat2x2_zero :
+    IntMatrix.zero 2 = mat2x2 0 0 0 0 := rfl
+
+theorem mat2x2_add (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
+    (mat2x2 a1 b1 c1 d1).add (mat2x2 a2 b2 c2 d2) =
+      mat2x2 (a1 + a2) (b1 + b2) (c1 + c2) (d1 + d2) := rfl
+
+theorem mat2x2_scale (s a b c d : Int) :
+    (mat2x2 a b c d).scale s = mat2x2 (s * a) (s * b) (s * c) (s * d) := rfl
+
+theorem mat2x2_trace (a b c d : Int) :
+    (mat2x2 a b c d).trace = a + (d + 0) := rfl
+
+theorem mat2x2_mul (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
+    (mat2x2 a1 b1 c1 d1).mul (mat2x2 a2 b2 c2 d2) =
+      mat2x2
+        (a1 * a2 + (b1 * c2 + 0))
+        (a1 * b2 + (b1 * d2 + 0))
+        (c1 * a2 + (d1 * c2 + 0))
+        (c1 * b2 + (d1 * d2 + 0)) := rfl
+
+/-- **Theorem (`faddeevLeVerrier_2x2_exact_and_cayley_hamilton`)**:
+For EVERY $2 \times 2$ integer matrix $A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}$ ($a, b, c, d \in \mathbb{Z}$):
+1. **Exact Newton-Identity Trace Divisibility**:
+   At step $k = 2$ of the Faddeev–LeVerrier recurrence, $B_2 = A(A - \operatorname{tr}(A) I_2)$ has
+   trace $-\operatorname{tr}(B_2) = 2(a d - b c)$, which is **always** an exact multiple of $2$
+   (`(-b2.trace) % 2 = 0` with zero remainder) and divides to `(-b2.trace) / 2 = a * d - b * c`.
+2. **Exact Characteristic Polynomial Synthesis**:
+   `faddeevLeVerrierCoeffs (mat2x2 a b c d) = [1, -(a + d), a * d - b * c]`.
+3. **Universal $2 \times 2$ Cayley–Hamilton Theorem ($A^2 - \operatorname{tr}(A) A + \det(A) I_2 = 0_2$)**:
+   `((A.mul A).add (A.scale (-(a + d)))).add (IntMatrix.scaledIdentity 2 (a * d - b * c)) = IntMatrix.zero 2`. -/
+theorem faddeevLeVerrier_2x2_exact_and_cayley_hamilton (a b c d : Int) :
+    let A := mat2x2 a b c d
+    let trA := a + d
+    let detA := a * d - b * c
+    let b2 := A.mul (A.add (IntMatrix.scaledIdentity 2 (-trA)))
+    (-b2.trace) % 2 = 0 ∧
+    (-b2.trace) / 2 = detA ∧
+    faddeevLeVerrierCoeffs A = [1, -trA, detA] ∧
+    ((A.mul A).add (A.scale (-trA))).add (IntMatrix.scaledIdentity 2 detA) = IntMatrix.zero 2 := by
+  have hDim : (mat2x2 a b c d).dim = 2 := rfl
+  have hCast1 : ((1 : Nat) : Int) = 1 := rfl
+  have hCast2 : ((1 + 1 : Nat) : Int) = 2 := rfl
+  simp only [faddeevLeVerrierCoeffs, faddeevLeVerrierAux, hDim, hCast1, hCast2,
+    mat2x2_zero, mat2x2_scaledIdentity, mat2x2_add, mat2x2_scale, mat2x2_mul, mat2x2_trace,
+    Int.add_zero, Int.zero_add, Int.mul_zero, Int.mul_one, Int.ediv_one]
+  have h1 : a + -(a + d) = -d := by omega
+  have h2 : d + -(a + d) = -a := by omega
+  rw [h1, h2]
+  have hbc : c * b = b * c := Int.mul_comm c b
+  have had1 : a * -d = -(a * d) := Int.mul_neg a d
+  have had2 : d * -a = -(a * d) := by rw [Int.mul_neg d a, Int.mul_comm d a]
+  have hTrace : -((a * -d + b * c) + (c * b + d * -a)) = 2 * (a * d - b * c) := by
+    rw [had1, had2, hbc]
+    omega
+  rw [hTrace]
+  have hMod : (2 * (a * d - b * c)) % 2 = 0 := Int.mul_emod_right 2 (a * d - b * c)
+  have hDiv : (2 * (a * d - b * c)) / 2 = a * d - b * c :=
+    Int.mul_ediv_cancel_left (a * d - b * c) (by decide)
+  rw [hMod, hDiv]
+  have hCH00 : a * a + b * c + -(a + d) * a + (a * d - b * c) = 0 := by
+    have hDist : -(a + d) * a = -(a * a + d * a) := by
+      rw [Int.neg_mul, Int.add_mul]
+    have hda : d * a = a * d := Int.mul_comm d a
+    omega
+  have hCH01 : a * b + b * d + -(a + d) * b = 0 := by
+    have hDist : -(a + d) * b = -(a * b + d * b) := by
+      rw [Int.neg_mul, Int.add_mul]
+    have hdb : d * b = b * d := Int.mul_comm d b
+    omega
+  have hCH10 : c * a + d * c + -(a + d) * c = 0 := by
+    have hDist : -(a + d) * c = -(a * c + d * c) := by
+      rw [Int.neg_mul, Int.add_mul]
+    have hac : a * c = c * a := Int.mul_comm a c
+    omega
+  have hCH11 : c * b + d * d + -(a + d) * d + (a * d - b * c) = 0 := by
+    have hDist : -(a + d) * d = -(a * d + d * d) := by
+      rw [Int.neg_mul, Int.add_mul]
+    omega
+  rw [hCH00, hCH01, hCH10, hCH11]
+  exact ⟨rfl, rfl, rfl, rfl⟩
+
+/-- **Theorem (`faddeevLeVerrier_charPoly_and_p4_obstruction_sound`)**:
+1. **Faddeev–LeVerrier Characteristic Polynomial Synthesis**:
+   - On $K_2$, `faddeevLeVerrierCoeffs k2Matrix` synthesizes $[1, 0, -1]$ ($\lambda^2 - 1$),
+   - On $P_3$, `faddeevLeVerrierCoeffs path3Matrix` synthesizes $[1, 0, -2, 0]$ ($\lambda^3 - 2\lambda$),
+   - On $P_4$, `faddeevLeVerrierCoeffs path4Matrix` synthesizes $[1, 0, -3, 0, 1]$ ($\lambda^4 - 3\lambda^2 + 1$),
+     which factors as the exact product `intPolyMulDesc` of the even and odd antipodal quotient
+     characteristic polynomials $(\lambda^2 - \lambda - 1)(\lambda^2 + \lambda - 1)$!
+2. **Algebraic Derivation of $P_4$'s Eigenvalue Ratio Minimal Polynomial $r^2 - 3r + 1 = 0$**:
+   - Let $\lambda_+$ be a root of $\chi(Q_{\text{even}})(\lambda) = \lambda^2 - \lambda - 1 = 0$ and
+     $\lambda_- = \lambda_+ - 1$ (`lamMinusCoeffs = [1, -1]`). Over $\mathbb{Z}[\lambda_+]$:
+     * $\chi(Q_{\text{odd}})(\lambda_+ - 1) = (\lambda_+ - 1)^2 + (\lambda_+ - 1) - 1 = \lambda_+^2 - \lambda_+ - 1 = \chi(Q_{\text{even}})(\lambda_+)$,
+       so $\lambda_-$ is an exact root of $\chi(Q_{\text{odd}})(\lambda) = 0$,
+     * $\lambda_+ \lambda_- - 1 = \lambda_+(\lambda_+ - 1) - 1 = \chi(Q_{\text{even}})(\lambda_+)$, so $\lambda_+ \lambda_- = 1$,
+     * The eigenvalue ratio $r = \lambda_+ / \lambda_- = \lambda_+^2$ (`ratioRCoeffs = [1, 0, 0]`) satisfies
+       $r^2 - 3r + 1 = (\lambda_+^2)^2 - 3(\lambda_+^2) + 1 = \chi(Q_{\text{odd}})(\lambda_+) \cdot \chi(Q_{\text{even}})(\lambda_+)$!
+   - `synthesizeP4RatioMinPolyCoeffs` equals $[1, -3, 1]$ ($r^2 - 3r + 1$), which has no rational
+     parity roots at $r = \pm 1$ (`evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs 1 = -1` and
+     `evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs (-1) = 5`). -/
+theorem faddeevLeVerrier_charPoly_and_p4_obstruction_sound :
+    let chiEvenCoeffs := faddeevLeVerrierCoeffs p4EvenQuotient2x2
+    let chiOddCoeffs := faddeevLeVerrierCoeffs p4OddQuotient2x2
+    let lamPlusCoeffs : List Int := [1, 0]
+    let lamMinusCoeffs : List Int := [1, -1]
+    let ratioRCoeffs : List Int := [1, 0, 0]
+    faddeevLeVerrierCoeffs k2Matrix = [1, 0, -1] ∧
+    faddeevLeVerrierCoeffs path3Matrix = [1, 0, -2, 0] ∧
+    faddeevLeVerrierCoeffs path4Matrix = [1, 0, -3, 0, 1] ∧
+    chiEvenCoeffs = [1, -1, -1] ∧
+    chiOddCoeffs = [1, 1, -1] ∧
+    faddeevLeVerrierCoeffs p4AntipodalOddBlock2x2 = [1, 0, -2] ∧
+    faddeevLeVerrierCoeffs path4Matrix = intPolyMulDesc chiEvenCoeffs chiOddCoeffs ∧
+    evalIntPolyAtPolyDesc lamMinusCoeffs chiOddCoeffs = chiEvenCoeffs ∧
+    intPolyAddDesc (intPolyMulDesc lamPlusCoeffs lamMinusCoeffs) [-1] = chiEvenCoeffs ∧
+    evalIntPolyAtPolyDesc ratioRCoeffs synthesizeP4RatioMinPolyCoeffs =
+      intPolyMulDesc chiOddCoeffs chiEvenCoeffs ∧
+    synthesizeP4RatioMinPolyCoeffs = [1, -3, 1] ∧
+    evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs 1 = -1 ∧
+    evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs (-1) = 5 := by
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- **Theorem (`ctqw_p3_end_to_end_pst_algebraic`)**:
 **Symbolic Algebraic Certificate for End-to-End PST on $P_3$ over $\mathbb{Q}(\alpha)/\langle \alpha^2 - 2 \rangle$**:
@@ -446,7 +828,7 @@ theorem ctqw_p3_end_to_end_pst_algebraic :
     checkP4IrrationalRatioObstruction = true := by
   decide +kernel
 
-/-! ## 5. Hypercube $Q_d$ Krawtchouk Quotient & Bachman–Tamon Quotient PST Theorem -/
+/-! ## 5. Hypercube $Q_d$ Krawtchouk Quotient, Bachman–Tamon PST & Continuous-Time Taylor Propagator Intertwining -/
 
 /-- Adjacency matrix of the 3-dimensional Hypercube $Q_3$ ($8$ vertices $0 \dots 7$, connected iff
 their 3-bit binary representations differ in exactly 1 bit). -/
@@ -488,6 +870,26 @@ def hypercubeQ3Quotient : Nat → Nat → Int
   | 3, 2 => 3
   | _, _ => 0
 
+/-- `IntMatrix` representation of the $4 \times 4$ Krawtchouk quotient $Q(Q_3)$ (eigenvalues $3, 1, -1, -3$). -/
+def hypercubeQ3QuotientMatrix : IntMatrix where
+  dim  := 4
+  rows :=
+    [ [0, 3, 0, 0]
+    , [1, 0, 2, 0]
+    , [0, 2, 0, 1]
+    , [0, 0, 3, 0] ]
+
+/-- Synthesized Lagrange–Sylvester spectral projectors for $Q(Q_3)$ at common scale $s = 48$
+(cofactors $[1, -3, 3, -1]$ for eigenvalues $[3, 1, -1, -3]$ since
+$\prod_{j \neq 0}(\lambda_0 - \lambda_j) = 2 \cdot 4 \cdot 6 = 48$ and
+$\prod_{j \neq 1}(\lambda_1 - \lambda_j) = (-2) \cdot 2 \cdot 4 = -16$). -/
+def q3QuotientSylvesterProjectors : List IntMatrix :=
+  let eigs := [3, 1, -1, -3]
+  [ synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 0 1
+  , synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 1 (-3)
+  , synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 2 3
+  , synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 3 (-1) ]
+
 /-- General $(d+1) \times (d+1)$ Krawtchouk / Ehrenfest tridiagonal quotient entry for the $d$-cube $Q_d$:
 for cell $i \in \{0, \dots, d\}$, $Q_{i, i-1} = i$ and $Q_{i, i+1} = d - i$. -/
 def krawtchoukQuotientEntry (d i j : Nat) : Int :=
@@ -522,7 +924,9 @@ theorem hypercubeAntipodalPhase_unit_norm :
    (`checkWl1ColorRefinementStable = true`), satisfies the symmetrizability handshake identity
    $\binom{3}{i} Q_{i,j} = \binom{3}{j} Q_{j,i}$ (`checkHandshakeIdentity = true`), and has zero
    equitable residual (`evalEquitableResidualNormSq = 0`).
-2. Its quotient matrix matches `krawtchoukQuotientEntry 3` across all $0 \le i, j < 4$.
+2. Its quotient matrix matches `krawtchoukQuotientEntry 3` across all $0 \le i, j < 4$, has
+   Faddeev–LeVerrier characteristic polynomial $(\lambda^2 - 9)(\lambda^2 - 1) = \lambda^4 - 10\lambda^2 + 9$,
+   and its synthesized Lagrange–Sylvester projectors pass `checkSpectralDecomposition = true`!
 3. By Cartesian tensor factorization $U_{Q_d}(\pi/2) = U_{K_2}(\pi/2)^{\otimes d}$, the antipodal
    state transfer amplitude $(-i)^d$ has exact unit norm (`normSq = 1`) for every dimension $d \in \mathbb{N}$
    (with `hypercubeAntipodalPhase 3 = ⟨0, 1⟩`, i.e., $(-i)^3 = +i$). -/
@@ -535,6 +939,8 @@ theorem ctqw_hypercube_factorization_exact :
     evalEquitableResidualNormSq hypercubeQ3Matrix 4 hypercubeQ3Part hypercubeQ3Quotient = 0 ∧
     (cells.all fun i => cells.all fun j =>
       decide (hypercubeQ3Quotient i j = krawtchoukQuotientEntry 3 i j)) = true ∧
+    faddeevLeVerrierCoeffs hypercubeQ3QuotientMatrix = [1, 0, -10, 0, 9] ∧
+    checkSpectralDecomposition hypercubeQ3QuotientMatrix 48 [3, 1, -1, -3] q3QuotientSylvesterProjectors = true ∧
     hypercubeAntipodalPhase 3 = ⟨0, 1⟩ ∧
     (hypercubeAntipodalPhase 3).normSq = 1 := by
   decide +kernel
@@ -578,6 +984,106 @@ theorem bachman_tamon_quotient_pst_iff
     equitable_intertwining_power H Q part cellIndices cellOf hCells hEqAll k w0 v
   refine ⟨?_, by decide +kernel⟩
   rw [hPower]
+
+/-- Compute $(-i t)^k \in \mathbb{Z}[i]$ for integer-scaled time $t \in \mathbb{Z}$. -/
+def negITimePow (t : Int) : Nat → GaussianInt
+  | 0 => GaussianInt.one
+  | k + 1 => GaussianInt.mul ⟨0, -t⟩ (negITimePow t k)
+
+/-- Compute $k! \in \mathbb{N}$. -/
+def natFactorial : Nat → Nat
+  | 0 => 1
+  | k + 1 => (k + 1) * natFactorial k
+
+/-- Integer-scaled Taylor coefficient $N! \cdot \frac{(-i t)^k}{k!} \in \mathbb{Z}[i]$ for the
+$N$-th order unitary propagator truncation $N! \sum_{k=0}^N \frac{(-i H t)^k}{k!}$. -/
+def taylorScaledWeight (t : Int) (tOrder k : Nat) : GaussianInt :=
+  GaussianInt.scale ((natFactorial tOrder / natFactorial k : Nat) : Int) (negITimePow t k)
+
+/-- Evaluate the $N$-th order truncated continuous-time Taylor propagator
+$$U_N(t) v = \sum_{k=0}^N \left(N! \frac{(-i t)^k}{k!}\right) A^k v$$
+of a linear operator `op` at time `t`, truncation order `tOrder`, vector `v`, and index `u`. -/
+def evalTaylorPropagator
+    (op : (Nat → Int) → (Nat → Int))
+    (t : Int)
+    (tOrder : Nat)
+    (v : Nat → Int)
+    (u : Nat) : GaussianInt :=
+  sumGaussianOver
+    (fun k => GaussianInt.scale (iterateVecOp op k v u) (taylorScaledWeight t tOrder k))
+    (List.range (tOrder + 1))
+
+/-- Full-space vs. quotient-space $N$-th order Taylor propagator step (`propagatorTaylorStep`). -/
+def propagatorTaylorStep
+    (H Q : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (t : Int)
+    (tOrder : Nat)
+    (w : Nat → Int)
+    (u : Nat) : GaussianInt × GaussianInt :=
+  ( evalTaylorPropagator (partitionedMatVec H cellIndices cellOf) t tOrder (liftQuotientVec part w) u
+  , evalTaylorPropagator (quotientMatVec Q cellIndices) t tOrder w (part u) )
+
+/-- **Theorem (`continuous_time_taylor_propagator_intertwines`)**:
+**Universal Continuous-Time Taylor Propagator Intertwining Theorem**:
+For EVERY time $t \in \mathbb{Z}$, EVERY Taylor truncation order $N \in \mathbb{N}$ (`tOrder`),
+EVERY initial quotient vector $w : \text{Nat} \to \text{Int}$, and EVERY vertex $u \in \mathbb{N}$,
+if $(H, \text{part}, Q)$ is an equitable partition across `cellIndices` and `cellOf`, then the
+$N$-th order unitary Taylor propagator $\sum_{k=0}^N \frac{(-i t)^k}{k!} H^k$ intertwines exact
+equitable lifts with $\sum_{k=0}^N \frac{(-i t)^k}{k!} Q^k$:
+$$(U_N^H(t) (S w))_u = (S (U_N^Q(t) w))_u = (U_N^Q(t) w)_{\text{part}(u)}.$$ -/
+theorem continuous_time_taylor_propagator_intertwines
+    (H Q : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (t : Int)
+    (tOrder : Nat)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqAll : ∀ u, ∀ j, j ∈ cellIndices → cellRowSum H (cellOf j) u = Q (part u) j) :
+    evalTaylorPropagator (partitionedMatVec H cellIndices cellOf) t tOrder (liftQuotientVec part w) u =
+      evalTaylorPropagator (quotientMatVec Q cellIndices) t tOrder w (part u) := by
+  dsimp only [evalTaylorPropagator]
+  apply sumGaussianOver_congr
+  intro k _
+  rw [equitable_intertwining_power H Q part cellIndices cellOf hCells hEqAll k w u]
+  rfl
+
+/-- **Theorem (`continuous_time_taylor_propagator_intertwines_unpartitioned`)**:
+End-to-end continuous-time Taylor propagator intertwining for both unpartitioned
+`matVec (List.range m.dim) m.entry` and `propagatorTaylorStep` on any bounded vertex $u < m.\text{dim}$
+whenever `checkEquitablePartition m numCells part Q = true`! -/
+theorem continuous_time_taylor_propagator_intertwines_unpartitioned
+    (m : IntMatrix)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → Int)
+    (t : Int)
+    (tOrder : Nat)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCheck : checkEquitablePartition m numCells part Q = true)
+    (hu : u < m.dim) :
+    evalTaylorPropagator (matVec (List.range m.dim) m.entry) t tOrder (liftQuotientVec part w) u =
+      evalTaylorPropagator (quotientMatVec Q (List.range numCells)) t tOrder w (part u) ∧
+    (propagatorTaylorStep m.entry Q part (List.range numCells)
+      (cellMembers (List.range m.dim) part) t tOrder w u).1 =
+    (propagatorTaylorStep m.entry Q part (List.range numCells)
+      (cellMembers (List.range m.dim) part) t tOrder w u).2 := by
+  dsimp only [propagatorTaylorStep, evalTaylorPropagator]
+  constructor
+  · apply sumGaussianOver_congr
+    intro k _
+    rw [(equitable_intertwining_power_unpartitioned m numCells part Q hCheck k w u hu).1]
+    rfl
+  · apply sumGaussianOver_congr
+    intro k _
+    rw [(equitable_intertwining_power_unpartitioned m numCells part Q hCheck k w u hu).2]
+    rfl
 
 /-! ## 6. Analytic Pole: Symplectic Schrödinger & Lindblad Flowpipes & Validated Taylor Phase Enclosures -/
 

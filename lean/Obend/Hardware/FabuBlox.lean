@@ -385,13 +385,49 @@ def extractCornerFromWafer (w : WaferState) : ProcessCorner :=
 
 /-- Theorem 6 (`extractCornerFromWafer_closes_500MHz`):
 The `ProcessCorner` extracted from the verified `cmosDamasceneFlow` wafer closes 500 MHz (`2000 ps`)
-static timing signoff on `obendStageCritPath`! -/
+ static timing signoff on `obendStageCritPath`! -/
 theorem extractCornerFromWafer_closes_500MHz :
     (match runFabFlow initialCmosWafer cmosDamasceneFlow with
     | .ok finalWafer =>
       checkTimingSignoff (extractCornerFromWafer finalWafer) 2000 obendStageCritPath
     | .error _ => false) = true := by
   decide +kernel
+
+/-! ## 6. Cleanroom Cutline Interconnect RC Extraction (`extractInterconnectRCFromCutline`) -/
+
+/-- Extract physical interconnect `(sheetResMilliOhm, plateCapFf)` from a fabricated `CutlineColumn`:
+* Sheet resistance $R_\square = \lfloor 18000 / \max(t_{\text{metal}}, 1) \rfloor$ ($\text{m}\Omega/\square$),
+* Parallel-plate capacitance $C_{\text{plate}} = \lfloor 400 / \max(t_{\text{ILD}}, 1) \rfloor$ ($\text{fF}$). -/
+def extractInterconnectRCFromCutline (c : CutlineColumn) : Nat × Nat :=
+  let effMetalNm := max c.metalThicknessNm 1
+  let effIldNm   := max c.ildOxideNm 1
+  (18000 / effMetalNm, 400 / effIldNm)
+
+/-- **Theorem (`extractInterconnectRC_thick_metal_reduces_res`)**:
+Increasing CMP-polished copper thickness (`c1.metalThicknessNm ≤ c2.metalThicknessNm`) monotonically
+reduces or preserves interconnect sheet resistance:
+`(extractInterconnectRCFromCutline c2).1 ≤ (extractInterconnectRCFromCutline c1).1`. -/
+theorem extractInterconnectRC_thick_metal_reduces_res
+    (c1 c2 : CutlineColumn)
+    (hThick : c1.metalThicknessNm ≤ c2.metalThicknessNm) :
+    (extractInterconnectRCFromCutline c2).1 ≤ (extractInterconnectRCFromCutline c1).1 := by
+  simp only [extractInterconnectRCFromCutline]
+  have hMaxLe : max c1.metalThicknessNm 1 ≤ max c2.metalThicknessNm 1 := by omega
+  have hPos : 0 < max c1.metalThicknessNm 1 := by omega
+  exact Nat.div_le_div_left hMaxLe hPos
+
+/-- **Theorem (`extractInterconnectRC_thick_oxide_reduces_cap`)**:
+Increasing inter-layer dielectric (`ILD`) oxide thickness (`c1.ildOxideNm ≤ c2.ildOxideNm`)
+monotonically reduces or preserves parallel-plate wire capacitance:
+`(extractInterconnectRCFromCutline c2).2 ≤ (extractInterconnectRCFromCutline c1).2`. -/
+theorem extractInterconnectRC_thick_oxide_reduces_cap
+    (c1 c2 : CutlineColumn)
+    (hOxide : c1.ildOxideNm ≤ c2.ildOxideNm) :
+    (extractInterconnectRCFromCutline c2).2 ≤ (extractInterconnectRCFromCutline c1).2 := by
+  simp only [extractInterconnectRCFromCutline]
+  have hMaxLe : max c1.ildOxideNm 1 ≤ max c2.ildOxideNm 1 := by omega
+  have hPos : 0 < max c1.ildOxideNm 1 := by omega
+  exact Nat.div_le_div_left hMaxLe hPos
 
 end Obend.Hardware.FabuBlox
 end

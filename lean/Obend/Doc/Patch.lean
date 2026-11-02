@@ -366,6 +366,182 @@ end Teeth
 #tooth apply_invert by mutation Patch.invert := fun p => p
 #tooth apply_frame by mutation Op.touches := fun _ => []
 
+/-! ### Keyed Structured Cells (`Content.cell`) & Cell-Level Patching -/
+
+mutual
+/-- Kernel-exposed decidable equality on `Obend.Core.Data.Data` for 3-way cell diffs and merges. -/
+@[expose] def decDataExposed : (a b : Obend.Core.Data.Data) → Decidable (a = b)
+  | .natural x, .natural y =>
+    if h : x = y then isTrue (by rw [h]) else isFalse (by intro e; cases e; exact h rfl)
+  | .natural _, .boolean _ => isFalse (by intro h; cases h)
+  | .natural _, .label _ => isFalse (by intro h; cases h)
+  | .natural _, .record _ => isFalse (by intro h; cases h)
+  | .natural _, .variant _ _ => isFalse (by intro h; cases h)
+  | .boolean _, .natural _ => isFalse (by intro h; cases h)
+  | .boolean x, .boolean y =>
+    if h : x = y then isTrue (by rw [h]) else isFalse (by intro e; cases e; exact h rfl)
+  | .boolean _, .label _ => isFalse (by intro h; cases h)
+  | .boolean _, .record _ => isFalse (by intro h; cases h)
+  | .boolean _, .variant _ _ => isFalse (by intro h; cases h)
+  | .label _, .natural _ => isFalse (by intro h; cases h)
+  | .label _, .boolean _ => isFalse (by intro h; cases h)
+  | .label x, .label y =>
+    if h : x = y then isTrue (by rw [h]) else isFalse (by intro e; cases e; exact h rfl)
+  | .label _, .record _ => isFalse (by intro h; cases h)
+  | .label _, .variant _ _ => isFalse (by intro h; cases h)
+  | .record _, .natural _ => isFalse (by intro h; cases h)
+  | .record _, .boolean _ => isFalse (by intro h; cases h)
+  | .record _, .label _ => isFalse (by intro h; cases h)
+  | .record fs, .record gs =>
+    match decFieldsExposed fs gs with
+    | isTrue h => isTrue (by rw [h])
+    | isFalse h => isFalse (by intro e; cases e; exact h rfl)
+  | .record _, .variant _ _ => isFalse (by intro h; cases h)
+  | .variant _ _, .natural _ => isFalse (by intro h; cases h)
+  | .variant _ _, .boolean _ => isFalse (by intro h; cases h)
+  | .variant _ _, .label _ => isFalse (by intro h; cases h)
+  | .variant _ _, .record _ => isFalse (by intro h; cases h)
+  | .variant l p, .variant m q =>
+    if hl : l = m then
+      match decDataExposed p q with
+      | isTrue h => isTrue (by rw [hl, h])
+      | isFalse h => isFalse (by intro e; cases e; exact h rfl)
+    else isFalse (by intro e; cases e; exact hl rfl)
+
+@[expose] def decFieldsExposed :
+    (fs gs : List (String × Obend.Core.Data.Data)) → Decidable (fs = gs)
+  | [], [] => isTrue rfl
+  | [], _ :: _ => isFalse (by intro h; cases h)
+  | _ :: _, [] => isFalse (by intro h; cases h)
+  | (n, a) :: fs, (m, b) :: gs =>
+    if hn : n = m then
+      match decDataExposed a b, decFieldsExposed fs gs with
+      | isTrue h, isTrue h' => isTrue (by rw [hn, h, h'])
+      | isFalse h, _ => isFalse (by intro e; cases e; exact h rfl)
+      | _, isFalse h => isFalse (by intro e; cases e; exact h rfl)
+    else isFalse (by intro e; cases e; exact hn rfl)
+end
+
+instance (priority := high) instDecidableEqDataExposed :
+    DecidableEq Obend.Core.Data.Data := decDataExposed
+
+namespace Graph
+
+/-- Extract all live structured `.cell` atoms of `G` as a keyed `(cellId, Data)` association list. -/
+@[expose] def keyedCells (G : Graph) : List (String × Obend.Core.Data.Data) :=
+  G.atoms.filterMap fun e => match e.2 with
+    | .cell id _ ast _ _ => if G.alive e.1 then some (id, ast) else none
+    | _ => none
+
+end Graph
+
+namespace Patch
+
+/-- A structured cell assignment that supersedes any live `.cell` atom with the same `cellId` in `G`:
+adds the new cell atom `i` after `after`, and tombstones previous live cells with key `cellId`. -/
+@[expose] def supersedeCell (G : Graph) (i after : AtomId) (cellId : String)
+    (kind : ProjectionKind) (ast : Obend.Core.Data.Data)
+    (pins : List (String × ByteArray)) (receipt : Option ByteArray) : Patch :=
+  .add i (.cell cellId kind ast pins receipt) after ::
+    (G.atoms.filterMap fun e => match e.2 with
+      | .cell id' _ _ _ _ => if id' = cellId && G.alive e.1 then some (.delete e.1) else none
+      | _ => none)
+
+/-- `supersedeCell` produces an authored forward patch (`Patch.forward = true`). -/
+theorem supersedeCell_forward (G : Graph) (i after : AtomId) (cellId : String)
+    (kind : ProjectionKind) (ast : Obend.Core.Data.Data)
+    (pins : List (String × ByteArray)) (receipt : Option ByteArray) :
+    (supersedeCell G i after cellId kind ast pins receipt).forward = true := by
+  simp only [supersedeCell, forward, List.all_cons, Op.forward, Bool.true_and, List.all_eq_true,
+    List.mem_filterMap]
+  rintro o ⟨e, _, he⟩
+  cases h2 : e.2 with
+  | text _ => simp [h2] at he
+  | cite _ _ => simp [h2] at he
+  | field _ _ => simp [h2] at he
+  | cell id' k' ast' pins' rec' =>
+    simp only [h2] at he
+    split at he
+    · simp only [Option.some.injEq] at he; subst he; rfl
+    · cases he
+
+/-- Deduplicate a list of string keys, keeping the first occurrence of each key in order. -/
+@[expose] def dedupStringKeys : List String → List String
+  | [] => []
+  | k :: rest => k :: (dedupStringKeys rest).filter (· != k)
+
+@[simp] theorem mem_dedupStringKeys {l : List String} {x : String} :
+    x ∈ dedupStringKeys l ↔ x ∈ l := by
+  induction l with
+  | nil => simp [dedupStringKeys]
+  | cons k rest ih =>
+    simp only [dedupStringKeys, List.mem_cons, List.mem_filter, ih, bne_iff_ne]
+    constructor
+    · rintro (rfl | ⟨hIn, _⟩)
+      · exact .inl rfl
+      · exact .inr hIn
+    · rintro (rfl | hIn)
+      · exact .inl rfl
+      · by_cases hEq : x = k
+        · exact .inl hEq
+        · exact .inr ⟨hIn, hEq⟩
+
+theorem lookup_eq_none_of_not_mem_map_fst {β : Type} {l : List (String × β)} {k : String}
+    (h : k ∉ l.map Prod.fst) :
+    l.lookup k = none := by
+  induction l with
+  | nil => rfl
+  | cons x rest ih =>
+    obtain ⟨k', v'⟩ := x
+    simp only [List.map_cons, List.mem_cons, not_or] at h
+    have hNe : (k == k') = false := beq_eq_false_iff_ne.2 h.1
+    simp only [List.lookup, hNe]
+    exact ih h.2
+
+/-- Compute the keyed cell diff between `base` and `branch`: returns `(k, branch.lookup k)` for every
+key `k` in `base` or `branch` whose value changed (`branch.lookup k ≠ base.lookup k`). -/
+@[expose] def diffKeyedCells
+    (base branch : List (String × Obend.Core.Data.Data)) :
+    List (String × Option Obend.Core.Data.Data) :=
+  let keys := dedupStringKeys ((base.map Prod.fst) ++ (branch.map Prod.fst))
+  keys.filterMap fun k =>
+    let bVal := base.lookup k
+    let brVal := branch.lookup k
+    if brVal = bVal then none else some (k, brVal)
+
+/-- Diffing any keyed cell state against itself produces zero changed keys. -/
+@[simp] theorem diffKeyedCells_self (cells : List (String × Obend.Core.Data.Data)) :
+    diffKeyedCells cells cells = [] := by
+  simp [diffKeyedCells]
+
+/-- Exact characterization of `diffKeyedCells`: `(k, v)` is in `diffKeyedCells base branch` iff
+`branch.lookup k ≠ base.lookup k` and `v = branch.lookup k`. -/
+theorem mem_diffKeyedCells
+    (base branch : List (String × Obend.Core.Data.Data))
+    (k : String) (v : Option Obend.Core.Data.Data) :
+    (k, v) ∈ diffKeyedCells base branch ↔
+      branch.lookup k ≠ base.lookup k ∧ v = branch.lookup k := by
+  simp only [diffKeyedCells, List.mem_filterMap, mem_dedupStringKeys, List.mem_append]
+  constructor
+  · rintro ⟨k', _, hIf⟩
+    by_cases hEq : branch.lookup k' = base.lookup k'
+    · simp [hEq] at hIf
+    · simp only [hEq, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hIf
+      obtain ⟨rfl, rfl⟩ := hIf
+      exact ⟨hEq, rfl⟩
+  · rintro ⟨hNe, rfl⟩
+    refine ⟨k, ?_, by simp [hNe]⟩
+    by_cases hInB : k ∈ base.map Prod.fst
+    · exact .inl hInB
+    · by_cases hInBr : k ∈ branch.map Prod.fst
+      · exact .inr hInBr
+      · exfalso
+        apply hNe
+        rw [lookup_eq_none_of_not_mem_map_fst hInBr, lookup_eq_none_of_not_mem_map_fst hInB]
+
+end Patch
+
 end Obend.Doc
 
 end
+

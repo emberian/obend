@@ -25,6 +25,9 @@ public import Obend.Hardware.Circuits
 public import Obend.Hardware.Retiming
 public import Obend.Hardware.Fabric
 public import Obend.Hardware.Analog
+public import Obend.Hardware.Magnetics
+public import Obend.Hardware.FluidThermal
+public import Obend.Hardware.PowerElectronics
 
 @[expose] public section
 
@@ -41,6 +44,10 @@ open Obend.Hardware.Circuits
 open Obend.Hardware.Retiming
 open Obend.Hardware.Analog
 open Obend.Hardware.Fabric
+open Obend.Hardware.Thermal
+open Obend.Hardware.Magnetics
+open Obend.Hardware.FluidThermal
+open Obend.Hardware.PowerElectronics
 
 set_option autoImplicit false
 
@@ -520,5 +527,80 @@ theorem hardware_ast_pin_receipt_noninterference
     | .cell _ _ ast1 _ _, .cell _ _ ast2 _ _ => ast1 = ast2
     | _, _ => False :=
   rfl
+
+/-! ## 6. Coupled Drive-Train Co-Design Projection (`driveTrainCoDesignToData`, `projectDriveTrainCoDesign`) -/
+
+/-- Project a coupled Motor-Inverter-Cooler drive-train co-design specification
+(`CoupledDriveTrainSpec`) into canonical `Core.Data`. -/
+def driveTrainCoDesignToData (spec : CoupledDriveTrainSpec) : Data :=
+  let vPeakV := evalTurnOffPeakVoltageV spec.vDcBusV spec.lBusNh spec.diDtAmpPerNs
+  let pInv := evalSicInverterTotalLoss spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV
+  let motor : IpmMotorSpec :=
+    { polePairs    := spec.polePairs
+    , psiPmMilliWb := spec.psiPmMilliWb
+    , ldMicroH     := spec.ldMicroH
+    , lqMicroH     := spec.lqMicroH }
+  let shaftTorque := evalIpmTorqueScaled motor spec.idAmp spec.iqAmp
+  let cuSlope := evalCopperJouleSlope spec.iRmsAmp spec.r0CuMohm spec.alphaCuPermille
+  let passed := checkDriveTrainCoDesign spec
+  .record [
+    ("kind", .label "coupled_drive_train_codesign"),
+    ("drive_name", .label spec.driveName),
+    ("modulation_permille", dInt spec.modulationPermille),
+    ("v_dc_bus_v", dInt spec.vDcBusV),
+    ("v_peak_turn_off_v", dInt vPeakV),
+    ("v_dss_rated_v", dInt spec.vDssRatedV),
+    ("inverter_loss_w", dInt pInv),
+    ("max_inverter_loss_w", dInt spec.maxInverterLossBudget),
+    ("shaft_torque_scaled", dInt shaftTorque),
+    ("min_shaft_torque_scaled", dInt spec.minShaftTorqueScaled),
+    ("core_loss_w", dInt spec.pCoreLoss),
+    ("copper_joule_slope", dInt cuSlope),
+    ("cooler_conductance_gth", dInt spec.gThCooler),
+    ("thermal_margin_gth", dInt (spec.gThCooler - cuSlope)),
+    ("t_coolant_milli_c", dInt spec.tCoolantMilliC),
+    ("t_winding_milli_c", dInt spec.tWindingMilliC),
+    ("max_class_h_milli_c", dInt spec.maxClassHInsulationMilliC),
+    ("codesign_passed", .boolean passed),
+    ("status", .label (if passed then "DRIVETRAIN_CERTIFIED" else "DRIVETRAIN_REFUSED"))
+  ]
+
+/-- Project a coupled Motor-Inverter-Cooler `CoupledDriveTrainSpec` into a `.hardwareSchematic`
+`.obnb` `Doc.Content.cell` record. -/
+def projectDriveTrainCoDesign
+    (id : String)
+    (spec : CoupledDriveTrainSpec)
+    (pins : List (String × ByteArray) := [])
+    (receipt : Option ByteArray := none) : Doc.Content :=
+  .cell id .hardwareSchematic (driveTrainCoDesignToData spec) pins receipt
+
+/-- Theorem (`projectDriveTrainCoDesign_deterministic`):
+Coupled drive-train co-design `.obnb` projection is strictly deterministic. -/
+theorem projectDriveTrainCoDesign_deterministic
+    (id : String) (s1 s2 : CoupledDriveTrainSpec)
+    (pins1 pins2 : List (String × ByteArray))
+    (rec1 rec2 : Option ByteArray)
+    (hSpec : s1 = s2) (hPins : pins1 = pins2) (hRec : rec1 = rec2) :
+    projectDriveTrainCoDesign id s1 pins1 rec1 = projectDriveTrainCoDesign id s2 pins2 rec2 := by
+  subst hSpec hPins hRec
+  rfl
+
+/-- **Theorem (`driveTrainCoDesign_projection_sound`)**:
+For any `spec : CoupledDriveTrainSpec`, if `checkDriveTrainCoDesign spec = true`, then
+`driveTrainCoDesign_sound` guarantees all seven electromagnetic, power-electronic, and
+electro-thermal stability invariants, and `projectDriveTrainCoDesign` deterministically
+projects `goldenCoupledDriveTrainSpec` into a `.hardwareSchematic` cell. -/
+theorem driveTrainCoDesign_projection_sound
+    (id : String) (s1 s2 : CoupledDriveTrainSpec)
+    (pins : List (String × ByteArray)) (rec : Option ByteArray)
+    (hEq : s1 = s2)
+    (hOk : checkDriveTrainCoDesign s1 = true) :
+    projectDriveTrainCoDesign id s1 pins rec = projectDriveTrainCoDesign id s2 pins rec ∧
+    evalCopperJouleSlope s1.iRmsAmp s1.r0CuMohm s1.alphaCuPermille < s1.gThCooler ∧
+    evalTurnOffPeakVoltageV s1.vDcBusV s1.lBusNh s1.diDtAmpPerNs ≤ s1.vDssRatedV ∧
+    checkDriveTrainCoDesign goldenCoupledDriveTrainSpec = true := by
+  have hDet := projectDriveTrainCoDesign_deterministic id s1 s2 pins pins rec rec hEq rfl rfl
+  have hSound := driveTrainCoDesign_sound s1 hOk
+  refine ⟨hDet, hSound.2.2.2.2.2.1, hSound.2.1, golden_coupled_drive_train_verified⟩
 
 end Obend.Vault.HardwareProjection

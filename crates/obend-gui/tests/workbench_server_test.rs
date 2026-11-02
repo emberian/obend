@@ -763,3 +763,146 @@ def answer() -> Nat:
     assert_eq!(bad_elab.status, "refused");
 }
 
+#[test]
+fn test_wsg_vacuous_true_theorem_rejected_and_bounds_bound() {
+    let server = WorkbenchServer::start_ephemeral().expect("Failed to start WorkbenchServer");
+
+    // 1. Pop out snippet must bind concrete bounds [15, 35] and value 28, never `: True`
+    let pop_req = serde_json::json!({
+        "cell_id": "cell-thermal-ode",
+        "action": "pop",
+        "tactic": "obend_law",
+        "verify_subprocess": true
+    })
+    .to_string();
+    let (status, body) = server
+        .request("POST", "/lean-bridge", Some(&pop_req))
+        .unwrap();
+    assert_eq!(status, 200);
+    let pop_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+    assert!(pop_resp.verified);
+    assert!(!pop_resp.lean_snippet.contains(": True"));
+    assert!(pop_resp.lean_snippet.contains("(15 ≤ (28 : Int) ∧ (28 : Int) ≤ 35)"));
+
+    // 2. Vacuous `: True := by obend_law` snippet must be rejected
+    let vacuous_req = serde_json::json!({
+        "cell_id": "cell-thermal-ode",
+        "action": "weave",
+        "tactic": "obend_law",
+        "verify_subprocess": true,
+        "custom_lean_snippet": "theorem cell_vacuous_law : True := by\n  obend_law\n"
+    })
+    .to_string();
+    let (status, body) = server
+        .request("POST", "/lean-bridge", Some(&vacuous_req))
+        .unwrap();
+    assert_eq!(status, 200);
+    let vacuous_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+    assert!(
+        !vacuous_resp.verified,
+        "Vacuous `: True :=` theorem must be rejected by /lean-bridge"
+    );
+    assert!(vacuous_resp.woven_cert.is_none());
+
+    // 3. Vacuous `: True := by trivial` snippet must also be rejected
+    let trivial_req = serde_json::json!({
+        "cell_id": "cell-thermal-ode",
+        "action": "weave",
+        "tactic": "obend_law",
+        "verify_subprocess": true,
+        "custom_lean_snippet": "theorem cell_trivial_law : True := by\n  trivial\n"
+    })
+    .to_string();
+    let (status, body) = server
+        .request("POST", "/lean-bridge", Some(&trivial_req))
+        .unwrap();
+    assert_eq!(status, 200);
+    let trivial_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+    assert!(
+        !trivial_resp.verified,
+        "Vacuous `: True := by trivial` theorem must be rejected by /lean-bridge"
+    );
+    assert!(trivial_resp.woven_cert.is_none());
+
+    // 4. Binder-evaded or whitespace-evaded `: True` must be rejected
+    for evaded in [
+        "theorem cell_binder_vacuous (h : 1 ≤ 1) : True\n:= by trivial\n",
+        "theorem cell_ws_vacuous : True  := by trivial\n",
+        "theorem cell_conj_vacuous : True ∧ True := by exact ⟨trivial, trivial⟩\n",
+    ] {
+        let evaded_req = serde_json::json!({
+            "cell_id": "cell-thermal-ode",
+            "action": "weave",
+            "tactic": "obend_law",
+            "verify_subprocess": true,
+            "custom_lean_snippet": evaded
+        })
+        .to_string();
+        let (status, body) = server
+            .request("POST", "/lean-bridge", Some(&evaded_req))
+            .unwrap();
+        assert_eq!(status, 200);
+        let evaded_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+        assert!(
+            !evaded_resp.verified,
+            "Evaded vacuous theorem `{evaded}` must be rejected"
+        );
+        assert!(evaded_resp.woven_cert.is_none());
+    }
+
+    // 5. Unbound tautologies or comment-spoofed bounds must be rejected
+    for unbound in [
+        "theorem cell_unbound : (0 : Int) = 0 := by rfl\n",
+        "-- 15 28 35\ntheorem cell_comment_spoof : (0 : Int) = 0 := by rfl\n",
+    ] {
+        let unbound_req = serde_json::json!({
+            "cell_id": "cell-thermal-ode",
+            "action": "weave",
+            "tactic": "obend_law",
+            "verify_subprocess": true,
+            "custom_lean_snippet": unbound
+        })
+        .to_string();
+        let (status, body) = server
+            .request("POST", "/lean-bridge", Some(&unbound_req))
+            .unwrap();
+        assert_eq!(status, 200);
+        let unbound_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+        assert!(
+            !unbound_resp.verified,
+            "Unbound/comment-spoofed theorem `{unbound}` must be rejected"
+        );
+        assert!(unbound_resp.woven_cert.is_none());
+    }
+
+    // 6. Custom snippet that genuinely binds the cell's bounds [15, 35] and value 28 is accepted
+    let valid_custom_req = serde_json::json!({
+        "cell_id": "cell-thermal-ode",
+        "action": "weave",
+        "tactic": "obend_law",
+        "verify_subprocess": true,
+        "custom_lean_snippet": "theorem cell_thermal_custom_bound : (15 ≤ (28 : Int) ∧ (28 : Int) ≤ 35) := by\n  decide\n"
+    })
+    .to_string();
+    let (status, body) = server
+        .request("POST", "/lean-bridge", Some(&valid_custom_req))
+        .unwrap();
+    assert_eq!(status, 200);
+    let valid_custom_resp: LeanBridgeResponse = serde_json::from_str(&body).unwrap();
+    assert!(valid_custom_resp.verified);
+    assert!(valid_custom_resp.woven_cert.is_some());
+
+    // 7. Consecutive parameter scrubs on the same cell parameter must succeed without false stale-pin rejection
+    for val in [24.0, 29.0, 26.0] {
+        let eval_req = serde_json::json!({
+            "cell_id": "cell-thermal-ode",
+            "parameter": "T",
+            "value": val
+        })
+        .to_string();
+        let (status, body) = server
+            .request("POST", "/eval", Some(&eval_req))
+            .unwrap();
+        assert_eq!(status, 200, "Consecutive parameter scrub to {val} failed: {body}");
+    }
+}

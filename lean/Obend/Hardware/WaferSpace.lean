@@ -23,12 +23,21 @@ for open-source ASIC fabrication on **`wafer.space`** (`GF180MCU` 180nm 3.3V/5.0
      layout and golden schematic (`lvsMatch_sound`).
 5. **LibreLane / OpenLane 2 `GF180MCU` Configuration Generator (`emitLibreLaneGf180Json`)**.
 -/
+public import Obend.Hardware.Silicon
 public import Obend.Hardware.Process
+public import Obend.Hardware.HDL
+public import Obend.Hardware.Synth
+public import Obend.Hardware.Retiming
+public import Obend.Hardware.PlaceRoute
+public import Obend.Hardware.FabuBlox
+public import Obend.Hardware.DRC
 public import Obend.Hardware.Analog
 @[expose] public section
 
 namespace Obend.Hardware.WaferSpace
-open Obend.Hardware.Process Obend.Hardware.Analog
+open Obend.Hardware.Silicon Obend.Hardware.Process Obend.Hardware.HDL
+open Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
+open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog
 set_option autoImplicit false
 
 /-! ## 1. Open-Source MPW Foundry Process Profiles (`WaferSpacePdk`) -/
@@ -314,5 +323,176 @@ def emitLibreLaneGf180Json (designName verilogFile : String) (clockPeriodNs : Na
   "  \"RUN_KLAYOUT_DRC\": true,\n" ++
   "  \"RUN_NETGEN_LVS\": true\n" ++
   "}\n"
+
+/-! ## 7. Unified End-to-End Silicon Physical Implementation Spine (`EndToEndTapeoutPipeline`) -/
+
+/-- Unified end-to-end physical silicon implementation & tapeout pipeline welding:
+1. `Synth`: `RtlModule` $\to$ `BelNetlist` synthesis & FF count preservation,
+2. `Retiming`: `SyncGraph` + Leiserson–Saxe `RetimingCert` timing closure,
+3. `PlaceRoute` & `Silicon`: `PnrCertificate` + multi-sink `SteinerTree` Elmore RC delay + `PlacedChannel` SLR floorplan,
+4. `DRC`: 1D `CutlineDrcFeature` + 2D Manhattan `LayoutBox2D` spacing & via enclosure,
+5. `FabuBlox`: `WaferState` + `List FabStep` cleanroom damascene flow + process corner extraction,
+6. `WaferSpace`: `WaferSpaceSignoffCert` (`GF180MCU` / `Sky130` / `IHP SG13G2` padring + antenna + CMP + LVS). -/
+structure EndToEndTapeoutPipeline where
+  rtlModule      : RtlModule
+  syncGraph      : SyncGraph
+  retimingCert   : RetimingCert
+  clockPeriodPs  : Nat
+  pnrCert        : PnrCertificate
+  steinerTrees   : List SteinerTree
+  placedChannels : List PlacedChannel
+  drcDeck        : FoundryDrcDeck
+  cutlineFeature : CutlineDrcFeature
+  metalBoxA      : LayoutBox2D
+  metalBoxB      : LayoutBox2D
+  viaBox         : LayoutBox2D
+  viaPadBox      : LayoutBox2D
+  initialWafer   : WaferState
+  fabSteps       : List FabStep
+  waferSpaceCert : WaferSpaceSignoffCert
+  deriving DecidableEq, Repr
+
+/-- Unified kernel checker for the end-to-end RTL-to-GDS physical silicon implementation spine:
+chains `FabuBlox` process & RC extraction $\to$ `Synth` $\to$ `Retiming` $\to$ `PlaceRoute` (with
+multi-sink `SteinerTree` Elmore delay and `PlacedChannel` floorplan) $\to$ `DRC` (`LayoutBox2D` +
+`CutlineDrcFeature`) $\to$ `WaferSpace` signoff. -/
+def checkEndToEndSiliconSignoff (pipe : EndToEndTapeoutPipeline) : Bool :=
+  match runFabFlow pipe.initialWafer pipe.fabSteps with
+  | .error _ => false
+  | .ok finalWafer =>
+    let corner := extractCornerFromWafer finalWafer
+    finalWafer.columns.all (fun c => decide ((extractInterconnectRCFromCutline c).1 ≤ 500)) &&
+    checkSynthesizedRtlSignoff pipe.rtlModule &&
+    checkRetimingCert pipe.syncGraph pipe.retimingCert corner pipe.clockPeriodPs &&
+    checkPnrCertificate corner pipe.clockPeriodPs pipe.pnrCert &&
+    pipe.steinerTrees.all (checkSteinerTimingClosure corner pipe.clockPeriodPs) &&
+    checkAllChannelHops pipe.placedChannels &&
+    checkCutlineDRC pipe.drcDeck pipe.cutlineFeature &&
+    checkBoxSpacing2D pipe.drcDeck.minMetalSpacingNm pipe.metalBoxA pipe.metalBoxB &&
+    checkViaEnclosure2D pipe.drcDeck.minViaEnclosureNm pipe.viaBox pipe.viaPadBox &&
+    checkWaferSpaceSignoff pipe.waferSpaceCert
+
+/-- **Theorem (`checkEndToEndSiliconSignoff_sound`)**:
+If `checkEndToEndSiliconSignoff pipe = true`, then EVERY physical stage of the RTL-to-GDS spine
+is simultaneously verified:
+1. The `FabuBlox` cleanroom recipe succeeds (`∃ finalWafer, ...`), every fabricated cutline column
+   meets sheet-resistance signoff (`(extractInterconnectRCFromCutline c).1 ≤ 500`), and every
+   multi-sink `SteinerTree` closes Elmore RC setup timing at `extractCornerFromWafer finalWafer`,
+2. `pipe.rtlModule` is a valid combinational DAG + CDC-safe module whose synthesized `BelNetlist`
+   is valid and preserves exact flip-flop count (`countFfBels = pipe.rtlModule.regs.length`),
+3. Every edge `e ∈ pipe.syncGraph.edges` has non-negative Leiserson–Saxe retimed register weight
+   `0 ≤ retimedEdgeWeight (lookupLag pipe.retimingCert) e`,
+4. BEL placement is injective (`checkPlacementInjective pipe.pnrCert.placedCells = true`), routing
+   is short-free (`checkRoutingDisjoint pipe.pnrCert.routedNets = true`), and every `PlacedChannel`
+   satisfies tile-local / 2-stage Laguna SLR rules,
+5. The 1D cutline feature satisfies minimum foundry metal pitch (`drc_clean_implies_min_pitch`),
+   the 2D layout boxes `metalBoxA` and `metalBoxB` are point-wise disjoint (`¬ (metalBoxA.containsPoint x y ∧ metalBoxB.containsPoint x y)`),
+   and every point in `viaBox` is strictly enclosed inside `viaPadBox`,
+6. The `wafer.space` MPW shuttle submission has 4 corner continuity cells, complete per-pad ESD
+   protection, and exact Layout-Versus-Schematic (`schematicSig = layoutSig`) equivalence! -/
+theorem checkEndToEndSiliconSignoff_sound (pipe : EndToEndTapeoutPipeline)
+    (hOk : checkEndToEndSiliconSignoff pipe = true) :
+    (∃ finalWafer,
+      runFabFlow pipe.initialWafer pipe.fabSteps = .ok finalWafer ∧
+      (∀ c ∈ finalWafer.columns, (extractInterconnectRCFromCutline c).1 ≤ 500) ∧
+      (∀ t ∈ pipe.steinerTrees,
+        checkSteinerTimingClosure (extractCornerFromWafer finalWafer) pipe.clockPeriodPs t = true)) ∧
+    checkRtlModule pipe.rtlModule = true ∧
+    checkBelNetlistValid (synthesizeModuleToBels pipe.rtlModule) = true ∧
+    countFfBels (synthesizeModuleToBels pipe.rtlModule) = pipe.rtlModule.regs.length ∧
+    (∀ e ∈ pipe.syncGraph.edges, 0 ≤ retimedEdgeWeight (lookupLag pipe.retimingCert) e) ∧
+    checkPlacementInjective pipe.pnrCert.placedCells = true ∧
+    checkRoutingDisjoint pipe.pnrCert.routedNets = true ∧
+    (∀ ch ∈ pipe.placedChannels, checkChannelHop ch = .ok ()) ∧
+    pipe.drcDeck.minMetalWidthNm + pipe.drcDeck.minMetalSpacingNm ≤
+      pipe.cutlineFeature.metalWidthNm + pipe.cutlineFeature.metalSpacingNm ∧
+    (∀ x y, ¬ (pipe.metalBoxA.containsPoint x y ∧ pipe.metalBoxB.containsPoint x y)) ∧
+    (∀ x y, pipe.viaBox.containsPoint x y → pipe.viaPadBox.containsPoint x y) ∧
+    pipe.waferSpaceCert.padring.numCornerCells = 4 ∧
+    pipe.waferSpaceCert.schematicSig = pipe.waferSpaceCert.layoutSig := by
+  unfold checkEndToEndSiliconSignoff at hOk
+  cases hFab : runFabFlow pipe.initialWafer pipe.fabSteps with
+  | error err => rw [hFab] at hOk; cases hOk
+  | ok finalWafer =>
+    rw [hFab] at hOk
+    dsimp only at hOk
+    simp only [Bool.and_eq_true] at hOk
+    rcases hOk with ⟨⟨⟨⟨⟨⟨⟨⟨⟨hRc, hSynth⟩, hRet⟩, hPnr⟩, hSteiner⟩, hChan⟩, hCutDrc⟩, hBoxSpace⟩, hViaEnc⟩, hWs⟩
+    have hRcAll : ∀ c ∈ finalWafer.columns, (extractInterconnectRCFromCutline c).1 ≤ 500 := by
+      intro c hMem
+      simp only [List.all_eq_true, decide_eq_true_eq] at hRc
+      exact hRc c hMem
+    have hSteinerAll : ∀ t ∈ pipe.steinerTrees,
+        checkSteinerTimingClosure (extractCornerFromWafer finalWafer) pipe.clockPeriodPs t = true := by
+      intro t hMem
+      simp only [List.all_eq_true] at hSteiner
+      exact hSteiner t hMem
+    have hSynthSound := checkSynthesizedRtlSignoff_sound pipe.rtlModule hSynth
+    have hRetNonneg : ∀ e ∈ pipe.syncGraph.edges, 0 ≤ retimedEdgeWeight (lookupLag pipe.retimingCert) e := by
+      simp only [checkRetimingCert, Bool.and_eq_true] at hRet
+      exact retimed_weights_nonneg (lookupLag pipe.retimingCert) pipe.syncGraph.edges hRet.1.1
+    have hPnrParts : checkPlacementInjective pipe.pnrCert.placedCells = true ∧
+        checkRoutingDisjoint pipe.pnrCert.routedNets = true := by
+      simp only [checkPnrCertificate, Bool.and_eq_true] at hPnr
+      exact ⟨hPnr.1.1.1.1, hPnr.1.1.2⟩
+    have hChanSound : ∀ ch ∈ pipe.placedChannels, checkChannelHop ch = .ok () := by
+      intro ch hMem
+      exact (checkAllChannelHops_sound pipe.placedChannels hChan ch hMem).1
+    have hPitch := drc_clean_implies_min_pitch pipe.drcDeck pipe.cutlineFeature hCutDrc
+    have hWsParts : pipe.waferSpaceCert.padring.numCornerCells = 4 ∧
+        pipe.waferSpaceCert.schematicSig = pipe.waferSpaceCert.layoutSig := by
+      simp only [checkWaferSpaceSignoff, Bool.and_eq_true] at hWs
+      exact ⟨(padring_esd_and_power_complete pipe.waferSpaceCert.padring hWs.1.1.1.1).1,
+             lvsMatch_sound pipe.waferSpaceCert.schematicSig pipe.waferSpaceCert.layoutSig hWs.2⟩
+    refine ⟨⟨finalWafer, rfl, hRcAll, hSteinerAll⟩,
+            hSynthSound.1,
+            hSynthSound.2.1,
+            hSynthSound.2.2,
+            hRetNonneg,
+            hPnrParts.1,
+            hPnrParts.2,
+            hChanSound,
+            hPitch,
+            fun x y => boxSpacing2D_disjoint pipe.drcDeck.minMetalSpacingNm pipe.metalBoxA pipe.metalBoxB x y hBoxSpace,
+            fun x y hIn => (viaEnclosure2D_contained pipe.drcDeck.minViaEnclosureNm pipe.viaBox pipe.viaPadBox x y hViaEnc hIn).1,
+            hWsParts.1,
+            hWsParts.2⟩
+
+/-- Golden end-to-end silicon physical implementation pipeline on `corner7nm_SS` / `GF180MCU`. -/
+def goldenEndToEndSiliconPipeline : EndToEndTapeoutPipeline where
+  rtlModule      := goldenRetimedMacRtl
+  syncGraph      := macUnretimedGraph
+  retimingCert   := balancedRetimingCert
+  clockPeriodPs  := 2000
+  pnrCert        := validAdderPnrCert
+  steinerTrees   := [bufferedFanoutTree]
+  placedChannels := goldenPlacedChannels
+  drcDeck        :=
+    { deckName          := "FabuBlox-7nm-BEOL"
+    , minMetalWidthNm   := 40
+    , minMetalSpacingNm := 40
+    , minViaWidthNm     := 36
+    , minViaEnclosureNm := 10
+    , maxResistAspect   := 4 }
+  cutlineFeature :=
+    { metalWidthNm    := 100
+    , metalSpacingNm  := 80
+    , viaWidthNm      := 40
+    , viaEnclosureNm  := 20
+    , resistHeightNm  := 120
+    , resistOpeningNm := 40
+    , ildThicknessNm  := 100 }
+  metalBoxA      := { layerId := 1, xMinNm := 0,   yMinNm := 0,  xMaxNm := 100, yMaxNm := 200 }
+  metalBoxB      := { layerId := 1, xMinNm := 160, yMinNm := 0,  xMaxNm := 260, yMaxNm := 200 }
+  viaBox         := { layerId := 2, xMinNm := 20,  yMinNm := 20, xMaxNm := 60,  yMaxNm := 60  }
+  viaPadBox      := { layerId := 1, xMinNm := 0,   yMinNm := 0,  xMaxNm := 100, yMaxNm := 100 }
+  initialWafer   := initialCmosWafer
+  fabSteps       := cmosDamasceneFlow
+  waferSpaceCert := goldenGf180SignoffCert
+
+/-- Theorem: `goldenEndToEndSiliconPipeline` passes the unified `checkEndToEndSiliconSignoff` gate! -/
+theorem goldenEndToEndSiliconPipeline_verified :
+    checkEndToEndSiliconSignoff goldenEndToEndSiliconPipeline = true := by
+  decide +kernel
 
 end Obend.Hardware.WaferSpace

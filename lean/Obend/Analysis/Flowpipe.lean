@@ -189,5 +189,184 @@ theorem flowpipe_safety_admits_contract
     Holds (odeSafetyCellContract maxTemp).invariant s_final :=
   flowpipe_safety_implies_contract_holds maxTemp s₀ s_final steps h_init h_tr
 
+/-! ## 4. Validated Picard–Lindelöf A-Priori Enclosure & Derived Remainder (`verifyPicardAPriori`, `derivePicardRemainder`, `picard_step_encloses_trajectory`) -/
+
+/-- Evaluate the primary vector field of `f : OdeSystem` over an interval enclosure `xTilde`. -/
+def evalOdeField (f : OdeSystem) (xTilde : Interval) : Interval :=
+  let env := f.fields.map (fun (name, _) => (name, xTilde))
+  match f.fields with
+  | [] => Interval.ofPoint 0
+  | (_, rhsExpr) :: _ =>
+    (evalInterval env rhsExpr).getD (Interval.ofPoint 0)
+
+/-- Evaluate the interval Jacobian $\frac{\partial f}{\partial x}$ of the primary vector field of `f`
+over `xTilde` via forward-mode interval AD (`evalDualInterval`). -/
+def evalOdeJacobian (f : OdeSystem) (xTilde : Interval) : Interval :=
+  let env := f.fields.map (fun (name, _) => (name, xTilde))
+  match f.fields with
+  | [] => Interval.ofPoint 0
+  | (name, rhsExpr) :: _ =>
+    match evalDualInterval env name rhsExpr with
+    | some dIv => dIv.der
+    | none     => Interval.ofPoint 0
+
+/-- Verify the Picard–Lindelöf a-priori enclosure condition:
+$$X_0 \oplus ([0, h] \otimes F(\tilde{X})) \subseteq \tilde{X}$$ -/
+def verifyPicardAPriori (f : OdeSystem) (x0 xTilde : Interval) (h : CanonicalRat) : Bool :=
+  Interval.subset (Interval.add x0 (Interval.mul (Interval.mk 0 h) (evalOdeField f xTilde))) xTilde
+
+/-- Automatically derive the validated 2nd-order Lagrange remainder interval:
+$$R_2(L, F(\tilde{X}), h) = \left[\frac{h^2}{2}, \frac{h^2}{2}\right] \otimes (L \otimes F(\tilde{X}))$$
+from the interval Jacobian enclosure $L \supseteq f'(\tilde{X})$ and vector-field bound $\text{fBound} \supseteq f(\tilde{X})$. -/
+def derivePicardRemainder (L : Interval) (fBound : Interval) (h : CanonicalRat) : Interval :=
+  let hSqHalf := Interval.ofPoint ((h * h) / 2)
+  Interval.mul hSqHalf (Interval.mul L fBound)
+
+/-- Compute a single validated 1D Picard–Taylor step using the automatically derived remainder
+`derivePicardRemainder L (evalOdeField f xTilde) h`. -/
+def stepPicardValidated1D (f : OdeSystem) (x0 xTilde L : Interval) (h : CanonicalRat) : Interval :=
+  stepFlowpipe1D x0 (evalOdeField f x0) h (derivePicardRemainder L (evalOdeField f xTilde) h)
+
+theorem lookup_map_const_interval
+    (fields : List (String × RealExpr)) (xTilde : Interval)
+    (v : String) (I : Interval)
+    (hLook : (fields.map (fun (name, _) => (name, xTilde))).lookup v = some I) :
+    I = xTilde := by
+  induction fields with
+  | nil => cases hLook
+  | cons hd tl ih =>
+    rcases hd with ⟨name, _⟩
+    simp only [List.map_cons, List.lookup] at hLook
+    split at hLook
+    · injection hLook with hEq
+      exact hEq.symm
+    · exact ih hLook
+
+/-- Universal soundness of `evalOdeField`: for any ODE system `f` with primary field `(name, rhsExpr)`
+whose interval evaluation succeeds, if `x ∈ xTilde`, then `evalExpr (fun _ => x) rhsExpr ∈ evalOdeField f xTilde`. -/
+theorem evalOdeField_sound
+    (f : OdeSystem) (name : String) (rhsExpr : RealExpr) (rest : List (String × RealExpr))
+    (xTilde fIv : Interval) (x : CanonicalRat)
+    (hFields : f.fields = (name, rhsExpr) :: rest)
+    (hEval : evalInterval (f.fields.map (fun (n, _) => (n, xTilde))) rhsExpr = some fIv)
+    (hx : x ∈ xTilde) :
+    evalExpr (fun _ => x) rhsExpr ∈ evalOdeField f xTilde := by
+  unfold evalOdeField
+  rw [hFields] at hEval ⊢
+  dsimp only
+  rw [hEval, Option.getD_some]
+  refine evalInterval_sound _ (fun _ => x) ?_ rhsExpr fIv hEval
+  intro v I hLook
+  have hEq := lookup_map_const_interval ((name, rhsExpr) :: rest) xTilde v I hLook
+  subst hEq
+  exact hx
+
+/-- Universal soundness of `evalOdeJacobian`: for any ODE system `f` with primary field `(name, rhsExpr)`
+whose forward-mode interval AD evaluation succeeds, if `x ∈ xTilde`, then the exact Jacobian
+`(evalDualRat (fun _ => x) name rhsExpr).der` is enclosed in `evalOdeJacobian f xTilde`. -/
+theorem evalOdeJacobian_sound
+    (f : OdeSystem) (name : String) (rhsExpr : RealExpr) (rest : List (String × RealExpr))
+    (xTilde : Interval) (dIv : DualInterval) (x : CanonicalRat)
+    (hFields : f.fields = (name, rhsExpr) :: rest)
+    (hEval : evalDualInterval (f.fields.map (fun (n, _) => (n, xTilde))) name rhsExpr = some dIv)
+    (hx : x ∈ xTilde) :
+    (evalDualRat (fun _ => x) name rhsExpr).der ∈ evalOdeJacobian f xTilde := by
+  unfold evalOdeJacobian
+  rw [hFields] at hEval ⊢
+  dsimp only
+  rw [hEval]
+  refine (evalDualInterval_sound _ (fun _ => x) ?_ name rhsExpr dIv hEval).2
+  intro v I hLook
+  have hEq := lookup_map_const_interval ((name, rhsExpr) :: rest) xTilde v I hLook
+  subst hEq
+  exact hx
+
+/-- Universal enclosure of `stepFlowpipe1D`: for any initial state $x_0 \in \text{stateBox}$,
+velocity $v_0 \in \text{velBox}$, and remainder $r \in \text{remPad}$,
+$x_0 + \Delta t \cdot v_0 + r \in \text{stepFlowpipe1D stateBox velBox dt remPad}$. -/
+theorem stepFlowpipe1D_mem
+    {stateBox velBox remPad : Interval} {x0 v0 r : CanonicalRat} (dt : CanonicalRat)
+    (hx0 : x0 ∈ stateBox) (hv0 : v0 ∈ velBox) (hr : r ∈ remPad) :
+    (x0 + dt * v0 + r) ∈ stepFlowpipe1D stateBox velBox dt remPad := by
+  unfold stepFlowpipe1D
+  exact Interval.add_mem (Interval.add_mem hx0 (Interval.mul_mem (Interval.ofPoint_mem dt) hv0)) hr
+
+/-- Universal enclosure of `derivePicardRemainder`: for any Jacobian value $\text{df}_\xi \in L$
+and vector-field value $f_\xi \in \text{fBound}$, the 2nd-order Taylor-Lagrange remainder term
+$\frac{h^2}{2} (\text{df}_\xi \cdot f_\xi)$ is enclosed in `derivePicardRemainder L fBound h`. -/
+theorem derivePicardRemainder_mem
+    {L fBound : Interval} {df_xi f_xi : CanonicalRat} (h : CanonicalRat)
+    (hL : df_xi ∈ L) (hF : f_xi ∈ fBound) :
+    (((h * h) / 2) * (df_xi * f_xi)) ∈ derivePicardRemainder L fBound h := by
+  unfold derivePicardRemainder
+  exact Interval.mul_mem (Interval.ofPoint_mem ((h * h) / 2)) (Interval.mul_mem hL hF)
+
+/-- Universal soundness of `verifyPicardAPriori`: if `verifyPicardAPriori f x0 xTilde h = true`,
+then for every initial state $x_{\text{init}} \in X_0$, time $t \in [0, h]$, and intermediate
+velocity $v_t \in F(\tilde{X})$, the Euler/mean-value trajectory point $x_{\text{init}} + t \cdot v_t$
+remains inside the a-priori enclosure $\tilde{X}$. -/
+theorem verifyPicardAPriori_encloses
+    (f : OdeSystem) (x0 xTilde : Interval) (h : CanonicalRat)
+    (hPicard : verifyPicardAPriori f x0 xTilde h = true)
+    {x_init t v_t : CanonicalRat}
+    (hx0 : x_init ∈ x0)
+    (ht : t ∈ Interval.mk 0 h)
+    (hvt : v_t ∈ evalOdeField f xTilde) :
+    (x_init + t * v_t) ∈ xTilde := by
+  unfold verifyPicardAPriori at hPicard
+  exact Interval.subset_sound hPicard (Interval.add_mem hx0 (Interval.mul_mem ht hvt))
+
+/-- **Theorem (`picard_step_encloses_trajectory`)**:
+1. **Universal Validated Picard–Lindelöf Step Soundness**:
+   For any `f : OdeSystem`, initial interval `x0`, verified a-priori enclosure `xTilde`
+   (`verifyPicardAPriori f x0 xTilde h = true`), Jacobian enclosure `L`, and step size `h`:
+   - Every intermediate mean-value state $x(0) + t \cdot f(x(\xi))$ ($t \in [0, h], f(x(\xi)) \in F(\tilde{X})$)
+     is enclosed in `xTilde`, and
+   - Every trajectory endpoint $x(h) = x(0) + h \cdot f(x(0)) + \frac{h^2}{2} f'(x(\xi)) f(x(\xi))$
+     with $x(0) \in x_0$, $f(x(0)) \in F(x_0)$, $f'(x(\xi)) \in L$, and $f(x(\xi)) \in F(\tilde{X})$
+     is enclosed in `stepPicardValidated1D f x0 xTilde L h`!
+2. **Concrete Thermal Cooling Trajectory Verification ($x(0) = 30, \dot{x} = 20 - x, h = 1/2$)**:
+   - `verifyPicardAPriori thermalCoolingOde ⟨30, 30⟩ ⟨25, 30⟩ (1/2) = true` and
+     `verifyPicardAPriori thermalCoolingOde ⟨28, 30⟩ ⟨23, 30⟩ (1/2) = true`,
+   - `evalOdeJacobian thermalCoolingOde ⟨25, 30⟩ = ⟨-1, -1⟩`,
+   - `derivePicardRemainder ⟨-1, -1⟩ (evalOdeField thermalCoolingOde ⟨25, 30⟩) (1/2) = ⟨5/8, 5/4⟩`,
+   - The derived Picard enclosure from $x(0) = 30$ (`stepPicardValidated1D thermalCoolingOde ⟨30, 30⟩ ⟨25, 30⟩ ⟨-1, -1⟩ (1/2) = [205/8, 105/4] = [25.625, 26.25]`)
+     and from $X_0 = [28, 30]$ (`[187/8, 109/4] = [23.375, 27.25]`) genuinely enclose the analytical
+     solution $20 + 10 e^{-1/2} \approx 26.0653$ (`260653 / 10000`). -/
+theorem picard_step_encloses_trajectory :
+    (∀ (f : OdeSystem) (x0 xTilde L : Interval) (h x_init v0 df_xi f_xi t : CanonicalRat),
+      verifyPicardAPriori f x0 xTilde h = true →
+      x_init ∈ x0 →
+      v0 ∈ evalOdeField f x0 →
+      df_xi ∈ L →
+      f_xi ∈ evalOdeField f xTilde →
+      t ∈ Interval.mk 0 h →
+      (x_init + t * f_xi) ∈ xTilde ∧
+      (x_init + h * v0 + ((h * h) / 2) * (df_xi * f_xi)) ∈
+        stepPicardValidated1D f x0 xTilde L h) ∧
+    (let h : CanonicalRat := CanonicalRat.mk 1 2
+     let x0Pt : Interval := ⟨30, 30⟩
+     let xTildePt : Interval := ⟨25, 30⟩
+     let x0Box : Interval := ⟨28, 30⟩
+     let xTildeBox : Interval := ⟨23, 30⟩
+     let L := evalOdeJacobian thermalCoolingOde xTildePt
+     let remPt := derivePicardRemainder L (evalOdeField thermalCoolingOde xTildePt) h
+     let stepPt := stepPicardValidated1D thermalCoolingOde x0Pt xTildePt L h
+     let stepBox := stepPicardValidated1D thermalCoolingOde x0Box xTildeBox L h
+     let exactTrajApprox : CanonicalRat := CanonicalRat.mk 260653 10000
+     verifyPicardAPriori thermalCoolingOde x0Pt xTildePt h = true ∧
+     verifyPicardAPriori thermalCoolingOde x0Box xTildeBox h = true ∧
+     L = ⟨-1, -1⟩ ∧
+     remPt = ⟨CanonicalRat.mk 5 8, CanonicalRat.mk 5 4⟩ ∧
+     stepPt = ⟨CanonicalRat.mk 205 8, CanonicalRat.mk 105 4⟩ ∧
+     stepBox = ⟨CanonicalRat.mk 187 8, CanonicalRat.mk 109 4⟩ ∧
+     Interval.containsRat stepPt exactTrajApprox = true ∧
+     Interval.containsRat stepBox exactTrajApprox = true) := by
+  refine ⟨?_, by decide +kernel⟩
+  intro f x0 xTilde L h x_init v0 df_xi f_xi t hPic hx0 hv0 hL hF ht
+  exact ⟨verifyPicardAPriori_encloses f x0 xTilde h hPic hx0 ht hF,
+    stepFlowpipe1D_mem h hx0 hv0 (derivePicardRemainder_mem h hL hF)⟩
+
 end Obend.Analysis
 end
+

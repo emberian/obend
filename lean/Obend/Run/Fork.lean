@@ -194,6 +194,19 @@ theorem stitch_union_comm (step : St → E → Except R St) (main : St × List M
   simp only [stitch_union]
   constructor <;> rintro ((h | h) | h) <;> simp [h]
 
+/-- **Monotone union is idempotent**: stitching the same fork's grown facts twice yields the exact same fact membership. -/
+theorem stitch_union_idem (step : St → E → Except R St) (main : St × List M) (F : Fork Tok M E) (x : M) :
+    x ∈ (stitch step (stitch step main F).1 F).1.2 ↔ x ∈ (stitch step main F).1.2 := by
+  simp only [stitch_union]
+  constructor
+  · rintro ((h | h) | h)
+    · exact .inl h
+    · exact .inr h
+    · exact .inr h
+  · rintro (h | h)
+    · exact .inl (.inl h)
+    · exact .inr h
+
 /-- What every accepted step keeps, the replay keeps. -/
 theorem replay_keeps (step : St → E → Except R St) (P : St → Prop)
     (keep : ∀ s e s', P s → step s e = .ok s' → P s') : ∀ (es : List E) (s : St), P s → P (replay step s es).1

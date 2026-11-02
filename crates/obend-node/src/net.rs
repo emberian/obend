@@ -98,10 +98,37 @@ pub enum SandboxViolation {
     DuplicateWriteSlot { agent: String },
 }
 
+/// Errors returned by durable Write-Ahead Log (`DurableNodeWal`) and outbox exposure operations
+/// mirroring `Obend.Run.Durable.HRefusal`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+pub enum ExposedOnceError {
+    #[error("volatile memory is down after crash; recover_from_wal() required first")]
+    NodeDown,
+    #[error("journal position {0} does not hold a dispatch effect")]
+    NotDispatch(u64),
+    #[error("outbox receipt position {0} has already been exposed (`expose_once`)")]
+    AlreadyExposed(u64),
+    #[error("volatile memory is already up; nothing to recover")]
+    AlreadyUp,
+    #[error("corrupt write-ahead log byte frame: {0}")]
+    CorruptWal(String),
+    #[error("token {token_id} already consumed at journal position {existing_pos} (`journal_once`)")]
+    TokenAlreadyConsumed { token_id: u64, existing_pos: u64 },
+    #[error("post-recovery equivocation refused at view {view} for kind {kind:?}: already voted {existing_block_hash:?}, refused {attempted_block_hash:?}")]
+    EquivocationRefused {
+        view: u64,
+        kind: SimplexVoteKind,
+        existing_block_hash: [u8; 32],
+        attempted_block_hash: [u8; 32],
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
     #[error("sandbox confinement violation: {0}")]
     Sandbox(#[from] SandboxViolation),
+    #[error("durable WAL / outbox error: {0}")]
+    Wal(#[from] ExposedOnceError),
     #[error("FFI kernel error: {0}")]
     Ffi(#[from] ObendError),
     #[error("I/O socket error: {0}")]
@@ -1251,6 +1278,499 @@ impl WireEnvelope {
     }
 }
 
+// ============================================================================
+// 5b. Durable Consensus & Outbox Write-Ahead Log (`DurableNodeWal`, `Obend.Run.Durable`)
+// ============================================================================
+
+/// Durable receipt identity naming a position in the Write-Ahead Log (`Obend.Run.Durable`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct OutboxReceiptId(pub u64);
+
+impl OutboxReceiptId {
+    pub fn pos(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for OutboxReceiptId {
+    fn from(pos: u64) -> Self {
+        Self(pos)
+    }
+}
+
+impl From<OutboxReceiptId> for u64 {
+    fn from(id: OutboxReceiptId) -> Self {
+        id.0
+    }
+}
+
+/// Write-Ahead Log entry recorded before consensus messages or dispatch effects are exposed (`Obend.Run.Durable`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WalEntry {
+    /// Validator vote cast in a `Simplex` view (`Propose`, `Vote`, `Skip`, or `Finalize`).
+    VoteCast(SignedSimplexVote),
+    /// Tier 2 finalized block record (`FinCert` quorum).
+    BlockFinalized(FinalizedBlockRecord),
+    /// Tier 1 disjoint fast-path commit certificate (`FastPathCert`).
+    FastPathCommitted(FastPathCert),
+    /// View-skip certificate (`SkipCert`).
+    SkipCertified(SkipCert),
+    /// Tier 3 collapsed epoch receipt (`CollapsedEpochReceipt`).
+    EpochCollapsed(CollapsedEpochReceipt),
+    /// Accepted dispatch effect (`Obend.Run.Durable.JEvent.dispatch`) with optional one-use token ID.
+    DispatchEffect {
+        turn: VaultTurn,
+        token_id: Option<u64>,
+    },
+    /// Durable outbox exposure marker recording that journal position `pos` has been exposed (`expose n`).
+    OutboxExposed {
+        pos: u64,
+    },
+}
+
+/// Durable Consensus & Outbox Write-Ahead Log (`Obend.Run.Durable.DState`):
+/// - `journal`: durable append-only log of accepted consensus and dispatch events (`Vec<WalEntry>`),
+/// - `outbox`: durable set of exposed journal positions (`BTreeSet<u64>`),
+/// - `byte_log`: serialized, length-prefixed, `cSHAKE256`-authenticated byte log,
+/// - volatile in-memory state (`memory_up`, `voted_by_view`, `highest_voted_view`, `consumed_tokens`, etc.)
+///   lost on `simulate_crash()` and deterministically reconstructed by `recover_from_wal()`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurableNodeWal {
+    /// Durable append-only journal (`DState.journal`).
+    pub journal: Vec<WalEntry>,
+    /// Durable exposed outbox receipt positions (`DState.outbox`).
+    pub outbox: BTreeSet<u64>,
+    /// Durable framed & `cSHAKE256`-authenticated byte log of all journal and outbox events.
+    pub byte_log: Vec<u8>,
+    /// Whether volatile memory is currently up (`DState.mem.isSome`).
+    pub memory_up: bool,
+    /// Volatile in-memory map of `(view, kind_tag) -> SignedSimplexVote` preventing double-voting in the same view.
+    pub voted_by_view: BTreeMap<(u64, u8), SignedSimplexVote>,
+    /// Volatile in-memory highest voted view.
+    pub highest_voted_view: u64,
+    /// Volatile in-memory finalized blocks replayed from the journal.
+    pub replayed_blocks: Vec<FinalizedBlockRecord>,
+    /// Volatile in-memory Tier 1 fast-path certificates replayed from the journal.
+    pub replayed_fast_path: Vec<FastPathCert>,
+    /// Volatile in-memory `SkipCert`s replayed from the journal.
+    pub replayed_skip_certs: Vec<SkipCert>,
+    /// Volatile in-memory Tier 3 `CollapsedEpochReceipt`s replayed from the journal.
+    pub replayed_epochs: Vec<CollapsedEpochReceipt>,
+    /// Volatile in-memory map of `token_id -> journal_pos` enforcing `journal_once` / `exposed_once`.
+    pub consumed_tokens: BTreeMap<u64, u64>,
+}
+
+impl Default for DurableNodeWal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DurableNodeWal {
+    pub const FRAME_MAGIC: [u8; 4] = *b"OWAL";
+
+    pub fn vote_kind_tag(kind: SimplexVoteKind) -> u8 {
+        match kind {
+            SimplexVoteKind::Propose => 0,
+            SimplexVoteKind::Vote => 1,
+            SimplexVoteKind::Skip => 2,
+            SimplexVoteKind::Finalize => 3,
+        }
+    }
+
+    pub fn new() -> Self {
+        Self {
+            journal: Vec::new(),
+            outbox: BTreeSet::new(),
+            byte_log: Vec::new(),
+            memory_up: true,
+            voted_by_view: BTreeMap::new(),
+            highest_voted_view: 0,
+            replayed_blocks: Vec::new(),
+            replayed_fast_path: Vec::new(),
+            replayed_skip_certs: Vec::new(),
+            replayed_epochs: Vec::new(),
+            consumed_tokens: BTreeMap::new(),
+        }
+    }
+
+    fn append_raw_frame(byte_log: &mut Vec<u8>, entry: &WalEntry) {
+        let payload = serde_json::to_vec(entry).expect("WalEntry serializes to JSON");
+        let len_bytes = (payload.len() as u32).to_be_bytes();
+        let digest = cshake256_domain(b"obend.durable.wal.frame", &len_bytes, &payload);
+        byte_log.extend_from_slice(&Self::FRAME_MAGIC);
+        byte_log.extend_from_slice(&len_bytes);
+        byte_log.extend_from_slice(&digest);
+        byte_log.extend_from_slice(&payload);
+    }
+
+    fn apply_entry_to_volatile(&mut self, pos: u64, entry: &WalEntry) -> Result<(), ExposedOnceError> {
+        match entry {
+            WalEntry::VoteCast(vote) => {
+                self.check_can_vote_inner(vote.view, vote.kind, vote.block_hash)?;
+                let key = (vote.view, Self::vote_kind_tag(vote.kind));
+                self.voted_by_view.entry(key).or_insert_with(|| vote.clone());
+                if vote.view > self.highest_voted_view {
+                    self.highest_voted_view = vote.view;
+                }
+            }
+            WalEntry::BlockFinalized(blk) => {
+                if blk.view > self.highest_voted_view {
+                    self.highest_voted_view = blk.view;
+                }
+                if !self.replayed_blocks.iter().any(|b| b.height == blk.height) {
+                    self.replayed_blocks.push(blk.clone());
+                }
+            }
+            WalEntry::FastPathCommitted(cert) => {
+                if !self
+                    .replayed_fast_path
+                    .iter()
+                    .any(|c| c.turn.turn_id == cert.turn.turn_id)
+                {
+                    self.replayed_fast_path.push(cert.clone());
+                }
+            }
+            WalEntry::SkipCertified(sc) => {
+                if sc.view > self.highest_voted_view {
+                    self.highest_voted_view = sc.view;
+                }
+                if !self.replayed_skip_certs.iter().any(|c| c.view == sc.view) {
+                    self.replayed_skip_certs.push(sc.clone());
+                }
+            }
+            WalEntry::EpochCollapsed(receipt) => {
+                if !self
+                    .replayed_epochs
+                    .iter()
+                    .any(|r| r.epoch_id == receipt.epoch_id)
+                {
+                    self.replayed_epochs.push(receipt.clone());
+                }
+            }
+            WalEntry::DispatchEffect { token_id, .. } => {
+                if let Some(tok) = token_id {
+                    if let Some(&existing_pos) = self.consumed_tokens.get(tok) {
+                        if existing_pos != pos {
+                            return Err(ExposedOnceError::TokenAlreadyConsumed {
+                                token_id: *tok,
+                                existing_pos,
+                            });
+                        }
+                    } else {
+                        self.consumed_tokens.insert(*tok, pos);
+                    }
+                }
+            }
+            WalEntry::OutboxExposed { pos: exp_pos } => {
+                self.outbox.insert(*exp_pos);
+            }
+        }
+        Ok(())
+    }
+
+    fn check_can_vote_inner(
+        &self,
+        view: u64,
+        kind: SimplexVoteKind,
+        block_hash: [u8; 32],
+    ) -> Result<(), ExposedOnceError> {
+        let key = (view, Self::vote_kind_tag(kind));
+        if let Some(existing) = self.voted_by_view.get(&key) {
+            if existing.block_hash != block_hash {
+                return Err(ExposedOnceError::EquivocationRefused {
+                    view,
+                    kind,
+                    existing_block_hash: existing.block_hash,
+                    attempted_block_hash: block_hash,
+                });
+            }
+        }
+
+        // Cross-kind and finalized-block / skip-cert consistency in the same view:
+        if kind == SimplexVoteKind::Skip {
+            if let Some(existing) =
+                self.voted_by_view
+                    .get(&(view, Self::vote_kind_tag(SimplexVoteKind::Finalize)))
+            {
+                return Err(ExposedOnceError::EquivocationRefused {
+                    view,
+                    kind,
+                    existing_block_hash: existing.block_hash,
+                    attempted_block_hash: block_hash,
+                });
+            }
+            if let Some(blk) = self.replayed_blocks.iter().find(|b| b.view == view) {
+                return Err(ExposedOnceError::EquivocationRefused {
+                    view,
+                    kind,
+                    existing_block_hash: blk.block_hash,
+                    attempted_block_hash: block_hash,
+                });
+            }
+        } else {
+            if let Some(existing) =
+                self.voted_by_view
+                    .get(&(view, Self::vote_kind_tag(SimplexVoteKind::Skip)))
+            {
+                return Err(ExposedOnceError::EquivocationRefused {
+                    view,
+                    kind,
+                    existing_block_hash: existing.block_hash,
+                    attempted_block_hash: block_hash,
+                });
+            }
+            if self.replayed_skip_certs.iter().any(|c| c.view == view) {
+                return Err(ExposedOnceError::EquivocationRefused {
+                    view,
+                    kind,
+                    existing_block_hash: [0u8; 32],
+                    attempted_block_hash: block_hash,
+                });
+            }
+            for other_kind in [
+                SimplexVoteKind::Propose,
+                SimplexVoteKind::Vote,
+                SimplexVoteKind::Finalize,
+            ] {
+                if let Some(existing) =
+                    self.voted_by_view
+                        .get(&(view, Self::vote_kind_tag(other_kind)))
+                {
+                    if existing.block_hash != block_hash {
+                        return Err(ExposedOnceError::EquivocationRefused {
+                            view,
+                            kind,
+                            existing_block_hash: existing.block_hash,
+                            attempted_block_hash: block_hash,
+                        });
+                    }
+                }
+            }
+            if let Some(blk) = self.replayed_blocks.iter().find(|b| b.view == view) {
+                if blk.block_hash != block_hash {
+                    return Err(ExposedOnceError::EquivocationRefused {
+                        view,
+                        kind,
+                        existing_block_hash: blk.block_hash,
+                        attempted_block_hash: block_hash,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check whether this validator can safely cast `(view, kind, block_hash)` without equivocating.
+    pub fn check_can_vote(
+        &self,
+        view: u64,
+        kind: SimplexVoteKind,
+        block_hash: [u8; 32],
+    ) -> Result<(), ExposedOnceError> {
+        if !self.memory_up {
+            return Err(ExposedOnceError::NodeDown);
+        }
+        self.check_can_vote_inner(view, kind, block_hash)
+    }
+
+    /// Append a `WalEntry` to the durable journal (`hstep .submit`), returning its `OutboxReceiptId`.
+    pub fn append_entry(&mut self, entry: WalEntry) -> Result<OutboxReceiptId, ExposedOnceError> {
+        if !self.memory_up {
+            return Err(ExposedOnceError::NodeDown);
+        }
+        let pos = self.journal.len() as u64;
+        self.apply_entry_to_volatile(pos, &entry)?;
+        Self::append_raw_frame(&mut self.byte_log, &entry);
+        self.journal.push(entry);
+        Ok(OutboxReceiptId(pos))
+    }
+
+    /// Record a validator's vote in the WAL before network transmission, refusing any same-view equivocation.
+    pub fn record_vote(&mut self, vote: SignedSimplexVote) -> Result<OutboxReceiptId, ExposedOnceError> {
+        self.check_can_vote(vote.view, vote.kind, vote.block_hash)?;
+        if let Some((idx, _)) = self.journal.iter().enumerate().find(|(_, e)| {
+            matches!(
+                e,
+                WalEntry::VoteCast(v)
+                    if v.voter_id == vote.voter_id
+                        && v.view == vote.view
+                        && v.kind == vote.kind
+                        && v.block_hash == vote.block_hash
+            )
+        }) {
+            return Ok(OutboxReceiptId(idx as u64));
+        }
+        self.append_entry(WalEntry::VoteCast(vote))
+    }
+
+    /// Submit a dispatch effect (`Obend.Run.Durable.JEvent.dispatch`) to the WAL.
+    pub fn submit_dispatch(
+        &mut self,
+        turn: VaultTurn,
+        token_id: Option<u64>,
+    ) -> Result<OutboxReceiptId, ExposedOnceError> {
+        self.append_entry(WalEntry::DispatchEffect { turn, token_id })
+    }
+
+    /// Expose a journaled dispatch effect at position `pos` (`Obend.Run.Durable.hstep (.expose pos)`).
+    /// Succeeds at most once per `pos`, returning `Err(ExposedOnceError::AlreadyExposed(pos))` on any
+    /// duplicate attempt (even across `simulate_crash()` + `recover_from_wal()`!).
+    pub fn expose_effect(&mut self, pos: u64) -> Result<OutboxReceiptId, ExposedOnceError> {
+        match self.journal.get(pos as usize) {
+            Some(WalEntry::DispatchEffect { .. }) => {
+                if self.outbox.contains(&pos) {
+                    return Err(ExposedOnceError::AlreadyExposed(pos));
+                }
+                self.outbox.insert(pos);
+                Self::append_raw_frame(&mut self.byte_log, &WalEntry::OutboxExposed { pos });
+                Ok(OutboxReceiptId(pos))
+            }
+            _ => Err(ExposedOnceError::NotDispatch(pos)),
+        }
+    }
+
+    /// Journal positions holding a `DispatchEffect` that have not yet been exposed (`Obend.Run.Durable.pending`).
+    pub fn pending_effects(&self) -> Vec<u64> {
+        self.journal
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| {
+                let pos = idx as u64;
+                if matches!(entry, WalEntry::DispatchEffect { .. }) && !self.outbox.contains(&pos) {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Simulate a crash (`Obend.Run.Durable.hstep .crash`): wipes volatile in-memory state
+    /// while preserving `journal`, `outbox`, and `byte_log` (`crash_keeps`).
+    pub fn simulate_crash(&mut self) {
+        self.memory_up = false;
+        self.voted_by_view.clear();
+        self.highest_voted_view = 0;
+        self.replayed_blocks.clear();
+        self.replayed_fast_path.clear();
+        self.replayed_skip_certs.clear();
+        self.replayed_epochs.clear();
+        self.consumed_tokens.clear();
+    }
+
+    /// Replay the durable journal after one or more crashes (`Obend.Run.Durable.hstep .recover`),
+    /// restoring all volatile state and highest voted views before rejoining the network.
+    pub fn recover_from_wal(&mut self) -> Result<(), ExposedOnceError> {
+        self.voted_by_view.clear();
+        self.highest_voted_view = 0;
+        self.replayed_blocks.clear();
+        self.replayed_fast_path.clear();
+        self.replayed_skip_certs.clear();
+        self.replayed_epochs.clear();
+        self.consumed_tokens.clear();
+
+        let entries = self.journal.clone();
+        for (idx, entry) in entries.iter().enumerate() {
+            self.apply_entry_to_volatile(idx as u64, entry)?;
+        }
+        self.memory_up = true;
+        Ok(())
+    }
+
+    /// Export the durable byte log for persistent storage or cold-start recovery.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.byte_log.clone()
+    }
+
+    /// Reconstruct a `DurableNodeWal` from a raw serialized byte log (`recover_from_wal`).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ExposedOnceError> {
+        let mut wal = Self::new();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            if offset + 40 > bytes.len() {
+                return Err(ExposedOnceError::CorruptWal(
+                    "truncated WAL frame header".to_string(),
+                ));
+            }
+            if &bytes[offset..offset + 4] != &Self::FRAME_MAGIC {
+                return Err(ExposedOnceError::CorruptWal("invalid WAL magic".to_string()));
+            }
+            let mut len_bytes = [0u8; 4];
+            len_bytes.copy_from_slice(&bytes[offset + 4..offset + 8]);
+            let payload_len = u32::from_be_bytes(len_bytes) as usize;
+            let mut expected_digest = [0u8; 32];
+            expected_digest.copy_from_slice(&bytes[offset + 8..offset + 40]);
+            if offset + 40 + payload_len > bytes.len() {
+                return Err(ExposedOnceError::CorruptWal(
+                    "truncated WAL frame payload".to_string(),
+                ));
+            }
+            let payload = &bytes[offset + 40..offset + 40 + payload_len];
+            let actual_digest =
+                cshake256_domain(b"obend.durable.wal.frame", &len_bytes, payload);
+            if actual_digest != expected_digest {
+                return Err(ExposedOnceError::CorruptWal(
+                    "WAL frame cSHAKE256 digest mismatch".to_string(),
+                ));
+            }
+            let entry: WalEntry = serde_json::from_slice(payload)
+                .map_err(|e| ExposedOnceError::CorruptWal(e.to_string()))?;
+            match &entry {
+                WalEntry::OutboxExposed { pos } => {
+                    if !matches!(
+                        wal.journal.get(*pos as usize),
+                        Some(WalEntry::DispatchEffect { .. })
+                    ) {
+                        return Err(ExposedOnceError::NotDispatch(*pos));
+                    }
+                    if !wal.outbox.insert(*pos) {
+                        return Err(ExposedOnceError::AlreadyExposed(*pos));
+                    }
+                    Self::append_raw_frame(&mut wal.byte_log, &entry);
+                }
+                _ => {
+                    wal.append_entry(entry)?;
+                }
+            }
+            offset += 40 + payload_len;
+        }
+        Ok(wal)
+    }
+
+    /// Reconstruct a `DurableNodeWal` from a byte log that may have an incomplete trailing frame
+    /// due to a mid-append power failure, returning `(recovered_wal, truncated_tail_bytes)`.
+    /// Rejects any mid-log corruption, invalid frame magic, or digest mismatch.
+    pub fn recover_from_truncated_bytes(bytes: &[u8]) -> Result<(Self, usize), ExposedOnceError> {
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            if offset + 40 > bytes.len() {
+                let rem = &bytes[offset..];
+                if (rem.len() <= 4 && Self::FRAME_MAGIC.starts_with(rem))
+                    || (rem.len() > 4 && rem.starts_with(&Self::FRAME_MAGIC))
+                {
+                    break;
+                }
+                return Err(ExposedOnceError::CorruptWal(
+                    "corrupt WAL frame header".to_string(),
+                ));
+            }
+            if &bytes[offset..offset + 4] != &Self::FRAME_MAGIC {
+                return Err(ExposedOnceError::CorruptWal("invalid WAL magic".to_string()));
+            }
+            let mut len_bytes = [0u8; 4];
+            len_bytes.copy_from_slice(&bytes[offset + 4..offset + 8]);
+            let payload_len = u32::from_be_bytes(len_bytes) as usize;
+            if offset + 40 + payload_len > bytes.len() {
+                break;
+            }
+            offset += 40 + payload_len;
+        }
+        let wal = Self::from_bytes(&bytes[..offset])?;
+        Ok((wal, bytes.len() - offset))
+    }
+}
+
 /// Internal state of a `NetworkedValidatorNode`.
 pub struct ValidatorNodeState {
     pub node_id: usize,
@@ -1266,6 +1786,7 @@ pub struct ValidatorNodeState {
     pub committed_height: u64,
     pub committed_tip_hash: [u8; 32],
 
+    pub genesis_cells: Vec<VaultCellRecord>,
     pub vault_cells: Vec<VaultCellRecord>,
     pub current_state_root: [u8; 32],
 
@@ -1301,6 +1822,9 @@ pub struct ValidatorNodeState {
     /// Tier 3 collapsed epoch receipts.
     pub epoch_receipts: Vec<CollapsedEpochReceipt>,
 
+    /// Durable Write-Ahead Log (`Obend.Run.Durable`).
+    pub wal: DurableNodeWal,
+
     /// Wire metrics.
     pub wire_frames_received: usize,
     pub wire_frames_sent: usize,
@@ -1322,6 +1846,150 @@ impl ValidatorNodeState {
         if entry.can_promote_to(target) {
             *entry = target;
         }
+    }
+
+    /// Simulate a volatile memory crash on this validator (`Obend.Run.Durable.hstep .crash`),
+    /// wiping volatile consensus & vault state while preserving `self.wal` (`journal` and `outbox`).
+    pub fn simulate_crash(&mut self) {
+        self.wal.simulate_crash();
+        self.current_view = 1;
+        self.committed_height = 0;
+        self.committed_tip_hash = [0u8; 32];
+        self.vault_cells = self.genesis_cells.clone();
+        self.recompute_state_root();
+        self.proposals.clear();
+        self.seen_votes.clear();
+        self.broadcast_fin_views.clear();
+        self.broadcast_skip_views.clear();
+        self.finalized_blocks.clear();
+        self.skip_certs.clear();
+        self.inflight_turns.clear();
+        self.fast_path_acks.clear();
+        self.fast_path_certs.clear();
+        self.pending_fast_path_turns.clear();
+        self.turn_finality.clear();
+        self.epoch_receipts.clear();
+    }
+
+    /// Recover volatile validator state by replaying `self.wal` (`Obend.Run.Durable.hstep .recover`),
+    /// restoring finalized blocks, vault cells, Merkle state root, committed height/tip, skip certs,
+    /// epoch receipts, and previously cast votes so this validator never equivocates after a crash!
+    pub fn recover_from_wal(&mut self) -> Result<(), ExposedOnceError> {
+        self.wal.recover_from_wal()?;
+        self.vault_cells = self.genesis_cells.clone();
+        self.current_view = 1;
+        self.committed_height = 0;
+        self.committed_tip_hash = [0u8; 32];
+        self.proposals.clear();
+        self.seen_votes.clear();
+        self.broadcast_fin_views.clear();
+        self.broadcast_skip_views.clear();
+        self.finalized_blocks.clear();
+        self.skip_certs.clear();
+        self.inflight_turns.clear();
+        self.fast_path_acks.clear();
+        self.fast_path_certs.clear();
+        self.pending_fast_path_turns.clear();
+        self.turn_finality.clear();
+        self.epoch_receipts.clear();
+
+        let entries = self.wal.journal.clone();
+        for entry in entries {
+            match entry {
+                WalEntry::VoteCast(vote) => {
+                    if !self.seen_votes.iter().any(|v| {
+                        v.voter_id == vote.voter_id
+                            && v.view == vote.view
+                            && v.kind == vote.kind
+                            && v.block_hash == vote.block_hash
+                    }) {
+                        self.seen_votes.push(vote.clone());
+                    }
+                    if vote.view > self.current_view {
+                        self.current_view = vote.view;
+                    }
+                }
+                WalEntry::FastPathCommitted(cert) => {
+                    if !self
+                        .fast_path_certs
+                        .iter()
+                        .any(|c| c.turn.turn_id == cert.turn.turn_id)
+                    {
+                        cert.turn.apply_to_cells(&mut self.vault_cells);
+                        self.recompute_state_root();
+                        self.pending_fast_path_turns.push(cert.turn.clone());
+                        self.promote_turn_tier(cert.turn.turn_id, FinalityTier::AttestedFastPath);
+                        self.fast_path_certs.push(cert);
+                    }
+                }
+                WalEntry::BlockFinalized(blk) => {
+                    if !self.finalized_blocks.iter().any(|b| b.height == blk.height) {
+                        for fp_turn in &blk.pre_block_fast_path_turns {
+                            if !self
+                                .fast_path_certs
+                                .iter()
+                                .any(|c| c.turn.turn_id == fp_turn.turn_id)
+                            {
+                                fp_turn.apply_to_cells(&mut self.vault_cells);
+                            }
+                            self.promote_turn_tier(fp_turn.turn_id, FinalityTier::AttestedFastPath);
+                        }
+                        self.pending_fast_path_turns.clear();
+                        Fold::apply_block_to_cells(
+                            &mut self.vault_cells,
+                            &blk.payload,
+                            blk.clearing_cert.as_ref(),
+                        );
+                        for t in &blk.payload.turns {
+                            self.promote_turn_tier(t.turn_id, FinalityTier::QuorumFinal);
+                        }
+                        self.recompute_state_root();
+                        self.committed_height = blk.height;
+                        self.committed_tip_hash = blk.block_hash;
+                        if self.current_view <= blk.view {
+                            self.current_view = blk.view + 1;
+                        }
+                        self.broadcast_fin_views.insert(blk.view);
+                        self.finalized_blocks.push(blk);
+                    }
+                }
+                WalEntry::SkipCertified(sc) => {
+                    if !self.skip_certs.iter().any(|c| c.view == sc.view) {
+                        self.skip_certs.push(sc.clone());
+                    }
+                    if self.current_view <= sc.view {
+                        self.current_view = sc.view + 1;
+                    }
+                    self.broadcast_skip_views.insert(sc.view);
+                }
+                WalEntry::EpochCollapsed(receipt) => {
+                    let mut promoted_turns = Vec::new();
+                    for blk in &mut self.finalized_blocks {
+                        if blk.height >= receipt.start_height && blk.height <= receipt.end_height {
+                            blk.tier = FinalityTier::Collapsed;
+                            for t in &blk.pre_block_fast_path_turns {
+                                promoted_turns.push(t.turn_id);
+                            }
+                            for t in &blk.payload.turns {
+                                promoted_turns.push(t.turn_id);
+                            }
+                        }
+                    }
+                    for tid in promoted_turns {
+                        self.promote_turn_tier(tid, FinalityTier::Collapsed);
+                    }
+                    if !self
+                        .epoch_receipts
+                        .iter()
+                        .any(|r| r.epoch_id == receipt.epoch_id)
+                    {
+                        self.epoch_receipts.push(receipt);
+                    }
+                }
+                WalEntry::DispatchEffect { .. } | WalEntry::OutboxExposed { .. } => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1372,6 +2040,7 @@ impl NetworkedValidatorNode {
             current_view: 1,
             committed_height: 0,
             committed_tip_hash: [0u8; 32],
+            genesis_cells: initial_cells.clone(),
             vault_cells: initial_cells,
             current_state_root: initial_root,
             proposals: BTreeMap::new(),
@@ -1388,6 +2057,7 @@ impl NetworkedValidatorNode {
             pending_fast_path_turns: Vec::new(),
             turn_finality: BTreeMap::new(),
             epoch_receipts: Vec::new(),
+            wal: DurableNodeWal::new(),
             wire_frames_received: 0,
             wire_frames_sent: 0,
             rejected_wire_frames: 0,
@@ -1552,6 +2222,9 @@ impl NetworkedValidatorNode {
         msg: ConsensusNetMessage,
     ) -> Vec<ConsensusNetMessage> {
         let mut outbound = Vec::new();
+        if !st.wal.memory_up {
+            return outbound;
+        }
 
         match msg {
             ConsensusNetMessage::Propose(prop_cert, payload) => {
@@ -1590,19 +2263,30 @@ impl NetworkedValidatorNode {
                 );
 
                 // If this node is not slashed, cast a Finalize vote for this valid proposal
+                // only if WAL confirms no conflicting vote was cast in `prop_cert.view`.
                 if !st.slashed_validators.contains(&st.node_id) {
                     let already_voted_in_view = st.seen_votes.iter().any(|v| {
                         v.voter_id == st.node_id
                             && v.view == prop_cert.view
                             && v.kind == SimplexVoteKind::Finalize
                     });
-                    if !already_voted_in_view {
+                    if !already_voted_in_view
+                        && st
+                            .wal
+                            .check_can_vote(
+                                prop_cert.view,
+                                SimplexVoteKind::Finalize,
+                                prop_cert.block_hash,
+                            )
+                            .is_ok()
+                    {
                         let fin_vote = SignedSimplexVote::new(
                             keypair,
                             prop_cert.view,
                             SimplexVoteKind::Finalize,
                             prop_cert.block_hash,
                         );
+                        let _ = st.wal.record_vote(fin_vote.clone());
                         let _ = Self::record_vote_and_check_equivocation(st, &fin_vote);
                         outbound.push(ConsensusNetMessage::Vote(fin_vote));
                     }
@@ -1671,6 +2355,7 @@ impl NetworkedValidatorNode {
                     return outbound;
                 }
                 if !st.skip_certs.iter().any(|c| c.view == skip_cert.view) {
+                    let _ = st.wal.append_entry(WalEntry::SkipCertified(skip_cert.clone()));
                     st.skip_certs.push(skip_cert.clone());
                 }
                 if st.current_view <= skip_cert.view {
@@ -1804,6 +2489,7 @@ impl NetworkedValidatorNode {
                     st.inflight_turns.remove(&cert.turn.turn_id);
                     st.pending_fast_path_turns.push(cert.turn.clone());
                     st.promote_turn_tier(cert.turn.turn_id, FinalityTier::AttestedFastPath);
+                    let _ = st.wal.append_entry(WalEntry::FastPathCommitted(cert.clone()));
                     st.fast_path_certs.push(cert);
                 }
             }
@@ -1843,6 +2529,10 @@ impl NetworkedValidatorNode {
             }
         }
 
+        if vote.voter_id == st.node_id {
+            let _ = st.wal.record_vote(vote.clone());
+        }
+
         if !st.seen_votes.iter().any(|v| {
             v.voter_id == vote.voter_id
                 && v.view == vote.view
@@ -1880,6 +2570,7 @@ impl NetworkedValidatorNode {
             };
             if cert.verify(st.quorum_size) {
                 if !st.skip_certs.iter().any(|c| c.view == view) {
+                    let _ = st.wal.append_entry(WalEntry::SkipCertified(cert.clone()));
                     st.skip_certs.push(cert.clone());
                 }
                 if st.current_view <= view {
@@ -2007,7 +2698,7 @@ impl NetworkedValidatorNode {
             st.current_view = payload.view + 1;
         }
 
-        st.finalized_blocks.push(FinalizedBlockRecord {
+        let rec = FinalizedBlockRecord {
             height: payload.height,
             view: payload.view,
             block_hash: fin_cert.block_hash,
@@ -2022,7 +2713,9 @@ impl NetworkedValidatorNode {
             post_state_root,
             multiproof,
             tier: FinalityTier::QuorumFinal,
-        });
+        };
+        let _ = st.wal.append_entry(WalEntry::BlockFinalized(rec.clone()));
+        st.finalized_blocks.push(rec);
     }
 
     fn record_fast_path_ack(st: &mut ValidatorNodeState, ack: SignedFastPathAck) {
@@ -2069,10 +2762,64 @@ impl NetworkedValidatorNode {
                 anchor_height: st.committed_height,
                 tier: FinalityTier::AttestedFastPath,
             };
+            let _ = st.wal.append_entry(WalEntry::FastPathCommitted(cert.clone()));
             st.fast_path_certs.push(cert.clone());
             return Some(ConsensusNetMessage::FastPathCommit(cert));
         }
         None
+    }
+
+    /// Simulate a volatile memory crash on this validator (`Obend.Run.Durable.hstep .crash`),
+    /// wiping volatile in-memory state while keeping the WAL (`journal` and `outbox`) durable.
+    pub fn simulate_crash(&self) {
+        self.state.lock().unwrap().simulate_crash();
+    }
+
+    /// Replay the durable WAL after a crash (`Obend.Run.Durable.hstep .recover`),
+    /// restoring finalized blocks, vault state root, and highest voted view before rejoining the network.
+    pub fn recover_from_wal(&self) -> Result<(), ExposedOnceError> {
+        self.state.lock().unwrap().recover_from_wal()
+    }
+
+    /// Attempt to cast and persist a validator vote in `(view, kind)` for `block_hash`.
+    /// Refuses double-voting (equivocation) in the same view even across a crash + `recover_from_wal()`!
+    pub fn try_cast_vote(
+        &self,
+        view: u64,
+        kind: SimplexVoteKind,
+        block_hash: [u8; 32],
+    ) -> Result<SignedSimplexVote, ExposedOnceError> {
+        let mut st = self.state.lock().unwrap();
+        st.wal.check_can_vote(view, kind, block_hash)?;
+        let vote = SignedSimplexVote::new(&self.keypair, view, kind, block_hash);
+        st.wal.record_vote(vote.clone())?;
+        let _ = Self::record_vote_and_check_equivocation(&mut st, &vote);
+        Ok(vote)
+    }
+
+    /// Submit a dispatch effect to this validator's durable WAL (`Obend.Run.Durable.hstep (.submit (.dispatch ..))`).
+    pub fn submit_dispatch_effect(
+        &self,
+        turn: VaultTurn,
+        token_id: Option<u64>,
+    ) -> Result<OutboxReceiptId, ExposedOnceError> {
+        self.state.lock().unwrap().wal.submit_dispatch(turn, token_id)
+    }
+
+    /// Expose a journaled dispatch effect at position `pos` (`Obend.Run.Durable.hstep (.expose pos)`).
+    /// Succeeds at most once per `pos`, even across `simulate_crash()` + `recover_from_wal()`.
+    pub fn expose_effect(&self, pos: u64) -> Result<OutboxReceiptId, ExposedOnceError> {
+        self.state.lock().unwrap().wal.expose_effect(pos)
+    }
+
+    /// Return all journal positions holding unexposed dispatch effects (`Obend.Run.Durable.pending`).
+    pub fn pending_effects(&self) -> Vec<u64> {
+        self.state.lock().unwrap().wal.pending_effects()
+    }
+
+    /// Snapshot this validator's `DurableNodeWal`.
+    pub fn wal_snapshot(&self) -> DurableNodeWal {
+        self.state.lock().unwrap().wal.clone()
     }
 
     pub fn committed_height(&self) -> u64 {
@@ -2500,6 +3247,12 @@ impl SimplexCluster {
             parent_hash,
             payload.to_bytes(),
         );
+        self.nodes[leader_id]
+            .state
+            .lock()
+            .unwrap()
+            .wal
+            .record_vote(prop_cert.leader_vote.clone())?;
 
         self.nodes[leader_id]
             .broadcast(ConsensusNetMessage::Propose(prop_cert.clone(), payload.clone()))?;
@@ -2565,6 +3318,12 @@ impl SimplexCluster {
                 SimplexVoteKind::Skip,
                 [0u8; 32],
             );
+            self.nodes[id]
+                .state
+                .lock()
+                .unwrap()
+                .wal
+                .record_vote(skip_vote.clone())?;
             self.nodes[id].broadcast(ConsensusNetMessage::Vote(skip_vote))?;
         }
 
@@ -2766,6 +3525,9 @@ impl SimplexCluster {
                 st.promote_turn_tier(tid, FinalityTier::Collapsed);
             }
             st.epoch_receipts.push(receipt.clone());
+            let _ = st
+                .wal
+                .append_entry(WalEntry::EpochCollapsed(receipt.clone()));
         }
 
         Ok(receipt)
@@ -2781,5 +3543,391 @@ impl SimplexCluster {
         (0..self.nodes.len())
             .filter(|id| !slashed.contains(id))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod wal_tests {
+    use super::*;
+
+    fn sample_turn(seed: u8, slot: u64, val: &[u8]) -> VaultTurn {
+        VaultTurn::new([seed; 32], "agent-wal", vec![slot], vec![(slot, val.to_vec())])
+    }
+
+    #[test]
+    fn wal_expose_once_and_pending_decreases_across_restarts() {
+        let mut wal = DurableNodeWal::new();
+        let kp = ValidatorKeypair::from_seed(0, b"wal-test-validator-0");
+
+        // Position 0: a validator vote (not a dispatch effect)
+        let vote = SignedSimplexVote::new(&kp, 1, SimplexVoteKind::Finalize, [0xAA; 32]);
+        let vote_pos = wal.record_vote(vote).expect("record_vote should succeed");
+        assert_eq!(vote_pos, OutboxReceiptId(0));
+
+        // Position 1 & 2: two dispatch effects with linear token IDs
+        let r1 = wal
+            .submit_dispatch(sample_turn(1, 10, b"alpha"), Some(1001))
+            .expect("first dispatch should succeed");
+        let r2 = wal
+            .submit_dispatch(sample_turn(2, 20, b"beta"), Some(1002))
+            .expect("second dispatch should succeed");
+        assert_eq!(r1, OutboxReceiptId(1));
+        assert_eq!(r2, OutboxReceiptId(2));
+
+        // Duplicate linear token_id must be refused (`journal_once`)
+        let dup_tok = wal.submit_dispatch(sample_turn(3, 30, b"gamma"), Some(1001));
+        assert_eq!(
+            dup_tok,
+            Err(ExposedOnceError::TokenAlreadyConsumed {
+                token_id: 1001,
+                existing_pos: 1,
+            })
+        );
+
+        // `pending_effects` initially holds [1, 2]
+        assert_eq!(wal.pending_effects(), vec![1, 2]);
+
+        // Exposing non-dispatch entry at pos 0 fails with NotDispatch(0)
+        assert_eq!(wal.expose_effect(0), Err(ExposedOnceError::NotDispatch(0)));
+        assert_eq!(
+            wal.expose_effect(99),
+            Err(ExposedOnceError::NotDispatch(99))
+        );
+
+        // Exposing pos 1 succeeds and strictly decreases pending (`pending_decreases_on_expose`)
+        assert_eq!(wal.expose_effect(1), Ok(OutboxReceiptId(1)));
+        assert_eq!(wal.pending_effects(), vec![2]);
+        assert!(wal.outbox.contains(&1));
+
+        // Duplicate exposure before crash is refused (`expose_once`)
+        assert_eq!(
+            wal.expose_effect(1),
+            Err(ExposedOnceError::AlreadyExposed(1))
+        );
+
+        // Simulate crash: volatile memory is down, submissions require recovery first (`hstep .submit` -> `.down`)
+        wal.simulate_crash();
+        assert!(!wal.memory_up);
+        assert_eq!(
+            wal.submit_dispatch(sample_turn(4, 40, b"down"), None),
+            Err(ExposedOnceError::NodeDown)
+        );
+        assert_eq!(
+            wal.expose_effect(1),
+            Err(ExposedOnceError::AlreadyExposed(1))
+        );
+
+        // Recover from WAL and verify outbox durability across crash + recovery
+        wal.recover_from_wal().expect("WAL recovery should succeed");
+        assert!(wal.memory_up);
+        assert_eq!(wal.pending_effects(), vec![2]);
+        assert_eq!(
+            wal.expose_effect(1),
+            Err(ExposedOnceError::AlreadyExposed(1))
+        );
+
+        // Still-unexposed effect at pos 2 can be exposed exactly once after recovery
+        assert_eq!(wal.expose_effect(2), Ok(OutboxReceiptId(2)));
+        assert!(wal.pending_effects().is_empty());
+        assert_eq!(
+            wal.expose_effect(2),
+            Err(ExposedOnceError::AlreadyExposed(2))
+        );
+    }
+
+    #[test]
+    fn wal_multi_crash_recover_idempotent_and_byte_log_roundtrip() {
+        let mut wal_single = DurableNodeWal::new();
+        let kp = ValidatorKeypair::from_seed(1, b"wal-idempotent-seed");
+
+        wal_single
+            .record_vote(SignedSimplexVote::new(
+                &kp,
+                3,
+                SimplexVoteKind::Propose,
+                [0x11; 32],
+            ))
+            .unwrap();
+        let receipt = wal_single
+            .submit_dispatch(sample_turn(7, 42, b"payload"), Some(77))
+            .unwrap();
+        wal_single.expose_effect(receipt.0).unwrap();
+        wal_single
+            .submit_dispatch(sample_turn(8, 43, b"pending"), Some(88))
+            .unwrap();
+
+        let mut wal_multi = wal_single.clone();
+
+        // Single crash + recover
+        wal_single.simulate_crash();
+        wal_single.recover_from_wal().unwrap();
+
+        // k = 5 consecutive crashes followed by a single recover (`crash_recover_idempotent`)
+        for _ in 0..5 {
+            wal_multi.simulate_crash();
+        }
+        wal_multi.recover_from_wal().unwrap();
+
+        assert_eq!(wal_single, wal_multi);
+        assert_eq!(wal_single.pending_effects(), vec![2]);
+        assert_eq!(wal_single.highest_voted_view, 3);
+
+        // Cold-start reconstruction from raw framed bytes
+        let bytes = wal_multi.to_bytes();
+        let decoded = DurableNodeWal::from_bytes(&bytes).expect("from_bytes should succeed");
+        assert_eq!(decoded.journal, wal_single.journal);
+        assert_eq!(decoded.outbox, wal_single.outbox);
+        assert_eq!(decoded.voted_by_view, wal_single.voted_by_view);
+        assert_eq!(decoded.consumed_tokens, wal_single.consumed_tokens);
+
+        // Tampering with a byte in the WAL frame payload is caught by cSHAKE256 digest check
+        let mut corrupted = bytes.clone();
+        let last_idx = corrupted.len() - 1;
+        corrupted[last_idx] ^= 0xFF;
+        assert!(matches!(
+            DurableNodeWal::from_bytes(&corrupted),
+            Err(ExposedOnceError::CorruptWal(_))
+        ));
+
+        // Torn / truncated trailing frame recovery (`recover_from_truncated_bytes`)
+        let mut torn_tail = bytes.clone();
+        torn_tail.extend_from_slice(b"OWAL\x00\x00\x00\x20partial-unflushed-tail");
+        assert!(matches!(
+            DurableNodeWal::from_bytes(&torn_tail),
+            Err(ExposedOnceError::CorruptWal(_))
+        ));
+        let (recovered_torn, truncated_len) = DurableNodeWal::recover_from_truncated_bytes(&torn_tail)
+            .expect("recover_from_truncated_bytes should discard incomplete trailing frame");
+        assert_eq!(truncated_len, 30);
+        assert_eq!(recovered_torn.journal, wal_single.journal);
+        assert_eq!(recovered_torn.outbox, wal_single.outbox);
+
+        // Duplicate `OutboxExposed { pos }` in serialized byte log is rejected by `from_bytes`
+        let mut dup_expose_bytes = bytes.clone();
+        let dup_entry = WalEntry::OutboxExposed { pos: receipt.0 };
+        DurableNodeWal::append_raw_frame(&mut dup_expose_bytes, &dup_entry);
+        assert_eq!(
+            DurableNodeWal::from_bytes(&dup_expose_bytes),
+            Err(ExposedOnceError::AlreadyExposed(receipt.0))
+        );
+    }
+
+    #[test]
+    fn wal_prevents_post_crash_validator_equivocation() {
+        let mut wal = DurableNodeWal::new();
+        let kp = ValidatorKeypair::from_seed(2, b"equivocation-guard-seed");
+        let block_a = [0xA1; 32];
+        let block_b = [0xB2; 32];
+
+        let vote_a = SignedSimplexVote::new(&kp, 4, SimplexVoteKind::Finalize, block_a);
+        wal.record_vote(vote_a.clone())
+            .expect("initial vote should be journaled");
+        assert_eq!(wal.highest_voted_view, 4);
+
+        // Crash and recover from WAL
+        wal.simulate_crash();
+        assert_eq!(wal.highest_voted_view, 0);
+        assert!(wal.voted_by_view.is_empty());
+
+        wal.recover_from_wal()
+            .expect("recover_from_wal should restore voted views");
+        assert_eq!(wal.highest_voted_view, 4);
+
+        // Attempting to vote for `block_b != block_a` in the same view (4) & kind (Finalize)
+        // after recovery MUST be refused!
+        let vote_b = SignedSimplexVote::new(&kp, 4, SimplexVoteKind::Finalize, block_b);
+        let err = wal
+            .record_vote(vote_b)
+            .expect_err("post-recovery double-vote must be refused");
+        assert_eq!(
+            err,
+            ExposedOnceError::EquivocationRefused {
+                view: 4,
+                kind: SimplexVoteKind::Finalize,
+                existing_block_hash: block_a,
+                attempted_block_hash: block_b,
+            }
+        );
+
+        // Cross-kind equivocation in view 4: Propose(block_b) or Skip after Finalize(block_a) MUST be refused!
+        let cross_propose = SignedSimplexVote::new(&kp, 4, SimplexVoteKind::Propose, block_b);
+        assert_eq!(
+            wal.record_vote(cross_propose),
+            Err(ExposedOnceError::EquivocationRefused {
+                view: 4,
+                kind: SimplexVoteKind::Propose,
+                existing_block_hash: block_a,
+                attempted_block_hash: block_b,
+            })
+        );
+        let skip_after_finalize = SignedSimplexVote::new(&kp, 4, SimplexVoteKind::Skip, [0u8; 32]);
+        assert_eq!(
+            wal.record_vote(skip_after_finalize),
+            Err(ExposedOnceError::EquivocationRefused {
+                view: 4,
+                kind: SimplexVoteKind::Skip,
+                existing_block_hash: block_a,
+                attempted_block_hash: [0u8; 32],
+            })
+        );
+
+        // Re-affirming the exact same vote `block_a` in view 4 is idempotent, and voting in view 5 succeeds
+        assert!(wal.check_can_vote(4, SimplexVoteKind::Finalize, block_a).is_ok());
+        let vote_v5 = SignedSimplexVote::new(&kp, 5, SimplexVoteKind::Propose, block_a);
+        wal.record_vote(vote_v5)
+            .expect("voting Propose(block_a) in a higher view 5 should succeed");
+        assert_eq!(wal.highest_voted_view, 5);
+
+        // Crash + recover at view 5, then verify Finalize(block_b) in view 5 is refused because Propose(block_a) was cast
+        wal.simulate_crash();
+        wal.recover_from_wal().unwrap();
+        let finalize_conflict_v5 =
+            SignedSimplexVote::new(&kp, 5, SimplexVoteKind::Finalize, block_b);
+        assert_eq!(
+            wal.record_vote(finalize_conflict_v5),
+            Err(ExposedOnceError::EquivocationRefused {
+                view: 5,
+                kind: SimplexVoteKind::Finalize,
+                existing_block_hash: block_a,
+                attempted_block_hash: block_b,
+            })
+        );
+        // Whereas Finalize(block_a) in view 5 (matching Propose(block_a)) is allowed
+        let finalize_same_v5 = SignedSimplexVote::new(&kp, 5, SimplexVoteKind::Finalize, block_a);
+        wal.record_vote(finalize_same_v5)
+            .expect("Finalize for the same proposed block in view 5 must succeed");
+
+        // View 6: cast Skip, crash + recover, then verify Finalize(block_a) in view 6 is refused
+        let skip_v6 = SignedSimplexVote::new(&kp, 6, SimplexVoteKind::Skip, [0u8; 32]);
+        wal.record_vote(skip_v6).unwrap();
+        wal.simulate_crash();
+        wal.recover_from_wal().unwrap();
+        let finalize_after_skip =
+            SignedSimplexVote::new(&kp, 6, SimplexVoteKind::Finalize, block_a);
+        assert_eq!(
+            wal.record_vote(finalize_after_skip),
+            Err(ExposedOnceError::EquivocationRefused {
+                view: 6,
+                kind: SimplexVoteKind::Finalize,
+                existing_block_hash: [0u8; 32],
+                attempted_block_hash: block_a,
+            })
+        );
+    }
+
+    #[test]
+    fn cluster_validator_crash_and_wal_recovery_restores_state_outbox_and_epoch_collapse() {
+        let genesis = vec![
+            VaultCellRecord {
+                id: 1,
+                required: vec![IpcAuth::Read],
+                salt: [0x10; 32],
+                content: b"genesis-cell-1".to_vec(),
+            },
+            VaultCellRecord {
+                id: 2,
+                required: vec![IpcAuth::Read],
+                salt: [0x20; 32],
+                content: b"genesis-cell-2".to_vec(),
+            },
+        ];
+
+        let mut cluster =
+            SimplexCluster::new(4, 1, genesis).expect("4-node cluster should spawn");
+
+        // Submit a contended turn and finalize block 1
+        let turn1 = VaultTurn::new([0x31; 32], "agent-a", vec![1], vec![(1, b"v1".to_vec())]);
+        let turn2 = VaultTurn::new([0x32; 32], "agent-a", vec![1], vec![(1, b"v2".to_vec())]);
+        cluster.submit_concurrent_batch(vec![turn1, turn2]).unwrap();
+        let blk1 = cluster
+            .run_simplex_block()
+            .expect("block 1 should finalize");
+        assert_eq!(blk1.height, 1);
+
+        // Submit a second block and collapse epoch 1 across heights [1..=2]
+        let turn3 = VaultTurn::new([0x33; 32], "agent-b", vec![2], vec![(2, b"v3".to_vec())]);
+        cluster.submit_concurrent_batch(vec![turn3]).unwrap();
+        let blk2 = cluster
+            .run_simplex_block()
+            .expect("block 2 should finalize");
+        assert_eq!(blk2.height, 2);
+
+        let epoch_receipt = cluster
+            .collapse_epoch(1, 1, 2)
+            .expect("epoch collapse [1..=2] should succeed");
+        assert_eq!(cluster.nodes[0].epoch_receipts().len(), 1);
+
+        // Submit two dispatch effects on node 0 and expose the first
+        let r_exposed = cluster.nodes[0]
+            .submit_dispatch_effect(sample_turn(0x41, 1, b"effect-1"), Some(501))
+            .unwrap();
+        let r_pending = cluster.nodes[0]
+            .submit_dispatch_effect(sample_turn(0x42, 2, b"effect-2"), Some(502))
+            .unwrap();
+        assert_eq!(
+            cluster.nodes[0].expose_effect(r_exposed.0),
+            Ok(r_exposed)
+        );
+
+        let pre_crash_root = cluster.nodes[0].state_root();
+        let pre_crash_height = cluster.nodes[0].committed_height();
+        assert_eq!(pre_crash_height, 2);
+
+        // Crash node 0 multiple times in a row, then recover from WAL
+        cluster.nodes[0].simulate_crash();
+        cluster.nodes[0].simulate_crash();
+        cluster.nodes[0].simulate_crash();
+        assert_eq!(cluster.nodes[0].committed_height(), 0);
+        assert!(cluster.nodes[0].finalized_blocks().is_empty());
+        assert!(cluster.nodes[0].epoch_receipts().is_empty());
+
+        cluster.nodes[0]
+            .recover_from_wal()
+            .expect("node 0 should recover from WAL");
+
+        assert_eq!(cluster.nodes[0].committed_height(), pre_crash_height);
+        assert_eq!(cluster.nodes[0].state_root(), pre_crash_root);
+        assert_eq!(cluster.nodes[0].finalized_blocks().len(), 2);
+        assert_eq!(cluster.nodes[0].epoch_receipts(), vec![epoch_receipt]);
+        for blk in cluster.nodes[0].finalized_blocks() {
+            assert_eq!(blk.tier, FinalityTier::Collapsed);
+        }
+        assert_eq!(cluster.nodes[0].pending_effects(), vec![r_pending.0]);
+
+        // Duplicate exposure of `r_exposed` after node recovery is still refused
+        assert_eq!(
+            cluster.nodes[0].expose_effect(r_exposed.0),
+            Err(ExposedOnceError::AlreadyExposed(r_exposed.0))
+        );
+        // Unexposed effect `r_pending` can still be exposed once
+        assert_eq!(
+            cluster.nodes[0].expose_effect(r_pending.0),
+            Ok(r_pending)
+        );
+
+        // Node 0 refuses to equivocate in view 1 (where `blk1` was finalized) for both Finalize and Skip
+        let conflicting_hash = [0xEE; 32];
+        let equiv_attempt =
+            cluster.nodes[0].try_cast_vote(blk1.view, SimplexVoteKind::Finalize, conflicting_hash);
+        assert_eq!(
+            equiv_attempt,
+            Err(ExposedOnceError::EquivocationRefused {
+                view: blk1.view,
+                kind: SimplexVoteKind::Finalize,
+                existing_block_hash: blk1.block_hash,
+                attempted_block_hash: conflicting_hash,
+            })
+        );
+        let skip_equiv_attempt =
+            cluster.nodes[0].try_cast_vote(blk1.view, SimplexVoteKind::Skip, [0u8; 32]);
+        assert_eq!(
+            skip_equiv_attempt,
+            Err(ExposedOnceError::EquivocationRefused {
+                view: blk1.view,
+                kind: SimplexVoteKind::Skip,
+                existing_block_hash: blk1.block_hash,
+                attempted_block_hash: [0u8; 32],
+            })
+        );
     }
 }

@@ -80,6 +80,27 @@ theorem termBeq_refl (t : Term) : termBeq t t = true := treeBeq_refl _
 theorem termBeq_sound {t t' : Term} (h : termBeq t t' = true) : t = t' :=
   encode_injective (treeBeq_sound _ _ h)
 
+/-- Executable equality test on `Option (Term × Nat)` results from `evalClairvoyantMinCost` and `evalCBV`. -/
+def optTermNatBeq : Option (Term × Nat) → Option (Term × Nat) → Bool
+  | some (t1, k1), some (t2, k2) => termBeq t1 t2 && (k1 == k2)
+  | none, none => true
+  | _, _ => false
+
+theorem optTermNatBeq_sound {o1 o2 : Option (Term × Nat)} (h : optTermNatBeq o1 o2 = true) : o1 = o2 := by
+  cases o1 with
+  | none =>
+    cases o2 with
+    | none => rfl
+    | some _ => cases h
+  | some r1 =>
+    obtain ⟨t1, k1⟩ := r1
+    cases o2 with
+    | none => cases h
+    | some r2 =>
+      obtain ⟨t2, k2⟩ := r2
+      simp only [optTermNatBeq, Bool.and_eq_true, beq_iff_eq] at h
+      rw [termBeq_sound h.1, h.2]
+
 /-! ## `CostWithin` composes -/
 
 theorem CostWithin.refl (t : Term) : CostWithin 1 t t := fun _ _ v k h =>
@@ -428,6 +449,26 @@ theorem cost_sound {r : Nat} {o : Term × Nat} {c : DemandCert} (h : costCheck r
     · cases h
   · cases h
 
+/-- Constructive `CostAtMost` projection from `costCheck` (`0 Classical.choice`). -/
+theorem costCheck_costAtMost {r : Nat} {o : Term × Nat} {c : DemandCert}
+    (h : costCheck r o c = .ok) : CostAtMost o.1 o.2 := by
+  simp only [costCheck] at h
+  split at h
+  · rename_i hb
+    have e := termBeq_sound hb
+    split at h
+    · rename_i nd
+      split at h
+      · rename_i v n hd
+        split at h
+        · rename_i le
+          rw [e]
+          exact ⟨_, n, demand_exists nd hd, le⟩
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
 /-- A refusal refutes the cost bound itself: no derivation is that cheap, or none exists. -/
 theorem cost_refuted {r : Nat} {o : Term × Nat} {c : DemandCert} {k : CostClause} {p : List Nat}
     (h : costCheck r o c = .refused k p) : ¬ CostAtMost o.1 o.2 := by
@@ -495,6 +536,97 @@ theorem selfField_cost_checked :
 28 transitions. -/
 theorem selfField_receipt : CostMeaning (.get CostTests.selfField "b", 7) :=
   cost_sound selfField_cost_checked.1
+
+/-! ## Clairvoyant Sharing Cost Certificate (`SharingCostCert`, `verifySharingCostCert`) -/
+
+/-- Clairvoyant Sharing Cost Certificate (`SharingCostCert`):
+certifies that `term` evaluates under `evalClairvoyantMinCost fuel` to `expectedValue`
+within `clairvoyantBound` ticks, and verifies Call-By-Value tick bounds (`cbvBound`). -/
+structure SharingCostCert where
+  term : Term
+  expectedValue : Term
+  fuel : Nat
+  clairvoyantBound : Nat
+  cbvBound : Nat
+
+/-- Verify a `SharingCostCert`:
+1. `evalClairvoyantMinCost c.fuel c.term` returns `some (v, k)` with `termBeq v c.expectedValue`
+   and `k ≤ c.clairvoyantBound`.
+2. `c.clairvoyantBound ≤ c.cbvBound`.
+3. `evalCBV c.fuel c.term` converges with `some (vCbv, kCbv)`, verifying `termBeq vCbv c.expectedValue`,
+   `k ≤ kCbv` (clairvoyant call-by-need cost is at most CBV cost), and `kCbv ≤ c.cbvBound`. -/
+def verifySharingCostCert (c : SharingCostCert) : Bool :=
+  match evalClairvoyantMinCost c.fuel c.term, evalCBV c.fuel c.term with
+  | some (v, k), some (vCbv, kCbv) =>
+    termBeq v c.expectedValue && decide (k ≤ c.clairvoyantBound) &&
+      decide (c.clairvoyantBound ≤ c.cbvBound) &&
+      termBeq vCbv c.expectedValue && decide (k ≤ kCbv) && decide (kCbv ≤ c.cbvBound)
+  | _, _ => false
+
+/-- Semantic meaning established by `verifySharingCostCert c = true`. -/
+def SharingCostMeaning (c : SharingCostCert) : Prop :=
+  ∃ k kCbv,
+    evalClairvoyantMinCost c.fuel c.term = some (c.expectedValue, k) ∧
+    evalCBV c.fuel c.term = some (c.expectedValue, kCbv) ∧
+    CV c.term c.expectedValue k ∧
+    CV c.term c.expectedValue kCbv ∧
+    k ≤ c.clairvoyantBound ∧
+    c.clairvoyantBound ≤ c.cbvBound ∧
+    k ≤ kCbv ∧
+    kCbv ≤ c.cbvBound ∧
+    CostAtMost c.term c.clairvoyantBound ∧
+    CostAtMost c.term c.cbvBound
+
+/-- **`verifySharingCostCert_sound`**: An accepted `SharingCostCert` establishes sound
+clairvoyant and CBV derivations `CV c.term c.expectedValue k` and `CV c.term c.expectedValue kCbv`
+with `k ≤ c.clairvoyantBound ≤ c.cbvBound` and `k ≤ kCbv ≤ c.cbvBound`
+(`0 Classical.choice`, `0 sorry`). -/
+theorem verifySharingCostCert_sound {c : SharingCostCert}
+    (h : verifySharingCostCert c = true) : SharingCostMeaning c := by
+  unfold verifySharingCostCert at h
+  split at h
+  · rename_i v k vCbv kCbv heval hcbv_eval
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨⟨⟨⟨⟨hv_beq, hk_le⟩, hcbv_bound⟩, hv_cbv_beq⟩, hk_le_cbv⟩, hkcbv_le⟩ := h
+    have hv_eq : v = c.expectedValue := termBeq_sound hv_beq
+    have hv_cbv_eq : vCbv = c.expectedValue := termBeq_sound hv_cbv_beq
+    subst hv_eq; subst hv_cbv_eq
+    have hcv : CV c.term c.expectedValue k :=
+      evalClairvoyantMinCost_sound c.fuel c.term c.expectedValue k heval
+    have hcv_cbv : CV c.term c.expectedValue kCbv :=
+      evalCBV_sound c.fuel c.term c.expectedValue kCbv hcbv_eval
+    exact ⟨k, kCbv, heval, hcbv_eval, hcv, hcv_cbv, hk_le, hcbv_bound, hk_le_cbv, hkcbv_le,
+      ⟨c.expectedValue, k, hcv, hk_le⟩, ⟨c.expectedValue, kCbv, hcv_cbv, hkcbv_le⟩⟩
+  · cases h
+
+inductive SharingCostClause where
+  | checkFailed
+  deriving DecidableEq, Repr
+
+def sharingCostCheck (_ : Nat) (c : SharingCostCert) (_ : Unit) : Verdict SharingCostClause :=
+  if verifySharingCostCert c then .ok else .refused .checkFailed []
+
+/-- Kernel `Judge` instance for `SharingCostCert`. -/
+instance sharingCostJudge : Judge SharingCostCert Unit where
+  Clause := SharingCostClause
+  Meaning c _ := SharingCostMeaning c
+  check := sharingCostCheck
+  sound := by
+    intro _ c _ h
+    unfold sharingCostCheck at h
+    split at h
+    · rename_i hv
+      exact verifySharingCostCert_sound hv
+    · cases h
+  refutes _ := false
+  refuted := by intro _ _ _ _ _ _ h; cases h
+  Fragment c := verifySharingCostCert c = true
+  complete := by
+    intro c hc _
+    exact ⟨(), 0, by simp [sharingCostCheck, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
 
 end Obend.Judge.Cost
 end

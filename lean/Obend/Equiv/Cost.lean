@@ -666,5 +666,70 @@ theorem mix_assoc_cost (a b c : Term) :
 theorem mix_assoc_cequiv (a b c : Term) : .mix (.mix a b) c ≈c .mix a (.mix b c) :=
   ⟨8, mix_assoc_cost a b c⟩
 
+/-! ## Quantitative Clairvoyant Call-by-Need vs. Call-by-Value Cost Bounds -/
+
+/-- Any `evalClairvoyantMinCost` witness within `bound` establishes `CV t v k` and `CostAtMost t bound`. -/
+theorem costAtMost_of_evalClairvoyantMinCost {fuel bound : Nat} {t v : Term} {k : Nat}
+    (heval : evalClairvoyantMinCost fuel t = some (v, k)) (hle : k ≤ bound) :
+    CV t v k ∧ CostAtMost t bound := by
+  have hcv := evalClairvoyantMinCost_sound fuel t v k heval
+  exact ⟨hcv, v, k, hcv, hle⟩
+
+/-- Any `evalCBV` witness within `bound` establishes `CV t v k` and `CostAtMost t bound`. -/
+theorem costAtMost_of_evalCBV {fuel bound : Nat} {t v : Term} {k : Nat}
+    (heval : evalCBV fuel t = some (v, k)) (hle : k ≤ bound) :
+    CV t v k ∧ CostAtMost t bound := by
+  have hcv := evalCBV_sound fuel t v k heval
+  exact ⟨hcv, v, k, hcv, hle⟩
+
+/-- Exact contextual `SandsImproves` embeds into `CostWithin 1`. -/
+theorem CostWithin.of_sandsImproves {t t' : Term} (h : SandsImproves t t') :
+    CostWithin 1 t t' := by
+  intro ρ C v k hcv
+  obtain ⟨v', k', r, hle, hlit⟩ := h ρ C v k hcv
+  exact ⟨v', k', r, by omega, hlit⟩
+
+/-- Call-by-need sharing on duplicated variables (`dupAdd = λ x => x + x`): an unsettled
+argument `a` that evaluates to `.nat n` at cost `ka` is evaluated ONCE in `Run .bind`
+(`Let′`, cost `ka + 1`), and its value `.nat n` is read twice at cost `0`, achieving
+total derivation cost `ka + 3`. -/
+theorem cv_dupAdd_shared {a : Term} {n ka : Nat}
+    (hnsa : ¬ Settled a) (ha : CV a (.nat n) ka) :
+    CV (.app dupAdd a) (.nat (n + n)) (ka + 3) := by
+  have hbind : Run .bind a (.nat n) (ka + 1) := .eval hnsa ha
+  have hbody : CV (instantiate (.binary .add (.bound 0) (.bound 0)) (.nat n)) (.nat (n + n)) 1 := by
+    rw [instantiate_dupAdd_body]
+    have hadd := Run.binary (op := .add) (Run.value (.nat n)) (Run.value (.nat n)) rfl
+    simpa using hadd
+  have happ := Run.apply (Run.value (.lam (.binary .add (.bound 0) (.bound 0)))) hbind hbody
+  have heq : 0 + (ka + 1) + 1 + 1 = ka + 3 := by omega
+  rwa [heq] at happ
+
+/-- Quantitative comparison between `evalClairvoyantMinCost` (`Skip`) and `evalCBV` (`Let′`)
+on an unused unsettled argument `a`: `evalCBV` pays `ka + 2` while `evalClairvoyantMinCost`
+pays `2`, saving `ka` ticks (`2 < ka + 2` whenever `0 < ka`). -/
+theorem cv_skip_vs_cbv_unused_arg {a va : Term} {ka fuel : Nat}
+    (ha : ¬ Settled a) (hcbv : evalCBV fuel a = some (va, ka)) :
+    evalClairvoyantMinCost (fuel + 1) (.app (.lam (.nat 42)) a) = some (.nat 42, 2) ∧
+      evalCBV (fuel + 1) (.app (.lam (.nat 42)) a) = some (.nat 42, ka + 2) ∧
+      2 ≤ ka + 2 ∧
+      (0 < ka → 2 < ka + 2) := by
+  have hclair := (evalClairvoyant_skip_unused_arg_saves_cost a ha fuel).1
+  have hnsa : isSettled a = false := by
+    cases h : isSettled a with
+    | false => rfl
+    | true => exact absurd (isSettled_sound a h) ha
+  have hncv : isCValue (.app (.lam (.nat 42)) a) = false := isCValue_app (.lam (.nat 42)) a
+  have hlam : evalCBV fuel (.lam (.nat 42)) = some (.lam (.nat 42), 0) := by
+    unfold evalCBV; simp [CValue.isCValue_eq_true (.lam (.nat 42))]
+  have hinst : instantiate (.nat 42) va = .nat 42 := by
+    simp [instantiate, Term.substitute]
+  have hnat : evalCBV fuel (.nat 42) = some (.nat 42, 0) := by
+    unfold evalCBV; simp [CValue.isCValue_eq_true (.nat 42)]
+  have hcbv_app : evalCBV (fuel + 1) (.app (.lam (.nat 42)) a) = some (.nat 42, ka + 2) := by
+    unfold evalCBV
+    simp [hncv, hlam, hnsa, hcbv, hinst, hnat]
+  exact ⟨hclair, hcbv_app, by omega, fun hpos => by omega⟩
+
 end Obend.Equiv
 end

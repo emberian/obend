@@ -38,9 +38,9 @@ set_option autoImplicit false
 theorem equitable_int_sq_nonneg (a : Int) : 0 ≤ a * a := by
   cases a with
   | ofNat n =>
-    exact Int.ofNat_nonneg (n * n)
+    exact Int.natCast_nonneg (n * n)
   | negSucc n =>
-    exact Int.ofNat_nonneg (Nat.succ n * Nat.succ n)
+    exact Int.natCast_nonneg (Nat.succ n * Nat.succ n)
 
 /-- Four-factor integer multiplication swap $(p q)(r s) = (p r)(q s)$. -/
 theorem equitable_int_mul_four_swap (p q r s : Int) :
@@ -433,11 +433,77 @@ def checkHandshakeIdentity
       let sizeJ : Int := cellSize vertices part j
       decide (sizeI * quotientEntry i j = sizeJ * quotientEntry j i)))
 
-/-! ## 5. Fundamental Intertwining Theorem ($H S = S Q$ and $H^k S = S Q^k$) -/
+/-- Helper lemma: `xs.all p = true` iff `p x = true` for every `x ∈ xs`. -/
+theorem list_all_iff_forall {α : Type} (p : α → Bool) :
+    ∀ (xs : List α), xs.all p = true ↔ ∀ x, x ∈ xs → p x = true
+  | [] => by
+    simp only [List.all_nil, List.not_mem_nil, false_implies, implies_true]
+  | x :: xs => by
+    simp only [List.all_cons, Bool.and_eq_true, List.mem_cons]
+    rw [list_all_iff_forall p xs]
+    constructor
+    · intro ⟨hx, hxs⟩ y hy
+      cases hy with
+      | inl hEq => rw [hEq]; exact hx
+      | inr hIn => exact hxs y hIn
+    · intro h
+      exact ⟨h x (Or.inl rfl), fun y hy => h y (Or.inr hy)⟩
+
+/-- Every member of `cellMembers vertices part j` belongs to `vertices` and has `part x = j`. -/
+theorem cellMembers_part_eq (vertices : List Nat) (part : Nat → Nat) (j : Nat) :
+    ∀ x, x ∈ cellMembers vertices part j → part x = j := by
+  intro x hx
+  dsimp only [cellMembers] at hx
+  rw [List.mem_filter] at hx
+  exact of_decide_eq_true hx.2
+
+/-- **Theorem (`checkEquitablePartition_sound`)**:
+**Checker Soundness Bridge for `checkEquitablePartition`**:
+If `checkEquitablePartition m numCells part Q = true`, then:
+1. Every vertex $u < m.\text{dim}$ is assigned to a valid cell $\text{part}(u) < \text{numCells}$,
+2. Every cell $j < \text{numCells}$ is non-empty (`1 ≤ cellSize (List.range m.dim) part j`), and
+3. Every vertex $u < m.\text{dim}$ and target cell $j < \text{numCells}$ satisfies the exact
+   equitable row-sum identity:
+   $$\text{cellRowSum}\; m.\text{entry}\; (\text{cellMembers}\; (\text{List.range}\; m.\text{dim})\; \text{part}\; j)\; u = Q(\text{part}(u), j).$$ -/
+theorem checkEquitablePartition_sound
+    (m : IntMatrix)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → Int)
+    (hCheck : checkEquitablePartition m numCells part Q = true) :
+    (∀ u, u < m.dim → part u < numCells) ∧
+    (∀ j, j < numCells → 1 ≤ cellSize (List.range m.dim) part j) ∧
+    (∀ u j, u < m.dim → j < numCells →
+      cellRowSum m.entry (cellMembers (List.range m.dim) part j) u = Q (part u) j) := by
+  unfold checkEquitablePartition at hCheck
+  simp only [Bool.and_eq_true] at hCheck
+  rcases hCheck with ⟨⟨hPartAll, hSizeAll⟩, hRowAll⟩
+  rw [list_all_iff_forall] at hPartAll hSizeAll hRowAll
+  refine ⟨?_, ?_, ?_⟩
+  · intro u hu
+    have huMem : u ∈ List.range m.dim := List.mem_range.mpr hu
+    exact of_decide_eq_true (hPartAll u huMem)
+  · intro j hj
+    have hjMem : j ∈ List.range numCells := List.mem_range.mpr hj
+    exact of_decide_eq_true (hSizeAll j hjMem)
+  · intro u j hu hj
+    have huMem : u ∈ List.range m.dim := List.mem_range.mpr hu
+    have hjMem : j ∈ List.range numCells := List.mem_range.mpr hj
+    have hRowU := (list_all_iff_forall _ (List.range numCells)).mp (hRowAll u huMem) j hjMem
+    exact of_decide_eq_true hRowU
+
+/-! ## 5. Fundamental Intertwining Theorem ($H S = S Q$, $H^k S = S Q^k$, and $p(H) S = S p(Q)$) -/
 
 /-- Lift a quotient cell vector `w : Nat → Int` to a cell-constant vertex vector $(S w)_u = w_{\text{part}(u)}$. -/
 def liftQuotientVec (part : Nat → Nat) (w : Nat → Int) (u : Nat) : Int :=
   w (part u)
+
+/-- Alias for `liftQuotientVec`. -/
+abbrev liftVec := liftQuotientVec
+
+/-- Standard unpartitioned matrix-vector multiplication $(H v)_u = \sum_{x \in \text{indices}} H_{u,x} \cdot v_x$. -/
+def matVec (indices : List Nat) (H : Nat → Nat → Int) (v : Nat → Int) (u : Nat) : Int :=
+  sumIntOver (fun x => H u x * v x) indices
 
 /-- Apply the $r \times r$ quotient matrix $Q$ to a quotient vector $w$ at cell $i$:
 $$(Q w)_i = \sum_{j \in \text{cellIndices}} Q_{i, j} \cdot w_j.$$ -/
@@ -457,6 +523,142 @@ def partitionedMatVec
     (v : Nat → Int)
     (u : Nat) : Int :=
   sumIntOver (fun j => sumIntOver (fun x => H u x * v x) (cellOf j)) cellIndices
+
+/-- Additivity of `sumIntOver` across list concatenation `xs ++ ys`. -/
+theorem sumIntOver_append (f : Nat → Int) :
+    ∀ (xs ys : List Nat),
+      sumIntOver f (xs ++ ys) = sumIntOver f xs + sumIntOver f ys
+  | [], ys => by
+    dsimp only [List.nil_append, sumIntOver]
+    omega
+  | x :: xs, ys => by
+    dsimp only [List.cons_append, sumIntOver]
+    rw [sumIntOver_append f xs ys]
+    omega
+
+/-- Decomposition of `sumIntOver` over `cellIndices.flatMap cellOf` into a nested cell sum. -/
+theorem sumIntOver_flatMap (f : Nat → Int) (cellOf : Nat → List Nat) :
+    ∀ (cellIndices : List Nat),
+      sumIntOver f (cellIndices.flatMap cellOf) =
+        sumIntOver (fun j => sumIntOver f (cellOf j)) cellIndices
+  | [] => rfl
+  | j :: js => by
+    simp only [List.flatMap_cons, sumIntOver]
+    rw [sumIntOver_append f (cellOf j) (js.flatMap cellOf)]
+    rw [sumIntOver_flatMap f cellOf js]
+
+/-- Step expansion of `sumIntOver f (cellMembers (x :: xs) part j)`. -/
+theorem sumIntOver_cellMembers_cons
+    (f : Nat → Int) (x : Nat) (xs : List Nat) (part : Nat → Nat) (j : Nat) :
+    sumIntOver f (cellMembers (x :: xs) part j) =
+      (if part x == j then f x else 0) + sumIntOver f (cellMembers xs part j) := by
+  dsimp only [cellMembers, List.filter]
+  cases h : (part x == j)
+  · simp only [Bool.false_eq_true, ↓reduceIte, Int.zero_add]
+  · simp only [↓reduceIte, sumIntOver]
+
+/-- Summing a Kronecker delta `if target == j then c else 0` over a list not containing `target` yields `0`. -/
+theorem sumIntOver_ite_eq_zero_of_not_mem (c : Int) (target : Nat) :
+    ∀ (js : List Nat), (∀ j, j ∈ js → target ≠ j) →
+      sumIntOver (fun j => if target == j then c else 0) js = 0
+  | [], _ => rfl
+  | j :: js, hNotMem => by
+    dsimp only [sumIntOver]
+    have hNe : target ≠ j := hNotMem j (List.Mem.head js)
+    have hBeq : (target == j) = false := beq_false_of_ne hNe
+    rw [hBeq]
+    simp only [Bool.false_eq_true, ↓reduceIte, Int.zero_add]
+    exact sumIntOver_ite_eq_zero_of_not_mem c target js
+      (fun k hk => hNotMem k (List.Mem.tail j hk))
+
+/-- Summing a Kronecker delta `if target == j then c else 0` over `List.range n` yields `c` whenever `target < n`. -/
+theorem sumIntOver_ite_range_eq (c : Int) (target : Nat) :
+    ∀ (n : Nat), target < n →
+      sumIntOver (fun j => if target == j then c else 0) (List.range n) = c
+  | 0, hLt => absurd hLt (Nat.not_lt_zero target)
+  | n + 1, hLt => by
+    rw [List.range_succ, sumIntOver_append]
+    dsimp only [sumIntOver]
+    by_cases hEq : target = n
+    · subst hEq
+      have hBeq : (target == target) = true := beq_self_eq_true target
+      rw [hBeq]
+      simp only [↓reduceIte, Int.add_zero]
+      have hZero : sumIntOver (fun j => if target == j then c else 0) (List.range target) = 0 := by
+        apply sumIntOver_ite_eq_zero_of_not_mem
+        intro j hj
+        have hjLt : j < target := List.mem_range.mp hj
+        omega
+      rw [hZero, Int.zero_add]
+    · have hLtN : target < n := by omega
+      have hBeq : (target == n) = false := beq_false_of_ne hEq
+      rw [hBeq, sumIntOver_ite_range_eq c target n hLtN]
+      simp only [Bool.false_eq_true, ↓reduceIte, Int.add_zero]
+
+/-- **Partition Bijection Sum Decomposition Lemma (`sumIntOver_cellMembers_partition`)**:
+For any vertex list `vertices`, partition `part : Nat → Nat`, and `numCells : Nat`, if every
+vertex $x \in \text{vertices}$ has $\text{part}(x) < \text{numCells}$, then summing any function
+$f : \text{Nat} \to \text{Int}$ over the disjoint cells `cellMembers vertices part j` ($0 \le j < \text{numCells}$)
+equals summing $f$ directly over `vertices`:
+$$\sum_{j=0}^{\text{numCells}-1} \sum_{x \in C_j} f(x) = \sum_{x \in \text{vertices}} f(x).$$ -/
+theorem sumIntOver_cellMembers_partition
+    (f : Nat → Int)
+    (part : Nat → Nat)
+    (numCells : Nat) :
+    ∀ (vertices : List Nat),
+      (∀ x, x ∈ vertices → part x < numCells) →
+      sumIntOver (fun j => sumIntOver f (cellMembers vertices part j)) (List.range numCells) =
+        sumIntOver f vertices
+  | [], _ => by
+    dsimp only [cellMembers, List.filter, sumIntOver]
+    exact sumIntOver_zero (List.range numCells)
+  | x :: xs, hPart => by
+    dsimp only [sumIntOver]
+    have hCongr :
+        sumIntOver (fun j => sumIntOver f (cellMembers (x :: xs) part j)) (List.range numCells) =
+        sumIntOver (fun j => (if part x == j then f x else 0) + sumIntOver f (cellMembers xs part j))
+          (List.range numCells) := by
+      apply sumIntOver_congr
+      intro j _
+      exact sumIntOver_cellMembers_cons f x xs part j
+    rw [hCongr, sumIntOver_add]
+    have hxLt : part x < numCells := hPart x (List.Mem.head xs)
+    rw [sumIntOver_ite_range_eq (f x) (part x) numCells hxLt]
+    rw [sumIntOver_cellMembers_partition f part numCells xs (fun y hy => hPart y (List.Mem.tail x hy))]
+
+/-- **Theorem (`partitionedMatVec_eq_matVec`)**:
+When every vertex $x \in \text{vertices}$ is assigned to a valid cell $\text{part}(x) < \text{numCells}$,
+the cell-partitioned matrix-vector product `partitionedMatVec` equals the standard unpartitioned
+matrix-vector product `matVec`:
+$$\sum_{j=0}^{\text{numCells}-1} \sum_{x \in C_j} H_{u,x} v_x = \sum_{x \in \text{vertices}} H_{u,x} v_x.$$ -/
+theorem partitionedMatVec_eq_matVec
+    (H : Nat → Nat → Int)
+    (vertices : List Nat)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (v : Nat → Int)
+    (u : Nat)
+    (hPart : ∀ x, x ∈ vertices → part x < numCells) :
+    partitionedMatVec H (List.range numCells) (cellMembers vertices part) v u =
+      matVec vertices H v u := by
+  dsimp only [partitionedMatVec, matVec]
+  exact sumIntOver_cellMembers_partition (fun x => H u x * v x) part numCells vertices hPart
+
+/-- **Theorem (`matMulEntry_eq_partitionedMatVec`)**:
+For any vertex list `indices` partitioned by `part` into `numCells` cells (`∀ x ∈ indices, part x < numCells`),
+the unpartitioned matrix-vector sum $\sum_{x \in \text{indices}} H_{u,x} v_x$ equals
+`partitionedMatVec H (List.range numCells) (cellMembers indices part) v u`. -/
+theorem matMulEntry_eq_partitionedMatVec
+    (H : Nat → Nat → Int)
+    (indices : List Nat)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (v : Nat → Int)
+    (u : Nat)
+    (hPart : ∀ x, x ∈ indices → part x < numCells) :
+    matVec indices H v u =
+      partitionedMatVec H (List.range numCells) (cellMembers indices part) v u :=
+  (partitionedMatVec_eq_matVec H indices numCells part v u hPart).symm
 
 /-- Helper lemma: within a single cell `cellJ` where every vertex $x \in \text{cellJ}$ has $\text{part}(x) = j$,
 summing $H_{u,x} \cdot w_{\text{part}(x)}$ factors out the constant cell weight $w_j$:
@@ -507,6 +709,29 @@ theorem equitable_intertwining_step
   have hStep := cellSum_liftQuotientVec H part w u j (cellOf j) (hCells j hj)
   rw [hStep, hEqRow j hj]
 
+/-- **Theorem (`equitable_intertwining_step_unpartitioned`)**:
+End-to-end one-step intertwining for the standard unpartitioned `matVec (List.range m.dim) m.entry`
+whenever `checkEquitablePartition m numCells part Q = true`! -/
+theorem equitable_intertwining_step_unpartitioned
+    (m : IntMatrix)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → Int)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCheck : checkEquitablePartition m numCells part Q = true)
+    (hu : u < m.dim) :
+    matVec (List.range m.dim) m.entry (liftQuotientVec part w) u =
+      liftQuotientVec part (quotientMatVec Q (List.range numCells) w) u := by
+  rcases checkEquitablePartition_sound m numCells part Q hCheck with ⟨hPart, _, hRow⟩
+  rw [matMulEntry_eq_partitionedMatVec m.entry (List.range m.dim) numCells part
+        (liftQuotientVec part w) u (fun x hx => hPart x (List.mem_range.mp hx))]
+  apply equitable_intertwining_step
+  · intro j _ x hx
+    exact cellMembers_part_eq (List.range m.dim) part j x hx
+  · intro j hj
+    exact hRow u j hu (List.mem_range.mp hj)
+
 /-- Congruence of `partitionedMatVec` when two vertex vectors agree on all vertices of all cells. -/
 theorem partitionedMatVec_congr
     (H : Nat → Nat → Int)
@@ -523,6 +748,19 @@ theorem partitionedMatVec_congr
   apply sumIntOver_congr
   intro x hx
   rw [hEq j hj x hx]
+
+/-- Congruence of `matVec` when two vertex vectors agree on all `x ∈ indices`. -/
+theorem matVec_congr
+    (indices : List Nat)
+    (H : Nat → Nat → Int)
+    (v1 v2 : Nat → Int)
+    (u : Nat)
+    (hEq : ∀ x, x ∈ indices → v1 x = v2 x) :
+    matVec indices H v1 u = matVec indices H v2 u := by
+  dsimp only [matVec]
+  apply sumIntOver_congr
+  intro x hx
+  rw [hEq x hx]
 
 /-- Iterate a linear operator on vectors `k` times: $A^0 v = v$, $A^{k+1} v = A (A^k v)$. -/
 def iterateVecOp (op : (Nat → Int) → (Nat → Int)) : Nat → (Nat → Int) → (Nat → Int)
@@ -561,6 +799,157 @@ theorem equitable_intertwining_power
     rw [hCongr]
     exact equitable_intertwining_step H Q part cellIndices cellOf
       (iterateVecOp (quotientMatVec Q cellIndices) k w) u hCells (hEqAll u)
+
+/-- **Theorem (`equitable_intertwining_power_unpartitioned`)**:
+End-to-end multi-step power intertwining for the standard unpartitioned `matVec (List.range m.dim) m.entry`
+(and `partitionedMatVec`) on any bounded vertex $u < m.\text{dim}$ whenever
+`checkEquitablePartition m numCells part Q = true`! -/
+theorem equitable_intertwining_power_unpartitioned
+    (m : IntMatrix)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → Int)
+    (hCheck : checkEquitablePartition m numCells part Q = true) :
+    ∀ (k : Nat) (w : Nat → Int) (u : Nat),
+      u < m.dim →
+      iterateVecOp (matVec (List.range m.dim) m.entry) k (liftQuotientVec part w) u =
+        liftQuotientVec part (iterateVecOp (quotientMatVec Q (List.range numCells)) k w) u ∧
+      iterateVecOp
+          (partitionedMatVec m.entry (List.range numCells) (cellMembers (List.range m.dim) part))
+          k (liftQuotientVec part w) u =
+        liftQuotientVec part (iterateVecOp (quotientMatVec Q (List.range numCells)) k w) u
+  | 0, _, _, _ => ⟨rfl, rfl⟩
+  | k + 1, w, u, hu => by
+    dsimp only [iterateVecOp]
+    rcases checkEquitablePartition_sound m numCells part Q hCheck with ⟨hPart, _, hRow⟩
+    have hCongrMat :
+        matVec (List.range m.dim) m.entry
+          (iterateVecOp (matVec (List.range m.dim) m.entry) k (liftQuotientVec part w)) u =
+        matVec (List.range m.dim) m.entry
+          (liftQuotientVec part (iterateVecOp (quotientMatVec Q (List.range numCells)) k w)) u := by
+      apply matVec_congr
+      intro x hx
+      exact (equitable_intertwining_power_unpartitioned m numCells part Q hCheck k w x
+        (List.mem_range.mp hx)).1
+    have hCongrPart :
+        partitionedMatVec m.entry (List.range numCells) (cellMembers (List.range m.dim) part)
+          (iterateVecOp
+            (partitionedMatVec m.entry (List.range numCells) (cellMembers (List.range m.dim) part))
+            k (liftQuotientVec part w)) u =
+        partitionedMatVec m.entry (List.range numCells) (cellMembers (List.range m.dim) part)
+          (liftQuotientVec part (iterateVecOp (quotientMatVec Q (List.range numCells)) k w)) u := by
+      apply partitionedMatVec_congr
+      intro j _ x hx
+      dsimp only [cellMembers] at hx
+      rw [List.mem_filter] at hx
+      exact (equitable_intertwining_power_unpartitioned m numCells part Q hCheck k w x
+        (List.mem_range.mp hx.1)).2
+    constructor
+    · rw [hCongrMat]
+      exact equitable_intertwining_step_unpartitioned m numCells part Q
+        (iterateVecOp (quotientMatVec Q (List.range numCells)) k w) u hCheck hu
+    · rw [hCongrPart]
+      apply equitable_intertwining_step
+      · intro j _ x hx
+        exact cellMembers_part_eq (List.range m.dim) part j x hx
+      · intro j hj
+        exact hRow u j hu (List.mem_range.mp hj)
+
+/-- Auxiliary evaluator for matrix polynomial $\sum_{m} c_m (A^{k+m} v)_u$ starting at degree `k`. -/
+def evalMatrixPolyAux (op : (Nat → Int) → (Nat → Int)) (k : Nat) : List Int → (Nat → Int) → (Nat → Int)
+  | [], _ => fun _ => 0
+  | c :: cs, v => fun u => c * iterateVecOp op k v u + evalMatrixPolyAux op (k + 1) cs v u
+
+/-- Evaluate the matrix polynomial $\sum_{k} c_k A^k v$ of a linear operator `op` on vector `v` at index `u`. -/
+def evalMatrixPoly (op : (Nat → Int) → (Nat → Int)) (coeffs : List Int) (v : Nat → Int) (u : Nat) : Int :=
+  evalMatrixPolyAux op 0 coeffs v u
+
+/-- Helper lemma: `evalMatrixPolyAux` intertwines equitable lifts starting from any power offset `k`. -/
+theorem equitable_intertwining_poly_aux
+    (H Q : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqAll : ∀ u, ∀ j, j ∈ cellIndices → cellRowSum H (cellOf j) u = Q (part u) j) :
+    ∀ (coeffs : List Int) (k : Nat) (w : Nat → Int) (u : Nat),
+      evalMatrixPolyAux (partitionedMatVec H cellIndices cellOf) k coeffs (liftQuotientVec part w) u =
+        liftQuotientVec part (evalMatrixPolyAux (quotientMatVec Q cellIndices) k coeffs w) u
+  | [], _, _, _ => rfl
+  | c :: cs, k, w, u => by
+    dsimp only [evalMatrixPolyAux, liftQuotientVec]
+    rw [equitable_intertwining_power H Q part cellIndices cellOf hCells hEqAll k w u]
+    rw [equitable_intertwining_poly_aux H Q part cellIndices cellOf hCells hEqAll cs (k + 1) w u]
+    rfl
+
+/-- **Theorem (`equitable_intertwining_poly`)**:
+**Universal Polynomial Intertwining Theorem ($p(H) S = S p(Q)$)**:
+For any polynomial $p(x) = \sum_{k} c_k x^k$ (`coeffs : List Int`), any equitable partition
+$(H, \text{part}, Q)$ across `cellIndices` and `cellOf`, any quotient vector `w : Nat → Int`,
+and any vertex `u : Nat`:
+$$\left(\sum_{k} c_k H^k (S w)\right)_u = \left(S \left(\sum_{k} c_k Q^k w\right)\right)_u = \left(\sum_{k} c_k Q^k w\right)_{\text{part}(u)}.$$
+This immediately implies exact intertwining of any truncated Taylor propagator or Chebyshev / Krylov
+spectral filter polynomial! -/
+theorem equitable_intertwining_poly
+    (H Q : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (coeffs : List Int)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqAll : ∀ u, ∀ j, j ∈ cellIndices → cellRowSum H (cellOf j) u = Q (part u) j) :
+    evalMatrixPoly (partitionedMatVec H cellIndices cellOf) coeffs (liftQuotientVec part w) u =
+      liftQuotientVec part (evalMatrixPoly (quotientMatVec Q cellIndices) coeffs w) u :=
+  equitable_intertwining_poly_aux H Q part cellIndices cellOf hCells hEqAll coeffs 0 w u
+
+/-- Helper lemma: `evalMatrixPolyAux` intertwines unpartitioned `matVec` and `partitionedMatVec`
+on all bounded vertices $u < m.\text{dim}$ whenever `checkEquitablePartition m numCells part Q = true`. -/
+theorem equitable_intertwining_poly_unpartitioned_aux
+    (m : IntMatrix)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → Int)
+    (hCheck : checkEquitablePartition m numCells part Q = true) :
+    ∀ (coeffs : List Int) (k : Nat) (w : Nat → Int) (u : Nat),
+      u < m.dim →
+      evalMatrixPolyAux (matVec (List.range m.dim) m.entry) k coeffs (liftQuotientVec part w) u =
+        liftQuotientVec part (evalMatrixPolyAux (quotientMatVec Q (List.range numCells)) k coeffs w) u ∧
+      evalMatrixPolyAux
+          (partitionedMatVec m.entry (List.range numCells) (cellMembers (List.range m.dim) part))
+          k coeffs (liftQuotientVec part w) u =
+        liftQuotientVec part (evalMatrixPolyAux (quotientMatVec Q (List.range numCells)) k coeffs w) u
+  | [], _, _, _, _ => ⟨rfl, rfl⟩
+  | c :: cs, k, w, u, hu => by
+    dsimp only [evalMatrixPolyAux, liftQuotientVec]
+    rcases equitable_intertwining_power_unpartitioned m numCells part Q hCheck k w u hu with ⟨hPowMat, hPowPart⟩
+    rcases equitable_intertwining_poly_unpartitioned_aux m numCells part Q hCheck cs (k + 1) w u hu with ⟨hRestMat, hRestPart⟩
+    rw [hPowMat, hPowPart]
+    exact ⟨congrArg (c * liftQuotientVec part (iterateVecOp (quotientMatVec Q (List.range numCells)) k w) u + ·) hRestMat,
+           congrArg (c * liftQuotientVec part (iterateVecOp (quotientMatVec Q (List.range numCells)) k w) u + ·) hRestPart⟩
+
+/-- **Theorem (`equitable_intertwining_poly_unpartitioned`)**:
+End-to-end universal polynomial intertwining for both unpartitioned `matVec (List.range m.dim) m.entry`
+and `partitionedMatVec` on any vertex $u < m.\text{dim}$ whenever
+`checkEquitablePartition m numCells part Q = true`! -/
+theorem equitable_intertwining_poly_unpartitioned
+    (m : IntMatrix)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → Int)
+    (coeffs : List Int)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCheck : checkEquitablePartition m numCells part Q = true)
+    (hu : u < m.dim) :
+    evalMatrixPoly (matVec (List.range m.dim) m.entry) coeffs (liftQuotientVec part w) u =
+      liftQuotientVec part (evalMatrixPoly (quotientMatVec Q (List.range numCells)) coeffs w) u ∧
+    evalMatrixPoly
+        (partitionedMatVec m.entry (List.range numCells) (cellMembers (List.range m.dim) part))
+        coeffs (liftQuotientVec part w) u =
+      liftQuotientVec part (evalMatrixPoly (quotientMatVec Q (List.range numCells)) coeffs w) u :=
+  equitable_intertwining_poly_unpartitioned_aux m numCells part Q hCheck coeffs 0 w u hu
 
 /-! ## 6. Irreducibility & Residual Floor Certification (`evalEquitableResidualNormSq`) -/
 

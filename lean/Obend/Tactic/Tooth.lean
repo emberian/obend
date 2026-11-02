@@ -243,4 +243,52 @@ elab "#tooth " target:ident " by " "mutation " mutation:ident " := " replacement
     let result ← liftCoreM <| experiment env target mutation value
     logInfo result
 
+/-! ## Dual-Pole Tooth Obligation Checker (`ToothSpec`, `verifyDualPoleTooth`, `verifyDualPoleTooth_sound`) -/
+
+/-- Specification of a dual-pole `#tooth` obligation over fixture type `α`:
+    - `name`: identifier for the obligation / law under test
+    - `eval`: candidate boolean checker / law evaluator `α → Bool`
+    - `posFixture`: positive golden fixture that must be accepted (`eval posFixture = true`)
+    - `negFixtures`: list of negative / mutated fixtures that must all be rejected (`eval x = false`) -/
+structure ToothSpec (α : Type) where
+  name        : String := "tooth"
+  eval        : α → Bool
+  posFixture  : α
+  negFixtures : List α
+
+/-- Pure executable Dual-Pole Tooth Obligation Checker: verifies that the candidate `spec.eval`
+    simultaneously accepts `spec.posFixture` (`spec.eval spec.posFixture = true`) and rejects
+    every negative mutation fixture in `spec.negFixtures`
+    (`spec.negFixtures.all (fun x => !spec.eval x) = true`). -/
+@[expose] def verifyDualPoleTooth {α : Type} (spec : ToothSpec α) : Bool :=
+  spec.eval spec.posFixture && spec.negFixtures.all (fun x => !spec.eval x)
+
+theorem all_neg_eval_false {α : Type} (eval : α → Bool) :
+    ∀ {xs : List α} {x : α},
+      xs.all (fun y => !eval y) = true →
+      x ∈ xs →
+      eval x = false
+  | [], _, _, hmem => by cases hmem
+  | _ :: _, _, hall, hmem => by
+    simp only [List.all_cons, Bool.and_eq_true, Bool.not_eq_true'] at hall
+    cases hmem with
+    | head _ => exact hall.1
+    | tail _ htail => exact all_neg_eval_false eval hall.2 htail
+
+/-- **Soundness of `verifyDualPoleTooth`** (`0 sorry`, `0 Classical.choice`):
+    whenever `verifyDualPoleTooth spec = true`, the candidate evaluator accepts the positive
+    golden fixture (`spec.eval spec.posFixture = true`), `spec.negFixtures.all (fun x => !spec.eval x) = true`,
+    and every negative mutation fixture `x ∈ spec.negFixtures` is rejected (`spec.eval x = false`). -/
+theorem verifyDualPoleTooth_sound {α : Type} (spec : ToothSpec α)
+    (h : verifyDualPoleTooth spec = true) :
+    spec.eval spec.posFixture = true ∧
+    spec.negFixtures.all (fun x => !spec.eval x) = true ∧
+    (∀ x ∈ spec.negFixtures, spec.eval x = false) := by
+  unfold verifyDualPoleTooth at h
+  simp only [Bool.and_eq_true] at h
+  exact ⟨h.1, h.2, fun x hx => all_neg_eval_false spec.eval h.2 hx⟩
+
 end Obend.Tactic.Tooth
+
+end
+

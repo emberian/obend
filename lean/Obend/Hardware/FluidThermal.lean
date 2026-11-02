@@ -425,6 +425,38 @@ theorem lc_drives_in_slot_prevents_thermal_runaway
   rw [electro_thermal_contraction_identity tInlet pBase 4 9 t1 t2]
   refine ⟨by decide, by decide, by decide, by decide, by omega, by omega⟩
 
+/-! ## 7. Microchannel Convective Thermal Conductance $G_{\text{th}}$ & Electro-Thermal Dichotomy -/
+
+/-- Evaluates total microchannel convective thermal conductance
+$G_{\text{th}} = N_{\text{ch}} \cdot h_{\text{conv}} \cdot A_{\text{wet}}$
+across `numChannels` parallel cooling channels with convective heat-transfer coefficient `hConv`
+and wetted perimeter-area `wettedArea`. -/
+def evalMicrochannelConductance (numChannels hConv wettedArea : Int) : Int :=
+  numChannels * hConv * wettedArea
+
+/-- Increasing microchannel count `n1 ≤ n2` under non-negative `hConv` and `wettedArea`
+monotonically increases total convective thermal conductance $G_{\text{th}}$. -/
+theorem microchannelConductance_mono_channels
+    (n1 n2 hConv wettedArea : Int)
+    (hN : n1 ≤ n2) (hConvPos : 0 ≤ hConv) (hAreaPos : 0 ≤ wettedArea) :
+    evalMicrochannelConductance n1 hConv wettedArea ≤
+      evalMicrochannelConductance n2 hConv wettedArea := by
+  dsimp only [evalMicrochannelConductance]
+  have h1 : n1 * hConv ≤ n2 * hConv :=
+    int_mul_le_mul_of_nonneg_right n1 n2 hConv hN hConvPos
+  exact int_mul_le_mul_of_nonneg_right (n1 * hConv) (n2 * hConv) wettedArea h1 hAreaPos
+
+export Obend.Hardware.Thermal (
+  evalCopperJouleHeatingTcr
+  evalCopperJouleSlope
+  evalConvectiveHeatRemoval
+  stepCoupledElectroThermalMap
+  copperJouleHeatingTcr_monotone_temp
+  electroThermal_step_diff_identity
+  electroThermal_equilibrium_stability_dichotomy
+  electroThermal_steady_state_unique_and_contraction
+)
+
 end Obend.Hardware.FluidThermal
 end
 

@@ -135,6 +135,259 @@ def mkSigJson (name : String) (params : List Param) (resultType : String) : Json
     Json.mkObj [("name", toJson p.name), ("type", toJson p.type), ("quantity", toJson p.quantity)]
   Json.mkObj [("name", toJson name), ("parameters", Json.arr paramJsons.toArray), ("resultType", toJson resultType)]
 
+/-! ### Zero-Choice `ByteArray` (`s.toUTF8`) Structural Wire-Parsing Combinators -/
+
+/-- Extract byte at index `i` from a `ByteArray` with `0` fallback (`0 Classical.choice`). -/
+def byteAt (ba : ByteArray) (i : Nat) : UInt8 :=
+  (ba.data[i]?).getD 0
+
+/-- Extract a `List UInt8` slice from `ba` by structural recursion on `rem : Nat`. -/
+def sliceBytesAux (ba : ByteArray) (idx : Nat) : Nat → List UInt8
+  | 0 => []
+  | rem + 1 => byteAt ba idx :: sliceBytesAux ba (idx + 1) rem
+
+/-- Convert a `String` into its UTF-8 `List UInt8` by `ByteArray` index recursion. -/
+def stringToBytes (s : String) : List UInt8 :=
+  let ba := s.toUTF8
+  sliceBytesAux ba 0 ba.size
+
+/-- Convert an ASCII/Latin-1 byte into a `Char` without `Classical.choice`. -/
+def asciiByteToChar (b : UInt8) : Char :=
+  Char.ofUInt8 b
+
+/-- Convert a `List UInt8` back into a `String` without `Classical.choice`. -/
+def bytesToString (bs : List UInt8) : String :=
+  String.ofList (bs.map asciiByteToChar)
+
+
+/-- Check if a byte is ASCII whitespace (`' '`, `'\t'`, `'\r'`, `'\n'`). -/
+def isWsByte (b : UInt8) : Bool :=
+  b == 32 || b == 9 || b == 13 || b == 10
+
+/-- Drop leading whitespace bytes by structural recursion on `List UInt8`. -/
+def dropLeadingWs : List UInt8 → List UInt8
+  | [] => []
+  | b :: bs => if isWsByte b then dropLeadingWs bs else b :: bs
+
+/-- Trim leading and trailing whitespace bytes from `bs`. -/
+def trimBytes (bs : List UInt8) : List UInt8 :=
+  (dropLeadingWs (dropLeadingWs bs).reverse).reverse
+
+/-- Strip matching outer double-quotes `"..."` if present. -/
+def unquoteBytes (bs : List UInt8) : List UInt8 :=
+  let t := trimBytes bs
+  match t with
+  | 34 :: rest =>
+    match rest.reverse with
+    | 34 :: innerRev => innerRev.reverse
+    | _ => t
+  | _ => t
+
+/-- Convert `bs` to a trimmed, unquoted `String`. -/
+def cleanBytesToString (bs : List UInt8) : String :=
+  bytesToString (unquoteBytes (trimBytes bs))
+
+/-- Check if `bs` starts with `pref` by structural recursion. -/
+def startsWithBytes : List UInt8 → List UInt8 → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | p :: ps, b :: bs => p == b && startsWithBytes ps bs
+
+/-- Check exact equality of two `List UInt8` slices. -/
+def eqBytes : List UInt8 → List UInt8 → Bool
+  | [], [] => true
+  | a :: as, b :: bs => a == b && eqBytes as bs
+  | _, _ => false
+
+/-- Check if `bs` starts with ASCII string `pref`. -/
+def startsWithAscii (bs : List UInt8) (pref : String) : Bool :=
+  startsWithBytes (stringToBytes pref) bs
+
+/-- Check if `bs` equals ASCII string `target`. -/
+def eqAscii (bs : List UInt8) (target : String) : Bool :=
+  eqBytes bs (stringToBytes target)
+
+/-- Drop `n` bytes from `bs`. -/
+def dropBytes : Nat → List UInt8 → List UInt8
+  | 0, bs => bs
+  | _ + 1, [] => []
+  | n + 1, _ :: bs => dropBytes n bs
+
+/-- Split `List UInt8` on delimiter byte `delim` by structural recursion. -/
+def splitBytesOnAux (delim : UInt8) : List UInt8 → List UInt8 → List (List UInt8)
+  | [], cur => [cur.reverse]
+  | b :: bs, cur =>
+    if b == delim then
+      cur.reverse :: splitBytesOnAux delim bs []
+    else
+      splitBytesOnAux delim bs (b :: cur)
+
+def splitBytesOn (delim : UInt8) (bs : List UInt8) : List (List UInt8) :=
+  splitBytesOnAux delim bs []
+
+/-- Split `bs` into non-empty whitespace-separated tokens by structural recursion. -/
+def wordsBytesAux : List UInt8 → List UInt8 → List (List UInt8)
+  | [], [] => []
+  | [], cur => [cur.reverse]
+  | b :: bs, cur =>
+    if isWsByte b || b == 61 then -- space/tab or '='
+      match cur with
+      | [] => wordsBytesAux bs []
+      | _ => cur.reverse :: wordsBytesAux bs []
+    else
+      wordsBytesAux bs (b :: cur)
+
+def wordsBytes (bs : List UInt8) : List (List UInt8) :=
+  wordsBytesAux bs []
+
+/-- Parse an unsigned decimal `Nat` from `List UInt8` by structural recursion (`0 Classical.choice`). -/
+def parseNatBytesAux : List UInt8 → Nat → Option Nat
+  | [], acc => some acc
+  | b :: bs, acc =>
+    if 48 ≤ b && b ≤ 57 then
+      parseNatBytesAux bs (acc * 10 + (b.toNat - 48))
+    else
+      none
+
+def parseNatBytes (bs : List UInt8) : Option Nat :=
+  let t := unquoteBytes (trimBytes bs)
+  match t with
+  | [] => none
+  | _ => parseNatBytesAux t 0
+
+/-- Check whether `bs` is a non-empty plain identifier (`[A-Za-z0-9_]`) by structural recursion. -/
+def isIdentByte (b : UInt8) : Bool :=
+  (65 ≤ b && b ≤ 90) || (97 ≤ b && b ≤ 122) || (48 ≤ b && b ≤ 57) || b == 95
+
+def plainNameBytes : List UInt8 → Bool
+  | [] => false
+  | b :: bs => isIdentByte b && bs.all isIdentByte
+
+/-- Strip outer `(...)` or `[...]` brackets around a token/list slice (`0 Classical.choice`). -/
+def stripBracketsOrParens (bs : List UInt8) : List UInt8 :=
+  let t := trimBytes bs
+  match t with
+  | 40 :: rest => -- '('
+    match rest.reverse with
+    | 41 :: revBody => trimBytes revBody.reverse
+    | _ => t
+  | 91 :: rest => -- '['
+    match rest.reverse with
+    | 93 :: revBody => trimBytes revBody.reverse
+    | _ => t
+  | _ => t
+
+/-- Verify that an S-expression byte list has balanced parentheses and ends at depth 0 (`0 Classical.choice`). -/
+def checkSexpBalancedBytes : List UInt8 → Nat → Bool → Bool
+  | [], depth, seenOpen => seenOpen && depth == 0
+  | b :: bs, depth, seenOpen =>
+    if b == 40 then -- '('
+      checkSexpBalancedBytes bs (depth + 1) true
+    else if b == 41 then -- ')'
+      if depth == 0 then false
+      else if depth == 1 then
+        (trimBytes bs).isEmpty
+      else
+        checkSexpBalancedBytes bs (depth - 1) seenOpen
+    else
+      if !seenOpen && !isWsByte b then false
+      else checkSexpBalancedBytes bs depth seenOpen
+
+/-- Convert a top-level S-expression item `(key val1 val2 ...)` into a normalized `key: val1 val2` line. -/
+def normalizeSexpItem (item : List UInt8) : List UInt8 :=
+  let t := trimBytes item
+  let inner :=
+    match t with
+    | 40 :: rest => -- '('
+      match rest.reverse with
+      | 41 :: revBody => trimBytes revBody.reverse -- ')'
+      | _ => trimBytes rest
+    | _ => t
+  if startsWithAscii inner "#usda" then
+    inner
+  else if startsWithAscii inner "def Xform" || startsWithAscii inner "over " then
+    inner
+  else
+    let toks := wordsBytes inner
+    match toks with
+    | [] => []
+    | k :: _ =>
+      if eqAscii k "obnb" then
+        stringToBytes "format: obnb@1"
+      else if eqAscii k "usd-stage" then
+        stringToBytes "#usda 1.0"
+      else if eqAscii k "dfa-policy" then
+        stringToBytes "format: dfa-policy@1"
+      else if eqAscii k "dreggnet-deploy" then
+        stringToBytes "format: dreggnet-deploy@1"
+      else if eqAscii k "prose" then
+        -- (prose Heading) or (prose Heading Markdown...) -> `prose: Heading ...`
+        stringToBytes "prose: " ++ dropLeadingWs (dropBytes k.length inner)
+      else
+        -- If `k` already ends with `:`, keep it; otherwise append `: `
+        let hasColon := match k.reverse with | 58 :: _ => true | _ => false
+        let restBytes := dropLeadingWs (dropBytes k.length inner)
+        if hasColon then
+          k ++ [32] ++ restBytes
+        else
+          k ++ [58, 32] ++ restBytes
+
+/-- Scan top-level parenthesized `( ... )` clauses inside an S-expression wire payload. -/
+def scanSexpClausesAux : List UInt8 → Nat → List UInt8 → List (List UInt8)
+  | [], 0, [] => []
+  | [], _, _ => [stringToBytes "__UNBALANCED_SEXP__"]
+  | b :: bs, depth, cur =>
+    if b == 40 then -- '('
+      if depth == 0 then
+        scanSexpClausesAux bs 1 [40]
+      else
+        scanSexpClausesAux bs (depth + 1) (b :: cur)
+    else if b == 41 then -- ')'
+      if depth == 1 then
+        let completed := normalizeSexpItem ((41 :: cur).reverse)
+        completed :: scanSexpClausesAux bs 0 []
+      else if depth > 1 then
+        scanSexpClausesAux bs (depth - 1) (b :: cur)
+      else
+        [stringToBytes "__UNBALANCED_SEXP__"]
+    else
+      if depth > 0 then
+        scanSexpClausesAux bs depth (b :: cur)
+      else if isWsByte b then
+        scanSexpClausesAux bs 0 cur
+      else
+        [stringToBytes "__UNBALANCED_SEXP__"]
+
+/-- Extract normalized logical wire lines from `input` via `input.toUTF8`:
+    supports standard newline-delimited wire text, semicolon-delimited wire text,
+    and S-expression `(tag (k v) ...)` wire payloads (`0 Classical.choice`). -/
+def extractWireLines (input : String) : List (List UInt8) :=
+  let rawBytes := trimBytes (stringToBytes input)
+  match rawBytes with
+  | [] => []
+  | 40 :: rest => -- starts with '('
+    if !checkSexpBalancedBytes rawBytes 0 false then
+      [stringToBytes "__UNBALANCED_SEXP__"]
+    else
+      let inner :=
+        match rest.reverse with
+        | 41 :: revBody => trimBytes revBody.reverse
+        | _ => rest
+      let headTok := (wordsBytes inner).headD []
+      let afterHead := trimBytes (dropBytes headTok.length inner)
+      let headLine := normalizeSexpItem headTok
+      let subClauses := scanSexpClausesAux afterHead 0 []
+      (headLine :: subClauses).filter (fun l => !l.isEmpty)
+  | _ =>
+    let rawLines := splitBytesOn 10 rawBytes
+    let expanded := rawLines.foldr (fun l acc =>
+      let tl := trimBytes l
+      if tl.contains 59 && !startsWithAscii tl "#" then -- ';'
+        (splitBytesOn 59 tl).map trimBytes ++ acc
+      else
+        tl :: acc) []
+    expanded.filter (fun l => !l.isEmpty)
+
 /-! ## 2. FormatReader 1: `obnbReader` (`"obnb@1"`) — Literate `.obnb` / Markdown Workbook -/
 
 /-- A cell in an `.obnb` literate workbook. -/
@@ -152,6 +405,9 @@ structure ObnbWorkbook where
   maxBound : Nat
   cells : List ObnbCell
   deriving DecidableEq, Repr, Inhabited
+
+/-- Alias `ObnbDocument` for `ObnbWorkbook`. -/
+abbrev ObnbDocument := ObnbWorkbook
 
 def encodeObnbCell : ObnbCell → Data
   | .prose h m => .variant "prose" (.record [("heading", .label h), ("markdown", .label m)])
@@ -202,48 +458,183 @@ def renderObnb (w : ObnbWorkbook) : String :=
     | .leanBridge t s => s!"```lean {t}\nbridge {s}\n```")
   header ++ body
 
-/-- Parse an `.obnb` literate Markdown workbook into `ObnbWorkbook`. -/
-def parseObnb (input : String) : Except String ObnbWorkbook := do
-  let rawLines := (input.splitOn "\n").map trimStr |>.filter (fun l => !l.isEmpty && l != "---")
-  if rawLines.isEmpty then .error "empty obnb@1 workbook"
-  let mut title := "Workbook"
-  let mut lawName := "workbookLaw"
-  let mut boundField := "progress"
-  let mut maxBound : Nat := 100
-  let mut cells : List ObnbCell := []
-  for l in rawLines do
-    if l.startsWith "format:" then
-      let fmt := trimStr (dropStr l 7)
-      if fmt != "obnb@1" then throw s!"unsupported obnb format: {fmt}"
-    else if l.startsWith "title:" then
-      title := trimStr (dropStr l 6)
-    else if l.startsWith "law:" then
-      lawName := trimStr (dropStr l 4)
-    else if l.startsWith "field:" then
-      boundField := trimStr (dropStr l 6)
-    else if l.startsWith "maxBound:" then
-      match (trimStr (dropStr l 9)).toNat? with
-      | some n => maxBound := n
-      | none => throw "invalid maxBound in obnb@1 frontmatter"
-    else if l.startsWith "# " then
-      let h := trimStr (dropStr l 2)
-      cells := cells ++ [.prose h h]
-    else if l.startsWith "cell-obend:" then
-      let parts := (trimStr (dropStr l 11)).splitOn ":"
-      match parts with
-      | [n, f, dStr] =>
-        let d ← match dStr.toNat? with | some v => pure v | none => throw "invalid obend cell delta"
-        cells := cells ++ [.obend (trimStr n) (trimStr f) d]
-      | _ => throw "invalid cell-obend syntax (expected cell-obend: name:field:delta)"
-    else if l.startsWith "cell-lean:" then
-      let parts := (trimStr (dropStr l 10)).splitOn ":"
-      match parts with
-      | [t, s] => cells := cells ++ [.leanBridge (trimStr t) (trimStr s)]
-      | _ => throw "invalid cell-lean syntax (expected cell-lean: theorem:spec)"
-    else pure ()
-  if !Obend.Spec.Law.plainName boundField then
-    throw s!"invalid boundField `{boundField}` in obnb@1"
-  return { title, lawName, boundField, maxBound, cells }
+/-- Accumulator state for zero-choice structural `.obnb` parsing. -/
+structure ObnbParseAcc where
+  hasFormat : Bool := false
+  title : String := "Workbook"
+  lawName : String := "workbookLaw"
+  boundFieldBytes : List UInt8 := stringToBytes "progress"
+  maxBound : Nat := 100
+  cells : List ObnbCell := []
+  pendingProseHeading : Option String := none
+  pendingObendCell : Option String := none
+  pendingLeanThm : Option String := none
+
+def flushPendingProse (acc : ObnbParseAcc) : ObnbParseAcc :=
+  match acc.pendingProseHeading with
+  | some h => { acc with cells := acc.cells ++ [.prose h h], pendingProseHeading := none }
+  | none => acc
+
+def parseObnbColonOrSpace3 (raw : List UInt8) : Option (List UInt8 × List UInt8 × List UInt8) :=
+  let cleaned := stripBracketsOrParens raw
+  let colonParts := (splitBytesOn 58 cleaned).map trimBytes
+  match colonParts with
+  | [a, b, c] => some (a, b, c)
+  | _ =>
+    match wordsBytes cleaned with
+    | [a, b, c] => some (a, b, c)
+    | _ => none
+
+def parseObnbColonOrSpace2 (raw : List UInt8) : Option (List UInt8 × List UInt8) :=
+  let cleaned := stripBracketsOrParens raw
+  let colonParts := (splitBytesOn 58 cleaned).map trimBytes
+  match colonParts with
+  | [a, b] => some (a, b)
+  | _ =>
+    match wordsBytes cleaned with
+    | [a, b] => some (a, b)
+    | _ => none
+
+def stepParseObnbLine (acc : ObnbParseAcc) (l : List UInt8) : Except String ObnbParseAcc :=
+  if eqAscii l "---" then
+    .ok (flushPendingProse acc)
+  else
+    match acc.pendingObendCell with
+    | some cName =>
+      if eqAscii l "```" then
+        .ok { acc with pendingObendCell := none }
+      else
+        -- Expect `field += delta` or `field:delta`
+        let toks := wordsBytes l
+        match toks with
+        | [fBytes, opBytes, dBytes] =>
+          if eqAscii opBytes "+=" || eqAscii opBytes "+" then
+            match parseNatBytes dBytes with
+            | some d =>
+              .ok { acc with cells := acc.cells ++ [.obend cName (cleanBytesToString fBytes) d], pendingObendCell := none }
+            | none => .error "invalid obend cell delta"
+          else
+            .error "invalid obend cell body"
+        | _ =>
+          match parseObnbColonOrSpace2 l with
+          | some (fBytes, dBytes) =>
+            match parseNatBytes dBytes with
+            | some d =>
+              .ok { acc with cells := acc.cells ++ [.obend cName (cleanBytesToString fBytes) d], pendingObendCell := none }
+            | none => .error "invalid obend cell delta"
+          | none => .error "invalid obend cell body"
+    | none =>
+      match acc.pendingLeanThm with
+      | some tName =>
+        if eqAscii l "```" then
+          .ok { acc with pendingLeanThm := none }
+        else if startsWithAscii l "bridge " then
+          let sName := cleanBytesToString (dropBytes 7 l)
+          .ok { acc with cells := acc.cells ++ [.leanBridge tName sName], pendingLeanThm := none }
+        else
+          .ok { acc with cells := acc.cells ++ [.leanBridge tName (cleanBytesToString l)], pendingLeanThm := none }
+      | none =>
+        if eqAscii l "```" then
+          .ok (flushPendingProse acc)
+        else if startsWithAscii l "```obend " then
+          let acc1 := flushPendingProse acc
+          let cName := cleanBytesToString (dropBytes 9 l)
+          .ok { acc1 with pendingObendCell := some cName }
+        else if startsWithAscii l "```lean " then
+          let acc1 := flushPendingProse acc
+          let tName := cleanBytesToString (dropBytes 8 l)
+          .ok { acc1 with pendingLeanThm := some tName }
+        else if startsWithAscii l "format:" then
+          let acc1 := flushPendingProse acc
+          let fmt := trimBytes (dropBytes 7 l)
+          if eqAscii fmt "obnb@1" || eqAscii fmt "obnb" then .ok { acc1 with hasFormat := true }
+          else .error ("unsupported obnb format: " ++ cleanBytesToString fmt)
+        else if startsWithAscii l "title:" then
+          let acc1 := flushPendingProse acc
+          .ok { acc1 with title := cleanBytesToString (dropBytes 6 l) }
+        else if startsWithAscii l "law:" then
+          let acc1 := flushPendingProse acc
+          .ok { acc1 with lawName := cleanBytesToString (dropBytes 4 l) }
+        else if startsWithAscii l "field:" then
+          let acc1 := flushPendingProse acc
+          .ok { acc1 with boundFieldBytes := unquoteBytes (trimBytes (dropBytes 6 l)) }
+        else if startsWithAscii l "maxBound:" then
+          let acc1 := flushPendingProse acc
+          match parseNatBytes (dropBytes 9 l) with
+          | some n => .ok { acc1 with maxBound := n }
+          | none => .error "invalid maxBound in obnb@1 frontmatter"
+        else if startsWithAscii l "prose:" then
+          let acc1 := flushPendingProse acc
+          let rawProse := stripBracketsOrParens (dropBytes 6 l)
+          let colonParts := (splitBytesOn 58 rawProse).map trimBytes
+          match colonParts with
+          | [hB, mB] =>
+            .ok { acc1 with cells := acc1.cells ++ [.prose (cleanBytesToString hB) (cleanBytesToString mB)] }
+          | _ =>
+            let toks := wordsBytes rawProse
+            match toks with
+            | [] => .error "empty prose cell in obnb@1"
+            | [hB] =>
+              let h := cleanBytesToString hB
+              .ok { acc1 with cells := acc1.cells ++ [.prose h h] }
+            | hB :: _ =>
+              let h := cleanBytesToString hB
+              let m := cleanBytesToString (dropLeadingWs (dropBytes hB.length rawProse))
+              .ok { acc1 with cells := acc1.cells ++ [.prose h m] }
+        else if startsWithAscii l "# " then
+          let acc1 := flushPendingProse acc
+          let h := cleanBytesToString (dropBytes 2 l)
+          .ok { acc1 with pendingProseHeading := some h }
+        else if startsWithAscii l "cell-obend:" then
+          let acc1 := flushPendingProse acc
+          match parseObnbColonOrSpace3 (trimBytes (dropBytes 11 l)) with
+          | some (nB, fB, dB) =>
+            match parseNatBytes dB with
+            | some d => .ok { acc1 with cells := acc1.cells ++ [.obend (cleanBytesToString nB) (cleanBytesToString fB) d] }
+            | none => .error "invalid obend cell delta"
+          | none => .error "invalid cell-obend syntax (expected cell-obend: name:field:delta)"
+        else if startsWithAscii l "cell-lean:" then
+          let acc1 := flushPendingProse acc
+          match parseObnbColonOrSpace2 (trimBytes (dropBytes 10 l)) with
+          | some (tB, sB) =>
+            .ok { acc1 with cells := acc1.cells ++ [.leanBridge (cleanBytesToString tB) (cleanBytesToString sB)] }
+          | none => .error "invalid cell-lean syntax (expected cell-lean: theorem:spec)"
+        else
+          match acc.pendingProseHeading with
+          | some h =>
+            let m := cleanBytesToString l
+            .ok { acc with cells := acc.cells ++ [.prose h m], pendingProseHeading := none }
+          | none => .error ("unrecognized obnb@1 line: " ++ cleanBytesToString l)
+
+def foldObnbLines : List (List UInt8) → ObnbParseAcc → Except String ObnbParseAcc
+  | [], acc => .ok (flushPendingProse acc)
+  | l :: ls, acc =>
+    match stepParseObnbLine acc l with
+    | .ok acc' => foldObnbLines ls acc'
+    | .error e => .error e
+
+/-- Parse an `.obnb` literate Markdown or S-expression workbook into `ObnbWorkbook` (`0 Classical.choice`). -/
+def parseObnb (input : String) : Except String ObnbWorkbook :=
+  let rawLines := (extractWireLines input).filter (fun l => !l.isEmpty && !eqAscii l "---")
+  match rawLines with
+  | [] => .error "empty obnb@1 workbook"
+  | _ =>
+    match foldObnbLines rawLines {} with
+    | .error e => .error e
+    | .ok acc =>
+      if !acc.hasFormat then
+        .error "missing format: obnb@1 header"
+      else if !plainNameBytes acc.boundFieldBytes then
+        .error ("invalid boundField `" ++ bytesToString acc.boundFieldBytes ++ "` in obnb@1")
+      else
+        .ok {
+          title := acc.title,
+          lawName := acc.lawName,
+          boundField := bytesToString acc.boundFieldBytes,
+          maxBound := acc.maxBound,
+          cells := acc.cells
+        }
+
 
 /-- Lower an `ObnbWorkbook` into a unified `.obend` `Syntax.Module`. -/
 def lowerObnbToObend (w : ObnbWorkbook) : Module :=
@@ -409,47 +800,76 @@ def renderUsdStage (s : UsdStage) : String :=
     s!"def Xform {b.layerName} {b.posX} {b.posY} {b.posZ} {b.velX} {b.velY} {b.thermalMk}"
   ] ++ overLines)
 
-def parseUsdLayerLine (prefixTag : String) (isOver : Bool) (line : String) : Except String UsdLayer := do
-  let rest := trimStr (dropStr line prefixTag.length)
-  let toks := (rest.splitOn " ").map trimStr |>.filter (fun t => !t.isEmpty)
-  match toks with
-  | [name, px, py, pz, vx, vy, th] =>
-    let some posX := px.toNat? | throw "invalid posX in usd-stage@1"
-    let some posY := py.toNat? | throw "invalid posY in usd-stage@1"
-    let some posZ := pz.toNat? | throw "invalid posZ in usd-stage@1"
-    let some velX := vx.toNat? | throw "invalid velX in usd-stage@1"
-    let some velY := vy.toNat? | throw "invalid velY in usd-stage@1"
-    let some thermalMk := th.toNat? | throw "invalid thermalMk in usd-stage@1"
-    return { layerName := name, isOver, posX, posY, posZ, velX, velY, thermalMk }
-  | _ => throw s!"invalid USD layer syntax in `{line}`"
+def parseUsdLayerBytes (prefixLen : Nat) (isOver : Bool) (line : List UInt8) : Except String UsdLayer :=
+  let rest := stripBracketsOrParens (dropBytes prefixLen line)
+  match wordsBytes rest with
+  | [nameB, pxB, pyB, pzB, vxB, vyB, thB] =>
+    match parseNatBytes pxB, parseNatBytes pyB, parseNatBytes pzB,
+          parseNatBytes vxB, parseNatBytes vyB, parseNatBytes thB with
+    | some posX, some posY, some posZ, some velX, some velY, some thermalMk =>
+      .ok { layerName := cleanBytesToString nameB, isOver, posX, posY, posZ, velX, velY, thermalMk }
+    | _, _, _, _, _, _ => .error "invalid numeric attribute in usd-stage@1 layer"
+  | _ => .error ("invalid USD layer syntax in `" ++ cleanBytesToString line ++ "`")
 
-/-- Parse an OpenUSD ASCII stage (`"usd-stage@1"`). -/
-def parseUsdStage (input : String) : Except String UsdStage := do
-  let lines := (input.splitOn "\n").map trimStr |>.filter (fun l => !l.isEmpty)
-  if !(lines.any (fun l => l == "#usda 1.0")) then
-    throw "missing #usda 1.0 header"
-  let mut stageName := "DefaultStage"
-  let mut subLayers : List String := []
-  let mut maxThermalMk : Nat := 350000
-  let mut baseOpt : Option UsdLayer := none
-  let mut overrides : List UsdLayer := []
-  for l in lines do
-    if l == "#usda 1.0" then pure ()
-    else if l.startsWith "stage:" then
-      stageName := trimStr (dropStr l 6)
-    else if l.startsWith "subLayers:" then
-      let raw := trimStr (dropStr l 10)
-      subLayers := if raw.isEmpty then [] else (raw.splitOn ",").map trimStr
-    else if l.startsWith "maxThermalMk:" then
-      let some v := (trimStr (dropStr l 13)).toNat? | throw "invalid maxThermalMk"
-      maxThermalMk := v
-    else if l.startsWith "def Xform " then
-      baseOpt := some (← parseUsdLayerLine "def Xform " false l)
-    else if l.startsWith "over " then
-      overrides := overrides ++ [← parseUsdLayerLine "over " true l]
-    else throw s!"unrecognized usd-stage@1 line: {l}"
-  let some base := baseOpt | throw "usd-stage@1 requires a base `def Xform` layer"
-  return { stageName, subLayers, maxThermalMk, baseXform := base, overrides }
+structure UsdParseAcc where
+  stageName : String := "DefaultStage"
+  subLayers : List String := []
+  maxThermalMk : Nat := 350000
+  baseOpt : Option UsdLayer := none
+  overrides : List UsdLayer := []
+
+def stepParseUsdLine (acc : UsdParseAcc) (l : List UInt8) : Except String UsdParseAcc :=
+  if eqAscii l "#usda 1.0" then .ok acc
+  else if startsWithAscii l "stage:" then
+    .ok { acc with stageName := cleanBytesToString (dropBytes 6 l) }
+  else if startsWithAscii l "subLayers:" then
+    let raw := stripBracketsOrParens (dropBytes 10 l)
+    let subs :=
+      if raw.isEmpty then []
+      else if raw.contains 44 then (splitBytesOn 44 raw).map cleanBytesToString
+      else (wordsBytes raw).map cleanBytesToString
+    .ok { acc with subLayers := subs }
+  else if startsWithAscii l "maxThermalMk:" then
+    match parseNatBytes (dropBytes 13 l) with
+    | some v => .ok { acc with maxThermalMk := v }
+    | none => .error "invalid maxThermalMk"
+  else if startsWithAscii l "def Xform " then
+    match parseUsdLayerBytes 10 false l with
+    | .ok base => .ok { acc with baseOpt := some base }
+    | .error e => .error e
+  else if startsWithAscii l "over " then
+    match parseUsdLayerBytes 5 true l with
+    | .ok ov => .ok { acc with overrides := acc.overrides ++ [ov] }
+    | .error e => .error e
+  else
+    .error ("unrecognized usd-stage@1 line: " ++ cleanBytesToString l)
+
+def foldUsdLines : List (List UInt8) → UsdParseAcc → Except String UsdParseAcc
+  | [], acc => .ok acc
+  | l :: ls, acc =>
+    match stepParseUsdLine acc l with
+    | .ok acc' => foldUsdLines ls acc'
+    | .error e => .error e
+
+/-- Parse an OpenUSD ASCII or S-expression stage (`"usd-stage@1"`) (`0 Classical.choice`). -/
+def parseUsdStage (input : String) : Except String UsdStage :=
+  let lines := extractWireLines input
+  if !(lines.any (fun l => eqAscii l "#usda 1.0")) then
+    .error "missing #usda 1.0 header"
+  else
+    match foldUsdLines lines {} with
+    | .error e => .error e
+    | .ok acc =>
+      match acc.baseOpt with
+      | some base =>
+        .ok {
+          stageName := acc.stageName,
+          subLayers := acc.subLayers,
+          maxThermalMk := acc.maxThermalMk,
+          baseXform := base,
+          overrides := acc.overrides
+        }
+      | none => .error "usd-stage@1 requires a base `def Xform` layer"
 
 /-- Lower a `UsdStage` into an `.obend` `Syntax.Module` with open-recursive `spec` compositions
     (`extends`, `around`, `def`) over 6D kinematic/thermal attributes. -/
@@ -637,49 +1057,78 @@ def renderDfaPolicy (p : DfaPolicy) : String :=
     s!"accepting: {accStr}"
   ] ++ trLines ++ holeLines)
 
-/-- Parse a `"dfa-policy@1"` manifest into `DfaPolicy`. -/
-def parseDfaPolicy (input : String) : Except String DfaPolicy := do
-  let lines := (input.splitOn "\n").map trimStr |>.filter (fun l => !l.isEmpty)
-  if !(lines.any (fun l => l == "format: dfa-policy@1")) then
-    throw "missing format: dfa-policy@1 header"
-  let mut policyName := "DefaultDfaPolicy"
-  let mut initialState : Nat := 0
-  let mut acceptingStates : List Nat := []
-  let mut transitions : List DfaTransition := []
-  let mut holes : List HoleConfinement := []
-  for l in lines do
-    if l == "format: dfa-policy@1" then pure ()
-    else if l.startsWith "policy:" then
-      policyName := trimStr (dropStr l 7)
-    else if l.startsWith "initial:" then
-      let some st := (trimStr (dropStr l 8)).toNat? | throw "invalid initial state in dfa-policy@1"
-      initialState := st
-    else if l.startsWith "accepting:" then
-      let raw := trimStr (dropStr l 10)
-      if !raw.isEmpty then
-        acceptingStates ← (raw.splitOn ",").mapM fun s =>
-          match (trimStr s).toNat? with
-          | some n => pure n
-          | none => throw "invalid accepting state in dfa-policy@1"
-    else if l.startsWith "transition:" then
-      let toks := ((trimStr (dropStr l 11)).splitOn " ").map trimStr |>.filter (fun t => !t.isEmpty)
-      match toks with
-      | [fStr, tokStr, toStr] =>
-        let some f := fStr.toNat? | throw "invalid fromState"
-        let some tok := tokStr.toNat? | throw "invalid tokenClass"
-        let some toSt := toStr.toNat? | throw "invalid toState"
-        transitions := transitions ++ [⟨f, tok, toSt⟩]
-      | _ => throw s!"invalid transition line: {l}"
-    else if l.startsWith "hole:" then
-      let toks := ((trimStr (dropStr l 5)).splitOn " ").map trimStr |>.filter (fun t => !t.isEmpty)
-      match toks with
-      | [hName, kStr, stStr] =>
-        let some k := kStr.toNat? | throw "invalid requiredKindTag"
-        let some st := stStr.toNat? | throw "invalid allowedState"
-        holes := holes ++ [⟨hName, k, st⟩]
-      | _ => throw s!"invalid hole confinement line: {l}"
-    else throw s!"unrecognized dfa-policy@1 line: {l}"
-  return { policyName, initialState, acceptingStates, transitions, holes }
+def parseNatListBytes : List (List UInt8) → Option (List Nat)
+  | [] => some []
+  | b :: bs =>
+    match parseNatBytes b, parseNatListBytes bs with
+    | some n, some ns => some (n :: ns)
+    | _, _ => none
+
+structure DfaParseAcc where
+  policyName : String := "DefaultDfaPolicy"
+  initialState : Nat := 0
+  acceptingStates : List Nat := []
+  transitions : List DfaTransition := []
+  holes : List HoleConfinement := []
+
+def stepParseDfaLine (acc : DfaParseAcc) (l : List UInt8) : Except String DfaParseAcc :=
+  if eqAscii l "format: dfa-policy@1" then .ok acc
+  else if startsWithAscii l "policy:" then
+    .ok { acc with policyName := cleanBytesToString (dropBytes 7 l) }
+  else if startsWithAscii l "initial:" then
+    match parseNatBytes (dropBytes 8 l) with
+    | some st => .ok { acc with initialState := st }
+    | none => .error "invalid initial state in dfa-policy@1"
+  else if startsWithAscii l "accepting:" then
+    let raw := stripBracketsOrParens (dropBytes 10 l)
+    if raw.isEmpty then .ok { acc with acceptingStates := [] }
+    else
+      let items := if raw.contains 44 then splitBytesOn 44 raw else wordsBytes raw
+      match parseNatListBytes items with
+      | some ns => .ok { acc with acceptingStates := ns }
+      | none => .error "invalid accepting state in dfa-policy@1"
+  else if startsWithAscii l "transition:" then
+    match wordsBytes (stripBracketsOrParens (dropBytes 11 l)) with
+    | [fB, tokB, toB] =>
+      match parseNatBytes fB, parseNatBytes tokB, parseNatBytes toB with
+      | some f, some tok, some toSt =>
+        .ok { acc with transitions := acc.transitions ++ [⟨f, tok, toSt⟩] }
+      | _, _, _ => .error "invalid numeric state in transition"
+    | _ => .error ("invalid transition line: " ++ cleanBytesToString l)
+  else if startsWithAscii l "hole:" then
+    match wordsBytes (stripBracketsOrParens (dropBytes 5 l)) with
+    | [hB, kB, stB] =>
+      match parseNatBytes kB, parseNatBytes stB with
+      | some k, some st =>
+        .ok { acc with holes := acc.holes ++ [⟨cleanBytesToString hB, k, st⟩] }
+      | _, _ => .error "invalid numeric tag/state in hole confinement"
+    | _ => .error ("invalid hole confinement line: " ++ cleanBytesToString l)
+  else
+    .error ("unrecognized dfa-policy@1 line: " ++ cleanBytesToString l)
+
+def foldDfaLines : List (List UInt8) → DfaParseAcc → Except String DfaParseAcc
+  | [], acc => .ok acc
+  | l :: ls, acc =>
+    match stepParseDfaLine acc l with
+    | .ok acc' => foldDfaLines ls acc'
+    | .error e => .error e
+
+/-- Parse a `"dfa-policy@1"` manifest or S-expression into `DfaPolicy` (`0 Classical.choice`). -/
+def parseDfaPolicy (input : String) : Except String DfaPolicy :=
+  let lines := extractWireLines input
+  if !(lines.any (fun l => eqAscii l "format: dfa-policy@1")) then
+    .error "missing format: dfa-policy@1 header"
+  else
+    match foldDfaLines lines {} with
+    | .error e => .error e
+    | .ok acc =>
+      .ok {
+        policyName := acc.policyName,
+        initialState := acc.initialState,
+        acceptingStates := acc.acceptingStates,
+        transitions := acc.transitions,
+        holes := acc.holes
+      }
 
 /-- Lower a `DfaPolicy` into an `.obend` `Syntax.Module` with state-transition methods and an
     unforgeable `#kind` confinement `law`. -/
@@ -856,43 +1305,68 @@ def renderDeploymentTopology (d : DeploymentTopology) : String :=
     s!"requiredTeePin: {d.requiredTeePin}"
   ] ++ gLines ++ cLines)
 
-/-- Parse a `"dreggnet-deploy@1"` manifest into `DeploymentTopology`. -/
-def parseDeploymentTopology (input : String) : Except String DeploymentTopology := do
-  let lines := (input.splitOn "\n").map trimStr |>.filter (fun l => !l.isEmpty)
-  if !(lines.any (fun l => l == "format: dreggnet-deploy@1")) then
-    throw "missing format: dreggnet-deploy@1 header"
-  let mut topologyName := "DefaultTopology"
-  let mut totalMandateCap : Nat := 1000
-  let mut requiredTeePin : Nat := 42
-  let mut grains : List GrainSpec := []
-  let mut channels : List SturdyRefChannel := []
-  for l in lines do
-    if l == "format: dreggnet-deploy@1" then pure ()
-    else if l.startsWith "topology:" then
-      topologyName := trimStr (dropStr l 9)
-    else if l.startsWith "totalMandateCap:" then
-      let some v := (trimStr (dropStr l 16)).toNat? | throw "invalid totalMandateCap"
-      totalMandateCap := v
-    else if l.startsWith "requiredTeePin:" then
-      let some v := (trimStr (dropStr l 15)).toNat? | throw "invalid requiredTeePin"
-      requiredTeePin := v
-    else if l.startsWith "grain:" then
-      let toks := ((trimStr (dropStr l 6)).splitOn " ").map trimStr |>.filter (fun t => !t.isEmpty)
-      match toks with
-      | [gName, pinStr, budStr] =>
-        let some pin := pinStr.toNat? | throw "invalid grain teeMeasurementPin"
-        let some bud := budStr.toNat? | throw "invalid grain mandateBudget"
-        grains := grains ++ [⟨gName, pin, bud⟩]
-      | _ => throw s!"invalid grain line: {l}"
-    else if l.startsWith "channel:" then
-      let toks := ((trimStr (dropStr l 8)).splitOn " ").map trimStr |>.filter (fun t => !t.isEmpty)
-      match toks with
-      | [cName, src, dst, epStr] =>
-        let some ep := epStr.toNat? | throw "invalid channel maxEpoch"
-        channels := channels ++ [⟨cName, src, dst, ep⟩]
-      | _ => throw s!"invalid channel line: {l}"
-    else throw s!"unrecognized dreggnet-deploy@1 line: {l}"
-  return { topologyName, totalMandateCap, requiredTeePin, grains, channels }
+structure DeployParseAcc where
+  topologyName : String := "DefaultTopology"
+  totalMandateCap : Nat := 1000
+  requiredTeePin : Nat := 42
+  grains : List GrainSpec := []
+  channels : List SturdyRefChannel := []
+
+def stepParseDeployLine (acc : DeployParseAcc) (l : List UInt8) : Except String DeployParseAcc :=
+  if eqAscii l "format: dreggnet-deploy@1" then .ok acc
+  else if startsWithAscii l "topology:" then
+    .ok { acc with topologyName := cleanBytesToString (dropBytes 9 l) }
+  else if startsWithAscii l "totalMandateCap:" then
+    match parseNatBytes (dropBytes 16 l) with
+    | some v => .ok { acc with totalMandateCap := v }
+    | none => .error "invalid totalMandateCap"
+  else if startsWithAscii l "requiredTeePin:" then
+    match parseNatBytes (dropBytes 15 l) with
+    | some v => .ok { acc with requiredTeePin := v }
+    | none => .error "invalid requiredTeePin"
+  else if startsWithAscii l "grain:" then
+    match wordsBytes (stripBracketsOrParens (dropBytes 6 l)) with
+    | [gB, pinB, budB] =>
+      match parseNatBytes pinB, parseNatBytes budB with
+      | some pin, some bud =>
+        .ok { acc with grains := acc.grains ++ [⟨cleanBytesToString gB, pin, bud⟩] }
+      | _, _ => .error "invalid grain teeMeasurementPin or mandateBudget"
+    | _ => .error ("invalid grain line: " ++ cleanBytesToString l)
+  else if startsWithAscii l "channel:" then
+    match wordsBytes (stripBracketsOrParens (dropBytes 8 l)) with
+    | [cB, srcB, dstB, epB] =>
+      match parseNatBytes epB with
+      | some ep =>
+        .ok { acc with channels := acc.channels ++ [⟨cleanBytesToString cB, cleanBytesToString srcB, cleanBytesToString dstB, ep⟩] }
+      | none => .error "invalid channel maxEpoch"
+    | _ => .error ("invalid channel line: " ++ cleanBytesToString l)
+  else
+    .error ("unrecognized dreggnet-deploy@1 line: " ++ cleanBytesToString l)
+
+def foldDeployLines : List (List UInt8) → DeployParseAcc → Except String DeployParseAcc
+  | [], acc => .ok acc
+  | l :: ls, acc =>
+    match stepParseDeployLine acc l with
+    | .ok acc' => foldDeployLines ls acc'
+    | .error e => .error e
+
+/-- Parse a `"dreggnet-deploy@1"` manifest or S-expression into `DeploymentTopology` (`0 Classical.choice`). -/
+def parseDeploymentTopology (input : String) : Except String DeploymentTopology :=
+  let lines := extractWireLines input
+  if !(lines.any (fun l => eqAscii l "format: dreggnet-deploy@1")) then
+    .error "missing format: dreggnet-deploy@1 header"
+  else
+    match foldDeployLines lines {} with
+    | .error e => .error e
+    | .ok acc =>
+      .ok {
+        topologyName := acc.topologyName,
+        totalMandateCap := acc.totalMandateCap,
+        requiredTeePin := acc.requiredTeePin,
+        grains := acc.grains,
+        channels := acc.channels
+      }
+
 
 /-- Lower a `DeploymentTopology` into an `.obend` `Syntax.Module` of composed specs and laws
     enforcing grain mandate budgets, SturdyRef channel epochs, and TEE attestation pins. -/
@@ -994,6 +1468,77 @@ def deploymentTopologyReader : FormatReader DeploymentTopology where
   lowerToObend := lowerDeploymentToObend
   data_roundtrip := deploymentTopology_data_roundtrip
 
+-- Compile-time verification guards for WS-G Zero-Choice Byte-Level Format Decoders
+#guard
+  let doc : ObnbDocument := {
+    title := "CustomWorkbook",
+    lawName := "customLaw",
+    boundField := "energy",
+    maxBound := 420,
+    cells := [
+      .prose "Overview" "Overview",
+      .obend "stepA" "energy" 12,
+      .leanBridge "energy_thm" "WorkbookSpec"
+    ]
+  }
+  let doc2 : ObnbDocument := {
+    title := "CustomWorkbook",
+    lawName := "customLaw",
+    boundField := "energy",
+    maxBound := 420,
+    cells := [
+      .prose "Overview" "DetailedBody",
+      .obend "stepA" "energy" 12,
+      .leanBridge "energy_thm" "WorkbookSpec"
+    ]
+  }
+  (parseObnb (renderObnb doc)).toOption == some doc &&
+  (parseObnb "(obnb (title CustomWorkbook) (law customLaw) (field energy) (maxBound 420) (prose Overview) (cell-obend stepA:energy:12) (cell-lean energy_thm:WorkbookSpec))").toOption == some doc &&
+  (parseObnb "(obnb (title CustomWorkbook) (law customLaw) (field energy) (maxBound 420) (prose Overview DetailedBody) (cell-obend (stepA energy 12)) (cell-lean (energy_thm WorkbookSpec)))").toOption == some doc2 &&
+  !(parseObnb "completely invalid garbage !!!").isOk &&
+  !(parseObnb "title: MissingFormatHeader").isOk &&
+  !(parseObnb "(obnb (title Unclosed)").isOk
+
+#guard
+  let stg : UsdStage := {
+    stageName := "RoboticArmStage",
+    subLayers := ["base.usda", "grip.usda"],
+    maxThermalMk := 310000,
+    baseXform := ⟨"ArmBase", false, 1, 2, 3, 4, 5, 290000⟩,
+    overrides := [⟨"GripTip", true, 6, 7, 8, 9, 10, 300000⟩]
+  }
+  (parseUsdStage (renderUsdStage stg)).toOption == some stg &&
+  (parseUsdStage "(usd-stage (stage RoboticArmStage) (subLayers base.usda,grip.usda) (maxThermalMk 310000) (def Xform ArmBase 1 2 3 4 5 290000) (over GripTip 6 7 8 9 10 300000))").toOption == some stg &&
+  (parseUsdStage "(usd-stage (stage RoboticArmStage) (subLayers (base.usda grip.usda)) (maxThermalMk 310000) (def Xform ArmBase 1 2 3 4 5 290000) (over GripTip 6 7 8 9 10 300000))").toOption == some stg &&
+  !(parseUsdStage "(usd-stage (stage Unclosed)").isOk
+
+#guard
+  let pol : DfaPolicy := {
+    policyName := "StrictTranscriptDfa",
+    initialState := 0,
+    acceptingStates := [2, 3],
+    transitions := [⟨0, 1, 1⟩, ⟨1, 2, 2⟩],
+    holes := [⟨"api_key_slot", 9, 1⟩]
+  }
+  (parseDfaPolicy (renderDfaPolicy pol)).toOption == some pol &&
+  (parseDfaPolicy "(dfa-policy (policy StrictTranscriptDfa) (initial 0) (accepting 2,3) (transition 0 1 1) (transition 1 2 2) (hole api_key_slot 9 1))").toOption == some pol &&
+  (parseDfaPolicy "(dfa-policy (policy StrictTranscriptDfa) (initial 0) (accepting (2 3)) (transition (0 1 1)) (transition [1 2 2]) (hole (api_key_slot 9 1)))").toOption == some pol &&
+  !(parseDfaPolicy "(dfa-policy (policy StrictTranscriptDfa) (initial 0").isOk
+
+#guard
+  let dep : DeploymentTopology := {
+    topologyName := "EdgeMeshCluster",
+    totalMandateCap := 8000,
+    requiredTeePin := 777,
+    grains := [⟨"gateway", 777, 3000⟩, ⟨"solver", 777, 5000⟩],
+    channels := [⟨"rpc_chan", "gateway", "solver", 64⟩]
+  }
+  (parseDeploymentTopology (renderDeploymentTopology dep)).toOption == some dep &&
+  (parseDeploymentTopology "(dreggnet-deploy (topology EdgeMeshCluster) (totalMandateCap 8000) (requiredTeePin 777) (grain gateway 777 3000) (grain solver 777 5000) (channel rpc_chan gateway solver 64))").toOption == some dep &&
+  (parseDeploymentTopology "(dreggnet-deploy (topology EdgeMeshCluster) (totalMandateCap 8000) (requiredTeePin 777) (grain (gateway 777 3000)) (grain [solver 777 5000]) (channel (rpc_chan gateway solver 64)))").toOption == some dep &&
+  !(parseDeploymentTopology "(dreggnet-deploy (topology Unclosed").isOk
+
 end Obend.Format
 
 end
+

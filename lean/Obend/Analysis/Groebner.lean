@@ -10,18 +10,19 @@ Implements `WS 29.2` (`NEXT-MATHEMATICA.md` §3.4):
      and fuel-bounded multivariate polynomial reduction modulo a generator basis $G = \{g_1, \dots, g_m\}$.
    - Verifies Buchberger's criterion (`checkGroebnerBasis`): every pairwise $S(g_i, g_j)$ reduces to $0$
      modulo $G$.
-2. **Certified Ideal Membership (`IdealMembershipCert`, `checkIdealMembership`, `groebner_ideal_membership_sound`)**:
+2. **Certified Ideal Membership (`IdealMembershipCert`, `checkIdealMembership`, `checkIdealMembership_eval_sound`, `groebner_ideal_membership_sound`)**:
    - Certifies $f \in \langle g_1, \dots, g_m \rangle$ via explicit quotient polynomials $f = \sum_{k} q_k g_{i_k}$.
+   - Proves `checkIdealMembership_eval_sound`: if `checkIdealMembership target gens cert = true`, then for
+     every assignment $\rho : \mathbb{N} \to \mathbb{Q}$, $(\forall g \in \text{gens},\; g.\text{eval}\,\rho = 0) \to \text{target}.\text{eval}\,\rho = 0$.
    - Proves `groebner_ideal_membership_sound` (positive/negative poles for ideal membership and
      Buchberger criterion distinguishing a reduced Gröbner basis from a non-Gröbner basis).
-3. **Stengle Positivstellensatz & Real Nullstellensatz Judge (`PositivstellensatzQuery`, `PositivstellensatzCert`, `positivstellensatzCheck`, `positivstellensatzJudge`)**:
+3. **Stengle Positivstellensatz & Real Nullstellensatz Judge (`PositivstellensatzQuery`, `PositivstellensatzCert`, `positivstellensatzCheck`, `positivstellensatz_eval_infeasible`, `positivstellensatzJudge`)**:
    - Certifies semi-algebraic infeasibility and nonlinear algebraic cell contracts under
      `Obend.Judge.RealAnalysis` via Stengle's Positivstellensatz identity:
      $$f_{\text{monoid}}^{2k} + \sigma_0 + \sum_{j} \sigma_j g_j + \sum_{\ell} \lambda_\ell h_\ell = 0$$
-   - Proves `stengle_positivstellensatz_sound` (`0 sorryAx`).
+   - Proves `positivstellensatz_eval_infeasible` and `stengle_positivstellensatz_sound` (`0 sorryAx`).
 -/
 public import Obend.Judge.RealAnalysis
-public import Obend.Tactic.Weave
 @[expose] public section
 
 namespace Obend.Analysis
@@ -171,6 +172,53 @@ theorem checkIdealMembership_sound (target : Poly) (generators : List Poly) (cer
     exact ⟨comb, hComb, h⟩
   · contradiction
 
+/-- Any checked ideal combination $\sum_{(q, i)} q \cdot g_i$ evaluates to $0$ at every assignment
+$\rho$ where all generators $g \in \text{generators}$ vanish. -/
+theorem expandIdealCombination?_eval_eq_zero
+    (ρ : Nat → CanonicalRat) (generators : List Poly)
+    (hGens : ∀ g ∈ generators, g.eval ρ = 0)
+    (quotients : List (Poly × Nat)) (comb : Poly)
+    (hComb : expandIdealCombination? generators quotients = some comb) :
+    comb.eval ρ = 0 := by
+  induction quotients generalizing comb with
+  | nil =>
+    simp only [expandIdealCombination?, Option.some.injEq] at hComb
+    subst hComb
+    rfl
+  | cons hd tl ih =>
+    rcases hd with ⟨q, idx⟩
+    simp only [expandIdealCombination?] at hComb
+    cases hg : generators[idx]? with
+    | none => rw [hg] at hComb; contradiction
+    | some g =>
+      rw [hg] at hComb
+      cases hRest : expandIdealCombination? generators tl with
+      | none => rw [hRest] at hComb; contradiction
+      | some restPoly =>
+        rw [hRest] at hComb
+        simp only [Option.some.injEq] at hComb
+        subst hComb
+        rw [Poly.eval_add, Poly.eval_mul, ih restPoly hRest]
+        have hmem : g ∈ generators := List.mem_of_getElem? hg
+        rw [hGens g hmem]
+        grind
+
+/-- **Theorem (`checkIdealMembership_eval_sound`)**:
+True semantic soundness of `checkIdealMembership` over `Poly.eval`:
+If `checkIdealMembership target gens cert = true`, then for every variable assignment
+`ρ : Nat → CanonicalRat`, if every generator `g ∈ gens` evaluates to `0`, then `target.eval ρ = 0`! -/
+theorem checkIdealMembership_eval_sound
+    (target : Poly) (gens : List Poly) (cert : IdealMembershipCert)
+    (h : checkIdealMembership target gens cert = true)
+    (ρ : Nat → CanonicalRat)
+    (hGens : ∀ g ∈ gens, g.eval ρ = 0) :
+    target.eval ρ = 0 := by
+  obtain ⟨comb, hComb, hZero⟩ := checkIdealMembership_sound target gens cert h
+  have hSub := Poly.eval_isZero ρ (Poly.sub target comb) hZero
+  rw [Poly.eval_sub] at hSub
+  have hCombZero := expandIdealCombination?_eval_eq_zero ρ gens hGens cert.quotients comb hComb
+  grind
+
 /-- **Theorem (`groebner_ideal_membership_sound`)**:
 1. **Universal Soundness**:
    Whenever `checkIdealMembership target generators cert = true`, every generator index in `cert`
@@ -218,7 +266,7 @@ theorem groebner_ideal_membership_sound :
      checkIdealMembership fTarget gRed certOob = false ∧
      checkIdealMembership fNonMember gRed certValid = false) := by
   refine ⟨checkIdealMembership_sound, ?_⟩
-  obend_law
+  decide +kernel
 
 /-! ## 3. Stengle Positivstellensatz & Semi-Algebraic Refutation Judge (`positivstellensatzJudge`) -/
 
@@ -296,11 +344,148 @@ theorem positivstellensatzCheck_sigma0_pos (fuel : Nat) (q : PositivstellensatzQ
   · exact hPos
   · simp [hPos] at h
 
+theorem expandMonoidProduct_eval_pos
+    (ρ : Nat → CanonicalRat) (strictPos : List Poly)
+    (hPos : ∀ f ∈ strictPos, 0 < f.eval ρ)
+    (indices : List Nat) (monoidPoly : Poly)
+    (hProd : expandMonoidProduct strictPos indices = some monoidPoly) :
+    0 < monoidPoly.eval ρ := by
+  induction indices generalizing monoidPoly with
+  | nil =>
+    simp only [expandMonoidProduct, Option.some.injEq] at hProd
+    subst hProd
+    simp [Poly.eval_one]
+    decide
+  | cons idx rest ih =>
+    simp only [expandMonoidProduct] at hProd
+    cases hf : strictPos[idx]? with
+    | none => rw [hf] at hProd; contradiction
+    | some f =>
+      rw [hf] at hProd
+      cases hRest : expandMonoidProduct strictPos rest with
+      | none => rw [hRest] at hProd; contradiction
+      | some restProd =>
+        rw [hRest] at hProd
+        simp only [Option.some.injEq] at hProd
+        subst hProd
+        rw [Poly.eval_mul]
+        have hf_pos : 0 < f.eval ρ := hPos f (List.mem_of_getElem? hf)
+        have hrest_pos : 0 < restProd.eval ρ := ih restProd hRest
+        have hle : 0 ≤ f.eval ρ := by grind
+        have hle2 : 0 ≤ restProd.eval ρ := by grind
+        have hne1 : f.eval ρ ≠ 0 := by grind
+        have hne2 : restProd.eval ρ ≠ 0 := by grind
+        have hmul_nonneg := Rat.mul_le_mul_of_nonneg_left hle2 hle
+        by_cases hzero : f.eval ρ * restProd.eval ρ = 0
+        · grind
+        · grind
+
+theorem expandConeSum_eval_nonneg
+    (ρ : Nat → CanonicalRat) (nonneg : List Poly)
+    (hNonneg : ∀ g ∈ nonneg, 0 ≤ g.eval ρ)
+    (coneTerms : List (SOSPoly × Nat)) (conePoly : Poly)
+    (hCone : expandConeSum nonneg coneTerms = some conePoly) :
+    0 ≤ conePoly.eval ρ := by
+  induction coneTerms generalizing conePoly with
+  | nil =>
+    simp only [expandConeSum, Option.some.injEq] at hCone
+    subst hCone
+    simp [Poly.eval_zero]
+  | cons hd tl ih =>
+    rcases hd with ⟨sos, idx⟩
+    simp only [expandConeSum] at hCone
+    by_cases hSos : sos.allCoeffsPos = true
+    · simp only [hSos, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hCone
+      cases hg : nonneg[idx]? with
+      | none => rw [hg] at hCone; contradiction
+      | some g =>
+        rw [hg] at hCone
+        cases hRest : expandConeSum nonneg tl with
+        | none => rw [hRest] at hCone; contradiction
+        | some restSum =>
+          rw [hRest] at hCone
+          simp only [Option.some.injEq] at hCone
+          subst hCone
+          rw [Poly.eval_add, Poly.eval_mul]
+          have hsos_nonneg := SOSPoly.eval_expand_nonneg ρ sos hSos
+          have hg_nonneg := hNonneg g (List.mem_of_getElem? hg)
+          have hmul := Rat.mul_le_mul_of_nonneg_left hg_nonneg hsos_nonneg
+          have hrest_nonneg := ih restSum hRest
+          grind
+    · simp [hSos] at hCone
+
+/-- Independent semantic meaning of `PositivstellensatzQuery`:
+no rational assignment `ρ : Nat → CanonicalRat` can simultaneously satisfy all strict-positivity
+constraints `f ∈ q.strictPos`, non-negativity constraints `g ∈ q.nonneg`, and equality constraints
+`h ∈ q.eqs`. -/
+def PositivstellensatzQuery.Infeasible (q : PositivstellensatzQuery) : Prop :=
+  ∀ (ρ : Nat → CanonicalRat),
+    (∀ f ∈ q.strictPos, 0 < f.eval ρ) →
+    (∀ g ∈ q.nonneg, 0 ≤ g.eval ρ) →
+    (∀ h ∈ q.eqs, h.eval ρ = 0) →
+    False
+
+/-- **Theorem (`positivstellensatz_general_eval_infeasible`)**:
+Whenever `positivstellensatzCheck fuel q c = .ok`, the semi-algebraic system `q` is semantically
+infeasible over `CanonicalRat` (`PositivstellensatzQuery.Infeasible q`). -/
+theorem positivstellensatz_general_eval_infeasible
+    (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
+    (hOk : positivstellensatzCheck fuel q c = .ok) :
+    PositivstellensatzQuery.Infeasible q := by
+  intro ρ hStrict hNonneg hEqs
+  unfold positivstellensatzCheck at hOk
+  by_cases hPos0 : c.sigma0.allCoeffsPos = true
+  · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+    cases hMon : expandMonoidProduct q.strictPos c.monoidIndices with
+    | none => rw [hMon] at hOk; contradiction
+    | some monoidPoly =>
+      rw [hMon] at hOk
+      cases hCone : expandConeSum q.nonneg c.coneTerms with
+      | none => rw [hCone] at hOk; contradiction
+      | some conePoly =>
+        rw [hCone] at hOk
+        cases hIdeal : expandIdealCombination? q.eqs c.idealTerms with
+        | none => rw [hIdeal] at hOk; contradiction
+        | some idealPoly =>
+          rw [hIdeal] at hOk
+          dsimp only at hOk
+          split at hOk
+          · rename_i hTotalZero
+            have hEvalTotal := Poly.eval_isZero ρ _ hTotalZero
+            rw [Poly.eval_add, Poly.eval_add, Poly.eval_add] at hEvalTotal
+            have hMonPos := expandMonoidProduct_eval_pos ρ q.strictPos hStrict c.monoidIndices monoidPoly hMon
+            have hSig0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 hPos0
+            have hConeNonneg := expandConeSum_eval_nonneg ρ q.nonneg hNonneg c.coneTerms conePoly hCone
+            have hIdealZero := expandIdealCombination?_eval_eq_zero ρ q.eqs hEqs c.idealTerms idealPoly hIdeal
+            grind
+          · contradiction
+  · simp [hPos0] at hOk
+
+/-- **Theorem (`positivstellensatz_eval_infeasible`)**:
+If a Positivstellensatz SOS certificate is valid (`positivstellensatzCheck fuel q c = .ok` with
+`c.monoidIndices = []`, so the monoid term is $1$ and $1 + \sigma_0 + \sum s_j g_j + \sum \lambda_\ell h_\ell = 0$),
+then **no assignment `ρ : Nat → CanonicalRat` can simultaneously satisfy `∀ g ∈ q.nonneg, 0 ≤ g.eval ρ`
+and `∀ h ∈ q.eqs, h.eval ρ = 0`**! -/
+theorem positivstellensatz_eval_infeasible
+    (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
+    (hOk : positivstellensatzCheck fuel q c = .ok)
+    (hMonoidOne : c.monoidIndices = [])
+    (ρ : Nat → CanonicalRat)
+    (hNonneg : ∀ g ∈ q.nonneg, 0 ≤ g.eval ρ)
+    (hEqs : ∀ h ∈ q.eqs, h.eval ρ = 0) :
+    False := by
+  have hOk' : positivstellensatzCheck fuel { q with strictPos := [] } c = .ok := by
+    unfold positivstellensatzCheck at hOk ⊢
+    rw [hMonoidOne] at hOk ⊢
+    exact hOk
+  exact positivstellensatz_general_eval_infeasible fuel { q with strictPos := [] } c hOk' ρ
+    (by intro _ hMem; cases hMem) hNonneg hEqs
+
 instance positivstellensatzJudge : Judge PositivstellensatzQuery PositivstellensatzCert where
   Clause := PositivstellensatzClause
-  Meaning q c := positivstellensatzCheck 0 q c = .ok
+  Meaning q _c := PositivstellensatzQuery.Infeasible q
   check := positivstellensatzCheck
-  sound := by intro _ _ _ h; exact h
+  sound := by intro r q c h; exact positivstellensatz_general_eval_infeasible r q c h
   refutes _ := false
   refuted := by intro _ _ _ _ _ _ h; cases h
   Fragment q := ∃ c r, positivstellensatzCheck r q c = .ok

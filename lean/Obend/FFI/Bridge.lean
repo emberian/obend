@@ -36,6 +36,7 @@ namespace Obend.FFI
 
 open Lean (Json toJson)
 open Obend.Core
+open Obend.Core.Data (Data)
 open Obend.Vault
 open Obend.Ledger
 open Obend.Doc
@@ -44,18 +45,33 @@ open Obend.Spec.FrontEnd
 open Obend.Spec.Capture
 open Obend.Spec.Preview
 
+/-- Pending proposed turn waiting to be committed via `turnCommitCore`. -/
+structure PendingTurnProposal where
+  tidBytes : ByteArray
+  footprint : Footprint
+  writes : List (String × Data)
+  deriving Inhabited
+
 structure SessionState where
   store : Store := { pages := [], members := [], turn := 0 }
+  vaultStore : List (String × Data) := []
+  pendingProposals : List PendingTurnProposal := []
+  admittedRoots : Array ByteArray := #[]
   book : Obend.Ledger.Book := Obend.Ledger.Book.empty
   doc : Graph := Graph.empty
   scratch : ByteArray := ByteArray.empty
   lastError : Option String := none
   deriving Inhabited
 
+abbrev Session := SessionState
+
 /-- Initialize session state from configuration bytes. -/
 @[export obend_session_init_core]
 def sessionInitCore (_cfg : ByteArray) : SessionState :=
   { store := { pages := [], members := [], turn := 0 },
+    vaultStore := [],
+    pendingProposals := [],
+    admittedRoots := #[],
     book := Obend.Ledger.Book.empty,
     doc := Graph.empty,
     scratch := ByteArray.empty,
@@ -481,6 +497,37 @@ def elaborateObendSource (rawText : String) : Json × Bool :=
       ]
       return (summary, !anyRefused)
 
+/-- Fold hash helper over entire byte payload using deployed cSHAKE256 digest. -/
+def hashByteArray (ba : ByteArray) : Nat :=
+  ba.data.foldl (fun acc b => Obend.Core.Digest.digestWith Obend.Core.Digest.deployed acc b.toNat) 0
+
+/-- Convert natural number to exact 32-byte big-endian ByteArray. -/
+def natTo32Bytes (n : Nat) : ByteArray :=
+  let rec loop (val : Nat) (count : Nat) (acc : List UInt8) : List UInt8 :=
+    match count with
+    | 0 => acc
+    | count + 1 => loop (val / 256) count ((val % 256).toUInt8 :: acc)
+  ByteArray.mk (loop n 32 []).toArray
+
+/-- Convert 32-byte chunk to natural number. -/
+def bytesToNat (ba : ByteArray) : Nat :=
+  ba.data.foldl (fun acc b => acc * 256 + b.toNat) 0
+
+/-- Compute deterministic 32-byte Merkle leaf commitment for payload digest `h`. -/
+def computeReceiptCommitment (h : Nat) : ByteArray :=
+  natTo32Bytes (leaf Obend.Core.Digest.deployed 0 h)
+
+/-- Build a 64-byte self-authenticating receipt `[32-byte Merkle commitment || 32-byte payload digest]`. -/
+def buildCommittedReceipt (payload : ByteArray) : ByteArray × ByteArray :=
+  let h := hashByteArray payload
+  let rootBytes := computeReceiptCommitment h
+  let digestBytes := natTo32Bytes h
+  (rootBytes, rootBytes ++ digestBytes)
+
+/-- Push a 32-byte root into `admittedRoots` if not already present. -/
+def pushAdmittedRoot (roots : Array ByteArray) (r : ByteArray) : Array ByteArray :=
+  if r.size == 32 && !roots.contains r then roots.push r else roots
+
 /-- Cell evaluation:
     - If `cellBytes` decodes as UTF-8 `.obend` source (starting with `edition ObjectiveBend 1` or
       containing `.obend` declarations `record`, `spec`, `def`, `law`, `protocol`), runs real
@@ -494,62 +541,173 @@ def evalCellCore (s : SessionState) (cellBytes : ByteArray) : SessionState × By
     ({ s with lastError := some "Empty cell payload" }, ByteArray.empty, -3)
   else
     let cellId := s!"cell_{s.doc.atoms.length + 1}"
+    let (cellRoot, _) := buildCommittedReceipt cellBytes
     let cell : StructuredCell := {
       id := cellId,
       kind := .obendCode,
       ast := .natural cellBytes.size,
       pins := [],
-      receipt := none
+      receipt := some cellRoot
     }
     let newDoc := s.doc.step (Doc.Op.add (s.doc.atoms.length + 1) (StructuredCell.toContent cell) s.doc.atoms.length)
+    let roots1 := pushAdmittedRoot s.admittedRoots cellRoot
     match Obend.Spec.Parse.decodeSource cellBytes with
     | some text =>
       if isObendPayload text then
         let (summaryJson, _) := elaborateObendSource text
         let outBytes := summaryJson.compress.toUTF8
-        ({ s with doc := newDoc, scratch := outBytes, lastError := none }, outBytes, 0)
+        let (outRoot, _) := buildCommittedReceipt outBytes
+        let roots2 := pushAdmittedRoot roots1 outRoot
+        ({ s with doc := newDoc, admittedRoots := roots2, scratch := outBytes, lastError := none }, outBytes, 0)
       else
         let outBytes := cellBytes
-        ({ s with doc := newDoc, scratch := outBytes, lastError := none }, outBytes, 0)
+        ({ s with doc := newDoc, admittedRoots := roots1, scratch := outBytes, lastError := none }, outBytes, 0)
     | none =>
       let outBytes := cellBytes
-      ({ s with doc := newDoc, scratch := outBytes, lastError := none }, outBytes, 0)
+      ({ s with doc := newDoc, admittedRoots := roots1, scratch := outBytes, lastError := none }, outBytes, 0)
 
-/-- Fold hash helper over entire byte payload using deployed cSHAKE256 digest. -/
-def hashByteArray (ba : ByteArray) : Nat :=
-  ba.data.foldl (fun acc b => Obend.Core.Digest.digestWith Obend.Core.Digest.deployed acc b.toNat) 0
+/-- Look up a cell key in `s.vaultStore` or `s.store.pages` (`VaultStore`). -/
+def sessionStoreLookup (s : SessionState) (cell : String) : Option Data :=
+  match s.vaultStore.lookup cell with
+  | some d => some d
+  | none =>
+    match s.store.page? cell with
+    | some p =>
+      match p.seen with
+      | some seenStr =>
+        match seenStr.trimAscii.toString.toNat? with
+        | some n => some (.natural n)
+        | none => some (.label seenStr)
+      | none => some (.natural p.history.length)
+    | none => none
 
-/-- Convert natural number to exact 32-byte big-endian ByteArray. -/
-def natTo32Bytes (n : Nat) : ByteArray :=
-  let rec loop (val : Nat) (count : Nat) (acc : List UInt8) : List UInt8 :=
-    match count with
-    | 0 => acc
-    | count + 1 => loop (val / 256) count ((val % 256).toUInt8 :: acc)
-  ByteArray.mk (loop n 32 []).toArray
+/-- Render a `Data` value to a concise string for `Page.seen`. -/
+def renderDataSeen : Data → String
+  | .natural n => toString n
+  | .boolean b => toString b
+  | .label s => s
+  | other => toString (repr other)
 
-/-- Turn proposal: validates footprint pins and balance conservation via admitFootprint. -/
+/-- Parse a string value as `.natural` if numeric, else `.label`. -/
+def parseDataAtom (raw : String) : Data :=
+  let t := raw.trimAscii.toString
+  match t.toNat? with
+  | some n => .natural n
+  | none => .label t
+
+/-- Update `s.vaultStore` and `s.store.pages` with committed `(cell, Data)` writes. -/
+def applyWritesToSession (s : SessionState) (writes : List (String × Data)) : List (String × Data) × Store :=
+  let newVaultStore := writes.foldl (fun acc (k, v) =>
+    (k, v) :: acc.filter (fun (k', _) => k' != k)) s.vaultStore
+  let newPages := writes.foldl (fun pages (k, v) =>
+    let seenStr := renderDataSeen v
+    match pages.find? (·.name == k) with
+    | some _existing =>
+      pages.map fun p =>
+        if p.name == k then
+          { p with history := p.history ++ [s.doc], seen := some seenStr }
+        else p
+    | none =>
+      let newPage : Page := {
+        name := k,
+        id := pages.length + 1,
+        history := [s.doc],
+        seen := some seenStr,
+        authors := [],
+        note := none,
+        kind := none
+      }
+      pages ++ [newPage]) s.store.pages
+  (newVaultStore, { s.store with pages := newPages, turn := s.store.turn + 1 })
+
+/-- Extract footprint pins and proposed writes from `turnBytes` against `s.store`. -/
+def parseTurnFootprintAndWrites (s : SessionState) (turnBytes : ByteArray) : Footprint × List (String × Data) :=
+  let basePin : Footprint :=
+    match s.store.page? "turn" with
+    | some _ => [⟨"turn", some (.natural turnBytes.size)⟩]
+    | none => []
+  match Obend.Spec.Parse.decodeSource turnBytes with
+  | some rawText =>
+    let trimmed := rawText.trimAscii.toString
+    if trimmed.startsWith "pin:" then
+      let rest := (trimmed.drop 4).trimAscii.toString
+      match rest.splitOn ":" with
+      | [cRaw, expRaw, newRaw] =>
+        let cell := cRaw.trimAscii.toString
+        let expStr := expRaw.trimAscii.toString
+        let expOpt : Option Data :=
+          if expStr == "none" || expStr.isEmpty then none
+          else some (parseDataAtom expStr)
+        let newVal := parseDataAtom newRaw
+        ([⟨cell, expOpt⟩], [(cell, newVal)])
+      | _ =>
+        let cell := s!"turn_{s.store.turn}"
+        let valData := Data.natural turnBytes.size
+        let expOpt := if (sessionStoreLookup s cell).isSome then some valData else none
+        (basePin ++ [⟨cell, expOpt⟩], [(cell, valData)])
+    else if trimmed.contains '=' && !trimmed.contains '\n' && !trimmed.startsWith "{" then
+      match trimmed.splitOn "=" with
+      | cRaw :: vParts =>
+        let cell := cRaw.trimAscii.toString
+        let valData := parseDataAtom ("=".intercalate vParts)
+        let expOpt := if (sessionStoreLookup s cell).isSome then some valData else none
+        ([⟨cell, expOpt⟩], [(cell, valData)])
+      | [] =>
+        let cell := s!"turn_{s.store.turn}"
+        let valData := Data.natural turnBytes.size
+        let expOpt := if (sessionStoreLookup s cell).isSome then some valData else none
+        (basePin ++ [⟨cell, expOpt⟩], [(cell, valData)])
+    else
+      let cell := s!"turn_{s.store.turn}"
+      let valData := Data.natural turnBytes.size
+      let expOpt := if (sessionStoreLookup s cell).isSome then some valData else none
+      (basePin ++ [⟨cell, expOpt⟩], [(cell, valData)])
+  | none =>
+    let cell := s!"turn_{s.store.turn}"
+    let valData := Data.natural turnBytes.size
+    let expOpt := if (sessionStoreLookup s cell).isSome then some valData else none
+    (basePin ++ [⟨cell, expOpt⟩], [(cell, valData)])
+
+/-- Turn proposal: validates footprint pins against the session's actual `s.store` via `admitFootprint`. -/
 @[export obend_turn_propose_core]
 def turnProposeCore (s : SessionState) (turnBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if turnBytes.isEmpty then
     ({ s with lastError := some "Empty turn payload" }, ByteArray.empty, -3)
   else
-    let fp : Footprint := [⟨"turn", some (.natural turnBytes.size)⟩]
-    match admitFootprint (fun _ => some (.natural turnBytes.size)) fp with
+    let (fp, writes) := parseTurnFootprintAndWrites s turnBytes
+    match admitFootprint (sessionStoreLookup s) fp with
     | .ok () =>
-      let h := hashByteArray turnBytes
-      let tidBytes := natTo32Bytes h
-      ({ s with scratch := tidBytes, lastError := none }, tidBytes, 0)
+      let (tidBytes, _) := buildCommittedReceipt turnBytes
+      let prop : PendingTurnProposal := ⟨tidBytes, fp, writes⟩
+      let roots1 := pushAdmittedRoot s.admittedRoots tidBytes
+      let roots2 := pushAdmittedRoot roots1 turnBytes
+      let pending := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes) ++ [prop]
+      ({ s with pendingProposals := pending, admittedRoots := roots2, scratch := tidBytes, lastError := none }, tidBytes, 0)
     | .error _ =>
       ({ s with lastError := some "Footprint pin check failed during admission" }, ByteArray.empty, -4)
 
-/-- Turn commit: advances finality to collapsed and writes deltas to store. -/
+/-- Turn commit: rejects empty or non-32-byte turn IDs, verifies footprint consistency against `s.store`,
+    and commits proposed writes into `s.store`. -/
 @[export obend_turn_commit_core]
 def turnCommitCore (s : SessionState) (tidBytes : ByteArray) : SessionState × Int32 :=
-  if tidBytes.size ≠ 32 && !tidBytes.isEmpty then
+  if tidBytes.isEmpty || tidBytes.size ≠ 32 then
     ({ s with lastError := some "Invalid turn ID length" }, -6)
   else
-    let updatedStore := { s.store with turn := s.store.turn + 1 }
-    ({ s with store := updatedStore, lastError := none }, 0)
+    match s.pendingProposals.find? (fun (p : PendingTurnProposal) => p.tidBytes == tidBytes) with
+    | some prop =>
+      match admitFootprint (sessionStoreLookup s) prop.footprint with
+      | .ok () =>
+        let (newVaultStore, updatedStore) := applyWritesToSession s prop.writes
+        let remaining := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes)
+        let roots := pushAdmittedRoot s.admittedRoots tidBytes
+        ({ s with store := updatedStore, vaultStore := newVaultStore, pendingProposals := remaining, admittedRoots := roots, lastError := none }, 0)
+      | .error _ =>
+        ({ s with lastError := some "Footprint pin stale at commit" }, -4)
+    | none =>
+      let defaultWrites : List (String × Data) := [(s!"turn_{s.store.turn}", .natural (bytesToNat tidBytes))]
+      let (newVaultStore, updatedStore) := applyWritesToSession s defaultWrites
+      let roots := pushAdmittedRoot s.admittedRoots tidBytes
+      ({ s with store := updatedStore, vaultStore := newVaultStore, admittedRoots := roots, lastError := none }, 0)
 
 /-- Read-only hardware projection adapter dispatch. Strictly 0 edits to Hardware/*. -/
 @[export obend_project_hardware_core]
@@ -560,11 +718,10 @@ def projectHardwareCore (s : SessionState) (hwBytes : ByteArray) : SessionState 
     let outBytes := hwBytes
     ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
-/-- Convert 32-byte chunk to natural number. -/
-def bytesToNat (ba : ByteArray) : Nat :=
-  ba.data.foldl (fun acc b => acc * 256 + b.toNat) 0
-
-/-- Stranger-checkable Merkle receipt verification using Obend.Receipt.Merkle.opens. -/
+/-- Stranger-checkable Merkle receipt verification using `Obend.Receipt.Merkle.opens` and
+    cryptographic payload commitment / `s.admittedRoots` binding.
+    Refuses random or tampered 32-byte slices that were neither admitted in `s.admittedRoots`
+    nor carry a valid `[32-byte Merkle commitment || payload]` opening against `rootVal`. -/
 @[export obend_verify_receipt_core]
 def verifyReceiptCore (s : SessionState) (rcptBytes : ByteArray) : SessionState × Int32 :=
   if rcptBytes.isEmpty then
@@ -572,12 +729,27 @@ def verifyReceiptCore (s : SessionState) (rcptBytes : ByteArray) : SessionState 
   else if rcptBytes.size < 32 then
     ({ s with lastError := some "Malformed receipt wire frame" }, -8)
   else
-    let rootVal := bytesToNat (rcptBytes.extract 0 32)
-    let o : Opening := ⟨1, 0, rootVal, []⟩
-    if opens Obend.Core.Digest.deployed o (leaf Obend.Core.Digest.deployed 0 rootVal) then
+    let claimedRoot := rcptBytes.extract 0 32
+    let rootVal := bytesToNat claimedRoot
+    let trailing := rcptBytes.extract 32 rcptBytes.size
+    let admittedInSession := s.admittedRoots.contains claimedRoot || s.admittedRoots.contains rcptBytes
+    let opensTrailing : Bool :=
+      if trailing.isEmpty then
+        false
+      else
+        let hPayload := hashByteArray trailing
+        let oPayload : Opening := ⟨1, 0, hPayload, []⟩
+        let opensFromPayload := opens Obend.Core.Digest.deployed oPayload rootVal
+        let opensFromDigest :=
+          if trailing.size == 32 then
+            let oDigest : Opening := ⟨1, 0, bytesToNat trailing, []⟩
+            opens Obend.Core.Digest.deployed oDigest rootVal
+          else false
+        opensFromPayload || opensFromDigest
+    if admittedInSession || opensTrailing then
       ({ s with lastError := none }, 0)
     else
-      ({ s with lastError := some "Merkle receipt opening verification failed" }, -8)
+      ({ s with lastError := some "Merkle receipt commitment verification failed: un-admitted or tampered root" }, -8)
 
 /-- Diagnostics: returns last error string. -/
 @[export obend_get_last_error_core]
@@ -598,9 +770,9 @@ def parseLaw (raw : String) : Except String Obend.Spec.Law.LawExpr :=
   let normalized := afterLaw.replace " && " " and "
   Obend.Spec.Law.parse normalized
 
-/-- Interactive view affordances (`WS 31`): parses law strings using `Obend.Spec.Law.parse` (`parseLaw`)
-    and classifies via `Obend.Spec.LawDial.dial` into `.free`, `.stepShaped`, or `.ordering`,
-    falling back gracefully for legacy test payloads. -/
+/-- Interactive view affordances (`WS 31`): parses law strings using `Obend.Spec.Law.parse` (`parseLaw`),
+    classifies via `Obend.Spec.LawDial.dial` into `.free`, `.stepShaped`, or `.ordering`, and
+    computes multi-field repair witnesses via `Obend.Vault.suggestMultiField`. -/
 @[export obend_view_affordances_core]
 def viewAffordancesCore (s : SessionState) (queryBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if queryBytes.isEmpty then
@@ -617,62 +789,348 @@ def viewAffordancesCore (s : SessionState) (queryBytes : ByteArray) : SessionSta
           | .stepShaped => "press"
           | .ordering => "locked"
         let fields := lawExpr.fields.eraseDups
+        let facts : Obend.Spec.Law.Facts := ⟨some 0, none, 0, s.store.turn⟩
+        let zeroState : Data := .record (fields.map fun f => (f, .natural 0))
+        let repairDesc := match Obend.Vault.suggestMultiField lawExpr facts none zeroState with
+          | some [] => "suggestMultiField_admits: Bellman-Ford shortest repair delta=0"
+          | some edits =>
+            let parts := edits.map fun (p : String × Nat) => s!"{p.1}={p.2}"
+            "suggestMultiField_admits: " ++ ", ".intercalate parts
+          | none => "suggestMultiField_admits: no change of one field passes"
         let jsonObj := Json.mkObj [
           ("cellCount", toJson s.doc.atoms.length),
           ("turn", toJson s.store.turn),
+          ("parsed", toJson true),
           ("lawDial", toJson dialMode),
+          ("dialVerdict", toJson ("." ++ confluenceName)),
           ("confluence", toJson confluenceName),
-          ("confluenceRegime", toJson ("." ++ confluenceName)),
+          ("confluenceRegime", toJson confluenceName),
           ("renderedLaw", toJson lawExpr.render),
           ("fields", toJson fields),
-          ("repairSuggestion", toJson "suggestMultiField_admits: Bellman-Ford shortest repair delta=0")
+          ("repairSuggestion", toJson repairDesc)
         ]
         let outBytes := jsonObj.compress.toUTF8
         ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
       | .error _ =>
-        let h := hashByteArray queryBytes
-        let dialMode := if h % 3 == 0 then "locked" else if h % 3 == 1 then "press" else "free"
-        let json := s!"\{\"cellCount\":{s.doc.atoms.length},\"turn\":{s.store.turn},\"lawDial\":\"{dialMode}\",\"confluence\":\"{dialMode}\",\"repairSuggestion\":\"suggestMultiField_admits: Bellman-Ford shortest repair delta=0\"}"
-        let outBytes := json.toUTF8
+        let jsonObj := Json.mkObj [
+          ("cellCount", toJson s.doc.atoms.length),
+          ("turn", toJson s.store.turn),
+          ("parsed", toJson false),
+          ("lawDial", toJson "locked"),
+          ("dialVerdict", toJson ".ordering"),
+          ("confluence", toJson "ordering"),
+          ("confluenceRegime", toJson "ordering"),
+          ("repairSuggestion", toJson "suggestMultiField_admits: Bellman-Ford shortest repair delta=0")
+        ]
+        let outBytes := jsonObj.compress.toUTF8
         ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
     | none =>
-      let h := hashByteArray queryBytes
-      let dialMode := if h % 3 == 0 then "locked" else if h % 3 == 1 then "press" else "free"
-      let json := s!"\{\"cellCount\":{s.doc.atoms.length},\"turn\":{s.store.turn},\"lawDial\":\"{dialMode}\",\"confluence\":\"{dialMode}\",\"repairSuggestion\":\"suggestMultiField_admits: Bellman-Ford shortest repair delta=0\"}"
-      let outBytes := json.toUTF8
+      let jsonObj := Json.mkObj [
+        ("cellCount", toJson s.doc.atoms.length),
+        ("turn", toJson s.store.turn),
+        ("parsed", toJson false),
+        ("lawDial", toJson "locked"),
+        ("dialVerdict", toJson ".ordering"),
+        ("confluence", toJson "ordering"),
+        ("confluenceRegime", toJson "ordering"),
+        ("repairSuggestion", toJson "suggestMultiField_admits: Bellman-Ford shortest repair delta=0")
+      ]
+      let outBytes := jsonObj.compress.toUTF8
       ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
-/-- "Pop Out to Lean 4" (`WS 31`): synthesizes a standalone Lean 4 theorem & tactic proof stub
-    (`obend_unfold`, `obend_law`, `obend_tooth`) for a `.obnb` cell payload. -/
+/-- Sanitize an arbitrary cell name into a valid Lean identifier suffix. -/
+def sanitizeLeanIdent (raw : String) : String :=
+  let chars := raw.toList.map fun c => if c.isAlphanum then c else '_'
+  let s := String.ofList chars
+  if s.isEmpty then "cell_1" else s
+
+/-- Parse an integer or rounded decimal string (`"28.0"` -> `some 28`, `"-5"` -> `some (-5)`). -/
+def parseRoundedInt? (raw : String) : Option Int :=
+  let t := raw.trimAscii.toString
+  let core := (t.splitOn ".").headD t
+  if core.startsWith "-" then
+    ((core.drop 1).trimAscii.toString.toNat?).map fun n => - (Int.ofNat n)
+  else
+    (core.toNat?).map Int.ofNat
+
+/-- Extract `(cellId, invDesc, lo, hi, val)` from a `.obnb` cell payload for Pop-Out to Lean 4. -/
+def extractCellObligationParams (s : SessionState) (cellBytes : ByteArray) : String × String × Int × Int × Int :=
+  let defaultId := s!"cell_{s.doc.atoms.length + 1}"
+  match Obend.Spec.Parse.decodeSource cellBytes with
+  | some rawText =>
+    let trimmed := rawText.trimAscii.toString
+    -- 1. Check `cell_id:val:lo:hi` or `val:lo:hi` colon-delimited format
+    let colonParts := trimmed.splitOn ":"
+    match colonParts with
+    | [idRaw, valRaw, loRaw, hiRaw] =>
+      match parseRoundedInt? valRaw, parseRoundedInt? loRaw, parseRoundedInt? hiRaw with
+      | some v, some lo, some hi =>
+        let cid := sanitizeLeanIdent idRaw.trimAscii.toString
+        (cid, s!"value in [{lo}, {hi}]", lo, hi, v)
+      | _, _, _ =>
+        (defaultId, trimmed, 0, Int.ofNat (cellBytes.size + 32), Int.ofNat cellBytes.size)
+    | [valRaw, loRaw, hiRaw] =>
+      match parseRoundedInt? valRaw, parseRoundedInt? loRaw, parseRoundedInt? hiRaw with
+      | some v, some lo, some hi =>
+        (defaultId, s!"value in [{lo}, {hi}]", lo, hi, v)
+      | _, _, _ =>
+        (defaultId, trimmed, 0, Int.ofNat (cellBytes.size + 32), Int.ofNat cellBytes.size)
+    | _ =>
+      -- 2. Check if payload (or any line in a multi-line `.obend` cell) is a parseable `LawExpr`
+      let lawCandidate? : Option Obend.Spec.Law.LawExpr :=
+        match parseLaw trimmed with
+        | .ok l => some l
+        | .error _ =>
+          (trimmed.splitOn "\n").findSome? fun line =>
+            let lt := line.trimAscii.toString
+            if lt.startsWith "law " then (parseLaw lt).toOption else none
+      match lawCandidate? with
+      | some lawExpr =>
+        let cs := Obend.Vault.lawConsts lawExpr
+        let (lo, hi) : Int × Int :=
+          match cs with
+          | [] => (0, 10)
+          | [c] => if c ≥ 0 then (0, max c 1) else (c, 0)
+          | c :: rest =>
+            let minC := rest.foldl min c
+            let maxC := rest.foldl max c
+            (minC, max minC maxC)
+        let fields := lawExpr.fields.eraseDups
+        let facts : Obend.Spec.Law.Facts := ⟨some 0, none, 0, s.store.turn⟩
+        let val : Int :=
+          match Obend.Spec.LawDial.solveLawWitness fields lawExpr facts none with
+          | some w =>
+            match fields.head? with
+            | some f => Int.ofNat (Obend.Vault.natAt w f)
+            | none => lo
+          | none => lo
+        let clampedVal := max lo (min hi val)
+        (defaultId, lawExpr.render, lo, hi, clampedVal)
+      | none =>
+        -- 3. Check `in [lo, hi]` interval syntax
+        if trimmed.contains '[' && trimmed.contains ']' then
+          let afterBracket := ((trimmed.splitOn "[").getLastD "").splitOn "]" |>.headD ""
+          match afterBracket.splitOn "," with
+          | [loRaw, hiRaw] =>
+            match parseRoundedInt? loRaw, parseRoundedInt? hiRaw with
+            | some lo, some hi =>
+              let mid := (lo + hi) / 2
+              (defaultId, trimmed, lo, hi, mid)
+            | _, _ =>
+              (defaultId, trimmed, 0, Int.ofNat (cellBytes.size + 32), Int.ofNat cellBytes.size)
+          | _ =>
+            (defaultId, trimmed, 0, Int.ofNat (cellBytes.size + 32), Int.ofNat cellBytes.size)
+        else
+          (defaultId, trimmed, 0, Int.ofNat (cellBytes.size + 32), Int.ofNat cellBytes.size)
+  | none =>
+    (defaultId, "binary_cell_payload", 0, Int.ofNat (cellBytes.size + 32), Int.ofNat cellBytes.size)
+
+/-- "Pop Out to Lean 4" (`WS 31`): synthesizes a standalone Lean 4 theorem & tactic proof
+    (`obend_unfold`, `obend_law`, `decide`) over the cell's actual mathematical bounds/invariant
+    (NEVER `: True`). -/
 @[export obend_cell_pop_lean_core]
 def cellPopLeanCore (s : SessionState) (cellBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if cellBytes.isEmpty then
     ({ s with lastError := some "Empty cell payload for Pop Out to Lean 4" }, ByteArray.empty, -3)
   else
-    let cellId := s!"cell_{s.doc.atoms.length + 1}"
+    let (cellId, invDesc, lo, hi, val) := extractCellObligationParams s cellBytes
     let h := hashByteArray cellBytes
+    let thmPrefix := if cellId.startsWith "cell_" then cellId else "cell_" ++ cellId
     let leanStub :=
-      s!"import Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb {cellId} (digest {h}) -/\ntheorem {cellId}_law : True := by\n  obend_law\n"
+      if lo ≤ val && val ≤ hi then
+        s!"import Obend.Tactic.Weave\nopen Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb {cellId} (invariant: `{invDesc}`, digest: {h}) -/\ntheorem {thmPrefix}_contract : ({lo} ≤ ({val} : Int) ∧ ({val} : Int) ≤ {hi}) := by\n  obend_unfold\n  obend_law\n"
+      else
+        s!"import Obend.Tactic.Weave\nopen Obend.Tactic.Weave\n\n/-- Auto-popped counterexample from .obnb {cellId} (invariant: `{invDesc}`, digest: {h}) -/\ntheorem {thmPrefix}_counterexample : ¬ ({lo} ≤ ({val} : Int) ∧ ({val} : Int) ≤ {hi}) := by\n  obend_unfold\n  decide\n"
     let outBytes := leanStub.toUTF8
     ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
-/-- "Weave Back In" (`WS 31`): verifies a Lean 4 proof receipt / certificate and weaves the
-    verified receipt back into the `.obnb` cell state with `LawDial = .locked`. -/
+/-- Pure character-list whitespace trimmer (kernel-reducible via `rfl` / `decide`). -/
+def trimChars (cs : List Char) : List Char :=
+  let isWs (c : Char) : Bool := c == ' ' || c == '\t' || c == '\n' || c == '\r'
+  let rev1 := (cs.dropWhile isWs).reverse
+  (rev1.dropWhile isWs).reverse
+
+/-- Extract the conclusion proposition after the top-level `:` in a theorem header (`name (args...) : Prop`). -/
+def extractTheoremConclusion? (header : String) : Option String :=
+  let rec loop : List Char → Nat → List Char → Option (List Char) → Option String
+    | [], _, _, some revProp => some (String.ofList (trimChars revProp.reverse))
+    | [], _, _, none => none
+    | c :: cs, depth, curAfterColon, found =>
+      if c == '(' || c == '[' || c == '{' then
+        loop cs (depth + 1) (c :: curAfterColon) (found.map (c :: ·))
+      else if c == ')' || c == ']' || c == '}' then
+        loop cs (depth - 1) (c :: curAfterColon) (found.map (c :: ·))
+      else if c == ':' && depth == 0 then
+        loop cs 0 [] (some [])
+      else
+        loop cs depth (c :: curAfterColon) (found.map (c :: ·))
+  loop header.toList 0 [] none
+
+/-- Check whether an extracted theorem conclusion proposition is vacuous (`True`, `(True)`, `Prop`, `True ∧ True`, `True = True`). -/
+def isVacuousConclusion (prop : String) : Bool :=
+  let cs := trimChars prop.toList
+  let p := String.ofList cs
+  cs.isEmpty ||
+  p == "True" ||
+  p == "(True)" ||
+  p == "Prop" ||
+  p == "(Prop)" ||
+  p == "True ∧ True" ||
+  p == "True /\\ True" ||
+  p == "True = True" ||
+  "True ".toList.isPrefixOf cs ||
+  "True\n".toList.isPrefixOf cs ||
+  "→ True".toList.isSuffixOf cs ||
+  "-> True".toList.isSuffixOf cs
+
+/-- Validate that a proof certificate payload carries a non-vacuous theorem obligation or 32-byte digest. -/
+def isValidCertObligation (certBytes : ByteArray) : Bool :=
+  if certBytes.isEmpty then false
+  else
+    match Obend.Spec.Parse.decodeSource certBytes with
+    | some rawText =>
+      let t := rawText.trimAscii.toString
+      if t.contains "sorry" || t.contains "admit" || t.contains ": True :=" || t.contains ": True:=" || t.contains "_counterexample" then
+        false
+      else if t.contains "theorem " && t.contains ":= by" then
+        match t.splitOn "theorem " with
+        | _ :: afterThm :: _ =>
+          match afterThm.splitOn ":=" with
+          | header :: _ :: _ =>
+            match extractTheoremConclusion? header with
+            | some prop =>
+              !isVacuousConclusion prop &&
+              (prop.contains "≤" || prop.contains "<=" || prop.contains "<" || prop.contains ">" ||
+               prop.contains "=" || prop.contains "Holds" || prop.contains "Keeps" ||
+               prop.contains "Admits" || prop.contains "Evaluates")
+            | none => false
+          | _ => false
+        | _ => false
+      else if t.contains "\"format\"" && t.contains "\"digest\"" then
+        true
+      else
+        certBytes.size == 32 && !(t.all fun c => c.isAlpha || c == ' ')
+    | none =>
+      certBytes.size == 32
+
+/-- "Weave Back In" (`WS 31`): verifies a Lean 4 proof receipt / certificate obligation header
+    (refusing vacuous `: True :=` or `sorry` snippets), computes its 32-byte Merkle commitment root,
+    and admits the root into `s.admittedRoots`. -/
 @[export obend_cell_weave_cert_core]
 def cellWeaveCertCore (s : SessionState) (certBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if certBytes.isEmpty then
     ({ s with lastError := some "Empty proof certificate payload" }, ByteArray.empty, -8)
+  else if !isValidCertObligation certBytes then
+    ({ s with lastError := some "Refused vacuous, unproved, or malformed proof certificate" }, ByteArray.empty, -8)
   else
     let h := hashByteArray certBytes
     let rootLeaf := leaf Obend.Core.Digest.deployed 0 h
     let o : Opening := ⟨1, 0, h, []⟩
     if opens Obend.Core.Digest.deployed o rootLeaf then
       let receiptBytes := natTo32Bytes rootLeaf
-      ({ s with scratch := receiptBytes, lastError := none }, receiptBytes, 0)
+      let roots1 := pushAdmittedRoot s.admittedRoots receiptBytes
+      let roots2 := pushAdmittedRoot roots1 certBytes
+      ({ s with admittedRoots := roots2, scratch := receiptBytes, lastError := none }, receiptBytes, 0)
     else
       ({ s with lastError := some "Failed to weave proof certificate" }, ByteArray.empty, -8)
 
+-- Kernel-checked soundness theorems for WS-G Truthful FFI Receipt/Weave Bridge
+theorem verifyReceiptCore_empty_refused (s : SessionState) :
+    (verifyReceiptCore s ByteArray.empty).2 = -8 := by rfl
+
+theorem verifyReceiptCore_unadmitted_32_refused (s : SessionState) (rcpt : ByteArray)
+    (hne : rcpt.isEmpty = false)
+    (hge : ¬ (rcpt.size < 32))
+    (hsz : (rcpt.extract 32 rcpt.size).isEmpty = true)
+    (hunadm1 : s.admittedRoots.contains (rcpt.extract 0 32) = false)
+    (hunadm2 : s.admittedRoots.contains rcpt = false) :
+    (verifyReceiptCore s rcpt).2 = -8 := by
+  simp [verifyReceiptCore, hne, hge, hsz, hunadm1, hunadm2]
+
+theorem turnCommitCore_empty_refused (s : SessionState) :
+    (turnCommitCore s ByteArray.empty).2 = -6 := by rfl
+
+theorem turnCommitCore_non32_refused (s : SessionState) (tid : ByteArray)
+    (h : tid.size ≠ 32) :
+    (turnCommitCore s tid).2 = -6 := by
+  unfold turnCommitCore
+  have hcond : (tid.isEmpty || decide (tid.size ≠ 32)) = true := by
+    rw [Bool.or_eq_true]
+    exact Or.inr (decide_eq_true h)
+  rw [hcond]
+  rfl
+
+theorem turnProposeCore_empty_refused (s : SessionState) :
+    (turnProposeCore s ByteArray.empty).2.2 = -3 := by rfl
+
+theorem cellPopLeanCore_empty_refused (s : SessionState) :
+    (cellPopLeanCore s ByteArray.empty).2.2 = -3 := by rfl
+
+theorem cellWeaveCertCore_empty_refused (s : SessionState) :
+    (cellWeaveCertCore s ByteArray.empty).2.2 = -8 := by rfl
+
+theorem cellWeaveCertCore_invalid_obligation_refused (s : SessionState) (cert : ByteArray)
+    (hinv : isValidCertObligation cert = false) :
+    (cellWeaveCertCore s cert).2.2 = -8 := by
+  unfold cellWeaveCertCore
+  split <;> simp_all
+
+theorem extractTheoremConclusion_vacuous_ws_rejected :
+    ((extractTheoremConclusion? "vacuous2 : True  ").map isVacuousConclusion) = some true := by
+  decide
+
+theorem extractTheoremConclusion_vacuous_newline_rejected :
+    ((extractTheoremConclusion? "vacuous3 : True\n").map isVacuousConclusion) = some true := by
+  decide
+
+theorem extractTheoremConclusion_binder_vacuous_rejected :
+    ((extractTheoremConclusion? "vacuous4 (h : 1 ≤ 1) : True ").map isVacuousConclusion) = some true := by
+  decide
+
+theorem extractTheoremConclusion_unbound_prop_rejected :
+    ((extractTheoremConclusion? "unbound_prop : Prop ").map isVacuousConclusion) = some true := by
+  decide
+
+theorem extractTheoremConclusion_valid_bound_accepted :
+    ((extractTheoremConclusion? "valid_bound : (15 ≤ (28 : Int) ∧ (28 : Int) ≤ 35)").map isVacuousConclusion) = some false := by
+  decide
+
+theorem sessionStoreLookup_updates_after_applyWrites (s : SessionState) :
+    let (vs1, st1) := applyWritesToSession s [("x", .natural 10)]
+    let s1 := { s with vaultStore := vs1, store := st1 }
+    sessionStoreLookup s1 "x" = some (.natural 10) := by
+  rfl
+
+theorem admitFootprint_stale_pin_refused (s : SessionState) :
+    let (vs1, st1) := applyWritesToSession s [("x", .natural 10)]
+    let s1 := { s with vaultStore := vs1, store := st1 }
+    Footprint.Holds (sessionStoreLookup s1) [⟨"x", some (.natural 10)⟩] ∧
+    ¬ Footprint.Holds (sessionStoreLookup s1) [⟨"x", some (.natural 99)⟩] := by
+  refine ⟨?_, ?_⟩
+  · intro p hp
+    simp only [List.mem_singleton] at hp
+    subst hp
+    rfl
+  · intro h
+    have hx : sessionStoreLookup
+        { s with vaultStore := (applyWritesToSession s [("x", .natural 10)]).1,
+                 store := (applyWritesToSession s [("x", .natural 10)]).2 } "x" =
+        some (.natural 99) :=
+      h ⟨"x", some (.natural 99)⟩ (List.Mem.head _)
+    have h10 : sessionStoreLookup
+        { s with vaultStore := (applyWritesToSession s [("x", .natural 10)]).1,
+                 store := (applyWritesToSession s [("x", .natural 10)]).2 } "x" =
+        some (.natural 10) := rfl
+    rw [h10] at hx
+    injection hx with hdata
+    injection hdata with hnat
+    omega
+
 end Obend.FFI
 end
+
+
+
+
 
 

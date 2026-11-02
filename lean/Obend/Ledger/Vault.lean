@@ -16,6 +16,7 @@ posting `kindLaw` admits is balanced. With `Obend.Ledger.Register.conserved` and
 the register a vault keeps is balanced and conserved because its kind page says so.
 -/
 public import Obend.Ledger.Register
+public import Obend.Ledger.Seat
 public import Obend.Vault.Law
 @[expose] public section
 
@@ -134,6 +135,57 @@ theorem vault_conserved (lin : List (String × LawExpr))
     {w : Nat} {b : Nat × Reg} (h : runFrom (kindLaw lin) (w, ⟨[]⟩) rows = .ok b) :
     b.2.debits = b.2.credits :=
   conserved (fun g p hp => kindLaw_balanced lin hb g p hp) h
+
+/-! ## Vault Escrow Settlement across ZoE Seats (`settleVaultSeats`) -/
+
+/-- Settle a multi-seat ZoE escrow batch reallocation in the vault book if and only if
+    `checkBatchReallocSafe b seats realloc = true`. -/
+def settleVaultSeats (b : Book) (seats : List Seat) (realloc : BatchRealloc) : Option Book :=
+  if checkBatchReallocSafe b seats realloc then
+    some (applyBatchRealloc b realloc)
+  else
+    none
+
+/-- Soundness of `settleVaultSeats`: whenever `settleVaultSeats b seats realloc = some b'`,
+    1. `b' = applyBatchRealloc b realloc` and `checkBatchReallocSafe b seats realloc = true`,
+    2. Every participating seat `s ∈ seats` satisfies ZoE Offer Safety (`safeAt b' s.account s.proposal = true`),
+    3. Every asset in `batchAssets seats realloc` satisfies zero-sum credit/debit conservation,
+    4. Every ordinary account (`< protectedBase`) has its balance strictly preserved across all assets. -/
+theorem settleVaultSeats_sound (b b' : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_settle : settleVaultSeats b seats realloc = some b') :
+    b' = applyBatchRealloc b realloc ∧
+    checkBatchReallocSafe b seats realloc = true ∧
+    (∀ s ∈ seats, safeAt b' s.account s.proposal = true) ∧
+    (∀ ast ∈ batchAssets seats realloc, batchTotalCredits seats realloc ast = batchTotalDebits seats realloc ast) ∧
+    (∀ ordinary, ordinary < protectedBase → ∀ ast, b'.balance ordinary ast = b.balance ordinary ast) := by
+  unfold settleVaultSeats at h_settle
+  split at h_settle
+  · rename_i h_safe
+    injection h_settle with h_eq
+    subst h_eq
+    refine ⟨rfl, h_safe, ?_, ?_, ?_⟩
+    · exact batchRealloc_preserves_all_seats_offer_safe b seats realloc h_safe
+    · exact batchRealloc_zero_sum_conservation b seats realloc h_safe
+    · intro ordinary h_ord ast
+      exact batchRealloc_disjoint_from_ordinary_accounts b seats realloc h_safe ordinary h_ord ast
+  · cases h_settle
+
+/-- Full book and asset conservation for `settleVaultSeats`: whenever `settleVaultSeats b seats realloc = some b'`,
+    participating seats have pairwise distinct accounts (`(seats.map Seat.account).Nodup`),
+    every asset `ast : AssetId` satisfies zero-sum credit/debit conservation across seats,
+    and when participating seats are registered in `b` (`b.accounts.Nodup`), `b'.totalAsset ast = b.totalAsset ast`. -/
+theorem settleVaultSeats_conserves (b b' : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_settle : settleVaultSeats b seats realloc = some b') :
+    (seats.map Seat.account).Nodup ∧
+    (∀ ast : AssetId, batchTotalCredits seats realloc ast = batchTotalDebits seats realloc ast) ∧
+    (∀ (_h_reg : ∀ s ∈ seats, s.account ∈ b.accounts) (_hnodup : b.accounts.Nodup) (ast : AssetId),
+      b'.totalAsset ast = b.totalAsset ast) := by
+  have hsound := settleVaultSeats_sound b b' seats realloc h_settle
+  rcases hsound with ⟨rfl, h_safe, _, _, _⟩
+  refine ⟨batchRealloc_nodup_seats b seats realloc h_safe,
+    batchRealloc_zero_sum_all_assets b seats realloc h_safe, ?_⟩
+  intro h_reg hnodup ast
+  exact batchRealloc_conserves b seats realloc h_safe h_reg hnodup ast
 
 end Obend.Ledger
 

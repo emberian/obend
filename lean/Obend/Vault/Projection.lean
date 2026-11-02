@@ -32,7 +32,7 @@ public import Obend.Digest.HashBytes
 
 namespace Obend.Vault.Projection
 
-open Obend.Core.Digest (digestWith)
+open Obend.Core.Digest (digestWith Admissible admissible_of_lt binds_or_collides)
 open Obend.Digest.HashBytes (Hash Collision)
 open Obend.Receipt.Merkle (Small Bounded root path climb leaf leaves mapRoot Opening opens climb_path mapOpening opens_complete opens_binds)
 
@@ -297,4 +297,170 @@ theorem projectCell_blinded_reveals_no_content (H : Hash) (v : List Auth) (c : V
   rw [hhide] at h
   contradiction
 
+/-! ## 5. Metadata-Bound Blinded Merkle Projections (`WS-F`) -/
+
+/-- Extract the read capability bit (`0` or `1`) from an authority list. -/
+def readCapOf (req : List Auth) : Nat :=
+  if req.contains .read then 1 else 0
+
+/-- Extract the write capability bit (`0` or `1`) from an authority list. -/
+def writeCapOf (req : List Auth) : Nat :=
+  if req.contains .write then 1 else 0
+
+/-- Read capability metadata of a `VaultCell`. -/
+def VaultCell.readCap (c : VaultCell) : Nat :=
+  readCapOf c.required
+
+/-- Write capability metadata of a `VaultCell`. -/
+def VaultCell.writeCap (c : VaultCell) : Nat :=
+  writeCapOf c.required
+
+theorem readCapOf_lt (req : List Auth) : readCapOf req < 2 ^ 256 := by
+  unfold readCapOf
+  split <;> decide
+
+theorem writeCapOf_lt (req : List Auth) : writeCapOf req < 2 ^ 256 := by
+  unfold writeCapOf
+  split <;> decide
+
+/-- Metadata-bound commitment over `(id, readCap, writeCap, salt, content)`. -/
+def cellBlindMetadataBoundValues (H : Hash) (id readCap writeCap salt content : Nat) : Nat :=
+  digestWith H
+    (digestWith H id (digestWith H readCap writeCap))
+    (digestWith H salt content)
+
+/-- Metadata-bound blinded commitment of a `VaultCell` committing to
+    `(cell.id, cell.readCap, cell.writeCap, cell.salt, cell.content)`. -/
+def cellBlindMetadataBound (H : Hash) (c : VaultCell) : Nat :=
+  cellBlindMetadataBoundValues H c.id c.readCap c.writeCap c.salt c.content
+
+/-- Project an individual cell for viewer `v` using metadata-bound blinding. -/
+def projectCellMetadataBound (H : Hash) (v : List Auth) (c : VaultCell) : ProjectedCell :=
+  if canSee v c then
+    .revealed c.id c.required c.salt c.content
+  else
+    .blinded c.id (cellBlindMetadataBound H c)
+
+/-- Extract the metadata-bound commitment from a `ProjectedCell`. -/
+def projectedCommitMetadataBound (H : Hash) : ProjectedCell → Nat
+  | .revealed id required salt content =>
+    cellBlindMetadataBoundValues H id (readCapOf required) (writeCapOf required) salt content
+  | .blinded _ blindedCommit => blindedCommit
+
+@[simp] theorem projectCellMetadataBound_commit_eq (H : Hash) (v : List Auth) (c : VaultCell) :
+    projectedCommitMetadataBound H (projectCellMetadataBound H v c) = cellBlindMetadataBound H c := by
+  dsimp [projectCellMetadataBound, cellBlindMetadataBound, VaultCell.readCap, VaultCell.writeCap]
+  split <;> rfl
+
+/-- Unredacted metadata-bound vault commitments. -/
+def vaultCommitsMetadataBound (H : Hash) (cells : List VaultCell) : List Nat :=
+  cells.map (cellBlindMetadataBound H)
+
+/-- Projected metadata-bound vault commitments for viewer `v`. -/
+def projectedCommitsMetadataBound (H : Hash) (v : List Auth) (cells : List VaultCell) : List Nat :=
+  (cells.map (projectCellMetadataBound H v)).map (projectedCommitMetadataBound H)
+
+theorem projectedCommitsMetadataBound_eq (H : Hash) (v : List Auth) (cells : List VaultCell) :
+    projectedCommitsMetadataBound H v cells = vaultCommitsMetadataBound H cells := by
+  unfold projectedCommitsMetadataBound vaultCommitsMetadataBound
+  induction cells with
+  | nil => rfl
+  | cons c rest ih =>
+    simp [projectCellMetadataBound_commit_eq, ih]
+
+/-- Binary Merkle tree root over `projectedCommitsMetadataBound` (and `projectedCommits`). -/
+def projectedMerkleRoot (H : Hash) (v : List Auth) (cells : List VaultCell) : Nat :=
+  mapRoot H (projectedCommitsMetadataBound H v cells)
+
+theorem projectedMerkleRoot_eq_vaultRoot (H : Hash) (v : List Auth) (cells : List VaultCell) :
+    projectedMerkleRoot H v cells = mapRoot H (vaultCommitsMetadataBound H cells) := by
+  unfold projectedMerkleRoot
+  rw [projectedCommitsMetadataBound_eq]
+
+/-- Verify a metadata-bound blinded opening against `vaultRoot`. -/
+def verifyMetadataBoundOpening (H : Hash) (bo : BlindedOpening) (vaultRoot : Nat) : Bool :=
+  Small bo.index &&
+  climb H bo.size bo.index (leaf H bo.index (projectedCommitMetadataBound H bo.cell)) bo.path == some vaultRoot
+
+/-- Construct an honest metadata-bound opening for cell `j`. -/
+def mkMetadataBoundOpening (H : Hash) (v : List Auth) (cells : List VaultCell) (j : Nat) : BlindedOpening :=
+  let o := mapOpening H (vaultCommitsMetadataBound H cells) j
+  ⟨o.size, o.index, projectCellMetadataBound H v (cells.getD j default), o.path⟩
+
+theorem verifyMetadataBoundOpening_eq_opens (H : Hash) (bo : BlindedOpening) (vaultRoot : Nat) :
+    verifyMetadataBoundOpening H bo vaultRoot =
+      opens H ⟨bo.size, bo.index, projectedCommitMetadataBound H bo.cell, bo.path⟩ vaultRoot := rfl
+
+/-- Binding theorem for `cellBlindMetadataBound`: equal commitments imply equal `(id, readCap, writeCap, salt, content)` or a hash collision. -/
+theorem cellBlindMetadataBound_binds {H : Hash} (hb : Bounded H) {c₁ c₂ : VaultCell}
+    (hid₁ : c₁.id < 2 ^ 256) (hsalt₁ : c₁.salt < 2 ^ 256)
+    (hid₂ : c₂.id < 2 ^ 256) (hsalt₂ : c₂.salt < 2 ^ 256)
+    (heq : cellBlindMetadataBound H c₁ = cellBlindMetadataBound H c₂) :
+    (c₁.id = c₂.id ∧ c₁.readCap = c₂.readCap ∧ c₁.writeCap = c₂.writeCap ∧
+     c₁.salt = c₂.salt ∧ c₁.content = c₂.content) ∨ Collision H := by
+  unfold cellBlindMetadataBound cellBlindMetadataBoundValues at heq
+  have hadm_top₁ : Admissible (digestWith H c₁.id (digestWith H c₁.readCap c₁.writeCap)) :=
+    admissible_of_lt (hb _ _)
+  have hadm_top₂ : Admissible (digestWith H c₂.id (digestWith H c₂.readCap c₂.writeCap)) :=
+    admissible_of_lt (hb _ _)
+  rcases binds_or_collides H hadm_top₁ hadm_top₂ heq with ⟨h_meta, h_body⟩ | hcoll
+  · have hadm_meta₁ : Admissible c₁.id := admissible_of_lt hid₁
+    have hadm_meta₂ : Admissible c₂.id := admissible_of_lt hid₂
+    rcases binds_or_collides H hadm_meta₁ hadm_meta₂ h_meta with ⟨hid_eq, h_caps⟩ | hcoll
+    · have hadm_caps₁ : Admissible c₁.readCap := admissible_of_lt (readCapOf_lt c₁.required)
+      have hadm_caps₂ : Admissible c₂.readCap := admissible_of_lt (readCapOf_lt c₂.required)
+      rcases binds_or_collides H hadm_caps₁ hadm_caps₂ h_caps with ⟨hread_eq, hwrite_eq⟩ | hcoll
+      · have hadm_body₁ : Admissible c₁.salt := admissible_of_lt hsalt₁
+        have hadm_body₂ : Admissible c₂.salt := admissible_of_lt hsalt₂
+        rcases binds_or_collides H hadm_body₁ hadm_body₂ h_body with ⟨hsalt_eq, hcont_eq⟩ | hcoll
+        · left
+          exact ⟨hid_eq, hread_eq, hwrite_eq, hsalt_eq, hcont_eq⟩
+        · right; exact hcoll.global
+      · right; exact hcoll.global
+    · right; exact hcoll.global
+  · right; exact hcoll.global
+
+/-- **Metadata Tampering Refusal Theorem (`tampered_metadata_opening_refused`)**:
+    Under a bounded collision-resistant hash `H`, tampering with `cell.id` or `cell.readCap`
+    (or `cell.writeCap`) in an opening at index `j < cells.length` strictly invalidates
+    `verifyMetadataBoundOpening` against `projectedMerkleRoot H v cells`. -/
+theorem tampered_metadata_opening_refused {H : Hash} (hb : Bounded H) (h_no_coll : ¬ Collision H)
+    (v : List Auth) (cells : List VaultCell) (j : Nat) (c_tampered : VaultCell)
+    (hj : j < cells.length) (hjs : j < 2 ^ 256)
+    (hid_orig : (cells.getD j default).id < 2 ^ 256)
+    (hsalt_orig : (cells.getD j default).salt < 2 ^ 256)
+    (hid_tamp : c_tampered.id < 2 ^ 256)
+    (hsalt_tamp : c_tampered.salt < 2 ^ 256)
+    (h_tampered : c_tampered.id ≠ (cells.getD j default).id ∨
+                  c_tampered.readCap ≠ (cells.getD j default).readCap) :
+    verifyMetadataBoundOpening H
+      { mkMetadataBoundOpening H v cells j with cell := projectCellMetadataBound H v c_tampered }
+      (projectedMerkleRoot H v cells) = false := by
+  cases hver : verifyMetadataBoundOpening H
+      { mkMetadataBoundOpening H v cells j with cell := projectCellMetadataBound H v c_tampered }
+      (projectedMerkleRoot H v cells) with
+  | false => rfl
+  | true =>
+    exfalso
+    rw [projectedMerkleRoot_eq_vaultRoot, verifyMetadataBoundOpening_eq_opens] at hver
+    unfold mkMetadataBoundOpening at hver
+    dsimp only at hver
+    have hlen : j < (vaultCommitsMetadataBound H cells).length := by
+      simp [vaultCommitsMetadataBound, hj]
+    have h_honest := opens_complete hb (vaultCommitsMetadataBound H cells) j hlen hjs
+    rcases opens_binds hb hver h_honest rfl rfl with hval_eq | hcoll
+    · dsimp only [mapOpening] at hval_eq
+      rw [projectCellMetadataBound_commit_eq] at hval_eq
+      have hget : (vaultCommitsMetadataBound H cells).getD j 0 = cellBlindMetadataBound H (cells.getD j default) :=
+        getD_map_helper (cellBlindMetadataBound H) default 0 cells j hj
+      rw [hget] at hval_eq
+      rcases cellBlindMetadataBound_binds hb hid_tamp hsalt_tamp hid_orig hsalt_orig hval_eq with
+        ⟨hid_eq, hread_eq, _, _, _⟩ | hcoll
+      · rcases h_tampered with hne_id | hne_read
+        · exact hne_id hid_eq
+        · exact hne_read hread_eq
+      · exact h_no_coll hcoll
+    · exact h_no_coll hcoll
+
 end Obend.Vault.Projection
+

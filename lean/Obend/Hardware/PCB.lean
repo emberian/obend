@@ -465,7 +465,7 @@ theorem goldenSdrCarrierPcb_passes :
 computed directly from physical trace geometry `(widthUm, heightUm, copperThickUm, erPermille)`
 rather than an external oracle field:
 $$W_{\text{eff}} = W + T, \qquad Z_0 \approx \frac{87000 \cdot 1000 \cdot (4 H + W_{\text{eff}})}{(\varepsilon_r + 1410) \cdot (W_{\text{eff}} + 2 H)}.$$ -/
-@[expose] def computeMicrostripZ0MilliOhm (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
+def computeMicrostripZ0MilliOhm (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
   let effWidthUm := widthUm + copperThickUm
   let denom := (erPermille + 1410) * (effWidthUm + 2 * heightUm)
   if denom == 0 then 0
@@ -473,7 +473,7 @@ $$W_{\text{eff}} = W + T, \qquad Z_0 \approx \frac{87000 \cdot 1000 \cdot (4 H +
 
 /-- Denominator $(\varepsilon_r + 1410) \cdot ((W + T) + 2 H)$ of the geometry-derived microstrip
 characteristic impedance formula. -/
-@[expose] def microstripZ0Denom (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
+def microstripZ0Denom (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
   (erPermille + 1410) * ((widthUm + copperThickUm) + 2 * heightUm)
 
 /-- Theorem (`microstrip_z0_geom_50ohm_in_band`):
@@ -566,12 +566,12 @@ theorem bboxClearanceUm_symm (a b : PcbBBox) :
 
 /-- Pairwise 2D bounding-box DRC check: distinct obstacles on different electrical nets (`a.netId != b.netId`)
 must be separated by at least `minClearanceUm`. -/
-@[expose] def checkBBoxPairDrc (minClearanceUm : Int) (a b : PcbBBox) : Bool :=
+def checkBBoxPairDrc (minClearanceUm : Int) (a b : PcbBBox) : Bool :=
   if a.id == b.id || a.netId == b.netId then true
   else decide (minClearanceUm ≤ bboxClearanceUm a b)
 
 /-- Complete board-level 2D bounding-box DRC checker over a list of copper obstacles `boxes`. -/
-@[expose] def checkBoardBBoxDrc (boxes : List PcbBBox) (minClearanceUm : Int) : Bool :=
+def checkBoardBBoxDrc (boxes : List PcbBBox) (minClearanceUm : Int) : Bool :=
   boxes.all fun a => boxes.all fun b => checkBBoxPairDrc minClearanceUm a b
 
 /-- Golden 4-obstacle PCB layout with two nets (`netId = 1` RF trace + pad, `netId = 2` GND shield + via)
@@ -596,6 +596,217 @@ theorem board_bbox_drc_multi_obstacle_verified :
     checkBoardBBoxDrc goldenPcbBBoxLayout 150 = true ∧
     checkBoardBBoxDrc violatingPcbBBoxLayout 150 = false := by
   decide +kernel
+
+/-! ## 7. Dielectric + Skin-Effect Frequency-Dependent Insertion Loss (`evalChannelInsertionLossMdB`) & Eye-Diagram Opening Signoff (`EyeDiagramSpec`, `checkEyeOpeningSignoff`) -/
+
+/-- Frequency-dependent high-speed PCB transmission-line insertion loss $IL(f, L)$ (in milli-decibels
+$\text{mdB}$, where $1000\,\text{mdB} = 1.0\,\text{dB}$) combining dielectric loss-tangent dissipation
+($\propto L \cdot f \cdot \tan\delta$) and copper conductor skin-effect attenuation ($\propto L \cdot f \cdot \alpha_{\text{skin}}$):
+$$IL_{\text{mdB}} = \frac{L_{\mu\text{m}} \cdot f_{\text{MHz}} \cdot \text{dfPpm}}{10^9} + \frac{L_{\mu\text{m}} \cdot f_{\text{MHz}} \cdot \alpha_{\text{skin}}}{10^6}.$$ -/
+def evalChannelInsertionLossMdB
+    (diel : PcbDielectric) (lengthUm freqMhz skinCoeff : Nat) : Nat :=
+  (lengthUm * freqMhz * diel.dfPpm) / 1000000000 +
+  (lengthUm * freqMhz * skinCoeff) / 1000000
+
+/-- Theorem (`channelInsertionLoss_monotone`):
+Increasing either the PCB trace length (`len1 ≤ len2`) or the substrate dielectric dissipation factor
+(`diel1.dfPpm ≤ diel2.dfPpm`) monotonically increases (or preserves) the channel insertion loss
+`evalChannelInsertionLossMdB`! -/
+theorem channelInsertionLoss_monotone
+    (diel1 diel2 : PcbDielectric) (len1 len2 freqMhz skinCoeff : Nat)
+    (hLen : len1 ≤ len2)
+    (hDf : diel1.dfPpm ≤ diel2.dfPpm) :
+    evalChannelInsertionLossMdB diel1 len1 freqMhz skinCoeff ≤
+      evalChannelInsertionLossMdB diel2 len2 freqMhz skinCoeff := by
+  dsimp only [evalChannelInsertionLossMdB]
+  have hLf : len1 * freqMhz ≤ len2 * freqMhz := Nat.mul_le_mul_right freqMhz hLen
+  have hDielProd : len1 * freqMhz * diel1.dfPpm ≤ len2 * freqMhz * diel2.dfPpm :=
+    Nat.mul_le_mul hLf hDf
+  have hSkinProd : len1 * freqMhz * skinCoeff ≤ len2 * freqMhz * skinCoeff :=
+    Nat.mul_le_mul_right skinCoeff hLf
+  have hDiv1 : (len1 * freqMhz * diel1.dfPpm) / 1000000000 ≤ (len2 * freqMhz * diel2.dfPpm) / 1000000000 :=
+    Nat.div_le_div_right hDielProd
+  have hDiv2 : (len1 * freqMhz * skinCoeff) / 1000000 ≤ (len2 * freqMhz * skinCoeff) / 1000000 :=
+    Nat.div_le_div_right hSkinProd
+  omega
+
+/-- High-Speed SerDes / LVDS Eye-Diagram Vertical & Horizontal Opening Specification coupling:
+* `channelName`: high-speed serial lane identifier,
+* `dielectric`: PCB substrate layer (`rogers4350bDielectric`, `isolaIspeedDielectric`, `fr4StandardDielectric`),
+* `diffPair`: edge-coupled differential pair geometry & target impedance (`DiffPairSpec`),
+* `meander`: serpentine length-matching delay line (`SerpentineMeander`),
+* `refLengthUm`: reference lane length ($\mu\text{m}$),
+* `freqMhz`: Nyquist / fundamental signaling frequency ($\text{MHz}$),
+* `skinCoeff`: copper skin-effect loss coefficient,
+* `txLaunchSwingMv`: transmitter differential launch voltage swing $V_{\text{tx}}$ ($\text{mV}$),
+* `isiPenaltyMvPerDb`: vertical eye closure per dB ($1000\,\text{mdB}$) of channel insertion loss ($\text{mV/dB}$),
+* `minEyeHeightMv`: minimum required vertical eye opening at the receiver slicer ($\text{mV}$),
+* `unitIntervalFs`: 1 Unit Interval ($1\,\text{UI} = 1 / R_{\text{bit}}$) in femtoseconds ($\text{fs}$),
+* `rjDjJitterFs`: combined random + deterministic TX/RX clock jitter budget ($\text{fs}$),
+* `minEyeWidthFs`: minimum required horizontal eye opening ($t_{\text{eye}} = \text{UI} - t_{\text{jitter}} - t_{\text{skew}}$, in $\text{fs}$),
+* `maxInsertionLossMdB`: maximum allowable channel insertion loss ($\text{mdB}$). -/
+structure EyeDiagramSpec where
+  channelName         : String
+  dielectric          : PcbDielectric
+  diffPair            : DiffPairSpec
+  meander             : SerpentineMeander
+  refLengthUm         : Nat
+  freqMhz             : Nat
+  skinCoeff           : Nat
+  txLaunchSwingMv     : Nat
+  isiPenaltyMvPerDb   : Nat
+  minEyeHeightMv      : Nat
+  unitIntervalFs      : Nat
+  rjDjJitterFs        : Nat
+  minEyeWidthFs       : Nat
+  maxInsertionLossMdB : Nat
+  deriving DecidableEq, Repr
+
+/-- Total vertical eye-closure penalty (in millivolts $\text{mV}$) due to frequency-dependent
+ISI insertion loss and differential impedance mismatch reflection. -/
+def evalEyeVerticalLossMv (spec : EyeDiagramSpec) : Nat :=
+  let routedLenUm := evalSerpentineTotalLengthUm spec.meander
+  let ilMdB := evalChannelInsertionLossMdB spec.dielectric routedLenUm spec.freqMhz spec.skinCoeff
+  let zDiffErrMilliOhm := natAbsDiff (evalDiffImpedanceMilliOhm spec.diffPair) spec.diffPair.zDiffTargetMilliOhm
+  (ilMdB * spec.isiPenaltyMvPerDb) / 1000 + zDiffErrMilliOhm / 100
+
+/-- Vertical eye opening $V_{\text{eye}} = V_{\text{tx}} - \Delta V_{\text{ISI+refl}}$ (in millivolts $\text{mV}$)
+at the receiver decision latch. -/
+def evalEyeHeightMv (spec : EyeDiagramSpec) : Nat :=
+  spec.txLaunchSwingMv - evalEyeVerticalLossMv spec
+
+/-- Horizontal eye opening $t_{\text{eye}} = \text{UI} - (t_{\text{RJ+DJ}} + \Delta t_{\text{skew}})$
+(in femtoseconds $\text{fs}$) at the receiver CDR sampling phase. -/
+def evalEyeWidthFs (spec : EyeDiagramSpec) : Nat :=
+  let routedLenUm := evalSerpentineTotalLengthUm spec.meander
+  let skewFs := evalFlightTimeSkewFs spec.refLengthUm routedLenUm spec.dielectric.propDelayFsPerUm
+  spec.unitIntervalFs - (spec.rjDjJitterFs + skewFs)
+
+/-- Complete High-Speed SerDes / LVDS Eye-Diagram Opening Signoff Checker (`checkEyeOpeningSignoff`):
+1. Channel insertion loss across the serpentine-routed trace length is at most `maxInsertionLossMdB`,
+2. Edge-coupled differential pair impedance matches `zDiffTargetMilliOhm` within `zDiffTolMilliOhm`,
+3. Strictly positive vertical eye opening (`0 < spec.minEyeHeightMv`), vertical loss does not collapse
+   the launch swing, and `minEyeHeightMv ≤ evalEyeHeightMv spec`,
+4. Strictly positive horizontal eye opening (`0 < spec.minEyeWidthFs`), total jitter plus flight-time
+   skew does not collapse the unit interval, and `minEyeWidthFs ≤ evalEyeWidthFs spec`. -/
+def checkEyeOpeningSignoff (spec : EyeDiagramSpec) : Bool :=
+  let routedLenUm := evalSerpentineTotalLengthUm spec.meander
+  let ilMdB := evalChannelInsertionLossMdB spec.dielectric routedLenUm spec.freqMhz spec.skinCoeff
+  let zDiffErr := natAbsDiff (evalDiffImpedanceMilliOhm spec.diffPair) spec.diffPair.zDiffTargetMilliOhm
+  let vertLossMv := evalEyeVerticalLossMv spec
+  let skewFs := evalFlightTimeSkewFs spec.refLengthUm routedLenUm spec.dielectric.propDelayFsPerUm
+  decide (ilMdB ≤ spec.maxInsertionLossMdB) &&
+  decide (zDiffErr ≤ spec.diffPair.zDiffTolMilliOhm) &&
+  decide (0 < spec.minEyeHeightMv) &&
+  decide (vertLossMv ≤ spec.txLaunchSwingMv) &&
+  decide (spec.minEyeHeightMv ≤ evalEyeHeightMv spec) &&
+  decide (0 < spec.minEyeWidthFs) &&
+  decide (spec.rjDjJitterFs + skewFs ≤ spec.unitIntervalFs) &&
+  decide (spec.minEyeWidthFs ≤ evalEyeWidthFs spec)
+
+/-- Theorem (`eyeOpeningSignoff_sound`):
+Whenever `checkEyeOpeningSignoff spec = true`, the high-speed PCB channel satisfies:
+1. Bounded dielectric + skin-effect insertion loss (`evalChannelInsertionLossMdB ... ≤ spec.maxInsertionLossMdB`),
+2. Bounded differential impedance reflection mismatch (`natAbsDiff ... ≤ spec.diffPair.zDiffTolMilliOhm`),
+3. Certified vertical voltage eye opening (`spec.minEyeHeightMv ≤ evalEyeHeightMv spec`), and
+4. Certified horizontal timing eye opening (`spec.minEyeWidthFs ≤ evalEyeWidthFs spec`). -/
+theorem eyeOpeningSignoff_sound
+    (spec : EyeDiagramSpec)
+    (hOk : checkEyeOpeningSignoff spec = true) :
+    evalChannelInsertionLossMdB spec.dielectric (evalSerpentineTotalLengthUm spec.meander) spec.freqMhz spec.skinCoeff ≤
+      spec.maxInsertionLossMdB ∧
+    natAbsDiff (evalDiffImpedanceMilliOhm spec.diffPair) spec.diffPair.zDiffTargetMilliOhm ≤
+      spec.diffPair.zDiffTolMilliOhm ∧
+    spec.minEyeHeightMv ≤ evalEyeHeightMv spec ∧
+    spec.minEyeWidthFs ≤ evalEyeWidthFs spec := by
+  dsimp only [checkEyeOpeningSignoff] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true,
+      Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq,
+      decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
+  exact ⟨hOk.1.1.1.1.1.1.1, hOk.1.1.1.1.1.1.2, hOk.1.1.1.2, hOk.2⟩
+
+/-- Theorem (`eyeOpeningSignoff_positive_and_exact`):
+Whenever `checkEyeOpeningSignoff spec = true`, both the vertical and horizontal eye openings are
+strictly positive (`0 < evalEyeHeightMv spec`, `0 < evalEyeWidthFs spec`), and the `Nat` voltage
+and timing subtractions are exact without truncation (`evalEyeHeightMv spec + evalEyeVerticalLossMv spec = spec.txLaunchSwingMv`
+and `evalEyeWidthFs spec + spec.rjDjJitterFs + skewFs = spec.unitIntervalFs`). -/
+theorem eyeOpeningSignoff_positive_and_exact
+    (spec : EyeDiagramSpec)
+    (hOk : checkEyeOpeningSignoff spec = true) :
+    0 < evalEyeHeightMv spec ∧
+    0 < evalEyeWidthFs spec ∧
+    evalEyeHeightMv spec + evalEyeVerticalLossMv spec = spec.txLaunchSwingMv ∧
+    evalEyeWidthFs spec + spec.rjDjJitterFs +
+      evalFlightTimeSkewFs spec.refLengthUm (evalSerpentineTotalLengthUm spec.meander) spec.dielectric.propDelayFsPerUm =
+      spec.unitIntervalFs := by
+  dsimp only [checkEyeOpeningSignoff] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true,
+      Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq,
+      decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hOk
+  have hMinH : 0 < spec.minEyeHeightMv := hOk.1.1.1.1.1.2
+  have hNoTruncH : evalEyeVerticalLossMv spec ≤ spec.txLaunchSwingMv := hOk.1.1.1.1.2
+  have hGeH : spec.minEyeHeightMv ≤ evalEyeHeightMv spec := hOk.1.1.1.2
+  have hMinW : 0 < spec.minEyeWidthFs := hOk.1.1.2
+  have hNoTruncW := hOk.1.2
+  have hGeW : spec.minEyeWidthFs ≤ evalEyeWidthFs spec := hOk.2
+  dsimp only [evalEyeHeightMv, evalEyeWidthFs] at hGeH hGeW ⊢
+  refine ⟨by omega, by omega, by omega, by omega⟩
+
+/-- Golden $10\,\text{Gbps}$ ($f_{\text{Nyquist}} = 5000\,\text{MHz}$, $\text{UI} = 100000\,\text{fs} = 100\,\text{ps}$)
+`Rogers RO4350B` $30\,\text{mm}$ differential SerDes lane (`800 mV` launch swing, `1155 mdB` insertion
+loss, `742 mV ≥ 400 mV` vertical eye opening, `80000 fs ≥ 60000 fs` horizontal eye opening). -/
+def goldenSerdesEyeSpec : EyeDiagramSpec where
+  channelName         := "SERDES_10G_RX0_RO4350B"
+  dielectric          := rogers4350bDielectric
+  diffPair            := goldenLvds100OhmPair
+  meander             := goldenDdrMeander
+  refLengthUm         := 30000
+  freqMhz             := 5000
+  skinCoeff           := 4
+  txLaunchSwingMv     := 800
+  isiPenaltyMvPerDb   := 50
+  minEyeHeightMv      := 400
+  unitIntervalFs      := 100000
+  rjDjJitterFs        := 20000
+  minEyeWidthFs       := 60000
+  maxInsertionLossMdB := 3000
+
+/-- Lossy $120\,\text{mm}$ `FR-4` lane at $5\,\text{GHz}$ whose dielectric loss tangent ($\tan\delta = 0.020$)
+causes $14400\,\text{mdB} = 14.4\,\text{dB} > 3.0\,\text{dB}$ insertion loss and closes the vertical eye! -/
+def highLossFr4EyeSpec : EyeDiagramSpec :=
+  { goldenSerdesEyeSpec with
+    channelName := "SERDES_10G_FR4_LOSSY"
+    dielectric  := fr4StandardDielectric
+    meander     := { goldenDdrMeander with baseLengthUm := 114000 }
+    refLengthUm := 120000 }
+
+/-- Uncompensated length-skewed lane (`baseLengthUm = 12000` vs `refLengthUm = 30000`, `numSegments = 0`)
+suffering $90000\,\text{fs}$ P/N skew that collapses the $100000\,\text{fs}$ unit interval! -/
+def unmatchedSkewEyeSpec : EyeDiagramSpec :=
+  { goldenSerdesEyeSpec with
+    channelName := "SERDES_10G_UNMATCHED_SKEW"
+    meander     := { goldenDdrMeander with baseLengthUm := 12000, numSegments := 0 } }
+
+/-- Degenerate zero-margin eye spec (`minEyeHeightMv = 0`, `txLaunchSwingMv = 58`) where vertical eye
+height is completely closed (`evalEyeHeightMv = 0 mV`). -/
+def zeroHeightClosedEyeSpec : EyeDiagramSpec :=
+  { goldenSerdesEyeSpec with
+    channelName     := "SERDES_10G_ZERO_EYE_HEIGHT"
+    txLaunchSwingMv := 58
+    minEyeHeightMv  := 0 }
+
+/-- Theorem (`eyeOpeningSignoff_poles`):
+`checkEyeOpeningSignoff` accepts `goldenSerdesEyeSpec` and refuses `highLossFr4EyeSpec`
+(excessive FR-4 dielectric insertion loss), `unmatchedSkewEyeSpec` (horizontal eye closure due to skew),
+and `zeroHeightClosedEyeSpec` (`0 mV` closed vertical eye)! -/
+theorem eyeOpeningSignoff_poles :
+    checkEyeOpeningSignoff goldenSerdesEyeSpec = true ∧
+    checkEyeOpeningSignoff highLossFr4EyeSpec = false ∧
+    checkEyeOpeningSignoff unmatchedSkewEyeSpec = false ∧
+    checkEyeOpeningSignoff zeroHeightClosedEyeSpec = false :=
+  ⟨rfl, rfl, rfl, rfl⟩
 
 end Obend.Hardware.PCB
 end

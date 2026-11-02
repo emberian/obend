@@ -57,7 +57,7 @@ theorem tb_totals (P : Nat) (rows : List Posting) (a : String) :
 /-- **Non-omission of the trial balance.** An accepted trial balance of period `P` names every posting
 of `P` in its book, names no other, and every account's totals are the sums of those postings'
 movements on it. -/
-theorem trial_balance_covers {P : Nat} {b : Book Posting String} {s : Said String Totals}
+theorem trial_balance_covers {P : Nat} {b : Obend.Analysis.Coverage.Book Posting String} {s : Said String Totals}
     (h : Obend.Analysis.Coverage.check (tb P) Json.postingsRoot b s = .ok) :
     (∀ p ∈ b.rows, p.period = P → p.id ∈ s.keys) ∧
       (∀ k ∈ s.keys, ∃ p ∈ b.rows, p.period = P ∧ p.id = k) ∧
@@ -70,7 +70,7 @@ theorem trial_balance_covers {P : Nat} {b : Book Posting String} {s : Said Strin
   exact ⟨p, hp, by simpa [tb] using hsel, hk⟩
 
 /-- Of every register whose root is the book's, when the root binds. -/
-theorem trial_balance_binds {P : Nat} {b : Book Posting String} {s : Said String Totals}
+theorem trial_balance_binds {P : Nat} {b : Obend.Analysis.Coverage.Book Posting String} {s : Said String Totals}
     (h : Obend.Analysis.Coverage.check (tb P) Json.postingsRoot b s = .ok) (reg : List Posting)
     (hroot : Json.postingsRoot reg = b.root) (hbind : Json.postingsRoot reg = Json.postingsRoot b.rows → reg = b.rows) :
     ∀ p ∈ reg, p.period = P → p.id ∈ s.keys := fun p hp hP =>
@@ -79,7 +79,7 @@ theorem trial_balance_binds {P : Nat} {b : Book Posting String} {s : Said String
 /-- The object of a trial balance: its period and its book. -/
 structure TBObj where
   period : Nat
-  book : Book Posting String
+  book : Obend.Analysis.Coverage.Book Posting String
 
 instance tbJudge : Judge TBObj (Said String Totals) where
   Clause := Obend.Analysis.Coverage.Clause String

@@ -405,4 +405,147 @@ theorem rf_transceiver_signoff_poles :
     checkRfTransceiverSignoff highVswrTransceiverCert = false :=
   ⟨rfl, rfl, rfl⟩
 
+/-! ## 6. Cascaded $N$-Stage Friis Noise Figure & Gain Chain (`RfStageSpec`, `evalCascadedGainDbTenths`, `checkCascadedSensitivity`) -/
+
+/-- Single RF stage in an $N$-stage cascaded receiver or transmitter chain (e.g., LNA, preselector
+BPF, quadrature mixer, IF amplifier):
+* `stageName`: identifier of the RF stage,
+* `gainDbTenths`: stage power gain in tenths of a decibel ($0.1\,\text{dB}$, signed: positive for amplifiers
+  such as $+200 = +20.0\,\text{dB}$, negative for passive mixer/filter insertion loss such as $-60 = -6.0\,\text{dB}$),
+* `noiseFactorMilli`: linear stage noise factor $F_i \times 1000$ ($1000 = 1.0 = 0.0\,\text{dB}$),
+* `linearGain`: linear power gain factor $G_i \ge 1$ used in Friis noise cascading. -/
+structure RfStageSpec where
+  stageName        : String
+  gainDbTenths     : Int
+  noiseFactorMilli : Nat
+  linearGain       : Nat
+  deriving DecidableEq, Repr
+
+/-- Total cascaded power gain (in tenths of a decibel, $0.1\,\text{dB}$) across an $N$-stage RF chain:
+$$G_{\text{total,dB}} = \sum_{k=1}^{N} G_{k,\text{dB}}.$$ -/
+def evalCascadedGainDbTenths : List RfStageSpec → Int
+  | [] => 0
+  | st :: rest => st.gainDbTenths + evalCascadedGainDbTenths rest
+
+/-- Recursive $N$-stage Friis noise factor accumulator (in milli-linear units where $1000 = 1.0$),
+dividing each subsequent stage's excess noise $(F_k - 1000)$ by the cumulative preceding linear
+power gain product `cumGainLinear`. -/
+def evalCascadedFriisAux (cumGainLinear : Nat) : List RfStageSpec → Nat
+  | [] => 0
+  | st :: rest =>
+    (st.noiseFactorMilli - 1000) / cumGainLinear +
+    evalCascadedFriisAux (cumGainLinear * st.linearGain) rest
+
+/-- Total $N$-stage Friis cascaded noise factor $F_{\text{total}} = 1000 + \sum_{k=1}^{N} \frac{F_k - 1000}{\prod_{j < k} G_j}$
+in milli-linear units. -/
+def evalCascadedFriisMilliNf (stages : List RfStageSpec) : Nat :=
+  1000 + evalCascadedFriisAux 1 stages
+
+/-- Theorem (`cascadedGainDbTenths_append` — Cascaded Gain Additivity):
+The total dB gain of two concatenated RF stage chains `chain1 ++ chain2` is the exact algebraic sum
+of their individual cascaded dB gains:
+$$\text{evalCascadedGainDbTenths}(c_1 \mathbin{+\!\!+} c_2) = \text{evalCascadedGainDbTenths}(c_1) + \text{evalCascadedGainDbTenths}(c_2).$$ -/
+theorem cascadedGainDbTenths_append (chain1 chain2 : List RfStageSpec) :
+    evalCascadedGainDbTenths (chain1 ++ chain2) =
+      evalCascadedGainDbTenths chain1 + evalCascadedGainDbTenths chain2 := by
+  induction chain1 with
+  | nil =>
+    dsimp only [List.nil_append, evalCascadedGainDbTenths]
+    omega
+  | cons st rest ih =>
+    dsimp only [List.cons_append, evalCascadedGainDbTenths]
+    rw [ih]
+    omega
+
+/-- Theorem (`cascadedGainDbTenths_monotone` — Cascaded Gain Monotonicity):
+1. Replacing the head RF stage `s1` with a higher-gain stage `s2` (`s1.gainDbTenths ≤ s2.gainDbTenths`)
+   monotonically increases the total cascaded gain for any downstream chain `rest`, and
+2. Prepending any amplifying stage `st` (`0 ≤ st.gainDbTenths`) monotonically increases or preserves
+   the cascaded chain gain! -/
+theorem cascadedGainDbTenths_monotone
+    (s1 s2 st : RfStageSpec) (rest : List RfStageSpec)
+    (hLe : s1.gainDbTenths ≤ s2.gainDbTenths)
+    (hNonneg : 0 ≤ st.gainDbTenths) :
+    evalCascadedGainDbTenths (s1 :: rest) ≤ evalCascadedGainDbTenths (s2 :: rest) ∧
+    evalCascadedGainDbTenths rest ≤ evalCascadedGainDbTenths (st :: rest) := by
+  dsimp only [evalCascadedGainDbTenths]
+  refine ⟨by omega, by omega⟩
+
+/-- Theorem (`cascadedFriis_matches_twoStage`):
+For any two RF stages `s1, s2` with physical first-stage noise factor `1000 ≤ s1.noiseFactorMilli`,
+the recursive $N$-stage Friis evaluator `evalCascadedFriisMilliNf [s1, s2]` reduces identically to
+the two-stage Friis formula `evalFriisTwoStageMilliNf s1.noiseFactorMilli s2.noiseFactorMilli s1.linearGain`. -/
+theorem cascadedFriis_matches_twoStage
+    (s1 s2 : RfStageSpec)
+    (hNf1 : 1000 ≤ s1.noiseFactorMilli) :
+    evalCascadedFriisMilliNf [s1, s2] =
+      evalFriisTwoStageMilliNf s1.noiseFactorMilli s2.noiseFactorMilli s1.linearGain := by
+  dsimp only [evalCascadedFriisMilliNf, evalCascadedFriisAux, evalFriisTwoStageMilliNf]
+  have hOneMul : 1 * s1.linearGain = s1.linearGain := Nat.one_mul s1.linearGain
+  rw [hOneMul]
+  omega
+
+/-- Theorem (`cascadedFriis_lna_gain_monotone`):
+Increasing first-stage LNA linear power gain (`0 < s1.linearGain ≤ s1'.linearGain` at equal noise
+factor `s1.noiseFactorMilli = s1'.noiseFactorMilli`) monotonically reduces or preserves the
+cascaded Friis noise factor `evalCascadedFriisMilliNf [s1', s2] ≤ evalCascadedFriisMilliNf [s1, s2]`. -/
+theorem cascadedFriis_lna_gain_monotone
+    (s1 s1' s2 : RfStageSpec)
+    (hSameNf : s1.noiseFactorMilli = s1'.noiseFactorMilli)
+    (hPos : 0 < s1.linearGain)
+    (hGainLe : s1.linearGain ≤ s1'.linearGain) :
+    evalCascadedFriisMilliNf [s1', s2] ≤ evalCascadedFriisMilliNf [s1, s2] := by
+  dsimp only [evalCascadedFriisMilliNf, evalCascadedFriisAux]
+  rw [hSameNf, Nat.one_mul, Nat.one_mul]
+  have hDiv : (s2.noiseFactorMilli - 1000) / s1'.linearGain ≤
+      (s2.noiseFactorMilli - 1000) / s1.linearGain :=
+    Nat.div_le_div_left hGainLe hPos
+  omega
+
+/-- Verify that a cascaded $N$-stage RF receiver front-end meets minimum total conversion gain
+`minGainDbTenths`, maximum cascaded Friis noise factor `maxNfMilli`, and physical stage validity
+(`0 < st.linearGain` and `1000 ≤ st.noiseFactorMilli`). -/
+def checkCascadedSensitivity
+    (stages : List RfStageSpec) (minGainDbTenths : Int) (maxNfMilli : Nat) : Bool :=
+  !stages.isEmpty &&
+  (stages.all fun st => decide (0 < st.linearGain) && decide (1000 ≤ st.noiseFactorMilli)) &&
+  decide (minGainDbTenths ≤ evalCascadedGainDbTenths stages) &&
+  decide (evalCascadedFriisMilliNf stages ≤ maxNfMilli)
+
+/-- Theorem (`checkCascadedSensitivity_sound`):
+Whenever `checkCascadedSensitivity stages minGainDbTenths maxNfMilli = true`, the cascaded RF chain
+is non-empty, achieves at least `minGainDbTenths` total gain, keeps the $N$-stage Friis noise factor
+within `maxNfMilli`, and every constituent stage has positive linear gain and physical noise factor $\ge 1000$. -/
+theorem checkCascadedSensitivity_sound
+    (stages : List RfStageSpec) (minGainDbTenths : Int) (maxNfMilli : Nat)
+    (hOk : checkCascadedSensitivity stages minGainDbTenths maxNfMilli = true) :
+    minGainDbTenths ≤ evalCascadedGainDbTenths stages ∧
+    evalCascadedFriisMilliNf stages ≤ maxNfMilli ∧
+    (∀ st ∈ stages, 0 < st.linearGain ∧ 1000 ≤ st.noiseFactorMilli) := by
+  dsimp only [checkCascadedSensitivity] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  rw [decide_eq_true_eq, decide_eq_true_eq, List.all_eq_true] at hOk
+  refine ⟨hOk.1.2, hOk.2, ?_⟩
+  intro st hMem
+  have hSt := hOk.1.1.2 st hMem
+  rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hSt
+  exact hSt
+
+/-- Canonical 3-stage SDR receiver front-end (`LNA +20.0 dB` $\to$ `Tayloe Mixer -6.0 dB` $\to$
+`Baseband PGA +24.0 dB`): total gain $= +38.0\,\text{dB}$ (`380` tenths dB) and Friis noise factor
+$= 1000 + 350 + 30 + 30 = 1410$ ($\approx 1.49\,\text{dB}$ NF). -/
+def golden3StageSdrRxChain : List RfStageSpec :=
+  [ { stageName := "sige_lna_20db",     gainDbTenths := 200, noiseFactorMilli := 1350, linearGain := 100 }
+  , { stageName := "tayloe_mixer_m6db", gainDbTenths := -60, noiseFactorMilli := 4000, linearGain := 1 }
+  , { stageName := "bb_pga_24db",       gainDbTenths := 240, noiseFactorMilli := 4000, linearGain := 250 } ]
+
+/-- Theorem (`golden3StageSdrRxChain_verified`):
+`golden3StageSdrRxChain` achieves $+380$ tenths dB ($+38.0\,\text{dB}$) net gain, $1410$ milli-NF,
+and passes `checkCascadedSensitivity` at `minGainDbTenths = 300`, `maxNfMilli = 1800`. -/
+theorem golden3StageSdrRxChain_verified :
+    evalCascadedGainDbTenths golden3StageSdrRxChain = 380 ∧
+    evalCascadedFriisMilliNf golden3StageSdrRxChain = 1410 ∧
+    checkCascadedSensitivity golden3StageSdrRxChain 300 1800 = true :=
+  ⟨rfl, rfl, rfl⟩
+
 end Obend.Hardware.RF

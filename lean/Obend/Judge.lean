@@ -23,7 +23,11 @@ public import Obend.Judge.Lrat
 public import Obend.Judge.Identity
 public import Obend.Judge.Certified
 public import Obend.Judge.AutomataConfinement
+public import Obend.Judge.TranscriptPolicy
 public import Obend.Analysis.Hybrid
+public import Obend.Analysis.Format
+public import Obend.Lower.Judge
+public import Obend.Hardware.Judge
 
 public section
 namespace Obend.Judge
@@ -34,8 +38,11 @@ def registry : List Format :=
   , dfaFormat
   , cfgCompactFormat
   , dclutchHoardFormat
+  , tlsnTranscriptFormat
   , Obend.Analysis.hybridFlowpipeFormat
-  ]
+  , Obend.Analysis.format
+  , Obend.Lower.format
+  ] ++ Obend.Hardware.Judge.hardwareFormats
 
 /-- Look a format up by name and version. -/
 def Format.find? (name version : String) : Option Format :=

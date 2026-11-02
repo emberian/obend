@@ -768,23 +768,43 @@ pub struct SignedSimplexVote {
     pub signature: Vec<u8>,
 }
 
+/// Alias for `SignedSimplexVote` (`Vote::signing_bytes`).
+pub type Vote = SignedSimplexVote;
+
 impl SignedSimplexVote {
-    pub fn canonical_bytes(view: u64, kind: SimplexVoteKind, block_hash: &[u8; 32]) -> Vec<u8> {
+    /// Construct canonical signing bytes binding `(voter_id, view, kind, block_hash)`
+    /// so a signed vote cannot be cloned under a different `voter_id`.
+    pub fn signing_bytes_for(
+        voter_id: usize,
+        view: u64,
+        kind: SimplexVoteKind,
+        block_hash: &[u8; 32],
+    ) -> Vec<u8> {
         let tag = match kind {
             SimplexVoteKind::Propose => 0x01u8,
             SimplexVoteKind::Vote => 0x02u8,
             SimplexVoteKind::Skip => 0x03u8,
             SimplexVoteKind::Finalize => 0x04u8,
         };
-        let mut out = Vec::with_capacity(41);
+        let mut out = Vec::with_capacity(49);
+        out.extend_from_slice(&(voter_id as u64).to_be_bytes());
         out.extend_from_slice(&view.to_be_bytes());
         out.push(tag);
         out.extend_from_slice(block_hash);
         out
     }
 
+    /// Return the signed payload for this vote (`self.voter_id` included in the signed payload).
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        Self::signing_bytes_for(self.voter_id, self.view, self.kind, &self.block_hash)
+    }
+
+    pub fn canonical_bytes(view: u64, kind: SimplexVoteKind, block_hash: &[u8; 32]) -> Vec<u8> {
+        Self::signing_bytes_for(0, view, kind, block_hash)
+    }
+
     pub fn new(kp: &ValidatorKeypair, view: u64, kind: SimplexVoteKind, block_hash: [u8; 32]) -> Self {
-        let msg = Self::canonical_bytes(view, kind, &block_hash);
+        let msg = Self::signing_bytes_for(kp.node_id, view, kind, &block_hash);
         let sig = kp.sign(&msg);
         Self {
             voter_id: kp.node_id,
@@ -802,8 +822,17 @@ impl SignedSimplexVote {
         }
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&self.signature);
-        let msg = Self::canonical_bytes(self.view, self.kind, &self.block_hash);
+        let msg = self.signing_bytes();
         ValidatorKeypair::verify(&self.public_key, &msg, &sig)
+    }
+
+    /// Verify both the vote's signature and that `self.public_key` matches the pinned
+    /// committee registry entry `committee_pks[self.voter_id]`.
+    pub fn verify_with_committee(&self, committee_pks: &[[u8; 32]]) -> bool {
+        let Some(expected_pk) = committee_pks.get(self.voter_id) else {
+            return false;
+        };
+        self.public_key == *expected_pk && self.verify_signature()
     }
 }
 
@@ -864,6 +893,10 @@ impl PropCert {
             && self.leader_vote.block_hash == expected_hash
             && self.leader_vote.verify_signature()
     }
+
+    pub fn verify_with_committee(&self, committee_pks: &[[u8; 32]]) -> bool {
+        self.verify(committee_pks.len()) && self.leader_vote.verify_with_committee(committee_pks)
+    }
 }
 
 /// Skip / View-Change Quorum Certificate (`SkipCert`): $2f + 1$ distinct `Skip` votes for `view`.
@@ -888,6 +921,15 @@ impl SkipCert {
             seen.push(v.voter_id);
         }
         seen.len() >= quorum_size
+    }
+
+    pub fn verify_with_committee(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
+        self.verify(quorum_size)
+            && self.votes.len() <= committee_pks.len()
+            && self
+                .votes
+                .iter()
+                .all(|v| v.verify_with_committee(committee_pks))
     }
 }
 
@@ -915,6 +957,15 @@ impl FinCert {
         }
         seen.len() >= quorum_size
     }
+
+    pub fn verify_with_committee(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
+        self.verify(quorum_size)
+            && self.votes.len() <= committee_pks.len()
+            && self
+                .votes
+                .iter()
+                .all(|v| v.verify_with_committee(committee_pks))
+    }
 }
 
 /// Accountable Equivocation Slashing Receipt: proves a validator signed two conflicting blocks in the same view.
@@ -938,6 +989,12 @@ impl EquivocationSlashReceipt {
             && self.vote_a.block_hash != self.vote_b.block_hash
             && self.vote_a.verify_signature()
             && self.vote_b.verify_signature()
+    }
+
+    pub fn verify_with_committee(&self, committee_pks: &[[u8; 32]]) -> bool {
+        self.verify()
+            && self.vote_a.verify_with_committee(committee_pks)
+            && self.vote_b.verify_with_committee(committee_pks)
     }
 }
 
@@ -1591,7 +1648,8 @@ impl SimplexCert {
             }
         }
         if let Some(fin) = &self.fin_cert {
-            if fin.view != self.view
+            if self.prop_cert.is_none()
+                || fin.view != self.view
                 || fin.block_hash != self.block_hash
                 || !fin.verify(quorum_size)
             {
@@ -1620,6 +1678,36 @@ impl SimplexCert {
             .verify_receipt(&self.state_digest)
             .map_err(NodeError::Ffi)?;
         Ok(ffi_receipt_ok && ffi_digest_ok)
+    }
+
+    /// Verify all embedded certificates (`prop_cert`, `skip_cert`, `fin_cert`) against the pinned `committee_pks` registry.
+    pub fn verify_with_committee(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
+        if let Some(prop) = &self.prop_cert {
+            if prop.view != self.view
+                || prop.height != self.height
+                || prop.block_hash != self.block_hash
+                || !prop.verify_with_committee(committee_pks)
+            {
+                return false;
+            }
+        }
+        if let Some(skip) = &self.skip_cert {
+            if !skip.verify_with_committee(quorum_size, committee_pks) {
+                return false;
+            }
+        }
+        if let Some(fin) = &self.fin_cert {
+            if self.prop_cert.is_none()
+                || fin.view != self.view
+                || fin.block_hash != self.block_hash
+                || !fin.verify_with_committee(quorum_size, committee_pks)
+            {
+                return false;
+            }
+        } else if self.skip_cert.is_none() {
+            return false;
+        }
+        true
     }
 }
 
@@ -1949,6 +2037,14 @@ impl SimplexState {
         2 * self.fault_tolerance + 1
     }
 
+    pub fn current_view(&self) -> u64 {
+        self.view
+    }
+
+    pub fn latest_finalized_hash(&self) -> [u8; 32] {
+        self.parent_hash
+    }
+
     pub fn vault_root(&self) -> [u8; 32] {
         let leaves: Vec<[u8; 32]> = self.vault_cells.iter().map(|c| c.leaf_hash()).collect();
         merkle_root_from_leaves(&leaves)
@@ -2180,13 +2276,62 @@ impl SimplexState {
         })
     }
 
-    /// Verify and apply an externally supplied `VerifiedNodeTransition`, rejecting any tampered FFI receipt.
+    /// Verify and apply an externally supplied `VerifiedNodeTransition`, rejecting any tampered FFI receipt
+    /// or stale transition replay (`transition.prior_view != self.current_view()` or `parent_hash != self.latest_finalized_hash()`).
     pub fn apply_verified_transition(
         &mut self,
         transition: &VerifiedNodeTransition,
         orders: &[LimitOrder],
         session: &mut ObendSession,
     ) -> Result<(), NodeError> {
+        if transition.prior_view != self.current_view() {
+            return Err(NodeError::ConsensusVerification(
+                "rejected stale or replayed VerifiedNodeTransition: prior_view mismatch".to_string(),
+            ));
+        }
+        if transition.next_view != transition.simplex_cert.view
+            || transition.height != transition.simplex_cert.height
+        {
+            return Err(NodeError::ConsensusVerification(
+                "rejected VerifiedNodeTransition with inconsistent view or height".to_string(),
+            ));
+        }
+        if transition.simplex_cert.fin_cert.is_some() {
+            let Some(prop) = &transition.simplex_cert.prop_cert else {
+                return Err(NodeError::ConsensusVerification(
+                    "rejected finalizing VerifiedNodeTransition missing PropCert lineage".to_string(),
+                ));
+            };
+            if prop.parent_hash != self.latest_finalized_hash() {
+                return Err(NodeError::ConsensusVerification(
+                    "rejected VerifiedNodeTransition with mismatched parent_hash lineage".to_string(),
+                ));
+            }
+            if transition.height != self.height + 1 {
+                return Err(NodeError::ConsensusVerification(
+                    "rejected finalizing VerifiedNodeTransition with non-sequential height".to_string(),
+                ));
+            }
+            if transition.simplex_cert.skip_cert.is_none()
+                && transition.next_view != self.current_view() + 1
+            {
+                return Err(NodeError::ConsensusVerification(
+                    "rejected non-skip VerifiedNodeTransition jumping views".to_string(),
+                ));
+            }
+        } else {
+            // SkipCert-only view-change transition: must carry SkipCert, no PropCert, and preserve height and latest_finalized_hash
+            if transition.simplex_cert.skip_cert.is_none()
+                || transition.simplex_cert.prop_cert.is_some()
+                || transition.height != self.height
+                || transition.simplex_cert.block_hash != self.latest_finalized_hash()
+            {
+                return Err(NodeError::ConsensusVerification(
+                    "rejected SkipCert-only VerifiedNodeTransition mutating finalized hash or height"
+                        .to_string(),
+                ));
+            }
+        }
         let quorum = self.quorum_size();
         let valid = transition.verify_with_session(
             self.total_parties,
@@ -3600,6 +3745,101 @@ mod tests {
             .verify_with_session(4, 3, &[], &mut session)
             .expect("verify tr2"));
     }
+
+    #[test]
+    fn test_vote_voter_id_binding_committee_verification_and_replay_protection() {
+        let validators: Vec<ValidatorKeypair> = (0..4)
+            .map(|id| ValidatorKeypair::from_seed(id, b"ws-f-committee-seed"))
+            .collect();
+        let committee_pks: Vec<[u8; 32]> = validators.iter().map(|v| v.public_key).collect();
+
+        // 1. Vote::signing_bytes binds voter_id: cloning a signed vote under a different voter_id is rejected
+        let v0 = Vote::new(&validators[0], 1, SimplexVoteKind::Finalize, [0x42; 32]);
+        assert!(v0.verify_signature());
+        assert!(v0.verify_with_committee(&committee_pks));
+
+        let mut cloned_voter_id = v0.clone();
+        cloned_voter_id.voter_id = 1;
+        assert_ne!(v0.signing_bytes(), cloned_voter_id.signing_bytes());
+        assert!(!cloned_voter_id.verify_signature());
+        assert!(!cloned_voter_id.verify_with_committee(&committee_pks));
+
+        // 2. Rogue keypair with voter_id = 0 passes self-signature check but fails verify_with_committee
+        let rogue_kp = ValidatorKeypair::from_seed(0, b"rogue-outsider-seed");
+        let rogue_vote = Vote::new(&rogue_kp, 1, SimplexVoteKind::Finalize, [0x42; 32]);
+        assert!(rogue_vote.verify_signature());
+        assert!(!rogue_vote.verify_with_committee(&committee_pks));
+
+        // 3. Stale transition replay protection in SimplexState::apply_verified_transition
+        let mut session = ObendSession::new().expect("session init");
+        let mut leader_state = SimplexState::new(4, 1, sample_genesis_cells());
+        let mut follower_state = SimplexState::new(4, 1, sample_genesis_cells());
+        let turn = VaultTurn::new([0xA1; 32], "alice", vec![1], vec![(1, b"v1".to_vec())]);
+
+        let tr1 = leader_state
+            .step_with_verified_session(&validators, None, &turn, None, &mut session)
+            .expect("step 1");
+        let tr2 = leader_state
+            .step_with_verified_session(&validators, None, &turn, None, &mut session)
+            .expect("step 2");
+
+        // Out-of-order application (tr2 before tr1) must be rejected due to prior_view / parent_hash mismatch
+        assert!(follower_state
+            .apply_verified_transition(&tr2, &[], &mut session)
+            .is_err());
+
+        // Attack: stripping prop_cert = None and forging prior_view = 0 on tr2 to bypass parent_hash check must be rejected
+        let mut stripped_prop_tr2 = tr2.clone();
+        stripped_prop_tr2.prior_view = 0;
+        stripped_prop_tr2.simplex_cert.prop_cert = None;
+        assert!(follower_state
+            .apply_verified_transition(&stripped_prop_tr2, &[], &mut session)
+            .is_err());
+
+        // SimplexCert::verify_with_committee accepts committee_pks and rejects a rogue committee
+        assert!(tr1.simplex_cert.verify_with_committee(3, &committee_pks));
+        let mut rogue_committee = committee_pks.clone();
+        rogue_committee[0] = rogue_kp.public_key;
+        assert!(!tr1.simplex_cert.verify_with_committee(3, &rogue_committee));
+
+        // Applying tr1 succeeds
+        follower_state
+            .apply_verified_transition(&tr1, &[], &mut session)
+            .expect("apply tr1");
+        assert_eq!(follower_state.current_view(), 1);
+        assert_eq!(
+            follower_state.latest_finalized_hash(),
+            tr1.simplex_cert.block_hash
+        );
+
+        // Replaying tr1 a second time must be rejected (stale prior_view == 0 != current_view == 1)
+        assert!(follower_state
+            .apply_verified_transition(&tr1, &[], &mut session)
+            .is_err());
+
+        // Attack: SkipCert-only transition attempting to overwrite latest_finalized_hash must be rejected
+        let skip_votes: Vec<SignedSimplexVote> = validators[..3]
+            .iter()
+            .map(|kp| SignedSimplexVote::new(kp, 2, SimplexVoteKind::Skip, [0u8; 32]))
+            .collect();
+        let skip_cert = SkipCert {
+            view: 2,
+            votes: skip_votes,
+        };
+        assert!(skip_cert.verify_with_committee(3, &committee_pks));
+        let mut bad_skip_tr = tr2.clone();
+        bad_skip_tr.simplex_cert.prop_cert = None;
+        bad_skip_tr.simplex_cert.fin_cert = None;
+        bad_skip_tr.simplex_cert.skip_cert = Some(skip_cert);
+        bad_skip_tr.simplex_cert.block_hash = [0x99; 32];
+        assert!(follower_state
+            .apply_verified_transition(&bad_skip_tr, &[], &mut session)
+            .is_err());
+
+        // Applying tr2 now succeeds
+        follower_state
+            .apply_verified_transition(&tr2, &[], &mut session)
+            .expect("apply tr2");
+        assert_eq!(follower_state.current_view(), 2);
+    }
 }
-
-

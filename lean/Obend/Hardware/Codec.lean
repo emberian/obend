@@ -647,36 +647,63 @@ structure BinaryTapeCert where
   words   : List UInt32
   deriving DecidableEq, Repr
 
+/-- Encode an RFC 8949 CBOR Major Type 4 32-bit array header (`0x9A` + 4-byte big-endian element count `be 4 n`). -/
+def cborEncodeArrHeader32 (n : Nat) : List UInt8 :=
+  (0x9A : UInt8) :: be 4 n
+
+/-- Decode an RFC 8949 CBOR Major Type 4 32-bit array header (`0x9A` + 4-byte big-endian element count) from a CBOR stream. -/
+def cborDecodeArrHeader32 : List UInt8 → Option (Nat × List UInt8)
+  | tag :: b3 :: b2 :: b1 :: b0 :: rest =>
+    if tag == (0x9A : UInt8) then
+      some (ofBE [b3, b2, b1, b0], rest)
+    else none
+  | _ => none
+
+@[simp] theorem cborDecodeArrHeader32_encode_append {n : Nat} (hn : n < u32Bound) (tail : List UInt8) :
+    cborDecodeArrHeader32 (cborEncodeArrHeader32 n ++ tail) = some (n, tail) := by
+  have hbe : ofBE (be 4 n) = n := ofBE_be hn
+  dsimp only [cborEncodeArrHeader32, be, List.append_assoc, List.cons_append, List.nil_append, cborDecodeArrHeader32] at hbe ⊢
+  rw [hbe]
+  rfl
+
 def BinaryTapeCert.WellFormed (c : BinaryTapeCert) : Prop :=
-  c.words.length < u32Bound
+  4 + c.words.length < u32Bound
 
-/-- Encode a `BinaryTapeCert` into a variable-length RFC 8949 CBOR tagged array. -/
+/-- Encode a `BinaryTapeCert` into a variable-length RFC 8949 CBOR tagged array:
+`0xD9 0x0B 0xED` (Tag `3053`) followed by `0x9A` + 4-byte big-endian array length `be 4 (4 + c.words.length)`. -/
 def encodeBinaryTapeCert (c : BinaryTapeCert) : List UInt8 :=
-  (0xD9 : UInt8) :: (0x0B : UInt8) :: (0xED : UInt8) :: (0x9A : UInt8) ::
-    (cborEncodeU32 c.domain.toCode ++
-      (cborEncodeU32 c.metric0.toNat ++
-        (cborEncodeU32 c.metric1.toNat ++
-          (cborEncodeU32 c.words.length ++ cborEncodeU32List c.words))))
+  (0xD9 : UInt8) :: (0x0B : UInt8) :: (0xED : UInt8) ::
+    (cborEncodeArrHeader32 (4 + c.words.length) ++
+      (cborEncodeU32 c.domain.toCode ++
+        (cborEncodeU32 c.metric0.toNat ++
+          (cborEncodeU32 c.metric1.toNat ++
+            (cborEncodeU32 c.words.length ++ cborEncodeU32List c.words)))))
 
-/-- Decode a `BinaryTapeCert` from a variable-length RFC 8949 CBOR tagged array byte stream. -/
+/-- Decode a `BinaryTapeCert` from a variable-length RFC 8949 CBOR tagged array byte stream,
+validating both the 4-byte `0x9A` CBOR array length header (`arrLen == 4 + len`) and the payload words. -/
 def decodeBinaryTapeCert (bytes : List UInt8) : Option BinaryTapeCert :=
   match bytes with
-  | b0 :: b1 :: b2 :: b3 :: rest0 =>
-    if b0 == (0xD9 : UInt8) && b1 == (0x0B : UInt8) && b2 == (0xED : UInt8) && b3 == (0x9A : UInt8) then
-      match cborDecodeU32 rest0 with
-      | some (domNat, rest1) =>
-        match HwCertDomain.fromCode domNat with
-        | some dom =>
-          match cborDecodeU32Word rest1 with
-          | some (m0, rest2) =>
-            match cborDecodeU32Word rest2 with
-            | some (m1, rest3) =>
-              match cborDecodeU32 rest3 with
-              | some (len, rest4) =>
-                match cborDecodeU32List len rest4 with
-                | some (ws, []) =>
-                  some { domain := dom, metric0 := m0, metric1 := m1, words := ws }
-                | _ => none
+  | b0 :: b1 :: b2 :: restHeader =>
+    if b0 == (0xD9 : UInt8) && b1 == (0x0B : UInt8) && b2 == (0xED : UInt8) then
+      match cborDecodeArrHeader32 restHeader with
+      | some (arrLen, rest0) =>
+        match cborDecodeU32 rest0 with
+        | some (domNat, rest1) =>
+          match HwCertDomain.fromCode domNat with
+          | some dom =>
+            match cborDecodeU32Word rest1 with
+            | some (m0, rest2) =>
+              match cborDecodeU32Word rest2 with
+              | some (m1, rest3) =>
+                match cborDecodeU32 rest3 with
+                | some (len, rest4) =>
+                  if arrLen == 4 + len then
+                    match cborDecodeU32List len rest4 with
+                    | some (ws, []) =>
+                      some { domain := dom, metric0 := m0, metric1 := m1, words := ws }
+                    | _ => none
+                  else none
+                | none => none
               | none => none
             | none => none
           | none => none
@@ -685,17 +712,21 @@ def decodeBinaryTapeCert (bytes : List UInt8) : Option BinaryTapeCert :=
     else none
   | _ => none
 
-/-- Universal round-trip theorem for variable-length `BinaryTapeCert` frames. -/
+/-- Universal round-trip theorem for variable-length `BinaryTapeCert` frames with RFC 8949 `0x9A`
+4-byte big-endian array length headers. -/
 theorem decode_encode_binaryTapeCert (c : BinaryTapeCert) (hWf : c.WellFormed) :
     decodeBinaryTapeCert (encodeBinaryTapeCert c) = some c := by
   rcases c with ⟨dom, m0, m1, ws⟩
   dsimp only [BinaryTapeCert.WellFormed] at hWf
+  have hLenLt : ws.length < u32Bound := by omega
   dsimp only [encodeBinaryTapeCert, decodeBinaryTapeCert]
+  rw [cborDecodeArrHeader32_encode_append hWf]; dsimp only
   rw [cborDecodeU32_encode_append (HwCertDomain.toCode_lt_u32Bound dom)]; dsimp only
   rw [HwCertDomain.fromCode_toCode]; dsimp only
   rw [cborDecodeU32Word_encode_append]; dsimp only
   rw [cborDecodeU32Word_encode_append]; dsimp only
-  rw [cborDecodeU32_encode_append hWf]; dsimp only
+  rw [cborDecodeU32_encode_append hLenLt]; dsimp only
+  simp only [beq_self_eq_true, ↓reduceIte]
   have hList := cborDecodeU32List_encode_append ws []
   rw [List.append_nil] at hList
   rw [hList]
@@ -724,7 +755,10 @@ def evalEvolutionCandidatePeakTemp
   40000 + totalLossW * (rCaloric + rConv + rCond)
 
 /-- Verify a variable-length `BinaryTapeCert` across multi-element 2D FEMM meshes,
-    3D F-Rep `fidget`-pruned CSG instruction tapes, and in-silico evolutionary Pareto fronts. -/
+    3D F-Rep `fidget`-pruned CSG instruction tapes, and in-silico evolutionary Pareto fronts.
+    All fixed-arity `BinaryHwCert` domains (`.pnr`, `.retiming`, `.photonics`, `.pcb`, `.dpr`,
+    `.edaBomSwap`, `.analog2d`, `.dspBeamformer`) are strictly refused (`false`) when submitted
+    as a `BinaryTapeCert` so they cannot bypass fixed-arity `verifyBinaryHwCert` checks. -/
 def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
   !c.words.isEmpty &&
   decide (c.metric0.toNat > 0) &&
@@ -749,7 +783,18 @@ def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
       decide (evalEvolutionCandidatePeakTemp tw.toNat mc.toNat fq.toNat == c.metric1.toNat)
     | _ => false
   | _ =>
-    decide (c.words.length ≥ 1)
+    false
+
+/-- **No-Bypass Theorem for Fixed-Arity Domains (`pnr_tape_cert_bypass_refused`)**:
+Any `BinaryTapeCert` claiming domain `.pnr` (or `.retiming`, `.photonics`, `.pcb`, `.dpr`,
+`.edaBomSwap`, `.analog2d`, `.dspBeamformer`) is unconditionally refused (`verifyBinaryTapeCert c = false`),
+regardless of its `metric0`, `metric1`, or `words` payload! -/
+theorem pnr_tape_cert_bypass_refused (m0 m1 : UInt32) (ws : List UInt32) :
+    verifyBinaryTapeCert { domain := .pnr, metric0 := m0, metric1 := m1, words := ws } = false ∧
+    verifyBinaryTapeCert { domain := .retiming, metric0 := m0, metric1 := m1, words := ws } = false ∧
+    verifyBinaryTapeCert { domain := .pcb, metric0 := m0, metric1 := m1, words := ws } = false ∧
+    verifyBinaryTapeCert { domain := .analog2d, metric0 := m0, metric1 := m1, words := ws } = false := by
+  simp [verifyBinaryTapeCert]
 
 def goldenBinaryFemmTapeCert : BinaryTapeCert :=
   { domain := .magnetics

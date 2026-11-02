@@ -397,4 +397,181 @@ theorem tsd_recovery_reenables_below_recover
   have hNotTrip : ¬ (spec.tTripMk ≤ tjMk) := by omega
   rw [if_neg hNotTrip, if_pos hCooled]
 
+/-! ## 6. Temperature-Dependent Copper TCR Joule Heating & Thermal Runaway vs. Equilibrium Dichotomy -/
+
+/-- Evaluates temperature-dependent copper Joule heating power (in permille-scaled units)
+with positive Temperature Coefficient of Resistance (TCR) $\alpha_{\text{permille}}$:
+$$P_{\text{Cu}}(I, T) = I^2 R_0 \left(1000 + \alpha_{\text{permille}} (T - T_0)\right).$$ -/
+def evalCopperJouleHeatingTcr
+    (iAmp r0Mohm alphaPermille tRef tCur : Int) : Int :=
+  (iAmp * iAmp * r0Mohm) * (1000 + alphaPermille * (tCur - tRef))
+
+/-- Evaluates the positive-feedback electro-thermal copper Joule heating slope
+$$\beta_{\text{Cu}} = \frac{\partial P_{\text{Cu}}}{\partial T} = I^2 R_0 \alpha_{\text{permille}}.$$ -/
+def evalCopperJouleSlope
+    (iAmp r0Mohm alphaPermille : Int) : Int :=
+  (iAmp * iAmp * r0Mohm) * alphaPermille
+
+/-- Evaluates microchannel convective heat removal rate:
+$$Q_{\text{cool}}(T) = G_{\text{th}} (T - T_{\text{coolant}}).$$ -/
+def evalConvectiveHeatRemoval (gTh tCoolant tCur : Int) : Int :=
+  gTh * (tCur - tCoolant)
+
+/-- Discrete-time coupled electro-thermal state transition map:
+$$T_{k+1} = T_k + \Delta t \left(P_{\text{Cu}}(I, T_k) + P_{\text{core}} + P_{\text{inv}} - Q_{\text{cool}}(T_k)\right).$$ -/
+def stepCoupledElectroThermalMap
+    (iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tCur : Int) : Int :=
+  tCur + dt * (evalCopperJouleHeatingTcr iAmp r0Mohm alphaPermille tRef tCur + pCore + pInv -
+               evalConvectiveHeatRemoval gTh tCoolant tCur)
+
+/-- Monotonicity of copper Joule heating with temperature under positive TCR (`0 ≤ r0Mohm`, `0 ≤ alphaPermille`). -/
+theorem copperJouleHeatingTcr_monotone_temp
+    (iAmp r0Mohm alphaPermille tRef t1 t2 : Int)
+    (hR0 : 0 ≤ r0Mohm) (hAlpha : 0 ≤ alphaPermille) (hTemp : t1 ≤ t2) :
+    evalCopperJouleHeatingTcr iAmp r0Mohm alphaPermille tRef t1 ≤
+      evalCopperJouleHeatingTcr iAmp r0Mohm alphaPermille tRef t2 := by
+  dsimp only [evalCopperJouleHeatingTcr]
+  have hIsq : 0 ≤ iAmp * iAmp := int_sq_nonneg iAmp
+  have hI2R : 0 ≤ iAmp * iAmp * r0Mohm := int_mul_nonneg (iAmp * iAmp) r0Mohm hIsq hR0
+  have hAlphaDiff : alphaPermille * (t1 - tRef) ≤ alphaPermille * (t2 - tRef) :=
+    int_mul_le_mul_of_nonneg_left (t1 - tRef) (t2 - tRef) alphaPermille (by omega) hAlpha
+  exact int_mul_le_mul_of_nonneg_left
+    (1000 + alphaPermille * (t1 - tRef))
+    (1000 + alphaPermille * (t2 - tRef))
+    (iAmp * iAmp * r0Mohm)
+    (by omega)
+    hI2R
+
+/-- **Exact Algebraic Perturbation Identity for the Coupled Electro-Thermal Map (`electroThermal_step_diff_identity`)**:
+For any two operating temperatures $T_1, T_2 \in \mathbb{Z}$ (in particular $T_2 = T^\star$ at steady state),
+the constant heat loads $P_{\text{core}}$, $P_{\text{inv}}$, $1000 I^2 R_0$, and reference temperatures
+$T_0, T_{\text{coolant}}$ cancel identically, leaving:
+$$\text{step}(T_1) - \text{step}(T_2) = (T_1 - T_2) - \Delta t \cdot \left(G_{\text{th}} - I^2 R_0 \alpha_{\text{permille}}\right) (T_1 - T_2).$$ -/
+theorem electroThermal_step_diff_identity
+    (iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 t2 : Int) :
+    stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 -
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t2 =
+    (t1 - t2) - dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) * (t1 - t2) := by
+  dsimp only [stepCoupledElectroThermalMap, evalCopperJouleHeatingTcr,
+              evalConvectiveHeatRemoval, evalCopperJouleSlope]
+  grind
+
+/-- **Thermal Runaway vs. Stable Equilibrium Dichotomy Theorem (`electroThermal_equilibrium_stability_dichotomy`)**:
+For any positive integration time step $\Delta t > 0$ and any ordered temperature pair $T_2 < T_1$
+(such as $T_1 > T^\star$ above steady-state equilibrium $T_2 = T^\star$):
+1. **Stable Equilibrium Contraction ($G_{\text{th}} > I^2 R_0 \alpha_{\text{permille}}$)**:
+   When microchannel convective thermal conductance strictly exceeds the positive-feedback copper TCR
+   Joule heating slope (`evalCopperJouleSlope iAmp r0Mohm alphaPermille < gTh`), the temperature
+   deviation strictly contracts in one step (`step(T1) - step(T2) < T1 - T2`), and if $T_2 = T^\star$ is
+   a steady-state fixed point (`step(T*) = T*`), the excess temperature above equilibrium strictly decreases
+   (`step(T1) - T* < T1 - T*`).
+2. **Thermal Runaway Divergence ($G_{\text{th}} < I^2 R_0 \alpha_{\text{permille}}$)**:
+   Conversely, when convective thermal conductance is strictly below the copper TCR Joule heating slope
+   (`gTh < evalCopperJouleSlope iAmp r0Mohm alphaPermille`), the temperature deviation grows strictly
+   monotonically (`T1 - T2 < step(T1) - step(T2)`), causing positive-feedback thermal runaway!
+3. **Neutral Boundary Invariance ($G_{\text{th}} = I^2 R_0 \alpha_{\text{permille}}$)**:
+   At the exact neutral threshold `gTh = evalCopperJouleSlope iAmp r0Mohm alphaPermille`, the
+   temperature perturbation is invariant (`step(T1) - step(T2) = T1 - T2`). -/
+theorem electroThermal_equilibrium_stability_dichotomy
+    (iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 t2 : Int)
+    (hDt : 0 < dt)
+    (hOrder : t2 < t1) :
+    (evalCopperJouleSlope iAmp r0Mohm alphaPermille < gTh →
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 -
+        stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t2 <
+      t1 - t2) ∧
+    (gTh < evalCopperJouleSlope iAmp r0Mohm alphaPermille →
+      t1 - t2 <
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 -
+        stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t2) ∧
+    (gTh = evalCopperJouleSlope iAmp r0Mohm alphaPermille →
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 -
+        stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t2 =
+      t1 - t2) := by
+  have hId := electroThermal_step_diff_identity
+    iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 t2
+  have hDiffPos : 0 < t1 - t2 := by omega
+  refine ⟨?_, ?_, ?_⟩
+  · intro hStable
+    have hMarginPos : 0 < gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille := by omega
+    have hDtMargin : 0 < dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) :=
+      Int.mul_pos hDt hMarginPos
+    have hDampPos : 0 < dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) * (t1 - t2) :=
+      Int.mul_pos hDtMargin hDiffPos
+    omega
+  · intro hRunaway
+    have hDeficitPos : 0 < evalCopperJouleSlope iAmp r0Mohm alphaPermille - gTh := by omega
+    have hDtDeficit : 0 < dt * (evalCopperJouleSlope iAmp r0Mohm alphaPermille - gTh) :=
+      Int.mul_pos hDt hDeficitPos
+    have hAmpPos : 0 < dt * (evalCopperJouleSlope iAmp r0Mohm alphaPermille - gTh) * (t1 - t2) :=
+      Int.mul_pos hDtDeficit hDiffPos
+    have hNegExpand :
+        dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) * (t1 - t2) +
+        dt * (evalCopperJouleSlope iAmp r0Mohm alphaPermille - gTh) * (t1 - t2) = 0 := by
+      grind
+    omega
+  · intro hNeutral
+    have hZeroMargin : gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille = 0 := by omega
+    rw [hZeroMargin, Int.mul_zero, Int.zero_mul] at hId
+    omega
+
+/-- **Uniqueness of Steady-State Operating Temperature $T^\star$ & Fixed-Point Excess Contraction
+(`electroThermal_steady_state_unique_and_contraction`)**:
+For any positive time step $\Delta t > 0$:
+1. Whenever $G_{\text{th}} \ne I^2 R_0 \alpha_{\text{permille}}$ (in particular whenever
+   $G_{\text{th}} > I^2 R_0 \alpha_{\text{permille}}$), the steady-state equilibrium temperature
+   $T^\star$ satisfying $\text{step}(T^\star) = T^\star$ is **unique** ($T_1^\star = T_2^\star$).
+2. At any steady-state equilibrium $T^\star$ ($\text{step}(T^\star) = T^\star$) and perturbed
+   temperature $T > T^\star$, excess temperature $T - T^\star$ strictly contracts toward $T^\star$
+   when $G_{\text{th}} > I^2 R_0 \alpha_{\text{permille}}$ and strictly diverges (thermal runaway)
+   when $G_{\text{th}} < I^2 R_0 \alpha_{\text{permille}}$. -/
+theorem electroThermal_steady_state_unique_and_contraction
+    (iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tStar1 tStar2 tCur : Int)
+    (hDt : 0 < dt)
+    (hFix1 : stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tStar1 = tStar1) :
+    (evalCopperJouleSlope iAmp r0Mohm alphaPermille ≠ gTh →
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tStar2 = tStar2 →
+      tStar1 = tStar2) ∧
+    (tStar1 < tCur →
+      evalCopperJouleSlope iAmp r0Mohm alphaPermille < gTh →
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tCur - tStar1 <
+        tCur - tStar1) ∧
+    (tStar1 < tCur →
+      gTh < evalCopperJouleSlope iAmp r0Mohm alphaPermille →
+      tCur - tStar1 <
+        stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tCur - tStar1) := by
+  refine ⟨?_, ?_, ?_⟩
+  · intro hNe hFix2
+    have hTri : tStar1 = tStar2 ∨ tStar2 < tStar1 ∨ tStar1 < tStar2 := by omega
+    rcases hTri with hEq | hGt | hLt
+    · exact hEq
+    · have hDich := electroThermal_equilibrium_stability_dichotomy
+        iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tStar1 tStar2 hDt hGt
+      rw [hFix1, hFix2] at hDich
+      have hSlopeOrder : evalCopperJouleSlope iAmp r0Mohm alphaPermille < gTh ∨
+                         gTh < evalCopperJouleSlope iAmp r0Mohm alphaPermille := by omega
+      rcases hSlopeOrder with hS | hR
+      · have h1 := hDich.1 hS; omega
+      · have h2 := hDich.2.1 hR; omega
+    · have hDich := electroThermal_equilibrium_stability_dichotomy
+        iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tStar2 tStar1 hDt hLt
+      rw [hFix1, hFix2] at hDich
+      have hSlopeOrder : evalCopperJouleSlope iAmp r0Mohm alphaPermille < gTh ∨
+                         gTh < evalCopperJouleSlope iAmp r0Mohm alphaPermille := by omega
+      rcases hSlopeOrder with hS | hR
+      · have h1 := hDich.1 hS; omega
+      · have h2 := hDich.2.1 hR; omega
+  · intro hOrder hStable
+    have hDich := (electroThermal_equilibrium_stability_dichotomy
+      iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tCur tStar1 hDt hOrder).1 hStable
+    rw [hFix1] at hDich
+    exact hDich
+  · intro hOrder hRunaway
+    have hDich := (electroThermal_equilibrium_stability_dichotomy
+      iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt tCur tStar1 hDt hOrder).2.1 hRunaway
+    rw [hFix1] at hDich
+    exact hDich
+
 end Obend.Hardware.Thermal
+
+

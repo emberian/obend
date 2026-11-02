@@ -200,6 +200,297 @@ end Teeth
 #tooth post_correct by mutation Index.post := fun I _ _ => I
 #tooth usable_unmoved by mutation citeFacts := fun _ => [.present 2]
 
+/-! ## Transitive `#^block` Citation Impact Closure (`impactedBacklinksFuel`) -/
+
+/-- Direct downstream cells in `deps` (where each entry `(citingCell, citedBlock)` records that
+`citingCell` carries a `#^citedBlock` citation to `citedBlock`) that directly depend on `k`. -/
+@[expose] def directCiteDependents (deps : List (String × String)) (k : String) : List String :=
+  deps.filterMap fun e => if e.2 == k then some e.1 else none
+
+theorem mem_directCiteDependents {deps : List (String × String)} {k c : String} :
+    c ∈ directCiteDependents deps k ↔ (c, k) ∈ deps := by
+  simp only [directCiteDependents, List.mem_filterMap]
+  constructor
+  · rintro ⟨⟨src, dst⟩, hMem, hIf⟩
+    by_cases hEq : dst = k
+    · subst hEq
+      simp at hIf
+      subst hIf
+      exact hMem
+    · have hFalse : (dst == k) = false := beq_eq_false_iff_ne.2 hEq
+      simp [hFalse] at hIf
+  · intro hMem
+    exact ⟨(c, k), hMem, by simp⟩
+
+/-- Deduplicate a list of cell/block keys, preserving the first occurrence of each key. -/
+@[expose] def dedupCellKeys : List String → List String
+  | [] => []
+  | c :: rest => c :: (dedupCellKeys rest).filter (· != c)
+
+theorem nodup_filter_bool {α : Type} (p : α → Bool) {l : List α} (h : l.Nodup) :
+    (l.filter p).Nodup := by
+  induction l with
+  | nil => simp
+  | cons x xs ih =>
+    obtain ⟨hx, hxs⟩ := List.nodup_cons.1 h
+    by_cases hp : p x = true
+    · rw [List.filter_cons_of_pos hp, List.nodup_cons]
+      refine ⟨fun hMem => hx (List.mem_filter.1 hMem).1, ih hxs⟩
+    · have hpf : p x = false := Bool.eq_false_iff.2 hp
+      rw [List.filter_cons_of_neg (by simp [hpf])]
+      exact ih hxs
+
+theorem nodup_append_of_disjoint {α : Type} {l₁ l₂ : List α}
+    (h₁ : l₁.Nodup) (h₂ : l₂.Nodup) (hDisj : ∀ x ∈ l₁, x ∉ l₂) :
+    (l₁ ++ l₂).Nodup := by
+  induction l₁ with
+  | nil => exact h₂
+  | cons x xs ih =>
+    obtain ⟨hx, hxs⟩ := List.nodup_cons.1 h₁
+    rw [List.cons_append, List.nodup_cons]
+    refine ⟨?_, ih hxs (fun y hy => hDisj y (List.mem_cons_of_mem x hy))⟩
+    rw [List.mem_append]
+    rintro (hInXs | hInL2)
+    · exact hx hInXs
+    · exact hDisj x List.mem_cons_self hInL2
+
+@[simp] theorem mem_dedupCellKeys {l : List String} {x : String} :
+    x ∈ dedupCellKeys l ↔ x ∈ l := by
+  induction l with
+  | nil => simp [dedupCellKeys]
+  | cons c rest ih =>
+    simp only [dedupCellKeys, List.mem_cons, List.mem_filter, ih, bne_iff_ne]
+    constructor
+    · rintro (rfl | ⟨hIn, _⟩)
+      · exact .inl rfl
+      · exact .inr hIn
+    · rintro (rfl | hIn)
+      · exact .inl rfl
+      · by_cases hEq : x = c
+        · exact .inl hEq
+        · exact .inr ⟨hIn, hEq⟩
+
+theorem nodup_dedupCellKeys (l : List String) : (dedupCellKeys l).Nodup := by
+  induction l with
+  | nil => simp [dedupCellKeys]
+  | cons c rest ih =>
+    simp only [dedupCellKeys, List.nodup_cons, List.mem_filter, bne_iff_ne]
+    refine ⟨fun ⟨_, hNe⟩ => hNe rfl, nodup_filter_bool _ ih⟩
+
+/-- One step of transitive `#^block` citation impact expansion: preserves `visited` and appends
+all newly discovered downstream cells (deduplicated) that directly cite any cell in `visited`. -/
+@[expose] def impactStep (deps : List (String × String)) (visited : List String) : List String :=
+  let nextHop := dedupCellKeys (visited.flatMap (directCiteDependents deps))
+  visited ++ (nextHop.filter fun c => !visited.contains c)
+
+/-- `impactStep` preserves `List.Nodup` (no duplicate cells are emitted even on diamond graphs). -/
+theorem nodup_impactStep (deps : List (String × String)) {visited : List String}
+    (hVis : visited.Nodup) :
+    (impactStep deps visited).Nodup := by
+  apply nodup_append_of_disjoint hVis
+  · exact nodup_filter_bool _ (nodup_dedupCellKeys _)
+  · intro x hx hInFilter
+    simp only [List.mem_filter] at hInFilter
+    have hContains : visited.contains x = true := List.contains_iff_mem.2 hx
+    rw [hContains] at hInFilter
+    cases hInFilter.2
+
+/-- `impactStep` is inflationary (every already-impacted cell remains in `impactStep deps visited`). -/
+theorem subset_impactStep (deps : List (String × String)) (visited : List String) :
+    ∀ x ∈ visited, x ∈ impactStep deps visited := by
+  intro x hx
+  simp [impactStep, hx]
+
+/-- Every cell directly citing an element of `visited` belongs to `impactStep deps visited`. -/
+theorem step_contains_directCiteDependent
+    {deps : List (String × String)} {visited : List String} {citingCell citedBlock : String}
+    (hEdge : (citingCell, citedBlock) ∈ deps)
+    (hCited : citedBlock ∈ visited) :
+    citingCell ∈ impactStep deps visited := by
+  simp only [impactStep, List.mem_append, List.mem_filter, mem_dedupCellKeys, List.mem_flatMap]
+  by_cases hIn : citingCell ∈ visited
+  · exact .inl hIn
+  · have hNotContains : (!visited.contains citingCell) = true := by
+      cases hc : visited.contains citingCell
+      · rfl
+      · exfalso; exact hIn (List.contains_iff_mem.1 hc)
+    exact .inr ⟨⟨citedBlock, hCited, mem_directCiteDependents.2 hEdge⟩, hNotContains⟩
+
+/-- Iterate `impactStep` for `fuel` rounds starting from `visited`. -/
+@[expose] def impactedClosureFuel
+    (fuel : Nat) (deps : List (String × String)) (visited : List String) : List String :=
+  match fuel with
+  | 0 => visited
+  | n + 1 => impactedClosureFuel n deps (impactStep deps visited)
+
+/-- **Transitive Citation Impact Closure (`impactedBacklinksFuel`)**:
+computes all downstream cells whose `#^block` citations transitively depend on a modified cell key `k`
+within `fuel` rounds. -/
+@[expose] def impactedBacklinksFuel
+    (fuel : Nat) (deps : List (String × String)) (k : String) : List String :=
+  impactedClosureFuel fuel deps [k]
+
+theorem nodup_impactedClosureFuel
+    (fuel : Nat) (deps : List (String × String)) {visited : List String}
+    (hVis : visited.Nodup) :
+    (impactedClosureFuel fuel deps visited).Nodup := by
+  induction fuel generalizing visited with
+  | zero => exact hVis
+  | succ n ih =>
+    exact ih (nodup_impactStep deps hVis)
+
+/-- `impactedBacklinksFuel` never emits duplicate cell keys, regardless of cycles or diamond paths. -/
+theorem impactedBacklinksFuel_nodup
+    (fuel : Nat) (deps : List (String × String)) (k : String) :
+    (impactedBacklinksFuel fuel deps k).Nodup :=
+  nodup_impactedClosureFuel fuel deps (by simp)
+
+/-- Right-step unfolding of `impactedClosureFuel`. -/
+theorem impactedClosureFuel_succ_right
+    (n : Nat) (deps : List (String × String)) (visited : List String) :
+    impactedClosureFuel (n + 1) deps visited =
+      impactStep deps (impactedClosureFuel n deps visited) := by
+  induction n generalizing visited with
+  | zero => rfl
+  | succ m ih =>
+    simp only [impactedClosureFuel]
+    exact ih (impactStep deps visited)
+
+/-- Every element in `visited` is retained by `impactedClosureFuel fuel deps visited`. -/
+theorem subset_impactedClosureFuel
+    (fuel : Nat) (deps : List (String × String)) (visited : List String) :
+    ∀ x ∈ visited, x ∈ impactedClosureFuel fuel deps visited := by
+  induction fuel generalizing visited with
+  | zero => intro x hx; exact hx
+  | succ n ih =>
+    intro x hx
+    exact ih (impactStep deps visited) x (subset_impactStep deps visited x hx)
+
+/-- The modified root cell key `k` is always included in `impactedBacklinksFuel fuel deps k`. -/
+theorem self_mem_impactedBacklinksFuel
+    (fuel : Nat) (deps : List (String × String)) (k : String) :
+    k ∈ impactedBacklinksFuel fuel deps k :=
+  subset_impactedClosureFuel fuel deps [k] k (by simp)
+
+/-- One additional unit of fuel monotonically grows `impactedBacklinksFuel`. -/
+theorem impactedBacklinksFuel_step_subset
+    (n : Nat) (deps : List (String × String)) (k : String) :
+    ∀ x ∈ impactedBacklinksFuel n deps k, x ∈ impactedBacklinksFuel (n + 1) deps k := by
+  intro x hx
+  dsimp only [impactedBacklinksFuel] at hx ⊢
+  rw [impactedClosureFuel_succ_right]
+  exact subset_impactStep deps (impactedClosureFuel n deps [k]) x hx
+
+/-- **Monotonicity of `impactedBacklinksFuel` (`impactedBacklinksFuel_mono`)**:
+If `m ≤ n`, every cell in `impactedBacklinksFuel m deps k` is also in `impactedBacklinksFuel n deps k`. -/
+theorem impactedBacklinksFuel_mono
+    {m n : Nat} (hLe : m ≤ n) (deps : List (String × String)) (k : String) :
+    ∀ x ∈ impactedBacklinksFuel m deps k, x ∈ impactedBacklinksFuel n deps k := by
+  induction hLe with
+  | refl => intro x hx; exact hx
+  | @step b h ih =>
+    intro x hx
+    exact impactedBacklinksFuel_step_subset b deps k x (ih x hx)
+
+/-- Inductive transitive `#^block` citation reachability from modified cell key `rootKey`. -/
+inductive CiteReachable (deps : List (String × String)) (rootKey : String) : String → Prop
+  | refl : CiteReachable deps rootKey rootKey
+  | step {mid citing : String} :
+      CiteReachable deps rootKey mid → (citing, mid) ∈ deps → CiteReachable deps rootKey citing
+
+theorem impactStep_reachable_sound
+    {deps : List (String × String)} {rootKey : String} {visited : List String}
+    (hVis : ∀ x ∈ visited, CiteReachable deps rootKey x) :
+    ∀ y ∈ impactStep deps visited, CiteReachable deps rootKey y := by
+  intro y hy
+  simp only [impactStep, List.mem_append, List.mem_filter, mem_dedupCellKeys,
+    List.mem_flatMap, mem_directCiteDependents] at hy
+  rcases hy with hInVis | ⟨⟨mid, hMid, hEdge⟩, _⟩
+  · exact hVis y hInVis
+  · exact .step (hVis mid hMid) hEdge
+
+theorem impactedClosureFuel_reachable_sound
+    (fuel : Nat) {deps : List (String × String)} {rootKey : String} {visited : List String}
+    (hVis : ∀ x ∈ visited, CiteReachable deps rootKey x) :
+    ∀ y ∈ impactedClosureFuel fuel deps visited, CiteReachable deps rootKey y := by
+  induction fuel generalizing visited with
+  | zero => exact hVis
+  | succ n ih =>
+    exact ih (impactStep_reachable_sound hVis)
+
+/-- Every cell reported in `impactedBacklinksFuel fuel deps k` genuinely transitively cites `k`. -/
+theorem impactedBacklinksFuel_reachable_sound
+    (fuel : Nat) (deps : List (String × String)) (k : String) :
+    ∀ x ∈ impactedBacklinksFuel fuel deps k, CiteReachable deps k x := by
+  apply impactedClosureFuel_reachable_sound fuel
+  intro x hx
+  simp only [List.mem_singleton] at hx
+  subst hx
+  exact .refl
+
+/-- Once `impactStep deps S = S` is a fixed point, further fuel iterations leave `S` unchanged. -/
+theorem impactedClosureFuel_of_fixedPoint
+    (d : Nat) {deps : List (String × String)} {S : List String}
+    (hFix : impactStep deps S = S) :
+    impactedClosureFuel d deps S = S := by
+  induction d with
+  | zero => rfl
+  | succ n ih =>
+    rw [impactedClosureFuel_succ_right, ih, hFix]
+
+/-- **Fixed-Point Soundness of `impactedBacklinksFuel` (`impactedBacklinksFuel_fixedPoint_sound`)**:
+When `impactedBacklinksFuel fuel deps k` reaches a fixed point (`impactStep deps S = S`, i.e.,
+`impactedBacklinksFuel (fuel + 1) deps k = impactedBacklinksFuel fuel deps k`), the set
+`S := impactedBacklinksFuel fuel deps k`:
+1. Contains the modified root key `k` (`k ∈ S`),
+2. Is closed under all `#^block` citation edges (`∀ citingCell citedBlock, (citingCell, citedBlock) ∈ deps → citedBlock ∈ S → citingCell ∈ S`), and
+3. Remains invariant under any additional fuel `d` (`impactedBacklinksFuel (fuel + d) deps k = S`). -/
+theorem impactedBacklinksFuel_fixedPoint_sound
+    (fuel : Nat) (deps : List (String × String)) (k : String)
+    (hFix : impactedBacklinksFuel (fuel + 1) deps k = impactedBacklinksFuel fuel deps k) :
+    let S := impactedBacklinksFuel fuel deps k
+    k ∈ S ∧
+    (∀ citingCell citedBlock, (citingCell, citedBlock) ∈ deps → citedBlock ∈ S → citingCell ∈ S) ∧
+    (∀ d, impactedBacklinksFuel (fuel + d) deps k = S) := by
+  dsimp only
+  have hStepEq : impactStep deps (impactedBacklinksFuel fuel deps k) = impactedBacklinksFuel fuel deps k := by
+    have h1 := impactedClosureFuel_succ_right fuel deps [k]
+    dsimp only [impactedBacklinksFuel] at hFix ⊢
+    rw [← h1, hFix]
+  refine ⟨self_mem_impactedBacklinksFuel fuel deps k, ?_, ?_⟩
+  · intro citingCell citedBlock hEdge hCited
+    have hInStep := step_contains_directCiteDependent hEdge hCited
+    rwa [hStepEq] at hInStep
+  · intro d
+    induction d with
+    | zero => rfl
+    | succ d ih =>
+      have hAdd : fuel + (d + 1) = (fuel + d) + 1 := by omega
+      dsimp only [impactedBacklinksFuel] at ih ⊢
+      rw [hAdd, impactedClosureFuel_succ_right, ih]
+      exact hStepEq
+
+/-- **Fixed-Point Soundness & Completeness Equivalence (`impactedBacklinksFuel_fixedPoint_iff_reachable`)**:
+At a fixed point (`impactedBacklinksFuel (fuel + 1) deps k = impactedBacklinksFuel fuel deps k`),
+a cell `x` is in `impactedBacklinksFuel fuel deps k` if and only if `CiteReachable deps k x`. -/
+theorem impactedBacklinksFuel_fixedPoint_iff_reachable
+    (fuel : Nat) (deps : List (String × String)) (k : String)
+    (hFix : impactedBacklinksFuel (fuel + 1) deps k = impactedBacklinksFuel fuel deps k)
+    (x : String) :
+    x ∈ impactedBacklinksFuel fuel deps k ↔ CiteReachable deps k x := by
+  obtain ⟨hRoot, hClosed, _⟩ := impactedBacklinksFuel_fixedPoint_sound fuel deps k hFix
+  constructor
+  · exact impactedBacklinksFuel_reachable_sound fuel deps k x
+  · intro hReach
+    induction hReach with
+    | refl => exact hRoot
+    | step _ hEdge ih => exact hClosed _ _ hEdge ih
+
+#tooth impactedBacklinksFuel_mono by mutation impactedBacklinksFuel := fun fuel _ k =>
+  if fuel == 0 then [k] else []
+#tooth impactedBacklinksFuel_fixedPoint_sound by mutation impactStep := fun _ _ => []
+
 end Obend.Doc
 
 end
+

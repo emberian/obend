@@ -20,6 +20,7 @@ public import Obend.Vault.Hyperedge
 public import Obend.Fold
 public import Obend.Core.Digest
 public import Obend.Digest.HashBytes
+public import Obend.Equiv.Improvement
 
 @[expose] public section
 
@@ -245,5 +246,174 @@ def consensusAdmission (_schema : List String) (_val : StoreValuation) :
   observe_ok := by
     intro w w' l ha
     rfl
+
+/-! ## 8. Connecting Static Record/Extension Collapse to Sands Improvement (`collapse_reduces_ticks`) -/
+
+open Obend.Core.Term (Term extendFields)
+open Obend.Equiv (CValue Settled Run CV EvalImproves StrictEvalImproves cv_of_value)
+
+/-- Fold a tower of static record extension layers over a base field list. -/
+def foldExtendTower (base : List (String × Term)) (layers : List (List (String × Term))) :
+    List (String × Term) :=
+  layers.foldl extendFields base
+
+theorem foldExtendTower_append (base : List (String × Term))
+    (l₁ l₂ : List (List (String × Term))) :
+    foldExtendTower base (l₁ ++ l₂) = foldExtendTower (foldExtendTower base l₁) l₂ := by
+  simp [foldExtendTower, List.foldl_append]
+
+/-- Construct the uncollapsed syntax tree `.extend (... (.extend (.record base) l₁) ...) lₙ`
+for a tower of static extension layers. -/
+def termExtendTower (base : List (String × Term)) (layers : List (List (String × Term))) : Term :=
+  layers.foldl (fun acc fs => .extend acc fs) (.record base)
+
+/-- Recursively extract and collapse a static `.record` / `.extend` tower of arbitrary depth. -/
+def collapseExtendTerm : Term → Option (List (String × Term))
+  | .record fs => some fs
+  | .extend i fs =>
+    match collapseExtendTerm i with
+    | some inh => some (extendFields inh fs)
+    | none => none
+  | _ => none
+
+theorem collapseExtendTerm_foldl (layers : List (List (String × Term))) :
+    ∀ (t : Term) (base : List (String × Term)),
+      collapseExtendTerm t = some base →
+      collapseExtendTerm (layers.foldl (fun acc fs => .extend acc fs) t) =
+        some (foldExtendTower base layers) := by
+  induction layers with
+  | nil =>
+    intro t base h
+    simpa [foldExtendTower] using h
+  | cons fs rest ih =>
+    intro t base h
+    simp only [List.foldl_cons, foldExtendTower]
+    refine ih (.extend t fs) (extendFields base fs) ?_
+    simp [collapseExtendTerm, h]
+
+/-- `collapseExtendTerm` collapses any `termExtendTower base layers` to `some (foldExtendTower base layers)`. -/
+theorem collapseExtendTerm_termExtendTower (base : List (String × Term))
+    (layers : List (List (String × Term))) :
+    collapseExtendTerm (termExtendTower base layers) = some (foldExtendTower base layers) :=
+  collapseExtendTerm_foldl layers (.record base) base rfl
+
+/-- Statically collapse a known record or multi-layer extension projection by resolving
+the target field directly when present. -/
+def collapseProjection : Term → Term
+  | .get g name =>
+    match collapseExtendTerm g with
+    | some fs =>
+      match fs.find? (fun f => f.1 == name) with
+      | some (_, x) => x
+      | none => .get (.record fs) name
+    | none => .get g name
+  | .extend i fs =>
+    match collapseExtendTerm (.extend i fs) with
+    | some merged => .record merged
+    | none => .extend i fs
+  | t => t
+
+theorem collapseProjection_record_eq {fs : List (String × Term)} {name : String} {x : Term}
+    (hfind : fs.find? (fun f => f.1 == name) = some (name, x)) :
+    collapseProjection (.get (.record fs) name) = x := by
+  simp [collapseProjection, collapseExtendTerm, hfind]
+
+theorem collapseProjection_extend_eq {inh fs : List (String × Term)} {name : String} {x : Term}
+    (hfind : (extendFields inh fs).find? (fun f => f.1 == name) = some (name, x)) :
+    collapseProjection (.get (.extend (.record inh) fs) name) = x := by
+  simp [collapseProjection, collapseExtendTerm, hfind]
+
+theorem collapseProjection_tower_eq {base : List (String × Term)}
+    {layers : List (List (String × Term))} {name : String} {x : Term}
+    (hfind : (foldExtendTower base layers).find? (fun f => f.1 == name) = some (name, x)) :
+    collapseProjection (.get (termExtendTower base layers) name) = x := by
+  simp [collapseProjection, collapseExtendTerm_termExtendTower, hfind]
+
+/-- Projecting a field from a settled record value costs 1 extra tick compared to evaluating
+the resolved field directly. -/
+theorem cv_get_record_step {fs : List (String × Term)} {name : String} {x v : Term} {k : Nat}
+    (hrec : CValue (.record fs))
+    (hfind : fs.find? (fun f => f.1 == name) = some (name, x))
+    (hx : CV x v k) :
+    CV (.get (.record fs) name) v (k + 1) := by
+  have hget := Run.get (r := .eval) (Run.value hrec) hfind hx
+  simpa using hget
+
+/-- Inversion of `CV (.get (.record fs) name) v k` for a settled record `CValue (.record fs)`:
+every derivation has positive cost `0 < k` and comes from a derivation `CV x v (k - 1)` of
+the statically resolved field `x`. -/
+theorem cv_get_record_inv {fs : List (String × Term)} {name : String} {x v : Term} {k : Nat}
+    (hrec : CValue (.record fs))
+    (hfind : fs.find? (fun f => f.1 == name) = some (name, x))
+    (h : CV (.get (.record fs) name) v k) :
+    0 < k ∧ CV x v (k - 1) := by
+  cases h with
+  | value h0 => cases h0
+  | get h1 hit h2 =>
+    obtain ⟨heq, rfl⟩ := cv_of_value hrec h1
+    injection heq with hfs
+    subst hfs
+    rw [hfind] at hit
+    injection hit with hpair
+    injection hpair with _ hx_eq
+    subst hx_eq
+    exact ⟨by omega, by simpa using h2⟩
+
+/-- **`collapse_reduces_ticks`**: Collapsing a statically known record projection
+`.get (.record fs) name` to `collapseProjection (.get (.record fs) name)` strictly reduces
+evaluation tick cost by 1 (`k` vs `k + 1`), establishing both `StrictEvalImproves 1` and
+Sands' `EvalImproves`. -/
+theorem collapse_reduces_ticks {fs : List (String × Term)} {name : String} {x v : Term} {k : Nat}
+    (hrec : CValue (.record fs))
+    (hfind : fs.find? (fun f => f.1 == name) = some (name, x))
+    (hx : CV x v k) :
+    collapseProjection (.get (.record fs) name) = x ∧
+      CV (collapseProjection (.get (.record fs) name)) v k ∧
+      CV (.get (.record fs) name) v (k + 1) ∧
+      k < k + 1 ∧
+      StrictEvalImproves 1 (.get (.record fs) name) (collapseProjection (.get (.record fs) name)) ∧
+      EvalImproves (.get (.record fs) name) (collapseProjection (.get (.record fs) name)) := by
+  have hcol := collapseProjection_record_eq hfind
+  refine ⟨hcol, ?_, cv_get_record_step hrec hfind hx, Nat.lt_succ_self k, ?_, ?_⟩
+  · rwa [hcol]
+  · intro w j hw
+    rw [hcol] at hw
+    exact cv_get_record_step hrec hfind hw
+  · intro w j hw
+    rw [hcol]
+    obtain ⟨hpos, hbody⟩ := cv_get_record_inv hrec hfind hw
+    exact ⟨j - 1, hbody, by omega⟩
+
+theorem run_fields_settled : ∀ (fs : List (String × Term)),
+    (∀ f ∈ fs, Settled f.2) → Run .fields (.record fs) (.record fs) fs.length
+  | [], _ => .nil
+  | (n, t) :: rest, h => by
+    have ht : Settled t := h (n, t) List.mem_cons_self
+    have hrest := run_fields_settled rest (fun f hf => h f (List.mem_cons_of_mem _ hf))
+    have hcons := Run.cons (n := n) (Run.keep ht) hrest
+    simpa using hcons
+
+/-- Collapsing a statically known extension projection `.get (.extend (.record inh) fs) name`
+saves `fs.length + 2` ticks compared to evaluating the extension and field lookup at runtime. -/
+theorem collapse_extend_reduces_ticks {inh fs : List (String × Term)} {name : String}
+    {x v : Term} {k : Nat}
+    (hinh : CValue (.record inh))
+    (hfs : ∀ f ∈ fs, Settled f.2)
+    (hfind : (extendFields inh fs).find? (fun f => f.1 == name) = some (name, x))
+    (hx : CV x v k) :
+    collapseProjection (.get (.extend (.record inh) fs) name) = x ∧
+      CV (collapseProjection (.get (.extend (.record inh) fs) name)) v k ∧
+      CV (.get (.extend (.record inh) fs) name) v (fs.length + k + 2) ∧
+      k < fs.length + k + 2 := by
+  have hcol := collapseProjection_extend_eq hfind
+  have hext : CV (.extend (.record inh) fs) (.record (extendFields inh fs)) (fs.length + 1) := by
+    have := Run.extend (Run.value hinh) (run_fields_settled fs hfs)
+    simpa using this
+  have hget : CV (.get (.extend (.record inh) fs) name) v (fs.length + k + 2) := by
+    have := Run.get (r := .eval) hext hfind hx
+    have heq : (fs.length + 1) + k + 1 = fs.length + k + 2 := by omega
+    rwa [heq] at this
+  refine ⟨hcol, ?_, hget, by omega⟩
+  rwa [hcol]
 
 end Obend.Fold.Collapse

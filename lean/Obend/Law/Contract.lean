@@ -409,5 +409,488 @@ def cellContractOfProofs (law inv stepRel : Term)
   inductive_preserves := h_pres
   step_sound := h_step
 
+/-! ## Goal-Bound `ContractCert` Verification & Soundness Bridge (`WS-F`) -/
+
+mutual
+theorem treeEq_sound_local : ∀ {a b : Obend.Core.Traverse.Tree Obend.Core.TermTraverse.Tag},
+    treeEq a b = true → a = b
+  | .var i, .var j, h => by simp [treeEq] at h; subst h; rfl
+  | .bind a, .bind b, h => by simp only [treeEq] at h; rw [treeEq_sound_local h]
+  | .node t cs, .node u ds, h => by
+      simp only [treeEq, Bool.and_eq_true, decide_eq_true_eq] at h
+      rw [h.1, treesEq_sound_local h.2]
+  | .var _, .bind _, h | .var _, .node _ _, h | .bind _, .var _, h | .bind _, .node _ _, h
+  | .node _ _, .var _, h | .node _ _, .bind _, h => by simp [treeEq] at h
+theorem treesEq_sound_local : ∀ {as bs : List (Obend.Core.Traverse.Tree Obend.Core.TermTraverse.Tag)},
+    treesEq as bs = true → as = bs
+  | [], [], _ => rfl
+  | a :: as, b :: bs, h => by
+      simp only [treesEq, Bool.and_eq_true] at h
+      rw [treeEq_sound_local h.1, treesEq_sound_local h.2]
+  | [], _ :: _, h | _ :: _, [], h => by simp [treesEq] at h
+end
+
+mutual
+theorem treeEq_refl_local : ∀ (a : Obend.Core.Traverse.Tree Obend.Core.TermTraverse.Tag), treeEq a a = true
+  | .var i => by simp [treeEq]
+  | .bind a => by simp only [treeEq]; exact treeEq_refl_local a
+  | .node t cs => by simp only [treeEq, decide_true, Bool.true_and]; exact treesEq_refl_local cs
+theorem treesEq_refl_local : ∀ (as : List (Obend.Core.Traverse.Tree Obend.Core.TermTraverse.Tag)),
+    treesEq as as = true
+  | [] => rfl
+  | a :: as => by simp only [treesEq, Bool.and_eq_true]; exact ⟨treeEq_refl_local a, treesEq_refl_local as⟩
+end
+
+theorem termEq_sound_local {a b : Term} (h : termEq a b = true) : a = b :=
+  Obend.Core.TermTraverse.encode_injective (treeEq_sound_local h)
+
+@[simp] theorem termEq_refl_local (a : Term) : termEq a a = true :=
+  treeEq_refl_local _
+
+/-- Canonical kind tag of a `ContractGoal`. -/
+def ContractGoal.kind : ContractGoal → String
+  | .preserves _ _ => "preserves"
+  | .stepSound _ _ _ => "stepSound"
+  | .narrows _ _ => "narrows"
+
+/-- Authoritative `law` operand of a `ContractGoal`. -/
+def ContractGoal.law : ContractGoal → Term
+  | .preserves l _ => l
+  | .stepSound l _ _ => l
+  | .narrows l2 _ => l2
+
+/-- Authoritative `invariant` (or parent law for `narrows`) operand of a `ContractGoal`. -/
+def ContractGoal.invariant : ContractGoal → Term
+  | .preserves _ i => i
+  | .stepSound _ i _ => i
+  | .narrows _ l1 => l1
+
+/-- Authoritative `step` operand of a `ContractGoal` (equals `invariant` when no separate `stepRel` is present). -/
+def ContractGoal.step : ContractGoal → Term
+  | .preserves _ i => i
+  | .stepSound _ _ s => s
+  | .narrows _ l1 => l1
+
+/-- Syntactic equality of two `ContractGoal` values via `(kind, law, invariant, step)`. -/
+def goalEq (a b : ContractGoal) : Bool :=
+  (a.kind == b.kind) &&
+  termEq a.law b.law &&
+  termEq a.invariant b.invariant &&
+  termEq a.step b.step
+
+instance : BEq ContractGoal where
+  beq := goalEq
+
+@[simp] theorem goalEq_refl (g : ContractGoal) : goalEq g g = true := by
+  simp [goalEq]
+
+theorem goalEq_sound {a b : ContractGoal} (h : goalEq a b = true) : a = b := by
+  unfold goalEq at h
+  simp only [Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨⟨⟨hk, hl⟩, hi⟩, hs⟩ := h
+  have hlaw := termEq_sound_local hl
+  have hinv := termEq_sound_local hi
+  have hstep := termEq_sound_local hs
+  cases a <;> cases b <;> simp [ContractGoal.kind, ContractGoal.law, ContractGoal.invariant, ContractGoal.step] at hk hlaw hinv hstep
+  · subst hlaw; subst hinv; rfl
+  · subst hlaw; subst hinv; subst hstep; rfl
+  · subst hlaw; subst hinv; rfl
+
+instance : DecidableEq ContractGoal := fun a b =>
+  if h : goalEq a b = true then
+    isTrue (goalEq_sound h)
+  else
+    isFalse (fun heq => by subst heq; exact h (goalEq_refl a))
+
+/-- Canonical Core4 `Term` encoding of a `ContractGoal`. -/
+def ContractGoal.toTerm : ContractGoal → Term
+  | .preserves l i =>
+    .record [("kind", .label "preserves"), ("law", l), ("invariant", i), ("step", i)]
+  | .stepSound l i s =>
+    .record [("kind", .label "stepSound"), ("law", l), ("invariant", i), ("step", s)]
+  | .narrows l2 l1 =>
+    .record [("kind", .label "narrows"), ("law", l2), ("invariant", l1), ("step", l1)]
+
+/-- Decode a `ContractGoal` from its canonical Core4 `Term` encoding. -/
+def ContractGoal.ofTerm? : Term → Option ContractGoal
+  | .record [("kind", .label "preserves"), ("law", l), ("invariant", i), ("step", s)] =>
+    if termEq i s then some (.preserves l i) else none
+  | .record [("kind", .label "stepSound"), ("law", l), ("invariant", i), ("step", s)] =>
+    some (.stepSound l i s)
+  | .record [("kind", .label "narrows"), ("law", l2), ("invariant", l1), ("step", s)] =>
+    if termEq l1 s then some (.narrows l2 l1) else none
+  | _ => none
+
+@[simp] theorem ContractGoal.ofTerm?_toTerm (g : ContractGoal) :
+    ContractGoal.ofTerm? g.toTerm = some g := by
+  cases g <;> simp [ContractGoal.toTerm, ContractGoal.ofTerm?]
+
+/-- Serialize a `ContractGoal` to JSON via `Obend.Logic.termJson`. -/
+def ContractGoal.toJson (g : ContractGoal) : Lean.Json :=
+  Obend.Logic.termJson g.toTerm
+
+/-- Deserialize a `ContractGoal` from JSON via `Obend.Logic.termOf`. -/
+def ContractGoal.ofJson? (j : Lean.Json) : Option ContractGoal :=
+  match Obend.Logic.termOf j with
+  | .ok t => ContractGoal.ofTerm? t
+  | .error _ => none
+
+/-! ### Universal vs. Bounded-Sampling LawDial Verdict Classification -/
+
+/-- Convert a `LawExpr` into a canonical Core4 `Term` for goal operand binding. -/
+def lawExprToTerm : LawExpr → Term
+  | .eqC (.field f) c => .binary .equal (.get (.bound 0) f) (.nat c.toNat)
+  | .eqC _ c => .nat c.toNat
+  | .leC (.field f) c => .binary .lessEqual (.get (.bound 0) f) (.nat c.toNat)
+  | .leC _ c => .nat c.toNat
+  | .inC (.field f) cs =>
+    cs.foldl (fun acc c => .ifBool (.binary .equal (.get (.bound 0) f) (.nat c.toNat)) (.boolean true) acc) (.boolean false)
+  | .inC _ _ => .boolean false
+  | .eqR (.field f1) (.field f2) =>
+    .binary .equal (.get (.bound 0) f1) (.get (.bound 0) f2)
+  | .eqR _ _ => .boolean false
+  | .leR (.field f1) (.field f2) =>
+    .binary .lessEqual (.get (.bound 0) f1) (.get (.bound 0) f2)
+  | .leR _ _ => .boolean false
+  | .leROff (.field f1) (.field f2) k =>
+    .binary .lessEqual (.get (.bound 0) f1) (.binary .add (.get (.bound 0) f2) (.nat k.toNat))
+  | .leROff _ _ k => .nat k.toNat
+  | .monotone f =>
+    .binary .lessEqual (.get (.bound 2) f) (.get (.bound 1) f)
+  | .writeOnce f =>
+    .binary .equal (.get (.bound 2) f) (.get (.bound 1) f)
+  | .not b => .ifBool (lawExprToTerm b) (.boolean false) (.boolean true)
+  | .and l r => .binary .conjunction (lawExprToTerm l) (lawExprToTerm r)
+  | .or l r => .ifBool (lawExprToTerm l) (.boolean true) (lawExprToTerm r)
+  | .implies p c => .ifBool (lawExprToTerm p) (lawExprToTerm c) (.boolean true)
+
+/-- Conservative structural check that `premise` universally implies `conclusion`
+    (distinguishing universal validity over all integer/natural states from finite sampling). -/
+def lawDialUniversalImplies (p c : LawExpr) : Bool :=
+  if p == c then true
+  else match p, c with
+  | p', .and l r => lawDialUniversalImplies p' l && lawDialUniversalImplies p' r
+  | .or l r, c' => lawDialUniversalImplies l c' && lawDialUniversalImplies r c'
+  | .and l r, c' => lawDialUniversalImplies l c' || lawDialUniversalImplies r c'
+  | p', .or l r => lawDialUniversalImplies p' l || lawDialUniversalImplies p' r
+  | .eqC r1 k1, .eqC r2 k2 => r1 == r2 && k1 == k2
+  | .eqC r1 k1, .leC r2 k2 => r1 == r2 && decide (0 ≤ k1 && k1 ≤ k2)
+  | .leC r1 k1, .leC r2 k2 => r1 == r2 && decide (k1 ≤ k2)
+  | .eqC r1 k1, .inC r2 ks => r1 == r2 && ks.contains k1
+  | .inC r1 ks, .leC r2 k2 => r1 == r2 && ks.all (fun k => decide (0 ≤ k && k ≤ k2))
+  | .eqR r1 r2, .leR r3 r4 => r1 == r3 && r2 == r4
+  | .leROff r1 r2 k1, .leROff r3 r4 k2 => r1 == r3 && r2 == r4 && decide (k1 ≤ k2)
+  | .writeOnce f1, .monotone f2 => f1 == f2
+  | _, _ => false
+
+/-- Fine-grained LawDial classification separating universal validity from bounded sampling. -/
+inductive LawDialSearchVerdict where
+  | universalValid
+  | boundedSampled (sampledCount : Nat)
+  | counterexample (bad : Data)
+  | invalidDomain (reason : String)
+  deriving Repr
+
+/-- Classify a LawDial preservation query into universal validity vs bounded sampling. -/
+def classifyLawDialPreserves (l i : LawExpr) (keys : List String) : LawDialSearchVerdict :=
+  let fieldKeys := if keys.isEmpty then (l.fields ++ i.fields).eraseDups else keys
+  if fieldKeys.isEmpty then
+    .invalidDomain "LawDial fields empty"
+  else
+    let facts : Obend.Spec.Law.Facts := { subject := some 0, caller := none, height := 0, turn := 0 }
+    let cs := candidateValues (extractConstants l ++ extractConstants i)
+    let states := cartesianStates fieldKeys cs
+    let sat := states.any (fun s => l.denote facts none s && i.denote facts none s) ||
+               (Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l i) facts none).isSome
+    if !sat then
+      .invalidDomain "LawDial could not solve satisfying witness for contract law and invariant"
+    else
+      match states.find? (fun s => l.denote facts none s && !i.denote facts none s) with
+      | some bad => .counterexample bad
+      | none =>
+        match Obend.Spec.LawDial.solveLawWitness fieldKeys (.and l (.not i)) facts none with
+        | some bad => .counterexample bad
+        | none =>
+          if lawDialUniversalImplies l i then
+            .universalValid
+          else
+            .boundedSampled states.length
+
+/-! ### Goal-Bound Decider Receipt Digest & Kernel Obligation Verification -/
+
+/-- Canonical cryptographic digest binding `(declName, format, goal.kind, goal.law, goal.invariant, goal.step)` and kernel check status. -/
+def goalBoundDeciderDigest (declName format : String) (g : ContractGoal) : String :=
+  let payload :=
+    s!"{declName}:{format}:{g.kind}:{(Obend.Logic.termJson g.law).compress}:{(Obend.Logic.termJson g.invariant).compress}:{(Obend.Logic.termJson g.step).compress}:kernel_ok"
+  Obend.Spec.Sha256.hex payload.toUTF8
+
+/-- Extract the derivation steps JSON array from either top-level `"steps"` or `"certificate"."steps"`. -/
+def extractReceiptStepsJson? (j : Lean.Json) : Option Lean.Json :=
+  match j.getObjVal? "steps" with
+  | .ok s => some s
+  | .error _ =>
+    match j.getObjVal? "certificate" with
+    | .ok certJson =>
+      match certJson.getObjVal? "steps" with
+      | .ok s => some s
+      | .error _ => none
+    | .error _ => none
+
+/-- Kernel obligation / syntactic guard check for a goal-bound decider receipt. -/
+def checkGoalKernelObligation (g : ContractGoal) (j : Lean.Json) : Bool :=
+  -- If the receipt carries a `"statement"` field, its decoded claim MUST equal `g.toTerm`,
+  -- and any accompanying derivation steps must pass `Obend.Logic.obligationCheck`.
+  match j.getObjVal? "statement" with
+  | .ok stmtJson =>
+    match Obend.Logic.statementOf stmtJson.compress with
+    | .ok o =>
+      if !termEq o.claim g.toTerm then
+        false
+      else
+        match extractReceiptStepsJson? j with
+        | some stepsJson =>
+          match Obend.Logic.stepsOf stepsJson with
+          | .ok steps => Obend.Logic.obligationCheck 100 o (.byDerivation steps) == .ok
+          | .error _ => false
+        | none => false
+    | .error _ => false
+  | .error _ =>
+    match g with
+    | .preserves l i =>
+      (closedB i && guardedBy i 1 0 (lawBody l)) || (closedB i && termEq l i)
+    | .narrows l2 l1 =>
+      termEq l2 l1
+    | .stepSound l i s =>
+      closedB i && termEq l s
+
+/-- Construct an authenticated, goal-bound Tier 2a decider receipt JSON payload. -/
+def mkGoalBoundDeciderReceipt (declName format : String) (g : ContractGoal) : ByteArray :=
+  let digest := goalBoundDeciderDigest declName format g
+  let j := Lean.Json.mkObj [
+    ("schema", Lean.toJson "obend.receipt.v1"),
+    ("claim", Lean.toJson declName),
+    ("verdict", Lean.toJson "ok"),
+    ("format", Lean.toJson format),
+    ("goal", g.toJson),
+    ("digest", Lean.toJson digest)
+  ]
+  j.compress.toUTF8
+
+/-- Extract the embedded `ContractGoal` from a decider receipt JSON payload.
+    If both `"goal"` and `"statement"` are present, they must agree via `goalEq`
+    (refusing any receipt where the outer `"goal"` field was overwritten). -/
+def deciderReceiptEmbeddedGoal? (receipt : ByteArray) : Option ContractGoal :=
+  match String.fromUTF8? receipt with
+  | none => none
+  | some s =>
+    match Lean.Json.parse s with
+    | .error _ => none
+    | .ok j =>
+      let goalField? : Option ContractGoal :=
+        match j.getObjVal? "goal" with
+        | .ok gj => ContractGoal.ofJson? gj
+        | .error _ => none
+      let stmtGoal? : Option ContractGoal :=
+        match j.getObjVal? "statement" with
+        | .ok stmtJson =>
+          match Obend.Logic.statementOf stmtJson.compress with
+          | .ok o => ContractGoal.ofTerm? o.claim
+          | .error _ => none
+        | .error _ => none
+      match j.getObjVal? "goal", j.getObjVal? "statement" with
+      | .ok _, .ok _ =>
+        match goalField?, stmtGoal? with
+        | some g1, some g2 => if goalEq g1 g2 then some g1 else none
+        | _, _ => none
+      | .ok _, .error _ => goalField?
+      | .error _, .ok _ => stmtGoal?
+      | .error _, .error _ => none
+
+/-- Verify a goal-bound Tier 2a decider receipt against `goal`. -/
+def checkDeciderReceiptGoalBound (goal : ContractGoal) (declName : String) (_argTys : List Ty) (receipt : ByteArray) : CertVerdict :=
+  if declName.isEmpty then
+    .invalid "declaration name empty"
+  else if receipt.isEmpty then
+    .invalid "receipt payload empty"
+  else
+    match String.fromUTF8? receipt with
+    | none => .invalid "receipt is not valid UTF-8"
+    | some s =>
+      match Lean.Json.parse s with
+      | .error e => .invalid s!"receipt JSON parse error: {e}"
+      | .ok j =>
+        let schemaOk := match j.getObjValAs? String "schema" with
+          | .ok "obend.receipt.v1" => true
+          | _ => false
+        let verdictOk := match j.getObjValAs? String "verdict" with
+          | .ok "ok" => true
+          | _ => false
+        let claimOk := match j.getObjValAs? String "claim" with
+          | .ok c => c == declName
+          | _ => false
+        if !schemaOk || !verdictOk || !claimOk then
+          .invalid "decider receipt header verification failed"
+        else
+          match deciderReceiptEmbeddedGoal? receipt with
+          | none => .invalid "decider receipt missing or inconsistent embedded goal (law, invariant, step)"
+          | some certGoal =>
+            if !goalEq goal certGoal then
+              .invalid "decider receipt goal operands do not match target goal"
+            else if !checkGoalKernelObligation goal j then
+              .invalid "decider receipt failed kernel obligation / law check"
+            else
+              let format := match j.getObjValAs? String "format" with
+                | .ok f => f
+                | _ => ""
+              if format == "rewrite@1" then
+                match Obend.Logic.Receipt.verifyClaim j with
+                | .ok _ => .valid
+                | .error e => .invalid s!"receipt claim verification failed: {e}"
+              else if format == "transport@1" || format == "decider@1" then
+                match j.getObjValAs? String "digest" with
+                | .ok d =>
+                  if d == goalBoundDeciderDigest declName format goal then
+                    .valid
+                  else
+                    .invalid "goal-bound cryptographic receipt digest mismatch"
+                | _ => .invalid "receipt missing cryptographic authentication digest"
+              else
+                .invalid s!"unsupported decider receipt format: {format}"
+
+/-- Extract the authoritative `ContractGoal` operands `(kind, law, invariant, step)` embedded in a `ContractCert`. -/
+def certEmbeddedGoal? (cert : ContractCert) : Option ContractGoal :=
+  match cert with
+  | .bySyntacticGuard l i =>
+    some (.preserves l i)
+  | .byLawDial l i keys =>
+    match keys with
+    | "__narrows__" :: _ => some (.narrows (lawExprToTerm l) (lawExprToTerm i))
+    | "__stepSound__" :: _ => some (.stepSound (lawExprToTerm l) (.boolean true) (lawExprToTerm i))
+    | _ => some (.preserves (lawExprToTerm l) (lawExprToTerm i))
+  | .byLoweredDecider _ _ receipt =>
+    deciderReceiptEmbeddedGoal? receipt
+  | .byLrat _ _ =>
+    none
+  | .byLoweredLean _ tcert pins =>
+    match ContractGoal.ofTerm? tcert.claim with
+    | some g => some g
+    | none =>
+      match pins.head? with
+      | some p => ContractGoal.ofTerm? p.code
+      | none => none
+
+/-- Goal-bound 4-tier certificate checker:
+    1. Strictly verifies that the certificate's embedded `kind`, `law`, `invariant`, and `step`
+       operands are syntactically equal (`==` / `termEq`) to `goal.kind`, `goal.law`,
+       `goal.invariant`, and `goal.step`.
+    2. Requires universal implication (not merely finite sampling) for `.byLawDial`.
+    3. Binds the canonical encoding of `(goal.kind, goal.law, goal.invariant, goal.step)` and
+       kernel obligation verification in `.byLoweredDecider`. -/
+def checkContractCertGoalBound (goal : ContractGoal) (cert : ContractCert) : CertVerdict :=
+  match certEmbeddedGoal? cert with
+  | none =>
+    .invalid "certificate does not carry embedded goal operands (law, invariant, step)"
+  | some certGoal =>
+    if !((goal.kind == certGoal.kind) &&
+         termEq goal.law certGoal.law &&
+         termEq goal.invariant certGoal.invariant &&
+         termEq goal.step certGoal.step) then
+      .invalid "certificate operands (law, invariant, step) do not match target ContractGoal"
+    else
+      match goal, cert with
+      | .preserves _ _, .bySyntacticGuard l i =>
+        if closedB i == true && guardedBy i 1 0 (lawBody l) == true then
+          .valid
+        else
+          .invalid "syntactic guard check failed"
+      | .preserves _ _, .byLawDial l i keys =>
+        match classifyLawDialPreserves l i keys with
+        | .universalValid => .valid
+        | .boundedSampled _ =>
+          .invalid "LawDial finite sampling without universal implication cannot certify universal goal"
+        | .counterexample bad =>
+          .invalid s!"LawDial found counterexample violating invariant: {repr bad}"
+        | .invalidDomain reason =>
+          .invalid reason
+      | .narrows _ _, .byLawDial l2 l1 keys =>
+        let cleanKeys := keys.filter (· != "__narrows__")
+        match classifyLawDialPreserves l2 l1 cleanKeys with
+        | .universalValid => .valid
+        | .boundedSampled _ =>
+          .invalid "LawDial finite sampling without universal implication cannot certify universal refinement"
+        | .counterexample bad =>
+          .invalid s!"LawDial found counterexample: {repr bad}"
+        | .invalidDomain reason =>
+          .invalid reason
+      | .stepSound _ _ _, .byLawDial l stepRel keys =>
+        let cleanKeys := keys.filter (· != "__stepSound__")
+        match classifyLawDialPreserves l stepRel cleanKeys with
+        | .universalValid => .valid
+        | .boundedSampled _ =>
+          .invalid "LawDial finite sampling without universal implication cannot certify universal step soundness"
+        | .counterexample bad =>
+          .invalid s!"LawDial found counterexample: {repr bad}"
+        | .invalidDomain reason =>
+          .invalid reason
+      | _, .byLoweredDecider declName argTys receipt =>
+        checkDeciderReceiptGoalBound goal declName argTys receipt
+      | _, .byLoweredLean obj tcert pins =>
+        if pins.isEmpty then
+          .invalid "pins empty"
+        else if !pins.all (fun p => Obend.Law.closedB p.code) then
+          .invalid "pin code not closed"
+        else if Obend.Law.closedB tcert.claim != true then
+          .invalid "cert claim not closed"
+        else if !(termEq tcert.claim goal.toTerm || goalMatchesClaim goal tcert.claim) then
+          .invalid "transport certificate claim does not match target contract goal"
+        else
+          match Obend.Lower.transportJudge.check 0 obj tcert with
+          | .ok => .valid
+          | .refused _ _ => .invalid "transport check refused"
+          | .uncovered => .invalid "transport check uncovered"
+      | _, _ =>
+        .invalid "tier certificate does not match target goal"
+
+/-- **Goal-Bound Substitution Refusal Theorem (`checkContractCertGoalBound_refuses_swapped_goal`)**:
+    Any certificate `cert` that is valid for `goalA` under `checkContractCertGoalBound`
+    is strictly refused (`≠ .valid`) when checked against any distinct `goalB ≠ goalA`. -/
+theorem checkContractCertGoalBound_refuses_swapped_goal
+    (goalA goalB : ContractGoal) (cert : ContractCert)
+    (h_valid : checkContractCertGoalBound goalA cert = .valid)
+    (h_ne : goalB ≠ goalA) :
+    checkContractCertGoalBound goalB cert ≠ .valid := by
+  unfold checkContractCertGoalBound at h_valid ⊢
+  cases hemb : certEmbeddedGoal? cert with
+  | none =>
+    simp [hemb] at h_valid
+  | some certGoal =>
+    simp only [hemb] at h_valid ⊢
+    have hEqA : ((goalA.kind == certGoal.kind) &&
+        termEq goalA.law certGoal.law &&
+        termEq goalA.invariant certGoal.invariant &&
+        termEq goalA.step certGoal.step) = true := by
+      cases hcond : ((goalA.kind == certGoal.kind) &&
+          termEq goalA.law certGoal.law &&
+          termEq goalA.invariant certGoal.invariant &&
+          termEq goalA.step certGoal.step)
+      · simp [hcond] at h_valid
+      · rfl
+    have hA_eq_cert : goalA = certGoal := goalEq_sound hEqA
+    have hEqB : ((goalB.kind == certGoal.kind) &&
+        termEq goalB.law certGoal.law &&
+        termEq goalB.invariant certGoal.invariant &&
+        termEq goalB.step certGoal.step) = false := by
+      cases hcondB : ((goalB.kind == certGoal.kind) &&
+          termEq goalB.law certGoal.law &&
+          termEq goalB.invariant certGoal.invariant &&
+          termEq goalB.step certGoal.step)
+      · rfl
+      · have hB_eq_cert : goalB = certGoal := goalEq_sound hcondB
+        exfalso
+        apply h_ne
+        rw [hB_eq_cert, hA_eq_cert]
+    simp [hEqB]
+
 end Obend.Law
 end
+

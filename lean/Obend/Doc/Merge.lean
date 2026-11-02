@@ -422,6 +422,315 @@ end Teeth
 #tooth Graph.merge_isPushout by mutation Graph.merge := fun A _ => A
 #tooth Teeth.files_no_pushout by mutation Graph.File := fun _ => True
 
+/-! ## 3-Way Keyed Section/Cell LCA Merge & Conflict Localization -/
+
+/-- Outcome of merging a single cell/field value `vL` and `vR` over a common ancestor `base`. -/
+inductive MergeCellResult (α : Type) where
+  | merged (val : α)
+  | conflict (baseVal leftVal rightVal : α)
+  deriving @[expose] DecidableEq, Repr
+
+/-- Structured 3-way merge conflict localized to a specific cell/block key `key`. -/
+structure MergeConflict where
+  key : String
+  baseVal : Option Obend.Core.Data.Data
+  leftVal : Option Obend.Core.Data.Data
+  rightVal : Option Obend.Core.Data.Data
+  deriving @[expose] DecidableEq, Repr
+
+/-- Outcome of a 3-way keyed cell/section LCA merge across a document's cells:
+carries the merged `(key, Data)` association list and the list of localized `MergeConflict`s. -/
+structure KeyedMergeOutcome where
+  mergedCells : List (String × Obend.Core.Data.Data)
+  conflicts : List MergeConflict
+  deriving @[expose] DecidableEq, Repr
+
+/-- **3-Way Single-Cell LCA Merge (`mergeCell3`)**:
+Given a common ancestor value `base` and two concurrent agent branch values `vL` and `vR`:
+- If `vL = vR` (both kept `base`, or both converged idempotently to the same new value), returns `.merged vL`.
+- If only the right branch changed (`vL = base`), returns `.merged vR`.
+- If only the left branch changed (`vR = base`), returns `.merged vL`.
+- If both branches changed to distinct values (`vL ≠ vR`, `vL ≠ base`, `vR ≠ base`), returns
+  `.conflict base vL vR`. -/
+@[expose] def mergeCell3 {α : Type} [DecidableEq α] (base vL vR : α) : MergeCellResult α :=
+  if vL = vR then
+    .merged vL
+  else if vL = base then
+    .merged vR
+  else if vR = base then
+    .merged vL
+  else
+    .conflict base vL vR
+
+/-- **Idempotence (`mergeCell3_idempotent`)**: merging two identical branches `(base, a, a)` always
+succeeds with `.merged a` (`0` conflicts). -/
+@[simp] theorem mergeCell3_idempotent {α : Type} [DecidableEq α] (base a : α) :
+    mergeCell3 base a a = .merged a := by
+  simp [mergeCell3]
+
+/-- If the left branch is unchanged (`vL = base`), `mergeCell3` cleanly adopts the right branch `vR`. -/
+@[simp] theorem mergeCell3_left_unchanged {α : Type} [DecidableEq α] (base vR : α) :
+    mergeCell3 base base vR = .merged vR := by
+  by_cases h : base = vR <;> simp [mergeCell3, h]
+
+/-- If the right branch is unchanged (`vR = base`), `mergeCell3` cleanly adopts the left branch `vL`. -/
+@[simp] theorem mergeCell3_right_unchanged {α : Type} [DecidableEq α] (base vL : α) :
+    mergeCell3 base vL base = .merged vL := by
+  by_cases h : vL = base <;> simp [mergeCell3, h]
+
+/-- Characterization of when `mergeCell3` reports a conflict. -/
+theorem mergeCell3_conflict_iff {α : Type} [DecidableEq α] (base vL vR : α) :
+    mergeCell3 base vL vR = .conflict base vL vR ↔
+      vL ≠ vR ∧ vL ≠ base ∧ vR ≠ base := by
+  unfold mergeCell3
+  by_cases hLR : vL = vR
+  · subst hLR; simp
+  · by_cases hLB : vL = base
+    · subst hLB; simp [hLR]
+    · by_cases hRB : vR = base
+      · subst hRB; simp [hLR, hLB]
+      · simp [hLR, hLB, hRB]
+
+/-- **Commutativity (`mergeCell3_commutative`)**:
+`mergeCell3 base vL vR` is symmetric:
+1. `mergeCell3 base vL vR = .merged v ↔ mergeCell3 base vR vL = .merged v` for all `v`, and
+2. `mergeCell3 base vL vR = .conflict base vL vR ↔ mergeCell3 base vR vL = .conflict base vR vL`. -/
+theorem mergeCell3_commutative {α : Type} [DecidableEq α] (base vL vR : α) :
+    (∀ v, mergeCell3 base vL vR = .merged v ↔ mergeCell3 base vR vL = .merged v) ∧
+    (mergeCell3 base vL vR = .conflict base vL vR ↔
+      mergeCell3 base vR vL = .conflict base vR vL) := by
+  refine ⟨fun v => ?_, ?_⟩
+  · unfold mergeCell3
+    by_cases hLR : vL = vR
+    · subst hLR; simp
+    · have hRL : vR ≠ vL := Ne.symm hLR
+      by_cases hLB : vL = base
+      · subst hLB; simp [hLR, hRL]
+      · by_cases hRB : vR = base
+        · subst hRB; simp [hLR, hRL, hLB]
+        · simp [hLR, hRL, hLB, hRB]
+  · rw [mergeCell3_conflict_iff, mergeCell3_conflict_iff]
+    exact ⟨fun ⟨h1, h2, h3⟩ => ⟨Ne.symm h1, h3, h2⟩,
+      fun ⟨h1, h2, h3⟩ => ⟨Ne.symm h1, h3, h2⟩⟩
+
+/-- **Disjoint Edits Succeed (`mergeCell3_disjoint_edits_succeed`)**:
+If Agent A modifies cell `k1` (`vR = base1` at `k1`) and Agent B modifies cell `k2` (`vL = base2` at `k2`),
+both cells merge cleanly without conflict! -/
+theorem mergeCell3_disjoint_edits_succeed {α : Type} [DecidableEq α]
+    (base1 base2 vL1 vR2 : α) :
+    mergeCell3 base1 vL1 base1 = .merged vL1 ∧
+    mergeCell3 base2 base2 vR2 = .merged vR2 :=
+  ⟨mergeCell3_right_unchanged base1 vL1, mergeCell3_left_unchanged base2 vR2⟩
+
+/-- Collect all distinct cell keys present across `base`, `left`, and `right` in order of appearance. -/
+@[expose] def collectCellKeys
+    (base left right : List (String × Obend.Core.Data.Data)) : List String :=
+  Patch.dedupStringKeys ((base.map Prod.fst) ++ (left.map Prod.fst) ++ (right.map Prod.fst))
+
+@[simp] theorem mem_collectCellKeys
+    {base left right : List (String × Obend.Core.Data.Data)} {k : String} :
+    k ∈ collectCellKeys base left right ↔
+      k ∈ base.map Prod.fst ∨ k ∈ left.map Prod.fst ∨ k ∈ right.map Prod.fst := by
+  simp [collectCellKeys, List.mem_append]
+
+/-- Perform a 3-way LCA cell merge at key `k` across keyed cell states `base`, `left`, and `right`. -/
+@[expose] def mergeKeyedCellAt
+    (base left right : List (String × Obend.Core.Data.Data)) (k : String) :
+    MergeCellResult (Option Obend.Core.Data.Data) :=
+  mergeCell3 (base.lookup k) (left.lookup k) (right.lookup k)
+
+theorem mergeKeyedCellAt_of_not_mem_collectCellKeys
+    {base left right : List (String × Obend.Core.Data.Data)} {k : String}
+    (hNotMem : k ∉ collectCellKeys base left right) :
+    mergeKeyedCellAt base left right k = .merged none := by
+  rw [mem_collectCellKeys, not_or, not_or] at hNotMem
+  obtain ⟨hB, hL, hR⟩ := hNotMem
+  simp [mergeKeyedCellAt,
+    Patch.lookup_eq_none_of_not_mem_map_fst hB,
+    Patch.lookup_eq_none_of_not_mem_map_fst hL,
+    Patch.lookup_eq_none_of_not_mem_map_fst hR]
+
+/-- Extract the merged `Option Data` value at key `k` when `mergeKeyedCellAt` succeeds with `some v`. -/
+@[expose] def mergedCellValueAt
+    (base left right : List (String × Obend.Core.Data.Data)) (k : String) :
+    Option Obend.Core.Data.Data :=
+  match mergeKeyedCellAt base left right k with
+  | .merged (some v) => some v
+  | .merged none => none
+  | .conflict _ _ _ => none
+
+/-- **3-Way Keyed Section/Cell LCA Merge (`mergeKeyedCells3`)**:
+Given a common ancestor document state `base : List (String × Data)` and two concurrent agent
+branches `left right : List (String × Data)`, merges each cell key `k` via `mergeKeyedCellAt`
+and partitions the results into `mergedCells` and structured `MergeConflict`s. -/
+@[expose] def mergeKeyedCells3
+    (base left right : List (String × Obend.Core.Data.Data)) : KeyedMergeOutcome :=
+  let keys := collectCellKeys base left right
+  let mergedCells := keys.filterMap fun k =>
+    (mergedCellValueAt base left right k).map fun v => (k, v)
+  let conflicts := keys.filterMap fun k =>
+    match mergeKeyedCellAt base left right k with
+    | .merged _ => none
+    | .conflict b l r => some ⟨k, b, l, r⟩
+  { mergedCells := mergedCells, conflicts := conflicts }
+
+theorem lookup_filterMap_keyed {β : Type} (ks : List String) (f : String → Option β) (q : String) :
+    (ks.filterMap fun k => (f k).map fun v => (k, v)).lookup q =
+      if q ∈ ks then f q else none := by
+  induction ks with
+  | nil => simp
+  | cons k rest ih =>
+    by_cases hEq : q = k
+    · subst hEq
+      cases hfq : f q with
+      | none =>
+        simp only [List.filterMap_cons, hfq, Option.map_none, ih, List.mem_cons, true_or, ↓reduceIte]
+        split <;> rfl
+      | some v =>
+        simp [hfq]
+    · have hBne : (q == k) = false := beq_eq_false_iff_ne.2 hEq
+      cases hfk : f k with
+      | none =>
+        simp [hfk, ih, hEq]
+      | some v =>
+        simp [hfk, List.lookup, hBne, ih, hEq]
+
+/-- **Exact Lookup Characterization of `mergedCells` (`lookup_mergedCells_mergeKeyedCells3`)**:
+For every key `k`, looking up `k` in `(mergeKeyedCells3 base left right).mergedCells` returns
+`some v` iff `mergeKeyedCellAt base left right k = .merged (some v)`, and `none` otherwise. -/
+theorem lookup_mergedCells_mergeKeyedCells3
+    (base left right : List (String × Obend.Core.Data.Data)) (k : String) :
+    ((mergeKeyedCells3 base left right).mergedCells).lookup k =
+      mergedCellValueAt base left right k := by
+  simp only [mergeKeyedCells3, lookup_filterMap_keyed]
+  by_cases hMem : k ∈ collectCellKeys base left right
+  · simp [hMem]
+  · simp [hMem, mergedCellValueAt, mergeKeyedCellAt_of_not_mem_collectCellKeys hMem]
+
+/-- **Exact Conflict Localization Characterization (`mem_conflicts_mergeKeyedCells3`)**:
+A conflict record `c` belongs to `(mergeKeyedCells3 base left right).conflicts` iff
+`mergeKeyedCellAt base left right c.key = .conflict c.baseVal c.leftVal c.rightVal`. -/
+theorem mem_conflicts_mergeKeyedCells3
+    (base left right : List (String × Obend.Core.Data.Data)) (c : MergeConflict) :
+    c ∈ (mergeKeyedCells3 base left right).conflicts ↔
+      mergeKeyedCellAt base left right c.key = .conflict c.baseVal c.leftVal c.rightVal ∧
+      c.baseVal = base.lookup c.key ∧
+      c.leftVal = left.lookup c.key ∧
+      c.rightVal = right.lookup c.key := by
+  simp only [mergeKeyedCells3, List.mem_filterMap]
+  constructor
+  · rintro ⟨k, _, hMatch⟩
+    cases hRes : mergeKeyedCellAt base left right k with
+    | merged _ => simp [hRes] at hMatch
+    | conflict b l r =>
+      simp only [hRes, Option.some.injEq] at hMatch
+      subst hMatch
+      have hAt : mergeCell3 (base.lookup k) (left.lookup k) (right.lookup k) = .conflict b l r := hRes
+      unfold mergeCell3 at hAt
+      split at hAt <;> try cases hAt
+      split at hAt <;> try cases hAt
+      split at hAt <;> try cases hAt
+      exact ⟨hRes, rfl, rfl, rfl⟩
+  · rintro ⟨hConf, _, _, _⟩
+    refine ⟨c.key, ?_, ?_⟩
+    · exact Classical.byContradiction fun hNotMem => by
+        rw [mergeKeyedCellAt_of_not_mem_collectCellKeys hNotMem] at hConf
+        cases hConf
+    · cases c
+      simp [hConf]
+
+/-- Merging two identical keyed cell branches `(base, a, a)` always produces zero conflicts. -/
+@[simp] theorem mergeKeyedCells3_idempotent_no_conflicts
+    (base a : List (String × Obend.Core.Data.Data)) :
+    (mergeKeyedCells3 base a a).conflicts = [] := by
+  simp [mergeKeyedCells3, mergeKeyedCellAt]
+
+/-- **Keyed Document Idempotence (`mergeKeyedCells3_idempotent`)**:
+Merging two identical branches `(base, a, a)` produces zero conflicts and recovers `a.lookup k`
+at every cell key `k`. -/
+theorem mergeKeyedCells3_idempotent
+    (base a : List (String × Obend.Core.Data.Data)) :
+    (mergeKeyedCells3 base a a).conflicts = [] ∧
+    ∀ k, ((mergeKeyedCells3 base a a).mergedCells).lookup k = a.lookup k := by
+  refine ⟨mergeKeyedCells3_idempotent_no_conflicts base a, fun k => ?_⟩
+  rw [lookup_mergedCells_mergeKeyedCells3]
+  simp only [mergedCellValueAt, mergeKeyedCellAt, mergeCell3_idempotent]
+  cases a.lookup k <;> rfl
+
+/-- **Keyed Document Commutativity (`mergeKeyedCells3_commutative`)**:
+1. Every key `k` resolves to the exact same merged cell value in `mergeKeyedCells3 base left right`
+   and `mergeKeyedCells3 base right left`, and
+2. `⟨k, b, l, r⟩ ∈ (mergeKeyedCells3 base left right).conflicts` iff
+   `⟨k, b, r, l⟩ ∈ (mergeKeyedCells3 base right left).conflicts`. -/
+theorem mergeKeyedCells3_commutative
+    (base left right : List (String × Obend.Core.Data.Data)) :
+    (∀ k, ((mergeKeyedCells3 base left right).mergedCells).lookup k =
+          ((mergeKeyedCells3 base right left).mergedCells).lookup k) ∧
+    (∀ k b l r,
+      (⟨k, b, l, r⟩ : MergeConflict) ∈ (mergeKeyedCells3 base left right).conflicts ↔
+      (⟨k, b, r, l⟩ : MergeConflict) ∈ (mergeKeyedCells3 base right left).conflicts) := by
+  refine ⟨fun k => ?_, fun k b l r => ?_⟩
+  · rw [lookup_mergedCells_mergeKeyedCells3, lookup_mergedCells_mergeKeyedCells3]
+    dsimp only [mergedCellValueAt, mergeKeyedCellAt]
+    have hComm := (mergeCell3_commutative (base.lookup k) (left.lookup k) (right.lookup k)).1
+    cases hL : mergeCell3 (base.lookup k) (left.lookup k) (right.lookup k) with
+    | merged optV =>
+      have hR : mergeCell3 (base.lookup k) (right.lookup k) (left.lookup k) = .merged optV :=
+        (hComm optV).1 hL
+      rw [hR]
+    | conflict bVal lVal rVal =>
+      cases hR : mergeCell3 (base.lookup k) (right.lookup k) (left.lookup k) with
+      | merged optV =>
+        have hBack := (hComm optV).2 hR
+        rw [hL] at hBack
+        cases hBack
+      | conflict _ _ _ => rfl
+  · rw [mem_conflicts_mergeKeyedCells3, mem_conflicts_mergeKeyedCells3]
+    dsimp only [mergeKeyedCellAt]
+    have hConfComm := (mergeCell3_commutative (base.lookup k) (left.lookup k) (right.lookup k)).2
+    constructor
+    · rintro ⟨hC, rfl, rfl, rfl⟩
+      exact ⟨hConfComm.1 hC, rfl, rfl, rfl⟩
+    · rintro ⟨hC, rfl, rfl, rfl⟩
+      exact ⟨hConfComm.2 hC, rfl, rfl, rfl⟩
+
+/-- Keyed-list disjoint edits theorem: if `left` only edits `k1` (`right.lookup k1 = base.lookup k1`)
+and `right` only edits `k2` (`left.lookup k2 = base.lookup k2`), then `mergeKeyedCellAt` merges both
+keys cleanly without conflict. -/
+theorem mergeKeyedCellAt_disjoint_edits_succeed
+    (base left right : List (String × Obend.Core.Data.Data))
+    (k1 k2 : String)
+    (hR1 : right.lookup k1 = base.lookup k1)
+    (hL2 : left.lookup k2 = base.lookup k2) :
+    mergeKeyedCellAt base left right k1 = .merged (left.lookup k1) ∧
+    mergeKeyedCellAt base left right k2 = .merged (right.lookup k2) := by
+  simp [mergeKeyedCellAt, hR1, hL2]
+
+/-- **Whole-Document Disjoint Edits Succeed Without Conflicts (`mergeKeyedCells3_disjoint_edits_no_conflicts`)**:
+If at every cell key `k`, either `left` is unchanged (`left.lookup k = base.lookup k`), `right` is
+unchanged (`right.lookup k = base.lookup k`), or both branches converged (`left.lookup k = right.lookup k`),
+then `mergeKeyedCells3 base left right` produces zero conflicts (`conflicts = []`). -/
+theorem mergeKeyedCells3_disjoint_edits_no_conflicts
+    (base left right : List (String × Obend.Core.Data.Data))
+    (hDisj : ∀ k, left.lookup k = base.lookup k ∨
+                  right.lookup k = base.lookup k ∨
+                  left.lookup k = right.lookup k) :
+    (mergeKeyedCells3 base left right).conflicts = [] := by
+  apply List.eq_nil_iff_forall_not_mem.2
+  intro c hc
+  obtain ⟨hConf, hB, hL, hR⟩ := (mem_conflicts_mergeKeyedCells3 base left right c).1 hc
+  dsimp only [mergeKeyedCellAt] at hConf
+  rw [hB, hL, hR, mergeCell3_conflict_iff] at hConf
+  obtain ⟨hNeLR, hNeLB, hNeRB⟩ := hConf
+  rcases hDisj c.key with hEqLB | hEqRB | hEqLR
+  · exact hNeLB hEqLB
+  · exact hNeRB hEqRB
+  · exact hNeLR hEqLR
+
+#tooth mergeCell3_commutative by mutation mergeCell3 := fun _ vL _ => .merged vL
+#tooth mergeCell3_disjoint_edits_succeed by mutation mergeCell3 := fun base _ _ => .merged base
+
 end Obend.Doc
 
 end
+

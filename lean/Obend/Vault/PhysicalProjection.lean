@@ -22,6 +22,9 @@ public import Obend.Vault.HardwareProjection
 public import Obend.Leaf.Emit
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.FluidThermal
+public import Obend.Hardware.Magnetics
+public import Obend.Hardware.PowerElectronics
+public import Obend.Hardware.Mechanics
 public import Obend.Hardware.OpenUSD
 public import Obend.Hardware.UserspacePhysical
 public import Obend.Analysis.Hybrid
@@ -34,6 +37,9 @@ open Obend.Doc
 open Obend.Vault.HardwareProjection (dInt)
 open Obend.Hardware.Kinematics
 open Obend.Hardware.FluidThermal
+open Obend.Hardware.Magnetics
+open Obend.Hardware.PowerElectronics
+open Obend.Hardware.Mechanics
 open Obend.Hardware.Thermal
 open Obend.Hardware.OpenUSD
 open Obend.Hardware.UserspacePhysical
@@ -329,6 +335,15 @@ theorem physical_projection_doc_noninterference
     (otherAtom : AtomId) (hNe : otherAtom ≠ newAtom) :
     (((newAtom, cell) :: G.atoms).lookup otherAtom) = G.atoms.lookup otherAtom :=
   Obend.Vault.HardwareProjection.hardware_projection_doc_noninterference G newAtom cell otherAtom hNe
+
+/-! ## 5. Coupled Motor-Inverter-Cooler Drive-Train Co-Design `.obnb` Projection -/
+
+export Obend.Vault.HardwareProjection (
+  driveTrainCoDesignToData
+  projectDriveTrainCoDesign
+  projectDriveTrainCoDesign_deterministic
+  driveTrainCoDesign_projection_sound
+)
 
 end Obend.Vault.PhysicalProjection
 end

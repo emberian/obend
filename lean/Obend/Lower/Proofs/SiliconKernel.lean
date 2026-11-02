@@ -41,6 +41,8 @@ connecting:
    Proves that 1-cycle hardware interaction-net $\beta$-reduction (`reduceActivePair` on `.lam` and
    `.nat64`) agrees with both `LeanKernel.kernelWhnf` and `Core4.Evaluates`.
 -/
+public import Obend.Tactic.Tooth
+public import Obend.Leaf.Futamura
 public import Obend.Lower.LeanKernel
 public import Obend.Lower.Proofs.Hardware
 public import Obend.Hardware.ReductionMachine
@@ -490,6 +492,215 @@ theorem silicon_elab_mesh_xy_and_icap_codec_sound :
      reduceActivePair { left := dupNode, right := supNode } 100 =
        .commute (commuteSpawnedNodes dupNode supNode 100)) := by
   decide +kernel
+
+/-! ## 6. Genuine Term-Level Lowered Kernel Node Reducer & Typechecker (`real_silicon_kernel_node_check_sound`) -/
+
+/-- Build the 4-port hardware input environment `(arg0 = exprTag, arg1 = a0, arg2 = a1, arg3 = envTy)`
+for evaluating `checkTermNodeBook`, `inferTypeNodeBook`, and `evalKernelStepBook` in RTL. -/
+def mkNodeInputEnv (node : Nat × Nat × Nat × Nat) : Nat → BitVec 64
+  | 0 => BitVec.ofNat 64 node.1
+  | 1 => BitVec.ofNat 64 node.2.1
+  | 2 => BitVec.ofNat 64 node.2.2.1
+  | _ => BitVec.ofNat 64 node.2.2.2
+
+/-- Evaluate the compiled 4-input `RtlModule` for `checkTermNodeBook` on a 4-word syntax descriptor. -/
+def evalLoweredNodeCheckRtl (node : Nat × Nat × Nat × Nat) : List (String × BitVec 64) :=
+  match compileBookToRtlSat "silicon_check_term_node_rtl" checkTermNodeBook with
+  | some m => evalModuleOutputs m (mkNodeInputEnv node) (fun _ => 0#64)
+  | none => []
+
+/-- Evaluate the compiled 4-input `RtlModule` for `inferTypeNodeBook` on a 4-word syntax descriptor. -/
+def evalLoweredNodeInferRtl (node : Nat × Nat × Nat × Nat) : List (String × BitVec 64) :=
+  match compileBookToRtlSat "silicon_infer_type_node_rtl" inferTypeNodeBook with
+  | some m => evalModuleOutputs m (mkNodeInputEnv node) (fun _ => 0#64)
+  | none => []
+
+/-- Evaluate the compiled 4-input `RtlModule` for `evalKernelStepBook` on a 4-word syntax descriptor. -/
+def evalLoweredKernelStepRtl (node : Nat × Nat × Nat × Nat) : List (String × BitVec 64) :=
+  match compileBookToRtlSat "silicon_eval_kernel_step_rtl" evalKernelStepBook with
+  | some m => evalModuleOutputs m (mkNodeInputEnv node) (fun _ => 0#64)
+  | none => []
+
+/-- Reference Lean kernel specification for checking a `KExpr` syntax node `e` against `expectedTy`
+in context `ctx` (`sorry`-free + `kernelInferType` + `kernelIsDefEqFull`). -/
+def kernelNodeCheckSpec (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e expectedTy : KExpr) : Bool :=
+  !(exprContainsSorry e) &&
+  !(exprContainsSorry expectedTy) &&
+  match kernelInferType env fuel ctx e with
+  | some infTy => kernelIsDefEqFull env fuel ctx infTy expectedTy
+  | none => false
+
+/-- **Theorem (`real_silicon_kernel_node_check_sound`)**:
+Proves that the genuine 4-argument lowered term-level kernel typechecker (`inferTypeLExpr` /
+`checkTermNodeLExpr`) and reducer (`evalKernelStepLExpr`), lowered through `Core4` (`lowerT`)
+and `Leaf.Book` (`checkTermNodeBook`, `inferTypeNodeBook`, `evalKernelStepBook`) to 4-port
+combinational hardware (`compileBookToRtlSat`), agree with `kernelNodeCheckSpec` across both
+well-typed and ill-typed `app`, `lam`, `const`, and `bvar` syntax nodes:
+1. **Well-typed `app` (`idNat 42 : Nat`, encoded `(5, 17, 1, 1)`)**:
+   `inferTypeLExpr` infers `1` (`Nat`), `checkTermNodeLExpr` reduces via `SSteps` to `.lit 1`,
+   `Core4` evaluates to `.nat 1`, and hardware RTL outputs `1#64`, agreeing with `kernelNodeCheckSpec = true`.
+2. **Ill-typed `app` domain mismatch (`idNat Prop : Nat`, encoded `(5, 17, 3, 1)`) and non-function
+   application (`42 7 : Nat`, encoded `(5, 1, 1, 1)`)**:
+   `inferTypeLExpr` and `checkTermNodeLExpr` reduce via `SSteps` to `.lit 0`, `Core4` evaluates to
+   `.nat 0`, and hardware RTL outputs `0#64`, agreeing with `kernelNodeCheckSpec = false`.
+3. **Well-typed `lam` (`(λ x : Nat => x) : Nat → Nat`, encoded `(4, 1, 1, 17)`) vs ill-typed `lam`
+   against `Nat` (`(4, 1, 1, 1)`)**:
+   `inferTypeLExpr` computes the arrow code `1 * 16 + 1 = 17` inside `LExpr`/RTL, accepting
+   expected type `17` (`1#64`) and rejecting expected type `1` (`0#64`), agreeing with `kernelNodeCheckSpec`.
+4. **Well-typed `const` (`idNat : Nat → Nat`, encoded `(3, 3, 0, 17)`) vs `sorryAx` (`(3, 0, 1, 17)`)**:
+   `checkTermNodeLExpr` and hardware RTL accept `idNat` (`1#64`) and reject `sorryAx` (`0#64`).
+5. **Bound variable lookup (`bvar 0` in `[Nat]`, encoded `(0, 0, 1, 1)`) vs unbound `bvar 1` (`(0, 1, 1, 1)`)**:
+   `checkTermNodeLExpr` and hardware RTL accept `bvar 0` (`1#64`) and reject `bvar 1` (`0#64`).
+6. **Lowered term-level reduction (`evalKernelStepLExpr` / `evalKernelStepBook`)**:
+   Executes $\beta$-reduction (`(5, 1, 35, 7) ↦ 42#64`), `Nat.succ` folding (`(5, 2, 41, 0) ↦ 42#64`),
+   `bvar 0` substitution (`(0, 0, 0, 42) ↦ 42#64`), and `letE` $\zeta$-reduction (`(7, 40, 2, 0) ↦ 42#64`)
+   across `SSteps`, `Core4.Evaluates`, and `RtlModule`. -/
+theorem real_silicon_kernel_node_check_sound :
+    let eAppGood := KExpr.app (.const (KName.mkSimple "idNat") []) (.lit (.natVal 42))
+    let eAppBadDom := KExpr.app (.const (KName.mkSimple "idNat") []) (.sort .zero)
+    let eAppNonFn := KExpr.app (.lit (.natVal 42)) (.lit (.natVal 7))
+    let eLamGood := KExpr.lam kNatConst (.bvar 0)
+    let eConstGood := KExpr.const (KName.mkSimple "idNat") []
+    let eConstSorry := KExpr.const (KName.mkSimple "sorryAx") []
+    let tyNat := kNatConst
+    let tyNatArr := KExpr.forallE kNatConst kNatConst
+    let nAppGood := encodeKExprNode stdKernelEnv 8 [] eAppGood tyNat
+    let nAppBadDom := encodeKExprNode stdKernelEnv 8 [] eAppBadDom tyNat
+    let nAppNonFn := encodeKExprNode stdKernelEnv 8 [] eAppNonFn tyNat
+    let nLamGood := encodeKExprNode stdKernelEnv 8 [] eLamGood tyNatArr
+    let nLamBadTy := encodeKExprNode stdKernelEnv 8 [] eLamGood tyNat
+    let nConstGood := encodeKExprNode stdKernelEnv 8 [] eConstGood tyNatArr
+    let nConstSorry := encodeKExprNode stdKernelEnv 8 [] eConstSorry tyNatArr
+    let nBVar0 := encodeKExprNode stdKernelEnv 8 [tyNat] (.bvar 0) tyNat
+    let nBVar1 := encodeKExprNode stdKernelEnv 8 [tyNat] (.bvar 1) tyNat
+    -- 1. Syntax node encoding and reference kernel spec agreement
+    nAppGood = (5, 17, 1, 1) ∧
+    nAppBadDom = (5, 17, 3, 1) ∧
+    nAppNonFn = (5, 1, 1, 1) ∧
+    nLamGood = (4, 1, 1, 17) ∧
+    nLamBadTy = (4, 1, 1, 1) ∧
+    nConstGood = (3, 3, 0, 17) ∧
+    nConstSorry = (3, 0, 1, 17) ∧
+    nBVar0 = (0, 0, 1, 1) ∧
+    nBVar1 = (0, 1, 1, 1) ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eAppGood tyNat = true ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eAppBadDom tyNat = false ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eAppNonFn tyNat = false ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eLamGood tyNatArr = true ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eLamGood tyNat = false ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eConstGood tyNatArr = true ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [] eConstSorry tyNatArr = false ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [tyNat] (.bvar 0) tyNat = true ∧
+    kernelNodeCheckSpec stdKernelEnv 8 [tyNat] (.bvar 1) tyNat = false ∧
+    -- 2. LExpr SSteps & Core4 Evaluates for well-typed and ill-typed nodes
+    SSteps (app4LExpr inferTypeLExpr 5 17 1 1) (.lit 1) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 5 17 1 1) (.lit 1) ∧
+    Evaluates (lowerT (app4LExpr checkTermNodeLExpr 5 17 1 1)) (.nat 1) ∧
+    SSteps (app4LExpr inferTypeLExpr 5 17 3 1) (.lit 0) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 5 17 3 1) (.lit 0) ∧
+    Evaluates (lowerT (app4LExpr checkTermNodeLExpr 5 17 3 1)) (.nat 0) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 5 1 1 1) (.lit 0) ∧
+    SSteps (app4LExpr inferTypeLExpr 4 1 1 17) (.lit 17) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 4 1 1 17) (.lit 1) ∧
+    Evaluates (lowerT (app4LExpr checkTermNodeLExpr 4 1 1 17)) (.nat 1) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 4 1 1 1) (.lit 0) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 3 3 0 17) (.lit 1) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 3 0 1 17) (.lit 0) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 0 0 1 1) (.lit 1) ∧
+    SSteps (app4LExpr checkTermNodeLExpr 0 1 1 1) (.lit 0) ∧
+    -- 3. Lowered term-level reducer SSteps & Core4 Evaluates
+    SSteps (app4LExpr evalKernelStepLExpr 5 1 35 7) (.lit 42) ∧
+    Evaluates (lowerT (app4LExpr evalKernelStepLExpr 5 1 35 7)) (.nat 42) ∧
+    SSteps (app4LExpr evalKernelStepLExpr 5 2 41 0) (.lit 42) ∧
+    SSteps (app4LExpr evalKernelStepLExpr 0 0 0 42) (.lit 42) ∧
+    SSteps (app4LExpr evalKernelStepLExpr 7 40 2 0) (.lit 42) ∧
+    -- 4. Synthesized 4-port RtlModule execution agreement
+    evalLoweredNodeInferRtl nAppGood = [("out_inferTypeNode", 1#64)] ∧
+    evalLoweredNodeCheckRtl nAppGood = [("out_checkTermNode", 1#64)] ∧
+    evalLoweredNodeInferRtl nAppBadDom = [("out_inferTypeNode", 0#64)] ∧
+    evalLoweredNodeCheckRtl nAppBadDom = [("out_checkTermNode", 0#64)] ∧
+    evalLoweredNodeCheckRtl nAppNonFn = [("out_checkTermNode", 0#64)] ∧
+    evalLoweredNodeInferRtl nLamGood = [("out_inferTypeNode", 17#64)] ∧
+    evalLoweredNodeCheckRtl nLamGood = [("out_checkTermNode", 1#64)] ∧
+    evalLoweredNodeCheckRtl nLamBadTy = [("out_checkTermNode", 0#64)] ∧
+    evalLoweredNodeCheckRtl nConstGood = [("out_checkTermNode", 1#64)] ∧
+    evalLoweredNodeCheckRtl nConstSorry = [("out_checkTermNode", 0#64)] ∧
+    evalLoweredNodeCheckRtl nBVar0 = [("out_checkTermNode", 1#64)] ∧
+    evalLoweredNodeCheckRtl nBVar1 = [("out_checkTermNode", 0#64)] ∧
+    evalLoweredKernelStepRtl (5, 1, 35, 7) = [("out_evalKernelStep", 42#64)] ∧
+    evalLoweredKernelStepRtl (5, 2, 41, 0) = [("out_evalKernelStep", 42#64)] ∧
+    evalLoweredKernelStepRtl (0, 0, 0, 42) = [("out_evalKernelStep", 42#64)] ∧
+    evalLoweredKernelStepRtl (7, 40, 2, 0) = [("out_evalKernelStep", 42#64)] := by
+  intro eAppGood eAppBadDom eAppNonFn eLamGood eConstGood eConstSorry
+        tyNat tyNatArr
+        nAppGood nAppBadDom nAppNonFn nLamGood nLamBadTy nConstGood nConstSorry nBVar0 nBVar1
+  have sAppInfGood : SSteps (app4LExpr inferTypeLExpr 5 17 1 1) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sAppChkGood : SSteps (app4LExpr checkTermNodeLExpr 5 17 1 1) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sAppInfBad : SSteps (app4LExpr inferTypeLExpr 5 17 3 1) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sAppChkBad : SSteps (app4LExpr checkTermNodeLExpr 5 17 3 1) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sAppNonFn : SSteps (app4LExpr checkTermNodeLExpr 5 1 1 1) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sLamInfGood : SSteps (app4LExpr inferTypeLExpr 4 1 1 17) (.lit 17) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sLamChkGood : SSteps (app4LExpr checkTermNodeLExpr 4 1 1 17) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sLamChkBad : SSteps (app4LExpr checkTermNodeLExpr 4 1 1 1) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sConstGood : SSteps (app4LExpr checkTermNodeLExpr 3 3 0 17) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sConstSorry : SSteps (app4LExpr checkTermNodeLExpr 3 0 1 17) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sBVar0 : SSteps (app4LExpr checkTermNodeLExpr 0 0 1 1) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sBVar1 : SSteps (app4LExpr checkTermNodeLExpr 0 1 1 1) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sBeta : SSteps (app4LExpr evalKernelStepLExpr 5 1 35 7) (.lit 42) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sSucc : SSteps (app4LExpr evalKernelStepLExpr 5 2 41 0) (.lit 42) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sBVarSubst : SSteps (app4LExpr evalKernelStepLExpr 0 0 0 42) (.lit 42) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sZeta : SSteps (app4LExpr evalKernelStepLExpr 7 40 2 0) (.lit 42) :=
+    runLExprSteps_sound 64 _ _ rfl
+  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+          rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+          sAppInfGood, sAppChkGood, by simpa [lowerT] using lower_sound_nat sAppChkGood,
+          sAppInfBad, sAppChkBad, by simpa [lowerT] using lower_sound_nat sAppChkBad,
+          sAppNonFn, sLamInfGood, sLamChkGood, by simpa [lowerT] using lower_sound_nat sLamChkGood,
+          sLamChkBad, sConstGood, sConstSorry, sBVar0, sBVar1,
+          sBeta, by simpa [lowerT] using lower_sound_nat sBeta, sSucc, sBVarSubst, sZeta,
+          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
+          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
+          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
+          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
+
+/-- Broken `mkNodeInputEnv` that swaps `arg0` (`fnCode`) and `arg1` (`argCode`) on the 4-port
+RTL interface, breaking hardware arrow domain/codomain checking. -/
+def mkNodeInputEnvSwappedArgs (node : Nat × Nat × Nat × Nat) : Nat → BitVec 64
+  | 0 => BitVec.ofNat 64 node.1
+  | 1 => BitVec.ofNat 64 node.2.2.1
+  | 2 => BitVec.ofNat 64 node.2.1
+  | _ => BitVec.ofNat 64 node.2.2.2
+
+#tooth real_silicon_kernel_node_check_sound by mutation mkNodeInputEnv := mkNodeInputEnvSwappedArgs
+
+/-- Broken `kernelNodeCheckSpec` that blindly accepts every syntax node (`true`), ignoring
+type errors and `sorryAx` contamination. -/
+def kernelNodeCheckSpecAlwaysAccept (_env : KEnv) (_fuel : Nat) (_ctx : List KExpr) (_e _expectedTy : KExpr) : Bool :=
+  true
+
+#tooth real_silicon_kernel_node_check_sound by mutation kernelNodeCheckSpec := kernelNodeCheckSpecAlwaysAccept
+
+/-- Broken `evalLoweredNodeCheckRtl` that always outputs `1#64` (accepting ill-typed applications
+and `sorryAx` constants). -/
+def evalLoweredNodeCheckRtlAlwaysAccept (_node : Nat × Nat × Nat × Nat) : List (String × BitVec 64) :=
+  [("out_checkTermNode", 1#64)]
+
+#tooth real_silicon_kernel_node_check_sound by mutation evalLoweredNodeCheckRtl := evalLoweredNodeCheckRtlAlwaysAccept
 
 end Obend.Lower.Proofs.SiliconKernel
 end

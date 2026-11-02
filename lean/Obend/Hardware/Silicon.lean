@@ -627,5 +627,50 @@ theorem chip_never_valid_of_divergent {fs : List (String × FE)} (nd : (fs.map P
     have hcv := demand_exists nd hd
     exact absurd hcv (hdiv (.nat u) (headCost fs + 2 * d + 2))
 
+/-! ## 5. Multi-Channel Floorplan & SLR Crossing Signoff (`checkAllChannelHops`) -/
+
+/-- Boolean wrapper for `checkChannelHop` used by end-to-end physical silicon signoff. -/
+def checkChannelHopBool (ch : PlacedChannel) : Bool :=
+  match checkChannelHop ch with
+  | .ok () => true
+  | .error _ => false
+
+/-- Check that every `PlacedChannel` in a floorplan satisfies tile-distance pipelining and
+2-stage Laguna SLR crossing rules. -/
+def checkAllChannelHops (channels : List PlacedChannel) : Bool :=
+  channels.all checkChannelHopBool
+
+/-- **Theorem (`checkAllChannelHops_sound`)**:
+If `checkAllChannelHops channels = true`, then for every channel `ch ∈ channels`:
+1. `checkChannelHop ch = .ok ()`,
+2. If `ch.regStages = 0`, `ch` is strictly tile-local (`ch.src = ch.dst`), and
+3. If `ch` crosses an SLR boundary (`ch.src.slr ≠ ch.dst.slr`), `ch` carries at least `2` Laguna
+   register stages (`ch.regStages ≥ 2`) at zero lateral Manhattan offset (`ch.src.manhattan2D ch.dst = 0`). -/
+theorem checkAllChannelHops_sound (channels : List PlacedChannel)
+    (hAll : checkAllChannelHops channels = true) :
+    ∀ ch ∈ channels,
+      checkChannelHop ch = .ok () ∧
+      (ch.regStages = 0 → ch.src = ch.dst) ∧
+      (ch.src.slr ≠ ch.dst.slr → ch.regStages ≥ 2 ∧ ch.src.manhattan2D ch.dst = 0) := by
+  intro ch hMem
+  simp only [checkAllChannelHops, List.all_eq_true] at hAll
+  have hCh := hAll ch hMem
+  unfold checkChannelHopBool at hCh
+  cases hRes : checkChannelHop ch with
+  | error e => rw [hRes] at hCh; cases hCh
+  | ok u =>
+    refine ⟨rfl, ?_, ?_⟩
+    · intro hComb
+      exact comb_channel_is_tile_local hRes hComb
+    · intro hCross
+      exact slr_crossing_has_laguna_pair hRes hCross
+
+/-- Golden floorplanned channel list exercising intra-tile combinational wiring, 1-hop pipelined
+tile routing, and 2-stage Laguna SLR crossing. -/
+def goldenPlacedChannels : List PlacedChannel :=
+  [ { name := "local_comb",   src := ⟨0, 0, 0⟩, dst := ⟨0, 0, 0⟩, bitWidth := 64, regStages := 0 }
+  , { name := "adj_tile_hop", src := ⟨0, 0, 0⟩, dst := ⟨0, 0, 1⟩, bitWidth := 64, regStages := 1 }
+  , { name := "slr_laguna",   src := ⟨0, 0, 1⟩, dst := ⟨1, 0, 1⟩, bitWidth := 64, regStages := 2 } ]
+
 end Obend.Hardware.Silicon
 end

@@ -30,7 +30,6 @@ public import Obend.Lower.Proofs.SiliconKernel
 namespace Obend.Lower.ExprCAM
 open Obend.Core.Term
 open Obend.Leaf
-open Obend.Leaf.Futamura
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel
@@ -745,6 +744,577 @@ theorem exprCam_roundtrip_sound :
     camInstantiate1 c4 kNatConst (.lit (.natVal 42)) = KExpr.instantiate1 kNatConst (.lit (.natVal 42)) ∧
     camInstantiate1 c4 (.bvar 0) (.lit (.natVal 42)) = .lit (.natVal 42) := by
   refine ⟨fun e => (intern_unintern_roundtrip e ExprCAM.empty_valid).2, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+/-! ## 4b. True Hardware CAM Memory Image (`HwCamNodeWord` / `HwCamImage`) Without AST Side-Channel -/
+
+/-- Structural AST depth of a `KExpr` (`depth e ≥ 1` for every `e : KExpr`). -/
+def depth : KExpr → Nat
+  | .bvar _      => 1
+  | .fvar _      => 1
+  | .sort _      => 1
+  | .const _ _   => 1
+  | .lit _       => 1
+  | .app f a     => 1 + max (depth f) (depth a)
+  | .lam d b     => 1 + max (depth d) (depth b)
+  | .forallE d b => 1 + max (depth d) (depth b)
+  | .letE t v b  => 1 + max (depth t) (max (depth v) (depth b))
+  | .proj _ _ s  => 1 + depth s
+
+abbrev KExpr.depth (e : KExpr) : Nat := Obend.Lower.ExprCAM.depth e
+
+/-- Auxiliary symbol/literal/universe table entry (`HwCamSymbolEntry`) referenced by `symIdx`
+from a `HwCamNodeWord`. Contains NO `KExpr` AST nodes! -/
+inductive HwCamSymbolEntry where
+  | sortEntry  (u : KLevel)
+  | constEntry (name : KName) (us : List KLevel)
+  | litEntry   (lit : KLiteral)
+  | projEntry  (structName : KName) (fieldIdx : Nat)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Hardware CAM Memory Node Word (`HwCamNodeWord`):
+Consists ONLY of fixed-width integer/word fields (`tag`, `h0`, `h1`, `h2` for `letE`, and
+symbol/literal table index `symIdx`) with **no `KExpr` AST stored inside the hardware table**! -/
+structure HwCamNodeWord where
+  tag    : Nat
+  h0     : Nat
+  h1     : Nat
+  h2     : Nat
+  symIdx : Nat
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Hardware CAM Memory Image (`HwCamImage`):
+Consists purely of the integer node-word table (`nodes : List HwCamNodeWord`) and the auxiliary
+symbol/literal table (`symbols : List HwCamSymbolEntry`), with zero `KExpr` AST side-channel. -/
+structure HwCamImage where
+  nodes   : List HwCamNodeWord := []
+  symbols : List HwCamSymbolEntry := []
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Empty `HwCamImage`. -/
+def HwCamImage.empty : HwCamImage := { nodes := [], symbols := [] }
+
+/-- Alias for `HwCamImage.empty`. -/
+abbrev emptyHwCamImage : HwCamImage := HwCamImage.empty
+
+/-- Associative index lookup in a hardware table (`findElemIdx?`), returning `some idx` when
+`target` is already present in `xs` (enabling 1-cycle CAM deduplication). -/
+def findElemIdx? {α : Type} [DecidableEq α] : List α → α → Option Nat
+  | [], _ => none
+  | x :: xs, target =>
+    if x = target then some 0
+    else (findElemIdx? xs target).map (· + 1)
+
+theorem getElem?_of_findElemIdx? {α : Type} [DecidableEq α] :
+    ∀ (xs : List α) (target : α) (idx : Nat),
+      findElemIdx? xs target = some idx → xs[idx]? = some target
+  | [], _, _, h => by cases h
+  | x :: xs, target, idx, h => by
+    simp only [findElemIdx?] at h
+    split at h
+    · rename_i heq
+      simp only [Option.some.injEq] at h
+      subst h heq
+      rfl
+    · simp only [Option.map_eq_some_iff] at h
+      obtain ⟨k, hk, rfl⟩ := h
+      simpa using getElem?_of_findElemIdx? xs target k hk
+
+/-- Allocate or reuse a symbol entry in `img.symbols` via associative CAM lookup, returning `(symIdx, updatedImage)`. -/
+def allocHwSymbol (s : HwCamSymbolEntry) (img : HwCamImage) : Nat × HwCamImage :=
+  match findElemIdx? img.symbols s with
+  | some idx => (idx, img)
+  | none =>
+    let idx := img.symbols.length
+    (idx, { img with symbols := img.symbols ++ [s] })
+
+/-- Allocate or reuse a hardware node word in `img.nodes` via associative CAM lookup, returning `(handle, updatedImage)`. -/
+def allocHwNode (w : HwCamNodeWord) (img : HwCamImage) : Nat × HwCamImage :=
+  match findElemIdx? img.nodes w with
+  | some h => (h, img)
+  | none =>
+    let h := img.nodes.length
+    (h, { img with nodes := img.nodes ++ [w] })
+
+/-- Intern a `KExpr` into a pure hardware `HwCamImage` (`internToHwImage : KExpr → HwCamImage → Nat × HwCamImage`),
+storing all 3 child handles `(ht, hv, hb)` of `.letE t v b` losslessly in `(h0, h1, h2)` and storing
+zero `KExpr` AST values in the hardware table. -/
+def internToHwImage : KExpr → HwCamImage → Nat × HwCamImage
+  | .bvar idx, img =>
+    allocHwNode { tag := 0, h0 := idx, h1 := 0, h2 := 0, symIdx := 0 } img
+  | .fvar id, img =>
+    allocHwNode { tag := 1, h0 := id, h1 := 0, h2 := 0, symIdx := 0 } img
+  | .sort u, img =>
+    let (sIdx, img1) := allocHwSymbol (.sortEntry u) img
+    allocHwNode { tag := 2, h0 := 0, h1 := 0, h2 := 0, symIdx := sIdx } img1
+  | .const n us, img =>
+    let (sIdx, img1) := allocHwSymbol (.constEntry n us) img
+    allocHwNode { tag := 3, h0 := 0, h1 := 0, h2 := 0, symIdx := sIdx } img1
+  | .app f a, img =>
+    let (hf, img1) := internToHwImage f img
+    let (ha, img2) := internToHwImage a img1
+    allocHwNode { tag := 4, h0 := hf, h1 := ha, h2 := 0, symIdx := 0 } img2
+  | .lam d b, img =>
+    let (hd, img1) := internToHwImage d img
+    let (hb, img2) := internToHwImage b img1
+    allocHwNode { tag := 5, h0 := hd, h1 := hb, h2 := 0, symIdx := 0 } img2
+  | .forallE d b, img =>
+    let (hd, img1) := internToHwImage d img
+    let (hb, img2) := internToHwImage b img1
+    allocHwNode { tag := 6, h0 := hd, h1 := hb, h2 := 0, symIdx := 0 } img2
+  | .letE t v b, img =>
+    let (ht, img1) := internToHwImage t img
+    let (hv, img2) := internToHwImage v img1
+    let (hb, img3) := internToHwImage b img2
+    allocHwNode { tag := 7, h0 := ht, h1 := hv, h2 := hb, symIdx := 0 } img3
+  | .lit l, img =>
+    let (sIdx, img1) := allocHwSymbol (.litEntry l) img
+    allocHwNode { tag := 8, h0 := 0, h1 := 0, h2 := 0, symIdx := sIdx } img1
+  | .proj structName idx s, img =>
+    let (hs, img1) := internToHwImage s img
+    let (sIdx, img2) := allocHwSymbol (.projEntry structName idx) img1
+    allocHwNode { tag := 9, h0 := hs, h1 := 0, h2 := 0, symIdx := sIdx } img2
+
+/-- Reconstruct a `KExpr` purely from the hardware word entries (`img.nodes`) and symbol table
+(`img.symbols`) bounded by fuel (`reconstructFromHwImage : Nat → HwCamImage → Nat → Option KExpr`). -/
+def reconstructFromHwImage : Nat → HwCamImage → Nat → Option KExpr
+  | 0, _, _ => none
+  | fuel + 1, img, h =>
+    match img.nodes[h]? with
+    | none => none
+    | some w =>
+      if w.tag == 0 then
+        some (.bvar w.h0)
+      else if w.tag == 1 then
+        some (.fvar w.h0)
+      else if w.tag == 2 then
+        match img.symbols[w.symIdx]? with
+        | some (.sortEntry u) => some (.sort u)
+        | _ => none
+      else if w.tag == 3 then
+        match img.symbols[w.symIdx]? with
+        | some (.constEntry n us) => some (.const n us)
+        | _ => none
+      else if w.tag == 4 then
+        match reconstructFromHwImage fuel img w.h0, reconstructFromHwImage fuel img w.h1 with
+        | some f, some a => some (.app f a)
+        | _, _ => none
+      else if w.tag == 5 then
+        match reconstructFromHwImage fuel img w.h0, reconstructFromHwImage fuel img w.h1 with
+        | some d, some b => some (.lam d b)
+        | _, _ => none
+      else if w.tag == 6 then
+        match reconstructFromHwImage fuel img w.h0, reconstructFromHwImage fuel img w.h1 with
+        | some d, some b => some (.forallE d b)
+        | _, _ => none
+      else if w.tag == 7 then
+        match reconstructFromHwImage fuel img w.h0,
+              reconstructFromHwImage fuel img w.h1,
+              reconstructFromHwImage fuel img w.h2 with
+        | some t, some v, some b => some (.letE t v b)
+        | _, _, _ => none
+      else if w.tag == 8 then
+        match img.symbols[w.symIdx]? with
+        | some (.litEntry l) => some (.lit l)
+        | _ => none
+      else if w.tag == 9 then
+        match reconstructFromHwImage fuel img w.h0, img.symbols[w.symIdx]? with
+        | some s, some (.projEntry structName idx) => some (.proj structName idx s)
+        | _, _ => none
+      else
+        none
+
+/-- Monotonicity predicate for `HwCamImage`: `img2` preserves all existing node and symbol indices of `img1`. -/
+def HwCamImage.Extends (img1 img2 : HwCamImage) : Prop :=
+  (∀ (i : Nat) (w : HwCamNodeWord), img1.nodes[i]? = some w → img2.nodes[i]? = some w) ∧
+  (∀ (j : Nat) (s : HwCamSymbolEntry), img1.symbols[j]? = some s → img2.symbols[j]? = some s)
+
+theorem HwCamImage.Extends.refl (img : HwCamImage) : img.Extends img :=
+  ⟨fun _ _ h => h, fun _ _ h => h⟩
+
+theorem HwCamImage.Extends.trans {a b c : HwCamImage}
+    (h1 : a.Extends b) (h2 : b.Extends c) : a.Extends c :=
+  ⟨fun i w h => h2.1 i w (h1.1 i w h), fun j s h => h2.2 j s (h1.2 j s h)⟩
+
+theorem getElem?_append_singleton_self {α : Type} (xs : List α) (x : α) :
+  (xs ++ [x])[xs.length]? = some x := by
+  rw [List.getElem?_append_right (Nat.le_refl xs.length)]
+  simp
+
+theorem getElem?_append_preserve {α : Type} {xs : List α} {i : Nat} {x : α}
+    (ys : List α) (h : xs[i]? = some x) :
+    (xs ++ ys)[i]? = some x := by
+  obtain ⟨hlt, _⟩ := List.getElem?_eq_some_iff.mp h
+  rw [List.getElem?_append_left hlt, h]
+
+theorem allocHwSymbol_spec (s : HwCamSymbolEntry) (img : HwCamImage) :
+    img.Extends (allocHwSymbol s img).2 ∧
+    (allocHwSymbol s img).2.symbols[(allocHwSymbol s img).1]? = some s := by
+  unfold allocHwSymbol
+  cases hfind : findElemIdx? img.symbols s with
+  | some idx =>
+    exact ⟨HwCamImage.Extends.refl img, getElem?_of_findElemIdx? img.symbols s idx hfind⟩
+  | none =>
+    refine ⟨⟨fun _ _ h => h, fun j sym h => getElem?_append_preserve [s] h⟩, ?_⟩
+    exact getElem?_append_singleton_self img.symbols s
+
+theorem allocHwNode_spec (w : HwCamNodeWord) (img : HwCamImage) :
+    img.Extends (allocHwNode w img).2 ∧
+    (allocHwNode w img).2.nodes[(allocHwNode w img).1]? = some w := by
+  unfold allocHwNode
+  cases hfind : findElemIdx? img.nodes w with
+  | some idx =>
+    exact ⟨HwCamImage.Extends.refl img, getElem?_of_findElemIdx? img.nodes w idx hfind⟩
+  | none =>
+    refine ⟨⟨fun i nd h => getElem?_append_preserve [w] h, fun _ _ h => h⟩, ?_⟩
+    exact getElem?_append_singleton_self img.nodes w
+
+theorem internToHwImage_extends : ∀ (e : KExpr) (img : HwCamImage),
+    img.Extends (internToHwImage e img).2
+  | .bvar _, img => (allocHwNode_spec _ img).1
+  | .fvar _, img => (allocHwNode_spec _ img).1
+  | .sort _, img =>
+    HwCamImage.Extends.trans (allocHwSymbol_spec _ img).1 (allocHwNode_spec _ _).1
+  | .const _ _, img =>
+    HwCamImage.Extends.trans (allocHwSymbol_spec _ img).1 (allocHwNode_spec _ _).1
+  | .app f a, img =>
+    HwCamImage.Extends.trans (internToHwImage_extends f img)
+      (HwCamImage.Extends.trans (internToHwImage_extends a _) (allocHwNode_spec _ _).1)
+  | .lam d b, img =>
+    HwCamImage.Extends.trans (internToHwImage_extends d img)
+      (HwCamImage.Extends.trans (internToHwImage_extends b _) (allocHwNode_spec _ _).1)
+  | .forallE d b, img =>
+    HwCamImage.Extends.trans (internToHwImage_extends d img)
+      (HwCamImage.Extends.trans (internToHwImage_extends b _) (allocHwNode_spec _ _).1)
+  | .letE t v b, img =>
+    HwCamImage.Extends.trans (internToHwImage_extends t img)
+      (HwCamImage.Extends.trans (internToHwImage_extends v _)
+        (HwCamImage.Extends.trans (internToHwImage_extends b _) (allocHwNode_spec _ _).1))
+  | .lit _, img =>
+    HwCamImage.Extends.trans (allocHwSymbol_spec _ img).1 (allocHwNode_spec _ _).1
+  | .proj _ _ s, img =>
+    HwCamImage.Extends.trans (internToHwImage_extends s img)
+      (HwCamImage.Extends.trans (allocHwSymbol_spec _ _).1 (allocHwNode_spec _ _).1)
+
+theorem reconstructFromHwImage_mono :
+    ∀ (fuel : Nat) {img1 img2 : HwCamImage} (_hext : img1.Extends img2) (h : Nat) {e : KExpr},
+      reconstructFromHwImage fuel img1 h = some e →
+      reconstructFromHwImage fuel img2 h = some e
+  | 0, _, _, _, _, _, h => by cases h
+  | fuel + 1, img1, img2, hext, h, e, hrec => by
+    unfold reconstructFromHwImage at hrec ⊢
+    cases hnode : img1.nodes[h]? with
+    | none => rw [hnode] at hrec; cases hrec
+    | some w =>
+      rw [hnode] at hrec
+      rw [hext.1 h w hnode]
+      dsimp only at hrec ⊢
+      cases ht0 : (w.tag == 0)
+      · simp only [ht0, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+        cases ht1 : (w.tag == 1)
+        · simp only [ht1, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+          cases ht2 : (w.tag == 2)
+          · simp only [ht2, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+            cases ht3 : (w.tag == 3)
+            · simp only [ht3, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+              cases ht4 : (w.tag == 4)
+              · simp only [ht4, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+                cases ht5 : (w.tag == 5)
+                · simp only [ht5, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+                  cases ht6 : (w.tag == 6)
+                  · simp only [ht6, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+                    cases ht7 : (w.tag == 7)
+                    · simp only [ht7, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+                      cases ht8 : (w.tag == 8)
+                      · simp only [ht8, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+                        cases ht9 : (w.tag == 9)
+                        · simp only [ht9, Bool.false_eq_true, ↓reduceIte] at hrec; cases hrec
+                        · simp only [ht9, ↓reduceIte] at hrec ⊢
+                          cases hc0 : reconstructFromHwImage fuel img1 w.h0 with
+                          | none => rw [hc0] at hrec; cases hrec
+                          | some e0 =>
+                            cases hsym : img1.symbols[w.symIdx]? with
+                            | none => rw [hc0, hsym] at hrec; cases hrec
+                            | some sym =>
+                              rw [hc0, hsym] at hrec
+                              rw [reconstructFromHwImage_mono fuel hext w.h0 hc0,
+                                  hext.2 w.symIdx sym hsym]
+                              exact hrec
+                      · simp only [ht8, ↓reduceIte] at hrec ⊢
+                        cases hsym : img1.symbols[w.symIdx]? with
+                        | none => rw [hsym] at hrec; cases hrec
+                        | some sym => rw [hsym] at hrec; rw [hext.2 w.symIdx sym hsym]; exact hrec
+                    · simp only [ht7, ↓reduceIte] at hrec ⊢
+                      cases hc0 : reconstructFromHwImage fuel img1 w.h0 with
+                      | none => rw [hc0] at hrec; cases hrec
+                      | some e0 =>
+                        cases hc1 : reconstructFromHwImage fuel img1 w.h1 with
+                        | none => rw [hc0, hc1] at hrec; cases hrec
+                        | some e1 =>
+                          cases hc2 : reconstructFromHwImage fuel img1 w.h2 with
+                          | none => rw [hc0, hc1, hc2] at hrec; cases hrec
+                          | some e2 =>
+                            rw [hc0, hc1, hc2] at hrec
+                            rw [reconstructFromHwImage_mono fuel hext w.h0 hc0,
+                                reconstructFromHwImage_mono fuel hext w.h1 hc1,
+                                reconstructFromHwImage_mono fuel hext w.h2 hc2]
+                            exact hrec
+                  · simp only [ht6, ↓reduceIte] at hrec ⊢
+                    cases hc0 : reconstructFromHwImage fuel img1 w.h0 with
+                    | none => rw [hc0] at hrec; cases hrec
+                    | some e0 =>
+                      cases hc1 : reconstructFromHwImage fuel img1 w.h1 with
+                      | none => rw [hc0, hc1] at hrec; cases hrec
+                      | some e1 =>
+                        rw [hc0, hc1] at hrec
+                        rw [reconstructFromHwImage_mono fuel hext w.h0 hc0,
+                            reconstructFromHwImage_mono fuel hext w.h1 hc1]
+                        exact hrec
+                · simp only [ht5, ↓reduceIte] at hrec ⊢
+                  cases hc0 : reconstructFromHwImage fuel img1 w.h0 with
+                  | none => rw [hc0] at hrec; cases hrec
+                  | some e0 =>
+                    cases hc1 : reconstructFromHwImage fuel img1 w.h1 with
+                    | none => rw [hc0, hc1] at hrec; cases hrec
+                    | some e1 =>
+                      rw [hc0, hc1] at hrec
+                      rw [reconstructFromHwImage_mono fuel hext w.h0 hc0,
+                          reconstructFromHwImage_mono fuel hext w.h1 hc1]
+                      exact hrec
+              · simp only [ht4, ↓reduceIte] at hrec ⊢
+                cases hc0 : reconstructFromHwImage fuel img1 w.h0 with
+                | none => rw [hc0] at hrec; cases hrec
+                | some e0 =>
+                  cases hc1 : reconstructFromHwImage fuel img1 w.h1 with
+                  | none => rw [hc0, hc1] at hrec; cases hrec
+                  | some e1 =>
+                    rw [hc0, hc1] at hrec
+                    rw [reconstructFromHwImage_mono fuel hext w.h0 hc0,
+                        reconstructFromHwImage_mono fuel hext w.h1 hc1]
+                    exact hrec
+            · simp only [ht3, ↓reduceIte] at hrec ⊢
+              cases hsym : img1.symbols[w.symIdx]? with
+              | none => rw [hsym] at hrec; cases hrec
+              | some sym => rw [hsym] at hrec; rw [hext.2 w.symIdx sym hsym]; exact hrec
+          · simp only [ht2, ↓reduceIte] at hrec ⊢
+            cases hsym : img1.symbols[w.symIdx]? with
+            | none => rw [hsym] at hrec; cases hrec
+            | some sym => rw [hsym] at hrec; rw [hext.2 w.symIdx sym hsym]; exact hrec
+        · simp only [ht1, ↓reduceIte] at hrec ⊢; exact hrec
+      · simp only [ht0, ↓reduceIte] at hrec ⊢; exact hrec
+
+/-- **Universal Lossless Hardware CAM Reconstruction Theorem (`reconstructFromHwImage_intern_roundtrip`)**:
+For every fuel bound `fuel : Nat`, every expression `e : KExpr` (including `.letE t v b` with 3 children),
+and every initial hardware image `img : HwCamImage`, if `depth e ≤ fuel`, then reconstructing from
+`internToHwImage e img` (which stores zero `KExpr` AST nodes in its hardware tables) recovers `some e`
+losslessly! -/
+theorem reconstructFromHwImage_intern_roundtrip :
+    ∀ (fuel : Nat) (e : KExpr) (img : HwCamImage),
+      depth e ≤ fuel →
+      reconstructFromHwImage fuel (internToHwImage e img).2 (internToHwImage e img).1 = some e := by
+  intro fuel e
+  induction e generalizing fuel with
+  | bvar idx =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [internToHwImage]
+      have hnd := (allocHwNode_spec { tag := 0, h0 := idx, h1 := 0, h2 := 0, symIdx := 0 } img).2
+      unfold reconstructFromHwImage
+      rw [hnd]
+      rfl
+  | fvar id =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [internToHwImage]
+      have hnd := (allocHwNode_spec { tag := 1, h0 := id, h1 := 0, h2 := 0, symIdx := 0 } img).2
+      unfold reconstructFromHwImage
+      rw [hnd]
+      rfl
+  | sort u =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [internToHwImage]
+      have hsym := (allocHwSymbol_spec (.sortEntry u) img).2
+      have hnd := allocHwNode_spec
+        { tag := 2, h0 := 0, h1 := 0, h2 := 0, symIdx := (allocHwSymbol (.sortEntry u) img).1 }
+        (allocHwSymbol (.sortEntry u) img).2
+      have hsym2 := hnd.1.2 _ _ hsym
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [hsym2]
+      rfl
+  | const n us =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [internToHwImage]
+      have hsym := (allocHwSymbol_spec (.constEntry n us) img).2
+      have hnd := allocHwNode_spec
+        { tag := 3, h0 := 0, h1 := 0, h2 := 0, symIdx := (allocHwSymbol (.constEntry n us) img).1 }
+        (allocHwSymbol (.constEntry n us) img).2
+      have hsym2 := hnd.1.2 _ _ hsym
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [hsym2]
+      rfl
+  | app fn arg ihF ihA =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [depth] at hdepth
+      have hdf : depth fn ≤ f := by omega
+      have hda : depth arg ≤ f := by omega
+      simp only [internToHwImage]
+      have recF := ihF f img hdf
+      have extA := internToHwImage_extends arg (internToHwImage fn img).2
+      have recA := ihA f (internToHwImage fn img).2 hda
+      have hnd := allocHwNode_spec
+        { tag := 4
+        , h0 := (internToHwImage fn img).1
+        , h1 := (internToHwImage arg (internToHwImage fn img).2).1
+        , h2 := 0
+        , symIdx := 0 }
+        (internToHwImage arg (internToHwImage fn img).2).2
+      have recF2 := reconstructFromHwImage_mono f (HwCamImage.Extends.trans extA hnd.1) _ recF
+      have recA2 := reconstructFromHwImage_mono f hnd.1 _ recA
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [recF2, recA2]
+      rfl
+  | lam dom body ihD ihB =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [depth] at hdepth
+      have hdd : depth dom ≤ f := by omega
+      have hdb : depth body ≤ f := by omega
+      simp only [internToHwImage]
+      have recD := ihD f img hdd
+      have extB := internToHwImage_extends body (internToHwImage dom img).2
+      have recB := ihB f (internToHwImage dom img).2 hdb
+      have hnd := allocHwNode_spec
+        { tag := 5
+        , h0 := (internToHwImage dom img).1
+        , h1 := (internToHwImage body (internToHwImage dom img).2).1
+        , h2 := 0
+        , symIdx := 0 }
+        (internToHwImage body (internToHwImage dom img).2).2
+      have recD2 := reconstructFromHwImage_mono f (HwCamImage.Extends.trans extB hnd.1) _ recD
+      have recB2 := reconstructFromHwImage_mono f hnd.1 _ recB
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [recD2, recB2]
+      rfl
+  | forallE dom body ihD ihB =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [depth] at hdepth
+      have hdd : depth dom ≤ f := by omega
+      have hdb : depth body ≤ f := by omega
+      simp only [internToHwImage]
+      have recD := ihD f img hdd
+      have extB := internToHwImage_extends body (internToHwImage dom img).2
+      have recB := ihB f (internToHwImage dom img).2 hdb
+      have hnd := allocHwNode_spec
+        { tag := 6
+        , h0 := (internToHwImage dom img).1
+        , h1 := (internToHwImage body (internToHwImage dom img).2).1
+        , h2 := 0
+        , symIdx := 0 }
+        (internToHwImage body (internToHwImage dom img).2).2
+      have recD2 := reconstructFromHwImage_mono f (HwCamImage.Extends.trans extB hnd.1) _ recD
+      have recB2 := reconstructFromHwImage_mono f hnd.1 _ recB
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [recD2, recB2]
+      rfl
+  | letE ty val body ihT ihV ihB =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [depth] at hdepth
+      have hdt : depth ty ≤ f := by omega
+      have hdv : depth val ≤ f := by omega
+      have hdb : depth body ≤ f := by omega
+      simp only [internToHwImage]
+      have recT := ihT f img hdt
+      have extV := internToHwImage_extends val (internToHwImage ty img).2
+      have recV := ihV f (internToHwImage ty img).2 hdv
+      have extB := internToHwImage_extends body (internToHwImage val (internToHwImage ty img).2).2
+      have recB := ihB f (internToHwImage val (internToHwImage ty img).2).2 hdb
+      have hnd := allocHwNode_spec
+        { tag := 7
+        , h0 := (internToHwImage ty img).1
+        , h1 := (internToHwImage val (internToHwImage ty img).2).1
+        , h2 := (internToHwImage body (internToHwImage val (internToHwImage ty img).2).2).1
+        , symIdx := 0 }
+        (internToHwImage body (internToHwImage val (internToHwImage ty img).2).2).2
+      have recT2 := reconstructFromHwImage_mono f
+        (HwCamImage.Extends.trans extV (HwCamImage.Extends.trans extB hnd.1)) _ recT
+      have recV2 := reconstructFromHwImage_mono f
+        (HwCamImage.Extends.trans extB hnd.1) _ recV
+      have recB2 := reconstructFromHwImage_mono f hnd.1 _ recB
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [recT2, recV2, recB2]
+      rfl
+  | lit l =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [internToHwImage]
+      have hsym := (allocHwSymbol_spec (.litEntry l) img).2
+      have hnd := allocHwNode_spec
+        { tag := 8, h0 := 0, h1 := 0, h2 := 0, symIdx := (allocHwSymbol (.litEntry l) img).1 }
+        (allocHwSymbol (.litEntry l) img).2
+      have hsym2 := hnd.1.2 _ _ hsym
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [hsym2]
+      rfl
+  | proj structName idx s ihS =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [depth] at hdepth
+      have hds : depth s ≤ f := by omega
+      simp only [internToHwImage]
+      have recS := ihS f img hds
+      have hsym := allocHwSymbol_spec (.projEntry structName idx) (internToHwImage s img).2
+      have hnd := allocHwNode_spec
+        { tag := 9
+        , h0 := (internToHwImage s img).1
+        , h1 := 0
+        , h2 := 0
+        , symIdx := (allocHwSymbol (.projEntry structName idx) (internToHwImage s img).2).1 }
+        (allocHwSymbol (.projEntry structName idx) (internToHwImage s img).2).2
+      have recS2 := reconstructFromHwImage_mono f (HwCamImage.Extends.trans hsym.1 hnd.1) _ recS
+      have hsym2 := hnd.1.2 _ _ hsym.2
+      unfold reconstructFromHwImage
+      rw [hnd.2]
+      dsimp only
+      rw [recS2, hsym2]
+      rfl
 
 /-! ## 5. Live `silicon-check` Ingestion from Host `Lean.ConstantInfo` / `Lean.Expr` (`WS 24`) -/
 

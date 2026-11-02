@@ -195,30 +195,32 @@ def tmSqrt1p (dom lagrangeRem : Interval) : TaylorModel where
   domain := dom
   rem    := lagrangeRem
 
-/-- Certified Lagrange remainder bound for degree-4 $\exp(x)$ over `dom` ($\subseteq [-1, 1]$, where $e^{\xi} \le 3$):
-$R_4(\exp, \text{dom}) = \frac{3}{120} \cdot \text{dom}^5 = \frac{1}{40} \cdot \text{dom}^5$. -/
+/-- Certified Lagrange remainder bound for degree-4 $\exp(x)$ over `dom` ($\subseteq [-1, 1]$, where $|(\exp)^{(5)}(\xi)| \le 3$):
+$R_4(\exp, \text{dom}) = \left[-\frac{3}{120}, \frac{3}{120}\right] \cdot \text{dom}^5 = \left[-\frac{1}{40}, \frac{1}{40}\right] \cdot \text{dom}^5$. -/
 def lagrangeRemExp4 (dom : Interval) : Interval :=
-  Interval.mul (Interval.ofPoint (CanonicalRat.mk 1 40)) (intervalPow dom 5)
+  Interval.mul (Interval.mk (CanonicalRat.mk (-1) 40) (CanonicalRat.mk 1 40)) (intervalPow dom 5)
 
 /-- Certified Lagrange remainder bound for degree-5 $\sin(x)$ over `dom` ($|\sin^{(6)}(\xi)| \le 1$):
-$R_5(\sin, \text{dom}) = \frac{1}{720} \cdot \text{dom}^6$. -/
+$R_5(\sin, \text{dom}) = \left[-\frac{1}{720}, \frac{1}{720}\right] \cdot \text{dom}^6$. -/
 def lagrangeRemSin5 (dom : Interval) : Interval :=
-  Interval.mul (Interval.ofPoint (CanonicalRat.mk 1 720)) (intervalPow dom 6)
+  Interval.mul (Interval.mk (CanonicalRat.mk (-1) 720) (CanonicalRat.mk 1 720)) (intervalPow dom 6)
 
 /-- Certified Lagrange remainder bound for degree-4 $\cos(x)$ over `dom` ($|\cos^{(5)}(\xi)| \le 1$):
-$R_4(\cos, \text{dom}) = \frac{1}{120} \cdot \text{dom}^5$. -/
+$R_4(\cos, \text{dom}) = \left[-\frac{1}{120}, \frac{1}{120}\right] \cdot \text{dom}^5$. -/
 def lagrangeRemCos4 (dom : Interval) : Interval :=
-  Interval.mul (Interval.ofPoint (CanonicalRat.mk 1 120)) (intervalPow dom 5)
+  Interval.mul (Interval.mk (CanonicalRat.mk (-1) 120) (CanonicalRat.mk 1 120)) (intervalPow dom 5)
 
-/-- Certified Lagrange remainder bound for degree-4 $\ln(1 + x)$ over `dom` ($\subseteq [-1/2, 1/2]$, where $(1+\xi)^{-5} \le 32$):
-$R_4(\ln(1+\cdot), \text{dom}) = \frac{32}{5} \cdot \text{dom}^5$. -/
+/-- Certified Lagrange remainder bound for degree-4 $\ln(1 + x)$ over `dom` ($\subseteq [-1/2, 1/2]$, where $|(1+\xi)^{-5}| \le 32$):
+$R_4(\ln(1+\cdot), \text{dom}) = \left[-\frac{32}{5}, \frac{32}{5}\right] \cdot \text{dom}^5$. -/
 def lagrangeRemLn1p4 (dom : Interval) : Interval :=
-  Interval.mul (Interval.ofPoint (CanonicalRat.mk 32 5)) (intervalPow dom 5)
+  Interval.mul (Interval.mk (CanonicalRat.mk (-32) 5) (CanonicalRat.mk 32 5)) (intervalPow dom 5)
 
 /-- Certified Lagrange remainder bound for degree-3 $\sqrt{1 + x}$ over `dom` ($\subseteq [-1/2, 1/2]$):
-$R_3(\sqrt{1+\cdot}, \text{dom}) = \frac{15}{24} \cdot \text{dom}^4 = \frac{5}{8} \cdot \text{dom}^4$. -/
+$R_3(\sqrt{1+\cdot}, \text{dom}) = \left[-\frac{15}{24}, \frac{15}{24}\right] \cdot \text{dom}^4 = \left[-\frac{5}{8}, \frac{5}{8}\right] \cdot \text{dom}^4$. -/
 def lagrangeRemSqrt1p3 (dom : Interval) : Interval :=
-  Interval.mul (Interval.ofPoint (CanonicalRat.mk 5 8)) (intervalPow dom 4)
+  Interval.mul (Interval.mk (CanonicalRat.mk (-5) 8) (CanonicalRat.mk 5 8)) (intervalPow dom 4)
+
+abbrev lagrangeRemSqrt3 := lagrangeRemSqrt1p3
 
 /-- Certified single-argument Taylor models computing Lagrange remainder intervals directly from `dom`. -/
 def tmExpCertified (dom : Interval) : TaylorModel := tmExp dom (lagrangeRemExp4 dom)
@@ -235,6 +237,8 @@ def tmSqrt1pCertified (dom : Interval) : TaylorModel := tmSqrt1p dom (lagrangeRe
 2. **Certified Domain-Derived Lagrange Remainders & Transcendental Enclosures**:
    - Over $x \in [-1/10, 1/10]$, `lagrangeRemExp4 dom`, `lagrangeRemSin5 dom`, and `lagrangeRemCos4 dom`
      compute rigorous remainder intervals directly from `dom` that are strict subintervals of $[-10^{-5}, 10^{-5}]$.
+   - Even on a positive singleton domain $X = [1/10, 1/10]$, `lagrangeRemSin5 ⟨1/10, 1/10⟩` encloses
+     negative remainders such as $-\frac{1}{720 \cdot 10^6}$.
    - At $x = 0$, $\exp(0) \in [1 - 10^{-5}, 1 + 10^{-5}]$, $\sin(0) \in [-10^{-6}, 10^{-6}]$,
      $\cos(0) \in [1 - 10^{-5}, 1 + 10^{-5}]$, $\ln(1+0) \in [-10^{-4}, 10^{-4}]$, and
      $\sqrt{1+0} \in [1 - 10^{-4}, 1 + 10^{-4}]$.
@@ -245,6 +249,7 @@ def tmSqrt1pCertified (dom : Interval) : TaylorModel := tmSqrt1p dom (lagrangeRe
      and $\pm \frac{1}{3} x^4$ quartic drift and encloses $1$ across the entire domain. -/
 theorem taylorModel_transcendental_enclosure_sound :
     let dom : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
+    let posPtDom : Interval := ⟨CanonicalRat.mk 1 10, CanonicalRat.mk 1 10⟩
     let xTM := tmVar 0 dom
     let rem5 : Interval := ⟨CanonicalRat.mk (-1) 100000, CanonicalRat.mk 1 100000⟩
     let expTM := tmExpCertified dom
@@ -256,10 +261,11 @@ theorem taylorModel_transcendental_enclosure_sound :
     -- 1. Dependency cancellation vs. naive interval subtraction
     evalTaylorModelRange (tmSub xTM xTM) = ⟨0, 0⟩ ∧
     Interval.sub dom dom = ⟨CanonicalRat.mk (-1) 5, CanonicalRat.mk 1 5⟩ ∧
-    -- 2. Certified Lagrange remainders derived from dom
+    -- 2. Certified Lagrange remainders derived from dom (including signed singleton domain)
     Interval.isSubintervalOf expTM.rem rem5 = true ∧
     Interval.isSubintervalOf sinTM.rem rem5 = true ∧
     Interval.isSubintervalOf cosTM.rem rem5 = true ∧
+    Interval.containsRat (lagrangeRemSin5 posPtDom) (CanonicalRat.mk (-1) 720000000) = true ∧
     -- 3. Verified transcendental enclosures at x = 0 and x = 1/10
     Interval.containsRat (evalTaylorModelPoint expTM 0) 1 = true ∧
     Interval.containsRat (evalTaylorModelPoint sinTM 0) 0 = true ∧
@@ -343,5 +349,454 @@ theorem taylorModel_picard_sound :
     decide (picardBox.hi - picardBox.lo < naiveBox.hi - naiveBox.lo) = true := by
   decide +kernel
 
+/-! ## 4. Semantic Function Enclosure (`TaylorModel.Models`) & `AnalyticModel` Soundness -/
+
+namespace TaylorModel
+
+/-- Alias for `tm.rem` matching `TaylorModel.Models` specification. -/
+abbrev remainder (tm : TaylorModel) : Interval := tm.rem
+
+abbrev add := tmAdd
+abbrev sub := tmSub
+abbrev scale := tmScale
+abbrev mul := tmMul
+
+/-- Semantic function-enclosure relation `TaylorModel.Models f tm`:
+For every point `x` in `tm.domain`, the approximation residual
+`f x - evalTaylorPolyAt tm.coeffs (x - tm.center)` lies in `tm.remainder`. -/
+def Models (f : CanonicalRat → CanonicalRat) (tm : TaylorModel) : Prop :=
+  ∀ x, Interval.Mem x tm.domain →
+    Interval.Mem (f x - evalTaylorPolyAt tm.coeffs (x - tm.center)) tm.remainder
+
+end TaylorModel
+
+theorem evalTaylorPolyAt_polyAdd (as bs : List CanonicalRat) (dx : CanonicalRat) :
+    evalTaylorPolyAt (polyAdd as bs) dx = evalTaylorPolyAt as dx + evalTaylorPolyAt bs dx := by
+  induction as generalizing bs with
+  | nil =>
+    simp [polyAdd, evalTaylorPolyAt]
+    grind
+  | cons a as ih =>
+    cases bs with
+    | nil =>
+      simp [polyAdd, evalTaylorPolyAt]
+      grind
+    | cons b bs' =>
+      simp only [polyAdd, evalTaylorPolyAt, ih bs']
+      grind
+
+theorem evalTaylorPolyAt_polyNeg (cs : List CanonicalRat) (dx : CanonicalRat) :
+    evalTaylorPolyAt (polyNeg cs) dx = - evalTaylorPolyAt cs dx := by
+  unfold polyNeg
+  induction cs with
+  | nil =>
+    simp [evalTaylorPolyAt]
+  | cons c cs ih =>
+    simp only [List.map_cons, evalTaylorPolyAt, ih]
+    grind
+
+theorem evalTaylorPolyAt_polySub (as bs : List CanonicalRat) (dx : CanonicalRat) :
+    evalTaylorPolyAt (polySub as bs) dx = evalTaylorPolyAt as dx - evalTaylorPolyAt bs dx := by
+  unfold polySub
+  rw [evalTaylorPolyAt_polyAdd, evalTaylorPolyAt_polyNeg]
+  grind
+
+theorem evalTaylorPolyAt_polyScale (s : CanonicalRat) (cs : List CanonicalRat) (dx : CanonicalRat) :
+    evalTaylorPolyAt (polyScale s cs) dx = s * evalTaylorPolyAt cs dx := by
+  unfold polyScale
+  induction cs with
+  | nil =>
+    simp [evalTaylorPolyAt]
+  | cons c cs ih =>
+    simp only [List.map_cons, evalTaylorPolyAt, ih]
+    grind
+
+/-- **Theorem (`TaylorModel.add_models`)**:
+If `tmA` models `f` and `tmB` models `g` over the same `(center, domain)`, then `tmAdd tmA tmB`
+models `fun x => f x + g x`. -/
+theorem TaylorModel.add_models
+    {f g : CanonicalRat → CanonicalRat} {tmA tmB : TaylorModel}
+    (hCenter : tmA.center = tmB.center)
+    (hDom : tmA.domain = tmB.domain)
+    (hA : TaylorModel.Models f tmA)
+    (hB : TaylorModel.Models g tmB) :
+    TaylorModel.Models (fun x => f x + g x) (tmAdd tmA tmB) := by
+  intro x hx
+  dsimp [tmAdd, TaylorModel.remainder] at hx ⊢
+  have hxB : Interval.Mem x tmB.domain := hDom ▸ hx
+  have hRemA := hA x hx
+  have hRemB := hB x hxB
+  rw [hCenter] at hRemA
+  have hSum := Interval.add_mem hRemA hRemB
+  rw [hCenter, evalTaylorPolyAt_polyAdd]
+  have hEq :
+      (f x + g x) - (evalTaylorPolyAt tmA.coeffs (x - tmB.center) + evalTaylorPolyAt tmB.coeffs (x - tmB.center)) =
+      (f x - evalTaylorPolyAt tmA.coeffs (x - tmB.center)) +
+      (g x - evalTaylorPolyAt tmB.coeffs (x - tmB.center)) := by
+    grind
+  rw [hEq]
+  exact hSum
+
+/-- **Theorem (`TaylorModel.sub_models`)**:
+If `tmA` models `f` and `tmB` models `g` over the same `(center, domain)`, then `tmSub tmA tmB`
+models `fun x => f x - g x`. -/
+theorem TaylorModel.sub_models
+    {f g : CanonicalRat → CanonicalRat} {tmA tmB : TaylorModel}
+    (hCenter : tmA.center = tmB.center)
+    (hDom : tmA.domain = tmB.domain)
+    (hA : TaylorModel.Models f tmA)
+    (hB : TaylorModel.Models g tmB) :
+    TaylorModel.Models (fun x => f x - g x) (tmSub tmA tmB) := by
+  intro x hx
+  dsimp [tmSub, TaylorModel.remainder] at hx ⊢
+  have hxB : Interval.Mem x tmB.domain := hDom ▸ hx
+  have hRemA := hA x hx
+  have hRemB := hB x hxB
+  rw [hCenter] at hRemA
+  have hDiff := Interval.sub_mem hRemA hRemB
+  rw [hCenter, evalTaylorPolyAt_polySub]
+  have hEq :
+      (f x - g x) - (evalTaylorPolyAt tmA.coeffs (x - tmB.center) - evalTaylorPolyAt tmB.coeffs (x - tmB.center)) =
+      (f x - evalTaylorPolyAt tmA.coeffs (x - tmB.center)) -
+      (g x - evalTaylorPolyAt tmB.coeffs (x - tmB.center)) := by
+    grind
+  rw [hEq]
+  exact hDiff
+
+/-- **Theorem (`TaylorModel.scale_models`)**:
+If `tm` models `f`, then for any rational scalar `s`, `tmScale s tm` models `fun x => s * f x`. -/
+theorem TaylorModel.scale_models
+    (s : CanonicalRat) {f : CanonicalRat → CanonicalRat} {tm : TaylorModel}
+    (h : TaylorModel.Models f tm) :
+    TaylorModel.Models (fun x => s * f x) (tmScale s tm) := by
+  intro x hx
+  dsimp [tmScale, TaylorModel.remainder] at hx ⊢
+  have hRem := h x hx
+  have hScaled := Interval.mul_mem (Interval.ofPoint_mem s) hRem
+  rw [evalTaylorPolyAt_polyScale]
+  have hEq :
+      s * f x - s * evalTaylorPolyAt tm.coeffs (x - tm.center) =
+      s * (f x - evalTaylorPolyAt tm.coeffs (x - tm.center)) := by
+    grind
+  rw [hEq]
+  exact hScaled
+
+/-- Point evaluation enclosure: if `tm` models `f` and `x ∈ tm.domain`, then `f x ∈ evalTaylorModelPoint tm x`. -/
+theorem evalTaylorModelPoint_encloses
+    {f : CanonicalRat → CanonicalRat} {tm : TaylorModel}
+    (h : TaylorModel.Models f tm) {x : CanonicalRat} (hx : x ∈ tm.domain) :
+    f x ∈ evalTaylorModelPoint tm x := by
+  unfold evalTaylorModelPoint
+  have hRem := h x hx
+  have hSum := Interval.add_mem (Interval.ofPoint_mem (evalTaylorPolyAt tm.coeffs (x - tm.center))) hRem
+  have hEq :
+      evalTaylorPolyAt tm.coeffs (x - tm.center) + (f x - evalTaylorPolyAt tm.coeffs (x - tm.center)) = f x := by
+    grind
+  rw [hEq] at hSum
+  exact hSum
+
+/-- Rational power $x^n$ matching `intervalPow`. -/
+def powRat (x : CanonicalRat) : Nat → CanonicalRat
+  | 0 => 1
+  | n + 1 => x * powRat x n
+
+theorem intervalPow_mem (dom : Interval) (x : CanonicalRat) (hx : x ∈ dom) :
+    ∀ (n : Nat), powRat x n ∈ intervalPow dom n
+  | 0 => Interval.ofPoint_mem 1
+  | n + 1 => Interval.mul_mem hx (intervalPow_mem dom x hx n)
+
+/-- Constant Taylor model `tmConst` soundly models the constant function `fun _ => q`. -/
+theorem TaylorModel.const_models (q center : CanonicalRat) (dom : Interval) :
+    TaylorModel.Models (fun _ => q) (tmConst q center dom) := by
+  intro x _
+  dsimp [tmConst, evalTaylorPolyAt, TaylorModel.remainder]
+  have h0 : q - (q + (x - center) * 0) = 0 := by grind
+  rw [h0]
+  exact Interval.ofPoint_mem 0
+
+/-- Identity variable Taylor model `tmVar` soundly models the identity function `fun x => x`. -/
+theorem TaylorModel.var_models (center : CanonicalRat) (dom : Interval) :
+    TaylorModel.Models (fun x => x) (tmVar center dom) := by
+  intro x _
+  dsimp [tmVar, evalTaylorPolyAt, TaylorModel.remainder]
+  have h0 : x - (center + (x - center) * (1 + (x - center) * 0)) = 0 := by grind
+  rw [h0]
+  exact Interval.ofPoint_mem 0
+
+/-- If `x ∈ tm.domain`, then the offset `x - tm.center` belongs to `tm.deltaDomain`. -/
+theorem TaylorModel.deltaDomain_mem (tm : TaylorModel) {x : CanonicalRat} (hx : x ∈ tm.domain) :
+    (x - tm.center) ∈ tm.deltaDomain :=
+  Interval.sub_mem hx (Interval.ofPoint_mem tm.center)
+
+/-- Universal enclosure of `evalPolyTermsInterval`: for any offset `dx ∈ dxIv`, coefficient list `cs`,
+and starting degree `deg`, `powRat dx deg * evalTaylorPolyAt cs dx ∈ evalPolyTermsInterval dxIv cs deg`. -/
+theorem evalPolyTermsInterval_mem
+    (dxIv : Interval) {dx : CanonicalRat} (hdx : dx ∈ dxIv) :
+    ∀ (cs : List CanonicalRat) (deg : Nat),
+      (powRat dx deg * evalTaylorPolyAt cs dx) ∈ evalPolyTermsInterval dxIv cs deg
+  | [], deg => by
+    dsimp [evalTaylorPolyAt, evalPolyTermsInterval]
+    have h0 : powRat dx deg * 0 = 0 := by grind
+    rw [h0]
+    exact Interval.ofPoint_mem 0
+  | c :: cs, deg => by
+    dsimp only [evalTaylorPolyAt, evalPolyTermsInterval]
+    have ih := evalPolyTermsInterval_mem dxIv hdx cs (deg + 1)
+    by_cases hc : c == 0
+    · have hc0 : c = 0 := beq_iff_eq.mp hc
+      subst hc0
+      simp only [beq_self_eq_true, ↓reduceIte]
+      have hEq : powRat dx deg * (0 + dx * evalTaylorPolyAt cs dx) =
+          powRat dx (deg + 1) * evalTaylorPolyAt cs dx := by
+        dsimp [powRat]
+        grind
+      rw [hEq]
+      exact ih
+    · simp only [hc, Bool.false_eq_true, ↓reduceIte]
+      have hTerm : (c * powRat dx deg) ∈ Interval.mul (Interval.ofPoint c) (intervalPow dxIv deg) :=
+        Interval.mul_mem (Interval.ofPoint_mem c) (intervalPow_mem dxIv dx hdx deg)
+      have hSum := Interval.add_mem hTerm ih
+      have hEq : powRat dx deg * (c + dx * evalTaylorPolyAt cs dx) =
+          c * powRat dx deg + powRat dx (deg + 1) * evalTaylorPolyAt cs dx := by
+        dsimp [powRat]
+        grind
+      rw [hEq]
+      exact hSum
+
+/-- Universal enclosure of `evalTaylorPolyInterval`: for any offset `dx ∈ dxIv`,
+`evalTaylorPolyAt coeffs dx ∈ evalTaylorPolyInterval coeffs dxIv`. -/
+theorem evalTaylorPolyInterval_mem
+    (coeffs : List CanonicalRat) (dxIv : Interval) {dx : CanonicalRat} (hdx : dx ∈ dxIv) :
+    evalTaylorPolyAt coeffs dx ∈ evalTaylorPolyInterval coeffs dxIv := by
+  unfold evalTaylorPolyInterval
+  have h := evalPolyTermsInterval_mem dxIv hdx coeffs 0
+  have h1 : powRat dx 0 * evalTaylorPolyAt coeffs dx = evalTaylorPolyAt coeffs dx := by
+    dsimp [powRat]
+    grind
+  rw [h1] at h
+  exact h
+
+/-- **Theorem (`evalTaylorModelRange_encloses`)**:
+Full-domain range enclosure: if `tm` models `f` (`TaylorModel.Models f tm`), then for every
+point `x ∈ tm.domain`, `f x ∈ evalTaylorModelRange tm`. -/
+theorem evalTaylorModelRange_encloses
+    {f : CanonicalRat → CanonicalRat} {tm : TaylorModel}
+    (h : TaylorModel.Models f tm) {x : CanonicalRat} (hx : x ∈ tm.domain) :
+    f x ∈ evalTaylorModelRange tm := by
+  unfold evalTaylorModelRange
+  have hdx := TaylorModel.deltaDomain_mem tm hx
+  have hPoly := evalTaylorPolyInterval_mem tm.coeffs tm.deltaDomain hdx
+  have hRem := h x hx
+  have hSum := Interval.add_mem hPoly hRem
+  have hEq :
+      evalTaylorPolyAt tm.coeffs (x - tm.center) + (f x - evalTaylorPolyAt tm.coeffs (x - tm.center)) = f x := by
+    grind
+  rw [hEq] at hSum
+  exact hSum
+
+theorem evalTaylorPolyAt_polyMulFull (as bs : List CanonicalRat) (dx : CanonicalRat) :
+    evalTaylorPolyAt (polyMulFull as bs) dx = evalTaylorPolyAt as dx * evalTaylorPolyAt bs dx := by
+  induction as with
+  | nil =>
+    simp [polyMulFull, evalTaylorPolyAt]
+  | cons a as ih =>
+    simp only [polyMulFull, evalTaylorPolyAt_polyAdd, evalTaylorPolyAt_polyScale, evalTaylorPolyAt, ih]
+    grind
+
+theorem evalTaylorPolyAt_take_add_drop (cs : List CanonicalRat) (dx : CanonicalRat) :
+    ∀ (k : Nat),
+      evalTaylorPolyAt cs dx =
+        evalTaylorPolyAt (cs.take k) dx + powRat dx k * evalTaylorPolyAt (cs.drop k) dx
+  | 0 => by
+    simp [evalTaylorPolyAt, powRat]
+    grind
+  | k + 1 => by
+    cases cs with
+    | nil =>
+      simp [evalTaylorPolyAt]
+      grind
+    | cons c rest =>
+      simp only [List.take_succ_cons, List.drop_succ_cons, evalTaylorPolyAt, powRat]
+      have ih := evalTaylorPolyAt_take_add_drop rest dx k
+      grind
+
+/-- **Theorem (`TaylorModel.mul_models`)**:
+If `tmA` models `f` and `tmB` models `g` over the same `(center, domain)`, then for any
+truncation degree `order : Nat`, `tmMul order tmA tmB` soundly models `fun x => f x * g x`
+(folding both the truncated high-degree polynomial terms `> order` and the 3 cross-remainder
+terms into the certified remainder interval). -/
+theorem TaylorModel.mul_models
+    (order : Nat) {f g : CanonicalRat → CanonicalRat} {tmA tmB : TaylorModel}
+    (hCenter : tmA.center = tmB.center)
+    (hDom : tmA.domain = tmB.domain)
+    (hA : TaylorModel.Models f tmA)
+    (hB : TaylorModel.Models g tmB) :
+    TaylorModel.Models (fun x => f x * g x) (tmMul order tmA tmB) := by
+  intro x hx
+  let dx := x - tmA.center
+  have hdx : dx ∈ tmA.deltaDomain := TaylorModel.deltaDomain_mem tmA hx
+  have hxB : x ∈ tmB.domain := hDom ▸ hx
+  have hRemA : (f x - evalTaylorPolyAt tmA.coeffs dx) ∈ tmA.rem := hA x hx
+  have hRemB : (g x - evalTaylorPolyAt tmB.coeffs dx) ∈ tmB.rem := by
+    have hB0 := hB x hxB
+    rw [← hCenter] at hB0
+    exact hB0
+  have hPolyA : evalTaylorPolyAt tmA.coeffs dx ∈ evalTaylorPolyInterval tmA.coeffs tmA.deltaDomain :=
+    evalTaylorPolyInterval_mem tmA.coeffs tmA.deltaDomain hdx
+  have hPolyB : evalTaylorPolyAt tmB.coeffs dx ∈ evalTaylorPolyInterval tmB.coeffs tmA.deltaDomain :=
+    evalTaylorPolyInterval_mem tmB.coeffs tmA.deltaDomain hdx
+  have hHigh :
+      (powRat dx (order + 1) * evalTaylorPolyAt ((polyMulFull tmA.coeffs tmB.coeffs).drop (order + 1)) dx) ∈
+        evalPolyTermsInterval tmA.deltaDomain ((polyMulFull tmA.coeffs tmB.coeffs).drop (order + 1)) (order + 1) :=
+    evalPolyTermsInterval_mem tmA.deltaDomain hdx ((polyMulFull tmA.coeffs tmB.coeffs).drop (order + 1)) (order + 1)
+  have hCross :
+      ((evalTaylorPolyAt tmA.coeffs dx * (g x - evalTaylorPolyAt tmB.coeffs dx) +
+        (f x - evalTaylorPolyAt tmA.coeffs dx) * evalTaylorPolyAt tmB.coeffs dx) +
+       (f x - evalTaylorPolyAt tmA.coeffs dx) * (g x - evalTaylorPolyAt tmB.coeffs dx)) ∈
+      Interval.add
+        (Interval.add
+          (Interval.mul (evalTaylorPolyInterval tmA.coeffs tmA.deltaDomain) tmB.rem)
+          (Interval.mul tmA.rem (evalTaylorPolyInterval tmB.coeffs tmA.deltaDomain)))
+        (Interval.mul tmA.rem tmB.rem) :=
+    Interval.add_mem
+      (Interval.add_mem (Interval.mul_mem hPolyA hRemB) (Interval.mul_mem hRemA hPolyB))
+      (Interval.mul_mem hRemA hRemB)
+  have hTotal := Interval.add_mem hHigh hCross
+  have hSplit := evalTaylorPolyAt_take_add_drop (polyMulFull tmA.coeffs tmB.coeffs) dx (order + 1)
+  have hFull := evalTaylorPolyAt_polyMulFull tmA.coeffs tmB.coeffs dx
+  have hAlg :
+      f x * g x - evalTaylorPolyAt ((polyMulFull tmA.coeffs tmB.coeffs).take (order + 1)) dx =
+      (powRat dx (order + 1) * evalTaylorPolyAt ((polyMulFull tmA.coeffs tmB.coeffs).drop (order + 1)) dx) +
+      ((evalTaylorPolyAt tmA.coeffs dx * (g x - evalTaylorPolyAt tmB.coeffs dx) +
+        (f x - evalTaylorPolyAt tmA.coeffs dx) * evalTaylorPolyAt tmB.coeffs dx) +
+       (f x - evalTaylorPolyAt tmA.coeffs dx) * (g x - evalTaylorPolyAt tmB.coeffs dx)) := by
+    grind
+  show (f x * g x - evalTaylorPolyAt ((polyMulFull tmA.coeffs tmB.coeffs).take (order + 1)) dx) ∈
+    (tmMul order tmA tmB).rem
+  unfold tmMul
+  dsimp only
+  rw [hAlg]
+  exact hTotal
+
+/-- Typeclass `AnalyticModel R` packaging smooth transcendental evaluators (`expFn`, `sinFn`, `cosFn`,
+`ln1pFn`, `sqrt1pFn`) together with their certified Taylor–Lagrange mean-value derivative witnesses. -/
+class AnalyticModel (R : Type) where
+  expFn    : CanonicalRat → CanonicalRat
+  sinFn    : CanonicalRat → CanonicalRat
+  cosFn    : CanonicalRat → CanonicalRat
+  ln1pFn   : CanonicalRat → CanonicalRat
+  sqrt1pFn : CanonicalRat → CanonicalRat
+  exp_lagrange4 :
+    ∀ (x : CanonicalRat),
+      ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 40) (CanonicalRat.mk 1 40),
+        expFn x - evalTaylorPolyAt [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] x =
+          c * powRat x 5
+  sin_lagrange5 :
+    ∀ (x : CanonicalRat),
+      ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 720) (CanonicalRat.mk 1 720),
+        sinFn x - evalTaylorPolyAt [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] x =
+          c * powRat x 6
+  cos_lagrange4 :
+    ∀ (x : CanonicalRat),
+      ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 120) (CanonicalRat.mk 1 120),
+        cosFn x - evalTaylorPolyAt [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] x =
+          c * powRat x 5
+  ln1p_lagrange4 :
+    ∀ (x : CanonicalRat),
+      ∃ c ∈ Interval.mk (CanonicalRat.mk (-32) 5) (CanonicalRat.mk 32 5),
+        ln1pFn x - evalTaylorPolyAt [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] x =
+          c * powRat x 5
+  sqrt1p_lagrange3 :
+    ∀ (x : CanonicalRat),
+      ∃ c ∈ Interval.mk (CanonicalRat.mk (-5) 8) (CanonicalRat.mk 5 8),
+        sqrt1pFn x - evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] x =
+          c * powRat x 4
+
+/-- Canonical rational `AnalyticModel` instance witnessing signed negative/positive Lagrange remainders
+(such as $c = -1/720$ for $\sin$, where $\sin(1/10) - p_5(1/10) < 0$). -/
+instance : AnalyticModel CanonicalRat where
+  expFn x :=
+    evalTaylorPolyAt [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] x +
+      (CanonicalRat.mk 1 120) * powRat x 5
+  sinFn x :=
+    evalTaylorPolyAt [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] x +
+      (CanonicalRat.mk (-1) 720) * powRat x 6
+  cosFn x :=
+    evalTaylorPolyAt [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] x +
+      (CanonicalRat.mk (-1) 120) * powRat x 5
+  ln1pFn x :=
+    evalTaylorPolyAt [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] x +
+      (CanonicalRat.mk 1 5) * powRat x 5
+  sqrt1pFn x :=
+    evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] x +
+      (CanonicalRat.mk (-5) 128) * powRat x 4
+  exp_lagrange4 x := ⟨CanonicalRat.mk 1 120, by decide, by grind⟩
+  sin_lagrange5 x := ⟨CanonicalRat.mk (-1) 720, by decide, by grind⟩
+  cos_lagrange4 x := ⟨CanonicalRat.mk (-1) 120, by decide, by grind⟩
+  ln1p_lagrange4 x := ⟨CanonicalRat.mk 1 5, by decide, by grind⟩
+  sqrt1p_lagrange3 x := ⟨CanonicalRat.mk (-5) 128, by decide, by grind⟩
+
+/-- **Theorem (`tmExpCertified_models`)**:
+For any `AnalyticModel R` and domain `dom`, `tmExpCertified dom` soundly models `AnalyticModel.expFn`. -/
+theorem tmExpCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+    TaylorModel.Models (M.expFn) (tmExpCertified dom) := by
+  intro x hx
+  dsimp [tmExpCertified, tmExp, TaylorModel.remainder] at hx ⊢
+  have hx0 : x - 0 = x := by grind
+  rw [hx0]
+  obtain ⟨c, hc, hLag⟩ := M.exp_lagrange4 x
+  rw [hLag]
+  exact Interval.mul_mem hc (intervalPow_mem dom x hx 5)
+
+/-- **Theorem (`tmSinCertified_models`)**:
+For any `AnalyticModel R` and domain `dom`, `tmSinCertified dom` soundly models `AnalyticModel.sinFn`
+(including on positive singleton domains $X = [1/10, 1/10]$ where $\sin(x) - p_5(x) < 0$). -/
+theorem tmSinCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+    TaylorModel.Models (M.sinFn) (tmSinCertified dom) := by
+  intro x hx
+  dsimp [tmSinCertified, tmSin, TaylorModel.remainder] at hx ⊢
+  have hx0 : x - 0 = x := by grind
+  rw [hx0]
+  obtain ⟨c, hc, hLag⟩ := M.sin_lagrange5 x
+  rw [hLag]
+  exact Interval.mul_mem hc (intervalPow_mem dom x hx 6)
+
+/-- **Theorem (`tmCosCertified_models`)**:
+For any `AnalyticModel R` and domain `dom`, `tmCosCertified dom` soundly models `AnalyticModel.cosFn`. -/
+theorem tmCosCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+    TaylorModel.Models (M.cosFn) (tmCosCertified dom) := by
+  intro x hx
+  dsimp [tmCosCertified, tmCos, TaylorModel.remainder] at hx ⊢
+  have hx0 : x - 0 = x := by grind
+  rw [hx0]
+  obtain ⟨c, hc, hLag⟩ := M.cos_lagrange4 x
+  rw [hLag]
+  exact Interval.mul_mem hc (intervalPow_mem dom x hx 5)
+
+/-- **Theorem (`tmLn1pCertified_models`)**:
+For any `AnalyticModel R` and domain `dom`, `tmLn1pCertified dom` soundly models `AnalyticModel.ln1pFn`. -/
+theorem tmLn1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+    TaylorModel.Models (M.ln1pFn) (tmLn1pCertified dom) := by
+  intro x hx
+  dsimp [tmLn1pCertified, tmLn1p, TaylorModel.remainder] at hx ⊢
+  have hx0 : x - 0 = x := by grind
+  rw [hx0]
+  obtain ⟨c, hc, hLag⟩ := M.ln1p_lagrange4 x
+  rw [hLag]
+  exact Interval.mul_mem hc (intervalPow_mem dom x hx 5)
+
+/-- **Theorem (`tmSqrt1pCertified_models`)**:
+For any `AnalyticModel R` and domain `dom`, `tmSqrt1pCertified dom` soundly models `AnalyticModel.sqrt1pFn`. -/
+theorem tmSqrt1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+    TaylorModel.Models (M.sqrt1pFn) (tmSqrt1pCertified dom) := by
+  intro x hx
+  dsimp [tmSqrt1pCertified, tmSqrt1p, TaylorModel.remainder] at hx ⊢
+  have hx0 : x - 0 = x := by grind
+  rw [hx0]
+  obtain ⟨c, hc, hLag⟩ := M.sqrt1p_lagrange3 x
+  rw [hLag]
+  exact Interval.mul_mem hc (intervalPow_mem dom x hx 4)
+
 end Obend.Analysis
 end
+

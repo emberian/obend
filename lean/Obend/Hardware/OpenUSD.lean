@@ -23,6 +23,7 @@ causal temporal persistence**:
 public import Obend.Hardware.Kinematics
 public import Obend.Law.Contract
 public import Obend.Law.Proofs.Claim
+public import Obend.Leaf.Flatten
 @[expose] public section
 
 namespace Obend.Hardware.OpenUSD
@@ -906,6 +907,625 @@ theorem golden_openusd_metatheory_verified :
     checkUsdTimeSampleChain 1200 180000 t0 [t1, t2, t3] = true ∧
     checkPartLifecycleInvariant 1200 180000 (finalUsdState t0 [t1, t2, t3]) = true := by
   decide +kernel
+
+/-! ## 4. Unified OpenUSD `SdfLayer` / `PrimSpec` / `PcpPrimIndex` $\to$ `Core4` `Term.mix` / `Term.fix` & `Obend.Leaf.flatten` -/
+
+/-- An OpenUSD `PrimSpec` authoring attribute/method opinions `fields` at hierarchical path `path`
+through LIVERPS composition arc `arc : UsdArcKind`. -/
+structure PrimSpec where
+  path   : SdfPath
+  arc    : UsdArcKind
+  fields : List (String × Term)
+  deriving Repr
+
+/-- An OpenUSD `SdfLayer` document containing a sequence of authored `PrimSpec`s. -/
+structure SdfLayer where
+  layerId : String
+  prims   : List PrimSpec
+  deriving Repr
+
+/-- Empty default `Obend.Logic.Layer` used when no `PrimSpec` matches a target `SdfPath`. -/
+def emptyUsdLayer : Obend.Logic.Layer :=
+  { name := "emptyUsdPrim"
+  , metadata := .record []
+  , fields := []
+  , flat := false }
+
+/-- Lower a single OpenUSD `PrimSpec` to a `Core4` `Obend.Logic.Layer` (`λself. λsuper. extend super {fields}`). -/
+def PrimSpec.toLayer (ps : PrimSpec) : Obend.Logic.Layer :=
+  { name := String.intercalate "/" ps.path
+  , metadata := .record []
+  , fields := ps.fields
+  , flat := false }
+
+/-- Insert a `PrimSpec` into a list ordered from strongest LIVERPS arc (`localArc = 7`) to weakest
+(`specializesArc = 1`). When two specs have equal LIVERPS strength, the newly inserted spec
+takes precedence at the head. -/
+def insertPrimByStrength (p : PrimSpec) : List PrimSpec → List PrimSpec
+  | [] => [p]
+  | q :: rest =>
+    if q.arc.strength ≤ p.arc.strength then
+      p :: q :: rest
+    else
+      q :: insertPrimByStrength p rest
+
+/-- Sort a list of `PrimSpec`s into canonical LIVERPS strength order (`L > I > V > E > R > P > S`). -/
+def sortPrimsByLiverps : List PrimSpec → List PrimSpec
+  | [] => []
+  | p :: rest => insertPrimByStrength p (sortPrimsByLiverps rest)
+
+/-- Gather all `PrimSpec`s across `layers : List SdfLayer` targeting `target : SdfPath`. -/
+def collectTargetPrims (layers : List SdfLayer) (target : SdfPath) : List PrimSpec :=
+  (layers.flatMap (fun l => l.prims)).filter (fun ps => ps.path == target)
+
+/-- Build the OpenUSD `PcpPrimIndex` for `target : SdfPath` by collecting matching `PrimSpec`s across
+`layers` and sorting them by LIVERPS `UsdArcKind.strength`. -/
+def buildPcpPrimIndex (layers : List SdfLayer) (target : SdfPath) : List PrimSpec :=
+  sortPrimsByLiverps (collectTargetPrims layers target)
+
+/-- Lower a list of `PrimSpec`s and `seedFields` into a `Core4` `Obend.Logic.Composition` sorted by
+LIVERPS `UsdArcKind.strength`. -/
+def primSpecsToComposition
+    (specs : List PrimSpec) (seedFields : List (String × Term)) : Obend.Logic.Composition :=
+  match sortPrimsByLiverps specs with
+  | [] => { top := emptyUsdLayer, below := [], seed := seedFields }
+  | topSpec :: belowSpecs =>
+    { top := topSpec.toLayer
+    , below := belowSpecs.map PrimSpec.toLayer
+    , seed := seedFields }
+
+/-- Lower a list of `PrimSpec`s and a `seed : Term` into a `Core4` `Term.fix (Term.mix ...)` object
+sorted by LIVERPS `UsdArcKind.strength`. -/
+def composePrimSpecsToTerm (specs : List PrimSpec) (seed : Term) : Term :=
+  match sortPrimsByLiverps specs with
+  | [] => .fix emptyUsdLayer.term seed
+  | topSpec :: belowSpecs =>
+    .fix (Obend.Logic.composeTerm topSpec.toLayer (belowSpecs.map PrimSpec.toLayer)) seed
+
+/-- **Unified OpenUSD `SdfLayer` $\to$ `Core4` `Term.mix` / `Term.fix` Lowering (`composePrimToTerm`)**:
+Sorts all `PrimSpec`s matching `target : SdfPath` across `layers : List SdfLayer` by LIVERPS
+`UsdArcKind.strength` and folds `Term.mix` across their `Layer.term`s, closing the open `self`/`super`
+recursion with `Term.fix ... seed`. -/
+def composePrimToTerm (layers : List SdfLayer) (target : SdfPath) (seed : Term) : Term :=
+  composePrimSpecsToTerm (collectTargetPrims layers target) seed
+
+/-- Bridge theorem: when `seed = .record seedFields`, `composePrimToTerm` is definitionally equal
+to `(primSpecsToComposition (collectTargetPrims layers target) seedFields).object`. -/
+theorem composePrimToTerm_eq_composition_object
+    (layers : List SdfLayer) (target : SdfPath) (seedFields : List (String × Term)) :
+    composePrimToTerm layers target (.record seedFields) =
+      (primSpecsToComposition (collectTargetPrims layers target) seedFields).object := by
+  unfold composePrimToTerm composePrimSpecsToTerm primSpecsToComposition Obend.Logic.Composition.object
+  cases sortPrimsByLiverps (collectTargetPrims layers target) <;> rfl
+
+/-- Every `UsdArcKind` has LIVERPS strength at most `UsdArcKind.localArc.strength` (`= 7`). -/
+theorem usdArcKind_strength_le_local (a : UsdArcKind) :
+    a.strength ≤ UsdArcKind.localArc.strength := by
+  cases a <;> decide
+
+/-- Inserting a `.localArc` `PrimSpec` into any `PrimSpec` list always places it at the head (`top`). -/
+theorem insertPrimByStrength_localArc_head
+    (p : PrimSpec) (rest : List PrimSpec) (hLocal : p.arc = .localArc) :
+    insertPrimByStrength p rest = p :: rest := by
+  cases rest with
+  | nil => rfl
+  | cons q tail =>
+    unfold insertPrimByStrength
+    rw [hLocal]
+    have hLe : q.arc.strength ≤ UsdArcKind.localArc.strength := usdArcKind_strength_le_local q.arc
+    rw [if_pos hLe]
+
+/-- **Formal LIVERPS $\leftrightarrow$ `Core4` `Term.mix` & `Obend.Leaf.flatten` Dominance Theorem
+(`liverps_local_dominates_term`)**:
+For any scene path `target : SdfPath`, any property name `m : String`, any `.localArc` opinion
+`vLocal : Term`, any weaker-or-equal arc `weakArc : UsdArcKind` with opinion `vWeak : Term`, and
+any `seedFields : List (String × Term)`:
+When a scene `layers` authors `{ path := target, arc := .localArc, fields := [(m, vLocal)] }`
+and `{ path := target, arc := weakArc, fields := [(m, vWeak)] }`:
+1. The lowered `Core4` object `composePrimToTerm layers target (.record seedFields)` reduces in
+   multi-step `Core4` operational semantics (`Steps`) on field projection `.get ... m` to the
+   local opinion `resolvedLocal` (via `Obend.Logic.late_binding`),
+2. Is behaviorally equivalent (`≈b`, `Obend.Equiv.BEquiv`) to `resolvedLocal`, and
+3. Whenever the composition is closed (`C.closedB = true`), compiling/flattening the OpenUSD
+   composition via `Obend.Leaf.flatten` eliminates all `Term.mix`/`super` indirections while
+   preserving behavioral equivalence `.get C.flatten m ≈b resolvedLocal`! -/
+theorem liverps_local_dominates_term
+    (target : SdfPath) (m : String) (vLocal vWeak : Term)
+    (weakArc : UsdArcKind) (seedFields : List (String × Term)) :
+    let localSpec : PrimSpec := { path := target, arc := .localArc, fields := [(m, vLocal)] }
+    let weakSpec  : PrimSpec := { path := target, arc := weakArc,   fields := [(m, vWeak)] }
+    let layers : List SdfLayer :=
+      [ { layerId := "localLayer", prims := [localSpec] }
+      , { layerId := "weakLayer",  prims := [weakSpec] } ]
+    let C := primSpecsToComposition (collectTargetPrims layers target) seedFields
+    let resolvedLocal := Obend.Logic.openTerm vLocal C.object (C.superAt 0)
+    Steps (.get (composePrimToTerm layers target (.record seedFields)) m) resolvedLocal ∧
+    (.get (composePrimToTerm layers target (.record seedFields)) m ≈b resolvedLocal) ∧
+    (C.closedB = true → (.get C.flatten m ≈b resolvedLocal)) := by
+  dsimp only
+  let localSpec : PrimSpec := { path := target, arc := .localArc, fields := [(m, vLocal)] }
+  let weakSpec  : PrimSpec := { path := target, arc := weakArc,   fields := [(m, vWeak)] }
+  let layers : List SdfLayer :=
+    [ { layerId := "localLayer", prims := [localSpec] }
+    , { layerId := "weakLayer",  prims := [weakSpec] } ]
+  have hCollect : collectTargetPrims layers target = [localSpec, weakSpec] := by
+    simp [collectTargetPrims, layers, localSpec, weakSpec]
+  have hSort : sortPrimsByLiverps [localSpec, weakSpec] = [localSpec, weakSpec] := by
+    dsimp only [sortPrimsByLiverps]
+    exact insertPrimByStrength_localArc_head localSpec [weakSpec] rfl
+  let C := primSpecsToComposition (collectTargetPrims layers target) seedFields
+  have hCEq : C = { top := localSpec.toLayer, below := [weakSpec.toLayer], seed := seedFields } := by
+    dsimp only [C, primSpecsToComposition]
+    rw [hCollect, hSort]
+    rfl
+  have hProv : Obend.Logic.providesLast C.layers m = some 0 := by
+    rw [hCEq]
+    simp [Obend.Logic.providesLast, Obend.Logic.Composition.layers, PrimSpec.toLayer, localSpec,
+      Obend.Logic.Layer.provides]
+  have hBody : Obend.Logic.bodyAt C.layers 0 m = some vLocal := by
+    rw [hCEq]
+    simp [Obend.Logic.bodyAt, Obend.Logic.Composition.layers, PrimSpec.toLayer, localSpec,
+      Obend.Logic.Layer.body]
+  rw [composePrimToTerm_eq_composition_object layers target seedFields]
+  have hSteps : Steps (.get C.object m) (Obend.Logic.openTerm vLocal C.object (C.superAt 0)) :=
+    Obend.Logic.late_binding C m 0 vLocal hProv hBody
+  have hBeq : (.get C.object m ≈b Obend.Logic.openTerm vLocal C.object (C.superAt 0)) :=
+    Obend.Logic.late_binding_bequiv C m 0 vLocal hProv hBody
+  refine ⟨hSteps, hBeq, ?_⟩
+  intro hClosed
+  exact Obend.Equiv.BEquiv.trans (Obend.Leaf.flatten_sound C hClosed m) hBeq
+
+/-- Concrete `Evaluates` corollary of `liverps_local_dominates_term`: even when a weaker
+`referencesArc` layer is listed *before* the stronger `localArc` layer in `layers`, LIVERPS sorting
+in `composePrimToTerm` places `localArc` at the top of the `Term.mix` stack and evaluates `.get ... m`
+to the `localArc` natural number attribute `.nat nLocal`! -/
+theorem liverps_local_overrides_preceding_reference_eval
+    (target : SdfPath) (m : String) (nLocal nRef : Nat) :
+    let refLayer   : SdfLayer := { layerId := "vendorRef.usd", prims := [{ path := target, arc := .referencesArc, fields := [(m, .nat nRef)] }] }
+    let localLayer : SdfLayer := { layerId := "sessionLocal.usd", prims := [{ path := target, arc := .localArc, fields := [(m, .nat nLocal)] }] }
+    let layers := [refLayer, localLayer]
+    let C := primSpecsToComposition (collectTargetPrims layers target) []
+    Evaluates (.get (composePrimToTerm layers target (.record [])) m) (.nat nLocal) ∧
+    (C.closedB = true → (.get C.flatten m ≈b .nat nLocal)) := by
+  dsimp only
+  let refSpec   : PrimSpec := { path := target, arc := .referencesArc, fields := [(m, .nat nRef)] }
+  let localSpec : PrimSpec := { path := target, arc := .localArc,      fields := [(m, .nat nLocal)] }
+  let layers : List SdfLayer :=
+    [ { layerId := "vendorRef.usd",    prims := [refSpec] }
+    , { layerId := "sessionLocal.usd", prims := [localSpec] } ]
+  have hCollect : collectTargetPrims layers target = [refSpec, localSpec] := by
+    simp [collectTargetPrims, layers, refSpec, localSpec]
+  have hSort : sortPrimsByLiverps [refSpec, localSpec] = [localSpec, refSpec] := by
+    rfl
+  let C := primSpecsToComposition (collectTargetPrims layers target) []
+  have hCEq : C = { top := localSpec.toLayer, below := [refSpec.toLayer], seed := [] } := by
+    dsimp only [C, primSpecsToComposition]
+    rw [hCollect, hSort]
+    rfl
+  have hProv : Obend.Logic.providesLast C.layers m = some 0 := by
+    rw [hCEq]
+    simp [Obend.Logic.providesLast, Obend.Logic.Composition.layers, PrimSpec.toLayer, localSpec,
+      Obend.Logic.Layer.provides]
+  have hBody : Obend.Logic.bodyAt C.layers 0 m = some (.nat nLocal) := by
+    rw [hCEq]
+    simp [Obend.Logic.bodyAt, Obend.Logic.Composition.layers, PrimSpec.toLayer, localSpec,
+      Obend.Logic.Layer.body]
+  have hRes : Obend.Logic.openTerm (.nat nLocal) C.object (C.superAt 0) = .nat nLocal := by
+    simp [Obend.Logic.openTerm, Term.substitute]
+  rw [composePrimToTerm_eq_composition_object layers target []]
+  have hSteps := Obend.Logic.late_binding C m 0 (.nat nLocal) hProv hBody
+  rw [hRes] at hSteps
+  have hEvalObj : Evaluates (.get C.object m) (.nat nLocal) :=
+    evaluates_steps hSteps ⟨.refl _, .natural nLocal⟩
+  refine ⟨hEvalObj, ?_⟩
+  intro hClosed
+  have hFlatSound := Obend.Leaf.flatten_sound C hClosed m
+  have hBeq := Obend.Logic.late_binding_bequiv C m 0 (.nat nLocal) hProv hBody
+  rw [hRes] at hBeq
+  exact Obend.Equiv.BEquiv.trans hFlatSound hBeq
+
+/-- **Universal Two-Arc LIVERPS Dominance in Both Layer Orders (`liverps_stronger_arc_dominates_term`)**:
+For *any* pair of OpenUSD composition arcs `strongArc, weakArc : UsdArcKind` with
+`weakArc.strength < strongArc.strength`, in *both* layer stack orders (`[strongLayer, weakLayer]` and
+`[weakLayer, strongLayer]`), lowering to `Core4` via `composePrimToTerm` places `strongArc` at the top of
+the `Term.mix` stack, steps `.get ... m` to `resolvedStrong`, and preserves `≈b resolvedStrong` under
+`Obend.Leaf.flatten`. -/
+theorem liverps_stronger_arc_dominates_term
+    (target : SdfPath) (m : String) (vStrong vWeak : Term)
+    (strongArc weakArc : UsdArcKind) (seedFields : List (String × Term))
+    (hLt : weakArc.strength < strongArc.strength) :
+    let strongSpec : PrimSpec := { path := target, arc := strongArc, fields := [(m, vStrong)] }
+    let weakSpec   : PrimSpec := { path := target, arc := weakArc,   fields := [(m, vWeak)] }
+    let strongLayer : SdfLayer := { layerId := "strongLayer", prims := [strongSpec] }
+    let weakLayer   : SdfLayer := { layerId := "weakLayer",   prims := [weakSpec] }
+    let layersFwd := [strongLayer, weakLayer]
+    let layersRev := [weakLayer, strongLayer]
+    let CFwd := primSpecsToComposition (collectTargetPrims layersFwd target) seedFields
+    let CRev := primSpecsToComposition (collectTargetPrims layersRev target) seedFields
+    let resolvedFwd := Obend.Logic.openTerm vStrong CFwd.object (CFwd.superAt 0)
+    let resolvedRev := Obend.Logic.openTerm vStrong CRev.object (CRev.superAt 0)
+    Steps (.get (composePrimToTerm layersFwd target (.record seedFields)) m) resolvedFwd ∧
+    Steps (.get (composePrimToTerm layersRev target (.record seedFields)) m) resolvedRev ∧
+    (CFwd.closedB = true → (.get CFwd.flatten m ≈b resolvedFwd)) ∧
+    (CRev.closedB = true → (.get CRev.flatten m ≈b resolvedRev)) := by
+  dsimp only
+  let strongSpec : PrimSpec := { path := target, arc := strongArc, fields := [(m, vStrong)] }
+  let weakSpec   : PrimSpec := { path := target, arc := weakArc,   fields := [(m, vWeak)] }
+  let strongLayer : SdfLayer := { layerId := "strongLayer", prims := [strongSpec] }
+  let weakLayer   : SdfLayer := { layerId := "weakLayer",   prims := [weakSpec] }
+  let layersFwd := [strongLayer, weakLayer]
+  let layersRev := [weakLayer, strongLayer]
+  have hColFwd : collectTargetPrims layersFwd target = [strongSpec, weakSpec] := by
+    simp [collectTargetPrims, layersFwd, strongLayer, weakLayer, strongSpec, weakSpec]
+  have hColRev : collectTargetPrims layersRev target = [weakSpec, strongSpec] := by
+    simp [collectTargetPrims, layersRev, strongLayer, weakLayer, strongSpec, weakSpec]
+  have hLe : weakSpec.arc.strength ≤ strongSpec.arc.strength := Nat.le_of_lt hLt
+  have hNotLe : ¬ (strongSpec.arc.strength ≤ weakSpec.arc.strength) := Nat.not_le_of_gt hLt
+  have hSortFwd : sortPrimsByLiverps [strongSpec, weakSpec] = [strongSpec, weakSpec] := by
+    dsimp only [sortPrimsByLiverps, insertPrimByStrength]
+    rw [if_pos hLe]
+  have hSortRev : sortPrimsByLiverps [weakSpec, strongSpec] = [strongSpec, weakSpec] := by
+    dsimp only [sortPrimsByLiverps, insertPrimByStrength]
+    rw [if_neg hNotLe]
+  let CFwd := primSpecsToComposition (collectTargetPrims layersFwd target) seedFields
+  let CRev := primSpecsToComposition (collectTargetPrims layersRev target) seedFields
+  have hCFwdEq : CFwd = { top := strongSpec.toLayer, below := [weakSpec.toLayer], seed := seedFields } := by
+    dsimp only [CFwd, primSpecsToComposition]
+    rw [hColFwd, hSortFwd]
+    rfl
+  have hCRevEq : CRev = { top := strongSpec.toLayer, below := [weakSpec.toLayer], seed := seedFields } := by
+    dsimp only [CRev, primSpecsToComposition]
+    rw [hColRev, hSortRev]
+    rfl
+  have hProvFwd : Obend.Logic.providesLast CFwd.layers m = some 0 := by
+    rw [hCFwdEq]
+    simp [Obend.Logic.providesLast, Obend.Logic.Composition.layers, PrimSpec.toLayer, strongSpec,
+      Obend.Logic.Layer.provides]
+  have hBodyFwd : Obend.Logic.bodyAt CFwd.layers 0 m = some vStrong := by
+    rw [hCFwdEq]
+    simp [Obend.Logic.bodyAt, Obend.Logic.Composition.layers, PrimSpec.toLayer, strongSpec,
+      Obend.Logic.Layer.body]
+  have hProvRev : Obend.Logic.providesLast CRev.layers m = some 0 := by
+    rw [hCRevEq]
+    simp [Obend.Logic.providesLast, Obend.Logic.Composition.layers, PrimSpec.toLayer, strongSpec,
+      Obend.Logic.Layer.provides]
+  have hBodyRev : Obend.Logic.bodyAt CRev.layers 0 m = some vStrong := by
+    rw [hCRevEq]
+    simp [Obend.Logic.bodyAt, Obend.Logic.Composition.layers, PrimSpec.toLayer, strongSpec,
+      Obend.Logic.Layer.body]
+  rw [composePrimToTerm_eq_composition_object layersFwd target seedFields,
+      composePrimToTerm_eq_composition_object layersRev target seedFields]
+  refine ⟨Obend.Logic.late_binding CFwd m 0 vStrong hProvFwd hBodyFwd,
+          Obend.Logic.late_binding CRev m 0 vStrong hProvRev hBodyRev, ?_, ?_⟩
+  · intro hClosed
+    exact Obend.Equiv.BEquiv.trans (Obend.Leaf.flatten_sound CFwd hClosed m)
+      (Obend.Logic.late_binding_bequiv CFwd m 0 vStrong hProvFwd hBodyFwd)
+  · intro hClosed
+    exact Obend.Equiv.BEquiv.trans (Obend.Leaf.flatten_sound CRev hClosed m)
+      (Obend.Logic.late_binding_bequiv CRev m 0 vStrong hProvRev hBodyRev)
+
+/-- **Same-Arc Sublayer Tie-Breaking Theorem (`liverps_sublayer_tiebreak_dominates_term`)**:
+When two sublayers `subLayer0` and `subLayer1` in `layers = [subLayer0, subLayer1]` author opinions
+`v0` and `v1` for the same property `m` under the *same* `UsdArcKind` (`arc`), stable LIVERPS
+sorting preserves sublayer order so `subLayer0` dominates `subLayer1` in `Core4` `Steps`, `BEquiv`,
+and `Obend.Leaf.flatten`. -/
+theorem liverps_sublayer_tiebreak_dominates_term
+    (target : SdfPath) (m : String) (v0 v1 : Term)
+    (arc : UsdArcKind) (seedFields : List (String × Term)) :
+    let spec0 : PrimSpec := { path := target, arc := arc, fields := [(m, v0)] }
+    let spec1 : PrimSpec := { path := target, arc := arc, fields := [(m, v1)] }
+    let layers : List SdfLayer :=
+      [ { layerId := "subLayer0", prims := [spec0] }
+      , { layerId := "subLayer1", prims := [spec1] } ]
+    let C := primSpecsToComposition (collectTargetPrims layers target) seedFields
+    let resolved0 := Obend.Logic.openTerm v0 C.object (C.superAt 0)
+    Steps (.get (composePrimToTerm layers target (.record seedFields)) m) resolved0 ∧
+    (.get (composePrimToTerm layers target (.record seedFields)) m ≈b resolved0) ∧
+    (C.closedB = true → (.get C.flatten m ≈b resolved0)) := by
+  dsimp only
+  let spec0 : PrimSpec := { path := target, arc := arc, fields := [(m, v0)] }
+  let spec1 : PrimSpec := { path := target, arc := arc, fields := [(m, v1)] }
+  let layers : List SdfLayer :=
+    [ { layerId := "subLayer0", prims := [spec0] }
+    , { layerId := "subLayer1", prims := [spec1] } ]
+  have hCol : collectTargetPrims layers target = [spec0, spec1] := by
+    simp [collectTargetPrims, layers, spec0, spec1]
+  have hLe : spec1.arc.strength ≤ spec0.arc.strength := Nat.le_refl _
+  have hSort : sortPrimsByLiverps [spec0, spec1] = [spec0, spec1] := by
+    dsimp only [sortPrimsByLiverps, insertPrimByStrength]
+    rw [if_pos hLe]
+  let C := primSpecsToComposition (collectTargetPrims layers target) seedFields
+  have hCEq : C = { top := spec0.toLayer, below := [spec1.toLayer], seed := seedFields } := by
+    dsimp only [C, primSpecsToComposition]
+    rw [hCol, hSort]
+    rfl
+  have hProv : Obend.Logic.providesLast C.layers m = some 0 := by
+    rw [hCEq]
+    simp [Obend.Logic.providesLast, Obend.Logic.Composition.layers, PrimSpec.toLayer, spec0,
+      Obend.Logic.Layer.provides]
+  have hBody : Obend.Logic.bodyAt C.layers 0 m = some v0 := by
+    rw [hCEq]
+    simp [Obend.Logic.bodyAt, Obend.Logic.Composition.layers, PrimSpec.toLayer, spec0,
+      Obend.Logic.Layer.body]
+  rw [composePrimToTerm_eq_composition_object layers target seedFields]
+  refine ⟨Obend.Logic.late_binding C m 0 v0 hProv hBody,
+          Obend.Logic.late_binding_bequiv C m 0 v0 hProv hBody, ?_⟩
+  intro hClosed
+  exact Obend.Equiv.BEquiv.trans (Obend.Leaf.flatten_sound C hClosed m)
+    (Obend.Logic.late_binding_bequiv C m 0 v0 hProv hBody)
+
+/-! ## 5. 3D $SE(3)$ / Affine `XformOp3D` Transform Stack Over `FRepExpr` & `AffineForm3D` -/
+
+/-- Elementary 3D OpenUSD `xformOp` spatial transformations:
+- `translate dx dy dz`: translates the local frame by `(dx, dy, dz)` (pullback maps `(x, y, z) ↦ (x - dx, y - dy, z - dz)`)
+- `rot90Z`: $90^\circ$ rotation about $+Z$ (pullback maps `(x, y, z) ↦ (y, -x, z)`)
+- `rot90X`: $90^\circ$ rotation about $+X$ (pullback maps `(x, y, z) ↦ (x, z, -y)`)
+- `rot90Y`: $90^\circ$ rotation about $+Y$ (pullback maps `(x, y, z) ↦ (-z, y, x)`)
+- `scaleIso k`: uniform coordinate scaling `(x, y, z) ↦ (k * x, k * y, k * z)` -/
+inductive XformOp3D where
+  | translate (dx dy dz : Int)
+  | rot90Z
+  | rot90X
+  | rot90Y
+  | scalePos (k : Nat)
+  deriving DecidableEq, Repr
+
+/-- Apply a single `XformOp3D` pullback to a 3D point `(x, y, z)`. -/
+def applyXformOpPoint (op : XformOp3D) (pt : Int × Int × Int) : Int × Int × Int :=
+  let (x, y, z) := pt
+  match op with
+  | .translate dx dy dz => (x - dx, y - dy, z - dz)
+  | .rot90Z             => (y, -x, z)
+  | .rot90X             => (x, z, -y)
+  | .rot90Y             => (-z, y, x)
+  | .scalePos k         => (Int.ofNat k * x, Int.ofNat k * y, Int.ofNat k * z)
+
+/-- Apply a sequence of OpenUSD `xformOpOrder` transforms `ops : List XformOp3D` to a 3D point `pt`. -/
+def applyXformStackPoint (ops : List XformOp3D) (pt : Int × Int × Int) : Int × Int × Int :=
+  ops.foldl (fun acc op => applyXformOpPoint op acc) pt
+
+/-- Apply a single `XformOp3D` pullback to a triple of 3D Affine Arithmetic forms `(ax, ay, az)`. -/
+def applyXformOpAffine3D
+    (op : XformOp3D) (ax ay az : AffineForm3D) : AffineForm3D × AffineForm3D × AffineForm3D :=
+  match op with
+  | .translate dx dy dz =>
+    ( AffineForm3D.sub ax (AffineForm3D.const dx)
+    , AffineForm3D.sub ay (AffineForm3D.const dy)
+    , AffineForm3D.sub az (AffineForm3D.const dz) )
+  | .rot90Z =>
+    ( ay, ax.neg, az )
+  | .rot90X =>
+    ( ax, az, ay.neg )
+  | .rot90Y =>
+    ( az.neg, ay, ax )
+  | .scalePos k =>
+    ( ax.scalePos k, ay.scalePos k, az.scalePos k )
+
+/-- Apply an OpenUSD `xformOpOrder` stack `ops : List XformOp3D` to 3D Affine Arithmetic forms `(ax, ay, az)`. -/
+def applyXformStackAffine3D
+    (ops : List XformOp3D) (ax ay az : AffineForm3D) : AffineForm3D × AffineForm3D × AffineForm3D :=
+  ops.foldl (fun (x, y, z) op => applyXformOpAffine3D op x y z) (ax, ay, az)
+
+/-- Evaluate a 3D `FRepExpr` solid `e` under an OpenUSD `XformOp3D` transform stack `ops` at `(x, y, z)`. -/
+def evalFRepPointXform (ops : List XformOp3D) (x y z : Int) (e : FRepExpr) : Int :=
+  let (x', y', z') := applyXformStackPoint ops (x, y, z)
+  evalFRepPoint x' y' z' e
+
+/-- Evaluate a 3D `FRepExpr` solid `e` in 3D Affine Arithmetic under an OpenUSD `XformOp3D` stack `ops`. -/
+def evalFRepAffine3DXform
+    (ops : List XformOp3D) (ax ay az : AffineForm3D) (e : FRepExpr) : AffineForm3D :=
+  let (ax', ay', az') := applyXformStackAffine3D ops ax ay az
+  evalFRepAffine3D ax' ay' az' e
+
+/-- **Exact Translation Inverse Identity (`xform_translate_inverse_exact`)**:
+Applying `.translate dx dy dz` followed by `.translate (-dx) (-dy) (-dz)` restores any 3D point `(x, y, z)`. -/
+theorem xform_translate_inverse_exact (dx dy dz x y z : Int) :
+    applyXformStackPoint [.translate dx dy dz, .translate (-dx) (-dy) (-dz)] (x, y, z) = (x, y, z) := by
+  dsimp only [applyXformStackPoint, List.foldl, applyXformOpPoint]
+  have hx : x - dx - -dx = x := by omega
+  have hy : y - dy - -dy = y := by omega
+  have hz : z - dz - -dz = z := by omega
+  rw [hx, hy, hz]
+
+/-- **Exact Four-Fold $90^\circ$ Rotation Identity (`xform_rot90Z_fourfold_identity`)**:
+Four successive $90^\circ$ rotations about $+Z$ (`[.rot90Z, .rot90Z, .rot90Z, .rot90Z]`) form the
+exact identity on $\mathbb{Z}^3$. -/
+theorem xform_rot90Z_fourfold_identity (x y z : Int) :
+    applyXformStackPoint [.rot90Z, .rot90Z, .rot90Z, .rot90Z] (x, y, z) = (x, y, z) := by
+  dsimp only [applyXformStackPoint, List.foldl, applyXformOpPoint]
+  have hx : - -x = x := by omega
+  have hy : - -y = y := by omega
+  rw [hx, hy]
+
+/-- Lemma: a single `applyXformOpAffine3D` preserves `enclosesAt`. -/
+theorem applyXformOpAffine3D_enclosesAt
+    (op : XformOp3D) (ax ay az : AffineForm3D) (x y z ex ey ez : Int)
+    (hx : ax.enclosesAt ex ey ez x)
+    (hy : ay.enclosesAt ex ey ez y)
+    (hz : az.enclosesAt ex ey ez z) :
+    let (ax', ay', az') := applyXformOpAffine3D op ax ay az
+    let (x', y', z') := applyXformOpPoint op (x, y, z)
+    ax'.enclosesAt ex ey ez x' ∧
+    ay'.enclosesAt ex ey ez y' ∧
+    az'.enclosesAt ex ey ez z' := by
+  cases op with
+  | translate dx dy dz =>
+    dsimp only [applyXformOpAffine3D, applyXformOpPoint]
+    refine ⟨?_, ?_, ?_⟩
+    · exact affine3d_sub_enclosesAt ax (AffineForm3D.const dx) ex ey ez x dx hx
+        (affine3d_const_enclosesAt dx ex ey ez)
+    · exact affine3d_sub_enclosesAt ay (AffineForm3D.const dy) ex ey ez y dy hy
+        (affine3d_const_enclosesAt dy ex ey ez)
+    · exact affine3d_sub_enclosesAt az (AffineForm3D.const dz) ex ey ez z dz hz
+        (affine3d_const_enclosesAt dz ex ey ez)
+  | rot90Z =>
+    dsimp only [applyXformOpAffine3D, applyXformOpPoint]
+    exact ⟨hy, affine3d_neg_enclosesAt ax ex ey ez x hx, hz⟩
+  | rot90X =>
+    dsimp only [applyXformOpAffine3D, applyXformOpPoint]
+    exact ⟨hx, hz, affine3d_neg_enclosesAt ay ex ey ez y hy⟩
+  | rot90Y =>
+    dsimp only [applyXformOpAffine3D, applyXformOpPoint]
+    exact ⟨affine3d_neg_enclosesAt az ex ey ez z hz, hy, hx⟩
+  | scalePos k =>
+    dsimp only [applyXformOpAffine3D, applyXformOpPoint]
+    exact ⟨ affine3d_scalePos_enclosesAt k ax ex ey ez x hx
+          , affine3d_scalePos_enclosesAt k ay ex ey ez y hy
+          , affine3d_scalePos_enclosesAt k az ex ey ez z hz ⟩
+
+/-- Lemma: folding `applyXformStackAffine3D` preserves `enclosesAt` across any `ops : List XformOp3D`. -/
+theorem applyXformStackAffine3D_enclosesAt
+    (ops : List XformOp3D) (ax ay az : AffineForm3D) (x y z ex ey ez : Int)
+    (hx : ax.enclosesAt ex ey ez x)
+    (hy : ay.enclosesAt ex ey ez y)
+    (hz : az.enclosesAt ex ey ez z) :
+    let (ax', ay', az') := applyXformStackAffine3D ops ax ay az
+    let (x', y', z') := applyXformStackPoint ops (x, y, z)
+    ax'.enclosesAt ex ey ez x' ∧
+    ay'.enclosesAt ex ey ez y' ∧
+    az'.enclosesAt ex ey ez z' := by
+  induction ops generalizing ax ay az x y z with
+  | nil => exact ⟨hx, hy, hz⟩
+  | cons op rest ih =>
+    dsimp only [applyXformStackAffine3D, applyXformStackPoint, List.foldl]
+    have hStep := applyXformOpAffine3D_enclosesAt op ax ay az x y z ex ey ez hx hy hz
+    rcases hStep with ⟨hx', hy', hz'⟩
+    exact ih (applyXformOpAffine3D op ax ay az).1
+             (applyXformOpAffine3D op ax ay az).2.1
+             (applyXformOpAffine3D op ax ay az).2.2
+             (applyXformOpPoint op (x, y, z)).1
+             (applyXformOpPoint op (x, y, z)).2.1
+             (applyXformOpPoint op (x, y, z)).2.2
+             hx' hy' hz'
+
+/-- **3D `XformOp3D` Stack Affine Arithmetic Soundness (`evalFRepAffine3DXform_enclosesAt`)**:
+For every transform stack `ops : List XformOp3D`, every 3D `FRepExpr` `e`, and every noise
+realization `(ex, ey, ez) ∈ [-1, 1]^3`, the interval `.toInterval` of `evalFRepAffine3DXform ops ax ay az e`
+conservatively encloses the transformed point evaluation `evalFRepPointXform ops x y z e`! -/
+theorem evalFRepAffine3DXform_enclosesAt
+    (ops : List XformOp3D) (ax ay az : AffineForm3D) (x y z ex ey ez : Int)
+    (hEx : -1 ≤ ex ∧ ex ≤ 1) (hEy : -1 ≤ ey ∧ ey ≤ 1) (hEz : -1 ≤ ez ∧ ez ≤ 1)
+    (hx : ax.enclosesAt ex ey ez x)
+    (hy : ay.enclosesAt ex ey ez y)
+    (hz : az.enclosesAt ex ey ez z)
+    (e : FRepExpr) :
+    (evalFRepAffine3DXform ops ax ay az e).toInterval.contains
+      (evalFRepPointXform ops x y z e) := by
+  unfold evalFRepAffine3DXform evalFRepPointXform
+  have hStack := applyXformStackAffine3D_enclosesAt ops ax ay az x y z ex ey ez hx hy hz
+  rcases hStack with ⟨hx', hy', hz'⟩
+  have hFRep := evalFRepAffine3D_enclosesAt
+    (applyXformStackAffine3D ops ax ay az).1
+    (applyXformStackAffine3D ops ax ay az).2.1
+    (applyXformStackAffine3D ops ax ay az).2.2
+    ex ey ez
+    (applyXformStackPoint ops (x, y, z)).1
+    (applyXformStackPoint ops (x, y, z)).2.1
+    (applyXformStackPoint ops (x, y, z)).2.2
+    e hEx hEy hEz hx' hy' hz'
+  exact affine3d_enclosesAt_to_interval _ ex ey ez _ hEx hEy hEz hFRep
+
+/-! ## 6. Certified Geometric Shell Wall Thickness Derived from 3D `FRepExpr` (`computeShellWallThicknessUm`) -/
+
+/-- **Certified 3D F-Rep Shell Wall Thickness (`computeShellWallThicknessUm`)**:
+Given an outer boundary surface `outer : FRepExpr`, an inner cavity surface `inner : FRepExpr`,
+a witness probe point `probePt : Int × Int × Int`, and a Lipschitz gradient bound `lipschitzBound : Int`,
+derives the certified lower-bound wall thickness (in micrometers):
+$$\text{wallThicknessUm} = \left\lfloor \frac{\max(0,\, f_{\text{inner}}(\text{probePt}) - f_{\text{outer}}(\text{probePt}))}{\max(1,\, L)} \right\rfloor.$$ -/
+def computeShellWallThicknessUm
+    (outer inner : FRepExpr) (probePt : Int × Int × Int) (lipschitzBound : Int) : Int :=
+  let (px, py, pz) := probePt
+  let fOut := evalFRepPoint px py pz outer
+  let fIn  := evalFRepPoint px py pz inner
+  let rawSpan := if fOut ≤ fIn then fIn - fOut else 0
+  let L := if 1 ≤ lipschitzBound then lipschitzBound else 1
+  rawSpan / L
+
+/-- Construct a `UsdPhysicalState` whose `wallThicknessUm` is derived directly from the 3D F-Rep
+shell geometry `(outer, inner)` via `computeShellWallThicknessUm` rather than an uncomputed integer. -/
+def mkCertifiedUsdPhysicalState
+    (timeCode : Nat) (outer inner : FRepExpr) (probePt : Int × Int × Int)
+    (lipschitzBound peakTempMilliC : Int) (receiptDigest : Nat) : UsdPhysicalState :=
+  { timeCode := timeCode
+  , wallThicknessUm := computeShellWallThicknessUm outer inner probePt lipschitzBound
+  , peakTempMilliC := peakTempMilliC
+  , receiptDigest := receiptDigest }
+
+/-- **Universal Non-Negativity of `computeShellWallThicknessUm` (`computeShellWallThicknessUm_nonneg`)**:
+For every outer/inner `FRepExpr` pair, probe point, and Lipschitz bound, the derived wall thickness
+is non-negative (`0 ≤ computeShellWallThicknessUm outer inner probePt lipschitzBound`). -/
+theorem computeShellWallThicknessUm_nonneg
+    (outer inner : FRepExpr) (probePt : Int × Int × Int) (lipschitzBound : Int) :
+    0 ≤ computeShellWallThicknessUm outer inner probePt lipschitzBound := by
+  rcases probePt with ⟨px, py, pz⟩
+  unfold computeShellWallThicknessUm
+  dsimp only
+  have hSpan : 0 ≤ (if evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner then
+      evalFRepPoint px py pz inner - evalFRepPoint px py pz outer else 0) := by
+    split <;> omega
+  have hL : 0 ≤ (if 1 ≤ lipschitzBound then lipschitzBound else 1) := by
+    split <;> omega
+  exact Int.ediv_nonneg hSpan hL
+
+/-- **Certified Lipschitz Shell Clearance Lower Bound (`computeShellWallThicknessUm_lipschitz_lower_bound`)**:
+Whenever `1 ≤ lipschitzBound` and `evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner`,
+the derived wall thickness `w := computeShellWallThicknessUm outer inner (px, py, pz) lipschitzBound`
+satisfies `w * lipschitzBound ≤ evalFRepPoint px py pz inner - evalFRepPoint px py pz outer`. -/
+theorem computeShellWallThicknessUm_lipschitz_lower_bound
+    (outer inner : FRepExpr) (px py pz lipschitzBound : Int)
+    (hL : 1 ≤ lipschitzBound)
+    (hOrder : evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner) :
+    computeShellWallThicknessUm outer inner (px, py, pz) lipschitzBound * lipschitzBound ≤
+      evalFRepPoint px py pz inner - evalFRepPoint px py pz outer := by
+  unfold computeShellWallThicknessUm
+  dsimp only
+  rw [if_pos hOrder, if_pos hL]
+  exact Int.ediv_mul_le _ (by omega)
+
+/-- **Certified 3D Affine-Form & `XformOp3D` Shell Wall Thickness (`computeShellWallThicknessAffine3DUm`)**:
+Given an OpenUSD `XformOp3D` transform stack `ops : List XformOp3D`, outer/inner F-Rep solids
+`outer inner : FRepExpr`, a 3D Affine Arithmetic probe cell `(ax, ay, az : AffineForm3D)`, and a
+Lipschitz bound `lipschitzBound : Int`, derives the worst-case certified lower-bound wall thickness
+across the entire 3D affine cell:
+$$\text{wallThicknessAffine3DUm} = \left\lfloor \frac{\max(0,\, \text{ivIn.lo} - \text{ivOut.hi})}{\max(1,\, L)} \right\rfloor.$$ -/
+def computeShellWallThicknessAffine3DUm
+    (ops : List XformOp3D) (outer inner : FRepExpr)
+    (ax ay az : AffineForm3D) (lipschitzBound : Int) : Int :=
+  let ivOut := (evalFRepAffine3DXform ops ax ay az outer).toInterval
+  let ivIn  := (evalFRepAffine3DXform ops ax ay az inner).toInterval
+  let rawSpan := if ivOut.hi ≤ ivIn.lo then ivIn.lo - ivOut.hi else 0
+  let L := if 1 ≤ lipschitzBound then lipschitzBound else 1
+  rawSpan / L
+
+/-- **3D Affine-Form Shell Wall Thickness Conservative Lower-Bound Theorem
+(`computeShellWallThicknessAffine3DUm_lipschitz_lower_bound`)**:
+For every transform stack `ops : List XformOp3D`, every point `(x, y, z)` enclosed by `(ax, ay, az)` at
+unit noise `(ex, ey, ez) ∈ [-1, 1]^3`, and every `1 ≤ lipschitzBound`: whenever the affine enclosures
+satisfy `ivOut.hi ≤ ivIn.lo`, the affine-derived wall thickness `w` satisfies
+`w * lipschitzBound ≤ evalFRepPointXform ops x y z inner - evalFRepPointXform ops x y z outer`! -/
+theorem computeShellWallThicknessAffine3DUm_lipschitz_lower_bound
+    (ops : List XformOp3D) (outer inner : FRepExpr)
+    (ax ay az : AffineForm3D) (x y z ex ey ez lipschitzBound : Int)
+    (hEx : -1 ≤ ex ∧ ex ≤ 1) (hEy : -1 ≤ ey ∧ ey ≤ 1) (hEz : -1 ≤ ez ∧ ez ≤ 1)
+    (hx : ax.enclosesAt ex ey ez x)
+    (hy : ay.enclosesAt ex ey ez y)
+    (hz : az.enclosesAt ex ey ez z)
+    (hL : 1 ≤ lipschitzBound)
+    (hSep : (evalFRepAffine3DXform ops ax ay az outer).toInterval.hi ≤
+            (evalFRepAffine3DXform ops ax ay az inner).toInterval.lo) :
+    computeShellWallThicknessAffine3DUm ops outer inner ax ay az lipschitzBound * lipschitzBound ≤
+      evalFRepPointXform ops x y z inner - evalFRepPointXform ops x y z outer := by
+  have hOut := evalFRepAffine3DXform_enclosesAt ops ax ay az x y z ex ey ez hEx hEy hEz hx hy hz outer
+  have hIn  := evalFRepAffine3DXform_enclosesAt ops ax ay az x y z ex ey ez hEx hEy hEz hx hy hz inner
+  dsimp only [FloatInterval.contains] at hOut hIn
+  unfold computeShellWallThicknessAffine3DUm
+  dsimp only
+  rw [if_pos hSep, if_pos hL]
+  have hDiv := Int.ediv_mul_le
+    ((evalFRepAffine3DXform ops ax ay az inner).toInterval.lo -
+     (evalFRepAffine3DXform ops ax ay az outer).toInterval.hi)
+    (by omega : lipschitzBound ≠ 0)
+  omega
 
 end Obend.Hardware.OpenUSD
 end

@@ -265,4 +265,72 @@ theorem extracted_corner_monotone_in_oxide
   by_cases h1 : f1.ildThicknessNm / 10 ≤ 40 <;> by_cases h2 : f2.ildThicknessNm / 10 ≤ 40 <;>
     simp only [h1, h2, ite_true, ite_false] <;> omega
 
+/-! ## 5. 2D Manhattan Bounding-Box DRC (`LayoutBox2D`, `checkBoxSpacing2D`, `checkViaEnclosure2D`) -/
+
+/-- 2D axis-aligned Manhattan bounding box `[xMinNm, xMaxNm] × [yMinNm, yMaxNm]` (in nanometers)
+on GDSII layer `layerId`. -/
+structure LayoutBox2D where
+  layerId : Nat
+  xMinNm  : Nat
+  yMinNm  : Nat
+  xMaxNm  : Nat
+  yMaxNm  : Nat
+  deriving DecidableEq, Repr
+
+/-- Check that a 2D layout bounding box has strictly positive width and height. -/
+def LayoutBox2D.wf (b : LayoutBox2D) : Bool :=
+  decide (b.xMinNm < b.xMaxNm) && decide (b.yMinNm < b.yMaxNm)
+
+/-- Predicate asserting that physical coordinate `(x, y)` (in nm) lies within `b`. -/
+def LayoutBox2D.containsPoint (b : LayoutBox2D) (x y : Nat) : Prop :=
+  b.xMinNm ≤ x ∧ x ≤ b.xMaxNm ∧ b.yMinNm ≤ y ∧ y ≤ b.yMaxNm
+
+/-- Check 2D Manhattan spacing between two axis-aligned layout boxes `b1` and `b2` by at least
+`minSpacingNm` nanometers along the X or Y axis (requiring strict separation `sep = max minSpacingNm 1`). -/
+def checkBoxSpacing2D (minSpacingNm : Nat) (b1 b2 : LayoutBox2D) : Bool :=
+  let sep : Nat := max minSpacingNm 1
+  b1.wf && b2.wf &&
+  (decide (b1.xMaxNm + sep ≤ b2.xMinNm) ||
+   decide (b2.xMaxNm + sep ≤ b1.xMinNm) ||
+   decide (b1.yMaxNm + sep ≤ b2.yMinNm) ||
+   decide (b2.yMaxNm + sep ≤ b1.yMinNm))
+
+/-- **Theorem (`boxSpacing2D_disjoint`)**:
+If `checkBoxSpacing2D minSpacingNm b1 b2 = true`, then `b1` and `b2` are point-wise disjoint in the
+2D silicon plane: no point `(x, y)` can belong to both `b1` and `b2`! -/
+theorem boxSpacing2D_disjoint
+    (minSpacingNm : Nat) (b1 b2 : LayoutBox2D) (x y : Nat)
+    (hSpace : checkBoxSpacing2D minSpacingNm b1 b2 = true) :
+    ¬ (b1.containsPoint x y ∧ b2.containsPoint x y) := by
+  unfold checkBoxSpacing2D LayoutBox2D.containsPoint at *
+  simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hSpace
+  intro ⟨⟨hx1Lo, hx1Hi, hy1Lo, hy1Hi⟩, ⟨hx2Lo, hx2Hi, hy2Lo, hy2Hi⟩⟩
+  rcases hSpace.2 with ((hX1 | hX2) | hY1) | hY2 <;> omega
+
+/-- Check 2D metal landing-pad enclosure around `viaBox` inside `metalPadBox` by at least
+`minEnclosureNm` nanometers on all 4 sides (West, East, South, North). -/
+def checkViaEnclosure2D (minEnclosureNm : Nat) (viaBox metalPadBox : LayoutBox2D) : Bool :=
+  viaBox.wf && metalPadBox.wf &&
+  decide (metalPadBox.xMinNm + minEnclosureNm ≤ viaBox.xMinNm) &&
+  decide (viaBox.xMaxNm + minEnclosureNm ≤ metalPadBox.xMaxNm) &&
+  decide (metalPadBox.yMinNm + minEnclosureNm ≤ viaBox.yMinNm) &&
+  decide (viaBox.yMaxNm + minEnclosureNm ≤ metalPadBox.yMaxNm)
+
+/-- **Theorem (`viaEnclosure2D_contained`)**:
+If `checkViaEnclosure2D minEnclosureNm viaBox metalPadBox = true`, then every point `(x, y)` inside
+`viaBox` is strictly contained within `metalPadBox` with at least `minEnclosureNm` enclosure margin
+on all 4 boundaries! -/
+theorem viaEnclosure2D_contained
+    (minEnclosureNm : Nat) (viaBox metalPadBox : LayoutBox2D) (x y : Nat)
+    (hEnc : checkViaEnclosure2D minEnclosureNm viaBox metalPadBox = true)
+    (hInVia : viaBox.containsPoint x y) :
+    metalPadBox.containsPoint x y ∧
+    metalPadBox.xMinNm + minEnclosureNm ≤ x ∧
+    x + minEnclosureNm ≤ metalPadBox.xMaxNm ∧
+    metalPadBox.yMinNm + minEnclosureNm ≤ y ∧
+    y + minEnclosureNm ≤ metalPadBox.yMaxNm := by
+  unfold checkViaEnclosure2D LayoutBox2D.containsPoint at *
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hEnc
+  omega
+
 end Obend.Hardware.DRC

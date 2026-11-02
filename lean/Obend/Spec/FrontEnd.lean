@@ -362,6 +362,94 @@ def accept (l : Lowering) : Except Diagnostic (Accepted l) := do
           else throw (elaborationRefusal "typed packet context must be closed")
       else throw (elaborationRefusal "core term nesting exceeds the checker's decoding capacity")
 
+/-! ## Isar Proof-Script & External Judge Dispatch Verification Hooks -/
+
+/-- Structural check that every judge format tag in `tags` is admitted by `admitsTag`
+    (`0 Classical.choice`). -/
+@[expose] def allJudgeTagsAdmitted (admitsTag : String → Bool) : List String → Bool
+  | [] => true
+  | t :: ts => admitsTag t && allJudgeTagsAdmitted admitsTag ts
+
+theorem allJudgeTagsAdmitted_mem (admitsTag : String → Bool) :
+    ∀ {tags : List String} {tag : String},
+      allJudgeTagsAdmitted admitsTag tags = true → tag ∈ tags → admitsTag tag = true
+  | [], _, _, hmem => by cases hmem
+  | x :: xs, tag, hall, hmem => by
+    simp only [allJudgeTagsAdmitted, Bool.and_eq_true] at hall
+    cases hmem with
+    | head _ => exact hall.1
+    | tail _ htail => exact allJudgeTagsAdmitted_mem admitsTag hall.2 htail
+
+/-- Alias for `allJudgeTagsAdmitted`: checks that every cited judge format tag is registered and admitted. -/
+abbrev allJudgeTagsRegistered := allJudgeTagsAdmitted
+
+/-- Verify that an `Elaborate.ElaboratedIsarCert` is both structurally valid (`cert.scriptValid`)
+    and has every extracted external judge format tag admitted by `admitsTag` (`0 Classical.choice`). -/
+@[expose] def verifyCertJudgeTags (admitsTag : String → Bool) (cert : Elaborate.ElaboratedIsarCert) : Bool :=
+  cert.scriptValid && allJudgeTagsAdmitted admitsTag cert.judgeTags
+
+/-- Soundness of `verifyCertJudgeTags` (`0 sorry`, `0 Classical.choice`):
+    whenever `verifyCertJudgeTags admitsTag cert = true`, `cert.scriptValid = true` and
+    every `tag ∈ cert.judgeTags` satisfies `admitsTag tag = true`. -/
+theorem verifyCertJudgeTags_sound (admitsTag : String → Bool) (cert : Elaborate.ElaboratedIsarCert)
+    (h : verifyCertJudgeTags admitsTag cert = true) :
+    cert.scriptValid = true ∧ (∀ tag ∈ cert.judgeTags, admitsTag tag = true) := by
+  simp only [verifyCertJudgeTags, Bool.and_eq_true] at h
+  exact ⟨h.1, fun tag hmem => allJudgeTagsAdmitted_mem admitsTag h.2 hmem⟩
+
+/-- End-to-end soundness of `verifyCertJudgeTags` on `Elaborate.elaborateContractIsarCert m c`
+    (`0 sorry`, `0 Classical.choice`):
+    whenever `verifyCertJudgeTags admitsTag (Elaborate.elaborateContractIsarCert m c) = true`,
+    `c.steps` is non-empty, terminates with a valid discharge step for `c.conclusion`, and
+    every `ProofStep.byJudge tag` or `ProofStep.haveStep label prop (.byJudge tag)` in `c.steps`
+    is admitted (`admitsTag tag = true`). -/
+theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.Module)
+    (c : Syntax.ContractDecl)
+    (h : verifyCertJudgeTags admitsTag (Elaborate.elaborateContractIsarCert m c) = true) :
+    c.steps ≠ [] ∧
+    (∃ lastStep ∈ c.steps,
+      Elaborate.lastStepOf c.steps = some lastStep ∧
+      Elaborate.isTerminalDischargeStep c.conclusion lastStep = true) ∧
+    (∀ tag, Elaborate.ProofStep.byJudge tag ∈ c.steps → admitsTag tag = true) ∧
+    (∀ label prop tag,
+      Elaborate.ProofStep.haveStep label prop (.byJudge tag) ∈ c.steps → admitsTag tag = true) := by
+  have hcert := verifyCertJudgeTags_sound admitsTag (Elaborate.elaborateContractIsarCert m c) h
+  have hscript := Elaborate.verifyIsarProofScript_sound c hcert.1
+  rcases hscript with ⟨hne, _, _, lastStep, hlastMem, hlastOf, hterm, _⟩
+  refine ⟨hne, ⟨lastStep, hlastMem, hlastOf, hterm⟩, ?_, ?_⟩
+  · intro tag hby
+    exact hcert.2 tag (Elaborate.byJudge_mem_extractIsarJudgeTags hby)
+  · intro label prop tag hhave
+    exact hcert.2 tag (Elaborate.haveStep_byJudge_mem_extractIsarJudgeTags hhave)
+
+/-- Elaborate and check a single `Syntax.ContractDecl`'s Isar proof script and external judge tags,
+    returning its `ElaboratedIsarCert` or a front-end `Diagnostic` refusal. -/
+@[expose] def checkContractIsarCert (admitsTag : String → Bool) (m : Syntax.Module)
+    (c : Syntax.ContractDecl) : Except Diagnostic Elaborate.ElaboratedIsarCert := do
+  let cert := Elaborate.elaborateContractIsarCert m c
+  if !cert.scriptValid then
+    throw (elaborationRefusal ("refused (isar-proof-script): contract " ++ c.name ++
+      " has an incomplete or invalid Isar proof script"))
+  for tag in cert.judgeTags do
+    if !admitsTag tag then
+      throw (elaborationRefusal ("refused (isar-unregistered-judge): contract " ++ c.name ++
+        " cites judge(" ++ tag ++ "), which is not registered or refused its certificate"))
+  return cert
+
+/-- Elaborate and verify all `contract` blocks in `m : Syntax.Module`, checking both structural
+    Isar step validity and external judge tag admission. -/
+@[expose] def checkModuleIsarCerts (admitsTag : String → Bool) (m : Syntax.Module) :
+    Except Diagnostic (List Elaborate.ElaboratedIsarCert) :=
+  m.contracts.mapM (checkContractIsarCert admitsTag m)
+
+/-- Elaborate all contracts in `m : Syntax.Module` together with their verified Isar certificates,
+    refusing if any contract's Isar proof script is invalid or cites an unregistered judge format tag. -/
+@[expose] def elaborateContractsWithCerts (admitsTag : String → Bool) (m : Syntax.Module) :
+    Except Diagnostic (List (String × Obend.Law.CellContract) × List Elaborate.ElaboratedIsarCert) := do
+  let certs ← checkModuleIsarCerts admitsTag m
+  return (Elaborate.elaborateContracts m, certs)
+
 end Obend.Spec.FrontEnd
 
 end
+

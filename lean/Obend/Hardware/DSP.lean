@@ -358,9 +358,94 @@ theorem golden2mHamLna_stable_and_unstable_refused :
         elementAmplitudeMv := 100 } = 160000 := by
   decide +kernel
 
-/-! ## 5. Multi-Stage Unrolled CORDIC Pipeline (`CordicMicroStage`, `runCordicPipeline`) -/
+/-! ## 5. Multi-Stage Unrolled CORDIC Pipeline (`runCordicPipeline`, `cordic_stage1_norm_identity`, `cordic_twoStage_exact_gain_10x`) -/
 
-/-- Unrolled CORDIC micro-rotation stage parameters:
+/-- Recursively execute a multi-stage CORDIC pipeline chaining arbitrary micro-rotation stages
+`(dirPos, shiftFactor)` from initial vector `v : CordicVec`. -/
+def runCordicPipeline (v : CordicVec) : List (Bool × Int) → CordicVec
+  | [] => v
+  | (dirPos, shiftFactor) :: rest =>
+    runCordicPipeline (stepCordicStage v dirPos shiftFactor) rest
+
+/-- Theorem (`runCordicPipeline_append`):
+Executing a concatenated multi-stage CORDIC pipeline `stages1 ++ stages2` is identical to executing
+`stages1` followed by `stages2` from the intermediate `CordicVec` register state. -/
+theorem runCordicPipeline_append
+    (stages1 stages2 : List (Bool × Int)) (v : CordicVec) :
+    runCordicPipeline v (stages1 ++ stages2) =
+      runCordicPipeline (runCordicPipeline v stages1) stages2 := by
+  induction stages1 generalizing v with
+  | nil => rfl
+  | cons st rest ih =>
+    dsimp only [List.cons_append, runCordicPipeline]
+    exact ih (stepCordicStage v st.1 st.2)
+
+/-- Stage-1 ($\tan \theta_1 = 2^{-1} = 1/2$, scaled by $2$ so $(x', y') = (2x \mp y, 2y \pm x)$)
+exact-integer CORDIC micro-rotation:
+* For `dirPos = true` ($d = +1$, counter-clockwise): $(x', y') = (2x - y, 2y + x)$,
+* For `dirPos = false` ($d = -1$, clockwise): $(x', y') = (2x + y, 2y - x)$. -/
+def stepCordicStage1 (v : CordicVec) (dirPos : Bool) : CordicVec :=
+  if dirPos then
+    { x := 2 * v.x - v.y, y := 2 * v.y + v.x }
+  else
+    { x := 2 * v.x + v.y, y := 2 * v.y - v.x }
+
+/-- Helper algebraic identity for Stage-1 CORDIC:
+$(2x - y)^2 + (2y + x)^2 = 5(x^2 + y^2)$ and $(2x + y)^2 + (2y - x)^2 = 5(x^2 + y^2)$. -/
+theorem int_cordic_stage1_identity (x y : Int) :
+    (2 * x - y) * (2 * x - y) + (2 * y + x) * (2 * y + x) = 5 * (x * x + y * y) ∧
+    (2 * x + y) * (2 * x + y) + (2 * y - x) * (2 * y - x) = 5 * (x * x + y * y) := by
+  have h1 : (2 * x - y) * (2 * x - y) = (2 * x) * (2 * x) - (2 * x) * y - y * (2 * x) + y * y := by
+    rw [Int.mul_sub, Int.sub_mul, Int.sub_mul]
+    omega
+  have h2 : (2 * y + x) * (2 * y + x) = (2 * y) * (2 * y) + (2 * y) * x + x * (2 * y) + x * x := by
+    rw [Int.mul_add, Int.add_mul, Int.add_mul]
+    omega
+  have h3 : (2 * x + y) * (2 * x + y) = (2 * x) * (2 * x) + (2 * x) * y + y * (2 * x) + y * y := by
+    rw [Int.mul_add, Int.add_mul, Int.add_mul]
+    omega
+  have h4 : (2 * y - x) * (2 * y - x) = (2 * y) * (2 * y) - (2 * y) * x - x * (2 * y) + x * x := by
+    rw [Int.mul_sub, Int.sub_mul, Int.sub_mul]
+    omega
+  have hx2 : (2 * x) * (2 * x) = 4 * (x * x) := by
+    rw [← Int.mul_assoc, Int.mul_comm (2 * x) 2, ← Int.mul_assoc, Int.mul_assoc]
+    omega
+  have hy2 : (2 * y) * (2 * y) = 4 * (y * y) := by
+    rw [← Int.mul_assoc, Int.mul_comm (2 * y) 2, ← Int.mul_assoc, Int.mul_assoc]
+    omega
+  have hxy1 : (2 * x) * y = 2 * (x * y) := by rw [Int.mul_assoc]
+  have hxy2 : y * (2 * x) = 2 * (x * y) := by rw [Int.mul_comm y (2 * x), Int.mul_assoc]
+  have hyx1 : (2 * y) * x = 2 * (x * y) := by rw [Int.mul_assoc, Int.mul_comm y x]
+  have hyx2 : x * (2 * y) = 2 * (x * y) := by rw [← Int.mul_assoc, Int.mul_comm x 2, Int.mul_assoc]
+  constructor <;> omega
+
+/-- Theorem (`cordic_stage1_norm_identity`):
+For Stage 1 ($\tan \theta_1 = 1/2$, scaled by $2$ so $(x', y') = (2x \mp y, 2y \pm x)$),
+the squared Euclidean norm scales by exact integer factor $1 + 2^2 = 5$:
+$$(x')^2 + (y')^2 = 5 (x^2 + y^2).$$ -/
+theorem cordic_stage1_norm_identity (v : CordicVec) (dirPos : Bool) :
+    evalCordicNormSq (stepCordicStage1 v dirPos) = 5 * evalCordicNormSq v := by
+  dsimp only [evalCordicNormSq, stepCordicStage1]
+  have hId := int_cordic_stage1_identity v.x v.y
+  cases dirPos
+  · exact hId.2
+  · exact hId.1
+
+/-- Combined 2-stage exact-integer CORDIC pipeline chaining Stage 0 ($\tan \theta_0 = 1$)
+followed by scaled Stage 1 ($\tan \theta_1 = 1/2$). -/
+def stepCordicTwoStage (v : CordicVec) (dir0 dir1 : Bool) : CordicVec :=
+  stepCordicStage1 (stepCordicStage0 v dir0) dir1
+
+/-- Theorem (`cordic_twoStage_exact_gain_10x`):
+For the combined Stage-0 + Stage-1 CORDIC pipeline, the squared Euclidean norm scales by the exact
+integer factor $2 \times 5 = 10$ across all four rotation sign combinations `(dir0, dir1)`! -/
+theorem cordic_twoStage_exact_gain_10x (v : CordicVec) (dir0 dir1 : Bool) :
+    evalCordicNormSq (stepCordicTwoStage v dir0 dir1) = 10 * evalCordicNormSq v := by
+  dsimp only [stepCordicTwoStage]
+  rw [cordic_stage1_norm_identity, cordic_stage0_norm_scaling]
+  omega
+
+/-- Unrolled CORDIC micro-rotation stage parameters with explicit angle accumulator:
 * `shiftPow2`: barrel-shifter exponent $i$ so the stage divisor is $2^i$ (`shiftPow2 = 0, 1, 2, 3`),
 * `atanAngleMrad`: elementary arctangent angle $\arctan(2^{-i})$ in milliradians ($\text{mrad}$, e.g. `785, 464, 245, 124`),
 * `signPositive`: micro-rotation direction $d_i \in \{+1, -1\}$. -/
@@ -372,33 +457,19 @@ structure CordicMicroStage where
 
 /-- Single unrolled CORDIC micro-rotation step updating $(x, y, z)$ across `st : CordicMicroStage`
 with shift divisor $2^{\text{shiftPow2}}$. -/
-@[expose] def cordicRotateStep (x y z : Int) (st : CordicMicroStage) : Int × Int × Int :=
+def cordicRotateStep (x y z : Int) (st : CordicMicroStage) : Int × Int × Int :=
   let sf : Int := Int.ofNat (2 ^ st.shiftPow2)
   if st.signPositive then
     (x - y / sf, y + x / sf, z - st.atanAngleMrad)
   else
     (x + y / sf, y - x / sf, z + st.atanAngleMrad)
 
-/-- Recursively execute a multi-stage unrolled CORDIC pipeline from initial state `(x0, y0, z0)`. -/
-@[expose] def runCordicPipeline (x0 y0 z0 : Int) : List CordicMicroStage → Int × Int × Int
+/-- Recursively execute a multi-stage unrolled CORDIC angle-tracking pipeline from `(x0, y0, z0)`. -/
+def runCordicMicroPipeline (x0 y0 z0 : Int) : List CordicMicroStage → Int × Int × Int
   | [] => (x0, y0, z0)
   | st :: rest =>
     let (x1, y1, z1) := cordicRotateStep x0 y0 z0 st
-    runCordicPipeline x1 y1 z1 rest
-
-/-- Theorem (`runCordicPipeline_append`):
-Executing a concatenated multi-stage CORDIC pipeline `stages1 ++ stages2` is identical to executing
-`stages1` followed by `stages2` from the intermediate pipeline register state. -/
-theorem runCordicPipeline_append
-    (stages1 stages2 : List CordicMicroStage) (x0 y0 z0 : Int) :
-    runCordicPipeline x0 y0 z0 (stages1 ++ stages2) =
-      let (x1, y1, z1) := runCordicPipeline x0 y0 z0 stages1
-      runCordicPipeline x1 y1 z1 stages2 := by
-  induction stages1 generalizing x0 y0 z0 with
-  | nil => rfl
-  | cons st rest ih =>
-    dsimp only [List.cons_append, runCordicPipeline]
-    exact ih (cordicRotateStep x0 y0 z0 st).1 (cordicRotateStep x0 y0 z0 st).2.1 (cordicRotateStep x0 y0 z0 st).2.2
+    runCordicMicroPipeline x1 y1 z1 rest
 
 /-- Concrete 4-stage unrolled CORDIC micro-rotation pipeline:
 * Stage 0: $2^0 = 1$, $\arctan(1) \approx 785\,\text{mrad}$ ($+45.0^\circ$), `signPositive = true`,
@@ -416,8 +487,8 @@ Starting from $(x_0, y_0, z_0) = (1000, 0, 442)$ ($442\,\text{mrad} \approx 25.3
 unrolled CORDIC pipeline `goldenCordic4Stages` converges to `(1484, 704, 0)` with zero residual
 angle error (`z4 = 0`) and processing norm gain $x_4^2 + y_4^2 = 2697872 > x_0^2 + y_0^2 = 1000000$. -/
 theorem cordic_4stage_pipeline_verified :
-    runCordicPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0) ∧
-    (let (x4, y4, z4) := runCordicPipeline 1000 0 442 goldenCordic4Stages
+    runCordicMicroPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0) ∧
+    (let (x4, y4, z4) := runCordicMicroPipeline 1000 0 442 goldenCordic4Stages
      z4 = 0 ∧ 1000 * 1000 < x4 * x4 + y4 * y4) := by
   decide +kernel
 
@@ -432,12 +503,12 @@ structure IqPhasor where
 /-- Complex conjugate weight multiplication for phased-array matched filtering:
 $$(I_{\text{sig}} + j Q_{\text{sig}}) \cdot (I_w - j Q_w) =
   (I_{\text{sig}} I_w + Q_{\text{sig}} Q_w) + j (Q_{\text{sig}} I_w - I_{\text{sig}} Q_w).$$ -/
-@[expose] def iqConjMul (sig weight : IqPhasor) : IqPhasor :=
+def iqConjMul (sig weight : IqPhasor) : IqPhasor :=
   ⟨sig.i * weight.i + sig.q * weight.q, sig.q * weight.i - sig.i * weight.q⟩
 
 /-- Uniform Linear Array (ULA) complex IQ beamformer summation across `(sig, weight)` antenna elements:
 $$Y = \sum_{k=0}^{N-1} s_k \cdot w_k^*.$$ -/
-@[expose] def evalUlaIqBeamformer : List (IqPhasor × IqPhasor) → IqPhasor
+def evalUlaIqBeamformer : List (IqPhasor × IqPhasor) → IqPhasor
   | [] => ⟨0, 0⟩
   | (sig, weight) :: rest =>
     let prod := iqConjMul sig weight
@@ -492,6 +563,173 @@ theorem ula_4elem_progressive_phase_beamformer_verified :
       , (⟨-80, -60⟩, ⟨-80, -60⟩)
       , (⟨60, -80⟩, ⟨60, -80⟩) ] = ⟨40000, 0⟩ := by
   decide +kernel
+
+/-! ## 7. Connected SDR Digital Downconverter (DDC) Datapath (`SdrDdcChainSpec`, `evalSdrDdcSample`, `checkSdrDdcSignoff`) -/
+
+/-- Alias for `evalCicRequiredWidthBits` matching Hogenauer's required accumulator bit width. -/
+abbrev cicRequiredBitWidth (cic : CicFilterSpec) : Nat :=
+  evalCicRequiredWidthBits cic
+
+/-- Alias for `evalFoldedSymmetricFirTapPair` evaluating a folded symmetric linear-phase FIR tap pair. -/
+abbrev evalSymmetricFirTapPair (coeff xEarly xLate : Int) : Int :=
+  evalFoldedSymmetricFirTapPair coeff xEarly xLate
+
+/-- Connected Software-Defined Radio (SDR) Digital Downconverter (DDC) datapath specification chaining:
+1. `NcoAccum` phase accumulator (`stepNco`),
+2. 2-stage CORDIC local oscillator (`stepCordicStage0` + `stepCordicStage1`),
+3. `RF.lean` Tayloe quadrature $I/Q$ image-rejecting mixer (`evalQuadratureImagePhaseCancel`),
+4. Hogenauer `CicFilterSpec` decimator with verified overflow-free accumulator bit-width (`cicRequiredBitWidth`),
+5. Folded symmetric linear-phase FIR compensating filter (`evalSymmetricFirTapPair`). -/
+structure SdrDdcChainSpec where
+  ddcName          : String
+  nco              : NcoAccum
+  loInitVec        : CordicVec
+  cordicDir0       : Bool
+  cordicDir1       : Bool
+  iqGainI          : Int
+  iqGainQ          : Int
+  iqPhaseErr       : Int
+  cic              : CicFilterSpec
+  cicAllocatedBits : Nat
+  firTapCoeff      : Int
+  deriving DecidableEq, Repr
+
+/-- Evaluate one sample through the connected SDR Digital Downconverter (DDC) datapath:
+1. Synthesizes the 2-stage CORDIC LO vector `loVec = stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1`,
+2. Demodulates the desired sideband `evalQuadratureDesiredSideband` minus any residual image
+   `evalQuadratureImagePhaseCancel`,
+3. Filters the decimated baseband sample pair `(cicDecimated, delayedSample)` via the folded symmetric
+   linear-phase FIR tap pair `evalSymmetricFirTapPair`. -/
+def evalSdrDdcSample (spec : SdrDdcChainSpec) (rfSigAmp delayedSample : Int) : Int :=
+  let loVec := stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1
+  let desiredBb := evalQuadratureDesiredSideband spec.iqGainI spec.iqGainQ (rfSigAmp * loVec.x)
+  let imageResidual := evalQuadratureImagePhaseCancel spec.iqGainI spec.iqGainQ spec.iqPhaseErr rfSigAmp
+  let cicDecimated := desiredBb - imageResidual
+  evalSymmetricFirTapPair spec.firTapCoeff cicDecimated delayedSample
+
+/-- Complete signoff checker for the connected SDR Digital Downconverter (`SdrDdcChainSpec`):
+1. Positive NCO phase modulus (`0 < spec.nco.phaseModulus`),
+2. Non-zero CORDIC LO seed vector (`0 < evalCordicNormSq spec.loInitVec`),
+3. Strictly positive, matched Tayloe quadrature $I/Q$ conversion gain (`0 < spec.iqGainI` and `spec.iqGainI == spec.iqGainQ`) and zero phase skew (`spec.iqPhaseErr == 0`),
+4. Hogenauer CIC decimator accumulator bit-width prevents 2's-complement wrap-around (`checkCicOverflowFree`). -/
+def checkSdrDdcSignoff (spec : SdrDdcChainSpec) : Bool :=
+  decide (0 < spec.nco.phaseModulus) &&
+  decide (0 < evalCordicNormSq spec.loInitVec) &&
+  decide (0 < spec.iqGainI) &&
+  (spec.iqGainI == spec.iqGainQ) &&
+  (spec.iqPhaseErr == 0) &&
+  checkCicOverflowFree spec.cic spec.cicAllocatedBits
+
+/-- Theorem (`sdrDdcChain_signoff_sound`):
+Whenever `checkSdrDdcSignoff spec = true`, for any RF input amplitude `rfSigAmp` and FIR delay-line
+samples `xEarly, xLate`:
+1. The stepped NCO phase word stays strictly within `[0, spec.nco.phaseModulus)`,
+2. The 2-stage CORDIC local oscillator scales squared vector magnitude by exact factor `10`,
+3. The Tayloe $I/Q$ unwanted image sideband cancels identically to `0`,
+4. The CIC accumulator width `spec.cicAllocatedBits` satisfies Hogenauer's overflow-free bit-growth bound
+   `spec.cic.inputWidthBits ≤ cicRequiredBitWidth spec.cic ≤ spec.cicAllocatedBits`,
+5. The folded symmetric FIR tap multiplier matches the 2-multiplier direct form (`evalDirectFirTapPair`), and
+6. End-to-end sample evaluation `evalSdrDdcSample` equals the image-free direct FIR output! -/
+theorem sdrDdcChain_signoff_sound
+    (spec : SdrDdcChainSpec) (rfSigAmp xEarly xLate : Int)
+    (hOk : checkSdrDdcSignoff spec = true) :
+    (stepNco spec.nco).phaseWord < spec.nco.phaseModulus ∧
+    evalCordicNormSq (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1) =
+      10 * evalCordicNormSq spec.loInitVec ∧
+    evalQuadratureImagePhaseCancel spec.iqGainI spec.iqGainQ spec.iqPhaseErr rfSigAmp = 0 ∧
+    spec.cic.inputWidthBits ≤ cicRequiredBitWidth spec.cic ∧
+    cicRequiredBitWidth spec.cic ≤ spec.cicAllocatedBits ∧
+    evalSymmetricFirTapPair spec.firTapCoeff xEarly xLate =
+      evalDirectFirTapPair spec.firTapCoeff xEarly xLate ∧
+    evalSdrDdcSample spec rfSigAmp xLate =
+      evalDirectFirTapPair spec.firTapCoeff
+        (2 * spec.iqGainI * (rfSigAmp * (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1).x))
+        xLate := by
+  dsimp only [checkSdrDdcSignoff] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  have hMod : 0 < spec.nco.phaseModulus := of_decide_eq_true hOk.1.1.1.1.1
+  have hGain : spec.iqGainI = spec.iqGainQ := LawfulBEq.eq_of_beq hOk.1.1.2
+  have hPhase : spec.iqPhaseErr = 0 := LawfulBEq.eq_of_beq hOk.1.2
+  have hCic := cic_register_width_sound spec.cic spec.cicAllocatedBits hOk.2
+  have hTayloeImg := (tayloe_iq_cancels_image_sideband spec.iqGainI spec.iqGainQ spec.iqPhaseErr rfSigAmp hGain hPhase).1
+  have hTayloeDes := (tayloe_iq_cancels_image_sideband spec.iqGainI spec.iqGainQ spec.iqPhaseErr
+    (rfSigAmp * (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1).x) hGain hPhase).2
+  refine ⟨nco_phase_in_bounds spec.nco hMod,
+          cordic_twoStage_exact_gain_10x spec.loInitVec spec.cordicDir0 spec.cordicDir1,
+          hTayloeImg,
+          hCic.1,
+          hCic.2,
+          firSymmetric_folds_multipliers spec.firTapCoeff xEarly xLate,
+          ?_⟩
+  dsimp only [evalSdrDdcSample, evalSymmetricFirTapPair]
+  rw [hTayloeImg, Int.sub_zero, hTayloeDes]
+  exact firSymmetric_folds_multipliers spec.firTapCoeff
+    (2 * spec.iqGainI * (rfSigAmp * (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1).x))
+    xLate
+
+/-- Theorem (`sdrDdcChain_positive_lo_and_gain`):
+Whenever `checkSdrDdcSignoff spec = true`, the Tayloe $I/Q$ conversion gain is strictly positive
+(`0 < spec.iqGainI`) and the 2-stage CORDIC local oscillator output vector has strictly positive
+squared Euclidean power (`0 < evalCordicNormSq (stepCordicTwoStage ...)`). -/
+theorem sdrDdcChain_positive_lo_and_gain
+    (spec : SdrDdcChainSpec)
+    (hOk : checkSdrDdcSignoff spec = true) :
+    0 < spec.iqGainI ∧
+    0 < evalCordicNormSq (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1) := by
+  dsimp only [checkSdrDdcSignoff] at hOk
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
+  have hLoPos : 0 < evalCordicNormSq spec.loInitVec := of_decide_eq_true hOk.1.1.1.1.2
+  have hGainPos : 0 < spec.iqGainI := of_decide_eq_true hOk.1.1.1.2
+  have hScale := cordic_twoStage_exact_gain_10x spec.loInitVec spec.cordicDir0 spec.cordicDir1
+  refine ⟨hGainPos, ?_⟩
+  rw [hScale]
+  omega
+
+/-- Canonical 40m FT8 SDR Digital Downconverter datapath configuration (`16-bit` NCO modulus $65536$,
+2-stage CORDIC LO seed `(100, 0)`, matched Tayloe $I/Q$ gains `500`, 4-stage $R=64$ CIC decimator
+with $38$-bit accumulator, and symmetric FIR tap coefficient `12`). -/
+def goldenSdrDdcChainSpec : SdrDdcChainSpec where
+  ddcName          := "sdr_40m_ft8_ddc_chain"
+  nco              := { phaseModulus := 65536, phaseWord := 12000, tuningWord := 7074 }
+  loInitVec        := { x := 100, y := 0 }
+  cordicDir0       := true
+  cordicDir1       := false
+  iqGainI          := 500
+  iqGainQ          := 500
+  iqPhaseErr       := 0
+  cic              := { filterName := "cic4_r64_m1", inputWidthBits := 14, numStages := 4, decimationRatio := 64, diffDelay := 1, ceilLog2Rm := 6 }
+  cicAllocatedBits := 38
+  firTapCoeff      := 12
+
+/-- Defective DDC configuration with $I/Q$ gain imbalance (`iqGainI = 500 ≠ iqGainQ = 480`). -/
+def unbalancedIqSdrDdcSpec : SdrDdcChainSpec :=
+  { goldenSdrDdcChainSpec with
+    ddcName := "sdr_ddc_iq_imbalanced"
+    iqGainQ := 480 }
+
+/-- Defective DDC configuration with zero conversion gain (`iqGainI = 0, iqGainQ = 0`). -/
+def deadMixerSdrDdcSpec : SdrDdcChainSpec :=
+  { goldenSdrDdcChainSpec with
+    ddcName := "sdr_ddc_dead_mixer"
+    iqGainI := 0
+    iqGainQ := 0 }
+
+/-- Defective DDC configuration with truncated 24-bit CIC accumulator (`24 < 38` required bits). -/
+def underAllocatedCicSdrDdcSpec : SdrDdcChainSpec :=
+  { goldenSdrDdcChainSpec with
+    ddcName          := "sdr_ddc_cic_overflow"
+    cicAllocatedBits := 24 }
+
+/-- Theorem (`sdrDdcChain_signoff_poles`):
+`checkSdrDdcSignoff` accepts `goldenSdrDdcChainSpec` and refuses `unbalancedIqSdrDdcSpec`
+($I/Q$ image leakage), `deadMixerSdrDdcSpec` (zero mixer conversion gain), and
+`underAllocatedCicSdrDdcSpec` (CIC integrator wrap-around overflow)! -/
+theorem sdrDdcChain_signoff_poles :
+    checkSdrDdcSignoff goldenSdrDdcChainSpec = true ∧
+    checkSdrDdcSignoff unbalancedIqSdrDdcSpec = false ∧
+    checkSdrDdcSignoff deadMixerSdrDdcSpec = false ∧
+    checkSdrDdcSignoff underAllocatedCicSdrDdcSpec = false :=
+  ⟨rfl, rfl, rfl, rfl⟩
 
 end Obend.Hardware.DSP
 end

@@ -736,12 +736,28 @@ theorem compileTermSat_sound
           simp only [evalTermHwSat, hv', hz', hs', evalRtlExpr, evalAluOp]
           rfl
 
-/-- Extract the inner body of a `LeafDef`'s `code` (`λself. λarg. body`) and compile it via
+/-- Extract the inner body of a `LeafDef`'s `code` (`λself. λarg₀...λargₖ. body`) and compile it via
 `compileTermSat`. -/
 def compileLeafDefSat (slots : List String) (slotBodies : List RtlExpr) (d : LeafDef) : Option RtlExpr :=
   match d.code with
+  | .lam (.lam (.lam (.lam (.lam body)))) =>
+    compileTermSat slots slotBodies 4 [.inputPort 3, .inputPort 2, .inputPort 1, .inputPort 0] body
+  | .lam (.lam (.lam (.lam body))) =>
+    compileTermSat slots slotBodies 3 [.inputPort 2, .inputPort 1, .inputPort 0] body
+  | .lam (.lam (.lam body)) =>
+    compileTermSat slots slotBodies 2 [.inputPort 1, .inputPort 0] body
   | .lam (.lam body) => compileTermSat slots slotBodies 1 [.inputPort 0] body
   | _ => none
+
+/-- Determine the input port list for a compiled `Obend.Leaf.Book` based on the method arity. -/
+def defInputNamesSat : List LeafDef → List String
+  | d :: _ =>
+    match d.code with
+    | .lam (.lam (.lam (.lam (.lam _)))) => ["arg0", "arg1", "arg2", "arg3"]
+    | .lam (.lam (.lam (.lam _)))        => ["arg0", "arg1", "arg2"]
+    | .lam (.lam (.lam _))               => ["arg0", "arg1"]
+    | _                                  => ["arg"]
+  | [] => ["arg"]
 
 /-- Structurally recursive slot-list compiler using `compileLeafDefSat`. -/
 def compileBookDefsSat
@@ -775,7 +791,7 @@ def compileBookToRtlSat (modName : String) (B : Book) : Option RtlModule :=
   | some (wires, regs, outs) =>
     some {
       name       := modName
-      inputNames := ["arg"]
+      inputNames := defInputNamesSat B.defs
       wires      := wires
       regs       := regs
       outputs    := outs
@@ -925,24 +941,148 @@ def compileNatRec2StateSat (fnName : String) (nVal : Nat) (initA initB : Nat) : 
       [ { name := s!"out_{fnName}", expr := .wireRef 2 }
       , { name := "out_done",       expr := .wireRef 3 } ] }
 
-/-- Compile a single-slot `Obend.Leaf.Book` containing a `Nat.rec` loop (or 2-state recurrence such
-as `fib`) into a verified multi-cycle synchronous `RtlModule` with:
-* `reg 0` (`reg_idx`, `.syncReset 0#64`): loop counter $i \in [0, N]$,
-* `reg 1` (`reg_acc`, `.syncReset 0#64`): loop accumulator holding `Nat.rec z s i`,
-* `wire 0` (`w_count`): iteration bound $N$,
-* `wire 1` (`w_eff_acc`): `(reg_idx == 0) ? zExpr : reg_acc`,
-* `wire 2` (`w_step`): `stepExpr(k = reg_idx, acc = w_eff_acc)`,
-* `wire 3` (`d.member`): `w_eff_acc`,
-* `wire 4` (`done`): `(reg_idx < w_count) ? 0 : 1`,
-* Outputs `out_{d.member}` and `out_done`. -/
+/-- Recognize a single weighted state summand in a 2-state linear recurrence:
+returns `some (true, c)` for the current state `b` (`.bound 0` with coeff `1`, or `c * b` / `b * c`),
+and `some (false, c)` for the previous state `a` (`.bound 6` / `.bound 2` with coeff `1`, or `c * a` / `a * c`). -/
+def extractStateTermCoeff : Term → Option (Bool × Nat)
+  | .bound idx =>
+    if idx == 0 then some (true, 1)
+    else if idx == 6 || idx == 2 then some (false, 1)
+    else none
+  | .binary .multiply (.nat c) (.bound idx) =>
+    if idx == 0 then some (true, c)
+    else if idx == 6 || idx == 2 then some (false, c)
+    else none
+  | .binary .multiply (.bound idx) (.nat c) =>
+    if idx == 0 then some (true, c)
+    else if idx == 6 || idx == 2 then some (false, c)
+    else none
+  | _ => none
+
+/-- Extract `(coeffCurr, coeffPrev)` from the inner linear combination AST of a 2-state recurrence
+`(a, b) ↦ (b, coeffCurr * b + coeffPrev * a)`, supporting arbitrary commuted multiplication and
+addition operand orders (`cCurr * b + cPrev * a`, `b * cCurr + a * cPrev`, `a * cPrev + b * cCurr`, etc.). -/
+def extractTwoStateCombCoeffs : Term → Option (Nat × Nat)
+  | .binary .add lhs rhs =>
+    match extractStateTermCoeff lhs, extractStateTermCoeff rhs with
+    | some (true, cCurr), some (false, cPrev) => some (cCurr, cPrev)
+    | some (false, cPrev), some (true, cCurr) => some (cCurr, cPrev)
+    | _, _ => none
+  | _ => none
+
+/-- Structural 2-state linear recurrence extractor (`extractTwoStateLinearRec`):
+recognizes nested `Nat.rec` 2-state recurrences directly from `Term` AST structure
+(extracting `(init0, init1, coeffCurr, coeffPrev)`) without inspecting string names! -/
+def extractTwoStateLinearRec : Term → Option (Nat × Nat × Nat × Nat)
+  | .lam (.lam body) => extractTwoStateLinearRec body
+  | .lam body => extractTwoStateLinearRec body
+  | .app
+      (.fix
+        (.lam (.lam (.lam
+          (.ifZero (.bound 0)
+            (.nat init0)
+            (.app
+              (.app
+                (.lam (.lam
+                  (.app
+                    (.fix
+                      (.lam (.lam (.lam
+                        (.ifZero (.bound 0)
+                          (.nat init1)
+                          (.app (.app (.lam (.lam combBody)) (.bound 0)) (.app (.bound 3) (.bound 0)))))))
+                      _)
+                    (.bound 1))))
+                (.bound 0))
+              (.app (.bound 3) (.bound 0)))))))
+        _)
+      (.bound 0) =>
+    match extractTwoStateCombCoeffs combBody with
+    | some (coeffCurr, coeffPrev) => some (init0, init1, coeffCurr, coeffPrev)
+    | none => none
+  | _ => none
+
+/-- Synthesize a general weighted 2-state linear recurrence sequential `RtlModule`
+for `(a, b) ↦ (b, coeffCurr * b + coeffPrev * a)` starting at `(init0, init1)`. -/
+def compileLinearRec2StateSat
+    (fnName : String)
+    (nVal init0 init1 coeffCurr coeffPrev : Nat) : RtlModule :=
+  if coeffCurr == 1 && coeffPrev == 1 then
+    compileNatRec2StateSat fnName nVal init0 init1
+  else
+    let w0 : WireAssign :=
+      { wireIdx := 0
+      , name    := "w_count"
+      , expr    := .alu .bitOr (.inputPort 0) (.const (BitVec.ofNat 64 nVal)) }
+    let w1 : WireAssign :=
+      { wireIdx := 1
+      , name    := "w_next_b"
+      , expr    :=
+          .alu .add
+            (.alu .mul (.const (BitVec.ofNat 64 coeffCurr)) (.regRead 2))
+            (.alu .mul (.const (BitVec.ofNat 64 coeffPrev)) (.regRead 1)) }
+    let w2 : WireAssign :=
+      { wireIdx := 2
+      , name    := fnName
+      , expr    := .regRead 1 }
+    let w3 : WireAssign :=
+      { wireIdx := 3
+      , name    := "done"
+      , expr    := .mux (.alu .ult (.regRead 0) (.wireRef 0)) (.const 0#64) (.const 1#64) }
+    let condLt : RtlExpr := .alu .ult (.regRead 0) (.wireRef 0)
+    let r0 : RegSpec :=
+      { regIdx         := 0
+      , name           := "reg_i"
+      , domain         := .coreClk
+      , resetKind      := .syncReset 0#64
+      , isSynchronizer := false
+      , nextExpr       := .mux condLt (.alu .add (.regRead 0) (.const 1#64)) (.regRead 0) }
+    let r1 : RegSpec :=
+      { regIdx         := 1
+      , name           := "reg_a"
+      , domain         := .coreClk
+      , resetKind      := .syncReset (BitVec.ofNat 64 init0)
+      , isSynchronizer := false
+      , nextExpr       := .mux condLt (.regRead 2) (.regRead 1) }
+    let r2 : RegSpec :=
+      { regIdx         := 2
+      , name           := "reg_b"
+      , domain         := .coreClk
+      , resetKind      := .syncReset (BitVec.ofNat 64 init1)
+      , isSynchronizer := false
+      , nextExpr       := .mux condLt (.wireRef 1) (.regRead 2) }
+    let r3 : RegSpec :=
+      { regIdx         := 3
+      , name           := "reg_running"
+      , domain         := .coreClk
+      , resetKind      := .syncReset 1#64
+      , isSynchronizer := false
+      , nextExpr       := .mux condLt (.const 1#64) (.const 0#64) }
+    let r4 : RegSpec :=
+      { regIdx         := 4
+      , name           := "reg_done"
+      , domain         := .coreClk
+      , resetKind      := .syncReset 0#64
+      , isSynchronizer := false
+      , nextExpr       := .wireRef 3 }
+    { name       := fnName
+      inputNames := ["arg"]
+      wires      := [w0, w1, w2, w3]
+      regs       := [r0, r1, r2, r3, r4]
+      outputs    :=
+        [ { name := s!"out_{fnName}", expr := .wireRef 2 }
+        , { name := "out_done",       expr := .wireRef 3 } ] }
+
+/-- Compile a single-slot `Obend.Leaf.Book` containing a `Nat.rec` loop (or 2-state linear recurrence
+recognized structurally by `extractTwoStateLinearRec`) into a verified multi-cycle synchronous `RtlModule`. -/
 def compileBookToSeqRtlSat (modName : String) (B : Book) : Option RtlModule :=
   match B.defs with
   | [d] =>
     match extractSeqNatRecDefSat d with
     | none =>
-      if d.member == "fib" || modName == "fib" then
-        some { (compileNatRec2StateSat d.member 0 0 1) with name := modName }
-      else
+      match extractTwoStateLinearRec d.code with
+      | some (init0, init1, coeffCurr, coeffPrev) =>
+        some { (compileLinearRec2StateSat d.member 0 init0 init1 coeffCurr coeffPrev) with name := modName }
+      | none =>
         none
     | some (zExpr, stepExpr, countExpr) =>
       let w0 : WireAssign := { wireIdx := 0, name := "w_count", expr := countExpr }
@@ -1006,6 +1146,119 @@ def evalSeqModuleAfterCycles
   let initSt := stepModuleRegs m true ins (fun _ => 0#64)
   let finalSt := stepSeqModuleN m ins numCycles initSt
   evalModuleOutputs m ins finalSt
+
+/-- Pure mathematical specification of a 2-state linear recurrence `(a_k, b_k)` with
+`(a_0, b_0) = (init0, init1)` and `(a_{k+1}, b_{k+1}) = (b_k, coeffCurr * b_k + coeffPrev * a_k)`. -/
+def linearRec2StateSpec (init0 init1 coeffCurr coeffPrev : Nat) : Nat → Nat × Nat
+  | 0 => (init0, init1)
+  | k + 1 =>
+    let st := linearRec2StateSpec init0 init1 coeffCurr coeffPrev k
+    (st.2, coeffCurr * st.2 + coeffPrev * st.1)
+
+/-- Single-step bounded transition for a 2-state linear recurrence loop `(i, a, b)`. -/
+def stepLinearRec2StateLoop
+    (nVal coeffCurr coeffPrev : Nat) (st : Nat × Nat × Nat) : Nat × Nat × Nat :=
+  let (i, a, b) := st
+  if i < nVal then
+    (i + 1, b, coeffCurr * b + coeffPrev * a)
+  else
+    (i, a, b)
+
+/-- Run the bounded 2-state linear recurrence loop for `k` cycles starting from `(0, init0, init1)`. -/
+def runLinearRec2StateLoop
+    (nVal init0 init1 coeffCurr coeffPrev : Nat) : Nat → Nat × Nat × Nat
+  | 0 => (0, init0, init1)
+  | k + 1 =>
+    stepLinearRec2StateLoop nVal coeffCurr coeffPrev
+      (runLinearRec2StateLoop nVal init0 init1 coeffCurr coeffPrev k)
+
+/-- **Universal 2-State Linear Recurrence Loop Simulation (`runLinearRec2StateLoop_le_bound`)**:
+For all `nVal init0 init1 coeffCurr coeffPrev k : Nat` with `k ≤ nVal`, stepping
+`runLinearRec2StateLoop` for `k` cycles matches `linearRec2StateSpec`. -/
+theorem runLinearRec2StateLoop_le_bound
+    (nVal init0 init1 coeffCurr coeffPrev k : Nat) (hk : k ≤ nVal) :
+    runLinearRec2StateLoop nVal init0 init1 coeffCurr coeffPrev k =
+      (k,
+       (linearRec2StateSpec init0 init1 coeffCurr coeffPrev k).1,
+       (linearRec2StateSpec init0 init1 coeffCurr coeffPrev k).2) := by
+  induction k with
+  | zero => rfl
+  | succ m ih =>
+    have hm_le : m ≤ nVal := Nat.le_of_succ_le hk
+    have hm_lt : m < nVal := hk
+    simp only [runLinearRec2StateLoop, ih hm_le, stepLinearRec2StateLoop, hm_lt, ↓reduceIte,
+      linearRec2StateSpec]
+
+/-- Construct a canonical 2-state linear recurrence `Term` (`λself. λarg. ...`) from
+`(init0, init1, coeffCurr, coeffPrev)`. -/
+def mkTwoStateLinearRecTerm (init0 init1 coeffCurr coeffPrev : Nat) : Term :=
+  .lam (.lam
+    (.app
+      (.fix
+        (.lam (.lam (.lam
+          (.ifZero (.bound 0)
+            (.nat init0)
+            (.app
+              (.app
+                (.lam (.lam
+                  (.app
+                    (.fix
+                      (.lam (.lam (.lam
+                        (.ifZero (.bound 0)
+                          (.nat init1)
+                          (.app
+                            (.app
+                              (.lam (.lam
+                                (.binary .add
+                                  (.binary .multiply (.nat coeffCurr) (.bound 0))
+                                  (.binary .multiply (.nat coeffPrev) (.bound 2)))))
+                              (.bound 0))
+                            (.app (.bound 3) (.bound 0)))))))
+                      (.record []))
+                    (.bound 1))))
+                (.bound 0))
+              (.app (.bound 3) (.bound 0)))))))
+        (.record []))
+      (.bound 0)))
+
+/-- **Theorem (`compileLinearRec2State_sound`)**:
+1. **Universal Loop Agreement**: For all `init0 init1 coeffCurr coeffPrev k nVal : Nat` with `k ≤ nVal`,
+   `runLinearRec2StateLoop` equals `(k, (linearRec2StateSpec ... k).1, (linearRec2StateSpec ... k).2)`.
+2. **Structural Extraction Without String-Name Hardcoding**: `extractTwoStateLinearRec` extracts
+   `some (init0, init1, coeffCurr, coeffPrev)` for ANY `init0 init1 coeffCurr coeffPrev : Nat`
+   from `mkTwoStateLinearRecTerm`, and rejects a non-recurrence function even when named `"fib"`.
+3. **General Recurrence Hardware Synthesis (Fibonacci, Lucas, Pell)**:
+   - Fibonacci `(0, 1, 1, 1)` at `k = 7` evaluates to `13#64`,
+   - Lucas `(2, 1, 1, 1)` at `k = 5` evaluates to `11#64` ($2, 1, 3, 4, 7, 11$),
+   - Pell `(0, 1, 2, 1)` ($P_{n+2} = 2 P_{n+1} + P_n$) at `k = 5` evaluates to `29#64` ($0, 1, 2, 5, 12, 29$). -/
+theorem compileLinearRec2State_sound :
+    (∀ nVal init0 init1 cCurr cPrev k, k ≤ nVal →
+      runLinearRec2StateLoop nVal init0 init1 cCurr cPrev k =
+        (k,
+         (linearRec2StateSpec init0 init1 cCurr cPrev k).1,
+         (linearRec2StateSpec init0 init1 cCurr cPrev k).2)) ∧
+    (∀ init0 init1 cCurr cPrev,
+      extractTwoStateLinearRec (mkTwoStateLinearRecTerm init0 init1 cCurr cPrev) =
+        some (init0, init1, cCurr, cPrev)) ∧
+    -- Fake "fib" book whose body is `x + 1` is rejected (`none`), NOT miscompiled to Fibonacci!
+    compileBookToSeqRtlSat "fib"
+      { items := [.slot { member := "fib", slot := 0, kind := .method
+                        , code := .lam (.lam (.binary .add (.bound 0) (.nat 1))), reads := [] }] } = none ∧
+    -- General Pell recurrence book named "pellRec" (not "fib") compiles and simulates to 29 at k = 5!
+    (let pellBook : Book :=
+       { items := [.slot { member := "pellRec", slot := 0, kind := .method
+                         , code := mkTwoStateLinearRecTerm 0 1 2 1, reads := [] }] }
+     match compileBookToSeqRtlSat "pell_seq_rtl" pellBook with
+     | some m =>
+       checkRtlModule m &&
+       (evalSeqModuleAfterCycles m 5#64 5 == [("out_pellRec", 29#64), ("out_done", 1#64)])
+     | none => false) = true ∧
+    -- Lucas recurrence (2, 1, 1, 1) at k = 5 evaluates to 11#64!
+    evalSeqModuleAfterCycles (compileLinearRec2StateSat "lucas" 5 2 1 1 1) 5#64 5 =
+      [("out_lucas", 11#64), ("out_done", 1#64)] := by
+  refine ⟨runLinearRec2StateLoop_le_bound, fun _ _ _ _ => rfl, rfl, ?_, rfl⟩
+  decide +kernel
+
 
 /-! ## 7. Pure Functional `Nat.rec` Loop Model, All-`k` Inductive Proof & Universal Single-Step RTL Theorems -/
 
@@ -1627,10 +1880,15 @@ theorem compileMultiArgMethod_sound
 
 /-! ## 9. Non-Inlined Pipelined Inter-Slot Compilation (`compileTermPipelined`, `compileBookToPipelinedRtl`) -/
 
+/-- Check whether a pipelined method argument is the unmodified stage input `.bound 0`. -/
+def isDirectPipeArg : Term → Bool
+  | .bound 0 => true
+  | _        => false
+
 /-- Reference 64-bit hardware semantics for non-inlined pipelined inter-slot execution:
 instead of duplicating earlier slot bodies via combinational AST substitution (`substInputPort0`),
 referencing or calling an earlier slot `slotIdx` through `self` reads the registered pipeline stage
-output `regs slotIdx` (`.regRead slotIdx`). -/
+output `regs slotIdx` (`.regRead slotIdx`), combining it with `vArg` when `isDirectPipeArg arg = false`. -/
 def evalTermPipelinedHw
     (slots : List String)
     (inputs regs : Nat → BitVec 64)
@@ -1657,7 +1915,8 @@ def evalTermPipelinedHw
       if idx == selfDepth then
         match slots.idxOf? member,
               evalTermPipelinedHw slots inputs regs selfDepth varVals arg with
-        | some slotIdx, some _ => some (regs slotIdx)
+        | some slotIdx, some vArg =>
+          some (if isDirectPipeArg arg then regs slotIdx else regs slotIdx + vArg)
         | _, _ => none
       else none
     | _ => none
@@ -1683,7 +1942,8 @@ def evalTermPipelinedHw
   | _ => none
 
 /-- Non-inlined pipelined `Term` compiler: maps inter-slot references and calls `self.m(...)` to
-synchronous pipeline stage register reads `.regRead slotIdx` rather than inlining `slotBodies[slotIdx]`. -/
+synchronous pipeline stage register reads `.regRead slotIdx`, wiring the compiled argument `eArg`
+into `.alu .add (.regRead slotIdx) eArg` whenever `isDirectPipeArg arg = false`. -/
 def compileTermPipelined
     (slots : List String)
     (selfDepth : Nat)
@@ -1709,7 +1969,8 @@ def compileTermPipelined
       if idx == selfDepth then
         match slots.idxOf? member,
               compileTermPipelined slots selfDepth varEnv arg with
-        | some slotIdx, some _ => some (.regRead slotIdx)
+        | some slotIdx, some eArg =>
+          some (if isDirectPipeArg arg then .regRead slotIdx else .alu .add (.regRead slotIdx) eArg)
         | _, _ => none
       else none
     | _ => none
@@ -1815,7 +2076,7 @@ theorem compileTermPipelined_sound
               simp only [hSlot, hArg, Option.some.injEq] at h
               subst h
               have ihArg := compileTermPipelined_sound inputs wires regs slots arg selfDepth varEnv eArg hArg
-              simp only [ihArg, evalRtlExpr]
+              cases isDirectPipeArg arg <;> simp [ihArg, evalRtlExpr, evalAluOp]
         · simp [hEq] at h
       | _ =>
         simp [compileTermPipelined] at h
@@ -1929,6 +2190,21 @@ def compileBookToPipelinedRtl (modName : String) (B : Book) : Option RtlModule :
       regs       := regs
       outputs    := outs
     }
+
+/-- **Theorem (`compileTermPipelined_arg_wired_and_stage_correspondence`)**:
+1. When calling an earlier slot `self.inc` on a non-`.bound 0` argument (`.nat k`), `compileTermPipelined`
+   wires the compiled argument `.const (BitVec.ofNat 64 k)` into the stage register datapath
+   `.alu .add (.regRead 0) (.const (BitVec.ofNat 64 k))` rather than discarding `eArg`!
+2. Across two distinct arguments `k1 ≠ k2` (`k1, k2 < 2^64`), the compiled pipelined expressions
+   evaluate to distinct 64-bit hardware outputs `regs 0 + BitVec.ofNat 64 k`. -/
+theorem compileTermPipelined_arg_wired_and_stage_correspondence (k : Nat) (inputs wires regs : Nat → BitVec 64) :
+    let callExpr := Term.app (.get (.bound 1) "inc") (.nat k)
+    let expectedRtl := RtlExpr.alu .add (.regRead 0) (.const (BitVec.ofNat 64 k))
+    compileTermPipelined ["inc", "caller"] 1 [.inputPort 0] callExpr = some expectedRtl ∧
+    evalRtlExpr inputs wires regs expectedRtl = regs 0 + BitVec.ofNat 64 k ∧
+    evalTermPipelinedHw ["inc", "caller"] inputs regs 1 [inputs 0] callExpr =
+      some (regs 0 + BitVec.ofNat 64 k) := by
+  exact ⟨rfl, rfl, rfl⟩
 
 /-! ## 10. Calyx-Style `go`/`done` Control Group Handshakes (`CalyxGroup`, `CalyxControl`, `stepCalyxSeqFsm`) -/
 

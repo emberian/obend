@@ -349,4 +349,196 @@ theorem payout_conserves (b : Book) (account payee : AccountId) (assets : List A
     exact ⟨hacc, hpay⟩
   · exact hnodup
 
+/-! ## Multi-Seat Atomic Batch Reallocation (`BatchRealloc`) -/
+
+/-- Multi-seat atomic batch reallocation across participating ZoE seats. -/
+structure BatchRealloc where
+  postings : List ResourcePosting
+  deriving DecidableEq, Repr
+
+/-- Apply a batch reallocation's postings to the ledger book. -/
+def applyBatchRealloc (b : Book) (realloc : BatchRealloc) : Book :=
+  applyPostings b realloc.postings
+
+/-- Total credits received by `acc` for asset `ast` in `realloc`. -/
+def seatCredit (realloc : BatchRealloc) (acc : AccountId) (ast : AssetId) : Nat :=
+  ((realloc.postings.filter fun p => p.destination == acc && p.asset == ast).map ResourcePosting.amount).sum
+
+/-- Total debits sent from `acc` for asset `ast` in `realloc`. -/
+def seatDebit (realloc : BatchRealloc) (acc : AccountId) (ast : AssetId) : Nat :=
+  ((realloc.postings.filter fun p => p.source == acc && p.asset == ast).map ResourcePosting.amount).sum
+
+/-- Sum of credits across all participating seat accounts for asset `ast`. -/
+def batchTotalCredits (seats : List Seat) (realloc : BatchRealloc) (ast : AssetId) : Nat :=
+  ((seats.map Seat.account).map fun acc => seatCredit realloc acc ast).sum
+
+/-- Sum of debits across all participating seat accounts for asset `ast`. -/
+def batchTotalDebits (seats : List Seat) (realloc : BatchRealloc) (ast : AssetId) : Nat :=
+  ((seats.map Seat.account).map fun acc => seatDebit realloc acc ast).sum
+
+/-- All assets referenced by participating seat proposals or reallocation postings. -/
+def batchAssets (seats : List Seat) (realloc : BatchRealloc) : List AssetId :=
+  (seats.flatMap fun s => s.proposal.assets) ++ realloc.postings.map ResourcePosting.asset
+
+/-- Executable safety & conservation checker for a multi-seat ZoE batch reallocation:
+    1. Participating `Seat` accounts are pairwise distinct (`seatAccounts.Nodup`).
+    2. Every posting moves value exclusively between participating protected `Seat` accounts (`≥ protectedBase`).
+    3. For every asset `ast ∈ batchAssets seats realloc`, total credits across participating seats equal total debits.
+    4. After reallocation (`b' := applyBatchRealloc b realloc`), every participating seat `s ∈ seats`
+       satisfies ZoE Offer Safety (`safeAt b' s.account s.proposal = true`) and non-negative balances. -/
+def checkBatchReallocSafe (b : Book) (seats : List Seat) (realloc : BatchRealloc) : Bool :=
+  let seatAccounts := seats.map Seat.account
+  let nodupSeats := decide seatAccounts.Nodup
+  let endpointsInSeats := realloc.postings.all fun p =>
+    decide (p.source ∈ seatAccounts) &&
+    decide (p.destination ∈ seatAccounts) &&
+    decide (protectedBase ≤ p.source) &&
+    decide (protectedBase ≤ p.destination)
+  let assets := batchAssets seats realloc
+  let zeroSumConserved := assets.all fun ast =>
+    batchTotalCredits seats realloc ast == batchTotalDebits seats realloc ast
+  let b' := applyBatchRealloc b realloc
+  let allSeatsOfferSafe := seats.all fun s =>
+    safeAt b' s.account s.proposal &&
+    assets.all fun ast => decide (0 ≤ b'.balance s.account ast)
+  nodupSeats && endpointsInSeats && zeroSumConserved && allSeatsOfferSafe
+
+/-- If `checkBatchReallocSafe b seats realloc = true`, participating seat accounts are pairwise distinct. -/
+theorem batchRealloc_nodup_seats (b : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_safe : checkBatchReallocSafe b seats realloc = true) :
+    (seats.map Seat.account).Nodup := by
+  unfold checkBatchReallocSafe at h_safe
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h_safe
+  exact h_safe.1.1.1
+
+/-- If `checkBatchReallocSafe b seats realloc = true`, then every participating seat `s ∈ seats`
+    satisfies ZoE Offer Safety (`safeAt (applyBatchRealloc b realloc) s.account s.proposal = true`). -/
+theorem batchRealloc_preserves_all_seats_offer_safe (b : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_safe : checkBatchReallocSafe b seats realloc = true) :
+    ∀ s ∈ seats, safeAt (applyBatchRealloc b realloc) s.account s.proposal = true := by
+  unfold checkBatchReallocSafe at h_safe
+  simp only [Bool.and_eq_true, List.all_eq_true] at h_safe
+  intro s hs
+  exact (h_safe.2 s hs).1
+
+/-- If `checkBatchReallocSafe b seats realloc = true`, then for every asset in `batchAssets seats realloc`,
+    the sum of credits across participating seats equals the sum of debits. -/
+theorem batchRealloc_zero_sum_conservation (b : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_safe : checkBatchReallocSafe b seats realloc = true) :
+    ∀ ast ∈ batchAssets seats realloc,
+      batchTotalCredits seats realloc ast = batchTotalDebits seats realloc ast := by
+  unfold checkBatchReallocSafe at h_safe
+  simp only [Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at h_safe
+  intro ast hast
+  exact h_safe.1.2 ast hast
+
+theorem filter_asset_nil_of_forall_ne (ps : List ResourcePosting) (pred : AccountId → ResourcePosting → Bool)
+    (acc : AccountId) (ast : AssetId) (hne : ∀ p ∈ ps, p.asset ≠ ast) :
+    ps.filter (fun p => pred acc p && (p.asset == ast)) = [] := by
+  induction ps with
+  | nil => rfl
+  | cons p rest ih =>
+    have hp : (p.asset == ast) = false := beq_eq_false_iff_ne.mpr (hne p (List.Mem.head rest))
+    simp [hp, ih (fun q hq => hne q (List.Mem.tail p hq))]
+
+theorem seatCredit_eq_zero_of_forall_ne (realloc : BatchRealloc) (acc : AccountId) (ast : AssetId)
+    (hne : ∀ p ∈ realloc.postings, p.asset ≠ ast) :
+    seatCredit realloc acc ast = 0 := by
+  unfold seatCredit
+  rw [filter_asset_nil_of_forall_ne realloc.postings (fun a p => p.destination == a) acc ast hne]
+  rfl
+
+theorem seatDebit_eq_zero_of_forall_ne (realloc : BatchRealloc) (acc : AccountId) (ast : AssetId)
+    (hne : ∀ p ∈ realloc.postings, p.asset ≠ ast) :
+    seatDebit realloc acc ast = 0 := by
+  unfold seatDebit
+  rw [filter_asset_nil_of_forall_ne realloc.postings (fun a p => p.source == a) acc ast hne]
+  rfl
+
+/-- Unconditional asset-wise zero-sum conservation: if `checkBatchReallocSafe b seats realloc = true`,
+    then for **every** asset `ast : AssetId` (whether referenced in `batchAssets` or not),
+    `batchTotalCredits seats realloc ast = batchTotalDebits seats realloc ast`. -/
+theorem batchRealloc_zero_sum_all_assets (b : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_safe : checkBatchReallocSafe b seats realloc = true) (ast : AssetId) :
+    batchTotalCredits seats realloc ast = batchTotalDebits seats realloc ast := by
+  by_cases hmem : ast ∈ batchAssets seats realloc
+  · exact batchRealloc_zero_sum_conservation b seats realloc h_safe ast hmem
+  · have hne : ∀ p ∈ realloc.postings, p.asset ≠ ast := by
+      intro p hp heq
+      apply hmem
+      unfold batchAssets
+      rw [List.mem_append]
+      right
+      rw [← heq]
+      exact List.mem_map_of_mem hp
+    unfold batchTotalCredits batchTotalDebits
+    have hmap : ((seats.map Seat.account).map fun acc => seatCredit realloc acc ast) =
+        ((seats.map Seat.account).map fun acc => seatDebit realloc acc ast) := by
+      apply map_congr_mem
+      intro acc _
+      rw [seatCredit_eq_zero_of_forall_ne realloc acc ast hne,
+          seatDebit_eq_zero_of_forall_ne realloc acc ast hne]
+    rw [hmap]
+
+theorem applyPosting_balance_other_account (b : Book) (p : ResourcePosting) (a : AccountId) (ast : AssetId)
+    (hsrc : a ≠ p.source) (hdst : a ≠ p.destination) :
+    (b.applyPosting p).balance a ast = b.balance a ast := by
+  unfold Book.balance Book.applyPosting
+  dsimp only
+  simp [hsrc, hdst]
+
+theorem applyPostings_balance_other_account (ps : List ResourcePosting) (b : Book) (a : AccountId) (ast : AssetId)
+    (haway : ∀ p ∈ ps, a ≠ p.source ∧ a ≠ p.destination) :
+    (applyPostings b ps).balance a ast = b.balance a ast := by
+  induction ps generalizing b with
+  | nil => rfl
+  | cons p rest ih =>
+    rw [applyPostings_cons]
+    have hp := haway p (List.Mem.head rest)
+    have hrest : ∀ q ∈ rest, a ≠ q.source ∧ a ≠ q.destination :=
+      fun q hq => haway q (List.Mem.tail p hq)
+    rw [ih (b.applyPosting p) hrest]
+    exact applyPosting_balance_other_account b p a ast hp.1 hp.2
+
+/-- Any batch reallocation whose postings touch only protected accounts (`≥ protectedBase`)
+    leaves every ordinary account (`< protectedBase`) strictly invariant. -/
+theorem applyBatchRealloc_balance_ordinary_of_protected (b : Book) (realloc : BatchRealloc)
+    (h_prot : ∀ p ∈ realloc.postings, protectedBase ≤ p.source ∧ protectedBase ≤ p.destination)
+    (ordinary : AccountId) (h_ord : ordinary < protectedBase) (ast : AssetId) :
+    (applyBatchRealloc b realloc).balance ordinary ast = b.balance ordinary ast := by
+  unfold applyBatchRealloc
+  apply applyPostings_balance_other_account
+  intro p hp
+  obtain ⟨hsrc, hdst⟩ := h_prot p hp
+  exact ⟨Nat.ne_of_lt (Nat.lt_of_lt_of_le h_ord hsrc), Nat.ne_of_lt (Nat.lt_of_lt_of_le h_ord hdst)⟩
+
+/-- Reallocating among protected `Seat` accounts under `checkBatchReallocSafe` leaves the balance
+    of every ordinary account (`< protectedBase`) strictly invariant across all assets. -/
+theorem batchRealloc_disjoint_from_ordinary_accounts (b : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_safe : checkBatchReallocSafe b seats realloc = true)
+    (ordinary : AccountId) (h_ord : ordinary < protectedBase) (ast : AssetId) :
+    (applyBatchRealloc b realloc).balance ordinary ast = b.balance ordinary ast := by
+  apply applyBatchRealloc_balance_ordinary_of_protected b realloc _ ordinary h_ord ast
+  unfold checkBatchReallocSafe at h_safe
+  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h_safe
+  intro p hp
+  have hp' := h_safe.1.1.2 p hp
+  exact ⟨hp'.1.2, hp'.2⟩
+
+/-- Total book asset conservation for `applyBatchRealloc` when participating seats are registered in `b`. -/
+theorem batchRealloc_conserves (b : Book) (seats : List Seat) (realloc : BatchRealloc)
+    (h_safe : checkBatchReallocSafe b seats realloc = true)
+    (h_reg : ∀ s ∈ seats, s.account ∈ b.accounts)
+    (hnodup : b.accounts.Nodup) (ast : AssetId) :
+    (applyBatchRealloc b realloc).totalAsset ast = b.totalAsset ast := by
+  unfold applyBatchRealloc
+  apply applyPostings_conserves _ _ _ hnodup ast
+  unfold checkBatchReallocSafe at h_safe
+  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h_safe
+  intro p hp
+  have hp' := h_safe.1.1.2 p hp
+  rcases List.mem_map.mp hp'.1.1.1 with ⟨s1, hs1, hacc1⟩
+  rcases List.mem_map.mp hp'.1.1.2 with ⟨s2, hs2, hacc2⟩
+  exact ⟨hacc1 ▸ h_reg s1 hs1, hacc2 ▸ h_reg s2 hs2⟩
+
 end Obend.Ledger

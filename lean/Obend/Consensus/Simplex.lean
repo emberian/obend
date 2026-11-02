@@ -595,24 +595,30 @@ theorem guard_ok_simplex {c rest w : Term} {why : String}
   | true =>
     exact ⟨hc, hr⟩
 
-/-- Core4 state invariant for a Simplex cell with fault tolerance `f`: `2 * f + 1 ≤ s.certSigners`. -/
+/-- Core4 state invariant for a Simplex cell with fault tolerance `f`:
+    `2 * f + 1 ≤ s.certSigners ∧ s.certSigners ≤ 3 * f + 1` (quorum met and committee-bounded). -/
 def simplexInvariant (f : Nat) : Term :=
-  .lam (leNat (natT (2 * f + 1)) (.get (.bound 0) "certSigners"))
+  .lam
+    (andT
+      (leNat (natT (2 * f + 1)) (.get (.bound 0) "certSigners"))
+      (leNat (.get (.bound 0) "certSigners") (natT (3 * f + 1))))
 
 theorem subst_simplexInvariant (f : Nat) (σ : Nat → Term) :
     (simplexInvariant f).substitute σ = simplexInvariant f := by
-  simp [simplexInvariant, leNat, natT, Term.substitute, subst_binary, subst_get, subst_bound]
+  simp [simplexInvariant, andT, Obend.Law.falseT, leNat, natT, Term.substitute, subst_binary, subst_get, subst_bound]
   rfl
 
 /-- Core4 step relation body enforcing `old.view ≤ new.view`, `old.finalizedHeight ≤ new.finalizedHeight`,
-    and `2 * f + 1 ≤ new.certSigners`. -/
+    `2 * f + 1 ≤ new.certSigners`, and `new.certSigners ≤ 3 * f + 1`. -/
 def simplexStepBody (f : Nat) : Term :=
   Obend.Law.guard
     (andT
       (leNat (.get (.bound 2) "view") (.get (.bound 1) "view"))
       (andT
         (leNat (.get (.bound 2) "finalizedHeight") (.get (.bound 1) "finalizedHeight"))
-        (leNat (natT (2 * f + 1)) (.get (.bound 1) "certSigners"))))
+        (andT
+          (leNat (natT (2 * f + 1)) (.get (.bound 1) "certSigners"))
+          (leNat (.get (.bound 1) "certSigners") (natT (3 * f + 1))))))
     "simplex_law_violation"
     okT
 
@@ -628,7 +634,8 @@ def simplexTransitionLaw (f : Nat) : Term :=
       "quorum_shortfall"
       (simplexStepBody f))
 
-/-- Parameterized `Obend.Law.CellContract` for Simplex BFT with fault tolerance `f`. -/
+/-- Parameterized `Obend.Law.CellContract` for Simplex BFT with fault tolerance `f`
+    enforcing both quorum (`2 * f + 1 ≤ certSigners`) and committee upper bound (`certSigners ≤ 3 * f + 1`). -/
 def simplexCellContractOf (f : Nat) : CellContract where
   law := simplexTransitionLaw f
   invariant := simplexInvariant f
@@ -651,9 +658,156 @@ def simplexCellContractOf (f : Nat) : CellContract where
     rw [simplexStepRel, admits_iff]
     exact ⟨w, h_ok.2⟩
 
-/-- Default `Obend.Law.CellContract` instance for Simplex BFT (`f = 1`, quorum `2*f + 1 = 3`). -/
+/-- Default `Obend.Law.CellContract` instance for Simplex BFT (`f = 1`, quorum `2*f + 1 = 3`, committee `3*f + 1 = 4`). -/
 def simplexCellContract : CellContract :=
   simplexCellContractOf 1
+
+/-! ## 7. Accountable Safety (`SlashingReceipt`, `extractSlashingReceipt`, `simplex_accountable_safety`) -/
+
+/-- Accountable slashing receipt recording a view, two conflicting block identifiers
+    (`blockA`, `blockB`), and the constructively extracted list of equivocating validator IDs
+    who signed both blocks in the same view. -/
+structure SlashingReceipt where
+  view               : Nat
+  blockA             : Nat
+  blockB             : Nat
+  equivocatingVoters : List Nat
+  deriving DecidableEq, BEq, Repr, Inhabited
+
+/-- Encode a list of `Nat` validator IDs into `Obend.Core.Data`. -/
+def encodeVoterIds : List Nat → Data
+  | [] => .variant "nil" (.record [])
+  | v :: vs =>
+    .variant "cons"
+      (.record [ ("head", .natural v), ("tail", encodeVoterIds vs) ])
+
+/-- Decode a list of `Nat` validator IDs from `Obend.Core.Data`. -/
+def decodeVoterIds : Data → Option (List Nat)
+  | .variant "nil" (.record []) => some []
+  | .variant "cons" (.record [ ("head", .natural v), ("tail", rest) ]) => do
+    let vs ← decodeVoterIds rest
+    pure (v :: vs)
+  | _ => none
+
+theorem decodeVoterIds_encodeVoterIds :
+    ∀ (vs : List Nat), decodeVoterIds (encodeVoterIds vs) = some vs
+  | [] => rfl
+  | v :: vs => by
+    simp [encodeVoterIds, decodeVoterIds, decodeVoterIds_encodeVoterIds vs]
+
+/-- Deterministic `Obend.Core.Data` encoding of `SlashingReceipt`. -/
+def SlashingReceipt.toData (r : SlashingReceipt) : Data :=
+  .record
+    [ ("view", .natural r.view)
+    , ("blockA", .natural r.blockA)
+    , ("blockB", .natural r.blockB)
+    , ("equivocatingVoters", encodeVoterIds r.equivocatingVoters) ]
+
+/-- Deterministic `Obend.Core.Data` decoding of `SlashingReceipt`. -/
+def SlashingReceipt.ofData? : Data → Option SlashingReceipt
+  | .record
+      [ ("view", .natural view)
+      , ("blockA", .natural blockA)
+      , ("blockB", .natural blockB)
+      , ("equivocatingVoters", vsData) ] => do
+    let vs ← decodeVoterIds vsData
+    pure { view, blockA, blockB, equivocatingVoters := vs }
+  | _ => none
+
+/-- Exact roundtrip theorem for `SlashingReceipt.toData` / `SlashingReceipt.ofData?`. -/
+theorem SlashingReceipt.ofData_toData (r : SlashingReceipt) :
+    SlashingReceipt.ofData? r.toData = some r := by
+  cases r with
+  | mk view blockA blockB vs =>
+    simp [SlashingReceipt.toData, SlashingReceipt.ofData?, decodeVoterIds_encodeVoterIds]
+
+/-- Constructive membership check on `List Nat` using `decide (v = x)`. -/
+def memNatList (v : Nat) : List Nat → Bool
+  | [] => false
+  | x :: xs => decide (v = x) || memNatList v xs
+
+/-- Constructively extract an accountable `SlashingReceipt` from a validator `committee`
+    and two conflicting vote predicates `votedA` (for `blockA`) and `votedB` (for `blockB`). -/
+def extractSlashingReceipt
+    (view blockA blockB : Nat)
+    (committee : List Nat)
+    (votedA votedB : Nat → Bool) : SlashingReceipt :=
+  { view               := view
+  , blockA             := blockA
+  , blockB             := blockB
+  , equivocatingVoters := committee.filter (fun v => votedA v && votedB v) }
+
+/-- Constructively extract an accountable `SlashingReceipt` from a validator `committee`
+    and two explicit voter lists `votersA` and `votersB`. -/
+def extractSlashingReceiptFromLists
+    (view blockA blockB : Nat)
+    (committee votersA votersB : List Nat) : SlashingReceipt :=
+  extractSlashingReceipt view blockA blockB committee
+    (fun v => memNatList v votersA)
+    (fun v => memNatList v votersB)
+
+/-- Filtering a `Nodup` list preserves `Nodup`. -/
+theorem nodup_filter_simplex {α : Type} (p : α → Bool) :
+    ∀ {l : List α}, l.Nodup → (l.filter p).Nodup
+  | [], _ => List.Pairwise.nil
+  | x :: xs, h => by
+    cases h with
+    | cons h_not_mem h_xs =>
+      simp only [List.filter_cons]
+      cases p x with
+      | false => exact nodup_filter_simplex p h_xs
+      | true =>
+        exact List.Pairwise.cons
+          (fun y hy => h_not_mem y (List.mem_filter.mp hy).1)
+          (nodup_filter_simplex p h_xs)
+
+/-- **Accountable Safety (`simplex_accountable_safety`)**:
+    If two distinct blocks `blockA ≠ blockB` both achieve `2*f + 1` quorum certificates
+    in the same `view` among at most `3*f + 1` validators in `committee`, then
+    `extractSlashingReceipt` constructively extracts at least `f + 1` validators who
+    double-voted for both `blockA` and `blockB` (`votedA v = true ∧ votedB v = true`). -/
+theorem simplex_accountable_safety
+    (view blockA blockB f : Nat)
+    (committee : List Nat)
+    (votedA votedB : Nat → Bool)
+    (h_distinct : blockA ≠ blockB)
+    (h_committee : committee.length ≤ 3 * f + 1)
+    (h_quorumA : 2 * f + 1 ≤ (committee.filter votedA).length)
+    (h_quorumB : 2 * f + 1 ≤ (committee.filter votedB).length) :
+    let receipt := extractSlashingReceipt view blockA blockB committee votedA votedB
+    receipt.blockA ≠ receipt.blockB ∧
+    f + 1 ≤ receipt.equivocatingVoters.length ∧
+    (∀ v ∈ receipt.equivocatingVoters, v ∈ committee ∧ votedA v = true ∧ votedB v = true) := by
+  dsimp [extractSlashingReceipt]
+  have h_sum := list_filter_add_card votedA votedB committee
+  have h_union := list_filter_length_le (fun v => votedA v || votedB v) committee
+  have h_bound : f + 1 ≤ (committee.filter (fun v => votedA v && votedB v)).length := by
+    omega
+  refine ⟨h_distinct, h_bound, ?_⟩
+  intro v hv
+  have ⟨h_in, h_both⟩ := List.mem_filter.mp hv
+  simp only [Bool.and_eq_true] at h_both
+  exact ⟨h_in, h_both.1, h_both.2⟩
+
+/-- When `committee.Nodup` holds, `extractSlashingReceipt` extracts at least `f + 1`
+    distinct (`Nodup`) equivocating validators. -/
+theorem simplex_accountable_safety_nodup
+    (view blockA blockB f : Nat)
+    (committee : List Nat)
+    (votedA votedB : Nat → Bool)
+    (h_nodup : committee.Nodup)
+    (h_distinct : blockA ≠ blockB)
+    (h_committee : committee.length ≤ 3 * f + 1)
+    (h_quorumA : 2 * f + 1 ≤ (committee.filter votedA).length)
+    (h_quorumB : 2 * f + 1 ≤ (committee.filter votedB).length) :
+    let receipt := extractSlashingReceipt view blockA blockB committee votedA votedB
+    receipt.equivocatingVoters.Nodup ∧
+    f + 1 ≤ receipt.equivocatingVoters.length ∧
+    (∀ v ∈ receipt.equivocatingVoters, v ∈ committee ∧ votedA v = true ∧ votedB v = true) := by
+  have ⟨_, h_len, h_mem⟩ :=
+    simplex_accountable_safety view blockA blockB f committee votedA votedB
+      h_distinct h_committee h_quorumA h_quorumB
+  exact ⟨nodup_filter_simplex (fun v => votedA v && votedB v) h_nodup, h_len, h_mem⟩
 
 end Obend.Consensus.Simplex
 

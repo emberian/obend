@@ -1120,5 +1120,498 @@ theorem lcnf_to_core4_sound :
   · simpa [lowerLCNF, lowerT] using lower_sound_nat sampleLcnfAstMatch_runs_42
   · simpa [lowerLCNFFunDecl, lowerT] using lower_sound_nat sampleLcnfRecDecl_runs_zero
 
+/-! ## 5. Multi-Constructor & Nested Recursor Lowering (`CtorIotaRule`, `compileMultiCtorIota`, `compileMultiCtorIota_sound`) -/
+
+/-- A constructor minor-premise rule for a multi-constructor inductive recursor (`compileMultiCtorIota`):
+* `ctorTag`: constructor tag name (e.g., `"zero"`, `"succ"`, `"none"`, `"some"`, `"nil"`, `"cons"`),
+* `fieldNames`: record field names of the constructor injection,
+* `minorBody`: minor premise body (wrapped in `wrapMinorBvars fieldNames.length` under the recursive self-binder). -/
+structure CtorIotaRule where
+  ctorTag    : String
+  fieldNames : List String
+  minorBody  : LExpr
+  deriving Repr, Inhabited
+
+/-- Compile a general multi-constructor inductive recursor (`recName`, `resTy`, `rules`) into
+an `LExpr.recConst` eliminator whose body dispatches on the major premise `.bvar 0` via
+`LExpr.cases resTy`. -/
+def compileMultiCtorIota (recName : String) (resTy : Ty) (rules : List CtorIotaRule) : LExpr :=
+  let arms := rules.map fun r => (r.ctorTag, r.fieldNames, wrapMinorBvars r.fieldNames.length r.minorBody)
+  .recConst recName (fn .emptyRow resTy) (.lam .emptyRow (.cases resTy arms (.bvar 0)))
+
+/-- Lower a Peano `Nat` into 2-constructor algebraic `LExpr` (`"zero"` / `"succ"`). -/
+def peanoNatToLExpr : Nat → LExpr
+  | 0     => .inject "zero" []
+  | n + 1 => .inject "succ" [("pred", peanoNatToLExpr n)]
+
+/-- Multi-constructor ι-rules for `Nat` (`zero ↦ 0`, `succ pred ↦ succ (self pred)`). -/
+def natIotaRules : List CtorIotaRule :=
+  [ { ctorTag := "zero", fieldNames := [],       minorBody := .lit 0 }
+  , { ctorTag := "succ", fieldNames := ["pred"], minorBody := .natSucc (.app (.bvar 2) (.bvar 0)) } ]
+
+/-- Lowered multi-constructor recursor for `Nat`. -/
+def natRecIotaLExpr : LExpr :=
+  compileMultiCtorIota "natRecIota" .natural natIotaRules
+
+/-- Lower an `Option Nat` into 2-constructor algebraic `LExpr` (`"none"` / `"some"`). -/
+def optionNatToLExpr : Option Nat → LExpr
+  | none   => .inject "none" []
+  | some v => .inject "some" [("val", .lit v)]
+
+/-- Multi-constructor ι-rules for `Option Nat` (`none ↦ defaultVal`, `some val ↦ val`). -/
+def optionIotaRules (defaultVal : Nat) : List CtorIotaRule :=
+  [ { ctorTag := "none", fieldNames := [],      minorBody := .lit defaultVal }
+  , { ctorTag := "some", fieldNames := ["val"], minorBody := .bvar 0 } ]
+
+/-- Lowered multi-constructor recursor for `Option Nat`. -/
+def optionRecIotaLExpr (defaultVal : Nat) : LExpr :=
+  compileMultiCtorIota "optionRecIota" .natural (optionIotaRules defaultVal)
+
+/-- Lower a `List Nat` into 2-constructor algebraic `LExpr` (`"nil"` / `"cons"`). -/
+def natListToLExpr : List Nat → LExpr
+  | []      => .inject "nil" []
+  | x :: xs => .inject "cons" [("head", .lit x), ("tail", natListToLExpr xs)]
+
+/-- Multi-constructor ι-rules for `List Nat` length (`nil ↦ 0`, `cons head tail ↦ succ (self tail)`). -/
+def listLenIotaRules : List CtorIotaRule :=
+  [ { ctorTag := "nil",  fieldNames := [],               minorBody := .lit 0 }
+  , { ctorTag := "cons", fieldNames := ["head", "tail"], minorBody := .natSucc (.app (.bvar 3) (.bvar 0)) } ]
+
+/-- Lowered multi-constructor recursor for `List Nat`. -/
+def listLenIotaLExpr : LExpr :=
+  compileMultiCtorIota "listLenIota" .natural listLenIotaRules
+
+/-- Lower a nested `Option (List Nat)` into algebraic `LExpr`. -/
+def optionListToLExpr : Option (List Nat) → LExpr
+  | none    => .inject "none" []
+  | some xs => .inject "some" [("val", natListToLExpr xs)]
+
+/-- Nested multi-constructor ι-rules for `Option (List Nat)` (`none ↦ 0`, `some xs ↦ listLenIota xs`). -/
+def nestedOptionListIotaRules : List CtorIotaRule :=
+  [ { ctorTag := "none", fieldNames := [],      minorBody := .lit 0 }
+  , { ctorTag := "some", fieldNames := ["val"], minorBody := .app listLenIotaLExpr (.bvar 0) } ]
+
+/-- Lowered nested multi-constructor recursor for `Option (List Nat)`. -/
+def nestedOptionListIotaLExpr : LExpr :=
+  compileMultiCtorIota "nestedOptionListIota" .natural nestedOptionListIotaRules
+
+theorem natRecIota_runs_zero :
+    SSteps (.app natRecIotaLExpr (peanoNatToLExpr 0)) (.lit 0) := by
+  have hunf : SStep (.app natRecIotaLExpr (peanoNatToLExpr 0))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("zero", [], .lit 0)
+            , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app (.bvar 2) (.bvar 0)))) ]
+            (.bvar 0))).inst natRecIotaLExpr)
+        (peanoNatToLExpr 0)) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("zero", [], .lit 0)
+          , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app (.bvar 2) (.bvar 0)))) ]
+          (.bvar 0))).inst natRecIotaLExpr =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("zero", [], .lit 0)
+          , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0)))) ]
+          (.bvar 0)) := by
+    simp [natRecIotaLExpr, compileMultiCtorIota, natIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename, liftRename]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (peanoNatToLExpr 0)) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("zero", [], .lit 0)
+        , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0)))) ]
+        (.bvar 0)).inst (peanoNatToLExpr 0) =
+      .cases .natural
+        [ ("zero", [], .lit 0)
+        , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0)))) ]
+        (.inject "zero" []) := by
+    simp [peanoNatToLExpr, natRecIotaLExpr, compileMultiCtorIota, natIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst2]
+  exact .next (.casesInject .natural _ "zero" [] [] (.lit 0) [] rfl rfl) (.refl _)
+
+theorem natRecIota_runs_succ (n : Nat)
+    (ih : SSteps (.app natRecIotaLExpr (peanoNatToLExpr n)) (.lit n)) :
+    SSteps (.app natRecIotaLExpr (peanoNatToLExpr (n + 1))) (.lit (n + 1)) := by
+  have hunf : SStep (.app natRecIotaLExpr (peanoNatToLExpr (n + 1)))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("zero", [], .lit 0)
+            , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app (.bvar 2) (.bvar 0)))) ]
+            (.bvar 0))).inst natRecIotaLExpr)
+        (peanoNatToLExpr (n + 1))) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("zero", [], .lit 0)
+          , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app (.bvar 2) (.bvar 0)))) ]
+          (.bvar 0))).inst natRecIotaLExpr =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("zero", [], .lit 0)
+          , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0)))) ]
+          (.bvar 0)) := by
+    simp [natRecIotaLExpr, compileMultiCtorIota, natIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename, liftRename]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (peanoNatToLExpr (n + 1))) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("zero", [], .lit 0)
+        , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0)))) ]
+        (.bvar 0)).inst (peanoNatToLExpr (n + 1)) =
+      .cases .natural
+        [ ("zero", [], .lit 0)
+        , ("succ", ["pred"], .lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0)))) ]
+        (.inject "succ" [("pred", peanoNatToLExpr n)]) := by
+    simp [peanoNatToLExpr, natRecIotaLExpr, compileMultiCtorIota, natIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst2]
+  refine .next (.casesInject .natural _ "succ" [("pred", peanoNatToLExpr n)] ["pred"]
+    (.lam .emptyRow (.natSucc (.app natRecIotaLExpr (.bvar 0))))
+    [peanoNatToLExpr n] rfl rfl) ?_
+  refine .next (.beta .emptyRow _ (peanoNatToLExpr n)) ?_
+  have hinst3 :
+      (LExpr.natSucc (.app natRecIotaLExpr (.bvar 0))).inst (peanoNatToLExpr n) =
+      .natSucc (.app natRecIotaLExpr (peanoNatToLExpr n)) := by
+    simp [natRecIotaLExpr, compileMultiCtorIota, natIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst3]
+  exact ssteps_trans (ssteps_succArg ih) (.next (.succFold n) (.refl _))
+
+theorem natRecIota_runs : ∀ (n : Nat),
+    SSteps (.app natRecIotaLExpr (peanoNatToLExpr n)) (.lit n)
+  | 0     => natRecIota_runs_zero
+  | n + 1 => natRecIota_runs_succ n (natRecIota_runs n)
+
+theorem optionRecIota_runs_none (defaultVal : Nat) :
+    SSteps (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr none)) (.lit defaultVal) := by
+  have hunf : SStep (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr none))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("none", [], .lit defaultVal)
+            , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+            (.bvar 0))).inst (optionRecIotaLExpr defaultVal))
+        (optionNatToLExpr none)) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit defaultVal)
+          , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+          (.bvar 0))).inst (optionRecIotaLExpr defaultVal) =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit defaultVal)
+          , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+          (.bvar 0)) := by
+    simp [optionRecIotaLExpr, compileMultiCtorIota, optionIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (optionNatToLExpr none)) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("none", [], .lit defaultVal)
+        , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+        (.bvar 0)).inst (optionNatToLExpr none) =
+      .cases .natural
+        [ ("none", [], .lit defaultVal)
+        , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+        (.inject "none" []) := by
+    simp [optionNatToLExpr, LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single]
+  rw [hinst2]
+  exact .next (.casesInject .natural _ "none" [] [] (.lit defaultVal) [] rfl rfl) (.refl _)
+
+theorem optionRecIota_runs_some (defaultVal v : Nat) :
+    SSteps (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr (some v))) (.lit v) := by
+  have hunf : SStep (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr (some v)))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("none", [], .lit defaultVal)
+            , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+            (.bvar 0))).inst (optionRecIotaLExpr defaultVal))
+        (optionNatToLExpr (some v))) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit defaultVal)
+          , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+          (.bvar 0))).inst (optionRecIotaLExpr defaultVal) =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit defaultVal)
+          , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+          (.bvar 0)) := by
+    simp [optionRecIotaLExpr, compileMultiCtorIota, optionIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (optionNatToLExpr (some v))) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("none", [], .lit defaultVal)
+        , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+        (.bvar 0)).inst (optionNatToLExpr (some v)) =
+      .cases .natural
+        [ ("none", [], .lit defaultVal)
+        , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+        (.inject "some" [("val", .lit v)]) := by
+    simp [optionNatToLExpr, LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single]
+  rw [hinst2]
+  refine .next (.casesInject .natural _ "some" [("val", .lit v)] ["val"]
+    (.lam .emptyRow (.bvar 0)) [.lit v] rfl rfl) ?_
+  refine .next (.beta .emptyRow (.bvar 0) (.lit v)) ?_
+  have hinst3 : (LExpr.bvar 0).inst (.lit v) = .lit v := by
+    simp [LExpr.inst, LExpr.subst, LExpr.single]
+  rw [hinst3]
+  exact .refl _
+
+theorem listLenIota_runs_nil :
+    SSteps (.app listLenIotaLExpr (natListToLExpr [])) (.lit 0) := by
+  have hunf : SStep (.app listLenIotaLExpr (natListToLExpr []))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("nil", [], .lit 0)
+            , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app (.bvar 3) (.bvar 0))))) ]
+            (.bvar 0))).inst listLenIotaLExpr)
+        (natListToLExpr [])) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("nil", [], .lit 0)
+          , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app (.bvar 3) (.bvar 0))))) ]
+          (.bvar 0))).inst listLenIotaLExpr =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("nil", [], .lit 0)
+          , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))))) ]
+          (.bvar 0)) := by
+    simp [listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename, liftRename]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (natListToLExpr [])) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("nil", [], .lit 0)
+        , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))))) ]
+        (.bvar 0)).inst (natListToLExpr []) =
+      .cases .natural
+        [ ("nil", [], .lit 0)
+        , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))))) ]
+        (.inject "nil" []) := by
+    simp [natListToLExpr, listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst2]
+  exact .next (.casesInject .natural _ "nil" [] [] (.lit 0) [] rfl rfl) (.refl _)
+
+theorem listLenIota_runs_cons (x : Nat) (xs : List Nat)
+    (ih : SSteps (.app listLenIotaLExpr (natListToLExpr xs)) (.lit xs.length)) :
+    SSteps (.app listLenIotaLExpr (natListToLExpr (x :: xs))) (.lit (x :: xs).length) := by
+  have hunf : SStep (.app listLenIotaLExpr (natListToLExpr (x :: xs)))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("nil", [], .lit 0)
+            , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app (.bvar 3) (.bvar 0))))) ]
+            (.bvar 0))).inst listLenIotaLExpr)
+        (natListToLExpr (x :: xs))) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("nil", [], .lit 0)
+          , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app (.bvar 3) (.bvar 0))))) ]
+          (.bvar 0))).inst listLenIotaLExpr =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("nil", [], .lit 0)
+          , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))))) ]
+          (.bvar 0)) := by
+    simp [listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename, liftRename]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (natListToLExpr (x :: xs))) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("nil", [], .lit 0)
+        , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))))) ]
+        (.bvar 0)).inst (natListToLExpr (x :: xs)) =
+      .cases .natural
+        [ ("nil", [], .lit 0)
+        , ("cons", ["head", "tail"], .lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))))) ]
+        (.inject "cons" [("head", .lit x), ("tail", natListToLExpr xs)]) := by
+    simp [natListToLExpr, listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst2]
+  refine .next (.casesInject .natural _ "cons"
+    [("head", .lit x), ("tail", natListToLExpr xs)] ["head", "tail"]
+    (.lam .emptyRow (.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0)))))
+    [.lit x, natListToLExpr xs] rfl rfl) ?_
+  refine .next (.appFun (natListToLExpr xs) (.beta .emptyRow _ (.lit x))) ?_
+  have hinst3 :
+      (LExpr.lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0)))).inst (.lit x) =
+      .lam .emptyRow (.natSucc (.app listLenIotaLExpr (.bvar 0))) := by
+    simp [listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.rename]
+  rw [hinst3]
+  refine .next (.beta .emptyRow _ (natListToLExpr xs)) ?_
+  have hinst4 :
+      (LExpr.natSucc (.app listLenIotaLExpr (.bvar 0))).inst (natListToLExpr xs) =
+      .natSucc (.app listLenIotaLExpr (natListToLExpr xs)) := by
+    simp [listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst4]
+  exact ssteps_trans (ssteps_succArg ih) (.next (.succFold xs.length) (.refl _))
+
+theorem listLenIota_runs : ∀ (xs : List Nat),
+    SSteps (.app listLenIotaLExpr (natListToLExpr xs)) (.lit xs.length)
+  | []      => listLenIota_runs_nil
+  | x :: xs => listLenIota_runs_cons x xs (listLenIota_runs xs)
+
+theorem nestedOptionListIota_runs_some (xs : List Nat) :
+    SSteps (.app nestedOptionListIotaLExpr (optionListToLExpr (some xs))) (.lit xs.length) := by
+  have hunf : SStep (.app nestedOptionListIotaLExpr (optionListToLExpr (some xs)))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("none", [], .lit 0)
+            , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+            (.bvar 0))).inst nestedOptionListIotaLExpr)
+        (optionListToLExpr (some xs))) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit 0)
+          , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+          (.bvar 0))).inst nestedOptionListIotaLExpr =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit 0)
+          , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+          (.bvar 0)) := by
+    simp [nestedOptionListIotaLExpr, compileMultiCtorIota, nestedOptionListIotaRules,
+      listLenIotaLExpr, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.rename]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (optionListToLExpr (some xs))) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("none", [], .lit 0)
+        , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+        (.bvar 0)).inst (optionListToLExpr (some xs)) =
+      .cases .natural
+        [ ("none", [], .lit 0)
+        , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+        (.inject "some" [("val", natListToLExpr xs)]) := by
+    simp [optionListToLExpr, listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst2]
+  refine .next (.casesInject .natural _ "some" [("val", natListToLExpr xs)] ["val"]
+    (.lam .emptyRow (.app listLenIotaLExpr (.bvar 0)))
+    [natListToLExpr xs] rfl rfl) ?_
+  refine .next (.beta .emptyRow _ (natListToLExpr xs)) ?_
+  have hinst3 :
+      (LExpr.app listLenIotaLExpr (.bvar 0)).inst (natListToLExpr xs) =
+      .app listLenIotaLExpr (natListToLExpr xs) := by
+    simp [listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst3]
+  exact listLenIota_runs xs
+
+theorem nestedOptionListIota_runs_none :
+    SSteps (.app nestedOptionListIotaLExpr (optionListToLExpr none)) (.lit 0) := by
+  have hunf : SStep (.app nestedOptionListIotaLExpr (optionListToLExpr none))
+      (.app
+        ((LExpr.lam .emptyRow
+          (.cases .natural
+            [ ("none", [], .lit 0)
+            , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+            (.bvar 0))).inst nestedOptionListIotaLExpr)
+        (optionListToLExpr none)) :=
+    .appFun _ (.unfold _ _ _)
+  refine .next hunf ?_
+  have hinst1 :
+      (LExpr.lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit 0)
+          , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+          (.bvar 0))).inst nestedOptionListIotaLExpr =
+      .lam .emptyRow
+        (.cases .natural
+          [ ("none", [], .lit 0)
+          , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+          (.bvar 0)) := by
+    simp [nestedOptionListIotaLExpr, compileMultiCtorIota, nestedOptionListIotaRules,
+      listLenIotaLExpr, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.rename]
+  rw [hinst1]
+  refine .next (.beta .emptyRow _ (optionListToLExpr none)) ?_
+  have hinst2 :
+      (LExpr.cases .natural
+        [ ("none", [], .lit 0)
+        , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+        (.bvar 0)).inst (optionListToLExpr none) =
+      .cases .natural
+        [ ("none", [], .lit 0)
+        , ("some", ["val"], .lam .emptyRow (.app listLenIotaLExpr (.bvar 0))) ]
+        (.inject "none" []) := by
+    simp [optionListToLExpr, listLenIotaLExpr, compileMultiCtorIota, listLenIotaRules, wrapMinorBvars,
+      LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  rw [hinst2]
+  exact .next (.casesInject .natural _ "none" [] [] (.lit 0) [] rfl rfl) (.refl _)
+
+theorem nestedOptionListIota_runs : ∀ (opt : Option (List Nat)),
+    SSteps (.app nestedOptionListIotaLExpr (optionListToLExpr opt)) (.lit ((opt.map List.length).getD 0))
+  | none    => nestedOptionListIota_runs_none
+  | some xs => nestedOptionListIota_runs_some xs
+
+theorem nestedOptionListIota_eval (opt : Option (List Nat)) :
+    Evaluates (lowerT (.app nestedOptionListIotaLExpr (optionListToLExpr opt)))
+      (.nat ((opt.map List.length).getD 0)) := by
+  simpa [lowerT] using lower_sound_nat (nestedOptionListIota_runs opt)
+
+/-- **Theorem (`compileMultiCtorIota_sound`)**:
+`compileMultiCtorIota` soundly lowers 2-constructor and nested inductive eliminators (`Nat`, `Option`,
+`List`, and nested `Option (List Nat)`) into `LExpr` and `Core4` (`Evaluates`):
+1. `Nat` (`natRecIotaLExpr`): evaluates `peanoNatToLExpr n` to `.nat n` for every `n : Nat`,
+2. `Option` (`optionRecIotaLExpr`): evaluates `none` to `.nat defaultVal` and `some v` to `.nat v`,
+3. `List` (`listLenIotaLExpr`): evaluates `natListToLExpr xs` to `.nat xs.length` for every `xs : List Nat`,
+4. Nested `Option (List Nat)` (`nestedOptionListIotaLExpr`): evaluates `none` to `.nat 0` and
+   `some xs` to `.nat xs.length` (`nestedOptionListIota_eval`). -/
+theorem compileMultiCtorIota_sound (n defaultVal v : Nat) (xs : List Nat) :
+    SSteps (.app natRecIotaLExpr (peanoNatToLExpr n)) (.lit n) ∧
+    Evaluates (lowerT (.app natRecIotaLExpr (peanoNatToLExpr n))) (.nat n) ∧
+    Evaluates (lowerT (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr none))) (.nat defaultVal) ∧
+    Evaluates (lowerT (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr (some v)))) (.nat v) ∧
+    SSteps (.app listLenIotaLExpr (natListToLExpr xs)) (.lit xs.length) ∧
+    Evaluates (lowerT (.app listLenIotaLExpr (natListToLExpr xs))) (.nat xs.length) ∧
+    Evaluates (lowerT (.app nestedOptionListIotaLExpr (optionListToLExpr (some xs)))) (.nat xs.length) := by
+  refine ⟨natRecIota_runs n, ?_, ?_, ?_, listLenIota_runs xs, ?_, ?_⟩
+  · simpa [lowerT] using lower_sound_nat (natRecIota_runs n)
+  · simpa [lowerT] using lower_sound_nat (optionRecIota_runs_none defaultVal)
+  · simpa [lowerT] using lower_sound_nat (optionRecIota_runs_some defaultVal v)
+  · simpa [lowerT] using lower_sound_nat (listLenIota_runs xs)
+  · exact nestedOptionListIota_eval (some xs)
+
 end Obend.Lower.Inductive
 end
+

@@ -30,6 +30,7 @@ Port `ICAP` and Region Isolation Fences), connecting `Obend.Leaf.Emit`, `Obend.L
      hardware function).
 -/
 public import Obend.Leaf.Emit
+public import Obend.Leaf.Specialize
 public import Obend.Lower.Lower
 public import Obend.Hardware.Compiler
 @[expose] public section
@@ -37,6 +38,9 @@ public import Obend.Hardware.Compiler
 namespace Obend.Hardware.ReductionMachine
 open Obend.Core.Term
 open Obend.Core.Ty (Ty)
+open Obend.Logic
+open Obend.Slot
+open Obend.Slot.World
 open Obend.Leaf
 open Obend.Lower
 open Obend.Hardware.HDL
@@ -1179,6 +1183,572 @@ theorem golden_multicycle_inet_pe_reduction :
     finalPe.scalarResults.map (·.immVal) = [37] ∧
     runInteractionNetCycles 5 initPe = finalPe := by
   decide +kernel
+
+/-! ## 6. Spatial Packet-Switched XY NoC Transition System & `Obend.Slot`-Backed DPR (`WS-A`) -/
+
+/-- Classification of a packet-switched Network-on-Chip (NoC) flit (`NocFlitKind`):
+* `request`: carries an argument `payload` from `(srcX, srcY)` to `(dstX, dstY)` targeting `targetSlot`,
+* `response`: carries the evaluated 64-bit result `payload` back to `(dstX, dstY)`. -/
+inductive NocFlitKind where
+  | request
+  | response
+  deriving DecidableEq, Repr
+
+/-- Hardware Network-on-Chip (NoC) credit-flow-controlled flit (`NocFlit`):
+* `flitId`: unique packet/flit identifier,
+* `kind`: `.request` or `.response`,
+* `srcX`, `srcY`: origin 2D mesh coordinates,
+* `curX`, `curY`: current router 2D mesh coordinates,
+* `dstX`, `dstY`: destination 2D mesh coordinates,
+* `targetSlot`: target `Obend.Leaf.Book` slot index on the destination tile,
+* `payload`: 64-bit data payload (`argVal` on `.request`, evaluated result on `.response`). -/
+structure NocFlit where
+  flitId     : Nat
+  kind       : NocFlitKind
+  srcX       : Nat
+  srcY       : Nat
+  curX       : Nat
+  curY       : Nat
+  dstX       : Nat
+  dstY       : Nat
+  targetSlot : Nat
+  payload    : BitVec 64
+  deriving DecidableEq, Repr
+
+/-- Check whether a `NocFlit` has reached its destination tile `(dstX, dstY)`. -/
+def NocFlit.atDest (f : NocFlit) : Bool :=
+  f.curX == f.dstX && f.curY == f.dstY
+
+/-- Manhattan hop distance `|curX - dstX| + |curY - dstY|` remaining for a `NocFlit`. -/
+def NocFlit.manhattanDist (f : NocFlit) : Nat :=
+  (if f.curX ≤ f.dstX then f.dstX - f.curX else f.curX - f.dstX) +
+  (if f.curY ≤ f.dstY then f.dstY - f.curY else f.curY - f.dstY)
+
+/-- Advance one hop along Dimension-Order XY routing (`stepNocFlitXy`):
+1. First routes horizontally along the X dimension (`curX < dstX ↦ curX + 1`, `curX > dstX ↦ curX - 1`),
+2. Once `curX == dstX`, routes vertically along the Y dimension (`curY < dstY ↦ curY + 1`, `curY > dstY ↦ curY - 1`),
+3. Once `(curX, curY) == (dstX, dstY)`, the flit has arrived at its destination tile. -/
+def stepNocFlitXy (f : NocFlit) : NocFlit :=
+  if f.curX < f.dstX then
+    { f with curX := f.curX + 1 }
+  else if f.curX > f.dstX then
+    { f with curX := f.curX - 1 }
+  else if f.curY < f.dstY then
+    { f with curY := f.curY + 1 }
+  else if f.curY > f.dstY then
+    { f with curY := f.curY - 1 }
+  else
+    f
+
+/-- Spatial NoC Tile & Router State (`NocTileState`):
+* `tileId`: linear tile identifier,
+* `tileX`, `tileY`: 2D mesh coordinates on the die,
+* `inbox`: queue of in-flight flits at this router/tile,
+* `outbox`: queue of completed response flits delivered to egress,
+* `credits`: downstream egress buffer credits (`credits == 0` stalls ejection),
+* `rules`: resident `AutomatonTile` slot rules on this tile. -/
+structure NocTileState where
+  tileId  : Nat
+  tileX   : Nat
+  tileY   : Nat
+  inbox   : List NocFlit
+  outbox  : List NocFlit
+  credits : Nat
+  rules   : List AutomatonTile
+  deriving DecidableEq, Repr
+
+/-- Evaluate the matching `AutomatonTile` rule in `rules` for `targetSlot` on `argVal`. -/
+def evalTileRuleOnFlit (rules : List AutomatonTile) (argVal : BitVec 64) (targetSlot : Nat) : BitVec 64 :=
+  match rules.find? (fun r => r.slotIdx == targetSlot) with
+  | some r => evalRtlExpr (packetInputEnv argVal) (fun _ => 0#64) (fun _ => 0#64) r.datapath
+  | none   =>
+    match rules.head? with
+    | some r => evalRtlExpr (packetInputEnv argVal) (fun _ => 0#64) (fun _ => 0#64) r.datapath
+    | none   => argVal
+
+/-- Single-cycle spatial XY router & rule transition (`stepNocRouter`):
+* Stalls if `t.credits == 0` or `t.inbox == []`,
+* If the head flit `f` is not yet at `(dstX, dstY)`, advances `f` by one XY hop (`stepNocFlitXy f`),
+* If `f` has reached `(dstX, dstY)` as a `.request`, fires `evalTileRuleOnFlit t.rules f.payload f.targetSlot`
+  and turns `f` into a `.response` flit routed back to `(srcX, srcY)` (ejecting to `outbox` and
+  decrementing `credits` if `(srcX, srcY) == (curX, curY)`, or routing back along the XY mesh),
+* If `f` has reached `(dstX, dstY)` as a `.response`, ejects `f` into `outbox` and decrements `credits` by 1. -/
+def stepNocRouter (t : NocTileState) : NocTileState :=
+  if t.credits == 0 then
+    t
+  else
+    match t.inbox with
+    | [] => t
+    | f :: rest =>
+      if !f.atDest then
+        let fNext := stepNocFlitXy f
+        { t with
+          inbox   := rest ++ [fNext]
+          credits := t.credits }
+      else
+        match f.kind with
+        | .request =>
+          let resVal := evalTileRuleOnFlit t.rules f.payload f.targetSlot
+          let respFlit : NocFlit :=
+            { f with
+              kind    := .response
+              dstX    := f.srcX
+              dstY    := f.srcY
+              payload := resVal }
+          if respFlit.atDest then
+            { t with
+              inbox   := rest
+              outbox  := t.outbox ++ [respFlit]
+              credits := t.credits - 1 }
+          else
+            { t with
+              inbox   := rest ++ [respFlit]
+              credits := t.credits }
+        | .response =>
+          { t with
+            inbox   := rest
+            outbox  := t.outbox ++ [f]
+            credits := t.credits - 1 }
+
+/-- Return an ejected response flit from `outbox` to the host and restore 1 egress credit (`credits + 1`). -/
+def consumeNocOutboxFlit (t : NocTileState) : Option NocFlit × NocTileState :=
+  match t.outbox with
+  | [] => (none, t)
+  | f :: rest =>
+    (some f, { t with outbox := rest, credits := t.credits + 1 })
+
+/-- Complete 2D Spatial NoC Fabric (`NocFabric`). -/
+structure NocFabric where
+  tiles : List NocTileState
+  deriving DecidableEq, Repr
+
+/-- Deliver an in-flight flit `f` to the first tile in `tiles` whose 2D mesh coordinates
+`(tileX, tileY)` match `(f.curX, f.curY)`. -/
+def deliverFlitToTiles (f : NocFlit) : List NocTileState → Option (List NocTileState)
+  | [] => none
+  | t :: rest =>
+    if t.tileX == f.curX && t.tileY == f.curY then
+      some ({ t with inbox := t.inbox ++ [f] } :: rest)
+    else
+      match deliverFlitToTiles f rest with
+      | some rest' => some (t :: rest')
+      | none => none
+
+/-- Deliver a flit `f` to the tile at `(f.curX, f.curY)` in `tiles` if present, or retain it in the
+head tile of `tiles` when `tiles` is a partial/single-tile submesh. -/
+def deliverFlitToFabric (f : NocFlit) (tiles : List NocTileState) : List NocTileState :=
+  match deliverFlitToTiles f tiles with
+  | some tiles' => tiles'
+  | none =>
+    match tiles with
+    | [] => []
+    | t :: rest => { t with inbox := t.inbox ++ [f] } :: rest
+
+/-- Deliver a list of in-flight flits across the fabric tiles. -/
+def deliverFlitsToFabric : List NocFlit → List NocTileState → List NocTileState
+  | [], tiles => tiles
+  | f :: rest, tiles => deliverFlitsToFabric rest (deliverFlitToFabric f tiles)
+
+/-- Extract all in-flight `inbox` flits from `tiles` and clear each tile's `inbox` prior to inter-tile
+crossbar delivery. -/
+def collectAndClearInboxes : List NocTileState → List NocFlit × List NocTileState
+  | [] => ([], [])
+  | t :: rest =>
+    let (restFlits, restTiles) := collectAndClearInboxes rest
+    (t.inbox ++ restFlits, { t with inbox := [] } :: restTiles)
+
+/-- Step all tiles/routers in a `NocFabric` by 1 clock cycle (`stepNocRouter`) and physically
+route every resulting in-flight `inbox` flit `f` across the 2D mesh fabric to the tile whose
+coordinates `(tileX, tileY)` match `(f.curX, f.curY)`. -/
+def stepNocFabric (fab : NocFabric) : NocFabric :=
+  let stepped := fab.tiles.map stepNocRouter
+  let (inFlight, cleared) := collectAndClearInboxes stepped
+  { tiles := deliverFlitsToFabric inFlight cleared }
+
+/-- Step a `NocFabric` for `n` clock cycles. -/
+def runNocFabricCycles : Nat → NocFabric → NocFabric
+  | 0, fab => fab
+  | n + 1, fab => runNocFabricCycles n (stepNocFabric fab)
+
+/-- Step a single `NocTileState` for `n` clock cycles. -/
+def runNocRouterCycles : Nat → NocTileState → NocTileState
+  | 0, t => t
+  | n + 1, t => runNocRouterCycles n (stepNocRouter t)
+
+/-- Total number of flits (`inbox.length + outbox.length`) on a `NocTileState`. -/
+def tileTotalFlits (t : NocTileState) : Nat :=
+  t.inbox.length + t.outbox.length
+
+/-- Credit-plus-outbox conservation invariant (`credits + outbox.length`) on a `NocTileState`. -/
+def tileCreditsPlusOutbox (t : NocTileState) : Nat :=
+  t.credits + t.outbox.length
+
+/-- Total number of flits across all tiles in a `NocFabric`. -/
+def fabricTotalFlits (fab : NocFabric) : Nat :=
+  (fab.tiles.map tileTotalFlits).sum
+
+/-- Total `credits + outbox.length` across all tiles in a `NocFabric`. -/
+def fabricCreditsPlusOutbox (fab : NocFabric) : Nat :=
+  (fab.tiles.map tileCreditsPlusOutbox).sum
+
+/-- **Theorem (`stepNocRouter_conserves_flits_and_credits`, Universally Quantified)**:
+For every `t : NocTileState`, a single router transition `stepNocRouter t` strictly conserves
+both total flits (`inbox.length + outbox.length`) and credit accounting (`credits + outbox.length`). -/
+theorem stepNocRouter_conserves_flits_and_credits (t : NocTileState) :
+    tileTotalFlits (stepNocRouter t) = tileTotalFlits t ∧
+    tileCreditsPlusOutbox (stepNocRouter t) = tileCreditsPlusOutbox t := by
+  unfold stepNocRouter tileTotalFlits tileCreditsPlusOutbox
+  by_cases hc : t.credits == 0
+  · simp [hc]
+  · simp only [hc, Bool.false_eq_true, ↓reduceIte]
+    have hpos : t.credits > 0 := by
+      rcases Nat.eq_zero_or_pos t.credits with h0 | hp
+      · exfalso; exact hc (beq_iff_eq.mpr h0)
+      · exact hp
+    cases hin : t.inbox with
+    | nil => simp [hin]
+    | cons f rest =>
+      dsimp only
+      by_cases hat : !f.atDest
+      · simp [hat]
+      · simp only [hat, Bool.false_eq_true, ↓reduceIte]
+        cases f.kind with
+        | request =>
+          dsimp only
+          split <;> simp <;> omega
+        | response =>
+          simp; omega
+
+theorem deliverFlitToTiles_conserves (f : NocFlit) :
+    ∀ (tiles tiles' : List NocTileState),
+      deliverFlitToTiles f tiles = some tiles' →
+      tiles' ≠ [] ∧
+      (tiles'.map tileTotalFlits).sum = (tiles.map tileTotalFlits).sum + 1 ∧
+      (tiles'.map tileCreditsPlusOutbox).sum = (tiles.map tileCreditsPlusOutbox).sum
+  | [], _, h => by cases h
+  | t :: rest, tiles', h => by
+    simp only [deliverFlitToTiles] at h
+    split at h
+    · simp only [Option.some.injEq] at h
+      subst h
+      refine ⟨by simp, ?_, rfl⟩
+      simp [tileTotalFlits]
+      omega
+    · cases hd : deliverFlitToTiles f rest with
+      | none => rw [hd] at h; cases h
+      | some rest' =>
+        rw [hd] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        obtain ⟨_, ih1, ih2⟩ := deliverFlitToTiles_conserves f rest rest' hd
+        refine ⟨by simp, ?_, ?_⟩
+        · simp only [List.map_cons, List.sum_cons, ih1]; omega
+        · simp only [List.map_cons, List.sum_cons, ih2]
+
+theorem deliverFlitToFabric_conserves (f : NocFlit) :
+    ∀ (tiles : List NocTileState),
+      tiles ≠ [] →
+      deliverFlitToFabric f tiles ≠ [] ∧
+      ((deliverFlitToFabric f tiles).map tileTotalFlits).sum = (tiles.map tileTotalFlits).sum + 1 ∧
+      ((deliverFlitToFabric f tiles).map tileCreditsPlusOutbox).sum = (tiles.map tileCreditsPlusOutbox).sum := by
+  intro tiles hne
+  unfold deliverFlitToFabric
+  cases hd : deliverFlitToTiles f tiles with
+  | some tiles' => exact deliverFlitToTiles_conserves f tiles tiles' hd
+  | none =>
+    cases tiles with
+    | nil => contradiction
+    | cons t rest =>
+      refine ⟨by simp, ?_, rfl⟩
+      simp [tileTotalFlits]
+      omega
+
+theorem deliverFlitsToFabric_conserves :
+    ∀ (flits : List NocFlit) (tiles : List NocTileState),
+      tiles ≠ [] →
+      ((deliverFlitsToFabric flits tiles).map tileTotalFlits).sum =
+        (tiles.map tileTotalFlits).sum + flits.length ∧
+      ((deliverFlitsToFabric flits tiles).map tileCreditsPlusOutbox).sum =
+        (tiles.map tileCreditsPlusOutbox).sum
+  | [], tiles, _ => by simp [deliverFlitsToFabric]
+  | f :: rest, tiles, hne => by
+    simp only [deliverFlitsToFabric, List.length_cons]
+    obtain ⟨hne1, hfl1, hcr1⟩ := deliverFlitToFabric_conserves f tiles hne
+    obtain ⟨ih1, ih2⟩ := deliverFlitsToFabric_conserves rest (deliverFlitToFabric f tiles) hne1
+    refine ⟨?_, ?_⟩
+    · rw [ih1, hfl1]; omega
+    · rw [ih2, hcr1]
+
+theorem collectAndClearInboxes_conserves :
+    ∀ (tiles : List NocTileState),
+      (tiles ≠ [] → (collectAndClearInboxes tiles).2 ≠ []) ∧
+      ((collectAndClearInboxes tiles).2.map tileTotalFlits).sum +
+        (collectAndClearInboxes tiles).1.length = (tiles.map tileTotalFlits).sum ∧
+      ((collectAndClearInboxes tiles).2.map tileCreditsPlusOutbox).sum =
+        (tiles.map tileCreditsPlusOutbox).sum
+  | [] => by simp [collectAndClearInboxes]
+  | t :: rest => by
+    obtain ⟨_, ihFl, ihCr⟩ := collectAndClearInboxes_conserves rest
+    refine ⟨by simp [collectAndClearInboxes], ?_, ?_⟩
+    · simp only [collectAndClearInboxes, List.map_cons, List.sum_cons, List.length_append, List.length_nil, tileTotalFlits]
+      omega
+    · simp only [collectAndClearInboxes, List.map_cons, List.sum_cons, tileCreditsPlusOutbox, ihCr]
+
+theorem map_stepNocRouter_conserves :
+    ∀ (tiles : List NocTileState),
+      ((tiles.map stepNocRouter).map tileTotalFlits).sum = (tiles.map tileTotalFlits).sum ∧
+      ((tiles.map stepNocRouter).map tileCreditsPlusOutbox).sum = (tiles.map tileCreditsPlusOutbox).sum
+  | [] => ⟨rfl, rfl⟩
+  | hd :: tl => by
+    obtain ⟨ih1, ih2⟩ := map_stepNocRouter_conserves tl
+    obtain ⟨h1, h2⟩ := stepNocRouter_conserves_flits_and_credits hd
+    exact ⟨by simp only [List.map_cons, List.sum_cons, h1, ih1],
+           by simp only [List.map_cons, List.sum_cons, h2, ih2]⟩
+
+/-- **Theorem (`noc_step_conserves_flits`, Universally Quantified)**:
+For every `fab : NocFabric` and every `t : NocTileState`:
+1. `stepNocRouter` and `stepNocFabric` strictly conserve total packets/flits across the entire fabric
+   (`fabricTotalFlits (stepNocFabric fab) = fabricTotalFlits fab`), and
+2. `stepNocRouter` and `stepNocFabric` strictly conserve credits + outbox occupancy across the entire
+   fabric (`fabricCreditsPlusOutbox (stepNocFabric fab) = fabricCreditsPlusOutbox fab`). -/
+theorem noc_step_conserves_flits (fab : NocFabric) (t : NocTileState) :
+    tileTotalFlits (stepNocRouter t) = tileTotalFlits t ∧
+    tileCreditsPlusOutbox (stepNocRouter t) = tileCreditsPlusOutbox t ∧
+    fabricTotalFlits (stepNocFabric fab) = fabricTotalFlits fab ∧
+    fabricCreditsPlusOutbox (stepNocFabric fab) = fabricCreditsPlusOutbox fab := by
+  have ht := stepNocRouter_conserves_flits_and_credits t
+  refine ⟨ht.1, ht.2, ?_, ?_⟩
+  · unfold fabricTotalFlits stepNocFabric
+    dsimp only
+    cases htiles : fab.tiles with
+    | nil => rfl
+    | cons hd tl =>
+      have hstepNe : (List.map stepNocRouter (hd :: tl)) ≠ [] := by simp
+      obtain ⟨hclrNe, hclrFl, _⟩ := collectAndClearInboxes_conserves (List.map stepNocRouter (hd :: tl))
+      obtain ⟨hdelFl, _⟩ := deliverFlitsToFabric_conserves
+        (collectAndClearInboxes (List.map stepNocRouter (hd :: tl))).1
+        (collectAndClearInboxes (List.map stepNocRouter (hd :: tl))).2
+        (hclrNe hstepNe)
+      have hmapFl := (map_stepNocRouter_conserves (hd :: tl)).1
+      omega
+  · unfold fabricCreditsPlusOutbox stepNocFabric
+    dsimp only
+    cases htiles : fab.tiles with
+    | nil => rfl
+    | cons hd tl =>
+      have hstepNe : (List.map stepNocRouter (hd :: tl)) ≠ [] := by simp
+      obtain ⟨hclrNe, _, hclrCr⟩ := collectAndClearInboxes_conserves (List.map stepNocRouter (hd :: tl))
+      obtain ⟨_, hdelCr⟩ := deliverFlitsToFabric_conserves
+        (collectAndClearInboxes (List.map stepNocRouter (hd :: tl))).1
+        (collectAndClearInboxes (List.map stepNocRouter (hd :: tl))).2
+        (hclrNe hstepNe)
+      have hmapCr := (map_stepNocRouter_conserves (hd :: tl)).2
+      rw [hdelCr, hclrCr, hmapCr]
+
+/-- **Theorem (`noc_multi_hop_delivery_and_eval_sound`)**:
+Proves end-to-end multi-hop XY routing, inter-tile crossbar delivery across a 6-tile 2D mesh
+`NocFabric`, remote rule firing on the target tile `(2, 1)`, and credit/packet conservation:
+1. **Multi-Tile 2D Mesh Fabric Delivery & Remote Rule Evaluation (`runNocFabricCycles`)**:
+   In a 6-tile 2D mesh fabric `meshFab` where origin tile `(0, 0)` has `rules = []` (no rules!)
+   and `inbox = [reqFlit]`, intermediate tiles `(1, 0), (2, 0), (1, 1), (0, 1)` have `rules = []`,
+   and only destination tile `(2, 1)` holds `rules = [rule]` (`inbox = []`):
+   - After 3 fabric cycles (`runNocFabricCycles 3 meshFab`), `reqFlit` has physically traversed
+     `(0,0) → (1,0) → (2,0) → (2,1)` into tile `(2, 1)`'s `inbox`!
+   - On cycle 4, tile `(2, 1)` fires its resident `rule` and emits `.response` with `payload = expectedVal`!
+   - On cycle 8 (after traversing `(2,1) → (1,1) → (0,1) → (0,0)`), origin tile `(0, 0)` ejects
+     `expectedResp` into its `outbox` and decrements its `credits` from `4` to `3`!
+2. **Single-Router Trajectory & Credit-Return Handshake**:
+   `runNocRouterCycles` and `consumeNocOutboxFlit` extract `some expectedResp` and restore `credits = 4`,
+   while `credits = 0` stalls without dropping flits. -/
+theorem noc_multi_hop_delivery_and_eval_sound
+    (rule : AutomatonTile) (argVal : BitVec 64) :
+    let reqFlit : NocFlit :=
+      { flitId     := 1
+      , kind       := .request
+      , srcX       := 0
+      , srcY       := 0
+      , curX       := 0
+      , curY       := 0
+      , dstX       := 2
+      , dstY       := 1
+      , targetSlot := rule.slotIdx
+      , payload    := argVal }
+    let initTile : NocTileState :=
+      { tileId  := 0
+      , tileX   := 2
+      , tileY   := 1
+      , inbox   := [reqFlit]
+      , outbox  := []
+      , credits := 4
+      , rules   := [rule] }
+    let meshFab : NocFabric :=
+      { tiles :=
+          [ { tileId := 0, tileX := 0, tileY := 0, inbox := [reqFlit], outbox := [], credits := 4, rules := [] }
+          , { tileId := 1, tileX := 1, tileY := 0, inbox := [], outbox := [], credits := 4, rules := [] }
+          , { tileId := 2, tileX := 2, tileY := 0, inbox := [], outbox := [], credits := 4, rules := [] }
+          , { tileId := 3, tileX := 2, tileY := 1, inbox := [], outbox := [], credits := 4, rules := [rule] }
+          , { tileId := 4, tileX := 1, tileY := 1, inbox := [], outbox := [], credits := 4, rules := [] }
+          , { tileId := 5, tileX := 0, tileY := 1, inbox := [], outbox := [], credits := 4, rules := [] } ] }
+    let expectedVal := evalRtlExpr (packetInputEnv argVal) (fun _ => 0#64) (fun _ => 0#64) rule.datapath
+    let expectedResp : NocFlit :=
+      { flitId     := 1
+      , kind       := .response
+      , srcX       := 0
+      , srcY       := 0
+      , curX       := 0
+      , curY       := 0
+      , dstX       := 0
+      , dstY       := 0
+      , targetSlot := rule.slotIdx
+      , payload    := expectedVal }
+    let afterHop3 := runNocRouterCycles 3 initTile
+    let afterFire := runNocRouterCycles 4 initTile
+    let afterReturn := runNocRouterCycles 8 initTile
+    let (popped, afterConsume) := consumeNocOutboxFlit afterReturn
+    let fabAfter3 := runNocFabricCycles 3 meshFab
+    let fabAfter8 := runNocFabricCycles 8 meshFab
+    -- 1. After 3 XY hops ((0,0)->(1,0)->(2,0)->(2,1)), flit arrives at destination (2, 1)
+    afterHop3.inbox.map (fun f => (f.curX, f.curY, f.atDest)) = [(2, 1, true)] ∧
+    -- 2. On cycle 4, rule fires at (2, 1) and emits response flit with `expectedVal` targeting (0, 0)
+    afterFire.inbox.map (fun f => (f.kind, f.dstX, f.dstY, f.payload)) =
+      [(.response, 0, 0, expectedVal)] ∧
+    -- 3. On cycle 8 (after 3 return XY hops + ejection), response flit is in `outbox` and `credits = 3`
+    afterReturn.inbox = [] ∧
+    afterReturn.outbox = [expectedResp] ∧
+    afterReturn.credits = 3 ∧
+    tileTotalFlits afterReturn = tileTotalFlits initTile ∧
+    tileCreditsPlusOutbox afterReturn = tileCreditsPlusOutbox initTile ∧
+    -- 4. Consuming the outbox flit returns `expectedResp` and restores `credits = 4`
+    popped = some expectedResp ∧
+    afterConsume.credits = 4 ∧
+    -- 5. Zero-credit backpressure stalls without losing the flit
+    stepNocRouter { initTile with credits := 0 } = { initTile with credits := 0 } ∧
+    -- 6. Multi-tile 2D mesh fabric physically routes `reqFlit` to tile 3 `(2, 1)`, fires `rule`,
+    --    and delivers `expectedResp` back to origin tile 0 `(0, 0)`'s `outbox`!
+    (fabAfter3.tiles.map (fun t => t.inbox.length)) = [0, 0, 0, 1, 0, 0] ∧
+    (fabAfter8.tiles.map (fun t => (t.outbox, t.credits))) =
+      [([expectedResp], 3), ([], 4), ([], 4), ([], 4), ([], 4), ([], 4)] := by
+  dsimp only
+  have hfind : ([rule].find? (fun r => r.slotIdx == rule.slotIdx)) = some rule := by
+    simp [List.find?]
+  simp [runNocRouterCycles, runNocFabricCycles, stepNocFabric, collectAndClearInboxes,
+    deliverFlitsToFabric, deliverFlitToFabric, deliverFlitToTiles,
+    stepNocRouter, stepNocFlitXy, NocFlit.atDest,
+    evalTileRuleOnFlit, hfind, consumeNocOutboxFlit, tileTotalFlits, tileCreditsPlusOutbox]
+
+/-- Hardware Dynamic Partial Reconfiguration (DPR) Bitstream Candidate (`TileBitstreamCandidate`)
+for an eFPGA `AutomatonTile` managed by `Obend.Slot`:
+* `specializedTile`: a specialized hardware bitstream (`tile : AutomatonTile`, `frameDigest : BitVec 64`)
+  synthesized from an `Obend.Leaf.Composition` `comp` under object `name`, guarded by `LeafPin`s
+  `(.book name comp).supports`,
+* `baselineTile`: the always-usable resident fallback `AutomatonTile` (`supports = []`, `judge = true`). -/
+inductive TileBitstreamCandidate where
+  | specializedTile (name : String) (comp : Composition) (tile : AutomatonTile) (frameDigest : BitVec 64)
+  | baselineTile    (tile : AutomatonTile)
+
+/-- The `LeafPin` supports assumed by a `TileBitstreamCandidate`:
+* A `specializedTile name C tile digest` assumes the exact pins of `Candidate.book name C`
+  (`⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩`),
+* A `baselineTile` assumes no pins (`[]`) and is always usable. -/
+def TileBitstreamCandidate.supports : TileBitstreamCandidate → List LeafPin
+  | .specializedTile name C _ _ => (Candidate.book name C).supports
+  | .baselineTile _             => []
+
+/-- Admission judge for a `TileBitstreamCandidate`:
+* A `specializedTile name C tile digest` is admitted when `C.closedB = true` and `frameDigest != 0#64`,
+* A `baselineTile` is always admitted (`true`). -/
+def TileBitstreamCandidate.judge : TileBitstreamCandidate → Bool
+  | .specializedTile _ C _ digest => C.closedB && (digest != 0#64)
+  | .baselineTile _               => true
+
+/-- Extract the active hardware `AutomatonTile` from a `TileBitstreamCandidate`. -/
+def TileBitstreamCandidate.hwTile : TileBitstreamCandidate → AutomatonTile
+  | .specializedTile _ _ tile _ => tile
+  | .baselineTile tile          => tile
+
+/-- **The Hardware Dynamic Partial Reconfiguration Slot (`dprTileSlot : Slot LeafPin TileBitstreamCandidate`)**:
+Instantiates `Obend.Slot` (`Slot LeafPin TileBitstreamCandidate`) over `Obend.Leaf.Specialize`'s
+`LeafView`/`LeafPin` world so that an eFPGA tile's specialized bitstream is directly guarded by
+`LeafPin` supports and falls back to `baselineTile` in 1 cycle upon upstream pin mutation! -/
+def dprTileSlot : Slot LeafPin TileBitstreamCandidate :=
+  ⟨TileBitstreamCandidate.supports, TileBitstreamCandidate.judge⟩
+
+/-- Priority order for hardware DPR slot selection: specialized tile bitstream first, baseline fallback second. -/
+def dprTileOrder (name : String) (C : Composition) (specTile baseTile : AutomatonTile) (digest : BitVec 64) :
+    List TileBitstreamCandidate :=
+  [.specializedTile name C specTile digest, .baselineTile baseTile]
+
+/-- **Theorem (`baselineTile_usable`)**:
+The resident fallback `baselineTile` is always usable in every `LeafView`. -/
+theorem baselineTile_usable (v : LeafView) (baseTile : AutomatonTile) :
+    dprTileSlot.usable (holdsAt v) (.baselineTile baseTile) = true := by
+  simp [Slot.usable, Slot.dead, dprTileSlot, TileBitstreamCandidate.supports, TileBitstreamCandidate.judge]
+
+/-- **Theorem (`dprTileSlot_choice`)**:
+Incumbent-first selection on `dprTileSlot`: the specialized hardware bitstream is retained iff all its
+`LeafPin` supports hold and its judge passes; otherwise `slotAdvance` transitions to `.baselineTile baseTile`
+in 1 step. -/
+theorem dprTileSlot_choice
+    (v : LeafView) (name : String) (C : Composition)
+    (specTile baseTile : AutomatonTile) (digest : BitVec 64) :
+    (slotAdvance : Advance LeafView LeafPin TileBitstreamCandidate).advance
+        dprTileSlot v (dprTileOrder name C specTile baseTile digest)
+        (some (.specializedTile name C specTile digest)) =
+      if dprTileSlot.usable (holdsAt v) (.specializedTile name C specTile digest) then
+        .ok (.specializedTile name C specTile digest)
+      else
+        .ok (.baselineTile baseTile) := by
+  split
+  · rename_i hu
+    exact (incumbent_choice dprTileSlot v _ _ _).2 (.inl ⟨rfl, hu⟩)
+  · rename_i hu
+    have hf : dprTileSlot.usable (holdsAt v) (.specializedTile name C specTile digest) = false := by
+      simpa using hu
+    refine (incumbent_choice dprTileSlot v _ _ _).2 (.inr ⟨fun c e => by cases e; exact hf, ?_⟩)
+    simp [Slot.select, Slot.alternatives, dprTileOrder, hf, baselineTile_usable]
+
+/-- **Theorem (`dprTile_moved_pin_blocks`)**:
+Connects `Obend.Leaf.Specialize.moved_pin_blocks` directly to the hardware `dprTileSlot`:
+Whenever an upstream `LeafPin` `p ∈ (Candidate.book name C).supports` mutates (`holdsAt v p = false`)
+for an admitted specialized tile (`C.closedB = true` and `(digest != 0#64) = true`):
+1. `specSlot.read` is blocked (`moved_pin_blocks`),
+2. `dprTileSlot.read` immediately transitions to `.blocked (.specializedTile name C specTile digest) d`
+   with `p ∈ d`, and
+3. `slotAdvance` immediately triggers the 1-cycle hardware fallback to `.ok (.baselineTile baseTile)`! -/
+theorem dprTile_moved_pin_blocks
+    {v : LeafView} {name : String} {C : Composition}
+    (specTile baseTile : AutomatonTile) (digest : BitVec 64)
+    (hj : C.closedB = true) (hdig : (digest != 0#64) = true)
+    {p : LeafPin} (hp : p ∈ (Candidate.book name C).supports) (hd : holdsAt v p = false) :
+    (∃ d, specSlot.read (holdsAt v) (some (.book name C)) = .blocked (.book name C) d ∧ p ∈ d) ∧
+    (∃ d, dprTileSlot.read (holdsAt v) (some (.specializedTile name C specTile digest)) =
+      .blocked (.specializedTile name C specTile digest) d ∧ p ∈ d) ∧
+    (slotAdvance : Advance LeafView LeafPin TileBitstreamCandidate).advance
+        dprTileSlot v (dprTileOrder name C specTile baseTile digest)
+        (some (.specializedTile name C specTile digest)) =
+      .ok (.baselineTile baseTile) := by
+  obtain ⟨dSpec, hrSpec, hpSpec, _⟩ := moved_pin_blocks hj hp hd
+  have hmem : p ∈ dprTileSlot.dead (holdsAt v) (.specializedTile name C specTile digest) :=
+    (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
+  have hjudge : dprTileSlot.judge (.specializedTile name C specTile digest) = true := by
+    simp [dprTileSlot, TileBitstreamCandidate.judge, hj, hdig]
+  have hread :
+      ∃ d, dprTileSlot.read (holdsAt v) (some (.specializedTile name C specTile digest)) =
+        .blocked (.specializedTile name C specTile digest) d ∧ p ∈ d := by
+    unfold Slot.read
+    simp only [hjudge, ite_true]
+    cases hdd : dprTileSlot.dead (holdsAt v) (.specializedTile name C specTile digest) with
+    | nil => rw [hdd] at hmem; cases hmem
+    | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
+  have husable_false :
+      dprTileSlot.usable (holdsAt v) (.specializedTile name C specTile digest) = false := by
+    unfold Slot.usable
+    cases hdd : dprTileSlot.dead (holdsAt v) (.specializedTile name C specTile digest) with
+    | nil => rw [hdd] at hmem; cases hmem
+    | cons _ _ => simp [List.isEmpty]
+  refine ⟨⟨dSpec, hrSpec, hpSpec⟩, hread, ?_⟩
+  rw [dprTileSlot_choice, husable_false]
+  rfl
 
 end Obend.Hardware.ReductionMachine
 end

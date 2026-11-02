@@ -91,6 +91,162 @@ def compileRtlExprToAmdGpu (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdG
   | .bitNot src =>
     compileRtlExprToAmdGpu nextReg src
 
+/-- Faithful 64-bit AMD `CDNA3`/`RDNA3` VALU/VOP3/VOPC instruction set (`AmdGpuVop64Inst`)
+covering every `RtlAluOp` (`add`, `sub`, `mul`, `bitAnd`, `bitOr`, `bitXor`, `shl`, `lshr`, `eq`, `ult`),
+`RtlExpr.bitNot` (`v_not_b64`), and `RtlExpr.mux` (`v_cndmask_b64`) without silent semantic corruption. -/
+inductive AmdGpuVop64Inst where
+  | v_mov_b64     (dst : Nat) (imm : BitVec 64)
+  | v_read_in_b64 (dst : Nat) (portIdx : Nat)
+  | v_read_w_b64  (dst : Nat) (wireIdx : Nat)
+  | v_read_r_b64  (dst : Nat) (regIdx : Nat)
+  | v_add_u64     (dst src0 src1 : Nat)
+  | v_sub_u64     (dst src0 src1 : Nat)
+  | v_mul_lo_u64  (dst src0 src1 : Nat)
+  | v_and_b64     (dst src0 src1 : Nat)
+  | v_or_b64      (dst src0 src1 : Nat)
+  | v_xor_b64     (dst src0 src1 : Nat)
+  | v_lshl_b64    (dst src0 src1 : Nat)
+  | v_lshr_b64    (dst src0 src1 : Nat)
+  | v_cmp_eq_u64  (dst src0 src1 : Nat)
+  | v_cmp_lt_u64  (dst src0 src1 : Nat)
+  | v_not_b64     (dst src : Nat)
+  | v_cndmask_b64 (dst cond srcTrue srcFalse : Nat)
+  deriving Repr, DecidableEq
+
+/-- Map every `RtlAluOp` to its exact 64-bit AMD GPU VOP instruction constructor (`compileRtlAluToVop`):
+- `.add`    ↦ `v_add_u64`
+- `.sub`    ↦ `v_sub_u64`
+- `.mul`    ↦ `v_mul_lo_u64`
+- `.bitAnd` ↦ `v_and_b64`
+- `.bitOr`  ↦ `v_or_b64`
+- `.bitXor` ↦ `v_xor_b64`
+- `.shl`    ↦ `v_lshl_b64`
+- `.lshr`   ↦ `v_lshr_b64`
+- `.eq`     ↦ `v_cmp_eq_u64`
+- `.ult`    ↦ `v_cmp_lt_u64` -/
+def compileRtlAluToVop (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop64Inst :=
+  match op with
+  | .add    => .v_add_u64 dst src0 src1
+  | .sub    => .v_sub_u64 dst src0 src1
+  | .mul    => .v_mul_lo_u64 dst src0 src1
+  | .bitAnd => .v_and_b64 dst src0 src1
+  | .bitOr  => .v_or_b64 dst src0 src1
+  | .bitXor => .v_xor_b64 dst src0 src1
+  | .shl    => .v_lshl_b64 dst src0 src1
+  | .lshr   => .v_lshr_b64 dst src0 src1
+  | .eq     => .v_cmp_eq_u64 dst src0 src1
+  | .ult    => .v_cmp_lt_u64 dst src0 src1
+
+/-- Compile any `RtlExpr` into a sequence of faithful 64-bit AMD GPU VOP instructions
+(`List AmdGpuVop64Inst`), preserving every `RtlAluOp` via `compileRtlAluToVop`, lowering
+`.bitNot` to `v_not_b64`, and lowering `.mux` to `v_cndmask_b64`. -/
+def compileRtlExprToVop64 (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdGpuVop64Inst
+  | .const bv =>
+    (nextReg, nextReg + 1, [.v_mov_b64 nextReg bv])
+  | .inputPort idx =>
+    (nextReg, nextReg + 1, [.v_read_in_b64 nextReg idx])
+  | .wireRef idx =>
+    (nextReg, nextReg + 1, [.v_read_w_b64 nextReg idx])
+  | .regRead idx =>
+    (nextReg, nextReg + 1, [.v_read_r_b64 nextReg idx])
+  | .alu op lhs rhs =>
+    let (rL, n1, codeL) := compileRtlExprToVop64 nextReg lhs
+    let (rR, n2, codeR) := compileRtlExprToVop64 n1 rhs
+    let dst := n2
+    let inst := compileRtlAluToVop op dst rL rR
+    (dst, dst + 1, codeL ++ codeR ++ [inst])
+  | .mux cond tBranch fBranch =>
+    let (rC, n1, codeC) := compileRtlExprToVop64 nextReg cond
+    let (rT, n2, codeT) := compileRtlExprToVop64 n1 tBranch
+    let (rF, n3, codeF) := compileRtlExprToVop64 n2 fBranch
+    let dst := n3
+    (dst, dst + 1, codeC ++ codeT ++ codeF ++ [.v_cndmask_b64 dst rC rT rF])
+  | .bitNot src =>
+    let (rS, n1, codeS) := compileRtlExprToVop64 nextReg src
+    let dst := n1
+    (dst, dst + 1, codeS ++ [.v_not_b64 dst rS])
+
+/-- Execute a single 64-bit AMD GPU VOP instruction on a 64-bit VGPR file `vgprs : Nat → BitVec 64`. -/
+def execAmdGpuVop64Inst
+    (inputs wires regs : Nat → BitVec 64)
+    (vgprs : Nat → BitVec 64)
+    (inst : AmdGpuVop64Inst) : Nat → BitVec 64 :=
+  let writeReg (dst : Nat) (val : BitVec 64) (r : Nat) : BitVec 64 :=
+    if r == dst then val else vgprs r
+  match inst with
+  | .v_mov_b64 dst imm       => writeReg dst imm
+  | .v_read_in_b64 dst idx   => writeReg dst (inputs idx)
+  | .v_read_w_b64 dst idx    => writeReg dst (wires idx)
+  | .v_read_r_b64 dst idx    => writeReg dst (regs idx)
+  | .v_add_u64 dst s0 s1     => writeReg dst (vgprs s0 + vgprs s1)
+  | .v_sub_u64 dst s0 s1     => writeReg dst (vgprs s0 - vgprs s1)
+  | .v_mul_lo_u64 dst s0 s1  => writeReg dst (vgprs s0 * vgprs s1)
+  | .v_and_b64 dst s0 s1     => writeReg dst (vgprs s0 &&& vgprs s1)
+  | .v_or_b64 dst s0 s1      => writeReg dst (vgprs s0 ||| vgprs s1)
+  | .v_xor_b64 dst s0 s1     => writeReg dst (vgprs s0 ^^^ vgprs s1)
+  | .v_lshl_b64 dst s0 s1    => writeReg dst (vgprs s0 <<< ((vgprs s1).toNat % 64))
+  | .v_lshr_b64 dst s0 s1    => writeReg dst (vgprs s0 >>> ((vgprs s1).toNat % 64))
+  | .v_cmp_eq_u64 dst s0 s1  => writeReg dst (if vgprs s0 == vgprs s1 then 1#64 else 0#64)
+  | .v_cmp_lt_u64 dst s0 s1  => writeReg dst (if BitVec.ult (vgprs s0) (vgprs s1) then 1#64 else 0#64)
+  | .v_not_b64 dst src       => writeReg dst (~~~(vgprs src))
+  | .v_cndmask_b64 dst c t f => writeReg dst (if vgprs c != 0#64 then vgprs t else vgprs f)
+
+/-- Execute a program of 64-bit AMD GPU VOP instructions (`List AmdGpuVop64Inst`). -/
+def runAmdGpuVop64Prog
+    (inputs wires regs : Nat → BitVec 64)
+    (vgprs : Nat → BitVec 64) : List AmdGpuVop64Inst → (Nat → BitVec 64)
+  | [] => vgprs
+  | inst :: rest =>
+    runAmdGpuVop64Prog inputs wires regs (execAmdGpuVop64Inst inputs wires regs vgprs inst) rest
+
+/-- Compile an `RtlExpr` via `compileRtlExprToVop64`, execute the resulting 64-bit VOP instruction
+sequence on a zero-initialized VGPR file, and return the result VGPR value. -/
+def evalAmdGpuExpr (inputs wires regs : Nat → BitVec 64) (e : RtlExpr) : BitVec 64 :=
+  let (resReg, _, code) := compileRtlExprToVop64 0 e
+  (runAmdGpuVop64Prog inputs wires regs (fun _ => 0#64) code) resReg
+
+/-- **Universal Faithfulness Theorem for All 64-bit GPU VOP ALU Operations & `bitNot`
+(`evalAmdGpuExpr_faithful_all_ops`)**:
+1. For EVERY `op : RtlAluOp` (`add`, `sub`, `mul`, `bitAnd`, `bitOr`, `bitXor`, `shl`, `lshr`, `eq`, `ult`)
+   and all 64-bit operands `a b : BitVec 64` (both constants and input ports), `evalAmdGpuExpr`
+   produces the exact same 64-bit word as `evalRtlExpr`.
+2. For all `a : BitVec 64`, `evalAmdGpuExpr` on `.bitNot (.const a)` produces `~~~a`
+   (matching `evalRtlExpr`), and in particular `.bitNot (.const 0#64)` evaluates to
+   `0xFFFFFFFFFFFFFFFF#64` (instead of being erased!).
+3. `.alu .eq (.const 0#64) (.const 0#64)` evaluates to `1#64` (instead of `0#64` via `.add`!),
+   and `.alu .ult` faithfully computes unsigned 64-bit `<` (`0` or `1`, instead of subtraction!). -/
+theorem evalAmdGpuExpr_faithful_all_ops :
+    (∀ (op : RtlAluOp) (inputs wires regs : Nat → BitVec 64) (a b : BitVec 64),
+      evalAmdGpuExpr inputs wires regs (.alu op (.const a) (.const b)) =
+        evalRtlExpr inputs wires regs (.alu op (.const a) (.const b))) ∧
+    (∀ (op : RtlAluOp) (inputs wires regs : Nat → BitVec 64) (i j : Nat),
+      evalAmdGpuExpr inputs wires regs (.alu op (.inputPort i) (.inputPort j)) =
+        evalRtlExpr inputs wires regs (.alu op (.inputPort i) (.inputPort j))) ∧
+    (∀ (inputs wires regs : Nat → BitVec 64) (a : BitVec 64),
+      evalAmdGpuExpr inputs wires regs (.bitNot (.const a)) =
+        evalRtlExpr inputs wires regs (.bitNot (.const a))) ∧
+    (∀ (inputs wires regs : Nat → BitVec 64) (i : Nat),
+      evalAmdGpuExpr inputs wires regs (.bitNot (.inputPort i)) =
+        evalRtlExpr inputs wires regs (.bitNot (.inputPort i))) ∧
+    (∀ (inputs wires regs : Nat → BitVec 64) (c t f : BitVec 64),
+      evalAmdGpuExpr inputs wires regs (.mux (.const c) (.const t) (.const f)) =
+        evalRtlExpr inputs wires regs (.mux (.const c) (.const t) (.const f))) ∧
+    (∀ (inputs wires regs : Nat → BitVec 64),
+      evalAmdGpuExpr inputs wires regs (.bitNot (.const 0#64)) = 0xFFFFFFFFFFFFFFFF#64) ∧
+    (∀ (inputs wires regs : Nat → BitVec 64),
+      evalAmdGpuExpr inputs wires regs (.alu .eq (.const 0#64) (.const 0#64)) = 1#64 ∧
+      evalAmdGpuExpr inputs wires regs (.alu .eq (.const 0#64) (.const 1#64)) = 0#64) ∧
+    (∀ (inputs wires regs : Nat → BitVec 64),
+      evalAmdGpuExpr inputs wires regs (.alu .ult (.const 3#64) (.const 5#64)) = 1#64 ∧
+      evalAmdGpuExpr inputs wires regs (.alu .ult (.const 5#64) (.const 3#64)) = 0#64) := by
+  refine ⟨?_, ?_, fun _ _ _ _ => rfl, fun _ _ _ _ => rfl, fun _ _ _ _ _ _ => rfl,
+          fun _ _ _ => by change ~~~(0#64) = 0xFFFFFFFFFFFFFFFF#64; decide +kernel,
+          fun _ _ _ => ⟨rfl, rfl⟩, fun _ _ _ => ⟨rfl, rfl⟩⟩
+  · intro op inputs wires regs a b
+    cases op <;> rfl
+  · intro op inputs wires regs i j
+    cases op <;> rfl
+
 /-- Compile the primary output wire of an `RtlModule` to an AMD GPU ISA kernel (`resultReg × List AmdGpuInst`),
 starting temporary VGPR allocation at `v1` (with `v0` holding the primary input argument). -/
 def compileRtlModuleToAmdGpu (m : RtlModule) : Option (Nat × List AmdGpuInst) :=

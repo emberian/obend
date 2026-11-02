@@ -302,5 +302,142 @@ theorem lengthHash_opens_lie (n : Nat) (p : List Nat) (r : Nat) :
     Obend.Core.Digest.lengthHash_binding_fails 0 1 3 (by decide)
   simp only [opens, this]
 
+/-! ## Batch Merkle Multi-Proof Inclusion Verification (`MerkleBatchProof`, `verifyMerkleBatchProof`) -/
+
+/-- A single `(leafIndex, leafDigest, auditPath)` entry in a batch Merkle inclusion proof. -/
+structure MerkleBatchEntry where
+  leafIndex : Nat
+  leafDigest : Nat
+  auditPath : List Nat
+  deriving @[expose] DecidableEq, Repr
+
+/-- A batch Merkle inclusion proof for a tree of `treeSize` leaves, carrying a list of
+`(leafIndex, leafDigest, auditPath)` entries verified against a shared `expectedRoot`. -/
+structure MerkleBatchProof where
+  treeSize : Nat
+  entries : List MerkleBatchEntry
+  deriving @[expose] DecidableEq, Repr
+
+/-- Single-leaf Merkle inclusion verifier for a `MerkleBatchEntry` against `expectedRoot`
+in a tree of `treeSize` leaves. -/
+@[expose] def verifySingleMerkleLeaf (H : Hash) (treeSize : Nat) (e : MerkleBatchEntry)
+    (expectedRoot : Nat) : Bool :=
+  Small e.leafIndex && Small e.leafDigest &&
+    (climb H treeSize e.leafIndex e.leafDigest e.auditPath == some expectedRoot)
+
+/-- Check that a list of leaf indices is pairwise distinct (contains no duplicate index). -/
+@[expose] def indicesPairwiseDistinct : List Nat → Bool
+  | [] => true
+  | idx :: rest => !rest.contains idx && indicesPairwiseDistinct rest
+
+/-- `indicesPairwiseDistinct` decides `List.Nodup`. -/
+theorem indicesPairwiseDistinct_iff_nodup (idxs : List Nat) :
+    indicesPairwiseDistinct idxs = true ↔ idxs.Nodup := by
+  induction idxs with
+  | nil => simp [indicesPairwiseDistinct]
+  | cons x xs ih =>
+    have hNotMem : (!xs.contains x) = true ↔ x ∉ xs := by
+      constructor
+      · intro h hx
+        have hc : xs.contains x = true := List.contains_iff_mem.2 hx
+        rw [hc] at h; cases h
+      · intro hx
+        cases hc : xs.contains x
+        · rfl
+        · exfalso; exact hx (List.contains_iff_mem.1 hc)
+    simp only [indicesPairwiseDistinct, Bool.and_eq_true, hNotMem, List.nodup_cons, ih]
+
+/-- **Batch Merkle Inclusion Verification (`verifyMerkleBatchProof`)**:
+verifies that a list of `(leafIndex, leafDigest, auditPath)` entries in `batch` have pairwise
+distinct `leafIndex`es and all resolve to the same `expectedRoot`. -/
+@[expose] def verifyMerkleBatchProof (H : Hash) (batch : MerkleBatchProof) (expectedRoot : Nat) : Bool :=
+  indicesPairwiseDistinct (batch.entries.map MerkleBatchEntry.leafIndex) &&
+  batch.entries.all (fun e => verifySingleMerkleLeaf H batch.treeSize e expectedRoot)
+
+/-- **Soundness of Batch Merkle Verification (`verifyMerkleBatchProof_sound`)**:
+If `verifyMerkleBatchProof H batch expectedRoot = true`, then:
+1. All `leafIndex` values across `batch.entries` are pairwise distinct (`List.Nodup`), and
+2. Every individual entry `e ∈ batch.entries` satisfies single-leaf Merkle verification
+   (`verifySingleMerkleLeaf H batch.treeSize e expectedRoot = true` and
+   `climb H batch.treeSize e.leafIndex e.leafDigest e.auditPath = some expectedRoot`). -/
+theorem verifyMerkleBatchProof_sound (H : Hash) (batch : MerkleBatchProof) (expectedRoot : Nat)
+    (hBatch : verifyMerkleBatchProof H batch expectedRoot = true) :
+    (batch.entries.map MerkleBatchEntry.leafIndex).Nodup ∧
+    ∀ e ∈ batch.entries,
+      verifySingleMerkleLeaf H batch.treeSize e expectedRoot = true ∧
+      climb H batch.treeSize e.leafIndex e.leafDigest e.auditPath = some expectedRoot := by
+  simp only [verifyMerkleBatchProof, Bool.and_eq_true, List.all_eq_true] at hBatch
+  refine ⟨(indicesPairwiseDistinct_iff_nodup _).1 hBatch.1, fun e he => ?_⟩
+  have hSingle := hBatch.2 e he
+  refine ⟨hSingle, ?_⟩
+  simp only [verifySingleMerkleLeaf, Bool.and_eq_true, beq_iff_eq] at hSingle
+  exact hSingle.2
+
+/-- Construct the honest `MerkleBatchEntry` for leaf position `i` of leaf list `l`. -/
+@[expose] def honestBatchEntry (H : Hash) (l : List Nat) (i : Nat) : MerkleBatchEntry :=
+  { leafIndex := i
+    leafDigest := l.getD i 0
+    auditPath := path H l i }
+
+/-- Honest single-leaf completeness for `honestBatchEntry`. -/
+theorem verifySingleMerkleLeaf_honest {H : Hash} (hb : Bounded H) (l : List Nat)
+    (hl : ∀ x ∈ l, x < 2 ^ 256) (i : Nat) (hi : i < l.length) (his : i < 2 ^ 256) :
+    verifySingleMerkleLeaf H l.length (honestBatchEntry H l i) (root H l) = true := by
+  have hc := climb_path hb l hl i hi
+  have hlt : l.getD i 0 < 2 ^ 256 := by
+    rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+    exact hl l[i] (List.getElem_mem hi)
+  simp only [verifySingleMerkleLeaf, honestBatchEntry, Small, his, hlt, decide_true,
+    Bool.true_and, hc, beq_self_eq_true]
+
+/-- Construct an honest `MerkleBatchProof` for a list of leaf positions `idxs` in leaf list `l`. -/
+@[expose] def honestBatchProof (H : Hash) (l : List Nat) (idxs : List Nat) : MerkleBatchProof :=
+  { treeSize := l.length
+    entries := idxs.map (honestBatchEntry H l) }
+
+/-- **Batch Completeness (`verifyMerkleBatchProof_honest`)**:
+For any bounded hash `H`, digest-sized leaf list `l` (`l.length < 2 ^ 256`), and pairwise-distinct
+leaf positions `idxs` (`idxs.Nodup`, `∀ i ∈ idxs, i < l.length`), `honestBatchProof H l idxs`
+verifies against `root H l`. -/
+theorem verifyMerkleBatchProof_honest {H : Hash} (hb : Bounded H) (l : List Nat)
+    (hl : ∀ x ∈ l, x < 2 ^ 256) (hs : l.length < 2 ^ 256)
+    (idxs : List Nat) (hNodup : idxs.Nodup) (hBounds : ∀ i ∈ idxs, i < l.length) :
+    verifyMerkleBatchProof H (honestBatchProof H l idxs) (root H l) = true := by
+  simp only [verifyMerkleBatchProof, honestBatchProof, Bool.and_eq_true,
+    indicesPairwiseDistinct_iff_nodup, List.map_map, List.all_map, List.all_eq_true]
+  have hId : (MerkleBatchEntry.leafIndex ∘ honestBatchEntry H l) = id := by
+    funext i; rfl
+  rw [hId, List.map_id]
+  refine ⟨hNodup, fun i hi => ?_⟩
+  have hlt : i < l.length := hBounds i hi
+  exact verifySingleMerkleLeaf_honest hb l hl i hlt (Nat.lt_trans hlt hs)
+
+/-- **Batch Cryptographic Binding (`verifyMerkleBatchProof_binds`)**:
+If `verifyMerkleBatchProof H batch (root H l) = true` for a tree of size `batch.treeSize = l.length`,
+then every entry `e ∈ batch.entries` with `e.leafIndex < l.length` binds to the true leaf
+`e.leafDigest = l[e.leafIndex]`, or `H` has a collision. -/
+theorem verifyMerkleBatchProof_binds {H : Hash} (hb : Bounded H) (l : List Nat)
+    (hl : ∀ x ∈ l, x < 2 ^ 256) {batch : MerkleBatchProof}
+    (hBatch : verifyMerkleBatchProof H batch (root H l) = true)
+    (hSize : batch.treeSize = l.length)
+    {e : MerkleBatchEntry} (he : e ∈ batch.entries) (hi : e.leafIndex < l.length) :
+    e.leafDigest = l[e.leafIndex] ∨ Collision H := by
+  obtain ⟨_, hEntries⟩ := verifyMerkleBatchProof_sound H batch (root H l) hBatch
+  obtain ⟨hSingle, hClimb⟩ := hEntries e he
+  simp only [verifySingleMerkleLeaf, Bool.and_eq_true, Small, decide_eq_true_eq] at hSingle
+  have hDigestSmall : e.leafDigest < 2 ^ 256 := hSingle.1.2
+  have hHonestClimb := climb_path hb l hl e.leafIndex hi
+  have hLeafSmall : l.getD e.leafIndex 0 < 2 ^ 256 := by
+    rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+    exact hl l[e.leafIndex] (List.getElem_mem hi)
+  rw [hSize] at hClimb
+  rcases climb_binds hb e.auditPath (path H l e.leafIndex) l.length e.leafIndex
+      e.leafDigest (l.getD e.leafIndex 0) (root H l) hDigestSmall hLeafSmall hClimb hHonestClimb with hEq | hCol
+  · left
+    rw [hEq, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+    rfl
+  · exact .inr hCol
+
 end Obend.Receipt.Merkle
 end
+

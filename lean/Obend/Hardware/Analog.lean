@@ -460,4 +460,185 @@ theorem totalMismatchEnvelope_sound
   simp only [checkTotalMismatchEnvelope, decide_eq_true_eq] at hOk
   omega
 
+/-! ## 7. Parametric $N$-Bit Charge-Redistribution SAR ADC & 2D Planar Common-Centroid Array -/
+
+/-- Parametric $N$-bit recursive Successive Approximation Register (SAR) ADC binary search:
+Given remaining bit count `bits : Nat`, current binary search accumulator `accCode : Nat`,
+analog input `vInMv : Nat`, and LSB step size `vLsbMv : Nat` (where $V_{\text{DAC}}(\text{code}) = \text{code} \cdot V_{\text{LSB}}$),
+at step $b$ (from $N - 1$ down to $0$), tests trial code `trial = accCode + 2^b`:
+if `trial * vLsbMv ≤ vInMv`, keeps `trial`, else keeps `accCode`. -/
+def runSarAdcN : Nat → Nat → Nat → Nat → Nat
+  | 0, accCode, _, _ => accCode
+  | b + 1, accCode, vInMv, vLsbMv =>
+    let nextAcc := sarBitTrial vInMv vLsbMv accCode (2 ^ b)
+    runSarAdcN b nextAcc vInMv vLsbMv
+
+/-- Top-level $N$-bit SAR ADC conversion starting from accumulator `accCode = 0`. -/
+def evalSarAdcN (bits vInMv vLsbMv : Nat) : Nat :=
+  runSarAdcN bits 0 vInMv vLsbMv
+
+/-- Theorem (`runSarAdcN_eq_runSarAdc4`):
+At $N = 4$ and initial accumulator `accCode = 0`, the parametric recursive `runSarAdcN` reduces
+definitionally to the 4-cycle unrolled `runSarAdc4` for all `vInMv` and `vLsbMv`. -/
+theorem runSarAdcN_eq_runSarAdc4 (vInMv vLsbMv : Nat) :
+    runSarAdcN 4 0 vInMv vLsbMv = runSarAdc4 vInMv vLsbMv :=
+  rfl
+
+/-- Theorem (`runSarAdcN_matches_runSarAdc4`):
+At $N = 4$ and $V_{\text{LSB}} = 100\,\text{mV}$, `runSarAdcN 4 0` agrees identically with `runSarAdc4`
+for every input `vInMv` and quantizes all 16 bins $q \in [0, 15]$ at offsets $\{0, 50, 99\}\,\text{mV}$
+to the exact digital code `q`. -/
+theorem runSarAdcN_matches_runSarAdc4 :
+    (∀ vInMv vLsbMv : Nat, runSarAdcN 4 0 vInMv vLsbMv = runSarAdc4 vInMv vLsbMv) ∧
+    (∀ q ∈ ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] : List Nat),
+      runSarAdcN 4 0 (q * 100) 100 = runSarAdc4 (q * 100) 100 ∧
+      runSarAdcN 4 0 (q * 100) 100 = q ∧
+      runSarAdcN 4 0 (q * 100 + 50) 100 = q ∧
+      runSarAdcN 4 0 (q * 100 + 99) 100 = q) := by
+  refine ⟨fun _ _ => rfl, ?_⟩
+  intro q hMem
+  have h4 := sarAdc4_exact_quantization q hMem
+  exact ⟨rfl, h4.1, h4.2.1, h4.2.2⟩
+
+/-- Inductive accumulator invariant for `runSarAdcN`: if `accCode * vLsbMv ≤ vInMv`, then after
+`bits` successive binary-search trials, `(runSarAdcN bits accCode vInMv vLsbMv) * vLsbMv ≤ vInMv`
+and the output code is bounded above by `accCode + 2^bits - 1`. -/
+theorem runSarAdcN_acc_invariant
+    (bits accCode vInMv vLsbMv : Nat)
+    (hAcc : accCode * vLsbMv ≤ vInMv) :
+    (runSarAdcN bits accCode vInMv vLsbMv) * vLsbMv ≤ vInMv ∧
+    accCode ≤ runSarAdcN bits accCode vInMv vLsbMv ∧
+    runSarAdcN bits accCode vInMv vLsbMv + 1 ≤ accCode + 2 ^ bits := by
+  induction bits generalizing accCode with
+  | zero =>
+    dsimp only [runSarAdcN]
+    have hPow : 2 ^ 0 = 1 := rfl
+    exact ⟨hAcc, Nat.le_refl accCode, by omega⟩
+  | succ b ih =>
+    dsimp only [runSarAdcN]
+    have hStep := sarBitTrial_invariant vInMv vLsbMv accCode (2 ^ b) (accCode + 2 ^ b) (Nat.le_refl _) hAcc
+    have hSub := ih (sarBitTrial vInMv vLsbMv accCode (2 ^ b)) hStep.2
+    have hGeAcc : accCode ≤ sarBitTrial vInMv vLsbMv accCode (2 ^ b) := by
+      dsimp only [sarBitTrial]
+      split <;> omega
+    have hPowSucc : 2 ^ (b + 1) = 2 ^ b + 2 ^ b := by
+      rw [Nat.pow_succ]
+      omega
+    refine ⟨hSub.1, by omega, ?_⟩
+    have hBound := hStep.1
+    have hUpper := hSub.2.2
+    omega
+
+/-- Theorem (`runSarAdcN_lower_bound`):
+For any bit resolution `bits : Nat`, analog input `vInMv : Nat`, and positive LSB step `0 < vLsbMv`,
+the quantized SAR ADC output code `code = runSarAdcN bits 0 vInMv vLsbMv` never overshoots the
+analog input (`code * vLsbMv ≤ vInMv`) and lies strictly within the $N$-bit range `[0, 2^bits)`. -/
+theorem runSarAdcN_lower_bound
+    (bits vInMv vLsbMv : Nat)
+    (_hPos : 0 < vLsbMv) :
+    (runSarAdcN bits 0 vInMv vLsbMv) * vLsbMv ≤ vInMv ∧
+    runSarAdcN bits 0 vInMv vLsbMv < 2 ^ bits := by
+  have h0 : 0 * vLsbMv ≤ vInMv := by simp
+  have hInv := runSarAdcN_acc_invariant bits 0 vInMv vLsbMv h0
+  exact ⟨hInv.1, by omega⟩
+
+/-- Inductive upper quantization-bin invariant for `runSarAdcN`:
+Whenever `vInMv < (accCode + 2^bits) * vLsbMv`, the binary search maintains
+`vInMv < (runSarAdcN bits accCode vInMv vLsbMv + 1) * vLsbMv`, bounding quantization error
+strictly within $1\,\text{LSB}$ (`vLsbMv`). -/
+theorem runSarAdcN_acc_upper_bound
+    (bits accCode vInMv vLsbMv : Nat)
+    (hUpper : vInMv < (accCode + 2 ^ bits) * vLsbMv) :
+    vInMv < (runSarAdcN bits accCode vInMv vLsbMv + 1) * vLsbMv := by
+  induction bits generalizing accCode with
+  | zero =>
+    dsimp only [runSarAdcN]
+    have hPow : 2 ^ 0 = 1 := rfl
+    rw [hPow] at hUpper
+    exact hUpper
+  | succ b ih =>
+    dsimp only [runSarAdcN, sarBitTrial]
+    have hPowSucc : accCode + 2 ^ b + 2 ^ b = accCode + 2 ^ (b + 1) := by
+      rw [Nat.pow_succ]
+      omega
+    split
+    · apply ih (accCode + 2 ^ b)
+      rw [hPowSucc]
+      exact hUpper
+    · next hNotLe =>
+      apply ih accCode
+      omega
+
+/-- Theorem (`runSarAdcN_exact_quantization_bounds`):
+For any resolution `bits : Nat`, analog input `vInMv : Nat`, and positive step `0 < vLsbMv`,
+`code = runSarAdcN bits 0 vInMv vLsbMv` satisfies both the lower DAC bound `code * vLsbMv ≤ vInMv`
+and, whenever `vInMv < 2^bits * vLsbMv` (non-saturating range), the tight upper bin bound
+`vInMv < (code + 1) * vLsbMv` ($0\,\text{LSB}$ ideal DNL). -/
+theorem runSarAdcN_exact_quantization_bounds
+    (bits vInMv vLsbMv : Nat)
+    (hPos : 0 < vLsbMv) :
+    (runSarAdcN bits 0 vInMv vLsbMv) * vLsbMv ≤ vInMv ∧
+    runSarAdcN bits 0 vInMv vLsbMv < 2 ^ bits ∧
+    (vInMv < 2 ^ bits * vLsbMv →
+      vInMv < (runSarAdcN bits 0 vInMv vLsbMv + 1) * vLsbMv) := by
+  have hLow := runSarAdcN_lower_bound bits vInMv vLsbMv hPos
+  refine ⟨hLow.1, hLow.2, ?_⟩
+  intro hInRange
+  have hZeroAdd : 0 + 2 ^ bits = 2 ^ bits := Nat.zero_add (2 ^ bits)
+  apply runSarAdcN_acc_upper_bound bits 0 vInMv vLsbMv
+  rw [hZeroAdd]
+  exact hInRange
+
+/-- 2D planar linear process profile $P(x, y) = P_0 + g_x \cdot x + g_y \cdot y$ across a silicon die
+(modeling MIM unit capacitance $C_{\square}(x, y)$ or threshold voltage $V_{\text{th}}(x, y)$). -/
+def evalPlanarGradient2D (p0 gx gy x y : Int) : Int :=
+  p0 + gx * x + gy * y
+
+/-- 2D Planar Common-Centroid Capacitor Array mismatch (`eval2DCommonCentroidMismatch`) for a
+cross-coupled $2 \times 2$ quad `[[A, B], [B, A]]` at arbitrary die origin `(x0, y0)` with cell
+pitches `(dx, dy)`:
+* Capacitor $A$ sums unit cells at `(x0, y0)` and `(x0 + dx, y0 + dy)`,
+* Capacitor $B$ sums unit cells at `(x0 + dx, y0)` and `(x0, y0 + dy)`. -/
+def eval2DCommonCentroidMismatch (p0 gx gy x0 y0 dx dy : Int) : Int :=
+  let capA :=
+    evalPlanarGradient2D p0 gx gy x0 y0 +
+    evalPlanarGradient2D p0 gx gy (x0 + dx) (y0 + dy)
+  let capB :=
+    evalPlanarGradient2D p0 gx gy (x0 + dx) y0 +
+    evalPlanarGradient2D p0 gx gy x0 (y0 + dy)
+  capA - capB
+
+/-- Unmatched 2D Side-by-Side Capacitor Array mismatch (`[[A, A], [B, B]]` split along the $y$-axis):
+* Capacitor $A$ occupies `(x0, y0)` and `(x0 + dx, y0)`,
+* Capacitor $B$ occupies `(x0, y0 + dy)` and `(x0 + dx, y0 + dy)`. -/
+def eval2DUnmatchedMismatch (p0 gx gy x0 y0 dx dy : Int) : Int :=
+  let capA :=
+    evalPlanarGradient2D p0 gx gy x0 y0 +
+    evalPlanarGradient2D p0 gx gy (x0 + dx) y0
+  let capB :=
+    evalPlanarGradient2D p0 gx gy x0 (y0 + dy) +
+    evalPlanarGradient2D p0 gx gy (x0 + dx) (y0 + dy)
+  capA - capB
+
+/-- Theorem (`commonCentroid2D_cancels_planar_gradient`):
+For ANY nominal process parameter `p0 : Int`, ANY 2D planar wafer gradient slopes `gx gy : Int`,
+ANY placement origin `x0 y0 : Int`, and ANY unit cell pitches `dx dy : Int`, the 2D common-centroid
+capacitor array cancels both $x$-axis and $y$-axis linear die gradients identically to `0`! -/
+theorem commonCentroid2D_cancels_planar_gradient
+    (p0 gx gy x0 y0 dx dy : Int) :
+    eval2DCommonCentroidMismatch p0 gx gy x0 y0 dx dy = 0 := by
+  dsimp only [eval2DCommonCentroidMismatch, evalPlanarGradient2D]
+  omega
+
+/-- Theorem (`unmatched2D_suffers_planar_gradient`):
+In contrast, an unmatched side-by-side 2D capacitor array `[[A, A], [B, B]]` suffers a systematic
+$y$-axis gradient mismatch equal to `-2 * (gy * dy)`. -/
+theorem unmatched2D_suffers_planar_gradient
+    (p0 gx gy x0 y0 dx dy : Int) :
+    eval2DUnmatchedMismatch p0 gx gy x0 y0 dx dy = -2 * (gy * dy) := by
+  have hy : gy * (y0 + dy) = gy * y0 + gy * dy := Int.mul_add gy y0 dy
+  dsimp only [eval2DUnmatchedMismatch, evalPlanarGradient2D]
+  rw [hy]
+  omega
+
 end Obend.Hardware.Analog

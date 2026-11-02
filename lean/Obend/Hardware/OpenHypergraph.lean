@@ -264,13 +264,33 @@ def mkStrictOpenHypergraph
   boundaryIn  := { source := inWires.length,  target := numWires, table := inWires }
   boundaryOut := { source := outWires.length, target := numWires, table := outWires }
 
+/-- Linear-time recursive unpacker for `extractHyperEdges`. -/
+def extractHyperEdgesAux
+    (idx : Nat)
+    (ops : List HypergraphOp)
+    (srcSizes srcVals tgtVals : List Nat) : List HyperEdge :=
+  match ops, srcSizes, tgtVals with
+  | [], _, _ => []
+  | op :: restOps, sLen :: restSizes, dst :: restTgts =>
+    { opIdx    := idx
+    , op       := op
+    , srcWires := srcVals.take sLen
+    , dstWire  := dst } ::
+    extractHyperEdgesAux (idx + 1) restOps restSizes (srcVals.drop sLen) restTgts
+  | op :: restOps, [], dst :: restTgts =>
+    { opIdx := idx, op := op, srcWires := [], dstWire := dst } ::
+    extractHyperEdgesAux (idx + 1) restOps [] srcVals restTgts
+  | op :: restOps, sLen :: restSizes, [] =>
+    { opIdx := idx, op := op, srcWires := srcVals.take sLen, dstWire := 0 } ::
+    extractHyperEdgesAux (idx + 1) restOps restSizes (srcVals.drop sLen) []
+  | op :: restOps, [], [] =>
+    { opIdx := idx, op := op, srcWires := [], dstWire := 0 } ::
+    extractHyperEdgesAux (idx + 1) restOps [] srcVals []
+
 /-- Extract the ordered list of `HyperEdge`s from a `StrictOpenHypergraph`. -/
 def extractHyperEdges (g : StrictOpenHypergraph) : List HyperEdge :=
-  (List.range g.ops.length).map fun idx =>
-    { opIdx    := idx
-    , op       := g.ops.getD idx (.const 0)
-    , srcWires := g.sources.segment idx
-    , dstWire  := (g.targets.segment idx).getD 0 0 }
+  extractHyperEdgesAux 0 g.ops g.sources.sizes.table g.sources.values.table g.targets.values.table
+
 
 /-- Evaluate a single `HyperEdge` against wire environment `env`, updating `e.dstWire`. -/
 def stepHyperEdge (env : Nat → Int) (e : HyperEdge) : Nat → Int :=
@@ -1024,5 +1044,837 @@ def compileHypergraphToRtl (name : String) (g : StrictOpenHypergraph) : RtlModul
   regs       := []
   outputs    := g.boundaryOut.table.map (fun w => { name := s!"out_w{w}", expr := RtlExpr.wireRef w })
 
+/-! ## 5. Whole-Graph Functorial Reverse-AD (`compileGraphAdjoint`, `compileGraphAdjoint_multiEdge_sound`) -/
+
+/-- State of the whole-graph reverse-mode cotangent compiler:
+* `cotMap`: maps each primal wire $w$ that has received at least one downstream cotangent contribution
+  to the SSA wire index holding its accumulated cotangent $\Delta w$,
+* `nextWire`: next fresh wire index in the augmented hypergraph,
+* `revEdges`: reverse-pass cotangent pullback and fanout-accumulation hyperedges emitted so far. -/
+structure CotangentBuilderState where
+  cotMap   : List (Nat × Nat)
+  nextWire : Nat
+  revEdges : List HyperEdge
+  deriving DecidableEq, Repr
+
+/-- Update or insert `(w, cotWire)` in a cotangent wire map. -/
+def setCotWire (w cotWire : Nat) : List (Nat × Nat) → List (Nat × Nat)
+  | [] => [(w, cotWire)]
+  | (k, v) :: rest =>
+    if k == w then (w, cotWire) :: rest
+    else (k, v) :: setCotWire w cotWire rest
+
+/-- Single-pass lookup-and-update on `cotMap`:
+* If `w` is not present, appends `(w, deltaWire)` and returns `(none, cotMap')`;
+* If `(w, prevWire)` is present, updates it in-place to `(w, sumWire)` and returns `(some prevWire, cotMap')`. -/
+def upsertCotWire (w deltaWire sumWire : Nat) :
+    List (Nat × Nat) → Option Nat × List (Nat × Nat)
+  | [] => (none, [(w, deltaWire)])
+  | (k, v) :: rest =>
+    if k == w then
+      (some v, (w, sumWire) :: rest)
+    else
+      match upsertCotWire w deltaWire sumWire rest with
+      | (res, rest') => (res, (k, v) :: rest')
+
+/-- Emit a single reverse-pass `HyperEdge` with a freshly allocated destination wire. -/
+def emitRevEdge (op : HypergraphOp) (srcWires : List Nat) :
+    CotangentBuilderState → Nat × CotangentBuilderState
+  | ⟨cotMap, nextWire, revEdges⟩ =>
+    let edge : HyperEdge :=
+      { opIdx := 0, op := op, srcWires := srcWires, dstWire := nextWire }
+    (nextWire, ⟨cotMap, nextWire + 1, revEdges ++ [edge]⟩)
+
+/-- Accumulate a cotangent contribution on wire `deltaWire` into primal wire `w`:
+* If `w` has no prior cotangent wire in `st.cotMap`, binds `w ↦ deltaWire` directly;
+* If `w` already has a cotangent wire `prevWire` (because `w` fans out to multiple downstream consumers
+  or is used twice in the same operation), emits a `.add` hyperedge summing `[prevWire, deltaWire]`
+  into a fresh wire and updates `st.cotMap`! -/
+def accumWireCotangent (w deltaWire : Nat) : CotangentBuilderState → CotangentBuilderState
+  | ⟨cotMap, nextWire, revEdges⟩ =>
+    match upsertCotWire w deltaWire nextWire cotMap with
+    | (none, cotMap') =>
+      ⟨cotMap', nextWire, revEdges⟩
+    | (some prevWire, cotMap') =>
+      let addEdge : HyperEdge :=
+        { opIdx := 0, op := .add, srcWires := [prevWire, deltaWire], dstWire := nextWire }
+      ⟨cotMap', nextWire + 1, revEdges ++ [addEdge]⟩
+
+/-- Emit a reverse-pass `HyperEdge` `(op, srcWires)` and immediately accumulate its output wire into
+primal wire `w` (emitting a `.add` fanout accumulator edge if `w` already has a cotangent wire). -/
+def emitAndAccum (w : Nat) (op : HypergraphOp) (srcWires : List Nat) :
+    CotangentBuilderState → CotangentBuilderState
+  | ⟨cotMap, nextWire, revEdges⟩ =>
+    let e1 : HyperEdge :=
+      { opIdx := 0, op := op, srcWires := srcWires, dstWire := nextWire }
+    match upsertCotWire w nextWire (nextWire + 1) cotMap with
+    | (none, cotMap') =>
+      ⟨cotMap', nextWire + 1, revEdges ++ [e1]⟩
+    | (some prevWire, cotMap') =>
+      let e2 : HyperEdge :=
+        { opIdx := 0, op := .add, srcWires := [prevWire, nextWire], dstWire := nextWire + 1 }
+      ⟨cotMap', nextWire + 2, revEdges ++ [e1, e2]⟩
+
+/-- Total structural wire index lookup (`wireAt ws i`), avoiding typeclass `GetElem?` indirection. -/
+def wireAt : List Nat → Nat → Nat
+  | [], _ => 0
+  | w :: _, 0 => w
+  | _ :: rest, i + 1 => wireAt rest i
+
+/-- Emit the reverse-mode cotangent pullback edges for a single forward `HyperEdge` `e`,
+routing forward primal wires directly as static residuals with zero runtime tape allocation. -/
+def pullbackHyperEdge (e : HyperEdge) : CotangentBuilderState → CotangentBuilderState
+  | ⟨cotMap, nextWire, revEdges⟩ =>
+    match cotMap.lookup e.dstWire with
+    | none => ⟨cotMap, nextWire, revEdges⟩
+    | some dOut =>
+      let st : CotangentBuilderState := ⟨cotMap, nextWire, revEdges⟩
+      match e.op with
+      | .const _ => st
+      | .add =>
+        let w0 := wireAt e.srcWires 0
+        let w1 := wireAt e.srcWires 1
+        emitAndAccum w1 (.scale 1) [dOut]
+          (emitAndAccum w0 (.scale 1) [dOut] st)
+      | .sub =>
+        let w0 := wireAt e.srcWires 0
+        let w1 := wireAt e.srcWires 1
+        emitAndAccum w1 (.scale (-1)) [dOut]
+          (emitAndAccum w0 (.scale 1) [dOut] st)
+      | .mul =>
+        let w0 := wireAt e.srcWires 0
+        let w1 := wireAt e.srcWires 1
+        emitAndAccum w1 .mul [w0, dOut]
+          (emitAndAccum w0 .mul [w1, dOut] st)
+      | .scale k =>
+        let w0 := wireAt e.srcWires 0
+        emitAndAccum w0 (.scale k) [dOut] st
+      | .mac =>
+        let w0 := wireAt e.srcWires 0
+        let w1 := wireAt e.srcWires 1
+        let w2 := wireAt e.srcWires 2
+        emitAndAccum w2 (.scale 1) [dOut]
+          (emitAndAccum w1 .mul [w0, dOut]
+            (emitAndAccum w0 .mul [w1, dOut] st))
+      | .mux =>
+        let c  := wireAt e.srcWires 0
+        let w1 := wireAt e.srcWires 1
+        let w2 := wireAt e.srcWires 2
+        match emitRevEdge (.const 0) [] st with
+        | (zWire, st1) =>
+          emitAndAccum w2 .mux [c, zWire, dOut]
+            (emitAndAccum w1 .mux [c, dOut, zWire] st1)
+
+/-- Resolve the final cotangent wire for each open input wire $w \in \text{inWires}$, emitting a
+`.const 0` wire if $w$ did not contribute to any output. -/
+def resolveInputCotWires : List Nat → CotangentBuilderState → List Nat × CotangentBuilderState
+  | [], st => ([], st)
+  | w :: rest, ⟨cotMap, nextWire, revEdges⟩ =>
+    match cotMap.lookup w with
+    | some cw =>
+      match resolveInputCotWires rest ⟨cotMap, nextWire, revEdges⟩ with
+      | (restWires, st') => (cw :: restWires, st')
+    | none =>
+      let e0 : HyperEdge := { opIdx := 0, op := .const 0, srcWires := [], dstWire := nextWire }
+      let st1 : CotangentBuilderState := ⟨setCotWire w nextWire cotMap, nextWire + 1, revEdges ++ [e0]⟩
+      match resolveInputCotWires rest st1 with
+      | (restWires, st2) => (nextWire :: restWires, st2)
+
+/-- Linear-time recursive helper for `reindexHyperEdges`. -/
+def reindexHyperEdgesAux : Nat → List HyperEdge → List HyperEdge
+  | _, [] => []
+  | idx, ⟨_, op, srcWires, dstWire⟩ :: rest =>
+    ⟨idx, op, srcWires, dstWire⟩ :: reindexHyperEdgesAux (idx + 1) rest
+
+/-- Re-number the `opIdx` fields of a list of `HyperEdge`s sequentially `0, 1, 2, ...`. -/
+def reindexHyperEdges (edges : List HyperEdge) : List HyperEdge :=
+  reindexHyperEdgesAux 0 edges
+
+/-- Seed the initial `CotangentBuilderState` with output cotangent wires `seedWire, seedWire + 1, ...`. -/
+def seedCotangentStateAux : Nat → List Nat → CotangentBuilderState → CotangentBuilderState
+  | _, [], st => st
+  | seedWire, wOut :: rest, st =>
+    seedCotangentStateAux (seedWire + 1) rest (accumWireCotangent wOut seedWire st)
+
+/-- Generate `count` consecutive wire indices starting at `startWire`. -/
+def makeSeedWires : Nat → Nat → List Nat
+  | _, 0 => []
+  | startWire, k + 1 => startWire :: makeSeedWires (startWire + 1) k
+
+/-- Build `(allOutWires, finalNextWire, rawAllEdges)` for `compileGraphAdjointAux`. -/
+def buildGraphAdjointState
+    (numPrimal : Nat) (inWires outWires : List Nat) (fwdEdges : List HyperEdge) :
+    List Nat × Nat × List HyperEdge :=
+  let numOuts := outWires.length
+  let initSt : CotangentBuilderState :=
+    seedCotangentStateAux numPrimal outWires
+      { cotMap := [], nextWire := numPrimal + numOuts, revEdges := [] }
+  let afterPullback :=
+    fwdEdges.reverse.foldl (fun st e => pullbackHyperEdge e st) initSt
+  match resolveInputCotWires inWires afterPullback with
+  | (inCotWires, ⟨_, finalNextWire, finalRevEdges⟩) =>
+    (outWires ++ inCotWires, finalNextWire, fwdEdges ++ finalRevEdges)
+
+/-- Auxiliary builder for `compileGraphAdjoint` operating on unpacked boundary tables and forward edges. -/
+def compileGraphAdjointAux
+    (numPrimal : Nat) (inWires outWires : List Nat) (fwdEdges : List HyperEdge) :
+    StrictOpenHypergraph :=
+  let state := buildGraphAdjointState numPrimal inWires outWires fwdEdges
+  let seedWires := makeSeedWires numPrimal outWires.length
+  mkStrictOpenHypergraph
+    state.2.1
+    (inWires ++ seedWires)
+    state.1
+    (reindexHyperEdges state.2.2)
+
+/-- **Whole-Graph Functorial Reverse-AD (`compileGraphAdjoint`)**:
+Takes an arbitrary multi-edge `StrictOpenHypergraph` `g` and constructs the joint forward+backward
+`StrictOpenHypergraph`:
+1. Preserves all forward primal wires `0 .. |W|-1` and forward hyperedges `extractHyperEdges g`,
+2. Allocates upstream output cotangent seed wires `|W| .. |W| + |O| - 1` (appended to `boundaryIn`),
+3. Traverses `(extractHyperEdges g).reverse` in reverse topological order, emitting cotangent pullback
+   hyperedges and accumulating fanout cotangents with `.add` whenever a primal wire feeds multiple
+   downstream consumers,
+4. Exposes `g.boundaryOut ++ inCotWires` as `boundaryOut` (the primal outputs followed by the exact
+   input gradients $\partial L / \partial x_i$). -/
+def compileGraphAdjoint (g : StrictOpenHypergraph) : StrictOpenHypergraph :=
+  compileGraphAdjointAux g.nodeTypes.length g.boundaryIn.table g.boundaryOut.table (extractHyperEdges g)
+
+/-- Emit the forward `HyperEdge`s for an `OpticOp` reading from `(in0, in1)` and writing its primal
+output to `outWire` (using `scratchWire` if an internal intermediate wire is needed). -/
+def opticFwdHyperEdges (op : OpticOp) (in0 in1 outWire scratchWire : Nat) : List HyperEdge :=
+  match op with
+  | .add =>
+    [{ opIdx := 0, op := .add, srcWires := [in0, in1], dstWire := outWire }]
+  | .sub =>
+    [{ opIdx := 0, op := .sub, srcWires := [in0, in1], dstWire := outWire }]
+  | .mul =>
+    [{ opIdx := 0, op := .mul, srcWires := [in0, in1], dstWire := outWire }]
+  | .scale k =>
+    [{ opIdx := 0, op := .scale k, srcWires := [in0], dstWire := outWire }]
+  | .square =>
+    [{ opIdx := 0, op := .mul, srcWires := [in0, in0], dstWire := outWire }]
+  | .linearMac w =>
+    [ { opIdx := 0, op := .scale w, srcWires := [in0],          dstWire := scratchWire }
+    , { opIdx := 1, op := .add,     srcWires := [scratchWire, in1], dstWire := outWire } ]
+  | .bilinear c =>
+    [ { opIdx := 0, op := .mul,     srcWires := [in0, in1],     dstWire := scratchWire }
+    , { opIdx := 1, op := .scale c, srcWires := [scratchWire],  dstWire := outWire } ]
+
+/-- Construct the multi-edge forward `StrictOpenHypergraph` for the 2-stage composition
+$L(x, y) = \text{op}_2(\text{op}_1(x, y), y)$ where:
+* Wire `0`: boundary input $x$,
+* Wire `1`: boundary input $y$ (which fans out to BOTH stage 1 and stage 2!),
+* Wire `2`: stage-1 primal output $u = \text{op}_1(x, y)$ (using scratch wire `4` if needed),
+* Wire `3`: stage-2 primal output $z = \text{op}_2(u, y)$ (using scratch wire `5` if needed). -/
+def compileOpticChain2FwdHypergraph (op1 op2 : OpticOp) : StrictOpenHypergraph :=
+  let edges1 := opticFwdHyperEdges op1 0 1 2 4
+  let edges2 := opticFwdHyperEdges op2 2 1 3 5
+  mkStrictOpenHypergraph 6 [0, 1] [3] (reindexHyperEdges (edges1 ++ edges2))
+
+/-- Initial wire environment for `compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)`
+binding wire `0 ↦ x`, wire `1 ↦ y`, and the output cotangent seed wire `6 ↦ dOut`. -/
+def opticChain2AdjointInitEnv (x y dOut : Int) (w : Nat) : Int :=
+  match w with
+  | 0 => x
+  | 1 => y
+  | 6 => dOut
+  | _ => 0
+
+theorem extractHyperEdgesAux_reindexHyperEdgesAux
+    (idx : Nat) (edges : List HyperEdge) :
+    extractHyperEdgesAux idx
+      ((reindexHyperEdgesAux idx edges).map (·.op))
+      (((reindexHyperEdgesAux idx edges).map (·.srcWires)).map List.length)
+      (((reindexHyperEdgesAux idx edges).map (·.srcWires)).flatten)
+      (((reindexHyperEdgesAux idx edges).map (fun e => [e.dstWire])).flatten) =
+      reindexHyperEdgesAux idx edges := by
+  induction edges generalizing idx with
+  | nil => rfl
+  | cons e rest ih =>
+    rcases e with ⟨_, op, srcWires, dstWire⟩
+    simp only [reindexHyperEdgesAux, List.map_cons, List.flatten_cons, List.cons_append,
+      List.nil_append, extractHyperEdgesAux, List.take_left, List.drop_left, ih (idx + 1)]
+
+@[simp] theorem extractHyperEdges_mkStrictOpenHypergraph
+    (numWires : Nat) (inWires outWires : List Nat) (edges : List HyperEdge) :
+    extractHyperEdges (mkStrictOpenHypergraph numWires inWires outWires (reindexHyperEdges edges)) =
+      reindexHyperEdges edges :=
+  extractHyperEdgesAux_reindexHyperEdgesAux 0 edges
+
+theorem evalHyperEdgesComb_reindexHyperEdgesAux
+    (idx : Nat) (edges : List HyperEdge) (initEnv : Nat → Int) :
+    evalHyperEdgesComb initEnv (reindexHyperEdgesAux idx edges) =
+      evalHyperEdgesComb initEnv edges := by
+  induction edges generalizing idx initEnv with
+  | nil => rfl
+  | cons e rest ih =>
+    rcases e with ⟨_, op, srcWires, dstWire⟩
+    dsimp only [reindexHyperEdgesAux, evalHyperEdgesComb, List.foldl_cons, stepHyperEdge]
+    exact ih (idx + 1) _
+
+@[simp] theorem evalHyperEdgesComb_reindexHyperEdges
+    (initEnv : Nat → Int) (edges : List HyperEdge) :
+    evalHyperEdgesComb initEnv (reindexHyperEdges edges) =
+      evalHyperEdgesComb initEnv edges :=
+  evalHyperEdgesComb_reindexHyperEdgesAux 0 edges initEnv
+
+theorem evalHypergraphComb_mkStrictOpenHypergraph_reindex
+    (numWires : Nat) (inWires outWires : List Nat) (edges : List HyperEdge) (initEnv : Nat → Int) :
+    evalHypergraphComb (mkStrictOpenHypergraph numWires inWires outWires (reindexHyperEdges edges)) initEnv =
+      outWires.map (evalHyperEdgesComb initEnv edges) := by
+  unfold evalHypergraphComb
+  rw [extractHyperEdges_mkStrictOpenHypergraph, evalHyperEdgesComb_reindexHyperEdges]
+  rfl
+
+/-- Direct combinational evaluator for `buildGraphAdjointState` bypassing `IndexedCoproduct` roundtrips. -/
+def evalBuildGraphAdjointComb
+    (numPrimal : Nat) (inWires outWires : List Nat) (fwdEdges : List HyperEdge) (initEnv : Nat → Int) :
+    List Int :=
+  match buildGraphAdjointState numPrimal inWires outWires fwdEdges with
+  | (allOuts, _, rawEdges) => allOuts.map (evalHyperEdgesComb initEnv rawEdges)
+
+theorem evalHypergraphComb_compileGraphAdjointAux
+    (numPrimal : Nat) (inWires outWires : List Nat) (fwdEdges : List HyperEdge) (initEnv : Nat → Int) :
+    evalHypergraphComb (compileGraphAdjointAux numPrimal inWires outWires fwdEdges) initEnv =
+      evalBuildGraphAdjointComb numPrimal inWires outWires fwdEdges initEnv := by
+  unfold compileGraphAdjointAux evalBuildGraphAdjointComb
+  rw [evalHypergraphComb_mkStrictOpenHypergraph_reindex]
+
+theorem compileGraphAdjoint_chain2_eq (op1 op2 : OpticOp) :
+    compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2) =
+      compileGraphAdjointAux 6 [0, 1] [3]
+        (reindexHyperEdges (opticFwdHyperEdges op1 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5)) := by
+  unfold compileGraphAdjoint compileOpticChain2FwdHypergraph
+  change compileGraphAdjointAux (List.replicate 6 64).length [0, 1] [3]
+    (extractHyperEdges (mkStrictOpenHypergraph 6 [0, 1] [3]
+      (reindexHyperEdges (opticFwdHyperEdges op1 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5)))) = _
+  rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
+
+@[simp] theorem list_getD_zero_cons {α : Type} (x : α) (xs : List α) (d : α) :
+    (x :: xs).getD 0 d = x := rfl
+
+@[simp] theorem list_getD_one_cons {α : Type} (x y : α) (xs : List α) (d : α) :
+    (x :: y :: xs).getD 1 d = y := rfl
+
+@[simp] theorem list_getD_two_cons {α : Type} (x y z : α) (xs : List α) (d : α) :
+    (x :: y :: z :: xs).getD 2 d = z := rfl
+
+@[simp] theorem list_getD_nil {α : Type} (i : Nat) (d : α) :
+    ([] : List α).getD i d = d := rfl
+
+set_option maxHeartbeats 1600000 in
+theorem compileGraphAdjoint_chain2_comb (op1 op2 : OpticOp) (x y dOut : Int) :
+    evalHypergraphComb (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2))
+      (opticChain2AdjointInitEnv x y dOut) =
+    [ (evalOpticChain2Fwd op1 op2 x y).1
+    , (evalOpticChain2Rev (compileOpticAdjoint op1) (compileOpticAdjoint op2)
+        (evalOpticChain2Fwd op1 op2 x y).2 dOut).1
+    , (evalOpticChain2Rev (compileOpticAdjoint op1) (compileOpticAdjoint op2)
+        (evalOpticChain2Fwd op1 op2 x y).2 dOut).2 ] := by
+  rw [compileGraphAdjoint_chain2_eq, evalHypergraphComb_compileGraphAdjointAux]
+  cases op1 <;> cases op2 <;>
+    dsimp [evalBuildGraphAdjointComb, buildGraphAdjointState,
+      opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
+      seedCotangentStateAux, accumWireCotangent, emitAndAccum, upsertCotWire,
+      pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
+      evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp, opticChain2AdjointInitEnv,
+      evalOpticChain2Fwd, evalOpticChain2Rev, evalOpticFwd, evalOpticRev, compileOpticAdjoint,
+      List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
+      list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons, list_getD_nil] <;>
+    grind
+
+set_option maxHeartbeats 1600000 in
+/-- **Theorem (`compileGraphAdjoint_multiEdge_sound`)**:
+1. **Universal 2-Stage Composed Multi-Edge Functorial AD Soundness**:
+   For EVERY pair of operations `op1 op2 : OpticOp` and EVERY `(x, y, dOut : Int)`:
+   - The whole-graph adjoint `compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)` is
+     structurally well-formed (`wf = true`),
+   - Evaluating `compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)` via combinational
+     evaluation (`evalHypergraphComb`), sequential wavefront evaluation (`evalHypergraphLayered`),
+     or true synchronous snapshot wavefront evaluation (`evalHypergraphLayeredSync`) produces the
+     exact 3-output vector `[z, dx, dy]` matching `evalOpticChain2Fwd` and `evalOpticChain2Rev`
+     (including automatic `.add` fanout cotangent accumulation on wire `1` across stages and within `.square`!),
+   - At unit output seed `dOut = 1`, `evalHypergraphComb` computes the exact analytical partial
+     derivatives $\left(L(x,y),\; \frac{\partial L}{\partial x},\; \frac{\partial L}{\partial y}\right)$
+     matching forward-mode dual numbers `DualInt`!
+2. **Whole-Graph Adjoint of the 5-Edge `goldenDiamondHypergraph`**:
+   Compiling the 5-edge 4-input diamond hypergraph $f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$
+   through `compileGraphAdjoint` produces a well-formed 21-wire, 14-edge hypergraph whose evaluation
+   at $(3, 4, 5, 6)$ with `dOut = 1` returns `[87, 11, 11, 7, 7]`
+   ($f = 87$, $\partial f / \partial x_0 = \partial f / \partial x_1 = 5 + 6 = 11$,
+   $\partial f / \partial x_2 = \partial f / \partial x_3 = 3 + 4 = 7$). -/
+theorem compileGraphAdjoint_multiEdge_sound (op1 op2 : OpticOp) (x y dOut : Int) :
+    let gFwd := compileOpticChain2FwdHypergraph op1 op2
+    let gAdj := compileGraphAdjoint gFwd
+    let env  := opticChain2AdjointInitEnv x y dOut
+    let (z, res) := evalOpticChain2Fwd op1 op2 x y
+    let (dx, dy) := evalOpticChain2Rev (compileOpticAdjoint op1) (compileOpticAdjoint op2) res dOut
+    let envUnit := opticChain2AdjointInitEnv x y 1
+    let dualX := evalOpticDual op2 (evalOpticDual op1 ⟨x, 1⟩ ⟨y, 0⟩) ⟨y, 0⟩
+    let dualY := evalOpticDual op2 (evalOpticDual op1 ⟨x, 0⟩ ⟨y, 1⟩) ⟨y, 1⟩
+    let diamondAdj := compileGraphAdjoint goldenDiamondHypergraph
+    let diamondEnv : Nat → Int := fun w =>
+      match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
+    gAdj.wf = true ∧
+    evalHypergraphComb gAdj env = [z, dx, dy] ∧
+    evalHypergraphLayered gAdj env = [z, dx, dy] ∧
+    evalHypergraphLayeredSync gAdj env = [z, dx, dy] ∧
+    evalHypergraphComb gAdj envUnit = [dualX.primal, dualX.tangent, dualY.tangent] ∧
+    diamondAdj.wf = true ∧
+    evalHypergraphComb diamondAdj diamondEnv = [87, 11, 11, 7, 7] := by
+  have hWf : (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2)).wf = true := by
+    rw [compileGraphAdjoint_chain2_eq]
+    cases op1 <;> cases op2 <;>
+      dsimp [compileGraphAdjointAux, buildGraphAdjointState,
+        opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
+        seedCotangentStateAux, makeSeedWires, accumWireCotangent, emitAndAccum, upsertCotWire,
+        pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
+        mkStrictOpenHypergraph, StrictOpenHypergraph.wf, IndexedCoproduct.wf,
+        IndexedCoproduct.fromSegments, FiniteFunction.wf, sumNatList,
+        List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
+        List.flatten, List.all, List.replicate, List.length] <;>
+      rfl
+  have hComb := compileGraphAdjoint_chain2_comb op1 op2 x y dOut
+  have hPipe := evalHypergraph_pipelined_eq_comb
+    (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2))
+    (opticChain2AdjointInitEnv x y dOut)
+  have hCombUnit :
+      evalHypergraphComb (compileGraphAdjoint (compileOpticChain2FwdHypergraph op1 op2))
+        (opticChain2AdjointInitEnv x y 1) =
+      [ (evalOpticDual op2 (evalOpticDual op1 ⟨x, 1⟩ ⟨y, 0⟩) ⟨y, 0⟩).primal
+      , (evalOpticDual op2 (evalOpticDual op1 ⟨x, 1⟩ ⟨y, 0⟩) ⟨y, 0⟩).tangent
+      , (evalOpticDual op2 (evalOpticDual op1 ⟨x, 0⟩ ⟨y, 1⟩) ⟨y, 1⟩).tangent ] := by
+    rw [compileGraphAdjoint_chain2_comb op1 op2 x y 1]
+    have hChain := optic_comp_chain_rule_sound op1 op2 x y
+    dsimp only at hChain
+    rw [hChain.1, hChain.2.1, hChain.2.2]
+  have hDiamond :
+      (compileGraphAdjoint goldenDiamondHypergraph).wf = true ∧
+      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph)
+        (fun w => match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0) =
+        [87, 11, 11, 7, 7] := by
+    decide +kernel
+  dsimp only
+  refine ⟨hWf, hComb, ?_, ?_, hCombUnit, hDiamond.1, hDiamond.2⟩
+  · rw [hPipe.1, hComb]
+  · rw [hPipe.2, hComb]
+
+/-! ## 6. Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_latency_sound`) -/
+
+/-- Synchronous 64-bit hardware step for a hyperedge `e` inside a wavefront stage, reading all
+`e.srcWires` from the frozen stage-entry snapshot `stageEntryEnv : Nat → BitVec 64`. -/
+def stepHyperEdgeSyncBv (stageEntryEnv : Nat → BitVec 64) (curEnv : Nat → BitVec 64) (e : HyperEdge) :
+    Nat → BitVec 64 :=
+  let v := evalHypergraphOpBv e.op (e.srcWires.map stageEntryEnv)
+  fun w => if w == e.dstWire then v else curEnv w
+
+/-- Auxiliary fold for 64-bit synchronous wavefront stage execution. -/
+def evalWavefrontStageAuxBv (stageEntryEnv : Nat → BitVec 64) (curEnv : Nat → BitVec 64) :
+    List HyperEdge → Nat → BitVec 64
+  | [] => curEnv
+  | e :: rest =>
+    evalWavefrontStageAuxBv stageEntryEnv (stepHyperEdgeSyncBv stageEntryEnv curEnv e) rest
+
+/-- 64-bit synchronous wavefront stage evaluation (`evalWavefrontStageSyncBv`). -/
+def evalWavefrontStageSyncBv (env : Nat → BitVec 64) (stage : List HyperEdge) : Nat → BitVec 64 :=
+  evalWavefrontStageAuxBv env env stage
+
+/-- Evaluate a sequence of wavefront stages over 64-bit bitvectors using synchronous snapshot reads. -/
+def evalLayeredStagesSyncBv (initEnv : Nat → BitVec 64) (stages : List (List HyperEdge)) :
+    Nat → BitVec 64 :=
+  stages.foldl evalWavefrontStageSyncBv initEnv
+
+/-- `RtlExpr` reading the stage-entry snapshot of hypergraph wire `u` at wavefront stage `stageIdx`:
+* Stage `0` reads from `.inputPort u`,
+* Stage `stageIdx > 0` reads from the previous wavefront stage's pipeline register
+  `.regRead ((stageIdx - 1) * numWires + u)`. -/
+def stageEntryExpr (numWires stageIdx u : Nat) : RtlExpr :=
+  if stageIdx == 0 then .inputPort u
+  else .regRead ((stageIdx - 1) * numWires + u)
+
+/-- Lower a `HypergraphOp` inside wavefront stage `stageIdx` to an `RtlExpr` reading its operands
+from the stage-entry register boundary `stageEntryExpr numWires stageIdx`. -/
+def compileHypergraphStageOpToRtl
+    (numWires stageIdx : Nat) (op : HypergraphOp) (srcWires : List Nat) : RtlExpr :=
+  let w (i : Nat) : RtlExpr :=
+    match srcWires[i]? with
+    | some u => stageEntryExpr numWires stageIdx u
+    | none   => .const 0#64
+  match op with
+  | .const v => .const (BitVec.ofInt 64 v)
+  | .add     => .alu .add (w 0) (w 1)
+  | .sub     => .alu .sub (w 0) (w 1)
+  | .mul     => .alu .mul (w 0) (w 1)
+  | .scale k => .alu .mul (.const (BitVec.ofInt 64 k)) (w 0)
+  | .mac     => .alu .add (.alu .mul (w 0) (w 1)) (w 2)
+  | .mux     => .mux (w 0) (w 1) (w 2)
+
+/-- Auxiliary fold constructing the next-state `RtlExpr` for each hypergraph wire `w` across the
+operations of wavefront stage `stageIdx`. -/
+def compileWavefrontStageAuxExpr
+    (numWires stageIdx : Nat) (curExpr : Nat → RtlExpr) :
+    List HyperEdge → Nat → RtlExpr
+  | [] => curExpr
+  | e :: rest =>
+    let vExpr := compileHypergraphStageOpToRtl numWires stageIdx e.op e.srcWires
+    compileWavefrontStageAuxExpr numWires stageIdx
+      (fun w => if w == e.dstWire then vExpr else curExpr w) rest
+
+/-- Construct the stage-exit `RtlExpr` for wire `w` at the end of wavefront stage `stageIdx`. -/
+def compileWavefrontStageExpr
+    (numWires stageIdx : Nat) (stage : List HyperEdge) (w : Nat) : RtlExpr :=
+  compileWavefrontStageAuxExpr numWires stageIdx (stageEntryExpr numWires stageIdx) stage w
+
+/-- **Pipelined Wavefront RTL Compiler (`compileHypergraphToRtlPipelined`)**:
+Lowers a `StrictOpenHypergraph` `g` into a deeply pipelined synchronous `Obend.Hardware.HDL.RtlModule`
+by partitioning `g` into Kahn topological wavefront layers `stages := layerHypergraph g` and inserting
+a bank of synchronous pipeline stage `RegSpec`s (`pipe_s{s}_w{w}`) between every wavefront layer! -/
+def compileHypergraphToRtlPipelined (name : String) (g : StrictOpenHypergraph) : RtlModule :=
+  let numWires  := g.nodeTypes.length
+  let stages    := layerHypergraph g
+  let numStages := stages.length
+  let stageWires : List WireAssign :=
+    (stages.zipIdx.map fun (stage, s) =>
+      (List.range numWires).map fun w =>
+        { wireIdx := s * numWires + w
+        , name    := s!"w_s{s}_w{w}"
+        , expr    := compileWavefrontStageExpr numWires s stage w }).flatten
+  let stageRegs : List RegSpec :=
+    (stages.zipIdx.map fun (stage, s) =>
+      (List.range numWires).map fun w =>
+        { regIdx         := s * numWires + w
+        , name           := s!"pipe_s{s}_w{w}"
+        , domain         := .coreClk
+        , resetKind      := .resetFree
+        , isSynchronizer := false
+        , nextExpr       := compileWavefrontStageExpr numWires s stage w }).flatten
+  let outPorts : List OutputPort :=
+    g.boundaryOut.table.map fun w =>
+      { name := s!"out_w{w}"
+      , expr :=
+          if numStages == 0 then .inputPort w
+          else .regRead ((numStages - 1) * numWires + w) }
+  { name       := name
+  , inputNames := (List.range numWires).map (fun w => s!"in_w{w}")
+  , wires      := stageWires
+  , regs       := stageRegs
+  , outputs    := outPorts }
+
+theorem map_getD_eq_getElem? {α : Type} (xs : List α) (f : α → BitVec 64) (i : Nat) :
+    (xs.map f).getD i 0#64 =
+      match xs[i]? with
+      | some u => f u
+      | none   => 0#64 := by
+  simp only [List.getD, List.getElem?_map]
+  cases xs[i]? <;> rfl
+
+theorem evalRtlExpr_stageEntryExpr
+    (numWires stageIdx u : Nat)
+    (inputs wireEnv regState : Nat → BitVec 64) :
+    evalRtlExpr inputs wireEnv regState (stageEntryExpr numWires stageIdx u) =
+      (if stageIdx == 0 then inputs else fun k => regState ((stageIdx - 1) * numWires + k)) u := by
+  unfold stageEntryExpr
+  by_cases h : stageIdx == 0 <;> simp [h, evalRtlExpr]
+
+theorem compileHypergraphStageOpToRtl_sound
+    (numWires stageIdx : Nat) (op : HypergraphOp) (srcWires : List Nat)
+    (inputs wireEnv regState : Nat → BitVec 64) :
+    let entryEnv := if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u)
+    evalRtlExpr inputs wireEnv regState (compileHypergraphStageOpToRtl numWires stageIdx op srcWires) =
+      evalHypergraphOpBv op (srcWires.map entryEnv) := by
+  intro entryEnv
+  have hw (i : Nat) :
+      evalRtlExpr inputs wireEnv regState
+        (match srcWires[i]? with
+        | some u => stageEntryExpr numWires stageIdx u
+        | none   => .const 0#64) =
+      (srcWires.map entryEnv).getD i 0#64 := by
+    rw [map_getD_eq_getElem?]
+    cases srcWires[i]? with
+    | none => rfl
+    | some u => exact evalRtlExpr_stageEntryExpr numWires stageIdx u inputs wireEnv regState
+  cases op with
+  | const v => rfl
+  | add =>
+    dsimp only [compileHypergraphStageOpToRtl, evalRtlExpr, evalAluOp, evalHypergraphOpBv]
+    rw [hw 0, hw 1]
+  | sub =>
+    dsimp only [compileHypergraphStageOpToRtl, evalRtlExpr, evalAluOp, evalHypergraphOpBv]
+    rw [hw 0, hw 1]
+  | mul =>
+    dsimp only [compileHypergraphStageOpToRtl, evalRtlExpr, evalAluOp, evalHypergraphOpBv]
+    rw [hw 0, hw 1]
+  | scale k =>
+    dsimp only [compileHypergraphStageOpToRtl, evalRtlExpr, evalAluOp, evalHypergraphOpBv]
+    rw [hw 0]
+  | mac =>
+    dsimp only [compileHypergraphStageOpToRtl, evalRtlExpr, evalAluOp, evalHypergraphOpBv]
+    rw [hw 0, hw 1, hw 2]
+  | mux =>
+    dsimp only [compileHypergraphStageOpToRtl, evalRtlExpr, evalHypergraphOpBv]
+    rw [hw 0, hw 1, hw 2]
+
+theorem compileWavefrontStageAuxExpr_sound
+    (numWires stageIdx : Nat) (stage : List HyperEdge)
+    (inputs wireEnv regState : Nat → BitVec 64)
+    (curExpr : Nat → RtlExpr) (curEnv : Nat → BitVec 64)
+    (hCur : ∀ w, evalRtlExpr inputs wireEnv regState (curExpr w) = curEnv w) :
+    let entryEnv := if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u)
+    ∀ w,
+      evalRtlExpr inputs wireEnv regState (compileWavefrontStageAuxExpr numWires stageIdx curExpr stage w) =
+        evalWavefrontStageAuxBv entryEnv curEnv stage w := by
+  intro entryEnv
+  induction stage generalizing curExpr curEnv with
+  | nil =>
+    intro w
+    exact hCur w
+  | cons e rest ih =>
+    intro w
+    dsimp only [compileWavefrontStageAuxExpr, evalWavefrontStageAuxBv]
+    apply ih
+    intro u
+    by_cases hu : u == e.dstWire
+    · simp only [hu, ↓reduceIte, stepHyperEdgeSyncBv]
+      exact compileHypergraphStageOpToRtl_sound numWires stageIdx e.op e.srcWires inputs wireEnv regState
+    · simp only [hu, Bool.false_eq_true, ↓reduceIte, stepHyperEdgeSyncBv]
+      exact hCur u
+
+/-- **Theorem (`compileWavefrontStageExpr_sound`)**:
+For EVERY wavefront stage `stage : List HyperEdge`, stage index `stageIdx`, wire count `numWires`,
+and wire index `w : Nat`, evaluating the lowered pipeline stage register expression
+`compileWavefrontStageExpr numWires stageIdx stage w` equals the synchronous wavefront stage
+evaluation `evalWavefrontStageSyncBv entryEnv stage w`! -/
+theorem compileWavefrontStageExpr_sound
+    (numWires stageIdx : Nat) (stage : List HyperEdge)
+    (inputs wireEnv regState : Nat → BitVec 64) (w : Nat) :
+    let entryEnv := if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u)
+    evalRtlExpr inputs wireEnv regState (compileWavefrontStageExpr numWires stageIdx stage w) =
+      evalWavefrontStageSyncBv entryEnv stage w := by
+  unfold compileWavefrontStageExpr evalWavefrontStageSyncBv
+  exact compileWavefrontStageAuxExpr_sound numWires stageIdx stage inputs wireEnv regState
+    (stageEntryExpr numWires stageIdx)
+    (if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u))
+    (fun u => evalRtlExpr_stageEntryExpr numWires stageIdx u inputs wireEnv regState)
+    w
+
+/-- Predicate identifying arithmetic `HypergraphOp`s (whose 64-bit `BitVec` semantics is a ring
+homomorphism of `Int` modulo $2^{64}$ via `BitVec.ofInt 64`). -/
+def HypergraphOp.isArithmetic : HypergraphOp → Bool
+  | .mux => false
+  | _    => true
+
+theorem map_ofInt_getD (args : List Int) (i : Nat) :
+    (args.map (BitVec.ofInt 64)).getD i 0#64 = BitVec.ofInt 64 (args.getD i 0) := by
+  rw [map_getD_eq_getElem?]
+  simp only [List.getD]
+  cases args[i]? <;> rfl
+
+theorem bitvec_ofInt_sub_64 (a b : Int) :
+    BitVec.ofInt 64 a - BitVec.ofInt 64 b = BitVec.ofInt 64 (a - b) := by
+  rw [Int.sub_eq_add_neg, BitVec.ofInt_add, BitVec.ofInt_neg, BitVec.sub_eq_add_neg]
+
+theorem evalHypergraphOpBv_ofInt (op : HypergraphOp) (args : List Int)
+    (hArith : op.isArithmetic = true) :
+    evalHypergraphOpBv op (args.map (BitVec.ofInt 64)) =
+      BitVec.ofInt 64 (evalHypergraphOp op args) := by
+  cases op with
+  | const v => rfl
+  | add =>
+    dsimp only [evalHypergraphOpBv, evalHypergraphOp]
+    rw [map_ofInt_getD, map_ofInt_getD, BitVec.ofInt_add]
+  | sub =>
+    dsimp only [evalHypergraphOpBv, evalHypergraphOp]
+    rw [map_ofInt_getD, map_ofInt_getD, bitvec_ofInt_sub_64]
+  | mul =>
+    dsimp only [evalHypergraphOpBv, evalHypergraphOp]
+    rw [map_ofInt_getD, map_ofInt_getD, BitVec.ofInt_mul]
+  | scale k =>
+    dsimp only [evalHypergraphOpBv, evalHypergraphOp]
+    rw [map_ofInt_getD, BitVec.ofInt_mul]
+  | mac =>
+    dsimp only [evalHypergraphOpBv, evalHypergraphOp]
+    rw [map_ofInt_getD, map_ofInt_getD, map_ofInt_getD, BitVec.ofInt_add, BitVec.ofInt_mul]
+  | mux =>
+    simp [HypergraphOp.isArithmetic] at hArith
+
+theorem evalWavefrontStageAuxBv_ofInt
+    (stageEntryEnv curEnv : Nat → Int) (stage : List HyperEdge)
+    (hArith : stage.all (fun e => e.op.isArithmetic) = true) :
+    ∀ w,
+      evalWavefrontStageAuxBv (fun u => BitVec.ofInt 64 (stageEntryEnv u))
+        (fun u => BitVec.ofInt 64 (curEnv u)) stage w =
+      BitVec.ofInt 64 (evalWavefrontStageAux stageEntryEnv curEnv stage w) := by
+  induction stage generalizing curEnv with
+  | nil =>
+    intro w
+    rfl
+  | cons e rest ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at hArith
+    intro w
+    dsimp only [evalWavefrontStageAuxBv, evalWavefrontStageAux]
+    have hStep :
+        stepHyperEdgeSyncBv (fun u => BitVec.ofInt 64 (stageEntryEnv u))
+          (fun u => BitVec.ofInt 64 (curEnv u)) e =
+        fun u => BitVec.ofInt 64 (stepHyperEdgeSync stageEntryEnv curEnv e u) := by
+      funext u
+      dsimp only [stepHyperEdgeSyncBv, stepHyperEdgeSync]
+      by_cases hu : u == e.dstWire
+      · simp only [hu, ↓reduceIte]
+        have hMap :
+            e.srcWires.map (fun k => BitVec.ofInt 64 (stageEntryEnv k)) =
+              (e.srcWires.map stageEntryEnv).map (BitVec.ofInt 64) := by
+          simp [List.map_map]
+        rw [hMap, evalHypergraphOpBv_ofInt e.op _ hArith.1]
+      · simp [hu]
+    rw [hStep]
+    exact ih (stepHyperEdgeSync stageEntryEnv curEnv e) hArith.2 w
+
+theorem evalWavefrontStageSyncBv_ofInt
+    (env : Nat → Int) (stage : List HyperEdge)
+    (hArith : stage.all (fun e => e.op.isArithmetic) = true) :
+    evalWavefrontStageSyncBv (fun u => BitVec.ofInt 64 (env u)) stage =
+      fun w => BitVec.ofInt 64 (evalWavefrontStageSync env stage w) := by
+  funext w
+  exact evalWavefrontStageAuxBv_ofInt env env stage hArith w
+
+theorem evalLayeredStagesSyncBv_ofInt
+    (initEnv : Nat → Int) (stages : List (List HyperEdge))
+    (hArith : stages.all (fun s => s.all (fun e => e.op.isArithmetic)) = true) :
+    evalLayeredStagesSyncBv (fun u => BitVec.ofInt 64 (initEnv u)) stages =
+      fun w => BitVec.ofInt 64 (evalLayeredStagesSync initEnv stages w) := by
+  induction stages generalizing initEnv with
+  | nil => rfl
+  | cons stage rest ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at hArith
+    simp only [evalLayeredStagesSyncBv, evalLayeredStagesSync, List.foldl_cons]
+    rw [evalWavefrontStageSyncBv_ofInt initEnv stage hArith.1]
+    exact ih (evalWavefrontStageSync initEnv stage) hArith.2
+
+/-- **Theorem (`compileGraphAdjoint_diamond_symbolic_sound`)**:
+For EVERY symbolic integer assignment `(x0 x1 x2 x3 dOut : Int)` to the 5-edge
+`goldenDiamondHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
+evaluating `compileGraphAdjoint goldenDiamondHypergraph` via `evalHypergraphComb`,
+`evalHypergraphLayered`, or `evalHypergraphLayeredSync` produces the exact symbolic primal
+output and partial derivatives:
+`[(x0 + x1) * (x2 + x3) + 10, (x2 + x3) * dOut, (x2 + x3) * dOut, (x0 + x1) * dOut, (x0 + x1) * dOut]`. -/
+theorem compileGraphAdjoint_diamond_symbolic_sound (x0 x1 x2 x3 dOut : Int) :
+    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
+    let env : Nat → Int := fun w =>
+      match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0
+    let expected :=
+      [ (x0 + x1) * (x2 + x3) + 10
+      , (x2 + x3) * dOut
+      , (x2 + x3) * dOut
+      , (x0 + x1) * dOut
+      , (x0 + x1) * dOut ]
+    evalHypergraphComb gAdj env = expected ∧
+    evalHypergraphLayered gAdj env = expected ∧
+    evalHypergraphLayeredSync gAdj env = expected := by
+  have hComb :
+      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph)
+        (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0) =
+      [ (x0 + x1) * (x2 + x3) + 10
+      , (x2 + x3) * dOut
+      , (x2 + x3) * dOut
+      , (x0 + x1) * dOut
+      , (x0 + x1) * dOut ] := by
+    change [ (x0 + x1) * (x2 + x3) + 10
+           , 1 * ((x2 + x3) * (1 * dOut))
+           , 1 * ((x2 + x3) * (1 * dOut))
+           , 1 * ((x0 + x1) * (1 * dOut))
+           , 1 * ((x0 + x1) * (1 * dOut)) ] = _
+    simp [Int.one_mul]
+  have hPipe := evalHypergraph_pipelined_eq_comb
+    (compileGraphAdjoint goldenDiamondHypergraph)
+    (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0)
+  exact ⟨hComb, hPipe.1.trans hComb, hPipe.2.trans hComb⟩
+
+/-- **Theorem (`compileHypergraphToRtlPipelined_diamond_symbolic_latency`)**:
+Universal 3-Cycle Pipeline Latency Soundness for `goldenDiamondHypergraph`:
+For EVERY symbolic input vector `insBv : Nat → BitVec 64`, EVERY symbolic integer environment
+`initEnv : Nat → Int`, and EVERY initial register state `initRegs : Nat → BitVec 64`:
+1. Executing `mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph`
+   for $K = 3$ synchronous clock cycles (`runModuleTrace`) produces the exact same output vector
+   as `goldenDiamondHypergraph.boundaryOut.table.map (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph))`,
+2. When `insBv = fun u => BitVec.ofInt 64 (initEnv u)`, the 3-cycle pipelined RTL output equals
+   `(evalHypergraphLayeredSync goldenDiamondHypergraph initEnv).map (BitVec.ofInt 64)`! -/
+theorem compileHypergraphToRtlPipelined_diamond_symbolic_latency
+    (insBv initRegs : Nat → BitVec 64) (initEnv : Nat → Int) :
+    let mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
+    let trace3Bv : List (Bool × (Nat → BitVec 64)) :=
+      [(false, insBv), (false, insBv), (false, insBv)]
+    let insOfInt : Nat → BitVec 64 := fun u => BitVec.ofInt 64 (initEnv u)
+    let trace3Int : List (Bool × (Nat → BitVec 64)) :=
+      [(false, insOfInt), (false, insOfInt), (false, insOfInt)]
+    (evalModuleOutputs mPipe insBv (runModuleTrace mPipe initRegs trace3Bv)).map Prod.snd =
+      goldenDiamondHypergraph.boundaryOut.table.map
+        (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph)) ∧
+    (evalModuleOutputs mPipe insOfInt (runModuleTrace mPipe initRegs trace3Int)).map Prod.snd =
+      (evalHypergraphLayeredSync goldenDiamondHypergraph initEnv).map (BitVec.ofInt 64) := by
+  have hBv :
+      (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
+        insBv
+        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
+          initRegs [(false, insBv), (false, insBv), (false, insBv)])).map Prod.snd =
+      goldenDiamondHypergraph.boundaryOut.table.map
+        (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph)) := rfl
+  have hBvInt :
+      (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
+        (fun u => BitVec.ofInt 64 (initEnv u))
+        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
+          initRegs
+          [ (false, fun u => BitVec.ofInt 64 (initEnv u))
+          , (false, fun u => BitVec.ofInt 64 (initEnv u))
+          , (false, fun u => BitVec.ofInt 64 (initEnv u)) ])).map Prod.snd =
+      goldenDiamondHypergraph.boundaryOut.table.map
+        (evalLayeredStagesSyncBv (fun u => BitVec.ofInt 64 (initEnv u))
+          (layerHypergraph goldenDiamondHypergraph)) := rfl
+  refine ⟨hBv, ?_⟩
+  rw [hBvInt]
+  have hArith :
+      (layerHypergraph goldenDiamondHypergraph).all
+        (fun s => s.all (fun e => e.op.isArithmetic)) = true := rfl
+  rw [evalLayeredStagesSyncBv_ofInt initEnv (layerHypergraph goldenDiamondHypergraph) hArith]
+  unfold evalHypergraphLayeredSync
+  simp [List.map_map]
+
+/-- **Theorem (`compileHypergraphToRtlPipelined_latency_sound`)**:
+1. **Universal Synchronous Wavefront Stage RTL Soundness**:
+   For EVERY wavefront stage `stage : List HyperEdge`, stage index `stageIdx`, wire count `numWires`,
+   and wire `w`, the pipelined register next-state expression
+   `compileWavefrontStageExpr numWires stageIdx stage w` evaluates to `evalWavefrontStageSyncBv entryEnv stage w`,
+   and for every arithmetic hypergraph stage list `stages`, $k$-stage synchronous bitvector wavefront
+   evaluation `evalLayeredStagesSyncBv` equals `BitVec.ofInt 64 (evalLayeredStagesSync initEnv stages w)`.
+2. **Concrete $K$-Cycle Pipeline Latency Verification on `goldenDiamondHypergraph` ($K = 3$ Wavefront Stages)**:
+   - `compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph` passes all structural
+     DAG and CDC checks (`checkRtlModule = true`),
+   - Inserts `27` synchronous pipeline stage registers (`3` wavefront stages $\times$ `9` hypergraph wires),
+   - Executing the pipelined `RtlModule` for $K = 3$ synchronous clock cycles (`runModuleTrace` of
+     length `(layerHypergraph goldenDiamondHypergraph).length = 3`) latches the exact boundary output
+     `[87#64]` matching `evalHypergraphLayeredSync goldenDiamondHypergraph initEnv = [87]`! -/
+theorem compileHypergraphToRtlPipelined_latency_sound
+    (numWires stageIdx : Nat) (stage : List HyperEdge)
+    (inputs wireEnv regState : Nat → BitVec 64) (w : Nat) :
+    let entryEnv := if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u)
+    let mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
+    let initEnvInt : Nat → Int := fun u =>
+      match u with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | _ => 0
+    let insBv : Nat → BitVec 64 := fun u => BitVec.ofInt 64 (initEnvInt u)
+    let initRegs : Nat → BitVec 64 := fun _ => 0#64
+    let trace3 : List (Bool × (Nat → BitVec 64)) :=
+      [(false, insBv), (false, insBv), (false, insBv)]
+    let regsAfter3 := runModuleTrace mPipe initRegs trace3
+    (evalRtlExpr inputs wireEnv regState (compileWavefrontStageExpr numWires stageIdx stage w) =
+      evalWavefrontStageSyncBv entryEnv stage w) ∧
+    checkRtlModule mPipe = true ∧
+    mPipe.regs.length = (layerHypergraph goldenDiamondHypergraph).length * goldenDiamondHypergraph.nodeTypes.length ∧
+    mPipe.regs.length = 27 ∧
+    (evalModuleOutputs mPipe insBv regsAfter3).map Prod.snd = [87#64] ∧
+    (evalHypergraphLayeredSync goldenDiamondHypergraph initEnvInt).map (BitVec.ofInt 64) = [87#64] := by
+  refine ⟨compileWavefrontStageExpr_sound numWires stageIdx stage inputs wireEnv regState w, ?_⟩
+  decide +kernel
+
 end Obend.Hardware.OpenHypergraph
 end
+

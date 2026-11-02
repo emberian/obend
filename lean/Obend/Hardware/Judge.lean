@@ -276,19 +276,171 @@ theorem badPnrCert_refused :
       .refused (.pnrCollisionShortOrTiming "obend_routed_adder2") [] :=
   rfl
 
+/-- Parse leading decimal digits from a `List Char`. -/
+def parseLeadingDigitsAux : List Char → Nat → Bool → Option Nat
+  | [], acc, true => some acc
+  | [], _, false => none
+  | c :: cs, acc, seen =>
+    if '0' ≤ c && c ≤ '9' then
+      parseLeadingDigitsAux cs (acc * 10 + (c.toNat - '0'.toNat)) true
+    else if seen then
+      some acc
+    else
+      none
+
+/-- True if `c` is an ASCII identifier character (`a-z`, `A-Z`, `0-9`, `'_'`). -/
+def isWireIdentChar (c : Char) : Bool :=
+  ('a' ≤ c && c ≤ 'z') || ('A' ≤ c && c ≤ 'Z') || ('0' ≤ c && c ≤ '9') || c == '_'
+
+/-- True if `c` is a field separator (`'"'`, `':'`, `'='`, `' '`, `'\t'`). -/
+def isFieldSepChar (c : Char) : Bool :=
+  c == '"' || c == ':' || c == '=' || c == ' ' || c == '\t'
+
+/-- True if `cs` starts with at least one field separator character (`'"'`, `':'`, `'='`, `' '`, `'\t'`). -/
+def hasFieldSepHead : List Char → Bool
+  | [] => false
+  | c :: _ => isFieldSepChar c
+
+/-- Skip optional separators (`'"'`, `':'`, `'='`, `' '`, `'\t'`) before a field value. -/
+def skipFieldSep : List Char → List Char
+  | [] => []
+  | c :: cs =>
+    if isFieldSepChar c then
+      skipFieldSep cs
+    else
+      c :: cs
+
+/-- Parse a leading string token (alphanumeric, `'_'`, `'-'`, `'.'`) until a delimiter. -/
+def parseLeadingStringTokenAux : List Char → List Char → Option String
+  | [], acc => if acc.isEmpty then none else some (String.ofList acc.reverse)
+  | c :: cs, acc =>
+    if isWireIdentChar c || c == '-' || c == '.' then
+      parseLeadingStringTokenAux cs (c :: acc)
+    else if acc.isEmpty then
+      none
+    else
+      some (String.ofList acc.reverse)
+
+/-- Check whether `pat` is a prefix of `cs`, returning the suffix after `pat`. -/
+def stripCharPrefix : List Char → List Char → Option (List Char)
+  | [], cs => some cs
+  | p :: ps, c :: cs => if p == c then stripCharPrefix ps cs else none
+  | _ :: _, [] => none
+
+/-- Scan `cs` for `pat` at a left/right token boundary followed by separators and a `Nat`. -/
+def scanNatAfterPatternAux (pat : List Char) (prevIsIdent : Bool) : List Char → Option Nat
+  | [] => none
+  | c :: cs =>
+    let nextPrev := isWireIdentChar c
+    if !prevIsIdent then
+      match stripCharPrefix pat (c :: cs) with
+      | some rest =>
+        if hasFieldSepHead rest || pat.getLast? == some '"' then
+          match parseLeadingDigitsAux (skipFieldSep rest) 0 false with
+          | some n => some n
+          | none => scanNatAfterPatternAux pat nextPrev cs
+        else
+          scanNatAfterPatternAux pat nextPrev cs
+      | none => scanNatAfterPatternAux pat nextPrev cs
+    else
+      scanNatAfterPatternAux pat nextPrev cs
+
+def scanNatAfterPattern (pat : List Char) (cs : List Char) : Option Nat :=
+  scanNatAfterPatternAux pat false cs
+
+/-- Scan `cs` for `pat` at a left/right token boundary followed by separators and an `Int`. -/
+def scanIntAfterPatternAux (pat : List Char) (prevIsIdent : Bool) : List Char → Option Int
+  | [] => none
+  | c :: cs =>
+    let nextPrev := isWireIdentChar c
+    if !prevIsIdent then
+      match stripCharPrefix pat (c :: cs) with
+      | some rest =>
+        if hasFieldSepHead rest || pat.getLast? == some '"' then
+          match skipFieldSep rest with
+          | '-' :: digits =>
+            match parseLeadingDigitsAux digits 0 false with
+            | some n => some (-Int.ofNat n)
+            | none => scanIntAfterPatternAux pat nextPrev cs
+          | digits =>
+            match parseLeadingDigitsAux digits 0 false with
+            | some n => some (Int.ofNat n)
+            | none => scanIntAfterPatternAux pat nextPrev cs
+        else
+          scanIntAfterPatternAux pat nextPrev cs
+      | none => scanIntAfterPatternAux pat nextPrev cs
+    else
+      scanIntAfterPatternAux pat nextPrev cs
+
+def scanIntAfterPattern (pat : List Char) (cs : List Char) : Option Int :=
+  scanIntAfterPatternAux pat false cs
+
+/-- Scan `cs` for `pat` at a left/right token boundary followed by separators and a string token. -/
+def scanStringAfterPatternAux (pat : List Char) (prevIsIdent : Bool) : List Char → Option String
+  | [] => none
+  | c :: cs =>
+    let nextPrev := isWireIdentChar c
+    if !prevIsIdent then
+      match stripCharPrefix pat (c :: cs) with
+      | some rest =>
+        if hasFieldSepHead rest || pat.getLast? == some '"' then
+          match parseLeadingStringTokenAux (skipFieldSep rest) [] with
+          | some s => some s
+          | none => scanStringAfterPatternAux pat nextPrev cs
+        else
+          scanStringAfterPatternAux pat nextPrev cs
+      | none => scanStringAfterPatternAux pat nextPrev cs
+    else
+      scanStringAfterPatternAux pat nextPrev cs
+
+def scanStringAfterPattern (pat : List Char) (cs : List Char) : Option String :=
+  scanStringAfterPatternAux pat false cs
+
+/-- Extract a string field `field` from a JSON or key-value wire string `s`.
+    100% reducible in the Lean 4 kernel (`decide +kernel`). -/
+def extractStringField (s : String) (field : String) : Option String :=
+  match scanStringAfterPattern (("\"" ++ field ++ "\"").toList) s.toList with
+  | some v => some v
+  | none => scanStringAfterPattern field.toList s.toList
+
+/-- Extract a natural-number field `field` from a JSON or key-value wire string `s`.
+    100% reducible in the Lean 4 kernel (`decide +kernel`). -/
+def extractNatField (s : String) (field : String) : Option Nat :=
+  match scanNatAfterPattern (("\"" ++ field ++ "\"").toList) s.toList with
+  | some n => some n
+  | none => scanNatAfterPattern field.toList s.toList
+
+/-- Extract a signed-integer field `field` from a JSON or key-value wire string `s`.
+    100% reducible in the Lean 4 kernel (`decide +kernel`). -/
+def extractIntField (s : String) (field : String) : Option Int :=
+  match scanIntAfterPattern (("\"" ++ field ++ "\"").toList) s.toList with
+  | some v => some v
+  | none => scanIntAfterPattern field.toList s.toList
+
+/-- Validate that a wire string `s` is non-empty and contains a `:` / `=` / `{` delimiter. -/
+def ensureWireFrame (s : String) : Except String Unit :=
+  let cs := s.toList
+  if cs.contains ':' || cs.contains '=' || cs.contains '{' then
+    .ok ()
+  else
+    .error "invalid wire frame: expected JSON object or key=value wire string"
+
 def decodePnrObj (s : String) : Except String Nat := do
-  let j ← Json.parse s
-  j.getObjValAs? Nat "periodPs"
+  match extractNatField s "periodPs" with
+  | some p => return p
+  | none =>
+    let j ← Json.parse s
+    j.getObjValAs? Nat "periodPs"
 
 def decodePnrCert (s : String) : Except String PnrCertificate := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "valid"
-  if mode == "collision" then
-    return collidingBelPnrCert
-  else if mode == "short" then
-    return shortedWirePnrCert
-  else
-    return validAdderPnrCert
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "valid"
+  let base :=
+    if mode == "collision" then collidingBelPnrCert
+    else if mode == "short" then shortedWirePnrCert
+    else validAdderPnrCert
+  let sinkCap := (extractNatField s "sinkCapFf").getD base.sinkCapFf
+  return { base with sinkCapFf := sinkCap }
 
 /-- Registered `Obend.Judge.Format` for `hw-pnr-bitstream@1`. -/
 def hwPnrFormat : Format where
@@ -429,21 +581,28 @@ theorem badWaferSpaceCert_refused :
   rfl
 
 def decodeWaferSpaceObj (s : String) : Except String WaferSpacePdk := do
-  let j ← Json.parse s
-  let pdkStr := (j.getObjValAs? String "pdk").toOption.getD "gf180mcuD"
+  ensureWireFrame s
+  let pdkStr := (extractStringField s "pdk").getD "gf180mcuD"
   if pdkStr == "sky130A" then return .sky130A
   else if pdkStr == "ihpSg13g2" then return .ihpSg13g2
   else return .gf180mcuD
 
 def decodeWaferSpaceCert (s : String) : Except String WaferSpaceSignoffCert := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
-  if mode == "bad_antenna" then
-    return badAntennaSignoffCert
-  else if mode == "bad_cmp" then
-    return badCmpDensitySignoffCert
-  else
-    return goldenGf180SignoffCert
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "golden"
+  let base :=
+    if mode == "bad_antenna" then badAntennaSignoffCert
+    else if mode == "bad_cmp" then badCmpDensitySignoffCert
+    else goldenGf180SignoffCert
+  let base' := match extractNatField s "antennaRatio" with
+    | some ratio =>
+      { base with antennaNets := [⟨"m4_long_clk_spine", ratio * 10, 10, false⟩] }
+    | none => base
+  let base'' := match extractNatField s "metalDensityPct" with
+    | some pct =>
+      { base' with metalLayers := [⟨"Metal1", pct, 0, 100⟩] }
+    | none => base'
+  return base''
 
 /-- Registered `Obend.Judge.Format` for `waferspace-signoff@1`. -/
 def waferSpaceFormat : Format where
@@ -503,18 +662,25 @@ theorem badDatasheetFitCert_refused :
   rfl
 
 def decodeDatasheetFitObj (s : String) : Except String String := do
-  let j ← Json.parse s
-  return (j.getObjValAs? String "suite").toOption.getD "obend_74ls_hct_ina_calibrated"
+  ensureWireFrame s
+  return (extractStringField s "suite").getD "obend_74ls_hct_ina_calibrated"
 
 def decodeDatasheetFitCert (s : String) : Except String DatasheetFitCert := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "calibrated"
-  if mode == "74ls_to_74hc_direct" then
-    return badDirect74HcFitCert
-  else if mode == "uncalibrated_drift" then
-    return badUncalibratedDriftFitCert
-  else
-    return goldenDatasheetFitCert
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "calibrated"
+  let base :=
+    if mode == "74ls_to_74hc_direct" then badDirect74HcFitCert
+    else if mode == "uncalibrated_drift" then badUncalibratedDriftFitCert
+    else goldenDatasheetFitCert
+  let pullup := (extractIntField s "pullupBoostMv").getD base.pullupBoostMv
+  let minMargin := (extractIntField s "minMarginMv").getD base.minMarginMv
+  let fanout := (extractNatField s "fanout").getD base.fanout
+  let maxCalErr := (extractIntField s "maxCalErrMv").getD base.maxCalErrMv
+  return { base with
+    pullupBoostMv := pullup
+    minMarginMv := minMargin
+    fanout := fanout
+    maxCalErrMv := maxCalErr }
 
 /-- Registered `Obend.Judge.Format` for `datasheet-fit@1`. -/
 def datasheetFitFormat : Format where
@@ -579,8 +745,8 @@ theorem badRfTransceiverCert_refused :
   rfl
 
 def decodeRfTransceiverObj (s : String) : Except String HamBand := do
-  let j ← Json.parse s
-  let bandStr := (j.getObjValAs? String "band").toOption.getD "40m"
+  ensureWireFrame s
+  let bandStr := (extractStringField s "band").getD "40m"
   if bandStr == "160m" then return .band160m
   else if bandStr == "80m" then return .band80m
   else if bandStr == "20m" then return .band20m
@@ -589,14 +755,21 @@ def decodeRfTransceiverObj (s : String) : Except String HamBand := do
   else return .band40m
 
 def decodeRfTransceiverCert (s : String) : Except String RfTransceiverCert := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "ft8_40m_golden"
-  if mode == "unfiltered_pa_harmonics" then
-    return unfilteredPaTransceiverCert
-  else if mode == "high_vswr_mismatch" then
-    return highVswrTransceiverCert
-  else
-    return golden40mFt8TransceiverCert
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "ft8_40m_golden"
+  let base :=
+    if mode == "unfiltered_pa_harmonics" then unfilteredPaTransceiverCert
+    else if mode == "high_vswr_mismatch" then highVswrTransceiverCert
+    else golden40mFt8TransceiverCert
+  let freq := (extractNatField s "carrierFreqKhz").getD base.carrierFreqKhz
+  let iqRej := (extractNatField s "iqRejectionTenthDb").getD base.iqRejectionTenthDb
+  let rxNf := (extractNatField s "rxCascadedMilliNf").getD base.rxCascadedMilliNf
+  let tjMk := (extractIntField s "paSteadyTjMk").getD base.paSteadyTjMk
+  return { base with
+    carrierFreqKhz := freq
+    iqRejectionTenthDb := iqRej
+    rxCascadedMilliNf := rxNf
+    paSteadyTjMk := tjMk }
 
 /-- Registered `Obend.Judge.Format` for `rf-transceiver-signoff@1`. -/
 def rfTransceiverFormat : Format where
@@ -662,16 +835,27 @@ theorem badPhotonicsPic_refused :
   rfl
 
 def decodePhotonicsObj (s : String) : Except String Nat := do
-  let j ← Json.parse s
-  return (j.getObjValAs? Nat "minFsrPm").toOption.getD 15000
+  match extractNatField s "minFsrPm" with
+  | some v => return v
+  | none =>
+    let j ← Json.parse s
+    return (j.getObjValAs? Nat "minFsrPm").toOption.getD 15000
 
 def decodePhotonicsCert (s : String) : Except String MicroringResonator := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
-  if mode == "tight_bend" then
-    return leakyTightBendMicroring
-  else
-    return goldenSoi220Microring
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "golden"
+  let base :=
+    if mode == "tight_bend" then leakyTightBendMicroring
+    else goldenSoi220Microring
+  let bendNm := (extractNatField s "bendRadiusNm").getD base.bendRadiusNm
+  let circUm := (extractNatField s "circumferenceUm").getD base.circumferenceUm
+  let rSelf := (extractIntField s "rSelfPermille").getD base.rSelfPermille
+  let aRt := (extractIntField s "aRoundTripPermille").getD base.aRoundTripPermille
+  return { base with
+    bendRadiusNm := bendNm
+    circumferenceUm := circUm
+    rSelfPermille := rSelf
+    aRoundTripPermille := aRt }
 
 /-- Registered `Obend.Judge.Format` for `photonics-pic-signoff@1`. -/
 def photonicsPicFormat : Format where
@@ -739,16 +923,27 @@ theorem badPcbBoard_refused :
   rfl
 
 def decodePcbBoardObj (s : String) : Except String Nat := do
-  let j ← Json.parse s
-  return (j.getObjValAs? Nat "maxSkewFs").toOption.getD 50
+  match extractNatField s "maxSkewFs" with
+  | some v => return v
+  | none =>
+    let j ← Json.parse s
+    return (j.getObjValAs? Nat "maxSkewFs").toOption.getD 50
 
 def decodePcbBoardCert (s : String) : Except String SerpentineMeander := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
-  if mode == "skew_mismatch" then
-    return badUnmatchedDdrMeander
-  else
-    return goldenDdrMeander
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "golden"
+  let base :=
+    if mode == "skew_mismatch" then badUnmatchedDdrMeander
+    else goldenDdrMeander
+  let baseLen := (extractNatField s "baseLengthUm").getD base.baseLengthUm
+  let nSeg := (extractNatField s "numSegments").getD base.numSegments
+  let ampUm := (extractNatField s "meanderAmplitudeUm").getD base.meanderAmplitudeUm
+  let spcUm := (extractNatField s "minLoopSpacingUm").getD base.minLoopSpacingUm
+  return {
+    baseLengthUm := baseLen
+    numSegments := nSeg
+    meanderAmplitudeUm := ampUm
+    minLoopSpacingUm := spcUm }
 
 /-- Registered `Obend.Judge.Format` for `pcb-board-signoff@1`. -/
 def pcbBoardFormat : Format where
@@ -822,16 +1017,33 @@ theorem badAgenticEdaSwap_refused :
   decide +kernel
 
 def decodeAgenticEdaObj (s : String) : Except String Int := do
-  let j ← Json.parse s
-  return (j.getObjValAs? Int "minMarginMv").toOption.getD 400
+  match extractIntField s "minMarginMv" with
+  | some v => return v
+  | none =>
+    let j ← Json.parse s
+    return (j.getObjValAs? Int "minMarginMv").toOption.getD 400
 
 def decodeAgenticEdaCert (s : String) : Except String EdaVaultPart := do
-  let j ← Json.parse s
-  let mode := (j.getObjValAs? String "mode").toOption.getD "golden"
-  if mode == "overbudget" then
-    return overbudgetSecondSourcePart
-  else
-    return goldenSecondSourcePart
+  ensureWireFrame s
+  let mode := (extractStringField s "mode").getD "golden"
+  let base :=
+    if mode == "overbudget" then overbudgetSecondSourcePart
+    else goldenSecondSourcePart
+  let voh := (extractNatField s "vohMinMv").getD base.vohMinMv
+  let vih := (extractNatField s "vihMinMv").getD base.vihMinMv
+  let vol := (extractNatField s "volMaxMv").getD base.volMaxMv
+  let vil := (extractNatField s "vilMaxMv").getD base.vilMaxMv
+  let tempMc := (extractNatField s "maxTempMc").getD base.maxTempMc
+  let drcErr := (extractNatField s "drcErrors").getD base.drcErrors
+  let cost := (extractNatField s "costCents").getD base.costCents
+  return { base with
+    vohMinMv := voh
+    vihMinMv := vih
+    volMaxMv := vol
+    vilMaxMv := vil
+    maxTempMc := tempMc
+    drcErrors := drcErr
+    costCents := cost }
 
 /-- Registered `Obend.Judge.Format` for `agentic-eda-swap@1`. -/
 def agenticEdaFormat : Format where
@@ -1054,5 +1266,53 @@ def hardwareFormats : List Format :=
 /-- Look up a hardware certificate format by `name@version` string (e.g. `"hw-pnr-bitstream@1"`). -/
 def findHardwareFormat? (tag : String) : Option Format :=
   hardwareFormats.find? (fun f => s!"{f.name}@{f.version}" == tag)
+
+/-- **No-Bypass Verification for `verifyRawBinaryCborCert` on Fixed-Arity `.pnr` (`verifyRawBinaryCborCert_refuses_pnr_tape_bypass`)**:
+Submitting a 1-word variable-length `BinaryTapeCert` claiming `.pnr` to `verifyRawBinaryCborCert .pnr`
+is strictly refused (`.refused (.binaryCborCertViolation 1) []`). -/
+theorem verifyRawBinaryCborCert_refuses_pnr_tape_bypass :
+    let fakePnrTape : BinaryTapeCert := { domain := .pnr, metric0 := 100, metric1 := 100, words := [1] }
+    let rawBytes := ByteArray.mk (encodeBinaryTapeCert fakePnrTape).toArray
+    verifyRawBinaryCborCert .pnr rawBytes = .refused (.binaryCborCertViolation 1) [] := by
+  decide +kernel
+
+/-- **Kernel Verification of Numeric Wire Field Extraction (`extractNatField_and_extractIntField_verified`)**:
+Verifies that `extractNatField` and `extractIntField` extract unsigned and signed numeric parameters
+from JSON and key-value wire strings, and that overriding numeric fields in `decodeWaferSpaceCert`,
+`decodePhotonicsCert`, `decodePcbBoardCert`, and `decodeAgenticEdaCert` triggers judge refusal on
+out-of-spec numeric values even when `"mode": "golden"` is set! -/
+theorem extractNatField_and_extractIntField_verified :
+    extractNatField "{\"mode\": \"golden\", \"antennaRatio\": 2400}" "antennaRatio" = some 2400 ∧
+    extractIntField "{\"mode\": \"golden\", \"minMarginMv\": -150}" "minMarginMv" = some (-150) ∧
+    extractNatField "bendRadiusNm=2000,circumferenceUm=50" "bendRadiusNm" = some 2000 ∧
+    (let mrr : MicroringResonator :=
+       { goldenSoi220Microring with
+         bendRadiusNm := (extractNatField "{\"mode\": \"golden\", \"bendRadiusNm\": 2000}" "bendRadiusNm").getD goldenSoi220Microring.bendRadiusNm }
+     checkPhotonicsPicJudge 0 15000 mrr = .refused (.photonicsPicSignoffViolation goldenSoi220Microring.ringName) []) ∧
+    (let meander : SerpentineMeander :=
+       { goldenDdrMeander with
+         numSegments := (extractNatField "{\"mode\": \"golden\", \"numSegments\": 0}" "numSegments").getD goldenDdrMeander.numSegments }
+     checkPcbBoardJudge 0 50 meander = .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []) := by
+  decide +kernel
+
+/-- **Identifier-Boundary Non-Collision & End-to-End Decoder Verification
+(`extractNatField_token_boundary_and_decoders_verified`)**:
+1. `"fanout"` does *not* match the suffix of `"max_fanout"` in JSON or key-value wire strings,
+2. `decodePhotonicsCert` and `decodePcbBoardCert` decode both JSON and key-value wire strings
+   directly in the Lean 4 kernel (`decide +kernel`) and reject out-of-spec numeric parameters even
+   when `mode=golden` is specified. -/
+theorem extractNatField_token_boundary_and_decoders_verified :
+    extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
+    extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧
+    extractIntField "{\"extra_minMarginMv\": -500}" "minMarginMv" = none ∧
+    (match decodePhotonicsCert "mode=golden,bendRadiusNm=2000,circumferenceUm=50" with
+     | .ok c => c.bendRadiusNm == 2000 && c.circumferenceUm == 50 &&
+       checkPhotonicsPicJudge 0 15000 c == .refused (.photonicsPicSignoffViolation goldenSoi220Microring.ringName) []
+     | .error _ => false) = true ∧
+    (match decodePcbBoardCert "mode=golden,numSegments=0" with
+     | .ok c => c.numSegments == 0 &&
+       checkPcbBoardJudge 0 50 c == .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []
+     | .error _ => false) = true := by
+  decide +kernel
 
 end Obend.Hardware.Judge

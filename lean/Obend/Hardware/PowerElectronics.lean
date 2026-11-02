@@ -31,10 +31,14 @@ autonomous microgrid droop sharing) within `Obend.Hardware`:
 6. **Flying-Capacitor Phase-Shifted PWM (`PS-PWM`) Natural Balance & Active Balancing Lyapunov Contraction (`evalFlyingCapErrorNext`, `fcml_pspwm_natural_balance`, `evalActiveBalancingStep`, `fcml_active_balancing_lyapunov_identity`, `fcml_active_balancing_lyapunov_contraction`, `ms350_350kw_fcml_solar_inverter_verified`)**.
 -/
 public import Obend.Hardware.Thermal
+public import Obend.Hardware.Magnetics
+public import Obend.Hardware.FluidThermal
 @[expose] public section
 
 namespace Obend.Hardware.PowerElectronics
 open Obend.Hardware.Thermal
+open Obend.Hardware.Magnetics
+open Obend.Hardware.FluidThermal
 set_option autoImplicit false
 
 /-! ## 1. Maximum Power-Point Tracking (MPPT) — Incremental Conductance Global Optimality -/
@@ -473,6 +477,208 @@ theorem ms350_350kw_fcml_solar_inverter_verified :
     evalFlyingCapErrorNext 0 500 500 233 = 0 ∧
     evalActiveBalancingStep 100 200 = 80 ∧
     checkInverterSignoff ms350Fcml350kWSolarInverter = true := by
+  decide +kernel
+
+/-! ## 7. Motor-Inverter-Cooler Drive Train Co-Design (`CoupledDriveTrainSpec`, `checkDriveTrainCoDesign`) -/
+
+/-- Evaluates scaled 3-phase Space-Vector / Sinusoidal PWM fundamental phase voltage amplitude
+$V_{\text{ac,scaled}} = M_{\text{permille}} \cdot V_{\text{DC}}$ for modulation index
+$M_{\text{permille}} \in [0, 1000]$ and DC link voltage $V_{\text{DC}}$. -/
+def evalPwmModulatedVoltageScaled (modulationPermille vDcBusV : Int) : Int :=
+  modulationPermille * vDcBusV
+
+/-- Checks that the 3-phase PWM modulation index lies in the linear modulation range $[0, 1000]$. -/
+def checkLinearPwmModulation (modulationPermille : Int) : Bool :=
+  decide (0 ≤ modulationPermille ∧ modulationPermille ≤ 1000)
+
+/-- Evaluates total 3-phase SiC MOSFET inverter conduction + switching power loss:
+$$P_{\text{inv}}(I_{\text{rms}}, f_{\text{sw}}, V_{\text{DC}}) =
+  3 \cdot I_{\text{rms}}^2 \cdot R_{DS(\text{on})} + k_{\text{sw}} \cdot f_{\text{sw}} \cdot V_{\text{DC}} \cdot I_{\text{rms}}.$$ -/
+def evalSicInverterTotalLoss
+    (iRmsAmp rDsOnMohm kSwScaled fSwKhz vDcBusV : Int) : Int :=
+  3 * (iRmsAmp * iRmsAmp) * rDsOnMohm + kSwScaled * fSwKhz * vDcBusV * iRmsAmp
+
+/-- Non-negativity and switching-frequency monotonicity of 3-phase SiC MOSFET inverter loss
+(`sicInverterLoss_nonneg_and_monotone_freq`). -/
+theorem sicInverterLoss_nonneg_and_monotone_freq
+    (iRmsAmp rDsOnMohm kSwScaled fSw1 fSw2 vDcBusV : Int)
+    (hI : 0 ≤ iRmsAmp)
+    (hR : 0 ≤ rDsOnMohm)
+    (hK : 0 ≤ kSwScaled)
+    (hF1 : 0 ≤ fSw1)
+    (hFLe : fSw1 ≤ fSw2)
+    (hV : 0 ≤ vDcBusV) :
+    0 ≤ evalSicInverterTotalLoss iRmsAmp rDsOnMohm kSwScaled fSw1 vDcBusV ∧
+    evalSicInverterTotalLoss iRmsAmp rDsOnMohm kSwScaled fSw1 vDcBusV ≤
+      evalSicInverterTotalLoss iRmsAmp rDsOnMohm kSwScaled fSw2 vDcBusV := by
+  dsimp only [evalSicInverterTotalLoss]
+  have hIsq : 0 ≤ iRmsAmp * iRmsAmp := int_sq_nonneg iRmsAmp
+  have h3Isq : 0 ≤ 3 * (iRmsAmp * iRmsAmp) :=
+    int_mul_nonneg 3 (iRmsAmp * iRmsAmp) (by omega) hIsq
+  have hCond : 0 ≤ 3 * (iRmsAmp * iRmsAmp) * rDsOnMohm :=
+    int_mul_nonneg (3 * (iRmsAmp * iRmsAmp)) rDsOnMohm h3Isq hR
+  have hKF1 : 0 ≤ kSwScaled * fSw1 := int_mul_nonneg kSwScaled fSw1 hK hF1
+  have hKFV1 : 0 ≤ kSwScaled * fSw1 * vDcBusV :=
+    int_mul_nonneg (kSwScaled * fSw1) vDcBusV hKF1 hV
+  have hSw1 : 0 ≤ kSwScaled * fSw1 * vDcBusV * iRmsAmp :=
+    int_mul_nonneg (kSwScaled * fSw1 * vDcBusV) iRmsAmp hKFV1 hI
+  have hKFMono : kSwScaled * fSw1 ≤ kSwScaled * fSw2 :=
+    int_mul_le_mul_of_nonneg_left fSw1 fSw2 kSwScaled hFLe hK
+  have hKFVMono : kSwScaled * fSw1 * vDcBusV ≤ kSwScaled * fSw2 * vDcBusV :=
+    int_mul_le_mul_of_nonneg_right (kSwScaled * fSw1) (kSwScaled * fSw2) vDcBusV hKFMono hV
+  have hSwMono : kSwScaled * fSw1 * vDcBusV * iRmsAmp ≤ kSwScaled * fSw2 * vDcBusV * iRmsAmp :=
+    int_mul_le_mul_of_nonneg_right
+      (kSwScaled * fSw1 * vDcBusV) (kSwScaled * fSw2 * vDcBusV) iRmsAmp hKFVMono hI
+  refine ⟨by omega, by omega⟩
+
+/-- Unified Motor-Inverter-Cooler Drive Train Co-Design Specification (`CoupledDriveTrainSpec`):
+Couples 3-phase Space-Vector / Sinusoidal PWM modulation index $M \in [0, 1000]$,
+SiC MOSFET conduction + switching loss $P_{\text{inv}}(I_{\text{rms}}, f_{\text{sw}}, V_{\text{DC}})$,
+laminated busbar $L\,dI/dt$ turn-off overshoot, half-bridge dead-time shoot-through interlock,
+$dq0$ IPM electromagnetic shaft torque, and microchannel convective cooling stability against
+positive-TCR copper Joule heating. -/
+structure CoupledDriveTrainSpec where
+  driveName                 : String
+  modulationPermille        : Int
+  vDcBusV                   : Int
+  lBusNh                    : Int
+  diDtAmpPerNs              : Int
+  vDssRatedV                : Int
+  deadTimeNs                : Int
+  turnOffMaxNs              : Int
+  turnOnMinNs               : Int
+  safetyMarginNs            : Int
+  iRmsAmp                   : Int
+  rDsOnMohm                 : Int
+  kSwScaled                 : Int
+  fSwKhz                    : Int
+  maxInverterLossBudget     : Int
+  polePairs                 : Int
+  psiPmMilliWb              : Int
+  ldMicroH                  : Int
+  lqMicroH                  : Int
+  idAmp                     : Int
+  iqAmp                     : Int
+  minShaftTorqueScaled      : Int
+  pCoreLoss                 : Int
+  r0CuMohm                  : Int
+  alphaCuPermille           : Int
+  gThCooler                 : Int
+  tCoolantMilliC            : Int
+  tWindingMilliC            : Int
+  maxClassHInsulationMilliC : Int
+  deriving DecidableEq, Repr
+
+/-- Unified co-design checker (`checkDriveTrainCoDesign`) for a coupled Motor-Inverter-Cooler drive train:
+1. PWM modulation index $M \in [0, 1000]$ (`checkLinearPwmModulation`) and non-negative DC link voltage $V_{\text{DC}} \ge 0$,
+2. Laminated busbar turn-off voltage peak $V_{\text{DC}} + L_{\text{bus}} \frac{dI}{dt} \le V_{\text{DSS,rated}}$,
+3. Gate-drive dead-time shoot-through interlock passes (`checkDeadTimeInterlock`),
+4. 3-phase SiC MOSFET conduction + switching loss $P_{\text{inv}} \le P_{\text{inv,max}}$,
+5. $dq0$ IPM shaft torque meets `minShaftTorqueScaled`,
+6. Convective thermal conductance strictly exceeds the positive-TCR copper Joule heating slope
+   ($I_{\text{rms}}^2 R_0 \alpha_{\text{Cu}} < G_{\text{th}}$, guaranteeing electro-thermal contraction),
+7. Non-negative stator iron core loss ($P_{\text{core}} \ge 0$) and stator winding temperature bounded
+   between coolant inlet and Class-H insulation rating ($T_{\text{coolant}} \le T_{\text{winding}} \le T_{\text{Class-H}}$). -/
+def checkDriveTrainCoDesign (spec : CoupledDriveTrainSpec) : Bool :=
+  let vPeakV := evalTurnOffPeakVoltageV spec.vDcBusV spec.lBusNh spec.diDtAmpPerNs
+  let pInv := evalSicInverterTotalLoss spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV
+  let motor : IpmMotorSpec :=
+    { polePairs    := spec.polePairs
+    , psiPmMilliWb := spec.psiPmMilliWb
+    , ldMicroH     := spec.ldMicroH
+    , lqMicroH     := spec.lqMicroH }
+  let shaftTorque := evalIpmTorqueScaled motor spec.idAmp spec.iqAmp
+  let cuSlope := evalCopperJouleSlope spec.iRmsAmp spec.r0CuMohm spec.alphaCuPermille
+  checkLinearPwmModulation spec.modulationPermille &&
+  decide (0 ≤ spec.vDcBusV) &&
+  decide (vPeakV ≤ spec.vDssRatedV) &&
+  checkDeadTimeInterlock spec.deadTimeNs spec.turnOffMaxNs spec.turnOnMinNs spec.safetyMarginNs &&
+  decide (pInv ≤ spec.maxInverterLossBudget) &&
+  decide (spec.minShaftTorqueScaled ≤ shaftTorque) &&
+  decide (0 ≤ spec.pCoreLoss) &&
+  decide (cuSlope < spec.gThCooler) &&
+  decide (spec.tCoolantMilliC ≤ spec.tWindingMilliC) &&
+  decide (spec.tWindingMilliC ≤ spec.maxClassHInsulationMilliC)
+
+/-- **Motor-Inverter-Cooler Co-Design Soundness Theorem (`driveTrainCoDesign_sound`)**:
+Whenever `checkDriveTrainCoDesign spec = true`, all coupled electromagnetic, power-electronic,
+PWM modulated AC voltage, gate-interlock, and electro-thermal contraction invariants hold simultaneously. -/
+theorem driveTrainCoDesign_sound
+    (spec : CoupledDriveTrainSpec)
+    (hOk : checkDriveTrainCoDesign spec = true) :
+    (0 ≤ spec.modulationPermille ∧ spec.modulationPermille ≤ 1000) ∧
+    evalTurnOffPeakVoltageV spec.vDcBusV spec.lBusNh spec.diDtAmpPerNs ≤ spec.vDssRatedV ∧
+    spec.turnOffMaxNs < spec.deadTimeNs + spec.turnOnMinNs ∧
+    evalSicInverterTotalLoss spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV ≤
+      spec.maxInverterLossBudget ∧
+    spec.minShaftTorqueScaled ≤
+      evalIpmTorqueScaled
+        { polePairs := spec.polePairs, psiPmMilliWb := spec.psiPmMilliWb,
+          ldMicroH := spec.ldMicroH, lqMicroH := spec.lqMicroH }
+        spec.idAmp spec.iqAmp ∧
+    evalCopperJouleSlope spec.iRmsAmp spec.r0CuMohm spec.alphaCuPermille < spec.gThCooler ∧
+    spec.tWindingMilliC ≤ spec.maxClassHInsulationMilliC ∧
+    0 ≤ evalPwmModulatedVoltageScaled spec.modulationPermille spec.vDcBusV ∧
+    evalPwmModulatedVoltageScaled spec.modulationPermille spec.vDcBusV ≤ 1000 * spec.vDcBusV ∧
+    0 ≤ spec.pCoreLoss ∧
+    spec.tCoolantMilliC ≤ spec.tWindingMilliC := by
+  unfold checkDriveTrainCoDesign checkLinearPwmModulation at hOk
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
+  have hMod : 0 ≤ spec.modulationPermille ∧ spec.modulationPermille ≤ 1000 := hOk.1.1.1.1.1.1.1.1.1
+  have hVdc : 0 ≤ spec.vDcBusV := hOk.1.1.1.1.1.1.1.1.2
+  have hVpk := hOk.1.1.1.1.1.1.1.2
+  have hNoShoot : spec.turnOffMaxNs < spec.deadTimeNs + spec.turnOnMinNs :=
+    checkDeadTimeInterlock_prevents_shoot_through
+      spec.deadTimeNs spec.turnOffMaxNs spec.turnOnMinNs spec.safetyMarginNs hOk.1.1.1.1.1.1.2
+  have hLoss := hOk.1.1.1.1.1.2
+  have hTorque := hOk.1.1.1.1.2
+  have hCore := hOk.1.1.1.2
+  have hSlope := hOk.1.1.2
+  have hCool := hOk.1.2
+  have hClassH := hOk.2
+  have hPwmNonneg : 0 ≤ evalPwmModulatedVoltageScaled spec.modulationPermille spec.vDcBusV :=
+    int_mul_nonneg spec.modulationPermille spec.vDcBusV hMod.1 hVdc
+  have hPwmMax : evalPwmModulatedVoltageScaled spec.modulationPermille spec.vDcBusV ≤ 1000 * spec.vDcBusV :=
+    int_mul_le_mul_of_nonneg_right spec.modulationPermille 1000 spec.vDcBusV hMod.2 hVdc
+  exact ⟨hMod, hVpk, hNoShoot, hLoss, hTorque, hSlope, hClassH, hPwmNonneg, hPwmMax, hCore, hCool⟩
+
+/-- Golden coupled $800\,\text{V}_{\text{DC}}$ SiC Inverter + 4-Pole-Pair IPM Motor + Direct In-Slot
+Microchannel Cooler drive-train reference specification (`goldenCoupledDriveTrainSpec`). -/
+def goldenCoupledDriveTrainSpec : CoupledDriveTrainSpec where
+  driveName                 := "LC_Drives_MS350_SiC_800V_IPM_DriveTrain"
+  modulationPermille        := 866
+  vDcBusV                   := 800
+  lBusNh                    := 15
+  diDtAmpPerNs              := 8
+  vDssRatedV                := 1200
+  deadTimeNs                := 500
+  turnOffMaxNs              := 180
+  turnOnMinNs               := 40
+  safetyMarginNs            := 100
+  iRmsAmp                   := 200
+  rDsOnMohm                 := 5
+  kSwScaled                 := 1
+  fSwKhz                    := 20
+  maxInverterLossBudget     := 4000000
+  polePairs                 : Int := 4
+  psiPmMilliWb              := 180
+  ldMicroH                  := 150
+  lqMicroH                  := 380
+  idAmp                     := -100
+  iqAmp                     := 250
+  minShaftTorqueScaled      := 20000000
+  pCoreLoss                 := 800
+  r0CuMohm                  := 12
+  alphaCuPermille           := 4
+  gThCooler                 := 2500000
+  tCoolantMilliC            := 50000
+  tWindingMilliC            := 122000
+  maxClassHInsulationMilliC := 180000
+
+/-- Theorem (`golden_coupled_drive_train_verified`):
+Kernel-checked verification of `goldenCoupledDriveTrainSpec`. -/
+theorem golden_coupled_drive_train_verified :
+    checkDriveTrainCoDesign goldenCoupledDriveTrainSpec = true := by
   decide +kernel
 
 end Obend.Hardware.PowerElectronics

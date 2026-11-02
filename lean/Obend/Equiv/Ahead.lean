@@ -219,5 +219,96 @@ theorem ahead_mixBody {l l' u u' : Term} (hl : Ahead l l') (hu : Ahead u u') :
   .lam (.lam (.app (.app (ahead_rename hu _) (.bound 1))
     (.app (.app (ahead_rename hl _) (.bound 1)) (.bound 0))))
 
+/-! ## Quantitative Sharing vs. Duplicated Evaluation (`λ x => x + x`) -/
+
+/-- Step-counted reference reduction: `t` reduces to `t'` in `k` steps. -/
+inductive StepsCount : Term → Term → Nat → Prop where
+  | refl (t : Term) : StepsCount t t 0
+  | next {a b c : Term} {k : Nat} : Step a b → StepsCount b c k → StepsCount a c (k + 1)
+
+theorem StepsCount.toSteps {a b : Term} {k : Nat} (h : StepsCount a b k) : Steps a b := by
+  induction h with
+  | refl t => exact .refl t
+  | next s _ ih => exact .next s ih
+
+theorem StepsCount.one {a b : Term} (s : Step a b) : StepsCount a b 1 :=
+  .next s (.refl b)
+
+theorem StepsCount.trans {a b c : Term} {k1 k2 : Nat}
+    (h1 : StepsCount a b k1) (h2 : StepsCount b c k2) : StepsCount a c (k1 + k2) := by
+  induction h1 with
+  | refl => simpa using h2
+  | @next x y _ j s _ ih =>
+    rw [show j + 1 + k2 = (j + k2) + 1 by omega]
+    exact .next s (ih h2)
+
+theorem StepsCount.congr {a b : Term} {k : Nat} (frame : Term → Term)
+    (lift : ∀ {x y : Term}, Step x y → Step (frame x) (frame y)) (h : StepsCount a b k) :
+    StepsCount (frame a) (frame b) k := by
+  induction h with
+  | refl t => exact .refl (frame t)
+  | next s _ ih => exact .next (lift s) ih
+
+theorem StepsCount.binaryLeft {l l' : Term} {k : Nat} (op : Primitive) (r : Term)
+    (h : StepsCount l l' k) : StepsCount (.binary op l r) (.binary op l' r) k :=
+  StepsCount.congr (fun x => .binary op x r) (fun s => .binaryLeft op r s) h
+
+theorem StepsCount.binaryRight {r r' : Term} {k : Nat} (op : Primitive) {l : Term}
+    (v : Value l) (h : StepsCount r r' k) : StepsCount (.binary op l r) (.binary op l r') k :=
+  StepsCount.congr (fun x => .binary op l x) (fun s => .binaryRight op l v s) h
+
+theorem Ahead.ofStepsCount {t t' : Term} {k : Nat} (h : StepsCount t t' k) : Ahead t t' :=
+  Ahead.ofStepsRefl h.toSteps
+
+/-- Duplicated-variable function `λ x => x + x`. -/
+def dupAdd : Term := .lam (.binary .add (.bound 0) (.bound 0))
+
+theorem instantiate_dupAdd_body (a : Term) :
+    instantiate (.binary .add (.bound 0) (.bound 0)) a = .binary .add a a := by
+  simp [instantiate, Term.substitute]
+
+/-- Unshared evaluation: substituting `a` into `λ x => x + x` before reducing `a` duplicates
+`a` into `a + a`, requiring `2 * k + 2` steps when `a` reduces to `.nat n` in `k` steps. -/
+theorem dupAdd_unshared_steps {a : Term} {n k : Nat} (ha : StepsCount a (.nat n) k) :
+    StepsCount (.app dupAdd a) (.nat (n + n)) (2 * k + 2) := by
+  have hbeta : StepsCount (.app dupAdd a) (.binary .add a a) 1 := by
+    have := StepsCount.one (Step.beta (.binary .add (.bound 0) (.bound 0)) a)
+    rwa [instantiate_dupAdd_body] at this
+  have hleft : StepsCount (.binary .add a a) (.binary .add (.nat n) a) k :=
+    StepsCount.binaryLeft .add a ha
+  have hright : StepsCount (.binary .add (.nat n) a) (.binary .add (.nat n) (.nat n)) k :=
+    StepsCount.binaryRight .add (.natural n) ha
+  have hadd : StepsCount (.binary .add (.nat n) (.nat n)) (.nat (n + n)) 1 :=
+    StepsCount.one (.primitive .add (.nat n) (.nat n) (.nat (n + n)) (.natural n) (.natural n) rfl)
+  have htot := ((hbeta.trans hleft).trans hright).trans hadd
+  have heq : 1 + k + k + 1 = 2 * k + 2 := by omega
+  rwa [heq] at htot
+
+/-- Shared evaluation via `Ahead`: once `a` is reduced ahead of time to `.nat n` (in `k` steps),
+applying `dupAdd` to the shared value `.nat n` takes only `2` steps (`k + 2` total vs `2 * k + 2`). -/
+theorem dupAdd_shared_value_steps (n : Nat) :
+    StepsCount (.app dupAdd (.nat n)) (.nat (n + n)) 2 := by
+  simpa using dupAdd_unshared_steps (StepsCount.refl (.nat n))
+
+/-- `Ahead` relates `(.app dupAdd a)` to its argument-shared form `(.app dupAdd (.nat n))` and
+to the final value `.nat (n + n)`. -/
+theorem ahead_dupAdd_sharing {a : Term} {n k : Nat} (ha : StepsCount a (.nat n) k) :
+    Ahead (.app dupAdd a) (.app dupAdd (.nat n)) ∧ Ahead (.app dupAdd a) (.nat (n + n)) :=
+  ⟨.app (Ahead.refl dupAdd) (Ahead.ofStepsCount ha),
+   Ahead.ofStepsCount (dupAdd_unshared_steps ha)⟩
+
+/-- Quantitative cost comparison: sharing `a`'s reduction (`k` steps once + `2` steps for `dupAdd`)
+costs `k + 2`, which is at most the duplicated evaluation cost `2 * k + 2`, and strictly less
+whenever `0 < k`. -/
+theorem ahead_sharing_saves_duplicate_cost {a : Term} {n k : Nat} (ha : StepsCount a (.nat n) k) :
+    StepsCount a (.nat n) k ∧
+      StepsCount (.app dupAdd (.nat n)) (.nat (n + n)) 2 ∧
+      StepsCount (.app dupAdd a) (.nat (n + n)) (2 * k + 2) ∧
+      Ahead (.app dupAdd a) (.app dupAdd (.nat n)) ∧
+      k + 2 ≤ 2 * k + 2 ∧
+      (0 < k → k + 2 < 2 * k + 2) :=
+  ⟨ha, dupAdd_shared_value_steps n, dupAdd_unshared_steps ha,
+   (ahead_dupAdd_sharing ha).1, by omega, fun hk => by omega⟩
+
 end Obend.Equiv
 end

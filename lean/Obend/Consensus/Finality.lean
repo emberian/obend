@@ -292,4 +292,92 @@ theorem advanceGate_advances (gate : FinalityGate) (ev : PromotionEvent) (next :
     cases currentTier <;> cases ev <;> simp [advanceGate] at hadv
     all_goals (obtain rfl := hadv; dsimp only [FinalityGate.currentTier]; decide)
 
+/-! ## §6. Quorum-Signer & State-Root Bound Finality Promotion -/
+
+/-- Promotion events binding non-empty quorum signer sets and canonical state roots. -/
+inductive QuorumBoundPromotionEvent where
+  | attestTurn (signer : Nat) (stateRoot : Nat)
+  | formQC (qcDigest : Nat) (signers : List Nat) (stateRoot : Nat)
+  | collapseRoot (merkleRoot : Nat) (signers : List Nat)
+  deriving DecidableEq, BEq, Repr, Inhabited
+
+/-- Finality gate binding `FinalityTier` promotion to non-empty quorum signer sets
+    (`2 * faults + 1 ≤ qcSigners.length`) and a non-zero state root (`stateRoot ≠ 0`). -/
+structure QuorumBoundFinalityGate where
+  turnId        : Nat
+  currentTier   : FinalityTier
+  faults        : Nat
+  stateRoot     : Nat
+  attestSigners : List Nat
+  qcSigners     : List Nat
+  qcDigest      : Option Nat
+  merkleRoot    : Option Nat
+  deriving DecidableEq, Inhabited
+
+/-- Advance a `QuorumBoundFinalityGate` only when the quorum signer set is non-empty,
+    meets the `2 * faults + 1` threshold, and binds the gate's non-zero `stateRoot`. -/
+def advanceQuorumBoundGate
+    (gate : QuorumBoundFinalityGate)
+    (ev : QuorumBoundPromotionEvent) : Option QuorumBoundFinalityGate :=
+  match gate.currentTier, ev with
+  | .speculative, .attestTurn signer root =>
+    if decide (root = gate.stateRoot ∧ root ≠ 0) then
+      some { gate with currentTier := .attested, attestSigners := [signer] }
+    else
+      none
+  | .attested, .formQC qcDigest signers root =>
+    if decide (signers ≠ [] ∧ 2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
+      some
+        { gate with
+          currentTier := .quorum_final
+          qcSigners   := signers
+          qcDigest    := some qcDigest }
+    else
+      none
+  | .quorum_final, .collapseRoot root signers =>
+    if decide (signers ≠ [] ∧ 2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
+      some
+        { gate with
+          currentTier := .collapsed
+          qcSigners   := signers
+          merkleRoot  := some root }
+    else
+      none
+  | _, _ => none
+
+/-- Promoting to `.quorum_final` via `advanceQuorumBoundGate` guarantees a non-empty quorum
+    (`2 * gate.faults + 1 ≤ next.qcSigners.length`) and a non-zero state root. -/
+theorem advanceQuorumBoundGate_formQC_sound
+    (gate next : QuorumBoundFinalityGate)
+    (qcDigest : Nat) (signers : List Nat) (root : Nat)
+    (h : advanceQuorumBoundGate gate (.formQC qcDigest signers root) = some next) :
+    next.currentTier = .quorum_final ∧
+    next.qcSigners = signers ∧
+    next.qcSigners ≠ [] ∧
+    2 * gate.faults + 1 ≤ next.qcSigners.length ∧
+    root = gate.stateRoot ∧
+    next.stateRoot ≠ 0 := by
+  cases h_tier : gate.currentTier <;>
+    simp [advanceQuorumBoundGate, h_tier] at h
+  rcases h with ⟨⟨h_ne, h_quorum, h_root, h_nz⟩, rfl⟩
+  refine ⟨rfl, rfl, h_ne, h_quorum, h_root, ?_⟩
+  simpa [h_root] using h_nz
+
+/-- Attempting to form a QC with an empty signer set is strictly refused. -/
+theorem advanceQuorumBoundGate_refuses_empty_signers
+    (gate : QuorumBoundFinalityGate) (qcDigest root : Nat) :
+    advanceQuorumBoundGate gate (.formQC qcDigest [] root) = none := by
+  cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier]
+
+/-- Attempting to form a QC with a mismatched state root (`root ≠ gate.stateRoot`) is strictly refused. -/
+theorem advanceQuorumBoundGate_refuses_mismatched_root
+    (gate : QuorumBoundFinalityGate) (qcDigest : Nat) (signers : List Nat) (root : Nat)
+    (h_mismatch : root ≠ gate.stateRoot) :
+    advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
+  cases h_tier : gate.currentTier
+  · simp [advanceQuorumBoundGate, h_tier]
+  · simp [advanceQuorumBoundGate, h_tier, h_mismatch]
+  · simp [advanceQuorumBoundGate, h_tier]
+  · simp [advanceQuorumBoundGate, h_tier]
+
 end Obend.Consensus.Finality

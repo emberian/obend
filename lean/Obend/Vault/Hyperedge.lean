@@ -15,6 +15,7 @@ Remediated for Milestone 2 Iteration 2:
 public import Obend.Law.Contract
 public import Obend.Core.Data
 public import Obend.Core.Term
+public import Obend.Judge.Class
 
 @[expose] public section
 
@@ -179,13 +180,24 @@ def legTurnId (d : CellDelta) : ByteArray :=
   | some (.byLoweredDecider _ _ r) => r
   | _ => ByteArray.empty
 
+/-- External judge witness cited by a `VaultTurn`. -/
+structure TurnWitness where
+  formatName : String
+  version : String
+  grade : Nat
+  objBytes : String
+  certBytes : String
+  deriving Repr, DecidableEq
+
 /-- Multi-cell wide-pullback turn structure.
-    Remediated: includes `nodup_cells` ensuring uniqueness of mutated cells. -/
+    Remediated: includes `nodup_cells` ensuring uniqueness of mutated cells
+    and `witnesses` for external `Judge.Format` certificates. -/
 structure VaultTurn where
   turnId : ByteArray
   readPins : Footprint
   writeCells : List CellDelta
   occasion : Data
+  witnesses : List TurnWitness := []
   agree : ∀ d ∈ writeCells, legTurnId d = turnId
   balanced : ∀ (asset : String), sumAssetDelta writeCells asset = 0
   nodup_cells : (writeCells.map CellDelta.cell).Nodup := by decide
@@ -488,4 +500,148 @@ def VaultTurn.relaw_sound (C : CellContract) (newLaw : Term) (h_nar : Narrows ne
     CellContract :=
   cellContract_relaw_sound C newLaw h_nar
 
+/-! ## 7. State-Derived Balanced Deltas & Total State Balance Conservation (`WS-F`) -/
+
+/-- Canonical cell identifier alias on `CellDelta`. -/
+def CellDelta.cellId (d : CellDelta) : String :=
+  d.cell
+
+/-- Extract an integer balance field `balanceField` from a cell state `Data`. -/
+def extractFieldInt (balanceField : String) : Data → Int
+  | .record fs =>
+    match fs.find? (·.1 == balanceField) with
+    | some (_, .natural n) => (n : Int)
+    | some (_, .variant "neg" (.natural n)) => -(n : Int)
+    | some (_, .variant "pos" (.natural n)) => (n : Int)
+    | _ => 0
+  | _ => 0
+
+/-- Net sum of `d.halfEdges` entries for `balanceField` (falling back to entries keyed by `d.cellId`
+    when no entry is explicitly keyed by `balanceField`). -/
+def CellDelta.netHalfEdgeSum (d : CellDelta) (balanceField : String) : Int :=
+  let byAsset := d.halfEdges.filter (fun (k, _) => k == balanceField)
+  let matching := if byAsset.isEmpty then d.halfEdges.filter (fun (k, _) => k == d.cellId) else byAsset
+  matching.foldl (fun acc (_, v) => acc + v) 0
+
+/-- Verify that the net sum of `d.halfEdges` (and `deltaAsset d balanceField`) for `d.cellId`
+    equals `extractFieldInt balanceField d.postState - extractFieldInt balanceField d.preState`. -/
+def CellDelta.accountingConsistent (d : CellDelta) (balanceField : String) : Bool :=
+  let stateDiff := extractFieldInt balanceField d.postState - extractFieldInt balanceField d.preState
+  decide (deltaAsset d balanceField = stateDiff) &&
+  decide (d.netHalfEdgeSum balanceField = stateDiff)
+
+/-- Total pre-state balance across a list of `CellDelta`s for `balanceField`. -/
+def sumPreStateBalance (cells : List CellDelta) (balanceField : String) : Int :=
+  (cells.map (fun d => extractFieldInt balanceField d.preState)).foldl (· + ·) 0
+
+/-- Total post-state balance across a list of `CellDelta`s for `balanceField`. -/
+def sumPostStateBalance (cells : List CellDelta) (balanceField : String) : Int :=
+  (cells.map (fun d => extractFieldInt balanceField d.postState)).foldl (· + ·) 0
+
+theorem foldl_add_shift (xs : List Int) (init : Int) :
+    xs.foldl (· + ·) init = init + xs.foldl (· + ·) 0 := by
+  induction xs generalizing init with
+  | nil => simp
+  | cons x rest ih =>
+    simp only [List.foldl]
+    rw [ih (init + x), ih (0 + x)]
+    omega
+
+theorem sumAssetDelta_eq_post_sub_pre (cells : List CellDelta) (balanceField : String)
+    (h_acc : ∀ d ∈ cells, d.accountingConsistent balanceField = true) :
+    sumAssetDelta cells balanceField =
+      sumPostStateBalance cells balanceField - sumPreStateBalance cells balanceField := by
+  induction cells with
+  | nil => rfl
+  | cons d rest ih =>
+    have hd : d.accountingConsistent balanceField = true := h_acc d (List.Mem.head rest)
+    have hrest : ∀ x ∈ rest, x.accountingConsistent balanceField = true :=
+      fun x hx => h_acc x (List.Mem.tail d hx)
+    unfold CellDelta.accountingConsistent at hd
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hd
+    unfold sumAssetDelta sumPostStateBalance sumPreStateBalance at ih ⊢
+    simp only [List.map, List.foldl]
+    rw [foldl_add_shift (rest.map (fun x => deltaAsset x balanceField)) (0 + deltaAsset d balanceField)]
+    rw [foldl_add_shift (rest.map (fun x => extractFieldInt balanceField x.postState))
+        (0 + extractFieldInt balanceField d.postState)]
+    rw [foldl_add_shift (rest.map (fun x => extractFieldInt balanceField x.preState))
+        (0 + extractFieldInt balanceField d.preState)]
+    have ih' := ih hrest
+    omega
+
+/-- **State-Derived Total Balance Conservation Theorem (`turn_conserves_total_state_balance`)**:
+    For any `VaultTurn` whose deltas are `accountingConsistent` for `balanceField`
+    (and whose hyperedge satisfies `turn.balanced`), the total post-state balance
+    `sumPostStateBalance turn.writeCells balanceField` across all touched cells
+    equals the total pre-state balance `sumPreStateBalance turn.writeCells balanceField`. -/
+theorem turn_conserves_total_state_balance (turn : VaultTurn) (balanceField : String)
+    (h_acc : ∀ d ∈ turn.writeCells, d.accountingConsistent balanceField = true) :
+    sumPostStateBalance turn.writeCells balanceField =
+      sumPreStateBalance turn.writeCells balanceField := by
+  have h_diff := sumAssetDelta_eq_post_sub_pre turn.writeCells balanceField h_acc
+  have h_bal := turn.balanced balanceField
+  omega
+
+/-! ## 8. Judge-Certified `VaultTurn` Witnesses & `no_toctou_with_witnesses` (`WS-F`) -/
+
+/-- Look up a registered `Obend.Judge.Format` by `(formatName, version)`. -/
+def findJudgeFormat : List Obend.Judge.Format → String → String → Option Obend.Judge.Format
+  | [], _, _ => none
+  | F :: rest, name, ver =>
+    if F.name == name && F.version == ver then some F
+    else findJudgeFormat rest name ver
+
+/-- Executable check that a single `TurnWitness` is accepted by its registered `Obend.Judge.Format`. -/
+def checkTurnWitness (formats : List Obend.Judge.Format) (w : TurnWitness) : Bool :=
+  match findJudgeFormat formats w.formatName w.version with
+  | some F =>
+    match F.checkBytes w.grade w.objBytes w.certBytes with
+    | .ok => true
+    | _ => false
+  | none => false
+
+/-- Turn validity at store `s` requiring every cited `TurnWitness` in `turn.witnesses`
+    to pass its registered `Obend.Judge.Format.checkBytes`. -/
+def ValidAtWithWitnesses (s : VaultStore) (turn : VaultTurn)
+    (contracts : String → Option CellContract) (formats : List Obend.Judge.Format) : Prop :=
+  ValidAt s turn contracts ∧
+  (∀ w ∈ turn.witnesses, ∃ F,
+    findJudgeFormat formats w.formatName w.version = some F ∧
+    F.checkBytes w.grade w.objBytes w.certBytes = .ok)
+
+/-- Soundness of witness verification in `ValidAtWithWitnesses`: every cited witness
+    decodes to a valid `(o, c)` pair satisfying `F.judge.Meaning o c`. -/
+theorem ValidAtWithWitnesses.witness_sound {s : VaultStore} {turn : VaultTurn}
+    {contracts : String → Option CellContract} {formats : List Obend.Judge.Format}
+    (h_valid : ValidAtWithWitnesses s turn contracts formats)
+    {w : TurnWitness} (hw : w ∈ turn.witnesses) :
+    ∃ F, findJudgeFormat formats w.formatName w.version = some F ∧
+      ∃ (o : F.Obj) (c : F.Cert),
+        F.decodeObj w.objBytes = .ok o ∧
+        F.decodeCert w.certBytes = .ok c ∧
+        F.judge.Meaning o c := by
+  obtain ⟨_, h_wit⟩ := h_valid
+  obtain ⟨F, hF, hchk⟩ := h_wit w hw
+  exact ⟨F, hF, F.checkBytes_sound hchk⟩
+
+/-- **TOCTOU-Free Footprint Pin Preservation with Judge Witnesses (`no_toctou_with_witnesses`)**:
+    If a turn's accessed cells are covered by footprint pins that hold at both
+    authored store `s₀` and admission store `s`:
+    1. `ValidAtWithWitnesses` at `s` is logically equivalent to `ValidAtWithWitnesses` at `s₀`.
+    2. Written cells receive identical post-states regardless of whether executed on `s₀` or `s`.
+    3. Unwritten cells strictly preserve their store value from `s`. -/
+theorem no_toctou_with_witnesses (s₀ s : VaultStore) (turn : VaultTurn)
+    (contracts : String → Option CellContract) (formats : List Obend.Judge.Format)
+    (h_cover : ∀ d ∈ turn.writeCells, ∃ p ∈ turn.readPins, p.cell = d.cell ∧ p.observed = some d.preState)
+    (h_fp_s0 : Footprint.Holds s₀ turn.readPins)
+    (h_fp_s : Footprint.Holds s turn.readPins) :
+    (ValidAtWithWitnesses s₀ turn contracts formats ↔ ValidAtWithWitnesses s turn contracts formats) ∧
+    (∀ c, applyTurn s turn c =
+      if c ∈ turn.writeFootprint then applyTurn s₀ turn c else s c) := by
+  obtain ⟨h_valid_iff, h_apply⟩ := no_toctou s₀ s turn contracts h_cover h_fp_s0 h_fp_s
+  refine ⟨?_, h_apply⟩
+  unfold ValidAtWithWitnesses
+  rw [h_valid_iff]
+
 end Obend.Vault
+

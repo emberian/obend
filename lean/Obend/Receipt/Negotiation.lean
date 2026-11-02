@@ -496,5 +496,162 @@ theorem template_refused :
 theorem template_untyped : ¬ env.Typed [] template :=
   (Obend.Judge.Instances.envelope env).refuted template_refused rfl ()
 
+/-! ## Pareto-Optimal / Minimum-Cost Cross-World Judge Negotiation (`selectMinCostCommonJudge`) -/
+
+/-- A candidate judge format in cross-world receipt negotiation, carrying its format identifier,
+version string, trust base (`Obend.Judge.TrustBase`), and verification weight/cost (`costWeight`). -/
+structure NegotiatedJudgeFormat where
+  format : String
+  version : String := "1"
+  base : Obend.Judge.TrustBase := .kernel
+  costWeight : Nat
+  deriving @[expose] DecidableEq, Repr
+
+/-- Select the lowest-weight judge format from a list of candidates (breaking ties by keeping the
+earlier candidate). -/
+@[expose] def minCostJudgeFormat : List NegotiatedJudgeFormat → Option NegotiatedJudgeFormat
+  | [] => none
+  | x :: rest =>
+    match minCostJudgeFormat rest with
+    | none => some x
+    | some bestTail =>
+      if x.costWeight ≤ bestTail.costWeight then some x else some bestTail
+
+/-- `minCostJudgeFormat` is `none` only on the empty list. -/
+theorem minCostJudgeFormat_eq_none_iff (l : List NegotiatedJudgeFormat) :
+    minCostJudgeFormat l = none ↔ l = [] := by
+  cases l with
+  | nil => simp [minCostJudgeFormat]
+  | cons x rest =>
+    simp only [minCostJudgeFormat, List.cons_ne_nil, iff_false]
+    cases minCostJudgeFormat rest with
+    | none => simp
+    | some b =>
+      by_cases hLe : x.costWeight ≤ b.costWeight <;> simp [hLe]
+
+/-- Every format selected by `minCostJudgeFormat l` is a member of `l`. -/
+theorem minCostJudgeFormat_mem {l : List NegotiatedJudgeFormat} {chosen : NegotiatedJudgeFormat}
+    (h : minCostJudgeFormat l = some chosen) : chosen ∈ l := by
+  induction l generalizing chosen with
+  | nil => cases h
+  | cons x rest ih =>
+    simp only [minCostJudgeFormat] at h
+    cases hTail : minCostJudgeFormat rest with
+    | none =>
+      rw [hTail] at h
+      cases h
+      exact List.mem_cons_self
+    | some bestTail =>
+      rw [hTail] at h
+      by_cases hLe : x.costWeight ≤ bestTail.costWeight
+      · simp only [hLe, ↓reduceIte, Option.some.injEq] at h
+        subst h
+        exact List.mem_cons_self
+      · simp only [hLe, ↓reduceIte, Option.some.injEq] at h
+        subst h
+        exact List.mem_cons_of_mem x (ih hTail)
+
+/-- The format selected by `minCostJudgeFormat l` has `costWeight ≤ jf.costWeight` for all `jf ∈ l`. -/
+theorem minCostJudgeFormat_minimal {l : List NegotiatedJudgeFormat} {chosen : NegotiatedJudgeFormat}
+    (h : minCostJudgeFormat l = some chosen) :
+    ∀ jf ∈ l, chosen.costWeight ≤ jf.costWeight := by
+  induction l generalizing chosen with
+  | nil => cases h
+  | cons x rest ih =>
+    simp only [minCostJudgeFormat] at h
+    cases hTail : minCostJudgeFormat rest with
+    | none =>
+      rw [hTail] at h
+      cases h
+      have hNil : rest = [] := (minCostJudgeFormat_eq_none_iff rest).1 hTail
+      subst hNil
+      intro jf hjf
+      simp only [List.mem_singleton] at hjf
+      subst hjf
+      exact Nat.le_refl _
+    | some bestTail =>
+      rw [hTail] at h
+      have ihTail := ih hTail
+      by_cases hLe : x.costWeight ≤ bestTail.costWeight
+      · simp only [hLe, ↓reduceIte, Option.some.injEq] at h
+        subst h
+        intro jf hjf
+        rcases List.mem_cons.1 hjf with rfl | hMem
+        · exact Nat.le_refl _
+        · exact Nat.le_trans hLe (ihTail jf hMem)
+      · simp only [hLe, ↓reduceIte, Option.some.injEq] at h
+        subst h
+        intro jf hjf
+        rcases List.mem_cons.1 hjf with rfl | hMem
+        · omega
+        · exact ihTail jf hMem
+
+/-- **Pareto-Optimal / Minimum-Cost Judge Negotiation (`selectMinCostCommonJudge`)**:
+selects the lowest-weight common judge format supported by both `producerSupported` and
+`verifierSupported`. -/
+@[expose] def selectMinCostCommonJudge
+    (producerSupported verifierSupported : List NegotiatedJudgeFormat) :
+    Option NegotiatedJudgeFormat :=
+  minCostJudgeFormat (producerSupported.filter fun jf => verifierSupported.contains jf)
+
+/-- **Mutual Support (`selectMinCostCommonJudge_supported_by_both`)**:
+Whenever `selectMinCostCommonJudge producerSupported verifierSupported = some chosen`, `chosen`
+is supported by both the producer (`chosen ∈ producerSupported`) and the verifier
+(`chosen ∈ verifierSupported`). -/
+theorem selectMinCostCommonJudge_supported_by_both
+    {producerSupported verifierSupported : List NegotiatedJudgeFormat}
+    {chosen : NegotiatedJudgeFormat}
+    (h : selectMinCostCommonJudge producerSupported verifierSupported = some chosen) :
+    chosen ∈ producerSupported ∧ chosen ∈ verifierSupported := by
+  have hMem := minCostJudgeFormat_mem h
+  simp only [List.mem_filter, List.contains_iff_mem] at hMem
+  exact hMem
+
+/-- **Cost Minimality (`selectMinCostCommonJudge_minimal`)**:
+Whenever `selectMinCostCommonJudge producerSupported verifierSupported = some chosen`, `chosen`
+has `costWeight ≤ jf.costWeight` for every common judge format `jf` supported by both producer and
+verifier. -/
+theorem selectMinCostCommonJudge_minimal
+    {producerSupported verifierSupported : List NegotiatedJudgeFormat}
+    {chosen : NegotiatedJudgeFormat}
+    (h : selectMinCostCommonJudge producerSupported verifierSupported = some chosen) :
+    ∀ jf, jf ∈ producerSupported → jf ∈ verifierSupported →
+      chosen.costWeight ≤ jf.costWeight := by
+  intro jf hProd hVer
+  apply minCostJudgeFormat_minimal h jf
+  simp only [List.mem_filter, List.contains_iff_mem]
+  exact ⟨hProd, hVer⟩
+
+/-- `selectMinCostCommonJudge` returns `none` if and only if `producerSupported` and
+`verifierSupported` share no common judge format. -/
+theorem selectMinCostCommonJudge_eq_none_iff
+    (producerSupported verifierSupported : List NegotiatedJudgeFormat) :
+    selectMinCostCommonJudge producerSupported verifierSupported = none ↔
+      ∀ jf ∈ producerSupported, jf ∉ verifierSupported := by
+  simp only [selectMinCostCommonJudge, minCostJudgeFormat_eq_none_iff,
+    List.filter_eq_nil_iff, List.contains_iff_mem]
+
+/-- **Completeness of Judge Negotiation (`selectMinCostCommonJudge_complete`)**:
+Whenever at least one common judge format `jf` is supported by both producer and verifier,
+`selectMinCostCommonJudge` succeeds with `some chosen` supported by both and with
+`chosen.costWeight ≤ jf.costWeight`. -/
+theorem selectMinCostCommonJudge_complete
+    {producerSupported verifierSupported : List NegotiatedJudgeFormat}
+    {jf : NegotiatedJudgeFormat}
+    (hProd : jf ∈ producerSupported) (hVer : jf ∈ verifierSupported) :
+    ∃ chosen,
+      selectMinCostCommonJudge producerSupported verifierSupported = some chosen ∧
+      chosen ∈ producerSupported ∧
+      chosen ∈ verifierSupported ∧
+      chosen.costWeight ≤ jf.costWeight := by
+  cases hSel : selectMinCostCommonJudge producerSupported verifierSupported with
+  | none =>
+    exfalso
+    exact (selectMinCostCommonJudge_eq_none_iff producerSupported verifierSupported).1 hSel jf hProd hVer
+  | some chosen =>
+    obtain ⟨hP, hV⟩ := selectMinCostCommonJudge_supported_by_both hSel
+    exact ⟨chosen, rfl, hP, hV, selectMinCostCommonJudge_minimal hSel jf hProd hVer⟩
+
 end Obend.Receipt.Negotiation
 end
+

@@ -83,6 +83,152 @@ theorem not_sound_sticky : ¬ SelectionSound (sticky : Advance Nat Member Member
 
 end
 
+/-! ## Cost-Ordered / Priority-Monotone Selection Policy (`prioritySelect`, `priorityAdvance`) -/
+
+section
+variable {Fact Cand : Type}
+
+/-- Pick the candidate with minimum `cost` from a non-empty list, preserving first-seen on ties. -/
+@[expose] def pickMinCost (cost : Cand → Nat) (best : Cand) : List Cand → Cand
+  | [] => best
+  | c :: cs =>
+    if cost c < cost best then pickMinCost cost c cs
+    else pickMinCost cost best cs
+
+theorem pickMinCost_mem (cost : Cand → Nat) :
+    ∀ (cs : List Cand) (best : Cand), pickMinCost cost best cs ∈ best :: cs
+  | [], best => List.Mem.head []
+  | c :: cs, best => by
+    simp only [pickMinCost]
+    split
+    · exact List.Mem.tail best (pickMinCost_mem cost cs c)
+    · rcases List.mem_cons.mp (pickMinCost_mem cost cs best) with heq | hmem
+      · rw [heq]; exact List.Mem.head (c :: cs)
+      · exact List.Mem.tail best (List.Mem.tail c hmem)
+
+theorem pickMinCost_le (cost : Cand → Nat) :
+    ∀ (cs : List Cand) (best : Cand) (x : Cand),
+      x ∈ best :: cs → cost (pickMinCost cost best cs) ≤ cost x
+  | [], best, x, hx => by
+    rcases List.mem_singleton.mp hx with rfl
+    exact Nat.le_refl _
+  | c :: cs, best, x, hx => by
+    simp only [pickMinCost]
+    split
+    · rename_i hlt
+      rcases List.mem_cons.mp hx with heq | hx_tl
+      · rw [heq]
+        have hle_c := pickMinCost_le cost cs c c (List.Mem.head cs)
+        omega
+      · exact pickMinCost_le cost cs c x hx_tl
+    · rename_i hge
+      rcases List.mem_cons.mp hx with heq | hx_tl
+      · rw [heq]
+        exact pickMinCost_le cost cs best best (List.Mem.head cs)
+      · rcases List.mem_cons.mp hx_tl with heq2 | hx_rest
+        · rw [heq2]
+          have hle_best := pickMinCost_le cost cs best best (List.Mem.head cs)
+          omega
+        · exact pickMinCost_le cost cs best x (List.Mem.tail best hx_rest)
+
+/-- Cost-ordered selection at a view: selects the usable candidate from `order` that minimizes
+    `cost`, or refuses naming every candidate's dead supports if none is usable. -/
+@[expose] def prioritySelect (S : Slot Fact Cand) (holds : Fact → Bool) (order : List Cand)
+    (cost : Cand → Nat := fun _ => 0) : Except (Refusal Fact Cand) Cand :=
+  match S.alternatives holds order with
+  | [] => .error (order.map fun c => (c, S.dead holds c))
+  | c :: cs => .ok (pickMinCost cost c cs)
+
+theorem prioritySelect_ok {S : Slot Fact Cand} {holds : Fact → Bool} {order : List Cand}
+    {cost : Cand → Nat} {c : Cand}
+    (h : prioritySelect S holds order cost = .ok c) :
+    c ∈ order ∧ S.usable holds c = true ∧ ∀ u ∈ S.alternatives holds order, cost c ≤ cost u := by
+  unfold prioritySelect at h
+  cases ha : S.alternatives holds order with
+  | nil => rw [ha] at h; cases h
+  | cons head tail =>
+    rw [ha] at h
+    injection h with hc_eq
+    subst hc_eq
+    have hmem_alt : pickMinCost cost head tail ∈ S.alternatives holds order := by
+      rw [ha]
+      exact pickMinCost_mem cost tail head
+    have hfilt : pickMinCost cost head tail ∈ order.filter (S.usable holds) := hmem_alt
+    rw [List.mem_filter] at hfilt
+    refine ⟨hfilt.1, hfilt.2, ?_⟩
+    intro u hu
+    exact pickMinCost_le cost tail head u hu
+
+end
+
+section
+variable {V Fact Cand : Type} [World V Fact]
+
+/-- Priority-monotone stored-selection advance policy:
+    - If a stored selection `s` is usable at `v`, keeps `s` unless a usable candidate in `order`
+      has strictly lower `cost` (`cost best < cost s`), in which case it upgrades to `best`.
+    - If `stored = none` or `s` is no longer usable at `v`, selects the minimum-cost usable
+      candidate via `prioritySelect`. -/
+@[expose] def priorityAdvance (cost : Cand → Nat := fun _ => 0) : Advance V Fact Cand where
+  advance S v order stored :=
+    match stored with
+    | some s =>
+      if S.usable (holdsAt v) s then
+        match prioritySelect S (holdsAt v) order cost with
+        | .ok best => if cost best < cost s then .ok best else .ok s
+        | .error _ => .ok s
+      else
+        prioritySelect S (holdsAt v) order cost
+    | none => prioritySelect S (holdsAt v) order cost
+
+/-- Soundness of `priorityAdvance`: every candidate selected by `priorityAdvance` is usable at `v`. -/
+theorem priorityAdvance_sound {cost : Cand → Nat} :
+    SelectionSound (priorityAdvance cost : Advance V Fact Cand) := by
+  intro S v order stored c h
+  unfold priorityAdvance at h
+  dsimp only at h
+  cases stored with
+  | none =>
+    exact (prioritySelect_ok h).2.1
+  | some s =>
+    by_cases hs : S.usable (holdsAt v) s = true
+    · simp only [hs, ↓reduceIte] at h
+      cases hp : prioritySelect S (holdsAt v) order cost with
+      | ok best =>
+        rw [hp] at h
+        dsimp only at h
+        split at h
+        · injection h with heq; subst heq; exact (prioritySelect_ok hp).2.1
+        · injection h with heq; subst heq; exact hs
+      | error _ =>
+        rw [hp] at h
+        injection h with heq; subst heq; exact hs
+    · simp only [hs, Bool.false_eq_true, ↓reduceIte] at h
+      exact (prioritySelect_ok h).2.1
+
+/-- Priority monotonicity: when `stored = some s` is usable at `v`, `priorityAdvance` never
+    increases the cost (`cost c ≤ cost s`). -/
+theorem priorityAdvance_monotone {cost : Cand → Nat} (S : Slot Fact Cand) (v : V)
+    (order : List Cand) (s c : Cand)
+    (hs : S.usable (holdsAt v) s = true)
+    (h : (priorityAdvance cost).advance S v order (some s) = .ok c) :
+    cost c ≤ cost s := by
+  unfold priorityAdvance at h
+  simp only [hs, ↓reduceIte] at h
+  cases hp : prioritySelect S (holdsAt v) order cost with
+  | ok best =>
+    rw [hp] at h
+    dsimp only at h
+    split at h
+    · rename_i hlt
+      injection h with heq; subst heq; omega
+    · injection h with heq; subst heq; exact Nat.le_refl _
+  | error _ =>
+    rw [hp] at h
+    injection h with heq; subst heq; exact Nat.le_refl _
+
+end
+
 end Obend.Slot
 
 end

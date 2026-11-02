@@ -377,4 +377,91 @@ instance : VerifiableRace IntervalQuery IntervalCertWrapper where
 
 end IntervalRace
 
+/-! ## §7. Weighted Trust-Graph Seed-Cut Sybil Bound (`sybilSeedCutBound`, `epistemic_sybil_bounded_by_seed_cut`) -/
+
+/-- Directed trust edge from `source` to `target` carrying `flow` (routed epistemic influence)
+    bounded by `capacity` (trust weight). -/
+structure TrustEdge where
+  source   : Nat
+  target   : Nat
+  flow     : Nat
+  capacity : Nat
+  deriving DecidableEq, BEq, Repr, Inhabited
+
+/-- Check whether `e` crosses the honest-to-Sybil seed cut (`!isSybil e.source && isSybil e.target`). -/
+def isSeedCutEdge (isSybil : Nat → Bool) (e : TrustEdge) : Bool :=
+  !(isSybil e.source) && isSybil e.target
+
+/-- Capacity of the honest-to-Sybil seed cut (`sybilSeedCutBound`):
+    total trust capacity of edges crossing from honest nodes into the Sybil region. -/
+def sybilSeedCutBound (isSybil : Nat → Bool) : List TrustEdge → Nat
+  | [] => 0
+  | e :: rest =>
+    (if isSeedCutEdge isSybil e then e.capacity else 0) +
+      sybilSeedCutBound isSybil rest
+
+/-- Total routed influence entering the Sybil region across the honest-to-Sybil seed cut. -/
+def sybilTotalInfluence (isSybil : Nat → Bool) : List TrustEdge → Nat
+  | [] => 0
+  | e :: rest =>
+    (if isSeedCutEdge isSybil e then e.flow else 0) +
+      sybilTotalInfluence isSybil rest
+
+/-- Proposition that every edge in the trust graph respects its capacity (`e.flow ≤ e.capacity`). -/
+def EdgesRespectCapacity : List TrustEdge → Prop
+  | [] => True
+  | e :: rest => e.flow ≤ e.capacity ∧ EdgesRespectCapacity rest
+
+/-- Boolean checker for `EdgesRespectCapacity`. -/
+def checkEdgesRespectCapacity : List TrustEdge → Bool
+  | [] => true
+  | e :: rest => decide (e.flow ≤ e.capacity) && checkEdgesRespectCapacity rest
+
+theorem edgesRespectCapacity_of_check
+    {edges : List TrustEdge}
+    (h : checkEdgesRespectCapacity edges = true) :
+    EdgesRespectCapacity edges := by
+  induction edges with
+  | nil => trivial
+  | cons e rest ih =>
+    simp only [checkEdgesRespectCapacity, Bool.and_eq_true, decide_eq_true_iff] at h
+    exact ⟨h.1, ih h.2⟩
+
+/-- Adding arbitrary internal Sybil-to-Sybil edges (`isSybil e.source = true`) leaves
+    `sybilSeedCutBound` strictly invariant. -/
+theorem sybilSeedCutBound_invariant_under_sybil_cloning
+    (isSybil : Nat → Bool)
+    (e : TrustEdge)
+    (edges : List TrustEdge)
+    (h_sybil_src : isSybil e.source = true) :
+    sybilSeedCutBound isSybil (e :: edges) = sybilSeedCutBound isSybil edges := by
+  simp [sybilSeedCutBound, isSeedCutEdge, h_sybil_src]
+
+/-- Total influence crossing the honest-to-Sybil cut is bounded by `sybilSeedCutBound`. -/
+theorem sybilTotalInfluence_le_seedCutBound
+    (isSybil : Nat → Bool) :
+    ∀ (edges : List TrustEdge),
+      EdgesRespectCapacity edges →
+      sybilTotalInfluence isSybil edges ≤ sybilSeedCutBound isSybil edges
+  | [], _ => Nat.le_refl 0
+  | e :: rest, ⟨h_cap, h_rest⟩ => by
+    simp only [sybilTotalInfluence, sybilSeedCutBound]
+    have ih := sybilTotalInfluence_le_seedCutBound isSybil rest h_rest
+    cases isSeedCutEdge isSybil e <;> simp <;> omega
+
+/-- **Weighted Trust-Graph Sybil Seed-Cut Theorem (`epistemic_sybil_bounded_by_seed_cut`)**:
+    For any Sybil region `isSybil`, weighted trust graph `edges` respecting edge capacities
+    (`EdgesRespectCapacity edges`), and any net Sybil region influence `sybilRegionInfluence`
+    conserved by the cut (`sybilRegionInfluence ≤ sybilTotalInfluence isSybil edges`),
+    the total influence of the Sybil region is bounded by the capacity of the honest-to-Sybil
+    seed cut (`sybilSeedCutBound isSybil edges`). -/
+theorem epistemic_sybil_bounded_by_seed_cut
+    (isSybil : Nat → Bool)
+    (edges : List TrustEdge)
+    (sybilRegionInfluence : Nat)
+    (h_cap : EdgesRespectCapacity edges)
+    (h_conservation : sybilRegionInfluence ≤ sybilTotalInfluence isSybil edges) :
+    sybilRegionInfluence ≤ sybilSeedCutBound isSybil edges :=
+  Nat.le_trans h_conservation (sybilTotalInfluence_le_seedCutBound isSybil edges h_cap)
+
 end Obend.Consensus.Epistemic

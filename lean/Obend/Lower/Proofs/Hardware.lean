@@ -27,12 +27,14 @@ Formalizes the complete 4-stage chain from `Obend.Lower` (`LExpr`) through `Core
      `n = 0, 2` (diverging under wrapping `compileBookToRtl` yet agreeing under `compileBookToRtlSat`).
 -/
 public import Obend.Lower.Proofs.Book
+public import Obend.Lower.Inductive
 public import Obend.Hardware.Compiler
 public import Obend.Hardware.HDL
 @[expose] public section
 namespace Obend.Lower
 open Obend.Core.Term Obend.Core.Ty
 open Obend.Equiv Obend.Leaf
+open Obend.Lower.Inductive
 open Obend.Hardware.HDL Obend.Hardware.Compiler
 set_option autoImplicit false
 
@@ -626,5 +628,44 @@ theorem lean_fib_seq_rtl_verified :
      | _, _, _, _, _ => false) = true := by
   decide +kernel
 
+/-! ## 10. Multi-Constructor & Nested `compileMultiCtorIota` Eliminator Bridge to `Core4` & Hardware -/
+
+/-- **Theorem (`multiCtorIota_hardware_bridge_sound`)**:
+Bridges `compileMultiCtorIota` across `Nat` (`natRecIotaLExpr`), `Option` (`optionRecIotaLExpr`),
+`List` (`listLenIotaLExpr`), and nested `Option (List Nat)` (`nestedOptionListIotaLExpr`) from
+`LExpr` (`SSteps`) to `Core4` (`Evaluates`) and `inlineDict` specialization:
+1. All four multi-constructor / nested recursors evaluate in `Core4` to their exact ground values,
+2. For any `Option Nat` constructor injection lowered to `Core4`, 3 passes of `inlineDict`
+   statically eliminate the `.case` + `.split` + `.lam` dispatch of the body of `optionRecIotaLExpr`
+   into a direct scalar `.nat` constant that compiles via `compileTermSat` to an `RtlExpr` evaluating
+   to `BitVec.ofNat 64 defaultVal` (for `none`) and `BitVec.ofNat 64 v` (for `some v`). -/
+theorem multiCtorIota_hardware_bridge_sound (n defaultVal v : Nat) (xs : List Nat) :
+    Evaluates (lowerT (.app natRecIotaLExpr (peanoNatToLExpr n))) (.nat n) ∧
+    Evaluates (lowerT (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr none))) (.nat defaultVal) ∧
+    Evaluates (lowerT (.app (optionRecIotaLExpr defaultVal) (optionNatToLExpr (some v)))) (.nat v) ∧
+    Evaluates (lowerT (.app listLenIotaLExpr (natListToLExpr xs))) (.nat xs.length) ∧
+    Evaluates (lowerT (.app nestedOptionListIotaLExpr (optionListToLExpr (some xs)))) (.nat xs.length) ∧
+    compileTermSat [] [] 0 []
+      (inlineDict 3 (lowerT (.cases .natural
+        [ ("none", [], .lit defaultVal)
+        , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+        (optionNatToLExpr none)))) =
+      some (.const (BitVec.ofNat 64 defaultVal)) ∧
+    compileTermSat [] [] 0 []
+      (inlineDict 3 (lowerT (.cases .natural
+        [ ("none", [], .lit defaultVal)
+        , ("some", ["val"], .lam .emptyRow (.bvar 0)) ]
+        (optionNatToLExpr (some v))))) =
+      some (.const (BitVec.ofNat 64 v)) := by
+  have hIota := compileMultiCtorIota_sound n defaultVal v xs
+  refine ⟨hIota.2.1, hIota.2.2.1, hIota.2.2.2.1, hIota.2.2.2.2.2.1, hIota.2.2.2.2.2.2, ?_, ?_⟩
+  · simp [inlineDict, inlinePass, optionNatToLExpr, lowerT, caseArm,
+      Term.substitute, Term.rename,
+      splitValues, applyAll, instantiate, compileTermSat]
+  · simp [inlineDict, inlinePass, optionNatToLExpr, lowerT, caseArm,
+      Term.substitute, liftSubstitution, Term.rename, liftRename,
+      splitValues, applyAll, instantiate, compileTermSat]
+
 end Obend.Lower
 end
+

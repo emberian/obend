@@ -509,9 +509,65 @@ pub struct BinaryTapeCert {
     pub words: Vec<u32>,
 }
 
+impl BinaryTapeCert {
+    /// Local verifier matching Lean's `Obend.Hardware.Codec.verifyBinaryTapeCert`.
+    /// Domains that require a fixed-arity `BinaryHwCert` (`Pnr`, `Retiming`, `Photonics`,
+    /// `Pcb`, `Dpr`, `EdaBomSwap`, `Analog2d`, `DspBeamformer`) are strictly refused here.
+    pub fn verify_local(&self) -> bool {
+        let words_sum: u64 = self.words.iter().map(|&w| w as u64).sum();
+        let all_pos = self.words.iter().all(|&w| w > 0);
+        match self.domain {
+            HwCertDomain::Magnetics => {
+                self.words.len() >= 3
+                    && self.metric0 > 0
+                    && (self.metric0 as u64) == words_sum
+                    && self.metric1 <= 5_000_000
+                    && all_pos
+            }
+            HwCertDomain::MechanicsVonNeumann => {
+                self.words.len() >= 4
+                    && self.metric1 < self.metric0
+                    && self.metric1 > 0
+                    && (self.metric1 as u64) == words_sum
+                    && all_pos
+            }
+            HwCertDomain::FluidThermal => {
+                if self.words.len() != 5 {
+                    return false;
+                }
+                let tw = self.words[0];
+                let mc = self.words[1];
+                let fq = self.words[2];
+                let fd = self.words[3];
+                let pf = self.words[4];
+                let cand = evaluate_physical_candidate(tw, mc, fq, fd);
+                self.metric0 >= 64
+                    && self.metric1 <= 165_000
+                    && tw >= 3800
+                    && mc >= 500
+                    && fq >= 20
+                    && fd <= 12
+                    && pf >= 1
+                    && cand.turn_off_peak_v <= 1150
+                    && cand.volumetric_error_um <= 36
+                    && self.metric1 == cand.peak_winding_temp_mc
+            }
+            HwCertDomain::PowerElectronics => {
+                self.words.len() >= 2 && self.metric0 <= 1150 && self.metric1 > 0 && all_pos
+            }
+            HwCertDomain::Multiphysics => {
+                self.words.len() >= 2 && self.metric0 > 0 && self.metric1 > 0 && all_pos
+            }
+            _ => false,
+        }
+    }
+}
+
 impl BinaryCodec for BinaryTapeCert {
     fn encode_bytes(&self, out: &mut Vec<u8>) {
+        let arr_len = (4 + self.words.len()) as u32;
         out.extend_from_slice(&[0xD9, 0x0B, 0xED, 0x9A]);
+        out.extend_from_slice(&arr_len.to_be_bytes());
         cbor_encode_u32(self.domain as u32, out);
         cbor_encode_u32(self.metric0, out);
         cbor_encode_u32(self.metric1, out);
@@ -522,14 +578,18 @@ impl BinaryCodec for BinaryTapeCert {
     }
 
     fn decode_bytes(input: &[u8]) -> Option<(Self, &[u8])> {
-        if input.len() < 4 || input[0..4] != [0xD9, 0x0B, 0xED, 0x9A] {
+        if input.len() < 8 || input[0..4] != [0xD9, 0x0B, 0xED, 0x9A] {
             return None;
         }
-        let (dom_u32, r1) = cbor_decode_u32(&input[4..])?;
+        let arr_len = u32::from_be_bytes([input[4], input[5], input[6], input[7]]);
+        let (dom_u32, r1) = cbor_decode_u32(&input[8..])?;
         let domain = HwCertDomain::from_u32(dom_u32)?;
         let (metric0, r2) = cbor_decode_u32(r1)?;
         let (metric1, r3) = cbor_decode_u32(r2)?;
         let (len, mut cur) = cbor_decode_u32(r3)?;
+        if arr_len != len.checked_add(4)? {
+            return None;
+        }
         let required_bytes = (len as usize).checked_mul(5)?;
         if cur.len() < required_bytes {
             return None;
@@ -582,8 +642,9 @@ pub struct FemmMeshSolution {
 }
 
 /// Assemble and solve a 6-element 2D nonlinear ferromagnetic stator slot + tooth + air-gap mesh
-/// via exact Newton-Raphson tangent iterations ($\|r\|_\infty = 0$ at quantized fixed point).
-pub fn solve_femm_mesh() -> FemmMeshSolution {
+/// via exact Newton-Raphson tangent iterations ($\|r\|_\infty = 0$ at quantized fixed point),
+/// parameterized by current density scaling `jz_scale`.
+pub fn solve_femm_mesh_with_excitation(jz_scale: f64) -> FemmMeshSolution {
     // 6 nodes:
     //   Node 0 (free): stator slot conductor center (4.0, 5.0)
     //   Node 1 (free): ferromagnetic stator tooth tip (8.0, 5.0)
@@ -596,7 +657,7 @@ pub fn solve_femm_mesh() -> FemmMeshSolution {
             y: [5.0, 0.0, 0.0],
             nu0: 800.0,
             nu_sat: 0.0,
-            jz: 18.0,
+            jz: 18.0 * jz_scale,
         },
         NonlinearFemmElement {
             nodes: [0, 3, 1],
@@ -604,7 +665,7 @@ pub fn solve_femm_mesh() -> FemmMeshSolution {
             y: [5.0, 0.0, 5.0],
             nu0: 800.0,
             nu_sat: 0.0,
-            jz: 18.0,
+            jz: 18.0 * jz_scale,
         },
         // Ferromagnetic stator tooth root & tip (Brauer nonlinear saturation nu_sat > 0)
         NonlinearFemmElement {
@@ -621,7 +682,7 @@ pub fn solve_femm_mesh() -> FemmMeshSolution {
             y: [5.0, 5.0, 10.0],
             nu0: 140.0,
             nu_sat: 50.0,
-            jz: 6.0,
+            jz: 6.0 * jz_scale,
         },
         // Air-gap & tooth shoe elements
         NonlinearFemmElement {
@@ -638,7 +699,7 @@ pub fn solve_femm_mesh() -> FemmMeshSolution {
             y: [5.0, 10.0, 0.0],
             nu0: 600.0,
             nu_sat: 0.0,
-            jz: 12.0,
+            jz: 12.0 * jz_scale,
         },
     ];
 
@@ -734,8 +795,11 @@ pub fn solve_femm_mesh() -> FemmMeshSolution {
         }
     }
 
-    let total_energy: u32 = element_energies.iter().sum();
-    let peak_b2 = peak_tooth_b2_scaled.max(1).min(4_500_000);
+    let total_energy: u32 = element_energies
+        .iter()
+        .fold(0u32, |acc, &e| acc.saturating_add(e));
+    // Compute physical scaled B^2 directly from the converged finite-element field (no artificial clamp!)
+    let peak_b2 = peak_tooth_b2_scaled.max(1);
     let hw_cert = BinaryHwCert::golden_for_domain(HwCertDomain::Magnetics);
     let tape_cert = BinaryTapeCert {
         domain: HwCertDomain::Magnetics,
@@ -754,6 +818,11 @@ pub fn solve_femm_mesh() -> FemmMeshSolution {
         hw_cert,
         tape_cert,
     }
+}
+
+/// Assemble and solve the nominal 6-element 2D nonlinear ferromagnetic stator slot + tooth + air-gap mesh.
+pub fn solve_femm_mesh() -> FemmMeshSolution {
+    solve_femm_mesh_with_excitation(1.0)
 }
 
 // ============================================================================
@@ -850,9 +919,26 @@ pub fn build_stator_frep_tape() -> Vec<FrepOp> {
     ]
 }
 
+/// Compute the required register file size (`max_reg + 1`) for an arbitrary `FrepOp` tape.
+fn tape_reg_capacity(tape: &[FrepOp]) -> usize {
+    tape.iter()
+        .map(|op| match *op {
+            FrepOp::Sphere { out, .. }
+            | FrepOp::CylinderZ { out, .. }
+            | FrepOp::HalfSpaceZ { out, .. } => out,
+            FrepOp::MinUnion { out, lhs, rhs } | FrepOp::MaxIntersect { out, lhs, rhs } => {
+                out.max(lhs).max(rhs)
+            }
+        })
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(1)
+        .max(16)
+}
+
 /// Evaluate a 3D F-Rep CSG tape at a single point `(px, py, pz)`.
 pub fn eval_frep_tape_point(tape: &[FrepOp], px: i64, py: i64, pz: i64) -> i64 {
-    let mut regs = [0i64; 16];
+    let mut regs = vec![0i64; tape_reg_capacity(tape)];
     let mut last_out = 0usize;
     for op in tape {
         match *op {
@@ -886,12 +972,162 @@ pub fn eval_frep_tape_point(tape: &[FrepOp], px: i64, py: i64, pz: i64) -> i64 {
     regs[last_out]
 }
 
+/// Compact a pruned SSA F-Rep tape via backward liveness analysis, eliminating both dead branches
+/// and single-branch `Choice::Left` / `Choice::Right` (or diamond `l_reg == r_reg`) `MinUnion`/`MaxIntersect`
+/// nodes via register aliasing and dense register renumbering (`0..compacted.len()`).
+pub fn compact_pruned_tape(tape: &[FrepOp], choices: &[Choice]) -> Vec<FrepOp> {
+    if tape.is_empty() {
+        return Vec::new();
+    }
+    let reg_cap = tape_reg_capacity(tape);
+    let mut alias: Vec<usize> = (0..reg_cap).collect();
+
+    // Forward pass: resolve register aliases for single-branch Choice::Left / Choice::Right nodes
+    // (as well as idempotent diamond aliases `l_reg == r_reg`) and rewrite surviving operations.
+    let mut resolved_ops: Vec<Option<FrepOp>> = Vec::with_capacity(tape.len());
+    let mut root_reg = 0usize;
+
+    for (idx, &op) in tape.iter().enumerate() {
+        let choice = choices.get(idx).copied().unwrap_or(Choice::Both);
+        match op {
+            FrepOp::Sphere { out, .. }
+            | FrepOp::CylinderZ { out, .. }
+            | FrepOp::HalfSpaceZ { out, .. } => {
+                alias[out] = out;
+                resolved_ops.push(Some(op));
+                root_reg = out;
+            }
+            FrepOp::MinUnion { out, lhs, rhs } => {
+                let l_reg = alias[lhs];
+                let r_reg = alias[rhs];
+                match choice {
+                    Choice::Left => {
+                        alias[out] = l_reg;
+                        resolved_ops.push(None);
+                    }
+                    Choice::Right => {
+                        alias[out] = r_reg;
+                        resolved_ops.push(None);
+                    }
+                    Choice::Both => {
+                        if l_reg == r_reg {
+                            alias[out] = l_reg;
+                            resolved_ops.push(None);
+                        } else {
+                            alias[out] = out;
+                            resolved_ops.push(Some(FrepOp::MinUnion {
+                                out,
+                                lhs: l_reg,
+                                rhs: r_reg,
+                            }));
+                        }
+                    }
+                }
+                root_reg = alias[out];
+            }
+            FrepOp::MaxIntersect { out, lhs, rhs } => {
+                let l_reg = alias[lhs];
+                let r_reg = alias[rhs];
+                match choice {
+                    Choice::Left => {
+                        alias[out] = l_reg;
+                        resolved_ops.push(None);
+                    }
+                    Choice::Right => {
+                        alias[out] = r_reg;
+                        resolved_ops.push(None);
+                    }
+                    Choice::Both => {
+                        if l_reg == r_reg {
+                            alias[out] = l_reg;
+                            resolved_ops.push(None);
+                        } else {
+                            alias[out] = out;
+                            resolved_ops.push(Some(FrepOp::MaxIntersect {
+                                out,
+                                lhs: l_reg,
+                                rhs: r_reg,
+                            }));
+                        }
+                    }
+                }
+                root_reg = alias[out];
+            }
+        }
+    }
+
+    // Backward liveness pass from `root_reg`
+    let mut live_regs = vec![false; reg_cap];
+    live_regs[root_reg] = true;
+    let mut keep_op = vec![false; resolved_ops.len()];
+
+    for idx in (0..resolved_ops.len()).rev() {
+        if let Some(op) = resolved_ops[idx] {
+            let out_r = op.out_reg();
+            if live_regs[out_r] {
+                keep_op[idx] = true;
+                match op {
+                    FrepOp::MinUnion { lhs, rhs, .. }
+                    | FrepOp::MaxIntersect { lhs, rhs, .. } => {
+                        live_regs[lhs] = true;
+                        live_regs[rhs] = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Dense register renumbering pass: map each surviving `out` register to `0..compacted.len()`
+    let mut reg_remap = vec![0usize; reg_cap];
+    let mut compacted = Vec::new();
+    for (idx, op_opt) in resolved_ops.iter().enumerate() {
+        if keep_op[idx] {
+            if let Some(op) = *op_opt {
+                let new_out = compacted.len();
+                let remapped_op = match op {
+                    FrepOp::Sphere { out, cx, cy, cz, r_sq } => {
+                        reg_remap[out] = new_out;
+                        FrepOp::Sphere { out: new_out, cx, cy, cz, r_sq }
+                    }
+                    FrepOp::CylinderZ { out, cx, cy, r_sq } => {
+                        reg_remap[out] = new_out;
+                        FrepOp::CylinderZ { out: new_out, cx, cy, r_sq }
+                    }
+                    FrepOp::HalfSpaceZ { out, z0 } => {
+                        reg_remap[out] = new_out;
+                        FrepOp::HalfSpaceZ { out: new_out, z0 }
+                    }
+                    FrepOp::MinUnion { out, lhs, rhs } => {
+                        reg_remap[out] = new_out;
+                        FrepOp::MinUnion {
+                            out: new_out,
+                            lhs: reg_remap[lhs],
+                            rhs: reg_remap[rhs],
+                        }
+                    }
+                    FrepOp::MaxIntersect { out, lhs, rhs } => {
+                        reg_remap[out] = new_out;
+                        FrepOp::MaxIntersect {
+                            out: new_out,
+                            lhs: reg_remap[lhs],
+                            rhs: reg_remap[rhs],
+                        }
+                    }
+                };
+                compacted.push(remapped_op);
+            }
+        }
+    }
+
+    compacted
+}
+
 /// Evaluate interval bounds over `box3d`, record `Choice::Left`/`Right`/`Both` at every min/max node,
-/// and compact the tape by backward liveness pruning of dead branches!
+/// and compact the tape by backward liveness pruning of dead branches and single-branch aliases!
 pub fn prune_tape_for_interval(tape: &[FrepOp], box3d: Interval3D) -> (Interval, Vec<Choice>, Vec<FrepOp>) {
-    let mut regs = [Interval::new(0, 0); 16];
+    let mut regs = vec![Interval::new(0, 0); tape_reg_capacity(tape)];
     let mut choices = Vec::with_capacity(tape.len());
-    let mut rewritten = Vec::with_capacity(tape.len());
     let mut root_reg = 0usize;
 
     for &op in tape {
@@ -902,7 +1138,6 @@ pub fn prune_tape_for_interval(tape: &[FrepOp], box3d: Interval3D) -> (Interval,
                 let dz2 = box3d.z.sub_scalar(cz).sq();
                 regs[out] = dx2.add(dy2).add(dz2).sub_scalar(r_sq);
                 choices.push(Choice::Both);
-                rewritten.push((op, Some(out), None, None));
                 root_reg = out;
             }
             FrepOp::CylinderZ { out, cx, cy, r_sq } => {
@@ -910,89 +1145,47 @@ pub fn prune_tape_for_interval(tape: &[FrepOp], box3d: Interval3D) -> (Interval,
                 let dy2 = box3d.y.sub_scalar(cy).sq();
                 regs[out] = dx2.add(dy2).sub_scalar(r_sq);
                 choices.push(Choice::Both);
-                rewritten.push((op, Some(out), None, None));
                 root_reg = out;
             }
             FrepOp::HalfSpaceZ { out, z0 } => {
                 regs[out] = box3d.z.sub_scalar(z0);
                 choices.push(Choice::Both);
-                rewritten.push((op, Some(out), None, None));
                 root_reg = out;
             }
             FrepOp::MinUnion { out, lhs, rhs } => {
                 let l = regs[lhs];
                 let r = regs[rhs];
-                if l.hi < r.lo {
+                if l.hi <= r.lo {
                     regs[out] = l;
                     choices.push(Choice::Left);
-                    rewritten.push((op, Some(out), Some(lhs), None));
-                } else if r.hi < l.lo {
+                } else if r.hi <= l.lo {
                     regs[out] = r;
                     choices.push(Choice::Right);
-                    rewritten.push((op, Some(out), Some(rhs), None));
                 } else {
                     regs[out] = Interval::new(l.lo.min(r.lo), l.hi.min(r.hi));
                     choices.push(Choice::Both);
-                    rewritten.push((op, Some(out), Some(lhs), Some(rhs)));
                 }
                 root_reg = out;
             }
             FrepOp::MaxIntersect { out, lhs, rhs } => {
                 let l = regs[lhs];
                 let r = regs[rhs];
-                if l.lo > r.hi {
+                if l.lo >= r.hi {
                     regs[out] = l;
                     choices.push(Choice::Left);
-                    rewritten.push((op, Some(out), Some(lhs), None));
-                } else if r.lo > l.hi {
+                } else if r.lo >= l.hi {
                     regs[out] = r;
                     choices.push(Choice::Right);
-                    rewritten.push((op, Some(out), Some(rhs), None));
                 } else {
                     regs[out] = Interval::new(l.lo.max(r.lo), l.hi.max(r.hi));
                     choices.push(Choice::Both);
-                    rewritten.push((op, Some(out), Some(lhs), Some(rhs)));
                 }
                 root_reg = out;
             }
         }
     }
 
-    // Backward liveness pass: any branch dropped by Choice::Left or Choice::Right is dead!
-    let mut live_regs = [false; 16];
-    live_regs[root_reg] = true;
-    let mut keep_op = vec![false; rewritten.len()];
-
-    for idx in (0..rewritten.len()).rev() {
-        let (_op, out_opt, dep1, dep2) = rewritten[idx];
-        if let Some(out_r) = out_opt {
-            if live_regs[out_r] {
-                keep_op[idx] = true;
-                if let Some(d1) = dep1 {
-                    live_regs[d1] = true;
-                }
-                if let Some(d2) = dep2 {
-                    live_regs[d2] = true;
-                }
-            }
-        }
-    }
-
-    let mut pruned_tape = Vec::new();
-    for (idx, &(op, _, dep1, dep2)) in rewritten.iter().enumerate() {
-        if keep_op[idx] {
-            match (op, dep1, dep2) {
-                (FrepOp::MinUnion { out, .. }, Some(only), None) => {
-                    pruned_tape.push(FrepOp::MinUnion { out, lhs: only, rhs: only });
-                }
-                (FrepOp::MaxIntersect { out, .. }, Some(only), None) => {
-                    pruned_tape.push(FrepOp::MaxIntersect { out, lhs: only, rhs: only });
-                }
-                _ => pruned_tape.push(op),
-            }
-        }
-    }
-
+    let pruned_tape = compact_pruned_tape(tape, &choices);
     (regs[root_reg], choices, pruned_tape)
 }
 
@@ -1331,9 +1524,24 @@ mod tests {
         assert!(sol.total_energy > 0);
         let sum_e: u32 = sol.element_energies.iter().sum();
         assert_eq!(sol.total_energy, sum_e);
+        assert!(sol.tape_cert.verify_local(), "nominal stator excitation must pass B^2 <= 5_000_000");
         let bytes = sol.tape_cert.to_vec();
+        assert_eq!(&bytes[0..4], &[0xD9, 0x0B, 0xED, 0x9A]);
+        assert_eq!(&bytes[4..8], &(10u32.to_be_bytes()));
         let dec = BinaryTapeCert::from_slice(&bytes).expect("must decode BinaryTapeCert");
         assert_eq!(dec, sol.tape_cert);
+
+        // Out-of-spec over-current excitation (500x nominal Jz) must genuinely exceed the 5_000_000 B^2 threshold
+        let over_sol = solve_femm_mesh_with_excitation(500.0);
+        assert!(
+            over_sol.peak_tooth_b2_scaled > 5_000_000,
+            "unclamped over-current FEMM solve must exceed 5_000_000 (got {})",
+            over_sol.peak_tooth_b2_scaled
+        );
+        assert!(
+            !over_sol.tape_cert.verify_local(),
+            "over-saturated tooth B^2 must be rejected by verify_local()"
+        );
     }
 
     #[test]
@@ -1347,9 +1555,27 @@ mod tests {
             rep.pruned_tape_ops,
             rep.unpruned_tape_ops
         );
+        assert!(rep.tape_cert.verify_local());
         let bytes = rep.tape_cert.to_vec();
         let dec = BinaryTapeCert::from_slice(&bytes).expect("must decode octree BinaryTapeCert");
         assert_eq!(dec, rep.tape_cert);
+
+        // Verify compact_pruned_tape eliminates single-branch MinUnion/MaxIntersect nodes cleanly
+        // (no dummy lhs == rhs nodes, and dense register indices 0..pruned.len())
+        let full_tape = build_stator_frep_tape();
+        let octant_box = Interval3D {
+            x: Interval::new(-80, -40),
+            y: Interval::new(-80, -40),
+            z: Interval::new(-80, -40),
+        };
+        let (_iv, _choices, pruned) = prune_tape_for_interval(&full_tape, octant_box);
+        assert!(pruned.len() < full_tape.len(), "compacted octant tape must be strictly shorter");
+        for (idx, op) in pruned.iter().enumerate() {
+            assert_eq!(op.out_reg(), idx, "compacted SSA registers must be densely numbered 0..len");
+            if let FrepOp::MinUnion { lhs, rhs, .. } | FrepOp::MaxIntersect { lhs, rhs, .. } = *op {
+                assert_ne!(lhs, rhs, "compacted tape must not contain dummy single-branch lhs == rhs nodes");
+            }
+        }
     }
 
     #[test]
@@ -1359,6 +1585,7 @@ mod tests {
         assert!(!evo.pareto_front.is_empty());
         assert!(evo.best_candidate.feasible);
         assert!(evo.best_candidate.peak_winding_temp_mc <= 165_000);
+        assert!(evo.tape_cert.verify_local());
         let bytes = evo.tape_cert.to_vec();
         let dec = BinaryTapeCert::from_slice(&bytes).expect("must decode evolution BinaryTapeCert");
         assert_eq!(dec, evo.tape_cert);
@@ -1376,16 +1603,112 @@ mod tests {
         with_trailing.push(0x00);
         assert_eq!(BinaryTapeCert::from_slice(&with_trailing), None);
 
-        // 3. Adversarial u32::MAX words.length header on a 24-byte frame must return None without OOM
+        // 3. Adversarial u32::MAX words.length header on a 28-byte frame must return None without OOM
         let mut max_len_frame = Vec::new();
         max_len_frame.extend_from_slice(&[0xD9, 0x0B, 0xED, 0x9A]);
+        max_len_frame.extend_from_slice(&u32::MAX.to_be_bytes());
         cbor_encode_u32(HwCertDomain::Magnetics as u32, &mut max_len_frame);
         cbor_encode_u32(1000, &mut max_len_frame);
         cbor_encode_u32(50000, &mut max_len_frame);
         cbor_encode_u32(u32::MAX, &mut max_len_frame);
         assert_eq!(BinaryTapeCert::from_slice(&max_len_frame), None);
 
-        // 4. Non-canonical 1-byte tiny uint (< 24) must be rejected to match Lean cborDecodeU32
+        // 4. Mismatched RFC 8949 0x9A array length header must be rejected
+        let mut bad_arr_len = valid.clone();
+        bad_arr_len[7] ^= 0x01;
+        assert_eq!(BinaryTapeCert::from_slice(&bad_arr_len), None);
+
+        // 5. Fixed-arity domain (Pnr) submitted as a 1-word BinaryTapeCert must be refused by verify_local()
+        let pnr_bypass = BinaryTapeCert {
+            domain: HwCertDomain::Pnr,
+            metric0: 0,
+            metric1: 0,
+            words: vec![1],
+        };
+        assert!(!pnr_bypass.verify_local());
+
+        // 6. Non-canonical 1-byte tiny uint (< 24) must be rejected to match Lean cborDecodeU32
         assert_eq!(cbor_decode_u32(&[0x05]), None);
+    }
+
+    #[test]
+    fn test_compact_pruned_tape_diamond_alias_and_large_register_file() {
+        // 1. Diamond alias: op2 aliases to reg 0 (Choice::Left), then op3 = MinUnion(0, 2)
+        // has both inputs aliased to reg 0 even under Choice::Both, so op3 must collapse cleanly
+        // without emitting a dummy lhs == rhs MinUnion node!
+        let diamond_tape = vec![
+            FrepOp::CylinderZ { out: 0, cx: 0, cy: 0, r_sq: 100 },
+            FrepOp::CylinderZ { out: 1, cx: 500, cy: 500, r_sq: 4 },
+            FrepOp::MinUnion { out: 2, lhs: 0, rhs: 1 },
+            FrepOp::MinUnion { out: 3, lhs: 0, rhs: 2 },
+        ];
+        let choices = vec![Choice::Both, Choice::Both, Choice::Left, Choice::Both];
+        let compacted = compact_pruned_tape(&diamond_tape, &choices);
+        assert_eq!(
+            compacted.len(),
+            1,
+            "diamond alias must collapse to the single live primitive"
+        );
+        assert_eq!(
+            eval_frep_tape_point(&compacted, 3, 4, 0),
+            eval_frep_tape_point(&diamond_tape, 3, 4, 0)
+        );
+
+        // 2. Large register file (> 16 registers): 20 operations must not panic
+        let mut large_tape = Vec::new();
+        for i in 0..10usize {
+            large_tape.push(FrepOp::CylinderZ {
+                out: i,
+                cx: (i as i64) * 100,
+                cy: 0,
+                r_sq: 25,
+            });
+        }
+        let mut cur = 0usize;
+        for i in 1..10usize {
+            let next_out = 9 + i;
+            large_tape.push(FrepOp::MinUnion {
+                out: next_out,
+                lhs: cur,
+                rhs: i,
+            });
+            cur = next_out;
+        }
+        let box_origin = Interval3D {
+            x: Interval::new(-2, 2),
+            y: Interval::new(-2, 2),
+            z: Interval::new(-2, 2),
+        };
+        let (_iv, _ch, pruned_large) = prune_tape_for_interval(&large_tape, box_origin);
+        assert_eq!(
+            pruned_large.len(),
+            1,
+            "19-op chain over [-2,2]^3 must compact to 1 primitive"
+        );
+        assert_eq!(
+            eval_frep_tape_point(&pruned_large, 1, 1, 0),
+            eval_frep_tape_point(&large_tape, 1, 1, 0)
+        );
+    }
+
+    #[test]
+    fn test_binary_tape_cert_verify_local_matches_lean_codec() {
+        // 1. Magnetics: tampered metric0 != sum(words) must be rejected
+        let mut bad_mag = solve_femm_mesh().tape_cert;
+        assert!(bad_mag.verify_local());
+        bad_mag.metric0 = 999;
+        assert!(!bad_mag.verify_local(), "Magnetics energy sum mismatch must be rejected");
+
+        // 2. MechanicsVonNeumann: metric1 == metric0 or metric1 != sum(words) must be rejected
+        let mut bad_mech = eval_octree_frep_pruned().tape_cert;
+        assert!(bad_mech.verify_local());
+        bad_mech.metric1 = bad_mech.metric0;
+        assert!(!bad_mech.verify_local(), "Mechanics metric1 == metric0 must be rejected");
+
+        // 3. FluidThermal: tampered metric1 != evaluated peak winding temp must be rejected
+        let mut bad_fluid = evolve_physical_design().tape_cert;
+        assert!(bad_fluid.verify_local());
+        bad_fluid.metric1 += 1;
+        assert!(!bad_fluid.verify_local(), "FluidThermal tampered peak temp must be rejected");
     }
 }

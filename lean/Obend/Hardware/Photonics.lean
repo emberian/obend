@@ -142,6 +142,17 @@ structure DirectionalCoupler where
   kappaSqPpm      : Int
   deriving DecidableEq, Repr
 
+/-- Alias for `DirectionalCoupler`. -/
+abbrev DirectionalCouplerSpec := DirectionalCoupler
+
+/-- Scaled cross-coupling power coefficient $\kappa^2 \times 10^6$ (`kappaSqPpm`). -/
+def DirectionalCoupler.kappaSqScaled (dc : DirectionalCoupler) : Int :=
+  dc.kappaSqPpm
+
+/-- Scaled bar-transmission power coefficient $t^2 \times 10^6$ (`tSqPpm`). -/
+def DirectionalCoupler.tSqScaled (dc : DirectionalCoupler) : Int :=
+  dc.tSqPpm
+
 /-- Check that a `DirectionalCoupler` satisfies lossless unitary power conservation
 $t^2 + \kappa^2 = 10^6\,\text{ppm}$ (`1000000`). -/
 def isLosslessCoupler (dc : DirectionalCoupler) : Bool :=
@@ -158,6 +169,18 @@ def coupler3dB : DirectionalCoupler where
   kFieldPermille := 707
   tSqPpm         := 500000
   kappaSqPpm     := 500000
+
+/-- Canonical 62.5 : 37.5 ($5 : 3$) Krawtchouk boundary directional coupler
+($t^2 = 625000\,\text{ppm}, \kappa^2 = 375000\,\text{ppm} \implies t^2 + \kappa^2 = 1000000\,\text{ppm}$,
+realizing exact $3 : 4 : 3$ coupling-squared ratio against `coupler3dB`'s $500000\,\text{ppm}$). -/
+def couplerKrawtchouk375 : DirectionalCoupler where
+  couplerName    := "dc_625_375_krawtchouk"
+  gapNm          := 225
+  couplingLenUm  := 11
+  tFieldPermille := 791
+  kFieldPermille := 612
+  tSqPpm         := 625000
+  kappaSqPpm     := 375000
 
 /-- Canonical 64:36 ($800 : 600$ Pythagorean field amplitude) lossless directional coupler
 ($t = 0.800, \kappa = 0.600 \implies t^2 + \kappa^2 = 640000 + 360000 = 1000000$). -/
@@ -448,30 +471,30 @@ structure ComplexField where
 namespace ComplexField
 
 /-- Zero optical electric field phasor $0 + 0i$. -/
-@[expose] def zero : ComplexField := ⟨0, 0⟩
+def zero : ComplexField := ⟨0, 0⟩
 
 /-- Coherent superposition (complex addition) of two optical field phasors. -/
-@[expose] def add (z w : ComplexField) : ComplexField :=
+def add (z w : ComplexField) : ComplexField :=
   ⟨z.re + w.re, z.im + w.im⟩
 
 /-- Coherent subtraction of two optical field phasors. -/
-@[expose] def sub (z w : ComplexField) : ComplexField :=
+def sub (z w : ComplexField) : ComplexField :=
   ⟨z.re - w.re, z.im - w.im⟩
 
 /-- Complex multiplication $(a + ib)(c + id) = (ac - bd) + i(ad + bc)$ of two optical phasors. -/
-@[expose] def mul (z w : ComplexField) : ComplexField :=
+def mul (z w : ComplexField) : ComplexField :=
   ⟨z.re * w.re - z.im * w.im, z.re * w.im + z.im * w.re⟩
 
 /-- Real scalar field attenuation or gain $c \cdot (E_{\text{re}} + i E_{\text{im}})$. -/
-@[expose] def scale (c : Int) (z : ComplexField) : ComplexField :=
+def scale (c : Int) (z : ComplexField) : ComplexField :=
   ⟨c * z.re, c * z.im⟩
 
 /-- Quarter-wave ($+\pi/2$ radian, factor of $i$) optical phase rotation $i \cdot (E_{\text{re}} + i E_{\text{im}}) = -E_{\text{im}} + i E_{\text{re}}$. -/
-@[expose] def mulI (z : ComplexField) : ComplexField :=
+def mulI (z : ComplexField) : ComplexField :=
   ⟨-z.im, z.re⟩
 
 /-- Optical intensity / power $|E|^2 = E_{\text{re}}^2 + E_{\text{im}}^2$ of a complex field phasor. -/
-@[expose] def normSq (z : ComplexField) : Int :=
+def normSq (z : ComplexField) : Int :=
   z.re * z.re + z.im * z.im
 
 end ComplexField
@@ -548,7 +571,7 @@ $$\begin{pmatrix} E_{\text{out},1} \\ E_{\text{out},2} \end{pmatrix}
   = \begin{pmatrix} t & i \kappa \\ i \kappa & t \end{pmatrix}
     \begin{pmatrix} E_1 \\ E_2 \end{pmatrix}
   = \begin{pmatrix} t E_1 + i \kappa E_2 \\ i \kappa E_1 + t E_2 \end{pmatrix}.$$ -/
-@[expose] def evalDirectionalCoupler2x2
+def evalDirectionalCoupler2x2
     (t kappa : Int) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
   let out1 : ComplexField := ⟨t * e1.re - kappa * e2.im, t * e1.im + kappa * e2.re⟩
   let out2 : ComplexField := ⟨-kappa * e1.im + t * e2.re, kappa * e1.re + t * e2.im⟩
@@ -603,7 +626,7 @@ theorem directional_coupler_2x2_power_conservation
 /-- Upper-arm optical phase shifter transfer matrix $\begin{pmatrix} e^{i\Delta\phi} & 0 \\ 0 & 1 \end{pmatrix}$
 represented by a complex phase phasor `phasePhasor : ComplexField` ($1 + 0i$ for $\Delta\phi = 0$,
 $-1 + 0i$ for $\Delta\phi = \pi$, $0 + 1i$ for $\Delta\phi = \pi/2$). -/
-@[expose] def evalPhaseShifter2x2
+def evalPhaseShifter2x2
     (phasePhasor : ComplexField) (e1 e2 : ComplexField) : ComplexField × ComplexField :=
   (ComplexField.mul phasePhasor e1, e2)
 
@@ -611,7 +634,7 @@ $-1 + 0i$ for $\Delta\phi = \pi$, $0 + 1i$ for $\Delta\phi = \pi/2$). -/
 $$T_{\text{MZI}} = U_{\text{DC}}(t, \kappa) \cdot \Phi(\Delta\phi) \cdot U_{\text{DC}}(t, \kappa)$$
 formed by composing the input $2 \times 2$ directional coupler, the upper-arm thermo-optic phase
 shifter `phasePhasor`, and the output $2 \times 2$ directional coupler. -/
-@[expose] def evalCascadedMzi2x2
+def evalCascadedMzi2x2
     (t kappa : Int) (phasePhasor : ComplexField) (eIn1 eIn2 : ComplexField) :
     ComplexField × ComplexField :=
   let (m1, m2) := evalDirectionalCoupler2x2 t kappa eIn1 eIn2
@@ -628,8 +651,7 @@ theorem cascaded_mzi_zero_phase_pure_cross
     (evalCascadedMzi2x2 t t ⟨1, 0⟩ eIn ⟨0, 0⟩).1 = ⟨0, 0⟩ := by
   simp only [evalCascadedMzi2x2, evalDirectionalCoupler2x2, evalPhaseShifter2x2, ComplexField.mul,
     Int.mul_zero, Int.zero_mul, Int.sub_zero, Int.add_zero, Int.sub_self,
-    int_one_mul, int_neg_one_mul, int_neg_mul_left, int_mul_neg_right,
-    int_neg_neg, int_add_neg_self, int_neg_add_self]
+    int_one_mul, int_neg_mul_left, int_mul_neg_right, int_add_neg_self]
 
 /-- Theorem (`cascaded_mzi_pi_phase_pure_bar`):
 For ANY symmetric 50:50 directional coupler (`t = kappa`) and ANY complex input optical field
@@ -640,8 +662,8 @@ theorem cascaded_mzi_pi_phase_pure_bar
     (t : Int) (eIn : ComplexField) :
     (evalCascadedMzi2x2 t t ⟨-1, 0⟩ eIn ⟨0, 0⟩).2 = ⟨0, 0⟩ := by
   simp only [evalCascadedMzi2x2, evalDirectionalCoupler2x2, evalPhaseShifter2x2, ComplexField.mul,
-    Int.mul_zero, Int.zero_mul, Int.sub_zero, Int.add_zero, Int.sub_self,
-    int_one_mul, int_neg_one_mul, int_neg_mul_left, int_mul_neg_right,
+    Int.mul_zero, Int.zero_mul, Int.sub_zero, Int.add_zero,
+    int_one_mul, int_neg_mul_left, int_mul_neg_right,
     int_neg_neg, int_add_neg_self, int_neg_add_self]
 
 end Obend.Hardware.Photonics

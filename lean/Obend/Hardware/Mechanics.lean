@@ -367,5 +367,81 @@ theorem golden_mechanics_and_von_neumann_verified :
     checkMechanicsSignoff goldenLiquidCooledRotorSpec incompleteOpenLoopFactory = false := by
   decide +kernel
 
+/-! ## 5. Combined Bending + Torsion Shaft Von Mises Stress & Strain-Energy Positive-Definiteness -/
+
+/-- Evaluates the squared Von Mises equivalent stress $\sigma_{\text{vM}}^2 = \sigma_b^2 + 3 \tau_t^2$
+for a drive-train rotor shaft or machine spindle subjected to combined axial/bending normal
+stress `sigmaBending` ($\sigma_b$) and torsional shear stress `tauTorsion` ($\tau_t$). -/
+def evalCombinedBendingTorsionVonMisesSq (sigmaBending tauTorsion : Int) : Int :=
+  sigmaBending * sigmaBending + 3 * (tauTorsion * tauTorsion)
+
+/-- Helper lemma: for any non-zero integer `x ≠ 0`, its square is strictly positive (`0 < x * x`). -/
+theorem int_sq_pos_of_ne_zero (x : Int) (hne : x ≠ 0) : 0 < x * x := by
+  have hNonneg := int_sq_nonneg x
+  have hPos : 0 < x ∨ x < 0 := by omega
+  rcases hPos with h | h
+  · exact Int.mul_pos h h
+  · have hNeg : 0 < (-x) * (-x) := Int.mul_pos (by omega) (by omega)
+    have hEq : (-x) * (-x) = x * x := by grind
+    omega
+
+/-- **Universal Non-Negativity, Component Dominance & Positive-Definiteness of Combined Bending + Torsion
+Von Mises Stress Squared (`combinedBendingTorsionVonMisesSq_nonneg`)**:
+For all signed bending stresses `sigmaBending : Int` and torsional shear stresses `tauTorsion : Int`,
+the squared Von Mises equivalent stress $\sigma_{\text{vM}}^2 = \sigma_b^2 + 3 \tau_t^2$ is
+non-negative, dominates both pure bending stress squared and $3\times$ pure torsional shear stress
+squared, and is strictly positive whenever `sigmaBending ≠ 0 ∨ tauTorsion ≠ 0`. -/
+theorem combinedBendingTorsionVonMisesSq_nonneg (sigmaBending tauTorsion : Int) :
+    0 ≤ evalCombinedBendingTorsionVonMisesSq sigmaBending tauTorsion ∧
+    sigmaBending * sigmaBending ≤ evalCombinedBendingTorsionVonMisesSq sigmaBending tauTorsion ∧
+    3 * (tauTorsion * tauTorsion) ≤ evalCombinedBendingTorsionVonMisesSq sigmaBending tauTorsion ∧
+    (sigmaBending ≠ 0 ∨ tauTorsion ≠ 0 →
+      0 < evalCombinedBendingTorsionVonMisesSq sigmaBending tauTorsion) := by
+  unfold evalCombinedBendingTorsionVonMisesSq
+  have hB : 0 ≤ sigmaBending * sigmaBending := int_sq_nonneg sigmaBending
+  have hT : 0 ≤ tauTorsion * tauTorsion := int_sq_nonneg tauTorsion
+  refine ⟨by omega, by omega, by omega, ?_⟩
+  intro hNz
+  rcases hNz with hBNz | hTNz
+  · have hBPos : 0 < sigmaBending * sigmaBending := int_sq_pos_of_ne_zero sigmaBending hBNz
+    omega
+  · have hTPos : 0 < tauTorsion * tauTorsion := int_sq_pos_of_ne_zero tauTorsion hTNz
+    omega
+
+/-- Evaluates the scaled elastic strain energy $U_{\text{strain}} = k_{\text{bend}} M_b^2 + k_{\text{tors}} T_t^2$
+of a rotor shaft or kinematic link under bending moment `mBend` and torsional torque `tTorsion`
+with flexural compliance/stiffness factor `kBend` and torsional factor `kTors`. -/
+def evalCombinedBendingTorsionStrainEnergy
+    (kBend kTors mBend tTorsion : Int) : Int :=
+  kBend * (mBend * mBend) + kTors * (tTorsion * tTorsion)
+
+/-- **Strain-Energy Positive-Definiteness Under Combined Bending + Torsion
+(`combinedBendingTorsionStrainEnergy_pos_def`)**:
+For any positive flexural and torsional stiffness coefficients (`0 < kBend`, `0 < kTors`), the
+elastic strain energy is non-negative for all `(mBend, tTorsion)` and strictly positive whenever
+either the bending moment or torsional torque is non-zero (`mBend ≠ 0 ∨ tTorsion ≠ 0`). -/
+theorem combinedBendingTorsionStrainEnergy_pos_def
+    (kBend kTors mBend tTorsion : Int)
+    (hKBend : 0 < kBend) (hKTors : 0 < kTors) :
+    0 ≤ evalCombinedBendingTorsionStrainEnergy kBend kTors mBend tTorsion ∧
+    (mBend ≠ 0 ∨ tTorsion ≠ 0 →
+      0 < evalCombinedBendingTorsionStrainEnergy kBend kTors mBend tTorsion) := by
+  unfold evalCombinedBendingTorsionStrainEnergy
+  have hB2 : 0 ≤ mBend * mBend := int_sq_nonneg mBend
+  have hT2 : 0 ≤ tTorsion * tTorsion := int_sq_nonneg tTorsion
+  have hTermB : 0 ≤ kBend * (mBend * mBend) :=
+    int_mul_nonneg kBend (mBend * mBend) (by omega) hB2
+  have hTermT : 0 ≤ kTors * (tTorsion * tTorsion) :=
+    int_mul_nonneg kTors (tTorsion * tTorsion) (by omega) hT2
+  refine ⟨by omega, ?_⟩
+  intro hNz
+  rcases hNz with hBM | hTT
+  · have hBPos : 0 < mBend * mBend := int_sq_pos_of_ne_zero mBend hBM
+    have hKBPos : 0 < kBend * (mBend * mBend) := Int.mul_pos hKBend hBPos
+    omega
+  · have hTPos : 0 < tTorsion * tTorsion := int_sq_pos_of_ne_zero tTorsion hTT
+    have hKTPos : 0 < kTors * (tTorsion * tTorsion) := Int.mul_pos hKTors hTPos
+    omega
+
 end Obend.Hardware.Mechanics
 end

@@ -34,6 +34,8 @@ public import Obend.Vault.Page
 public import Obend.Vault.Law
 public import Obend.Hardware.Datasheet
 public import Obend.Hardware.PCB
+public import Obend.Doc.Merge
+public import Obend.Receipt.Merkle
 @[expose] public section
 
 namespace Obend.Hardware.AgenticEDA
@@ -740,5 +742,336 @@ theorem decode_project_edaPart_coreData_roundtrip (p : EdaVaultPart) :
   cases p
   rfl
 
+/-! ## 7. Multi-Agent Concurrent PCB/BOM Co-Design over 3-Way Merge & Merkle Receipts -/
+
+/-- Return `[fieldName]` if `Obend.Doc.mergeCell3 b l r` is a conflict, or `[]` if it merges cleanly. -/
+@[expose] def fieldConflictTag {α : Type} [DecidableEq α]
+    (fieldName : String) (b l r : α) : List String :=
+  match Obend.Doc.mergeCell3 b l r with
+  | .merged _ => []
+  | .conflict _ _ _ => [fieldName]
+
+/-- Extract the merged value of a single field via `Obend.Doc.mergeCell3` (falling back to `b`
+only when a conflict is recorded by `edaBoardConflictFields`). -/
+@[expose] def mergeFieldVal3 {α : Type} [DecidableEq α] (b l r : α) : α :=
+  match Obend.Doc.mergeCell3 b l r with
+  | .merged v => v
+  | .conflict _ _ _ => b
+
+/-- Collect all field names where Agent 1 (`left`) and Agent 2 (`right`) made conflicting edits
+relative to `base` under `Obend.Doc.mergeCell3`. -/
+@[expose] def edaBoardConflictFields (base left right : EdaVaultPart) : List String :=
+  fieldConflictTag "page_name" base.pageName left.pageName right.pageName ++
+  fieldConflictTag "voh_min_mv" base.vohMinMv left.vohMinMv right.vohMinMv ++
+  fieldConflictTag "vih_min_mv" base.vihMinMv left.vihMinMv right.vihMinMv ++
+  fieldConflictTag "vol_max_mv" base.volMaxMv left.volMaxMv right.volMaxMv ++
+  fieldConflictTag "vil_max_mv" base.vilMaxMv left.vilMaxMv right.vilMaxMv ++
+  fieldConflictTag "pkg_width_um" base.pkgWidthUm left.pkgWidthUm right.pkgWidthUm ++
+  fieldConflictTag "pkg_length_um" base.pkgLengthUm left.pkgLengthUm right.pkgLengthUm ++
+  fieldConflictTag "pin_count" base.pinCount left.pinCount right.pinCount ++
+  fieldConflictTag "pin_pitch_um" base.pinPitchUm left.pinPitchUm right.pinPitchUm ++
+  fieldConflictTag "max_temp_mc" base.maxTempMc left.maxTempMc right.maxTempMc ++
+  fieldConflictTag "vswr_milli" base.vswrMilli left.vswrMilli right.vswrMilli ++
+  fieldConflictTag "drc_errors" base.drcErrors left.drcErrors right.drcErrors ++
+  fieldConflictTag "cost_cents" base.costCents left.costCents right.costCents
+
+/-- Perform a 3-way field-by-field LCA merge of two concurrent agents' `EdaVaultPart` edits
+from a common ancestor `base`. -/
+@[expose] def mergeEdaPartFields3 (base left right : EdaVaultPart) : EdaVaultPart :=
+  { pageName    := mergeFieldVal3 base.pageName left.pageName right.pageName
+    vohMinMv    := mergeFieldVal3 base.vohMinMv left.vohMinMv right.vohMinMv
+    vihMinMv    := mergeFieldVal3 base.vihMinMv left.vihMinMv right.vihMinMv
+    volMaxMv    := mergeFieldVal3 base.volMaxMv left.volMaxMv right.volMaxMv
+    vilMaxMv    := mergeFieldVal3 base.vilMaxMv left.vilMaxMv right.vilMaxMv
+    pkgWidthUm  := mergeFieldVal3 base.pkgWidthUm left.pkgWidthUm right.pkgWidthUm
+    pkgLengthUm := mergeFieldVal3 base.pkgLengthUm left.pkgLengthUm right.pkgLengthUm
+    pinCount    := mergeFieldVal3 base.pinCount left.pinCount right.pinCount
+    pinPitchUm  := mergeFieldVal3 base.pinPitchUm left.pinPitchUm right.pinPitchUm
+    maxTempMc   := mergeFieldVal3 base.maxTempMc left.maxTempMc right.maxTempMc
+    vswrMilli   := mergeFieldVal3 base.vswrMilli left.vswrMilli right.vswrMilli
+    drcErrors   := mergeFieldVal3 base.drcErrors left.drcErrors right.drcErrors
+    costCents   := mergeFieldVal3 base.costCents left.costCents right.costCents }
+
+/-- Multi-agent concurrent PCB/BOM co-design proposal:
+Agent 1 (`powerAgentBoard`: Power/Analog engineer) updates power/thermal/rail fields and
+Agent 2 (`rfLayoutAgentBoard`: RF/Layout engineer) updates RF/footprint/BOM fields from a common
+`baseBoard : EdaVaultPart`. -/
+structure MultiAgentBoardMergeProposal where
+  laws : List (String × LawExpr)
+  baseBoard : EdaVaultPart
+  powerAgentBoard : EdaVaultPart
+  rfLayoutAgentBoard : EdaVaultPart
+  downstreamReceiver : LogicFamilySpec := lvcmos33ReceiverSpec
+  minNoiseMarginMv : Int := 400
+  courtyard : FootprintCourtyardSpec := goldenQfn16Courtyard
+  citePin : DatasheetCitePin := goldenFreshDatasheetCite
+  agentName : String := "multi_agent_codesign"
+  facts : Facts := defaultEdaFacts
+  deriving DecidableEq, Repr
+
+/-- **Multi-Agent 3-Way LCA Board Merge & Judge (`mergeAndJudgeAgenticEdaBoard`)**:
+1. Checks that no concurrent field conflict occurred between `powerAgentBoard` and `rfLayoutAgentBoard`
+   relative to `baseBoard` (`edaBoardConflictFields = []`),
+2. Computes the 3-way LCA merged board `mergeEdaPartFields3`,
+3. Runs `judgeAgenticEdaProposal` on the merged board against `baseBoard`! -/
+@[expose] def mergeAndJudgeAgenticEdaBoard (prop : MultiAgentBoardMergeProposal) : AgenticEdaVerdict :=
+  let conflicts := edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard
+  if !conflicts.isEmpty then
+    .refusedByPhysics "concurrent-field-merge-conflict"
+  else
+    let mergedBoard := mergeEdaPartFields3 prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard
+    judgeAgenticEdaProposal
+      prop.laws
+      prop.baseBoard
+      mergedBoard
+      prop.downstreamReceiver
+      prop.minNoiseMarginMv
+      prop.courtyard
+      prop.citePin
+      prop.agentName
+      prop.facts
+
+/-- **Soundness of Multi-Agent 3-Way Board Merge & Judge (`mergeAndJudgeAgenticEdaBoard_sound`)**:
+Whenever `mergeAndJudgeAgenticEdaBoard prop = .admitted`:
+1. **Zero Merge Conflicts**: `edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard = []`,
+2. **Smart-Contract Soundness**: Every `.obend` `law:` in `prop.laws` holds on the transition from
+   `prop.baseBoard` to the 3-way merged board `mergedBoard`,
+3. **Datasheet Provenance**: `prop.citePin.pinnedBlockHash = prop.citePin.currentDatasheetHash`,
+4. **2D Geometric Drop-In**: `mergedBoard` fits `prop.courtyard` with exact pin count and pitch,
+5. **CMOS Static Noise Margin**: Both high and low logic noise margins are at least `prop.minNoiseMarginMv`. -/
+theorem mergeAndJudgeAgenticEdaBoard_sound
+    (prop : MultiAgentBoardMergeProposal)
+    (hAdmit : mergeAndJudgeAgenticEdaBoard prop = .admitted) :
+    let mergedBoard := mergeEdaPartFields3 prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard
+    let baseData := stateOf edaStateKeys prop.baseBoard.toScalarFields
+    let mergedData := stateOf edaStateKeys mergedBoard.toScalarFields
+    edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard = [] ∧
+    (∀ p ∈ prop.laws, p.2.denote prop.facts (some baseData) mergedData = true) ∧
+    prop.citePin.pinnedBlockHash = prop.citePin.currentDatasheetHash ∧
+    mergedBoard.pinCount = prop.courtyard.requiredPinCount ∧
+    mergedBoard.pinPitchUm = prop.courtyard.requiredPinPitchUm ∧
+    mergedBoard.pkgWidthUm ≤ prop.courtyard.maxCourtyardWidthUm ∧
+    mergedBoard.pkgLengthUm ≤ prop.courtyard.maxCourtyardLengthUm ∧
+    prop.downstreamReceiver.vihMinMv + prop.minNoiseMarginMv ≤ mergedBoard.toLogicFamilySpec.vohMinMv ∧
+    mergedBoard.toLogicFamilySpec.volMaxMv + prop.minNoiseMarginMv ≤ prop.downstreamReceiver.vilMaxMv := by
+  dsimp only [mergeAndJudgeAgenticEdaBoard] at hAdmit
+  cases hEmpty : (edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard).isEmpty
+  · rw [hEmpty] at hAdmit
+    cases hAdmit
+  · rw [hEmpty] at hAdmit
+    simp only [Bool.not_true, ↓reduceIte] at hAdmit
+    have hNil : edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard = [] :=
+      List.isEmpty_iff.1 hEmpty
+    have hSound := agenticEdaProposal_admits_sound
+      prop.laws prop.baseBoard
+      (mergeEdaPartFields3 prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard)
+      prop.downstreamReceiver prop.minNoiseMarginMv prop.courtyard prop.citePin prop.agentName prop.facts
+      hAdmit
+    exact ⟨hNil, hSound⟩
+
+/-- **Refusal of Conflicting Multi-Agent Board Edits (`conflictingAgentBoardEdits_refused`)**:
+Whenever Agent 1 and Agent 2 produce at least one conflicting field edit relative to `baseBoard`
+(`edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard ≠ []`),
+`mergeAndJudgeAgenticEdaBoard prop` deterministically refuses the proposal with
+`.refusedByPhysics "concurrent-field-merge-conflict"`. -/
+theorem conflictingAgentBoardEdits_refused
+    (prop : MultiAgentBoardMergeProposal)
+    (hConflict : edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard ≠ []) :
+    mergeAndJudgeAgenticEdaBoard prop = .refusedByPhysics "concurrent-field-merge-conflict" ∧
+    mergeAndJudgeAgenticEdaBoard prop ≠ .admitted := by
+  have hNotEmpty :
+      (edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard).isEmpty = false := by
+    cases hE : (edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard).isEmpty
+    · rfl
+    · exfalso; exact hConflict (List.isEmpty_iff.1 hE)
+  have hVerdict : mergeAndJudgeAgenticEdaBoard prop = .refusedByPhysics "concurrent-field-merge-conflict" := by
+    dsimp only [mergeAndJudgeAgenticEdaBoard]
+    rw [hNotEmpty]
+    rfl
+  refine ⟨hVerdict, ?_⟩
+  rw [hVerdict]
+  intro h; cases h
+
+@[simp] theorem fieldConflictTag_self {α : Type} [DecidableEq α]
+    (fieldName : String) (b a : α) :
+    fieldConflictTag fieldName b a a = [] := by
+  simp [fieldConflictTag]
+
+theorem fieldConflictTag_comm {α : Type} [DecidableEq α]
+    (fieldName : String) (b l r : α) :
+    fieldConflictTag fieldName b l r = fieldConflictTag fieldName b r l := by
+  unfold fieldConflictTag Obend.Doc.mergeCell3
+  by_cases hLR : l = r
+  · subst hLR; simp
+  · have hRL : r ≠ l := Ne.symm hLR
+    by_cases hLB : l = b
+    · subst hLB; simp [hLR, hRL]
+    · by_cases hRB : r = b
+      · subst hRB; simp [hLR, hRL]
+      · simp [hLR, hRL, hLB, hRB]
+
+@[simp] theorem mergeFieldVal3_self {α : Type} [DecidableEq α] (b a : α) :
+    mergeFieldVal3 b a a = a := by
+  simp [mergeFieldVal3]
+
+theorem mergeFieldVal3_comm {α : Type} [DecidableEq α] (b l r : α) :
+    mergeFieldVal3 b l r = mergeFieldVal3 b r l := by
+  unfold mergeFieldVal3 Obend.Doc.mergeCell3
+  by_cases hLR : l = r
+  · subst hLR; simp
+  · have hRL : r ≠ l := Ne.symm hLR
+    by_cases hLB : l = b
+    · subst hLB; simp [hLR, hRL]
+    · by_cases hRB : r = b
+      · subst hRB; simp [hLR, hRL]
+      · simp [hLR, hRL, hLB, hRB]
+
+@[simp] theorem edaBoardConflictFields_self (base a : EdaVaultPart) :
+    edaBoardConflictFields base a a = [] := by
+  simp [edaBoardConflictFields]
+
+theorem edaBoardConflictFields_comm (base left right : EdaVaultPart) :
+    edaBoardConflictFields base left right = edaBoardConflictFields base right left := by
+  simp only [edaBoardConflictFields]
+  rw [fieldConflictTag_comm "page_name",
+      fieldConflictTag_comm "voh_min_mv",
+      fieldConflictTag_comm "vih_min_mv",
+      fieldConflictTag_comm "vol_max_mv",
+      fieldConflictTag_comm "vil_max_mv",
+      fieldConflictTag_comm "pkg_width_um",
+      fieldConflictTag_comm "pkg_length_um",
+      fieldConflictTag_comm "pin_count",
+      fieldConflictTag_comm "pin_pitch_um",
+      fieldConflictTag_comm "max_temp_mc",
+      fieldConflictTag_comm "vswr_milli",
+      fieldConflictTag_comm "drc_errors",
+      fieldConflictTag_comm "cost_cents"]
+
+@[simp] theorem mergeEdaPartFields3_idempotent (base a : EdaVaultPart) :
+    mergeEdaPartFields3 base a a = a := by
+  cases a; simp [mergeEdaPartFields3]
+
+theorem mergeEdaPartFields3_comm (base left right : EdaVaultPart) :
+    mergeEdaPartFields3 base left right = mergeEdaPartFields3 base right left := by
+  simp only [mergeEdaPartFields3]
+  rw [mergeFieldVal3_comm base.pageName,
+      mergeFieldVal3_comm base.vohMinMv,
+      mergeFieldVal3_comm base.vihMinMv,
+      mergeFieldVal3_comm base.volMaxMv,
+      mergeFieldVal3_comm base.vilMaxMv,
+      mergeFieldVal3_comm base.pkgWidthUm,
+      mergeFieldVal3_comm base.pkgLengthUm,
+      mergeFieldVal3_comm base.pinCount,
+      mergeFieldVal3_comm base.pinPitchUm,
+      mergeFieldVal3_comm base.maxTempMc,
+      mergeFieldVal3_comm base.vswrMilli,
+      mergeFieldVal3_comm base.drcErrors,
+      mergeFieldVal3_comm base.costCents]
+
+/-- **Multi-Agent Co-Design Commutativity (`mergeAndJudgeAgenticEdaBoard_commutative`)**:
+Swapping the Power/Analog agent's board (`powerAgentBoard`) and the RF/Layout agent's board
+(`rfLayoutAgentBoard`) produces the exact same `AgenticEdaVerdict`. -/
+theorem mergeAndJudgeAgenticEdaBoard_commutative (prop : MultiAgentBoardMergeProposal) :
+    mergeAndJudgeAgenticEdaBoard
+      { prop with
+        powerAgentBoard := prop.rfLayoutAgentBoard
+        rfLayoutAgentBoard := prop.powerAgentBoard } =
+    mergeAndJudgeAgenticEdaBoard prop := by
+  simp only [mergeAndJudgeAgenticEdaBoard,
+    edaBoardConflictFields_comm prop.baseBoard prop.rfLayoutAgentBoard prop.powerAgentBoard,
+    mergeEdaPartFields3_comm prop.baseBoard prop.rfLayoutAgentBoard prop.powerAgentBoard]
+
+/-- Commit the 12 scalar fields of an `EdaVaultPart` as a `Receipt.Merkle` value list. -/
+@[expose] def edaBoardScalarValues (p : EdaVaultPart) : List Nat :=
+  (p.toScalarFields).map Prod.snd
+
+/-- Compute the Merkle leaf digests (`Obend.Receipt.Merkle.leaves`) of an `EdaVaultPart`'s scalar fields. -/
+@[expose] def edaBoardMerkleLeaves (H : Obend.Digest.HashBytes.Hash) (p : EdaVaultPart) : List Nat :=
+  Obend.Receipt.Merkle.leaves H (edaBoardScalarValues p)
+
+/-- Compute the Merkle root (`Obend.Receipt.Merkle.mapRoot`) of an `EdaVaultPart`'s scalar fields. -/
+@[expose] def commitEdaBoardMerkleRoot (H : Obend.Digest.HashBytes.Hash) (p : EdaVaultPart) : Nat :=
+  Obend.Receipt.Merkle.mapRoot H (edaBoardScalarValues p)
+
+/-- Construct a `MerkleBatchProof` opening a list of scalar field indices `fieldIndices`
+against the committed board root `commitEdaBoardMerkleRoot H p`. -/
+@[expose] def buildEdaBoardBatchProof
+    (H : Obend.Digest.HashBytes.Hash) (p : EdaVaultPart) (fieldIndices : List Nat) :
+    Obend.Receipt.Merkle.MerkleBatchProof :=
+  Obend.Receipt.Merkle.honestBatchProof H (edaBoardMerkleLeaves H p) fieldIndices
+
+/-- **Soundness & Completeness of EDA Board Merkle Batch Receipts (`buildEdaBoardBatchProof_verifies`)**:
+For any bounded hash `H`, board `p : EdaVaultPart`, and pairwise-distinct scalar field indices
+`fieldIndices` (`fieldIndices.Nodup`, `∀ i ∈ fieldIndices, i < 12`), the multi-proof
+`buildEdaBoardBatchProof H p fieldIndices` verifies against `commitEdaBoardMerkleRoot H p`. -/
+theorem buildEdaBoardBatchProof_verifies
+    {H : Obend.Digest.HashBytes.Hash} (hb : Obend.Receipt.Merkle.Bounded H)
+    (p : EdaVaultPart) (fieldIndices : List Nat)
+    (hNodup : fieldIndices.Nodup)
+    (hBounds : ∀ i ∈ fieldIndices, i < 12) :
+    Obend.Receipt.Merkle.verifyMerkleBatchProof H
+      (buildEdaBoardBatchProof H p fieldIndices)
+      (commitEdaBoardMerkleRoot H p) = true := by
+  have hLen : (edaBoardMerkleLeaves H p).length = 12 := by
+    simp [edaBoardMerkleLeaves, Obend.Receipt.Merkle.leaves_length,
+      edaBoardScalarValues, EdaVaultPart.toScalarFields]
+  have hSmall : ∀ x ∈ edaBoardMerkleLeaves H p, x < 2 ^ 256 :=
+    Obend.Receipt.Merkle.leaves_small hb (edaBoardScalarValues p)
+  have hLenSmall : (edaBoardMerkleLeaves H p).length < 2 ^ 256 := by
+    rw [hLen]; decide
+  exact Obend.Receipt.Merkle.verifyMerkleBatchProof_honest hb
+    (edaBoardMerkleLeaves H p) hSmall hLenSmall fieldIndices hNodup
+    (fun i hi => by rw [hLen]; exact hBounds i hi)
+
+/-- Deployed cSHAKE256 instantiation of `buildEdaBoardBatchProof_verifies`. -/
+theorem deployed_edaBoardBatchProof_verifies
+    (p : EdaVaultPart) (fieldIndices : List Nat)
+    (hNodup : fieldIndices.Nodup)
+    (hBounds : ∀ i ∈ fieldIndices, i < 12) :
+    Obend.Receipt.Merkle.verifyMerkleBatchProof Obend.Core.Digest.deployed
+      (buildEdaBoardBatchProof Obend.Core.Digest.deployed p fieldIndices)
+      (commitEdaBoardMerkleRoot Obend.Core.Digest.deployed p) = true :=
+  buildEdaBoardBatchProof_verifies Obend.Receipt.Merkle.deployed_bounded p fieldIndices hNodup hBounds
+
+/-- Power/Analog engineer's branch: upgrades LDO output levels (`vohMinMv = 2950`, `volMaxMv = 180`)
+and lowers peak junction temperature (`maxTempMc = 68000`), leaving RF and BOM cost at `goldenBaselinePart`. -/
+def goldenPowerAgentBranch : EdaVaultPart :=
+  { goldenBaselinePart with
+    vohMinMv := 2950
+    volMaxMv := 180
+    maxTempMc := 68000 }
+
+/-- RF/Layout engineer's branch: improves RF VSWR match (`vswrMilli = 1280`) and lowers BOM cost
+(`costCents = 120`), leaving power/thermal levels at `goldenBaselinePart`. -/
+def goldenRfLayoutAgentBranch : EdaVaultPart :=
+  { goldenBaselinePart with
+    vswrMilli := 1280
+    costCents := 120 }
+
+/-- Golden multi-agent co-design proposal combining `goldenPowerAgentBranch` and `goldenRfLayoutAgentBranch`. -/
+def goldenMultiAgentCoDesignProposal : MultiAgentBoardMergeProposal :=
+  { laws := goldenEdaLaws
+    baseBoard := goldenBaselinePart
+    powerAgentBoard := goldenPowerAgentBranch
+    rfLayoutAgentBoard := goldenRfLayoutAgentBranch }
+
+/-- Conflicting multi-agent co-design proposal where both agents concurrently edit `costCents`
+to distinct values (`135` vs `120` against baseline `145`). -/
+def conflictingMultiAgentCoDesignProposal : MultiAgentBoardMergeProposal :=
+  { goldenMultiAgentCoDesignProposal with
+    powerAgentBoard := { goldenPowerAgentBranch with costCents := 135 } }
+
+/-- End-to-end kernel verification (`decide +kernel`) of multi-agent 3-way board co-design:
+1. Disjoint power/thermal and RF/BOM edits merge cleanly into `goldenSecondSourcePart` and are admitted,
+2. Concurrent conflicting `costCents` edits are refused with `.refusedByPhysics "concurrent-field-merge-conflict"`. -/
+theorem goldenMultiAgentCoDesign_admitted_and_conflict_refused :
+    mergeEdaPartFields3 goldenBaselinePart goldenPowerAgentBranch goldenRfLayoutAgentBranch =
+      goldenSecondSourcePart ∧
+    mergeAndJudgeAgenticEdaBoard goldenMultiAgentCoDesignProposal = .admitted ∧
+    mergeAndJudgeAgenticEdaBoard conflictingMultiAgentCoDesignProposal =
+      .refusedByPhysics "concurrent-field-merge-conflict" := by
+  decide +kernel
+
 end Obend.Hardware.AgenticEDA
 end
+

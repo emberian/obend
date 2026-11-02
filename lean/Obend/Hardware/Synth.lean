@@ -378,5 +378,38 @@ theorem synthesizeModuleToBels_valid_and_ff_count (m : RtlModule) :
   · simp [countFfBels, synthesizeModuleToBels, List.filter_append,
       flatMap_synthesizeExprToBels_no_ff, map_reg_ff_filter]
 
+/-! ## 5. Verified RTL-to-BEL Signoff Gate (`checkSynthesizedRtlSignoff`) & Retimed MAC RTL Module -/
+
+/-- Verify both `RtlModule` DAG/CDC well-formedness (`checkRtlModule`) and synthesized `BelNetlist`
+cell-arity validity (`checkBelNetlistValid`). -/
+def checkSynthesizedRtlSignoff (m : RtlModule) : Bool :=
+  checkRtlModule m && checkBelNetlistValid (synthesizeModuleToBels m)
+
+/-- **Theorem (`checkSynthesizedRtlSignoff_sound`)**:
+Any `m : RtlModule` passing `checkSynthesizedRtlSignoff` satisfies `checkRtlModule m = true`,
+produces a valid `BelNetlist`, and preserves exact sequential flip-flop count (`countFfBels = m.regs.length`). -/
+theorem checkSynthesizedRtlSignoff_sound (m : RtlModule)
+    (hOk : checkSynthesizedRtlSignoff m = true) :
+    checkRtlModule m = true ∧
+    checkBelNetlistValid (synthesizeModuleToBels m) = true ∧
+    countFfBels (synthesizeModuleToBels m) = m.regs.length := by
+  simp only [checkSynthesizedRtlSignoff, Bool.and_eq_true] at hOk
+  exact ⟨hOk.1, hOk.2, (synthesizeModuleToBels_valid_and_ff_count m).2⟩
+
+/-- Golden Leiserson–Saxe retimed 2-stage MAC `RtlModule` (`mulReg := a * b`, `cReg := c`,
+`outReg := mulReg + cReg`). -/
+def goldenRetimedMacRtl : RtlModule where
+  name       := "obend_retimed_mac2"
+  inputNames := ["a", "b", "c"]
+  wires      :=
+    [ { wireIdx := 0, name := "w_mul", expr := .alu .mul (.inputPort 0) (.inputPort 1) }
+    , { wireIdx := 1, name := "w_add", expr := .alu .add (.regRead 0) (.regRead 1) } ]
+  regs       :=
+    [ { regIdx := 0, name := "mulReg", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .wireRef 0 }
+    , { regIdx := 1, name := "cReg",   domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .inputPort 2 }
+    , { regIdx := 2, name := "outReg", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .wireRef 1 } ]
+  outputs    :=
+    [ { name := "mac_out", expr := .regRead 2 } ]
+
 end Obend.Hardware.Synth
 end
