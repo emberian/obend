@@ -22,11 +22,13 @@ import Obend
 import Obend.Analysis.Cli
 import Obend.Analysis.Coverage
 import Obend.Analysis.Diff
+import Obend.Analysis.Equitable
 import Obend.Analysis.Flowpipe
 import Obend.Analysis.Format
 import Obend.Analysis.Groebner
 import Obend.Analysis.Hybrid
 import Obend.Analysis.Impact
+import Obend.Analysis.QuantumWalk
 import Obend.Analysis.Replay
 import Obend.Analysis.RealAnalysis
 import Obend.Analysis.Setup
@@ -239,6 +241,7 @@ import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
 import Obend.Hardware.Mechanics
+import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.OpenUSD
 import Obend.Hardware.PCB
 import Obend.Hardware.Photonics
@@ -246,6 +249,7 @@ import Obend.Hardware.Physics
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.PowerElectronics
 import Obend.Hardware.Process
+import Obend.Hardware.QuantumMatter
 import Obend.Hardware.RF
 import Obend.Hardware.ReductionMachine
 import Obend.Hardware.Retiming

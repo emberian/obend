@@ -280,17 +280,185 @@ if os.path.exists(OBEND_BIN):
                   and "Variant(\"hardwareSchematic\"" in r_rust_obnb.stdout,
                   r_rust_emit.stdout + r_lean_ver_rust.stdout + r_rust_obnb.stdout)
 
+            # Variable-length CBOR certificates from Rust high-speed solvers (solve-femm, prune-octree, evolve)
+            for cmd_name, dom_arg in [
+                ("solve-femm", "magnetics"),
+                ("prune-octree", "mechanics"),
+                ("evolve", "fluid"),
+            ]:
+                var_cbor_path = os.path.join(obj_dir, f"rust_{cmd_name}.cbor")
+                r_rcmd = subprocess.run(
+                    [RUST_HOST_BIN, cmd_name, "--out", var_cbor_path],
+                    capture_output=True, text=True,
+                )
+                r_lver = subprocess.run(
+                    [OBEND_BIN, "hardware", "verify-cbor", "--domain", dom_arg, "--in-bin", var_cbor_path, "--out-obnb", obnb_cell_path],
+                    capture_output=True, text=True,
+                )
+                check(f"Rust {cmd_name} -> variable-length RFC 8949 CBOR -> obend hardware verify-cbor ({dom_arg})",
+                      r_rcmd.returncode == 0 and r_lver.returncode == 0
+                      and f"verified (hw-binary-cbor@1, domain={dom_arg}," in r_lver.stdout,
+                      r_rcmd.stdout + r_rcmd.stderr + r_lver.stdout + r_lver.stderr)
+
+            # Adversarial variable-length 0x9A CBOR checks (truncated stream & trailing garbage bytes)
+            femm_cbor_path = os.path.join(obj_dir, "rust_solve-femm.cbor")
+            with open(femm_cbor_path, "rb") as f:
+                valid_tape_bytes = f.read()
+            trunc_cbor_path = os.path.join(obj_dir, "rust_tape_trunc.cbor")
+            with open(trunc_cbor_path, "wb") as f:
+                f.write(valid_tape_bytes[:-1])
+            trail_cbor_path = os.path.join(obj_dir, "rust_tape_trail.cbor")
+            with open(trail_cbor_path, "wb") as f:
+                f.write(valid_tape_bytes + b"\x00")
+            r_l_trunc = subprocess.run([OBEND_BIN, "hardware", "verify-cbor", "--domain", "magnetics", "--in-bin", trunc_cbor_path], capture_output=True, text=True)
+            r_l_trail = subprocess.run([OBEND_BIN, "hardware", "verify-cbor", "--domain", "magnetics", "--in-bin", trail_cbor_path], capture_output=True, text=True)
+            r_r_trunc = subprocess.run([RUST_HOST_BIN, "decode-cbor", "--in", trunc_cbor_path], capture_output=True, text=True)
+            r_r_trail = subprocess.run([RUST_HOST_BIN, "decode-cbor", "--in", trail_cbor_path], capture_output=True, text=True)
+            check("variable-length 0x9A CBOR adversarial framing (truncated & trailing garbage rejected by Lean & Rust)",
+                  r_l_trunc.returncode == 3 and r_l_trail.returncode == 3
+                  and r_r_trunc.returncode == 3 and r_r_trail.returncode == 3,
+                  r_l_trunc.stderr + r_l_trail.stderr + r_r_trunc.stderr + r_r_trail.stderr)
+
         # 11. Userspace .obend Physical Engineering Suite (LcDrivesStatorUsd.obend & Cnc5AxisMill.obend)
-        for ob_name, expected_val in [
-            ("LcDrivesStatorUsd.obend", "90n"),
-            ("Cnc5AxisMill.obend", "2100n"),
+        for ob_name, entry_name, expected_val in [
+            ("LcDrivesStatorUsd.obend", "lcDrivesInSlotPeakTemp8kW", "result: 122"),
+            ("Cnc5AxisMill.obend", "compensatedCommandSample", "result: 10024"),
         ]:
             ob_path = os.path.join(HERE, "obend-source", "world", "physical", ob_name)
             r_ob_chk = subprocess.run([OBEND_BIN, "check", ob_path], capture_output=True, text=True)
-            r_ob_run = subprocess.run([OBEND_BIN, "run", ob_path], capture_output=True, text=True)
-            check(f"obend check + run world/physical/{ob_name} (userspace OpenUSD/CAM #law contracts & evaluation = {expected_val})",
-                  r_ob_chk.returncode == 0 and r_ob_run.returncode == 0 and r_ob_run.stdout.strip() == expected_val,
+            r_ob_run = subprocess.run([OBEND_BIN, "run", ob_path, entry_name], capture_output=True, text=True)
+            check(f"obend check + run world/physical/{ob_name} {entry_name} (userspace OpenUSD/CAM #law contracts & {expected_val})",
+                  r_ob_chk.returncode == 0 and r_ob_run.returncode == 0 and expected_val in r_ob_run.stdout,
                   r_ob_chk.stdout + r_ob_chk.stderr + r_ob_run.stdout + r_ob_run.stderr)
+
+        # 12. Live Compiler-Emitted SystemVerilog (emit-sv) + Verilator 5.050 (-Wall) C++ Co-Simulation
+        stator_sv = os.path.join(obj_dir, "lc_drives_userspace_stator.sv")
+        mill_sv = os.path.join(obj_dir, "cnc_5axis_userspace_mill.sv")
+        r_emit_stator = subprocess.run(
+            [OBEND_BIN, "hardware", "emit-sv", "--module", "lc_drives_stator", "--out", stator_sv],
+            capture_output=True, text=True,
+        )
+        r_emit_mill = subprocess.run(
+            [OBEND_BIN, "hardware", "emit-sv", "--module", "cnc_5axis_mill", "--out", mill_sv],
+            capture_output=True, text=True,
+        )
+        check("obend hardware emit-sv: synthesized SystemVerilog-2012 emitted for lc_drives_stator & cnc_5axis_mill",
+              r_emit_stator.returncode == 0 and r_emit_mill.returncode == 0
+              and os.path.exists(stator_sv) and os.path.exists(mill_sv),
+              r_emit_stator.stdout + r_emit_stator.stderr + r_emit_mill.stdout + r_emit_mill.stderr)
+
+        up_tb_sv = os.path.join(obj_dir, "userspace_phys_tb.sv")
+        with open(up_tb_sv, "w") as f:
+            f.write("""/* verilator lint_off UNUSED */
+/* verilator lint_off DECLFILENAME */
+module userspace_phys_tb (
+  input  logic        clk,
+  input  logic        rst,
+  input  logic [63:0] stator_arg,
+  input  logic [63:0] mill_arg,
+  output logic [63:0] out_massKg,
+  output logic [63:0] out_camSurfaceErrorUm,
+  output logic [63:0] out_thermalResistance,
+  output logic [63:0] out_sdfMargin,
+  output logic [63:0] out_peakWindingTemp,
+  output logic [63:0] out_servoLagUm,
+  output logic [63:0] out_endMillDeflectionUm,
+  output logic [63:0] out_abbeAngularDriftUm,
+  output logic [63:0] out_commandedAxisAt10mmUm,
+  output logic [63:0] out_totalVolumetricErrorUm
+);
+  lc_drives_userspace_stator u_stator (
+    .clk(clk),
+    .rst(rst),
+    .arg(stator_arg),
+    .out_massKg(out_massKg),
+    .out_camSurfaceErrorUm(out_camSurfaceErrorUm),
+    .out_thermalResistance(out_thermalResistance),
+    .out_sdfMargin(out_sdfMargin),
+    .out_peakWindingTemp(out_peakWindingTemp)
+  );
+  cnc_5axis_userspace_mill u_mill (
+    .clk(clk),
+    .rst(rst),
+    .arg(mill_arg),
+    .out_servoLagUm(out_servoLagUm),
+    .out_endMillDeflectionUm(out_endMillDeflectionUm),
+    .out_abbeAngularDriftUm(out_abbeAngularDriftUm),
+    .out_commandedAxisAt10mmUm(out_commandedAxisAt10mmUm),
+    .out_totalVolumetricErrorUm(out_totalVolumetricErrorUm)
+  );
+endmodule
+""")
+
+        up_main_cpp = os.path.join(obj_dir, "userspace_phys_main.cpp")
+        with open(up_main_cpp, "w") as f:
+            f.write("""#include <cstdio>
+#include <cstdlib>
+#include "Vuserspace_phys_tb.h"
+#include "verilated.h"
+
+int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);
+    Vuserspace_phys_tb top;
+    top.clk = 0;
+    top.rst = 0;
+    top.stator_arg = 8ULL;
+    top.mill_arg = 6ULL;
+    top.eval();
+    top.clk = 1;
+    top.eval();
+    std::printf(
+        "userspace_phys_sv: massKg=%llu camErr=%llu rTh=%llu sdfMargin=%llu peakWindingTemp=%llu | cmdAxis=%llu totalVolErr=%llu\\n",
+        static_cast<unsigned long long>(top.out_massKg),
+        static_cast<unsigned long long>(top.out_camSurfaceErrorUm),
+        static_cast<unsigned long long>(top.out_thermalResistance),
+        static_cast<unsigned long long>(top.out_sdfMargin),
+        static_cast<unsigned long long>(top.out_peakWindingTemp),
+        static_cast<unsigned long long>(top.out_commandedAxisAt10mmUm),
+        static_cast<unsigned long long>(top.out_totalVolumetricErrorUm)
+    );
+    if (top.out_peakWindingTemp != 122ULL || top.out_sdfMargin != 24ULL ||
+        top.out_commandedAxisAt10mmUm != 10024ULL || top.out_totalVolumetricErrorUm != 26ULL) {
+        return 1;
+    }
+    return 0;
+}
+""")
+
+        up_obj_dir = os.path.join(obj_dir, "obj_userspace_phys")
+        r_up_ver = subprocess.run([
+            VERILATOR, "--cc", "--exe", "--top-module", "userspace_phys_tb",
+            "-sv", "-Wall",
+            f"-I{obj_dir}",
+            stator_sv, mill_sv, up_tb_sv, up_main_cpp,
+            "--Mdir", up_obj_dir,
+        ], capture_output=True, text=True)
+        check("verilator 5.050 (-Wall): compiler-emitted lc_drives_userspace_stator.sv & cnc_5axis_userspace_mill.sv elaboration",
+              r_up_ver.returncode == 0, r_up_ver.stdout + r_up_ver.stderr)
+
+        if r_up_ver.returncode == 0:
+            up_bin = os.path.join(up_obj_dir, "sim_userspace_phys")
+            up_cpps = [
+                os.path.join(up_obj_dir, f)
+                for f in sorted(os.listdir(up_obj_dir))
+                if f.startswith("Vuserspace_phys_tb") and f.endswith(".cpp") and f != "Vuserspace_phys_tb__ALL.cpp"
+            ]
+            r_up_cxx = subprocess.run([
+                CXX, "-Os", "-std=c++20",
+                f"-I{up_obj_dir}", f"-I{VL_INC}", f"-I{VL_INC}/vltstd",
+                "-Wl,-U,__Z15vl_time_stamp64v,-U,__Z13sc_time_stampv,-U,_vlog_startup_routines",
+                up_main_cpp,
+                *up_cpps,
+                os.path.join(VL_INC, "verilated.cpp"),
+                os.path.join(VL_INC, "verilated_threads.cpp"),
+                "-o", up_bin,
+            ], capture_output=True, text=True)
+            r_up_sim = subprocess.run([up_bin], capture_output=True, text=True) if r_up_cxx.returncode == 0 else r_up_cxx
+            check("verilator co-sim: compiler-emitted SV matches Lean kernel (peakWindingTemp=122, sdfMargin=24, cmdAxis=10024, totalVolErr=26)",
+                  r_up_cxx.returncode == 0 and r_up_sim.returncode == 0
+                  and "peakWindingTemp=122" in r_up_sim.stdout and "sdfMargin=24" in r_up_sim.stdout
+                  and "cmdAxis=10024" in r_up_sim.stdout and "totalVolErr=26" in r_up_sim.stdout,
+                  r_up_cxx.stdout + r_up_cxx.stderr + r_up_sim.stdout + r_up_sim.stderr)
 
 print(f"\nrun-hardware: {count - len(failures)}/{count} passed")
 sys.exit(1 if failures else 0)

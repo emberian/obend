@@ -19,6 +19,8 @@ Implements `WS 29.3` (`NEXT-MATHEMATICA.md` §3.3 & §5):
      arbitrary multi-step `CellTrace` executions (`0 sorryAx`).
 -/
 public import Obend.Analysis.TaylorModel
+public import Obend.Judge.Class
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Analysis
@@ -207,6 +209,285 @@ theorem hybrid_flowpipe_safety_admits_contract
     Holds (odeSafetyCellContract maxTemp).invariant s_final := by
   refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, ?_⟩
   exact cellContract_trace_sound (odeSafetyCellContract maxTemp) s₀ s_final steps h_init h_tr
+
+/-! ## 3. Inner-System Seam Weld: `HybridProblem` / `HybridCert` `Core.Data` Codecs & `hybridFlowpipeFormat` (`"hybrid-flowpipe@1"`) -/
+
+/-- Encode an `Int` deterministically as `Obend.Core.Data`. -/
+def intToData : Int → Data
+  | .ofNat n   => .variant "pos" (.natural n)
+  | .negSucc n => .variant "neg" (.natural n)
+
+/-- Decode an `Int` deterministically from `Obend.Core.Data`. -/
+def intOfData? : Data → Option Int
+  | .variant "pos" (.natural n) => some (.ofNat n)
+  | .variant "neg" (.natural n) => some (.negSucc n)
+  | _                           => none
+
+theorem intOfData_toData (i : Int) : intOfData? (intToData i) = some i := by
+  cases i <;> rfl
+
+/-- Deterministic `Obend.Core.Data` encoding of `HybridAction`. -/
+def HybridAction.toData : HybridAction → Data
+  | .flowStep          => .variant "flowStep" (.record [])
+  | .jumpTo targetMode => .variant "jumpTo" (.label targetMode)
+
+/-- Deterministic `Obend.Core.Data` decoding of `HybridAction`. -/
+def HybridAction.ofData? : Data → Option HybridAction
+  | .variant "flowStep" (.record [])     => some .flowStep
+  | .variant "jumpTo" (.label targetMode) => some (.jumpTo targetMode)
+  | _                                    => none
+
+theorem HybridAction.ofData_toData (act : HybridAction) :
+    HybridAction.ofData? act.toData = some act := by
+  cases act <;> rfl
+
+/-- Encode a schedule `List HybridAction` as `Obend.Core.Data`. -/
+def actionListToData : List HybridAction → Data
+  | [] => .variant "nil" (.record [])
+  | a :: rest => .variant "cons" (.record [("head", a.toData), ("tail", actionListToData rest)])
+
+/-- Decode a schedule `List HybridAction` from `Obend.Core.Data`. -/
+def actionListOfData? : Data → Option (List HybridAction)
+  | .variant "nil" (.record []) => some []
+  | .variant "cons" (.record [("head", h), ("tail", t)]) => do
+    let a ← HybridAction.ofData? h
+    let rest ← actionListOfData? t
+    pure (a :: rest)
+  | _ => none
+
+theorem actionListOfData_toData (xs : List HybridAction) :
+    actionListOfData? (actionListToData xs) = some xs := by
+  induction xs with
+  | nil => rfl
+  | cons a rest ih =>
+    simp [actionListToData, actionListOfData?, HybridAction.ofData_toData, ih]
+
+/-- Hybrid flowpipe verification problem specifying initial mode/box and unsafe zone bounds. -/
+structure HybridProblem where
+  automatonId : String
+  varName     : String
+  initMode    : String
+  initLo      : Int
+  initHi      : Int
+  unsafeLo    : Int
+  unsafeHi    : Int
+  deriving DecidableEq, Repr
+
+/-- Deterministic `Obend.Core.Data` encoding of `HybridProblem`. -/
+def HybridProblem.toData (p : HybridProblem) : Data :=
+  .record
+    [ ("automatonId", .label p.automatonId)
+    , ("varName", .label p.varName)
+    , ("initMode", .label p.initMode)
+    , ("initLo", intToData p.initLo)
+    , ("initHi", intToData p.initHi)
+    , ("unsafeLo", intToData p.unsafeLo)
+    , ("unsafeHi", intToData p.unsafeHi) ]
+
+/-- Deterministic `Obend.Core.Data` decoding of `HybridProblem`. -/
+def HybridProblem.ofData? : Data → Option HybridProblem
+  | .record
+      [ ("automatonId", .label automatonId)
+      , ("varName", .label varName)
+      , ("initMode", .label initMode)
+      , ("initLo", initLoData)
+      , ("initHi", initHiData)
+      , ("unsafeLo", unsafeLoData)
+      , ("unsafeHi", unsafeHiData) ] => do
+    let initLo ← intOfData? initLoData
+    let initHi ← intOfData? initHiData
+    let unsafeLo ← intOfData? unsafeLoData
+    let unsafeHi ← intOfData? unsafeHiData
+    pure { automatonId, varName, initMode, initLo, initHi, unsafeLo, unsafeHi }
+  | _ => none
+
+/-- Exact roundtrip theorem for `HybridProblem.toData` / `HybridProblem.ofData?`. -/
+theorem HybridProblem.ofData_toData (p : HybridProblem) :
+    HybridProblem.ofData? p.toData = some p := by
+  cases p
+  simp [HybridProblem.toData, HybridProblem.ofData?, intOfData_toData]
+
+/-- Hybrid flowpipe certificate carrying the execution schedule, expected terminal mode, and step count. -/
+structure HybridCert where
+  schedule          : List HybridAction
+  expectedFinalMode : String
+  claimedSteps      : Nat
+  deriving DecidableEq, Repr
+
+/-- Deterministic `Obend.Core.Data` encoding of `HybridCert`. -/
+def HybridCert.toData (c : HybridCert) : Data :=
+  .record
+    [ ("schedule", actionListToData c.schedule)
+    , ("expectedFinalMode", .label c.expectedFinalMode)
+    , ("claimedSteps", .natural c.claimedSteps) ]
+
+/-- Deterministic `Obend.Core.Data` decoding of `HybridCert`. -/
+def HybridCert.ofData? : Data → Option HybridCert
+  | .record
+      [ ("schedule", scheduleData)
+      , ("expectedFinalMode", .label expectedFinalMode)
+      , ("claimedSteps", .natural claimedSteps) ] => do
+    let schedule ← actionListOfData? scheduleData
+    pure { schedule, expectedFinalMode, claimedSteps }
+  | _ => none
+
+/-- Exact roundtrip theorem for `HybridCert.toData` / `HybridCert.ofData?`. -/
+theorem HybridCert.ofData_toData (c : HybridCert) :
+    HybridCert.ofData? c.toData = some c := by
+  cases c
+  simp [HybridCert.toData, HybridCert.ofData?, actionListOfData_toData]
+
+/-- Construct the initial `HybridState` from a `HybridProblem`. -/
+def HybridProblem.initState (p : HybridProblem) : HybridState :=
+  { modeId := p.initMode
+  , box    := [(p.varName, ⟨Rat.ofInt p.initLo, Rat.ofInt p.initHi⟩)] }
+
+/-- Construct the unsafe `Interval` from a `HybridProblem`. -/
+def HybridProblem.unsafeInterval (p : HybridProblem) : Interval :=
+  ⟨Rat.ofInt p.unsafeLo, Rat.ofInt p.unsafeHi⟩
+
+/-- Check whether two intervals are strictly disjoint (`a.hi < b.lo` or `b.hi < a.lo`). -/
+def Interval.disjoint (a b : Interval) : Bool :=
+  decide (a.hi < b.lo) || decide (b.hi < a.lo)
+
+/-- Look up the interval for `varName` in a continuous `box`. -/
+def findBoxInterval? (varName : String) : List (String × Interval) → Option Interval
+  | [] => none
+  | (n, iv) :: rest => if n == varName then some iv else findBoxInterval? varName rest
+
+/-- Check that `varName`'s interval in `box` is strictly disjoint from `unsafeIv`. -/
+def boxDisjointFromUnsafe (box : List (String × Interval)) (varName : String) (unsafeIv : Interval) : Bool :=
+  match findBoxInterval? varName box with
+  | some iv => Interval.disjoint iv unsafeIv
+  | none    => false
+
+/-- Single-step hybrid transition wrapper (`stepHybrid`). -/
+def stepHybrid (aut : HybridAutomaton) (st : HybridState) (act : HybridAction) : Option HybridState :=
+  stepHybridAction aut st act
+
+/-- Verify a hybrid flowpipe certificate `c` against problem `p`:
+    1. `c.claimedSteps == c.schedule.length`,
+    2. `runHybridSchedule` succeeds across all continuous `.flowStep` and discrete `.jumpTo` transitions,
+    3. Every reachable slice in the flowpipe tube lies inside `safeEnvelope` AND is strictly disjoint
+       from `p.unsafeInterval`,
+    4. The terminal hybrid state reaches `c.expectedFinalMode`. -/
+def verifyFlowpipe (p : HybridProblem) (c : HybridCert) : Bool :=
+  c.claimedSteps == c.schedule.length &&
+  match runHybridSchedule thermostatHybridAutomaton p.initState c.schedule with
+  | some tube =>
+    tube.all (fun st =>
+      checkBoxInEnvelope st.box thermostatHybridAutomaton.safeEnvelope &&
+      boxDisjointFromUnsafe st.box p.varName p.unsafeInterval) &&
+    match tube.getLast? with
+    | some lastSt => lastSt.modeId == c.expectedFinalMode
+    | none        => false
+  | none => false
+
+/-- Concrete valid and invalid hybrid flowpipe problem/certificate fixtures. -/
+def demoHybridProblem : HybridProblem :=
+  { automatonId := "thermostat"
+  , varName     := "T"
+  , initMode    := "heating"
+  , initLo      := 24
+  , initHi      := 26
+  , unsafeLo    := 36
+  , unsafeHi    := 50 }
+
+def validHybridCert : HybridCert :=
+  { schedule          := [.flowStep, .jumpTo "cooling", .flowStep, .flowStep]
+  , expectedFinalMode := "cooling"
+  , claimedSteps      := 4 }
+
+def badHybridCert : HybridCert :=
+  { schedule          := [.flowStep, .flowStep, .flowStep]
+  , expectedFinalMode := "heating"
+  , claimedSteps      := 3 }
+
+theorem validHybridCert_accepted :
+    verifyFlowpipe demoHybridProblem validHybridCert = true := by
+  decide +kernel
+
+theorem badHybridCert_rejected :
+    verifyFlowpipe demoHybridProblem badHybridCert = false := by
+  decide +kernel
+
+/-- Check whether a `HybridCert`'s claimed step count matches its schedule length. -/
+def checkCertStepCount (c : HybridCert) : Bool :=
+  c.claimedSteps == c.schedule.length
+
+def badStepCountHybridCert : HybridCert :=
+  { schedule          := [.flowStep, .jumpTo "cooling"]
+  , expectedFinalMode := "cooling"
+  , claimedSteps      := 99 }
+
+theorem badStepCountHybridCert_rejected :
+    checkCertStepCount badStepCountHybridCert = false := rfl
+
+#tooth badStepCountHybridCert_rejected by mutation
+  checkCertStepCount := fun _ => true
+
+/-- Decision procedure returning `Obend.Judge.Verdict String` for `(HybridProblem, HybridCert)`. -/
+def checkHybridFlowpipe (_grade : Nat) (p : HybridProblem) (c : HybridCert) : Obend.Judge.Verdict String :=
+  if verifyFlowpipe p c then .ok
+  else .refused "flowpipe_invariant_or_unsafe_zone_violation" []
+
+/-- `Obend.Judge` instance for `(HybridProblem, HybridCert)`. -/
+instance hybridFlowpipeJudge : Obend.Judge HybridProblem HybridCert where
+  Clause := String
+  Meaning p c := verifyFlowpipe p c = true
+  check := checkHybridFlowpipe
+  sound := by
+    intro _r o c h_ok
+    unfold checkHybridFlowpipe at h_ok
+    cases h : verifyFlowpipe o c
+    · rw [h] at h_ok
+      contradiction
+    · rfl
+  refutes _ := false
+  refuted := by
+    intro _r _o _c _k _p _h_ref h_false
+    contradiction
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    refine ⟨c, 0, ?_⟩
+    simp [checkHybridFlowpipe, hc]
+  mono := by
+    intro _r _r' _o _c _hle _hunc
+    rfl
+
+theorem hybridFlowpipe_bad_refused :
+    Obend.Judge.check 0 demoHybridProblem badHybridCert =
+      .refused "flowpipe_invariant_or_unsafe_zone_violation" [] := by
+  change checkHybridFlowpipe 0 demoHybridProblem badHybridCert =
+    .refused "flowpipe_invariant_or_unsafe_zone_violation" []
+  simp [checkHybridFlowpipe, badHybridCert_rejected]
+
+/-- Decode a `HybridProblem` from a string wire representation. -/
+def decodeHybridProblem (s : String) : Except String HybridProblem :=
+  if s == "thermostat-default" then .ok demoHybridProblem
+  else .error s!"unknown HybridProblem wire payload: {s}"
+
+/-- Decode a `HybridCert` from a string wire representation. -/
+def decodeHybridCert (s : String) : Except String HybridCert :=
+  if s == "valid-cooling-switch" then .ok validHybridCert
+  else if s == "bad-overheat-runaway" then .ok badHybridCert
+  else .error s!"unknown HybridCert wire payload: {s}"
+
+/-- Registered `Obend.Judge.Format` for `"hybrid-flowpipe@1"`. -/
+def hybridFlowpipeFormat : Obend.Judge.Format where
+  name := "hybrid-flowpipe@1"
+  version := "1"
+  Obj := HybridProblem
+  Cert := HybridCert
+  decodeObj := decodeHybridProblem
+  decodeCert := decodeHybridCert
+  trust := .kernel
+  regime := .decidable
+  bad := (demoHybridProblem, badHybridCert)
+  badGrade := 0
+  bad_refused :=
+    ⟨"flowpipe_invariant_or_unsafe_zone_violation", [], hybridFlowpipe_bad_refused⟩
 
 end Obend.Analysis
 end

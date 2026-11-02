@@ -70,6 +70,10 @@ import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Kinematics
 import all Obend.Hardware.OpenUSD
 import all Obend.Hardware.UserspacePhysical
+import all Obend.Hardware.OpenHypergraph
+import all Obend.Hardware.QuantumMatter
+import all Obend.Analysis.Equitable
+import all Obend.Analysis.QuantumWalk
 import all Obend.Hardware.Codec
 import all Obend.Hardware.Judge
 public import Obend.Hardware
@@ -87,6 +91,7 @@ open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticED
 open Obend.Hardware.Magnetics Obend.Hardware.FluidThermal
 open Obend.Hardware.PowerElectronics Obend.Hardware.Mechanics Obend.Hardware.Accelerators Obend.Hardware.GeometryCAM
 open Obend.Hardware.Kinematics Obend.Hardware.OpenUSD Obend.Hardware.UserspacePhysical
+open Obend.Hardware.OpenHypergraph Obend.Hardware.QuantumMatter Obend.Analysis
 open Obend.Hardware.Codec Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
@@ -586,6 +591,103 @@ def lcDrivesInSlotUpgradeBrokenLayer : Layer where
     ]
 
 #tooth Obend.Hardware.UserspacePhysical.userspace_physical_stator_to_fpga_verified by mutation Obend.Hardware.UserspacePhysical.lcDrivesInSlotUpgradeLayer := lcDrivesInSlotUpgradeBrokenLayer
+
+/-- 49. Broken `compileOpticAdjoint` in `Obend.Hardware.OpenHypergraph` that maps every `OpticOp` to `.add` (breaking `catgrad` reverse-mode AD cotangent soundness for `.sub` and `.mul`). -/
+def compileOpticAdjointAlwaysAdd (_op : OpticOp) : OpticAdjoint :=
+  { op := .add, numResidualWires := 0, usesInputResiduals := false }
+
+#tooth Obend.Hardware.OpenHypergraph.optic_reverse_ad_sound by mutation Obend.Hardware.OpenHypergraph.compileOpticAdjoint := compileOpticAdjointAlwaysAdd
+
+/-- 50. Broken `stepCalyxSeqFsm` in `Obend.Hardware.Compiler` that fails to increment `activeGroupIdx` when a Calyx group completes (`done`), deadlocking the sequential schedule. -/
+def stepCalyxSeqFsmStuckGroup
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64)
+    (st : CalyxSeqFsmState) : CalyxSeqFsmState :=
+  match groups[st.activeGroupIdx]? with
+  | none =>
+    { st with goSignal := false, doneSignal := true }
+  | some g =>
+    if st.cycleInGroup + 1 < g.latencyCycles then
+      { st with cycleInGroup := st.cycleInGroup + 1, goSignal := true, doneSignal := false }
+    else
+      let v := evalRtlExpr inputs wires st.regState g.datapathExpr
+      { activeGroupIdx := st.activeGroupIdx
+        cycleInGroup   := 0
+        goSignal       := true
+        doneSignal     := false
+        regState       := fun r => if r == g.targetRegIdx then v else st.regState r }
+
+#tooth Obend.Hardware.Compiler.calyx_group_go_done_handshake_sound by mutation Obend.Hardware.Compiler.stepCalyxSeqFsm := stepCalyxSeqFsmStuckGroup
+
+/-- 51. Broken `resolveTwoWireSplices` in `Obend.Hardware.ReductionMachine` that drops newly formed active pairs instead of returning them to `activeQueue` (breaking multi-cycle cascading Interaction-Net reduction). -/
+def resolveTwoWireSplicesDropPairs (arena : List INetNode) (_w1 _w2 : PortRef × PortRef) : List INetNode × List ActivePair :=
+  (arena, [])
+
+#tooth Obend.Hardware.ReductionMachine.inet_dynamic_splice_cascading_reduction by mutation Obend.Hardware.ReductionMachine.resolveTwoWireSplices := resolveTwoWireSplicesDropPairs
+
+/-- 52. Broken `ivMinChoice` in `Obend.Hardware.GeometryCAM` that returns `.right` when `a.hi ≤ b.lo` instead of `.left` (inverting `fidget` CSG union branch pruning). -/
+def ivMinChoiceInverted (a b : FloatInterval) : FidgetChoice :=
+  if decide (a.hi ≤ b.lo) then .right
+  else if decide (b.hi ≤ a.lo) then .left
+  else .both
+
+#tooth Obend.Hardware.GeometryCAM.pruneFRepTape_sound by mutation Obend.Hardware.GeometryCAM.ivMinChoice := ivMinChoiceInverted
+
+/-- 53. Broken `AffineForm3D.toInterval` in `Obend.Hardware.OpenUSD` that adds `af.radius` on `lo` instead of subtracting it (collapsing 3D affine SDF enclosures). -/
+def affine3dToIntervalCollapsed (af : AffineForm3D) : FloatInterval where
+  lo := af.c0 + af.radius
+  hi := af.c0 + af.radius
+
+#tooth Obend.Hardware.OpenUSD.affine3d_to_interval_encloses_eval by mutation Obend.Hardware.OpenUSD.AffineForm3D.toInterval := affine3dToIntervalCollapsed
+
+/-- 54. Broken `evalRuckigProfile7` in `Obend.Hardware.Kinematics` that applies `+jMax` instead of `-jMax` in Phase 3 (violating rest-to-rest zero final velocity and acceleration). -/
+def evalRuckigProfile7BrokenPhase3
+    (st0 : RuckigState1D) (jMax : Int) (t1 t2 t3 t4 t5 t6 t7 : Int)
+    (_signs : RuckigControlSigns) : RuckigState1D :=
+  let st1 := stepRuckigSegment st0 jMax t1
+  let st2 := stepRuckigSegment st1 0 t2
+  let st3 := stepRuckigSegment st2 jMax t3
+  let st4 := stepRuckigSegment st3 0 t4
+  let st5 := stepRuckigSegment st4 (-jMax) t5
+  let st6 := stepRuckigSegment st5 0 t6
+  stepRuckigSegment st6 jMax t7
+
+#tooth Obend.Hardware.Kinematics.ruckig_7phase_symmetric_rest_to_rest_identity by mutation Obend.Hardware.Kinematics.evalRuckigProfile7 := evalRuckigProfile7BrokenPhase3
+
+/-- 55. Broken `stepElectroThermalTemp` in `Obend.Hardware.FluidThermal` that subtracts `(pBase + slopeBeta * (tCur - tInlet)) * rTh` instead of adding it (breaking the electro-thermal contraction identity). -/
+def stepElectroThermalTempSubLoss (tInlet pBase slopeBeta rTh tCur : Int) : Int :=
+  tInlet - (pBase + slopeBeta * (tCur - tInlet)) * rTh
+
+#tooth Obend.Hardware.FluidThermal.electro_thermal_contraction_identity by mutation Obend.Hardware.FluidThermal.stepElectroThermalTemp := stepElectroThermalTempSubLoss
+
+/-- 56. Broken `cborDecodeU32List` in `Obend.Hardware.Codec` that drops the decoded head element `x` instead of prepending `x :: xs` (breaking variable-length RFC 8949 CBOR tape round-trip). -/
+def cborDecodeU32ListDropHead : Nat → List UInt8 → Option (List UInt32 × List UInt8)
+  | 0, bytes => some ([], bytes)
+  | k + 1, bytes =>
+    match cborDecodeU32Word bytes with
+    | some (_x, rest1) =>
+      match cborDecodeU32ListDropHead k rest1 with
+      | some (xs, rest2) => some (xs, rest2)
+      | none => none
+    | none => none
+
+#tooth Obend.Hardware.Codec.cborDecodeU32List_encode_exact by mutation Obend.Hardware.Codec.cborDecodeU32List := cborDecodeU32ListDropHead
+
+/-- 57. Broken `cellRowSum` in `Obend.Analysis.Equitable` that returns `0` instead of summing `H u v` over `cellJ` (breaking the equitable partition handshake identity $|C_i| Q_{i,j} = |C_j| Q_{j,i}$). -/
+def cellRowSumZero (_H : Nat → Nat → Int) (_cellJ : List Nat) (_u : Nat) : Int := 0
+
+#tooth Obend.Analysis.equitable_handshake_identity by mutation Obend.Analysis.cellRowSum := cellRowSumZero
+
+/-- 58. Broken `evalPhotonicArray4LayerEven` in `Obend.Hardware.QuantumMatter` that duplicates `c01.1` on waveguide 1 instead of routing `c01.2` (violating 4-waveguide CMT unitary power conservation). -/
+def evalPhotonicArray4LayerEvenDuplicatePort
+    (t01 k01 t23 k23 : Int)
+    (e0 e1 e2 e3 : ComplexField) :
+    ComplexField × ComplexField × ComplexField × ComplexField :=
+  let c01 := evalDirectionalCoupler2x2 t01 k01 e0 e1
+  let c23 := evalDirectionalCoupler2x2 t23 k23 e2 e3
+  (c01.1, c01.1, c23.1, c23.2)
+
+#tooth Obend.Hardware.QuantumMatter.photonic_ctqw_array_power_conserved by mutation Obend.Hardware.QuantumMatter.evalPhotonicArray4LayerEven := evalPhotonicArray4LayerEvenDuplicatePort
 
 end Obend.Teeth.Hardware
 end

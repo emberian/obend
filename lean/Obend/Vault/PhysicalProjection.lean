@@ -22,6 +22,8 @@ public import Obend.Vault.HardwareProjection
 public import Obend.Leaf.Emit
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.FluidThermal
+public import Obend.Hardware.OpenUSD
+public import Obend.Hardware.UserspacePhysical
 public import Obend.Analysis.Hybrid
 @[expose] public section
 
@@ -33,163 +35,12 @@ open Obend.Vault.HardwareProjection (dInt)
 open Obend.Hardware.Kinematics
 open Obend.Hardware.FluidThermal
 open Obend.Hardware.Thermal
+open Obend.Hardware.OpenUSD
+open Obend.Hardware.UserspacePhysical
 open Obend.Logic
 open Obend.Leaf
 open Obend.Analysis
 set_option autoImplicit false
-
-/-! ## 0. Userspace Open-Recursive Physical Compositions & OpenUSD Scene Projection Primitives -/
-
-/-- The 2-layer open-recursive `Composition` for `compensated5AxisMill()` (`Cnc5AxisMill.obend`). -/
-def cnc5AxisMillComp : Composition where
-  top := {
-    name := "Cnc5AxisMill.AbbeAndRuckigCompensatedMill"
-    metadata := .label "Cnc5AxisMill.AbbeAndRuckigCompensatedMill"
-    fields :=
-      [ ("servoLagUm", .lam (.binary .multiply (.bound 0) (.nat 1)))
-      , ("endMillDeflectionUm", .lam (.binary .multiply (.bound 0) (.nat 2)))
-      , ("abbeAngularDriftUm", .lam (.binary .multiply (.bound 0) (.nat 1)))
-      , ("commandedAxisAt10mmUm",
-          .lam (.binary .add
-            (.app (.get (.bound 1) "commandedAxisAt10mmUm") (.bound 0))
-            (.app (.get (.bound 1) "abbeAngularDriftUm") (.bound 0))))
-      ]
-  }
-  below := [{
-    name := "Cnc5AxisMill.Uncompensated5AxisMill"
-    metadata := .label "Cnc5AxisMill.Uncompensated5AxisMill"
-    fields :=
-      [ ("servoLagUm", .lam (.binary .multiply (.bound 0) (.nat 5)))
-      , ("endMillDeflectionUm", .lam (.binary .multiply (.bound 0) (.nat 6)))
-      , ("abbeAngularDriftUm", .lam (.binary .multiply (.bound 0) (.nat 4)))
-      , ("commandedAxisAt10mmUm", .lam (.nat 10000))
-      , ("totalVolumetricErrorUm",
-          .lam (.binary .add
-            (.binary .add
-              (.app (.get (.bound 2) "servoLagUm") (.nat 10))
-              (.app (.get (.bound 2) "endMillDeflectionUm") (.nat 5)))
-            (.app (.get (.bound 2) "abbeAngularDriftUm") (.bound 0))))
-      ]
-  }]
-  seed :=
-    [ ("servoLagUm", .lam (.nat 0))
-    , ("endMillDeflectionUm", .lam (.nat 0))
-    , ("abbeAngularDriftUm", .lam (.nat 0))
-    , ("commandedAxisAt10mmUm", .lam (.nat 10000))
-    , ("totalVolumetricErrorUm", .lam (.nat 0))
-    ]
-
-/-- The 3-layer open-recursive `Composition` for `lcDrivesProductionStator()` (`LcDrivesStatorUsd.obend`). -/
-def lcDrivesStatorUsdComp : Composition where
-  top := {
-    name := "LcDrivesStatorUsd.FiveAxisFinishMilled"
-    metadata := .label "LcDrivesStatorUsd.FiveAxisFinishMilled"
-    fields :=
-      [ ("massKg", .nat 395)
-      , ("camSurfaceErrorUm",
-          .lam (.binary .add (.app (.get (.bound 1) "camSurfaceErrorUm") (.bound 0)) (.nat 2)))
-      ]
-  }
-  below := [
-    { name := "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
-      metadata := .label "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
-      fields :=
-        [ ("thermalResistance", .nat 9)
-        , ("sdfMargin",
-            .lam (.binary .add (.app (.get (.bound 1) "sdfMargin") (.bound 0)) (.nat 6)))
-        ] },
-    { name := "LcDrivesStatorUsd.OuterJacketStator"
-      metadata := .label "LcDrivesStatorUsd.OuterJacketStator"
-      fields :=
-        [ ("thermalResistance", .nat 29)
-        , ("massKg", .nat 420)
-        , ("sdfMargin", .lam (.binary .add (.bound 0) (.nat 10)))
-        , ("peakWindingTemp",
-            .lam (.binary .add (.nat 50)
-              (.binary .multiply (.bound 0) (.get (.bound 2) "thermalResistance"))))
-        , ("camSurfaceErrorUm", .lam (.binary .multiply (.bound 0) (.nat 4)))
-        ] }
-  ]
-  seed :=
-    [ ("thermalResistance", .nat 0)
-    , ("massKg", .nat 0)
-    , ("sdfMargin", .lam (.bound 0))
-    , ("peakWindingTemp", .lam (.bound 0))
-    , ("camSurfaceErrorUm", .lam (.bound 0))
-    ]
-
-/-- OpenUSD scene-graph path (`SdfPath`) represented as hierarchical path segments. -/
-abbrev SdfPath := List String
-
-/-- Non-destructive OpenUSD `relocates` path rewrite. -/
-def applyUsdRelocate (src dst path : SdfPath) : SdfPath :=
-  if src.isPrefixOf path then
-    dst ++ path.drop src.length
-  else
-    path
-
-/-- 1D two-noise-symbol affine form `c0 + c1*eps1 + c2*eps2` for correlation-preserving SDF enclosures. -/
-structure AffineForm1D where
-  c0 : Int
-  c1 : Int
-  c2 : Int
-  deriving DecidableEq, Repr
-
-namespace AffineForm1D
-
-/-- Absolute value of an integer. -/
-def intAbs (x : Int) : Int :=
-  if x >= 0 then x else -x
-
-/-- Total noise radius `|c1| + |c2|`. -/
-def radius (af : AffineForm1D) : Int :=
-  intAbs af.c1 + intAbs af.c2
-
-/-- Affine subtraction `a - b` preserving noise symbol correlations. -/
-def sub (a b : AffineForm1D) : AffineForm1D where
-  c0 := a.c0 - b.c0
-  c1 := a.c1 - b.c1
-  c2 := a.c2 - b.c2
-
-/-- Integer interval `[lo, hi]` for 1D affine form enclosures. -/
-structure IntInterval1D where
-  lo : Int
-  hi : Int
-  deriving DecidableEq, Repr
-
-/-- Interval enclosure `[c0 - radius, c0 + radius]`. -/
-def toInterval (af : AffineForm1D) : IntInterval1D where
-  lo := af.c0 - af.radius
-  hi := af.c0 + af.radius
-
-end AffineForm1D
-
-/-- Causal OpenUSD `timeSamples` physical manufacturing & operation state. -/
-structure UsdPhysicalState where
-  timeCode        : Nat
-  wallThicknessUm : Int
-  peakTempMilliC  : Int
-  receiptDigest   : Nat
-  deriving DecidableEq, Repr
-
-/-- Part lifecycle invariant across manufacturing and thermal operation. -/
-def checkPartLifecycleInvariant (minWallUm maxTempMilliC : Int) (st : UsdPhysicalState) : Bool :=
-  decide (st.wallThicknessUm >= minWallUm ∧ st.peakTempMilliC <= maxTempMilliC)
-
-/-- Causal `timeSamples` chain validator. -/
-def checkUsdTimeSampleChain
-    (minWallUm maxTempMilliC : Int)
-    (prev : UsdPhysicalState) : List UsdPhysicalState → Bool
-  | [] => true
-  | next :: rest =>
-    decide (next.timeCode > prev.timeCode ∧ next.receiptDigest > 0) &&
-    checkPartLifecycleInvariant minWallUm maxTempMilliC next &&
-    checkUsdTimeSampleChain minWallUm maxTempMilliC next rest
-
-/-- Final state of a `timeSamples` track. -/
-def finalUsdState (init : UsdPhysicalState) : List UsdPhysicalState → UsdPhysicalState
-  | [] => init
-  | s :: rest => finalUsdState s rest
 
 /-! ## 1. 5-Axis CNC Kinematic Toolpath & Abbe Compensation Projection -/
 

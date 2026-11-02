@@ -424,5 +424,188 @@ theorem femm_matrix_free_energy_identity (tri : FemmTriangle2D) (a0 a1 a2 : Int)
   rw [femm_linear_comb_factor]
   rfl
 
+/-! ## 7. Global Mesh Nodal Residual Equilibrium (`evalGlobalNodalResidual`) -/
+
+/-- Alias `evalLibCeedElementOp` for `evalMatrixFreeElementAction` (`libCEED` $G_e^\top D_e G_e$ element operator). -/
+abbrev evalLibCeedElementOp := evalMatrixFreeElementAction
+
+/-- A 2D triangular finite element together with its three global mesh vertex indices `(n0, n1, n2)`
+and its three internal nodal residual contributions `(f0, f1, f2)` computed by `evalLibCeedElementOp`. -/
+structure MeshElementResidual2D where
+  n0 : Nat
+  n1 : Nat
+  n2 : Nat
+  f0 : Int
+  f1 : Int
+  f2 : Int
+  deriving DecidableEq, Repr
+
+/-- A 2D triangular mesh element connecting global vertex indices `(n0, n1, n2)` with geometry `tri`. -/
+structure FemmMeshElement2D where
+  n0  : Nat
+  n1  : Nat
+  n2  : Nat
+  tri : FemmTriangle2D
+  deriving DecidableEq, Repr
+
+/-- Evaluates the element nodal residual record `MeshElementResidual2D` for a mesh triangle `elem`
+under a global nodal vector-potential field `nodalA : Nat → Int`. -/
+def evalElementResidual2D (elem : FemmMeshElement2D) (nodalA : Nat → Int) : MeshElementResidual2D :=
+  let (f0, f1, f2) := evalLibCeedElementOp elem.tri (nodalA elem.n0) (nodalA elem.n1) (nodalA elem.n2)
+  { n0 := elem.n0, n1 := elem.n1, n2 := elem.n2, f0 := f0, f1 := f1, f2 := f2 }
+
+/-- Scatters (`P_e^\top`) the internal nodal forces `(f0, f1, f2)` of an element residual `er`
+onto global mesh vertex `nodeIdx : Nat`. -/
+def evalElementNodeContribution (er : MeshElementResidual2D) (nodeIdx : Nat) : Int :=
+  (if er.n0 == nodeIdx then er.f0 else 0) +
+  (if er.n1 == nodeIdx then er.f1 else 0) +
+  (if er.n2 == nodeIdx then er.f2 else 0)
+
+/-- Assembles the global nodal magnetostatic residual $\sum_{e \in \mathcal{T}} (P_e^\top G_e^\top D_e G_e P_e A)_{\text{nodeIdx}}$
+at global mesh vertex `nodeIdx : Nat` across an entire 2D finite-element mesh `mesh : List FemmMeshElement2D`. -/
+def evalGlobalNodalResidual
+    (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) (nodeIdx : Nat) : Int :=
+  match mesh with
+  | [] => 0
+  | elem :: rest =>
+    evalElementNodeContribution (evalElementResidual2D elem nodalA) nodeIdx +
+    evalGlobalNodalResidual rest nodalA nodeIdx
+
+/-- Sums all internal nodal residuals $\sum_{e \in \mathcal{T}} (f_{e,0} + f_{e,1} + f_{e,2})$
+across a 2D finite-element mesh `mesh`. -/
+def evalMeshTotalResidualSum (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) : Int :=
+  match mesh with
+  | [] => 0
+  | elem :: rest =>
+    let er := evalElementResidual2D elem nodalA
+    (er.f0 + er.f1 + er.f2) + evalMeshTotalResidualSum rest nodalA
+
+/-- **Discrete Divergence Theorem / Global Nodal Residual Conservation (`femm_global_residual_sum_zero`)**:
+For every mesh element `elem`, every 2D mesh `mesh : List FemmMeshElement2D`, and every global nodal
+vector potential field `nodalA : Nat → Int`, the sum of internal nodal residuals over each element
+and over the entire mesh is identically zero. -/
+theorem femm_global_residual_sum_zero
+    (elem : FemmMeshElement2D) (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) :
+    let er := evalElementResidual2D elem nodalA
+    (er.f0 + er.f1 + er.f2 = 0) ∧ evalMeshTotalResidualSum mesh nodalA = 0 := by
+  constructor
+  · dsimp only [evalElementResidual2D, evalLibCeedElementOp]
+    exact femm_matrix_free_nodal_sum_zero elem.tri (nodalA elem.n0) (nodalA elem.n1) (nodalA elem.n2)
+  · induction mesh with
+    | nil => rfl
+    | cons hd tl ih =>
+      dsimp only [evalMeshTotalResidualSum, evalElementResidual2D, evalLibCeedElementOp]
+      have hHd := femm_matrix_free_nodal_sum_zero hd.tri (nodalA hd.n0) (nodalA hd.n1) (nodalA hd.n2)
+      dsimp only at hHd
+      rw [hHd, ih, Int.add_zero]
+
+/-- Helper lemma: `evalLibCeedElementOp` is invariant under adding a uniform scalar gauge shift `c`
+to all three nodal vector potentials. -/
+theorem femm_libceed_element_gauge_invariant (tri : FemmTriangle2D) (a0 a1 a2 c : Int) :
+    evalLibCeedElementOp tri (a0 + c) (a1 + c) (a2 + c) =
+      evalLibCeedElementOp tri a0 a1 a2 := by
+  have hGauge := femm_gauge_invariance tri a0 a1 a2 c
+  unfold evalLibCeedElementOp evalMatrixFreeElementAction
+  rw [hGauge.1, hGauge.2]
+
+/-- Helper lemma: `evalElementResidual2D` is invariant under adding a uniform scalar gauge shift `c`
+to the global nodal vector-potential field `nodalA`. -/
+theorem femm_element_residual_gauge_invariant
+    (elem : FemmMeshElement2D) (nodalA : Nat → Int) (c : Int) :
+    evalElementResidual2D elem (fun n => nodalA n + c) =
+      evalElementResidual2D elem nodalA := by
+  unfold evalElementResidual2D
+  rw [femm_libceed_element_gauge_invariant elem.tri (nodalA elem.n0) (nodalA elem.n1) (nodalA elem.n2) c]
+
+/-- **Global Nodal Residual Gauge Invariance (`femm_global_equilibrium_gauge_invariant`)**:
+Adding a constant scalar gauge offset $c \in \mathbb{Z}$ to all nodal vector potentials
+$A_i \mapsto A_i + c$ leaves the assembled global nodal residual at every mesh vertex `nodeIdx : Nat`
+strictly unchanged across any 2D mesh `mesh : List FemmMeshElement2D`. -/
+theorem femm_global_equilibrium_gauge_invariant
+    (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) (c : Int) (nodeIdx : Nat) :
+    evalGlobalNodalResidual mesh (fun n => nodalA n + c) nodeIdx =
+      evalGlobalNodalResidual mesh nodalA nodeIdx := by
+  induction mesh with
+  | nil => rfl
+  | cons elem rest ih =>
+    dsimp only [evalGlobalNodalResidual]
+    rw [femm_element_residual_gauge_invariant elem nodalA c, ih]
+
+/-! ## 8. Maxwell Stress Tensor (`MST`) Air-Gap Torque Integration (`evalMaxwellStressTorque`) -/
+
+/-- A circumferential quadrature sample along the stator-rotor air-gap contour $\Gamma_{\text{ag}}$
+for Maxwell Stress Tensor (`MST`) electromagnetic torque integration
+$T_{\text{MST}} = \frac{L_{\text{stk}} r_{\text{ag}}^2}{\mu_0} \oint_{\Gamma_{\text{ag}}} B_r(\theta) B_\theta(\theta)\,d\theta$:
+* `bRadialMt`: radial magnetic flux density $B_r(\theta)$ in millitesla ($\text{mT}$),
+* `bTangentialMt`: tangential (circumferential) magnetic flux density $B_\theta(\theta)$ in millitesla ($\text{mT}$),
+* `arcWeight`: non-negative quadrature arc-length / stack-volume scaling weight $w_k \ge 0$. -/
+structure AirGapHarmonicSample where
+  bRadialMt     : Int
+  bTangentialMt : Int
+  arcWeight     : Int
+  deriving DecidableEq, Repr
+
+/-- Evaluates the Maxwell Stress Tensor shear contribution $w_k \cdot B_{r,k} \cdot B_{\theta,k}$
+of a single circumferential air-gap quadrature sample. -/
+def evalSampleMaxwellShear (s : AirGapHarmonicSample) : Int :=
+  s.arcWeight * s.bRadialMt * s.bTangentialMt
+
+/-- Integrates the Maxwell Stress Tensor (`MST`) electromagnetic torque across a list of
+circumferential air-gap quadrature samples:
+$$T_{\text{MST}} = \sum_{k} w_k \, B_{r,k} \, B_{\theta,k}.$$ -/
+def evalMaxwellStressTorque : List AirGapHarmonicSample → Int
+  | [] => 0
+  | s :: rest => evalSampleMaxwellShear s + evalMaxwellStressTorque rest
+
+/-- Scales the radial rotor excitation field by `kRadial` and tangential stator armature field by
+`kTan` across an air-gap sample contour. -/
+def scaleAirGapContour (kRadial kTan : Int) : List AirGapHarmonicSample → List AirGapHarmonicSample
+  | [] => []
+  | s :: rest =>
+    { bRadialMt     := kRadial * s.bRadialMt
+      bTangentialMt := kTan * s.bTangentialMt
+      arcWeight     := s.arcWeight } :: scaleAirGapContour kRadial kTan rest
+
+/-- **Bilinear Scaling of Maxwell Stress Tensor Air-Gap Torque (`maxwell_stress_torque_bilinear_scale`)**:
+Scaling the radial rotor flux density by $k_r$ and tangential stator current flux density by $k_q$
+scales the integrated Maxwell Stress Tensor air-gap torque by $k_r \cdot k_q$. -/
+theorem maxwell_stress_torque_bilinear_scale
+    (kRadial kTan : Int) (samples : List AirGapHarmonicSample) :
+    evalMaxwellStressTorque (scaleAirGapContour kRadial kTan samples) =
+      (kRadial * kTan) * evalMaxwellStressTorque samples := by
+  induction samples with
+  | nil =>
+    dsimp only [scaleAirGapContour, evalMaxwellStressTorque]
+    omega
+  | cons s rest ih =>
+    dsimp only [scaleAirGapContour, evalMaxwellStressTorque, evalSampleMaxwellShear]
+    rw [ih]
+    grind
+
+/-- **Maxwell Stress Tensor Torque Positivity & Monotonicity (`maxwell_stress_torque_monotone`)**:
+For any air-gap contour sample with non-negative quadrature weight (`0 ≤ arcWeight`) and non-negative
+radial rotor flux density (`0 ≤ bRadialMt`), increasing the quadrature-aligned tangential stator
+flux density (`0 ≤ bTan1` and `bTan1 ≤ bTan2`) produces non-negative torque and monotonically
+increases the integrated Maxwell Stress Tensor air-gap torque. -/
+theorem maxwell_stress_torque_monotone
+    (bRadialMt bTan1 bTan2 arcWeight : Int)
+    ( rest : List AirGapHarmonicSample)
+    (hWeight : 0 ≤ arcWeight)
+    (hRad    : 0 ≤ bRadialMt)
+    (hTanPos : 0 ≤ bTan1)
+    (hTanLe  : bTan1 ≤ bTan2) :
+    let s1 : AirGapHarmonicSample := { bRadialMt := bRadialMt, bTangentialMt := bTan1, arcWeight := arcWeight }
+    let s2 : AirGapHarmonicSample := { bRadialMt := bRadialMt, bTangentialMt := bTan2, arcWeight := arcWeight }
+    0 ≤ evalSampleMaxwellShear s1 ∧
+    evalMaxwellStressTorque (s1 :: rest) ≤ evalMaxwellStressTorque (s2 :: rest) := by
+  dsimp only [evalMaxwellStressTorque, evalSampleMaxwellShear]
+  have hWR : 0 ≤ arcWeight * bRadialMt := int_mul_nonneg arcWeight bRadialMt hWeight hRad
+  have hShearPos : 0 ≤ arcWeight * bRadialMt * bTan1 :=
+    int_mul_nonneg (arcWeight * bRadialMt) bTan1 hWR hTanPos
+  have hShearMono : arcWeight * bRadialMt * bTan1 ≤ arcWeight * bRadialMt * bTan2 :=
+    int_mul_le_mul_of_nonneg_left bTan1 bTan2 (arcWeight * bRadialMt) hTanLe hWR
+  omega
+
 end Obend.Hardware.Magnetics
 end
+

@@ -71,10 +71,74 @@ structure Method where
   signature : Json
   deriving Inhabited
 
+/-- Isar-style structured proof/discharge method in `.obend` specifications, laws, and contracts. -/
+inductive IsarMethod where
+  | weave
+  | frame
+  | decide
+  | omega
+  | lean (decl : String)
+  | judge (format : String)
+  deriving Inhabited, Repr, BEq, DecidableEq
+
+def IsarMethod.render : IsarMethod → String
+  | .weave => "weave"
+  | .frame => "frame"
+  | .decide => "decide"
+  | .omega => "omega"
+  | .lean decl => "lean(" ++ decl ++ ")"
+  | .judge fmt => "judge(" ++ fmt ++ ")"
+
+def stripQuotes (s : String) : String :=
+  let t := trimStr s
+  if t.length >= 2 && t.startsWith "\"" && t.endsWith "\"" then
+    dropEndStr (dropStr t 1) 1
+  else t
+
+def parseIsarMethod (raw : String) : Except String IsarMethod :=
+  let s := trimStr raw
+  if s == "weave" then .ok .weave
+  else if s == "frame" then .ok .frame
+  else if s == "decide" then .ok .decide
+  else if s == "omega" then .ok .omega
+  else if s.startsWith "lean(" && s.endsWith ")" then
+    let inner := stripQuotes (dropEndStr (dropStr s 5) 1)
+    if inner.isEmpty then .error "empty lean(...) justification"
+    else .ok (.lean inner)
+  else if s.startsWith "judge(" && s.endsWith ")" then
+    let inner := stripQuotes (dropEndStr (dropStr s 6) 1)
+    if inner.isEmpty then .error "empty judge(...) justification"
+    else .ok (.judge inner)
+  else .error ("unknown Isar proof method: " ++ s)
+
+/-- A structured Isar proof step inside a claim or contract block. -/
+inductive IsarStep where
+  | haveStep (label : String) (prop : Expr) (method : IsarMethod)
+  | showStep (prop : Expr) (method : IsarMethod)
+  | obtainStep (binder : String) (prop : Expr) (method : IsarMethod)
+  | byMethod (method : IsarMethod)
+  deriving Inhabited, Repr
+
 structure Claim where
   name : String
   params : List Param
   body : Expr
+  /-- Optional Isar-style structured proof method (`by weave`, `by frame`, `by decide`,
+      `by omega`, `by lean(...)`, `by judge(...)`). -/
+  method : Option IsarMethod := none
+  /-- Optional structured Isar proof steps (`have`, `show`, `obtain`). -/
+  steps : List IsarStep := []
+  deriving Inhabited
+
+/-- Top-level `contract NAME for TARGET [by METHOD]:` block in `.obend`. -/
+structure ContractDecl where
+  name : String
+  targetType : String
+  invariant : Option Expr := none
+  law : Option Law.LawExpr := none
+  step : Option Expr := none
+  method : Option IsarMethod := none
+  steps : List IsarStep := []
   deriving Inhabited
 
 structure Spec where
@@ -157,6 +221,10 @@ structure Module where
   /-- `keeps INV by LAW` lines: the law `LAW` of this module keeps the invariant `INV`
   (`Law.Claim.keeps`), an obligation `obend check --obligations` lists. -/
   keeps : List (String × String) := []
+  /-- Optional Isar-style justification methods on top-level `law NAME [by METHOD]: EXPR` declarations. -/
+  lawMethods : List (String × IsarMethod) := []
+  /-- Top-level `contract NAME for TARGET [by METHOD]:` declarations. -/
+  contracts : List ContractDecl := []
   deriving Inhabited
 
 /-! ## Decoding the parser's AST JSON -/
@@ -218,6 +286,31 @@ def decodeBody : Nat → Json → Except String Body
     | other => .error ("unknown AST body " ++ other)
 end
 
+def decodeIsarStep (fuel : Nat) (j : Json) : Except String IsarStep := do
+  let m ← parseIsarMethod (← str j "by")
+  match ← str j "kind" with
+  | "have" =>
+    return .haveStep (← str j "label") (← decodeExpr fuel (← j.getObjVal? "prop")) m
+  | "show" =>
+    return .showStep (← decodeExpr fuel (← j.getObjVal? "prop")) m
+  | "obtain" =>
+    return .obtainStep (← str j "binder") (← decodeExpr fuel (← j.getObjVal? "prop")) m
+  | "by" =>
+    return .byMethod m
+  | other => .error ("unknown Isar proof step " ++ other)
+
+def decodeOptionalMethod (j : Json) : Except String (Option IsarMethod) := do
+  match j.getObjValAs? String "by" with
+  | .ok mStr =>
+    if trimStr mStr == "" then return none
+    else return some (← parseIsarMethod mStr)
+  | .error _ => return none
+
+def decodeOptionalSteps (fuel : Nat) (j : Json) : Except String (List IsarStep) := do
+  match arr j "steps" with
+  | .ok js => js.mapM (decodeIsarStep fuel)
+  | .error _ => return []
+
 def withoutKey (j : Json) (key : String) : Json :=
   match j with
   | .obj kvs => .obj (kvs.erase key)
@@ -241,10 +334,13 @@ def decodeDecl (j : Json) : Except String Decl := do
       let name ← str l "name"
       let params ← (← arr l "parameters").mapM decodeParam
       let body ← decodeExpr fuel (← l.getObjVal? "body")
+      let method ← decodeOptionalMethod l
+      let steps ← decodeOptionalSteps fuel l
       -- `claim … given COND: BODY` is `if COND then BODY else true`: no new elaboration.
-      match l.getObjVal? "given" with
-      | .ok g => return (Claim.mk name params (.ite (← decodeExpr fuel g) body (.bool true)))
-      | .error _ => return (Claim.mk name params body)
+      let fullBody ← match l.getObjVal? "given" with
+        | .ok g => pure (.ite (← decodeExpr fuel g) body (.bool true))
+        | .error _ => pure body
+      return (Claim.mk name params fullBody method steps)
     let name ← str j "name"
     let suffix := (j.getObjValAs? Bool "suffix").toOption.getD false
     let parents ← (← arr j "parents").mapM (fun p => p.getStr?)
@@ -278,6 +374,25 @@ def decodeDecl (j : Json) : Except String Decl := do
     return .protocol (← str j "generic") (← str j "for") methods
   | other => .error ("unknown AST declaration " ++ other)
 
+def decodeContractDecl (j : Json) : Except String ContractDecl := do
+  let fuel := 4096
+  let name ← str j "name"
+  let targetType ← str j "targetType"
+  let method ← decodeOptionalMethod j
+  let steps ← decodeOptionalSteps fuel j
+  let inv ← match j.getObjVal? "invariant" with
+    | .ok invJ => pure (some (← decodeExpr fuel invJ))
+    | .error _ => pure none
+  let lawExpr ← match j.getObjValAs? String "law" with
+    | .ok lStr =>
+      if trimStr lStr == "" then pure none
+      else pure (some (← Law.parse lStr))
+    | .error _ => pure none
+  let stepExpr ← match j.getObjVal? "step" with
+    | .ok stJ => pure (some (← decodeExpr fuel stJ))
+    | .error _ => pure none
+  return { name, targetType, invariant := inv, law := lawExpr, step := stepExpr, method, steps }
+
 /-- `{name, imports:[{alias, moduleName}], ast}` as the TS elaborator received it. -/
 def decodeModule (j : Json) : Except String Module := do
   let ast ← j.getObjVal? "ast"
@@ -285,11 +400,18 @@ def decodeModule (j : Json) : Except String Module := do
   let mut laws : List (String × Law.LawExpr) := []
   let mut header : Option PackageHeader := none
   let mut keeps : List (String × String) := []
+  let mut lawMethods : List (String × IsarMethod) := []
+  let mut contracts : List ContractDecl := []
   for d in ← arr ast "declarations" do
     if (str d "kind").toOption == some "keeps" then
       keeps := keeps ++ [(← str d "invariant", ← str d "law")]
     else if (str d "kind").toOption == some "law" then
-      laws := laws ++ [(← str d "name", ← Law.parse (← str d "source"))]
+      let lawName ← str d "name"
+      laws := laws ++ [(lawName, ← Law.parse (← str d "source"))]
+      if let some m ← decodeOptionalMethod d then
+        lawMethods := lawMethods ++ [(lawName, m)]
+    else if (str d "kind").toOption == some "contract" then
+      contracts := contracts ++ [← decodeContractDecl d]
     else if (str d "kind").toOption == some "package" then
       if header.isSome then throw "a module declares one package"
       let parents ← (← arr d "parents").mapM fun p => do
@@ -306,7 +428,7 @@ def decodeModule (j : Json) : Except String Module := do
     unless laws.any (·.1 == law) do throw s!"keeps {inv} by {law}: {law} is not a law of this module"
     unless decls.any (fun d => d.name == inv) do throw s!"keeps {inv} by {law}: {inv} is not declared in this module"
   return ⟨← str j "name", ← (← arr j "imports").mapM (fun i => do return (← str i "alias", ← str i "moduleName")),
-    decls, laws, header, keeps⟩
+    decls, laws, header, keeps, lawMethods, contracts⟩
 
 end Obend.Spec.Syntax
 

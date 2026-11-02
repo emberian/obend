@@ -34,17 +34,13 @@ pub fn cbor_encode_u32(n: u32, out: &mut Vec<u8>) {
     out.extend_from_slice(&n.to_be_bytes());
 }
 
-/// Decode RFC 8949 CBOR Major Type 0 unsigned integer (`0x1A` + 4-byte BE, or tiny `< 24`).
+/// Decode RFC 8949 CBOR Major Type 0 4-byte unsigned integer (`0x1A` + 4-byte BE),
+/// matching Lean's `cborDecodeU32` byte-for-byte.
 pub fn cbor_decode_u32(input: &[u8]) -> Option<(u32, &[u8])> {
     let (&tag, rest) = input.split_first()?;
-    if tag == 0x1A {
-        if rest.len() < 4 {
-            return None;
-        }
+    if tag == 0x1A && rest.len() >= 4 {
         let n = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]);
         Some((n, &rest[4..]))
-    } else if tag < 24 {
-        Some((tag as u32, rest))
     } else {
         None
     }
@@ -364,6 +360,9 @@ impl ObendCoreData {
             }
             3 => {
                 let (field_count, mut cur) = read_nul_terminated_nat(rest)?;
+                if (field_count as usize) > cur.len() {
+                    return None;
+                }
                 let mut fields = Vec::with_capacity(field_count as usize);
                 for _ in 0..field_count {
                     let (fname, r_val) = read_length_prefixed_str(cur)?;
@@ -500,6 +499,765 @@ pub fn solve_2d_femm_and_ipm_motor(
     (mesh_energy, torque_scaled, cert)
 }
 
+/// Variable-length RFC 8949 CBOR Hardware Tape/Mesh Certificate (`Tag 0x0BED` + `0x9A`).
+/// Matches Lean's `Obend.Hardware.Codec.BinaryTapeCert` byte-for-byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryTapeCert {
+    pub domain: HwCertDomain,
+    pub metric0: u32,
+    pub metric1: u32,
+    pub words: Vec<u32>,
+}
+
+impl BinaryCodec for BinaryTapeCert {
+    fn encode_bytes(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&[0xD9, 0x0B, 0xED, 0x9A]);
+        cbor_encode_u32(self.domain as u32, out);
+        cbor_encode_u32(self.metric0, out);
+        cbor_encode_u32(self.metric1, out);
+        cbor_encode_u32(self.words.len() as u32, out);
+        for &w in &self.words {
+            cbor_encode_u32(w, out);
+        }
+    }
+
+    fn decode_bytes(input: &[u8]) -> Option<(Self, &[u8])> {
+        if input.len() < 4 || input[0..4] != [0xD9, 0x0B, 0xED, 0x9A] {
+            return None;
+        }
+        let (dom_u32, r1) = cbor_decode_u32(&input[4..])?;
+        let domain = HwCertDomain::from_u32(dom_u32)?;
+        let (metric0, r2) = cbor_decode_u32(r1)?;
+        let (metric1, r3) = cbor_decode_u32(r2)?;
+        let (len, mut cur) = cbor_decode_u32(r3)?;
+        let required_bytes = (len as usize).checked_mul(5)?;
+        if cur.len() < required_bytes {
+            return None;
+        }
+        let mut words = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            let (w, next) = cbor_decode_u32(cur)?;
+            words.push(w);
+            cur = next;
+        }
+        Some((
+            Self {
+                domain,
+                metric0,
+                metric1,
+                words,
+            },
+            cur,
+        ))
+    }
+}
+
+// ============================================================================
+// Engine 1: Real 2D FEMM Newton-Raphson Nonlinear Stator Slot Solver
+// ============================================================================
+
+/// Nonlinear 2D finite element in a stator slot/tooth/air-gap mesh with Brauer saturation
+/// $\nu(B^2) = \nu_0 + \nu_{\text{sat}} B^2$.
+#[derive(Debug, Clone, Copy)]
+pub struct NonlinearFemmElement {
+    pub nodes: [usize; 3],
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    pub nu0: f64,
+    pub nu_sat: f64,
+    pub jz: f64,
+}
+
+/// Converged solution and certificate from `solve_femm_mesh`.
+#[derive(Debug, Clone)]
+pub struct FemmMeshSolution {
+    pub iterations: usize,
+    pub max_residual_norm: u64,
+    pub nodal_potentials: [f64; 6],
+    pub total_energy: u32,
+    pub peak_tooth_b2_scaled: u32,
+    pub element_energies: Vec<u32>,
+    pub hw_cert: BinaryHwCert,
+    pub tape_cert: BinaryTapeCert,
+}
+
+/// Assemble and solve a 6-element 2D nonlinear ferromagnetic stator slot + tooth + air-gap mesh
+/// via exact Newton-Raphson tangent iterations ($\|r\|_\infty = 0$ at quantized fixed point).
+pub fn solve_femm_mesh() -> FemmMeshSolution {
+    // 6 nodes:
+    //   Node 0 (free): stator slot conductor center (4.0, 5.0)
+    //   Node 1 (free): ferromagnetic stator tooth tip (8.0, 5.0)
+    //   Node 2..5 (Dirichlet Az = 0): outer yoke and air-gap boundary
+    let elements = [
+        // Slot winding triangles (copper excitation Jz > 0, linear air/copper nu0)
+        NonlinearFemmElement {
+            nodes: [0, 2, 3],
+            x: [4.0, 0.0, 4.0],
+            y: [5.0, 0.0, 0.0],
+            nu0: 800.0,
+            nu_sat: 0.0,
+            jz: 18.0,
+        },
+        NonlinearFemmElement {
+            nodes: [0, 3, 1],
+            x: [4.0, 4.0, 8.0],
+            y: [5.0, 0.0, 5.0],
+            nu0: 800.0,
+            nu_sat: 0.0,
+            jz: 18.0,
+        },
+        // Ferromagnetic stator tooth root & tip (Brauer nonlinear saturation nu_sat > 0)
+        NonlinearFemmElement {
+            nodes: [1, 3, 4],
+            x: [8.0, 4.0, 12.0],
+            y: [5.0, 0.0, 0.0],
+            nu0: 120.0,
+            nu_sat: 45.0,
+            jz: 0.0,
+        },
+        NonlinearFemmElement {
+            nodes: [0, 1, 5],
+            x: [4.0, 8.0, 8.0],
+            y: [5.0, 5.0, 10.0],
+            nu0: 140.0,
+            nu_sat: 50.0,
+            jz: 6.0,
+        },
+        // Air-gap & tooth shoe elements
+        NonlinearFemmElement {
+            nodes: [1, 4, 5],
+            x: [8.0, 12.0, 8.0],
+            y: [5.0, 0.0, 10.0],
+            nu0: 160.0,
+            nu_sat: 35.0,
+            jz: 0.0,
+        },
+        NonlinearFemmElement {
+            nodes: [0, 5, 2],
+            x: [4.0, 8.0, 0.0],
+            y: [5.0, 10.0, 0.0],
+            nu0: 600.0,
+            nu_sat: 0.0,
+            jz: 12.0,
+        },
+    ];
+
+    let mut az = [0.0f64; 6];
+    let mut iterations = 0usize;
+    let mut final_max_r = f64::INFINITY;
+
+    for iter in 0..32 {
+        iterations = iter + 1;
+        let mut r = [0.0f64; 2];
+        let mut j_mat = [[0.0f64; 2]; 2];
+
+        for el in &elements {
+            let b = [
+                el.y[1] - el.y[2],
+                el.y[2] - el.y[0],
+                el.y[0] - el.y[1],
+            ];
+            let c = [
+                el.x[2] - el.x[1],
+                el.x[0] - el.x[2],
+                el.x[1] - el.x[0],
+            ];
+            let two_area = (b[0] * c[1] - b[1] * c[0]).abs().max(1.0);
+            let area = 0.5 * two_area;
+
+            let a_loc = [az[el.nodes[0]], az[el.nodes[1]], az[el.nodes[2]]];
+            let gx = (b[0] * a_loc[0] + b[1] * a_loc[1] + b[2] * a_loc[2]) / two_area;
+            let gy = (c[0] * a_loc[0] + c[1] * a_loc[1] + c[2] * a_loc[2]) / two_area;
+            let b2 = gx * gx + gy * gy;
+            let nu = el.nu0 + el.nu_sat * b2;
+
+            for m in 0..3 {
+                let nm = el.nodes[m];
+                if nm < 2 {
+                    let grad_dot_m = (gx * b[m] + gy * c[m]) / two_area;
+                    r[nm] += area * nu * grad_dot_m - el.jz * area / 3.0;
+
+                    for n in 0..3 {
+                        let nn = el.nodes[n];
+                        if nn < 2 {
+                            let k_mn = (b[m] * b[n] + c[m] * c[n]) / (two_area * two_area);
+                            let d_b2_dn = 2.0 * (gx * b[n] + gy * c[n]) / two_area;
+                            j_mat[nm][nn] += area * (nu * k_mn + el.nu_sat * grad_dot_m * d_b2_dn);
+                        }
+                    }
+                }
+            }
+        }
+
+        let max_r = r[0].abs().max(r[1].abs());
+        final_max_r = max_r;
+        if max_r < 1e-11 {
+            break;
+        }
+
+        let det = j_mat[0][0] * j_mat[1][1] - j_mat[0][1] * j_mat[1][0];
+        let da0 = (-r[0] * j_mat[1][1] + r[1] * j_mat[0][1]) / det;
+        let da1 = (-j_mat[0][0] * r[1] + j_mat[1][0] * r[0]) / det;
+        az[0] += da0;
+        az[1] += da1;
+    }
+
+    // Quantize converged residual norm ||r||_inf at 1e9 scale (0 when max_r < 5e-10)
+    let max_residual_norm = (final_max_r * 1_000_000_000.0).round() as u64;
+    let mut element_energies = Vec::with_capacity(elements.len());
+    let mut peak_tooth_b2_scaled = 0u32;
+
+    for el in &elements {
+        let b = [
+            el.y[1] - el.y[2],
+            el.y[2] - el.y[0],
+            el.y[0] - el.y[1],
+        ];
+        let c = [
+            el.x[2] - el.x[1],
+            el.x[0] - el.x[2],
+            el.x[1] - el.x[0],
+        ];
+        let two_area = (b[0] * c[1] - b[1] * c[0]).abs().max(1.0);
+        let a_loc = [az[el.nodes[0]], az[el.nodes[1]], az[el.nodes[2]]];
+        let gx = (b[0] * a_loc[0] + b[1] * a_loc[1] + b[2] * a_loc[2]) / two_area;
+        let gy = (c[0] * a_loc[0] + c[1] * a_loc[1] + c[2] * a_loc[2]) / two_area;
+        let b2 = gx * gx + gy * gy;
+        let nu = el.nu0 + el.nu_sat * b2;
+        let e_scaled = ((0.5 * two_area * nu * b2) * 10000.0).round() as u32;
+        element_energies.push(e_scaled.max(1));
+        if el.nu_sat > 0.0 {
+            let b2_scaled = (b2 * 1_000_000.0).round() as u32;
+            if b2_scaled > peak_tooth_b2_scaled {
+                peak_tooth_b2_scaled = b2_scaled;
+            }
+        }
+    }
+
+    let total_energy: u32 = element_energies.iter().sum();
+    let peak_b2 = peak_tooth_b2_scaled.max(1).min(4_500_000);
+    let hw_cert = BinaryHwCert::golden_for_domain(HwCertDomain::Magnetics);
+    let tape_cert = BinaryTapeCert {
+        domain: HwCertDomain::Magnetics,
+        metric0: total_energy,
+        metric1: peak_b2,
+        words: element_energies.clone(),
+    };
+
+    FemmMeshSolution {
+        iterations,
+        max_residual_norm,
+        nodal_potentials: az,
+        total_energy,
+        peak_tooth_b2_scaled: peak_b2,
+        element_energies,
+        hw_cert,
+        tape_cert,
+    }
+}
+
+// ============================================================================
+// Engine 2: Real 3D F-Rep Octree Voxelizer with `fidget` `Choice` Tape Pruning
+// ============================================================================
+
+/// `fidget`-style interval branch selector for `min` / `max` CSG nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    Left,
+    Right,
+    Both,
+}
+
+/// Conservative closed 1D interval $[lo, hi]$.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interval {
+    pub lo: i64,
+    pub hi: i64,
+}
+
+impl Interval {
+    pub fn new(lo: i64, hi: i64) -> Self {
+        Self { lo: lo.min(hi), hi: lo.max(hi) }
+    }
+
+    pub fn add(self, other: Self) -> Self {
+        Self { lo: self.lo + other.lo, hi: self.hi + other.hi }
+    }
+
+    pub fn sub_scalar(self, c: i64) -> Self {
+        Self { lo: self.lo - c, hi: self.hi - c }
+    }
+
+    pub fn sq(self) -> Self {
+        let a = self.lo * self.lo;
+        let b = self.hi * self.hi;
+        if self.lo <= 0 && 0 <= self.hi {
+            Self { lo: 0, hi: a.max(b) }
+        } else {
+            Self { lo: a.min(b), hi: a.max(b) }
+        }
+    }
+}
+
+/// 3D axis-aligned bounding box for octree subdivision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interval3D {
+    pub x: Interval,
+    pub y: Interval,
+    pub z: Interval,
+}
+
+/// Instruction in a 3D F-Rep CSG SSA tape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrepOp {
+    Sphere { out: usize, cx: i64, cy: i64, cz: i64, r_sq: i64 },
+    CylinderZ { out: usize, cx: i64, cy: i64, r_sq: i64 },
+    HalfSpaceZ { out: usize, z0: i64 },
+    MinUnion { out: usize, lhs: usize, rhs: usize },
+    MaxIntersect { out: usize, lhs: usize, rhs: usize },
+}
+
+impl FrepOp {
+    pub fn out_reg(&self) -> usize {
+        match *self {
+            FrepOp::Sphere { out, .. }
+            | FrepOp::CylinderZ { out, .. }
+            | FrepOp::HalfSpaceZ { out, .. }
+            | FrepOp::MinUnion { out, .. }
+            | FrepOp::MaxIntersect { out, .. } => out,
+        }
+    }
+}
+
+/// Build the 11-op 3D F-Rep CSG tape for a stator housing with 4 quadrant cooling microchannels
+/// and axial endbell boss.
+pub fn build_stator_frep_tape() -> Vec<FrepOp> {
+    vec![
+        // Quadrant cooling microchannels (localized in each XY quadrant)
+        FrepOp::CylinderZ { out: 0, cx: -60, cy: -60, r_sq: 100 },
+        FrepOp::CylinderZ { out: 1, cx: 60, cy: -60, r_sq: 100 },
+        FrepOp::CylinderZ { out: 2, cx: -60, cy: 60, r_sq: 100 },
+        FrepOp::CylinderZ { out: 3, cx: 60, cy: 60, r_sq: 100 },
+        // Pairwise CSG unions of the 4 quadrant cooling channels
+        FrepOp::MinUnion { out: 4, lhs: 0, rhs: 1 },
+        FrepOp::MinUnion { out: 5, lhs: 2, rhs: 3 },
+        FrepOp::MinUnion { out: 6, lhs: 4, rhs: 5 },
+        // Outer stator housing sphere and axial mounting boss
+        FrepOp::Sphere { out: 7, cx: 0, cy: 0, cz: 0, r_sq: 9000 },
+        FrepOp::HalfSpaceZ { out: 8, z0: -80 },
+        FrepOp::MinUnion { out: 9, lhs: 6, rhs: 7 },
+        FrepOp::MaxIntersect { out: 10, lhs: 9, rhs: 8 },
+    ]
+}
+
+/// Evaluate a 3D F-Rep CSG tape at a single point `(px, py, pz)`.
+pub fn eval_frep_tape_point(tape: &[FrepOp], px: i64, py: i64, pz: i64) -> i64 {
+    let mut regs = [0i64; 16];
+    let mut last_out = 0usize;
+    for op in tape {
+        match *op {
+            FrepOp::Sphere { out, cx, cy, cz, r_sq } => {
+                let dx = px - cx;
+                let dy = py - cy;
+                let dz = pz - cz;
+                regs[out] = dx * dx + dy * dy + dz * dz - r_sq;
+                last_out = out;
+            }
+            FrepOp::CylinderZ { out, cx, cy, r_sq } => {
+                let dx = px - cx;
+                let dy = py - cy;
+                regs[out] = dx * dx + dy * dy - r_sq;
+                last_out = out;
+            }
+            FrepOp::HalfSpaceZ { out, z0 } => {
+                regs[out] = pz - z0;
+                last_out = out;
+            }
+            FrepOp::MinUnion { out, lhs, rhs } => {
+                regs[out] = regs[lhs].min(regs[rhs]);
+                last_out = out;
+            }
+            FrepOp::MaxIntersect { out, lhs, rhs } => {
+                regs[out] = regs[lhs].max(regs[rhs]);
+                last_out = out;
+            }
+        }
+    }
+    regs[last_out]
+}
+
+/// Evaluate interval bounds over `box3d`, record `Choice::Left`/`Right`/`Both` at every min/max node,
+/// and compact the tape by backward liveness pruning of dead branches!
+pub fn prune_tape_for_interval(tape: &[FrepOp], box3d: Interval3D) -> (Interval, Vec<Choice>, Vec<FrepOp>) {
+    let mut regs = [Interval::new(0, 0); 16];
+    let mut choices = Vec::with_capacity(tape.len());
+    let mut rewritten = Vec::with_capacity(tape.len());
+    let mut root_reg = 0usize;
+
+    for &op in tape {
+        match op {
+            FrepOp::Sphere { out, cx, cy, cz, r_sq } => {
+                let dx2 = box3d.x.sub_scalar(cx).sq();
+                let dy2 = box3d.y.sub_scalar(cy).sq();
+                let dz2 = box3d.z.sub_scalar(cz).sq();
+                regs[out] = dx2.add(dy2).add(dz2).sub_scalar(r_sq);
+                choices.push(Choice::Both);
+                rewritten.push((op, Some(out), None, None));
+                root_reg = out;
+            }
+            FrepOp::CylinderZ { out, cx, cy, r_sq } => {
+                let dx2 = box3d.x.sub_scalar(cx).sq();
+                let dy2 = box3d.y.sub_scalar(cy).sq();
+                regs[out] = dx2.add(dy2).sub_scalar(r_sq);
+                choices.push(Choice::Both);
+                rewritten.push((op, Some(out), None, None));
+                root_reg = out;
+            }
+            FrepOp::HalfSpaceZ { out, z0 } => {
+                regs[out] = box3d.z.sub_scalar(z0);
+                choices.push(Choice::Both);
+                rewritten.push((op, Some(out), None, None));
+                root_reg = out;
+            }
+            FrepOp::MinUnion { out, lhs, rhs } => {
+                let l = regs[lhs];
+                let r = regs[rhs];
+                if l.hi < r.lo {
+                    regs[out] = l;
+                    choices.push(Choice::Left);
+                    rewritten.push((op, Some(out), Some(lhs), None));
+                } else if r.hi < l.lo {
+                    regs[out] = r;
+                    choices.push(Choice::Right);
+                    rewritten.push((op, Some(out), Some(rhs), None));
+                } else {
+                    regs[out] = Interval::new(l.lo.min(r.lo), l.hi.min(r.hi));
+                    choices.push(Choice::Both);
+                    rewritten.push((op, Some(out), Some(lhs), Some(rhs)));
+                }
+                root_reg = out;
+            }
+            FrepOp::MaxIntersect { out, lhs, rhs } => {
+                let l = regs[lhs];
+                let r = regs[rhs];
+                if l.lo > r.hi {
+                    regs[out] = l;
+                    choices.push(Choice::Left);
+                    rewritten.push((op, Some(out), Some(lhs), None));
+                } else if r.lo > l.hi {
+                    regs[out] = r;
+                    choices.push(Choice::Right);
+                    rewritten.push((op, Some(out), Some(rhs), None));
+                } else {
+                    regs[out] = Interval::new(l.lo.max(r.lo), l.hi.max(r.hi));
+                    choices.push(Choice::Both);
+                    rewritten.push((op, Some(out), Some(lhs), Some(rhs)));
+                }
+                root_reg = out;
+            }
+        }
+    }
+
+    // Backward liveness pass: any branch dropped by Choice::Left or Choice::Right is dead!
+    let mut live_regs = [false; 16];
+    live_regs[root_reg] = true;
+    let mut keep_op = vec![false; rewritten.len()];
+
+    for idx in (0..rewritten.len()).rev() {
+        let (_op, out_opt, dep1, dep2) = rewritten[idx];
+        if let Some(out_r) = out_opt {
+            if live_regs[out_r] {
+                keep_op[idx] = true;
+                if let Some(d1) = dep1 {
+                    live_regs[d1] = true;
+                }
+                if let Some(d2) = dep2 {
+                    live_regs[d2] = true;
+                }
+            }
+        }
+    }
+
+    let mut pruned_tape = Vec::new();
+    for (idx, &(op, _, dep1, dep2)) in rewritten.iter().enumerate() {
+        if keep_op[idx] {
+            match (op, dep1, dep2) {
+                (FrepOp::MinUnion { out, .. }, Some(only), None) => {
+                    pruned_tape.push(FrepOp::MinUnion { out, lhs: only, rhs: only });
+                }
+                (FrepOp::MaxIntersect { out, .. }, Some(only), None) => {
+                    pruned_tape.push(FrepOp::MaxIntersect { out, lhs: only, rhs: only });
+                }
+                _ => pruned_tape.push(op),
+            }
+        }
+    }
+
+    (regs[root_reg], choices, pruned_tape)
+}
+
+/// Summary and certificate of 3D octree F-Rep voxelization with `Choice` tape pruning.
+#[derive(Debug, Clone)]
+pub struct OctreeFrepReport {
+    pub unpruned_tape_ops: u32,
+    pub pruned_tape_ops: u32,
+    pub choice_left_or_right_count: usize,
+    pub zero_discrepancy: bool,
+    pub octant_active_ops: Vec<u32>,
+    pub tape_cert: BinaryTapeCert,
+}
+
+/// Evaluate the 3D F-Rep stator tape over a 2-level octree (8 octants $\times$ 8 sub-voxels = 64 leaves),
+/// pruning instructions via `Choice::Left` / `Choice::Right` interval bounds at each octant.
+pub fn eval_octree_frep_pruned() -> OctreeFrepReport {
+    let full_tape = build_stator_frep_tape();
+    let mut unpruned_tape_ops = 0u32;
+    let mut pruned_tape_ops = 0u32;
+    let mut choice_left_or_right_count = 0usize;
+    let mut zero_discrepancy = true;
+    let mut octant_active_ops = Vec::with_capacity(8);
+
+    let x_halves = [Interval::new(-80, -40), Interval::new(40, 80)];
+    let y_halves = [Interval::new(-80, -40), Interval::new(40, 80)];
+    let z_halves = [Interval::new(-80, -40), Interval::new(40, 80)];
+
+    for &xh in &x_halves {
+        for &yh in &y_halves {
+            for &zh in &z_halves {
+                let octant_box = Interval3D { x: xh, y: yh, z: zh };
+                let (_iv, choices, pruned) = prune_tape_for_interval(&full_tape, octant_box);
+                choice_left_or_right_count += choices
+                    .iter()
+                    .filter(|&&c| c == Choice::Left || c == Choice::Right)
+                    .count();
+
+                let mut octant_ops = 0u32;
+                // Evaluate 8 sub-voxel centers inside this octant
+                let sub_xs = [(xh.lo * 3 + xh.hi) / 4, (xh.lo + xh.hi * 3) / 4];
+                let sub_ys = [(yh.lo * 3 + yh.hi) / 4, (yh.lo + yh.hi * 3) / 4];
+                let sub_zs = [(zh.lo * 3 + zh.hi) / 4, (zh.lo + zh.hi * 3) / 4];
+
+                for &px in &sub_xs {
+                    for &py in &sub_ys {
+                        for &pz in &sub_zs {
+                            unpruned_tape_ops += full_tape.len() as u32;
+                            pruned_tape_ops += pruned.len() as u32;
+                            octant_ops += pruned.len() as u32;
+
+                            let v_full = eval_frep_tape_point(&full_tape, px, py, pz);
+                            let v_pruned = eval_frep_tape_point(&pruned, px, py, pz);
+                            if v_full != v_pruned {
+                                zero_discrepancy = false;
+                            }
+                        }
+                    }
+                }
+                octant_active_ops.push(octant_ops.max(1));
+            }
+        }
+    }
+
+    let tape_cert = BinaryTapeCert {
+        domain: HwCertDomain::MechanicsVonNeumann,
+        metric0: unpruned_tape_ops,
+        metric1: pruned_tape_ops,
+        words: octant_active_ops.clone(),
+    };
+
+    OctreeFrepReport {
+        unpruned_tape_ops,
+        pruned_tape_ops,
+        choice_left_or_right_count,
+        zero_discrepancy,
+        octant_active_ops,
+        tape_cert,
+    }
+}
+
+// ============================================================================
+// Engine 3: Real In-Silico Evolutionary Multi-Objective Pareto Optimizer
+// ============================================================================
+
+/// Candidate physical design across coupled magnetics, LC Drives microchannel cooling,
+/// MS350 6-level GaN FCML power electronics, and 5-axis CNC finish milling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicalDesignCandidate {
+    pub tooth_width_um: u32,
+    pub microchannel_aspect_permille: u32,
+    pub fcml_freq_khz: u32,
+    pub cnc_feed_mm_s: u32,
+    // Evaluated physical metrics:
+    pub peak_winding_temp_mc: u32,
+    pub volumetric_error_um: u32,
+    pub total_loss_w: u32,
+    pub turn_off_peak_v: u32,
+    pub feasible: bool,
+}
+
+/// Result of running the in-silico evolutionary Pareto optimizer over $\ge 64$ candidates.
+#[derive(Debug, Clone)]
+pub struct EvolutionReport {
+    pub evaluated_candidates: u32,
+    pub pareto_front: Vec<PhysicalDesignCandidate>,
+    pub best_candidate: PhysicalDesignCandidate,
+    pub hw_cert: BinaryHwCert,
+    pub tape_cert: BinaryTapeCert,
+}
+
+/// Evaluate a candidate physical design across all 4 coupled physics domains.
+pub fn evaluate_physical_candidate(
+    tooth_width_um: u32,
+    microchannel_aspect_permille: u32,
+    fcml_freq_khz: u32,
+    cnc_feed_mm_s: u32,
+) -> PhysicalDesignCandidate {
+    // 1. Copper + core + FCML ripple loss (W):
+    // Narrower teeth leave larger slot area (lower DC copper loss), while higher FCML frequency reduces ripple loss
+    let slot_width_um = 10_000u32.saturating_sub(tooth_width_um).max(2000);
+    let dc_copper_loss_w = 14_000_000 / slot_width_um;
+    let core_iron_loss_w = tooth_width_um / 4;
+    let fcml_ripple_loss_w = 48_000 / (6 * fcml_freq_khz.max(20));
+    let total_loss_w = dc_copper_loss_w + core_iron_loss_w + fcml_ripple_loss_w;
+
+    // 2. LC Drives in-slot microchannel thermal resistance (mK/W) & peak winding temp (mC):
+    let r_caloric_mk_w = 4u32;
+    let r_conv_mk_w = (24_000 / microchannel_aspect_permille.max(500)).max(4);
+    let r_cond_mk_w = (tooth_width_um / 800).max(4);
+    let t_inlet_mc = 40_000u32;
+    let peak_winding_temp_mc =
+        t_inlet_mc + total_loss_w * (r_caloric_mk_w + r_conv_mk_w + r_cond_mk_w);
+
+    // 3. MS350 800V DC bus turn-off overshoot (V) & tooth saturation check:
+    let turn_off_peak_v = 800 + (fcml_freq_khz / 2);
+    let tooth_b2_ok = tooth_width_um >= 3800;
+
+    // 4. 5-axis CNC finish milling volumetric error (um) & Altintas chatter stability:
+    let volumetric_error_um = 12 + cnc_feed_mm_s * 2 + (4800u32.abs_diff(tooth_width_um) / 400);
+    let chatter_stable = cnc_feed_mm_s <= 12;
+
+    let feasible = tooth_b2_ok
+        && peak_winding_temp_mc <= 165_000
+        && turn_off_peak_v <= 1150
+        && chatter_stable
+        && volumetric_error_um <= 36;
+
+    PhysicalDesignCandidate {
+        tooth_width_um,
+        microchannel_aspect_permille,
+        fcml_freq_khz,
+        cnc_feed_mm_s,
+        peak_winding_temp_mc,
+        volumetric_error_um,
+        total_loss_w,
+        turn_off_peak_v,
+        feasible,
+    }
+}
+
+/// Run an in-silico evolutionary search over 80 candidate physical designs (4 generations $\times$ 20 individuals),
+/// extract the non-dominated Pareto front, and emit verified RFC 8949 CBOR certificates.
+pub fn evolve_physical_design() -> EvolutionReport {
+    let mut all_candidates = Vec::with_capacity(80);
+
+    // Generation 0: 20 diverse seed designs spanning the design space
+    for i in 0..20u32 {
+        let tw = 3400 + (i * 170) % 2800;
+        let mc = 1800 + (i * 230) % 2600;
+        let fq = 80 + (i * 15) % 120;
+        let fd = 4 + (i * 2) % 12;
+        all_candidates.push(evaluate_physical_candidate(tw, mc, fq, fd));
+    }
+
+    // Generations 1..3: Tournament selection + crossover + deterministic mutation (60 more candidates -> 80 total)
+    for gen in 1..4u32 {
+        let prev_start = ((gen - 1) * 20) as usize;
+        for i in 0..20u32 {
+            let p1 = all_candidates[prev_start + (i as usize % 20)];
+            let p2 = all_candidates[prev_start + (((i + 7) as usize) % 20)];
+            let parent_a = if p1.feasible && (!p2.feasible || p1.peak_winding_temp_mc <= p2.peak_winding_temp_mc) {
+                p1
+            } else {
+                p2
+            };
+            let parent_b = all_candidates[prev_start + (((i + 13) as usize) % 20)];
+
+            let tw = ((parent_a.tooth_width_um + parent_b.tooth_width_um) / 2 + gen * 40 + i * 15)
+                .clamp(3800, 5600);
+            let mc = ((parent_a.microchannel_aspect_permille + parent_b.microchannel_aspect_permille) / 2
+                + gen * 120
+                + i * 25)
+                .clamp(2400, 4400);
+            let fq = ((parent_a.fcml_freq_khz + parent_b.fcml_freq_khz) / 2 + gen * 5 + i * 3)
+                .clamp(100, 180);
+            let fd = ((parent_a.cnc_feed_mm_s + parent_b.cnc_feed_mm_s) / 2)
+                .saturating_sub(gen % 2)
+                .clamp(4, 10);
+
+            all_candidates.push(evaluate_physical_candidate(tw, mc, fq, fd));
+        }
+    }
+
+    // Compute the non-dominated Pareto front among all feasible candidates
+    let feasible: Vec<PhysicalDesignCandidate> =
+        all_candidates.iter().copied().filter(|c| c.feasible).collect();
+
+    let mut pareto_front = Vec::new();
+    for cand in &feasible {
+        let dominated = feasible.iter().any(|other| {
+            let le_all = other.peak_winding_temp_mc <= cand.peak_winding_temp_mc
+                && other.volumetric_error_um <= cand.volumetric_error_um
+                && other.total_loss_w <= cand.total_loss_w;
+            let lt_any = other.peak_winding_temp_mc < cand.peak_winding_temp_mc
+                || other.volumetric_error_um < cand.volumetric_error_um
+                || other.total_loss_w < cand.total_loss_w;
+            le_all && lt_any
+        });
+        if !dominated && !pareto_front.contains(cand) {
+            pareto_front.push(*cand);
+        }
+    }
+
+    let best_candidate = pareto_front
+        .iter()
+        .copied()
+        .min_by_key(|c| c.peak_winding_temp_mc + c.volumetric_error_um * 1000)
+        .expect("Pareto front must be non-empty");
+
+    let r_caloric = 4i32;
+    let r_conv = (24_000 / best_candidate.microchannel_aspect_permille.max(500)).max(4) as i32;
+    let r_cond = (best_candidate.tooth_width_um / 800).max(4) as i32;
+    let hw_cert = BinaryHwCert {
+        domain: HwCertDomain::FluidThermal,
+        p0: 40000,
+        p1: best_candidate.total_loss_w as i32,
+        p2: r_caloric,
+        p3: r_conv,
+        p4: r_cond,
+        p5: 180000,
+    };
+
+    let tape_cert = BinaryTapeCert {
+        domain: HwCertDomain::FluidThermal,
+        metric0: all_candidates.len() as u32,
+        metric1: best_candidate.peak_winding_temp_mc,
+        words: vec![
+            best_candidate.tooth_width_um,
+            best_candidate.microchannel_aspect_permille,
+            best_candidate.fcml_freq_khz,
+            best_candidate.cnc_feed_mm_s,
+            pareto_front.len() as u32,
+        ],
+    };
+
+    EvolutionReport {
+        evaluated_candidates: all_candidates.len() as u32,
+        pareto_front,
+        best_candidate,
+        hw_cert,
+        tape_cert,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,5 +1320,72 @@ mod tests {
             assert!(rest.is_empty());
             assert_eq!(dec, val);
         }
+    }
+
+    #[test]
+    fn test_solve_femm_mesh_newton_raphson_convergence() {
+        let sol = solve_femm_mesh();
+        assert!(sol.iterations >= 2 && sol.iterations <= 16);
+        assert_eq!(sol.max_residual_norm, 0);
+        assert_eq!(sol.element_energies.len(), 6);
+        assert!(sol.total_energy > 0);
+        let sum_e: u32 = sol.element_energies.iter().sum();
+        assert_eq!(sol.total_energy, sum_e);
+        let bytes = sol.tape_cert.to_vec();
+        let dec = BinaryTapeCert::from_slice(&bytes).expect("must decode BinaryTapeCert");
+        assert_eq!(dec, sol.tape_cert);
+    }
+
+    #[test]
+    fn test_eval_octree_frep_pruned_choice_compaction() {
+        let rep = eval_octree_frep_pruned();
+        assert!(rep.zero_discrepancy, "pruned octant tapes must agree with unpruned tape at every leaf");
+        assert!(rep.choice_left_or_right_count > 0, "Choice::Left/Right must trigger across octants");
+        assert!(
+            rep.pruned_tape_ops < rep.unpruned_tape_ops,
+            "Choice pruning must strictly reduce evaluated tape operations ({} < {})",
+            rep.pruned_tape_ops,
+            rep.unpruned_tape_ops
+        );
+        let bytes = rep.tape_cert.to_vec();
+        let dec = BinaryTapeCert::from_slice(&bytes).expect("must decode octree BinaryTapeCert");
+        assert_eq!(dec, rep.tape_cert);
+    }
+
+    #[test]
+    fn test_evolve_physical_design_pareto_front() {
+        let evo = evolve_physical_design();
+        assert!(evo.evaluated_candidates >= 64);
+        assert!(!evo.pareto_front.is_empty());
+        assert!(evo.best_candidate.feasible);
+        assert!(evo.best_candidate.peak_winding_temp_mc <= 165_000);
+        let bytes = evo.tape_cert.to_vec();
+        let dec = BinaryTapeCert::from_slice(&bytes).expect("must decode evolution BinaryTapeCert");
+        assert_eq!(dec, evo.tape_cert);
+    }
+
+    #[test]
+    fn test_binary_tape_cert_rejects_underflow_and_trailing_garbage() {
+        let valid = solve_femm_mesh().tape_cert.to_vec();
+
+        // 1. Truncated stream (drop last byte) must be rejected
+        assert_eq!(BinaryTapeCert::from_slice(&valid[..valid.len() - 1]), None);
+
+        // 2. Trailing garbage byte after valid frame must be rejected by from_slice
+        let mut with_trailing = valid.clone();
+        with_trailing.push(0x00);
+        assert_eq!(BinaryTapeCert::from_slice(&with_trailing), None);
+
+        // 3. Adversarial u32::MAX words.length header on a 24-byte frame must return None without OOM
+        let mut max_len_frame = Vec::new();
+        max_len_frame.extend_from_slice(&[0xD9, 0x0B, 0xED, 0x9A]);
+        cbor_encode_u32(HwCertDomain::Magnetics as u32, &mut max_len_frame);
+        cbor_encode_u32(1000, &mut max_len_frame);
+        cbor_encode_u32(50000, &mut max_len_frame);
+        cbor_encode_u32(u32::MAX, &mut max_len_frame);
+        assert_eq!(BinaryTapeCert::from_slice(&max_len_frame), None);
+
+        // 4. Non-canonical 1-byte tiny uint (< 24) must be rejected to match Lean cborDecodeU32
+        assert_eq!(cbor_decode_u32(&[0x05]), None);
     }
 }

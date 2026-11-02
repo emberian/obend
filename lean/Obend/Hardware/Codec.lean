@@ -130,6 +130,97 @@ def cborDecodeU32 : List UInt8 → Option (Nat × List UInt8)
   rw [hbe]
   rfl
 
+instance : Coe UInt32 Nat where
+  coe := UInt32.toNat
+
+/-- Decode a 4-byte big-endian `UInt32` word prefixed by `0x1A` from a CBOR stream. -/
+def cborDecodeU32Word (bytes : List UInt8) : Option (UInt32 × List UInt8) :=
+  match cborDecodeU32 bytes with
+  | some (n, rest) => some (UInt32.ofNat n, rest)
+  | none => none
+
+theorem u32_toNat_lt_u32Bound (x : UInt32) : x.toNat < u32Bound := by
+  have h := x.toNat_lt
+  unfold u32Bound
+  omega
+
+@[simp] theorem cborDecodeU32Word_encode_append (x : UInt32) (tail : List UInt8) :
+    cborDecodeU32Word (cborEncodeU32 x.toNat ++ tail) = some (x, tail) := by
+  have hlt : x.toNat < u32Bound := u32_toNat_lt_u32Bound x
+  simp [cborDecodeU32Word, cborDecodeU32_encode_append hlt]
+
+/-- Encode a variable-length `List UInt32` into concatenated RFC 8949 CBOR 32-bit unsigned integers. -/
+def cborEncodeU32List (xs : List UInt32) : List UInt8 :=
+  xs.foldr (fun (x : UInt32) acc => cborEncodeU32 x ++ acc) []
+
+/-- Decode `count` 32-bit unsigned CBOR integers from a byte stream. -/
+def cborDecodeU32List : Nat → List UInt8 → Option (List UInt32 × List UInt8)
+  | 0, bytes => some ([], bytes)
+  | k + 1, bytes =>
+    match cborDecodeU32Word bytes with
+    | some (x, rest1) =>
+      match cborDecodeU32List k rest1 with
+      | some (xs, rest2) => some (x :: xs, rest2)
+      | none => none
+    | none => none
+
+/-- **Universal Variable-Length CBOR `UInt32` Array/Tape Round-Trip Theorem (`cborDecodeU32List_encode_exact`)**:
+    For every list `xs : List UInt32` of arbitrary length and any trailing byte stream `rest : List UInt8`,
+    decoding `xs.length` elements from `xs.foldr (fun x acc => cborEncodeU32 x ++ acc) rest` recovers
+    `some (xs, rest)` exactly. -/
+@[simp] theorem cborDecodeU32List_encode_exact (xs : List UInt32) (rest : List UInt8) :
+    cborDecodeU32List xs.length (xs.foldr (fun (x : UInt32) acc => cborEncodeU32 x ++ acc) rest) =
+      some (xs, rest) := by
+  induction xs generalizing rest with
+  | nil => rfl
+  | cons x tl ih =>
+    simp only [List.length_cons, List.foldr_cons, cborDecodeU32List,
+      cborDecodeU32Word_encode_append, ih]
+
+@[simp] theorem foldr_cborEncodeU32_eq_append (xs : List UInt32) (rest : List UInt8) :
+    xs.foldr (fun (x : UInt32) acc => cborEncodeU32 x ++ acc) rest = cborEncodeU32List xs ++ rest := by
+  induction xs with
+  | nil => rfl
+  | cons x tl ih =>
+    simp only [cborEncodeU32List, List.foldr_cons, ih, List.append_assoc]
+
+@[simp] theorem cborDecodeU32List_encode_append (xs : List UInt32) (rest : List UInt8) :
+    cborDecodeU32List xs.length (cborEncodeU32List xs ++ rest) = some (xs, rest) := by
+  rw [← foldr_cborEncodeU32_eq_append]
+  exact cborDecodeU32List_encode_exact xs rest
+
+/-- Encode a variable-length `List UInt32` instruction tape / mesh payload inside an RFC 8949 CBOR
+    Tag `0x0BED` (`[0xD9, 0x0B, 0xED]`) + 32-bit array header (`0x9A`). -/
+def cborEncodeVarTape (xs : List UInt32) : List UInt8 :=
+  (0xD9 : UInt8) :: (0x0B : UInt8) :: (0xED : UInt8) :: (0x9A : UInt8) ::
+    (cborEncodeU32 xs.length ++ cborEncodeU32List xs)
+
+/-- Decode a variable-length `List UInt32` instruction tape / mesh payload from an RFC 8949 CBOR
+    Tag `0x0BED` + `0x9A` frame. -/
+def cborDecodeVarTape (bytes : List UInt8) : Option (List UInt32) :=
+  match bytes with
+  | b0 :: b1 :: b2 :: b3 :: rest0 =>
+    if b0 == (0xD9 : UInt8) && b1 == (0x0B : UInt8) && b2 == (0xED : UInt8) && b3 == (0x9A : UInt8) then
+      match cborDecodeU32 rest0 with
+      | some (len, rest1) =>
+        match cborDecodeU32List len rest1 with
+        | some (xs, []) => some xs
+        | _ => none
+      | none => none
+    else none
+  | _ => none
+
+/-- Universal round-trip theorem for variable-length CBOR instruction tapes (`cborDecodeVarTape_encode`). -/
+theorem cborDecodeVarTape_encode (xs : List UInt32) (hLen : xs.length < u32Bound) :
+    cborDecodeVarTape (cborEncodeVarTape xs) = some xs := by
+  dsimp only [cborEncodeVarTape, cborDecodeVarTape]
+  rw [cborDecodeU32_encode_append hLen]
+  dsimp only
+  have hList := cborDecodeU32List_encode_append xs []
+  rw [List.append_nil] at hList
+  rw [hList]
+  rfl
+
 /-- Encode a signed `Int` as RFC 8949 CBOR Major Type 0 (`0x1A` + BE4 for `Int.ofNat n`)
     or Major Type 1 (`0x3A` + BE4 for `Int.negSucc n = -1 - n`). -/
 def cborEncodeI32 : Int → List UInt8
@@ -543,6 +634,152 @@ theorem binary_cbor_certificates_roundtrip_and_verify :
      | some c => verifyBinaryHwCert c | none => true) = false := by
   decide +kernel
 
+/-! ### Variable-Length Binary CBOR Tape / Mesh / Evolutionary Certificates (`BinaryTapeCert`)
+
+Encodes variable-length F-Rep CSG instruction tapes, multi-element 2D FEMM meshes, and
+in-silico evolutionary Pareto-front design certificates with RFC 8949 Tag `0x0BED` + `0x9A`. -/
+
+/-- Variable-length RFC 8949 CBOR hardware tape/mesh certificate (`[0xD9, 0x0B, 0xED, 0x9A]`). -/
+structure BinaryTapeCert where
+  domain  : HwCertDomain
+  metric0 : UInt32
+  metric1 : UInt32
+  words   : List UInt32
+  deriving DecidableEq, Repr
+
+def BinaryTapeCert.WellFormed (c : BinaryTapeCert) : Prop :=
+  c.words.length < u32Bound
+
+/-- Encode a `BinaryTapeCert` into a variable-length RFC 8949 CBOR tagged array. -/
+def encodeBinaryTapeCert (c : BinaryTapeCert) : List UInt8 :=
+  (0xD9 : UInt8) :: (0x0B : UInt8) :: (0xED : UInt8) :: (0x9A : UInt8) ::
+    (cborEncodeU32 c.domain.toCode ++
+      (cborEncodeU32 c.metric0.toNat ++
+        (cborEncodeU32 c.metric1.toNat ++
+          (cborEncodeU32 c.words.length ++ cborEncodeU32List c.words))))
+
+/-- Decode a `BinaryTapeCert` from a variable-length RFC 8949 CBOR tagged array byte stream. -/
+def decodeBinaryTapeCert (bytes : List UInt8) : Option BinaryTapeCert :=
+  match bytes with
+  | b0 :: b1 :: b2 :: b3 :: rest0 =>
+    if b0 == (0xD9 : UInt8) && b1 == (0x0B : UInt8) && b2 == (0xED : UInt8) && b3 == (0x9A : UInt8) then
+      match cborDecodeU32 rest0 with
+      | some (domNat, rest1) =>
+        match HwCertDomain.fromCode domNat with
+        | some dom =>
+          match cborDecodeU32Word rest1 with
+          | some (m0, rest2) =>
+            match cborDecodeU32Word rest2 with
+            | some (m1, rest3) =>
+              match cborDecodeU32 rest3 with
+              | some (len, rest4) =>
+                match cborDecodeU32List len rest4 with
+                | some (ws, []) =>
+                  some { domain := dom, metric0 := m0, metric1 := m1, words := ws }
+                | _ => none
+              | none => none
+            | none => none
+          | none => none
+        | none => none
+      | none => none
+    else none
+  | _ => none
+
+/-- Universal round-trip theorem for variable-length `BinaryTapeCert` frames. -/
+theorem decode_encode_binaryTapeCert (c : BinaryTapeCert) (hWf : c.WellFormed) :
+    decodeBinaryTapeCert (encodeBinaryTapeCert c) = some c := by
+  rcases c with ⟨dom, m0, m1, ws⟩
+  dsimp only [BinaryTapeCert.WellFormed] at hWf
+  dsimp only [encodeBinaryTapeCert, decodeBinaryTapeCert]
+  rw [cborDecodeU32_encode_append (HwCertDomain.toCode_lt_u32Bound dom)]; dsimp only
+  rw [HwCertDomain.fromCode_toCode]; dsimp only
+  rw [cborDecodeU32Word_encode_append]; dsimp only
+  rw [cborDecodeU32Word_encode_append]; dsimp only
+  rw [cborDecodeU32_encode_append hWf]; dsimp only
+  have hList := cborDecodeU32List_encode_append ws []
+  rw [List.append_nil] at hList
+  rw [hList]
+  rfl
+
+instance : BinaryCodec BinaryTapeCert where
+  WellFormed := BinaryTapeCert.WellFormed
+  encodeBytes := encodeBinaryTapeCert
+  decodeBytes := decodeBinaryTapeCert
+  decode_encode := decode_encode_binaryTapeCert
+
+/-- Kernel replay of the 4-domain coupled evolutionary candidate physics model
+(`evaluate_physical_candidate` in `hardware/rust-ffi/src/lib.rs`): given
+`(toothWidthUm, microchannelAspectPermille, fcmlFreqKhz)`, computes exact peak winding
+temperature in milli-Celsius. -/
+def evalEvolutionCandidatePeakTemp
+    (toothWidthUm microchannelAspectPermille fcmlFreqKhz : Nat) : Nat :=
+  let slotWidthUm := max (10000 - toothWidthUm) 2000
+  let dcCopperLossW := 14000000 / slotWidthUm
+  let coreIronLossW := toothWidthUm / 4
+  let fcmlRippleLossW := 48000 / (6 * max fcmlFreqKhz 20)
+  let totalLossW := dcCopperLossW + coreIronLossW + fcmlRippleLossW
+  let rCaloric := 4
+  let rConv := max (24000 / max microchannelAspectPermille 500) 4
+  let rCond := max (toothWidthUm / 800) 4
+  40000 + totalLossW * (rCaloric + rConv + rCond)
+
+/-- Verify a variable-length `BinaryTapeCert` across multi-element 2D FEMM meshes,
+    3D F-Rep `fidget`-pruned CSG instruction tapes, and in-silico evolutionary Pareto fronts. -/
+def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
+  !c.words.isEmpty &&
+  decide (c.metric0.toNat > 0) &&
+  decide (c.metric1.toNat > 0) &&
+  c.words.all (fun w => decide (w.toNat > 0)) &&
+  match c.domain with
+  | .magnetics =>
+    decide (c.words.length ≥ 4) &&
+    decide (c.metric1.toNat ≤ 5000000) &&
+    decide ((c.words.foldl (fun acc w => acc + w.toNat) 0) == c.metric0.toNat)
+  | .mechanicsVonNeumann =>
+    decide (c.words.length ≥ 4) &&
+    decide (c.metric1.toNat < c.metric0.toNat)
+  | .fluidThermal | .powerElectronics | .multiphysics =>
+    match c.words with
+    | tw :: mc :: fq :: fd :: _ =>
+      decide (c.metric0.toNat ≥ 64) &&
+      decide (c.metric1.toNat ≤ 165000) &&
+      decide (tw.toNat ≥ 3800) &&
+      decide (fd.toNat ≤ 12) &&
+      decide (800 + fq.toNat / 2 ≤ 1150) &&
+      decide (evalEvolutionCandidatePeakTemp tw.toNat mc.toNat fq.toNat == c.metric1.toNat)
+    | _ => false
+  | _ =>
+    decide (c.words.length ≥ 1)
+
+def goldenBinaryFemmTapeCert : BinaryTapeCert :=
+  { domain := .magnetics
+  , metric0 := 15200
+  , metric1 := 184000
+  , words := [4200, 3800, 3100, 2200, 1100, 800] }
+
+def goldenBinaryOctreeTapeCert : BinaryTapeCert :=
+  { domain := .mechanicsVonNeumann
+  , metric0 := 768
+  , metric1 := 256
+  , words := [32, 32, 32, 32, 32, 32, 32, 32] }
+
+def goldenBinaryEvolutionTapeCert : BinaryTapeCert :=
+  { domain := .fluidThermal
+  , metric0 := 80
+  , metric1 := 103184
+  , words := [4800, 3500, 140, 8, 6] }
+
+theorem binary_cbor_tape_certificates_roundtrip_and_verify :
+    (match decodeBinaryTapeCert (encodeBinaryTapeCert goldenBinaryFemmTapeCert) with
+     | some c => verifyBinaryTapeCert c | none => false) = true ∧
+    (match decodeBinaryTapeCert (encodeBinaryTapeCert goldenBinaryOctreeTapeCert) with
+     | some c => verifyBinaryTapeCert c | none => false) = true ∧
+    (match decodeBinaryTapeCert (encodeBinaryTapeCert goldenBinaryEvolutionTapeCert) with
+     | some c => verifyBinaryTapeCert c | none => false) = true ∧
+    (match decodeBinaryTapeCert (encodeBinaryTapeCert { goldenBinaryFemmTapeCert with metric0 := 999 }) with
+     | some c => verifyBinaryTapeCert c | none => true) = false := by
+  decide +kernel
+
 /-! ## 6. `.obnb` (`NEXT-MATHEMATICA.md` §5) `Obend.Core.Data` Hardware Cell Projections -/
 
 /-- Structured notebook cell projection kind from `NEXT-MATHEMATICA.md` §5. -/
@@ -651,12 +888,15 @@ def encodeObnbCellCanonicalBytes (c : ObnbHardwareCell) : List UInt8 :=
 /-! ## 7. Zero-Copy `ByteArray` C-ABI Exports for Rust Host (`NEXT-MATHEMATICA.md` §6) -/
 
 /-- C-ABI Entry Point 1: Verify a binary RFC 8949 CBOR hardware certificate (`ByteArray → UInt8`).
-    Returns `1` if the CBOR frame decodes cleanly and passes `verifyBinaryHwCert`, `0` otherwise. -/
+    Returns `1` if the CBOR frame decodes cleanly and passes `verifyBinaryHwCert` or `verifyBinaryTapeCert`, `0` otherwise. -/
 @[export obend_hw_cbor_verify]
 def obendHwCborVerify (raw : ByteArray) : UInt8 :=
   match decodeFromByteArray (α := BinaryHwCert) raw with
   | some cert => if verifyBinaryHwCert cert then 1 else 0
-  | none => 0
+  | none =>
+    match decodeFromByteArray (α := BinaryTapeCert) raw with
+    | some tapeCert => if verifyBinaryTapeCert tapeCert then 1 else 0
+    | none => 0
 
 /-- C-ABI Entry Point 2: Project a binary RFC 8949 CBOR hardware certificate into canonical
     `Obend.Core.Data.encoded` `.obnb` cell bytes (`ByteArray → ByteArray`). -/
@@ -676,7 +916,22 @@ def obendHwCborProjectCell (raw : ByteArray) : ByteArray :=
       verifiedPass := verifyBinaryHwCert cert
     }
     ByteArray.mk (encodeObnbCellCanonicalBytes cell).toArray
-  | none => ByteArray.empty
+  | none =>
+    match decodeFromByteArray (α := BinaryTapeCert) raw with
+    | some tapeCert =>
+      let cell : ObnbHardwareCell := {
+        cellId := tapeCert.domain.toCode
+        kind := match tapeCert.domain with
+          | .pnr | .pcb | .analog2d | .mechanicsVonNeumann => .hardwareLayout
+          | .retiming | .photonics | .dspBeamformer | .powerElectronics => .hardwareTiming
+          | .dpr | .edaBomSwap | .multiphysics | .magnetics | .fluidThermal => .hardwareSchematic
+        title := s!"obnb_hw_tape_{tapeCert.domain.toCode}"
+        primaryCount := tapeCert.words.length
+        secondaryMetric := tapeCert.metric0.toNat
+        verifiedPass := verifyBinaryTapeCert tapeCert
+      }
+      ByteArray.mk (encodeObnbCellCanonicalBytes cell).toArray
+    | none => ByteArray.empty
 where
   c_p5_nat (cert : BinaryHwCert) : Nat := cert.p5.toNat
 

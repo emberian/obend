@@ -1529,6 +1529,702 @@ impl DrexClearingCertificate {
     }
 }
 
+// ============================================================================
+// 5. Verified FFI Transition Delegation (`VerifiedEpochBridge`, `SimplexState`,
+//    `SimplexCert`, `ClearingReceipt`, `FogOfWar`, `VerifiedNodeTransition`)
+// ============================================================================
+
+/// Composite Simplex BFT certificate (`PropCert`, `SkipCert`, `FinCert`) cryptographically
+/// bound to a Lean 4 FFI receipt (`receipt_bytes` + `state_digest`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimplexCert {
+    pub view: u64,
+    pub height: u64,
+    pub block_hash: [u8; 32],
+    pub prop_cert: Option<PropCert>,
+    pub skip_cert: Option<SkipCert>,
+    pub fin_cert: Option<FinCert>,
+    pub receipt_bytes: Vec<u8>,
+    pub state_digest: [u8; 32],
+}
+
+impl SimplexCert {
+    /// Compute the canonical domain-separated `state_digest` binding `(view, height, block_hash, vault_root, receipt_bytes)`.
+    pub fn compute_state_digest(
+        view: u64,
+        height: u64,
+        block_hash: &[u8; 32],
+        vault_root: &[u8; 32],
+        receipt_bytes: &[u8],
+    ) -> [u8; 32] {
+        let mut header = Vec::with_capacity(8 + 8 + 32 + 32);
+        header.extend_from_slice(&view.to_be_bytes());
+        header.extend_from_slice(&height.to_be_bytes());
+        header.extend_from_slice(block_hash);
+        header.extend_from_slice(vault_root);
+        cshake256_domain(b"obend.simplex.ffi.cert", &header, receipt_bytes)
+    }
+
+    /// Verify the BFT certificate quorum/leader signatures, receipt binding, and Lean FFI receipt validity.
+    pub fn verify_with_session(
+        &self,
+        total_parties: usize,
+        quorum_size: usize,
+        vault_root: &[u8; 32],
+        session: &mut ObendSession,
+    ) -> Result<bool, NodeError> {
+        if self.receipt_bytes.len() < 32 {
+            return Ok(false);
+        }
+        if let Some(prop) = &self.prop_cert {
+            if prop.view != self.view
+                || prop.height != self.height
+                || prop.block_hash != self.block_hash
+                || !prop.verify(total_parties)
+            {
+                return Ok(false);
+            }
+        }
+        if let Some(skip) = &self.skip_cert {
+            if !skip.verify(quorum_size) {
+                return Ok(false);
+            }
+        }
+        if let Some(fin) = &self.fin_cert {
+            if fin.view != self.view
+                || fin.block_hash != self.block_hash
+                || !fin.verify(quorum_size)
+            {
+                return Ok(false);
+            }
+        } else if self.skip_cert.is_none() {
+            return Ok(false);
+        }
+
+        let expected_digest = Self::compute_state_digest(
+            self.view,
+            self.height,
+            &self.block_hash,
+            vault_root,
+            &self.receipt_bytes,
+        );
+        if self.state_digest != expected_digest {
+            return Ok(false);
+        }
+
+        // Verify the embedded 32-byte Lean FFI receipt prefix and the bound state_digest
+        let ffi_receipt_ok = session
+            .verify_receipt(&self.receipt_bytes[..32])
+            .map_err(NodeError::Ffi)?;
+        let ffi_digest_ok = session
+            .verify_receipt(&self.state_digest)
+            .map_err(NodeError::Ffi)?;
+        Ok(ffi_receipt_ok && ffi_digest_ok)
+    }
+}
+
+/// Verified DREX clearing + Fog-of-War projection receipt bound to a Lean FFI session receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClearingReceipt {
+    pub certificate: DrexClearingCertificate,
+    pub multiproof: BlindedVaultMultiProof,
+    pub receipt_bytes: Vec<u8>,
+    pub state_digest: [u8; 32],
+}
+
+impl ClearingReceipt {
+    /// Compute canonical `state_digest` binding `(certificate.digest, multiproof.unredacted_root, receipt_bytes)`.
+    pub fn compute_state_digest(
+        cert_digest: &[u8; 32],
+        unredacted_root: &[u8; 32],
+        receipt_bytes: &[u8],
+    ) -> [u8; 32] {
+        let mut left = Vec::with_capacity(64);
+        left.extend_from_slice(cert_digest);
+        left.extend_from_slice(unredacted_root);
+        cshake256_domain(b"obend.clearing.ffi.receipt", &left, receipt_bytes)
+    }
+
+    /// Verify the clearing certificate, Fog-of-War multiproof, and bound Lean FFI receipt.
+    pub fn verify_with_session(
+        &self,
+        orders: &[LimitOrder],
+        session: &mut ObendSession,
+    ) -> Result<bool, NodeError> {
+        if self.receipt_bytes.len() < 32 {
+            return Ok(false);
+        }
+        if !self.multiproof.verify_stranger() {
+            return Ok(false);
+        }
+        if !self
+            .multiproof
+            .verify_via_ffi(session)
+            .map_err(NodeError::Ffi)?
+        {
+            return Ok(false);
+        }
+        if !self
+            .certificate
+            .verify_with_kernel(orders, session)
+            .map_err(NodeError::Ffi)?
+        {
+            return Ok(false);
+        }
+        let expected_digest = Self::compute_state_digest(
+            &self.certificate.digest,
+            &self.multiproof.unredacted_root,
+            &self.receipt_bytes,
+        );
+        if self.state_digest != expected_digest {
+            return Ok(false);
+        }
+        let ffi_receipt_ok = session
+            .verify_receipt(&self.receipt_bytes[..32])
+            .map_err(NodeError::Ffi)?;
+        let ffi_state_ok = session
+            .verify_receipt(&self.state_digest)
+            .map_err(NodeError::Ffi)?;
+        Ok(ffi_receipt_ok && ffi_state_ok)
+    }
+}
+
+/// Fog-of-War blinded vault state and FFI-verified clearing coordinator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FogOfWar {
+    pub cells: Vec<VaultCellRecord>,
+    pub viewer_caps: Vec<IpcAuth>,
+}
+
+impl FogOfWar {
+    pub fn new(cells: Vec<VaultCellRecord>, viewer_caps: Vec<IpcAuth>) -> Self {
+        Self { cells, viewer_caps }
+    }
+
+    pub fn project(&self) -> BlindedVaultMultiProof {
+        BlindedVaultMultiProof::generate(&self.cells, &self.viewer_caps)
+    }
+
+    pub fn state_root(&self) -> [u8; 32] {
+        let leaves: Vec<[u8; 32]> = self.cells.iter().map(|c| c.leaf_hash()).collect();
+        merkle_root_from_leaves(&leaves)
+    }
+
+    /// Execute a Mandate-authorized VaultTurn and DREX clearing batch through `ObendSession`
+    /// (`eval_cell` -> `propose_turn` -> `commit_turn` -> `verify_receipt`), returning a `ClearingReceipt`.
+    pub fn step_with_verified_session(
+        &mut self,
+        mandate: &Mandate,
+        turn: &VaultTurn,
+        currency: &str,
+        goods: &str,
+        epsilon: u64,
+        orders: &[LimitOrder],
+        session: &mut ObendSession,
+    ) -> Result<ClearingReceipt, NodeError> {
+        if turn.has_duplicate_write_slots() {
+            return Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot {
+                agent: turn.agent.clone(),
+            }));
+        }
+        mandate.check_turn(turn).map_err(NodeError::Sandbox)?;
+
+        let mut cell_eval_accum = Vec::new();
+        for (slot_id, payload) in &turn.write_slots {
+            let mut cell_input = Vec::with_capacity(8 + payload.len());
+            cell_input.extend_from_slice(&slot_id.to_be_bytes());
+            cell_input.extend_from_slice(payload);
+            let eval_out = session.eval_cell(&cell_input).map_err(NodeError::Ffi)?;
+            if eval_out.is_empty() {
+                return Err(NodeError::ConsensusVerification(
+                    "ObendSession::eval_cell returned empty output".to_string(),
+                ));
+            }
+            cell_eval_accum.extend_from_slice(&eval_out);
+
+            if let Some(cell) = self.cells.iter_mut().find(|c| c.id == *slot_id) {
+                cell.content = payload.clone();
+            } else {
+                self.cells.push(VaultCellRecord {
+                    id: *slot_id,
+                    required: vec![IpcAuth::Read],
+                    salt: cshake256_domain(
+                        b"obend.vault.salt",
+                        &slot_id.to_be_bytes(),
+                        &turn.turn_id,
+                    ),
+                    content: payload.clone(),
+                });
+            }
+        }
+
+        let cert = solve_primal_dual_clearing(currency, goods, epsilon, orders).ok_or_else(|| {
+            NodeError::ConsensusVerification("failed to solve DREX clearing batch".to_string())
+        })?;
+        let kernel_ok = cert
+            .verify_with_kernel(orders, session)
+            .map_err(NodeError::Ffi)?;
+        if !kernel_ok {
+            return Err(NodeError::ConsensusVerification(
+                "DREX clearing certificate rejected by kernel FFI".to_string(),
+            ));
+        }
+
+        let turn_bytes = serde_json::to_vec(turn).unwrap_or_default();
+        let turn_receipt = session.propose_turn(&turn_bytes).map_err(NodeError::Ffi)?;
+        session
+            .commit_turn(&turn.turn_id)
+            .map_err(NodeError::Ffi)?;
+
+        let multiproof = self.project();
+        if !multiproof
+            .verify_via_ffi(session)
+            .map_err(NodeError::Ffi)?
+        {
+            return Err(NodeError::ConsensusVerification(
+                "FogOfWar BlindedVaultMultiProof rejected by FFI".to_string(),
+            ));
+        }
+
+        let woven = session
+            .weave_cert(&cert.digest)
+            .map_err(NodeError::Ffi)?;
+
+        let mut receipt_bytes = Vec::new();
+        let primary_digest = cshake256_domain(
+            b"obend.clearing.ffi.primary",
+            &turn_receipt,
+            &[&cell_eval_accum[..], &woven[..]].concat(),
+        );
+        receipt_bytes.extend_from_slice(&primary_digest);
+        receipt_bytes.extend_from_slice(&turn_receipt);
+        receipt_bytes.extend_from_slice(&cell_eval_accum);
+        receipt_bytes.extend_from_slice(&woven);
+
+        let state_digest = ClearingReceipt::compute_state_digest(
+            &cert.digest,
+            &multiproof.unredacted_root,
+            &receipt_bytes,
+        );
+
+        let verified = session
+            .verify_receipt(&state_digest)
+            .map_err(NodeError::Ffi)?;
+        if !verified {
+            return Err(NodeError::ConsensusVerification(
+                "ObendSession::verify_receipt rejected ClearingReceipt state_digest".to_string(),
+            ));
+        }
+
+        Ok(ClearingReceipt {
+            certificate: cert,
+            multiproof,
+            receipt_bytes,
+            state_digest,
+        })
+    }
+}
+
+impl Mandate {
+    /// Delegate a Mandate-checked turn and DREX clearing step through `FogOfWar::step_with_verified_session`.
+    pub fn step_with_verified_session(
+        &self,
+        fog: &mut FogOfWar,
+        turn: &VaultTurn,
+        currency: &str,
+        goods: &str,
+        epsilon: u64,
+        orders: &[LimitOrder],
+        session: &mut ObendSession,
+    ) -> Result<ClearingReceipt, NodeError> {
+        fog.step_with_verified_session(self, turn, currency, goods, epsilon, orders, session)
+    }
+}
+
+/// Verified consensus view & clearing transition output produced by `SimplexState::step_with_verified_session`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifiedNodeTransition {
+    pub prior_view: u64,
+    pub next_view: u64,
+    pub height: u64,
+    pub post_vault_root: [u8; 32],
+    pub simplex_cert: SimplexCert,
+    pub clearing_receipt: Option<ClearingReceipt>,
+    pub receipt_bytes: Vec<u8>,
+    pub state_digest: [u8; 32],
+}
+
+impl VerifiedNodeTransition {
+    /// Compute canonical transition `state_digest` over `(simplex_cert.state_digest, clearing_digest, receipt_bytes)`.
+    pub fn compute_state_digest(
+        simplex_state_digest: &[u8; 32],
+        clearing_state_digest: Option<&[u8; 32]>,
+        receipt_bytes: &[u8],
+    ) -> [u8; 32] {
+        let mut left = Vec::with_capacity(64);
+        left.extend_from_slice(simplex_state_digest);
+        if let Some(cd) = clearing_state_digest {
+            left.extend_from_slice(cd);
+        } else {
+            left.extend_from_slice(&[0u8; 32]);
+        }
+        cshake256_domain(b"obend.node.verified_transition", &left, receipt_bytes)
+    }
+
+    /// Re-verify the entire transition (SimplexCert, optional ClearingReceipt, and FFI receipt bindings).
+    pub fn verify_with_session(
+        &self,
+        total_parties: usize,
+        quorum_size: usize,
+        orders: &[LimitOrder],
+        session: &mut ObendSession,
+    ) -> Result<bool, NodeError> {
+        if self.receipt_bytes.len() < 32
+            || self.next_view <= self.prior_view
+            || self.receipt_bytes != self.simplex_cert.receipt_bytes
+        {
+            return Ok(false);
+        }
+        if !self.simplex_cert.verify_with_session(
+            total_parties,
+            quorum_size,
+            &self.post_vault_root,
+            session,
+        )? {
+            return Ok(false);
+        }
+        if let Some(clearing) = &self.clearing_receipt {
+            if !clearing.verify_with_session(orders, session)? {
+                return Ok(false);
+            }
+        }
+        let expected_digest = Self::compute_state_digest(
+            &self.simplex_cert.state_digest,
+            self.clearing_receipt.as_ref().map(|c| &c.state_digest),
+            &self.receipt_bytes,
+        );
+        if self.state_digest != expected_digest {
+            return Ok(false);
+        }
+        session
+            .verify_receipt(&self.state_digest)
+            .map_err(NodeError::Ffi)
+    }
+}
+
+/// Deterministic Simplex BFT state machine with verified Lean FFI transition delegation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimplexState {
+    pub view: u64,
+    pub height: u64,
+    pub total_parties: usize,
+    pub fault_tolerance: usize,
+    pub parent_hash: [u8; 32],
+    pub vault_cells: Vec<VaultCellRecord>,
+    pub state_digest: [u8; 32],
+    pub last_receipt_bytes: Vec<u8>,
+}
+
+impl SimplexState {
+    pub fn new(
+        total_parties: usize,
+        fault_tolerance: usize,
+        vault_cells: Vec<VaultCellRecord>,
+    ) -> Self {
+        let leaves: Vec<[u8; 32]> = vault_cells.iter().map(|c| c.leaf_hash()).collect();
+        let state_digest = merkle_root_from_leaves(&leaves);
+        Self {
+            view: 0,
+            height: 0,
+            total_parties,
+            fault_tolerance,
+            parent_hash: [0u8; 32],
+            vault_cells,
+            state_digest,
+            last_receipt_bytes: Vec::new(),
+        }
+    }
+
+    pub fn quorum_size(&self) -> usize {
+        2 * self.fault_tolerance + 1
+    }
+
+    pub fn vault_root(&self) -> [u8; 32] {
+        let leaves: Vec<[u8; 32]> = self.vault_cells.iter().map(|c| c.leaf_hash()).collect();
+        merkle_root_from_leaves(&leaves)
+    }
+
+    /// Execute a consensus view transition and optional DREX clearing batch through `ObendSession`
+    /// (`eval_cell` -> `propose_turn` -> `commit_turn` -> `verify_receipt`), binding the Lean FFI
+    /// receipt (`receipt_bytes` + `state_digest`) into `SimplexCert` and `ClearingReceipt`.
+    pub fn step_with_verified_session(
+        &mut self,
+        validators: &[ValidatorKeypair],
+        mandate: Option<&Mandate>,
+        turn: &VaultTurn,
+        drex_batch: Option<(&str, &str, u64, &[LimitOrder])>,
+        session: &mut ObendSession,
+    ) -> Result<VerifiedNodeTransition, NodeError> {
+        if self.total_parties == 0 || validators.len() < self.total_parties {
+            return Err(NodeError::ConsensusVerification(
+                "insufficient validator keypairs for SimplexState transition".to_string(),
+            ));
+        }
+        if turn.has_duplicate_write_slots() {
+            return Err(NodeError::Sandbox(SandboxViolation::DuplicateWriteSlot {
+                agent: turn.agent.clone(),
+            }));
+        }
+        if let Some(m) = mandate {
+            m.check_turn(turn).map_err(NodeError::Sandbox)?;
+        }
+
+        // 1. Evaluate every cell update via `ObendSession::eval_cell`
+        let mut evaluated_cells_bytes = Vec::new();
+        let mut next_cells = self.vault_cells.clone();
+        for (slot_id, content) in &turn.write_slots {
+            let mut cell_input = Vec::with_capacity(8 + content.len());
+            cell_input.extend_from_slice(&slot_id.to_be_bytes());
+            cell_input.extend_from_slice(content);
+            let eval_res = session.eval_cell(&cell_input).map_err(NodeError::Ffi)?;
+            if eval_res.is_empty() {
+                return Err(NodeError::ConsensusVerification(
+                    "ObendSession::eval_cell returned empty receipt".to_string(),
+                ));
+            }
+            evaluated_cells_bytes.extend_from_slice(&eval_res);
+
+            if let Some(existing) = next_cells.iter_mut().find(|c| c.id == *slot_id) {
+                existing.content = content.clone();
+            } else {
+                next_cells.push(VaultCellRecord {
+                    id: *slot_id,
+                    required: vec![IpcAuth::Read],
+                    salt: cshake256_domain(
+                        b"obend.vault.salt",
+                        &slot_id.to_be_bytes(),
+                        &turn.turn_id,
+                    ),
+                    content: content.clone(),
+                });
+            }
+        }
+
+        //If read-only turn, still evaluate cell state over the first read slot via FFI
+        if turn.write_slots.is_empty() {
+            let probe_bytes = serde_json::to_vec(turn).unwrap_or_else(|_| b"readonly-turn".to_vec());
+            let eval_res = session.eval_cell(&probe_bytes).map_err(NodeError::Ffi)?;
+            evaluated_cells_bytes.extend_from_slice(&eval_res);
+        }
+
+        // 2. Propose and commit the turn via `ObendSession::propose_turn` & `commit_turn`
+        let turn_payload = serde_json::to_vec(turn).unwrap_or_default();
+        let proposed_receipt = session.propose_turn(&turn_payload).map_err(NodeError::Ffi)?;
+        if proposed_receipt.is_empty() {
+            return Err(NodeError::ConsensusVerification(
+                "ObendSession::propose_turn returned empty receipt".to_string(),
+            ));
+        }
+        session
+            .commit_turn(&turn.turn_id)
+            .map_err(NodeError::Ffi)?;
+
+        // 3. Optional DREX clearing batch & FogOfWar multiproof
+        let mut fog = FogOfWar::new(next_cells.clone(), vec![IpcAuth::Read]);
+        let clearing_receipt = if let Some((currency, goods, epsilon, orders)) = drex_batch {
+            if !orders.is_empty() {
+                let default_mandate;
+                let active_mandate = if let Some(m) = mandate {
+                    m
+                } else {
+                    default_mandate = Mandate {
+                        grantor: "kernel".to_string(),
+                        holder: turn.agent.clone(),
+                        target: "obend.vault".to_string(),
+                        rights: vec![IpcAuth::Read, IpcAuth::Write, IpcAuth::Grant],
+                        budget: u64::MAX,
+                        allowed_slots: turn
+                            .read_slots
+                            .iter()
+                            .copied()
+                            .chain(turn.write_slots.iter().map(|(s, _)| *s))
+                            .collect(),
+                        expires_at: u64::MAX,
+                        allowed_methods: None,
+                    };
+                    &default_mandate
+                };
+                Some(fog.step_with_verified_session(
+                    active_mandate,
+                    turn,
+                    currency,
+                    goods,
+                    epsilon,
+                    orders,
+                    session,
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 4. Construct consensus view transition certificates (`PropCert` + `FinCert`)
+        let prior_view = self.view;
+        let next_view = self.view + 1;
+        let next_height = self.height + 1;
+        let leader_idx = ((next_view - 1) as usize) % self.total_parties;
+        let prop_cert = PropCert::create(
+            &validators[leader_idx],
+            next_view,
+            next_height,
+            self.parent_hash,
+            turn_payload,
+        );
+        let quorum = self.quorum_size();
+        let fin_votes: Vec<SignedSimplexVote> = validators[..quorum]
+            .iter()
+            .map(|kp| {
+                SignedSimplexVote::new(kp, next_view, SimplexVoteKind::Finalize, prop_cert.block_hash)
+            })
+            .collect();
+        let fin_cert = FinCert {
+            view: next_view,
+            block_hash: prop_cert.block_hash,
+            votes: fin_votes,
+        };
+
+        let woven_cert = session
+            .weave_cert(&prop_cert.block_hash)
+            .map_err(NodeError::Ffi)?;
+
+        let post_leaves: Vec<[u8; 32]> = next_cells.iter().map(|c| c.leaf_hash()).collect();
+        let post_vault_root = merkle_root_from_leaves(&post_leaves);
+
+        // Build non-empty Lean FFI `receipt_bytes` (32-byte FFI commitment prefix + raw FFI artifacts)
+        let receipt_head = cshake256_domain(
+            b"obend.simplex.ffi.receipt_head",
+            &proposed_receipt,
+            &[&evaluated_cells_bytes[..], &woven_cert[..]].concat(),
+        );
+        let mut receipt_bytes = Vec::with_capacity(
+            32 + proposed_receipt.len() + evaluated_cells_bytes.len() + woven_cert.len(),
+        );
+        receipt_bytes.extend_from_slice(&receipt_head);
+        receipt_bytes.extend_from_slice(&proposed_receipt);
+        receipt_bytes.extend_from_slice(&evaluated_cells_bytes);
+        receipt_bytes.extend_from_slice(&woven_cert);
+
+        let simplex_state_digest = SimplexCert::compute_state_digest(
+            next_view,
+            next_height,
+            &prop_cert.block_hash,
+            &post_vault_root,
+            &receipt_bytes,
+        );
+
+        let simplex_cert = SimplexCert {
+            view: next_view,
+            height: next_height,
+            block_hash: prop_cert.block_hash,
+            prop_cert: Some(prop_cert.clone()),
+            skip_cert: None,
+            fin_cert: Some(fin_cert),
+            receipt_bytes: receipt_bytes.clone(),
+            state_digest: simplex_state_digest,
+        };
+
+        if !simplex_cert.verify_with_session(
+            self.total_parties,
+            quorum,
+            &post_vault_root,
+            session,
+        )? {
+            return Err(NodeError::ConsensusVerification(
+                "SimplexCert FFI receipt verification failed".to_string(),
+            ));
+        }
+
+        let state_digest = VerifiedNodeTransition::compute_state_digest(
+            &simplex_cert.state_digest,
+            clearing_receipt.as_ref().map(|c| &c.state_digest),
+            &receipt_bytes,
+        );
+
+        if !session
+            .verify_receipt(&state_digest)
+            .map_err(NodeError::Ffi)?
+        {
+            return Err(NodeError::ConsensusVerification(
+                "ObendSession::verify_receipt rejected transition state_digest".to_string(),
+            ));
+        }
+
+        self.view = next_view;
+        self.height = next_height;
+        self.parent_hash = prop_cert.block_hash;
+        self.vault_cells = next_cells;
+        self.state_digest = state_digest;
+        self.last_receipt_bytes = receipt_bytes.clone();
+
+        Ok(VerifiedNodeTransition {
+            prior_view,
+            next_view,
+            height: next_height,
+            post_vault_root,
+            simplex_cert,
+            clearing_receipt,
+            receipt_bytes,
+            state_digest,
+        })
+    }
+
+    /// Verify and apply an externally supplied `VerifiedNodeTransition`, rejecting any tampered FFI receipt.
+    pub fn apply_verified_transition(
+        &mut self,
+        transition: &VerifiedNodeTransition,
+        orders: &[LimitOrder],
+        session: &mut ObendSession,
+    ) -> Result<(), NodeError> {
+        let quorum = self.quorum_size();
+        let valid = transition.verify_with_session(
+            self.total_parties,
+            quorum,
+            orders,
+            session,
+        )?;
+        if !valid {
+            return Err(NodeError::ConsensusVerification(
+                "rejected tampered or invalid VerifiedNodeTransition receipt".to_string(),
+            ));
+        }
+        self.view = transition.next_view;
+        self.height = transition.height;
+        self.parent_hash = transition.simplex_cert.block_hash;
+        self.state_digest = transition.state_digest;
+        self.last_receipt_bytes = transition.receipt_bytes.clone();
+        Ok(())
+    }
+}
+
+/// Stateless coordinator bridging consensus epochs, Fog-of-War vaults, and DREX clearing batches
+/// through a verified `ObendSession`.
+pub struct VerifiedEpochBridge;
+
+impl VerifiedEpochBridge {
+    pub fn step_with_verified_session(
+        state: &mut SimplexState,
+        validators: &[ValidatorKeypair],
+        mandate: Option<&Mandate>,
+        turn: &VaultTurn,
+        drex_batch: Option<(&str, &str, u64, &[LimitOrder])>,
+        session: &mut ObendSession,
+    ) -> Result<VerifiedNodeTransition, NodeError> {
+        state.step_with_verified_session(validators, mandate, turn, drex_batch, session)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2656,4 +3352,254 @@ mod tests {
             Err(SandboxViolation::InsecureConfinementPolicy { .. })
         ));
     }
+
+    #[test]
+    fn test_simplex_state_step_with_verified_session_and_tamper_rejection() {
+        let validators: Vec<ValidatorKeypair> = (0..4)
+            .map(|id| ValidatorKeypair::from_seed(id, b"verified-bridge-seed"))
+            .collect();
+        let genesis = sample_genesis_cells();
+        let mut state = SimplexState::new(4, 1, genesis.clone());
+        let mut session = ObendSession::new().expect("session init");
+
+        let mandate = Mandate {
+            grantor: "kernel".to_string(),
+            holder: "alice_trader".to_string(),
+            target: "obend.vault".to_string(),
+            rights: vec![IpcAuth::Read, IpcAuth::Write],
+            budget: 50,
+            allowed_slots: vec![1, 2],
+            expires_at: 100,
+            allowed_methods: Some(vec![0]),
+        };
+
+        let turn = VaultTurn::new(
+            [0x77; 32],
+            "alice_trader",
+            vec![1],
+            vec![(1, b"verified-slot-1-v1".to_vec())],
+        )
+        .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 5, 1, 0);
+
+        let orders = vec![
+            LimitOrder {
+                account: "alice_buyer".to_string(),
+                side: OrderSide::Bid,
+                qty: 10,
+                total: 1200,
+            },
+            LimitOrder {
+                account: "carol_seller".to_string(),
+                side: OrderSide::Ask,
+                qty: 10,
+                total: 1000,
+            },
+        ];
+
+        let transition = VerifiedEpochBridge::step_with_verified_session(
+            &mut state,
+            &validators,
+            Some(&mandate),
+            &turn,
+            Some(("USDC", "WAFER", 0, &orders)),
+            &mut session,
+        )
+        .expect("step_with_verified_session should succeed");
+
+        assert_eq!(transition.prior_view, 0);
+        assert_eq!(transition.next_view, 1);
+        assert_eq!(transition.height, 1);
+        assert!(!transition.receipt_bytes.is_empty());
+        assert!(transition.receipt_bytes.len() > 32);
+        assert_ne!(transition.state_digest, [0u8; 32]);
+        assert_eq!(
+            transition.simplex_cert.receipt_bytes,
+            transition.receipt_bytes
+        );
+        assert_ne!(transition.simplex_cert.state_digest, [0u8; 32]);
+
+        let clearing = transition
+            .clearing_receipt
+            .as_ref()
+            .expect("clearing receipt present");
+        assert!(!clearing.receipt_bytes.is_empty());
+        assert_ne!(clearing.state_digest, [0u8; 32]);
+        assert_eq!(clearing.certificate.price, 110);
+        assert_eq!(clearing.certificate.objective_volume, 20);
+
+        // Verify transition on a follower SimplexState
+        let mut follower = SimplexState::new(4, 1, genesis.clone());
+        assert!(transition
+            .verify_with_session(4, 3, &orders, &mut session)
+            .expect("verify transition"));
+        follower
+            .apply_verified_transition(&transition, &orders, &mut session)
+            .expect("follower apply verified transition");
+        assert_eq!(follower.view, 1);
+        assert_eq!(follower.height, 1);
+        assert_eq!(follower.state_digest, state.state_digest);
+
+        // 1. Tampering with transition `receipt_bytes` must be rejected
+        let mut tampered_receipt = transition.clone();
+        tampered_receipt.receipt_bytes[0] ^= 0xFF;
+        assert!(!tampered_receipt
+            .verify_with_session(4, 3, &orders, &mut session)
+            .expect("verify tampered receipt_bytes"));
+        assert!(follower
+            .apply_verified_transition(&tampered_receipt, &orders, &mut session)
+            .is_err());
+
+        // 2. Tampering with `simplex_cert.receipt_bytes` must be rejected
+        let mut tampered_simplex = transition.clone();
+        tampered_simplex.simplex_cert.receipt_bytes[16] ^= 0xAA;
+        tampered_simplex.receipt_bytes = tampered_simplex.simplex_cert.receipt_bytes.clone();
+        assert!(!tampered_simplex
+            .verify_with_session(4, 3, &orders, &mut session)
+            .expect("verify tampered simplex_cert"));
+
+        // 3. Tampering with `clearing_receipt.state_digest` or `receipt_bytes` must be rejected
+        let mut tampered_clearing = transition.clone();
+        tampered_clearing
+            .clearing_receipt
+            .as_mut()
+            .unwrap()
+            .receipt_bytes[8] ^= 0x55;
+        assert!(!tampered_clearing
+            .verify_with_session(4, 3, &orders, &mut session)
+            .expect("verify tampered clearing receipt"));
+
+        // 4. Empty `receipt_bytes` must be rejected
+        let mut empty_receipt = transition.clone();
+        empty_receipt.receipt_bytes.clear();
+        empty_receipt.simplex_cert.receipt_bytes.clear();
+        assert!(!empty_receipt
+            .verify_with_session(4, 3, &orders, &mut session)
+            .expect("verify empty receipt"));
+    }
+
+    #[test]
+    fn test_mandate_and_fog_of_war_step_with_verified_session() {
+        let mut fog = FogOfWar::new(sample_genesis_cells(), vec![IpcAuth::Read]);
+        let mut session = ObendSession::new().expect("session init");
+
+        let mandate = Mandate {
+            grantor: "kernel".to_string(),
+            holder: "fog_worker".to_string(),
+            target: "obend.vault".to_string(),
+            rights: vec![IpcAuth::Read, IpcAuth::Write],
+            budget: 20,
+            allowed_slots: vec![1],
+            expires_at: 10,
+            allowed_methods: Some(vec![0]),
+        };
+
+        let orders = vec![
+            LimitOrder {
+                account: "buyer".to_string(),
+                side: OrderSide::Bid,
+                qty: 4,
+                total: 400,
+            },
+            LimitOrder {
+                account: "seller".to_string(),
+                side: OrderSide::Ask,
+                qty: 4,
+                total: 400,
+            },
+        ];
+
+        let valid_turn = VaultTurn::new(
+            [0x88; 32],
+            "fog_worker",
+            vec![1],
+            vec![(1, b"fog-cell-updated".to_vec())],
+        )
+        .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 5, 2, 0);
+
+        let receipt = mandate
+            .step_with_verified_session(
+                &mut fog,
+                &valid_turn,
+                "USDC",
+                "WAFER",
+                0,
+                &orders,
+                &mut session,
+            )
+            .expect("Mandate::step_with_verified_session should succeed");
+
+        assert!(!receipt.receipt_bytes.is_empty());
+        assert_ne!(receipt.state_digest, [0u8; 32]);
+        assert!(receipt
+            .verify_with_session(&orders, &mut session)
+            .expect("verify clearing receipt"));
+        // Slot 3 remains Blinded to viewer holding only IpcAuth::Read
+        assert!(matches!(
+            receipt.multiproof.projected_cells[2],
+            ProjectedCellView::Blinded { id: 3, .. }
+        ));
+
+        // Tampering with the FogOfWar multiproof root inside ClearingReceipt is rejected
+        let mut bad_mp = receipt.clone();
+        bad_mp.multiproof.unredacted_root[0] ^= 0x01;
+        assert!(!bad_mp
+            .verify_with_session(&orders, &mut session)
+            .expect("tampered multiproof must fail"));
+
+        // Unauthorized slot 3 write is rejected by Mandate before touching FFI
+        let unauthorized_turn = VaultTurn::new(
+            [0x89; 32],
+            "fog_worker",
+            vec![3],
+            vec![(3, b"illegal".to_vec())],
+        )
+        .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 5, 2, 0);
+        assert!(matches!(
+            mandate.step_with_verified_session(
+                &mut fog,
+                &unauthorized_turn,
+                "USDC",
+                "WAFER",
+                0,
+                &orders,
+                &mut session,
+            ),
+            Err(NodeError::Sandbox(SandboxViolation::UnauthorizedSlotAccess { .. }))
+        ));
+
+        // Edge case: SimplexState with insufficient validators or duplicate write slots
+        let validators: Vec<ValidatorKeypair> = (0..4)
+            .map(|id| ValidatorKeypair::from_seed(id, b"edge-seed"))
+            .collect();
+        let mut state = SimplexState::new(4, 1, sample_genesis_cells());
+        let ro_turn = VaultTurn::new([0x90; 32], "reader", vec![1], vec![]);
+        assert!(state
+            .step_with_verified_session(&validators[..2], None, &ro_turn, None, &mut session)
+            .is_err());
+
+        // Read-only turn with no DREX batch across two consecutive views (view 1 leader 0 -> view 2 leader 1)
+        let tr1 = state
+            .step_with_verified_session(&validators, None, &ro_turn, None, &mut session)
+            .expect("view 1 read-only transition");
+        assert_eq!(tr1.next_view, 1);
+        assert!(tr1.clearing_receipt.is_none());
+        assert!(tr1
+            .verify_with_session(4, 3, &[], &mut session)
+            .expect("verify tr1"));
+
+        let tr2 = state
+            .step_with_verified_session(&validators, None, &ro_turn, None, &mut session)
+            .expect("view 2 read-only transition");
+        assert_eq!(tr2.prior_view, 1);
+        assert_eq!(tr2.next_view, 2);
+        assert_eq!(
+            tr2.simplex_cert.prop_cert.as_ref().unwrap().parent_hash,
+            tr1.simplex_cert.block_hash
+        );
+        assert!(tr2
+            .verify_with_session(4, 3, &[], &mut session)
+            .expect("verify tr2"));
+    }
 }
+
+

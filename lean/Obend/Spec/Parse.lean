@@ -653,9 +653,16 @@ def qualifiedRe : Re := seqs [group 1 (alts [str "def", str "around", str "befor
   chr ':', .done]
 def claimRe : Re := seqs [str "claim", many1 space, group 1 ident, opt (seqs [chr '(', group 2 (many dot), chr ')']),
   many space, chr ':', many space, group 3 (many1 dot), .done]
+/-- `claim NAME(params) by METHOD: BODY`: a claim with an Isar-style justification method. -/
+def claimByRe : Re := seqs [str "claim", many1 space, group 1 ident, opt (seqs [chr '(', group 2 (many dot), chr ')']),
+  many1 space, str "by", many1 space, group 5 (lazy1 dot), many space, chr ':', many space, group 3 (many1 dot), .done]
 /-- `claim NAME(params) given COND: BODY`: a precondition, lowered as `if COND then BODY else true`. -/
 def claimGivenRe : Re := seqs [str "claim", many1 space, group 1 ident, opt (seqs [chr '(', group 2 (many dot), chr ')']),
   many1 space, str "given", many1 space, group 4 (many1 dot), many space, chr ':', many space, group 3 (many1 dot), .done]
+/-- `claim NAME(params) given COND by METHOD: BODY`: a preconditioned claim with an Isar method. -/
+def claimGivenByRe : Re := seqs [str "claim", many1 space, group 1 ident, opt (seqs [chr '(', group 2 (many dot), chr ')']),
+  many1 space, str "given", many1 space, group 4 (lazy1 dot), many1 space, str "by", many1 space, group 5 (lazy1 dot),
+  many space, chr ':', many space, group 3 (many1 dot), .done]
 /-- `keeps INV by LAW`: the module's law `LAW` keeps the invariant `INV` (`Law.Claim.keeps`). -/
 def keepsRe : Re := seqs [str "keeps", many1 space, group 1 ident, many1 space, str "by", many1 space, group 2 ident,
   many space, .done]
@@ -668,6 +675,19 @@ def recordRe : Re := seqs [str "record", many1 space, group 1 ident, chr ':', .d
 def fieldRe : Re := seqs [group 1 (.alt ident quoted), chr ':', many space, group 2 (many1 dot), .done]
 /-- `law NAME: EXPR`, a top-level ENFORCED law of the package (`Obend.Spec.Law`). -/
 def lawRe : Re := seqs [str "law", many1 space, group 1 ident, many space, chr ':', many space, group 2 (many1 dot), .done]
+/-- `law NAME by METHOD: EXPR`, a top-level enforced law with an Isar justification method. -/
+def lawByRe : Re := seqs [str "law", many1 space, group 1 ident, many1 space, str "by", many1 space,
+  group 3 (lazy1 dot), many space, chr ':', many space, group 2 (many1 dot), .done]
+/-- `contract NAME for TARGET [by METHOD]:`, an Isar-style inductive cell contract block. -/
+def contractRe : Re := seqs [str "contract", many1 space, group 1 ident, many1 space, str "for", many1 space,
+  group 2 (lazy1 dot), opt (seqs [many1 space, str "by", many1 space, group 3 (lazy1 dot)]), many space, chr ':', .done]
+def isarHaveRe : Re := seqs [str "have", many1 space, group 1 ident, many space, chr ':', many space,
+  group 2 (lazy1 dot), many1 space, str "by", many1 space, group 3 (many1 dot), .done]
+def isarShowRe : Re := seqs [str "show", many1 space, group 1 (lazy1 dot), many1 space, str "by", many1 space,
+  group 2 (many1 dot), .done]
+def isarObtainRe : Re := seqs [str "obtain", many1 space, group 1 ident, many space, chr ':', many space,
+  group 2 (lazy1 dot), many1 space, str "by", many1 space, group 3 (many1 dot), .done]
+def isarByRe : Re := seqs [str "by", many1 space, group 1 (many1 dot), .done]
 
 /-- A package name: identifier segments joined by `/` (`commons/record`). -/
 def packageNameRe : Re := seqs [ident, many (.seq (chr '/') ident)]
@@ -710,6 +730,55 @@ def sourceLines (source : String) : Except Diagnostic (Array Line) := do
     offset := offset + utf8Length raw + 1
     number := number + 1
   return lines
+
+def checkIsarMethod (raw : String) : Except String Unit :=
+  let s := String.ofList (jsTrim raw.toList)
+  if s == "weave" || s == "frame" || s == "decide" || s == "omega" then .ok ()
+  else if s.startsWith "lean(" && s.endsWith ")" then
+    let inner := String.ofList (jsTrim ((s.toList.drop 5).take (s.length - 6)))
+    if inner.isEmpty || inner == "\"\"" then .error "empty lean(...) justification"
+    else .ok ()
+  else if s.startsWith "judge(" && s.endsWith ")" then
+    let inner := String.ofList (jsTrim ((s.toList.drop 6).take (s.length - 7)))
+    if inner.isEmpty || inner == "\"\"" then .error "empty judge(...) justification"
+    else .ok ()
+  else .error ("unknown Isar proof method: " ++ s)
+
+def parseIsarStepClause (clause : Line) : PS (Option Json) := do
+  if let some (_, s) ← matchAt clause isarHaveRe clause.text then
+    let mStr := cap clause.text s 3
+    if let .error msg := checkIsarMethod mStr then fail clause msg
+    let prop ← lineExpr clause ((capture clause.text s 2).getD [])
+    return some (Json.mkObj [("kind", toJson "have"), ("label", toJson (cap clause.text s 1)),
+      ("prop", prop), ("by", toJson mStr), ("span", clause.span.json)])
+  if let some (_, s) ← matchAt clause isarShowRe clause.text then
+    let mStr := cap clause.text s 2
+    if let .error msg := checkIsarMethod mStr then fail clause msg
+    let prop ← lineExpr clause ((capture clause.text s 1).getD [])
+    return some (Json.mkObj [("kind", toJson "show"), ("prop", prop),
+      ("by", toJson mStr), ("span", clause.span.json)])
+  if let some (_, s) ← matchAt clause isarObtainRe clause.text then
+    let mStr := cap clause.text s 3
+    if let .error msg := checkIsarMethod mStr then fail clause msg
+    let prop ← lineExpr clause ((capture clause.text s 2).getD [])
+    return some (Json.mkObj [("kind", toJson "obtain"), ("binder", toJson (cap clause.text s 1)),
+      ("prop", prop), ("by", toJson mStr), ("span", clause.span.json)])
+  if let some (_, s) ← matchAt clause isarByRe clause.text then
+    let mStr := cap clause.text s 1
+    if let .error msg := checkIsarMethod mStr then fail clause msg
+    return some (Json.mkObj [("kind", toJson "by"), ("by", toJson mStr), ("span", clause.span.json)])
+  return none
+
+def collectIndentedIsarSteps (lines : Array Line) (parentIndent : Nat) : PS (Array Json) := do
+  let mut steps : Array Json := #[]
+  for _ in [0:lines.size] do
+    let k ← get
+    let some sub := lines[k]? | break
+    if sub.indent <= parentIndent then break
+    let some stepJson ← parseIsarStepClause sub | break
+    set (k + 1)
+    steps := steps.push stepJson
+  return steps
 
 def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
   let fuel := lines.size + 1
@@ -758,18 +827,43 @@ def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
           let methodBody ← body lines fuel clause.indent
           methods := methods.push (Json.mkObj (signatureJson method ++ [("qualifier", toJson qualifier), ("body", methodBody)]))
           continue
+        if let some (_, l) ← matchAt clause claimGivenByRe clause.text then
+          let parameters ← liftBare (splitParameters ((capture clause.text l 2).getD []))
+          let condition ← lineExpr clause ((capture clause.text l 4).getD [])
+          let mStr := cap clause.text l 5
+          if let .error msg := checkIsarMethod mStr then fail clause msg
+          let claimBody ← lineExpr clause ((capture clause.text l 3).getD [])
+          let steps ← collectIndentedIsarSteps lines clause.indent
+          let extra := if steps.isEmpty then [("by", toJson mStr)] else [("by", toJson mStr), ("steps", Json.arr steps)]
+          claims := claims.push (Json.mkObj ([("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
+            ("given", condition), ("body", claimBody), ("span", clause.span.json)] ++ extra))
+          continue
         if let some (_, l) ← matchAt clause claimGivenRe clause.text then
           let parameters ← liftBare (splitParameters ((capture clause.text l 2).getD []))
           let condition ← lineExpr clause ((capture clause.text l 4).getD [])
           let claimBody ← lineExpr clause ((capture clause.text l 3).getD [])
-          claims := claims.push (Json.mkObj [("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
-            ("given", condition), ("body", claimBody), ("span", clause.span.json)])
+          let steps ← collectIndentedIsarSteps lines clause.indent
+          let extra := if steps.isEmpty then [] else [("steps", Json.arr steps)]
+          claims := claims.push (Json.mkObj ([("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
+            ("given", condition), ("body", claimBody), ("span", clause.span.json)] ++ extra))
+          continue
+        if let some (_, l) ← matchAt clause claimByRe clause.text then
+          let parameters ← liftBare (splitParameters ((capture clause.text l 2).getD []))
+          let mStr := cap clause.text l 5
+          if let .error msg := checkIsarMethod mStr then fail clause msg
+          let claimBody ← lineExpr clause ((capture clause.text l 3).getD [])
+          let steps ← collectIndentedIsarSteps lines clause.indent
+          let extra := if steps.isEmpty then [("by", toJson mStr)] else [("by", toJson mStr), ("steps", Json.arr steps)]
+          claims := claims.push (Json.mkObj ([("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
+            ("body", claimBody), ("span", clause.span.json)] ++ extra))
           continue
         if let some (_, l) ← matchAt clause claimRe clause.text then
           let parameters ← liftBare (splitParameters ((capture clause.text l 2).getD []))
           let claimBody ← lineExpr clause ((capture clause.text l 3).getD [])
-          claims := claims.push (Json.mkObj [("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
-            ("body", claimBody), ("span", clause.span.json)])
+          let steps ← collectIndentedIsarSteps lines clause.indent
+          let extra := if steps.isEmpty then [] else [("steps", Json.arr steps)]
+          claims := claims.push (Json.mkObj ([("name", toJson (cap clause.text l 1)), ("parameters", Json.arr parameters.toArray),
+            ("body", claimBody), ("span", clause.span.json)] ++ extra))
           continue
         -- `law` names an ENFORCED predicate or an accepted proof obligation (GPT-6 row G); a spec
         -- property nothing checks is a `claim`. The old spelling refuses by name, never reinterprets.
@@ -827,14 +921,66 @@ def declarations (lines : Array Line) : PS (Array Json × Array Json) := do
       decls := decls.push (Json.mkObj [("kind", toJson "record"), ("name", toJson (cap line.text caps 1)),
         ("methods", Json.arr methods), ("fields", Json.arr fields), ("span", line.span.json)])
       continue
-    -- `law NAME: EXPR` is a law the kernel enforces on every object of the package; its text is
-    -- parsed here (a refusal names the construct outside the fragment) and again by the
-    -- elaborator's module decoder, which keeps the law itself.
+    -- `law NAME [by METHOD]: EXPR` is a law the kernel enforces on every object of the package.
+    if let some (_, caps) ← matchAt line lawByRe line.text then
+      let text := cap line.text caps 2
+      let mStr := cap line.text caps 3
+      if let .error message := Law.parse text then fail line message
+      if let .error msg := checkIsarMethod mStr then fail line msg
+      decls := decls.push (Json.mkObj [("kind", toJson "law"), ("name", toJson (cap line.text caps 1)),
+        ("by", toJson mStr), ("source", toJson text), ("span", line.span.json)])
+      continue
     if let some (_, caps) ← matchAt line lawRe line.text then
       let text := cap line.text caps 2
       if let .error message := Law.parse text then fail line message
       decls := decls.push (Json.mkObj [("kind", toJson "law"), ("name", toJson (cap line.text caps 1)),
         ("source", toJson text), ("span", line.span.json)])
+      continue
+    if let some (_, caps) ← matchAt line contractRe line.text then
+      let cName := cap line.text caps 1
+      let cTarget := cap line.text caps 2
+      let cMethod ← match capture line.text caps 3 with
+        | some raw =>
+          let mStr := String.ofList raw
+          if let .error msg := checkIsarMethod mStr then fail line msg
+          pure (some mStr)
+        | none => pure none
+      let mut invOpt : Option Json := none
+      let mut lawOpt : Option String := none
+      let mut stepOpt : Option Json := none
+      let mut cSteps : Array Json := #[]
+      for _ in [0:lines.size] do
+        let j ← get
+        let some clause := lines[j]? | break
+        if clause.indent == 0 then break
+        set (j + 1)
+        if startsWith clause.text "invariant:" then
+          invOpt := some (← lineExpr clause (jsTrim (clause.text.drop 10)))
+          continue
+        if startsWith clause.text "law:" then
+          let lText := String.ofList (jsTrim (clause.text.drop 4))
+          if let .error msg := Law.parse lText then fail clause msg
+          lawOpt := some lText
+          continue
+        if startsWith clause.text "step:" then
+          stepOpt := some (← lineExpr clause (jsTrim (clause.text.drop 5)))
+          continue
+        if let some stepJson ← parseIsarStepClause clause then
+          cSteps := cSteps.push stepJson
+          continue
+        fail clause "expected invariant:, law:, step:, or Isar proof step (have/show/obtain/by)"
+      let mut fields : List (String × Json) := [
+        ("kind", toJson "contract"),
+        ("name", toJson cName),
+        ("targetType", toJson cTarget),
+        ("steps", Json.arr cSteps),
+        ("span", line.span.json)
+      ]
+      if let some m := cMethod then fields := fields ++ [("by", toJson m)]
+      if let some inv := invOpt then fields := fields ++ [("invariant", inv)]
+      if let some lw := lawOpt then fields := fields ++ [("law", toJson lw)]
+      if let some st := stepOpt then fields := fields ++ [("step", st)]
+      decls := decls.push (Json.mkObj fields)
       continue
     if let some (_, caps) ← matchAt line keepsRe line.text then
       decls := decls.push (Json.mkObj [("kind", toJson "keeps"), ("invariant", toJson (cap line.text caps 1)),

@@ -329,5 +329,102 @@ theorem lc_drives_potsdam_dyno_comparison_verified :
     checkLiquidThermalSignoff tLcInSlot 180000 102000 120000 42000 80000 67619 105000 = true := by
   decide +kernel
 
+/-! ## 6. Coupled Electro-Thermal Copper Resistivity Feedback & No-Thermal-Runaway Stability -/
+
+/-- Temperature-dependent stator copper Joule loss $P_{\text{Cu}}(T) = P_0 + \beta (T - T_{\text{inlet}})$,
+where $R_{\text{Cu}}(T) = R_0 (1 + \alpha_{\text{Cu}}(T - T_{\text{inlet}}))$ and $\beta = I^2 R_0 \alpha_{\text{Cu}}$
+is the electro-thermal power feedback slope ($\alpha_{\text{Cu}} \approx 0.00393\,\text{K}^{-1}$ for copper). -/
+def evalTempDependentCopperLoss (tInlet pBase slopeBeta tCur : Int) : Int :=
+  pBase + slopeBeta * (tCur - tInlet)
+
+/-- Coupled electro-thermal fixed-point operator mapping current stator winding temperature `tCur`
+to next-step steady-state temperature under temperature-dependent copper resistivity feedback:
+$$\mathcal{F}(T) = T_{\text{inlet}} + \left(P_0 + \beta (T - T_{\text{inlet}})\right) R_{\text{th}}.$$ -/
+def stepElectroThermalTemp (tInlet pBase slopeBeta rTh tCur : Int) : Int :=
+  tInlet + (pBase + slopeBeta * (tCur - tInlet)) * rTh
+
+/-- Evaluates the dimensionless electro-thermal feedback loop gain $\Lambda = \beta \cdot R_{\text{th}}$. -/
+def evalElectroThermalLoopGain (slopeBeta rTh : Int) : Int :=
+  slopeBeta * rTh
+
+/-- Checks whether the electro-thermal feedback loop gain $\Lambda = \beta \cdot R_{\text{th}}$ is
+non-negative and strictly below the unity fixed-point scale `scale` ($0 \le \beta R_{\text{th}} < \text{scale}$). -/
+def checkNoThermalRunaway (slopeBeta rTh scale : Int) : Bool :=
+  decide (0 ≤ slopeBeta * rTh ∧ slopeBeta * rTh < scale)
+
+/-- **Electro-Thermal Contraction Identity (`electro_thermal_contraction_identity`)**:
+For any two winding temperatures $T_1, T_2 \in \mathbb{Z}$, the difference between their mapped
+electro-thermal fixed-point iterates equals the loop gain $\Lambda = \beta \cdot R_{\text{th}}$
+times $(T_1 - T_2)$:
+$$\mathcal{F}(T_1) - \mathcal{F}(T_2) = (\beta \cdot R_{\text{th}}) (T_1 - T_2).$$ -/
+theorem electro_thermal_contraction_identity
+    (tInlet pBase slopeBeta rTh t1 t2 : Int) :
+    stepElectroThermalTemp tInlet pBase slopeBeta rTh t1 -
+      stepElectroThermalTemp tInlet pBase slopeBeta rTh t2 =
+    (slopeBeta * rTh) * (t1 - t2) := by
+  dsimp only [stepElectroThermalTemp]
+  grind
+
+/-- **Electro-Thermal Strict Contraction & No-Thermal-Runaway Bound (`electro_thermal_no_runaway_bound`)**:
+Whenever the electro-thermal loop gain $\Lambda = \beta \cdot R_{\text{th}}$ satisfies
+$0 \le \beta \cdot R_{\text{th}} < \text{scale}$, for any ordered pair of winding temperatures
+$T_2 < T_1$, the coupled electro-thermal operator is order-preserving and strictly contracts the
+temperature perturbation relative to `scale`:
+$$0 \le \mathcal{F}(T_1) - \mathcal{F}(T_2) < \text{scale} \cdot (T_1 - T_2).$$ -/
+theorem electro_thermal_no_runaway_bound
+    (tInlet pBase slopeBeta rTh scale t1 t2 : Int)
+    (hNonneg : 0 ≤ slopeBeta * rTh)
+    (hSubUnity : slopeBeta * rTh < scale)
+    (hOrder : t2 < t1) :
+    0 ≤ stepElectroThermalTemp tInlet pBase slopeBeta rTh t1 -
+          stepElectroThermalTemp tInlet pBase slopeBeta rTh t2 ∧
+    stepElectroThermalTemp tInlet pBase slopeBeta rTh t1 -
+      stepElectroThermalTemp tInlet pBase slopeBeta rTh t2 <
+      scale * (t1 - t2) := by
+  rw [electro_thermal_contraction_identity]
+  have hDiffPos : 0 < t1 - t2 := by omega
+  have hNonnegProd : 0 ≤ (slopeBeta * rTh) * (t1 - t2) :=
+    int_mul_nonneg (slopeBeta * rTh) (t1 - t2) hNonneg (by omega)
+  have hGapPos : 0 < (scale - slopeBeta * rTh) * (t1 - t2) :=
+    Int.mul_pos (by omega) hDiffPos
+  have hExpand :
+      (scale - slopeBeta * rTh) * (t1 - t2) =
+      scale * (t1 - t2) - (slopeBeta * rTh) * (t1 - t2) :=
+    Int.sub_mul scale (slopeBeta * rTh) (t1 - t2)
+  omega
+
+/-- **LC Drives Direct In-Slot Cooling Prevents Electro-Thermal Runaway (`lc_drives_in_slot_prevents_thermal_runaway`)**:
+At high stator current overload where the copper resistivity thermal feedback slope is $\beta = 4$
+(in percentage-scaled units with unity threshold $\text{scale} = 100$):
+* A conventional outer-water-jacketed stator ($R_{\text{th,jacket}} = 29$) suffers super-unity positive
+  feedback loop gain $\Lambda_{\text{jacket}} = 4 \times 29 = 116 \ge 100$ (`checkNoThermalRunaway 4 29 100 = false`),
+  amplifying any positive temperature perturbation ($\mathcal{F}_{\text{jacket}}(T_1) - \mathcal{F}_{\text{jacket}}(T_2) \ge 100 (T_1 - T_2)$,
+  divergent thermal runaway!),
+* LC Drives' direct in-slot microchannel liquid-cooled stator ($R_{\text{th,in-slot}} = 9$) reduces
+  the loop gain by $3.2\times$ to $\Lambda_{\text{in-slot}} = 4 \times 9 = 36 < 100$ (`checkNoThermalRunaway 4 9 100 = true`),
+  strictly contracting every temperature perturbation $T_2 < T_1$ by $36/100 < 1$ to a unique stable
+  steady-state winding temperature! -/
+theorem lc_drives_in_slot_prevents_thermal_runaway
+    (tInlet pBase t1 t2 : Int) (hOrder : t2 < t1) :
+    let rOuterJacket : Int := 29
+    let rLcInSlot    : Int := 9
+    let slopeBeta    : Int := 4
+    let scale        : Int := 100
+    evalElectroThermalLoopGain slopeBeta rOuterJacket = 116 ∧
+    evalElectroThermalLoopGain slopeBeta rLcInSlot = 36 ∧
+    checkNoThermalRunaway slopeBeta rOuterJacket scale = false ∧
+    checkNoThermalRunaway slopeBeta rLcInSlot scale = true ∧
+    scale * (t1 - t2) <
+      stepElectroThermalTemp tInlet pBase slopeBeta rOuterJacket t1 -
+        stepElectroThermalTemp tInlet pBase slopeBeta rOuterJacket t2 ∧
+    stepElectroThermalTemp tInlet pBase slopeBeta rLcInSlot t1 -
+      stepElectroThermalTemp tInlet pBase slopeBeta rLcInSlot t2 <
+      scale * (t1 - t2) := by
+  dsimp only [evalElectroThermalLoopGain, checkNoThermalRunaway]
+  rw [electro_thermal_contraction_identity tInlet pBase 4 29 t1 t2]
+  rw [electro_thermal_contraction_identity tInlet pBase 4 9 t1 t2]
+  refine ⟨by decide, by decide, by decide, by decide, by omega, by omega⟩
+
 end Obend.Hardware.FluidThermal
 end
+

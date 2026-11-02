@@ -307,6 +307,347 @@ theorem frep_octree_prune_interior_sound
   dsimp only [FloatInterval.contains, inSolid] at *
   omega
 
+/-! ### 2B. Matt Keeter's `fidget` Interval `Choice` Lattice & Recursive CSG Tape Specialization -/
+
+/-- Matt Keeter's `fidget` (`fidget-core/src/vm/choice.rs`) 4-valued branch selection lattice
+for interval-driven CSG tape specialization (`min` / `max` pruning):
+* `unknown` (`0b00 = 0`): neither branch selected yet (lattice bottom $\bot$),
+* `left`    (`0b01 = 1`): left operand strictly dominates across the octree cell,
+* `right`   (`0b10 = 2`): right operand strictly dominates across the octree cell,
+* `both`    (`0b11 = 3`): intervals overlap; both branches must be retained (lattice top $\top$). -/
+inductive FidgetChoice where
+  | unknown
+  | left
+  | right
+  | both
+  deriving DecidableEq, Repr
+
+/-- 2-bit integer encoding (`0..3`) matching `fidget-core/src/vm/choice.rs`. -/
+def FidgetChoice.toBits : FidgetChoice → Nat
+  | .unknown => 0
+  | .left    => 1
+  | .right   => 2
+  | .both    => 3
+
+/-- Decode a 2-bit tag (`0..3`) back into `FidgetChoice`. -/
+def FidgetChoice.fromBits : Nat → FidgetChoice
+  | 0 => .unknown
+  | 1 => .left
+  | 2 => .right
+  | _ => .both
+
+/-- Bitwise OR / lattice join (`Choice::or` in `fidget-core/src/vm/choice.rs`). -/
+def FidgetChoice.join : FidgetChoice → FidgetChoice → FidgetChoice
+  | .unknown, c        => c
+  | c,        .unknown => c
+  | .left,    .left    => .left
+  | .right,   .right   => .right
+  | _,        _        => .both
+
+/-- Bitwise AND / lattice meet (`Choice::and` in `fidget-core/src/vm/choice.rs`). -/
+def FidgetChoice.meet : FidgetChoice → FidgetChoice → FidgetChoice
+  | .both,  c      => c
+  | c,      .both  => c
+  | .left,  .left  => .left
+  | .right, .right => .right
+  | _,      _      => .unknown
+
+/-- Swap `.left` and `.right` branch selections. -/
+def FidgetChoice.flip : FidgetChoice → FidgetChoice
+  | .unknown => .unknown
+  | .left    => .right
+  | .right   => .left
+  | .both    => .both
+
+/-- `FidgetChoice.join` is commutative, associative, and idempotent. -/
+theorem fidgetChoice_join_laws (a b c : FidgetChoice) :
+    a.join b = b.join a ∧
+    (a.join b).join c = a.join (b.join c) ∧
+    a.join a = a ∧
+    a.flip.flip = a := by
+  cases a <;> cases b <;> cases c <;> decide
+
+/-- `fidget` (`fidget-core/src/types/interval.rs` `min_choice`) interval selector for $\min(a, b)$:
+* Returns `.left` when `a.hi ≤ b.lo` ($a \le b$ everywhere in the box),
+* Returns `.right` when `b.hi ≤ a.lo` ($b \le a$ everywhere in the box),
+* Returns `.both` when the intervals overlap. -/
+def ivMinChoice (a b : FloatInterval) : FidgetChoice :=
+  if decide (a.hi ≤ b.lo) then .left
+  else if decide (b.hi ≤ a.lo) then .right
+  else .both
+
+/-- `fidget` (`fidget-core/src/types/interval.rs` `max_choice`) interval selector for $\max(a, b)$:
+* Returns `.left` when `b.hi ≤ a.lo` ($b \le a$ everywhere in the box),
+* Returns `.right` when `a.hi ≤ b.lo` ($a \le b$ everywhere in the box),
+* Returns `.both` when the intervals overlap. -/
+def ivMaxChoice (a b : FloatInterval) : FidgetChoice :=
+  if decide (b.hi ≤ a.lo) then .left
+  else if decide (a.hi ≤ b.lo) then .right
+  else .both
+
+/-- Lemma: If `va ∈ ia`, `vb ∈ ib`, and `ivMinChoice ia ib = .left`, then `min va vb = va`. -/
+theorem ivMinChoice_left_sound (ia ib : FloatInterval) (va vb : Int)
+    (ha : ia.contains va) (hb : ib.contains vb)
+    (hChoice : ivMinChoice ia ib = .left) :
+    min va vb = va := by
+  unfold ivMinChoice at hChoice
+  dsimp only [FloatInterval.contains] at ha hb
+  by_cases h1 : ia.hi ≤ ib.lo
+  · omega
+  · rw [if_neg (by simpa [decide_eq_true_iff] using h1)] at hChoice
+    by_cases h2 : ib.hi ≤ ia.lo
+    · rw [if_pos (decide_eq_true h2)] at hChoice
+      cases hChoice
+    · rw [if_neg (by simpa [decide_eq_true_iff] using h2)] at hChoice
+      cases hChoice
+
+/-- Lemma: If `va ∈ ia`, `vb ∈ ib`, and `ivMinChoice ia ib = .right`, then `min va vb = vb`. -/
+theorem ivMinChoice_right_sound (ia ib : FloatInterval) (va vb : Int)
+    (ha : ia.contains va) (hb : ib.contains vb)
+    (hChoice : ivMinChoice ia ib = .right) :
+    min va vb = vb := by
+  unfold ivMinChoice at hChoice
+  dsimp only [FloatInterval.contains] at ha hb
+  by_cases h1 : ia.hi ≤ ib.lo
+  · rw [if_pos (decide_eq_true h1)] at hChoice
+    cases hChoice
+  · rw [if_neg (by simpa [decide_eq_true_iff] using h1)] at hChoice
+    by_cases h2 : ib.hi ≤ ia.lo
+    · omega
+    · rw [if_neg (by simpa [decide_eq_true_iff] using h2)] at hChoice
+      cases hChoice
+
+/-- Lemma: If `va ∈ ia`, `vb ∈ ib`, and `ivMaxChoice ia ib = .left`, then `max va vb = va`. -/
+theorem ivMaxChoice_left_sound (ia ib : FloatInterval) (va vb : Int)
+    (ha : ia.contains va) (hb : ib.contains vb)
+    (hChoice : ivMaxChoice ia ib = .left) :
+    max va vb = va := by
+  unfold ivMaxChoice at hChoice
+  dsimp only [FloatInterval.contains] at ha hb
+  by_cases h1 : ib.hi ≤ ia.lo
+  · omega
+  · rw [if_neg (by simpa [decide_eq_true_iff] using h1)] at hChoice
+    by_cases h2 : ia.hi ≤ ib.lo
+    · rw [if_pos (decide_eq_true h2)] at hChoice
+      cases hChoice
+    · rw [if_neg (by simpa [decide_eq_true_iff] using h2)] at hChoice
+      cases hChoice
+
+/-- Lemma: If `va ∈ ia`, `vb ∈ ib`, and `ivMaxChoice ia ib = .right`, then `max va vb = vb`. -/
+theorem ivMaxChoice_right_sound (ia ib : FloatInterval) (va vb : Int)
+    (ha : ia.contains va) (hb : ib.contains vb)
+    (hChoice : ivMaxChoice ia ib = .right) :
+    max va vb = vb := by
+  unfold ivMaxChoice at hChoice
+  dsimp only [FloatInterval.contains] at ha hb
+  by_cases h1 : ib.hi ≤ ia.lo
+  · rw [if_pos (decide_eq_true h1)] at hChoice
+    cases hChoice
+  · rw [if_neg (by simpa [decide_eq_true_iff] using h1)] at hChoice
+    by_cases h2 : ia.hi ≤ ib.lo
+    · omega
+    · rw [if_neg (by simpa [decide_eq_true_iff] using h2)] at hChoice
+      cases hChoice
+
+/-- Lemma: If `vb ∈ ib`, then `-vb ∈ ivNeg ib`. -/
+theorem ivNeg_contains (ib : FloatInterval) (vb : Int) (hb : ib.contains vb) :
+    (ivNeg ib).contains (-vb) := by
+  dsimp only [ivNeg, FloatInterval.contains] at *
+  omega
+
+/-- Total AST node count of an `FRepExpr` CSG tape (`fidget` tape length). -/
+def frepNodeCount : FRepExpr → Nat
+  | .const _      => 1
+  | .varX         => 1
+  | .varY         => 1
+  | .varZ         => 1
+  | .add a b      => 1 + frepNodeCount a + frepNodeCount b
+  | .sub a b      => 1 + frepNodeCount a + frepNodeCount b
+  | .scalePos _ a => 1 + frepNodeCount a
+  | .sq a         => 1 + frepNodeCount a
+  | .csgUnion a b => 1 + frepNodeCount a + frepNodeCount b
+  | .csgInter a b => 1 + frepNodeCount a + frepNodeCount b
+  | .csgDiff a b  => 1 + frepNodeCount a + frepNodeCount b
+  | .offset _ a   => 1 + frepNodeCount a
+
+/-- Recursively specialize (`prune`) an `FRepExpr` CSG tape to a 3D octree cell `B : Box3D`
+following Matt Keeter's `fidget` tape specialization (`fidget-core/src/vm/data.rs`):
+* `.csgUnion a b` ($\min(a, b)$) prunes to `pruneFRepTape B a` when `ivMinChoice = .left`
+  (`a.hi ≤ b.lo`) and to `pruneFRepTape B b` when `ivMinChoice = .right` (`b.hi ≤ a.lo`),
+* `.csgInter a b` ($\max(a, b)$) prunes to `pruneFRepTape B a` when `ivMaxChoice = .left`
+  (`b.hi ≤ a.lo`) and to `pruneFRepTape B b` when `ivMaxChoice = .right` (`a.hi ≤ b.lo`),
+* `.csgDiff a b` ($\max(a, -b)$) prunes away the subtracted tool/feature `b` to `pruneFRepTape B a`
+  whenever `ivMaxChoice (evalFRepInterval B a) (ivNeg (evalFRepInterval B b)) = .left`
+  (`-(evalFRepInterval B b).lo ≤ (evalFRepInterval B a).lo`). -/
+def pruneFRepTape (B : Box3D) : FRepExpr → FRepExpr
+  | .const c      => .const c
+  | .varX         => .varX
+  | .varY         => .varY
+  | .varZ         => .varZ
+  | .add a b      => .add (pruneFRepTape B a) (pruneFRepTape B b)
+  | .sub a b      => .sub (pruneFRepTape B a) (pruneFRepTape B b)
+  | .scalePos k a => .scalePos k (pruneFRepTape B a)
+  | .sq a         => .sq (pruneFRepTape B a)
+  | .csgUnion a b =>
+    match ivMinChoice (evalFRepInterval B a) (evalFRepInterval B b) with
+    | .left  => pruneFRepTape B a
+    | .right => pruneFRepTape B b
+    | _      => .csgUnion (pruneFRepTape B a) (pruneFRepTape B b)
+  | .csgInter a b =>
+    match ivMaxChoice (evalFRepInterval B a) (evalFRepInterval B b) with
+    | .left  => pruneFRepTape B a
+    | .right => pruneFRepTape B b
+    | _      => .csgInter (pruneFRepTape B a) (pruneFRepTape B b)
+  | .csgDiff a b  =>
+    match ivMaxChoice (evalFRepInterval B a) (ivNeg (evalFRepInterval B b)) with
+    | .left  => pruneFRepTape B a
+    | _      => .csgDiff (pruneFRepTape B a) (pruneFRepTape B b)
+  | .offset r a   => .offset r (pruneFRepTape B a)
+
+/-- **Universal `fidget` CSG Tape Pruning Soundness Theorem (`pruneFRepTape_sound`)**:
+For every 3D octree bounding box `B : Box3D`, every point `(x, y, z)` contained in `B`, and every
+CSG expression tree `e : FRepExpr`, evaluating the specialized tape `pruneFRepTape B e` at `(x, y, z)`
+produces the **exact** same value as evaluating the unpruned tree `e` at `(x, y, z)`. -/
+theorem pruneFRepTape_sound
+    (B : Box3D) (x y z : Int) (e : FRepExpr)
+    (hIn : B.contains x y z) :
+    evalFRepPoint x y z (pruneFRepTape B e) = evalFRepPoint x y z e := by
+  induction e with
+  | const c => rfl
+  | varX => rfl
+  | varY => rfl
+  | varZ => rfl
+  | add a b iha ihb =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    rw [iha, ihb]
+  | sub a b iha ihb =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    rw [iha, ihb]
+  | scalePos k a iha =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    rw [iha]
+  | sq a iha =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    rw [iha]
+  | csgUnion a b iha ihb =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    have ha := frep_interval_enclosure_sound B x y z a hIn
+    have hb := frep_interval_enclosure_sound B x y z b hIn
+    cases hC : ivMinChoice (evalFRepInterval B a) (evalFRepInterval B b) with
+    | left =>
+      dsimp only
+      rw [iha, ivMinChoice_left_sound _ _ _ _ ha hb hC]
+    | right =>
+      dsimp only
+      rw [ihb, ivMinChoice_right_sound _ _ _ _ ha hb hC]
+    | unknown =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+    | both =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+  | csgInter a b iha ihb =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    have ha := frep_interval_enclosure_sound B x y z a hIn
+    have hb := frep_interval_enclosure_sound B x y z b hIn
+    cases hC : ivMaxChoice (evalFRepInterval B a) (evalFRepInterval B b) with
+    | left =>
+      dsimp only
+      rw [iha, ivMaxChoice_left_sound _ _ _ _ ha hb hC]
+    | right =>
+      dsimp only
+      rw [ihb, ivMaxChoice_right_sound _ _ _ _ ha hb hC]
+    | unknown =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+    | both =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+  | csgDiff a b iha ihb =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    have ha := frep_interval_enclosure_sound B x y z a hIn
+    have hb := ivNeg_contains _ _ (frep_interval_enclosure_sound B x y z b hIn)
+    cases hC : ivMaxChoice (evalFRepInterval B a) (ivNeg (evalFRepInterval B b)) with
+    | left =>
+      dsimp only
+      rw [iha, ivMaxChoice_left_sound _ _ _ _ ha hb hC]
+    | right =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+    | unknown =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+    | both =>
+      dsimp only [evalFRepPoint]
+      rw [iha, ihb]
+  | offset r a iha =>
+    dsimp only [pruneFRepTape, evalFRepPoint]
+    rw [iha]
+
+/-- **Universal `fidget` Tape Compaction Theorem (`pruneFRepTape_size_le`)**:
+Specializing any CSG expression tree `e : FRepExpr` to any 3D octree cell `B : Box3D` never
+increases the AST node count (`frepNodeCount (pruneFRepTape B e) ≤ frepNodeCount e`). -/
+theorem pruneFRepTape_size_le (B : Box3D) (e : FRepExpr) :
+    frepNodeCount (pruneFRepTape B e) ≤ frepNodeCount e := by
+  induction e with
+  | const _ => exact Nat.le_refl _
+  | varX => exact Nat.le_refl _
+  | varY => exact Nat.le_refl _
+  | varZ => exact Nat.le_refl _
+  | add a b iha ihb =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    omega
+  | sub a b iha ihb =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    omega
+  | scalePos k a iha =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    omega
+  | sq a iha =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    omega
+  | csgUnion a b iha ihb =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    cases ivMinChoice (evalFRepInterval B a) (evalFRepInterval B b) <;>
+      dsimp only [frepNodeCount] <;> omega
+  | csgInter a b iha ihb =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    cases ivMaxChoice (evalFRepInterval B a) (evalFRepInterval B b) <;>
+      dsimp only [frepNodeCount] <;> omega
+  | csgDiff a b iha ihb =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    cases ivMaxChoice (evalFRepInterval B a) (ivNeg (evalFRepInterval B b)) <;>
+      dsimp only [frepNodeCount] <;> omega
+  | offset r a iha =>
+    dsimp only [pruneFRepTape, frepNodeCount]
+    omega
+
+/-- **Golden Multi-Feature Stator CSG Tape Compaction Certificate (`golden_fidget_tape_pruning_verified`)**:
+On a 3-feature stator CSG expression combining:
+1. Primary stator core cylinder $x^2 + y^2 - 100$,
+2. Unioned mounting lug $(x - 20)^2 + y^2 - 4$, and
+3. Subtracted axial cooling bore $(x + 20)^2 + y^2 - 4$,
+specializing the 24-node CSG tape over an octree sub-box $B = [-2, 2]^3$ near the stator center
+prunes away both the distant mounting lug (`.csgUnion` $\to$ `.left`) and the distant cooling bore
+(`.csgDiff` $\to$ `.left`), compacting the tape from `24` AST nodes down to `6` AST nodes while
+preserving exact point evaluations inside $B$! -/
+theorem golden_fidget_tape_pruning_verified :
+    let statorCore : FRepExpr := .offset 100 (.add (.sq .varX) (.sq .varY))
+    let mountingLug : FRepExpr := .offset 4 (.add (.sq (.sub .varX (.const 20))) (.sq .varY))
+    let coolingBore : FRepExpr := .offset 4 (.add (.sq (.add .varX (.const 20))) (.sq .varY))
+    let fullStatorCsg : FRepExpr := .csgDiff (.csgUnion statorCore mountingLug) coolingBore
+    let centerOctreeCell : Box3D :=
+      { xIv := { lo := -2, hi := 2 }
+        yIv := { lo := -2, hi := 2 }
+        zIv := { lo := -2, hi := 2 } }
+    let prunedTape := pruneFRepTape centerOctreeCell fullStatorCsg
+    frepNodeCount fullStatorCsg = 24 ∧
+    frepNodeCount prunedTape = 6 ∧
+    frepNodeCount prunedTape < frepNodeCount fullStatorCsg ∧
+    prunedTape = statorCore ∧
+    evalFRepPoint 1 (-1) 0 prunedTape = evalFRepPoint 1 (-1) 0 fullStatorCsg := by
+  decide +kernel
+
 /-! ## 3. Implicit Swept-Volume CAM Material Removal & Zero-Gouge Certification -/
 
 /-- Evaluates the In-Process Workpiece (`IPW`) after subtracting cutter swept volume `fSwept`

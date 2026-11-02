@@ -179,6 +179,143 @@ pub type WorkbenchEvent = EvalResponse;
 /// Alias for `WorkbenchServer` (`WS 31`).
 pub type WorkbenchEngine = WorkbenchServer;
 
+/// Entry for a single `.obend` file discovered in `lean/tests/obend-source/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceFileEntry {
+    pub path: String,
+    pub category: String,
+    pub module_name: String,
+    pub size_bytes: u64,
+    pub summary: String,
+}
+
+/// JSON response payload for `GET /workspace/tree`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTreeResponse {
+    pub root_dir: String,
+    pub total_files: usize,
+    pub categories: Vec<String>,
+    pub files: Vec<WorkspaceFileEntry>,
+}
+
+/// A literate section split from a `.obend` source file (`# ...` prose commentary + declaration block).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiterateSection {
+    pub index: usize,
+    pub kind: String,
+    pub title: String,
+    pub prose: String,
+    pub code: String,
+    pub declaration_name: Option<String>,
+    pub declaration_kind: Option<String>,
+}
+
+/// Surface structure extracted from a `.obend` `spec`, `record`, `sum`, or `protocol` declaration.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceSpecDetails {
+    pub inherits: Vec<String>,
+    pub fields: Vec<String>,
+    pub requires_methods: Vec<String>,
+    pub around_methods: Vec<String>,
+    pub def_methods: Vec<String>,
+    pub claims: Vec<String>,
+    pub laws: Vec<String>,
+}
+
+/// Per-declaration PIDE semantic summary returned by the Lean FFI kernel (`obend_eval_cell_core`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElaboratedDeclaration {
+    pub name: String,
+    pub declaration: String,
+    pub kind: String,
+    pub status: String,
+    pub type_text: String,
+    pub uses: u64,
+    pub object_layers: Vec<String>,
+    pub leaf_slots: usize,
+    pub preview: serde_json::Value,
+    pub spec_details: Option<SurfaceSpecDetails>,
+    pub diagnostic: Option<serde_json::Value>,
+}
+
+/// Per-claim obligation verification status returned by `Obend.Logic.Program.claimFields` + `proposeDerivation`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElaboratedClaim {
+    pub spec: String,
+    pub name: String,
+    pub claim: String,
+    pub status: String,
+    pub steps: usize,
+    pub lhs_text: String,
+    pub rhs_text: String,
+    pub normal_form: String,
+}
+
+/// Per-law confluence regime classification returned by `Obend.Spec.Law.parse` + `Obend.Spec.LawDial.dial`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElaboratedLaw {
+    pub name: String,
+    pub declaration: String,
+    pub body: String,
+    pub parsed: bool,
+    pub confluence_regime: String,
+    pub dial_verdict: String,
+    pub status: String,
+}
+
+/// Emitted `Obend.Leaf.Book` vtable slot summary for closed spec composition objects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElaboratedLeafBook {
+    pub object: String,
+    pub layers: Vec<String>,
+    pub slot_count: usize,
+    pub slots: Vec<String>,
+    pub closed: bool,
+}
+
+/// Evaluated demand-machine preview output for 0-argument definitions or requested entry points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElaboratedPreview {
+    pub entry: String,
+    pub status: String,
+    pub result: serde_json::Value,
+}
+
+/// JSON request payload for `POST /workspace/elaborate`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceElaborateRequest {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub module_name: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub entry: Option<String>,
+}
+
+/// JSON response payload for `GET /workspace/file?path=...` and `POST /workspace/elaborate`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceElaborateResponse {
+    pub schema: String,
+    pub path: Option<String>,
+    pub module_name: String,
+    pub sha256: String,
+    pub status: String,
+    pub turn_receipt_hex: String,
+    pub source: String,
+    pub literate_sections: Vec<LiterateSection>,
+    pub declarations: Vec<ElaboratedDeclaration>,
+    pub claims: Vec<ElaboratedClaim>,
+    pub laws: Vec<ElaboratedLaw>,
+    pub leaf_books: Vec<ElaboratedLeafBook>,
+    pub previews: Vec<ElaboratedPreview>,
+    pub raw_ffi_json: serde_json::Value,
+}
+
+/// Alias for `GET /workspace/file` response.
+pub type WorkspaceFileResponse = WorkspaceElaborateResponse;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LawAtomConstraint {
     Monotone(String),
@@ -1313,16 +1450,758 @@ fn write_html_response(stream: &mut TcpStream, status: u16, status_text: &str, h
     let _ = stream.flush();
 }
 
+/// Locate the `lean/tests/obend-source` directory relative to `CARGO_MANIFEST_DIR` or current working directory.
+pub fn find_obend_source_root() -> std::path::PathBuf {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let from_manifest = manifest_dir.join("../../lean/tests/obend-source");
+    if from_manifest.exists() {
+        return from_manifest
+            .canonicalize()
+            .unwrap_or(from_manifest);
+    }
+    let from_cwd = std::path::Path::new("lean/tests/obend-source");
+    if from_cwd.exists() {
+        return from_cwd
+            .canonicalize()
+            .unwrap_or_else(|_| from_cwd.to_path_buf());
+    }
+    let from_parent = std::path::Path::new("../lean/tests/obend-source");
+    if from_parent.exists() {
+        return from_parent
+            .canonicalize()
+            .unwrap_or_else(|_| from_parent.to_path_buf());
+    }
+    from_manifest
+}
+
+/// Derive a valid `.obend` module name from a file path or stem (`Obend.Main.moduleNameOf`).
+pub fn module_name_of_path(path: &str) -> String {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    let stem = base.strip_suffix(".obend").unwrap_or(base);
+    let cleaned: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    if cleaned.is_empty() {
+        return "WorkbookModule".to_string();
+    }
+    if cleaned.chars().next().unwrap().is_ascii_digit() {
+        format!("M{cleaned}")
+    } else {
+        cleaned
+    }
+}
+
+fn categorize_obend_path(rel_path: &str) -> String {
+    if rel_path.starts_with("world/physical/") {
+        "world/physical".to_string()
+    } else if rel_path.starts_with("world/market/") {
+        "world/market".to_string()
+    } else if rel_path.starts_with("tutorial/") {
+        "tutorial".to_string()
+    } else if rel_path.starts_with("examples/") {
+        "examples".to_string()
+    } else if rel_path.starts_with("ltuo/") {
+        "ltuo".to_string()
+    } else if let Some((first_dir, _)) = rel_path.split_once('/') {
+        first_dir.to_string()
+    } else {
+        "examples".to_string()
+    }
+}
+
+fn category_sort_rank(cat: &str) -> usize {
+    match cat {
+        "world/physical" => 0,
+        "world/market" => 1,
+        "tutorial" => 2,
+        "examples" => 3,
+        "ltuo" => 4,
+        _ => 5,
+    }
+}
+
+fn walk_obend_dir(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<WorkspaceFileEntry>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries.filter_map(|e| e.ok().map(|x| x.path())).collect();
+    paths.sort();
+    for p in paths {
+        if p.is_dir() {
+            walk_obend_dir(root, &p, out);
+        } else if p.extension().and_then(|s| s.to_str()) == Some("obend") {
+            let Ok(rel) = p.strip_prefix(root) else {
+                continue;
+            };
+            let rel_str = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let size_bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            let content = std::fs::read_to_string(&p).unwrap_or_default();
+            let summary = content
+                .lines()
+                .find_map(|line| {
+                    let t = line.trim();
+                    if let Some(rest) = t.strip_prefix('#') {
+                        let s = rest.trim().trim_start_matches('=').trim();
+                        if !s.is_empty() && !s.starts_with('@') {
+                            return Some(s.to_string());
+                        }
+                    }
+                    None
+                })
+                .unwrap_or_else(|| format!("ObjectiveBend 1 module ({rel_str})"));
+            let category = categorize_obend_path(&rel_str);
+            let module_name = module_name_of_path(&rel_str);
+            out.push(WorkspaceFileEntry {
+                path: rel_str,
+                category,
+                module_name,
+                size_bytes,
+                summary,
+            });
+        }
+    }
+}
+
+/// Scan `lean/tests/obend-source/` for all real `.obend` workspace files.
+pub fn scan_workspace_tree() -> WorkspaceTreeResponse {
+    let root = find_obend_source_root();
+    let mut files = Vec::new();
+    walk_obend_dir(&root, &root, &mut files);
+    files.sort_by(|a, b| {
+        category_sort_rank(&a.category)
+            .cmp(&category_sort_rank(&b.category))
+            .then_with(|| a.category.cmp(&b.category))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    let mut categories: Vec<String> = Vec::new();
+    for priority in ["world/physical", "world/market", "tutorial", "examples", "ltuo"] {
+        if files.iter().any(|f| f.category == priority) {
+            categories.push(priority.to_string());
+        }
+    }
+    for f in &files {
+        if !categories.contains(&f.category) {
+            categories.push(f.category.clone());
+        }
+    }
+    WorkspaceTreeResponse {
+        root_dir: root.display().to_string(),
+        total_files: files.len(),
+        categories,
+        files,
+    }
+}
+
+fn parse_top_level_decl_header(trimmed: &str) -> Option<(&'static str, String)> {
+    for kw in ["record", "sum", "spec", "def", "law", "protocol"] {
+        let prefix = format!("{kw} ");
+        if let Some(rest) = trimmed.strip_prefix(&prefix) {
+            let ident: String = rest
+                .trim()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !ident.is_empty() && trimmed.contains(':') {
+                let norm_kind = if kw == "def" { "function" } else { kw };
+                return Some((norm_kind, ident));
+            }
+        }
+    }
+    None
+}
+
+/// Split `.obend` source into literate prose/declaration sections and extract surface `spec`/`record` details.
+pub fn split_literate_obend_sections(
+    source: &str,
+) -> (Vec<LiterateSection>, BTreeMap<String, SurfaceSpecDetails>) {
+    let mut sections: Vec<LiterateSection> = Vec::new();
+    let mut spec_map: BTreeMap<String, SurfaceSpecDetails> = BTreeMap::new();
+
+    let mut pending_comments: Vec<String> = Vec::new();
+    let mut cur_decl_kind: Option<String> = None;
+    let mut cur_decl_name: Option<String> = None;
+    let mut cur_decl_prose: String = String::new();
+    let mut cur_decl_lines: Vec<String> = Vec::new();
+
+    let flush_decl = |sections: &mut Vec<LiterateSection>,
+                      spec_map: &mut BTreeMap<String, SurfaceSpecDetails>,
+                      kind: &mut Option<String>,
+                      name: &mut Option<String>,
+                      prose: &mut String,
+                      lines: &mut Vec<String>| {
+        if let (Some(k), Some(n)) = (kind.take(), name.take()) {
+            let code_str = lines.join("\n").trim().to_string();
+            // Extract surface details from code_str
+            let mut details = SurfaceSpecDetails::default();
+            if let Some(first_line) = lines.first() {
+                let fl = first_line.trim().trim_end_matches(':');
+                if let Some((_, after_is)) = fl.split_once(" is ") {
+                    let before_for = after_is.split(" for ").next().unwrap_or(after_is);
+                    for part in before_for.split(',') {
+                        let parent = part.trim().split_whitespace().next().unwrap_or("");
+                        if !parent.is_empty() && !details.inherits.contains(&parent.to_string()) {
+                            details.inherits.push(parent.to_string());
+                        }
+                    }
+                }
+                if let Some((_, after_for)) = fl.split_once(" for ") {
+                    let target = after_for.trim().split_whitespace().next().unwrap_or("");
+                    if !target.is_empty() && !details.inherits.contains(&target.to_string()) {
+                        details.inherits.push(target.to_string());
+                    }
+                }
+            }
+            for line in lines.iter().skip(1) {
+                let indent = line.chars().take_while(|c| *c == ' ').count();
+                let t = line.trim();
+                if t.is_empty() || t.starts_with('#') {
+                    continue;
+                }
+                if indent == 2 {
+                    if let Some(rest) = t.strip_prefix("uses ") {
+                        for u in rest.split(',') {
+                            let u_clean = u.trim();
+                            if !u_clean.is_empty() && !details.inherits.contains(&u_clean.to_string()) {
+                                details.inherits.push(u_clean.to_string());
+                            }
+                        }
+                    } else if let Some(rest) = t.strip_prefix("requires ") {
+                        details.requires_methods.push(rest.trim().to_string());
+                    } else if let Some(rest) = t.strip_prefix("around ") {
+                        details
+                            .around_methods
+                            .push(rest.trim().trim_end_matches(':').to_string());
+                    } else if let Some(rest) = t.strip_prefix("def ") {
+                        details
+                            .def_methods
+                            .push(rest.trim().trim_end_matches(':').to_string());
+                    } else if let Some(rest) = t.strip_prefix("claim ") {
+                        details.claims.push(rest.trim().to_string());
+                    } else if let Some(rest) = t.strip_prefix("law ") {
+                        details.laws.push(rest.trim().to_string());
+                    } else if t.contains(':') && !t.starts_with("case ") && !t.starts_with("match ") {
+                        details.fields.push(t.to_string());
+                    }
+                }
+            }
+            spec_map.insert(n.clone(), details);
+            let idx = sections.len();
+            sections.push(LiterateSection {
+                index: idx,
+                kind: "declaration".to_string(),
+                title: format!("{k} {n}"),
+                prose: std::mem::take(prose),
+                code: code_str,
+                declaration_name: Some(n),
+                declaration_kind: Some(k),
+            });
+            lines.clear();
+        }
+    };
+
+    for raw_line in source.lines() {
+        let trimmed = raw_line.trim();
+        let is_top_level = !raw_line.starts_with(' ') && !raw_line.starts_with('\t');
+
+        if is_top_level && trimmed.starts_with('#') {
+            flush_decl(
+                &mut sections,
+                &mut spec_map,
+                &mut cur_decl_kind,
+                &mut cur_decl_name,
+                &mut cur_decl_prose,
+                &mut cur_decl_lines,
+            );
+            let comment_body = trimmed.trim_start_matches('#').trim();
+            if !comment_body.starts_with('@') {
+                pending_comments.push(comment_body.to_string());
+            }
+            continue;
+        }
+
+        if is_top_level
+            && (trimmed.starts_with("edition ") || trimmed.starts_with("import "))
+        {
+            flush_decl(
+                &mut sections,
+                &mut spec_map,
+                &mut cur_decl_kind,
+                &mut cur_decl_name,
+                &mut cur_decl_prose,
+                &mut cur_decl_lines,
+            );
+            let prose = pending_comments.join("\n").trim().to_string();
+            pending_comments.clear();
+            let idx = sections.len();
+            sections.push(LiterateSection {
+                index: idx,
+                kind: "header".to_string(),
+                title: trimmed.to_string(),
+                prose,
+                code: raw_line.to_string(),
+                declaration_name: None,
+                declaration_kind: None,
+            });
+            continue;
+        }
+
+        if is_top_level {
+            if let Some((dk, dn)) = parse_top_level_decl_header(trimmed) {
+                flush_decl(
+                    &mut sections,
+                    &mut spec_map,
+                    &mut cur_decl_kind,
+                    &mut cur_decl_name,
+                    &mut cur_decl_prose,
+                    &mut cur_decl_lines,
+                );
+                cur_decl_kind = Some(dk.to_string());
+                cur_decl_name = Some(dn);
+                cur_decl_prose = pending_comments.join("\n").trim().to_string();
+                pending_comments.clear();
+                cur_decl_lines.push(raw_line.to_string());
+                continue;
+            }
+        }
+
+        if cur_decl_name.is_some() {
+            cur_decl_lines.push(raw_line.to_string());
+        } else if !trimmed.is_empty() {
+            pending_comments.push(trimmed.to_string());
+        }
+    }
+
+    flush_decl(
+        &mut sections,
+        &mut spec_map,
+        &mut cur_decl_kind,
+        &mut cur_decl_name,
+        &mut cur_decl_prose,
+        &mut cur_decl_lines,
+    );
+
+    if !pending_comments.is_empty() {
+        let prose = pending_comments.join("\n").trim().to_string();
+        if !prose.is_empty() {
+            let idx = sections.len();
+            sections.push(LiterateSection {
+                index: idx,
+                kind: "prose".to_string(),
+                title: "Literate Commentary".to_string(),
+                prose,
+                code: String::new(),
+                declaration_name: None,
+                declaration_kind: None,
+            });
+        }
+    }
+
+    (sections, spec_map)
+}
+
+fn collect_import_dep_modules(
+    base_dir: &std::path::Path,
+    source: &str,
+    visited: &mut Vec<String>,
+    out_deps: &mut Vec<(String, String)>,
+) {
+    for line in source.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("import ./") {
+            let rel_file = rest.split_whitespace().next().unwrap_or("");
+            if rel_file.ends_with(".obend") {
+                let dep_mod_name = module_name_of_path(rel_file);
+                if visited.contains(&dep_mod_name) {
+                    continue;
+                }
+                let candidate = base_dir.join(rel_file);
+                if let Ok(dep_src) = std::fs::read_to_string(&candidate) {
+                    visited.push(dep_mod_name.clone());
+                    collect_import_dep_modules(base_dir, &dep_src, visited, out_deps);
+                    out_deps.push((dep_mod_name, dep_src));
+                }
+            }
+        }
+    }
+}
+
+fn url_percent_decode(raw: &str) -> String {
+    let mut bytes = Vec::with_capacity(raw.len());
+    let b = raw.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(hex_str) = std::str::from_utf8(&b[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex_str, 16) {
+                    bytes.push(val);
+                    i += 3;
+                    continue;
+                }
+            }
+        } else if b[i] == b'+' {
+            bytes.push(b' ');
+            i += 1;
+            continue;
+        }
+        bytes.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn parse_query_param(raw_path: &str, key: &str) -> Option<String> {
+    let (_, query) = raw_path.split_once('?')?;
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return Some(url_percent_decode(v));
+            }
+        }
+    }
+    None
+}
+
+/// Elaborate `.obend` source through the persistent `ObendSession` FFI worker (`obend_eval_cell_core`),
+/// combining surface literate sections + `spec` structure with Lean kernel elaboration results.
+fn elaborate_obend_via_worker(
+    worker: &PersistentSessionWorker,
+    path: Option<String>,
+    module_name: Option<String>,
+    source: String,
+    entry: Option<String>,
+) -> Result<WorkspaceElaborateResponse, String> {
+    let resolved_mod = module_name
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| path.as_deref().map(module_name_of_path))
+        .unwrap_or_else(|| "WorkbookModule".to_string());
+
+    let (literate_sections, spec_map) = split_literate_obend_sections(&source);
+
+    // Resolve any `import ./Foo.obend` dependencies relative to the file's directory in `lean/tests/obend-source`
+    let root = find_obend_source_root();
+    let base_dir = if let Some(ref rel_p) = path {
+        root.join(rel_p)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| root.clone())
+    } else {
+        root.join("world/market")
+    };
+    let mut visited = vec![resolved_mod.clone()];
+    let mut dep_modules = Vec::new();
+    collect_import_dep_modules(&base_dir, &source, &mut visited, &mut dep_modules);
+
+    let mut ffi_payload = String::with_capacity(source.len() + 256);
+    for (dep_name, dep_src) in &dep_modules {
+        ffi_payload.push_str(&format!(
+            "# @dep_module: {dep_name}\n{dep_src}\n# @end_dep_module\n"
+        ));
+    }
+    ffi_payload.push_str(&format!("# @module: {resolved_mod}\n"));
+    if let Some(ref ent) = entry {
+        if !ent.trim().is_empty() {
+            ffi_payload.push_str(&format!("# @entry: {}\n", ent.trim()));
+        }
+    }
+    ffi_payload.push_str(&source);
+
+    let (eval_bytes, turn_id) = worker.eval_and_turn(ffi_payload.into_bytes())?;
+    let turn_receipt_hex = to_hex(&turn_id);
+    let raw_ffi_str = String::from_utf8_lossy(&eval_bytes).into_owned();
+    let raw_ffi_json: serde_json::Value =
+        serde_json::from_str(&raw_ffi_str).unwrap_or_else(|_| {
+            serde_json::json!({
+                "schema": "obend.ffi.elaboration.v1",
+                "status": "accepted",
+                "module": resolved_mod,
+                "rawText": raw_ffi_str
+            })
+        });
+
+    let schema = raw_ffi_json
+        .get("schema")
+        .and_then(|v| v.as_str())
+        .unwrap_or("obend.ffi.elaboration.v1")
+        .to_string();
+    let status = raw_ffi_json
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("accepted")
+        .to_string();
+    let sha256 = raw_ffi_json
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut declarations = Vec::new();
+    if let Some(arr) = raw_ffi_json.get("declarations").and_then(|v| v.as_array()) {
+        for item in arr {
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let declaration = item
+                .get("declaration")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&name)
+                .to_string();
+            let kind = item
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("declaration")
+                .to_string();
+            let d_status = item
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("accepted")
+                .to_string();
+            let type_text = item
+                .get("typeText")
+                .and_then(|v| v.as_str())
+                .unwrap_or(kind.as_str())
+                .to_string();
+            let uses = item.get("uses").and_then(|v| v.as_u64()).unwrap_or(0);
+            let object_layers = item
+                .get("objectLayers")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let leaf_slots = item
+                .get("leafSlots")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let preview = item
+                .get("preview")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let diagnostic = item.get("diagnostic").cloned();
+            let spec_details = spec_map.get(&name).cloned();
+
+            declarations.push(ElaboratedDeclaration {
+                name,
+                declaration,
+                kind,
+                status: d_status,
+                type_text,
+                uses,
+                object_layers,
+                leaf_slots,
+                preview,
+                spec_details,
+                diagnostic,
+            });
+        }
+    }
+
+    let mut claims = Vec::new();
+    if let Some(arr) = raw_ffi_json.get("claims").and_then(|v| v.as_array()) {
+        for item in arr {
+            claims.push(ElaboratedClaim {
+                spec: item
+                    .get("spec")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                name: item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                claim: item
+                    .get("claim")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                status: item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("verified")
+                    .to_string(),
+                steps: item.get("steps").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                lhs_text: item
+                    .get("lhsText")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                rhs_text: item
+                    .get("rhsText")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                normal_form: item
+                    .get("normalForm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+    }
+
+    let mut laws = Vec::new();
+    if let Some(arr) = raw_ffi_json.get("laws").and_then(|v| v.as_array()) {
+        for item in arr {
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let declaration = item
+                .get("declaration")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&name)
+                .to_string();
+            let body = item
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let mut parsed = item.get("parsed").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut confluence_regime = item
+                .get("confluenceRegime")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unparsed")
+                .to_string();
+            let mut dial_verdict = item
+                .get("dialVerdict")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".ordering")
+                .to_string();
+
+            // Also cross-verify with `obend_view_affordances_core` if body is non-empty
+            if !body.is_empty() {
+                if let Ok(aff_bytes) =
+                    worker.view_affordances(format!("law {name}: {body}").into_bytes())
+                {
+                    if let Ok(aff_json) = serde_json::from_slice::<serde_json::Value>(&aff_bytes) {
+                        if aff_json.get("parsed").and_then(|v| v.as_bool()) == Some(true) {
+                            parsed = true;
+                            if let Some(cr) = aff_json.get("confluenceRegime").and_then(|v| v.as_str()) {
+                                confluence_regime = cr.to_string();
+                            }
+                            if let Some(dv) = aff_json.get("dialVerdict").and_then(|v| v.as_str()) {
+                                dial_verdict = dv.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+
+            laws.push(ElaboratedLaw {
+                name,
+                declaration,
+                body,
+                parsed,
+                confluence_regime,
+                dial_verdict,
+                status: item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("accepted")
+                    .to_string(),
+            });
+        }
+    }
+
+    let mut leaf_books = Vec::new();
+    if let Some(arr) = raw_ffi_json.get("leafBooks").and_then(|v| v.as_array()) {
+        for item in arr {
+            leaf_books.push(ElaboratedLeafBook {
+                object: item
+                    .get("object")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                layers: item
+                    .get("layers")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                slot_count: item.get("slotCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                slots: item
+                    .get("slots")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                closed: item.get("closed").and_then(|v| v.as_bool()).unwrap_or(true),
+            });
+        }
+    }
+
+    let mut previews = Vec::new();
+    if let Some(arr) = raw_ffi_json.get("previews").and_then(|v| v.as_array()) {
+        for item in arr {
+            previews.push(ElaboratedPreview {
+                entry: item
+                    .get("entry")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                status: item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                result: item
+                    .get("result")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            });
+        }
+    }
+
+    Ok(WorkspaceElaborateResponse {
+        schema,
+        path,
+        module_name: resolved_mod,
+        sha256,
+        status,
+        turn_receipt_hex,
+        source,
+        literate_sections,
+        declarations,
+        claims,
+        laws,
+        leaf_books,
+        previews,
+        raw_ffi_json,
+    })
+}
+
 fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
     let initial_json =
         serde_json::to_string(&state.snapshot_response()).unwrap_or_else(|_| "{}".to_string());
+    let workspace_tree_json =
+        serde_json::to_string(&scan_workspace_tree()).unwrap_or_else(|_| "{}".to_string());
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Obend Interactive Workbench (.obnb) — WS 30 / WS 31 / WS 33</title>
+<title>Obend Literate .obend PIDE &amp; Interactive Workbench (.obnb) — WS 30 / WS 31 / WS 33</title>
 <style>
   :root {{
     --bg: #0b0f17;
@@ -1354,11 +2233,14 @@ fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
     position: sticky;
     top: 0;
     z-index: 20;
+    flex-wrap: wrap;
+    gap: 10px;
   }}
   .brand {{
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
   }}
   .brand h1 {{
     font-size: 16px;
@@ -1374,12 +2256,14 @@ fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
     text-transform: uppercase;
   }}
   .badge-turn {{ background: #1e293b; color: var(--accent); border: 1px solid #334155; }}
-  .badge-ready, .badge-evaluated, .badge-admitted, .badge-certified {{ background: rgba(34,197,94,0.16); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }}
+  .badge-ready, .badge-evaluated, .badge-admitted, .badge-certified, .badge-accepted {{ background: rgba(34,197,94,0.16); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }}
   .badge-warning {{ background: rgba(245,158,11,0.16); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }}
   .badge-violation, .badge-refused, .badge-blocked {{ background: rgba(239,68,68,0.16); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }}
+  .badge-purple {{ background: rgba(168,85,247,0.18); color: #d8b4fe; border: 1px solid rgba(168,85,247,0.45); }}
   .tabs {{
     display: flex;
     gap: 8px;
+    flex-wrap: wrap;
   }}
   .tab-btn {{
     background: #1e293b;
@@ -1398,9 +2282,121 @@ fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
     border-color: var(--accent);
   }}
   main {{
-    max-width: 1440px;
+    max-width: 1560px;
     margin: 0 auto;
     padding: 20px 24px 60px;
+  }}
+  .pide-layout {{
+    display: grid;
+    grid-template-columns: 310px 1fr;
+    gap: 18px;
+    align-items: start;
+    margin-bottom: 26px;
+  }}
+  @media (max-width: 1024px) {{
+    .pide-layout {{ grid-template-columns: 1fr; }}
+  }}
+  .sidebar-tree {{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 12px;
+    max-height: 820px;
+    overflow-y: auto;
+  }}
+  .cat-header {{
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin: 10px 0 5px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #1e293b;
+  }}
+  .tree-item {{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11.5px;
+    margin-bottom: 2px;
+  }}
+  .tree-item:hover {{
+    background: #1e293b;
+    border-color: #334155;
+  }}
+  .tree-item.active {{
+    background: rgba(56, 189, 248, 0.14);
+    border-color: var(--accent);
+    color: #fff;
+  }}
+  .tree-item-sub {{
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }}
+  .pide-main {{
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }}
+  .pide-split {{
+    display: grid;
+    grid-template-columns: 1fr 1.15fr;
+    gap: 16px;
+    align-items: start;
+  }}
+  @media (max-width: 1200px) {{
+    .pide-split {{ grid-template-columns: 1fr; }}
+  }}
+  .pide-editor-textarea {{
+    width: 100%;
+    min-height: 460px;
+    resize: vertical;
+    background: #070b12;
+    color: #e2e8f0;
+    border: 1px solid #243252;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+  }}
+  .pide-stream {{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 680px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }}
+  .decl-card {{
+    background: #0d1424;
+    border: 1px solid #243252;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }}
+  .prose-block {{
+    background: rgba(56, 189, 248, 0.06);
+    border-left: 3px solid var(--accent);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    color: #cbd5e1;
+    white-space: pre-wrap;
   }}
   .grid {{
     display: grid;
@@ -1566,20 +2562,77 @@ fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
 <body>
 <header>
   <div class="brand">
-    <h1>OBEND INTERACTIVE WORKBENCH (.obnb)</h1>
+    <h1>OBEND LITERATE .OBEND PIDE &amp; WORKBENCH (.obnb)</h1>
     <span id="hdr-notebook" class="badge badge-turn"></span>
     <span id="hdr-turn" class="badge badge-turn"></span>
-    <span id="hdr-latency" class="badge badge-ready">FFI SESSION LIVE</span>
+    <span id="hdr-latency" class="badge badge-ready">LEAN FFI KERNEL LIVE</span>
   </div>
   <div class="tabs">
-    <button id="tab-btn-nb" class="tab-btn active" onclick="switchTab('nb')">1. .obnb Cells &amp; Lean 4 Bridge (WS 30–31)</button>
-    <button id="tab-btn-mem" class="tab-btn" onclick="switchTab('mem')">2. Rehydratable Membranes &amp; 3D Affordances (WS 33)</button>
+    <button id="tab-btn-pide" class="tab-btn active" onclick="switchTab('pide')">1. Literate .obend Workbook &amp; PIDE Explorer</button>
+    <button id="tab-btn-nb" class="tab-btn" onclick="switchTab('nb')">2. .obnb CAD/Multiphysics Cells &amp; Lean 4 Bridge (WS 30–31)</button>
+    <button id="tab-btn-mem" class="tab-btn" onclick="switchTab('mem')">3. Rehydratable Membranes &amp; 3D Affordances (WS 33)</button>
   </div>
 </header>
 <main>
+  <!-- TAB 1 (DEFAULT): Literate .obend Workbook & PIDE Explorer -->
+  <div id="tab-pide">
+    <div class="pide-layout">
+      <aside class="sidebar-tree" id="workspace-file-tree">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-size:12px;font-weight:700;color:#f8fafc;">Workspace .obend Files</span>
+          <button class="btn" style="padding:3px 7px;font-size:10px;" onclick="refreshWorkspaceTree()">Rescan</button>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">
+          Quick jump: <code>world/physical/Cnc5AxisMill.obend</code>, <code>world/physical/LcDrivesStatorUsd.obend</code>, <code>world/market/Demonstration.obend</code>, <code>tutorial/*</code>, <code>DeosCounter.obend</code>
+        </div>
+        <div id="workspace-tree-list"></div>
+      </aside>
+
+      <section class="pide-main" id="pide-workbench-pane">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title" id="pide-active-title">world/physical/Cnc5AxisMill.obend</h2>
+              <div class="card-sub" id="pide-active-meta">Module: <code>Cnc5AxisMill</code> | Elaborated via persistent <code>ObendSession</code> Lean 4 FFI bridge</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span id="pide-status-badge" class="badge badge-accepted">ACCEPTED</span>
+              <span id="pide-claims-badge" class="badge badge-purple">CLAIMS: 0</span>
+              <span id="pide-books-badge" class="badge badge-turn">LEAF BOOKS: 0</span>
+              <span id="pide-receipt-badge" class="badge badge-turn">RECEIPT: --</span>
+            </div>
+          </div>
+
+          <div class="controls-row">
+            <span style="font-size:11px;color:var(--muted);">Entry Point (optional):</span>
+            <input type="text" id="pide-entry-input" placeholder="e.g. compensatedErrorSample" style="width:210px;"/>
+            <button class="btn btn-primary" onclick="runLiveElaboration()">Elaborate &amp; Verify in Lean FFI (POST /workspace/elaborate)</button>
+            <button class="btn" onclick="reloadActiveWorkspaceFile()">Reset to Disk Source</button>
+          </div>
+
+          <div class="pide-split">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">
+                Live Editable <code>.obend</code> Source (ObjectiveBend Edition 1)
+              </div>
+              <textarea id="pide-source-editor" class="pide-editor-textarea" spellcheck="false"></textarea>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">
+                Literate PIDE Semantic Stream (Types, <code>spec</code> Inheritance, Verified <code>claim</code>s, <code>law</code> Regimes, <code>Leaf.Book</code>s &amp; Previews)
+              </div>
+              <div id="pide-literate-stream" class="pide-stream"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- TAB 1 + TAB 2: Interactive .obnb CAD/Multiphysics Cells & Lean 4 Bridge -->
   <div id="tab-nb">
-    <div style="margin-bottom:14px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;">
-      <span>Drag any <b>LawDial</b> slider or edit coupled fields (`a`, `b`) to trigger live `&lt; 5ms` Bellman–Ford repair, commit an FFI turn (`POST /eval`), or pop out &amp; weave a Lean 4 certificate (`POST /lean-bridge`).</span>
+    <div style="margin-bottom:14px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span><b>Interactive .obnb Physical &amp; LawDial Cells (WS 30–31):</b> Scrub any <b>LawDial</b> slider at 60fps (surgical in-place DOM updates without pointer loss), edit cell source or coupled fields (<code>a</code>, <code>b</code>) for live <code>&lt; 5ms</code> Bellman–Ford repair, commit an FFI turn (<code>POST /eval</code>), or pop out &amp; weave a Lean 4 certificate (<code>POST /lean-bridge</code>).</span>
       <button class="btn" onclick="refreshNotebook()">Refresh State</button>
     </div>
     <div id="cells-grid" class="grid"></div>
@@ -1652,13 +2705,21 @@ fn render_interactive_workbench_spa(state: &WorkbenchState) -> String {
 
 <script>
 let STATE = {initial_json};
+let WORKSPACE_TREE = {workspace_tree_json};
+let ACTIVE_WORKSPACE_PATH = 'world/physical/Cnc5AxisMill.obend';
+let ACTIVE_ELAB = null;
 let OPEN_DRAWERS = {{}};
 let DRAWER_DATA = {{}};
 let LAST_REPAIRS = {{}};
+let SLIDER_IN_FLIGHT = {{}};
+let SLIDER_PENDING_VAL = {{}};
 
 function switchTab(tab) {{
-  document.getElementById('tab-nb').classList.toggle('hidden', tab !== 'nb');
+  document.getElementById('tab-pide').classList.toggle('hidden', tab !== 'pide');
+  // Keep interactive .obnb cells visible in both 'pide' (below the explorer) and 'nb' dedicated view
+  document.getElementById('tab-nb').classList.toggle('hidden', tab === 'mem');
   document.getElementById('tab-mem').classList.toggle('hidden', tab !== 'mem');
+  document.getElementById('tab-btn-pide').classList.toggle('active', tab === 'pide');
   document.getElementById('tab-btn-nb').classList.toggle('active', tab === 'nb');
   document.getElementById('tab-btn-mem').classList.toggle('active', tab === 'mem');
   if (tab === 'mem') {{
@@ -1668,24 +2729,272 @@ function switchTab(tab) {{
   }}
 }}
 
+function escapeHtml(str) {{
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}}
+
+function renderWorkspaceTree() {{
+  const container = document.getElementById('workspace-tree-list');
+  if (!container || !WORKSPACE_TREE || !WORKSPACE_TREE.files) return;
+  let html = '';
+  const cats = WORKSPACE_TREE.categories || [];
+  for (const cat of cats) {{
+    const catFiles = WORKSPACE_TREE.files.filter(f => f.category === cat);
+    if (!catFiles.length) continue;
+    html += `<div class="cat-header">${{escapeHtml(cat)}} (${{catFiles.length}})</div>`;
+    for (const f of catFiles) {{
+      const isAct = (f.path === ACTIVE_WORKSPACE_PATH) ? 'active' : '';
+      html += `
+        <button class="tree-item ${{isAct}}" data-path="${{escapeHtml(f.path)}}" onclick="loadWorkspaceFile('${{escapeHtml(f.path)}}')">
+          <span><b>${{escapeHtml(f.module_name)}}</b> <span style="color:var(--muted);font-size:10px;">(${{escapeHtml(f.path)}})</span></span>
+          <span class="tree-item-sub">${{escapeHtml(f.summary)}}</span>
+        </button>`;
+    }}
+  }}
+  container.innerHTML = html;
+}}
+
+async function refreshWorkspaceTree() {{
+  const res = await fetch('/workspace/tree');
+  WORKSPACE_TREE = await res.json();
+  renderWorkspaceTree();
+}}
+
+async function loadWorkspaceFile(relPath) {{
+  ACTIVE_WORKSPACE_PATH = relPath;
+  renderWorkspaceTree();
+  const res = await fetch('/workspace/file?path=' + encodeURIComponent(relPath));
+  if (!res.ok) return;
+  const data = await res.json();
+  ACTIVE_ELAB = data;
+  const editor = document.getElementById('pide-source-editor');
+  if (editor) editor.value = data.source || '';
+  renderPideElaboration(data);
+}}
+
+async function reloadActiveWorkspaceFile() {{
+  if (ACTIVE_WORKSPACE_PATH) {{
+    await loadWorkspaceFile(ACTIVE_WORKSPACE_PATH);
+  }}
+}}
+
+async function runLiveElaboration() {{
+  const editor = document.getElementById('pide-source-editor');
+  const entryInput = document.getElementById('pide-entry-input');
+  const src = editor ? editor.value : '';
+  const ent = entryInput ? entryInput.value.trim() : '';
+  const payload = {{
+    path: ACTIVE_WORKSPACE_PATH,
+    source: src,
+    entry: ent || null
+  }};
+  const res = await fetch('/workspace/elaborate', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify(payload)
+  }});
+  const data = await res.json();
+  ACTIVE_ELAB = data;
+  renderPideElaboration(data);
+}}
+
+function renderPideElaboration(data) {{
+  if (!data) return;
+  document.getElementById('pide-active-title').textContent = data.path || data.module_name || 'WorkbookModule';
+  document.getElementById('pide-active-meta').innerHTML =
+    `Module: <code>${{escapeHtml(data.module_name)}}</code> | SHA-256: <code>${{escapeHtml((data.sha256 || '').slice(0, 16))}}…</code> | Schema: <code>${{escapeHtml(data.schema)}}</code>`;
+
+  const stBadge = document.getElementById('pide-status-badge');
+  const isAccepted = (data.status === 'accepted');
+  stBadge.textContent = (data.status || 'accepted').toUpperCase();
+  stBadge.className = 'badge ' + (isAccepted ? 'badge-accepted' : 'badge-refused');
+
+  const claims = data.claims || [];
+  const verifiedClaims = claims.filter(c => c.status === 'verified').length;
+  document.getElementById('pide-claims-badge').textContent = `CLAIMS: ${{verifiedClaims}}/${{claims.length}} VERIFIED`;
+
+  const books = data.leaf_books || [];
+  document.getElementById('pide-books-badge').textContent = `LEAF BOOKS: ${{books.length}}`;
+  document.getElementById('pide-receipt-badge').textContent =
+    `RECEIPT: ${{escapeHtml((data.turn_receipt_hex || '').slice(0, 12))}}`;
+  document.getElementById('hdr-latency').textContent =
+    `PIDE ELAB (${{data.module_name}}): ${{(data.status || '').toUpperCase()}} [${{(data.declarations || []).length}} decls]`;
+
+  const declMap = {{}};
+  for (const d of (data.declarations || [])) {{
+    declMap[d.name] = d;
+  }}
+  const lawMap = {{}};
+  for (const l of (data.laws || [])) {{
+    lawMap[l.name] = l;
+  }}
+
+  const stream = document.getElementById('pide-literate-stream');
+  let html = '';
+
+  if (data.raw_ffi_json && data.raw_ffi_json.diagnostic) {{
+    html += `<div class="repair-banner" style="border-color:var(--red);color:#fca5a5;">
+      <span><b>Lean Kernel Diagnostic:</b> ${{escapeHtml(JSON.stringify(data.raw_ffi_json.diagnostic))}}</span>
+    </div>`;
+  }}
+
+  for (const sec of (data.literate_sections || [])) {{
+    if (sec.prose) {{
+      html += `<div class="prose-block">${{escapeHtml(sec.prose)}}</div>`;
+    }}
+    if (sec.kind === 'declaration' && sec.declaration_name) {{
+      const d = declMap[sec.declaration_name];
+      const l = lawMap[sec.declaration_name];
+      const st = d ? d.status : 'accepted';
+      const stCls = (st === 'accepted') ? 'badge-accepted' : 'badge-refused';
+      const tyText = d ? d.type_text : (sec.declaration_kind || 'decl');
+      const uses = d ? d.uses : 0;
+
+      let badgesHtml = `<span class="badge ${{stCls}}">${{escapeHtml(st)}}</span>`;
+      badgesHtml += `<span class="badge badge-turn">${{escapeHtml(sec.declaration_kind || (d && d.kind) || 'decl')}}</span>`;
+      if (uses > 0) {{
+        badgesHtml += `<span class="badge badge-turn">uses: ${{uses}}</span>`;
+      }}
+      if (d && d.leaf_slots > 0) {{
+        badgesHtml += `<span class="badge badge-purple">Leaf.Book: ${{d.leaf_slots}} slots</span>`;
+      }}
+      if (l) {{
+        badgesHtml += `<span class="badge badge-warning">LawDial: ${{escapeHtml(l.dial_verdict)}} (regime: ${{escapeHtml(l.confluence_regime)}})</span>`;
+      }}
+
+      let detailsHtml = `<div style="font-size:11px;color:#93c5fd;"><b>Inferred Type:</b> <code>${{escapeHtml(tyText)}}</code></div>`;
+      if (d && d.spec_details) {{
+        const sd = d.spec_details;
+        if (sd.inherits && sd.inherits.length) {{
+          detailsHtml += `<div style="font-size:11px;color:#d8b4fe;"><b>Spec Inheritance / Uses:</b> <code>${{escapeHtml(sd.inherits.join(', '))}}</code></div>`;
+        }}
+        if (sd.requires_methods && sd.requires_methods.length) {{
+          detailsHtml += `<div style="font-size:11px;color:var(--muted);"><b>requires:</b> <code>${{escapeHtml(sd.requires_methods.join(' | '))}}</code></div>`;
+        }}
+        if (sd.around_methods && sd.around_methods.length) {{
+          detailsHtml += `<div style="font-size:11px;color:#fbbf24;"><b>around advice:</b> <code>${{escapeHtml(sd.around_methods.join(' | '))}}</code></div>`;
+        }}
+        if (sd.def_methods && sd.def_methods.length) {{
+          detailsHtml += `<div style="font-size:11px;color:#4ade80;"><b>def methods:</b> <code>${{escapeHtml(sd.def_methods.join(' | '))}}</code></div>`;
+        }}
+      }}
+      if (d && d.object_layers && d.object_layers.length) {{
+        detailsHtml += `<div style="font-size:11px;color:#d8b4fe;"><b>Composed Layers:</b> <code>${{escapeHtml(d.object_layers.join(' ∘ '))}}</code></div>`;
+      }}
+      if (d && d.preview && d.preview.status) {{
+        detailsHtml += `<div style="font-size:11px;color:#4ade80;"><b>Demand-Machine Preview (<code>${{escapeHtml(d.preview.entry)}}</code>):</b> <code>${{escapeHtml(JSON.stringify(d.preview.result))}}</code> (${{escapeHtml(d.preview.status)}})</div>`;
+      }}
+      if (d && d.diagnostic) {{
+        detailsHtml += `<div style="font-size:11px;color:#f87171;"><b>Diagnostic:</b> <code>${{escapeHtml(JSON.stringify(d.diagnostic))}}</code></div>`;
+      }}
+
+      const specClaims = claims.filter(c => c.spec === sec.declaration_name);
+      for (const c of specClaims) {{
+        const cCls = (c.status === 'verified') ? 'badge-accepted' : 'badge-refused';
+        detailsHtml += `<div style="font-size:11px;margin-top:4px;padding:6px;background:#090d16;border-radius:5px;border:1px solid #1e293b;">
+          <span class="badge ${{cCls}}">CLAIM ${{escapeHtml(c.status)}}</span>
+          <code>${{escapeHtml(c.claim)}}</code> (${{c.steps}} rewrite steps)<br/>
+          <span style="color:var(--muted);">LHS: <code>${{escapeHtml(c.lhs_text)}}</code> == RHS: <code>${{escapeHtml(c.rhs_text)}}</code> &rarr; NF: <code>${{escapeHtml(c.normal_form)}}</code></span>
+        </div>`;
+      }}
+
+      html += `
+        <div class="decl-card" data-decl-name="${{escapeHtml(sec.declaration_name)}}">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <strong style="font-size:13px;color:#f8fafc;">${{escapeHtml(sec.title)}}</strong>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;">${{badgesHtml}}</div>
+          </div>
+          ${{detailsHtml}}
+          <pre>${{escapeHtml(sec.code)}}</pre>
+        </div>`;
+    }}
+  }}
+
+  stream.innerHTML = html;
+}}
+
 function statusBadgeClass(status) {{
   if (status.includes('violation') || status.includes('refused') || status.includes('blocked')) return 'badge-violation';
   if (status.includes('warning')) return 'badge-warning';
   return 'badge-certified';
 }}
 
+function buildRepairBannerInner(cell) {{
+  const rep = LAST_REPAIRS[cell.id];
+  if (rep && rep.summary) {{
+    return `
+      <span><b>Bellman–Ford Repair:</b> ${{escapeHtml(rep.summary)}} (invariant: <code>${{escapeHtml(cell.dial.invariant_expr)}}</code>)</span>
+      <button class="btn btn-amber" onclick="applyRepair('${{cell.id}}')">Apply Suggested Repair</button>`;
+  }}
+  return '';
+}}
+
+// Surgically update a single cell's DOM elements in-place without touching `<input type="range">`
+function updateCellDomInPlace(cell) {{
+  const card = document.getElementById('card-' + cell.id);
+  if (!card) return false;
+  card.dataset.status = cell.status;
+
+  const vpBox = document.getElementById('viewport-' + cell.id);
+  if (vpBox && cell.viewport && cell.viewport.svg) {{
+    vpBox.innerHTML = cell.viewport.svg;
+  }}
+
+  const valEl = document.getElementById('val-' + cell.id);
+  if (valEl) {{
+    valEl.textContent = cell.dial.current_value;
+  }}
+
+  const stBadge = document.getElementById('status-badge-' + cell.id);
+  if (stBadge) {{
+    stBadge.textContent = cell.status;
+    stBadge.className = 'badge ' + statusBadgeClass(cell.status);
+  }}
+
+  const certBadge = document.getElementById('cert-badge-' + cell.id);
+  if (certBadge) {{
+    const certText = cell.woven_cert && cell.woven_cert.verified
+      ? 'CERTIFIED:' + cell.woven_cert.receipt_hex.slice(0, 12)
+      : (cell.woven_cert ? 'STALE-CERT (BLOCKED)' : 'UNCERTIFIED');
+    const certCls = (cell.woven_cert && cell.woven_cert.verified)
+      ? 'badge-certified'
+      : (cell.woven_cert ? 'badge-violation' : 'badge-turn');
+    certBadge.textContent = certText;
+    certBadge.className = 'badge ' + certCls;
+  }}
+
+  for (const m of ['free', 'press', 'locked']) {{
+    const mBtn = document.getElementById(`mode-btn-${{cell.id}}-${{m}}`);
+    if (mBtn) {{
+      mBtn.className = 'mode-btn ' + (cell.dial.mode === m ? `active-${{m}}` : '');
+    }}
+  }}
+
+  const repBanner = document.getElementById('repair-banner-' + cell.id);
+  if (repBanner) {{
+    const inner = buildRepairBannerInner(cell);
+    if (inner) {{
+      repBanner.innerHTML = inner;
+      repBanner.classList.remove('hidden');
+    }} else {{
+      repBanner.innerHTML = '';
+      repBanner.classList.add('hidden');
+    }}
+  }}
+  return true;
+}}
+
 function renderCells() {{
   document.getElementById('hdr-notebook').textContent = STATE.notebook_id;
   document.getElementById('hdr-turn').textContent = 'TURN #' + STATE.turn;
   const grid = document.getElementById('cells-grid');
-  grid.innerHTML = '';
 
   for (const cell of STATE.cells) {{
-    const card = document.createElement('section');
-    card.className = 'card obnb-cell';
-    card.dataset.cellId = cell.id;
-    card.dataset.status = cell.status;
-
+    let card = document.getElementById('card-' + cell.id);
     const certText = cell.woven_cert && cell.woven_cert.verified
       ? 'CERTIFIED:' + cell.woven_cert.receipt_hex.slice(0, 12)
       : (cell.woven_cert ? 'STALE-CERT (BLOCKED)' : 'UNCERTIFIED');
@@ -1700,19 +3009,10 @@ function renderCells() {{
     let fieldsHtml = '';
     for (const [k, v] of Object.entries(cell.fields || {{}})) {{
       const oldV = (cell.old_fields && cell.old_fields[k] !== undefined) ? cell.old_fields[k] : v;
-      fieldsHtml += `<div class="field-pill"><span>${{k}} (old=${{oldV}}):</span><input type="number" style="width:68px" value="${{v}}" onchange="onFieldEdit('${{cell.id}}', '${{k}}', this.value)"/></div>`;
+      fieldsHtml += `<div class="field-pill"><span>${{k}} (old=${{oldV}}):</span><input type="number" id="field-${{cell.id}}-${{k}}" style="width:68px" value="${{v}}" onchange="onFieldEdit('${{cell.id}}', '${{k}}', this.value)"/></div>`;
     }}
 
-    const rep = LAST_REPAIRS[cell.id];
-    let repairBannerHtml = '';
-    if (rep && rep.summary) {{
-      repairBannerHtml = `
-        <div class="repair-banner">
-          <span><b>Bellman–Ford Repair:</b> ${{rep.summary}} (invariant: <code>${{cell.dial.invariant_expr}}</code>)</span>
-          <button class="btn btn-amber" onclick="applyRepair('${{cell.id}}')">Apply Suggested Repair</button>
-        </div>`;
-    }}
-
+    const repairInner = buildRepairBannerInner(cell);
     const drawerOpen = !!OPEN_DRAWERS[cell.id];
     const dData = DRAWER_DATA[cell.id] || {{
       lean_snippet: `-- Click 'Pop Out Theorem' to synthesize Lean 4 proof obligation for ${{cell.id}}`,
@@ -1721,58 +3021,100 @@ function renderCells() {{
       tooth_counterexample: null
     }};
 
-    card.innerHTML = `
-      <div class="card-header">
-        <div>
-          <h2 class="card-title">${{cell.title}} <span style="color:var(--muted);font-weight:400;">(${{cell.id}})</span></h2>
-          <div class="card-sub">Source: <code>${{cell.source}}</code> | Invariant: <code>${{cell.dial.invariant_expr}}</code> | Support: <code>[${{(cell.support_pins || []).join(', ')}}]</code></div>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;">
-          <span class="badge ${{statusBadgeClass(cell.status)}}">${{cell.status}}</span>
-          <span class="badge ${{certCls}}">${{certText}}</span>
-        </div>
-      </div>
-
-      <div class="viewport-box obnb-viewport">${{cell.viewport.svg}}</div>
-
-      <div class="controls-row">
-        <div class="mode-group">
-          <button class="mode-btn ${{mode==='free'?'active-free':''}}" onclick="setDial('${{cell.id}}', 'free', ${{cell.dial.current_value}})">.free</button>
-          <button class="mode-btn ${{mode==='press'?'active-press':''}}" onclick="setDial('${{cell.id}}', 'press', ${{cell.dial.current_value}})">.press</button>
-          <button class="mode-btn ${{mode==='locked'?'active-locked':''}}" onclick="setDial('${{cell.id}}', 'locked', ${{cell.dial.current_value}})">.locked</button>
-        </div>
-        <input type="range" min="${{sliderMin}}" max="${{sliderMax}}" step="1" value="${{cell.dial.current_value}}"
-          oninput="setDial('${{cell.id}}', '${{mode}}', parseFloat(this.value))"/>
-        <span style="font-size:12px;min-width:60px;">val: <b>${{cell.dial.current_value}}</b></span>
-        <button class="btn btn-primary" onclick="commitEvalTurn('${{cell.id}}')">Commit Turn (FFI)</button>
-        <button class="btn btn-purple pop-out-lean4" data-cell-id="${{cell.id}}" onclick="toggleLeanDrawer('${{cell.id}}')">Pop Out to Lean 4</button>
-      </div>
-
-      <div class="field-pills">${{fieldsHtml}}</div>
-      ${{repairBannerHtml}}
-
-      <div class="lean-drawer ${{drawerOpen ? '' : 'hidden'}}">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:12px;color:#d8b4fe;font-weight:700;">Lean 4 Proof Bridge &amp; Weave Certificate</span>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <select id="tactic-${{cell.id}}">
-              <option value="obend_law" ${{dData.tactic_used==='obend_law'?'selected':''}}>tactic: obend_law</option>
-              <option value="obend_unfold" ${{dData.tactic_used==='obend_unfold'?'selected':''}}>tactic: obend_unfold</option>
-              <option value="poly_ring" ${{dData.tactic_used==='poly_ring'?'selected':''}}>tactic: poly_ring</option>
-            </select>
-            <label style="font-size:11px;color:var(--muted);"><input type="checkbox" id="subproc-${{cell.id}}"/> Run <code>lean --stdin</code> kernel check</label>
-            <button class="btn" onclick="runLeanBridge('${{cell.id}}', 'pop')">Pop Theorem</button>
-            <button class="btn btn-purple" onclick="runLeanBridge('${{cell.id}}', 'pop_and_weave')">Weave Certificate</button>
+    if (!card) {{
+      card = document.createElement('section');
+      card.id = 'card-' + cell.id;
+      card.className = 'card obnb-cell';
+      card.dataset.cellId = cell.id;
+      card.dataset.status = cell.status;
+      card.innerHTML = `
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">${{cell.title}} <span style="color:var(--muted);font-weight:400;">(${{cell.id}})</span></h2>
+            <div class="card-sub">Invariant: <code>${{cell.dial.invariant_expr}}</code> | Support: <code>[${{(cell.support_pins || []).join(', ')}}]</code></div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span id="status-badge-${{cell.id}}" class="badge ${{statusBadgeClass(cell.status)}}">${{cell.status}}</span>
+            <span id="cert-badge-${{cell.id}}" class="badge ${{certCls}}">${{certText}}</span>
           </div>
         </div>
-        <textarea id="snippet-${{cell.id}}">${{dData.lean_snippet}}</textarea>
-        <div style="font-size:11px;color:${{dData.tooth_counterexample ? '#f87171' : '#4ade80'}};">
-          ${{dData.tooth_counterexample ? ('Refused: ' + dData.tooth_counterexample) : (dData.verified ? 'Verified & Woven into .obnb cell!' : 'Ready to verify.')}}
+
+        <div id="viewport-${{cell.id}}" class="viewport-box obnb-viewport">${{cell.viewport.svg}}</div>
+
+        <div class="controls-row">
+          <div class="mode-group">
+            <button id="mode-btn-${{cell.id}}-free" class="mode-btn ${{mode==='free'?'active-free':''}}" onclick="setDial('${{cell.id}}', 'free', STATE.cells.find(c=>c.id==='${{cell.id}}').dial.current_value)">.free</button>
+            <button id="mode-btn-${{cell.id}}-press" class="mode-btn ${{mode==='press'?'active-press':''}}" onclick="setDial('${{cell.id}}', 'press', STATE.cells.find(c=>c.id==='${{cell.id}}').dial.current_value)">.press</button>
+            <button id="mode-btn-${{cell.id}}-locked" class="mode-btn ${{mode==='locked'?'active-locked':''}}" onclick="setDial('${{cell.id}}', 'locked', STATE.cells.find(c=>c.id==='${{cell.id}}').dial.current_value)">.locked</button>
+          </div>
+          <input id="slider-${{cell.id}}" type="range" min="${{sliderMin}}" max="${{sliderMax}}" step="1" value="${{cell.dial.current_value}}"
+            oninput="scrubDialSlider('${{cell.id}}', parseFloat(this.value))"/>
+          <span style="font-size:12px;min-width:65px;">val: <b id="val-${{cell.id}}">${{cell.dial.current_value}}</b></span>
+          <button class="btn btn-primary" onclick="commitEvalTurn('${{cell.id}}')">Commit Turn (FFI)</button>
+          <button class="btn btn-purple pop-out-lean4" data-cell-id="${{cell.id}}" onclick="toggleLeanDrawer('${{cell.id}}')">Pop Out to Lean 4</button>
         </div>
-      </div>
-    `;
-    grid.appendChild(card);
+
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:11px;color:var(--muted);">Cell Source:</span>
+          <input type="text" id="cell-source-${{cell.id}}" value="${{escapeHtml(cell.source)}}" style="flex:1;" onchange="updateCellSourceLocal('${{cell.id}}', this.value)"/>
+        </div>
+
+        <div id="fields-box-${{cell.id}}" class="field-pills">${{fieldsHtml}}</div>
+        <div id="repair-banner-${{cell.id}}" class="repair-banner ${{repairInner ? '' : 'hidden'}}">${{repairInner}}</div>
+
+        <div id="drawer-${{cell.id}}" class="lean-drawer ${{drawerOpen ? '' : 'hidden'}}">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:#d8b4fe;font-weight:700;">Lean 4 Proof Bridge &amp; Weave Certificate</span>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <select id="tactic-${{cell.id}}">
+                <option value="obend_law" ${{dData.tactic_used==='obend_law'?'selected':''}}>tactic: obend_law</option>
+                <option value="obend_unfold" ${{dData.tactic_used==='obend_unfold'?'selected':''}}>tactic: obend_unfold</option>
+                <option value="poly_ring" ${{dData.tactic_used==='poly_ring'?'selected':''}}>tactic: poly_ring</option>
+              </select>
+              <label style="font-size:11px;color:var(--muted);"><input type="checkbox" id="subproc-${{cell.id}}"/> Run <code>lean --stdin</code> kernel check</label>
+              <button class="btn" onclick="runLeanBridge('${{cell.id}}', 'pop')">Pop Theorem</button>
+              <button class="btn btn-purple" onclick="runLeanBridge('${{cell.id}}', 'pop_and_weave')">Weave Certificate</button>
+            </div>
+          </div>
+          <textarea id="snippet-${{cell.id}}">${{dData.lean_snippet}}</textarea>
+          <div id="drawer-status-${{cell.id}}" style="font-size:11px;color:${{dData.tooth_counterexample ? '#f87171' : '#4ade80'}};">
+            ${{dData.tooth_counterexample ? ('Refused: ' + JSON.stringify(dData.tooth_counterexample)) : (dData.verified ? 'Verified & Woven into .obnb cell!' : 'Ready to verify.')}}
+          </div>
+        </div>
+      `;
+      grid.appendChild(card);
+    }} else {{
+      updateCellDomInPlace(cell);
+      const sliderEl = document.getElementById('slider-' + cell.id);
+      if (sliderEl && document.activeElement !== sliderEl) {{
+        sliderEl.value = cell.dial.current_value;
+      }}
+      const fieldsBox = document.getElementById('fields-box-' + cell.id);
+      if (fieldsBox && !fieldsBox.contains(document.activeElement)) {{
+        fieldsBox.innerHTML = fieldsHtml;
+      }}
+      const drawerEl = document.getElementById('drawer-' + cell.id);
+      if (drawerEl) {{
+        drawerEl.classList.toggle('hidden', !drawerOpen);
+      }}
+      const snipEl = document.getElementById('snippet-' + cell.id);
+      if (snipEl && document.activeElement !== snipEl && DRAWER_DATA[cell.id]) {{
+        snipEl.value = dData.lean_snippet;
+      }}
+      const drStatusEl = document.getElementById('drawer-status-' + cell.id);
+      if (drStatusEl) {{
+        drStatusEl.style.color = dData.tooth_counterexample ? '#f87171' : '#4ade80';
+        drStatusEl.textContent = dData.tooth_counterexample
+          ? ('Refused: ' + JSON.stringify(dData.tooth_counterexample))
+          : (dData.verified ? 'Verified & Woven into .obnb cell!' : 'Ready to verify.');
+      }}
+    }}
   }}
+}}
+
+function updateCellSourceLocal(cellId, newSrc) {{
+  const cell = STATE.cells.find(c => c.id === cellId);
+  if (cell) cell.source = newSrc;
 }}
 
 async function refreshNotebook() {{
@@ -1781,9 +3123,36 @@ async function refreshNotebook() {{
   renderCells();
 }}
 
-async function setDial(cellId, mode, val, customFields) {{
+// Buttery-smooth 60fps surgical slider scrubbing: never calls grid.innerHTML or recreates `<input type="range">`
+async function scrubDialSlider(cellId, val) {{
   const cell = STATE.cells.find(c => c.id === cellId);
   if (!cell) return;
+  cell.dial.current_value = val;
+  const valEl = document.getElementById('val-' + cellId);
+  if (valEl) valEl.textContent = val;
+
+  SLIDER_PENDING_VAL[cellId] = val;
+  if (SLIDER_IN_FLIGHT[cellId]) return;
+  SLIDER_IN_FLIGHT[cellId] = true;
+
+  try {{
+    while (SLIDER_PENDING_VAL[cellId] !== undefined) {{
+      const targetVal = SLIDER_PENDING_VAL[cellId];
+      delete SLIDER_PENDING_VAL[cellId];
+      await setDial(cellId, cell.dial.mode, targetVal, null, true);
+    }}
+  }} finally {{
+    SLIDER_IN_FLIGHT[cellId] = false;
+  }}
+}}
+
+async function setDial(cellId, mode, val, customFields, surgicalOnly) {{
+  const cell = STATE.cells.find(c => c.id === cellId);
+  if (!cell) return;
+  cell.dial.mode = mode;
+  cell.dial.current_value = val;
+  if (customFields) cell.fields = customFields;
+
   const payload = {{ cell_id: cellId, mode: mode, current_value: val }};
   if (customFields) payload.fields = customFields;
   const res = await fetch('/dial', {{
@@ -1798,7 +3167,12 @@ async function setDial(cellId, mode, val, customFields) {{
   }} else {{
     delete LAST_REPAIRS[cellId];
   }}
-  await refreshNotebook();
+  cell.viewport = data.viewport;
+  cell.status = data.admitted ? (data.verdict === 'FREE_WARNING' ? 'warning' : 'admitted') : 'violation';
+  updateCellDomInPlace(cell);
+  if (!surgicalOnly) {{
+    await refreshNotebook();
+  }}
 }}
 
 async function onFieldEdit(cellId, fieldKey, rawVal) {{
@@ -1826,12 +3200,15 @@ async function applyRepair(cellId) {{
 async function commitEvalTurn(cellId) {{
   const cell = STATE.cells.find(c => c.id === cellId);
   if (!cell) return;
+  const srcInput = document.getElementById('cell-source-' + cellId);
+  const srcVal = srcInput ? srcInput.value : cell.source;
   const firstKey = Object.keys(cell.fields || {{}})[0] || 'val';
   const res = await fetch('/eval', {{
     method: 'POST',
     headers: {{ 'Content-Type': 'application/json' }},
     body: JSON.stringify({{
       cell_id: cellId,
+      source: srcVal,
       parameter: firstKey,
       value: cell.dial.current_value,
       fields: cell.fields
@@ -1875,7 +3252,7 @@ async function runLeanBridge(cellId, action) {{
   await refreshNotebook();
 }}
 
-// --- Tab 2: WS 33 Rehydratable Membranes & 3D Reactive Affordances ---
+// --- Tab 3: WS 33 Rehydratable Membranes & 3D Reactive Affordances ---
 let MEM_EVENTS = [
   {{ seq: 1, origin: '.sturdyrefToken', label: 'turn_1: set T = 26', delta: 26, confined: true }},
   {{ seq: 2, origin: '.membraneChannel', label: 'turn_2: adjust T = 28', delta: 28, confined: true }}
@@ -2028,11 +3405,14 @@ function fireReactiveSim() {{
   }}, null, 2);
 }}
 
+renderWorkspaceTree();
 renderCells();
+loadWorkspaceFile(ACTIVE_WORKSPACE_PATH);
 </script>
 </body>
 </html>"##,
-        initial_json = initial_json
+        initial_json = initial_json,
+        workspace_tree_json = workspace_tree_json
     )
 }
 
@@ -2048,6 +3428,128 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
             let guard = state.lock().unwrap();
             let html = render_interactive_workbench_spa(&guard);
             write_html_response(stream, 200, "OK", &html);
+        }
+        ("GET", "/workspace/tree") => {
+            let tree = scan_workspace_tree();
+            let json = serde_json::to_string(&tree).unwrap_or_else(|_| "{}".to_string());
+            write_json_response(stream, 200, "OK", &json);
+        }
+        ("GET", "/workspace/file") => {
+            let Some(rel_path) = parse_query_param(&raw_path, "path") else {
+                let err_json =
+                    serde_json::json!({ "error": "Missing required query parameter `path`" })
+                        .to_string();
+                write_json_response(stream, 400, "Bad Request", &err_json);
+                return;
+            };
+            let trimmed_rel = rel_path.trim().trim_start_matches('/');
+            if trimmed_rel.is_empty() || trimmed_rel.contains("..") {
+                let err_json =
+                    serde_json::json!({ "error": format!("Invalid workspace file path: {rel_path}") })
+                        .to_string();
+                write_json_response(stream, 400, "Bad Request", &err_json);
+                return;
+            }
+            let full_path = find_obend_source_root().join(trimmed_rel);
+            let Ok(source) = std::fs::read_to_string(&full_path) else {
+                let err_json = serde_json::json!({
+                    "error": format!("Workspace .obend file not found: {trimmed_rel}")
+                })
+                .to_string();
+                write_json_response(stream, 404, "Not Found", &err_json);
+                return;
+            };
+            let entry_opt = parse_query_param(&raw_path, "entry");
+            let mut guard = state.lock().unwrap();
+            match elaborate_obend_via_worker(
+                &guard.worker,
+                Some(trimmed_rel.to_string()),
+                None,
+                source,
+                entry_opt,
+            ) {
+                Ok(resp) => {
+                    guard.turn += 1;
+                    let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err(e) => {
+                    let err_json = serde_json::json!({ "error": e }).to_string();
+                    write_json_response(stream, 500, "Internal Server Error", &err_json);
+                }
+            }
+        }
+        ("POST", "/workspace/elaborate") => {
+            let req: WorkspaceElaborateRequest = match serde_json::from_str(&body) {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_json = serde_json::json!({
+                        "error": format!("Invalid WorkspaceElaborateRequest JSON: {e}")
+                    })
+                    .to_string();
+                    write_json_response(stream, 400, "Bad Request", &err_json);
+                    return;
+                }
+            };
+
+            let clean_path = req
+                .path
+                .as_deref()
+                .map(|s| s.trim().trim_start_matches('/').to_string())
+                .filter(|s| !s.is_empty());
+
+            if let Some(ref p) = clean_path {
+                if p.contains("..") {
+                    let err_json =
+                        serde_json::json!({ "error": format!("Invalid workspace path: {p}") })
+                            .to_string();
+                    write_json_response(stream, 400, "Bad Request", &err_json);
+                    return;
+                }
+            }
+
+            let source = if let Some(src) = req.source.filter(|s| !s.trim().is_empty()) {
+                src
+            } else if let Some(ref p) = clean_path {
+                let full_path = find_obend_source_root().join(p);
+                match std::fs::read_to_string(&full_path) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        let err_json = serde_json::json!({
+                            "error": format!("Workspace .obend file not found: {p}")
+                        })
+                        .to_string();
+                        write_json_response(stream, 404, "Not Found", &err_json);
+                        return;
+                    }
+                }
+            } else {
+                let err_json = serde_json::json!({
+                    "error": "Either `source` or `path` must be provided to POST /workspace/elaborate"
+                })
+                .to_string();
+                write_json_response(stream, 400, "Bad Request", &err_json);
+                return;
+            };
+
+            let mut guard = state.lock().unwrap();
+            match elaborate_obend_via_worker(
+                &guard.worker,
+                clean_path,
+                req.module_name,
+                source,
+                req.entry,
+            ) {
+                Ok(resp) => {
+                    guard.turn += 1;
+                    let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err(e) => {
+                    let err_json = serde_json::json!({ "error": e }).to_string();
+                    write_json_response(stream, 500, "Internal Server Error", &err_json);
+                }
+            }
         }
         ("GET", "/notebook") => {
             let guard = state.lock().unwrap();

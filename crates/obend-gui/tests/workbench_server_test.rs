@@ -484,3 +484,282 @@ fn test_ws31_real_lean_subprocess_rejects_false_theorems_and_chunked_concurrent_
     assert!(usd_viol_vp.svg.contains("LCA VIOLATION"));
 }
 
+#[test]
+fn test_literate_pide_workbench_spa_and_surgical_slider_dom_update() {
+    let server = WorkbenchServer::start_ephemeral().expect("Start ephemeral WorkbenchServer");
+
+    // 1. GET / must serve the Literate .obend Workbook & PIDE Explorer as Tab 1 default experience
+    let (status, html) = server.request("GET", "/", None).expect("GET /");
+    assert_eq!(status, 200);
+    assert!(html.contains("<!DOCTYPE html>"));
+    assert!(html.contains("1. Literate .obend Workbook &amp; PIDE Explorer"));
+    assert!(html.contains("workspace-file-tree"));
+    assert!(html.contains("pide-source-editor"));
+    assert!(html.contains("pide-literate-stream"));
+    assert!(html.contains("world/physical/Cnc5AxisMill.obend"));
+    assert!(html.contains("world/physical/LcDrivesStatorUsd.obend"));
+    assert!(html.contains("world/market/Demonstration.obend"));
+
+    // 2. Verify slider drag DOM-destruction bug is fixed:
+    //    - Must NOT contain `grid.innerHTML = ''`
+    //    - Must use `scrubDialSlider` on `<input type="range">` and surgical `updateCellDomInPlace`
+    assert!(
+        !html.contains("grid.innerHTML = ''"),
+        "Slider oninput must never destroy #cells-grid via grid.innerHTML = ''"
+    );
+    assert!(html.contains("scrubDialSlider("));
+    assert!(html.contains("updateCellDomInPlace("));
+}
+
+#[test]
+fn test_workspace_tree_and_real_obend_pide_elaboration_routes() {
+    use obend_gui::server::{WorkspaceElaborateResponse, WorkspaceTreeResponse};
+
+    let server = WorkbenchServer::start_ephemeral().expect("Start ephemeral WorkbenchServer");
+
+    // 1. GET /workspace/tree — must discover real .obend files across categories
+    let (status, tree_body) = server
+        .request("GET", "/workspace/tree", None)
+        .expect("GET /workspace/tree");
+    assert_eq!(status, 200);
+    let tree: WorkspaceTreeResponse =
+        serde_json::from_str(&tree_body).expect("Parse WorkspaceTreeResponse");
+    assert!(
+        tree.total_files >= 20,
+        "Expected at least 20 real .obend files in lean/tests/obend-source, found {}",
+        tree.total_files
+    );
+    for expected_cat in ["world/physical", "world/market", "tutorial", "examples", "ltuo"] {
+        assert!(
+            tree.categories.contains(&expected_cat.to_string()),
+            "Missing category {expected_cat} in {:?}",
+            tree.categories
+        );
+    }
+    for expected_path in [
+        "world/physical/Cnc5AxisMill.obend",
+        "world/physical/LcDrivesStatorUsd.obend",
+        "world/market/Demonstration.obend",
+        "world/market/UniformProRata.obend",
+        "tutorial/ch5-ancestry.obend",
+        "DeosCounter.obend",
+        "ltuo/LawSpecification.obend",
+    ] {
+        assert!(
+            tree.files.iter().any(|f| f.path == expected_path),
+            "Expected workspace tree to contain {expected_path}"
+        );
+    }
+
+    // 2. GET /workspace/file?path=world/physical/Cnc5AxisMill.obend
+    let (status, cnc_body) = server
+        .request(
+            "GET",
+            "/workspace/file?path=world/physical/Cnc5AxisMill.obend",
+            None,
+        )
+        .expect("GET /workspace/file Cnc5AxisMill.obend");
+    assert_eq!(status, 200);
+    let cnc: WorkspaceElaborateResponse =
+        serde_json::from_str(&cnc_body).expect("Parse WorkspaceElaborateResponse for Cnc5AxisMill");
+    assert_eq!(cnc.schema, "obend.ffi.elaboration.v1");
+    assert_eq!(cnc.module_name, "Cnc5AxisMill");
+    assert_eq!(cnc.status, "accepted");
+    assert_eq!(cnc.turn_receipt_hex.len(), 64);
+    assert!(cnc.source.contains("edition ObjectiveBend 1"));
+    assert!(!cnc.literate_sections.is_empty());
+
+    // Verify declarations extracted & elaborated by Lean FFI
+    let uncomp_spec = cnc
+        .declarations
+        .iter()
+        .find(|d| d.name == "Uncompensated5AxisMill")
+        .unwrap_or_else(|| panic!("Missing Uncompensated5AxisMill in cnc.raw_ffi_json: {}", cnc.raw_ffi_json));
+    assert_eq!(uncomp_spec.kind, "spec");
+    assert_eq!(uncomp_spec.status, "accepted");
+    assert!(uncomp_spec.type_text.contains("Spec<"));
+    let spec_details = uncomp_spec
+        .spec_details
+        .as_ref()
+        .expect("SurfaceSpecDetails for Uncompensated5AxisMill");
+    assert!(spec_details
+        .inherits
+        .contains(&"Cnc5AxisMill".to_string()));
+    assert!(!spec_details.requires_methods.is_empty());
+    assert!(!spec_details.def_methods.is_empty());
+    assert!(!spec_details.claims.is_empty());
+
+    let abbe_spec = cnc
+        .declarations
+        .iter()
+        .find(|d| d.name == "AbbeAndRuckigCompensatedMill")
+        .expect("AbbeAndRuckigCompensatedMill declaration");
+    assert_eq!(abbe_spec.kind, "spec");
+    assert_eq!(abbe_spec.status, "accepted");
+    assert!(abbe_spec.type_text.contains("Spec<"));
+
+    // Verify Lean-proved claim `Uncompensated5AxisMill.volumetric_decomposition`
+    let claim = cnc
+        .claims
+        .iter()
+        .find(|c| c.name == "volumetric_decomposition")
+        .expect("volumetric_decomposition claim");
+    assert_eq!(claim.status, "verified");
+    assert!(claim.steps > 0);
+
+    // Verify emitted Leaf.Book for `compensated5AxisMill`
+    let book = cnc
+        .leaf_books
+        .iter()
+        .find(|b| b.object == "compensated5AxisMill")
+        .expect("Leaf.Book for compensated5AxisMill");
+    assert!(book.closed);
+    assert!(book.slot_count >= 5);
+
+    // Verify demand-machine previews for 0-arg entry functions (`104` and `26`)
+    let uncomp_prev = cnc
+        .previews
+        .iter()
+        .find(|p| p.entry == "uncompensatedErrorSample")
+        .expect("preview for uncompensatedErrorSample");
+    assert_eq!(uncomp_prev.status, "finished");
+    assert_eq!(
+        uncomp_prev.result.get("value").and_then(|v| v.as_str()),
+        Some("104")
+    );
+    let comp_prev = cnc
+        .previews
+        .iter()
+        .find(|p| p.entry == "compensatedErrorSample")
+        .expect("preview for compensatedErrorSample");
+    assert_eq!(comp_prev.status, "finished");
+    assert_eq!(
+        comp_prev.result.get("value").and_then(|v| v.as_str()),
+        Some("26")
+    );
+
+    // 3. POST /workspace/elaborate on `world/physical/LcDrivesStatorUsd.obend`
+    let stator_req = serde_json::json!({
+        "path": "world/physical/LcDrivesStatorUsd.obend",
+        "entry": "lcDrivesInSlotPeakTemp8kW"
+    })
+    .to_string();
+    let (status, stator_body) = server
+        .request("POST", "/workspace/elaborate", Some(&stator_req))
+        .expect("POST /workspace/elaborate LcDrivesStatorUsd.obend");
+    assert_eq!(status, 200);
+    let stator: WorkspaceElaborateResponse = serde_json::from_str(&stator_body)
+        .expect("Parse WorkspaceElaborateResponse for LcDrivesStatorUsd");
+    assert_eq!(stator.module_name, "LcDrivesStatorUsd");
+    assert_eq!(stator.status, "accepted");
+    assert!(stator
+        .claims
+        .iter()
+        .any(|c| c.name == "peak_temp_open_recursion" && c.status == "verified"));
+    assert!(stator
+        .leaf_books
+        .iter()
+        .any(|b| b.object == "lcDrivesProductionStator" && b.slot_count >= 5));
+    let temp_prev = stator
+        .previews
+        .iter()
+        .find(|p| p.entry == "lcDrivesInSlotPeakTemp8kW")
+        .expect("preview for lcDrivesInSlotPeakTemp8kW");
+    assert_eq!(temp_prev.status, "finished");
+    assert_eq!(
+        temp_prev.result.get("value").and_then(|v| v.as_str()),
+        Some("122")
+    );
+
+    // 4. POST /workspace/elaborate on multi-module `world/market/Demonstration.obend` (imports `./UniformProRata.obend` -> `./MarketMath.obend`)
+    let demo_req = serde_json::json!({
+        "path": "world/market/Demonstration.obend"
+    })
+    .to_string();
+    let (status, demo_body) = server
+        .request("POST", "/workspace/elaborate", Some(&demo_req))
+        .expect("POST /workspace/elaborate Demonstration.obend");
+    assert_eq!(status, 200);
+    let demo: WorkspaceElaborateResponse = serde_json::from_str(&demo_body).unwrap();
+    assert_eq!(demo.module_name, "Demonstration");
+    assert_eq!(demo.status, "accepted");
+    assert!(demo.declarations.iter().any(|d| d.name == "divideQuotient" && d.status == "accepted"));
+    assert!(demo.declarations.iter().any(|d| d.name == "rationedBook" && d.status == "accepted"));
+
+    // 5. POST /workspace/elaborate on `ltuo/LawSpecification.obend` + custom law confluence regime classification
+    let law_req = serde_json::json!({
+        "path": "ltuo/LawSpecification.obend"
+    })
+    .to_string();
+    let (status, law_body) = server
+        .request("POST", "/workspace/elaborate", Some(&law_req))
+        .expect("POST /workspace/elaborate LawSpecification.obend");
+    assert_eq!(status, 200);
+    let law_elab: WorkspaceElaborateResponse = serde_json::from_str(&law_body).unwrap();
+    assert_eq!(law_elab.status, "accepted");
+    assert!(!law_elab.claims.is_empty());
+    assert!(law_elab
+        .claims
+        .iter()
+        .any(|c| c.name == "positive" && c.status == "verified"));
+
+    // Custom `.obend` source with `law` declarations that parse via `Obend.Spec.Law.parse` and classify via `LawDial.dial`
+    let custom_law_src = r#"edition ObjectiveBend 1
+# Custom PIDE live elaboration test with .free, .stepShaped, and .ordering laws
+law monotone_temp: monotone(T) and new.T <= 35
+law seal_once: writeOnce(T) and new.T <= 35
+law coupled_diff: new.a <= new.b + 5
+
+def answer() -> Nat:
+  42n
+"#;
+    let custom_req = serde_json::json!({
+        "module_name": "LivePideCustom",
+        "source": custom_law_src,
+        "entry": "answer"
+    })
+    .to_string();
+    let (status, custom_body) = server
+        .request("POST", "/workspace/elaborate", Some(&custom_req))
+        .expect("POST /workspace/elaborate custom");
+    assert_eq!(status, 200);
+    let custom_elab: WorkspaceElaborateResponse = serde_json::from_str(&custom_body).unwrap();
+    assert_eq!(custom_elab.status, "accepted");
+    assert_eq!(custom_elab.laws.len(), 3);
+    assert!(custom_elab.laws.iter().all(|l| l.parsed));
+    assert_eq!(custom_elab.laws[0].confluence_regime, "free");
+    assert_eq!(custom_elab.laws[0].dial_verdict, ".free");
+    assert_eq!(custom_elab.laws[1].confluence_regime, "stepShaped");
+    assert_eq!(custom_elab.laws[1].dial_verdict, ".stepShaped");
+    assert_eq!(custom_elab.laws[2].confluence_regime, "ordering");
+    assert_eq!(custom_elab.laws[2].dial_verdict, ".ordering");
+    assert!(custom_elab
+        .previews
+        .iter()
+        .any(|p| p.entry == "answer" && p.result.get("value").and_then(|v| v.as_str()) == Some("42")));
+
+    // 6. Error & refusal paths on `/workspace/file` and `/workspace/elaborate`
+    let (status, _) = server.request("GET", "/workspace/file", None).unwrap();
+    assert_eq!(status, 400);
+    let (status, _) = server
+        .request("GET", "/workspace/file?path=../Cargo.toml", None)
+        .unwrap();
+    assert_eq!(status, 400);
+    let (status, _) = server
+        .request("GET", "/workspace/file?path=nonexistent/Missing.obend", None)
+        .unwrap();
+    assert_eq!(status, 404);
+
+    let bad_obend_req = serde_json::json!({
+        "module_name": "BrokenModule",
+        "source": "edition ObjectiveBend 1\ndef broken(x: Nat) -> Bool:\n  x + 1n\n"
+    })
+    .to_string();
+    let (status, bad_body) = server
+        .request("POST", "/workspace/elaborate", Some(&bad_obend_req))
+        .unwrap();
+    assert_eq!(status, 200);
+    let bad_elab: WorkspaceElaborateResponse = serde_json::from_str(&bad_body).unwrap();
+    assert_eq!(bad_elab.status, "refused");
+}
+

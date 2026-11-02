@@ -1132,5 +1132,1070 @@ theorem compileNatRec2StateSat_running_step_universal
       regs 1 + regs 2 := by
   simp [compileNatRec2StateSat, stepModuleRegs, evalWireTable, evalRtlExpr, evalAluOp, hLt]
 
+/-! ## 8. Multi-Argument Port Substitution & Multi-Argument Method Compilation (`substInputPorts`, `compileMultiArgTerm`, `compileMultiArgMethod`) -/
+
+/-- Substitute a list of argument expressions `argExprs` for `.inputPort idx` across an `RtlExpr`:
+any `.inputPort idx` with `idx < argExprs.length` is replaced by `argExprs[idx]`, while higher-indexed
+input ports remain `.inputPort idx`. Generalizes `substInputPort0` to arbitrary multi-port methods. -/
+def substInputPorts (argExprs : List RtlExpr) : RtlExpr → RtlExpr
+  | .const v       => .const v
+  | .inputPort idx =>
+    match argExprs[idx]? with
+    | some ae => ae
+    | none    => .inputPort idx
+  | .wireRef idx   => .wireRef idx
+  | .regRead idx   => .regRead idx
+  | .alu op a b    => .alu op (substInputPorts argExprs a) (substInputPorts argExprs b)
+  | .mux c t f     =>
+    .mux (substInputPorts argExprs c) (substInputPorts argExprs t) (substInputPorts argExprs f)
+  | .bitNot a      => .bitNot (substInputPorts argExprs a)
+
+/-- **Universal Soundness of Multi-Port Substitution (`substInputPorts_sound`)**:
+Evaluating `substInputPorts argExprs e` is identical to evaluating `e` in an input environment where
+each port `i < argExprs.length` is bound to `evalRtlExpr inputs wires regs argExprs[i]`. -/
+theorem substInputPorts_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (argExprs : List RtlExpr) (e : RtlExpr) :
+    evalRtlExpr inputs wires regs (substInputPorts argExprs e) =
+      evalRtlExpr
+        (fun i => match argExprs[i]? with
+                  | some ae => evalRtlExpr inputs wires regs ae
+                  | none    => inputs i)
+        wires regs e := by
+  induction e with
+  | const v => rfl
+  | inputPort idx =>
+    simp only [substInputPorts, evalRtlExpr]
+    cases hIdx : argExprs[idx]? <;> simp [evalRtlExpr]
+  | wireRef idx => rfl
+  | regRead idx => rfl
+  | alu op a b iha ihb =>
+    simp only [substInputPorts, evalRtlExpr, iha, ihb]
+  | mux c t f ihc iht ihf =>
+    simp only [substInputPorts, evalRtlExpr, ihc, iht, ihf]
+  | bitNot a iha =>
+    simp only [substInputPorts, evalRtlExpr, iha]
+
+/-- Reference 64-bit hardware semantics for multi-argument `Term`s (`evalMultiArgTermHw`):
+supports arbitrary `inputPort idx` bindings in `varVals`, unary `self.m(arg0)` calls, and
+curried binary `self.m(arg0, arg1)` calls via `substInputPorts`. -/
+def evalMultiArgTermHw
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (inputs slotWires regs : Nat → BitVec 64)
+    (selfDepth : Nat)
+    (varVals : List (BitVec 64)) : Term → Option (BitVec 64)
+  | .nat n => some (BitVec.ofNat 64 n)
+  | .boolean b => some (if b then 1#64 else 0#64)
+  | .record [] => some 0#64
+  | .bound idx => varVals[idx]?
+  | .get (.bound idx) member =>
+    if idx == selfDepth then
+      match slots.idxOf? member with
+      | some slotIdx => some (slotWires slotIdx)
+      | none => none
+    else none
+  | .app fn arg =>
+    match fn with
+    | .lam subBody =>
+      match evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg with
+      | some vArg =>
+        evalMultiArgTermHw slots slotBodies inputs slotWires regs (selfDepth + 1) (vArg :: varVals) subBody
+      | none => none
+    | .get (.bound idx) member =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg with
+        | some slotIdx, some vArg =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr =>
+            let argVals := [vArg]
+            some (evalRtlExpr
+              (fun i => match argVals[i]? with | some v => v | none => inputs i)
+              slotWires regs slotExpr)
+          | none => none
+        | _, _ => none
+      else none
+    | .app (.get (.bound idx) member) arg0 =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg0,
+              evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg with
+        | some slotIdx, some vArg0, some vArg1 =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr =>
+            let argVals := [vArg0, vArg1]
+            some (evalRtlExpr
+              (fun i => match argVals[i]? with | some v => v | none => inputs i)
+              slotWires regs slotExpr)
+          | none => none
+        | _, _, _ => none
+      else none
+    | .app (.app (.get (.bound idx) member) arg0) arg1 =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg0,
+              evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg1,
+              evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals arg with
+        | some slotIdx, some vArg0, some vArg1, some vArg2 =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr =>
+            let argVals := [vArg0, vArg1, vArg2]
+            some (evalRtlExpr
+              (fun i => match argVals[i]? with | some v => v | none => inputs i)
+              slotWires regs slotExpr)
+          | none => none
+        | _, _, _, _ => none
+      else none
+    | _ => none
+  | .binary op l r =>
+    match evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals l,
+          evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals r with
+    | some vl, some vr => evalPrimHwSat op vl vr
+    | _, _ => none
+  | .ifBool c t f =>
+    match evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals c,
+          evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals t,
+          evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals f with
+    | some vc, some vt, some vf => some (if vc != 0#64 then vt else vf)
+    | _, _, _ => none
+  | .ifZero v z s =>
+    match evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals v,
+          evalMultiArgTermHw slots slotBodies inputs slotWires regs selfDepth varVals z with
+    | some vv, some vz =>
+      match evalMultiArgTermHw slots slotBodies inputs slotWires regs (selfDepth + 1) ((vv - 1#64) :: varVals) s with
+      | some vs => some (if (if vv == 0#64 then 1#64 else 0#64) != 0#64 then vz else vs)
+      | none => none
+    | _, _ => none
+  | _ => none
+
+/-- Compile an `Obend.Core.Term` with multi-argument port bindings (`inputPort idx` for arbitrary
+`idx : Nat`), supporting unary `self.m(arg0)`, binary `self.m(arg0, arg1)`, and ternary
+`self.m(arg0, arg1, arg2)` slot calls via `substInputPorts`. -/
+def compileMultiArgTerm
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (selfDepth : Nat)
+    (varEnv : List RtlExpr) : Term → Option RtlExpr
+  | .nat n => some (.const (BitVec.ofNat 64 n))
+  | .boolean b => some (.const (if b then 1#64 else 0#64))
+  | .record [] => some (.const 0#64)
+  | .bound idx => varEnv[idx]?
+  | .get (.bound idx) member =>
+    if idx == selfDepth then
+      match slots.idxOf? member with
+      | some slotIdx => some (.wireRef slotIdx)
+      | none => none
+    else none
+  | .app fn arg =>
+    match fn with
+    | .lam subBody =>
+      match compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+      | some eArg =>
+        compileMultiArgTerm slots slotBodies (selfDepth + 1) (eArg :: varEnv) subBody
+      | none => none
+    | .get (.bound idx) member =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+        | some slotIdx, some eArg =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr => some (substInputPorts [eArg] slotExpr)
+          | none => none
+        | _, _ => none
+      else none
+    | .app (.get (.bound idx) member) arg0 =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              compileMultiArgTerm slots slotBodies selfDepth varEnv arg0,
+              compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+        | some slotIdx, some eArg0, some eArg1 =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr => some (substInputPorts [eArg0, eArg1] slotExpr)
+          | none => none
+        | _, _, _ => none
+      else none
+    | .app (.app (.get (.bound idx) member) arg0) arg1 =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              compileMultiArgTerm slots slotBodies selfDepth varEnv arg0,
+              compileMultiArgTerm slots slotBodies selfDepth varEnv arg1,
+              compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+        | some slotIdx, some eArg0, some eArg1, some eArg2 =>
+          match slotBodies[slotIdx]? with
+          | some slotExpr => some (substInputPorts [eArg0, eArg1, eArg2] slotExpr)
+          | none => none
+        | _, _, _, _ => none
+      else none
+    | _ => none
+  | .binary op l r =>
+    match compileMultiArgTerm slots slotBodies selfDepth varEnv l,
+          compileMultiArgTerm slots slotBodies selfDepth varEnv r with
+    | some el, some er => compilePrimSat op el er
+    | _, _ => none
+  | .ifBool c t f =>
+    match compileMultiArgTerm slots slotBodies selfDepth varEnv c,
+          compileMultiArgTerm slots slotBodies selfDepth varEnv t,
+          compileMultiArgTerm slots slotBodies selfDepth varEnv f with
+    | some ec, some et, some ef => some (.mux ec et ef)
+    | _, _, _ => none
+  | .ifZero v z s =>
+    match compileMultiArgTerm slots slotBodies selfDepth varEnv v,
+          compileMultiArgTerm slots slotBodies selfDepth varEnv z with
+    | some ev, some ez =>
+      let predExpr := RtlExpr.alu .sub ev (.const 1#64)
+      match compileMultiArgTerm slots slotBodies (selfDepth + 1) (predExpr :: varEnv) s with
+      | some es => some (.mux (.alu .eq ev (.const 0#64)) ez es)
+      | none => none
+    | _, _ => none
+  | _ => none
+
+/-- **Universal Structural Soundness of `compileMultiArgTerm` (`compileMultiArgTerm_sound`)**:
+For EVERY `t : Term` and arbitrary multi-port variable environment `varEnv : List RtlExpr`,
+if `compileMultiArgTerm slots slotBodies selfDepth varEnv t = some e`, then evaluating `e` in
+`evalRtlExpr` matches `evalMultiArgTermHw` under `varEnv.map (evalRtlExpr inputs wires regs)`. -/
+theorem compileMultiArgTerm_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (t : Term)
+    (selfDepth : Nat) (varEnv : List RtlExpr) (e : RtlExpr)
+    (h : compileMultiArgTerm slots slotBodies selfDepth varEnv t = some e) :
+    evalMultiArgTermHw slots slotBodies inputs wires regs selfDepth
+        (varEnv.map (evalRtlExpr inputs wires regs)) t =
+      some (evalRtlExpr inputs wires regs e) := by
+  match t with
+  | .hole _ _ | .lam _ | .mix _ _ | .fix _ _ | .specification _ _
+  | .prototype _ _ | .reflect _ | .metadata _ | .project _ | .label _
+  | .extend _ _ | .inject _ _ | .case _ _ | .perform _ | .done _ | .split _ _ _ =>
+    simp [compileMultiArgTerm] at h
+  | .record fs =>
+    cases fs with
+    | nil =>
+      simp only [compileMultiArgTerm, Option.some.injEq] at h
+      subst h
+      rfl
+    | cons _ _ =>
+      simp [compileMultiArgTerm] at h
+  | .nat n =>
+    simp only [compileMultiArgTerm, Option.some.injEq] at h
+    subst h
+    rfl
+  | .boolean b =>
+    simp only [compileMultiArgTerm, Option.some.injEq] at h
+    subst h
+    rfl
+  | .bound idx =>
+    simp only [compileMultiArgTerm] at h
+    simp only [evalMultiArgTermHw, List.getElem?_map, h, Option.map_some]
+  | .get target member =>
+    cases target with
+    | bound idx =>
+      simp only [compileMultiArgTerm] at h
+      simp only [evalMultiArgTermHw]
+      by_cases hEq : idx == selfDepth
+      · simp only [hEq, ↓reduceIte] at h ⊢
+        cases hSlot : slots.idxOf? member with
+        | none => simp [hSlot] at h
+        | some slotIdx =>
+          simp only [hSlot, Option.some.injEq] at h
+          subst h
+          rfl
+      · simp [hEq] at h
+    | _ =>
+      simp [compileMultiArgTerm] at h
+  | .app fn arg =>
+    cases fn with
+    | lam subBody =>
+      simp only [compileMultiArgTerm] at h
+      cases hArg : compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+      | none => simp [hArg] at h
+      | some eArg =>
+        simp only [hArg] at h
+        have ihArg := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg hArg
+        have ihBody := compileMultiArgTerm_sound inputs wires regs slots slotBodies subBody
+          (selfDepth + 1) (eArg :: varEnv) e h
+        simp only [List.map_cons] at ihBody
+        simp only [evalMultiArgTermHw, ihArg, ihBody]
+    | get target member =>
+      cases target with
+      | bound idx =>
+        simp only [compileMultiArgTerm] at h
+        simp only [evalMultiArgTermHw]
+        by_cases hEq : idx == selfDepth
+        · simp only [hEq, ↓reduceIte] at h ⊢
+          cases hSlot : slots.idxOf? member with
+          | none => simp [hSlot] at h
+          | some slotIdx =>
+            cases hArg : compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+            | none => simp [hSlot, hArg] at h
+            | some eArg =>
+              simp only [hSlot, hArg] at h
+              cases hBody : slotBodies[slotIdx]? with
+              | none => simp [hBody] at h
+              | some slotExpr =>
+                simp only [hBody, Option.some.injEq] at h
+                subst h
+                have ihArg := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg hArg
+                simp only [ihArg, hBody, substInputPorts_sound]
+                congr 2
+                funext i
+                cases i <;> rfl
+        · simp [hEq] at h
+      | _ =>
+        simp [compileMultiArgTerm] at h
+    | app innerFn arg0 =>
+      cases innerFn with
+      | get target member =>
+        cases target with
+        | bound idx =>
+          simp only [compileMultiArgTerm] at h
+          simp only [evalMultiArgTermHw]
+          by_cases hEq : idx == selfDepth
+          · simp only [hEq, ↓reduceIte] at h ⊢
+            cases hSlot : slots.idxOf? member with
+            | none => simp [hSlot] at h
+            | some slotIdx =>
+              cases hArg0 : compileMultiArgTerm slots slotBodies selfDepth varEnv arg0 with
+              | none => simp [hSlot, hArg0] at h
+              | some eArg0 =>
+                cases hArg1 : compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+                | none => simp [hSlot, hArg0, hArg1] at h
+                | some eArg1 =>
+                  simp only [hSlot, hArg0, hArg1] at h
+                  cases hBody : slotBodies[slotIdx]? with
+                  | none => simp [hBody] at h
+                  | some slotExpr =>
+                    simp only [hBody, Option.some.injEq] at h
+                    subst h
+                    have ihArg0 := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg0 selfDepth varEnv eArg0 hArg0
+                    have ihArg1 := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg1 hArg1
+                    simp only [ihArg0, ihArg1, hBody, substInputPorts_sound]
+                    congr 2
+                    funext i
+                    cases i with
+                    | zero => rfl
+                    | succ j =>
+                      cases j <;> rfl
+          · simp [hEq] at h
+        | _ =>
+          simp [compileMultiArgTerm] at h
+      | app innerFn2 arg00 =>
+        cases innerFn2 with
+        | get target member =>
+          cases target with
+          | bound idx =>
+            simp only [compileMultiArgTerm] at h
+            simp only [evalMultiArgTermHw]
+            by_cases hEq : idx == selfDepth
+            · simp only [hEq, ↓reduceIte] at h ⊢
+              cases hSlot : slots.idxOf? member with
+              | none => simp [hSlot] at h
+              | some slotIdx =>
+                cases hArg0 : compileMultiArgTerm slots slotBodies selfDepth varEnv arg00 with
+                | none => simp [hSlot, hArg0] at h
+                | some eArg0 =>
+                  cases hArg1 : compileMultiArgTerm slots slotBodies selfDepth varEnv arg0 with
+                  | none => simp [hSlot, hArg0, hArg1] at h
+                  | some eArg1 =>
+                    cases hArg2 : compileMultiArgTerm slots slotBodies selfDepth varEnv arg with
+                    | none => simp [hSlot, hArg0, hArg1, hArg2] at h
+                    | some eArg2 =>
+                      simp only [hSlot, hArg0, hArg1, hArg2] at h
+                      cases hBody : slotBodies[slotIdx]? with
+                      | none => simp [hBody] at h
+                      | some slotExpr =>
+                        simp only [hBody, Option.some.injEq] at h
+                        subst h
+                        have ihArg0 := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg00 selfDepth varEnv eArg0 hArg0
+                        have ihArg1 := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg0 selfDepth varEnv eArg1 hArg1
+                        have ihArg2 := compileMultiArgTerm_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg2 hArg2
+                        simp only [ihArg0, ihArg1, ihArg2, hBody, substInputPorts_sound]
+                        congr 2
+                        funext i
+                        cases i with
+                        | zero => rfl
+                        | succ j =>
+                          cases j with
+                          | zero => rfl
+                          | succ k =>
+                            cases k <;> rfl
+            · simp [hEq] at h
+          | _ =>
+            simp [compileMultiArgTerm] at h
+        | _ =>
+          simp [compileMultiArgTerm] at h
+      | _ =>
+        simp [compileMultiArgTerm] at h
+    | _ =>
+      simp [compileMultiArgTerm] at h
+  | .binary op l r =>
+    simp only [compileMultiArgTerm] at h
+    cases hl : compileMultiArgTerm slots slotBodies selfDepth varEnv l with
+    | none => simp [hl] at h
+    | some el =>
+      cases hr : compileMultiArgTerm slots slotBodies selfDepth varEnv r with
+      | none => simp [hl, hr] at h
+      | some er =>
+        simp only [hl, hr] at h
+        have ihl := compileMultiArgTerm_sound inputs wires regs slots slotBodies l selfDepth varEnv el hl
+        have ihr := compileMultiArgTerm_sound inputs wires regs slots slotBodies r selfDepth varEnv er hr
+        simp only [evalMultiArgTermHw, ihl, ihr]
+        exact compilePrimSat_sound inputs wires regs op el er e h
+  | .ifBool c t f =>
+    simp only [compileMultiArgTerm] at h
+    cases hc : compileMultiArgTerm slots slotBodies selfDepth varEnv c with
+    | none => simp [hc] at h
+    | some ec =>
+      cases ht : compileMultiArgTerm slots slotBodies selfDepth varEnv t with
+      | none => simp [hc, ht] at h
+      | some et =>
+        cases hf : compileMultiArgTerm slots slotBodies selfDepth varEnv f with
+        | none => simp [hc, ht, hf] at h
+        | some ef =>
+          simp only [hc, ht, hf, Option.some.injEq] at h
+          subst h
+          have ihc := compileMultiArgTerm_sound inputs wires regs slots slotBodies c selfDepth varEnv ec hc
+          have iht := compileMultiArgTerm_sound inputs wires regs slots slotBodies t selfDepth varEnv et ht
+          have ihf := compileMultiArgTerm_sound inputs wires regs slots slotBodies f selfDepth varEnv ef hf
+          simp only [evalMultiArgTermHw, ihc, iht, ihf, evalRtlExpr]
+  | .ifZero v z s =>
+    simp only [compileMultiArgTerm] at h
+    cases hv : compileMultiArgTerm slots slotBodies selfDepth varEnv v with
+    | none => simp [hv] at h
+    | some ev =>
+      cases hz : compileMultiArgTerm slots slotBodies selfDepth varEnv z with
+      | none => simp [hv, hz] at h
+      | some ez =>
+        cases hs : compileMultiArgTerm slots slotBodies (selfDepth + 1)
+            (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) s with
+        | none => simp [hv, hz, hs] at h
+        | some es =>
+          simp only [hv, hz, hs, Option.some.injEq] at h
+          subst h
+          have hv' := compileMultiArgTerm_sound inputs wires regs slots slotBodies v selfDepth varEnv ev hv
+          have hz' := compileMultiArgTerm_sound inputs wires regs slots slotBodies z selfDepth varEnv ez hz
+          have hs' := compileMultiArgTerm_sound inputs wires regs slots slotBodies s (selfDepth + 1)
+            (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) es hs
+          simp only [List.map_cons, evalRtlExpr, evalAluOp] at hs'
+          simp only [evalMultiArgTermHw, hv', hz', hs', evalRtlExpr, evalAluOp]
+          rfl
+
+/-- Peel `arity` nested `.lam` argument binders from a curried method body `λx_0. ... λx_{arity-1}. body`. -/
+def peelMultiArgLambdas : Nat → Term → Option Term
+  | 0, body => some body
+  | k + 1, .lam sub => peelMultiArgLambdas k sub
+  | _ + 1, _ => none
+
+/-- Construct the de Bruijn port environment `[.inputPort (arity - 1), ..., .inputPort 0]` for an
+`arity`-argument hardware method `λself. λx_0. ... λx_{arity-1}. body`. -/
+def mkMultiArgPortEnv (arity : Nat) : List RtlExpr :=
+  (List.range arity).reverse.map RtlExpr.inputPort
+
+/-- Compile a curried `arity`-argument method (`λself. λx_0. ... λx_{arity-1}. body`) to an `RtlExpr`
+binding each parameter $x_j$ (`0 ≤ j < arity`) to `.inputPort j`. -/
+def compileMultiArgMethod
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (arity : Nat)
+    (code : Term) : Option RtlExpr :=
+  match code with
+  | .lam selfBody =>
+    match peelMultiArgLambdas arity selfBody with
+    | some innerBody =>
+      compileMultiArgTerm slots slotBodies arity (mkMultiArgPortEnv arity) innerBody
+    | none => none
+  | _ => none
+
+/-- **Theorem (`compileMultiArgMethod_sound`)**:
+For any `arity`-argument method `code = .lam selfBody` where `peelMultiArgLambdas arity selfBody = some innerBody`,
+if `compileMultiArgMethod slots slotBodies arity code = some e`, then evaluating `e` in `evalRtlExpr`
+matches `evalMultiArgTermHw` under the `arity`-port input environment! -/
+theorem compileMultiArgMethod_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (arity : Nat) (selfBody innerBody : Term) (e : RtlExpr)
+    (hPeel : peelMultiArgLambdas arity selfBody = some innerBody)
+    (hComp : compileMultiArgMethod slots slotBodies arity (.lam selfBody) = some e) :
+    evalMultiArgTermHw slots slotBodies inputs wires regs arity
+        ((mkMultiArgPortEnv arity).map (evalRtlExpr inputs wires regs)) innerBody =
+      some (evalRtlExpr inputs wires regs e) := by
+  simp only [compileMultiArgMethod, hPeel] at hComp
+  exact compileMultiArgTerm_sound inputs wires regs slots slotBodies innerBody
+    arity (mkMultiArgPortEnv arity) e hComp
+
+/-! ## 9. Non-Inlined Pipelined Inter-Slot Compilation (`compileTermPipelined`, `compileBookToPipelinedRtl`) -/
+
+/-- Reference 64-bit hardware semantics for non-inlined pipelined inter-slot execution:
+instead of duplicating earlier slot bodies via combinational AST substitution (`substInputPort0`),
+referencing or calling an earlier slot `slotIdx` through `self` reads the registered pipeline stage
+output `regs slotIdx` (`.regRead slotIdx`). -/
+def evalTermPipelinedHw
+    (slots : List String)
+    (inputs regs : Nat → BitVec 64)
+    (selfDepth : Nat)
+    (varVals : List (BitVec 64)) : Term → Option (BitVec 64)
+  | .nat n => some (BitVec.ofNat 64 n)
+  | .boolean b => some (if b then 1#64 else 0#64)
+  | .record [] => some 0#64
+  | .bound idx => varVals[idx]?
+  | .get (.bound idx) member =>
+    if idx == selfDepth then
+      match slots.idxOf? member with
+      | some slotIdx => some (regs slotIdx)
+      | none => none
+    else none
+  | .app fn arg =>
+    match fn with
+    | .lam subBody =>
+      match evalTermPipelinedHw slots inputs regs selfDepth varVals arg with
+      | some vArg =>
+        evalTermPipelinedHw slots inputs regs (selfDepth + 1) (vArg :: varVals) subBody
+      | none => none
+    | .get (.bound idx) member =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              evalTermPipelinedHw slots inputs regs selfDepth varVals arg with
+        | some slotIdx, some _ => some (regs slotIdx)
+        | _, _ => none
+      else none
+    | _ => none
+  | .binary op l r =>
+    match evalTermPipelinedHw slots inputs regs selfDepth varVals l,
+          evalTermPipelinedHw slots inputs regs selfDepth varVals r with
+    | some vl, some vr => evalPrimHwSat op vl vr
+    | _, _ => none
+  | .ifBool c t f =>
+    match evalTermPipelinedHw slots inputs regs selfDepth varVals c,
+          evalTermPipelinedHw slots inputs regs selfDepth varVals t,
+          evalTermPipelinedHw slots inputs regs selfDepth varVals f with
+    | some vc, some vt, some vf => some (if vc != 0#64 then vt else vf)
+    | _, _, _ => none
+  | .ifZero v z s =>
+    match evalTermPipelinedHw slots inputs regs selfDepth varVals v,
+          evalTermPipelinedHw slots inputs regs selfDepth varVals z with
+    | some vv, some vz =>
+      match evalTermPipelinedHw slots inputs regs (selfDepth + 1) ((vv - 1#64) :: varVals) s with
+      | some vs => some (if (if vv == 0#64 then 1#64 else 0#64) != 0#64 then vz else vs)
+      | none => none
+    | _, _ => none
+  | _ => none
+
+/-- Non-inlined pipelined `Term` compiler: maps inter-slot references and calls `self.m(...)` to
+synchronous pipeline stage register reads `.regRead slotIdx` rather than inlining `slotBodies[slotIdx]`. -/
+def compileTermPipelined
+    (slots : List String)
+    (selfDepth : Nat)
+    (varEnv : List RtlExpr) : Term → Option RtlExpr
+  | .nat n => some (.const (BitVec.ofNat 64 n))
+  | .boolean b => some (.const (if b then 1#64 else 0#64))
+  | .record [] => some (.const 0#64)
+  | .bound idx => varEnv[idx]?
+  | .get (.bound idx) member =>
+    if idx == selfDepth then
+      match slots.idxOf? member with
+      | some slotIdx => some (.regRead slotIdx)
+      | none => none
+    else none
+  | .app fn arg =>
+    match fn with
+    | .lam subBody =>
+      match compileTermPipelined slots selfDepth varEnv arg with
+      | some eArg =>
+        compileTermPipelined slots (selfDepth + 1) (eArg :: varEnv) subBody
+      | none => none
+    | .get (.bound idx) member =>
+      if idx == selfDepth then
+        match slots.idxOf? member,
+              compileTermPipelined slots selfDepth varEnv arg with
+        | some slotIdx, some _ => some (.regRead slotIdx)
+        | _, _ => none
+      else none
+    | _ => none
+  | .binary op l r =>
+    match compileTermPipelined slots selfDepth varEnv l,
+          compileTermPipelined slots selfDepth varEnv r with
+    | some el, some er => compilePrimSat op el er
+    | _, _ => none
+  | .ifBool c t f =>
+    match compileTermPipelined slots selfDepth varEnv c,
+          compileTermPipelined slots selfDepth varEnv t,
+          compileTermPipelined slots selfDepth varEnv f with
+    | some ec, some et, some ef => some (.mux ec et ef)
+    | _, _, _ => none
+  | .ifZero v z s =>
+    match compileTermPipelined slots selfDepth varEnv v,
+          compileTermPipelined slots selfDepth varEnv z with
+    | some ev, some ez =>
+      let predExpr := RtlExpr.alu .sub ev (.const 1#64)
+      match compileTermPipelined slots (selfDepth + 1) (predExpr :: varEnv) s with
+      | some es => some (.mux (.alu .eq ev (.const 0#64)) ez es)
+      | none => none
+    | _, _ => none
+  | _ => none
+
+/-- **Universal Structural Soundness of `compileTermPipelined` (`compileTermPipelined_sound`)**:
+For EVERY `t : Term`, if `compileTermPipelined slots selfDepth varEnv t = some e`, then evaluating
+`e` in `evalRtlExpr` produces the exact same 64-bit value as `evalTermPipelinedHw`. -/
+theorem compileTermPipelined_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (slots : List String)
+    (t : Term)
+    (selfDepth : Nat) (varEnv : List RtlExpr) (e : RtlExpr)
+    (h : compileTermPipelined slots selfDepth varEnv t = some e) :
+    evalTermPipelinedHw slots inputs regs selfDepth (varEnv.map (evalRtlExpr inputs wires regs)) t =
+      some (evalRtlExpr inputs wires regs e) := by
+  match t with
+  | .hole _ _ | .lam _ | .mix _ _ | .fix _ _ | .specification _ _
+  | .prototype _ _ | .reflect _ | .metadata _ | .project _ | .label _
+  | .extend _ _ | .inject _ _ | .case _ _ | .perform _ | .done _ | .split _ _ _ =>
+    simp [compileTermPipelined] at h
+  | .record fs =>
+    cases fs with
+    | nil =>
+      simp only [compileTermPipelined, Option.some.injEq] at h
+      subst h
+      rfl
+    | cons _ _ =>
+      simp [compileTermPipelined] at h
+  | .nat n =>
+    simp only [compileTermPipelined, Option.some.injEq] at h
+    subst h
+    rfl
+  | .boolean b =>
+    simp only [compileTermPipelined, Option.some.injEq] at h
+    subst h
+    rfl
+  | .bound idx =>
+    simp only [compileTermPipelined] at h
+    simp only [evalTermPipelinedHw, List.getElem?_map, h, Option.map_some]
+  | .get target member =>
+    cases target with
+    | bound idx =>
+      simp only [compileTermPipelined] at h
+      simp only [evalTermPipelinedHw]
+      by_cases hEq : idx == selfDepth
+      · simp only [hEq, ↓reduceIte] at h ⊢
+        cases hSlot : slots.idxOf? member with
+        | none => simp [hSlot] at h
+        | some slotIdx =>
+          simp only [hSlot, Option.some.injEq] at h
+          subst h
+          rfl
+      · simp [hEq] at h
+    | _ =>
+      simp [compileTermPipelined] at h
+  | .app fn arg =>
+    cases fn with
+    | lam subBody =>
+      simp only [compileTermPipelined] at h
+      cases hArg : compileTermPipelined slots selfDepth varEnv arg with
+      | none => simp [hArg] at h
+      | some eArg =>
+        simp only [hArg] at h
+        have ihArg := compileTermPipelined_sound inputs wires regs slots arg selfDepth varEnv eArg hArg
+        have ihBody := compileTermPipelined_sound inputs wires regs slots subBody
+          (selfDepth + 1) (eArg :: varEnv) e h
+        simp only [List.map_cons] at ihBody
+        simp only [evalTermPipelinedHw, ihArg, ihBody]
+    | get target member =>
+      cases target with
+      | bound idx =>
+        simp only [compileTermPipelined] at h
+        simp only [evalTermPipelinedHw]
+        by_cases hEq : idx == selfDepth
+        · simp only [hEq, ↓reduceIte] at h ⊢
+          cases hSlot : slots.idxOf? member with
+          | none => simp [hSlot] at h
+          | some slotIdx =>
+            cases hArg : compileTermPipelined slots selfDepth varEnv arg with
+            | none => simp [hSlot, hArg] at h
+            | some eArg =>
+              simp only [hSlot, hArg, Option.some.injEq] at h
+              subst h
+              have ihArg := compileTermPipelined_sound inputs wires regs slots arg selfDepth varEnv eArg hArg
+              simp only [ihArg, evalRtlExpr]
+        · simp [hEq] at h
+      | _ =>
+        simp [compileTermPipelined] at h
+    | _ =>
+      simp [compileTermPipelined] at h
+  | .binary op l r =>
+    simp only [compileTermPipelined] at h
+    cases hl : compileTermPipelined slots selfDepth varEnv l with
+    | none => simp [hl] at h
+    | some el =>
+      cases hr : compileTermPipelined slots selfDepth varEnv r with
+      | none => simp [hl, hr] at h
+      | some er =>
+        simp only [hl, hr] at h
+        have ihl := compileTermPipelined_sound inputs wires regs slots l selfDepth varEnv el hl
+        have ihr := compileTermPipelined_sound inputs wires regs slots r selfDepth varEnv er hr
+        simp only [evalTermPipelinedHw, ihl, ihr]
+        exact compilePrimSat_sound inputs wires regs op el er e h
+  | .ifBool c t f =>
+    simp only [compileTermPipelined] at h
+    cases hc : compileTermPipelined slots selfDepth varEnv c with
+    | none => simp [hc] at h
+    | some ec =>
+      cases ht : compileTermPipelined slots selfDepth varEnv t with
+      | none => simp [hc, ht] at h
+      | some et =>
+        cases hf : compileTermPipelined slots selfDepth varEnv f with
+        | none => simp [hc, ht, hf] at h
+        | some ef =>
+          simp only [hc, ht, hf, Option.some.injEq] at h
+          subst h
+          have ihc := compileTermPipelined_sound inputs wires regs slots c selfDepth varEnv ec hc
+          have iht := compileTermPipelined_sound inputs wires regs slots t selfDepth varEnv et ht
+          have ihf := compileTermPipelined_sound inputs wires regs slots f selfDepth varEnv ef hf
+          simp only [evalTermPipelinedHw, ihc, iht, ihf, evalRtlExpr]
+  | .ifZero v z s =>
+    simp only [compileTermPipelined] at h
+    cases hv : compileTermPipelined slots selfDepth varEnv v with
+    | none => simp [hv] at h
+    | some ev =>
+      cases hz : compileTermPipelined slots selfDepth varEnv z with
+      | none => simp [hv, hz] at h
+      | some ez =>
+        cases hs : compileTermPipelined slots (selfDepth + 1)
+            (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) s with
+        | none => simp [hv, hz, hs] at h
+        | some es =>
+          simp only [hv, hz, hs, Option.some.injEq] at h
+          subst h
+          have hv' := compileTermPipelined_sound inputs wires regs slots v selfDepth varEnv ev hv
+          have hz' := compileTermPipelined_sound inputs wires regs slots z selfDepth varEnv ez hz
+          have hs' := compileTermPipelined_sound inputs wires regs slots s (selfDepth + 1)
+            (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) es hs
+          simp only [List.map_cons, evalRtlExpr, evalAluOp] at hs'
+          simp only [evalTermPipelinedHw, hv', hz', hs', evalRtlExpr, evalAluOp]
+          rfl
+
+/-- Compile a `LeafDef` using non-inlined pipelined inter-slot register reads (`compileTermPipelined`). -/
+def compileLeafDefPipelined (slots : List String) (d : LeafDef) : Option RtlExpr :=
+  match d.code with
+  | .lam (.lam body) => compileTermPipelined slots 1 [.inputPort 0] body
+  | _ => none
+
+/-- **Theorem (`compileLeafDefPipelined_sound`)**:
+For any `LeafDef` `d` with `d.code = .lam (.lam body)`, if `compileLeafDefPipelined slots d = some e`,
+then evaluating `e` in `evalRtlExpr` matches `evalTermPipelinedHw` under `[inputs 0]`. -/
+theorem compileLeafDefPipelined_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (slots : List String)
+    (d : LeafDef) (body : Term) (e : RtlExpr)
+    (hCode : d.code = .lam (.lam body))
+    (hComp : compileLeafDefPipelined slots d = some e) :
+    evalTermPipelinedHw slots inputs regs 1 [inputs 0] body =
+      some (evalRtlExpr inputs wires regs e) := by
+  simp only [compileLeafDefPipelined, hCode] at hComp
+  exact compileTermPipelined_sound inputs wires regs slots body 1 [.inputPort 0] e hComp
+
+/-- Structurally recursive slot-list compiler for non-inlined pipelined `RtlModule` synthesis. -/
+def compileBookDefsPipelined
+    (slots : List String)
+    (wires : List WireAssign)
+    (regs : List RegSpec)
+    (outs : List OutputPort) :
+    List LeafDef → Option (List WireAssign × List RegSpec × List OutputPort)
+  | [] => some (wires, regs, outs)
+  | d :: rest =>
+    match compileLeafDefPipelined slots d with
+    | none => none
+    | some expr =>
+      let w : WireAssign := { wireIdx := d.slot, name := d.member, expr := expr }
+      let r : RegSpec :=
+        { regIdx         := d.slot
+        , name           := s!"reg_{d.member}"
+        , domain         := .coreClk
+        , resetKind      := .resetFree
+        , isSynchronizer := false
+        , nextExpr       := .wireRef d.slot }
+      let o : OutputPort := { name := s!"out_{d.member}", expr := .regRead d.slot }
+      compileBookDefsPipelined slots (wires ++ [w]) (regs ++ [r]) (outs ++ [o]) rest
+
+/-- Compile an entire `Obend.Leaf.Book` into a non-inlined pipelined `RtlModule` where inter-slot
+references read synchronous pipeline stage registers (`reg_{member}`) instead of duplicating ASTs. -/
+def compileBookToPipelinedRtl (modName : String) (B : Book) : Option RtlModule :=
+  match compileBookDefsPipelined B.slots [] [] [] B.defs with
+  | none => none
+  | some (wires, regs, outs) =>
+    some {
+      name       := modName
+      inputNames := ["arg"]
+      wires      := wires
+      regs       := regs
+      outputs    := outs
+    }
+
+/-! ## 10. Calyx-Style `go`/`done` Control Group Handshakes (`CalyxGroup`, `CalyxControl`, `stepCalyxSeqFsm`) -/
+
+/-- A structural datapath group in the Calyx accelerator intermediate representation (`arXiv:2102.09713`):
+* `groupName`: identifier of the structural group,
+* `latencyCycles`: number of active clock cycles required before the group's `done` signal is asserted,
+* `datapathExpr`: `RtlExpr` evaluated while the group's `go` signal is asserted,
+* `targetRegIdx`: destination register index written when the group completes. -/
+structure CalyxGroup where
+  groupName     : String
+  latencyCycles : Nat
+  datapathExpr  : RtlExpr
+  targetRegIdx  : Nat
+  deriving DecidableEq, Repr
+
+/-- Hierarchical Calyx control schedule (`seq`, `par`, `ifCond`, `whileLoop`, `enable`). -/
+inductive CalyxControl where
+  | empty
+  | enable    (groupIdx : Nat)
+  | seq       (c1 c2 : CalyxControl)
+  | par       (groups : List Nat)
+  | ifCond    (condExpr : RtlExpr) (tBranch fBranch : CalyxControl)
+  | whileLoop (condExpr : RtlExpr) (bound : Nat) (body : CalyxControl)
+  deriving DecidableEq, Repr
+
+/-- Execute a single `CalyxGroup` to completion against architectural register state `regs`. -/
+def evalCalyxGroup
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64)
+    (groupIdx : Nat)
+    (regs : Nat → BitVec 64) : Nat → BitVec 64 :=
+  match groups[groupIdx]? with
+  | none => regs
+  | some g =>
+    let v := evalRtlExpr inputs wires regs g.datapathExpr
+    fun r => if r == g.targetRegIdx then v else regs r
+
+/-- Bounded while-loop helper for `evalCalyxControl`, structurally recursive on the trip-count bound `bound : Nat`. -/
+def evalCalyxWhileLoop
+    (cond : (Nat → BitVec 64) → Bool)
+    (step : (Nat → BitVec 64) → (Nat → BitVec 64)) :
+    Nat → (Nat → BitVec 64) → (Nat → BitVec 64)
+  | 0, curRegs => curRegs
+  | k + 1, curRegs =>
+    if cond curRegs then
+      evalCalyxWhileLoop cond step k (step curRegs)
+    else
+      curRegs
+
+/-- Structural denotational interpreter for a hierarchical `CalyxControl` schedule (`arXiv:2102.09713`):
+* `.empty`: identity on `regs`,
+* `.enable gIdx`: executes `evalCalyxGroup`,
+* `.seq c1 c2`: sequential composition (`c1` followed by `c2`),
+* `.par gIdxs`: parallel fork-join where all enabled groups sample the pre-stage `regs` snapshot,
+* `.ifCond cond t f`: branches on `evalRtlExpr inputs wires regs cond != 0#64`,
+* `.whileLoop cond bound body`: bounded while-loop iteration. -/
+def evalCalyxControl
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64) :
+    CalyxControl → (Nat → BitVec 64) → (Nat → BitVec 64)
+  | .empty, regs => regs
+  | .enable gIdx, regs => evalCalyxGroup groups inputs wires gIdx regs
+  | .seq c1 c2, regs =>
+    evalCalyxControl groups inputs wires c2 (evalCalyxControl groups inputs wires c1 regs)
+  | .par gIdxs, regs =>
+    gIdxs.foldl (fun curRegs gIdx =>
+      match groups[gIdx]? with
+      | none => curRegs
+      | some g =>
+        let v := evalRtlExpr inputs wires regs g.datapathExpr
+        fun r => if r == g.targetRegIdx then v else curRegs r) regs
+  | .ifCond condExpr tBranch fBranch, regs =>
+    if evalRtlExpr inputs wires regs condExpr != 0#64 then
+      evalCalyxControl groups inputs wires tBranch regs
+    else
+      evalCalyxControl groups inputs wires fBranch regs
+  | .whileLoop condExpr bound body, regs =>
+    evalCalyxWhileLoop
+      (fun curRegs => evalRtlExpr inputs wires curRegs condExpr != 0#64)
+      (evalCalyxControl groups inputs wires body)
+      bound regs
+
+/-- **Theorem (`evalCalyxControl_seq_assoc`)**:
+Sequential Calyx control composition `.seq` is strictly associative over any register state `regs`. -/
+theorem evalCalyxControl_seq_assoc
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64)
+    (c1 c2 c3 : CalyxControl)
+    (regs : Nat → BitVec 64) :
+    evalCalyxControl groups inputs wires (.seq (.seq c1 c2) c3) regs =
+      evalCalyxControl groups inputs wires (.seq c1 (.seq c2 c3)) regs := by
+  rfl
+
+/-- Synchronous FSM state for a sequential Calyx group controller (`seq { g_0; g_1; ... }`):
+* `activeGroupIdx`: index of the currently enabled `CalyxGroup`,
+* `cycleInGroup`: intra-group cycle counter ($0 \dots \text{latencyCycles}-1$),
+* `goSignal`: asserted (`true`) while `activeGroupIdx < groups.length`,
+* `doneSignal`: asserted (`true`) when all groups in the schedule have completed,
+* `regState`: current 64-bit architectural register file. -/
+structure CalyxSeqFsmState where
+  activeGroupIdx : Nat
+  cycleInGroup   : Nat
+  goSignal       : Bool
+  doneSignal     : Bool
+  regState       : Nat → BitVec 64
+
+/-- Initial `CalyxSeqFsmState` at the start of a sequential group schedule. -/
+def initCalyxSeqFsmState (groups : List CalyxGroup) (initRegs : Nat → BitVec 64) : CalyxSeqFsmState where
+  activeGroupIdx := 0
+  cycleInGroup   := 0
+  goSignal       := !groups.isEmpty
+  doneSignal     := groups.isEmpty
+  regState       := initRegs
+
+/-- Step a Calyx sequential control FSM by one clock cycle under `go`/`done` handshaking:
+* If `st.activeGroupIdx < groups.length` has `some g = groups[st.activeGroupIdx]?`:
+  - While `st.cycleInGroup + 1 < g.latencyCycles`, the group remains active (`goSignal = true`,
+    `doneSignal = false`) and increments `cycleInGroup` by 1.
+  - When `st.cycleInGroup + 1 ≥ g.latencyCycles`, the group's `done` strobe fires: `g.targetRegIdx`
+    latches `evalRtlExpr inputs wires st.regState g.datapathExpr`, `activeGroupIdx` advances to
+    `st.activeGroupIdx + 1`, and `cycleInGroup` resets to `0`.
+* Once `st.activeGroupIdx ≥ groups.length`, the controller holds `goSignal = false`, `doneSignal = true`,
+  and leaves `regState` stationary. -/
+def stepCalyxSeqFsm
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64)
+    (st : CalyxSeqFsmState) : CalyxSeqFsmState :=
+  match groups[st.activeGroupIdx]? with
+  | none =>
+    { st with
+      goSignal   := false
+      doneSignal := true }
+  | some g =>
+    if st.cycleInGroup + 1 < g.latencyCycles then
+      { st with
+        cycleInGroup := st.cycleInGroup + 1
+        goSignal     := true
+        doneSignal   := false }
+    else
+      let v := evalRtlExpr inputs wires st.regState g.datapathExpr
+      let nextIdx := st.activeGroupIdx + 1
+      { activeGroupIdx := nextIdx
+        cycleInGroup   := 0
+        goSignal       := decide (nextIdx < groups.length)
+        doneSignal     := decide (groups.length ≤ nextIdx)
+        regState       := fun r => if r == g.targetRegIdx then v else st.regState r }
+
+/-- Run `stepCalyxSeqFsm` for `numCycles` clock edges. -/
+def runCalyxSeqFsm
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64) : Nat → CalyxSeqFsmState → CalyxSeqFsmState
+  | 0, st => st
+  | k + 1, st => runCalyxSeqFsm groups inputs wires k (stepCalyxSeqFsm groups inputs wires st)
+
+/-- **Theorem (`calyx_group_go_done_handshake_sound`)**:
+When the active Calyx group `g` at `st.activeGroupIdx` reaches its completion cycle
+(`¬ (st.cycleInGroup + 1 < g.latencyCycles)`), `stepCalyxSeqFsm` latches `evalRtlExpr inputs wires st.regState g.datapathExpr`
+into `g.targetRegIdx`, advances `activeGroupIdx` to `st.activeGroupIdx + 1`, and resets `cycleInGroup` to `0`. -/
+theorem calyx_group_go_done_handshake_sound
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64)
+    (st : CalyxSeqFsmState)
+    (g : CalyxGroup)
+    (hGroup : groups[st.activeGroupIdx]? = some g)
+    (hDone  : ¬ (st.cycleInGroup + 1 < g.latencyCycles)) :
+    let st' := stepCalyxSeqFsm groups inputs wires st
+    st'.activeGroupIdx = st.activeGroupIdx + 1 ∧
+    st'.cycleInGroup = 0 ∧
+    st'.regState g.targetRegIdx = evalRtlExpr inputs wires st.regState g.datapathExpr := by
+  dsimp only [stepCalyxSeqFsm]
+  rw [hGroup]
+  simp [hDone]
+
+/-- **Theorem (`calyx_seq_fsm_stationary_when_done`)**:
+Once all groups in `groups` have completed (`groups[st.activeGroupIdx]? = none`), `stepCalyxSeqFsm`
+asserts `doneSignal = true`, deasserts `goSignal = false`, and leaves `regState` invariant. -/
+theorem calyx_seq_fsm_stationary_when_done
+    (groups : List CalyxGroup)
+    (inputs wires : Nat → BitVec 64)
+    (st : CalyxSeqFsmState)
+    (hNone : groups[st.activeGroupIdx]? = none) :
+    let st' := stepCalyxSeqFsm groups inputs wires st
+    st'.goSignal = false ∧
+    st'.doneSignal = true ∧
+    st'.regState = st.regState := by
+  dsimp only [stepCalyxSeqFsm]
+  rw [hNone]
+  exact ⟨rfl, rfl, rfl⟩
+
+/-- **Theorem (`calyx_seq_two_group_pipeline_sound`)**:
+Verifies a 2-group sequential Calyx accelerator schedule `[g0, g1]` where:
+* `g0` (`latencyCycles = 1`) computes `reg 0 := inputPort 0 + 5#64`,
+* `g1` (`latencyCycles = 1`) computes `reg 1 := regRead 0 * 3#64`.
+Running `runCalyxSeqFsm` for 2 cycles with `inputPort 0 = 10#64` transitions `activeGroupIdx : 0 → 1 → 2`,
+asserts `doneSignal = true`, and produces `reg 0 = 15#64` and `reg 1 = 45#64`, matching the
+hierarchical `CalyxControl` schedule `.seq (.enable 0) (.enable 1)`! -/
+theorem calyx_seq_two_group_pipeline_sound :
+    let g0 : CalyxGroup :=
+      { groupName := "load_add5", latencyCycles := 1
+      , datapathExpr := .alu .add (.inputPort 0) (.const 5#64), targetRegIdx := 0 }
+    let g1 : CalyxGroup :=
+      { groupName := "scale_mul3", latencyCycles := 1
+      , datapathExpr := .alu .mul (.regRead 0) (.const 3#64), targetRegIdx := 1 }
+    let groups := [g0, g1]
+    let inputs : Nat → BitVec 64 := fun i => if i == 0 then 10#64 else 0#64
+    let wires  : Nat → BitVec 64 := fun _ => 0#64
+    let st0 := initCalyxSeqFsmState groups (fun _ => 0#64)
+    let st1 := stepCalyxSeqFsm groups inputs wires st0
+    let st2 := runCalyxSeqFsm groups inputs wires 2 st0
+    let ctrlRegs := evalCalyxControl groups inputs wires (.seq (.enable 0) (.enable 1)) (fun _ => 0#64)
+    st0.goSignal = true ∧
+    st0.doneSignal = false ∧
+    st1.activeGroupIdx = 1 ∧
+    st1.regState 0 = 15#64 ∧
+    st2.activeGroupIdx = 2 ∧
+    st2.goSignal = false ∧
+    st2.doneSignal = true ∧
+    st2.regState 0 = 15#64 ∧
+    st2.regState 1 = 45#64 ∧
+    ctrlRegs 0 = st2.regState 0 ∧
+    ctrlRegs 1 = st2.regState 1 := by
+  decide +kernel
+
+/-- **Theorem (`golden_multi_arg_and_pipelined_rtl_verified`)**:
+1. Verifies 3-argument port compilation (`compileMultiArgMethod`) on the ternary hardware MAC
+   `λself. λx0. λx1. λx2. x0 * x1 + x2`, confirming that it binds `.bound 2 ↦ .inputPort 0`,
+   `.bound 1 ↦ .inputPort 1`, `.bound 0 ↦ .inputPort 2` and evaluates `(6, 7, 8) ↦ 50#64`,
+   AND verifies curried 3-argument inter-slot invocation `self.mac3(x0, x1, x2)` from a caller slot.
+2. Verifies non-inlined pipelined book compilation (`compileBookToPipelinedRtl`) on a 2-slot `Book`
+   (`slot 0`: `"inc"`, `slot 1`: `"doubleInc"` calling `self.inc(arg) * 2`), confirming that the
+   synthesized `RtlModule` passes `checkRtlModule = true`, emits `.regRead 0` (`reg_inc`) in
+   slot 1's wire rather than duplicating slot 0's combinational adder tree, and latches
+   `reg_inc = 11#64` on Cycle 1 followed by `reg_doubleInc = 22#64` on Cycle 2! -/
+theorem golden_multi_arg_and_pipelined_rtl_verified :
+    let mac3Code : Term :=
+      .lam (.lam (.lam (.lam (.binary .add (.binary .multiply (.bound 2) (.bound 1)) (.bound 0)))))
+    let expectedMacExpr : RtlExpr :=
+      .alu .add (.alu .mul (.inputPort 0) (.inputPort 1)) (.inputPort 2)
+    let macCallerCode : Term :=
+      .lam (.lam (.lam (.lam
+        (.app (.app (.app (.get (.bound 3) "mac3") (.bound 2)) (.bound 1)) (.bound 0)))))
+    let macInputs : Nat → BitVec 64 := fun i =>
+      match i with | 0 => 6#64 | 1 => 7#64 | 2 => 8#64 | _ => 0#64
+    let pipeBook : Book :=
+      { items :=
+          [ .slot { member := "inc", slot := 0, kind := .method
+                  , code := .lam (.lam (.binary .add (.bound 0) (.nat 1))), reads := [] }
+          , .slot { member := "doubleInc", slot := 1, kind := .method
+                  , code := .lam (.lam (.binary .multiply (.app (.get (.bound 1) "inc") (.bound 0)) (.nat 2)))
+                  , reads := [0] } ] }
+    compileMultiArgMethod [] [] 3 mac3Code = some expectedMacExpr ∧
+    compileMultiArgMethod ["mac3"] [expectedMacExpr] 3 macCallerCode = some expectedMacExpr ∧
+    evalRtlExpr macInputs (fun _ => 0#64) (fun _ => 0#64) expectedMacExpr = 50#64 ∧
+    (match compileBookToPipelinedRtl "pipelined_book_mod" pipeBook with
+     | some m =>
+       let pipeIn : Nat → BitVec 64 := fun _ => 10#64
+       let regs0  : Nat → BitVec 64 := fun _ => 0#64
+       let regs1  := stepModuleRegs m false pipeIn regs0
+       let regs2  := stepModuleRegs m false pipeIn regs1
+       checkRtlModule m &&
+       (m.wires.map (·.expr) ==
+         [ .alu .add (.inputPort 0) (.const 1#64)
+         , .alu .mul (.regRead 0) (.const 2#64) ]) &&
+       (regs1 0 == 11#64) &&
+       (regs2 1 == 22#64)
+     | none => false) = true := by
+  decide +kernel
+
 end Obend.Hardware.Compiler
 end

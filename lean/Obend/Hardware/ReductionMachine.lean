@@ -907,7 +907,7 @@ theorem decode_encode_icap_words_roundtrip
   dsimp only [t, encodeTileIcapWords]
   rw [extractTileRuleAndImm_mkIcapRuleTile]
   dsimp only [mkIcapRuleTile, decodeTileIcapWords]
-  rw [h1, hSync, if_pos rfl]
+  simp only [h1, hSync, ↓reduceIte]
   rw [decode_encode_opKind_bv, decode_encode_opcode_bv, h2, h3]
 
 /-- Theorem (`golden_icap_bitstream_roundtrip`):
@@ -920,6 +920,264 @@ theorem golden_icap_bitstream_roundtrip :
     decodeTileIcapWords (encodeTileIcapWords incAutomatonTile) = some incAutomatonTile ∧
     decodeTileIcapWords (encodeTileIcapWords mul4AutomatonTile) = some mul4AutomatonTile ∧
     decodeTileIcapWords [0xDEADBEEF#32, 0#32, 0#32, 0#32, 1#32] = none := by
+  decide +kernel
+
+/-! ## 8. Multi-Cycle `BendTT` Interaction-Net Active-Pair Hardware Processing Element (`stepInteractionNetPe`, `runInteractionNetCycles`) -/
+
+/-- Construct a `BendTT` Eraser (`ERA`) interaction-net node. -/
+def mkEraNode (id : Nat) : INetNode where
+  id     := id
+  kind   := .era
+  label  := 0
+  immVal := 0
+  aux1   := ⟨0, 0⟩
+  aux2   := ⟨0, 0⟩
+
+/-- Construct a `BendTT` Constructor (`CON`) interaction-net node with combinator `label` and auxiliary ports `aux1`, `aux2`. -/
+def mkConNode (id label : Nat) (aux1 aux2 : PortRef) : INetNode where
+  id     := id
+  kind   := .con
+  label  := label
+  immVal := 0
+  aux1   := aux1
+  aux2   := aux2
+
+/-- Construct a `BendTT` Duplicator (`DUP`) interaction-net node with combinator `label` and auxiliary ports `aux1`, `aux2`. -/
+def mkDupNode (id label : Nat) (aux1 aux2 : PortRef) : INetNode where
+  id     := id
+  kind   := .dup
+  label  := label
+  immVal := 0
+  aux1   := aux1
+  aux2   := aux2
+
+/-- Extract the 4 external boundary auxiliary ports `[l.aux1, l.aux2, r.aux1, r.aux2]` of a binary `ActivePair`. -/
+def externalBoundaryPorts (pair : ActivePair) : List PortRef :=
+  [pair.left.aux1, pair.left.aux2, pair.right.aux1, pair.right.aux2]
+
+/-- Extract the external boundary ports preserved across the 4 nodes spawned by a `CON-DUP` commutation. -/
+def commutedBoundaryPorts (spawned : List INetNode) : List PortRef :=
+  match spawned with
+  | [_, _, supA, supB] => [supA.aux1, supB.aux1, supA.aux2, supB.aux2]
+  | _ => []
+
+/-- Look up a waiting node by `id` in `arenaNodes`. -/
+def findArenaNodeById (arena : List INetNode) (targetId : Nat) : Option INetNode :=
+  arena.find? (fun n => n.id == targetId)
+
+/-- Check whether a wire splice `w = (p1, p2)` connects two principal ports (`p1.slot == 0` and
+`p2.slot == 0` with `p1.nodeId != p2.nodeId`) of waiting nodes in `arena`. If so, remove both
+nodes from `arena` and dynamically synthesize the newly formed `ActivePair` `{ left := n1, right := n2 }`. -/
+def resolveWireSplice (arena : List INetNode) (w : PortRef × PortRef) : List INetNode × List ActivePair :=
+  let (p1, p2) := w
+  if p1.slot == 0 && p2.slot == 0 && p1.nodeId != p2.nodeId then
+    match findArenaNodeById arena p1.nodeId, findArenaNodeById arena p2.nodeId with
+    | some n1, some n2 =>
+      let arena' := arena.filter (fun n => n.id != p1.nodeId && n.id != p2.nodeId)
+      (arena', [{ left := n1, right := n2 }])
+    | _, _ => (arena, [])
+  else
+    (arena, [])
+
+/-- Resolve both wire splices `w1` and `w2` emitted by an annihilation against waiting nodes in `arena`,
+returning the updated `arena` and any newly formed `ActivePair`s to enqueue into `activeQueue`. -/
+def resolveTwoWireSplices (arena : List INetNode) (w1 w2 : PortRef × PortRef) : List INetNode × List ActivePair :=
+  match arena with
+  | [] => ([], [])
+  | _ =>
+    let (arena1, pairs1) := resolveWireSplice arena w1
+    let (arena2, pairs2) := resolveWireSplice arena1 w2
+    (arena2, pairs1 ++ pairs2)
+
+/-- Synchronous architectural state of a multi-cycle `BendTT` Interaction-Net Hardware Processing Element (PE):
+* `activeQueue`: hardware FIFO worklist of active principal-port pairs awaiting reduction,
+* `arenaNodes`: local arena of spawned combinator nodes,
+* `rewiredPorts`: completed port-to-port wire splices emitted by `CON-CON` and `DUP-DUP` annihilations,
+* `erasedPorts`: auxiliary ports scheduled for `.era` garbage collection,
+* `scalarResults`: completed `.nat64` scalar nodes produced by hardware $\beta$-reduction,
+* `nextFreeId`: monotonic hardware arena allocator pointer,
+* `cycleCount`: active reduction cycles executed,
+* `annihilations`: hardware performance counter for `CON-CON` / `DUP-DUP` annihilations,
+* `commutations`: hardware performance counter for `CON-DUP` commutations. -/
+structure InteractionNetPeState where
+  activeQueue   : List ActivePair
+  arenaNodes    : List INetNode
+  rewiredPorts  : List (PortRef × PortRef)
+  erasedPorts   : List PortRef
+  scalarResults : List INetNode
+  nextFreeId    : Nat
+  cycleCount    : Nat
+  annihilations : Nat
+  commutations  : Nat
+  deriving DecidableEq, Repr
+
+/-- Initialize an `InteractionNetPeState` with an initial active-pair queue and starting free node ID. -/
+def initInteractionNetPe (queue : List ActivePair) (startFreeId : Nat) : InteractionNetPeState where
+  activeQueue   := queue
+  arenaNodes    := []
+  rewiredPorts  := []
+  erasedPorts   := []
+  scalarResults := []
+  nextFreeId    := startFreeId
+  cycleCount    := 0
+  annihilations := 0
+  commutations  := 0
+
+/-- Execute a single clock cycle on the `BendTT` Interaction-Net Hardware Processing Element (`stepInteractionNetPe`):
+dequeues the head `ActivePair` from `activeQueue`, dispatches `reduceActivePair`, dynamically synthesizes
+any newly formed `ActivePair`s when a port splice connects two principal ports (`slot == 0`) in `arenaNodes`,
+updates the arena / wire-splice tables / hardware performance counters, and holds the state stationary
+once `activeQueue = []`. -/
+def stepInteractionNetPe (st : InteractionNetPeState) : InteractionNetPeState :=
+  match st.activeQueue with
+  | [] => st
+  | pair :: restQueue =>
+    match reduceActivePair pair st.nextFreeId with
+    | .annihilate w1 w2 =>
+      let (arena', newPairs) := resolveTwoWireSplices st.arenaNodes w1 w2
+      { st with
+        activeQueue   := restQueue ++ newPairs
+        arenaNodes    := arena'
+        rewiredPorts  := st.rewiredPorts ++ [w1, w2]
+        cycleCount    := st.cycleCount + 1
+        annihilations := st.annihilations + 1 }
+    | .commute spawned =>
+      { st with
+        activeQueue   := restQueue
+        arenaNodes    := st.arenaNodes ++ spawned
+        nextFreeId    := st.nextFreeId + 4
+        cycleCount    := st.cycleCount + 1
+        commutations  := st.commutations + 1 }
+    | .erase auxs =>
+      { st with
+        activeQueue   := restQueue
+        erasedPorts   := st.erasedPorts ++ auxs
+        cycleCount    := st.cycleCount + 1 }
+    | .betaNat64 resNode =>
+      { st with
+        activeQueue   := restQueue
+        scalarResults := st.scalarResults ++ [resNode]
+        nextFreeId    := st.nextFreeId + 1
+        cycleCount    := st.cycleCount + 1 }
+
+/-- Run the `BendTT` Interaction-Net Processing Element for `numCycles` clock edges. -/
+def runInteractionNetCycles : Nat → InteractionNetPeState → InteractionNetPeState
+  | 0, st => st
+  | k + 1, st => runInteractionNetCycles k (stepInteractionNetPe st)
+
+/-- **Theorem (`inet_annihilation_exact`)**:
+For ANY combinator label `lbl : Nat` and auxiliary port pairs `(a1, a2)` and `(b1, b2)`:
+1. Stepping `stepInteractionNetPe` on a `CON-CON` active pair with matching label `lbl` annihilates
+   both nodes in 1 cycle, splicing `(a1, b1)` and `(a2, b2)` into `rewiredPorts` with zero arena allocation, and
+2. Stepping `stepInteractionNetPe` on a `DUP-DUP` active pair with matching label `lbl` likewise
+   annihilates both nodes in 1 cycle, splicing `(a1, b1)` and `(a2, b2)` into `rewiredPorts` and
+   incrementing `annihilations` by 1. -/
+theorem inet_annihilation_exact
+    (id1 id2 lbl : Nat) (a1 a2 b1 b2 : PortRef) (startFreeId : Nat) :
+    let conPair : ActivePair :=
+      { left  := mkConNode id1 lbl a1 a2
+      , right := mkConNode id2 lbl b1 b2 }
+    let dupPair : ActivePair :=
+      { left  := mkDupNode id1 lbl a1 a2
+      , right := mkDupNode id2 lbl b1 b2 }
+    let stCon := stepInteractionNetPe (initInteractionNetPe [conPair] startFreeId)
+    let stDup := stepInteractionNetPe (initInteractionNetPe [dupPair] startFreeId)
+    stCon.activeQueue = [] ∧
+    stCon.rewiredPorts = [(a1, b1), (a2, b2)] ∧
+    stCon.arenaNodes = [] ∧
+    stCon.nextFreeId = startFreeId ∧
+    stCon.annihilations = 1 ∧
+    stDup.activeQueue = [] ∧
+    stDup.rewiredPorts = [(a1, b1), (a2, b2)] ∧
+    stDup.arenaNodes = [] ∧
+    stDup.nextFreeId = startFreeId ∧
+    stDup.annihilations = 1 := by
+  simp [stepInteractionNetPe, initInteractionNetPe, reduceActivePair,
+    resolveTwoWireSplices, mkConNode, mkDupNode]
+
+/-- **Theorem (`inet_commutation_port_count_preserved`)**:
+When a `CON` node with label `l1` interacts with a `DUP` node with label `l2` (`l1 ≠ l2`),
+stepping `stepInteractionNetPe`:
+1. Executes a 1-cycle `CON-DUP` commutation spawning 4 cross-wired arena nodes (`arenaNodes.length = 4`),
+2. Advances `nextFreeId` by `4` and increments `commutations` by `1`, and
+3. Strictly preserves all 4 external boundary auxiliary ports `[a1, a2, b1, b2]`
+   (`commutedBoundaryPorts st'.arenaNodes = externalBoundaryPorts pair` and length `= 4`). -/
+theorem inet_commutation_port_count_preserved
+    (id1 id2 l1 l2 : Nat) (a1 a2 b1 b2 : PortRef) (startFreeId : Nat)
+    (hDiff : l1 ≠ l2) :
+    let pair : ActivePair :=
+      { left  := mkConNode id1 l1 a1 a2
+      , right := mkDupNode id2 l2 b1 b2 }
+    let st' := stepInteractionNetPe (initInteractionNetPe [pair] startFreeId)
+    st'.activeQueue = [] ∧
+    st'.arenaNodes.length = 4 ∧
+    st'.nextFreeId = startFreeId + 4 ∧
+    st'.commutations = 1 ∧
+    commutedBoundaryPorts st'.arenaNodes = externalBoundaryPorts pair ∧
+    (commutedBoundaryPorts st'.arenaNodes).length = (externalBoundaryPorts pair).length ∧
+    (externalBoundaryPorts pair).length = 4 := by
+  intro pair st'
+  dsimp only [st', pair, stepInteractionNetPe, initInteractionNetPe, reduceActivePair, mkConNode, mkDupNode]
+  simp [hDiff, commuteSpawnedNodes, commutedBoundaryPorts, externalBoundaryPorts]
+
+/-- **Theorem (`inet_dynamic_splice_cascading_reduction`)**:
+Verifies that when an outer `CON 0 - CON 0` active pair annihilates in Cycle 1 and splices two
+principal ports `(⟨10, 0⟩, ⟨11, 0⟩)` belonging to waiting `DUP 1` nodes in `arenaNodes`:
+1. Cycle 1 dynamically promotes `{ left := n10, right := n11 }` from `arenaNodes` into `activeQueue`, and
+2. Cycle 2 dequeues and annihilates the newly formed `DUP 1 - DUP 1` active pair, splicing its
+   auxiliary ports `(⟨10, 1⟩, ⟨11, 1⟩)` and `(⟨10, 2⟩, ⟨11, 2⟩)`. -/
+theorem inet_dynamic_splice_cascading_reduction :
+    let n10 := mkDupNode 10 1 ⟨10, 1⟩ ⟨10, 2⟩
+    let n11 := mkDupNode 11 1 ⟨11, 1⟩ ⟨11, 2⟩
+    let outerPair : ActivePair :=
+      { left  := mkConNode 1 0 ⟨10, 0⟩ ⟨1, 2⟩
+      , right := mkConNode 2 0 ⟨11, 0⟩ ⟨2, 2⟩ }
+    let st0 : InteractionNetPeState :=
+      { (initInteractionNetPe [outerPair] 50) with arenaNodes := [n10, n11] }
+    let st1 := stepInteractionNetPe st0
+    let st2 := runInteractionNetCycles 2 st0
+    st1.activeQueue = [{ left := n10, right := n11 }] ∧
+    st1.arenaNodes = [] ∧
+    st1.annihilations = 1 ∧
+    st2.activeQueue = [] ∧
+    st2.annihilations = 2 ∧
+    st2.rewiredPorts =
+      [ (⟨10, 0⟩, ⟨11, 0⟩), (⟨1, 2⟩, ⟨2, 2⟩)
+      , (⟨10, 1⟩, ⟨11, 1⟩), (⟨10, 2⟩, ⟨11, 2⟩) ] := by
+  decide +kernel
+
+/-- **Theorem (`golden_multicycle_inet_pe_reduction`)**:
+End-to-end 4-cycle verification of the `BendTT` Interaction-Net Processing Element executing a
+heterogeneous batch of active pairs across 4 clock cycles:
+* **Cycle 1 (`CON 0` - `CON 0` Annihilation)**: splices `(⟨1, 1⟩, ⟨2, 1⟩)` and `(⟨1, 2⟩, ⟨2, 2⟩)`,
+* **Cycle 2 (`CON 0` - `DUP 1` Commutation)**: spawns 4 cross-wired nodes (`IDs 100..103`),
+* **Cycle 3 (`DUP 1` - `DUP 1` Annihilation)**: splices `(⟨5, 1⟩, ⟨6, 1⟩)` and `(⟨5, 2⟩, ⟨6, 2⟩)`,
+* **Cycle 4 ($\beta$-`nat64` Affine Evaluation)**: reduces `(λx. 3x + 7) 10` to `nat64 37` (`ID 104`),
+and reaches a quiescent fixed point at Cycle 5 (`runInteractionNetCycles 5 = runInteractionNetCycles 4`). -/
+theorem golden_multicycle_inet_pe_reduction :
+    let p1 : ActivePair :=
+      { left  := mkConNode 1 0 ⟨1, 1⟩ ⟨1, 2⟩
+      , right := mkConNode 2 0 ⟨2, 1⟩ ⟨2, 2⟩ }
+    let p2 : ActivePair :=
+      { left  := mkConNode 3 0 ⟨3, 1⟩ ⟨3, 2⟩
+      , right := mkDupNode 4 1 ⟨4, 1⟩ ⟨4, 2⟩ }
+    let p3 : ActivePair :=
+      { left  := mkDupNode 5 1 ⟨5, 1⟩ ⟨5, 2⟩
+      , right := mkDupNode 6 1 ⟨6, 1⟩ ⟨6, 2⟩ }
+    let p4 : ActivePair :=
+      { left  := { id := 7, kind := .lam, label := 3, immVal := 7, aux1 := ⟨7, 1⟩, aux2 := ⟨7, 2⟩ }
+      , right := { id := 8, kind := .nat64, label := 0, immVal := 10, aux1 := ⟨8, 1⟩, aux2 := ⟨8, 2⟩ } }
+    let initPe := initInteractionNetPe [p1, p2, p3, p4] 100
+    let finalPe := runInteractionNetCycles 4 initPe
+    finalPe.activeQueue = [] ∧
+    finalPe.cycleCount = 4 ∧
+    finalPe.annihilations = 2 ∧
+    finalPe.commutations = 1 ∧
+    finalPe.arenaNodes.length = 4 ∧
+    finalPe.rewiredPorts.length = 4 ∧
+    finalPe.nextFreeId = 105 ∧
+    finalPe.scalarResults.map (·.immVal) = [37] ∧
+    runInteractionNetCycles 5 initPe = finalPe := by
   decide +kernel
 
 end Obend.Hardware.ReductionMachine

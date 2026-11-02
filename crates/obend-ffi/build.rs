@@ -3,8 +3,19 @@ fn main() {
     println!("cargo:rerun-if-changed=../../lean/c/obend_bridge.c");
     println!("cargo:rerun-if-env-changed=LEAN_SYSROOT");
     println!("cargo:rerun-if-env-changed=OBEND_LEAN_LINK");
+    println!("cargo:rerun-if-env-changed=OBEND_REQUIRE_NATIVE_FFI");
+    println!("cargo:rerun-if-env-changed=OBEND_LAKE_LIB_DIR");
+
+    let require_native = std::env::var("OBEND_REQUIRE_NATIVE_FFI")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     if std::env::var("CARGO_FEATURE_STUB").is_ok() {
+        if require_native {
+            panic!(
+                "OBEND_REQUIRE_NATIVE_FFI=1 is set, but Cargo feature `stub` is enabled; refusing to build with stub FFI."
+            );
+        }
         return;
     }
 
@@ -13,7 +24,9 @@ fn main() {
         .unwrap()
         .parent()
         .unwrap();
-    let lake_lib_dir = workspace_root.join("lean/.lake/build/lib");
+    let lake_lib_dir = std::env::var("OBEND_LAKE_LIB_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join("lean/.lake/build/lib"));
 
     let lib_so = lake_lib_dir.join("libobend_Obend.so");
     let lib_dylib = lake_lib_dir.join("libobend_Obend.dylib");
@@ -21,9 +34,22 @@ fn main() {
     let lib_so2 = lake_lib_dir.join("libObend.so");
     let lib_dylib2 = lake_lib_dir.join("libObend.dylib");
 
-    let has_native = lib_so.exists() || lib_dylib.exists() || lib_a.exists() || lib_so2.exists() || lib_dylib2.exists();
+    let has_libobend = lib_so.exists() || lib_dylib.exists();
+    let has_native =
+        has_libobend || lib_a.exists() || lib_so2.exists() || lib_dylib2.exists();
+
+    if require_native && !has_libobend {
+        panic!(
+            "OBEND_REQUIRE_NATIVE_FFI=1 is set, but native Lean library `libobend_Obend` (.so/.dylib) was not found in {}",
+            lake_lib_dir.display()
+        );
+    }
+
     if !has_native {
-        println!("cargo:warning=Native Lean libraries not found at {}. Using stub fallback.", lake_lib_dir.display());
+        println!(
+            "cargo:warning=Native Lean libraries not found at {}. Using stub fallback.",
+            lake_lib_dir.display()
+        );
         println!("cargo:rustc-cfg=feature=\"stub\"");
         return;
     }

@@ -37,6 +37,8 @@ law must admit its own amendment) is satisfied for package laws by the upgrade p
 -/
 public import Obend.Spec.Law
 public import Obend.Law.Std
+public import Obend.Law.Claim
+public import Obend.Law.Proofs.Claim
 public import Obend.Core.Bidirectional
 public section
 namespace Obend.Spec.LawCompile
@@ -200,6 +202,68 @@ boolean (the first field so named), and a field `S` does not read as a scalar ho
 @[expose] def verdictOf (name : String) : Bool → Term
   | true => okT
   | false => refusedT name
+
+/-! ## `Claim.keeps` Compilation & Soundness Bridge -/
+
+/-- Construct the canonical `Term.record [("step", stepTerm), ("inv", invTerm)]` layout
+    for a `Claim.keeps` obligation pairing a transition/law `stepTerm` with an invariant `invTerm`. -/
+@[expose] def compileKeepsClaim (stepTerm invTerm : Term) : Term :=
+  .record [("step", stepTerm), ("inv", invTerm)]
+
+/-- Extract the named field list from a `compileKeepsClaim` record term for `Obend.Law.checkClaim`. -/
+@[expose] def fieldsOfKeepsRecord : Term → List (String × Term)
+  | .record fs => fs
+  | _ => []
+
+/-- Check a `compileKeepsClaim` record term against `Claim.keeps "inv" "step"`. -/
+@[expose] def checkKeepsClaimRecord (r : Term) (claim : Claim := .keeps "inv" "step") : Bool :=
+  checkClaim (fieldsOfKeepsRecord r) claim
+
+/-- Compile a `LawExpr` predicate over state type `S` into a closed `S → boolean` invariant term. -/
+@[expose] def compileKeepsInvariant (S : Ty) (e : LawExpr) : Term :=
+  .lam ((cond S .none ⟨0⟩ e).rename (fun i => i - 1))
+
+/-- Compile a closed invariant `invTerm` over state type `S` into a certifying-shape `keeps` law. -/
+@[expose] def compileKeepsLaw (S : Ty) (invTerm : Term) : Term :=
+  keeps S invTerm
+
+/-- Compile a closed invariant `invTerm` over `S` directly into the `compileKeepsClaim` record
+    `Term.record [("step", keeps S invTerm), ("inv", invTerm)]`. -/
+@[expose] def compileKeeps (S : Ty) (invTerm : Term) : Term :=
+  compileKeepsClaim (keeps S invTerm) invTerm
+
+/-- Projecting `"step"` from `compileKeepsClaim stepTerm invTerm` steps in one `Core.Term.Step` to `stepTerm`. -/
+theorem compileKeepsClaim_step_eval (stepTerm invTerm : Term) :
+    Obend.Core.Term.Step (.get (compileKeepsClaim stepTerm invTerm) "step") stepTerm :=
+  .field [("step", stepTerm), ("inv", invTerm)] "step" stepTerm rfl
+
+/-- Projecting `"inv"` from `compileKeepsClaim stepTerm invTerm` steps in one `Core.Term.Step` to `invTerm`. -/
+theorem compileKeepsClaim_inv_eval (stepTerm invTerm : Term) :
+    Obend.Core.Term.Step (.get (compileKeepsClaim stepTerm invTerm) "inv") invTerm :=
+  .field [("step", stepTerm), ("inv", invTerm)] "inv" invTerm rfl
+
+/-- `checkKeepsClaimRecord` on `compileKeepsClaim (keeps S invTerm) invTerm` reduces to `closedB invTerm`. -/
+theorem compileKeepsClaim_checkClaim_eq (S : Ty) (invTerm : Term) :
+    checkKeepsClaimRecord (compileKeepsClaim (keeps S invTerm) invTerm) (.keeps "inv" "step") =
+      closedB invTerm := by
+  have hg : guardedBy invTerm 1 0 (lawBody (keeps S invTerm)) = true := keeps_guarded S invTerm
+  change (closedB invTerm && guardedBy invTerm 1 0 (lawBody (keeps S invTerm))) = closedB invTerm
+  rw [hg, Bool.and_true]
+
+/-- **Soundness Bridge for `compileKeepsClaim`**:
+    When `invTerm` is closed (`closedB invTerm = true`), `compileKeepsClaim (keeps S invTerm) invTerm`
+    is accepted by `checkKeepsClaimRecord` and guarantees that along any history `Chain (LawStep (keeps S invTerm))`
+    starting from an invariant-satisfying state `o`, every reached state keeps `invTerm`. -/
+theorem compileKeepsClaim_sound (S : Ty) (invTerm : Term) (hclosed : closedB invTerm = true) :
+    checkKeepsClaimRecord (compileKeepsClaim (keeps S invTerm) invTerm) (.keeps "inv" "step") = true ∧
+      ∀ {o : Data} {steps : List (Data × Data)},
+        Keeps invTerm o → Chain (LawStep (keeps S invTerm)) o steps →
+        ∀ s ∈ steps, Keeps invTerm s.2 := by
+  have hchk : checkKeepsClaimRecord (compileKeepsClaim (keeps S invTerm) invTerm) (.keeps "inv" "step") = true := by
+    rw [compileKeepsClaim_checkClaim_eq, hclosed]
+  refine ⟨hchk, ?_⟩
+  intro o steps h0 hch s hs
+  exact chain_keeps hclosed (keeps_guarded S invTerm) h0 hch s hs
 
 end Obend.Spec.LawCompile
 

@@ -41,6 +41,12 @@ public import Obend.Vault.Affordance
 public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
 public import Obend.Receipt
+public import Obend.Slot
+public import Obend.Slot.Protocol
+public import Obend.Law.Contract
+public import Obend.Law.Proofs.Claim
+public import Obend.Law.Proofs.Std
+public import Obend.Tactic.Tooth
 
 @[expose] public section
 
@@ -1322,6 +1328,336 @@ theorem rehydration_master_sound :
     (fireReactive resolveReactiveBtn [.read, .grant] 22 statePend2 stateResolved3 demoFireCtx).isSome = true ∧
     (fireReactive resolveReactiveBtn [.read, .grant] 22 stateResolved3 stateResolved3 demoFireCtx).isNone = true := by
   decide
+
+/-! ## Pillar 5 — Inner-System Seam Weld: `FrozenMembrane` / `LiveMembrane` `Core.Data` Codecs, `Obend.Slot` Protocol & `Obend.Law.CellContract` -/
+
+open Obend.Core.Term (Term)
+open Obend.Spec.Law (LawExpr LawRef Facts)
+open Obend.Law (CellContract Holds Admits law3 okT leNat eqNat andT natT
+  admits_iff guard_ok subst_guard subst_binary subst_get subst_bound lawEnv)
+
+/-- Encode an `Auth` capability token as `Obend.Core.Data`. -/
+def Auth.toData : Auth → Data
+  | .read    => .label "read"
+  | .write   => .label "write"
+  | .grant   => .label "grant"
+  | .call    => .label "call"
+  | .reply   => .label "reply"
+  | .reset   => .label "reset"
+  | .control => .label "control"
+  | .notify  => .label "notify"
+
+/-- Decode an `Auth` capability token from `Obend.Core.Data`. -/
+def Auth.ofData? : Data → Option Auth
+  | .label "read"    => some .read
+  | .label "write"   => some .write
+  | .label "grant"   => some .grant
+  | .label "call"    => some .call
+  | .label "reply"   => some .reply
+  | .label "reset"   => some .reset
+  | .label "control" => some .control
+  | .label "notify"  => some .notify
+  | _                => none
+
+theorem Auth.ofData_toData (a : Auth) : Auth.ofData? (Auth.toData a) = some a := by
+  cases a <;> rfl
+
+/-- Encode a list of `Auth` capability tokens as `Obend.Core.Data`. -/
+def authListToData : List Auth → Data
+  | [] => .variant "nil" (.record [])
+  | a :: rest => .variant "cons" (.record [("head", Auth.toData a), ("tail", authListToData rest)])
+
+/-- Decode a list of `Auth` capability tokens from `Obend.Core.Data`. -/
+def authListOfData? : Data → Option (List Auth)
+  | .variant "nil" (.record []) => some []
+  | .variant "cons" (.record [("head", h), ("tail", t)]) => do
+    let a ← Auth.ofData? h
+    let rest ← authListOfData? t
+    pure (a :: rest)
+  | _ => none
+
+theorem authListOfData_toData (xs : List Auth) :
+    authListOfData? (authListToData xs) = some xs := by
+  induction xs with
+  | nil => rfl
+  | cons a rest ih =>
+    simp [authListToData, authListOfData?, Auth.ofData_toData, ih]
+
+/-- Encode a `Rehydration` liveness classification as `Obend.Core.Data`. -/
+def Rehydration.toData : Rehydration → Data
+  | .Live                     => .label "Live"
+  | .ReplayedDeterministic    => .label "ReplayedDeterministic"
+  | .ReconstructedApproximate => .label "ReconstructedApproximate"
+
+/-- Decode a `Rehydration` liveness classification from `Obend.Core.Data`. -/
+def Rehydration.ofData? : Data → Option Rehydration
+  | .label "Live"                     => some .Live
+  | .label "ReplayedDeterministic"    => some .ReplayedDeterministic
+  | .label "ReconstructedApproximate" => some .ReconstructedApproximate
+  | _                                 => none
+
+theorem Rehydration.ofData_toData (r : Rehydration) :
+    Rehydration.ofData? (Rehydration.toData r) = some r := by
+  cases r <;> rfl
+
+instance : Inhabited Rehydration := ⟨.Live⟩
+
+/-- **`FrozenMembrane`** — serialized membrane state carrying a monotonically advancing `epoch`,
+    an immutable capability boundary digest `capDigest`, a dependency digest `depDigest`, and
+    the held `Auth` capability tokens. -/
+structure FrozenMembrane where
+  surfaceId : String
+  epoch     : Nat
+  capDigest : Nat
+  depDigest : Nat
+  heldCaps  : List Auth
+  deriving DecidableEq, Repr, Inhabited
+
+/-- **`LiveMembrane`** — rehydrated runtime membrane state coupling the surface metadata, epoch,
+    capability/dependency digests, active `Auth` capabilities, and derived `Rehydration` liveness. -/
+structure LiveMembrane where
+  surfaceId  : String
+  epoch      : Nat
+  capDigest  : Nat
+  depDigest  : Nat
+  activeCaps : List Auth
+  liveness   : Rehydration
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Deterministic `Obend.Core.Data` encoding of `FrozenMembrane`. -/
+def FrozenMembrane.toData (fm : FrozenMembrane) : Data :=
+  .record
+    [ ("surfaceId", .label fm.surfaceId)
+    , ("epoch", .natural fm.epoch)
+    , ("capDigest", .natural fm.capDigest)
+    , ("depDigest", .natural fm.depDigest)
+    , ("heldCaps", authListToData fm.heldCaps) ]
+
+/-- Deterministic `Obend.Core.Data` decoding of `FrozenMembrane`. -/
+def FrozenMembrane.ofData? : Data → Option FrozenMembrane
+  | .record
+      [ ("surfaceId", .label surfaceId)
+      , ("epoch", .natural epoch)
+      , ("capDigest", .natural capDigest)
+      , ("depDigest", .natural depDigest)
+      , ("heldCaps", heldCapsData) ] => do
+    let heldCaps ← authListOfData? heldCapsData
+    pure { surfaceId, epoch, capDigest, depDigest, heldCaps }
+  | _ => none
+
+/-- Exact roundtrip theorem for `FrozenMembrane.toData` / `FrozenMembrane.ofData?`. -/
+theorem FrozenMembrane.ofData_toData (fm : FrozenMembrane) :
+    FrozenMembrane.ofData? fm.toData = some fm := by
+  cases fm
+  simp [FrozenMembrane.toData, FrozenMembrane.ofData?, authListOfData_toData]
+
+/-- Deterministic `Obend.Core.Data` encoding of `LiveMembrane`. -/
+def LiveMembrane.toData (lm : LiveMembrane) : Data :=
+  .record
+    [ ("surfaceId", .label lm.surfaceId)
+    , ("epoch", .natural lm.epoch)
+    , ("capDigest", .natural lm.capDigest)
+    , ("depDigest", .natural lm.depDigest)
+    , ("activeCaps", authListToData lm.activeCaps)
+    , ("liveness", Rehydration.toData lm.liveness) ]
+
+/-- Deterministic `Obend.Core.Data` decoding of `LiveMembrane`. -/
+def LiveMembrane.ofData? : Data → Option LiveMembrane
+  | .record
+      [ ("surfaceId", .label surfaceId)
+      , ("epoch", .natural epoch)
+      , ("capDigest", .natural capDigest)
+      , ("depDigest", .natural depDigest)
+      , ("activeCaps", activeCapsData)
+      , ("liveness", livenessData) ] => do
+    let activeCaps ← authListOfData? activeCapsData
+    let liveness ← Rehydration.ofData? livenessData
+    pure { surfaceId, epoch, capDigest, depDigest, activeCaps, liveness }
+  | _ => none
+
+/-- Exact roundtrip theorem for `LiveMembrane.toData` / `LiveMembrane.ofData?`. -/
+theorem LiveMembrane.ofData_toData (lm : LiveMembrane) :
+    LiveMembrane.ofData? lm.toData = some lm := by
+  cases lm
+  simp [LiveMembrane.toData, LiveMembrane.ofData?, authListOfData_toData, Rehydration.ofData_toData]
+
+/-- Dependency and capability boundary facts checked by the inner `Obend.Slot` protocol. -/
+inductive MembraneFact where
+  | depDigestValid (digest : Nat)
+  | capBoundaryHolds (cap : Auth)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Slot payload bundling a `FrozenMembrane` with its required capability boundary and serialized `Data`. -/
+structure MembranePayload where
+  frozen       : FrozenMembrane
+  requiredCaps : List Auth
+  encoded      : Data
+  deriving DecidableEq, Repr
+
+/-- Construct a `MembranePayload` for a `FrozenMembrane` and required capability boundary. -/
+def membranePayload (fm : FrozenMembrane) (requiredCaps : List Auth) : MembranePayload :=
+  { frozen := fm, requiredCaps := requiredCaps, encoded := fm.toData }
+
+/-- Slot envelope pairing a `MembranePayload` with its expected dependency digest and support facts. -/
+structure MembraneEnvelope where
+  payload           : MembranePayload
+  expectedDepDigest : Nat
+  supports          : List MembraneFact
+  deriving DecidableEq, Repr
+
+/-- Construct a `MembraneEnvelope` over a `FrozenMembrane`. -/
+def membraneEnvelope (fm : FrozenMembrane) (expectedDepDigest : Nat) (requiredCaps : List Auth) :
+    MembraneEnvelope :=
+  { payload := membranePayload fm requiredCaps
+  , expectedDepDigest := expectedDepDigest
+  , supports := .depDigestValid fm.depDigest :: requiredCaps.map .capBoundaryHolds }
+
+/-- Inner `Obend.Slot.Slot` over `FrozenMembrane`:
+    - `supports`: requires `.depDigestValid fm.depDigest` and `.capBoundaryHolds cap` for every required capability,
+    - `judge`: checks that `fm.depDigest == expectedDepDigest`, `fm.capDigest != 0`, and `fireGate requiredCaps fm.heldCaps`. -/
+def membraneSlot (expectedDepDigest : Nat) (requiredCaps : List Auth) :
+    Obend.Slot.Slot MembraneFact FrozenMembrane where
+  supports fm := .depDigestValid fm.depDigest :: requiredCaps.map .capBoundaryHolds
+  judge fm := fm.depDigest == expectedDepDigest && fm.capDigest != 0 && fireGate requiredCaps fm.heldCaps
+
+theorem membraneSlot_rejected_of_bad_depDigest
+    (settled : MembraneFact → Bool) (expectedDepDigest : Nat) (requiredCaps : List Auth)
+    (fm : FrozenMembrane) (h_bad : (fm.depDigest == expectedDepDigest) = false) :
+    (membraneSlot expectedDepDigest requiredCaps).read settled (some fm) = .rejected fm := by
+  simp [Obend.Slot.Slot.read, membraneSlot, h_bad]
+
+theorem membraneSlot_rejected_of_missing_cap
+    (settled : MembraneFact → Bool) (expectedDepDigest : Nat) (requiredCaps : List Auth)
+    (fm : FrozenMembrane) (h_cap : fireGate requiredCaps fm.heldCaps = false) :
+    (membraneSlot expectedDepDigest requiredCaps).read settled (some fm) = .rejected fm := by
+  simp [Obend.Slot.Slot.read, membraneSlot, h_cap]
+
+/-- Rehydrate a `FrozenMembrane` into a `LiveMembrane` using an `InteractionLog` and reachability flag. -/
+def rehydrateMembrane (fm : FrozenMembrane) (log : InteractionLog) (reachable : Bool) : LiveMembrane :=
+  { surfaceId  := fm.surfaceId
+  , epoch      := fm.epoch
+  , capDigest  := fm.capDigest
+  , depDigest  := fm.depDigest
+  , activeCaps := fm.heldCaps
+  , liveness   := classify log reachable }
+
+/-- Rehydrate and advance a `FrozenMembrane` by `epochDelta`, preserving `capDigest`, `depDigest`, and `heldCaps`. -/
+def rehydrateAndStep (fm : FrozenMembrane) (epochDelta : Nat) : FrozenMembrane :=
+  { fm with epoch := fm.epoch + epochDelta }
+
+/-- Rehydrate and advance into a `LiveMembrane` by `epochDelta`. -/
+def rehydrateLiveAndStep (fm : FrozenMembrane) (log : InteractionLog) (reachable : Bool) (epochDelta : Nat) :
+    LiveMembrane :=
+  { (rehydrateMembrane fm log reachable) with epoch := fm.epoch + epochDelta }
+
+/-- Relational `LawExpr` governing membrane rehydration transitions:
+    1. `epoch` advances monotonically (`LawExpr.monotone "epoch"`),
+    2. `capDigest` is preserved across steps (`LawExpr.writeOnce "capDigest"`). -/
+def membraneRehydrationLaw : LawExpr :=
+  (LawExpr.monotone "epoch").and (LawExpr.writeOnce "capDigest")
+
+/-- Evaluate `membraneRehydrationLaw` across a `FrozenMembrane` state transition. -/
+def evalMembraneRehydrationLaw (facts : Facts) (old new : FrozenMembrane) : Bool :=
+  membraneRehydrationLaw.denote facts (some old.toData) new.toData
+
+/-- **Bridge Theorem (`rehydrate_satisfies_law`)**:
+    Every `rehydrateAndStep` transition satisfies `membraneRehydrationLaw` (`epoch` is monotonic
+    and `capDigest` is preserved). -/
+theorem rehydrate_satisfies_law (facts : Facts) (fm : FrozenMembrane) (epochDelta : Nat) :
+    evalMembraneRehydrationLaw facts fm (rehydrateAndStep fm epochDelta) = true := by
+  change
+    (decide (Int.ofNat fm.epoch ≤ Int.ofNat (fm.epoch + epochDelta)) &&
+      (Int.ofNat fm.capDigest == 0 ||
+        decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest)))) = true
+  simp
+  omega
+
+/-- Concrete facts and fixtures for `#tooth` refutation probes on `membraneRehydrationLaw`. -/
+def demoMembraneFacts : Facts := ⟨none, none, 1, 1⟩
+
+def demoFrozenBase : FrozenMembrane :=
+  { surfaceId := "council-surface"
+  , epoch     := 5
+  , capDigest := 101
+  , depDigest := 202
+  , heldCaps  := [.read, .write] }
+
+def demoFrozenTamperedDigest : FrozenMembrane :=
+  { demoFrozenBase with capDigest := 999 }
+
+def demoFrozenRegressedEpoch : FrozenMembrane :=
+  { demoFrozenBase with epoch := 3 }
+
+/-- Refutation theorem: a tampered capability digest (`101 → 999`) is rejected by `membraneRehydrationLaw`. -/
+theorem membrane_tampered_digest_rejected :
+    evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenTamperedDigest = false := rfl
+
+/-- Refutation theorem: a regressed epoch (`5 → 3`) is rejected by `membraneRehydrationLaw`. -/
+theorem membrane_regressed_epoch_rejected :
+    evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenRegressedEpoch = false := rfl
+
+#tooth membrane_tampered_digest_rejected by mutation
+  membraneRehydrationLaw := LawExpr.monotone "epoch"
+
+#tooth membrane_regressed_epoch_rejected by mutation
+  membraneRehydrationLaw := LawExpr.writeOnce "capDigest"
+
+/-- Core4 state invariant for a membrane cell: `s.capDigest == expectedCapDigest`. -/
+def membraneInvariant (expectedCapDigest : Nat) : Term :=
+  .lam (eqNat (.get (.bound 0) "capDigest") (natT expectedCapDigest))
+
+theorem subst_membraneInvariant (d : Nat) (σ : Nat → Term) :
+    (membraneInvariant d).substitute σ = membraneInvariant d := by
+  simp [membraneInvariant, eqNat, natT, Term.substitute, subst_binary, subst_get, subst_bound]
+  rfl
+
+/-- Core4 step relation body enforcing `old.epoch ≤ new.epoch` and `old.capDigest == new.capDigest`. -/
+def membraneStepBody : Term :=
+  Obend.Law.guard
+    (andT
+      (leNat (.get (.bound 2) "epoch") (.get (.bound 1) "epoch"))
+      (eqNat (.get (.bound 2) "capDigest") (.get (.bound 1) "capDigest")))
+    "membrane_step_violation"
+    okT
+
+/-- Core4 3-argument relational step law (`old`, `new`, `req`) for membrane rehydration. -/
+def membraneStepRel : Term :=
+  law3 membraneStepBody
+
+/-- Core4 transition law combining `membraneInvariant` preservation with `membraneStepBody`. -/
+def membraneTransitionLaw (expectedCapDigest : Nat) : Term :=
+  law3
+    (Obend.Law.guard
+      (.app (membraneInvariant expectedCapDigest) (.bound 1))
+      "cap_digest_mismatch"
+      membraneStepBody)
+
+/-- Parameterized `Obend.Law.CellContract` for a membrane cell with capability digest `expectedCapDigest`. -/
+def membraneCellContractOf (expectedCapDigest : Nat) : CellContract where
+  law := membraneTransitionLaw expectedCapDigest
+  invariant := membraneInvariant expectedCapDigest
+  stepRel := membraneStepRel
+  inductive_preserves := by
+    intro old new req _h_old h_adm
+    rw [membraneTransitionLaw, admits_iff] at h_adm
+    rcases h_adm with ⟨w, hw⟩
+    rw [subst_guard] at hw
+    have h_ok := guard_ok hw
+    have h_cond := h_ok.1
+    simp [subst_membraneInvariant, subst_bound, lawEnv] at h_cond
+    exact h_cond
+  step_sound := by
+    intro old new req _h_old h_adm
+    rw [membraneTransitionLaw, admits_iff] at h_adm
+    rcases h_adm with ⟨w, hw⟩
+    rw [subst_guard] at hw
+    have h_ok := guard_ok hw
+    rw [membraneStepRel, admits_iff]
+    exact ⟨w, h_ok.2⟩
+
+/-- Default `Obend.Law.CellContract` instance for `demoFrozenBase` (`capDigest = 101`). -/
+def membraneCellContract : CellContract :=
+  membraneCellContractOf demoFrozenBase.capDigest
 
 end Obend.Vault.Rehydration
 

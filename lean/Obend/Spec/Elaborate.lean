@@ -24,6 +24,10 @@ public import Obend.Spec.Annotated
 public import Obend.Spec.C4
 public import Obend.Spec.Contract
 public import Obend.Core.Code
+public import Obend.Law.Contract
+public import Obend.Law.Proofs.Std
+public import Obend.Spec.LawCompile
+public import Obend.Logic.Obligation
 public section
 namespace Obend.Spec.Elaborate
 open Lean (Json toJson)
@@ -2129,6 +2133,217 @@ def runJob (job : Json) : Json :=
   match result with
   | .ok j => Json.mkObj [("name", name), ("ok", toJson true), ("output", j)]
   | .error e => Json.mkObj [("name", name), ("ok", toJson false), ("error", e)]
+
+end Obend.Spec.Elaborate
+
+namespace Obend.Logic
+
+set_option autoImplicit false
+
+/-- Structured Isar-style proof obligation tree over `.obend` claims, laws, and contracts. -/
+inductive ObligationTree where
+  | leaf (name : String) (method : Obend.Spec.Syntax.IsarMethod) (obligation : Option Obligation := none)
+  | stepNode (label : String) (method : Obend.Spec.Syntax.IsarMethod) (prop : Obend.Core.Term.Term)
+      (rest : ObligationTree)
+  | conj (left right : ObligationTree)
+  | caseSplit (scrutinee : String) (whenTrue whenFalse : ObligationTree)
+  | frameTransport (specName : String) (method : Obend.Spec.Syntax.IsarMethod) (child : ObligationTree)
+  | contractNode (contractName : String) (targetType : String)
+      (method : Obend.Spec.Syntax.IsarMethod) (invariantStep : ObligationTree)
+  deriving Inhabited
+
+namespace ObligationTree
+
+/-- Flatten all leaf obligations in an `ObligationTree`. -/
+def obligations : ObligationTree → List Obligation
+  | .leaf _ _ (some ob) => [ob]
+  | .leaf _ _ none => []
+  | .stepNode _ _ _ rest => rest.obligations
+  | .conj l r => l.obligations ++ r.obligations
+  | .caseSplit _ l r => l.obligations ++ r.obligations
+  | .frameTransport _ _ c => c.obligations
+  | .contractNode _ _ _ c => c.obligations
+
+/-- Extract all Isar proof methods used in the tree, in preorder. -/
+def methods : ObligationTree → List Obend.Spec.Syntax.IsarMethod
+  | .leaf _ m _ => [m]
+  | .stepNode _ m _ rest => m :: rest.methods
+  | .conj l r => l.methods ++ r.methods
+  | .caseSplit _ l r => l.methods ++ r.methods
+  | .frameTransport _ m c => m :: c.methods
+  | .contractNode _ _ m c => m :: c.methods
+
+/-- Count the total nodes in an `ObligationTree`. -/
+def nodeCount : ObligationTree → Nat
+  | .leaf _ _ _ => 1
+  | .stepNode _ _ _ rest => 1 + rest.nodeCount
+  | .conj l r => 1 + l.nodeCount + r.nodeCount
+  | .caseSplit _ l r => 1 + l.nodeCount + r.nodeCount
+  | .frameTransport _ _ c => 1 + c.nodeCount
+  | .contractNode _ _ _ c => 1 + c.nodeCount
+
+/-- Every `ObligationTree` has a positive `nodeCount`. -/
+theorem nodeCount_pos (t : ObligationTree) : 0 < t.nodeCount := by
+  cases t <;> simp only [nodeCount] <;> omega
+
+end ObligationTree
+
+end Obend.Logic
+
+namespace Obend.Spec.Elaborate
+
+open Lean (Json toJson)
+open Obend.Spec.Syntax
+open Obend.Core.Term (Term)
+open Obend.Core.Ty (Ty)
+open Obend.Law (CellContract Holds Admits)
+
+set_option autoImplicit false
+
+abbrev ObligationTree := Obend.Logic.ObligationTree
+
+/-- Constructive decimal parser for numeric literals in Isar step summaries (`0 Classical.choice`). -/
+def parseDecimalSummaryNat (s : String) : Nat :=
+  s.toList.foldl (fun acc c => if '0' ≤ c && c ≤ '9' then acc * 10 + (c.toNat - '0'.toNat) else acc) 0
+
+/-- Lower a surface `Expr` into a lightweight Core4 summary term for Isar step metadata (`0 Classical.choice`). -/
+def lowerIsarExprSummaryAux : Nat → Expr → Term
+  | 0, _ => .boolean true
+  | _ + 1, .var n => .label n
+  | _ + 1, .nat v => .nat (parseDecimalSummaryNat v)
+  | _ + 1, .bool b => .boolean b
+  | _ + 1, .str s => .label s
+  | _ + 1, .unit => .record []
+  | fuel + 1, .member t f => .get (lowerIsarExprSummaryAux fuel t) f
+  | fuel + 1, .binary op l r =>
+      .record [("op", .label op), ("left", lowerIsarExprSummaryAux fuel l), ("right", lowerIsarExprSummaryAux fuel r)]
+  | fuel + 1, .ite c t f =>
+      .ifBool (lowerIsarExprSummaryAux fuel c) (lowerIsarExprSummaryAux fuel t) (lowerIsarExprSummaryAux fuel f)
+  | _ + 1, _ => .boolean true
+
+def lowerIsarExprSummary (e : Expr) : Term := lowerIsarExprSummaryAux 16 e
+
+/-- Fold a list of structured Isar steps around a terminal `ObligationTree` leaf. -/
+def foldIsarSteps (owner : String) (steps : List IsarStep) (terminal : ObligationTree) : ObligationTree :=
+  steps.foldr (fun st acc =>
+    match st with
+    | .haveStep lbl prop m => .stepNode lbl m (lowerIsarExprSummary prop) acc
+    | .showStep prop m => .stepNode "show" m (lowerIsarExprSummary prop) acc
+    | .obtainStep b prop m => .stepNode ("obtain:" ++ b) m (lowerIsarExprSummary prop) acc
+    | .byMethod m => .frameTransport owner m acc) terminal
+
+/-- Elaborate a single `.obend` `Claim` into an `ObligationTree`. -/
+def elaborateClaimProofTree (specName : String) (c : Claim) : ObligationTree :=
+  let m := c.method.getD .weave
+  let leaf : ObligationTree := .leaf (specName ++ "." ++ c.name) m none
+  let stepped := foldIsarSteps specName c.steps leaf
+  match c.method with
+  | some .frame => .frameTransport specName .frame stepped
+  | _ => stepped
+
+/-- Elaborate a single `.obend` `ContractDecl` into an `ObligationTree`. -/
+def elaborateContractProofTree (c : ContractDecl) : ObligationTree :=
+  let m := c.method.getD .weave
+  let leaf : ObligationTree := .leaf (c.name ++ ".preserves") m none
+  let stepped := foldIsarSteps c.name c.steps leaf
+  .contractNode c.name c.targetType m stepped
+
+/-- Combine a non-empty list of `ObligationTree`s with `.conj`. -/
+def conjTrees (defaultName : String) : List ObligationTree → ObligationTree
+  | [] => .leaf defaultName .decide none
+  | [t] => t
+  | t :: ts => .conj t (conjTrees defaultName ts)
+
+/-- Translate all structured claims, annotated laws, and `contract` blocks of an `.obend`
+    `Syntax.Module` into a unified `Obend.Logic.ObligationTree`. -/
+def elaborateIsarProofTree (m : Module) : ObligationTree :=
+  let specTrees : List ObligationTree := m.decls.foldr (fun d acc =>
+    match d with
+    | .spec s => (s.claims.map (elaborateClaimProofTree s.name)) ++ acc
+    | _ => acc) []
+  let lawTrees : List ObligationTree := m.laws.map fun (lname, _) =>
+    let lm := (m.lawMethods.find? (fun p => p.1 == lname)).map Prod.snd |>.getD .decide
+    .leaf (m.name ++ ".law." ++ lname) lm none
+  let contractTrees : List ObligationTree := m.contracts.map elaborateContractProofTree
+  conjTrees (m.name ++ ".root") (specTrees ++ lawTrees ++ contractTrees)
+
+/-- Map a surface field type name to a scalar Core4 `Ty` for law compilation. -/
+def fieldTyOfSurface : String → Ty
+  | "Nat" => .natural
+  | "Bool" => .boolean
+  | "String" => .label
+  | _ => .natural
+
+/-- Build the canonical state row `Ty` for a `ContractDecl` from explicit declared record fields
+    and any fields referenced by its `LawExpr` (`0 Classical.choice`). -/
+def resolveContractStateTyFromFields (recFields : List (String × String)) (lawExpr : Obend.Spec.Law.LawExpr) : Ty :=
+  let declaredNames := recFields.map Prod.fst
+  let extraLawFields := (lawExpr.fields.eraseDups.filter (fun f => !declaredNames.contains f)).map (fun f => (f, "Nat"))
+  let allFields := recFields ++ extraLawFields
+  allFields.foldr (fun (fname, fty) acc => .field fname (fieldTyOfSurface fty) acc) .emptyRow
+
+/-- Build the canonical state row `Ty` for a `ContractDecl` from its target record declaration
+    and any fields referenced by its `LawExpr`. -/
+def resolveContractStateTy (m : Module) (c : ContractDecl) (lawExpr : Obend.Spec.Law.LawExpr) : Ty :=
+  let recFields : List (String × String) :=
+    match m.decls.find? (fun d => match d with | .record n _ _ => n == c.targetType | _ => false) with
+    | some (.record _ fs _) => fs
+    | _ => []
+  resolveContractStateTyFromFields recFields lawExpr
+
+theorem holds_top_invariant (d : Obend.Core.Data.Data) : Holds (.lam (.boolean true)) d := by
+  unfold Holds
+  refine Obend.Law.evaluates_step (.beta (.boolean true) d.term) ?_
+  have hinst : Obend.Core.Term.instantiate (.boolean true) d.term = .boolean true := by
+    unfold Obend.Core.Term.instantiate
+    exact Obend.Law.subst_boolean _ true
+  rw [hinst]
+  exact Obend.Law.evaluates_self (.boolean true)
+
+/-- Translate an `.obend` `ContractDecl` into a verified `Obend.Law.CellContract` from explicit
+    package name and record fields (`0 Classical.choice`). -/
+def elaborateCellContractFromFields (modName : String) (recFields : List (String × String))
+    (c : ContractDecl) (fallbackLaw : Obend.Spec.Law.LawExpr := .eqR .turn .turn) : CellContract :=
+  let lawExpr := c.law.getD fallbackLaw
+  let stateTy := resolveContractStateTyFromFields recFields lawExpr
+  let compiled := Obend.Spec.LawCompile.compile stateTy modName c.name lawExpr
+  let inv : Term := .lam (.boolean true)
+  { law := compiled
+    invariant := inv
+    stepRel := compiled
+    inductive_preserves := fun _ new _ _ _ => holds_top_invariant new
+    step_sound := fun _ _ _ _ hadm => hadm }
+
+/-- Translate an `.obend` `ContractDecl` (within `m : Syntax.Module`) into a verified
+    `Obend.Law.CellContract` whose `law` and `stepRel` are the compiled Core4 `LawExpr`. -/
+def elaborateCellContract (m : Module) (c : ContractDecl) : CellContract :=
+  let fallbackLaw := match m.laws.head? with
+    | some (_, l) => l
+    | none => .eqR .turn .turn
+  let recFields : List (String × String) :=
+    match m.decls.find? (fun d => match d with | .record n _ _ => n == c.targetType | _ => false) with
+    | some (.record _ fs _) => fs
+    | _ => []
+  elaborateCellContractFromFields m.name recFields c fallbackLaw
+
+/-- Elaborate all `contract` blocks (and top-level laws) of a `Syntax.Module` into named `CellContract`s. -/
+def elaborateModuleContracts (m : Module) : List (String × CellContract) :=
+  let fromContracts := m.contracts.map fun c => (c.name, elaborateCellContract m c)
+  let fromLaws := m.laws.map fun (lname, lexpr) =>
+    let pseudo : ContractDecl := { name := lname, targetType := m.name, law := some lexpr }
+    (lname, elaborateCellContract m pseudo)
+  fromContracts ++ fromLaws
+
+/-- Parse and decode `.obend` source text and translate its Isar claims, laws, and contracts
+    into `(Module, ObligationTree, List (String × CellContract))`. -/
+def elaborateIsarSource (modName : String) (source : String) :
+    Except String (Module × ObligationTree × List (String × CellContract)) := do
+  let ast ← match Parse.parseObjective source with
+    | .ok j => pure j
+    | .error d => .error d.message
+  let wrapper := Json.mkObj [("name", toJson modName), ("imports", Json.arr #[]), ("ast", ast)]
+  let m ← decodeModule wrapper
+  return (m, elaborateIsarProofTree m, elaborateModuleContracts m)
 
 end Obend.Spec.Elaborate
 

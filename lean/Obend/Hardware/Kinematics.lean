@@ -304,5 +304,251 @@ theorem golden_kinematics_featherstone_ruckig_verified :
     evalUncompensatedTipPos3D (evalAbbeCompensatedCmd3D target linErr angErr arm) linErr angErr arm = target := by
   decide +kernel
 
+/-! ## 5. Multi-Link Articulated Kinematic Chain & Recursive Newton-Euler (`RNEA`) Dynamics -/
+
+/-- Scalar multiplication $s \cdot \mathbf{a}$ of a 3D vector. -/
+def Vec3.scale (s : Int) (a : Vec3) : Vec3 where
+  x := s * a.x
+  y := s * a.y
+  z := s * a.z
+
+/-- Componentwise addition of two 6D spatial twists $u + v \in \mathfrak{se}(3)$. -/
+def SpatialTwist6D.add (u v : SpatialTwist6D) : SpatialTwist6D where
+  ang := Vec3.add u.ang v.ang
+  lin := Vec3.add u.lin v.lin
+
+/-- Scalar multiplication $s \cdot v \in \mathfrak{se}(3)$ of a 6D spatial twist (e.g. $S_i \dot{q}_i$). -/
+def SpatialTwist6D.scale (s : Int) (v : SpatialTwist6D) : SpatialTwist6D where
+  ang := Vec3.scale s v.ang
+  lin := Vec3.scale s v.lin
+
+/-- Zero 6D spatial wrench $(0, 0) \in \mathfrak{se}(3)^*$. -/
+def SpatialWrench6D.zero : SpatialWrench6D :=
+  { torque := Vec3.zero, force := Vec3.zero }
+
+/-- Componentwise addition of two 6D spatial wrenches $f + g \in \mathfrak{se}(3)^*$. -/
+def SpatialWrench6D.add (f g : SpatialWrench6D) : SpatialWrench6D where
+  torque := Vec3.add f.torque g.torque
+  force  := Vec3.add f.force g.force
+
+/-- Componentwise subtraction of two 6D spatial wrenches $f - g \in \mathfrak{se}(3)^*$. -/
+def SpatialWrench6D.sub (f g : SpatialWrench6D) : SpatialWrench6D where
+  torque := Vec3.sub f.torque g.torque
+  force  := Vec3.sub f.force g.force
+
+/-- **Left Bilinearity of Spatial Duality Pairing (`spatialPower_bilinear_add_left`)**:
+$$\langle f + g,\; v \rangle = \langle f, v \rangle + \langle g, v \rangle.$$ -/
+theorem spatialPower_bilinear_add_left
+    (f g : SpatialWrench6D) (v : SpatialTwist6D) :
+    spatialPower (SpatialWrench6D.add f g) v = spatialPower f v + spatialPower g v := by
+  dsimp only [spatialPower, SpatialWrench6D.add]
+  rw [dot3_add_left, dot3_add_left]
+  omega
+
+/-- **Right Bilinearity of Spatial Duality Pairing (`spatialPower_bilinear_add_right`)**:
+$$\langle f,\; u + v \rangle = \langle f, u \rangle + \langle f, v \rangle.$$ -/
+theorem spatialPower_bilinear_add_right
+    (f : SpatialWrench6D) (u v : SpatialTwist6D) :
+    spatialPower f (SpatialTwist6D.add u v) = spatialPower f u + spatialPower f v := by
+  dsimp only [spatialPower, SpatialTwist6D.add]
+  rw [dot3_add_right, dot3_add_right]
+  omega
+
+/-- Dynamic state of a single articulated body link $i$ in a Featherstone Recursive Newton-Euler
+(`RNEA`) serial kinematic chain (`arXiv:2109.07719`, `arXiv:2105.05102`, `arXiv:2203.01497`):
+* `jointAxis`: joint motion subspace twist $S_i \in \mathfrak{se}(3)$,
+* `qDot`: generalized joint velocity $\dot{q}_i$,
+* `linkMomentum`: spatial momentum $p_i = I_i v_i \in \mathfrak{se}(3)^*$,
+* `inertialAccelWrench`: inertial D'Alembert acceleration wrench $f_{\text{inertial},i} = I_i a_i \in \mathfrak{se}(3)^*$. -/
+structure RneaChainLink where
+  jointAxis           : SpatialTwist6D
+  qDot                : Int
+  linkMomentum        : SpatialWrench6D
+  inertialAccelWrench : SpatialWrench6D
+  deriving DecidableEq, Repr
+
+/-- Alias `LinkDynamicState` for `RneaChainLink`. -/
+abbrev LinkDynamicState := RneaChainLink
+
+/-- Forward kinematic twist propagation across a single joint:
+$$v_i = v_{\lambda(i)} + S_i \dot{q}_i.$$ -/
+def stepForwardLinkTwist (parentTwist : SpatialTwist6D) (link : RneaChainLink) : SpatialTwist6D :=
+  SpatialTwist6D.add parentTwist (SpatialTwist6D.scale link.qDot link.jointAxis)
+
+/-- Forward `RNEA` pass (`forwardChainTwists`): propagates 6D spatial twists $v_1, \dots, v_N$
+from base twist `parentTwist` outward along an $N$-link articulated kinematic chain. -/
+def forwardChainTwists (parentTwist : SpatialTwist6D) : List RneaChainLink → List SpatialTwist6D
+  | [] => []
+  | link :: rest =>
+    let vLink := stepForwardLinkTwist parentTwist link
+    vLink :: forwardChainTwists vLink rest
+
+/-- Evaluates the net rigid-body Euler-Poincaré / Newton-Euler spatial wrench on a link with twist $v$,
+inertial acceleration wrench $f_{\text{inertial}} = I a$, and spatial momentum $p = I v$:
+$$f_{\text{net}} = f_{\text{inertial}} + v \times_f p.$$ -/
+def evalLinkNetWrench
+    (v : SpatialTwist6D) (fInertial pMomentum : SpatialWrench6D) : SpatialWrench6D :=
+  SpatialWrench6D.add fInertial (spatialCrossForce v pMomentum)
+
+/-- Backward `RNEA` pass (`backwardChainWrenches`): accumulates transmitted joint wrenches
+$f_i = f_{\text{net},i} + f_{i+1}$ from distal tip wrench `tipWrench` inward to the base. -/
+def backwardChainWrenches : List (SpatialTwist6D × RneaChainLink) → SpatialWrench6D → List SpatialWrench6D
+  | [], _ => []
+  | (v, link) :: rest, tipWrench =>
+    let childWrenches := backwardChainWrenches rest tipWrench
+    let fChild := childWrenches.headD tipWrench
+    let fNet := evalLinkNetWrench v link.inertialAccelWrench link.linkMomentum
+    SpatialWrench6D.add fNet fChild :: childWrenches
+
+/-- Projects the transmitted spatial joint wrench $f_i \in \mathfrak{se}(3)^*$ onto the joint motion
+subspace axis $S_i \in \mathfrak{se}(3)$ to obtain generalized actuator torque/force $\tau_i = S_i^\top f_i$:
+$$\tau_i = \langle f_i, S_i \rangle.$$ -/
+def evalRneaJointTorque (jointAxis : SpatialTwist6D) (jointWrench : SpatialWrench6D) : Int :=
+  spatialPower jointWrench jointAxis
+
+/-- **Single-Link RNEA Coriolis Power Neutrality (`rnea_link_coriolis_power_neutral`)**:
+For any link with twist $v$, inertial acceleration wrench $f_{\text{inertial}} = I a$, and spatial
+momentum $p = I v$, the virtual mechanical power of the net RNEA wrench
+$f_{\text{net}} = f_{\text{inertial}} + v \times_f p$ equals purely the inertial acceleration power
+$\langle f_{\text{inertial}}, v \rangle$ (the gyroscopic/Coriolis wrench $v \times_f p$ contributes
+identically zero net power!). -/
+theorem rnea_link_coriolis_power_neutral
+    (v : SpatialTwist6D) (fInertial pMomentum : SpatialWrench6D) :
+    spatialPower (evalLinkNetWrench v fInertial pMomentum) v = spatialPower fInertial v := by
+  unfold evalLinkNetWrench
+  rw [spatialPower_bilinear_add_left, rnea_gyroscopic_coriolis_power_zero, Int.add_zero]
+
+/-- Sums the gyroscopic/Coriolis virtual mechanical power $\sum_i \langle v_i \times_f p_i, v_i \rangle$
+across an arbitrary multi-link articulated kinematic chain. -/
+def evalMultiLinkCoriolisPower : List (SpatialTwist6D × SpatialWrench6D) → Int
+  | [] => 0
+  | (v, p) :: rest =>
+    spatialPower (spatialCrossForce v p) v + evalMultiLinkCoriolisPower rest
+
+/-- **Multi-Link Articulated Chain Total Coriolis Power Cancellation (`multi_link_rnea_total_coriolis_power_zero`)**:
+Summing the gyroscopic/Coriolis virtual mechanical power across any arbitrary multi-link articulated
+kinematic chain `chain : List (SpatialTwist6D × SpatialWrench6D)` vanishes identically (`= 0`),
+regardless of the number of links, joint velocities, or link inertias. -/
+theorem multi_link_rnea_total_coriolis_power_zero
+    (chain : List (SpatialTwist6D × SpatialWrench6D)) :
+    evalMultiLinkCoriolisPower chain = 0 := by
+  induction chain with
+  | nil => rfl
+  | cons hd tl ih =>
+    rcases hd with ⟨v, p⟩
+    dsimp only [evalMultiLinkCoriolisPower]
+    rw [rnea_gyroscopic_coriolis_power_zero, ih, Int.add_zero]
+
+/-- Pairs each propagated link twist from `forwardChainTwists` with its link spatial momentum `linkMomentum`
+along an $N$-link articulated kinematic chain. -/
+def forwardChainTwistMomentumPairs (parentTwist : SpatialTwist6D) :
+    List RneaChainLink → List (SpatialTwist6D × SpatialWrench6D)
+  | [] => []
+  | link :: rest =>
+    let vLink := stepForwardLinkTwist parentTwist link
+    (vLink, link.linkMomentum) :: forwardChainTwistMomentumPairs vLink rest
+
+/-- **Forward-Propagated Multi-Link RNEA Coriolis Power Conservation (`forward_chain_rnea_coriolis_power_zero`)**:
+For ANY base twist `parentTwist` and ANY articulated kinematic chain `links : List RneaChainLink`,
+propagating joint velocities outward via `forwardChainTwistMomentumPairs` yields identically zero
+total gyroscopic/Coriolis virtual mechanical power across the entire chain. -/
+theorem forward_chain_rnea_coriolis_power_zero
+    (parentTwist : SpatialTwist6D) (links : List RneaChainLink) :
+    evalMultiLinkCoriolisPower (forwardChainTwistMomentumPairs parentTwist links) = 0 :=
+  multi_link_rnea_total_coriolis_power_zero (forwardChainTwistMomentumPairs parentTwist links)
+
+/-! ## 6. 7-Phase Ruckig Jerk-Limited Trajectory Profile (`RuckigProfile7`, `UDDU` / `UDUD`) -/
+
+/-- Jerk sign sequence (`ControlSigns` in `ruckig/include/ruckig/profile.hpp`, `arXiv:2105.04830`):
+* `.uddu`: Up-Down-Down-Up (`+jMax, 0, -jMax, 0, -jMax, 0, +jMax`),
+* `.udud`: Up-Down-Up-Down (`+jMax, 0, -jMax, 0, +jMax, 0, -jMax`). -/
+inductive RuckigControlSigns where
+  | uddu
+  | udud
+  deriving DecidableEq, Repr
+
+/-- Alias `ControlSigns` matching `ruckig::Profile::ControlSigns`. -/
+abbrev ControlSigns := RuckigControlSigns
+
+/-- Complete 7-segment 3rd-order jerk-limited Ruckig trajectory profile (`arXiv:2105.04830`, Fig. 2). -/
+structure RuckigProfile7 where
+  jMax  : Int
+  t1    : Int
+  t2    : Int
+  t3    : Int
+  t4    : Int
+  t5    : Int
+  t6    : Int
+  t7    : Int
+  signs : RuckigControlSigns
+  deriving DecidableEq, Repr
+
+/-- Integrates all 7 phases of a 3rd-order jerk-limited Ruckig profile starting from `st0`:
+* Phases 1–3 (acceleration profile): `(+jMax, t1) -> (0, t2) -> (-jMax, t3)`,
+* Phase 4 (constant-velocity cruise): `(0, t4)`,
+* Phases 5–7 (deceleration profile):
+  - `.uddu`: `(-jMax, t5) -> (0, t6) -> (+jMax, t7)`,
+  - `.udud`: `(+jMax, t5) -> (0, t6) -> (-jMax, t7)`. -/
+def evalRuckigProfile7
+    (st0 : RuckigState1D) (jMax : Int) (t1 t2 t3 t4 t5 t6 t7 : Int)
+    (signs : RuckigControlSigns) : RuckigState1D :=
+  let st1 := stepRuckigSegment st0 jMax t1
+  let st2 := stepRuckigSegment st1 0 t2
+  let st3 := stepRuckigSegment st2 (-jMax) t3
+  let st4 := stepRuckigSegment st3 0 t4
+  match signs with
+  | .uddu =>
+    let st5 := stepRuckigSegment st4 (-jMax) t5
+    let st6 := stepRuckigSegment st5 0 t6
+    stepRuckigSegment st6 jMax t7
+  | .udud =>
+    let st5 := stepRuckigSegment st4 jMax t5
+    let st6 := stepRuckigSegment st5 0 t6
+    stepRuckigSegment st6 (-jMax) t7
+
+/-- **Exact Closed-Form Identity for Symmetric 7-Phase Rest-to-Rest `UDDU` Ruckig Profile
+(`ruckig_7phase_symmetric_rest_to_rest_identity`)**:
+For any symmetric 7-phase `.uddu` profile with jerk-ramp duration $t_1 = t_3 = t_5 = t_7 = \tau$,
+constant-acceleration hold duration $t_2 = t_6 = \tau_{\text{acc}}$, and constant-velocity cruise
+duration $t_4 = \tau_{\text{cruise}}$, starting from rest $(v_0 = 0, a_0 = 0)$ at position $p_0$:
+1. Final acceleration at the end of phase 7 is identically zero ($a_7 = 0$),
+2. Final velocity at the end of phase 7 is identically zero ($2 v_7 = 0$),
+3. Final scaled position $6 p_7$ equals
+   $$6 p_0 + 6 j_{\max} \tau (\tau + \tau_{\text{acc}})(2\tau + \tau_{\text{acc}} + \tau_{\text{cruise}}).$$ -/
+theorem ruckig_7phase_symmetric_rest_to_rest_identity
+    (p0 jMax tau tAcc tCruise : Int) :
+    let st0 : RuckigState1D := { posScaled6 := p0, velScaled2 := 0, acc := 0 }
+    let st7 := evalRuckigProfile7 st0 jMax tau tAcc tau tCruise tau tAcc tau .uddu
+    st7.acc = 0 ∧
+    st7.velScaled2 = 0 ∧
+    st7.posScaled6 = p0 + 6 * jMax * tau * (tau + tAcc) * (2 * tau + tAcc + tCruise) := by
+  dsimp only [evalRuckigProfile7, stepRuckigSegment]
+  refine ⟨by grind, by grind, by grind⟩
+
+/-- **Ruckig 7-Phase Symmetric Rest-to-Rest Theorem (`ruckig_7phase_symmetric_rest_to_rest`)**:
+For any symmetric 7-phase `UDDU` profile with $t_1 = t_3 = t_5 = t_7 = \tau > 0$,
+$t_2 = t_6 = \tau_{\text{acc}} \ge 0$, $t_4 = \tau_{\text{cruise}} \ge 0$, and $j_{\max} > 0$,
+starting from rest $(v_0 = 0, a_0 = 0)$ reaches exact rest $(v_7 = 0, a_7 = 0)$ at the end of
+phase 7 while strictly advancing position ($p_0 < p_7$). -/
+theorem ruckig_7phase_symmetric_rest_to_rest
+    (p0 jMax tau tAcc tCruise : Int)
+    (hj : 0 < jMax) (hTau : 0 < tau) (hAcc : 0 ≤ tAcc) (hCruise : 0 ≤ tCruise) :
+    let st0 : RuckigState1D := { posScaled6 := p0, velScaled2 := 0, acc := 0 }
+    let st7 := evalRuckigProfile7 st0 jMax tau tAcc tau tCruise tau tAcc tau .uddu
+    st7.acc = 0 ∧ st7.velScaled2 = 0 ∧ p0 < st7.posScaled6 := by
+  have hId := ruckig_7phase_symmetric_rest_to_rest_identity p0 jMax tau tAcc tCruise
+  dsimp only at hId
+  refine ⟨hId.1, hId.2.1, ?_⟩
+  rw [hId.2.2]
+  have h6j : 0 < 6 * jMax := Int.mul_pos (by omega) hj
+  have h6jt : 0 < 6 * jMax * tau := Int.mul_pos h6j hTau
+  have hTauAcc : 0 < tau + tAcc := by omega
+  have hPeakVel : 0 < 6 * jMax * tau * (tau + tAcc) := Int.mul_pos h6jt hTauAcc
+  have hDur : 0 < 2 * tau + tAcc + tCruise := by omega
+  have hDisp : 0 < 6 * jMax * tau * (tau + tAcc) * (2 * tau + tAcc + tCruise) :=
+    Int.mul_pos hPeakVel hDur
+  omega
+
 end Obend.Hardware.Kinematics
 end
+

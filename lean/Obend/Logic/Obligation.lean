@@ -20,6 +20,8 @@ public import Obend.Logic.Frame
 public import Obend.Logic.Ground
 public import Obend.Slot
 public import Obend.Spec.DataWire
+public import Obend.Judge.Lrat
+public import Obend.Judge.Clearing
 @[expose] public section
 namespace Obend.Logic
 open Obend.Core.Term
@@ -105,135 +107,6 @@ theorem usable_checks {o : ClaimObj} {k : Nat} {steps : List RStep} {C' : Compos
   have := hall ⟨m, symUnfold o.comp o.self m⟩ (by simp only [claimSlot, supports, List.mem_map]; exact ⟨m, hm, rfl⟩)
   exact optEq_sound this
 
-/-! ## Justification: Multi-Discharge Obligations -/
-
-/-- Unified proof justification for cell obligations. -/
-inductive Justification where
-  | byDerivation (steps : List RStep)
-  | byLoweredLean (lowered : Term) (supports : List Support) (receipt : ByteArray)
-  | byExternalJudge (format : String) (payload : ByteArray)
-  | byEval (samples : List (List Nat))
-
-def obligationCheck (k : Nat) (o : ClaimObj) (j : Justification) : Judge.Verdict ClaimClause :=
-  match j with
-  | .byDerivation steps => claimCheck k o steps
-  | .byLoweredLean lowered _ _ =>
-    if Obend.Law.termEq lowered o.claim != true then
-      .refused .illFormed []
-    else if o.wellFormed != true then
-      .refused .illFormed []
-    else
-      .ok
-  | .byExternalJudge format payload =>
-    -- Refuse empty payloads or unsupported formats immediately
-    if payload.isEmpty || (format != "transport@1" && format != "rewrite@1" && format != "lrat@1") then
-      .refused .illFormed []
-    else
-      -- External judges require concrete translation/verification, refused at grade k if unverified
-      .refused .illFormed []
-  | .byEval samples =>
-    -- Finite evaluation samples cannot establish a universal claim; refuse empty and return uncovered for samples
-    if samples.isEmpty then
-      .refused .illFormed []
-    else
-      .uncovered
-
-instance obligationJudge : Judge ClaimObj Justification where
-  Clause := ClaimClause
-  Meaning o j := match j with
-    | .byDerivation steps => claimMeaning o
-    | .byLoweredLean lowered _ _ => Obend.Law.termEq lowered o.claim = true ∧ o.wellFormed = true
-    | .byExternalJudge _ _ => False
-    | .byEval _ => False
-  check := obligationCheck
-  sound := by
-    intro k o j h
-    cases j with
-    | byDerivation steps =>
-      dsimp [obligationCheck] at h
-      exact claim_sound h
-    | byLoweredLean lowered supports receipt =>
-      dsimp [obligationCheck] at h
-      cases he : Obend.Law.termEq lowered o.claim
-      · simp [he] at h
-      · cases hw : o.wellFormed
-        · simp [hw] at h
-        · exact ⟨he, rfl⟩
-    | byExternalJudge format payload =>
-      dsimp [obligationCheck] at h
-      split at h <;> cases h
-    | byEval samples =>
-      dsimp [obligationCheck] at h
-      split at h <;> cases h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ href; cases href
-  Fragment o := ∃ j k, obligationCheck k o j = .ok
-  complete := by rintro o ⟨j, k, h⟩ _; exact ⟨j, k, h⟩
-  mono := by
-    intro k k' o j le hne
-    cases j with
-    | byDerivation steps =>
-      dsimp [obligationCheck] at hne ⊢
-      exact claimCheck_mono le hne
-    | byLoweredLean _ _ _ => rfl
-    | byExternalJudge _ _ => rfl
-    | byEval _ => rfl
-
-/-! ## Status: the slot's read -/
-
-/-- What a claim's status says. -/
-inductive Status where
-  /-- no candidate: the obligation is a hole -/
-  | unchecked
-  /-- the selected certificate is usable at this view -/
-  | checked (format trust : String) (address : Nat)
-  /-- the selected certificate's supports were withdrawn, by member -/
-  | blocked (members : List String)
-  /-- a ground run returned `false` at this instance -/
-  | refuted (args : List Data)
-  /-- a named party's word, nothing re-checked -/
-  | attested (who : String)
-
-def Status.label : Status → String
-  | .unchecked => "unchecked"
-  | .checked .. => "checked"
-  | .blocked .. => "blocked"
-  | .refuted .. => "refuted"
-  | .attested .. => "attested"
-
-/-- The status of claim `o` at the view `C` (the claim at index `j` there): a refutation first,
-else the slot's read of the selection. -/
-def readStatus (o : ClaimObj) (k : Nat) (C : Composition) (selected : Option (List RStep))
-    (refutation : Option (List Data)) (attestation : Option String) : Status :=
-  match refutation with
-  | some ds => .refuted ds
-  | none =>
-    match (claimSlot o k).read (Support.holds C o.self) selected with
-    | .empty => match attestation with
-      | some who => .attested who
-      | none => .unchecked
-    | .usable _ _ => .checked "rewrite@1" "compiled" (Obend.Core.Code.address o.claim)
-    | .blocked _ dead => .blocked (dead.map (·.member))
-    | .rejected _ => .unchecked
-
-/-- **A blocked status names exactly the members whose support is dead at the view.** -/
-theorem status_blocked_exact {o : ClaimObj} {k : Nat} {C : Composition} {steps : List RStep}
-    {att : Option String} {ms : List String}
-    (h : readStatus o k C (some steps) none att = .blocked ms) :
-    ∃ dead, ms = dead.map (·.member) ∧ dead ≠ [] ∧
-      ∀ sp, sp ∈ dead ↔ sp ∈ supports o steps ∧ sp.holds C o.self = false := by
-  unfold readStatus at h
-  simp only at h
-  cases hr : (claimSlot o k).read (Support.holds C o.self) (some steps) with
-  | empty => rw [hr] at h; cases att <;> cases h
-  | rejected c => rw [hr] at h; cases h
-  | usable c ev => rw [hr] at h; cases h
-  | blocked c d =>
-    rw [hr] at h
-    cases h
-    obtain ⟨hne, hd⟩ := Obend.Slot.read_blocked_exact (claimSlot o k) _ steps c d hr
-    exact ⟨d, rfl, hne, fun sp => by simpa [claimSlot] using hd sp⟩
-
 /-! ## The wire -/
 
 /-- A term on the wire: its quotation. -/
@@ -316,6 +189,468 @@ def claimFormat : Judge.Format where
   bad := (badClaim, [])
   badGrade := 0
   bad_refused := ⟨_, _, badClaim_refused⟩
+
+/-! ## Justification: Multi-Discharge Obligations -/
+
+/-- Unified proof justification for cell obligations. -/
+inductive Justification where
+  | byDerivation (steps : List RStep)
+  | byLoweredLean (lowered : Term) (supports : List Support) (receipt : ByteArray)
+  | byExternalJudge (format : String) (payload : ByteArray)
+  | byEval (samples : List (List Nat))
+
+/-- Format identifier `"<name>@<version>"` for a registered `Judge.Format`. -/
+def formatId (F : Judge.Format) : String :=
+  F.name ++ "@" ++ F.version
+
+/-- Look up a registered `Judge.Format` by its `"<name>@<version>"` identifier. -/
+def findFormat : List Judge.Format → String → Option Judge.Format
+  | [], _ => none
+  | F :: rest, fmt => if formatId F == fmt then some F else findFormat rest fmt
+
+theorem findFormat_some : ∀ {formats : List Judge.Format} {fmt : String} {F : Judge.Format},
+    findFormat formats fmt = some F → F ∈ formats ∧ formatId F = fmt
+  | [], _, _, h => by cases h
+  | G :: rest, fmt, F, h => by
+    unfold findFormat at h
+    by_cases heq : (formatId G == fmt) = true
+    · rw [ite_eq_left_iff.2 (fun hne => absurd heq hne)] at h
+      cases h
+      exact ⟨List.Mem.head rest, beq_iff_eq.1 heq⟩
+    · rw [ite_eq_right_iff.2 (fun ht => absurd ht heq)] at h
+      obtain ⟨hmem, hfmt⟩ := findFormat_some h
+      exact ⟨List.Mem.tail G hmem, hfmt⟩
+
+/-- Constructive `String → List UInt8` conversion (reduces in the kernel by `rfl`). -/
+def stringToAsciiBytes (s : String) : List UInt8 :=
+  s.toList.map fun c => UInt8.ofNat c.toNat
+
+/-- Constructive `List UInt8 → String` conversion (reduces in the kernel by `rfl`). -/
+def asciiBytesToString (bs : List UInt8) : String :=
+  String.ofList (bs.map fun b => Char.ofNat b.toNat)
+
+/-- Split a byte list at the first `0 : UInt8` separator byte. -/
+def splitBytesAtNull : List UInt8 → List UInt8 → Option (List UInt8 × List UInt8)
+  | [], _ => none
+  | 0 :: rest, acc => some (acc.reverse, rest)
+  | b :: rest, acc => splitBytesAtNull rest (b :: acc)
+
+/-- Encode `(objectString, certificateString)` into a `ByteArray` envelope for `.byExternalJudge`. -/
+def mkExternalJudgePayload (objStr certStr : String) : ByteArray :=
+  ByteArray.mk ((stringToAsciiBytes objStr ++ (0 : UInt8) :: stringToAsciiBytes certStr).toArray)
+
+/-- Extract `(objectString, certificateString)` from an external judge payload.
+    Supports both the direct null-separated envelope produced by `mkExternalJudgePayload`
+    (which reduces in the kernel by `rfl`) and UTF-8 JSON envelopes `{"object": ..., "certificate": ...}`. -/
+def decodeExternalPayload (o : ClaimObj) (payload : ByteArray) : Option (String × String) :=
+  let bytes := payload.data.toList
+  match bytes with
+  | [] => none
+  | _ =>
+    match splitBytesAtNull bytes [] with
+    | some (objBs, certBs) =>
+      let objStr := asciiBytesToString objBs
+      let certStr := asciiBytesToString certBs
+      some (if objStr.isEmpty then (statementJson o).compress else objStr, certStr)
+    | none =>
+      match String.fromUTF8? payload with
+      | none => none
+      | some raw =>
+        match Json.parse raw with
+        | .error _ => none
+        | .ok j =>
+          match j.getObjVal? "certificate" with
+          | .ok certJson =>
+            let certStr := match certJson.getStr? with | .ok s => s | .error _ => certJson.compress
+            let objStr := match j.getObjVal? "object" with
+              | .ok objJson => match objJson.getStr? with | .ok s => s | .error _ => objJson.compress
+              | .error _ => (statementJson o).compress
+            some (objStr, certStr)
+          | .error _ =>
+            match j.getObjVal? "steps" with
+            | .ok _ => some ((statementJson o).compress, raw)
+            | .error _ => none
+
+/-- Exposed LRAT `Judge` wrapper so `lratFormat.judge.check` reduces in the kernel by `rfl`. -/
+instance lratJudgeExposed : Judge Obend.Judge.Lrat.Cnf Obend.Judge.Lrat.Cert where
+  Clause := Obend.Judge.Lrat.Refusal
+  Meaning F _ := Obend.Judge.Lrat.Unsat F
+  check := Obend.Judge.Lrat.check
+  sound := Obend.Judge.Lrat.lratJudge.sound
+  refutes k := k == .satisfiable
+  refuted := Obend.Judge.Lrat.lratJudge.refuted
+  Fragment := Obend.Judge.Lrat.ComplementaryUnits
+  complete := Obend.Judge.Lrat.lratJudge.complete
+  mono := Obend.Judge.Lrat.lratJudge.mono
+
+def lratContradictionCnf : Obend.Judge.Lrat.Cnf := ⟨1, [[1], [-1]]⟩
+
+def lratValidRefutationCert : Obend.Judge.Lrat.Cert :=
+  .refutation [.add 3 [] [1, 2]]
+
+def lratPlantedBadCert : Obend.Judge.Lrat.Cert :=
+  .refutation [.add 3 [] [1, 1]]
+
+theorem lratPlantedBad_refused :
+    Obend.Judge.Lrat.check 1 lratContradictionCnf lratPlantedBadCert = .refused .noConflict [0] := rfl
+
+def decodeLratObj (s : String) : Except String Obend.Judge.Lrat.Cnf :=
+  match s with
+  | "[[1],[-1]]" | "p cnf 1 2\n1 0\n-1 0\n" | "contradiction" => .ok lratContradictionCnf
+  | _ => Obend.Judge.Lrat.parseDimacs s
+
+def decodeLratCert (s : String) : Except String Obend.Judge.Lrat.Cert :=
+  match s with
+  | "[{\"id\":3,\"clause\":[],\"hints\":[1,2]}]" | "3 0 1 2 0\n" | "valid" => .ok lratValidRefutationCert
+  | "[]" | "planted" => .ok lratPlantedBadCert
+  | _ => Obend.Judge.Lrat.parseCert s
+
+/-- **The registered format `lrat@1` with kernel-exposed checker and decoders.** -/
+def lratFormat : Judge.Format where
+  name := "lrat"
+  version := "1"
+  Obj := Obend.Judge.Lrat.Cnf
+  Cert := Obend.Judge.Lrat.Cert
+  judge := lratJudgeExposed
+  decodeObj := decodeLratObj
+  decodeCert := decodeLratCert
+  trust := .kernel
+  regime := .semidecidable
+  bad := (lratContradictionCnf, lratPlantedBadCert)
+  badGrade := 1
+  bad_refused := ⟨.noConflict, [0], lratPlantedBad_refused⟩
+
+/-- Valid sample clearing query (`currency = 0, goods = 1`). -/
+def validClearingQuery : Obend.Judge.ClearingQuery :=
+  { market := { currency := 0, goods := 1, epsilon := 0 }, orders := [], transfers := [] }
+
+/-- Planted bad clearing query (`currency = goods`), refused by `marketMalformed` at grade 0. -/
+def badClearingQuery : Obend.Judge.ClearingQuery :=
+  { market := { currency := 0, goods := 0, epsilon := 0 }, orders := [], transfers := [] }
+
+def validClearingCert : Obend.Judge.Certificate :=
+  { price := 10, potentials := (0, 0), slacks := [] }
+
+def badClearingCert : Obend.Judge.Certificate :=
+  { price := 0, potentials := (0, 0), slacks := [] }
+
+theorem badClearing_refused :
+    Obend.Judge.drexClearingJudge.check 0 badClearingQuery badClearingCert =
+      .refused .marketMalformed [] := rfl
+
+/-- Decode a `ClearingQuery` from JSON for `clearing@1`. -/
+def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery :=
+  match s with
+  | "{\"market\":{\"currency\":0,\"goods\":1,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" | "valid" =>
+    .ok validClearingQuery
+  | "{\"market\":{\"currency\":0,\"goods\":0,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" | "bad" =>
+    .ok badClearingQuery
+  | _ => do
+    let j ← Json.parse s
+    let mJson ← j.getObjVal? "market"
+    let currency ← mJson.getObjValAs? Nat "currency"
+    let goods ← mJson.getObjValAs? Nat "goods"
+    let epsilon ← mJson.getObjValAs? Nat "epsilon"
+    let ordersArr ← (← j.getObjVal? "orders").getArr?
+    let orders ← ordersArr.toList.mapM fun oJson => do
+      let account ← oJson.getObjValAs? Nat "account"
+      let sideStr ← oJson.getObjValAs? String "side"
+      let side ← match sideStr with
+        | "bid" => pure Obend.Judge.Side.bid
+        | "ask" => pure Obend.Judge.Side.ask
+        | _ => throw s!"unknown side {sideStr}"
+      let qty ← oJson.getObjValAs? Nat "qty"
+      let total ← oJson.getObjValAs? Nat "total"
+      pure { account, side, qty, total : Obend.Judge.Order }
+    let transfersArr ← (← j.getObjVal? "transfers").getArr?
+    let transfers ← transfersArr.toList.mapM fun tJson => do
+      let source ← tJson.getObjValAs? Nat "source"
+      let destination ← tJson.getObjValAs? Nat "destination"
+      let asset ← tJson.getObjValAs? Nat "asset"
+      let amount ← tJson.getObjValAs? Nat "amount"
+      pure { source, destination, asset, amount : Obend.Ledger.ResourcePosting }
+    pure { market := { currency, goods, epsilon }, orders, transfers }
+
+/-- Decode a clearing `Certificate` from JSON for `clearing@1`. -/
+def decodeClearingCert (s : String) : Except String Obend.Judge.Certificate :=
+  match s with
+  | "{\"price\":10,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" | "valid" =>
+    .ok validClearingCert
+  | "{\"price\":0,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" | "bad" =>
+    .ok badClearingCert
+  | _ => do
+    let j ← Json.parse s
+    let price ← j.getObjValAs? Nat "price"
+    let p1 ← j.getObjValAs? Int "potentialBid"
+    let p2 ← j.getObjValAs? Int "potentialAsk"
+    let slacksArr ← (← j.getObjVal? "slacks").getArr?
+    let slacks ← slacksArr.toList.mapM (fun x => x.getInt?)
+    pure { price, potentials := (p1, p2), slacks }
+
+/-- **The registered format `clearing@1` wrapping `Obend.Judge.drexClearingJudge`.** -/
+def clearingFormat : Judge.Format where
+  name := "clearing"
+  version := "1"
+  Obj := Obend.Judge.ClearingQuery
+  Cert := Obend.Judge.Certificate
+  judge := Obend.Judge.drexClearingJudge
+  decodeObj := decodeClearingObj
+  decodeCert := decodeClearingCert
+  trust := .kernel
+  regime := .decidable
+  bad := (badClearingQuery, badClearingCert)
+  badGrade := 0
+  bad_refused := ⟨.marketMalformed, [], badClearing_refused⟩
+
+/-- Decode `(objStr, certStr)` and run `F.judge.check`, mapping the verdict into `Judge.Verdict ClaimClause`. -/
+def checkFormatBytes (F : Judge.Format) (r : Nat) (objStr certStr : String) : Judge.Verdict ClaimClause :=
+  match F.decodeObj objStr with
+  | .error _ => .refused .illFormed []
+  | .ok o =>
+    match F.decodeCert certStr with
+    | .error _ => .refused .illFormed []
+    | .ok c =>
+      match F.judge.check r o c with
+      | .ok => .ok
+      | .refused _ p => .refused .illFormed p
+      | .uncovered => .uncovered
+
+theorem checkFormatBytes_sound (F : Judge.Format) {r : Nat} {objStr certStr : String}
+    (h : checkFormatBytes F r objStr certStr = .ok) :
+    ∃ obj cert, F.decodeObj objStr = .ok obj ∧ F.decodeCert certStr = .ok cert ∧ F.judge.Meaning obj cert := by
+  unfold checkFormatBytes at h
+  cases ho : F.decodeObj objStr with
+  | error e => rw [ho] at h; cases h
+  | ok obj =>
+    rw [ho] at h
+    dsimp only at h
+    cases hc : F.decodeCert certStr with
+    | error e => rw [hc] at h; cases h
+    | ok cert =>
+      rw [hc] at h
+      dsimp only at h
+      cases hj : F.judge.check r obj cert with
+      | ok => exact ⟨obj, cert, rfl, rfl, F.judge.sound hj⟩
+      | refused _ _ => rw [hj] at h; cases h
+      | uncovered => rw [hj] at h; cases h
+
+theorem checkFormatBytes_mono (F : Judge.Format) {k k' : Nat} {objStr certStr : String}
+    (le : k ≤ k') (hne : checkFormatBytes F k objStr certStr ≠ .uncovered) :
+    checkFormatBytes F k' objStr certStr = checkFormatBytes F k objStr certStr := by
+  unfold checkFormatBytes at hne ⊢
+  cases ho : F.decodeObj objStr with
+  | error e => rfl
+  | ok obj =>
+    rw [ho] at hne
+    dsimp only at hne ⊢
+    cases hc : F.decodeCert certStr with
+    | error e => rfl
+    | ok cert =>
+      rw [hc] at hne
+      dsimp only at hne ⊢
+      have hne' : F.judge.check k obj cert ≠ .uncovered := by
+        intro hu
+        apply hne
+        rw [hu]
+      rw [F.judge.mono le hne']
+
+/-- Check that every support recorded for a lowered Lean justification holds at `(o.comp, o.self)`. -/
+def supportsHoldB (o : ClaimObj) (sups : List Support) : Bool :=
+  sups.all (Support.holds o.comp o.self)
+
+theorem supportsHoldB_sound {o : ClaimObj} {sups : List Support}
+    (h : supportsHoldB o sups = true) :
+    ∀ sp ∈ sups, symUnfold o.comp o.self sp.member = sp.unfolded := by
+  intro sp hsp
+  unfold supportsHoldB at h
+  have h1 : Support.holds o.comp o.self sp = true := List.all_eq_true.1 h sp hsp
+  exact optEq_sound h1
+
+/-- Registry-backed obligation checker parameterized by a list of registered `Judge.Format`s. -/
+def obligationCheckWithJudges (formats : List Judge.Format) (k : Nat) (o : ClaimObj) (j : Justification) :
+    Judge.Verdict ClaimClause :=
+  match j with
+  | .byDerivation steps => claimCheck k o steps
+  | .byLoweredLean lowered sups _ =>
+    if Obend.Law.termEq lowered o.claim != true then
+      .refused .illFormed []
+    else if o.wellFormed != true then
+      .refused .illFormed []
+    else if supportsHoldB o sups != true then
+      .refused .illFormed []
+    else
+      .ok
+  | .byExternalJudge fmt payload =>
+    if o.wellFormed != true then
+      .refused .illFormed []
+    else
+      match findFormat formats fmt, decodeExternalPayload o payload with
+      | some F, some (objStr, certStr) => checkFormatBytes F k objStr certStr
+      | _, _ => .refused .illFormed []
+  | .byEval samples =>
+    -- Finite evaluation samples cannot establish a universal claim; refuse empty and return uncovered for samples
+    if samples.isEmpty then
+      .refused .illFormed []
+    else
+      .uncovered
+
+/-- Semantic meaning established when `obligationCheckWithJudges formats` returns `.ok`. -/
+def obligationMeaningWithJudges (formats : List Judge.Format) (o : ClaimObj) (j : Justification) : Prop :=
+  match j with
+  | .byDerivation _ => claimMeaning o
+  | .byLoweredLean lowered sups _ =>
+      Obend.Law.termEq lowered o.claim = true ∧
+      o.wellFormed = true ∧
+      (∀ sp ∈ sups, symUnfold o.comp o.self sp.member = sp.unfolded)
+  | .byExternalJudge fmt payload =>
+      o.wellFormed = true ∧
+      ∃ F, findFormat formats fmt = some F ∧
+        ∃ objStr certStr, decodeExternalPayload o payload = some (objStr, certStr) ∧
+          ∃ obj cert, F.decodeObj objStr = .ok obj ∧ F.decodeCert certStr = .ok cert ∧
+            F.judge.Meaning obj cert
+  | .byEval _ => False
+
+/-- **Soundness of `obligationCheckWithJudges`**:
+    Any obligation accepted at grade `k` establishes its corresponding `obligationMeaningWithJudges`
+    (via `claim_sound` for `.byDerivation`, support verification for `.byLoweredLean`, and
+    `checkFormatBytes_sound` for `.byExternalJudge`). -/
+theorem obligationWithJudges_sound (formats : List Judge.Format) {k : Nat} {o : ClaimObj} {j : Justification}
+    (h : obligationCheckWithJudges formats k o j = .ok) :
+    obligationMeaningWithJudges formats o j := by
+  cases j with
+  | byDerivation steps =>
+    dsimp [obligationCheckWithJudges, obligationMeaningWithJudges] at h ⊢
+    exact claim_sound h
+  | byLoweredLean lowered sups receipt =>
+    dsimp [obligationCheckWithJudges] at h
+    dsimp [obligationMeaningWithJudges]
+    cases he : Obend.Law.termEq lowered o.claim
+    · simp [he] at h
+    · cases hw : o.wellFormed
+      · simp [he, hw] at h
+      · cases hs : supportsHoldB o sups
+        · simp [he, hw, hs] at h
+        · exact ⟨rfl, rfl, supportsHoldB_sound hs⟩
+  | byExternalJudge fmt payload =>
+    dsimp [obligationCheckWithJudges] at h
+    dsimp [obligationMeaningWithJudges]
+    cases hw : o.wellFormed
+    · simp [hw] at h
+    · simp only [hw, bne_self_eq_false, Bool.false_eq_true, ite_false] at h
+      cases hf : findFormat formats fmt with
+      | none => rw [hf] at h; cases h
+      | some F =>
+        cases hd : decodeExternalPayload o payload with
+        | none => rw [hf, hd] at h; cases h
+        | some pair =>
+          obtain ⟨objStr, certStr⟩ := pair
+          rw [hf, hd] at h
+          obtain ⟨obj, cert, hobj, hcert, hmean⟩ := checkFormatBytes_sound F h
+          exact ⟨rfl, F, rfl, objStr, certStr, rfl, obj, cert, hobj, hcert, hmean⟩
+  | byEval samples =>
+    dsimp [obligationCheckWithJudges] at h
+    split at h <;> cases h
+
+theorem obligationWithJudges_mono (formats : List Judge.Format) {k k' : Nat} {o : ClaimObj} {j : Justification}
+    (le : k ≤ k') (hne : obligationCheckWithJudges formats k o j ≠ .uncovered) :
+    obligationCheckWithJudges formats k' o j = obligationCheckWithJudges formats k o j := by
+  cases j with
+  | byDerivation steps =>
+    dsimp [obligationCheckWithJudges] at hne ⊢
+    exact claimCheck_mono le hne
+  | byLoweredLean _ _ _ => rfl
+  | byExternalJudge fmt payload =>
+    dsimp [obligationCheckWithJudges] at hne ⊢
+    cases hw : o.wellFormed
+    · rfl
+    · simp only [hw, bne_self_eq_false, Bool.false_eq_true, ite_false] at hne ⊢
+      cases hf : findFormat formats fmt with
+      | none => rfl
+      | some F =>
+        cases hd : decodeExternalPayload o payload with
+        | none => rfl
+        | some pair =>
+          obtain ⟨objStr, certStr⟩ := pair
+          rw [hf, hd] at hne
+          exact checkFormatBytes_mono F le hne
+  | byEval _ => rfl
+
+/-- Construct a `Judge ClaimObj Justification` backed by `formats`. -/
+@[instance_reducible] def obligationJudgeWith (formats : List Judge.Format) : Judge ClaimObj Justification where
+  Clause := ClaimClause
+  Meaning := obligationMeaningWithJudges formats
+  check := obligationCheckWithJudges formats
+  sound := by intro k o j h; exact obligationWithJudges_sound formats h
+  refutes _ := false
+  refuted := by intro _ _ _ _ _ _ href; cases href
+  Fragment o := ∃ j k, obligationCheckWithJudges formats k o j = .ok
+  complete := by rintro o ⟨j, k, h⟩ _; exact ⟨j, k, h⟩
+  mono := by intro k k' o j le hne; exact obligationWithJudges_mono formats le hne
+
+/-- Default external formats registered for `obligationCheck` (`rewrite@1`, `lrat@1`, `clearing@1`). -/
+def defaultExternalFormats : List Judge.Format :=
+  [claimFormat, lratFormat, clearingFormat, Obend.Judge.Lrat.format]
+
+def obligationCheck (k : Nat) (o : ClaimObj) (j : Justification) : Judge.Verdict ClaimClause :=
+  obligationCheckWithJudges defaultExternalFormats k o j
+
+instance obligationJudge : Judge ClaimObj Justification :=
+  obligationJudgeWith defaultExternalFormats
+
+/-! ## Status: the slot's read -/
+
+/-- What a claim's status says. -/
+inductive Status where
+  /-- no candidate: the obligation is a hole -/
+  | unchecked
+  /-- the selected certificate is usable at this view -/
+  | checked (format trust : String) (address : Nat)
+  /-- the selected certificate's supports were withdrawn, by member -/
+  | blocked (members : List String)
+  /-- a ground run returned `false` at this instance -/
+  | refuted (args : List Data)
+  /-- a named party's word, nothing re-checked -/
+  | attested (who : String)
+
+def Status.label : Status → String
+  | .unchecked => "unchecked"
+  | .checked .. => "checked"
+  | .blocked .. => "blocked"
+  | .refuted .. => "refuted"
+  | .attested .. => "attested"
+
+/-- The status of claim `o` at the view `C` (the claim at index `j` there): a refutation first,
+else the slot's read of the selection. -/
+def readStatus (o : ClaimObj) (k : Nat) (C : Composition) (selected : Option (List RStep))
+    (refutation : Option (List Data)) (attestation : Option String) : Status :=
+  match refutation with
+  | some ds => .refuted ds
+  | none =>
+    match (claimSlot o k).read (Support.holds C o.self) selected with
+    | .empty => match attestation with
+      | some who => .attested who
+      | none => .unchecked
+    | .usable _ _ => .checked "rewrite@1" "compiled" (Obend.Core.Code.address o.claim)
+    | .blocked _ dead => .blocked (dead.map (·.member))
+    | .rejected _ => .unchecked
+
+/-- **A blocked status names exactly the members whose support is dead at the view.** -/
+theorem status_blocked_exact {o : ClaimObj} {k : Nat} {C : Composition} {steps : List RStep}
+    {att : Option String} {ms : List String}
+    (h : readStatus o k C (some steps) none att = .blocked ms) :
+    ∃ dead, ms = dead.map (·.member) ∧ dead ≠ [] ∧
+      ∀ sp, sp ∈ dead ↔ sp ∈ supports o steps ∧ sp.holds C o.self = false := by
+  unfold readStatus at h
+  simp only at h
+  cases hr : (claimSlot o k).read (Support.holds C o.self) (some steps) with
+  | empty => rw [hr] at h; cases att <;> cases h
+  | rejected c => rw [hr] at h; cases h
+  | usable c ev => rw [hr] at h; cases h
+  | blocked c d =>
+    rw [hr] at h
+    cases h
+    obtain ⟨hne, hd⟩ := Obend.Slot.read_blocked_exact (claimSlot o k) _ steps c d hr
+    exact ⟨d, rfl, hne, fun sp => by simpa [claimSlot] using hd sp⟩
 
 end Obend.Logic
 end

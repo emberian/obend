@@ -934,11 +934,86 @@ def decodeBinaryCborCert (s : String) : Except String BinaryHwCert := do
     | none => .error "invalid RFC 8949 CBOR BinaryHwCert frame"
   | none => .error "invalid hex-encoded CBOR byte stream"
 
-/-- Direct raw-byte binary CBOR judge entry point (no JSON, no hex string). -/
+/-- Judge check function for variable-length RFC 8949 CBOR tape/mesh certificates (`BinaryTapeCert`). -/
+def checkBinaryTapeCert (_grade : Nat) (expectedDom : HwCertDomain) (cert : BinaryTapeCert) : Verdict HwClause :=
+  if (cert.domain == expectedDom) && verifyBinaryTapeCert cert then
+    .ok
+  else
+    .refused (.binaryCborCertViolation cert.domain.toCode) []
+
+theorem checkBinaryTapeCert_sound {grade : Nat} {expectedDom : HwCertDomain} {cert : BinaryTapeCert}
+    (h : checkBinaryTapeCert grade expectedDom cert = .ok) :
+    ((cert.domain == expectedDom) && verifyBinaryTapeCert cert) = true := by
+  unfold checkBinaryTapeCert at h
+  by_cases hOk : ((cert.domain == expectedDom) && verifyBinaryTapeCert cert) = true
+  · exact hOk
+  · simp [hOk] at h
+
+instance binaryTapeJudge : Obend.Judge HwCertDomain BinaryTapeCert where
+  Clause := HwClause
+  Meaning expectedDom cert := ((cert.domain == expectedDom) && verifyBinaryTapeCert cert) = true
+  check := checkBinaryTapeCert
+  sound := by
+    intro _ _ _ h
+    exact checkBinaryTapeCert_sound h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkBinaryTapeCert, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+def badBinaryTapeCert : BinaryTapeCert :=
+  { goldenBinaryFemmTapeCert with metric0 := 999 }
+
+theorem badBinaryTapeCert_refused :
+    checkBinaryTapeCert 0 .magnetics badBinaryTapeCert =
+      .refused (.binaryCborCertViolation 10) [] := by
+  decide +kernel
+
+def decodeBinaryTapeCertHex (s : String) : Except String BinaryTapeCert := do
+  let trimmed := s.trimAscii.toString
+  match decodeHexChars trimmed.toList with
+  | some rawBytes =>
+    match decodeBinaryTapeCert rawBytes with
+    | some cert => .ok cert
+    | none => .error "invalid RFC 8949 CBOR BinaryTapeCert frame"
+  | none => .error "invalid hex-encoded CBOR byte stream"
+
+def binaryTapeFormat : Format where
+  name        := "hw-binary-tape-cbor"
+  version     := "1"
+  Obj         := HwCertDomain
+  Cert        := BinaryTapeCert
+  judge       := binaryTapeJudge
+  decodeObj   := decodeBinaryCborObj
+  decodeCert  := decodeBinaryTapeCertHex
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (.magnetics, badBinaryTapeCert)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badBinaryTapeCert_refused⟩
+
+theorem binaryTapeFormat_sound {r : Nat} {obj cert : String}
+    (h : binaryTapeFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeBinaryCborObj obj = .ok o ∧ decodeBinaryTapeCertHex cert = .ok c ∧
+      ((c.domain == o) && verifyBinaryTapeCert c) = true :=
+  binaryTapeFormat.checkBytes_sound h
+
+/-- Direct raw-byte binary CBOR judge entry point (supports both 39-byte `BinaryHwCert` `0x87`
+    and variable-length `BinaryTapeCert` `0x9A` frames, with zero JSON). -/
 def verifyRawBinaryCborCert (expectedDom : HwCertDomain) (raw : ByteArray) : Verdict HwClause :=
   match decodeFromByteArray (α := BinaryHwCert) raw with
   | some cert => checkBinaryCborJudge 0 expectedDom cert
-  | none => .refused (.binaryCborCertViolation expectedDom.toCode) []
+  | none =>
+    match decodeFromByteArray (α := BinaryTapeCert) raw with
+    | some tapeCert => checkBinaryTapeCert 0 expectedDom tapeCert
+    | none => .refused (.binaryCborCertViolation expectedDom.toCode) []
 
 /-- Registered `Obend.Judge.Format` for `hw-binary-cbor@1`. -/
 def binaryCborFormat : Format where
@@ -961,7 +1036,7 @@ theorem binaryCborFormat_sound {r : Nat} {obj cert : String}
       ((c.domain == o) && verifyBinaryHwCert c) = true :=
   binaryCborFormat.checkBytes_sound h
 
-/-- Complete list of 11 registered hardware, FabuBlox, `wafer.space`, datasheet-fit, RF, photonics, PCB, agentic EDA, and binary CBOR formats. -/
+/-- Complete list of registered hardware, FabuBlox, `wafer.space`, datasheet-fit, RF, photonics, PCB, agentic EDA, and binary CBOR formats. -/
 def hardwareFormats : List Format :=
   [ hwSynthFormat
   , hwRetimeFormat
@@ -973,7 +1048,8 @@ def hardwareFormats : List Format :=
   , photonicsPicFormat
   , pcbBoardFormat
   , agenticEdaFormat
-  , binaryCborFormat ]
+  , binaryCborFormat
+  , binaryTapeFormat ]
 
 /-- Look up a hardware certificate format by `name@version` string (e.g. `"hw-pnr-bitstream@1"`). -/
 def findHardwareFormat? (tag : String) : Option Format :=

@@ -20,6 +20,7 @@ Provides CLI commands for hardware synthesis, Leiserson–Saxe retiming, physica
 -/
 public import Lean.Data.Json
 public import Obend.Hardware.Judge
+public import Obend.Hardware.UserspacePhysical
 @[expose] public section
 
 namespace Obend.Hardware.Cli
@@ -200,7 +201,7 @@ def cmdEdaVaultCheck (args : List String) : IO UInt32 := do
     IO.println s!"wrote {outPath}"
   verifyHardware recJson
 
-/-- Run `hw-binary-cbor@1` binary CBOR certificate encode/decode/verify and `.obnb` projection (NO JSON). -/
+/-- Run `hw-binary-cbor@1` / `hw-binary-tape-cbor@1` binary CBOR certificate encode/decode/verify and `.obnb` projection (NO JSON). -/
 def cmdVerifyCbor (args : List String) : IO UInt32 := do
   let (domOpt, args1)  := extractFlag "--domain" args
   let (modeOpt, args2) := extractFlag "--mode" args1
@@ -230,9 +231,18 @@ def cmdVerifyCbor (args : List String) : IO UInt32 := do
     | _ =>
       if mode == "corrupt" then badBinaryPnrCert
       else Obend.Hardware.Codec.goldenBinaryPnrCert
+  let defaultBytes : ByteArray :=
+    if mode == "tape" then
+      let tapeCert := match expectedDom with
+        | .mechanicsVonNeumann => Obend.Hardware.Codec.goldenBinaryOctreeTapeCert
+        | .fluidThermal => Obend.Hardware.Codec.goldenBinaryEvolutionTapeCert
+        | _ => Obend.Hardware.Codec.goldenBinaryFemmTapeCert
+      Obend.Hardware.Codec.encodeToByteArray tapeCert
+    else
+      Obend.Hardware.Codec.encodeToByteArray baseCert
   let rawBytes : ByteArray ← match binInOpt with
     | some inPath => IO.FS.readBinFile inPath
-    | none => pure (Obend.Hardware.Codec.encodeToByteArray baseCert)
+    | none => pure defaultBytes
   if let some outBinPath := binOutOpt then
     IO.FS.writeBinFile outBinPath rawBytes
     IO.println s!"wrote binary CBOR ({rawBytes.size} bytes) to {outBinPath}"
@@ -251,6 +261,37 @@ def cmdVerifyCbor (args : List String) : IO UInt32 := do
     IO.eprintln s!"uncovered: binary CBOR certificate obligations uncovered (domain={domName})"
     return 3
 
+/-- Compile a userspace `.obend` physical engineering `Composition` via `compileBookToRtl`
+    and emit synthesizable SystemVerilog-2012 via `emitModuleSV`. -/
+def cmdEmitSv (args : List String) : IO UInt32 := do
+  let (modOpt, args1) := extractFlag "--module" args
+  let (outOpt, _)     := extractFlag "--out" args1
+  let modChoice := modOpt.getD "lc_drives_stator"
+  let (modName, comp) :=
+    if modChoice == "cnc_5axis_mill" || modChoice == "cnc_5axis_userspace_mill" then
+      ("cnc_5axis_userspace_mill", Obend.Hardware.UserspacePhysical.cnc5AxisMillComp)
+    else
+      ("lc_drives_userspace_stator", Obend.Hardware.UserspacePhysical.lcDrivesStatorUsdComp)
+  match Obend.Hardware.Compiler.compileBookToRtl modName (Obend.Leaf.emit comp) with
+  | none =>
+    IO.eprintln s!"refused: failed to compile {modName} to RtlModule"
+    return 3
+  | some m =>
+    if !Obend.Hardware.HDL.checkRtlModule m then
+      IO.eprintln s!"refused: synthesized RtlModule {m.name} failed DAG/CDC check"
+      return 3
+    else
+      let svText := "/* verilator lint_off UNUSED */\n/* verilator lint_off DECLFILENAME */\n" ++
+        Obend.Hardware.HDL.emitModuleSV m
+      match outOpt with
+      | some outPath =>
+        IO.FS.writeFile outPath svText
+        IO.println s!"wrote synthesized SystemVerilog module {m.name} ({m.wires.length} wires, {m.outputs.length} outputs) to {outPath}"
+        return 0
+      | none =>
+        IO.print svText
+        return 0
+
 /-- CLI entry point for `obend hardware ...` and `obend fabublox ...`. -/
 public def main? : List String → Option (IO UInt32)
   | "hardware" :: "verify-pnr" :: rest         => some (cmdVerifyPnr rest)
@@ -262,6 +303,8 @@ public def main? : List String → Option (IO UInt32)
   | "hardware" :: "pcb-signoff" :: rest        => some (cmdPcbSignoff rest)
   | "hardware" :: "eda-vault-check" :: rest    => some (cmdEdaVaultCheck rest)
   | "hardware" :: "verify-cbor" :: rest        => some (cmdVerifyCbor rest)
+  | "hardware" :: "verify-tape-cbor" :: rest   => some (cmdVerifyCbor ("--mode" :: "tape" :: rest))
+  | "hardware" :: "emit-sv" :: rest            => some (cmdEmitSv rest)
   | "fabublox" :: "check" :: rest              => some (cmdFabuBloxCheck rest)
   | _ => none
 
