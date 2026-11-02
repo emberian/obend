@@ -37,18 +37,37 @@ structure LayoutEnv where
   arity : Nat
   deriving DecidableEq, Repr
 
-/-- Structural byte-list equality on `String` (avoids `String.decEq` / `Classical.choice`). -/
+/-- Structural byte-index comparison helper for `ByteArray` (`0 Classical.choice`). -/
+def byteArrayEqAux (a b : ByteArray) : Nat → Bool
+  | 0 => true
+  | k + 1 =>
+    let ba := if h : k < a.size then a[k]'h else 0
+    let bb := if h : k < b.size then b[k]'h else 0
+    (ba == bb) && byteArrayEqAux a b k
+
+/-- Structural byte-level equality on `String` (avoids `Array.toList` / `Classical.choice`). -/
 def strEq (a b : String) : Bool :=
-  List.beq a.toUTF8.data.toList b.toUTF8.data.toList
+  let ba := a.toUTF8
+  let bb := b.toUTF8
+  (ba.size == bb.size) && byteArrayEqAux ba bb ba.size
 
 /-- Structural lookup by `strEq`. -/
 def lookupByStr {α : Type} (k : String) : List (String × α) → Option α
   | [] => none
   | (m, v) :: rest => if strEq k m then some v else lookupByStr k rest
 
+/-- Structural byte-index accumulator for `labelToNat` (`0 Classical.choice`). -/
+def labelToNatAux (b : ByteArray) : Nat → Nat → Nat
+  | 0, acc => acc
+  | k + 1, acc =>
+    let idx := b.size - (k + 1)
+    let byte := if h : idx < b.size then (b[idx]'h).toNat else 0
+    labelToNatAux b k (acc * 257 + byte + 1)
+
 /-- Deterministic numeric encoding of surface labels for `.label`, `.inject`, and `.case`. -/
 def labelToNat (s : String) : Nat :=
-  s.toUTF8.data.toList.foldl (fun acc b => acc * 257 + b.toNat + 1) 0
+  let b := s.toUTF8
+  labelToNatAux b b.size 0
 
 /-- Structural insertion helper for `canonicalizeFields` (avoids `Array.qsort` / `Classical.choice`). -/
 def insertFieldByLayout (env : LayoutEnv) (x : String × LExpr) : List (String × LExpr) → List (String × LExpr)
@@ -311,6 +330,19 @@ theorem lowerTerm_inject_case_skip_steps (tag armTag : String) (payloadLow bodyL
   rw [heval]
   exact .next (.boolRecFalse .emptyRow _ _) (.refl _)
 
+/-- Constructive reflexivity of `==` from `DecidableEq` without `String.instLawfulBEq`. -/
+theorem beq_refl_of_decEq (m : String) : (m == m) = true := by
+  show @Decidable.decide (m = m) (instDecidableEqString m m) = true
+  cases instDecidableEqString m m with
+  | isFalse h => exact False.elim (h rfl)
+  | isTrue _ => rfl
+
+/-- Constructive head match for `List.find?`. -/
+theorem find?_cons_head {α : Type} (p : α → Bool) (x : α) (xs : List α) (h : p x = true) :
+    List.find? p (x :: xs) = some x := by
+  unfold List.find?
+  rw [h]
+
 /-- **Soundness of lowered `.extend` field projection**:
     Projecting an updated head field `(m, v)` from `lowerExtend` with an unpermuted layout
     steps in one `SStep.projRecord` to `v`. -/
@@ -318,8 +350,8 @@ theorem lowerExtend_proj_head_step (env : LayoutEnv) (hempty : env.fields = [])
     (baseLow : LExpr) (m : String) (v : LExpr) (rest : List (String × LExpr)) :
     Obend.Lower.SStep (.proj m (lowerExtend env baseLow ((m, v) :: rest))) v := by
   unfold lowerExtend canonicalizeFields
-  simp [hempty]
-  exact .projRecord m _ v (by simp)
+  rw [hempty]
+  exact .projRecord m _ v (find?_cons_head _ _ _ (beq_refl_of_decEq m))
 
 /-- **Soundness of lowered `.split` on a record**:
     When `targetLow = .record fields` and `splitValues fields names = some values`,

@@ -1556,9 +1556,66 @@ def rehydrateLiveAndStep (fm : FrozenMembrane) (log : InteractionLog) (reachable
 def membraneRehydrationLaw : LawExpr :=
   (LawExpr.monotone "epoch").and (LawExpr.writeOnce "capDigest")
 
+/-- Constructive record field lookup avoiding `BEq String` (`Classical.choice`) in Lean 4.35. -/
+def fieldOfFieldList (field : String) : List (String × Data) → Option Int
+  | [] => none
+  | (k, v) :: rest =>
+    if decide (k = field) then
+      match v with
+      | .natural n => some (Int.ofNat n)
+      | .boolean b => some (if b then 1 else 0)
+      | _          => none
+    else
+      fieldOfFieldList field rest
+
+def fieldOfData (field : String) : Data → Option Int
+  | .record fields => fieldOfFieldList field fields
+  | _ => none
+
+/-- Constructive `LawRef` reader avoiding `BEq String` (`Classical.choice`) in Lean 4.35. -/
+def readLawRef (_facts : Facts) (state : Data) : LawRef → Option Int
+  | .field name => fieldOfData name state
+  | _           => none
+
+/-- Constructive `LawExpr` evaluator avoiding `BEq Int` and `BEq String` (`Classical.choice`) in Lean 4.35. -/
+def evalLawExpr (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
+  | .eqC ref value => decide (readLawRef facts new ref = some value)
+  | .leC ref value =>
+    match readLawRef facts new ref with
+    | some x => decide (x ≤ value)
+    | none   => false
+  | .inC ref values =>
+    match readLawRef facts new ref with
+    | some x => values.any (fun v => decide (v = x))
+    | none   => false
+  | .eqR left right =>
+    match readLawRef facts new left, readLawRef facts new right with
+    | some x, some y => decide (x = y)
+    | _, _           => false
+  | .leR left right =>
+    match readLawRef facts new left, readLawRef facts new right with
+    | some x, some y => decide (x ≤ y)
+    | _, _           => false
+  | .leROff left right offset =>
+    match readLawRef facts new left, readLawRef facts new right with
+    | some x, some y => decide (x ≤ y + offset)
+    | _, _           => false
+  | .monotone field =>
+    match old.bind (fieldOfData field), fieldOfData field new with
+    | some before, some after => decide (before ≤ after)
+    | _, _                    => false
+  | .writeOnce field =>
+    match old.bind (fieldOfData field) with
+    | none        => false
+    | some before => decide (fieldOfData field new = some before)
+  | .not body => !(evalLawExpr facts old new body)
+  | .and left right => evalLawExpr facts old new left && evalLawExpr facts old new right
+  | .or left right => evalLawExpr facts old new left || evalLawExpr facts old new right
+  | .implies premise conclusion => !(evalLawExpr facts old new premise) || evalLawExpr facts old new conclusion
+
 /-- Evaluate `membraneRehydrationLaw` across a `FrozenMembrane` state transition. -/
 def evalMembraneRehydrationLaw (facts : Facts) (old new : FrozenMembrane) : Bool :=
-  membraneRehydrationLaw.denote facts (some old.toData) new.toData
+  evalLawExpr facts (some old.toData) new.toData membraneRehydrationLaw
 
 /-- **Bridge Theorem (`rehydrate_satisfies_law`)**:
     Every `rehydrateAndStep` transition satisfies `membraneRehydrationLaw` (`epoch` is monotonic
@@ -1567,10 +1624,12 @@ theorem rehydrate_satisfies_law (facts : Facts) (fm : FrozenMembrane) (epochDelt
     evalMembraneRehydrationLaw facts fm (rehydrateAndStep fm epochDelta) = true := by
   change
     (decide (Int.ofNat fm.epoch ≤ Int.ofNat (fm.epoch + epochDelta)) &&
-      (Int.ofNat fm.capDigest == 0 ||
-        decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest)))) = true
-  simp
-  omega
+      decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest))) = true
+  have h1 : decide (Int.ofNat fm.epoch ≤ Int.ofNat (fm.epoch + epochDelta)) = true :=
+    decide_eq_true (Int.ofNat_le.mpr (Nat.le_add_right fm.epoch epochDelta))
+  have h2 : decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest)) = true :=
+    decide_eq_true rfl
+  rw [h1, h2, Bool.and_true]
 
 /-- Concrete facts and fixtures for `#tooth` refutation probes on `membraneRehydrationLaw`. -/
 def demoMembraneFacts : Facts := ⟨none, none, 1, 1⟩
@@ -1592,6 +1651,12 @@ def demoFrozenRegressedEpoch : FrozenMembrane :=
 theorem membrane_tampered_digest_rejected :
     evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenTamperedDigest = false := rfl
 
+/-- Refutation theorem: even if `capDigest = 0`, tampering it to `999` is rejected by `membraneRehydrationLaw`. -/
+theorem membrane_zero_digest_tamper_rejected :
+    evalMembraneRehydrationLaw demoMembraneFacts
+      { demoFrozenBase with capDigest := 0 }
+      { demoFrozenBase with capDigest := 999 } = false := rfl
+
 /-- Refutation theorem: a regressed epoch (`5 → 3`) is rejected by `membraneRehydrationLaw`. -/
 theorem membrane_regressed_epoch_rejected :
     evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenRegressedEpoch = false := rfl
@@ -1601,6 +1666,25 @@ theorem membrane_regressed_epoch_rejected :
 
 #tooth membrane_regressed_epoch_rejected by mutation
   membraneRehydrationLaw := LawExpr.writeOnce "capDigest"
+
+theorem ok_ne_refused_membrane (h : ("ok" : String) = "refused") : False := by
+  have hlen : ("ok" : String).utf8ByteSize = ("refused" : String).utf8ByteSize :=
+    congrArg String.utf8ByteSize h
+  exact absurd hlen (by decide)
+
+theorem guard_ok_membrane {c rest w : Term} {why : String}
+    (h : Obend.Core.Term.Evaluates (Obend.Law.guard c why rest) (.inject "ok" w)) :
+    Obend.Core.Term.Evaluates c (.boolean true) ∧
+      Obend.Core.Term.Evaluates rest (.inject "ok" w) := by
+  rcases Obend.Law.ifBool_inv h with ⟨b, hc, hr⟩
+  cases b with
+  | false =>
+    dsimp at hr
+    have hval := Obend.Law.evaluates_value (.inject "refused" (.label why)) hr
+    injection hval with htag _
+    exact False.elim (ok_ne_refused_membrane htag)
+  | true =>
+    exact ⟨hc, hr⟩
 
 /-- Core4 state invariant for a membrane cell: `s.capDigest == expectedCapDigest`. -/
 def membraneInvariant (expectedCapDigest : Nat) : Term :=
@@ -1642,7 +1726,7 @@ def membraneCellContractOf (expectedCapDigest : Nat) : CellContract where
     rw [membraneTransitionLaw, admits_iff] at h_adm
     rcases h_adm with ⟨w, hw⟩
     rw [subst_guard] at hw
-    have h_ok := guard_ok hw
+    have h_ok := guard_ok_membrane hw
     have h_cond := h_ok.1
     simp [subst_membraneInvariant, subst_bound, lawEnv] at h_cond
     exact h_cond
@@ -1651,7 +1735,7 @@ def membraneCellContractOf (expectedCapDigest : Nat) : CellContract where
     rw [membraneTransitionLaw, admits_iff] at h_adm
     rcases h_adm with ⟨w, hw⟩
     rw [subst_guard] at hw
-    have h_ok := guard_ok hw
+    have h_ok := guard_ok_membrane hw
     rw [membraneStepRel, admits_iff]
     exact ⟨w, h_ok.2⟩
 

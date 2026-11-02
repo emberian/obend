@@ -22,12 +22,20 @@ public import Obend.Judge.Instances
 public import Obend.Judge.Lrat
 public import Obend.Judge.Identity
 public import Obend.Judge.Certified
+public import Obend.Judge.AutomataConfinement
+public import Obend.Analysis.Hybrid
 
 public section
 namespace Obend.Judge
 
 /-- The registered formats. -/
-def registry : List Format := [Lrat.format]
+def registry : List Format :=
+  [ Lrat.format
+  , dfaFormat
+  , cfgCompactFormat
+  , dclutchHoardFormat
+  , Obend.Analysis.hybridFlowpipeFormat
+  ]
 
 /-- Look a format up by name and version. -/
 def Format.find? (name version : String) : Option Format :=

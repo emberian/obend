@@ -346,42 +346,96 @@ def HybridProblem.initState (p : HybridProblem) : HybridState :=
 def HybridProblem.unsafeInterval (p : HybridProblem) : Interval :=
   ⟨Rat.ofInt p.unsafeLo, Rat.ofInt p.unsafeHi⟩
 
-/-- Check whether two intervals are strictly disjoint (`a.hi < b.lo` or `b.hi < a.lo`). -/
-def Interval.disjoint (a b : Interval) : Bool :=
-  decide (a.hi < b.lo) || decide (b.hi < a.lo)
+/-- Check whether two integer interval bounds `[lo₁, hi₁]` and `[lo₂, hi₂]` are valid and strictly disjoint. -/
+def intIntervalDisjoint (lo₁ hi₁ lo₂ hi₂ : Int) : Bool :=
+  decide (lo₁ ≤ hi₁) && decide (lo₂ ≤ hi₂) && (decide (hi₁ < lo₂) || decide (hi₂ < lo₁))
 
-/-- Look up the interval for `varName` in a continuous `box`. -/
-def findBoxInterval? (varName : String) : List (String × Interval) → Option Interval
-  | [] => none
-  | (n, iv) :: rest => if n == varName then some iv else findBoxInterval? varName rest
+/-- Check whether `[lo, hi]` is a non-inverted interval (`lo ≤ hi`) lying inside `[envLo, envHi]`. -/
+def intIntervalInBounds (lo hi envLo envHi : Int) : Bool :=
+  decide (lo ≤ hi) && decide (envLo ≤ lo) && decide (hi ≤ envHi)
 
-/-- Check that `varName`'s interval in `box` is strictly disjoint from `unsafeIv`. -/
-def boxDisjointFromUnsafe (box : List (String × Interval)) (varName : String) (unsafeIv : Interval) : Bool :=
-  match findBoxInterval? varName box with
-  | some iv => Interval.disjoint iv unsafeIv
-  | none    => false
+/-- Mode invariant check for `"heating"` (`[15, 32]`) and `"cooling"` (`[15, 35]`); rejects unknown modes. -/
+def modeInvariantHolds (modeId : String) (lo hi : Int) : Bool :=
+  if decide (modeId = "heating") then
+    intIntervalInBounds lo hi 15 32
+  else if decide (modeId = "cooling") then
+    intIntervalInBounds lo hi 15 35
+  else
+    false
 
-/-- Single-step hybrid transition wrapper (`stepHybrid`). -/
-def stepHybrid (aut : HybridAutomaton) (st : HybridState) (act : HybridAction) : Option HybridState :=
-  stepHybridAction aut st act
+/-- Constructive single-step hybrid transition (`stepHybrid`) over `(modeId, lo, hi)`:
+    - Global safety envelope: `[15, 35]`,
+    - Mode `"heating"`: invariant `[15, 32]`, continuous step `+[4, 4]`,
+    - Mode `"cooling"`: invariant `[15, 35]`, continuous step `-[2, 2]`,
+    - Discrete guarded jump `"heating" → "cooling"`: guard `[27, 32]`, affine reset `-[1, 1]`. -/
+def stepHybrid (modeId : String) (lo hi : Int) : HybridAction → Option (String × Int × Int)
+  | .flowStep =>
+    if decide (modeId = "heating") then
+      if intIntervalInBounds lo hi 15 32 && intIntervalInBounds lo hi 15 35 then
+        let lo' := lo + 4
+        let hi' := hi + 4
+        if intIntervalInBounds lo' hi' 15 32 && intIntervalInBounds lo' hi' 15 35 then
+          some ("heating", lo', hi')
+        else none
+      else none
+    else if decide (modeId = "cooling") then
+      if intIntervalInBounds lo hi 15 35 then
+        let lo' := lo - 2
+        let hi' := hi - 2
+        if intIntervalInBounds lo' hi' 15 35 then
+          some ("cooling", lo', hi')
+        else none
+      else none
+    else none
+  | .jumpTo targetMode =>
+    if decide (modeId = "heating") && decide (targetMode = "cooling") then
+      if intIntervalInBounds lo hi 27 32 then
+        let lo' := lo - 1
+        let hi' := hi - 1
+        if intIntervalInBounds lo' hi' 15 35 then
+          some ("cooling", lo', hi')
+        else none
+      else none
+    else none
+
+/-- Execute a hybrid schedule constructively from `(modeId, lo, hi)`, checking mode invariant,
+    global safety envelope `[15, 35]`, and strict disjointness from `[unsafeLo, unsafeHi]` at
+    every reachable slice (including the terminal slice `[]`), returning the terminal mode. -/
+def runFlowpipeTube (modeId : String) (lo hi unsafeLo unsafeHi : Int) :
+    List HybridAction → Option String
+  | [] =>
+    if modeInvariantHolds modeId lo hi &&
+       intIntervalInBounds lo hi 15 35 &&
+       intIntervalDisjoint lo hi unsafeLo unsafeHi then
+      some modeId
+    else none
+  | act :: rest =>
+    if modeInvariantHolds modeId lo hi &&
+       intIntervalInBounds lo hi 15 35 &&
+       intIntervalDisjoint lo hi unsafeLo unsafeHi then
+      match stepHybrid modeId lo hi act with
+      | some (nextMode, nextLo, nextHi) =>
+        runFlowpipeTube nextMode nextLo nextHi unsafeLo unsafeHi rest
+      | none => none
+    else none
 
 /-- Verify a hybrid flowpipe certificate `c` against problem `p`:
-    1. `c.claimedSteps == c.schedule.length`,
-    2. `runHybridSchedule` succeeds across all continuous `.flowStep` and discrete `.jumpTo` transitions,
-    3. Every reachable slice in the flowpipe tube lies inside `safeEnvelope` AND is strictly disjoint
-       from `p.unsafeInterval`,
-    4. The terminal hybrid state reaches `c.expectedFinalMode`. -/
+    1. `p.automatonId = "thermostat"` and `p.varName = "T"`,
+    2. `p.initLo ≤ p.initHi` and `p.unsafeLo ≤ p.unsafeHi`,
+    3. `c.claimedSteps = c.schedule.length`,
+    4. `runFlowpipeTube` succeeds across all continuous `.flowStep` and discrete `.jumpTo` transitions,
+    5. Every reachable slice in the flowpipe tube satisfies its mode invariant, lies inside `safeEnvelope`,
+       AND is strictly disjoint from `[p.unsafeLo, p.unsafeHi]`,
+    6. The terminal hybrid state reaches `c.expectedFinalMode`. -/
 def verifyFlowpipe (p : HybridProblem) (c : HybridCert) : Bool :=
-  c.claimedSteps == c.schedule.length &&
-  match runHybridSchedule thermostatHybridAutomaton p.initState c.schedule with
-  | some tube =>
-    tube.all (fun st =>
-      checkBoxInEnvelope st.box thermostatHybridAutomaton.safeEnvelope &&
-      boxDisjointFromUnsafe st.box p.varName p.unsafeInterval) &&
-    match tube.getLast? with
-    | some lastSt => lastSt.modeId == c.expectedFinalMode
-    | none        => false
-  | none => false
+  decide (p.automatonId = "thermostat") &&
+  decide (p.varName = "T") &&
+  decide (p.initLo ≤ p.initHi) &&
+  decide (p.unsafeLo ≤ p.unsafeHi) &&
+  decide (c.claimedSteps = c.schedule.length) &&
+  match runFlowpipeTube p.initMode p.initLo p.initHi p.unsafeLo p.unsafeHi c.schedule with
+  | some finalMode => decide (finalMode = c.expectedFinalMode)
+  | none           => false
 
 /-- Concrete valid and invalid hybrid flowpipe problem/certificate fixtures. -/
 def demoHybridProblem : HybridProblem :=
@@ -403,28 +457,29 @@ def badHybridCert : HybridCert :=
   , expectedFinalMode := "heating"
   , claimedSteps      := 3 }
 
-theorem validHybridCert_accepted :
-    verifyFlowpipe demoHybridProblem validHybridCert = true := by
-  decide +kernel
-
-theorem badHybridCert_rejected :
-    verifyFlowpipe demoHybridProblem badHybridCert = false := by
-  decide +kernel
-
-/-- Check whether a `HybridCert`'s claimed step count matches its schedule length. -/
-def checkCertStepCount (c : HybridCert) : Bool :=
-  c.claimedSteps == c.schedule.length
-
 def badStepCountHybridCert : HybridCert :=
   { schedule          := [.flowStep, .jumpTo "cooling"]
   , expectedFinalMode := "cooling"
   , claimedSteps      := 99 }
 
-theorem badStepCountHybridCert_rejected :
-    checkCertStepCount badStepCountHybridCert = false := rfl
+theorem validHybridCert_accepted :
+    verifyFlowpipe demoHybridProblem validHybridCert = true := rfl
 
-#tooth badStepCountHybridCert_rejected by mutation
-  checkCertStepCount := fun _ => true
+theorem badHybridCert_rejected :
+    verifyFlowpipe demoHybridProblem badHybridCert = false := rfl
+
+/-- Inverted initial interval (`initLo > initHi`) is rejected even if endpoints lie in `[15, 32]`. -/
+theorem invertedInterval_rejected :
+    verifyFlowpipe { demoHybridProblem with initLo := 26, initHi := 24 } validHybridCert = false := rfl
+
+/-- Nonexistent mode is rejected even on an empty schedule (`schedule = []`). -/
+theorem bogusMode_rejected :
+    verifyFlowpipe
+      { demoHybridProblem with initMode := "bogus", initLo := 20, initHi := 22 }
+      { schedule := [], expectedFinalMode := "bogus", claimedSteps := 0 } = false := rfl
+
+#tooth badHybridCert_rejected by mutation
+  verifyFlowpipe := fun _ _ => true
 
 /-- Decision procedure returning `Obend.Judge.Verdict String` for `(HybridProblem, HybridCert)`. -/
 def checkHybridFlowpipe (_grade : Nat) (p : HybridProblem) (c : HybridCert) : Obend.Judge.Verdict String :=
@@ -458,21 +513,35 @@ instance hybridFlowpipeJudge : Obend.Judge HybridProblem HybridCert where
 
 theorem hybridFlowpipe_bad_refused :
     Obend.Judge.check 0 demoHybridProblem badHybridCert =
-      .refused "flowpipe_invariant_or_unsafe_zone_violation" [] := by
-  change checkHybridFlowpipe 0 demoHybridProblem badHybridCert =
-    .refused "flowpipe_invariant_or_unsafe_zone_violation" []
-  simp [checkHybridFlowpipe, badHybridCert_rejected]
+      .refused "flowpipe_invariant_or_unsafe_zone_violation" [] := rfl
 
-/-- Decode a `HybridProblem` from a string wire representation. -/
+/-- Decode a `HybridProblem` from `Obend.Core.Data` via `HybridProblem.ofData?`. -/
+def decodeHybridProblemData (d : Data) : Except String HybridProblem :=
+  match HybridProblem.ofData? d with
+  | some p => .ok p
+  | none   => .error "malformed HybridProblem Core.Data payload"
+
+/-- Decode a `HybridCert` from `Obend.Core.Data` via `HybridCert.ofData?`. -/
+def decodeHybridCertData (d : Data) : Except String HybridCert :=
+  match HybridCert.ofData? d with
+  | some c => .ok c
+  | none   => .error "malformed HybridCert Core.Data payload"
+
+/-- Decode a `HybridProblem` from a string wire representation via `HybridProblem.toData` / `HybridProblem.ofData?`. -/
 def decodeHybridProblem (s : String) : Except String HybridProblem :=
-  if s == "thermostat-default" then .ok demoHybridProblem
-  else .error s!"unknown HybridProblem wire payload: {s}"
+  if decide (s = "thermostat-default") then
+    decodeHybridProblemData demoHybridProblem.toData
+  else .error "unknown HybridProblem wire payload"
 
-/-- Decode a `HybridCert` from a string wire representation. -/
+/-- Decode a `HybridCert` from a string wire representation via `HybridCert.toData` / `HybridCert.ofData?`. -/
 def decodeHybridCert (s : String) : Except String HybridCert :=
-  if s == "valid-cooling-switch" then .ok validHybridCert
-  else if s == "bad-overheat-runaway" then .ok badHybridCert
-  else .error s!"unknown HybridCert wire payload: {s}"
+  if decide (s = "valid-cooling-switch") then
+    decodeHybridCertData validHybridCert.toData
+  else if decide (s = "bad-overheat-runaway") then
+    decodeHybridCertData badHybridCert.toData
+  else if decide (s = "bad-step-count") then
+    decodeHybridCertData badStepCountHybridCert.toData
+  else .error "unknown HybridCert wire payload"
 
 /-- Registered `Obend.Judge.Format` for `"hybrid-flowpipe@1"`. -/
 def hybridFlowpipeFormat : Obend.Judge.Format where

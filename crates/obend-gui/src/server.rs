@@ -3906,31 +3906,58 @@ fn verify_lean_snippet_subprocess(snippet: &str) -> bool {
         return false;
     }
 
-    // Replace `import Obend.Tactic.Weave` / `open Obend.Tactic.Weave` with self-contained
-    // Lean 4 macro definitions so `lean --stdin` can kernel-check the theorem in ~1s without
-    // requiring external `.olean` module loading.
+    let lean_build_lib = find_obend_source_root()
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|lean_root| lean_root.join(".lake/build/lib/lean"));
+    let has_compiled_oleans = lean_build_lib
+        .as_ref()
+        .map(|p| p.join("Obend/Tactic/Weave.olean").exists())
+        .unwrap_or(false);
+
+    // Always provide fast tactic macros for interactive sub-second kernel verification, while
+    // preserving non-Weave `import Obend.*` imports when `.olean` artifacts are available.
     let mut standalone = String::from(
         "macro \"obend_unfold\" : tactic => `(tactic| try dsimp only)\n\
          macro \"obend_split\" : tactic => `(tactic| (split <;> try rfl <;> try contradiction))\n\
          macro \"poly_ring\" : tactic => `(tactic| try omega)\n\
          macro \"obend_law\" : tactic => `(tactic| first | decide +kernel | decide | omega | trivial)\n\n",
     );
+    let mut header_imports = String::new();
     for line in trimmed.lines() {
         let l = line.trim();
-        if l.starts_with("import Obend.") || l.starts_with("open Obend.") {
+        if l.starts_with("import Obend.Tactic.Weave") || l.starts_with("open Obend.Tactic.Weave") {
+            continue;
+        }
+        if l.starts_with("import Obend.") {
+            if has_compiled_oleans {
+                header_imports.push_str(line);
+                header_imports.push('\n');
+            }
+            continue;
+        }
+        if l.starts_with("open Obend.") && !has_compiled_oleans {
             continue;
         }
         standalone.push_str(line);
         standalone.push('\n');
     }
+    if !header_imports.is_empty() {
+        standalone = format!("{header_imports}\n{standalone}");
+    }
 
-    if let Ok(mut child) = Command::new("lean")
-        .arg("--stdin")
+    let mut cmd = Command::new("lean");
+    cmd.arg("--stdin")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+        .stderr(std::process::Stdio::piped());
+    if let Some(ref olean_dir) = lean_build_lib {
+        if olean_dir.exists() {
+            cmd.env("LEAN_PATH", olean_dir);
+        }
+    }
+
+    if let Ok(mut child) = cmd.spawn() {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(standalone.as_bytes());
         }

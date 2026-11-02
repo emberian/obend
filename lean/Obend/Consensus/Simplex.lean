@@ -402,19 +402,80 @@ theorem SimplexState.ofData_toData (s : SimplexState) :
 def simplexViewMonotoneLaw : LawExpr :=
   LawExpr.monotone "view"
 
-/-- Relational `LawExpr` enforcing the `2*f + 1` quorum threshold (`quorumThreshold ≤ certSigners`)
-    and monotonic finalized height across Simplex transitions. -/
+/-- Relational `LawExpr` enforcing the `2*f + 1` quorum threshold (`quorumThreshold ≤ certSigners`),
+    immutable fault bound (`writeOnce "faults"` and `faults ≤ quorumThreshold - 1`), and monotonic
+    finalized height across Simplex transitions. -/
 def simplexQuorumLaw : LawExpr :=
   (LawExpr.leR (.field "quorumThreshold") (.field "certSigners")).and
-    (LawExpr.monotone "finalizedHeight")
+    ((LawExpr.leROff (.field "faults") (.field "quorumThreshold") (-1)).and
+      ((LawExpr.writeOnce "faults").and
+        (LawExpr.monotone "finalizedHeight")))
 
 /-- Combined relational `LawExpr` conjoining `simplexViewMonotoneLaw` and `simplexQuorumLaw`. -/
 def simplexTransitionLawExpr : LawExpr :=
   simplexViewMonotoneLaw.and simplexQuorumLaw
 
+/-- Constructive record field lookup avoiding `BEq String` (`Classical.choice`) in Lean 4.35. -/
+def simplexFieldOfList (field : String) : List (String × Data) → Option Int
+  | [] => none
+  | (k, v) :: rest =>
+    if decide (k = field) then
+      match v with
+      | .natural n => some (Int.ofNat n)
+      | .boolean b => some (if b then 1 else 0)
+      | _          => none
+    else
+      simplexFieldOfList field rest
+
+def simplexFieldOf (field : String) : Data → Option Int
+  | .record fields => simplexFieldOfList field fields
+  | _ => none
+
+/-- Constructive `LawRef` reader avoiding `BEq String` (`Classical.choice`) in Lean 4.35. -/
+def readSimplexRef (_facts : Facts) (state : Data) : LawRef → Option Int
+  | .field name => simplexFieldOf name state
+  | _           => none
+
+/-- Constructive `LawExpr` evaluator avoiding `BEq Int` and `BEq String` (`Classical.choice`) in Lean 4.35. -/
+def evalSimplexLawExpr (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
+  | .eqC ref value => decide (readSimplexRef facts new ref = some value)
+  | .leC ref value =>
+    match readSimplexRef facts new ref with
+    | some x => decide (x ≤ value)
+    | none   => false
+  | .inC ref values =>
+    match readSimplexRef facts new ref with
+    | some x => values.any (fun v => decide (v = x))
+    | none   => false
+  | .eqR left right =>
+    match readSimplexRef facts new left, readSimplexRef facts new right with
+    | some x, some y => decide (x = y)
+    | _, _           => false
+  | .leR left right =>
+    match readSimplexRef facts new left, readSimplexRef facts new right with
+    | some x, some y => decide (x ≤ y)
+    | _, _           => false
+  | .leROff left right offset =>
+    match readSimplexRef facts new left, readSimplexRef facts new right with
+    | some x, some y => decide (x ≤ y + offset)
+    | _, _           => false
+  | .monotone field =>
+    match old.bind (simplexFieldOf field), simplexFieldOf field new with
+    | some before, some after => decide (before ≤ after)
+    | _, _                    => false
+  | .writeOnce field =>
+    match old.bind (simplexFieldOf field) with
+    | none        => false
+    | some before => decide (simplexFieldOf field new = some before)
+  | .not body => !(evalSimplexLawExpr facts old new body)
+  | .and left right => evalSimplexLawExpr facts old new left && evalSimplexLawExpr facts old new right
+  | .or left right => evalSimplexLawExpr facts old new left || evalSimplexLawExpr facts old new right
+  | .implies premise conclusion =>
+    !(evalSimplexLawExpr facts old new premise) || evalSimplexLawExpr facts old new conclusion
+
 /-- Evaluate the combined Simplex relational law across `old` and `new` `SimplexState`s. -/
 def evalSimplexLaw (facts : Facts) (old new : SimplexState) : Bool :=
-  simplexTransitionLawExpr.denote facts (some old.toData) new.toData
+  evalSimplexLawExpr facts (some old.toData) new.toData simplexTransitionLawExpr
 
 /-- Advance `SimplexState` by `viewDelta` and `heightDelta` using a notarization/finalization `cert`. -/
 def stepSimplexState (s : SimplexState) (viewDelta heightDelta : Nat) (cert : Cert) : SimplexState :=
@@ -432,33 +493,46 @@ def stepSimplexState (s : SimplexState) (viewDelta heightDelta : Nat) (cert : Ce
 theorem simplex_step_respects_law
     (facts : Facts) (s : SimplexState) (viewDelta heightDelta : Nat) (cert : Cert)
     (h_quorum : 2 * s.faults + 1 ≤ cert.signerCount) :
-    simplexViewMonotoneLaw.denote facts (some s.toData)
-      (stepSimplexState s viewDelta heightDelta cert).toData = true ∧
-    simplexQuorumLaw.denote facts (some s.toData)
-      (stepSimplexState s viewDelta heightDelta cert).toData = true ∧
+    evalSimplexLawExpr facts (some s.toData)
+      (stepSimplexState s viewDelta heightDelta cert).toData simplexViewMonotoneLaw = true ∧
+    evalSimplexLawExpr facts (some s.toData)
+      (stepSimplexState s viewDelta heightDelta cert).toData simplexQuorumLaw = true ∧
     evalSimplexLaw facts s (stepSimplexState s viewDelta heightDelta cert) = true := by
+  have hv : decide (Int.ofNat s.view ≤ Int.ofNat (s.view + viewDelta)) = true :=
+    decide_eq_true (Int.ofNat_le.mpr (Nat.le_add_right s.view viewDelta))
+  have hq1 : decide (Int.ofNat (2 * s.faults + 1) ≤ Int.ofNat cert.signerCount) = true :=
+    decide_eq_true (Int.ofNat_le.mpr h_quorum)
+  have hq_f : decide (Int.ofNat s.faults ≤ Int.ofNat (2 * s.faults + 1) + (-1 : Int)) = true :=
+    decide_eq_true (by simp only [Int.ofNat_eq_coe]; omega)
+  have hq_wo : decide (some (Int.ofNat s.faults) = some (Int.ofNat s.faults)) = true :=
+    decide_eq_true rfl
+  have hq2 : decide (Int.ofNat s.finalizedHeight ≤ Int.ofNat (s.finalizedHeight + heightDelta)) = true :=
+    decide_eq_true (Int.ofNat_le.mpr (Nat.le_add_right s.finalizedHeight heightDelta))
   have h_view :
-      simplexViewMonotoneLaw.denote facts (some s.toData)
-        (stepSimplexState s viewDelta heightDelta cert).toData = true := by
+      evalSimplexLawExpr facts (some s.toData)
+        (stepSimplexState s viewDelta heightDelta cert).toData simplexViewMonotoneLaw = true := by
     change decide (Int.ofNat s.view ≤ Int.ofNat (s.view + viewDelta)) = true
-    simp
-    omega
+    exact hv
   have h_q :
-      simplexQuorumLaw.denote facts (some s.toData)
-        (stepSimplexState s viewDelta heightDelta cert).toData = true := by
+      evalSimplexLawExpr facts (some s.toData)
+        (stepSimplexState s viewDelta heightDelta cert).toData simplexQuorumLaw = true := by
     change
       (decide (Int.ofNat (2 * s.faults + 1) ≤ Int.ofNat cert.signerCount) &&
-        decide (Int.ofNat s.finalizedHeight ≤ Int.ofNat (s.finalizedHeight + heightDelta))) = true
-    simp
-    omega
+        (decide (Int.ofNat s.faults ≤ Int.ofNat (2 * s.faults + 1) + (-1 : Int)) &&
+          (decide (some (Int.ofNat s.faults) = some (Int.ofNat s.faults)) &&
+            decide (Int.ofNat s.finalizedHeight ≤ Int.ofNat (s.finalizedHeight + heightDelta))))) = true
+    rw [hq1, hq_f, hq_wo, hq2]
+    rfl
   have h_both :
       evalSimplexLaw facts s (stepSimplexState s viewDelta heightDelta cert) = true := by
     change
       (decide (Int.ofNat s.view ≤ Int.ofNat (s.view + viewDelta)) &&
         (decide (Int.ofNat (2 * s.faults + 1) ≤ Int.ofNat cert.signerCount) &&
-          decide (Int.ofNat s.finalizedHeight ≤ Int.ofNat (s.finalizedHeight + heightDelta)))) = true
-    simp
-    omega
+          (decide (Int.ofNat s.faults ≤ Int.ofNat (2 * s.faults + 1) + (-1 : Int)) &&
+            (decide (some (Int.ofNat s.faults) = some (Int.ofNat s.faults)) &&
+              decide (Int.ofNat s.finalizedHeight ≤ Int.ofNat (s.finalizedHeight + heightDelta)))))) = true
+    rw [hv, hq1, hq_f, hq_wo, hq2]
+    rfl
   exact ⟨h_view, h_q, h_both⟩
 
 /-- Concrete fixtures for `#tooth` refutation probes on `simplexViewMonotoneLaw` and `simplexQuorumLaw`. -/
@@ -481,6 +555,9 @@ def demoSimplexViewRegressed : SimplexState :=
 def demoSimplexUnderQuorum : SimplexState :=
   { demoSimplexBase with certSigners := 2, latestCert := { demoSimplexCert with signerCount := 2 } }
 
+def demoSimplexLoweredThreshold : SimplexState :=
+  { demoSimplexBase with quorumThreshold := 1, certSigners := 1, latestCert := { demoSimplexCert with signerCount := 1 } }
+
 /-- Refutation theorem: a view-regressed Simplex transition (`4 → 2`) is rejected. -/
 theorem simplex_view_regression_rejected :
     evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexViewRegressed = false := rfl
@@ -489,11 +566,34 @@ theorem simplex_view_regression_rejected :
 theorem simplex_under_quorum_rejected :
     evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexUnderQuorum = false := rfl
 
+/-- Refutation theorem: attempting to bypass quorum by lowering `quorumThreshold` to `1` is rejected. -/
+theorem simplex_lowered_threshold_rejected :
+    evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexLoweredThreshold = false := rfl
+
 #tooth simplex_view_regression_rejected by mutation
   simplexViewMonotoneLaw := LawExpr.monotone "finalizedHeight"
 
 #tooth simplex_under_quorum_rejected by mutation
   simplexQuorumLaw := LawExpr.monotone "finalizedHeight"
+
+theorem ok_ne_refused_simplex (h : ("ok" : String) = "refused") : False := by
+  have hlen : ("ok" : String).utf8ByteSize = ("refused" : String).utf8ByteSize :=
+    congrArg String.utf8ByteSize h
+  exact absurd hlen (by decide)
+
+theorem guard_ok_simplex {c rest w : Term} {why : String}
+    (h : Obend.Core.Term.Evaluates (Obend.Law.guard c why rest) (.inject "ok" w)) :
+    Obend.Core.Term.Evaluates c (.boolean true) ∧
+      Obend.Core.Term.Evaluates rest (.inject "ok" w) := by
+  rcases Obend.Law.ifBool_inv h with ⟨b, hc, hr⟩
+  cases b with
+  | false =>
+    dsimp at hr
+    have hval := Obend.Law.evaluates_value (.inject "refused" (.label why)) hr
+    injection hval with htag _
+    exact False.elim (ok_ne_refused_simplex htag)
+  | true =>
+    exact ⟨hc, hr⟩
 
 /-- Core4 state invariant for a Simplex cell with fault tolerance `f`: `2 * f + 1 ≤ s.certSigners`. -/
 def simplexInvariant (f : Nat) : Term :=
@@ -504,12 +604,15 @@ theorem subst_simplexInvariant (f : Nat) (σ : Nat → Term) :
   simp [simplexInvariant, leNat, natT, Term.substitute, subst_binary, subst_get, subst_bound]
   rfl
 
-/-- Core4 step relation body enforcing `old.view ≤ new.view` and `2 * f + 1 ≤ new.certSigners`. -/
+/-- Core4 step relation body enforcing `old.view ≤ new.view`, `old.finalizedHeight ≤ new.finalizedHeight`,
+    and `2 * f + 1 ≤ new.certSigners`. -/
 def simplexStepBody (f : Nat) : Term :=
   Obend.Law.guard
     (andT
       (leNat (.get (.bound 2) "view") (.get (.bound 1) "view"))
-      (leNat (natT (2 * f + 1)) (.get (.bound 1) "certSigners")))
+      (andT
+        (leNat (.get (.bound 2) "finalizedHeight") (.get (.bound 1) "finalizedHeight"))
+        (leNat (natT (2 * f + 1)) (.get (.bound 1) "certSigners"))))
     "simplex_law_violation"
     okT
 
@@ -535,7 +638,7 @@ def simplexCellContractOf (f : Nat) : CellContract where
     rw [simplexTransitionLaw, admits_iff] at h_adm
     rcases h_adm with ⟨w, hw⟩
     rw [subst_guard] at hw
-    have h_ok := guard_ok hw
+    have h_ok := guard_ok_simplex hw
     have h_cond := h_ok.1
     simp [subst_simplexInvariant, subst_bound, lawEnv] at h_cond
     exact h_cond
@@ -544,7 +647,7 @@ def simplexCellContractOf (f : Nat) : CellContract where
     rw [simplexTransitionLaw, admits_iff] at h_adm
     rcases h_adm with ⟨w, hw⟩
     rw [subst_guard] at hw
-    have h_ok := guard_ok hw
+    have h_ok := guard_ok_simplex hw
     rw [simplexStepRel, admits_iff]
     exact ⟨w, h_ok.2⟩
 

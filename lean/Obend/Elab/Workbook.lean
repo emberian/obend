@@ -531,15 +531,15 @@ theorem workbookTransportCheck_ok {r : Nat} {o : TransportObj} {c : TransportCer
             simp only [bne_iff_ne, ne_eq, Decidable.not_not, Bool.not_eq_true'] at hd ht ha hs hc
             have hteq : Obend.Law.termEq (Obend.Lower.lowerProp o.decideExpr) c.claim = true := by
               cases e : Obend.Law.termEq (Obend.Lower.lowerProp o.decideExpr) c.claim
-              · rw [e] at ht; cases ht
+              · rw [e] at ht; exact absurd rfl ht
               · rfl
             have hsplit : Obend.Lower.nonEmptySplits o.decideExpr = true := by
               cases e : Obend.Lower.nonEmptySplits o.decideExpr
-              · rw [e] at hs; cases hs
+              · rw [e] at hs; exact absurd rfl hs
               · rfl
             have hcheck : Obend.Lower.checkL [] o.decideExpr (Obend.Lower.curry o.argTys .boolean) = true := by
               cases e : Obend.Lower.checkL [] o.decideExpr (Obend.Lower.curry o.argTys .boolean)
-              · rw [e] at hc; cases hc
+              · rw [e] at hc; exact absurd rfl hc
               · rfl
             exact ⟨hd, (Obend.Law.termEq_sound hteq).symm, ha, hsplit, hcheck⟩
 
@@ -595,7 +595,7 @@ def decodeWorkbookTransportCert (s : String) : Except String TransportCert :=
   | _ => Obend.Lower.transportCertOf s
 
 def encodeWorkbookTransportObj (o : TransportObj) : String :=
-  if o.decideExpr == reflNatDecideExpr && o.argTys == [.natural] then
+  if workbookSourceDigest o.decideExpr == workbookSourceDigest reflNatDecideExpr && o.argTys == [.natural] then
     "reflNat"
   else
     (Obend.Lower.transportObjJson o).compress

@@ -941,44 +941,140 @@ pub fn render_projection_viewport(
         },
     ];
 
+    let admitted = dial.is_admitted();
+    let status_color = if admitted { "#22c55e" } else { "#ef4444" };
+    let norm = ((dial.current_value - dial.margin_lo) / (dial.margin_hi - dial.margin_lo).max(1.0))
+        .clamp(0.0, 1.0);
+
     let svg = match kind {
         ProjectionKind::Circuit => format!(
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" data-projection="circuit"><g class="rtl-schematic"><rect x="40" y="60" width="120" height="80" fill="#1e293b" stroke="#38bdf8" /><text x="55" y="105" fill="#f8fafc">{}</text></g>{}</svg>"##,
             title,
             render_efpga_heatmap_svg(&default_tiles)
         ),
-        ProjectionKind::Netlist => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" data-projection="netlist"><g class="lvs-netlist"><line x1="60" y1="100" x2="260" y2="100" stroke="#a855f7" stroke-width="2" /><text x="80" y="90">{}</text></g></svg>"##,
-            title
-        ),
-        ProjectionKind::Timing => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" data-projection="timing"><g class="sta-slack"><rect x="50" y="80" width="420" height="24" fill="#10b981" /><text x="60" y="70">STA Slack +185ps ({})</text></g></svg>"##,
-            title
-        ),
+        ProjectionKind::Netlist => {
+            let wire_color = if admitted { "#a855f7" } else { "#f97316" };
+            let fanout_y = 65 + (norm * 90.0) as i32;
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" data-projection="netlist"><rect width="640" height="240" fill="#090d16" rx="8"/><g class="lvs-netlist"><rect x="28" y="42" width="110" height="52" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/><text x="40" y="65" fill="#e2e8f0" font-family="monospace" font-size="11">in_port[0..7]</text><text x="40" y="82" fill="#94a3b8" font-family="monospace" font-size="10">val={:.1}</text><rect x="28" y="136" width="110" height="52" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/><text x="40" y="159" fill="#e2e8f0" font-family="monospace" font-size="11">clk_domain</text><text x="40" y="176" fill="#94a3b8" font-family="monospace" font-size="10">mode=.{}</text><line x1="60" y1="100" x2="260" y2="100" stroke="{}" stroke-width="2"/><path d="M 138 68 C 195 68, 195 {}, 250 {}" fill="none" stroke="{}" stroke-width="2"/><path d="M 138 162 C 195 162, 195 135, 250 135" fill="none" stroke="#38bdf8" stroke-width="1.8"/><rect x="250" y="54" width="150" height="120" rx="8" fill="#0f172a" stroke="{}" stroke-width="2"/><text x="264" y="78" fill="#f8fafc" font-family="monospace" font-size="12" font-weight="bold">{}</text><text x="264" y="100" fill="#cbd5e1" font-family="monospace" font-size="10">LUT6 + Carry4 DAG</text><text x="264" y="118" fill="#94a3b8" font-family="monospace" font-size="10">Nets: 24 | Cells: 12</text><text x="264" y="138" fill="{}" font-family="monospace" font-size="10">LVS: {}</text><line x1="400" y1="114" x2="485" y2="114" stroke="{}" stroke-width="2.5"/><rect x="485" y="84" width="125" height="60" rx="6" fill="#1e293b" stroke="{}" stroke-width="1.8"/><text x="498" y="109" fill="#f8fafc" font-family="monospace" font-size="11">out_bus[0..7]</text><text x="498" y="128" fill="{}" font-family="monospace" font-size="10">margin [{:.0}..{:.0}]</text></g></svg>"##,
+                dial.current_value,
+                dial.mode.as_str(),
+                wire_color,
+                fanout_y,
+                fanout_y,
+                wire_color,
+                wire_color,
+                title,
+                status_color,
+                if admitted { "MATCHED" } else { "MISMATCH" },
+                status_color,
+                status_color,
+                status_color,
+                dial.margin_lo,
+                dial.margin_hi
+            )
+        }
+        ProjectionKind::Timing => {
+            let slack_ps = ((dial.margin_hi - dial.current_value) * 18.5).round() as i64;
+            let logic_w = (120.0 + norm * 160.0) as i32;
+            let route_w = (80.0 + norm * 90.0) as i32;
+            let slack_w = (420 - logic_w - route_w).max(24);
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" data-projection="timing"><rect width="640" height="240" fill="#090d16" rx="8"/><g class="sta-slack"><text x="36" y="34" fill="#f8fafc" font-family="monospace" font-size="12" font-weight="bold">STA Slack {:+}ps ({})</text><text x="36" y="54" fill="#94a3b8" font-family="monospace" font-size="10">Clock Period: 1000ps | Setup Uncertainty: 35ps | Dial: {:.2}</text><rect x="50" y="80" width="420" height="24" fill="#10b981" opacity="0.18" rx="4"/><rect x="50" y="80" width="{}" height="24" fill="#38bdf8" rx="3"/><rect x="{}" y="80" width="{}" height="24" fill="#a855f7"/><rect x="{}" y="80" width="{}" height="24" fill="{}" rx="3"/><line x1="470" y1="66" x2="470" y2="188" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4,3"/><text x="478" y="88" fill="#fbbf24" font-family="monospace" font-size="10">Required Edge</text><text x="478" y="104" fill="{}" font-family="monospace" font-size="11" font-weight="bold">{}</text><text x="52" y="132" fill="#38bdf8" font-family="monospace" font-size="10">Logic: {}ps</text><text x="210" y="132" fill="#c084fc" font-family="monospace" font-size="10">Route: {}ps</text><text x="360" y="132" fill="{}" font-family="monospace" font-size="10">Slack: {:+}ps</text><rect x="50" y="152" width="540" height="52" rx="6" fill="#0f172a" stroke="#1e293b"/><text x="64" y="174" fill="#cbd5e1" font-family="monospace" font-size="10">Critical Path: clk_launch -&gt; carry_chain_s3 -&gt;cam_match_reg ({})</text><text x="64" y="192" fill="#94a3b8" font-family="monospace" font-size="10">Invariant: {} | Bounds [{:.1}, {:.1}]</text></g></svg>"##,
+                slack_ps,
+                title,
+                dial.current_value,
+                logic_w,
+                50 + logic_w,
+                route_w,
+                50 + logic_w + route_w,
+                slack_w,
+                status_color,
+                status_color,
+                if admitted { "MET (TIMING CLOSED)" } else { "VIOLATED (NEGATIVE SLACK)" },
+                logic_w * 2,
+                route_w * 2,
+                status_color,
+                slack_ps,
+                dial.mode.as_str(),
+                dial.invariant_expr,
+                dial.margin_lo,
+                dial.margin_hi
+            )
+        }
         ProjectionKind::Gdsii => render_gdsii_svg(&default_gds),
         ProjectionKind::Waveform => render_flowpipe_svg(title, &default_slices, 15.0, 35.0),
         ProjectionKind::CellQuote => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" data-projection="cellQuote"><text x="24" y="64">Content.cell quotation: {}</text></svg>"##,
-            title
-        ),
-        ProjectionKind::NotebookCell => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" data-projection="notebookCell"><text x="24" y="64">Notebook Cell: {}</text></svg>"##,
-            title
-        ),
-        ProjectionKind::ProofTree => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" data-projection="proofTree"><g class="silicon-proof-tree"><text x="24" y="60">Goal: {} (0 sorryAx, ExprCAM verified)</text></g></svg>"##,
-            title
-        ),
-        ProjectionKind::ContractBadge => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" data-projection="contractBadge"><rect x="8" y="8" width="304" height="64" rx="8" fill="{}" /><text x="24" y="46" fill="#fff">Contract {} [{}]</text></svg>"##,
-            dial.mode.badge_color(),
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" data-projection="cellQuote"><rect width="640" height="160" fill="#090d16" rx="8"/><rect x="16" y="16" width="608" height="128" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/><rect x="16" y="16" width="6" height="128" rx="3" fill="{}"/><text x="36" y="42" fill="#f8fafc" font-family="monospace" font-size="12" font-weight="bold">Content.cell quotation: {}</text><text x="36" y="66" fill="#38bdf8" font-family="monospace" font-size="11">Cite Mode: .pinned | Span: .page | World Pin: {}</text><text x="36" y="90" fill="#cbd5e1" font-family="monospace" font-size="10">Invariant: {} (val={:.2} in [{:.1}, {:.1}])</text><text x="36" y="114" fill="{}" font-family="monospace" font-size="10">Integrity: {} (pinned_cite_stays / moved_pin_blocks)</text></svg>"##,
+            status_color,
             title,
+            if admitted { "HOLDING" } else { "MOVED_PIN_BLOCKED" },
+            dial.invariant_expr,
+            dial.current_value,
+            dial.margin_lo,
+            dial.margin_hi,
+            status_color,
+            if admitted { "USABLE (VERIFIED DIGEST)" } else { "BLOCKED BY UPSTREAM MUTATION" }
+        ),
+        ProjectionKind::NotebookCell => {
+            let gauge_w = (norm * 360.0) as i32;
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" data-projection="notebookCell"><rect width="640" height="160" fill="#090d16" rx="8"/><rect x="16" y="14" width="608" height="132" rx="6" fill="#131b2e" stroke="#334155"/><text x="32" y="40" fill="#f8fafc" font-family="monospace" font-size="12" font-weight="bold">Notebook Cell: {}</text><text x="32" y="62" fill="#94a3b8" font-family="monospace" font-size="10">Cell ID: {} | Dial Mode: .{} | Law: {}</text><rect x="32" y="78" width="360" height="14" rx="4" fill="#090d16" stroke="#334155"/><rect x="32" y="78" width="{}" height="14" rx="4" fill="{}"/><text x="408" y="90" fill="{}" font-family="monospace" font-size="11" font-weight="bold">{:.2} [{:.1}..{:.1}]</text><text x="32" y="120" fill="#cbd5e1" font-family="monospace" font-size="10">Status: {} | Rehydratable Membrane Slot Ready</text></svg>"##,
+                title,
+                dial.cell_id,
+                dial.mode.as_str(),
+                dial.invariant_expr,
+                gauge_w,
+                status_color,
+                status_color,
+                dial.current_value,
+                dial.margin_lo,
+                dial.margin_hi,
+                if admitted { "ADMITTED" } else { "REFUSED" }
+            )
+        }
+        ProjectionKind::ProofTree => format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" data-projection="proofTree"><rect width="640" height="200" fill="#090d16" rx="8"/><g class="silicon-proof-tree"><rect x="34" y="20" width="240" height="36" rx="5" fill="#1e293b" stroke="#38bdf8"/><text x="46" y="42" fill="#e2e8f0" font-family="monospace" font-size="10">Γ ⊢ lhs ⇓ nf (Law.step?)</text><rect x="310" y="20" width="270" height="36" rx="5" fill="#1e293b" stroke="#a855f7"/><text x="322" y="42" fill="#e2e8f0" font-family="monospace" font-size="10">Γ ⊢ {} ({:.1} ∈ [{:.0},{:.0}])</text><line x1="28" y1="74" x2="588" y2="74" stroke="#94a3b8" stroke-width="2"/><text x="594" y="78" fill="#38bdf8" font-family="monospace" font-size="10">Weave</text><text x="44" y="102" fill="#f8fafc" font-family="monospace" font-size="11">Goal: {} (0 sorryAx, ExprCAM verified)</text><line x1="28" y1="118" x2="588" y2="118" stroke="{}" stroke-width="2.5"/><text x="594" y="122" fill="{}" font-family="monospace" font-size="10">Kernel</text><rect x="34" y="132" width="546" height="44" rx="6" fill="#0f172a" stroke="{}" stroke-width="1.5"/><text x="48" y="158" fill="{}" font-family="monospace" font-size="11" font-weight="bold">⊢ {} — Verdict: {} (mode=.{})</text></g></svg>"##,
+            dial.invariant_expr,
+            dial.current_value,
+            dial.margin_lo,
+            dial.margin_hi,
+            title,
+            status_color,
+            status_color,
+            status_color,
+            status_color,
+            title,
+            if admitted { "QED / CERTIFIED" } else { "REFUSED BY TOOTH" },
             dial.mode.as_str()
         ),
-        ProjectionKind::ClearingLedger => format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" data-projection="clearingLedger"><g class="drex-clearing"><text x="24" y="60">drex-clearing@1 Uniform Price Book: {}</text></g></svg>"##,
-            title
+        ProjectionKind::ContractBadge => format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" data-projection="contractBadge"><rect x="4" y="4" width="312" height="72" rx="8" fill="#0f172a" stroke="{}" stroke-width="2"/><rect x="12" y="12" width="12" height="56" rx="4" fill="{}"/><text x="32" y="34" fill="#fff" font-family="monospace" font-size="12" font-weight="bold">Contract {} [{}]</text><text x="32" y="54" fill="#cbd5e1" font-family="monospace" font-size="10">{} | {:.1} in [{:.0}..{:.0}]</text></svg>"##,
+            dial.mode.badge_color(),
+            status_color,
+            title,
+            dial.mode.as_str(),
+            if admitted { "ADMITS" } else { "REFUSES" },
+            dial.current_value,
+            dial.margin_lo,
+            dial.margin_hi
         ),
+        ProjectionKind::ClearingLedger => {
+            let clear_x = 120 + (norm * 360.0) as i32;
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" data-projection="clearingLedger"><rect width="640" height="200" fill="#090d16" rx="8"/><g class="drex-clearing"><text x="24" y="32" fill="#f8fafc" font-family="monospace" font-size="12" font-weight="bold">drex-clearing@1 Uniform Price Book: {}</text><text x="24" y="50" fill="#94a3b8" font-family="monospace" font-size="10">Clearing Price p* = {:.2} | KKT Dual Gap = 0 | Hoard Solvency: {}</text><polyline points="60,70 180,70 180,105 320,105 320,140 520,140" fill="none" stroke="#22c55e" stroke-width="2.5"/><polyline points="60,155 210,155 210,120 350,120 350,82 520,82" fill="none" stroke="#f43f5e" stroke-width="2.5"/><line x1="{}" y1="62" x2="{}" y2="170" stroke="#38bdf8" stroke-width="2" stroke-dasharray="5,3"/><circle cx="{}" cy="112" r="5" fill="{}" stroke="#fff" stroke-width="1.5"/><text x="64" y="184" fill="#22c55e" font-family="monospace" font-size="10">Bids (Demand)</text><text x="200" y="184" fill="#f43f5e" font-family="monospace" font-size="10">Asks (Supply)</text><text x="340" y="184" fill="#38bdf8" font-family="monospace" font-size="10">p*={:.2} ([{:.0}..{:.0}])</text></g></svg>"##,
+                title,
+                dial.current_value,
+                if admitted { "CONSERVED" } else { "REFUSED" },
+                clear_x,
+                clear_x,
+                clear_x,
+                status_color,
+                dial.current_value,
+                dial.margin_lo,
+                dial.margin_hi
+            )
+        }
     };
 
     let html_controls = dial.render_html();
