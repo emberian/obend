@@ -107,7 +107,7 @@ Key mechanized theorems across the 26 modules in `Obend/Hardware/` include:
 
 - **Whole-Tree Axiom & File Census (`Obend/Census.lean`, `Obend/AssertAxioms.lean`, `Obend/AssertCompiled.lean`)**: Crawls the filesystem and Lean environment at compile time to verify that every `.lean` file in `lean/Obend/` is imported, compiled, and depends on zero `sorryAx` and zero custom axioms, plus 15 choice-free `#print axioms` pins on `MachineFast`, `Data`, and `Cshake256/Fast`.
 - **Two-Tier Build & `#tooth` Gate (`lean/tools/hooks/pre-push`)**: Tier 1 (`lake build Obend obend`) builds the core library and CLI in ~90s using selective `@[expose]` in `Obend/Core/` (`import all` for proof readers); Tier 2 (`lake build Obend.Census Teeth`) runs the full census and 60+ `#tooth` mutation suites across `Obend/Teeth/`.
-- **Retired Exploration Record**: Early prototypes of standalone justification/polynomial-slot wrappers (`Obend/Just.lean`, `Obend/Slot/PolySlot.lean`, `Obend/Slot/Repair.lean` at commits `5892944`/`4753f62`) were retired in `ab6bb3f` after proving that `Obend/Slot.lean` already stores its support monomial in normal form (`stale_iff_blocked`, `incumbent_kept`).
+- **Retired Exploration Record**: Early prototypes of standalone justification/polynomial-slot wrappers (`Obend/Logic/Obligation.lean`, `Obend/Slot/Selection.lean`, `Obend/Intention.lean` at commits `5892944`/`4753f62`) were retired in `ab6bb3f` after proving that `Obend/Slot.lean` already stores its support monomial in normal form (`stale_iff_blocked`, `incumbent_kept`).
 
 ---
 

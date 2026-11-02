@@ -343,6 +343,68 @@ public theorem dispatch_sound {Body : Type} {ks : Kinds} {impls : List (Impl Bod
     exact ⟨lk, pre, k, post, hk', hl', hl, hk, hpre⟩
   · cases h
 
+/-! ## `K-KIND-CELL` Derivation Soundness (`deriveKindFrom_inherits_ancestors_and_narrows_laws`) -/
+
+/-- **`deriveKindFrom_inherits_ancestors_and_narrows_laws`**:
+Whenever `deriveKindFrom ks d = .ok (child, ks')`:
+1. `child.name = d.name`, `child.parents = d.parents`, `child.law = d.law`, and `(ks.find d.name).isSome = false`,
+2. `d.law ∈ child.contract` (the child kind's own law narrows the contract),
+3. there exists the C4 linearization `lk` of `d.name` over `d.parents` such that for every ancestor
+   kind `a ∈ lk.drop 1` and cell `ca` with `ks.find a = some ca`:
+   - `ca.law ∈ child.contract`,
+   - every contract entry `law_a ∈ ca.contract` is inherited in `child.contract`, and
+   - every open-recursive layer `L ∈ ca.layers` is inherited in `child.layers`. -/
+public theorem deriveKindFrom_inherits_ancestors_and_narrows_laws {Law : Type}
+    {ks ks' : Kinds Law} {d : KindDerivation Law} {child : KindCell Law}
+    (h : deriveKindFrom ks d = .ok (child, ks')) :
+    child.name = d.name ∧
+    child.parents = d.parents ∧
+    child.law = d.law ∧
+    (ks.find d.name).isSome = false ∧
+    d.law ∈ child.contract ∧
+    ks'.cells = ks.cells ++ [child] ∧
+    ∃ lists lk s,
+      d.parents.mapM (kindPrecedence ks ks.depth) = .ok lists ∧
+      Obend.Spec.C4.linearize
+        ⟨fun p => ((d.parents.zip lists).lookup p).getD [p], fun _ => false⟩
+        [d.name] [d.parents] = .ok (lk, s) ∧
+      (∀ a ∈ lk.drop 1, ∀ ca, ks.find a = some ca →
+        ca.law ∈ child.contract ∧
+        (∀ law_a ∈ ca.contract, law_a ∈ child.contract) ∧
+        (∀ L ∈ ca.layers, L ∈ child.layers)) := by
+  unfold deriveKindFrom at h
+  split at h
+  · cases h
+  · rename_i hclash
+    split at h
+    · cases h
+    · rename_i p0 hp0
+      split at h
+      · cases h
+      · rename_i p0Cell hp0c
+        split at h
+        · cases h
+        · rename_i lists hlists
+          split at h
+          · cases h
+          · rename_i lk s hc4
+            cases h
+            refine ⟨rfl, rfl, rfl, by simpa using hclash, List.mem_cons_self, rfl,
+              lists, lk, s, hlists, hc4, ?_⟩
+            intro a ha ca hca
+            refine ⟨?_, ?_, ?_⟩
+            · refine List.mem_cons_of_mem _ (List.mem_append_right _ ?_)
+              refine List.mem_flatMap.2 ⟨a, ha, ?_⟩
+              simp [hca]
+            · intro law_a hlaw
+              refine List.mem_cons_of_mem _ (List.mem_append_right _ ?_)
+              refine List.mem_flatMap.2 ⟨a, ha, ?_⟩
+              simp [hca, hlaw]
+            · intro L hL
+              refine List.mem_append_right _ ?_
+              refine List.mem_flatMap.2 ⟨a, ha, ?_⟩
+              simp [hca, hL]
+
 /-! ## Teeth -/
 
 /-- Two kinds with the same layout and initial state, `Mile` and `Kilo`, each with a law; `Trip`
@@ -357,15 +419,15 @@ def natField : Data → String → Option Nat
   | _, _ => none
 
 def tooth : Kinds := ⟨[
-  ⟨"Mile", 1, ["n"], .record [("n", .natural 0)], lawAdmit, []⟩,
-  ⟨"Kilo", 1, ["n"], .record [("n", .natural 0)], lawAdmit, []⟩,
-  ⟨"Trip", 3, ["n"], .record [("n", .natural 0)], lawAdmit, ["Mile"]⟩]⟩
+  ⟨"Mile", 1, ["n"], .record [("n", .natural 0)], lawAdmit, [], [], []⟩,
+  ⟨"Kilo", 1, ["n"], .record [("n", .natural 0)], lawAdmit, [], [], []⟩,
+  ⟨"Trip", 3, ["n"], .record [("n", .natural 0)], lawAdmit, ["Mile"], [], []⟩]⟩
 
 /-- The registry after `Mile`'s owner revised it. -/
 def revised : Kinds := ⟨[
-  ⟨"Mile", 2, ["n"], .record [("n", .natural 0)], lawAdmit, []⟩,
-  ⟨"Kilo", 1, ["n"], .record [("n", .natural 0)], lawAdmit, []⟩,
-  ⟨"Trip", 3, ["n"], .record [("n", .natural 0)], lawAdmit, ["Mile"]⟩]⟩
+  ⟨"Mile", 2, ["n"], .record [("n", .natural 0)], lawAdmit, [], [], []⟩,
+  ⟨"Kilo", 1, ["n"], .record [("n", .natural 0)], lawAdmit, [], [], []⟩,
+  ⟨"Trip", 3, ["n"], .record [("n", .natural 0)], lawAdmit, ["Mile"], [], []⟩]⟩
 
 /-- `show` for each kind: the bodies say which. -/
 def shows : List (Impl String) := [⟨"show", "Mile", "miles"⟩, ⟨"show", "Kilo", "kilometres"⟩]

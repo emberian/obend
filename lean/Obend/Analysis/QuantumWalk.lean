@@ -43,14 +43,6 @@ set_option autoImplicit false
 
 /-! ## 1. Symbolic Pole: Orthogonal Spectral Projectors & Universal Idempotency Calculus -/
 
-/-- Matrix multiplication entry $(A B)_{u, v} = \sum_{w \in \text{indices}} A_{u, w} \cdot B_{w, v}$. -/
-def matMulEntry (indices : List Nat) (A B : Nat → Nat → Int) (u v : Nat) : Int :=
-  sumIntOver (fun w => A u w * B w v) indices
-
-/-- Matrix addition entry $(A + B)_{u, v} = A_{u, v} + B_{u, v}$. -/
-def matAddEntry (A B : Nat → Nat → Int) (u v : Nat) : Int :=
-  A u v + B u v
-
 /-- Elementary integer bilinear expansion $(a + b)(c + d) = (a c + a d) + (b c + b d)$. -/
 theorem int_add_mul_add_expand (a b c d : Int) :
     (a + b) * (c + d) = (a * c + a * d) + (b * c + b * d) := by
@@ -99,51 +91,7 @@ theorem orthogonal_idempotents_sum_sq
   rw [Int.mul_add]
   omega
 
-/-- Concrete `IntMatrix` multiplication $(A \cdot B)$ of two `dim × dim` integer matrices. -/
-def IntMatrix.mul (A B : IntMatrix) : IntMatrix :=
-  let indices := List.range A.dim
-  { dim  := A.dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v =>
-        matMulEntry indices A.entry B.entry u v)) }
-
-/-- Concrete `IntMatrix` addition $(A + B)$. -/
-def IntMatrix.add (A B : IntMatrix) : IntMatrix :=
-  let indices := List.range A.dim
-  { dim  := A.dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v => A.entry u v + B.entry u v)) }
-
-/-- Concrete `IntMatrix` scalar multiplication $c \cdot A$. -/
-def IntMatrix.scale (c : Int) (A : IntMatrix) : IntMatrix :=
-  let indices := List.range A.dim
-  { dim  := A.dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v => c * A.entry u v)) }
-
-/-- Scaled $n \times n$ identity matrix $s \cdot I_n$. -/
-def IntMatrix.scaledIdentity (dim : Nat) (s : Int) : IntMatrix :=
-  let indices := List.range dim
-  { dim  := dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v => if u == v then s else 0)) }
-
-/-- Zero $n \times n$ matrix $0_n$. -/
-def IntMatrix.zero (dim : Nat) : IntMatrix :=
-  IntMatrix.scaledIdentity dim 0
-
 /-! ## 2. Strong Cospectrality & Godsil's Spectral-Projector CTQW Propagator -/
-
-/-- Sum a `GaussianInt`-valued function over a list of spectral mode indices `modes`. -/
-def sumGaussianOver (f : Nat → GaussianInt) : List Nat → GaussianInt
-  | [] => GaussianInt.zero
-  | k :: ks => GaussianInt.add (f k) (sumGaussianOver f ks)
-
-@[simp] theorem sumGaussianOver_nil (f : Nat → GaussianInt) :
-    sumGaussianOver f [] = GaussianInt.zero := rfl
-
-@[simp] theorem sumGaussianOver_cons (f : Nat → GaussianInt) (k : Nat) (ks : List Nat) :
-    sumGaussianOver f (k :: ks) = GaussianInt.add (f k) (sumGaussianOver f ks) := rfl
 
 /-- Evaluate the scaled CTQW transition amplitude $(s \cdot U(t))_{w, u} = \sum_{k \in \text{modes}} \phi_k \cdot (E_k)_{w, u}$
 in $\mathbb{Z}[i]$ from source vertex `u` to target vertex `w`, given scaled spectral projectors
@@ -233,10 +181,6 @@ def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
     let isEven := indices.all (fun w => decide (E.entry w u = E.entry w v))
     let isOdd  := indices.all (fun w => decide (E.entry w u = -E.entry w v))
     isEven || isOdd)
-
-/-- Matrix trace $\operatorname{tr}(A) = \sum_{i=0}^{n-1} A_{i, i}$. -/
-def IntMatrix.trace (A : IntMatrix) : Int :=
-  sumIntOver (fun i => A.entry i i) (List.range A.dim)
 
 /-- Auxiliary step for Faddeev–LeVerrier trace recurrence:
 Given matrix `A`, current auxiliary matrix `B_{k-1}`, previous coefficient `c_{n-k+1}`,

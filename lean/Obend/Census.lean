@@ -470,9 +470,22 @@ import Obend.Consensus
 import Obend.Consensus.Simplex
 import Obend.Consensus.Finality
 import Obend.Consensus.Epistemic
+import Obend.Consensus.SovereignFinality
 import Obend.Fold.Collapse
 import Obend.FFI.Bridge
 import Obend.FFI
+import Obend.Analysis.EqSatHypergraph
+import Obend.Analysis.SosLyapunov
+import Obend.Hardware.DigitalTwin
+import Obend.Hardware.TapeoutPipeline
+import Obend.Hardware.TcadBridge
+import Obend.Lower.LCNF
+import Obend.Lower.SiliconElabFabric
+import Obend.Spec.CrossPackage
+import Obend.Stdlib
+import Obend.Tactic.DocsCensus
+import Obend.Vault.Carry
+import Obend.Vault.SovereignEngine
 
 open Lean Elab Command in
 run_cmd do

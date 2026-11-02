@@ -20,7 +20,7 @@ If a design detail does not change what `Judge.accepts` checks—or what a speci
 
 `Core4` is the trusted kernel of `Obend`. Everything above it (`Spec/Elaborate`, `Vault`, `Leaf`, `Lower`, `Hardware`, `Ledger`) reduces to `Core4` terms, slots, and receipts.
 
-### 1.1 Term Former Table (`Obend/Core/Syntax.lean`)
+### 1.1 Term Former Table (`Obend/Core/Term.lean`)
 
 | Category | Constructors | Purpose |
 |---|---|---|
@@ -30,11 +30,11 @@ If a design detail does not change what `Judge.accepts` checks—or what a speci
 | **Propositional equality** | `eqType A a b`, `refl a`, `jElim A a P d b p` | Intensional equality and $J$-elimination |
 | **Bounded recursion** | `fix fuel f A b` | Fuel-bounded fixpoint (`fix 0` returns default; `fix (n+1)` unfolds once) |
 | **Nominal branding (`#kind`)** | `brand tag inner`, `unbrand tag e` | First-class nominal type/value wrapper (`Obend/Core/Nominal.lean`) |
-| **Quotient / View (`view`)** | `quo T R`, `quoIn T R a`, `quoLift T R B f h q` | Setoid quotient introduction and soundness-checked elimination (`Obend/Core/View.lean`) |
-| **Inductive families** | `ind name params`, `ctor ind tag args`, `matchE scrutotive arms`, `recConst f fuel args` | Inductive types, constructors, quantity-preserving `ArmsTyping` pattern matching, and equation-lemma recursion (`Obend/Core/Inductive.lean`) |
-| **Capability slots & quoting** | `slot id`, `quote t`, `unquote q` | First-class slot references and canonical capability-stripped quoting (`Obend/Core/Quote.lean`) |
+| **Quotient / View (`view`)** | `quo T R`, `quoIn T R a`, `quoLift T R B f h q` | Setoid quotient introduction and soundness-checked elimination (`Obend/Core/Code.lean`) |
+| **Inductive families** | `ind name params`, `ctor ind tag args`, `matchE scrutotive arms`, `recConst f fuel args` | Inductive types, constructors, quantity-preserving `ArmsTyping` pattern matching, and equation-lemma recursion (`Obend/Lower/Inductive.lean`) |
+| **Capability slots & quoting** | `slot id`, `quote t`, `unquote q` | First-class slot references and canonical capability-stripped quoting (`Obend/Equiv/Quote.lean`) |
 
-### 1.2 Quantities (`Obend/Core/Quantity.lean`)
+### 1.2 Quantities (`Obend/Core/Ty.lean`)
 
 Every binder and dependent pair carries a quantity $q \in \{0, 1, \omega\}$ (`Quantity.zero`, `Quantity.one`, `Quantity.many`):
 
@@ -63,11 +63,11 @@ Why is `split q p B body` in `Core4` alongside `fst`/`snd`? Because projecting b
   Slot s       = { id : SlotId, state : Term, law : Intention, ... }   -- mutable capability cell
 ```
 
-- An **Intention** (`Obend/Intention/Check.lean`) is a pure `Core4` proposition $\lambda s.\, P(s)$ over a state type.
-- A **Slot** (`Obend/Slot/State.lean`) binds a `SlotId`, a current value `v`, a governing `Intention` (`law`), and a monotonic `Epoch` / receipt chain.
+- An **Intention** (`Obend/Intention.lean`) is a pure `Core4` proposition $\lambda s.\, P(s)$ over a state type.
+- A **Slot** (`Obend/Slot/World.lean`) binds a `SlotId`, a current value `v`, a governing `Intention` (`law`), and a monotonic `Epoch` / receipt chain.
 - **Kinds (`#kind`, `Obend/Kind/`, `Obend/Core/Nominal.lean`)**: Two slots with structurally identical carrier types (e.g., `Nat` representing `Meters` vs. `Seconds`, or `PublicCell` vs. `SecretVault`) are distinguished nominally by `Term.brand tag T`. `brand_distinct_non_conv` proves that distinct tags are never definitionally equal (`Conv`), blocking accidental capability confusion (`C1`).
 
-### 2.2 Folds and Citations (`Obend/Fold/`, `Obend/Receipt/Dated.lean`)
+### 2.2 Folds and Citations (`Obend/Fold/`, `Obend/Receipt.lean`)
 
 A `Fold` is a verifiable log of state transitions (`Turn`s), where each turn carries a `Receipt`:
 
@@ -90,22 +90,22 @@ A `Fold` is a verifiable log of state transitions (`Turn`s), where each turn car
 
 ## 3. The One Checker and the Runner (`Obend/Judge/`, `Obend/Run/`)
 
-### 3.1 `Judge.accepts` (`Obend/Judge/Accepts.lean`)
+### 3.1 `Judge.accepts` (`Obend/Judge/Class.lean`)
 
 There is **one** gatekeeper in `Obend`:
 
 $$\mathsf{Judge.accepts}(\Gamma, s_{\text{old}}, s_{\text{new}}, \mathcal{L}, w) = \mathsf{true}$$
 
-By `OneChecker.one_checker_to_rule_them_all` (`Obend/Judge/Proofs/OneChecker.lean`), `Judge.accepts` returns `true` **if and only if**:
+By `OneChecker.one_checker_to_rule_them_all` (`Obend/Judge/Certified.lean`), `Judge.accepts` returns `true` **if and only if**:
 1. $s_{\text{old}}$ and $s_{\text{new}}$ typecheck at the slot's carrier type under $\Gamma$,
 2. The witness $w$ typechecks in `Core4` at the law obligation $\mathcal{L}(s_{\text{old}}, s_{\text{new}})$ with valid linear usage, and
 3. Every cited slot (`acceptsCited`) matches its live hash and epoch.
 
-Nothing outside `Core4` + `Judge.accepts` is trusted. Tactics, e-graphs (`Obend/Law/EGraph.lean`), press-fit solvers (`Obend/Spec/LawDial.lean`), Lean tactic bridges (`Obend/Lower/Transport.lean`), and hardware tiles all emit explicit `Core4` terms or receipts that `Judge.accepts` verifies.
+Nothing outside `Core4` + `Judge.accepts` is trusted. Tactics, e-graphs (`Obend/Analysis/EqSatHypergraph.lean`), press-fit solvers (`Obend/Spec/LawDial.lean`), Lean tactic bridges (`Obend/Lower/Transport.lean`), and hardware tiles all emit explicit `Core4` terms or receipts that `Judge.accepts` verifies.
 
-### 3.2 Cost, Demand, and Ticks (`Obend/Run/Cost.lean`, `Demand.lean`, `Ticks.lean`)
+### 3.2 Cost, Demand, and Ticks (`Obend/Run/Ticks.lean`, `Demand.lean`, `Ticks.lean`)
 
-Every evaluation step in `Obend/Core/Eval.lean` and `Obend/Run/Runner.lean` accounts for exact resource budgets:
+Every evaluation step in `Obend/Core/Term.lean` and `Obend/Run/Runner.lean` accounts for exact resource budgets:
 - **`Cost` & `Ticks`**: `ticks_sound` and `ticks_tight` prove that static tick bounds upper-bound exact evaluation steps.
 - **`Demand` (`Demand.lean`)**: Compositional demand analysis over `Core4` terms (`demand_sound`), guaranteeing that any call with budget $B \ge \mathsf{demand}(t)$ terminates without fuel exhaustion.
 - **Atomic Fork/Stitch (`Obend/Run/Fork.lean`)**: `stitch_atomic` proves that concurrent or speculative execution over disjoint slot footprints merges atomically into the parent state, or rolls back cleanly on conflict without leaking partial mutations.
@@ -120,11 +120,11 @@ Why can `Obend` programs be reasoned about *before* their open slots are bound, 
 
 | Theorem | Module | Guarantee |
 |---|---|---|
-| **T1: `late_binding`** | `Obend/Logic/Proofs/LateBind.lean` | Typing, laws, and proofs over open slots commute with slot instantiation ($\Gamma, x : A \vdash t : B \implies \Gamma \vdash t[v/x] : B[v/x]$) |
-| **T2: `rewrite_sound`** | `Obend/Logic/Proofs/Rewrite.lean` | Any contextual rewrite justified by a law equality preserves `Conv` and typing in arbitrary frames |
-| **T3: `claim_frame`** | `Obend/Logic/Proofs/Frame.lean` | A law proved on slot footprint $S_1$ remains valid across any transition whose write footprint $S_2$ is disjoint from $S_1$ ($S_1 \cap S_2 = \emptyset$) |
+| **T1: `late_binding`** | `Obend/Logic/LateBinding.lean` | Typing, laws, and proofs over open slots commute with slot instantiation ($\Gamma, x : A \vdash t : B \implies \Gamma \vdash t[v/x] : B[v/x]$) |
+| **T2: `rewrite_sound`** | `Obend/Logic/Rewrite.lean` | Any contextual rewrite justified by a law equality preserves `Conv` and typing in arbitrary frames |
+| **T3: `claim_frame`** | `Obend/Logic/Frame.lean` | A law proved on slot footprint $S_1$ remains valid across any transition whose write footprint $S_2$ is disjoint from $S_1$ ($S_1 \cap S_2 = \emptyset$) |
 
- complemented by **`Obend/Vault/Impact.lean`** (`impact_complete`), which statically computes a sound over-approximation of every transitive dependency of a slot mutation across a Vault.
+ complemented by **`Obend/Analysis/Impact.lean`** (`impact_complete`), which statically computes a sound over-approximation of every transitive dependency of a slot mutation across a Vault.
 
 ### 4.2 `Leaf`, `BendTT`, and the First Futamura Projection (`Obend/Leaf/`)
 
@@ -162,7 +162,7 @@ In classic OO or capability systems, composing layers of objects/wrappers introd
 
 ### 5.2 Inbound: `Core4` $\to$ Lean 4 Reflection & Tactics (`Obend/Lower/Transport.lean` + Milestone 1)
 - **`transport@1` (`Obend/Lower/Transport.lean`)**: Turns a checked Lean theorem into a `Judge`-verifiable `Law.Claim` / `CellContract` witness (`transportTheorem`).
-- **Tactic Reflection (`Obend/Lower/Tactics.lean`)**: Reflects `Obend` slot obligations and cell expressions into live Lean 4 goals (`obend_unfold`, `obend_law`, `obend_split`, `obend_tooth`), letting users discharge complex nonlinear/analytic proof obligations using `omega`, `linarith`, `polyrith`, `norm_num`, `ring`, `aesop`, or custom Mathlib lemmas, and lowering the resulting kernel proof right back into a `Core4` receipt witness (`byLoweredLean`).
+- **Tactic Reflection (`Obend/Tactic/Weave.lean`)**: Reflects `Obend` slot obligations and cell expressions into live Lean 4 goals (`obend_unfold`, `obend_law`, `obend_split`, `obend_tooth`), letting users discharge complex nonlinear/analytic proof obligations using `omega`, `linarith`, `polyrith`, `norm_num`, `ring`, `aesop`, or custom Mathlib lemmas, and lowering the resulting kernel proof right back into a `Core4` receipt witness (`byLoweredLean`).
 
 ---
 
@@ -190,10 +190,10 @@ The early `Obend/Law/Claim.lean` (`keeps`) checker required a syntactic guard sh
 
 ### 6.3 Real Mathematical Analysis Beyond E-Graphs (`Obend/Analysis/`)
 
-Equational saturation (`Obend/Law/EGraph.lean`, `extractProof_sound`) is fast for algebraic rewrites, but real engineering and physics require **order, bounds, rates of change, and fixed-point convergence**:
-- **Verified Dyadic Interval Arithmetic (`Obend/Analysis/Interval.lean`)**: Exact $[lo, hi] \subset \mathbb{Q}_{\text{dyadic}}$ enclosures (`interval_add_sound`, `interval_mul_sound`, `interval_monotone`) that synthesize `Core4` inequality certificates without floating-point unsoundness.
-- **Symbolic Differentiation & Automatic Adjoints (`Obend/Analysis/Diff.lean`)**: Forward-mode dual numbers and reverse-mode pullbacks over `Core4` expressions (`hasDeriv_chain`, `grad_sound`), feeding sensitivity cones directly into `Obend/Vault/Impact.lean` and `Obend/Hardware/` multiphysics checks.
-- **Contraction Mapping & Monotone Fixed Points (`Obend/Analysis/Fixpoint.lean`)**: Certifies convergence and error bounds for iterative numerical solvers.
+Equational saturation (`Obend/Analysis/EqSatHypergraph.lean`, `extractProof_sound`) is fast for algebraic rewrites, but real engineering and physics require **order, bounds, rates of change, and fixed-point convergence**:
+- **Verified Dyadic Interval Arithmetic (`Obend/Analysis/RealAnalysis.lean`)**: Exact $[lo, hi] \subset \mathbb{Q}_{\text{dyadic}}$ enclosures (`interval_add_sound`, `interval_mul_sound`, `interval_monotone`) that synthesize `Core4` inequality certificates without floating-point unsoundness.
+- **Symbolic Differentiation & Automatic Adjoints (`Obend/Analysis/Diff.lean`)**: Forward-mode dual numbers and reverse-mode pullbacks over `Core4` expressions (`hasDeriv_chain`, `grad_sound`), feeding sensitivity cones directly into `Obend/Analysis/Impact.lean` and `Obend/Hardware/` multiphysics checks.
+- **Contraction Mapping & Monotone Fixed Points (`Obend/Analysis/Flowpipe.lean`)**: Certifies convergence and error bounds for iterative numerical solvers.
 
 ---
 
@@ -233,7 +233,7 @@ A `Vault` (`Obend/Vault/Store.lean`) is simultaneously a filesystem-backed react
 
 ## 9. `.obnb` Structured Notebooks & Thin Rust GUI/FFI
 
-Markdown files remain supported as a compatibility projection (`Obend/Doc/Markdown.lean`, `roundtrip_parse_render`), but the primary interactive medium of "The Next Mathematica" is the **`.obnb` structured notebook (`Obend/Doc/Notebook.lean`)**:
+Markdown files remain supported as a compatibility projection (`Obend/Doc/Structured.lean`, `roundtrip_parse_render`), but the primary interactive medium of "The Next Mathematica" is the **`.obnb` structured notebook (`Obend/Doc/Section.lean`)**:
 - **Typed `BlockGraph` Cells**: `CodeCell`, `LawCell`, `ProofCell`, `Plot2DCell`, `Plot3DCell`, `CircuitSchematicCell`, `LayoutViewportCell`, `SliderWidgetCell`, `ContractEscrowCell`, `TableCell`, and `ProseCell`.
 - **Every Widget Is a `Slot`**: Adjusting a `SliderWidgetCell` submits a `VaultTurn`; `Impact` recomputes the exact downstream cone; `.free` cells update at 120 fps, `.press` cells re-verify automatically, and `.locked` cells highlight broken laws with concrete counterexamples.
 - **Thin Rust Native Shell**: Lean owns 100% of parsing, elaboration, typechecking, tactic reflection, interval/AD analysis, `Leaf` specialization, and `Vault` transitions via a thin `@[export]` C-ABI boundary (`obend_vault_open`, `obend_notebook_apply_op`, `obend_cell_set_dial`, `obend_tactic_reflect`, `obend_viewport_render_frame`), while a lightweight Rust `wgpu` shell renders 2D/3D plots, schematics, and GDSII/eFPGA viewports and handles native cryptography (`aws-lc-rs` / `blake3` / `ed25519-dalek`).

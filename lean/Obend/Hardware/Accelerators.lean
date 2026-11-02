@@ -124,6 +124,86 @@ theorem ozaki_base13_2limb_product_exact (a0 a1 b0 b1 : Int) :
   rw [h1, h2, h3, Int.mul_add 13 (a0 * b1) (a1 * b0)]
   omega
 
+/-- Evaluate an arbitrary $K$-limb base-13 integer $\sum_{k=0}^{K-1} a_k \cdot 13^k$
+(little-endian limb list `a_0 :: a_1 :: ...`). -/
+def evalBase13Limbs : List Int → Int
+  | [] => 0
+  | a :: rest => a + 13 * evalBase13Limbs rest
+
+/-- Scale every limb of a $K$-limb base-13 representation by scalar `c : Int`. -/
+def scaleBase13Limbs (c : Int) : List Int → List Int
+  | [] => []
+  | a :: rest => (c * a) :: scaleBase13Limbs c rest
+
+/-- Limbwise addition of two multi-limb base-13 representations (without carry propagation,
+accumulating in wide Kulisch/FP32 limbs). -/
+def addBase13Limbs : List Int → List Int → List Int
+  | [], bs => bs
+  | as, [] => as
+  | a :: as, b :: bs => (a + b) :: addBase13Limbs as bs
+
+/-- Cauchy convolution of two multi-limb base-13 representations (`arXiv:2608.06812` §III):
+computes all $K_A \times K_B$ `FP4 (E2M1)` Tensor-Core limb products and accumulates them by radix-13 degree. -/
+def mulBase13Limbs : List Int → List Int → List Int
+  | [], _ => []
+  | a :: as, bs => addBase13Limbs (scaleBase13Limbs a bs) (0 :: mulBase13Limbs as bs)
+
+/-- Check that every limb in a $K$-limb representation is a valid doubled `FP4 (E2M1)` value in $S_{\text{E2M1}}$. -/
+def allLimbsDoubledFp4 (limbs : List Int) : Bool :=
+  limbs.all isDoubledFp4E2M1
+
+/-- **Universal $K$-Limb Base-13 Limbwise Addition Exactness (`evalBase13Limbs_add_exact`)**:
+Evaluating the limbwise sum `addBase13Limbs as bs` equals `evalBase13Limbs as + evalBase13Limbs bs`
+for all limb lists `as, bs : List Int`. -/
+theorem evalBase13Limbs_add_exact (as bs : List Int) :
+    evalBase13Limbs (addBase13Limbs as bs) =
+      evalBase13Limbs as + evalBase13Limbs bs := by
+  induction as generalizing bs with
+  | nil =>
+    simp [addBase13Limbs, evalBase13Limbs]
+  | cons a restA ih =>
+    cases bs with
+    | nil =>
+      simp [addBase13Limbs, evalBase13Limbs]
+    | cons b restB =>
+      dsimp only [addBase13Limbs, evalBase13Limbs]
+      rw [ih restB]
+      omega
+
+/-- **Universal $K$-Limb Base-13 Scalar Scaling Exactness (`evalBase13Limbs_scale_exact`)**:
+Scaling every limb of `as` by `c` scales its base-13 value by `c` (`c * evalBase13Limbs as`). -/
+theorem evalBase13Limbs_scale_exact (c : Int) (as : List Int) :
+    evalBase13Limbs (scaleBase13Limbs c as) = c * evalBase13Limbs as := by
+  induction as with
+  | nil =>
+    simp [scaleBase13Limbs, evalBase13Limbs]
+  | cons a rest ih =>
+    dsimp only [scaleBase13Limbs, evalBase13Limbs]
+    rw [ih, Int.mul_add]
+    have hAssoc : 13 * (c * evalBase13Limbs rest) = c * (13 * evalBase13Limbs rest) := by
+      rw [← Int.mul_assoc 13 c, Int.mul_comm 13 c, Int.mul_assoc c 13]
+    rw [hAssoc]
+
+/-- **Universal $K$-Limb Ozaki Base-13 Cauchy Convolution Exactness (`ozaki_base13_klimb_mul_exact`)**:
+For ANY two arbitrary-length limb lists `as, bs : List Int`, evaluating their Cauchy limb convolution
+`mulBase13Limbs as bs` reproduces the exact integer product `evalBase13Limbs as * evalBase13Limbs bs`
+with zero intermediate truncation or rounding error! -/
+theorem ozaki_base13_klimb_mul_exact (as bs : List Int) :
+    evalBase13Limbs (mulBase13Limbs as bs) =
+      evalBase13Limbs as * evalBase13Limbs bs := by
+  induction as with
+  | nil =>
+    simp [mulBase13Limbs, evalBase13Limbs]
+  | cons a restA ih =>
+    dsimp only [mulBase13Limbs, evalBase13Limbs]
+    rw [evalBase13Limbs_add_exact, evalBase13Limbs_scale_exact]
+    dsimp only [evalBase13Limbs]
+    rw [ih, Int.zero_add, Int.add_mul]
+    have hAssoc : 13 * (evalBase13Limbs restA * evalBase13Limbs bs) =
+        13 * evalBase13Limbs restA * evalBase13Limbs bs := by
+      rw [Int.mul_assoc]
+    rw [hAssoc]
+
 /-! ## 2. OCP Microscaling (`MXFP`) Block-Floating-Point & Kulisch Exact Accumulator (`arXiv:2607.13898`) -/
 
 /-- A Microscaling (`MXFP8` / `MXFP6` / `MXFP4`) block sharing an 8-bit unsigned `E8M0` scale exponent
@@ -171,6 +251,40 @@ theorem kulisch_dot_append_exact
       have hSub := ih restY hLen
       simp only [List.cons_append, kulischDot]
       omega
+
+/-- Limbwise Cauchy inner-product accumulator over two vectors of $K$-limb base-13 numbers:
+accumulates the Cauchy convolution `mulBase13Limbs x y` across all vector positions without
+collapsing limbs until final reduction. -/
+def accumOzakiBase13KLimbDot : List (List Int) → List (List Int) → List Int
+  | [], _ => []
+  | _, [] => []
+  | x :: xs, y :: ys => addBase13Limbs (mulBase13Limbs x y) (accumOzakiBase13KLimbDot xs ys)
+
+/-- Multi-limb ($K$-limb) Ozaki Base-13 `FP4` Tensor-Core inner product (`arXiv:2608.06812` §III):
+evaluates the limbwise Cauchy dot-product accumulation `accumOzakiBase13KLimbDot xs ys` in a
+wide Kulisch accumulator. -/
+def evalOzakiBase13KLimbDot (xs ys : List (List Int)) : Int :=
+  evalBase13Limbs (accumOzakiBase13KLimbDot xs ys)
+
+/-- **Universal $K$-Limb Ozaki Base-13 Inner-Product Exactness (`ozaki_base13_klimb_dot_exact`)**:
+For ANY two vectors of $K$-limb base-13 representations `xs, ys : List (List Int)`, the multi-limb
+Tensor-Core inner product `evalOzakiBase13KLimbDot xs ys` equals the exact Kulisch wide inner
+product `kulischDot (xs.map evalBase13Limbs) (ys.map evalBase13Limbs)` with zero intermediate
+rounding error! -/
+theorem ozaki_base13_klimb_dot_exact (xs ys : List (List Int)) :
+    evalOzakiBase13KLimbDot xs ys =
+      kulischDot (xs.map evalBase13Limbs) (ys.map evalBase13Limbs) := by
+  induction xs generalizing ys with
+  | nil =>
+    simp [evalOzakiBase13KLimbDot, accumOzakiBase13KLimbDot, evalBase13Limbs, kulischDot]
+  | cons x restX ih =>
+    cases ys with
+    | nil =>
+      simp [evalOzakiBase13KLimbDot, accumOzakiBase13KLimbDot, evalBase13Limbs, kulischDot]
+    | cons y restY =>
+      unfold evalOzakiBase13KLimbDot at *
+      dsimp only [accumOzakiBase13KLimbDot, List.map, kulischDot]
+      rw [evalBase13Limbs_add_exact, ozaki_base13_klimb_mul_exact, ih restY]
 
 /-! ## 3. IEEE-754 / TAO Operator Rounding Interval Enclosure (`arXiv:2510.16028` & `arXiv:2610.24548`) -/
 
@@ -311,6 +425,42 @@ theorem amd_gpu_mfma_dot4_exact
          readVgpr regs (aBase + 3) * readVgpr regs (bBase + 3)) := by
   dsimp only [execAmdGpuInst]
   rw [readVgpr_writeVgpr_same]
+
+/-- **Universal 4-Limb Ozaki Base-13 `FP4` $\leftrightarrow$ AMD `CDNA3` `v_mfma` Bridge (`ozaki_base13_4limb_fp4_mfma_bridge`)**:
+For any two 4-limb base-13 numbers $A = [a_0, a_1, a_2, a_3]$ and $B = [b_0, b_1, b_2, b_3]$
+and initial accumulator `acc : Int`:
+1. Evaluating the 4-limb Cauchy convolution `mulBase13Limbs [a0, a1, a2, a3] [b0, b1, b2, b3]`
+   reproduces the exact integer product `(a0 + 13*a1 + 169*a2 + 2197*a3) * (b0 + 13*b1 + 169*b2 + 2197*b3)`,
+2. Executing a single AMD `CDNA3` `vMfmaDot4 9 0 4 8` instruction on VGPR file
+   `[a0, a1, a2, a3, 1, 13, 169, 2197, 0]` reconstructs `evalBase13Limbs [a0, a1, a2, a3]` in register `9`, and
+3. Executing `vMfmaDot4 9 0 4 8` on `[a0, a1, a2, a3, b0, b1, b2, b3, acc]` writes the exact 4-lane
+   Kulisch inner product `acc + kulischDot [a0, a1, a2, a3] [b0, b1, b2, b3]` into register `9`. -/
+theorem ozaki_base13_4limb_fp4_mfma_bridge
+    (a0 a1 a2 a3 b0 b1 b2 b3 acc : Int) :
+    evalBase13Limbs (mulBase13Limbs [a0, a1, a2, a3] [b0, b1, b2, b3]) =
+      (a0 + 13 * a1 + 169 * a2 + 2197 * a3) * (b0 + 13 * b1 + 169 * b2 + 2197 * b3) ∧
+    readVgpr
+      (execAmdGpuInst [a0, a1, a2, a3, 1, 13, 169, 2197, 0] (.vMfmaDot4 9 0 4 8)) 9 =
+      evalBase13Limbs [a0, a1, a2, a3] ∧
+    readVgpr
+      (execAmdGpuInst [a0, a1, a2, a3, b0, b1, b2, b3, acc] (.vMfmaDot4 9 0 4 8)) 9 =
+      acc + kulischDot [a0, a1, a2, a3] [b0, b1, b2, b3] := by
+  refine ⟨?_, ?_, ?_⟩
+  · rw [ozaki_base13_klimb_mul_exact]
+    dsimp only [evalBase13Limbs]
+    have hA : a0 + 13 * (a1 + 13 * (a2 + 13 * (a3 + 13 * 0))) =
+        a0 + 13 * a1 + 169 * a2 + 2197 * a3 := by omega
+    have hB : b0 + 13 * (b1 + 13 * (b2 + 13 * (b3 + 13 * 0))) =
+        b0 + 13 * b1 + 169 * b2 + 2197 * b3 := by omega
+    rw [hA, hB]
+  · rw [amd_gpu_mfma_dot4_exact]
+    simp only [readVgpr, List.getD, Nat.add_zero, List.getElem?_cons_zero,
+      List.getElem?_cons_succ, Option.getD_some, evalBase13Limbs]
+    omega
+  · rw [amd_gpu_mfma_dot4_exact]
+    simp only [readVgpr, List.getD, Nat.add_zero, List.getElem?_cons_zero,
+      List.getElem?_cons_succ, Option.getD_some, kulischDot]
+    omega
 
 /-! ## 5. 2D Systolic Array TPU & FPGA `DSP58` `PCIN -> PCOUT` Hardware Cascade -/
 

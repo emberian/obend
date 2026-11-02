@@ -124,158 +124,6 @@ theorem badLoopRtlModule_refused :
       .refused (.rtlInvalidDagOrCdc "bad_loop_mod") [] := by
   rfl
 
-/-- Decode a JSON object string for `hw-rtl-synth@1` (`{"module": NAME}`). -/
-def decodeRtlSynthObj (s : String) : Except String String := do
-  let j ← Json.parse s
-  j.getObjValAs? String "module"
-
-/-- Decode a JSON certificate string for `hw-rtl-synth@1`: supports either `"preset": "review"`
-(the verified `ReviewMember.obend` compiled module) or `"preset": "bad_loop"`. -/
-def decodeRtlSynthCert (s : String) : Except String RtlModule := do
-  let j ← Json.parse s
-  let name ← j.getObjValAs? String "module"
-  let dagOk := (j.getObjValAs? Bool "dagOk").toOption.getD true
-  let cdcOk := (j.getObjValAs? Bool "cdcOk").toOption.getD true
-  if !dagOk then
-    return { badLoopRtlModule with name := name }
-  else if !cdcOk then
-    let r0 : RegSpec := ⟨0, "core_r", .coreClk, .resetFree, false, .inputPort 0⟩
-    let r1 : RegSpec := ⟨1, "axi_r", .axiIoClk, .resetFree, false, .regRead 0⟩
-    return { name := name, inputNames := ["in0"], wires := [], regs := [r0, r1], outputs := [] }
-  else
-    return { name := name
-           , inputNames := ["arg"]
-           , wires :=
-               [ ⟨0, "w_slot_0", .const 1#64⟩
-               , ⟨1, "w_slot_1", .alu .add (.alu .add (.inputPort 0) (.wireRef 0)) (.const 1#64)⟩ ]
-           , regs := []
-           , outputs := [⟨"out_review", .wireRef 1⟩] }
-
-/-- Registered `Obend.Judge.Format` for `hw-rtl-synth@1`. -/
-def hwSynthFormat : Format where
-  name        := "hw-rtl-synth"
-  version     := "1"
-  Obj         := String
-  Cert        := RtlModule
-  judge       := rtlSynthJudge
-  decodeObj   := decodeRtlSynthObj
-  decodeCert  := decodeRtlSynthCert
-  trust       := .kernel
-  regime      := .decidable
-  bad         := ("bad_loop_mod", badLoopRtlModule)
-  badGrade    := 0
-  bad_refused := ⟨_, _, badLoopRtlModule_refused⟩
-
-theorem hwSynthFormat_sound {r : Nat} {obj cert : String}
-    (h : hwSynthFormat.checkBytes r obj cert = .ok) :
-    ∃ o c, decodeRtlSynthObj obj = .ok o ∧ decodeRtlSynthCert cert = .ok c ∧
-      ((c.name == o) && checkRtlModule c) = true :=
-  hwSynthFormat.checkBytes_sound h
-
-/-! ## 3. Format 2: `hw-retime-sta@1` (Leiserson–Saxe Retiming & STA Judge) -/
-
-/-- Judge check function for `hw-retime-sta@1` on `(SyncGraph × Nat)` (`clockPeriodPs`) at `corner7nm_SS`. -/
-def checkRetimeSta (_grade : Nat) (target : SyncGraph × Nat) (cert : RetimingCert) : Verdict HwClause :=
-  if checkRetimingCert target.1 cert corner7nm_SS target.2 then
-    .ok
-  else
-    .refused (.retimeInvalidLagOrTiming target.1.name) []
-
-instance retimeStaJudge : Obend.Judge (SyncGraph × Nat) RetimingCert where
-  Clause := HwClause
-  Meaning target cert := checkRetimingCert target.1 cert corner7nm_SS target.2 = true
-  check := checkRetimeSta
-  sound := by
-    intro _ o c h
-    unfold checkRetimeSta at h
-    by_cases hOk : checkRetimingCert o.1 c corner7nm_SS o.2 = true
-    · exact hOk
-    · simp [hOk] at h
-  refutes _ := false
-  refuted := by
-    intro _ _ _ _ _ _ hRef
-    cases hRef
-  Fragment _ := True
-  complete := by
-    intro o _ ⟨c, hc⟩
-    exact ⟨c, 0, by simp [checkRetimeSta, hc]⟩
-  mono := by
-    intro _ _ _ _ _ _
-    rfl
-
-theorem badRetimeCert_refused :
-    checkRetimeSta 0 (macUnretimedGraph, 2000) negativeWeightBadCert =
-      .refused (.retimeInvalidLagOrTiming "mac_2stage") [] :=
-  rfl
-
-def decodeRetimeObj (s : String) : Except String (SyncGraph × Nat) := do
-  let j ← Json.parse s
-  let period ← j.getObjValAs? Nat "periodPs"
-  return (macUnretimedGraph, period)
-
-def decodeRetimeCert (s : String) : Except String RetimingCert := do
-  let j ← Json.parse s
-  let lag1 ← j.getObjValAs? Int "lag1"
-  let ioShift := (j.getObjValAs? Int "ioLatencyShift").toOption.getD 0
-  return { vertexLags := [(0, 0), (1, lag1), (2, ioShift)], ioLatencyShift := ioShift }
-
-/-- Registered `Obend.Judge.Format` for `hw-retime-sta@1`. -/
-def hwRetimeFormat : Format where
-  name        := "hw-retime-sta"
-  version     := "1"
-  Obj         := SyncGraph × Nat
-  Cert        := RetimingCert
-  judge       := retimeStaJudge
-  decodeObj   := decodeRetimeObj
-  decodeCert  := decodeRetimeCert
-  trust       := .kernel
-  regime      := .decidable
-  bad         := ((macUnretimedGraph, 2000), negativeWeightBadCert)
-  badGrade    := 0
-  bad_refused := ⟨_, _, badRetimeCert_refused⟩
-
-theorem hwRetimeFormat_sound {r : Nat} {obj cert : String}
-    (h : hwRetimeFormat.checkBytes r obj cert = .ok) :
-    ∃ o c, decodeRetimeObj obj = .ok o ∧ decodeRetimeCert cert = .ok c ∧
-      checkRetimingCert o.1 c corner7nm_SS o.2 = true :=
-  hwRetimeFormat.checkBytes_sound h
-
-/-! ## 4. Format 3: `hw-pnr-bitstream@1` (Physical Place-and-Route & Bitstream Judge) -/
-
-/-- Judge check function for `hw-pnr-bitstream@1`. -/
-def checkPnrJudge (_grade : Nat) (periodPs : Nat) (cert : PnrCertificate) : Verdict HwClause :=
-  if checkPnrCertificate corner7nm_SS periodPs cert then
-    .ok
-  else
-    .refused (.pnrCollisionShortOrTiming cert.designName) []
-
-instance pnrBitstreamJudge : Obend.Judge Nat PnrCertificate where
-  Clause := HwClause
-  Meaning periodPs cert := checkPnrCertificate corner7nm_SS periodPs cert = true
-  check := checkPnrJudge
-  sound := by
-    intro _ o c h
-    unfold checkPnrJudge at h
-    by_cases hOk : checkPnrCertificate corner7nm_SS o c = true
-    · exact hOk
-    · simp [hOk] at h
-  refutes _ := false
-  refuted := by
-    intro _ _ _ _ _ _ hRef
-    cases hRef
-  Fragment _ := True
-  complete := by
-    intro o _ ⟨c, hc⟩
-    exact ⟨c, 0, by simp [checkPnrJudge, hc]⟩
-  mono := by
-    intro _ _ _ _ _ _
-    rfl
-
-theorem badPnrCert_refused :
-    checkPnrJudge 0 2000 collidingBelPnrCert =
-      .refused (.pnrCollisionShortOrTiming "obend_routed_adder2") [] :=
-  rfl
-
 /-- Parse leading decimal digits from a `List Char`. -/
 def parseLeadingDigitsAux : List Char → Nat → Bool → Option Nat
   | [], acc, true => some acc
@@ -425,22 +273,287 @@ def ensureWireFrame (s : String) : Except String Unit :=
   else
     .error "invalid wire frame: expected JSON object or key=value wire string"
 
+/-- Require a string field `field` in wire string `s`, returning `.error` if absent. -/
+def requireStringField (s field : String) : Except String String :=
+  match extractStringField s field with
+  | some v => .ok v
+  | none   => .error s!"missing required string field '{field}'"
+
+/-- Require a natural-number field `field` in wire string `s`, returning `.error` if absent. -/
+def requireNatField (s field : String) : Except String Nat :=
+  match extractNatField s field with
+  | some n => .ok n
+  | none   => .error s!"missing required nat field '{field}'"
+
+/-- Require a signed-integer field `field` in wire string `s`, returning `.error` if absent. -/
+def requireIntField (s field : String) : Except String Int :=
+  match extractIntField s field with
+  | some v => .ok v
+  | none   => .error s!"missing required int field '{field}'"
+
+/-- Decode a JSON or wire object string for `hw-rtl-synth@1` (`{"module": NAME}`). -/
+def decodeRtlSynthObj (s : String) : Except String String := do
+  ensureWireFrame s
+  requireStringField s "module"
+
+/-- Decode a single `RtlExpr` operand from `<prefix>Kind` and `<prefix>Val`. -/
+def decodeRtlOperand (s prefixStr : String) : Except String RtlExpr := do
+  let kind ← requireStringField s (prefixStr ++ "Kind")
+  let val  ← requireNatField s (prefixStr ++ "Val")
+  if kind == "const" then return .const (BitVec.ofNat 64 val)
+  else if kind == "inputPort" then return .inputPort val
+  else if kind == "wireRef" then return .wireRef val
+  else if kind == "regRead" then return .regRead val
+  else if kind == "addInputWire" then return .alu .add (.inputPort 0) (.wireRef val)
+  else .error s!"unknown RtlExpr operand kind '{kind}'"
+
+/-- Decode an `RtlAluOp` from its wire string token. -/
+def decodeRtlAluOp (opStr : String) : Except String RtlAluOp :=
+  if opStr == "add" then .ok .add
+  else if opStr == "sub" then .ok .sub
+  else if opStr == "mul" then .ok .mul
+  else if opStr == "bitAnd" then .ok .bitAnd
+  else if opStr == "bitOr" then .ok .bitOr
+  else if opStr == "bitXor" then .ok .bitXor
+  else if opStr == "shl" then .ok .shl
+  else if opStr == "lshr" then .ok .lshr
+  else if opStr == "eq" then .ok .eq
+  else if opStr == "ult" then .ok .ult
+  else .error s!"unknown RtlAluOp '{opStr}'"
+
+/-- Decode a `ClkDomain` from its wire string token. -/
+def decodeClockDomain (domStr : String) : Except String ClkDomain :=
+  if domStr == "coreClk" then .ok .coreClk
+  else if domStr == "axiIoClk" then .ok .axiIoClk
+  else if domStr == "cfgJtagClk" then .ok .cfgJtagClk
+  else .error s!"unknown ClkDomain '{domStr}'"
+
+/-- Decode `numWires` wire assignments (`wire0Idx`, `wire0Name`, `wire0Op`, ...) from `s`. -/
+def decodeRtlWiresAux (s : String) (idx fuel : Nat) (acc : List WireAssign) :
+    Except String (List WireAssign) :=
+  match fuel with
+  | 0 => .ok acc
+  | k + 1 => do
+    let wIdx  ← requireNatField s s!"wire{idx}Idx"
+    let wName ← requireStringField s s!"wire{idx}Name"
+    let wOp   ← requireStringField s s!"wire{idx}Op"
+    let expr ←
+      if wOp == "const" then do
+        let v ← requireNatField s s!"wire{idx}Val"
+        pure (.const (BitVec.ofNat 64 v))
+      else if wOp == "inputPort" then do
+        let v ← requireNatField s s!"wire{idx}Val"
+        pure (.inputPort v)
+      else if wOp == "wireRef" then do
+        let v ← requireNatField s s!"wire{idx}Val"
+        pure (.wireRef v)
+      else if wOp == "regRead" then do
+        let v ← requireNatField s s!"wire{idx}Val"
+        pure (.regRead v)
+      else do
+        let aluOp ← decodeRtlAluOp wOp
+        let lhs   ← decodeRtlOperand s s!"wire{idx}Lhs"
+        let rhs   ← decodeRtlOperand s s!"wire{idx}Rhs"
+        pure (.alu aluOp lhs rhs)
+    decodeRtlWiresAux s (idx + 1) k (acc ++ [{ wireIdx := wIdx, name := wName, expr := expr }])
+
+/-- Decode `numRegs` register specifications (`reg0Idx`, `reg0Name`, `reg0Domain`, `reg0Sync`,
+`reg0NextKind`, `reg0NextVal`) from `s`. -/
+def decodeRtlRegsAux (s : String) (idx fuel : Nat) (acc : List RegSpec) :
+    Except String (List RegSpec) :=
+  match fuel with
+  | 0 => .ok acc
+  | k + 1 => do
+    let rIdx    ← requireNatField s s!"reg{idx}Idx"
+    let rName   ← requireStringField s s!"reg{idx}Name"
+    let domStr  ← requireStringField s s!"reg{idx}Domain"
+    let dom     ← decodeClockDomain domStr
+    let syncNat ← requireNatField s s!"reg{idx}Sync"
+    let nextExp ← decodeRtlOperand s s!"reg{idx}Next"
+    let r : RegSpec :=
+      { regIdx         := rIdx
+      , name           := rName
+      , domain         := dom
+      , resetKind      := .resetFree
+      , isSynchronizer := syncNat != 0
+      , nextExpr       := nextExp }
+    decodeRtlRegsAux s (idx + 1) k (acc ++ [r])
+
+/-- Decode a certificate string for `hw-rtl-synth@1`: parses explicit `RtlModule` wire,
+register, clock-domain, and output definitions, failing with `.error` if any required field
+is absent (zero hardcoded `golden` module fallback!). -/
+def decodeRtlSynthCert (s : String) : Except String RtlModule := do
+  ensureWireFrame s
+  let name      ← requireStringField s "module"
+  let inputPort ← requireStringField s "inputPort"
+  let numWires  ← requireNatField s "numWires"
+  let wires     ← decodeRtlWiresAux s 0 numWires []
+  let numRegs   ← requireNatField s "numRegs"
+  let regs      ← decodeRtlRegsAux s 0 numRegs []
+  let outName   ← requireStringField s "outputName"
+  let outWire   ← requireNatField s "outputWire"
+  return {
+    name       := name
+    inputNames := [inputPort]
+    wires      := wires
+    regs       := regs
+    outputs    := [⟨outName, .wireRef outWire⟩]
+  }
+
+/-- Registered `Obend.Judge.Format` for `hw-rtl-synth@1`. -/
+def hwSynthFormat : Format where
+  name        := "hw-rtl-synth"
+  version     := "1"
+  Obj         := String
+  Cert        := RtlModule
+  judge       := rtlSynthJudge
+  decodeObj   := decodeRtlSynthObj
+  decodeCert  := decodeRtlSynthCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := ("bad_loop_mod", badLoopRtlModule)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badLoopRtlModule_refused⟩
+
+theorem hwSynthFormat_sound {r : Nat} {obj cert : String}
+    (h : hwSynthFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeRtlSynthObj obj = .ok o ∧ decodeRtlSynthCert cert = .ok c ∧
+      ((c.name == o) && checkRtlModule c) = true :=
+  hwSynthFormat.checkBytes_sound h
+
+/-! ## 3. Format 2: `hw-retime-sta@1` (Leiserson–Saxe Retiming & STA Judge) -/
+
+/-- Judge check function for `hw-retime-sta@1` on `(SyncGraph × Nat)` (`clockPeriodPs`) at `corner7nm_SS`. -/
+def checkRetimeSta (_grade : Nat) (target : SyncGraph × Nat) (cert : RetimingCert) : Verdict HwClause :=
+  if checkRetimingCert target.1 cert corner7nm_SS target.2 then
+    .ok
+  else
+    .refused (.retimeInvalidLagOrTiming target.1.name) []
+
+instance retimeStaJudge : Obend.Judge (SyncGraph × Nat) RetimingCert where
+  Clause := HwClause
+  Meaning target cert := checkRetimingCert target.1 cert corner7nm_SS target.2 = true
+  check := checkRetimeSta
+  sound := by
+    intro _ o c h
+    unfold checkRetimeSta at h
+    by_cases hOk : checkRetimingCert o.1 c corner7nm_SS o.2 = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkRetimeSta, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badRetimeCert_refused :
+    checkRetimeSta 0 (macUnretimedGraph, 2000) negativeWeightBadCert =
+      .refused (.retimeInvalidLagOrTiming "mac_2stage") [] :=
+  rfl
+
+def decodeRetimeObj (s : String) : Except String (SyncGraph × Nat) := do
+  ensureWireFrame s
+  let period ← requireNatField s "periodPs"
+  return (macUnretimedGraph, period)
+
+def decodeRetimeCert (s : String) : Except String RetimingCert := do
+  ensureWireFrame s
+  let lag0    ← requireIntField s "lag0"
+  let lag1    ← requireIntField s "lag1"
+  let ioShift ← requireIntField s "ioLatencyShift"
+  return { vertexLags := [(0, lag0), (1, lag1), (2, ioShift)], ioLatencyShift := ioShift }
+
+/-- Registered `Obend.Judge.Format` for `hw-retime-sta@1`. -/
+def hwRetimeFormat : Format where
+  name        := "hw-retime-sta"
+  version     := "1"
+  Obj         := SyncGraph × Nat
+  Cert        := RetimingCert
+  judge       := retimeStaJudge
+  decodeObj   := decodeRetimeObj
+  decodeCert  := decodeRetimeCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := ((macUnretimedGraph, 2000), negativeWeightBadCert)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badRetimeCert_refused⟩
+
+theorem hwRetimeFormat_sound {r : Nat} {obj cert : String}
+    (h : hwRetimeFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeRetimeObj obj = .ok o ∧ decodeRetimeCert cert = .ok c ∧
+      checkRetimingCert o.1 c corner7nm_SS o.2 = true :=
+  hwRetimeFormat.checkBytes_sound h
+
+/-! ## 4. Format 3: `hw-pnr-bitstream@1` (Physical Place-and-Route & Bitstream Judge) -/
+
+/-- Judge check function for `hw-pnr-bitstream@1`. -/
+def checkPnrJudge (_grade : Nat) (periodPs : Nat) (cert : PnrCertificate) : Verdict HwClause :=
+  if checkPnrCertificate corner7nm_SS periodPs cert then
+    .ok
+  else
+    .refused (.pnrCollisionShortOrTiming cert.designName) []
+
+instance pnrBitstreamJudge : Obend.Judge Nat PnrCertificate where
+  Clause := HwClause
+  Meaning periodPs cert := checkPnrCertificate corner7nm_SS periodPs cert = true
+  check := checkPnrJudge
+  sound := by
+    intro _ o c h
+    unfold checkPnrJudge at h
+    by_cases hOk : checkPnrCertificate corner7nm_SS o c = true
+    · exact hOk
+    · simp [hOk] at h
+  refutes _ := false
+  refuted := by
+    intro _ _ _ _ _ _ hRef
+    cases hRef
+  Fragment _ := True
+  complete := by
+    intro o _ ⟨c, hc⟩
+    exact ⟨c, 0, by simp [checkPnrJudge, hc]⟩
+  mono := by
+    intro _ _ _ _ _ _
+    rfl
+
+theorem badPnrCert_refused :
+    checkPnrJudge 0 2000 collidingBelPnrCert =
+      .refused (.pnrCollisionShortOrTiming "obend_routed_adder2") [] :=
+  rfl
+
 def decodePnrObj (s : String) : Except String Nat := do
-  match extractNatField s "periodPs" with
-  | some p => return p
-  | none =>
-    let j ← Json.parse s
-    j.getObjValAs? Nat "periodPs"
+  ensureWireFrame s
+  requireNatField s "periodPs"
 
 def decodePnrCert (s : String) : Except String PnrCertificate := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "valid"
-  let base :=
-    if mode == "collision" then collidingBelPnrCert
-    else if mode == "short" then shortedWirePnrCert
-    else validAdderPnrCert
-  let sinkCap := (extractNatField s "sinkCapFf").getD base.sinkCapFf
-  return { base with sinkCapFf := sinkCap }
+  let designName  ← requireStringField s "designName"
+  let sinkCap     ← requireNatField s "sinkCapFf"
+  let cell1TileY  ← requireNatField s "cell1TileY"
+  let cell0Bel    ← requireNatField s "cell0BelSlot"
+  let cell1Bel    ← requireNatField s "cell1BelSlot"
+  let net0DstWire ← requireNatField s "net0DstWire"
+  let net1DstWire ← requireNatField s "net1DstWire"
+  return {
+    designName  := designName
+    placedCells :=
+      [ { cellId := 0, tileX := 0, tileY := 0, belSlot := cell0Bel, lutInit := 0x6 }
+      , { cellId := 1, tileX := 0, tileY := cell1TileY, belSlot := cell1Bel, lutInit := 0x6 } ]
+    routedNets  :=
+      [ { netId := 0, srcWire := 10, dstWire := net0DstWire
+        , hops := [ { srcWire := 10, dstWire := 11, resOhm := 50, capFf := 4 }
+                  , { srcWire := 11, dstWire := net0DstWire, resOhm := 50, capFf := 4 } ] }
+      , { netId := 1, srcWire := 20, dstWire := net1DstWire
+        , hops := [ { srcWire := 20, dstWire := net1DstWire, resOhm := 40, capFf := 3 } ] } ]
+    expectedConfigs := validAdderPnrCert.expectedConfigs
+    bitstreamFrames := validAdderPnrCert.bitstreamFrames
+    sinkCapFf       := sinkCap
+  }
 
 /-- Registered `Obend.Judge.Format` for `hw-pnr-bitstream@1`. -/
 def hwPnrFormat : Format where
@@ -509,19 +622,35 @@ theorem badFabuBloxFlow_refused :
   rfl
 
 def decodeFabuBloxObj (s : String) : Except String WaferState := do
-  let j ← Json.parse s
-  let maxBudget := (j.getObjValAs? Nat "maxThermalBudgetCMin").toOption.getD 50000
+  ensureWireFrame s
+  let maxBudget ← requireNatField s "maxThermalBudgetCMin"
   return { initialCmosWafer with maxThermalBudgetCMin := maxBudget }
 
 def decodeFabuBloxCert (s : String) : Except String (List FabStep) := do
-  let j ← Json.parse s
-  let recipe := (j.getObjValAs? String "recipe").toOption.getD "damascene"
-  if recipe == "post_cu_anneal" then
-    return illegalPostCuAnnealFlow
-  else if recipe == "under_etch" then
-    return [.anisotropicRieOxide 80 10]
-  else
-    return cmosDamasceneFlow
+  ensureWireFrame s
+  let annealTempC       ← requireNatField s "annealTempC"
+  let annealDurationMin ← requireNatField s "annealDurationMin"
+  let lithoXMinNm       ← requireNatField s "lithoXMinNm"
+  let lithoXMaxNm       ← requireNatField s "lithoXMaxNm"
+  let resistThicknessNm ← requireNatField s "resistThicknessNm"
+  let rieDepthNm        ← requireNatField s "rieDepthNm"
+  let rieSelectivity    ← requireNatField s "rieSelectivity"
+  let cuDepositNm       ← requireNatField s "cuDepositNm"
+  let cuDepositTempC    ← requireNatField s "cuDepositTempC"
+  let cmpTargetNm       ← requireNatField s "cmpTargetNm"
+  let baseFlow : List FabStep :=
+    [ .feolThermalAnneal annealTempC annealDurationMin
+    , .lithoWindow lithoXMinNm lithoXMaxNm resistThicknessNm
+    , .anisotropicRieOxide rieDepthNm rieSelectivity
+    , .stripPhotoresist
+    , .depositMetal .cuMetal cuDepositNm cuDepositTempC .pvdSputter
+    , .cmpMetal cmpTargetNm ]
+  match extractNatField s "postCuAnnealTempC" with
+  | some postTemp =>
+    let postMin ← requireNatField s "postCuAnnealMin"
+    return baseFlow ++ [.feolThermalAnneal postTemp postMin]
+  | none =>
+    return baseFlow
 
 /-- Registered `Obend.Judge.Format` for `fabublox-run@1`. -/
 def fabubloxFormat : Format where
@@ -582,27 +711,51 @@ theorem badWaferSpaceCert_refused :
 
 def decodeWaferSpaceObj (s : String) : Except String WaferSpacePdk := do
   ensureWireFrame s
-  let pdkStr := (extractStringField s "pdk").getD "gf180mcuD"
+  let pdkStr ← requireStringField s "pdk"
   if pdkStr == "sky130A" then return .sky130A
   else if pdkStr == "ihpSg13g2" then return .ihpSg13g2
-  else return .gf180mcuD
+  else if pdkStr == "gf180mcuD" then return .gf180mcuD
+  else .error s!"unknown WaferSpacePdk '{pdkStr}'"
 
 def decodeWaferSpaceCert (s : String) : Except String WaferSpaceSignoffCert := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "golden"
-  let base :=
-    if mode == "bad_antenna" then badAntennaSignoffCert
-    else if mode == "bad_cmp" then badCmpDensitySignoffCert
-    else goldenGf180SignoffCert
-  let base' := match extractNatField s "antennaRatio" with
-    | some ratio =>
-      { base with antennaNets := [⟨"m4_long_clk_spine", ratio * 10, 10, false⟩] }
-    | none => base
-  let base'' := match extractNatField s "metalDensityPct" with
-    | some pct =>
-      { base' with metalLayers := [⟨"Metal1", pct, 0, 100⟩] }
-    | none => base'
-  return base''
+  let projectName         ← requireStringField s "projectName"
+  let pdk                 ← decodeWaferSpaceObj s
+  let antennaMetalAreaUm2 ← requireNatField s "antennaMetalAreaUm2"
+  let antennaGateAreaUm2  ← requireNatField s "antennaGateAreaUm2"
+  let antennaHasDiodeNat  ← requireNatField s "antennaHasDiode"
+  let metal1RoutedUm2     ← requireNatField s "metal1RoutedUm2"
+  let metal1DummyUm2      ← requireNatField s "metal1DummyUm2"
+  let metal1WindowUm2     ← requireNatField s "metal1WindowUm2"
+  let nfetCount           ← requireNatField s "nfetCount"
+  let pfetCount           ← requireNatField s "pfetCount"
+  let layoutNfetCount     ← requireNatField s "layoutNfetCount"
+  let schemSig : LvsNetlistSig :=
+    { goldenGf180SignoffCert.schematicSig with
+      nfetCount := nfetCount
+      pfetCount := pfetCount }
+  let laySig : LvsNetlistSig :=
+    { goldenGf180SignoffCert.layoutSig with
+      nfetCount := layoutNfetCount
+      pfetCount := pfetCount }
+  return {
+    projectName   := projectName
+    pdk           := pdk
+    padring       := goldenGf180SignoffCert.padring
+    antennaNets   :=
+      [ { netName         := "long_bus_m4"
+        , metalAreaUm2    := antennaMetalAreaUm2
+        , gateAreaUm2     := antennaGateAreaUm2
+        , hasTieDownDiode := antennaHasDiodeNat != 0 } ]
+    metalLayers   :=
+      [ { layerName      := "Metal1"
+        , routedMetalUm2 := metal1RoutedUm2
+        , dummyFillUm2   := metal1DummyUm2
+        , windowAreaUm2  := metal1WindowUm2 } ]
+    voltageChecks := goldenGf180SignoffCert.voltageChecks
+    schematicSig  := schemSig
+    layoutSig     := laySig
+  }
 
 /-- Registered `Obend.Judge.Format` for `waferspace-signoff@1`. -/
 def waferSpaceFormat : Format where
@@ -663,24 +816,32 @@ theorem badDatasheetFitCert_refused :
 
 def decodeDatasheetFitObj (s : String) : Except String String := do
   ensureWireFrame s
-  return (extractStringField s "suite").getD "obend_74ls_hct_ina_calibrated"
+  requireStringField s "suite"
 
 def decodeDatasheetFitCert (s : String) : Except String DatasheetFitCert := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "calibrated"
-  let base :=
-    if mode == "74ls_to_74hc_direct" then badDirect74HcFitCert
-    else if mode == "uncalibrated_drift" then badUncalibratedDriftFitCert
-    else goldenDatasheetFitCert
-  let pullup := (extractIntField s "pullupBoostMv").getD base.pullupBoostMv
-  let minMargin := (extractIntField s "minMarginMv").getD base.minMarginMv
-  let fanout := (extractNatField s "fanout").getD base.fanout
-  let maxCalErr := (extractIntField s "maxCalErrMv").getD base.maxCalErrMv
-  return { base with
-    pullupBoostMv := pullup
-    minMarginMv := minMargin
-    fanout := fanout
-    maxCalErrMv := maxCalErr }
+  let suiteName   ← requireStringField s "suiteName"
+  let pullup      ← requireIntField s "pullupBoostMv"
+  let minMargin   ← requireIntField s "minMarginMv"
+  let rcvVihMinMv ← requireIntField s "rcvVihMinMv"
+  let rcvVilMaxMv ← requireIntField s "rcvVilMaxMv"
+  let fanout      ← requireNatField s "fanout"
+  let maxCalErr   ← requireIntField s "maxCalErrMv"
+  let buckLoadMa  ← requireNatField s "buckLoadMa"
+  return {
+    suiteName       := suiteName
+    driverSpec      := sn74ls00Datasheet.logic
+    receiverSpec    := { cd74hct00Datasheet.logic with vihMinMv := rcvVihMinMv, vilMaxMv := rcvVilMaxMv }
+    pullupBoostMv   := pullup
+    minMarginMv     := minMargin
+    ttlParams       := sn74ls00TotemParams
+    fanout          := fanout
+    modelPreds      := calibrated74ls00ModelPreds
+    datasheetPoints := sn74ls00Datasheet.transferCurve
+    maxCalErrMv     := maxCalErr
+    inaSpec         := precisionMatchedIna
+    buckStage       := { golden5vBuckSpec with iLoadMa := buckLoadMa }
+  }
 
 /-- Registered `Obend.Judge.Format` for `datasheet-fit@1`. -/
 def datasheetFitFormat : Format where
@@ -746,30 +907,50 @@ theorem badRfTransceiverCert_refused :
 
 def decodeRfTransceiverObj (s : String) : Except String HamBand := do
   ensureWireFrame s
-  let bandStr := (extractStringField s "band").getD "40m"
+  let bandStr ← requireStringField s "band"
   if bandStr == "160m" then return .band160m
   else if bandStr == "80m" then return .band80m
+  else if bandStr == "40m" then return .band40m
   else if bandStr == "20m" then return .band20m
   else if bandStr == "2m" then return .band2m
   else if bandStr == "70cm" then return .band70cm
-  else return .band40m
+  else .error s!"unknown HamBand '{bandStr}'"
 
 def decodeRfTransceiverCert (s : String) : Except String RfTransceiverCert := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "ft8_40m_golden"
-  let base :=
-    if mode == "unfiltered_pa_harmonics" then unfilteredPaTransceiverCert
-    else if mode == "high_vswr_mismatch" then highVswrTransceiverCert
-    else golden40mFt8TransceiverCert
-  let freq := (extractNatField s "carrierFreqKhz").getD base.carrierFreqKhz
-  let iqRej := (extractNatField s "iqRejectionTenthDb").getD base.iqRejectionTenthDb
-  let rxNf := (extractNatField s "rxCascadedMilliNf").getD base.rxCascadedMilliNf
-  let tjMk := (extractIntField s "paSteadyTjMk").getD base.paSteadyTjMk
-  return { base with
-    carrierFreqKhz := freq
+  let rigName     ← requireStringField s "rigName"
+  let band        ← decodeRfTransceiverObj s
+  let freq        ← requireNatField s "carrierFreqKhz"
+  let z0Ohm       ← requireIntField s "z0Ohm"
+  let loadROhm    ← requireIntField s "loadROhm"
+  let loadXOhm    ← requireIntField s "loadXOhm"
+  let iqRej       ← requireNatField s "iqRejectionTenthDb"
+  let rxNf        ← requireNatField s "rxCascadedMilliNf"
+  let lpfElements ← requireNatField s "lpfElementCount"
+  let lpf2ndAtten ← requireNatField s "lpf2ndAttenTenthDb"
+  let lpf3rdAtten ← requireNatField s "lpf3rdAttenTenthDb"
+  let tjMk        ← requireIntField s "paSteadyTjMk"
+  return {
+    rigName            := rigName
+    band               := band
+    carrierFreqKhz     := freq
+    z0Ohm              := z0Ohm
+    matchedLoad        := ⟨loadROhm, loadXOhm⟩
+    iqGainI            := 1000
+    iqGainQ            := 1000
+    iqPhaseErr         := 0
     iqRejectionTenthDb := iqRej
-    rxCascadedMilliNf := rxNf
-    paSteadyTjMk := tjMk }
+    rxCascadedMilliNf  := rxNf
+    paSpec             :=
+      { golden40mClassEPaSpec with
+        band               := band
+        carrierFreqKhz     := freq
+        lpfElementCount    := lpfElements
+        lpf2ndAttenTenthDb := lpf2ndAtten
+        lpf3rdAttenTenthDb := lpf3rdAtten }
+    paThermal          := emitterBallastedPowerBjt
+    paSteadyTjMk       := tjMk
+  }
 
 /-- Registered `Obend.Judge.Format` for `rf-transceiver-signoff@1`. -/
 def rfTransceiverFormat : Format where
@@ -835,26 +1016,21 @@ theorem badPhotonicsPic_refused :
   rfl
 
 def decodePhotonicsObj (s : String) : Except String Nat := do
-  match extractNatField s "minFsrPm" with
-  | some v => return v
-  | none =>
-    let j ← Json.parse s
-    return (j.getObjValAs? Nat "minFsrPm").toOption.getD 15000
+  ensureWireFrame s
+  requireNatField s "minFsrPm"
 
 def decodePhotonicsCert (s : String) : Except String MicroringResonator := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "golden"
-  let base :=
-    if mode == "tight_bend" then leakyTightBendMicroring
-    else goldenSoi220Microring
-  let bendNm := (extractNatField s "bendRadiusNm").getD base.bendRadiusNm
-  let circUm := (extractNatField s "circumferenceUm").getD base.circumferenceUm
-  let rSelf := (extractIntField s "rSelfPermille").getD base.rSelfPermille
-  let aRt := (extractIntField s "aRoundTripPermille").getD base.aRoundTripPermille
-  return { base with
-    bendRadiusNm := bendNm
-    circumferenceUm := circUm
-    rSelfPermille := rSelf
+  let ringName ← requireStringField s "ringName"
+  let bendNm   ← requireNatField s "bendRadiusNm"
+  let circUm   ← requireNatField s "circumferenceUm"
+  let rSelf    ← requireIntField s "rSelfPermille"
+  let aRt      ← requireIntField s "aRoundTripPermille"
+  return {
+    ringName           := ringName
+    bendRadiusNm       := bendNm
+    circumferenceUm    := circUm
+    rSelfPermille      := rSelf
     aRoundTripPermille := aRt }
 
 /-- Registered `Obend.Judge.Format` for `photonics-pic-signoff@1`. -/
@@ -923,27 +1099,20 @@ theorem badPcbBoard_refused :
   rfl
 
 def decodePcbBoardObj (s : String) : Except String Nat := do
-  match extractNatField s "maxSkewFs" with
-  | some v => return v
-  | none =>
-    let j ← Json.parse s
-    return (j.getObjValAs? Nat "maxSkewFs").toOption.getD 50
+  ensureWireFrame s
+  requireNatField s "maxSkewFs"
 
 def decodePcbBoardCert (s : String) : Except String SerpentineMeander := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "golden"
-  let base :=
-    if mode == "skew_mismatch" then badUnmatchedDdrMeander
-    else goldenDdrMeander
-  let baseLen := (extractNatField s "baseLengthUm").getD base.baseLengthUm
-  let nSeg := (extractNatField s "numSegments").getD base.numSegments
-  let ampUm := (extractNatField s "meanderAmplitudeUm").getD base.meanderAmplitudeUm
-  let spcUm := (extractNatField s "minLoopSpacingUm").getD base.minLoopSpacingUm
+  let baseLen ← requireNatField s "baseLengthUm"
+  let nSeg    ← requireNatField s "numSegments"
+  let ampUm   ← requireNatField s "meanderAmplitudeUm"
+  let spcUm   ← requireNatField s "minLoopSpacingUm"
   return {
-    baseLengthUm := baseLen
-    numSegments := nSeg
+    baseLengthUm       := baseLen
+    numSegments        := nSeg
     meanderAmplitudeUm := ampUm
-    minLoopSpacingUm := spcUm }
+    minLoopSpacingUm   := spcUm }
 
 /-- Registered `Obend.Judge.Format` for `pcb-board-signoff@1`. -/
 def pcbBoardFormat : Format where
@@ -1017,33 +1186,38 @@ theorem badAgenticEdaSwap_refused :
   decide +kernel
 
 def decodeAgenticEdaObj (s : String) : Except String Int := do
-  match extractIntField s "minMarginMv" with
-  | some v => return v
-  | none =>
-    let j ← Json.parse s
-    return (j.getObjValAs? Int "minMarginMv").toOption.getD 400
+  ensureWireFrame s
+  requireIntField s "minMarginMv"
 
 def decodeAgenticEdaCert (s : String) : Except String EdaVaultPart := do
   ensureWireFrame s
-  let mode := (extractStringField s "mode").getD "golden"
-  let base :=
-    if mode == "overbudget" then overbudgetSecondSourcePart
-    else goldenSecondSourcePart
-  let voh := (extractNatField s "vohMinMv").getD base.vohMinMv
-  let vih := (extractNatField s "vihMinMv").getD base.vihMinMv
-  let vol := (extractNatField s "volMaxMv").getD base.volMaxMv
-  let vil := (extractNatField s "vilMaxMv").getD base.vilMaxMv
-  let tempMc := (extractNatField s "maxTempMc").getD base.maxTempMc
-  let drcErr := (extractNatField s "drcErrors").getD base.drcErrors
-  let cost := (extractNatField s "costCents").getD base.costCents
-  return { base with
-    vohMinMv := voh
-    vihMinMv := vih
-    volMaxMv := vol
-    vilMaxMv := vil
-    maxTempMc := tempMc
-    drcErrors := drcErr
-    costCents := cost }
+  let pageName ← requireStringField s "pageName"
+  let voh      ← requireNatField s "vohMinMv"
+  let vih      ← requireNatField s "vihMinMv"
+  let vol      ← requireNatField s "volMaxMv"
+  let vil      ← requireNatField s "vilMaxMv"
+  let pkgW     ← requireNatField s "pkgWidthUm"
+  let pkgL     ← requireNatField s "pkgLengthUm"
+  let pins     ← requireNatField s "pinCount"
+  let pitch    ← requireNatField s "pinPitchUm"
+  let tempMc   ← requireNatField s "maxTempMc"
+  let vswr     ← requireNatField s "vswrMilli"
+  let drcErr   ← requireNatField s "drcErrors"
+  let cost     ← requireNatField s "costCents"
+  return {
+    pageName     := pageName
+    vohMinMv     := voh
+    vihMinMv     := vih
+    volMaxMv     := vol
+    vilMaxMv     := vil
+    pkgWidthUm   := pkgW
+    pkgLengthUm  := pkgL
+    pinCount     := pins
+    pinPitchUm   := pitch
+    maxTempMc    := tempMc
+    vswrMilli    := vswr
+    drcErrors    := drcErr
+    costCents    := cost }
 
 /-- Registered `Obend.Judge.Format` for `agentic-eda-swap@1`. -/
 def agenticEdaFormat : Format where
@@ -1135,7 +1309,13 @@ def decodeBinaryCborObj (s : String) : Except String HwCertDomain :=
     match HwCertDomain.fromCode n with
     | some d => .ok d
     | none => .error s!"unknown binary CBOR domain id: {n}"
-  | none => .ok .pnr
+  | none =>
+    match extractNatField s "domainId" with
+    | some n =>
+      match HwCertDomain.fromCode n with
+      | some d => .ok d
+      | none => .error s!"unknown binary CBOR domain id: {n}"
+    | none => .error s!"missing required binary CBOR domain id in '{s}'"
 
 def decodeBinaryCborCert (s : String) : Except String BinaryHwCert := do
   let trimmed := s.trimAscii.toString
@@ -1280,7 +1460,7 @@ theorem verifyRawBinaryCborCert_refuses_pnr_tape_bypass :
 Verifies that `extractNatField` and `extractIntField` extract unsigned and signed numeric parameters
 from JSON and key-value wire strings, and that overriding numeric fields in `decodeWaferSpaceCert`,
 `decodePhotonicsCert`, `decodePcbBoardCert`, and `decodeAgenticEdaCert` triggers judge refusal on
-out-of-spec numeric values even when `"mode": "golden"` is set! -/
+out-of-spec numeric values! -/
 theorem extractNatField_and_extractIntField_verified :
     extractNatField "{\"mode\": \"golden\", \"antennaRatio\": 2400}" "antennaRatio" = some 2400 ∧
     extractIntField "{\"mode\": \"golden\", \"minMarginMv\": -150}" "minMarginMv" = some (-150) ∧
@@ -1295,21 +1475,24 @@ theorem extractNatField_and_extractIntField_verified :
      checkPcbBoardJudge 0 50 meander = .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []) := by
   decide +kernel
 
-/-- **Identifier-Boundary Non-Collision & End-to-End Decoder Verification
+/-- **Identifier-Boundary Non-Collision & End-to-End Strict Decoder Verification
 (`extractNatField_token_boundary_and_decoders_verified`)**:
 1. `"fanout"` does *not* match the suffix of `"max_fanout"` in JSON or key-value wire strings,
-2. `decodePhotonicsCert` and `decodePcbBoardCert` decode both JSON and key-value wire strings
-   directly in the Lean 4 kernel (`decide +kernel`) and reject out-of-spec numeric parameters even
-   when `mode=golden` is specified. -/
+2. `decodePhotonicsCert` and `decodePcbBoardCert` require all explicit fields (returning `.error`
+   when fields are omitted) and reject out-of-spec numeric parameters in the Lean 4 kernel (`decide +kernel`). -/
 theorem extractNatField_token_boundary_and_decoders_verified :
     extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
     extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧
     extractIntField "{\"extra_minMarginMv\": -500}" "minMarginMv" = none ∧
-    (match decodePhotonicsCert "mode=golden,bendRadiusNm=2000,circumferenceUm=50" with
+    (decodePhotonicsCert "mode=golden").isOk = false ∧
+    (decodePcbBoardCert "mode=golden").isOk = false ∧
+    (decodeRtlSynthCert "{\"module\": \"m\"}").isOk = false ∧
+    (decodePnrCert "{\"mode\": \"valid\"}").isOk = false ∧
+    (match decodePhotonicsCert "ringName=mrr_wdm_soi220_r5um,bendRadiusNm=2000,circumferenceUm=50,rSelfPermille=985,aRoundTripPermille=985" with
      | .ok c => c.bendRadiusNm == 2000 && c.circumferenceUm == 50 &&
        checkPhotonicsPicJudge 0 15000 c == .refused (.photonicsPicSignoffViolation goldenSoi220Microring.ringName) []
      | .error _ => false) = true ∧
-    (match decodePcbBoardCert "mode=golden,numSegments=0" with
+    (match decodePcbBoardCert "baseLengthUm=24000,numSegments=0,meanderAmplitudeUm=1500,minLoopSpacingUm=600" with
      | .ok c => c.numSegments == 0 &&
        checkPcbBoardJudge 0 50 c == .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []
      | .error _ => false) = true := by

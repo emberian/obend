@@ -156,8 +156,11 @@ def reverseGradVar (rho : String → CanonicalRat) (diffVar : String) : RealExpr
     reverseGradVar rho diffVar a * evalPointPure rho a +
     evalPointPure rho a * reverseGradVar rho diffVar a
 
-/-- Top-down multi-variable reverse-mode cotangent pullback (`gradReverse`):
-propagates an output cotangent seed `bar` ($\bar{y}$) from root to variable leaves in a single pass. -/
+/-- Single-pass top-down multi-variable reverse-mode cotangent pullback (`gradReverse`):
+propagates an output cotangent seed `bar` ($\bar{y}$) from root to variable leaves in a single pass.
+On `.sqr a`, evaluates the primal value `va = evalPointPure rho a` once and propagates the combined
+cotangent `bar * va + va * bar` in a single recursive pullback call on `a`, eliminating the $2^n$
+exponential blowup on nested squares. -/
 def gradReverse (rho : String → CanonicalRat) (bar : CanonicalRat) : RealExpr → List (String × CanonicalRat)
   | .const _ => []
   | .var name => [(name, bar)]
@@ -167,8 +170,8 @@ def gradReverse (rho : String → CanonicalRat) (bar : CanonicalRat) : RealExpr 
     gradReverse rho (bar * evalPointPure rho r) l ++
     gradReverse rho (evalPointPure rho l * bar) r
   | .sqr a =>
-    gradReverse rho (bar * evalPointPure rho a) a ++
-    gradReverse rho (evalPointPure rho a * bar) a
+    let va := evalPointPure rho a
+    gradReverse rho (bar * va + va * bar) a
 
 theorem reverseGradVar_eq_dual_der (rho : String → CanonicalRat) (diffVar : String) :
     ∀ (e : RealExpr), reverseGradVar rho diffVar e = (evalDualRat rho diffVar e).der
@@ -478,28 +481,12 @@ def mergeGradList (entries : List (Nat × CanonicalRat)) : List (Nat × Canonica
 def mergeGradListStr (entries : List (String × CanonicalRat)) : List (String × CanonicalRat) :=
   entries.foldr (fun (v, d) acc => insertAccumGradStr v d acc) []
 
-/-- Single-pass reverse-mode AD pullback (`gradReverseSinglePass`):
-Unlike naive `gradReverse`, `.sqr a` evaluates the primal value `va = evalPointPure rho a` once and
-propagates the combined cotangent `bar * va + va * bar` in a **single** recursive pullback call on `a`,
-eliminating the $2^n$ exponential blowup on nested squares. -/
-def gradReverseSinglePass (rho : String → CanonicalRat) (bar : CanonicalRat) : RealExpr → List (String × CanonicalRat)
-  | .const _ => []
-  | .var name => [(name, bar)]
-  | .add l r => gradReverseSinglePass rho bar l ++ gradReverseSinglePass rho bar r
-  | .sub l r => gradReverseSinglePass rho bar l ++ gradReverseSinglePass rho (-bar) r
-  | .mul l r =>
-    gradReverseSinglePass rho (bar * evalPointPure rho r) l ++
-    gradReverseSinglePass rho (evalPointPure rho l * bar) r
-  | .sqr a =>
-    let va := evalPointPure rho a
-    gradReverseSinglePass rho (bar * va + va * bar) a
-
 /-- Accumulated reverse-mode AD pass (`gradReverseAccumulated`):
-runs `gradReverseSinglePass` and merges all cotangent contributions per variable so the output size
+runs single-pass `gradReverse` and merges all cotangent contributions per variable so the output size
 is bounded by the number of distinct variables. -/
 def gradReverseAccumulated (rho : String → CanonicalRat) (bar : CanonicalRat) (e : RealExpr) :
     List (String × CanonicalRat) :=
-  mergeGradListStr (gradReverseSinglePass rho bar e)
+  mergeGradListStr (gradReverse rho bar e)
 
 /-- Map variable names to canonical `Nat` indices via a symbol table `symTab : List String` and
 accumulate gradients by `Nat` variable index. -/
@@ -509,7 +496,7 @@ def varIndexOf (symTab : List String) (name : String) : Nat :=
 def gradReverseAccumulatedIdx
     (symTab : List String) (rho : String → CanonicalRat) (bar : CanonicalRat) (e : RealExpr) :
     List (Nat × CanonicalRat) :=
-  mergeGradList ((gradReverseSinglePass rho bar e).map (fun (name, c) => (varIndexOf symTab name, c)))
+  mergeGradList ((gradReverse rho bar e).map (fun (name, c) => (varIndexOf symTab name, c)))
 
 theorem accumulateGrad_append (xs ys : List (Nat × CanonicalRat)) (v : Nat) :
     accumulateGrad (xs ++ ys) v = accumulateGrad xs v + accumulateGrad ys v := by
@@ -580,43 +567,47 @@ theorem accumulateGradStr_mergeGradListStr (entries : List (String × CanonicalR
     rcases hd with ⟨v, d⟩
     simp only [List.foldr_cons, accumulateGradStr_insert, accumulateGradStr, ih]
 
-theorem gradReverseSinglePass_agrees_with_dual
+/-- **Theorem (`gradReverse_sound` / `gradReverse_agrees_with_dual`)**:
+Single-pass `gradReverse` computes the exact scaled forward-mode dual derivative `bar * (evalDualRat rho diffVar e).der`. -/
+theorem gradReverse_agrees_with_dual
     (rho : String → CanonicalRat) (diffVar : String) (e : RealExpr) :
     ∀ (bar : CanonicalRat),
-      accumulateGradStr (gradReverseSinglePass rho bar e) diffVar =
+      accumulateGradStr (gradReverse rho bar e) diffVar =
         bar * (evalDualRat rho diffVar e).der := by
   induction e with
   | const c =>
     intro bar
-    simp [gradReverseSinglePass, accumulateGradStr, evalDualRat, DualRat.const]
+    simp [gradReverse, accumulateGradStr, evalDualRat, DualRat.const]
   | var name =>
     intro bar
-    simp only [gradReverseSinglePass, accumulateGradStr, evalDualRat, DualRat.var]
+    simp only [gradReverse, accumulateGradStr, evalDualRat, DualRat.var]
     by_cases h : name == diffVar <;> simp [h] <;> grind
   | add l r ihl ihr =>
     intro bar
-    simp only [gradReverseSinglePass, accumulateGradStr_append, ihl bar, ihr bar,
+    simp only [gradReverse, accumulateGradStr_append, ihl bar, ihr bar,
       evalDualRat, DualRat.add]
     grind
   | sub l r ihl ihr =>
     intro bar
-    simp only [gradReverseSinglePass, accumulateGradStr_append, ihl bar, ihr (-bar),
+    simp only [gradReverse, accumulateGradStr_append, ihl bar, ihr (-bar),
       evalDualRat, DualRat.sub]
     grind
   | mul l r ihl ihr =>
     intro bar
     have hvl := (evalDual_fst_eq_eval rho diffVar l).1
     have hvr := (evalDual_fst_eq_eval rho diffVar r).1
-    simp only [gradReverseSinglePass, accumulateGradStr_append,
+    simp only [gradReverse, accumulateGradStr_append,
       ihl (bar * evalPointPure rho r), ihr (evalPointPure rho l * bar),
       evalDualRat, DualRat.mul, hvl, hvr]
     grind
   | sqr a iha =>
     intro bar
     have hva := (evalDual_fst_eq_eval rho diffVar a).1
-    simp only [gradReverseSinglePass, iha (bar * evalPointPure rho a + evalPointPure rho a * bar),
+    simp only [gradReverse, iha (bar * evalPointPure rho a + evalPointPure rho a * bar),
       evalDualRat, DualRat.sqr, hva]
     grind
+
+abbrev gradReverse_sound := gradReverse_agrees_with_dual
 
 /-- Insert a variable name into a deduplicated variable list. -/
 def insertDistinctVar (v : String) : List String → List String
@@ -662,24 +653,24 @@ theorem map_fst_mergeGradListStr (entries : List (String × CanonicalRat)) :
     rcases hd with ⟨v, d⟩
     simp only [List.foldr_cons, map_fst_insertAccumGradStr, List.map_cons, ih]
 
-theorem map_fst_gradReverseSinglePass (rho : String → CanonicalRat) (e : RealExpr) :
+theorem map_fst_gradReverse (rho : String → CanonicalRat) (e : RealExpr) :
     ∀ (bar : CanonicalRat),
-      (gradReverseSinglePass rho bar e).map Prod.fst = exprRawVars e := by
+      (gradReverse rho bar e).map Prod.fst = exprRawVars e := by
   induction e with
   | const _ => intro _; rfl
   | var _ => intro _; rfl
   | add l r ihl ihr =>
     intro bar
-    simp [gradReverseSinglePass, exprRawVars, ihl bar, ihr bar]
+    simp [gradReverse, exprRawVars, ihl bar, ihr bar]
   | sub l r ihl ihr =>
     intro bar
-    simp [gradReverseSinglePass, exprRawVars, ihl bar, ihr (-bar)]
+    simp [gradReverse, exprRawVars, ihl bar, ihr (-bar)]
   | mul l r ihl ihr =>
     intro bar
-    simp [gradReverseSinglePass, exprRawVars, ihl _, ihr _]
+    simp [gradReverse, exprRawVars, ihl _, ihr _]
   | sqr a iha =>
     intro bar
-    simp [gradReverseSinglePass, exprRawVars, iha _]
+    simp [gradReverse, exprRawVars, iha _]
 
 /-- The output size of `gradReverseAccumulated` is bounded by (and equal to) the number of distinct
 variables in `e`. -/
@@ -689,7 +680,7 @@ theorem gradReverseAccumulated_length_le_distinctVars
     (gradReverseAccumulated rho bar e).length ≤ (exprDistinctVars e).length := by
   have hMap : (gradReverseAccumulated rho bar e).map Prod.fst = exprDistinctVars e := by
     unfold gradReverseAccumulated exprDistinctVars
-    rw [map_fst_mergeGradListStr, map_fst_gradReverseSinglePass]
+    rw [map_fst_mergeGradListStr, map_fst_gradReverse]
   have hLen : (gradReverseAccumulated rho bar e).length = (exprDistinctVars e).length := by
     simpa using congrArg List.length hMap
   exact ⟨hLen, Nat.le_of_eq hLen⟩
@@ -712,21 +703,22 @@ theorem gradReverseAccumulated_agrees_with_dual
     (gradReverseAccumulated rho bar e).length ≤ (exprDistinctVars e).length := by
   unfold gradReverseAccumulated
   rw [accumulateGradStr_mergeGradListStr, accumulateGradStr_mergeGradListStr]
-  rw [gradReverseSinglePass_agrees_with_dual, gradReverseSinglePass_agrees_with_dual]
+  rw [gradReverse_agrees_with_dual, gradReverse_agrees_with_dual]
   exact ⟨rfl, by grind, (gradReverseAccumulated_length_le_distinctVars rho bar e).2⟩
 
-/-- Nested squaring chain $\text{sqr}^n(e)$ used to test linear $O(1)$-leaf vs $2^n$ pullback complexity. -/
+abbrev gradReverseAccumulated_sound := gradReverseAccumulated_agrees_with_dual
+
+/-- Nested squaring chain $\text{sqr}^n(e)$ used to test linear $O(1)$-leaf pullback complexity. -/
 def nestedSqrChain : Nat → RealExpr → RealExpr
   | 0, e => e
   | n + 1, e => .sqr (nestedSqrChain n e)
 
-/-- On an $n$-deep nested squaring chain `nestedSqrChain n (.var name)`, `gradReverseSinglePass`
-and `gradReverseAccumulated` produce a single accumulated cotangent entry of length `1` for every `n`,
-whereas naive `gradReverse` produces $2^n$ un-merged entries. -/
+/-- On an $n$-deep nested squaring chain `nestedSqrChain n (.var name)`, single-pass `gradReverse`
+and `gradReverseAccumulated` produce a single cotangent entry of length `1` for every `n`. -/
 theorem gradReverseAccumulated_nestedSqr_linear
     (rho : String → CanonicalRat) (name : String) (n : Nat) :
     ∀ (bar : CanonicalRat),
-      (gradReverseSinglePass rho bar (nestedSqrChain n (.var name))).length = 1 ∧
+      (gradReverse rho bar (nestedSqrChain n (.var name))).length = 1 ∧
       (gradReverseAccumulated rho bar (nestedSqrChain n (.var name))).length = 1 := by
   induction n with
   | zero =>
@@ -734,7 +726,7 @@ theorem gradReverseAccumulated_nestedSqr_linear
     exact ⟨rfl, rfl⟩
   | succ k ih =>
     intro bar
-    dsimp only [nestedSqrChain, gradReverseSinglePass, gradReverseAccumulated]
+    dsimp only [nestedSqrChain, gradReverse, gradReverseAccumulated]
     exact ih (bar * evalPointPure rho (nestedSqrChain k (.var name)) +
               evalPointPure rho (nestedSqrChain k (.var name)) * bar)
 
@@ -750,7 +742,7 @@ theorem accumulateGrad_map_varIndexOf
     rcases hd with ⟨name, c⟩
     simp only [List.map_cons, accumulateGrad, accumulateGradStr, hInj name, ih]
 
-/-- **Theorem (`gradReverseAccumulatedIdx_agrees_with_dual`)**:
+/-- **Theorem (`gradReverseAccumulatedIdx_agrees_with_dual` / `gradReverseAccumulatedIdx_sound`)**:
 When `symTab` assigns a distinct variable index to `diffVar` (`∀ v, (varIndexOf symTab v == varIndexOf symTab diffVar) = (v == diffVar)`),
 looking up `varIndexOf symTab diffVar` in `gradReverseAccumulatedIdx symTab rho bar e` via `accumulateGrad`
 equals `bar * (evalDualRat rho diffVar e).der`! -/
@@ -762,7 +754,9 @@ theorem gradReverseAccumulatedIdx_agrees_with_dual
       bar * (evalDualRat rho diffVar e).der := by
   unfold gradReverseAccumulatedIdx
   rw [accumulateGrad_mergeGradList, accumulateGrad_map_varIndexOf symTab diffVar _ hInj]
-  exact gradReverseSinglePass_agrees_with_dual rho diffVar e bar
+  exact gradReverse_agrees_with_dual rho diffVar e bar
+
+abbrev gradReverseAccumulatedIdx_sound := gradReverseAccumulatedIdx_agrees_with_dual
 
 end Obend.Analysis
 end

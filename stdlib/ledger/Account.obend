@@ -1,0 +1,52 @@
+edition ObjectiveBend 1
+# Objective Bend Standard Library (`stdlib/ledger/Account.obend`)
+# Sovereign ledger & escrow account importing `stdlib/core/Cell.obend` with open-recursive fee/reserve specs.
+
+import ./Cell.obend as Cell
+
+law monotone_nonce: monotone(nonce)
+law bounded_fee_bps: new.feeBps <= 500
+
+record LedgerAccount:
+  balance() -> Nat
+  reserveFloor() -> Nat
+  feeRate() -> Nat
+  availableAfterFee(amount: Nat) -> Nat
+  totalSettlement(amount: Nat) -> Nat
+
+spec BaseAccountSpec for LedgerAccount:
+  requires balance() -> Nat
+  requires feeRate() -> Nat
+  def balance() -> Nat:
+    Cell.baseCell().value + 900n
+  def reserveFloor() -> Nat:
+    50n
+  def feeRate() -> Nat:
+    2n
+  def availableAfterFee(amount: Nat) -> Nat:
+    self.balance + amount * self.feeRate
+  def totalSettlement(amount: Nat) -> Nat:
+    amount + self.reserveFloor
+  claim available_open_recursion(amount: Nat): self.availableAfterFee(amount) == self.balance + amount * self.feeRate
+
+spec EscrowAccountOverride for LedgerAccount:
+  requires totalSettlement(amount: Nat) -> Nat
+  def reserveFloor() -> Nat:
+    150n
+  def totalSettlement(amount: Nat) -> Nat:
+    super.totalSettlement(amount) + 20n
+
+def seedAccount() -> LedgerAccount:
+  {balance: 0n, reserveFloor: 0n, feeRate: 0n, availableAfterFee: fn(a: Nat) -> Nat: a, totalSettlement: fn(a: Nat) -> Nat: a}
+
+def baseAccount() -> LedgerAccount:
+  fix(BaseAccountSpec, seedAccount())
+
+def escrowAccount() -> LedgerAccount:
+  fix(compose(BaseAccountSpec, EscrowAccountOverride), seedAccount())
+
+def escrowAvailableAt10() -> Nat:
+  escrowAccount().availableAfterFee(10n)
+
+def escrowSettlementAt100() -> Nat:
+  escrowAccount().totalSettlement(100n)

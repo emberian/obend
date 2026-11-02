@@ -34,6 +34,7 @@ Implements Stage 1 (`WS 23` / `SILICON-ELABORATOR.md` §3.2) of the Silicon Lean
 public import Obend.Lower.Fragment
 public import Obend.Lower.Proofs.Sound
 public import Obend.Lower.Proofs.Book
+public import Obend.Lower.LCNF
 @[expose] public section
 
 namespace Obend.Lower.Inductive
@@ -41,6 +42,7 @@ open Obend.Core.Term
 open Obend.Core.Ty (Ty)
 open Obend.Equiv
 open Obend.Lower
+open Obend.Lower.LCNF
 set_option autoImplicit false
 
 /-! ## 1. Recursive Algebraic AST Datatypes (`KName`, `KLevel`, `KLiteral`, `KExpr`, `KSyntax`) -/
@@ -576,6 +578,10 @@ end
 @[simp] theorem lowerT_lit (n : Nat) : lowerT (.lit n) = .nat n := by
   simp [lowerT]
 
+@[simp] theorem Term.substitute_nat (σ : Nat → Term) (n : Nat) :
+    Term.substitute σ (.nat n) = .nat n := by
+  simp [Term.substitute]
+
 @[simp] theorem lowerT_boolLit (b : Bool) : lowerT (.boolLit b) = .boolean b := by
   simp [lowerT]
 
@@ -886,222 +892,22 @@ theorem lower_inductive_sound
   · intro t
     exact ⟨lower_value (canonical_coreTermToLExpr t), decodeCoreTerm_lowerT t⟩
 
-/-! ## 4. LCNF (Lean Compiler Normal Form) Lowering Bridge (`LCNFCode`, `LCNFFunDecl`, `lowerLCNF`, `lcnf_to_core4_sound`) -/
+/-! ## 4. LCNF (Lean Compiler Normal Form) Lowering Bridge (Delegated to `Obend.Lower.LCNF`) -/
 
-/-- An argument in LCNF (Lean Compiler Normal Form):
-* `.bvar idx`: computational variable in scope,
-* `.lit n`: scalar `Nat` literal,
-* `.boolLit b`: scalar `Bool` literal,
-* `.erased`: `.zero`-quantity erased type or proof argument (`□`). -/
-inductive LCNFArg where
-  | bvar (idx : Nat)
-  | lit (n : Nat)
-  | boolLit (b : Bool)
-  | erased
-  deriving DecidableEq, Repr, Inhabited
+export Obend.Lower.LCNF (
+  LcnfQuantity LcnfParam LcnfArg LCNFArg LcnfLetValue LCNFLetValue LcnfAlt LcnfCode LCNFCode
+  LcnfFunDecl LCNFFunDecl LcnfModule
+  eraseZeroQtyArgs evalLcnfArgNat readLinearStore writeLinearStore evalLcnfLetValue evalLcnfCode
+  checkLinearLetValue checkLinearStateToken checkLinearArms
+  lcnfArgToLExpr lcnfLetValueToLExpr wrapMinorBvars applyLcnfArgs
+  compileLcnfToLExpr lcnfToLExpr lcnfArmsToLExpr compileLcnfToCore4 lowerLCNF
+  lcnfFunDeclToLExpr lowerLCNFFunDecl compileLcnfToBook compileLcnfFunDeclToBook
+  sampleLcnfRecDecl sampleLcnfRecBody sampleLcnfRecDecl_runs_zero
+  sampleLcnfAstMatch sampleLcnfAstMatch_runs_42
+  sampleLcnfJpCode sampleLcnfJpCode_runs_42 sampleLinearStateCode sampleDuplicatedStateTokCode
+  lcnf_zero_erasure_sound lcnf_linear_state_conserved lcnf_elab_pass_to_book_sound
+)
 
-/-- Right-hand side of an ANF `let`-binding in LCNF. -/
-inductive LCNFLetValue where
-  | arg (a : LCNFArg)
-  | natOp (op : NatOp) (lhs rhs : LCNFArg)
-  | ctor (tag : String) (fields : List (String × LCNFArg))
-  | record (fields : List (String × LCNFArg))
-  | proj (field : String) (target : LCNFArg)
-  | app (fn arg : LCNFArg)
-  deriving DecidableEq, Repr, Inhabited
-
-/-- ANF-flattened LCNF code block (`let`, `cases`, `ifBool`, `returnArg`). -/
-inductive LCNFCode where
-  | letDecl (val : LCNFLetValue) (body : LCNFCode)
-  | cases (scrut : LCNFArg) (arms : List (String × List String × LCNFCode))
-  | ifBool (cond : LCNFArg) (whenTrue whenFalse : LCNFCode)
-  | returnArg (a : LCNFArg)
-  deriving Repr, Inhabited
-
-/-- A recursive LCNF function declaration (`Lean.Compiler.LCNF.Decl` / `FunDecl`):
-`body` is an ANF `LCNFCode` block under `numParams` parameter binders and a recursive self-binder
-at the outermost de Bruijn index (`numParams`), lowered via `LExpr.recConst`. -/
-structure LCNFFunDecl where
-  name      : String
-  numParams : Nat
-  body      : LCNFCode
-  deriving Repr, Inhabited
-
-/-- Lower an `LCNFArg` into `LExpr`. -/
-def lcnfArgToLExpr : LCNFArg → LExpr
-  | .bvar i    => .bvar i
-  | .lit n     => .lit n
-  | .boolLit b => .boolLit b
-  | .erased    => .erased
-
-/-- Lower an `LCNFLetValue` into `LExpr`. -/
-def lcnfLetValueToLExpr : LCNFLetValue → LExpr
-  | .arg a          => lcnfArgToLExpr a
-  | .natOp op l r   => .natBin op (lcnfArgToLExpr l) (lcnfArgToLExpr r)
-  | .ctor tag fs    => .inject tag (fs.map fun f => (f.1, lcnfArgToLExpr f.2))
-  | .record fs      => .record (fs.map fun f => (f.1, lcnfArgToLExpr f.2))
-  | .proj field tgt => .proj field (lcnfArgToLExpr tgt)
-  | .app fn arg     => .app (lcnfArgToLExpr fn) (lcnfArgToLExpr arg)
-
-/-- Wrap an arm body `body : LExpr` in `k` curried `.lam .emptyRow` binders for the constructor's
-fields (matching `LExpr.cases` minor-premise convention). -/
-def wrapMinorBvars : Nat → LExpr → LExpr
-  | 0, body     => body
-  | k + 1, body => .lam .emptyRow (wrapMinorBvars k body)
-
-mutual
-/-- Lower an `LCNFCode` block into `LExpr` by structural recursion. -/
-def lcnfToLExpr : LCNFCode → LExpr
-  | .returnArg a => lcnfArgToLExpr a
-  | .letDecl v body => .letE .emptyRow (lcnfLetValueToLExpr v) (lcnfToLExpr body)
-  | .ifBool c t f => .boolRec .emptyRow (lcnfToLExpr f) (lcnfToLExpr t) (lcnfArgToLExpr c)
-  | .cases scrut arms => .cases .emptyRow (lcnfArmsToLExpr arms) (lcnfArgToLExpr scrut)
-
-/-- Lower a list of LCNF `cases` arms into `LExpr` arms. -/
-def lcnfArmsToLExpr : List (String × List String × LCNFCode) → List (String × List String × LExpr)
-  | [] => []
-  | (tag, names, body) :: rest =>
-    (tag, names, wrapMinorBvars names.length (lcnfToLExpr body)) :: lcnfArmsToLExpr rest
-end
-
-/-- Lower an `LCNFCode` block directly to a `Core4` `Term`. -/
-def lowerLCNF (c : LCNFCode) : Term :=
-  lowerT (lcnfToLExpr c)
-
-/-- Lower a recursive `LCNFFunDecl` into `LExpr` via `LExpr.recConst`. -/
-def lcnfFunDeclToLExpr (decl : LCNFFunDecl) : LExpr :=
-  .recConst decl.name (fn .emptyRow .natural) (wrapMinorBvars decl.numParams (lcnfToLExpr decl.body))
-
-/-- Lower a recursive `LCNFFunDecl` directly to a `Core4` `Term`. -/
-def lowerLCNFFunDecl (decl : LCNFFunDecl) : Term :=
-  lowerT (lcnfFunDeclToLExpr decl)
-
-/-- Concrete recursive `LCNFFunDecl` computing `countdown(n) = if n == 0 then 42 else countdown(n - 1)`:
-under self-binder `bvar 1` and parameter `n = bvar 0`:
-1. `let isZ := (n == 0)` (`bvar 0` inside let; `n` shifts to `bvar 1`, `self` shifts to `bvar 2`),
-2. `ifBool isZ then return 42 else (let pred := n - 1; let res := self pred; return res)`. -/
-def sampleLcnfRecDecl : LCNFFunDecl where
-  name      := "lcnfCountdown42"
-  numParams := 1
-  body      :=
-    .letDecl (.natOp .beq (.bvar 0) (.lit 0))
-      (.ifBool (.bvar 0)
-        (.returnArg (.lit 42))
-        (.letDecl (.natOp .sub (.bvar 1) (.lit 1))
-          (.letDecl (.app (.bvar 3) (.bvar 0))
-            (.returnArg (.bvar 0)))))
-
-def sampleLcnfRecBody : LExpr :=
-  wrapMinorBvars sampleLcnfRecDecl.numParams (lcnfToLExpr sampleLcnfRecDecl.body)
-
-theorem sampleLcnfRecDecl_runs_zero :
-    SSteps (.app (lcnfFunDeclToLExpr sampleLcnfRecDecl) (.lit 0)) (.lit 42) := by
-  have heq : lcnfFunDeclToLExpr sampleLcnfRecDecl =
-      .recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody := rfl
-  rw [heq]
-  refine .next (.appFun (.lit 0) (.unfold _ _ _)) ?_
-  have hinst1 :
-      sampleLcnfRecBody.inst (.recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody) =
-      .lam .emptyRow
-        (.letE .emptyRow (.natBin .beq (.bvar 0) (.lit 0))
-          (.boolRec .emptyRow
-            (.letE .emptyRow (.natBin .sub (.bvar 1) (.lit 1))
-              (.letE .emptyRow (.app (.recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody) (.bvar 0)) (.bvar 0)))
-            (.lit 42)
-            (.bvar 0))) := by
-    simp [sampleLcnfRecBody, sampleLcnfRecDecl, wrapMinorBvars, lcnfToLExpr,
-      lcnfLetValueToLExpr, lcnfArgToLExpr, LExpr.inst, LExpr.subst, LExpr.liftSubst,
-      LExpr.single, LExpr.rename, liftRename]
-  rw [hinst1]
-  refine .next (.beta .emptyRow _ (.lit 0)) ?_
-  have hinst2 :
-      (LExpr.letE .emptyRow (.natBin .beq (.bvar 0) (.lit 0))
-        (.boolRec .emptyRow
-          (.letE .emptyRow (.natBin .sub (.bvar 1) (.lit 1))
-            (.letE .emptyRow (.app (.recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody) (.bvar 0)) (.bvar 0)))
-          (.lit 42)
-          (.bvar 0))).inst (.lit 0) =
-      .letE .emptyRow (.natBin .beq (.lit 0) (.lit 0))
-        (.boolRec .emptyRow
-          (.letE .emptyRow (.natBin .sub (.lit 0) (.lit 1))
-            (.letE .emptyRow (.app (.recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody) (.bvar 0)) (.bvar 0)))
-          (.lit 42)
-          (.bvar 0)) := by
-    simp [sampleLcnfRecBody, sampleLcnfRecDecl, wrapMinorBvars, lcnfToLExpr,
-      lcnfLetValueToLExpr, lcnfArgToLExpr, LExpr.inst, LExpr.subst, LExpr.liftSubst,
-      LExpr.single, LExpr.rename]
-  rw [hinst2]
-  refine .next (.zeta .emptyRow (.natBin .beq (.lit 0) (.lit 0)) _) ?_
-  have hinst3 :
-      (LExpr.boolRec .emptyRow
-        (.letE .emptyRow (.natBin .sub (.lit 0) (.lit 1))
-          (.letE .emptyRow (.app (.recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody) (.bvar 0)) (.bvar 0)))
-        (.lit 42)
-        (.bvar 0)).inst (.natBin .beq (.lit 0) (.lit 0)) =
-      .boolRec .emptyRow
-        (.letE .emptyRow (.natBin .sub (.lit 0) (.lit 1))
-          (.letE .emptyRow (.app (.recConst "lcnfCountdown42" (fn .emptyRow .natural) sampleLcnfRecBody) (.bvar 0)) (.bvar 0)))
-        (.lit 42)
-        (.natBin .beq (.lit 0) (.lit 0)) := by
-    simp [sampleLcnfRecBody, sampleLcnfRecDecl, wrapMinorBvars, lcnfToLExpr,
-      lcnfLetValueToLExpr, lcnfArgToLExpr, LExpr.inst, LExpr.subst, LExpr.liftSubst,
-      LExpr.single, LExpr.rename]
-  rw [hinst3]
-  refine .next (.boolRecMajor .emptyRow _ (.lit 42) (.binLit .beq 0 0)) ?_
-  exact .next (.boolRecTrue .emptyRow _ (.lit 42)) (.refl _)
-
-/-- Concrete LCNF block that allocates a `KExpr.bvar 7` node, pattern-matches on its constructor
-tag `"bvar"`, and returns `idx + 35 = 42`. -/
-def sampleLcnfAstMatch : LCNFCode :=
-  .letDecl (.ctor "bvar" [("idx", .lit 7)])
-    (.cases (.bvar 0)
-      [ ("bvar", ["idx"],
-          .letDecl (.natOp .add (.bvar 0) (.lit 35))
-            (.returnArg (.bvar 0)))
-      , ("sort", ["u"],
-          .returnArg (.lit 0)) ])
-
-theorem sampleLcnfAstMatch_runs_42 :
-    SSteps (lcnfToLExpr sampleLcnfAstMatch) (.lit 42) := by
-  dsimp only [sampleLcnfAstMatch, lcnfToLExpr, lcnfArmsToLExpr, lcnfLetValueToLExpr,
-    lcnfArgToLExpr, wrapMinorBvars, List.map, List.length]
-  refine .next (.zeta .emptyRow (.inject "bvar" [("idx", .lit 7)]) _) ?_
-  have hinst1 :
-      (LExpr.cases .emptyRow
-        [ ("bvar", ["idx"], .lam .emptyRow (.letE .emptyRow (.natBin .add (.bvar 0) (.lit 35)) (.bvar 0)))
-        , ("sort", ["u"], .lam .emptyRow (.lit 0)) ]
-        (.bvar 0)).inst (.inject "bvar" [("idx", .lit 7)]) =
-      .cases .emptyRow
-        [ ("bvar", ["idx"], .lam .emptyRow (.letE .emptyRow (.natBin .add (.bvar 0) (.lit 35)) (.bvar 0)))
-        , ("sort", ["u"], .lam .emptyRow (.lit 0)) ]
-        (.inject "bvar" [("idx", .lit 7)]) := by
-    simp [LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single]
-  rw [hinst1]
-  refine .next (.casesInject .emptyRow _ "bvar" [("idx", .lit 7)] ["idx"]
-    (.lam .emptyRow (.letE .emptyRow (.natBin .add (.bvar 0) (.lit 35)) (.bvar 0)))
-    [.lit 7] rfl rfl) ?_
-  refine .next (.beta .emptyRow _ (.lit 7)) ?_
-  have hinst2 :
-      (LExpr.letE .emptyRow (.natBin .add (.bvar 0) (.lit 35)) (.bvar 0)).inst (.lit 7) =
-      .letE .emptyRow (.natBin .add (.lit 7) (.lit 35)) (.bvar 0) := by
-    simp [LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single]
-  rw [hinst2]
-  refine .next (.zeta .emptyRow (.natBin .add (.lit 7) (.lit 35)) (.bvar 0)) ?_
-  have hinst3 :
-      (LExpr.bvar 0).inst (.natBin .add (.lit 7) (.lit 35)) =
-      .natBin .add (.lit 7) (.lit 35) := by
-    simp [LExpr.inst, LExpr.subst, LExpr.single]
-  rw [hinst3]
-  exact .next (.binLit .add 7 35) (.refl _)
-
-/-- **Theorem (`lcnf_to_core4_sound`)**:
-1. Every `.zero`-quantity erased LCNF argument (`LCNFArg.erased`) lowers to `box` (`.record []`),
-2. For ANY `c : LCNFCode` whose `lcnfToLExpr c` reduces in `SSteps` to `.lit n` (or `.boolLit b`),
-   `lowerLCNF c` evaluates in `Core4` to `.nat n` (or `.boolean b`),
-3. Specifically, `sampleLcnfAstMatch` (allocating an AST constructor and pattern-matching in ANF)
-   reduces in `SSteps` to `.lit 42` and evaluates in `Core4` to `.nat 42`, and
-4. Recursive `LCNFFunDecl` declarations (`sampleLcnfRecDecl`, lowered via `LExpr.recConst`)
-   evaluate in `Core4` to `.nat 42`. -/
 theorem lcnf_to_core4_sound :
     lowerLCNF (.returnArg .erased) = box ∧
     (∀ (c : LCNFCode) (n : Nat),
@@ -1110,15 +916,8 @@ theorem lcnf_to_core4_sound :
       SSteps (lcnfToLExpr c) (.boolLit b) → Evaluates (lowerLCNF c) (.boolean b)) ∧
     SSteps (lcnfToLExpr sampleLcnfAstMatch) (.lit 42) ∧
     Evaluates (lowerLCNF sampleLcnfAstMatch) (.nat 42) ∧
-    Evaluates (.app (lowerLCNFFunDecl sampleLcnfRecDecl) (.nat 0)) (.nat 42) := by
-  refine ⟨by simp [lowerLCNF, lcnfToLExpr, lcnfArgToLExpr, lowerT], ?_, ?_,
-    sampleLcnfAstMatch_runs_42, ?_, ?_⟩
-  · intro c n hrun
-    simpa [lowerLCNF, lowerT] using lower_sound_nat hrun
-  · intro c b hrun
-    simpa [lowerLCNF, lowerT] using lower_sound_bool hrun
-  · simpa [lowerLCNF, lowerT] using lower_sound_nat sampleLcnfAstMatch_runs_42
-  · simpa [lowerLCNFFunDecl, lowerT] using lower_sound_nat sampleLcnfRecDecl_runs_zero
+    Evaluates (.app (lowerLCNFFunDecl sampleLcnfRecDecl) (.nat 0)) (.nat 42) :=
+  Obend.Lower.LCNF.lcnf_to_core4_sound
 
 /-! ## 5. Multi-Constructor & Nested Recursor Lowering (`CtorIotaRule`, `compileMultiCtorIota`, `compileMultiCtorIota_sound`) -/
 

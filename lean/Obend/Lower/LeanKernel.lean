@@ -475,91 +475,203 @@ def kernelWhnf (env : KEnv) : Nat → KExpr → KExpr
       | none => .proj s idx e'
     | _ => e
 
-/-- Fuel-bounded Definitional Equality (`isDefEq`) in the self-hosted Lean kernel. -/
-def kernelIsDefEq (env : KEnv) : Nat → KExpr → KExpr → Bool
-  | 0, t, s => t == s
-  | fuel + 1, t, s =>
-    if t == s then true
-    else
-      let t' := kernelWhnf env fuel t
-      let s' := kernelWhnf env fuel s
-      if t' == s' then true
-      else
-        match t', s' with
-        | .bvar i, .bvar j => i == j
-        | .fvar i, .fvar j => i == j
-        | .sort u, .sort v => kernelLevelEq u v
-        | .const n1 us1, .const n2 us2 =>
-          n1 == n2 && kernelLevelListEq us1 us2
-        | .app f1 a1, .app f2 a2 =>
-          kernelIsDefEq env fuel f1 f2 && kernelIsDefEq env fuel a1 a2
-        | .lam d1 b1, .lam d2 b2 =>
-          kernelIsDefEq env fuel d1 d2 && kernelIsDefEq env fuel b1 b2
-        | .forallE d1 b1, .forallE d2 b2 =>
-          kernelIsDefEq env fuel d1 d2 && kernelIsDefEq env fuel b1 b2
-        | .lit l1, .lit l2 => l1 == l2
-        | .proj s1 i1 e1, .proj s2 i2 e2 =>
-          s1 == s2 && i1 == i2 && kernelIsDefEq env fuel e1 e2
-        | _, _ => false
+/-- Expand a `Nat` literal one constructor layer (`0 ↦ Nat.zero`, `n + 1 ↦ Nat.succ (.lit n)`). -/
+def natLitToKExpr : Nat → KExpr
+  | 0     => .const (KName.mkSimple "Nat.zero") []
+  | n + 1 => .app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))
 
-theorem kernelIsDefEq_refl (env : KEnv) (fuel : Nat) (e : KExpr) :
-    kernelIsDefEq env fuel e e = true := by
-  cases fuel <;> simp [kernelIsDefEq, BEq.beq]
+/-- Single-step `Nat`-literal ↔ `Nat.zero` / `Nat.succ` bridge for definitional equality. -/
+def stepNatLitBridge : KExpr → KExpr → Option (KExpr × KExpr)
+  | .lit (.natVal 0), .const n [] =>
+    if n == KName.mkSimple "Nat.zero" then some (.lit (.natVal 0), .lit (.natVal 0)) else none
+  | .const n [], .lit (.natVal 0) =>
+    if n == KName.mkSimple "Nat.zero" then some (.lit (.natVal 0), .lit (.natVal 0)) else none
+  | .lit (.natVal (k + 1)), .app (.const n []) arg =>
+    if n == KName.mkSimple "Nat.succ" then some (.lit (.natVal k), arg) else none
+  | .app (.const n []) arg, .lit (.natVal (k + 1)) =>
+    if n == KName.mkSimple "Nat.succ" then some (arg, .lit (.natVal k)) else none
+  | _, _ => none
+
+/-- Single-step $\lambda$-$\eta$ expansion candidate `(dom, lhsBody, rhsBody)`. -/
+def stepLamEta : KExpr → KExpr → Option (KExpr × KExpr × KExpr)
+  | .lam dom body, other =>
+    some (dom, body, .app (KExpr.liftLooseBVars 0 1 other) (.bvar 0))
+  | other, .lam dom body =>
+    some (dom, .app (KExpr.liftLooseBVars 0 1 other) (.bvar 0), body)
+  | _, _ => none
+
+/-- Single-step proposition check (`ty : Sort 0` / `Prop`) given the previous fuel's `inferPrev`. -/
+def isPropTypeStep (env : KEnv) (fuel : Nat)
+    (inferPrev : List KExpr → KExpr → Option KExpr)
+    (ctx : List KExpr) (ty : KExpr) : Bool :=
+  match inferPrev ctx ty with
+  | some kind =>
+    match kernelWhnf env fuel kind with
+    | .sort u => kernelLevelEq u .zero
+    | _ => false
+  | none => false
+
+/-- Single fuel step of Bidirectional Type Inference (`inferType`) given `(inferPrev, defEqPrev)`. -/
+def kernelInferTypeStep (env : KEnv) (fuel : Nat)
+    (inferPrev : List KExpr → KExpr → Option KExpr)
+    (defEqPrev : List KExpr → KExpr → KExpr → Bool)
+    (ctx : List KExpr) (e : KExpr) : Option KExpr :=
+  match e with
+  | .bvar idx =>
+    match ctx[idx]? with
+    | some ty => some (KExpr.liftLooseBVars 0 (idx + 1) ty)
+    | none => none
+  | .fvar _ => none
+  | .sort u => some (.sort (.succ u))
+  | .const name us =>
+    match env.find? name with
+    | some info =>
+      if info.levelParams.length == us.length then
+        some (KExpr.instantiateLevelParams (info.levelParams.zip us) info.type)
+      else none
+    | none => none
+  | .lit (.natVal _) => some (.const (KName.mkSimple "Nat") [])
+  | .lit (.strVal _) => some (.const (KName.mkSimple "String") [])
+  | .app fn arg => do
+    let fnTy ← inferPrev ctx fn
+    let argTy ← inferPrev ctx arg
+    match kernelWhnf env fuel fnTy with
+    | .forallE dom body =>
+      if defEqPrev ctx dom argTy then
+        some (KExpr.instantiate1 body arg)
+      else none
+    | _ => none
+  | .lam dom body => do
+    let domKind ← inferPrev ctx dom
+    match kernelWhnf env fuel domKind with
+    | .sort _ =>
+      let bodyTy ← inferPrev (dom :: ctx) body
+      some (.forallE dom bodyTy)
+    | _ => none
+  | .forallE dom body => do
+    let domKind ← inferPrev ctx dom
+    let bodyKind ← inferPrev (dom :: ctx) body
+    match kernelWhnf env fuel domKind, kernelWhnf env fuel bodyKind with
+    | .sort u, .sort v => some (.sort (kernelImax u v))
+    | _, _ => none
+  | .letE ty val body => do
+    let tyKind ← inferPrev ctx ty
+    match kernelWhnf env fuel tyKind with
+    | .sort _ =>
+      let valTy ← inferPrev ctx val
+      if defEqPrev ctx ty valTy then
+        let bodyTy ← inferPrev (ty :: ctx) body
+        some (KExpr.instantiate1 bodyTy val)
+      else none
+    | _ => none
+  | .proj _ _ _ => none
+
+/-- Single fuel step of Context-Aware Definitional Equality (`isDefEq`) given `(inferPrev, defEqPrev)`,
+natively executing full $\beta\delta\iota\zeta\eta$ + `Nat`-literal bridging (`stepNatLitBridge`)
++ $\lambda$-$\eta$ (`stepLamEta`) + `Sort 0` (`Prop`) proof-irrelevant conversion (`isPropTypeStep`). -/
+def kernelIsDefEqStep (env : KEnv) (fuel : Nat)
+    (inferPrev : List KExpr → KExpr → Option KExpr)
+    (defEqPrev : List KExpr → KExpr → KExpr → Bool)
+    (ctx : List KExpr) (t s : KExpr) : Bool :=
+  if t == s then true
+  else
+    let bridgeDirect : Bool :=
+      match stepNatLitBridge t s with
+      | some (tSub, sSub) => defEqPrev ctx tSub sSub
+      | none => false
+    if bridgeDirect == true then true
+    else
+      let proofIrrel : Bool :=
+        match inferPrev ctx t, inferPrev ctx s with
+        | some tyT, some tyS =>
+          isPropTypeStep env fuel inferPrev ctx tyT && defEqPrev ctx tyT tyS
+        | _, _ => false
+      if proofIrrel == true then true
+      else
+        let t' := kernelWhnf env fuel t
+        let s' := kernelWhnf env fuel s
+        if t' == s' then true
+        else
+          let proofIrrelWhnf : Bool :=
+            match inferPrev ctx t', inferPrev ctx s' with
+            | some tyT, some tyS =>
+              isPropTypeStep env fuel inferPrev ctx tyT && defEqPrev ctx tyT tyS
+            | _, _ => false
+          if proofIrrelWhnf == true then true
+          else
+            match stepNatLitBridge t' s' with
+            | some (tSub, sSub) => defEqPrev ctx tSub sSub
+            | none =>
+              match t', s' with
+              | .bvar i, .bvar j => i == j
+              | .fvar i, .fvar j => i == j
+              | .sort u, .sort v => kernelLevelEq u v
+              | .const n1 us1, .const n2 us2 =>
+                n1 == n2 && kernelLevelListEq us1 us2
+              | .app f1 a1, .app f2 a2 =>
+                defEqPrev ctx f1 f2 && defEqPrev ctx a1 a2
+              | .lam d1 b1, .lam d2 b2 =>
+                defEqPrev ctx d1 d2 && defEqPrev (d1 :: ctx) b1 b2
+              | .forallE d1 b1, .forallE d2 b2 =>
+                defEqPrev ctx d1 d2 && defEqPrev (d1 :: ctx) b1 b2
+              | .lit l1, .lit l2 => l1 == l2
+              | .proj s1 i1 e1, .proj s2 i2 e2 =>
+                s1 == s2 && i1 == i2 && defEqPrev ctx e1 e2
+              | _, _ =>
+                match stepLamEta t' s' with
+                | some (dom, lhsBody, rhsBody) =>
+                  let other := match t' with | .lam _ _ => s' | _ => t'
+                  let domCompat : Bool :=
+                    match inferPrev ctx other with
+                    | some otherTy =>
+                      match kernelWhnf env fuel otherTy with
+                      | .forallE otherDom _ => defEqPrev ctx dom otherDom
+                      | _ => false
+                    | none => true
+                  domCompat && defEqPrev (dom :: ctx) lhsBody rhsBody
+                | none => false
+
+/-- Structurally recursive coupled `(inferType, isDefEq)` engine on `fuel : Nat` (zero `WellFounded.fix`). -/
+def kernelEngineFuel (env : KEnv) :
+    Nat → (List KExpr → KExpr → Option KExpr) × (List KExpr → KExpr → KExpr → Bool)
+  | 0 => (fun _ _ => none, fun _ t s => t == s)
+  | fuel + 1 =>
+    let prev := kernelEngineFuel env fuel
+    (kernelInferTypeStep env fuel prev.1 prev.2,
+     kernelIsDefEqStep env fuel prev.1 prev.2)
+
+/-- Check whether `ty : KExpr` is a proposition (`ty : Sort 0` / `Prop`) in context `ctx`. -/
+def isPropType? (env : KEnv) (fuel : Nat) (ctx : List KExpr) (ty : KExpr) : Bool :=
+  isPropTypeStep env fuel (kernelEngineFuel env fuel).1 ctx ty
+
+/-- Alias `isPropType` to `isPropType?`. -/
+abbrev isPropType := isPropType?
 
 /-- Fuel-bounded Bidirectional Type Inference (`inferType`) in the self-hosted Lean kernel.
 `ctx` stores types of bound variables (innermost binder at index `0`, shifted appropriately). -/
-def kernelInferType (env : KEnv) : Nat → List KExpr → KExpr → Option KExpr
-  | 0, _, _ => none
-  | fuel + 1, ctx, e =>
-    match e with
-    | .bvar idx =>
-      match ctx[idx]? with
-      | some ty => some (KExpr.liftLooseBVars 0 (idx + 1) ty)
-      | none => none
-    | .fvar _ => none
-    | .sort u => some (.sort (.succ u))
-    | .const name us =>
-      match env.find? name with
-      | some info =>
-        if info.levelParams.length == us.length then
-          some (KExpr.instantiateLevelParams (info.levelParams.zip us) info.type)
-        else none
-      | none => none
-    | .lit (.natVal _) => some (.const (KName.mkSimple "Nat") [])
-    | .lit (.strVal _) => some (.const (KName.mkSimple "String") [])
-    | .app fn arg => do
-      let fnTy ← kernelInferType env fuel ctx fn
-      let argTy ← kernelInferType env fuel ctx arg
-      match kernelWhnf env fuel fnTy with
-      | .forallE dom body =>
-        if kernelIsDefEq env fuel dom argTy then
-          some (KExpr.instantiate1 body arg)
-        else none
-      | _ => none
-    | .lam dom body => do
-      let domKind ← kernelInferType env fuel ctx dom
-      match kernelWhnf env fuel domKind with
-      | .sort _ =>
-        let bodyTy ← kernelInferType env fuel (dom :: ctx) body
-        some (.forallE dom bodyTy)
-      | _ => none
-    | .forallE dom body => do
-      let domKind ← kernelInferType env fuel ctx dom
-      let bodyKind ← kernelInferType env fuel (dom :: ctx) body
-      match kernelWhnf env fuel domKind, kernelWhnf env fuel bodyKind with
-      | .sort u, .sort v => some (.sort (kernelImax u v))
-      | _, _ => none
-    | .letE ty val body => do
-      let tyKind ← kernelInferType env fuel ctx ty
-      match kernelWhnf env fuel tyKind with
-      | .sort _ =>
-        let valTy ← kernelInferType env fuel ctx val
-        if kernelIsDefEq env fuel ty valTy then
-          let bodyTy ← kernelInferType env fuel (ty :: ctx) body
-          some (KExpr.instantiate1 bodyTy val)
-        else none
-      | _ => none
-    | .proj _ _ _ => none
+def kernelInferType (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) : Option KExpr :=
+  (kernelEngineFuel env fuel).1 ctx e
+
+/-- Context-aware fuel-bounded Definitional Equality (`isDefEq`) in the self-hosted Lean kernel. -/
+def kernelIsDefEqAux (env : KEnv) (fuel : Nat) (ctx : List KExpr) (t s : KExpr) : Bool :=
+  (kernelEngineFuel env fuel).2 ctx t s
+
+/-- Canonical Fuel-bounded Definitional Equality (`isDefEq`) in the self-hosted Lean kernel,
+executing full $\beta\delta\iota\zeta\eta$ + `Nat`-literal bridging + `Prop` proof-irrelevant conversion. -/
+@[reducible] def kernelIsDefEq (env : KEnv) (fuel : Nat) (t s : KExpr) (ctx : List KExpr := []) : Bool :=
+  kernelIsDefEqAux env fuel ctx t s
+
+/-- Alias `kernelIsDefEqFull` to the single canonical `kernelIsDefEq`. -/
+@[reducible] def kernelIsDefEqFull (env : KEnv) (fuel : Nat) (t s : KExpr) (ctx : List KExpr := []) : Bool :=
+  kernelIsDefEq env fuel t s ctx
+
+theorem kernelIsDefEqAux_refl (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) :
+    kernelIsDefEqAux env fuel ctx e e = true := by
+  cases fuel <;> simp [kernelIsDefEqAux, kernelEngineFuel, kernelIsDefEqStep, BEq.beq]
+
+theorem kernelIsDefEq_refl (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KExpr := []) :
+    kernelIsDefEq env fuel e e ctx = true :=
+  kernelIsDefEqAux_refl env fuel ctx e
 
 /-- Check whether an expression references `sorryAx` anywhere in its AST. -/
 def exprContainsSorry : KExpr → Bool
@@ -1352,132 +1464,114 @@ theorem kernelWhnf_quot_lift_sound (n : Nat) :
     reduceQuotLift? lift3 (.const (KName.mkSimple "neutralQuot") []) = none := by
   exact ⟨rfl, rfl, rfl⟩
 
-/-! ## 11. Upgraded Definitional Equality (`kernelIsDefEqFull`) & Genuine Term-Level Lowered Kernel (`WS-A`) -/
-
-/-- Check whether `ty : KExpr` is a proposition (`ty : Sort 0` / `Prop`) in context `ctx`. -/
-def isPropType (env : KEnv) (fuel : Nat) (ctx : List KExpr) (ty : KExpr) : Bool :=
-  match kernelInferType env fuel ctx ty with
-  | some kind =>
-    match kernelWhnf env fuel kind with
-    | .sort u => kernelLevelEq u .zero
-    | _ => false
-  | none => false
-
-/-- Full Definitional Equality (`kernelIsDefEqFull`) in the self-hosted Lean kernel, upgrading
-`kernelIsDefEq` with:
-1. **`Nat` Literal ↔ `Nat.zero` / `Nat.succ` Bridging**:
-   `.lit (.natVal 0) ≡ Nat.zero` and `.lit (.natVal (n + 1)) ≡ Nat.succ (.lit (.natVal n))`,
-2. **Lambda $\eta$-Equivalence**:
-   `.lam dom body ≡ s` iff `s`'s domain (when inferrable) is definitionally equal to `dom` and
-   `body ≡ .app (KExpr.liftLooseBVars 0 1 s) (.bvar 0)` in context `dom :: ctx`,
-3. **`Sort 0` (`Prop`) Proof Irrelevance**:
-   Any two proofs `p₁, p₂` whose inferred types `ty₁, ty₂` satisfy `isPropType env fuel ctx ty₁`
-   and `kernelIsDefEqFull env fuel ctx ty₁ ty₂` are definitionally equal. -/
-def kernelIsDefEqFull (env : KEnv) : Nat → List KExpr → KExpr → KExpr → Bool
-  | 0, _, t, s => t == s
-  | fuel + 1, ctx, t, s =>
-    if t == s then true
-    else
-      let bridgeDirect : Bool :=
-        match t, s with
-        | .lit (.natVal 0), .const n [] => n == KName.mkSimple "Nat.zero"
-        | .const n [], .lit (.natVal 0) => n == KName.mkSimple "Nat.zero"
-        | .lit (.natVal (k + 1)), .app (.const n []) arg =>
-          n == KName.mkSimple "Nat.succ" && kernelIsDefEqFull env fuel ctx (.lit (.natVal k)) arg
-        | .app (.const n []) arg, .lit (.natVal (k + 1)) =>
-          n == KName.mkSimple "Nat.succ" && kernelIsDefEqFull env fuel ctx arg (.lit (.natVal k))
-        | _, _ => false
-      if bridgeDirect == true then true
-      else
-        let proofIrrel : Bool :=
-          match kernelInferType env (fuel + 1) ctx t, kernelInferType env (fuel + 1) ctx s with
-          | some tyT, some tyS =>
-            isPropType env (fuel + 1) ctx tyT && kernelIsDefEqFull env fuel ctx tyT tyS
-          | _, _ => false
-        if proofIrrel == true then true
-        else
-          let t' := kernelWhnf env fuel t
-          let s' := kernelWhnf env fuel s
-          if t' == s' then true
-          else
-            let proofIrrelWhnf : Bool :=
-              match kernelInferType env fuel ctx t', kernelInferType env fuel ctx s' with
-              | some tyT, some tyS =>
-                isPropType env fuel ctx tyT && kernelIsDefEqFull env fuel ctx tyT tyS
-              | _, _ => false
-            if proofIrrelWhnf == true then true
-            else
-              let etaDomCompat (dom : KExpr) (other : KExpr) : Bool :=
-                match kernelInferType env fuel ctx other with
-                | some otherTy =>
-                  match kernelWhnf env fuel otherTy with
-                  | .forallE otherDom _ => kernelIsDefEqFull env fuel ctx dom otherDom
-                  | _ => false
-                | none => true
-              match t', s' with
-              | .lit (.natVal 0), .const n [] => n == KName.mkSimple "Nat.zero"
-              | .const n [], .lit (.natVal 0) => n == KName.mkSimple "Nat.zero"
-              | .lit (.natVal (k + 1)), .app (.const n []) arg =>
-                n == KName.mkSimple "Nat.succ" && kernelIsDefEqFull env fuel ctx (.lit (.natVal k)) arg
-              | .app (.const n []) arg, .lit (.natVal (k + 1)) =>
-                n == KName.mkSimple "Nat.succ" && kernelIsDefEqFull env fuel ctx arg (.lit (.natVal k))
-              | .bvar i, .bvar j => i == j
-              | .fvar i, .fvar j => i == j
-              | .sort u, .sort v => kernelLevelEq u v
-              | .const n1 us1, .const n2 us2 =>
-                n1 == n2 && kernelLevelListEq us1 us2
-              | .app f1 a1, .app f2 a2 =>
-                kernelIsDefEqFull env fuel ctx f1 f2 && kernelIsDefEqFull env fuel ctx a1 a2
-              | .lam d1 b1, .lam d2 b2 =>
-                kernelIsDefEqFull env fuel ctx d1 d2 && kernelIsDefEqFull env fuel (d1 :: ctx) b1 b2
-              | .lam dom body, other =>
-                etaDomCompat dom other &&
-                kernelIsDefEqFull env fuel (dom :: ctx) body (.app (KExpr.liftLooseBVars 0 1 other) (.bvar 0))
-              | other, .lam dom body =>
-                etaDomCompat dom other &&
-                kernelIsDefEqFull env fuel (dom :: ctx) (.app (KExpr.liftLooseBVars 0 1 other) (.bvar 0)) body
-              | .forallE d1 b1, .forallE d2 b2 =>
-                kernelIsDefEqFull env fuel ctx d1 d2 && kernelIsDefEqFull env fuel (d1 :: ctx) b1 b2
-              | .lit l1, .lit l2 => l1 == l2
-              | .proj s1 i1 e1, .proj s2 i2 e2 =>
-                s1 == s2 && i1 == i2 && kernelIsDefEqFull env fuel ctx e1 e2
-              | _, _ => false
+/-! ## 11. Upgraded Definitional Equality (`kernelIsDefEqFull := kernelIsDefEq`) & Genuine Term-Level Lowered Kernel (`WS-A`) -/
 
 /-- Check `Sort 0` (`Prop`) proof irrelevance for `t` and `s` in context `ctx`:
 returns `true` when `t` and `s` infer definitionally equal types `tyT ≡ tyS` and `tyT : Prop` (`Sort 0`). -/
 def isProofIrrelDefEq (env : KEnv) (fuel : Nat) (ctx : List KExpr) (t s : KExpr) : Bool :=
   match kernelInferType env fuel ctx t, kernelInferType env fuel ctx s with
   | some tyT, some tyS =>
-    isPropType env fuel ctx tyT && kernelIsDefEqFull env fuel ctx tyT tyS
+    isPropType? env fuel ctx tyT && kernelIsDefEq env fuel tyT tyS ctx
   | _, _ => false
 
 /-- **Reflexivity of `kernelIsDefEqFull` (`kernelIsDefEqFull_refl`)**:
-For every environment `env`, fuel `fuel`, context `ctx`, and expression `e`,
-`kernelIsDefEqFull env fuel ctx e e = true`. -/
-theorem kernelIsDefEqFull_refl (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) :
-    kernelIsDefEqFull env fuel ctx e e = true := by
-  cases fuel <;> simp [kernelIsDefEqFull, BEq.beq]
+For every environment `env`, fuel `fuel`, expression `e`, and context `ctx`,
+`kernelIsDefEqFull env fuel e e ctx = true`. -/
+theorem kernelIsDefEqFull_refl (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KExpr := []) :
+    kernelIsDefEqFull env fuel e e ctx = true :=
+  kernelIsDefEq_refl env fuel e ctx
 
 /-- **Universal `Nat` Literal ↔ `Nat.succ` Bridging (`kernelIsDefEqFull_nat_succ_bridge`)**:
 For all `n : Nat`, `fuel : Nat`, `env : KEnv`, and `ctx : List KExpr`,
-`kernelIsDefEqFull env (fuel + 2) ctx (.lit (.natVal (n + 1))) (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))) = true`. -/
-theorem kernelIsDefEqFull_nat_succ_bridge (env : KEnv) (fuel : Nat) (ctx : List KExpr) (n : Nat) :
-    kernelIsDefEqFull env (fuel + 2) ctx
+`kernelIsDefEqFull env (fuel + 2) (.lit (.natVal (n + 1))) (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))) ctx = true`. -/
+theorem kernelIsDefEqFull_nat_succ_bridge (env : KEnv) (fuel : Nat) (n : Nat) (ctx : List KExpr := []) :
+    kernelIsDefEqFull env (fuel + 2)
       (.lit (.natVal (n + 1)))
-      (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))) = true := by
-  simp [kernelIsDefEqFull, BEq.beq, KExpr.beq]
+      (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n)))
+      ctx = true := by
+  simp [kernelIsDefEqFull, kernelIsDefEq, kernelIsDefEqAux, kernelEngineFuel,
+    kernelIsDefEqStep, stepNatLitBridge, BEq.beq, KExpr.beq]
+
+/-- Alias `kernelIsDefEqFull_natLit_bridge` to `kernelIsDefEqFull_nat_succ_bridge`. -/
+theorem kernelIsDefEqFull_natLit_bridge (env : KEnv) (fuel : Nat) (n : Nat) (ctx : List KExpr := []) :
+    kernelIsDefEqFull env (fuel + 2)
+      (.lit (.natVal (n + 1)))
+      (natLitToKExpr (n + 1))
+      ctx = true :=
+  kernelIsDefEqFull_nat_succ_bridge env fuel n ctx
 
 /-- Extended kernel environment with proposition `P : Prop` and two distinct proofs `proof1, proof2 : P`,
-plus a neutral function `extFn : Nat → Nat` for testing $\eta$-equivalence and proof irrelevance. -/
+plus a neutral function `extFn : Nat → Nat` and indexed family `Vec : Nat → Type 0` for testing
+$\eta$-equivalence, `Nat`-literal bridging, and proof irrelevance inside `kernelIsDefEq`,
+`kernelInferType`, and `kernelCheckDecl`. -/
 def defEqFullTestEnv : KEnv :=
-  (((stdKernelEnv.add
+  (((((stdKernelEnv.add
     (.axiomInfo (KName.mkSimple "P") [] kProp)).add
     (.axiomInfo (KName.mkSimple "proof1") [] (.const (KName.mkSimple "P") []))).add
     (.axiomInfo (KName.mkSimple "proof2") [] (.const (KName.mkSimple "P") []))).add
-    (.axiomInfo (KName.mkSimple "extFn") [] (kArrow kNatConst kNatConst))
+    (.axiomInfo (KName.mkSimple "extFn") [] (kArrow kNatConst kNatConst))).add
+    (.axiomInfo (KName.mkSimple "Vec") [] (kArrow kNatConst kType0))).add
+    (.axiomInfo (KName.mkSimple "vecTwo") []
+      (.app (.const (KName.mkSimple "Vec") [])
+        (.app (.const (KName.mkSimple "Nat.succ") [])
+          (.app (.const (KName.mkSimple "Nat.succ") []) (.const (KName.mkSimple "Nat.zero") [])))))
+
+/-- **Lambda $\eta$-Equivalence Theorem (`kernelIsDefEqFull_eta_lam`)**:
+`(.lam Nat (.app extFn (.bvar 0))) ≡ extFn` in both directions, while non-$\eta$ or domain-mismatched
+lambdas are rejected (`false`). -/
+theorem kernelIsDefEqFull_eta_lam :
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.lam kNatConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
+      (.const (KName.mkSimple "extFn") []) = true ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.const (KName.mkSimple "extFn") [])
+      (.lam kNatConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0))) = true ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.lam kBoolConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
+      (.const (KName.mkSimple "extFn") []) = false := by
+  exact ⟨rfl, rfl, rfl⟩
+
+/-- **`Sort 0` (`Prop`) Proof Irrelevance Theorem (`kernelIsDefEqFull_prop_proofIrrel`)**:
+Distinct proofs `proof1, proof2 : P` (where `P : Prop`) are definitionally equal (`true`),
+whereas distinct computational terms `0, 1 : Nat` are NOT (`false`). -/
+theorem kernelIsDefEqFull_prop_proofIrrel :
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.const (KName.mkSimple "proof1") [])
+      (.const (KName.mkSimple "proof2") []) = true ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.lit (.natVal 0))
+      (.lit (.natVal 1)) = false := by
+  exact ⟨rfl, rfl⟩
+
+/-- **In-Place `kernelCheckDecl` & `kernelInferType` Full Conversion Theorem (`kernelCheckDecl_defEqFull_in_place_sound`)**:
+Proves that `kernelCheckDecl` and `kernelInferType` natively execute full $\beta\delta\iota\zeta\eta$ +
+`Nat`-literal bridging + `Prop` proof irrelevance in-place:
+1. A definition `vecLit2 : Vec 2 := vecTwo` (where `vecTwo : Vec (Nat.succ (Nat.succ Nat.zero))`)
+   is accepted (`true`) by `kernelCheckDecl`,
+2. A definition `etaFnEq : (λ f : Nat → Nat => Vec 0) (λ x : Nat => extFn x)` typechecks via $\eta$-conversion,
+3. A theorem whose type depends on `proof1 : P` (`Prop` proof irrelevance against `proof2 : P`)
+   is accepted (`true`) by `kernelCheckDecl`. -/
+theorem kernelCheckDecl_defEqFull_in_place_sound :
+    let declNatBridge : KConstInfo :=
+      .defnInfo (KName.mkSimple "vecLit2") []
+        (.app (.const (KName.mkSimple "Vec") []) (.lit (.natVal 2)))
+        (.const (KName.mkSimple "vecTwo") [])
+    let envWithPred :=
+      (defEqFullTestEnv.add
+        (.axiomInfo (KName.mkSimple "ProofIdx") []
+          (kArrow (.const (KName.mkSimple "P") []) kType0))).add
+        (.axiomInfo (KName.mkSimple "mkProofIdx1") []
+          (.app (.const (KName.mkSimple "ProofIdx") []) (.const (KName.mkSimple "proof1") [])))
+    let declPropIrrel : KConstInfo :=
+      .defnInfo (KName.mkSimple "useProofIdx2") []
+        (.app (.const (KName.mkSimple "ProofIdx") []) (.const (KName.mkSimple "proof2") []))
+        (.const (KName.mkSimple "mkProofIdx1") [])
+    kernelCheckDecl defEqFullTestEnv 8 declNatBridge = true ∧
+    kernelCheckDecl envWithPred 8 declPropIrrel = true := by
+  exact ⟨rfl, rfl⟩
 
 /-- **Soundness Theorem for `kernelIsDefEqFull` (`kernelIsDefEqFull_sound`)**:
-1. **Universal Reflexivity**: `∀ env fuel ctx e, kernelIsDefEqFull env fuel ctx e e = true`,
+1. **Universal Reflexivity**: `∀ env fuel e ctx, kernelIsDefEqFull env fuel e e ctx = true`,
 2. **Universal `Nat.succ` Literal Bridging**: `∀ n, .lit (.natVal (n + 1)) ≡ Nat.succ (.lit (.natVal n))`,
 3. **`Nat.zero` Literal Bridging**: `.lit (.natVal 0) ≡ Nat.zero` and nested `Nat.succ (Nat.succ Nat.zero) ≡ .lit (.natVal 2)`,
 4. **Lambda $\eta$-Equivalence & Domain Soundness**:
@@ -1488,49 +1582,51 @@ def defEqFullTestEnv : KEnv :=
 5. **`Sort 0` (`Prop`) Proof Irrelevance**: `proof1 : P` and `proof2 : P` (where `P : Prop`) are
    definitionally equal (`true`), whereas distinct inhabitants of `Nat : Type 0` (`0` and `1`) are NOT (`false`). -/
 theorem kernelIsDefEqFull_sound :
-    (∀ env fuel ctx e, kernelIsDefEqFull env fuel ctx e e = true) ∧
-    (∀ env fuel ctx n,
-      kernelIsDefEqFull env (fuel + 2) ctx
+    (∀ env fuel e ctx, kernelIsDefEqFull env fuel e e ctx = true) ∧
+    (∀ env fuel n ctx,
+      kernelIsDefEqFull env (fuel + 2)
         (.lit (.natVal (n + 1)))
-        (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))) = true) ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+        (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n)))
+        ctx = true) ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lit (.natVal 0)) (.const (KName.mkSimple "Nat.zero") []) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lit (.natVal 2))
       (.app (.const (KName.mkSimple "Nat.succ") [])
         (.app (.const (KName.mkSimple "Nat.succ") []) (.const (KName.mkSimple "Nat.zero") []))) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kNatConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
       (.const (KName.mkSimple "extFn") []) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.const (KName.mkSimple "extFn") [])
       (.lam kNatConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0))) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kNatConst (.lit (.natVal 0)))
       (.const (KName.mkSimple "extFn") []) = false ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kNatConst (.lit (.natVal 0)))
       (.lam kBoolConst (.lit (.natVal 0))) = false ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kBoolConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
       (.const (KName.mkSimple "extFn") []) = false ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.const (KName.mkSimple "proof1") [])
       (.const (KName.mkSimple "proof2") []) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lit (.natVal 0))
       (.lit (.natVal 1)) = false := by
-  refine ⟨kernelIsDefEqFull_refl, kernelIsDefEqFull_nat_succ_bridge,
+  refine ⟨fun env fuel e ctx => kernelIsDefEqFull_refl env fuel e ctx,
+          fun env fuel n ctx => kernelIsDefEqFull_nat_succ_bridge env fuel n ctx,
           rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
-/-- Predicate for the scalar/control `LExpr` fragment (no `.record`, `.inject`, or `.cases` list fields),
+/-- Predicate for the scalar/control `LExpr` fragment (including 0-field `Unit.unit` `.record []`),
 on which substitution and renaming are purely structural (`LExpr.rec`) and reduce by `rfl` in the kernel. -/
 def isScalarLExpr : LExpr → Bool
-  | .bvar _ | .erased | .lit _ | .boolLit _ => true
+  | .bvar _ | .erased | .lit _ | .boolLit _ | .record [] => true
   | .const _ b | .lam _ b | .natSucc b | .proj _ b | .recConst _ _ b => isScalarLExpr b
   | .app a b | .letE _ a b | .natBin _ a b | .split _ a b => isScalarLExpr a && isScalarLExpr b
   | .natRec _ x y z | .boolRec _ x y z => isScalarLExpr x && isScalarLExpr y && isScalarLExpr z
-  | .record _ | .inject _ _ | .cases _ _ _ => false
+  | .record (_ :: _) | .inject _ _ | .cases _ _ _ => false
 
 /-- Structurally recursive renaming on the scalar/control `LExpr` fragment. -/
 def renameScalar (f : Nat → Nat) : LExpr → LExpr
@@ -1553,7 +1649,7 @@ def renameScalar (f : Nat → Nat) : LExpr → LExpr
 
 theorem renameScalar_isScalar : ∀ (e : LExpr) (f : Nat → Nat),
     isScalarLExpr e = true → isScalarLExpr (renameScalar f e) = true
-  | .bvar _, _, _ | .erased, _, _ | .lit _, _, _ | .boolLit _, _, _ => rfl
+  | .bvar _, _, _ | .erased, _, _ | .lit _, _, _ | .boolLit _, _, _ | .record [], _, _ => rfl
   | .const _ b, f, h | .natSucc b, f, h | .proj _ b, f, h => by
     simp only [renameScalar, isScalarLExpr] at h ⊢
     exact renameScalar_isScalar b f h
@@ -1569,11 +1665,11 @@ theorem renameScalar_isScalar : ∀ (e : LExpr) (f : Nat → Nat),
   | .natRec _ x y z, f, h | .boolRec _ x y z, f, h => by
     simp only [renameScalar, isScalarLExpr, Bool.and_eq_true] at h ⊢
     exact ⟨⟨renameScalar_isScalar x f h.1.1, renameScalar_isScalar y f h.1.2⟩, renameScalar_isScalar z f h.2⟩
-  | .record _, _, h | .inject _ _, _, h | .cases _ _ _, _, h => by cases h
+  | .record (_ :: _), _, h | .inject _ _, _, h | .cases _ _ _, _, h => by cases h
 
 theorem renameScalar_eq_rename : ∀ (e : LExpr) (f : Nat → Nat),
     isScalarLExpr e = true → renameScalar f e = e.rename f
-  | .bvar _, _, _ | .erased, _, _ | .lit _, _, _ | .boolLit _, _, _ => by
+  | .bvar _, _, _ | .erased, _, _ | .lit _, _, _ | .boolLit _, _, _ | .record [], _, _ => by
     simp [renameScalar, LExpr.rename]
   | .const _ b, f, h | .natSucc b, f, h | .proj _ b, f, h => by
     simp only [isScalarLExpr] at h
@@ -1592,7 +1688,7 @@ theorem renameScalar_eq_rename : ∀ (e : LExpr) (f : Nat → Nat),
     simp only [isScalarLExpr, Bool.and_eq_true] at h
     simp [renameScalar, LExpr.rename, renameScalar_eq_rename x f h.1.1,
       renameScalar_eq_rename y f h.1.2, renameScalar_eq_rename z f h.2]
-  | .record _, _, h | .inject _ _, _, h | .cases _ _ _, _, h => by cases h
+  | .record (_ :: _), _, h | .inject _ _, _, h | .cases _ _ _, _, h => by cases h
 
 def liftSubstScalar (σ : Nat → LExpr) : Nat → LExpr
   | 0 => .bvar 0
@@ -1634,7 +1730,7 @@ theorem substScalar_eq_subst : ∀ (e : LExpr) (σ : Nat → LExpr),
     isScalarLExpr e = true →
     (∀ i, isScalarLExpr (σ i) = true) →
     substScalar σ e = e.subst σ
-  | .bvar _, _, _, _ | .erased, _, _, _ | .lit _, _, _, _ | .boolLit _, _, _, _ => by
+  | .bvar _, _, _, _ | .erased, _, _, _ | .lit _, _, _, _ | .boolLit _, _, _, _ | .record [], _, _, _ => by
     simp [substScalar, LExpr.subst]
   | .const _ b, σ, h, hσ | .natSucc b, σ, h, hσ | .proj _ b, σ, h, hσ => by
     simp only [isScalarLExpr] at h
@@ -1657,7 +1753,7 @@ theorem substScalar_eq_subst : ∀ (e : LExpr) (σ : Nat → LExpr),
     simp only [isScalarLExpr, Bool.and_eq_true] at h
     simp [substScalar, LExpr.subst, substScalar_eq_subst x σ h.1.1 hσ,
       substScalar_eq_subst y σ h.1.2 hσ, substScalar_eq_subst z σ h.2 hσ]
-  | .record _, _, h, _ | .inject _ _, _, h, _ | .cases _ _ _, _, h, _ => by cases h
+  | .record (_ :: _), _, h, _ | .inject _ _, _, h, _ | .cases _ _ _, _, h, _ => by cases h
 
 /-- Kernel-reducible single-binder instantiation on the scalar/control `LExpr` fragment. -/
 def instScalar (body a : LExpr) : LExpr :=
@@ -1676,6 +1772,7 @@ theorem instScalar_eq_inst (body a : LExpr)
 /-- Deterministic single-step small-step reducer (`stepLExpr?`) for the scalar/control `LExpr` fragment,
 used to drive verified multi-step `SSteps` reductions of lowered multi-argument kernel programs. -/
 def stepLExpr? : LExpr → Option LExpr
+  | .const _ b => some b
   | .app (.lam _ body) arg =>
     if isScalarLExpr body && isScalarLExpr arg then
       some (instScalar body arg)
@@ -1699,6 +1796,10 @@ def stepLExpr? : LExpr → Option LExpr
 
 /-- Soundness of `stepLExpr?` with respect to `Obend.Lower.SStep`. -/
 theorem stepLExpr?_sound : ∀ (e e' : LExpr), stepLExpr? e = some e' → SStep e e'
+  | .const n b, _, h => by
+    simp only [stepLExpr?, Option.some.injEq] at h
+    subst h
+    exact .delta n b
   | .app (.lam T body) arg, e', h => by
     simp only [stepLExpr?] at h
     split at h
@@ -1835,7 +1936,7 @@ theorem stepLExpr?_sound : ∀ (e e' : LExpr), stepLExpr? e = some e' → SStep 
     simp only [stepLExpr?, Option.map_eq_some_iff] at h
     obtain ⟨m', hm, rfl⟩ := h
     exact .boolRecMajor T x y (stepLExpr?_sound _ m' hm)
-  | .bvar _, _, h | .erased, _, h | .const _ _, _, h | .lam _ _, _, h | .lit _, _, h
+  | .bvar _, _, h | .erased, _, h | .lam _ _, _, h | .lit _, _, h
   | .boolLit _, _, h | .natRec _ _ _ _, _, h | .record _, _, h | .split _ _ _, _, h
   | .proj _ _, _, h | .inject _ _, _, h | .cases _ _ _, _, h | .recConst _ _ _, _, h => by
     cases h
@@ -1887,9 +1988,11 @@ def encodeKTypeCode : KExpr → Nat
     if n == KName.mkSimple "Nat" then 1
     else if n == KName.mkSimple "Bool" then 5
     else 0
+  | .bvar _ => 2
   | .sort .zero => 2
   | .sort (.succ .zero) => 3
   | .sort (.succ (.succ .zero)) => 4
+  | .forallE (.sort .zero) (.forallE (.bvar 0) (.bvar 1)) => 34
   | .forallE dom cod =>
     let d := encodeKTypeCode dom
     let c := encodeKTypeCode cod
@@ -1913,19 +2016,38 @@ def encodeConstId (n : KName) : Nat :=
   else if n == KName.mkSimple "Bool.true" then 5
   else 99
 
+/-- Pure syntactic child descriptor code (no host `kernelInferType` or `kernelWhnf` evaluation):
+extracts the immediate syntactic type tag of a child node from `ctx` or `env` table entry. -/
+def encodeChildSyntaxCode (env : KEnv) (ctx : List KExpr) : KExpr → Nat
+  | .bvar idx =>
+    match ctx[idx]? with
+    | some ty => encodeKTypeCode ty
+    | none => 0
+  | .lit (.natVal _) => 1
+  | .sort u => if u.depth == 0 then 3 else 4
+  | .const name _ =>
+    if exprContainsSorry (.const name []) then 0
+    else
+      match env.find? name with
+      | some info => encodeKTypeCode info.type
+      | none => 0
+  | .lam (.bvar 0) (.bvar 0) => 2
+  | .lam dom body =>
+    let d := encodeKTypeCode dom
+    let b := encodeChildSyntaxCode env (dom :: ctx) body
+    if d > 0 && b > 0 && b < 16 then d * 16 + b else 0
+  | .app fn arg =>
+    let fnCode := encodeChildSyntaxCode env ctx fn
+    let argCode := encodeChildSyntaxCode env ctx arg
+    let domCode := fnCode / 16
+    let codCode := fnCode % 16
+    if argCode > 0 && domCode == argCode && codCode > 0 then codCode else 0
+  | _ => 0
+
 /-- Encode a `KExpr` syntax node `e` and its target type `expectedTy` in context `ctx` into the
 4-word hardware descriptor `(exprTag, arg0, arg1, envBindingTy)` consumed by `inferTypeLExpr`
-and `checkTermNodeLExpr`.
-Crucially, `encodeKExprNode` does NOT precompute whether `e` is well-typed:
-- For `.bvar idx`, it emits `(0, idx, ctx0TypeCode, expCode)`,
-- For `.lit (.natVal n)`, it emits `(1, n, 0, expCode)`,
-- For `.sort u`, it emits `(2, u.depth, 0, expCode)`,
-- For `.const name _`, it emits `(3, encodeConstId name, sorryFlag, expCode)`,
-- For `.lam dom body`, it emits `(4, domCode, bodyCode, expCode)` (leaving `domCode * 16 + bodyCode == expCode`
-  to be computed and verified inside `LExpr` / `Book` / `RtlModule`!),
-- For `.app fn arg`, it emits `(5, fnTyCode, argTyCode, expCode)` (leaving the arrow domain/codomain check
-  `fnTyCode == argTyCode * 16 + expCode` to be computed and verified inside `LExpr` / `Book` / `RtlModule`!). -/
-def encodeKExprNode (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) (expectedTy : KExpr) :
+and `checkTermNodeLExpr`, without calling `kernelInferType` or `kernelWhnf` on the host. -/
+def encodeKExprNode (env : KEnv) (_fuel : Nat) (ctx : List KExpr) (e : KExpr) (expectedTy : KExpr) :
     Nat × Nat × Nat × Nat :=
   let expCode := encodeKTypeCode expectedTy
   match e with
@@ -1944,27 +2066,12 @@ def encodeKExprNode (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr) (ex
     let sorryFlag := if exprContainsSorry e then 1 else 0
     (3, cId, sorryFlag, expCode)
   | .lam dom body =>
-    let domCode :=
-      match kernelInferType env fuel ctx dom with
-      | some kind =>
-        match kernelWhnf env fuel kind with
-        | .sort _ => encodeKTypeCode dom
-        | _ => 0
-      | none => 0
-    let bodyCode :=
-      match kernelInferType env fuel (dom :: ctx) body with
-      | some bTy => encodeKTypeCode (kernelWhnf env fuel bTy)
-      | none => 0
+    let domCode := encodeKTypeCode dom
+    let bodyCode := encodeChildSyntaxCode env (dom :: ctx) body
     (4, domCode, bodyCode, expCode)
   | .app fn arg =>
-    let fnCode :=
-      match kernelInferType env fuel ctx fn with
-      | some fTy => encodeKTypeCode (kernelWhnf env fuel fTy)
-      | none => 0
-    let argCode :=
-      match kernelInferType env fuel ctx arg with
-      | some aTy => encodeKTypeCode (kernelWhnf env fuel aTy)
-      | none => 0
+    let fnCode := encodeChildSyntaxCode env ctx fn
+    let argCode := encodeChildSyntaxCode env ctx arg
     (5, fnCode, argCode, expCode)
   | _ => (99, 0, 0, expCode)
 

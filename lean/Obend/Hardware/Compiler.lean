@@ -1880,18 +1880,55 @@ theorem compileMultiArgMethod_sound
 
 /-! ## 9. Non-Inlined Pipelined Inter-Slot Compilation (`compileTermPipelined`, `compileBookToPipelinedRtl`) -/
 
+/-- Substitute `argExpr` for `.inputPort 0` throughout a callee slot's compiled `RtlExpr`
+when a pipelined method invokes an earlier slot on a non-direct argument (`isDirectPipeArg arg = false`). -/
+def substRtlInputPort0 (argExpr : RtlExpr) : RtlExpr → RtlExpr
+  | .const v       => .const v
+  | .inputPort idx => if idx == 0 then argExpr else .inputPort idx
+  | .wireRef idx   => .wireRef idx
+  | .regRead idx   => .regRead idx
+  | .alu op a b    => .alu op (substRtlInputPort0 argExpr a) (substRtlInputPort0 argExpr b)
+  | .mux c t f     =>
+    .mux (substRtlInputPort0 argExpr c) (substRtlInputPort0 argExpr t) (substRtlInputPort0 argExpr f)
+  | .bitNot a      => .bitNot (substRtlInputPort0 argExpr a)
+
+/-- Soundness of `substRtlInputPort0`: evaluating `substRtlInputPort0 argExpr e` is identical to
+evaluating `e` with input port `0` bound to `evalRtlExpr inputs wires regs argExpr`. -/
+theorem substRtlInputPort0_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (argExpr e : RtlExpr) :
+    evalRtlExpr inputs wires regs (substRtlInputPort0 argExpr e) =
+      evalRtlExpr
+        (fun i => if i == 0 then evalRtlExpr inputs wires regs argExpr else inputs i)
+        wires regs e := by
+  induction e with
+  | const v => rfl
+  | inputPort idx =>
+    simp only [substRtlInputPort0, evalRtlExpr]
+    by_cases h : idx == 0 <;> simp [h, evalRtlExpr]
+  | wireRef idx => rfl
+  | regRead idx => rfl
+  | alu op a b iha ihb =>
+    simp only [substRtlInputPort0, evalRtlExpr, iha, ihb]
+  | mux c t f ihc iht ihf =>
+    simp only [substRtlInputPort0, evalRtlExpr, ihc, iht, ihf]
+  | bitNot a iha =>
+    simp only [substRtlInputPort0, evalRtlExpr, iha]
+
 /-- Check whether a pipelined method argument is the unmodified stage input `.bound 0`. -/
 def isDirectPipeArg : Term → Bool
   | .bound 0 => true
   | _        => false
 
-/-- Reference 64-bit hardware semantics for non-inlined pipelined inter-slot execution:
-instead of duplicating earlier slot bodies via combinational AST substitution (`substInputPort0`),
-referencing or calling an earlier slot `slotIdx` through `self` reads the registered pipeline stage
-output `regs slotIdx` (`.regRead slotIdx`), combining it with `vArg` when `isDirectPipeArg arg = false`. -/
+/-- Reference 64-bit hardware semantics for pipelined inter-slot execution:
+* When referencing an earlier slot `self.m` or calling `self.m(arg)` with `isDirectPipeArg arg = true`
+  (`arg = .bound 0`), reads the registered pipeline stage output `regs slotIdx` (`.regRead slotIdx`).
+* When calling `self.m(arg)` with `isDirectPipeArg arg = false`, looks up `calleeBody ← slotBodies[slotIdx]?`
+  and evaluates `calleeBody` with `.inputPort 0` bound to `vArg`. -/
 def evalTermPipelinedHw
     (slots : List String)
-    (inputs regs : Nat → BitVec 64)
+    (slotBodies : List RtlExpr)
+    (inputs wires regs : Nat → BitVec 64)
     (selfDepth : Nat)
     (varVals : List (BitVec 64)) : Term → Option (BitVec 64)
   | .nat n => some (BitVec.ofNat 64 n)
@@ -1907,45 +1944,54 @@ def evalTermPipelinedHw
   | .app fn arg =>
     match fn with
     | .lam subBody =>
-      match evalTermPipelinedHw slots inputs regs selfDepth varVals arg with
+      match evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals arg with
       | some vArg =>
-        evalTermPipelinedHw slots inputs regs (selfDepth + 1) (vArg :: varVals) subBody
+        evalTermPipelinedHw slots slotBodies inputs wires regs (selfDepth + 1) (vArg :: varVals) subBody
       | none => none
     | .get (.bound idx) member =>
       if idx == selfDepth then
         match slots.idxOf? member,
-              evalTermPipelinedHw slots inputs regs selfDepth varVals arg with
+              evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals arg with
         | some slotIdx, some vArg =>
-          some (if isDirectPipeArg arg then regs slotIdx else regs slotIdx + vArg)
+          if isDirectPipeArg arg then
+            some (regs slotIdx)
+          else
+            match slotBodies[slotIdx]? with
+            | some calleeBody =>
+              some (evalRtlExpr (fun i => if i == 0 then vArg else inputs i) wires regs calleeBody)
+            | none => none
         | _, _ => none
       else none
     | _ => none
   | .binary op l r =>
-    match evalTermPipelinedHw slots inputs regs selfDepth varVals l,
-          evalTermPipelinedHw slots inputs regs selfDepth varVals r with
+    match evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals l,
+          evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals r with
     | some vl, some vr => evalPrimHwSat op vl vr
     | _, _ => none
   | .ifBool c t f =>
-    match evalTermPipelinedHw slots inputs regs selfDepth varVals c,
-          evalTermPipelinedHw slots inputs regs selfDepth varVals t,
-          evalTermPipelinedHw slots inputs regs selfDepth varVals f with
+    match evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals c,
+          evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals t,
+          evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals f with
     | some vc, some vt, some vf => some (if vc != 0#64 then vt else vf)
     | _, _, _ => none
   | .ifZero v z s =>
-    match evalTermPipelinedHw slots inputs regs selfDepth varVals v,
-          evalTermPipelinedHw slots inputs regs selfDepth varVals z with
+    match evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals v,
+          evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth varVals z with
     | some vv, some vz =>
-      match evalTermPipelinedHw slots inputs regs (selfDepth + 1) ((vv - 1#64) :: varVals) s with
+      match evalTermPipelinedHw slots slotBodies inputs wires regs (selfDepth + 1) ((vv - 1#64) :: varVals) s with
       | some vs => some (if (if vv == 0#64 then 1#64 else 0#64) != 0#64 then vz else vs)
       | none => none
     | _, _ => none
   | _ => none
 
-/-- Non-inlined pipelined `Term` compiler: maps inter-slot references and calls `self.m(...)` to
-synchronous pipeline stage register reads `.regRead slotIdx`, wiring the compiled argument `eArg`
-into `.alu .add (.regRead slotIdx) eArg` whenever `isDirectPipeArg arg = false`. -/
+/-- Pipelined `Term` compiler:
+* Maps direct stage references `self.m` and unmodified stage-input calls `self.m(.bound 0)`
+  (`isDirectPipeArg arg = true`) to synchronous pipeline stage register reads `.regRead slotIdx`.
+* When `isDirectPipeArg arg = false`, looks up `calleeBody ← slotBodies[slotIdx]?` and emits
+  `substRtlInputPort0 eArg calleeBody` (applying `member`'s actual compiled `RtlExpr` body to `eArg`). -/
 def compileTermPipelined
     (slots : List String)
+    (slotBodies : List RtlExpr)
     (selfDepth : Nat)
     (varEnv : List RtlExpr) : Term → Option RtlExpr
   | .nat n => some (.const (BitVec.ofNat 64 n))
@@ -1961,51 +2007,57 @@ def compileTermPipelined
   | .app fn arg =>
     match fn with
     | .lam subBody =>
-      match compileTermPipelined slots selfDepth varEnv arg with
+      match compileTermPipelined slots slotBodies selfDepth varEnv arg with
       | some eArg =>
-        compileTermPipelined slots (selfDepth + 1) (eArg :: varEnv) subBody
+        compileTermPipelined slots slotBodies (selfDepth + 1) (eArg :: varEnv) subBody
       | none => none
     | .get (.bound idx) member =>
       if idx == selfDepth then
         match slots.idxOf? member,
-              compileTermPipelined slots selfDepth varEnv arg with
+              compileTermPipelined slots slotBodies selfDepth varEnv arg with
         | some slotIdx, some eArg =>
-          some (if isDirectPipeArg arg then .regRead slotIdx else .alu .add (.regRead slotIdx) eArg)
+          if isDirectPipeArg arg then
+            some (.regRead slotIdx)
+          else
+            match slotBodies[slotIdx]? with
+            | some calleeBody => some (substRtlInputPort0 eArg calleeBody)
+            | none => none
         | _, _ => none
       else none
     | _ => none
   | .binary op l r =>
-    match compileTermPipelined slots selfDepth varEnv l,
-          compileTermPipelined slots selfDepth varEnv r with
+    match compileTermPipelined slots slotBodies selfDepth varEnv l,
+          compileTermPipelined slots slotBodies selfDepth varEnv r with
     | some el, some er => compilePrimSat op el er
     | _, _ => none
   | .ifBool c t f =>
-    match compileTermPipelined slots selfDepth varEnv c,
-          compileTermPipelined slots selfDepth varEnv t,
-          compileTermPipelined slots selfDepth varEnv f with
+    match compileTermPipelined slots slotBodies selfDepth varEnv c,
+          compileTermPipelined slots slotBodies selfDepth varEnv t,
+          compileTermPipelined slots slotBodies selfDepth varEnv f with
     | some ec, some et, some ef => some (.mux ec et ef)
     | _, _, _ => none
   | .ifZero v z s =>
-    match compileTermPipelined slots selfDepth varEnv v,
-          compileTermPipelined slots selfDepth varEnv z with
+    match compileTermPipelined slots slotBodies selfDepth varEnv v,
+          compileTermPipelined slots slotBodies selfDepth varEnv z with
     | some ev, some ez =>
       let predExpr := RtlExpr.alu .sub ev (.const 1#64)
-      match compileTermPipelined slots (selfDepth + 1) (predExpr :: varEnv) s with
+      match compileTermPipelined slots slotBodies (selfDepth + 1) (predExpr :: varEnv) s with
       | some es => some (.mux (.alu .eq ev (.const 0#64)) ez es)
       | none => none
     | _, _ => none
   | _ => none
 
 /-- **Universal Structural Soundness of `compileTermPipelined` (`compileTermPipelined_sound`)**:
-For EVERY `t : Term`, if `compileTermPipelined slots selfDepth varEnv t = some e`, then evaluating
-`e` in `evalRtlExpr` produces the exact same 64-bit value as `evalTermPipelinedHw`. -/
+For EVERY `t : Term`, if `compileTermPipelined slots slotBodies selfDepth varEnv t = some e`, then
+evaluating `e` in `evalRtlExpr` produces the exact same 64-bit value as `evalTermPipelinedHw`. -/
 theorem compileTermPipelined_sound
     (inputs wires regs : Nat → BitVec 64)
     (slots : List String)
+    (slotBodies : List RtlExpr)
     (t : Term)
     (selfDepth : Nat) (varEnv : List RtlExpr) (e : RtlExpr)
-    (h : compileTermPipelined slots selfDepth varEnv t = some e) :
-    evalTermPipelinedHw slots inputs regs selfDepth (varEnv.map (evalRtlExpr inputs wires regs)) t =
+    (h : compileTermPipelined slots slotBodies selfDepth varEnv t = some e) :
+    evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth (varEnv.map (evalRtlExpr inputs wires regs)) t =
       some (evalRtlExpr inputs wires regs e) := by
   match t with
   | .hole _ _ | .lam _ | .mix _ _ | .fix _ _ | .specification _ _
@@ -2051,12 +2103,12 @@ theorem compileTermPipelined_sound
     cases fn with
     | lam subBody =>
       simp only [compileTermPipelined] at h
-      cases hArg : compileTermPipelined slots selfDepth varEnv arg with
+      cases hArg : compileTermPipelined slots slotBodies selfDepth varEnv arg with
       | none => simp [hArg] at h
       | some eArg =>
         simp only [hArg] at h
-        have ihArg := compileTermPipelined_sound inputs wires regs slots arg selfDepth varEnv eArg hArg
-        have ihBody := compileTermPipelined_sound inputs wires regs slots subBody
+        have ihArg := compileTermPipelined_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg hArg
+        have ihBody := compileTermPipelined_sound inputs wires regs slots slotBodies subBody
           (selfDepth + 1) (eArg :: varEnv) e h
         simp only [List.map_cons] at ihBody
         simp only [evalTermPipelinedHw, ihArg, ihBody]
@@ -2070,13 +2122,23 @@ theorem compileTermPipelined_sound
           cases hSlot : slots.idxOf? member with
           | none => simp [hSlot] at h
           | some slotIdx =>
-            cases hArg : compileTermPipelined slots selfDepth varEnv arg with
+            cases hArg : compileTermPipelined slots slotBodies selfDepth varEnv arg with
             | none => simp [hSlot, hArg] at h
             | some eArg =>
-              simp only [hSlot, hArg, Option.some.injEq] at h
-              subst h
-              have ihArg := compileTermPipelined_sound inputs wires regs slots arg selfDepth varEnv eArg hArg
-              cases isDirectPipeArg arg <;> simp [ihArg, evalRtlExpr, evalAluOp]
+              have ihArg := compileTermPipelined_sound inputs wires regs slots slotBodies arg selfDepth varEnv eArg hArg
+              simp only [hSlot, hArg] at h
+              simp only [ihArg]
+              cases hDir : isDirectPipeArg arg
+              · simp only [hDir, Bool.false_eq_true, ↓reduceIte] at h ⊢
+                cases hBody : slotBodies[slotIdx]? with
+                | none => simp [hBody] at h
+                | some calleeBody =>
+                  simp only [hBody, Option.some.injEq] at h
+                  subst h
+                  simp only [substRtlInputPort0_sound]
+              · simp only [hDir, ↓reduceIte, Option.some.injEq] at h ⊢
+                subst h
+                rfl
         · simp [hEq] at h
       | _ =>
         simp [compileTermPipelined] at h
@@ -2084,86 +2146,92 @@ theorem compileTermPipelined_sound
       simp [compileTermPipelined] at h
   | .binary op l r =>
     simp only [compileTermPipelined] at h
-    cases hl : compileTermPipelined slots selfDepth varEnv l with
+    cases hl : compileTermPipelined slots slotBodies selfDepth varEnv l with
     | none => simp [hl] at h
     | some el =>
-      cases hr : compileTermPipelined slots selfDepth varEnv r with
+      cases hr : compileTermPipelined slots slotBodies selfDepth varEnv r with
       | none => simp [hl, hr] at h
       | some er =>
         simp only [hl, hr] at h
-        have ihl := compileTermPipelined_sound inputs wires regs slots l selfDepth varEnv el hl
-        have ihr := compileTermPipelined_sound inputs wires regs slots r selfDepth varEnv er hr
+        have ihl := compileTermPipelined_sound inputs wires regs slots slotBodies l selfDepth varEnv el hl
+        have ihr := compileTermPipelined_sound inputs wires regs slots slotBodies r selfDepth varEnv er hr
         simp only [evalTermPipelinedHw, ihl, ihr]
         exact compilePrimSat_sound inputs wires regs op el er e h
   | .ifBool c t f =>
     simp only [compileTermPipelined] at h
-    cases hc : compileTermPipelined slots selfDepth varEnv c with
+    cases hc : compileTermPipelined slots slotBodies selfDepth varEnv c with
     | none => simp [hc] at h
     | some ec =>
-      cases ht : compileTermPipelined slots selfDepth varEnv t with
+      cases ht : compileTermPipelined slots slotBodies selfDepth varEnv t with
       | none => simp [hc, ht] at h
       | some et =>
-        cases hf : compileTermPipelined slots selfDepth varEnv f with
+        cases hf : compileTermPipelined slots slotBodies selfDepth varEnv f with
         | none => simp [hc, ht, hf] at h
         | some ef =>
           simp only [hc, ht, hf, Option.some.injEq] at h
           subst h
-          have ihc := compileTermPipelined_sound inputs wires regs slots c selfDepth varEnv ec hc
-          have iht := compileTermPipelined_sound inputs wires regs slots t selfDepth varEnv et ht
-          have ihf := compileTermPipelined_sound inputs wires regs slots f selfDepth varEnv ef hf
+          have ihc := compileTermPipelined_sound inputs wires regs slots slotBodies c selfDepth varEnv ec hc
+          have iht := compileTermPipelined_sound inputs wires regs slots slotBodies t selfDepth varEnv et ht
+          have ihf := compileTermPipelined_sound inputs wires regs slots slotBodies f selfDepth varEnv ef hf
           simp only [evalTermPipelinedHw, ihc, iht, ihf, evalRtlExpr]
   | .ifZero v z s =>
     simp only [compileTermPipelined] at h
-    cases hv : compileTermPipelined slots selfDepth varEnv v with
+    cases hv : compileTermPipelined slots slotBodies selfDepth varEnv v with
     | none => simp [hv] at h
     | some ev =>
-      cases hz : compileTermPipelined slots selfDepth varEnv z with
+      cases hz : compileTermPipelined slots slotBodies selfDepth varEnv z with
       | none => simp [hv, hz] at h
       | some ez =>
-        cases hs : compileTermPipelined slots (selfDepth + 1)
+        cases hs : compileTermPipelined slots slotBodies (selfDepth + 1)
             (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) s with
         | none => simp [hv, hz, hs] at h
         | some es =>
           simp only [hv, hz, hs, Option.some.injEq] at h
           subst h
-          have hv' := compileTermPipelined_sound inputs wires regs slots v selfDepth varEnv ev hv
-          have hz' := compileTermPipelined_sound inputs wires regs slots z selfDepth varEnv ez hz
-          have hs' := compileTermPipelined_sound inputs wires regs slots s (selfDepth + 1)
+          have hv' := compileTermPipelined_sound inputs wires regs slots slotBodies v selfDepth varEnv ev hv
+          have hz' := compileTermPipelined_sound inputs wires regs slots slotBodies z selfDepth varEnv ez hz
+          have hs' := compileTermPipelined_sound inputs wires regs slots slotBodies s (selfDepth + 1)
             (RtlExpr.alu .sub ev (.const 1#64) :: varEnv) es hs
           simp only [List.map_cons, evalRtlExpr, evalAluOp] at hs'
           simp only [evalTermPipelinedHw, hv', hz', hs', evalRtlExpr, evalAluOp]
           rfl
 
-/-- Compile a `LeafDef` using non-inlined pipelined inter-slot register reads (`compileTermPipelined`). -/
-def compileLeafDefPipelined (slots : List String) (d : LeafDef) : Option RtlExpr :=
+/-- Compile a `LeafDef` using pipelined inter-slot register reads (`compileTermPipelined`). -/
+def compileLeafDefPipelined
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (d : LeafDef) : Option RtlExpr :=
   match d.code with
-  | .lam (.lam body) => compileTermPipelined slots 1 [.inputPort 0] body
+  | .lam (.lam body) => compileTermPipelined slots slotBodies 1 [.inputPort 0] body
   | _ => none
 
 /-- **Theorem (`compileLeafDefPipelined_sound`)**:
-For any `LeafDef` `d` with `d.code = .lam (.lam body)`, if `compileLeafDefPipelined slots d = some e`,
+For any `LeafDef` `d` with `d.code = .lam (.lam body)`, if `compileLeafDefPipelined slots slotBodies d = some e`,
 then evaluating `e` in `evalRtlExpr` matches `evalTermPipelinedHw` under `[inputs 0]`. -/
 theorem compileLeafDefPipelined_sound
     (inputs wires regs : Nat → BitVec 64)
     (slots : List String)
+    (slotBodies : List RtlExpr)
     (d : LeafDef) (body : Term) (e : RtlExpr)
     (hCode : d.code = .lam (.lam body))
-    (hComp : compileLeafDefPipelined slots d = some e) :
-    evalTermPipelinedHw slots inputs regs 1 [inputs 0] body =
+    (hComp : compileLeafDefPipelined slots slotBodies d = some e) :
+    evalTermPipelinedHw slots slotBodies inputs wires regs 1 [inputs 0] body =
       some (evalRtlExpr inputs wires regs e) := by
   simp only [compileLeafDefPipelined, hCode] at hComp
-  exact compileTermPipelined_sound inputs wires regs slots body 1 [.inputPort 0] e hComp
+  exact compileTermPipelined_sound inputs wires regs slots slotBodies body 1 [.inputPort 0] e hComp
 
-/-- Structurally recursive slot-list compiler for non-inlined pipelined `RtlModule` synthesis. -/
+/-- Structurally recursive slot-list compiler for pipelined `RtlModule` synthesis,
+accumulating `slotBodies : List RtlExpr` as each `LeafDef` is compiled. -/
 def compileBookDefsPipelined
     (slots : List String)
+    (slotBodies : List RtlExpr)
     (wires : List WireAssign)
     (regs : List RegSpec)
     (outs : List OutputPort) :
     List LeafDef → Option (List WireAssign × List RegSpec × List OutputPort)
   | [] => some (wires, regs, outs)
   | d :: rest =>
-    match compileLeafDefPipelined slots d with
+    match compileLeafDefPipelined slots slotBodies d with
     | none => none
     | some expr =>
       let w : WireAssign := { wireIdx := d.slot, name := d.member, expr := expr }
@@ -2175,12 +2243,13 @@ def compileBookDefsPipelined
         , isSynchronizer := false
         , nextExpr       := .wireRef d.slot }
       let o : OutputPort := { name := s!"out_{d.member}", expr := .regRead d.slot }
-      compileBookDefsPipelined slots (wires ++ [w]) (regs ++ [r]) (outs ++ [o]) rest
+      compileBookDefsPipelined slots (slotBodies ++ [expr]) (wires ++ [w]) (regs ++ [r]) (outs ++ [o]) rest
 
-/-- Compile an entire `Obend.Leaf.Book` into a non-inlined pipelined `RtlModule` where inter-slot
-references read synchronous pipeline stage registers (`reg_{member}`) instead of duplicating ASTs. -/
+/-- Compile an entire `Obend.Leaf.Book` into a pipelined `RtlModule` where direct inter-slot
+references read synchronous pipeline stage registers (`reg_{member}`) and non-direct argument
+calls substitute into the callee slot's actual compiled `RtlExpr` body (`substRtlInputPort0`). -/
 def compileBookToPipelinedRtl (modName : String) (B : Book) : Option RtlModule :=
-  match compileBookDefsPipelined B.slots [] [] [] B.defs with
+  match compileBookDefsPipelined B.slots [] [] [] [] B.defs with
   | none => none
   | some (wires, regs, outs) =>
     some {
@@ -2192,19 +2261,25 @@ def compileBookToPipelinedRtl (modName : String) (B : Book) : Option RtlModule :
     }
 
 /-- **Theorem (`compileTermPipelined_arg_wired_and_stage_correspondence`)**:
-1. When calling an earlier slot `self.inc` on a non-`.bound 0` argument (`.nat k`), `compileTermPipelined`
-   wires the compiled argument `.const (BitVec.ofNat 64 k)` into the stage register datapath
-   `.alu .add (.regRead 0) (.const (BitVec.ofNat 64 k))` rather than discarding `eArg`!
-2. Across two distinct arguments `k1 ≠ k2` (`k1, k2 < 2^64`), the compiled pipelined expressions
-   evaluate to distinct 64-bit hardware outputs `regs 0 + BitVec.ofNat 64 k`. -/
+1. When calling an earlier slot `self.scale3` on `.bound 0` (`isDirectPipeArg (.bound 0) = true`),
+   `compileTermPipelined` emits the registered pipeline stage read `.regRead 0`.
+2. When calling an earlier slot `self.scale3` (whose compiled body is `calleeBody = .alu .mul (.inputPort 0) (.const 3#64)`)
+   on a non-`.bound 0` argument (`.nat k`), `compileTermPipelined` looks up `calleeBody` in `slotBodies`
+   and emits `substRtlInputPort0 (.const (BitVec.ofNat 64 k)) calleeBody = .alu .mul (.const (BitVec.ofNat 64 k)) (.const 3#64)`,
+   evaluating to `BitVec.ofNat 64 k * 3#64` rather than hardcoding `.alu .add (.regRead 0) ...`!
+3. When `slotBodies` does not contain `slotIdx`, a non-direct call fails closed with `none`. -/
 theorem compileTermPipelined_arg_wired_and_stage_correspondence (k : Nat) (inputs wires regs : Nat → BitVec 64) :
-    let callExpr := Term.app (.get (.bound 1) "inc") (.nat k)
-    let expectedRtl := RtlExpr.alu .add (.regRead 0) (.const (BitVec.ofNat 64 k))
-    compileTermPipelined ["inc", "caller"] 1 [.inputPort 0] callExpr = some expectedRtl ∧
-    evalRtlExpr inputs wires regs expectedRtl = regs 0 + BitVec.ofNat 64 k ∧
-    evalTermPipelinedHw ["inc", "caller"] inputs regs 1 [inputs 0] callExpr =
-      some (regs 0 + BitVec.ofNat 64 k) := by
-  exact ⟨rfl, rfl, rfl⟩
+    let calleeBody := RtlExpr.alu .mul (.inputPort 0) (.const 3#64)
+    let directCall := Term.app (.get (.bound 1) "scale3") (.bound 0)
+    let nonDirectCall := Term.app (.get (.bound 1) "scale3") (.nat k)
+    let expectedRtl := RtlExpr.alu .mul (.const (BitVec.ofNat 64 k)) (.const 3#64)
+    compileTermPipelined ["scale3", "caller"] [calleeBody] 1 [.inputPort 0] directCall = some (.regRead 0) ∧
+    compileTermPipelined ["scale3", "caller"] [calleeBody] 1 [.inputPort 0] nonDirectCall = some expectedRtl ∧
+    compileTermPipelined ["scale3", "caller"] [] 1 [.inputPort 0] nonDirectCall = none ∧
+    evalRtlExpr inputs wires regs expectedRtl = BitVec.ofNat 64 k * 3#64 ∧
+    evalTermPipelinedHw ["scale3", "caller"] [calleeBody] inputs wires regs 1 [inputs 0] nonDirectCall =
+      some (BitVec.ofNat 64 k * 3#64) := by
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## 10. Calyx-Style `go`/`done` Control Group Handshakes (`CalyxGroup`, `CalyxControl`, `stepCalyxSeqFsm`) -/
 
@@ -2433,11 +2508,13 @@ theorem calyx_seq_two_group_pipeline_sound :
    `λself. λx0. λx1. λx2. x0 * x1 + x2`, confirming that it binds `.bound 2 ↦ .inputPort 0`,
    `.bound 1 ↦ .inputPort 1`, `.bound 0 ↦ .inputPort 2` and evaluates `(6, 7, 8) ↦ 50#64`,
    AND verifies curried 3-argument inter-slot invocation `self.mac3(x0, x1, x2)` from a caller slot.
-2. Verifies non-inlined pipelined book compilation (`compileBookToPipelinedRtl`) on a 2-slot `Book`
-   (`slot 0`: `"inc"`, `slot 1`: `"doubleInc"` calling `self.inc(arg) * 2`), confirming that the
-   synthesized `RtlModule` passes `checkRtlModule = true`, emits `.regRead 0` (`reg_inc`) in
-   slot 1's wire rather than duplicating slot 0's combinational adder tree, and latches
-   `reg_inc = 11#64` on Cycle 1 followed by `reg_doubleInc = 22#64` on Cycle 2! -/
+2. Verifies pipelined book compilation (`compileBookToPipelinedRtl`) on a 3-slot `Book`
+   (`slot 0`: `"inc"`, `slot 1`: `"doubleInc"` calling `self.inc(arg) * 2` with `isDirectPipeArg = true`,
+   `slot 2`: `"shiftedInc"` calling `self.inc(arg + 5)` with `isDirectPipeArg = false`), confirming that
+   the synthesized `RtlModule` passes `checkRtlModule = true`, emits `.regRead 0` (`reg_inc`) in
+   slot 1's wire, substitutes `arg + 5` into slot 0's compiled body `(arg + 5) + 1` in slot 2's wire,
+   and latches `reg_inc = 11#64` and `reg_shiftedInc = 16#64` on Cycle 1 followed by
+   `reg_doubleInc = 22#64` on Cycle 2! -/
 theorem golden_multi_arg_and_pipelined_rtl_verified :
     let mac3Code : Term :=
       .lam (.lam (.lam (.lam (.binary .add (.binary .multiply (.bound 2) (.bound 1)) (.bound 0)))))
@@ -2454,6 +2531,9 @@ theorem golden_multi_arg_and_pipelined_rtl_verified :
                   , code := .lam (.lam (.binary .add (.bound 0) (.nat 1))), reads := [] }
           , .slot { member := "doubleInc", slot := 1, kind := .method
                   , code := .lam (.lam (.binary .multiply (.app (.get (.bound 1) "inc") (.bound 0)) (.nat 2)))
+                  , reads := [0] }
+          , .slot { member := "shiftedInc", slot := 2, kind := .method
+                  , code := .lam (.lam (.app (.get (.bound 1) "inc") (.binary .add (.bound 0) (.nat 5))))
                   , reads := [0] } ] }
     compileMultiArgMethod [] [] 3 mac3Code = some expectedMacExpr ∧
     compileMultiArgMethod ["mac3"] [expectedMacExpr] 3 macCallerCode = some expectedMacExpr ∧
@@ -2467,8 +2547,10 @@ theorem golden_multi_arg_and_pipelined_rtl_verified :
        checkRtlModule m &&
        (m.wires.map (·.expr) ==
          [ .alu .add (.inputPort 0) (.const 1#64)
-         , .alu .mul (.regRead 0) (.const 2#64) ]) &&
+         , .alu .mul (.regRead 0) (.const 2#64)
+         , .alu .add (.alu .add (.inputPort 0) (.const 5#64)) (.const 1#64) ]) &&
        (regs1 0 == 11#64) &&
+       (regs1 2 == 16#64) &&
        (regs2 1 == 22#64)
      | none => false) = true := by
   decide +kernel

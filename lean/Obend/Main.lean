@@ -122,7 +122,8 @@ def usage : String :=
   "       obend specialize --package PACKAGE.json --object ENTRY --book BOOK.json [--call MEMBER NAT]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
   "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
-  "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf"
+  "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf\n" ++
+  "       obend tapeout [FILE.obend] [--entry NAME] [--mode pipelined|seq|comb] [--out-sv FILE.sv] [--out-librelane FILE.json] [--out-receipt RECEIPT.json]"
 
 /-! ## The typed-core packet path (lane A) -/
 
@@ -670,7 +671,7 @@ def specializeCommand (spec entry bookPath : String) (call : Option (String × N
   | .ok .machine =>
     IO.println "selected: machine"
     if let some (m, n) := call then IO.println s!"machine: {m}({n}) = {showNat (callOn now.object m n)}"
-  | .error _ => IO.println "selected: none"
+  | _ => IO.println "selected: none"
   return 0
 
 def leafCall : List String → Option (Option (String × Nat))
@@ -733,6 +734,7 @@ public def main (args : List String) : IO UInt32 :=
           ((Obend.Receipt.Cli.main? ("verify" :: path :: rest)).getD (do IO.eprintln usage; return 64))
   | "analyze" :: _ => (Obend.Analysis.Cli.main? args).getD (do IO.eprintln usage; return 64)
   | "lower" :: _ => (Obend.Lower.Cli.main? args).getD (do IO.eprintln usage; return 64)
+  | "tapeout" :: rest => Obend.Hardware.Cli.cmdTapeout rest
   | _ => match Obend.Receipt.Cli.main? args with
     | some act => act
     | none => match Obend.Ledger.Cli.main? args with

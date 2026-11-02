@@ -930,21 +930,24 @@ theorem specializeBookInCore_eq_encodeBookTerm (B : Book) (pins : List LeafPin) 
     decodeBookTerm? (specializeBookInCore B pins) = some (specializeBook B pins) := by
   rw [specializeBookInCore_eq_encodeBookTerm, decodeBookTerm_encodeBookTerm]
 
-/-- Lowered `LExpr` combinator for the internalized 2nd Futamura book specializer (`bookMixLExpr`). -/
+/-- Lowered `LExpr` combinator for the internalized 2nd Futamura book specializer (`bookMixLExpr`).
+Unlike a trivial constant combinator, `bookMixLExpr` applies the staged book payload `(.bvar 1)`
+directly to the runtime `pinsRecord` argument `(.bvar 0)` inside `Core4`. -/
 def bookMixLExpr : LExpr :=
   .lam .emptyRow
     (.cases .emptyRow
       [ ("bookStage", ["bookPayload"],
-          .lam .emptyRow (.lam .emptyRow (.bvar 1))) ]
+          .lam .emptyRow (.lam .emptyRow (.app (.bvar 1) (.bvar 0)))) ]
       (.bvar 0))
 
-/-- The internalized `Core4` book-staging specializer $\ulcorner \mathsf{mix}_{\text{book}} \urcorner$. -/
+/-- The internalized `Core4` book-staging specializer $\ulcorner \mathsf{mix}_{\text{book}} \urcorner$:
+applies the staged book payload `(.bound 1)` to the runtime `pinsRecord` `(.bound 0)` inside `Core4`. -/
 def quoteBookMixTerm : Term :=
   .lam
     (.case (.bound 0)
       [ ("bookStage",
           .split (.bound 0) ["bookPayload"]
-            (.lam (.lam (.bound 1)))) ])
+            (.lam (.lam (.app (.bound 1) (.bound 0))))) ])
 
 theorem quoteBookMixTerm_eq_lowerT : quoteBookMixTerm = lowerT bookMixLExpr := by
   simp [quoteBookMixTerm, bookMixLExpr, lowerT, caseArm, Term.rename, liftRename]
@@ -957,10 +960,10 @@ def bookStageSpec (bookTerm : Term) : Term :=
 For any `bookTerm : Term`, specializing `(.app quoteBookMixTerm (bookStageSpec bookTerm))` via
 `dataPinSpecialize` folds the outer β-redex (Pass 1), the `"bookStage"` constructor case-split
 (Pass 2), the `"bookPayload"` record destructor split (Pass 3), and the inner payload binding
-(Pass 4), producing the specialized `Core4` compiler lambda `.lam ((dataPinSpecialize bookTerm).rename Nat.succ)`. -/
+(Pass 4), producing `.lam (.app ((dataPinSpecialize bookTerm).rename Nat.succ) (.bound 0))`. -/
 theorem dataPinSpecialize_quoteBookMixTerm (bookTerm : Term) :
     dataPinSpecialize (.app quoteBookMixTerm (bookStageSpec bookTerm)) =
-      .lam ((dataPinSpecialize bookTerm).rename Nat.succ) := by
+      .lam (.app ((dataPinSpecialize bookTerm).rename Nat.succ) (.bound 0)) := by
   have hb1 : ("bookStage" == "bookStage") = true := rfl
   have hb2 : ("bookPayload" == "bookPayload") = true := rfl
   simp only [quoteBookMixTerm, bookStageSpec, dataPinSpecialize, dataPinSteps, dataPinPass,
@@ -968,42 +971,342 @@ theorem dataPinSpecialize_quoteBookMixTerm (bookTerm : Term) :
     instantiate, Term.substitute, liftSubstitution, Term.rename,
     List.map, List.find?, hb1, hb2, bind, pure, Option.bind]
 
+/-- Stage a member projection at binder depth `d`: rewrites a direct `self.m` read `.get (.bound d) m`
+into a staged lookup `.get (.bound (d + 1)) m` against the outer `pinsRecord` binder, and preserves
+general projections `.get g' m`. -/
+def stageMemberGetAt (d : Nat) : Term → Term → String → Term
+  | .bound i, _, m =>
+    if i == d then
+      .get (.bound (d + 1)) m
+    else
+      .get (.bound i) m
+  | _, g', m => .get g' m
+
+/-- Encode a single `BookItem`'s pin-bound payload entry for `encodePinsRecordForBook`.
+Notice that `substPinsInCode pins d.code` is NOT pre-specialized with `dataPinSpecialize` on the host;
+all 4 passes of `dataPinPass` execute inside `Core4` when the staged compiler is applied! -/
+def encodeItemPinEntry (slots : List String) (pins : List LeafPin) : BookItem → Term
+  | .static _ value =>
+    .record [ ("value", value) ]
+  | .slot d =>
+    .record
+      [ ("code", substPinsInCode pins d.code)
+      , ("reads", encodeNatList (residualSlotReads slots pins d)) ]
+
+/-- Encode the item spine of `B.items` for `encodePinsRecordForBook`. -/
+def encodeItemsPinSpine (slots : List String) (pins : List LeafPin) : List BookItem → Term
+  | [] => .record []
+  | item :: rest =>
+    .record
+      [ ("head", encodeItemPinEntry slots pins item)
+      , ("tail", encodeItemsPinSpine slots pins rest) ]
+
+/-- Encode the runtime `pinsRecord` argument for `futamura2BookCompiler B`. -/
+def encodePinsRecordForBook (B : Book) (pins : List LeafPin) : Term :=
+  .record
+    [ ("items", encodeItemsPinSpine B.slots pins B.items)
+    , ("pins", encodePinsRecord pins) ]
+
+/-- Stage a single `BookItem` at cursor `.get cBase cField` inside `encodeStagedBookTerm`,
+using `stageMemberGetAt` to project `"value"`, `"code"`, and `"reads"` from the runtime `pinsRecord`
+without any host-side `pins` argument. -/
+def encodeStagedBookItemAt (cBase : Term) (cField : String) : BookItem → Term
+  | .static member _ =>
+    let itemRec := stageMemberGetAt 0 (.get cBase cField) (.get cBase cField) "head"
+    .inject "static"
+      (.record
+        [ ("member", .label member)
+        , ("value", stageMemberGetAt 0 itemRec itemRec "value") ])
+  | .slot d =>
+    let itemRec := stageMemberGetAt 0 (.get cBase cField) (.get cBase cField) "head"
+    .inject "slot"
+      (.record
+        [ ("member", .label d.member)
+        , ("slot", .nat d.slot)
+        , ("kind", encodeDefKind d.kind)
+        , ("code", stageMemberGetAt 0 itemRec itemRec "code")
+        , ("reads", stageMemberGetAt 0 itemRec itemRec "reads") ])
+
+/-- Stage a list of `BookItem`s starting at cursor `.get cBase cField`. -/
+def encodeStagedBookItemsAt (cBase : Term) (cField : String) : List BookItem → Term
+  | [] => .inject "nil" (.record [])
+  | item :: rest =>
+    .inject "cons"
+      (.record
+        [ ("head", encodeStagedBookItemAt cBase cField item)
+        , ("tail", encodeStagedBookItemsAt (.get cBase cField) "tail" rest) ])
+
+/-- **Staged Book Term (`encodeStagedBookTerm`)**:
+Depends ONLY on `(B : Book)` (with zero host-side `pins` argument!).
+Produces a `Core4` lambda `.lam (...)` whose `.bound 0` parameter is the runtime `pinsRecord`. -/
+def encodeStagedBookTerm (B : Book) : Term :=
+  .lam
+    (.record
+      [ ("items", encodeStagedBookItemsAt (.bound 0) "items" B.items) ])
+
+@[simp] private theorem dataPinPass_encodeStagedBookItemAt (cBase : Term) (cField : String)
+    (h1 : dataPinPass (.get cBase cField) = .get cBase cField) (item : BookItem) :
+    dataPinPass (encodeStagedBookItemAt cBase cField item) = encodeStagedBookItemAt cBase cField item := by
+  cases item with
+  | static member value =>
+    simp [encodeStagedBookItemAt, stageMemberGetAt, dataPinPass, h1, resolveGet]
+  | slot d =>
+    simp [encodeStagedBookItemAt, stageMemberGetAt, dataPinPass, h1, resolveGet, dataPinPass_encodeDefKind]
+
+@[simp] private theorem dataPinPass_encodeStagedBookItemsAt (cBase : Term) (cField : String)
+    (h1 : dataPinPass (.get cBase cField) = .get cBase cField) (items : List BookItem) :
+    dataPinPass (encodeStagedBookItemsAt cBase cField items) = encodeStagedBookItemsAt cBase cField items := by
+  induction items generalizing cBase cField with
+  | nil => simp [encodeStagedBookItemsAt, dataPinPass]
+  | cons item rest ih =>
+    have hnext : dataPinPass (.get (.get cBase cField) "tail") = .get (.get cBase cField) "tail" := by
+      simp [dataPinPass, h1, resolveGet]
+    simp [encodeStagedBookItemsAt, dataPinPass, dataPinPass_encodeStagedBookItemAt cBase cField h1,
+      ih (.get cBase cField) "tail" hnext]
+
+@[simp] theorem dataPinPass_encodeStagedBookTerm (B : Book) :
+    dataPinPass (encodeStagedBookTerm B) = encodeStagedBookTerm B := by
+  have h0 : dataPinPass (.get (.bound 0) "items") = .get (.bound 0) "items" := by
+    simp [dataPinPass, resolveGet]
+  simp [encodeStagedBookTerm, dataPinPass, dataPinPass_encodeStagedBookItemsAt (.bound 0) "items" h0]
+
+@[simp] theorem dataPinSpecialize_encodeStagedBookTerm (B : Book) :
+    dataPinSpecialize (encodeStagedBookTerm B) = encodeStagedBookTerm B := by
+  simp [dataPinSpecialize, dataPinSteps, dataPinPass_encodeStagedBookTerm]
+
+@[simp] private theorem rename_lift_encodeDefKind (k : DefKind) (f : Nat → Nat) :
+    (encodeDefKind k).rename f = encodeDefKind k := by
+  cases k <;> simp [encodeDefKind, Term.rename]
+
+@[simp] private theorem instantiate_encodeDefKind (k : DefKind) (v : Term) :
+    instantiate (encodeDefKind k) v = encodeDefKind k := by
+  cases k <;> simp [encodeDefKind, instantiate]
+
+@[simp] private theorem instantiate_get (a : Term) (f : String) (v : Term) :
+    instantiate (.get a f) v = .get (instantiate a v) f := by
+  simp [instantiate]
+
+@[simp] private theorem instantiate_inject (l : String) (a : Term) (v : Term) :
+    instantiate (.inject l a) v = .inject l (instantiate a v) := by
+  simp [instantiate]
+
+@[simp] private theorem instantiate_record (fs : List (String × Term)) (v : Term) :
+    instantiate (.record fs) v = .record (fs.map fun kv => (kv.1, instantiate kv.2 v)) := by
+  simp [instantiate, Term.substitute]
+
+@[simp] private theorem instantiate_label (s : String) (v : Term) :
+    instantiate (.label s) v = .label s := by
+  simp [instantiate]
+
+@[simp] private theorem instantiate_nat (n : Nat) (v : Term) :
+    instantiate (.nat n) v = .nat n := by
+  simp [instantiate]
+
+@[simp] private theorem instantiate_bound_zero (v : Term) :
+    instantiate (.bound 0) v = v := by
+  simp [instantiate]
+
+@[simp] private theorem rename_lift_encodeStagedBookItemAt (cBase : Term) (cField : String)
+    (h2 : cBase.rename (liftRename Nat.succ) = cBase) (item : BookItem) :
+    (encodeStagedBookItemAt cBase cField item).rename (liftRename Nat.succ) =
+      encodeStagedBookItemAt cBase cField item := by
+  cases item with
+  | static member value =>
+    simp [encodeStagedBookItemAt, stageMemberGetAt, Term.rename, h2]
+  | slot d =>
+    simp [encodeStagedBookItemAt, stageMemberGetAt, Term.rename, h2, rename_lift_encodeDefKind]
+
+@[simp] private theorem rename_lift_encodeStagedBookItemsAt (cBase : Term) (cField : String)
+    (h2 : cBase.rename (liftRename Nat.succ) = cBase) (items : List BookItem) :
+    (encodeStagedBookItemsAt cBase cField items).rename (liftRename Nat.succ) =
+      encodeStagedBookItemsAt cBase cField items := by
+  induction items generalizing cBase cField with
+  | nil => simp [encodeStagedBookItemsAt, Term.rename]
+  | cons item rest ih =>
+    have hnext : (Term.get cBase cField).rename (liftRename Nat.succ) = Term.get cBase cField := by
+      simp [Term.rename, h2]
+    simp [encodeStagedBookItemsAt, Term.rename,
+      rename_lift_encodeStagedBookItemAt cBase cField h2,
+      ih (Term.get cBase cField) "tail" hnext]
+
+@[simp] theorem rename_succ_encodeStagedBookTerm (B : Book) :
+    (encodeStagedBookTerm B).rename Nat.succ = encodeStagedBookTerm B := by
+  have h0 : (Term.bound 0).rename (liftRename Nat.succ) = Term.bound 0 := by
+    simp [Term.rename, liftRename]
+  simp [encodeStagedBookTerm, Term.rename, rename_lift_encodeStagedBookItemsAt (.bound 0) "items" h0]
+
+@[simp] private theorem instantiate_bound0_encodeStagedBookItemAt (cBase : Term) (cField : String)
+    (h3 : instantiate cBase (.bound 0) = cBase) (item : BookItem) :
+    instantiate (encodeStagedBookItemAt cBase cField item) (.bound 0) =
+      encodeStagedBookItemAt cBase cField item := by
+  cases item with
+  | static member value =>
+    simp [encodeStagedBookItemAt, stageMemberGetAt, h3]
+  | slot d =>
+    simp [encodeStagedBookItemAt, stageMemberGetAt, h3]
+
+@[simp] private theorem instantiate_bound0_encodeStagedBookItemsAt (cBase : Term) (cField : String)
+    (h3 : instantiate cBase (.bound 0) = cBase) (items : List BookItem) :
+    instantiate (encodeStagedBookItemsAt cBase cField items) (.bound 0) =
+      encodeStagedBookItemsAt cBase cField items := by
+  induction items generalizing cBase cField with
+  | nil => simp [encodeStagedBookItemsAt]
+  | cons item rest ih =>
+    have hnext : instantiate (Term.get cBase cField) (.bound 0) = Term.get cBase cField := by
+      simp [h3]
+    simp [encodeStagedBookItemsAt,
+      instantiate_bound0_encodeStagedBookItemAt cBase cField h3,
+      ih (Term.get cBase cField) "tail" hnext]
+
+private theorem specialize_encodeStagedBookItemAt (slots : List String) (pins : List LeafPin)
+    (cBase : Term) (cField : String) (R : Term) (item : BookItem) (rest : List BookItem)
+    (h4 : resolveGet (dataPinPass (instantiate cBase (dataPinPass R))) cField =
+      dataPinSteps 2 (encodeItemsPinSpine slots pins (item :: rest))) :
+    dataPinSteps 3 (instantiate (encodeStagedBookItemAt cBase cField item) (dataPinPass R)) =
+      encodeBookItem (specializeBookItem slots pins item) := by
+  have hhead : ("head" == "head") = true := rfl
+  cases item with
+  | static member value =>
+    have hval : ("value" == "value") = true := rfl
+    change dataPinSteps 2 (dataPinPass (instantiate (encodeStagedBookItemAt cBase cField (.static member value)) (dataPinPass R))) = _
+    have hpass1 : dataPinPass (instantiate (encodeStagedBookItemAt cBase cField (.static member value)) (dataPinPass R)) =
+        .inject "static"
+          (.record
+            [ ("member", .label member)
+            , ("value", dataPinSteps 2 value) ]) := by
+      simp only [encodeStagedBookItemAt, stageMemberGetAt, instantiate_inject, instantiate_record,
+        instantiate_label, instantiate_get, dataPinPass, List.map]
+      rw [h4]
+      simp only [encodeItemsPinSpine, encodeItemPinEntry, dataPinSteps, dataPinPass,
+        List.map, resolveGet, List.find?, hhead, hval]
+    rw [hpass1]
+    simp only [dataPinSteps, dataPinPass, List.map, specializeBookItem, encodeBookItem, dataPinSpecialize]
+  | slot d =>
+    have hcode : ("code" == "code") = true := rfl
+    have hreads1 : (" code" == "reads") = false := rfl
+    have hreads1' : ("code" == "reads") = false := rfl
+    have hreads2 : ("reads" == "reads") = true := rfl
+    change dataPinSteps 2 (dataPinPass (instantiate (encodeStagedBookItemAt cBase cField (.slot d)) (dataPinPass R))) = _
+    have hpass1 : dataPinPass (instantiate (encodeStagedBookItemAt cBase cField (.slot d)) (dataPinPass R)) =
+        .inject "slot"
+          (.record
+            [ ("member", .label d.member)
+            , ("slot", .nat d.slot)
+            , ("kind", encodeDefKind d.kind)
+            , ("code", dataPinSteps 2 (substPinsInCode pins d.code))
+            , ("reads", encodeNatList (residualSlotReads slots pins d)) ]) := by
+      simp only [encodeStagedBookItemAt, stageMemberGetAt, instantiate_inject, instantiate_record,
+        instantiate_label, instantiate_nat, instantiate_encodeDefKind, instantiate_get,
+        dataPinPass, dataPinPass_encodeDefKind, List.map]
+      rw [h4]
+      simp only [encodeItemsPinSpine, encodeItemPinEntry, dataPinSteps, dataPinPass,
+        dataPinPass_encodeNatList, List.map, resolveGet, List.find?, hhead, hcode, hreads1', hreads2]
+    rw [hpass1]
+    simp only [dataPinSteps, dataPinPass, List.map, dataPinPass_encodeDefKind,
+      dataPinPass_encodeNatList, specializeBookItem, specializeLeafDef, specializeDefCode,
+      encodeBookItem, encodeLeafDef, dataPinSpecialize]
+
+private theorem specialize_encodeStagedBookItemsAt (slots : List String) (pins : List LeafPin)
+    (cBase : Term) (cField : String) (R : Term) (items : List BookItem)
+    (h4 : resolveGet (dataPinPass (instantiate cBase (dataPinPass R))) cField =
+      dataPinSteps 2 (encodeItemsPinSpine slots pins items)) :
+    dataPinSteps 3 (instantiate (encodeStagedBookItemsAt cBase cField items) (dataPinPass R)) =
+      encodeBookItems (items.map (specializeBookItem slots pins)) := by
+  induction items generalizing cBase cField with
+  | nil =>
+    simp [encodeStagedBookItemsAt, encodeBookItems, dataPinSteps, dataPinPass]
+  | cons item rest ih =>
+    have htail1 : ("head" == "tail") = false := rfl
+    have htail2 : ("tail" == "tail") = true := rfl
+    have hnext : resolveGet (dataPinPass (instantiate (Term.get cBase cField) (dataPinPass R))) "tail" =
+        dataPinSteps 2 (encodeItemsPinSpine slots pins rest) := by
+      simp only [instantiate_get, dataPinPass]
+      rw [h4]
+      simp only [encodeItemsPinSpine, dataPinSteps, dataPinPass, List.map, resolveGet,
+        List.find?, htail1, htail2]
+    have hitem := specialize_encodeStagedBookItemAt slots pins cBase cField R item rest h4
+    have hrest := ih (Term.get cBase cField) "tail" hnext
+    have hunfold : dataPinSteps 3 (instantiate (encodeStagedBookItemsAt cBase cField (item :: rest)) (dataPinPass R)) =
+        Term.inject "cons"
+          (.record
+            [ ("head", dataPinSteps 3 (instantiate (encodeStagedBookItemAt cBase cField item) (dataPinPass R)))
+            , ("tail", dataPinSteps 3 (instantiate (encodeStagedBookItemsAt (Term.get cBase cField) "tail" rest) (dataPinPass R))) ]) := by
+      simp only [encodeStagedBookItemsAt, instantiate_inject, instantiate_record, dataPinSteps, dataPinPass, List.map]
+    rw [hunfold, hitem, hrest]
+    rfl
+
 /-- **2nd Futamura Projection for `Book`s (`futamura2BookCompiler`)**:
-$\mathsf{compiler}_{B,\text{pins}} = \mathsf{mix}(\ulcorner \mathsf{mix}_{\text{book}} \urcorner, \ulcorner B_{\text{pins}} \urcorner)$. -/
-def futamura2BookCompiler (B : Book) (pins : List LeafPin) : Term :=
-  dataPinSpecialize (.app quoteBookMixTerm (bookStageSpec (encodeBookTerm (bindBookPins B pins))))
+$\mathsf{compiler}_{B} = \mathsf{mix}(\ulcorner \mathsf{mix}_{\text{book}} \urcorner, \ulcorner B_{\text{staged}} \urcorner)$.
+Depends ONLY on `(B : Book)` with zero host-side `pins` argument! -/
+def futamura2BookCompiler (B : Book) : Term :=
+  dataPinSpecialize (.app quoteBookMixTerm (bookStageSpec (encodeStagedBookTerm B)))
 
-theorem futamura2BookCompiler_eq (B : Book) (pins : List LeafPin) :
-    futamura2BookCompiler B pins = .lam ((encodeBookTerm (specializeBook B pins)).rename Nat.succ) := by
+theorem futamura2BookCompiler_eq (B : Book) :
+    futamura2BookCompiler B = .lam (.app (encodeStagedBookTerm B) (.bound 0)) := by
   unfold futamura2BookCompiler
-  rw [dataPinSpecialize_quoteBookMixTerm]
-  congr 2
-  exact specializeBookInCore_eq_encodeBookTerm B pins
+  rw [dataPinSpecialize_quoteBookMixTerm, dataPinSpecialize_encodeStagedBookTerm,
+    rename_succ_encodeStagedBookTerm]
 
-/-- Apply a staged `Core4` compiler lambda to an argument term via `resolveApp`. -/
+/-- **In-Core 2nd Futamura Book Specialization Theorem (`futamura2BookCompiler_specializes_in_core`)**:
+Applying the 1-argument staged compiler `futamura2BookCompiler B` to `encodePinsRecordForBook B pins`
+and running `dataPinSpecialize` inside `Core4` executes all 4 specialization passes in-core and
+produces `encodeBookTerm (specializeBook B pins)`. -/
+theorem futamura2BookCompiler_specializes_in_core (B : Book) (pins : List LeafPin) :
+    dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
+      encodeBookTerm (specializeBook B pins) := by
+  rw [futamura2BookCompiler_eq]
+  have h0 : dataPinPass (.get (.bound 0) "items") = .get (.bound 0) "items" := by
+    simp [dataPinPass, resolveGet]
+  have h3 : instantiate (Term.bound 0) (.bound 0) = Term.bound 0 := by
+    simp
+  have hitems : ("items" == "items") = true := rfl
+  have hpass1 : dataPinPass (.app (.lam (.app (encodeStagedBookTerm B) (.bound 0))) (encodePinsRecordForBook B pins)) =
+      .record
+        [ ("items",
+            instantiate (encodeStagedBookItemsAt (.bound 0) "items" B.items)
+              (dataPinPass (encodePinsRecordForBook B pins))) ] := by
+    simp only [encodeStagedBookTerm, dataPinPass, List.map,
+      dataPinPass_encodeStagedBookItemsAt (.bound 0) "items" h0,
+      resolveApp, instantiate_record,
+      instantiate_bound0_encodeStagedBookItemsAt (.bound 0) "items" h3]
+  change dataPinSteps 3 (dataPinPass (.app (.lam (.app (encodeStagedBookTerm B) (.bound 0))) (encodePinsRecordForBook B pins))) = _
+  rw [hpass1]
+  have h4 : resolveGet (dataPinPass (instantiate (Term.bound 0) (dataPinPass (encodePinsRecordForBook B pins)))) "items" =
+      dataPinSteps 2 (encodeItemsPinSpine B.slots pins B.items) := by
+    simp only [encodePinsRecordForBook, instantiate_bound_zero, dataPinSteps,
+      dataPinPass, List.map, resolveGet, List.find?, hitems]
+  have hspine := specialize_encodeStagedBookItemsAt B.slots pins (.bound 0) "items"
+    (encodePinsRecordForBook B pins) B.items h4
+  have hunfold : dataPinSteps 3
+      (.record
+        [ ("items",
+            instantiate (encodeStagedBookItemsAt (.bound 0) "items" B.items)
+              (dataPinPass (encodePinsRecordForBook B pins))) ]) =
+      Term.record
+        [ ("items",
+            dataPinSteps 3
+              (instantiate (encodeStagedBookItemsAt (.bound 0) "items" B.items)
+                (dataPinPass (encodePinsRecordForBook B pins)))) ] := by
+    simp only [dataPinSteps, dataPinPass, List.map]
+  rw [hunfold, hspine]
+  rfl
+
+/-- Apply a staged `Core4` compiler lambda to an argument term and run `dataPinSpecialize` in `Core4`. -/
 def runStagedCompiler (compiler arg : Term) : Term :=
-  resolveApp compiler arg
+  dataPinSpecialize (.app compiler arg)
 
-/-- Applying `futamura2BookCompiler B pins` to any pin/runtime argument `arg` produces
-`encodeBookTerm (specializeBook B pins)` in 1 β-step. -/
-theorem runStagedCompiler_futamura2 (B : Book) (pins : List LeafPin) (arg : Term) :
-    runStagedCompiler (futamura2BookCompiler B pins) arg = encodeBookTerm (specializeBook B pins) := by
-  rw [futamura2BookCompiler_eq]
-  simp only [runStagedCompiler, resolveApp, instantiate_succ]
+/-- Running `futamura2BookCompiler B` on `encodePinsRecordForBook B pins` inside `Core4` produces
+`encodeBookTerm (specializeBook B pins)`. -/
+theorem runStagedCompiler_futamura2 (B : Book) (pins : List LeafPin) :
+    runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins) =
+      encodeBookTerm (specializeBook B pins) :=
+  futamura2BookCompiler_specializes_in_core B pins
 
-theorem step_futamura2BookCompiler (B : Book) (pins : List LeafPin) (arg : Term) :
-    Step (.app (futamura2BookCompiler B pins) arg) (encodeBookTerm (specializeBook B pins)) := by
-  rw [futamura2BookCompiler_eq]
-  have hstep : Step (.app (.lam ((encodeBookTerm (specializeBook B pins)).rename Nat.succ)) arg)
-      (instantiate ((encodeBookTerm (specializeBook B pins)).rename Nat.succ) arg) :=
-    .beta _ _
-  rwa [instantiate_succ] at hstep
-
-theorem evaluates_futamura2BookCompiler (B : Book) (pins : List LeafPin) (arg : Term) :
-    Evaluates (.app (futamura2BookCompiler B pins) arg) (encodeBookTerm (specializeBook B pins)) := by
-  refine ⟨.next (step_futamura2BookCompiler B pins arg) (.refl _), ?_⟩
-  unfold encodeBookTerm
-  exact .record _
+@[simp] theorem decodeBookTerm_futamura2BookCompiler (B : Book) (pins : List LeafPin) :
+    decodeBookTerm?
+      (dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins))) =
+      some (specializeBook B pins) := by
+  rw [futamura2BookCompiler_specializes_in_core, decodeBookTerm_encodeBookTerm]
 
 /-- Lowered `LExpr` combinator for the 3rd Futamura compiler-generator (`metaCogenLExpr`). -/
 def metaCogenLExpr : LExpr :=
@@ -1040,15 +1343,20 @@ theorem cogenBookInCore_eq :
     cogenBookInCore = .lam (.app quoteBookMixTerm (.bound 0)) :=
   Obend.Law.termEq_sound (by decide +kernel)
 
-/-- Applying `cogenBookInCore` to a staged book descriptor and specializing yields the exact
-2nd Futamura compiler `futamura2BookCompiler B pins`. -/
-theorem cogenBookInCore_generates_compiler (B : Book) (pins : List LeafPin) :
+/-- Applying `cogenBookInCore` to `bookStageSpec (encodeStagedBookTerm B)` yields the exact
+2nd Futamura compiler `futamura2BookCompiler B` (with zero host-side `pins` argument). -/
+theorem cogenBookInCore_generates_compiler (B : Book) :
+    resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B)) =
+      .app quoteBookMixTerm (bookStageSpec (encodeStagedBookTerm B)) ∧
     dataPinSpecialize
-      (runStagedCompiler cogenBookInCore (bookStageSpec (encodeBookTerm (bindBookPins B pins)))) =
-    futamura2BookCompiler B pins := by
+      (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))) =
+      futamura2BookCompiler B := by
   rw [cogenBookInCore_eq]
-  simp only [runStagedCompiler, resolveApp, instantiate, Term.substitute, liftSubstitution,
-    futamura2BookCompiler, quoteBookMixTerm, Term.rename, List.map]
+  refine ⟨?_, ?_⟩
+  · simp only [resolveApp, instantiate, Term.substitute, liftSubstitution,
+      quoteBookMixTerm, Term.rename, List.map]
+  · simp only [resolveApp, instantiate, Term.substitute, liftSubstitution,
+      futamura2BookCompiler, quoteBookMixTerm, Term.rename, List.map]
 
 /-! ## 9. Semantic Evaluation of `Book` & `specializeBook`, and the Commuting Diagrams -/
 
@@ -1389,20 +1697,21 @@ theorem futamura1_book_specializer_sound (B : Book) (pins : List LeafPin) (m : S
 
 /-- **2nd Futamura Compiler Generator Commuting Diagram (`futamura2_compiler_generator_commutes`)**:
 1. `quoteBookMixTerm` is the exact `Core4` lowering `lowerT bookMixLExpr`.
-2. Specializing `quoteBookMixTerm` with respect to the staged encoding of `B` and `pins` (`futamura2BookCompiler B pins`)
-   and running the generated compiler on `encodePinsRecord pins` evaluates in `Core4` to `encodeBookTerm (specializeBook B pins)`,
-   which decodes via `decodeBookTerm?` to `some (specializeBook B pins)`.
+2. Specializing `quoteBookMixTerm` with respect to the staged encoding of `B` (`futamura2BookCompiler B`)
+   and running the generated compiler on `encodePinsRecordForBook B pins` inside `Core4` via `dataPinSpecialize`
+   reduces to `encodeBookTerm (specializeBook B pins)`, which decodes via `decodeBookTerm?` to `some (specializeBook B pins)`.
 3. Evaluating the decoded residual book on any member `m` and runtime argument `x` commutes with
    evaluating `B` under `pins` and `x`. -/
 theorem futamura2_compiler_generator_commutes (B : Book) (pins : List LeafPin) (m : String) (x : Term) :
     quoteBookMixTerm = lowerT bookMixLExpr ∧
-    Evaluates (.app (futamura2BookCompiler B pins) (encodePinsRecord pins)) (encodeBookTerm (specializeBook B pins)) ∧
-    decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B pins) (encodePinsRecord pins)) =
+    dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
+      encodeBookTerm (specializeBook B pins) ∧
+    decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
       some (specializeBook B pins) ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B pins) (encodePinsRecord pins))).bind
+    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
       (fun B_res => evalResidualBookAt B_res m x)) = evalBookUnderPinsAt B pins m x := by
   refine ⟨quoteBookMixTerm_eq_lowerT,
-    evaluates_futamura2BookCompiler B pins (encodePinsRecord pins),
+    futamura2BookCompiler_specializes_in_core B pins,
     ?_, ?_⟩
   · rw [runStagedCompiler_futamura2, decodeBookTerm_encodeBookTerm]
   · rw [runStagedCompiler_futamura2, decodeBookTerm_encodeBookTerm]
@@ -1412,34 +1721,34 @@ theorem futamura2_compiler_generator_commutes (B : Book) (pins : List LeafPin) (
 1. `quoteMetaCogenTerm` is the exact `Core4` lowering `lowerT metaCogenLExpr`.
 2. Self-applying `dataPinSpecialize` to `quoteMetaCogenTerm` and `cogenStageSpec quoteBookMixTerm`
    produces `cogenBookInCore = .lam (.app quoteBookMixTerm (.bound 0))`.
-3. Applying `cogenBookInCore` to the staged book descriptor for `(B, pins)` and specializing generates
-   the exact 2nd Futamura compiler `futamura2BookCompiler B pins`.
-4. Running that generated compiler on `encodePinsRecord pins` and decoding via `decodeBookTerm?`
+3. Applying `cogenBookInCore` to `bookStageSpec (encodeStagedBookTerm B)` and specializing generates
+   the exact 2nd Futamura compiler `futamura2BookCompiler B` (with zero host-side `pins` argument).
+4. Running that generated compiler on `encodePinsRecordForBook B pins` inside `Core4` and decoding via `decodeBookTerm?`
    yields `some (specializeBook B pins)`, whose evaluation on `(m, x)` equals `evalBookUnderPinsAt B pins m x`. -/
 theorem futamura3_cogen_self_application_commutes (B : Book) (pins : List LeafPin) (m : String) (x : Term) :
     quoteMetaCogenTerm = lowerT metaCogenLExpr ∧
     cogenBookInCore = .lam (.app quoteBookMixTerm (.bound 0)) ∧
     dataPinSpecialize
-      (runStagedCompiler cogenBookInCore (bookStageSpec (encodeBookTerm (bindBookPins B pins)))) =
-      futamura2BookCompiler B pins ∧
+      (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))) =
+      futamura2BookCompiler B ∧
     decodeBookTerm?
       (runStagedCompiler
         (dataPinSpecialize
-          (runStagedCompiler cogenBookInCore (bookStageSpec (encodeBookTerm (bindBookPins B pins)))))
-        (encodePinsRecord pins)) =
+          (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))))
+        (encodePinsRecordForBook B pins)) =
       some (specializeBook B pins) ∧
     ((decodeBookTerm?
       (runStagedCompiler
         (dataPinSpecialize
-          (runStagedCompiler cogenBookInCore (bookStageSpec (encodeBookTerm (bindBookPins B pins)))))
-        (encodePinsRecord pins))).bind
+          (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))))
+        (encodePinsRecordForBook B pins))).bind
       (fun B_res => evalResidualBookAt B_res m x)) = evalBookUnderPinsAt B pins m x := by
   refine ⟨quoteMetaCogenTerm_eq_lowerT,
     cogenBookInCore_eq,
-    cogenBookInCore_generates_compiler B pins,
+    (cogenBookInCore_generates_compiler B).2,
     ?_, ?_⟩
-  · rw [cogenBookInCore_generates_compiler, runStagedCompiler_futamura2, decodeBookTerm_encodeBookTerm]
-  · rw [cogenBookInCore_generates_compiler, runStagedCompiler_futamura2, decodeBookTerm_encodeBookTerm]
+  · rw [(cogenBookInCore_generates_compiler B).2, runStagedCompiler_futamura2, decodeBookTerm_encodeBookTerm]
+  · rw [(cogenBookInCore_generates_compiler B).2, runStagedCompiler_futamura2, decodeBookTerm_encodeBookTerm]
     exact evalResidualBookAt_specializeBook B pins m x
 
 /-! ## 10. Concrete Verification of Constant Propagation, Dead-Branch Elimination & Method Inlining in `specializeBook` -/
@@ -1515,7 +1824,7 @@ def specializeBookNoOp (B : Book) (_pins : List LeafPin) : Book := B
   Obend.Leaf.Futamura.specializeBook := specializeBookNoOp
 
 /-- Mutated `futamura2BookCompiler` that returns a non-lambda `.nat 0`, breaking compiler staging. -/
-def futamura2BookCompilerBroken (_B : Book) (_pins : List LeafPin) : Term := .nat 0
+def futamura2BookCompilerBroken (_B : Book) : Term := .nat 0
 
 #tooth Obend.Leaf.Futamura.futamura2_compiler_generator_commutes by mutation
   Obend.Leaf.Futamura.futamura2BookCompiler := futamura2BookCompilerBroken

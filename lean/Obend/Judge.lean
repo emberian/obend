@@ -25,6 +25,7 @@ public import Obend.Judge.Certified
 public import Obend.Judge.AutomataConfinement
 public import Obend.Judge.TranscriptPolicy
 public import Obend.Analysis.Hybrid
+public import Obend.Analysis.SosLyapunov
 public import Obend.Analysis.Format
 public import Obend.Lower.Judge
 public import Obend.Hardware.Judge
@@ -40,6 +41,7 @@ def registry : List Format :=
   , dclutchHoardFormat
   , tlsnTranscriptFormat
   , Obend.Analysis.hybridFlowpipeFormat
+  , Obend.Analysis.sosLyapunovFormat
   , Obend.Analysis.format
   , Obend.Lower.format
   ] ++ Obend.Hardware.Judge.hardwareFormats

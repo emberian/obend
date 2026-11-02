@@ -1,45 +1,48 @@
 /-
-# `tests/metasystem/FutamuraAndObjectsTest.lean` — Literal Self-Application (`Futamura 1, 2 & 3`),
-# Conservative Support Extraction, Affine `BendTT`, and Domain Objects Inside `.obend`
+# `tests/FutamuraAndObjectsTest.lean` — In-Place `Futamura` Specialization,
+# Faré `OB5`/`LT5` Cross-Package Open Recursion, `K-KIND-CELL`, Multi-File `#import_obend` & `DocsCensus`
 
-End-to-end verification of `WS-B`:
-1. **`Obend.Leaf.Futamura` — Literal Self-Application of `dataPinSpecialize` & Commuting Semantic Decoding Diagrams**:
-   - Program-as-Data (`Core.Term`) representation of `Leaf.Book`: `encodeBookTerm` and `decodeBookTerm?`
-     with proved roundtrip `decodeBookTerm_encodeBookTerm : ∀ b, decodeBookTerm? (encodeBookTerm b) = some b`.
-   - Internalized specializer `specializeBook`, `specializeBookInCore`, `futamura2BookCompiler`, and
-     `cogenBookInCore` operating directly on encoded `Book`s and `LeafPin` environments, performing
-     constant propagation, dead-branch elimination on `.ifZero`/`.ifBool` over pinned fields, and
-     method inlining across `Book` definitions (`specializeBook_eliminates_branches_and_inlines_methods`).
+End-to-end verification of `WS-U`:
+1. **Task 1 (`Obend.Leaf.Futamura`) — In-Place Audit Fix 11**:
+   - `encodeStagedBookTerm (B : Book) : Term` (depends ONLY on `B`, zero host `pins` argument) and
+     `encodePinsRecordForBook (B : Book) (pins : List LeafPin) : Term`.
+   - `quoteBookMixTerm` applies `(.bound 1)` (`bookPayload`) to `(.bound 0)` (`pinsRecord`) inside `Core4`.
+   - 1-argument `futamura2BookCompiler (B : Book) : Term` and `futamura2BookCompiler_specializes_in_core`:
+     `dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) = encodeBookTerm (specializeBook B pins)`.
    - True Futamura 1, 2, and 3 commuting diagrams (`futamura1_book_specializer_sound`,
-     `futamura2_compiler_generator_commutes`, `futamura3_cogen_self_application_commutes`).
-   - `#tooth` mutation probes on `specializeBook` and `futamura2_compiler_generator_commutes`.
+     `futamura2_compiler_generator_commutes`, `futamura3_cogen_self_application_commutes`) + `#tooth` probes.
 
-2. **`Obend.Leaf.Specialize` — Complete Dependency Support Extraction & Conservatism Theorem**:
-   - `extractReadMembers : Term → List String` (and `extractReadPins`), `AgreeOnMembers`.
-   - `extractReadMembers_conservative`, `extractReadMembers_mutation_invariant`, and
-     `candidate_supports_conservative`.
-   - `#tooth` mutation probe on `extractReadMembersAt`.
+2. **Task 2 (`Obend.Leaf.Specialize`, `Obend.Lower.Transport`, `Obend.Spec.Elaborate`, `Obend.Spec.CrossPackage`) — Cross-Package Open Recursion (`OB5`/`LT5`)**:
+   - `slotReadCone`, `coneSupports`, `Candidate.slotBook`, and `slotBook_moved_pin_blocks`.
+   - `transportSlot_usable_of_disjoint_overlay`.
+   - `CrossPackageLink`, `overlayModifiedFields`, `linkComposition`, `symUnfold_linkComposition_of_not_mem`,
+     `crossPackage_disjoint_override_preserves_transportedSlot_and_specSlot`, and
+     `crossPackage_intersecting_override_pinpoints_stale`.
 
-3. **`Obend.Leaf.BendTT` — Affine Resource Discipline & Interaction-Net Port Wiring Validation**:
-   - `countVarUses : Nat → BendTerm → Nat`, `isFixSpecPortBalanced`, and `isAffineBendTerm : BendTerm → Bool`.
-   - `affine_bendTerm_subst_preserves` and `quantity_affine_linear_refines_bendTerm`.
-   - `#tooth` mutation probe on `isAffineBendTerm`.
+3. **Task 3 (`Obend.Kind`, `Obend.Kind.Proofs`, `Obend.Vault.Store`) — First-Class `K-KIND-CELL`**:
+   - `KindCell` enriched with `layers : List Obend.Logic.Layer := []` and `contract : List Law := []`.
+   - `KindDerivation`, `deriveKindFrom`, and `deriveKindFrom_inherits_ancestors_and_narrows_laws`.
+   - `Store.createFrom` on `_kind/Child` pages and `createFrom_kind_preserves_ancestor_laws`.
 
-4. **`Obend.Hardware.UserspacePhysical` & `#import_obend` / `#obend_decl` — Domain Objects Inside `.obend`**:
-   - 3 multi-layer open-recursive `Core4` prototype hierarchies (`Term.fix (Term.mix baseSpec overrideSpec) (.record seed)`)
-     reasoned about directly via `fix_mix_flatten_sound` (`Leaf.flatten_sound` / `BEquiv`),
-     `extractReadMembers_conservative`, and `futamura2_compiler_generator_commutes`:
-     * **Domain Object 1**: Multi-layer LC Drives In-Slot Stator (`statorInSlotCore4Object`, `#import_obend` from
-       `lean/tests/obend-source/world/physical/LcDrivesStatorUsd.obend`),
-      * **Domain Object 2**: `MS350` SiC Half-Bridge Phase Leg (`ms350PhaseLegCore4Object`, plus `#obend_decl`),
-      * **Domain Object 3**: $Q_3$ Photonic Coupler Array (`q3PhotonicCore4Object`, plus `#obend_decl`),
-      * Plus `cnc5AxisMillComp` (`Cnc5AxisMill.obend` open-recursive composition in `UserspacePhysical.lean`).
-   - Compile-time axiom audit (`0 sorryAx`, `0 Classical.choice`).
+4. **Task 4 (`Obend.Elab.Workbook`, `stdlib/{core,ledger,usd}/*.obend`, `Obend.Stdlib`) — Multi-File `#import_obend`**:
+   - Recursive multi-file `.obend` `import` resolution in `Workbook.lean`.
+   - `stdlib/core/Cell.obend`, `stdlib/ledger/Account.obend`, and `stdlib/usd/ScenePrim.obend` elaborated in
+     `Obend.Stdlib` with open-recursion specialization and cross-package pin survival proofs.
+
+5. **Task 5 (`Obend.Tactic.DocsCensus`) — Compile-Time Docs Census Gate**:
+   - `#check_docs_census` verifying all 7 top-level markdown documents (`DESIGN.md`, `PLAN.md`, `METATHEORY.md`,
+     `PHYSICAL.md`, `SILICON-ELABORATOR.md`, `NEXT-MATHEMATICA.md`, `DEOS-CONTRACTS-CONSENSUS.md`).
 -/
 import Obend.Leaf.Futamura
 import Obend.Leaf.Specialize
 import Obend.Leaf.BendTT
-import Obend.Hardware.UserspacePhysical
+import Obend.Lower.Transport
+import Obend.Spec.CrossPackage
+import Obend.Kind
+import Obend.Kind.Proofs
+import Obend.Vault.Store
+import Obend.Stdlib
+import Obend.Tactic.DocsCensus
 import Obend.Elab.Workbook
 import Obend.Tactic.Tooth
 
@@ -55,137 +58,69 @@ open Obend.Slot.World
 open Obend.Leaf
 open Obend.Leaf.Futamura
 open Obend.Leaf.BendTT
-open Obend.Hardware.UserspacePhysical
+open Obend.Lower
+open Obend.Spec.CrossPackage
+open Obend.Kind
+open Obend.Vault
+open Obend.Stdlib
+open Obend.Tactic.DocsCensus
 open Obend.Elab.Workbook
 
 set_option autoImplicit false
 set_option maxHeartbeats 800000
 
 -- ============================================================================
--- 1. `#import_obend` & `#obend_decl` Integration with `.obend` Physical Models
+-- 1. Multi-File `#import_obend` Standard Library (`Obend.Stdlib`)
 -- ============================================================================
 
-#import_obend "lean/tests/obend-source/world/physical/LcDrivesStatorUsd.obend" as LcDrivesStator
+/-- All 3 multi-file `.obend` standard library modules (`stdlib/core/Cell.obend`,
+`stdlib/ledger/Account.obend`, `stdlib/usd/ScenePrim.obend`) pass `FrontEnd.accept`
+and discharge their open-recursion `claim`s and `law` obligations. -/
+theorem all_stdlib_obend_packages_accepted_and_verified :
+    (StdlibCell.accepted = true ∧
+     StdlibAccount.accepted = true ∧
+     StdlibScenePrim.accepted = true) ∧
+    (obligationMeaningWithJudges workbookFormats
+       StdlibCell.claim_next_value_open_recursion_obj
+       StdlibCell.claim_next_value_open_recursion_just ∧
+     obligationMeaningWithJudges workbookFormats
+       StdlibAccount.claim_available_open_recursion_obj
+       StdlibAccount.claim_available_open_recursion_just ∧
+     obligationMeaningWithJudges workbookFormats
+       StdlibScenePrim.claim_world_transform_open_recursion_obj
+       StdlibScenePrim.claim_world_transform_open_recursion_just) ∧
+    (StdlibCell.package.laws.length = 2 ∧
+     StdlibAccount.package.laws.length = 4 ∧
+     StdlibScenePrim.package.laws.length = 3) :=
+  ⟨stdlib_all_accepted, stdlib_all_claims_hold, stdlib_inherited_laws_count⟩
 
-#obend_decl Ms350SicPhaseLeg "
-record Ms350PhaseLeg:
-  deadtimeNs() -> Nat
-  slewRateLimitVPerNs() -> Nat
-  switchingLossUj(currentA: Nat) -> Nat
-  effectiveGateDelayNs(marginNs: Nat) -> Nat
-
-spec SicBaseSwitch for Ms350PhaseLeg:
-  requires deadtimeNs() -> Nat
-  def deadtimeNs() -> Nat:
-    40n
-  def slewRateLimitVPerNs() -> Nat:
-    50n
-  def switchingLossUj(currentA: Nat) -> Nat:
-    currentA * 3n + self.deadtimeNs
-  def effectiveGateDelayNs(marginNs: Nat) -> Nat:
-    marginNs + 12n
-
-spec DeadtimeProtectionOverride for Ms350PhaseLeg:
-  requires effectiveGateDelayNs(marginNs: Nat) -> Nat
-  def deadtimeNs() -> Nat:
-    120n
-  def slewRateLimitVPerNs() -> Nat:
-    80n
-  def effectiveGateDelayNs(marginNs: Nat) -> Nat:
-    super.effectiveGateDelayNs(marginNs) + 25n
-
-def seedSicSwitch() -> Ms350PhaseLeg:
-  {deadtimeNs: 0n, slewRateLimitVPerNs: 0n, switchingLossUj: fn(i: Nat) -> Nat: 0n, effectiveGateDelayNs: fn(m: Nat) -> Nat: 0n}
-
-def ms350ProtectedPhaseLeg() -> Ms350PhaseLeg:
-  fix(compose(SicBaseSwitch, DeadtimeProtectionOverride), seedSicSwitch())
-
-def ms350LossAt100A() -> Nat:
-  ms350ProtectedPhaseLeg().switchingLossUj(100n)
-
-def ms350GateDelayAt10Ns() -> Nat:
-  ms350ProtectedPhaseLeg().effectiveGateDelayNs(10n)
-"
-
-#obend_decl Q3PhotonicArray "
-record Q3PhotonicCouplerArray:
-  couplingWeight() -> Nat
-  hypercubeDim() -> Nat
-  transferredPowerMw(pInMw: Nat) -> Nat
-  krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat
-
-spec PlanarWaveguideBase for Q3PhotonicCouplerArray:
-  requires couplingWeight() -> Nat
-  requires hypercubeDim() -> Nat
-  def couplingWeight() -> Nat:
-    2n
-  def hypercubeDim() -> Nat:
-    3n
-  def transferredPowerMw(pInMw: Nat) -> Nat:
-    pInMw * self.couplingWeight + self.hypercubeDim
-  def krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat:
-    modeIdx * 15n
-
-spec KrawtchoukCouplingOverride for Q3PhotonicCouplerArray:
-  requires krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat
-  def couplingWeight() -> Nat:
-    7n
-  def krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat:
-    super.krawtchoukPhaseShiftMrad(modeIdx) + 45n
-
-def seedPhotonic() -> Q3PhotonicCouplerArray:
-  {couplingWeight: 0n, hypercubeDim: 0n, transferredPowerMw: fn(p: Nat) -> Nat: 0n, krawtchoukPhaseShiftMrad: fn(m: Nat) -> Nat: 0n}
-
-def q3KrawtchoukArray() -> Q3PhotonicCouplerArray:
-  fix(compose(PlanarWaveguideBase, KrawtchoukCouplingOverride), seedPhotonic())
-
-def q3PowerAt20Mw() -> Nat:
-  q3KrawtchoukArray().transferredPowerMw(20n)
-
-def q3PhaseAtMode3() -> Nat:
-  q3KrawtchoukArray().krawtchoukPhaseShiftMrad(3n)
-"
-
-/-- All 3 `.obend` physical domain packages (`LcDrivesStatorUsd.obend`, `Ms350SicPhaseLeg`,
-`Q3PhotonicArray`) pass `FrontEnd.accept` and discharge the open-recursion obligation! -/
-theorem all_physical_obend_packages_accepted_and_verified :
-    LcDrivesStator.accepted = true ∧
-    Ms350SicPhaseLeg.accepted = true ∧
-    Q3PhotonicArray.accepted = true ∧
-    obligationMeaningWithJudges workbookFormats
-      LcDrivesStator.claim_peak_temp_open_recursion_obj
-      LcDrivesStator.claim_peak_temp_open_recursion_just :=
-  ⟨LcDrivesStator.accepted_eq,
-   Ms350SicPhaseLeg.accepted_eq,
-   Q3PhotonicArray.accepted_eq,
-   LcDrivesStator.claim_peak_temp_open_recursion_holds⟩
-
-theorem obend_elaborated_domain_benchmarks :
-    LcDrivesStator.lcDrivesInSlotPeakTemp8kW_val = .nat 122 ∧
-    Ms350SicPhaseLeg.ms350LossAt100A_val = .nat 420 ∧
-    Ms350SicPhaseLeg.ms350GateDelayAt10Ns_val = .nat 47 ∧
-    Q3PhotonicArray.q3PowerAt20Mw_val = .nat 143 ∧
-    Q3PhotonicArray.q3PhaseAtMode3_val = .nat 90 :=
-  ⟨rfl, rfl, rfl, rfl, rfl⟩
+theorem stdlib_elaborated_domain_benchmarks :
+    StdlibCell.versionedCellNextAt25_val = .nat 125 ∧
+    StdlibCell.versionedCellGasAt4_val = .nat 32 ∧
+    StdlibAccount.escrowAvailableAt10_val = .nat 1020 ∧
+    StdlibAccount.escrowSettlementAt100_val = .nat 270 ∧
+    StdlibScenePrim.composedWorldTransformAt100_val = .nat 140 ∧
+    StdlibScenePrim.composedVoxelCostAt5_val = .nat 28 :=
+  stdlib_open_recursion_eval
 
 -- ============================================================================
--- 2. Literal Self-Application of `dataPinSpecialize` & Futamura 1, 2, 3 Tests
+-- 2. In-Place `Futamura` Specialization (Audit Fix 11: 1-Arg `futamura2BookCompiler B`)
 -- ============================================================================
 
 example : decodeBookTerm? (encodeBookTerm sampleSpecializableBook) = some sampleSpecializableBook :=
   decodeBookTerm_encodeBookTerm sampleSpecializableBook
 
-example : decodeBookTerm? (encodeBookTerm (emit statorInSlotComp)) = some (emit statorInSlotComp) :=
-  decodeBookTerm_encodeBookTerm (emit statorInSlotComp)
+example : decodeBookTerm? (encodeBookTerm (emit StdlibCell.versionedCell_comp)) =
+    some (emit StdlibCell.versionedCell_comp) :=
+  decodeBookTerm_encodeBookTerm (emit StdlibCell.versionedCell_comp)
 
-example : decodeBookTerm? (encodeBookTerm (emit cnc5AxisMillComp)) = some (emit cnc5AxisMillComp) :=
-  decodeBookTerm_encodeBookTerm (emit cnc5AxisMillComp)
+example : decodeBookTerm? (encodeBookTerm (emit StdlibAccount.escrowAccount_comp)) =
+    some (emit StdlibAccount.escrowAccount_comp) :=
+  decodeBookTerm_encodeBookTerm (emit StdlibAccount.escrowAccount_comp)
 
-example : decodeBookTerm? (encodeBookTerm (emit ms350PhaseLegComp)) = some (emit ms350PhaseLegComp) :=
-  decodeBookTerm_encodeBookTerm (emit ms350PhaseLegComp)
-
-example : decodeBookTerm? (encodeBookTerm (emit q3PhotonicComp)) = some (emit q3PhotonicComp) :=
-  decodeBookTerm_encodeBookTerm (emit q3PhotonicComp)
+example : decodeBookTerm? (encodeBookTerm (emit StdlibScenePrim.composedUsdPrim_comp)) =
+    some (emit StdlibScenePrim.composedUsdPrim_comp) :=
+  decodeBookTerm_encodeBookTerm (emit StdlibScenePrim.composedUsdPrim_comp)
 
 example (B : Book) : decodeBookTerm? (encodeBookTerm B) = some B :=
   decodeBookTerm_encodeBookTerm B
@@ -248,7 +183,8 @@ example :
   exact ⟨hholds, evalBook_specializeBook_eq_evalBook sampleSpecializableBook sampleBookPins "dispatch" hholds⟩
 
 /-- True Futamura 1, 2, and 3 commuting diagrams on arbitrary `Book` `B`, `pins : List LeafPin`,
-member `m : String`, and runtime argument `x : Term`. -/
+member `m : String`, and runtime argument `x : Term` (with in-place 1-arg `futamura2BookCompiler B`
+and `futamura2BookCompiler_specializes_in_core`). -/
 theorem test_true_futamura_1_2_3_commuting_diagrams (B : Book) (pins : List LeafPin) (m : String) (x : Term) :
     -- Futamura 1: internalized specializer decodes to `specializeBook B pins` and preserves semantics
     decodeBookTerm? (specializeBookInCore B pins) = some (specializeBook B pins) ∧
@@ -256,25 +192,29 @@ theorem test_true_futamura_1_2_3_commuting_diagrams (B : Book) (pins : List Leaf
     evalResidualBookAt (specializeBook B pins) m x = evalBookUnderPinsAt B pins m x ∧
     (holdsAll pins → lookupBookCode (specializeBook B pins) m = evalBookUnderPins B [] m) ∧
     (HoldsForBookMember B pins m → evalBook (specializeBook B pins) m = evalBook B m) ∧
-    -- Futamura 2: staged compiler `futamura2BookCompiler B pins` commutes with `specializeBook B pins`
-    decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B pins) (encodePinsRecord pins)) =
+    -- Futamura 2: staged compiler `futamura2BookCompiler B` (zero host `pins` argument) specializes in Core4
+    dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
+      encodeBookTerm (specializeBook B pins) ∧
+    decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
       some (specializeBook B pins) ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B pins) (encodePinsRecord pins))).bind
+    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
       (fun B_res => evalResidualBookAt B_res m x)) = evalBookUnderPinsAt B pins m x ∧
-    -- Futamura 3: self-applied compiler generator `cogenBookInCore` reproduces `futamura2BookCompiler B pins`
+    -- Futamura 3: self-applied compiler generator `cogenBookInCore` reproduces `futamura2BookCompiler B`
     dataPinSpecialize
-      (runStagedCompiler cogenBookInCore (bookStageSpec (encodeBookTerm (bindBookPins B pins)))) =
-      futamura2BookCompiler B pins ∧
+      (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))) =
+      futamura2BookCompiler B ∧
     decodeBookTerm?
       (runStagedCompiler
         (dataPinSpecialize
-          (runStagedCompiler cogenBookInCore (bookStageSpec (encodeBookTerm (bindBookPins B pins)))))
-        (encodePinsRecord pins)) =
+          (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))))
+        (encodePinsRecordForBook B pins)) =
       some (specializeBook B pins) := by
   have f1 := futamura1_book_specializer_sound B pins m x
   have f2 := futamura2_compiler_generator_commutes B pins m x
   have f3 := futamura3_cogen_self_application_commutes B pins m x
-  exact ⟨f1.1, f1.2.1, f1.2.2.1, f1.2.2.2.1, f1.2.2.2.2.2, f2.2.2.1, f2.2.2.2, f3.2.2.1, f3.2.2.2.1⟩
+  exact ⟨f1.1, f1.2.1, f1.2.2.1, f1.2.2.2.1, f1.2.2.2.2.2,
+    futamura2BookCompiler_specializes_in_core B pins,
+    f2.2.2.1, f2.2.2.2, f3.2.2.1, f3.2.2.2.1⟩
 
 -- `#tooth` mutation probe on `specializeBook`.
 theorem probe_specializeBook_eliminates_ifZero :
@@ -294,11 +234,6 @@ def sampleMethodTerm : Term :=
     (.binary .multiply (.bound 0) (.get (.bound 1) "couplingWeight"))
     (.get (.bound 1) "hypercubeDim"))
 
-/-- Deep multi-binder term nesting `.lam` (depth 1), `.ifZero` successor arm (depth 2),
-and `.case` arm payload (depth 3): inner `.get (.bound 0) "shadowedCasePayload"`,
-`.get (.bound 1) "shadowedIfZeroPred"`, and `.get (.bound 2) "shadowedLamArg"` must NOT be
-reported as reads of `self` (`(.bound 3)` at depth 3), while `.get (.bound 3) "outerSelfField"`
-is extracted at depth 0! -/
 def deepBinderShadowTerm : Term :=
   .lam (
     .ifZero (.bound 0)
@@ -321,9 +256,6 @@ def deepBinderShadowTerm : Term :=
 example (t : Term) : extractReadMembers t = selfReads 0 t :=
   extractReadMembers_eq_selfReads t
 
-/-- Support Extraction Conservatism & Mutation Invariance:
-Any store mutation outside `extractReadMembers sampleMethodTerm` (and `deepBinderShadowTerm`)
-leaves `substMemberEnv` and `evalWithMemberEnv` identical. -/
 theorem test_extractReadMembers_conservative_and_mutation_invariant
     (env1 env2 : String → Option Term) (v : Option Term) (fuel : Nat) :
     (AgreeOnMembers (extractReadMembers sampleMethodTerm) env1 env2 →
@@ -339,8 +271,6 @@ theorem test_extractReadMembers_conservative_and_mutation_invariant
     (extractReadMembers_mutation_invariant sampleMethodTerm env1 v (by decide +kernel)).1,
     (extractReadMembers_mutation_invariant deepBinderShadowTerm env1 v (by decide +kernel)).1⟩
 
-/-- Candidate support conservatism: a `Candidate` whose `pins` cover `extractReadMembers t`
-evaluates identically under `viewLayerEnv v1` and `viewLayerEnv v2` whenever all `pins` hold at `v1` and `v2`. -/
 example (pins : List LeafPin) (v1 v2 : LeafView) (t : Term) (fuel : Nat)
     (hcov : SupportsCoverMembers pins (extractReadMembers t))
     (h1 : ∀ p ∈ pins, holdsAt v1 p = true)
@@ -350,7 +280,6 @@ example (pins : List LeafPin) (v1 v2 : LeafView) (t : Term) (fuel : Nat)
   ⟨(candidate_supports_conservative hcov h1 h2).1,
    (candidate_supports_conservative hcov h1 h2).2 fuel⟩
 
--- `#tooth` mutation probe on `extractReadMembers`.
 theorem probe_extractReadMembers_sample :
     extractReadMembers sampleMethodTerm = ["couplingWeight", "hypercubeDim"] := by
   decide +kernel
@@ -385,8 +314,6 @@ def unbalancedFixBendTerm : BendTerm :=
 #guard isAffineBendTerm balancedFixBendTerm == true
 #guard isAffineBendTerm unbalancedFixBendTerm == false
 
-/-- `affine_bendTerm_subst_preserves`, `affine_bendTerm_fix_unfold_preserves`, &
-`quantity_affine_linear_refines_bendTerm`. -/
 theorem test_affine_bendtt_subst_and_quantity_refinement
     (body arg : BendTerm) (haffBody : isAffineBendTerm body = true)
     (haffArg : isAffineBendTerm arg = true) (hclosedArg : closedAtB 0 arg = true) :
@@ -411,7 +338,6 @@ example {t : Term} {bt : BendTerm} (hcomp : compileToBendTT t = some bt)
     (isAffineBendTerm bt = isAffineCoreTerm t) :=
   quantity_affine_linear_refines_bendTerm hcomp q hq
 
--- `#tooth` mutation probe on `isAffineBendTerm`.
 theorem probe_nonAffine_rejected :
     isAffineBendTerm nonAffineDuplicateUseBendTerm = false := by
   decide +kernel
@@ -420,60 +346,64 @@ theorem probe_nonAffine_rejected :
   isAffineBendTerm := fun _ => true
 
 -- ============================================================================
--- 5. Open-Recursive `Core4` Domain Objects (`Term.fix (Term.mix base override) seed`)
+-- 5. Faré `OB5` / `LT5` Cross-Package Open Recursion (`Specialize`, `Transport`, `CrossPackage`)
 -- ============================================================================
 
-/-- Universal parametric verification across all 3 multi-layer open-recursive `Core4` domain objects:
-1. `statorInSlotCore4Object = .fix (.mix statorBaseSpec inSlotCoolingOverrideSpec) (.record seedStatorFields)`
-2. `ms350PhaseLegCore4Object = .fix (.mix sicBaseSwitchSpec deadtimeProtectionOverrideSpec) (.record seedSicSwitchFields)`
-3. `q3PhotonicCore4Object = .fix (.mix planarWaveguideBaseSpec krawtchoukCouplingOverrideSpec) (.record seedPhotonicFields)` -/
-theorem test_three_core4_domain_objects_universal
-    (loss r currentA diDt margin pIn modeIdx : Nat) :
-    -- Domain Object 1: LC Drives In-Slot Stator
-    Evaluates (.app (.get statorInSlotCore4Object "peakWindingTemp") (.nat loss)) (.nat (50 + loss * 9)) ∧
-    Evaluates (.app (.get statorInSlotCore4Object "sdfMargin") (.nat r)) (.nat ((r + 10) + 6)) ∧
-    -- Domain Object 2: MS350 SiC Half-Bridge Phase Leg
-    Evaluates (.app (.get ms350PhaseLegCore4Object "switchingLossUj") (.nat currentA)) (.nat (currentA * 3 + 120)) ∧
-    Evaluates (.app (.get ms350PhaseLegCore4Object "shootThroughSafe") (.nat diDt)) (.boolean (decide (diDt ≤ 80))) ∧
-    Evaluates (.app (.get ms350PhaseLegCore4Object "effectiveGateDelayNs") (.nat margin)) (.nat ((margin + 12) + 25)) ∧
-    -- Domain Object 3: Q3 Photonic Coupler Array
-    Evaluates (.app (.get q3PhotonicCore4Object "transferredPowerMw") (.nat pIn)) (.nat (pIn * 7 + 3)) ∧
-    Evaluates (.app (.get q3PhotonicCore4Object "krawtchoukPhaseShiftMrad") (.nat modeIdx)) (.nat (modeIdx * 15 + 45)) :=
-  ⟨stator_in_slot_peak_temp_forall loss,
-   stator_in_slot_sdf_margin_forall r,
-   ms350_switching_loss_forall currentA,
-   ms350_shoot_through_safe_forall diDt,
-   ms350_gate_delay_forall margin,
-   q3_photonic_transferred_power_forall pIn,
-   q3_photonic_phase_shift_forall modeIdx⟩
-
--- `#tooth` mutation probes on the 3 `Core4` domain objects.
-theorem probe_stator_inSlot_override_active :
-    Obend.Law.run 40 (.app (.get statorInSlotComp.flatten "peakWindingTemp") (.nat 8)) =
-      some (.nat 122) :=
-  optTermEq_sound (by decide +kernel)
-
-#tooth probe_stator_inSlot_override_active by mutation
-  lcDrivesInSlotUpgradeLayer := outerJacketStatorLayer
-
-theorem probe_ms350_deadtime_override_active :
-    Obend.Law.run 40 (.app (.get ms350PhaseLegComp.flatten "switchingLossUj") (.nat 100)) =
-      some (.nat 420) :=
-  optTermEq_sound (by decide +kernel)
-
-#tooth probe_ms350_deadtime_override_active by mutation
-  deadtimeProtectionOverrideLayer := sicBaseSwitchLayer
-
-theorem probe_q3_krawtchouk_override_active :
-    Obend.Law.run 40 (.app (.get q3PhotonicComp.flatten "transferredPowerMw") (.nat 20)) =
-      some (.nat 143) :=
-  optTermEq_sound (by decide +kernel)
-
-#tooth probe_q3_krawtchouk_override_active by mutation
-  krawtchoukCouplingOverrideLayer := planarWaveguideBaseLayer
+/-- Cross-package disjoint override preserves symbolic unfolding, provenance, and cone supports
+across `StdlibCell` (`nextValue`) and `StdlibAccount` (`availableAfterFee`). -/
+theorem test_crossPackage_disjoint_cone_survival :
+    let C_cell := StdlibCell.baseCell_comp
+    let L_cell := StdlibCell.versionedCell_comp.top
+    let C_acct := StdlibAccount.baseAccount_comp
+    let L_acct := StdlibAccount.escrowAccount_comp.top
+    ((linkComposition C_cell L_cell).symUnfold "nextValue" = C_cell.symUnfold "nextValue" ∧
+     (linkComposition C_cell L_cell).provenance "nextValue" = C_cell.provenance "nextValue" ∧
+     memberConePin (linkComposition C_cell L_cell) "nextValue" = memberConePin C_cell "nextValue" ∧
+     coneSupports (linkComposition C_cell L_cell) (slotReadCone C_cell "nextValue") =
+       coneSupports C_cell (slotReadCone C_cell "nextValue")) ∧
+    (coneSupports (linkComposition C_acct L_acct) (slotReadCone C_acct "availableAfterFee") =
+       coneSupports C_acct (slotReadCone C_acct "availableAfterFee")) :=
+  ⟨stdlib_cell_crossPackage_nextValue_pin_survives,
+   stdlib_account_crossPackage_availableAfterFee_cone_survives⟩
 
 -- ============================================================================
--- 6. Axiom Audit (`0 sorryAx`, `0 Classical.choice`)
+-- 6. First-Class `K-KIND-CELL` (`Obend.Kind`, `Obend.Kind.Proofs`, `Obend.Vault.Store`)
+-- ============================================================================
+
+/-- `deriveKindFrom` inherits ancestor layout + contracts along C4 and preserves narrowing,
+and `Store.createFrom` on `_kind/Child` preserves all ancestor laws. -/
+theorem test_deriveKindFrom_and_store_createFrom_kind
+    {Law : Type} {ks ks' : Kinds Law} {d : KindDerivation Law} {child : KindCell Law}
+    (h : deriveKindFrom ks d = .ok (child, ks')) :
+    child.name = d.name ∧
+    child.parents = d.parents ∧
+    child.law = d.law ∧
+    d.law ∈ child.contract := by
+  have h1 := deriveKindFrom_inherits_ancestors_and_narrows_laws h
+  exact ⟨h1.1, h1.2.1, h1.2.2.1, h1.2.2.2.2.1⟩
+
+example {s : Store} {k page md : String}
+    (hkind : isKind page = true)
+    (hcf : createFrom s k page = .ok md) :
+    (s.page? page).isSome = false ∧ kindName k ≠ page := by
+  have h1 := createFrom_kind_preserves_ancestor_laws hkind hcf
+  exact ⟨h1.1, h1.2.1⟩
+
+-- ============================================================================
+-- 7. Compile-Time Docs Census Gate (`Obend.Tactic.DocsCensus`)
+-- ============================================================================
+
+#check_docs_census
+
+example :
+    extractObendLeanPaths "Obend/Leaf/Futamura.lean lean/Obend/Spec/CrossPackage.lean" =
+      ["Obend/Leaf/Futamura.lean", "Obend/Spec/CrossPackage.lean"] ∧
+    extractObendDottedRoots "Obend.Leaf.Futamura Obend.Spec.CrossPackage" =
+      ["Leaf", "Spec"] :=
+  ⟨extractObendLeanPaths_sample, extractObendDottedRoots_sample⟩
+
+-- ============================================================================
+-- 8. Axiom Audit (`0 sorryAx`, `0 Classical.choice`)
 -- ============================================================================
 
 #print axioms decodeBookTerm_encodeBookTerm
@@ -481,29 +411,33 @@ theorem probe_q3_krawtchouk_override_active :
 #print axioms specializeBook_eliminates_branches_and_inlines_methods
 #print axioms evalBook_specializeBook_eq_evalBook
 #print axioms futamura1_book_specializer_sound
+#print axioms futamura2BookCompiler_specializes_in_core
 #print axioms futamura2_compiler_generator_commutes
 #print axioms futamura3_cogen_self_application_commutes
 #print axioms extractReadMembers_eq_selfReads
 #print axioms extractReadMembers_conservative
 #print axioms extractReadMembers_mutation_invariant
 #print axioms candidate_supports_conservative
+#print axioms slotBook_moved_pin_blocks
+#print axioms transportSlot_usable_of_disjoint_overlay
+#print axioms symUnfold_linkComposition_of_not_mem
+#print axioms crossPackage_disjoint_override_preserves_transportedSlot_and_specSlot
+#print axioms crossPackage_intersecting_override_pinpoints_stale
+#print axioms deriveKindFrom_inherits_ancestors_and_narrows_laws
+#print axioms createFrom_kind_preserves_ancestor_laws
+#print axioms stdlib_all_accepted
+#print axioms stdlib_all_claims_hold
+#print axioms stdlib_inherited_laws_count
+#print axioms stdlib_open_recursion_eval
+#print axioms stdlib_flatten_and_book_sound
+#print axioms stdlib_futamura2_in_core
+#print axioms stdlib_cell_crossPackage_nextValue_pin_survives
+#print axioms stdlib_account_crossPackage_availableAfterFee_cone_survives
+#print axioms extractObendLeanPaths_sample
+#print axioms extractObendDottedRoots_sample
+#print axioms censusReport_isClean_iff
 #print axioms affine_bendTerm_subst_preserves
 #print axioms affine_bendTerm_fix_unfold_preserves
 #print axioms quantity_affine_linear_refines_bendTerm
-#print axioms fix_mix_flatten_sound
-#print axioms statorInSlot_flatten_sound
-#print axioms stator_in_slot_peak_temp_forall
-#print axioms stator_in_slot_sdf_margin_forall
-#print axioms stator_in_slot_support_and_futamura2
-#print axioms ms350PhaseLeg_flatten_sound
-#print axioms ms350_switching_loss_forall
-#print axioms ms350_shoot_through_safe_forall
-#print axioms ms350_gate_delay_forall
-#print axioms ms350_support_and_futamura2
-#print axioms q3Photonic_flatten_sound
-#print axioms q3_photonic_transferred_power_forall
-#print axioms q3_photonic_phase_shift_forall
-#print axioms q3_photonic_support_and_futamura2
-#print axioms test_three_core4_domain_objects_universal
 
 end Obend.Tests.FutamuraAndObjectsTest

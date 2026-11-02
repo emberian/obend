@@ -304,25 +304,73 @@ def proposeWorkbookDerivation (o : ClaimObj) : Option (List RStep) :=
     | some (_, l, r) => deriveWorkbook o r 4096 l []
     | none => none
 
-/-- Elaborate an `.obend` source string through `FrontEnd.parseSource`, `FrontEnd.checkParsed`,
-    `Elaborate.elaborate` (`FrontEnd.lowerDecoded`), `FrontEnd.accept`, `Leaf.Flatten`/`Leaf.Emit`,
-    and `Lower.Reflect`. -/
-def elaborateObendSource (src : String) (moduleName : String := "Main")
-    (entryDef? : Option String := none) : Except String WorkbookPackage := do
+/-- Sanitize a file stem into a valid Objective Bend module identifier. -/
+def sanitizeModuleName (stem : String) : String :=
+  let chars := stem.toList.map fun c => if c.isAlphanum || c == '_' then c else '_'
+  match chars with
+  | [] => "Main"
+  | c :: _ =>
+    let s := String.ofList (if c.isAlpha || c == '_' then chars else '_' :: chars)
+    if Obend.Spec.Parse.isIdent s.toList then s else "Main"
+
+/-- Strip optional surrounding double quotes from an import path string. -/
+def stripImportQuotes (raw : String) : String :=
+  let s := raw.trimAscii.toString
+  if s.startsWith "\"" && s.endsWith "\"" && s.length ≥ 2 then
+    ((s.drop 1).dropEnd 1).toString
+  else
+    s
+
+/-- Parse and check one `.obend` module source against already-loaded `prior` modules. -/
+def parseAndCheckObendModule (src : String) (moduleName : String)
+    (prior : List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)) :
+    Except String (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) := do
   let normSrc := normalizeObendSource src
   let sha256 := Obend.Spec.Sha256.hex normSrc.toUTF8
   let ast ← match Obend.Spec.FrontEnd.parseSource moduleName normSrc with
     | .ok a => pure a
     | .error d => throw (formatDiagnostic d)
+  let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
+  let mut lockedImports : List Obend.Spec.FrontEnd.LockedImport := []
+  for edge in parsedEdges.toList do
+    let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
+    let edgeAlias := (edge.getObjValAs? String "alias").toOption.getD ""
+    let edgeSpan := (edge.getObjVal? "span").toOption.getD .null
+    let cleanPath := stripImportQuotes edgePath
+    let stemMod := sanitizeModuleName ((System.FilePath.mk cleanPath).fileStem.getD edgeAlias)
+    let found? := prior.zipIdx.find? fun ((sm, _), _) =>
+      sm.name == stemMod || (edgeAlias != "" && sm.name == edgeAlias)
+    let some ((targetSm, _), targetIdx) := found?
+      | throw s!"module {moduleName}: imported module for '{edgePath}' (alias '{edgeAlias}') not found in loaded closure"
+    lockedImports := lockedImports ++ [{
+      path := edgePath
+      importAlias := edgeAlias
+      span := edgeSpan
+      target := targetIdx
+      moduleName := targetSm.name
+      sha256 := targetSm.sha256
+    }]
   let srcMod : Obend.Spec.FrontEnd.SourceModule := {
     name := moduleName
     source := normSrc
     sha256 := sha256
-    imports := []
+    imports := lockedImports
   }
   let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
     | .ok m => pure m
     | .error d => throw (formatDiagnostic d)
+  return (srcMod, decodedMod)
+
+/-- Elaborate an `.obend` source string through `FrontEnd.parseSource`, `FrontEnd.checkParsed`,
+    `Elaborate.elaborate` (`FrontEnd.lowerDecoded`), `FrontEnd.accept`, `Leaf.Flatten`/`Leaf.Emit`,
+    and `Lower.Reflect`. Supports multi-module closures via `prior`. -/
+def elaborateObendSource (src : String) (moduleName : String := "Main")
+    (entryDef? : Option String := none)
+    (prior : List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) := []) :
+    Except String WorkbookPackage := do
+  let (srcMod, decodedMod) ← parseAndCheckObendModule src moduleName prior
+  let normSrc := srcMod.source
+  let sha256 := srcMod.sha256
   let callables := selectCallableDecls decodedMod
   let entryDef ← match entryDef? with
     | some e => pure e
@@ -330,7 +378,13 @@ def elaborateObendSource (src : String) (moduleName : String := "Main")
       match callables.getLast? with
       | some d => pure d.name
       | none => throw s!"module {moduleName} contains no callable function, extension, or spec"
-  let lowering ← match Obend.Spec.FrontEnd.lowerDecoded [srcMod] [decodedMod] 0 entryDef
+  let allSrcMods := prior.map Prod.fst ++ [srcMod]
+  let allDecodedMods := prior.map Prod.snd ++ [decodedMod]
+  let entryIdx := prior.length
+  let allLaws := (allDecodedMods.map (·.laws)).flatten
+  let decodedForLower := allDecodedMods.zipIdx.map fun (dm, idx) =>
+    if idx == entryIdx then { dm with laws := allLaws } else { dm with laws := [] }
+  let lowering ← match Obend.Spec.FrontEnd.lowerDecoded allSrcMods decodedForLower entryIdx entryDef
       (Json.arr #[]) (Json.arr #[]) defaultWorkbookLimits "definition" [] with
     | .ok l => pure l
     | .error d => throw (formatDiagnostic d)
@@ -426,15 +480,6 @@ def elaborateObendSource (src : String) (moduleName : String := "Main")
     laws := lowering.laws
   }
 
-/-- Sanitize a file stem into a valid Objective Bend module identifier. -/
-def sanitizeModuleName (stem : String) : String :=
-  let chars := stem.toList.map fun c => if c.isAlphanum || c == '_' then c else '_'
-  match chars with
-  | [] => "Main"
-  | c :: _ =>
-    let s := String.ofList (if c.isAlpha || c == '_' then chars else '_' :: chars)
-    if Obend.Spec.Parse.isIdent s.toList then s else "Main"
-
 /-- Resolve a workbook `.obend` file path whether invoked from the repo root or `lean/`. -/
 def resolveObendPath (path : System.FilePath) : IO System.FilePath := do
   if ← path.pathExists then
@@ -447,21 +492,76 @@ def resolveObendPath (path : System.FilePath) : IO System.FilePath := do
   let prefixed := System.FilePath.mk ("lean/" ++ s)
   if ← prefixed.pathExists then
     return prefixed
+  let parentRel := System.FilePath.mk ("../" ++ s)
+  if ← parentRel.pathExists then
+    return parentRel
   return path
 
-/-- Load an `.obend` file from disk, validate it with `Obend.Spec.Capture.captureModule`,
+/-- Resolve an imported `.obend` path relative to the importing file `parentFile` or `stdlib/` directories. -/
+def resolveImportedObendPath (parentFile : System.FilePath) (rawImportPath : String) :
+    IO System.FilePath := do
+  let clean := stripImportQuotes rawImportPath
+  let rel1 := match parentFile.parent with
+    | some dir => dir / clean
+    | none => System.FilePath.mk clean
+  let r1 ← resolveObendPath rel1
+  if ← r1.pathExists then return r1
+  let stripped := if clean.startsWith "./" then (clean.drop 2).toString else clean
+  let rel2 := match parentFile.parent with
+    | some dir => dir / stripped
+    | none => System.FilePath.mk stripped
+  let r2 ← resolveObendPath rel2
+  if ← r2.pathExists then return r2
+  let r3 ← resolveObendPath (System.FilePath.mk stripped)
+  if ← r3.pathExists then return r3
+  let fileName := (System.FilePath.mk stripped).fileName.getD stripped
+  for sub in ["stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/"] do
+    let cand ← resolveObendPath (System.FilePath.mk (sub ++ fileName))
+    if ← cand.pathExists then return cand
+  return r1
+
+/-- Recursively load an `.obend` file and all of its transitive `import`s in topological order. -/
+def loadObendModuleClosure :
+    Nat → System.FilePath →
+    List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) →
+    IO (Except String (List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)))
+  | 0, path, _ => return .error s!"import depth limit exceeded while loading {path}"
+  | fuel + 1, path, acc => do
+    let resolved ← resolveObendPath path
+    let modName := sanitizeModuleName (resolved.fileStem.getD "Main")
+    if acc.any (fun (sm, _) => sm.name == modName) then
+      return .ok acc
+    match ← (IO.FS.readBinFile resolved).toBaseIO with
+    | .error e => return .error (toString e)
+    | .ok bytes =>
+      let some rawSrc := Obend.Spec.Parse.decodeSource bytes
+        | return .error s!"{resolved}: invalid UTF-8"
+      let normSrc := normalizeObendSource rawSrc
+      let ast ← match Obend.Spec.FrontEnd.parseSource modName normSrc with
+        | .ok a => pure a
+        | .error d => return .error (formatDiagnostic d)
+      let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
+      let mut curAcc := acc
+      for edge in parsedEdges.toList do
+        let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
+        let impFile ← resolveImportedObendPath resolved edgePath
+        match ← loadObendModuleClosure fuel impFile curAcc with
+        | .error err => return .error err
+        | .ok nextAcc => curAcc := nextAcc
+      match parseAndCheckObendModule normSrc modName curAcc with
+      | .error err => return .error err
+      | .ok pair => return .ok (curAcc ++ [pair])
+
+/-- Load an `.obend` file from disk (recursively resolving any `import` declarations)
     and elaborate it into a `WorkbookPackage`. -/
 def loadObendWorkbookFile (path : System.FilePath) : IO (Except String WorkbookPackage) := do
-  let resolved ← resolveObendPath path
-  let modName := sanitizeModuleName (resolved.fileStem.getD "Main")
-  match ← (IO.FS.readBinFile resolved).toBaseIO with
-  | .error e => return .error (toString e)
-  | .ok bytes =>
-    let capRes ← (Obend.Spec.Capture.captureModule #[] modName bytes none [] false).run
-    match capRes with
-    | .error d => return .error (formatDiagnostic d)
-    | .ok (srcMod, _) =>
-      return elaborateObendSource srcMod.source modName none
+  match ← loadObendModuleClosure 32 path [] with
+  | .error err => return .error err
+  | .ok closure =>
+    match closure.getLast? with
+    | none => return .error s!"empty module closure for {path}"
+    | some (lastSrc, _) =>
+      return elaborateObendSource lastSrc.source lastSrc.name none closure.dropLast
 
 /-! ## 3. Reverse Bridge: Exporting Lean `TransportCert` / `LawExpr` into `.obend` Obligations -/
 

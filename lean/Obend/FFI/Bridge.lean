@@ -30,6 +30,7 @@ public import Obend.Logic.Program
 public import Obend.Logic.Obligation
 public import Obend.Logic.Receipt
 public import Obend.Leaf.Emit
+public import Obend.Tactic.Tooth
 
 public section
 namespace Obend.FFI
@@ -64,6 +65,9 @@ structure SessionState where
   deriving Inhabited
 
 abbrev Session := SessionState
+
+/-- Canonical empty session state before any cells or turns are proposed or admitted. -/
+def SessionState.empty : SessionState := {}
 
 /-- Initialize session state from configuration bytes. -/
 @[export obend_session_init_core]
@@ -686,7 +690,8 @@ def turnProposeCore (s : SessionState) (turnBytes : ByteArray) : SessionState ×
     | .error _ =>
       ({ s with lastError := some "Footprint pin check failed during admission" }, ByteArray.empty, -4)
 
-/-- Turn commit: rejects empty or non-32-byte turn IDs, verifies footprint consistency against `s.store`,
+/-- Turn commit: rejects empty or non-32-byte turn IDs, refuses un-proposed turn IDs not in
+    `s.pendingProposals` with `-5`, verifies footprint consistency against `s.store`,
     and commits proposed writes into `s.store`. -/
 @[export obend_turn_commit_core]
 def turnCommitCore (s : SessionState) (tidBytes : ByteArray) : SessionState × Int32 :=
@@ -704,10 +709,7 @@ def turnCommitCore (s : SessionState) (tidBytes : ByteArray) : SessionState × I
       | .error _ =>
         ({ s with lastError := some "Footprint pin stale at commit" }, -4)
     | none =>
-      let defaultWrites : List (String × Data) := [(s!"turn_{s.store.turn}", .natural (bytesToNat tidBytes))]
-      let (newVaultStore, updatedStore) := applyWritesToSession s defaultWrites
-      let roots := pushAdmittedRoot s.admittedRoots tidBytes
-      ({ s with store := updatedStore, vaultStore := newVaultStore, admittedRoots := roots, lastError := none }, 0)
+      ({ s with lastError := some "Turn ID not found in pendingProposals" }, -5)
 
 /-- Read-only hardware projection adapter dispatch. Strictly 0 edits to Hardware/*. -/
 @[export obend_project_hardware_core]
@@ -719,9 +721,9 @@ def projectHardwareCore (s : SessionState) (hwBytes : ByteArray) : SessionState 
     ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
 /-- Stranger-checkable Merkle receipt verification using `Obend.Receipt.Merkle.opens` and
-    cryptographic payload commitment / `s.admittedRoots` binding.
-    Refuses random or tampered 32-byte slices that were neither admitted in `s.admittedRoots`
-    nor carry a valid `[32-byte Merkle commitment || payload]` opening against `rootVal`. -/
+    mandatory `s.admittedRoots` session binding.
+    Requires `admittedInSession = true` FIRST (returning `-8` if un-admitted), and only when
+    `admittedInSession = true` verifies either `trailing.isEmpty` or `opensFromPayload || opensFromDigest`. -/
 @[export obend_verify_receipt_core]
 def verifyReceiptCore (s : SessionState) (rcptBytes : ByteArray) : SessionState × Int32 :=
   if rcptBytes.isEmpty then
@@ -733,23 +735,25 @@ def verifyReceiptCore (s : SessionState) (rcptBytes : ByteArray) : SessionState 
     let rootVal := bytesToNat claimedRoot
     let trailing := rcptBytes.extract 32 rcptBytes.size
     let admittedInSession := s.admittedRoots.contains claimedRoot || s.admittedRoots.contains rcptBytes
-    let opensTrailing : Bool :=
-      if trailing.isEmpty then
-        false
-      else
-        let hPayload := hashByteArray trailing
-        let oPayload : Opening := ⟨1, 0, hPayload, []⟩
-        let opensFromPayload := opens Obend.Core.Digest.deployed oPayload rootVal
-        let opensFromDigest :=
-          if trailing.size == 32 then
-            let oDigest : Opening := ⟨1, 0, bytesToNat trailing, []⟩
-            opens Obend.Core.Digest.deployed oDigest rootVal
-          else false
-        opensFromPayload || opensFromDigest
-    if admittedInSession || opensTrailing then
-      ({ s with lastError := none }, 0)
+    if !admittedInSession then
+      ({ s with lastError := some "Merkle receipt root not admitted in session" }, -8)
     else
-      ({ s with lastError := some "Merkle receipt commitment verification failed: un-admitted or tampered root" }, -8)
+      let opensFromPayload : Bool :=
+        if trailing.isEmpty then
+          false
+        else
+          let hPayload := hashByteArray trailing
+          let oPayload : Opening := ⟨1, 0, hPayload, []⟩
+          opens Obend.Core.Digest.deployed oPayload rootVal
+      let opensFromDigest : Bool :=
+        if trailing.size == 32 then
+          let oDigest : Opening := ⟨1, 0, bytesToNat trailing, []⟩
+          opens Obend.Core.Digest.deployed oDigest rootVal
+        else false
+      if trailing.isEmpty || opensFromPayload || opensFromDigest then
+        ({ s with lastError := none }, 0)
+      else
+        ({ s with lastError := some "Merkle receipt commitment verification failed: un-admitted or tampered root" }, -8)
 
 /-- Diagnostics: returns last error string. -/
 @[export obend_get_last_error_core]
@@ -1041,11 +1045,11 @@ theorem verifyReceiptCore_empty_refused (s : SessionState) :
 theorem verifyReceiptCore_unadmitted_32_refused (s : SessionState) (rcpt : ByteArray)
     (hne : rcpt.isEmpty = false)
     (hge : ¬ (rcpt.size < 32))
-    (hsz : (rcpt.extract 32 rcpt.size).isEmpty = true)
+    (_hsz : (rcpt.extract 32 rcpt.size).isEmpty = true)
     (hunadm1 : s.admittedRoots.contains (rcpt.extract 0 32) = false)
     (hunadm2 : s.admittedRoots.contains rcpt = false) :
     (verifyReceiptCore s rcpt).2 = -8 := by
-  simp [verifyReceiptCore, hne, hge, hsz, hunadm1, hunadm2]
+  simp [verifyReceiptCore, hne, hge, hunadm1, hunadm2]
 
 theorem turnCommitCore_empty_refused (s : SessionState) :
     (turnCommitCore s ByteArray.empty).2 = -6 := by rfl
@@ -1125,6 +1129,54 @@ theorem admitFootprint_stale_pin_refused (s : SessionState) :
     injection hx with hdata
     injection hdata with hnat
     omega
+
+/-- **Unproposed Turn Commit Refusal (`turnCommitCore_unproposed_tid_refused`)**:
+    Committing any 32-byte `tidBytes` in `SessionState.empty` (where `pendingProposals = []`)
+    is strictly refused with status `-5` and leaves `admittedRoots.toList = []` (`admittedRoots = #[]`). -/
+theorem turnCommitCore_unproposed_tid_refused (tidBytes : ByteArray)
+    (h32 : tidBytes.size = 32) :
+    (turnCommitCore SessionState.empty tidBytes).2 = -5 ∧
+    (turnCommitCore SessionState.empty tidBytes).1.admittedRoots = #[] ∧
+    (turnCommitCore SessionState.empty tidBytes).1.admittedRoots.toList = [] := by
+  unfold turnCommitCore SessionState.empty
+  have hcond : (tidBytes.isEmpty || decide (tidBytes.size ≠ 32)) = false := by
+    rw [Bool.or_eq_false_iff]
+    refine ⟨?_, ?_⟩
+    · unfold ByteArray.isEmpty
+      rw [h32]
+      rfl
+    · exact decide_eq_false (by omega)
+  rw [hcond]
+  exact ⟨rfl, rfl, rfl⟩
+
+#tooth turnCommitCore_unproposed_tid_refused by mutation
+  turnCommitCore := fun s _ => (s, 0)
+
+/-- Any receipt query against `SessionState.empty` (where `admittedRoots = #[]`) is refused with `-8`. -/
+theorem verifyReceiptCore_empty_session_refused (rcptBytes : ByteArray) :
+    (verifyReceiptCore SessionState.empty rcptBytes).2 = -8 := by
+  unfold verifyReceiptCore
+  split
+  · rfl
+  · split
+    · rfl
+    · dsimp only
+      have h1 : SessionState.empty.admittedRoots.contains (rcptBytes.extract 0 32) = false := by
+        simp [SessionState.empty]
+      have h2 : SessionState.empty.admittedRoots.contains rcptBytes = false := by
+        simp [SessionState.empty]
+      rw [h1, h2]
+      rfl
+
+/-- **Unadmitted Self-Opening Receipt Refusal (`verifyReceiptCore_unadmitted_self_opening_refused`)**:
+    Passing a 64-byte self-opening `[leaf(0, h) || h]` slice (`computeReceiptCommitment h ++ natTo32Bytes h`)
+    into `verifyReceiptCore SessionState.empty` returns `-8` (refused!). -/
+theorem verifyReceiptCore_unadmitted_self_opening_refused (h : Nat) :
+    (verifyReceiptCore SessionState.empty (computeReceiptCommitment h ++ natTo32Bytes h)).2 = -8 :=
+  verifyReceiptCore_empty_session_refused (computeReceiptCommitment h ++ natTo32Bytes h)
+
+#tooth verifyReceiptCore_unadmitted_self_opening_refused by mutation
+  verifyReceiptCore := fun s _ => (s, 0)
 
 end Obend.FFI
 end

@@ -1645,12 +1645,13 @@ def finishSpecification (c : Ctx) (fuel : Nat) (s : Spec) (m : Module) (key : St
 def specification (c : Ctx) (fuel : Nat) (s : Spec) (m : Module) : M ATerm := do
   checkSpecMethods s
   let key := m.name ++ "." ++ s.name
+  let list ← precedence c fuel key
   if !s.binders.isEmpty then
-    -- An open spec: checked once at its own bounds; its knot field is that instance.
+    -- An open spec: checked once at its own bounds; its knot field is that instance along C4 `list`.
     let some (selfVar, superVar) ← openBinding c fuel key s.binders (← requirementsOf s) m.name
       | fail ("open spec " ++ key ++ ": its Self/Super bounds do not resolve")
     let (_, _, layer) ← templateLayer c fuel key (.spec s) m
-    return ← withTypes [("Self", selfVar), ("Super", superVar)] (finishSpecification c fuel s m key [key] layer)
+    return ← withTypes [("Self", selfVar), ("Super", superVar)] (finishSpecification c fuel s m key list layer)
   let target ← sourceType c fuel s.targetType m.name []
   -- `requires` is checked: a requirement is a member of the closed target, at its type.
   if let some t := target then
@@ -1662,11 +1663,15 @@ def specification (c : Ctx) (fuel : Nat) (s : Spec) (m : Module) : M ATerm := do
       | some mt => if !sameTy rt (some mt) then
           fail ("refused (requires-signature): spec " ++ key ++ " requires " ++ signatureText r ++
             ", but " ++ s.targetType ++ "." ++ r.name ++ " has another type")
-  let list ← precedence c fuel key
   let extension ← if plainSpec s then layer c fuel s m "primary" else do
+    let openBindings : List (String × PTy) := match target with
+      | some t => [("Self", t), ("Super", t)]
+      | none => []
     for ancestor in list do
       let some (a, am) := specOf c ancestor | fail "internal"
-      if target.isSome && !sameTy (← sourceType c fuel a.targetType am.name []) target then
+      let aTarget ← withTypes (if a.binders.isEmpty then [] else openBindings)
+        (sourceType c fuel a.targetType am.name [])
+      if target.isSome && !sameTy aTarget target then
         fail ("ancestor " ++ ancestor ++ " targets " ++ a.targetType ++ "; declared ancestry composes one target type (" ++ s.targetType ++ ")")
     for group in ["primary", "around"] do
       if hasLayer s group then
@@ -1689,8 +1694,16 @@ def specification (c : Ctx) (fuel : Nat) (s : Spec) (m : Module) : M ATerm := do
       layers := layers ++ [← abstract c fuel (selfSuperParams s) outerEnv (fun _ => pure (.extend (.bound 0) [(name, init)])) s.name (.source s.targetType) m.name]
     for group in ["primary", "around"] do
       for ancestor in list.reverse do
-        let some (a, _) := specOf c ancestor | fail "internal"
-        if hasLayer a group then layers := layers ++ [← layerRef c ancestor group]
+        let some (a, am) := specOf c ancestor | fail "internal"
+        if hasLayer a group then
+          if !a.binders.isEmpty then
+            let some t := target | fail ("open ancestor " ++ ancestor ++ " requires a resolved target type")
+            let l ← withTypes openBindings (layerAt c fuel a am t t t)
+            let instKey := key ++ "#open#" ++ ancestor ++ "#" ++ group
+            modify fun st => { st with hidden := st.hidden.push (instKey, l, some (extensionTy t)) }
+            layers := layers ++ [← globalRef outerEnv instKey]
+          else
+            layers := layers ++ [← layerRef c ancestor group]
     match layers with
     | [] => fail ("spec " ++ key ++ " and its ancestors provide no methods")
     | [only] =>

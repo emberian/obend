@@ -97,9 +97,9 @@ def baseName (name : String) : String := ((name.splitOn "/").getLast?).getD name
 /-- The folder of a page (`""` at the vault's top). -/
 def folderOf (name : String) : String := "/".intercalate (name.splitOn "/").dropLast
 
-/-- A page is a kind when it is a folder's `_kind`: a kind cell, with its own law lines, and the
+/-- A page is a kind when it is a folder's `_kind` or under `_kind/`: a kind cell, with its own law lines, and the
 initial fields of the pages born under it. -/
-def isKind (name : String) : Bool := baseName name == "_kind"
+def isKind (name : String) : Bool := baseName name == "_kind" || name.startsWith "_kind/"
 
 /-- The folder kinds of a page, innermost first: its folder's `_kind`, then each enclosing
 folder's. A kind page itself is an instance of none. -/
@@ -229,7 +229,7 @@ def vaultKinds (es : List Entry) : Except String (Obend.Kind.Kinds Laws) := do
     let fields := (frontFields src).filter fun f => (lawKey f.1).isNone && f.1 != "kind" && f.1 != "parents"
     let init : Obend.Core.Data.Data := .record (fields.map fun f => (f.1, Obend.Core.Data.Data.label f.2))
     let cell : Obend.Kind.KindCell Laws :=
-      ⟨e.name, e.version, fields.map (·.1), init, laws, kindParentsIn es e.name src⟩
+      ⟨e.name, e.version, fields.map (·.1), init, laws, kindParentsIn es e.name src, [], [laws]⟩
     pure cell
   pure ⟨cells⟩
 
@@ -990,18 +990,80 @@ theorem post_needs_grant (H : Hash) (s : Store) (m : Member) (page text : String
 
 /-! ### Birth under a kind -/
 
-/-- **`create --from K PAGE`**: the text of a page born under kind `K`: its frontmatter names `K`
-(the kind's identity, which every page born under it carries) and starts with `K`'s fields (its
-frontmatter's `key: value` lines other than laws and its own kind line); its body is empty. The
-birth is then an ordinary write, judged by the page's kinds' laws, `K`'s first. -/
+/-- **`create --from K PAGE`**:
+- When `PAGE` is an instance page (`isKind page = false`), returns the text of a page born under kind `K`:
+  its frontmatter names `kind: K` and starts with `K`'s non-law fields; its body is empty.
+- When `PAGE` is a kind page (`isKind page = true`, `K-KIND-CELL`), derives a child kind page from parent
+  kind `K`: its frontmatter names `parents: K` and inherits `K`'s non-law fields AND `K`'s law lines. -/
 def createFrom (s : Store) (k page : String) : Except String String := do
   let kn := kindName k
   if (s.page? page).isSome then throw ("refused: " ++ page ++ " exists")
-  if isKind page then throw ("refused: " ++ page ++ " is a kind page; a kind is not born under a kind")
   let some kp := s.page? kn | throw ("refused (unknown-kind): no kind page " ++ kn)
   let some G := kp.current | throw ("refused (unknown-kind): " ++ kn ++ " has no version")
   let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents"
-  return "---\nkind: " ++ kn ++ "\n" ++ String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++ "---\n"
+  if isKind page then
+    if kn == page then throw ("refused (kind-cycle): " ++ page ++ " is its own ancestor")
+    let laws := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isSome
+    return "---\nparents: " ++ kn ++ "\n" ++
+      String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++
+      String.join (laws.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++ "---\n"
+  else
+    return "---\nkind: " ++ kn ++ "\n" ++
+      String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++ "---\n"
+
+/-- **`createFrom_kind_preserves_ancestor_laws` (`K-KIND-CELL`)**:
+1. When `isKind page = true` and `createFrom s k page = .ok md`, `page` does not yet exist in `s`,
+   parent kind `kn = kindName k` exists in `s` at version `G` with `kn ≠ page`, and `md` is the
+   derived child kind markdown naming `parents: <kn>` and inheriting both `kn`'s layout fields and
+   all of `kn`'s law lines.
+2. Any write to an instance page `instName` (version `G_inst`) whose resolved kind chain `K.chain`
+   includes both `page` and its ancestor `kindName k` is required to satisfy every law of `page`
+   AND every law of `kindName k`. -/
+theorem createFrom_kind_preserves_ancestor_laws
+    {s : Store} {k page md : String}
+    (hkind : isKind page = true)
+    (hcf : createFrom s k page = .ok md) :
+    (s.page? page).isSome = false ∧
+    kindName k ≠ page ∧
+    (∃ kp G,
+      s.page? (kindName k) = some kp ∧
+      kp.current = some G ∧
+      let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents"
+      let laws := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isSome
+      md = "---\nparents: " ++ kindName k ++ "\n" ++
+        String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++
+        String.join (laws.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++ "---\n") ∧
+    (∀ (es : List Entry) (instName : String) (G_inst : Graph) (laws : Laws)
+       (K : KindsOf) (ks : Obend.Kind.Kinds Laws)
+       (S : Obend.Core.Ty.Ty) (o n : Obend.Core.Data.Data) (facts : Facts) (who : String) (occ : Occ),
+      lawsFor es instName G_inst = .ok laws →
+      kindsFor es instName (settled G_inst) = .ok K →
+      vaultKinds es = .ok ks →
+      judge S instName (laws.map fun x => (x.1, x.2.1)) o n (requestOf who occ facts) = .admitted →
+      kindName k ∈ K.chain →
+      ∀ cParent, ks.find (kindName k) = some cParent →
+      ∀ x ∈ cParent.law, x.2.1.denote facts (occ.old o n) n = true) := by
+  unfold createFrom at hcf
+  simp only [bind, Except.bind, pure, Except.pure, hkind, ite_true] at hcf
+  split at hcf
+  · cases hcf
+  · rename_i hpage_none
+    split at hcf
+    · rename_i kp hkp
+      split at hcf
+      · rename_i G hG
+        split at hcf
+        · cases hcf
+        · rename_i hne
+          cases hcf
+          have hne' : kindName k ≠ page := by
+            intro heq
+            exact hne (beq_iff_eq.2 heq)
+          refine ⟨by simpa using hpage_none, hne', ⟨kp, G, hkp, hG, rfl⟩, ?_⟩
+          intro es instName G_inst laws K ks S o n facts who occ hl hK hks hj hmem cParent hcParent x hx
+          exact kind_law_inherited hl hK hks hj (kindName k) hmem cParent hcParent x hx
+      · cases hcf
+    · cases hcf
 
 /-! ### Re-citing -/
 

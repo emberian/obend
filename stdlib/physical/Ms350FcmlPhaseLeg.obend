@@ -1,0 +1,50 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/Ms350FcmlPhaseLeg.obend`):
+# MS350 7-Level Flying-Capacitor Multilevel (FCML) SiC Half-Bridge Phase Leg
+# with Deadtime & Slew-Rate Shoot-Through Protection Override.
+
+record Ms350PhaseLeg:
+  deadtimeNs() -> Nat
+  slewRateLimitVPerNs() -> Nat
+  shootThroughSafe(diDt: Nat) -> Bool
+  switchingLossUj(currentA: Nat) -> Nat
+  effectiveGateDelayNs(marginNs: Nat) -> Nat
+
+spec SicBaseSwitch for Ms350PhaseLeg:
+  requires deadtimeNs() -> Nat
+  requires slewRateLimitVPerNs() -> Nat
+  def deadtimeNs() -> Nat:
+    40n
+  def slewRateLimitVPerNs() -> Nat:
+    50n
+  def shootThroughSafe(diDt: Nat) -> Bool:
+    diDt <= self.slewRateLimitVPerNs
+  def switchingLossUj(currentA: Nat) -> Nat:
+    currentA * 3n + self.deadtimeNs
+  def effectiveGateDelayNs(marginNs: Nat) -> Nat:
+    marginNs + 12n
+  claim switching_loss_open_recursion(currentA: Nat): self.switchingLossUj(currentA) == currentA * 3n + self.deadtimeNs
+
+spec DeadtimeProtectionOverride for Ms350PhaseLeg:
+  requires effectiveGateDelayNs(marginNs: Nat) -> Nat
+  def deadtimeNs() -> Nat:
+    120n
+  def slewRateLimitVPerNs() -> Nat:
+    80n
+  def effectiveGateDelayNs(marginNs: Nat) -> Nat:
+    super.effectiveGateDelayNs(marginNs) + 25n
+
+def seedSicSwitch() -> Ms350PhaseLeg:
+  {deadtimeNs: 0n, slewRateLimitVPerNs: 0n, shootThroughSafe: fn(d: Nat) -> Bool: false, switchingLossUj: fn(i: Nat) -> Nat: 0n, effectiveGateDelayNs: fn(m: Nat) -> Nat: 0n}
+
+def sicBasePhaseLeg() -> Ms350PhaseLeg:
+  fix(SicBaseSwitch, seedSicSwitch())
+
+def ms350ProtectedPhaseLeg() -> Ms350PhaseLeg:
+  fix(compose(SicBaseSwitch, DeadtimeProtectionOverride), seedSicSwitch())
+
+def ms350LossAt100A() -> Nat:
+  ms350ProtectedPhaseLeg().switchingLossUj(100n)
+
+def ms350GateDelayAt10Ns() -> Nat:
+  ms350ProtectedPhaseLeg().effectiveGateDelayNs(10n)

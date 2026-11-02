@@ -402,6 +402,111 @@ def clearingFormat : Judge.Format where
   badGrade := 0
   bad_refused := ⟨.marketMalformed, [], badClearing_refused⟩
 
+/-- Kernel summary of a live world state for external `"world-carry@1"` obligation checks. -/
+structure WorldCarrySpec where
+  cells : List (String × Nat)
+  totalBook : Nat
+  deriving DecidableEq, Repr
+
+/-- Kernel certificate summary of a `CarryPlan` for `"world-carry@1"`. -/
+structure WorldCarryWitness where
+  carriedCells : List String
+  namedDrops : List String
+  postBook : Nat
+  deriving DecidableEq, Repr
+
+/-- Refusal clauses for `"world-carry@1"`. -/
+inductive WorldCarryClause where
+  | silentCellDrop
+  | nonZeroDropBalance
+  | bookConservationFailed
+  deriving DecidableEq, Repr
+
+/-- Executable check for `"world-carry@1"` obligation format. -/
+def checkWorldCarrySpec (w : WorldCarrySpec) (p : WorldCarryWitness) : Judge.Verdict WorldCarryClause :=
+  if w.cells.any (fun (cid, _) => !(p.carriedCells.contains cid || p.namedDrops.contains cid)) then
+    .refused .silentCellDrop []
+  else if w.cells.any (fun (cid, bal) => p.namedDrops.contains cid && bal != 0) then
+    .refused .nonZeroDropBalance []
+  else if p.postBook != w.totalBook then
+    .refused .bookConservationFailed []
+  else
+    .ok
+
+/-- Semantic meaning of `"world-carry@1"` kernel check. -/
+def WorldCarrySpecMeaning (w : WorldCarrySpec) (p : WorldCarryWitness) : Prop :=
+  checkWorldCarrySpec w p = .ok
+
+/-- Kernel `Judge` instance for `"world-carry@1"` in `defaultExternalFormats`. -/
+@[instance_reducible] def worldCarrySpecJudge : Judge WorldCarrySpec WorldCarryWitness where
+  Clause := WorldCarryClause
+  Meaning := WorldCarrySpecMeaning
+  check _ w p := checkWorldCarrySpec w p
+  sound := by intro _ _ _ h; exact h
+  refutes _ := false
+  refuted := by intro _ _ _ _ _ _ href; cases href
+  Fragment _ := True
+  complete := by rintro w _ ⟨p, hp⟩; exact ⟨p, 0, hp⟩
+  mono := by intro _ _ _ _ _ _; rfl
+
+def validWorldCarrySpec : WorldCarrySpec :=
+  { cells := [("cell.alpha", 100), ("cell.legacy", 0)], totalBook := 100 }
+
+def validWorldCarryWitness : WorldCarryWitness :=
+  { carriedCells := ["cell.alpha"], namedDrops := ["cell.legacy"], postBook := 100 }
+
+def badWorldCarrySpec : WorldCarrySpec :=
+  { cells := [("cell.alpha", 100), ("cell.unaccounted", 50)], totalBook := 150 }
+
+def badWorldCarryWitness : WorldCarryWitness :=
+  { carriedCells := ["cell.alpha"], namedDrops := [], postBook := 150 }
+
+theorem badWorldCarry_refused :
+    worldCarrySpecJudge.check 0 badWorldCarrySpec badWorldCarryWitness =
+      .refused .silentCellDrop [] := rfl
+
+def decodeWorldCarryObj (s : String) : Except String WorldCarrySpec :=
+  match s with
+  | "valid" => .ok validWorldCarrySpec
+  | "bad" => .ok badWorldCarrySpec
+  | _ => do
+    let j ← Json.parse s
+    let totalBook ← j.getObjValAs? Nat "totalBook"
+    let cellsArr ← (← j.getObjVal? "cells").getArr?
+    let cells ← cellsArr.toList.mapM fun cJson => do
+      let cid ← cJson.getObjValAs? String "id"
+      let bal ← cJson.getObjValAs? Nat "balance"
+      pure (cid, bal)
+    pure { cells, totalBook }
+
+def decodeWorldCarryCert (s : String) : Except String WorldCarryWitness :=
+  match s with
+  | "valid" => .ok validWorldCarryWitness
+  | "bad" => .ok badWorldCarryWitness
+  | _ => do
+    let j ← Json.parse s
+    let postBook ← j.getObjValAs? Nat "postBook"
+    let carriedArr ← (← j.getObjVal? "carriedCells").getArr?
+    let carriedCells ← carriedArr.toList.mapM (fun x => x.getStr?)
+    let dropsArr ← (← j.getObjVal? "namedDrops").getArr?
+    let namedDrops ← dropsArr.toList.mapM (fun x => x.getStr?)
+    pure { carriedCells, namedDrops, postBook }
+
+/-- **The registered format `world-carry@1` for live world K-CARRY migrations.** -/
+def worldCarryFormat : Judge.Format where
+  name := "world-carry"
+  version := "1"
+  Obj := WorldCarrySpec
+  Cert := WorldCarryWitness
+  judge := worldCarrySpecJudge
+  decodeObj := decodeWorldCarryObj
+  decodeCert := decodeWorldCarryCert
+  trust := .kernel
+  regime := .decidable
+  bad := (badWorldCarrySpec, badWorldCarryWitness)
+  badGrade := 0
+  bad_refused := ⟨.silentCellDrop, [], badWorldCarry_refused⟩
+
 /-- Decode `(objStr, certStr)` and run `F.judge.check`, mapping the verdict into `Judge.Verdict ClaimClause`. -/
 def checkFormatBytes (F : Judge.Format) (r : Nat) (objStr certStr : String) : Judge.Verdict ClaimClause :=
   match F.decodeObj objStr with
@@ -587,9 +692,9 @@ theorem obligationWithJudges_mono (formats : List Judge.Format) {k k' : Nat} {o 
   complete := by rintro o ⟨j, k, h⟩ _; exact ⟨j, k, h⟩
   mono := by intro k k' o j le hne; exact obligationWithJudges_mono formats le hne
 
-/-- Default external formats registered for `obligationCheck` (`rewrite@1`, `lrat@1`, `clearing@1`). -/
+/-- Default external formats registered for `obligationCheck` (`rewrite@1`, `lrat@1`, `clearing@1`, `world-carry@1`). -/
 def defaultExternalFormats : List Judge.Format :=
-  [claimFormat, lratFormat, clearingFormat, Obend.Judge.Lrat.format]
+  [claimFormat, lratFormat, clearingFormat, worldCarryFormat, Obend.Judge.Lrat.format]
 
 def obligationCheck (k : Nat) (o : ClaimObj) (j : Justification) : Judge.Verdict ClaimClause :=
   obligationCheckWithJudges defaultExternalFormats k o j

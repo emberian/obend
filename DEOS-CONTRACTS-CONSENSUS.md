@@ -45,7 +45,7 @@ structure CellContract where
 1. **Inductive Step Obligation (`cellContract_step_inductive`)**:
    To mutate slot $s$ from `old` to `new` on `occ`, the caller supplies a `Core4` witness $w$ checked by `Judge.accepts` at type:
    $$I(\text{old}) \;\to\; T(\text{old}, \text{new}, \text{occ}) \;\wedge\; I(\text{new})$$
-   Because `Judge.accepts` checks a semantic `Core4` proof term rather than inspecting the syntactic AST of how `new` was computed, `new` can be produced by *any* mechanism—user edit, e-graph rewrite (`Obend/Law/EGraph.lean`), dyadic interval solver (`Obend/Analysis/Interval.lean`), Lean 4 tactic reflection (`byLoweredLean`), or an off-chain LP solver!
+   Because `Judge.accepts` checks a semantic `Core4` proof term rather than inspecting the syntactic AST of how `new` was computed, `new` can be produced by *any* mechanism—user edit, e-graph rewrite (`Obend/Analysis/EqSatHypergraph.lean`), dyadic interval solver (`Obend/Analysis/RealAnalysis.lean`), Lean 4 tactic reflection (`byLoweredLean`), or an off-chain LP solver!
 2. **Forever-Crowns via `Narrows` (`relaw_preserves_forever_crown`)**:
    When `occ == "relaw"` proposes replacing `oldC` with `newC`, `Judge.accepts` requires a `Core4` proof of **`Narrows newC oldC`**:
    $$\mathsf{Narrows}(C_{\text{new}}, C_{\text{old}}) \;\triangleq\; \bigl(\forall s.\, I_{\text{new}}(s) \to I_{\text{old}}(s)\bigr) \;\wedge\; \bigl(\forall s, s', o.\, I_{\text{new}}(s) \to T_{\text{new}}(s, s', o) \to T_{\text{old}}(s, s', o)\bigr)$$
@@ -79,7 +79,7 @@ flowchart LR
     LP -->|"Compact Primal-Dual Receipt"| JUDGE
 ```
 
-### 3.1 Wide-Pullback Hyperedges (`Obend/Vault/Turn.lean`)
+### 3.1 Wide-Pullback Hyperedges (`Obend/Vault/Hyperedge.lean`)
 A `VaultTurn` is a multi-slot transaction hyperedge:
 - **`reads : List Citation`**: External slots inspected read-only at pinned `(slotId, epoch, stateHash)`.
 - **`writes : List SlotUpdate`**: Mutated slots with `(oldState, newState, witness)`.
@@ -94,7 +94,7 @@ Absorbing the best of Dregg2 (`drex.ml`) and Agoric/ZoE:
     $$\mathsf{want}(\mathsf{payout}) \;\vee\; (\mathsf{payout} = \mathsf{give})$$
     Even if the external matcher or counterfactual counterparty is Byzantine, **no `Seat` can ever lose its deposited assets without its `want` predicate being satisfied.**
 
-### 3.3 Certified `drex-clearing@1` LP Primal-Dual Verification (`Obend/Ledger/Clearing.lean`)
+### 3.3 Certified `drex-clearing@1` LP Primal-Dual Verification (`Obend/Judge/Clearing.lean`)
 In Dregg2, `drex.ml` cleared multi-commodity batch orderbooks via Linear Programming. Running Simplex or Interior-Point inside a kernel checker is slow and unnecessary; **verifying a Primal-Dual optimality certificate is linear-time!**
 - The off-chain solver computes the optimal primal flow vector $x^*$ and dual price/slack variables $(y^*, s^*)$.
 - The `drex-clearing@1` receipt embeds $(x^*, y^*, s^*)$ in exact rational/fixed-point arithmetic.
@@ -110,25 +110,25 @@ In Dregg2, `drex.ml` cleared multi-commodity batch orderbooks via Linear Program
 
 Absorbing `breadstuffs/deos-*`, `starbridge-v2`, and `minidregg` Sandstorm grains:
 
-### 4.1 First-Class DeOS Capability Surfaces (`Obend/Vault/Surface.lean`)
+### 4.1 First-Class DeOS Capability Surfaces (`Obend/Vault/Affordance.lean`)
 1. **`SealedEscrow`**: Locks a linear `Book` or capability slot until a cited external theorem/receipt slot reaches an epoch satisfying a release predicate $P$, or refunds after timeout epoch $E_{\max}$.
 2. **`PrepaidLease`**: Grants temporary capability access to a resource slot (e.g., compute ticks on `bb2` or an eFPGA `AutomatonTile` in `ReductionMachine`) backed by a linear balance that drains proportionally to verified `Obend/Run/Ticks.lean` receipts.
 3. **`GatedAffordance` & `PublishGate`**: UI/agent action handles that can only be invoked when a `Core4` precondition proof is attached (`Judge.accepts`).
 
-### 4.2 `FogOfWar`: Blinded Merkle Multiproof Projections (`Obend/Vault/Blinded.lean`)
+### 4.2 `FogOfWar`: Blinded Merkle Multiproof Projections (`Obend/Vault/Projection.lean`)
 How do two distrusting agents execute a joint `VaultTurn` when parts of their Vaults are private?
 - A `BlindedVaultView` represents a Vault state tree where private cells are replaced by `BlindedNode (hash : Hash) (contractCommitment : Hash)`.
-- Using `Obend/Logic/Proofs/Frame.lean` (`claim_frame`) and Merkle multiproofs:
+- Using `Obend/Logic/Frame.lean` (`claim_frame`) and Merkle multiproofs:
   - **`blinded_projection_sound`**: A `VaultTurn` whose read/write footprint lies entirely within the unblinded subtree can be verified by any peer holding only the `BlindedVaultView`.
   - **`blinded_projection_non_forgeable`**: No party can forge a valid `BlindedVaultView` transition that violates a public `CellContract` without breaking hash collision resistance.
 
-### 4.3 Sandstorm Grain Confinement, `Powerbox`, and `Mandate` (`Obend/Vault/Grain.lean`, `Mandate.lean`)
+### 4.3 Sandstorm Grain Confinement, `Powerbox`, and `Mandate` (`Obend/Lower/PolicyToGrain.lean`, `Mandate.lean`)
 Inspired by `minidregg`'s Sandstorm grain architecture and DeOS `starbridge-v2`:
 - **`Grain`**: An isolated sub-Vault compartment with a closed capability table `capTable : List (CapHandle × SlotId × Permission)`.
   - **`grain_confinement_sound`**: A `Grain` transition cannot read, cite, or mutate any `SlotId` not present in its `capTable` with matching permission.
 - **`Powerbox`**: The sole mechanism for introducing a new capability into a `Grain` is an explicit `PowerboxRequest` approved by the parent Vault / user.
   - **`powerbox_attenuation_monotonic`**: Delegating a capability through the `Powerbox` can only **narrow** permissions (`Narrows attenuatedContract parentContract`), never widen them.
-- **`Mandate`**: Every autonomous subagent operates under a `Mandate`—a human-readable, machine-checked envelope bounding maximum asset spend (`Book`), allowed `SlotId` impact cone (`Obend/Vault/Impact.lean`), and maximum `Ticks` budget (`mandate_bounds_turn`).
+- **`Mandate`**: Every autonomous subagent operates under a `Mandate`—a human-readable, machine-checked envelope bounding maximum asset spend (`Book`), allowed `SlotId` impact cone (`Obend/Analysis/Impact.lean`), and maximum `Ticks` budget (`mandate_bounds_turn`).
 
 ### 4.4 Rehydratable Membranes, `Sturdyref`, Derived Liveness-Types & 3D `ReactiveAffordance` (`Obend/Vault/Rehydration.lean`)
 Absorbing `REHYDRATABLE-SURFACES.md` and `Dregg2/Deos/{Rehydration,Rerender,Reactive}.lean`:
@@ -141,7 +141,7 @@ Absorbing `REHYDRATABLE-SURFACES.md` and `Dregg2/Deos/{Rehydration,Rerender,Reac
 
 ## 5. The 4-Tier Finality Ladder: From Local CRDT to Symbolic `Simplex` BFT & `EpistemicConsensus`
 
-Why choose between an instant local notebook and a globally finalized Byzantine Fault Tolerant ledger when both are points on a single verified finality ladder (`Obend/Ledger/Finality.lean`)?
+Why choose between an instant local notebook and a globally finalized Byzantine Fault Tolerant ledger when both are points on a single verified finality ladder (`Obend/Consensus/Finality.lean`)?
 
 ```mermaid
 flowchart TD
@@ -158,9 +158,9 @@ flowchart TD
 
 ### 5.1 Tier 0 & Tier 1: Zero-Coordination Fast Paths
 - **Tier 0 (`LawDial.free`)**: Local notebook cells edit freely (`dial_free_confluent`), tracking unproven steps in `UnverifiedDebt`.
-- **Tier 1 (`VaultTurn` Fast Path)**: Once `Judge.accepts` verifies the `Core4` witness, if a `VaultTurn` touches only local slots or slots whose footprints are disjoint from concurrent turns, **`disjoint_turns_commute`** (backed by `Obend/Logic/Proofs/Frame.lean` `claim_frame` and `Obend/Run/Fork.lean` `stitch_atomic`) proves that no global ordering is required! Owned/disjoint capability turns finalize in a single round-trip.
+- **Tier 1 (`VaultTurn` Fast Path)**: Once `Judge.accepts` verifies the `Core4` witness, if a `VaultTurn` touches only local slots or slots whose footprints are disjoint from concurrent turns, **`disjoint_turns_commute`** (backed by `Obend/Logic/Frame.lean` `claim_frame` and `Obend/Run/Fork.lean` `stitch_atomic`) proves that no global ordering is required! Owned/disjoint capability turns finalize in a single round-trip.
 
-### 5.2 Tier 2: Symbolic-Mode `Simplex` BFT (`Obend/Ledger/Simplex.lean`)
+### 5.2 Tier 2: Symbolic-Mode `Simplex` BFT (`Obend/Consensus/Simplex.lean`)
 When multiple agents contend on the *same* shared slot (e.g., a public `drex-clearing@1` orderbook or shared repository root), `Obend` orders the contending `VaultTurn`s using a mechanized **Symbolic `Simplex` BFT** protocol (inspired by Chan–Pass `Simplex` in `minidregg` and `breadstuffs/dregg2`):
 - **Symbolic Cryptographic Abstraction**: Signatures and hashes are modeled in Lean via an abstract `CryptoVerifier` typeclass (`VerifySig`, `HashCollisionFree`) so metatheory proofs are fast and syntactic, while the thin Rust shell binds concrete `ed25519-dalek` / `aws-lc-rs` / `blake3` implementations at runtime.
 - **Protocol Certificates**:
@@ -173,7 +173,7 @@ When multiple agents contend on the *same* shared slot (e.g., a public `drex-cle
   - **`simplex_accountable_safety`**: If a safety violation ever occurs (under $> n/3$ Byzantine corruption), comparing the two conflicting certificates deterministically extracts a concrete **`SlashingReceipt`** containing $\ge f+1$ double-signed equivocations verifiable by `Judge.accepts`.
   - **`simplex_bounded_liveness_after_gst`**: After Global Stabilization Time (GST), every height with an honest leader finalizes a `VaultTurn` batch within $3\Delta$ network delays.
 
-### 5.3 Tier 3: `EpistemicConsensus` & `Fold.collapse` (`Obend/Ledger/Epistemic.lean`)
+### 5.3 Tier 3: `EpistemicConsensus` & `Fold.collapse` (`Obend/Consensus/Epistemic.lean`)
 Ordering bytes (`Simplex`) is not the same as agreeing on **scientific truth, hardware PDK signoff, or oracle validity**. Absorbing Dregg2's `epistemic_consensus.ml`:
 - **`EpistemicClaim`**: A typed `Core4` proposition paired with weighted `EvidenceReceipt`s from domain validators (formal proof = weight $1.0$; verified hardware co-sim receipt = weight $w_{\text{sim}}$; subjective peer attestation = trust-graph flow weight).
 - **`epistemic_sybil_bounded_by_seed_cut`**: Splitting a Byzantine identity into $k$ Sybil nodes cannot increase its subjective belief weight beyond the min-cut capacity of its trust edges from the observer's seed set.

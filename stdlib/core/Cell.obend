@@ -1,0 +1,47 @@
+edition ObjectiveBend 1
+# Objective Bend Standard Library (`stdlib/core/Cell.obend`)
+# Core capability-guarded state cell with open-recursive `self`/`super` methods and monotone epoch law.
+
+law monotone_epoch: monotone(epoch)
+law write_once_owner: writeOnce(owner)
+
+record StateCell:
+  epoch() -> Nat
+  value() -> Nat
+  gasCost(steps: Nat) -> Nat
+  nextValue(delta: Nat) -> Nat
+
+spec BaseCellSpec for StateCell:
+  requires epoch() -> Nat
+  requires value() -> Nat
+  def epoch() -> Nat:
+    1n
+  def value() -> Nat:
+    100n
+  def gasCost(steps: Nat) -> Nat:
+    steps * 5n + self.epoch
+  def nextValue(delta: Nat) -> Nat:
+    self.value + delta
+  claim next_value_open_recursion(delta: Nat): self.nextValue(delta) == self.value + delta
+
+spec VersionedCellOverride for StateCell:
+  requires gasCost(steps: Nat) -> Nat
+  def epoch() -> Nat:
+    2n
+  def gasCost(steps: Nat) -> Nat:
+    super.gasCost(steps) + 10n
+
+def seedCell() -> StateCell:
+  {epoch: 0n, value: 0n, gasCost: fn(s: Nat) -> Nat: s, nextValue: fn(d: Nat) -> Nat: d}
+
+def baseCell() -> StateCell:
+  fix(BaseCellSpec, seedCell())
+
+def versionedCell() -> StateCell:
+  fix(compose(BaseCellSpec, VersionedCellOverride), seedCell())
+
+def versionedCellNextAt25() -> Nat:
+  versionedCell().nextValue(25n)
+
+def versionedCellGasAt4() -> Nat:
+  versionedCell().gasCost(4n)

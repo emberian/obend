@@ -20,10 +20,10 @@
 //!   `CpuMeter`) to enforce capability and slot confinement before turn admission.
 
 use crate::{
-    cshake256_domain, merkle_root_from_leaves, net_flow, solve_primal_dual_clearing,
-    BlindedVaultMultiProof, DrexClearingCertificate, EquivocationSlashReceipt, FinCert, IpcAuth,
-    LimitOrder, PropCert, SignedSimplexVote, SimplexVoteKind, SkipCert, ValidatorKeypair,
-    VaultCellRecord,
+    cshake256_domain, merkle_root_from_leaves, net_flow, select_epistemic_winner,
+    solve_primal_dual_clearing, BlindedVaultMultiProof, DrexClearingCertificate,
+    EquivocationSlashReceipt, FinCert, IpcAuth, LimitOrder, PropCert, SignedSimplexVote,
+    SimplexVoteKind, SkipCert, ValidatorKeypair, VaultCellRecord, VerifiableRaceCandidate,
 };
 use obend_ffi::error::ObendError;
 use obend_ffi::session::ObendSession;
@@ -41,7 +41,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 /// Global lock serializing FFI calls into the Lean runtime across validator threads.
-static FFI_KERNEL_LOCK: Mutex<()> = Mutex::new(());
+pub static FFI_KERNEL_LOCK: Mutex<()> = Mutex::new(());
 
 /// Type alias harmonizing `SlashingReceipt` with `EquivocationSlashReceipt`.
 pub type SlashingReceipt = EquivocationSlashReceipt;
@@ -966,6 +966,8 @@ impl CollapsedEpochReceipt {
             return Ok(false);
         }
         let _guard = FFI_KERNEL_LOCK.lock().unwrap();
+        let tid = session.propose_turn(&self.collapsed_root)?;
+        session.commit_turn(&tid)?;
         session.verify_receipt(&self.collapsed_root)
     }
 }
@@ -996,8 +998,32 @@ impl Fold {
                 ));
             }
         }
+        let max_voter_id = blocks
+            .iter()
+            .flat_map(|b| b.fin_cert.votes.iter().map(|v| v.voter_id))
+            .max()
+            .unwrap_or(0);
+        let mut epoch_committee_pks = vec![[0u8; 32]; max_voter_id + 1];
+        let mut seen_voter_pk: BTreeMap<usize, [u8; 32]> = BTreeMap::new();
         for blk in blocks {
-            if blk.fin_cert.block_hash != blk.block_hash || !blk.fin_cert.verify(1) {
+            for v in &blk.fin_cert.votes {
+                if let Some(&prev_pk) = seen_voter_pk.get(&v.voter_id) {
+                    if prev_pk != v.public_key {
+                        return Err(NodeError::ConsensusVerification(format!(
+                            "conflicting public keys for voter_id {} across epoch blocks",
+                            v.voter_id
+                        )));
+                    }
+                } else {
+                    seen_voter_pk.insert(v.voter_id, v.public_key);
+                    epoch_committee_pks[v.voter_id] = v.public_key;
+                }
+            }
+        }
+        for blk in blocks {
+            if blk.fin_cert.block_hash != blk.block_hash
+                || !blk.fin_cert.verify(1, &epoch_committee_pks)
+            {
                 return Err(NodeError::ConsensusVerification(format!(
                     "block at height {} has invalid FinCert",
                     blk.height
@@ -2246,7 +2272,7 @@ impl NetworkedValidatorNode {
                 if st.slashed_validators.contains(&prop_cert.leader_vote.voter_id) {
                     return outbound;
                 }
-                if !prop_cert.verify(st.total_parties)
+                if !prop_cert.verify(&st.peer_public_keys)
                     || prop_cert.view != payload.view
                     || prop_cert.height != payload.height
                     || prop_cert.turn_payload != payload.to_bytes()
@@ -2301,15 +2327,7 @@ impl NetworkedValidatorNode {
             }
 
             ConsensusNetMessage::Vote(vote) => {
-                if !vote.verify_signature() {
-                    st.rejected_wire_frames += 1;
-                    return outbound;
-                }
-                let Some(expected_pk) = st.peer_public_keys.get(vote.voter_id) else {
-                    st.rejected_wire_frames += 1;
-                    return outbound;
-                };
-                if &vote.public_key != expected_pk {
+                if !vote.verify(&st.peer_public_keys) {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 }
@@ -2350,7 +2368,9 @@ impl NetworkedValidatorNode {
                             && !st.slashed_validators.contains(&v.voter_id)
                     })
                     .count();
-                if !skip_cert.verify(st.quorum_size) || valid_peer_votes < st.quorum_size {
+                if !skip_cert.verify(st.quorum_size, &st.peer_public_keys)
+                    || valid_peer_votes < st.quorum_size
+                {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 }
@@ -2372,7 +2392,7 @@ impl NetworkedValidatorNode {
                             && !st.slashed_validators.contains(&v.voter_id)
                     })
                     .count();
-                if !fin_cert.verify(st.quorum_size)
+                if !fin_cert.verify(st.quorum_size, &st.peer_public_keys)
                     || valid_peer_votes < st.quorum_size
                     || payload.view != fin_cert.view
                 {
@@ -2411,7 +2431,7 @@ impl NetworkedValidatorNode {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 };
-                if !receipt.verify() || &receipt.vote_a.public_key != expected_pk {
+                if !receipt.verify(&st.peer_public_keys) || &receipt.vote_a.public_key != expected_pk {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 }
@@ -2514,7 +2534,7 @@ impl NetworkedValidatorNode {
                 vote_a: existing.clone(),
                 vote_b: vote.clone(),
             };
-            if receipt.verify() {
+            if receipt.verify(&st.peer_public_keys) {
                 st.slashed_validators.insert(vote.voter_id);
                 st.proposals
                     .retain(|_, (p, _)| p.leader_vote.voter_id != vote.voter_id);
@@ -2568,7 +2588,7 @@ impl NetworkedValidatorNode {
                 view,
                 votes: skip_votes,
             };
-            if cert.verify(st.quorum_size) {
+            if cert.verify(st.quorum_size, &st.peer_public_keys) {
                 if !st.skip_certs.iter().any(|c| c.view == view) {
                     let _ = st.wal.append_entry(WalEntry::SkipCertified(cert.clone()));
                     st.skip_certs.push(cert.clone());
@@ -2618,7 +2638,7 @@ impl NetworkedValidatorNode {
                 block_hash,
                 votes: fin_votes,
             };
-            if fin_cert.verify(st.quorum_size) {
+            if fin_cert.verify(st.quorum_size, &st.peer_public_keys) {
                 Self::apply_finalized_block(st, Some(prop_cert), fin_cert.clone(), payload.clone());
                 if st.broadcast_fin_views.insert(view) {
                     return Some(ConsensusNetMessage::FinalizationCertificate(
@@ -3543,6 +3563,53 @@ impl SimplexCluster {
         (0..self.nodes.len())
             .filter(|id| !slashed.contains(id))
             .collect()
+    }
+
+    /// Return the ordered 32-byte Ed25519 committee public keys for all validators in this cluster.
+    pub fn committee_pks(&self) -> Vec<[u8; 32]> {
+        self.nodes.iter().map(|n| n.keypair.public_key).collect()
+    }
+
+    /// Execute an `Epistemic` verifiable race swarm round (`Obend.Consensus.Epistemic.selectWinner`)
+    /// over `SimplexCluster` + `DurableNodeWal`:
+    /// 1. Selects the order-insensitive, frontrunning-resistant winner via `select_epistemic_winner`.
+    /// 2. Stages the winning candidate's `VaultTurn` on `slot_id` and finalizes a `Simplex` BFT block.
+    /// 3. Journals and exposes the winning dispatch effect in the leader's `DurableNodeWal` (`expose_once`).
+    pub fn run_epistemic_swarm_round<C: VerifiableRaceCandidate>(
+        &mut self,
+        slot_id: u64,
+        candidates: &[C],
+        ctx: &C::Context,
+    ) -> Result<(C, FinalizedBlockRecord, OutboxReceiptId), NodeError> {
+        let winner = select_epistemic_winner(candidates, ctx).ok_or_else(|| {
+            NodeError::ConsensusVerification(
+                "no valid candidate in epistemic swarm race passed judge verification".to_string(),
+            )
+        })?;
+        let turn = winner.to_vault_turn(slot_id);
+        self.stage_contended_or_inflight_turn(turn.clone())?;
+        let block = self.run_simplex_block()?;
+
+        let honest_ids = self.honest_validator_ids();
+        let leader_id = *honest_ids.first().ok_or_else(|| {
+            NodeError::ConsensusVerification("no honest validators available".to_string())
+        })?;
+        let outbox_id = self.nodes[leader_id]
+            .submit_dispatch_effect(turn, None)
+            .map_err(|e| {
+                NodeError::ConsensusVerification(format!(
+                    "DurableNodeWal submit_dispatch_effect failed: {e}"
+                ))
+            })?;
+        self.nodes[leader_id]
+            .expose_effect(outbox_id.0)
+            .map_err(|e| {
+                NodeError::ConsensusVerification(format!(
+                    "DurableNodeWal expose_effect failed: {e}"
+                ))
+            })?;
+
+        Ok((winner, block, outbox_id))
     }
 }
 

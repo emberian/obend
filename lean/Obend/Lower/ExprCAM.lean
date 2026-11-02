@@ -1316,7 +1316,370 @@ theorem reconstructFromHwImage_intern_roundtrip :
       rw [recS2, hsym2]
       rfl
 
-/-! ## 5. Live `silicon-check` Ingestion from Host `Lean.ConstantInfo` / `Lean.Expr` (`WS 24`) -/
+/-! ## 5. Enriched Hardware CAM (`PackedNodeWord`, `HwExprCAM`) & 1-Cycle Handle-Level Substitution (`hwCamInstantiateAt`) -/
+
+/--Metavariable FVar ID threshold matching `Obend.Lower.MetaUnify.mvarIdOffset` (`1000000`). -/
+def hwCamMVarOffset : Nat := 1000000
+
+/-- Enriched 64-bit Hardware CAM Node Word (`PackedNodeWord`):
+Augments the structural child handles `(tag, h0, h1, h2, symIdx)` with the hardware summary bit-flags
+required by Zone 1 (`hasLooseBVar`, `maxLooseBVar`) and Zone 2 (`hasFVar`, `hasMVar` = Bit 58):
+* `hasLooseBVar`: `true` iff any loose `.bvar` escapes this subtree (`Bit 59`),
+* `hasMVar`: `true` iff any metavariable occurs in this subtree (`Bit 58`),
+* `hasFVar`: `true` iff any free variable occurs in this subtree (`Bit 57`),
+* `maxLooseBVar`: `0` if closed, else `1 + max_loose_bvar_idx`. -/
+structure PackedNodeWord where
+  tag          : Nat
+  h0           : Nat
+  h1           : Nat
+  h2           : Nat := 0
+  symIdx       : Nat := 0
+  hasLooseBVar : Bool := false
+  hasFVar      : Bool := false
+  hasMVar      : Bool := false
+  maxLooseBVar : Nat := 0
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Project a `PackedNodeWord` to its core `HwCamNodeWord`. -/
+def PackedNodeWord.toHwCamNodeWord (w : PackedNodeWord) : HwCamNodeWord :=
+  { tag := w.tag, h0 := w.h0, h1 := w.h1, h2 := w.h2, symIdx := w.symIdx }
+
+/-- Hardware recursor $\iota$-reduction rule entry in `HwExprCAM`. -/
+structure HwCamRecRuleEntry where
+  recName   : KName
+  ctorName  : KName
+  numParams : Nat
+  numFields : Nat
+  rhsHandle : Nat
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Hardware constant table entry in `HwExprCAM` for 1-cycle $\delta$-unfolding and constructor lookup. -/
+structure HwCamConstEntry where
+  name        : KName
+  symIdx      : Nat
+  typeHandle  : Nat
+  valHandle?  : Option Nat := none
+  isCtor      : Bool := false
+  inductName? : Option KName := none
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Complete Hardware Hash-Consed DAG / CAM State (`HwExprCAM`) for the 4-Zone Spatial Silicon Elaborator:
+Stores `PackedNodeWord` entries, symbol entries, constant entries, and recursor rules with zero
+`KExpr` AST side-channel. -/
+structure HwExprCAM where
+  nodes    : List PackedNodeWord := []
+  symbols  : List HwCamSymbolEntry := []
+  consts   : List HwCamConstEntry := []
+  recRules : List HwCamRecRuleEntry := []
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Empty `HwExprCAM`. -/
+def HwExprCAM.empty : HwExprCAM := {}
+
+/-- Allocate or reuse a symbol entry in `cam.symbols`. -/
+def allocPackedSymbol (s : HwCamSymbolEntry) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  match findElemIdx? cam.symbols s with
+  | some idx => (idx, cam)
+  | none =>
+    let idx := cam.symbols.length
+    (idx, { cam with symbols := cam.symbols ++ [s] })
+
+/-- Allocate or reuse a `PackedNodeWord` in `cam.nodes` via associative CAM lookup. -/
+def allocPackedNode (w : PackedNodeWord) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  match findElemIdx? cam.nodes w with
+  | some h => (h, cam)
+  | none =>
+    let h := cam.nodes.length
+    (h, { cam with nodes := cam.nodes ++ [w] })
+
+/-- Look up a `PackedNodeWord` by handle (defaulting to a closed dummy word if out of bounds). -/
+def getPackedNode (cam : HwExprCAM) (h : Nat) : PackedNodeWord :=
+  cam.nodes[h]?.getD { tag := 99, h0 := 0, h1 := 0 }
+
+/-- Construct and intern an `.app` node from two existing handles `(hf, ha)`, computing its summary
+bit-flags in $O(1)$ from the child words `(wf, wa)`. -/
+def mkHwCamApp (hf ha : Nat) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let wf := getPackedNode cam hf
+  let wa := getPackedNode cam ha
+  let maxB := Nat.max wf.maxLooseBVar wa.maxLooseBVar
+  allocPackedNode
+    { tag          := 4
+    , h0           := hf
+    , h1           := ha
+    , h2           := 0
+    , symIdx       := 0
+    , hasLooseBVar := decide (maxB > 0)
+    , hasFVar      := wf.hasFVar || wa.hasFVar
+    , hasMVar      := wf.hasMVar || wa.hasMVar
+    , maxLooseBVar := maxB }
+    cam
+
+/-- Construct and intern a `.lam` (`tag = 5`) or `.forallE` (`tag = 6`) binder node from `(hd, hb)`,
+decrementing the body's `maxLooseBVar` across the binder in $O(1)$. -/
+def mkHwCamBinder (tag hd hb : Nat) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let wd := getPackedNode cam hd
+  let wb := getPackedNode cam hb
+  let maxB := Nat.max wd.maxLooseBVar (wb.maxLooseBVar - 1)
+  allocPackedNode
+    { tag          := tag
+    , h0           := hd
+    , h1           := hb
+    , h2           := 0
+    , symIdx       := 0
+    , hasLooseBVar := decide (maxB > 0)
+    , hasFVar      := wd.hasFVar || wb.hasFVar
+    , hasMVar      := wd.hasMVar || wb.hasMVar
+    , maxLooseBVar := maxB }
+    cam
+
+/-- Construct and intern a `.letE` (`tag = 7`) node from `(ht, hv, hb)`, decrementing `hb`'s
+`maxLooseBVar` across the let-binder in $O(1)$. -/
+def mkHwCamLetE (ht hv hb : Nat) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let wt := getPackedNode cam ht
+  let wv := getPackedNode cam hv
+  let wb := getPackedNode cam hb
+  let maxB := Nat.max (Nat.max wt.maxLooseBVar wv.maxLooseBVar) (wb.maxLooseBVar - 1)
+  allocPackedNode
+    { tag          := 7
+    , h0           := ht
+    , h1           := hv
+    , h2           := hb
+    , symIdx       := 0
+    , hasLooseBVar := decide (maxB > 0)
+    , hasFVar      := wt.hasFVar || wv.hasFVar || wb.hasFVar
+    , hasMVar      := wt.hasMVar || wv.hasMVar || wb.hasMVar
+    , maxLooseBVar := maxB }
+    cam
+
+/-- Construct and intern a `.proj` (`tag = 9`) node from `(hs, symIdx)`. -/
+def mkHwCamProj (hs symIdx : Nat) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let ws := getPackedNode cam hs
+  allocPackedNode
+    { tag          := 9
+    , h0           := hs
+    , h1           := 0
+    , h2           := 0
+    , symIdx       := symIdx
+    , hasLooseBVar := ws.hasLooseBVar
+    , hasFVar      := ws.hasFVar
+    , hasMVar      := ws.hasMVar
+    , maxLooseBVar := ws.maxLooseBVar }
+    cam
+
+/-- Intern a `KExpr` into `HwExprCAM`, populating `hasLooseBVar`, `hasFVar`, `hasMVar`, and
+`maxLooseBVar` bottom-up in $O(1)$ per node. -/
+def internToHwExprCAM : KExpr → HwExprCAM → Nat × HwExprCAM
+  | .bvar idx, cam =>
+    allocPackedNode
+      { tag := 0, h0 := idx, h1 := 0, hasLooseBVar := true, maxLooseBVar := idx + 1 }
+      cam
+  | .fvar id, cam =>
+    let isMVar := decide (id >= hwCamMVarOffset)
+    allocPackedNode
+      { tag := 1, h0 := id, h1 := 0, hasFVar := !isMVar, hasMVar := isMVar }
+      cam
+  | .sort u, cam =>
+    let (sIdx, cam1) := allocPackedSymbol (.sortEntry u) cam
+    allocPackedNode { tag := 2, h0 := 0, h1 := 0, symIdx := sIdx } cam1
+  | .const n us, cam =>
+    let (sIdx, cam1) := allocPackedSymbol (.constEntry n us) cam
+    allocPackedNode { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } cam1
+  | .app f a, cam =>
+    let (hf, cam1) := internToHwExprCAM f cam
+    let (ha, cam2) := internToHwExprCAM a cam1
+    mkHwCamApp hf ha cam2
+  | .lam d b, cam =>
+    let (hd, cam1) := internToHwExprCAM d cam
+    let (hb, cam2) := internToHwExprCAM b cam1
+    mkHwCamBinder 5 hd hb cam2
+  | .forallE d b, cam =>
+    let (hd, cam1) := internToHwExprCAM d cam
+    let (hb, cam2) := internToHwExprCAM b cam1
+    mkHwCamBinder 6 hd hb cam2
+  | .letE t v b, cam =>
+    let (ht, cam1) := internToHwExprCAM t cam
+    let (hv, cam2) := internToHwExprCAM v cam1
+    let (hb, cam3) := internToHwExprCAM b cam2
+    mkHwCamLetE ht hv hb cam3
+  | .lit l, cam =>
+    let (sIdx, cam1) := allocPackedSymbol (.litEntry l) cam
+    allocPackedNode { tag := 8, h0 := 0, h1 := 0, symIdx := sIdx } cam1
+  | .proj structName idx s, cam =>
+    let (hs, cam1) := internToHwExprCAM s cam
+    let (sIdx, cam2) := allocPackedSymbol (.projEntry structName idx) cam1
+    mkHwCamProj hs sIdx cam2
+
+/-- Reconstruct a `KExpr` from a handle `h` in `HwExprCAM` (used only for specification/readout). -/
+def reconstructFromHwExprCAM : Nat → HwExprCAM → Nat → Option KExpr
+  | 0, _, _ => none
+  | fuel + 1, cam, h =>
+    match cam.nodes[h]? with
+    | none => none
+    | some w =>
+      if w.tag == 0 then some (.bvar w.h0)
+      else if w.tag == 1 then some (.fvar w.h0)
+      else if w.tag == 2 then
+        match cam.symbols[w.symIdx]? with
+        | some (.sortEntry u) => some (.sort u)
+        | _ => none
+      else if w.tag == 3 then
+        match cam.symbols[w.symIdx]? with
+        | some (.constEntry n us) => some (.const n us)
+        | _ => none
+      else if w.tag == 4 then
+        match reconstructFromHwExprCAM fuel cam w.h0, reconstructFromHwExprCAM fuel cam w.h1 with
+        | some f, some a => some (.app f a)
+        | _, _ => none
+      else if w.tag == 5 then
+        match reconstructFromHwExprCAM fuel cam w.h0, reconstructFromHwExprCAM fuel cam w.h1 with
+        | some d, some b => some (.lam d b)
+        | _, _ => none
+      else if w.tag == 6 then
+        match reconstructFromHwExprCAM fuel cam w.h0, reconstructFromHwExprCAM fuel cam w.h1 with
+        | some d, some b => some (.forallE d b)
+        | _, _ => none
+      else if w.tag == 7 then
+        match reconstructFromHwExprCAM fuel cam w.h0,
+              reconstructFromHwExprCAM fuel cam w.h1,
+              reconstructFromHwExprCAM fuel cam w.h2 with
+        | some t, some v, some b => some (.letE t v b)
+        | _, _, _ => none
+      else if w.tag == 8 then
+        match cam.symbols[w.symIdx]? with
+        | some (.litEntry l) => some (.lit l)
+        | _ => none
+      else if w.tag == 9 then
+        match reconstructFromHwExprCAM fuel cam w.h0, cam.symbols[w.symIdx]? with
+        | some s, some (.projEntry structName idx) => some (.proj structName idx s)
+        | _, _ => none
+      else none
+
+/-- Pure handle-level de Bruijn lifting (`hwCamLiftLooseBVars`) over `HwExprCAM` with the
+**1-cycle $O(1)$ closed-term bypass** when `w.hasLooseBVar = false` (or `w.maxLooseBVar ≤ cutoff`).
+Never reconstructs `KExpr` ASTs! -/
+def hwCamLiftLooseBVars : Nat → Nat → Nat → Nat → HwExprCAM → Nat × HwExprCAM
+  | 0, h, _, _, cam => (h, cam)
+  | fuel + 1, h, cutoff, shift, cam =>
+    match cam.nodes[h]? with
+    | none => (h, cam)
+    | some w =>
+      if !w.hasLooseBVar || shift == 0 || w.maxLooseBVar <= cutoff then
+        (h, cam)
+      else if w.tag == 0 then
+        if w.h0 >= cutoff then
+          allocPackedNode
+            { w with h0 := w.h0 + shift, hasLooseBVar := true, maxLooseBVar := w.h0 + shift + 1 }
+            cam
+        else (h, cam)
+      else if w.tag == 4 then
+        let (hf', cam1) := hwCamLiftLooseBVars fuel w.h0 cutoff shift cam
+        let (ha', cam2) := hwCamLiftLooseBVars fuel w.h1 cutoff shift cam1
+        if hf' == w.h0 && ha' == w.h1 then (h, cam2) else mkHwCamApp hf' ha' cam2
+      else if w.tag == 5 || w.tag == 6 then
+        let (hd', cam1) := hwCamLiftLooseBVars fuel w.h0 cutoff shift cam
+        let (hb', cam2) := hwCamLiftLooseBVars fuel w.h1 (cutoff + 1) shift cam1
+        if hd' == w.h0 && hb' == w.h1 then (h, cam2) else mkHwCamBinder w.tag hd' hb' cam2
+      else if w.tag == 7 then
+        let (ht', cam1) := hwCamLiftLooseBVars fuel w.h0 cutoff shift cam
+        let (hv', cam2) := hwCamLiftLooseBVars fuel w.h1 cutoff shift cam1
+        let (hb', cam3) := hwCamLiftLooseBVars fuel w.h2 (cutoff + 1) shift cam2
+        if ht' == w.h0 && hv' == w.h1 && hb' == w.h2 then (h, cam3)
+        else mkHwCamLetE ht' hv' hb' cam3
+      else if w.tag == 9 then
+        let (hs', cam1) := hwCamLiftLooseBVars fuel w.h0 cutoff shift cam
+        if hs' == w.h0 then (h, cam1) else mkHwCamProj hs' w.symIdx cam1
+      else
+        (h, cam)
+
+/-- Pure handle-level de Bruijn instantiation (`hwCamInstantiateAt`) over `HwExprCAM` with the
+**1-cycle $O(1)$ closed-term bypass** when `w.hasLooseBVar = false` (or `w.maxLooseBVar ≤ depth`).
+Never calls `uninternExpr` or `reconstructFromHwExprCAM`! -/
+def hwCamInstantiateAt : Nat → Nat → Nat → Nat → HwExprCAM → Nat × HwExprCAM
+  | 0, hBody, _, _, cam => (hBody, cam)
+  | fuel + 1, hBody, depth, hArg, cam =>
+    match cam.nodes[hBody]? with
+    | none => (hBody, cam)
+    | some w =>
+      if !w.hasLooseBVar || w.maxLooseBVar <= depth then
+        (hBody, cam)
+      else if w.tag == 0 then
+        if w.h0 == depth then
+          hwCamLiftLooseBVars fuel hArg 0 depth cam
+        else if w.h0 > depth then
+          allocPackedNode
+            { w with h0 := w.h0 - 1, hasLooseBVar := true, maxLooseBVar := w.h0 }
+            cam
+        else
+          (hBody, cam)
+      else if w.tag == 4 then
+        let (hf', cam1) := hwCamInstantiateAt fuel w.h0 depth hArg cam
+        let (ha', cam2) := hwCamInstantiateAt fuel w.h1 depth hArg cam1
+        if hf' == w.h0 && ha' == w.h1 then (hBody, cam2) else mkHwCamApp hf' ha' cam2
+      else if w.tag == 5 || w.tag == 6 then
+        let (hd', cam1) := hwCamInstantiateAt fuel w.h0 depth hArg cam
+        let (hb', cam2) := hwCamInstantiateAt fuel w.h1 (depth + 1) hArg cam1
+        if hd' == w.h0 && hb' == w.h1 then (hBody, cam2) else mkHwCamBinder w.tag hd' hb' cam2
+      else if w.tag == 7 then
+        let (ht', cam1) := hwCamInstantiateAt fuel w.h0 depth hArg cam
+        let (hv', cam2) := hwCamInstantiateAt fuel w.h1 depth hArg cam1
+        let (hb', cam3) := hwCamInstantiateAt fuel w.h2 (depth + 1) hArg cam2
+        if ht' == w.h0 && hv' == w.h1 && hb' == w.h2 then (hBody, cam3)
+        else mkHwCamLetE ht' hv' hb' cam3
+      else if w.tag == 9 then
+        let (hs', cam1) := hwCamInstantiateAt fuel w.h0 depth hArg cam
+        if hs' == w.h0 then (hBody, cam1) else mkHwCamProj hs' w.symIdx cam1
+      else
+        (hBody, cam)
+
+/-- Instantiate `.bvar 0` in `hBody` with `hArg` purely at the `HwExprCAM` handle level. -/
+def hwCamInstantiate1 (fuel hBody hArg : Nat) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  hwCamInstantiateAt fuel hBody 0 hArg cam
+
+/-- **1-Cycle Closed-Term Bypass Theorem (`hwCamInstantiateAt_closed_bypass`)**:
+Whenever a node word `w` at handle `hBody` has `w.hasLooseBVar = false` (Bit 59 = `0`),
+`hwCamInstantiateAt` and `hwCamLiftLooseBVars` return `(hBody, cam)` immediately in 1 cycle
+without inspecting children or allocating any CAM nodes! -/
+theorem hwCamInstantiateAt_closed_bypass
+    (fuel hBody depth hArg : Nat) (cam : HwExprCAM) (w : PackedNodeWord)
+    (hnode : cam.nodes[hBody]? = some w)
+    (hclosed : w.hasLooseBVar = false) :
+    hwCamInstantiateAt (fuel + 1) hBody depth hArg cam = (hBody, cam) ∧
+    hwCamLiftLooseBVars (fuel + 1) hBody depth hArg cam = (hBody, cam) := by
+  simp [hwCamInstantiateAt, hwCamLiftLooseBVars, hnode, hclosed]
+
+/-- **Handle-Level CAM Substitution Soundness Theorem (`hwCamInstantiateAt_sound`)**:
+1. Universal 1-cycle closed-term bypass (`hwCamInstantiateAt_closed_bypass`),
+2. Concrete closed subtree bypass: interning a deep closed expression `sharedSubtermExpr` sets
+   `w.hasLooseBVar = false` (`maxLooseBVar = 0`), and `hwCamInstantiate1` returns the identical
+   handle and CAM state (`cam'.nodes.length = cam.nodes.length`),
+3. Open `.app` and nested `.lam` instantiation: substituting `42` for `.bvar 0` in
+   `.app (.const "idNat" []) (.bvar 0)` and in `.lam Nat (.app (.bvar 1) (.bvar 0))` purely on
+   `HwExprCAM` handles matches `KExpr.instantiate1` identically upon reconstruction! -/
+theorem hwCamInstantiateAt_sound :
+    (∀ (fuel hBody depth hArg : Nat) (cam : HwExprCAM) (w : PackedNodeWord),
+      cam.nodes[hBody]? = some w → w.hasLooseBVar = false →
+      hwCamInstantiateAt (fuel + 1) hBody depth hArg cam = (hBody, cam)) ∧
+    (let (hClosed, cam1) := internToHwExprCAM sharedSubtermExpr HwExprCAM.empty
+     let (hArg, cam2) := internToHwExprCAM (.lit (.natVal 99)) cam1
+     (getPackedNode cam2 hClosed).hasLooseBVar = false ∧
+     hwCamInstantiate1 16 hClosed hArg cam2 = (hClosed, cam2)) ∧
+    (let openBody : KExpr := .app (.const (KName.mkSimple "idNat") []) (.bvar 0)
+     let arg42 : KExpr := .lit (.natVal 42)
+     let (hBody, cam1) := internToHwExprCAM openBody HwExprCAM.empty
+     let (hArg, cam2) := internToHwExprCAM arg42 cam1
+     let (hRes, cam3) := hwCamInstantiate1 16 hBody hArg cam2
+     reconstructFromHwExprCAM 16 cam3 hRes = some (KExpr.instantiate1 openBody arg42)) ∧
+    (let nestedBody : KExpr := .lam kNatConst (.app (.bvar 1) (.bvar 0))
+     let openArg : KExpr := .bvar 0
+     let (hBody, cam1) := internToHwExprCAM nestedBody HwExprCAM.empty
+     let (hArg, cam2) := internToHwExprCAM openArg cam1
+     let (hRes, cam3) := hwCamInstantiate1 16 hBody hArg cam2
+     reconstructFromHwExprCAM 16 cam3 hRes = some (KExpr.instantiate1 nestedBody openArg)) := by
+  refine ⟨fun fuel hBody depth hArg cam w hnode hclosed =>
+            (hwCamInstantiateAt_closed_bypass fuel hBody depth hArg cam w hnode hclosed).1,
+          ⟨rfl, rfl⟩, rfl, rfl⟩
+
+/-! ## 6. Live `silicon-check` Ingestion from Host `Lean.ConstantInfo` / `Lean.Expr` (`WS 24`) -/
 
 /-- Extract a self-hosted `KConstInfo` from a live host `Lean.ConstantInfo` via `fromLeanName` and `fromLeanExpr`. -/
 def extractLeanConstInfo? : Lean.ConstantInfo → Option KConstInfo

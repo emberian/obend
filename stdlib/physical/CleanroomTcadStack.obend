@@ -1,0 +1,88 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/CleanroomTcadStack.obend`):
+# Cleanroom-to-TCAD Semiconductor Wafer Stack (`PlanarBulkMosfetBase` -> `HighKMetalGateFinFetUpgrade`)
+# and Q3 Hypercube Krawtchouk Photonic Coupler Array (`PlanarWaveguideBase` -> `KrawtchoukCouplingOverride`).
+
+record CleanroomTcadStack:
+  oxideEotPicometers() -> Nat
+  vthMilliV() -> Nat
+  drainCurrentUa(overdriveMilliV: Nat) -> Nat
+  gateDelayPs(fanout: Nat) -> Nat
+
+spec PlanarBulkMosfetBase for CleanroomTcadStack:
+  requires oxideEotPicometers() -> Nat
+  requires vthMilliV() -> Nat
+  def oxideEotPicometers() -> Nat:
+    1200n
+  def vthMilliV() -> Nat:
+    400n
+  def drainCurrentUa(overdriveMilliV: Nat) -> Nat:
+    overdriveMilliV * 5n + self.vthMilliV
+  def gateDelayPs(fanout: Nat) -> Nat:
+    fanout * 8n + 20n
+  claim drain_current_open_recursion(overdriveMilliV: Nat): self.drainCurrentUa(overdriveMilliV) == overdriveMilliV * 5n + self.vthMilliV
+
+spec HighKMetalGateFinFetUpgrade for CleanroomTcadStack:
+  requires gateDelayPs(fanout: Nat) -> Nat
+  def oxideEotPicometers() -> Nat:
+    700n
+  def vthMilliV() -> Nat:
+    250n
+  def gateDelayPs(fanout: Nat) -> Nat:
+    super.gateDelayPs(fanout) + 4n
+
+def seedTcadStack() -> CleanroomTcadStack:
+  {oxideEotPicometers: 0n, vthMilliV: 0n, drainCurrentUa: fn(v: Nat) -> Nat: 0n, gateDelayPs: fn(f: Nat) -> Nat: 0n}
+
+def planarBulkTcadStack() -> CleanroomTcadStack:
+  fix(PlanarBulkMosfetBase, seedTcadStack())
+
+def cleanroomTcadStack() -> CleanroomTcadStack:
+  fix(compose(PlanarBulkMosfetBase, HighKMetalGateFinFetUpgrade), seedTcadStack())
+
+def tcadDrainCurrentAt200mV() -> Nat:
+  cleanroomTcadStack().drainCurrentUa(200n)
+
+def tcadGateDelayAtFanout4() -> Nat:
+  cleanroomTcadStack().gateDelayPs(4n)
+
+record Q3PhotonicCouplerArray:
+  couplingWeight() -> Nat
+  hypercubeDim() -> Nat
+  transferredPowerMw(pInMw: Nat) -> Nat
+  krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat
+
+spec PlanarWaveguideBase for Q3PhotonicCouplerArray:
+  requires couplingWeight() -> Nat
+  requires hypercubeDim() -> Nat
+  def couplingWeight() -> Nat:
+    2n
+  def hypercubeDim() -> Nat:
+    3n
+  def transferredPowerMw(pInMw: Nat) -> Nat:
+    pInMw * self.couplingWeight + self.hypercubeDim
+  def krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat:
+    modeIdx * 15n
+  claim transferred_power_open_recursion(pInMw: Nat): self.transferredPowerMw(pInMw) == pInMw * self.couplingWeight + self.hypercubeDim
+
+spec KrawtchoukCouplingOverride for Q3PhotonicCouplerArray:
+  requires krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat
+  def couplingWeight() -> Nat:
+    7n
+  def krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat:
+    super.krawtchoukPhaseShiftMrad(modeIdx) + 45n
+
+def seedPhotonic() -> Q3PhotonicCouplerArray:
+  {couplingWeight: 0n, hypercubeDim: 0n, transferredPowerMw: fn(p: Nat) -> Nat: 0n, krawtchoukPhaseShiftMrad: fn(m: Nat) -> Nat: 0n}
+
+def planarWaveguideCoupler() -> Q3PhotonicCouplerArray:
+  fix(PlanarWaveguideBase, seedPhotonic())
+
+def q3KrawtchoukArray() -> Q3PhotonicCouplerArray:
+  fix(compose(PlanarWaveguideBase, KrawtchoukCouplingOverride), seedPhotonic())
+
+def q3PowerAt20Mw() -> Nat:
+  q3KrawtchoukArray().transferredPowerMw(20n)
+
+def q3PhaseAtMode3() -> Nat:
+  q3KrawtchoukArray().krawtchoukPhaseShiftMrad(3n)

@@ -9,6 +9,11 @@
 
 use obend_ffi::error::ObendError;
 use obend_ffi::session::ObendSession;
+pub use obend_sandbox::grain::{
+    compile_policy_to_grain_prog, eval_policy_grain_prog, grain_policy_fuel_budget,
+    run_policy_grain_instrs, step_policy_grain_instr, PolicyGrainInstr, PolicyGrainVmState,
+    PolicyTableDfa,
+};
 use serde::{Deserialize, Serialize};
 
 pub mod net;
@@ -828,7 +833,7 @@ impl SignedSimplexVote {
 
     /// Verify both the vote's signature and that `self.public_key` matches the pinned
     /// committee registry entry `committee_pks[self.voter_id]`.
-    pub fn verify_with_committee(&self, committee_pks: &[[u8; 32]]) -> bool {
+    pub fn verify(&self, committee_pks: &[[u8; 32]]) -> bool {
         let Some(expected_pk) = committee_pks.get(self.voter_id) else {
             return false;
         };
@@ -871,11 +876,11 @@ impl PropCert {
         }
     }
 
-    pub fn verify(&self, total_parties: usize) -> bool {
-        if total_parties == 0 {
+    pub fn verify(&self, committee_pks: &[[u8; 32]]) -> bool {
+        if committee_pks.is_empty() {
             return false;
         }
-        let expected_leader = ((self.view.saturating_sub(1)) as usize) % total_parties;
+        let expected_leader = ((self.view.saturating_sub(1)) as usize) % committee_pks.len();
         let expected_hash = cshake256_domain(
             b"obend.simplex.block",
             &[
@@ -891,11 +896,7 @@ impl PropCert {
             && self.leader_vote.kind == SimplexVoteKind::Propose
             && self.block_hash == expected_hash
             && self.leader_vote.block_hash == expected_hash
-            && self.leader_vote.verify_signature()
-    }
-
-    pub fn verify_with_committee(&self, committee_pks: &[[u8; 32]]) -> bool {
-        self.verify(committee_pks.len()) && self.leader_vote.verify_with_committee(committee_pks)
+            && self.leader_vote.verify(committee_pks)
     }
 }
 
@@ -907,29 +908,23 @@ pub struct SkipCert {
 }
 
 impl SkipCert {
-    pub fn verify(&self, quorum_size: usize) -> bool {
+    pub fn verify(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
+        if self.votes.len() > committee_pks.len() {
+            return false;
+        }
         let mut seen = Vec::new();
         for v in &self.votes {
             if v.view != self.view
                 || v.kind != SimplexVoteKind::Skip
                 || v.block_hash != [0u8; 32]
                 || seen.contains(&v.voter_id)
-                || !v.verify_signature()
+                || !v.verify(committee_pks)
             {
                 return false;
             }
             seen.push(v.voter_id);
         }
         seen.len() >= quorum_size
-    }
-
-    pub fn verify_with_committee(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
-        self.verify(quorum_size)
-            && self.votes.len() <= committee_pks.len()
-            && self
-                .votes
-                .iter()
-                .all(|v| v.verify_with_committee(committee_pks))
     }
 }
 
@@ -942,29 +937,23 @@ pub struct FinCert {
 }
 
 impl FinCert {
-    pub fn verify(&self, quorum_size: usize) -> bool {
+    pub fn verify(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
+        if self.votes.len() > committee_pks.len() {
+            return false;
+        }
         let mut seen = Vec::new();
         for v in &self.votes {
             if v.view != self.view
                 || v.kind != SimplexVoteKind::Finalize
                 || v.block_hash != self.block_hash
                 || seen.contains(&v.voter_id)
-                || !v.verify_signature()
+                || !v.verify(committee_pks)
             {
                 return false;
             }
             seen.push(v.voter_id);
         }
         seen.len() >= quorum_size
-    }
-
-    pub fn verify_with_committee(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
-        self.verify(quorum_size)
-            && self.votes.len() <= committee_pks.len()
-            && self
-                .votes
-                .iter()
-                .all(|v| v.verify_with_committee(committee_pks))
     }
 }
 
@@ -978,8 +967,8 @@ pub struct EquivocationSlashReceipt {
 }
 
 impl EquivocationSlashReceipt {
-    /// Detect accountable equivocation between two signed votes and verify both signatures.
-    pub fn verify(&self) -> bool {
+    /// Detect accountable equivocation between two signed votes and verify both signatures against `committee_pks`.
+    pub fn verify(&self, committee_pks: &[[u8; 32]]) -> bool {
         self.vote_a.voter_id == self.offender_id
             && self.vote_b.voter_id == self.offender_id
             && self.vote_a.public_key == self.vote_b.public_key
@@ -987,14 +976,8 @@ impl EquivocationSlashReceipt {
             && self.vote_b.view == self.view
             && self.vote_a.kind == self.vote_b.kind
             && self.vote_a.block_hash != self.vote_b.block_hash
-            && self.vote_a.verify_signature()
-            && self.vote_b.verify_signature()
-    }
-
-    pub fn verify_with_committee(&self, committee_pks: &[[u8; 32]]) -> bool {
-        self.verify()
-            && self.vote_a.verify_with_committee(committee_pks)
-            && self.vote_b.verify_with_committee(committee_pks)
+            && self.vote_a.verify(committee_pks)
+            && self.vote_b.verify(committee_pks)
     }
 }
 
@@ -1041,8 +1024,47 @@ impl VaultCellRecord {
         self.required.iter().all(|req| held.contains(req))
     }
 
+    pub fn read_cap(&self) -> u8 {
+        if self.required.contains(&IpcAuth::Read) {
+            1
+        } else {
+            0
+        }
+    }
+
+    pub fn write_cap(&self) -> u8 {
+        if self.required.contains(&IpcAuth::Write) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Metadata-bound cell commitment binding `(id, read_cap, write_cap, salt, content)`
+    /// matching `Obend.Vault.Projection.cellBlindMetadataBound` (`Projection.lean`).
+    pub fn commitment_for(
+        id: u64,
+        read_cap: u8,
+        write_cap: u8,
+        salt: &[u8; 32],
+        content: &[u8],
+    ) -> [u8; 32] {
+        let mut meta = [0u8; 10];
+        meta[..8].copy_from_slice(&id.to_be_bytes());
+        meta[8] = read_cap;
+        meta[9] = write_cap;
+        let meta_digest = cshake256_domain(b"obend.vault.cell.meta", &meta, salt);
+        cshake256_domain(b"obend.vault.cell.blind", &meta_digest, content)
+    }
+
     pub fn commitment(&self) -> [u8; 32] {
-        cshake256_domain(b"obend.vault.cell.blind", &self.salt, &self.content)
+        Self::commitment_for(
+            self.id,
+            self.read_cap(),
+            self.write_cap(),
+            &self.salt,
+            &self.content,
+        )
     }
 
     pub fn leaf_hash(&self) -> [u8; 32] {
@@ -1070,9 +1092,23 @@ impl ProjectedCellView {
     pub fn leaf_hash(&self) -> [u8; 32] {
         match self {
             ProjectedCellView::Visible {
-                id, salt, content, ..
+                id,
+                required,
+                salt,
+                content,
             } => {
-                let comm = cshake256_domain(b"obend.vault.cell.blind", salt, content);
+                let read_cap = if required.contains(&IpcAuth::Read) {
+                    1
+                } else {
+                    0
+                };
+                let write_cap = if required.contains(&IpcAuth::Write) {
+                    1
+                } else {
+                    0
+                };
+                let comm =
+                    VaultCellRecord::commitment_for(*id, read_cap, write_cap, salt, content);
                 cshake256_domain(b"obend.vault.leaf", &id.to_be_bytes(), &comm)
             }
             ProjectedCellView::Blinded { id, commitment } => {
@@ -1133,6 +1169,8 @@ impl BlindedVaultMultiProof {
         if !self.verify_stranger() {
             return Ok(false);
         }
+        let tid = session.propose_turn(&self.unredacted_root)?;
+        session.commit_turn(&tid)?;
         session.verify_receipt(&self.unredacted_root)
     }
 }
@@ -1582,6 +1620,8 @@ impl DrexClearingCertificate {
         let cert_json = serde_json::to_vec(self).unwrap_or_default();
         let tid = session.propose_turn(&cert_json)?;
         session.commit_turn(&tid)?;
+        let digest_tid = session.propose_turn(&self.digest)?;
+        session.commit_turn(&digest_tid)?;
         session.verify_receipt(&self.digest)
     }
 }
@@ -1622,28 +1662,28 @@ impl SimplexCert {
         cshake256_domain(b"obend.simplex.ffi.cert", &header, receipt_bytes)
     }
 
-    /// Verify the BFT certificate quorum/leader signatures, receipt binding, and Lean FFI receipt validity.
+    /// Verify the BFT certificate quorum/leader signatures against `committee_pks`, receipt binding, and Lean FFI receipt validity.
     pub fn verify_with_session(
         &self,
-        total_parties: usize,
+        committee_pks: &[[u8; 32]],
         quorum_size: usize,
         vault_root: &[u8; 32],
         session: &mut ObendSession,
     ) -> Result<bool, NodeError> {
-        if self.receipt_bytes.len() < 32 {
+        if self.receipt_bytes.len() < 32 || committee_pks.is_empty() {
             return Ok(false);
         }
         if let Some(prop) = &self.prop_cert {
             if prop.view != self.view
                 || prop.height != self.height
                 || prop.block_hash != self.block_hash
-                || !prop.verify(total_parties)
+                || !prop.verify(committee_pks)
             {
                 return Ok(false);
             }
         }
         if let Some(skip) = &self.skip_cert {
-            if !skip.verify(quorum_size) {
+            if !skip.verify(quorum_size, committee_pks) {
                 return Ok(false);
             }
         }
@@ -1651,7 +1691,7 @@ impl SimplexCert {
             if self.prop_cert.is_none()
                 || fin.view != self.view
                 || fin.block_hash != self.block_hash
-                || !fin.verify(quorum_size)
+                || !fin.verify(quorum_size, committee_pks)
             {
                 return Ok(false);
             }
@@ -1678,36 +1718,6 @@ impl SimplexCert {
             .verify_receipt(&self.state_digest)
             .map_err(NodeError::Ffi)?;
         Ok(ffi_receipt_ok && ffi_digest_ok)
-    }
-
-    /// Verify all embedded certificates (`prop_cert`, `skip_cert`, `fin_cert`) against the pinned `committee_pks` registry.
-    pub fn verify_with_committee(&self, quorum_size: usize, committee_pks: &[[u8; 32]]) -> bool {
-        if let Some(prop) = &self.prop_cert {
-            if prop.view != self.view
-                || prop.height != self.height
-                || prop.block_hash != self.block_hash
-                || !prop.verify_with_committee(committee_pks)
-            {
-                return false;
-            }
-        }
-        if let Some(skip) = &self.skip_cert {
-            if !skip.verify_with_committee(quorum_size, committee_pks) {
-                return false;
-            }
-        }
-        if let Some(fin) = &self.fin_cert {
-            if self.prop_cert.is_none()
-                || fin.view != self.view
-                || fin.block_hash != self.block_hash
-                || !fin.verify_with_committee(quorum_size, committee_pks)
-            {
-                return false;
-            }
-        } else if self.skip_cert.is_none() {
-            return false;
-        }
-        true
     }
 }
 
@@ -1861,7 +1871,7 @@ impl FogOfWar {
         let turn_bytes = serde_json::to_vec(turn).unwrap_or_default();
         let turn_receipt = session.propose_turn(&turn_bytes).map_err(NodeError::Ffi)?;
         session
-            .commit_turn(&turn.turn_id)
+            .commit_turn(&turn_receipt)
             .map_err(NodeError::Ffi)?;
 
         let multiproof = self.project();
@@ -1894,6 +1904,11 @@ impl FogOfWar {
             &multiproof.unredacted_root,
             &receipt_bytes,
         );
+
+        let prim_tid = session.propose_turn(&primary_digest).map_err(NodeError::Ffi)?;
+        session.commit_turn(&prim_tid).map_err(NodeError::Ffi)?;
+        let sd_tid = session.propose_turn(&state_digest).map_err(NodeError::Ffi)?;
+        session.commit_turn(&sd_tid).map_err(NodeError::Ffi)?;
 
         let verified = session
             .verify_receipt(&state_digest)
@@ -1936,6 +1951,7 @@ pub struct VerifiedNodeTransition {
     pub next_view: u64,
     pub height: u64,
     pub post_vault_root: [u8; 32],
+    pub post_vault_cells: Vec<VaultCellRecord>,
     pub simplex_cert: SimplexCert,
     pub clearing_receipt: Option<ClearingReceipt>,
     pub receipt_bytes: Vec<u8>,
@@ -1959,10 +1975,10 @@ impl VerifiedNodeTransition {
         cshake256_domain(b"obend.node.verified_transition", &left, receipt_bytes)
     }
 
-    /// Re-verify the entire transition (SimplexCert, optional ClearingReceipt, and FFI receipt bindings).
+    /// Re-verify the entire transition (SimplexCert against `committee_pks`, post_vault_cells root, optional ClearingReceipt, and FFI receipt bindings).
     pub fn verify_with_session(
         &self,
-        total_parties: usize,
+        committee_pks: &[[u8; 32]],
         quorum_size: usize,
         orders: &[LimitOrder],
         session: &mut ObendSession,
@@ -1973,8 +1989,13 @@ impl VerifiedNodeTransition {
         {
             return Ok(false);
         }
+        let post_leaves: Vec<[u8; 32]> =
+            self.post_vault_cells.iter().map(|c| c.leaf_hash()).collect();
+        if merkle_root_from_leaves(&post_leaves) != self.post_vault_root {
+            return Ok(false);
+        }
         if !self.simplex_cert.verify_with_session(
-            total_parties,
+            committee_pks,
             quorum_size,
             &self.post_vault_root,
             session,
@@ -2007,6 +2028,7 @@ pub struct SimplexState {
     pub height: u64,
     pub total_parties: usize,
     pub fault_tolerance: usize,
+    pub committee_pks: Vec<[u8; 32]>,
     pub parent_hash: [u8; 32],
     pub vault_cells: Vec<VaultCellRecord>,
     pub state_digest: [u8; 32],
@@ -2026,11 +2048,18 @@ impl SimplexState {
             height: 0,
             total_parties,
             fault_tolerance,
+            committee_pks: Vec::new(),
             parent_hash: [0u8; 32],
             vault_cells,
             state_digest,
             last_receipt_bytes: Vec::new(),
         }
+    }
+
+    pub fn with_committee_pks(mut self, committee_pks: Vec<[u8; 32]>) -> Self {
+        self.total_parties = committee_pks.len();
+        self.committee_pks = committee_pks;
+        self
     }
 
     pub fn quorum_size(&self) -> usize {
@@ -2064,6 +2093,17 @@ impl SimplexState {
         if self.total_parties == 0 || validators.len() < self.total_parties {
             return Err(NodeError::ConsensusVerification(
                 "insufficient validator keypairs for SimplexState transition".to_string(),
+            ));
+        }
+        let active_pks: Vec<[u8; 32]> = validators[..self.total_parties]
+            .iter()
+            .map(|v| v.public_key)
+            .collect();
+        if self.committee_pks.is_empty() {
+            self.committee_pks = active_pks;
+        } else if self.committee_pks != active_pks {
+            return Err(NodeError::ConsensusVerification(
+                "validator keypairs do not match SimplexState pinned committee_pks".to_string(),
             ));
         }
         if turn.has_duplicate_write_slots() {
@@ -2106,7 +2146,7 @@ impl SimplexState {
             }
         }
 
-        //If read-only turn, still evaluate cell state over the first read slot via FFI
+        // If read-only turn, still evaluate cell state over the first read slot via FFI
         if turn.write_slots.is_empty() {
             let probe_bytes = serde_json::to_vec(turn).unwrap_or_else(|_| b"readonly-turn".to_vec());
             let eval_res = session.eval_cell(&probe_bytes).map_err(NodeError::Ffi)?;
@@ -2122,7 +2162,7 @@ impl SimplexState {
             ));
         }
         session
-            .commit_turn(&turn.turn_id)
+            .commit_turn(&proposed_receipt)
             .map_err(NodeError::Ffi)?;
 
         // 3. Optional DREX clearing batch & FogOfWar multiproof
@@ -2220,6 +2260,13 @@ impl SimplexState {
             &receipt_bytes,
         );
 
+        let rh_tid = session.propose_turn(&receipt_head).map_err(NodeError::Ffi)?;
+        session.commit_turn(&rh_tid).map_err(NodeError::Ffi)?;
+        let ssd_tid = session
+            .propose_turn(&simplex_state_digest)
+            .map_err(NodeError::Ffi)?;
+        session.commit_turn(&ssd_tid).map_err(NodeError::Ffi)?;
+
         let simplex_cert = SimplexCert {
             view: next_view,
             height: next_height,
@@ -2232,7 +2279,7 @@ impl SimplexState {
         };
 
         if !simplex_cert.verify_with_session(
-            self.total_parties,
+            &self.committee_pks,
             quorum,
             &post_vault_root,
             session,
@@ -2248,6 +2295,9 @@ impl SimplexState {
             &receipt_bytes,
         );
 
+        let sd_tid = session.propose_turn(&state_digest).map_err(NodeError::Ffi)?;
+        session.commit_turn(&sd_tid).map_err(NodeError::Ffi)?;
+
         if !session
             .verify_receipt(&state_digest)
             .map_err(NodeError::Ffi)?
@@ -2260,7 +2310,7 @@ impl SimplexState {
         self.view = next_view;
         self.height = next_height;
         self.parent_hash = prop_cert.block_hash;
-        self.vault_cells = next_cells;
+        self.vault_cells = next_cells.clone();
         self.state_digest = state_digest;
         self.last_receipt_bytes = receipt_bytes.clone();
 
@@ -2269,6 +2319,7 @@ impl SimplexState {
             next_view,
             height: next_height,
             post_vault_root,
+            post_vault_cells: next_cells,
             simplex_cert,
             clearing_receipt,
             receipt_bytes,
@@ -2284,6 +2335,11 @@ impl SimplexState {
         orders: &[LimitOrder],
         session: &mut ObendSession,
     ) -> Result<(), NodeError> {
+        if self.committee_pks.is_empty() {
+            return Err(NodeError::ConsensusVerification(
+                "rejected VerifiedNodeTransition on SimplexState with empty committee_pks".to_string(),
+            ));
+        }
         if transition.prior_view != self.current_view() {
             return Err(NodeError::ConsensusVerification(
                 "rejected stale or replayed VerifiedNodeTransition: prior_view mismatch".to_string(),
@@ -2334,7 +2390,7 @@ impl SimplexState {
         }
         let quorum = self.quorum_size();
         let valid = transition.verify_with_session(
-            self.total_parties,
+            &self.committee_pks,
             quorum,
             orders,
             session,
@@ -2347,6 +2403,7 @@ impl SimplexState {
         self.view = transition.next_view;
         self.height = transition.height;
         self.parent_hash = transition.simplex_cert.block_hash;
+        self.vault_cells = transition.post_vault_cells.clone();
         self.state_digest = transition.state_digest;
         self.last_receipt_bytes = transition.receipt_bytes.clone();
         Ok(())
@@ -2367,6 +2424,725 @@ impl VerifiedEpochBridge {
         session: &mut ObendSession,
     ) -> Result<VerifiedNodeTransition, NodeError> {
         state.step_with_verified_session(validators, mandate, turn, drex_batch, session)
+    }
+}
+
+// ============================================================================
+// 5. Pillar 5B Runtime: `"tlsn-transcript-policy@1"`, ZoE `Seat`s, `DragonsExchange`
+//    & `Epistemic` Verifiable Race Swarm (`DrexClearingCertificate` + `EdaBoardSwarmCandidate`)
+// ============================================================================
+
+/// Schema identifier for TLSNotary selective-disclosure transcript policy certificates
+/// (`Obend.Judge.TranscriptPolicy.tlsnTranscriptFormat`).
+pub const TLSN_TRANSCRIPT_POLICY_SCHEMA: &str = "tlsn-transcript-policy@1";
+
+/// Protected ZoE seat escrow account base (`Obend.Run.Durable` / `DurableHostAndZoeSeatTest.lean`).
+/// Any seat escrow account strictly below `PROTECTED_SEAT_BASE` is rejected as an unprotected user account.
+pub const PROTECTED_SEAT_BASE: u64 = 10_000;
+
+/// Check whether `b` is a structural HTTP/JSON delimiter byte (`Obend.Judge.TranscriptPolicy.isStructuralDelimiterByte`).
+#[inline]
+pub fn is_structural_delimiter_byte(b: u8) -> bool {
+    matches!(
+        b,
+        b'{' | b'}' | b'[' | b']' | b'"' | b':' | b',' | b'\r' | b'\n'
+    )
+}
+
+/// Check whether `allowed_mask` excludes all structural delimiter classes (`(allowed_mask & 0xF8) == 0`).
+#[inline]
+pub fn mask_excludes_delimiters(allowed_mask: u8) -> bool {
+    (allowed_mask & 0xF8) == 0
+}
+
+/// Redacted secret span inside a `"tlsn-transcript-policy@1"` skeleton (`Obend.Judge.TranscriptPolicy.RedactedSpan`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TlsnRedactedSpan {
+    pub start_offset: usize,
+    pub byte_length: usize,
+    pub allowed_mask: u8,
+    pub slot_commitment: [u8; 32],
+}
+
+/// TLSNotary selective-disclosure transcript certificate (`"tlsn-transcript-policy@1"`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TlsnTranscriptCertificate {
+    pub schema: String,
+    pub notary_pubkey: [u8; 32],
+    pub session_commitment_root: [u8; 32],
+    pub redacted_skeleton_bytes: Vec<u8>,
+    pub redacted_spans: Vec<TlsnRedactedSpan>,
+    pub tokenized_classes: Vec<String>,
+    pub notary_signature: Vec<u8>,
+}
+
+impl TlsnTranscriptCertificate {
+    /// Compute the canonical Merkle commitment root binding `redacted_skeleton_bytes` and `redacted_spans`.
+    pub fn compute_session_root(
+        redacted_skeleton_bytes: &[u8],
+        redacted_spans: &[TlsnRedactedSpan],
+    ) -> [u8; 32] {
+        let skel_leaf = cshake256_domain(b"obend.tlsn.skeleton", &[], redacted_skeleton_bytes);
+        let mut leaves = Vec::with_capacity(1 + redacted_spans.len());
+        leaves.push(skel_leaf);
+        for span in redacted_spans {
+            let mut meta = Vec::with_capacity(17);
+            meta.extend_from_slice(&(span.start_offset as u64).to_be_bytes());
+            meta.extend_from_slice(&(span.byte_length as u64).to_be_bytes());
+            meta.push(span.allowed_mask);
+            leaves.push(cshake256_domain(
+                b"obend.tlsn.span",
+                &meta,
+                &span.slot_commitment,
+            ));
+        }
+        merkle_root_from_leaves(&leaves)
+    }
+
+    /// Canonical domain-separated signing payload for the notary Ed25519 signature.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"obend.tlsn-transcript-policy@1");
+        out.extend_from_slice(self.schema.as_bytes());
+        out.extend_from_slice(&self.session_commitment_root);
+        out.extend_from_slice(&(self.redacted_skeleton_bytes.len() as u64).to_be_bytes());
+        out.extend_from_slice(&self.redacted_skeleton_bytes);
+        out.extend_from_slice(&(self.redacted_spans.len() as u64).to_be_bytes());
+        for span in &self.redacted_spans {
+            out.extend_from_slice(&(span.start_offset as u64).to_be_bytes());
+            out.extend_from_slice(&(span.byte_length as u64).to_be_bytes());
+            out.push(span.allowed_mask);
+            out.extend_from_slice(&span.slot_commitment);
+        }
+        out.extend_from_slice(&(self.tokenized_classes.len() as u64).to_be_bytes());
+        for cls in &self.tokenized_classes {
+            out.extend_from_slice(&(cls.len() as u64).to_be_bytes());
+            out.extend_from_slice(cls.as_bytes());
+        }
+        out
+    }
+
+    /// Construct and notary-sign a `"tlsn-transcript-policy@1"` certificate.
+    pub fn create_signed(
+        notary_kp: &ValidatorKeypair,
+        redacted_skeleton_bytes: Vec<u8>,
+        redacted_spans: Vec<TlsnRedactedSpan>,
+        tokenized_classes: Vec<String>,
+    ) -> Self {
+        let session_commitment_root =
+            Self::compute_session_root(&redacted_skeleton_bytes, &redacted_spans);
+        let mut cert = Self {
+            schema: TLSN_TRANSCRIPT_POLICY_SCHEMA.to_string(),
+            notary_pubkey: notary_kp.public_key,
+            session_commitment_root,
+            redacted_skeleton_bytes,
+            redacted_spans,
+            tokenized_classes,
+            notary_signature: Vec::new(),
+        };
+        let sig = notary_kp.sign(&cert.signing_bytes());
+        cert.notary_signature = sig.to_vec();
+        cert
+    }
+}
+
+/// Verify a `"tlsn-transcript-policy@1"` certificate against a `PolicyTableDfa` compiled via `PolicyToGrain`:
+/// 1. Schema must equal `"tlsn-transcript-policy@1"`, `session_commitment_root` must match `compute_session_root`,
+///    and the 64-byte `notary_signature` must verify under `notary_pubkey`.
+/// 2. Every `TlsnRedactedSpan` must satisfy delimiter exclusion `(allowed_mask & 0xF8) == 0`, have non-zero
+///    in-bounds range `[start_offset .. start_offset + byte_length]`, and have all secret slot bytes zeroed (`0x00`)
+///    in `redacted_skeleton_bytes` (`selective_disclosure_redaction_confinement`).
+/// 3. Compiling `policy_dfa` via `compile_policy_to_grain_prog` and evaluating `eval_policy_grain_prog` over
+///    `cert.tokenized_classes` must return `Some(true)` (`compilePolicyToGrainProg_sound`).
+pub fn verify_tlsn_transcript_policy(
+    cert: &TlsnTranscriptCertificate,
+    policy_dfa: &PolicyTableDfa,
+) -> bool {
+    if cert.schema != TLSN_TRANSCRIPT_POLICY_SCHEMA {
+        return false;
+    }
+    let Ok(sig_arr): Result<[u8; 64], _> = cert.notary_signature.as_slice().try_into() else {
+        return false;
+    };
+    let expected_root = TlsnTranscriptCertificate::compute_session_root(
+        &cert.redacted_skeleton_bytes,
+        &cert.redacted_spans,
+    );
+    if cert.session_commitment_root != expected_root {
+        return false;
+    }
+    if !ValidatorKeypair::verify(&cert.notary_pubkey, &cert.signing_bytes(), &sig_arr) {
+        return false;
+    }
+    for span in &cert.redacted_spans {
+        if span.byte_length == 0 || !mask_excludes_delimiters(span.allowed_mask) {
+            return false;
+        }
+        let Some(end_offset) = span.start_offset.checked_add(span.byte_length) else {
+            return false;
+        };
+        if end_offset > cert.redacted_skeleton_bytes.len() {
+            return false;
+        }
+        if cert.redacted_skeleton_bytes[span.start_offset..end_offset]
+            .iter()
+            .any(|&b| b != 0 || is_structural_delimiter_byte(b))
+        {
+            return false;
+        }
+    }
+    let grain_prog = compile_policy_to_grain_prog(policy_dfa, cert.tokenized_classes.len());
+    eval_policy_grain_prog(&grain_prog, &cert.tokenized_classes) == Some(true)
+}
+
+/// Agoric ZoE offer-safe escrow seat (`DurableHostAndZoeSeatTest.lean`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZoeSeat {
+    pub seat_id: u64,
+    pub seat_account: u64,
+    pub holder: String,
+    pub give_asset: String,
+    pub give_amount: i64,
+    pub want_asset: String,
+    pub want_amount: i64,
+}
+
+impl ZoeSeat {
+    /// Verify the seat resides in the protected kernel escrow range (`seat_account >= PROTECTED_SEAT_BASE`)
+    /// and carries non-negative `give_amount` / `want_amount`.
+    pub fn is_protected(&self) -> bool {
+        self.seat_account >= PROTECTED_SEAT_BASE && self.give_amount >= 0 && self.want_amount >= 0
+    }
+
+    /// Agoric ZoE offer-safety predicate (`safe_at`):
+    /// After settlement reallocation, the seat must hold non-negative balances and EITHER
+    /// have its `want` satisfied (`post_want_balance >= self.want_amount`) OR have its `give`
+    /// refunded (`post_give_balance >= self.give_amount`).
+    pub fn safe_at(&self, post_give_balance: i64, post_want_balance: i64) -> bool {
+        self.is_protected()
+            && post_give_balance >= 0
+            && post_want_balance >= 0
+            && (post_want_balance >= self.want_amount || post_give_balance >= self.give_amount)
+    }
+}
+
+/// Bilateral credit leg in a `DragonsExchange` mutual-credit clearing ring (`Obend.Vault.DragonsExchange.CreditLeg`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreditLeg {
+    pub debtor: String,
+    pub creditor: String,
+    pub amount: i64,
+    pub max_credit_limit: i64,
+}
+
+/// Combined batch settlement binding Agoric ZoE `ZoeSeat`s, `drex-clearing@1` primal-dual LP clearing,
+/// and a `DragonsExchange` closed mutual-credit clearing ring.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SovereignBatchSettlement {
+    pub seats: Vec<ZoeSeat>,
+    /// Post-settlement `(seat_id, post_give_balance, post_want_balance)` allocations for each `ZoeSeat`.
+    pub post_seat_balances: Vec<(u64, i64, i64)>,
+    pub orders: Vec<LimitOrder>,
+    pub clearing_cert: DrexClearingCertificate,
+    pub credit_ring: Vec<CreditLeg>,
+    pub pre_net_worths: std::collections::BTreeMap<String, i64>,
+}
+
+/// Verify and settle a `SovereignBatchSettlement` through the Lean FFI kernel (`ObendSession`):
+/// 1. Enforces `PROTECTED_SEAT_BASE`: every `ZoeSeat` must have `seat_account >= PROTECTED_SEAT_BASE`.
+/// 2. Enforces ZoE `safe_at` offer safety for every `ZoeSeat` in `batch.seats`.
+/// 3. Enforces `drex-clearing@1` primal-dual LP and FFI kernel verification (`verify_with_kernel`).
+/// 4. Enforces `DragonsExchange` closed-ring net-worth conservation (`settleRing_conserves_net_worth`
+///    & `settleRing_never_triggers_liquidation`): every `CreditLeg` has `0 < amount <= max_credit_limit`,
+///    `debtor != creditor`, forms a closed flow-conserving ring where every participant's incoming credit
+///    reduction equals their outgoing debt reduction, and preserves every participant's net worth (`>= 0`).
+pub fn verify_and_settle_sovereign_batch(
+    batch: &SovereignBatchSettlement,
+    session: &mut ObendSession,
+) -> Result<std::collections::BTreeMap<String, i64>, NodeError> {
+    // 1 & 2. Enforce PROTECTED_SEAT_BASE and ZoE `safe_at` offer safety
+    for seat in &batch.seats {
+        if !seat.is_protected() {
+            return Err(NodeError::ConsensusVerification(format!(
+                "ZoeSeat {} account {} is below PROTECTED_SEAT_BASE ({PROTECTED_SEAT_BASE})",
+                seat.seat_id, seat.seat_account
+            )));
+        }
+        let Some(&(_, post_give, post_want)) = batch
+            .post_seat_balances
+            .iter()
+            .find(|&&(sid, _, _)| sid == seat.seat_id)
+        else {
+            return Err(NodeError::ConsensusVerification(format!(
+                "missing post-settlement balance record for ZoeSeat {}",
+                seat.seat_id
+            )));
+        };
+        if !seat.safe_at(post_give, post_want) {
+            return Err(NodeError::ConsensusVerification(format!(
+                "ZoE offer safety (`safe_at`) violated for ZoeSeat {} (holder {})",
+                seat.seat_id, seat.holder
+            )));
+        }
+    }
+
+    // 3. Enforce `drex-clearing@1` primal-dual LP and FFI verification
+    let clearing_ok = batch
+        .clearing_cert
+        .verify_with_kernel(&batch.orders, session)?;
+    if !clearing_ok {
+        return Err(NodeError::ConsensusVerification(
+            "DrexClearingCertificate failed kernel verification in SovereignBatchSettlement"
+                .to_string(),
+        ));
+    }
+
+    // 4. Enforce `DragonsExchange` closed-ring net-worth conservation
+    let mut post_net_worths = batch.pre_net_worths.clone();
+    if !batch.credit_ring.is_empty() {
+        let ring_len = batch.credit_ring.len();
+        let ring_amount = batch.credit_ring[0].amount;
+        if ring_amount <= 0 {
+            return Err(NodeError::ConsensusVerification(
+                "DragonsExchange CreditLeg amount must be strictly positive".to_string(),
+            ));
+        }
+        let mut net_deltas: std::collections::BTreeMap<String, i64> =
+            std::collections::BTreeMap::new();
+        for (i, leg) in batch.credit_ring.iter().enumerate() {
+            if leg.amount != ring_amount
+                || leg.amount <= 0
+                || leg.amount > leg.max_credit_limit
+                || leg.debtor == leg.creditor
+            {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "invalid DragonsExchange CreditLeg at index {i}: debtor={}, creditor={}, amount={}, limit={}",
+                    leg.debtor, leg.creditor, leg.amount, leg.max_credit_limit
+                )));
+            }
+            let next_leg = &batch.credit_ring[(i + 1) % ring_len];
+            if leg.creditor != next_leg.debtor {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "DragonsExchange ring not closed at leg {i}: creditor {} != next debtor {}",
+                    leg.creditor, next_leg.debtor
+                )));
+            }
+            // Extinguishing `leg.amount` of debt from `debtor` to `creditor` increases debtor's net worth by `+amount`
+            // and decreases creditor's claim by `-amount`; around a closed ring, every node's delta sums to 0!
+            *net_deltas.entry(leg.debtor.clone()).or_insert(0) += leg.amount;
+            *net_deltas.entry(leg.creditor.clone()).or_insert(0) -= leg.amount;
+        }
+        for (acct, delta) in net_deltas {
+            if delta != 0 {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "DragonsExchange ring violated net-worth conservation for {acct}: delta={delta}"
+                )));
+            }
+            let pre = *post_net_worths.get(&acct).ok_or_else(|| {
+                NodeError::ConsensusVerification(format!(
+                    "DragonsExchange ring participant {acct} missing from pre_net_worths"
+                ))
+            })?;
+            if pre < 0 {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "DragonsExchange participant {acct} is insolvent prior to ring settlement ({pre})"
+                )));
+            }
+            post_net_worths.insert(acct, pre + delta);
+        }
+    }
+
+    Ok(post_net_worths)
+}
+
+/// Verified catalog component in the Agentic EDA BOM Vault (`Obend.Hardware.AgenticEDA.EdaVaultPart`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdaVaultPart {
+    pub part_id: u64,
+    pub footprint_hash: u64,
+    pub pin_count: u64,
+    pub unit_cost_cents: u64,
+    pub lead_time_days: u64,
+    pub in_stock: bool,
+}
+
+/// Routed copper trace segment on a PCB layer (`Obend.Hardware.AgenticEDA.NetSegment`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdaNetSegment {
+    pub segment_id: u64,
+    pub net_id: u64,
+    pub layer: u64,
+    pub x1: u64,
+    pub y1: u64,
+    pub x2: u64,
+    pub y2: u64,
+    pub clearance_um: u64,
+    pub width_um: u64,
+}
+
+/// Inter-layer PCB via (`Obend.Hardware.AgenticEDA.Via`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdaVia {
+    pub via_id: u64,
+    pub net_id: u64,
+    pub x: u64,
+    pub y: u64,
+    pub from_layer: u64,
+    pub to_layer: u64,
+    pub drill_um: u64,
+}
+
+/// PCB board revision snapshot (`Obend.Hardware.AgenticEDA.BoardRev`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdaBoardRev {
+    pub rev_id: u64,
+    pub schematic_netlist_hash: u64,
+    pub layout_netlist_hash: u64,
+    pub min_clearance_um: u64,
+    pub min_trace_width_um: u64,
+    pub min_via_drill_um: u64,
+    pub placed_part_ids: Vec<u64>,
+    pub segments: Vec<EdaNetSegment>,
+    pub vias: Vec<EdaVia>,
+}
+
+/// Multi-agent PCB layout & BOM merge candidate in an `Epistemic` swarm race
+/// (`Obend.Hardware.AgenticEDA.MultiAgentBoardMergeProposal`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdaBoardSwarmCandidate {
+    pub proposal_id: u64,
+    pub proposer_agent: String,
+    pub ancestor_board: EdaBoardRev,
+    pub agent_a_board: EdaBoardRev,
+    pub agent_b_board: EdaBoardRev,
+    pub max_bom_budget_cents: u64,
+    pub routing_quality_score: u64,
+    pub digest: [u8; 32],
+}
+
+impl EdaBoardSwarmCandidate {
+    /// Compute the canonical domain-separated candidate digest.
+    pub fn compute_digest(&self) -> [u8; 32] {
+        let payload = serde_json::to_vec(&(
+            self.proposal_id,
+            &self.proposer_agent,
+            &self.ancestor_board,
+            &self.agent_a_board,
+            &self.agent_b_board,
+            self.max_bom_budget_cents,
+            self.routing_quality_score,
+        ))
+        .unwrap_or_default();
+        cshake256_domain(
+            b"obend.eda.swarm.candidate",
+            &self.proposal_id.to_be_bytes(),
+            &payload,
+        )
+    }
+
+    /// Construct a candidate with its canonical `digest` populated.
+    pub fn new(
+        proposal_id: u64,
+        proposer_agent: impl Into<String>,
+        ancestor_board: EdaBoardRev,
+        agent_a_board: EdaBoardRev,
+        agent_b_board: EdaBoardRev,
+        max_bom_budget_cents: u64,
+        routing_quality_score: u64,
+    ) -> Self {
+        let mut c = Self {
+            proposal_id,
+            proposer_agent: proposer_agent.into(),
+            ancestor_board,
+            agent_a_board,
+            agent_b_board,
+            max_bom_budget_cents,
+            routing_quality_score,
+            digest: [0u8; 32],
+        };
+        c.digest = c.compute_digest();
+        c
+    }
+
+    /// Execute the 3-way LCA semantic merge and hardware DRC + Netlist + BOM judge
+    /// (`Obend.Hardware.AgenticEDA.mergeAndJudgeAgenticEdaBoard`).
+    pub fn merge_and_judge(&self, catalog: &[EdaVaultPart]) -> Option<EdaBoardRev> {
+        // 1. Both agent branches must preserve the ancestor schematic netlist and DRC rules
+        if self.agent_a_board.schematic_netlist_hash != self.ancestor_board.schematic_netlist_hash
+            || self.agent_b_board.schematic_netlist_hash
+                != self.ancestor_board.schematic_netlist_hash
+            || self.agent_a_board.layout_netlist_hash != self.agent_a_board.schematic_netlist_hash
+            || self.agent_b_board.layout_netlist_hash != self.agent_b_board.schematic_netlist_hash
+        {
+            return None;
+        }
+
+        // 2. 3-way LCA semantic merge on segments (by `segment_id`):
+        // If both Agent A and Agent B modified or added the same `segment_id` with different values, refuse!
+        let mut merged_segments_map: std::collections::BTreeMap<u64, EdaNetSegment> =
+            std::collections::BTreeMap::new();
+        let mut all_seg_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+        for s in &self.ancestor_board.segments {
+            all_seg_ids.insert(s.segment_id);
+        }
+        for s in &self.agent_a_board.segments {
+            all_seg_ids.insert(s.segment_id);
+        }
+        for s in &self.agent_b_board.segments {
+            all_seg_ids.insert(s.segment_id);
+        }
+        for seg_id in all_seg_ids {
+            let base = self
+                .ancestor_board
+                .segments
+                .iter()
+                .find(|s| s.segment_id == seg_id);
+            let branch_a = self
+                .agent_a_board
+                .segments
+                .iter()
+                .find(|s| s.segment_id == seg_id);
+            let branch_b = self
+                .agent_b_board
+                .segments
+                .iter()
+                .find(|s| s.segment_id == seg_id);
+            let resolved = if branch_a == base {
+                branch_b.cloned()
+            } else if branch_b == base || branch_a == branch_b {
+                branch_a.cloned()
+            } else {
+                // Conflicting concurrent edits to the same segment_id!
+                return None;
+            };
+            if let Some(seg) = resolved {
+                merged_segments_map.insert(seg_id, seg);
+            }
+        }
+        let merged_segments: Vec<EdaNetSegment> = merged_segments_map.into_values().collect();
+
+        // 3. 3-way LCA semantic merge on vias (by `via_id`)
+        let mut merged_vias_map: std::collections::BTreeMap<u64, EdaVia> =
+            std::collections::BTreeMap::new();
+        let mut all_via_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+        for v in &self.ancestor_board.vias {
+            all_via_ids.insert(v.via_id);
+        }
+        for v in &self.agent_a_board.vias {
+            all_via_ids.insert(v.via_id);
+        }
+        for v in &self.agent_b_board.vias {
+            all_via_ids.insert(v.via_id);
+        }
+        for via_id in all_via_ids {
+            let base = self.ancestor_board.vias.iter().find(|v| v.via_id == via_id);
+            let branch_a = self.agent_a_board.vias.iter().find(|v| v.via_id == via_id);
+            let branch_b = self.agent_b_board.vias.iter().find(|v| v.via_id == via_id);
+            let resolved = if branch_a == base {
+                branch_b.cloned()
+            } else if branch_b == base || branch_a == branch_b {
+                branch_a.cloned()
+            } else {
+                return None;
+            };
+            if let Some(v) = resolved {
+                merged_vias_map.insert(via_id, v);
+            }
+        }
+        let merged_vias: Vec<EdaVia> = merged_vias_map.into_values().collect();
+
+        // 4. Merge placed_part_ids (union of ancestor + A + B additions minus removals, or LCA set merge)
+        let mut merged_parts: Vec<u64> = self.ancestor_board.placed_part_ids.clone();
+        for &pid in &self.agent_a_board.placed_part_ids {
+            if !merged_parts.contains(&pid) {
+                merged_parts.push(pid);
+            }
+        }
+        for &pid in &self.agent_b_board.placed_part_ids {
+            if !merged_parts.contains(&pid) {
+                merged_parts.push(pid);
+            }
+        }
+
+        let min_clearance_um = self
+            .ancestor_board
+            .min_clearance_um
+            .max(self.agent_a_board.min_clearance_um)
+            .max(self.agent_b_board.min_clearance_um);
+        let min_trace_width_um = self
+            .ancestor_board
+            .min_trace_width_um
+            .max(self.agent_a_board.min_trace_width_um)
+            .max(self.agent_b_board.min_trace_width_um);
+        let min_via_drill_um = self
+            .ancestor_board
+            .min_via_drill_um
+            .max(self.agent_a_board.min_via_drill_um)
+            .max(self.agent_b_board.min_via_drill_um);
+
+        // 5. DRC verification on all merged segments and vias
+        for seg in &merged_segments {
+            if seg.clearance_um < min_clearance_um || seg.width_um < min_trace_width_um {
+                return None;
+            }
+        }
+        // Check for same-layer short-circuits (distinct nets sharing an endpoint on the same layer)
+        for (i, s1) in merged_segments.iter().enumerate() {
+            for s2 in merged_segments.iter().skip(i + 1) {
+                if s1.layer == s2.layer
+                    && s1.net_id != s2.net_id
+                    && ((s1.x1 == s2.x1 && s1.y1 == s2.y1)
+                        || (s1.x2 == s2.x2 && s1.y2 == s2.y2)
+                        || (s1.x1 == s2.x2 && s1.y1 == s2.y2)
+                        || (s1.x2 == s2.x1 && s1.y2 == s2.y1))
+                {
+                    return None;
+                }
+            }
+        }
+        for via in &merged_vias {
+            if via.drill_um < min_via_drill_um || via.from_layer == via.to_layer {
+                return None;
+            }
+        }
+
+        // 6. BOM Vault verification: every placed part must exist in `catalog`, be `in_stock`,
+        // and total BOM cost must not exceed `self.max_bom_budget_cents`.
+        let mut total_bom_cost_cents = 0u64;
+        for &pid in &merged_parts {
+            let part = catalog.iter().find(|p| p.part_id == pid)?;
+            if !part.in_stock || part.pin_count == 0 {
+                return None;
+            }
+            total_bom_cost_cents = total_bom_cost_cents.checked_add(part.unit_cost_cents)?;
+        }
+        if total_bom_cost_cents > self.max_bom_budget_cents {
+            return None;
+        }
+
+        Some(EdaBoardRev {
+            rev_id: self
+                .agent_a_board
+                .rev_id
+                .max(self.agent_b_board.rev_id)
+                .saturating_add(1),
+            schematic_netlist_hash: self.ancestor_board.schematic_netlist_hash,
+            layout_netlist_hash: self.ancestor_board.schematic_netlist_hash,
+            min_clearance_um,
+            min_trace_width_um,
+            min_via_drill_um,
+            placed_part_ids: merged_parts,
+            segments: merged_segments,
+            vias: merged_vias,
+        })
+    }
+}
+
+/// Trait modeling an `Obend.Consensus.Epistemic.VerifiableRace` candidate (`verify`, `quality`, `digest`).
+pub trait VerifiableRaceCandidate: Clone {
+    type Context: ?Sized;
+
+    /// Total boolean judge gate (`VerifiableRace.verify`).
+    fn verify_candidate(&self, ctx: &Self::Context) -> bool;
+
+    /// Objective quality score (`VerifiableRace.quality`); higher is strictly better.
+    fn quality(&self) -> u64;
+
+    /// Canonical 32-byte candidate digest used for deterministic tie-breaking (`VerifiableRace.digest`).
+    fn candidate_digest(&self) -> [u8; 32];
+
+    /// Materialize the winning candidate as a `VaultTurn` writing to `slot_id`.
+    fn to_vault_turn(&self, slot_id: u64) -> VaultTurn;
+}
+
+/// Deterministic strict preference comparator (`Obend.Consensus.Epistemic.better`):
+/// Prefers strictly higher `quality()`; ties are broken by lexicographically smaller `candidate_digest()`.
+pub fn epistemic_better<C: VerifiableRaceCandidate>(a: &C, b: &C) -> bool {
+    let qa = a.quality();
+    let qb = b.quality();
+    qa > qb || (qa == qb && a.candidate_digest() < b.candidate_digest())
+}
+
+/// Order-insensitive, frontrunning-resistant epistemic race winner selector
+/// (`Obend.Consensus.Epistemic.selectWinner`).
+///
+/// Filters `candidates` to those satisfying `c.verify_candidate(ctx)` and selects the unique
+/// maximum under `epistemic_better`. By `order_insensitive_pair` and `frontrunning_resistant_pair`,
+/// any permutation of `candidates` with distinct digests yields the exact same winner.
+pub fn select_epistemic_winner<C: VerifiableRaceCandidate>(
+    candidates: &[C],
+    ctx: &C::Context,
+) -> Option<C> {
+    let mut best: Option<C> = None;
+    for cand in candidates {
+        if !cand.verify_candidate(ctx) {
+            continue;
+        }
+        match &best {
+            None => best = Some(cand.clone()),
+            Some(curr) => {
+                if epistemic_better(cand, curr) {
+                    best = Some(cand.clone());
+                }
+            }
+        }
+    }
+    best
+}
+
+impl VerifiableRaceCandidate for DrexClearingCertificate {
+    type Context = [LimitOrder];
+
+    fn verify_candidate(&self, orders: &[LimitOrder]) -> bool {
+        let _guard = FFI_KERNEL_LOCK.lock().unwrap();
+        ObendSession::new()
+            .and_then(|mut s| self.verify_with_kernel(orders, &mut s))
+            .unwrap_or(false)
+    }
+
+    fn quality(&self) -> u64 {
+        if self.objective_volume <= 0 {
+            0
+        } else {
+            let vol = self.objective_volume as u64;
+            let gap_penalty = (self.duality_gap.max(0) as u64).saturating_add(1);
+            vol.saturating_mul(1_000_000) / gap_penalty
+        }
+    }
+
+    fn candidate_digest(&self) -> [u8; 32] {
+        self.digest
+    }
+
+    fn to_vault_turn(&self, slot_id: u64) -> VaultTurn {
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        VaultTurn::new(self.digest, "epistemic_drex_solver", vec![slot_id], vec![(slot_id, bytes)])
+    }
+}
+
+impl VerifiableRaceCandidate for EdaBoardSwarmCandidate {
+    type Context = [EdaVaultPart];
+
+    fn verify_candidate(&self, catalog: &[EdaVaultPart]) -> bool {
+        self.digest == self.compute_digest() && self.merge_and_judge(catalog).is_some()
+    }
+
+    fn quality(&self) -> u64 {
+        self.routing_quality_score
+    }
+
+    fn candidate_digest(&self) -> [u8; 32] {
+        self.digest
+    }
+
+    fn to_vault_turn(&self, slot_id: u64) -> VaultTurn {
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        VaultTurn::new(
+            self.digest,
+            &self.proposer_agent,
+            vec![slot_id],
+            vec![(slot_id, bytes)],
+        )
     }
 }
 
@@ -2430,6 +3206,7 @@ mod tests {
         let validators: Vec<ValidatorKeypair> = (0..4)
             .map(|id| ValidatorKeypair::from_seed(id, b"simplex-m4-seed"))
             .collect();
+        let committee_pks: Vec<[u8; 32]> = validators.iter().map(|v| v.public_key).collect();
 
         // View 1 leader is (1 - 1) % 4 == 0
         let prop = PropCert::create(
@@ -2439,13 +3216,13 @@ mod tests {
             [0u8; 32],
             b"turn-transfer-100".to_vec(),
         );
-        assert!(prop.verify(4));
+        assert!(prop.verify(&committee_pks));
         // Wrong party count / wrong leader fails
         assert!(!PropCert {
             view: 2,
             ..prop.clone()
         }
-        .verify(4));
+        .verify(&committee_pks));
 
         // 2f + 1 = 3 Finalize votes for view 1
         let fin_votes: Vec<SignedSimplexVote> = validators[0..3]
@@ -2457,8 +3234,8 @@ mod tests {
             block_hash: prop.block_hash,
             votes: fin_votes,
         };
-        assert!(fin_cert.verify(3));
-        assert!(!fin_cert.verify(4));
+        assert!(fin_cert.verify(3, &committee_pks));
+        assert!(!fin_cert.verify(4, &committee_pks));
 
         // 2f + 1 = 3 Skip votes for view 2
         let skip_votes: Vec<SignedSimplexVote> = validators[1..4]
@@ -2469,7 +3246,7 @@ mod tests {
             view: 2,
             votes: skip_votes,
         };
-        assert!(skip_cert.verify(3));
+        assert!(skip_cert.verify(3, &committee_pks));
 
         // Accountable equivocation slashing detection: validator 0 double-votes in view 1
         let vote_a = SignedSimplexVote::new(&validators[0], 1, SimplexVoteKind::Vote, [0xAA; 32]);
@@ -2480,7 +3257,7 @@ mod tests {
             vote_a: vote_a.clone(),
             vote_b,
         };
-        assert!(slash.verify());
+        assert!(slash.verify(&committee_pks));
 
         // Non-equivocating identical votes are NOT slashable
         let benign = EquivocationSlashReceipt {
@@ -2489,7 +3266,7 @@ mod tests {
             vote_a: vote_a.clone(),
             vote_b: vote_a,
         };
-        assert!(!benign.verify());
+        assert!(!benign.verify(&committee_pks));
     }
 
     #[test]
@@ -2649,6 +3426,7 @@ mod tests {
             let mut cluster =
                 SimplexCluster::with_transport(4, 1, sample_genesis_cells(), transport)
                     .expect("spawn 4-validator cluster");
+            let committee_pks = cluster.committee_pks();
 
             // Verify all 4 nodes bound real ephemeral 127.0.0.1 ports
             for node in &cluster.nodes {
@@ -2672,7 +3450,7 @@ mod tests {
             let blk1 = cluster.run_simplex_block().expect("finalize block 1");
             assert_eq!(blk1.height, 1);
             assert_eq!(blk1.view, 1);
-            assert!(blk1.fin_cert.verify(3));
+            assert!(blk1.fin_cert.verify(3, &committee_pks));
             assert!(blk1.multiproof.verify_stranger());
 
             // Stage another turn and run height 2 (leader rotates to validator 1)
@@ -2690,7 +3468,7 @@ mod tests {
             assert_eq!(blk2.height, 2);
             assert_eq!(blk2.view, 2);
             assert_eq!(blk2.parent_hash, blk1.block_hash);
-            assert!(blk2.fin_cert.verify(3));
+            assert!(blk2.fin_cert.verify(3, &committee_pks));
 
             // All 4 networked validators must agree on height 2 and identical FogOfWar Merkle state root
             let root0 = cluster.nodes[0].state_root();
@@ -2714,6 +3492,7 @@ mod tests {
     fn test_ws32_e2e_byzantine_equivocation_detection_and_slashing_broadcast() {
         let mut cluster =
             SimplexCluster::new(4, 1, sample_genesis_cells()).expect("spawn 4-validator cluster");
+        let committee_pks = cluster.committee_pks();
 
         // Validator 1 (faulty) double-signs two conflicting block hashes in view 2 over real sockets
         let slash_receipt = cluster
@@ -2722,14 +3501,14 @@ mod tests {
 
         assert_eq!(slash_receipt.offender_id, 1);
         assert_eq!(slash_receipt.view, 2);
-        assert!(slash_receipt.verify());
+        assert!(slash_receipt.verify(&committee_pks));
 
         // Every honest validator (0, 2, 3) must hold the verified SlashingReceipt and mark validator 1 slashed
         for &honest_id in &[0usize, 2, 3] {
             let receipts = cluster.nodes[honest_id].slashing_receipts();
             assert!(receipts
                 .iter()
-                .any(|r| r.offender_id == 1 && r.view == 2 && r.verify()));
+                .any(|r| r.offender_id == 1 && r.view == 2 && r.verify(&committee_pks)));
             assert!(cluster.nodes[honest_id].slashed_validators().contains(&1));
         }
 
@@ -2754,12 +3533,12 @@ mod tests {
             .expect("finalize block 2 after SkipCert over slashed leader");
         assert_eq!(blk2.height, 2);
         assert_eq!(blk2.view, 3);
-        assert!(blk2.fin_cert.verify(3));
+        assert!(blk2.fin_cert.verify(3, &committee_pks));
 
         // Verify all honest nodes recorded the SkipCert for view 2
         for &honest_id in &[0usize, 2, 3] {
             let skips = cluster.nodes[honest_id].skip_certs();
-            assert!(skips.iter().any(|s| s.view == 2 && s.verify(3)));
+            assert!(skips.iter().any(|s| s.view == 2 && s.verify(3, &committee_pks)));
         }
     }
 
@@ -3503,6 +4282,7 @@ mod tests {
         let validators: Vec<ValidatorKeypair> = (0..4)
             .map(|id| ValidatorKeypair::from_seed(id, b"verified-bridge-seed"))
             .collect();
+        let committee_pks: Vec<[u8; 32]> = validators.iter().map(|v| v.public_key).collect();
         let genesis = sample_genesis_cells();
         let mut state = SimplexState::new(4, 1, genesis.clone());
         let mut session = ObendSession::new().expect("session init");
@@ -3573,9 +4353,10 @@ mod tests {
         assert_eq!(clearing.certificate.objective_volume, 20);
 
         // Verify transition on a follower SimplexState
-        let mut follower = SimplexState::new(4, 1, genesis.clone());
+        let mut follower =
+            SimplexState::new(4, 1, genesis.clone()).with_committee_pks(committee_pks.clone());
         assert!(transition
-            .verify_with_session(4, 3, &orders, &mut session)
+            .verify_with_session(&committee_pks, 3, &orders, &mut session)
             .expect("verify transition"));
         follower
             .apply_verified_transition(&transition, &orders, &mut session)
@@ -3583,12 +4364,14 @@ mod tests {
         assert_eq!(follower.view, 1);
         assert_eq!(follower.height, 1);
         assert_eq!(follower.state_digest, state.state_digest);
+        assert_eq!(follower.vault_cells, state.vault_cells);
+        assert_eq!(follower.vault_root(), transition.post_vault_root);
 
         // 1. Tampering with transition `receipt_bytes` must be rejected
         let mut tampered_receipt = transition.clone();
         tampered_receipt.receipt_bytes[0] ^= 0xFF;
         assert!(!tampered_receipt
-            .verify_with_session(4, 3, &orders, &mut session)
+            .verify_with_session(&committee_pks, 3, &orders, &mut session)
             .expect("verify tampered receipt_bytes"));
         assert!(follower
             .apply_verified_transition(&tampered_receipt, &orders, &mut session)
@@ -3599,7 +4382,7 @@ mod tests {
         tampered_simplex.simplex_cert.receipt_bytes[16] ^= 0xAA;
         tampered_simplex.receipt_bytes = tampered_simplex.simplex_cert.receipt_bytes.clone();
         assert!(!tampered_simplex
-            .verify_with_session(4, 3, &orders, &mut session)
+            .verify_with_session(&committee_pks, 3, &orders, &mut session)
             .expect("verify tampered simplex_cert"));
 
         // 3. Tampering with `clearing_receipt.state_digest` or `receipt_bytes` must be rejected
@@ -3610,7 +4393,7 @@ mod tests {
             .unwrap()
             .receipt_bytes[8] ^= 0x55;
         assert!(!tampered_clearing
-            .verify_with_session(4, 3, &orders, &mut session)
+            .verify_with_session(&committee_pks, 3, &orders, &mut session)
             .expect("verify tampered clearing receipt"));
 
         // 4. Empty `receipt_bytes` must be rejected
@@ -3618,7 +4401,7 @@ mod tests {
         empty_receipt.receipt_bytes.clear();
         empty_receipt.simplex_cert.receipt_bytes.clear();
         assert!(!empty_receipt
-            .verify_with_session(4, 3, &orders, &mut session)
+            .verify_with_session(&committee_pks, 3, &orders, &mut session)
             .expect("verify empty receipt"));
     }
 
@@ -3716,6 +4499,7 @@ mod tests {
         let validators: Vec<ValidatorKeypair> = (0..4)
             .map(|id| ValidatorKeypair::from_seed(id, b"edge-seed"))
             .collect();
+        let committee_pks: Vec<[u8; 32]> = validators.iter().map(|v| v.public_key).collect();
         let mut state = SimplexState::new(4, 1, sample_genesis_cells());
         let ro_turn = VaultTurn::new([0x90; 32], "reader", vec![1], vec![]);
         assert!(state
@@ -3729,7 +4513,7 @@ mod tests {
         assert_eq!(tr1.next_view, 1);
         assert!(tr1.clearing_receipt.is_none());
         assert!(tr1
-            .verify_with_session(4, 3, &[], &mut session)
+            .verify_with_session(&committee_pks, 3, &[], &mut session)
             .expect("verify tr1"));
 
         let tr2 = state
@@ -3742,7 +4526,7 @@ mod tests {
             tr1.simplex_cert.block_hash
         );
         assert!(tr2
-            .verify_with_session(4, 3, &[], &mut session)
+            .verify_with_session(&committee_pks, 3, &[], &mut session)
             .expect("verify tr2"));
     }
 
@@ -3756,24 +4540,25 @@ mod tests {
         // 1. Vote::signing_bytes binds voter_id: cloning a signed vote under a different voter_id is rejected
         let v0 = Vote::new(&validators[0], 1, SimplexVoteKind::Finalize, [0x42; 32]);
         assert!(v0.verify_signature());
-        assert!(v0.verify_with_committee(&committee_pks));
+        assert!(v0.verify(&committee_pks));
 
         let mut cloned_voter_id = v0.clone();
         cloned_voter_id.voter_id = 1;
         assert_ne!(v0.signing_bytes(), cloned_voter_id.signing_bytes());
         assert!(!cloned_voter_id.verify_signature());
-        assert!(!cloned_voter_id.verify_with_committee(&committee_pks));
+        assert!(!cloned_voter_id.verify(&committee_pks));
 
-        // 2. Rogue keypair with voter_id = 0 passes self-signature check but fails verify_with_committee
+        // 2. Rogue keypair with voter_id = 0 passes self-signature check but fails verify(&committee_pks)
         let rogue_kp = ValidatorKeypair::from_seed(0, b"rogue-outsider-seed");
         let rogue_vote = Vote::new(&rogue_kp, 1, SimplexVoteKind::Finalize, [0x42; 32]);
         assert!(rogue_vote.verify_signature());
-        assert!(!rogue_vote.verify_with_committee(&committee_pks));
+        assert!(!rogue_vote.verify(&committee_pks));
 
         // 3. Stale transition replay protection in SimplexState::apply_verified_transition
         let mut session = ObendSession::new().expect("session init");
         let mut leader_state = SimplexState::new(4, 1, sample_genesis_cells());
-        let mut follower_state = SimplexState::new(4, 1, sample_genesis_cells());
+        let mut follower_state = SimplexState::new(4, 1, sample_genesis_cells())
+            .with_committee_pks(committee_pks.clone());
         let turn = VaultTurn::new([0xA1; 32], "alice", vec![1], vec![(1, b"v1".to_vec())]);
 
         let tr1 = leader_state
@@ -3796,11 +4581,17 @@ mod tests {
             .apply_verified_transition(&stripped_prop_tr2, &[], &mut session)
             .is_err());
 
-        // SimplexCert::verify_with_committee accepts committee_pks and rejects a rogue committee
-        assert!(tr1.simplex_cert.verify_with_committee(3, &committee_pks));
+        // SimplexCert::verify_with_session accepts committee_pks and rejects a rogue committee
+        assert!(tr1
+            .simplex_cert
+            .verify_with_session(&committee_pks, 3, &tr1.post_vault_root, &mut session)
+            .expect("verify_with_session"));
         let mut rogue_committee = committee_pks.clone();
         rogue_committee[0] = rogue_kp.public_key;
-        assert!(!tr1.simplex_cert.verify_with_committee(3, &rogue_committee));
+        assert!(!tr1
+            .simplex_cert
+            .verify_with_session(&rogue_committee, 3, &tr1.post_vault_root, &mut session)
+            .expect("rogue committee rejected"));
 
         // Applying tr1 succeeds
         follower_state
@@ -3826,7 +4617,7 @@ mod tests {
             view: 2,
             votes: skip_votes,
         };
-        assert!(skip_cert.verify_with_committee(3, &committee_pks));
+        assert!(skip_cert.verify(3, &committee_pks));
         let mut bad_skip_tr = tr2.clone();
         bad_skip_tr.simplex_cert.prop_cert = None;
         bad_skip_tr.simplex_cert.fin_cert = None;
@@ -3841,5 +4632,361 @@ mod tests {
             .apply_verified_transition(&tr2, &[], &mut session)
             .expect("apply tr2");
         assert_eq!(follower_state.current_view(), 2);
+    }
+
+    #[test]
+    fn test_vault_cell_commitment_metadata_binding_and_tamper_refusal() {
+        let cell = VaultCellRecord {
+            id: 7,
+            required: vec![IpcAuth::Read, IpcAuth::Write],
+            salt: [0x55; 32],
+            content: b"confidential-payload".to_vec(),
+        };
+        let mut diff_id = cell.clone();
+        diff_id.id = 8;
+        assert_ne!(cell.commitment(), diff_id.commitment());
+        assert_ne!(cell.leaf_hash(), diff_id.leaf_hash());
+
+        let mut diff_cap = cell.clone();
+        diff_cap.required = vec![IpcAuth::Read];
+        assert_ne!(cell.commitment(), diff_cap.commitment());
+        assert_ne!(cell.leaf_hash(), diff_cap.leaf_hash());
+
+        // Generate a Visible ProjectedCellView and verify tampering with `id` or `required`
+        // causes `verify_stranger()` to fail (`tampered_metadata_opening_refused`).
+        let mp = BlindedVaultMultiProof::generate(&[cell], &[IpcAuth::Read, IpcAuth::Write]);
+        assert!(mp.verify_stranger());
+
+        let mut tampered_id_mp = mp.clone();
+        if let ProjectedCellView::Visible { ref mut id, .. } = tampered_id_mp.projected_cells[0] {
+            *id = 99;
+        }
+        assert!(!tampered_id_mp.verify_stranger());
+
+        let mut tampered_cap_mp = mp;
+        if let ProjectedCellView::Visible {
+            ref mut required, ..
+        } = tampered_cap_mp.projected_cells[0]
+        {
+            required.pop();
+        }
+        assert!(!tampered_cap_mp.verify_stranger());
+    }
+
+    #[test]
+    fn test_tlsn_transcript_policy_verification_and_confinement() {
+        let notary_kp = ValidatorKeypair::from_seed(0, b"tlsn-notary-seed");
+        // Skeleton: `{"key":"\0\0\0\0"}` where bytes 8..12 are the 4-byte zeroed secret slot
+        let mut skeleton = br#"{"key":"    "}"#.to_vec();
+        for b in &mut skeleton[8..12] {
+            *b = 0x00;
+        }
+        let span = TlsnRedactedSpan {
+            start_offset: 8,
+            byte_length: 4,
+            allowed_mask: 0x07, // Lower 3 bits allowed; upper 5 delimiter bits (0xF8) are 0!
+            slot_commitment: [0xAB; 32],
+        };
+        let dfa = PolicyTableDfa {
+            start: 0,
+            accepting: vec![2],
+            transitions: vec![
+                ((0, "HDR".to_string()), 1),
+                ((1, "HDR".to_string()), 1),
+                ((1, "SLOT_OK".to_string()), 2),
+            ],
+            state_defaults: vec![(0, 99), (1, 99), (2, 99)],
+            default_sink: 99,
+        };
+        let valid_tokens = vec![
+            "HDR".to_string(),
+            "HDR".to_string(),
+            "SLOT_OK".to_string(),
+        ];
+        let cert = TlsnTranscriptCertificate::create_signed(
+            &notary_kp,
+            skeleton.clone(),
+            vec![span.clone()],
+            valid_tokens.clone(),
+        );
+        assert!(verify_tlsn_transcript_policy(&cert, &dfa));
+
+        // 1. Delimiter mask bit set (`allowed_mask & 0xF8 != 0`) must be rejected
+        let bad_mask_span = TlsnRedactedSpan {
+            allowed_mask: 0x08,
+            ..span.clone()
+        };
+        let bad_mask_cert = TlsnTranscriptCertificate::create_signed(
+            &notary_kp,
+            skeleton.clone(),
+            vec![bad_mask_span],
+            valid_tokens.clone(),
+        );
+        assert!(!verify_tlsn_transcript_policy(&bad_mask_cert, &dfa));
+
+        // 2. Non-zeroed secret byte inside `redacted_skeleton_bytes` must be rejected
+        let mut unzeroed_skel = skeleton.clone();
+        unzeroed_skel[9] = b'A';
+        let unzeroed_cert = TlsnTranscriptCertificate::create_signed(
+            &notary_kp,
+            unzeroed_skel,
+            vec![span.clone()],
+            valid_tokens,
+        );
+        assert!(!verify_tlsn_transcript_policy(&unzeroed_cert, &dfa));
+
+        // 3. Tokenized classes rejected by compiled Grain DFA must be rejected
+        let rejected_dfa_cert = TlsnTranscriptCertificate::create_signed(
+            &notary_kp,
+            skeleton,
+            vec![span],
+            vec!["HDR".to_string(), "HDR".to_string(), "HDR".to_string()], // ends in state 1, not accepting state 2
+        );
+        assert!(!verify_tlsn_transcript_policy(&rejected_dfa_cert, &dfa));
+    }
+
+    #[test]
+    fn test_zoe_seat_and_dragons_exchange_sovereign_batch_settlement() {
+        let mut session = ObendSession::new().expect("session init");
+        let orders = vec![
+            LimitOrder {
+                account: "alice_buyer".to_string(),
+                side: OrderSide::Bid,
+                qty: 10,
+                total: 1200,
+            },
+            LimitOrder {
+                account: "carol_seller".to_string(),
+                side: OrderSide::Ask,
+                qty: 10,
+                total: 1000,
+            },
+        ];
+        let clearing_cert = solve_primal_dual_clearing("USDC", "WAFER", 0, &orders)
+            .expect("solve drex clearing");
+
+        let seats = vec![
+            ZoeSeat {
+                seat_id: 1,
+                seat_account: PROTECTED_SEAT_BASE,
+                holder: "alice_buyer".to_string(),
+                give_asset: "USDC".to_string(),
+                give_amount: 1200,
+                want_asset: "WAFER".to_string(),
+                want_amount: 10,
+            },
+            ZoeSeat {
+                seat_id: 2,
+                seat_account: PROTECTED_SEAT_BASE + 1,
+                holder: "carol_seller".to_string(),
+                give_asset: "WAFER".to_string(),
+                give_amount: 10,
+                want_asset: "USDC".to_string(),
+                want_amount: 1000,
+            },
+        ];
+        let post_seat_balances = vec![(1, 100, 10), (2, 0, 1100)];
+        let credit_ring = vec![
+            CreditLeg {
+                debtor: "firm_a".to_string(),
+                creditor: "firm_b".to_string(),
+                amount: 500,
+                max_credit_limit: 1000,
+            },
+            CreditLeg {
+                debtor: "firm_b".to_string(),
+                creditor: "firm_c".to_string(),
+                amount: 500,
+                max_credit_limit: 800,
+            },
+            CreditLeg {
+                debtor: "firm_c".to_string(),
+                creditor: "firm_a".to_string(),
+                amount: 500,
+                max_credit_limit: 600,
+            },
+        ];
+        let mut pre_net_worths = std::collections::BTreeMap::new();
+        pre_net_worths.insert("firm_a".to_string(), 2500);
+        pre_net_worths.insert("firm_b".to_string(), 1800);
+        pre_net_worths.insert("firm_c".to_string(), 3200);
+
+        let batch = SovereignBatchSettlement {
+            seats,
+            post_seat_balances,
+            orders,
+            clearing_cert,
+            credit_ring,
+            pre_net_worths: pre_net_worths.clone(),
+        };
+        let post_nw = verify_and_settle_sovereign_batch(&batch, &mut session)
+            .expect("valid sovereign batch must settle");
+        assert_eq!(post_nw, pre_net_worths);
+
+        // 1. Unprotected seat account (< PROTECTED_SEAT_BASE) must be rejected
+        let mut unprotected_batch = batch.clone();
+        unprotected_batch.seats[0].seat_account = PROTECTED_SEAT_BASE - 1;
+        assert!(verify_and_settle_sovereign_batch(&unprotected_batch, &mut session).is_err());
+
+        // 2. ZoE offer safety violation (neither want satisfied nor give refunded) must be rejected
+        let mut unsafe_offer_batch = batch.clone();
+        unsafe_offer_batch.post_seat_balances[0] = (1, 500, 5); // < give_amount(1200) and < want_amount(10)
+        assert!(verify_and_settle_sovereign_batch(&unsafe_offer_batch, &mut session).is_err());
+
+        // 3. Unclosed DragonsExchange credit ring must be rejected
+        let mut open_ring_batch = batch;
+        open_ring_batch.credit_ring[2].creditor = "firm_outsider".to_string();
+        assert!(verify_and_settle_sovereign_batch(&open_ring_batch, &mut session).is_err());
+    }
+
+    #[test]
+    fn test_epistemic_verifiable_race_drex_and_agentic_eda_over_cluster() {
+        // 1. Epistemic race over `DrexClearingCertificate`
+        let orders = vec![
+            LimitOrder {
+                account: "b1".to_string(),
+                side: OrderSide::Bid,
+                qty: 10,
+                total: 1200,
+            },
+            LimitOrder {
+                account: "s1".to_string(),
+                side: OrderSide::Ask,
+                qty: 10,
+                total: 1000,
+            },
+        ];
+        let optimal_drex =
+            solve_primal_dual_clearing("USDC", "WAFER", 0, &orders).expect("optimal");
+        let mut invalid_forged_drex = optimal_drex.clone();
+        invalid_forged_drex.objective_volume = 9999; // Forged higher volume that fails kernel check!
+
+        // Order-insensitivity & frontrunning resistance: optimal wins regardless of arrival order
+        let w1 = select_epistemic_winner(
+            &[invalid_forged_drex.clone(), optimal_drex.clone()],
+            orders.as_slice(),
+        )
+        .expect("winner 1");
+        let w2 = select_epistemic_winner(
+            &[optimal_drex.clone(), invalid_forged_drex],
+            orders.as_slice(),
+        )
+        .expect("winner 2");
+        assert_eq!(w1, optimal_drex);
+        assert_eq!(w1, w2);
+
+        // 2. Epistemic race over `EdaBoardSwarmCandidate` (`Obend.Hardware.AgenticEDA`)
+        let catalog = vec![
+            EdaVaultPart {
+                part_id: 101,
+                footprint_hash: 0xAA01,
+                pin_count: 48,
+                unit_cost_cents: 450,
+                lead_time_days: 3,
+                in_stock: true,
+            },
+            EdaVaultPart {
+                part_id: 102,
+                footprint_hash: 0xBB02,
+                pin_count: 16,
+                unit_cost_cents: 150,
+                lead_time_days: 2,
+                in_stock: true,
+            },
+        ];
+        let ancestor = EdaBoardRev {
+            rev_id: 1,
+            schematic_netlist_hash: 0xCAFE_1234,
+            layout_netlist_hash: 0xCAFE_1234,
+            min_clearance_um: 100,
+            min_trace_width_um: 120,
+            min_via_drill_um: 200,
+            placed_part_ids: vec![101],
+            segments: vec![EdaNetSegment {
+                segment_id: 1,
+                net_id: 10,
+                layer: 0,
+                x1: 0,
+                y1: 0,
+                x2: 100,
+                y2: 0,
+                clearance_um: 110,
+                width_um: 130,
+            }],
+            vias: vec![],
+        };
+        let mut agent_a = ancestor.clone();
+        agent_a.rev_id = 2;
+        agent_a.placed_part_ids.push(102);
+        let mut agent_b = ancestor.clone();
+        agent_b.rev_id = 2;
+        agent_b.segments.push(EdaNetSegment {
+            segment_id: 2,
+            net_id: 20,
+            layer: 1,
+            x1: 10,
+            y1: 10,
+            x2: 80,
+            y2: 80,
+            clearance_um: 125,
+            width_um: 140,
+        });
+
+        let cand_low = EdaBoardSwarmCandidate::new(
+            1,
+            "eda_agent_alpha",
+            ancestor.clone(),
+            agent_a.clone(),
+            agent_b.clone(),
+            1000,
+            850,
+        );
+        let cand_high = EdaBoardSwarmCandidate::new(
+            2,
+            "eda_agent_beta",
+            ancestor.clone(),
+            agent_a.clone(),
+            agent_b.clone(),
+            1000,
+            940,
+        );
+        // Conflicting candidate where both agents edit `segment_id = 1` differently (refused by 3-way LCA merge!)
+        let mut conflicting_b = agent_b.clone();
+        conflicting_b.segments[0].width_um = 200;
+        let mut conflicting_a = agent_a;
+        conflicting_a.segments[0].width_um = 180;
+        let cand_conflict = EdaBoardSwarmCandidate::new(
+            3,
+            "eda_agent_conflict",
+            ancestor,
+            conflicting_a,
+            conflicting_b,
+            1000,
+            9999,
+        );
+        assert!(cand_conflict.merge_and_judge(&catalog).is_none());
+
+        let eda_w1 = select_epistemic_winner(
+            &[cand_conflict.clone(), cand_low.clone(), cand_high.clone()],
+            catalog.as_slice(),
+        )
+        .expect("eda winner 1");
+        let eda_w2 = select_epistemic_winner(
+            &[cand_high.clone(), cand_low.clone(), cand_conflict],
+            catalog.as_slice(),
+        )
+        .expect("eda winner 2");
+        assert_eq!(eda_w1, cand_high);
+        assert_eq!(eda_w1, eda_w2);
+
+        // Execute full epistemic swarm round on `SimplexCluster` + `DurableNodeWal`
+        let mut cluster =
+            SimplexCluster::new(4, 1, sample_genesis_cells()).expect("spawn cluster");
+        let (committed_winner, blk, outbox_id) = cluster
+            .run_epistemic_swarm_round(1, &[cand_low, cand_high.clone()], catalog.as_slice())
+            .expect("run_epistemic_swarm_round should finalize winner");
+        assert_eq!(committed_winner, cand_high);
+        assert_eq!(blk.height, 1);
+        assert!(cluster.nodes[0].wal_snapshot().outbox.contains(&outbox_id.0));
     }
 }

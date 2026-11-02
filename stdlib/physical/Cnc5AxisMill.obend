@@ -1,0 +1,57 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/Cnc5AxisMill.obend`):
+# 5-Axis CNC Machine-Tool Metatheory with Coupled Servo Tracking Lag,
+# Cantilever End-Mill Deflection, and 21-Parameter Abbe Volumetric Error Compensation.
+
+record Cnc5AxisMill:
+  servoLagUm(feedVelocityMmPerSec: Nat) -> Nat
+  endMillDeflectionUm(cuttingForceHundredN: Nat) -> Nat
+  abbeAngularDriftUm(cantileverArmDm: Nat) -> Nat
+  commandedAxisAt10mmUm(cantileverArmDm: Nat) -> Nat
+  totalVolumetricErrorUm(cantileverArmDm: Nat) -> Nat
+
+spec Uncompensated5AxisMill for Cnc5AxisMill:
+  requires servoLagUm(feedVelocityMmPerSec: Nat) -> Nat
+  requires endMillDeflectionUm(cuttingForceHundredN: Nat) -> Nat
+  requires abbeAngularDriftUm(cantileverArmDm: Nat) -> Nat
+  def servoLagUm(feedVelocityMmPerSec: Nat) -> Nat:
+    feedVelocityMmPerSec * 5n
+  def endMillDeflectionUm(cuttingForceHundredN: Nat) -> Nat:
+    cuttingForceHundredN * 6n
+  def abbeAngularDriftUm(cantileverArmDm: Nat) -> Nat:
+    cantileverArmDm * 4n
+  def commandedAxisAt10mmUm(cantileverArmDm: Nat) -> Nat:
+    10000n
+  def totalVolumetricErrorUm(cantileverArmDm: Nat) -> Nat:
+    self.servoLagUm(10n) + self.endMillDeflectionUm(5n) + self.abbeAngularDriftUm(cantileverArmDm)
+  claim volumetric_decomposition(arm: Nat): self.totalVolumetricErrorUm(arm) == self.servoLagUm(10n) + self.endMillDeflectionUm(5n) + self.abbeAngularDriftUm(arm)
+
+spec AbbeAndRuckigCompensatedMill for Cnc5AxisMill:
+  requires commandedAxisAt10mmUm(cantileverArmDm: Nat) -> Nat
+  requires abbeAngularDriftUm(cantileverArmDm: Nat) -> Nat
+  def servoLagUm(feedVelocityMmPerSec: Nat) -> Nat:
+    feedVelocityMmPerSec * 1n
+  def endMillDeflectionUm(cuttingForceHundredN: Nat) -> Nat:
+    cuttingForceHundredN * 2n
+  def abbeAngularDriftUm(cantileverArmDm: Nat) -> Nat:
+    cantileverArmDm * 1n
+  def commandedAxisAt10mmUm(cantileverArmDm: Nat) -> Nat:
+    super.commandedAxisAt10mmUm(cantileverArmDm) + super.abbeAngularDriftUm(cantileverArmDm)
+
+def seedMill() -> Cnc5AxisMill:
+  {servoLagUm: fn(v: Nat) -> Nat: 0n, endMillDeflectionUm: fn(f: Nat) -> Nat: 0n, abbeAngularDriftUm: fn(arm: Nat) -> Nat: 0n, commandedAxisAt10mmUm: fn(arm: Nat) -> Nat: 10000n, totalVolumetricErrorUm: fn(arm: Nat) -> Nat: 0n}
+
+def raw5AxisMill() -> Cnc5AxisMill:
+  fix(Uncompensated5AxisMill, seedMill())
+
+def compensated5AxisMill() -> Cnc5AxisMill:
+  fix(compose(Uncompensated5AxisMill, AbbeAndRuckigCompensatedMill), seedMill())
+
+def uncompensatedErrorAt6Dm() -> Nat:
+  raw5AxisMill().totalVolumetricErrorUm(6n)
+
+def compensatedErrorAt6Dm() -> Nat:
+  compensated5AxisMill().totalVolumetricErrorUm(6n)
+
+def compensatedCommandAt6Dm() -> Nat:
+  compensated5AxisMill().commandedAxisAt10mmUm(6n)

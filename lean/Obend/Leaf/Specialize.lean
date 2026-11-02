@@ -70,29 +70,95 @@ instance : World LeafView LeafPin where
   pin_ver _ _ := rfl
   ver_step _ _ _ h := .inr h
 
-/-- The view a program's object gives: each of its layers under its key, its composition under its
-name. -/
+/-- Winning provenance layer name for member `m` in a stack of layers (outermost first). -/
+def provLayers : List Layer → String → String
+  | [], _ => "seed"
+  | L :: rest, m => if L.provides m then L.name else if L.flat then L.name else provLayers rest m
+
+/-- Provenance layer of member `m` in composition `C`. -/
+def _root_.Obend.Logic.Composition.provenance (C : Composition) (m : String) : String :=
+  provLayers C.layers m
+
+/-- Resolved symbolic unfolding of member `m` in composition `C` (under 1 `self` binder at index 0). -/
+def _root_.Obend.Logic.Composition.symUnfold (C : Composition) (m : String) : Term :=
+  match (flatRow C.seed C.layers).find? (·.1 == m) with
+  | some (_, b) => resolve b
+  | none => .label "missing"
+
+/-- Split a reversed character list at the first `'.'` delimiter. -/
+def splitBeforeFirstDot : List Char → Option (List Char × List Char)
+  | [] => none
+  | c :: cs =>
+    if c == '.' then
+      some ([], cs)
+    else
+      (splitBeforeFirstDot cs).map fun (pre, post) => (c :: pre, post)
+
+/-- Split a scoped layer-member key `"provLayer.member"` at its last `'.'` into `(provLayer, member)`. -/
+def splitScopedLayerKey (k : String) : Option (String × String) :=
+  match splitBeforeFirstDot k.toList.reverse with
+  | some (revMember, revProv) =>
+    some (String.ofList revProv.reverse, String.ofList revMember.reverse)
+  | none => none
+
+/-- Resolve `.layer k` in `viewOf`: first checks whole-layer declarations `C.layers`, then resolves
+fine-grained per-member provenance keys `provLayer ++ "." ++ m` to `C.symUnfold m` when
+`C.provenance m == provLayer`. -/
+def resolveLayerDecl (C : Composition) (k : String) : Option Term :=
+  match (C.layers.find? (·.name == k)).map Layer.code with
+  | some c => some c
+  | none =>
+    match splitScopedLayerKey k with
+    | some (provLayer, m) =>
+      if C.provenance m == provLayer then some (C.symUnfold m) else none
+    | none => none
+
+/-- The view a program's object gives: each of its layers under its key, each member under its
+provenance-scoped key `provLayer ++ "." ++ m`, and its composition under its name. -/
 def viewOf (clock : Nat) (name : String) (C : Composition) : LeafView where
   clock := clock
   decl
-    | .layer k => (C.layers.find? (·.name == k)).map Layer.code
+    | .layer k => resolveLayerDecl C k
     | .object n => if n == name then some C.code else none
+
+/-- The read-support cone of a slot `member` in composition `C`: `member` itself together with
+all `self`-fields read by its unfolded body `C.symUnfold member` (and 1-hop transitive reads). -/
+def slotReadCone (C : Composition) (member : String) : List String :=
+  let direct := selfReads 0 (C.symUnfold member)
+  let twoHop := (direct.map (fun r => selfReads 0 (C.symUnfold r))).flatten
+  member :: (direct ++ twoHop)
+
+/-- Pin a single member `m` to its winning provenance layer and symbolic unfolding
+`⟨.layer (C.provenance m ++ "." ++ m), C.symUnfold m⟩`. -/
+def memberConePin (C : Composition) (m : String) : LeafPin :=
+  ⟨.layer (C.provenance m ++ "." ++ m), C.symUnfold m⟩
+
+/-- Fine-grained per-slot support pins for a read-support `cone` of composition `C`. -/
+def coneSupports (C : Composition) (cone : List String) : List LeafPin :=
+  cone.map (memberConePin C)
 
 /-- The candidates of the specialization slot. -/
 inductive Candidate where
-  /-- the book `emit comp`, for the object `name` -/
+  /-- the whole-object book `emit comp`, for the object `name` -/
   | book (name : String) (comp : Composition)
+  /-- a per-slot specialized definition `defItem` for `member` of `objectName`, pinned ONLY to its read-support cone -/
+  | slotBook (objectName : String) (member : String) (comp : Composition) (defItem : LeafDef)
   /-- the machine: the unflattened term -/
   | machine
 
-/-- The pins a book assumed: its object's composition and each layer it flattened. -/
+/-- The pins a candidate assumed:
+- `.book`: its object's composition and each layer it flattened;
+- `.slotBook`: only the member's read-support cone (`coneSupports comp (slotReadCone comp member)`);
+- `.machine`: none. -/
 def Candidate.supports : Candidate → List LeafPin
   | .book name C => ⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩
+  | .slotBook _ member C _ => coneSupports C (slotReadCone C member)
   | .machine => []
 
-/-- A book is admitted for compositions in the scope of `flatten_sound`; the machine always. -/
+/-- A book or slotBook is admitted for compositions in the scope of `flatten_sound`; the machine always. -/
 def Candidate.judge : Candidate → Bool
   | .book _ C => C.closedB
+  | .slotBook _ _ C _ => C.closedB
   | .machine => true
 
 /-- **The specialization slot.** -/
@@ -154,6 +220,28 @@ theorem moved_pin_blocks {v : LeafView} {name : String} {C : Composition} (hj : 
     unfold Slot.read
     simp only [hjudge, ite_true]
     cases hdd : specSlot.dead (holdsAt v) (.book name C) with
+    | nil => rw [hdd] at hmem; cases hmem
+    | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
+  obtain ⟨d, hr, hpd⟩ := hread
+  exact ⟨d, hr, hpd, (read_blocked_exact specSlot _ _ _ _ hr).2⟩
+
+/-- **A moved pin blocks a `slotBook` by name**: when a support of an admitted `slotBook` does not
+hold at a view, its read is `.blocked` and names the exact stale cone pins. -/
+theorem slotBook_moved_pin_blocks {v : LeafView} {name member : String} {C : Composition}
+    {defItem : LeafDef} (hj : C.closedB = true)
+    {p : LeafPin} (hp : p ∈ (Candidate.slotBook name member C defItem).supports)
+    (hd : holdsAt v p = false) :
+    ∃ d, specSlot.read (holdsAt v) (some (.slotBook name member C defItem)) =
+      .blocked (.slotBook name member C defItem) d ∧ p ∈ d ∧
+      ∀ q, q ∈ d ↔ q ∈ (Candidate.slotBook name member C defItem).supports ∧ holdsAt v q = false := by
+  have hmem : p ∈ specSlot.dead (holdsAt v) (.slotBook name member C defItem) :=
+    (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
+  have hjudge : specSlot.judge (.slotBook name member C defItem) = true := hj
+  have hread : ∃ d, specSlot.read (holdsAt v) (some (.slotBook name member C defItem)) =
+      .blocked (.slotBook name member C defItem) d ∧ p ∈ d := by
+    unfold Slot.read
+    simp only [hjudge, ite_true]
+    cases hdd : specSlot.dead (holdsAt v) (.slotBook name member C defItem) with
     | nil => rw [hdd] at hmem; cases hmem
     | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
   obtain ⟨d, hr, hpd⟩ := hread

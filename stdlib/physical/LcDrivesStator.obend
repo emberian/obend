@@ -1,0 +1,63 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/LcDrivesStator.obend`):
+# LC Drives (Potsdam, NY) Direct In-Slot Liquid-Cooled Permanent-Magnet Stator
+# with 5-Axis Finish-Milled Housing.
+
+record PhysicalStator:
+  thermalResistance() -> Nat
+  massKg() -> Nat
+  sdfMargin(radialClearanceMm: Nat) -> Nat
+  peakWindingTemp(copperLossKw: Nat) -> Nat
+  camSurfaceErrorUm(feedMmPerSec: Nat) -> Nat
+
+spec OuterJacketStator for PhysicalStator:
+  requires thermalResistance() -> Nat
+  def thermalResistance() -> Nat:
+    29n
+  def massKg() -> Nat:
+    420n
+  def sdfMargin(radialClearanceMm: Nat) -> Nat:
+    radialClearanceMm + 10n
+  def peakWindingTemp(copperLossKw: Nat) -> Nat:
+    50n + copperLossKw * self.thermalResistance
+  def camSurfaceErrorUm(feedMmPerSec: Nat) -> Nat:
+    feedMmPerSec * 4n
+  claim peak_temp_open_recursion(copperLossKw: Nat): self.peakWindingTemp(copperLossKw) == 50n + copperLossKw * self.thermalResistance
+
+spec LcDrivesInSlotUpgrade for PhysicalStator:
+  requires sdfMargin(radialClearanceMm: Nat) -> Nat
+  def thermalResistance() -> Nat:
+    9n
+  def sdfMargin(radialClearanceMm: Nat) -> Nat:
+    super.sdfMargin(radialClearanceMm) + 6n
+
+spec FiveAxisFinishMilled for PhysicalStator:
+  requires camSurfaceErrorUm(feedMmPerSec: Nat) -> Nat
+  def massKg() -> Nat:
+    395n
+  def camSurfaceErrorUm(feedMmPerSec: Nat) -> Nat:
+    super.camSurfaceErrorUm(feedMmPerSec) + 2n
+
+def seedStator() -> PhysicalStator:
+  {thermalResistance: 0n, massKg: 0n, sdfMargin: fn(r: Nat) -> Nat: r, peakWindingTemp: fn(loss: Nat) -> Nat: loss, camSurfaceErrorUm: fn(feed: Nat) -> Nat: feed}
+
+def outerJacketStator() -> PhysicalStator:
+  fix(OuterJacketStator, seedStator())
+
+def statorInSlot() -> PhysicalStator:
+  fix(compose(OuterJacketStator, LcDrivesInSlotUpgrade), seedStator())
+
+def lcDrivesProductionStator() -> PhysicalStator:
+  fix(compose(OuterJacketStator, LcDrivesInSlotUpgrade, FiveAxisFinishMilled), seedStator())
+
+def baselineJacketPeakTemp8kW() -> Nat:
+  outerJacketStator().peakWindingTemp(8n)
+
+def lcDrivesInSlotPeakTemp8kW() -> Nat:
+  lcDrivesProductionStator().peakWindingTemp(8n)
+
+def lcDrivesSdfMargin12mm() -> Nat:
+  lcDrivesProductionStator().sdfMargin(12n)
+
+def finishMilledErrorAt5MmPerSec() -> Nat:
+  lcDrivesProductionStator().camSurfaceErrorUm(5n)

@@ -1,0 +1,48 @@
+edition ObjectiveBend 1
+# Objective Bend Standard Library (`stdlib/usd/ScenePrim.obend`)
+# OpenUSD LIVRPS scene primitive importing `stdlib/core/Cell.obend` with open-recursive transform & LOD layers.
+
+import ./Cell.obend as Cell
+
+law monotone_frame: monotone(frame)
+
+record UsdScenePrim:
+  localOffsetMm() -> Nat
+  lodBias() -> Nat
+  worldTransformMm(parentMm: Nat) -> Nat
+  voxelStepCost(voxels: Nat) -> Nat
+
+spec SubLayerPrimSpec for UsdScenePrim:
+  requires localOffsetMm() -> Nat
+  requires lodBias() -> Nat
+  def localOffsetMm() -> Nat:
+    15n
+  def lodBias() -> Nat:
+    Cell.baseCell().epoch + 3n
+  def worldTransformMm(parentMm: Nat) -> Nat:
+    parentMm + self.localOffsetMm
+  def voxelStepCost(voxels: Nat) -> Nat:
+    voxels * self.lodBias
+  claim world_transform_open_recursion(parentMm: Nat): self.worldTransformMm(parentMm) == parentMm + self.localOffsetMm
+
+spec LocalOpinionOverride for UsdScenePrim:
+  requires voxelStepCost(voxels: Nat) -> Nat
+  def localOffsetMm() -> Nat:
+    40n
+  def voxelStepCost(voxels: Nat) -> Nat:
+    super.voxelStepCost(voxels) + 8n
+
+def seedPrim() -> UsdScenePrim:
+  {localOffsetMm: 0n, lodBias: 0n, worldTransformMm: fn(p: Nat) -> Nat: p, voxelStepCost: fn(v: Nat) -> Nat: v}
+
+def subLayerPrim() -> UsdScenePrim:
+  fix(SubLayerPrimSpec, seedPrim())
+
+def composedUsdPrim() -> UsdScenePrim:
+  fix(compose(SubLayerPrimSpec, LocalOpinionOverride), seedPrim())
+
+def composedWorldTransformAt100() -> Nat:
+  composedUsdPrim().worldTransformMm(100n)
+
+def composedVoxelCostAt5() -> Nat:
+  composedUsdPrim().voxelStepCost(5n)

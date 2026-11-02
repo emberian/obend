@@ -35,10 +35,12 @@ monolithic BiCMOS+Silicon Photonics, and low-loss $400\,\text{nm}$ $\text{Si}_3\
      $< 5000\,\text{nm}$ that suffer radiative mode leakage).
 -/
 public import Obend.Hardware.Thermal
+public import Obend.Analysis.Equitable
 @[expose] public section
 
 namespace Obend.Hardware.Photonics
 open Obend.Hardware.Thermal
+open Obend.Analysis
 set_option autoImplicit false
 
 /-! ## 1. Photonic Foundry Platforms, Waveguide Dispersion & Thermo-Optic Effect -/
@@ -665,6 +667,25 @@ theorem cascaded_mzi_pi_phase_pure_bar
     Int.mul_zero, Int.zero_mul, Int.sub_zero, Int.add_zero,
     int_one_mul, int_neg_mul_left, int_mul_neg_right,
     int_neg_neg, int_add_neg_self, int_neg_add_self]
+
+/-! ## 7. Thermo-Optic Crosstalk Pre-Distortion & 2-Boson Hong–Ou–Mandel Photonics Exports -/
+
+export Obend.Analysis (
+  faddeevAdjugateAndDet
+  ThermoOpticPhaseShifter
+  compensateThermalCrosstalk
+  goldenThermalCrosstalk4x4
+  faddeevAdjugate_cancels_crosstalk_4x4
+  compensateThermalCrosstalk_exact_4x4
+  twoBosonPermanent
+  beamSplitter5050
+  hong_ou_mandel_bunching_exact
+  twoBosonPermanent_bose_symmetry
+  twoBosonHamiltonian
+  twoBosonPart
+  twoBosonQuotient
+  twoBoson_equitable_intertwining_poly
+)
 
 end Obend.Hardware.Photonics
 end

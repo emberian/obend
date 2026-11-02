@@ -1460,6 +1460,738 @@ theorem compileGraphAdjoint_multiEdge_sound (op1 op2 : OpticOp) (x y dOut : Int)
   · rw [hPipe.1, hComb]
   · rw [hPipe.2, hComb]
 
+/-! ### 5.1 Universal Whole-DAG Reverse-Mode AD Pullback Specification & Soundness (`compileGraphAdjoint_dag_sound`) -/
+
+/-- Mathematical local cotangent contributions `[(srcWire, deltaCot), ...]` for a single forward
+`HyperEdge` `e` given the forward primal wire environment `fwdEnv : Nat → Int` and the downstream
+cotangent `dOut : Int` on `e.dstWire`. -/
+def specEdgeLocalPullback (fwdEnv : Nat → Int) (e : HyperEdge) (dOut : Int) : List (Nat × Int) :=
+  match e.op with
+  | .const _ => []
+  | .add =>
+    let w0 := wireAt e.srcWires 0
+    let w1 := wireAt e.srcWires 1
+    [(w0, 1 * dOut), (w1, 1 * dOut)]
+  | .sub =>
+    let w0 := wireAt e.srcWires 0
+    let w1 := wireAt e.srcWires 1
+    [(w0, 1 * dOut), (w1, (-1) * dOut)]
+  | .mul =>
+    let w0 := wireAt e.srcWires 0
+    let w1 := wireAt e.srcWires 1
+    [(w0, fwdEnv w1 * dOut), (w1, fwdEnv w0 * dOut)]
+  | .scale k =>
+    let w0 := wireAt e.srcWires 0
+    [(w0, k * dOut)]
+  | .mac =>
+    let w0 := wireAt e.srcWires 0
+    let w1 := wireAt e.srcWires 1
+    let w2 := wireAt e.srcWires 2
+    [(w0, fwdEnv w1 * dOut), (w1, fwdEnv w0 * dOut), (w2, 1 * dOut)]
+  | .mux =>
+    let c  := wireAt e.srcWires 0
+    let w1 := wireAt e.srcWires 1
+    let w2 := wireAt e.srcWires 2
+    [ (w1, if fwdEnv c != 0 then dOut else 0)
+    , (w2, if fwdEnv c != 0 then 0 else dOut) ]
+
+/-- Accumulate a single `(targetWire, deltaCot)` contribution into a cotangent map `cot : Nat → Int`. -/
+def addSpecCotangent (targetWire : Nat) (delta : Int) (cot : Nat → Int) (w : Nat) : Int :=
+  if w == targetWire then cot w + delta else cot w
+
+/-- Accumulate a list of `(wire, deltaCot)` contributions into a mathematical cotangent map `specCot : Nat → Int`. -/
+def accumSpecCotangents (contribs : List (Nat × Int)) (specCot : Nat → Int) : Nat → Int :=
+  contribs.foldl (fun cot (u, delta) => addSpecCotangent u delta cot) specCot
+
+/-- Single-edge mathematical reverse-mode AD pullback step on `specCot : Nat → Int`. -/
+def specGradEdgeStep (fwdEnv : Nat → Int) (e : HyperEdge) (specCot : Nat → Int) : Nat → Int :=
+  accumSpecCotangents (specEdgeLocalPullback fwdEnv e (specCot e.dstWire)) specCot
+
+/-- Left-to-right fold of `specGradEdgeStep` over an already-reversed forward edge list `revFwd`. -/
+def specGradRevOrder (fwdEnv : Nat → Int) (revFwd : List HyperEdge) (initCot : Nat → Int) : Nat → Int :=
+  revFwd.foldl (fun cot e => specGradEdgeStep fwdEnv e cot) initCot
+
+/-- Whole-DAG mathematical reverse-mode AD pullback specification (`specGradEdges`):
+folds `specGradEdgeStep` right-to-left over `edges : List HyperEdge` (i.e. left-to-right over `edges.reverse`). -/
+def specGradEdges (fwdEnv : Nat → Int) (edges : List HyperEdge) (initCot : Nat → Int) : Nat → Int :=
+  specGradRevOrder fwdEnv edges.reverse initCot
+
+@[simp] theorem addSpecCotangent_zero (targetWire : Nat) (cot : Nat → Int) :
+    addSpecCotangent targetWire 0 cot = cot := by
+  funext w
+  unfold addSpecCotangent
+  split <;> omega
+
+theorem accumSpecCotangents_localPullback_zero
+    (fwdEnv : Nat → Int) (e : HyperEdge) (specCot : Nat → Int) :
+    accumSpecCotangents (specEdgeLocalPullback fwdEnv e 0) specCot = specCot := by
+  cases hOp : e.op <;>
+    simp [specEdgeLocalPullback, hOp, accumSpecCotangents, addSpecCotangent_zero]
+
+/-- A forward `HyperEdge` `e` has all source wire lookups within the primal wire range `0 .. numPrimal - 1`. -/
+def EdgeSrcBounded (numPrimal : Nat) (e : HyperEdge) : Prop :=
+  ∀ i, wireAt e.srcWires i < numPrimal
+
+/-- Representation invariant relating `st : CotangentBuilderState` to the forward primal wire
+environment `fwdEnv : Nat → Int` and the mathematical cotangent specification `specCot : Nat → Int`:
+1. `numPrimal ≤ st.nextWire`,
+2. Every primal wire `u < numPrimal` retains its forward value: `evalHyperEdgesComb fwdEnv st.revEdges u = fwdEnv u`,
+3. Every wire `w` with `st.cotMap.lookup w = none` has `specCot w = 0`,
+4. Every wire `w` with `st.cotMap.lookup w = some cw` has `cw < st.nextWire` and
+   `evalHyperEdgesComb fwdEnv st.revEdges cw = specCot w`. -/
+structure CotStateInvariant
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (specCot : Nat → Int) (st : CotangentBuilderState) : Prop where
+  primal_le_next : numPrimal ≤ st.nextWire
+  primal_preserved : ∀ u, u < numPrimal → evalHyperEdgesComb fwdEnv st.revEdges u = fwdEnv u
+  lookup_none : ∀ w, st.cotMap.lookup w = none → specCot w = 0
+  lookup_some : ∀ w cw, st.cotMap.lookup w = some cw →
+    cw < st.nextWire ∧ evalHyperEdgesComb fwdEnv st.revEdges cw = specCot w
+
+theorem evalHyperEdgesComb_append (initEnv : Nat → Int) (es1 es2 : List HyperEdge) :
+    evalHyperEdgesComb initEnv (es1 ++ es2) =
+      evalHyperEdgesComb (evalHyperEdgesComb initEnv es1) es2 := by
+  unfold evalHyperEdgesComb
+  exact List.foldl_append
+
+@[simp] theorem evalHyperEdgesComb_nil (initEnv : Nat → Int) :
+    evalHyperEdgesComb initEnv [] = initEnv := rfl
+
+@[simp] theorem evalHyperEdgesComb_cons (initEnv : Nat → Int) (e : HyperEdge) (rest : List HyperEdge) :
+    evalHyperEdgesComb initEnv (e :: rest) = evalHyperEdgesComb (stepHyperEdge initEnv e) rest := rfl
+
+theorem stepHyperEdge_eq_self (env : Nat → Int) (e : HyperEdge) :
+    stepHyperEdge env e e.dstWire = evalHypergraphOp e.op (e.srcWires.map env) := by
+  simp [stepHyperEdge]
+
+theorem stepHyperEdge_ne (env : Nat → Int) (e : HyperEdge) (u : Nat) (hne : u ≠ e.dstWire) :
+    stepHyperEdge env e u = env u := by
+  unfold stepHyperEdge
+  have hbeq : (u == e.dstWire) = false := beq_false_of_ne hne
+  simp [hbeq]
+
+theorem upsertCotWire_fst (w deltaWire sumWire : Nat) (cotMap : List (Nat × Nat)) :
+    (upsertCotWire w deltaWire sumWire cotMap).1 = cotMap.lookup w := by
+  induction cotMap with
+  | nil => rfl
+  | cons kv rest ih =>
+    rcases kv with ⟨k, v⟩
+    simp only [upsertCotWire, List.lookup]
+    have hcomm : (k == w) = (w == k) := by grind
+    rw [hcomm]
+    cases (w == k) <;> simp [ih]
+
+theorem upsertCotWire_snd_lookup_self (w deltaWire sumWire : Nat) (cotMap : List (Nat × Nat)) :
+    ((upsertCotWire w deltaWire sumWire cotMap).2).lookup w =
+      match cotMap.lookup w with
+      | none => some deltaWire
+      | some _ => some sumWire := by
+  induction cotMap with
+  | nil =>
+    simp [upsertCotWire, List.lookup]
+  | cons kv rest ih =>
+    rcases kv with ⟨k, v⟩
+    simp only [upsertCotWire, List.lookup]
+    have hcomm : (k == w) = (w == k) := by grind
+    rw [hcomm]
+    cases hwk : (w == k)
+    · simp [List.lookup, hwk, ih]
+    · simp [List.lookup]
+
+theorem upsertCotWire_snd_lookup_ne (w u deltaWire sumWire : Nat) (cotMap : List (Nat × Nat))
+    (hne : (u == w) = false) :
+    ((upsertCotWire w deltaWire sumWire cotMap).2).lookup u = cotMap.lookup u := by
+  induction cotMap with
+  | nil =>
+    simp [upsertCotWire, List.lookup, hne]
+  | cons kv rest ih =>
+    rcases kv with ⟨k, v⟩
+    simp only [upsertCotWire, List.lookup]
+    cases hkw : (k == w)
+    · simp [List.lookup, ih]
+    · have huk : (u == k) = false := by grind
+      simp [List.lookup, hne, huk]
+
+theorem setCotWire_lookup_self (w cw : Nat) (cotMap : List (Nat × Nat)) :
+    (setCotWire w cw cotMap).lookup w = some cw := by
+  induction cotMap with
+  | nil => simp [setCotWire]
+  | cons kv rest ih =>
+    rcases kv with ⟨k, v⟩
+    simp only [setCotWire]
+    have hcomm : (k == w) = (w == k) := by grind
+    rw [hcomm]
+    cases hwk : (w == k) <;> simp [List.lookup, hwk, ih]
+
+theorem setCotWire_lookup_ne (w u cw : Nat) (cotMap : List (Nat × Nat))
+    (hne : (u == w) = false) :
+    (setCotWire w cw cotMap).lookup u = cotMap.lookup u := by
+  induction cotMap with
+  | nil => simp [setCotWire, List.lookup, hne]
+  | cons kv rest ih =>
+    rcases kv with ⟨k, v⟩
+    simp only [setCotWire, List.lookup]
+    cases hkw : (k == w)
+    · simp [List.lookup, ih]
+    · have huk : (u == k) = false := by grind
+      simp [List.lookup, hne, huk]
+
+theorem emitAndAccum_cotMap
+    (w : Nat) (op : HypergraphOp) (srcWires : List Nat) (st : CotangentBuilderState) :
+    (emitAndAccum w op srcWires st).cotMap =
+      (upsertCotWire w st.nextWire (st.nextWire + 1) st.cotMap).2 := by
+  rcases st with ⟨cotMap, nextWire, revEdges⟩
+  unfold emitAndAccum
+  cases hUp : upsertCotWire w nextWire (nextWire + 1) cotMap with
+  | mk opt cotMap' =>
+    cases opt <;> simp [hUp]
+
+theorem emitAndAccum_nextWire_le
+    (w : Nat) (op : HypergraphOp) (srcWires : List Nat) (st : CotangentBuilderState) :
+    st.nextWire ≤ (emitAndAccum w op srcWires st).nextWire := by
+  rcases st with ⟨cotMap, nextWire, revEdges⟩
+  unfold emitAndAccum
+  cases hUp : upsertCotWire w nextWire (nextWire + 1) cotMap with
+  | mk opt cotMap' =>
+    cases opt <;> simp [hUp] <;> omega
+
+theorem emitAndAccum_preserves_below_nextWire
+    (fwdEnv : Nat → Int) (w : Nat) (op : HypergraphOp) (srcWires : List Nat)
+    (st : CotangentBuilderState) (u : Nat) (hu : u < st.nextWire) :
+    evalHyperEdgesComb fwdEnv (emitAndAccum w op srcWires st).revEdges u =
+      evalHyperEdgesComb fwdEnv st.revEdges u := by
+  rcases st with ⟨cotMap, nextWire, revEdges⟩
+  dsimp at hu
+  unfold emitAndAccum
+  cases hUp : upsertCotWire w nextWire (nextWire + 1) cotMap with
+  | mk opt cotMap' =>
+    cases opt with
+    | none =>
+      simp only [hUp, evalHyperEdgesComb_append, evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+      exact stepHyperEdge_ne _ _ u (by dsimp; omega)
+    | some prevWire =>
+      simp only [hUp, evalHyperEdgesComb_append, evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+      rw [stepHyperEdge_ne _ _ u (by dsimp; omega), stepHyperEdge_ne _ _ u (by dsimp; omega)]
+
+/-- **Lemma (`emitAndAccum_preserves_invariant`)**:
+Emitting a local cotangent edge `(op, srcWires)` and accumulating its output into primal wire `w`
+preserves `CotStateInvariant` while updating the mathematical cotangent map by
+`addSpecCotangent w (evalHypergraphOp op (srcWires.map curEnv)) specCot`. -/
+theorem emitAndAccum_preserves_invariant
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (specCot : Nat → Int)
+    (w : Nat) (op : HypergraphOp) (srcWires : List Nat) (st : CotangentBuilderState)
+    (hInv : CotStateInvariant numPrimal fwdEnv specCot st) :
+    let curEnv := evalHyperEdgesComb fwdEnv st.revEdges
+    let delta  := evalHypergraphOp op (srcWires.map curEnv)
+    CotStateInvariant numPrimal fwdEnv (addSpecCotangent w delta specCot) (emitAndAccum w op srcWires st) := by
+  intro curEnv delta
+  have hNextLe := emitAndAccum_nextWire_le w op srcWires st
+  have hBelow := emitAndAccum_preserves_below_nextWire fwdEnv w op srcWires st
+  refine
+    { primal_le_next := Nat.le_trans hInv.primal_le_next hNextLe
+    , primal_preserved := fun u hu => by
+        rw [hBelow u (Nat.lt_of_lt_of_le hu hInv.primal_le_next)]
+        exact hInv.primal_preserved u hu
+    , lookup_none := ?_
+    , lookup_some := ?_ }
+  · intro u hNone
+    rw [emitAndAccum_cotMap] at hNone
+    cases huw : (u == w)
+    · rw [upsertCotWire_snd_lookup_ne w u st.nextWire (st.nextWire + 1) st.cotMap huw] at hNone
+      unfold addSpecCotangent
+      simp [huw, hInv.lookup_none u hNone]
+    · have huEq : u = w := LawfulBEq.eq_of_beq huw
+      subst huEq
+      rw [upsertCotWire_snd_lookup_self] at hNone
+      cases hLook : st.cotMap.lookup u <;> rw [hLook] at hNone <;> contradiction
+  · intro u cw hSome
+    cases huw : (u == w)
+    · rw [emitAndAccum_cotMap, upsertCotWire_snd_lookup_ne w u st.nextWire (st.nextWire + 1) st.cotMap huw] at hSome
+      obtain ⟨hcwLt, hcwVal⟩ := hInv.lookup_some u cw hSome
+      refine ⟨Nat.lt_of_lt_of_le hcwLt hNextLe, ?_⟩
+      rw [hBelow cw hcwLt, hcwVal]
+      unfold addSpecCotangent
+      simp [huw]
+    · have huEq : u = w := LawfulBEq.eq_of_beq huw
+      subst huEq
+      rcases st with ⟨cotMap, nextWire, revEdges⟩
+      unfold emitAndAccum at hSome ⊢
+      cases hUp : upsertCotWire u nextWire (nextWire + 1) cotMap with
+      | mk opt cotMap' =>
+        cases opt with
+        | none =>
+          have hFst : (upsertCotWire u nextWire (nextWire + 1) cotMap).1 = none :=
+            congrArg Prod.fst hUp
+          rw [upsertCotWire_fst] at hFst
+          have hSnd : (upsertCotWire u nextWire (nextWire + 1) cotMap).2 = cotMap' :=
+            congrArg Prod.snd hUp
+          simp only [hUp] at hSome ⊢
+          rw [← hSnd, upsertCotWire_snd_lookup_self, hFst] at hSome
+          injection hSome with hcwEq
+          subst hcwEq
+          have hSpec0 : specCot u = 0 := hInv.lookup_none u hFst
+          refine ⟨by omega, ?_⟩
+          rw [evalHyperEdgesComb_append]
+          simp only [evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+          change stepHyperEdge curEnv { opIdx := 0, op := op, srcWires := srcWires, dstWire := nextWire } nextWire =
+            addSpecCotangent u delta specCot u
+          rw [stepHyperEdge_eq_self]
+          unfold addSpecCotangent
+          simp [hSpec0, delta]
+        | some prevWire =>
+          have hFst : (upsertCotWire u nextWire (nextWire + 1) cotMap).1 = some prevWire :=
+            congrArg Prod.fst hUp
+          rw [upsertCotWire_fst] at hFst
+          have hSnd : (upsertCotWire u nextWire (nextWire + 1) cotMap).2 = cotMap' :=
+            congrArg Prod.snd hUp
+          simp only [hUp] at hSome ⊢
+          rw [← hSnd, upsertCotWire_snd_lookup_self, hFst] at hSome
+          injection hSome with hcwEq
+          subst hcwEq
+          obtain ⟨hPrevLt, hPrevVal⟩ := hInv.lookup_some u prevWire hFst
+          dsimp at hPrevLt hPrevVal
+          refine ⟨by omega, ?_⟩
+          rw [evalHyperEdgesComb_append]
+          simp only [evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+          let e1 : HyperEdge := { opIdx := 0, op := op, srcWires := srcWires, dstWire := nextWire }
+          let e2 : HyperEdge := { opIdx := 0, op := .add, srcWires := [prevWire, nextWire], dstWire := nextWire + 1 }
+          change stepHyperEdge (stepHyperEdge curEnv e1) e2 (nextWire + 1) = addSpecCotangent u delta specCot u
+          rw [stepHyperEdge_eq_self]
+          have hPrevAfterE1 : stepHyperEdge curEnv e1 prevWire = specCot u := by
+            rw [stepHyperEdge_ne curEnv e1 prevWire (by dsimp [e1]; omega)]
+            exact hPrevVal
+          have hNextAfterE1 : stepHyperEdge curEnv e1 nextWire = delta :=
+            stepHyperEdge_eq_self curEnv e1
+          unfold addSpecCotangent
+          simp [e2, evalHypergraphOp, hPrevAfterE1, hNextAfterE1]
+
+theorem emitRevEdge_const_zero_sound
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (specCot : Nat → Int) (st : CotangentBuilderState)
+    (hInv : CotStateInvariant numPrimal fwdEnv specCot st) :
+    let res := emitRevEdge (.const 0) [] st
+    CotStateInvariant numPrimal fwdEnv specCot res.2 ∧
+    st.nextWire < res.2.nextWire ∧
+    res.1 = st.nextWire ∧
+    evalHyperEdgesComb fwdEnv res.2.revEdges res.1 = 0 ∧
+    (∀ u, u < st.nextWire → evalHyperEdgesComb fwdEnv res.2.revEdges u = evalHyperEdgesComb fwdEnv st.revEdges u) := by
+  rcases st with ⟨cotMap, nextWire, revEdges⟩
+  dsimp [emitRevEdge]
+  have hBelow :
+      ∀ u, u < nextWire →
+        evalHyperEdgesComb fwdEnv (revEdges ++ [{ opIdx := 0, op := .const 0, srcWires := [], dstWire := nextWire }]) u =
+          evalHyperEdgesComb fwdEnv revEdges u := by
+    intro u hu
+    rw [evalHyperEdgesComb_append]
+    simp only [evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+    exact stepHyperEdge_ne _ _ u (by dsimp; omega)
+  refine ⟨?_, by omega, rfl, ?_, hBelow⟩
+  · refine
+      { primal_le_next := by
+          have := hInv.primal_le_next
+          dsimp at this ⊢
+          omega
+      , primal_preserved := fun u hu => by
+          have hPrimalLe := hInv.primal_le_next
+          dsimp at hPrimalLe
+          rw [hBelow u (Nat.lt_of_lt_of_le hu hPrimalLe)]
+          exact hInv.primal_preserved u hu
+      , lookup_none := hInv.lookup_none
+      , lookup_some := fun w cw hSome => by
+          obtain ⟨hcwLt, hcwVal⟩ := hInv.lookup_some w cw hSome
+          dsimp at hcwLt hcwVal
+          refine ⟨by dsimp; omega, ?_⟩
+          rw [hBelow cw hcwLt, hcwVal] }
+  · rw [evalHyperEdgesComb_append]
+    simp only [evalHyperEdgesComb_cons, evalHyperEdgesComb_nil, stepHyperEdge, evalHypergraphOp, beq_self_eq_true, ↓reduceIte]
+
+/-- **Theorem (`pullbackHyperEdge_sound`)**:
+For every forward `e : HyperEdge` with `EdgeSrcBounded numPrimal e` (covering all 7 `HypergraphOp`
+constructors: `.const`, `.add`, `.sub`, `.mul`, `.scale`, `.mac`, `.mux`), executing
+`pullbackHyperEdge e st` from a state satisfying `CotStateInvariant numPrimal fwdEnv specCot st`
+produces a state satisfying `CotStateInvariant numPrimal fwdEnv (specGradEdgeStep fwdEnv e specCot) (pullbackHyperEdge e st)`. -/
+theorem pullbackHyperEdge_sound
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (specCot : Nat → Int)
+    (e : HyperEdge) (st : CotangentBuilderState)
+    (hEdge : EdgeSrcBounded numPrimal e)
+    (hInv : CotStateInvariant numPrimal fwdEnv specCot st) :
+    CotStateInvariant numPrimal fwdEnv (specGradEdgeStep fwdEnv e specCot) (pullbackHyperEdge e st) ∧
+    st.nextWire ≤ (pullbackHyperEdge e st).nextWire ∧
+    (∀ u, u < st.nextWire →
+      evalHyperEdgesComb fwdEnv (pullbackHyperEdge e st).revEdges u =
+        evalHyperEdgesComb fwdEnv st.revEdges u) := by
+  rcases st with ⟨cotMap, nextWire, revEdges⟩
+  rcases e with ⟨opIdx, op, srcWires, dstWire⟩
+  let st0 : CotangentBuilderState := ⟨cotMap, nextWire, revEdges⟩
+  let e0 : HyperEdge := ⟨opIdx, op, srcWires, dstWire⟩
+  unfold pullbackHyperEdge
+  cases hLook : cotMap.lookup dstWire with
+  | none =>
+    simp only [hLook]
+    have hSpec0 : specCot dstWire = 0 := hInv.lookup_none dstWire hLook
+    have hStepEq : specGradEdgeStep fwdEnv e0 specCot = specCot := by
+      unfold specGradEdgeStep
+      change accumSpecCotangents (specEdgeLocalPullback fwdEnv e0 (specCot dstWire)) specCot = specCot
+      rw [hSpec0, accumSpecCotangents_localPullback_zero]
+    rw [hStepEq]
+    exact ⟨hInv, Nat.le_refl _, fun _ _ => trivial⟩
+  | some dOut =>
+    simp only [hLook]
+    obtain ⟨hdOutLt, hdOutVal⟩ := hInv.lookup_some dstWire dOut hLook
+    dsimp at hdOutLt hdOutVal
+    have hwLt : ∀ i, wireAt srcWires i < st0.nextWire := fun i =>
+      Nat.lt_of_lt_of_le (hEdge i) hInv.primal_le_next
+    have hwVal : ∀ i, evalHyperEdgesComb fwdEnv st0.revEdges (wireAt srcWires i) = fwdEnv (wireAt srcWires i) :=
+      fun i => hInv.primal_preserved (wireAt srcWires i) (hEdge i)
+    cases op with
+    | const v =>
+      simp only
+      have hStepEq : specGradEdgeStep fwdEnv ⟨opIdx, .const v, srcWires, dstWire⟩ specCot = specCot := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents]
+      rw [hStepEq]
+      exact ⟨hInv, Nat.le_refl _, fun _ _ => trivial⟩
+    | scale k =>
+      simp only
+      let w0 := wireAt srcWires 0
+      have hInv1 := emitAndAccum_preserves_invariant numPrimal fwdEnv specCot w0 (.scale k) [dOut] st0 hInv
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons] at hInv1
+      rw [hdOutVal] at hInv1
+      have hStepEq :
+          specGradEdgeStep fwdEnv ⟨opIdx, .scale k, srcWires, dstWire⟩ specCot =
+            addSpecCotangent w0 (k * specCot dstWire) specCot := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, w0]
+      rw [hStepEq]
+      exact ⟨hInv1, emitAndAccum_nextWire_le w0 (.scale k) [dOut] st0,
+        emitAndAccum_preserves_below_nextWire fwdEnv w0 (.scale k) [dOut] st0⟩
+    | add =>
+      simp only
+      let w0 := wireAt srcWires 0
+      let w1 := wireAt srcWires 1
+      let st1 := emitAndAccum w0 (.scale 1) [dOut] st0
+      have hInv1 := emitAndAccum_preserves_invariant numPrimal fwdEnv specCot w0 (.scale 1) [dOut] st0 hInv
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons] at hInv1
+      rw [hdOutVal] at hInv1
+      have hNext1 := emitAndAccum_nextWire_le w0 (.scale 1) [dOut] st0
+      have hBelow1 := emitAndAccum_preserves_below_nextWire fwdEnv w0 (.scale 1) [dOut] st0
+      have hdOutVal1 : evalHyperEdgesComb fwdEnv st1.revEdges dOut = specCot dstWire := by
+        rw [hBelow1 dOut hdOutLt, hdOutVal]
+      have hInv2 := emitAndAccum_preserves_invariant numPrimal fwdEnv
+        (addSpecCotangent w0 (1 * specCot dstWire) specCot) w1 (.scale 1) [dOut] st1 hInv1
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons] at hInv2
+      rw [hdOutVal1] at hInv2
+      have hNext2 := emitAndAccum_nextWire_le w1 (.scale 1) [dOut] st1
+      have hBelow2 := emitAndAccum_preserves_below_nextWire fwdEnv w1 (.scale 1) [dOut] st1
+      have hStepEq :
+          specGradEdgeStep fwdEnv ⟨opIdx, .add, srcWires, dstWire⟩ specCot =
+            addSpecCotangent w1 (1 * specCot dstWire)
+              (addSpecCotangent w0 (1 * specCot dstWire) specCot) := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, w0, w1]
+      rw [hStepEq]
+      refine ⟨hInv2, Nat.le_trans hNext1 hNext2, fun u hu => ?_⟩
+      change evalHyperEdgesComb fwdEnv (emitAndAccum w1 (.scale 1) [dOut] st1).revEdges u =
+        evalHyperEdgesComb fwdEnv st0.revEdges u
+      rw [hBelow2 u (Nat.lt_of_lt_of_le hu hNext1), hBelow1 u hu]
+    | sub =>
+      simp only
+      let w0 := wireAt srcWires 0
+      let w1 := wireAt srcWires 1
+      let st1 := emitAndAccum w0 (.scale 1) [dOut] st0
+      have hInv1 := emitAndAccum_preserves_invariant numPrimal fwdEnv specCot w0 (.scale 1) [dOut] st0 hInv
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons] at hInv1
+      rw [hdOutVal] at hInv1
+      have hNext1 := emitAndAccum_nextWire_le w0 (.scale 1) [dOut] st0
+      have hBelow1 := emitAndAccum_preserves_below_nextWire fwdEnv w0 (.scale 1) [dOut] st0
+      have hdOutVal1 : evalHyperEdgesComb fwdEnv st1.revEdges dOut = specCot dstWire := by
+        rw [hBelow1 dOut hdOutLt, hdOutVal]
+      have hInv2 := emitAndAccum_preserves_invariant numPrimal fwdEnv
+        (addSpecCotangent w0 (1 * specCot dstWire) specCot) w1 (.scale (-1)) [dOut] st1 hInv1
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons] at hInv2
+      rw [hdOutVal1] at hInv2
+      have hNext2 := emitAndAccum_nextWire_le w1 (.scale (-1)) [dOut] st1
+      have hBelow2 := emitAndAccum_preserves_below_nextWire fwdEnv w1 (.scale (-1)) [dOut] st1
+      have hStepEq :
+          specGradEdgeStep fwdEnv ⟨opIdx, .sub, srcWires, dstWire⟩ specCot =
+            addSpecCotangent w1 ((-1) * specCot dstWire)
+              (addSpecCotangent w0 (1 * specCot dstWire) specCot) := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, w0, w1]
+      rw [hStepEq]
+      refine ⟨hInv2, Nat.le_trans hNext1 hNext2, fun u hu => ?_⟩
+      change evalHyperEdgesComb fwdEnv (emitAndAccum w1 (.scale (-1)) [dOut] st1).revEdges u =
+        evalHyperEdgesComb fwdEnv st0.revEdges u
+      rw [hBelow2 u (Nat.lt_of_lt_of_le hu hNext1), hBelow1 u hu]
+    | mul =>
+      simp only
+      let w0 := wireAt srcWires 0
+      let w1 := wireAt srcWires 1
+      let st1 := emitAndAccum w0 .mul [w1, dOut] st0
+      have hInv1 := emitAndAccum_preserves_invariant numPrimal fwdEnv specCot w0 .mul [w1, dOut] st0 hInv
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons, list_getD_one_cons] at hInv1
+      rw [hwVal 1, hdOutVal] at hInv1
+      have hNext1 := emitAndAccum_nextWire_le w0 .mul [w1, dOut] st0
+      have hBelow1 := emitAndAccum_preserves_below_nextWire fwdEnv w0 .mul [w1, dOut] st0
+      have hw0Val1 : evalHyperEdgesComb fwdEnv st1.revEdges w0 = fwdEnv w0 := by
+        rw [hBelow1 w0 (hwLt 0), hwVal 0]
+      have hdOutVal1 : evalHyperEdgesComb fwdEnv st1.revEdges dOut = specCot dstWire := by
+        rw [hBelow1 dOut hdOutLt, hdOutVal]
+      have hInv2 := emitAndAccum_preserves_invariant numPrimal fwdEnv
+        (addSpecCotangent w0 (fwdEnv w1 * specCot dstWire) specCot) w1 .mul [w0, dOut] st1 hInv1
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons, list_getD_one_cons] at hInv2
+      rw [hw0Val1, hdOutVal1] at hInv2
+      have hNext2 := emitAndAccum_nextWire_le w1 .mul [w0, dOut] st1
+      have hBelow2 := emitAndAccum_preserves_below_nextWire fwdEnv w1 .mul [w0, dOut] st1
+      have hStepEq :
+          specGradEdgeStep fwdEnv ⟨opIdx, .mul, srcWires, dstWire⟩ specCot =
+            addSpecCotangent w1 (fwdEnv w0 * specCot dstWire)
+              (addSpecCotangent w0 (fwdEnv w1 * specCot dstWire) specCot) := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, w0, w1]
+      rw [hStepEq]
+      refine ⟨hInv2, Nat.le_trans hNext1 hNext2, fun u hu => ?_⟩
+      change evalHyperEdgesComb fwdEnv (emitAndAccum w1 .mul [w0, dOut] st1).revEdges u =
+        evalHyperEdgesComb fwdEnv st0.revEdges u
+      rw [hBelow2 u (Nat.lt_of_lt_of_le hu hNext1), hBelow1 u hu]
+    | mac =>
+      simp only
+      let w0 := wireAt srcWires 0
+      let w1 := wireAt srcWires 1
+      let w2 := wireAt srcWires 2
+      let st1 := emitAndAccum w0 .mul [w1, dOut] st0
+      have hInv1 := emitAndAccum_preserves_invariant numPrimal fwdEnv specCot w0 .mul [w1, dOut] st0 hInv
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons, list_getD_one_cons] at hInv1
+      rw [hwVal 1, hdOutVal] at hInv1
+      have hNext1 := emitAndAccum_nextWire_le w0 .mul [w1, dOut] st0
+      have hBelow1 := emitAndAccum_preserves_below_nextWire fwdEnv w0 .mul [w1, dOut] st0
+      have hw0Val1 : evalHyperEdgesComb fwdEnv st1.revEdges w0 = fwdEnv w0 := by
+        rw [hBelow1 w0 (hwLt 0), hwVal 0]
+      have hdOutVal1 : evalHyperEdgesComb fwdEnv st1.revEdges dOut = specCot dstWire := by
+        rw [hBelow1 dOut hdOutLt, hdOutVal]
+      let cot1 := addSpecCotangent w0 (fwdEnv w1 * specCot dstWire) specCot
+      let st2 := emitAndAccum w1 .mul [w0, dOut] st1
+      have hInv2 := emitAndAccum_preserves_invariant numPrimal fwdEnv cot1 w1 .mul [w0, dOut] st1 hInv1
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons, list_getD_one_cons] at hInv2
+      rw [hw0Val1, hdOutVal1] at hInv2
+      have hNext2 := emitAndAccum_nextWire_le w1 .mul [w0, dOut] st1
+      have hBelow2 := emitAndAccum_preserves_below_nextWire fwdEnv w1 .mul [w0, dOut] st1
+      have hdOutVal2 : evalHyperEdgesComb fwdEnv st2.revEdges dOut = specCot dstWire := by
+        rw [hBelow2 dOut (Nat.lt_of_lt_of_le hdOutLt hNext1), hdOutVal1]
+      let cot2 := addSpecCotangent w1 (fwdEnv w0 * specCot dstWire) cot1
+      have hInv3 := emitAndAccum_preserves_invariant numPrimal fwdEnv cot2 w2 (.scale 1) [dOut] st2 hInv2
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons] at hInv3
+      rw [hdOutVal2] at hInv3
+      have hNext3 := emitAndAccum_nextWire_le w2 (.scale 1) [dOut] st2
+      have hBelow3 := emitAndAccum_preserves_below_nextWire fwdEnv w2 (.scale 1) [dOut] st2
+      have hStepEq :
+          specGradEdgeStep fwdEnv ⟨opIdx, .mac, srcWires, dstWire⟩ specCot =
+            addSpecCotangent w2 (1 * specCot dstWire) cot2 := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, w0, w1, w2, cot1, cot2]
+      rw [hStepEq]
+      refine ⟨hInv3, Nat.le_trans (Nat.le_trans hNext1 hNext2) hNext3, fun u hu => ?_⟩
+      have hu1 : u < st1.nextWire := Nat.lt_of_lt_of_le hu hNext1
+      have hu2 : u < st2.nextWire := Nat.lt_of_lt_of_le hu1 hNext2
+      change evalHyperEdgesComb fwdEnv (emitAndAccum w2 (.scale 1) [dOut] st2).revEdges u =
+        evalHyperEdgesComb fwdEnv st0.revEdges u
+      rw [hBelow3 u hu2, hBelow2 u hu1, hBelow1 u hu]
+    | mux =>
+      simp only
+      let c  := wireAt srcWires 0
+      let w1 := wireAt srcWires 1
+      let w2 := wireAt srcWires 2
+      obtain ⟨hInvZ, hNextZ, hzEq, hzVal, hBelowZ⟩ := emitRevEdge_const_zero_sound numPrimal fwdEnv specCot st0 hInv
+      let zWire := (emitRevEdge (.const 0) [] st0).1
+      let st1   := (emitRevEdge (.const 0) [] st0).2
+      have hzLt1 : zWire < st1.nextWire := by
+        change (emitRevEdge (.const 0) [] st0).1 < st1.nextWire
+        rw [hzEq]
+        exact hNextZ
+      have hcLt1 : c < st1.nextWire := Nat.lt_trans (hwLt 0) hNextZ
+      have hdOutLt1 : dOut < st1.nextWire := Nat.lt_trans hdOutLt hNextZ
+      have hcVal1 : evalHyperEdgesComb fwdEnv st1.revEdges c = fwdEnv c := by
+        rw [hBelowZ c (hwLt 0), hwVal 0]
+      have hdOutVal1 : evalHyperEdgesComb fwdEnv st1.revEdges dOut = specCot dstWire := by
+        rw [hBelowZ dOut hdOutLt, hdOutVal]
+      let st2 := emitAndAccum w1 .mux [c, dOut, zWire] st1
+      have hInv2 := emitAndAccum_preserves_invariant numPrimal fwdEnv specCot w1 .mux [c, dOut, zWire] st1 hInvZ
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons] at hInv2
+      rw [hcVal1, hdOutVal1, hzVal] at hInv2
+      have hNext2 := emitAndAccum_nextWire_le w1 .mux [c, dOut, zWire] st1
+      have hBelow2 := emitAndAccum_preserves_below_nextWire fwdEnv w1 .mux [c, dOut, zWire] st1
+      have hcVal2 : evalHyperEdgesComb fwdEnv st2.revEdges c = fwdEnv c := by
+        rw [hBelow2 c hcLt1, hcVal1]
+      have hzVal2 : evalHyperEdgesComb fwdEnv st2.revEdges zWire = 0 := by
+        rw [hBelow2 zWire hzLt1, hzVal]
+      have hdOutVal2 : evalHyperEdgesComb fwdEnv st2.revEdges dOut = specCot dstWire := by
+        rw [hBelow2 dOut hdOutLt1, hdOutVal1]
+      let cot1 := addSpecCotangent w1 (if (fwdEnv c != 0) = true then specCot dstWire else 0) specCot
+      have hInv3 := emitAndAccum_preserves_invariant numPrimal fwdEnv cot1 w2 .mux [c, zWire, dOut] st2 hInv2
+      dsimp only [List.map, evalHypergraphOp, list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons] at hInv3
+      rw [hcVal2, hzVal2, hdOutVal2] at hInv3
+      have hNext3 := emitAndAccum_nextWire_le w2 .mux [c, zWire, dOut] st2
+      have hBelow3 := emitAndAccum_preserves_below_nextWire fwdEnv w2 .mux [c, zWire, dOut] st2
+      have hStepEq :
+          specGradEdgeStep fwdEnv ⟨opIdx, .mux, srcWires, dstWire⟩ specCot =
+            addSpecCotangent w2 (if (fwdEnv c != 0) = true then 0 else specCot dstWire) cot1 := by
+        simp [specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, c, w1, w2, cot1]
+      rw [hStepEq]
+      refine ⟨hInv3, Nat.le_trans (Nat.le_trans (Nat.le_of_lt hNextZ) hNext2) hNext3, fun u hu => ?_⟩
+      have hu1 : u < st1.nextWire := Nat.lt_trans hu hNextZ
+      have hu2 : u < st2.nextWire := Nat.lt_of_lt_of_le hu1 hNext2
+      change evalHyperEdgesComb fwdEnv (emitAndAccum w2 .mux [c, zWire, dOut] st2).revEdges u =
+        evalHyperEdgesComb fwdEnv st0.revEdges u
+      rw [hBelow3 u hu2, hBelow2 u hu1, hBelowZ u hu]
+
+/-- Structural induction over any reversed forward edge list `revFwd : List HyperEdge` establishing
+that `revFwd.foldl (fun st e => pullbackHyperEdge e st) initSt` maintains `CotStateInvariant` for
+`specGradRevOrder fwdEnv revFwd initCot`. -/
+theorem pullbackHyperEdges_foldl_sound
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (revFwd : List HyperEdge)
+    (initCot : Nat → Int) (initSt : CotangentBuilderState)
+    (hEdges : ∀ e ∈ revFwd, EdgeSrcBounded numPrimal e)
+    (hInv : CotStateInvariant numPrimal fwdEnv initCot initSt) :
+    let finalSt := revFwd.foldl (fun st e => pullbackHyperEdge e st) initSt
+    CotStateInvariant numPrimal fwdEnv (specGradRevOrder fwdEnv revFwd initCot) finalSt ∧
+    initSt.nextWire ≤ finalSt.nextWire ∧
+    (∀ u, u < initSt.nextWire →
+      evalHyperEdgesComb fwdEnv finalSt.revEdges u = evalHyperEdgesComb fwdEnv initSt.revEdges u) := by
+  induction revFwd generalizing initCot initSt with
+  | nil =>
+    exact ⟨hInv, Nat.le_refl _, fun _ _ => rfl⟩
+  | cons e rest ih =>
+    dsimp only [List.foldl_cons, specGradRevOrder]
+    have hHeadEdge : EdgeSrcBounded numPrimal e := hEdges e List.mem_cons_self
+    have hRestEdges : ∀ e' ∈ rest, EdgeSrcBounded numPrimal e' :=
+      fun e' he' => hEdges e' (List.mem_cons_of_mem e he')
+    obtain ⟨hInv1, hNext1, hBelow1⟩ :=
+      pullbackHyperEdge_sound numPrimal fwdEnv initCot e initSt hHeadEdge hInv
+    obtain ⟨hInvRest, hNextRest, hBelowRest⟩ :=
+      ih (specGradEdgeStep fwdEnv e initCot) (pullbackHyperEdge e initSt) hRestEdges hInv1
+    refine ⟨hInvRest, Nat.le_trans hNext1 hNextRest, fun u hu => ?_⟩
+    rw [hBelowRest u (Nat.lt_of_lt_of_le hu hNext1), hBelow1 u hu]
+
+theorem resolveInputCotWires_sound
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (specCot : Nat → Int)
+    (inWires : List Nat) (st : CotangentBuilderState)
+    (hInv : CotStateInvariant numPrimal fwdEnv specCot st) :
+    CotStateInvariant numPrimal fwdEnv specCot (resolveInputCotWires inWires st).2 ∧
+    st.nextWire ≤ (resolveInputCotWires inWires st).2.nextWire ∧
+    (∀ u, u < st.nextWire →
+      evalHyperEdgesComb fwdEnv (resolveInputCotWires inWires st).2.revEdges u =
+        evalHyperEdgesComb fwdEnv st.revEdges u) ∧
+    (resolveInputCotWires inWires st).1.map
+      (evalHyperEdgesComb fwdEnv (resolveInputCotWires inWires st).2.revEdges) =
+      inWires.map specCot := by
+  induction inWires generalizing st with
+  | nil =>
+    exact ⟨hInv, Nat.le_refl _, fun _ _ => rfl, rfl⟩
+  | cons w rest ih =>
+    rcases st with ⟨cotMap, nextWire, revEdges⟩
+    unfold resolveInputCotWires
+    cases hLook : cotMap.lookup w with
+    | some cw =>
+      simp only
+      obtain ⟨hcwLt, hcwVal⟩ := hInv.lookup_some w cw hLook
+      dsimp at hcwLt hcwVal
+      obtain ⟨hInvRest, hNextRest, hBelowRest, hMapRest⟩ := ih ⟨cotMap, nextWire, revEdges⟩ hInv
+      refine ⟨hInvRest, hNextRest, hBelowRest, ?_⟩
+      simp only [List.map_cons]
+      rw [hBelowRest cw hcwLt, hcwVal, hMapRest]
+    | none =>
+      simp only
+      have hSpec0 : specCot w = 0 := hInv.lookup_none w hLook
+      let e0 : HyperEdge := { opIdx := 0, op := .const 0, srcWires := [], dstWire := nextWire }
+      let st1 : CotangentBuilderState := ⟨setCotWire w nextWire cotMap, nextWire + 1, revEdges ++ [e0]⟩
+      have hBelow1 : ∀ u, u < nextWire → evalHyperEdgesComb fwdEnv st1.revEdges u = evalHyperEdgesComb fwdEnv revEdges u := by
+        intro u hu
+        dsimp [st1]
+        rw [evalHyperEdgesComb_append]
+        simp only [evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+        exact stepHyperEdge_ne _ _ u (by dsimp [e0]; omega)
+      have hValNext : evalHyperEdgesComb fwdEnv st1.revEdges nextWire = specCot w := by
+        dsimp [st1]
+        rw [evalHyperEdgesComb_append]
+        simp only [evalHyperEdgesComb_cons, evalHyperEdgesComb_nil]
+        change stepHyperEdge (evalHyperEdgesComb fwdEnv revEdges) e0 e0.dstWire = specCot w
+        rw [stepHyperEdge_eq_self]
+        simp [e0, evalHypergraphOp, hSpec0]
+      have hInv1 : CotStateInvariant numPrimal fwdEnv specCot st1 := by
+        refine
+          { primal_le_next := by
+              have hPrimalLe := hInv.primal_le_next
+              dsimp at hPrimalLe
+              dsimp [st1]
+              omega
+          , primal_preserved := fun u hu => by
+              have hPrimalLe := hInv.primal_le_next
+              dsimp at hPrimalLe
+              rw [hBelow1 u (Nat.lt_of_lt_of_le hu hPrimalLe)]
+              exact hInv.primal_preserved u hu
+          , lookup_none := fun u hNone => by
+              dsimp [st1] at hNone
+              cases huw : (u == w)
+              · rw [setCotWire_lookup_ne w u nextWire cotMap huw] at hNone
+                exact hInv.lookup_none u hNone
+              · have huEq : u = w := LawfulBEq.eq_of_beq huw
+                subst huEq
+                rw [setCotWire_lookup_self] at hNone
+                contradiction
+          , lookup_some := fun u cw hSome => by
+              dsimp [st1] at hSome ⊢
+              cases huw : (u == w)
+              · rw [setCotWire_lookup_ne w u nextWire cotMap huw] at hSome
+                obtain ⟨hcwLt, hcwVal⟩ := hInv.lookup_some u cw hSome
+                dsimp at hcwLt hcwVal
+                refine ⟨by omega, ?_⟩
+                rw [hBelow1 cw hcwLt, hcwVal]
+              · have huEq : u = w := LawfulBEq.eq_of_beq huw
+                subst huEq
+                rw [setCotWire_lookup_self] at hSome
+                injection hSome with hcwEq
+                subst hcwEq
+                exact ⟨by omega, hValNext⟩ }
+      obtain ⟨hInvRest, hNextRest, hBelowRest, hMapRest⟩ := ih st1 hInv1
+      have hNext1 : nextWire < st1.nextWire := by dsimp [st1]; omega
+      refine ⟨hInvRest, Nat.le_trans (Nat.le_of_lt hNext1) hNextRest, fun u hu => ?_, ?_⟩
+      · rw [hBelowRest u (Nat.lt_trans hu hNext1), hBelow1 u hu]
+      · simp only [List.map_cons]
+        change evalHyperEdgesComb fwdEnv (resolveInputCotWires rest st1).2.revEdges nextWire ::
+          List.map (evalHyperEdgesComb fwdEnv (resolveInputCotWires rest st1).2.revEdges)
+            (resolveInputCotWires rest st1).1 =
+          specCot w :: List.map specCot rest
+        rw [hBelowRest nextWire hNext1, hValNext, hMapRest]
+
+/-- **Theorem (`compileGraphAdjoint_dag_sound`)**:
+Universal Whole-DAG Reverse-Mode AD Pullback Soundness by structural induction on `edges : List HyperEdge`:
+1. For ANY primal wire count `numPrimal`, ANY forward DAG `edges : List HyperEdge` whose source wires lie
+   in `0 .. numPrimal - 1` (`∀ e ∈ edges, EdgeSrcBounded numPrimal e`), ANY forward wire environment
+   `fwdEnv : Nat → Int`, ANY initial cotangent map `initCot : Nat → Int`, and ANY initial builder state
+   `initSt : CotangentBuilderState` satisfying `CotStateInvariant numPrimal fwdEnv initCot initSt`:
+   - Folding `pullbackHyperEdge` right-to-left over `edges` (`edges.reverse.foldl`) maintains
+     `CotStateInvariant numPrimal fwdEnv (specGradEdges fwdEnv edges initCot) afterPullback`,
+   - Resolving any boundary input wire list `inWires : List Nat` via `resolveInputCotWires` preserves
+     all primal wires `u < numPrimal` (`evalHyperEdgesComb fwdEnv finalSt.revEdges u = fwdEnv u`) and
+     evaluates the resolved input cotangent wires `inCotWires` to the exact whole-DAG reverse-mode
+     gradients `inWires.map (specGradEdges fwdEnv edges initCot)`! -/
+theorem compileGraphAdjoint_dag_sound
+    (numPrimal : Nat) (fwdEnv : Nat → Int) (edges : List HyperEdge) (inWires : List Nat)
+    (initCot : Nat → Int) (initSt : CotangentBuilderState)
+    (hEdges : ∀ e ∈ edges, EdgeSrcBounded numPrimal e)
+    (hInv : CotStateInvariant numPrimal fwdEnv initCot initSt) :
+    let afterPullback := edges.reverse.foldl (fun st e => pullbackHyperEdge e st) initSt
+    let resolved := resolveInputCotWires inWires afterPullback
+    let inCotWires := resolved.1
+    let finalSt := resolved.2
+    CotStateInvariant numPrimal fwdEnv (specGradEdges fwdEnv edges initCot) afterPullback ∧
+    CotStateInvariant numPrimal fwdEnv (specGradEdges fwdEnv edges initCot) finalSt ∧
+    (∀ u, u < numPrimal → evalHyperEdgesComb fwdEnv finalSt.revEdges u = fwdEnv u) ∧
+    inCotWires.map (evalHyperEdgesComb fwdEnv finalSt.revEdges) =
+      inWires.map (specGradEdges fwdEnv edges initCot) := by
+  have hRevEdges : ∀ e ∈ edges.reverse, EdgeSrcBounded numPrimal e := by
+    intro e he
+    exact hEdges e (List.mem_reverse.mp he)
+  obtain ⟨hInvAfter, _, _⟩ :=
+    pullbackHyperEdges_foldl_sound numPrimal fwdEnv edges.reverse initCot initSt hRevEdges hInv
+  change CotStateInvariant numPrimal fwdEnv (specGradEdges fwdEnv edges initCot) _ at hInvAfter
+  obtain ⟨hInvFinal, _, _, hMapFinal⟩ :=
+    resolveInputCotWires_sound numPrimal fwdEnv (specGradEdges fwdEnv edges initCot)
+      inWires (edges.reverse.foldl (fun st e => pullbackHyperEdge e st) initSt) hInvAfter
+  refine ⟨hInvAfter, hInvFinal, hInvFinal.primal_preserved, hMapFinal⟩
+
 /-! ## 6. Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_latency_sound`) -/
 
 /-- Synchronous 64-bit hardware step for a hyperedge `e` inside a wavefront stage, reading all

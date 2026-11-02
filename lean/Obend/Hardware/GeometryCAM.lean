@@ -2038,17 +2038,9 @@ theorem golden_geometry_cam_evolutionary_search_verified :
     (filterVerifiedDesigns 800 [candGouge, candVerified, candChatter]).map (·.candidateId) = [2] := by
   decide +kernel
 
-/-! ## 6. Mechanized OpenUSD (`LIVERPS`) Scene Composition, `Sdf` × `SDF` Solid Layers & Temporal `timeSamples` Persistence -/
-
 /-- The 7 composition arc kinds of Apple/Pixar OpenUSD (`LIVERPS` strength ordering,
-from strongest `localArc` to weakest `specializesArc`):
-* `localArc`       (**L**ocal / SubLayers — strongest direct opinion),
-* `inheritsArc`    (**I**nherits — C4 nominal class broadcast),
-* `variantArc`     (**V**ariantSets — contextual `Slot` variant choice),
-* `relocatesArc`   (r**E**locates — non-destructive namespace path remapping),
-* `referencesArc`  (**R**eferences — external part/sub-assembly composition),
-* `payloadArc`     (**P**ayloads — lazy call-by-need deferred assembly),
-* `specializesArc` (**S**pecializes — globally weakest fallback template). -/
+from strongest `localArc` to weakest `specializesArc`), consumed by the canonical OpenUSD
+model in `Obend.Hardware.OpenUSD`. -/
 inductive UsdArcKind where
   | localArc
   | inheritsArc
@@ -2068,130 +2060,6 @@ def UsdArcKind.strength : UsdArcKind → Nat
   | .referencesArc  => 3
   | .payloadArc     => 2
   | .specializesArc => 1
-
-/-- An authored OpenUSD property/geometry opinion tagged with its `LIVERPS` composition arc
-and intra-arc layer priority. -/
-structure UsdOpinion (α : Type) where
-  arc      : UsdArcKind
-  subLayer : Nat
-  value    : α
-  deriving DecidableEq, Repr
-
-/-- Returns `true` iff opinion `a` is at least as strong as opinion `b` under `LIVERPS`
-(stronger arc wins; ties broken by higher `subLayer` priority). -/
-def usdOpinionStrongerOrEq {α : Type} (a b : UsdOpinion α) : Bool :=
-  if a.arc.strength == b.arc.strength then
-    decide (b.subLayer ≤ a.subLayer)
-  else
-    decide (b.arc.strength < a.arc.strength)
-
-/-- Resolve two OpenUSD opinions according to `LIVERPS` strength ordering. -/
-def resolveLiverpsPair {α : Type} (a b : UsdOpinion α) : UsdOpinion α :=
-  if usdOpinionStrongerOrEq a b then a else b
-
-/-- Resolve a non-empty stack of OpenUSD opinions with a fallback default opinion. -/
-def resolveLiverpsStack {α : Type} (fallback : UsdOpinion α) : List (UsdOpinion α) → UsdOpinion α
-  | []        => fallback
-  | op :: ops => resolveLiverpsPair op (resolveLiverpsStack fallback ops)
-
-/-- **`LIVERPS` Local Dominance Theorem (`liverps_local_dominates_nonlocal`)**:
-Any `localArc` opinion strictly dominates every `inheritsArc`, `variantArc`, `relocatesArc`,
-`referencesArc`, `payloadArc`, or `specializesArc` opinion regardless of `subLayer` index. -/
-theorem liverps_local_dominates_nonlocal {α : Type}
-    (loc other : UsdOpinion α)
-    (hLoc : loc.arc = .localArc)
-    (hNotLoc : other.arc ≠ .localArc) :
-    resolveLiverpsPair loc other = loc := by
-  unfold resolveLiverpsPair usdOpinionStrongerOrEq
-  rw [hLoc]
-  cases hArc : other.arc <;>
-    simp_all [UsdArcKind.strength]
-
-/-- **`LIVERPS` Specializes Globally Weakest Theorem (`liverps_specializes_globally_weakest`)**:
-A `specializesArc` opinion always yields to any non-`specializesArc` opinion in `LIVERPS`
-regardless of `subLayer` index, acting as a true globally-weakest prototype fallback. -/
-theorem liverps_specializes_globally_weakest {α : Type}
-    (stronger specOp : UsdOpinion α)
-    (hNotSpec : stronger.arc ≠ .specializesArc)
-    (hSpec : specOp.arc = .specializesArc) :
-    resolveLiverpsPair stronger specOp = stronger := by
-  unfold resolveLiverpsPair usdOpinionStrongerOrEq
-  rw [hSpec]
-  cases hArc : stronger.arc <;>
-    simp_all [UsdArcKind.strength]
-
-/-- Open-recursive `Sdf` × `SDF` solid geometry modifier inside an OpenUSD layer:
-* `replaceSolid f`: replaces the inherited solid geometry with `f`,
-* `subtractFeature fCut`: non-destructively mills/drills `fCut` out of `super` (`csgDiff super fCut`),
-* `unionBoss fBoss`: non-destructively fuses a boss/rib `fBoss` onto `super` (`csgUnion super fBoss`),
-* `offsetShell r`: offsets `super` outward by `r` (`offset r super`). -/
-inductive UsdSdfModifier where
-  | replaceSolid    (f : FRepExpr)
-  | subtractFeature (fCut : FRepExpr)
-  | unionBoss       (fBoss : FRepExpr)
-  | offsetShell     (r : Int)
-  deriving DecidableEq, Repr
-
-/-- Apply a `UsdSdfModifier` layer to an inherited `super` `FRepExpr` (analogous to `Obend` `mix`). -/
-def applyUsdSdfModifier (superSdf : FRepExpr) : UsdSdfModifier → FRepExpr
-  | .replaceSolid f       => f
-  | .subtractFeature fCut => .csgDiff superSdf fCut
-  | .unionBoss fBoss      => .csgUnion superSdf fBoss
-  | .offsetShell r        => .offset r superSdf
-
-/-- Compose a C4/`LIVERPS`-linearized list of `UsdSdfModifier` layers on top of a `seed` solid. -/
-def composeUsdSdfLayers (seed : FRepExpr) : List UsdSdfModifier → FRepExpr
-  | []          => seed
-  | mod :: rest => applyUsdSdfModifier (composeUsdSdfLayers seed rest) mod
-
-/-- **Non-Destructive Subtractive Layer Soundness (`usd_subtract_feature_monotone`)**:
-Applying a `.subtractFeature fCut` layer (such as an LC Drives in-slot cooling channel or a 5-axis
-CAM roughing pass) on top of `superSdf` never adds material anywhere in $\mathbb{Z}^3$. -/
-theorem usd_subtract_feature_monotone (x y z : Int) (superSdf fCut : FRepExpr) :
-    evalFRepPoint x y z superSdf ≤
-      evalFRepPoint x y z (applyUsdSdfModifier superSdf (.subtractFeature fCut)) := by
-  dsimp only [applyUsdSdfModifier, evalFRepPoint]
-  omega
-
-/-- A time-sampled physical state (`timeSamples` in OpenUSD) pairing an integer `timeCode`
-(e.g. microseconds, G-code block index, or lifecycle epoch) with a solid `FRepExpr` and
-telemetry value. -/
-structure UsdTimeSample where
-  timeCode  : Nat
-  solidSdf  : FRepExpr
-  telemetry : Int
-  deriving DecidableEq, Repr
-
-/-- Look up the active `UsdTimeSample` at query time `t` (returning the latest sample with `timeCode ≤ t`). -/
-def lookupTimeSample (fallback : UsdTimeSample) (t : Nat) : List UsdTimeSample → UsdTimeSample
-  | [] => fallback
-  | s :: rest =>
-    let later := lookupTimeSample fallback t rest
-    if decide (s.timeCode ≤ t ∧ later.timeCode ≤ s.timeCode) then s else later
-
-/-- Golden OpenUSD `LIVERPS` + `Sdf` × `SDF` + `timeSamples` Verification (`golden_openusd_liverps_sdf_verified`):
-Verifies that:
-1. A `.localArc` cooling-channel override beats `.variantArc` and `.specializesArc` opinions,
-2. Composing a `.subtractFeature` cooling bore on top of a cylindrical stator billet `FRepExpr`
-   cleanly removes the bore center `(0, 0, 0)` (`evalFRepPoint > 0`) while preserving the stator wall
-   `(8, 0, 0)` (`evalFRepPoint ≤ 0`), and
-3. Querying `lookupTimeSample` across a 3-stage machining lifecycle (`t = 0` raw billet, `t = 10`
-   rough milled, `t = 20` finish ground) selects the exact stage at `t = 15`. -/
-theorem golden_openusd_liverps_sdf_verified :
-    let opSpec : UsdOpinion Int := { arc := .specializesArc, subLayer := 99, value := 180 }
-    let opVar  : UsdOpinion Int := { arc := .variantArc,     subLayer := 5,  value := 148 }
-    let opLoc  : UsdOpinion Int := { arc := .localArc,       subLayer := 0,  value := 122 }
-    let statorBillet := FRepExpr.offset 100 (.add (.sq .varX) (.sq .varY))
-    let coolingBore  := FRepExpr.offset 9   (.add (.sq .varX) (.sq .varY))
-    let composedPart := composeUsdSdfLayers statorBillet [.subtractFeature coolingBore]
-    let t0  : UsdTimeSample := { timeCode := 0,  solidSdf := statorBillet, telemetry := 25000 }
-    let t10 : UsdTimeSample := { timeCode := 10, solidSdf := composedPart, telemetry := 85000 }
-    let t20 : UsdTimeSample := { timeCode := 20, solidSdf := composedPart, telemetry := 122000 }
-    (resolveLiverpsStack opSpec [opVar, opLoc]).value = 122 ∧
-    0 < evalFRepPoint 0 0 0 composedPart ∧
-    evalFRepPoint 8 0 0 composedPart ≤ 0 ∧
-    (lookupTimeSample t0 15 [t0, t10, t20]).timeCode = 10 := by
-  decide +kernel
 
 end Obend.Hardware.GeometryCAM
 end

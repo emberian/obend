@@ -231,13 +231,50 @@ def applyTurn (s : VaultStore) (turn : VaultTurn) : VaultStore :=
     | some d => some d.postState
     | none => s c
 
-/-- Turn validity at a store against a contract registry. -/
-def ValidAt (s : VaultStore) (turn : VaultTurn) (contracts : String → Option CellContract) : Prop :=
+/-- Look up a registered `Obend.Judge.Format` by `(formatName, version)`. -/
+def findJudgeFormat : List Obend.Judge.Format → String → String → Option Obend.Judge.Format
+  | [], _, _ => none
+  | F :: rest, name, ver =>
+    if F.name == name && F.version == ver then some F
+    else findJudgeFormat rest name ver
+
+/-- Executable check that a single `TurnWitness` is accepted by its registered `Obend.Judge.Format`. -/
+def checkTurnWitness (formats : List Obend.Judge.Format) (w : TurnWitness) : Bool :=
+  match findJudgeFormat formats w.formatName w.version with
+  | some F =>
+    match F.checkBytes w.grade w.objBytes w.certBytes with
+    | .ok => true
+    | _ => false
+  | none => false
+
+/-- Turn validity at a store against a contract registry and judge format registry
+    (verifying footprint pins, pre-states, contract invariants/laws, and all cited `TurnWitness`es). -/
+def ValidAt (s : VaultStore) (turn : VaultTurn)
+    (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := []) : Prop :=
   Footprint.Holds s turn.readPins ∧
   (∀ d ∈ turn.writeCells, s d.cell = some d.preState) ∧
   (∀ d ∈ turn.writeCells, ∀ C, contracts d.cell = some C →
     Holds C.invariant d.preState ∧
-    Admits C.law d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell))
+    Admits C.law d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell)) ∧
+  (∀ w ∈ turn.witnesses, ∃ F,
+    findJudgeFormat formats w.formatName w.version = some F ∧
+    F.checkBytes w.grade w.objBytes w.certBytes = .ok)
+
+/-- Soundness of witness verification in `ValidAt`: every cited witness
+    decodes to a valid `(o, c)` pair satisfying `F.judge.Meaning o c`. -/
+theorem ValidAt.witness_sound {s : VaultStore} {turn : VaultTurn}
+    {contracts : String → Option CellContract} {formats : List Obend.Judge.Format}
+    (h_valid : ValidAt s turn contracts formats)
+    {w : TurnWitness} (hw : w ∈ turn.witnesses) :
+    ∃ F, findJudgeFormat formats w.formatName w.version = some F ∧
+      ∃ (o : F.Obj) (c : F.Cert),
+        F.decodeObj w.objBytes = .ok o ∧
+        F.decodeCert w.certBytes = .ok c ∧
+        F.judge.Meaning o c := by
+  obtain ⟨_, _, _, h_wit⟩ := h_valid
+  obtain ⟨F, hF, hchk⟩ := h_wit w hw
+  exact ⟨F, hF, F.checkBytes_sound hchk⟩
 
 theorem mem_of_find?_some {α : Type} {p : α → Bool} {l : List α} {a : α} :
     l.find? p = some a → a ∈ l ∧ p a = true := by
@@ -313,14 +350,16 @@ theorem applyTurn_write (s : VaultStore) (turn : VaultTurn) (d : CellDelta)
 /-- **TOCTOU-Free Footprint Pin Preservation Theorem (`no_toctou`)**.
     If a turn's accessed cells are covered by footprint pins that hold at both
     authored store `s₀` and admission store `s`:
-    1. Turn validity at `s` is logically equivalent to validity at `s₀`.
+    1. Turn validity (including all cited judge witnesses) at `s` is logically equivalent to validity at `s₀`.
     2. Written cells receive identical post-states regardless of whether executed on `s₀` or `s`.
     3. Unwritten cells strictly preserve their store value from `s`. -/
-theorem no_toctou (s₀ s : VaultStore) (turn : VaultTurn) (contracts : String → Option CellContract)
+theorem no_toctou (s₀ s : VaultStore) (turn : VaultTurn)
+    (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := [])
     (h_cover : ∀ d ∈ turn.writeCells, ∃ p ∈ turn.readPins, p.cell = d.cell ∧ p.observed = some d.preState)
     (h_fp_s0 : Footprint.Holds s₀ turn.readPins)
     (h_fp_s : Footprint.Holds s turn.readPins) :
-    (ValidAt s₀ turn contracts ↔ ValidAt s turn contracts) ∧
+    (ValidAt s₀ turn contracts formats ↔ ValidAt s turn contracts formats) ∧
     (∀ c, applyTurn s turn c =
       if c ∈ turn.writeFootprint then applyTurn s₀ turn c else s c) := by
   have h_cell_agree : ∀ d ∈ turn.writeCells, s₀ d.cell = s d.cell := by
@@ -342,12 +381,12 @@ theorem no_toctou (s₀ s : VaultStore) (turn : VaultTurn) (contracts : String �
     have hs := h_fp_s p hp_mem
     rw [hp_cell] at hs
     rw [hs, hp_obs]
-  have h_valid_iff : ValidAt s₀ turn contracts ↔ ValidAt s turn contracts := by
+  have h_valid_iff : ValidAt s₀ turn contracts formats ↔ ValidAt s turn contracts formats := by
     constructor
-    · intro ⟨_, _, h_contracts⟩
-      exact ⟨h_fp_s, h_pre_s, h_contracts⟩
-    · intro ⟨_, _, h_contracts⟩
-      exact ⟨h_fp_s0, h_pre_s0, h_contracts⟩
+    · intro ⟨_, _, h_contracts, h_wit⟩
+      exact ⟨h_fp_s, h_pre_s, h_contracts, h_wit⟩
+    · intro ⟨_, _, h_contracts, h_wit⟩
+      exact ⟨h_fp_s0, h_pre_s0, h_contracts, h_wit⟩
   refine ⟨h_valid_iff, fun c => ?_⟩
   split
   · rename_i hc
@@ -430,11 +469,12 @@ theorem vaultTurn_disjoint_commutes (s : VaultStore) (T₁ T₂ : VaultTurn)
     After executing an independent turn T₁, turn T₂ remains fully valid. -/
 theorem admits_after_disjoint (s : VaultStore) (T₁ T₂ : VaultTurn)
     (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := [])
     (h_disj : DisjointTurns T₁ T₂)
-    (h_valid : ValidAt s T₂ contracts) :
-    ValidAt (applyTurn s T₁) T₂ contracts := by
-  obtain ⟨h_pins, h_pre, h_contracts⟩ := h_valid
-  refine ⟨?_, ?_, h_contracts⟩
+    (h_valid : ValidAt s T₂ contracts formats) :
+    ValidAt (applyTurn s T₁) T₂ contracts formats := by
+  obtain ⟨h_pins, h_pre, h_contracts, h_wit⟩ := h_valid
+  refine ⟨?_, ?_, h_contracts, h_wit⟩
   · intro p hp
     have hp_cell_not_mem := disjoint_read_write h_disj hp
     rw [applyTurn_frame_of_not_mem s T₁ p.cell hp_cell_not_mem]
@@ -449,14 +489,15 @@ theorem admits_after_disjoint (s : VaultStore) (T₁ T₂ : VaultTurn)
     are each admitted after the other has been applied. -/
 theorem disjoint_both_orders (s : VaultStore) (T₁ T₂ : VaultTurn)
     (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := [])
     (h_disj : DisjointTurns T₁ T₂)
-    (h₁ : ValidAt s T₁ contracts)
-    (h₂ : ValidAt s T₂ contracts) :
-    ValidAt (applyTurn s T₁) T₂ contracts ∧
-    ValidAt (applyTurn s T₂) T₁ contracts := by
+    (h₁ : ValidAt s T₁ contracts formats)
+    (h₂ : ValidAt s T₂ contracts formats) :
+    ValidAt (applyTurn s T₁) T₂ contracts formats ∧
+    ValidAt (applyTurn s T₂) T₁ contracts formats := by
   have h_disj_symm : DisjointTurns T₂ T₁ := ⟨h_disj.2, h_disj.1⟩
-  exact ⟨admits_after_disjoint s T₁ T₂ contracts h_disj h₂,
-         admits_after_disjoint s T₂ T₁ contracts h_disj_symm h₁⟩
+  exact ⟨admits_after_disjoint s T₁ T₂ contracts formats h_disj h₂,
+         admits_after_disjoint s T₂ T₁ contracts formats h_disj_symm h₁⟩
 
 /-! ## 6. Integration with CellContract -/
 
@@ -464,33 +505,39 @@ theorem disjoint_both_orders (s : VaultStore) (T₁ T₂ : VaultTurn)
     Under an admitted VaultTurn, every mutated cell's post-state satisfies
     its active contract invariant. -/
 theorem VaultTurn.post_invariants_hold (turn : VaultTurn) (s : VaultStore)
-    (contracts : String → Option CellContract) (h_valid : ValidAt s turn contracts) :
+    (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := [])
+    (h_valid : ValidAt s turn contracts formats) :
     ∀ d ∈ turn.writeCells, ∀ C, contracts d.cell = some C →
       Holds C.invariant d.postState := by
   intro d hd C hC
-  obtain ⟨_, _, h_contracts⟩ := h_valid
+  obtain ⟨_, _, h_contracts, _⟩ := h_valid
   have ⟨h_inv, h_adm⟩ := h_contracts d hd C hC
   exact C.inductive_preserves d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell) h_inv h_adm
 
 /-- **Post-State Step Soundness Theorem**.
     Under an admitted VaultTurn, every cell transition satisfies its contract step specification. -/
 theorem VaultTurn.post_step_sound (turn : VaultTurn) (s : VaultStore)
-    (contracts : String → Option CellContract) (h_valid : ValidAt s turn contracts) :
+    (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := [])
+    (h_valid : ValidAt s turn contracts formats) :
     ∀ d ∈ turn.writeCells, ∀ C, contracts d.cell = some C →
       Admits C.stepRel d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell) := by
   intro d hd C hC
-  obtain ⟨_, _, h_contracts⟩ := h_valid
+  obtain ⟨_, _, h_contracts, _⟩ := h_valid
   have ⟨h_inv, h_adm⟩ := h_contracts d hd C hC
   exact C.step_sound d.preState d.postState (turnRequest turn.turnId turn.occasion d.cell) h_inv h_adm
 
 /-- **Store-Level Invariance**: Under `nodup_cells`, every mutated cell in the resulting
     store actually contains `d.postState` and satisfies the contract invariant. -/
 theorem VaultTurn.store_post_invariants_hold (turn : VaultTurn) (s : VaultStore)
-    (contracts : String → Option CellContract) (h_valid : ValidAt s turn contracts) :
+    (contracts : String → Option CellContract)
+    (formats : List Obend.Judge.Format := [])
+    (h_valid : ValidAt s turn contracts formats) :
     ∀ d ∈ turn.writeCells, ∀ C, contracts d.cell = some C →
       applyTurn s turn d.cell = some d.postState ∧ Holds C.invariant d.postState := by
   intro d hd C hC
-  refine ⟨applyTurn_write s turn d hd, turn.post_invariants_hold s contracts h_valid d hd C hC⟩
+  refine ⟨applyTurn_write s turn d hd, turn.post_invariants_hold s contracts formats h_valid d hd C hC⟩
 
 /-- **Turn Relaw Preservation**.
     If a turn transition updates a cell's active contract law from `C.law` to `newLaw`
@@ -581,67 +628,6 @@ theorem turn_conserves_total_state_balance (turn : VaultTurn) (balanceField : St
   have h_diff := sumAssetDelta_eq_post_sub_pre turn.writeCells balanceField h_acc
   have h_bal := turn.balanced balanceField
   omega
-
-/-! ## 8. Judge-Certified `VaultTurn` Witnesses & `no_toctou_with_witnesses` (`WS-F`) -/
-
-/-- Look up a registered `Obend.Judge.Format` by `(formatName, version)`. -/
-def findJudgeFormat : List Obend.Judge.Format → String → String → Option Obend.Judge.Format
-  | [], _, _ => none
-  | F :: rest, name, ver =>
-    if F.name == name && F.version == ver then some F
-    else findJudgeFormat rest name ver
-
-/-- Executable check that a single `TurnWitness` is accepted by its registered `Obend.Judge.Format`. -/
-def checkTurnWitness (formats : List Obend.Judge.Format) (w : TurnWitness) : Bool :=
-  match findJudgeFormat formats w.formatName w.version with
-  | some F =>
-    match F.checkBytes w.grade w.objBytes w.certBytes with
-    | .ok => true
-    | _ => false
-  | none => false
-
-/-- Turn validity at store `s` requiring every cited `TurnWitness` in `turn.witnesses`
-    to pass its registered `Obend.Judge.Format.checkBytes`. -/
-def ValidAtWithWitnesses (s : VaultStore) (turn : VaultTurn)
-    (contracts : String → Option CellContract) (formats : List Obend.Judge.Format) : Prop :=
-  ValidAt s turn contracts ∧
-  (∀ w ∈ turn.witnesses, ∃ F,
-    findJudgeFormat formats w.formatName w.version = some F ∧
-    F.checkBytes w.grade w.objBytes w.certBytes = .ok)
-
-/-- Soundness of witness verification in `ValidAtWithWitnesses`: every cited witness
-    decodes to a valid `(o, c)` pair satisfying `F.judge.Meaning o c`. -/
-theorem ValidAtWithWitnesses.witness_sound {s : VaultStore} {turn : VaultTurn}
-    {contracts : String → Option CellContract} {formats : List Obend.Judge.Format}
-    (h_valid : ValidAtWithWitnesses s turn contracts formats)
-    {w : TurnWitness} (hw : w ∈ turn.witnesses) :
-    ∃ F, findJudgeFormat formats w.formatName w.version = some F ∧
-      ∃ (o : F.Obj) (c : F.Cert),
-        F.decodeObj w.objBytes = .ok o ∧
-        F.decodeCert w.certBytes = .ok c ∧
-        F.judge.Meaning o c := by
-  obtain ⟨_, h_wit⟩ := h_valid
-  obtain ⟨F, hF, hchk⟩ := h_wit w hw
-  exact ⟨F, hF, F.checkBytes_sound hchk⟩
-
-/-- **TOCTOU-Free Footprint Pin Preservation with Judge Witnesses (`no_toctou_with_witnesses`)**:
-    If a turn's accessed cells are covered by footprint pins that hold at both
-    authored store `s₀` and admission store `s`:
-    1. `ValidAtWithWitnesses` at `s` is logically equivalent to `ValidAtWithWitnesses` at `s₀`.
-    2. Written cells receive identical post-states regardless of whether executed on `s₀` or `s`.
-    3. Unwritten cells strictly preserve their store value from `s`. -/
-theorem no_toctou_with_witnesses (s₀ s : VaultStore) (turn : VaultTurn)
-    (contracts : String → Option CellContract) (formats : List Obend.Judge.Format)
-    (h_cover : ∀ d ∈ turn.writeCells, ∃ p ∈ turn.readPins, p.cell = d.cell ∧ p.observed = some d.preState)
-    (h_fp_s0 : Footprint.Holds s₀ turn.readPins)
-    (h_fp_s : Footprint.Holds s turn.readPins) :
-    (ValidAtWithWitnesses s₀ turn contracts formats ↔ ValidAtWithWitnesses s turn contracts formats) ∧
-    (∀ c, applyTurn s turn c =
-      if c ∈ turn.writeFootprint then applyTurn s₀ turn c else s c) := by
-  obtain ⟨h_valid_iff, h_apply⟩ := no_toctou s₀ s turn contracts h_cover h_fp_s0 h_fp_s
-  refine ⟨?_, h_apply⟩
-  unfold ValidAtWithWitnesses
-  rw [h_valid_iff]
 
 end Obend.Vault
 

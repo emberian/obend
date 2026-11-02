@@ -25,6 +25,8 @@ public import Obend.Hardware.Accelerators
 public import Obend.Hardware.Magnetics
 public import Obend.Hardware.FluidThermal
 public import Obend.Hardware.PowerElectronics
+public import Obend.Hardware.GeometryCAM
+public import Obend.Hardware.OpenHypergraph
 @[expose] public section
 
 namespace Obend.Lower
@@ -35,61 +37,7 @@ open Obend.Hardware.Accelerators
 
 set_option autoImplicit false
 
-/-! ## 1. Compiler from Synthesized `RtlExpr` / `RtlModule` to AMD `CDNA3`/`RDNA3` GPU Wavefront ISA -/
-
-/-- Lower a synthesized `RtlExpr` into a sequence of AMD `CDNA3`/`RDNA3` GPU VALU instructions
-(`List AmdGpuInst`), allocating fresh virtual VGPRs starting from `nextReg` (where VGPR `0` holds
-the primary kernel input `arg0`). Returns `(resultVgpr, nextFreeVgpr, instructions)`. -/
-def compileRtlExprToAmdGpu (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdGpuInst
-  | .const bv =>
-    (nextReg, nextReg + 1, [.vMovImm nextReg (Int.ofNat bv.toNat)])
-  | .inputPort idx =>
-    (nextReg, nextReg + 1, [.vCopy nextReg idx])
-  | .wireRef idx =>
-    (nextReg, nextReg + 1, [.vCopy nextReg idx])
-  | .regRead idx =>
-    (nextReg, nextReg + 1, [.vCopy nextReg idx])
-  | .alu op lhs rhs =>
-    let (rL, n1, codeL) := compileRtlExprToAmdGpu nextReg lhs
-    let (rR, n2, codeR) := compileRtlExprToAmdGpu n1 rhs
-    let dst := n2
-    let inst : AmdGpuInst :=
-      match op with
-      | .add    => .vAddI32 dst rL rR
-      | .sub    => .vSubI32 dst rL rR
-      | .mul    => .vMulLoI32 dst rL rR
-      | .ult    =>
-        -- Represented via vSelectLe on (rL + 1 <= rR) in general, or for saturating sub handled in .mux
-        .vSubI32 dst rL rR
-      | _       => .vAddI32 dst rL rR
-    (dst, dst + 1, codeL ++ codeR ++ [inst])
-  | .mux (.alu .ult a b) (.const 0#64) (.alu .sub _ _) =>
-    -- Recognizes the saturating subtraction idiom emitted by `compilePrimSat .subtract`!
-    let (rA, n1, codeA) := compileRtlExprToAmdGpu nextReg a
-    let (rB, n2, codeB) := compileRtlExprToAmdGpu n1 b
-    let dst := n2
-    (dst, dst + 1, codeA ++ codeB ++ [.vSubSatNat dst rA rB])
-  | .mux (.alu .ult b a) (.const 0#64) (.const 1#64) =>
-    -- Recognizes the `a ≤ b` comparison idiom emitted by `compilePrimSat .lessEqual`!
-    let (rA, n1, codeA) := compileRtlExprToAmdGpu nextReg a
-    let (rB, n2, codeB) := compileRtlExprToAmdGpu n1 b
-    let rOne := n2
-    let rZero := n2 + 1
-    let dst := n2 + 2
-    (dst, dst + 1,
-      codeA ++ codeB ++
-      [.vMovImm rOne 1, .vMovImm rZero 0, .vSelectLe dst rA rB rOne rZero])
-  | .mux cond tBranch fBranch =>
-    let (rC, n1, codeC) := compileRtlExprToAmdGpu nextReg cond
-    let (rT, n2, codeT) := compileRtlExprToAmdGpu n1 tBranch
-    let (rF, n3, codeF) := compileRtlExprToAmdGpu n2 fBranch
-    let rZero := n3
-    let dst := n3 + 1
-    (dst, dst + 1,
-      codeC ++ codeT ++ codeF ++
-      [.vMovImm rZero 0, .vSelectLe dst rC rZero rF rT])
-  | .bitNot src =>
-    compileRtlExprToAmdGpu nextReg src
+/-! ## 1. Compiler from Synthesized `RtlExpr` / `RtlModule` to 64-Bit AMD `CDNA3`/`RDNA3` GPU Wavefront ISA (`AmdGpuVop64Inst`) -/
 
 /-- Faithful 64-bit AMD `CDNA3`/`RDNA3` VALU/VOP3/VOPC instruction set (`AmdGpuVop64Inst`)
 covering every `RtlAluOp` (`add`, `sub`, `mul`, `bitAnd`, `bitOr`, `bitXor`, `shl`, `lshr`, `eq`, `ult`),
@@ -140,7 +88,7 @@ def compileRtlAluToVop (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop64Inst :
 /-- Compile any `RtlExpr` into a sequence of faithful 64-bit AMD GPU VOP instructions
 (`List AmdGpuVop64Inst`), preserving every `RtlAluOp` via `compileRtlAluToVop`, lowering
 `.bitNot` to `v_not_b64`, and lowering `.mux` to `v_cndmask_b64`. -/
-def compileRtlExprToVop64 (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdGpuVop64Inst
+def compileRtlExprToAmdGpu (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdGpuVop64Inst
   | .const bv =>
     (nextReg, nextReg + 1, [.v_mov_b64 nextReg bv])
   | .inputPort idx =>
@@ -150,19 +98,19 @@ def compileRtlExprToVop64 (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdGp
   | .regRead idx =>
     (nextReg, nextReg + 1, [.v_read_r_b64 nextReg idx])
   | .alu op lhs rhs =>
-    let (rL, n1, codeL) := compileRtlExprToVop64 nextReg lhs
-    let (rR, n2, codeR) := compileRtlExprToVop64 n1 rhs
+    let (rL, n1, codeL) := compileRtlExprToAmdGpu nextReg lhs
+    let (rR, n2, codeR) := compileRtlExprToAmdGpu n1 rhs
     let dst := n2
     let inst := compileRtlAluToVop op dst rL rR
     (dst, dst + 1, codeL ++ codeR ++ [inst])
   | .mux cond tBranch fBranch =>
-    let (rC, n1, codeC) := compileRtlExprToVop64 nextReg cond
-    let (rT, n2, codeT) := compileRtlExprToVop64 n1 tBranch
-    let (rF, n3, codeF) := compileRtlExprToVop64 n2 fBranch
+    let (rC, n1, codeC) := compileRtlExprToAmdGpu nextReg cond
+    let (rT, n2, codeT) := compileRtlExprToAmdGpu n1 tBranch
+    let (rF, n3, codeF) := compileRtlExprToAmdGpu n2 fBranch
     let dst := n3
     (dst, dst + 1, codeC ++ codeT ++ codeF ++ [.v_cndmask_b64 dst rC rT rF])
   | .bitNot src =>
-    let (rS, n1, codeS) := compileRtlExprToVop64 nextReg src
+    let (rS, n1, codeS) := compileRtlExprToAmdGpu nextReg src
     let dst := n1
     (dst, dst + 1, codeS ++ [.v_not_b64 dst rS])
 
@@ -199,10 +147,10 @@ def runAmdGpuVop64Prog
   | inst :: rest =>
     runAmdGpuVop64Prog inputs wires regs (execAmdGpuVop64Inst inputs wires regs vgprs inst) rest
 
-/-- Compile an `RtlExpr` via `compileRtlExprToVop64`, execute the resulting 64-bit VOP instruction
+/-- Compile an `RtlExpr` via `compileRtlExprToAmdGpu`, execute the resulting 64-bit VOP instruction
 sequence on a zero-initialized VGPR file, and return the result VGPR value. -/
 def evalAmdGpuExpr (inputs wires regs : Nat → BitVec 64) (e : RtlExpr) : BitVec 64 :=
-  let (resReg, _, code) := compileRtlExprToVop64 0 e
+  let (resReg, _, code) := compileRtlExprToAmdGpu 0 e
   (runAmdGpuVop64Prog inputs wires regs (fun _ => 0#64) code) resReg
 
 /-- **Universal Faithfulness Theorem for All 64-bit GPU VOP ALU Operations & `bitNot`
@@ -247,21 +195,28 @@ theorem evalAmdGpuExpr_faithful_all_ops :
   · intro op inputs wires regs i j
     cases op <;> rfl
 
-/-- Compile the primary output wire of an `RtlModule` to an AMD GPU ISA kernel (`resultReg × List AmdGpuInst`),
-starting temporary VGPR allocation at `v1` (with `v0` holding the primary input argument). -/
-def compileRtlModuleToAmdGpu (m : RtlModule) : Option (Nat × List AmdGpuInst) :=
+/-- Compile the primary output wire of an `RtlModule` to a 64-bit AMD GPU VOP64 kernel
+(`resultReg × List AmdGpuVop64Inst`), starting VGPR allocation at `v1`. -/
+def compileRtlModuleToAmdGpu (m : RtlModule) : Option (Nat × List AmdGpuVop64Inst) :=
   match m.wires with
   | w :: _ =>
     let (resReg, _, code) := compileRtlExprToAmdGpu 1 w.expr
     some (resReg, code)
   | [] => none
 
-/-- Execute a compiled AMD GPU kernel with primary input `arg0 : Int` in `v0` and read the result VGPR. -/
-def evalCompiledAmdGpuModule (m : RtlModule) (arg0 : Int) : Option Int :=
+/-- Execute a compiled 64-bit AMD GPU VOP64 kernel (`runAmdGpuVop64Prog`) with primary input
+`arg0 : Nat` bound to input port `0` (`BitVec.ofNat 64 arg0`) and read the result VGPR. -/
+def evalCompiledAmdGpuModule (m : RtlModule) (arg0 : Nat) : Option Nat :=
   match compileRtlModuleToAmdGpu m with
   | some (resReg, code) =>
-    let finalRegs := runAmdGpuKernel [arg0] code
-    some (readVgpr finalRegs resReg)
+    let finalVgprs :=
+      runAmdGpuVop64Prog
+        (fun _ => BitVec.ofNat 64 arg0)
+        (fun _ => 0#64)
+        (fun _ => 0#64)
+        (fun _ => 0#64)
+        code
+    some (finalVgprs resReg).toNat
   | none => none
 
 /-! ## 2. Domain A: LC Drives (Potsdam, NY) Direct In-Slot Stator Cooling Kernel -/
@@ -468,6 +423,237 @@ theorem femm_2d_energy_self_accelerates_6stage :
   · simpa [lowerT] using lower_sound_nat femm2dElementEnergy_runs_6
   · exact lean_to_book "femmEnergy" femm2dElementEnergyLExpr 6 125 (by decide +kernel) femm2dElementEnergy_runs_6
   · decide +kernel
+
+/-! ## 5. Coupled PDE, Reverse-AD & Octree Geometry 6-Stage Self-Acceleration (`libCEED` + `catgrad` + `fidget`) -/
+
+/-- `Lean-lite` (`LExpr`) kernel for the `libCEED` matrix-free 2D FEMM nodal residual operator
+$y_0(a_0) = \nu (b_0 \nabla_x A_z + c_0 \nabla_y A_z) = 5 \cdot ((a_0 - 2) + (a_0 - 3))$
+on `selfAccelFemmTriangle` with fixed neighbor nodal potentials $(a_1, a_2) = (3, 2)$.
+At $a_0 = 6$, $y_0(6) = 5 \cdot (4 + 3) = 35$, matching
+`(Obend.Hardware.Magnetics.evalLibCeedElementOp selfAccelFemmTriangle 6 3 2).1`. -/
+def libCeedFemmNodalOpLExpr : LExpr :=
+  .lam .natural
+    (.natBin .mul
+      (.lit 5)
+      (.natBin .add
+        (.natBin .sub (.bvar 0) (.lit 2))
+        (.natBin .sub (.bvar 0) (.lit 3))))
+
+theorem libCeedFemmNodalOp_runs_6 :
+    SSteps (.app libCeedFemmNodalOpLExpr (.lit 6)) (.lit 35) := by
+  refine .next (.beta .natural _ (.lit 6)) ?_
+  have hinst :
+      (LExpr.natBin .mul
+        (.lit 5)
+        (.natBin .add
+          (.natBin .sub (.bvar 0) (.lit 2))
+          (.natBin .sub (.bvar 0) (.lit 3)))).inst (.lit 6) =
+      .natBin .mul
+        (.lit 5)
+        (.natBin .add
+          (.natBin .sub (.lit 6) (.lit 2))
+          (.natBin .sub (.lit 6) (.lit 3))) := by
+    simp [LExpr.inst, LExpr.subst, LExpr.single]
+  rw [hinst]
+  refine .next (.binRight .mul 5 (.binLeft .add (.natBin .sub (.lit 6) (.lit 3)) (.binLit .sub 6 2))) ?_
+  refine .next (.binRight .mul 5 (.binRight .add 4 (.binLit .sub 6 3))) ?_
+  refine .next (.binRight .mul 5 (.binLit .add 4 3)) ?_
+  exact .next (.binLit .mul 5 7) (.refl _)
+
+/-- **6-Stage Reflexive Self-Acceleration of `libCEED` Matrix-Free FEMM Nodal Operator
+(`self_accelerate_libceed_femm_nodal_op_6stage`)**:
+Lowers `libCeedFemmNodalOpLExpr` across all 6 stages:
+1. `Lean-lite` `SSteps` (`35`),
+2. `Obend.Core` `Evaluates` (`35`),
+3. `Obend.Leaf.Book` `Halts` (`35`),
+4. Saturating FPGA `DSP58` RTL (`compileBookToRtlSat` + `runDsp58Cascade`),
+5. 64-bit AMD `CDNA3` `AmdGpuVop64Inst` (`evalCompiledAmdGpuModule`) + `vMfmaDot4`, and
+6. TPU Systolic Array (`runSystolicMacChain`), $K$-limb Ozaki Base-13 `FP4` (`evalOzakiBase13KLimbDot`),
+   and `Obend.Hardware.Magnetics.evalLibCeedElementOp`! -/
+theorem self_accelerate_libceed_femm_nodal_op_6stage :
+    let C := leanComposition "libCeedNodal" (lowerT libCeedFemmNodalOpLExpr)
+    let B := emit C
+    SSteps (.app libCeedFemmNodalOpLExpr (.lit 6)) (.lit 35) ∧
+    Evaluates (.app (lowerT libCeedFemmNodalOpLExpr) (.nat 6)) (.nat 35) ∧
+    Halts (.app (.get B.link "libCeedNodal") (.nat 6)) (.natural 35) ∧
+    (match compileBookToRtlSat "lean_libceed_nodal_rtl" B with
+     | some m =>
+       checkRtlModule m &&
+       (evalModuleOutputs m (fun _ => 6#64) (fun _ => 0#64) == [("out_libCeedNodal", 35#64)]) &&
+       (evalCompiledAmdGpuModule m 6 == some 35)
+     | none => false) = true ∧
+    readVgpr (execAmdGpuInst [5, 5, 0, 0, 4, 3, 0, 0, 0] (.vMfmaDot4 8 0 4 8)) 8 = 35 ∧
+    runSystolicMacChain 0 [5, 5] [4, 3] = 35 ∧
+    runDsp58Cascade 0 [(5, 4), (5, 3)] = 35 ∧
+    allLimbsDoubledFp4 [-8, 1] = true ∧
+    evalOzakiBase13KLimbDot [[-8, 1], [-8, 1]] [[4], [3]] = 35 ∧
+    (Obend.Hardware.Magnetics.evalLibCeedElementOp selfAccelFemmTriangle 6 3 2).1 = 35 := by
+  refine ⟨libCeedFemmNodalOp_runs_6, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  · simpa [lowerT] using lower_sound_nat libCeedFemmNodalOp_runs_6
+  · exact lean_to_book "libCeedNodal" libCeedFemmNodalOpLExpr 6 35 (by decide +kernel) libCeedFemmNodalOp_runs_6
+  · decide +kernel
+
+/-- `Lean-lite` (`LExpr`) kernel for `catgrad` 2-stage Optic reverse-mode AD fanout cotangent
+accumulation $\Delta y(y) = \Delta y_1 + \Delta y_2 = (x \cdot y) + (x \cdot y)$ for the
+2-operator chain $L(x, y) = (x \cdot y) \cdot y$ at $x = 4$.
+At $y = 7$, $\Delta y(7) = 28 + 28 = 56$, matching `Obend.Hardware.OpenHypergraph.evalOpticChain2Rev`. -/
+def catgradOpticRevAdLExpr : LExpr :=
+  .lam .natural
+    (.natBin .add
+      (.natBin .mul (.lit 4) (.bvar 0))
+      (.natBin .mul (.lit 4) (.bvar 0)))
+
+theorem catgradOpticRevAd_runs_7 :
+    SSteps (.app catgradOpticRevAdLExpr (.lit 7)) (.lit 56) := by
+  refine .next (.beta .natural _ (.lit 7)) ?_
+  have hinst :
+      (LExpr.natBin .add
+        (.natBin .mul (.lit 4) (.bvar 0))
+        (.natBin .mul (.lit 4) (.bvar 0))).inst (.lit 7) =
+      .natBin .add
+        (.natBin .mul (.lit 4) (.lit 7))
+        (.natBin .mul (.lit 4) (.lit 7)) := by
+    simp [LExpr.inst, LExpr.subst, LExpr.single]
+  rw [hinst]
+  refine .next (.binLeft .add (.natBin .mul (.lit 4) (.lit 7)) (.binLit .mul 4 7)) ?_
+  refine .next (.binRight .add 28 (.binLit .mul 4 7)) ?_
+  exact .next (.binLit .add 28 28) (.refl _)
+
+/-- **6-Stage Reflexive Self-Acceleration of `catgrad` Optic Reverse-Mode AD Kernel
+(`self_accelerate_catgrad_optic_rev_ad_6stage`)**:
+Lowers `catgradOpticRevAdLExpr` across all 6 stages:
+1. `Lean-lite` `SSteps` (`56`),
+2. `Obend.Core` `Evaluates` (`56`),
+3. `Obend.Leaf.Book` `Halts` (`56`),
+4. Saturating FPGA `DSP58` RTL (`compileBookToRtlSat` + `runDsp58Cascade`),
+5. 64-bit AMD `CDNA3` `AmdGpuVop64Inst` (`evalCompiledAmdGpuModule`) + `vMfmaDot4`, and
+6. TPU Systolic Array (`runSystolicMacChain`), $K$-limb Ozaki Base-13 `FP4` (`evalOzakiBase13KLimbDot`),
+   and `Obend.Hardware.OpenHypergraph.evalOpticChain2Rev`! -/
+theorem self_accelerate_catgrad_optic_rev_ad_6stage :
+    let C := leanComposition "catgradRevAd" (lowerT catgradOpticRevAdLExpr)
+    let B := emit C
+    SSteps (.app catgradOpticRevAdLExpr (.lit 7)) (.lit 56) ∧
+    Evaluates (.app (lowerT catgradOpticRevAdLExpr) (.nat 7)) (.nat 56) ∧
+    Halts (.app (.get B.link "catgradRevAd") (.nat 7)) (.natural 56) ∧
+    (match compileBookToRtlSat "lean_catgrad_rev_ad_rtl" B with
+     | some m =>
+       checkRtlModule m &&
+       (evalModuleOutputs m (fun _ => 7#64) (fun _ => 0#64) == [("out_catgradRevAd", 56#64)]) &&
+       (evalCompiledAmdGpuModule m 7 == some 56)
+     | none => false) = true ∧
+    readVgpr (execAmdGpuInst [4, 4, 0, 0, 7, 7, 0, 0, 0] (.vMfmaDot4 8 0 4 8)) 8 = 56 ∧
+    runSystolicMacChain 0 [4, 4] [7, 7] = 56 ∧
+    runDsp58Cascade 0 [(4, 7), (4, 7)] = 56 ∧
+    allLimbsDoubledFp4 [-6, 1] = true ∧
+    evalOzakiBase13KLimbDot [[4], [4]] [[-6, 1], [-6, 1]] = 56 ∧
+    (Obend.Hardware.OpenHypergraph.evalOpticChain2Rev
+      (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
+      (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
+      (Obend.Hardware.OpenHypergraph.evalOpticChain2Fwd .mul .mul 4 7).2 1).2 = 56 := by
+  refine ⟨catgradOpticRevAd_runs_7, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  · simpa [lowerT] using lower_sound_nat catgradOpticRevAd_runs_7
+  · exact lean_to_book "catgradRevAd" catgradOpticRevAdLExpr 7 56 (by decide +kernel) catgradOpticRevAd_runs_7
+  · decide +kernel
+
+/-- `Lean-lite` (`LExpr`) kernel for `fidget` octree CSG branch pruning (`GeometryCAM.ivMinChoice`)
+evaluating candidate interval $A = [a_{\text{hi}} - 4, a_{\text{hi}}]$ against reference CSG interval
+$B = [10, 20]$:
+- Returns `1` (`.left`: prune right CSG subtree) when $a_{\text{hi}} \le 10$,
+- Returns `2` (`.right`: prune left CSG subtree) when $20 \le a_{\text{hi}} - 4$,
+- Returns `3` (`.both`: keep both CSG subtrees) when the intervals overlap. -/
+def fidgetChoiceOctreePruneLExpr : LExpr :=
+  .lam .natural
+    (.boolRec .natural
+      (.boolRec .natural
+        (.lit 3)
+        (.lit 2)
+        (.natBin .ble (.lit 20) (.natBin .sub (.bvar 0) (.lit 4))))
+      (.lit 1)
+      (.natBin .ble (.bvar 0) (.lit 10)))
+
+theorem fidgetChoiceOctreePrune_runs_8 :
+    SSteps (.app fidgetChoiceOctreePruneLExpr (.lit 8)) (.lit 1) := by
+  refine .next (.beta .natural _ (.lit 8)) ?_
+  have hinst :
+      (LExpr.boolRec .natural
+        (.boolRec .natural
+          (.lit 3)
+          (.lit 2)
+          (.natBin .ble (.lit 20) (.natBin .sub (.bvar 0) (.lit 4))))
+        (.lit 1)
+        (.natBin .ble (.bvar 0) (.lit 10))).inst (.lit 8) =
+      .boolRec .natural
+        (.boolRec .natural
+          (.lit 3)
+          (.lit 2)
+          (.natBin .ble (.lit 20) (.natBin .sub (.lit 8) (.lit 4))))
+        (.lit 1)
+        (.natBin .ble (.lit 8) (.lit 10)) := by
+    simp [LExpr.inst, LExpr.subst, LExpr.single]
+  rw [hinst]
+  refine .next (.boolRecMajor .natural _ _ (.binLit .ble 8 10)) ?_
+  exact .next (.boolRecTrue .natural _ _) (.refl _)
+
+/-- **6-Stage Reflexive Self-Acceleration of `fidget` Octree CSG Pruning Kernel
+(`self_accelerate_fidget_choice_octree_6stage`)**:
+Lowers `fidgetChoiceOctreePruneLExpr` across all 6 stages, verifying that branchless 64-bit
+`v_cmp_lt_u64` + `v_cndmask_b64` in `AmdGpuVop64Inst` and saturating FPGA RTL reproduce
+`Obend.Hardware.GeometryCAM.ivMinChoice` across all three octree pruning regimes
+(`.left` at `aHi = 8`, `.right` at `aHi = 30`, and `.both` at `aHi = 15`)! -/
+theorem self_accelerate_fidget_choice_octree_6stage :
+    let C := leanComposition "fidgetPrune" (lowerT fidgetChoiceOctreePruneLExpr)
+    let B := emit C
+    SSteps (.app fidgetChoiceOctreePruneLExpr (.lit 8)) (.lit 1) ∧
+    Evaluates (.app (lowerT fidgetChoiceOctreePruneLExpr) (.nat 8)) (.nat 1) ∧
+    Halts (.app (.get B.link "fidgetPrune") (.nat 8)) (.natural 1) ∧
+    (match compileBookToRtlSat "lean_fidget_prune_rtl" B with
+     | some m =>
+       checkRtlModule m &&
+       -- Regime 1 (`aHi = 8`, `A = [4, 8]`): `.left` (`1`)
+       (evalModuleOutputs m (fun _ => 8#64) (fun _ => 0#64) == [("out_fidgetPrune", 1#64)]) &&
+       (evalCompiledAmdGpuModule m 8 == some 1) &&
+       -- Regime 2 (`aHi = 30`, `A = [26, 30]`): `.right` (`2`)
+       (evalModuleOutputs m (fun _ => 30#64) (fun _ => 0#64) == [("out_fidgetPrune", 2#64)]) &&
+       (evalCompiledAmdGpuModule m 30 == some 2) &&
+       -- Regime 3 (`aHi = 15`, `A = [11, 15]`): `.both` (`3`)
+       (evalModuleOutputs m (fun _ => 15#64) (fun _ => 0#64) == [("out_fidgetPrune", 3#64)]) &&
+       (evalCompiledAmdGpuModule m 15 == some 3)
+     | none => false) = true ∧
+    Obend.Hardware.GeometryCAM.ivMinChoice { lo := 4, hi := 8 } { lo := 10, hi := 20 } = .left ∧
+    Obend.Hardware.GeometryCAM.ivMinChoice { lo := 26, hi := 30 } { lo := 10, hi := 20 } = .right ∧
+    Obend.Hardware.GeometryCAM.ivMinChoice { lo := 11, hi := 15 } { lo := 10, hi := 20 } = .both := by
+  refine ⟨fidgetChoiceOctreePrune_runs_8, ?_, ?_, ?_, rfl, rfl, rfl⟩
+  · simpa [lowerT] using lower_sound_nat fidgetChoiceOctreePrune_runs_8
+  · exact lean_to_book "fidgetPrune" fidgetChoiceOctreePruneLExpr 8 1 (by decide +kernel) fidgetChoiceOctreePrune_runs_8
+  · decide +kernel
+
+/-- **Master Universal 6-Stage Coupled PDE, Reverse-AD & Geometry Self-Acceleration Theorem
+(`coupled_pde_ad_geometry_6stage_universal_self_acceleration`)**:
+Unifies the 6-stage reflexive self-acceleration of:
+1. `libCeedFemmNodalOpLExpr` (`Magnetics.evalLibCeedElementOp`),
+2. `catgradOpticRevAdLExpr` (`OpenHypergraph.evalOpticChain2Rev`),
+3. `fidgetChoiceOctreePruneLExpr` (`GeometryCAM.ivMinChoice` via branchless `v_cmp_lt_u64` + `v_cndmask_b64`), and
+4. Arbitrary $K$-limb Ozaki Base-13 `FP4` exact Cauchy convolution (`ozaki_base13_klimb_mul_exact`) and
+   inner-product accumulation (`ozaki_base13_klimb_dot_exact`)! -/
+theorem coupled_pde_ad_geometry_6stage_universal_self_acceleration
+    (as bs : List Int) (xs ys : List (List Int)) :
+    evalBase13Limbs (mulBase13Limbs as bs) = evalBase13Limbs as * evalBase13Limbs bs ∧
+    evalOzakiBase13KLimbDot xs ys = kulischDot (xs.map evalBase13Limbs) (ys.map evalBase13Limbs) ∧
+    SSteps (.app libCeedFemmNodalOpLExpr (.lit 6)) (.lit 35) ∧
+    SSteps (.app catgradOpticRevAdLExpr (.lit 7)) (.lit 56) ∧
+    SSteps (.app fidgetChoiceOctreePruneLExpr (.lit 8)) (.lit 1) ∧
+    (Obend.Hardware.Magnetics.evalLibCeedElementOp selfAccelFemmTriangle 6 3 2).1 = 35 ∧
+    (Obend.Hardware.OpenHypergraph.evalOpticChain2Rev
+      (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
+      (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
+      (Obend.Hardware.OpenHypergraph.evalOpticChain2Fwd .mul .mul 4 7).2 1).2 = 56 ∧
+    Obend.Hardware.GeometryCAM.ivMinChoice { lo := 4, hi := 8 } { lo := 10, hi := 20 } = .left :=
+  ⟨ozaki_base13_klimb_mul_exact as bs,
+   ozaki_base13_klimb_dot_exact xs ys,
+   libCeedFemmNodalOp_runs_6,
+   catgradOpticRevAd_runs_7,
+   fidgetChoiceOctreePrune_runs_8,
+   rfl, rfl, rfl⟩
 
 end Obend.Lower
 end

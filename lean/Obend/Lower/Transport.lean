@@ -661,5 +661,29 @@ theorem transportSlot_blocked_on_override
   | nil => rw [hd] at hdead_mem; cases hdead_mem
   | cons g t => exact ⟨g :: t, rfl, hd ▸ hdead_mem⟩
 
+/-- **Cross-Package Disjoint Overlay Preserves `transportSlot` Usable Status (`transportSlot_usable_of_disjoint_overlay`)**:
+Whenever `c` is usable at base composition `C` (`(transportSlot o).usable (Support.holds C s) c = true`)
+and an overlay composition `C'` preserves `symUnfold` on every supported member `sp ∈ c.supports`
+(because the overlay modifies only fields disjoint from `c.supports`), `c` remains `.usable` at `C'`
+and `TransportMeaning o c` is preserved without re-running `checkL` or the theorem prover. -/
+theorem transportSlot_usable_of_disjoint_overlay
+    {o : TransportObj} {c : TransportCert} {C C' : Composition} {s : Nat}
+    (hus : (transportSlot o).usable (Support.holds C s) c = true)
+    (hdisj : ∀ sp ∈ c.supports, symUnfold C' s sp.member = symUnfold C s sp.member) :
+    (transportSlot o).usable (Support.holds C' s) c = true ∧
+    TransportMeaning o c ∧
+    (∀ sp ∈ c.supports, symUnfold C' s sp.member = sp.unfolded) := by
+  obtain ⟨hj, hall⟩ := (Obend.Slot.usable_iff (transportSlot o) (Support.holds C s) c).1 hus
+  have hall' : ∀ sp ∈ (transportSlot o).supports c, Support.holds C' s sp = true := by
+    intro sp hsp
+    have h1 := hall sp hsp
+    have heq := hdisj sp hsp
+    simpa only [Support.holds, heq] using h1
+  have hus' : (transportSlot o).usable (Support.holds C' s) c = true :=
+    (Obend.Slot.usable_iff (transportSlot o) (Support.holds C' s) c).2 ⟨hj, hall'⟩
+  have hok : transportCheck 0 o c = .ok := by simpa [transportSlot] using hj
+  refine ⟨hus', transportJudge.sound hok, fun sp hsp => ?_⟩
+  exact optEq_sound (hall' sp hsp)
+
 end Obend.Lower
 end

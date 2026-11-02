@@ -981,6 +981,269 @@ impl GrainExecutor {
     }
 }
 
+// =========================================================================
+// Policy-to-Grain Automata Confinement Compiler & VM (`Obend.Lower.PolicyToGrain`)
+// =========================================================================
+
+/// Deterministic Table-DFA transcript policy matching `Obend.Judge.TableDfa` (`AutomataConfinement.lean`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyTableDfa {
+    pub start: usize,
+    pub accepting: Vec<usize>,
+    pub transitions: Vec<((usize, String), usize)>,
+    pub state_defaults: Vec<(usize, usize)>,
+    pub default_sink: usize,
+}
+
+impl PolicyTableDfa {
+    /// Step from state `q` on token `tok` matching `TableDfa.step` / `grainStepToken`.
+    pub fn step(&self, q: usize, tok: &str) -> usize {
+        grain_step_token(
+            &self.transitions,
+            &self.state_defaults,
+            self.default_sink,
+            q,
+            tok,
+        )
+    }
+
+    /// Classify a token stream starting from state `q` matching `dfaClassifyFrom`.
+    pub fn classify_from<S: AsRef<str>>(&self, mut q: usize, tokens: &[S]) -> usize {
+        for tok in tokens {
+            q = self.step(q, tok.as_ref());
+        }
+        q
+    }
+
+    /// Classify a token stream starting from `self.start` matching `dfaClassify`.
+    pub fn classify<S: AsRef<str>>(&self, tokens: &[S]) -> usize {
+        self.classify_from(self.start, tokens)
+    }
+
+    /// Check whether `self` accepts `tokens` matching `dfaAccepts`.
+    pub fn accepts<S: AsRef<str>>(&self, tokens: &[S]) -> bool {
+        let final_state = self.classify(tokens);
+        self.accepting.contains(&final_state)
+    }
+
+    /// Canonical injection-confinement DFA matching `Obend.Judge.confinementDfa`.
+    pub fn confinement_dfa() -> Self {
+        Self {
+            start: 0,
+            accepting: vec![0],
+            transitions: vec![
+                ((0, "{{".to_string()), 1),
+                ((0, "}}".to_string()), 1),
+                ((0, "<|system|>".to_string()), 1),
+                ((0, "<|assistant|>".to_string()), 1),
+                ((0, "<|user|>".to_string()), 1),
+            ],
+            state_defaults: vec![(0, 0), (1, 1)],
+            default_sink: 1,
+        }
+    }
+}
+
+/// Deterministic register/stack `Grain` bytecode instructions for transcript policy evaluation
+/// matching `Obend.Lower.GrainInstr` (`PolicyToGrain.lean`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyGrainInstr {
+    /// Initialize `state_reg := start_state` and `fuel_reg := fuel_budget`.
+    InitState {
+        start_state: usize,
+        fuel_budget: usize,
+    },
+    /// Load the DFA transition table `(transitions, state_defaults, default_sink)` into VM registers.
+    LoadTable {
+        transitions: Vec<((usize, String), usize)>,
+        state_defaults: Vec<(usize, usize)>,
+        default_sink: usize,
+    },
+    /// Scan the input token stream through the loaded transition table.
+    ScanTokens { max_tokens: usize },
+    /// Check whether `state_reg` is in `accept_states` and push the boolean verdict onto the stack.
+    CheckAccept { accept_states: Vec<usize> },
+    /// Halt execution and expose the top of the verdict stack.
+    Halt,
+}
+
+/// Explicit linear fuel budget `2 * max_tokens + 4` matching `Obend.Lower.grainPolicyFuelBudget`.
+#[inline]
+pub fn grain_policy_fuel_budget(max_tokens: usize) -> usize {
+    2 * max_tokens + 4
+}
+
+/// Compile a `PolicyTableDfa` transcript policy with token budget `max_tokens` into a
+/// `Vec<PolicyGrainInstr>` bytecode program matching `Obend.Lower.compilePolicyToGrainProg`.
+pub fn compile_policy_to_grain_prog(
+    policy: &PolicyTableDfa,
+    max_tokens: usize,
+) -> Vec<PolicyGrainInstr> {
+    vec![
+        PolicyGrainInstr::InitState {
+            start_state: policy.start,
+            fuel_budget: grain_policy_fuel_budget(max_tokens),
+        },
+        PolicyGrainInstr::LoadTable {
+            transitions: policy.transitions.clone(),
+            state_defaults: policy.state_defaults.clone(),
+            default_sink: policy.default_sink,
+        },
+        PolicyGrainInstr::ScanTokens { max_tokens },
+        PolicyGrainInstr::CheckAccept {
+            accept_states: policy.accepting.clone(),
+        },
+        PolicyGrainInstr::Halt,
+    ]
+}
+
+/// Deterministic state of the `Grain` policy VM matching `Obend.Lower.GrainVmState`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PolicyGrainVmState {
+    pub state_reg: usize,
+    pub fuel_reg: usize,
+    pub transitions_reg: Vec<((usize, String), usize)>,
+    pub state_defaults_reg: Vec<(usize, usize)>,
+    pub default_sink_reg: usize,
+    pub verdict_stack: Vec<bool>,
+    pub halted: bool,
+}
+
+/// Single-token transition step on the VM's table registers matching `Obend.Lower.grainStepToken`.
+pub fn grain_step_token(
+    transitions: &[((usize, String), usize)],
+    state_defaults: &[(usize, usize)],
+    default_sink: usize,
+    q: usize,
+    tok: &str,
+) -> usize {
+    if let Some((_, next)) = transitions
+        .iter()
+        .find(|((s, t), _)| *s == q && t.as_str() == tok)
+    {
+        *next
+    } else if let Some((_, def_next)) = state_defaults.iter().find(|(s, _)| *s == q) {
+        *def_next
+    } else {
+        default_sink
+    }
+}
+
+/// Deterministic token scan loop over the VM's table registers matching `Obend.Lower.grainScanLoop`.
+pub fn grain_scan_loop<S: AsRef<str>>(
+    transitions: &[((usize, String), usize)],
+    state_defaults: &[(usize, usize)],
+    default_sink: usize,
+    mut q: usize,
+    tokens: &[S],
+) -> usize {
+    for tok in tokens {
+        q = grain_step_token(transitions, state_defaults, default_sink, q, tok.as_ref());
+    }
+    q
+}
+
+/// Execute one `PolicyGrainInstr` against `vm` and `tokens` matching `Obend.Lower.stepGrainInstr`.
+pub fn step_policy_grain_instr<S: AsRef<str>>(
+    mut vm: PolicyGrainVmState,
+    tokens: &[S],
+    instr: &PolicyGrainInstr,
+) -> Option<PolicyGrainVmState> {
+    match instr {
+        PolicyGrainInstr::InitState {
+            start_state,
+            fuel_budget,
+        } => {
+            if *fuel_budget < 4 {
+                None
+            } else {
+                vm.state_reg = *start_state;
+                vm.fuel_reg = *fuel_budget;
+                Some(vm)
+            }
+        }
+        PolicyGrainInstr::LoadTable {
+            transitions,
+            state_defaults,
+            default_sink,
+        } => {
+            if vm.fuel_reg == 0 {
+                None
+            } else {
+                vm.transitions_reg = transitions.clone();
+                vm.state_defaults_reg = state_defaults.clone();
+                vm.default_sink_reg = *default_sink;
+                vm.fuel_reg -= 1;
+                Some(vm)
+            }
+        }
+        PolicyGrainInstr::ScanTokens { max_tokens } => {
+            let scan_cost = 2 * tokens.len().min(*max_tokens) + 1;
+            if vm.fuel_reg < scan_cost {
+                None
+            } else {
+                vm.state_reg = grain_scan_loop(
+                    &vm.transitions_reg,
+                    &vm.state_defaults_reg,
+                    vm.default_sink_reg,
+                    vm.state_reg,
+                    tokens,
+                );
+                vm.fuel_reg -= scan_cost;
+                Some(vm)
+            }
+        }
+        PolicyGrainInstr::CheckAccept { accept_states } => {
+            if vm.fuel_reg == 0 {
+                None
+            } else {
+                let accepted = accept_states.contains(&vm.state_reg);
+                vm.verdict_stack.insert(0, accepted);
+                vm.fuel_reg -= 1;
+                Some(vm)
+            }
+        }
+        PolicyGrainInstr::Halt => {
+            if vm.fuel_reg == 0 {
+                None
+            } else {
+                vm.halted = true;
+                vm.fuel_reg -= 1;
+                Some(vm)
+            }
+        }
+    }
+}
+
+/// Execute a sequence of `PolicyGrainInstr` instructions matching `Obend.Lower.runGrainInstrs`.
+pub fn run_policy_grain_instrs<S: AsRef<str>>(
+    mut vm: PolicyGrainVmState,
+    tokens: &[S],
+    prog: &[PolicyGrainInstr],
+) -> Option<PolicyGrainVmState> {
+    for instr in prog {
+        if vm.halted {
+            return Some(vm);
+        }
+        vm = step_policy_grain_instr(vm, tokens, instr)?;
+    }
+    Some(vm)
+}
+
+/// Evaluate a `PolicyGrainInstr` bytecode program on `tokens`, returning `Some(verdict)` on clean halt
+/// matching `Obend.Lower.evalGrainProg` (`compilePolicyToGrainProg_sound`).
+pub fn eval_policy_grain_prog<S: AsRef<str>>(
+    prog: &[PolicyGrainInstr],
+    tokens: &[S],
+) -> Option<bool> {
+    let vm = run_policy_grain_instrs(PolicyGrainVmState::default(), tokens, prog)?;
+    if vm.halted {
+        vm.verdict_stack.first().copied()
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1201,6 +1464,59 @@ mod tests {
         assert!(GrainProgram::from_obend_cell("bad_op", "unknown_instruction 1").is_err());
         assert!(GrainProgram::from_obend_cell("missing_imm", "push").is_err());
         assert!(GrainProgram::from_obend_cell("bad_imm", "push not_a_number").is_err());
+    }
+
+    #[test]
+    fn test_policy_to_grain_compiler_and_vm_soundness() {
+        let policy = PolicyTableDfa {
+            start: 0,
+            accepting: vec![2],
+            transitions: vec![
+                ((0, "HDR".to_string()), 1),
+                ((1, "SLOT:api_key".to_string()), 2),
+            ],
+            state_defaults: vec![],
+            default_sink: 99,
+        };
+        let prog = compile_policy_to_grain_prog(&policy, 4);
+        assert_eq!(prog.len(), 5);
+
+        let accept_tokens = vec!["HDR".to_string(), "SLOT:api_key".to_string()];
+        let reject_tokens = vec!["HDR".to_string(), "INJECTED".to_string()];
+
+        assert_eq!(
+            eval_policy_grain_prog(&prog, &accept_tokens),
+            Some(policy.accepts(&accept_tokens))
+        );
+        assert_eq!(eval_policy_grain_prog(&prog, &accept_tokens), Some(true));
+
+        assert_eq!(
+            eval_policy_grain_prog(&prog, &reject_tokens),
+            Some(policy.accepts(&reject_tokens))
+        );
+        assert_eq!(eval_policy_grain_prog(&prog, &reject_tokens), Some(false));
+
+        // Confinement DFA test
+        let conf_dfa = PolicyTableDfa::confinement_dfa();
+        let conf_prog = compile_policy_to_grain_prog(&conf_dfa, 8);
+        assert_eq!(
+            eval_policy_grain_prog(&conf_prog, &["hello", "world"]),
+            Some(true)
+        );
+        assert_eq!(
+            eval_policy_grain_prog(&conf_prog, &["hello", "{{", "world"]),
+            Some(false)
+        );
+
+        // Insufficient fuel (< 4) in InitState returns None
+        let bad_prog = vec![
+            PolicyGrainInstr::InitState {
+                start_state: 0,
+                fuel_budget: 3,
+            },
+            PolicyGrainInstr::Halt,
+        ];
+        assert_eq!(eval_policy_grain_prog(&bad_prog, &accept_tokens), None);
     }
 }
 

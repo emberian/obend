@@ -32,10 +32,12 @@ model-order reduction** (for Lanyon AI multiphysics-to-SPICE/Cauer interoperabil
      and optical reflectometry film-thickness signoff (`checkNeofabMetrology`, `neofabMetrology_sound`).
 -/
 public import Obend.Hardware.Thermal
+public import Obend.Hardware.FabuBlox
 @[expose] public section
 
 namespace Obend.Hardware.Physics
 open Obend.Hardware.Thermal
+open Obend.Hardware.FabuBlox
 set_option autoImplicit false
 
 /-! ## 1. Semiconductor Poisson-Drift-Diffusion (PDD) & Finite-Volume Continuity Conservation -/
@@ -599,6 +601,115 @@ theorem scharfetter_gummel_monotone_right_carrier
       (nRight2 * bernoulliPosPermille - nLeft * bernoulliNegPermille)
       mobilityPermille hSub hMob
   omega
+
+/-! ## 7. Cleanroom-to-TCAD Electrostatics: High-$\kappa$ EOT, Cutline PDD Mesh, $V_{\text{th}}$, Subthreshold Swing & Drive Current -/
+
+/-- Equivalent Oxide Thickness ($\text{EOT}$, in picometers) of a gate dielectric with physical
+thickness `physThicknessPm` (pm) and relative permittivity `kDielectricPermille` ($\kappa \times 1000$,
+where $\kappa_{\text{SiO}_2} = 3900$ for $3.9$ and $\kappa_{\text{HfO}_2} = 25000$ for $25.0$):
+$$\text{EOT} = \left\lfloor \frac{3900 \cdot t_{\text{phys}}}{\max(\kappa_{\text{permille}}, 1)} \right\rfloor.$$ -/
+def evalEquivalentOxideThicknessPm (physThicknessPm kDielectricPermille : Nat) : Nat :=
+  (3900 * physThicknessPm) / max kDielectricPermille 1
+
+/-- Scaled gate-oxide areal capacitance $C_{\text{ox}} = \lfloor 3453000 / \max(\text{eotPm}, 1) \rfloor$
+(in scaled $\text{nF}/\text{cm}^2$ units where $\varepsilon_0 \varepsilon_{\text{SiO}_2} \approx 34.53\text{ pF/m}$). -/
+def evalGateOxideCapScaled (eotPm : Nat) : Nat :=
+  3453000 / max eotPm 1
+
+/-- **Theorem (`high_k_hfo2_reduces_eot_and_boosts_cox`)**:
+1. Universally, increasing gate dielectric permittivity (`k1 ≤ k2`) monotonically reduces or preserves
+   Equivalent Oxide Thickness (`evalEquivalentOxideThicknessPm physThicknessPm k2 ≤ evalEquivalentOxideThicknessPm physThicknessPm k1`)
+   and monotonically boosts or preserves gate capacitance $C_{\text{ox}}$,
+2. Concretely, for a $2000\text{ pm}$ ($2\text{ nm}$) physical gate dielectric, replacing $\text{SiO}_2$
+   ($\kappa = 3.9 \mapsto 3900$) with high-$\kappa$ $\text{HfO}_2$ ($\kappa = 25.0 \mapsto 25000$)
+   reduces $\text{EOT}$ from $2000\text{ pm}$ to $312\text{ pm}$ and boosts $C_{\text{ox}}$ from
+   $1726$ to $11067$. -/
+theorem high_k_hfo2_reduces_eot_and_boosts_cox
+    (physThicknessPm k1 k2 : Nat)
+    (hK : k1 ≤ k2) :
+    evalEquivalentOxideThicknessPm physThicknessPm k2 ≤
+      evalEquivalentOxideThicknessPm physThicknessPm k1 ∧
+    evalGateOxideCapScaled (evalEquivalentOxideThicknessPm physThicknessPm k1) ≤
+      evalGateOxideCapScaled (evalEquivalentOxideThicknessPm physThicknessPm k2) ∧
+    evalEquivalentOxideThicknessPm 2000 25000 = 312 ∧
+    evalEquivalentOxideThicknessPm 2000 3900 = 2000 ∧
+    evalGateOxideCapScaled (evalEquivalentOxideThicknessPm 2000 25000) = 11067 ∧
+    evalGateOxideCapScaled (evalEquivalentOxideThicknessPm 2000 3900) = 1726 := by
+  have hEot :
+      evalEquivalentOxideThicknessPm physThicknessPm k2 ≤
+        evalEquivalentOxideThicknessPm physThicknessPm k1 := by
+    simp only [evalEquivalentOxideThicknessPm]
+    exact Nat.div_le_div_left (by omega) (by omega)
+  have hCox :
+      evalGateOxideCapScaled (evalEquivalentOxideThicknessPm physThicknessPm k1) ≤
+        evalGateOxideCapScaled (evalEquivalentOxideThicknessPm physThicknessPm k2) := by
+    simp only [evalGateOxideCapScaled]
+    exact Nat.div_le_div_left (by omega) (by omega)
+  exact ⟨hEot, hCox, rfl, rfl, rfl, rfl⟩
+
+/-- Extract a 3-cell finite-volume Poisson-Drift-Diffusion (`PddControlVolume`) channel mesh
+(source-extension, intrinsic channel, drain-extension) from a fabricated `CutlineColumn`,
+effective channel doping `dopingPermille`, and terminal current flux `jTerm`. -/
+def extractPddMeshFromCutline
+    (c : CutlineColumn) (dopingPermille jTerm : Int) : List PddControlVolume :=
+  let gateScale : Int := Int.ofNat (max c.gateOxideNm 1)
+  [ { cellIdx := 0, nPermille := 1000, pPermille := 10, dopingNetPermille := dopingPermille, recombRate := 0, fluxIn := jTerm, fluxOut := jTerm }
+  , { cellIdx := 1, nPermille := 500 / gateScale, pPermille := 50, dopingNetPermille := -dopingPermille, recombRate := 0, fluxIn := jTerm, fluxOut := jTerm }
+  , { cellIdx := 2, nPermille := 1000, pPermille := 10, dopingNetPermille := dopingPermille, recombRate := 0, fluxIn := jTerm, fluxOut := jTerm } ]
+
+/-- MOSFET / FinFET / GAA threshold voltage $V_{\text{th}}$ (in mV):
+$$V_{\text{th}} = V_{\text{fb}+2\psi_B} + \left\lfloor \frac{Q_{\text{dep}} \cdot \text{eotPm}}{3453} \right\rfloor.$$ -/
+def evalTransistorVthMv (vfbPlusTwoPsiBMv qDepScaled eotPm : Nat) : Nat :=
+  vfbPlusTwoPsiBMv + (qDepScaled * eotPm) / 3453
+
+/-- MOSFET / FinFET / GAA subthreshold swing $S$ (in $\text{mV/dec}$):
+$$S = 60 + \left\lfloor \frac{T_{\text{K}} - 300}{5} \right\rfloor + \left\lfloor \frac{60 \cdot C_{\text{dep}}}{\max(C_{\text{ox}}, 1)} \right\rfloor.$$ -/
+def evalSubthresholdSwingMvPerDec (tempK cDepScaled coxScaled : Nat) : Nat :=
+  60 + (tempK - 300) / 5 + (60 * cDepScaled) / max coxScaled 1
+
+/-- **Theorem (`subthreshold_swing_thermionic_lower_bound`)**:
+For any temperature `tempK`, depletion capacitance `cDepScaled`, and gate-oxide capacitance `coxScaled`,
+the Boltzmann thermionic subthreshold swing satisfies the fundamental room-temperature lower bound
+$S \ge 60\text{ mV/dec}$, and increases monotonically with temperature (`t1 ≤ t2`). -/
+theorem subthreshold_swing_thermionic_lower_bound
+    (t1 t2 cDepScaled coxScaled : Nat)
+    (hTemp : t1 ≤ t2) :
+    60 ≤ evalSubthresholdSwingMvPerDec t1 cDepScaled coxScaled ∧
+    evalSubthresholdSwingMvPerDec t1 cDepScaled coxScaled ≤
+      evalSubthresholdSwingMvPerDec t2 cDepScaled coxScaled := by
+  simp only [evalSubthresholdSwingMvPerDec]
+  have hT : (t1 - 300) / 5 ≤ (t2 - 300) / 5 := Nat.div_le_div_right (by omega)
+  exact ⟨Nat.le_trans (Nat.le_add_right 60 _) (Nat.le_add_right _ _),
+         Nat.add_le_add_right (Nat.add_le_add_left hT 60) _⟩
+
+/-- Velocity-saturated ON-state transistor drive current $I_{\text{on}}$ (in $\mu\text{A}/\mu\text{m}$):
+$$I_{\text{on}} = \left\lfloor \frac{\mu_{\text{eff}} \cdot (V_{\text{DD}} - V_{\text{th}})}{\max(\text{eotPm}, 1)} \right\rfloor.$$ -/
+def evalDriveCurrentUaPerUm (mobilityScaled vddMv vthMv eotPm : Nat) : Nat :=
+  (mobilityScaled * (vddMv - vthMv)) / max eotPm 1
+
+/-- **Theorem (`drive_current_antitone_in_vth_and_eot`)**:
+Transistor ON-state drive current $I_{\text{on}}$ is universally antitone in both threshold voltage
+(`vth1 ≤ vth2`) and Equivalent Oxide Thickness (`eot1 ≤ eot2`): increasing $V_{\text{th}}$ or
+increasing $\text{EOT}$ monotonically reduces or preserves `evalDriveCurrentUaPerUm`. -/
+theorem drive_current_antitone_in_vth_and_eot
+    (mobilityScaled vddMv vth1 vth2 eot1 eot2 : Nat)
+    (hVth : vth1 ≤ vth2)
+    (hEot : eot1 ≤ eot2) :
+    evalDriveCurrentUaPerUm mobilityScaled vddMv vth2 eot2 ≤
+      evalDriveCurrentUaPerUm mobilityScaled vddMv vth1 eot1 := by
+  simp only [evalDriveCurrentUaPerUm]
+  have hSub : vddMv - vth2 ≤ vddMv - vth1 := by omega
+  have hNum : mobilityScaled * (vddMv - vth2) ≤ mobilityScaled * (vddMv - vth1) :=
+    Nat.mul_le_mul_left mobilityScaled hSub
+  have hStep1 :
+      (mobilityScaled * (vddMv - vth2)) / max eot2 1 ≤
+        (mobilityScaled * (vddMv - vth1)) / max eot2 1 :=
+    Nat.div_le_div_right hNum
+  have hStep2 :
+      (mobilityScaled * (vddMv - vth1)) / max eot2 1 ≤
+        (mobilityScaled * (vddMv - vth1)) / max eot1 1 :=
+    Nat.div_le_div_left (by omega) (by omega)
+  exact Nat.le_trans hStep1 hStep2
 
 end Obend.Hardware.Physics
 end

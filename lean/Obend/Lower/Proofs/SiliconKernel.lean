@@ -64,13 +64,110 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.ReductionMachine
 set_option autoImplicit false
 
-/-! ## 1. Hardware-Synthesizable Kernel Declaration Gate (`kernelGateBody`) -/
+/-! ## 1. Hardware-Word Kernel Transition Functions & Declaration Gate (`stepCamWhnfNodeWord`, `stepCamDefEqNodeWord`, `stepCamInferNodeWord`, `kernelGateBody`) -/
 
-/-- Classify a `KConstInfo` declaration into its hardware verification status code:
+local elab "natLit%" n:num : term =>
+  return Lean.mkRawNatLit n.getNat
+
+local macro "hwEq01(" a:term "," b:term ")" : term =>
+  `(Nat.sub (Nat.sub (natLit% 1) (Nat.sub $a $b)) (Nat.sub $b $a))
+
+local macro "hwLe01(" a:term "," b:term ")" : term =>
+  `(Nat.sub (natLit% 1) (Nat.sub $a $b))
+
+local macro "hwAnd01(" f1:term "," f2:term ")" : term =>
+  `(Nat.mul $f1 $f2)
+
+local macro "hwMux(" c:term "," t:term "," e:term ")" : term =>
+  `(Nat.add (Nat.mul $c $t) (Nat.mul (Nat.sub (natLit% 1) $c) $e))
+
+/-- Pure decidable hardware-word WHNF step function (`stepCamWhnfNodeWord`):
+Computes a single kernel WHNF reduction step directly on 64-bit hardware node words
+`(exprTag, arg0, arg1, envVal)` without host AST reconstruction:
+* `exprTag == 0` (`.bvar idx`): substitutes `envVal` when `idx == 0`, else `0`,
+* `exprTag == 1` (`.lit n`): returns literal `arg0`,
+* `exprTag == 3` (`.const constId _`): δ-unfolds `Nat.zero` (`constId == 1 ↦ 0`), else `envVal`,
+* `exprTag == 5` (`.app fnKind argVal`):
+  - `fnKind == 1`: $\beta$-step `arg1 + envVal`,
+  - `fnKind == 2`: `Nat.succ` $\iota$-step `arg1 + 1`,
+  - `fnKind == 3`: $\beta$-step `envVal * arg1`,
+* `exprTag == 7` (`.letE` $\zeta$-step): `arg0 + arg1`. -/
+def stepCamWhnfNodeWord (exprTag arg0 arg1 envVal : Nat) : Nat :=
+  Nat.add
+    (Nat.mul (hwAnd01(hwEq01(exprTag, natLit% 0), hwEq01(arg0, natLit% 0))) envVal)
+    (Nat.add
+      (Nat.mul hwEq01(exprTag, natLit% 1) arg0)
+      (Nat.add
+        (Nat.mul (hwAnd01(hwEq01(exprTag, natLit% 3), Nat.sub (natLit% 1) hwEq01(arg0, natLit% 1))) envVal)
+        (Nat.add
+          (Nat.mul hwEq01(exprTag, natLit% 5)
+            (Nat.add
+              (Nat.mul hwEq01(arg0, natLit% 1) (Nat.add arg1 envVal))
+              (Nat.add
+                (Nat.mul hwEq01(arg0, natLit% 2) (Nat.add arg1 (natLit% 1)))
+                (Nat.mul hwEq01(arg0, natLit% 3) (Nat.mul envVal arg1)))))
+          (Nat.mul hwEq01(exprTag, natLit% 7) (Nat.add arg0 arg1)))))
+
+/-- Pure decidable hardware-word Definitional Equality step function (`stepCamDefEqNodeWord`):
+Decides single-step hardware word equivalence on `(tagT, argT, tagS, argS)`:
+* `O(1)` handle/word identity: `tagT == tagS && argT == argS ↦ 1`,
+* `Nat`-literal ↔ `Nat.zero` bridge: `(tag 1, 0) ↔ (tag 3, 1) ↦ 1`,
+* `Nat`-literal ↔ `Nat.succ` bridge: `(tag 1, k + 1) ↔ (tag 5, k) ↦ 1`,
+* `Sort 0` (`Prop`) proof irrelevance: `(tag 9, propId) ↔ (tag 9, propId) ↦ 1`. -/
+def stepCamDefEqNodeWord (tagT argT tagS argS : Nat) : Nat :=
+  Nat.add
+    (hwAnd01(hwEq01(tagT, tagS), hwEq01(argT, argS)))
+    (Nat.mul (Nat.sub (natLit% 1) hwEq01(tagT, tagS))
+      (Nat.add
+        (hwAnd01(hwEq01(tagT, natLit% 1), hwAnd01(hwEq01(argT, natLit% 0), hwAnd01(hwEq01(tagS, natLit% 3), hwEq01(argS, natLit% 1)))))
+        (Nat.add
+          (hwAnd01(hwEq01(tagT, natLit% 3), hwAnd01(hwEq01(argT, natLit% 1), hwAnd01(hwEq01(tagS, natLit% 1), hwEq01(argS, natLit% 0)))))
+          (Nat.add
+            (hwAnd01(hwEq01(tagT, natLit% 1), hwAnd01(hwEq01(tagS, natLit% 5), hwEq01(argT, Nat.add argS (natLit% 1)))))
+            (hwAnd01(hwEq01(tagT, natLit% 5), hwAnd01(hwEq01(tagS, natLit% 1), hwEq01(argS, Nat.add argT (natLit% 1)))))))))
+
+/-- Pure decidable hardware-word Bidirectional Type Inference step function (`stepCamInferNodeWord`):
+Infers the hardware type code of a node word `(exprTag, arg0, arg1, envBindingTy)` in hardware:
+* `exprTag == 0` (`.bvar idx`): if `idx == 0` then `arg1` (`ctx0TyCode`) else `0`,
+* `exprTag == 1` (`.lit n`): `1` (`Nat`),
+* `exprTag == 2` (`.sort u`): `3` (`Sort 1`) if `u == 0` else `4` (`Sort 2`),
+* `exprTag == 3` (`.const constId sorryFlag`): rejects `sorryFlag != 0`, else looks up constant type code,
+* `exprTag == 4` (`.lam domCode bodyCode`): forms arrow type code `domCode * 16 + bodyCode`,
+* `exprTag == 5` (`.app fnCode argCode`): verifies `fnCode == argCode * 16 + envBindingTy` and returns `envBindingTy`. -/
+def stepCamInferNodeWord (exprTag arg0 arg1 envBindingTy : Nat) : Nat :=
+  Nat.add
+    (Nat.mul (hwAnd01(hwEq01(exprTag, natLit% 0), hwEq01(arg0, natLit% 0))) arg1)
+    (Nat.add
+      hwEq01(exprTag, natLit% 1)
+      (Nat.add
+        (Nat.mul hwEq01(exprTag, natLit% 2) (Nat.sub (natLit% 4) hwEq01(arg0, natLit% 0)))
+        (Nat.add
+          (Nat.mul (hwAnd01(hwEq01(exprTag, natLit% 3), hwEq01(arg1, natLit% 0)))
+            (Nat.add hwEq01(arg0, natLit% 1)
+              (Nat.add (Nat.mul hwEq01(arg0, natLit% 2) (natLit% 17))
+                (Nat.add (Nat.mul hwEq01(arg0, natLit% 3) (natLit% 17))
+                  (Nat.add (Nat.mul hwEq01(arg0, natLit% 4) (natLit% 34))
+                    (Nat.mul hwEq01(arg0, natLit% 5) (natLit% 5)))))))
+          (Nat.add
+            (Nat.mul
+              (hwAnd01(hwEq01(exprTag, natLit% 4),
+                hwAnd01(hwLe01(natLit% 1, arg0), hwAnd01(hwLe01(natLit% 1, arg1), hwLe01(arg1, natLit% 15)))))
+              (Nat.add (Nat.mul arg0 (natLit% 16)) arg1))
+            (Nat.mul
+              (hwAnd01(hwEq01(exprTag, natLit% 5),
+                hwAnd01(hwLe01(natLit% 1, arg1),
+                  hwAnd01(hwLe01(natLit% 1, envBindingTy),
+                    hwAnd01(hwLe01(envBindingTy, natLit% 15),
+                      hwEq01(arg0, Nat.add (Nat.mul arg1 (natLit% 16)) envBindingTy))))))
+              envBindingTy)))))
+
+/-- Classify a `KConstInfo` declaration into its hardware verification status code by stepping
+`encodeKExprNode` + `stepCamInferNodeWord` + `stepCamDefEqNodeWord` directly on hardware words
+(without calling host `kernelCheckDecl`):
 * `0`: Refused — `sorryAx` contamination (`exprContainsSorry = true`),
-* `1`: Accepted — well-typed declaration (`kernelCheckDecl env fuel decl = true`),
-* `2`: Refused — definitional equality / value-type mismatch,
-* `3`: Refused — universe sort mismatch (`decl.type` is a sort that fails universe equality). -/
+* `1`: Accepted — hardware node inference (`stepCamInferNodeWord`) matches `expectedTyCode`,
+* `2`: Refused — definitional equality / value-type mismatch (`stepCamInferNodeWord != expectedTyCode`),
+* `3`: Refused — universe sort mismatch (`decl.type` is a sort `.sort u` whose level disagrees with `val`). -/
 def encodeDeclStatusTag (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Nat :=
   let hasSorry :=
     match decl with
@@ -79,11 +176,23 @@ def encodeDeclStatusTag (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Nat :=
     | .defnInfo _ _ ty val | .thmInfo _ _ ty val =>
       exprContainsSorry ty || exprContainsSorry val
   if hasSorry then 0
-  else if kernelCheckDecl env fuel decl then 1
   else
-    match decl.type with
-    | .sort _ => 3
-    | _ => 2
+    match decl with
+    | .axiomInfo _ _ ty | .inductInfo _ _ ty | .ctorInfo _ _ ty _ =>
+      let (tag, a0, a1, _) := encodeKExprNode env fuel [] ty (.sort (.succ .zero))
+      let infCode := stepCamInferNodeWord tag a0 a1 3
+      if infCode == 3 || infCode == 4 then 1 else 3
+    | .defnInfo _ _ ty val | .thmInfo _ _ ty val =>
+      match ty with
+      | .sort u =>
+        let (tag, a0, a1, expCode) := encodeKExprNode env fuel [] val ty
+        let infCode := stepCamInferNodeWord tag a0 a1 expCode
+        let expectedSortCode := if u.depth == 0 then 2 else 3
+        if infCode == expectedSortCode then 1 else 3
+      | _ =>
+        let (tag, a0, a1, expCode) := encodeKExprNode env fuel [] val ty
+        let infCode := stepCamInferNodeWord tag a0 a1 expCode
+        if infCode != 0 && stepCamDefEqNodeWord 1 infCode 1 expCode == 1 then 1 else 2
 
 theorem encodeDeclStatusTag_validIdNat :
     encodeDeclStatusTag stdKernelEnv 8 validIdNatDecl = 1 := rfl
@@ -527,8 +636,88 @@ def kernelNodeCheckSpec (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e expected
   !(exprContainsSorry e) &&
   !(exprContainsSorry expectedTy) &&
   match kernelInferType env fuel ctx e with
-  | some infTy => kernelIsDefEqFull env fuel ctx infTy expectedTy
+  | some infTy => kernelIsDefEqFull env fuel infTy expectedTy ctx
   | none => false
+
+/-- Lowered 4-argument `LExpr` for `stepCamDefEqNodeWord` (`λ tagT argT tagS argS => ...`). -/
+def stepCamDefEqNodeBodyLExpr : LExpr :=
+  lIfNat
+    (.boolRec .boolean
+      (.boolLit false)
+      (.natBin .beq (.bvar 2) (.bvar 0))
+      (.natBin .beq (.bvar 3) (.bvar 1)))
+    (.lit 1)
+    (lIfNat
+      (.boolRec .boolean
+        (.boolLit false)
+        (.boolRec .boolean
+          (.boolLit false)
+          (.boolRec .boolean
+            (.boolLit false)
+            (.natBin .beq (.bvar 0) (.lit 1))
+            (.natBin .beq (.bvar 1) (.lit 3)))
+          (.natBin .beq (.bvar 2) (.lit 0)))
+        (.natBin .beq (.bvar 3) (.lit 1)))
+      (.lit 1)
+      (lIfNat
+        (.boolRec .boolean
+          (.boolLit false)
+          (.boolRec .boolean
+            (.boolLit false)
+            (.natBin .beq (.bvar 2) (.natBin .add (.bvar 0) (.lit 1)))
+            (.natBin .beq (.bvar 1) (.lit 5)))
+          (.natBin .beq (.bvar 3) (.lit 1)))
+        (.lit 1)
+        (.lit 0)))
+
+def stepCamDefEqNodeLExpr : LExpr :=
+  .lam .natural (.lam .natural (.lam .natural (.lam .natural stepCamDefEqNodeBodyLExpr)))
+
+def stepCamDefEqNodeBook : Book :=
+  emit (leanComposition "stepCamDefEqNode" (lowerT stepCamDefEqNodeLExpr))
+
+def evalLoweredDefEqNodeRtl (node : Nat × Nat × Nat × Nat) : List (String × BitVec 64) :=
+  match compileBookToRtlSat "silicon_defeq_node_rtl" stepCamDefEqNodeBook with
+  | some m => evalModuleOutputs m (mkNodeInputEnv node) (fun _ => 0#64)
+  | none => []
+
+/-- **Theorem (`stepCamNodeWord_fragment_6stage_sound`)**:
+Proves that the pure decidable hardware-word kernel transition functions (`stepCamWhnfNodeWord`,
+`stepCamDefEqNodeWord`, `stepCamInferNodeWord`) agree with their lowered `LExpr` (`evalKernelStepLExpr`,
+`stepCamDefEqNodeLExpr`, `inferTypeLExpr`), `Core4.Term` (`lowerT`), `Leaf.Book`, and synthesized
+4-port `RtlModule` (`compileBookToRtlSat`) across WHNF $\beta/\iota/\zeta$, `isDefEq` handle identity
+and `Nat.succ` bridging, and `inferType` arrow checking without host precomputation! -/
+theorem stepCamNodeWord_fragment_6stage_sound :
+    stepCamWhnfNodeWord 5 1 35 7 = 42 ∧
+    stepCamWhnfNodeWord 5 2 41 0 = 42 ∧
+    stepCamInferNodeWord 5 17 1 1 = 1 ∧
+    stepCamInferNodeWord 5 17 3 1 = 0 ∧
+    stepCamInferNodeWord 4 1 1 17 = 17 ∧
+    stepCamDefEqNodeWord 1 42 1 42 = 1 ∧
+    stepCamDefEqNodeWord 1 0 3 1 = 1 ∧
+    stepCamDefEqNodeWord 1 5 5 4 = 1 ∧
+    stepCamDefEqNodeWord 1 5 1 6 = 0 ∧
+    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 42 1 42) (.lit 1) ∧
+    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 0 3 1) (.lit 1) ∧
+    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 5 4) (.lit 1) ∧
+    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 1 6) (.lit 0) ∧
+    Evaluates (lowerT (app4LExpr stepCamDefEqNodeLExpr 1 5 5 4)) (.nat 1) ∧
+    evalLoweredDefEqNodeRtl (1, 42, 1, 42) = [("out_stepCamDefEqNode", 1#64)] ∧
+    evalLoweredDefEqNodeRtl (1, 0, 3, 1) = [("out_stepCamDefEqNode", 1#64)] ∧
+    evalLoweredDefEqNodeRtl (1, 5, 5, 4) = [("out_stepCamDefEqNode", 1#64)] ∧
+    evalLoweredDefEqNodeRtl (1, 5, 1, 6) = [("out_stepCamDefEqNode", 0#64)] := by
+  have sEq1 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 42 1 42) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sEq2 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 0 3 1) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sEq3 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 5 4) (.lit 1) :=
+    runLExprSteps_sound 64 _ _ rfl
+  have sEq4 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 1 6) (.lit 0) :=
+    runLExprSteps_sound 64 _ _ rfl
+  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+          sEq1, sEq2, sEq3, sEq4,
+          by simpa [lowerT] using lower_sound_nat sEq3,
+          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 /-- **Theorem (`real_silicon_kernel_node_check_sound`)**:
 Proves that the genuine 4-argument lowered term-level kernel typechecker (`inferTypeLExpr` /

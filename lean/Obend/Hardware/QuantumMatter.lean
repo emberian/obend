@@ -621,14 +621,14 @@ def majoranaTetronHamiltonian : IntMatrix where
 
 /-- Symmetry-preserving (parity-conserving) Majorana-1 braiding / dephasing perturbation $\Delta H_{\text{sym}}$
 that commutes with total fermion parity $P_{\text{tot}} = -\gamma_1 \gamma_2 \gamma_3 \gamma_4$:
-$$\Delta H_{\text{sym}} = \begin{pmatrix} 1 & 2 & 0 & 0 \\ 2 & 1 & 0 & 0 \\ 0 & 0 & 1 & -1 \\ 0 & 0 & -1 & 1 \end{pmatrix}.$$ -/
+$$\Delta H_{\text{sym}} = \begin{pmatrix} 1 & 2 & 0 & 0 \\ 2 & 1 & 0 & 0 \\ 0 & 0 & 1 & 0 \\ 0 & 0 & 0 & 1 \end{pmatrix}.$$ -/
 def majoranaParityPreserveNoise : IntMatrix where
   dim  := 4
   rows :=
     [ [1, 2, 0, 0]
     , [2, 1, 0, 0]
-    , [0, 0, 1, -1]
-    , [0, 0, -1, 1] ]
+    , [0, 0, 1, 0]
+    , [0, 0, 0, 1] ]
 
 /-- Parity-breaking quasiparticle-poisoning perturbation $\Delta H_{\text{poison}}$ that couples
 state $0 \in C_{\text{even}}$ to $C_{\text{odd}}$ asymmetrically, breaking parity conservation and
@@ -659,9 +659,10 @@ def majoranaTetronQuotient : Nat → Nat → Int
   | _, _ => 0
 
 /-- $2 \times 2$ block-diagonal parity quotient of `majoranaParityPreserveNoise`:
-$\Delta Q_{\text{sym}} = \begin{pmatrix} 3 & 0 \\ 0 & 0 \end{pmatrix}$. -/
+$\Delta Q_{\text{sym}} = \begin{pmatrix} 3 & 0 \\ 0 & 1 \end{pmatrix}$. -/
 def majoranaNoiseSymQuotient : Nat → Nat → Int
   | 0, 0 => 3
+  | 1, 1 => 1
   | _, _ => 0
 
 /-! ## 4. True 16-Dimensional Clifford Algebra $Cl_4$ & Majorana Parity Selection Theorem -/
@@ -873,26 +874,26 @@ theorem clifford_commutesWithParity_iff_even_blades (H : CliffordElem) :
     refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega,
             by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
 
-/-- $4 \times 4$ matrix representation $\rho(H)$ (`cliffordToTetronMatrix`) of a Clifford operator
-$H \in Cl_4$ on the 4-state Majorana-1 tetron space in the parity-ordered basis
+/-- Rank-16 bijective $4 \times 4$ Pauli-block matrix representation $\rho(H)$ (`cliffordToTetronMatrix`)
+of a Clifford operator $H \in Cl_4$ on the 4-state Majorana-1 tetron space in the parity-ordered basis
 $C_{\text{even}} = \{0, 1\}$ ($P = +1$) and $C_{\text{odd}} = \{2, 3\}$ ($P = -1$):
-* Even-weight blades (`b0, b3, b5, b6, b9, b10, b12, b15`) act **strictly block-diagonally** within
-  $C_{\text{even}}$ and $C_{\text{odd}}$ (preserving fermion parity and intra-sector row-sum equitability).
+* Even-weight blades (`b0, b3, b5, b6, b9, b10, b12, b15`) act **strictly block-diagonally** as full
+  $2 \times 2$ Pauli spinor blocks ($I_L, Z_L, X_L, i Y_L$) within $C_{\text{even}}$ and $C_{\text{odd}}$,
+  preserving all 8 even blades with $e_{00} \neq e_{11}$ whenever $Z_L \neq 0$ (`b6 ≠ b9`)!
 * Odd-weight blades (`b1, b2, b4, b7, b8, b11, b13, b14`) act **strictly off-block-diagonally**
-  between $C_{\text{even}}$ and $C_{\text{odd}}$ (with weight-1 blades $b_1, b_2, b_4, b_8$ acting
-  symmetrically and weight-3 blades $b_7, b_{11}, b_{13}, b_{14}$ acting skew-symmetrically, so all
-  8 odd-weight coordinates are linearly independent on the 8 off-sector entries!). -/
+  between $C_{\text{even}}$ and $C_{\text{odd}}$, so all 16 Clifford blades are linearly independent
+  (`cliffordToTetronMatrix H = IntMatrix.zero 4 ↔ H = cliffordZero`). -/
 def cliffordToTetronMatrix (H : CliffordElem) : IntMatrix where
   dim := 4
   rows :=
-    let e00 := H.b0 - H.b15 + H.b6 - H.b9
-    let e01 := H.b3 + H.b10 + H.b12
-    let e10 := H.b3 + H.b10 + H.b12
-    let e11 := H.b0 - H.b15 + H.b6 - H.b9
-    let o00 := H.b0 + H.b15 - H.b6 + H.b9
-    let o01 := H.b3 + H.b5 - H.b10
-    let o10 := H.b3 + H.b5 - H.b10
-    let o11 := H.b0 + H.b15 - H.b6 + H.b9
+    let e00 := (H.b0 - H.b15) + (H.b6 - H.b9)
+    let e01 := (H.b3 + H.b12) + (H.b5 + H.b10)
+    let e10 := (H.b3 + H.b12) - (H.b5 + H.b10)
+    let e11 := (H.b0 - H.b15) - (H.b6 - H.b9)
+    let o00 := (H.b0 + H.b15) + (H.b6 + H.b9)
+    let o01 := (H.b3 - H.b12) + (H.b5 - H.b10)
+    let o10 := (H.b3 - H.b12) - (H.b5 - H.b10)
+    let o11 := (H.b0 + H.b15) - (H.b6 + H.b9)
     let c02 := H.b1 + H.b13
     let c03 := H.b1 + H.b2 + H.b7
     let c12 := -H.b1 + H.b4 + H.b11
@@ -910,23 +911,23 @@ def cliffordToTetronMatrix (H : CliffordElem) : IntMatrix where
 def majoranaTetronClifford : CliffordElem :=
   { cliffordZero with b3 := 1, b15 := -2 }
 
-/-- Clifford element realizing `majoranaParityPreserveNoise` ($e_0 + 2 e_3 - 3 e_5$). -/
+/-- Clifford element realizing `majoranaParityPreserveNoise` ($e_0 + e_3 + e_{12}$). -/
 def majoranaParityPreserveClifford : CliffordElem :=
-  { cliffordZero with b0 := 1, b3 := 2, b5 := -3 }
+  { cliffordZero with b0 := 1, b3 := 1, b12 := 1 }
 
 /-- Clifford element realizing `majoranaQuasiparticlePoisonNoise` ($\gamma_0 = e_1$, odd-weight blade!). -/
 def majoranaQuasiparticlePoisonClifford : CliffordElem :=
   cliffordGamma ⟨0, by decide⟩
 
-/-- Quotient matrix induced on the 2-sector parity partition (`C_even = {0, 1}`, `C_odd = {2, 3}`)
-by any Clifford element $H \in Cl_4$:
-$$Q_H(0, 0) = H_{b_0} - H_{b_{15}} + H_{b_6} - H_{b_9} + H_{b_3} + H_{b_{10}} + H_{b_{12}}, \quad
-  Q_H(1, 1) = H_{b_0} + H_{b_{15}} - H_{b_6} + H_{b_9} + H_{b_3} + H_{b_5} - H_{b_{10}},$$
-and $Q_H(0, 1) = Q_H(1, 0) = 0$ for every parity-commuting $H$! -/
-def cliffordParityQuotient (H : CliffordElem) : Nat → Nat → Int
-  | 0, 0 => H.b0 - H.b15 + H.b6 - H.b9 + H.b3 + H.b10 + H.b12
-  | 1, 1 => H.b0 + H.b15 - H.b6 + H.b9 + H.b3 + H.b5 - H.b10
-  | _, _ => 0
+/-- $2 \times 2$ Pauli spinor block quotient induced on the 2-sector parity partition
+(`C_even = {0, 1}`, `C_odd = {2, 3}`) by any Clifford element $H \in Cl_4$:
+* `cliffordParityQuotient H 0 0` is the $2 \times 2$ logical qubit Pauli block on $C_{\text{even}}$,
+* `cliffordParityQuotient H 1 1` is the $2 \times 2$ poisoned Pauli block on $C_{\text{odd}}$,
+* `cliffordParityQuotient H 0 1 = cliffordParityQuotient H 1 0 = IntMatrix.zero 2`. -/
+def cliffordParityQuotient (H : CliffordElem) : Nat → Nat → IntMatrix
+  | 0, 0 => extractCellBlock (cliffordToTetronMatrix H) 2 0 0
+  | 1, 1 => extractCellBlock (cliffordToTetronMatrix H) 2 1 1
+  | _, _ => IntMatrix.zero 2
 
 /-- **Theorem (`clifford_commutesWithParity_zero_offblock_and_leakage`)**:
 **Universal Clifford Parity Eigenspace Protection Theorem**:
@@ -936,10 +937,10 @@ For ANY Clifford operator $\Delta H \in Cl_4$, if $\Delta H$ commutes with fermi
    vanish (`isEvenBladeSupported dH = true`),
 2. Every off-sector matrix element of `cliffordToTetronMatrix dH` between the $+1$ parity eigenspace
    $C_{\text{even}} = \{0, 1\}$ and the $-1$ parity eigenspace $C_{\text{odd}} = \{2, 3\}$ is
-   **identically zero** (`(cliffordToTetronMatrix dH).entry u v = 0` whenever
-   `majoranaParityPart u ≠ majoranaParityPart v`),
+   **identically zero** (`extractCellBlock (cliffordToTetronMatrix dH) 2 0 1 = IntMatrix.zero 2` and
+   `extractCellBlock (cliffordToTetronMatrix dH) 2 1 0 = IntMatrix.zero 2`),
 3. The inter-sector row sums from $C_{\text{odd}}$ into $C_{\text{even}}$ and from $C_{\text{even}}$
-   into $C_{\text{odd}}$ are **derived to be identically zero** (`= 0`) without assuming `dQ 1 0 = 0`! -/
+   into $C_{\text{odd}}$ are **derived to be identically zero** (`= 0`)! -/
 theorem clifford_commutesWithParity_zero_offblock_and_leakage
     (dH : CliffordElem)
     (hComm : commutesWithParity dH = true) :
@@ -956,8 +957,8 @@ theorem clifford_commutesWithParity_zero_offblock_and_leakage
     cellRowSum (cliffordToTetronMatrix dH).entry [0, 1] 3 = 0 ∧
     cellRowSum (cliffordToTetronMatrix dH).entry [2, 3] 0 = 0 ∧
     cellRowSum (cliffordToTetronMatrix dH).entry [2, 3] 1 = 0 ∧
-    cliffordParityQuotient dH 1 0 = 0 ∧
-    cliffordParityQuotient dH 0 1 = 0 := by
+    cliffordParityQuotient dH 1 0 = IntMatrix.zero 2 ∧
+    cliffordParityQuotient dH 0 1 = IntMatrix.zero 2 := by
   have hEven : isEvenBladeSupported dH = true :=
     (clifford_commutesWithParity_iff_even_blades dH).mp hComm
   rcases dH with ⟨b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15⟩
@@ -986,192 +987,76 @@ theorem clifford_commutesWithParity_zero_offblock_and_leakage
     ((b1 + b2 - b7) + ((-b1 + b8 - b14) + 0) = 0) ∧
     ((b1 + b13) + ((b1 + b2 + b7) + 0) = 0) ∧
     ((-b1 + b4 + b11) + ((-b1 + b8 + b14) + 0) = 0) ∧
-    (0 = 0) ∧ (0 = 0)
+    (IntMatrix.zero 2 = IntMatrix.zero 2) ∧ (IntMatrix.zero 2 = IntMatrix.zero 2)
   refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega,
           by omega, by omega, by omega, by omega, by omega, rfl, rfl⟩
 
 /-- **Theorem (`clifford_commutesWithParity_iff_offblock_and_equitable`)**:
-**Bidirectional Off-Sector Vanishing & Universal Equitable Partition Theorem for $Cl_4$**:
+**Bidirectional $2 \times 2$ Block Off-Sector Vanishing, Block-Equitable Partition & 16D Injectivity Theorem for $Cl_4$**:
 For EVERY Clifford operator $H \in Cl_4$ (universally quantified over $\mathbb{Z}^{16}$):
-1. All 8 off-sector matrix elements of `cliffordToTetronMatrix H` between $C_{\text{even}} = \{0, 1\}$
-   and $C_{\text{odd}} = \{2, 3\}$ vanish **if and only if** `commutesWithParity H = true` ($[H, P] = 0$)!
-2. Whenever `commutesWithParity H = true`, `cliffordToTetronMatrix H` universally satisfies
-   `checkEquitablePartition (cliffordToTetronMatrix H) 2 majoranaParityPart (cliffordParityQuotient H) = true`! -/
+1. Both off-diagonal $2 \times 2$ blocks (`extractCellBlock (cliffordToTetronMatrix H) 2 0 1` and
+   `extractCellBlock (cliffordToTetronMatrix H) 2 1 0`, i.e., all 8 off-sector entries between
+   $C_{\text{even}} = \{0, 1\}$ and $C_{\text{odd}} = \{2, 3\}$) vanish **if and only if**
+   `commutesWithParity H = true` ($[H, P] = 0$)!
+2. `commutesWithParity H = true` holds **if and only if** `cliffordToTetronMatrix H` satisfies
+   `checkBlockEquitablePartition (cliffordToTetronMatrix H) 2 2 majoranaParityPart (cliffordParityQuotient H) = true`
+   (full bidirectional `↔` with $2 \times 2$ Pauli spinor blocks)!
+3. `cliffordToTetronMatrix H = IntMatrix.zero 4` holds **if and only if** `H = cliffordZero`
+   (full 16-dimensional injectivity across all 8 even and 8 odd blades!). -/
+private theorem list_range_two : List.range 2 = [0, 1] := rfl
+private theorem list_range_four : List.range 4 = [0, 1, 2, 3] := rfl
+
 theorem clifford_commutesWithParity_iff_offblock_and_equitable (H : CliffordElem) :
-    ((cliffordToTetronMatrix H).entry 0 2 = 0 ∧
-     (cliffordToTetronMatrix H).entry 0 3 = 0 ∧
-     (cliffordToTetronMatrix H).entry 1 2 = 0 ∧
-     (cliffordToTetronMatrix H).entry 1 3 = 0 ∧
-     (cliffordToTetronMatrix H).entry 2 0 = 0 ∧
-     (cliffordToTetronMatrix H).entry 2 1 = 0 ∧
-     (cliffordToTetronMatrix H).entry 3 0 = 0 ∧
-     (cliffordToTetronMatrix H).entry 3 1 = 0 ↔
+    ((extractCellBlock (cliffordToTetronMatrix H) 2 0 1 = IntMatrix.zero 2 ∧
+      extractCellBlock (cliffordToTetronMatrix H) 2 1 0 = IntMatrix.zero 2) ↔
      commutesWithParity H = true) ∧
-    (commutesWithParity H = true →
-     checkEquitablePartition (cliffordToTetronMatrix H) 2 majoranaParityPart (cliffordParityQuotient H) = true) := by
+    (commutesWithParity H = true ↔
+     checkBlockEquitablePartition (cliffordToTetronMatrix H) 2 2 majoranaParityPart (cliffordParityQuotient H) = true) ∧
+    (cliffordToTetronMatrix H = IntMatrix.zero 4 ↔ H = cliffordZero) := by
   rw [clifford_commutesWithParity_iff_even_blades H]
   rcases H with ⟨b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15⟩
-  constructor
+  refine ⟨?_, ?_, ?_⟩
   · unfold isEvenBladeSupported
     simp only [Bool.and_eq_true, decide_eq_true_eq]
-    change ((b1 + b13 = 0) ∧
-      (b1 + b2 + b7 = 0) ∧
-      (-b1 + b4 + b11 = 0) ∧
-      (-b1 + b8 + b14 = 0) ∧
-      (b1 - b13 = 0) ∧
-      (-b1 + b4 - b11 = 0) ∧
-      (b1 + b2 - b7 = 0) ∧
-      (-b1 + b8 - b14 = 0)) ↔
+    change (({ dim := 2, rows := [[b1 + b13, b1 + b2 + b7], [-b1 + b4 + b11, -b1 + b8 + b14]] } : IntMatrix) =
+              { dim := 2, rows := [[0, 0], [0, 0]] } ∧
+            ({ dim := 2, rows := [[b1 - b13, -b1 + b4 - b11], [b1 + b2 - b7, -b1 + b8 - b14]] } : IntMatrix) =
+              { dim := 2, rows := [[0, 0], [0, 0]] }) ↔
       (((((((b1 = 0 ∧ b2 = 0) ∧ b4 = 0) ∧ b7 = 0) ∧ b8 = 0) ∧ b11 = 0) ∧ b13 = 0) ∧ b14 = 0)
+    simp only [IntMatrix.mk.injEq, List.cons.injEq, and_true, true_and]
     constructor
-    · rintro ⟨h02, h03, h12, h13, h20, h21, h30, h31⟩
+    · rintro ⟨⟨⟨h02, h03⟩, ⟨h12, h13⟩⟩, ⟨⟨h20, h21⟩, ⟨h30, h31⟩⟩⟩
       refine ⟨⟨⟨⟨⟨⟨⟨by omega, by omega⟩, by omega⟩, by omega⟩, by omega⟩, by omega⟩, by omega⟩, by omega⟩
     · rintro ⟨⟨⟨⟨⟨⟨⟨hb1, hb2⟩, hb4⟩, hb7⟩, hb8⟩, hb11⟩, hb13⟩, hb14⟩
-      refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
-  · intro hEven
-    unfold isEvenBladeSupported at hEven
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hEven
-    rcases hEven with ⟨⟨⟨⟨⟨⟨⟨hb1, hb2⟩, hb4⟩, hb7⟩, hb8⟩, hb11⟩, hb13⟩, hb14⟩
-    subst hb1 hb2 hb4 hb7 hb8 hb11 hb13 hb14
-    have hEq0 : (b0 - b15 + b6 - b9) + ((b3 + b10 + b12) + 0) = b0 - b15 + b6 - b9 + b3 + b10 + b12 := by omega
-    have hEq1 : (b3 + b10 + b12) + ((b0 - b15 + b6 - b9) + 0) = b0 - b15 + b6 - b9 + b3 + b10 + b12 := by omega
-    have hEq2 : (b0 + b15 - b6 + b9) + ((b3 + b5 - b10) + 0) = b0 + b15 - b6 + b9 + b3 + b5 - b10 := by omega
-    have hEq3 : (b3 + b5 - b10) + ((b0 + b15 - b6 + b9) + 0) = b0 + b15 - b6 + b9 + b3 + b5 - b10 := by omega
-    change (true && true &&
-      ((decide ((b0 - b15 + b6 - b9) + ((b3 + b10 + b12) + 0) = b0 - b15 + b6 - b9 + b3 + b10 + b12) &&
-        (decide ((0 : Int) + (0 + 0) = 0) && true)) &&
-       ((decide ((b3 + b10 + b12) + ((b0 - b15 + b6 - b9) + 0) = b0 - b15 + b6 - b9 + b3 + b10 + b12) &&
-        (decide ((0 : Int) + (0 + 0) = 0) && true)) &&
-        ((decide ((0 : Int) + (0 + 0) = 0) &&
-          (decide ((b0 + b15 - b6 + b9) + ((b3 + b5 - b10) + 0) = b0 + b15 - b6 + b9 + b3 + b5 - b10) && true)) &&
-         ((decide ((0 : Int) + (0 + 0) = 0) &&
-           (decide ((b3 + b5 - b10) + ((b0 + b15 - b6 + b9) + 0) = b0 + b15 - b6 + b9 + b3 + b5 - b10) && true)) &&
-          true))))) = true
-    rw [hEq0, hEq1, hEq2, hEq3]
-    have hZ : (0 : Int) + (0 + 0) = 0 := rfl
-    rw [hZ]
-    simp only [decide_true, Bool.and_self]
-
-/-- Exact $n \times n$ matrix over Gaussian integers $\mathbb{Z}[i]$ (`GaussianInt`), used for the
-faithful $4 \times 4$ Jordan–Wigner / Pauli spinor representation of $Cl_4$. -/
-structure GaussianMatrix where
-  dim  : Nat
-  rows : List (List GaussianInt)
-  deriving DecidableEq, Repr
-
-namespace GaussianMatrix
-
-/-- Look up a `GaussianInt` at index `v` in a row by structural recursion (`0 Classical.choice`). -/
-def listGetGaussian : List GaussianInt → Nat → GaussianInt
-  | [], _ => GaussianInt.zero
-  | x :: _, 0 => x
-  | _ :: xs, v + 1 => listGetGaussian xs v
-
-/-- Look up row `u` in a list of `GaussianInt` rows by structural recursion (`0 Classical.choice`). -/
-def listGetGaussianRow : List (List GaussianInt) → Nat → List GaussianInt
-  | [], _ => []
-  | r :: _, 0 => r
-  | _ :: rs, u + 1 => listGetGaussianRow rs u
-
-/-- Entry lookup $(u, v)$ in a `GaussianMatrix` (defaulting to `GaussianInt.zero`). -/
-def entry (m : GaussianMatrix) (u v : Nat) : GaussianInt :=
-  listGetGaussian (listGetGaussianRow m.rows u) v
-
-/-- Pure boolean equality on `GaussianInt` (`0 Classical.choice`). -/
-def gaussianIntBeq (z w : GaussianInt) : Bool :=
-  decide (z.re = w.re) && decide (z.im = w.im)
-
-theorem gaussianInt_eq_of_beq {z w : GaussianInt} (h : gaussianIntBeq z w = true) : z = w := by
-  cases z with
-  | mk zr zi =>
-    cases w with
-    | mk wr wi =>
-      unfold gaussianIntBeq at h
-      have hAnd := (Bool.and_eq_true _ _).mp h
-      have hRe : zr = wr := of_decide_eq_true hAnd.1
-      have hIm : zi = wi := of_decide_eq_true hAnd.2
-      rw [hRe, hIm]
-
-/-- Pure boolean equality on `List GaussianInt` (`0 Classical.choice`). -/
-def listBeqGaussian : List GaussianInt → List GaussianInt → Bool
-  | [], [] => true
-  | x :: xs, y :: ys => gaussianIntBeq x y && listBeqGaussian xs ys
-  | _, _ => false
-
-theorem listBeqGaussian_eq : ∀ {xs ys : List GaussianInt}, listBeqGaussian xs ys = true → xs = ys
-  | [], [], _ => rfl
-  | [], _ :: _, h => Bool.noConfusion h
-  | _ :: _, [], h => Bool.noConfusion h
-  | _ :: _, _ :: _, h => by
-    have hAnd := (Bool.and_eq_true _ _).mp h
-    rw [gaussianInt_eq_of_beq hAnd.1, listBeqGaussian_eq hAnd.2]
-
-/-- Pure boolean equality on `List (List GaussianInt)` (`0 Classical.choice`). -/
-def listBeqGaussianRows : List (List GaussianInt) → List (List GaussianInt) → Bool
-  | [], [] => true
-  | r1 :: rs1, r2 :: rs2 => listBeqGaussian r1 r2 && listBeqGaussianRows rs1 rs2
-  | _, _ => false
-
-theorem listBeqGaussianRows_eq :
-    ∀ {rs1 rs2 : List (List GaussianInt)}, listBeqGaussianRows rs1 rs2 = true → rs1 = rs2
-  | [], [], _ => rfl
-  | [], _ :: _, h => Bool.noConfusion h
-  | _ :: _, [], h => Bool.noConfusion h
-  | _ :: _, _ :: _, h => by
-    have hAnd := (Bool.and_eq_true _ _).mp h
-    rw [listBeqGaussian_eq hAnd.1, listBeqGaussianRows_eq hAnd.2]
-
-/-- Pure boolean equality on `GaussianMatrix` (`0 Classical.choice`). -/
-def beq (A B : GaussianMatrix) : Bool :=
-  decide (A.dim = B.dim) && listBeqGaussianRows A.rows B.rows
-
-theorem eq_of_beq {A B : GaussianMatrix} (h : GaussianMatrix.beq A B = true) : A = B := by
-  cases A with
-  | mk d1 r1 =>
-    cases B with
-    | mk d2 r2 =>
-      unfold GaussianMatrix.beq at h
-      have hAnd := (Bool.and_eq_true _ _).mp h
-      have hDim : d1 = d2 := of_decide_eq_true hAnd.1
-      have hRows : r1 = r2 := listBeqGaussianRows_eq hAnd.2
-      rw [hDim, hRows]
-
-/-- Identity matrix $I_n$ over $\mathbb{Z}[i]$. -/
-def identity (dim : Nat) : GaussianMatrix :=
-  let indices := List.range dim
-  { dim  := dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v => cond (u == v) GaussianInt.one GaussianInt.zero)) }
-
-/-- Zero matrix $0_n$ over $\mathbb{Z}[i]$. -/
-def zero (dim : Nat) : GaussianMatrix :=
-  let indices := List.range dim
-  { dim  := dim
-  , rows := indices.map (fun _ => indices.map (fun _ => GaussianInt.zero)) }
-
-/-- Matrix addition $A + B$ over $\mathbb{Z}[i]$. -/
-def add (A B : GaussianMatrix) : GaussianMatrix :=
-  let indices := List.range A.dim
-  { dim  := A.dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v => GaussianInt.add (A.entry u v) (B.entry u v))) }
-
-/-- Scalar multiplication $c \cdot A$ ($c \in \mathbb{Z}$) over $\mathbb{Z}[i]$. -/
-def scale (c : Int) (A : GaussianMatrix) : GaussianMatrix :=
-  let indices := List.range A.dim
-  { dim  := A.dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v => GaussianInt.scale c (A.entry u v))) }
-
-/-- Matrix multiplication $A \cdot B$ over $\mathbb{Z}[i]$. -/
-def mul (A B : GaussianMatrix) : GaussianMatrix :=
-  let indices := List.range A.dim
-  { dim  := A.dim
-  , rows := indices.map (fun u =>
-      indices.map (fun v =>
-        sumGaussianOver (fun w => GaussianInt.mul (A.entry u w) (B.entry w v)) indices)) }
-
-end GaussianMatrix
+      refine ⟨⟨⟨by omega, by omega⟩, ⟨by omega, by omega⟩⟩, ⟨⟨by omega, by omega⟩, ⟨by omega, by omega⟩⟩⟩
+  · unfold isEvenBladeSupported checkBlockEquitablePartition
+    have hDiv42 : (4 : Nat) / 2 = 2 := by decide
+    simp [cliffordToTetronMatrix, hDiv42, list_range_two,
+      blockCellOf, blockCellMembers, blockCellRowSumEntry,
+      cliffordParityQuotient, extractCellBlock, majoranaParityPart,
+      IntMatrix.zero, IntMatrix.scaledIdentity, IntMatrix.entry, listGetInt, sumIntOver]
+    constructor
+    · intro h
+      repeat' constructor <;> omega
+    · intro h
+      repeat' constructor <;> omega
+  · rw [CliffordElem.ext_iff]
+    change ({ dim := 4
+            , rows :=
+                [ [(b0 - b15) + (b6 - b9), (b3 + b12) + (b5 + b10), b1 + b13, b1 + b2 + b7]
+                , [(b3 + b12) - (b5 + b10), (b0 - b15) - (b6 - b9), -b1 + b4 + b11, -b1 + b8 + b14]
+                , [b1 - b13, -b1 + b4 - b11, (b0 + b15) + (b6 + b9), (b3 - b12) + (b5 - b10)]
+                , [b1 + b2 - b7, -b1 + b8 - b14, (b3 - b12) - (b5 - b10), (b0 + b15) - (b6 + b9)] ] } : IntMatrix) =
+           { dim := 4, rows := [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] } ↔
+      (b0 = 0 ∧ b1 = 0 ∧ b2 = 0 ∧ b3 = 0 ∧ b4 = 0 ∧ b5 = 0 ∧ b6 = 0 ∧ b7 = 0 ∧
+       b8 = 0 ∧ b9 = 0 ∧ b10 = 0 ∧ b11 = 0 ∧ b12 = 0 ∧ b13 = 0 ∧ b14 = 0 ∧ b15 = 0)
+    simp only [IntMatrix.mk.injEq, List.cons.injEq, and_true, true_and]
+    constructor
+    · rintro ⟨⟨e00, e01, c02, c03⟩, ⟨e10, e11, c12, c13⟩, ⟨c20, c21, o00, o01⟩, ⟨c30, c31, o10, o11⟩⟩
+      refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega,
+              by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
+    · rintro ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      refine ⟨⟨rfl, rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl, rfl⟩⟩
 
 /-- Faithful $4 \times 4$ Pauli spinor matrices over $\mathbb{Z}[i]$ for the 4 Majorana generators
 in the parity-ordered basis ($C_{\text{even}} = \{0, 1\}$ with $P = +1$, $C_{\text{odd}} = \{2, 3\}$ with $P = -1$):
@@ -1294,13 +1179,17 @@ def perturbedHamiltonian (H dH : Nat → Nat → Int) (eps : Int) (u v : Nat) : 
 def perturbedQuotient (Q dQ : Nat → Nat → Int) (eps : Int) (i j : Nat) : Int :=
   Q i j + eps * dQ i j
 
+/-- Perturbed $2 \times 2$ block quotient $(Q + \epsilon \Delta Q)_{i, j} = Q_{i,j} + \epsilon \cdot \Delta Q_{i,j}$. -/
+def perturbedBlockQuotient (Q dQ : Nat → Nat → IntMatrix) (eps : Int) (i j : Nat) : IntMatrix :=
+  (Q i j).add ((dQ i j).scale eps)
+
 /-- **Theorem (`clifford_parity_protected_zero_sector_leakage`)**:
 For ANY nominal Clifford Hamiltonian `cH : CliffordElem` and noise operator `cDH : CliffordElem`,
 if both commute with fermion parity $P = -\gamma_0\gamma_1\gamma_2\gamma_3$
 (`commutesWithParity cH = true` and `commutesWithParity cDH = true`), then for EVERY noise
 amplitude `eps : Int` and EVERY initial state `w : Nat → Int` prepared in the $+1$ parity
 eigenspace (`w 1 = 0`), **without assuming `Q 1 0 = 0` or `dQ 1 0 = 0`**:
-1. The odd-parity quotient amplitude after $Q_{cH} + \epsilon Q_{cDH}$ is identically `0`, and
+1. The odd-parity $2 \times 2$ inter-sector block quotient after $Q_{cH} + \epsilon Q_{cDH}$ is identically `IntMatrix.zero 2`, and
 2. The full 4-state tetron amplitudes at odd-parity basis states $u = 2$ and $u = 3$ after
    $\rho(cH) + \epsilon \rho(cDH)$ are **identically `0`**! -/
 theorem clifford_parity_protected_zero_sector_leakage
@@ -1310,7 +1199,7 @@ theorem clifford_parity_protected_zero_sector_leakage
     (hCommH  : commutesWithParity cH = true)
     (hCommDH : commutesWithParity cDH = true)
     (hEvenInit : w 1 = 0) :
-    quotientMatVec (perturbedQuotient (cliffordParityQuotient cH) (cliffordParityQuotient cDH) eps) [0, 1] w 1 = 0 ∧
+    perturbedBlockQuotient (cliffordParityQuotient cH) (cliffordParityQuotient cDH) eps 1 0 = IntMatrix.zero 2 ∧
     matVec [0, 1, 2, 3]
       (perturbedHamiltonian (cliffordToTetronMatrix cH).entry (cliffordToTetronMatrix cDH).entry eps)
       (liftQuotientVec majoranaParityPart w) 2 = 0 ∧
@@ -1321,18 +1210,22 @@ theorem clifford_parity_protected_zero_sector_leakage
   have hZ_DH := clifford_commutesWithParity_zero_offblock_and_leakage cDH hCommDH
   rcases hZ_H with ⟨_, _, _, _, _, hH20, hH21, hH30, hH31, _, _, _, _, hQH10, _⟩
   rcases hZ_DH with ⟨_, _, _, _, _, hDH20, hDH21, hDH30, hDH31, _, _, _, _, hQDH10, _⟩
-  change ((cliffordParityQuotient cH 1 0 + eps * cliffordParityQuotient cDH 1 0) * w 0 +
-    ((cliffordParityQuotient cH 1 1 + eps * cliffordParityQuotient cDH 1 1) * w 1 + 0) = 0) ∧
-    (((cliffordToTetronMatrix cH).entry 2 0 + eps * (cliffordToTetronMatrix cDH).entry 2 0) * w 0 +
-     (((cliffordToTetronMatrix cH).entry 2 1 + eps * (cliffordToTetronMatrix cDH).entry 2 1) * w 0 +
-      (((cliffordToTetronMatrix cH).entry 2 2 + eps * (cliffordToTetronMatrix cDH).entry 2 2) * w 1 +
-       (((cliffordToTetronMatrix cH).entry 2 3 + eps * (cliffordToTetronMatrix cDH).entry 2 3) * w 1 + 0))) = 0) ∧
-    (((cliffordToTetronMatrix cH).entry 3 0 + eps * (cliffordToTetronMatrix cDH).entry 3 0) * w 0 +
-     (((cliffordToTetronMatrix cH).entry 3 1 + eps * (cliffordToTetronMatrix cDH).entry 3 1) * w 0 +
-      (((cliffordToTetronMatrix cH).entry 3 2 + eps * (cliffordToTetronMatrix cDH).entry 3 2) * w 1 +
-       (((cliffordToTetronMatrix cH).entry 3 3 + eps * (cliffordToTetronMatrix cDH).entry 3 3) * w 1 + 0))) = 0)
-  rw [hQH10, hQDH10, hH20, hH21, hH30, hH31, hDH20, hDH21, hDH30, hDH31, hEvenInit]
-  refine ⟨by omega, by omega, by omega⟩
+  refine ⟨?_, ?_⟩
+  · dsimp only [perturbedBlockQuotient]
+    rw [hQH10, hQDH10]
+    change ({ dim := 2, rows := [[0 + eps * 0, 0 + eps * 0], [0 + eps * 0, 0 + eps * 0]] } : IntMatrix) =
+           { dim := 2, rows := [[0, 0], [0, 0]] }
+    simp only [Int.mul_zero, Int.add_zero]
+  · change (((cliffordToTetronMatrix cH).entry 2 0 + eps * (cliffordToTetronMatrix cDH).entry 2 0) * w 0 +
+      (((cliffordToTetronMatrix cH).entry 2 1 + eps * (cliffordToTetronMatrix cDH).entry 2 1) * w 0 +
+       (((cliffordToTetronMatrix cH).entry 2 2 + eps * (cliffordToTetronMatrix cDH).entry 2 2) * w 1 +
+        (((cliffordToTetronMatrix cH).entry 2 3 + eps * (cliffordToTetronMatrix cDH).entry 2 3) * w 1 + 0))) = 0) ∧
+      (((cliffordToTetronMatrix cH).entry 3 0 + eps * (cliffordToTetronMatrix cDH).entry 3 0) * w 0 +
+       (((cliffordToTetronMatrix cH).entry 3 1 + eps * (cliffordToTetronMatrix cDH).entry 3 1) * w 0 +
+        (((cliffordToTetronMatrix cH).entry 3 2 + eps * (cliffordToTetronMatrix cDH).entry 3 2) * w 1 +
+         (((cliffordToTetronMatrix cH).entry 3 3 + eps * (cliffordToTetronMatrix cDH).entry 3 3) * w 1 + 0))) = 0)
+    rw [hH20, hH21, hH30, hH31, hDH20, hDH21, hDH30, hDH31, hEvenInit]
+    exact ⟨by omega, by omega⟩
 
 /-- Lemma (`perturbed_cellRowSum_equitable`):
 If both $H$ and a noise perturbation $\Delta H$ are equitable with respect to cell `cellJ` (with
@@ -1431,6 +1324,282 @@ theorem symmetry_preserving_noise_zero_leakage
     rw [hBlockH, hBlockDH, hEvenInit]
     simp only [Int.mul_zero, Int.zero_mul, Int.add_zero]
   refine ⟨hIntertwine, hZeroOdd, ?_⟩
+  decide +kernel
+
+/-! ## 6. Ivanov Majorana Braiding Gates, Artin Braid Group & Open-System Lindblad Parity Cooling -/
+
+/-- Scaled Ivanov / measurement-based Majorana exchange braid generator $T_{a, b} = 1 + \gamma_a \gamma_b \in Cl_4$
+($U_{a,b} = \frac{1}{\sqrt{2}}(1 + \gamma_a \gamma_b) = \exp(\frac{\pi}{4}\gamma_a\gamma_b)$). -/
+def majoranaBraidElem (a b : Fin 4) : CliffordElem :=
+  cliffordAdd cliffordOne (cliffordMul (cliffordGamma a) (cliffordGamma b))
+
+/-- Hermitian adjoint Majorana braid generator $T_{a, b}^\dagger = 1 + \gamma_b \gamma_a = 1 - \gamma_a \gamma_b \in Cl_4$
+(for $a \neq b$). -/
+def majoranaBraidAdjElem (a b : Fin 4) : CliffordElem :=
+  cliffordAdd cliffordOne (cliffordMul (cliffordGamma b) (cliffordGamma a))
+
+/-- Direct lookup of the $4 \times 4$ spinor matrix $\rho_{\mathbb{Z}[i]}(\gamma_a)$ for Majorana index $a \in \mathbb{N}$. -/
+def spinorGammaNat : Nat → GaussianMatrix
+  | 0 => gamma0Spinor
+  | 1 => gamma1Spinor
+  | 2 => gamma2Spinor
+  | _ => gamma3Spinor
+
+/-- Direct lookup of the $4 \times 4$ spinor matrix $\rho_{\mathbb{Z}[i]}(\gamma_a)$ for Majorana generator $a \in \text{Fin } 4$. -/
+def spinorGamma (a : Fin 4) : GaussianMatrix :=
+  spinorGammaNat a.val
+
+/-- $4 \times 4$ spinor matrix $\rho_{\mathbb{Z}[i]}(T_{a,b}) = I_4 + \rho_{\mathbb{Z}[i]}(\gamma_a)\rho_{\mathbb{Z}[i]}(\gamma_b)$
+of the Majorana braiding gate over $\mathbb{Z}[i]$. -/
+def spinorBraidGate (a b : Fin 4) : GaussianMatrix :=
+  (GaussianMatrix.identity 4).add ((spinorGamma a).mul (spinorGamma b))
+
+/-- Exact equivalence between `spinorBraidGate a b` and `cliffordToSpinorMatrix (majoranaBraidElem a b)`
+for all Majorana modes $a, b \in \text{Fin } 4$. -/
+theorem spinorBraidGate_eq_cliffordToSpinorMatrix (a b : Fin 4) :
+    spinorBraidGate a b = cliffordToSpinorMatrix (majoranaBraidElem a b) := by
+  have hCheck : (List.range 4).all (fun i =>
+      (List.range 4).all (fun j =>
+        GaussianMatrix.beq
+          (spinorBraidGate ⟨i % 4, Nat.mod_lt i (by decide)⟩ ⟨j % 4, Nat.mod_lt j (by decide)⟩)
+          (cliffordToSpinorMatrix
+            (majoranaBraidElem ⟨i % 4, Nat.mod_lt i (by decide)⟩ ⟨j % 4, Nat.mod_lt j (by decide)⟩)))) = true := by
+    decide +kernel
+  rw [list_all_iff_forall] at hCheck
+  have hRow := (list_all_iff_forall _ (List.range 4)).mp (hCheck a.val (List.mem_range.mpr a.isLt))
+  have hEq := GaussianMatrix.eq_of_beq (hRow b.val (List.mem_range.mpr b.isLt))
+  have ha : (⟨a.val % 4, Nat.mod_lt a.val (by decide)⟩ : Fin 4) = a := by
+    ext; exact Nat.mod_eq_of_lt a.isLt
+  have hb : (⟨b.val % 4, Nat.mod_lt b.val (by decide)⟩ : Fin 4) = b := by
+    ext; exact Nat.mod_eq_of_lt b.isLt
+  rw [ha, hb] at hEq
+  exact hEq
+
+/-- Chiral fermion parity spinor matrix $\rho_{\mathbb{Z}[i]}(P) = \operatorname{diag}(1, 1, -1, -1)$. -/
+def spinorChiralParity : GaussianMatrix where
+  dim  := 4
+  rows :=
+    [ [⟨1, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨1, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨-1, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨-1, 0⟩] ]
+
+/-- Even-parity computational subspace projector $\Pi_{\text{even}} = \frac{1}{2}(I_4 + P) = \operatorname{diag}(1, 1, 0, 0)$
+over $\mathbb{Z}[i]$. -/
+def spinorEvenParityProjector : GaussianMatrix where
+  dim  := 4
+  rows :=
+    [ [⟨1, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨1, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩] ]
+
+/-- Odd-parity poisoned subspace projector $\Pi_{\text{odd}} = \frac{1}{2}(I_4 - P) = \operatorname{diag}(0, 0, 1, 1)$
+over $\mathbb{Z}[i]$. -/
+def spinorOddParityProjector : GaussianMatrix where
+  dim  := 4
+  rows :=
+    [ [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨1, 0⟩, ⟨0, 0⟩]
+    , [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨1, 0⟩] ]
+
+/-- **Theorem (`majoranaBraidElem_unitary`)**:
+For every pair of distinct Majorana modes $a, b \in \text{Fin } 4$ ($a \neq b$), the Ivanov braid
+generator $T_{a,b} = 1 + \gamma_a\gamma_b$ is scaled unitary of norm $2$:
+$$T_{a,b} T_{a,b}^\dagger = T_{a,b}^\dagger T_{a,b} = 2 \cdot 1_{Cl_4} \;\wedge\;
+  \rho(T_{a,b}) \rho(T_{a,b})^\dagger = \rho(T_{a,b})^\dagger \rho(T_{a,b}) = 2 I_4.$$ -/
+theorem majoranaBraidElem_unitary (a b : Fin 4) (hNe : a ≠ b) :
+    cliffordMul (majoranaBraidElem a b) (majoranaBraidAdjElem a b) = cliffordScale 2 cliffordOne ∧
+    cliffordMul (majoranaBraidAdjElem a b) (majoranaBraidElem a b) = cliffordScale 2 cliffordOne ∧
+    (spinorBraidGate a b).mul (spinorBraidGate a b).conjTranspose = (GaussianMatrix.identity 4).scale 2 ∧
+    (spinorBraidGate a b).conjTranspose.mul (spinorBraidGate a b) = (GaussianMatrix.identity 4).scale 2 := by
+  revert a b hNe
+  decide +kernel
+
+/-- **Theorem (`majoranaBraid_preserves_parity`)**:
+For all Majorana modes $a, b \in \text{Fin } 4$, the braid gate $T_{a,b}$ commutes with total fermion
+parity $P = -\gamma_0\gamma_1\gamma_2\gamma_3$ both in $Cl_4$ and in the $4 \times 4$ spinor representation:
+$$\text{commutesWithParity}(T_{a,b}) = \text{true} \;\wedge\; \rho(T_{a,b}) \rho(P) = \rho(P) \rho(T_{a,b}).$$ -/
+theorem majoranaBraid_preserves_parity (a b : Fin 4) :
+    commutesWithParity (majoranaBraidElem a b) = true ∧
+    commutesWithParity (majoranaBraidAdjElem a b) = true ∧
+    (spinorBraidGate a b).mul spinorChiralParity = spinorChiralParity.mul (spinorBraidGate a b) := by
+  revert a b
+  decide +kernel
+
+/-- **Theorem (`spinorParityProjectors_orthogonal_idempotent`)**:
+The even and odd fermion-parity projectors $\Pi_{\text{even}}, \Pi_{\text{odd}}$ form a complete
+orthogonal idempotent resolution of the identity and spectral decomposition of chiral parity $P$:
+$$\Pi_{\text{even}}^2 = \Pi_{\text{even}},\quad \Pi_{\text{odd}}^2 = \Pi_{\text{odd}},\quad
+  \Pi_{\text{even}}\Pi_{\text{odd}} = \Pi_{\text{odd}}\Pi_{\text{even}} = 0_4,\quad
+  \Pi_{\text{even}} + \Pi_{\text{odd}} = I_4,\quad \Pi_{\text{even}} - \Pi_{\text{odd}} = P.$$ -/
+theorem spinorParityProjectors_orthogonal_idempotent :
+    spinorEvenParityProjector.mul spinorEvenParityProjector = spinorEvenParityProjector ∧
+    spinorOddParityProjector.mul spinorOddParityProjector = spinorOddParityProjector ∧
+    spinorEvenParityProjector.mul spinorOddParityProjector = GaussianMatrix.zero 4 ∧
+    spinorOddParityProjector.mul spinorEvenParityProjector = GaussianMatrix.zero 4 ∧
+    spinorEvenParityProjector.add spinorOddParityProjector = GaussianMatrix.identity 4 ∧
+    spinorEvenParityProjector.sub spinorOddParityProjector = spinorChiralParity := by
+  decide +kernel
+
+/-- **Theorem (`majoranaBraid_exchanges_modes`)**:
+**Ivanov Non-Abelian Majorana Exchange Law**:
+For all distinct Majorana modes $a, b \in \text{Fin } 4$ ($a \neq b$), conjugating $\gamma_a$ and $\gamma_b$
+by $T_{a,b} = 1 + \gamma_a\gamma_b$ exchanges the two Majorana modes with a topological relative minus sign:
+$$T_{a,b} \gamma_a T_{a,b}^\dagger = -2 \gamma_b \;\wedge\; T_{a,b} \gamma_b T_{a,b}^\dagger = +2 \gamma_a.$$ -/
+theorem majoranaBraid_exchanges_modes (a b : Fin 4) (hNe : a ≠ b) :
+    cliffordMul (cliffordMul (majoranaBraidElem a b) (cliffordGamma a)) (majoranaBraidAdjElem a b) =
+      cliffordScale (-2) (cliffordGamma b) ∧
+    cliffordMul (cliffordMul (majoranaBraidElem a b) (cliffordGamma b)) (majoranaBraidAdjElem a b) =
+      cliffordScale 2 (cliffordGamma a) := by
+  revert a b hNe
+  decide +kernel
+
+/-- **Theorem (`majoranaBraid_artin_relation`)**:
+**Non-Abelian Artin Braid Group Relation ($T_{a,b} T_{b,c} T_{a,b} = T_{b,c} T_{a,b} T_{b,c}$)**:
+For all pairwise distinct Majorana zero modes $a, b, c \in \text{Fin } 4$ ($a \neq b$, $b \neq c$, $a \neq c$),
+the braiding generators satisfy the non-Abelian Artin braid relation in both $Cl_4$ and $M_4(\mathbb{Z}[i])$,
+while failing to commute ($T_{a,b} T_{b,c} \neq T_{b,c} T_{a,b}$)! -/
+theorem majoranaBraid_artin_relation (a b c : Fin 4) (hab : a ≠ b) (hbc : b ≠ c) (hac : a ≠ c) :
+    cliffordMul (cliffordMul (majoranaBraidElem a b) (majoranaBraidElem b c)) (majoranaBraidElem a b) =
+      cliffordMul (cliffordMul (majoranaBraidElem b c) (majoranaBraidElem a b)) (majoranaBraidElem b c) ∧
+    ((spinorBraidGate a b).mul (spinorBraidGate b c)).mul (spinorBraidGate a b) =
+      ((spinorBraidGate b c).mul (spinorBraidGate a b)).mul (spinorBraidGate b c) ∧
+    cliffordMul (majoranaBraidElem a b) (majoranaBraidElem b c) ≠
+      cliffordMul (majoranaBraidElem b c) (majoranaBraidElem a b) := by
+  revert a b c hab hbc hac
+  decide +kernel
+
+/-- Scaled open-system Lindblad dissipator $2 \mathcal{D}[L](\rho) = 2 L \rho L^\dagger - (L^\dagger L \rho + \rho L^\dagger L)$
+over $M_4(\mathbb{Z}[i])$. -/
+def lindbladDissipator2 (L rho : GaussianMatrix) : GaussianMatrix :=
+  let indices := List.range L.dim
+  let rhoNorm : GaussianMatrix :=
+    { dim  := L.dim
+    , rows := indices.map (fun u => indices.map (fun v => rho.entry u v)) }
+  let lDag := L.conjTranspose
+  let lDagL := lDag.mul L
+  let jumpTerm := ((L.mul rhoNorm).mul lDag).scale 2
+  let antiComm := (lDagL.mul rhoNorm).add (rhoNorm.mul lDagL)
+  jumpTerm.sub antiComm
+
+/-- Engineered dissipative parity-cooling jump operator $L_{\text{cool}}(a) = \rho(\gamma_a) \Pi_{\text{odd}}$
+that detects and resets odd-parity quasiparticle-poisoned states back into the even-parity logical
+qubit sector without disturbing even-parity states. -/
+def parityCoolingJumpOp (a : Fin 4) : GaussianMatrix :=
+  (spinorGamma a).mul spinorOddParityProjector
+
+/-- **Theorem (`lindbladDissipator2_trace_zero`)**:
+For every Majorana parity-cooling jump operator $L_{\text{cool}}(a)$ ($a \in \text{Fin } 4$) and
+EVERY $4 \times 4$ density matrix $\rho \in M_4(\mathbb{Z}[i])$ (universally quantified over all
+matrix entries of $\rho$), the Lindblad dissipator is strictly trace-preserving:
+$$\operatorname{Tr}(2 \mathcal{D}[L_{\text{cool}}(a)](\rho)) = 0 + 0i.$$ -/
+private theorem spinorGamma_0 (h : 0 < 4) : spinorGamma ⟨0, h⟩ = gamma0Spinor := rfl
+private theorem spinorGamma_1 (h : 1 < 4) : spinorGamma ⟨1, h⟩ = gamma1Spinor := rfl
+private theorem spinorGamma_2 (h : 2 < 4) : spinorGamma ⟨2, h⟩ = gamma2Spinor := rfl
+private theorem spinorGamma_3 (h : 3 < 4) : spinorGamma ⟨3, h⟩ = gamma3Spinor := rfl
+
+theorem lindbladDissipator2_trace_zero (a : Fin 4) (rho : GaussianMatrix) :
+    (lindbladDissipator2 (parityCoolingJumpOp a) rho).trace = GaussianInt.zero := by
+  rcases a with ⟨aVal, hLt⟩
+  rcases aVal with _ | aVal
+  · unfold parityCoolingJumpOp
+    rw [spinorGamma_0]
+    dsimp only [lindbladDissipator2,
+      gamma0Spinor, spinorOddParityProjector,
+      GaussianMatrix.mul, GaussianMatrix.conjTranspose,
+      GaussianMatrix.scale, GaussianMatrix.add, GaussianMatrix.sub, GaussianMatrix.identity,
+      GaussianMatrix.zero, GaussianMatrix.trace]
+    rw [list_range_four]
+    dsimp only [GaussianMatrix.entry,
+      GaussianMatrix.listGetGaussianRow, GaussianMatrix.listGetGaussian,
+      sumGaussianOver, GaussianInt.mul, GaussianInt.add, GaussianInt.sub,
+      GaussianInt.scale, GaussianInt.conj, GaussianInt.one, GaussianInt.zero,
+      List.map]
+    simp only [GaussianInt.mk.injEq]
+    constructor <;> omega
+  · rcases aVal with _ | aVal
+    · unfold parityCoolingJumpOp
+      rw [spinorGamma_1]
+      dsimp only [lindbladDissipator2,
+        gamma1Spinor, spinorOddParityProjector,
+        GaussianMatrix.mul, GaussianMatrix.conjTranspose,
+        GaussianMatrix.scale, GaussianMatrix.add, GaussianMatrix.sub, GaussianMatrix.identity,
+        GaussianMatrix.zero, GaussianMatrix.trace]
+      rw [list_range_four]
+      dsimp only [GaussianMatrix.entry,
+        GaussianMatrix.listGetGaussianRow, GaussianMatrix.listGetGaussian,
+        sumGaussianOver, GaussianInt.mul, GaussianInt.add, GaussianInt.sub,
+        GaussianInt.scale, GaussianInt.conj, GaussianInt.one, GaussianInt.zero,
+        List.map]
+      simp only [GaussianInt.mk.injEq]
+      constructor <;> omega
+    · rcases aVal with _ | aVal
+      · unfold parityCoolingJumpOp
+        rw [spinorGamma_2]
+        dsimp only [lindbladDissipator2,
+          gamma2Spinor, spinorOddParityProjector,
+          GaussianMatrix.mul, GaussianMatrix.conjTranspose,
+          GaussianMatrix.scale, GaussianMatrix.add, GaussianMatrix.sub, GaussianMatrix.identity,
+          GaussianMatrix.zero, GaussianMatrix.trace]
+        rw [list_range_four]
+        dsimp only [GaussianMatrix.entry,
+          GaussianMatrix.listGetGaussianRow, GaussianMatrix.listGetGaussian,
+          sumGaussianOver, GaussianInt.mul, GaussianInt.add, GaussianInt.sub,
+          GaussianInt.scale, GaussianInt.conj, GaussianInt.one, GaussianInt.zero,
+          List.map]
+        simp only [GaussianInt.mk.injEq]
+        constructor <;> omega
+      · rcases aVal with _ | aVal
+        · unfold parityCoolingJumpOp
+          rw [spinorGamma_3]
+          dsimp only [lindbladDissipator2,
+            gamma3Spinor, spinorOddParityProjector,
+            GaussianMatrix.mul, GaussianMatrix.conjTranspose,
+            GaussianMatrix.scale, GaussianMatrix.add, GaussianMatrix.sub, GaussianMatrix.identity,
+            GaussianMatrix.zero, GaussianMatrix.trace]
+          rw [list_range_four]
+          dsimp only [GaussianMatrix.entry,
+            GaussianMatrix.listGetGaussianRow, GaussianMatrix.listGetGaussian,
+            sumGaussianOver, GaussianInt.mul, GaussianInt.add, GaussianInt.sub,
+            GaussianInt.scale, GaussianInt.conj, GaussianInt.one, GaussianInt.zero,
+            List.map]
+          simp only [GaussianInt.mk.injEq]
+          constructor <;> omega
+        · omega
+
+/-- **Theorem (`lindblad_bilocal_preserves_even_sector`)**:
+For all Majorana mode pairs $a, b \in \text{Fin } 4$, any bilocal parity-conserving Lindblad jump
+operator $L_{a,b} = \rho(\gamma_a \gamma_b)$ preserves the even-parity computational sector with
+identically zero dissipative leakage into the odd-parity sector ($\Pi_{\text{odd}} \mathcal{D}[L_{a,b}](\Pi_{\text{even}}) = 0_4$). -/
+theorem lindblad_bilocal_preserves_even_sector (a b : Fin 4) :
+    let L := (spinorGamma a).mul (spinorGamma b)
+    let D := lindbladDissipator2 L spinorEvenParityProjector
+    spinorOddParityProjector.mul D = GaussianMatrix.zero 4 ∧
+    D.mul spinorOddParityProjector = GaussianMatrix.zero 4 ∧
+    D = GaussianMatrix.zero 4 := by
+  revert a b
+  decide +kernel
+
+/-- **Theorem (`parityCoolingJumpOp_dark_on_even_and_corrects_odd`)**:
+For every Majorana mode $a \in \text{Fin } 4$, the engineered parity-cooling jump operator
+$L_{\text{cool}}(a) = \rho(\gamma_a) \Pi_{\text{odd}}$ satisfies:
+1. **Even-Sector Dark State**: $L_{\text{cool}}(a) \Pi_{\text{even}} = 0_4$ and
+   $\mathcal{D}[L_{\text{cool}}(a)](\Pi_{\text{even}}) = 0_4$ (the logical even-parity subspace is
+   completely dark to the cooling channel),
+2. **Autonomous Odd-to-Even Quasiparticle Reset**:
+   $L_{\text{cool}}(a) \Pi_{\text{odd}} L_{\text{cool}}(a)^\dagger = \Pi_{\text{even}}$ and
+   $\Pi_{\text{even}} L_{\text{cool}}(a) = L_{\text{cool}}(a)$ (every odd-parity poisoned state is
+   autonomously transferred back into the even-parity computational sector!). -/
+theorem parityCoolingJumpOp_dark_on_even_and_corrects_odd (a : Fin 4) :
+    (parityCoolingJumpOp a).mul spinorEvenParityProjector = GaussianMatrix.zero 4 ∧
+    lindbladDissipator2 (parityCoolingJumpOp a) spinorEvenParityProjector = GaussianMatrix.zero 4 ∧
+    ((parityCoolingJumpOp a).mul spinorOddParityProjector).mul (parityCoolingJumpOp a).conjTranspose =
+      spinorEvenParityProjector ∧
+    spinorEvenParityProjector.mul (parityCoolingJumpOp a) = parityCoolingJumpOp a ∧
+    (lindbladDissipator2 (parityCoolingJumpOp a) spinorOddParityProjector).trace = GaussianInt.zero := by
+  revert a
   decide +kernel
 
 end Obend.Hardware.QuantumMatter

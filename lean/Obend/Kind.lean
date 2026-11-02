@@ -36,6 +36,7 @@ that two kinds with equal fields are distinguished.
 -/
 public import Obend.Intention
 public import Obend.Law.Inherit
+public import Obend.Logic.LateBinding
 public section
 
 namespace Obend.Kind
@@ -59,6 +60,10 @@ structure KindCell (Law : Type := Term) where
   law : Law
   /-- the kinds it inherits from, a local chain -/
   parents : List String
+  /-- open-recursive prototype layers carried by the kind (`K-KIND-CELL`) -/
+  layers : List Obend.Logic.Layer := []
+  /-- monotonic law contract list carried by the kind (`K-KIND-CELL`) -/
+  contract : List Law := []
 
 /-- The kind cells a world holds, the current version of each. -/
 structure Kinds (Law : Type := Term) where
@@ -257,6 +262,62 @@ name, as `effectiveOf` refuses it: one accepted pin is one dispatch decision. -/
   match pinnedPrecedence ks i.kind with
   | .ok lk => .ok (lk.findSome? (implFor impls generic))
   | .error e => .error e
+
+/-! ## First-Class `K-KIND-CELL` Derivation (`deriveKindFrom`) -/
+
+/-- Specification for deriving a child kind cell from existing parent kind(s) (`K-KIND-CELL`:
+`create --from K` for kinds, `fareoo/AUDIT.md` §5). -/
+structure KindDerivation (Law : Type := Term) where
+  name : String
+  parents : List String
+  addedLayout : List String := []
+  initOverride : Option Data := none
+  law : Law
+  addedLayers : List Obend.Logic.Layer := []
+  addedContract : List Law := []
+
+/-- **`deriveKindFrom` (`K-KIND-CELL` kind-from-kind derivation)**:
+Derives a child `KindCell` from one or more parent kinds in `ks`, verifying:
+1. `d.name` does not clash with an existing kind in `ks`,
+2. every parent kind in `d.parents` resolves and linearizes cleanly via C4 (`Obend.Spec.C4.linearize`),
+3. the derived child kind inherits all ancestor layouts, open-recursive `layers`, and `contract` laws
+   along the C4 precedence list, monotonically narrowing the contract with `d.law`. -/
+@[expose] def deriveKindFrom {Law : Type} (ks : Kinds Law) (d : KindDerivation Law) :
+    Except Refusal (KindCell Law × Kinds Law) :=
+  if (ks.find d.name).isSome then .error (.clash d.name)
+  else
+    match d.parents.head? with
+    | none => .error (.unknown d.name)
+    | some p0 =>
+      match ks.find p0 with
+      | none => .error (.unknown p0)
+      | some p0Cell =>
+        match d.parents.mapM (kindPrecedence ks ks.depth) with
+        | .error e => .error e
+        | .ok lists =>
+          match Obend.Spec.C4.linearize
+              ⟨fun p => ((d.parents.zip lists).lookup p).getD [p], fun _ => false⟩
+              [d.name] [d.parents] with
+          | .error e => .error (.c4 d.name e)
+          | .ok (lk, _) =>
+            let ancestors := lk.drop 1
+            let inheritedLayout := ancestors.flatMap fun a => ((ks.find a).map (·.layout)).getD []
+            let inheritedLayers := ancestors.flatMap fun a => ((ks.find a).map (·.layers)).getD []
+            let inheritedContracts := ancestors.flatMap fun a =>
+              match ks.find a with
+              | some ca => ca.law :: ca.contract
+              | none => []
+            let child : KindCell Law := {
+              name := d.name
+              version := 0
+              layout := (inheritedLayout ++ d.addedLayout).eraseDups
+              init := d.initOverride.getD p0Cell.init
+              law := d.law
+              parents := d.parents
+              layers := d.addedLayers ++ inheritedLayers
+              contract := d.law :: (d.addedContract ++ inheritedContracts)
+            }
+            .ok (child, ⟨ks.cells ++ [child]⟩)
 
 end Obend.Kind
 

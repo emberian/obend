@@ -321,6 +321,215 @@ def isSymmetric (m : IntMatrix) : Bool :=
 
 end IntMatrix
 
+/-- Matrix multiplication entry $(A B)_{u, v} = \sum_{w \in \text{indices}} A_{u, w} \cdot B_{w, v}$. -/
+def matMulEntry (indices : List Nat) (A B : Nat → Nat → Int) (u v : Nat) : Int :=
+  sumIntOver (fun w => A u w * B w v) indices
+
+/-- Matrix addition entry $(A + B)_{u, v} = A_{u, v} + B_{u, v}$. -/
+def matAddEntry (A B : Nat → Nat → Int) (u v : Nat) : Int :=
+  A u v + B u v
+
+/-- Concrete `IntMatrix` multiplication $(A \cdot B)$ of two `dim × dim` integer matrices. -/
+def IntMatrix.mul (A B : IntMatrix) : IntMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v =>
+        matMulEntry indices A.entry B.entry u v)) }
+
+/-- Concrete `IntMatrix` addition $(A + B)$. -/
+def IntMatrix.add (A B : IntMatrix) : IntMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => A.entry u v + B.entry u v)) }
+
+/-- Concrete `IntMatrix` subtraction $(A - B)$. -/
+def IntMatrix.sub (A B : IntMatrix) : IntMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => A.entry u v - B.entry u v)) }
+
+/-- Concrete `IntMatrix` scalar multiplication $c \cdot A$. -/
+def IntMatrix.scale (c : Int) (A : IntMatrix) : IntMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => c * A.entry u v)) }
+
+/-- Scaled $n \times n$ identity matrix $s \cdot I_n$. -/
+def IntMatrix.scaledIdentity (dim : Nat) (s : Int) : IntMatrix :=
+  let indices := List.range dim
+  { dim  := dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => if u == v then s else 0)) }
+
+/-- Zero $n \times n$ matrix $0_n$. -/
+def IntMatrix.zero (dim : Nat) : IntMatrix :=
+  IntMatrix.scaledIdentity dim 0
+
+/-- Multiply an `IntMatrix` $A$ by a column vector `v : List Int`. -/
+def IntMatrix.mulVec (A : IntMatrix) (v : List Int) : List Int :=
+  let indices := List.range A.dim
+  indices.map (fun i =>
+    sumIntOver (fun j => A.entry i j * listGetInt v j) indices)
+
+/-- Matrix trace $\operatorname{tr}(A) = \sum_{i=0}^{n-1} A_{i, i}$. -/
+def IntMatrix.trace (A : IntMatrix) : Int :=
+  sumIntOver (fun i => A.entry i i) (List.range A.dim)
+
+/-- Sum a `GaussianInt`-valued function over a list of indices `modes`. -/
+def sumGaussianOver (f : Nat → GaussianInt) : List Nat → GaussianInt
+  | [] => GaussianInt.zero
+  | k :: ks => GaussianInt.add (f k) (sumGaussianOver f ks)
+
+@[simp] theorem sumGaussianOver_nil (f : Nat → GaussianInt) :
+    sumGaussianOver f [] = GaussianInt.zero := rfl
+
+@[simp] theorem sumGaussianOver_cons (f : Nat → GaussianInt) (k : Nat) (ks : List Nat) :
+    sumGaussianOver f (k :: ks) = GaussianInt.add (f k) (sumGaussianOver f ks) := rfl
+
+/-- Exact $n \times n$ matrix over Gaussian integers $\mathbb{Z}[i]$ (`GaussianInt`), used for
+unitary photonic transfer matrices and the faithful $4 \times 4$ Jordan–Wigner / Pauli spinor
+representation of $Cl_4$. -/
+structure GaussianMatrix where
+  dim  : Nat
+  rows : List (List GaussianInt)
+  deriving DecidableEq, Repr
+
+namespace GaussianMatrix
+
+/-- Look up a `GaussianInt` at index `v` in a row by structural recursion (`0 Classical.choice`). -/
+def listGetGaussian : List GaussianInt → Nat → GaussianInt
+  | [], _ => GaussianInt.zero
+  | x :: _, 0 => x
+  | _ :: xs, v + 1 => listGetGaussian xs v
+
+/-- Look up row `u` in a list of `GaussianInt` rows by structural recursion (`0 Classical.choice`). -/
+def listGetGaussianRow : List (List GaussianInt) → Nat → List GaussianInt
+  | [], _ => []
+  | r :: _, 0 => r
+  | _ :: rs, u + 1 => listGetGaussianRow rs u
+
+/-- Entry lookup $(u, v)$ in a `GaussianMatrix` (defaulting to `GaussianInt.zero`). -/
+def entry (m : GaussianMatrix) (u v : Nat) : GaussianInt :=
+  listGetGaussian (listGetGaussianRow m.rows u) v
+
+/-- Pure boolean equality on `GaussianInt` (`0 Classical.choice`). -/
+def gaussianIntBeq (z w : GaussianInt) : Bool :=
+  decide (z.re = w.re) && decide (z.im = w.im)
+
+theorem gaussianInt_eq_of_beq {z w : GaussianInt} (h : gaussianIntBeq z w = true) : z = w := by
+  cases z with
+  | mk zr zi =>
+    cases w with
+    | mk wr wi =>
+      unfold gaussianIntBeq at h
+      have hAnd := (Bool.and_eq_true _ _).mp h
+      have hRe : zr = wr := of_decide_eq_true hAnd.1
+      have hIm : zi = wi := of_decide_eq_true hAnd.2
+      rw [hRe, hIm]
+
+/-- Pure boolean equality on `List GaussianInt` (`0 Classical.choice`). -/
+def listBeqGaussian : List GaussianInt → List GaussianInt → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => gaussianIntBeq x y && listBeqGaussian xs ys
+  | _, _ => false
+
+theorem listBeqGaussian_eq : ∀ {xs ys : List GaussianInt}, listBeqGaussian xs ys = true → xs = ys
+  | [], [], _ => rfl
+  | [], _ :: _, h => Bool.noConfusion h
+  | _ :: _, [], h => Bool.noConfusion h
+  | _ :: _, _ :: _, h => by
+    have hAnd := (Bool.and_eq_true _ _).mp h
+    rw [gaussianInt_eq_of_beq hAnd.1, listBeqGaussian_eq hAnd.2]
+
+/-- Pure boolean equality on `List (List GaussianInt)` (`0 Classical.choice`). -/
+def listBeqGaussianRows : List (List GaussianInt) → List (List GaussianInt) → Bool
+  | [], [] => true
+  | r1 :: rs1, r2 :: rs2 => listBeqGaussian r1 r2 && listBeqGaussianRows rs1 rs2
+  | _, _ => false
+
+theorem listBeqGaussianRows_eq :
+    ∀ {rs1 rs2 : List (List GaussianInt)}, listBeqGaussianRows rs1 rs2 = true → rs1 = rs2
+  | [], [], _ => rfl
+  | [], _ :: _, h => Bool.noConfusion h
+  | _ :: _, [], h => Bool.noConfusion h
+  | _ :: _, _ :: _, h => by
+    have hAnd := (Bool.and_eq_true _ _).mp h
+    rw [listBeqGaussian_eq hAnd.1, listBeqGaussianRows_eq hAnd.2]
+
+/-- Pure boolean equality on `GaussianMatrix` (`0 Classical.choice`). -/
+def beq (A B : GaussianMatrix) : Bool :=
+  decide (A.dim = B.dim) && listBeqGaussianRows A.rows B.rows
+
+theorem eq_of_beq {A B : GaussianMatrix} (h : GaussianMatrix.beq A B = true) : A = B := by
+  cases A with
+  | mk d1 r1 =>
+    cases B with
+    | mk d2 r2 =>
+      unfold GaussianMatrix.beq at h
+      have hAnd := (Bool.and_eq_true _ _).mp h
+      have hDim : d1 = d2 := of_decide_eq_true hAnd.1
+      have hRows : r1 = r2 := listBeqGaussianRows_eq hAnd.2
+      rw [hDim, hRows]
+
+/-- Identity matrix $I_n$ over $\mathbb{Z}[i]$. -/
+def identity (dim : Nat) : GaussianMatrix :=
+  let indices := List.range dim
+  { dim  := dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => cond (u == v) GaussianInt.one GaussianInt.zero)) }
+
+/-- Zero matrix $0_n$ over $\mathbb{Z}[i]$. -/
+def zero (dim : Nat) : GaussianMatrix :=
+  let indices := List.range dim
+  { dim  := dim
+  , rows := indices.map (fun _ => indices.map (fun _ => GaussianInt.zero)) }
+
+/-- Matrix addition $A + B$ over $\mathbb{Z}[i]$. -/
+def add (A B : GaussianMatrix) : GaussianMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => GaussianInt.add (A.entry u v) (B.entry u v))) }
+
+/-- Matrix subtraction $A - B$ over $\mathbb{Z}[i]$. -/
+def sub (A B : GaussianMatrix) : GaussianMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => GaussianInt.sub (A.entry u v) (B.entry u v))) }
+
+/-- Scalar multiplication $c \cdot A$ ($c \in \mathbb{Z}$) over $\mathbb{Z}[i]$. -/
+def scale (c : Int) (A : GaussianMatrix) : GaussianMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => GaussianInt.scale c (A.entry u v))) }
+
+/-- Matrix multiplication $A \cdot B$ over $\mathbb{Z}[i]$. -/
+def mul (A B : GaussianMatrix) : GaussianMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v =>
+        sumGaussianOver (fun w => GaussianInt.mul (A.entry u w) (B.entry w v)) indices)) }
+
+/-- Conjugate transpose (Hermitian adjoint) $A^\dagger$ over $\mathbb{Z}[i]$. -/
+def conjTranspose (A : GaussianMatrix) : GaussianMatrix :=
+  let indices := List.range A.dim
+  { dim  := A.dim
+  , rows := indices.map (fun u =>
+      indices.map (fun v => GaussianInt.conj (A.entry v u))) }
+
+/-- Matrix trace $\operatorname{Tr}(A) = \sum_{u=0}^{\text{dim}-1} A_{u, u} \in \mathbb{Z}[i]$. -/
+def trace (A : GaussianMatrix) : GaussianInt :=
+  sumGaussianOver (fun u => A.entry u u) (List.range A.dim)
+
+end GaussianMatrix
+
 /-! ## 3. Equitable Partitions, Row-Sum Profiles & 1-WL Color Refinement -/
 
 /-- Return the ordered list of vertices in `vertices` assigned to cell `j` under `part`. -/
@@ -1083,6 +1292,554 @@ theorem equitable_partition_and_residual_floor_sound :
     checkWl1ColorRefinementStable gqaUntiedOperator 2 gqa2GroupPart = false ∧
     evalEquitableResidualNormSq gqaUntiedOperator 2 gqa2GroupPart gqa2GroupQuotient = 8 := by
   decide +kernel
+
+/-! ## 8. Block-Equitable Partitions & $d \times d$ Spinor Block Intertwining (`checkBlockEquitablePartition`, `block_equitable_intertwining_poly`) -/
+
+/-- Extract the $d \times d$ spinor block at block row `p` and block column `q` from `A : IntMatrix`:
+$$\operatorname{extractCellBlock}(A, d, p, q)_{\alpha, \beta} = A_{p \cdot d + \alpha,\; q \cdot d + \beta}.$$ -/
+def extractCellBlock (A : IntMatrix) (d p q : Nat) : IntMatrix :=
+  let subIdx := List.range d
+  { dim  := d
+  , rows := subIdx.map (fun alpha =>
+      subIdx.map (fun beta => A.entry (p * d + alpha) (q * d + beta))) }
+
+/-- Cell index assigned to $d \times d$ spinor block `p` by vertex partition `part`. -/
+def blockCellOf (part : Nat → Nat) (d p : Nat) : Nat :=
+  part (p * d)
+
+/-- List of block indices in `blocks` belonging to cell `j`. -/
+def blockCellMembers (blocks : List Nat) (part : Nat → Nat) (d j : Nat) : List Nat :=
+  blocks.filter (fun q => blockCellOf part d q == j)
+
+/-- Entry $(\alpha, \beta)$ of the $d \times d$ block row sum of block `p` into target block cell `blockCellJ`:
+$$\left(\sum_{q \in \text{blockCellJ}} A_{[p, q]}\right)_{\alpha, \beta} = \sum_{q \in \text{blockCellJ}} A_{p \cdot d + \alpha,\; q \cdot d + \beta}.$$ -/
+def blockCellRowSumEntry
+    (A : IntMatrix) (d : Nat) (blockCellJ : List Nat) (p alpha beta : Nat) : Int :=
+  sumIntOver (fun q => A.entry (p * d + alpha) (q * d + beta)) blockCellJ
+
+/-- $d \times d$ matrix block row sum $\sum_{q \in \text{blockCellJ}} \operatorname{extractCellBlock}(A, d, p, q)$
+of block `p` into target block cell `blockCellJ`. -/
+def blockCellRowSum (A : IntMatrix) (d : Nat) (blockCellJ : List Nat) (p : Nat) : IntMatrix :=
+  let subIdx := List.range d
+  { dim  := d
+  , rows := subIdx.map (fun alpha =>
+      subIdx.map (fun beta => blockCellRowSumEntry A d blockCellJ p alpha beta)) }
+
+/-- Computable **Block-Equitable Partition Checker** (`checkBlockEquitablePartition`):
+Verifies that `A` (partitioned into `numBlocks = A.dim / d` spinor blocks of size $d \times d$ across `r` cells)
+satisfies:
+1. $d > 0$ and $A.\text{dim} = \text{numBlocks} \cdot d$,
+2. Every vertex $p \cdot d + \alpha$ within block $p$ shares the block's cell assignment $\text{part}(p \cdot d) < r$,
+3. Every cell $j < r$ contains at least one $d \times d$ block, and
+4. For every block $p < \text{numBlocks}$ and target cell $j < r$, the $d \times d$ block row sum
+   `blockCellRowSum A d (blockCellMembers blocks part d j) p` equals the $d \times d$ quotient block
+   `Q (blockCellOf part d p) j`. -/
+def checkBlockEquitablePartition
+    (A : IntMatrix)
+    (r d : Nat)
+    (part : Nat → Nat)
+    (Q : Nat → Nat → IntMatrix) : Bool :=
+  let numBlocks := A.dim / d
+  let blocks := List.range numBlocks
+  let cells := List.range r
+  let subIdx := List.range d
+  decide (0 < d) &&
+  decide (A.dim = numBlocks * d) &&
+  blocks.all (fun p =>
+    decide (blockCellOf part d p < r) &&
+    subIdx.all (fun alpha => decide (part (p * d + alpha) = blockCellOf part d p))) &&
+  cells.all (fun j => decide (1 ≤ (blockCellMembers blocks part d j).length)) &&
+  blocks.all (fun p =>
+    cells.all (fun j =>
+      let cJ := blockCellMembers blocks part d j
+      let qBlock := Q (blockCellOf part d p) j
+      decide (qBlock.dim = d) &&
+      subIdx.all (fun alpha =>
+        subIdx.all (fun beta =>
+          decide (blockCellRowSumEntry A d cJ p alpha beta = qBlock.entry alpha beta)))))
+
+/-- Entry $(u, k)$ of the block characteristic matrix $P_{\text{block}}$ (`blockCharMatrix`):
+for $u = p \cdot d + \alpha$ and $k = j \cdot d + \beta$, equals `1` when block $p$ belongs to cell $j$
+and spinor component $\alpha = \beta$, and `0` otherwise ($I_d$ on matching cell blocks, $0_d$ elsewhere). -/
+def blockCharEntry (part : Nat → Nat) (d u k : Nat) : Int :=
+  if d == 0 then 0
+  else
+    let p := u / d
+    let alpha := u % d
+    let j := k / d
+    let beta := k % d
+    if blockCellOf part d p == j && alpha == beta then 1 else 0
+
+/-- Block characteristic matrix $P_{\text{block}}$ of dimension $(\text{numBlocks} \cdot d) \times (r \cdot d)$
+whose $(p, j)$ block is $I_d$ if $\text{part}(p \cdot d) = j$ and $0_d$ otherwise. -/
+def blockCharMatrix (numBlocks r d : Nat) (part : Nat → Nat) : IntMatrix :=
+  let rowsIdx := List.range (numBlocks * d)
+  let colsIdx := List.range (r * d)
+  { dim  := numBlocks * d
+  , rows := rowsIdx.map (fun u =>
+      colsIdx.map (fun k => blockCharEntry part d u k)) }
+
+/-- Lift a block-quotient spinor vector $W : \text{Nat} \to \text{Nat} \to \text{Int}$ ($r$ cells of $d$-spinors)
+to the full block-spinor space via $P_{\text{block}}$:
+$$(P_{\text{block}} W)_{p, \alpha} = W(\text{blockCellOf}(\text{part}, d, p), \alpha).$$ -/
+def liftBlockQuotientVec
+    (part : Nat → Nat) (d : Nat) (W : Nat → Nat → Int) (p alpha : Nat) : Int :=
+  W (blockCellOf part d p) alpha
+
+/-- Full block-partitioned operator action on a block-spinor vector $V : \text{Nat} \to \text{Nat} \to \text{Int}$:
+$$(A V)_{p, \alpha} = \sum_{j \in \text{cellIndices}} \sum_{q \in \text{blockCellOfJ}(j)} \sum_{\beta=0}^{d-1} A_{p \cdot d + \alpha,\; q \cdot d + \beta} \cdot V(q, \beta).$$ -/
+def blockPartitionedMatVec
+    (A : IntMatrix)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (blockCellOfJ : Nat → List Nat)
+    (V : Nat → Nat → Int)
+    (p alpha : Nat) : Int :=
+  let subIdx := List.range d
+  sumIntOver (fun j =>
+    sumIntOver (fun q =>
+      sumIntOver (fun beta =>
+        A.entry (p * d + alpha) (q * d + beta) * V q beta) subIdx)
+      (blockCellOfJ j))
+    cellIndices
+
+/-- Block-quotient operator action $B_{\text{block}} W$ on a quotient spinor vector $W : \text{Nat} \to \text{Nat} \to \text{Int}$:
+$$(B_{\text{block}} W)_{i, \alpha} = \sum_{j \in \text{cellIndices}} \sum_{\beta=0}^{d-1} (Q_{i, j})_{\alpha, \beta} \cdot W(j, \beta).$$ -/
+def blockQuotientMatVec
+    (Q : Nat → Nat → IntMatrix)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (W : Nat → Nat → Int)
+    (i alpha : Nat) : Int :=
+  let subIdx := List.range d
+  sumIntOver (fun j =>
+    sumIntOver (fun beta =>
+      (Q i j).entry alpha beta * W j beta) subIdx)
+    cellIndices
+
+/-- Congruence of `blockPartitionedMatVec` under pointwise equality of block-spinor vectors. -/
+theorem blockPartitionedMatVec_congr
+    (A : IntMatrix)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (blockCellOfJ : Nat → List Nat)
+    (V1 V2 : Nat → Nat → Int)
+    (p alpha : Nat)
+    (hEq : ∀ j, j ∈ cellIndices → ∀ q, q ∈ blockCellOfJ j → ∀ beta, beta ∈ List.range d → V1 q beta = V2 q beta) :
+    blockPartitionedMatVec A d cellIndices blockCellOfJ V1 p alpha =
+      blockPartitionedMatVec A d cellIndices blockCellOfJ V2 p alpha := by
+  dsimp only [blockPartitionedMatVec]
+  apply sumIntOver_congr
+  intro j hj
+  apply sumIntOver_congr
+  intro q hq
+  apply sumIntOver_congr
+  intro beta hbeta
+  rw [hEq j hj q hq beta hbeta]
+
+/-- Single-cell spinor block factorization lemma:
+for any block cell `blockCellJ` where every block $q \in \text{blockCellJ}$ has `blockCellOf part d q = j`,
+summing $\sum_{q \in \text{blockCellJ}} \sum_{\beta=0}^{d-1} A_{p d + \alpha, q d + \beta} (P_{\text{block}} W)_{q, \beta}$
+interchanges via `doubleSum_swap` to $\sum_{\beta=0}^{d-1} (\text{blockCellRowSumEntry } A\, d\, \text{blockCellJ}\, p\, \alpha\, \beta) \cdot W(j, \beta)$. -/
+theorem blockCellSum_liftBlockQuotientVec
+    (A : IntMatrix)
+    (part : Nat → Nat)
+    (d : Nat)
+    (W : Nat → Nat → Int)
+    (p alpha j : Nat)
+    (blockCellJ : List Nat)
+    (hCell : ∀ q, q ∈ blockCellJ → blockCellOf part d q = j) :
+    sumIntOver (fun q =>
+      sumIntOver (fun beta =>
+        A.entry (p * d + alpha) (q * d + beta) * liftBlockQuotientVec part d W q beta)
+        (List.range d))
+      blockCellJ =
+    sumIntOver (fun beta =>
+      blockCellRowSumEntry A d blockCellJ p alpha beta * W j beta)
+      (List.range d) := by
+  have hCongr :
+      sumIntOver (fun q =>
+        sumIntOver (fun beta =>
+          A.entry (p * d + alpha) (q * d + beta) * liftBlockQuotientVec part d W q beta)
+          (List.range d))
+        blockCellJ =
+      sumIntOver (fun q =>
+        sumIntOver (fun beta =>
+          A.entry (p * d + alpha) (q * d + beta) * W j beta)
+          (List.range d))
+        blockCellJ := by
+    apply sumIntOver_congr
+    intro q hq
+    apply sumIntOver_congr
+    intro beta _
+    dsimp only [liftBlockQuotientVec]
+    rw [hCell q hq]
+  rw [hCongr]
+  rw [doubleSum_swap (fun q beta => A.entry (p * d + alpha) (q * d + beta) * W j beta) blockCellJ (List.range d)]
+  apply sumIntOver_congr
+  intro beta _
+  rw [sumIntOver_mul_right (fun q => A.entry (p * d + alpha) (q * d + beta)) (W j beta) blockCellJ]
+  rfl
+
+/-- **Theorem (`block_equitable_intertwining_step`)**:
+**Fundamental One-Step Block-Equitable Intertwining Identity ($A P_{\text{block}} = P_{\text{block}} B_{\text{block}}$)**:
+For any $d \times d$ block-equitable partition $(A, \text{part}, Q)$ across `cellIndices` and `blockCellOfJ`,
+and any block-quotient spinor vector $W : \text{Nat} \to \text{Nat} \to \text{Int}$:
+$$(A (P_{\text{block}} W))_{p, \alpha} = (P_{\text{block}} (B_{\text{block}} W))_{p, \alpha}.$$ -/
+theorem block_equitable_intertwining_step
+    (A : IntMatrix)
+    (Q : Nat → Nat → IntMatrix)
+    (part : Nat → Nat)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (blockCellOfJ : Nat → List Nat)
+    (W : Nat → Nat → Int)
+    (p alpha : Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ q, q ∈ blockCellOfJ j → blockCellOf part d q = j)
+    (hEqRow : ∀ j, j ∈ cellIndices → ∀ beta, beta ∈ List.range d →
+      blockCellRowSumEntry A d (blockCellOfJ j) p alpha beta = (Q (blockCellOf part d p) j).entry alpha beta) :
+    blockPartitionedMatVec A d cellIndices blockCellOfJ (liftBlockQuotientVec part d W) p alpha =
+      liftBlockQuotientVec part d (blockQuotientMatVec Q d cellIndices W) p alpha := by
+  dsimp only [blockPartitionedMatVec, blockQuotientMatVec]
+  apply sumIntOver_congr
+  intro j hj
+  rw [blockCellSum_liftBlockQuotientVec A part d W p alpha j (blockCellOfJ j) (hCells j hj)]
+  apply sumIntOver_congr
+  intro beta hbeta
+  rw [hEqRow j hj beta hbeta]
+
+/-- Iterate a block-spinor linear operator `op : (Nat → Nat → Int) → (Nat → Nat → Int)` $k$ times. -/
+def iterateBlockVecOp
+    (op : (Nat → Nat → Int) → (Nat → Nat → Int)) :
+    Nat → (Nat → Nat → Int) → (Nat → Nat → Int)
+  | 0, V => V
+  | k + 1, V => op (iterateBlockVecOp op k V)
+
+/-- **Theorem (`block_equitable_intertwining_power`)**:
+**Multi-Step Power Block Intertwining Identity ($A^k P_{\text{block}} = P_{\text{block}} B_{\text{block}}^k$)**:
+If $(A, \text{part}, Q)$ is $d \times d$ block-equitable across `cellIndices` and `blockCellOfJ`,
+then for every power $k \in \mathbb{N}$ and every quotient spinor vector $W$:
+$$(A^k (P_{\text{block}} W))_{p, \alpha} = (P_{\text{block}} (B_{\text{block}}^k W))_{p, \alpha}.$$ -/
+theorem block_equitable_intertwining_power
+    (A : IntMatrix)
+    (Q : Nat → Nat → IntMatrix)
+    (part : Nat → Nat)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (blockCellOfJ : Nat → List Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ q, q ∈ blockCellOfJ j → blockCellOf part d q = j)
+    (hEqAll : ∀ p alpha, ∀ j, j ∈ cellIndices → ∀ beta, beta ∈ List.range d →
+      blockCellRowSumEntry A d (blockCellOfJ j) p alpha beta = (Q (blockCellOf part d p) j).entry alpha beta) :
+    ∀ (k : Nat) (W : Nat → Nat → Int) (p alpha : Nat),
+      iterateBlockVecOp (blockPartitionedMatVec A d cellIndices blockCellOfJ) k (liftBlockQuotientVec part d W) p alpha =
+        liftBlockQuotientVec part d (iterateBlockVecOp (blockQuotientMatVec Q d cellIndices) k W) p alpha
+  | 0, _, _, _ => rfl
+  | k + 1, W, p, alpha => by
+    dsimp only [iterateBlockVecOp]
+    have hCongr :
+        blockPartitionedMatVec A d cellIndices blockCellOfJ
+          (iterateBlockVecOp (blockPartitionedMatVec A d cellIndices blockCellOfJ) k (liftBlockQuotientVec part d W)) p alpha =
+        blockPartitionedMatVec A d cellIndices blockCellOfJ
+          (liftBlockQuotientVec part d (iterateBlockVecOp (blockQuotientMatVec Q d cellIndices) k W)) p alpha := by
+      apply blockPartitionedMatVec_congr
+      intro j _ q _ beta _
+      exact block_equitable_intertwining_power A Q part d cellIndices blockCellOfJ hCells hEqAll k W q beta
+    rw [hCongr]
+    exact block_equitable_intertwining_step A Q part d cellIndices blockCellOfJ
+      (iterateBlockVecOp (blockQuotientMatVec Q d cellIndices) k W) p alpha hCells (hEqAll p alpha)
+
+/-- Auxiliary evaluator for block-spinor matrix polynomial $\sum_{m} c_m (A^{k+m} V)_{p, \alpha}$. -/
+def evalBlockMatrixPolyAux
+    (op : (Nat → Nat → Int) → (Nat → Nat → Int))
+    (k : Nat) : List Int → (Nat → Nat → Int) → (Nat → Nat → Int)
+  | [], _ => fun _ _ => 0
+  | c :: cs, V => fun p alpha =>
+      c * iterateBlockVecOp op k V p alpha + evalBlockMatrixPolyAux op (k + 1) cs V p alpha
+
+/-- Evaluate the matrix polynomial $p(A) V = \sum_{k} c_k A^k V$ on a block-spinor vector $V$ at $(p, \alpha)$. -/
+def evalBlockMatrixPoly
+    (op : (Nat → Nat → Int) → (Nat → Nat → Int))
+    (coeffs : List Int)
+    (V : Nat → Nat → Int)
+    (p alpha : Nat) : Int :=
+  evalBlockMatrixPolyAux op 0 coeffs V p alpha
+
+/-- Helper lemma: `evalBlockMatrixPolyAux` intertwines block-equitable lifts from any power offset `k`. -/
+theorem block_equitable_intertwining_poly_aux
+    (A : IntMatrix)
+    (Q : Nat → Nat → IntMatrix)
+    (part : Nat → Nat)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (blockCellOfJ : Nat → List Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ q, q ∈ blockCellOfJ j → blockCellOf part d q = j)
+    (hEqAll : ∀ p alpha, ∀ j, j ∈ cellIndices → ∀ beta, beta ∈ List.range d →
+      blockCellRowSumEntry A d (blockCellOfJ j) p alpha beta = (Q (blockCellOf part d p) j).entry alpha beta) :
+    ∀ (coeffs : List Int) (k : Nat) (W : Nat → Nat → Int) (p alpha : Nat),
+      evalBlockMatrixPolyAux (blockPartitionedMatVec A d cellIndices blockCellOfJ) k coeffs
+        (liftBlockQuotientVec part d W) p alpha =
+      liftBlockQuotientVec part d
+        (evalBlockMatrixPolyAux (blockQuotientMatVec Q d cellIndices) k coeffs W) p alpha
+  | [], _, _, _, _ => rfl
+  | c :: cs, k, W, p, alpha => by
+    dsimp only [evalBlockMatrixPolyAux, liftBlockQuotientVec]
+    rw [block_equitable_intertwining_power A Q part d cellIndices blockCellOfJ hCells hEqAll k W p alpha]
+    rw [block_equitable_intertwining_poly_aux A Q part d cellIndices blockCellOfJ hCells hEqAll cs (k + 1) W p alpha]
+    rfl
+
+/-- **Theorem (`block_equitable_intertwining_poly`)**:
+**Universal Block-Equitable Polynomial Intertwining Theorem ($p(A) P_{\text{block}} = P_{\text{block}} p(B_{\text{block}})$)**:
+For any polynomial $p(x) = \sum_{k} c_k x^k$ (`coeffs : List Int`), any block-equitable partition
+$(A, \text{part}, Q)$ of $r$ cells of $d \times d$ spinor blocks across `cellIndices` and `blockCellOfJ`,
+any block-quotient spinor vector $W : \text{Nat} \to \text{Nat} \to \text{Int}$, and any block $p$ and
+spinor index $\alpha \in \{0, \dots, d-1\}$:
+$$\left(p(A) (P_{\text{block}} W)\right)_{p, \alpha} = \left(P_{\text{block}} \left(p(B_{\text{block}}) W\right)\right)_{p, \alpha} = \left(p(B_{\text{block}}) W\right)_{\text{blockCellOf}(\text{part}, d, p), \alpha}.$$ -/
+theorem block_equitable_intertwining_poly
+    (A : IntMatrix)
+    (Q : Nat → Nat → IntMatrix)
+    (part : Nat → Nat)
+    (d : Nat)
+    (cellIndices : List Nat)
+    (blockCellOfJ : Nat → List Nat)
+    (coeffs : List Int)
+    (W : Nat → Nat → Int)
+    (p alpha : Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ q, q ∈ blockCellOfJ j → blockCellOf part d q = j)
+    (hEqAll : ∀ p alpha, ∀ j, j ∈ cellIndices → ∀ beta, beta ∈ List.range d →
+      blockCellRowSumEntry A d (blockCellOfJ j) p alpha beta = (Q (blockCellOf part d p) j).entry alpha beta) :
+    evalBlockMatrixPoly (blockPartitionedMatVec A d cellIndices blockCellOfJ) coeffs
+      (liftBlockQuotientVec part d W) p alpha =
+    liftBlockQuotientVec part d
+      (evalBlockMatrixPoly (blockQuotientMatVec Q d cellIndices) coeffs W) p alpha :=
+  block_equitable_intertwining_poly_aux A Q part d cellIndices blockCellOfJ hCells hEqAll coeffs 0 W p alpha
+
+/-! ## 9. Faddeev–LeVerrier Adjugate Crosstalk Compensation & 2-Boson Hong–Ou–Mandel Permanents -/
+
+/-- Auxiliary Faddeev–LeVerrier recurrence returning the penultimate matrix $M_n = B_{n-1} + c_1 I_n$
+and the constant term $c_0 = \det(-A)$ of $\det(\lambda I - A)$. -/
+def faddeevAdjugateAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → IntMatrix × Int
+  | 0 => (B, cPrev)
+  | rem + 1 =>
+    let mCurr := B.add (IntMatrix.scaledIdentity A.dim cPrev)
+    let bNext := A.mul mCurr
+    let cCurr := -(bNext.trace) / (k : Int)
+    match rem with
+    | 0 => (mCurr, cCurr)
+    | _ => faddeevAdjugateAux A bNext cCurr (k + 1) rem
+
+/-- **Faddeev–LeVerrier Exact Classical Adjugate & Determinant** (`faddeevAdjugateAndDet`):
+For any $n \times n$ integer matrix $A$, computes `(adj(A), det(A))` via the division-free
+Faddeev–LeVerrier trace recurrence such that:
+$$A \cdot \operatorname{adj}(A) = \operatorname{adj}(A) \cdot A = \det(A) \cdot I_n.$$ -/
+def faddeevAdjugateAndDet (A : IntMatrix) : IntMatrix × Int :=
+  if A.dim == 0 then (IntMatrix.zero 0, 1)
+  else
+    let (mN, c0) := faddeevAdjugateAux A (IntMatrix.zero A.dim) 1 1 A.dim
+    let sign : Int := if A.dim % 2 == 0 then -1 else 1
+    (mN.scale sign, (-c0) * sign)
+
+/-- Multi-channel thermo-optic phase-shifter array specification (`ThermoOpticPhaseShifter`):
+* `numChannels`: number of coupled waveguide TiN/doped-Si micro-heaters $r$,
+* `crosstalkMatrix`: $r \times r$ integer-scaled thermal conductance / crosstalk matrix $G_{\text{th}}$,
+* `maxPowerMw`: per-channel maximum heater power budget in milliwatts. -/
+structure ThermoOpticPhaseShifter where
+  numChannels     : Nat
+  crosstalkMatrix : IntMatrix
+  maxPowerMw      : Nat
+  deriving DecidableEq, Repr
+
+/-- **Exact Adjugate Pre-Distortion for Thermo-Optic Crosstalk** (`compensateThermalCrosstalk`):
+Given an $r \times r$ thermal crosstalk matrix $G_{\text{th}}$ and target phase vector $\phi_{\text{target}}$,
+computes `(u_comp, det(G_th))` where $u_{\text{comp}} = \operatorname{adj}(G_{\text{th}}) \cdot \phi_{\text{target}}$,
+so that the physical thermally-coupled phase response is strictly crosstalk-free:
+$$G_{\text{th}} \cdot u_{\text{comp}} = \det(G_{\text{th}}) \cdot \phi_{\text{target}}.$$ -/
+def compensateThermalCrosstalk (G_th : IntMatrix) (phiTarget : List Int) : List Int × Int :=
+  let res := faddeevAdjugateAndDet G_th
+  (res.1.mulVec phiTarget, res.2)
+
+/-- Canonical $4 \times 4$ tridiagonal nearest-neighbor silicon thermo-optic crosstalk matrix $G_{\text{th}}$
+(diagonal self-heating gain $10$, nearest-neighbor diffusive thermal coupling $2$, next-nearest $1$):
+$$G_{\text{th}} = \begin{pmatrix} 10 & 2 & 1 & 0 \\ 2 & 10 & 2 & 1 \\ 1 & 2 & 10 & 2 \\ 0 & 1 & 2 & 10 \end{pmatrix}.$$ -/
+def goldenThermalCrosstalk4x4 : IntMatrix where
+  dim  := 4
+  rows :=
+    [ [10, 2, 1, 0]
+    , [2, 10, 2, 1]
+    , [1, 2, 10, 2]
+    , [0, 1, 2, 10] ]
+
+/-- Explicit Faddeev–LeVerrier adjugate and determinant of `goldenThermalCrosstalk4x4`. -/
+theorem goldenThermalCrosstalk4x4_adj_eq :
+    faddeevAdjugateAndDet goldenThermalCrosstalk4x4 =
+      ({ dim := 4
+       , rows :=
+           [ [918, -174, -63, 30]
+           , [-174, 950, -160, -63]
+           , [-63, -160, 950, -174]
+           , [30, -63, -174, 918] ] }, 8769) := by
+  decide +kernel
+
+/-- **Theorem (`faddeevAdjugate_cancels_crosstalk_4x4`)**:
+For the $4 \times 4$ thermo-optic crosstalk matrix `goldenThermalCrosstalk4x4`, `faddeevAdjugateAndDet`
+synthesizes `(adjG, detG)` with $\det(G_{\text{th}}) = 8769 > 0$ such that both left and right
+matrix products cancel all off-diagonal thermal crosstalk identically:
+$$G_{\text{th}} \cdot \operatorname{adj}(G_{\text{th}}) = \operatorname{adj}(G_{\text{th}}) \cdot G_{\text{th}} = \det(G_{\text{th}}) \cdot I_4.$$ -/
+theorem faddeevAdjugate_cancels_crosstalk_4x4 :
+    let res := faddeevAdjugateAndDet goldenThermalCrosstalk4x4
+    res.2 = 8769 ∧
+    goldenThermalCrosstalk4x4.mul res.1 = IntMatrix.scaledIdentity 4 res.2 ∧
+    res.1.mul goldenThermalCrosstalk4x4 = IntMatrix.scaledIdentity 4 res.2 := by
+  decide +kernel
+
+/-- **Theorem (`compensateThermalCrosstalk_exact_4x4`)**:
+For ANY 4-channel target phase vector $\phi_{\text{target}} = [\phi_0, \phi_1, \phi_2, \phi_3] \in \mathbb{Z}^4$,
+applying `goldenThermalCrosstalk4x4` to the pre-distorted heater drive
+`u_comp = (compensateThermalCrosstalk goldenThermalCrosstalk4x4 [phi0, phi1, phi2, phi3]).1`
+recovers the exact crosstalk-free scaled target phase vector
+`[detG * phi0, detG * phi1, detG * phi2, detG * phi3]`! -/
+theorem compensateThermalCrosstalk_exact_4x4 (phi0 phi1 phi2 phi3 : Int) :
+    let target := [phi0, phi1, phi2, phi3]
+    let res := compensateThermalCrosstalk goldenThermalCrosstalk4x4 target
+    goldenThermalCrosstalk4x4.mulVec res.1 =
+      [res.2 * phi0, res.2 * phi1, res.2 * phi2, res.2 * phi3] := by
+  dsimp only [compensateThermalCrosstalk]
+  rw [goldenThermalCrosstalk4x4_adj_eq]
+  dsimp only [IntMatrix.mulVec, goldenThermalCrosstalk4x4, IntMatrix.entry, listGetInt,
+    sumIntOver, List.range, List.range.loop, List.map,
+    List.getElem?_cons_zero, List.getElem?_cons_succ]
+  congr 1
+  · omega
+  · congr 1
+    · omega
+    · congr 1
+      · omega
+      · congr 1
+        · omega
+
+/-- **2-Boson Matrix Permanent** (`twoBosonPermanent`):
+Evaluates the exact $2 \times 2$ permanent governing 2-photon bosonic transition amplitude from
+input waveguide modes $(c, d)$ to output waveguide modes $(a, b)$ under single-photon unitary $U$:
+$$\operatorname{perm}(U_{[a, b;\, c, d]}) = U_{a, c} U_{b, d} + U_{a, d} U_{b, c} \in \mathbb{Z}[i].$$ -/
+def twoBosonPermanent (U : GaussianMatrix) (a b c d : Fin 4) : GaussianInt :=
+  GaussianInt.add
+    (GaussianInt.mul (U.entry a.val c.val) (U.entry b.val d.val))
+    (GaussianInt.mul (U.entry a.val d.val) (U.entry b.val c.val))
+
+/-- Scaled $4 \times 4$ 50:50 lossless symmetric directional coupler (beam-splitter) unitary over $\mathbb{Z}[i]$
+acting on waveguide modes `a` and `b` ($U_{a,a} = U_{b,b} = 1$, $U_{a,b} = U_{b,a} = i$, and identity
+on spectator modes; returns `GaussianMatrix.zero 4` in the degenerate case `a = b`). -/
+def beamSplitter5050 (a b : Fin 4) : GaussianMatrix :=
+  if a.val == b.val then
+    GaussianMatrix.zero 4
+  else
+    let indices := List.range 4
+    { dim  := 4
+    , rows := indices.map (fun u =>
+        indices.map (fun v =>
+          if (u == a.val && v == a.val) || (u == b.val && v == b.val) then
+            GaussianInt.one
+          else if (u == a.val && v == b.val) || (u == b.val && v == a.val) then
+            GaussianInt.iUnit
+          else if u == v then
+            GaussianInt.one
+          else
+            GaussianInt.zero)) }
+
+/-- **Theorem (`hong_ou_mandel_bunching_exact`)**:
+**Exact Hong–Ou–Mandel (HOM) Two-Boson Coincidence Extinction Theorem**:
+For any pair of waveguide modes $a, b \in \text{Fin } 4$, injecting one photon into mode $a$ and
+one photon into mode $b$ of a symmetric 50:50 beam-splitter `beamSplitter5050 a b` yields identically
+zero $(1, 1)$ anti-bunched coincidence amplitude (`twoBosonPermanent (beamSplitter5050 a b) a b a b = GaussianInt.zero`),
+because the transmitted-transmitted amplitude ($1 \cdot 1 = +1$) and reflected-reflected amplitude
+($i \cdot i = -1$) interfere destructively ($+1 + (-1) = 0$)! -/
+theorem hong_ou_mandel_bunching_exact (a b : Fin 4) :
+    twoBosonPermanent (beamSplitter5050 a b) a b a b = GaussianInt.zero := by
+  revert a b
+  decide +kernel
+
+/-- Commutativity of Gaussian integer addition (`z + w = w + z`). -/
+theorem gaussianInt_add_comm (z w : GaussianInt) :
+    GaussianInt.add z w = GaussianInt.add w z := by
+  cases z
+  cases w
+  dsimp only [GaussianInt.add]
+  congr 1 <;> omega
+
+/-- Commutativity of Gaussian integer multiplication (`z * w = w * z`). -/
+theorem gaussianInt_mul_comm (z w : GaussianInt) :
+    GaussianInt.mul z w = GaussianInt.mul w z := by
+  cases z with
+  | mk zr zi =>
+    cases w with
+    | mk wr wi =>
+      dsimp only [GaussianInt.mul]
+      rw [Int.mul_comm zr wr, Int.mul_comm zi wi, Int.mul_comm zr wi, Int.mul_comm zi wr, Int.add_comm]
+
+/-- **Theorem (`twoBosonPermanent_bose_symmetry`)**:
+**Universal Bosonic Exchange Symmetry of the 2-Boson Permanent**:
+For EVERY $4 \times 4$ unitary/transfer matrix `U : GaussianMatrix` and ALL mode indices $a, b, c, d \in \text{Fin } 4$,
+the 2-boson permanent is invariant under exchanging the output bosons ($a \leftrightarrow b$) and
+under exchanging the input bosons ($c \leftrightarrow d$):
+$$\operatorname{perm}(U_{[b,a;\, c,d]}) = \operatorname{perm}(U_{[a,b;\, c,d]}) \;\wedge\;
+  \operatorname{perm}(U_{[a,b;\, d,c]}) = \operatorname{perm}(U_{[a,b;\, c,d]}).$$ -/
+theorem twoBosonPermanent_bose_symmetry (U : GaussianMatrix) (a b c d : Fin 4) :
+    twoBosonPermanent U b a c d = twoBosonPermanent U a b c d ∧
+    twoBosonPermanent U a b d c = twoBosonPermanent U a b c d := by
+  dsimp only [twoBosonPermanent]
+  constructor
+  · rw [gaussianInt_mul_comm (U.entry b.val c.val) (U.entry a.val d.val)]
+    rw [gaussianInt_mul_comm (U.entry b.val d.val) (U.entry a.val c.val)]
+    exact gaussianInt_add_comm
+      (GaussianInt.mul (U.entry a.val d.val) (U.entry b.val c.val))
+      (GaussianInt.mul (U.entry a.val c.val) (U.entry b.val d.val))
+  · exact gaussianInt_add_comm
+      (GaussianInt.mul (U.entry a.val d.val) (U.entry b.val c.val))
+      (GaussianInt.mul (U.entry a.val c.val) (U.entry b.val d.val))
+
+/-- 2-Boson two-particle Hamiltonian $H^{(2)} = H_{K_2} \otimes I_2 + I_2 \otimes H_{K_2}$ on the
+4-state 2-photon basis $\{|0,0\rangle, |0,1\rangle, |1,0\rangle, |1,1\rangle\}$:
+$$H^{(2)} = \begin{pmatrix} 0 & 1 & 1 & 0 \\ 1 & 0 & 0 & 1 \\ 1 & 0 & 0 & 1 \\ 0 & 1 & 1 & 0 \end{pmatrix}.$$ -/
+def twoBosonHamiltonian : IntMatrix where
+  dim  := 4
+  rows :=
+    [ [0, 1, 1, 0]
+    , [1, 0, 0, 1]
+    , [1, 0, 0, 1]
+    , [0, 1, 1, 0] ]
+
+/-- Symmetrized Fock-space partition of the 4-state 2-boson space into the 3 bosonic occupation
+sectors $C_0 = \{|2, 0\rangle\} = \{0\}$, $C_1 = \{|0,1\rangle, |1,0\rangle\} = \{1, 2\}$, and
+$C_2 = \{|0, 2\rangle\} = \{3\}$. -/
+def twoBosonPart : Nat → Nat
+  | 0 => 0
+  | 1 => 1
+  | 2 => 1
+  | 3 => 2
+  | _ => 0
+
+/-- $3 \times 3$ bosonic Fock-space quotient matrix of `twoBosonHamiltonian`:
+$$Q_{\text{2-boson}} = \begin{pmatrix} 0 & 2 & 0 \\ 1 & 0 & 1 \\ 0 & 2 & 0 \end{pmatrix}.$$ -/
+def twoBosonQuotient : Nat → Nat → Int
+  | 0, 1 => 2
+  | 1, 0 => 1
+  | 1, 2 => 1
+  | 2, 1 => 2
+  | _, _ => 0
+
+/-- **Theorem (`twoBoson_equitable_intertwining_poly`)**:
+The 4-state 2-boson Hamiltonian $H^{(2)} = H_{K_2} \otimes I + I \otimes H_{K_2}$ is an exact
+equitable partition over the 3-sector bosonic Fock partition `twoBosonPart` (`checkEquitablePartition = true`),
+and for EVERY polynomial $p(x) = \sum_k c_k x^k$ (`coeffs : List Int`), EVERY Fock-sector wavevector
+`w : Nat → Int`, and EVERY 2-photon basis state `u < 4`, the 2-boson polynomial evolution intertwines
+with the 3-mode Fock quotient `twoBosonQuotient`! -/
+theorem twoBoson_equitable_intertwining_poly
+    (coeffs : List Int) (w : Nat → Int) (u : Nat) (hu : u < 4) :
+    checkEquitablePartition twoBosonHamiltonian 3 twoBosonPart twoBosonQuotient = true ∧
+    evalMatrixPoly (matVec (List.range 4) twoBosonHamiltonian.entry) coeffs (liftQuotientVec twoBosonPart w) u =
+      liftQuotientVec twoBosonPart (evalMatrixPoly (quotientMatVec twoBosonQuotient (List.range 3)) coeffs w) u := by
+  have hCheck : checkEquitablePartition twoBosonHamiltonian 3 twoBosonPart twoBosonQuotient = true := by
+    decide +kernel
+  exact ⟨hCheck, (equitable_intertwining_poly_unpartitioned twoBosonHamiltonian 3 twoBosonPart twoBosonQuotient coeffs w u hCheck hu).1⟩
 
 end Obend.Analysis
 end

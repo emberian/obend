@@ -561,11 +561,12 @@ def evalActualCutterIgnoreDeflection (xCmdNm feedVelMmPerS servoLagNsPerMm _tool
 
 #tooth Obend.Hardware.GeometryCAM.machining_dimensional_error_identity by mutation Obend.Hardware.GeometryCAM.evalActualCutterPosNm := evalActualCutterIgnoreDeflection
 
-/-- 45. Broken `resolveLiverpsPair` in `Obend.Hardware.GeometryCAM` that picks the weaker opinion `b` instead of the stronger opinion `a` (inverting OpenUSD `LIVERPS` composition strength). -/
-def resolveLiverpsPairInverted {α : Type} (a b : UsdOpinion α) : UsdOpinion α :=
-  if usdOpinionStrongerOrEq a b then b else a
+/-- 45. Broken `insertPrimByStrength` in `Obend.Hardware.OpenUSD` that appends `p` after `q` instead of placing stronger/local `PrimSpec`s at the head (inverting OpenUSD `LIVERPS` composition strength). -/
+def insertPrimByStrengthBroken (p : PrimSpec) : List PrimSpec → List PrimSpec
+  | [] => [p]
+  | q :: rest => q :: insertPrimByStrengthBroken p rest
 
-#tooth Obend.Hardware.GeometryCAM.liverps_local_dominates_nonlocal by mutation Obend.Hardware.GeometryCAM.resolveLiverpsPair := resolveLiverpsPairInverted
+#tooth Obend.Hardware.OpenUSD.insertPrimByStrength_localArc_head by mutation Obend.Hardware.OpenUSD.insertPrimByStrength := insertPrimByStrengthBroken
 
 /-- 46. Broken `spatialPower` in `Obend.Hardware.Kinematics` that subtracts the linear power `dot3 f.force v.lin` instead of adding it (breaking Featherstone spatial adjoint-coadjoint duality and D'Alembert virtual work). -/
 def spatialPowerBrokenLinear (f : SpatialWrench6D) (v : SpatialTwist6D) : Int :=

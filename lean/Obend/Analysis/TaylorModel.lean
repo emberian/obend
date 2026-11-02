@@ -678,8 +678,29 @@ theorem TaylorModel.mul_models
   rw [hAlg]
   exact hTotal
 
+/-- Canonical validity domain $[-1, 1]$ for degree-4 $\exp(x)$ Taylor–Lagrange remainder bound
+(where $|\exp^{(5)}(\xi)| \le e < 3$, so $\frac{3}{5!} = \frac{1}{40}$). -/
+def expValidDomain : Interval :=
+  Interval.mk (-1) 1
+
+/-- Canonical validity domain $[-4, 4]$ for degree-5 $\sin(x)$ and degree-4 $\cos(x)$ Taylor–Lagrange
+remainder bounds. -/
+def trigValidDomain : Interval :=
+  Interval.mk (-4) 4
+
+/-- Canonical validity domain $[-\frac{1}{2}, \frac{1}{2}]$ for degree-4 $\ln(1 + x)$ Taylor–Lagrange
+remainder bound (where $|(1 + \xi)^{-5}| \le 2^5 = 32$ on $\xi \in [-1/2, 1/2]$, strictly avoiding the
+branch singularity at $x = -1$). -/
+def ln1pValidDomain : Interval :=
+  Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)
+
+/-- Canonical validity domain $[-\frac{1}{2}, \frac{1}{2}]$ for degree-3 $\sqrt{1 + x}$ Taylor–Lagrange
+remainder bound (where $\left|\frac{-15}{16}(1+\xi)^{-7/2}\right| \cdot \frac{1}{4!} \le \frac{5}{8}$ on $\xi \in [-1/2, 1/2]$). -/
+def sqrt1pValidDomain : Interval :=
+  Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)
+
 /-- Typeclass `AnalyticModel R` packaging smooth transcendental evaluators (`expFn`, `sinFn`, `cosFn`,
-`ln1pFn`, `sqrt1pFn`) together with their certified Taylor–Lagrange mean-value derivative witnesses. -/
+`ln1pFn`, `sqrt1pFn`) together with their domain-guarded certified Taylor–Lagrange mean-value derivative witnesses. -/
 class AnalyticModel (R : Type) where
   expFn    : CanonicalRat → CanonicalRat
   sinFn    : CanonicalRat → CanonicalRat
@@ -687,33 +708,38 @@ class AnalyticModel (R : Type) where
   ln1pFn   : CanonicalRat → CanonicalRat
   sqrt1pFn : CanonicalRat → CanonicalRat
   exp_lagrange4 :
-    ∀ (x : CanonicalRat),
-      ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 40) (CanonicalRat.mk 1 40),
-        expFn x - evalTaylorPolyAt [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] x =
-          c * powRat x 5
+    ∀ (D : Interval), Interval.subset D expValidDomain = true →
+      ∀ (x : CanonicalRat), Interval.Mem x D →
+        ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 40) (CanonicalRat.mk 1 40),
+          expFn x - evalTaylorPolyAt [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] x =
+            c * powRat x 5
   sin_lagrange5 :
-    ∀ (x : CanonicalRat),
-      ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 720) (CanonicalRat.mk 1 720),
-        sinFn x - evalTaylorPolyAt [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] x =
-          c * powRat x 6
+    ∀ (D : Interval), Interval.subset D trigValidDomain = true →
+      ∀ (x : CanonicalRat), Interval.Mem x D →
+        ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 720) (CanonicalRat.mk 1 720),
+          sinFn x - evalTaylorPolyAt [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] x =
+            c * powRat x 6
   cos_lagrange4 :
-    ∀ (x : CanonicalRat),
-      ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 120) (CanonicalRat.mk 1 120),
-        cosFn x - evalTaylorPolyAt [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] x =
-          c * powRat x 5
+    ∀ (D : Interval), Interval.subset D trigValidDomain = true →
+      ∀ (x : CanonicalRat), Interval.Mem x D →
+        ∃ c ∈ Interval.mk (CanonicalRat.mk (-1) 120) (CanonicalRat.mk 1 120),
+          cosFn x - evalTaylorPolyAt [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] x =
+            c * powRat x 5
   ln1p_lagrange4 :
-    ∀ (x : CanonicalRat),
-      ∃ c ∈ Interval.mk (CanonicalRat.mk (-32) 5) (CanonicalRat.mk 32 5),
-        ln1pFn x - evalTaylorPolyAt [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] x =
-          c * powRat x 5
+    ∀ (D : Interval), Interval.subset D ln1pValidDomain = true →
+      ∀ (x : CanonicalRat), Interval.Mem x D →
+        ∃ c ∈ Interval.mk (CanonicalRat.mk (-32) 5) (CanonicalRat.mk 32 5),
+          ln1pFn x - evalTaylorPolyAt [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] x =
+            c * powRat x 5
   sqrt1p_lagrange3 :
-    ∀ (x : CanonicalRat),
-      ∃ c ∈ Interval.mk (CanonicalRat.mk (-5) 8) (CanonicalRat.mk 5 8),
-        sqrt1pFn x - evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] x =
-          c * powRat x 4
+    ∀ (D : Interval), Interval.subset D sqrt1pValidDomain = true →
+      ∀ (x : CanonicalRat), Interval.Mem x D →
+        ∃ c ∈ Interval.mk (CanonicalRat.mk (-5) 8) (CanonicalRat.mk 5 8),
+          sqrt1pFn x - evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] x =
+            c * powRat x 4
 
 /-- Canonical rational `AnalyticModel` instance witnessing signed negative/positive Lagrange remainders
-(such as $c = -1/720$ for $\sin$, where $\sin(1/10) - p_5(1/10) < 0$). -/
+(such as $c = -1/720$ for $\sin$, where $\sin(1/10) - p_5(1/10) < 0$) over the guarded validity domains. -/
 instance : AnalyticModel CanonicalRat where
   expFn x :=
     evalTaylorPolyAt [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] x +
@@ -730,72 +756,102 @@ instance : AnalyticModel CanonicalRat where
   sqrt1pFn x :=
     evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] x +
       (CanonicalRat.mk (-5) 128) * powRat x 4
-  exp_lagrange4 x := ⟨CanonicalRat.mk 1 120, by decide, by grind⟩
-  sin_lagrange5 x := ⟨CanonicalRat.mk (-1) 720, by decide, by grind⟩
-  cos_lagrange4 x := ⟨CanonicalRat.mk (-1) 120, by decide, by grind⟩
-  ln1p_lagrange4 x := ⟨CanonicalRat.mk 1 5, by decide, by grind⟩
-  sqrt1p_lagrange3 x := ⟨CanonicalRat.mk (-5) 128, by decide, by grind⟩
+  exp_lagrange4 _ _ _ _ := ⟨CanonicalRat.mk 1 120, by decide, by grind⟩
+  sin_lagrange5 _ _ _ _ := ⟨CanonicalRat.mk (-1) 720, by decide, by grind⟩
+  cos_lagrange4 _ _ _ _ := ⟨CanonicalRat.mk (-1) 120, by decide, by grind⟩
+  ln1p_lagrange4 _ _ _ _ := ⟨CanonicalRat.mk 1 5, by decide, by grind⟩
+  sqrt1p_lagrange3 _ _ _ _ := ⟨CanonicalRat.mk (-5) 128, by decide, by grind⟩
 
 /-- **Theorem (`tmExpCertified_models`)**:
-For any `AnalyticModel R` and domain `dom`, `tmExpCertified dom` soundly models `AnalyticModel.expFn`. -/
-theorem tmExpCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+For any `AnalyticModel R` and domain `dom ⊆ expValidDomain` (`[-1, 1]`), `tmExpCertified dom`
+soundly models `AnalyticModel.expFn`. -/
+theorem tmExpCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
+    (hDom : Interval.subset dom expValidDomain = true := by decide) :
     TaylorModel.Models (M.expFn) (tmExpCertified dom) := by
   intro x hx
   dsimp [tmExpCertified, tmExp, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
-  obtain ⟨c, hc, hLag⟩ := M.exp_lagrange4 x
+  obtain ⟨c, hc, hLag⟩ := M.exp_lagrange4 dom hDom x hx
   rw [hLag]
   exact Interval.mul_mem hc (intervalPow_mem dom x hx 5)
 
 /-- **Theorem (`tmSinCertified_models`)**:
-For any `AnalyticModel R` and domain `dom`, `tmSinCertified dom` soundly models `AnalyticModel.sinFn`
-(including on positive singleton domains $X = [1/10, 1/10]$ where $\sin(x) - p_5(x) < 0$). -/
-theorem tmSinCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+For any `AnalyticModel R` and domain `dom ⊆ trigValidDomain` (`[-4, 4]`), `tmSinCertified dom`
+soundly models `AnalyticModel.sinFn` (including on positive singleton domains $X = [1/10, 1/10]$
+where $\sin(x) - p_5(x) < 0$). -/
+theorem tmSinCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
+    (hDom : Interval.subset dom trigValidDomain = true := by decide) :
     TaylorModel.Models (M.sinFn) (tmSinCertified dom) := by
   intro x hx
   dsimp [tmSinCertified, tmSin, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
-  obtain ⟨c, hc, hLag⟩ := M.sin_lagrange5 x
+  obtain ⟨c, hc, hLag⟩ := M.sin_lagrange5 dom hDom x hx
   rw [hLag]
   exact Interval.mul_mem hc (intervalPow_mem dom x hx 6)
 
 /-- **Theorem (`tmCosCertified_models`)**:
-For any `AnalyticModel R` and domain `dom`, `tmCosCertified dom` soundly models `AnalyticModel.cosFn`. -/
-theorem tmCosCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+For any `AnalyticModel R` and domain `dom ⊆ trigValidDomain` (`[-4, 4]`), `tmCosCertified dom`
+soundly models `AnalyticModel.cosFn`. -/
+theorem tmCosCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
+    (hDom : Interval.subset dom trigValidDomain = true := by decide) :
     TaylorModel.Models (M.cosFn) (tmCosCertified dom) := by
   intro x hx
   dsimp [tmCosCertified, tmCos, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
-  obtain ⟨c, hc, hLag⟩ := M.cos_lagrange4 x
+  obtain ⟨c, hc, hLag⟩ := M.cos_lagrange4 dom hDom x hx
   rw [hLag]
   exact Interval.mul_mem hc (intervalPow_mem dom x hx 5)
 
 /-- **Theorem (`tmLn1pCertified_models`)**:
-For any `AnalyticModel R` and domain `dom`, `tmLn1pCertified dom` soundly models `AnalyticModel.ln1pFn`. -/
-theorem tmLn1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+For any `AnalyticModel R` and domain `dom ⊆ ln1pValidDomain` (`[-1/2, 1/2]`), `tmLn1pCertified dom`
+soundly models `AnalyticModel.ln1pFn`. -/
+theorem tmLn1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
+    (hDom : Interval.subset dom ln1pValidDomain = true := by decide) :
     TaylorModel.Models (M.ln1pFn) (tmLn1pCertified dom) := by
   intro x hx
   dsimp [tmLn1pCertified, tmLn1p, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
-  obtain ⟨c, hc, hLag⟩ := M.ln1p_lagrange4 x
+  obtain ⟨c, hc, hLag⟩ := M.ln1p_lagrange4 dom hDom x hx
   rw [hLag]
   exact Interval.mul_mem hc (intervalPow_mem dom x hx 5)
 
 /-- **Theorem (`tmSqrt1pCertified_models`)**:
-For any `AnalyticModel R` and domain `dom`, `tmSqrt1pCertified dom` soundly models `AnalyticModel.sqrt1pFn`. -/
-theorem tmSqrt1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval) :
+For any `AnalyticModel R` and domain `dom ⊆ sqrt1pValidDomain` (`[-1/2, 1/2]`), `tmSqrt1pCertified dom`
+soundly models `AnalyticModel.sqrt1pFn`. -/
+theorem tmSqrt1pCertified_models (R : Type) [M : AnalyticModel R] (dom : Interval)
+    (hDom : Interval.subset dom sqrt1pValidDomain = true := by decide) :
     TaylorModel.Models (M.sqrt1pFn) (tmSqrt1pCertified dom) := by
   intro x hx
   dsimp [tmSqrt1pCertified, tmSqrt1p, TaylorModel.remainder] at hx ⊢
   have hx0 : x - 0 = x := by grind
   rw [hx0]
-  obtain ⟨c, hc, hLag⟩ := M.sqrt1p_lagrange3 x
+  obtain ⟨c, hc, hLag⟩ := M.sqrt1p_lagrange3 dom hDom x hx
   rw [hLag]
   exact Interval.mul_mem hc (intervalPow_mem dom x hx 4)
+
+/-- **Theorem (`analyticModel_domain_guard_rejects_out_of_domain`)**:
+Out-of-domain intervals (such as $x = 10$ outside `expValidDomain = [-1, 1]`, $x = 5$ outside
+`trigValidDomain = [-4, 4]`, or the branch singularity $x = -1$ outside `ln1pValidDomain = [-1/2, 1/2]`
+and `sqrt1pValidDomain = [-1/2, 1/2]`) are rejected by the validity domain guards (`Interval.subset = false`),
+while in-domain intervals such as $[-1/10, 1/10]$ are accepted (`Interval.subset = true`). -/
+theorem analyticModel_domain_guard_rejects_out_of_domain :
+    let tenthDom := Interval.mk (CanonicalRat.mk (-1) 10) (CanonicalRat.mk 1 10)
+    Interval.subset tenthDom expValidDomain = true ∧
+    Interval.subset tenthDom trigValidDomain = true ∧
+    Interval.subset tenthDom ln1pValidDomain = true ∧
+    Interval.subset tenthDom sqrt1pValidDomain = true ∧
+    Interval.subset (Interval.ofPoint 10) expValidDomain = false ∧
+    Interval.subset (Interval.ofPoint 5) trigValidDomain = false ∧
+    Interval.subset (Interval.ofPoint (-1)) ln1pValidDomain = false ∧
+    Interval.subset (Interval.ofPoint (-1)) sqrt1pValidDomain = false := by
+  decide +kernel
+
+#tooth analyticModel_domain_guard_rejects_out_of_domain by mutation
+  Obend.Analysis.Interval.subset := fun _ _ => true
 
 end Obend.Analysis
 end
