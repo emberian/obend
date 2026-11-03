@@ -1,12 +1,9 @@
 edition ObjectiveBend 1
 # Flagship App #8 (`apps/quantum-photonic-matter/MajoranaTetronSyndromes.obend`):
 # Topological Majorana tetron (\gamma_0..\gamma_3) non-Abelian Clifford braiding
-# and dissipative Lindblad fermion-parity cooling (L_cool = 1/2 * \gamma_0 * (I - P_tot)).
+# and dissipative Lindblad fermion-parity cooling (L_cool(a) = \rho(\gamma_a) * \Pi_odd).
 
-import "./QuantumPhotonicMatter.obend" as QPMStd
-
-law monotone_tetron_syndrome_cycle: monotone(syndromeCycle)
-law preserve_fermion_parity_sector: writeOnce(fermionParitySector)
+import ./ClementsKrawtchoukArray.obend as ClementsMod
 
 record TetronSyndromeDecoder:
   majoranaZeroModes() -> Nat
@@ -52,5 +49,5 @@ def tetronBraidDepthAt10() -> Nat:
 def tetronRecoveryAt3() -> Nat:
   parityCooledTetronDecoder().syndromeRecoveryLatencyNs(3n)
 
-def crossModuleTetronStdlib() -> Nat:
-  QPMStd.tetronBraidPhaseAt2() + tetronBraidDepthAt10()
+def crossModuleTetronKrawtchouk() -> Nat:
+  ClementsMod.krawtchoukFidelityAt4() + tetronBraidDepthAt10()

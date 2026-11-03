@@ -3,11 +3,6 @@ edition ObjectiveBend 1
 # Planar Clements MZI interferometer & Krawtchouk Q_3 hypercube photonic state-transfer array
 # with 1-WL quotient compression (8 -> 4 shells) and DPR guard fallback.
 
-import "./QuantumPhotonicMatter.obend" as QPMStd
-
-law monotone_photonic_cal_epoch: monotone(photonicCalEpoch)
-law bounded_disorder_leakage: new.disorderLeakagePpm <= 676
-
 record KrawtchoukPhotonicBus:
   fullModes() -> Nat
   quotientShells() -> Nat
@@ -57,6 +52,3 @@ def krawtchoukMacsAt16() -> Nat:
 
 def krawtchoukFidelityAt4() -> Nat:
   calibratedKrawtchoukBus().pstTransferFidelityPpm(4n)
-
-def crossModuleKrawtchoukStdlib() -> Nat:
-  QPMStd.clementsPowerAt20Mw() + krawtchoukMacsAt16()

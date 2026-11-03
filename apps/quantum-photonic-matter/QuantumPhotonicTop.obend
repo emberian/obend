@@ -2,14 +2,19 @@ edition ObjectiveBend 1
 # Flagship App #8 (`apps/quantum-photonic-matter/QuantumPhotonicTop.obend`):
 # Top-level Quantum Photonic & Topological Matter Co-Processor integrating:
 # - 1-WL quotient-compressed Q_3 Krawtchouk photonic bus (8 -> 4 shells),
-# - 4x4 Faddeev-LeVerrier exact thermo-optic crosstalk pre-compensation (det = 10946),
+# - 4x4 Faddeev-LeVerrier exact thermo-optic crosstalk pre-compensation (det = 8769),
 # - Majorana tetron (\gamma_0..\gamma_3) non-Abelian Clifford braiding & Lindblad parity cooling.
 
-import "./QuantumPhotonicMatter.obend" as QPMStd
-import "./ClementsKrawtchoukArray.obend" as ClementsMod
-import "./ThermoOpticCrosstalkComp.obend" as CrosstalkMod
-import "./MajoranaTetronSyndromes.obend" as TetronMod
+import ./ClementsKrawtchoukArray.obend as ClementsMod
+import ./ThermoOpticCrosstalkComp.obend as CrosstalkMod
+import ./MajoranaTetronSyndromes.obend as TetronMod
 
+law monotone_photonic_cal_epoch: monotone(photonicCalEpoch)
+law bounded_disorder_leakage: new.disorderLeakagePpm <= 676
+law monotone_heater_trim_step: monotone(heaterTrimStep)
+law bounded_heater_power_mw: new.heaterPowerMw <= 120
+law monotone_tetron_syndrome_cycle: monotone(syndromeCycle)
+law preserve_fermion_parity_sector: writeOnce(fermionParitySector)
 law write_once_chip_calibration_digest: writeOnce(chipCalibrationDigest)
 
 record QuantumPhotonicCoProcessor:
@@ -57,4 +62,4 @@ def coprocBudgetAt6() -> Nat:
   faultTolerantQuantumPhotonicCoProc().coProcessorCycleBudget(6n)
 
 def crossModuleQpmSummary() -> Nat:
-  QPMStd.tetronResetRateAt10() + ClementsMod.krawtchoukMacsAt16() + CrosstalkMod.precompDriveAt50() + TetronMod.tetronBraidDepthAt10() + coprocAdjointOpsAt25()
+  ClementsMod.krawtchoukMacsAt16() + ClementsMod.krawtchoukFidelityAt4() + CrosstalkMod.precompDriveAt50() + TetronMod.tetronBraidDepthAt10() + coprocAdjointOpsAt25()
