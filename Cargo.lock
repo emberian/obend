@@ -188,6 +188,7 @@ dependencies = [
  "clap",
  "colored",
  "obend-ffi",
+ "obend-fpga-hal",
  "serde",
  "serde_json",
 ]
@@ -197,6 +198,7 @@ name = "obend-node"
 version = "0.1.0"
 dependencies = [
  "obend-ffi",
+ "obend-fpga-hal",
  "obend-sandbox",
  "serde",
  "serde_json",
