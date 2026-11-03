@@ -1,46 +1,68 @@
 edition ObjectiveBend 1
-# Flagship App #1 (Layer 1): Base RV64I/M Instruction Bit-Slice Decoders & ALU/Branch/Load-Store Core
+# Flagship App #1 (Layer 1): Base RV64I/M In-Core Bit-Slice Instruction Decoders & Two's-Complement ALU
 
 law monotone_cycle_cnt: monotone(cycleCounter)
 law bounded_reg_index: new.archRegIdx <= 31
 
 record BaseRiscCoreTarget:
   addiOpcodeConst() -> Nat
-  immShiftDivisor() -> Nat
+  opOpcodeConst() -> Nat
   decodeOpcode(inst: Nat) -> Nat
-  decodeImm12(inst: Nat) -> Nat
-  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  decodeRd(inst: Nat) -> Nat
+  decodeFunct3(inst: Nat) -> Nat
+  decodeRs1(inst: Nat) -> Nat
+  decodeRs2(inst: Nat) -> Nat
+  decodeFunct7(inst: Nat) -> Nat
+  decodeImmI(inst: Nat) -> Nat
+  decodeImmS(inst: Nat) -> Nat
+  aluExec(opcode: Nat, funct3: Nat, funct7: Nat, lhs: Nat, rhs: Nat) -> Nat
   execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
 
 spec BaseRv64iSpec for BaseRiscCoreTarget:
   requires addiOpcodeConst() -> Nat
-  requires immShiftDivisor() -> Nat
+  requires opOpcodeConst() -> Nat
   def addiOpcodeConst() -> Nat:
-    19n
-  def immShiftDivisor() -> Nat:
-    1048576n
+    0x13n
+  def opOpcodeConst() -> Nat:
+    0x33n
   def decodeOpcode(inst: Nat) -> Nat:
-    inst % 128n
-  def decodeImm12(inst: Nat) -> Nat:
-    inst / self.immShiftDivisor
-  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
-    rs1Val + rs2Val + imm
+    inst & 0x7Fn
+  def decodeRd(inst: Nat) -> Nat:
+    (inst >>> 7n) & 0x1Fn
+  def decodeFunct3(inst: Nat) -> Nat:
+    (inst >>> 12n) & 0x7n
+  def decodeRs1(inst: Nat) -> Nat:
+    (inst >>> 15n) & 0x1Fn
+  def decodeRs2(inst: Nat) -> Nat:
+    (inst >>> 20n) & 0x1Fn
+  def decodeFunct7(inst: Nat) -> Nat:
+    (inst >>> 25n) & 0x7Fn
+  def decodeImmI(inst: Nat) -> Nat:
+    (inst << 32n) >> 52n
+  def decodeImmS(inst: Nat) -> Nat:
+    let rawS = (((inst >>> 25n) & 0x7Fn) << 5n) | ((inst >>> 7n) & 0x1Fn) in (rawS << 52n) >> 52n
+  def aluExec(opcode: Nat, funct3: Nat, funct7: Nat, lhs: Nat, rhs: Nat) -> Nat:
+    if funct3 == 0n then (if (opcode == self.opOpcodeConst) && (funct7 == 0x20n) then ((lhs & 0xFFFFFFFFFFFFFFFFn) + ((rhs ^ 0xFFFFFFFFFFFFFFFFn) + 1n)) & 0xFFFFFFFFFFFFFFFFn else (lhs + rhs) & 0xFFFFFFFFFFFFFFFFn) else (if funct3 == 1n then lhs << (rhs & 0x3Fn) else (if funct3 == 2n then (if lhs <s rhs then 1n else 0n) else (if funct3 == 4n then lhs ^ rhs else (if funct3 == 5n then (if funct7 == 0x20n then lhs >> (rhs & 0x3Fn) else lhs >>> (rhs & 0x3Fn)) else (if funct3 == 6n then lhs | rhs else lhs & rhs)))))
   def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
-    rs1Val + rs2Val + self.addiOpcodeConst
-  claim base_decode_addi_opcode(): self.decodeOpcode(1048723n) == 19n
-  claim base_exec_add(): self.aluExec(13n, 21n, 0n) == 34n
+    let op = self.decodeOpcode(inst) in let f3 = self.decodeFunct3(inst) in let f7 = self.decodeFunct7(inst) in let imm = self.decodeImmI(inst) in let rhs = if op == self.addiOpcodeConst then imm else rs2Val in self.aluExec(op, f3, f7, rs1Val, rhs)
+  claim base_decode_addi_opcode() by weave: self.decodeOpcode(0x00100093n) == 0x13n
+  claim base_decode_neg_imm() by weave: self.decodeImmI(0xFFB00093n) == 0xFFFFFFFFFFFFFFFBn
+  claim base_decode_store_offset() by weave: self.decodeImmS(0x02F02423n) == 40n
+  claim base_exec_slt_signed() by weave: self.execInstruction(0x0020A1B3n, 0xFFFFFFFFFFFFFFFBn, 1n) == 1n
+  claim base_exec_add() by weave: self.execInstruction(0x002081B3n, 13n, 21n) == 34n
 
 spec Rv64imMultiplyOverride for BaseRiscCoreTarget:
-  requires execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  requires opOpcodeConst() -> Nat
+  requires aluExec(opcode: Nat, funct3: Nat, funct7: Nat, lhs: Nat, rhs: Nat) -> Nat
   def addiOpcodeConst() -> Nat:
-    19n
-  def immShiftDivisor() -> Nat:
-    1048576n
-  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
-    super.execInstruction(inst, rs1Val, rs2Val) + 4n
+    0x13n
+  def opOpcodeConst() -> Nat:
+    0x33n
+  def aluExec(opcode: Nat, funct3: Nat, funct7: Nat, lhs: Nat, rhs: Nat) -> Nat:
+    if (opcode == self.opOpcodeConst) && (funct3 == 0n) && (funct7 == 0x01n) then (lhs * rhs) & 0xFFFFFFFFFFFFFFFFn else super.aluExec(opcode, funct3, funct7, lhs, rhs)
 
 def seedBaseRiscCore() -> BaseRiscCoreTarget:
-  {addiOpcodeConst: 0n, immShiftDivisor: 1n, decodeOpcode: fn(i: Nat) -> Nat: 0n, decodeImm12: fn(i: Nat) -> Nat: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
+  {addiOpcodeConst: 0n, opOpcodeConst: 0n, decodeOpcode: fn(i: Nat) -> Nat: 0n, decodeRd: fn(i: Nat) -> Nat: 0n, decodeFunct3: fn(i: Nat) -> Nat: 0n, decodeRs1: fn(i: Nat) -> Nat: 0n, decodeRs2: fn(i: Nat) -> Nat: 0n, decodeFunct7: fn(i: Nat) -> Nat: 0n, decodeImmI: fn(i: Nat) -> Nat: 0n, decodeImmS: fn(i: Nat) -> Nat: 0n, aluExec: fn(o: Nat, f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
 
 def baseRiscCore() -> BaseRiscCoreTarget:
   fix(compose(BaseRv64iSpec, Rv64imMultiplyOverride), seedBaseRiscCore())

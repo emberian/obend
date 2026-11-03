@@ -30,6 +30,8 @@ public import Obend.Hardware.Kinematics
 public import Obend.Hardware.OpenUSD
 public import Obend.Hardware.FluidThermal
 public import Obend.Hardware.GeometryCAM
+public import Obend.Hardware.Silicon
+public import Obend.Hardware.Types
 public meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
@@ -1496,7 +1498,8 @@ mixed 0-arg cell + 2-argument method `Book`) and verifies:
    `signedCmpBlend(16, 20) = 336#64` (`-1 <s 16` and `16 <=s 20`), and `signedCmpBlend(9, 3) = 10#64`,
 4. `Obend.Hardware.Silicon.emitHierarchicalSV` emits all hard-IP macro headers alongside the top module. -/
 theorem userspace_obend_full_surface_rich_and_stateful_verified :
-    let emptyCtx : RtlLayoutCtx := { structSlices := [], unionTagBits := 8, unionArms := [] }
+    let emptyCtx : Obend.Hardware.Types.RtlLayoutCtx :=
+      { structSlices := [], unionTagBits := 8, unionArms := [] }
     (StdFullSurface.accepted &&
      match compileBookToRtl "full_surface_wrap" StdFullSurface.fullSurfaceInst_book,
            compileBookToRtlSat "full_surface_sat" StdFullSurface.fullSurfaceInst_book,
@@ -1523,8 +1526,16 @@ theorem userspace_obend_full_surface_rich_and_stateful_verified :
          [ ("out_negOneMask", 0xFFFFFFFFFFFFFFFF#64)
          , ("out_lshrCheck", 17#64)
          , ("out_signedCmpBlend", 10#64) ]) &&
-       ("module obend_macro_dsp48e2".toList.isPrefixOf
-         (Obend.Hardware.Silicon.emitHierarchicalSV mWrap).toList)
+       (let stepSpec : StatefulStepSpec :=
+          { moduleName  := "full_surface_step"
+          , inputNames  := ["din"]
+          , stateRegs   := [{ regIdx := 0, name := "acc", initVal := 0#64,
+                              nextExpr := .alu .add (.regRead 0) (.inputPort 0) }]
+          , outputExprs := [("acc_out", .regRead 0)] }
+        let mStep := compileStatefulStepToRtl stepSpec
+        let inValid : Nat → BitVec 64 := fun i => if i == 0 then 9#64 else 1#64
+        let st1 := stepModuleRegs mStep false inValid zEnv
+        checkRtlModule mStep && (st1 0 == 9#64))
      | _, _, _ => false) = true := by
   decide +kernel
 

@@ -429,24 +429,17 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
 
 /-- True when `tag` is one of the 5 automatically synthesized external judge formats in `Obend.Elab.AutoCert`. -/
 @[expose] def isSynthesizableAutoCertTag (tag : String) : Bool :=
-  tag == "interval@1" ||
-  tag == "taylor-model@1" ||
-  tag == "sos-lyapunov-cbf@1" ||
-  tag == "groebner@1" ||
-  tag == "rtl-synth@1" ||
-  tag == "hw-rtl-synth@1"
+  Obend.Elab.AutoCert.isSynthesizableAutoCertTag tag
 
-/-- Verify that every `isSynthesizableAutoCertTag` cited by `c : Syntax.ContractDecl` synthesizes
-    a valid `(objWire, certWire)` witness accepted by its registered kernel `Judge.Format`. -/
+/-- Verify that EVERY `isSynthesizableAutoCertTag` cited by `c : Syntax.ContractDecl` (both header
+    method and every Isar step) synthesizes a valid `(objWire, certWire)` witness accepted by its
+    registered kernel `Judge.Format`. -/
 @[expose] def verifyContractAutoCertSteps
     (m : Syntax.Module)
     (c : Syntax.ContractDecl)
     (book? : Option Obend.Leaf.Book := none) : Bool :=
-  let synthesized := Obend.Elab.AutoCert.synthesizeContractExternalJudges
+  Obend.Elab.AutoCert.verifyContractAutoCertSteps
     Obend.Elab.AutoCert.autoCertFormats m.name book? c
-  let requiredTags := (Elaborate.extractIsarJudgeTags c.steps).filter isSynthesizableAutoCertTag
-  requiredTags.all fun reqTag =>
-    synthesized.any fun (t, _, _) => t == reqTag
 
 /-- Elaborate and check a single `Syntax.ContractDecl`'s Isar proof script and external judge tags,
     returning its `ElaboratedIsarCert` or a front-end `Diagnostic` refusal. -/

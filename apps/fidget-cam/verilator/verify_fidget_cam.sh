@@ -1,16 +1,29 @@
 #!/usr/bin/env bash
 # Flagship App #6 (`apps/fidget-cam/verilator/verify_fidget_cam.sh`):
-# Compiles the pruned SSA F-Rep voxelizer & 5-axis CAM hardware pipeline with Verilator,
-# evaluates the 3D octree in hardware, emits `build/impeller_part.stl` + `build/impeller_5axis.ngc`
-# + `fidget_cam_trace.vcd`, and verifies Z3 SMT2 LEC returns `unsat`.
+# 1. Verifies the 4-module `.obend` package (`apps/fidget-cam/package.json`) with `obend check` & `obend run`,
+# 2. Compiles the `emitModuleSV`-generated pruned SSA F-Rep voxelizer & 5-axis CAM RTL with Verilator,
+# 3. Evaluates the recursive 3D octree in hardware, emits `build/impeller_part.stl` + `build/impeller_5axis.ngc`
+#    + `fidget_cam_trace.vcd`, and verifies full-surface no-gouge + adversarial gouge detection,
+# 4. Verifies Z3 QF_BV LEC (`fidget_cam_lec.smt2`) returns `unsat`.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${APP_DIR}/.." && cd .. && pwd)"
+OBEND_BIN="${OBEND_BIN:-${REPO_ROOT}/lean/.lake/build/bin/obend}"
 VERILATOR_BIN="${VERILATOR_BIN:-/opt/homebrew/bin/verilator}"
 Z3_BIN="${Z3_BIN:-/opt/homebrew/bin/z3}"
 
 mkdir -p "${APP_DIR}/build" "${SCRIPT_DIR}/build"
+
+if [[ -x "${OBEND_BIN}" ]]; then
+  echo "[0/3] Checking & running multi-module Objective Bend package apps/fidget-cam/package.json..."
+  (
+    cd "${REPO_ROOT}"
+    "${OBEND_BIN}" check --package apps/fidget-cam/package.json
+    "${OBEND_BIN}" run --package apps/fidget-cam/package.json
+  )
+fi
 
 echo "[1/3] Compiling fidget_impeller_voxel_cam.sv with ${VERILATOR_BIN}..."
 "${VERILATOR_BIN}" --cc --exe --build --trace -Wall \
@@ -21,7 +34,7 @@ echo "[1/3] Compiling fidget_impeller_voxel_cam.sv with ${VERILATOR_BIN}..."
   "${SCRIPT_DIR}/fidget_voxel_tb.cpp" \
   -o Vfidget_impeller_voxel_cam
 
-echo "[2/3] Running Verilated 3D Octree Voxelizer, .stl Mesh Emitter & 5-Axis G-Code Verifier..."
+echo "[2/3] Running Verilated 3D Octree Voxelizer, .stl Mesh Emitter & Full-Surface 5-Axis G-Code Verifier..."
 (
   cd "${SCRIPT_DIR}"
   ./obj_dir/Vfidget_impeller_voxel_cam
@@ -43,4 +56,4 @@ if [[ "${LEC_OUT}" != "unsat" ]]; then
   exit 1
 fi
 
-echo "[PASS] Flagship App #6 (apps/fidget-cam) Verilator + .stl + 5-axis G-code + Z3 LEC verified!"
+echo "[PASS] Flagship App #6 (apps/fidget-cam) .obend + Verilator + .stl + 5-axis G-code + Z3 LEC verified!"

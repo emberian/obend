@@ -2800,13 +2800,21 @@ def compileRichMethod
     compileRichTerm ctx slots slotBodies arity varEnv body
 
 /-- Determine the input port list for a `Book` compiled via `compileRichBookToRtl`, supporting
-arbitrary method arity `k ≥ 1`. -/
+arbitrary method arity `k ≥ 1` (with literal lists for `k ≤ 8` so kernel `decide` avoids `Nat.repr`). -/
 def defInputNamesRich (defs : List LeafDef) : List String :=
   let maxArity := defs.foldl (fun acc d =>
     let (nLam, _) := peelLambdas d.code
     max acc (nLam - 1)) 1
-  if maxArity <= 1 then ["arg"]
-  else (List.range maxArity).map (fun i => s!"arg{i}")
+  match maxArity with
+  | 0 | 1 => ["arg"]
+  | 2 => ["arg0", "arg1"]
+  | 3 => ["arg0", "arg1", "arg2"]
+  | 4 => ["arg0", "arg1", "arg2", "arg3"]
+  | 5 => ["arg0", "arg1", "arg2", "arg3", "arg4"]
+  | 6 => ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5"]
+  | 7 => ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6"]
+  | 8 => ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6", "arg7"]
+  | k => (List.range k).map (fun i => s!"arg{i}")
 
 /-- Structurally recursive slot-list compiler using `compileRichMethod`. -/
 def compileRichBookDefs

@@ -1,18 +1,30 @@
+# Objective Bend 3-Layer Open-Recursive RISC Softcore Firmware Image (test_prog.hex)
+# Word 0x00..0x07: 8-element Fibonacci sequence (x1..x8 = 1, 1, 2, 3, 5, 8, 13, 21)
 00100093
 00100113
-002081B3
+002081b3
 00310233
-004182B3
+004182b3
 00520333
-006283B3
+006283b3
 00730433
-000004F3
-027305AB
-0435862B
-064606AB
-0836872B
-00A407B3
-00E787B3
-00F02023
-02A00513
+# Word 0x08 (PC=0x20): Standard ECALL -> MTVEC=0x50 (word 20)
+00000073
+# Word 0x09..0x0C (PC=0x24..0x30): 4 CustomSimdZkExt (opcode 0x2B) MAC instructions (x11..x14)
+027305ab
+0435862b
+064606ab
+0836872b
+# Word 0x0D..0x11 (PC=0x34..0x44): Combine checksum x15=1345, SW 0(x0), SW 8(x0), LW 8(x0)
+00a407b3
+00e787b3
+00f02023
+00e02423
+00802483
+# Word 0x12..0x13 (PC=0x48..0x4C): NOP padding up to MTVEC=0x50
+00000013
+00000013
+# Word 0x14..0x16 (PC=0x50..0x58): MTVEC handler (CSRRS x9, mcause, x0; ADDI x10, x9, 31; MRET)
+342024f3
+01f48513
 30200073

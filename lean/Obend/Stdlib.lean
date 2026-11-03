@@ -4,6 +4,8 @@ public import Obend.Elab.Workbook
 public meta import Obend.Elab.Workbook
 public import Obend.Leaf.Futamura
 public import Obend.Spec.CrossPackage
+import all Init.Data.String.Defs
+import all Init.Data.ByteArray.Basic
 
 /-!
 # Obend.Stdlib — Multi-File `.obend` Domain Standard Library (`stdlib/{core,ledger,usd,physical}/*.obend`)

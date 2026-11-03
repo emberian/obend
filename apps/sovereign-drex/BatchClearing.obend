@@ -2,9 +2,7 @@ edition ObjectiveBend 1
 # Flagship App #7 (`apps/sovereign-drex/BatchClearing.obend`):
 # Sovereign batch-clearing cell delta and `K-CARRY` pin transition (`"world-carry@1"`).
 
-import "./Seat.obend" as SeatMod
-
-law monotone_carry_epoch: monotone(carryEpoch)
+import ./Seat.obend as SeatMod
 
 record CarryClearingCell:
   quorumThreshold() -> Nat

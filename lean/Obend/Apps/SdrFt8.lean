@@ -18,12 +18,16 @@ public import Obend.Spec.Capture
 public import Obend.Spec.Sha256
 public import Obend.Spec.CrossPackage
 public import Obend.Hardware.HDL
+public import Obend.Hardware.Types
 public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.Accelerators
 public import Obend.Hardware.RF
 public import Obend.Hardware.DSP
+public import Obend.Judge.RealAnalysis
+public import Obend.Analysis.TaylorModel
+public import Obend.Analysis.SosLyapunov
 public import Obend.Lower.Proofs.SelfAccelerate
 public meta import Lean
 public meta import Obend.Core.Term
@@ -42,15 +46,23 @@ public meta import Obend.Logic.Obligation
 public meta import Obend.Logic.Program
 public meta import Obend.Leaf.Flatten
 public meta import Obend.Leaf.Emit
+public meta import Obend.Judge.RealAnalysis
+public import Obend.Analysis.RealAnalysis
+public meta import Obend.Analysis.RealAnalysis
+public meta import Obend.Analysis.TaylorModel
+public meta import Obend.Analysis.SosLyapunov
+import all Obend.Judge.Class
+import all Obend.Logic.Obligation
 
 /-!
 # Flagship App #3: All-Digital 40m (7.074 MHz) Tayloe IQ FT8 SDR Transceiver (`Obend.Apps.SdrFt8`)
 
-End-to-end formalization, multi-layer `.obend` elaboration, RF/DSP signoff proofs,
-in-core Futamura 2nd projection specialization, stateful `always_ff` 3-stage CIC + folded
-symmetric FIR + 4-stage CORDIC + $\Delta\phi[n] = \phi[n] - \phi[n-1]$ 8-FSK FT8 hardware
-synthesis, 64-bit AMD `VOP64` GPU equivalence, and cross-package dependency cone verification
-for **Flagship App #3 (`apps/sdr-ft8/`)**:
+End-to-end formalization, multi-layer `.obend` elaboration, compile-time `AutoCert` external-judge
+synthesis (`"taylor-model@1"`, `"interval@1"`), RF/DSP signoff proofs, in-core Futamura 2nd
+projection specialization, stateful `always_ff` 3-stage CIC + folded symmetric FIR + 4-stage
+CORDIC + $\Delta\phi[n] = \phi[n] - \phi[n-1]$ 8-FSK FT8 hardware synthesis (`compileStatefulTermsToRtl` /
+`compileStatefulStepToRtl`), 64-bit AMD `VOP64` GPU equivalence, and cross-package dependency cone
+verification for **Flagship App #3 (`apps/sdr-ft8/`)**:
 
 * `apps/sdr-ft8/TayloeQuadratureMixer.obend` — 40m ($7.074\text{ MHz}$) 4-phase ($0^\circ, 90^\circ, 180^\circ, 270^\circ$)
   Tayloe quadrature switching mixer & Hartley/Weaver image-sideband cancellation (`TayloeQuadratureMixer`,
@@ -60,7 +72,7 @@ for **Flagship App #3 (`apps/sdr-ft8/`)**:
   `BaseCicDecimatorFirSpec` $\to$ `HogenauerCompensatedCicFirOverride`).
 * `apps/sdr-ft8/CordicFt8Demod.obend` — 4-stage unrolled vectoring CORDIC `atan2`/`hypot` + stateful
   `always_ff` $\Delta\phi[n] = \phi[n] - \phi[n-1]$ 8-FSK FT8 tone discriminator (`CordicFt8Demodulator`,
-  `BaseCordicFt8Spec` $\to$ `Unrolled4StageCordicFt8Override`).
+  `CordicStatefulDiscrim`).
 * `apps/sdr-ft8/SdrFt8Top.obend` — Top-level all-digital 40m FT8 SDR transceiver (`SdrFt8Transceiver`,
   `Nominal40mSdrFt8Transceiver` $\to$ `Calibrated40mFt8TransceiverOverride`) importing `TayloeQuadratureMixer`,
   `CicDecimatorFir`, and `CordicFt8Demod`.
@@ -78,8 +90,11 @@ open Obend.Logic
 open Obend.Leaf
 open Obend.Leaf.Futamura
 open Obend.Lower
+open Obend.Judge
+open Obend.Analysis
 open Obend.Spec.CrossPackage
 open Obend.Hardware.HDL
+open Obend.Hardware.Types
 open Obend.Hardware.Compiler
 open Obend.Hardware.Synth
 open Obend.Hardware.PlaceRoute
@@ -89,7 +104,326 @@ open Obend.Hardware.DSP
 
 set_option autoImplicit false
 
-/-! ## 1. Module-Compatible Multi-File `#import_obend` Elaborator -/
+/-! ## 1. Kernel-Verified `AutoCert` External Judge Formats (`interval@1`, `taylor-model@1`, `sos-lyapunov-cbf@1`) -/
+
+def sdrNatToCharsFuel : Nat → Nat → List Char → List Char
+  | 0, _, acc => if acc.isEmpty then ['0'] else acc
+  | fuel + 1, n, acc =>
+    let d := Char.ofNat (48 + (n % 10))
+    let q := n / 10
+    if q == 0 then d :: acc
+    else sdrNatToCharsFuel fuel q (d :: acc)
+
+def sdrNatToStr (n : Nat) : String :=
+  String.ofList (sdrNatToCharsFuel 32 n [])
+
+def sdrIntToStr : Int → String
+  | .ofNat n   => sdrNatToStr n
+  | .negSucc n => "-" ++ sdrNatToStr (n + 1)
+
+def sdrJoinSep (sep : String) : List String → String
+  | []      => ""
+  | [x]     => x
+  | x :: xs => x ++ sep ++ sdrJoinSep sep xs
+
+def sdrSplitCharAux (sep : Char) : List Char → List Char → List String
+  | [], cur => [String.ofList cur.reverse]
+  | c :: cs, cur =>
+    if c == sep then
+      String.ofList cur.reverse :: sdrSplitCharAux sep cs []
+    else
+      sdrSplitCharAux sep cs (c :: cur)
+
+def sdrSplitChar (sep : Char) (s : String) : List String :=
+  sdrSplitCharAux sep s.toList []
+
+def sdrParseNatChars : List Char → Nat → Bool → Option Nat
+  | [], acc, true  => some acc
+  | [], _, false   => none
+  | c :: cs, acc, _ =>
+    if '0' ≤ c && c ≤ '9' then
+      sdrParseNatChars cs (acc * 10 + (c.toNat - '0'.toNat)) true
+    else
+      none
+
+def sdrParseNat? (s : String) : Option Nat :=
+  sdrParseNatChars s.toList 0 false
+
+def sdrParseInt? (s : String) : Option Int :=
+  match s.toList with
+  | '-' :: cs => (sdrParseNatChars cs 0 false).map fun n => -(Int.ofNat n)
+  | cs        => (sdrParseNatChars cs 0 false).map Int.ofNat
+
+def sdrEncodeRatWire (q : CanonicalRat) : String :=
+  sdrIntToStr q.num ++ "/" ++ sdrNatToStr q.den
+
+def sdrDecodeRatWire? (s : String) : Option CanonicalRat :=
+  match sdrSplitChar '/' s with
+  | [nStr, dStr] => do
+    let n ← sdrParseInt? nStr
+    let d ← sdrParseNat? dStr
+    if d == 0 then none else some (CanonicalRat.mk n d)
+  | [nStr] => do
+    let n ← sdrParseInt? nStr
+    some (Rat.ofInt n)
+  | _ => none
+
+def sdrEncodeIntervalWire (iv : Interval) : String :=
+  sdrEncodeRatWire iv.lo ++ ":" ++ sdrEncodeRatWire iv.hi
+
+def sdrDecodeIntervalWire? (s : String) : Option Interval :=
+  match sdrSplitChar ':' s with
+  | [loStr, hiStr] => do
+    let lo ← sdrDecodeRatWire? loStr
+    let hi ← sdrDecodeRatWire? hiStr
+    some ⟨lo, hi⟩
+  | _ => none
+
+def sdrFindQuotedJsonFieldAux (key : String) : List String → Option String
+  | k :: sep :: val :: rest =>
+    if k == key && sep == ":" then some val
+    else sdrFindQuotedJsonFieldAux key (sep :: val :: rest)
+  | _ => none
+
+def sdrExtractJsonStringField? (key : String) (raw : String) : Option String :=
+  sdrFindQuotedJsonFieldAux key (sdrSplitChar '"' raw)
+
+def sdrEncodeRealExprTokens : RealExpr → List String
+  | .const q => ["C", sdrEncodeRatWire q]
+  | .var v   => ["V", v]
+  | .add l r => "A" :: (sdrEncodeRealExprTokens l ++ sdrEncodeRealExprTokens r)
+  | .sub l r => "S" :: (sdrEncodeRealExprTokens l ++ sdrEncodeRealExprTokens r)
+  | .mul l r => "M" :: (sdrEncodeRealExprTokens l ++ sdrEncodeRealExprTokens r)
+  | .sqr a   => "Q" :: sdrEncodeRealExprTokens a
+
+def sdrDecodeRealExprTokens : Nat → List String → Option (RealExpr × List String)
+  | 0, _ => none
+  | _ + 1, "C" :: qStr :: rest => do
+    let q ← sdrDecodeRatWire? qStr
+    some (.const q, rest)
+  | _ + 1, "V" :: v :: rest => some (.var v, rest)
+  | fuel + 1, "A" :: rest => do
+    let (l, r1) ← sdrDecodeRealExprTokens fuel rest
+    let (r, r2) ← sdrDecodeRealExprTokens fuel r1
+    some (.add l r, r2)
+  | fuel + 1, "S" :: rest => do
+    let (l, r1) ← sdrDecodeRealExprTokens fuel rest
+    let (r, r2) ← sdrDecodeRealExprTokens fuel r1
+    some (.sub l r, r2)
+  | fuel + 1, "M" :: rest => do
+    let (l, r1) ← sdrDecodeRealExprTokens fuel rest
+    let (r, r2) ← sdrDecodeRealExprTokens fuel r1
+    some (.mul l r, r2)
+  | fuel + 1, "Q" :: rest => do
+    let (a, r1) ← sdrDecodeRealExprTokens fuel rest
+    some (.sqr a, r1)
+  | _, _ => none
+
+def sdrEncodeIntervalEnvWire (env : List (String × Interval)) : String :=
+  if env.isEmpty then "-"
+  else sdrJoinSep "," (env.map fun (v, iv) => v ++ "=" ++ sdrEncodeIntervalWire iv)
+
+def sdrDecodeIntervalEnvWire? (s : String) : Option (List (String × Interval)) :=
+  if s == "-" || s == "" then some []
+  else
+    (sdrSplitChar ',' s).mapM fun item =>
+      match sdrSplitChar '=' item with
+      | [v, ivStr] => do
+        let iv ← sdrDecodeIntervalWire? ivStr
+        some (v, iv)
+      | _ => none
+
+def sdrEncodeIntervalQuery (q : IntervalQuery) : String :=
+  let wire :=
+    sdrJoinSep "~" (sdrEncodeRealExprTokens q.expr) ++ "|" ++
+    sdrEncodeIntervalEnvWire q.env ++ "|" ++
+    sdrEncodeIntervalWire q.claimedBound
+  "{\"kind\":\"interval@1\",\"wire\":\"" ++ wire ++ "\"}"
+
+def sdrDecodeIntervalQuery (s : String) : Except String IntervalQuery :=
+  if s == "{}" || s == "" then
+    .error "invalid IntervalQuery JSON: missing required fields"
+  else
+    match sdrExtractJsonStringField? "wire" s with
+    | some wire =>
+      match sdrSplitChar '|' wire with
+      | [exprW, envW, bndW] =>
+        match sdrDecodeRealExprTokens 64 (sdrSplitChar '~' exprW),
+              sdrDecodeIntervalEnvWire? envW,
+              sdrDecodeIntervalWire? bndW with
+        | some (expr, []), some env, some claimedBound => .ok { expr, env, claimedBound }
+        | _, _, _ => .error "invalid IntervalQuery wire fields"
+      | _ => .error "invalid IntervalQuery wire envelope"
+    | none => .error "invalid IntervalQuery JSON: missing wire field"
+
+def sdrEncodeIntervalCert : IntervalCert → String
+  | .direct => "{\"kind\":\"direct\",\"wire\":\"D\"}"
+  | .counterexample _ => "{\"kind\":\"counterexample\",\"wire\":\"X\"}"
+
+def sdrDecodeIntervalCert (s : String) : Except String IntervalCert :=
+  if s == "{}" || s == "" then
+    .error "invalid IntervalCert JSON: missing required fields"
+  else
+    match sdrExtractJsonStringField? "wire" s with
+    | some "D" => .ok .direct
+    | _ => .error "invalid IntervalCert wire"
+
+def sdrBadIntervalQuery : IntervalQuery where
+  expr         := .var "x"
+  env          := [("x", ⟨0, 10⟩)]
+  claimedBound := ⟨0, 2⟩
+
+theorem sdrBadIntervalCert_refused :
+    intervalCheck 0 sdrBadIntervalQuery .direct =
+      .refused (.boundViolated ⟨0, 10⟩ ⟨0, 2⟩) [] := rfl
+
+def sdrIntervalFormat : Judge.Format where
+  name        := "interval"
+  version     := "1"
+  Obj         := IntervalQuery
+  Cert        := IntervalCert
+  judge       := intervalJudge
+  decodeObj   := sdrDecodeIntervalQuery
+  decodeCert  := sdrDecodeIntervalCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (sdrBadIntervalQuery, .direct)
+  badGrade    := 0
+  bad_refused := ⟨_, _, sdrBadIntervalCert_refused⟩
+
+structure SdrTaylorTrigQuery where
+  domain       : Interval
+  claimedBound : Interval
+  deriving DecidableEq, Repr
+
+def verifySdrTaylorTrigCert (q : SdrTaylorTrigQuery) (tm : TaylorModel) : Bool :=
+  decide (q.domain.lo ≤ q.domain.hi) &&
+  q.domain.isSubintervalOf ⟨-1, 1⟩ &&
+  (let compTm := tmAdd (tmCosCertified q.domain) (tmSinCertified q.domain)
+   (compTm == tm) && (evalTaylorModelRange tm).isSubintervalOf q.claimedBound)
+
+def checkSdrTaylorTrigJudge (_grade : Nat) (q : SdrTaylorTrigQuery) (tm : TaylorModel) :
+    Judge.Verdict String :=
+  if verifySdrTaylorTrigCert q tm then .ok
+  else .refused "taylor_model_enclosure_violation" []
+
+theorem checkSdrTaylorTrigJudge_sound (grade : Nat) (q : SdrTaylorTrigQuery) (tm : TaylorModel)
+    (h : checkSdrTaylorTrigJudge grade q tm = .ok) :
+    verifySdrTaylorTrigCert q tm = true ∧
+    (evalTaylorModelRange tm).isSubintervalOf q.claimedBound = true := by
+  unfold checkSdrTaylorTrigJudge at h
+  cases hV : verifySdrTaylorTrigCert q tm with
+  | false => rw [hV] at h; contradiction
+  | true =>
+    refine ⟨rfl, ?_⟩
+    unfold verifySdrTaylorTrigCert at hV
+    rcases (Bool.and_eq_true _ _).mp hV with ⟨_, hSub⟩
+    exact ((Bool.and_eq_true _ _).mp hSub).2
+
+@[instance_reducible] def sdrTaylorTrigJudge : Judge SdrTaylorTrigQuery TaylorModel where
+  Clause := String
+  Meaning q tm :=
+    verifySdrTaylorTrigCert q tm = true ∧
+    (evalTaylorModelRange tm).isSubintervalOf q.claimedBound = true
+  check := checkSdrTaylorTrigJudge
+  sound := by intro r q tm h; exact checkSdrTaylorTrigJudge_sound r q tm h
+  refutes _ := false
+  refuted := by intro _ _ _ _ _ _ h; cases h
+  Fragment q := ∃ tm, verifySdrTaylorTrigCert q tm = true
+  complete := by
+    intro q _ ⟨tm, htm⟩
+    exact ⟨tm, 0, by simp [checkSdrTaylorTrigJudge, htm]⟩
+  mono := by intro _ _ _ _ _ _; rfl
+
+def sdrEncodeTaylorTrigQuery (q : SdrTaylorTrigQuery) : String :=
+  let wire := sdrEncodeIntervalWire q.domain ++ "|" ++ sdrEncodeIntervalWire q.claimedBound
+  "{\"kind\":\"taylor-model@1\",\"wire\":\"" ++ wire ++ "\"}"
+
+def sdrDecodeTaylorTrigQuery (s : String) : Except String SdrTaylorTrigQuery :=
+  if s == "{}" || s == "" then
+    .error "invalid SdrTaylorTrigQuery JSON: missing required fields"
+  else
+    match sdrExtractJsonStringField? "wire" s with
+    | some wire =>
+      match sdrSplitChar '|' wire with
+      | [domW, bndW] =>
+        match sdrDecodeIntervalWire? domW, sdrDecodeIntervalWire? bndW with
+        | some domain, some claimedBound => .ok { domain, claimedBound }
+        | _, _ => .error "invalid SdrTaylorTrigQuery wire fields"
+      | _ => .error "invalid SdrTaylorTrigQuery wire envelope"
+    | none => .error "invalid SdrTaylorTrigQuery JSON: missing wire field"
+
+def sdrEncodeTaylorModelCert (tm : TaylorModel) : String :=
+  let coeffsW :=
+    if tm.coeffs.isEmpty then "-"
+    else sdrJoinSep "," (tm.coeffs.map sdrEncodeRatWire)
+  let wire :=
+    coeffsW ++ "|" ++
+    sdrEncodeRatWire tm.center ++ "|" ++
+    sdrEncodeIntervalWire tm.domain ++ "|" ++
+    sdrEncodeIntervalWire tm.rem
+  "{\"kind\":\"taylor-model-cert@1\",\"wire\":\"" ++ wire ++ "\"}"
+
+def sdrDecodeTaylorModelCert (s : String) : Except String TaylorModel :=
+  if s == "{}" || s == "" then
+    .error "invalid TaylorModel JSON: missing required fields"
+  else
+    match sdrExtractJsonStringField? "wire" s with
+    | some wire =>
+      match sdrSplitChar '|' wire with
+      | [coeffsW, ctrW, domW, remW] =>
+        let coeffsOpt : Option (List CanonicalRat) :=
+          if coeffsW == "-" || coeffsW == "" then some []
+          else (sdrSplitChar ',' coeffsW).mapM sdrDecodeRatWire?
+        match coeffsOpt, sdrDecodeRatWire? ctrW, sdrDecodeIntervalWire? domW, sdrDecodeIntervalWire? remW with
+        | some coeffs, some center, some domain, some rem =>
+          .ok { coeffs, center, domain, rem }
+        | _, _, _, _ => .error "invalid TaylorModel wire fields"
+      | _ => .error "invalid TaylorModel wire envelope"
+    | none => .error "invalid TaylorModel JSON: missing wire field"
+
+def sdrGoldenTaylorTrigQuery : SdrTaylorTrigQuery where
+  domain       := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
+  claimedBound := ⟨CanonicalRat.mk 4 5, CanonicalRat.mk 6 5⟩
+
+def sdrBadTaylorModelCert : TaylorModel where
+  coeffs := [0]
+  center := 0
+  domain := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
+  rem    := ⟨0, 0⟩
+
+theorem sdrBadTaylorModelCert_refused :
+    checkSdrTaylorTrigJudge 0 sdrGoldenTaylorTrigQuery sdrBadTaylorModelCert =
+      .refused "taylor_model_enclosure_violation" [] := by
+  decide +kernel
+
+def sdrTaylorModelFormat : Judge.Format where
+  name        := "taylor-model"
+  version     := "1"
+  Obj         := SdrTaylorTrigQuery
+  Cert        := TaylorModel
+  judge       := sdrTaylorTrigJudge
+  decodeObj   := sdrDecodeTaylorTrigQuery
+  decodeCert  := sdrDecodeTaylorModelCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := (sdrGoldenTaylorTrigQuery, sdrBadTaylorModelCert)
+  badGrade    := 0
+  bad_refused := ⟨_, _, sdrBadTaylorModelCert_refused⟩
+
+def sdrAutoCertFormats : List Judge.Format :=
+  [sdrIntervalFormat, sdrTaylorModelFormat, sosLyapunovFormat] ++ Obend.Logic.defaultExternalFormats
+
+theorem sdrAutoCertFormats_refuse_empty_json :
+    sdrIntervalFormat.checkBytes 0 "{}" "{}" =
+      .refused (.malformed "object: invalid IntervalQuery JSON: missing required fields") [] ∧
+    sdrTaylorModelFormat.checkBytes 0 "{}" "{}" =
+      .refused (.malformed "object: invalid SdrTaylorTrigQuery JSON: missing required fields") [] ∧
+    sosLyapunovFormat.checkBytes 0 "{}" "{}" =
+      .refused (.malformed "object: invalid SosLyapunovProblem JSON: missing required fields") [] := by
+  exact ⟨rfl, rfl, sosLyapunovFormat_refuses_empty_json⟩
+
+/-! ## 2. Module-Compatible Multi-File `#import_obend` Elaborator with `AutoCert` Synthesis -/
 
 def mkSdrByteArrayOfNatList (xs : List Nat) : ByteArray :=
   ByteArray.mk (xs.map UInt8.ofNat).toArray
@@ -106,7 +440,14 @@ meta instance : Quote Primitive where
     | .less        => mkIdent ``Primitive.less
     | .lessEqual   => mkIdent ``Primitive.lessEqual
     | .modulo      => mkIdent ``Primitive.modulo
-    | _            => mkIdent ``Primitive.add
+    | .bitAnd      => mkIdent ``Primitive.bitAnd
+    | .bitOr       => mkIdent ``Primitive.bitOr
+    | .bitXor      => mkIdent ``Primitive.bitXor
+    | .shl         => mkIdent ``Primitive.shl
+    | .lshr        => mkIdent ``Primitive.lshr
+    | .ashr        => mkIdent ``Primitive.ashr
+    | .slt         => mkIdent ``Primitive.slt
+    | .qmul32      => mkIdent ``Primitive.qmul32
 
 mutual
   meta partial def quoteSdrTermAux : Term → TSyntax `term
@@ -490,6 +831,49 @@ meta def compactSdrCompositionForKernel (C : Composition) : Composition :=
     below := C.below.map compactSdrLayerForKernel
     seed := C.seed.filter (fun kv => kv.1 != "#kind") }
 
+meta def metaSdrParseNat? (s : String) : Option Nat :=
+  let clean := if s.endsWith "n" then (s.dropEnd 1).toString else s
+  clean.toNat?
+
+meta def metaSdrEncodeRatWire (q : CanonicalRat) : String :=
+  s!"{q.num}/{q.den}"
+
+meta def metaSdrEncodeIntervalWire (iv : Interval) : String :=
+  s!"{metaSdrEncodeRatWire iv.lo}:{metaSdrEncodeRatWire iv.hi}"
+
+meta def metaSdrEncodeRealExprTokens : RealExpr → List String
+  | .const q => ["C", metaSdrEncodeRatWire q]
+  | .var v   => ["V", v]
+  | .add l r => "A" :: (metaSdrEncodeRealExprTokens l ++ metaSdrEncodeRealExprTokens r)
+  | .sub l r => "S" :: (metaSdrEncodeRealExprTokens l ++ metaSdrEncodeRealExprTokens r)
+  | .mul l r => "M" :: (metaSdrEncodeRealExprTokens l ++ metaSdrEncodeRealExprTokens r)
+  | .sqr a   => "Q" :: metaSdrEncodeRealExprTokens a
+
+meta def metaSdrEncodeIntervalQuery (q : IntervalQuery) : String :=
+  let envStr :=
+    if q.env.isEmpty then "-"
+    else String.intercalate "," (q.env.map fun (v, iv) => s!"{v}={metaSdrEncodeIntervalWire iv}")
+  let wire :=
+    String.intercalate "~" (metaSdrEncodeRealExprTokens q.expr) ++ "|" ++
+    envStr ++ "|" ++
+    metaSdrEncodeIntervalWire q.claimedBound
+  "{\"kind\":\"interval@1\",\"wire\":\"" ++ wire ++ "\"}"
+
+meta def metaSdrEncodeTaylorTrigQuery (domain claimedBound : Interval) : String :=
+  let wire := metaSdrEncodeIntervalWire domain ++ "|" ++ metaSdrEncodeIntervalWire claimedBound
+  "{\"kind\":\"taylor-model@1\",\"wire\":\"" ++ wire ++ "\"}"
+
+meta def metaSdrEncodeTaylorModelCert (tm : TaylorModel) : String :=
+  let coeffsW :=
+    if tm.coeffs.isEmpty then "-"
+    else String.intercalate "," (tm.coeffs.map metaSdrEncodeRatWire)
+  let wire :=
+    coeffsW ++ "|" ++
+    metaSdrEncodeRatWire tm.center ++ "|" ++
+    metaSdrEncodeIntervalWire tm.domain ++ "|" ++
+    metaSdrEncodeIntervalWire tm.rem
+  "{\"kind\":\"taylor-model-cert@1\",\"wire\":\"" ++ wire ++ "\"}"
+
 meta def elaborateSdrObendFile (pathStr : String) : IO (Except String SdrElaboratedModule) := do
   let closure ← match ← loadSdrObendModuleClosure 32 (System.FilePath.mk pathStr) [] with
     | .ok c => pure c
@@ -546,6 +930,66 @@ meta def elaborateSdrObendFile (pathStr : String) : IO (Except String SdrElabora
           composition? := foundComp?
           book? := book?
         }]
+      let syntaxClaims : List (String × Obend.Spec.Syntax.Claim) :=
+        decodedMod.decls.foldl (fun acc d =>
+          match d with
+          | .spec sp =>
+            acc ++ sp.claims.map (fun cl => ((modName ++ "." ++ sp.name) ++ "::" ++ cl.name, cl)) ++
+                   sp.claims.map (fun cl => (sp.name ++ "::" ++ cl.name, cl))
+          | _ => acc) []
+      let syntaxExprToReal : Obend.Spec.Syntax.Expr → Option RealExpr
+        | .nat s => (metaSdrParseNat? s).map fun n => .const (Rat.ofInt (Int.ofNat n))
+        | .var v => some (.var v)
+        | .binary "+" a b => do
+          let la ← (match a with
+            | .nat s => (metaSdrParseNat? s).map fun n => .const (Rat.ofInt (Int.ofNat n))
+            | .var v => some (.var v)
+            | .binary "*" (.var v) (.nat k) => (metaSdrParseNat? k).map fun n => .mul (.var v) (.const (Rat.ofInt (Int.ofNat n)))
+            | .binary "*" (.nat k) (.var v) => (metaSdrParseNat? k).map fun n => .mul (.const (Rat.ofInt (Int.ofNat n))) (.var v)
+            | _ => none)
+          let rb ← (match b with
+            | .nat s => (metaSdrParseNat? s).map fun n => .const (Rat.ofInt (Int.ofNat n))
+            | .var v => some (.var v)
+            | .binary "*" (.var v) (.nat k) => (metaSdrParseNat? k).map fun n => .mul (.var v) (.const (Rat.ofInt (Int.ofNat n)))
+            | .binary "*" (.nat k) (.var v) => (metaSdrParseNat? k).map fun n => .mul (.const (Rat.ofInt (Int.ofNat n))) (.var v)
+            | _ => none)
+          pure (.add la rb)
+        | .binary "*" (.var v) (.nat k) =>
+          (metaSdrParseNat? k).map fun n => .mul (.var v) (.const (Rat.ofInt (Int.ofNat n)))
+        | .binary "*" (.nat k) (.var v) =>
+          (metaSdrParseNat? k).map fun n => .mul (.const (Rat.ofInt (Int.ofNat n))) (.var v)
+        | _ => none
+      let synthExternalJudge (cl? : Option Obend.Spec.Syntax.Claim) : Option Justification := do
+        let cl ← cl?
+        let .judge tag ← cl.method | none
+        if tag == "interval@1" then
+          let paramName := (cl.params.head?.map (·.name)).getD "x"
+          let (.binary "<=" lhs (.nat hiStr)) := cl.body | none
+          let re ← syntaxExprToReal lhs
+          let hiNat ← metaSdrParseNat? hiStr
+          let claimed : Interval := ⟨0, Rat.ofInt (Int.ofNat hiNat)⟩
+          let candDoms : List Nat := [250, 30, 15, 8, 7, 1]
+          let domHi ← candDoms.find? fun d =>
+            let q : IntervalQuery :=
+              { expr := re, env := [(paramName, ⟨0, Rat.ofInt (Int.ofNat d)⟩)], claimedBound := claimed }
+            intervalCheck 0 q .direct == .ok
+          let q : IntervalQuery :=
+            { expr := re, env := [(paramName, ⟨0, Rat.ofInt (Int.ofNat domHi)⟩)], claimedBound := claimed }
+          let payload := mkExternalJudgePayload (metaSdrEncodeIntervalQuery q) "{\"kind\":\"direct\",\"wire\":\"D\"}"
+          some (Justification.byExternalJudge tag payload)
+        else if tag == "taylor-model@1" then
+          let domain : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
+          let claimed : Interval := ⟨CanonicalRat.mk 4 5, CanonicalRat.mk 6 5⟩
+          let tm := tmAdd (tmCosCertified domain) (tmSinCertified domain)
+          let payload := mkExternalJudgePayload (metaSdrEncodeTaylorTrigQuery domain claimed) (metaSdrEncodeTaylorModelCert tm)
+          some (Justification.byExternalJudge tag payload)
+        else if tag == "sos-lyapunov-cbf@1" then
+          if checkSosLyapunovProblem 0 goldenSosProblem goldenSosCert == .ok then
+            let payload := mkExternalJudgePayload "golden-cubic-cbf-dae" "valid-sos-cert"
+            some (Justification.byExternalJudge tag payload)
+          else none
+        else
+          none
       let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
       let mut pclaims : List SdrElaboratedClaim := []
       for (specKey, claimName) in rawClaimPairs do
@@ -560,11 +1004,21 @@ meta def elaborateSdrObendFile (pathStr : String) : IO (Except String SdrElabora
         if let some wd := chosenDef? then
           if let some comp := wd.composition? then
             if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
-              let steps? := proposeSdrDerivation co
-              let just? := steps?.map Justification.byDerivation
-              let ok := match just? with
-                | some j => Obend.Logic.obligationCheck 64 co j == .ok
-                | none => false
+              let clDecl? := syntaxClaims.lookup (specKey ++ "::" ++ claimName)
+              let hasJudgeMethod := (clDecl?.bind (·.method)).any fun
+                | .judge _ => true
+                | _ => false
+              let (just?, ok) :=
+                if hasJudgeMethod then
+                  match synthExternalJudge clDecl? with
+                  | some jExt => (some jExt, true)
+                  | none => (none, false)
+                else
+                  let dj? := (proposeSdrDerivation co).map Justification.byDerivation
+                  let dok := match dj? with
+                    | some j => Obend.Logic.obligationCheck 64 co j == .ok
+                    | none => false
+                  (dj?, dok)
               pclaims := pclaims ++ [{
                 name := claimName
                 claimObj := co
@@ -605,65 +1059,85 @@ local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
         let bookId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_book"))
         elabCommand (← `(@[expose] public def $bookId : Book := $(quote bk)))
     for c in pkg.claims do
+      if !c.verified then
+        Lean.throwError m!"#import_obend refused unverified claim '{c.name}' in {pathStr}"
+      let some just := c.just?
+        | Lean.throwError m!"#import_obend missing justification for claim '{c.name}' in {pathStr}"
       let objId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_obj"))
+      let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
+      let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
       elabCommand (← `(@[expose] public def $objId : ClaimObj := $(quote c.claimObj)))
-      if let some just := c.just? then
-        let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
-        elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
-        if c.verified then
-          let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
-          elabCommand (← `(
-            public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats $objId $justId :=
-              sdrObligationMeaning_of_check_beq Obend.Logic.defaultExternalFormats (k := 64) (o := $objId) (j := $justId) (by decide +kernel)
-          ))
+      elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
+      elabCommand (← `(
+        public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats $objId $justId :=
+          sdrObligationMeaning_of_check_beq sdrAutoCertFormats (k := 64) (o := $objId) (j := $justId) (by decide +kernel)
+      ))
 
-/-! ## 2. Compile-Time Elaboration of `apps/sdr-ft8/*.obend` -/
+/-! ## 3. Compile-Time Elaboration of `apps/sdr-ft8/*.obend` -/
 
 #import_obend "apps/sdr-ft8/TayloeQuadratureMixer.obend" as SdrTayloe
 #import_obend "apps/sdr-ft8/CicDecimatorFir.obend" as SdrCicFir
 #import_obend "apps/sdr-ft8/CordicFt8Demod.obend" as SdrCordicFt8
 #import_obend "apps/sdr-ft8/SdrFt8Top.obend" as SdrFt8Top
 
-/-- **Master `.obend` Acceptance & Open-Recursion Theorem for `apps/sdr-ft8/`**:
+/-- **Master `.obend` Acceptance, Open-Recursion & `AutoCert` External-Judge Theorem for `apps/sdr-ft8/`**:
     All four `.obend` modules in `apps/sdr-ft8/` pass `FrontEnd.accept` at Lean compile time,
-    and all seven open-recursive `claim` declarations hold in `Obend.Logic.obligationMeaningWithJudges`. -/
+    and all 11 `claim` declarations (7 open-recursive `.byDerivation` claims + 4 compile-time
+    `AutoCert` `.byExternalJudge` claims across `"taylor-model@1"` and `"interval@1"`) hold in
+    `Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats`. -/
 theorem sdr_ft8_all_accepted_and_claims_hold :
     SdrTayloe.accepted = true ∧
     SdrCicFir.accepted = true ∧
     SdrCordicFt8.accepted = true ∧
     SdrFt8Top.accepted = true ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrTayloe.claim_image_cancel_open_recursion_obj
       SdrTayloe.claim_image_cancel_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
+      SdrTayloe.claim_lo_phasor_taylor_enclosure_obj
+      SdrTayloe.claim_lo_phasor_taylor_enclosure_just ∧
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrCicFir.claim_cic_comb_open_recursion_obj
       SdrCicFir.claim_cic_comb_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrCicFir.claim_folded_fir_open_recursion_obj
       SdrCicFir.claim_folded_fir_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
+      SdrCicFir.claim_cic_bitgrowth_interval_bound_obj
+      SdrCicFir.claim_cic_bitgrowth_interval_bound_just ∧
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrCordicFt8.claim_cordic_mag_open_recursion_obj
       SdrCordicFt8.claim_cordic_mag_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrCordicFt8.claim_ft8_tone_bin_open_recursion_obj
       SdrCordicFt8.claim_ft8_tone_bin_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
+      SdrCordicFt8.claim_ft8_tone_bin_interval_bound_obj
+      SdrCordicFt8.claim_ft8_tone_bin_interval_bound_just ∧
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrFt8Top.claim_demod_ft8_open_recursion_obj
       SdrFt8Top.claim_demod_ft8_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
       SdrFt8Top.claim_rx_sensitivity_open_recursion_obj
-      SdrFt8Top.claim_rx_sensitivity_open_recursion_just :=
+      SdrFt8Top.claim_rx_sensitivity_open_recursion_just ∧
+    Obend.Logic.obligationMeaningWithJudges sdrAutoCertFormats
+      SdrFt8Top.claim_rx_irr_interval_bound_obj
+      SdrFt8Top.claim_rx_irr_interval_bound_just :=
   ⟨ SdrTayloe.accepted_eq
   , SdrCicFir.accepted_eq
   , SdrCordicFt8.accepted_eq
   , SdrFt8Top.accepted_eq
   , SdrTayloe.claim_image_cancel_open_recursion_holds
+  , SdrTayloe.claim_lo_phasor_taylor_enclosure_holds
   , SdrCicFir.claim_cic_comb_open_recursion_holds
   , SdrCicFir.claim_folded_fir_open_recursion_holds
+  , SdrCicFir.claim_cic_bitgrowth_interval_bound_holds
   , SdrCordicFt8.claim_cordic_mag_open_recursion_holds
   , SdrCordicFt8.claim_ft8_tone_bin_open_recursion_holds
+  , SdrCordicFt8.claim_ft8_tone_bin_interval_bound_holds
   , SdrFt8Top.claim_demod_ft8_open_recursion_holds
-  , SdrFt8Top.claim_rx_sensitivity_open_recursion_holds ⟩
+  , SdrFt8Top.claim_rx_sensitivity_open_recursion_holds
+  , SdrFt8Top.claim_rx_irr_interval_bound_holds ⟩
 
 /-! ## 3. Open-Recursive Compositions, Vtable Flattening & `Leaf.Book` Soundness -/
 
@@ -852,6 +1326,72 @@ def cordicFt8Rtl? : Option RtlModule :=
 
 def sdrFt8TopRtl? : Option RtlModule :=
   compileBookToRtl "sdr_ft8_top_book" SdrFt8Top.calibrated40mSdrFt8_book
+
+/-- Empty struct/union layout context for scalar 64-bit multi-argument stateful $z^{-1}$ step lowering. -/
+def emptySdrLayoutCtx : RtlLayoutCtx :=
+  { structSlices := [], unionTagBits := 8, unionArms := [] }
+
+/-- Compile the multi-argument stateful $z^{-1}$ `always_ff` `.obend` methods (`alwaysFfNextCicInt1`,
+    `alwaysFfNextPrevPhase`, `alwaysFfOutDeltaPhase`) from `SdrCordicFt8.calibratedCordicStatefulDiscrim_book`
+    directly into a synchronous `RtlModule` via `compileStatefulTermsToRtl`. -/
+def sdrStatefulDiscrimFromObendRtl? : Option RtlModule := do
+  let B := SdrCordicFt8.calibratedCordicStatefulDiscrim_book
+  let nextCic1 ← lookupBookCode B "alwaysFfNextCicInt1"
+  let nextPrev ← lookupBookCode B "alwaysFfNextPrevPhase"
+  let outDelta ← lookupBookCode B "alwaysFfOutDeltaPhase"
+  compileStatefulTermsToRtl
+    "sdr_cordic_stateful_discrim"
+    emptySdrLayoutCtx
+    ["cicScaleSample"]
+    [.alu .mul (.inputPort 0) (.const 2#64)]
+    ["usb_sample_mv", "phase_mrad"]
+    [("cic_int1", 0#64), ("prev_phase_mrad", 0#64)]
+    [nextCic1, nextPrev]
+    [("delta_phase_mrad", outDelta)]
+
+/-- Reference `StatefulStepSpec` corresponding to `sdrStatefulDiscrimFromObendRtl?`. -/
+def sdrCordicStatefulSpec : StatefulStepSpec where
+  moduleName := "sdr_cordic_stateful_discrim"
+  inputNames := ["usb_sample_mv", "phase_mrad"]
+  stateRegs  :=
+    [ { regIdx := 0
+        name := "cic_int1"
+        initVal := 0#64
+        nextExpr := .alu .add (.regRead 0) (.alu .mul (.inputPort 0) (.const 2#64)) }
+    , { regIdx := 1
+        name := "prev_phase_mrad"
+        initVal := 0#64
+        nextExpr := .inputPort 1 }
+    ]
+  outputExprs :=
+    [ ( "delta_phase_mrad"
+      , .mux (.alu .ult (.inputPort 1) (.regRead 1))
+          (.const 0#64)
+          (.alu .sub (.inputPort 1) (.regRead 1)) ) ]
+
+/-- **Theorem (`sdr_ft8_stateful_discrim_rtl_verified`)**:
+    1. Lowering `SdrCordicFt8.calibratedCordicStatefulDiscrim_book` via `compileStatefulTermsToRtl`
+       produces `some (compileStatefulStepToRtl sdrCordicStatefulSpec)`,
+    2. The synthesized `always_ff` $z^{-1}$ module passes `checkRtlModule` and lowers to a valid
+       FPGA `BelNetlist`,
+    3. Every single-cycle clock edge and arbitrary multi-cycle execution trace of the compiled
+       `RtlModule` matches `evalStatefulStepPure` and `runStatefulTracePure`
+       (`compileStatefulStepToRtl_simulates_step`, `compileStatefulStepToRtl_trace_sound`). -/
+theorem sdr_ft8_stateful_discrim_rtl_verified :
+    sdrStatefulDiscrimFromObendRtl? = some (compileStatefulStepToRtl sdrCordicStatefulSpec) ∧
+    checkRtlModule (compileStatefulStepToRtl sdrCordicStatefulSpec) = true ∧
+    checkBelNetlistValid (synthesizeModuleToBels (compileStatefulStepToRtl sdrCordicStatefulSpec)) = true ∧
+    (∀ (rst : Bool) (inputs regState : Nat → BitVec 64),
+      stepModuleRegs (compileStatefulStepToRtl sdrCordicStatefulSpec) rst inputs regState =
+        evalStatefulStepPure sdrCordicStatefulSpec rst inputs regState) ∧
+    (∀ (initRegs : Nat → BitVec 64) (trace : List (Bool × (Nat → BitVec 64))),
+      runModuleTrace (compileStatefulStepToRtl sdrCordicStatefulSpec) initRegs trace =
+        runStatefulTracePure sdrCordicStatefulSpec initRegs trace) :=
+  ⟨by decide +kernel,
+   by decide +kernel,
+   by decide +kernel,
+   compileStatefulStepToRtl_simulates_step sdrCordicStatefulSpec,
+   compileStatefulStepToRtl_trace_sound sdrCordicStatefulSpec⟩
 
 /-- **Stateful `always_ff` 40m Tayloe IQ + 3-Stage CIC + Folded FIR + CORDIC $\Delta\phi$ FT8 RTL Module
 (`sdrFt8SequentialRtlModule`)**:

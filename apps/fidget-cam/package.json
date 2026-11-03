@@ -1,0 +1,56 @@
+{
+  "schema": "dregg.objective-bend.package-input.v1",
+  "edition": "objective-bend-1",
+  "entryModule": "3",
+  "entryDefinition": "crossModuleAssemblySummary",
+  "modules": [
+    {
+      "name": "BaseImpellerBody",
+      "sourcePath": "apps/fidget-cam/BaseImpellerBody.obend",
+      "imports": []
+    },
+    {
+      "name": "CoolingChannelOverride",
+      "sourcePath": "apps/fidget-cam/CoolingChannelOverride.obend",
+      "imports": [
+        {
+          "alias": "BaseBody",
+          "path": "./BaseImpellerBody.obend",
+          "module": "0"
+        }
+      ]
+    },
+    {
+      "name": "MountingBossAssembly",
+      "sourcePath": "apps/fidget-cam/MountingBossAssembly.obend",
+      "imports": [
+        {
+          "alias": "BaseBody",
+          "path": "./BaseImpellerBody.obend",
+          "module": "0"
+        }
+      ]
+    },
+    {
+      "name": "ImpellerPartTop",
+      "sourcePath": "apps/fidget-cam/ImpellerPartTop.obend",
+      "imports": [
+        {
+          "alias": "BaseBody",
+          "path": "./BaseImpellerBody.obend",
+          "module": "0"
+        },
+        {
+          "alias": "Cooling",
+          "path": "./CoolingChannelOverride.obend",
+          "module": "1"
+        },
+        {
+          "alias": "Boss",
+          "path": "./MountingBossAssembly.obend",
+          "module": "2"
+        }
+      ]
+    }
+  ]
+}

@@ -246,4 +246,12 @@ theorem silicon_self_host_end_to_end_test_sound :
           SiliconKernelBundle.accepted_eq,
           by decide +kernel, by decide +kernel, by decide +kernel⟩
 
+#print axioms Obend.Tactic.SiliconElab.verifyRealBoundSubdiv_sound
+#print axioms Obend.Tactic.SiliconElab.verifyRealBoxBoundSubdiv_sound
+#print axioms Obend.Tactic.SiliconElab.sos_cert_implies_nonneg
+#print axioms Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound
+#print axioms Obend.Apps.SiliconKernelVerilator.siliconKernelBundle_accepted_and_claims_hold
+#print axioms Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound
+#print axioms silicon_self_host_end_to_end_test_sound
+
 end Obend.Tests.SiliconSelfHostTest

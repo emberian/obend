@@ -2,9 +2,6 @@ edition ObjectiveBend 1
 # Flagship App #6 (`apps/fidget-cam/BaseImpellerBody.obend`):
 # Base OpenUSD/F-Rep centrifugal impeller body primitive with open-recursive shroud & blade specs.
 
-law monotone_cam_pass: monotone(camPassEpoch)
-law bounded_wall_thickness: new.wallThicknessUm <= 3000
-
 record ImpellerBody:
   shroudRadiusUm() -> Nat
   bladeThicknessUm() -> Nat

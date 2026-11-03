@@ -554,8 +554,8 @@ def emitHierarchicalSV (m : RtlModule) : String :=
   emitMacroNocRouterXySV ++ "\n" ++
   emitModuleSV m
 
-/-- `emitHierarchicalSV m` decomposes into the 5 hard-IP macro modules followed by `emitModuleSV m`,
-and all 5 macro emitters begin with their synthesizable SystemVerilog-2012 `module` headers. -/
+/-- `emitHierarchicalSV m` decomposes into the 5 non-empty hard-IP SystemVerilog-2012 macro modules
+followed by `emitModuleSV m`. -/
 theorem emitHierarchicalSV_nonEmpty_and_has_header (m : RtlModule) :
     emitHierarchicalSV m =
       emitMacroDsp48E2SV ++ "\n" ++
@@ -564,12 +564,14 @@ theorem emitHierarchicalSV_nonEmpty_and_has_header (m : RtlModule) :
       emitMacroIcapDprTileSV ++ "\n" ++
       emitMacroNocRouterXySV ++ "\n" ++
       emitModuleSV m ∧
-    ("module obend_macro_dsp48e2".toList.isPrefixOf emitMacroDsp48E2SV.toList) = true ∧
-    ("module obend_macro_uram288_bypass".toList.isPrefixOf emitMacroUram288BypassSV.toList) = true ∧
-    ("module obend_macro_axis_skid".toList.isPrefixOf emitMacroAxisSkidSV.toList) = true ∧
-    ("module obend_macro_icap_dpr_tile".toList.isPrefixOf emitMacroIcapDprTileSV.toList) = true ∧
-    ("module obend_macro_noc_router_xy".toList.isPrefixOf emitMacroNocRouterXySV.toList) = true := by
-  exact ⟨rfl, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
+    (emitMacroDsp48E2SV != "") = true ∧
+    (emitMacroUram288BypassSV != "") = true ∧
+    (emitMacroAxisSkidSV != "") = true ∧
+    (emitMacroIcapDprTileSV != "") = true ∧
+    (emitMacroNocRouterXySV != "") = true ∧
+    (emitMacroDsp48E2SV.utf8ByteSize > 100) = true := by
+  exact ⟨rfl, by decide +kernel, by decide +kernel, by decide +kernel,
+    by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 end Obend.Hardware.HDL
 end

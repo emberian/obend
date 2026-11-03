@@ -1,39 +1,62 @@
 edition ObjectiveBend 1
-# Flagship App #4 (Layer 2): Cooley-Tukey Radix-2 NTT Butterfly Layer
+# Flagship App #4 (Layer 2): Modular Cooley-Tukey Radix-2 Goldilocks NTT Butterfly Layer
 
 import ./GoldilocksField.obend as Field
 
 law monotone_ntt_stage: monotone(nttStageIdx)
 
 record NttButterflyTarget:
-  twiddleScale() -> Nat
+  goldilocksPrime() -> Nat
+  canon64(x: Nat) -> Nat
+  fieldAdd(a: Nat, b: Nat) -> Nat
+  fieldSub(a: Nat, b: Nat) -> Nat
+  goldilocksReduce128(lo: Nat, hi: Nat) -> Nat
+  fieldMul(a: Nat, b: Nat) -> Nat
   butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
   butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat
-  butterflyStageStep(u: Nat, v: Nat) -> Nat
 
 spec BaseRadix2ButterflySpec for NttButterflyTarget:
-  requires twiddleScale() -> Nat
-  def twiddleScale() -> Nat:
-    1n
+  requires goldilocksPrime() -> Nat
+  def goldilocksPrime() -> Nat:
+    0xFFFFFFFF00000001n
+  def canon64(x: Nat) -> Nat:
+    let w = x & 0xFFFFFFFFFFFFFFFFn in if self.goldilocksPrime <= w then w - self.goldilocksPrime else w
+  def fieldAdd(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let remP = self.goldilocksPrime - cb in if remP <= ca then ca - remP else ca + cb
+  def fieldSub(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in if cb <= ca then ca - cb else (self.goldilocksPrime - cb) + ca
+  def goldilocksReduce128(lo: Nat, hi: Nat) -> Nat:
+    let hiLo = hi & 0xFFFFFFFFn in let hiHi = (hi >>> 32n) & 0xFFFFFFFFn in let mid = (hiLo << 32n) - hiLo in self.fieldSub(self.fieldAdd(lo, mid), hiHi)
+  def fieldMul(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let aLo = ca & 0xFFFFFFFFn in let aHi = (ca >>> 32n) & 0xFFFFFFFFn in let bLo = cb & 0xFFFFFFFFn in let bHi = (cb >>> 32n) & 0xFFFFFFFFn in let p00 = aLo * bLo in let p01 = aLo * bHi in let p10 = aHi * bLo in let p11 = aHi * bHi in let mid32 = ((p00 >>> 32n) & 0xFFFFFFFFn) + (p01 & 0xFFFFFFFFn) + (p10 & 0xFFFFFFFFn) in let lo = (p00 & 0xFFFFFFFFn) | ((mid32 & 0xFFFFFFFFn) << 32n) in let hi = p11 + ((p01 >>> 32n) & 0xFFFFFFFFn) + ((p10 >>> 32n) & 0xFFFFFFFFn) + (mid32 >>> 32n) in self.goldilocksReduce128(lo, hi)
   def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
-    u + v * twiddle
+    self.fieldAdd(u, self.fieldMul(v, twiddle))
   def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
-    u - v * twiddle
-  def butterflyStageStep(u: Nat, v: Nat) -> Nat:
-    u + v * self.twiddleScale
-  claim butterfly_even_radix2(): self.butterflyEven(50n, 6n, 7n) == 92n
-  claim butterfly_odd_radix2(): self.butterflyOdd(50n, 6n, 7n) == 8n
-  claim butterfly_sum_involution(): self.butterflyEven(50n, 6n, 7n) + self.butterflyOdd(50n, 6n, 7n) == 100n
+    self.fieldSub(u, self.fieldMul(v, twiddle))
+  claim butterfly_even_radix2() by weave: self.butterflyEven(50n, 6n, 7n) == 92n
+  claim butterfly_odd_radix2() by weave: self.butterflyOdd(50n, 6n, 7n) == 8n
+  claim butterfly_odd_wrap_mod_p() by weave: self.butterflyOdd(10n, 6n, 7n) == 0xFFFFFFFEFFFFFFE1n
 
 spec PipelinedButterflyOverride for NttButterflyTarget:
-  requires butterflyStageStep(u: Nat, v: Nat) -> Nat
-  def twiddleScale() -> Nat:
-    1n
-  def butterflyStageStep(u: Nat, v: Nat) -> Nat:
-    super.butterflyStageStep(u, v) + 4n
+  requires fieldAdd(a: Nat, b: Nat) -> Nat
+  requires fieldSub(a: Nat, b: Nat) -> Nat
+  requires butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  requires butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  def goldilocksPrime() -> Nat:
+    0xFFFFFFFF00000001n
+  def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    if twiddle == 1n then self.fieldAdd(u, v) else super.butterflyEven(u, v, twiddle)
+  def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    if twiddle == 1n then self.fieldSub(u, v) else super.butterflyOdd(u, v, twiddle)
+  claim butterfly_sum_involution() by weave: self.fieldAdd(self.butterflyEven(10n, 6n, 7n), self.butterflyOdd(10n, 6n, 7n)) == 20n
 
 def seedNttButterfly() -> NttButterflyTarget:
-  {twiddleScale: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyStageStep: fn(u: Nat, v: Nat) -> Nat: 0n}
+  {goldilocksPrime: 0n, canon64: fn(x: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, goldilocksReduce128: fn(lo: Nat, hi: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n}
 
 def nttButterflyEngine() -> NttButterflyTarget:
   fix(compose(BaseRadix2ButterflySpec, PipelinedButterflyOverride), seedNttButterfly())
+
+def verifyButterflyMatchesField() -> Bool:
+  let f = Field.goldilocksEngine()
+  let b = nttButterflyEngine()
+  b.butterflyOdd(10n, 6n, 7n) == f.fieldSub(10n, f.fieldMul(6n, 7n))

@@ -1,39 +1,54 @@
 edition ObjectiveBend 1
-# Flagship App #4 (Layer 1): Goldilocks Prime Field (p = 2^64 - 2^32 + 1) & 128-to-64 Modular Reduction
+# Flagship App #4 (Layer 1): Goldilocks Prime Field (p = 2^64 - 2^32 + 1) & Shift/Mask 128-to-64 Modular Reduction
 
 law bounded_goldilocks_elem: new.fieldElem <= 18446744069414584320
 
 record GoldilocksFieldTarget:
+  goldilocksPrime() -> Nat
   goldilocksEpsilon() -> Nat
-  goldilocksReduce128(lo: Nat, hiLo32: Nat, hiHi32: Nat) -> Nat
+  canon64(x: Nat) -> Nat
   fieldAdd(a: Nat, b: Nat) -> Nat
   fieldSub(a: Nat, b: Nat) -> Nat
+  goldilocksReduce128(lo: Nat, hi: Nat) -> Nat
   fieldMul(a: Nat, b: Nat) -> Nat
 
 spec BaseGoldilocksFieldSpec for GoldilocksFieldTarget:
+  requires goldilocksPrime() -> Nat
   requires goldilocksEpsilon() -> Nat
+  def goldilocksPrime() -> Nat:
+    0xFFFFFFFF00000001n
   def goldilocksEpsilon() -> Nat:
-    4294967295n
-  def goldilocksReduce128(lo: Nat, hiLo32: Nat, hiHi32: Nat) -> Nat:
-    lo + hiLo32 * self.goldilocksEpsilon - hiHi32
+    0xFFFFFFFFn
+  def canon64(x: Nat) -> Nat:
+    let w = x & 0xFFFFFFFFFFFFFFFFn in if self.goldilocksPrime <= w then w - self.goldilocksPrime else w
   def fieldAdd(a: Nat, b: Nat) -> Nat:
-    a + b
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let remP = self.goldilocksPrime - cb in if remP <= ca then ca - remP else ca + cb
   def fieldSub(a: Nat, b: Nat) -> Nat:
-    a - b
+    let ca = self.canon64(a) in let cb = self.canon64(b) in if cb <= ca then ca - cb else (self.goldilocksPrime - cb) + ca
+  def goldilocksReduce128(lo: Nat, hi: Nat) -> Nat:
+    let hiLo = hi & 0xFFFFFFFFn in let hiHi = (hi >>> 32n) & 0xFFFFFFFFn in let mid = (hiLo << 32n) - hiLo in self.fieldSub(self.fieldAdd(lo, mid), hiHi)
   def fieldMul(a: Nat, b: Nat) -> Nat:
-    a * b
-  claim goldilocks_epsilon_identity(): self.goldilocksReduce128(10n, 2n, 1n) == 8589934599n
-  claim goldilocks_field_mul_add(): self.fieldAdd(self.fieldMul(7n, 9n), 5n) == 68n
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let aLo = ca & 0xFFFFFFFFn in let aHi = (ca >>> 32n) & 0xFFFFFFFFn in let bLo = cb & 0xFFFFFFFFn in let bHi = (cb >>> 32n) & 0xFFFFFFFFn in let p00 = aLo * bLo in let p01 = aLo * bHi in let p10 = aHi * bLo in let p11 = aHi * bHi in let mid32 = ((p00 >>> 32n) & 0xFFFFFFFFn) + (p01 & 0xFFFFFFFFn) + (p10 & 0xFFFFFFFFn) in let lo = (p00 & 0xFFFFFFFFn) | ((mid32 & 0xFFFFFFFFn) << 32n) in let hi = p11 + ((p01 >>> 32n) & 0xFFFFFFFFn) + ((p10 >>> 32n) & 0xFFFFFFFFn) + (mid32 >>> 32n) in self.goldilocksReduce128(lo, hi)
+  claim goldilocks_epsilon_identity() by weave: self.goldilocksReduce128(10n, 0x0000000100000002n) == 8589934599n
+  claim goldilocks_reduce_max128() by weave: self.goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn) == 0xFFFFFFFC00000004n
+  claim goldilocks_sub_wraparound() by weave: self.fieldSub(3n, 5n) == 0xFFFFFFFEFFFFFFFFn
+  claim goldilocks_add_wraparound() by weave: self.fieldAdd(0xFFFFFFFF00000000n, 5n) == 4n
 
 spec FastEpsilonFoldOverride for GoldilocksFieldTarget:
+  requires goldilocksPrime() -> Nat
   requires fieldAdd(a: Nat, b: Nat) -> Nat
+  requires fieldSub(a: Nat, b: Nat) -> Nat
+  requires goldilocksReduce128(lo: Nat, hi: Nat) -> Nat
+  def goldilocksPrime() -> Nat:
+    0xFFFFFFFF00000001n
   def goldilocksEpsilon() -> Nat:
-    4294967295n
-  def fieldAdd(a: Nat, b: Nat) -> Nat:
-    super.fieldAdd(a, b) + 0n
+    0xFFFFFFFFn
+  def goldilocksReduce128(lo: Nat, hi: Nat) -> Nat:
+    let hiLo = hi & 0xFFFFFFFFn in let hiHi = (hi >>> 32n) & 0xFFFFFFFFn in let mid = (hiLo << 32n) - hiLo in if hi == 0n then self.canon64(lo) else super.goldilocksReduce128(lo, hi)
+  claim goldilocks_mul_minus_one_sq() by weave: self.fieldMul(0xFFFFFFFF00000000n, 0xFFFFFFFF00000000n) == 1n
 
 def seedGoldilocksField() -> GoldilocksFieldTarget:
-  {goldilocksEpsilon: 0n, goldilocksReduce128: fn(lo: Nat, hl: Nat, hh: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n}
+  {goldilocksPrime: 0n, goldilocksEpsilon: 0n, canon64: fn(x: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, goldilocksReduce128: fn(lo: Nat, hi: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n}
 
 def goldilocksEngine() -> GoldilocksFieldTarget:
   fix(compose(BaseGoldilocksFieldSpec, FastEpsilonFoldOverride), seedGoldilocksField())

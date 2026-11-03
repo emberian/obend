@@ -4,8 +4,6 @@ edition ObjectiveBend 1
 
 import ./BaseImpellerBody.obend as BaseBody
 
-law monotone_coolant_flow: monotone(flowEpoch)
-
 record ImpellerCoolingChannel:
   boreRadiusUm() -> Nat
   shellWallThicknessUm() -> Nat

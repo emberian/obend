@@ -68,12 +68,16 @@ public:
                   - s.omega_e_rads * PSI_PM_WB) / LQ_HENRY;
         d.d_theta = s.omega_e_rads;
 
-        // 6-level SiC FCML flying-capacitor unbalance ODE with active Lyapunov balancing
-        // and 120 kHz effective phase-shifted PWM ripple (< 0.5 V steady-state ripple)
+        // 6-level SiC FCML flying-capacitor unbalance ODE:
+        // Slow passive bleed (-5.0 s^-1, tau = 200 ms) + active Lyapunov balancing driven
+        // strictly by the RTL controller's cap_bal_cmd_volt (-800.0 * cap_bal_cmd_volt when
+        // gates are enabled), plus 120 kHz effective phase-shifted PWM ripple.
+        // Without active controller balancing (cap_bal_cmd_volt == 0), +15 V unbalance remains
+        // > 10 V after 15 ms; with closed-loop Lyapunov balancing, it contracts to < 0.5 V.
         const double pspwm_ripple = 0.12 * std::sin(2.0 * M_PI * 120000.0 * sim_time_sec);
-        const double active_bal_rate = -650.0 * s.cap_unbal_volt
-                                       - 120.0 * (cap_bal_cmd_volt - 0.8 * s.cap_unbal_volt);
-        d.d_cap_unbal = active_bal_rate + 120.0 * pspwm_ripple;
+        const double passive_bleed = -5.0 * s.cap_unbal_volt;
+        const double active_bal_rate = pwm_gate_en ? (-800.0 * cap_bal_cmd_volt) : 0.0;
+        d.d_cap_unbal = passive_bleed + active_bal_rate + 120.0 * pspwm_ripple;
 
         // Coupled electro-thermal stator winding ODE: P_loss(I, T) = I^2 * R_0 * (1 + alpha * dT)
         const double i_sq = s.id_amp * s.id_amp + s.iq_amp * s.iq_amp;

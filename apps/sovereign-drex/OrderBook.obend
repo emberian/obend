@@ -2,10 +2,7 @@ edition ObjectiveBend 1
 # Flagship App #7 (`apps/sovereign-drex/OrderBook.obend`):
 # Multi-asset (`CBDC`, `TokenizedTreasury`, `WelfareCredit`) sovereign order book with uniform clearing price.
 
-import "./Seat.obend" as SeatMod
-
-law monotone_book_batch: monotone(batchSeq)
-law conserve_total_cbdc_supply: writeOnce(totalCbdcSupply)
+import ./Seat.obend as SeatMod
 
 record DrexOrderBook:
   uniformClearingPriceBps() -> Nat

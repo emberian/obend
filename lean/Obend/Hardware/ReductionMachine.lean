@@ -814,6 +814,11 @@ theorem aluOpToRuleOpcode_ruleOpcodeToAluOp (op : RuleOpcode) :
     aluOpToRuleOpcode (ruleOpcodeToAluOp op) = op := by
   cases op <;> rfl
 
+/-- Inverse round-trip lemma between `aluOpToRuleOpcode` and `ruleOpcodeToAluOp`. -/
+theorem ruleOpcodeToAluOp_aluOpToRuleOpcode (op : RtlAluOp) :
+    ruleOpcodeToAluOp (aluOpToRuleOpcode op) = op := by
+  cases op <;> rfl
+
 /-- Canonical member name associated with a `RuleOpcode` tile. -/
 def ruleOpcodeName : RuleOpcode → String
   | .addImm    => "inc"
@@ -2429,11 +2434,12 @@ def emitNocRouterXySVLines : List String :=
   , "  logic [7:0]  dst_y;"
   , "  logic [79:0] flit_body;"
   , "  assign flit_kind_id = flit_in[119:112];"
-  , "  assign cur_x        = (flit_in[111:104] == 8'd0) ? router_x : flit_in[111:104];"
-  , "  assign cur_y        = (flit_in[103:96]  == 8'd0) ? router_y : flit_in[103:96];"
+  , "  assign cur_x        = router_x;"
+  , "  assign cur_y        = router_y;"
   , "  assign dst_x        = flit_in[95:88];"
   , "  assign dst_y        = flit_in[87:80];"
   , "  assign flit_body    = flit_in[79:0];"
+  , "  wire _unused_flit_xy = &{1'b0, flit_in[111:96]};"
   , ""
   , "  logic [3:0] credits_q;"
   , "  logic       any_downstream_credit;"

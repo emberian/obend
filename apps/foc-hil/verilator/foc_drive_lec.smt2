@@ -18,6 +18,7 @@
 (declare-const fcml_cap_err (_ BitVec 64))
 (declare-const thermal_trip_latch (_ BitVec 1))
 (declare-const skid_vq_hold (_ BitVec 64))
+(declare-const skid_vd_hold (_ BitVec 64))
 
 ; --- Spec Model (Obend.Apps.FocHil.focHilSequentialRtlModule) ---
 (define-fun spec_kp_gain () (_ BitVec 64)
@@ -25,6 +26,9 @@
 
 (define-fun spec_vq_active () (_ BitVec 64)
   (bvadd (bvmul iq_err_ma spec_kp_gain) int_q))
+
+(define-fun spec_vd_active () (_ BitVec 64)
+  (bvadd (bvmul id_err_ma (_ bv400 64)) int_d))
 
 (define-fun spec_overtemp_now () (_ BitVec 1)
   (ite (bvult (_ bv154 64) winding_temp_c) #b1 #b0))
@@ -36,7 +40,14 @@
   (bvnot spec_fault_trip))
 
 (define-fun spec_vq_cmd_mv () (_ BitVec 64)
-  (ite (= dpr_isolate_en #b1) skid_vq_hold spec_vq_active))
+  (ite (= spec_fault_trip #b1)
+       (_ bv0 64)
+       (ite (= dpr_isolate_en #b1) skid_vq_hold spec_vq_active)))
+
+(define-fun spec_vd_cmd_mv () (_ BitVec 64)
+  (ite (= spec_fault_trip #b1)
+       (_ bv0 64)
+       (ite (= dpr_isolate_en #b1) skid_vd_hold spec_vd_active)))
 
 (define-fun spec_int_q_next () (_ BitVec 64)
   (ite (= dpr_isolate_en #b1) int_q (bvadd int_q (bvmul iq_err_ma (_ bv65 64)))))
@@ -52,6 +63,9 @@
 (define-fun rtl_vq_active () (_ BitVec 64)
   (bvadd (bvmul iq_err_ma rtl_kp_gain) int_q))
 
+(define-fun rtl_vd_active () (_ BitVec 64)
+  (bvadd (bvmul id_err_ma (_ bv400 64)) int_d))
+
 (define-fun rtl_overtemp_now () (_ BitVec 1)
   (ite (bvugt winding_temp_c (_ bv154 64)) #b1 #b0))
 
@@ -61,9 +75,19 @@
 (define-fun rtl_pwm_gate_en () (_ BitVec 1)
   (ite (= rtl_fault_trip #b1) #b0 #b1))
 
-(define-fun rtl_vq_cmd_mv () (_ BitVec 64)
+(define-fun rtl_vq_dpr_mux () (_ BitVec 64)
   (bvor (bvand (bvneg ((_ zero_extend 63) dpr_isolate_en)) skid_vq_hold)
         (bvand (bvnot (bvneg ((_ zero_extend 63) dpr_isolate_en))) rtl_vq_active)))
+
+(define-fun rtl_vq_cmd_mv () (_ BitVec 64)
+  (bvand (bvnot (bvneg ((_ zero_extend 63) rtl_fault_trip))) rtl_vq_dpr_mux))
+
+(define-fun rtl_vd_dpr_mux () (_ BitVec 64)
+  (bvor (bvand (bvneg ((_ zero_extend 63) dpr_isolate_en)) skid_vd_hold)
+        (bvand (bvnot (bvneg ((_ zero_extend 63) dpr_isolate_en))) rtl_vd_active)))
+
+(define-fun rtl_vd_cmd_mv () (_ BitVec 64)
+  (bvand (bvnot (bvneg ((_ zero_extend 63) rtl_fault_trip))) rtl_vd_dpr_mux))
 
 (define-fun rtl_int_q_next () (_ BitVec 64)
   (bvor (bvand (bvneg ((_ zero_extend 63) dpr_isolate_en)) int_q)
@@ -76,20 +100,28 @@
                (bvmul cap_err_mv (_ bv800 64)))))
 
 ; Assert miter negation: any divergence between .obend spec and RTL, or any violation
-; of the 155 C 1-cycle gate-kill barrier or ICAP DPR isolation hold
+; of the 155 C 1-cycle gate-kill barrier (including during ICAP DPR isolation) or
+; fault-free ICAP DPR isolation hold
 (assert
   (or
     (distinct spec_vq_cmd_mv rtl_vq_cmd_mv)
+    (distinct spec_vd_cmd_mv rtl_vd_cmd_mv)
     (distinct spec_int_q_next rtl_int_q_next)
     (distinct spec_cap_err_next rtl_cap_err_next)
     (distinct spec_fault_trip rtl_fault_trip)
     (distinct spec_pwm_gate_en rtl_pwm_gate_en)
-    ; Safety Barrier 1: winding_temp_c >= 155 MUST force rtl_fault_trip = 1 and rtl_pwm_gate_en = 0
+    ; Safety Barrier 1: winding_temp_c >= 155 MUST unconditionally force fault_trip = 1,
+    ; pwm_gate_en = 0, vq_cmd_mv = 0, and vd_cmd_mv = 0 (even when dpr_isolate_en = 1)
     (and (bvuge winding_temp_c (_ bv155 64))
-         (or (= rtl_fault_trip #b0) (= rtl_pwm_gate_en #b1)))
-    ; Safety Barrier 2: dpr_isolate_en = 1 MUST freeze int_q and hold skid_vq_hold
+         (or (= rtl_fault_trip #b0)
+             (= rtl_pwm_gate_en #b1)
+             (distinct rtl_vq_cmd_mv (_ bv0 64))
+             (distinct rtl_vd_cmd_mv (_ bv0 64))))
+    ; Safety Barrier 2: fault-free dpr_isolate_en = 1 MUST freeze int_q and hold skid_vq/skid_vd
     (and (= dpr_isolate_en #b1)
+         (= rtl_fault_trip #b0)
          (or (distinct rtl_vq_cmd_mv skid_vq_hold)
+             (distinct rtl_vd_cmd_mv skid_vd_hold)
              (distinct rtl_int_q_next int_q)))))
 
 (check-sat)

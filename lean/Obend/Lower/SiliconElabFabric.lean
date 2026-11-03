@@ -293,11 +293,39 @@ def rebuildCamAppSpine (cam : HwExprCAM) (fnHandle : CamHandle) : List CamHandle
     let (appH, cam1) := mkHwCamApp fnHandle argH cam
     rebuildCamAppSpine cam1 appH rest
 
-/-- Look up a constant definition entry by `symIdx` in `cam.consts`. -/
+/-- Look up a monomorphic constant definition entry by `symIdx` in `cam.consts`. -/
 def findHwCamConstDef? (cam : HwExprCAM) (symIdx : Nat) : Option Nat :=
   match cam.consts.find? (fun c => c.symIdx == symIdx && c.valHandle?.isSome) with
   | some c => c.valHandle?
   | none   => none
+
+/-- Extract formal universe parameter names `[p₁, …, pₖ]` from a constant's canonical symbol level list. -/
+def extractConstParamNames : List KLevel → Option (List KName)
+  | [] => some []
+  | .param p :: rest => (extractConstParamNames rest).map (p :: ·)
+  | _ :: _ => none
+
+/-- Look up a constant definition entry in `cam.consts` (both monomorphic fast-path and
+universe-polymorphic call-site instantiation via `hwCamInstantiateLevelParams`). -/
+def findHwCamConstDefInst? (cam : HwExprCAM) (symIdx : Nat) : Option (CamHandle × HwExprCAM) :=
+  match findHwCamConstDef? cam symIdx with
+  | some valH => some (valH, cam)
+  | none =>
+    match cam.symbols[symIdx]? with
+    | some (.constEntry name us) =>
+      match cam.consts.find? (fun c => c.name == name && c.valHandle?.isSome) with
+      | some c =>
+        match c.valHandle?, cam.symbols[c.symIdx]? with
+        | some valH, some (.constEntry _ pLvls) =>
+          match extractConstParamNames pLvls with
+          | some pNames =>
+            if pNames.length == us.length then
+              some (hwCamInstantiateLevelParams (cam.nodes.length + 8) (pNames.zip us) valH cam)
+            else none
+          | none => none
+        | _, _ => none
+      | none => none
+    | _ => none
 
 /-- Extract the constructor head `symIdx` and argument handles from a constructor application spine in `cam`. -/
 def decomposeCamCtorSpine : Nat → HwExprCAM → CamHandle → Option (Nat × List CamHandle)
@@ -315,20 +343,67 @@ def decomposeCamCtorSpine : Nat → HwExprCAM → CamHandle → Option (Nat × L
       else
         none
 
-/-- Single-cycle hardware WHNF transition (`stepCamWhnf`) over `HwExprCAM` handles:
-* **Fast 1-Cycle Closed $\beta$-Redex (`w.tag == 4` with `lamW.tag == 5` and `argStack == []`)**:
-  Immediately invokes `hwCamInstantiateAt` on `lamW.h1` and `w.h1`. When `lamW.h1` has
-  `hasLooseBVar = false`, `hwCamInstantiateAt` takes the 1-cycle $O(1)$ closed-term bypass and
-  redirects `focusHandle := lamW.h1` in a single cycle without allocating any CAM nodes!
-* **General `.app` Spine Push (`w.tag == 4`)**: pushes `w.h1` onto `argStack` and focuses `w.h0`.
-* **`.lam` $\beta$-Pop (`w.tag == 5`)**: pops `argH` from `argStack` and instantiates `w.h1` via
-  `hwCamInstantiateAt`; if `argStack == []`, halts (`done := true`).
-* **`.letE` $\zeta$-Step (`w.tag == 7`)**: instantiates `w.h2` (`body`) with `w.h1` (`val`) via
-  `hwCamInstantiateAt`.
-* **`.const` $\delta$-Step (`w.tag == 3`)**: unfolds defined constants in `cam.consts` (`c.valHandle?`);
-  otherwise rebuilds the application spine and halts.
-* **`.proj` Step (`w.tag == 9`)**: projects field `idx` from a constructor spine at `w.h0`. -/
-def stepCamWhnf (st : Zone1WhnfState) : Zone1WhnfState :=
+/-- Extract a constructor name and argument handles from either a constructor application spine
+or a `Nat` literal (`0 ↦ Nat.zero`, `k + 1 ↦ Nat.succ k`) in `HwExprCAM`. -/
+def decomposeCamCtorOrLitSpine (fuel : Nat) (cam : HwExprCAM) (h : CamHandle) :
+    Option (KName × List CamHandle × HwExprCAM) :=
+  match decomposeCamCtorSpine fuel cam h with
+  | some (ctorSym, args) =>
+    match cam.symbols[ctorSym]? with
+    | some (.constEntry ctorName _) => some (ctorName, args, cam)
+    | _ => none
+  | none =>
+    match cam.nodes[h]? with
+    | some w =>
+      if w.tag == 8 then
+        match cam.symbols[w.symIdx]? with
+        | some (.litEntry (.natVal 0)) =>
+          some (KName.mkSimple "Nat.zero", [], cam)
+        | some (.litEntry (.natVal (k + 1))) =>
+          let (kH, cam1) := mkHwCamLit (.natVal k) cam
+          some (KName.mkSimple "Nat.succ", [kH], cam1)
+        | _ => none
+      else none
+    | none => none
+
+/-- Pure handle-level general recursor $\iota$-reduction (`reduceHwCamIota?`) over `cam.recRules`. -/
+def reduceHwCamIota?
+    (subWhnf : HwExprCAM → CamHandle → CamHandle × HwExprCAM)
+    (cam : HwExprCAM)
+    (recSymIdx : Nat)
+    (argStack : List CamHandle) : Option (CamHandle × HwExprCAM) := do
+  let .constEntry recName recUs ← cam.symbols[recSymIdx]?
+  let r0 ← cam.recRules.find? (fun r => r.recName == recName && decide (argStack.length > r.numParams))
+  let prefixArgs := argStack.take r0.numParams
+  let majorRawH ← argStack[r0.numParams]?
+  let extraArgs := argStack.drop (r0.numParams + 1)
+  let (majorWhnfH, cam1) := subWhnf cam majorRawH
+  let (ctorName, ctorArgs, cam2) ← decomposeCamCtorOrLitSpine 32 cam1 majorWhnfH
+  let rule ← cam2.recRules.find? (fun r => r.recName == recName && r.ctorName == ctorName)
+  if ctorArgs.length >= rule.numFields then
+    let fieldArgs := ctorArgs.drop (ctorArgs.length - rule.numFields)
+    let (rhsInstH, cam3) :=
+      match cam2.consts.find? (fun c => c.name == recName) with
+      | some rc =>
+        match cam2.symbols[rc.symIdx]? with
+        | some (.constEntry _ pLvls) =>
+          match extractConstParamNames pLvls with
+          | some pNames =>
+            if pNames.length == recUs.length then
+              hwCamInstantiateLevelParams (cam2.nodes.length + 8) (pNames.zip recUs) rule.rhsHandle cam2
+            else (rule.rhsHandle, cam2)
+          | none => (rule.rhsHandle, cam2)
+        | _ => (rule.rhsHandle, cam2)
+      | none => (rule.rhsHandle, cam2)
+    some (rebuildCamAppSpine cam3 rhsInstH (prefixArgs ++ fieldArgs ++ extraArgs))
+  else
+    none
+
+/-- Single-cycle hardware WHNF transition parameterized by a bounded sub-WHNF callback `subWhnf`
+for major-premise $\iota$-reduction and `.proj` target normalization. -/
+def stepCamWhnfAt
+    (subWhnf : HwExprCAM → CamHandle → CamHandle × HwExprCAM)
+    (st : Zone1WhnfState) : Zone1WhnfState :=
   if st.done then
     st
   else
@@ -355,26 +430,63 @@ def stepCamWhnf (st : Zone1WhnfState) : Zone1WhnfState :=
         let (instH, cam') := hwCamInstantiateAt (st.cam.nodes.length + 4) w.h2 0 w.h1 st.cam
         { st with cam := cam', focusHandle := instH, steps := st.steps + 1 }
       else if w.tag == 3 then
-        match findHwCamConstDef? st.cam w.symIdx with
-        | some valH =>
-          { st with focusHandle := valH, steps := st.steps + 1 }
+        match findHwCamConstDefInst? st.cam w.symIdx with
+        | some (valH, cam') =>
+          { st with cam := cam', focusHandle := valH, steps := st.steps + 1 }
         | none =>
-          let (fullH, cam') := rebuildCamAppSpine st.cam st.focusHandle st.argStack
-          { st with cam := cam', focusHandle := fullH, argStack := [], done := true, steps := st.steps + 1 }
-      else if w.tag == 9 then
-        match decomposeCamCtorSpine 16 st.cam w.h0, st.cam.symbols[w.symIdx]? with
-        | some (_, ctorArgs), some (.projEntry _ idx) =>
-          match ctorArgs[idx]? with
-          | some fieldH => { st with focusHandle := fieldH, steps := st.steps + 1 }
+          match reduceHwCamIota? subWhnf st.cam w.symIdx st.argStack with
+          | some (redH, cam') =>
+            { st with cam := cam', focusHandle := redH, argStack := [], steps := st.steps + 1 }
           | none =>
             let (fullH, cam') := rebuildCamAppSpine st.cam st.focusHandle st.argStack
             { st with cam := cam', focusHandle := fullH, argStack := [], done := true, steps := st.steps + 1 }
+      else if w.tag == 9 then
+        let (sWhnfH, camS) := subWhnf st.cam w.h0
+        match decomposeCamCtorSpine 32 camS sWhnfH, camS.symbols[w.symIdx]? with
+        | some (_, ctorArgs), some (.projEntry _ idx) =>
+          match ctorArgs[idx]? with
+          | some fieldH => { st with cam := camS, focusHandle := fieldH, steps := st.steps + 1 }
+          | none =>
+            let (fullH, cam') := rebuildCamAppSpine camS st.focusHandle st.argStack
+            { st with cam := cam', focusHandle := fullH, argStack := [], done := true, steps := st.steps + 1 }
         | _, _ =>
-          let (fullH, cam') := rebuildCamAppSpine st.cam st.focusHandle st.argStack
+          let (fullH, cam') := rebuildCamAppSpine camS st.focusHandle st.argStack
           { st with cam := cam', focusHandle := fullH, argStack := [], done := true, steps := st.steps + 1 }
       else
         let (fullH, cam') := rebuildCamAppSpine st.cam st.focusHandle st.argStack
         { st with cam := cam', focusHandle := fullH, argStack := [], done := true, steps := st.steps + 1 }
+
+/-- Run `stepCamWhnfAt subWhnf` for up to `fuel` cycles. -/
+def runZone1WhnfAt
+    (subWhnf : HwExprCAM → CamHandle → CamHandle × HwExprCAM) :
+    Nat → Zone1WhnfState → Zone1WhnfState
+  | 0, st => st
+  | fuel + 1, st =>
+    if st.done then st else runZone1WhnfAt subWhnf fuel (stepCamWhnfAt subWhnf st)
+
+/-- Stratified handle-level WHNF engine (`whnfCamEngine`) with zero `WellFounded.fix`. -/
+def whnfCamEngine : Nat → HwExprCAM → CamHandle → CamHandle × HwExprCAM
+  | 0, cam, h => (h, cam)
+  | depth + 1, cam, h =>
+    let stF := runZone1WhnfAt (whnfCamEngine depth) 32 { cam := cam, focusHandle := h }
+    (stF.focusHandle, stF.cam)
+
+/-- Single-cycle hardware WHNF transition (`stepCamWhnf`) over `HwExprCAM` handles:
+* **Fast 1-Cycle Closed $\beta$-Redex (`w.tag == 4` with `lamW.tag == 5` and `argStack == []`)**:
+  Immediately invokes `hwCamInstantiateAt` on `lamW.h1` and `w.h1`. When `lamW.h1` has
+  `hasLooseBVar = false`, `hwCamInstantiateAt` takes the 1-cycle $O(1)$ closed-term bypass and
+  redirects `focusHandle := lamW.h1` in a single cycle without allocating any CAM nodes!
+* **General `.app` Spine Push (`w.tag == 4`)**: pushes `w.h1` onto `argStack` and focuses `w.h0`.
+* **`.lam` $\beta$-Pop (`w.tag == 5`)**: pops `argH` from `argStack` and instantiates `w.h1` via
+  `hwCamInstantiateAt`; if `argStack == []`, halts (`done := true`).
+* **`.letE` $\zeta$-Step (`w.tag == 7`)**: instantiates `w.h2` (`body`) with `w.h1` (`val`) via
+  `hwCamInstantiateAt`.
+* **`.const` $\delta / \iota$-Step (`w.tag == 3`)**: unfolds monomorphic or universe-polymorphic
+  constants in `cam.consts` (`findHwCamConstDefInst?`), or fires general `cam.recRules` $\iota$-reduction
+  (`reduceHwCamIota?`); otherwise rebuilds the application spine and halts.
+* **`.proj` Step (`w.tag == 9`)**: WHNF-reduces `w.h0` and projects field `idx` from a constructor spine. -/
+def stepCamWhnf (st : Zone1WhnfState) : Zone1WhnfState :=
+  stepCamWhnfAt (whnfCamEngine 3) st
 
 /-- Run the Zone-1 WHNF spine engine for up to `fuel` hardware clock cycles. -/
 def runZone1Whnf : Nat → Zone1WhnfState → Zone1WhnfState
@@ -403,7 +515,7 @@ theorem stepCamWhnf_closed_beta_one_step
     (hClosed : bodyW.hasLooseBVar = false) :
     stepCamWhnf { cam := cam, focusHandle := appH, argStack := [], done := false, steps := 0 } =
       { cam := cam, focusHandle := bodyH, argStack := [], done := false, steps := 1 } := by
-  unfold stepCamWhnf
+  unfold stepCamWhnf stepCamWhnfAt
   simp only [Bool.false_eq_true, ↓reduceIte, hApp, hAppTag, hAppL, hAppR, hLam, hLamTag, hLamR]
   have hBypass := (hwCamInstantiateAt_closed_bypass (cam.nodes.length + 3) bodyH 0 argH cam bodyW hBody hClosed).1
   have hFuelEq : cam.nodes.length + 4 = (cam.nodes.length + 3) + 1 := by omega

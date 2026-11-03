@@ -15,12 +15,18 @@
 //!   weaves the resulting 32-byte Merkle certificate receipt back into the `.obnb` cell via
 //!   `obend_cell_weave_cert`.
 
+use crate::apps::{find_workspace_root, get_flagship_app_detail, list_flagship_apps};
+use crate::fpga::{
+    execute_fpga_dpr_swap, execute_fpga_step, query_fpga_ila, query_fpga_telemetry,
+    FpgaDprSwapRequest, FpgaStepRequest,
+};
 use crate::viewport::{
     render_physical_viewport, render_projection_viewport, LawDialControl, LawDialMode,
     PhysicalViewportKind, ProjectionKind, RenderedViewport,
 };
-use obend_ffi::pool:: ensure_lean_thread_initialized;
+use obend_ffi::pool::ensure_lean_thread_initialized;
 use obend_ffi::session::ObendSession;
+use obend_fpga_hal::ObendFpgaHal;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -1201,10 +1207,16 @@ struct WorkbenchState {
     turn: u64,
     cells: Vec<WorkbenchCellState>,
     worker: PersistentSessionWorker,
+    fpga_hal: Arc<Mutex<ObendFpgaHal>>,
+    fpga_in_ports: Arc<Mutex<[u64; 32]>>,
 }
 
 impl WorkbenchState {
-    fn new(worker: PersistentSessionWorker) -> Self {
+    fn new(
+        worker: PersistentSessionWorker,
+        fpga_hal: Arc<Mutex<ObendFpgaHal>>,
+        fpga_in_ports: Arc<Mutex<[u64; 32]>>,
+    ) -> Self {
         let make_cell = |id: &str,
                          title: &str,
                          kind: ProjectionKind,
@@ -1336,6 +1348,8 @@ impl WorkbenchState {
             turn: 1,
             cells,
             worker,
+            fpga_hal,
+            fpga_in_ports,
         }
     }
 
@@ -1375,9 +1389,10 @@ impl WorkbenchState {
     }
 }
 
-/// Live local HTTP/JSON `.obnb` workbench daemon (`WS 31`).
+/// Live local HTTP/JSON `.obnb` workbench daemon (`WS 31` / `WS-4C-2`).
 pub struct WorkbenchServer {
     local_addr: SocketAddr,
+    fpga_hal: Arc<Mutex<ObendFpgaHal>>,
     shutdown: Arc<AtomicBool>,
     accept_thread: Option<JoinHandle<()>>,
 }
@@ -1396,9 +1411,19 @@ impl WorkbenchServer {
             .local_addr()
             .map_err(|e| format!("Failed to query local_addr: {e}"))?;
         let worker = PersistentSessionWorker::spawn()?;
-        let state = Arc::new(Mutex::new(WorkbenchState::new(worker)));
+        let hal = ObendFpgaHal::auto_connect()
+            .map_err(|e| format!("Failed to initialize ObendFpgaHal::auto_connect(): {e}"))?;
+        let fpga_hal = Arc::new(Mutex::new(hal));
+        let fpga_in_ports = Arc::new(Mutex::new([0u64; 32]));
+        let state = Arc::new(Mutex::new(WorkbenchState::new(
+            worker,
+            Arc::clone(&fpga_hal),
+            Arc::clone(&fpga_in_ports),
+        )));
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
+        let fpga_hal_accept = Arc::clone(&fpga_hal);
+        let fpga_in_accept = Arc::clone(&fpga_in_ports);
 
         let accept_thread = thread::spawn(move || {
             for stream_res in listener.incoming() {
@@ -1410,10 +1435,12 @@ impl WorkbenchServer {
                         break;
                     }
                     let state_conn = Arc::clone(&state);
+                    let hal_conn = Arc::clone(&fpga_hal_accept);
+                    let in_conn = Arc::clone(&fpga_in_accept);
                     thread::spawn(move || {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                        handle_http_connection(&mut stream, &state_conn);
+                        handle_http_connection(&mut stream, &state_conn, &hal_conn, &in_conn);
                     });
                 }
             }
@@ -1421,9 +1448,15 @@ impl WorkbenchServer {
 
         Ok(Self {
             local_addr,
+            fpga_hal,
             shutdown,
             accept_thread: Some(accept_thread),
         })
+    }
+
+    /// Thread-safe handle to the unified `ObendFpgaHal` (`Mutex<ObendFpgaHal>`) owned by this workbench.
+    pub fn fpga_hal(&self) -> &Arc<Mutex<ObendFpgaHal>> {
+        &self.fpga_hal
     }
 
     /// Bound local socket address (`127.0.0.1:<port>`).
@@ -1669,6 +1702,8 @@ fn categorize_obend_path(rel_path: &str) -> String {
         "examples".to_string()
     } else if rel_path.starts_with("ltuo/") {
         "ltuo".to_string()
+    } else if rel_path.starts_with("apps/") {
+        "apps".to_string()
     } else if let Some((first_dir, _)) = rel_path.split_once('/') {
         first_dir.to_string()
     } else {
@@ -1680,10 +1715,11 @@ fn category_sort_rank(cat: &str) -> usize {
     match cat {
         "world/physical" => 0,
         "world/market" => 1,
-        "tutorial" => 2,
-        "examples" => 3,
-        "ltuo" => 4,
-        _ => 5,
+        "apps" => 2,
+        "tutorial" => 3,
+        "examples" => 4,
+        "ltuo" => 5,
+        _ => 6,
     }
 }
 
@@ -1699,6 +1735,10 @@ fn walk_obend_dir(
     paths.sort();
     for p in paths {
         if p.is_dir() {
+            let dir_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if dir_name == "obj_dir" || dir_name.starts_with('.') {
+                continue;
+            }
             walk_obend_dir(root, &p, out);
         } else if p.extension().and_then(|s| s.to_str()) == Some("obend") {
             let Ok(rel) = p.strip_prefix(root) else {
@@ -1737,11 +1777,20 @@ fn walk_obend_dir(
     }
 }
 
-/// Scan `lean/tests/obend-source/` for all real `.obend` workspace files.
+/// Scan `lean/tests/obend-source/` and `apps/<slug>/` for all real `.obend` workspace files.
 pub fn scan_workspace_tree() -> WorkspaceTreeResponse {
     let root = find_obend_source_root();
     let mut files = Vec::new();
     walk_obend_dir(&root, &root, &mut files);
+
+    let ws_root = find_workspace_root();
+    for app in &crate::apps::FLAGSHIP_APPS {
+        let app_dir = ws_root.join("apps").join(app.slug);
+        if app_dir.is_dir() {
+            walk_obend_dir(&ws_root, &app_dir, &mut files);
+        }
+    }
+
     files.sort_by(|a, b| {
         category_sort_rank(&a.category)
             .cmp(&category_sort_rank(&b.category))
@@ -1749,7 +1798,14 @@ pub fn scan_workspace_tree() -> WorkspaceTreeResponse {
             .then_with(|| a.path.cmp(&b.path))
     });
     let mut categories: Vec<String> = Vec::new();
-    for priority in ["world/physical", "world/market", "tutorial", "examples", "ltuo"] {
+    for priority in [
+        "world/physical",
+        "world/market",
+        "apps",
+        "tutorial",
+        "examples",
+        "ltuo",
+    ] {
         if files.iter().any(|f| f.category == priority) {
             categories.push(priority.to_string());
         }
@@ -1974,6 +2030,14 @@ pub fn split_literate_obend_sections(
     (sections, spec_map)
 }
 
+fn resolve_workspace_obend_path(trimmed_rel: &str) -> std::path::PathBuf {
+    if trimmed_rel.starts_with("apps/") {
+        find_workspace_root().join(trimmed_rel)
+    } else {
+        find_obend_source_root().join(trimmed_rel)
+    }
+}
+
 fn collect_import_dep_modules(
     base_dir: &std::path::Path,
     source: &str,
@@ -1982,15 +2046,26 @@ fn collect_import_dep_modules(
 ) {
     for line in source.lines() {
         let t = line.trim();
-        if let Some(rest) = t.strip_prefix("import ./") {
-            let rel_file = rest.split_whitespace().next().unwrap_or("");
-            if rel_file.ends_with(".obend") {
+        let Some(after_import) = t.strip_prefix("import ") else {
+            continue;
+        };
+        let raw_tok = after_import
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
+        if let Some(rel_file) = raw_tok.strip_prefix("./") {
+            if rel_file.ends_with(".obend") && !rel_file.contains("..") {
                 let dep_mod_name = module_name_of_path(rel_file);
                 if visited.contains(&dep_mod_name) {
                     continue;
                 }
                 let candidate = base_dir.join(rel_file);
-                if let Ok(dep_src) = std::fs::read_to_string(&candidate) {
+                let stdlib_fallback =
+                    find_workspace_root().join("lean/stdlib/physical").join(rel_file);
+                let dep_src_res = std::fs::read_to_string(&candidate)
+                    .or_else(|_| std::fs::read_to_string(&stdlib_fallback));
+                if let Ok(dep_src) = dep_src_res {
                     visited.push(dep_mod_name.clone());
                     collect_import_dep_modules(base_dir, &dep_src, visited, out_deps);
                     out_deps.push((dep_mod_name, dep_src));
@@ -2217,10 +2292,10 @@ fn elaborate_obend_via_worker(
 
     let (literate_sections, spec_map) = split_literate_obend_sections(&source);
 
-    // Resolve any `import ./Foo.obend` dependencies relative to the file's directory in `lean/tests/obend-source`
+    // Resolve any `import ./Foo.obend` dependencies relative to the file's directory
     let root = find_obend_source_root();
     let base_dir = if let Some(ref rel_p) = path {
-        root.join(rel_p)
+        resolve_workspace_obend_path(rel_p)
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| root.clone())
@@ -3747,7 +3822,12 @@ loadWorkspaceFile(ACTIVE_WORKSPACE_PATH);
     )
 }
 
-fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchState>>) {
+fn handle_http_connection(
+    stream: &mut TcpStream,
+    state: &Arc<Mutex<WorkbenchState>>,
+    fpga_hal: &Arc<Mutex<ObendFpgaHal>>,
+    fpga_in_ports: &Arc<Mutex<[u64; 32]>>,
+) {
     let (method, raw_path, body) = match read_http_request(stream) {
         Ok(req) => req,
         Err(_) => return,
@@ -3781,7 +3861,7 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
                 write_json_response(stream, 400, "Bad Request", &err_json);
                 return;
             }
-            let full_path = find_obend_source_root().join(trimmed_rel);
+            let full_path = resolve_workspace_obend_path(trimmed_rel);
             let Ok(source) = std::fs::read_to_string(&full_path) else {
                 let err_json = serde_json::json!({
                     "error": format!("Workspace .obend file not found: {trimmed_rel}")
@@ -3842,7 +3922,7 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
             let source = if let Some(src) = req.source.filter(|s| !s.trim().is_empty()) {
                 src
             } else if let Some(ref p) = clean_path {
-                let full_path = find_obend_source_root().join(p);
+                let full_path = resolve_workspace_obend_path(p);
                 match std::fs::read_to_string(&full_path) {
                     Ok(s) => s,
                     Err(_) => {
@@ -4261,6 +4341,135 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
             };
             let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
             write_json_response(stream, 200, "OK", &json);
+        }
+        ("GET", "/api/fpga/telemetry") => {
+            let guard = fpga_hal
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match query_fpga_telemetry(&guard) {
+                Ok(resp) => {
+                    let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err(e) => {
+                    let err_json = serde_json::json!({ "error": e }).to_string();
+                    write_json_response(stream, 500, "Internal Server Error", &err_json);
+                }
+            }
+        }
+        ("GET", "/api/fpga/ila") => {
+            let hal_guard = fpga_hal
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let in_guard = fpga_in_ports
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match query_fpga_ila(&hal_guard, &in_guard) {
+                Ok(snap) => {
+                    let json = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err(e) => {
+                    let err_json = serde_json::json!({ "error": e }).to_string();
+                    write_json_response(stream, 500, "Internal Server Error", &err_json);
+                }
+            }
+        }
+        ("POST", "/api/fpga/step") => {
+            let req: FpgaStepRequest = if body.trim().is_empty() {
+                FpgaStepRequest::default()
+            } else {
+                match serde_json::from_str(&body) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err_json = serde_json::json!({
+                            "error": format!("Invalid FpgaStepRequest JSON: {e}")
+                        })
+                        .to_string();
+                        write_json_response(stream, 400, "Bad Request", &err_json);
+                        return;
+                    }
+                }
+            };
+            let mut hal_guard = fpga_hal
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut in_guard = fpga_in_ports
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match execute_fpga_step(&mut hal_guard, &mut in_guard, req) {
+                Ok(resp) => {
+                    let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err((code, msg)) => {
+                    let status_text = if code == 400 {
+                        "Bad Request"
+                    } else {
+                        "Internal Server Error"
+                    };
+                    let err_json = serde_json::json!({ "error": msg }).to_string();
+                    write_json_response(stream, code, status_text, &err_json);
+                }
+            }
+        }
+        ("POST", "/api/fpga/dpr-swap") => {
+            let req: FpgaDprSwapRequest = match serde_json::from_str(&body) {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_json = serde_json::json!({
+                        "error": format!("Invalid FpgaDprSwapRequest JSON: {e}")
+                    })
+                    .to_string();
+                    write_json_response(stream, 400, "Bad Request", &err_json);
+                    return;
+                }
+            };
+            let mut hal_guard = fpga_hal
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let in_guard = fpga_in_ports
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match execute_fpga_dpr_swap(&mut hal_guard, &in_guard, req) {
+                Ok(resp) => {
+                    let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err((code, msg)) => {
+                    let status_text = if code == 400 {
+                        "Bad Request"
+                    } else {
+                        "Internal Server Error"
+                    };
+                    let err_json = serde_json::json!({ "error": msg }).to_string();
+                    write_json_response(stream, code, status_text, &err_json);
+                }
+            }
+        }
+        ("GET", "/api/apps") => {
+            let list = list_flagship_apps();
+            let json = serde_json::to_string(&list).unwrap_or_else(|_| "{}".to_string());
+            write_json_response(stream, 200, "OK", &json);
+        }
+        ("GET", p) if p.starts_with("/api/apps/") => {
+            let raw_slug = &p["/api/apps/".len()..];
+            let decoded_slug = url_percent_decode(raw_slug);
+            match get_flagship_app_detail(&decoded_slug) {
+                Ok(detail) => {
+                    let json = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_string());
+                    write_json_response(stream, 200, "OK", &json);
+                }
+                Err((code, msg)) => {
+                    let status_text = match code {
+                        400 => "Bad Request",
+                        404 => "Not Found",
+                        _ => "Internal Server Error",
+                    };
+                    let err_json = serde_json::json!({ "error": msg }).to_string();
+                    write_json_response(stream, code, status_text, &err_json);
+                }
+            }
         }
         _ => {
             let err_json =

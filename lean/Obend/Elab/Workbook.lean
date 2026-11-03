@@ -422,6 +422,13 @@ def elaborateObendSource (src : String) (moduleName : String := "Main")
   let acc ← match Obend.Spec.FrontEnd.accept lowering with
     | .ok a => pure a
     | .error d => throw (formatDiagnostic d)
+  for c in decodedMod.contracts do
+    if !c.steps.isEmpty then
+      match Obend.Spec.FrontEnd.checkContractIsarCert Obend.Spec.FrontEnd.defaultAutoCertAdmitsTag decodedMod c with
+      | .ok _ => pure ()
+      | .error d => throw (formatDiagnostic d)
+    else if !Obend.Elab.AutoCert.verifyContractAutoCertSteps Obend.Elab.AutoCert.autoCertFormats moduleName none c then
+      throw s!"elaborate: refused (autocert-synthesis): contract {c.name} failed automatic certificate synthesis"
   let erasedTerm := acc.erased
   let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
   let rawFields := Obend.Logic.Program.knotFields rootTerm
@@ -1417,6 +1424,13 @@ private meta def metaElaborateObendSource (src : String) (moduleName : String :=
   let acc ← match Obend.Spec.FrontEnd.accept lowering with
     | .ok a => pure a
     | .error d => throw s!"{d.stage}: {d.message}"
+  for c in decodedMod.contracts do
+    if !c.steps.isEmpty then
+      match Obend.Spec.FrontEnd.checkContractIsarCert Obend.Spec.FrontEnd.defaultAutoCertAdmitsTag decodedMod c with
+      | .ok _ => pure ()
+      | .error d => throw s!"{d.stage}: {d.message}"
+    else if !Obend.Elab.AutoCert.verifyContractAutoCertSteps Obend.Elab.AutoCert.autoCertFormats moduleName none c then
+      throw s!"elaborate: refused (autocert-synthesis): contract {c.name} failed automatic certificate synthesis"
   let erasedTerm := acc.erased
   let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
   let rawFields := Obend.Logic.Program.knotFields rootTerm
@@ -1639,6 +1653,25 @@ meta def defineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit 
   }
   liftCoreM <| Lean.withExporting (isExporting := true) <| addDecl decl
 
+meta def tryDefineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit := do
+  let env ← getEnv
+  if env.contains thmName then
+    return ()
+  let decl : Declaration := .thmDecl {
+    name := thmName
+    levelParams := []
+    type := ty
+    value := val
+  }
+  let checkRes ← liftCoreM do
+    let opts ← Lean.getOptions
+    return (env.setExporting true).unlockAsync.addDeclCore
+      (Lean.Core.getMaxHeartbeats opts).toUSize
+      (Lean.maxRecDepth.get opts).toUSize
+      decl none (doCheck := true)
+  if let .ok _ := checkRes then
+    liftCoreM <| Lean.withExporting (isExporting := true) <| addDecl decl
+
 /-- Emit all kernel-checked constants and theorems for a `WorkbookPackage` into namespace `ns`. -/
 meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM Unit := do
   modifyEnv fun env => obendWorkbookExt.addEntry env (ns, pkg)
@@ -1668,7 +1701,7 @@ meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandEl
         let rhs := mkApp2 (mkConst ``Option.some [Level.zero]) (mkConst ``LExpr) (mkConst dLExprName)
         let eqTy := mkApp3 (mkConst ``Eq [Level.succ Level.zero]) optTy lhs rhs
         let eqPrf := mkApp2 (mkConst ``Eq.refl [Level.succ Level.zero]) optTy rhs
-        defineWorkbookThm (ns ++ Name.mkSimple (d.name ++ "_lowerTerm_eq")) eqTy eqPrf
+        tryDefineWorkbookThm (ns ++ Name.mkSimple (d.name ++ "_lowerTerm_eq")) eqTy eqPrf
     if let some comp := d.composition? then
       defineWorkbookConst (ns ++ Name.mkSimple (d.name ++ "_comp")) comp
     if let some bk := d.book? then

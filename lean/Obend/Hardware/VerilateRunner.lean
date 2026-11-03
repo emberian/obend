@@ -350,22 +350,25 @@ def stripOutPrefix (s : String) : String :=
 def applyNatArgs (fn : Term) (args : List Nat) : Term :=
   args.foldl (fun acc a => .app acc (.nat a)) fn
 
-/-- Evaluate a single `DifferentialVector` across `numCycles` clock cycles via `HDL.runModuleTrace`
-    and cross-check against `MachineFast.evalFuelFast` on the source `Composition` when provided. -/
-def evaluateDifferentialVector
+/-- Initial register environment after the synchronous reset pulse (`top->rst = 1; tick(); top->rst = 0;`). -/
+def initialModuleRegs (m : RtlModule) : Nat → BitVec 64 := fun rIdx =>
+  match m.regs.find? (fun r => r.regIdx == rIdx) with
+  | some r => match r.resetKind with | .syncReset v => v | .resetFree => 0#64
+  | none => 0#64
+
+/-- Evaluate a single `DifferentialVector` starting from register state `curRegs` across `numCycles`
+    clock cycles via `HDL.runModuleTrace`, returning `(nextRegs, DifferentialVector)`. -/
+def evaluateDifferentialVectorFromRegs
     (m : RtlModule)
     (comp? : Option Composition)
     (numCycles : Nat)
-    (vecIdx : Nat) : DifferentialVector :=
+    (curRegs : Nat → BitVec 64)
+    (vecIdx : Nat) : (Nat → BitVec 64) × DifferentialVector :=
   let portPairs : List (String × BitVec 64) :=
     (List.range m.inputNames.length).map fun pIdx =>
       (m.inputNames.getD pIdx "in_0", genVectorWord vecIdx pIdx)
   let inEnv : Nat → BitVec 64 := fun pIdx => genVectorWord vecIdx pIdx
-  let initRegs : Nat → BitVec 64 := fun rIdx =>
-    match m.regs.find? (fun r => r.regIdx == rIdx) with
-    | some r => match r.resetKind with | .syncReset v => v | .resetFree => 0#64
-    | none => 0#64
-  let finalRegs := runModuleTrace m initRegs (mkHeldCycleTrace numCycles inEnv)
+  let finalRegs := runModuleTrace m curRegs (mkHeldCycleTrace numCycles inEnv)
   let expectedOuts := evalModuleOutputs m inEnv finalRegs
   let arg0Nat := (inEnv 0).toNat
   let allArgNats := (List.range (max m.inputNames.length 1)).map (fun i => (inEnv i).toNat)
@@ -390,17 +393,38 @@ def evaluateDifferentialVector
           match evalFuelFast 4000 directTerm with
           | some vm => vm == hwVal
           | none => true
-  { vecIdx          := vecIdx
-  , portInputs      := portPairs
-  , expectedOutputs := expectedOuts
-  , machineAgreed   := machineOk }
+  ( finalRegs
+  , { vecIdx          := vecIdx
+    , portInputs      := portPairs
+    , expectedOutputs := expectedOuts
+    , machineAgreed   := machineOk } )
 
-/-- Generate all `numVectors` differential reference vectors for `m`. -/
+/-- Evaluate a single `DifferentialVector` from initial synchronous-reset state across `numCycles` clock cycles. -/
+def evaluateDifferentialVector
+    (m : RtlModule)
+    (comp? : Option Composition)
+    (numCycles : Nat)
+    (vecIdx : Nat) : DifferentialVector :=
+  (evaluateDifferentialVectorFromRegs m comp? numCycles (initialModuleRegs m) vecIdx).2
+
+/-- Thread register state continuously across a list of vector indices (`N × C` continuous cycles). -/
+def generateDifferentialVectorsAux
+    (m : RtlModule)
+    (comp? : Option Composition)
+    (numCycles : Nat)
+    (curRegs : Nat → BitVec 64) : List Nat → List DifferentialVector
+  | [] => []
+  | vIdx :: rest =>
+    let (nextRegs, vec) := evaluateDifferentialVectorFromRegs m comp? numCycles curRegs vIdx
+    vec :: generateDifferentialVectorsAux m comp? numCycles nextRegs rest
+
+/-- Generate all `numVectors` differential reference vectors for `m` across `numVectors × numCycles`
+    continuous clock cycles after synchronous reset. -/
 def generateDifferentialVectors
     (m : RtlModule)
     (comp? : Option Composition)
     (numVectors numCycles : Nat) : List DifferentialVector :=
-  (List.range (max numVectors 1)).map (evaluateDifferentialVector m comp? (max numCycles 1))
+  generateDifferentialVectorsAux m comp? (max numCycles 1) (initialModuleRegs m) (List.range (max numVectors 1))
 
 /-- Theorem: `runModuleTrace` over an appended trace equals sequential `runModuleTrace` composition. -/
 theorem runModuleTrace_append

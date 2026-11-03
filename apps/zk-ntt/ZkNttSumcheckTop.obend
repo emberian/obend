@@ -8,52 +8,91 @@ import ./SumcheckRoundPoly.obend as Sumcheck
 law bounded_ntt_degree: new.nttDegree <= 256
 
 record ZkNttSumcheckTopTarget:
+  goldilocksPrime() -> Nat
   goldilocksEpsilon() -> Nat
   numStages() -> Nat
+  canon64(x: Nat) -> Nat
+  fieldAdd(a: Nat, b: Nat) -> Nat
+  fieldSub(a: Nat, b: Nat) -> Nat
+  goldilocksReduce128(lo: Nat, hi: Nat) -> Nat
+  fieldMul(a: Nat, b: Nat) -> Nat
   butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
   butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  stepAccG0(accG0: Nat, f0: Nat, clear: Nat) -> Nat
+  stepAccG1(accG1: Nat, f1: Nat, clear: Nat) -> Nat
+  sumcheckRoundClaim(accG0: Nat, accG1: Nat) -> Nat
   sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat
-  pipelineStep(u: Nat, v: Nat) -> Nat
 
 spec Layer1GoldilocksSpec for ZkNttSumcheckTopTarget:
+  requires goldilocksPrime() -> Nat
   requires goldilocksEpsilon() -> Nat
   requires numStages() -> Nat
+  def goldilocksPrime() -> Nat:
+    0xFFFFFFFF00000001n
   def goldilocksEpsilon() -> Nat:
-    4294967295n
+    0xFFFFFFFFn
+  def numStages() -> Nat:
+    8n
+  def canon64(x: Nat) -> Nat:
+    let w = x & 0xFFFFFFFFFFFFFFFFn in if self.goldilocksPrime <= w then w - self.goldilocksPrime else w
+  def fieldAdd(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let remP = self.goldilocksPrime - cb in if remP <= ca then ca - remP else ca + cb
+  def fieldSub(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in if cb <= ca then ca - cb else (self.goldilocksPrime - cb) + ca
+  def goldilocksReduce128(lo: Nat, hi: Nat) -> Nat:
+    let hiLo = hi & 0xFFFFFFFFn in let hiHi = (hi >>> 32n) & 0xFFFFFFFFn in let mid = (hiLo << 32n) - hiLo in self.fieldSub(self.fieldAdd(lo, mid), hiHi)
+  def fieldMul(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let aLo = ca & 0xFFFFFFFFn in let aHi = (ca >>> 32n) & 0xFFFFFFFFn in let bLo = cb & 0xFFFFFFFFn in let bHi = (cb >>> 32n) & 0xFFFFFFFFn in let p00 = aLo * bLo in let p01 = aLo * bHi in let p10 = aHi * bLo in let p11 = aHi * bHi in let mid32 = ((p00 >>> 32n) & 0xFFFFFFFFn) + (p01 & 0xFFFFFFFFn) + (p10 & 0xFFFFFFFFn) in let lo = (p00 & 0xFFFFFFFFn) | ((mid32 & 0xFFFFFFFFn) << 32n) in let hi = p11 + ((p01 >>> 32n) & 0xFFFFFFFFn) + ((p10 >>> 32n) & 0xFFFFFFFFn) + (mid32 >>> 32n) in self.goldilocksReduce128(lo, hi)
+  def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    self.fieldAdd(u, self.fieldMul(v, twiddle))
+  def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    self.fieldSub(u, self.fieldMul(v, twiddle))
+  def stepAccG0(accG0: Nat, f0: Nat, clear: Nat) -> Nat:
+    if clear == 1n then self.canon64(f0) else self.fieldAdd(accG0, f0)
+  def stepAccG1(accG1: Nat, f1: Nat, clear: Nat) -> Nat:
+    if clear == 1n then self.canon64(f1) else self.fieldAdd(accG1, f1)
+  def sumcheckRoundClaim(accG0: Nat, accG1: Nat) -> Nat:
+    self.fieldAdd(accG0, accG1)
+  def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
+    self.fieldAdd(f0, self.fieldMul(rChallenge, self.fieldSub(f1, f0)))
+
+spec Layer2ButterflyOverride for ZkNttSumcheckTopTarget:
+  requires fieldAdd(a: Nat, b: Nat) -> Nat
+  requires fieldSub(a: Nat, b: Nat) -> Nat
+  requires butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  requires butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat
   def numStages() -> Nat:
     8n
   def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
-    u + v * twiddle
+    if twiddle == 1n then self.fieldAdd(u, v) else super.butterflyEven(u, v, twiddle)
   def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
-    u - v * twiddle
-  def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
-    f0 + rChallenge * (f1 - f0)
-  def pipelineStep(u: Nat, v: Nat) -> Nat:
-    u + v + self.numStages
-  claim zk_top_pipeline_open_recursion(u: Nat, v: Nat): self.pipelineStep(u, v) == u + v + self.numStages
-
-spec Layer2ButterflyOverride for ZkNttSumcheckTopTarget:
-  requires pipelineStep(u: Nat, v: Nat) -> Nat
-  def numStages() -> Nat:
-    8n
-  def pipelineStep(u: Nat, v: Nat) -> Nat:
-    super.pipelineStep(u, v) + 4n
+    if twiddle == 1n then self.fieldSub(u, v) else super.butterflyOdd(u, v, twiddle)
 
 spec Layer3SumcheckOverride for ZkNttSumcheckTopTarget:
-  requires pipelineStep(u: Nat, v: Nat) -> Nat
+  requires canon64(x: Nat) -> Nat
+  requires sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat
   def goldilocksEpsilon() -> Nat:
-    4294967295n
-  def pipelineStep(u: Nat, v: Nat) -> Nat:
-    super.pipelineStep(u, v) + 8n
+    0xFFFFFFFFn
+  def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
+    if rChallenge == 0n then self.canon64(f0) else (if rChallenge == 1n then self.canon64(f1) else super.sumcheckFold(f0, f1, rChallenge))
+  claim zk_top_reduce_max128() by weave: self.goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn) == 0xFFFFFFFC00000004n
+  claim zk_top_butterfly_involution() by weave: self.fieldAdd(self.butterflyEven(10n, 6n, 7n), self.butterflyOdd(10n, 6n, 7n)) == 20n
+  claim zk_top_sumcheck_fold() by weave: self.sumcheckFold(18n, 10n, 2n) == 2n
 
 def seedZkNttSumcheckTop() -> ZkNttSumcheckTopTarget:
-  {goldilocksEpsilon: 0n, numStages: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n, pipelineStep: fn(u: Nat, v: Nat) -> Nat: 0n}
+  {goldilocksPrime: 0n, goldilocksEpsilon: 0n, numStages: 0n, canon64: fn(x: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, goldilocksReduce128: fn(lo: Nat, hi: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, stepAccG0: fn(a: Nat, f: Nat, c: Nat) -> Nat: 0n, stepAccG1: fn(a: Nat, f: Nat, c: Nat) -> Nat: 0n, sumcheckRoundClaim: fn(a: Nat, b: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n}
 
 def zkNttSumcheckTop() -> ZkNttSumcheckTopTarget:
   fix(compose(compose(Layer1GoldilocksSpec, Layer2ButterflyOverride), Layer3SumcheckOverride), seedZkNttSumcheckTop())
 
 def evalNttButterflyPairSum() -> Nat:
-  zkNttSumcheckTop().butterflyEven(50n, 6n, 7n) + zkNttSumcheckTop().butterflyOdd(50n, 6n, 7n)
+  let top = zkNttSumcheckTop()
+  top.fieldAdd(top.butterflyEven(50n, 6n, 7n), top.butterflyOdd(50n, 6n, 7n))
 
 def evalSumcheckTwoRounds() -> Nat:
-  zkNttSumcheckTop().sumcheckFold(34n, 42n, 2n)
+  let top = zkNttSumcheckTop()
+  top.sumcheckFold(34n, 42n, 2n)
+
+def evalZkCrossLayerConsistency() -> Bool:
+  let top = zkNttSumcheckTop()
+  (Field.goldilocksEngine().goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn) == top.goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn)) && (Bfly.nttButterflyEngine().butterflyOdd(10n, 6n, 7n) == top.butterflyOdd(10n, 6n, 7n)) && (Sumcheck.sumcheckEngine().sumcheckFold(18n, 10n, 2n) == top.sumcheckFold(18n, 10n, 2n))

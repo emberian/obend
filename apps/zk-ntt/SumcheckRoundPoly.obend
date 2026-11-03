@@ -1,5 +1,5 @@
 edition ObjectiveBend 1
-# Flagship App #4 (Layer 3): Multilinear Sumcheck Round Polynomial Evaluator & Folding Layer
+# Flagship App #4 (Layer 3): Stateful Multilinear Sumcheck Round Polynomial Accumulator & Folding Layer
 
 import ./GoldilocksField.obend as Field
 import ./NttButterflyRadix2.obend as Bfly
@@ -7,37 +7,67 @@ import ./NttButterflyRadix2.obend as Bfly
 law monotone_sumcheck_round: monotone(sumcheckRoundIdx)
 
 record SumcheckRoundTarget:
+  goldilocksPrime() -> Nat
   numSumcheckRounds() -> Nat
-  butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
-  sumcheckRoundClaim(f0: Nat, f1: Nat) -> Nat
+  canon64(x: Nat) -> Nat
+  fieldAdd(a: Nat, b: Nat) -> Nat
+  fieldSub(a: Nat, b: Nat) -> Nat
+  goldilocksReduce128(lo: Nat, hi: Nat) -> Nat
+  fieldMul(a: Nat, b: Nat) -> Nat
+  stepAccG0(accG0: Nat, f0: Nat, clear: Nat) -> Nat
+  stepAccG1(accG1: Nat, f1: Nat, clear: Nat) -> Nat
+  stepAccG2(accG2: Nat, f0: Nat, f1: Nat, clear: Nat) -> Nat
+  sumcheckRoundClaim(accG0: Nat, accG1: Nat) -> Nat
   sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat
-  roundStep(f0: Nat, f1: Nat) -> Nat
 
 spec BaseSumcheckRoundSpec for SumcheckRoundTarget:
+  requires goldilocksPrime() -> Nat
   requires numSumcheckRounds() -> Nat
+  def goldilocksPrime() -> Nat:
+    0xFFFFFFFF00000001n
   def numSumcheckRounds() -> Nat:
     8n
-  def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
-    u + v * twiddle
-  def sumcheckRoundClaim(f0: Nat, f1: Nat) -> Nat:
-    f0 + f1
+  def canon64(x: Nat) -> Nat:
+    let w = x & 0xFFFFFFFFFFFFFFFFn in if self.goldilocksPrime <= w then w - self.goldilocksPrime else w
+  def fieldAdd(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let remP = self.goldilocksPrime - cb in if remP <= ca then ca - remP else ca + cb
+  def fieldSub(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in if cb <= ca then ca - cb else (self.goldilocksPrime - cb) + ca
+  def goldilocksReduce128(lo: Nat, hi: Nat) -> Nat:
+    let hiLo = hi & 0xFFFFFFFFn in let hiHi = (hi >>> 32n) & 0xFFFFFFFFn in let mid = (hiLo << 32n) - hiLo in self.fieldSub(self.fieldAdd(lo, mid), hiHi)
+  def fieldMul(a: Nat, b: Nat) -> Nat:
+    let ca = self.canon64(a) in let cb = self.canon64(b) in let aLo = ca & 0xFFFFFFFFn in let aHi = (ca >>> 32n) & 0xFFFFFFFFn in let bLo = cb & 0xFFFFFFFFn in let bHi = (cb >>> 32n) & 0xFFFFFFFFn in let p00 = aLo * bLo in let p01 = aLo * bHi in let p10 = aHi * bLo in let p11 = aHi * bHi in let mid32 = ((p00 >>> 32n) & 0xFFFFFFFFn) + (p01 & 0xFFFFFFFFn) + (p10 & 0xFFFFFFFFn) in let lo = (p00 & 0xFFFFFFFFn) | ((mid32 & 0xFFFFFFFFn) << 32n) in let hi = p11 + ((p01 >>> 32n) & 0xFFFFFFFFn) + ((p10 >>> 32n) & 0xFFFFFFFFn) + (mid32 >>> 32n) in self.goldilocksReduce128(lo, hi)
+  def stepAccG0(accG0: Nat, f0: Nat, clear: Nat) -> Nat:
+    if clear == 1n then self.canon64(f0) else self.fieldAdd(accG0, f0)
+  def stepAccG1(accG1: Nat, f1: Nat, clear: Nat) -> Nat:
+    if clear == 1n then self.canon64(f1) else self.fieldAdd(accG1, f1)
+  def stepAccG2(accG2: Nat, f0: Nat, f1: Nat, clear: Nat) -> Nat:
+    let g2Term = self.fieldSub(self.fieldAdd(f1, f1), f0) in if clear == 1n then g2Term else self.fieldAdd(accG2, g2Term)
+  def sumcheckRoundClaim(accG0: Nat, accG1: Nat) -> Nat:
+    self.fieldAdd(accG0, accG1)
   def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
-    f0 + rChallenge * (f1 - f0)
-  def roundStep(f0: Nat, f1: Nat) -> Nat:
-    f0 + f1 + self.numSumcheckRounds
-  claim sumcheck_round_consistency(): self.sumcheckRoundClaim(14n, 26n) == 40n
-  claim sumcheck_fold_eval(): self.sumcheckFold(10n, 18n, 3n) == 34n
-  claim fused_butterfly_sumcheck_eval(): self.sumcheckFold(self.butterflyEven(50n, 6n, 7n), 92n, 0n) == 92n
+    self.fieldAdd(f0, self.fieldMul(rChallenge, self.fieldSub(f1, f0)))
+  claim sumcheck_round_consistency() by weave: self.sumcheckRoundClaim(0xFFFFFFFF00000000n, 41n) == 40n
+  claim sumcheck_fold_eval() by weave: self.sumcheckFold(10n, 18n, 3n) == 34n
+  claim sumcheck_fold_wrap_sub() by weave: self.sumcheckFold(18n, 10n, 2n) == 2n
 
 spec FusedSumcheckRoundOverride for SumcheckRoundTarget:
-  requires roundStep(f0: Nat, f1: Nat) -> Nat
+  requires canon64(x: Nat) -> Nat
+  requires sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat
   def numSumcheckRounds() -> Nat:
     8n
-  def roundStep(f0: Nat, f1: Nat) -> Nat:
-    super.roundStep(f0, f1) + 2n
+  def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
+    if rChallenge == 0n then self.canon64(f0) else (if rChallenge == 1n then self.canon64(f1) else super.sumcheckFold(f0, f1, rChallenge))
+  claim sumcheck_stateful_acc_two_pairs() by weave: self.sumcheckRoundClaim(self.stepAccG0(self.stepAccG0(0n, 10n, 1n), 4n, 0n), self.stepAccG1(self.stepAccG1(0n, 18n, 1n), 8n, 0n)) == 40n
 
 def seedSumcheckRound() -> SumcheckRoundTarget:
-  {numSumcheckRounds: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, sumcheckRoundClaim: fn(a: Nat, b: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n, roundStep: fn(a: Nat, b: Nat) -> Nat: 0n}
+  {goldilocksPrime: 0n, numSumcheckRounds: 0n, canon64: fn(x: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, goldilocksReduce128: fn(lo: Nat, hi: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n, stepAccG0: fn(a: Nat, f: Nat, c: Nat) -> Nat: 0n, stepAccG1: fn(a: Nat, f: Nat, c: Nat) -> Nat: 0n, stepAccG2: fn(a: Nat, f0: Nat, f1: Nat, c: Nat) -> Nat: 0n, sumcheckRoundClaim: fn(a: Nat, b: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n}
 
 def sumcheckEngine() -> SumcheckRoundTarget:
   fix(compose(BaseSumcheckRoundSpec, FusedSumcheckRoundOverride), seedSumcheckRound())
+
+def verifySumcheckCrossModule() -> Bool:
+  let f = Field.goldilocksEngine()
+  let b = Bfly.nttButterflyEngine()
+  let s = sumcheckEngine()
+  s.sumcheckFold(b.butterflyEven(50n, 6n, 7n), b.butterflyOdd(50n, 6n, 7n), 2n) == f.fieldSub(b.butterflyOdd(50n, 6n, 7n), 84n)

@@ -20,6 +20,14 @@ int main(int argc, char** argv) {
     dut->trace(tfp, 99);
     tfp->open("foc_hil_trace.vcd");
 
+    obend::foc_hil::Rk4PmsmFcmlPlant open_loop_plant;
+    for (uint64_t ol_step = 0; ol_step < 150000; ++ol_step) {
+        // Zero active balancing command (cap_bal_mv = 0): verify plant does NOT self-balance
+        open_loop_plant.step_rk4(0.0, 180000.0, 0.0, true, ol_step);
+    }
+    const double open_loop_cap_unbal_15ms = std::abs(open_loop_plant.state.cap_unbal_volt);
+    const bool open_loop_unbalanced_ok = (open_loop_cap_unbal_15ms > 10.0);
+
     obend::foc_hil::Rk4PmsmFcmlPlant plant;
 
     constexpr uint64_t TOTAL_STEPS       = 500000; // 50 ms at dt = 100 ns
@@ -107,11 +115,13 @@ int main(int argc, char** argv) {
             dut->dpr_high_bw_sel = 1;
         }
 
-        // Scenario 4: 155 C over-temperature fault injection at t = 40.0 ms
+        // Scenario 4: 155 C over-temperature fault injection at t = 40.0 ms, asserted
+        // SIMULTANEOUSLY with dpr_isolate_en = 1 to verify safety dominance over DPR hold
         if (step == OVERTEMP_TRIP_IDX) {
             plant.overtemp_injected = true;
             plant.state.winding_temp_c = 155.0;
             dut->winding_temp_c = 155;
+            dut->dpr_isolate_en = 1;
         }
         // Cool down below 155 C at t = 45.0 ms to verify write-once latch remains tripped
         if (step == COOL_CHECK_IDX) {
@@ -141,6 +151,7 @@ int main(int argc, char** argv) {
         }
 
         // Verify 1-cycle over-temperature hardware gate-kill at step == OVERTEMP_TRIP_IDX
+        // even with dpr_isolate_en == 1 active simultaneously
         if (step == OVERTEMP_TRIP_IDX) {
             if (dut->fault_trip == 1 &&
                 dut->pwm_gate_en == 0 &&
@@ -153,7 +164,8 @@ int main(int argc, char** argv) {
 
         // Verify write-once thermal latch remains tripped even after cooling to 90 C
         if (step == COOL_CHECK_IDX + 10) {
-            if (dut->fault_trip == 1 && dut->pwm_gate_en == 0) {
+            if (dut->fault_trip == 1 && dut->pwm_gate_en == 0 &&
+                dut->vd_cmd_mv == 0 && dut->vq_cmd_mv == 0) {
                 latch_hold_ok = true;
             }
         }
@@ -196,10 +208,13 @@ int main(int argc, char** argv) {
                 id_at_24ms, id_err_24ms, iq_at_24ms, iq_err_24ms);
     std::printf("  t=39ms (Post-DPR Hot-Swap) : id = %.4f A (err %.4f A), iq = %.4f A (err %.4f A)\n",
                 id_at_39ms, id_err_39ms, iq_at_39ms, iq_err_39ms);
-    std::printf("  FCML +15V unbal recovery   : max steady-state ripple = %.4f V (< 0.50 V)\n",
+    std::printf("  Open-loop FCML (cap_bal=0) : |V_unbal(15ms)| = %.4f V (> 10.0 V, no self-bal)\n",
+                open_loop_cap_unbal_15ms);
+    std::printf("  Closed-loop FCML recovery  : max steady-state ripple = %.4f V (< 0.50 V)\n",
                 max_cap_ripple_steady);
     std::printf("  Live ICAP DPR hot-swap     : %s\n", dpr_verified ? "PASS" : "FAIL");
-    std::printf("  155 C 1-cycle gate-kill    : %s\n", trip_1cycle_ok ? "PASS" : "FAIL");
+    std::printf("  155 C 1-cycle gate-kill    : %s (dominates dpr_isolate_en=1)\n",
+                trip_1cycle_ok ? "PASS" : "FAIL");
     std::printf("  Write-once fault latch     : %s\n", latch_hold_ok ? "PASS" : "FAIL");
 
     bool all_ok = (total_ctrl_ticks == 1000) &&
@@ -207,6 +222,7 @@ int main(int argc, char** argv) {
                   (iq_err_24ms < 0.25) &&
                   (id_err_39ms < 0.25) &&
                   (iq_err_39ms < 0.25) &&
+                  open_loop_unbalanced_ok &&
                   (max_cap_ripple_steady < 0.50) &&
                   dpr_verified &&
                   trip_1cycle_ok &&

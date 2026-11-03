@@ -2,9 +2,6 @@ edition ObjectiveBend 1
 # Flagship App #7 (`apps/sovereign-drex/Seat.obend`):
 # Agoric/Zoe seat allocation, multi-asset escrow bounds, and offer-safety / mandate specs.
 
-law monotone_seat_epoch: monotone(seatEpoch)
-law bounded_seat_slippage: new.slippageBps <= 50
-
 record ZoeSeat:
   seatId() -> Nat
   cbdcEscrow() -> Nat

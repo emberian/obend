@@ -4,8 +4,6 @@ edition ObjectiveBend 1
 
 import ./BaseImpellerBody.obend as BaseBody
 
-law write_once_boss_datum: writeOnce(bossDatumId)
-
 record MountingBossLug:
   bossOffsetMm() -> Nat
   boltCircleRadiusUm() -> Nat

@@ -39,6 +39,7 @@ spec Nominal20kHzFocDrive for FocDriveController:
     45n + lossWatt * self.statorThermalResPermille
   claim closed_loop_vq_open_recursion(iqErrAmp: Nat): self.closedLoopVqMv(iqErrAmp) == iqErrAmp * self.icapDprBandwidthGain + 250n
   claim stator_temp_open_recursion(lossWatt: Nat): self.statorWindingTempC(lossWatt) == 45n + lossWatt * self.statorThermalResPermille
+  claim stator_temp_interval_cbf(lossWatt: Nat) by judge("interval@1"): 45n + lossWatt * 4n <= 180n
 
 spec IcapDprHighBandwidthFocOverride for FocDriveController:
   requires activeFcmlBalanceMv(capErrMv: Nat) -> Nat

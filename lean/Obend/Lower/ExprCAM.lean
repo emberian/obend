@@ -1681,7 +1681,9 @@ theorem hwCamInstantiateAt_sound :
 
 /-! ## 6. Live `silicon-check` Ingestion from Host `Lean.ConstantInfo` / `Lean.Expr` (`WS 24`) -/
 
-/-- Extract a self-hosted `KConstInfo` from a live host `Lean.ConstantInfo` via `fromLeanName` and `fromLeanExpr`. -/
+/-- Extract a self-hosted `KConstInfo` from a live host `Lean.ConstantInfo` via `fromLeanName` and `fromLeanExpr`.
+Note: `.opaqueInfo` translates `val.value` into `.thmInfo` so `sorryAx` or ill-typed opaque bodies
+are checked by the kernel while remaining opaque to $\delta$-unfolding during WHNF. -/
 def extractLeanConstInfo? : Lean.ConstantInfo → Option KConstInfo
   | .axiomInfo val => do
     let ty ← fromLeanExpr val.type
@@ -1705,9 +1707,69 @@ def extractLeanConstInfo? : Lean.ConstantInfo → Option KConstInfo
     pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
   | .opaqueInfo val => do
     let ty ← fromLeanExpr val.type
-    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
+    let v  ← fromLeanExpr val.value
+    pure (.thmInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
   | .quotInfo val => do
     let ty ← fromLeanExpr val.type
+    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
+
+/-- Environment-aware `Lean.Expr → Option KExpr` translator that shifts `Lean.Expr.proj s i e`
+by `numParamsOf s` so `KExpr.proj` indexes past inductive type parameters on parameterized structures
+such as `Prod` (`numParams = 2`, `.proj ``Prod 0 ↦ .proj "Prod" 2`). -/
+def fromLeanExprWithProjShift (numParamsOf : Lean.Name → Nat) : Lean.Expr → Option KExpr
+  | .bvar i          => some (.bvar i)
+  | .fvar id         => some (.fvar (fromLeanName id.name).toCleanId)
+  | .mvar id         => some (.fvar (1000000 + (fromLeanName id.name).toCleanId))
+  | .sort u          => do return .sort (← fromLeanLevel u)
+  | .const n us      => do return .const (fromLeanName n) (← us.mapM fromLeanLevel)
+  | .app f a         => do return .app (← fromLeanExprWithProjShift numParamsOf f) (← fromLeanExprWithProjShift numParamsOf a)
+  | .lam _ d b _     => do return .lam (← fromLeanExprWithProjShift numParamsOf d) (← fromLeanExprWithProjShift numParamsOf b)
+  | .forallE _ d b _ => do return .forallE (← fromLeanExprWithProjShift numParamsOf d) (← fromLeanExprWithProjShift numParamsOf b)
+  | .letE _ t v b _  => do
+    return .letE (← fromLeanExprWithProjShift numParamsOf t)
+                 (← fromLeanExprWithProjShift numParamsOf v)
+                 (← fromLeanExprWithProjShift numParamsOf b)
+  | .lit l           => some (.lit (fromLeanLiteral l))
+  | .mdata _ e       => fromLeanExprWithProjShift numParamsOf e
+  | .proj s i e      => do
+    return .proj (fromLeanName s) (numParamsOf s + i) (← fromLeanExprWithProjShift numParamsOf e)
+
+/-- Environment-aware `KConstInfo` extractor using `fromLeanExprWithProjShift`. -/
+def extractLeanConstInfoWith?
+    (findConst? : Lean.Name → Option Lean.ConstantInfo)
+    (info : Lean.ConstantInfo) : Option KConstInfo :=
+  let numParamsOf (s : Lean.Name) : Nat :=
+    match findConst? s with
+    | some (.inductInfo iv) => iv.numParams
+    | _ => 0
+  let tr := fromLeanExprWithProjShift numParamsOf
+  match info with
+  | .axiomInfo val => do
+    let ty ← tr val.type
+    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
+  | .defnInfo val => do
+    let ty ← tr val.type
+    let v  ← tr val.value
+    pure (.defnInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
+  | .thmInfo val => do
+    let ty ← tr val.type
+    let v  ← tr val.value
+    pure (.thmInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
+  | .inductInfo val => do
+    let ty ← tr val.type
+    pure (.inductInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
+  | .ctorInfo val => do
+    let ty ← tr val.type
+    pure (.ctorInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty (fromLeanName val.induct))
+  | .recInfo val => do
+    let ty ← tr val.type
+    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
+  | .opaqueInfo val => do
+    let ty ← tr val.type
+    let v  ← tr val.value
+    pure (.thmInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
+  | .quotInfo val => do
+    let ty ← tr val.type
     pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
 
 /-- Extract the list of `KRecRule` $\iota$-reduction rules from a live host `Lean.RecursorVal`
@@ -1717,6 +1779,23 @@ annotations transparently). -/
 def extractLeanRecRules (rval : Lean.RecursorVal) : Option (List KRecRule) :=
   rval.rules.mapM fun rule => do
     let rhsExpr ← fromLeanExpr rule.rhs
+    pure
+      { recName       := fromLeanName rval.name
+      , ctorName      := fromLeanName rule.ctor
+      , numPrefixArgs := rval.numParams + rval.numMotives + rval.numMinors
+      , numFields     := rule.nfields
+      , rhs           := rhsExpr }
+
+/-- Environment-aware `KRecRule` extractor shifting parameterized `.proj` indices via `findConst?`. -/
+def extractLeanRecRulesWith
+    (findConst? : Lean.Name → Option Lean.ConstantInfo)
+    (rval : Lean.RecursorVal) : Option (List KRecRule) :=
+  let numParamsOf (s : Lean.Name) : Nat :=
+    match findConst? s with
+    | some (.inductInfo iv) => iv.numParams
+    | _ => 0
+  rval.rules.mapM fun rule => do
+    let rhsExpr ← fromLeanExprWithProjShift numParamsOf rule.rhs
     pure
       { recName       := fromLeanName rval.name
       , ctorName      := fromLeanName rule.ctor
@@ -1744,11 +1823,11 @@ def collectConstInfoDeps (info : Lean.ConstantInfo) : List Lean.Name :=
   | .thmInfo val =>
     collectLeanExprConsts val.type ++ collectLeanExprConsts val.value
   | .inductInfo val =>
-    collectLeanExprConsts val.type ++ val.ctors ++ [.str val.name "rec"]
+    [.str val.name "rec"] ++ val.ctors ++ collectLeanExprConsts val.type
   | .ctorInfo val =>
-    collectLeanExprConsts val.type ++ [val.induct, .str val.induct "rec"]
+    [val.induct, .str val.induct "rec"] ++ collectLeanExprConsts val.type
   | .recInfo val =>
-    collectLeanExprConsts val.type ++ val.all ++ (val.rules.flatMap fun r => r.ctor :: collectLeanExprConsts r.rhs)
+    val.all ++ (val.rules.flatMap fun r => r.ctor :: collectLeanExprConsts r.rhs) ++ collectLeanExprConsts val.type
   | .axiomInfo val =>
     collectLeanExprConsts val.type
   | .opaqueInfo val =>
@@ -1756,8 +1835,20 @@ def collectConstInfoDeps (info : Lean.ConstantInfo) : List Lean.Name :=
   | .quotInfo val =>
     collectLeanExprConsts val.type
 
+/-- Append only unvisited, non-queued `Lean.Name` dependencies so every BFS step in `extractEnvConeAux`
+processes a distinct declaration without burning `fuel` on duplicate AST constant occurrences. -/
+def enqueueUnvisitedDeps (visited : List KName) (queue : List Lean.Name) :
+    List Lean.Name → List Lean.Name
+  | [] => queue
+  | d :: ds =>
+    let kd := fromLeanName d
+    if visited.contains kd || queue.any (fun q => fromLeanName q == kd) then
+      enqueueUnvisitedDeps visited queue ds
+    else
+      enqueueUnvisitedDeps visited (queue ++ [d]) ds
+
 /-- Bounded BFS helper extracting all transitive `KConstInfo` declarations and `KRecRule`
-recursor rules reachable from a worklist of `Lean.Name`s. -/
+recursor rules reachable from a deduplicated worklist of `Lean.Name`s. -/
 def extractEnvConeAux
     (findConst? : Lean.Name → Option Lean.ConstantInfo) :
     Nat → List Lean.Name → List KName → List KConstInfo → List KRecRule →
@@ -1775,7 +1866,7 @@ def extractEnvConeAux
         extractEnvConeAux findConst? fuel rest visited' accConsts accRules
       | some info =>
         let accConsts' :=
-          match extractLeanConstInfo? info with
+          match extractLeanConstInfoWith? findConst? info with
           | some kc =>
             if accConsts.any (fun c => c.name == kc.name) then accConsts
             else accConsts ++ [kc]
@@ -1783,12 +1874,13 @@ def extractEnvConeAux
         let accRules' :=
           match info with
           | .recInfo rval =>
-            match extractLeanRecRules rval with
+            match extractLeanRecRulesWith findConst? rval with
             | some rs => accRules ++ rs
             | none    => accRules
           | _ => accRules
         let deps := collectConstInfoDeps info
-        extractEnvConeAux findConst? fuel (rest ++ deps) visited' accConsts' accRules'
+        let nextQueue := enqueueUnvisitedDeps visited' rest deps
+        extractEnvConeAux findConst? fuel nextQueue visited' accConsts' accRules'
 
 /-- Extract a self-contained `(KEnv × KConstInfo)` transitive dependency cone rooted at `rootName`
 using a lookup function `findConst? : Lean.Name → Option Lean.ConstantInfo`. -/
@@ -1797,7 +1889,7 @@ def extractEnvConeWith
     (rootName : Lean.Name)
     (fuel : Nat) : Option (KEnv × KConstInfo) := do
   let rootInfo ← findConst? rootName
-  let rootDecl ← extractLeanConstInfo? rootInfo
+  let rootDecl ← extractLeanConstInfoWith? findConst? rootInfo
   let (consts, recRules) := extractEnvConeAux findConst? fuel [rootName] [] [] []
   pure ({ constants := consts, recRules := recRules }, rootDecl)
 
@@ -1809,15 +1901,83 @@ def extractLeanEnvCone
     (fuel : Nat) : Option (KEnv × KConstInfo) :=
   extractEnvConeWith env.find? rootName fuel
 
-/-- Intern a `KConstInfo` declaration into `HwExprCAM` (`consts`, `nodes`, `symbols`). -/
+/-- Construct and intern a `.sort u` (`tag = 2`) node in `HwExprCAM`. -/
+def mkHwCamSort (u : KLevel) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let (sIdx, cam1) := allocPackedSymbol (.sortEntry u) cam
+  allocPackedNode { tag := 2, h0 := 0, h1 := 0, symIdx := sIdx } cam1
+
+/-- Construct and intern a `.const n us` (`tag = 3`) node in `HwExprCAM`. -/
+def mkHwCamConst (n : KName) (us : List KLevel) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let (sIdx, cam1) := allocPackedSymbol (.constEntry n us) cam
+  allocPackedNode { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } cam1
+
+/-- Construct and intern a `.lit l` (`tag = 8`) node in `HwExprCAM`. -/
+def mkHwCamLit (l : KLiteral) (cam : HwExprCAM) : Nat × HwExprCAM :=
+  let (sIdx, cam1) := allocPackedSymbol (.litEntry l) cam
+  allocPackedNode { tag := 8, h0 := 0, h1 := 0, symIdx := sIdx } cam1
+
+/-- Pure handle-level universe level parameter instantiation (`hwCamInstantiateLevelParams`) over
+`HwExprCAM` (`cam.nodes` and `cam.symbols`) with zero `KExpr` AST reconstruction! -/
+def hwCamInstantiateLevelParams :
+    Nat → List (KName × KLevel) → Nat → HwExprCAM → Nat × HwExprCAM
+  | 0, _, h, cam => (h, cam)
+  | fuel + 1, subst, h, cam =>
+    if subst.isEmpty then
+      (h, cam)
+    else
+      match cam.nodes[h]? with
+      | none => (h, cam)
+      | some w =>
+        if w.tag == 0 || w.tag == 1 || w.tag == 8 then
+          (h, cam)
+        else if w.tag == 2 then
+          match cam.symbols[w.symIdx]? with
+          | some (.sortEntry u) =>
+            let u' := KLevel.substParams subst u
+            if u' == u then (h, cam) else mkHwCamSort u' cam
+          | _ => (h, cam)
+        else if w.tag == 3 then
+          match cam.symbols[w.symIdx]? with
+          | some (.constEntry n us) =>
+            let us' := us.map (KLevel.substParams subst)
+            if us' == us then (h, cam) else mkHwCamConst n us' cam
+          | _ => (h, cam)
+        else if w.tag == 4 then
+          let (hf', cam1) := hwCamInstantiateLevelParams fuel subst w.h0 cam
+          let (ha', cam2) := hwCamInstantiateLevelParams fuel subst w.h1 cam1
+          if hf' == w.h0 && ha' == w.h1 then (h, cam2) else mkHwCamApp hf' ha' cam2
+        else if w.tag == 5 || w.tag == 6 then
+          let (hd', cam1) := hwCamInstantiateLevelParams fuel subst w.h0 cam
+          let (hb', cam2) := hwCamInstantiateLevelParams fuel subst w.h1 cam1
+          if hd' == w.h0 && hb' == w.h1 then (h, cam2) else mkHwCamBinder w.tag hd' hb' cam2
+        else if w.tag == 7 then
+          let (ht', cam1) := hwCamInstantiateLevelParams fuel subst w.h0 cam
+          let (hv', cam2) := hwCamInstantiateLevelParams fuel subst w.h1 cam1
+          let (hb', cam3) := hwCamInstantiateLevelParams fuel subst w.h2 cam2
+          if ht' == w.h0 && hv' == w.h1 && hb' == w.h2 then (h, cam3)
+          else mkHwCamLetE ht' hv' hb' cam3
+        else if w.tag == 9 then
+          let (hs', cam1) := hwCamInstantiateLevelParams fuel subst w.h0 cam
+          if hs' == w.h0 then (h, cam1) else mkHwCamProj hs' w.symIdx cam1
+        else
+          (h, cam)
+
+/-- Intern a `KConstInfo` declaration into `HwExprCAM` (`consts`, `nodes`, `symbols`).
+Only `.defnInfo` populates `valHandle? := some valH` for Zone-1 $\delta$-unfolding; `.thmInfo`
+remains proof-irrelevant/opaque to WHNF unfolding matching Lean 4 kernel semantics. -/
 def internKConstInfoToHwExprCAM (c : KConstInfo) (cam : HwExprCAM) : HwExprCAM :=
   let (symIdx, cam1) := allocPackedSymbol (.constEntry c.name (c.levelParams.map KLevel.param)) cam
   let (tyH, cam2) := internToHwExprCAM c.type cam1
   match c with
-  | .defnInfo _ _ _ val | .thmInfo _ _ _ val =>
+  | .defnInfo _ _ _ val =>
     let (valH, cam3) := internToHwExprCAM val cam2
     let entry : HwCamConstEntry :=
       { name := c.name, symIdx := symIdx, typeHandle := tyH, valHandle? := some valH }
+    { cam3 with consts := cam3.consts ++ [entry] }
+  | .thmInfo _ _ _ val =>
+    let (_, cam3) := internToHwExprCAM val cam2
+    let entry : HwCamConstEntry :=
+      { name := c.name, symIdx := symIdx, typeHandle := tyH, valHandle? := none }
     { cam3 with consts := cam3.consts ++ [entry] }
   | .ctorInfo _ _ _ indName =>
     let entry : HwCamConstEntry :=
@@ -1911,8 +2071,23 @@ def sampleLiveLeanSorryInfo : Lean.ConstantInfo :=
     , type        := falseClaim
     , value       := sorryProof }
 
+/-- Sample invalid host `.opaqueInfo` declaration hiding `sorryAx` in its body. -/
+def sampleLiveOpaqueSorryInfo : Lean.ConstantInfo :=
+  let propSort : Lean.Expr := .sort .zero
+  let falseClaim : Lean.Expr := .forallE (.str .anonymous "P") propSort (.bvar 0) .default
+  let sorryProof : Lean.Expr := .const (.str .anonymous "sorryAx") [.zero]
+  .opaqueInfo
+    { name        := .str .anonymous "liveBadOpaqueSorry"
+    , levelParams := []
+    , type        := falseClaim
+    , value       := sorryProof
+    , isUnsafe    := false
+    , all         := [.str .anonymous "liveBadOpaqueSorry"] }
+
 /-- Sample host `Lean.RecursorVal` for a 2-constructor inductive `MyBool` (`MyBool.false`, `MyBool.true`)
-with `.mdata` annotations on its rule RHSs (`λ motive hFalse hTrue => hFalse` and `λ motive hFalse hTrue => hTrue`). -/
+with its genuine dependent recursor $\Pi$-type
+`(motive : MyBool → Type) → motive MyBool.false → motive MyBool.true → (t : MyBool) → motive t`
+and `.mdata` annotations on its rule RHSs. -/
 def sampleLiveMyBoolRecVal : Lean.RecursorVal :=
   let myBoolName : Lean.Name := .str .anonymous "MyBool"
   let falseName  : Lean.Name := .str myBoolName "false"
@@ -1920,21 +2095,28 @@ def sampleLiveMyBoolRecVal : Lean.RecursorVal :=
   let recName    : Lean.Name := .str myBoolName "rec"
   let type0      : Lean.Expr := .sort (.succ .zero)
   let myBoolExpr : Lean.Expr := .const myBoolName []
-  -- RHS for `MyBool.false`: λ (motive : MyBool → Type) (hFalse : Type) (hTrue : Type) => .mdata {} (.bvar 1)
+  let motiveTy   : Lean.Expr := .forallE (.str .anonymous "b") myBoolExpr type0 .default
+  let recType    : Lean.Expr :=
+    .forallE (.str .anonymous "motive") motiveTy
+      (.forallE (.str .anonymous "hFalse") (.app (.bvar 0) (.const falseName []))
+        (.forallE (.str .anonymous "hTrue") (.app (.bvar 1) (.const trueName []))
+          (.forallE (.str .anonymous "t") myBoolExpr
+            (.app (.bvar 3) (.bvar 0)) .default) .default) .default) .default
+  -- RHS for `MyBool.false`: λ (motive : MyBool → Type) (hFalse : motive false) (hTrue : motive true) => .mdata {} (.bvar 1)
   let rhsFalse : Lean.Expr :=
-    .lam (.str .anonymous "motive") (.forallE (.str .anonymous "b") myBoolExpr type0 .default)
-      (.lam (.str .anonymous "hFalse") type0
-        (.lam (.str .anonymous "hTrue") type0
+    .lam (.str .anonymous "motive") motiveTy
+      (.lam (.str .anonymous "hFalse") (.app (.bvar 0) (.const falseName []))
+        (.lam (.str .anonymous "hTrue") (.app (.bvar 1) (.const trueName []))
           (.mdata {} (.bvar 1)) .default) .default) .default
-  -- RHS for `MyBool.true`: λ (motive : MyBool → Type) (hFalse : Type) (hTrue : Type) => .mdata {} (.bvar 0)
+  -- RHS for `MyBool.true`: λ (motive : MyBool → Type) (hFalse : motive false) (hTrue : motive true) => .mdata {} (.bvar 0)
   let rhsTrue : Lean.Expr :=
-    .lam (.str .anonymous "motive") (.forallE (.str .anonymous "b") myBoolExpr type0 .default)
-      (.lam (.str .anonymous "hFalse") type0
-        (.lam (.str .anonymous "hTrue") type0
+    .lam (.str .anonymous "motive") motiveTy
+      (.lam (.str .anonymous "hFalse") (.app (.bvar 0) (.const falseName []))
+        (.lam (.str .anonymous "hTrue") (.app (.bvar 1) (.const trueName []))
           (.mdata {} (.bvar 0)) .default) .default) .default
   { name        := recName
   , levelParams := []
-  , type        := type0
+  , type        := recType
   , all         := [myBoolName]
   , numParams   := 0
   , numIndices  := 0
@@ -1991,19 +2173,21 @@ def sampleLiveConeFindConst? (n : Lean.Name) : Option Lean.ConstantInfo :=
    and produces the 2 `KRecRule` entries (`numPrefixArgs = 3`, `numFields = 0`),
 2. `extractEnvConeWith sampleLiveConeFindConst? (.str .anonymous "flipMyBool") 16` extracts all 5
    transitive declarations (`flipMyBool`, `MyBool`, `MyBool.rec`, `MyBool.true`, `MyBool.false`) and
-   both `MyBool.rec` $\iota$-reduction rules (`coneEnv.recRules.length = 2`),
+   both `MyBool.rec` $\iota$-reduction rules (`coneEnv.recRules.length = 2`), and `flipDecl` passes
+   full dependent `kernelCheckDecl coneEnv 32 flipDecl = true`,
 3. In the extracted `coneEnv`, `kernelWhnf` $\delta + \beta + \iota$-reduces `flipMyBool MyBool.true`
    to `MyBool.false` and `flipMyBool MyBool.false` to `MyBool.true`,
-4. `internKEnvConeToHwExprCAM coneEnv HwExprCAM.empty` populates `cam.consts.length = 5` and
-   `cam.recRules.length = 2`. -/
+4. `extractLeanConstInfo? sampleLiveOpaqueSorryInfo` preserves `sorryAx` inside `.opaqueInfo` bodies
+   so `kernelCheckDecl` refuses it (`false`). -/
 theorem extractLeanRecRules_and_cone_sound :
     (match extractLeanRecRules sampleLiveMyBoolRecVal with
      | some [r0, r1] =>
        r0.numPrefixArgs == 3 && r0.numFields == 0 &&
        r1.numPrefixArgs == 3 && r1.numFields == 0
      | _ => false) = true ∧
-    (match extractEnvConeWith sampleLiveConeFindConst? (.str .anonymous "flipMyBool") 16 with
-     | some (coneEnv, _) =>
+    (match extractEnvConeWith sampleLiveConeFindConst? (.str .anonymous "flipMyBool") 16,
+           extractLeanConstInfo? sampleLiveOpaqueSorryInfo with
+     | some (coneEnv, flipDecl), some opaqueBad =>
        let myBoolK := KName.mkSimple "MyBool"
        let trueK   := KExpr.const (.str myBoolK "true") []
        let falseK  := KExpr.const (.str myBoolK "false") []
@@ -2011,11 +2195,13 @@ theorem extractLeanRecRules_and_cone_sound :
        let cam     := internKEnvConeToHwExprCAM coneEnv HwExprCAM.empty
        coneEnv.constants.length == 5 &&
        coneEnv.recRules.length == 2 &&
+       kernelCheckDecl coneEnv 32 flipDecl &&
+       !(kernelCheckDecl coneEnv 16 opaqueBad) &&
        kernelWhnf coneEnv 16 (.app flipK trueK) == falseK &&
        kernelWhnf coneEnv 16 (.app flipK falseK) == trueK &&
        cam.consts.length == 5 &&
        cam.recRules.length == 2
-     | none => false) = true := by
+     | _, _ => false) = true := by
   decide +kernel
 
 /-- **Theorem (`silicon_live_env_decl_check_sound`)**:
@@ -3154,6 +3340,109 @@ theorem deserialize_serialize_siliconWireFrame (f : SiliconElabWireFrame) :
   have h := decodeSiliconWireFrameBytes_encodeSiliconWireFrameBytes f []
   rw [List.append_nil] at h
   rw [h]
+
+/-- Allocate or reuse a `HwCamLevelEntry` in a Section-3 universe level DAG table. -/
+def allocHwCamLevelEntry (e : HwCamLevelEntry) (tbl : List HwCamLevelEntry) :
+    Nat × List HwCamLevelEntry :=
+  match findElemIdx? tbl e with
+  | some idx => (idx, tbl)
+  | none => (tbl.length, tbl ++ [e])
+
+/-- Intern a `KLevel` into a deduplicated Section-3 `List HwCamLevelEntry` DAG table. -/
+def internKLevelToHwCam : KLevel → List HwCamLevelEntry → Nat × List HwCamLevelEntry
+  | .zero, tbl =>
+    allocHwCamLevelEntry { tag := 0 } tbl
+  | .succ u, tbl =>
+    let (uIdx, tbl1) := internKLevelToHwCam u tbl
+    allocHwCamLevelEntry { tag := 1, l0 := uIdx } tbl1
+  | .max u v, tbl =>
+    let (uIdx, tbl1) := internKLevelToHwCam u tbl
+    let (vIdx, tbl2) := internKLevelToHwCam v tbl1
+    allocHwCamLevelEntry { tag := 2, l0 := uIdx, l1 := vIdx } tbl2
+  | .imax u v, tbl =>
+    let (uIdx, tbl1) := internKLevelToHwCam u tbl
+    let (vIdx, tbl2) := internKLevelToHwCam v tbl1
+    allocHwCamLevelEntry { tag := 3, l0 := uIdx, l1 := vIdx } tbl2
+  | .param n, tbl =>
+    allocHwCamLevelEntry { tag := 4, paramName := n } tbl
+
+/-- Reconstruct a `KLevel` from a Section-3 `List HwCamLevelEntry` DAG table. -/
+def reconstructHwCamLevel : Nat → List HwCamLevelEntry → Nat → Option KLevel
+  | 0, _, _ => none
+  | fuel + 1, tbl, idx =>
+    match tbl[idx]? with
+    | none => none
+    | some e =>
+      if e.tag == 0 then some .zero
+      else if e.tag == 1 then (reconstructHwCamLevel fuel tbl e.l0).map .succ
+      else if e.tag == 2 then
+        match reconstructHwCamLevel fuel tbl e.l0, reconstructHwCamLevel fuel tbl e.l1 with
+        | some u, some v => some (.max u v)
+        | _, _ => none
+      else if e.tag == 3 then
+        match reconstructHwCamLevel fuel tbl e.l0, reconstructHwCamLevel fuel tbl e.l1 with
+        | some u, some v => some (.imax u v)
+        | _, _ => none
+      else if e.tag == 4 then some (.param e.paramName)
+      else none
+
+/-- Extract the deduplicated Section-3 `List HwCamLevelEntry` table from `cam.symbols`. -/
+def extractCamLevelEntries (cam : HwExprCAM) : List HwCamLevelEntry :=
+  cam.symbols.foldl
+    (fun tbl sym =>
+      match sym with
+      | .sortEntry u => (internKLevelToHwCam u tbl).2
+      | .constEntry _ us => us.foldl (fun acc u => (internKLevelToHwCam u acc).2) tbl
+      | _ => tbl)
+    []
+
+/-- Check `OBCAMv1` magic (`0x31564D4143424F00`), `version == 1`, and exact agreement between
+`header` section counts and the 7 payload section lengths. -/
+def SiliconElabWireFrame.hasValidHeader (f : SiliconElabWireFrame) : Bool :=
+  f.header.magic == 0x31564D4143424F00 &&
+  f.header.version == 1 &&
+  f.header.nodeCount.toNat == f.nodes.length &&
+  f.header.symbolCount.toNat == f.symbols.length &&
+  f.header.levelCount.toNat == f.levels.length &&
+  f.header.constCount.toNat == f.consts.length &&
+  f.header.recRuleCount.toNat == f.recRules.length &&
+  f.header.lutEntryCount.toNat == f.lutEntries.length &&
+  f.header.icapFrameCount.toNat == f.icapFrames.length
+
+/-- Construct a canonical, header-validated 7-section `SiliconElabWireFrame` (`OBCAMv1`) directly
+from an interned `HwExprCAM`, populating Section 3 (`levels`) from `cam.symbols` and synchronizing
+all 7 section count fields in `SiliconElabWireHeader`. -/
+def buildSiliconWireFrameFromCam
+    (cam : HwExprCAM)
+    (targetDeclSymIdx targetExprHandle targetTypeHandle : Nat)
+    (lutEntries : List DiscrTreeLutEntry := [])
+    (icapFrames : List IcapBitstreamFrame := [])
+    (fuelBudget : UInt32 := 65536)
+    (envPinDigest64 : UInt64 := 0) : SiliconElabWireFrame :=
+  let levels := extractCamLevelEntries cam
+  { header :=
+      { magic            := 0x31564D4143424F00
+      , version          := 1
+      , flags            := 0
+      , nodeCount        := UInt32.ofNat cam.nodes.length
+      , symbolCount      := UInt32.ofNat cam.symbols.length
+      , levelCount       := UInt32.ofNat levels.length
+      , constCount       := UInt32.ofNat cam.consts.length
+      , recRuleCount     := UInt32.ofNat cam.recRules.length
+      , lutEntryCount    := UInt32.ofNat lutEntries.length
+      , icapFrameCount   := UInt32.ofNat icapFrames.length
+      , targetDeclSymIdx := UInt32.ofNat targetDeclSymIdx
+      , targetExprHandle := UInt32.ofNat targetExprHandle
+      , targetTypeHandle := UInt32.ofNat targetTypeHandle
+      , fuelBudget       := fuelBudget
+      , envPinDigest64   := envPinDigest64 }
+  , nodes      := cam.nodes
+  , symbols    := cam.symbols
+  , levels     := levels
+  , consts     := cam.consts
+  , recRules   := cam.recRules
+  , lutEntries := lutEntries
+  , icapFrames := icapFrames }
 
 end Obend.Lower.ExprCAM
 end

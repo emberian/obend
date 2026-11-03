@@ -19,6 +19,10 @@
 //!   `GrainConfig`, and `SandboxRunner` (`BubblewrapRunner`, `ConfinementPolicy`, `LaunchGate`,
 //!   `CpuMeter`) to enforce capability and slot confinement before turn admission.
 
+use crate::silicon_bridge::{
+    derive_icap_frame_word, DatedSiliconReceipt, FpgaHalError, IcapDprSwapReceipt,
+    NodeSiliconAccelerator, SiliconSlotGuardError, SiliconTelemetry,
+};
 use crate::{
     cshake256_domain, merkle_root_from_leaves, net_flow, select_epistemic_winner,
     solve_primal_dual_clearing, BlindedVaultMultiProof, DrexClearingCertificate,
@@ -39,6 +43,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+/// Default genesis law/schema pin digest loaded into each `NetworkedValidatorNode`'s `SlotGuardReg`.
+pub const DEFAULT_NODE_LAW_PIN_DIGEST: u64 = 0x4F42_454E_445F_5631;
 
 /// Global lock serializing FFI calls into the Lean runtime across validator threads.
 pub static FFI_KERNEL_LOCK: Mutex<()> = Mutex::new(());
@@ -131,6 +138,10 @@ pub enum NodeError {
     Wal(#[from] ExposedOnceError),
     #[error("FFI kernel error: {0}")]
     Ffi(#[from] ObendError),
+    #[error("FPGA HAL error: {0}")]
+    FpgaHal(#[from] FpgaHalError),
+    #[error("silicon SlotGuardReg / ICAP DPR error: {0}")]
+    SiliconGuard(#[from] SiliconSlotGuardError),
     #[error("I/O socket error: {0}")]
     Io(#[from] std::io::Error),
     #[error("serialization error: {0}")]
@@ -892,6 +903,14 @@ pub struct FinalizedBlockRecord {
     pub post_state_root: [u8; 32],
     pub multiproof: BlindedVaultMultiProof,
     pub tier: FinalityTier,
+    #[serde(default)]
+    pub silicon_telemetry: Option<SiliconTelemetry>,
+    #[serde(default)]
+    pub silicon_recorded_at_unix_ms: u64,
+    #[serde(default)]
+    pub dpr_swap_receipt: Option<IcapDprSwapReceipt>,
+    #[serde(default)]
+    pub law_pin_digest: u64,
 }
 
 /// Tier 3 `Fold.collapse` compressed epoch receipt binding initial and final state roots,
@@ -1352,6 +1371,16 @@ pub enum WalEntry {
     OutboxExposed {
         pos: u64,
     },
+    /// Authorized ICAP Dynamic Partial Reconfiguration law/schema pin upgrade (`K-CARRY` / `SlotGuardReg`).
+    DprLawUpgraded {
+        epoch_id: u64,
+        slot_name: String,
+        frame_word: u64,
+        law_pin_digest: u64,
+        receipt: IcapDprSwapReceipt,
+        #[serde(default)]
+        carry_artifact_bytes: Vec<u8>,
+    },
 }
 
 /// Durable Consensus & Outbox Write-Ahead Log (`Obend.Run.Durable.DState`):
@@ -1384,6 +1413,9 @@ pub struct DurableNodeWal {
     pub replayed_epochs: Vec<CollapsedEpochReceipt>,
     /// Volatile in-memory map of `token_id -> journal_pos` enforcing `journal_once` / `exposed_once`.
     pub consumed_tokens: BTreeMap<u64, u64>,
+    /// Volatile in-memory DPR bitstream upgrade epochs replayed from the journal.
+    #[serde(default)]
+    pub replayed_dpr_upgrades: Vec<(u64, String, u64, u64, IcapDprSwapReceipt)>,
 }
 
 impl Default for DurableNodeWal {
@@ -1417,6 +1449,7 @@ impl DurableNodeWal {
             replayed_skip_certs: Vec::new(),
             replayed_epochs: Vec::new(),
             consumed_tokens: BTreeMap::new(),
+            replayed_dpr_upgrades: Vec::new(),
         }
     }
 
@@ -1490,6 +1523,28 @@ impl DurableNodeWal {
             }
             WalEntry::OutboxExposed { pos: exp_pos } => {
                 self.outbox.insert(*exp_pos);
+            }
+            WalEntry::DprLawUpgraded {
+                epoch_id,
+                slot_name,
+                frame_word,
+                law_pin_digest,
+                receipt,
+                ..
+            } => {
+                if !self
+                    .replayed_dpr_upgrades
+                    .iter()
+                    .any(|(ep, _, _, pin, _)| *ep == *epoch_id && *pin == *law_pin_digest)
+                {
+                    self.replayed_dpr_upgrades.push((
+                        *epoch_id,
+                        slot_name.clone(),
+                        *frame_word,
+                        *law_pin_digest,
+                        receipt.clone(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -1683,6 +1738,7 @@ impl DurableNodeWal {
         self.replayed_skip_certs.clear();
         self.replayed_epochs.clear();
         self.consumed_tokens.clear();
+        self.replayed_dpr_upgrades.clear();
     }
 
     /// Replay the durable journal after one or more crashes (`Obend.Run.Durable.hstep .recover`),
@@ -1695,6 +1751,7 @@ impl DurableNodeWal {
         self.replayed_skip_certs.clear();
         self.replayed_epochs.clear();
         self.consumed_tokens.clear();
+        self.replayed_dpr_upgrades.clear();
 
         let entries = self.journal.clone();
         for (idx, entry) in entries.iter().enumerate() {
@@ -1851,6 +1908,9 @@ pub struct ValidatorNodeState {
     /// Durable Write-Ahead Log (`Obend.Run.Durable`).
     pub wal: DurableNodeWal,
 
+    /// Hardware FPGA / 4-Zone Silicon Elaborator accelerator (`ObendFpgaHal` + `SlotGuardReg`).
+    pub silicon_accel: NodeSiliconAccelerator,
+
     /// Wire metrics.
     pub wire_frames_received: usize,
     pub wire_frames_sent: usize,
@@ -1875,7 +1935,7 @@ impl ValidatorNodeState {
     }
 
     /// Simulate a volatile memory crash on this validator (`Obend.Run.Durable.hstep .crash`),
-    /// wiping volatile consensus & vault state while preserving `self.wal` (`journal` and `outbox`).
+    /// wiping volatile consensus, FPGA SRAM bitstream, & vault state while preserving `self.wal`.
     pub fn simulate_crash(&mut self) {
         self.wal.simulate_crash();
         self.current_view = 1;
@@ -1895,11 +1955,17 @@ impl ValidatorNodeState {
         self.pending_fast_path_turns.clear();
         self.turn_finality.clear();
         self.epoch_receipts.clear();
+        if let Ok(fresh_accel) = NodeSiliconAccelerator::auto_connect(
+            format!("validator_{}_slot", self.node_id),
+            DEFAULT_NODE_LAW_PIN_DIGEST,
+        ) {
+            self.silicon_accel = fresh_accel;
+        }
     }
 
     /// Recover volatile validator state by replaying `self.wal` (`Obend.Run.Durable.hstep .recover`),
     /// restoring finalized blocks, vault cells, Merkle state root, committed height/tip, skip certs,
-    /// epoch receipts, and previously cast votes so this validator never equivocates after a crash!
+    /// epoch receipts, DPR specialization slot, and previously cast votes so this validator never equivocates after a crash!
     pub fn recover_from_wal(&mut self) -> Result<(), ExposedOnceError> {
         self.wal.recover_from_wal()?;
         self.vault_cells = self.genesis_cells.clone();
@@ -1918,6 +1984,12 @@ impl ValidatorNodeState {
         self.pending_fast_path_turns.clear();
         self.turn_finality.clear();
         self.epoch_receipts.clear();
+        if let Ok(fresh_accel) = NodeSiliconAccelerator::auto_connect(
+            format!("validator_{}_slot", self.node_id),
+            DEFAULT_NODE_LAW_PIN_DIGEST,
+        ) {
+            self.silicon_accel = fresh_accel;
+        }
 
         let entries = self.wal.journal.clone();
         for entry in entries {
@@ -2012,6 +2084,22 @@ impl ValidatorNodeState {
                         self.epoch_receipts.push(receipt);
                     }
                 }
+                WalEntry::DprLawUpgraded {
+                    epoch_id,
+                    slot_name,
+                    frame_word,
+                    law_pin_digest,
+                    ..
+                } => {
+                    let _ = self.silicon_accel.hot_swap_law_pin(
+                        epoch_id,
+                        slot_name,
+                        frame_word,
+                        law_pin_digest,
+                        law_pin_digest,
+                        false,
+                    );
+                }
                 WalEntry::DispatchEffect { .. } | WalEntry::OutboxExposed { .. } => {}
             }
         }
@@ -2053,6 +2141,10 @@ impl NetworkedValidatorNode {
         let leaves: Vec<[u8; 32]> = initial_cells.iter().map(|c| c.leaf_hash()).collect();
         let initial_root = merkle_root_from_leaves(&leaves);
         let quorum_size = 2 * fault_tolerance + 1;
+        let silicon_accel = NodeSiliconAccelerator::auto_connect(
+            format!("validator_{node_id}_slot"),
+            DEFAULT_NODE_LAW_PIN_DIGEST,
+        )?;
 
         let state = Arc::new(Mutex::new(ValidatorNodeState {
             node_id,
@@ -2084,6 +2176,7 @@ impl NetworkedValidatorNode {
             turn_finality: BTreeMap::new(),
             epoch_receipts: Vec::new(),
             wal: DurableNodeWal::new(),
+            silicon_accel,
             wire_frames_received: 0,
             wire_frames_sent: 0,
             rejected_wire_frames: 0,
@@ -2693,6 +2786,24 @@ impl NetworkedValidatorNode {
             }
         }
 
+        // Hardware-verify block turns, limit orders & clearing obligations on this validator's `ObendFpgaHal`
+        let active_epoch = st.silicon_accel.active_epoch_id();
+        let active_pin = st.silicon_accel.active_law_pin_digest();
+        let (silicon_telemetry, silicon_recorded_at_unix_ms) = match st
+            .silicon_accel
+            .verify_turn_or_batch(
+                active_epoch,
+                payload.height,
+                active_pin,
+                &payload.turns,
+                &payload.drex_orders,
+                clearing_cert.as_ref(),
+            ) {
+            Ok(receipt) => (Some(receipt.telemetry), receipt.recorded_at_unix_ms),
+            Err(_) => (None, 0),
+        };
+        let dpr_swap_receipt = st.silicon_accel.swap_history().last().cloned();
+
         // Apply turns & verified clearing digest to VaultCellRecord state
         Fold::apply_block_to_cells(&mut st.vault_cells, &payload, clearing_cert.as_ref());
         for turn in &payload.turns {
@@ -2733,6 +2844,10 @@ impl NetworkedValidatorNode {
             post_state_root,
             multiproof,
             tier: FinalityTier::QuorumFinal,
+            silicon_telemetry,
+            silicon_recorded_at_unix_ms,
+            dpr_swap_receipt,
+            law_pin_digest: active_pin,
         };
         let _ = st.wal.append_entry(WalEntry::BlockFinalized(rec.clone()));
         st.finalized_blocks.push(rec);
@@ -2884,6 +2999,93 @@ impl NetworkedValidatorNode {
 
     pub fn wire_frames_received(&self) -> usize {
         self.state.lock().unwrap().wire_frames_received
+    }
+
+    /// Read live `SiliconTelemetry` directly from this validator's `ObendFpgaHal`.
+    pub fn read_silicon_telemetry(&self) -> Result<SiliconTelemetry, NodeError> {
+        Ok(self.state.lock().unwrap().silicon_accel.read_telemetry()?)
+    }
+
+    /// Return all dated hardware verification receipts recorded on this validator.
+    pub fn silicon_receipts(&self) -> Vec<DatedSiliconReceipt> {
+        self.state
+            .lock()
+            .unwrap()
+            .silicon_accel
+            .receipt_history()
+            .to_vec()
+    }
+
+    /// Return all 3-phase ICAP DPR swap/fallback receipts recorded on this validator.
+    pub fn dpr_swap_receipts(&self) -> Vec<IcapDprSwapReceipt> {
+        self.state
+            .lock()
+            .unwrap()
+            .silicon_accel
+            .swap_history()
+            .to_vec()
+    }
+
+    /// Return the currently active law/schema pin digest guarded by `SlotGuardReg` on this validator.
+    pub fn active_law_pin_digest(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap()
+            .silicon_accel
+            .active_law_pin_digest()
+    }
+
+    /// Execute a 3-phase ICAP DPR hot-swap (`perform_icap_dpr_hot_swap`) on this validator's `ObendFpgaHal`,
+    /// journaling `WalEntry::DprLawUpgraded` when an authorized pin commits cleanly.
+    pub fn hot_swap_law_pin(
+        &self,
+        new_epoch_id: u64,
+        slot_name: &str,
+        expected_digest: u64,
+        computed_digest: u64,
+        moved_pin_violation: bool,
+    ) -> Result<IcapDprSwapReceipt, NodeError> {
+        let mut st = self.state.lock().unwrap();
+        let frame_word = derive_icap_frame_word(new_epoch_id, slot_name, expected_digest);
+        let receipt = st.silicon_accel.hot_swap_law_pin(
+            new_epoch_id,
+            slot_name,
+            frame_word,
+            expected_digest,
+            computed_digest,
+            moved_pin_violation,
+        )?;
+        let _ = st.wal.append_entry(WalEntry::DprLawUpgraded {
+            epoch_id: new_epoch_id,
+            slot_name: slot_name.to_string(),
+            frame_word,
+            law_pin_digest: expected_digest,
+            receipt: receipt.clone(),
+            carry_artifact_bytes: Vec::new(),
+        });
+        Ok(receipt)
+    }
+
+    /// Hardware-verify an obligation batch against a specific `observed_law_pin_digest`
+    /// (triggering 1-cycle `SlotGuardReg` fallback if `observed_law_pin_digest != active_law_pin_digest`).
+    pub fn verify_batch_with_law_pin(
+        &self,
+        epoch_id: u64,
+        block_height: u64,
+        observed_law_pin_digest: u64,
+        turns: &[VaultTurn],
+        orders: &[LimitOrder],
+        clearing_cert: Option<&DrexClearingCertificate>,
+    ) -> Result<DatedSiliconReceipt, NodeError> {
+        let mut st = self.state.lock().unwrap();
+        Ok(st.silicon_accel.verify_turn_or_batch(
+            epoch_id,
+            block_height,
+            observed_law_pin_digest,
+            turns,
+            orders,
+            clearing_cert,
+        )?)
     }
 
     pub fn shutdown(&mut self) {
@@ -3610,6 +3812,51 @@ impl SimplexCluster {
             })?;
 
         Ok((winner, block, outbox_id))
+    }
+
+    /// Execute an authorized `"world-carry@1"` (`K-CARRY`) law/schema upgrade across the BFT quorum:
+    /// Finalizes a quorum-certified upgrade height via `run_simplex_block()` and executes a 3-phase
+    /// glitch-free `perform_icap_dpr_hot_swap` on every honest validator's `ObendFpgaHal`.
+    pub fn perform_quorum_icap_dpr_upgrade(
+        &mut self,
+        new_epoch_id: u64,
+        slot_name: &str,
+        new_law_pin_digest: u64,
+    ) -> Result<(FinalizedBlockRecord, Vec<IcapDprSwapReceipt>), NodeError> {
+        let upgrade_turn = VaultTurn::new(
+            cshake256_domain(
+                b"obend.simplex.dpr.upgrade",
+                &new_epoch_id.to_be_bytes(),
+                &new_law_pin_digest.to_be_bytes(),
+            ),
+            "k-carry-quorum-upgrade",
+            vec![],
+            vec![(0xC0DE_D2E8, new_law_pin_digest.to_be_bytes().to_vec())],
+        );
+        self.stage_contended_or_inflight_turn(upgrade_turn)?;
+        let finalized = self.run_simplex_block()?;
+
+        let honest_ids = self.honest_validator_ids();
+        if honest_ids.len() < self.quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "insufficient honest validators ({}) for DPR quorum ({})",
+                honest_ids.len(),
+                self.quorum_size
+            )));
+        }
+
+        let mut receipts = Vec::with_capacity(honest_ids.len());
+        for &id in &honest_ids {
+            let r = self.nodes[id].hot_swap_law_pin(
+                new_epoch_id,
+                slot_name,
+                new_law_pin_digest,
+                new_law_pin_digest,
+                false,
+            )?;
+            receipts.push(r);
+        }
+        Ok((finalized, receipts))
     }
 }
 

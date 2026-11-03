@@ -36,6 +36,7 @@ spec BasePiCurrentSpec for PiCurrentController:
     iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
   claim integral_q_open_recursion(errQMa: Nat): self.alwaysFfIntQ(errQMa) == errQMa * self.kiGainPermille + 200n
   claim vq_decoupling_open_recursion(iqErrAmp: Nat): self.decoupledVqCommandMv(iqErrAmp) == iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
+  claim pi_modulation_interval_bound(x: Nat) by judge("interval@1"): 120n + x * 400n <= 600000n
 
 spec CrossCoupledDecouplingOverride for PiCurrentController:
   requires decoupledVdCommandMv(idErrAmp: Nat) -> Nat
@@ -48,8 +49,38 @@ spec CrossCoupledDecouplingOverride for PiCurrentController:
   def decoupledVdCommandMv(idErrAmp: Nat) -> Nat:
     super.decoupledVdCommandMv(idErrAmp) + 40n
 
+record PiStatefulStep:
+  kpStepMv(errMa: Nat) -> Nat
+  kiStepMv(errMa: Nat) -> Nat
+  alwaysFfNextIntD(intD: Nat, intQ: Nat, errDMa: Nat, errQMa: Nat) -> Nat
+  alwaysFfNextIntQ(intD: Nat, intQ: Nat, errDMa: Nat, errQMa: Nat) -> Nat
+  alwaysFfOutVqMv(intD: Nat, intQ: Nat, errDMa: Nat, errQMa: Nat) -> Nat
+
+spec NominalPiStatefulStep for PiStatefulStep:
+  requires kpStepMv(errMa: Nat) -> Nat
+  requires kiStepMv(errMa: Nat) -> Nat
+  def kpStepMv(errMa: Nat) -> Nat:
+    errMa * 400n
+  def kiStepMv(errMa: Nat) -> Nat:
+    errMa * 50n
+  def alwaysFfNextIntD(intD: Nat, intQ: Nat, errDMa: Nat, errQMa: Nat) -> Nat:
+    intD + self.kiStepMv(errDMa)
+  def alwaysFfNextIntQ(intD: Nat, intQ: Nat, errDMa: Nat, errQMa: Nat) -> Nat:
+    intQ + self.kiStepMv(errQMa)
+  def alwaysFfOutVqMv(intD: Nat, intQ: Nat, errDMa: Nat, errQMa: Nat) -> Nat:
+    intQ + self.kpStepMv(errQMa)
+
+spec HighBwPiStatefulStepOverride for PiStatefulStep:
+  def kpStepMv(errMa: Nat) -> Nat:
+    errMa * 480n
+  def kiStepMv(errMa: Nat) -> Nat:
+    errMa * 65n
+
 def seedPiCurrentLoop() -> PiCurrentController:
   {kpGainPermille: 0n, kiGainPermille: 0n, decouplingInductanceUh: 0n, alwaysFfIntD: fn(ed: Nat) -> Nat: 0n, alwaysFfIntQ: fn(eq: Nat) -> Nat: 0n, decoupledVdCommandMv: fn(id: Nat) -> Nat: 0n, decoupledVqCommandMv: fn(iq: Nat) -> Nat: 0n}
+
+def seedPiStatefulStep() -> PiStatefulStep:
+  {kpStepMv: fn(e: Nat) -> Nat: 0n, kiStepMv: fn(e: Nat) -> Nat: 0n, alwaysFfNextIntD: fn(id: Nat, iq: Nat, ed: Nat, eq: Nat) -> Nat: 0n, alwaysFfNextIntQ: fn(id: Nat, iq: Nat, ed: Nat, eq: Nat) -> Nat: 0n, alwaysFfOutVqMv: fn(id: Nat, iq: Nat, ed: Nat, eq: Nat) -> Nat: 0n}
 
 def basePiCurrentController() -> PiCurrentController:
   fix(BasePiCurrentSpec, seedPiCurrentLoop())
@@ -57,5 +88,9 @@ def basePiCurrentController() -> PiCurrentController:
 def decoupledPiCurrentController() -> PiCurrentController:
   fix(compose(BasePiCurrentSpec, CrossCoupledDecouplingOverride), seedPiCurrentLoop())
 
+def hotSwappedPiStatefulStep() -> PiStatefulStep:
+  fix(compose(NominalPiStatefulStep, HighBwPiStatefulStepOverride), seedPiStatefulStep())
+
 def ratedStepVqCommandMv() -> Nat:
-  decoupledPiCurrentController().decoupledVqCommandMv(250n) + ClarkePark.ratedQuadratureAxisCurrentMa()
+  decoupledPiCurrentController().decoupledVqCommandMv(250n) + basePiCurrentController().kpGainPermille() + hotSwappedPiStatefulStep().alwaysFfOutVqMv(0n, 16250n, 0n, 250n) + ClarkePark.ratedQuadratureAxisCurrentMa()
+

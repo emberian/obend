@@ -40,6 +40,7 @@ spec BaseSicFcmlLegSpec for SicFcmlLegController:
   def safetyBarrierHeadroomC(tempC: Nat) -> Nat:
     self.thermalWarningLimitC + tempC
   claim lyapunov_cap_balance_open_recursion(capErrMv: Nat): self.alwaysFfCapErrMv(capErrMv) == capErrMv * self.activeBalGainPermille + 25n
+  claim fcml_sos_lyapunov_cbf_barrier(capErrMv: Nat) by judge("sos-lyapunov-cbf@1"): capErrMv <= 15000n
 
 spec LyapunovBalancedThermalBarrierOverride for SicFcmlLegController:
   requires thermalDeratedDutyPermille(tempC: Nat) -> Nat

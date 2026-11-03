@@ -391,7 +391,7 @@ def KName.toCleanIdAux : KName → Nat
 
 /-- Extract a clean numeric identifier `< 1000000` from a `KName`. -/
 def KName.toCleanId (n : KName) : Nat :=
-  n.toCleanIdAux % 999983
+  n.toCleanIdAux % 1000000
 
 theorem KName.toCleanId_lt_offset (n : KName) : n.toCleanId < 1000000 := by
   unfold KName.toCleanId
@@ -471,6 +471,64 @@ def toLeanExpr : KExpr → Lean.Expr
   | .letE t v b  => .letE (.str .anonymous "x") (toLeanExpr t) (toLeanExpr v) (toLeanExpr b) false
   | .lit l       => .lit (toLeanLiteral l)
   | .proj s i e  => .proj (toLeanName s) i (toLeanExpr e)
+
+/-- Well-formed variable ID bound (`< 2000000`: `< 1000000` for `.fvar` and `1000000..1999999` for `.mvar`). -/
+def KExpr.validVarIds : KExpr → Bool
+  | .bvar _      => true
+  | .fvar id     => decide (id < 2000000)
+  | .sort _      => true
+  | .const _ _   => true
+  | .app f a     => f.validVarIds && a.validVarIds
+  | .lam d b     => d.validVarIds && b.validVarIds
+  | .forallE d b => d.validVarIds && b.validVarIds
+  | .letE t v b  => t.validVarIds && v.validVarIds && b.validVarIds
+  | .lit _       => true
+  | .proj _ _ e  => e.validVarIds
+
+theorem mapM_fromLeanLevel_toLeanLevel :
+    ∀ (us : List KLevel), (us.map toLeanLevel).mapM fromLeanLevel = some us
+  | []      => rfl
+  | u :: us => by
+    simp [fromLeanLevel_toLeanLevel, mapM_fromLeanLevel_toLeanLevel us]
+
+theorem fromLeanExpr_toLeanExpr :
+    ∀ (e : KExpr), e.validVarIds = true → fromLeanExpr (toLeanExpr e) = some e
+  | .bvar _, _ => rfl
+  | .fvar id, h => by
+    simp only [KExpr.validVarIds, decide_eq_true_eq] at h
+    unfold toLeanExpr
+    by_cases hGe : id >= 1000000
+    · simp only [hGe, ↓reduceIte, fromLeanExpr, Lean.Name.mkNum, fromLeanName,
+        KName.toCleanId, KName.toCleanIdAux]
+      have hMod : (id - 1000000) % 1000000 = id - 1000000 := by omega
+      have hAdd : 1000000 + (id - 1000000) = id := by omega
+      rw [hMod, hAdd]
+    · simp only [hGe, ↓reduceIte, fromLeanExpr, Lean.Name.mkNum, fromLeanName,
+        KName.toCleanId, KName.toCleanIdAux]
+      have hMod : id % 1000000 = id := by omega
+      rw [hMod]
+  | .sort u, _ => by simp [toLeanExpr, fromLeanExpr, fromLeanLevel_toLeanLevel]
+  | .const n us, _ => by
+    unfold toLeanExpr fromLeanExpr
+    rw [fromLeanName_toLeanName, mapM_fromLeanLevel_toLeanLevel]
+    rfl
+  | .app f a, h => by
+    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr f h.1, fromLeanExpr_toLeanExpr a h.2]
+  | .lam d b, h => by
+    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr d h.1, fromLeanExpr_toLeanExpr b h.2]
+  | .forallE d b, h => by
+    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr d h.1, fromLeanExpr_toLeanExpr b h.2]
+  | .letE t v b, h => by
+    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr t h.1.1,
+      fromLeanExpr_toLeanExpr v h.1.2, fromLeanExpr_toLeanExpr b h.2]
+  | .lit l, _ => by simp [toLeanExpr, fromLeanExpr]
+  | .proj s i e, h => by
+    simp only [KExpr.validVarIds] at h
+    simp [toLeanExpr, fromLeanExpr, fromLeanName_toLeanName, fromLeanExpr_toLeanExpr e h]
 
 /-- Lower an `Obend.Core.Term.Primitive` into `LExpr`. -/
 def primToLExpr : Primitive → LExpr

@@ -1,0 +1,56 @@
+{
+  "schema": "dregg.objective-bend.package-input.v1",
+  "edition": "objective-bend-1",
+  "entryModule": "3",
+  "entryDefinition": "crossModuleDrexSummary",
+  "modules": [
+    {
+      "name": "Seat",
+      "sourcePath": "apps/sovereign-drex/Seat.obend",
+      "imports": []
+    },
+    {
+      "name": "OrderBook",
+      "sourcePath": "apps/sovereign-drex/OrderBook.obend",
+      "imports": [
+        {
+          "alias": "SeatMod",
+          "path": "./Seat.obend",
+          "module": "0"
+        }
+      ]
+    },
+    {
+      "name": "BatchClearing",
+      "sourcePath": "apps/sovereign-drex/BatchClearing.obend",
+      "imports": [
+        {
+          "alias": "SeatMod",
+          "path": "./Seat.obend",
+          "module": "0"
+        }
+      ]
+    },
+    {
+      "name": "SovereignDrexTop",
+      "sourcePath": "apps/sovereign-drex/SovereignDrexTop.obend",
+      "imports": [
+        {
+          "alias": "SeatMod",
+          "path": "./Seat.obend",
+          "module": "0"
+        },
+        {
+          "alias": "BookMod",
+          "path": "./OrderBook.obend",
+          "module": "1"
+        },
+        {
+          "alias": "ClearingMod",
+          "path": "./BatchClearing.obend",
+          "module": "2"
+        }
+      ]
+    }
+  ]
+}

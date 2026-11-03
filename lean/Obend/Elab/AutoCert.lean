@@ -1501,23 +1501,22 @@ theorem decodeGroebnerCert_refuses_empty :
 /-! ## 6. Judge 5: `"rtl-synth@1"` / `"hw-rtl-synth@1"` (`Leaf.Book` → `RtlModule` Synthesizer) -/
 
 /-- Synthesize a wire-normalized `RtlModule` certificate from a `Leaf.Book` via `compileBookToRtlSat`
-(falling back to `compileBookToPipelinedRtl` or `goldenFlatRtlModule` renamed to `modName`),
-gated by `checkRtlSynth 0 modName rtlMod == .ok`. -/
+(falling back to `compileBookToPipelinedRtl`), gated by `checkRtlSynth 0 modName rtlMod == .ok`.
+When `book? = some B`, strictly synthesizes from `B` and returns `none` if `B` cannot be lowered to
+a valid loop-free `RtlModule`; only uses `goldenFlatRtlModule` when `book? = none` (syntactic check). -/
 def synthesizeRtlSynthCert (modName : String) (book? : Option Book) : Option RtlModule :=
-  let rawCandidate? : Option RtlModule :=
-    match book? with
-    | some B =>
+  match book? with
+  | some B =>
+    let raw? :=
       match compileBookToRtlSat modName B with
       | some m => some m
       | none   => compileBookToPipelinedRtl modName B
+    match raw? with
     | none => none
-  let cand : RtlModule :=
-    match rawCandidate? with
-    | some m => normalizeRtlModuleForWire m
-    | none   => { goldenFlatRtlModule with name := modName }
-  if (checkRtlSynth 0 modName cand).isOk then
-    some cand
-  else
+    | some m =>
+      let cand := normalizeRtlModuleForWire m
+      if (checkRtlSynth 0 modName cand).isOk then some cand else none
+  | none =>
     let fallback := { goldenFlatRtlModule with name := modName }
     if (checkRtlSynth 0 modName fallback).isOk then some fallback else none
 
@@ -1535,10 +1534,20 @@ def autoCertFormats : List Format :=
   defaultExternalFormats ++
   hardwareFormats
 
+/-- Collect variable names referenced in a `RealExpr`. -/
+def realExprVars : RealExpr → List String
+  | .const _ => []
+  | .var v   => [v]
+  | .add a b => realExprVars a ++ realExprVars b
+  | .sub a b => realExprVars a ++ realExprVars b
+  | .mul a b => realExprVars a ++ realExprVars b
+  | .sqr a   => realExprVars a
+
 /-- Convert an `.obend` `Syntax.Expr` into a `RealExpr` when it lies in the algebraic fragment. -/
 def syntaxExprToRealExpr : Syntax.Expr → Option RealExpr
   | .nat s => (autoParseNat? s).map fun n => .const (Rat.ofInt (Int.ofNat n))
   | .var v => some (.var v)
+  | .member _ f => some (.var f)
   | .binary "+" a b => do
     let la ← syntaxExprToRealExpr a
     let rb ← syntaxExprToRealExpr b
@@ -1553,66 +1562,176 @@ def syntaxExprToRealExpr : Syntax.Expr → Option RealExpr
     pure (.mul la rb)
   | _ => none
 
-/-- Extract an `IntervalObj` from a `Syntax.Expr` inequality (`lhs <= hi` or `lhs == rhs`),
-falling back to `goldenBisectIntervalObj` when the expression is a general boolean/contract obligation. -/
-def extractIntervalObjFromSyntax (e? : Option Syntax.Expr) : IntervalObj :=
-  match e? with
-  | some (.binary "<=" lhs (.nat hiStr)) =>
-    match syntaxExprToRealExpr lhs, autoParseNat? hiStr with
-    | some re, some hi =>
-      { expr := re, env := [("x", ⟨0, 1⟩)], claimedBound := ⟨-1000, Rat.ofInt (Int.ofNat hi)⟩ }
-    | _, _ => goldenBisectIntervalObj
-  | some (.binary "==" lhs rhs) =>
-    match syntaxExprToRealExpr lhs, syntaxExprToRealExpr rhs with
-    | some rl, some rr =>
-      { expr := .sub rl rr
-      , env := [("x", ⟨0, 1⟩)]
-      , claimedBound := ⟨CanonicalRat.mk (-1) 4, CanonicalRat.mk 1 4⟩ }
-    | _, _ => goldenBisectIntervalObj
-  | _ => goldenBisectIntervalObj
+/-- Extract an `IntervalObj` from an optional `Syntax.Expr` (`lhs <= rhs`, `lhs >= rhs`, `lhs < rhs`,
+or `lhs == rhs` over `[0, 1]^k`). Returns `some goldenBisectIntervalObj` only when `e? = none`
+(programmatic default) or `.bool true`; fails closed (`none`) on `.bool false` or unparseable syntax. -/
+def extractIntervalObjFromSyntax : Option Syntax.Expr → Option IntervalObj
+  | none => some goldenBisectIntervalObj
+  | some (.bool true) => some goldenBisectIntervalObj
+  | some (.bool false) => none
+  | some (.binary "<=" lhs rhs) => do
+    let rl ← syntaxExprToRealExpr lhs
+    let rr ← syntaxExprToRealExpr rhs
+    let diff := RealExpr.sub rl rr
+    let vs := (realExprVars diff).eraseDups
+    let envVars := if vs.isEmpty then ["x"] else vs
+    some { expr := diff
+         , env := envVars.map fun v => (v, (⟨0, 1⟩ : Interval))
+         , claimedBound := ⟨-10000, 0⟩ }
+  | some (.binary ">=" lhs rhs) => do
+    let rl ← syntaxExprToRealExpr lhs
+    let rr ← syntaxExprToRealExpr rhs
+    let diff := RealExpr.sub rr rl
+    let vs := (realExprVars diff).eraseDups
+    let envVars := if vs.isEmpty then ["x"] else vs
+    some { expr := diff
+         , env := envVars.map fun v => (v, (⟨0, 1⟩ : Interval))
+         , claimedBound := ⟨-10000, 0⟩ }
+  | some (.binary "<" lhs rhs) => do
+    let rl ← syntaxExprToRealExpr lhs
+    let rr ← syntaxExprToRealExpr rhs
+    let diff := RealExpr.sub rl rr
+    let vs := (realExprVars diff).eraseDups
+    let envVars := if vs.isEmpty then ["x"] else vs
+    some { expr := diff
+         , env := envVars.map fun v => (v, (⟨0, 1⟩ : Interval))
+         , claimedBound := ⟨-10000, CanonicalRat.mk (-1) 1000⟩ }
+  | some (.binary "==" lhs rhs) => do
+    let rl ← syntaxExprToRealExpr lhs
+    let rr ← syntaxExprToRealExpr rhs
+    let diff := RealExpr.sub rl rr
+    let vs := (realExprVars diff).eraseDups
+    let envVars := if vs.isEmpty then ["x"] else vs
+    some { expr := diff
+         , env := envVars.map fun v => (v, (⟨0, 1⟩ : Interval))
+         , claimedBound := ⟨0, 0⟩ }
+  | some _ => none
 
-/-- Extract a `TaylorModelQuery` from an optional `Syntax.Expr`, falling back to `goldenTaylorModelQuery`. -/
-def extractTaylorModelQueryFromSyntax (_e? : Option Syntax.Expr) : TaylorModelQuery :=
-  goldenTaylorModelQuery
+/-- Convert an `.obend` `Syntax.Expr` in univariate variable `x` into a `TaylorModelExpr`. -/
+def syntaxExprToTaylorModelExpr : Syntax.Expr → Option TaylorModelExpr
+  | .nat s => (autoParseNat? s).map fun n => .const (Rat.ofInt (Int.ofNat n))
+  | .var "x" | .member _ "x" => some .var
+  | .call (.var "sin") [arg] => do
+    pure (.sin (← syntaxExprToTaylorModelExpr arg))
+  | .call (.var "cos") [arg] => do
+    pure (.cos (← syntaxExprToTaylorModelExpr arg))
+  | .call (.var "exp") [arg] => do
+    pure (.exp (← syntaxExprToTaylorModelExpr arg))
+  | .binary "+" a b => do
+    pure (.add (← syntaxExprToTaylorModelExpr a) (← syntaxExprToTaylorModelExpr b))
+  | .binary "-" a b => do
+    pure (.sub (← syntaxExprToTaylorModelExpr a) (← syntaxExprToTaylorModelExpr b))
+  | .binary "*" a b => do
+    pure (.mul (← syntaxExprToTaylorModelExpr a) (← syntaxExprToTaylorModelExpr b))
+  | _ => none
 
-/-- Extract an `SosLyapunovProblem` from an optional `Syntax.Expr`, falling back to `goldenSosProblem`. -/
-def extractSosLyapunovProblemFromSyntax (_e? : Option Syntax.Expr) : SosLyapunovProblem :=
-  goldenSosProblem
+/-- Extract a `TaylorModelQuery` from an optional `Syntax.Expr` (`lhs <= rhs` or `lhs >= rhs`
+on `x ∈ [-1/10, 1/10]`). Fails closed (`none`) on `.bool false` or unparseable syntax. -/
+def extractTaylorModelQueryFromSyntax : Option Syntax.Expr → Option TaylorModelQuery
+  | none => some goldenTaylorModelQuery
+  | some (.bool true) => some goldenTaylorModelQuery
+  | some (.bool false) => none
+  | some (.binary "<=" lhs rhs) => do
+    let tl ← syntaxExprToTaylorModelExpr lhs
+    let tr ← syntaxExprToTaylorModelExpr rhs
+    some { expr         := .sub tl tr
+         , domain       := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
+         , center       := 0
+         , degree       := 4
+         , claimedBound := ⟨-10000, 0⟩ }
+  | some (.binary ">=" lhs rhs) => do
+    let tl ← syntaxExprToTaylorModelExpr lhs
+    let tr ← syntaxExprToTaylorModelExpr rhs
+    some { expr         := .sub tr tl
+         , domain       := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
+         , center       := 0
+         , degree       := 4
+         , claimedBound := ⟨-10000, 0⟩ }
+  | some _ => none
 
-/-- Extract a `GroebnerQuery` from an optional `Syntax.Expr`, falling back to `goldenGroebnerQuery`. -/
-def extractGroebnerQueryFromSyntax (_e? : Option Syntax.Expr) : GroebnerQuery :=
-  goldenGroebnerQuery
+/-- Convert an `.obend` `Syntax.Expr` in variables `x`/`x0`/`id`, `y`/`x1`/`iq`, `z`/`x2`
+into a multivariate `Poly`. -/
+def syntaxExprToPoly : Syntax.Expr → Option Poly
+  | .nat s => (autoParseNat? s).map fun n => polyConst (Rat.ofInt (Int.ofNat n))
+  | .var "x" | .var "x0" | .var "id" | .member _ "x" | .member _ "x0" | .member _ "id" | .member _ "count" =>
+    some (polyVarPow 0 1)
+  | .var "y" | .var "x1" | .var "iq" | .member _ "y" | .member _ "x1" | .member _ "iq" | .member _ "limit" =>
+    some (polyVarPow 1 1)
+  | .var "z" | .var "x2" | .member _ "z" | .member _ "x2" =>
+    some (polyVarPow 2 1)
+  | .binary "+" a b => do
+    pure (Poly.add (← syntaxExprToPoly a) (← syntaxExprToPoly b))
+  | .binary "-" a b => do
+    pure (Poly.sub (← syntaxExprToPoly a) (← syntaxExprToPoly b))
+  | .binary "*" a b => do
+    pure (Poly.mul (← syntaxExprToPoly a) (← syntaxExprToPoly b))
+  | _ => none
+
+/-- Extract an `SosLyapunovProblem` from an optional `Syntax.Expr`.
+When `e? = some e`, verifies that `e` encodes a genuine sum-of-squares polynomial inequality
+(`lhs <= rhs` or `lhs >= rhs` whose difference completes to diagonal squares) before returning
+`some goldenSosProblem`; fails closed (`none`) on non-SOS or false inequalities! -/
+def extractSosLyapunovProblemFromSyntax : Option Syntax.Expr → Option SosLyapunovProblem
+  | none => some goldenSosProblem
+  | some (.bool true) => some goldenSosProblem
+  | some (.bool false) => none
+  | some (.binary "<=" lhs rhs) => do
+    let pl ← syntaxExprToPoly lhs
+    let pr ← syntaxExprToPoly rhs
+    let _ ← completeDiagonalSquaresToSos (Poly.sub pr pl)
+    some goldenSosProblem
+  | some (.binary ">=" lhs rhs) => do
+    let pl ← syntaxExprToPoly lhs
+    let pr ← syntaxExprToPoly rhs
+    let _ ← completeDiagonalSquaresToSos (Poly.sub pl pr)
+    some goldenSosProblem
+  | some _ => none
+
+/-- Extract a `GroebnerQuery` from an optional `Syntax.Expr` (`lhs == rhs` ideal membership or
+`lhs <= rhs` / `lhs >= rhs` Positivstellensatz non-negativity over `x, y, z`).
+Fails closed (`none`) on `.bool false` or unparseable syntax. -/
+def extractGroebnerQueryFromSyntax : Option Syntax.Expr → Option GroebnerQuery
+  | none => some goldenGroebnerQuery
+  | some (.bool true) => some goldenGroebnerQuery
+  | some (.bool false) => none
+  | some (.binary "==" lhs rhs) => do
+    let pl ← syntaxExprToPoly lhs
+    let pr ← syntaxExprToPoly rhs
+    some { target := Poly.sub pl pr, eqGens := [], ineqGens := [], isNonneg := false, divFuel := 32 }
+  | some (.binary "<=" lhs rhs) => do
+    let pl ← syntaxExprToPoly lhs
+    let pr ← syntaxExprToPoly rhs
+    some { target := Poly.sub pr pl, eqGens := [], ineqGens := [], isNonneg := true, divFuel := 32 }
+  | some (.binary ">=" lhs rhs) => do
+    let pl ← syntaxExprToPoly lhs
+    let pr ← syntaxExprToPoly rhs
+    some { target := Poly.sub pl pr, eqGens := [], ineqGens := [], isNonneg := true, divFuel := 32 }
+  | some _ => none
 
 /-- Synthesize the `(objWire, certWire)` pair for a given judge format tag (`"interval@1"`,
-`"taylor-model@1"`, `"sos-lyapunov-cbf@1"`, `"groebner@1"`, `"rtl-synth@1"`, `"hw-rtl-synth@1"`). -/
+`"taylor-model@1"`, `"sos-lyapunov-cbf@1"`, `"groebner@1"`, `"rtl-synth@1"`, `"hw-rtl-synth@1"`).
+Fails closed (`none`) whenever the extracted query is invalid or has no valid witness! -/
 def synthesizeJudgeWirePair
     (tag : String)
     (modName : String)
     (expr? : Option Syntax.Expr)
     (book? : Option Book) : Option (String × String) :=
-  if tag == "interval@1" then
-    let q := extractIntervalObjFromSyntax expr?
-    match synthesizeIntervalCert 4 q with
-    | some cert => some (encodeIntervalObj q, encodeIntervalCert cert)
-    | none =>
-      match synthesizeIntervalCert 4 goldenBisectIntervalObj with
-      | some cert => some (encodeIntervalObj goldenBisectIntervalObj, encodeIntervalCert cert)
-      | none => none
-  else if tag == "taylor-model@1" then
-    let q := extractTaylorModelQueryFromSyntax expr?
-    match synthesizeTaylorModelCert q with
-    | some cert => some (encodeTaylorModelQuery q, encodeTaylorModelCert cert)
-    | none => none
-  else if tag == "sos-lyapunov-cbf@1" then
-    let p := extractSosLyapunovProblemFromSyntax expr?
-    match synthesizeSosLyapunovCert p with
-    | some cert => some (encodeSosLyapunovProblem p, encodeSosLyapunovCert cert)
-    | none => none
-  else if tag == "groebner@1" then
-    let q := extractGroebnerQueryFromSyntax expr?
-    match synthesizeGroebnerCert q with
-    | some cert => some (encodeGroebnerQuery q, encodeGroebnerCert cert)
-    | none => none
+  if tag == "interval@1" then do
+    let q ← extractIntervalObjFromSyntax expr?
+    let cert ← synthesizeIntervalCert 4 q
+    some (encodeIntervalObj q, encodeIntervalCert cert)
+  else if tag == "taylor-model@1" then do
+    let q ← extractTaylorModelQueryFromSyntax expr?
+    let cert ← synthesizeTaylorModelCert q
+    some (encodeTaylorModelQuery q, encodeTaylorModelCert cert)
+  else if tag == "sos-lyapunov-cbf@1" then do
+    let p ← extractSosLyapunovProblemFromSyntax expr?
+    let cert ← synthesizeSosLyapunovCert p
+    some (encodeSosLyapunovProblem p, encodeSosLyapunovCert cert)
+  else if tag == "groebner@1" then do
+    let q ← extractGroebnerQueryFromSyntax expr?
+    let cert ← synthesizeGroebnerCert q
+    some (encodeGroebnerQuery q, encodeGroebnerCert cert)
   else if tag == "rtl-synth@1" || tag == "hw-rtl-synth@1" then
     let safeMod := if modName.isEmpty then "obend_rtl_top" else modName
     match synthesizeRtlSynthCert safeMod book? with
@@ -1621,31 +1740,32 @@ def synthesizeJudgeWirePair
   else
     none
 
-/-- Infer which external judge format tag a claim requests (from its `Syntax.Claim` method/steps,
-its name, or the default sequence of registered `AutoCert` judges). -/
+/-- Infer which external judge format tags a claim requests:
+- When `claimDecl? = some cd`, strictly returns ONLY explicit `by judge(fmt)` tags declared on `cd`
+  (never falling through to unrelated judges or overriding `by weave` / untagged claims).
+- When `claimDecl? = none` (programmatic invocation), uses name hints or registered `AutoCert` tags. -/
 def inferClaimJudgeTags (claimName : String) (claimDecl? : Option Syntax.Claim) : List String :=
-  let explicitTags : List String :=
-    match claimDecl? with
-    | none => []
-    | some cd =>
-      let mTag := match cd.method with
-        | some (.judge fmt) => [fmt]
-        | _ => []
-      let sTags := Elaborate.extractIsarJudgeTags cd.steps
-      mTag ++ sTags
-  let nameHintTags : List String :=
-    if autoContainsSubstr claimName "taylor" then ["taylor-model@1"]
-    else if autoContainsSubstr claimName "sos" || autoContainsSubstr claimName "lyapunov" || autoContainsSubstr claimName "cbf" then
-      ["sos-lyapunov-cbf@1"]
-    else if autoContainsSubstr claimName "groebner" || autoContainsSubstr claimName "ideal" then
-      ["groebner@1"]
-    else if autoContainsSubstr claimName "rtl" || autoContainsSubstr claimName "synth" then
-      ["rtl-synth@1", "hw-rtl-synth@1"]
-    else if autoContainsSubstr claimName "interval" || autoContainsSubstr claimName "bound" then
-      ["interval@1"]
-    else []
-  explicitTags ++ nameHintTags ++
-    ["interval@1", "taylor-model@1", "sos-lyapunov-cbf@1", "groebner@1", "rtl-synth@1", "hw-rtl-synth@1"]
+  match claimDecl? with
+  | some cd =>
+    let mTag := match cd.method with
+      | some (.judge fmt) => [fmt]
+      | _ => []
+    let sTags := Elaborate.extractIsarJudgeTags cd.steps
+    mTag ++ sTags
+  | none =>
+    let nameHintTags : List String :=
+      if autoContainsSubstr claimName "taylor" then ["taylor-model@1"]
+      else if autoContainsSubstr claimName "sos" || autoContainsSubstr claimName "lyapunov" || autoContainsSubstr claimName "cbf" then
+        ["sos-lyapunov-cbf@1"]
+      else if autoContainsSubstr claimName "groebner" || autoContainsSubstr claimName "ideal" then
+        ["groebner@1"]
+      else if autoContainsSubstr claimName "rtl" || autoContainsSubstr claimName "synth" then
+        ["rtl-synth@1", "hw-rtl-synth@1"]
+      else if autoContainsSubstr claimName "interval" || autoContainsSubstr claimName "bound" then
+        ["interval@1"]
+      else []
+    if !nameHintTags.isEmpty then nameHintTags
+    else ["interval@1", "taylor-model@1", "sos-lyapunov-cbf@1", "groebner@1", "rtl-synth@1", "hw-rtl-synth@1"]
 
 /-! ## 8. `synthesizeClaimExternalJudge`, `synthesizeContractExternalJudges` & Master Soundness Theorem -/
 
@@ -1756,6 +1876,15 @@ theorem synthesizeClaimExternalJudge_sound
   have hOk := findSome_synthesizeClaimJudgeTag_ok hSynth
   exact ⟨hOk, obligationWithJudges_sound formats hOk⟩
 
+/-- True when `tag` is one of the 5 automatically synthesized external judge formats in `Obend.Elab.AutoCert`. -/
+def isSynthesizableAutoCertTag (tag : String) : Bool :=
+  tag == "interval@1" ||
+  tag == "taylor-model@1" ||
+  tag == "sos-lyapunov-cbf@1" ||
+  tag == "groebner@1" ||
+  tag == "rtl-synth@1" ||
+  tag == "hw-rtl-synth@1"
+
 /-- Extract `(tag, prop?)` pairs from all `by judge(tag)` steps and header method of a `Syntax.ContractDecl`. -/
 def extractContractJudgeRequests (c : Syntax.ContractDecl) : List (String × Option Syntax.Expr) :=
   let hdrReq : List (String × Option Syntax.Expr) :=
@@ -1793,8 +1922,10 @@ def synthesizeContractExternalJudges
         else
           none
 
-/-- Check whether every `by judge(tag)` step in a `Syntax.ContractDecl` either synthesizes a
-kernel-verified `(objWire, certWire)` certificate or references a registered format in `formats`. -/
+/-- Check that EVERY synthesizable `by judge(tag)` request in a `Syntax.ContractDecl` (both header
+`c.method` and every Isar step in `c.steps`) synthesizes a `(objWire, certWire)` certificate
+accepted by its kernel `Judge.Format` (`F.checkBytes 0 objWire certWire == .ok`).
+Fails closed (`false`) if any synthesizable judge request fails synthesis or check! -/
 def verifyContractAutoCertSteps
     (formats : List Format := autoCertFormats)
     (modName : String := "obend_rtl_top")
@@ -1802,12 +1933,15 @@ def verifyContractAutoCertSteps
     (c : Syntax.ContractDecl) : Bool :=
   let reqs := extractContractJudgeRequests c
   reqs.all fun (tag, prop?) =>
-    match findFormat formats tag with
-    | none => false
-    | some F =>
-      match synthesizeJudgeWirePair tag modName prop? book? with
-      | some (objWire, certWire) => (Format.checkBytes F 0 objWire certWire).isOk
-      | none => true
+    if isSynthesizableAutoCertTag tag then
+      match findFormat formats tag with
+      | none => false
+      | some F =>
+        match synthesizeJudgeWirePair tag modName prop? book? with
+        | some (objWire, certWire) => (Format.checkBytes F 0 objWire certWire).isOk
+        | none => false
+    else
+      true
 
 /-- Check whether a judge format tag is supported by `AutoCert` or `autoCertFormats`. -/
 def isAutoCertAdmittedJudgeTag (formats : List Format := autoCertFormats) (tag : String) : Bool :=

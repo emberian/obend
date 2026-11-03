@@ -1,5 +1,5 @@
 edition ObjectiveBend 1
-# Flagship App #1 (Layer 3): Custom Opcode 0x2B (43) SIMD/ZK Multiply-Accumulate Extension Layer
+# Flagship App #1 (Layer 3): Custom Opcode 0x2B (43) SIMD/ZK Multiply-Accumulate & Goldilocks Fold Layer
 
 import ./BaseRiscCore.obend as Base
 import ./PrivilegeCsrOverride.obend as Priv
@@ -9,41 +9,43 @@ law bounded_custom_opcode: new.customOpcode <= 127
 record CustomSimdZkTarget:
   mtvecAddr() -> Nat
   customExtOpcode() -> Nat
-  extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
-  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
-  stepPc(pc: Nat, mepc: Nat) -> Nat
+  extMacExec(funct3: Nat, funct7: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  stepPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat
   execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
 
 spec BaseSimdZkSpec for CustomSimdZkTarget:
   requires mtvecAddr() -> Nat
-  requires customExtOpcode() -> Nat
   def mtvecAddr() -> Nat:
-    64n
+    0x50n
   def customExtOpcode() -> Nat:
-    43n
-  def extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
-    rs1Val * rs2Val + imm
-  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
-    rs1Val + rs2Val + imm
-  def stepPc(pc: Nat, mepc: Nat) -> Nat:
-    self.mtvecAddr + mepc
+    0x2Bn
+  def extMacExec(funct3: Nat, funct7: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    if funct3 == 0n then ((rs1Val * rs2Val) + funct7) & 0xFFFFFFFFFFFFFFFFn else (if funct3 == 1n then (((rs1Val & 0xFFFFFFFFn) << 32n) - (rs1Val & 0xFFFFFFFFn) + rs2Val) & 0xFFFFFFFFFFFFFFFFn else (rs1Val + (rs2Val << 1n)) & 0xFFFFFFFFFFFFFFFFn)
+  def stepPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat:
+    let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let immU12 = (inst >>> 20n) & 0xFFFn in if (op == 0x73n) && (f3 == 0n) && (immU12 == 0n) then self.mtvecAddr else (if (op == 0x73n) && (f3 == 0n) && (immU12 == 0x302n) then mepc else (pc + 4n) & 0xFFFFFFFFFFFFFFFFn)
   def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
-    rs1Val * rs2Val + self.customExtOpcode
-  claim custom_simd_zk_mac_exec(): self.extMacExec(7n, 9n, 5n) == 68n
-  claim custom_ext_non_interference_add(): self.aluExec(13n, 21n, 0n) == 34n
-  claim custom_ext_respects_trap_preemption(): self.stepPc(28n, 0n) == 64n
+    let op = inst & 0x7Fn in let immI = (inst << 32n) >> 52n in let rhs = if op == 0x13n then immI else rs2Val in (rs1Val + rhs) & 0xFFFFFFFFFFFFFFFFn
 
 spec CustomSimdZkExtSpec for CustomSimdZkTarget:
+  requires customExtOpcode() -> Nat
+  requires extMacExec(funct3: Nat, funct7: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  requires stepPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat
   requires execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
   def mtvecAddr() -> Nat:
-    64n
+    0x50n
   def customExtOpcode() -> Nat:
-    43n
+    0x2Bn
   def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
-    super.execInstruction(inst, rs1Val, rs2Val) + 1n
+    let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let f7 = (inst >>> 25n) & 0x7Fn in if op == self.customExtOpcode then self.extMacExec(f3, f7, rs1Val, rs2Val) else super.execInstruction(inst, rs1Val, rs2Val)
+  claim custom_simd_zk_mac_exec() by weave: self.execInstruction(0x027305ABn, 8n, 13n) == 105n
+  claim custom_ext_non_interference_add() by weave: self.execInstruction(0x002081B3n, 13n, 21n) == 34n
+  claim custom_ext_respects_trap_preemption() by weave: self.stepPc(0x00000073n, 32n, 0n) == 0x50n
 
 def seedCustomSimdZk() -> CustomSimdZkTarget:
-  {mtvecAddr: 0n, customExtOpcode: 0n, extMacExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, stepPc: fn(p: Nat, m: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
+  {mtvecAddr: 0n, customExtOpcode: 0n, extMacExec: fn(f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, stepPc: fn(i: Nat, p: Nat, m: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
 
 def customSimdZkRiscCore() -> CustomSimdZkTarget:
   fix(compose(BaseSimdZkSpec, CustomSimdZkExtSpec), seedCustomSimdZk())
+
+def verifyExtCrossModuleConsistency() -> Bool:
+  (Base.baseRiscCore().execInstruction(0x002081B3n, 13n, 21n) == customSimdZkRiscCore().execInstruction(0x002081B3n, 13n, 21n)) && (Priv.privilegeRiscCore().stepPc(0x00000073n, 32n, 0n) == customSimdZkRiscCore().stepPc(0x00000073n, 32n, 0n))

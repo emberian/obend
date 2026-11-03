@@ -1,0 +1,1447 @@
+//! 8-Flagship-App Qualification Explorer, `.obend` Layer Stack, `.smt2` `QF_BV` LEC Specs,
+//! Fast Streaming `.vcd` Waveform Digest & SVG Logic Analyzer, and `fidget-cam` `.stl`/`.ngc`
+//! Artifact Inspector (`QUALIFICATION-AND-SILICON-LEAN.md` §4 Flagship Apps #1–#8).
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+
+/// Static specification entry for one of the 8 Flagship Userspace Applications (`QUALIFICATION-AND-SILICON-LEAN.md` §4).
+#[derive(Debug, Clone, Copy)]
+pub struct FlagshipAppDescriptor {
+    pub index: usize,
+    pub slug: &'static str,
+    pub title: &'static str,
+    pub lean_module: &'static str,
+    pub qualification_summary: &'static str,
+}
+
+/// Canonical registry of all 8 Flagship Applications in `QUALIFICATION-AND-SILICON-LEAN.md` §4 order.
+pub const FLAGSHIP_APPS: [FlagshipAppDescriptor; 8] = [
+    FlagshipAppDescriptor {
+        index: 1,
+        slug: "obend-risc",
+        title: "3-Layer Open-Recursive Sequential RISC Softcore CPU",
+        lean_module: "lean/Obend/Apps/ObendRisc.lean",
+        qualification_summary: "BaseRiscCore >> PrivilegeCsrOverride >> CustomSimdZkExt; in-core RV64I/custom 0x2B bit-slice decode, always_ff pc/mstatus/mepc/mcause/x1..x15, SMT2 LEC & Fibonacci/trap firmware.",
+    },
+    FlagshipAppDescriptor {
+        index: 2,
+        slug: "foc-hil",
+        title: "Closed-Loop 20 kHz FOC Motor Drive + 6-Level SiC FCML Inverter HIL",
+        lean_module: "lean/Obend/Apps/FocHil.lean",
+        qualification_summary: "ClarkePark -> PiCurrentLoop -> SicFcmlInverterLeg -> FocDriveTop; AutoCert sos-lyapunov-cbf@1 / taylor-model@1 / interval@1, RK4 PMSM HIL & mid-run ICAP DPR hot-swap.",
+    },
+    FlagshipAppDescriptor {
+        index: 3,
+        slug: "sdr-ft8",
+        title: "All-Digital 40m Tayloe IQ SDR & 4-Stage CORDIC FT8 Demodulator",
+        lean_module: "lean/Obend/Apps/SdrFt8.lean",
+        qualification_summary: "Signed Q16.16/Q32.32 stateful always_ff receiver chain (TayloeQuadratureMixer -> CicDecimatorFir -> CordicFt8Demod -> SdrFt8Top), >=60 dB IRR & 79/79 FT8 symbol recovery.",
+    },
+    FlagshipAppDescriptor {
+        index: 4,
+        slug: "zk-ntt",
+        title: "Goldilocks 256-Point NTT & 8-Round Sumcheck Co-Processor (RTL + AMD VOP64)",
+        lean_module: "lean/Obend/Apps/ZkNtt.lean",
+        qualification_summary: "Goldilocks (p = 2^64 - 2^32 + 1) shift/mask reduction, Cooley-Tukey radix-2 butterfly, stateful always_ff Sumcheck accumulators, EqSat >=30% mul reduction, Verilator + AMD VOP64.",
+    },
+    FlagshipAppDescriptor {
+        index: 5,
+        slug: "silicon-kernel-verilator",
+        title: "Verilated 4-Zone Silicon Elaborator & Live ICAP DPR Hot-Swap Showcase",
+        lean_module: "lean/Obend/Apps/SiliconKernelVerilator.lean",
+        qualification_summary: "Streams OBCAMv1 declaration bundles over AXI4-Stream into 5-module silicon_elab_top.sv, executes 3-phase glitch-free Zone 3 ICAP DPR swap & 1-cycle moved_pin_blocks fallback.",
+    },
+    FlagshipAppDescriptor {
+        index: 6,
+        slug: "fidget-cam",
+        title: "Parametric OpenUSD/F-Rep CAD -> Pruned SSA Tape -> Verilated Voxelizer, .stl & 5-Axis .ngc",
+        lean_module: "lean/Obend/Apps/FidgetCam.lean",
+        qualification_summary: "LIVERPS impeller OpenUSD/F-Rep assembly lowered to interval-pruned SSA tape, evaluated on Verilated octree voxelizer, emitting verified binary .stl mesh & gouge-free 5-axis G-code.",
+    },
+    FlagshipAppDescriptor {
+        index: 7,
+        slug: "sovereign-drex",
+        title: "Live DReX + K-CARRY Hot-Upgradable Sovereign Exchange on 4-Validator Cluster",
+        lean_module: "lean/Obend/Apps/SovereignDrex.lean",
+        qualification_summary: "Multi-file Seat / OrderBook / BatchClearing / SovereignDrexTop on a 4-validator obend-node Simplex BFT cluster with mid-flight world-carry@1 hot-upgrade & WAL recovery.",
+    },
+    FlagshipAppDescriptor {
+        index: 8,
+        slug: "quantum-photonic-matter",
+        title: "Planar Clements Photonic CTQW, Majorana Tetron Lindblad & 1-WL Quotient Accelerator",
+        lean_module: "lean/Obend/Apps/QuantumPhotonicMatter.lean",
+        qualification_summary: "1-WL color-refined quotient hypergraph reverse-AD, Faddeev-LeVerrier thermo-optic crosstalk cancellation, Ivanov Majorana braiding & Lindblad parity cooling.",
+    },
+];
+
+/// Summary item returned in `GET /api/apps`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlagshipAppSummary {
+    pub index: usize,
+    pub slug: String,
+    pub title: String,
+    pub lean_module: String,
+    pub lean_module_exists: bool,
+    pub qualification_summary: String,
+    pub obend_layer_count: usize,
+    pub obend_files: Vec<String>,
+    pub sv_files: Vec<String>,
+    pub smt2_lec_present: bool,
+    pub smt2_files: Vec<String>,
+    pub vcd_present: bool,
+    pub vcd_build_status: String,
+    pub vcd_signal_count: usize,
+    pub vcd_total_transitions: u64,
+    pub cam_artifacts_present: bool,
+}
+
+/// JSON response for `GET /api/apps`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlagshipAppsListResponse {
+    pub apps_root: String,
+    pub total_apps: usize,
+    pub vcd_present_count: usize,
+    pub lec_present_count: usize,
+    pub apps: Vec<FlagshipAppSummary>,
+}
+
+/// Discovered `.obend` source layer inside `apps/<slug>/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppObendLayerSource {
+    pub filename: String,
+    pub rel_path: String,
+    pub size_bytes: u64,
+    pub line_count: usize,
+    pub imports: Vec<String>,
+    pub specs: Vec<String>,
+    pub claims: Vec<String>,
+    pub laws: Vec<String>,
+    pub source: String,
+}
+
+/// Discovered `.smt2` `QF_BV` Logical Equivalence Checking (LEC) specification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppSmt2LecSpec {
+    pub filename: String,
+    pub rel_path: String,
+    pub size_bytes: u64,
+    pub line_count: usize,
+    pub logic: Option<String>,
+    pub declare_const_count: usize,
+    pub define_fun_count: usize,
+    pub assert_count: usize,
+    pub check_sat_count: usize,
+    pub source: String,
+}
+
+/// Discovered synthesizable SystemVerilog `.sv` RTL module summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppRtlModuleSummary {
+    pub filename: String,
+    pub rel_path: String,
+    pub size_bytes: u64,
+    pub line_count: usize,
+    pub module_names: Vec<String>,
+    pub always_ff_count: usize,
+}
+
+/// Per-signal transition & timeline summary extracted from a Verilator `.vcd` waveform file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VcdSignalSummary {
+    pub name: String,
+    pub scope: String,
+    pub width: usize,
+    pub transitions: u64,
+    pub initial_value_hex: String,
+    pub last_value_hex: String,
+    pub samples: Vec<(u64, String)>,
+}
+
+/// `.vcd` waveform digest for a flagship app (gracefully reporting `build_status = "not_built"` if absent).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppVcdDigest {
+    pub present: bool,
+    pub build_status: String,
+    pub rel_path: Option<String>,
+    pub size_bytes: u64,
+    pub version: Option<String>,
+    pub timescale: Option<String>,
+    pub timestamp_count: usize,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub signal_count: usize,
+    pub total_transitions: u64,
+    pub signals: Vec<VcdSignalSummary>,
+    pub waveform_svg: Option<String>,
+}
+
+/// Binary/ASCII `.stl` 3D triangle mesh statistics (`fidget-cam`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StlArtifactStats {
+    pub rel_path: String,
+    pub size_bytes: u64,
+    pub format: String,
+    pub header_text: String,
+    pub triangle_count: u32,
+    pub binary_size_consistent: bool,
+    pub bbox_min: [f32; 3],
+    pub bbox_max: [f32; 3],
+}
+
+/// 5-axis `.ngc` G-code toolpath statistics (`fidget-cam`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NgcArtifactStats {
+    pub rel_path: String,
+    pub size_bytes: u64,
+    pub line_count: usize,
+    pub rapid_g00_moves: usize,
+    pub linear_g01_moves: usize,
+    pub no_gouge_verified_points: usize,
+    pub min_tool_sdf: Option<i64>,
+    pub max_tool_sdf: Option<i64>,
+    pub spindle_rpm: Option<u32>,
+    pub preview_lines: Vec<String>,
+}
+
+/// Combined CAD/CAM buildout artifact report for `fidget-cam` (`.stl` + `.ngc`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FidgetCamArtifacts {
+    pub build_status: String,
+    pub stl: Option<StlArtifactStats>,
+    pub ngc: Option<NgcArtifactStats>,
+}
+
+/// Detailed JSON response for `GET /api/apps/<slug>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlagshipAppDetailResponse {
+    pub index: usize,
+    pub slug: String,
+    pub title: String,
+    pub lean_module: String,
+    pub lean_module_exists: bool,
+    pub qualification_summary: String,
+    pub top_obend_file: Option<String>,
+    pub obend_layers: Vec<AppObendLayerSource>,
+    pub lec_specs: Vec<AppSmt2LecSpec>,
+    pub rtl_modules: Vec<AppRtlModuleSummary>,
+    pub firmware_files: Vec<String>,
+    pub vcd_digest: AppVcdDigest,
+    pub cam_artifacts: Option<FidgetCamArtifacts>,
+}
+
+/// Locate the Objective Bend repository workspace root.
+pub fn find_workspace_root() -> PathBuf {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if let Some(root) = manifest_dir.parent().and_then(|p| p.parent()) {
+        if root.join("apps").exists() {
+            return root.to_path_buf();
+        }
+    }
+    for candidate in [".", "..", "../.."] {
+        let p = Path::new(candidate);
+        if p.join("apps").exists() {
+            return p.to_path_buf();
+        }
+    }
+    PathBuf::from(".")
+}
+
+/// Validate a URL `<slug>` parameter against path traversal or empty values.
+pub fn validate_app_slug(raw_slug: &str) -> Result<&'static FlagshipAppDescriptor, (u16, String)> {
+    let trimmed = raw_slug.trim().trim_matches('/');
+    if trimmed.is_empty()
+        || trimmed.contains("..")
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return Err((400, format!("Invalid flagship app slug: `{raw_slug}`")));
+    }
+    FLAGSHIP_APPS
+        .iter()
+        .find(|d| d.slug == trimmed)
+        .ok_or_else(|| (404, format!("Unknown flagship app slug: `{trimmed}`")))
+}
+
+/// Discover all 8 Flagship Applications in the active workspace (`GET /api/apps`).
+pub fn list_flagship_apps() -> FlagshipAppsListResponse {
+    list_flagship_apps_in_root(&find_workspace_root())
+}
+
+/// Discover all 8 Flagship Applications relative to an explicit `workspace_root`.
+pub fn list_flagship_apps_in_root(workspace_root: &Path) -> FlagshipAppsListResponse {
+    let apps_dir = workspace_root.join("apps");
+    let mut apps = Vec::with_capacity(FLAGSHIP_APPS.len());
+    let mut vcd_present_count = 0usize;
+    let mut lec_present_count = 0usize;
+
+    for desc in &FLAGSHIP_APPS {
+        let detail = build_app_detail(workspace_root, desc, false);
+        if detail.vcd_digest.present {
+            vcd_present_count += 1;
+        }
+        if !detail.lec_specs.is_empty() {
+            lec_present_count += 1;
+        }
+        let cam_artifacts_present = detail
+            .cam_artifacts
+            .as_ref()
+            .map(|c| c.stl.is_some() || c.ngc.is_some())
+            .unwrap_or(false);
+        apps.push(FlagshipAppSummary {
+            index: desc.index,
+            slug: desc.slug.to_string(),
+            title: desc.title.to_string(),
+            lean_module: desc.lean_module.to_string(),
+            lean_module_exists: detail.lean_module_exists,
+            qualification_summary: desc.qualification_summary.to_string(),
+            obend_layer_count: detail.obend_layers.len(),
+            obend_files: detail
+                .obend_layers
+                .iter()
+                .map(|l| l.filename.clone())
+                .collect(),
+            sv_files: detail
+                .rtl_modules
+                .iter()
+                .map(|m| m.filename.clone())
+                .collect(),
+            smt2_lec_present: !detail.lec_specs.is_empty(),
+            smt2_files: detail
+                .lec_specs
+                .iter()
+                .map(|s| s.filename.clone())
+                .collect(),
+            vcd_present: detail.vcd_digest.present,
+            vcd_build_status: detail.vcd_digest.build_status,
+            vcd_signal_count: detail.vcd_digest.signal_count,
+            vcd_total_transitions: detail.vcd_digest.total_transitions,
+            cam_artifacts_present,
+        });
+    }
+
+    FlagshipAppsListResponse {
+        apps_root: apps_dir.display().to_string(),
+        total_apps: apps.len(),
+        vcd_present_count,
+        lec_present_count,
+        apps,
+    }
+}
+
+/// Load full qualification explorer detail for `slug` (`GET /api/apps/<slug>`).
+pub fn get_flagship_app_detail(slug: &str) -> Result<FlagshipAppDetailResponse, (u16, String)> {
+    get_flagship_app_detail_in_root(&find_workspace_root(), slug)
+}
+
+/// Load full qualification explorer detail for `slug` relative to `workspace_root`.
+pub fn get_flagship_app_detail_in_root(
+    workspace_root: &Path,
+    slug: &str,
+) -> Result<FlagshipAppDetailResponse, (u16, String)> {
+    let desc = validate_app_slug(slug)?;
+    Ok(build_app_detail(workspace_root, desc, true))
+}
+
+fn build_app_detail(
+    workspace_root: &Path,
+    desc: &FlagshipAppDescriptor,
+    include_svg: bool,
+) -> FlagshipAppDetailResponse {
+    let app_dir = workspace_root.join("apps").join(desc.slug);
+    let lean_module_exists = workspace_root.join(desc.lean_module).exists();
+
+    let mut obend_paths = collect_files_with_ext(&app_dir, "obend", 2);
+    obend_paths.sort();
+
+    let mut obend_layers = Vec::with_capacity(obend_paths.len());
+    for p in &obend_paths {
+        if let Ok(source) = fs::read_to_string(p) {
+            let meta_size = fs::metadata(p).map(|m| m.len()).unwrap_or(source.len() as u64);
+            let filename = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let rel_path = to_rel_slash(workspace_root, p);
+            obend_layers.push(parse_obend_layer_source(
+                filename, rel_path, meta_size, source,
+            ));
+        }
+    }
+
+    let top_obend_file = obend_layers
+        .iter()
+        .find(|l| {
+            l.filename.contains("Top")
+                || l.filename.contains("Composed")
+                || l.filename.contains("Bundle")
+        })
+        .or_else(|| obend_layers.last())
+        .map(|l| l.rel_path.clone());
+
+    let mut smt2_paths = collect_files_with_ext(&app_dir, "smt2", 3);
+    smt2_paths.sort();
+    let mut lec_specs = Vec::with_capacity(smt2_paths.len());
+    for p in &smt2_paths {
+        if let Ok(source) = fs::read_to_string(p) {
+            let meta_size = fs::metadata(p).map(|m| m.len()).unwrap_or(source.len() as u64);
+            let filename = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let rel_path = to_rel_slash(workspace_root, p);
+            lec_specs.push(parse_smt2_text(filename, rel_path, meta_size, source));
+        }
+    }
+
+    let mut sv_paths = collect_files_with_ext(&app_dir, "sv", 3);
+    sv_paths.sort();
+    let mut rtl_modules = Vec::with_capacity(sv_paths.len());
+    for p in &sv_paths {
+        if let Ok(source) = fs::read_to_string(p) {
+            let meta_size = fs::metadata(p).map(|m| m.len()).unwrap_or(source.len() as u64);
+            let filename = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let rel_path = to_rel_slash(workspace_root, p);
+            rtl_modules.push(parse_sv_summary(filename, rel_path, meta_size, &source));
+        }
+    }
+
+    let mut firmware_files = Vec::new();
+    let fw_dir = app_dir.join("firmware");
+    if fw_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&fw_dir) {
+            for ent in entries.flatten() {
+                let p = ent.path();
+                if p.is_file() {
+                    firmware_files.push(to_rel_slash(workspace_root, &p));
+                }
+            }
+        }
+        firmware_files.sort();
+    }
+
+    // Locate `.vcd` buildout in `verilator/*.vcd`, `build/*.vcd`, or `*.vcd`
+    let mut vcd_candidates = collect_files_with_ext(&app_dir, "vcd", 3);
+    vcd_candidates.sort();
+    let vcd_digest = if let Some(vcd_path) = vcd_candidates.first() {
+        let rel = to_rel_slash(workspace_root, vcd_path);
+        match parse_vcd_file(vcd_path, Some(rel), include_svg) {
+            Ok(d) => d,
+            Err(_) => empty_vcd_digest("corrupt_or_unreadable"),
+        }
+    } else {
+        empty_vcd_digest("not_built")
+    };
+
+    // Inspect `.stl` and `.ngc` CAD/CAM build artifacts when `fidget-cam` (or if present in `build/` / `verilator/build/`)
+    let stl_candidates = collect_files_with_ext(&app_dir, "stl", 4);
+    let ngc_candidates = collect_files_with_ext(&app_dir, "ngc", 4);
+    let cam_artifacts =
+        if desc.slug == "fidget-cam" || !stl_candidates.is_empty() || !ngc_candidates.is_empty() {
+            let stl = stl_candidates.first().and_then(|p| {
+                let bytes = fs::read(p).ok()?;
+                Some(parse_stl_bytes(to_rel_slash(workspace_root, p), &bytes))
+            });
+            let ngc = ngc_candidates.first().and_then(|p| {
+                let text = fs::read_to_string(p).ok()?;
+                let size_bytes = fs::metadata(p).map(|m| m.len()).unwrap_or(text.len() as u64);
+                Some(parse_ngc_text(
+                    to_rel_slash(workspace_root, p),
+                    size_bytes,
+                    &text,
+                ))
+            });
+            let build_status = match (&stl, &ngc) {
+                (Some(_), Some(_)) => "built",
+                (Some(_), None) | (None, Some(_)) => "partial",
+                (None, None) => "not_built",
+            }
+            .to_string();
+            Some(FidgetCamArtifacts {
+                build_status,
+                stl,
+                ngc,
+            })
+        } else {
+            None
+        };
+
+    FlagshipAppDetailResponse {
+        index: desc.index,
+        slug: desc.slug.to_string(),
+        title: desc.title.to_string(),
+        lean_module: desc.lean_module.to_string(),
+        lean_module_exists,
+        qualification_summary: desc.qualification_summary.to_string(),
+        top_obend_file,
+        obend_layers,
+        lec_specs,
+        rtl_modules,
+        firmware_files,
+        vcd_digest,
+        cam_artifacts,
+    }
+}
+
+fn empty_vcd_digest(status: &str) -> AppVcdDigest {
+    AppVcdDigest {
+        present: false,
+        build_status: status.to_string(),
+        rel_path: None,
+        size_bytes: 0,
+        version: None,
+        timescale: None,
+        timestamp_count: 0,
+        start_time: 0,
+        end_time: 0,
+        signal_count: 0,
+        total_transitions: 0,
+        signals: Vec::new(),
+        waveform_svg: None,
+    }
+}
+
+fn collect_files_with_ext(dir: &Path, ext: &str, max_depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    collect_files_rec(dir, ext, 0, max_depth, &mut out);
+    out
+}
+
+fn collect_files_rec(
+    dir: &Path,
+    ext: &str,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<PathBuf>,
+) {
+    if depth > max_depth || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for ent in entries.flatten() {
+        let p = ent.path();
+        let name = ent.file_name();
+        let name_s = name.to_string_lossy();
+        if name_s == "obj_dir" || name_s.starts_with('.') {
+            continue;
+        }
+        if p.is_dir() {
+            collect_files_rec(&p, ext, depth + 1, max_depth, out);
+        } else if p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case(ext))
+            .unwrap_or(false)
+        {
+            out.push(p);
+        }
+    }
+}
+
+fn to_rel_slash(root: &Path, target: &Path) -> String {
+    target
+        .strip_prefix(root)
+        .unwrap_or(target)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn parse_obend_layer_source(
+    filename: String,
+    rel_path: String,
+    size_bytes: u64,
+    source: String,
+) -> AppObendLayerSource {
+    let mut imports = Vec::new();
+    let mut specs = Vec::new();
+    let mut claims = Vec::new();
+    let mut laws = Vec::new();
+    let mut line_count = 0usize;
+
+    for raw_line in source.lines() {
+        line_count += 1;
+        let t = raw_line.trim();
+        if let Some(rest) = t.strip_prefix("import ") {
+            imports.push(rest.trim().to_string());
+        } else if let Some(rest) = t.strip_prefix("spec ") {
+            let name = rest
+                .split(|c: char| c.is_whitespace() || c == ':')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() {
+                specs.push(name.to_string());
+            }
+        } else if let Some(rest) = t.strip_prefix("claim ") {
+            let name = rest
+                .split(|c: char| c == '(' || c == ':' || c.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() {
+                claims.push(name.to_string());
+            }
+        } else if let Some(rest) = t.strip_prefix("law ") {
+            let name = rest
+                .split(|c: char| c == ':' || c.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() {
+                laws.push(name.to_string());
+            }
+        }
+    }
+
+    AppObendLayerSource {
+        filename,
+        rel_path,
+        size_bytes,
+        line_count,
+        imports,
+        specs,
+        claims,
+        laws,
+        source,
+    }
+}
+
+/// Parse an SMT-LIB2 (`.smt2`) LEC specification and extract structural metrics.
+pub fn parse_smt2_text(
+    filename: String,
+    rel_path: String,
+    size_bytes: u64,
+    source: String,
+) -> AppSmt2LecSpec {
+    let mut logic = None;
+    let mut declare_const_count = 0usize;
+    let mut define_fun_count = 0usize;
+    let mut assert_count = 0usize;
+    let mut check_sat_count = 0usize;
+    let mut line_count = 0usize;
+
+    for raw_line in source.lines() {
+        line_count += 1;
+        let code = raw_line.split(';').next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+        if let Some(after) = code.strip_prefix("(set-logic ") {
+            let l = after.trim_end_matches(')').trim();
+            if !l.is_empty() {
+                logic = Some(l.to_string());
+            }
+        }
+        declare_const_count += code.matches("(declare-const ").count()
+            + code.matches("(declare-fun ").count();
+        define_fun_count += code.matches("(define-fun ").count();
+        assert_count += code.matches("(assert ").count() + usize::from(code == "(assert");
+        check_sat_count += code.matches("(check-sat)").count();
+    }
+
+    AppSmt2LecSpec {
+        filename,
+        rel_path,
+        size_bytes,
+        line_count,
+        logic,
+        declare_const_count,
+        define_fun_count,
+        assert_count,
+        check_sat_count,
+        source,
+    }
+}
+
+fn parse_sv_summary(
+    filename: String,
+    rel_path: String,
+    size_bytes: u64,
+    source: &str,
+) -> AppRtlModuleSummary {
+    let mut module_names = Vec::new();
+    let mut always_ff_count = 0usize;
+    let mut line_count = 0usize;
+
+    for line in source.lines() {
+        line_count += 1;
+        let code = line.split("//").next().unwrap_or("").trim();
+        if let Some(rest) = code.strip_prefix("module ") {
+            let m = rest
+                .split(|c: char| c.is_whitespace() || c == '(' || c == '#' || c == ';')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !m.is_empty() {
+                module_names.push(m.to_string());
+            }
+        }
+        always_ff_count += code.matches("always_ff").count();
+    }
+
+    AppRtlModuleSummary {
+        filename,
+        rel_path,
+        size_bytes,
+        line_count,
+        module_names,
+        always_ff_count,
+    }
+}
+
+/// Convert a VCD binary bit-string (arbitrary width, e.g. 1..512 bits) into compact `"0x..."` hex.
+pub fn vcd_bits_to_hex(bits: &[u8]) -> String {
+    if bits.is_empty() {
+        return "0x0".to_string();
+    }
+    if bits
+        .iter()
+        .any(|&b| matches!(b, b'x' | b'X' | b'z' | b'Z'))
+    {
+        let has_z = bits.iter().any(|&b| b == b'z' || b == b'Z');
+        return if has_z {
+            "0xZ".to_string()
+        } else {
+            "0xX".to_string()
+        };
+    }
+
+    // Strip leading '0's while keeping at least 1 bit
+    let first_one = bits.iter().position(|&b| b != b'0').unwrap_or(bits.len() - 1);
+    let trimmed = &bits[first_one..];
+    let rem = trimmed.len() % 4;
+    let mut hex = String::with_capacity(2 + (trimmed.len() + 3) / 4);
+    hex.push_str("0x");
+
+    if rem > 0 {
+        let mut nib = 0u8;
+        for &b in &trimmed[..rem] {
+            nib = (nib << 1) | u8::from(b == b'1');
+        }
+        let _ = write!(&mut hex, "{nib:x}");
+    }
+    for chunk in trimmed[rem..].chunks_exact(4) {
+        let mut nib = 0u8;
+        for &b in chunk {
+            nib = (nib << 1) | u8::from(b == b'1');
+        }
+        let _ = write!(&mut hex, "{nib:x}");
+    }
+    hex
+}
+
+struct VcdCodeTrack {
+    primary_name: String,
+    primary_scope: String,
+    width: usize,
+    has_initial: bool,
+    initial_bits: Vec<u8>,
+    last_bits: Vec<u8>,
+    transitions: u64,
+    samples: Vec<(u64, String)>,
+}
+
+/// Parse a `.vcd` file from disk using a fast streaming byte-slice scanner.
+pub fn parse_vcd_file(
+    path: &Path,
+    rel_path: Option<String>,
+    include_svg: bool,
+) -> Result<AppVcdDigest, String> {
+    let file = File::open(path).map_err(|e| format!("open VCD {:?}: {e}", path))?;
+    let size_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let reader = BufReader::with_capacity(64 * 1024, file);
+    parse_vcd_reader(reader, rel_path, size_bytes, include_svg)
+}
+
+/// Streaming VCD waveform parser supporting scalar (`0`/`1`/`x`/`z`), arbitrary-width vector (`b...`),
+/// and real (`r...`) changes with bounded per-signal sample capture.
+pub fn parse_vcd_reader<R: BufRead>(
+    mut reader: R,
+    rel_path: Option<String>,
+    size_bytes: u64,
+    include_svg: bool,
+) -> Result<AppVcdDigest, String> {
+    let mut version: Option<String> = None;
+    let mut timescale: Option<String> = None;
+    let mut in_header = true;
+    let mut pending_tag: Option<&'static str> = None;
+    let mut pending_val = String::new();
+    let mut scope_stack: Vec<String> = Vec::new();
+
+    let mut code_map: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut tracks: Vec<VcdCodeTrack> = Vec::new();
+    let mut declared_signal_count = 0usize;
+
+    let mut timestamp_count = 0usize;
+    let mut start_time = 0u64;
+    let mut end_time = 0u64;
+    let mut current_time = 0u64;
+    let mut saw_first_ts = false;
+
+    let mut line_buf = Vec::with_capacity(512);
+    loop {
+        line_buf.clear();
+        let n = reader
+            .read_until(b'\n', &mut line_buf)
+            .map_err(|e| format!("read VCD error: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let line = trim_ascii(&line_buf);
+        if line.is_empty() {
+            continue;
+        }
+
+        if in_header {
+            let s = String::from_utf8_lossy(line);
+            let st = s.trim();
+
+            if let Some(tag) = pending_tag {
+                if let Some(before_end) = st.strip_suffix("$end") {
+                    if !before_end.trim().is_empty() {
+                        if !pending_val.is_empty() {
+                            pending_val.push(' ');
+                        }
+                        pending_val.push_str(before_end.trim());
+                    }
+                    let final_v = pending_val.trim().to_string();
+                    if !final_v.is_empty() {
+                        if tag == "version" {
+                            version = Some(final_v);
+                        } else if tag == "timescale" {
+                            timescale = Some(final_v);
+                        }
+                    }
+                    pending_val.clear();
+                    pending_tag = None;
+                } else {
+                    if !pending_val.is_empty() {
+                        pending_val.push(' ');
+                    }
+                    pending_val.push_str(st);
+                }
+                continue;
+            }
+
+            if st.starts_with("$enddefinitions") {
+                in_header = false;
+                continue;
+            }
+            if let Some(rest) = st.strip_prefix("$version") {
+                if let Some(inner) = rest.strip_suffix("$end") {
+                    let v = inner.trim();
+                    if !v.is_empty() {
+                        version = Some(v.to_string());
+                    }
+                } else {
+                    pending_tag = Some("version");
+                    pending_val = rest.trim().to_string();
+                }
+                continue;
+            }
+            if let Some(rest) = st.strip_prefix("$timescale") {
+                if let Some(inner) = rest.strip_suffix("$end") {
+                    let v = inner.trim();
+                    if !v.is_empty() {
+                        timescale = Some(v.to_string());
+                    }
+                } else {
+                    pending_tag = Some("timescale");
+                    pending_val = rest.trim().to_string();
+                }
+                continue;
+            }
+            if let Some(rest) = st.strip_prefix("$scope") {
+                let inner = rest.strip_suffix("$end").unwrap_or(rest).trim();
+                let mut toks = inner.split_whitespace();
+                let _kind = toks.next();
+                if let Some(scope_name) = toks.next() {
+                    scope_stack.push(scope_name.to_string());
+                }
+                continue;
+            }
+            if st.starts_with("$upscope") {
+                scope_stack.pop();
+                continue;
+            }
+            if let Some(rest) = st.strip_prefix("$var") {
+                let inner = rest.strip_suffix("$end").unwrap_or(rest).trim();
+                let toks: Vec<&str> = inner.split_whitespace().collect();
+                // `$var <type> <width> <id_code> <reference> [bit-select] $end`
+                if toks.len() >= 4 {
+                    let width = toks[1].parse::<usize>().unwrap_or(1);
+                    let id_code = toks[2].as_bytes();
+                    let sig_name = toks[3].to_string();
+                    let cur_scope = scope_stack.join(".");
+                    declared_signal_count += 1;
+
+                    if let Some(&idx) = code_map.get(id_code) {
+                        // Prefer shorter/non-internal signal name (e.g. `pc_out` over `w_16`)
+                        let existing_internal = tracks[idx].primary_name.starts_with("w_");
+                        let new_internal = sig_name.starts_with("w_");
+                        if existing_internal && !new_internal {
+                            tracks[idx].primary_name = sig_name;
+                            tracks[idx].primary_scope = cur_scope;
+                        }
+                    } else {
+                        let idx = tracks.len();
+                        code_map.insert(id_code.to_vec(), idx);
+                        tracks.push(VcdCodeTrack {
+                            primary_name: sig_name,
+                            primary_scope: cur_scope,
+                            width,
+                            has_initial: false,
+                            initial_bits: Vec::new(),
+                            last_bits: Vec::new(),
+                            transitions: 0,
+                            samples: Vec::with_capacity(24),
+                        });
+                    }
+                }
+                continue;
+            }
+        } else {
+            // Value-change dump section
+            match line[0] {
+                b'#' => {
+                    if let Some(ts) = parse_u64_ascii(&line[1..]) {
+                        current_time = ts;
+                        timestamp_count += 1;
+                        if !saw_first_ts {
+                            start_time = ts;
+                            saw_first_ts = true;
+                        }
+                        end_time = ts;
+                    }
+                }
+                b'$' => {
+                    // `$dumpvars`, `$end`, `$comment`, etc.
+                }
+                b'0' | b'1' | b'x' | b'X' | b'z' | b'Z' => {
+                    let bit = line[0].to_ascii_lowercase();
+                    let id_code = trim_ascii(&line[1..]);
+                    if let Some(&idx) = code_map.get(id_code) {
+                        record_track_bits(&mut tracks[idx], current_time, &[bit]);
+                    }
+                }
+                b'b' | b'B' => {
+                    let rest = &line[1..];
+                    if let Some(ws_pos) = rest.iter().position(|b| b.is_ascii_whitespace()) {
+                        let raw_bits = &rest[..ws_pos];
+                        let id_code = trim_ascii(&rest[ws_pos + 1..]);
+                        if let Some(&idx) = code_map.get(id_code) {
+                            let norm = normalize_bit_slice(raw_bits);
+                            record_track_bits(&mut tracks[idx], current_time, norm);
+                        }
+                    }
+                }
+                b'r' | b'R' => {
+                    let rest = &line[1..];
+                    if let Some(ws_pos) = rest.iter().position(|b| b.is_ascii_whitespace()) {
+                        let raw_real = &rest[..ws_pos];
+                        let id_code = trim_ascii(&rest[ws_pos + 1..]);
+                        if let Some(&idx) = code_map.get(id_code) {
+                            let tr = &mut tracks[idx];
+                            if !tr.has_initial {
+                                tr.has_initial = true;
+                                tr.initial_bits.extend_from_slice(raw_real);
+                                tr.last_bits.extend_from_slice(raw_real);
+                                tr.samples.push((
+                                    current_time,
+                                    String::from_utf8_lossy(raw_real).into_owned(),
+                                ));
+                            } else if tr.last_bits.as_slice() != raw_real {
+                                tr.transitions += 1;
+                                tr.last_bits.clear();
+                                tr.last_bits.extend_from_slice(raw_real);
+                                if tr.samples.len() < 24 {
+                                    tr.samples.push((
+                                        current_time,
+                                        String::from_utf8_lossy(raw_real).into_owned(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let total_transitions: u64 = tracks.iter().map(|t| t.transitions).sum();
+    let unique_signal_count = tracks.len().max(usize::from(declared_signal_count > 0));
+
+    // Sort signals so architectural / high-activity non-internal ports come first
+    let mut summaries: Vec<VcdSignalSummary> = tracks
+        .into_iter()
+        .map(|t| {
+            let init_hex = if t.initial_bits.contains(&b'.') {
+                String::from_utf8_lossy(&t.initial_bits).into_owned()
+            } else {
+                vcd_bits_to_hex(&t.initial_bits)
+            };
+            let last_hex = if t.last_bits.contains(&b'.') {
+                String::from_utf8_lossy(&t.last_bits).into_owned()
+            } else {
+                vcd_bits_to_hex(&t.last_bits)
+            };
+            VcdSignalSummary {
+                name: t.primary_name,
+                scope: t.primary_scope,
+                width: t.width,
+                transitions: t.transitions,
+                initial_value_hex: init_hex,
+                last_value_hex: last_hex,
+                samples: t.samples,
+            }
+        })
+        .collect();
+
+    summaries.sort_by(|a, b| {
+        let a_internal = a.name.starts_with("w_");
+        let b_internal = b.name.starts_with("w_");
+        a_internal
+            .cmp(&b_internal)
+            .then_with(|| b.transitions.cmp(&a.transitions))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    // Keep top 24 signals in JSON payload so multi-hundred-wire netlists remain compact
+    summaries.truncate(24);
+
+    let waveform_svg = if include_svg && !summaries.is_empty() {
+        Some(render_vcd_waveform_svg(
+            &summaries,
+            start_time,
+            end_time,
+            timescale.as_deref().unwrap_or("1ps"),
+        ))
+    } else {
+        None
+    };
+
+    Ok(AppVcdDigest {
+        present: true,
+        build_status: "built".to_string(),
+        rel_path,
+        size_bytes,
+        version,
+        timescale,
+        timestamp_count,
+        start_time,
+        end_time,
+        signal_count: unique_signal_count,
+        total_transitions,
+        signals: summaries,
+        waveform_svg,
+    })
+}
+
+#[inline]
+fn trim_ascii(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(start);
+    &bytes[start..end]
+}
+
+#[inline]
+fn normalize_bit_slice(raw: &[u8]) -> &[u8] {
+    if raw.is_empty() {
+        return b"0";
+    }
+    let pos = raw.iter().position(|&b| b != b'0').unwrap_or(raw.len() - 1);
+    &raw[pos..]
+}
+
+#[inline]
+fn parse_u64_ascii(bytes: &[u8]) -> Option<u64> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut val = 0u64;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            break;
+        }
+        val = val.saturating_mul(10).saturating_add((b - b'0') as u64);
+    }
+    Some(val)
+}
+
+#[inline]
+fn record_track_bits(tr: &mut VcdCodeTrack, current_time: u64, norm_bits: &[u8]) {
+    if !tr.has_initial {
+        tr.has_initial = true;
+        tr.initial_bits.extend_from_slice(norm_bits);
+        tr.last_bits.extend_from_slice(norm_bits);
+        tr.samples.push((current_time, vcd_bits_to_hex(norm_bits)));
+    } else if tr.last_bits.as_slice() != norm_bits {
+        tr.transitions += 1;
+        tr.last_bits.clear();
+        tr.last_bits.extend_from_slice(norm_bits);
+        if tr.samples.len() < 24 {
+            tr.samples.push((current_time, vcd_bits_to_hex(norm_bits)));
+        }
+    }
+}
+
+/// Render an interactive dark-theme SVG digital waveform diagram from extracted `.vcd` signal samples.
+pub fn render_vcd_waveform_svg(
+    signals: &[VcdSignalSummary],
+    start_time: u64,
+    end_time: u64,
+    timescale: &str,
+) -> String {
+    let rows: Vec<&VcdSignalSummary> = signals.iter().take(8).collect();
+    let row_h = 34usize;
+    let top_pad = 34usize;
+    let height = top_pad + rows.len() * row_h + 16;
+    let width = 880usize;
+    let label_x = 12usize;
+    let wave_x0 = 230.0f64;
+    let wave_x1 = 856.0f64;
+    let wave_w = wave_x1 - wave_x0;
+
+    // Focus the horizontal time axis on the sampled window so dense multi-thousand-cycle VCDs stay legible
+    let max_sample_t = rows
+        .iter()
+        .flat_map(|s| s.samples.iter().map(|&(t, _)| t))
+        .max()
+        .unwrap_or(end_time);
+    let view_end = if max_sample_t > start_time {
+        max_sample_t.saturating_add(((max_sample_t - start_time) / 8).max(2))
+    } else {
+        end_time.max(start_time + 10)
+    };
+    let span = (view_end.saturating_sub(start_time)).max(1) as f64;
+
+    let mut svg = String::with_capacity(4096);
+    let _ = write!(
+        &mut svg,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" data-projection="vcd-waveform-digest">"##
+    );
+    let _ = write!(
+        &mut svg,
+        r##"<rect x="0" y="0" width="{width}" height="{height}" rx="8" fill="#070b12" stroke="#1e293b"/>"##
+    );
+    let _ = write!(
+        &mut svg,
+        r##"<text x="{label_x}" y="21" fill="#94a3b8" font-family="monospace" font-size="11">VCD LOGIC ANALYZER (timescale: {ts} | window: #{t0}..#{t1} | full end: #{tend})</text>"##,
+        ts = xml_escape(timescale),
+        t0 = start_time,
+        t1 = view_end,
+        tend = end_time
+    );
+
+    // Vertical grid ticks
+    for tick in 0..=4 {
+        let gx = wave_x0 + (tick as f64 / 4.0) * wave_w;
+        let gt = start_time + ((tick as f64 / 4.0) * span).round() as u64;
+        let _ = write!(
+            &mut svg,
+            r##"<line x1="{gx:.1}" y1="28" x2="{gx:.1}" y2="{h}" stroke="#162032" stroke-dasharray="3,3"/>"##,
+            h = height - 8
+        );
+        let _ = write!(
+            &mut svg,
+            r##"<text x="{gx:.1}" y="21" fill="#64748b" font-family="monospace" font-size="9.5" text-anchor="end">#{gt}</text>"##
+        );
+    }
+
+    for (r_idx, sig) in rows.iter().enumerate() {
+        let y_top = (top_pad + r_idx * row_h) as f64;
+        let y_hi = y_top + 6.0;
+        let y_mid = y_top + 15.0;
+        let y_lo = y_top + 24.0;
+
+        let short_name = if sig.name.len() > 20 {
+            format!("{}…", &sig.name[..19])
+        } else {
+            sig.name.clone()
+        };
+        let _ = write!(
+            &mut svg,
+            r##"<text x="{label_x}" y="{yt:.1}" fill="#e2e8f0" font-family="monospace" font-size="11">{name}[{w}]</text>"##,
+            yt = y_mid + 3.0,
+            name = xml_escape(&short_name),
+            w = sig.width
+        );
+        let _ = write!(
+            &mut svg,
+            r##"<text x="220" y="{yt:.1}" fill="#38bdf8" font-family="monospace" font-size="9.5" text-anchor="end">{tr}Δ</text>"##,
+            yt = y_mid + 3.0,
+            tr = sig.transitions
+        );
+
+        if sig.samples.is_empty() {
+            continue;
+        }
+
+        if sig.width == 1 {
+            let mut path_d = String::new();
+            for (s_idx, &(t, ref val)) in sig.samples.iter().enumerate() {
+                let x = (wave_x0 + ((t.saturating_sub(start_time)) as f64 / span) * wave_w)
+                    .clamp(wave_x0, wave_x1);
+                let y = if val == "0x1" || val == "1" {
+                    y_hi
+                } else {
+                    y_lo
+                };
+                if s_idx == 0 {
+                    let _ = write!(&mut path_d, "M {wave_x0:.1} {y:.1} L {x:.1} {y:.1}");
+                } else {
+                    let prev_y = if sig.samples[s_idx - 1].1 == "0x1"
+                        || sig.samples[s_idx - 1].1 == "1"
+                    {
+                        y_hi
+                    } else {
+                        y_lo
+                    };
+                    let _ = write!(&mut path_d, " L {x:.1} {prev_y:.1} L {x:.1} {y:.1}");
+                }
+                if s_idx + 1 == sig.samples.len() {
+                    let _ = write!(&mut path_d, " L {wave_x1:.1} {y:.1}");
+                }
+            }
+            let _ = write!(
+                &mut svg,
+                r##"<path d="{path_d}" fill="none" stroke="#4ade80" stroke-width="1.6"/>"##
+            );
+        } else {
+            // Multi-bit bus envelope boxes
+            for (s_idx, &(t, ref val)) in sig.samples.iter().enumerate() {
+                let x0 = (wave_x0 + ((t.saturating_sub(start_time)) as f64 / span) * wave_w)
+                    .clamp(wave_x0, wave_x1);
+                let next_t = sig
+                    .samples
+                    .get(s_idx + 1)
+                    .map(|&(nt, _)| nt)
+                    .unwrap_or(view_end);
+                let x1 = (wave_x0 + ((next_t.saturating_sub(start_time)) as f64 / span) * wave_w)
+                    .clamp(x0 + 2.0, wave_x1);
+                let box_w = (x1 - x0).max(2.0);
+                let stroke = if val == "0x0" { "#334155" } else { "#38bdf8" };
+                let fill = if val == "0x0" {
+                    "#0f172a"
+                } else {
+                    "rgba(56,189,248,0.13)"
+                };
+                let _ = write!(
+                    &mut svg,
+                    r##"<rect x="{x0:.1}" y="{y_hi:.1}" width="{box_w:.1}" height="18" rx="3" fill="{fill}" stroke="{stroke}" stroke-width="1"/>"##
+                );
+                if box_w >= 46.0 {
+                    let max_chars = ((box_w - 8.0) / 6.2) as usize;
+                    let disp = if val.len() > max_chars && max_chars > 3 {
+                        format!("{}…", &val[..max_chars - 1])
+                    } else {
+                        val.clone()
+                    };
+                    let _ = write!(
+                        &mut svg,
+                        r##"<text x="{tx:.1}" y="{ty:.1}" fill="#bae6fd" font-family="monospace" font-size="9.5">{disp}</text>"##,
+                        tx = x0 + 4.0,
+                        ty = y_mid + 3.0,
+                        disp = xml_escape(&disp)
+                    );
+                }
+            }
+        }
+    }
+
+    svg.push_str("</svg>");
+    svg
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Parse binary or ASCII `.stl` mesh bytes into `StlArtifactStats`.
+pub fn parse_stl_bytes(rel_path: String, bytes: &[u8]) -> StlArtifactStats {
+    let size_bytes = bytes.len() as u64;
+    if bytes.len() >= 84 {
+        let tri_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]);
+        let expected_len = 84u64.saturating_add((tri_count as u64).saturating_mul(50));
+        let looks_ascii = bytes.starts_with(b"solid ") && expected_len != size_bytes;
+
+        if !looks_ascii {
+            let header_end = bytes[..80]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(80);
+            let header_text = String::from_utf8_lossy(&bytes[..header_end])
+                .trim()
+                .to_string();
+
+            let mut min_v = [f32::INFINITY; 3];
+            let mut max_v = [f32::NEG_INFINITY; 3];
+            let max_tris = ((bytes.len() - 84) / 50).min(tri_count as usize);
+            for i in 0..max_tris {
+                let base = 84 + i * 50 + 12; // skip 12-byte normal vector
+                for v_idx in 0..3 {
+                    for axis in 0..3 {
+                        let off = base + v_idx * 12 + axis * 4;
+                        let val = f32::from_le_bytes([
+                            bytes[off],
+                            bytes[off + 1],
+                            bytes[off + 2],
+                            bytes[off + 3],
+                        ]);
+                        if val.is_finite() {
+                            if val < min_v[axis] {
+                                min_v[axis] = val;
+                            }
+                            if val > max_v[axis] {
+                                max_v[axis] = val;
+                            }
+                        }
+                    }
+                }
+            }
+            if max_tris == 0 || !min_v[0].is_finite() {
+                min_v = [0.0; 3];
+                max_v = [0.0; 3];
+            }
+
+            return StlArtifactStats {
+                rel_path,
+                size_bytes,
+                format: "binary".to_string(),
+                header_text,
+                triangle_count: tri_count,
+                binary_size_consistent: expected_len == size_bytes,
+                bbox_min: min_v,
+                bbox_max: max_v,
+            };
+        }
+    }
+
+    // Fallback: ASCII STL or truncated header
+    let text = String::from_utf8_lossy(bytes);
+    let mut tri_count = 0u32;
+    let mut min_v = [f32::INFINITY; 3];
+    let mut max_v = [f32::NEG_INFINITY; 3];
+    let first_line = text.lines().next().unwrap_or("").trim().to_string();
+
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("facet normal") {
+            tri_count = tri_count.saturating_add(1);
+        } else if let Some(rest) = t.strip_prefix("vertex ") {
+            let mut coords = rest.split_whitespace();
+            if let (Some(xs), Some(ys), Some(zs)) = (coords.next(), coords.next(), coords.next()) {
+                if let (Ok(x), Ok(y), Ok(z)) =
+                    (xs.parse::<f32>(), ys.parse::<f32>(), zs.parse::<f32>())
+                {
+                    for (axis, val) in [(0, x), (1, y), (2, z)] {
+                        if val.is_finite() {
+                            min_v[axis] = min_v[axis].min(val);
+                            max_v[axis] = max_v[axis].max(val);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !min_v[0].is_finite() {
+        min_v = [0.0; 3];
+        max_v = [0.0; 3];
+    }
+
+    StlArtifactStats {
+        rel_path,
+        size_bytes,
+        format: if text.trim_start().starts_with("solid") {
+            "ascii".to_string()
+        } else {
+            "truncated".to_string()
+        },
+        header_text: first_line,
+        triangle_count: tri_count,
+        binary_size_consistent: false,
+        bbox_min: min_v,
+        bbox_max: max_v,
+    }
+}
+
+/// Parse 5-axis `.ngc` G-code toolpath text into `NgcArtifactStats`.
+pub fn parse_ngc_text(rel_path: String, size_bytes: u64, text: &str) -> NgcArtifactStats {
+    let mut line_count = 0usize;
+    let mut rapid_g00_moves = 0usize;
+    let mut linear_g01_moves = 0usize;
+    let mut no_gouge_verified_points = 0usize;
+    let mut min_tool_sdf: Option<i64> = None;
+    let mut max_tool_sdf: Option<i64> = None;
+    let mut spindle_rpm: Option<u32> = None;
+    let mut preview_lines = Vec::new();
+
+    for line in text.lines() {
+        line_count += 1;
+        let t = line.trim();
+        if preview_lines.len() < 12 && !t.is_empty() {
+            preview_lines.push(t.to_string());
+        }
+        if t.starts_with("G00 ") || t.starts_with("G0 ") {
+            rapid_g00_moves += 1;
+        } else if t.starts_with("G01 ") || t.starts_with("G1 ") {
+            linear_g01_moves += 1;
+        }
+        if t.contains("NO_GOUGE=1") {
+            no_gouge_verified_points += 1;
+        }
+        if let Some(pos) = t.find("TOOL_SDF=") {
+            let after = &t[pos + "TOOL_SDF=".len()..];
+            let num_s: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
+            if let Ok(sdf) = num_s.parse::<i64>() {
+                min_tool_sdf = Some(min_tool_sdf.map_or(sdf, |m| m.min(sdf)));
+                max_tool_sdf = Some(max_tool_sdf.map_or(sdf, |m| m.max(sdf)));
+            }
+        }
+        if spindle_rpm.is_none() && t.starts_with('S') && t.contains("M03") {
+            let digits: String = t[1..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(rpm) = digits.parse::<u32>() {
+                spindle_rpm = Some(rpm);
+            }
+        }
+    }
+
+    NgcArtifactStats {
+        rel_path,
+        size_bytes,
+        line_count,
+        rapid_g00_moves,
+        linear_g01_moves,
+        no_gouge_verified_points,
+        min_tool_sdf,
+        max_tool_sdf,
+        spindle_rpm,
+        preview_lines,
+    }
+}

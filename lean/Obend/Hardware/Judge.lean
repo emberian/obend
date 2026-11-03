@@ -318,8 +318,11 @@ def decodeRtlAluOp (opStr : String) : Except String RtlAluOp :=
   else if opStr == "bitXor" then .ok .bitXor
   else if opStr == "shl" then .ok .shl
   else if opStr == "lshr" then .ok .lshr
+  else if opStr == "ashr" then .ok .ashr
   else if opStr == "eq" then .ok .eq
   else if opStr == "ult" then .ok .ult
+  else if opStr == "slt" then .ok .slt
+  else if opStr == "qmul32" then .ok .qmul32
   else .error s!"unknown RtlAluOp '{opStr}'"
 
 /-- Decode a `ClkDomain` from its wire string token. -/
@@ -430,18 +433,24 @@ def encodeRtlSynthObj (modName : String) : String :=
   "{\"module\":\"" ++ modName ++ "\"}"
 
 /-- Encode an `RtlAluOp` to its canonical wire string token inverting `decodeRtlAluOp`. -/
-def encodeRtlAluOp (op : RtlAluOp) : String :=
-  if op == .add then "add"
-  else if op == .sub then "sub"
-  else if op == .mul then "mul"
-  else if op == .bitAnd then "bitAnd"
-  else if op == .bitOr then "bitOr"
-  else if op == .bitXor then "bitXor"
-  else if op == .shl then "shl"
-  else if op == .lshr then "lshr"
-  else if op == .eq then "eq"
-  else if op == .ult then "ult"
-  else "add"
+def encodeRtlAluOp : RtlAluOp → String
+  | .add    => "add"
+  | .sub    => "sub"
+  | .mul    => "mul"
+  | .bitAnd => "bitAnd"
+  | .bitOr  => "bitOr"
+  | .bitXor => "bitXor"
+  | .shl    => "shl"
+  | .lshr   => "lshr"
+  | .ashr   => "ashr"
+  | .eq     => "eq"
+  | .ult    => "ult"
+  | .slt    => "slt"
+  | .qmul32 => "qmul32"
+
+@[simp] theorem decodeRtlAluOp_encodeRtlAluOp (op : RtlAluOp) :
+    decodeRtlAluOp (encodeRtlAluOp op) = .ok op := by
+  cases op <;> rfl
 
 /-- Encode a `ClkDomain` to its canonical wire string token inverting `decodeClockDomain`. -/
 def encodeClockDomain : ClkDomain → String

@@ -2,10 +2,15 @@ edition ObjectiveBend 1
 # Flagship App #7 (`apps/sovereign-drex/SovereignDrexTop.obend`):
 # Top-level 4-validator (`V0..V3`, N=4, f=1, quorum=3) Sovereign `DReX` + `K-CARRY` exchange.
 
-import "./Seat.obend" as SeatMod
-import "./OrderBook.obend" as BookMod
-import "./BatchClearing.obend" as ClearingMod
+import ./Seat.obend as SeatMod
+import ./OrderBook.obend as BookMod
+import ./BatchClearing.obend as ClearingMod
 
+law monotone_seat_epoch: monotone(seatEpoch)
+law bounded_seat_slippage: new.slippageBps <= 50
+law monotone_book_batch: monotone(batchSeq)
+law conserve_total_cbdc_supply: writeOnce(totalCbdcSupply)
+law monotone_carry_epoch: monotone(carryEpoch)
 law write_once_genesis_carry_hash: writeOnce(genesisCarryHash)
 
 record SovereignDrexExchange:

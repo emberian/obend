@@ -7,6 +7,10 @@ import ./BaseImpellerBody.obend as BaseBody
 import ./CoolingChannelOverride.obend as Cooling
 import ./MountingBossAssembly.obend as Boss
 
+law monotone_cam_pass: monotone(camPassEpoch)
+law bounded_wall_thickness: new.wallThicknessUm <= 3000
+law monotone_coolant_flow: monotone(flowEpoch)
+law write_once_boss_datum: writeOnce(bossDatumId)
 law monotone_stl_triangles: monotone(triangleCount)
 law bounded_servo_deflection_nm: new.deflectionNm <= 500
 

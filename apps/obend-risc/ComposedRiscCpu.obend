@@ -11,55 +11,96 @@ record ComposedRiscCpuTarget:
   mtvecAddr() -> Nat
   trapCauseCode() -> Nat
   customExtOpcode() -> Nat
-  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
-  extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
-  nextPc(pc: Nat) -> Nat
-  execStep(rs1Val: Nat, rs2Val: Nat) -> Nat
+  decodeOpcode(inst: Nat) -> Nat
+  decodeImmI(inst: Nat) -> Nat
+  decodeImmS(inst: Nat) -> Nat
+  aluExec(opcode: Nat, funct3: Nat, funct7: Nat, lhs: Nat, rhs: Nat) -> Nat
+  extMacExec(funct3: Nat, funct7: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  nextPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat
+  execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
 
 spec Layer1BaseRiscSpec for ComposedRiscCpuTarget:
   requires mtvecAddr() -> Nat
   requires trapCauseCode() -> Nat
   requires customExtOpcode() -> Nat
   def mtvecAddr() -> Nat:
-    64n
+    0x50n
   def trapCauseCode() -> Nat:
     11n
   def customExtOpcode() -> Nat:
-    43n
-  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
-    rs1Val + rs2Val + imm
-  def extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
-    rs1Val * rs2Val + imm
-  def nextPc(pc: Nat) -> Nat:
-    pc + self.mtvecAddr
-  def execStep(rs1Val: Nat, rs2Val: Nat) -> Nat:
-    rs1Val + rs2Val + self.trapCauseCode
-  claim composed_next_pc_open_recursion(pc: Nat): self.nextPc(pc) == pc + self.mtvecAddr
+    0x2Bn
+  def decodeOpcode(inst: Nat) -> Nat:
+    inst & 0x7Fn
+  def decodeImmI(inst: Nat) -> Nat:
+    (inst << 32n) >> 52n
+  def decodeImmS(inst: Nat) -> Nat:
+    let rawS = (((inst >>> 25n) & 0x7Fn) << 5n) | ((inst >>> 7n) & 0x1Fn) in (rawS << 52n) >> 52n
+  def aluExec(opcode: Nat, funct3: Nat, funct7: Nat, lhs: Nat, rhs: Nat) -> Nat:
+    if funct3 == 0n then (if (opcode == 0x33n) && (funct7 == 0x20n) then ((lhs & 0xFFFFFFFFFFFFFFFFn) + ((rhs ^ 0xFFFFFFFFFFFFFFFFn) + 1n)) & 0xFFFFFFFFFFFFFFFFn else (if (opcode == 0x33n) && (funct7 == 0x01n) then (lhs * rhs) & 0xFFFFFFFFFFFFFFFFn else (lhs + rhs) & 0xFFFFFFFFFFFFFFFFn)) else (if funct3 == 1n then lhs << (rhs & 0x3Fn) else (if funct3 == 2n then (if lhs <s rhs then 1n else 0n) else (if funct3 == 4n then lhs ^ rhs else (if funct3 == 5n then (if funct7 == 0x20n then lhs >> (rhs & 0x3Fn) else lhs >>> (rhs & 0x3Fn)) else (if funct3 == 6n then lhs | rhs else lhs & rhs)))))
+  def extMacExec(funct3: Nat, funct7: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    if funct3 == 0n then ((rs1Val * rs2Val) + funct7) & 0xFFFFFFFFFFFFFFFFn else (((rs1Val & 0xFFFFFFFFn) << 32n) - (rs1Val & 0xFFFFFFFFn) + rs2Val) & 0xFFFFFFFFFFFFFFFFn
+  def nextPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat:
+    (pc + 4n) & 0xFFFFFFFFFFFFFFFFn
+  def execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let f7 = (inst >>> 25n) & 0x7Fn in let immI = (inst << 32n) >> 52n in let rhs = if op == 0x13n then immI else rs2Val in self.aluExec(op, f3, f7, rs1Val, rhs)
 
 spec Layer2PrivCsrOverride for ComposedRiscCpuTarget:
-  requires execStep(rs1Val: Nat, rs2Val: Nat) -> Nat
+  requires mtvecAddr() -> Nat
+  requires trapCauseCode() -> Nat
+  requires nextPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat
+  requires execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
   def mtvecAddr() -> Nat:
-    64n
+    0x50n
   def trapCauseCode() -> Nat:
     11n
-  def execStep(rs1Val: Nat, rs2Val: Nat) -> Nat:
-    super.execStep(rs1Val, rs2Val) + 42n
+  def nextPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat:
+    let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let immU12 = (inst >>> 20n) & 0xFFFn in if (op == 0x73n) && (f3 == 0n) && (immU12 == 0n) then self.mtvecAddr else (if (op == 0x73n) && (f3 == 0n) && (immU12 == 0x302n) then mepc else super.nextPc(inst, pc, mepc))
+  def execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let immU12 = (inst >>> 20n) & 0xFFFn in if (op == 0x73n) && (f3 == 2n) then (if immU12 == 0x342n then self.trapCauseCode else self.mtvecAddr) else super.execStep(inst, rs1Val, rs2Val)
 
 spec Layer3CustomSimdZkOverride for ComposedRiscCpuTarget:
-  requires execStep(rs1Val: Nat, rs2Val: Nat) -> Nat
+  requires customExtOpcode() -> Nat
+  requires extMacExec(funct3: Nat, funct7: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  requires nextPc(inst: Nat, pc: Nat, mepc: Nat) -> Nat
+  requires execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
   def customExtOpcode() -> Nat:
-    43n
-  def execStep(rs1Val: Nat, rs2Val: Nat) -> Nat:
-    super.execStep(rs1Val, rs2Val) + 10n
+    0x2Bn
+  def execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let f7 = (inst >>> 25n) & 0x7Fn in if op == self.customExtOpcode then self.extMacExec(f3, f7, rs1Val, rs2Val) else super.execStep(inst, rs1Val, rs2Val)
+  claim composed_base_non_interference() by weave: self.execStep(0x002081B3n, 13n, 21n) == 34n
+  claim composed_trap_preempts_pc() by weave: self.nextPc(0x00000073n, 32n, 0n) == 0x50n
+  claim composed_mret_restores_mepc() by weave: self.nextPc(0x30200073n, 88n, 36n) == 36n
+  claim composed_csrrs_reads_mcause() by weave: self.execStep(0x342024F3n, 0n, 0n) == 11n
+  claim composed_custom_mac_exec() by weave: self.execStep(0x027305ABn, 8n, 13n) == 105n
 
 def seedComposedRiscCpu() -> ComposedRiscCpuTarget:
-  {mtvecAddr: 0n, trapCauseCode: 0n, customExtOpcode: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, extMacExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, nextPc: fn(p: Nat) -> Nat: 0n, execStep: fn(a: Nat, b: Nat) -> Nat: 0n}
+  {mtvecAddr: 0n, trapCauseCode: 0n, customExtOpcode: 0n, decodeOpcode: fn(i: Nat) -> Nat: 0n, decodeImmI: fn(i: Nat) -> Nat: 0n, decodeImmS: fn(i: Nat) -> Nat: 0n, aluExec: fn(o: Nat, f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, extMacExec: fn(f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, nextPc: fn(i: Nat, p: Nat, m: Nat) -> Nat: 0n, execStep: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
 
 def composedRiscCpu() -> ComposedRiscCpuTarget:
   fix(compose(compose(Layer1BaseRiscSpec, Layer2PrivCsrOverride), Layer3CustomSimdZkOverride), seedComposedRiscCpu())
 
+# Execute real 32-bit RV64I machine words from firmware/test_prog.hex across all 8 Fibonacci elements (sum = 54)
 def evalFibonacci8Sum() -> Nat:
-  composedRiscCpu().aluExec(21n, 33n, 0n)
+  let cpu = composedRiscCpu()
+  let x1 = cpu.execStep(0x00100093n, 0n, 0n)
+  let x2 = cpu.execStep(0x00100113n, 0n, 0n)
+  let x3 = cpu.execStep(0x002081B3n, x1, x2)
+  let x4 = cpu.execStep(0x00310233n, x2, x3)
+  let x5 = cpu.execStep(0x004182B3n, x3, x4)
+  let x6 = cpu.execStep(0x00520333n, x4, x5)
+  let x7 = cpu.execStep(0x006283B3n, x5, x6)
+  let x8 = cpu.execStep(0x00730433n, x6, x7)
+  x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8
 
+# Execute all 4 custom 0x2B zk.mac machine words from firmware/test_prog.hex (x11=105 -> x12=212 -> x13=639 -> x14=1282)
 def evalCustomSimdMac4() -> Nat:
-  composedRiscCpu().extMacExec(639n, 2n, 4n)
+  let cpu = composedRiscCpu()
+  let x11 = cpu.execStep(0x027305ABn, 8n, 13n)
+  let x12 = cpu.execStep(0x0435862Bn, x11, 2n)
+  let x13 = cpu.execStep(0x064606ABn, x12, 3n)
+  cpu.execStep(0x0836872Bn, x13, 2n)
+
+# Cross-check imported Base, Priv, and Ext modules against ComposedRiscCpu
+def evalCrossLayerConsistency() -> Bool:
+  let cpu = composedRiscCpu()
+  (Base.baseRiscCore().decodeImmI(0xFFB00093n) == cpu.decodeImmI(0xFFB00093n)) && (Priv.privilegeRiscCore().stepPc(0x30200073n, 88n, 36n) == cpu.nextPc(0x30200073n, 88n, 36n)) && (Ext.customSimdZkRiscCore().execInstruction(0x027305ABn, 8n, 13n) == cpu.execStep(0x027305ABn, 8n, 13n))

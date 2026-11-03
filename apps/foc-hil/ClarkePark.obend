@@ -30,6 +30,7 @@ spec UncalibratedClarkePark for ClarkeParkTransform:
   def cordicAngleResidualMrad(thetaMrad: Nat) -> Nat:
     thetaMrad + self.phaseOffsetMrad
   claim direct_axis_open_recursion(iaMa: Nat): self.directAxisCurrentMa(iaMa) == iaMa * self.cordicGainPermille + 15n
+  claim cordic_trig_taylor_enclosure(thetaMrad: Nat) by judge("taylor-model@1"): thetaMrad <= 1000n
 
 spec Cordic4StageCompensatedPark for ClarkeParkTransform:
   requires quadratureAxisCurrentMa(ibMa: Nat) -> Nat

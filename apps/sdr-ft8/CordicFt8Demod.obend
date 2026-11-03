@@ -29,6 +29,7 @@ spec BaseCordicFt8Spec for CordicFt8Demodulator:
     deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
   claim cordic_mag_open_recursion(iVal: Nat): self.cordicEnvelopeMag(iVal) == iVal * self.cordicGainPermille + 10n
   claim ft8_tone_bin_open_recursion(deltaPhaseMrad: Nat): self.ft8SymbolBin(deltaPhaseMrad) == deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
+  claim ft8_tone_bin_interval_bound(bin: Nat) by judge("interval@1"): 125n + bin * 125n <= 1000n
 
 spec Unrolled4StageCordicFt8Override for CordicFt8Demodulator:
   requires alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat
@@ -39,8 +40,32 @@ spec Unrolled4StageCordicFt8Override for CordicFt8Demodulator:
   def alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat:
     super.alwaysFfDeltaPhaseMrad(phaseMrad) + 2n
 
+record CordicStatefulDiscrim:
+  cicScaleSample(usbMv: Nat) -> Nat
+  alwaysFfNextCicInt1(cicInt1: Nat, prevPhaseMrad: Nat, usbSampleMv: Nat, phaseMrad: Nat) -> Nat
+  alwaysFfNextPrevPhase(cicInt1: Nat, prevPhaseMrad: Nat, usbSampleMv: Nat, phaseMrad: Nat) -> Nat
+  alwaysFfOutDeltaPhase(cicInt1: Nat, prevPhaseMrad: Nat, usbSampleMv: Nat, phaseMrad: Nat) -> Nat
+
+spec NominalCordicStatefulSpec for CordicStatefulDiscrim:
+  requires cicScaleSample(usbMv: Nat) -> Nat
+  def cicScaleSample(usbMv: Nat) -> Nat:
+    usbMv * 1n
+  def alwaysFfNextCicInt1(cicInt1: Nat, prevPhaseMrad: Nat, usbSampleMv: Nat, phaseMrad: Nat) -> Nat:
+    cicInt1 + self.cicScaleSample(usbSampleMv)
+  def alwaysFfNextPrevPhase(cicInt1: Nat, prevPhaseMrad: Nat, usbSampleMv: Nat, phaseMrad: Nat) -> Nat:
+    phaseMrad
+  def alwaysFfOutDeltaPhase(cicInt1: Nat, prevPhaseMrad: Nat, usbSampleMv: Nat, phaseMrad: Nat) -> Nat:
+    phaseMrad - prevPhaseMrad
+
+spec CalibratedCordicStatefulOverride for CordicStatefulDiscrim:
+  def cicScaleSample(usbMv: Nat) -> Nat:
+    usbMv * 2n
+
 def seedCordicFt8Demod() -> CordicFt8Demodulator:
   {cordicGainPermille: 0n, ft8ToneSpacingMilliHz: 0n, cordicEnvelopeMag: fn(iv: Nat) -> Nat: 0n, alwaysFfDeltaPhaseMrad: fn(pm: Nat) -> Nat: 0n, ft8SymbolBin: fn(dp: Nat) -> Nat: 0n}
+
+def seedCordicStatefulDiscrim() -> CordicStatefulDiscrim:
+  {cicScaleSample: fn(u: Nat) -> Nat: 0n, alwaysFfNextCicInt1: fn(c1: Nat, pp: Nat, us: Nat, pm: Nat) -> Nat: 0n, alwaysFfNextPrevPhase: fn(c1: Nat, pp: Nat, us: Nat, pm: Nat) -> Nat: 0n, alwaysFfOutDeltaPhase: fn(c1: Nat, pp: Nat, us: Nat, pm: Nat) -> Nat: 0n}
 
 def baseCordicFt8Demod() -> CordicFt8Demodulator:
   fix(BaseCordicFt8Spec, seedCordicFt8Demod())
@@ -48,5 +73,9 @@ def baseCordicFt8Demod() -> CordicFt8Demodulator:
 def unrolled4StageCordicFt8Demod() -> CordicFt8Demodulator:
   fix(compose(BaseCordicFt8Spec, Unrolled4StageCordicFt8Override), seedCordicFt8Demod())
 
+def calibratedCordicStatefulDiscrim() -> CordicStatefulDiscrim:
+  fix(compose(NominalCordicStatefulSpec, CalibratedCordicStatefulOverride), seedCordicStatefulDiscrim())
+
 def ratedFt8SymbolMetric() -> Nat:
-  unrolled4StageCordicFt8Demod().cordicEnvelopeMag(80n) + CicFir.ratedDecimatedFirSample()
+  unrolled4StageCordicFt8Demod().cordicEnvelopeMag(80n) + baseCordicFt8Demod().cordicGainPermille() + calibratedCordicStatefulDiscrim().alwaysFfOutDeltaPhase(0n, 100n, 500n, 350n) + CicFir.ratedDecimatedFirSample()
+
