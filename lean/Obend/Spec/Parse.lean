@@ -296,10 +296,15 @@ structure Token where
   stop : Nat
   deriving Inhabited
 
-/-- `^(?:[A-Za-z_]\w*|[0-9]+n?|"(?:[^"\\]|\\.)*"|->|==|!=|<=|>=|&&|\|\||[{}:=().,+*/%<>-])` -/
-def tokenRe : Re := alts [ident, seqs [many1 (.char asciiDigit), opt (chr 'n')], quoted,
-  str "->", str "==", str "!=", str "<=", str ">=", str "&&", str "||",
-  .char (fun c => "{}:=().,+*/%<>-".toList.contains c)]
+def asciiHexDigit (c : Char) : Bool := (hexValue c).isSome
+
+/-- `^(?:[A-Za-z_]\w*|0[xX][0-9a-fA-F]+n?|[0-9]+n?|"(?:[^"\\]|\\.)*"|->|>>>|<<|>>|<=s|<s|==|!=|<=|>=|&&|\|\||[{}:=().,+*/%<>-&|^~])` -/
+def tokenRe : Re := alts [ident,
+  seqs [chr '0', .char (fun c => c == 'x' || c == 'X'), many1 (.char asciiHexDigit), opt (chr 'n')],
+  seqs [many1 (.char asciiDigit), opt (chr 'n')], quoted,
+  str "->", str ">>>", str "<<", str ">>", str "<=s", str "<s",
+  str "==", str "!=", str "<=", str ">=", str "&&", str "||",
+  .char (fun c => "{}:=().,+*/%<>-&|^~".toList.contains c)]
 
 def tokenize (text : List Char) : Except String (Array Token) := do
   let mut tokens : Array Token := #[]
@@ -322,7 +327,10 @@ def precedence (op : String) : Option Nat :=
   match op with
   | "||" => some 1 | "&&" => some 2 | "==" => some 3 | "!=" => some 3
   | "<" => some 4 | ">" => some 4 | "<=" => some 4 | ">=" => some 4
-  | "+" => some 5 | "-" => some 5 | "*" => some 6 | "/" => some 6 | "%" => some 6
+  | "<s" => some 4 | "<=s" => some 4
+  | "|" => some 5 | "^" => some 6 | "&" => some 7
+  | "<<" => some 8 | ">>" => some 8 | ">>>" => some 8
+  | "+" => some 9 | "-" => some 9 | "*" => some 10 | "/" => some 10 | "%" => some 10
   | _ => none
 
 structure ExprEnv where
@@ -353,14 +361,25 @@ def node (kind : String) (fields : List (String × Json)) (span : Span) : Json :
   Json.mkObj ([("kind", toJson kind)] ++ fields ++ [("span", span.json)])
 
 def isNumberToken (t : List Char) : Bool :=
-  let digits := t.takeWhile asciiDigit
-  !digits.isEmpty && (t.drop digits.length == [] || t.drop digits.length == ['n'])
+  match t with
+  | '0' :: ('x' :: rest) | '0' :: ('X' :: rest) =>
+    let digits := rest.takeWhile asciiHexDigit
+    !digits.isEmpty && (rest.drop digits.length == [] || rest.drop digits.length == ['n'])
+  | _ =>
+    let digits := t.takeWhile asciiDigit
+    !digits.isEmpty && (t.drop digits.length == [] || t.drop digits.length == ['n'])
 
-/-- `value.replace(/n$/," ").trim().replace(/^0+(?=[0-9])/,"")` -/
+/-- `value.replace(/n$/," ").trim().replace(/^0+(?=[0-9])/,"")` (or hex `0x...` converted to canonical decimal) -/
 def natValue (t : List Char) : String :=
-  let digits := t.takeWhile asciiDigit
-  let stripped := digits.dropWhile (· == '0')
-  String.ofList (if stripped.isEmpty then ['0'] else stripped)
+  match t with
+  | '0' :: ('x' :: rest) | '0' :: ('X' :: rest) =>
+    let digits := rest.takeWhile asciiHexDigit
+    let val := digits.foldl (fun acc c => acc * 16 + (hexValue c).getD 0) 0
+    toString val
+  | _ =>
+    let digits := t.takeWhile asciiDigit
+    let stripped := digits.dropWhile (· == '0')
+    String.ofList (if stripped.isEmpty then ['0'] else stripped)
 
 def kindOf (j : Json) : String := (j.getObjValAs? String "kind").toOption.getD ""
 
@@ -462,6 +481,11 @@ def parseExpr (env : ExprEnv) : Nat → Nat → EP (Json × Span)
     else if isIdent first.text then
       let span := env.location first.start first.stop
       result := (node "var" [("name", toJson firstText)] span, span)
+    else if firstText == "~" then
+      let (operand, opSpan) ← parseExpr env fuel 11
+      let span := { env.location first.start first.stop with stop := opSpan.stop }
+      let callee := node "var" [("name", toJson "bitNot")] (env.location first.start first.stop)
+      result := (node "call" [("callee", callee), ("args", Json.arr #[operand])] span, span)
     else throw "Error: expected expression atom"
     for _ in [0:env.tokens.size + 1] do
       let some next := (← peek env) | break

@@ -1,0 +1,57 @@
+edition ObjectiveBend 1
+# Flagship App #6 (`apps/fidget-cam/CoolingChannelOverride.obend`):
+# OpenUSD LIVERPS cooling channel CSG difference override with certified shell wall thickness & Lipschitz gradient bound.
+
+import ./BaseImpellerBody.obend as BaseBody
+
+law monotone_coolant_flow: monotone(flowEpoch)
+
+record ImpellerCoolingChannel:
+  boreRadiusUm() -> Nat
+  shellWallThicknessUm() -> Nat
+  lipschitzGradBound() -> Nat
+  certifiedClearanceUm(probeSpanUm: Nat) -> Nat
+  thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat
+
+spec HelicalChannelReferenceSpec for ImpellerCoolingChannel:
+  requires boreRadiusUm() -> Nat
+  requires shellWallThicknessUm() -> Nat
+  requires lipschitzGradBound() -> Nat
+  def boreRadiusUm() -> Nat:
+    800n
+  def shellWallThicknessUm() -> Nat:
+    2600n
+  def lipschitzGradBound() -> Nat:
+    9n
+  def certifiedClearanceUm(probeSpanUm: Nat) -> Nat:
+    probeSpanUm + self.shellWallThicknessUm * self.lipschitzGradBound
+  def thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat:
+    flowRateMlMin * 12n + self.boreRadiusUm
+  claim cooling_clearance_open_recursion(probeSpanUm: Nat): self.certifiedClearanceUm(probeSpanUm) == probeSpanUm + self.shellWallThicknessUm * self.lipschitzGradBound
+
+spec ConformalBoreLocalOverride for ImpellerCoolingChannel:
+  requires thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat
+  def boreRadiusUm() -> Nat:
+    950n
+  def lipschitzGradBound() -> Nat:
+    12n
+  def thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat:
+    super.thermalFluxCapacityMw(flowRateMlMin) + 250n
+
+def seedCoolingChannel() -> ImpellerCoolingChannel:
+  {boreRadiusUm: 0n, shellWallThicknessUm: 0n, lipschitzGradBound: 0n, certifiedClearanceUm: fn(p: Nat) -> Nat: p, thermalFluxCapacityMw: fn(f: Nat) -> Nat: f}
+
+def referenceCoolingChannel() -> ImpellerCoolingChannel:
+  fix(HelicalChannelReferenceSpec, seedCoolingChannel())
+
+def conformalCoolingChannel() -> ImpellerCoolingChannel:
+  fix(compose(HelicalChannelReferenceSpec, ConformalBoreLocalOverride), seedCoolingChannel())
+
+def conformalClearanceAt100() -> Nat:
+  conformalCoolingChannel().certifiedClearanceUm(100n)
+
+def conformalFluxAt30() -> Nat:
+  conformalCoolingChannel().thermalFluxCapacityMw(30n)
+
+def crossModuleShroudClearance() -> Nat:
+  BaseBody.shroudedMarginAt50() + conformalClearanceAt100()

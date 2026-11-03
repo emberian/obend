@@ -16,6 +16,7 @@ public import Obend.Law.Contract
 public import Obend.Core.Data
 public import Obend.Core.Term
 public import Obend.Judge.Class
+public import Obend.Tactic.Tooth
 
 @[expose] public section
 
@@ -149,12 +150,15 @@ theorem holds_of_pin_agrees {s₀ s : VaultStore} {fp : Footprint}
 
 /-! ## 3. Cell Deltas & VaultTurn Structure -/
 
+/-- A signed asset balance adjustment `(asset, delta)` attached to a `CellDelta`. -/
+abbrev HalfEdge := String × Int
+
 structure CellDelta where
   cell : String
   preState : Data
   postState : Data
   touchedFields : List String := []
-  halfEdges : List (String × Int) := []
+  halfEdges : List HalfEdge := []
   cert : Option ContractCert := none
 
 /-- Compute the net balance change for a specific asset in a single cell delta. -/
@@ -162,6 +166,10 @@ def deltaAsset (d : CellDelta) (asset : String) : Int :=
   match d.halfEdges.find? (·.1 == asset) with
   | some (_, amount) => amount
   | none => 0
+
+/-- Alias for `deltaAsset`: the reported half-edge balance delta for `asset` in `d`. -/
+abbrev cellAssetDelta (d : CellDelta) (asset : String) : Int :=
+  deltaAsset d asset
 
 /-- Sum asset balance adjustments across all cell deltas. -/
 def sumAssetDelta (writeCells : List CellDelta) (asset : String) : Int :=
@@ -628,6 +636,179 @@ theorem turn_conserves_total_state_balance (turn : VaultTurn) (balanceField : St
   have h_diff := sumAssetDelta_eq_post_sub_pre turn.writeCells balanceField h_acc
   have h_bal := turn.balanced balanceField
   omega
+
+/-! ## 8. State-to-HalfEdge Conservation Binding (`ASTRA-COUNCIL:363–370`) -/
+
+/-- Extract the integer/natural balance of `asset` (or `"balance_" ++ asset`) from a
+    `Data.record` cell state payload, defaulting to `0` if absent or non-numeric. -/
+def extractCellAssetBalance (d : Data) (asset : String) : Int :=
+  match d with
+  | .record fs =>
+    match fs.find? (·.1 == asset) with
+    | some (_, .natural n) => (n : Int)
+    | some (_, .variant "neg" (.natural n)) => -(n : Int)
+    | some (_, .variant "pos" (.natural n)) => (n : Int)
+    | _ =>
+      match fs.find? (·.1 == "balance_" ++ asset) with
+      | some (_, .natural n) => (n : Int)
+      | some (_, .variant "neg" (.natural n)) => -(n : Int)
+      | some (_, .variant "pos" (.natural n)) => (n : Int)
+      | _ => 0
+  | _ => 0
+
+/-- Actual state-level balance change for `asset` across `d.preState → d.postState`. -/
+def cellStateBalanceDelta (d : CellDelta) (asset : String) : Int :=
+  extractCellAssetBalance d.postState asset - extractCellAssetBalance d.preState asset
+
+/-- Derive canonical `HalfEdge` entries directly from the `preState`/`postState` balance diffs
+    of `d` across `assets`. -/
+def deriveHalfEdgesFromState (d : CellDelta) (assets : List String) : List HalfEdge :=
+  assets.map (fun a => (a, cellStateBalanceDelta d a))
+
+/-- Boolean checker verifying that for every `a ∈ assets`, the reported half-edge delta
+    `cellAssetDelta d a` equals the actual state balance delta `cellStateBalanceDelta d a`. -/
+def checkDeltaMatchesStateBalances (assets : List String) (d : CellDelta) : Bool :=
+  assets.all (fun a => cellAssetDelta d a == cellStateBalanceDelta d a)
+
+/-- Whole-turn boolean checker verifying that every modified cell in `turn.writeCells`
+    binds its `halfEdges` faithfully to its `preState`/`postState` balance changes. -/
+def checkTurnStateBalancesBound (assets : List String) (turn : VaultTurn) : Bool :=
+  turn.writeCells.all (checkDeltaMatchesStateBalances assets)
+
+theorem checkDeltaMatchesStateBalances_iff (assets : List String) (d : CellDelta) :
+    checkDeltaMatchesStateBalances assets d = true ↔
+      ∀ a ∈ assets, cellAssetDelta d a = cellStateBalanceDelta d a := by
+  unfold checkDeltaMatchesStateBalances
+  rw [List.all_eq_true]
+  constructor
+  · intro h a ha
+    exact beq_iff_eq.1 (h a ha)
+  · intro h a ha
+    exact beq_iff_eq.2 (h a ha)
+
+theorem checkTurnStateBalancesBound_iff (assets : List String) (turn : VaultTurn) :
+    checkTurnStateBalancesBound assets turn = true ↔
+      ∀ d ∈ turn.writeCells, ∀ a ∈ assets, cellAssetDelta d a = cellStateBalanceDelta d a := by
+  unfold checkTurnStateBalancesBound
+  rw [List.all_eq_true]
+  constructor
+  · intro h d hd a ha
+    exact (checkDeltaMatchesStateBalances_iff assets d).1 (h d hd) a ha
+  · intro h d hd
+    exact (checkDeltaMatchesStateBalances_iff assets d).2 (h d hd)
+
+theorem sumAssetDelta_eq_sumStateBalanceDelta (cells : List CellDelta) (a : String)
+    (h_match : ∀ d ∈ cells, cellAssetDelta d a = cellStateBalanceDelta d a) :
+    sumAssetDelta cells a =
+      (cells.map (fun d => extractCellAssetBalance d.postState a - extractCellAssetBalance d.preState a)).foldl (· + ·) 0 := by
+  unfold sumAssetDelta
+  congr 1
+  apply List.map_congr_left
+  intro d hd
+  exact h_match d hd
+
+theorem sumStateBalanceDelta_eq_post_sub_pre (cells : List CellDelta) (a : String) :
+    (cells.map (fun d => extractCellAssetBalance d.postState a - extractCellAssetBalance d.preState a)).foldl (· + ·) 0 =
+      (cells.map (fun d => extractCellAssetBalance d.postState a)).foldl (· + ·) 0 -
+        (cells.map (fun d => extractCellAssetBalance d.preState a)).foldl (· + ·) 0 := by
+  induction cells with
+  | nil => rfl
+  | cons d rest ih =>
+    simp only [List.map, List.foldl]
+    rw [foldl_add_shift (rest.map (fun x => extractCellAssetBalance x.postState a - extractCellAssetBalance x.preState a))
+        (0 + (extractCellAssetBalance d.postState a - extractCellAssetBalance d.preState a))]
+    rw [foldl_add_shift (rest.map (fun x => extractCellAssetBalance x.postState a))
+        (0 + extractCellAssetBalance d.postState a)]
+    rw [foldl_add_shift (rest.map (fun x => extractCellAssetBalance x.preState a))
+        (0 + extractCellAssetBalance d.preState a)]
+    omega
+
+/-- **Universal State-Level Asset Conservation Theorem (`stateBoundTurn_conserves_actual_state_balances`)**:
+    For any `turn : VaultTurn`, `assets : List String`, and `a ∈ assets`, if `turn.balanced`
+    (`sumAssetDelta turn.writeCells a = 0`) and `checkTurnStateBalancesBound assets turn = true`,
+    then:
+    1. The sum of actual state balance changes across all modified cells is identically zero:
+       `∑_{d ∈ turn.writeCells} (extractCellAssetBalance d.postState a - extractCellAssetBalance d.preState a) = 0`, and
+    2. Equivalently, the total post-state balance equals the total pre-state balance:
+       `∑_{d ∈ turn.writeCells} extractCellAssetBalance d.postState a = ∑_{d ∈ turn.writeCells} extractCellAssetBalance d.preState a`. -/
+theorem stateBoundTurn_conserves_actual_state_balances
+    (turn : VaultTurn) (assets : List String) (a : String)
+    (ha : a ∈ assets)
+    (hbound : checkTurnStateBalancesBound assets turn = true) :
+    (turn.writeCells.map (fun d => extractCellAssetBalance d.postState a - extractCellAssetBalance d.preState a)).foldl (· + ·) 0 = 0 ∧
+    (turn.writeCells.map (fun d => extractCellAssetBalance d.postState a)).foldl (· + ·) 0 =
+      (turn.writeCells.map (fun d => extractCellAssetBalance d.preState a)).foldl (· + ·) 0 := by
+  have h_cell : ∀ d ∈ turn.writeCells, cellAssetDelta d a = cellStateBalanceDelta d a :=
+    fun d hd => (checkTurnStateBalancesBound_iff assets turn).1 hbound d hd a ha
+  have h_eq := sumAssetDelta_eq_sumStateBalanceDelta turn.writeCells a h_cell
+  have h_bal := turn.balanced a
+  have h_zero : (turn.writeCells.map (fun d => extractCellAssetBalance d.postState a - extractCellAssetBalance d.preState a)).foldl (· + ·) 0 = 0 := by
+    omega
+  have h_sub := sumStateBalanceDelta_eq_post_sub_pre turn.writeCells a
+  refine ⟨h_zero, ?_⟩
+  omega
+
+/-- Concrete `CellDelta` attempting to mint +900 `"USDC"` in `postState` (from `100` to `1000`)
+    while hiding the inflation behind `halfEdges := []`. -/
+def unreportedInflationDelta : CellDelta where
+  cell := "vault_alice"
+  preState := .record [("USDC", .natural 100)]
+  postState := .record [("USDC", .natural 1000)]
+  halfEdges := []
+
+/-- **Unreported State Inflation Refusal (`unreported_state_inflation_refused`)**:
+    A `CellDelta` that increases `"USDC"` in `postState` from `100` to `1000` while supplying
+    `halfEdges := []` trivially passes naive `halfEdges` summation (`sumAssetDelta = 0`),
+    but has actual state delta `+900` and is deterministically rejected (`= false`) by
+    `checkDeltaMatchesStateBalances`. -/
+theorem unreported_state_inflation_refused :
+    sumAssetDelta [unreportedInflationDelta] "USDC" = 0 ∧
+    cellStateBalanceDelta unreportedInflationDelta "USDC" = 900 ∧
+    checkDeltaMatchesStateBalances ["USDC"] unreportedInflationDelta = false := by
+  decide
+
+#tooth unreported_state_inflation_refused by mutation
+  checkDeltaMatchesStateBalances := fun _ _ => true
+
+#tooth stateBoundTurn_conserves_actual_state_balances by mutation
+  checkTurnStateBalancesBound := fun _ _ => true
+
+/-- **Derived Half-Edges Match State Balances (`deriveHalfEdgesFromState_sound`)**:
+    When `d.halfEdges` is populated via `deriveHalfEdgesFromState d assets` for a duplicate-free
+    asset list `assets`, `checkDeltaMatchesStateBalances assets` is guaranteed to return `true`. -/
+theorem find?_map_deriveHalfEdges {assets : List String} (h_nodup : assets.Nodup)
+    (d : CellDelta) {a : String} (ha : a ∈ assets) :
+    (deriveHalfEdgesFromState d assets).find? (·.1 == a) = some (a, cellStateBalanceDelta d a) := by
+  induction assets with
+  | nil => cases ha
+  | cons x rest ih =>
+    have ⟨hx_not_mem, hrest_nodup⟩ := List.nodup_cons.1 h_nodup
+    simp only [deriveHalfEdgesFromState, List.map_cons, List.find?_cons]
+    cases ha with
+    | head =>
+      simp
+    | tail _ hmem =>
+      have hne : (x == a) = false := by
+        cases hxa : x == a with
+        | false => rfl
+        | true =>
+          have heq : x = a := beq_iff_eq.1 hxa
+          subst heq
+          exact False.elim (hx_not_mem hmem)
+      simp only [hne]
+      exact ih hrest_nodup hmem
+
+theorem deriveHalfEdgesFromState_matches (d : CellDelta) (assets : List String)
+    (h_nodup : assets.Nodup) :
+    checkDeltaMatchesStateBalances assets { d with halfEdges := deriveHalfEdgesFromState d assets } = true := by
+  rw [checkDeltaMatchesStateBalances_iff]
+  intro a ha
+  unfold cellAssetDelta deltaAsset
+  simp only [find?_map_deriveHalfEdges h_nodup d ha]
+  rfl
+
+#tooth deriveHalfEdgesFromState_matches by mutation
+  deriveHalfEdgesFromState := fun _ _ => []
 
 end Obend.Vault
 

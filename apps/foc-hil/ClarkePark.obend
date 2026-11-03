@@ -1,0 +1,56 @@
+edition ObjectiveBend 1
+# Flagship App #2 (Layer 1): 20 kHz Clarke/Park & 4-Stage CORDIC Transform
+# Reference: Obend/Hardware/DSP.lean (stepCordicTwoStage, goldenCordic4Stages)
+#            Obend/Hardware/DigitalTwin.lean (PowertrainTwinState, PowertrainPlantSpec)
+
+law monotone_electrical_angle: monotone(electricalAngleStep)
+law bounded_modulation_index: new.modulationPermille <= 1000
+
+record ClarkeParkTransform:
+  cordicGainPermille() -> Nat
+  phaseOffsetMrad() -> Nat
+  alphaCurrentMa(iaMa: Nat) -> Nat
+  directAxisCurrentMa(iaMa: Nat) -> Nat
+  quadratureAxisCurrentMa(ibMa: Nat) -> Nat
+  cordicAngleResidualMrad(thetaMrad: Nat) -> Nat
+
+spec UncalibratedClarkePark for ClarkeParkTransform:
+  requires cordicGainPermille() -> Nat
+  requires phaseOffsetMrad() -> Nat
+  def cordicGainPermille() -> Nat:
+    607n
+  def phaseOffsetMrad() -> Nat:
+    12n
+  def alphaCurrentMa(iaMa: Nat) -> Nat:
+    iaMa + self.phaseOffsetMrad
+  def directAxisCurrentMa(iaMa: Nat) -> Nat:
+    iaMa * self.cordicGainPermille + 15n
+  def quadratureAxisCurrentMa(ibMa: Nat) -> Nat:
+    ibMa * 607n + 20n
+  def cordicAngleResidualMrad(thetaMrad: Nat) -> Nat:
+    thetaMrad + self.phaseOffsetMrad
+  claim direct_axis_open_recursion(iaMa: Nat): self.directAxisCurrentMa(iaMa) == iaMa * self.cordicGainPermille + 15n
+
+spec Cordic4StageCompensatedPark for ClarkeParkTransform:
+  requires quadratureAxisCurrentMa(ibMa: Nat) -> Nat
+  def cordicGainPermille() -> Nat:
+    608n
+  def phaseOffsetMrad() -> Nat:
+    4n
+  def quadratureAxisCurrentMa(ibMa: Nat) -> Nat:
+    super.quadratureAxisCurrentMa(ibMa) + 8n
+
+def seedClarkePark() -> ClarkeParkTransform:
+  {cordicGainPermille: 0n, phaseOffsetMrad: 0n, alphaCurrentMa: fn(ia: Nat) -> Nat: 0n, directAxisCurrentMa: fn(ia: Nat) -> Nat: 0n, quadratureAxisCurrentMa: fn(ib: Nat) -> Nat: 0n, cordicAngleResidualMrad: fn(th: Nat) -> Nat: 0n}
+
+def uncalibratedClarkePark() -> ClarkeParkTransform:
+  fix(UncalibratedClarkePark, seedClarkePark())
+
+def compensatedClarkePark() -> ClarkeParkTransform:
+  fix(compose(UncalibratedClarkePark, Cordic4StageCompensatedPark), seedClarkePark())
+
+def ratedDirectAxisCurrentMa() -> Nat:
+  compensatedClarkePark().directAxisCurrentMa(100n)
+
+def ratedQuadratureAxisCurrentMa() -> Nat:
+  compensatedClarkePark().quadratureAxisCurrentMa(250n)

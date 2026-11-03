@@ -1,0 +1,62 @@
+edition ObjectiveBend 1
+# Flagship App #8 (`apps/quantum-photonic-matter/ClementsKrawtchoukArray.obend`):
+# Planar Clements MZI interferometer & Krawtchouk Q_3 hypercube photonic state-transfer array
+# with 1-WL quotient compression (8 -> 4 shells) and DPR guard fallback.
+
+import "./QuantumPhotonicMatter.obend" as QPMStd
+
+law monotone_photonic_cal_epoch: monotone(photonicCalEpoch)
+law bounded_disorder_leakage: new.disorderLeakagePpm <= 676
+
+record KrawtchoukPhotonicBus:
+  fullModes() -> Nat
+  quotientShells() -> Nat
+  krawtchoukCouplingLength0Nm() -> Nat
+  krawtchoukCouplingLength1Nm() -> Nat
+  krawtchoukCouplingLength2Nm() -> Nat
+  quotientAdjointMacs(batchSize: Nat) -> Nat
+  pstTransferFidelityPpm(stepIndex: Nat) -> Nat
+
+spec BaseKrawtchoukBusSpec for KrawtchoukPhotonicBus:
+  requires quotientShells() -> Nat
+  requires krawtchoukCouplingLength2Nm() -> Nat
+  def fullModes() -> Nat:
+    8n
+  def quotientShells() -> Nat:
+    4n
+  def krawtchoukCouplingLength0Nm() -> Nat:
+    1571n
+  def krawtchoukCouplingLength1Nm() -> Nat:
+    2721n
+  def krawtchoukCouplingLength2Nm() -> Nat:
+    3142n
+  def quotientAdjointMacs(batchSize: Nat) -> Nat:
+    batchSize * self.quotientShells + self.krawtchoukCouplingLength2Nm
+  def pstTransferFidelityPpm(stepIndex: Nat) -> Nat:
+    stepIndex * 250n + 4n
+  claim krawtchouk_quotient_open_recursion(batchSize: Nat): self.quotientAdjointMacs(batchSize) == batchSize * self.quotientShells + self.krawtchoukCouplingLength2Nm
+
+spec SymmetryPreservingKrawtchoukOverride for KrawtchoukPhotonicBus:
+  requires pstTransferFidelityPpm(stepIndex: Nat) -> Nat
+  def krawtchoukCouplingLength2Nm() -> Nat:
+    3142n
+  def pstTransferFidelityPpm(stepIndex: Nat) -> Nat:
+    super.pstTransferFidelityPpm(stepIndex) + 1000n
+
+def seedKrawtchoukPhotonicBus() -> KrawtchoukPhotonicBus:
+  {fullModes: 0n, quotientShells: 0n, krawtchoukCouplingLength0Nm: 0n, krawtchoukCouplingLength1Nm: 0n, krawtchoukCouplingLength2Nm: 0n, quotientAdjointMacs: fn(b: Nat) -> Nat: b, pstTransferFidelityPpm: fn(s: Nat) -> Nat: s}
+
+def baseKrawtchoukBus() -> KrawtchoukPhotonicBus:
+  fix(BaseKrawtchoukBusSpec, seedKrawtchoukPhotonicBus())
+
+def calibratedKrawtchoukBus() -> KrawtchoukPhotonicBus:
+  fix(compose(BaseKrawtchoukBusSpec, SymmetryPreservingKrawtchoukOverride), seedKrawtchoukPhotonicBus())
+
+def krawtchoukMacsAt16() -> Nat:
+  calibratedKrawtchoukBus().quotientAdjointMacs(16n)
+
+def krawtchoukFidelityAt4() -> Nat:
+  calibratedKrawtchoukBus().pstTransferFidelityPpm(4n)
+
+def crossModuleKrawtchoukStdlib() -> Nat:
+  QPMStd.clementsPowerAt20Mw() + krawtchoukMacsAt16()

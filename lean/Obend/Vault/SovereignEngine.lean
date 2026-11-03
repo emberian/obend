@@ -36,6 +36,7 @@ public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
 public import Obend.Vault.Rehydration
 public import Obend.Vault.DragonsExchange
+public import Obend.Tactic.Tooth
 
 @[expose] public section
 namespace Obend.Vault
@@ -251,6 +252,34 @@ def exitSeatAdmissibleB (W : SovereignWorldState) (s : Seat) (seatAcc : AccountI
   seats'.all (seatSafeInBook ledger') &&
   W.assets.all (fun a => ledger'.balance s.account a == 0)
 
+/-- Executable conservation and duplicate-free cell check for `turn : VaultTurn`. -/
+def VaultTurn.conservedB (turn : VaultTurn) : Bool :=
+  let assets := ("balance" :: (turn.writeCells.flatMap fun d => d.halfEdges.map Prod.fst)).eraseDups
+  assets.all (fun a => sumAssetDelta turn.writeCells a == 0) &&
+  (checkNodupCells (turn.writeCells.map CellDelta.cell)).isOk
+
+/-- Executable turn gate (`checkOracleTurnValidAt`) enforcing:
+    1. `(admitFootprint W.store turn.readPins).isOk` (no stale read pins / TOCTOU),
+    2. `turn.conservedB` (value conservation across `turn.writeCells` and duplicate-free cell deltas),
+    3. Every written cell delta `d ∈ turn.writeCells` has its `preState` present in `W.store`, and
+    4. Every written cell delta satisfies the deployed contracts' `invariant`, `law`, and `stepRel`. -/
+def checkOracleTurnValidAt (W : SovereignWorldState) (turn : VaultTurn) : Bool :=
+  (admitFootprint W.store turn.readPins).isOk &&
+  turn.conservedB &&
+  turn.writeCells.all fun d =>
+    let preOk :=
+      match W.store d.cell with
+      | some cur => Obend.Law.termEq cur.term d.preState.term
+      | none => false
+    let req := turnRequest turn.turnId turn.occasion d.cell
+    let contractsOk :=
+      W.contracts.all fun c =>
+        Obend.Law.evalHoldsBounded c.invariant d.preState &&
+        Obend.Law.evalHoldsBounded c.invariant d.postState &&
+        Obend.Law.evalAdmitsBounded c.law d.preState d.postState req &&
+        Obend.Law.evalAdmitsBounded c.stepRel d.preState d.postState req
+    preOk && contractsOk
+
 /-- **Unified Sovereign Execution Engine Step (`stepSovereignEngine`)**. -/
 def stepSovereignEngine (W : SovereignWorldState) (tx : SovereignTransaction) :
     Option SovereignWorldState :=
@@ -270,6 +299,7 @@ def stepSovereignEngine (W : SovereignWorldState) (tx : SovereignTransaction) :
         let ledger' := applyPostings W.ledger postings
         if c.wellFormedB &&
            verifyZkOracleEnvelope c env &&
+           checkOracleTurnValidAt W turn &&
            turn.witnesses.all (checkTurnWitness sovereignJudgeFormats) &&
            postings.all (bookPostingValid W.ledger) &&
            W.seats.all (seatSafeInBook ledger') then
@@ -358,6 +388,7 @@ theorem sovereignEngine_step_conserves_all_assets
         simp only [h_nd, Bool.not_true, Bool.false_eq_true, ↓reduceIte, h_find] at h_step
         cases h_cond : (c.wellFormedB &&
             verifyZkOracleEnvelope c env &&
+            checkOracleTurnValidAt W turn &&
             turn.witnesses.all (checkTurnWitness sovereignJudgeFormats) &&
             postings.all (bookPostingValid W.ledger) &&
             W.seats.all (seatSafeInBook (applyPostings W.ledger postings)))
@@ -468,6 +499,7 @@ theorem sovereignEngine_enforces_zoe_and_mandates
           simp only [h_nd, Bool.not_true, Bool.false_eq_true, ↓reduceIte, h_find] at h_step
           cases h_cond : (c.wellFormedB &&
               verifyZkOracleEnvelope c env &&
+              checkOracleTurnValidAt W turn &&
               turn.witnesses.all (checkTurnWitness sovereignJudgeFormats) &&
               postings.all (bookPostingValid W.ledger) &&
               W.seats.all (seatSafeInBook (applyPostings W.ledger postings)))
@@ -554,6 +586,7 @@ theorem sovereignEngine_enforces_zoe_and_mandates
         simp only [h_nd, Bool.not_true, Bool.false_eq_true, ↓reduceIte, h_find] at h_step
         cases h_cond : (c.wellFormedB &&
             verifyZkOracleEnvelope c env &&
+            checkOracleTurnValidAt W turn &&
             turn.witnesses.all (checkTurnWitness sovereignJudgeFormats) &&
             postings.all (bookPostingValid W.ledger) &&
             W.seats.all (seatSafeInBook (applyPostings W.ledger postings)))
@@ -598,6 +631,30 @@ theorem sovereignEngine_blinded_view_non_forgeable
     exact verify_blinded_opening_complete hb v W.vaultCells j hj hjs
   · exact tampered_metadata_opening_refused hb h_no_coll v W.vaultCells j c_tampered
       hj hjs hid_orig hsalt_orig hid_tamp hsalt_tamp h_tampered
+
+/-- **Stale-Pin Refusal Theorem (`stepSovereignEngine_oracleTurn_refuses_stale_pin`)**:
+    Whenever `admitFootprint W.store turn.readPins` is not `.ok` (`.isOk = false`, i.e., a read pin
+    in `turn.readPins` mismatches `W.store`), `.executeOracleTurn` is strictly refused (`= none`). -/
+theorem stepSovereignEngine_oracleTurn_refuses_stale_pin
+    (W : SovereignWorldState) (cid : String) (env : ZkOracleFactEnvelope)
+    (turn : VaultTurn) (postings : List ResourcePosting)
+    (h_stale : (admitFootprint W.store turn.readPins).isOk = false) :
+    stepSovereignEngine W (.executeOracleTurn cid env turn postings) = none := by
+  unfold stepSovereignEngine
+  cases h_nd : decide W.ledger.accounts.Nodup
+  · rfl
+  · simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    cases h_find : W.contracts.find? (fun c => c.contractId == cid) with
+    | none => rfl
+    | some c =>
+      have h_gate : checkOracleTurnValidAt W turn = false := by
+        unfold checkOracleTurnValidAt
+        rw [h_stale]
+        rfl
+      simp [h_gate]
+
+#tooth stepSovereignEngine_oracleTurn_refuses_stale_pin by mutation
+  stepSovereignEngine := fun W _ => some W
 
 end Obend.Vault
 end

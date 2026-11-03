@@ -1,0 +1,52 @@
+edition ObjectiveBend 1
+# Flagship App #3 (Layer 3): 4-Stage Unrolled CORDIC atan2/hypot & Stateful Delta-Phase FT8 Discriminator
+# Reference: Obend/Hardware/DSP.lean (cordic_4stage_pipeline_verified, goldenCordic4Stages)
+
+import ./CicDecimatorFir.obend as CicFir
+
+law monotone_ft8_symbol_idx: monotone(ft8SymbolCounter)
+law bounded_ft8_tone_bin: new.ft8ToneBin <= 7
+
+record CordicFt8Demodulator:
+  cordicGainPermille() -> Nat
+  ft8ToneSpacingMilliHz() -> Nat
+  cordicEnvelopeMag(iVal: Nat) -> Nat
+  alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat
+  ft8SymbolBin(deltaPhaseMrad: Nat) -> Nat
+
+spec BaseCordicFt8Spec for CordicFt8Demodulator:
+  requires cordicGainPermille() -> Nat
+  requires ft8ToneSpacingMilliHz() -> Nat
+  def cordicGainPermille() -> Nat:
+    1600n
+  def ft8ToneSpacingMilliHz() -> Nat:
+    6250n
+  def cordicEnvelopeMag(iVal: Nat) -> Nat:
+    iVal * self.cordicGainPermille + 10n
+  def alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat:
+    phaseMrad * 2n + 3n
+  def ft8SymbolBin(deltaPhaseMrad: Nat) -> Nat:
+    deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
+  claim cordic_mag_open_recursion(iVal: Nat): self.cordicEnvelopeMag(iVal) == iVal * self.cordicGainPermille + 10n
+  claim ft8_tone_bin_open_recursion(deltaPhaseMrad: Nat): self.ft8SymbolBin(deltaPhaseMrad) == deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
+
+spec Unrolled4StageCordicFt8Override for CordicFt8Demodulator:
+  requires alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat
+  def cordicGainPermille() -> Nat:
+    1646n
+  def ft8ToneSpacingMilliHz() -> Nat:
+    6250n
+  def alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat:
+    super.alwaysFfDeltaPhaseMrad(phaseMrad) + 2n
+
+def seedCordicFt8Demod() -> CordicFt8Demodulator:
+  {cordicGainPermille: 0n, ft8ToneSpacingMilliHz: 0n, cordicEnvelopeMag: fn(iv: Nat) -> Nat: 0n, alwaysFfDeltaPhaseMrad: fn(pm: Nat) -> Nat: 0n, ft8SymbolBin: fn(dp: Nat) -> Nat: 0n}
+
+def baseCordicFt8Demod() -> CordicFt8Demodulator:
+  fix(BaseCordicFt8Spec, seedCordicFt8Demod())
+
+def unrolled4StageCordicFt8Demod() -> CordicFt8Demodulator:
+  fix(compose(BaseCordicFt8Spec, Unrolled4StageCordicFt8Override), seedCordicFt8Demod())
+
+def ratedFt8SymbolMetric() -> Nat:
+  unrolled4StageCordicFt8Demod().cordicEnvelopeMag(80n) + CicFir.ratedDecimatedFirSample()

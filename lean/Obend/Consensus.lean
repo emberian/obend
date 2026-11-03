@@ -9,6 +9,7 @@ consensus for parallel solver/prover race resolution.
 public import Obend.Consensus.Simplex
 public import Obend.Consensus.Finality
 public import Obend.Consensus.Epistemic
+public import Obend.Consensus.SovereignFinality
 
 @[expose] public section
 namespace Obend.Consensus

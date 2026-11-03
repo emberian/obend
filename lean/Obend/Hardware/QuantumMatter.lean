@@ -32,12 +32,19 @@ inside `Obend.Hardware`, coupling `Obend.Analysis.Equitable` and `Obend.Analysis
      positive residual leakage floor.
 -/
 public import Obend.Hardware.Photonics
+public import Obend.Hardware.OpenHypergraph
+public import Obend.Leaf.Specialize
 public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
 @[expose] public section
 
 namespace Obend.Hardware.QuantumMatter
 open Obend.Hardware.Photonics
+open Obend.Hardware.OpenHypergraph
+open Obend.Leaf
+open Obend.Slot
+open Obend.Slot.World
+open Obend.Core.Term
 open Obend.Analysis
 set_option autoImplicit false
 
@@ -1601,6 +1608,680 @@ theorem parityCoolingJumpOp_dark_on_even_and_corrects_odd (a : Fin 4) :
     (lindbladDissipator2 (parityCoolingJumpOp a) spinorOddParityProjector).trace = GaussianInt.zero := by
   revert a
   decide +kernel
+
+/-! ## 7. Perturbative Equitable Breaking Score & Grönwall/Duhamel Disorder Leakage Bound (`breakingScore_zero_iff_equitable`, `perturbative_disorder_leakage_bound`) -/
+
+/-- Auxiliary lookup finding the index $i$ of the cell in `part : List (List Nat)` that contains vertex `u`. -/
+def cellIndexOfListPartAux (u : Nat) (idx : Nat) : List (List Nat) → Nat
+  | [] => 0
+  | cell :: rest =>
+    if cell.contains u then idx
+    else cellIndexOfListPartAux u (idx + 1) rest
+
+/-- Map vertex `u` to its cell index in `part : List (List Nat)`. -/
+def cellIndexOfListPart (part : List (List Nat)) (u : Nat) : Nat :=
+  cellIndexOfListPartAux u 0 part
+
+/-- Members of cell `j` in `part : List (List Nat)`. -/
+def cellMembersAt (part : List (List Nat)) (j : Nat) : List Nat :=
+  part[j]?.getD []
+
+/-- **Equitable Breaking Residual Matrix (`equitableBreakingResidual`)**:
+Given an $n \times n$ perturbation/disorder matrix $\Delta H$, partition `part : List (List Nat)`
+of $n$ vertices into $r$ cells, and candidate $r \times r$ quotient perturbation $Q_\Delta$,
+computes the $n \times r$ intertwining defect matrix
+$$R(\Delta H, P, Q_\Delta) = \Delta H \cdot P - P \cdot Q_\Delta,$$
+whose entry $(u, j)$ is $\sum_{v \in C_j} \Delta H_{u, v} - Q_\Delta(\text{cell}(u), j)$. -/
+def equitableBreakingResidual
+    (dH : IntMatrix)
+    (n r : Nat)
+    (part : List (List Nat))
+    (Q_d : Nat → Nat → Int) : IntMatrix where
+  dim  := n
+  rows := (List.range n).map (fun u =>
+    (List.range r).map (fun j =>
+      cellRowSum dH.entry (cellMembersAt part j) u - Q_d (cellIndexOfListPart part u) j))
+
+/-- Sum a list of natural numbers using right-associative addition (convenient for structural induction). -/
+def sumNatListRight : List Nat → Nat
+  | [] => 0
+  | x :: xs => x + sumNatListRight xs
+
+/-- **Perturbative Equitable Breaking Score (`equitableBreakingScore`)**:
+Computes the entrywise $\ell_1$ norm $\| \Delta H \cdot P - P \cdot Q_\Delta \|_1 = \sum_{u < n} \sum_{j < r} |R_{u, j}|$
+of `equitableBreakingResidual dH n r part Q_d`. -/
+def equitableBreakingScore
+    (dH : IntMatrix)
+    (n r : Nat)
+    (part : List (List Nat))
+    (Q_d : Nat → Nat → Int) : Nat :=
+  let res := equitableBreakingResidual dH n r part Q_d
+  sumNatListRight (res.rows.map (fun row => sumNatListRight (row.map Int.natAbs)))
+
+theorem sumNatListRight_eq_zero_iff (xs : List Nat) :
+    sumNatListRight xs = 0 ↔ ∀ x, x ∈ xs → x = 0 := by
+  induction xs with
+  | nil =>
+    simp [sumNatListRight]
+  | cons x rest ih =>
+    simp only [sumNatListRight, Nat.add_eq_zero_iff, List.mem_cons]
+    constructor
+    · rintro ⟨hx, hrest⟩ y (rfl | hy)
+      · exact hx
+      · exact (ih.mp hrest) y hy
+    · intro hAll
+      exact ⟨hAll x (Or.inl rfl), ih.mpr (fun y hy => hAll y (Or.inr hy))⟩
+
+/-- **Theorem (`breakingScore_zero_iff_equitable`)**:
+**Equitable Breaking Score Zero Equivalence Theorem**:
+1. **Universal Zero-Score $\iff$ Exact Equitability**:
+   For ANY $n \times n$ perturbation matrix $\Delta H$, dimensions $n, r \in \mathbb{N}$, partition
+   `part : List (List Nat)`, and quotient $Q_\Delta$,
+   `equitableBreakingScore dH n r part Q_d = 0` **if and only if** every cell-transition residual vanishes:
+   $$\forall u < n,\; \forall j < r,\quad \sum_{v \in C_j} \Delta H_{u,v} = Q_\Delta(\text{cell}(u), j).$$
+2. **Exact Intertwining Recovery (`symmetry_preserving_noise_zero_leakage` Special Case)**:
+   Whenever `equitableBreakingScore dH n r part Q_d = 0` and `part` assigns every $x \in C_j$ to cell $j$,
+   $\Delta H$ intertwines identically with $Q_\Delta$ across all $u < n$ and all quotient states $w$:
+   $$(\Delta H (P w))_u = (P (Q_\Delta w))_u.$$
+3. **Concrete Majorana-1 Parity Noise Verification**:
+   - Parity-preserving bilocal noise `majoranaParityPreserveNoise` on cells `[[0, 1], [2, 3]]` has
+     `equitableBreakingScore = 0`,
+   - Quasiparticle poisoning noise `majoranaQuasiparticlePoisonNoise` ($\gamma_0$) breaks parity
+     equitability with strictly positive breaking score `equitableBreakingScore = 4 > 0`! -/
+theorem breakingScore_zero_iff_equitable
+    (dH : IntMatrix)
+    (n r : Nat)
+    (part : List (List Nat))
+    (Q_d : Nat → Nat → Int) :
+    (equitableBreakingScore dH n r part Q_d = 0 ↔
+      ∀ u, u < n → ∀ j, j < r →
+        cellRowSum dH.entry (cellMembersAt part j) u = Q_d (cellIndexOfListPart part u) j) ∧
+    (equitableBreakingScore dH n r part Q_d = 0 →
+      (∀ j, j ∈ List.range r → ∀ x, x ∈ cellMembersAt part j → cellIndexOfListPart part x = j) →
+      ∀ (w : Nat → Int) (u : Nat), u < n →
+        partitionedMatVec dH.entry (List.range r) (cellMembersAt part)
+          (liftQuotientVec (cellIndexOfListPart part) w) u =
+        liftQuotientVec (cellIndexOfListPart part) (quotientMatVec Q_d (List.range r) w) u) ∧
+    equitableBreakingScore majoranaParityPreserveNoise 4 2 [[0, 1], [2, 3]] majoranaNoiseSymQuotient = 0 ∧
+    equitableBreakingScore majoranaQuasiparticlePoisonNoise 4 2 [[0, 1], [2, 3]] (fun _ _ => 0) = 4 := by
+  have hIff :
+      equitableBreakingScore dH n r part Q_d = 0 ↔
+        ∀ u, u < n → ∀ j, j < r →
+          cellRowSum dH.entry (cellMembersAt part j) u = Q_d (cellIndexOfListPart part u) j := by
+    unfold equitableBreakingScore equitableBreakingResidual
+    dsimp only
+    rw [sumNatListRight_eq_zero_iff]
+    simp only [List.mem_map, List.mem_range]
+    constructor
+    · intro hRows u hu j hj
+      have hRowZero := hRows
+        (sumNatListRight ((List.range r).map (fun j =>
+          Int.natAbs (cellRowSum dH.entry (cellMembersAt part j) u - Q_d (cellIndexOfListPart part u) j))))
+        ⟨(List.range r).map (fun j =>
+          cellRowSum dH.entry (cellMembersAt part j) u - Q_d (cellIndexOfListPart part u) j),
+          ⟨u, hu, rfl⟩, by rw [List.map_map]; rfl⟩
+      rw [sumNatListRight_eq_zero_iff] at hRowZero
+      simp only [List.mem_map, List.mem_range] at hRowZero
+      have hEntryZero := hRowZero
+        (Int.natAbs (cellRowSum dH.entry (cellMembersAt part j) u - Q_d (cellIndexOfListPart part u) j))
+        ⟨j, hj, rfl⟩
+      omega
+    · rintro hAll _ ⟨row, ⟨u, hu, rfl⟩, rfl⟩
+      rw [List.map_map, sumNatListRight_eq_zero_iff]
+      simp only [List.mem_map, List.mem_range, Function.comp_apply]
+      rintro _ ⟨j, hj, rfl⟩
+      have hEq := hAll u hu j hj
+      omega
+  refine ⟨hIff, ?_, by decide +kernel, by decide +kernel⟩
+  intro hZero hCells w u hu
+  have hRows := hIff.mp hZero u hu
+  exact equitable_intertwining_step dH.entry Q_d (cellIndexOfListPart part) (List.range r)
+    (cellMembersAt part) w u hCells (fun j hj => hRows j (List.mem_range.mp hj))
+
+/-- Discrete-time Duhamel / Grönwall error propagation recurrence for $K$ propagator steps under
+nominal operator norm bound `opNorm` ($\|H\|$) and per-step symmetry-breaking score bound `epsBreak` ($\varepsilon_{\text{break}}$):
+$$E_0 = 0, \qquad E_{k+1} = \|H\| \cdot E_k + \varepsilon_{\text{break}} \cdot \|H\|^k.$$ -/
+def evalDuhamelLeakageRecurrence (opNorm epsBreak : Nat) : Nat → Nat
+  | 0 => 0
+  | k + 1 => opNorm * evalDuhamelLeakageRecurrence opNorm epsBreak k + epsBreak * (opNorm ^ k)
+
+/-- Exact closed-form identity for `evalDuhamelLeakageRecurrence`:
+for EVERY $K \in \mathbb{N}$, $E_K = K \cdot \varepsilon_{\text{break}} \cdot \|H\|^{K-1}$. -/
+theorem evalDuhamelLeakageRecurrence_closed_form (opNorm epsBreak K : Nat) :
+    evalDuhamelLeakageRecurrence opNorm epsBreak K = K * epsBreak * (opNorm ^ (K - 1)) := by
+  induction K with
+  | zero => simp [evalDuhamelLeakageRecurrence]
+  | succ k ih =>
+    cases k with
+    | zero =>
+      simp [evalDuhamelLeakageRecurrence]
+    | succ m =>
+      change opNorm * evalDuhamelLeakageRecurrence opNorm epsBreak (m + 1) + epsBreak * (opNorm ^ (m + 1)) =
+        (m + 1 + 1) * epsBreak * (opNorm ^ (m + 1))
+      rw [ih]
+      have hSub : m + 1 - 1 = m := rfl
+      rw [hSub, Nat.pow_succ]
+      calc opNorm * ((m + 1) * epsBreak * opNorm ^ m) + epsBreak * (opNorm ^ m * opNorm)
+        _ = (m + 1) * (epsBreak * (opNorm ^ m * opNorm)) + 1 * (epsBreak * (opNorm ^ m * opNorm)) := by
+          ac_rfl
+        _ = (m + 1 + 1) * (epsBreak * (opNorm ^ m * opNorm)) := by
+          rw [← Nat.add_mul]
+        _ = (m + 1 + 1) * epsBreak * (opNorm ^ m * opNorm) := by
+          ac_rfl
+
+/-- **Theorem (`perturbative_disorder_leakage_bound`)**:
+**Quantitative Perturbative Fabrication-Disorder Leakage Bound (Discrete Duhamel / Grönwall Certificate)**:
+Suppose fabrication or thermal disorder $\Delta H$ has equitable breaking score bounded by
+`equitableBreakingScore dH n r part Q_d ≤ epsBreak` ($\varepsilon_{\text{break}}$) and the nominal
+propagator step has operator norm bound `opNorm` ($\|H\|$). Then for ANY non-negative leaked amplitude
+trajectory `leak : Nat → Nat` starting in the equitable/Majorana code space (`leak 0 = 0`) and
+satisfying the per-step Duhamel inequality
+$$\forall k,\quad \text{leak}(k + 1) \le \|H\| \cdot \text{leak}(k) + \text{equitableBreakingScore}(\Delta H) \cdot \|H\|^k:$$
+1. **Closed-Form Duhamel Envelope**: `evalDuhamelLeakageRecurrence opNorm epsBreak K = K * epsBreak * (opNorm ^ (K - 1))` for all $K \in \mathbb{N}$.
+2. **Universal Polynomial Leakage Bound**: After $K$ discrete propagator steps, the leaked amplitude
+   outside the equitable code space satisfies
+   $$\text{leak}(K) \le K \cdot \varepsilon_{\text{break}} \cdot \|H\|^{K - 1}.$$
+3. **Zero-Leakage Corollary ($\varepsilon_{\text{break}} = 0$)**: When `epsBreak = 0` (exact symmetry-preserving
+   disorder), `leak K = 0` for all $K \in \mathbb{N}$! -/
+theorem perturbative_disorder_leakage_bound
+    (dH : IntMatrix)
+    (n r : Nat)
+    (part : List (List Nat))
+    (Q_d : Nat → Nat → Int)
+    (opNorm epsBreak : Nat)
+    (leak : Nat → Nat)
+    (hScore : equitableBreakingScore dH n r part Q_d ≤ epsBreak)
+    (hInit : leak 0 = 0)
+    (hStep : ∀ k, leak (k + 1) ≤ opNorm * leak k + equitableBreakingScore dH n r part Q_d * (opNorm ^ k)) :
+    ∀ (K : Nat),
+      evalDuhamelLeakageRecurrence opNorm epsBreak K = K * epsBreak * (opNorm ^ (K - 1)) ∧
+      leak K ≤ K * epsBreak * (opNorm ^ (K - 1)) ∧
+      (epsBreak = 0 → leak K = 0) := by
+  have hLeRec : ∀ K, leak K ≤ evalDuhamelLeakageRecurrence opNorm epsBreak K := by
+    intro K
+    induction K with
+    | zero =>
+      simp [evalDuhamelLeakageRecurrence, hInit]
+    | succ k ih =>
+      dsimp only [evalDuhamelLeakageRecurrence]
+      have hk := hStep k
+      have h1 : opNorm * leak k ≤ opNorm * evalDuhamelLeakageRecurrence opNorm epsBreak k :=
+        Nat.mul_le_mul_left opNorm ih
+      have h2 : equitableBreakingScore dH n r part Q_d * (opNorm ^ k) ≤ epsBreak * (opNorm ^ k) :=
+        Nat.mul_le_mul_right (opNorm ^ k) hScore
+      omega
+  intro K
+  have hClosed := evalDuhamelLeakageRecurrence_closed_form opNorm epsBreak K
+  have hBound : leak K ≤ K * epsBreak * (opNorm ^ (K - 1)) := by
+    rw [← hClosed]
+    exact hLeRec K
+  refine ⟨hClosed, hBound, ?_⟩
+  intro hZero
+  rw [hZero] at hBound
+  simp only [Nat.mul_zero, Nat.zero_mul, Nat.le_zero] at hBound
+  exact hBound
+
+/-- Broken `equitableBreakingScore` that always returns `0`. -/
+def equitableBreakingScoreConstZeroBug
+    (_dH : IntMatrix) (_n _r : Nat) (_part : List (List Nat)) (_Q_d : Nat → Nat → Int) : Nat := 0
+
+#tooth breakingScore_zero_iff_equitable by mutation equitableBreakingScore := equitableBreakingScoreConstZeroBug
+
+/-- Broken `evalDuhamelLeakageRecurrence` that omits the previous step accumulation term `opNorm * E_k`. -/
+def evalDuhamelLeakageRecurrenceDropPrevBug (opNorm epsBreak : Nat) : Nat → Nat
+  | 0 => 0
+  | k + 1 => epsBreak * (opNorm ^ k)
+
+#tooth perturbative_disorder_leakage_bound by mutation evalDuhamelLeakageRecurrence := evalDuhamelLeakageRecurrenceDropPrevBug
+
+/-! ## 8. True Planar 4-Mode Clements Photonic MZI Mesh (`evalPlanarClements4x4`, `planarClements4x4_conserves_optical_power`) -/
+
+/-- Evaluate a single **Planar Odd Nearest-Neighbor Layer** on a 4-mode waveguide array with
+phase-matched outer reference waveguides:
+- Inner adjacent waveguide pair $(1, 2)$ is coupled by `evalDirectionalCoupler2x2 t kappa e1 e2`,
+- Outer waveguides $0$ and $3$ propagate through uncoupled phase-matched reference waveguides
+  (`evalDirectionalCoupler2x2 t kappa e0 ⟨0, 0⟩` and `evalDirectionalCoupler2x2 t kappa ⟨0, 0⟩ e3`,
+  i.e., zero non-planar $0 \leftrightarrow 3$ coupling!). -/
+def evalPlanarOddLayer4x4
+    (t kappa : Int)
+    (e0 e1 e2 e3 : ComplexField) :
+    ComplexField × ComplexField × ComplexField × ComplexField :=
+  let ref0 := evalDirectionalCoupler2x2 t kappa e0 ⟨0, 0⟩
+  let c12  := evalDirectionalCoupler2x2 t kappa e1 e2
+  let ref3 := evalDirectionalCoupler2x2 t kappa ⟨0, 0⟩ e3
+  (ref0.1, c12.1, c12.2, ref3.1)
+
+/-- Evaluate a **True Planar 4-Mode Clements Photonic Mesh (`evalPlanarClements4x4`)**:
+Alternates planar nearest-neighbor directional coupler layers `[(0, 1), (2, 3)]` (even layer) and
+`[(1, 2)]` (odd layer, with outer waveguides $0$ and $3$ completely uncoupled from each other —
+zero waveguide crossings!):
+1. **Layer 1 (Even Nearest-Neighbor Layer `[(0, 1), (2, 3)]`)**: couples $(0, 1)$ and $(2, 3)$,
+2. **Layer 2 (Odd Nearest-Neighbor Layer `[(1, 2)]`)**: couples $(1, 2)$ while outer modes $0$ and $3$
+   never interact (`0 ↔ 3` crossing-free). -/
+def evalPlanarClements4x4
+    (t kappa : Int)
+    (e0 e1 e2 e3 : ComplexField) :
+    ComplexField × ComplexField × ComplexField × ComplexField :=
+  let (m0, m1, m2, m3) := evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3
+  evalPhotonicArray4LayerOdd t kappa m0 m1 m2 m3
+
+/-- Alias `evalClements4x4Mesh` for the planar 4-mode Clements mesh. -/
+abbrev evalClements4x4Mesh := evalPlanarClements4x4
+
+/-- **Theorem (`planarClements4x4_conserves_optical_power`)**:
+**Universal Planar 4-Mode Clements Mesh Optical Power Conservation Theorem**:
+For ALL coupler transmission/coupling parameters `t, kappa : Int` and ALL input optical fields
+`e0, e1, e2, e3 : ComplexField` ($\mathbb{Z}[i]$), proved by composing `directional_coupler_2x2_power_conservation`:
+1. **Planar 2-Layer Clements Mesh (`evalPlanarClements4x4`) Weighted Power Conservation**:
+   With CMT scale $s = t^2 + \kappa^2$, the planar Clements mesh (which couples `[(0, 1), (2, 3)]`
+   in Layer 1 and ONLY `[(1, 2)]` in Layer 2, with zero $0 \leftrightarrow 3$ crossing) satisfies:
+   $$s |E_{\text{out},0}|^2 + |E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 + s |E_{\text{out},3}|^2
+     = s^2 \left(|E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2\right).$$
+2. **Unweighted Power Conservation at Normalized Scale ($t^2 + \kappa^2 = 1$)**:
+   Whenever $t^2 + \kappa^2 = 1$,
+   $$|E_{\text{out},0}|^2 + |E_{\text{out},1}|^2 + |E_{\text{out},2}|^2 + |E_{\text{out},3}|^2
+     = |E_0|^2 + |E_1|^2 + |E_2|^2 + |E_3|^2.$$
+3. **Strict Planar $0 \leftrightarrow 3$ Isolation**:
+   Outer output mode $0$ of `evalPlanarClements4x4 t kappa e0 e1 e2 e3` depends ONLY on inputs
+   $(e_0, e_1)$ and is completely independent of $(e_2, e_3)$, proving zero $0 \leftrightarrow 3$ crosstalk! -/
+theorem planarClements4x4_conserves_optical_power
+    (t kappa : Int)
+    (e0 e1 e2 e3 : ComplexField) :
+    (let s := t * t + kappa * kappa
+     let (p0, p1, p2, p3) := evalPlanarClements4x4 t kappa e0 e1 e2 e3
+     s * p0.normSq + p1.normSq + p2.normSq + s * p3.normSq =
+       s * (s * (e0.normSq + e1.normSq + e2.normSq + e3.normSq))) ∧
+    (t * t + kappa * kappa = 1 →
+     let (p0, p1, p2, p3) := evalPlanarClements4x4 t kappa e0 e1 e2 e3
+     p0.normSq + p1.normSq + p2.normSq + p3.normSq =
+       e0.normSq + e1.normSq + e2.normSq + e3.normSq) ∧
+    (∀ e2' e3' : ComplexField,
+      (evalPlanarClements4x4 t kappa e0 e1 e2 e3).1 =
+        (evalPlanarClements4x4 t kappa e0 e1 e2' e3').1) := by
+  have hBase := planarClements4Mesh_conserves_optical_power t kappa t kappa e0 e1 e2 e3
+  dsimp only [evalPlanarClements4x4]
+  refine ⟨hBase.1, ?_, fun _ _ => rfl⟩
+  intro hUnit
+  have h2 := hBase.2.1 hUnit
+  rw [hUnit, Int.one_mul] at h2
+  exact h2
+
+/-- Broken `evalPlanarClements4x4` that zeroes out mode 1 in the odd layer (violating power conservation). -/
+def evalPlanarClements4x4LossyBug
+    (t kappa : Int)
+    (e0 e1 e2 e3 : ComplexField) :
+    ComplexField × ComplexField × ComplexField × ComplexField :=
+  let (m0, _m1, m2, m3) := evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3
+  (m0, ⟨0, 0⟩, m2, m3)
+
+#tooth planarClements4x4_conserves_optical_power by mutation evalPlanarClements4x4 := evalPlanarClements4x4LossyBug
+
+/-! ## 9. Symmetric `StrictOpenHypergraph` Equitable Quotient Compression & `quotientHypergraphSlot` (`quotientOpenHypergraph_intertwines_eval_and_adjoint`, `quotientHypergraph_moved_pin_blocks`) -/
+
+/-- Partition of a 4-channel parallel hardware/photonic/attention hypergraph into $r = 2$ equitable
+symmetry cells $C_0 = \{0, 1\}$ and $C_1 = \{2, 3\}$. -/
+def sym4LaneCellOf : Nat → Nat
+  | 0 => 0
+  | 1 => 0
+  | 2 => 1
+  | 3 => 1
+  | _ => 0
+
+/-- Construct an $N = 4$-channel `StrictOpenHypergraph` where each channel lane $u \in \{0, 1, 2, 3\}$
+processes its input pair $(x_u, y_u)$ through a channel-weighted stage-1 scale `.scale w_u` followed
+by a shared stage-2 operation `op2 : OpticOp`:
+- Lane $u \in \{0, 1, 2, 3\}$ occupies a 6-wire slice `[6*u .. 6*u + 5]`:
+  * `6*u + 0`: boundary input $x_u$,
+  * `6*u + 1`: boundary input $y_u$ (fans out to both stage 1 and stage 2),
+  * `6*u + 2`: stage-1 output $m_u = w_u \cdot x_u$,
+  * `6*u + 3`: boundary output $z_u = \text{op}_2(m_u, y_u)$,
+  * `6*u + 4`, `6*u + 5`: internal scratch wires. -/
+def buildSymmetric4LaneHypergraph
+    (w0 w1 w2 w3 : Int)
+    (op2 : OpticOp) : StrictOpenHypergraph :=
+  let lane0 := opticFwdHyperEdges (.scale w0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5
+  let lane1 := opticFwdHyperEdges (.scale w1) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11
+  let lane2 := opticFwdHyperEdges (.scale w2) 12 13 14 16 ++ opticFwdHyperEdges op2 14 13 15 17
+  let lane3 := opticFwdHyperEdges (.scale w3) 18 19 20 22 ++ opticFwdHyperEdges op2 20 19 21 23
+  mkStrictOpenHypergraph 24
+    [0, 1, 6, 7, 12, 13, 18, 19]
+    [3, 9, 15, 21]
+    (reindexHyperEdges (lane0 ++ lane1 ++ lane2 ++ lane3))
+
+/-- **Equitable Quotient Open Hypergraph Compression (`quotientOpenHypergraph`)**:
+Compresses the $N = 4$-channel symmetric `StrictOpenHypergraph` (with equitable cell weights
+$w_0 = w_1 = W_0$ on cell $C_0 = \{0, 1\}$ and $w_2 = w_3 = W_1$ on cell $C_1 = \{2, 3\}$)
+down to an $r = 2$-cell quotient `StrictOpenHypergraph` ($12$ wires instead of $24$, and half the
+hyperedges in both the forward pass and `compileGraphAdjoint`!). -/
+def quotientOpenHypergraph
+    (W0 W1 : Int)
+    (op2 : OpticOp) : StrictOpenHypergraph :=
+  let cell0 := opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5
+  let cell1 := opticFwdHyperEdges (.scale W1) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11
+  mkStrictOpenHypergraph 12
+    [0, 1, 6, 7]
+    [3, 9]
+    (reindexHyperEdges (cell0 ++ cell1))
+
+/-- Initial wire environment for the compressed $r = 2$-cell quotient hypergraph (and its adjoint
+`compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2)`, whose output cotangent seed wires are
+`12` and `13`). -/
+def quotientHypergraphInitEnv
+    (x0 y0 x1 y1 dOut0 dOut1 : Int) (w : Nat) : Int :=
+  match w with
+  | 0  => x0
+  | 1  => y0
+  | 6  => x1
+  | 7  => y1
+  | 12 => dOut0
+  | 13 => dOut1
+  | _  => 0
+
+/-- Cell-constant lifted wire environment for the $N = 4$-lane symmetric hypergraph (and its adjoint
+`compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2)`, whose output cotangent seed
+wires are `24, 25, 26, 27`), lifting cell $C_0$'s inputs $(x_0, y_0, dOut_0)$ to lanes $0, 1$ and
+cell $C_1$'s inputs $(x_1, y_1, dOut_1)$ to lanes $2, 3$. -/
+def liftSymmetric4LaneInitEnv
+    (x0 y0 x1 y1 dOut0 dOut1 : Int) (w : Nat) : Int :=
+  match w with
+  | 0  => x0
+  | 1  => y0
+  | 6  => x0
+  | 7  => y0
+  | 12 => x1
+  | 13 => y1
+  | 18 => x1
+  | 19 => y1
+  | 24 => dOut0
+  | 25 => dOut0
+  | 26 => dOut1
+  | 27 => dOut1
+  | _  => 0
+
+/-- Lift the 2-cell forward output vector `[z0, z1]` of `quotientOpenHypergraph` to the 4-lane
+output vector `[z0, z0, z1, z1]` across $C_0 = \{0, 1\}$ and $C_1 = \{2, 3\}$. -/
+def liftQuotientFwdOutputs (qOut : List Int) : List Int :=
+  [qOut.getD 0 0, qOut.getD 0 0, qOut.getD 1 0, qOut.getD 1 0]
+
+/-- Lift the 6-element adjoint output vector `[z0, z1, dx0, dy0, dx1, dy1]` of
+`compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2)` to the 12-element 4-lane adjoint output
+vector `[z0, z0, z1, z1, dx0, dy0, dx0, dy0, dx1, dy1, dx1, dy1]`. -/
+def liftQuotientAdjointOutputs (qAdjOut : List Int) : List Int :=
+  let z0  := qAdjOut.getD 0 0
+  let z1  := qAdjOut.getD 1 0
+  let dx0 := qAdjOut.getD 2 0
+  let dy0 := qAdjOut.getD 3 0
+  let dx1 := qAdjOut.getD 4 0
+  let dy1 := qAdjOut.getD 5 0
+  [z0, z0, z1, z1, dx0, dy0, dx0, dy0, dx1, dy1, dx1, dy1]
+
+set_option maxHeartbeats 1600000 in
+/-- **Theorem (`quotientOpenHypergraph_intertwines_eval_and_adjoint`)**:
+**Universal Symmetric `StrictOpenHypergraph` Forward & Reverse-Mode AD Quotient Intertwining Theorem**:
+For EVERY stage-2 operation `op2 : OpticOp`, EVERY symmetry-cell weight pair `W0, W1 : Int`,
+EVERY cell-constant primal input state `x0, y0, x1, y1 : Int`, and EVERY cell-constant upstream
+cotangent seed `dOut0, dOut1 : Int`:
+1. **Structural Well-Formedness & $2\times$ Compression**:
+   Both `buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2` ($24$ wires) and its compressed quotient
+   `quotientOpenHypergraph W0 W1 op2` ($12$ wires) are well-formed (`wf = true`).
+2. **Combinational & Wavefront-Layered Forward Intertwining (`evalHypergraphComb` & `evalHypergraphLayered`)**:
+   Evaluating the 4-lane symmetric hypergraph via `evalHypergraphComb` or `evalHypergraphLayered`
+   on the lifted cell-constant environment produces the exact lifted output of the compressed 2-cell
+   quotient hypergraph:
+   $$\text{evalHypergraphLayered}(G_{\text{full}}, P w) = P_{\text{out}}\!\left(\text{evalHypergraphLayered}(G_{\text{quot}}, w)\right).$$
+3. **Whole-DAG Reverse-Mode AD Intertwining (`compileGraphAdjoint`)**:
+   Running whole-DAG reverse-mode AD `compileGraphAdjoint` on the 4-lane symmetric hypergraph
+   (via `evalHypergraphComb` or `evalHypergraphLayered`) produces the **exact lifted primal outputs
+   AND lifted input cotangent gradients $(\partial L / \partial x_u, \partial L / \partial y_u)$**
+   of `compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2)`! -/
+theorem quotientOpenHypergraph_intertwines_eval_and_adjoint
+    (W0 W1 : Int)
+    (op2 : OpticOp)
+    (x0 y0 x1 y1 dOut0 dOut1 : Int) :
+    let gFull := buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2
+    let gQuot := quotientOpenHypergraph W0 W1 op2
+    let envFull := liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1
+    let envQuot := quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1
+    let adjFull := compileGraphAdjoint gFull
+    let adjQuot := compileGraphAdjoint gQuot
+    -- 1. Well-formedness & compression ratio
+    gFull.wf = true ∧
+    gQuot.wf = true ∧
+    gFull.nodeTypes.length = 24 ∧
+    gQuot.nodeTypes.length = 12 ∧
+    -- 2. Forward combinational & wavefront-layered intertwining
+    evalHypergraphComb gFull envFull = liftQuotientFwdOutputs (evalHypergraphComb gQuot envQuot) ∧
+    evalHypergraphLayered gFull envFull = liftQuotientFwdOutputs (evalHypergraphLayered gQuot envQuot) ∧
+    -- 3. Whole-DAG reverse-mode AD (compileGraphAdjoint) combinational & layered intertwining
+    evalHypergraphComb adjFull envFull = liftQuotientAdjointOutputs (evalHypergraphComb adjQuot envQuot) ∧
+    evalHypergraphLayered adjFull envFull = liftQuotientAdjointOutputs (evalHypergraphLayered adjQuot envQuot) := by
+  have hPipeFull := (evalHypergraph_pipelined_eq_comb (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2)
+    (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
+  have hPipeQuot := (evalHypergraph_pipelined_eq_comb (quotientOpenHypergraph W0 W1 op2)
+    (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
+  have hPipeAdjFull := (evalHypergraph_pipelined_eq_comb
+    (compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2))
+    (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
+  have hPipeAdjQuot := (evalHypergraph_pipelined_eq_comb
+    (compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2))
+    (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)).1
+  have hWfFull : (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2).wf = true := by
+    cases op2 <;> rfl
+  have hWfQuot : (quotientOpenHypergraph W0 W1 op2).wf = true := by
+    cases op2 <;> rfl
+  have hFwdComb :
+      evalHypergraphComb (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2)
+        (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1) =
+      liftQuotientFwdOutputs
+        (evalHypergraphComb (quotientOpenHypergraph W0 W1 op2)
+          (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)) := by
+    unfold buildSymmetric4LaneHypergraph quotientOpenHypergraph
+    rw [evalHypergraphComb_mkStrictOpenHypergraph_reindex,
+        evalHypergraphComb_mkStrictOpenHypergraph_reindex]
+    cases op2 <;>
+      dsimp [opticFwdHyperEdges, evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp,
+        liftSymmetric4LaneInitEnv, quotientHypergraphInitEnv, liftQuotientFwdOutputs,
+        List.foldl, List.map, list_getD_zero_cons, list_getD_one_cons] <;>
+      rfl
+  have hAdjComb :
+      evalHypergraphComb (compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2))
+        (liftSymmetric4LaneInitEnv x0 y0 x1 y1 dOut0 dOut1) =
+      liftQuotientAdjointOutputs
+        (evalHypergraphComb (compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2))
+          (quotientHypergraphInitEnv x0 y0 x1 y1 dOut0 dOut1)) := by
+    have hEqFull :
+        compileGraphAdjoint (buildSymmetric4LaneHypergraph W0 W0 W1 W1 op2) =
+          compileGraphAdjointAux 24 [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21]
+            (reindexHyperEdges
+              ((opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5) ++
+               (opticFwdHyperEdges (.scale W0) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11) ++
+               (opticFwdHyperEdges (.scale W1) 12 13 14 16 ++ opticFwdHyperEdges op2 14 13 15 17) ++
+               (opticFwdHyperEdges (.scale W1) 18 19 20 22 ++ opticFwdHyperEdges op2 20 19 21 23))) := by
+      unfold compileGraphAdjoint buildSymmetric4LaneHypergraph
+      change compileGraphAdjointAux (List.replicate 24 64).length
+        [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21]
+        (extractHyperEdges (mkStrictOpenHypergraph 24 [0, 1, 6, 7, 12, 13, 18, 19] [3, 9, 15, 21] _)) = _
+      rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
+    have hEqQuot :
+        compileGraphAdjoint (quotientOpenHypergraph W0 W1 op2) =
+          compileGraphAdjointAux 12 [0, 1, 6, 7] [3, 9]
+            (reindexHyperEdges
+              ((opticFwdHyperEdges (.scale W0) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5) ++
+               (opticFwdHyperEdges (.scale W1) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11))) := by
+      unfold compileGraphAdjoint quotientOpenHypergraph
+      change compileGraphAdjointAux (List.replicate 12 64).length [0, 1, 6, 7] [3, 9]
+        (extractHyperEdges (mkStrictOpenHypergraph 12 [0, 1, 6, 7] [3, 9] _)) = _
+      rw [List.length_replicate, extractHyperEdges_mkStrictOpenHypergraph]
+    rw [hEqFull, hEqQuot, evalHypergraphComb_compileGraphAdjointAux, evalHypergraphComb_compileGraphAdjointAux]
+    cases op2 <;>
+      dsimp [evalBuildGraphAdjointComb, buildGraphAdjointState,
+        opticFwdHyperEdges, reindexHyperEdges, reindexHyperEdgesAux,
+        seedCotangentStateAux, accumWireCotangent, emitAndAccum, upsertCotWire,
+        pullbackHyperEdge, wireAt, emitRevEdge, resolveInputCotWires, setCotWire,
+        evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp,
+        liftSymmetric4LaneInitEnv, quotientHypergraphInitEnv, liftQuotientAdjointOutputs,
+        List.reverse, List.reverseAux, List.foldl, List.map, List.lookup,
+        list_getD_zero_cons, list_getD_one_cons, list_getD_two_cons, list_getD_nil] <;>
+      rfl
+  dsimp only
+  refine ⟨hWfFull, hWfQuot, rfl, rfl, hFwdComb, ?_, hAdjComb, ?_⟩
+  · rw [hPipeFull, hPipeQuot, hFwdComb]
+  · rw [hPipeAdjFull, hPipeAdjQuot, hAdjComb]
+
+/-- Specialization candidates for `quotientHypergraphSlot`:
+- `.quotientCompressed gFull gQuot weightPins eqOk`: the compressed $r$-lane quotient hypergraph
+  `gQuot`, supported by the `LeafPin` list `weightPins` pinning every channel weight parameter
+  $w_i = W_{\text{cell}(i)}$ across symmetry cells,
+- `.unreducedFull gFull`: the unreduced $N$-lane hypergraph fallback (no symmetry pins required). -/
+inductive QuotientHypergraphCandidate where
+  | quotientCompressed
+      (gFull : StrictOpenHypergraph)
+      (gQuot : StrictOpenHypergraph)
+      (weightPins : List LeafPin)
+      (equitableOk : Bool)
+  | unreducedFull (gFull : StrictOpenHypergraph)
+
+/-- Support pins for a `QuotientHypergraphCandidate`. -/
+def QuotientHypergraphCandidate.supports : QuotientHypergraphCandidate → List LeafPin
+  | .quotientCompressed _ _ pins _ => pins
+  | .unreducedFull _ => []
+
+/-- Admission judge for a `QuotientHypergraphCandidate`. -/
+def QuotientHypergraphCandidate.judge : QuotientHypergraphCandidate → Bool
+  | .quotientCompressed gFull gQuot _ eqOk => gFull.wf && gQuot.wf && eqOk
+  | .unreducedFull gFull => gFull.wf
+
+/-- **The Quotient Hypergraph Specialization Slot (`quotientHypergraphSlot`)**:
+Pins the symmetry-preserving channel weight parameters (`w_i = w_j` within each equitable cell)
+and automatically invalidates the compressed $r$-lane quotient candidate whenever an outer `.obend`
+layer overrides a channel weight and breaks equitability. -/
+def quotientHypergraphSlot : Slot LeafPin QuotientHypergraphCandidate :=
+  ⟨QuotientHypergraphCandidate.supports, QuotientHypergraphCandidate.judge⟩
+
+/-- Construct a `LeafPin` pinning channel weight key `key` (e.g. `"weights.w1"`) to integer literal `w`. -/
+def mkChannelWeightPin (key : String) (w : Nat) : LeafPin :=
+  ⟨.layer key, .nat w⟩
+
+/-- The 4 symmetry-preserving channel weight pins for a 4-lane hypergraph with cell weights $W_0, W_1 \in \mathbb{N}$
+($w_0 = W_0, w_1 = W_0$ in cell $C_0$, and $w_2 = W_1, w_3 = W_1$ in cell $C_1$). -/
+def sym4LaneWeightPins (W0 W1 : Nat) : List LeafPin :=
+  [ mkChannelWeightPin "weights.w0" W0
+  , mkChannelWeightPin "weights.w1" W0
+  , mkChannelWeightPin "weights.w2" W1
+  , mkChannelWeightPin "weights.w3" W1 ]
+
+/-- Build a `LeafView` at `clock` assigning channel weights `(w0, w1, w2, w3)` to `"weights.w0" .. "weights.w3"`. -/
+def mkChannelWeightView (clock w0 w1 w2 w3 : Nat) : LeafView where
+  clock := clock
+  decl
+    | .layer "weights.w0" => some (.nat w0)
+    | .layer "weights.w1" => some (.nat w1)
+    | .layer "weights.w2" => some (.nat w2)
+    | .layer "weights.w3" => some (.nat w3)
+    | _ => none
+
+/-- **Theorem (`quotientHypergraph_moved_pin_blocks`)**:
+1. **Universal Moved-Pin Blocking (`read_blocked_exact`)**:
+   Whenever a compressed quotient candidate `cand = .quotientCompressed gFull gQuot pins true` is
+   admitted (`quotientHypergraphSlot.judge cand = true`), if ANY symmetry-preserving channel weight
+   pin `p ∈ pins` ceases to hold at `v : LeafView` (`holdsAt v p = false`), then reading
+   `quotientHypergraphSlot` at `v` immediately returns `.blocked cand d` with `p ∈ d` and
+   `∀ q, q ∈ d ↔ q ∈ pins ∧ holdsAt v q = false`, AND `slotAdvance.advance` falls back to
+   `.ok (.unreducedFull gFull)` in 1 cycle!
+2. **Concrete `.obend` Single-Channel Weight Override Verification**:
+   - At clock $0$ (`vSym := mkChannelWeightView 0 5 5 7 7`, where $w_0 = w_1 = 5$ and $w_2 = w_3 = 7$
+     preserve equitability), the compressed 2-lane quotient candidate is `.usable`.
+   - At clock $1$ (`vBroken := mkChannelWeightView 1 5 99 7 7`, where an outer `.obend` layer overrides
+     a single channel weight $w_1 := 99 \neq 5$ and breaks equitability), `quotientHypergraphSlot.read`
+     blocks the compressed quotient candidate in 1 cycle, naming the exact broken pin cell
+     `[.layer "weights.w1"]`! -/
+theorem quotientHypergraph_moved_pin_blocks
+    (v : LeafView)
+    (gFull gQuot : StrictOpenHypergraph)
+    (pins : List LeafPin)
+    (hWfFull : gFull.wf = true)
+    (hWfQuot : gQuot.wf = true)
+    (p : LeafPin)
+    (hp : p ∈ pins)
+    (hd : holdsAt v p = false) :
+    let cand := QuotientHypergraphCandidate.quotientCompressed gFull gQuot pins true
+    let fallback := QuotientHypergraphCandidate.unreducedFull gFull
+    (∃ d,
+      quotientHypergraphSlot.read (holdsAt v) (some cand) = .blocked cand d ∧
+      p ∈ d ∧
+      (∀ q, q ∈ d ↔ q ∈ pins ∧ holdsAt v q = false)) ∧
+    (slotAdvance : Advance LeafView LeafPin QuotientHypergraphCandidate).advance
+      quotientHypergraphSlot v [cand, fallback] (some cand) = .ok fallback ∧
+    (let gFullConcrete := buildSymmetric4LaneHypergraph 5 5 7 7 .add
+     let gQuotConcrete := quotientOpenHypergraph 5 7 .add
+     let pinsConcrete := sym4LaneWeightPins 5 7
+     let candConcrete := QuotientHypergraphCandidate.quotientCompressed
+                           gFullConcrete gQuotConcrete pinsConcrete true
+     let vSym := mkChannelWeightView 0 5 5 7 7
+     let vBroken := mkChannelWeightView 1 5 99 7 7
+     quotientHypergraphSlot.usable (holdsAt vSym) candConcrete = true ∧
+     quotientHypergraphSlot.usable (holdsAt vBroken) candConcrete = false ∧
+     (quotientHypergraphSlot.dead (holdsAt vBroken) candConcrete).map LeafPin.cell =
+       [.layer "weights.w1"]) := by
+  dsimp only
+  let cand := QuotientHypergraphCandidate.quotientCompressed gFull gQuot pins true
+  let fallback := QuotientHypergraphCandidate.unreducedFull gFull
+  have hJudge : quotientHypergraphSlot.judge cand = true := by
+    simp [quotientHypergraphSlot, QuotientHypergraphCandidate.judge, cand, hWfFull, hWfQuot]
+  have hMemDead : p ∈ quotientHypergraphSlot.dead (holdsAt v) cand :=
+    (mem_dead_iff quotientHypergraphSlot (holdsAt v) cand p).2 ⟨hp, hd⟩
+  have hread : ∃ d,
+      quotientHypergraphSlot.read (holdsAt v) (some cand) = .blocked cand d ∧ p ∈ d := by
+    unfold Slot.read
+    simp only [hJudge, ite_true]
+    cases hdd : quotientHypergraphSlot.dead (holdsAt v) cand with
+    | nil =>
+      rw [hdd] at hMemDead
+      cases hMemDead
+    | cons g t =>
+      exact ⟨g :: t, rfl, hdd ▸ hMemDead⟩
+  obtain ⟨d, hr, hpd⟩ := hread
+  have hRead : ∃ d,
+      quotientHypergraphSlot.read (holdsAt v) (some cand) = .blocked cand d ∧
+      p ∈ d ∧
+      (∀ q, q ∈ d ↔ q ∈ pins ∧ holdsAt v q = false) :=
+    ⟨d, hr, hpd, (read_blocked_exact quotientHypergraphSlot _ _ _ _ hr).2⟩
+  have hNotUsable : quotientHypergraphSlot.usable (holdsAt v) cand = false := by
+    unfold Slot.usable
+    cases hdd : quotientHypergraphSlot.dead (holdsAt v) cand with
+    | nil =>
+      rw [hdd] at hMemDead
+      cases hMemDead
+    | cons _ _ =>
+      simp [List.isEmpty]
+  have hFallbackUsable : quotientHypergraphSlot.usable (holdsAt v) fallback = true := by
+    simp [Slot.usable, Slot.dead, quotientHypergraphSlot,
+      QuotientHypergraphCandidate.supports, QuotientHypergraphCandidate.judge, fallback, hWfFull]
+  have hAdv :
+      (slotAdvance : Advance LeafView LeafPin QuotientHypergraphCandidate).advance
+        quotientHypergraphSlot v [cand, fallback] (some cand) = .ok fallback := by
+    refine (incumbent_choice quotientHypergraphSlot v [cand, fallback] (some cand) fallback).2
+      (.inr ⟨fun c hc => by cases hc; exact hNotUsable, ?_⟩)
+    simp [Slot.select, Slot.alternatives, hNotUsable, hFallbackUsable]
+  refine ⟨hRead, hAdv, ?_⟩
+  decide +kernel
+
+/-- Broken `quotientOpenHypergraph` that swaps cell weights $W_0$ and $W_1$. -/
+def quotientOpenHypergraphSwapWeightsBug (W0 W1 : Int) (op2 : OpticOp) : StrictOpenHypergraph :=
+  let cell0 := opticFwdHyperEdges (.scale W1) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5
+  let cell1 := opticFwdHyperEdges (.scale W0) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11
+  mkStrictOpenHypergraph 12
+    [0, 1, 6, 7]
+    [3, 9]
+    (reindexHyperEdges (cell0 ++ cell1))
+
+#tooth quotientOpenHypergraph_intertwines_eval_and_adjoint by mutation quotientOpenHypergraph := quotientOpenHypergraphSwapWeightsBug
+
+/-- Broken `QuotientHypergraphCandidate.supports` that drops all channel weight pins (`[]`). -/
+def quotientSupportsDropPinsBug : QuotientHypergraphCandidate → List LeafPin
+  | _ => []
+
+#tooth quotientHypergraph_moved_pin_blocks by mutation QuotientHypergraphCandidate.supports := quotientSupportsDropPinsBug
 
 end Obend.Hardware.QuantumMatter
 end

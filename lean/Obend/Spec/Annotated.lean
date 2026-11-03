@@ -98,6 +98,9 @@ def primitiveOf : String → Except String CorePrimitive
   | "labelEqual" => .ok .labelEqual
   | "subtract" => .ok .subtract | "divide" => .ok .divide | "less" => .ok .less | "lessEqual" => .ok .lessEqual
   | "modulo" => .ok .modulo
+  | "bitAnd" => .ok .bitAnd | "bitOr" => .ok .bitOr | "bitXor" => .ok .bitXor
+  | "shl" => .ok .shl | "lshr" => .ok .lshr | "ashr" => .ok .ashr
+  | "slt" => .ok .slt | "qmul32" => .ok .qmul32
   | other => .error ("primitive " ++ other ++ " is not a Core4 constructor yet")
 
 mutual

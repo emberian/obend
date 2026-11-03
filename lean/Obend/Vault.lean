@@ -30,3 +30,9 @@ public import Obend.Vault.Affordance
 public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
 public import Obend.Vault.Rehydration
+public import Obend.Vault.Carry
+public import Obend.Vault.DragonsExchange
+public import Obend.Vault.HardwareProjection
+public import Obend.Vault.PhysicalProjection
+public import Obend.Vault.SovereignEngine
+public import Obend.Vault.Cli

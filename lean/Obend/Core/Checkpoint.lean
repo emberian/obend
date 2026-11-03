@@ -24,10 +24,15 @@ abbrev Tokens := List Token
 def primitiveCode : Primitive → Nat
   | .add => 0 | .multiply => 1 | .equal => 2 | .conjunction => 3 | .labelEqual => 4
   | .subtract => 5 | .divide => 6 | .less => 7 | .lessEqual => 8 | .modulo => 10
+  | .bitAnd => 11 | .bitOr => 12 | .bitXor => 13 | .shl => 14 | .lshr => 15
+  | .ashr => 16 | .slt => 17 | .qmul32 => 18
 def primitiveOf : Nat → Option Primitive
   | 0 => some .add | 1 => some .multiply | 2 => some .equal | 3 => some .conjunction
   | 4 => some .labelEqual | 5 => some .subtract | 6 => some .divide | 7 => some .less
-  | 8 => some .lessEqual | 10 => some .modulo | _ => none
+  | 8 => some .lessEqual | 10 => some .modulo
+  | 11 => some .bitAnd | 12 => some .bitOr | 13 => some .bitXor | 14 => some .shl
+  | 15 => some .lshr | 16 => some .ashr | 17 => some .slt | 18 => some .qmul32
+  | _ => none
 
 /-- A destructor's names: length-prefixed. -/
 def encodeNames (names : List String) : Tokens := .nat names.length :: names.map .text

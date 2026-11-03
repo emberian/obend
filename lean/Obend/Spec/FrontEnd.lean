@@ -39,6 +39,7 @@ public import Obend.Spec.Annotated
 public import Obend.Spec.Elaborate
 public import Obend.Spec.Sha256
 public import Obend.Elab.Gate
+public import Obend.Elab.AutoCert
 public section
 namespace Obend.Spec.FrontEnd
 open Lean (Json toJson)
@@ -422,9 +423,34 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
   · intro label prop tag hhave
     exact hcert.2 tag (Elaborate.haveStep_byJudge_mem_extractIsarJudgeTags hhave)
 
+/-- Default external judge format admission predicate backed by `Obend.Elab.AutoCert.autoCertFormats`. -/
+@[expose] def defaultAutoCertAdmitsTag (tag : String) : Bool :=
+  Obend.Elab.AutoCert.isAutoCertAdmittedJudgeTag Obend.Elab.AutoCert.autoCertFormats tag
+
+/-- True when `tag` is one of the 5 automatically synthesized external judge formats in `Obend.Elab.AutoCert`. -/
+@[expose] def isSynthesizableAutoCertTag (tag : String) : Bool :=
+  tag == "interval@1" ||
+  tag == "taylor-model@1" ||
+  tag == "sos-lyapunov-cbf@1" ||
+  tag == "groebner@1" ||
+  tag == "rtl-synth@1" ||
+  tag == "hw-rtl-synth@1"
+
+/-- Verify that every `isSynthesizableAutoCertTag` cited by `c : Syntax.ContractDecl` synthesizes
+    a valid `(objWire, certWire)` witness accepted by its registered kernel `Judge.Format`. -/
+@[expose] def verifyContractAutoCertSteps
+    (m : Syntax.Module)
+    (c : Syntax.ContractDecl)
+    (book? : Option Obend.Leaf.Book := none) : Bool :=
+  let synthesized := Obend.Elab.AutoCert.synthesizeContractExternalJudges
+    Obend.Elab.AutoCert.autoCertFormats m.name book? c
+  let requiredTags := (Elaborate.extractIsarJudgeTags c.steps).filter isSynthesizableAutoCertTag
+  requiredTags.all fun reqTag =>
+    synthesized.any fun (t, _, _) => t == reqTag
+
 /-- Elaborate and check a single `Syntax.ContractDecl`'s Isar proof script and external judge tags,
     returning its `ElaboratedIsarCert` or a front-end `Diagnostic` refusal. -/
-@[expose] def checkContractIsarCert (admitsTag : String → Bool) (m : Syntax.Module)
+@[expose] def checkContractIsarCert (admitsTag : String → Bool := defaultAutoCertAdmitsTag) (m : Syntax.Module)
     (c : Syntax.ContractDecl) : Except Diagnostic Elaborate.ElaboratedIsarCert := do
   let cert := Elaborate.elaborateContractIsarCert m c
   if !cert.scriptValid then
@@ -434,20 +460,41 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
     if !admitsTag tag then
       throw (elaborationRefusal ("refused (isar-unregistered-judge): contract " ++ c.name ++
         " cites judge(" ++ tag ++ "), which is not registered or refused its certificate"))
+  if !verifyContractAutoCertSteps m c none then
+    throw (elaborationRefusal ("refused (autocert-synthesis): contract " ++ c.name ++
+      " failed automatic certificate synthesis for one or more judge steps"))
   return cert
 
 /-- Elaborate and verify all `contract` blocks in `m : Syntax.Module`, checking both structural
-    Isar step validity and external judge tag admission. -/
-@[expose] def checkModuleIsarCerts (admitsTag : String → Bool) (m : Syntax.Module) :
+    Isar step validity and external judge tag admission + `AutoCert` witness synthesis. -/
+@[expose] def checkModuleIsarCerts (admitsTag : String → Bool := defaultAutoCertAdmitsTag) (m : Syntax.Module) :
     Except Diagnostic (List Elaborate.ElaboratedIsarCert) :=
   m.contracts.mapM (checkContractIsarCert admitsTag m)
 
 /-- Elaborate all contracts in `m : Syntax.Module` together with their verified Isar certificates,
+    synthesizing and checking `AutoCert` witnesses for all synthesizable `by judge(...)` steps and
     refusing if any contract's Isar proof script is invalid or cites an unregistered judge format tag. -/
-@[expose] def elaborateContractsWithCerts (admitsTag : String → Bool) (m : Syntax.Module) :
+@[expose] def elaborateContractsWithCerts (admitsTag : String → Bool := defaultAutoCertAdmitsTag) (m : Syntax.Module) :
     Except Diagnostic (List (String × Obend.Law.CellContract) × List Elaborate.ElaboratedIsarCert) := do
   let certs ← checkModuleIsarCerts admitsTag m
   return (Elaborate.elaborateContracts m, certs)
+
+/-- Elaborate all contracts in `m : Syntax.Module` together with their verified Isar certificates
+    and the synthesized `(contractName, [(judgeTag, objWire, certWire), ...])` `AutoCert` witnesses. -/
+@[expose] def elaborateContractsWithAutoCerts
+    (admitsTag : String → Bool := defaultAutoCertAdmitsTag)
+    (m : Syntax.Module)
+    (book? : Option Obend.Leaf.Book := none) :
+    Except Diagnostic
+      (List (String × Obend.Law.CellContract) ×
+       List Elaborate.ElaboratedIsarCert ×
+       List (String × List (String × String × String))) := do
+  let (contracts, certs) ← elaborateContractsWithCerts admitsTag m
+  let synthBundles := m.contracts.map fun c =>
+    (c.name,
+     Obend.Elab.AutoCert.synthesizeContractExternalJudges
+       Obend.Elab.AutoCert.autoCertFormats m.name book? c)
+  return (contracts, certs, synthBundles)
 
 end Obend.Spec.FrontEnd
 

@@ -1,0 +1,54 @@
+edition ObjectiveBend 1
+# Flagship App #3 (Layer 1): 40m (7.074 MHz) 4-Phase Tayloe Quadrature Switching Mixer
+# Reference: Obend/Hardware/RF.lean (tayloe_iq_cancels_image_sideband, golden40mFt8TransceiverCert)
+#            Obend/Hardware/DSP.lean (sdrDdcChain_signoff_sound)
+
+law monotone_nco_phase: monotone(ncoPhaseStep)
+law bounded_carrier_freq_khz: new.carrierFreqKhz <= 7300
+
+record TayloeQuadratureMixer:
+  ncoFreqKhz() -> Nat
+  iqGainPermille() -> Nat
+  inPhaseSampleMv(rfMv: Nat) -> Nat
+  quadratureSampleMv(rfMv: Nat) -> Nat
+  imageSidebandCancelMv(rfMv: Nat) -> Nat
+  desiredUsbSignalMv(rfMv: Nat) -> Nat
+
+spec UncalibratedTayloeMixer for TayloeQuadratureMixer:
+  requires ncoFreqKhz() -> Nat
+  requires iqGainPermille() -> Nat
+  def ncoFreqKhz() -> Nat:
+    7074n
+  def iqGainPermille() -> Nat:
+    490n
+  def inPhaseSampleMv(rfMv: Nat) -> Nat:
+    rfMv * self.iqGainPermille + 10n
+  def quadratureSampleMv(rfMv: Nat) -> Nat:
+    rfMv * 490n + 8n
+  def imageSidebandCancelMv(rfMv: Nat) -> Nat:
+    rfMv * self.iqGainPermille + 12n
+  def desiredUsbSignalMv(rfMv: Nat) -> Nat:
+    rfMv * self.iqGainPermille + self.ncoFreqKhz
+  claim image_cancel_open_recursion(rfMv: Nat): self.imageSidebandCancelMv(rfMv) == rfMv * self.iqGainPermille + 12n
+
+spec Calibrated4PhaseTayloeOverride for TayloeQuadratureMixer:
+  requires quadratureSampleMv(rfMv: Nat) -> Nat
+  def iqGainPermille() -> Nat:
+    500n
+  def quadratureSampleMv(rfMv: Nat) -> Nat:
+    super.quadratureSampleMv(rfMv) + 2n
+
+def seedTayloeMixer() -> TayloeQuadratureMixer:
+  {ncoFreqKhz: 0n, iqGainPermille: 0n, inPhaseSampleMv: fn(rf: Nat) -> Nat: 0n, quadratureSampleMv: fn(rf: Nat) -> Nat: 0n, imageSidebandCancelMv: fn(rf: Nat) -> Nat: 0n, desiredUsbSignalMv: fn(rf: Nat) -> Nat: 0n}
+
+def uncalibratedTayloeMixer() -> TayloeQuadratureMixer:
+  fix(UncalibratedTayloeMixer, seedTayloeMixer())
+
+def calibratedTayloeMixer() -> TayloeQuadratureMixer:
+  fix(compose(UncalibratedTayloeMixer, Calibrated4PhaseTayloeOverride), seedTayloeMixer())
+
+def rated40mUsbSampleMv() -> Nat:
+  calibratedTayloeMixer().desiredUsbSignalMv(100n)
+
+def rated40mImageCancelMv() -> Nat:
+  calibratedTayloeMixer().imageSidebandCancelMv(100n)

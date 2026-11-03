@@ -1,0 +1,65 @@
+edition ObjectiveBend 1
+# Flagship App #5 (`apps/silicon-kernel-verilator/SiliconKernelBundle.obend`):
+# Open-Recursive 4-Zone Spatial Silicon Elaborator & Live 3-Phase Glitch-Free ICAP DPR Bundle
+# (`Epoch1ElaboratorBase` -> `Epoch2IcapDprOverride`).
+
+law monotone_epoch: monotone(epoch)
+law write_once_kernel_root: writeOnce(rootOfTrustDigest)
+
+record SiliconElaboratorFabric:
+  zone3Gain() -> Nat
+  zone3Offset() -> Nat
+  zone3LutEval(argVal: Nat) -> Nat
+  zone1ClosedBetaBypass(bodyHandle: Nat) -> Nat
+  zone4KernelGate(statusTag: Nat) -> Nat
+
+spec Epoch1ElaboratorBase for SiliconElaboratorFabric:
+  requires zone3Gain() -> Nat
+  requires zone3Offset() -> Nat
+  def zone3Gain() -> Nat:
+    4n
+  def zone3Offset() -> Nat:
+    2n
+  def zone3LutEval(argVal: Nat) -> Nat:
+    argVal * self.zone3Gain + self.zone3Offset
+  def zone1ClosedBetaBypass(bodyHandle: Nat) -> Nat:
+    bodyHandle + 0n
+  def zone4KernelGate(statusTag: Nat) -> Nat:
+    if statusTag == 1n then 1n else 0n
+  claim epoch1_lut_open_recursion(argVal: Nat): self.zone3LutEval(argVal) == argVal * self.zone3Gain + self.zone3Offset
+
+spec Epoch2IcapDprOverride for SiliconElaboratorFabric:
+  requires zone1ClosedBetaBypass(bodyHandle: Nat) -> Nat
+  def zone3Gain() -> Nat:
+    6n
+  def zone3Offset() -> Nat:
+    10n
+  def zone1ClosedBetaBypass(bodyHandle: Nat) -> Nat:
+    super.zone1ClosedBetaBypass(bodyHandle) + 0n
+
+def seedSiliconFabric() -> SiliconElaboratorFabric:
+  {zone3Gain: 0n, zone3Offset: 0n, zone3LutEval: fn(a: Nat) -> Nat: 0n, zone1ClosedBetaBypass: fn(h: Nat) -> Nat: 0n, zone4KernelGate: fn(s: Nat) -> Nat: 0n}
+
+def epoch1SiliconFabric() -> SiliconElaboratorFabric:
+  fix(Epoch1ElaboratorBase, seedSiliconFabric())
+
+def epoch2DprSiliconFabric() -> SiliconElaboratorFabric:
+  fix(compose(Epoch1ElaboratorBase, Epoch2IcapDprOverride), seedSiliconFabric())
+
+def epoch1LutAt10() -> Nat:
+  epoch1SiliconFabric().zone3LutEval(10n)
+
+def epoch2LutAt10() -> Nat:
+  epoch2DprSiliconFabric().zone3LutEval(10n)
+
+def zone1BypassAtHandle42() -> Nat:
+  epoch2DprSiliconFabric().zone1ClosedBetaBypass(42n)
+
+def zone4AcceptTag1() -> Nat:
+  epoch2DprSiliconFabric().zone4KernelGate(1n)
+
+def zone4RefuseToothMutantTag2() -> Nat:
+  epoch2DprSiliconFabric().zone4KernelGate(2n)
+
+def zone4RefuseSorryTag0() -> Nat:
+  epoch2DprSiliconFabric().zone4KernelGate(0n)

@@ -754,6 +754,172 @@ pub fn suggest_multi_field_admits(
     (suggestions, summary)
 }
 
+/// Parse a Lean `Data` string representation (e.g. `Obend.Core.Data.Data.natural 100` or integer literal)
+/// emitted by `Obend.Vault.suggestMultiField` in `Obend/FFI/Bridge.lean`.
+fn parse_lean_data_int(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if let Ok(v) = trimmed.parse::<i64>() {
+        return Some(v);
+    }
+    let digits: String = trimmed
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit() && *c != '-')
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    digits.parse::<i64>().ok()
+}
+
+/// Parse the `"repairSuggestion"` field (`"suggestMultiField_admits: field=val, ..."`) returned by
+/// the Lean kernel's `obend_view_affordances_core` (`Obend.Vault.suggestMultiField`).
+pub fn parse_lean_ffi_repair_deltas(affordances_json: &[u8]) -> BTreeMap<String, i64> {
+    let mut deltas = BTreeMap::new();
+    let Ok(val) = serde_json::from_slice::<serde_json::Value>(affordances_json) else {
+        return deltas;
+    };
+    let Some(repair_str) = val.get("repairSuggestion").and_then(|v| v.as_str()) else {
+        return deltas;
+    };
+    let Some(rest) = repair_str.strip_prefix("suggestMultiField_admits:") else {
+        return deltas;
+    };
+    for part in rest.split(',') {
+        if let Some((field, raw_val)) = part.trim().split_once('=') {
+            if let Some(parsed) = parse_lean_data_int(raw_val) {
+                deltas.insert(field.trim().to_string(), parsed);
+            }
+        }
+    }
+    deltas
+}
+
+/// Render a `LawDialControl` + `old_fields` into the enforced `Obend.Spec.Law` surface grammar
+/// (`new.FIELD == INT`, `new.FIELD <= INT`, `new.LHS <= new.RHS`, `new.LHS <= new.RHS + INT`)
+/// consumed by `obend_view_affordances_core` (`Obend.Vault.suggestMultiField`).
+pub fn render_ffi_law_query(
+    dial: &LawDialControl,
+    old_fields: &BTreeMap<String, i64>,
+    new_fields: &BTreeMap<String, i64>,
+) -> String {
+    let init_keys: Vec<String> = old_fields
+        .keys()
+        .chain(new_fields.keys())
+        .cloned()
+        .collect();
+    let (constraints, _) = parse_law_constraints(dial, &init_keys);
+    let mut atoms = Vec::new();
+    for c in &constraints {
+        match c {
+            LawAtomConstraint::Monotone(f) => {
+                if let Some(&old_v) = old_fields.get(f) {
+                    atoms.push(format!("new.{f} == {old_v}"));
+                } else {
+                    atoms.push(format!("monotone({f})"));
+                }
+            }
+            LawAtomConstraint::WriteOnce(f) => {
+                if let Some(&old_v) = old_fields.get(f) {
+                    if old_v != 0 {
+                        atoms.push(format!("new.{f} == {old_v}"));
+                    }
+                }
+            }
+            LawAtomConstraint::EqConst(f, val) => {
+                let atom = format!("new.{f} == {val}");
+                if !atoms.contains(&atom) {
+                    atoms.push(atom);
+                }
+            }
+            LawAtomConstraint::LowerBound(f, val) => {
+                let margin_lo = dial.margin_lo.round() as i64;
+                if *val > margin_lo {
+                    let atom = format!("new.{f} == {val}");
+                    if !atoms.contains(&atom) {
+                        atoms.push(atom);
+                    }
+                }
+            }
+            LawAtomConstraint::UpperBound(f, hi) => {
+                let atom = format!("new.{f} <= {hi}");
+                if !atoms.contains(&atom) {
+                    atoms.push(atom);
+                }
+            }
+            LawAtomConstraint::DiffLe { lhs, rhs, offset } => {
+                if *offset == 0 {
+                    atoms.push(format!("new.{lhs} <= new.{rhs}"));
+                } else {
+                    atoms.push(format!("new.{lhs} <= new.{rhs} + {offset}"));
+                }
+            }
+            LawAtomConstraint::EqField(f, g) => {
+                atoms.push(format!("new.{f} == new.{g}"));
+            }
+        }
+    }
+    if atoms.is_empty() {
+        dial.invariant_expr.clone()
+    } else {
+        atoms.join(" and ")
+    }
+}
+
+/// Route multi-field affordance repair through the live Lean FFI `ObendSession`
+/// (`worker.view_affordances` -> `Obend.Vault.suggestMultiField`), using the Lean kernel's
+/// multi-field repair deltas as the authoritative result when applicable to the cell's fields,
+/// and falling back to `suggest_multi_field_admits` for custom cell schemas.
+fn suggest_multi_field_admits_with_worker(
+    worker: &PersistentSessionWorker,
+    dial: &LawDialControl,
+    old_fields: &BTreeMap<String, i64>,
+    new_fields: &BTreeMap<String, i64>,
+) -> (Vec<FieldRepairSuggestion>, Option<String>) {
+    let scalar_ok = dial.current_value >= dial.margin_lo && dial.current_value <= dial.margin_hi;
+    if scalar_ok && evaluate_multi_field_admitted(dial, old_fields, new_fields) {
+        return (Vec::new(), None);
+    }
+
+    let ffi_payload = render_ffi_law_query(dial, old_fields, new_fields).into_bytes();
+    if let Ok(ffi_bytes) = worker.view_affordances(ffi_payload) {
+        let ffi_deltas = parse_lean_ffi_repair_deltas(&ffi_bytes);
+        if !ffi_deltas.is_empty() && ffi_deltas.keys().all(|k| new_fields.contains_key(k)) {
+            let mut candidate = new_fields.clone();
+            let mut suggestions = Vec::new();
+            let mut summary_parts = Vec::new();
+            for (field, suggested_value) in &ffi_deltas {
+                let current_value = *new_fields.get(field).unwrap_or(&0);
+                if current_value != *suggested_value {
+                    candidate.insert(field.clone(), *suggested_value);
+                    suggestions.push(FieldRepairSuggestion {
+                        field: field.clone(),
+                        current_value,
+                        suggested_value: *suggested_value,
+                    });
+                    summary_parts.push(format!("{field} = {suggested_value}"));
+                }
+            }
+            if !suggestions.is_empty()
+                && evaluate_multi_field_admitted(dial, old_fields, &candidate)
+            {
+                let summary = if suggestions.len() == 1 {
+                    let s = &suggestions[0];
+                    format!(
+                        "{} = {} would pass (this write has {} = {})",
+                        s.field, s.suggested_value, s.field, s.current_value
+                    )
+                } else {
+                    format!(
+                        "the multi-field change `{}` would pass",
+                        summary_parts.join(", ")
+                    )
+                };
+                return (suggestions, Some(summary));
+            }
+        }
+    }
+
+    suggest_multi_field_admits(dial, old_fields, new_fields)
+}
+
 /// Generate a Lean 4 goal & tactic proof snippet (`obend_unfold`, `obend_law`, `obend_tooth`)
 /// for a `.obnb` cell (`obend_cell_pop_lean`).
 pub fn obend_cell_pop_lean(
@@ -3734,35 +3900,46 @@ fn handle_http_connection(stream: &mut TcpStream, state: &Arc<Mutex<WorkbenchSta
             };
 
             let mut guard = state.lock().unwrap();
-            let _ = guard.worker.view_affordances(
-                format!("{}:{:?}", req.cell_id, req.mode).into_bytes(),
-            );
-            let Some(cell) = guard.cells.iter_mut().find(|c| c.id == req.cell_id) else {
+            let Some(cell_idx) = guard.cells.iter().position(|c| c.id == req.cell_id) else {
                 let err_json = serde_json::json!({ "error": format!("Unknown cell_id: {}", req.cell_id) }).to_string();
                 write_json_response(stream, 404, "Not Found", &err_json);
                 return;
             };
 
-            cell.dial.mode = req.mode;
-            if let Some(val) = req.current_value {
-                cell.dial.current_value = val;
-            }
-            if let Some(new_fields) = req.fields {
-                cell.fields = new_fields;
-            } else if let Some(val) = req.current_value {
-                if let Some(first_key) = cell.fields.keys().next().cloned() {
-                    cell.fields.insert(first_key, val.round() as i64);
+            {
+                let cell = &mut guard.cells[cell_idx];
+                cell.dial.mode = req.mode;
+                if let Some(val) = req.current_value {
+                    cell.dial.current_value = val;
+                }
+                if let Some(new_fields) = req.fields {
+                    cell.fields = new_fields;
+                } else if let Some(val) = req.current_value {
+                    if let Some(first_key) = cell.fields.keys().next().cloned() {
+                        cell.fields.insert(first_key, val.round() as i64);
+                    }
                 }
             }
 
+            let dial_snapshot = guard.cells[cell_idx].dial.clone();
+            let old_fields_snapshot = guard.cells[cell_idx].old_fields.clone();
+            let fields_snapshot = guard.cells[cell_idx].fields.clone();
             let strict_dial = LawDialControl {
                 mode: LawDialMode::Press,
-                ..cell.dial.clone()
+                ..dial_snapshot.clone()
             };
-            let strictly_valid =
-                evaluate_multi_field_admitted(&strict_dial, &cell.old_fields, &cell.fields);
-            let (repair_suggestions, repair_summary) =
-                suggest_multi_field_admits(&cell.dial, &cell.old_fields, &cell.fields);
+            let strictly_valid = evaluate_multi_field_admitted(
+                &strict_dial,
+                &old_fields_snapshot,
+                &fields_snapshot,
+            );
+            let (repair_suggestions, repair_summary) = suggest_multi_field_admits_with_worker(
+                &guard.worker,
+                &dial_snapshot,
+                &old_fields_snapshot,
+                &fields_snapshot,
+            );
+            let cell = &mut guard.cells[cell_idx];
             let multi_admitted = match cell.dial.mode {
                 LawDialMode::Free => true,
                 LawDialMode::Press | LawDialMode::Locked => strictly_valid,
@@ -4392,5 +4569,65 @@ mod tests {
         assert!(eval_resp
             .rerendered_cells
             .contains(&"cell-cnc-5axis".to_string()));
+    }
+
+    #[test]
+    fn test_live_ffi_affordance_multi_field_repair() {
+        // 1. Verify parser on Lean FFI `suggestMultiField` wire payload
+        let sample_ffi_json = br#"{"status":"ok","repairSuggestion":"suggestMultiField_admits: balance=100, nonce=2"}"#;
+        let parsed_deltas = parse_lean_ffi_repair_deltas(sample_ffi_json);
+        assert_eq!(parsed_deltas.get("balance"), Some(&100));
+        assert_eq!(parsed_deltas.get("nonce"), Some(&2));
+
+        // 2. Verify live `PersistentSessionWorker` (`ObendSession` FFI) affordance repair end-to-end
+        let worker = PersistentSessionWorker::spawn().expect("spawn live ObendSession worker");
+        let dial = LawDialControl {
+            cell_id: "cell-vault".to_string(),
+            mode: LawDialMode::Press,
+            invariant_expr: "monotone(balance) && balance <= 100 && nonce >= 2".to_string(),
+            margin_lo: 0.0,
+            margin_hi: 100.0,
+            current_value: 90.0,
+        };
+        let mut old_fields = BTreeMap::new();
+        old_fields.insert("balance".to_string(), 100);
+        old_fields.insert("nonce".to_string(), 1);
+
+        let mut new_fields = BTreeMap::new();
+        new_fields.insert("balance".to_string(), 90);
+        new_fields.insert("nonce".to_string(), 1);
+
+        let ffi_query = render_ffi_law_query(&dial, &old_fields, &new_fields);
+        assert_eq!(
+            ffi_query,
+            "new.balance == 100 and new.balance <= 100 and new.nonce == 2 and new.nonce <= 100"
+        );
+        let raw_affordances = worker
+            .view_affordances(ffi_query.into_bytes())
+            .expect("call Lean FFI view_affordances");
+        let raw_str = String::from_utf8_lossy(&raw_affordances);
+        assert!(raw_str.contains("suggestMultiField_admits:"));
+
+        let (repairs, summary) =
+            suggest_multi_field_admits_with_worker(&worker, &dial, &old_fields, &new_fields);
+        assert_eq!(
+            repairs,
+            vec![
+                FieldRepairSuggestion {
+                    field: "balance".to_string(),
+                    current_value: 90,
+                    suggested_value: 100,
+                },
+                FieldRepairSuggestion {
+                    field: "nonce".to_string(),
+                    current_value: 1,
+                    suggested_value: 2,
+                },
+            ]
+        );
+        assert_eq!(
+            summary.as_deref(),
+            Some("the multi-field change `balance = 100, nonce = 2` would pass")
+        );
     }
 }

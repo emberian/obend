@@ -1,0 +1,63 @@
+edition ObjectiveBend 1
+# Flagship App #2 (Layer 3): 6-Level SiC FCML Inverter Leg, Active Lyapunov Balancer & Thermal CBF
+# Reference: Obend/Hardware/PowerElectronics.lean (fcml_active_balancing_lyapunov_contraction)
+#            Obend/Hardware/DigitalTwin.lean (sampled_data_closed_loop_powertrain_safety_invariant)
+
+import ./PiCurrentLoop.obend as PiLoop
+
+law monotone_fault_counter: monotone(faultCounter)
+law write_once_thermal_trip: writeOnce(thermalTripLatch)
+law bounded_winding_temp_c: new.windingTempC <= 180
+law bounded_phase_current_a: new.phaseCurrentAmp <= 350
+
+record SicFcmlLegController:
+  fcmlLevels() -> Nat
+  activeBalGainPermille() -> Nat
+  thermalWarningLimitC() -> Nat
+  thermalShutdownLimitC() -> Nat
+  overCurrentLimitAmp() -> Nat
+  alwaysFfCapErrMv(capErrMv: Nat) -> Nat
+  thermalDeratedDutyPermille(tempC: Nat) -> Nat
+  safetyBarrierHeadroomC(tempC: Nat) -> Nat
+
+spec BaseSicFcmlLegSpec for SicFcmlLegController:
+  requires activeBalGainPermille() -> Nat
+  requires thermalWarningLimitC() -> Nat
+  def fcmlLevels() -> Nat:
+    6n
+  def activeBalGainPermille() -> Nat:
+    850n
+  def thermalWarningLimitC() -> Nat:
+    150n
+  def thermalShutdownLimitC() -> Nat:
+    180n
+  def overCurrentLimitAmp() -> Nat:
+    350n
+  def alwaysFfCapErrMv(capErrMv: Nat) -> Nat:
+    capErrMv * self.activeBalGainPermille + 25n
+  def thermalDeratedDutyPermille(tempC: Nat) -> Nat:
+    180n + tempC * 2n
+  def safetyBarrierHeadroomC(tempC: Nat) -> Nat:
+    self.thermalWarningLimitC + tempC
+  claim lyapunov_cap_balance_open_recursion(capErrMv: Nat): self.alwaysFfCapErrMv(capErrMv) == capErrMv * self.activeBalGainPermille + 25n
+
+spec LyapunovBalancedThermalBarrierOverride for SicFcmlLegController:
+  requires thermalDeratedDutyPermille(tempC: Nat) -> Nat
+  def activeBalGainPermille() -> Nat:
+    800n
+  def thermalWarningLimitC() -> Nat:
+    155n
+  def thermalDeratedDutyPermille(tempC: Nat) -> Nat:
+    super.thermalDeratedDutyPermille(tempC) + 10n
+
+def seedSicFcmlLeg() -> SicFcmlLegController:
+  {fcmlLevels: 0n, activeBalGainPermille: 0n, thermalWarningLimitC: 0n, thermalShutdownLimitC: 0n, overCurrentLimitAmp: 0n, alwaysFfCapErrMv: fn(ce: Nat) -> Nat: 0n, thermalDeratedDutyPermille: fn(tc: Nat) -> Nat: 0n, safetyBarrierHeadroomC: fn(tc: Nat) -> Nat: 0n}
+
+def baseSicFcmlLeg() -> SicFcmlLegController:
+  fix(BaseSicFcmlLegSpec, seedSicFcmlLeg())
+
+def lyapunovBalancedSicFcmlLeg() -> SicFcmlLegController:
+  fix(compose(BaseSicFcmlLegSpec, LyapunovBalancedThermalBarrierOverride), seedSicFcmlLeg())
+
+def unbalanced15vRecoveryStepMv() -> Nat:
+  lyapunovBalancedSicFcmlLeg().alwaysFfCapErrMv(15n) + PiLoop.ratedStepVqCommandMv()

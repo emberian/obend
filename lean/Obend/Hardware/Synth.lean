@@ -261,6 +261,15 @@ def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
       subBels ++ [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
     | .lshr =>
       subBels ++ [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
+    | .ashr =>
+      subBels ++ [{ dstName := dstName, kind := .lut2 0x8, inputs := [aName, bName] }]
+    | .slt =>
+      let invName := dstName ++ "_binv"
+      subBels ++
+        [ { dstName := invName, kind := .lut1 0x1, inputs := [bName] }
+        , { dstName := dstName, kind := .carry4,   inputs := [aName, invName] } ]
+    | .qmul32 =>
+      subBels ++ [{ dstName := dstName, kind := .dspMul, inputs := [aName, bName] }]
 
 /-- Synthesize an entire synchronous `RtlModule` into a technology-mapped `BelNetlist`, mapping all
 internal wires, register next-state trees, and output trees via `synthesizeExprToBels`, and mapping

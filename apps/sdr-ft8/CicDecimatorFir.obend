@@ -1,0 +1,56 @@
+edition ObjectiveBend 1
+# Flagship App #3 (Layer 2): Stateful always_ff 3-Stage Hogenauer CIC Decimator & Folded Symmetric FIR
+# Reference: Obend/Hardware/DSP.lean (cic_register_width_sound, firSymmetric_folds_multipliers)
+
+import ./TayloeQuadratureMixer.obend as Tayloe
+
+law monotone_decim_epoch: monotone(decimationEpoch)
+law bounded_cic_bit_width: new.cicBitWidth <= 64
+
+record CicDecimatorFirChain:
+  cicStages() -> Nat
+  decimationRatio() -> Nat
+  firCenterTapWeight() -> Nat
+  alwaysFfCicInt3(inSample: Nat) -> Nat
+  alwaysFfCicComb3(intSample: Nat) -> Nat
+  foldedSymmetricFirOut(combSample: Nat) -> Nat
+
+spec BaseCicDecimatorFirSpec for CicDecimatorFirChain:
+  requires cicStages() -> Nat
+  requires decimationRatio() -> Nat
+  requires firCenterTapWeight() -> Nat
+  def cicStages() -> Nat:
+    3n
+  def decimationRatio() -> Nat:
+    64n
+  def firCenterTapWeight() -> Nat:
+    240n
+  def alwaysFfCicInt3(inSample: Nat) -> Nat:
+    inSample * 8n + 3n
+  def alwaysFfCicComb3(intSample: Nat) -> Nat:
+    intSample * self.decimationRatio + 5n
+  def foldedSymmetricFirOut(combSample: Nat) -> Nat:
+    combSample * self.firCenterTapWeight + self.cicStages
+  claim cic_comb_open_recursion(intSample: Nat): self.alwaysFfCicComb3(intSample) == intSample * self.decimationRatio + 5n
+  claim folded_fir_open_recursion(combSample: Nat): self.foldedSymmetricFirOut(combSample) == combSample * self.firCenterTapWeight + self.cicStages
+
+spec HogenauerCompensatedCicFirOverride for CicDecimatorFirChain:
+  requires alwaysFfCicInt3(inSample: Nat) -> Nat
+  def decimationRatio() -> Nat:
+    64n
+  def firCenterTapWeight() -> Nat:
+    256n
+  def alwaysFfCicInt3(inSample: Nat) -> Nat:
+    super.alwaysFfCicInt3(inSample) + 4n
+
+def seedCicFirChain() -> CicDecimatorFirChain:
+  {cicStages: 0n, decimationRatio: 0n, firCenterTapWeight: 0n, alwaysFfCicInt3: fn(is: Nat) -> Nat: 0n, alwaysFfCicComb3: fn(cs: Nat) -> Nat: 0n, foldedSymmetricFirOut: fn(fs: Nat) -> Nat: 0n}
+
+def baseCicFirChain() -> CicDecimatorFirChain:
+  fix(BaseCicDecimatorFirSpec, seedCicFirChain())
+
+def compensatedCicFirChain() -> CicDecimatorFirChain:
+  fix(compose(BaseCicDecimatorFirSpec, HogenauerCompensatedCicFirOverride), seedCicFirChain())
+
+def ratedDecimatedFirSample() -> Nat:
+  compensatedCicFirChain().foldedSymmetricFirOut(120n) + Tayloe.rated40mUsbSampleMv()

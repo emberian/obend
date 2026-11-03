@@ -1,0 +1,43 @@
+edition ObjectiveBend 1
+# Flagship App #4 (Layer 3): Multilinear Sumcheck Round Polynomial Evaluator & Folding Layer
+
+import ./GoldilocksField.obend as Field
+import ./NttButterflyRadix2.obend as Bfly
+
+law monotone_sumcheck_round: monotone(sumcheckRoundIdx)
+
+record SumcheckRoundTarget:
+  numSumcheckRounds() -> Nat
+  butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  sumcheckRoundClaim(f0: Nat, f1: Nat) -> Nat
+  sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat
+  roundStep(f0: Nat, f1: Nat) -> Nat
+
+spec BaseSumcheckRoundSpec for SumcheckRoundTarget:
+  requires numSumcheckRounds() -> Nat
+  def numSumcheckRounds() -> Nat:
+    8n
+  def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    u + v * twiddle
+  def sumcheckRoundClaim(f0: Nat, f1: Nat) -> Nat:
+    f0 + f1
+  def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
+    f0 + rChallenge * (f1 - f0)
+  def roundStep(f0: Nat, f1: Nat) -> Nat:
+    f0 + f1 + self.numSumcheckRounds
+  claim sumcheck_round_consistency(): self.sumcheckRoundClaim(14n, 26n) == 40n
+  claim sumcheck_fold_eval(): self.sumcheckFold(10n, 18n, 3n) == 34n
+  claim fused_butterfly_sumcheck_eval(): self.sumcheckFold(self.butterflyEven(50n, 6n, 7n), 92n, 0n) == 92n
+
+spec FusedSumcheckRoundOverride for SumcheckRoundTarget:
+  requires roundStep(f0: Nat, f1: Nat) -> Nat
+  def numSumcheckRounds() -> Nat:
+    8n
+  def roundStep(f0: Nat, f1: Nat) -> Nat:
+    super.roundStep(f0, f1) + 2n
+
+def seedSumcheckRound() -> SumcheckRoundTarget:
+  {numSumcheckRounds: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, sumcheckRoundClaim: fn(a: Nat, b: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n, roundStep: fn(a: Nat, b: Nat) -> Nat: 0n}
+
+def sumcheckEngine() -> SumcheckRoundTarget:
+  fix(compose(BaseSumcheckRoundSpec, FusedSumcheckRoundOverride), seedSumcheckRound())

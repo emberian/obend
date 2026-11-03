@@ -1,0 +1,56 @@
+edition ObjectiveBend 1
+# Flagship App #8 (`apps/quantum-photonic-matter/MajoranaTetronSyndromes.obend`):
+# Topological Majorana tetron (\gamma_0..\gamma_3) non-Abelian Clifford braiding
+# and dissipative Lindblad fermion-parity cooling (L_cool = 1/2 * \gamma_0 * (I - P_tot)).
+
+import "./QuantumPhotonicMatter.obend" as QPMStd
+
+law monotone_tetron_syndrome_cycle: monotone(syndromeCycle)
+law preserve_fermion_parity_sector: writeOnce(fermionParitySector)
+
+record TetronSyndromeDecoder:
+  majoranaZeroModes() -> Nat
+  evenParityEigenvalue() -> Nat
+  coolingPumpRateMHz() -> Nat
+  braidGateDepth(cliffordWords: Nat) -> Nat
+  syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat
+
+spec BaseTetronBraidSpec for TetronSyndromeDecoder:
+  requires coolingPumpRateMHz() -> Nat
+  requires majoranaZeroModes() -> Nat
+  def majoranaZeroModes() -> Nat:
+    4n
+  def evenParityEigenvalue() -> Nat:
+    1n
+  def coolingPumpRateMHz() -> Nat:
+    120n
+  def braidGateDepth(cliffordWords: Nat) -> Nat:
+    cliffordWords * self.majoranaZeroModes + self.coolingPumpRateMHz
+  def syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat:
+    oddPoisonEvents * 16n + self.majoranaZeroModes
+  claim tetron_syndrome_braid_open_recursion(cliffordWords: Nat): self.braidGateDepth(cliffordWords) == cliffordWords * self.majoranaZeroModes + self.coolingPumpRateMHz
+
+spec ParityCooledTetronOverride for TetronSyndromeDecoder:
+  requires syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat
+  def coolingPumpRateMHz() -> Nat:
+    160n
+  def syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat:
+    super.syndromeRecoveryLatencyNs(oddPoisonEvents) + 12n
+
+def seedTetronSyndromeDecoder() -> TetronSyndromeDecoder:
+  {majoranaZeroModes: 0n, evenParityEigenvalue: 0n, coolingPumpRateMHz: 0n, braidGateDepth: fn(w: Nat) -> Nat: w, syndromeRecoveryLatencyNs: fn(e: Nat) -> Nat: e}
+
+def baseTetronDecoder() -> TetronSyndromeDecoder:
+  fix(BaseTetronBraidSpec, seedTetronSyndromeDecoder())
+
+def parityCooledTetronDecoder() -> TetronSyndromeDecoder:
+  fix(compose(BaseTetronBraidSpec, ParityCooledTetronOverride), seedTetronSyndromeDecoder())
+
+def tetronBraidDepthAt10() -> Nat:
+  parityCooledTetronDecoder().braidGateDepth(10n)
+
+def tetronRecoveryAt3() -> Nat:
+  parityCooledTetronDecoder().syndromeRecoveryLatencyNs(3n)
+
+def crossModuleTetronStdlib() -> Nat:
+  QPMStd.tetronBraidPhaseAt2() + tetronBraidDepthAt10()

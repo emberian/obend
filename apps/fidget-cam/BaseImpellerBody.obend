@@ -1,0 +1,50 @@
+edition ObjectiveBend 1
+# Flagship App #6 (`apps/fidget-cam/BaseImpellerBody.obend`):
+# Base OpenUSD/F-Rep centrifugal impeller body primitive with open-recursive shroud & blade specs.
+
+law monotone_cam_pass: monotone(camPassEpoch)
+law bounded_wall_thickness: new.wallThicknessUm <= 3000
+
+record ImpellerBody:
+  shroudRadiusUm() -> Nat
+  bladeThicknessUm() -> Nat
+  channelClearanceUm() -> Nat
+  sweptVolumeMarginUm(feedStepUm: Nat) -> Nat
+  voxelTapeOpsCount(octreeDepth: Nat) -> Nat
+
+spec BaseImpellerSubLayerSpec for ImpellerBody:
+  requires bladeThicknessUm() -> Nat
+  requires channelClearanceUm() -> Nat
+  def shroudRadiusUm() -> Nat:
+    25000n
+  def bladeThicknessUm() -> Nat:
+    1800n
+  def channelClearanceUm() -> Nat:
+    600n
+  def sweptVolumeMarginUm(feedStepUm: Nat) -> Nat:
+    self.bladeThicknessUm + feedStepUm * 4n
+  def voxelTapeOpsCount(octreeDepth: Nat) -> Nat:
+    octreeDepth * 20n + self.channelClearanceUm
+  claim swept_margin_open_recursion(feedStepUm: Nat): self.sweptVolumeMarginUm(feedStepUm) == self.bladeThicknessUm + feedStepUm * 4n
+
+spec HighSpeedShroudOverride for ImpellerBody:
+  requires voxelTapeOpsCount(octreeDepth: Nat) -> Nat
+  def bladeThicknessUm() -> Nat:
+    2200n
+  def voxelTapeOpsCount(octreeDepth: Nat) -> Nat:
+    super.voxelTapeOpsCount(octreeDepth) + 15n
+
+def seedImpellerBody() -> ImpellerBody:
+  {shroudRadiusUm: 0n, bladeThicknessUm: 0n, channelClearanceUm: 0n, sweptVolumeMarginUm: fn(f: Nat) -> Nat: f, voxelTapeOpsCount: fn(d: Nat) -> Nat: d}
+
+def baseImpellerBody() -> ImpellerBody:
+  fix(BaseImpellerSubLayerSpec, seedImpellerBody())
+
+def shroudedImpellerBody() -> ImpellerBody:
+  fix(compose(BaseImpellerSubLayerSpec, HighSpeedShroudOverride), seedImpellerBody())
+
+def shroudedMarginAt50() -> Nat:
+  shroudedImpellerBody().sweptVolumeMarginUm(50n)
+
+def shroudedTapeOpsAt4() -> Nat:
+  shroudedImpellerBody().voxelTapeOpsCount(4n)

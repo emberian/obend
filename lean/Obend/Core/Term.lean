@@ -10,13 +10,33 @@ public section
 namespace Obend.Core.Term
 set_option autoImplicit false
 
-/-- The scalar primitives, each one machine transition on unbounded naturals.
+/-- 64-bit two's-complement word projection used by bitwise, shift, signed order,
+    and fixed-point `Q32.32` (`qmul32`) primitives on `Nat`. -/
+@[expose] def word64 (n : Nat) : BitVec 64 :=
+  BitVec.ofNat 64 n
+
+/-- Signed `Q32.32` fixed-point multiplication on 64-bit words:
+    `((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64`. -/
+@[expose] def qmul32Bv (a b : BitVec 64) : BitVec 64 :=
+  ((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64
+
+/-- Encode a signed integer `x` as a `Q32.32` fixed-point 64-bit word (`x * 2^32`). -/
+@[expose] def q32FromInt (x : Int) : BitVec 64 :=
+  BitVec.ofInt 64 (x * (2 ^ 32 : Int))
+
+/-- Decode the integer part of a `Q32.32` fixed-point 64-bit word via arithmetic right shift by 32. -/
+@[expose] def q32ToInt (w : BitVec 64) : Int :=
+  (BitVec.sshiftRight w 32).toInt
+
+/-- The scalar primitives, each one machine transition on unbounded naturals (or 64-bit words).
 `subtract` is truncated at zero, `divide` is floor division with `a / 0 = 0`,
 `modulo` is Lean's `%` (`a % 0 = a`, so `(a / b) * b + a % b = a` for every `b`),
-`less`/`lessEqual` are the order on Nat; the surface `>`/`>=` are their negations. -/
+`less`/`lessEqual` are the order on Nat; the surface `>`/`>=` are their negations.
+`bitAnd`/`bitOr`/`bitXor`/`shl`/`lshr`/`ashr`/`slt`/`qmul32` operate on `word64 n : BitVec 64`. -/
 inductive Primitive where
   | add | multiply | equal | conjunction | labelEqual
   | subtract | divide | less | lessEqual | modulo
+  | bitAnd | bitOr | bitXor | shl | lshr | ashr | slt | qmul32
   deriving Repr, DecidableEq
 
 inductive Term where
@@ -224,6 +244,14 @@ theorem splitValues_map {α β : Type} (g : α → β) (fields : List (String ×
   | .less, .nat a, .nat b => some (.boolean (decide (a < b)))
   | .lessEqual, .nat a, .nat b => some (.boolean (decide (a ≤ b)))
   | .modulo, .nat a, .nat b => some (.nat (a % b))
+  | .bitAnd, .nat a, .nat b => some (.nat ((word64 a &&& word64 b).toNat))
+  | .bitOr, .nat a, .nat b => some (.nat ((word64 a ||| word64 b).toNat))
+  | .bitXor, .nat a, .nat b => some (.nat ((word64 a ^^^ word64 b).toNat))
+  | .shl, .nat a, .nat b => some (.nat ((word64 a <<< ((word64 b).toNat % 64)).toNat))
+  | .lshr, .nat a, .nat b => some (.nat ((word64 a >>> ((word64 b).toNat % 64)).toNat))
+  | .ashr, .nat a, .nat b => some (.nat ((BitVec.sshiftRight (word64 a) ((word64 b).toNat % 64)).toNat))
+  | .slt, .nat a, .nat b => some (.boolean (BitVec.slt (word64 a) (word64 b)))
+  | .qmul32, .nat a, .nat b => some (.nat ((qmul32Bv (word64 a) (word64 b)).toNat))
   | _, _, _ => none
 
 /-- All String labels, including true/false, are excluded from Boolean operations. -/

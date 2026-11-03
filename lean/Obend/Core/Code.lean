@@ -63,12 +63,17 @@ def primitiveName : Primitive → String
   | .add => "add" | .multiply => "multiply" | .equal => "equal" | .conjunction => "conjunction"
   | .labelEqual => "labelEqual" | .subtract => "subtract" | .divide => "divide"
   | .less => "less" | .lessEqual => "lessEqual" | .modulo => "modulo"
+  | .bitAnd => "bitAnd" | .bitOr => "bitOr" | .bitXor => "bitXor"
+  | .shl => "shl" | .lshr => "lshr" | .ashr => "ashr" | .slt => "slt" | .qmul32 => "qmul32"
 
 def primitiveOfName : String → Option Primitive
   | "add" => some .add | "multiply" => some .multiply | "equal" => some .equal
   | "conjunction" => some .conjunction | "labelEqual" => some .labelEqual
   | "subtract" => some .subtract | "divide" => some .divide | "less" => some .less
   | "lessEqual" => some .lessEqual | "modulo" => some .modulo
+  | "bitAnd" => some .bitAnd | "bitOr" => some .bitOr | "bitXor" => some .bitXor
+  | "shl" => some .shl | "lshr" => some .lshr | "ashr" => some .ashr
+  | "slt" => some .slt | "qmul32" => some .qmul32
   | _ => none
 
 theorem primitiveOfName_name (p : Primitive) : primitiveOfName (primitiveName p) = some p := by
@@ -731,10 +736,12 @@ def oneRule (name : String) : Data := .variant name (hole 0)
 def primitiveIndex : Primitive → Nat
   | .add => 0 | .multiply => 1 | .equal => 2 | .conjunction => 3 | .labelEqual => 4
   | .subtract => 5 | .divide => 6 | .less => 7 | .lessEqual => 8 | .modulo => 9
+  | .bitAnd => 10 | .bitOr => 11 | .bitXor => 12 | .shl => 13 | .lshr => 14
+  | .ashr => 15 | .slt => 16 | .qmul32 => 17
 
 def primitiveRules : List Data :=
   ["add", "multiply", "equal", "conjunction", "labelEqual", "subtract", "divide", "less", "lessEqual",
-    "modulo"].map Data.label
+    "modulo", "bitAnd", "bitOr", "bitXor", "shl", "lshr", "ashr", "slt", "qmul32"].map Data.label
 
 theorem primitive_conforms (p : Primitive) :
     Data.label (primitiveName p) = byTable primitiveRules (primitiveIndex p, []) := by

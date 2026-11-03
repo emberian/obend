@@ -27,6 +27,14 @@ review/kimi-*.pid
 review/kimi-brief-*
 review/kimi-run/
 hardware/sim/obj_dir/
+**/obj_dir/
+apps/**/build/
+**/*.vcd
+**/*.fst
+*.o
+*.a
+*.d
+.DS_Store
 hardware/rust-ffi/target/
 **/target/
 **/__pycache__/
@@ -34,3 +42,5 @@ hardware/rust-ffi/target/
 .agents/
 aa.html
 t.out
+astra/
+review/

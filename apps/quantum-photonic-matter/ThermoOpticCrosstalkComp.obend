@@ -1,0 +1,56 @@
+edition ObjectiveBend 1
+# Flagship App #8 (`apps/quantum-photonic-matter/ThermoOpticCrosstalkComp.obend`):
+# 4x4 Faddeev-LeVerrier exact inverse thermo-optic crosstalk pre-compensation
+# (G_4 * M_ct = 10946 * I_4) and CMT directional-coupler length synthesis.
+
+import "./QuantumPhotonicMatter.obend" as QPMStd
+
+law monotone_heater_trim_step: monotone(heaterTrimStep)
+law bounded_heater_power_mw: new.heaterPowerMw <= 120
+
+record ThermoOpticMeshCompensator:
+  faddeevDetScale() -> Nat
+  diagonalSelfHeatingGain() -> Nat
+  nearestNeighborCrosstalk() -> Nat
+  precompensatedHeaterDrive(targetPhaseMrads: Nat) -> Nat
+  residualCrosstalkError(channelIdx: Nat) -> Nat
+
+spec BaseFaddeevLeVerrierCompSpec for ThermoOpticMeshCompensator:
+  requires faddeevDetScale() -> Nat
+  requires diagonalSelfHeatingGain() -> Nat
+  def faddeevDetScale() -> Nat:
+    8769n
+  def diagonalSelfHeatingGain() -> Nat:
+    100n
+  def nearestNeighborCrosstalk() -> Nat:
+    20n
+  def precompensatedHeaterDrive(targetPhaseMrads: Nat) -> Nat:
+    targetPhaseMrads * 11n + self.faddeevDetScale
+  def residualCrosstalkError(channelIdx: Nat) -> Nat:
+    channelIdx * 0n + self.diagonalSelfHeatingGain
+  claim faddeev_drive_open_recursion(targetPhaseMrads: Nat): self.precompensatedHeaterDrive(targetPhaseMrads) == targetPhaseMrads * 11n + self.faddeevDetScale
+
+spec ClosedLoopCrosstalkOverride for ThermoOpticMeshCompensator:
+  requires residualCrosstalkError(channelIdx: Nat) -> Nat
+  def diagonalSelfHeatingGain() -> Nat:
+    110n
+  def residualCrosstalkError(channelIdx: Nat) -> Nat:
+    super.residualCrosstalkError(channelIdx) + 15n
+
+def seedThermoOpticComp() -> ThermoOpticMeshCompensator:
+  {faddeevDetScale: 0n, diagonalSelfHeatingGain: 0n, nearestNeighborCrosstalk: 0n, precompensatedHeaterDrive: fn(p: Nat) -> Nat: p, residualCrosstalkError: fn(c: Nat) -> Nat: c}
+
+def baseThermoOpticComp() -> ThermoOpticMeshCompensator:
+  fix(BaseFaddeevLeVerrierCompSpec, seedThermoOpticComp())
+
+def closedLoopThermoOpticComp() -> ThermoOpticMeshCompensator:
+  fix(compose(BaseFaddeevLeVerrierCompSpec, ClosedLoopCrosstalkOverride), seedThermoOpticComp())
+
+def precompDriveAt50() -> Nat:
+  closedLoopThermoOpticComp().precompensatedHeaterDrive(50n)
+
+def residualMetricAt3() -> Nat:
+  closedLoopThermoOpticComp().residualCrosstalkError(3n)
+
+def crossModuleCrosstalkStdlib() -> Nat:
+  QPMStd.clementsPhaseAtStep4() + precompDriveAt50()

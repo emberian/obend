@@ -1,0 +1,43 @@
+/* verilator lint_off UNUSED */
+/* verilator lint_off DECLFILENAME */
+module lc_drives_userspace_stator (
+  input  logic        clk,
+  input  logic        rst,
+  input  logic [63:0] arg,
+  output logic [63:0] out_massKg,
+  output logic [63:0] out_camSurfaceErrorUm,
+  output logic [63:0] out_thermalResistance,
+  output logic [63:0] out_sdfMargin,
+  output logic [63:0] out_peakWindingTemp
+);
+  logic [63:0] w_0; // massKg
+  logic [63:0] w_1; // camSurfaceErrorUm
+  logic [63:0] w_2; // thermalResistance
+  logic [63:0] w_3; // sdfMargin
+  logic [63:0] w_4; // peakWindingTemp
+  logic [63:0] reg_massKg;
+  logic [63:0] reg_camSurfaceErrorUm;
+  logic [63:0] reg_thermalResistance;
+  logic [63:0] reg_sdfMargin;
+  logic [63:0] reg_peakWindingTemp;
+  always_comb begin
+    w_0 = 64'd395;
+    w_1 = ((arg * 64'd4) + 64'd2);
+    w_2 = 64'd9;
+    w_3 = ((arg + 64'd10) + 64'd6);
+    w_4 = (64'd50 + (arg * w_2));
+    out_massKg = w_0;
+    out_camSurfaceErrorUm = w_1;
+    out_thermalResistance = w_2;
+    out_sdfMargin = w_3;
+    out_peakWindingTemp = w_4;
+  end
+  // Reset-free datapath registers
+  always_ff @(posedge clk) begin
+    reg_massKg <= w_0;
+    reg_camSurfaceErrorUm <= w_1;
+    reg_thermalResistance <= w_2;
+    reg_sdfMargin <= w_3;
+    reg_peakWindingTemp <= w_4;
+  end
+endmodule

@@ -4,6 +4,7 @@ module
 -/
 public import Obend.Core.Ty
 public import Obend.Equiv.Demand
+public import Obend.Hardware.HDL
 @[expose] public section
 
 namespace Obend.Hardware.Silicon
@@ -671,6 +672,14 @@ def goldenPlacedChannels : List PlacedChannel :=
   [ { name := "local_comb",   src := ⟨0, 0, 0⟩, dst := ⟨0, 0, 0⟩, bitWidth := 64, regStages := 0 }
   , { name := "adj_tile_hop", src := ⟨0, 0, 0⟩, dst := ⟨0, 0, 1⟩, bitWidth := 64, regStages := 1 }
   , { name := "slr_laguna",   src := ⟨0, 0, 1⟩, dst := ⟨1, 0, 1⟩, bitWidth := 64, regStages := 2 } ]
+
+/-! ## 6. Hierarchical Hard-IP Macro SystemVerilog Emission (`emitHierarchicalSV`) -/
+
+/-- Emit hierarchical SystemVerilog-2012 containing all hard-IP macro modules
+(`obend_macro_dsp48e2`, `obend_macro_uram288_bypass`, `obend_macro_axis_skid`,
+`obend_macro_icap_dpr_tile`, `obend_macro_noc_router_xy`) alongside a top-level `RtlModule`. -/
+def emitHierarchicalSV (m : Obend.Hardware.HDL.RtlModule) : String :=
+  Obend.Hardware.HDL.emitHierarchicalSV m
 
 end Obend.Hardware.Silicon
 end

@@ -202,6 +202,14 @@ def primitiveSignature : String → Option (String × PTy × PTy)
   | "%" => some ("modulo", .natural, .natural)
   | "<" => some ("less", .natural, .boolean)
   | "<=" => some ("lessEqual", .natural, .boolean)
+  | "&" | "bitAnd" => some ("bitAnd", .natural, .natural)
+  | "|" | "bitOr" => some ("bitOr", .natural, .natural)
+  | "^" | "bitXor" => some ("bitXor", .natural, .natural)
+  | "<<" | "shl" => some ("shl", .natural, .natural)
+  | ">>>" | "lshr" => some ("lshr", .natural, .natural)
+  | ">>" | "ashr" => some ("ashr", .natural, .natural)
+  | "<s" | "slt" => some ("slt", .natural, .boolean)
+  | "qmul32" => some ("qmul32", .natural, .natural)
   | _ => none
 /-- `a > b` is `!(a <= b)` and `a >= b` is `!(a < b)`: the operands stay in source
 order (left evaluated first), unlike a swap to `b < a`. -/
@@ -210,6 +218,7 @@ def negatedOrder : String → Option String
   | ">=" => some "less"
   | _ => none
 def operatorTypes (op : String) : Option (PTy × PTy) :=
+  if op == "<=s" then some (.natural, .boolean) else
   match primitiveSignature op with
   | some (_, input, output) => some (input, output)
   | none => (negatedOrder op).map fun _ => (.natural, .boolean)
@@ -829,6 +838,21 @@ def synth (c : Ctx) : Nat → Expr → List Binding → Module → M (Option PTy
         return t
       if let some sc := sumCase c callee env m then return ← sourceType c fuel sc.2.2 sc.2.1 []
       if let .var name := callee then
+        if !env.any (·.name == name) && (lookupGlobal c name m).isNone then
+          if ["bitAnd", "bitOr", "bitXor", "shl", "lshr", "ashr", "qmul32"].contains name then
+            if let [a, b] := args then
+              return if sameTy (← synth c fuel a env m) (some .natural) && sameTy (← synth c fuel b env m) (some .natural)
+                then some .natural else none
+            return none
+          if ["slt", "sle"].contains name then
+            if let [a, b] := args then
+              return if sameTy (← synth c fuel a env m) (some .natural) && sameTy (← synth c fuel b env m) (some .natural)
+                then some .boolean else none
+            return none
+          if ["bitNot", "q32FromInt", "q32ToInt"].contains name then
+            if let [a] := args then
+              return if sameTy (← synth c fuel a env m) (some .natural) then some .natural else none
+            return none
         if ["reflect", "metadata", "targetOf", "prototype"].contains name && !env.any (·.name == name) then
           -- metadata(s) of a specification-typed s is its SpecMeta; the prototype
           -- forms have no synthesized type (annotate a let).
@@ -1176,6 +1200,10 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
         let lt ← expression c fuel left env m
         let rt ← expression c fuel right env m
         return .ifBool lt (.boolean true) rt
+      if op == "<=s" then
+        let lt ← expression c fuel left env m
+        let rt ← expression c fuel right env m
+        return notTerm (.binary "slt" rt lt)
       if let some primitive := negatedOrder op then
         let lt ← expression c fuel left env m
         let rt ← expression c fuel right env m
@@ -1254,6 +1282,45 @@ def expression (c : Ctx) : Nat → Expr → List Binding → Module → M ATerm
         return .inject caseLabel type (if type.isSome then none else some ("sum " ++ key ++ " type unresolved")) payload
       if let .var name := callee then
         if !env.any (·.name == name) && (lookupGlobal c name m).isNone then
+          if ["bitAnd", "bitOr", "bitXor", "shl", "lshr", "ashr", "qmul32"].contains name then
+            match args with
+            | [a, b] =>
+              noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+              noActivity c fuel b env m "effect-as-argument" "an argument is a shared lazy thunk"
+              return .binary name (← expression c fuel a env m) (← expression c fuel b env m)
+            | _ => fail (name ++ " expects two arguments")
+          if name == "slt" then
+            match args with
+            | [a, b] =>
+              noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+              noActivity c fuel b env m "effect-as-argument" "an argument is a shared lazy thunk"
+              return .binary "slt" (← expression c fuel a env m) (← expression c fuel b env m)
+            | _ => fail "slt expects two arguments"
+          if name == "sle" then
+            match args with
+            | [a, b] =>
+              noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+              noActivity c fuel b env m "effect-as-argument" "an argument is a shared lazy thunk"
+              return notTerm (.binary "slt" (← expression c fuel b env m) (← expression c fuel a env m))
+            | _ => fail "sle expects two arguments"
+          if name == "bitNot" then
+            match args with
+            | [a] =>
+              noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+              return .binary "bitXor" (← expression c fuel a env m) (.nat "18446744073709551615")
+            | _ => fail "bitNot expects one argument"
+          if name == "q32FromInt" then
+            match args with
+            | [a] =>
+              noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+              return .binary "shl" (← expression c fuel a env m) (.nat "32")
+            | _ => fail "q32FromInt expects one argument"
+          if name == "q32ToInt" then
+            match args with
+            | [a] =>
+              noActivity c fuel a env m "effect-as-argument" "an argument is a shared lazy thunk"
+              return .binary "ashr" (← expression c fuel a env m) (.nat "32")
+            | _ => fail "q32ToInt expects one argument"
           if ["reflect", "metadata", "targetOf"].contains name then
             match args with
             | [a] =>

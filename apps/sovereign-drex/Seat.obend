@@ -1,0 +1,53 @@
+edition ObjectiveBend 1
+# Flagship App #7 (`apps/sovereign-drex/Seat.obend`):
+# Agoric/Zoe seat allocation, multi-asset escrow bounds, and offer-safety / mandate specs.
+
+law monotone_seat_epoch: monotone(seatEpoch)
+law bounded_seat_slippage: new.slippageBps <= 50
+
+record ZoeSeat:
+  seatId() -> Nat
+  cbdcEscrow() -> Nat
+  treasuryBondEscrow() -> Nat
+  welfareCreditCrown() -> Nat
+  offerSafetyMargin(fillRatioPct: Nat) -> Nat
+  mandateReserveCheck(drawdownBps: Nat) -> Nat
+
+spec BaseZoeSeatSpec for ZoeSeat:
+  requires cbdcEscrow() -> Nat
+  requires welfareCreditCrown() -> Nat
+  def seatId() -> Nat:
+    101n
+  def cbdcEscrow() -> Nat:
+    50000n
+  def treasuryBondEscrow() -> Nat:
+    25000n
+  def welfareCreditCrown() -> Nat:
+    1000n
+  def offerSafetyMargin(fillRatioPct: Nat) -> Nat:
+    self.cbdcEscrow + fillRatioPct * 250n
+  def mandateReserveCheck(drawdownBps: Nat) -> Nat:
+    drawdownBps * 10n + self.welfareCreditCrown
+  claim zoe_offer_safety_open_recursion(fillRatioPct: Nat): self.offerSafetyMargin(fillRatioPct) == self.cbdcEscrow + fillRatioPct * 250n
+
+spec InstitutionalMandateSeatOverride for ZoeSeat:
+  requires mandateReserveCheck(drawdownBps: Nat) -> Nat
+  def cbdcEscrow() -> Nat:
+    75000n
+  def mandateReserveCheck(drawdownBps: Nat) -> Nat:
+    super.mandateReserveCheck(drawdownBps) + 500n
+
+def seedZoeSeat() -> ZoeSeat:
+  {seatId: 0n, cbdcEscrow: 0n, treasuryBondEscrow: 0n, welfareCreditCrown: 0n, offerSafetyMargin: fn(r: Nat) -> Nat: r, mandateReserveCheck: fn(d: Nat) -> Nat: d}
+
+def retailZoeSeat() -> ZoeSeat:
+  fix(BaseZoeSeatSpec, seedZoeSeat())
+
+def institutionalZoeSeat() -> ZoeSeat:
+  fix(compose(BaseZoeSeatSpec, InstitutionalMandateSeatOverride), seedZoeSeat())
+
+def institutionalSafetyAt80() -> Nat:
+  institutionalZoeSeat().offerSafetyMargin(80n)
+
+def institutionalMandateAt15() -> Nat:
+  institutionalZoeSeat().mandateReserveCheck(15n)

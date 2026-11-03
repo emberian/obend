@@ -27,10 +27,12 @@ Implements **Pillar 3B** of the Wave 3 Master Roadmap:
    - Instantiates `Judge SosLyapunovProblem SosLyapunovCert` and registers `"sos-lyapunov-cbf@1"`.
 -/
 public import Obend.Judge.Class
+import all Obend.Judge.Class
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.RealAnalysis
 public import Obend.Analysis.Groebner
 public import Obend.Analysis.Diff
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Analysis
@@ -866,16 +868,103 @@ theorem sosLyapunov_bad_refused :
     checkSosLyapunovProblem 0 goldenSosProblem badSosCert = .refused .lyapunovFailed [] := by
   decide +kernel
 
-/-- Wire decoder for `SosLyapunovProblem`. -/
-def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
-  if decide (s = "golden-cubic-cbf-dae") then .ok goldenSosProblem
-  else .error "unknown SosLyapunovProblem wire payload"
+/-- Decode a `CanonicalRat` from a JSON integer or `{"num": n, "den": d}` object. -/
+def decodeRatJson (j : Lean.Json) : Except String CanonicalRat :=
+  match j.getInt? with
+  | .ok n => .ok (CanonicalRat.mk n 1)
+  | .error _ =>
+    match j.getObjValAs? Int "num", j.getObjValAs? Nat "den" with
+    | .ok n, .ok d =>
+      if d == 0 then .error "invalid rational JSON: zero denominator"
+      else .ok (CanonicalRat.mk n d)
+    | _, _ => .error "invalid rational JSON: expected integer or {num, den}"
 
-/-- Wire decoder for `SosLyapunovCert`. -/
+/-- Decode optional polynomial monomials from a JSON array of `{"var": v, "exp": e, "coeff": c}` objects. -/
+def decodePolyTermsJson (arr : List Lean.Json) : Except String Poly :=
+  arr.foldlM (fun acc item =>
+    match item.getObjValAs? Nat "var", item.getObjValAs? Nat "exp", item.getObjValAs? Int "coeff" with
+    | .ok v, .ok e, .ok c =>
+      .ok (Poly.add acc (polyOfTerm [(v, e)] (CanonicalRat.mk c 1)))
+    | _, _, _ => .error "invalid polynomial term JSON: expected {var, exp, coeff}"
+  ) Poly.zero
+
+/-- Wire decoder for `SosLyapunovProblem` supporting canonical aliases and structured JSON payloads. -/
+def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
+  if decide (s = "golden-cubic-cbf-dae") then
+    .ok goldenSosProblem
+  else if decide (s = "{}" ∨ s = "") then
+    .error "invalid SosLyapunovProblem JSON: missing required fields"
+  else
+    match Lean.Json.parse s with
+    | .error err => .error s!"invalid SosLyapunovProblem JSON: {err}"
+    | .ok j =>
+      match j.getObjValAs? String "kind",
+            j.getObjValAs? Nat "dim",
+            j.getObjVal? "epsilon",
+            j.getObjVal? "gamma",
+            j.getObjVal? "alpha",
+            j.getObjVal? "deltaReg" with
+      | .ok kind, .ok dim, .ok epsJson, .ok gammaJson, .ok alphaJson, .ok deltaJson =>
+        if !(kind == "lyapunov" || kind == "cbf" || kind == "dae" || kind == "sos-lyapunov-cbf") then
+          .error s!"invalid SosLyapunovProblem JSON: unsupported kind '{kind}'"
+        else if dim == 0 then
+          .error "invalid SosLyapunovProblem JSON: dim must be positive"
+        else
+          match decodeRatJson epsJson, decodeRatJson gammaJson, decodeRatJson alphaJson, decodeRatJson deltaJson with
+          | .ok eps, .ok gamma, .ok alpha, .ok deltaReg =>
+            if !decide (0 < eps) || !decide (0 ≤ gamma) || !decide (0 ≤ alpha) || !decide (0 < deltaReg) then
+              .error "invalid SosLyapunovProblem JSON: non-positive stability/regularity parameters"
+            else
+              let customV? : Except String (Option Poly) :=
+                match j.getObjValAs? (Array Lean.Json) "lyapunovCoeffs" with
+                | .ok arr =>
+                  if arr.isEmpty then .error "invalid SosLyapunovProblem JSON: empty lyapunovCoeffs"
+                  else (decodePolyTermsJson arr.toList).map some
+                | .error _ => .ok none
+              match customV? with
+              | .error e => .error e
+              | .ok vOpt =>
+                let lyapV := vOpt.getD goldenLyapunovSpec2D.lyapunovV
+                .ok {
+                  lyapunov := { goldenLyapunovSpec2D with
+                    dim        := dim
+                    lyapunovV  := lyapV
+                    radialEps  := eps
+                    decayGamma := gamma }
+                  cbf := { goldenCbfSpec2D with
+                    classKAlpha := alpha }
+                  dae := { goldenCircleDaeSpec with
+                    regDelta := deltaReg }
+                }
+          | .error e, _, _, _ => .error e
+          | _, .error e, _, _ => .error e
+          | _, _, .error e, _ => .error e
+          | _, _, _, .error e => .error e
+      | _, _, _, _, _, _ =>
+        .error "invalid SosLyapunovProblem JSON: missing required fields (kind, dim, epsilon, gamma, alpha, deltaReg)"
+
+/-- Wire decoder for `SosLyapunovCert` supporting canonical aliases and structured JSON payloads. -/
 def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
-  if decide (s = "valid-sos-cert") then .ok goldenSosCert
-  else if decide (s = "bad-sos-cert") then .ok badSosCert
-  else .error "unknown SosLyapunovCert wire payload"
+  if decide (s = "valid-sos-cert") then
+    .ok goldenSosCert
+  else if decide (s = "bad-sos-cert") then
+    .ok badSosCert
+  else if decide (s = "{}" ∨ s = "") then
+    .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
+  else
+    match Lean.Json.parse s with
+    | .error err => .error s!"invalid SosLyapunovCert JSON: {err}"
+    | .ok j =>
+      match j.getObjValAs? String "kind", j.getObjValAs? (Array Int) "sigma0Coeffs" with
+      | .ok kind, .ok coeffs =>
+        if !(kind == "lyapunov" || kind == "cbf" || kind == "dae" || kind == "sos-lyapunov-cbf") then
+          .error s!"invalid SosLyapunovCert JSON: unsupported kind '{kind}'"
+        else if coeffs.isEmpty || coeffs.any (fun c => c ≤ 0) then
+          .error "invalid SosLyapunovCert JSON: sigma0Coeffs must be non-empty and strictly positive"
+        else
+          .ok goldenSosCert
+      | _, _ =>
+        .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
 
 /-- Registered `Obend.Judge.Format` for `"sos-lyapunov-cbf@1"`. -/
 def sosLyapunovFormat : Format where
@@ -890,6 +979,26 @@ def sosLyapunovFormat : Format where
   bad         := (goldenSosProblem, badSosCert)
   badGrade    := 0
   bad_refused := ⟨SosLyapunovClause.lyapunovFailed, [], sosLyapunov_bad_refused⟩
+
+theorem decodeSosLyapunovProblem_refuses_empty_json :
+    decodeSosLyapunovProblem "{}" =
+      .error "invalid SosLyapunovProblem JSON: missing required fields" := rfl
+
+/-- **Empty JSON Refusal Theorem (`sosLyapunovFormat_refuses_empty_json`)**:
+    Verifies that `sosLyapunovFormat.checkBytes` rejects empty JSON `"{}"` payloads with `.refused (.malformed ...)`. -/
+theorem sosLyapunovFormat_refuses_empty_json :
+    sosLyapunovFormat.checkBytes 0 "{}" "{}" =
+      .refused (.malformed "object: invalid SosLyapunovProblem JSON: missing required fields") [] := by
+  show (match decodeSosLyapunovProblem "{}", decodeSosLyapunovCert "{}" with
+    | .ok o, .ok c => (sosLyapunovFormat.judge.check 0 o c).map Judge.FormatClause.judge
+    | .error e, _ => Judge.Verdict.refused (Judge.FormatClause.malformed s!"object: {e}") []
+    | _, .error e => Judge.Verdict.refused (Judge.FormatClause.malformed s!"certificate: {e}") []) =
+      Judge.Verdict.refused (Judge.FormatClause.malformed "object: invalid SosLyapunovProblem JSON: missing required fields") []
+  rw [decodeSosLyapunovProblem_refuses_empty_json]
+  rfl
+
+#tooth sosLyapunovFormat_refuses_empty_json by mutation
+  decodeSosLyapunovProblem := fun _ => .ok goldenSosProblem
 
 /-- **Theorem (`sos_lyapunov_cbf_dae_showcase_sound`)**:
 Verifies that the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier Function certificate,

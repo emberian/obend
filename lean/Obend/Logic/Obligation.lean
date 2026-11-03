@@ -22,6 +22,7 @@ public import Obend.Slot
 public import Obend.Spec.DataWire
 public import Obend.Judge.Lrat
 public import Obend.Judge.Clearing
+public import Obend.Tactic.Tooth
 @[expose] public section
 namespace Obend.Logic
 open Obend.Core.Term
@@ -756,6 +757,169 @@ theorem status_blocked_exact {o : ClaimObj} {k : Nat} {C : Composition} {steps :
     cases h
     obtain ⟨hne, hd⟩ := Obend.Slot.read_blocked_exact (claimSlot o k) _ steps c d hr
     exact ⟨d, rfl, hne, fun sp => by simpa [claimSlot] using hd sp⟩
+
+/-! ## Bisimilarity / Observational Equivalence Transport (`≈b`) -/
+
+/-- Construct an equation body for `EqKind` so `equationSides (mkEquationBody kind l r) = some (kind, l, r)`. -/
+def mkEquationBody : EqKind → Term → Term → Term
+  | .nat, l, r => .binary .equal l r
+  | .label, l, r => .binary .labelEqual l r
+  | .bool, l, r =>
+    .app (.lam (.ifBool (l.rename Nat.succ) (.bound 0) (.ifBool (.bound 0) (.boolean false) (.boolean true)))) r
+
+theorem unlams_lams : ∀ (n : Nat) (b : Term), unlams n (lams n b) = some b
+  | 0, _ => rfl
+  | n + 1, b => unlams_lams n b
+
+theorem equationSides_mkEquationBody (kind : EqKind) (l r : Term) :
+    equationSides (mkEquationBody kind l r) = some (kind, l, r) := by
+  cases kind
+  · rfl
+  · rfl
+  · simp [mkEquationBody, equationSides, unshift_rename]
+
+/-- The left-hand side of a claim's equation body, if it is an equation. -/
+def ClaimObj.lhs (o : ClaimObj) : Option Term :=
+  o.sides.map fun (_, l, _) => l
+
+/-- The right-hand side of a claim's equation body, if it is an equation. -/
+def ClaimObj.rhs (o : ClaimObj) : Option Term :=
+  o.sides.map fun (_, _, r) => r
+
+/-- Refactor the left-hand side of a `ClaimObj`'s equation to `lhs'`. -/
+def ClaimObj.withLhs (o : ClaimObj) (lhs' : Term) : ClaimObj :=
+  match o.sides with
+  | some (kind, _, r) => { o with claim := lams (o.arity + 2) (mkEquationBody kind lhs' r) }
+  | none => o
+
+theorem ClaimObj.sides_withLhs {o : ClaimObj} {kind : EqKind} {l r : Term}
+    (hs : o.sides = some (kind, l, r)) (lhs' : Term) :
+    (o.withLhs lhs').sides = some (kind, lhs', r) := by
+  unfold ClaimObj.withLhs
+  rw [hs]
+  simp [ClaimObj.sides, unlams_lams, equationSides_mkEquationBody]
+
+theorem ClaimObj.lhs_withLhs {o : ClaimObj} {kind : EqKind} {l r : Term}
+    (hs : o.sides = some (kind, l, r)) (lhs' : Term) :
+    (o.withLhs lhs').lhs = some lhs' := by
+  simp [ClaimObj.lhs, ClaimObj.sides_withLhs hs]
+
+/-- Substitution preserves `SameRuns` for observationally equivalent (`≈b`) terms. -/
+theorem bEquiv_sameRuns_substitute {t t' : Term} (h : t ≈b t') (σ : Nat → Term) :
+    SameRuns (t.substitute σ) (t'.substitute σ) := by
+  have := h σ (.bound 0)
+  simpa [instantiate, Term.substitute, substitute_bound] using this
+
+/-- `HoldsEq` is preserved when replacing the left-hand side by an observationally equivalent (`≈b`) term. -/
+theorem holdsEq_of_bEquiv_left {l l' r : Term} (hbeq : l ≈b l') (σ : Nat → Term)
+    (h : HoldsEq (l.substitute σ) (r.substitute σ)) :
+    HoldsEq (l'.substitute σ) (r.substitute σ) := by
+  intro obs
+  have hsr := (bEquiv_sameRuns_substitute hbeq σ).halts obs
+  exact hsr.symm.trans (h obs)
+
+/-- `HoldsEq` is preserved when replacing both sides by observationally equivalent (`≈b`) terms. -/
+theorem holdsEq_of_bEquiv_both {l l' r r' : Term} {σ σ' : Nat → Term}
+    (hl : l.substitute σ ≈b l'.substitute σ')
+    (hr : r.substitute σ ≈b r'.substitute σ')
+    (h : HoldsEq (l.substitute σ) (r.substitute σ)) :
+    HoldsEq (l'.substitute σ') (r'.substitute σ') := by
+  intro obs
+  have hsl := hl.sameRuns.halts obs
+  have hsr := hr.sameRuns.halts obs
+  exact hsl.symm.trans ((h obs).trans hsr)
+
+/-- **Universal Bisimilarity / Observational Equivalence Transport (`claimMeaning_of_bEquiv`)**:
+    If a claim `obj` holds (`claimMeaning obj`) and we refactor its left-hand side `lhs` to `lhs'`
+    with `lhs ≈b lhs'`, then `claimMeaning (obj.withLhs lhs')` holds. -/
+theorem claimMeaning_of_bEquiv {obj : ClaimObj} {kind : EqKind} {lhs rhs lhs' : Term}
+    (hmean : claimMeaning obj)
+    (hsides : obj.sides = some (kind, lhs, rhs))
+    (hbeq : lhs ≈b lhs') :
+    claimMeaning (obj.withLhs lhs') := by
+  unfold claimMeaning at hmean ⊢
+  rw [hsides] at hmean
+  rw [ClaimObj.sides_withLhs hsides lhs']
+  intro ds hlen
+  have hargs : (obj.withLhs lhs').args ds = obj.args ds := by
+    unfold ClaimObj.withLhs; rw [hsides]; rfl
+  have harity : (obj.withLhs lhs').arity = obj.arity := by
+    unfold ClaimObj.withLhs; rw [hsides]
+  rw [harity] at hlen
+  rw [hargs]
+  exact holdsEq_of_bEquiv_left hbeq (argSubst (obj.args ds)) (hmean ds hlen)
+
+/-- **Layer-Upgraded Bisimilarity Transport (`claimMeaning_of_layer_bEquiv`)**:
+    If `baseObj` holds (`claimMeaning baseObj`) and `upgradedObj` (on an upgraded composition/layer)
+    has equation sides `(kind', l', r')` whose instantiations are observationally equivalent (`≈b`)
+    to `baseObj`'s sides `(kind, l, r)` at every data instance, then `claimMeaning upgradedObj` holds. -/
+theorem claimMeaning_of_layer_bEquiv {baseObj upgradedObj : ClaimObj}
+    {kind kind' : EqKind} {l r l' r' : Term}
+    (hmean : claimMeaning baseObj)
+    (hpar : upgradedObj.arity = baseObj.arity)
+    (hsBase : baseObj.sides = some (kind, l, r))
+    (hsUp : upgradedObj.sides = some (kind', l', r'))
+    (hl : ∀ ds : List Data, ds.length = baseObj.arity →
+      l.substitute (argSubst (baseObj.args ds)) ≈b l'.substitute (argSubst (upgradedObj.args ds)))
+    (hr : ∀ ds : List Data, ds.length = baseObj.arity →
+      r.substitute (argSubst (baseObj.args ds)) ≈b r'.substitute (argSubst (upgradedObj.args ds))) :
+    claimMeaning upgradedObj := by
+  unfold claimMeaning at hmean ⊢
+  rw [hsBase] at hmean
+  rw [hsUp]
+  intro ds hlen
+  rw [hpar] at hlen
+  exact holdsEq_of_bEquiv_both (hl ds hlen) (hr ds hlen) (hmean ds hlen)
+
+/-- **Executable / Certified Justification Combinator (`verifyByBisimRefinement`)**:
+    Discharges an obligation on a refactored or upgraded claim `baseObj.withLhs lhs'` by checking
+    the base obligation's derivation `baseSteps` at grade `k` (combined with an observational
+    equivalence witness `lhs ≈b lhs'`). -/
+def verifyByBisimRefinement (k : Nat) (baseObj : ClaimObj) (baseSteps : List RStep) (_lhs' : Term) :
+    Judge.Verdict ClaimClause :=
+  claimCheck k baseObj baseSteps
+
+/-- **Soundness of `verifyByBisimRefinement`**:
+    When `verifyByBisimRefinement k baseObj baseSteps lhs' = .ok` and `lhs ≈b lhs'`,
+    both the base obligation `claimMeaning baseObj` and the refactored obligation
+    `claimMeaning (baseObj.withLhs lhs')` hold, and at any ground data instance where `lhs'`
+    halts with an observation accepted by `kind`, the refactored equation `HoldsEq`. -/
+theorem verifyByBisimRefinement_sound {k : Nat} {baseObj : ClaimObj} {baseSteps : List RStep}
+    {kind : EqKind} {lhs rhs lhs' : Term}
+    (hcheck : verifyByBisimRefinement k baseObj baseSteps lhs' = .ok)
+    (hsides : baseObj.sides = some (kind, lhs, rhs))
+    (hbeq : lhs ≈b lhs') :
+    claimMeaning baseObj ∧
+    claimMeaning (baseObj.withLhs lhs') ∧
+    (∀ ds : List Data, ds.length = baseObj.arity →
+      HoldsEq (lhs'.substitute (argSubst (baseObj.args ds))) (rhs.substitute (argSubst (baseObj.args ds)))) := by
+  have hbase : claimMeaning baseObj := claim_sound hcheck
+  have href : claimMeaning (baseObj.withLhs lhs') := claimMeaning_of_bEquiv hbase hsides hbeq
+  refine ⟨hbase, href, ?_⟩
+  intro ds hlen
+  unfold claimMeaning at href
+  rw [ClaimObj.sides_withLhs hsides lhs'] at href
+  have hargs : (baseObj.withLhs lhs').args ds = baseObj.args ds := by
+    unfold ClaimObj.withLhs; rw [hsides]; rfl
+  have harity : (baseObj.withLhs lhs').arity = baseObj.arity := by
+    unfold ClaimObj.withLhs; rw [hsides]
+  have h := href ds (hlen.trans harity.symm)
+  rwa [hargs] at h
+
+/-- Mutated `ClaimObj.withLhs` that replaces the whole claim with `lhs'` without equation binders. -/
+def withLhsBroken (o : ClaimObj) (lhs' : Term) : ClaimObj :=
+  { o with claim := lhs' }
+
+/-- Mutated `verifyByBisimRefinement` that unconditionally accepts without running `claimCheck`. -/
+def verifyByBisimRefinementBroken (_k : Nat) (_baseObj : ClaimObj) (_baseSteps : List RStep) (_lhs' : Term) :
+    Judge.Verdict ClaimClause :=
+  .ok
+
+#tooth Obend.Logic.claimMeaning_of_bEquiv by mutation
+  Obend.Logic.ClaimObj.withLhs := withLhsBroken
+
+#tooth Obend.Logic.verifyByBisimRefinement_sound by mutation
+  Obend.Logic.verifyByBisimRefinement := verifyByBisimRefinementBroken
 
 end Obend.Logic
 end

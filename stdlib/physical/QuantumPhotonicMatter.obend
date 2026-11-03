@@ -1,0 +1,91 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/QuantumPhotonicMatter.obend`):
+# Planar Clements Photonic Array (`PlanarWaveguideMeshBase` -> `KrawtchoukFaddeevCompensatedOverride`)
+# and Majorana Tetron Code Cell (`TetronParitySectorBase` -> `LindbladCooledTetronOverride`).
+
+law monotone_braid_epoch: monotone(braidCount)
+law write_once_parity_sector: writeOnce(paritySector)
+
+record ClementsPhotonicArray:
+  krawtchoukRatioWeight() -> Nat
+  faddeevThermalResidualPpm() -> Nat
+  transferredOpticalPowerMw(inputMw: Nat) -> Nat
+  szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat
+
+spec PlanarWaveguideMeshBase for ClementsPhotonicArray:
+  requires krawtchoukRatioWeight() -> Nat
+  def krawtchoukRatioWeight() -> Nat:
+    3n
+  def faddeevThermalResidualPpm() -> Nat:
+    120n
+  def transferredOpticalPowerMw(inputMw: Nat) -> Nat:
+    inputMw * self.krawtchoukRatioWeight + 10n
+  def szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat:
+    stepIdx * 25n
+  claim clements_power_open_recursion(inputMw: Nat): self.transferredOpticalPowerMw(inputMw) == inputMw * self.krawtchoukRatioWeight + 10n
+
+spec KrawtchoukFaddeevCompensatedOverride for ClementsPhotonicArray:
+  requires szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat
+  def krawtchoukRatioWeight() -> Nat:
+    4n
+  def faddeevThermalResidualPpm() -> Nat:
+    0n
+  def szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat:
+    super.szegedyQuotientStepPhaseMrad(stepIdx) + 50n
+
+def seedClementsArray() -> ClementsPhotonicArray:
+  {krawtchoukRatioWeight: 0n, faddeevThermalResidualPpm: 0n, transferredOpticalPowerMw: fn(p: Nat) -> Nat: 0n, szegedyQuotientStepPhaseMrad: fn(s: Nat) -> Nat: 0n}
+
+def planarWaveguideMesh() -> ClementsPhotonicArray:
+  fix(PlanarWaveguideMeshBase, seedClementsArray())
+
+def compensatedClementsArray() -> ClementsPhotonicArray:
+  fix(compose(PlanarWaveguideMeshBase, KrawtchoukFaddeevCompensatedOverride), seedClementsArray())
+
+def clementsPowerAt20Mw() -> Nat:
+  compensatedClementsArray().transferredOpticalPowerMw(20n)
+
+def clementsPhaseAtStep4() -> Nat:
+  compensatedClementsArray().szegedyQuotientStepPhaseMrad(4n)
+
+record MajoranaTetronCodeCell:
+  cliffordParityGapUeV() -> Nat
+  breakingScoreFloor() -> Nat
+  ivanovBraidPhaseMrad(braidCount: Nat) -> Nat
+  lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat
+
+spec TetronParitySectorBase for MajoranaTetronCodeCell:
+  requires cliffordParityGapUeV() -> Nat
+  def cliffordParityGapUeV() -> Nat:
+    150n
+  def breakingScoreFloor() -> Nat:
+    4n
+  def ivanovBraidPhaseMrad(braidCount: Nat) -> Nat:
+    braidCount * 90n + self.cliffordParityGapUeV
+  def lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat:
+    quasiparticleFlux * 3n + 12n
+  claim tetron_braid_open_recursion(braidCount: Nat): self.ivanovBraidPhaseMrad(braidCount) == braidCount * 90n + self.cliffordParityGapUeV
+
+spec LindbladCooledTetronOverride for MajoranaTetronCodeCell:
+  requires lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat
+  def cliffordParityGapUeV() -> Nat:
+    240n
+  def breakingScoreFloor() -> Nat:
+    0n
+  def lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat:
+    super.lindbladResetRateKhz(quasiparticleFlux) + 30n
+
+def seedTetronCell() -> MajoranaTetronCodeCell:
+  {cliffordParityGapUeV: 0n, breakingScoreFloor: 0n, ivanovBraidPhaseMrad: fn(b: Nat) -> Nat: 0n, lindbladResetRateKhz: fn(q: Nat) -> Nat: 0n}
+
+def baseTetronCell() -> MajoranaTetronCodeCell:
+  fix(TetronParitySectorBase, seedTetronCell())
+
+def cooledTetronCell() -> MajoranaTetronCodeCell:
+  fix(compose(TetronParitySectorBase, LindbladCooledTetronOverride), seedTetronCell())
+
+def tetronBraidPhaseAt2() -> Nat:
+  cooledTetronCell().ivanovBraidPhaseMrad(2n)
+
+def tetronResetRateAt10() -> Nat:
+  cooledTetronCell().lindbladResetRateKhz(10n)

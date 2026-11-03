@@ -82,6 +82,14 @@ meta instance : Quote Primitive where
     | .less        => mkIdent ``Primitive.less
     | .lessEqual   => mkIdent ``Primitive.lessEqual
     | .modulo      => mkIdent ``Primitive.modulo
+    | .bitAnd      => mkIdent ``Primitive.bitAnd
+    | .bitOr       => mkIdent ``Primitive.bitOr
+    | .bitXor      => mkIdent ``Primitive.bitXor
+    | .shl         => mkIdent ``Primitive.shl
+    | .lshr        => mkIdent ``Primitive.lshr
+    | .ashr        => mkIdent ``Primitive.ashr
+    | .slt         => mkIdent ``Primitive.slt
+    | .qmul32      => mkIdent ``Primitive.qmul32
 
 mutual
   meta partial def quoteTermAux : Term → TSyntax `term
@@ -358,100 +366,128 @@ meta def compactCompositionForKernel (C : Composition) : Composition :=
     below := C.below.map compactLayerForKernel
     seed := C.seed.filter (fun kv => kv.1 != "#kind") }
 
+meta def elaboratePhysicalObendBytes (modName : String) (bytes : ByteArray) :
+    IO (Except String PhysicalElaboratedModule) := do
+  let capRes ← (Obend.Spec.Capture.captureModule #[] modName bytes none [] false).run
+  match capRes with
+  | .error d => return .error s!"{d.stage}: {d.message}"
+  | .ok (srcMod, _) =>
+    let ast ← match Obend.Spec.FrontEnd.parseSource modName srcMod.source with
+      | .ok a => pure a
+      | .error d => return .error s!"{d.stage}: {d.message}"
+    let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
+      | .ok m => pure m
+      | .error d => return .error s!"{d.stage}: {d.message}"
+    let callables := decodedMod.decls.filter fun (d : Obend.Spec.Syntax.Decl) =>
+      match d with
+      | .function .. | .extension .. | .spec .. => true
+      | _ => false
+    let some (lastDecl : Obend.Spec.Syntax.Decl) := callables.getLast?
+      | return .error s!"module {modName} contains no callable declarations"
+    let entryDef := lastDecl.name
+    match Obend.Spec.FrontEnd.lowerDecoded [srcMod] [decodedMod] 0 entryDef
+        (Json.arr #[]) (Json.arr #[]) defaultPhysicalLimits "definition" [] with
+    | .error d => return .error s!"{d.stage}: {d.message}"
+    | .ok lowering =>
+      match Obend.Spec.FrontEnd.accept lowering with
+      | .error d => return .error s!"{d.stage}: {d.message}"
+      | .ok acc =>
+        let erasedTerm := acc.erased
+        let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
+        let rawFields := Obend.Logic.Program.knotFields rootTerm
+        let mut pdefs : List PhysicalElaboratedDef := []
+        for d in callables do
+          let shortName := d.name
+          let fullKey := modName ++ "." ++ shortName
+          let knotTerm : Term := .get rootTerm fullKey
+          let opened := match rawFields.lookup fullKey with
+            | some rb => Obend.Logic.openTerm rb rootTerm (.record [])
+            | none => knotTerm
+          let wantNamed : Composition → Bool := fun C => C.top.name != ""
+          let rawComp? :=
+            match findWorkbookObjectPhys wantNamed 64 knotTerm with
+            | some c => some c
+            | none =>
+              match findWorkbookObjectPhys wantNamed 64 (.app knotTerm (.record [])) with
+              | some c => some c
+              | none =>
+                let inlined := resolveKnotTermPhys rootTerm rawFields [fullKey] 4 opened
+                decodeWorkbookWithSeedPhys wantNamed inlined
+          let foundComp? := rawComp?.map compactCompositionForKernel
+          let book? := foundComp?.map Obend.Leaf.emit
+          pdefs := pdefs ++ [{
+            name := shortName
+            composition? := foundComp?
+            book? := book?
+          }]
+        let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
+        let mut pclaims : List PhysicalElaboratedClaim := []
+        for (specKey, claimName) in rawClaimPairs do
+          let matchingDefs := pdefs.filter fun wd =>
+            match wd.composition? with
+            | some comp => (Obend.Logic.Program.layerIndex comp specKey).isSome
+            | none => false
+          let chosenDef? :=
+            match matchingDefs.find? (fun wd => wd.composition?.any (fun c => c.top.name == specKey)) with
+            | some wd => some wd
+            | none => matchingDefs.head?
+          if let some wd := chosenDef? then
+            if let some comp := wd.composition? then
+              if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
+                let steps? := proposeWorkbookDerivationPhys co
+                let just? := steps?.map Justification.byDerivation
+                let ok := match just? with
+                  | some j => Obend.Logic.obligationCheck 64 co j == .ok
+                  | none => false
+                pclaims := pclaims ++ [{
+                  name := claimName
+                  claimObj := co
+                  just? := just?
+                  verified := ok
+                }]
+        return .ok {
+          moduleName := modName
+          defs := pdefs
+          claims := pclaims
+        }
+
 meta def elaboratePhysicalObendFile (pathStr : String) : IO (Except String PhysicalElaboratedModule) := do
   let resolved ← resolvePhysicalObendPath (System.FilePath.mk pathStr)
   let modName := resolved.fileStem.getD "Main"
   match ← (IO.FS.readBinFile resolved).toBaseIO with
   | .error e => return .error (toString e)
-  | .ok bytes =>
-    let capRes ← (Obend.Spec.Capture.captureModule #[] modName bytes none [] false).run
-    match capRes with
-    | .error d => return .error s!"{d.stage}: {d.message}"
-    | .ok (srcMod, _) =>
-      let ast ← match Obend.Spec.FrontEnd.parseSource modName srcMod.source with
-        | .ok a => pure a
-        | .error d => return .error s!"{d.stage}: {d.message}"
-      let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
-        | .ok m => pure m
-        | .error d => return .error s!"{d.stage}: {d.message}"
-      let callables := decodedMod.decls.filter fun (d : Obend.Spec.Syntax.Decl) =>
-        match d with
-        | .function .. | .extension .. | .spec .. => true
-        | _ => false
-      let some (lastDecl : Obend.Spec.Syntax.Decl) := callables.getLast?
-        | return .error s!"module {modName} contains no callable declarations"
-      let entryDef := lastDecl.name
-      match Obend.Spec.FrontEnd.lowerDecoded [srcMod] [decodedMod] 0 entryDef
-          (Json.arr #[]) (Json.arr #[]) defaultPhysicalLimits "definition" [] with
-      | .error d => return .error s!"{d.stage}: {d.message}"
-      | .ok lowering =>
-        match Obend.Spec.FrontEnd.accept lowering with
-        | .error d => return .error s!"{d.stage}: {d.message}"
-        | .ok acc =>
-          let erasedTerm := acc.erased
-          let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
-          let rawFields := Obend.Logic.Program.knotFields rootTerm
-          let mut pdefs : List PhysicalElaboratedDef := []
-          for d in callables do
-            let shortName := d.name
-            let fullKey := modName ++ "." ++ shortName
-            let knotTerm : Term := .get rootTerm fullKey
-            let opened := match rawFields.lookup fullKey with
-              | some rb => Obend.Logic.openTerm rb rootTerm (.record [])
-              | none => knotTerm
-            let wantNamed : Composition → Bool := fun C => C.top.name != ""
-            let rawComp? :=
-              match findWorkbookObjectPhys wantNamed 64 knotTerm with
-              | some c => some c
-              | none =>
-                match findWorkbookObjectPhys wantNamed 64 (.app knotTerm (.record [])) with
-                | some c => some c
-                | none =>
-                  let inlined := resolveKnotTermPhys rootTerm rawFields [fullKey] 4 opened
-                  decodeWorkbookWithSeedPhys wantNamed inlined
-            let foundComp? := rawComp?.map compactCompositionForKernel
-            let book? := foundComp?.map Obend.Leaf.emit
-            pdefs := pdefs ++ [{
-              name := shortName
-              composition? := foundComp?
-              book? := book?
-            }]
-          let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
-          let mut pclaims : List PhysicalElaboratedClaim := []
-          for (specKey, claimName) in rawClaimPairs do
-            let matchingDefs := pdefs.filter fun wd =>
-              match wd.composition? with
-              | some comp => (Obend.Logic.Program.layerIndex comp specKey).isSome
-              | none => false
-            let chosenDef? :=
-              match matchingDefs.find? (fun wd => wd.composition?.any (fun c => c.top.name == specKey)) with
-              | some wd => some wd
-              | none => matchingDefs.head?
-            if let some wd := chosenDef? then
-              if let some comp := wd.composition? then
-                if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
-                  let steps? := proposeWorkbookDerivationPhys co
-                  let just? := steps?.map Justification.byDerivation
-                  let ok := match just? with
-                    | some j => Obend.Logic.obligationCheck 64 co j == .ok
-                    | none => false
-                  pclaims := pclaims ++ [{
-                    name := claimName
-                    claimObj := co
-                    just? := just?
-                    verified := ok
-                  }]
-          return .ok {
-            moduleName := modName
-            defs := pdefs
-            claims := pclaims
-          }
+  | .ok bytes => elaboratePhysicalObendBytes modName bytes
 
 theorem obligationMeaning_of_check_beq
     (formats : List Judge.Format) {k : Nat} {o : ClaimObj} {j : Justification}
     (h : (Obend.Logic.obligationCheckWithJudges formats k o j == .ok) = true) :
     Obend.Logic.obligationMeaningWithJudges formats o j :=
   Obend.Logic.obligationWithJudges_sound formats (beq_iff_eq.1 h)
+
+meta def emitPhysicalElaboratedModule (pkg : PhysicalElaboratedModule) (ns : Name) : CommandElabM Unit := do
+  let accId := mkIdent (ns ++ `accepted)
+  let accEqId := mkIdent (ns ++ `accepted_eq)
+  elabCommand (← `(@[expose] public def $accId : Bool := true))
+  elabCommand (← `(public theorem $accEqId : $accId = true := rfl))
+  for d in pkg.defs do
+    if let some comp := d.composition? then
+      let compId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_comp"))
+      elabCommand (← `(@[expose] public def $compId : Composition := $(quote comp)))
+    if let some bk := d.book? then
+      let bookId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_book"))
+      elabCommand (← `(@[expose] public def $bookId : Book := $(quote bk)))
+  for c in pkg.claims do
+    let objId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_obj"))
+    elabCommand (← `(@[expose] public def $objId : ClaimObj := $(quote c.claimObj)))
+    if let some just := c.just? then
+      let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
+      elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
+      if c.verified then
+        let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
+        elabCommand (← `(
+          public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats $objId $justId :=
+            obligationMeaning_of_check_beq Obend.Logic.defaultExternalFormats (k := 64) (o := $objId) (j := $justId) (by decide +kernel)
+        ))
 
 /-- Compile-time `.obend` physical library elaborator `#import_obend "stdlib/physical/..." as Ns`.
     Parses, typechecks, lowers (`FrontEnd.lowerDecoded`), verifies `FrontEnd.accept`, extracts all
@@ -466,30 +502,19 @@ local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
   | .error err =>
     Lean.throwError m!"#import_obend failed on {pathStr}: {err}"
   | .ok pkg =>
-    let ns := nsId.getId
-    let accId := mkIdent (ns ++ `accepted)
-    let accEqId := mkIdent (ns ++ `accepted_eq)
-    elabCommand (← `(@[expose] public def $accId : Bool := true))
-    elabCommand (← `(public theorem $accEqId : $accId = true := rfl))
-    for d in pkg.defs do
-      if let some comp := d.composition? then
-        let compId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_comp"))
-        elabCommand (← `(@[expose] public def $compId : Composition := $(quote comp)))
-      if let some bk := d.book? then
-        let bookId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_book"))
-        elabCommand (← `(@[expose] public def $bookId : Book := $(quote bk)))
-    for c in pkg.claims do
-      let objId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_obj"))
-      elabCommand (← `(@[expose] public def $objId : ClaimObj := $(quote c.claimObj)))
-      if let some just := c.just? then
-        let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
-        elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
-        if c.verified then
-          let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
-          elabCommand (← `(
-            public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats $objId $justId :=
-              obligationMeaning_of_check_beq Obend.Logic.defaultExternalFormats (k := 64) (o := $objId) (j := $justId) (by decide +kernel)
-          ))
+    emitPhysicalElaboratedModule pkg nsId.getId
+
+local elab "#import_obend_source " modLit:str srcLit:str " as " nsId:ident : command => do
+  let modName := modLit.getString
+  let src := srcLit.getString
+  let res ← IO.toEIO
+    (fun e => Lean.Exception.error Lean.Syntax.missing (Lean.MessageData.ofFormat (Std.Format.text (toString e))))
+    (elaboratePhysicalObendBytes modName src.toUTF8)
+  match res with
+  | .error err =>
+    Lean.throwError m!"#import_obend_source failed on {modName}: {err}"
+  | .ok pkg =>
+    emitPhysicalElaboratedModule pkg nsId.getId
 
 /-! ## 1. Compile-Time Elaboration of the 4 Canonical `stdlib/physical/*.obend` Modules via `#import_obend` -/
 
@@ -1384,6 +1409,123 @@ theorem userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified :
           vgprsPhase rPhase == 90#64
         | _, _ => false)
      | _, _ => false) = true := by
+  decide +kernel
+
+/-! ## 10. Full-Stack `.obend` Bitwise, Shift, Signed Order & `Q32.32` Fixed-Point Surface Lowering -/
+
+/-- Userspace `.obend` source exercising hex literals (`0xFF`, `0x0F`, `0x01`), bitwise operators (`&`, `|`, `^`),
+shifts (`<<`, `>>`), and `Q32.32` fixed-point intrinsics (`q32FromInt`, `qmul32`, `q32ToInt`). -/
+def obendBitwiseQ32Source : String :=
+  "edition ObjectiveBend 1\n" ++
+  "record BitwiseQ32Target:\n" ++
+  "  maskVal() -> Nat\n" ++
+  "  q32Scaled(x: Nat) -> Nat\n\n" ++
+  "spec BitwiseQ32Base for BitwiseQ32Target:\n" ++
+  "  requires maskVal() -> Nat\n" ++
+  "  def maskVal() -> Nat:\n" ++
+  "    (0xFFn & 0x0Fn) | (0x01n << 4n)\n" ++
+  "  def q32Scaled(x: Nat) -> Nat:\n" ++
+  "    q32ToInt(qmul32(q32FromInt(x), q32FromInt(3n))) ^ (self.maskVal >> 1n)\n\n" ++
+  "def seedBitwiseQ32() -> BitwiseQ32Target:\n" ++
+  "  {maskVal: 0n, q32Scaled: fn(x: Nat) -> Nat: 0n}\n\n" ++
+  "def bitwiseQ32Inst() -> BitwiseQ32Target:\n" ++
+  "  fix(BitwiseQ32Base, seedBitwiseQ32())\n"
+
+#import_obend_source "BitwiseQ32Mod"
+  "edition ObjectiveBend 1\nrecord BitwiseQ32Target:\n  maskVal() -> Nat\n  q32Scaled(x: Nat) -> Nat\n\nspec BitwiseQ32Base for BitwiseQ32Target:\n  requires maskVal() -> Nat\n  def maskVal() -> Nat:\n    (0xFFn & 0x0Fn) | (0x01n << 4n)\n  def q32Scaled(x: Nat) -> Nat:\n    q32ToInt(qmul32(q32FromInt(x), q32FromInt(3n))) ^ (self.maskVal >> 1n)\n\ndef seedBitwiseQ32() -> BitwiseQ32Target:\n  {maskVal: 0n, q32Scaled: fn(x: Nat) -> Nat: 0n}\n\ndef bitwiseQ32Inst() -> BitwiseQ32Target:\n  fix(BitwiseQ32Base, seedBitwiseQ32())\n"
+  as StdBitwiseQ32
+
+/-- **Theorem (`userspace_obend_bitwise_q32_surface_to_rtl_verified`)**:
+Elaborates `obendBitwiseQ32Source` through `Spec.Parse` + `Spec.Elaborate` + `FrontEnd.accept`,
+synthesizes a `Composition` -> `Leaf.Book` -> `RtlModule` + `AmdGpuVop64Inst`, and proves that:
+1. `StdBitwiseQ32.accepted = true` (passes `Obend.Core.Check` translation validation),
+2. `maskVal = (0xFF & 0x0F) | (1 << 4) = 15 | 16 = 31`,
+3. `q32Scaled(10) = q32ToInt(qmul32(10 << 32, 3 << 32)) ^ (31 >> 1) = 30 ^ 15 = 17` in both
+   the synchronous `RtlModule` (`evalModuleOutputs`) and the 64-bit AMD `CDNA3` VOP64 GPU kernel! -/
+theorem userspace_obend_bitwise_q32_surface_to_rtl_verified :
+    (StdBitwiseQ32.accepted &&
+     match compileBookToRtl "bitwise_q32_rtl" StdBitwiseQ32.bitwiseQ32Inst_book with
+     | some m =>
+       checkRtlModule m &&
+       (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) ==
+         [ ("out_maskVal", 31#64)
+         , ("out_q32Scaled", 17#64) ]) &&
+       (match m.wires[1]? with
+        | some wScaled =>
+          let (rOut, _, code) := compileRtlExprToAmdGpu 1 wScaled.expr
+          let wireEnv := evalWireTable (fun _ => 10#64) (fun _ => 0#64) m.wires
+          let vgprs := runAmdGpuVop64Prog (fun _ => 10#64) wireEnv (fun _ => 0#64) (fun _ => 0#64) code
+          vgprs rOut == 17#64
+        | none => false)
+     | none => false) = true := by
+  decide +kernel
+
+/-- Userspace `.obend` source exercising unary bitwise complement (`~`), logical right shift (`>>>` / `lshr`),
+signed two's-complement comparisons (`<s`, `<=s`), named bitwise/shift intrinsics (`bitAnd`, `bitXor`, `shl`),
+and a mixed 0-arg cell + 2-argument method `Book`. -/
+def obendFullSurfaceSource : String :=
+  "edition ObjectiveBend 1\n" ++
+  "record FullSurfaceTarget:\n" ++
+  "  negOneMask() -> Nat\n" ++
+  "  lshrCheck(x: Nat) -> Nat\n" ++
+  "  signedCmpBlend(a: Nat, b: Nat) -> Nat\n\n" ++
+  "spec FullSurfaceBase for FullSurfaceTarget:\n" ++
+  "  requires negOneMask() -> Nat\n" ++
+  "  def negOneMask() -> Nat:\n" ++
+  "    ~0n\n" ++
+  "  def lshrCheck(x: Nat) -> Nat:\n" ++
+  "    (self.negOneMask >>> 60n) + lshr(x, 2n)\n" ++
+  "  def signedCmpBlend(a: Nat, b: Nat) -> Nat:\n" ++
+  "    if (self.negOneMask <s a) && (a <=s b) then bitAnd(a, 0xFFn) | shl(b, 4n) else bitXor(a, b)\n\n" ++
+  "def seedFullSurface() -> FullSurfaceTarget:\n" ++
+  "  {negOneMask: 0n, lshrCheck: fn(x: Nat) -> Nat: 0n, signedCmpBlend: fn(a: Nat, b: Nat) -> Nat: 0n}\n\n" ++
+  "def fullSurfaceInst() -> FullSurfaceTarget:\n" ++
+  "  fix(FullSurfaceBase, seedFullSurface())\n"
+
+#import_obend_source "FullSurfaceRichMod"
+  "edition ObjectiveBend 1\nrecord FullSurfaceTarget:\n  negOneMask() -> Nat\n  lshrCheck(x: Nat) -> Nat\n  signedCmpBlend(a: Nat, b: Nat) -> Nat\n\nspec FullSurfaceBase for FullSurfaceTarget:\n  requires negOneMask() -> Nat\n  def negOneMask() -> Nat:\n    ~0n\n  def lshrCheck(x: Nat) -> Nat:\n    (self.negOneMask >>> 60n) + lshr(x, 2n)\n  def signedCmpBlend(a: Nat, b: Nat) -> Nat:\n    if (self.negOneMask <s a) && (a <=s b) then bitAnd(a, 0xFFn) | shl(b, 4n) else bitXor(a, b)\n\ndef seedFullSurface() -> FullSurfaceTarget:\n  {negOneMask: 0n, lshrCheck: fn(x: Nat) -> Nat: 0n, signedCmpBlend: fn(a: Nat, b: Nat) -> Nat: 0n}\n\ndef fullSurfaceInst() -> FullSurfaceTarget:\n  fix(FullSurfaceBase, seedFullSurface())\n"
+  as StdFullSurface
+
+/-- **Theorem (`userspace_obend_full_surface_rich_and_stateful_verified`)**:
+Elaborates `FullSurfaceRichMod` (`~`, `>>>`, `lshr`, `<s`, `<=s`, `bitAnd`, `bitXor`, `shl`, and a
+mixed 0-arg cell + 2-argument method `Book`) and verifies:
+1. `StdFullSurface.accepted = true`,
+2. `compileBookToRtl`, `compileBookToRtlSat`, and `compileRichBookToRtl` all synthesize valid
+   2-input `RtlModule`s (`checkRtlModule = true`, `inputNames = ["arg0", "arg1"]`),
+3. `~0n = 0xFFFFFFFFFFFFFFFF#64` (`-1` in signed two's complement), `(negOneMask >>> 60) + lshr(16, 2) = 19#64`,
+   `signedCmpBlend(16, 20) = 336#64` (`-1 <s 16` and `16 <=s 20`), and `signedCmpBlend(9, 3) = 10#64`,
+4. `Obend.Hardware.Silicon.emitHierarchicalSV` emits all hard-IP macro headers alongside the top module. -/
+theorem userspace_obend_full_surface_rich_and_stateful_verified :
+    let emptyCtx : RtlLayoutCtx := { structSlices := [], unionTagBits := 8, unionArms := [] }
+    (StdFullSurface.accepted &&
+     match compileBookToRtl "full_surface_wrap" StdFullSurface.fullSurfaceInst_book,
+           compileBookToRtlSat "full_surface_sat" StdFullSurface.fullSurfaceInst_book,
+           compileRichBookToRtl "full_surface_rich" emptyCtx StdFullSurface.fullSurfaceInst_book with
+     | some mWrap, some mSat, some mRich =>
+       let inA : Nat → BitVec 64 := fun i => if i == 0 then 16#64 else if i == 1 then 20#64 else 0#64
+       let inB : Nat → BitVec 64 := fun i => if i == 0 then 9#64 else if i == 1 then 3#64 else 0#64
+       let zEnv : Nat → BitVec 64 := fun _ => 0#64
+       checkRtlModule mWrap &&
+       checkRtlModule mSat &&
+       checkRtlModule mRich &&
+       (mWrap.inputNames == ["arg0", "arg1"]) &&
+       (mSat.inputNames == ["arg0", "arg1"]) &&
+       (mRich.inputNames == ["arg0", "arg1"]) &&
+       (evalModuleOutputs mWrap inA zEnv ==
+         [ ("out_negOneMask", 0xFFFFFFFFFFFFFFFF#64)
+         , ("out_lshrCheck", 19#64)
+         , ("out_signedCmpBlend", 336#64) ]) &&
+       (evalModuleOutputs mSat inA zEnv ==
+         [ ("out_negOneMask", 0xFFFFFFFFFFFFFFFF#64)
+         , ("out_lshrCheck", 19#64)
+         , ("out_signedCmpBlend", 336#64) ]) &&
+       (evalModuleOutputs mRich inB zEnv ==
+         [ ("out_negOneMask", 0xFFFFFFFFFFFFFFFF#64)
+         , ("out_lshrCheck", 17#64)
+         , ("out_signedCmpBlend", 10#64) ]) &&
+       ("module obend_macro_dsp48e2".toList.isPrefixOf
+         (Obend.Hardware.Silicon.emitHierarchicalSV mWrap).toList)
+     | _, _, _ => false) = true := by
   decide +kernel
 
 end Obend.Hardware.UserspacePhysical

@@ -101,6 +101,38 @@ theorem primitive_result_typed {assumptions : Assumptions} {types : AddressTypes
       obtain ⟨first,rfl⟩ := natural_value_form leftTyped
       obtain ⟨second,rfl⟩ := natural_value_form rightTyped
       exact ⟨.nat (first%second),.natural (first%second),rfl,rfl,.natural _⟩
+  | bitAnd =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((word64 first &&& word64 second).toNat),.natural ((word64 first &&& word64 second).toNat),rfl,rfl,.natural _⟩
+  | bitOr =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((word64 first ||| word64 second).toNat),.natural ((word64 first ||| word64 second).toNat),rfl,rfl,.natural _⟩
+  | bitXor =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((word64 first ^^^ word64 second).toNat),.natural ((word64 first ^^^ word64 second).toNat),rfl,rfl,.natural _⟩
+  | shl =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((word64 first <<< ((word64 second).toNat % 64)).toNat),.natural ((word64 first <<< ((word64 second).toNat % 64)).toNat),rfl,rfl,.natural _⟩
+  | lshr =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((word64 first >>> ((word64 second).toNat % 64)).toNat),.natural ((word64 first >>> ((word64 second).toNat % 64)).toNat),rfl,rfl,.natural _⟩
+  | ashr =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((BitVec.sshiftRight (word64 first) ((word64 second).toNat % 64)).toNat),.natural ((BitVec.sshiftRight (word64 first) ((word64 second).toNat % 64)).toNat),rfl,rfl,.natural _⟩
+  | slt =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.boolean (BitVec.slt (word64 first) (word64 second)),.boolean (BitVec.slt (word64 first) (word64 second)),rfl,rfl,.boolean _⟩
+  | qmul32 =>
+      obtain ⟨first,rfl⟩ := natural_value_form leftTyped
+      obtain ⟨second,rfl⟩ := natural_value_form rightTyped
+      exact ⟨.nat ((qmul32Bv (word64 first) (word64 second)).toNat),.natural ((qmul32Bv (word64 first) (word64 second)).toNat),rfl,rfl,.natural _⟩
 
 theorem stack_binary_right_values {assumptions : Assumptions} {types : AddressTypes}
     {stack : List Frame} {input result : Ty} {right : RuntimeValue}

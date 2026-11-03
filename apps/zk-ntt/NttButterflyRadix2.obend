@@ -1,0 +1,39 @@
+edition ObjectiveBend 1
+# Flagship App #4 (Layer 2): Cooley-Tukey Radix-2 NTT Butterfly Layer
+
+import ./GoldilocksField.obend as Field
+
+law monotone_ntt_stage: monotone(nttStageIdx)
+
+record NttButterflyTarget:
+  twiddleScale() -> Nat
+  butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  butterflyStageStep(u: Nat, v: Nat) -> Nat
+
+spec BaseRadix2ButterflySpec for NttButterflyTarget:
+  requires twiddleScale() -> Nat
+  def twiddleScale() -> Nat:
+    1n
+  def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    u + v * twiddle
+  def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    u - v * twiddle
+  def butterflyStageStep(u: Nat, v: Nat) -> Nat:
+    u + v * self.twiddleScale
+  claim butterfly_even_radix2(): self.butterflyEven(50n, 6n, 7n) == 92n
+  claim butterfly_odd_radix2(): self.butterflyOdd(50n, 6n, 7n) == 8n
+  claim butterfly_sum_involution(): self.butterflyEven(50n, 6n, 7n) + self.butterflyOdd(50n, 6n, 7n) == 100n
+
+spec PipelinedButterflyOverride for NttButterflyTarget:
+  requires butterflyStageStep(u: Nat, v: Nat) -> Nat
+  def twiddleScale() -> Nat:
+    1n
+  def butterflyStageStep(u: Nat, v: Nat) -> Nat:
+    super.butterflyStageStep(u, v) + 4n
+
+def seedNttButterfly() -> NttButterflyTarget:
+  {twiddleScale: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyStageStep: fn(u: Nat, v: Nat) -> Nat: 0n}
+
+def nttButterflyEngine() -> NttButterflyTarget:
+  fix(compose(BaseRadix2ButterflySpec, PipelinedButterflyOverride), seedNttButterfly())

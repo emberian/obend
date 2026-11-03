@@ -1,0 +1,56 @@
+edition ObjectiveBend 1
+# Flagship App #6 (`apps/fidget-cam/MountingBossAssembly.obend`):
+# OpenUSD LIVERPS mounting boss CSG union assembly with pruned SSA tape length & 5-axis G-code toolpath steps.
+
+import ./BaseImpellerBody.obend as BaseBody
+
+law write_once_boss_datum: writeOnce(bossDatumId)
+
+record MountingBossLug:
+  bossOffsetMm() -> Nat
+  boltCircleRadiusUm() -> Nat
+  prunedTapeLength() -> Nat
+  fiveAxisGcodeSteps(flutes: Nat) -> Nat
+  clampingTorqueNm(preloadKn: Nat) -> Nat
+
+spec PayloadBossArcSpec for MountingBossLug:
+  requires bossOffsetMm() -> Nat
+  requires prunedTapeLength() -> Nat
+  def bossOffsetMm() -> Nat:
+    15n
+  def boltCircleRadiusUm() -> Nat:
+    30000n
+  def prunedTapeLength() -> Nat:
+    9n
+  def fiveAxisGcodeSteps(flutes: Nat) -> Nat:
+    flutes * 64n + self.prunedTapeLength
+  def clampingTorqueNm(preloadKn: Nat) -> Nat:
+    preloadKn * self.bossOffsetMm + 10n
+  claim boss_gcode_open_recursion(flutes: Nat): self.fiveAxisGcodeSteps(flutes) == flutes * 64n + self.prunedTapeLength
+
+spec VariantStiffenedBossOverride for MountingBossLug:
+  requires clampingTorqueNm(preloadKn: Nat) -> Nat
+  def bossOffsetMm() -> Nat:
+    15n
+  def prunedTapeLength() -> Nat:
+    7n
+  def clampingTorqueNm(preloadKn: Nat) -> Nat:
+    super.clampingTorqueNm(preloadKn) + 25n
+
+def seedMountingBoss() -> MountingBossLug:
+  {bossOffsetMm: 0n, boltCircleRadiusUm: 0n, prunedTapeLength: 0n, fiveAxisGcodeSteps: fn(f: Nat) -> Nat: f, clampingTorqueNm: fn(p: Nat) -> Nat: p}
+
+def payloadMountingBoss() -> MountingBossLug:
+  fix(PayloadBossArcSpec, seedMountingBoss())
+
+def stiffenedMountingBoss() -> MountingBossLug:
+  fix(compose(PayloadBossArcSpec, VariantStiffenedBossOverride), seedMountingBoss())
+
+def stiffenedGcodeStepsAt5() -> Nat:
+  stiffenedMountingBoss().fiveAxisGcodeSteps(5n)
+
+def stiffenedTorqueAt12() -> Nat:
+  stiffenedMountingBoss().clampingTorqueNm(12n)
+
+def crossModuleBossOps() -> Nat:
+  BaseBody.shroudedTapeOpsAt4() + stiffenedGcodeStepsAt5()

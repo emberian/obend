@@ -40,6 +40,7 @@ in-silico evolutionary physical design** within `Obend.Hardware`:
      dimensional deflection tolerance, and within its multiphysics performance floor.
 -/
 public import Obend.Hardware.Accelerators
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Hardware.GeometryCAM
@@ -1876,6 +1877,652 @@ theorem continuous_swept_volume_no_gouge_sound
   dsimp only [evalFRepPoint]
   rw [evalFRepPoint_translateFRep]
   omega
+
+/-! ### 3C. Self-Certified Forward-Mode Dual-Interval Gradients (`evalFRepGradBox`) & Lipschitz Swept-Volume Synthesis -/
+
+/-- Interval convex hull `[\min(a.lo, b.lo), \max(a.hi, b.hi)]` enclosing subgradients of CSG
+`min` (`.csgUnion`) and `max` (`.csgInter`, `.csgDiff`) operations. -/
+def ivHull (a b : FloatInterval) : FloatInterval where
+  lo := min a.lo b.lo
+  hi := max a.hi b.hi
+
+/-- Minimum absolute magnitude $\min_{v \in [a_{\text{lo}}, a_{\text{hi}}]} |v|$ of a `FloatInterval`. -/
+def ivMinAbs (a : FloatInterval) : Int :=
+  if 0 ≤ a.lo then a.lo
+  else if a.hi ≤ 0 then -a.hi
+  else 0
+
+/-- Forward-mode 3D dual-interval gradient evaluation (`evalFRepGradBox`):
+computes tight interval enclosures $(g_x, g_y, g_z)$ over bounding box `B : Box3D` for the partial
+derivatives / discrete secant differences $(\Delta_x e, \Delta_y e, \Delta_z e)$ of any `FRepExpr`. -/
+def evalFRepGradBox (B : Box3D) : FRepExpr → FloatInterval × FloatInterval × FloatInterval
+  | .const _ =>
+    (defaultSsaIv, defaultSsaIv, defaultSsaIv)
+  | .varX =>
+    ({ lo := 1, hi := 1 }, defaultSsaIv, defaultSsaIv)
+  | .varY =>
+    (defaultSsaIv, { lo := 1, hi := 1 }, defaultSsaIv)
+  | .varZ =>
+    (defaultSsaIv, defaultSsaIv, { lo := 1, hi := 1 })
+  | .add a b =>
+    let ga := evalFRepGradBox B a
+    let gb := evalFRepGradBox B b
+    (ivAdd ga.1 gb.1, ivAdd ga.2.1 gb.2.1, ivAdd ga.2.2 gb.2.2)
+  | .sub a b =>
+    let ga := evalFRepGradBox B a
+    let gb := evalFRepGradBox B b
+    (ivSub ga.1 gb.1, ivSub ga.2.1 gb.2.1, ivSub ga.2.2 gb.2.2)
+  | .scalePos k a =>
+    let ga := evalFRepGradBox B a
+    (ivScalePos k ga.1, ivScalePos k ga.2.1, ivScalePos k ga.2.2)
+  | .sq a =>
+    let ga := evalFRepGradBox B a
+    let twoVal := ivScalePos 2 (evalFRepInterval B a)
+    (ivMulSym twoVal ga.1, ivMulSym twoVal ga.2.1, ivMulSym twoVal ga.2.2)
+  | .csgUnion a b =>
+    let ga := evalFRepGradBox B a
+    let gb := evalFRepGradBox B b
+    (ivHull ga.1 gb.1, ivHull ga.2.1 gb.2.1, ivHull ga.2.2 gb.2.2)
+  | .csgInter a b =>
+    let ga := evalFRepGradBox B a
+    let gb := evalFRepGradBox B b
+    (ivHull ga.1 gb.1, ivHull ga.2.1 gb.2.1, ivHull ga.2.2 gb.2.2)
+  | .csgDiff a b =>
+    let ga := evalFRepGradBox B a
+    let gb := evalFRepGradBox B b
+    (ivHull ga.1 (ivNeg gb.1), ivHull ga.2.1 (ivNeg gb.2.1), ivHull ga.2.2 (ivNeg gb.2.2))
+  | .offset _ a =>
+    evalFRepGradBox B a
+
+/-- Self-certified $L_\infty \to L_1$ Lipschitz upper bound $|g_x|_{\max} + |g_y|_{\max} + |g_z|_{\max}$
+derived directly from `evalFRepGradBox B e` without any unchecked caller-supplied parameter. -/
+def computeCertifiedLipschitzBox (B : Box3D) (e : FRepExpr) : Nat :=
+  let g := evalFRepGradBox B e
+  (ivAbsBound g.1 + ivAbsBound g.2.1 + ivAbsBound g.2.2).toNat
+
+/-- Alias for `computeCertifiedLipschitzBox`. -/
+abbrev computeCertifiedLipschitzBound (B : Box3D) (e : FRepExpr) : Nat :=
+  computeCertifiedLipschitzBox B e
+
+/-- Lower bound on the $L_1$ gradient magnitude $|g_x|_{\min} + |g_y|_{\min} + |g_z|_{\min}$ over `B`. -/
+def computeCertifiedGradMinBox (B : Box3D) (e : FRepExpr) : Nat :=
+  let g := evalFRepGradBox B e
+  (ivMinAbs g.1 + ivMinAbs g.2.1 + ivMinAbs g.2.2).toNat
+
+/-- 3D $L_\infty$ (Chebyshev) distance $\|p - q\|_\infty = \max(|x_1 - x_2|, |y_1 - y_2|, |z_1 - z_2|)$. -/
+def linfDist3D (p q : Int × Int × Int) : Int :=
+  let (x1, y1, z1) := p
+  let (x2, y2, z2) := q
+  max (max (frepIntAbs (x1 - x2)) (frepIntAbs (y1 - y2))) (frepIntAbs (z1 - z2))
+
+theorem ivAbsBound_nonneg (a : FloatInterval) : 0 ≤ ivAbsBound a := by
+  unfold ivAbsBound
+  have h1 := (frepIntAbs_bounds a.lo).1
+  have h2 := (frepIntAbs_bounds a.hi).1
+  omega
+
+theorem ivAbsBound_bounds (a : FloatInterval) :
+    -ivAbsBound a ≤ a.lo ∧ a.lo ≤ ivAbsBound a ∧
+    -ivAbsBound a ≤ a.hi ∧ a.hi ≤ ivAbsBound a := by
+  unfold ivAbsBound
+  have h1 := frepIntAbs_bounds a.lo
+  have h2 := frepIntAbs_bounds a.hi
+  omega
+
+theorem ivAbsBound_of_contains (a : FloatInterval) (v : Int) (h : a.contains v) :
+    -ivAbsBound a ≤ v ∧ v ≤ ivAbsBound a := by
+  dsimp only [FloatInterval.contains] at h
+  have hb := ivAbsBound_bounds a
+  omega
+
+theorem ivScalePos_two_contains_add (a : FloatInterval) (v1 v2 : Int)
+    (h1 : a.contains v1) (h2 : a.contains v2) :
+    (ivScalePos 2 a).contains (v1 + v2) := by
+  dsimp only [ivScalePos, FloatInterval.contains] at *
+  change 2 * a.lo ≤ v1 + v2 ∧ v1 + v2 ≤ 2 * a.hi
+  omega
+
+theorem int_sq_sub_sq (v1 v2 : Int) :
+    v1 * v1 - v2 * v2 = (v1 + v2) * (v1 - v2) := by
+  rw [Int.add_mul, Int.mul_sub, Int.mul_sub, Int.mul_comm v2 v1]
+  omega
+
+theorem ivAdd_secant_encloses (ga gb : FloatInterval) (dx dfa dfb : Int)
+    (ha : ga.lo * dx ≤ dfa ∧ dfa ≤ ga.hi * dx)
+    (hb : gb.lo * dx ≤ dfb ∧ dfb ≤ gb.hi * dx) :
+    (ivAdd ga gb).lo * dx ≤ dfa + dfb ∧ dfa + dfb ≤ (ivAdd ga gb).hi * dx := by
+  dsimp only [ivAdd]
+  rw [Int.add_mul, Int.add_mul]
+  omega
+
+theorem ivSub_secant_encloses (ga gb : FloatInterval) (dx dfa dfb : Int)
+    (ha : ga.lo * dx ≤ dfa ∧ dfa ≤ ga.hi * dx)
+    (hb : gb.lo * dx ≤ dfb ∧ dfb ≤ gb.hi * dx) :
+    (ivSub ga gb).lo * dx ≤ dfa - dfb ∧ dfa - dfb ≤ (ivSub ga gb).hi * dx := by
+  dsimp only [ivSub]
+  rw [Int.sub_mul, Int.sub_mul]
+  omega
+
+theorem ivScalePos_secant_encloses (k : Nat) (ga : FloatInterval) (dx dfa : Int)
+    (ha : ga.lo * dx ≤ dfa ∧ dfa ≤ ga.hi * dx) :
+    (ivScalePos k ga).lo * dx ≤ Int.ofNat k * dfa ∧
+    Int.ofNat k * dfa ≤ (ivScalePos k ga).hi * dx := by
+  dsimp only [ivScalePos]
+  have hk : (0 : Int) ≤ Int.ofNat k := Int.natCast_nonneg k
+  have hLo := int_mul_le_mul_of_nonneg_left (ga.lo * dx) dfa (Int.ofNat k) ha.1 hk
+  have hHi := int_mul_le_mul_of_nonneg_left dfa (ga.hi * dx) (Int.ofNat k) ha.2 hk
+  rw [← Int.mul_assoc (Int.ofNat k) ga.lo dx] at hLo
+  rw [← Int.mul_assoc (Int.ofNat k) ga.hi dx] at hHi
+  exact ⟨hLo, hHi⟩
+
+theorem ivMulSym_secant_encloses
+    (ivA ga : FloatInterval) (dx v1 v2 : Int)
+    (hDx : 0 ≤ dx)
+    (hv1 : ivA.contains v1) (hv2 : ivA.contains v2)
+    (ha : ga.lo * dx ≤ v1 - v2 ∧ v1 - v2 ≤ ga.hi * dx) :
+    (ivMulSym (ivScalePos 2 ivA) ga).lo * dx ≤ v1 * v1 - v2 * v2 ∧
+    v1 * v1 - v2 * v2 ≤ (ivMulSym (ivScalePos 2 ivA) ga).hi * dx := by
+  dsimp only [ivMulSym]
+  have hSumIn := ivScalePos_two_contains_add ivA v1 v2 hv1 hv2
+  have hSumBnd := ivAbsBound_of_contains (ivScalePos 2 ivA) (v1 + v2) hSumIn
+  have hGaBnd := ivAbsBound_bounds ga
+  have hLoMul : (-ivAbsBound ga) * dx ≤ ga.lo * dx :=
+    int_mul_le_mul_of_nonneg_right (-ivAbsBound ga) ga.lo dx hGaBnd.1 hDx
+  have hHiMul : ga.hi * dx ≤ ivAbsBound ga * dx :=
+    int_mul_le_mul_of_nonneg_right ga.hi (ivAbsBound ga) dx hGaBnd.2.2.2 hDx
+  rw [Int.neg_mul] at hLoMul
+  have hDiffBnd : -(ivAbsBound ga * dx) ≤ v1 - v2 ∧ v1 - v2 ≤ ivAbsBound ga * dx := by omega
+  have hR1 : 0 ≤ ivAbsBound (ivScalePos 2 ivA) := ivAbsBound_nonneg _
+  have hR2 : 0 ≤ ivAbsBound ga * dx := by
+    have := int_mul_le_mul_of_nonneg_right 0 (ivAbsBound ga) dx (ivAbsBound_nonneg ga) hDx
+    omega
+  have hProd := frep_abs_mul_bound (v1 + v2) (v1 - v2)
+    (ivAbsBound (ivScalePos 2 ivA)) (ivAbsBound ga * dx) hR1 hR2 hSumBnd hDiffBnd
+  rw [← int_sq_sub_sq v1 v2, ← Int.mul_assoc, ← Int.neg_mul] at hProd
+  exact hProd
+
+theorem ivHull_min_secant_encloses (ga gb : FloatInterval) (dx a1 a2 b1 b2 : Int)
+    (hDx : 0 ≤ dx)
+    (ha : ga.lo * dx ≤ a1 - a2 ∧ a1 - a2 ≤ ga.hi * dx)
+    (hb : gb.lo * dx ≤ b1 - b2 ∧ b1 - b2 ≤ gb.hi * dx) :
+    (ivHull ga gb).lo * dx ≤ min a1 b1 - min a2 b2 ∧
+    min a1 b1 - min a2 b2 ≤ (ivHull ga gb).hi * dx := by
+  dsimp only [ivHull]
+  have hLoA : min ga.lo gb.lo * dx ≤ ga.lo * dx :=
+    int_mul_le_mul_of_nonneg_right (min ga.lo gb.lo) ga.lo dx (by omega) hDx
+  have hLoB : min ga.lo gb.lo * dx ≤ gb.lo * dx :=
+    int_mul_le_mul_of_nonneg_right (min ga.lo gb.lo) gb.lo dx (by omega) hDx
+  have hHiA : ga.hi * dx ≤ max ga.hi gb.hi * dx :=
+    int_mul_le_mul_of_nonneg_right ga.hi (max ga.hi gb.hi) dx (by omega) hDx
+  have hHiB : gb.hi * dx ≤ max ga.hi gb.hi * dx :=
+    int_mul_le_mul_of_nonneg_right gb.hi (max ga.hi gb.hi) dx (by omega) hDx
+  omega
+
+theorem ivHull_max_secant_encloses (ga gb : FloatInterval) (dx a1 a2 b1 b2 : Int)
+    (hDx : 0 ≤ dx)
+    (ha : ga.lo * dx ≤ a1 - a2 ∧ a1 - a2 ≤ ga.hi * dx)
+    (hb : gb.lo * dx ≤ b1 - b2 ∧ b1 - b2 ≤ gb.hi * dx) :
+    (ivHull ga gb).lo * dx ≤ max a1 b1 - max a2 b2 ∧
+    max a1 b1 - max a2 b2 ≤ (ivHull ga gb).hi * dx := by
+  dsimp only [ivHull]
+  have hLoA : min ga.lo gb.lo * dx ≤ ga.lo * dx :=
+    int_mul_le_mul_of_nonneg_right (min ga.lo gb.lo) ga.lo dx (by omega) hDx
+  have hLoB : min ga.lo gb.lo * dx ≤ gb.lo * dx :=
+    int_mul_le_mul_of_nonneg_right (min ga.lo gb.lo) gb.lo dx (by omega) hDx
+  have hHiA : ga.hi * dx ≤ max ga.hi gb.hi * dx :=
+    int_mul_le_mul_of_nonneg_right ga.hi (max ga.hi gb.hi) dx (by omega) hDx
+  have hHiB : gb.hi * dx ≤ max ga.hi gb.hi * dx :=
+    int_mul_le_mul_of_nonneg_right gb.hi (max ga.hi gb.hi) dx (by omega) hDx
+  omega
+
+theorem ivNeg_secant_encloses (gb : FloatInterval) (dx b1 b2 : Int)
+    (hb : gb.lo * dx ≤ b1 - b2 ∧ b1 - b2 ≤ gb.hi * dx) :
+    (ivNeg gb).lo * dx ≤ (-b1) - (-b2) ∧ (-b1) - (-b2) ≤ (ivNeg gb).hi * dx := by
+  dsimp only [ivNeg]
+  rw [Int.neg_mul, Int.neg_mul]
+  omega
+
+/-- Directional secant enclosure along $X$ over bounding box `B`. -/
+theorem evalFRepGradBox_secant_x
+    (B : Box3D) (x1 x2 y z : Int) (e : FRepExpr)
+    (hx1 : B.xIv.contains x1) (hx2 : B.xIv.contains x2)
+    (hy : B.yIv.contains y) (hz : B.zIv.contains z)
+    (hLe : x2 ≤ x1) :
+    let gx := (evalFRepGradBox B e).1
+    let df := evalFRepPoint x1 y z e - evalFRepPoint x2 y z e
+    gx.lo * (x1 - x2) ≤ df ∧ df ≤ gx.hi * (x1 - x2) := by
+  have hDx : 0 ≤ x1 - x2 := by omega
+  induction e with
+  | const c =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varX =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]; omega
+  | varY =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varZ =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | add a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    have h := ivAdd_secant_encloses _ _ (x1 - x2) _ _ iha ihb
+    omega
+  | sub a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    have h := ivSub_secant_encloses _ _ (x1 - x2) _ _ iha ihb
+    omega
+  | scalePos k a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    rw [← Int.mul_sub]
+    exact ivScalePos_secant_encloses k _ (x1 - x2) _ iha
+  | sq a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivMulSym_secant_encloses (evalFRepInterval B a) (evalFRepGradBox B a).1 (x1 - x2)
+      (evalFRepPoint x1 y z a) (evalFRepPoint x2 y z a) hDx
+      (frep_interval_enclosure_sound B x1 y z a ⟨hx1, hy, hz⟩)
+      (frep_interval_enclosure_sound B x2 y z a ⟨hx2, hy, hz⟩) iha
+  | csgUnion a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_min_secant_encloses _ _ (x1 - x2) _ _ _ _ hDx iha ihb
+  | csgInter a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_max_secant_encloses _ _ (x1 - x2) _ _ _ _ hDx iha ihb
+  | csgDiff a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_max_secant_encloses _ _ (x1 - x2) _ _ _ _ hDx iha
+      (ivNeg_secant_encloses _ (x1 - x2) _ _ ihb)
+  | offset r a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    omega
+
+/-- Directional secant enclosure along $Y$ over bounding box `B`. -/
+theorem evalFRepGradBox_secant_y
+    (B : Box3D) (x y1 y2 z : Int) (e : FRepExpr)
+    (hx : B.xIv.contains x)
+    (hy1 : B.yIv.contains y1) (hy2 : B.yIv.contains y2)
+    (hz : B.zIv.contains z)
+    (hLe : y2 ≤ y1) :
+    let gy := (evalFRepGradBox B e).2.1
+    let df := evalFRepPoint x y1 z e - evalFRepPoint x y2 z e
+    gy.lo * (y1 - y2) ≤ df ∧ df ≤ gy.hi * (y1 - y2) := by
+  have hDy : 0 ≤ y1 - y2 := by omega
+  induction e with
+  | const c =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varX =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varY =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]; omega
+  | varZ =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | add a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    have h := ivAdd_secant_encloses (evalFRepGradBox B a).2.1 (evalFRepGradBox B b).2.1 (y1 - y2) _ _ iha ihb
+    omega
+  | sub a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    have h := ivSub_secant_encloses (evalFRepGradBox B a).2.1 (evalFRepGradBox B b).2.1 (y1 - y2) _ _ iha ihb
+    omega
+  | scalePos k a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    rw [← Int.mul_sub]
+    exact ivScalePos_secant_encloses k _ (y1 - y2) _ iha
+  | sq a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivMulSym_secant_encloses (evalFRepInterval B a) (evalFRepGradBox B a).2.1 (y1 - y2)
+      (evalFRepPoint x y1 z a) (evalFRepPoint x y2 z a) hDy
+      (frep_interval_enclosure_sound B x y1 z a ⟨hx, hy1, hz⟩)
+      (frep_interval_enclosure_sound B x y2 z a ⟨hx, hy2, hz⟩) iha
+  | csgUnion a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_min_secant_encloses _ _ (y1 - y2) _ _ _ _ hDy iha ihb
+  | csgInter a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_max_secant_encloses _ _ (y1 - y2) _ _ _ _ hDy iha ihb
+  | csgDiff a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_max_secant_encloses _ _ (y1 - y2) _ _ _ _ hDy iha
+      (ivNeg_secant_encloses _ (y1 - y2) _ _ ihb)
+  | offset r a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    omega
+
+/-- Directional secant enclosure along $Z$ over bounding box `B`. -/
+theorem evalFRepGradBox_secant_z
+    (B : Box3D) (x y z1 z2 : Int) (e : FRepExpr)
+    (hx : B.xIv.contains x) (hy : B.yIv.contains y)
+    (hz1 : B.zIv.contains z1) (hz2 : B.zIv.contains z2)
+    (hLe : z2 ≤ z1) :
+    let gz := (evalFRepGradBox B e).2.2
+    let df := evalFRepPoint x y z1 e - evalFRepPoint x y z2 e
+    gz.lo * (z1 - z2) ≤ df ∧ df ≤ gz.hi * (z1 - z2) := by
+  have hDz : 0 ≤ z1 - z2 := by omega
+  induction e with
+  | const c =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varX =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varY =>
+    dsimp only [evalFRepGradBox, defaultSsaIv, evalFRepPoint]; omega
+  | varZ =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]; omega
+  | add a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    have h := ivAdd_secant_encloses (evalFRepGradBox B a).2.2 (evalFRepGradBox B b).2.2 (z1 - z2) _ _ iha ihb
+    omega
+  | sub a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    have h := ivSub_secant_encloses (evalFRepGradBox B a).2.2 (evalFRepGradBox B b).2.2 (z1 - z2) _ _ iha ihb
+    omega
+  | scalePos k a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    rw [← Int.mul_sub]
+    exact ivScalePos_secant_encloses k _ (z1 - z2) _ iha
+  | sq a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivMulSym_secant_encloses (evalFRepInterval B a) (evalFRepGradBox B a).2.2 (z1 - z2)
+      (evalFRepPoint x y z1 a) (evalFRepPoint x y z2 a) hDz
+      (frep_interval_enclosure_sound B x y z1 a ⟨hx, hy, hz1⟩)
+      (frep_interval_enclosure_sound B x y z2 a ⟨hx, hy, hz2⟩) iha
+  | csgUnion a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_min_secant_encloses _ _ (z1 - z2) _ _ _ _ hDz iha ihb
+  | csgInter a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_max_secant_encloses _ _ (z1 - z2) _ _ _ _ hDz iha ihb
+  | csgDiff a b iha ihb =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    exact ivHull_max_secant_encloses _ _ (z1 - z2) _ _ _ _ hDz iha
+      (ivNeg_secant_encloses _ (z1 - z2) _ _ ihb)
+  | offset r a iha =>
+    dsimp only [evalFRepGradBox, evalFRepPoint]
+    omega
+
+theorem secant_to_abs_bound (g : FloatInterval) (d df : Int)
+    (hDx : 0 ≤ d) (hSec : g.lo * d ≤ df ∧ df ≤ g.hi * d) :
+    frepIntAbs df ≤ ivAbsBound g * d := by
+  have hBnd := ivAbsBound_bounds g
+  have hLo : (-ivAbsBound g) * d ≤ g.lo * d :=
+    int_mul_le_mul_of_nonneg_right (-ivAbsBound g) g.lo d hBnd.1 hDx
+  have hHi : g.hi * d ≤ ivAbsBound g * d :=
+    int_mul_le_mul_of_nonneg_right g.hi (ivAbsBound g) d hBnd.2.2.2 hDx
+  rw [Int.neg_mul] at hLo
+  unfold frepIntAbs
+  omega
+
+theorem evalFRepGradBox_abs_x
+    (B : Box3D) (x1 x2 y z : Int) (e : FRepExpr)
+    (hx1 : B.xIv.contains x1) (hx2 : B.xIv.contains x2)
+    (hy : B.yIv.contains y) (hz : B.zIv.contains z) :
+    frepIntAbs (evalFRepPoint x1 y z e - evalFRepPoint x2 y z e) ≤
+      ivAbsBound (evalFRepGradBox B e).1 * frepIntAbs (x1 - x2) := by
+  by_cases hLe : x2 ≤ x1
+  · have hSec := evalFRepGradBox_secant_x B x1 x2 y z e hx1 hx2 hy hz hLe
+    have hAbs : frepIntAbs (x1 - x2) = x1 - x2 := by unfold frepIntAbs; omega
+    rw [hAbs]
+    exact secant_to_abs_bound (evalFRepGradBox B e).1 (x1 - x2) _ (by omega) hSec
+  · have hLe' : x1 ≤ x2 := by omega
+    have hSec := evalFRepGradBox_secant_x B x2 x1 y z e hx2 hx1 hy hz hLe'
+    have hAbsD : frepIntAbs (x1 - x2) = x2 - x1 := by unfold frepIntAbs; omega
+    have hAbsF : frepIntAbs (evalFRepPoint x1 y z e - evalFRepPoint x2 y z e) =
+        frepIntAbs (evalFRepPoint x2 y z e - evalFRepPoint x1 y z e) := by
+      unfold frepIntAbs; omega
+    rw [hAbsD, hAbsF]
+    exact secant_to_abs_bound (evalFRepGradBox B e).1 (x2 - x1) _ (by omega) hSec
+
+theorem evalFRepGradBox_abs_y
+    (B : Box3D) (x y1 y2 z : Int) (e : FRepExpr)
+    (hx : B.xIv.contains x)
+    (hy1 : B.yIv.contains y1) (hy2 : B.yIv.contains y2)
+    (hz : B.zIv.contains z) :
+    frepIntAbs (evalFRepPoint x y1 z e - evalFRepPoint x y2 z e) ≤
+      ivAbsBound (evalFRepGradBox B e).2.1 * frepIntAbs (y1 - y2) := by
+  by_cases hLe : y2 ≤ y1
+  · have hSec := evalFRepGradBox_secant_y B x y1 y2 z e hx hy1 hy2 hz hLe
+    have hAbs : frepIntAbs (y1 - y2) = y1 - y2 := by unfold frepIntAbs; omega
+    rw [hAbs]
+    exact secant_to_abs_bound (evalFRepGradBox B e).2.1 (y1 - y2) _ (by omega) hSec
+  · have hLe' : y1 ≤ y2 := by omega
+    have hSec := evalFRepGradBox_secant_y B x y2 y1 z e hx hy2 hy1 hz hLe'
+    have hAbsD : frepIntAbs (y1 - y2) = y2 - y1 := by unfold frepIntAbs; omega
+    have hAbsF : frepIntAbs (evalFRepPoint x y1 z e - evalFRepPoint x y2 z e) =
+        frepIntAbs (evalFRepPoint x y2 z e - evalFRepPoint x y1 z e) := by
+      unfold frepIntAbs; omega
+    rw [hAbsD, hAbsF]
+    exact secant_to_abs_bound (evalFRepGradBox B e).2.1 (y2 - y1) _ (by omega) hSec
+
+theorem evalFRepGradBox_abs_z
+    (B : Box3D) (x y z1 z2 : Int) (e : FRepExpr)
+    (hx : B.xIv.contains x) (hy : B.yIv.contains y)
+    (hz1 : B.zIv.contains z1) (hz2 : B.zIv.contains z2) :
+    frepIntAbs (evalFRepPoint x y z1 e - evalFRepPoint x y z2 e) ≤
+      ivAbsBound (evalFRepGradBox B e).2.2 * frepIntAbs (z1 - z2) := by
+  by_cases hLe : z2 ≤ z1
+  · have hSec := evalFRepGradBox_secant_z B x y z1 z2 e hx hy hz1 hz2 hLe
+    have hAbs : frepIntAbs (z1 - z2) = z1 - z2 := by unfold frepIntAbs; omega
+    rw [hAbs]
+    exact secant_to_abs_bound (evalFRepGradBox B e).2.2 (z1 - z2) _ (by omega) hSec
+  · have hLe' : z1 ≤ z2 := by omega
+    have hSec := evalFRepGradBox_secant_z B x y z2 z1 e hx hy hz2 hz1 hLe'
+    have hAbsD : frepIntAbs (z1 - z2) = z2 - z1 := by unfold frepIntAbs; omega
+    have hAbsF : frepIntAbs (evalFRepPoint x y z1 e - evalFRepPoint x y z2 e) =
+        frepIntAbs (evalFRepPoint x y z2 e - evalFRepPoint x y z1 e) := by
+      unfold frepIntAbs; omega
+    rw [hAbsD, hAbsF]
+    exact secant_to_abs_bound (evalFRepGradBox B e).2.2 (z2 - z1) _ (by omega) hSec
+
+/-- **Universal 3D F-Rep Dual-Interval Lipschitz Soundness (`evalFRepGradBox_lipschitz_sound`)**:
+For every 3D bounding box `B : Box3D`, every `FRepExpr` `e` (including linear, affine, offset, CSG,
+and quadratic `.sq` polynomials), and any two points $p = (x_1, y_1, z_1) \in B$ and
+$q = (x_2, y_2, z_2) \in B$:
+$$|e(p) - e(q)| \le \text{computeCertifiedLipschitzBox}(B, e) \cdot \|p - q\|_\infty.$$ -/
+theorem evalFRepGradBox_lipschitz_sound
+    (B : Box3D) (e : FRepExpr)
+    (x1 y1 z1 x2 y2 z2 : Int)
+    (hp : B.contains x1 y1 z1) (hq : B.contains x2 y2 z2) :
+    frepIntAbs (evalFRepPoint x1 y1 z1 e - evalFRepPoint x2 y2 z2 e) ≤
+      Int.ofNat (computeCertifiedLipschitzBox B e) * linfDist3D (x1, y1, z1) (x2, y2, z2) := by
+  have hx := evalFRepGradBox_abs_x B x1 x2 y1 z1 e hp.1 hq.1 hp.2.1 hp.2.2
+  have hy := evalFRepGradBox_abs_y B x2 y1 y2 z1 e hq.1 hp.2.1 hq.2.1 hp.2.2
+  have hz := evalFRepGradBox_abs_z B x2 y2 z1 z2 e hq.1 hq.2.1 hp.2.2 hq.2.2
+  have hGxPos : 0 ≤ ivAbsBound (evalFRepGradBox B e).1 := ivAbsBound_nonneg _
+  have hGyPos : 0 ≤ ivAbsBound (evalFRepGradBox B e).2.1 := ivAbsBound_nonneg _
+  have hGzPos : 0 ≤ ivAbsBound (evalFRepGradBox B e).2.2 := ivAbsBound_nonneg _
+  have hDxLe : frepIntAbs (x1 - x2) ≤ linfDist3D (x1, y1, z1) (x2, y2, z2) := by
+    dsimp [linfDist3D]; omega
+  have hDyLe : frepIntAbs (y1 - y2) ≤ linfDist3D (x1, y1, z1) (x2, y2, z2) := by
+    dsimp [linfDist3D]; omega
+  have hDzLe : frepIntAbs (z1 - z2) ≤ linfDist3D (x1, y1, z1) (x2, y2, z2) := by
+    dsimp [linfDist3D]; omega
+  have hxInf : ivAbsBound (evalFRepGradBox B e).1 * frepIntAbs (x1 - x2) ≤
+      ivAbsBound (evalFRepGradBox B e).1 * linfDist3D (x1, y1, z1) (x2, y2, z2) :=
+    int_mul_le_mul_of_nonneg_left _ _ _ hDxLe hGxPos
+  have hyInf : ivAbsBound (evalFRepGradBox B e).2.1 * frepIntAbs (y1 - y2) ≤
+      ivAbsBound (evalFRepGradBox B e).2.1 * linfDist3D (x1, y1, z1) (x2, y2, z2) :=
+    int_mul_le_mul_of_nonneg_left _ _ _ hDyLe hGyPos
+  have hzInf : ivAbsBound (evalFRepGradBox B e).2.2 * frepIntAbs (z1 - z2) ≤
+      ivAbsBound (evalFRepGradBox B e).2.2 * linfDist3D (x1, y1, z1) (x2, y2, z2) :=
+    int_mul_le_mul_of_nonneg_left _ _ _ hDzLe hGzPos
+  have hTri :
+      frepIntAbs (evalFRepPoint x1 y1 z1 e - evalFRepPoint x2 y2 z2 e) ≤
+        frepIntAbs (evalFRepPoint x1 y1 z1 e - evalFRepPoint x2 y1 z1 e) +
+        frepIntAbs (evalFRepPoint x2 y1 z1 e - evalFRepPoint x2 y2 z1 e) +
+        frepIntAbs (evalFRepPoint x2 y2 z1 e - evalFRepPoint x2 y2 z2 e) := by
+    unfold frepIntAbs
+    omega
+  have hL :
+      Int.ofNat (computeCertifiedLipschitzBox B e) =
+        ivAbsBound (evalFRepGradBox B e).1 +
+        ivAbsBound (evalFRepGradBox B e).2.1 +
+        ivAbsBound (evalFRepGradBox B e).2.2 := by
+    unfold computeCertifiedLipschitzBox
+    dsimp only
+    exact Int.toNat_of_nonneg (by omega)
+  rw [hL, Int.add_mul, Int.add_mul]
+  omega
+
+/-- Broken `computeCertifiedLipschitzBox` returning a constant `0` Lipschitz bound. -/
+def computeCertifiedLipschitzBoxBroken (_B : Box3D) (_e : FRepExpr) : Nat := 0
+
+#tooth evalFRepGradBox_lipschitz_sound by mutation
+  computeCertifiedLipschitzBox := computeCertifiedLipschitzBoxBroken
+
+/-- Positive scaling homogeneity of `frepIntAbs`. -/
+theorem frepIntAbs_scalePos (k : Nat) (z : Int) :
+    frepIntAbs (Int.ofNat k * z) = Int.ofNat k * frepIntAbs z := by
+  unfold frepIntAbs
+  have hk : (0 : Int) ≤ Int.ofNat k := Int.natCast_nonneg k
+  split
+  · rename_i hkz
+    split
+    · rfl
+    · rename_i hz
+      have hNegZ : 1 ≤ -z := by omega
+      have hMul := int_mul_le_mul_of_nonneg_left 0 (-z) (Int.ofNat k) (by omega) hk
+      rw [Int.mul_neg] at hMul
+      have hZero : Int.ofNat k * z = 0 := by omega
+      by_cases hk0 : k = 0
+      · subst hk0; simp
+      · have hkPos : (1 : Int) ≤ Int.ofNat k := by
+          change (1 : Int) ≤ (k : Int)
+          omega
+        have hProdPos := int_mul_le_mul_of_nonneg_left 1 (-z) (Int.ofNat k) hNegZ hk
+        rw [Int.mul_neg] at hProdPos
+        omega
+  · rename_i hkz
+    split
+    · rename_i hz
+      have hMul := int_mul_le_mul_of_nonneg_left 0 z (Int.ofNat k) hz hk
+      omega
+    · rw [Int.mul_neg]
+
+/-- Positive scaling homogeneity of `ivAbsBound`. -/
+theorem ivAbsBound_scalePos (k : Nat) (a : FloatInterval) :
+    ivAbsBound (ivScalePos k a) = Int.ofNat k * ivAbsBound a := by
+  dsimp only [ivAbsBound, ivScalePos]
+  rw [frepIntAbs_scalePos, frepIntAbs_scalePos]
+  have hk : (0 : Int) ≤ Int.ofNat k := Int.natCast_nonneg k
+  by_cases hLe : frepIntAbs a.lo ≤ frepIntAbs a.hi
+  · have hMulLe := int_mul_le_mul_of_nonneg_left _ _ (Int.ofNat k) hLe hk
+    have hMax1 : max (Int.ofNat k * frepIntAbs a.lo) (Int.ofNat k * frepIntAbs a.hi) =
+        Int.ofNat k * frepIntAbs a.hi := by omega
+    have hMax2 : max (frepIntAbs a.lo) (frepIntAbs a.hi) = frepIntAbs a.hi := by omega
+    rw [hMax1, hMax2]
+  · have hLe' : frepIntAbs a.hi ≤ frepIntAbs a.lo := by omega
+    have hMulLe := int_mul_le_mul_of_nonneg_left _ _ (Int.ofNat k) hLe' hk
+    have hMax1 : max (Int.ofNat k * frepIntAbs a.lo) (Int.ofNat k * frepIntAbs a.hi) =
+        Int.ofNat k * frepIntAbs a.lo := by omega
+    have hMax2 : max (frepIntAbs a.lo) (frepIntAbs a.hi) = frepIntAbs a.lo := by omega
+    rw [hMax1, hMax2]
+
+/-- **Lipschitz Positive-Scaling Homogeneity (`computeCertifiedLipschitzBox_scalePos`)**:
+Scaling any `FRepExpr` `e` by `k : Nat` (`.scalePos k e`) scales `computeCertifiedLipschitzBox B`
+by `k`:
+$$\text{computeCertifiedLipschitzBox}(B,\, k \cdot e) = k \cdot \text{computeCertifiedLipschitzBox}(B,\, e).$$ -/
+theorem computeCertifiedLipschitzBox_scalePos (B : Box3D) (k : Nat) (e : FRepExpr) :
+    computeCertifiedLipschitzBox B (.scalePos k e) =
+      k * computeCertifiedLipschitzBox B e := by
+  unfold computeCertifiedLipschitzBox
+  dsimp only [evalFRepGradBox]
+  rw [ivAbsBound_scalePos, ivAbsBound_scalePos, ivAbsBound_scalePos]
+  have hGx : 0 ≤ ivAbsBound (evalFRepGradBox B e).1 := ivAbsBound_nonneg _
+  have hGy : 0 ≤ ivAbsBound (evalFRepGradBox B e).2.1 := ivAbsBound_nonneg _
+  have hGz : 0 ≤ ivAbsBound (evalFRepGradBox B e).2.2 := ivAbsBound_nonneg _
+  have hSumNonneg :
+      0 ≤ ivAbsBound (evalFRepGradBox B e).1 +
+          ivAbsBound (evalFRepGradBox B e).2.1 +
+          ivAbsBound (evalFRepGradBox B e).2.2 := by omega
+  have hDist :
+      Int.ofNat k * ivAbsBound (evalFRepGradBox B e).1 +
+      Int.ofNat k * ivAbsBound (evalFRepGradBox B e).2.1 +
+      Int.ofNat k * ivAbsBound (evalFRepGradBox B e).2.2 =
+        Int.ofNat k * (ivAbsBound (evalFRepGradBox B e).1 +
+                       ivAbsBound (evalFRepGradBox B e).2.1 +
+                       ivAbsBound (evalFRepGradBox B e).2.2) := by
+    rw [Int.mul_add, Int.mul_add]
+  rw [hDist]
+  have hMul := Int.toNat_mul (Int.natCast_nonneg k) hSumNonneg
+  exact hMul
+
+/-- Self-certified inter-waypoint safety padding derived directly from `computeCertifiedLipschitzBox`
+and maximum waypoint step distance `stepDist : Nat`. -/
+def computeCertifiedStepPad (B_local : Box3D) (tool : FRepExpr) (stepDist : Nat) : Int :=
+  Int.ofNat (computeCertifiedLipschitzBox B_local tool) * Int.ofNat stepDist
+
+/-- **Self-Certified 5-Axis Swept-Volume Envelope Synthesis (`synthesizeCertifiedSweptVolume`)**:
+Computes the inter-waypoint Lipschitz safety pad automatically from `computeCertifiedLipschitzBox B_local tool`
+and `stepDist : Nat` without accepting an unchecked caller `stepLipschitzPad`. -/
+def synthesizeCertifiedSweptVolume
+    (B_local : Box3D) (tool : FRepExpr)
+    (waypoints : List (Int × Int × Int)) (stepDist : Nat) : FRepExpr :=
+  synthesizeSweptVolume tool waypoints (computeCertifiedStepPad B_local tool stepDist)
+
+/-- **Self-Certified Continuous-Time 5-Axis Swept-Volume No-Gouge Theorem
+(`synthesizeCertifiedSweptVolume_no_gouge_sound`)**:
+Unlike `continuous_swept_volume_no_gouge_sound`, requires **zero caller-supplied Lipschitz bound**
+and **zero unproven Lipschitz assumption**: the spatial Lipschitz bound over `B_local` is derived
+and certified automatically by `evalFRepGradBox_lipschitz_sound`! -/
+theorem synthesizeCertifiedSweptVolume_no_gouge_sound
+    (B B_local : Box3D) (fStock tool : FRepExpr)
+    (waypoints : List (Int × Int × Int)) (stepDist : Nat)
+    (wx wy wz tx ty tz x y z : Int)
+    (hNoGouge : checkVoxelNoGouge B (synthesizeCertifiedSweptVolume B_local tool waypoints stepDist) = true)
+    (hInBox : B.contains x y z)
+    (hWay : (wx, wy, wz) ∈ waypoints)
+    (hLocalW : B_local.contains (x - wx) (y - wy) (z - wz))
+    (hLocalT : B_local.contains (x - tx) (y - ty) (z - tz))
+    (hStep : linfDist3D (x - wx, y - wy, z - wz) (x - tx, y - ty, z - tz) ≤ Int.ofNat stepDist) :
+    0 < evalFRepPoint x y z (translateFRep tx ty tz tool) ∧
+    (inSolid x y z fStock → inSolid x y z (.csgDiff fStock (translateFRep tx ty tz tool))) := by
+  have hLipAbs := evalFRepGradBox_lipschitz_sound B_local tool
+    (x - wx) (y - wy) (z - wz) (x - tx) (y - ty) (z - tz) hLocalW hLocalT
+  have hAbsBnd := frepIntAbs_bounds
+    (evalFRepPoint (x - wx) (y - wy) (z - wz) tool - evalFRepPoint (x - tx) (y - ty) (z - tz) tool)
+  have hLNonneg : (0 : Int) ≤ Int.ofNat (computeCertifiedLipschitzBox B_local tool) :=
+    Int.natCast_nonneg _
+  have hMulStep := int_mul_le_mul_of_nonneg_left
+    (linfDist3D (x - wx, y - wy, z - wz) (x - tx, y - ty, z - tz))
+    (Int.ofNat stepDist)
+    (Int.ofNat (computeCertifiedLipschitzBox B_local tool))
+    hStep hLNonneg
+  have hComm :
+      Int.ofNat (computeCertifiedLipschitzBox B_local tool) * Int.ofNat stepDist =
+        Int.ofNat stepDist * Int.ofNat (computeCertifiedLipschitzBox B_local tool) :=
+    Int.mul_comm _ _
+  exact continuous_swept_volume_no_gouge_sound
+    B fStock tool waypoints
+    (computeCertifiedStepPad B_local tool stepDist)
+    (Int.ofNat stepDist)
+    (Int.ofNat (computeCertifiedLipschitzBox B_local tool))
+    wx wy wz tx ty tz x y z
+    hNoGouge hInBox hWay
+    (by unfold computeCertifiedStepPad; omega)
+    (by omega)
+
+/-- **Golden Self-Certified Dual-Interval Gradient & Swept-Volume Verification
+(`golden_certified_lipschitz_swept_volume_verified`)**:
+1. On a 3D plane $f_{\text{plane}}(x, y, z) = 3x - 4y + 2z - 10$, `evalFRepGradBox` derives exact
+   constant gradient intervals $([3, 3], [-4, -4], [2, 2])$ and `computeCertifiedLipschitzBox = 9`,
+2. On a non-Eikonal quadratic sphere polynomial $f_{\text{sphere}}(x, y, z) = x^2 + y^2 + z^2 - 100$
+   over box $B = [10, 12]^3$, `evalFRepGradBox` derives $([-24, 24], [-24, 24], [-24, 24])$ and
+   `computeCertifiedLipschitzBox = 72` ($\neq 1$!),
+3. `synthesizeCertifiedSweptVolume` automatically pads the swept volume by `computeCertifiedStepPad`
+   and certifies `checkVoxelNoGouge = true` without any caller-supplied Lipschitz parameter! -/
+theorem golden_certified_lipschitz_swept_volume_verified :
+    let box : Box3D :=
+      { xIv := { lo := 10, hi := 12 }
+      , yIv := { lo := 10, hi := 12 }
+      , zIv := { lo := 10, hi := 12 } }
+    let plane : FRepExpr :=
+      .offset 10 (.add (.sub (.scalePos 3 .varX) (.scalePos 4 .varY)) (.scalePos 2 .varZ))
+    let sphere : FRepExpr :=
+      .offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
+    evalFRepGradBox box plane =
+      ({ lo := 3, hi := 3 }, { lo := -4, hi := -4 }, { lo := 2, hi := 2 }) ∧
+    computeCertifiedLipschitzBox box plane = 9 ∧
+    computeCertifiedLipschitzBox box (.scalePos 100 plane) = 900 ∧
+    computeCertifiedLipschitzBox box sphere = 72 ∧
+    checkVoxelNoGouge box (synthesizeCertifiedSweptVolume box sphere [(0, 0, 0)] 2) = true := by
+  decide +kernel
+
 
 
 /-! ## 4. Machine-Tool Dynamics: Servo Lag, End-Mill Cantilever Deflection & Altintas Chatter -/

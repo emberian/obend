@@ -43,3 +43,6 @@ public import Obend.Spec.Ecosystem
 public import Obend.Spec.PackageLaw
 public import Obend.Spec.Capture
 public import Obend.Spec.Preview
+public import Obend.Spec.CrossPackage
+public import Obend.Spec.LawDial
+public import Obend.Spec.Workspace

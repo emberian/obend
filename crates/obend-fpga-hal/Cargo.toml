@@ -1,0 +1,16 @@
+[package]
+name = "obend-fpga-hal"
+version = "0.1.0"
+edition = "2021"
+description = "Unified Cloud-FPGA Hardware Abstraction Layer (Rung 1 Verilator SHM/Unix-socket daemon & Rung 3/4 AWS EC2 F2 vu47p BAR0 MMIO + 512-bit AXI4-Stream DMA + ICAP DPR)"
+license = "Apache-2.0"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[[bin]]
+name = "obend-silicon-sim"
+path = "src/bin/obend-silicon-sim.rs"

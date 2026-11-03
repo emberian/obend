@@ -4,5 +4,6 @@ members = [
     "crates/obend-ffi",
     "crates/obend-gui",
     "crates/obend-node",
+    "crates/obend-fpga-hal",
 ]
 resolver = "2"

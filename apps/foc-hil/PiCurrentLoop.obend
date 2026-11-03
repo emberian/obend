@@ -1,0 +1,61 @@
+edition ObjectiveBend 1
+# Flagship App #2 (Layer 2): Stateful always_ff d/q PI Current Loop & Cross-Coupling Decoupling
+# Reference: Obend/Hardware/DigitalTwin.lean (sampled_data_current_loop_iss_contraction)
+
+import ./ClarkePark.obend as ClarkePark
+
+law monotone_control_epoch: monotone(controlEpoch)
+law bounded_integral_state: new.integralStateMv <= 600000
+
+record PiCurrentController:
+  kpGainPermille() -> Nat
+  kiGainPermille() -> Nat
+  decouplingInductanceUh() -> Nat
+  alwaysFfIntD(errDMa: Nat) -> Nat
+  alwaysFfIntQ(errQMa: Nat) -> Nat
+  decoupledVdCommandMv(idErrAmp: Nat) -> Nat
+  decoupledVqCommandMv(iqErrAmp: Nat) -> Nat
+
+spec BasePiCurrentSpec for PiCurrentController:
+  requires kpGainPermille() -> Nat
+  requires kiGainPermille() -> Nat
+  requires decouplingInductanceUh() -> Nat
+  def kpGainPermille() -> Nat:
+    400n
+  def kiGainPermille() -> Nat:
+    50n
+  def decouplingInductanceUh() -> Nat:
+    380n
+  def alwaysFfIntD(errDMa: Nat) -> Nat:
+    errDMa * self.kiGainPermille + 100n
+  def alwaysFfIntQ(errQMa: Nat) -> Nat:
+    errQMa * self.kiGainPermille + 200n
+  def decoupledVdCommandMv(idErrAmp: Nat) -> Nat:
+    idErrAmp * 400n + 120n
+  def decoupledVqCommandMv(iqErrAmp: Nat) -> Nat:
+    iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
+  claim integral_q_open_recursion(errQMa: Nat): self.alwaysFfIntQ(errQMa) == errQMa * self.kiGainPermille + 200n
+  claim vq_decoupling_open_recursion(iqErrAmp: Nat): self.decoupledVqCommandMv(iqErrAmp) == iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
+
+spec CrossCoupledDecouplingOverride for PiCurrentController:
+  requires decoupledVdCommandMv(idErrAmp: Nat) -> Nat
+  def kpGainPermille() -> Nat:
+    480n
+  def kiGainPermille() -> Nat:
+    65n
+  def decouplingInductanceUh() -> Nat:
+    360n
+  def decoupledVdCommandMv(idErrAmp: Nat) -> Nat:
+    super.decoupledVdCommandMv(idErrAmp) + 40n
+
+def seedPiCurrentLoop() -> PiCurrentController:
+  {kpGainPermille: 0n, kiGainPermille: 0n, decouplingInductanceUh: 0n, alwaysFfIntD: fn(ed: Nat) -> Nat: 0n, alwaysFfIntQ: fn(eq: Nat) -> Nat: 0n, decoupledVdCommandMv: fn(id: Nat) -> Nat: 0n, decoupledVqCommandMv: fn(iq: Nat) -> Nat: 0n}
+
+def basePiCurrentController() -> PiCurrentController:
+  fix(BasePiCurrentSpec, seedPiCurrentLoop())
+
+def decoupledPiCurrentController() -> PiCurrentController:
+  fix(compose(BasePiCurrentSpec, CrossCoupledDecouplingOverride), seedPiCurrentLoop())
+
+def ratedStepVqCommandMv() -> Nat:
+  decoupledPiCurrentController().decoupledVqCommandMv(250n) + ClarkePark.ratedQuadratureAxisCurrentMa()

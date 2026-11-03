@@ -1,0 +1,56 @@
+edition ObjectiveBend 1
+# Flagship App #7 (`apps/sovereign-drex/SovereignDrexTop.obend`):
+# Top-level 4-validator (`V0..V3`, N=4, f=1, quorum=3) Sovereign `DReX` + `K-CARRY` exchange.
+
+import "./Seat.obend" as SeatMod
+import "./OrderBook.obend" as BookMod
+import "./BatchClearing.obend" as ClearingMod
+
+law write_once_genesis_carry_hash: writeOnce(genesisCarryHash)
+
+record SovereignDrexExchange:
+  validatorQuorum() -> Nat
+  protectedWelfareCrown() -> Nat
+  settledCbdcLiquidity() -> Nat
+  batchSettlementCbdc(lotCount: Nat) -> Nat
+  finalityCommitTag(epochId: Nat) -> Nat
+
+spec BaseSovereignDrexSpec for SovereignDrexExchange:
+  requires validatorQuorum() -> Nat
+  requires protectedWelfareCrown() -> Nat
+  def validatorQuorum() -> Nat:
+    3n
+  def protectedWelfareCrown() -> Nat:
+    1000n
+  def settledCbdcLiquidity() -> Nat:
+    100000n
+  def batchSettlementCbdc(lotCount: Nat) -> Nat:
+    lotCount * 500n + self.protectedWelfareCrown
+  def finalityCommitTag(epochId: Nat) -> Nat:
+    epochId * 64n + 3n
+  claim drex_settlement_open_recursion(lotCount: Nat): self.batchSettlementCbdc(lotCount) == lotCount * 500n + self.protectedWelfareCrown
+
+spec CarryUpgradeSovereignDrexOverride for SovereignDrexExchange:
+  requires finalityCommitTag(epochId: Nat) -> Nat
+  def settledCbdcLiquidity() -> Nat:
+    125000n
+  def finalityCommitTag(epochId: Nat) -> Nat:
+    super.finalityCommitTag(epochId) + 32n
+
+def seedSovereignDrexExchange() -> SovereignDrexExchange:
+  {validatorQuorum: 0n, protectedWelfareCrown: 0n, settledCbdcLiquidity: 0n, batchSettlementCbdc: fn(l: Nat) -> Nat: l, finalityCommitTag: fn(e: Nat) -> Nat: e}
+
+def baseSovereignDrex() -> SovereignDrexExchange:
+  fix(BaseSovereignDrexSpec, seedSovereignDrexExchange())
+
+def carryUpgradedSovereignDrex() -> SovereignDrexExchange:
+  fix(compose(BaseSovereignDrexSpec, CarryUpgradeSovereignDrexOverride), seedSovereignDrexExchange())
+
+def drexSettlementAt8() -> Nat:
+  carryUpgradedSovereignDrex().batchSettlementCbdc(8n)
+
+def drexFinalityTagAt3() -> Nat:
+  carryUpgradedSovereignDrex().finalityCommitTag(3n)
+
+def crossModuleDrexSummary() -> Nat:
+  SeatMod.institutionalSafetyAt80() + BookMod.wholesaleSlackAt10() + ClearingMod.sovereignDigestAt5() + drexSettlementAt8()

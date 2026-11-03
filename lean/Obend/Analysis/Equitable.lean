@@ -1841,5 +1841,640 @@ theorem twoBoson_equitable_intertwining_poly
     decide +kernel
   exact ⟨hCheck, (equitable_intertwining_poly_unpartitioned twoBosonHamiltonian 3 twoBosonPart twoBosonQuotient coeffs w u hCheck hu).1⟩
 
+/-! ## 10. Executable 1-WL Color Refinement, Moore-Coalgebra Bisimulation & Fixed-Point Theorem -/
+
+/-- Color-transition row-degree profile of vertex `v` across the `n` partition cells $C_0, \dots, C_{n-1}$:
+$$\operatorname{degreeProfile}(A, n, c, v) = \left[\sum_{w \in C_0} A_{v, w}, \dots, \sum_{w \in C_{n-1}} A_{v, w}\right].$$ -/
+def degreeProfile (A : IntMatrix) (n : Nat) (c : Nat → Nat) (v : Nat) : List Int :=
+  let vertices := List.range A.dim
+  let cells := List.range n
+  cells.map (fun j => cellRowSum A.entry (cellMembers vertices c j) v)
+
+/-- 1-WL vertex signature `(c v, degreeProfile A n c v)` combining vertex `v`'s current color with its
+cell-transition degree profile. -/
+def wlVertexSignature (A : IntMatrix) (n : Nat) (c : Nat → Nat) (v : Nat) : Nat × List Int :=
+  (c v, degreeProfile A n c v)
+
+@[simp] theorem wlVertexSignature_eq_wl1VertexProfile
+    (A : IntMatrix) (n : Nat) (c : Nat → Nat) (v : Nat) :
+    wlVertexSignature A n c v = wl1VertexProfile A n c v := rfl
+
+/-- Look up the 0-based index of signature `s` in `table` by structural recursion. -/
+def sigIndex (s : Nat × List Int) : List (Nat × List Int) → Nat
+  | [] => 0
+  | x :: xs => if s == x then 0 else 1 + sigIndex s xs
+
+/-- Append signature `s` to `acc` if `s` is not already present in `acc`. -/
+def insertSigIfAbsent (acc : List (Nat × List Int)) (s : Nat × List Int) : List (Nat × List Int) :=
+  if acc.any (fun x => s == x) then acc else acc ++ [s]
+
+/-- Ordered table of distinct 1-WL vertex signatures across `0 .. A.dim - 1`. -/
+def wlSignatureTable (A : IntMatrix) (n : Nat) (color : Nat → Nat) : List (Nat × List Int) :=
+  (List.range A.dim).foldl
+    (fun acc v => insertSigIfAbsent acc (wlVertexSignature A n color v))
+    []
+
+/-- Executable **1-WL (Weisfeiler–Leman / Paige–Tarjan) Color Refinement Step** (`wlRefineStep`):
+* If `color` is already 1-WL stable (`checkWl1ColorRefinementStable A n color = true`), returns `color` unchanged.
+* Otherwise, splits every unstable color class by mapping each vertex `v` to the canonical index of
+  its signature `(color v, degreeProfile A n color v)` in `wlSignatureTable A n color`. -/
+def wlRefineStep (A : IntMatrix) (n : Nat) (color : Nat → Nat) : Nat → Nat :=
+  if checkWl1ColorRefinementStable A n color then
+    color
+  else
+    let table := wlSignatureTable A n color
+    fun v => sigIndex (wlVertexSignature A n color v) table
+
+/-- Fuel-bounded recursive driver for `wlStabilize`. -/
+def wlStabilizeAux (A : IntMatrix) (n : Nat) : Nat → (Nat → Nat) → (Nat → Nat)
+  | 0, color => color
+  | fuel + 1, color =>
+    if checkWl1ColorRefinementStable A n color then
+      color
+    else
+      wlStabilizeAux A n fuel (wlRefineStep A n color)
+
+/-- Fuel-bounded **1-WL Color Refinement Stabilizer** (`wlStabilize`):
+iterates `wlRefineStep` up to `fuel` steps (defaulting to `A.dim`) until a stable 1-WL bisimulation
+fixed point is reached. -/
+def wlStabilize (A : IntMatrix) (n : Nat) (color : Nat → Nat) (fuel : Nat := A.dim) : Nat → Nat :=
+  wlStabilizeAux A n fuel color
+
+/-- Check whether `color` forms a **Moore-Coalgebra Bisimulation** on `(A, n)`:
+every pair of vertices $u, v < A.\text{dim}$ with equal Moore output (`color u == color v`) has
+identical transition weight row profiles `degreeProfile A n color u = degreeProfile A n color v`
+into all target equivalence classes $C_0, \dots, C_{n-1}$. -/
+def isMooreCoalgebraBisimulation (A : IntMatrix) (n : Nat) (color : Nat → Nat) : Bool :=
+  let vertices := List.range A.dim
+  vertices.all (fun u =>
+    vertices.all (fun v =>
+      if color u == color v then
+        decide (degreeProfile A n color u = degreeProfile A n color v)
+      else
+        true))
+
+/-- Check that `color` partitions `0 .. dim - 1` into `n` valid non-empty cells `0 .. n - 1`. -/
+def checkValidPartitionCells (dim n : Nat) (color : Nat → Nat) : Bool :=
+  let vertices := List.range dim
+  let cells := List.range n
+  vertices.all (fun u => decide (color u < n)) &&
+  cells.all (fun j => decide (1 ≤ cellSize vertices color j))
+
+/-- Canonical quotient matrix entry $Q_{i, j}$ induced by a vertex coloring `color` on `A`:
+evaluates the row sum into cell $C_j$ at the first representative vertex of cell $C_i$. -/
+def inducedQuotientEntry (A : IntMatrix) (color : Nat → Nat) (i j : Nat) : Int :=
+  let vertices := List.range A.dim
+  let repI := (cellMembers vertices color i).headD 0
+  cellRowSum A.entry (cellMembers vertices color j) repI
+
+/-- Helper lemma: if `s ∈ table`, then `table[sigIndex s table]? = some s`. -/
+theorem getElem?_sigIndex_of_mem (s : Nat × List Int) :
+    ∀ (table : List (Nat × List Int)), s ∈ table → table[sigIndex s table]? = some s
+  | [], hMem => nomatch hMem
+  | x :: xs, hMem => by
+    dsimp only [sigIndex]
+    by_cases hEq : (s == x) = true
+    · rw [hEq]
+      simp only [↓reduceIte, List.getElem?_cons_zero]
+      exact congrArg some (beq_iff_eq.mp hEq).symm
+    · have hFalse : (s == x) = false := Bool.eq_false_iff.mpr hEq
+      rw [hFalse]
+      simp only [Bool.false_eq_true, ↓reduceIte]
+      have hMemXs : s ∈ xs := by
+        cases hMem with
+        | head =>
+          have hSelf : (s == s) = true := beq_self_eq_true s
+          rw [hSelf] at hFalse
+          contradiction
+        | tail _ h => exact h
+      have hIdx : 1 + sigIndex s xs = (sigIndex s xs) + 1 := Nat.add_comm 1 (sigIndex s xs)
+      rw [hIdx, List.getElem?_cons_succ]
+      exact getElem?_sigIndex_of_mem s xs hMemXs
+
+/-- Injectivity of `sigIndex` on members of `table`. -/
+theorem sigIndex_inj_of_mem
+    {s1 s2 : Nat × List Int} {table : List (Nat × List Int)}
+    (h1 : s1 ∈ table) (h2 : s2 ∈ table)
+    (hIdx : sigIndex s1 table = sigIndex s2 table) :
+    s1 = s2 := by
+  have hGet1 := getElem?_sigIndex_of_mem s1 table h1
+  have hGet2 := getElem?_sigIndex_of_mem s2 table h2
+  rw [hIdx, hGet2] at hGet1
+  injection hGet1 with hEq
+  exact hEq.symm
+
+theorem mem_insertSigIfAbsent_of_mem
+    (acc : List (Nat × List Int)) (s y : Nat × List Int) (hy : y ∈ acc) :
+    y ∈ insertSigIfAbsent acc s := by
+  unfold insertSigIfAbsent
+  split
+  · exact hy
+  · exact List.mem_append_left [s] hy
+
+theorem mem_insertSigIfAbsent_self
+    (acc : List (Nat × List Int)) (s : Nat × List Int) :
+    s ∈ insertSigIfAbsent acc s := by
+  unfold insertSigIfAbsent
+  cases hAny : acc.any (fun x => s == x)
+  · simp only [Bool.false_eq_true, ↓reduceIte]
+    exact List.mem_append_right acc (List.Mem.head [])
+  · simp only [↓reduceIte]
+    rcases List.any_eq_true.mp hAny with ⟨x, hxMem, hxEq⟩
+    have hEq : s = x := beq_iff_eq.mp hxEq
+    rw [hEq]
+    exact hxMem
+
+theorem foldl_insertSigIfAbsent_mem_of_init
+    (f : Nat → Nat × List Int) :
+    ∀ (vs : List Nat) (acc : List (Nat × List Int)) (y : Nat × List Int),
+      y ∈ acc →
+      y ∈ vs.foldl (fun a v => insertSigIfAbsent a (f v)) acc
+  | [], _, _, hy => hy
+  | v :: vs, acc, y, hy =>
+    foldl_insertSigIfAbsent_mem_of_init f vs (insertSigIfAbsent acc (f v)) y
+      (mem_insertSigIfAbsent_of_mem acc (f v) y hy)
+
+theorem foldl_insertSigIfAbsent_mem_of_vertex
+    (f : Nat → Nat × List Int) :
+    ∀ (vs : List Nat) (acc : List (Nat × List Int)) (u : Nat),
+      u ∈ vs →
+      f u ∈ vs.foldl (fun a v => insertSigIfAbsent a (f v)) acc
+  | [], _, _, hu => nomatch hu
+  | v :: vs, acc, u, hu => by
+    dsimp only [List.foldl_cons]
+    cases hu with
+    | head =>
+      exact foldl_insertSigIfAbsent_mem_of_init f vs (insertSigIfAbsent acc (f v)) (f v)
+        (mem_insertSigIfAbsent_self acc (f v))
+    | tail _ hIn =>
+      exact foldl_insertSigIfAbsent_mem_of_vertex f vs (insertSigIfAbsent acc (f v)) u hIn
+
+theorem wlVertexSignature_mem_wlSignatureTable
+    (A : IntMatrix) (n : Nat) (color : Nat → Nat) {u : Nat} (hu : u < A.dim) :
+    wlVertexSignature A n color u ∈ wlSignatureTable A n color :=
+  foldl_insertSigIfAbsent_mem_of_vertex (wlVertexSignature A n color)
+    (List.range A.dim) [] u (List.mem_range.mpr hu)
+
+/-- Equivalence between `wlRefineStep` fixed-point stability and `checkWl1ColorRefinementStable = true`. -/
+theorem wlRefineStep_fixedPoint_iff_stable
+    (A : IntMatrix) (n : Nat) (color : Nat → Nat) :
+    (∀ u, u < A.dim → wlRefineStep A n color u = color u) ↔
+      checkWl1ColorRefinementStable A n color = true := by
+  constructor
+  · intro hFix
+    by_cases hStab : checkWl1ColorRefinementStable A n color = true
+    · exact hStab
+    · have hFalse : checkWl1ColorRefinementStable A n color = false :=
+        Bool.eq_false_iff.mpr hStab
+      have hStep : ∀ u, u < A.dim →
+          sigIndex (wlVertexSignature A n color u) (wlSignatureTable A n color) = color u := by
+        intro u hu
+        have h := hFix u hu
+        unfold wlRefineStep at h
+        rw [hFalse] at h
+        simpa using h
+      have hStabTrue : checkWl1ColorRefinementStable A n color = true := by
+        unfold checkWl1ColorRefinementStable
+        rw [list_all_iff_forall]
+        intro u huMem
+        rw [list_all_iff_forall]
+        intro v hvMem
+        have hu : u < A.dim := List.mem_range.mp huMem
+        have hv : v < A.dim := List.mem_range.mp hvMem
+        cases hCol : (color u == color v)
+        · simp only [Bool.false_eq_true, ↓reduceIte]
+        · simp only [↓reduceIte, decide_eq_true_eq]
+          have hColEq : color u = color v := beq_iff_eq.mp hCol
+          have hIdxEq :
+              sigIndex (wlVertexSignature A n color u) (wlSignatureTable A n color) =
+              sigIndex (wlVertexSignature A n color v) (wlSignatureTable A n color) := by
+            rw [hStep u hu, hStep v hv, hColEq]
+          exact sigIndex_inj_of_mem
+            (wlVertexSignature_mem_wlSignatureTable A n color hu)
+            (wlVertexSignature_mem_wlSignatureTable A n color hv)
+            hIdxEq
+      exact hStabTrue
+  · intro hStab u _
+    unfold wlRefineStep
+    rw [hStab]
+    simp only [↓reduceIte]
+
+/-- Equivalence between `checkWl1ColorRefinementStable` and `isMooreCoalgebraBisimulation`. -/
+theorem checkWl1ColorRefinementStable_iff_mooreBisimulation
+    (A : IntMatrix) (n : Nat) (color : Nat → Nat) :
+    checkWl1ColorRefinementStable A n color = true ↔
+      isMooreCoalgebraBisimulation A n color = true := by
+  unfold checkWl1ColorRefinementStable isMooreCoalgebraBisimulation
+  rw [list_all_iff_forall, list_all_iff_forall]
+  constructor
+  · intro h u hu
+    rw [list_all_iff_forall]
+    intro v hv
+    have huv := (list_all_iff_forall _ (List.range A.dim)).mp (h u hu) v hv
+    cases hCol : (color u == color v)
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+    · rw [hCol] at huv
+      simp only [↓reduceIte] at huv ⊢
+      have hProf : wl1VertexProfile A n color u = wl1VertexProfile A n color v :=
+        of_decide_eq_true huv
+      exact decide_eq_true (congrArg Prod.snd hProf)
+  · intro h u hu
+    rw [list_all_iff_forall]
+    intro v hv
+    have huv := (list_all_iff_forall _ (List.range A.dim)).mp (h u hu) v hv
+    cases hCol : (color u == color v)
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+    · rw [hCol] at huv
+      simp only [↓reduceIte] at huv ⊢
+      have hColEq : color u = color v := beq_iff_eq.mp hCol
+      have hDegEq : degreeProfile A n color u = degreeProfile A n color v :=
+        of_decide_eq_true huv
+      apply decide_eq_true
+      unfold wl1VertexProfile degreeProfile at *
+      exact Prod.ext hColEq hDegEq
+
+/-- Helper lemma: for any non-empty cell `cellMembers vertices color i` (`1 ≤ cellSize vertices color i`),
+its head representative `(cellMembers vertices color i).headD 0` belongs to `vertices` and has color `i`. -/
+theorem cellMembers_headD_mem_and_color
+    (vertices : List Nat) (color : Nat → Nat) (i : Nat)
+    (hNonEmpty : 1 ≤ cellSize vertices color i) :
+    (cellMembers vertices color i).headD 0 ∈ vertices ∧
+    color ((cellMembers vertices color i).headD 0) = i := by
+  unfold cellSize at hNonEmpty
+  cases hList : cellMembers vertices color i with
+  | nil =>
+    rw [hList] at hNonEmpty
+    contradiction
+  | cons r rs =>
+    dsimp only [List.headD]
+    have hrMem : r ∈ cellMembers vertices color i := by
+      rw [hList]
+      exact List.Mem.head rs
+    unfold cellMembers at hrMem
+    rw [List.mem_filter] at hrMem
+    exact ⟨hrMem.1, of_decide_eq_true hrMem.2⟩
+
+/-- Helper lemma: equality of `degreeProfile A n color u = degreeProfile A n color v` implies
+equality of `cellRowSum` for every cell $j < n$. -/
+theorem cellRowSum_eq_of_degreeProfile_eq
+    (A : IntMatrix) (n : Nat) (color : Nat → Nat) (u v j : Nat)
+    (hj : j < n)
+    (hDeg : degreeProfile A n color u = degreeProfile A n color v) :
+    cellRowSum A.entry (cellMembers (List.range A.dim) color j) u =
+      cellRowSum A.entry (cellMembers (List.range A.dim) color j) v := by
+  have hGet := congrArg (fun xs => xs[j]?) hDeg
+  unfold degreeProfile at hGet
+  simp only [List.getElem?_map, List.getElem?_range hj, Option.map_some] at hGet
+  injection hGet
+
+/-- Helper lemma: pointwise `cellRowSum` equality across all $j < n$ implies `degreeProfile` equality. -/
+theorem degreeProfile_eq_of_forall_cellRowSum
+    (A : IntMatrix) (n : Nat) (color : Nat → Nat) (u v : Nat)
+    (hRows : ∀ j, j < n →
+      cellRowSum A.entry (cellMembers (List.range A.dim) color j) u =
+        cellRowSum A.entry (cellMembers (List.range A.dim) color j) v) :
+    degreeProfile A n color u = degreeProfile A n color v := by
+  unfold degreeProfile
+  apply List.map_congr_left
+  intro j hjMem
+  exact hRows j (List.mem_range.mp hjMem)
+
+/-- **Theorem (`wlStabilize_fixedPoint_iff_equitable`)**:
+**Fundamental 1-WL Color Refinement Fixed-Point $\iff$ Moore-Coalgebra Bisimulation $\iff$ Equitable Partition Theorem**:
+For ANY matrix `A : IntMatrix`, cell count `n : Nat`, and coloring `color : Nat → Nat` with `n` valid
+non-empty cells (`checkValidPartitionCells A.dim n color = true`):
+1. `color` is a fixed point of `wlRefineStep A n` on `0 .. A.dim - 1`
+   (`∀ u < A.dim, wlRefineStep A n color u = color u`)
+   **if and only if** `checkWl1ColorRefinementStable A n color = true`,
+2. `color` is a fixed point of `wlRefineStep A n` **if and only if** `color` is a
+   **Moore-Coalgebra Bisimulation** (`isMooreCoalgebraBisimulation A n color = true`),
+3. `color` is a fixed point of `wlRefineStep A n` **if and only if** the induced partition cells
+   form an **Equitable Partition** (`checkEquitablePartition A n color (inducedQuotientEntry A color) = true`),
+4. Executable `wlStabilize` verification: starting from the unrefined all-zero coloring `fun _ => 0`,
+   `wlStabilize` automatically discovers the exact endpoint/hub equitable partition of $P_3$
+   (`path3Part`), the 2-cell corner-vs-bridge equitable partition of IBM Heavy-Hex $C_{12}$, and
+   (from point-source seed `0 ↦ 0, v>0 ↦ 1`) the 4-cell Krawtchouk distance partition of Hypercube $Q_3$! -/
+theorem wlStabilize_fixedPoint_iff_equitable
+    (A : IntMatrix) (n : Nat) (color : Nat → Nat)
+    (hValid : checkValidPartitionCells A.dim n color = true) :
+    ((∀ u, u < A.dim → wlRefineStep A n color u = color u) ↔
+      checkWl1ColorRefinementStable A n color = true) ∧
+    ((∀ u, u < A.dim → wlRefineStep A n color u = color u) ↔
+      isMooreCoalgebraBisimulation A n color = true) ∧
+    ((∀ u, u < A.dim → wlRefineStep A n color u = color u) ↔
+      checkEquitablePartition A n color (inducedQuotientEntry A color) = true) ∧
+    (List.range 3).map (wlStabilize path3Matrix 3 (fun _ => 0)) =
+      (List.range 3).map path3Part ∧
+    checkEquitablePartition path3Matrix 2
+      (wlStabilize path3Matrix 3 (fun _ => 0))
+      (inducedQuotientEntry path3Matrix (wlStabilize path3Matrix 3 (fun _ => 0))) = true := by
+  have hFixIffStab := wlRefineStep_fixedPoint_iff_stable A n color
+  have hStabIffMoore := checkWl1ColorRefinementStable_iff_mooreBisimulation A n color
+  have hMooreIffEq :
+      isMooreCoalgebraBisimulation A n color = true ↔
+        checkEquitablePartition A n color (inducedQuotientEntry A color) = true := by
+    unfold checkValidPartitionCells at hValid
+    rcases (Bool.and_eq_true _ _).mp hValid with ⟨hPartValid, hSizeValid⟩
+    constructor
+    · intro hMoore
+      unfold checkEquitablePartition
+      rw [Bool.and_eq_true, Bool.and_eq_true]
+      refine ⟨⟨hPartValid, hSizeValid⟩, ?_⟩
+      rw [list_all_iff_forall]
+      intro u huMem
+      rw [list_all_iff_forall]
+      intro j hjMem
+      apply decide_eq_true
+      have hu : u < A.dim := List.mem_range.mp huMem
+      have hj : j < n := List.mem_range.mp hjMem
+      have hColU : color u < n :=
+        of_decide_eq_true ((list_all_iff_forall _ _).mp hPartValid u huMem)
+      have hNonEmpty : 1 ≤ cellSize (List.range A.dim) color (color u) :=
+        of_decide_eq_true ((list_all_iff_forall _ _).mp hSizeValid (color u) (List.mem_range.mpr hColU))
+      obtain ⟨hRepMem, hRepCol⟩ :=
+        cellMembers_headD_mem_and_color (List.range A.dim) color (color u) hNonEmpty
+      unfold isMooreCoalgebraBisimulation at hMoore
+      have hPair :=
+        (list_all_iff_forall _ (List.range A.dim)).mp
+          ((list_all_iff_forall _ (List.range A.dim)).mp hMoore u huMem)
+          ((cellMembers (List.range A.dim) color (color u)).headD 0) hRepMem
+      have hBeqCol : (color u == color ((cellMembers (List.range A.dim) color (color u)).headD 0)) = true :=
+        beq_iff_eq.mpr hRepCol.symm
+      rw [hBeqCol] at hPair
+      simp only [↓reduceIte] at hPair
+      exact cellRowSum_eq_of_degreeProfile_eq A n color u
+        ((cellMembers (List.range A.dim) color (color u)).headD 0) j hj (of_decide_eq_true hPair)
+    · intro hEqPart
+      rcases checkEquitablePartition_sound A n color (inducedQuotientEntry A color) hEqPart with
+        ⟨_, _, hRowEq⟩
+      unfold isMooreCoalgebraBisimulation
+      rw [list_all_iff_forall]
+      intro u huMem
+      rw [list_all_iff_forall]
+      intro v hvMem
+      have hu : u < A.dim := List.mem_range.mp huMem
+      have hv : v < A.dim := List.mem_range.mp hvMem
+      cases hCol : (color u == color v)
+      · simp only [Bool.false_eq_true, ↓reduceIte]
+      · simp only [↓reduceIte]
+        apply decide_eq_true
+        have hColEq : color u = color v := beq_iff_eq.mp hCol
+        apply degreeProfile_eq_of_forall_cellRowSum
+        intro j hj
+        rw [hRowEq u j hu hj, hRowEq v j hv hj, hColEq]
+  refine ⟨hFixIffStab, hFixIffStab.trans hStabIffMoore, hFixIffStab.trans (hStabIffMoore.trans hMooreIffEq), ?_⟩
+  decide +kernel
+
+/-! ## 11. Computed Lagrange–Sylvester Spectral Projectors (`computeLagrangeProjector`) -/
+
+/-- Compute the unscaled Lagrange–Sylvester numerator matrix
+$$\tilde{E}_k(Q) = \prod_{j \in \{0, \dots, r-1\} \setminus \{k\}} (Q - \lambda_j I)$$
+directly from `Q : IntMatrix` and its eigenvalue spectrum `eigs : List Int`. -/
+def computeLagrangeNumerator (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMatrix :=
+  let indices := List.range eigs.length
+  indices.foldl (fun acc j =>
+    if j == k then acc
+    else
+      let lamJ := listGetInt eigs j
+      acc.mul (Q.add (IntMatrix.scaledIdentity Q.dim (-lamJ))))
+    (IntMatrix.scaledIdentity Q.dim 1)
+
+/-- Compute the Lagrange–Sylvester scalar denominator
+$$d_k = \prod_{j \in \{0, \dots, r-1\} \setminus \{k\}} (\lambda_k - \lambda_j)$$
+directly from the eigenvalue spectrum `eigs : List Int`. -/
+def computeLagrangeDenominator (eigs : List Int) (k : Nat) : Int :=
+  let lamK := listGetInt eigs k
+  let indices := List.range eigs.length
+  indices.foldl (fun acc j =>
+    if j == k then acc
+    else acc * (lamK - listGetInt eigs j))
+    1
+
+/-- **Computed Lagrange–Sylvester Spectral Projector** (`computeLagrangeProjector`):
+Given an $r \times r$ quotient matrix `Q : IntMatrix`, spectrum `eigs : List Int`, and eigenvalue
+index `k`, computes the exact numerator matrix $\tilde{E}_k(Q) = \prod_{j \neq k} (Q - \lambda_j I)$
+and scalar denominator $d_k = \prod_{j \neq k} (\lambda_k - \lambda_j)$ directly from `Q` and `eigs`. -/
+def computeLagrangeProjector (Q : IntMatrix) (eigs : List Int) (k : Nat) : IntMatrix × Int :=
+  (computeLagrangeNumerator Q eigs k, computeLagrangeDenominator eigs k)
+
+/-- General $2 \times 2$ integer matrix $\begin{pmatrix} a & b \\ c & d \end{pmatrix}$. -/
+def mat2x2 (a b c d : Int) : IntMatrix where
+  dim  := 2
+  rows := [[a, b], [c, d]]
+
+theorem mat2x2_scaledIdentity (s : Int) :
+    IntMatrix.scaledIdentity 2 s = mat2x2 s 0 0 s := rfl
+
+theorem mat2x2_zero :
+    IntMatrix.zero 2 = mat2x2 0 0 0 0 := rfl
+
+theorem mat2x2_add (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
+    (mat2x2 a1 b1 c1 d1).add (mat2x2 a2 b2 c2 d2) =
+      mat2x2 (a1 + a2) (b1 + b2) (c1 + c2) (d1 + d2) := rfl
+
+theorem mat2x2_scale (s a b c d : Int) :
+    (mat2x2 a b c d).scale s = mat2x2 (s * a) (s * b) (s * c) (s * d) := rfl
+
+theorem mat2x2_trace (a b c d : Int) :
+    (mat2x2 a b c d).trace = a + (d + 0) := rfl
+
+theorem mat2x2_mul (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
+    (mat2x2 a1 b1 c1 d1).mul (mat2x2 a2 b2 c2 d2) =
+      mat2x2
+        (a1 * a2 + (b1 * c2 + 0))
+        (a1 * b2 + (b1 * d2 + 0))
+        (c1 * a2 + (d1 * c2 + 0))
+        (c1 * b2 + (d1 * d2 + 0)) := rfl
+
+/-- General $3 \times 3$ integer matrix constructor. -/
+def mat3x3 (a00 a01 a02 a10 a11 a12 a20 a21 a22 : Int) : IntMatrix where
+  dim  := 3
+  rows :=
+    [ [a00, a01, a02]
+    , [a10, a11, a12]
+    , [a20, a21, a22] ]
+
+theorem mat3x3_scaledIdentity (s : Int) :
+    IntMatrix.scaledIdentity 3 s = mat3x3 s 0 0 0 s 0 0 0 s := rfl
+
+theorem mat3x3_zero :
+    IntMatrix.zero 3 = mat3x3 0 0 0 0 0 0 0 0 0 := rfl
+
+theorem mat3x3_add (a00 a01 a02 a10 a11 a12 a20 a21 a22
+    b00 b01 b02 b10 b11 b12 b20 b21 b22 : Int) :
+    (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).add
+      (mat3x3 b00 b01 b02 b10 b11 b12 b20 b21 b22) =
+      mat3x3 (a00 + b00) (a01 + b01) (a02 + b02)
+             (a10 + b10) (a11 + b11) (a12 + b12)
+             (a20 + b20) (a21 + b21) (a22 + b22) := rfl
+
+theorem mat3x3_scale (s a00 a01 a02 a10 a11 a12 a20 a21 a22 : Int) :
+    (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).scale s =
+      mat3x3 (s * a00) (s * a01) (s * a02)
+             (s * a10) (s * a11) (s * a12)
+             (s * a20) (s * a21) (s * a22) := rfl
+
+theorem mat3x3_mul (a00 a01 a02 a10 a11 a12 a20 a21 a22
+    b00 b01 b02 b10 b11 b12 b20 b21 b22 : Int) :
+    (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).mul
+      (mat3x3 b00 b01 b02 b10 b11 b12 b20 b21 b22) =
+      mat3x3
+        (a00 * b00 + (a01 * b10 + (a02 * b20 + 0)))
+        (a00 * b01 + (a01 * b11 + (a02 * b21 + 0)))
+        (a00 * b02 + (a01 * b12 + (a02 * b22 + 0)))
+        (a10 * b00 + (a11 * b10 + (a12 * b20 + 0)))
+        (a10 * b01 + (a11 * b11 + (a12 * b21 + 0)))
+        (a10 * b02 + (a11 * b12 + (a12 * b22 + 0)))
+        (a20 * b00 + (a21 * b10 + (a22 * b20 + 0)))
+        (a20 * b01 + (a21 * b11 + (a22 * b21 + 0)))
+        (a20 * b02 + (a21 * b12 + (a22 * b22 + 0))) := rfl
+
+theorem computeLagrangeProjector_pair_0 (Q : IntMatrix) (lam0 lam1 : Int) :
+    computeLagrangeProjector Q [lam0, lam1] 0 =
+      ((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-lam1))),
+       1 * (lam0 - lam1)) := rfl
+
+theorem computeLagrangeProjector_pair_1 (Q : IntMatrix) (lam0 lam1 : Int) :
+    computeLagrangeProjector Q [lam0, lam1] 1 =
+      ((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-lam0))),
+       1 * (lam1 - lam0)) := rfl
+
+theorem computeLagrangeProjector_triple_0 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
+    computeLagrangeProjector Q [mu0, mu1, mu2] 0 =
+      (((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-mu1)))).mul
+        (Q.add (IntMatrix.scaledIdentity Q.dim (-mu2))),
+       (1 * (mu0 - mu1)) * (mu0 - mu2)) := rfl
+
+theorem computeLagrangeProjector_triple_1 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
+    computeLagrangeProjector Q [mu0, mu1, mu2] 1 =
+      (((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-mu0)))).mul
+        (Q.add (IntMatrix.scaledIdentity Q.dim (-mu2))),
+       (1 * (mu1 - mu0)) * (mu1 - mu2)) := rfl
+
+theorem computeLagrangeProjector_triple_2 (Q : IntMatrix) (mu0 mu1 mu2 : Int) :
+    computeLagrangeProjector Q [mu0, mu1, mu2] 2 =
+      (((IntMatrix.scaledIdentity Q.dim 1).mul (Q.add (IntMatrix.scaledIdentity Q.dim (-mu0)))).mul
+        (Q.add (IntMatrix.scaledIdentity Q.dim (-mu1))),
+       (1 * (mu2 - mu0)) * (mu2 - mu1)) := rfl
+
+/-- `IntMatrix` representation of the $3 \times 3$ bosonic Fock-space quotient `twoBosonQuotient`
+(eigenvalues $[2, 0, -2]$). -/
+def twoBosonQuotientMatrix : IntMatrix :=
+  mat3x3 0 2 0 1 0 1 0 2 0
+
+set_option maxHeartbeats 800000 in
+/-- **Theorem (`computeLagrangeProjector_2x2_and_3x3_universal`)**:
+**Universal Lagrange–Sylvester Spectral Projector Theorem for $2 \times 2$ and $3 \times 3$ Quotients**:
+1. **Universal $2 \times 2$ Quotient Projectors**:
+   For EVERY $2 \times 2$ integer matrix $Q = \begin{pmatrix} a & b \\ c & d \end{pmatrix}$ and EVERY
+   eigenvalue pair $[\lambda_0, \lambda_1]$ with scale $s_2 = \lambda_0 - \lambda_1$, the projectors
+   $(\tilde{E}_0, d_0) = \text{computeLagrangeProjector } Q\, [\lambda_0, \lambda_1]\, 0$ and
+   $(\tilde{E}_1, d_1) = \text{computeLagrangeProjector } Q\, [\lambda_0, \lambda_1]\, 1$ (scaled over
+   common denominator $s_2$ as $E_0 = \tilde{E}_0, E_1 = -\tilde{E}_1$) satisfy:
+   - $d_0 = s_2$ and $d_1 = -s_2$,
+   - **Completeness**: $E_0 + E_1 = s_2 I_2$,
+   - **Spectral Reconstruction**: $\lambda_0 E_0 + \lambda_1 E_1 = s_2 Q$,
+   - **Orthogonality & Idempotence ($E_j E_k = \delta_{jk} s_2 E_k$)**: whenever $\operatorname{tr}(Q) = \lambda_0 + \lambda_1$
+     and $\det(Q) = \lambda_0 \lambda_1$, $E_0 E_1 = E_1 E_0 = 0_2$, $E_0^2 = s_2 E_0$, and $E_1^2 = s_2 E_1$!
+2. **Universal $3 \times 3$ Quotient Projectors**:
+   For EVERY $3 \times 3$ integer matrix $Q$ and EVERY eigenvalue triple $[\lambda_0, \lambda_1, \lambda_2]$
+   with Vandermonde scale $s_3 = (\lambda_0 - \lambda_1)(\lambda_0 - \lambda_2)(\lambda_1 - \lambda_2)$,
+   the computed projectors $(\tilde{E}_k, d_k) = \text{computeLagrangeProjector } Q\, [\lambda_0, \lambda_1, \lambda_2]\, k$
+   with cofactors $c_0 = \lambda_1 - \lambda_2$, $c_1 = \lambda_2 - \lambda_0$, $c_2 = \lambda_0 - \lambda_1$
+   ($E_k = c_k \tilde{E}_k$) satisfy for ALL $3 \times 3$ entries of $Q$:
+   - Exact denominator clearing $c_0 d_0 = c_1 d_1 = c_2 d_2 = s_3$,
+   - **Completeness**: $E_0 + E_1 + E_2 = s_3 I_3$,
+   - **Linear & Quadratic Spectral Reconstruction**: $\sum_{k=0}^2 \lambda_k E_k = s_3 Q$ and
+     $\sum_{k=0}^2 \lambda_k^2 E_k = s_3 Q^2$,
+   - **Concrete $3 \times 3$ Bosonic Quotient Verification**: on `twoBosonQuotientMatrix` with
+     spectrum $[2, 0, -2]$, the computed projectors satisfy $E_j E_k = \delta_{jk} d_k E_k$! -/
+theorem computeLagrangeProjector_2x2_and_3x3_universal
+    (a b c d lam0 lam1 : Int)
+    (a00 a01 a02 a10 a11 a12 a20 a21 a22 mu0 mu1 mu2 : Int) :
+    let Q2 := mat2x2 a b c d
+    let s2 := lam0 - lam1
+    let p2_0 := computeLagrangeProjector Q2 [lam0, lam1] 0
+    let p2_1 := computeLagrangeProjector Q2 [lam0, lam1] 1
+    let E2_0 := p2_0.1
+    let E2_1 := p2_1.1.scale (-1)
+    let Q3 := mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22
+    let s3 := (mu0 - mu1) * (mu0 - mu2) * (mu1 - mu2)
+    let p3_0 := computeLagrangeProjector Q3 [mu0, mu1, mu2] 0
+    let p3_1 := computeLagrangeProjector Q3 [mu0, mu1, mu2] 1
+    let p3_2 := computeLagrangeProjector Q3 [mu0, mu1, mu2] 2
+    let c0 := mu1 - mu2
+    let c1 := mu2 - mu0
+    let c2 := mu0 - mu1
+    let E3_0 := p3_0.1.scale c0
+    let E3_1 := p3_1.1.scale c1
+    let E3_2 := p3_2.1.scale c2
+    let bosP0 := (computeLagrangeProjector twoBosonQuotientMatrix [2, 0, -2] 0).1
+    let bosP1 := (computeLagrangeProjector twoBosonQuotientMatrix [2, 0, -2] 1).1
+    let bosP2 := (computeLagrangeProjector twoBosonQuotientMatrix [2, 0, -2] 2).1
+    -- 1. Universal 2x2 identities
+    p2_0.2 = s2 ∧
+    p2_1.2 = -s2 ∧
+    E2_0.add E2_1 = IntMatrix.scaledIdentity 2 s2 ∧
+    (E2_0.scale lam0).add (E2_1.scale lam1) = Q2.scale s2 ∧
+    (a + d = lam0 + lam1 → a * d - b * c = lam0 * lam1 →
+      E2_0.mul E2_1 = IntMatrix.zero 2 ∧
+      E2_1.mul E2_0 = IntMatrix.zero 2 ∧
+      E2_0.mul E2_0 = E2_0.scale s2 ∧
+      E2_1.mul E2_1 = E2_1.scale s2) ∧
+    -- 2. Universal 3x3 identities
+    c0 * p3_0.2 = s3 ∧
+    c1 * p3_1.2 = s3 ∧
+    c2 * p3_2.2 = s3 ∧
+    (E3_0.add E3_1).add E3_2 = IntMatrix.scaledIdentity 3 s3 ∧
+    ((E3_0.scale mu0).add (E3_1.scale mu1)).add (E3_2.scale mu2) = Q3.scale s3 ∧
+    ((E3_0.scale (mu0 * mu0)).add (E3_1.scale (mu1 * mu1))).add (E3_2.scale (mu2 * mu2)) =
+      (Q3.mul Q3).scale s3 ∧
+    -- 3. 3x3 Bosonic Fock quotient orthogonality & idempotence
+    bosP0.mul bosP1 = IntMatrix.zero 3 ∧
+    bosP0.mul bosP2 = IntMatrix.zero 3 ∧
+    bosP1.mul bosP2 = IntMatrix.zero 3 ∧
+    bosP0.mul bosP0 = bosP0.scale (computeLagrangeDenominator [2, 0, -2] 0) ∧
+    bosP1.mul bosP1 = bosP1.scale (computeLagrangeDenominator [2, 0, -2] 1) ∧
+    bosP2.mul bosP2 = bosP2.scale (computeLagrangeDenominator [2, 0, -2] 2) := by
+  have hDim2 : (mat2x2 a b c d).dim = 2 := rfl
+  have hDim3 : (mat3x3 a00 a01 a02 a10 a11 a12 a20 a21 a22).dim = 3 := rfl
+  simp only [computeLagrangeProjector_pair_0, computeLagrangeProjector_pair_1,
+    computeLagrangeProjector_triple_0, computeLagrangeProjector_triple_1, computeLagrangeProjector_triple_2,
+    hDim2, hDim3,
+    mat2x2_scaledIdentity, mat2x2_zero, mat2x2_add, mat2x2_scale, mat2x2_mul,
+    mat3x3_scaledIdentity, mat3x3_zero, mat3x3_add, mat3x3_scale, mat3x3_mul]
+  refine ⟨by grind, by grind, ?_, ?_, ?_, by grind, by grind, by grind, ?_, ?_, ?_, ?_⟩
+  · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
+  · simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
+  · intro hTr hDet
+    simp only [mat2x2, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
+           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
+           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩,
+           ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩⟩
+  · simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
+  · simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
+  · simp only [mat3x3, IntMatrix.mk.injEq, List.cons.injEq, true_and, and_true]
+    exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
+  · decide +kernel
+
+/-- Broken `computeLagrangeDenominator` that adds instead of multiplying eigenvalue differences. -/
+def computeLagrangeDenominatorAddBug (eigs : List Int) (k : Nat) : Int :=
+  let lamK := listGetInt eigs k
+  (List.range eigs.length).foldl (fun acc j =>
+    if j == k then acc else acc + (lamK - listGetInt eigs j)) 0
+
+#tooth computeLagrangeProjector_2x2_and_3x3_universal by mutation computeLagrangeDenominator := computeLagrangeDenominatorAddBug
+
+/-- Broken `wlRefineStep` that always returns the constant zero coloring `fun _ => 0`. -/
+def wlRefineStepConstZeroBug (_A : IntMatrix) (_n : Nat) (_color : Nat → Nat) : Nat → Nat :=
+  fun _ => 0
+
+#tooth wlStabilize_fixedPoint_iff_equitable by mutation wlRefineStep := wlRefineStepConstZeroBug
+
 end Obend.Analysis
 end

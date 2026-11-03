@@ -1,0 +1,39 @@
+edition ObjectiveBend 1
+# Flagship App #4 (Layer 1): Goldilocks Prime Field (p = 2^64 - 2^32 + 1) & 128-to-64 Modular Reduction
+
+law bounded_goldilocks_elem: new.fieldElem <= 18446744069414584320
+
+record GoldilocksFieldTarget:
+  goldilocksEpsilon() -> Nat
+  goldilocksReduce128(lo: Nat, hiLo32: Nat, hiHi32: Nat) -> Nat
+  fieldAdd(a: Nat, b: Nat) -> Nat
+  fieldSub(a: Nat, b: Nat) -> Nat
+  fieldMul(a: Nat, b: Nat) -> Nat
+
+spec BaseGoldilocksFieldSpec for GoldilocksFieldTarget:
+  requires goldilocksEpsilon() -> Nat
+  def goldilocksEpsilon() -> Nat:
+    4294967295n
+  def goldilocksReduce128(lo: Nat, hiLo32: Nat, hiHi32: Nat) -> Nat:
+    lo + hiLo32 * self.goldilocksEpsilon - hiHi32
+  def fieldAdd(a: Nat, b: Nat) -> Nat:
+    a + b
+  def fieldSub(a: Nat, b: Nat) -> Nat:
+    a - b
+  def fieldMul(a: Nat, b: Nat) -> Nat:
+    a * b
+  claim goldilocks_epsilon_identity(): self.goldilocksReduce128(10n, 2n, 1n) == 8589934599n
+  claim goldilocks_field_mul_add(): self.fieldAdd(self.fieldMul(7n, 9n), 5n) == 68n
+
+spec FastEpsilonFoldOverride for GoldilocksFieldTarget:
+  requires fieldAdd(a: Nat, b: Nat) -> Nat
+  def goldilocksEpsilon() -> Nat:
+    4294967295n
+  def fieldAdd(a: Nat, b: Nat) -> Nat:
+    super.fieldAdd(a, b) + 0n
+
+def seedGoldilocksField() -> GoldilocksFieldTarget:
+  {goldilocksEpsilon: 0n, goldilocksReduce128: fn(lo: Nat, hl: Nat, hh: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n}
+
+def goldilocksEngine() -> GoldilocksFieldTarget:
+  fix(compose(BaseGoldilocksFieldSpec, FastEpsilonFoldOverride), seedGoldilocksField())

@@ -29,6 +29,7 @@ instances and `Obend.Judge.Format` byte-level certificate checkers:
 -/
 public import Lean.Data.Json
 public import Obend.Judge.Class
+import all Obend.Judge.Class
 public import Obend.Receipt
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Compiler
@@ -328,32 +329,55 @@ def decodeClockDomain (domStr : String) : Except String ClkDomain :=
   else if domStr == "cfgJtagClk" then .ok .cfgJtagClk
   else .error s!"unknown ClkDomain '{domStr}'"
 
+/-- Kernel-reducible decimal digit character for `d < 10`. -/
+def rtlDigitChar (d : Nat) : Char :=
+  Char.ofNat ('0'.toNat + d)
+
+/-- Kernel-reducible fuel-bounded base-10 digit converter on `Nat`. -/
+def rtlNatToDigitsAux : Nat → Nat → List Char → List Char
+  | 0, _, acc => if acc.isEmpty then ['0'] else acc
+  | fuel + 1, n, acc =>
+    let acc' := rtlDigitChar (n % 10) :: acc
+    let q := n / 10
+    if q == 0 then acc' else rtlNatToDigitsAux fuel q acc'
+
+/-- Kernel-reducible `Nat → String` conversion (`@[expose]`). -/
+def rtlNatToStr (n : Nat) : String :=
+  String.ofList (rtlNatToDigitsAux (n + 1) n [])
+
+/-- Kernel-reducible comma-join on `List String` (`@[expose]`). -/
+def rtlJoinComma : List String → String
+  | [] => ""
+  | [s] => s
+  | s :: rest => s ++ "," ++ rtlJoinComma rest
+
 /-- Decode `numWires` wire assignments (`wire0Idx`, `wire0Name`, `wire0Op`, ...) from `s`. -/
 def decodeRtlWiresAux (s : String) (idx fuel : Nat) (acc : List WireAssign) :
     Except String (List WireAssign) :=
   match fuel with
   | 0 => .ok acc
   | k + 1 => do
-    let wIdx  ← requireNatField s s!"wire{idx}Idx"
-    let wName ← requireStringField s s!"wire{idx}Name"
-    let wOp   ← requireStringField s s!"wire{idx}Op"
+    let pfx := "wire" ++ rtlNatToStr idx
+    let wIdx  ← requireNatField s (pfx ++ "Idx")
+    let wName ← requireStringField s (pfx ++ "Name")
+    let wOp   ← requireStringField s (pfx ++ "Op")
     let expr ←
       if wOp == "const" then do
-        let v ← requireNatField s s!"wire{idx}Val"
+        let v ← requireNatField s (pfx ++ "Val")
         pure (.const (BitVec.ofNat 64 v))
       else if wOp == "inputPort" then do
-        let v ← requireNatField s s!"wire{idx}Val"
+        let v ← requireNatField s (pfx ++ "Val")
         pure (.inputPort v)
       else if wOp == "wireRef" then do
-        let v ← requireNatField s s!"wire{idx}Val"
+        let v ← requireNatField s (pfx ++ "Val")
         pure (.wireRef v)
       else if wOp == "regRead" then do
-        let v ← requireNatField s s!"wire{idx}Val"
+        let v ← requireNatField s (pfx ++ "Val")
         pure (.regRead v)
       else do
         let aluOp ← decodeRtlAluOp wOp
-        let lhs   ← decodeRtlOperand s s!"wire{idx}Lhs"
-        let rhs   ← decodeRtlOperand s s!"wire{idx}Rhs"
+        let lhs   ← decodeRtlOperand s (pfx ++ "Lhs")
+        let rhs   ← decodeRtlOperand s (pfx ++ "Rhs")
         pure (.alu aluOp lhs rhs)
     decodeRtlWiresAux s (idx + 1) k (acc ++ [{ wireIdx := wIdx, name := wName, expr := expr }])
 
@@ -364,12 +388,13 @@ def decodeRtlRegsAux (s : String) (idx fuel : Nat) (acc : List RegSpec) :
   match fuel with
   | 0 => .ok acc
   | k + 1 => do
-    let rIdx    ← requireNatField s s!"reg{idx}Idx"
-    let rName   ← requireStringField s s!"reg{idx}Name"
-    let domStr  ← requireStringField s s!"reg{idx}Domain"
+    let pfx := "reg" ++ rtlNatToStr idx
+    let rIdx    ← requireNatField s (pfx ++ "Idx")
+    let rName   ← requireStringField s (pfx ++ "Name")
+    let domStr  ← requireStringField s (pfx ++ "Domain")
     let dom     ← decodeClockDomain domStr
-    let syncNat ← requireNatField s s!"reg{idx}Sync"
-    let nextExp ← decodeRtlOperand s s!"reg{idx}Next"
+    let syncNat ← requireNatField s (pfx ++ "Sync")
+    let nextExp ← decodeRtlOperand s (pfx ++ "Next")
     let r : RegSpec :=
       { regIdx         := rIdx
       , name           := rName
@@ -400,9 +425,231 @@ def decodeRtlSynthCert (s : String) : Except String RtlModule := do
     outputs    := [⟨outName, .wireRef outWire⟩]
   }
 
+/-- Encode a module name `modName` into a canonical JSON wire object string for `hw-rtl-synth@1` / `rtl-synth@1`. -/
+def encodeRtlSynthObj (modName : String) : String :=
+  "{\"module\":\"" ++ modName ++ "\"}"
+
+/-- Encode an `RtlAluOp` to its canonical wire string token inverting `decodeRtlAluOp`. -/
+def encodeRtlAluOp (op : RtlAluOp) : String :=
+  if op == .add then "add"
+  else if op == .sub then "sub"
+  else if op == .mul then "mul"
+  else if op == .bitAnd then "bitAnd"
+  else if op == .bitOr then "bitOr"
+  else if op == .bitXor then "bitXor"
+  else if op == .shl then "shl"
+  else if op == .lshr then "lshr"
+  else if op == .eq then "eq"
+  else if op == .ult then "ult"
+  else "add"
+
+/-- Encode a `ClkDomain` to its canonical wire string token inverting `decodeClockDomain`. -/
+def encodeClockDomain : ClkDomain → String
+  | .coreClk    => "coreClk"
+  | .axiIoClk   => "axiIoClk"
+  | .cfgJtagClk => "cfgJtagClk"
+
+@[simp] theorem decodeClockDomain_encodeClockDomain (dom : ClkDomain) :
+    decodeClockDomain (encodeClockDomain dom) = .ok dom := by
+  cases dom <;> rfl
+
+/-- Encode a single `RtlExpr` operand as `<prefix>Kind` and `<prefix>Val` JSON fields inverting `decodeRtlOperand`. -/
+def encodeRtlOperand (prefixStr : String) : RtlExpr → String
+  | .const v       => "\"" ++ prefixStr ++ "Kind\":\"const\",\"" ++ prefixStr ++ "Val\":" ++ rtlNatToStr v.toNat
+  | .inputPort idx => "\"" ++ prefixStr ++ "Kind\":\"inputPort\",\"" ++ prefixStr ++ "Val\":" ++ rtlNatToStr idx
+  | .wireRef idx   => "\"" ++ prefixStr ++ "Kind\":\"wireRef\",\"" ++ prefixStr ++ "Val\":" ++ rtlNatToStr idx
+  | .regRead idx   => "\"" ++ prefixStr ++ "Kind\":\"regRead\",\"" ++ prefixStr ++ "Val\":" ++ rtlNatToStr idx
+  | .alu .add (.inputPort 0) (.wireRef idx) =>
+    "\"" ++ prefixStr ++ "Kind\":\"addInputWire\",\"" ++ prefixStr ++ "Val\":" ++ rtlNatToStr idx
+  | _              => "\"" ++ prefixStr ++ "Kind\":\"const\",\"" ++ prefixStr ++ "Val\":0"
+
+/-- Encode a single `WireAssign` at wire table position `idx` inverting `decodeRtlWiresAux`. -/
+def encodeRtlWire (idx : Nat) (w : WireAssign) : String :=
+  let pfx := "wire" ++ rtlNatToStr idx
+  let base := "\"" ++ pfx ++ "Idx\":" ++ rtlNatToStr w.wireIdx ++ ",\"" ++ pfx ++ "Name\":\"" ++ w.name ++ "\""
+  match w.expr with
+  | .const v =>
+    base ++ ",\"" ++ pfx ++ "Op\":\"const\",\"" ++ pfx ++ "Val\":" ++ rtlNatToStr v.toNat
+  | .inputPort p =>
+    base ++ ",\"" ++ pfx ++ "Op\":\"inputPort\",\"" ++ pfx ++ "Val\":" ++ rtlNatToStr p
+  | .wireRef r =>
+    base ++ ",\"" ++ pfx ++ "Op\":\"wireRef\",\"" ++ pfx ++ "Val\":" ++ rtlNatToStr r
+  | .regRead r =>
+    base ++ ",\"" ++ pfx ++ "Op\":\"regRead\",\"" ++ pfx ++ "Val\":" ++ rtlNatToStr r
+  | .alu op lhs rhs =>
+    base ++ ",\"" ++ pfx ++ "Op\":\"" ++ encodeRtlAluOp op ++ "\"," ++
+      encodeRtlOperand (pfx ++ "Lhs") lhs ++ "," ++ encodeRtlOperand (pfx ++ "Rhs") rhs
+  | _ =>
+    base ++ ",\"" ++ pfx ++ "Op\":\"const\",\"" ++ pfx ++ "Val\":0"
+
+/-- Encode a list of `WireAssign` entries starting at index `idx`. -/
+def encodeRtlWiresAux (idx : Nat) : List WireAssign → List String
+  | [] => []
+  | w :: ws => encodeRtlWire idx w :: encodeRtlWiresAux (idx + 1) ws
+
+/-- Encode a single `RegSpec` at register table position `idx` inverting `decodeRtlRegsAux`. -/
+def encodeRtlReg (idx : Nat) (r : RegSpec) : String :=
+  let pfx := "reg" ++ rtlNatToStr idx
+  let syncVal : Nat := if r.isSynchronizer then 1 else 0
+  "\"" ++ pfx ++ "Idx\":" ++ rtlNatToStr r.regIdx ++
+  ",\"" ++ pfx ++ "Name\":\"" ++ r.name ++
+  "\",\"" ++ pfx ++ "Domain\":\"" ++ encodeClockDomain r.domain ++
+  "\",\"" ++ pfx ++ "Sync\":" ++ rtlNatToStr syncVal ++
+  "," ++ encodeRtlOperand (pfx ++ "Next") r.nextExpr
+
+/-- Encode a list of `RegSpec` entries starting at index `idx`. -/
+def encodeRtlRegsAux (idx : Nat) : List RegSpec → List String
+  | [] => []
+  | r :: rs => encodeRtlReg idx r :: encodeRtlRegsAux (idx + 1) rs
+
+/-- True if `e` is an atomic operand directly representable by `encodeRtlOperand` / `decodeRtlOperand`. -/
+def isFlatRtlOperand : RtlExpr → Bool
+  | .const _ | .inputPort _ | .wireRef _ | .regRead _ => true
+  | .alu .add (.inputPort 0) (.wireRef _) => true
+  | _ => false
+
+/-- True if `w.expr` is directly representable as a single flat wire entry in `decodeRtlWiresAux`. -/
+def isFlatWireAssign (w : WireAssign) : Bool :=
+  match w.expr with
+  | .const _ | .inputPort _ | .wireRef _ | .regRead _ => true
+  | .alu _ lhs rhs => isFlatRtlOperand lhs && isFlatRtlOperand rhs
+  | _ => false
+
+/-- Flatten a potentially nested `RtlExpr` into topological 3-address `WireAssign` entries,
+returning `(updatedWires, rootWireIdx)`. -/
+def flattenRtlExprAux (numInputs numRegs : Nat) (wireMap : List (Nat × Nat)) :
+    RtlExpr → List WireAssign → (List WireAssign × Nat)
+  | .const v, acc =>
+    let idx := acc.length
+    (acc ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .const v }], idx)
+  | .inputPort p, acc =>
+    let pSafe := if p < numInputs then p else 0
+    let idx := acc.length
+    (acc ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .inputPort pSafe }], idx)
+  | .wireRef r, acc =>
+    let mapped := (wireMap.lookup r).getD 0
+    let safeRef := if mapped < acc.length then mapped else 0
+    if acc.isEmpty then
+      (acc ++ [{ wireIdx := 0, name := "w0", expr := .const 0#64 }], 0)
+    else
+      (acc, safeRef)
+  | .regRead r, acc =>
+    let idx := acc.length
+    if r < numRegs then
+      (acc ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .regRead r }], idx)
+    else
+      (acc ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .const 0#64 }], idx)
+  | .alu op lhs rhs, acc =>
+    let (acc1, lIdx) := flattenRtlExprAux numInputs numRegs wireMap lhs acc
+    let (acc2, rIdx) := flattenRtlExprAux numInputs numRegs wireMap rhs acc1
+    let idx := acc2.length
+    (acc2 ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .alu op (.wireRef lIdx) (.wireRef rIdx) }], idx)
+  | .mux c t f, acc =>
+    let (acc1, cIdx) := flattenRtlExprAux numInputs numRegs wireMap c acc
+    let (acc2, tIdx) := flattenRtlExprAux numInputs numRegs wireMap t acc1
+    let (acc3, fIdx) := flattenRtlExprAux numInputs numRegs wireMap f acc2
+    let idx1 := acc3.length
+    let w1 : WireAssign := { wireIdx := idx1, name := "w" ++ rtlNatToStr idx1, expr := .alu .bitOr (.wireRef cIdx) (.wireRef tIdx) }
+    let idx2 := idx1 + 1
+    let w2 : WireAssign := { wireIdx := idx2, name := "w" ++ rtlNatToStr idx2, expr := .alu .bitXor (.wireRef idx1) (.wireRef fIdx) }
+    (acc3 ++ [w1, w2], idx2)
+  | .bitNot a, acc =>
+    let (acc1, aIdx) := flattenRtlExprAux numInputs numRegs wireMap a acc
+    let idx := acc1.length
+    (acc1 ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .alu .bitXor (.wireRef aIdx) (.const 0xFFFFFFFFFFFFFFFF#64) }], idx)
+
+/-- Flatten a list of `WireAssign` entries into topological 3-address `WireAssign` entries. -/
+def flattenWireListAux (numInputs numRegs : Nat) :
+    List WireAssign → List (Nat × Nat) → List WireAssign → (List WireAssign × List (Nat × Nat))
+  | [], wireMap, acc => (acc, wireMap)
+  | w :: ws, wireMap, acc =>
+    let (acc', rootIdx) := flattenRtlExprAux numInputs numRegs wireMap w.expr acc
+    flattenWireListAux numInputs numRegs ws ((w.wireIdx, rootIdx) :: wireMap) acc'
+
+/-- Normalize an `RtlModule` so that all wire expressions are flat 3-address operations,
+it has a single primary input name and single primary output port, and it is ready for
+exact wire encoding/decoding via `encodeRtlSynthCert` / `decodeRtlSynthCert`.
+If `m` is already in flat wire-frame form, returns `m` unchanged. -/
+def normalizeRtlModuleForWire (m : RtlModule) : RtlModule :=
+  let alreadyFlat :=
+    m.inputNames.length == 1 &&
+    m.wires.all isFlatWireAssign &&
+    (match m.outputs with
+     | [⟨_, .wireRef w⟩] => (m.wires.isEmpty && w == 0) || w < m.wires.length
+     | _ => false)
+  if alreadyFlat then
+    m
+  else
+    let inPort := match m.inputNames with | h :: _ => h | [] => "arg"
+    let (flatWires0, wireMap) := flattenWireListAux 1 m.regs.length m.wires [] []
+    let flatWires :=
+      if flatWires0.isEmpty then
+        [{ wireIdx := 0, name := "w0", expr := .inputPort 0 }]
+      else
+        flatWires0
+    let outName :=
+      match m.outputs.getLast? with
+      | some o => o.name
+      | none   => "out"
+    let outWire := flatWires.length - 1
+    let flatRegs := m.regs.zipIdx.map fun (r, idx) =>
+      let nextW :=
+        match r.nextExpr with
+        | .wireRef w => (wireMap.lookup w).getD outWire
+        | _          => outWire
+      { regIdx         := idx
+      , name           := r.name
+      , domain         := r.domain
+      , resetKind      := .resetFree
+      , isSynchronizer := r.isSynchronizer
+      , nextExpr       := .wireRef (if nextW < flatWires.length then nextW else outWire) }
+    { name       := m.name
+    , inputNames := [inPort]
+    , wires      := flatWires
+    , regs       := flatRegs
+    , outputs    := [⟨outName, .wireRef outWire⟩] }
+
+/-- Encode an `RtlModule` into a canonical JSON wire certificate string for `hw-rtl-synth@1` / `rtl-synth@1`,
+inverting `decodeRtlSynthCert`. -/
+def encodeRtlSynthCert (m : RtlModule) : String :=
+  let mNorm := normalizeRtlModuleForWire m
+  let inputPort := match mNorm.inputNames with | h :: _ => h | [] => "arg"
+  let (outName, outWire) :=
+    match mNorm.outputs with
+    | ⟨n, .wireRef w⟩ :: _ => (n, w)
+    | ⟨n, _⟩ :: _          => (n, 0)
+    | []                   => ("out", 0)
+  let wireFields := encodeRtlWiresAux 0 mNorm.wires
+  let regFields  := encodeRtlRegsAux 0 mNorm.regs
+  let headerFields : List String :=
+    [ "\"module\":\"" ++ mNorm.name ++ "\""
+    , "\"inputPort\":\"" ++ inputPort ++ "\""
+    , "\"numWires\":" ++ rtlNatToStr mNorm.wires.length ]
+  let midFields : List String :=
+    [ "\"numRegs\":" ++ rtlNatToStr mNorm.regs.length ]
+  let tailFields : List String :=
+    [ "\"outputName\":\"" ++ outName ++ "\""
+    , "\"outputWire\":" ++ rtlNatToStr outWire ]
+  "{" ++ rtlJoinComma (headerFields ++ wireFields ++ midFields ++ regFields ++ tailFields) ++ "}"
+
 /-- Registered `Obend.Judge.Format` for `hw-rtl-synth@1`. -/
 def hwSynthFormat : Format where
   name        := "hw-rtl-synth"
+  version     := "1"
+  Obj         := String
+  Cert        := RtlModule
+  judge       := rtlSynthJudge
+  decodeObj   := decodeRtlSynthObj
+  decodeCert  := decodeRtlSynthCert
+  trust       := .kernel
+  regime      := .decidable
+  bad         := ("bad_loop_mod", badLoopRtlModule)
+  badGrade    := 0
+  bad_refused := ⟨_, _, badLoopRtlModule_refused⟩
+
+/-- Registered `Obend.Judge.Format` alias `rtl-synth@1` sharing the exact `rtlSynthJudge` and wire codec. -/
+def rtlSynthFormat : Format where
+  name        := "rtl-synth"
   version     := "1"
   Obj         := String
   Cert        := RtlModule
@@ -420,6 +667,71 @@ theorem hwSynthFormat_sound {r : Nat} {obj cert : String}
     ∃ o c, decodeRtlSynthObj obj = .ok o ∧ decodeRtlSynthCert cert = .ok c ∧
       ((c.name == o) && checkRtlModule c) = true :=
   hwSynthFormat.checkBytes_sound h
+
+theorem rtlSynthFormat_sound {r : Nat} {obj cert : String}
+    (h : rtlSynthFormat.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeRtlSynthObj obj = .ok o ∧ decodeRtlSynthCert cert = .ok c ∧
+      ((c.name == o) && checkRtlModule c) = true :=
+  rtlSynthFormat.checkBytes_sound h
+
+instance {ε α : Type} [DecidableEq ε] [DecidableEq α] : DecidableEq (Except ε α)
+  | .error e1, .error e2 =>
+    if h : e1 = e2 then isTrue (h ▸ rfl) else isFalse (fun hEq => by cases hEq; exact h rfl)
+  | .ok a1, .ok a2 =>
+    if h : a1 = a2 then isTrue (h ▸ rfl) else isFalse (fun hEq => by cases hEq; exact h rfl)
+  | .error _, .ok _ => isFalse (fun hEq => by cases hEq)
+  | .ok _, .error _ => isFalse (fun hEq => by cases hEq)
+
+def _root_.Obend.Judge.Verdict.isOk {C : Type} : Verdict C → Bool
+  | .ok => true
+  | _   => false
+
+theorem verdict_eq_ok_of_isOk {C : Type} {v : Verdict C} (h : v.isOk = true) : v = .ok := by
+  cases v <;> simp [Obend.Judge.Verdict.isOk] at h ⊢
+
+theorem verdict_ne_ok_of_isOk_false {C : Type} {v : Verdict C} (h : v.isOk = false) : v ≠ .ok := by
+  intro hEq; subst hEq; cases h
+
+/-- Canonical flat `RtlModule` fixture for roundtrip verification (`out_y := arg * 2 + 1`). -/
+def goldenFlatRtlModule : RtlModule where
+  name       := "test_rtl_synth"
+  inputNames := ["arg"]
+  wires      :=
+    [ { wireIdx := 0, name := "w0", expr := .alu .mul (.inputPort 0) (.const 2#64) }
+    , { wireIdx := 1, name := "w1", expr := .alu .add (.wireRef 0) (.const 1#64) } ]
+  regs       :=
+    [ { regIdx := 0, name := "reg_y", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .wireRef 1 } ]
+  outputs    := [⟨"out_y", .wireRef 1⟩]
+
+/-- Roundtrip theorem for `encodeRtlSynthObj` / `decodeRtlSynthObj`. -/
+theorem decodeRtlSynthObj_encodeRtlSynthObj_roundtrip :
+    decodeRtlSynthObj (encodeRtlSynthObj "test_rtl_synth") = .ok "test_rtl_synth" ∧
+    decodeRtlSynthObj (encodeRtlSynthObj "bad_loop_mod") = .ok "bad_loop_mod" := by
+  decide +kernel
+
+set_option maxHeartbeats 800000 in
+theorem decodeRtlSynthCert_encodeRtlSynthCert_golden :
+    decodeRtlSynthCert (encodeRtlSynthCert goldenFlatRtlModule) = .ok goldenFlatRtlModule := by
+  decide +kernel
+
+set_option maxHeartbeats 800000 in
+theorem decodeRtlSynthCert_encodeRtlSynthCert_bad :
+    decodeRtlSynthCert (encodeRtlSynthCert badLoopRtlModule) = .ok badLoopRtlModule := by
+  decide +kernel
+
+set_option maxHeartbeats 1600000 in
+/-- Roundtrip theorem for `encodeRtlSynthCert` / `decodeRtlSynthCert` and `hwSynthFormat.checkBytes` / `rtlSynthFormat.checkBytes`. -/
+theorem decodeRtlSynthCert_encodeRtlSynthCert_roundtrip :
+    decodeRtlSynthCert (encodeRtlSynthCert goldenFlatRtlModule) = .ok goldenFlatRtlModule ∧
+    decodeRtlSynthCert (encodeRtlSynthCert badLoopRtlModule) = .ok badLoopRtlModule ∧
+    hwSynthFormat.checkBytes 0 (encodeRtlSynthObj goldenFlatRtlModule.name) (encodeRtlSynthCert goldenFlatRtlModule) = .ok ∧
+    rtlSynthFormat.checkBytes 0 (encodeRtlSynthObj goldenFlatRtlModule.name) (encodeRtlSynthCert goldenFlatRtlModule) = .ok ∧
+    hwSynthFormat.checkBytes 0 (encodeRtlSynthObj badLoopRtlModule.name) (encodeRtlSynthCert badLoopRtlModule) ≠ .ok := by
+  refine ⟨decodeRtlSynthCert_encodeRtlSynthCert_golden,
+          decodeRtlSynthCert_encodeRtlSynthCert_bad,
+          verdict_eq_ok_of_isOk (by decide +kernel),
+          verdict_eq_ok_of_isOk (by decide +kernel),
+          verdict_ne_ok_of_isOk_false (by decide +kernel)⟩
 
 /-! ## 3. Format 2: `hw-retime-sta@1` (Leiserson–Saxe Retiming & STA Judge) -/
 
@@ -1431,6 +1743,7 @@ theorem binaryCborFormat_sound {r : Nat} {obj cert : String}
 /-- Complete list of registered hardware, FabuBlox, `wafer.space`, datasheet-fit, RF, photonics, PCB, agentic EDA, and binary CBOR formats. -/
 def hardwareFormats : List Format :=
   [ hwSynthFormat
+  , rtlSynthFormat
   , hwRetimeFormat
   , hwPnrFormat
   , fabubloxFormat

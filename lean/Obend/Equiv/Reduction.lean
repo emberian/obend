@@ -83,8 +83,8 @@ theorem value_substitute {t : Term} (σ : Nat → Term) (h : Value t) : Value (t
 theorem primitiveResult_substitute {p : Primitive} {l r res : Term} (σ : Nat → Term)
     (h : primitiveResult p l r = some res) :
     primitiveResult p (l.substitute σ) (r.substitute σ) = some (res.substitute σ) := by
-  cases p <;> cases l <;> cases r <;> simp_all [primitiveResult, Term.substitute] <;>
-    (subst h; simp [Term.substitute])
+  unfold primitiveResult at h
+  split at h <;> cases h <;> simp only [Term.substitute] <;> rfl
 
 def mapFields (g : Term → Term) (fields : List (String × Term)) : List (String × Term) :=
   fields.map fun field => (field.1, g field.2)

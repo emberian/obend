@@ -1,156 +1,147 @@
-`include "obend_hw.sv"
-`include "obend_silicon_process.sv"
-`include "obend_efpga_fabric.sv"
+/* verilator lint_off UNUSED */
+/* verilator lint_off DECLFILENAME */
+// Canonical Verilator Top-Level Testbench (`tb_top.sv`)
+// Instantiates ONLY compiler-emitted SystemVerilog modules:
+//   1. `cleanroom_tcad_stack`       (`CleanroomTcadStack.obend` 5-stage pipelined RTL)
+//   2. `lc_drives_userspace_stator` (`LcDrivesStator.obend` 3-layer stator RTL)
+//   3. `cnc_5axis_userspace_mill`   (`Cnc5AxisMill.obend` 2-layer 5-axis mill RTL)
+//   4. `obend_retimed_mac2`         (`Synth.lean` retimed 2-stage DSP MAC)
+//   5. `silicon_elab_top`           (4-zone Silicon Elaborator Fabric + 5 hierarchical macros)
+
+`include "cleanroom_tcad_stack.sv"
+`include "lc_drives_userspace_stator.sv"
+`include "cnc_5axis_userspace_mill.sv"
+`include "obend_retimed_mac2.sv"
+`include "silicon_elab_top.sv"
 
 module tb_top (
   input  logic        clk,
-  input  logic        rst_n,
-  // 1. DSP MAC ports
-  input  logic [63:0] dsp_a,
-  input  logic [63:0] dsp_b,
-  input  logic [63:0] dsp_c,
-  output logic [63:0] dsp_p,
-  // 2. Boot-Sweep + RAW-Bypassed URAM/SRAM ports
-  output logic        ram_boot_done,
-  input  logic        ram_rd_en,
-  input  logic [3:0]  ram_rd_addr,
-  output logic [63:0] ram_rd_data,
-  input  logic        ram_wr_en,
-  input  logic [3:0]  ram_wr_addr,
-  input  logic [63:0] ram_wr_data,
-  // 3. AXI4-Stream Skid Buffer ports
-  input  logic        s_tvalid,
-  output logic        s_tready,
-  input  logic [63:0] s_tdata,
-  output logic        m_tvalid,
-  input  logic        m_tready,
-  output logic [63:0] m_tdata,
-  // 4. Demand Wave Chip ports
-  output logic [63:0] csr_afi_digest,
-  output logic [3:0]  slot_valid,
-  output logic [63:0] slot_val_0,
-  output logic [63:0] slot_val_1,
-  output logic [63:0] slot_val_2,
-  output logic [63:0] slot_val_3,
-  // 5. eFPGA 64-bit BLE Bitstream Adder ports
-  input  logic [63:0] efpga_a,
-  input  logic [63:0] efpga_b,
-  output logic [63:0] efpga_sum,
-  // 6. ReviewMember.obend 2-stage Pipeline ports
-  input  logic [63:0] rev_x,
-  input  logic [63:0] rev_base,
-  output logic [63:0] rev_twice,
-  output logic        rev_claim_ok,
-  // 7. Hardware Ledger Co-Processor ports
-  output logic        led_boot_done,
-  input  logic        led_row_valid,
-  input  logic        led_row_is_close,
-  input  logic [3:0]  led_row_doc_id,
-  input  logic [63:0] led_row_period,
-  input  logic [63:0] led_row_debit,
-  input  logic [63:0] led_row_credit,
-  output logic        led_row_accepted,
-  output logic [1:0]  led_refusal_code,
-  output logic [63:0] led_closed_through,
-  output logic [63:0] led_total_debits,
-  output logic [63:0] led_total_credits,
-  // 8. 2x2 eFPGA Mesh + Frame Loader (TwiceReview.obend) ports
-  input  logic        mesh_cfg_wr_en,
-  input  logic        mesh_cfg_lock_cmd,
-  input  logic [1:0]  mesh_cfg_tile_id,
-  input  logic [2:0]  mesh_cfg_mux_a,
-  input  logic [2:0]  mesh_cfg_mux_b,
-  input  logic [1:0]  mesh_cfg_alu_op,
-  input  logic [63:0] mesh_cfg_imm,
-  output logic        mesh_cfg_locked,
-  input  logic [63:0] mesh_in_00,
-  output logic [63:0] mesh_out_01,
-  // 9. Hardware Merkle-View Receipt Verifier Engine ports
-  input  logic [63:0] mrk_dated_root,
-  input  logic [1:0]  mrk_leaf_pos,
-  input  logic [63:0] mrk_leaf_val,
-  input  logic [63:0] mrk_sib_0,
-  input  logic [63:0] mrk_sib_1,
-  input  logic        mrk_law_ok,
-  output logic [63:0] mrk_climbed_root,
-  output logic        mrk_accepted,
-  // 10. DeosCounter.obend + Vault.Law Capability-Guarded Register Bank ports
-  input  logic        deos_cmd_valid,
-  input  logic [1:0]  deos_cmd_op,
-  input  logic [63:0] deos_cmd_arg,
-  input  logic        deos_has_cred,
-  output logic [63:0] deos_count,
-  output logic [63:0] deos_cfg_tag,
-  output logic        deos_accepted
+  input  logic        rst,
+
+  // 1. CleanroomTcadStack inputs & outputs
+  input  logic [63:0] tcad_in_0,
+  output logic [63:0] tcad_out_oxideEotPicometers,
+  output logic [63:0] tcad_out_vthMilliV,
+  output logic [63:0] tcad_out_drainCurrentUa,
+  output logic [63:0] tcad_out_gateDelayPs,
+  output logic [63:0] tcad_out_calibratedDelayPs,
+
+  // 2. LcDrivesStator inputs & outputs
+  input  logic [63:0] stator_in_0,
+  output logic [63:0] stator_out_massKg,
+  output logic [63:0] stator_out_camSurfaceErrorUm,
+  output logic [63:0] stator_out_thermalResistance,
+  output logic [63:0] stator_out_sdfMargin,
+  output logic [63:0] stator_out_peakWindingTemp,
+
+  // 3. Cnc5AxisMill inputs & outputs
+  input  logic [63:0] mill_in_0,
+  output logic [63:0] mill_out_servoLagUm,
+  output logic [63:0] mill_out_endMillDeflectionUm,
+  output logic [63:0] mill_out_abbeAngularDriftUm,
+  output logic [63:0] mill_out_commandedAxisAt10mmUm,
+  output logic [63:0] mill_out_totalVolumetricErrorUm,
+
+  // 4. Retimed MAC2 inputs & outputs
+  input  logic [63:0] mac_in_a,
+  input  logic [63:0] mac_in_b,
+  input  logic [63:0] mac_in_c,
+  output logic [63:0] mac_out_y,
+
+  // 5. 4-Zone Silicon Elaborator Fabric + ICAP DPR inputs & outputs
+  input  logic        elab_ap_start,
+  input  logic        elab_dpr_isolate_en,
+  input  logic        elab_dpr_load_we,
+  input  logic [63:0] elab_dpr_frame_word,
+  input  logic [63:0] elab_dpr_expected_digest,
+  input  logic [63:0] elab_dpr_computed_digest,
+  input  logic        elab_dpr_moved_pin,
+  input  logic [31:0] elab_target_expr_h,
+  input  logic [31:0] elab_target_type_h,
+  input  logic [31:0] elab_target_decl_sym,
+  input  logic [31:0] elab_fuel_budget,
+  output logic        elab_ap_done,
+  output logic        elab_ap_idle,
+  output logic [31:0] elab_result_status,
+  output logic [31:0] elab_perf_cycles,
+  output logic [31:0] elab_perf_cam_hits,
+  output logic [31:0] elab_perf_cam_allocs,
+  output logic [31:0] elab_perf_bypass_cnt,
+  output logic [31:0] elab_perf_noc_flits,
+  output logic [31:0] elab_perf_lut_hits,
+  output logic [31:0] elab_zone3_match_thm,
+  output logic        elab_dpr_commit_ok,
+  output logic        elab_dpr_fallback_active
 );
-  logic [63:0] slot_val [0:3];
-  assign slot_val_0 = slot_val[0];
-  assign slot_val_1 = slot_val[1];
-  assign slot_val_2 = slot_val[2];
-  assign slot_val_3 = slot_val[3];
-  assign led_boot_done = rst_n;
 
-  obend_dsp_mac4 u_dsp (
-    .clk(clk), .a_in(dsp_a), .b_in(dsp_b), .c_in(dsp_c), .p_out(dsp_p)
+  cleanroom_tcad_stack u_tcad (
+    .clk(clk),
+    .rst(rst),
+    .arg(tcad_in_0),
+    .out_oxideEotPicometers(tcad_out_oxideEotPicometers),
+    .out_vthMilliV(tcad_out_vthMilliV),
+    .out_drainCurrentUa(tcad_out_drainCurrentUa),
+    .out_gateDelayPs(tcad_out_gateDelayPs),
+    .out_calibratedDelayPs(tcad_out_calibratedDelayPs)
   );
 
-  obend_boot_sweep_ram #(.ADDR_W(4), .DATA_W(64), .DEPTH(16)) u_ram (
-    .clk(clk), .rst_n(rst_n), .boot_done(ram_boot_done),
-    .rd_en(ram_rd_en), .rd_addr(ram_rd_addr), .rd_data(ram_rd_data),
-    .wr_en(ram_wr_en), .wr_addr(ram_wr_addr), .wr_data(ram_wr_data)
+  lc_drives_userspace_stator u_stator (
+    .clk(clk),
+    .rst(rst),
+    .arg(stator_in_0),
+    .out_massKg(stator_out_massKg),
+    .out_camSurfaceErrorUm(stator_out_camSurfaceErrorUm),
+    .out_thermalResistance(stator_out_thermalResistance),
+    .out_sdfMargin(stator_out_sdfMargin),
+    .out_peakWindingTemp(stator_out_peakWindingTemp)
   );
 
-  obend_axis_skid #(.W(64)) u_skid (
-    .clk(clk), .rst_n(rst_n),
-    .s_axis_tvalid(s_tvalid), .s_axis_tready(s_tready), .s_axis_tdata(s_tdata),
-    .m_axis_tvalid(m_tvalid), .m_axis_tready(m_tready), .m_axis_tdata(m_tdata)
+  cnc_5axis_userspace_mill u_mill (
+    .clk(clk),
+    .rst(rst),
+    .arg(mill_in_0),
+    .out_servoLagUm(mill_out_servoLagUm),
+    .out_endMillDeflectionUm(mill_out_endMillDeflectionUm),
+    .out_abbeAngularDriftUm(mill_out_abbeAngularDriftUm),
+    .out_commandedAxisAt10mmUm(mill_out_commandedAxisAt10mmUm),
+    .out_totalVolumetricErrorUm(mill_out_totalVolumetricErrorUm)
   );
 
-  obend_chain4_chip u_wave (
-    .clk(clk), .rst_n(rst_n),
-    .csr_afi_digest(csr_afi_digest), .slot_valid(slot_valid), .slot_val(slot_val)
+  obend_retimed_mac2 u_mac2 (
+    .clk(clk),
+    .rst(rst),
+    .a(mac_in_a),
+    .b(mac_in_b),
+    .c(mac_in_c),
+    .mac_out(mac_out_y)
   );
 
-  obend_efpga_adder64 u_efpga_add (
-    .a(efpga_a), .b(efpga_b), .sum(efpga_sum)
+  silicon_elab_top u_silicon_elab (
+    .clk(clk),
+    .rst(rst),
+    .ap_start(elab_ap_start),
+    .dpr_isolate_en(elab_dpr_isolate_en),
+    .dpr_load_we(elab_dpr_load_we),
+    .dpr_frame_word(elab_dpr_frame_word),
+    .dpr_expected_digest(elab_dpr_expected_digest),
+    .dpr_computed_digest(elab_dpr_computed_digest),
+    .dpr_moved_pin(elab_dpr_moved_pin),
+    .target_expr_h(elab_target_expr_h),
+    .target_type_h(elab_target_type_h),
+    .target_decl_sym(elab_target_decl_sym),
+    .fuel_budget(elab_fuel_budget),
+    .ap_done(elab_ap_done),
+    .ap_idle(elab_ap_idle),
+    .result_status(elab_result_status),
+    .perf_cycles(elab_perf_cycles),
+    .perf_cam_hits(elab_perf_cam_hits),
+    .perf_cam_allocs(elab_perf_cam_allocs),
+    .perf_bypass_cnt(elab_perf_bypass_cnt),
+    .perf_noc_flits(elab_perf_noc_flits),
+    .perf_lut_hits(elab_perf_lut_hits),
+    .zone3_match_thm(elab_zone3_match_thm),
+    .dpr_commit_ok(elab_dpr_commit_ok),
+    .dpr_fallback_active(elab_dpr_fallback_active)
   );
 
-  obend_review_member_pipe u_rev_pipe (
-    .clk(clk), .x_in(rev_x), .base_in(rev_base),
-    .twice_out(rev_twice), .claim_repeated_ok(rev_claim_ok)
-  );
-
-  obend_ledger_coproc u_ledger (
-    .clk(clk), .rst_n(rst_n),
-    .row_valid(led_row_valid), .row_is_close(led_row_is_close),
-    .row_doc_id(led_row_doc_id), .row_period(led_row_period),
-    .row_debit(led_row_debit), .row_credit(led_row_credit),
-    .row_accepted(led_row_accepted), .refusal_code(led_refusal_code),
-    .closed_through_out(led_closed_through),
-    .total_debits_out(led_total_debits), .total_credits_out(led_total_credits)
-  );
-
-  obend_efpga_mesh_2x2 u_mesh (
-    .clk(clk), .rst_n(rst_n),
-    .cfg_wr_en(mesh_cfg_wr_en), .cfg_lock_cmd(mesh_cfg_lock_cmd),
-    .cfg_tile_id(mesh_cfg_tile_id), .cfg_mux_a_in(mesh_cfg_mux_a),
-    .cfg_mux_b_in(mesh_cfg_mux_b), .cfg_alu_op_in(mesh_cfg_alu_op),
-    .cfg_imm_in(mesh_cfg_imm), .cfg_locked(mesh_cfg_locked),
-    .mesh_in_00(mesh_in_00), .mesh_out_01(mesh_out_01)
-  );
-
-  obend_merkle_receipt_engine u_merkle (
-    .dated_root(mrk_dated_root), .leaf_pos(mrk_leaf_pos),
-    .leaf_val(mrk_leaf_val), .sib_0(mrk_sib_0), .sib_1(mrk_sib_1),
-    .law_ok(mrk_law_ok), .climbed_root(mrk_climbed_root),
-    .receipt_accepted(mrk_accepted)
-  );
-
-  obend_deos_vault_guard u_deos (
-    .clk(clk), .rst_n(rst_n),
-    .cmd_valid(deos_cmd_valid), .cmd_op(deos_cmd_op),
-    .cmd_arg(deos_cmd_arg), .has_proof_cred(deos_has_cred),
-    .count_out(deos_count), .cfg_tag_out(deos_cfg_tag),
-    .last_accepted_out(deos_accepted)
-  );
 endmodule

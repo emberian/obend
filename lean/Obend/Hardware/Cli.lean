@@ -21,6 +21,7 @@ Provides CLI commands for hardware synthesis, Leiserson–Saxe retiming, physica
 public import Lean.Data.Json
 public import Obend.Hardware.Judge
 public import Obend.Hardware.TapeoutPipeline
+public import Obend.Hardware.VerilateRunner
 @[expose] public section
 
 namespace Obend.Hardware.Cli
@@ -364,39 +365,22 @@ def cmdVerifyCbor (args : List String) : IO UInt32 := do
     IO.eprintln s!"uncovered: binary CBOR certificate obligations uncovered (domain={domName})"
     return 3
 
-/-- Compile a userspace `.obend` physical engineering `Composition` via `compileBookToRtl`
+/-- Compile a userspace `.obend` physical engineering `Composition` via `compileCompositionToVerifiedRtl`
     and emit synthesizable SystemVerilog-2012 via `emitModuleSV`. -/
-def cmdEmitSv (args : List String) : IO UInt32 := do
-  let (modOpt, args1) := extractFlag "--module" args
-  let (outOpt, _)     := extractFlag "--out" args1
-  let modChoice := modOpt.getD "cleanroom_tcad_stack"
-  let modName :=
-    if modChoice == "cnc_5axis_mill" || modChoice == "cnc_5axis_userspace_mill" then
-      "cnc_5axis_userspace_mill"
-    else if modChoice == "lc_drives_stator" || modChoice == "lc_drives_userspace_stator" then
-      "lc_drives_userspace_stator"
-    else
-      "cleanroom_tcad_stack"
-  let comp := Obend.Hardware.TapeoutPipeline.goldenCleanroomTcadComp
-  match Obend.Hardware.Compiler.compileBookToPipelinedRtl modName (Obend.Leaf.emit comp) with
-  | none =>
-    IO.eprintln s!"refused: failed to compile {modName} to RtlModule"
-    return 3
-  | some m =>
-    if !Obend.Hardware.HDL.checkRtlModule m then
-      IO.eprintln s!"refused: synthesized RtlModule {m.name} failed DAG/CDC check"
-      return 3
-    else
-      let svText := "/* verilator lint_off UNUSED */\n/* verilator lint_off DECLFILENAME */\n" ++
-        Obend.Hardware.HDL.emitModuleSV m
-      match outOpt with
-      | some outPath =>
-        IO.FS.writeFile outPath svText
-        IO.println s!"wrote synthesized SystemVerilog module {m.name} ({m.wires.length} wires, {m.outputs.length} outputs) to {outPath}"
-        return 0
-      | none =>
-        IO.print svText
-        return 0
+def cmdEmitSv (args : List String) : IO UInt32 :=
+  Obend.Hardware.VerilateRunner.cmdEmitSv args
+
+/-- Emit the 5-module `silicon_elab_top.sv` + hierarchical hardware macros (`obend hardware emit-silicon-sv [--out FILE.sv]`). -/
+def cmdEmitSiliconSv (args : List String) : IO UInt32 :=
+  Obend.Hardware.VerilateRunner.cmdEmitSiliconSv args
+
+/-- Emit the Rung-2 `Synth.TechNetlist` SMT-LIB2 `QF_BV` equivalence miter (`obend hardware emit-lec-smt2`). -/
+def cmdEmitLecSmt2 (args : List String) : IO UInt32 :=
+  Obend.Hardware.VerilateRunner.cmdEmitLecSmt2 args
+
+/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>] [--lec]`. -/
+def cmdVerilate (args : List String) : IO UInt32 :=
+  Obend.Hardware.VerilateRunner.cmdVerilate args
 
 /-- Extract a module name stem from a file path (e.g., `"stdlib/physical/CleanroomTcadStack.obend"` -> `"CleanroomTcadStack"`). -/
 def moduleStemOfPath (p : String) : String :=
@@ -490,8 +474,12 @@ def cmdTapeout (args : List String) : IO UInt32 := do
     IO.println s!"verified tapeout ({art.moduleName}): slots={art.specializedBook.slots.length}, wires={art.rtlModule.wires.length}, regs={art.rtlModule.regs.length}, bels={art.belNetlist.cells.length}, tcad=[FF:{art.tcadEnvelope.fastCorner.tGateMaxPs}ps, TT:{art.tcadEnvelope.nomCorner.tGateMaxPs}ps, SS:{art.tcadEnvelope.slowCorner.tGateMaxPs}ps], verdict=ok"
     return 0
 
-/-- CLI entry point for `obend tapeout ...`, `obend hardware ...`, and `obend fabublox ...`. -/
+/-- CLI entry point for `obend verilate ...`, `obend tapeout ...`, `obend hardware ...`, and `obend fabublox ...`. -/
 public def main? : List String → Option (IO UInt32)
+  | "verilate" :: rest                         => some (cmdVerilate rest)
+  | "hardware" :: "verilate" :: rest           => some (cmdVerilate rest)
+  | "hardware" :: "emit-lec-smt2" :: rest      => some (cmdEmitLecSmt2 rest)
+  | "hardware" :: "emit-silicon-sv" :: rest    => some (cmdEmitSiliconSv rest)
   | "tapeout" :: rest                          => some (cmdTapeout rest)
   | "hardware" :: "tapeout" :: rest            => some (cmdTapeout rest)
   | "hardware" :: "verify-pnr" :: rest         => some (cmdVerifyPnr rest)

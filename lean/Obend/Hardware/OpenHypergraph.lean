@@ -35,6 +35,7 @@ via syntactic `Optic` morphisms), bridged directly to `Obend.Hardware.HDL` and `
 -/
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Compiler
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Hardware.OpenHypergraph
@@ -2606,6 +2607,658 @@ theorem compileHypergraphToRtlPipelined_latency_sound
     (evalHypergraphLayeredSync goldenDiamondHypergraph initEnvInt).map (BitVec.ofInt 64) = [87#64] := by
   refine ⟨compileWavefrontStageExpr_sound numWires stageIdx stage inputs wireEnv regState w, ?_⟩
   decide +kernel
+
+/-! ## 9. Data-Parallel CSR `IndexedCoproduct` Algebra (`FiniteFunction.converse`, `IndexedCoproduct.flatmap`, `operationAdjacencyCsr`, `layerHypergraphCsr`) (`arXiv:2305.01041`) -/
+
+/-- Length of the lookup table of a `FiniteFunction`. -/
+def FiniteFunction.length (f : FiniteFunction) : Nat :=
+  f.table.length
+
+/-- Evaluate a `FiniteFunction` at domain index `i : Nat`, returning `some (f(i))` when
+`i < f.table.length`, or `none` otherwise. -/
+def FiniteFunction.eval (f : FiniteFunction) (i : Nat) : Option Nat :=
+  f.table[i]?
+
+/-- Number of segments in an `IndexedCoproduct`. -/
+def IndexedCoproduct.numSegments (c : IndexedCoproduct) : Nat :=
+  c.sizes.table.length
+
+/-- Ordered list of domain indices `offset + k` where `xs[k]? = some w`. -/
+def preimageIndicesAux (offset w : Nat) : List Nat → List Nat
+  | [] => []
+  | x :: xs =>
+    if x == w then
+      offset :: preimageIndicesAux (offset + 1) w xs
+    else
+      preimageIndicesAux (offset + 1) w xs
+
+/-- Ordered preimage indices $i \in \{0, \dots, |f.\text{table}|-1\}$ mapped to codomain element $w$ by $f$. -/
+def FiniteFunction.preimageSegment (f : FiniteFunction) (w : Nat) : List Nat :=
+  preimageIndicesAux 0 w f.table
+
+/-- **Relational Converse / Preimage Family (`FiniteFunction.converse`, `arXiv:2305.01041`)**:
+Given a finite function $f : \{0, \dots, s-1\} \to \{0, \dots, t-1\}$, computes its relational
+converse / preimage family $\sum_{w \in \{0, \dots, t-1\}} f^{-1}(w) \to \{0, \dots, s-1\}$ as a
+CSR `IndexedCoproduct` whose `sizes` array has length `t` (`sizes[w] = count of i with f(i) = w`)
+and whose flat `values` array lists the preimage indices in ascending order for each $w = 0, \dots, t-1$. -/
+def FiniteFunction.converse (f : FiniteFunction) : IndexedCoproduct :=
+  IndexedCoproduct.fromSegments f.source
+    ((List.range f.target).map (fun w => f.preimageSegment w))
+
+theorem foldl_add_eq_add_sumNatList (acc : Nat) (xs : List Nat) :
+    xs.foldl (· + ·) acc = acc + sumNatList xs := by
+  induction xs generalizing acc with
+  | nil =>
+    simp [sumNatList]
+  | cons x rest ih =>
+    simp only [List.foldl_cons, sumNatList]
+    rw [ih (acc + x), ih (0 + x)]
+    omega
+
+theorem sumNatList_nil : sumNatList [] = 0 := rfl
+
+theorem sumNatList_cons (x : Nat) (xs : List Nat) :
+    sumNatList (x :: xs) = x + sumNatList xs := by
+  unfold sumNatList
+  simp only [List.foldl_cons, Nat.zero_add]
+  exact foldl_add_eq_add_sumNatList x xs
+
+theorem sumNatList_append (xs ys : List Nat) :
+    sumNatList (xs ++ ys) = sumNatList xs + sumNatList ys := by
+  induction xs with
+  | nil =>
+    simp [sumNatList_nil]
+  | cons x rest ih =>
+    simp only [List.cons_append, sumNatList_cons, ih]
+    omega
+
+theorem drop_add_length_append {α : Type} (s : List α) (rest : List α) (n : Nat) :
+    (s ++ rest).drop (s.length + n) = rest.drop n := by
+  induction s with
+  | nil =>
+    simp
+  | cons x xs ih =>
+    simp only [List.cons_append, List.length_cons, Nat.add_right_comm, Nat.add_assoc]
+    change (xs ++ rest).drop (xs.length + n) = rest.drop n
+    exact ih
+
+theorem take_length_append {α : Type} (s : List α) (rest : List α) :
+    (s ++ rest).take s.length = s := by
+  induction s with
+  | nil => rfl
+  | cons x xs ih =>
+    change x :: ((xs ++ rest).take xs.length) = x :: xs
+    exact congrArg (x :: ·) ih
+
+theorem segment_fromSegments_aux (segs : List (List Nat)) (k : Nat) :
+    (segs.flatten.drop (sumNatList ((segs.map List.length).take k))).take
+      ((segs.map List.length).getD k 0) = segs.getD k [] := by
+  induction segs generalizing k with
+  | nil =>
+    simp [List.getD]
+  | cons s rest ih =>
+    cases k with
+    | zero =>
+      exact take_length_append s rest.flatten
+    | succ k' =>
+      change ((s ++ rest.flatten).drop (sumNatList (s.length :: (rest.map List.length).take k'))).take
+        ((rest.map List.length).getD k' 0) = rest.getD k' []
+      rw [sumNatList_cons, drop_add_length_append]
+      exact ih k'
+
+/-- Extracting segment `k` from `IndexedCoproduct.fromSegments numWires segs` returns `segs.getD k []`. -/
+theorem segment_fromSegments (numWires : Nat) (segs : List (List Nat)) (k : Nat) :
+    (IndexedCoproduct.fromSegments numWires segs).segment k = segs.getD k [] := by
+  unfold IndexedCoproduct.fromSegments IndexedCoproduct.segment
+  exact segment_fromSegments_aux segs k
+
+theorem getD_map_range {α : Type} (n : Nat) (f : Nat → α) (k : Nat) (d : α) (hk : k < n) :
+    ((List.range n).map f).getD k d = f k := by
+  simp only [List.getD, List.getElem?_map]
+  have hRange : (List.range n)[k]? = some k := List.getElem?_range hk
+  rw [hRange]
+  rfl
+
+theorem getD_of_le_length {α : Type} (xs : List α) (k : Nat) (d : α) (hk : xs.length ≤ k) :
+    xs.getD k d = d := by
+  simp only [List.getD]
+  have hNone : xs[k]? = none := List.getElem?_eq_none hk
+  rw [hNone]
+  rfl
+
+theorem preimageIndicesAux_length (offset w : Nat) (xs : List Nat) :
+    (preimageIndicesAux offset w xs).length = (xs.filter (· == w)).length := by
+  induction xs generalizing offset with
+  | nil => rfl
+  | cons x rest ih =>
+    dsimp only [preimageIndicesAux, List.filter]
+    by_cases h : (x == w) = true
+    · simp [h, ih (offset + 1)]
+    · have hf : (x == w) = false := Bool.eq_false_iff.mpr h
+      simp [hf, ih (offset + 1)]
+
+theorem filter_lt_zero_nil (xs : List Nat) :
+    xs.filter (fun x => decide (x < 0)) = [] := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp [List.filter, ih]
+
+theorem filter_lt_succ_length (xs : List Nat) (t : Nat) :
+    (xs.filter (fun x => decide (x < t + 1))).length =
+      (xs.filter (fun x => decide (x < t))).length + (xs.filter (· == t)).length := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp only [List.filter]
+    by_cases h1 : x < t
+    · have h2 : x < t + 1 := by omega
+      have h3 : (x == t) = false := beq_eq_false_iff_ne.mpr (by omega)
+      simp [decide_eq_true h1, decide_eq_true h2, h3, ih]
+      omega
+    · by_cases hEq : x = t
+      · subst hEq
+        have h2 : x < x + 1 := by omega
+        have h3 : (x == x) = true := beq_self_eq_true x
+        simp [decide_eq_false h1, decide_eq_true h2, h3, ih]
+        omega
+      · have h2 : ¬(x < t + 1) := by omega
+        have h3 : (x == t) = false := beq_eq_false_iff_ne.mpr hEq
+        simp [decide_eq_false h1, decide_eq_false h2, h3, ih]
+
+theorem sum_filter_beq_range (xs : List Nat) (t : Nat) :
+    sumNatList ((List.range t).map (fun w => (xs.filter (· == w)).length)) =
+      (xs.filter (fun x => decide (x < t))).length := by
+  induction t with
+  | zero =>
+    rw [filter_lt_zero_nil]
+    rfl
+  | succ k ih =>
+    rw [List.range_succ, List.map_append, sumNatList_append, ih, filter_lt_succ_length]
+    simp [sumNatList_cons, sumNatList_nil]
+
+/-- **Theorem (`converse_wellFormed`)**:
+For EVERY `f : FiniteFunction`:
+1. `f.converse.sizes.length = f.target` and `f.converse.sizes.table.length = f.target`,
+2. `f.converse.numSegments = f.target`, and
+3. `sumNatList f.converse.sizes.table = (f.table.filter (· < f.target)).length`! -/
+theorem converse_wellFormed (f : FiniteFunction) :
+    f.converse.sizes.length = f.target ∧
+    f.converse.sizes.table.length = f.target ∧
+    f.converse.numSegments = f.target ∧
+    sumNatList f.converse.sizes.table = (f.table.filter (fun y => decide (y < f.target))).length := by
+  have hLen : f.converse.sizes.table.length = f.target := by
+    simp [FiniteFunction.converse, IndexedCoproduct.fromSegments]
+  refine ⟨hLen, hLen, hLen, ?_⟩
+  dsimp only [FiniteFunction.converse, IndexedCoproduct.fromSegments]
+  rw [List.map_map]
+  have hMap :
+      List.map (List.length ∘ fun w => f.preimageSegment w) (List.range f.target) =
+        (List.range f.target).map (fun w => (f.table.filter (· == w)).length) := by
+    apply List.map_congr_left
+    intro w _
+    exact preimageIndicesAux_length 0 w f.table
+  rw [hMap]
+  exact sum_filter_beq_range f.table f.target
+
+theorem mem_preimageIndicesAux_ge (offset w i : Nat) (xs : List Nat)
+    (hMem : i ∈ preimageIndicesAux offset w xs) :
+    offset ≤ i := by
+  induction xs generalizing offset with
+  | nil =>
+    cases hMem
+  | cons x rest ih =>
+    dsimp only [preimageIndicesAux] at hMem
+    split at hMem
+    · cases List.mem_cons.mp hMem with
+      | inl hEq => omega
+      | inr hRest =>
+        have hGe := ih (offset + 1) hRest
+        omega
+    · have hGe := ih (offset + 1) hMem
+      omega
+
+theorem mem_preimageIndicesAux_iff (offset w i : Nat) (xs : List Nat) :
+    i ∈ preimageIndicesAux offset w xs ↔ offset ≤ i ∧ xs[i - offset]? = some w := by
+  induction xs generalizing offset with
+  | nil =>
+    simp [preimageIndicesAux]
+  | cons x rest ih =>
+    dsimp only [preimageIndicesAux]
+    by_cases hLt : i < offset
+    · constructor
+      · intro hMem
+        have hGe := mem_preimageIndicesAux_ge offset w i (x :: rest) hMem
+        omega
+      · rintro ⟨hGe, _⟩
+        omega
+    · by_cases hEq : i = offset
+      · subst hEq
+        have hSub : i - i = 0 := Nat.sub_self i
+        rw [hSub]
+        change i ∈ (if x == w then i :: preimageIndicesAux (i + 1) w rest else preimageIndicesAux (i + 1) w rest) ↔
+          i ≤ i ∧ some x = some w
+        by_cases hxw : (x == w) = true
+        · have hxEq : x = w := beq_iff_eq.mp hxw
+          simp [hxEq]
+        · have hxf : (x == w) = false := Bool.eq_false_iff.mpr hxw
+          have hxNe : x ≠ w := beq_eq_false_iff_ne.mp hxf
+          simp only [hxf, Bool.false_eq_true, ↓reduceIte, Nat.le_refl, true_and, Option.some.injEq]
+          constructor
+          · intro hMem
+            have hGe := mem_preimageIndicesAux_ge (i + 1) w i rest hMem
+            omega
+          · intro hContra
+            exact absurd hContra hxNe
+      · have hGt : offset + 1 ≤ i := by omega
+        have hNe : i ≠ offset := hEq
+        have hMemStep :
+            i ∈ (if x == w then offset :: preimageIndicesAux (offset + 1) w rest else preimageIndicesAux (offset + 1) w rest) ↔
+              i ∈ preimageIndicesAux (offset + 1) w rest := by
+          by_cases hxw : (x == w) = true
+          · simp [hxw, hNe]
+          · have hxf : (x == w) = false := Bool.eq_false_iff.mpr hxw
+            simp [hxf]
+        rw [hMemStep, ih (offset + 1)]
+        have hSubSucc : i - offset = (i - (offset + 1)) + 1 := by omega
+        rw [hSubSucc]
+        change (offset + 1 ≤ i ∧ rest[i - (offset + 1)]? = some w) ↔
+          (offset ≤ i ∧ rest[i - (offset + 1)]? = some w)
+        constructor
+        · rintro ⟨_, hSome⟩
+          exact ⟨by omega, hSome⟩
+        · rintro ⟨_, hSome⟩
+          exact ⟨hGt, hSome⟩
+
+/-- **Theorem (`mem_converse_segment_iff`)**:
+For any `f : FiniteFunction`, codomain element $w < f.\text{target}$, and domain index $i$
+(including all $i < f.\text{source}$), $i$ appears in segment $w$ of `f.converse`
+**if and only if** `f.eval i = some w`! -/
+theorem mem_converse_segment_iff (f : FiniteFunction) (w i : Nat) (hw : w < f.target) :
+    i ∈ f.converse.segment w ↔ f.eval i = some w := by
+  unfold FiniteFunction.converse
+  rw [segment_fromSegments, getD_map_range f.target (fun u => f.preimageSegment u) w [] hw]
+  unfold FiniteFunction.preimageSegment FiniteFunction.eval
+  rw [mem_preimageIndicesAux_iff 0 w i f.table]
+  simp
+
+/-- **CSR Segmented `IndexedCoproduct.flatmap` (`arXiv:2305.01041`)**:
+Given a segmented CSR array `c` with values in $\{0, \dots, \text{sub.numSegments}-1\}$, replaces
+each element $w$ in segment $e$ of `c` with the entire segment `sub.segment w`, producing a new
+CSR `IndexedCoproduct` with `c.sizes.length` segments over codomain `sub.values.target`. -/
+def IndexedCoproduct.flatmap (c : IndexedCoproduct) (sub : IndexedCoproduct) : IndexedCoproduct :=
+  IndexedCoproduct.fromSegments sub.values.target
+    ((List.range c.sizes.table.length).map (fun e =>
+      ((c.segment e).map (fun w => sub.segment w)).flatten))
+
+/-- **Theorem (`flatmap_numSegments`)**:
+For EVERY pair of CSR `IndexedCoproduct`s `c` and `sub`, `c.flatmap sub` preserves the exact
+number of segments:
+`(c.flatmap sub).sizes.length = c.sizes.length` and `(c.flatmap sub).numSegments = c.numSegments`. -/
+theorem flatmap_numSegments (c sub : IndexedCoproduct) :
+    (c.flatmap sub).sizes.length = c.sizes.length ∧
+    (c.flatmap sub).sizes.table.length = c.sizes.table.length ∧
+    (c.flatmap sub).numSegments = c.numSegments := by
+  simp [IndexedCoproduct.flatmap, IndexedCoproduct.fromSegments,
+    FiniteFunction.length, IndexedCoproduct.numSegments]
+
+theorem segment_flatmap_eq (c sub : IndexedCoproduct) (e : Nat) :
+    (c.flatmap sub).segment e = ((c.segment e).map (fun w => sub.segment w)).flatten := by
+  unfold IndexedCoproduct.flatmap
+  rw [segment_fromSegments]
+  by_cases he : e < c.sizes.table.length
+  · exact getD_map_range c.sizes.table.length
+      (fun u => ((c.segment u).map (fun w => sub.segment w)).flatten) e [] he
+  · have hLe : c.sizes.table.length ≤ e := by omega
+    have hMapLe : ((List.range c.sizes.table.length).map
+        (fun u => ((c.segment u).map (fun w => sub.segment w)).flatten)).length ≤ e := by
+      simp [hLe]
+    rw [getD_of_le_length _ e [] hMapLe]
+    have hSegEmpty : c.segment e = [] := by
+      unfold IndexedCoproduct.segment
+      rw [getD_of_le_length c.sizes.table e 0 hLe]
+      rfl
+    rw [hSegEmpty]
+    rfl
+
+/-- **Theorem (`mem_flatmap_segment_iff`)**:
+For EVERY pair of CSR `IndexedCoproduct`s `c, sub` and EVERY segment index `e` and value `j`:
+$$j \in (c.\text{flatmap } \text{sub}).\text{segment } e \iff \exists w \in c.\text{segment } e,\; j \in \text{sub.segment } w.$$ -/
+theorem mem_flatmap_segment_iff (c sub : IndexedCoproduct) (e j : Nat) :
+    j ∈ (c.flatmap sub).segment e ↔ ∃ w ∈ c.segment e, j ∈ sub.segment w := by
+  rw [segment_flatmap_eq, List.mem_flatten]
+  simp only [List.mem_map]
+  constructor
+  · rintro ⟨l, ⟨w, hw, rfl⟩, hj⟩
+    exact ⟨w, hw, hj⟩
+  · rintro ⟨w, hw, hj⟩
+    exact ⟨sub.segment w, ⟨w, hw, rfl⟩, hj⟩
+
+/-- CSR segmented array mapping each hyperedge index $e \in \{0, \dots, |E|-1\}$ to its source wires. -/
+def sourcesCsr (numWires : Nat) (edges : List HyperEdge) : IndexedCoproduct :=
+  IndexedCoproduct.fromSegments numWires (edges.map (·.srcWires))
+
+/-- CSR segmented array mapping each hyperedge index $e \in \{0, \dots, |E|-1\}$ to its target wire(s). -/
+def targetsCsr (numWires : Nat) (edges : List HyperEdge) : IndexedCoproduct :=
+  IndexedCoproduct.fromSegments numWires (edges.map (fun e => [e.dstWire]))
+
+/-- Flat port-to-hyperedge owner table mapping each flat input port $p \in \sum_e |e.\text{srcWires}|$
+to the index $e \in \{0, \dots, |E|-1\}$ of its owning consumer hyperedge. -/
+def sourcePortOwnerTable (edges : List HyperEdge) : List Nat :=
+  (edges.zipIdx.map (fun (e, idx) => List.replicate e.srcWires.length idx)).flatten
+
+/-- CSR `IndexedCoproduct` mapping each wire $w \in \{0, \dots, \text{numWires}-1\}$ to the producer
+hyperedges $e_1$ that write $w$, computed directly as `(targetsCsr numWires edges).values.converse`. -/
+def wireProducersCsr (numWires : Nat) (edges : List HyperEdge) : IndexedCoproduct :=
+  (targetsCsr numWires edges).values.converse
+
+/-- CSR `IndexedCoproduct` mapping each wire $w \in \{0, \dots, \text{numWires}-1\}$ to the consumer
+hyperedges $e_2$ that read $w$, computed by composing `(sourcesCsr numWires edges).values.converse`
+with `sourcePortOwnerTable edges`. -/
+def wireConsumersCsr (numWires : Nat) (edges : List HyperEdge) : IndexedCoproduct :=
+  let portConv := (sourcesCsr numWires edges).values.converse
+  { sizes  := portConv.sizes
+  , values :=
+      { source := portConv.values.source
+      , target := edges.length
+      , table  := portConv.values.table.map (fun p => (sourcePortOwnerTable edges).getD p 0) } }
+
+/-- **CSR Operation Predecessor Table (`operationPredecessorsCsr`)**:
+Maps each consumer hyperedge $e_2$ to the flat segment of producer hyperedges $e_1$ that write a
+wire read by $e_2$, computed via `IndexedCoproduct.flatmap` and `FiniteFunction.converse`:
+`(sourcesCsr numWires edges).flatmap (wireProducersCsr numWires edges)`. -/
+def operationPredecessorsCsr (numWires : Nat) (edges : List HyperEdge) : IndexedCoproduct :=
+  (sourcesCsr numWires edges).flatmap (wireProducersCsr numWires edges)
+
+/-- **CSR Operation Adjacency Table (`operationAdjacencyCsr`)**:
+Maps each producer hyperedge $e_1$ to the flat segment of consumer hyperedges $e_2$ that read a
+wire written by $e_1$, computed via `IndexedCoproduct.flatmap` and `FiniteFunction.converse`:
+`(targetsCsr numWires edges).flatmap (wireConsumersCsr numWires edges)`. -/
+def operationAdjacencyCsr (numWires : Nat) (edges : List HyperEdge) : IndexedCoproduct :=
+  (targetsCsr numWires edges).flatmap (wireConsumersCsr numWires edges)
+
+theorem drop_map_eq {α β : Type} (f : α → β) (xs : List α) (n : Nat) :
+    (xs.map f).drop n = (xs.drop n).map f := by
+  induction xs generalizing n with
+  | nil =>
+    cases n <;> rfl
+  | cons x rest ih =>
+    cases n with
+    | zero => rfl
+    | succ k => exact ih k
+
+theorem take_map_eq {α β : Type} (f : α → β) (xs : List α) (n : Nat) :
+    (xs.map f).take n = (xs.take n).map f := by
+  induction xs generalizing n with
+  | nil =>
+    cases n <;> rfl
+  | cons x rest ih =>
+    cases n with
+    | zero => rfl
+    | succ k =>
+      change f x :: ((rest.map f).take k) = f x :: ((rest.take k).map f)
+      exact congrArg (f x :: ·) (ih k)
+
+theorem segment_wireConsumersCsr (numWires : Nat) (edges : List HyperEdge) (w : Nat) :
+    (wireConsumersCsr numWires edges).segment w =
+      (((sourcesCsr numWires edges).values.converse).segment w).map
+        (fun p => (sourcePortOwnerTable edges).getD p 0) := by
+  unfold wireConsumersCsr IndexedCoproduct.segment
+  dsimp only
+  rw [drop_map_eq, take_map_eq]
+
+/-- **Theorem (`operationAdjacencyCsr_sound`)**:
+1. **Universal CSR Producer-to-Consumer Adjacency Characterization**:
+   For EVERY `numWires : Nat`, `edges : List HyperEdge`, and hyperedge indices `e1, e2 : Nat`,
+   $e_2 \in (\text{operationAdjacencyCsr numWires edges}).\text{segment } e_1$ iff there exists a
+   written wire $w \in (\text{targetsCsr numWires edges}).\text{segment } e_1$ and a flat input
+   port $p \in ((\text{sourcesCsr numWires edges}).\text{values.converse}).\text{segment } w$
+   owned by $e_2$ (`(sourcePortOwnerTable edges).getD p 0 = e2`).
+2. **Universal CSR Consumer-to-Producer Predecessor Characterization**:
+   For EVERY `numWires : Nat`, `edges : List HyperEdge`, and `e1, e2 : Nat`,
+   $e_1 \in (\text{operationPredecessorsCsr numWires edges}).\text{segment } e_2$ iff there exists a
+   source wire $w \in (\text{sourcesCsr numWires edges}).\text{segment } e_2$ such that
+   $e_1 \in ((\text{targetsCsr numWires edges}).\text{values.converse}).\text{segment } w$.
+3. **Concrete Kernel Verification on `goldenDiamondHypergraph`**:
+   `operationAdjacencyCsr` and `operationPredecessorsCsr` recover the exact diamond DAG adjacency
+   (`0 → [2]`, `1 → [2]`, `2 → [4]`, `3 → [4]`, `4 → []`) and predecessor segments
+   (`0 ← []`, `1 ← []`, `2 ← [0, 1]`, `3 ← []`, `4 ← [2, 3]`)! -/
+theorem operationAdjacencyCsr_sound
+    (numWires : Nat) (edges : List HyperEdge) (e1 e2 : Nat) :
+    (e2 ∈ (operationAdjacencyCsr numWires edges).segment e1 ↔
+      ∃ w ∈ (targetsCsr numWires edges).segment e1,
+        ∃ p ∈ ((sourcesCsr numWires edges).values.converse).segment w,
+          (sourcePortOwnerTable edges).getD p 0 = e2) ∧
+    (e1 ∈ (operationPredecessorsCsr numWires edges).segment e2 ↔
+      ∃ w ∈ (sourcesCsr numWires edges).segment e2,
+        e1 ∈ ((targetsCsr numWires edges).values.converse).segment w) ∧
+    (let dEdges := extractHyperEdges goldenDiamondHypergraph
+     let adj := operationAdjacencyCsr 9 dEdges
+     let preds := operationPredecessorsCsr 9 dEdges
+     [adj.segment 0, adj.segment 1, adj.segment 2, adj.segment 3, adj.segment 4] =
+       [[2], [2], [4], [4], []] ∧
+     [preds.segment 0, preds.segment 1, preds.segment 2, preds.segment 3, preds.segment 4] =
+       [[], [], [0, 1], [], [2, 3]]) := by
+  have hAdj :
+      e2 ∈ (operationAdjacencyCsr numWires edges).segment e1 ↔
+        ∃ w ∈ (targetsCsr numWires edges).segment e1,
+          ∃ p ∈ ((sourcesCsr numWires edges).values.converse).segment w,
+            (sourcePortOwnerTable edges).getD p 0 = e2 := by
+    unfold operationAdjacencyCsr
+    rw [mem_flatmap_segment_iff]
+    constructor
+    · rintro ⟨w, hw, he2⟩
+      rw [segment_wireConsumersCsr, List.mem_map] at he2
+      rcases he2 with ⟨p, hp, rfl⟩
+      exact ⟨w, hw, p, hp, rfl⟩
+    · rintro ⟨w, hw, p, hp, rfl⟩
+      refine ⟨w, hw, ?_⟩
+      rw [segment_wireConsumersCsr, List.mem_map]
+      exact ⟨p, hp, rfl⟩
+  have hPreds :
+      e1 ∈ (operationPredecessorsCsr numWires edges).segment e2 ↔
+        ∃ w ∈ (sourcesCsr numWires edges).segment e2,
+          e1 ∈ ((targetsCsr numWires edges).values.converse).segment w := by
+    unfold operationPredecessorsCsr wireProducersCsr
+    exact mem_flatmap_segment_iff (sourcesCsr numWires edges) ((targetsCsr numWires edges).values.converse) e2 e1
+  refine ⟨hAdj, hPreds, by decide +kernel⟩
+
+/-- Check whether hyperedge `idx` has all its CSR producer hyperedges already in `scheduled`. -/
+def csrEdgeReady (predsCsr : IndexedCoproduct) (scheduled : List Nat) (idx : Nat) : Bool :=
+  (predsCsr.segment idx).all (fun p => (p == idx) || scheduled.contains p)
+
+/-- Filter ready frontier edges into a conflict-free parallel wavefront stage (`picked`) and
+remaining deferred edges (`deferred`), guaranteeing `checkStageIndependent (picked.map Prod.fst) = true`. -/
+def filterIndependentWavefront :
+    List (HyperEdge × Nat) → List (HyperEdge × Nat) × List (HyperEdge × Nat)
+  | [] => ([], [])
+  | (e, idx) :: rest =>
+    let (picked, deferred) := filterIndependentWavefront rest
+    if edgeIndependentOfStage e (picked.map Prod.fst) then
+      ((e, idx) :: picked, deferred)
+    else
+      (picked, (e, idx) :: deferred)
+
+/-- Peel one parallel CSR wavefront stage from `remaining` unscheduled hyperedges:
+all unscheduled edges whose CSR producer edges are already scheduled (and that have no WAW/WAR
+hazard with earlier unscheduled edges) fire simultaneously in the current wavefront. -/
+def peelCsrWavefrontStage
+    (predsCsr : IndexedCoproduct)
+    (scheduled : List Nat)
+    (remaining : List (HyperEdge × Nat)) :
+    List HyperEdge × List Nat × List (HyperEdge × Nat) :=
+  let (readyRaw, blocked) :=
+    remaining.partition (fun (e, idx) =>
+      csrEdgeReady predsCsr scheduled idx &&
+      edgeIndependentOfStage e ((remaining.takeWhile (fun (_, j) => j != idx)).map Prod.fst))
+  let (picked, deferred) := filterIndependentWavefront readyRaw
+  match picked with
+  | [] =>
+    match remaining with
+    | [] => ([], scheduled, [])
+    | (e, idx) :: rest => ([e], idx :: scheduled, rest)
+  | _ =>
+    (picked.map Prod.fst, (picked.map Prod.snd) ++ scheduled, deferred ++ blocked)
+
+/-- Fuel-bounded CSR parallel frontier-peeling loop. -/
+def layerHyperEdgesCsrAux
+    (predsCsr : IndexedCoproduct)
+    (scheduled : List Nat) :
+    Nat → List (HyperEdge × Nat) → List (List HyperEdge)
+  | 0, _ => []
+  | _, [] => []
+  | fuel + 1, remaining@(_ :: _) =>
+    let (stage, scheduled', remaining') := peelCsrWavefrontStage predsCsr scheduled remaining
+    stage :: layerHyperEdgesCsrAux predsCsr scheduled' fuel remaining'
+
+/-- Compute wavefront stages from CSR producer/in-degree tables by parallel frontier peeling. -/
+def layerHyperEdgesCsr (numWires : Nat) (edges : List HyperEdge) : List (List HyperEdge) :=
+  let predsCsr := operationPredecessorsCsr numWires edges
+  layerHyperEdgesCsrAux predsCsr [] edges.length edges.zipIdx
+
+/-- **Data-Parallel CSR Wavefront Layering (`layerHypergraphCsr`)**:
+Computes synchronous wavefront stages from the CSR in-degree/producer tables
+(`operationPredecessorsCsr`) by parallel frontier peeling. -/
+def layerHypergraphCsr (g : StrictOpenHypergraph) : List (List HyperEdge) :=
+  layerHyperEdgesCsr g.nodeTypes.length (extractHyperEdges g)
+
+/-- Evaluate a `StrictOpenHypergraph` stage-by-stage using CSR wavefront layering (`layerHypergraphCsr`). -/
+def evalHypergraphLayeredCsr (g : StrictOpenHypergraph) (initEnv : Nat → Int) : List Int :=
+  let finalEnv := evalLayeredStages initEnv (layerHypergraphCsr g)
+  g.boundaryOut.table.map finalEnv
+
+/-- Evaluate a `StrictOpenHypergraph` stage-by-stage using CSR wavefront layering and true
+synchronous stage-entry register snapshots (`evalLayeredStagesSync`). -/
+def evalHypergraphLayeredCsrSync (g : StrictOpenHypergraph) (initEnv : Nat → Int) : List Int :=
+  let finalEnv := evalLayeredStagesSync initEnv (layerHypergraphCsr g)
+  g.boundaryOut.table.map finalEnv
+
+theorem filterIndependentWavefront_independent (xs : List (HyperEdge × Nat)) :
+    checkStageIndependent ((filterIndependentWavefront xs).1.map Prod.fst) = true := by
+  induction xs with
+  | nil => rfl
+  | cons pair rest ih =>
+    rcases pair with ⟨e, idx⟩
+    dsimp only [filterIndependentWavefront]
+    by_cases hInd : edgeIndependentOfStage e ((filterIndependentWavefront rest).1.map Prod.fst) = true
+    · simp [hInd, checkStageIndependent, ih]
+    · simp [hInd, ih]
+
+theorem peelCsrWavefrontStage_independent
+    (predsCsr : IndexedCoproduct)
+    (scheduled : List Nat)
+    (remaining : List (HyperEdge × Nat)) :
+    checkStageIndependent (peelCsrWavefrontStage predsCsr scheduled remaining).1 = true := by
+  unfold peelCsrWavefrontStage
+  dsimp only
+  have hFilt := filterIndependentWavefront_independent
+    ((remaining.partition (fun (e, idx) =>
+      csrEdgeReady predsCsr scheduled idx &&
+      edgeIndependentOfStage e ((remaining.takeWhile (fun (_, j) => j != idx)).map Prod.fst))).1)
+  cases hPicked : (filterIndependentWavefront
+    ((remaining.partition (fun (e, idx) =>
+      csrEdgeReady predsCsr scheduled idx &&
+      edgeIndependentOfStage e ((remaining.takeWhile (fun (_, j) => j != idx)).map Prod.fst))).1)).1 with
+  | nil =>
+    cases remaining with
+    | nil => rfl
+    | cons hd tl =>
+      rcases hd with ⟨e, idx⟩
+      rfl
+  | cons p ps =>
+    rw [hPicked] at hFilt
+    exact hFilt
+
+theorem layerHyperEdgesCsrAux_all_independent
+    (predsCsr : IndexedCoproduct)
+    (scheduled : List Nat)
+    (fuel : Nat)
+    (remaining : List (HyperEdge × Nat)) :
+    (layerHyperEdgesCsrAux predsCsr scheduled fuel remaining).all checkStageIndependent = true := by
+  induction fuel generalizing scheduled remaining with
+  | zero => rfl
+  | succ k ih =>
+    cases remaining with
+    | nil => rfl
+    | cons hd tl =>
+      dsimp only [layerHyperEdgesCsrAux, List.all_cons]
+      rw [peelCsrWavefrontStage_independent, Bool.true_and]
+      exact ih _ _
+
+/-- **Theorem (`layerHypergraphCsr_sound_and_agrees`)**:
+1. **Universal CSR Wavefront Stage Independence & Synchronous Equivalence**:
+   For EVERY `StrictOpenHypergraph` `g` and EVERY initial wire environment `initEnv : Nat → Int`:
+   - Every wavefront stage produced by `layerHypergraphCsr g` is conflict-free
+     (`(layerHypergraphCsr g).all checkStageIndependent = true`),
+   - True synchronous stage-entry snapshot evaluation (`evalLayeredStagesSync initEnv (layerHypergraphCsr g)`)
+     equals sequential stage evaluation (`evalLayeredStages initEnv (layerHypergraphCsr g)`), and
+   - `evalHypergraphLayeredCsrSync g initEnv = evalHypergraphLayeredCsr g initEnv`.
+2. **Symbolic & Concrete Agreement with `layerHypergraph` and `evalHypergraphComb` on `goldenDiamondHypergraph`
+   and Multi-Stage Reverse-AD Pipelines (`compileGraphAdjoint goldenDiamondHypergraph`)**:
+   - On `goldenDiamondHypergraph`, `layerHypergraphCsr` peels 3 wavefront stages of sizes `[3, 1, 1]`
+     (coalescing `op 0`, `op 1`, and constant `op 3` into Wavefront 0), and for EVERY symbolic environment
+     `initEnv : Nat → Int`:
+     `evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv = evalHypergraphLayered goldenDiamondHypergraph initEnv`
+     and `evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv = evalHypergraphComb goldenDiamondHypergraph initEnv`!
+   - On the 12-operation multi-stage reverse-mode AD pipeline `compileGraphAdjoint goldenDiamondHypergraph`,
+     `evalHypergraphLayeredCsr` and `evalHypergraphLayeredCsrSync` agree with `evalHypergraphLayered`
+     and `evalHypergraphComb` (`[87, 11, 11, 7, 7]`)! -/
+theorem layerHypergraphCsr_sound_and_agrees
+    (g : StrictOpenHypergraph) (initEnv : Nat → Int) :
+    let diamondEnv : Nat → Int := fun w =>
+      match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
+    (layerHypergraphCsr g).all checkStageIndependent = true ∧
+    evalLayeredStagesSync initEnv (layerHypergraphCsr g) =
+      evalLayeredStages initEnv (layerHypergraphCsr g) ∧
+    evalHypergraphLayeredCsrSync g initEnv =
+      evalHypergraphLayeredCsr g initEnv ∧
+    ((layerHypergraphCsr goldenDiamondHypergraph).map List.length = [3, 1, 1]) ∧
+    evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
+      evalHypergraphLayered goldenDiamondHypergraph initEnv ∧
+    evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
+      evalHypergraphComb goldenDiamondHypergraph initEnv ∧
+    evalHypergraphLayeredCsr (compileGraphAdjoint goldenDiamondHypergraph) diamondEnv =
+      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph) diamondEnv ∧
+    evalHypergraphLayeredCsrSync (compileGraphAdjoint goldenDiamondHypergraph) diamondEnv =
+      [87, 11, 11, 7, 7] := by
+  have hInd : (layerHypergraphCsr g).all checkStageIndependent = true :=
+    layerHyperEdgesCsrAux_all_independent _ [] _ _
+  have hSync :
+      evalLayeredStagesSync initEnv (layerHypergraphCsr g) =
+        evalLayeredStages initEnv (layerHypergraphCsr g) :=
+    evalLayeredStagesSync_eq_evalLayeredStages initEnv (layerHypergraphCsr g) hInd
+  have hOutSync :
+      evalHypergraphLayeredCsrSync g initEnv = evalHypergraphLayeredCsr g initEnv := by
+    unfold evalHypergraphLayeredCsrSync evalHypergraphLayeredCsr
+    rw [hSync]
+  have hDiamondComb :
+      evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
+        evalHypergraphComb goldenDiamondHypergraph initEnv := rfl
+  have hDiamondLay :
+      evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
+        evalHypergraphLayered goldenDiamondHypergraph initEnv := rfl
+  refine ⟨hInd, hSync, hOutSync, by decide +kernel, hDiamondLay, hDiamondComb, by decide +kernel, by decide +kernel⟩
+
+/-- Broken `FiniteFunction.converse` that produces 0 segments. -/
+def converseEmptyBug (f : FiniteFunction) : IndexedCoproduct :=
+  IndexedCoproduct.fromSegments f.source []
+
+#tooth converse_wellFormed by mutation FiniteFunction.converse := converseEmptyBug
+#tooth mem_converse_segment_iff by mutation FiniteFunction.converse := converseEmptyBug
+#tooth operationAdjacencyCsr_sound by mutation FiniteFunction.converse := converseEmptyBug
+
+/-- Broken `IndexedCoproduct.flatmap` that drops all sub-segments and returns empty segments. -/
+def flatmapDropSegmentsBug (c : IndexedCoproduct) (sub : IndexedCoproduct) : IndexedCoproduct :=
+  IndexedCoproduct.fromSegments sub.values.target []
+
+#tooth flatmap_numSegments by mutation IndexedCoproduct.flatmap := flatmapDropSegmentsBug
+#tooth mem_flatmap_segment_iff by mutation IndexedCoproduct.flatmap := flatmapDropSegmentsBug
+#tooth operationAdjacencyCsr_sound by mutation IndexedCoproduct.flatmap := flatmapDropSegmentsBug
+
+/-- Broken `layerHypergraphCsr` that drops all wavefront stages. -/
+def layerHypergraphCsrEmptyBug (_g : StrictOpenHypergraph) : List (List HyperEdge) := []
+
+#tooth layerHypergraphCsr_sound_and_agrees by mutation layerHypergraphCsr := layerHypergraphCsrEmptyBug
 
 end Obend.Hardware.OpenHypergraph
 end

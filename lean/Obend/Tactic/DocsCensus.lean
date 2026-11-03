@@ -1,3 +1,4 @@
+module
 /-
 # `Obend.Tactic.DocsCensus` — Compile-Time Top-Level Markdown Census Gate
 
@@ -9,7 +10,10 @@ reference only existing `lean/Obend/.../*.lean` modules and valid `Obend.*`
 subsystems.
 -/
 
-import Lean
+public import Lean
+public meta import Lean
+
+@[expose] public section
 
 namespace Obend.Tactic.DocsCensus
 
@@ -70,6 +74,12 @@ def charsEndsWith (suf : List Char) (cs : List Char) : Bool :=
 def stripTrailingDotChars (cs : List Char) : List Char :=
   (cs.reverse.dropWhile (· == '.')).reverse
 
+/-- Join a list of path components with `"/"` (`@[expose]`-friendly for kernel reduction). -/
+def joinWithSlash : List String → String
+  | [] => ""
+  | [s] => s
+  | s :: rest => s ++ "/" ++ joinWithSlash rest
+
 /-- Extract normalized `Obend/.../*.lean` relative paths from a single token character list. -/
 def tokenCharsToObendLeanPath? (raw : List Char) : Option String :=
   let tok := stripTrailingDotChars raw
@@ -81,7 +91,7 @@ def tokenCharsToObendLeanPath? (raw : List Char) : Option String :=
     match tail with
     | "Obend" :: rest =>
         if !rest.isEmpty && tail.all (fun p => p != "" && p != "." && p != "..") then
-          some (String.intercalate "/" tail)
+          some (joinWithSlash tail)
         else
           none
     | _ => none
@@ -200,14 +210,164 @@ def runDocsCensus (docs : List String := topLevelMarkdownDocs) : IO CensusReport
     missingRoots := missingRoots
   }
 
+meta def metaTopLevelMarkdownDocs : List String :=
+  [ "DESIGN.md"
+  , "PLAN.md"
+  , "METATHEORY.md"
+  , "PHYSICAL.md"
+  , "SILICON-ELABORATOR.md"
+  , "NEXT-MATHEMATICA.md"
+  , "DEOS-CONTRACTS-CONSENSUS.md"
+  ]
+
+meta def metaIsTokenChar (c : Char) : Bool :=
+  c.isAlphanum || c == '_' || c == '/' || c == '.'
+
+meta def metaTokenizeChars (cs : List Char) (cur : List Char) (acc : List (List Char)) : List (List Char) :=
+  match cs with
+  | [] =>
+      match cur with
+      | [] => acc.reverse
+      | _ => (cur.reverse :: acc).reverse
+  | c :: rest =>
+      if metaIsTokenChar c then
+        metaTokenizeChars rest (c :: cur) acc
+      else
+        match cur with
+        | [] => metaTokenizeChars rest [] acc
+        | _ => metaTokenizeChars rest [] (cur.reverse :: acc)
+
+meta def metaSplitCharsOn (sep : Char) (cs : List Char) (cur : List Char) (acc : List String) : List String :=
+  match cs with
+  | [] => (String.ofList cur.reverse :: acc).reverse
+  | c :: rest =>
+      if c == sep then
+        metaSplitCharsOn sep rest [] (String.ofList cur.reverse :: acc)
+      else
+        metaSplitCharsOn sep rest (c :: cur) acc
+
+meta def metaCharsStartsWith (pre : List Char) (cs : List Char) : Bool :=
+  match pre, cs with
+  | [], _ => true
+  | _ :: _, [] => false
+  | p :: ps, c :: rest => (p == c) && metaCharsStartsWith ps rest
+
+meta def metaCharsEndsWith (suf : List Char) (cs : List Char) : Bool :=
+  metaCharsStartsWith suf.reverse cs.reverse
+
+meta def metaStripTrailingDotChars (cs : List Char) : List Char :=
+  (cs.reverse.dropWhile (· == '.')).reverse
+
+meta def metaJoinWithSlash : List String → String
+  | [] => ""
+  | [s] => s
+  | s :: rest => s ++ "/" ++ metaJoinWithSlash rest
+
+meta def metaTokenCharsToObendLeanPath? (raw : List Char) : Option String :=
+  let tok := metaStripTrailingDotChars raw
+  if !metaCharsEndsWith ['.','l','e','a','n'] tok then
+    none
+  else
+    let parts := metaSplitCharsOn '/' tok [] []
+    let tail := parts.dropWhile (· != "Obend")
+    match tail with
+    | "Obend" :: rest =>
+        if !rest.isEmpty && tail.all (fun p => p != "" && p != "." && p != "..") then
+          some (metaJoinWithSlash tail)
+        else
+          none
+    | _ => none
+
+meta def metaExtractObendLeanPaths (content : String) : List String :=
+  (metaTokenizeChars content.toList [] []).filterMap metaTokenCharsToObendLeanPath?
+
+meta def metaTokenCharsToObendDottedRoot? (raw : List Char) : Option String :=
+  let tok := metaStripTrailingDotChars raw
+  if metaCharsStartsWith ['O','b','e','n','d','.'] tok &&
+     !tok.contains '/' &&
+     !metaCharsEndsWith ['.','l','e','a','n'] tok then
+    match metaSplitCharsOn '.' tok [] [] with
+    | "Obend" :: sub :: _ =>
+        if sub != "" then some sub else none
+    | _ => none
+  else
+    none
+
+meta def metaExtractObendDottedRoots (content : String) : List String :=
+  (metaTokenizeChars content.toList [] []).filterMap metaTokenCharsToObendDottedRoot?
+
+meta def metaResolveRepoFile (relPath : String) : IO (Option System.FilePath) := do
+  let candidates : List System.FilePath :=
+    [ System.FilePath.mk relPath
+    , System.FilePath.mk ("../" ++ relPath)
+    ]
+  for c in candidates do
+    if ← c.pathExists then
+      return some c
+  return none
+
+meta def metaObendLeanPathExists (relObendPath : String) : IO Bool := do
+  let candidates : List System.FilePath :=
+    [ System.FilePath.mk relObendPath
+    , System.FilePath.mk ("lean/" ++ relObendPath)
+    , System.FilePath.mk ("../lean/" ++ relObendPath)
+    ]
+  for c in candidates do
+    if ← c.pathExists then
+      return true
+  return false
+
+meta def metaObendSubsystemExists (sub : String) : IO Bool := do
+  let fileRel := s!"Obend/{sub}.lean"
+  let dirRel := s!"Obend/{sub}"
+  let candidates : List System.FilePath :=
+    [ System.FilePath.mk fileRel
+    , System.FilePath.mk ("lean/" ++ fileRel)
+    , System.FilePath.mk ("../lean/" ++ fileRel)
+    , System.FilePath.mk dirRel
+    , System.FilePath.mk ("lean/" ++ dirRel)
+    , System.FilePath.mk ("../lean/" ++ dirRel)
+    ]
+  for c in candidates do
+    if ← c.pathExists then
+      return true
+  return false
+
+meta def metaRunDocsCensus (docs : List String := metaTopLevelMarkdownDocs) :
+    IO (Nat × Nat × Nat × List String × List (String × String) × List (String × String)) := do
+  let mut pathsChecked := 0
+  let mut rootsChecked := 0
+  let mut missingDocs : List String := []
+  let mut missingPaths : List (String × String) := []
+  let mut missingRoots : List (String × String) := []
+  for doc in docs do
+    match ← metaResolveRepoFile doc with
+    | none =>
+        missingDocs := missingDocs ++ [doc]
+    | some path =>
+        let content ← IO.FS.readFile path
+        let paths := metaExtractObendLeanPaths content
+        let roots := metaExtractObendDottedRoots content
+        for p in paths do
+          pathsChecked := pathsChecked + 1
+          unless ← metaObendLeanPathExists p do
+            if !missingPaths.contains (doc, p) then
+              missingPaths := missingPaths ++ [(doc, p)]
+        for r in roots do
+          rootsChecked := rootsChecked + 1
+          unless ← metaObendSubsystemExists r do
+            if !missingRoots.contains (doc, r) then
+              missingRoots := missingRoots ++ [(doc, r)]
+  return (docs.length, pathsChecked, rootsChecked, missingDocs, missingPaths, missingRoots)
+
 /-- `#check_docs_census` — compile-time gate verifying that all 7 top-level markdown
 documents exist and every `Obend/.../*.lean` path and `Obend.<Sub>.*` identifier
 referenced in them resolves to an existing file or subsystem in `lean/Obend/`. -/
 elab "#check_docs_census" : command => do
-  let report ← liftIO runDocsCensus
-  unless report.isClean do
-    throwError m!"#check_docs_census FAIL: missingDocs={report.missingDocs}, missingPaths={report.missingPaths}, missingRoots={report.missingRoots}"
-  logInfo m!"#check_docs_census: {report.docsChecked} markdown docs verified; {report.pathsChecked} Obend/*.lean path references and {report.rootsChecked} Obend.* namespace references resolve cleanly (0 stale references)."
+  let (docsChecked, pathsChecked, rootsChecked, missingDocs, missingPaths, missingRoots) ← liftIO metaRunDocsCensus
+  unless missingDocs.isEmpty && missingPaths.isEmpty && missingRoots.isEmpty do
+    throwError m!"#check_docs_census FAIL: missingDocs={missingDocs}, missingPaths={missingPaths}, missingRoots={missingRoots}"
+  logInfo m!"#check_docs_census: {docsChecked} markdown docs verified; {pathsChecked} Obend/*.lean path references and {rootsChecked} Obend.* namespace references resolve cleanly (0 stale references)."
 
 set_option maxRecDepth 20000 in
 theorem extractObendLeanPaths_sample :
@@ -222,3 +382,5 @@ theorem extractObendDottedRoots_sample :
 #check_docs_census
 
 end Obend.Tactic.DocsCensus
+
+end

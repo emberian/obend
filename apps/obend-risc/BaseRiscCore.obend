@@ -1,0 +1,46 @@
+edition ObjectiveBend 1
+# Flagship App #1 (Layer 1): Base RV64I/M Instruction Bit-Slice Decoders & ALU/Branch/Load-Store Core
+
+law monotone_cycle_cnt: monotone(cycleCounter)
+law bounded_reg_index: new.archRegIdx <= 31
+
+record BaseRiscCoreTarget:
+  addiOpcodeConst() -> Nat
+  immShiftDivisor() -> Nat
+  decodeOpcode(inst: Nat) -> Nat
+  decodeImm12(inst: Nat) -> Nat
+  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+
+spec BaseRv64iSpec for BaseRiscCoreTarget:
+  requires addiOpcodeConst() -> Nat
+  requires immShiftDivisor() -> Nat
+  def addiOpcodeConst() -> Nat:
+    19n
+  def immShiftDivisor() -> Nat:
+    1048576n
+  def decodeOpcode(inst: Nat) -> Nat:
+    inst % 128n
+  def decodeImm12(inst: Nat) -> Nat:
+    inst / self.immShiftDivisor
+  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
+    rs1Val + rs2Val + imm
+  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    rs1Val + rs2Val + self.addiOpcodeConst
+  claim base_decode_addi_opcode(): self.decodeOpcode(1048723n) == 19n
+  claim base_exec_add(): self.aluExec(13n, 21n, 0n) == 34n
+
+spec Rv64imMultiplyOverride for BaseRiscCoreTarget:
+  requires execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  def addiOpcodeConst() -> Nat:
+    19n
+  def immShiftDivisor() -> Nat:
+    1048576n
+  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    super.execInstruction(inst, rs1Val, rs2Val) + 4n
+
+def seedBaseRiscCore() -> BaseRiscCoreTarget:
+  {addiOpcodeConst: 0n, immShiftDivisor: 1n, decodeOpcode: fn(i: Nat) -> Nat: 0n, decodeImm12: fn(i: Nat) -> Nat: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
+
+def baseRiscCore() -> BaseRiscCoreTarget:
+  fix(compose(BaseRv64iSpec, Rv64imMultiplyOverride), seedBaseRiscCore())

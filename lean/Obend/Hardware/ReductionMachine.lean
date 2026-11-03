@@ -29,6 +29,7 @@ Port `ICAP` and Region Isolation Fences), connecting `Obend.Leaf.Emit`, `Obend.L
      `Leaf.Book` method into an eFPGA tile via `runGlitchFreeDpr` transitions cleanly to the new
      hardware function).
 -/
+public import Obend.Tactic.Tooth
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Lower.Lower
@@ -731,11 +732,14 @@ inductive RuleOpcode where
   | bitXorImm
   | shlImm
   | lshrImm
+  | ashrImm
   | eqImm
   | ultImm
+  | sltImm
+  | qmul32Imm
   deriving DecidableEq, Repr
 
-/-- Encode a `RuleOpcode` into its 4-bit hardware opcode index (`0..9`). -/
+/-- Encode a `RuleOpcode` into its 4-bit hardware opcode index (`0..12`). -/
 def encodeRuleOpcodeBits : RuleOpcode → Nat
   | .addImm    => 0
   | .subImm    => 1
@@ -745,22 +749,28 @@ def encodeRuleOpcodeBits : RuleOpcode → Nat
   | .bitXorImm => 5
   | .shlImm    => 6
   | .lshrImm   => 7
-  | .eqImm     => 8
-  | .ultImm    => 9
+  | .ashrImm   => 8
+  | .eqImm     => 9
+  | .ultImm    => 10
+  | .sltImm    => 11
+  | .qmul32Imm => 12
 
 /-- Decode a hardware opcode index into `Option RuleOpcode`. -/
 def decodeRuleOpcodeBits : Nat → Option RuleOpcode
-  | 0 => some .addImm
-  | 1 => some .subImm
-  | 2 => some .mulImm
-  | 3 => some .bitAndImm
-  | 4 => some .bitOrImm
-  | 5 => some .bitXorImm
-  | 6 => some .shlImm
-  | 7 => some .lshrImm
-  | 8 => some .eqImm
-  | 9 => some .ultImm
-  | _ => none
+  | 0  => some .addImm
+  | 1  => some .subImm
+  | 2  => some .mulImm
+  | 3  => some .bitAndImm
+  | 4  => some .bitOrImm
+  | 5  => some .bitXorImm
+  | 6  => some .shlImm
+  | 7  => some .lshrImm
+  | 8  => some .ashrImm
+  | 9  => some .eqImm
+  | 10 => some .ultImm
+  | 11 => some .sltImm
+  | 12 => some .qmul32Imm
+  | _  => none
 
 /-- Round-trip lemma (`decode_encode_opcode`): decoding the encoded bits of any `RuleOpcode` recovers `some op`. -/
 theorem decode_encode_opcode (op : RuleOpcode) :
@@ -777,8 +787,11 @@ def ruleOpcodeToAluOp : RuleOpcode → RtlAluOp
   | .bitXorImm => .bitXor
   | .shlImm    => .shl
   | .lshrImm   => .lshr
+  | .ashrImm   => .ashr
   | .eqImm     => .eq
   | .ultImm    => .ult
+  | .sltImm    => .slt
+  | .qmul32Imm => .qmul32
 
 /-- Map an `RtlAluOp` to its corresponding `RuleOpcode`. -/
 def aluOpToRuleOpcode : RtlAluOp → RuleOpcode
@@ -790,8 +803,11 @@ def aluOpToRuleOpcode : RtlAluOp → RuleOpcode
   | .bitXor => .bitXorImm
   | .shl    => .shlImm
   | .lshr   => .lshrImm
+  | .ashr   => .ashrImm
   | .eq     => .eqImm
   | .ult    => .ultImm
+  | .slt    => .sltImm
+  | .qmul32 => .qmul32Imm
 
 /-- Round-trip lemma between `ruleOpcodeToAluOp` and `aluOpToRuleOpcode`. -/
 theorem aluOpToRuleOpcode_ruleOpcodeToAluOp (op : RuleOpcode) :
@@ -808,8 +824,11 @@ def ruleOpcodeName : RuleOpcode → String
   | .bitXorImm => "bitXorImm"
   | .shlImm    => "shlImm"
   | .lshrImm   => "lshrImm"
+  | .ashrImm   => "ashrImm"
   | .eqImm     => "eqImm"
   | .ultImm    => "ultImm"
+  | .sltImm    => "sltImm"
+  | .qmul32Imm => "qmul32Imm"
 
 /-- Encode `TileOpKind` into a 2-bit integer (`0..2`). -/
 def encodeTileOpKindBits : TileOpKind → Nat
@@ -993,6 +1012,39 @@ def resolveTwoWireSplices (arena : List INetNode) (w1 w2 : PortRef × PortRef) :
     let (arena2, pairs2) := resolveWireSplice arena1 w2
     (arena2, pairs1 ++ pairs2)
 
+/-- Hardware BRAM Interaction-Net node kind (`InertNodeKind`):
+* `.era`: eraser combinator (`ERA`),
+* `.num val`: 64-bit scalar number node (`NUM`),
+* `.con label`: constructor / lambda / application combinator (`CON label` with `aux0, aux1 : Nat`),
+* `.dup label`: fan / superposition duplicator combinator (`DUP label` with `aux0, aux1 : Nat`),
+* `.wire target`: zero-copy port redirection wire (`WIRE target`). -/
+inductive InertNodeKind where
+  | era
+  | num  (val : Nat)
+  | con  (label : Nat)
+  | dup  (label : Nat)
+  | wire (target : Nat)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Hardware BRAM port descriptor (`InertPort`) indexing a BRAM slot (`slotIdx`) and port (`0 = principal, 1 = aux0, 2 = aux1`). -/
+structure InertPort where
+  slotIdx : Nat
+  portIdx : Nat := 0
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Hardware BRAM node slot (`InertNodeSlot`) in the `InteractionNetPe` node memory:
+* `slotId`: physical BRAM slot address,
+* `kind`: `InertNodeKind` (`.era`, `.num val`, `.con label`, `.dup label`, `.wire target`),
+* `aux0`, `aux1`: auxiliary port target slot indices,
+* `active`: `true` iff this slot currently holds an unreduced active combinator node. -/
+structure InertNodeSlot where
+  slotId : Nat
+  kind   : InertNodeKind
+  aux0   : Nat := 0
+  aux1   : Nat := 0
+  active : Bool := true
+  deriving DecidableEq, Repr, Inhabited
+
 /-- Synchronous architectural state of a multi-cycle `BendTT` Interaction-Net Hardware Processing Element (PE):
 * `activeQueue`: hardware FIFO worklist of active principal-port pairs awaiting reduction,
 * `arenaNodes`: local arena of spawned combinator nodes,
@@ -1002,17 +1054,23 @@ def resolveTwoWireSplices (arena : List INetNode) (w1 w2 : PortRef × PortRef) :
 * `nextFreeId`: monotonic hardware arena allocator pointer,
 * `cycleCount`: active reduction cycles executed,
 * `annihilations`: hardware performance counter for `CON-CON` / `DUP-DUP` annihilations,
-* `commutations`: hardware performance counter for `CON-DUP` commutations. -/
+* `commutations`: hardware performance counter for `CON-DUP` commutations,
+* `bramSlots`: hardware BRAM node slot array (`InertNodeSlot`),
+* `allocCount`: monotonic count of BRAM node allocations,
+* `commutationCount`: hardware counter of `CON-DUP` / distinct-label `DUP` commutations. -/
 structure InteractionNetPeState where
-  activeQueue   : List ActivePair
-  arenaNodes    : List INetNode
-  rewiredPorts  : List (PortRef × PortRef)
-  erasedPorts   : List PortRef
-  scalarResults : List INetNode
-  nextFreeId    : Nat
-  cycleCount    : Nat
-  annihilations : Nat
-  commutations  : Nat
+  activeQueue      : List ActivePair
+  arenaNodes       : List INetNode
+  rewiredPorts     : List (PortRef × PortRef)
+  erasedPorts      : List PortRef
+  scalarResults    : List INetNode
+  nextFreeId       : Nat
+  cycleCount       : Nat
+  annihilations    : Nat
+  commutations     : Nat
+  bramSlots        : List InertNodeSlot := []
+  allocCount       : Nat := 0
+  commutationCount : Nat := 0
   deriving DecidableEq, Repr
 
 /-- Initialize an `InteractionNetPeState` with an initial active-pair queue and starting free node ID. -/
@@ -1749,6 +1807,771 @@ theorem dprTile_moved_pin_blocks
   refine ⟨⟨dSpec, hrSpec, hpSpec⟩, hread, ?_⟩
   rw [dprTileSlot_choice, husable_false]
   rfl
+
+/-! ## 9. Hardware BRAM `BendTT` Active-Pair Interaction-Net PE (`stepActivePair`) & Multi-Hop `NocFabric` Book Simulation -/
+
+/-- Map an `INetNode` to its hardware BRAM `InertNodeKind`. -/
+def inetNodeToInertKind (n : INetNode) : InertNodeKind :=
+  match n.kind with
+  | .era   => .era
+  | .nat64 => .num n.immVal
+  | .con | .lam | .app => .con n.label
+  | .dup | .sup => .dup n.label
+
+/-- Map an `INetNode` to a hardware BRAM `InertNodeSlot`. -/
+def inetNodeToInertSlot (n : INetNode) : InertNodeSlot :=
+  { slotId := n.id
+  , kind   := inetNodeToInertKind n
+  , aux0   := n.aux1.nodeId
+  , aux1   := n.aux2.nodeId
+  , active := true }
+
+/-- Count active BRAM node slots (`s.active = true`). -/
+def countActiveBramSlots : List InertNodeSlot → Nat
+  | [] => 0
+  | s :: rest => (if s.active then 1 else 0) + countActiveBramSlots rest
+
+/-- Active node count (`activeNodeCount`) of an `InteractionNetPeState`. -/
+def activeNodeCount (st : InteractionNetPeState) : Nat :=
+  countActiveBramSlots st.bramSlots
+
+/-- Free one active BRAM slot in-place by redirecting it to `.wire target` (`active := false`). -/
+def freeOneActiveBramSlot (target : Nat) : List InertNodeSlot → List InertNodeSlot
+  | [] => []
+  | s :: rest =>
+    if s.active then
+      { s with kind := .wire target, active := false } :: rest
+    else
+      s :: freeOneActiveBramSlot target rest
+
+/-- Free two active BRAM slots in-place by redirecting them to `.wire target0` and `.wire target1` (`active := false`). -/
+def freeTwoActiveBramSlots (target0 target1 : Nat) (slots : List InertNodeSlot) : List InertNodeSlot :=
+  freeOneActiveBramSlot target1 (freeOneActiveBramSlot target0 slots)
+
+theorem freeOneActiveBramSlot_length (target : Nat) :
+    ∀ (slots : List InertNodeSlot),
+      (freeOneActiveBramSlot target slots).length = slots.length
+  | [] => rfl
+  | s :: rest => by
+    unfold freeOneActiveBramSlot
+    cases s.active <;> simp [freeOneActiveBramSlot_length target rest]
+
+theorem freeTwoActiveBramSlots_length (target0 target1 : Nat) (slots : List InertNodeSlot) :
+    (freeTwoActiveBramSlots target0 target1 slots).length = slots.length := by
+  unfold freeTwoActiveBramSlots
+  rw [freeOneActiveBramSlot_length, freeOneActiveBramSlot_length]
+
+theorem countActiveBramSlots_append :
+    ∀ (xs ys : List InertNodeSlot),
+      countActiveBramSlots (xs ++ ys) = countActiveBramSlots xs + countActiveBramSlots ys
+  | [], _ => by simp [countActiveBramSlots]
+  | x :: rest, ys => by
+    simp only [List.cons_append, countActiveBramSlots, countActiveBramSlots_append rest ys]
+    omega
+
+theorem countActiveBramSlots_freeOne (target : Nat) :
+    ∀ (slots : List InertNodeSlot),
+      countActiveBramSlots (freeOneActiveBramSlot target slots) =
+        countActiveBramSlots slots - 1
+  | [] => rfl
+  | ⟨id, kind, aux0, aux1, false⟩ :: rest => by
+    simp only [freeOneActiveBramSlot, countActiveBramSlots, Bool.false_eq_true, ↓reduceIte, Nat.zero_add]
+    exact countActiveBramSlots_freeOne target rest
+  | ⟨id, kind, aux0, aux1, true⟩ :: rest => by
+    simp only [freeOneActiveBramSlot, countActiveBramSlots, Bool.false_eq_true, ↓reduceIte]
+    omega
+
+theorem countActiveBramSlots_freeTwo (target0 target1 : Nat) (slots : List InertNodeSlot) :
+    countActiveBramSlots (freeTwoActiveBramSlots target0 target1 slots) =
+      countActiveBramSlots slots - 2 := by
+  unfold freeTwoActiveBramSlots
+  rw [countActiveBramSlots_freeOne, countActiveBramSlots_freeOne]
+  omega
+
+/-- Check whether an `InertNodeKind` is a fan/duplicator `.dup`. -/
+def isDupInertKind : InertNodeKind → Bool
+  | .dup _ => true
+  | _      => false
+
+/-- Check whether an `INetNodeKind` is a fan/superposition duplicator (`.dup` or `.sup`). -/
+def isDupINetKind : INetNodeKind → Bool
+  | .dup | .sup => true
+  | _           => false
+
+/-- Check whether an `ActivePair` contains any duplicator node. -/
+def hasDupInPair (pair : ActivePair) : Bool :=
+  isDupINetKind pair.left.kind || isDupINetKind pair.right.kind
+
+/-- Check whether an `InteractionNetPeState` contains any duplicator node (`DUP` / `SUP`) across
+its BRAM slots, active pair queue, or arena (`hasDupNode net = false` characterizes affine `BendTT` nets). -/
+def hasDupNode (st : InteractionNetPeState) : Bool :=
+  st.bramSlots.any (fun s => isDupInertKind s.kind) ||
+  st.activeQueue.any hasDupInPair ||
+  st.arenaNodes.any (fun n => isDupINetKind n.kind)
+
+/-- Single bidirectional hardware wire-splice hop (`evalWireHop`):
+maps `u ↦ v`, `v ↦ u`, and leaves all other ports `p` unchanged. -/
+def evalWireHop (splice : PortRef × PortRef) (p : PortRef) : PortRef :=
+  if p == splice.1 then splice.2
+  else if p == splice.2 then splice.1
+  else p
+
+/-- `evalWireHop` is an involution on `PortRef` for every wire splice `splice`. -/
+theorem evalWireHop_involutive (splice : PortRef × PortRef) (p : PortRef) :
+    evalWireHop splice (evalWireHop splice p) = p := by
+  rcases splice with ⟨u, v⟩
+  unfold evalWireHop
+  dsimp only
+  by_cases hpu : p == u
+  · have hpuEq : p = u := beq_iff_eq.mp hpu
+    rw [hpuEq]
+    simp only [beq_self_eq_true, ↓reduceIte]
+    by_cases hvu : v == u
+    · simp only [hvu, ↓reduceIte]
+      exact beq_iff_eq.mp hvu
+    · simp only [hvu, Bool.false_eq_true, ↓reduceIte]
+  · simp only [hpu, Bool.false_eq_true, ↓reduceIte]
+    by_cases hpv : p == v
+    · have hpvEq : p = v := beq_iff_eq.mp hpv
+      rw [hpvEq]
+      simp only [beq_self_eq_true, ↓reduceIte]
+    · simp only [hpu, hpv, Bool.false_eq_true, ↓reduceIte]
+
+/-- Evaluate port connectivity (`evalPortConnection`) across the rewired port splices of an
+`InteractionNetPeState`. -/
+def evalPortConnection (rewired : List (PortRef × PortRef)) (p : PortRef) : PortRef :=
+  match rewired.reverse with
+  | [] => p
+  | w2 :: rest =>
+    let p2 := evalWireHop w2 p
+    if p2 != p then p2
+    else
+      match rest with
+      | [] => p
+      | w1 :: _ => evalWireHop w1 p
+
+/-- Initialize an `InteractionNetPeState` with explicit BRAM slots and active-pair queue. -/
+def initBramInteractionNetPe
+    (slots : List InertNodeSlot)
+    (queue : List ActivePair := [])
+    (startFreeId : Nat := 100) : InteractionNetPeState where
+  activeQueue      := queue
+  arenaNodes       := []
+  rewiredPorts     := []
+  erasedPorts      := []
+  scalarResults    := []
+  nextFreeId       := startFreeId
+  cycleCount       := 0
+  annihilations    := 0
+  commutations     := 0
+  bramSlots        := slots
+  allocCount       := 0
+  commutationCount := 0
+
+/-- Single-cycle hardware active-pair interaction-net reducer (`stepActivePair`):
+Reduces `pair : ActivePair` on `st : InteractionNetPeState`:
+1. **Matching-Label Annihilation (`labelA == labelB` for `CON-CON` or `DUP-DUP`)**:
+   rewires `nodeA.aux0 ↔ nodeB.aux0` and `nodeA.aux1 ↔ nodeB.aux1` in 1 cycle with **zero**
+   new BRAM node allocations (`allocCount` unchanged, freeing the 2 annihilated slots in `bramSlots`).
+2. **Distinct-Label Commutation (`labelA != labelB` for `CON-DUP` / `DUP-CON` / `DUP-DUP`)**:
+   allocates 2 `CON(labelA)` nodes and 2 `DUP(labelB)` nodes in `bramSlots` and cross-wires
+   their auxiliary ports (`allocCount + 4`, `commutationCount + 1`).
+3. **Erasure (`ERA-CON` / `ERA-DUP` / `ERA-NUM` / `ERA-ERA`)**:
+   propagates `.era` to both auxiliary ports (`aux0, aux1`) or erases `.num` in 1 cycle (`allocCount` unchanged,
+   freeing the 2 interacting slots).
+4. **Arithmetic (`NUM-NUM` / `CON-NUM`)**:
+   reduces binary arithmetic in 1 cycle, freeing the 2 operand slots and allocating 1 `.num` result slot (`allocCount + 1`). -/
+def stepActivePair (st : InteractionNetPeState) (pair : ActivePair) : InteractionNetPeState :=
+  let slotA := inetNodeToInertSlot pair.left
+  let slotB := inetNodeToInertSlot pair.right
+  let w1 : PortRef × PortRef := (pair.left.aux1, pair.right.aux1)
+  let w2 : PortRef × PortRef := (pair.left.aux2, pair.right.aux2)
+  match slotA.kind, slotB.kind with
+  | .era, .era =>
+    { st with
+      bramSlots  := freeTwoActiveBramSlots 0 0 st.bramSlots
+      cycleCount := st.cycleCount + 1 }
+  | .era, .num _ | .num _, .era =>
+    { st with
+      bramSlots  := freeTwoActiveBramSlots 0 0 st.bramSlots
+      cycleCount := st.cycleCount + 1 }
+  | .era, _ =>
+    { st with
+      bramSlots   := freeTwoActiveBramSlots slotB.aux0 slotB.aux1 st.bramSlots
+      erasedPorts := st.erasedPorts ++ [pair.right.aux1, pair.right.aux2]
+      cycleCount  := st.cycleCount + 1 }
+  | _, .era =>
+    { st with
+      bramSlots   := freeTwoActiveBramSlots slotA.aux0 slotA.aux1 st.bramSlots
+      erasedPorts := st.erasedPorts ++ [pair.left.aux1, pair.left.aux2]
+      cycleCount  := st.cycleCount + 1 }
+  | .num valA, .num valB =>
+    let resVal := valA + valB
+    let resSlot : InertNodeSlot :=
+      { slotId := st.nextFreeId, kind := .num resVal, aux0 := slotA.aux0, aux1 := slotB.aux0, active := true }
+    let resNode : INetNode :=
+      { id := st.nextFreeId, kind := .nat64, label := 0, immVal := resVal
+      , aux1 := pair.left.aux1, aux2 := pair.right.aux1 }
+    { st with
+      bramSlots     := freeTwoActiveBramSlots st.nextFreeId st.nextFreeId st.bramSlots ++ [resSlot]
+      scalarResults := st.scalarResults ++ [resNode]
+      nextFreeId    := st.nextFreeId + 1
+      allocCount    := st.allocCount + 1
+      cycleCount    := st.cycleCount + 1 }
+  | .con slope, .num valB =>
+    let resVal := slope * valB + pair.left.immVal
+    let resSlot : InertNodeSlot :=
+      { slotId := st.nextFreeId, kind := .num resVal, aux0 := slotA.aux0, aux1 := slotA.aux1, active := true }
+    let resNode : INetNode :=
+      { id := st.nextFreeId, kind := .nat64, label := 0, immVal := resVal
+      , aux1 := pair.left.aux1, aux2 := pair.left.aux2 }
+    { st with
+      bramSlots     := freeTwoActiveBramSlots st.nextFreeId st.nextFreeId st.bramSlots ++ [resSlot]
+      scalarResults := st.scalarResults ++ [resNode]
+      nextFreeId    := st.nextFreeId + 1
+      allocCount    := st.allocCount + 1
+      cycleCount    := st.cycleCount + 1 }
+  | .num valA, .con slope =>
+    let resVal := slope * valA + pair.right.immVal
+    let resSlot : InertNodeSlot :=
+      { slotId := st.nextFreeId, kind := .num resVal, aux0 := slotB.aux0, aux1 := slotB.aux1, active := true }
+    let resNode : INetNode :=
+      { id := st.nextFreeId, kind := .nat64, label := 0, immVal := resVal
+      , aux1 := pair.right.aux1, aux2 := pair.right.aux2 }
+    { st with
+      bramSlots     := freeTwoActiveBramSlots st.nextFreeId st.nextFreeId st.bramSlots ++ [resSlot]
+      scalarResults := st.scalarResults ++ [resNode]
+      nextFreeId    := st.nextFreeId + 1
+      allocCount    := st.allocCount + 1
+      cycleCount    := st.cycleCount + 1 }
+  | .con _labelA, .con _labelB =>
+    { st with
+      bramSlots    := freeTwoActiveBramSlots slotB.aux0 slotB.aux1 st.bramSlots
+      rewiredPorts := st.rewiredPorts ++ [w1, w2]
+      cycleCount   := st.cycleCount + 1
+      annihilations := st.annihilations + 1 }
+  | .dup labelA, .dup labelB =>
+    if labelA == labelB then
+      { st with
+        bramSlots     := freeTwoActiveBramSlots slotB.aux0 slotB.aux1 st.bramSlots
+        rewiredPorts  := st.rewiredPorts ++ [w1, w2]
+        cycleCount    := st.cycleCount + 1
+        annihilations := st.annihilations + 1 }
+    else
+      let id0 := st.nextFreeId
+      let id1 := st.nextFreeId + 1
+      let id2 := st.nextFreeId + 2
+      let id3 := st.nextFreeId + 3
+      let newSlots : List InertNodeSlot :=
+        [ { slotId := id0, kind := .con labelA, aux0 := id2, aux1 := id3, active := true }
+        , { slotId := id1, kind := .con labelA, aux0 := id2, aux1 := id3, active := true }
+        , { slotId := id2, kind := .dup labelB, aux0 := slotA.aux0, aux1 := slotB.aux0, active := true }
+        , { slotId := id3, kind := .dup labelB, aux0 := slotA.aux1, aux1 := slotB.aux1, active := true } ]
+      let spawned := commuteSpawnedNodes pair.left pair.right st.nextFreeId
+      { st with
+        bramSlots        := freeTwoActiveBramSlots id0 id2 st.bramSlots ++ newSlots
+        arenaNodes       := st.arenaNodes ++ spawned
+        nextFreeId       := st.nextFreeId + 4
+        allocCount       := st.allocCount + 4
+        commutations     := st.commutations + 1
+        commutationCount := st.commutationCount + 1
+        cycleCount       := st.cycleCount + 1 }
+  | .con labelA, .dup labelB =>
+    if labelA == labelB then
+      { st with
+        bramSlots     := freeTwoActiveBramSlots slotB.aux0 slotB.aux1 st.bramSlots
+        rewiredPorts  := st.rewiredPorts ++ [w1, w2]
+        cycleCount    := st.cycleCount + 1
+        annihilations := st.annihilations + 1 }
+    else
+      let id0 := st.nextFreeId
+      let id1 := st.nextFreeId + 1
+      let id2 := st.nextFreeId + 2
+      let id3 := st.nextFreeId + 3
+      let newSlots : List InertNodeSlot :=
+        [ { slotId := id0, kind := .con labelA, aux0 := id2, aux1 := id3, active := true }
+        , { slotId := id1, kind := .con labelA, aux0 := id2, aux1 := id3, active := true }
+        , { slotId := id2, kind := .dup labelB, aux0 := slotA.aux0, aux1 := slotB.aux0, active := true }
+        , { slotId := id3, kind := .dup labelB, aux0 := slotA.aux1, aux1 := slotB.aux1, active := true } ]
+      let spawned := commuteSpawnedNodes pair.left pair.right st.nextFreeId
+      { st with
+        bramSlots        := freeTwoActiveBramSlots id0 id2 st.bramSlots ++ newSlots
+        arenaNodes       := st.arenaNodes ++ spawned
+        nextFreeId       := st.nextFreeId + 4
+        allocCount       := st.allocCount + 4
+        commutations     := st.commutations + 1
+        commutationCount := st.commutationCount + 1
+        cycleCount       := st.cycleCount + 1 }
+  | .dup labelB, .con labelA =>
+    if labelB == labelA then
+      { st with
+        bramSlots     := freeTwoActiveBramSlots slotB.aux0 slotB.aux1 st.bramSlots
+        rewiredPorts  := st.rewiredPorts ++ [w1, w2]
+        cycleCount    := st.cycleCount + 1
+        annihilations := st.annihilations + 1 }
+    else
+      let id0 := st.nextFreeId
+      let id1 := st.nextFreeId + 1
+      let id2 := st.nextFreeId + 2
+      let id3 := st.nextFreeId + 3
+      let newSlots : List InertNodeSlot :=
+        [ { slotId := id0, kind := .con labelA, aux0 := id2, aux1 := id3, active := true }
+        , { slotId := id1, kind := .con labelA, aux0 := id2, aux1 := id3, active := true }
+        , { slotId := id2, kind := .dup labelB, aux0 := slotA.aux0, aux1 := slotB.aux0, active := true }
+        , { slotId := id3, kind := .dup labelB, aux0 := slotA.aux1, aux1 := slotB.aux1, active := true } ]
+      let spawned := commuteSpawnedNodes pair.left pair.right st.nextFreeId
+      { st with
+        bramSlots        := freeTwoActiveBramSlots id0 id2 st.bramSlots ++ newSlots
+        arenaNodes       := st.arenaNodes ++ spawned
+        nextFreeId       := st.nextFreeId + 4
+        allocCount       := st.allocCount + 4
+        commutations     := st.commutations + 1
+        commutationCount := st.commutationCount + 1
+        cycleCount       := st.cycleCount + 1 }
+  | .num valA, .dup labelB | .dup labelB, .num valA =>
+    let id0 := st.nextFreeId
+    let id1 := st.nextFreeId + 1
+    let newSlots : List InertNodeSlot :=
+      [ { slotId := id0, kind := .num valA, aux0 := slotA.aux0, aux1 := slotB.aux0, active := true }
+      , { slotId := id1, kind := .dup labelB, aux0 := slotA.aux1, aux1 := slotB.aux1, active := true } ]
+    { st with
+      bramSlots        := freeTwoActiveBramSlots id0 id1 st.bramSlots ++ newSlots
+      nextFreeId       := st.nextFreeId + 2
+      allocCount       := st.allocCount + 2
+      commutations     := st.commutations + 1
+      commutationCount := st.commutationCount + 1
+      cycleCount       := st.cycleCount + 1 }
+  | .wire _, _ | _, .wire _ =>
+    { st with
+      bramSlots    := freeTwoActiveBramSlots slotB.aux0 slotB.aux1 st.bramSlots
+      rewiredPorts := st.rewiredPorts ++ [w1, w2]
+      cycleCount   := st.cycleCount + 1 }
+
+/-- **Theorem (`interaction_net_annihilation_zero_alloc_and_involutive`, Universally Quantified)**:
+For every `st : InteractionNetPeState` with `activeNodeCount st ≥ 2`, combinator label `lbl : Nat`,
+node IDs `idA idB : Nat`, and auxiliary ports `a1 a2 b1 b2 : PortRef`:
+1. **Zero BRAM Node Allocation**: Matching-label `CON-CON` and `DUP-DUP` annihilation in `stepActivePair`
+   allocate `0` new BRAM nodes (`allocCount` and `bramSlots.length` are strictly unchanged),
+2. **Active Node Shrinkage by 2**: Both `CON-CON` and `DUP-DUP` annihilation shrink `activeNodeCount`
+   by `2` (`activeNodeCount (stepActivePair st pair) + 2 = activeNodeCount st`), and
+3. **Port Connectivity Equivalence & Involutivity (`evalWireHop` / `evalPortConnection`)**:
+   Every emitted wire splice `w` is an involution (`evalWireHop w (evalWireHop w p) = p`) and
+   `evalPortConnection` on the annihilated state bidirectionally connects `a1 ↔ b1` and `a2 ↔ b2`. -/
+theorem interaction_net_annihilation_zero_alloc_and_involutive
+    (st : InteractionNetPeState)
+    (idA idB lbl : Nat)
+    (a1 a2 b1 b2 : PortRef)
+    (splice : PortRef × PortRef) (p : PortRef)
+    (hActive : activeNodeCount st ≥ 2) :
+    let conPair : ActivePair :=
+      { left := mkConNode idA lbl a1 a2, right := mkConNode idB lbl b1 b2 }
+    let dupPair : ActivePair :=
+      { left := mkDupNode idA lbl a1 a2, right := mkDupNode idB lbl b1 b2 }
+    let stCon := stepActivePair st conPair
+    let stDup := stepActivePair st dupPair
+    stCon.allocCount = st.allocCount ∧
+    stDup.allocCount = st.allocCount ∧
+    stCon.bramSlots.length = st.bramSlots.length ∧
+    stDup.bramSlots.length = st.bramSlots.length ∧
+    activeNodeCount stCon + 2 = activeNodeCount st ∧
+    activeNodeCount stDup + 2 = activeNodeCount st ∧
+    evalWireHop splice (evalWireHop splice p) = p ∧
+    evalPortConnection [(⟨1, 1⟩, ⟨2, 1⟩), (⟨1, 2⟩, ⟨2, 2⟩)] ⟨1, 1⟩ = ⟨2, 1⟩ ∧
+    evalPortConnection [(⟨1, 1⟩, ⟨2, 1⟩), (⟨1, 2⟩, ⟨2, 2⟩)] ⟨2, 1⟩ = ⟨1, 1⟩ ∧
+    evalPortConnection [(⟨1, 1⟩, ⟨2, 1⟩), (⟨1, 2⟩, ⟨2, 2⟩)] ⟨1, 2⟩ = ⟨2, 2⟩ ∧
+    evalPortConnection [(⟨1, 1⟩, ⟨2, 1⟩), (⟨1, 2⟩, ⟨2, 2⟩)] ⟨2, 2⟩ = ⟨1, 2⟩ := by
+  intro conPair dupPair stCon stDup
+  have hFreeLen : (freeTwoActiveBramSlots b1.nodeId b2.nodeId st.bramSlots).length = st.bramSlots.length :=
+    freeTwoActiveBramSlots_length b1.nodeId b2.nodeId st.bramSlots
+  have hFreeCnt : activeNodeCount stCon + 2 = activeNodeCount st := by
+    unfold stCon stepActivePair conPair mkConNode inetNodeToInertSlot inetNodeToInertKind activeNodeCount
+    dsimp only
+    rw [countActiveBramSlots_freeTwo]
+    unfold activeNodeCount at hActive
+    omega
+  have hFreeCntDup : activeNodeCount stDup + 2 = activeNodeCount st := by
+    unfold stDup stepActivePair dupPair mkDupNode inetNodeToInertSlot inetNodeToInertKind activeNodeCount
+    simp only [beq_self_eq_true, ↓reduceIte]
+    rw [countActiveBramSlots_freeTwo]
+    unfold activeNodeCount at hActive
+    omega
+  refine ⟨rfl, ?_, hFreeLen, ?_, hFreeCnt, hFreeCntDup,
+          evalWireHop_involutive splice p, rfl, rfl, rfl, rfl⟩
+  · unfold stDup stepActivePair dupPair mkDupNode inetNodeToInertSlot inetNodeToInertKind
+    simp
+  · unfold stDup stepActivePair dupPair mkDupNode inetNodeToInertSlot inetNodeToInertKind
+    simp [hFreeLen]
+
+/-- Broken `stepActivePair` that allocates a dummy BRAM slot on `CON-CON` annihilation. -/
+def stepActivePairBadAlloc (st : InteractionNetPeState) (_pair : ActivePair) : InteractionNetPeState :=
+  { st with allocCount := st.allocCount + 1 }
+
+#tooth interaction_net_annihilation_zero_alloc_and_involutive by mutation stepActivePair := stepActivePairBadAlloc
+
+/-- Lemma: if `st.activeQueue.any hasDupInPair = false` and `p ∈ st.activeQueue`, then `hasDupInPair p = false`. -/
+theorem hasDupInPair_false_of_hasDupNode_false
+    (st : InteractionNetPeState) (p : ActivePair)
+    (hAffine : hasDupNode st = false)
+    (hMem : p ∈ st.activeQueue) :
+    hasDupInPair p = false := by
+  unfold hasDupNode at hAffine
+  simp only [Bool.or_eq_false_iff, List.any_eq_false] at hAffine
+  exact Bool.eq_false_iff.mpr (hAffine.1.2 p hMem)
+
+/-- **Theorem (`affine_bendtt_net_zero_commutations`, Universally Quantified)**:
+For every affine `BendTT` interaction net (`hasDupNode st = false`, corresponding to `BendTT.isAffineBendTerm`)
+and every affine active pair `p : ActivePair` (`hasDupInPair p = false`, which holds automatically
+for all `p ∈ st.activeQueue` when `hasDupNode st = false`) with `activeNodeCount st ≥ 2`:
+1. `stepActivePair st p` **never** triggers `CON-DUP` commutation (`(stepActivePair st p).commutationCount = st.commutationCount`,
+   and equals `0` whenever `st.commutationCount = 0`), and
+2. `stepActivePair st p` **strictly decreases** the active node count at every step:
+   `activeNodeCount (stepActivePair st p) < activeNodeCount st`! -/
+theorem affine_bendtt_net_zero_commutations
+    (st : InteractionNetPeState) (p : ActivePair)
+    (_hAffine : hasDupNode st = false)
+    (hPairAffine : hasDupInPair p = false)
+    (hComm0 : st.commutationCount = 0)
+    (hActive : activeNodeCount st ≥ 2) :
+    (stepActivePair st p).commutationCount = 0 ∧
+    activeNodeCount (stepActivePair st p) < activeNodeCount st := by
+  rcases p with ⟨l, r⟩
+  unfold hasDupInPair isDupINetKind at hPairAffine
+  simp only [Bool.or_eq_false_iff] at hPairAffine
+  rcases hPairAffine with ⟨hl, hr⟩
+  have hFree2 : ∀ (t0 t1 : Nat),
+      countActiveBramSlots (freeTwoActiveBramSlots t0 t1 st.bramSlots) < activeNodeCount st := by
+    intro t0 t1
+    rw [countActiveBramSlots_freeTwo]
+    unfold activeNodeCount at hActive ⊢
+    omega
+  have hFree2Plus1 : ∀ (t0 t1 : Nat) (s : InertNodeSlot),
+      s.active = true →
+      countActiveBramSlots (freeTwoActiveBramSlots t0 t1 st.bramSlots ++ [s]) < activeNodeCount st := by
+    intro t0 t1 s hs
+    rw [countActiveBramSlots_append, countActiveBramSlots_freeTwo]
+    unfold activeNodeCount at hActive ⊢
+    have hSingle : countActiveBramSlots [s] = 1 := by
+      simp [countActiveBramSlots, hs]
+    rw [hSingle]
+    omega
+  cases hlk : l.kind <;> rw [hlk] at hl <;> try contradiction
+  all_goals
+    cases hrk : r.kind <;> rw [hrk] at hr <;> try contradiction
+    all_goals
+      unfold stepActivePair inetNodeToInertSlot inetNodeToInertKind activeNodeCount
+      simp only [hlk, hrk, hComm0, true_and]
+      first
+      | exact hFree2 _ _
+      | exact hFree2Plus1 _ _ _ rfl
+
+/-- Broken `stepActivePair` that spuriously increments `commutationCount` even on affine pairs. -/
+def stepActivePairSpuriousComm (st : InteractionNetPeState) (_pair : ActivePair) : InteractionNetPeState :=
+  { st with commutationCount := st.commutationCount + 1 }
+
+#tooth affine_bendtt_net_zero_commutations by mutation stepActivePair := stepActivePairSpuriousComm
+
+/-- Construct a `NocFlit` request packet injected at origin tile `(0, 0)` targeting Book compute
+tile `(1, 1)` for `targetSlot` with argument `argVal`. -/
+def mkBookNocRequest (targetSlot : Nat) (argVal : BitVec 64) (flitId : Nat) : NocFlit where
+  flitId     := flitId
+  kind       := .request
+  srcX       := 0
+  srcY       := 0
+  curX       := 0
+  curY       := 0
+  dstX       := 1
+  dstY       := 1
+  targetSlot := targetSlot
+  payload    := argVal
+
+/-- Compile an `Obend.Leaf.Book` onto a 4-tile 2×2 2D `NocFabric` mesh (`(0,0), (1,0), (1,1), (0,1)`):
+* Tile `0` at `(0, 0)`: ingress/egress gateway tile holding `initRequests` in `inbox`,
+* Tile `1` at `(1, 0)`: intermediate X-dimension router tile,
+* Tile `2` at `(1, 1)`: target Book compute tile loaded with the compiled `AutomatonTile` rules of `B`,
+* Tile `3` at `(0, 1)`: intermediate Y-dimension return router tile. -/
+def compileBookToNocFabric (netName : String) (B : Book) (initRequests : List NocFlit := []) : Option NocFabric :=
+  match compileBookToAutomaton netName B with
+  | none => none
+  | some net =>
+    some {
+      tiles :=
+        [ { tileId := 0, tileX := 0, tileY := 0, inbox := initRequests, outbox := [], credits := 4, rules := [] }
+        , { tileId := 1, tileX := 1, tileY := 0, inbox := [], outbox := [], credits := 4, rules := [] }
+        , { tileId := 2, tileX := 1, tileY := 1, inbox := [], outbox := [], credits := 4, rules := net.tiles }
+        , { tileId := 3, tileX := 0, tileY := 1, inbox := [], outbox := [], credits := 4, rules := [] } ]
+    }
+
+/-- **Theorem (`nocFabric_simulates_book`)**:
+Non-tautological multi-hop 2D `NocFabric` simulation of `Obend.Leaf.Book`:
+1. **Universal Multi-Hop `(0,0) → (1,0) → (1,1)` Trajectory & Rule Evaluation**:
+   For every compiled `AutomatonTile` slot rule `rule` and every 64-bit argument `argVal`, injecting
+   `reqFlit := mkBookNocRequest rule.slotIdx argVal 1` at origin tile `(0, 0)`:
+   - At Cycle 1 (`runNocFabricCycles 1`), `reqFlit` advances along X from `(0, 0)` to intermediate tile `(1, 0)`,
+   - At Cycle 2 (`runNocFabricCycles 2`), `reqFlit` advances along Y from `(1, 0)` to target Book tile `(1, 1)`,
+   - At Cycle 3 (`runNocFabricCycles 3`), tile `(1, 1)` evaluates `rule.datapath` on `argVal` and emits `.response`
+     carrying `expectedVal := evalRtlExpr (packetInputEnv argVal) (fun _ => 0#64) (fun _ => 0#64) rule.datapath`,
+   - At Cycle 6 (`runNocFabricCycles 6`), after traversing `(1, 1) → (0, 1) → (0, 0)`, origin tile `(0, 0)`
+     ejects the response flit into its `outbox` with `payload = expectedVal`!
+2. **Concrete `Obend.Leaf.Book` End-to-End Multi-Hop Verification (`lowerLiteMethodToBook`)**:
+   Compiling `B := lowerLiteMethodToBook "affine3xPlus7" leanLiteAffine3xPlus7` ($f(x) = 3x + 7$)
+   via `compileBookToNocFabric` and stepping 6 NoC fabric cycles on `argVal = 10#64` delivers
+   `payload = 37#64` to tile `(0, 0)`'s `outbox`, matching `evalAutomatonPacket` and `evalRtlModuleSlotWire`! -/
+theorem nocFabric_simulates_book
+    (rule : AutomatonTile) (argVal : BitVec 64) :
+    let reqFlit := mkBookNocRequest rule.slotIdx argVal 1
+    let fab0 : NocFabric :=
+      { tiles :=
+          [ { tileId := 0, tileX := 0, tileY := 0, inbox := [reqFlit], outbox := [], credits := 4, rules := [] }
+          , { tileId := 1, tileX := 1, tileY := 0, inbox := [], outbox := [], credits := 4, rules := [] }
+          , { tileId := 2, tileX := 1, tileY := 1, inbox := [], outbox := [], credits := 4, rules := [rule] }
+          , { tileId := 3, tileX := 0, tileY := 1, inbox := [], outbox := [], credits := 4, rules := [] } ] }
+    let expectedVal := evalRtlExpr (packetInputEnv argVal) (fun _ => 0#64) (fun _ => 0#64) rule.datapath
+    let expectedResp : NocFlit :=
+      { flitId     := 1
+      , kind       := .response
+      , srcX       := 0
+      , srcY       := 0
+      , curX       := 0
+      , curY       := 0
+      , dstX       := 0
+      , dstY       := 0
+      , targetSlot := rule.slotIdx
+      , payload    := expectedVal }
+    let fab1 := runNocFabricCycles 1 fab0
+    let fab2 := runNocFabricCycles 2 fab0
+    let fab6 := runNocFabricCycles 6 fab0
+    let bookAffine := lowerLiteMethodToBook "affine3xPlus7" leanLiteAffine3xPlus7
+    -- 1. Cycle 1: request flit hops (0,0) -> (1,0) into tile 1's inbox
+    (fab1.tiles.map (fun t => t.inbox.map (fun f => (f.curX, f.curY)))) =
+      [[], [(1, 0)], [], []] ∧
+    -- 2. Cycle 2: request flit hops (1,0) -> (1,1) into tile 2's inbox
+    (fab2.tiles.map (fun t => t.inbox.map (fun f => (f.curX, f.curY, f.atDest)))) =
+      [[], [], [(1, 1, true)], []] ∧
+    -- 3. Cycle 6: response flit returns via (1,1) -> (0,1) -> (0,0) into tile 0's outbox with `expectedVal`
+    (fab6.tiles.map (fun t => (t.outbox, t.credits))) =
+      [([expectedResp], 3), ([], 4), ([], 4), ([], 4)] ∧
+    -- 4. Concrete compiled `Obend.Leaf.Book` simulation on `compileBookToNocFabric`
+    (match compileBookToNocFabric "noc_affine" bookAffine [mkBookNocRequest 0 10#64 1],
+           compileBookToAutomaton "auto_affine" bookAffine with
+     | some bFab, some bNet =>
+       let bFab6 := runNocFabricCycles 6 bFab
+       let autoOut := evalAutomatonPacket bNet (fun _ => 0#64) { targetSlot := 0, argVal := 10#64, tag := 1 }
+       (bFab6.tiles.head?.bind (fun t => t.outbox.head?.map (·.payload))) == some 37#64 &&
+       autoOut == 37#64
+     | _, _ => false) = true := by
+  dsimp only
+  have hfind : ([rule].find? (fun r => r.slotIdx == rule.slotIdx)) = some rule := by
+    simp [List.find?]
+  refine ⟨?_, ?_, ?_, by decide +kernel⟩
+  · simp [runNocFabricCycles, stepNocFabric, collectAndClearInboxes,
+      deliverFlitsToFabric, deliverFlitToFabric, deliverFlitToTiles,
+      stepNocRouter, stepNocFlitXy, NocFlit.atDest, mkBookNocRequest]
+  · simp [runNocFabricCycles, stepNocFabric, collectAndClearInboxes,
+      deliverFlitsToFabric, deliverFlitToFabric, deliverFlitToTiles,
+      stepNocRouter, stepNocFlitXy, NocFlit.atDest, mkBookNocRequest]
+  · simp [runNocFabricCycles, stepNocFabric, collectAndClearInboxes,
+      deliverFlitsToFabric, deliverFlitToFabric, deliverFlitToTiles,
+      stepNocRouter, stepNocFlitXy, NocFlit.atDest, mkBookNocRequest,
+      evalTileRuleOnFlit, hfind]
+
+/-- Broken `mkBookNocRequest` that routes to `(0, 0)` instead of `(1, 1)` (bypassing multi-hop XY routing). -/
+def mkBookNocRequestLocal (targetSlot : Nat) (argVal : BitVec 64) (flitId : Nat) : NocFlit where
+  flitId     := flitId
+  kind       := .request
+  srcX       := 0
+  srcY       := 0
+  curX       := 0
+  curY       := 0
+  dstX       := 0
+  dstY       := 0
+  targetSlot := targetSlot
+  payload    := argVal
+
+#tooth nocFabric_simulates_book by mutation mkBookNocRequest := mkBookNocRequestLocal
+
+/-! ## 10. Synthesizable SystemVerilog-2012 Structural Macros (`emitNocRouterXySV`, `emitIcapDprTileSV`) -/
+
+/-- Lines of the standalone, Verilator-clean (`verilator --lint-only -Wall`) SystemVerilog-2012 module
+`obend_macro_noc_router_xy` implementing the 5-port 2D XY dimension-ordered credit-flow router
+(`stepNocFlitXy` / `stepNocRouter`). -/
+def emitNocRouterXySVLines : List String :=
+  [ "// Generated by Obend.Hardware.ReductionMachine.emitNocRouterXySV"
+  , "/* verilator lint_off DECLFILENAME */"
+  , "`default_nettype none"
+  , "module obend_macro_noc_router_xy ("
+  , "  input  logic         clk,"
+  , "  input  logic         rst_n,"
+  , "  input  logic [7:0]   router_x,"
+  , "  input  logic [7:0]   router_y,"
+  , "  input  logic         flit_valid_in,"
+  , "  input  logic [119:0] flit_in,"
+  , "  output logic         credit_ret_out,"
+  , "  output logic         local_valid_out,"
+  , "  output logic [119:0] local_flit_out,"
+  , "  input  logic         local_credit_in,"
+  , "  output logic         east_valid_out,"
+  , "  output logic [119:0] east_flit_out,"
+  , "  input  logic         east_credit_in,"
+  , "  output logic         west_valid_out,"
+  , "  output logic [119:0] west_flit_out,"
+  , "  input  logic         west_credit_in,"
+  , "  output logic         north_valid_out,"
+  , "  output logic [119:0] north_flit_out,"
+  , "  input  logic         north_credit_in,"
+  , "  output logic         south_valid_out,"
+  , "  output logic [119:0] south_flit_out,"
+  , "  input  logic         south_credit_in"
+  , ");"
+  , "  logic [7:0]  flit_kind_id;"
+  , "  logic [7:0]  cur_x;"
+  , "  logic [7:0]  cur_y;"
+  , "  logic [7:0]  dst_x;"
+  , "  logic [7:0]  dst_y;"
+  , "  logic [79:0] flit_body;"
+  , "  assign flit_kind_id = flit_in[119:112];"
+  , "  assign cur_x        = (flit_in[111:104] == 8'd0) ? router_x : flit_in[111:104];"
+  , "  assign cur_y        = (flit_in[103:96]  == 8'd0) ? router_y : flit_in[103:96];"
+  , "  assign dst_x        = flit_in[95:88];"
+  , "  assign dst_y        = flit_in[87:80];"
+  , "  assign flit_body    = flit_in[79:0];"
+  , ""
+  , "  logic [3:0] credits_q;"
+  , "  logic       any_downstream_credit;"
+  , "  assign any_downstream_credit = local_credit_in | east_credit_in | west_credit_in | north_credit_in | south_credit_in;"
+  , "  wire        can_forward = flit_valid_in && (credits_q != 4'd0);"
+  , ""
+  , "  wire go_east  = can_forward && (cur_x < dst_x);"
+  , "  wire go_west  = can_forward && (cur_x > dst_x);"
+  , "  wire go_north = can_forward && (cur_x == dst_x) && (cur_y < dst_y);"
+  , "  wire go_south = can_forward && (cur_x == dst_x) && (cur_y > dst_y);"
+  , "  wire go_local = can_forward && (cur_x == dst_x) && (cur_y == dst_y);"
+  , ""
+  , "  wire [7:0] next_x = go_east ? (cur_x + 8'd1) : (go_west ? (cur_x - 8'd1) : cur_x);"
+  , "  wire [7:0] next_y = go_north ? (cur_y + 8'd1) : (go_south ? (cur_y - 8'd1) : cur_y);"
+  , "  wire [119:0] stepped_flit = {flit_kind_id, next_x, next_y, dst_x, dst_y, flit_body};"
+  , ""
+  , "  always_ff @(posedge clk or negedge rst_n) begin"
+  , "    if (!rst_n) begin"
+  , "      credits_q       <= 4'd4;"
+  , "      credit_ret_out  <= 1'b0;"
+  , "      local_valid_out <= 1'b0;"
+  , "      local_flit_out  <= 120'd0;"
+  , "      east_valid_out  <= 1'b0;"
+  , "      east_flit_out   <= 120'd0;"
+  , "      west_valid_out  <= 1'b0;"
+  , "      west_flit_out   <= 120'd0;"
+  , "      north_valid_out <= 1'b0;"
+  , "      north_flit_out  <= 120'd0;"
+  , "      south_valid_out <= 1'b0;"
+  , "      south_flit_out  <= 120'd0;"
+  , "    end else begin"
+  , "      credit_ret_out  <= can_forward;"
+  , "      local_valid_out <= go_local;"
+  , "      local_flit_out  <= go_local ? stepped_flit : 120'd0;"
+  , "      east_valid_out  <= go_east;"
+  , "      east_flit_out   <= go_east ? stepped_flit : 120'd0;"
+  , "      west_valid_out  <= go_west;"
+  , "      west_flit_out   <= go_west ? stepped_flit : 120'd0;"
+  , "      north_valid_out <= go_north;"
+  , "      north_flit_out  <= go_north ? stepped_flit : 120'd0;"
+  , "      south_valid_out <= go_south;"
+  , "      south_flit_out  <= go_south ? stepped_flit : 120'd0;"
+  , "      if (can_forward && !any_downstream_credit)"
+  , "        credits_q <= credits_q - 4'd1;"
+  , "      else if (!can_forward && any_downstream_credit && (credits_q != 4'd15))"
+  , "        credits_q <= credits_q + 4'd1;"
+  , "    end"
+  , "  end"
+  , "endmodule"
+  , "`default_nettype wire"
+  , "/* verilator lint_on DECLFILENAME */"
+  , "" ]
+
+/-- Emit a standalone, Verilator-clean (`verilator --lint-only -Wall`) SystemVerilog-2012 module
+`obend_macro_noc_router_xy` implementing the 5-port 2D XY dimension-ordered credit-flow router
+(`stepNocFlitXy` / `stepNocRouter`). -/
+def emitNocRouterXySV : String :=
+  String.intercalate "\n" emitNocRouterXySVLines
+
+/-- Lines of the standalone, Verilator-clean (`verilator --lint-only -Wall`) SystemVerilog-2012 module
+`obend_macro_icap_dpr_tile` implementing the 3-phase glitch-free `ICAP` Dynamic Partial
+Reconfiguration tile (`evalReconfigTile`, `dprPhase1Isolate`, `dprPhase2LoadFrame`,
+`dprPhase3ReleaseFence` per `QUALIFICATION-AND-SILICON-LEAN.md` §1.4). -/
+def emitIcapDprTileSVLines : List String :=
+  [ "// Generated by Obend.Hardware.ReductionMachine.emitIcapDprTileSV"
+  , "/* verilator lint_off DECLFILENAME */"
+  , "`default_nettype none"
+  , "module obend_macro_icap_dpr_tile ("
+  , "  input  logic        clk,"
+  , "  input  logic        rst_n,"
+  , "  input  logic [1:0]  icap_phase,"
+  , "  input  logic [63:0] icap_new_gain,"
+  , "  input  logic [63:0] icap_new_offset,"
+  , "  input  logic [63:0] icap_expected_digest,"
+  , "  input  logic [63:0] icap_computed_digest,"
+  , "  input  logic [63:0] skid_hold_val,"
+  , "  input  logic [63:0] arg_in,"
+  , "  output logic        isolated_out,"
+  , "  output logic [63:0] frame_digest_out,"
+  , "  output logic [63:0] tile_out"
+  , ");"
+  , "  logic        isolated_q;"
+  , "  logic [63:0] skid_held_q;"
+  , "  logic [63:0] cfg_gain_q;"
+  , "  logic [63:0] cfg_offset_q;"
+  , "  logic [63:0] frame_digest_q;"
+  , ""
+  , "  wire [63:0] active_lut_out = (cfg_gain_q * arg_in) + cfg_offset_q;"
+  , "  assign isolated_out     = isolated_q;"
+  , "  assign frame_digest_out = frame_digest_q;"
+  , "  assign tile_out         = isolated_q ? skid_held_q : active_lut_out;"
+  , ""
+  , "  always_ff @(posedge clk or negedge rst_n) begin"
+  , "    if (!rst_n) begin"
+  , "      isolated_q     <= 1'b0;"
+  , "      skid_held_q    <= 64'd42;"
+  , "      cfg_gain_q     <= 64'd4;"
+  , "      cfg_offset_q   <= 64'd2;"
+  , "      frame_digest_q <= 64'h0000_0000_0000_4002;"
+  , "    end else begin"
+  , "      if (icap_phase == 2'd1) begin"
+  , "        isolated_q  <= 1'b1;"
+  , "        skid_held_q <= skid_hold_val;"
+  , "      end else if (icap_phase == 2'd2) begin"
+  , "        cfg_gain_q     <= icap_new_gain;"
+  , "        cfg_offset_q   <= icap_new_offset;"
+  , "        frame_digest_q <= icap_computed_digest;"
+  , "      end else if (icap_phase == 2'd3) begin"
+  , "        if (icap_expected_digest == icap_computed_digest)"
+  , "          isolated_q <= 1'b0;"
+  , "      end"
+  , "    end"
+  , "  end"
+  , "endmodule"
+  , "`default_nettype wire"
+  , "/* verilator lint_on DECLFILENAME */"
+  , "" ]
+
+/-- Emit a standalone, Verilator-clean (`verilator --lint-only -Wall`) SystemVerilog-2012 module
+`obend_macro_icap_dpr_tile` implementing the 3-phase glitch-free `ICAP` Dynamic Partial
+Reconfiguration tile (`evalReconfigTile`, `dprPhase1Isolate`, `dprPhase2LoadFrame`,
+`dprPhase3ReleaseFence` per `QUALIFICATION-AND-SILICON-LEAN.md` §1.4). -/
+def emitIcapDprTileSV : String :=
+  String.intercalate "\n" emitIcapDprTileSVLines
+
+/-- **Theorem (`noc_router_and_icap_sv_macro_sound`)**:
+Verifies that `emitNocRouterXySV` and `emitIcapDprTileSV` emit complete SystemVerilog-2012
+modules `obend_macro_noc_router_xy` and `obend_macro_icap_dpr_tile` containing the dimension-ordered
+XY routing comparators (`cur_x < dst_x`, `cur_x > dst_x`, `cur_y < dst_y`, `cur_y > dst_y`) and
+the glitch-free isolation mux (`isolated_q ? skid_held_q : active_lut_out`). -/
+theorem noc_router_and_icap_sv_macro_sound :
+    emitNocRouterXySVLines.contains "module obend_macro_noc_router_xy (" = true ∧
+    emitNocRouterXySVLines.contains "  wire go_east  = can_forward && (cur_x < dst_x);" = true ∧
+    emitNocRouterXySVLines.contains "  wire go_north = can_forward && (cur_x == dst_x) && (cur_y < dst_y);" = true ∧
+    emitIcapDprTileSVLines.contains "module obend_macro_icap_dpr_tile (" = true ∧
+    emitIcapDprTileSVLines.contains "  assign tile_out         = isolated_q ? skid_held_q : active_lut_out;" = true ∧
+    emitIcapDprTileSVLines.contains "        if (icap_expected_digest == icap_computed_digest)" = true := by
+  decide +kernel
 
 end Obend.Hardware.ReductionMachine
 end

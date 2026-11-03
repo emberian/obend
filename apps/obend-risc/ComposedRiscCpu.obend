@@ -1,0 +1,65 @@
+edition ObjectiveBend 1
+# Flagship App #1 (Top Level): 3-Layer Composed Open-Recursive RISC Softcore
+
+import ./BaseRiscCore.obend as Base
+import ./PrivilegeCsrOverride.obend as Priv
+import ./CustomSimdZkExt.obend as Ext
+
+law monotone_retired_insts: monotone(retiredInstCount)
+
+record ComposedRiscCpuTarget:
+  mtvecAddr() -> Nat
+  trapCauseCode() -> Nat
+  customExtOpcode() -> Nat
+  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  nextPc(pc: Nat) -> Nat
+  execStep(rs1Val: Nat, rs2Val: Nat) -> Nat
+
+spec Layer1BaseRiscSpec for ComposedRiscCpuTarget:
+  requires mtvecAddr() -> Nat
+  requires trapCauseCode() -> Nat
+  requires customExtOpcode() -> Nat
+  def mtvecAddr() -> Nat:
+    64n
+  def trapCauseCode() -> Nat:
+    11n
+  def customExtOpcode() -> Nat:
+    43n
+  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
+    rs1Val + rs2Val + imm
+  def extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
+    rs1Val * rs2Val + imm
+  def nextPc(pc: Nat) -> Nat:
+    pc + self.mtvecAddr
+  def execStep(rs1Val: Nat, rs2Val: Nat) -> Nat:
+    rs1Val + rs2Val + self.trapCauseCode
+  claim composed_next_pc_open_recursion(pc: Nat): self.nextPc(pc) == pc + self.mtvecAddr
+
+spec Layer2PrivCsrOverride for ComposedRiscCpuTarget:
+  requires execStep(rs1Val: Nat, rs2Val: Nat) -> Nat
+  def mtvecAddr() -> Nat:
+    64n
+  def trapCauseCode() -> Nat:
+    11n
+  def execStep(rs1Val: Nat, rs2Val: Nat) -> Nat:
+    super.execStep(rs1Val, rs2Val) + 42n
+
+spec Layer3CustomSimdZkOverride for ComposedRiscCpuTarget:
+  requires execStep(rs1Val: Nat, rs2Val: Nat) -> Nat
+  def customExtOpcode() -> Nat:
+    43n
+  def execStep(rs1Val: Nat, rs2Val: Nat) -> Nat:
+    super.execStep(rs1Val, rs2Val) + 10n
+
+def seedComposedRiscCpu() -> ComposedRiscCpuTarget:
+  {mtvecAddr: 0n, trapCauseCode: 0n, customExtOpcode: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, extMacExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, nextPc: fn(p: Nat) -> Nat: 0n, execStep: fn(a: Nat, b: Nat) -> Nat: 0n}
+
+def composedRiscCpu() -> ComposedRiscCpuTarget:
+  fix(compose(compose(Layer1BaseRiscSpec, Layer2PrivCsrOverride), Layer3CustomSimdZkOverride), seedComposedRiscCpu())
+
+def evalFibonacci8Sum() -> Nat:
+  composedRiscCpu().aluExec(21n, 33n, 0n)
+
+def evalCustomSimdMac4() -> Nat:
+  composedRiscCpu().extMacExec(639n, 2n, 4n)

@@ -1,0 +1,62 @@
+edition ObjectiveBend 1
+# Flagship App #2 (Top Level): Closed-Loop 20 kHz FOC Motor Drive & 6-Level SiC FCML HIL Controller
+# Reference: QUALIFICATION-AND-SILICON-LEAN.md §4 App #2
+#            Obend/Hardware/DigitalTwin.lean (sampled_data_current_loop_iss_contraction,
+#                                             sampled_data_closed_loop_powertrain_safety_invariant)
+#            Obend/Analysis/EqSatHypergraph.lean (statorCoupledLoss_adjoint_eqSat_sound)
+
+import ./ClarkePark.obend as ClarkePark
+import ./PiCurrentLoop.obend as PiLoop
+import ./SicFcmlInverterLeg.obend as FcmlLeg
+
+law monotone_hil_step: monotone(hilStepCounter)
+law write_once_overtemp_gate_kill: writeOnce(overtempGateKill)
+law bounded_dc_bus_voltage_v: new.dcBusVoltageV <= 1200
+
+record FocDriveController:
+  controlFreqKhz() -> Nat
+  icapDprBandwidthGain() -> Nat
+  statorThermalResPermille() -> Nat
+  closedLoopVqMv(iqErrAmp: Nat) -> Nat
+  activeFcmlBalanceMv(capErrMv: Nat) -> Nat
+  statorWindingTempC(lossWatt: Nat) -> Nat
+
+spec Nominal20kHzFocDrive for FocDriveController:
+  requires controlFreqKhz() -> Nat
+  requires icapDprBandwidthGain() -> Nat
+  requires statorThermalResPermille() -> Nat
+  def controlFreqKhz() -> Nat:
+    20n
+  def icapDprBandwidthGain() -> Nat:
+    400n
+  def statorThermalResPermille() -> Nat:
+    5n
+  def closedLoopVqMv(iqErrAmp: Nat) -> Nat:
+    iqErrAmp * self.icapDprBandwidthGain + 250n
+  def activeFcmlBalanceMv(capErrMv: Nat) -> Nat:
+    capErrMv * 20n + 10n
+  def statorWindingTempC(lossWatt: Nat) -> Nat:
+    45n + lossWatt * self.statorThermalResPermille
+  claim closed_loop_vq_open_recursion(iqErrAmp: Nat): self.closedLoopVqMv(iqErrAmp) == iqErrAmp * self.icapDprBandwidthGain + 250n
+  claim stator_temp_open_recursion(lossWatt: Nat): self.statorWindingTempC(lossWatt) == 45n + lossWatt * self.statorThermalResPermille
+
+spec IcapDprHighBandwidthFocOverride for FocDriveController:
+  requires activeFcmlBalanceMv(capErrMv: Nat) -> Nat
+  def icapDprBandwidthGain() -> Nat:
+    480n
+  def statorThermalResPermille() -> Nat:
+    4n
+  def activeFcmlBalanceMv(capErrMv: Nat) -> Nat:
+    super.activeFcmlBalanceMv(capErrMv) + 15n
+
+def seedFocDrive() -> FocDriveController:
+  {controlFreqKhz: 0n, icapDprBandwidthGain: 0n, statorThermalResPermille: 0n, closedLoopVqMv: fn(iq: Nat) -> Nat: 0n, activeFcmlBalanceMv: fn(ce: Nat) -> Nat: 0n, statorWindingTempC: fn(lw: Nat) -> Nat: 0n}
+
+def nominalFocDrive() -> FocDriveController:
+  fix(Nominal20kHzFocDrive, seedFocDrive())
+
+def icapDprHotSwappedFocDrive() -> FocDriveController:
+  fix(compose(Nominal20kHzFocDrive, IcapDprHighBandwidthFocOverride), seedFocDrive())
+
+def fullHilClosedLoopDiagnosticMv() -> Nat:
+  icapDprHotSwappedFocDrive().closedLoopVqMv(250n) + FcmlLeg.unbalanced15vRecoveryStepMv() + ClarkePark.ratedDirectAxisCurrentMa() + PiLoop.ratedStepVqCommandMv()

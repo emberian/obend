@@ -23,6 +23,8 @@ vectors into flat bitvectors and `Obend.Hardware.HDL.RtlExpr` combinational circ
    - Proves `taggedUnion_case_mux_sound`: hardware tag-comparison + payload extraction implements
      exact sum elimination (`Term.case`), and proves `array_index_mux_sound`.
 -/
+public import Std.Tactic.BVDecide
+public meta import Std.Tactic.BVDecide.Reflect
 public import Obend.Core.Term
 public import Obend.Hardware.HDL
 @[expose] public section
@@ -436,5 +438,178 @@ theorem array_index_mux_sound
     by_cases hEq : (evalRtlExpr inputs wires regs idxExpr == BitVec.ofNat 64 baseIdx) = true
     · simp [hEq]
     · simp [hEq, ih (baseIdx + 1)]
+
+/-! ## 7. `RtlLayoutCtx` Arbitrary-Offset Bit-Slice & Tagged-Union RTL Lowering -/
+
+/-- Hardware layout context mapping record field names to `(offset, width)` bit-slices inside a
+64-bit word and sum constructor labels to `(tagIdx, payloadWidth)` arms with `unionTagBits` tag width. -/
+structure RtlLayoutCtx where
+  structSlices : List (String × (Nat × Nat)) := []
+  unionTagBits : Nat := 8
+  unionArms    : List (String × (Nat × Nat)) := []
+  deriving DecidableEq, Repr
+
+/-- Look up the `(offset, width)` bit-slice for a struct field `fieldName` in `ctx`. -/
+def RtlLayoutCtx.lookupField (ctx : RtlLayoutCtx) (fieldName : String) : Option (Nat × Nat) :=
+  (ctx.structSlices.find? (fun (f, _) => f == fieldName)).map (·.2)
+
+/-- Look up the `(tagIdx, payloadWidth)` descriptor for a sum constructor `armLabel` in `ctx`. -/
+def RtlLayoutCtx.lookupArm (ctx : RtlLayoutCtx) (armLabel : String) : Option (Nat × Nat) :=
+  (ctx.unionArms.find? (fun (l, _) => l == armLabel)).map (·.2)
+
+/-- Specification of extracting a bit-slice at `(offset, width)` from a 64-bit hardware word. -/
+def evalSliceExtract64 (word : BitVec 64) (offset width : Nat) : BitVec 64 :=
+  (word >>> ((BitVec.ofNat 64 offset).toNat % 64)) &&& widthMask64 width
+
+/-- Compile bit-slice extraction `(word >>> offset) & widthMask64 width` into `RtlExpr`. -/
+def compileSliceExtractRtl (wordExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
+  .alu .bitAnd
+    (.alu .lshr wordExpr (.const (BitVec.ofNat 64 offset)))
+    (.const (widthMask64 width))
+
+/-- Specification of inserting a width-masked `fieldVal` at `(offset, width)` into `acc`. -/
+def evalSliceInsert64 (acc fieldVal : BitVec 64) (offset width : Nat) : BitVec 64 :=
+  acc ||| ((fieldVal &&& widthMask64 width) <<< ((BitVec.ofNat 64 offset).toNat % 64))
+
+/-- Compile bit-slice insertion `acc | ((field & widthMask64 width) << offset)` into `RtlExpr`. -/
+def compileSliceInsertRtl (accExpr fieldExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
+  .alu .bitOr accExpr
+    (.alu .shl
+      (.alu .bitAnd fieldExpr (.const (widthMask64 width)))
+      (.const (BitVec.ofNat 64 offset)))
+
+/-- Bitmask that zeroes out the slice `[offset + width - 1 : offset]` in a 64-bit word. -/
+def clearSliceMask64 (offset width : Nat) : BitVec 64 :=
+  ~~~(widthMask64 width <<< ((BitVec.ofNat 64 offset).toNat % 64))
+
+/-- Specification of updating slice `(offset, width)` in `word` with `newVal`. -/
+def evalSliceUpdate64 (word newVal : BitVec 64) (offset width : Nat) : BitVec 64 :=
+  (word &&& clearSliceMask64 offset width) |||
+    ((newVal &&& widthMask64 width) <<< ((BitVec.ofNat 64 offset).toNat % 64))
+
+/-- Compile in-place bit-slice update `(word & ~(mask << offset)) | ((newVal & mask) << offset)`
+into `RtlExpr` (used for `.extend inherited fields`). -/
+def compileSliceUpdateRtl (wordExpr newValExpr : RtlExpr) (offset width : Nat) : RtlExpr :=
+  .alu .bitOr
+    (.alu .bitAnd wordExpr (.const (clearSliceMask64 offset width)))
+    (.alu .shl
+      (.alu .bitAnd newValExpr (.const (widthMask64 width)))
+      (.const (BitVec.ofNat 64 offset)))
+
+/-- Specification of packing a sum tag (`tagBits` at LSB `0`) and payload (`payloadWidth` at `tagBits`). -/
+def evalTagInject64 (tagBits tagIdx payloadWidth : Nat) (payload : BitVec 64) : BitVec 64 :=
+  evalSliceInsert64 (BitVec.ofNat 64 tagIdx &&& widthMask64 tagBits) payload tagBits payloadWidth
+
+/-- Compile tagged-union injection `.inject label payload` into a single 64-bit `RtlExpr` word
+with tag in `[tagBits - 1 : 0]` and payload in `[tagBits + payloadWidth - 1 : tagBits]`. -/
+def compileTagInjectRtl (tagBits tagIdx payloadWidth : Nat) (payloadExpr : RtlExpr) : RtlExpr :=
+  compileSliceInsertRtl (.const (BitVec.ofNat 64 tagIdx &&& widthMask64 tagBits)) payloadExpr tagBits payloadWidth
+
+/-- Compile tag extraction `[tagBits - 1 : 0]` from a packed 64-bit tagged union word. -/
+def compileTagExtractRtl (tagBits : Nat) (scrutExpr : RtlExpr) : RtlExpr :=
+  compileSliceExtractRtl scrutExpr 0 tagBits
+
+/-- Compile payload extraction `[tagBits + payloadWidth - 1 : tagBits]` from a packed 64-bit tagged union word. -/
+def compilePayloadExtractRtl (tagBits payloadWidth : Nat) (scrutExpr : RtlExpr) : RtlExpr :=
+  compileSliceExtractRtl scrutExpr tagBits payloadWidth
+
+/-- Soundness of `compileSliceExtractRtl`, `compileSliceInsertRtl`, and `compileSliceUpdateRtl`. -/
+theorem compileSliceRtl_ops_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (wordExpr accExpr fieldExpr : RtlExpr)
+    (offset width : Nat) :
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl wordExpr offset width) =
+      evalSliceExtract64 (evalRtlExpr inputs wires regs wordExpr) offset width ∧
+    evalRtlExpr inputs wires regs (compileSliceInsertRtl accExpr fieldExpr offset width) =
+      evalSliceInsert64 (evalRtlExpr inputs wires regs accExpr) (evalRtlExpr inputs wires regs fieldExpr) offset width ∧
+    evalRtlExpr inputs wires regs (compileSliceUpdateRtl wordExpr fieldExpr offset width) =
+      evalSliceUpdate64 (evalRtlExpr inputs wires regs wordExpr) (evalRtlExpr inputs wires regs fieldExpr) offset width := by
+  exact ⟨rfl, rfl, rfl⟩
+
+/-- **Theorem (`compileSliceExtract_insert_disjoint_sound`)**:
+For any expressions `eLo`, `eHi` packed into disjoint slices `(0, 32)` and `(32, 32)` via
+`compileSliceInsertRtl`, `compileSliceExtractRtl` at `(0, 32)` and `(32, 32)` recovers the exact
+width-masked fields, and `compileSliceUpdateRtl` on either slice `(0, 32)` or `(32, 32)` updates
+that slice while preserving the disjoint slice! -/
+theorem compileSliceExtract_insert_disjoint_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (eLo eHi eNew : RtlExpr) :
+    let packed := compileSliceInsertRtl (compileSliceInsertRtl (.const 0#64) eLo 0 32) eHi 32 32
+    let vLo := evalRtlExpr inputs wires regs eLo
+    let vHi := evalRtlExpr inputs wires regs eHi
+    let vNew := evalRtlExpr inputs wires regs eNew
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl packed 0 32) = (vLo &&& widthMask64 32) ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl packed 32 32) = (vHi &&& widthMask64 32) ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl (compileSliceUpdateRtl packed eNew 0 32) 0 32) =
+      (vNew &&& widthMask64 32) ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl (compileSliceUpdateRtl packed eNew 0 32) 32 32) =
+      (vHi &&& widthMask64 32) ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl (compileSliceUpdateRtl packed eNew 32 32) 32 32) =
+      (vNew &&& widthMask64 32) ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl (compileSliceUpdateRtl packed eNew 32 32) 0 32) =
+      (vLo &&& widthMask64 32) := by
+  dsimp only
+  simp only [compileSliceExtractRtl, compileSliceInsertRtl, compileSliceUpdateRtl,
+    evalRtlExpr, evalAluOp, widthMask64, clearSliceMask64]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> bv_decide
+
+/-- **Theorem (`compileSlice_fullWidth64_boundary_sound`)**:
+At the full 64-bit word boundary `(offset = 0, width = 64)`, `widthMask64 64 = ~~~0#64`,
+`compileSliceInsertRtl` followed by `compileSliceExtractRtl` recovers the full 64-bit word
+without truncation, and `compileSliceUpdateRtl` replaces all 64 bits cleanly. -/
+theorem compileSlice_fullWidth64_boundary_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (eWord eNew : RtlExpr) :
+    let vWord := evalRtlExpr inputs wires regs eWord
+    let vNew := evalRtlExpr inputs wires regs eNew
+    widthMask64 64 = ~~~0#64 ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl (compileSliceInsertRtl (.const 0#64) eWord 0 64) 0 64) =
+      vWord ∧
+    evalRtlExpr inputs wires regs (compileSliceExtractRtl (compileSliceUpdateRtl eWord eNew 0 64) 0 64) =
+      vNew := by
+  dsimp only
+  simp only [compileSliceExtractRtl, compileSliceInsertRtl, compileSliceUpdateRtl,
+    evalRtlExpr, evalAluOp, widthMask64, clearSliceMask64]
+  refine ⟨by decide, ?_, ?_⟩ <;> bv_decide
+
+/-- **Theorem (`compileTagInject_caseMux_sound`)**:
+Injecting constructor `tagIdx` with `payloadExpr` via `compileTagInjectRtl` and matching its
+extracted tag via `compileCaseMuxRtl` evaluates to `evalCaseMuxSpec` on the masked tag, while
+`compilePayloadExtractRtl` with `8`-bit tag and `32`-bit payload recovers `payload &&& widthMask64 32`. -/
+theorem compileTagInject_caseMux_sound
+    (inputs wires regs : Nat → BitVec 64)
+    (tagIdx : Nat)
+    (payloadExpr defaultExpr : RtlExpr)
+    (arms : List (Nat × RtlExpr)) :
+    let injected := compileTagInjectRtl 8 tagIdx 32 payloadExpr
+    let tagE := compileTagExtractRtl 8 injected
+    let payE := compilePayloadExtractRtl 8 32 injected
+    let vTag := BitVec.ofNat 64 tagIdx &&& widthMask64 8
+    let vPay := evalRtlExpr inputs wires regs payloadExpr &&& widthMask64 32
+    evalRtlExpr inputs wires regs (compileCaseMuxRtl tagE arms defaultExpr) =
+      evalCaseMuxSpec
+        ⟨vTag, vPay⟩
+        (arms.map (fun (t, body) => (t, evalRtlExpr inputs wires regs body)))
+        (evalRtlExpr inputs wires regs defaultExpr) ∧
+    evalRtlExpr inputs wires regs payE = vPay := by
+  dsimp only
+  have hTag :
+      evalRtlExpr inputs wires regs (compileTagExtractRtl 8 (compileTagInjectRtl 8 tagIdx 32 payloadExpr)) =
+        (BitVec.ofNat 64 tagIdx &&& widthMask64 8) := by
+    simp only [compileTagExtractRtl, compileTagInjectRtl, compileSliceExtractRtl, compileSliceInsertRtl,
+      evalRtlExpr, evalAluOp, widthMask64]
+    bv_decide
+  have hPay :
+      evalRtlExpr inputs wires regs (compilePayloadExtractRtl 8 32 (compileTagInjectRtl 8 tagIdx 32 payloadExpr)) =
+        (evalRtlExpr inputs wires regs payloadExpr &&& widthMask64 32) := by
+    simp only [compilePayloadExtractRtl, compileTagInjectRtl, compileSliceExtractRtl, compileSliceInsertRtl,
+      evalRtlExpr, evalAluOp, widthMask64]
+    bv_decide
+  refine ⟨?_, hPay⟩
+  rw [taggedUnion_case_mux_sound inputs wires regs
+    (compileTagExtractRtl 8 (compileTagInjectRtl 8 tagIdx 32 payloadExpr))
+    (compilePayloadExtractRtl 8 32 (compileTagInjectRtl 8 tagIdx 32 payloadExpr))
+    arms defaultExpr]
+  rw [hTag, hPay]
 
 end Obend.Hardware.Types

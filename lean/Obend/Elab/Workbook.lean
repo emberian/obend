@@ -1,4 +1,55 @@
-/-
+module
+
+public import Lean
+public meta import Lean
+public import Obend.Core.Term
+public meta import Obend.Core.Term
+public import Obend.Core.Ty
+public meta import Obend.Core.Ty
+public import Obend.Spec.Law
+public meta import Obend.Spec.Law
+public import Obend.Spec.LawCompile
+public meta import Obend.Spec.LawCompile
+public import Obend.Spec.Parse
+public meta import Obend.Spec.Parse
+public import Obend.Spec.Syntax
+public meta import Obend.Spec.Syntax
+public import Obend.Spec.Elaborate
+public meta import Obend.Spec.Elaborate
+public import Obend.Spec.FrontEnd
+public meta import Obend.Spec.FrontEnd
+public import Obend.Spec.Capture
+public meta import Obend.Spec.Capture
+public import Obend.Logic.LateBinding
+public meta import Obend.Logic.LateBinding
+public import Obend.Logic.Claim
+public meta import Obend.Logic.Claim
+public import Obend.Logic.Rewrite
+public meta import Obend.Logic.Rewrite
+public import Obend.Logic.Frame
+public meta import Obend.Logic.Frame
+public import Obend.Logic.Obligation
+public meta import Obend.Logic.Obligation
+public import Obend.Logic.Program
+public meta import Obend.Logic.Program
+public import Obend.Leaf.Flatten
+public meta import Obend.Leaf.Flatten
+public import Obend.Leaf.Emit
+public meta import Obend.Leaf.Emit
+public import Obend.Lower.Syntax
+public meta import Obend.Lower.Syntax
+public import Obend.Lower.Transport
+public meta import Obend.Lower.Transport
+public import Obend.Lower.Proofs.Book
+public meta import Obend.Lower.Proofs.Book
+public import Obend.Lower.Reflect
+public meta import Obend.Lower.Reflect
+public import Obend.Elab.AutoCert
+public meta import Obend.Elab.AutoCert
+import all Obend.Judge.Class
+import all Obend.Logic.Obligation
+
+/-!
 # Obend.Elab.Workbook — Bidirectional `.obend` <-> `.lean` Metasystem Bridge
 
 Provides a first-class Lean 4 metasystem bridge allowing `.lean` files to elaborate,
@@ -7,8 +58,8 @@ without manual de Bruijn transcription:
 
 1. `elaborateObendSource` and `loadObendWorkbookFile`:
    Wraps `Obend.Spec.Capture.captureModule`, `Obend.Spec.Elaborate`, `Obend.Spec.FrontEnd.accept`,
-   `Obend.Leaf.Flatten`, `Obend.Leaf.Emit`, and `Obend.Lower.Reflect` into a verified
-   `WorkbookPackage`.
+   `Obend.Leaf.Flatten`, `Obend.Leaf.Emit`, `Obend.Lower.Reflect`, and `Obend.Elab.AutoCert`
+   into a verified `WorkbookPackage`.
 2. `obendWorkbookExt`, `#import_obend "path/to/File.obend" as Ns`, and `#obend_decl Ns "..."`:
    Elaborates `.obend` sources at Lean compile time, verifies `FrontEnd.accept`, registers the
    package in `obendWorkbookExt`, and emits concrete kernel-checked Lean constants inside namespace
@@ -19,28 +70,8 @@ without manual de Bruijn transcription:
    Exports verified Lean `TransportCert`, `LawExpr`, and `Justification` certificates back into
    an `.obend` `WorkbookPackage`'s obligation checker.
 -/
-import Lean
-import Obend.Core.Term
-import Obend.Core.Ty
-import Obend.Spec.Law
-import Obend.Spec.LawCompile
-import Obend.Spec.Parse
-import Obend.Spec.Syntax
-import Obend.Spec.Elaborate
-import Obend.Spec.FrontEnd
-import Obend.Spec.Capture
-import Obend.Logic.LateBinding
-import Obend.Logic.Claim
-import Obend.Logic.Rewrite
-import Obend.Logic.Frame
-import Obend.Logic.Obligation
-import Obend.Logic.Program
-import Obend.Leaf.Flatten
-import Obend.Leaf.Emit
-import Obend.Lower.Syntax
-import Obend.Lower.Transport
-import Obend.Lower.Proofs.Book
-import Obend.Lower.Reflect
+
+@[expose] public section
 
 namespace Obend.Elab.Workbook
 
@@ -454,10 +485,31 @@ def elaborateObendSource (src : String) (moduleName : String := "Main")
       if let some comp := wd.composition? then
         if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
           let steps? := proposeWorkbookDerivation co
-          let just? := steps?.map Justification.byDerivation
-          let ok := match just? with
-            | some j => Obend.Logic.obligationCheck 4096 co j == .ok
+          let derivJust? := steps?.map Justification.byDerivation
+          let derivOk := match derivJust? with
+            | some j => Obend.Logic.obligationCheck 4096 co j == Obend.Judge.Verdict.ok
             | none => false
+          let claimDecl? : Option Obend.Spec.Syntax.Claim :=
+            allDecodedMods.findSome? fun dm =>
+              dm.decls.findSome? fun d =>
+                match d with
+                | .spec s =>
+                  if s.name == specKey || (dm.name ++ "." ++ s.name) == specKey then
+                    s.claims.find? (·.name == claimName)
+                  else none
+                | _ => none
+          let (just?, ok) :=
+            if derivOk then
+              (derivJust?, true)
+            else
+              match Obend.Elab.AutoCert.synthesizeClaimExternalJudge
+                  Obend.Elab.AutoCert.autoCertFormats 4096 moduleName claimName claimDecl? wd.book? co with
+              | some extJ =>
+                (some extJ,
+                 Obend.Logic.obligationCheckWithJudges Obend.Elab.AutoCert.autoCertFormats 4096 co extJ ==
+                   Obend.Judge.Verdict.ok)
+              | none =>
+                (derivJust?, false)
           wclaims := wclaims ++ [{
             specKey := specKey
             name := claimName
@@ -663,7 +715,7 @@ instance workbookTransportJudge : Obend.Judge TransportObj TransportCert where
   complete := by
     intro o ⟨hs, hc⟩ _
     refine ⟨⟨workbookSourceDigest o.decideExpr, Obend.Lower.lowerProp o.decideExpr, o.argTys, []⟩, 0, ?_⟩
-    simp [workbookTransportCheck, Obend.Logic.termEq_refl', hs, hc]
+    simp [workbookTransportCheck, hs, hc]
   mono := by intros; rfl
 
 def reflNatDecideExpr : LExpr :=
@@ -722,9 +774,10 @@ def workbookTransportFormat : Obend.Judge.Format where
   bad_refused := ⟨.otherSource, [], badWorkbookTransport_refused⟩
 
 /-- Registered judge formats for workbook obligation verification (`transport@1`, `rewrite@1`,
-    `lrat@1`, `clearing@1`). -/
+    `lrat@1`, `clearing@1`, `interval@1`, `taylor-model@1`, `sos-lyapunov-cbf@1`, `groebner@1`,
+    `rtl-synth@1`, `hw-rtl-synth@1`). -/
 def workbookFormats : List Obend.Judge.Format :=
-  workbookTransportFormat :: Obend.Logic.defaultExternalFormats
+  workbookTransportFormat :: Obend.Elab.AutoCert.autoCertFormats
 
 /-- Convert a Lean `TransportCert` into an `.obend` `.byLoweredLean` obligation justification. -/
 def justificationOfTransportCert (cert : TransportCert) (receipt : ByteArray := ByteArray.empty) :
@@ -826,7 +879,7 @@ theorem verifyWorkbookObligationsWithLean_sound
 /-! ## 4. Persistent Environment Extension `obendWorkbookExt` -/
 
 /-- Persistent environment extension storing elaborated `WorkbookPackage`s by namespace `Name`. -/
-initialize obendWorkbookExt :
+meta initialize obendWorkbookExt :
     SimplePersistentEnvExtension (Name × WorkbookPackage) (NameMap WorkbookPackage) ←
   registerSimplePersistentEnvExtension {
     addImportedFn := fun arrays =>
@@ -836,7 +889,7 @@ initialize obendWorkbookExt :
   }
 
 /-- Look up a registered `WorkbookPackage` in the current Lean environment. -/
-def getRegisteredWorkbook? (env : Environment) (ns : Name) : Option WorkbookPackage :=
+meta def getRegisteredWorkbook? (env : Environment) (ns : Name) : Option WorkbookPackage :=
   (obendWorkbookExt.getState env).find? ns
 
 /-! ## 5. `ToExpr` Instances for Kernel Constant Materialization -/
@@ -866,12 +919,40 @@ def toExprPrimitive : Primitive → Expr
   | .less => mkConst ``Primitive.less
   | .lessEqual => mkConst ``Primitive.lessEqual
   | .modulo => mkConst ``Primitive.modulo
+  | .bitAnd => mkConst ``Primitive.bitAnd
+  | .bitOr => mkConst ``Primitive.bitOr
+  | .bitXor => mkConst ``Primitive.bitXor
+  | .shl => mkConst ``Primitive.shl
+  | .lshr => mkConst ``Primitive.lshr
+  | .ashr => mkConst ``Primitive.ashr
+  | .slt => mkConst ``Primitive.slt
+  | .qmul32 => mkConst ``Primitive.qmul32
 
-instance : ToExpr Primitive where
-  toExpr := toExprPrimitive
+meta def metaToExprPrimitive : Primitive → Expr
+  | .add => mkConst ``Primitive.add
+  | .multiply => mkConst ``Primitive.multiply
+  | .equal => mkConst ``Primitive.equal
+  | .conjunction => mkConst ``Primitive.conjunction
+  | .labelEqual => mkConst ``Primitive.labelEqual
+  | .subtract => mkConst ``Primitive.subtract
+  | .divide => mkConst ``Primitive.divide
+  | .less => mkConst ``Primitive.less
+  | .lessEqual => mkConst ``Primitive.lessEqual
+  | .modulo => mkConst ``Primitive.modulo
+  | .bitAnd => mkConst ``Primitive.bitAnd
+  | .bitOr => mkConst ``Primitive.bitOr
+  | .bitXor => mkConst ``Primitive.bitXor
+  | .shl => mkConst ``Primitive.shl
+  | .lshr => mkConst ``Primitive.lshr
+  | .ashr => mkConst ``Primitive.ashr
+  | .slt => mkConst ``Primitive.slt
+  | .qmul32 => mkConst ``Primitive.qmul32
+
+meta instance : ToExpr Primitive where
+  toExpr := metaToExprPrimitive
   toTypeExpr := mkConst ``Primitive
 
-partial def toExprTerm : Term → Expr
+meta partial def toExprTerm : Term → Expr
   | .hole n σ =>
     have : ToExpr Term := ⟨toExprTerm, mkConst ``Obend.Core.Term.Term⟩
     mkApp2 (mkConst ``Term.hole) (toExpr n) (toExpr σ)
@@ -907,11 +988,11 @@ partial def toExprTerm : Term → Expr
   | .split t names f =>
     mkApp3 (mkConst ``Term.split) (toExprTerm t) (toExpr names) (toExprTerm f)
 
-instance : ToExpr Term where
+meta instance : ToExpr Term where
   toExpr := toExprTerm
   toTypeExpr := mkConst ``Obend.Core.Term.Term
 
-instance : ToExpr Quantity where
+meta instance : ToExpr Quantity where
   toExpr
     | .erased => mkConst ``Quantity.erased
     | .affine => mkConst ``Quantity.affine
@@ -919,13 +1000,13 @@ instance : ToExpr Quantity where
     | .unrestricted => mkConst ``Quantity.unrestricted
   toTypeExpr := mkConst ``Quantity
 
-instance : ToExpr Reuse where
+meta instance : ToExpr Reuse where
   toExpr
     | .once => mkConst ``Reuse.once
     | .reusable => mkConst ``Reuse.reusable
   toTypeExpr := mkConst ``Reuse
 
-partial def toExprTy : Ty → Expr
+meta partial def toExprTy : Ty → Expr
   | .natural => mkConst ``Ty.natural
   | .label => mkConst ``Ty.label
   | .boolean => mkConst ``Ty.boolean
@@ -939,11 +1020,11 @@ partial def toExprTy : Ty → Expr
   | .variant r => mkApp (mkConst ``Ty.variant) (toExprTy r)
   | .computation p r res => mkApp3 (mkConst ``Ty.computation) (toExprTy p) (toExprTy r) (toExprTy res)
 
-instance : ToExpr Ty where
+meta instance : ToExpr Ty where
   toExpr := toExprTy
   toTypeExpr := mkConst ``Ty
 
-instance : ToExpr NatOp where
+meta instance : ToExpr NatOp where
   toExpr
     | .add => mkConst ``NatOp.add
     | .sub => mkConst ``NatOp.sub
@@ -954,7 +1035,7 @@ instance : ToExpr NatOp where
     | .ble => mkConst ``NatOp.ble
   toTypeExpr := mkConst ``NatOp
 
-partial def toExprLExpr : LExpr → Expr
+meta partial def toExprLExpr : LExpr → Expr
   | .bvar i => mkApp (mkConst ``LExpr.bvar) (toExpr i)
   | .erased => mkConst ``LExpr.erased
   | .const n b => mkApp2 (mkConst ``LExpr.const) (toExpr n) (toExprLExpr b)
@@ -983,49 +1064,49 @@ partial def toExprLExpr : LExpr → Expr
     mkApp3 (mkConst ``LExpr.cases) (toExpr res) (toExpr arms) (toExprLExpr mj)
   | .recConst n ty b => mkApp3 (mkConst ``LExpr.recConst) (toExpr n) (toExpr ty) (toExprLExpr b)
 
-instance : ToExpr LExpr where
+meta instance : ToExpr LExpr where
   toExpr := toExprLExpr
   toTypeExpr := mkConst ``LExpr
 
-instance : ToExpr Layer where
+meta instance : ToExpr Layer where
   toExpr L :=
     mkApp5 (mkConst ``Layer.mk)
       (toExpr L.name) (toExpr L.metadata) (toExpr L.fields) (toExpr L.flat) (toExpr L.composeMeta)
   toTypeExpr := mkConst ``Layer
 
-instance : ToExpr Composition where
+meta instance : ToExpr Composition where
   toExpr C :=
     mkApp3 (mkConst ``Composition.mk) (toExpr C.top) (toExpr C.below) (toExpr C.seed)
   toTypeExpr := mkConst ``Composition
 
-instance : ToExpr DefKind where
+meta instance : ToExpr DefKind where
   toExpr
     | .method => mkConst ``Obend.Leaf.DefKind.method
     | .cell => mkConst ``Obend.Leaf.DefKind.cell
   toTypeExpr := mkConst ``Obend.Leaf.DefKind
 
-instance : ToExpr LeafDef where
+meta instance : ToExpr LeafDef where
   toExpr d :=
     mkApp5 (mkConst ``LeafDef.mk)
       (toExpr d.member) (toExpr d.slot) (toExpr d.kind) (toExpr d.code) (toExpr d.reads)
   toTypeExpr := mkConst ``LeafDef
 
-instance : ToExpr BookItem where
+meta instance : ToExpr BookItem where
   toExpr
     | .slot d => mkApp (mkConst ``BookItem.slot) (toExpr d)
     | .static m v => mkApp2 (mkConst ``BookItem.static) (toExpr m) (toExpr v)
   toTypeExpr := mkConst ``BookItem
 
-instance : ToExpr Book where
+meta instance : ToExpr Book where
   toExpr B := mkApp (mkConst ``Book.mk) (toExpr B.items)
   toTypeExpr := mkConst ``Book
 
-instance : ToExpr ReflectedObject where
+meta instance : ToExpr ReflectedObject where
   toExpr ro :=
     mkApp3 (mkConst ``mkReflectedObject) (toExpr ro.name) (toExpr ro.composition) (toExpr ro.defs)
   toTypeExpr := mkConst ``ReflectedObject
 
-partial def toExprRStep : RStep → Expr
+meta partial def toExprRStep : RStep → Expr
   | .run n => mkApp (mkConst ``RStep.run) (toExpr n)
   | .lateBinding m L => mkApp2 (mkConst ``RStep.lateBinding) (toExpr m) (toExpr L)
   | .assoc d => mkApp (mkConst ``RStep.assoc) (toExpr d)
@@ -1037,24 +1118,24 @@ partial def toExprRStep : RStep → Expr
     have : ToExpr RStep := ⟨toExprRStep, mkConst ``RStep⟩
     mkApp2 (mkConst ``RStep.trans) (toExpr f) (toExpr s)
 
-instance : ToExpr RStep where
+meta instance : ToExpr RStep where
   toExpr := toExprRStep
   toTypeExpr := mkConst ``RStep
 
-instance : ToExpr ClaimObj where
+meta instance : ToExpr ClaimObj where
   toExpr o :=
     mkApp4 (mkConst ``ClaimObj.mk) (toExpr o.comp) (toExpr o.layer) (toExpr o.claim) (toExpr o.arity)
   toTypeExpr := mkConst ``ClaimObj
 
-instance : ToExpr Support where
+meta instance : ToExpr Support where
   toExpr sp := mkApp2 (mkConst ``Support.mk) (toExpr sp.member) (toExpr sp.unfolded)
   toTypeExpr := mkConst ``Support
 
-instance : ToExpr ByteArray where
+meta instance : ToExpr ByteArray where
   toExpr ba := mkApp (mkConst ``mkByteArrayOfList) (toExpr ba.data.toList)
   toTypeExpr := mkConst ``ByteArray
 
-instance : ToExpr Justification where
+meta instance : ToExpr Justification where
   toExpr
     | .byDerivation steps => mkApp (mkConst ``Justification.byDerivation) (toExpr steps)
     | .byLoweredLean lowered sups receipt =>
@@ -1064,7 +1145,7 @@ instance : ToExpr Justification where
     | .byEval samples => mkApp (mkConst ``Justification.byEval) (toExpr samples)
   toTypeExpr := mkConst ``Justification
 
-instance : ToExpr LawRef where
+meta instance : ToExpr LawRef where
   toExpr
     | .field n => mkApp (mkConst ``LawRef.field) (toExpr n)
     | .subject => mkConst ``LawRef.subject
@@ -1073,7 +1154,7 @@ instance : ToExpr LawRef where
     | .turn => mkConst ``LawRef.turn
   toTypeExpr := mkConst ``LawRef
 
-partial def toExprLawExpr : LawExpr → Expr
+meta partial def toExprLawExpr : LawExpr → Expr
   | .eqC r v => mkApp2 (mkConst ``LawExpr.eqC) (toExpr r) (toExpr v)
   | .leC r v => mkApp2 (mkConst ``LawExpr.leC) (toExpr r) (toExpr v)
   | .inC r vs => mkApp2 (mkConst ``LawExpr.inC) (toExpr r) (toExpr vs)
@@ -1087,11 +1168,11 @@ partial def toExprLawExpr : LawExpr → Expr
   | .or l r => mkApp2 (mkConst ``LawExpr.or) (toExprLawExpr l) (toExprLawExpr r)
   | .implies p c => mkApp2 (mkConst ``LawExpr.implies) (toExprLawExpr p) (toExprLawExpr c)
 
-instance : ToExpr LawExpr where
+meta instance : ToExpr LawExpr where
   toExpr := toExprLawExpr
   toTypeExpr := mkConst ``LawExpr
 
-instance : ToExpr WorkbookDef where
+meta instance : ToExpr WorkbookDef where
   toExpr d :=
     mkApp9 (mkConst ``WorkbookDef.mk)
       (toExpr d.name) (toExpr d.fullKey) (toExpr d.knotTerm) (toExpr d.term)
@@ -1099,14 +1180,14 @@ instance : ToExpr WorkbookDef where
       (toExpr d.book?) (toExpr d.reflectedObject?)
   toTypeExpr := mkConst ``WorkbookDef
 
-instance : ToExpr WorkbookClaim where
+meta instance : ToExpr WorkbookClaim where
   toExpr c :=
     mkApp7 (mkConst ``WorkbookClaim.mk)
       (toExpr c.specKey) (toExpr c.name) (toExpr c.targetDef) (toExpr c.claimObj)
       (toExpr c.autoSteps?) (toExpr c.autoJustification?) (toExpr c.autoVerified)
   toTypeExpr := mkConst ``WorkbookClaim
 
-instance : ToExpr WorkbookPackage where
+meta instance : ToExpr WorkbookPackage where
   toExpr p :=
     mkApp10 (mkConst ``WorkbookPackage.mk)
       (toExpr p.moduleName) (toExpr p.entryDef) (toExpr p.source) (toExpr p.sha256)
@@ -1116,7 +1197,422 @@ instance : ToExpr WorkbookPackage where
 
 /-! ## 6. Command Elaborators `#import_obend` and `#obend_decl` -/
 
-def defineWorkbookConst {α : Type} [ToExpr α] (declName : Name) (val : α) :
+private meta def metaEmptyLayoutEnv : LayoutEnv :=
+  { fields := [], selfIndex := 0, arity := 0 }
+
+private meta def metaDefaultWorkbookLimits : Json :=
+  Json.mkObj [
+    ("heap", toJson "100000"),
+    ("stack", toJson "100000"),
+    ("ticks", toJson "100000"),
+    ("checkWork", toJson "65536")
+  ]
+
+private meta def metaNormalizeObendSource (src : String) : String :=
+  let trimmed := src.trimAscii.toString
+  if trimmed.startsWith "edition ObjectiveBend 1" then src
+  else "edition ObjectiveBend 1\n" ++ src
+
+private meta def metaResolveKnotTerm (root : Term) (rawFields : List (String × Term)) (visiting : List String) :
+    Nat → Term → Term
+  | 0, t => t
+  | fuel + 1, .get target name =>
+    if Obend.Law.termEq target root then
+      if visiting.contains name then .get root name
+      else
+        match rawFields.lookup name with
+        | some rawBody =>
+          let opened := Obend.Logic.openTerm rawBody root (.record [])
+          metaResolveKnotTerm root rawFields (name :: visiting) fuel opened
+        | none => .get root name
+    else
+      .get (metaResolveKnotTerm root rawFields visiting fuel target) name
+  | fuel + 1, .lam b => .lam (metaResolveKnotTerm root rawFields visiting fuel b)
+  | fuel + 1, .app f a =>
+    .app (metaResolveKnotTerm root rawFields visiting fuel f) (metaResolveKnotTerm root rawFields visiting fuel a)
+  | fuel + 1, .mix l u =>
+    .mix (metaResolveKnotTerm root rawFields visiting fuel l) (metaResolveKnotTerm root rawFields visiting fuel u)
+  | fuel + 1, .fix s i =>
+    .fix (metaResolveKnotTerm root rawFields visiting fuel s) (metaResolveKnotTerm root rawFields visiting fuel i)
+  | fuel + 1, .specification m e =>
+    .specification (metaResolveKnotTerm root rawFields visiting fuel m) (metaResolveKnotTerm root rawFields visiting fuel e)
+  | fuel + 1, .prototype s g =>
+    .prototype (metaResolveKnotTerm root rawFields visiting fuel s) (metaResolveKnotTerm root rawFields visiting fuel g)
+  | fuel + 1, .reflect p => .reflect (metaResolveKnotTerm root rawFields visiting fuel p)
+  | fuel + 1, .metadata p => .metadata (metaResolveKnotTerm root rawFields visiting fuel p)
+  | fuel + 1, .project p => .project (metaResolveKnotTerm root rawFields visiting fuel p)
+  | fuel + 1, .binary op l r =>
+    .binary op (metaResolveKnotTerm root rawFields visiting fuel l) (metaResolveKnotTerm root rawFields visiting fuel r)
+  | fuel + 1, .extend i fs =>
+    .extend (metaResolveKnotTerm root rawFields visiting fuel i)
+      (fs.map fun (k, v) => (k, metaResolveKnotTerm root rawFields visiting fuel v))
+  | fuel + 1, .record fs =>
+    .record (fs.map fun (k, v) => (k, metaResolveKnotTerm root rawFields visiting fuel v))
+  | fuel + 1, .ifZero v z s =>
+    .ifZero (metaResolveKnotTerm root rawFields visiting fuel v)
+      (metaResolveKnotTerm root rawFields visiting fuel z)
+      (metaResolveKnotTerm root rawFields visiting fuel s)
+  | fuel + 1, .inject l p => .inject l (metaResolveKnotTerm root rawFields visiting fuel p)
+  | fuel + 1, .case sc arms =>
+    .case (metaResolveKnotTerm root rawFields visiting fuel sc)
+      (arms.map fun (k, v) => (k, metaResolveKnotTerm root rawFields visiting fuel v))
+  | fuel + 1, .ifBool c x y =>
+    .ifBool (metaResolveKnotTerm root rawFields visiting fuel c)
+      (metaResolveKnotTerm root rawFields visiting fuel x)
+      (metaResolveKnotTerm root rawFields visiting fuel y)
+  | fuel + 1, .perform p => .perform (metaResolveKnotTerm root rawFields visiting fuel p)
+  | fuel + 1, .done v => .done (metaResolveKnotTerm root rawFields visiting fuel v)
+  | fuel + 1, .split t names f =>
+    .split (metaResolveKnotTerm root rawFields visiting fuel t) names
+      (metaResolveKnotTerm root rawFields visiting fuel f)
+  | _ + 1, t => t
+
+private meta def metaDecodeWorkbookWithSeed (want : Composition → Bool) : Term → Option Composition
+  | .fix S (.record seed) =>
+    (Obend.Logic.Program.decodeOperands 64 S).bind fun (top, below) =>
+      let C : Composition := ⟨top, below, seed⟩
+      if want C then some C else none
+  | .fix S seedTerm =>
+    (Obend.Logic.Program.decodeOperands 64 S).bind fun (top, below) =>
+      if top.name == "" then none
+      else
+        match Obend.Law.run 20000 seedTerm with
+        | some (.record seed) =>
+          let C : Composition := ⟨top, below, seed⟩
+          if want C then some C else none
+        | _ => none
+  | _ => none
+
+private meta def metaFindWorkbookObject (want : Composition → Bool) : Nat → Term → Option Composition
+  | 0, _ => none
+  | fuel + 1, t =>
+    match metaDecodeWorkbookWithSeed want t with
+    | some C => some C
+    | none => (Obend.Law.step? t).bind (metaFindWorkbookObject want fuel)
+
+private meta def metaFindSelfGetCtx (selfIdx : Nat) : Term → Option (Term × String)
+  | .get (.bound i) m =>
+    if i == selfIdx then some (.bound 0, m) else none
+  | .app f a =>
+    match metaFindSelfGetCtx selfIdx f with
+    | some (ctxF, m) => some (.app ctxF (a.rename Nat.succ), m)
+    | none =>
+      (metaFindSelfGetCtx selfIdx a).map fun (ctxA, m) => (.app (f.rename Nat.succ) ctxA, m)
+  | .binary op l r =>
+    match metaFindSelfGetCtx selfIdx l with
+    | some (ctxL, m) => some (.binary op ctxL (r.rename Nat.succ), m)
+    | none =>
+      (metaFindSelfGetCtx selfIdx r).map fun (ctxR, m) => (.binary op (l.rename Nat.succ) ctxR, m)
+  | _ => none
+
+private meta def metaDeriveWorkbook (o : ClaimObj) (r : Term) : Nat → Term → List RStep → Option (List RStep)
+  | 0, _, _ => none
+  | fuel + 1, t, acc =>
+    if Obend.Law.termEq t r then some acc.reverse
+    else match Obend.Law.step? t with
+    | some t' => metaDeriveWorkbook o r fuel t' (Obend.Logic.Program.pushRun acc)
+    | none =>
+      match metaFindSelfGetCtx o.self t with
+      | some (ctx, m) =>
+        match Obend.Logic.symUnfold o.comp o.self m with
+        | some (L, _) =>
+          let step : RStep :=
+            if Obend.Law.termEq ctx (.bound 0) then .lateBinding m L
+            else .congr ctx (.get (.bound o.self) m) [.lateBinding m L]
+          match Obend.Logic.apply (Obend.Logic.claimResolver o.comp o.self) step t with
+          | .ok t' => metaDeriveWorkbook o r fuel t' (step :: acc)
+          | .error _ => none
+        | none => none
+      | none => none
+
+private meta def metaProposeWorkbookDerivation (o : ClaimObj) : Option (List RStep) :=
+  match Obend.Logic.Program.proposeDerivation o with
+  | some steps => some steps
+  | none =>
+    match o.sides with
+    | some (_, l, r) => metaDeriveWorkbook o r 4096 l []
+    | none => none
+
+private meta def metaSanitizeModuleName (stem : String) : String :=
+  let chars := stem.toList.map fun c => if c.isAlphanum || c == '_' then c else '_'
+  match chars with
+  | [] => "Main"
+  | c :: _ =>
+    let s := String.ofList (if c.isAlpha || c == '_' then chars else '_' :: chars)
+    if Obend.Spec.Parse.isIdent s.toList then s else "Main"
+
+private meta def metaStripImportQuotes (raw : String) : String :=
+  let s := raw.trimAscii.toString
+  if s.startsWith "\"" && s.endsWith "\"" && s.length ≥ 2 then
+    ((s.drop 1).dropEnd 1).toString
+  else
+    s
+
+private meta def metaParseAndCheckObendModule (src : String) (moduleName : String)
+    (prior : List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)) :
+    Except String (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) := do
+  let normSrc := metaNormalizeObendSource src
+  let sha256 := Obend.Spec.Sha256.hex normSrc.toUTF8
+  let ast ← match Obend.Spec.FrontEnd.parseSource moduleName normSrc with
+    | .ok a => pure a
+    | .error d => throw s!"{d.stage}: {d.message}"
+  let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
+  let mut lockedImports : List Obend.Spec.FrontEnd.LockedImport := []
+  for edge in parsedEdges.toList do
+    let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
+    let edgeAlias := (edge.getObjValAs? String "alias").toOption.getD ""
+    let edgeSpan := (edge.getObjVal? "span").toOption.getD .null
+    let cleanPath := metaStripImportQuotes edgePath
+    let stemMod := metaSanitizeModuleName ((System.FilePath.mk cleanPath).fileStem.getD edgeAlias)
+    let found? := prior.zipIdx.find? fun ((sm, _), _) =>
+      sm.name == stemMod || (edgeAlias != "" && sm.name == edgeAlias)
+    let some ((targetSm, _), targetIdx) := found?
+      | throw s!"module {moduleName}: imported module for '{edgePath}' (alias '{edgeAlias}') not found in loaded closure"
+    lockedImports := lockedImports ++ [{
+      path := edgePath
+      importAlias := edgeAlias
+      span := edgeSpan
+      target := targetIdx
+      moduleName := targetSm.name
+      sha256 := targetSm.sha256
+    }]
+  let srcMod : Obend.Spec.FrontEnd.SourceModule := {
+    name := moduleName
+    source := normSrc
+    sha256 := sha256
+    imports := lockedImports
+  }
+  let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
+    | .ok m => pure m
+    | .error d => throw s!"{d.stage}: {d.message}"
+  return (srcMod, decodedMod)
+
+private meta def metaElaborateObendSource (src : String) (moduleName : String := "Main")
+    (entryDef? : Option String := none)
+    (prior : List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) := []) :
+    Except String WorkbookPackage := do
+  let (srcMod, decodedMod) ← metaParseAndCheckObendModule src moduleName prior
+  let normSrc := srcMod.source
+  let sha256 := srcMod.sha256
+  let callables := decodedMod.decls.filter fun d =>
+    match d with
+    | .function .. | .extension .. | .spec .. => true
+    | _ => false
+  let entryDef ← match entryDef? with
+    | some e => pure e
+    | none =>
+      match callables.getLast? with
+      | some d => pure d.name
+      | none => throw s!"module {moduleName} contains no callable function, extension, or spec"
+  let allSrcMods := prior.map Prod.fst ++ [srcMod]
+  let allDecodedMods := prior.map Prod.snd ++ [decodedMod]
+  let entryIdx := prior.length
+  let allLaws := (allDecodedMods.map (·.laws)).flatten
+  let decodedForLower := allDecodedMods.zipIdx.map fun (dm, idx) =>
+    if idx == entryIdx then { dm with laws := allLaws } else { dm with laws := [] }
+  let lowering ← match Obend.Spec.FrontEnd.lowerDecoded allSrcMods decodedForLower entryIdx entryDef
+      (Json.arr #[]) (Json.arr #[]) metaDefaultWorkbookLimits "definition" [] with
+    | .ok l => pure l
+    | .error d => throw s!"{d.stage}: {d.message}"
+  let acc ← match Obend.Spec.FrontEnd.accept lowering with
+    | .ok a => pure a
+    | .error d => throw s!"{d.stage}: {d.message}"
+  let erasedTerm := acc.erased
+  let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
+  let rawFields := Obend.Logic.Program.knotFields rootTerm
+  let mut wdefs : List WorkbookDef := []
+  for d in callables do
+    let shortName := d.name
+    let fullKey := moduleName ++ "." ++ shortName
+    let knotTerm : Term := .get rootTerm fullKey
+    let opened := match rawFields.lookup fullKey with
+      | some rb => Obend.Logic.openTerm rb rootTerm (.record [])
+      | none => knotTerm
+    let inlined := metaResolveKnotTerm rootTerm rawFields [fullKey] 16 opened
+    let reducedTerm? := Obend.Law.run 50000 knotTerm
+    let wantNamed : Composition → Bool := fun C => C.top.name != ""
+    let foundComp? :=
+      match metaFindWorkbookObject wantNamed 64 knotTerm with
+      | some c => some c
+      | none =>
+        match metaFindWorkbookObject wantNamed 64 (.app knotTerm (.record [])) with
+        | some c => some c
+        | none => metaDecodeWorkbookWithSeed wantNamed inlined
+    let composition? : Option Composition :=
+      match foundComp? with
+      | some c => some c
+      | none =>
+        match d with
+        | .function .. =>
+          let lc := Obend.Lower.leanComposition shortName inlined
+          if lc.closedB then some lc else none
+        | _ => none
+    let book? : Option Book := composition?.map Obend.Leaf.emit
+    let reflectedObject? : Option ReflectedObject :=
+      composition?.bind fun c => reflectComposition shortName c metaEmptyLayoutEnv
+    let lexpr? : Option LExpr :=
+      match lowerTerm metaEmptyLayoutEnv inlined with
+      | some e => some e
+      | none => reducedTerm?.bind (lowerTerm metaEmptyLayoutEnv)
+    wdefs := wdefs ++ [{
+      name := shortName
+      fullKey := fullKey
+      knotTerm := knotTerm
+      term := inlined
+      reducedTerm? := reducedTerm?
+      lexpr? := lexpr?
+      composition? := composition?
+      book? := book?
+      reflectedObject? := reflectedObject?
+    }]
+  let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
+  let mut wclaims : List WorkbookClaim := []
+  for (specKey, claimName) in rawClaimPairs do
+    let matchingDefs := wdefs.filter fun wd =>
+      match wd.composition? with
+      | some comp => (Obend.Logic.Program.layerIndex comp specKey).isSome
+      | none => false
+    let chosenDef? :=
+      match matchingDefs.find? (fun wd => wd.composition?.any (fun c => c.top.name == specKey)) with
+      | some wd => some wd
+      | none => matchingDefs.head?
+    if let some wd := chosenDef? then
+      if let some comp := wd.composition? then
+        if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
+          let steps? := metaProposeWorkbookDerivation co
+          let derivJust? := steps?.map Justification.byDerivation
+          let derivOk := match derivJust? with
+            | some j => Obend.Logic.obligationCheck 4096 co j == Obend.Judge.Verdict.ok
+            | none => false
+          let claimDecl? : Option Obend.Spec.Syntax.Claim :=
+            allDecodedMods.findSome? fun dm =>
+              dm.decls.findSome? fun d =>
+                match d with
+                | .spec s =>
+                  if s.name == specKey || (dm.name ++ "." ++ s.name) == specKey then
+                    s.claims.find? (·.name == claimName)
+                  else none
+                | _ => none
+          let (just?, ok) :=
+            if derivOk then
+              (derivJust?, true)
+            else
+              match Obend.Elab.AutoCert.synthesizeClaimExternalJudge
+                  Obend.Elab.AutoCert.autoCertFormats 4096 moduleName claimName claimDecl? wd.book? co with
+              | some extJ =>
+                (some extJ,
+                 Obend.Logic.obligationCheckWithJudges Obend.Elab.AutoCert.autoCertFormats 4096 co extJ ==
+                   Obend.Judge.Verdict.ok)
+              | none =>
+                (derivJust?, false)
+          wclaims := wclaims ++ [{
+            specKey := specKey
+            name := claimName
+            targetDef := wd.name
+            claimObj := co
+            autoSteps? := steps?
+            autoJustification? := just?
+            autoVerified := ok
+          }]
+  return {
+    moduleName := moduleName
+    entryDef := entryDef
+    source := normSrc
+    sha256 := sha256
+    accepted := true
+    erasedTerm := erasedTerm
+    rootTerm := rootTerm
+    defs := wdefs
+    claims := wclaims
+    laws := lowering.laws
+  }
+
+private meta def metaResolveObendPath (path : System.FilePath) : IO System.FilePath := do
+  if ← path.pathExists then return path
+  let s := path.toString
+  if s.startsWith "lean/" then
+    let stripped := System.FilePath.mk (s.drop 5).toString
+    if ← stripped.pathExists then return stripped
+  let prefixed := System.FilePath.mk ("lean/" ++ s)
+  if ← prefixed.pathExists then return prefixed
+  let parentRel := System.FilePath.mk ("../" ++ s)
+  if ← parentRel.pathExists then return parentRel
+  return path
+
+private meta def metaResolveImportedObendPath (parentFile : System.FilePath) (rawImportPath : String) :
+    IO System.FilePath := do
+  let clean := metaStripImportQuotes rawImportPath
+  let rel1 := match parentFile.parent with
+    | some dir => dir / clean
+    | none => System.FilePath.mk clean
+  let r1 ← metaResolveObendPath rel1
+  if ← r1.pathExists then return r1
+  let stripped := if clean.startsWith "./" then (clean.drop 2).toString else clean
+  let rel2 := match parentFile.parent with
+    | some dir => dir / stripped
+    | none => System.FilePath.mk stripped
+  let r2 ← metaResolveObendPath rel2
+  if ← r2.pathExists then return r2
+  let r3 ← metaResolveObendPath (System.FilePath.mk stripped)
+  if ← r3.pathExists then return r3
+  let fileName := (System.FilePath.mk stripped).fileName.getD stripped
+  for sub in ["stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/"] do
+    let cand ← metaResolveObendPath (System.FilePath.mk (sub ++ fileName))
+    if ← cand.pathExists then return cand
+  return r1
+
+private meta def metaLoadObendModuleClosure :
+    Nat → System.FilePath →
+    List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) →
+    IO (Except String (List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)))
+  | 0, path, _ => return .error s!"import depth limit exceeded while loading {path}"
+  | fuel + 1, path, acc => do
+    let resolved ← metaResolveObendPath path
+    let modName := metaSanitizeModuleName (resolved.fileStem.getD "Main")
+    if acc.any (fun (sm, _) => sm.name == modName) then
+      return .ok acc
+    match ← (IO.FS.readBinFile resolved).toBaseIO with
+    | .error e => return .error (toString e)
+    | .ok bytes =>
+      let some rawSrc := Obend.Spec.Parse.decodeSource bytes
+        | return .error s!"{resolved}: invalid UTF-8"
+      let normSrc := metaNormalizeObendSource rawSrc
+      let ast ← match Obend.Spec.FrontEnd.parseSource modName normSrc with
+        | .ok a => pure a
+        | .error d => return .error s!"{d.stage}: {d.message}"
+      let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
+      let mut curAcc := acc
+      for edge in parsedEdges.toList do
+        let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
+        let impFile ← metaResolveImportedObendPath resolved edgePath
+        match ← metaLoadObendModuleClosure fuel impFile curAcc with
+        | .error err => return .error err
+        | .ok nextAcc => curAcc := nextAcc
+      match metaParseAndCheckObendModule normSrc modName curAcc with
+      | .error err => return .error err
+      | .ok pair => return .ok (curAcc ++ [pair])
+
+private meta def metaLoadObendWorkbookFile (path : System.FilePath) : IO (Except String WorkbookPackage) := do
+  match ← metaLoadObendModuleClosure 32 path [] with
+  | .error err => return .error err
+  | .ok closure =>
+    match closure.getLast? with
+    | none => return .error s!"empty module closure for {path}"
+    | some (lastSrc, _) =>
+      return metaElaborateObendSource lastSrc.source lastSrc.name none closure.dropLast
+
+private meta def metaVerifyWorkbookObligationsWithLean (pkg : WorkbookPackage) : Bool :=
+  let claimsOk := pkg.claims.all fun wc =>
+    match wc.autoJustification? with
+    | some j =>
+      Obend.Logic.obligationCheckWithJudges Obend.Elab.AutoCert.autoCertFormats 4096 wc.claimObj j ==
+        Obend.Judge.Verdict.ok
+    | none => false
+  let lawsOk := pkg.laws.all fun (lawName, lawExpr) =>
+    Obend.Law.closedB (Obend.Spec.LawCompile.compile .emptyRow pkg.moduleName lawName lawExpr)
+  pkg.accepted && claimsOk && lawsOk
+
+meta def defineWorkbookConst {α : Type} [ToExpr α] (declName : Name) (val : α) :
     CommandElabM Unit := do
   let env ← getEnv
   if env.contains declName then
@@ -1129,9 +1625,9 @@ def defineWorkbookConst {α : Type} [ToExpr α] (declName : Name) (val : α) :
     hints := .regular 0
     safety := .safe
   }
-  liftCoreM <| addAndCompile decl
+  liftCoreM <| Lean.withExporting (isExporting := true) <| addAndCompile decl
 
-def defineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit := do
+meta def defineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit := do
   let env ← getEnv
   if env.contains thmName then
     return ()
@@ -1141,10 +1637,10 @@ def defineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit := do
     type := ty
     value := val
   }
-  liftCoreM <| addDecl decl
+  liftCoreM <| Lean.withExporting (isExporting := true) <| addDecl decl
 
 /-- Emit all kernel-checked constants and theorems for a `WorkbookPackage` into namespace `ns`. -/
-def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM Unit := do
+meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM Unit := do
   modifyEnv fun env => obendWorkbookExt.addEntry env (ns, pkg)
   defineWorkbookConst (ns ++ `package) pkg
   defineWorkbookConst (ns ++ `accepted) pkg.accepted
@@ -1154,7 +1650,7 @@ def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM U
     let eqPrf := mkApp2 (mkConst ``Eq.refl [Level.succ Level.zero])
       (mkConst ``Bool) (toExpr true)
     defineWorkbookThm (ns ++ `accepted_eq) eqTy eqPrf
-  let obOk := verifyWorkbookObligationsWithLean pkg
+  let obOk := metaVerifyWorkbookObligationsWithLean pkg
   defineWorkbookConst (ns ++ `obligations_ok) obOk
   for d in pkg.defs do
     let dTermName := ns ++ Name.mkSimple (d.name ++ "_term")
@@ -1166,7 +1662,7 @@ def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM U
     if let some le := d.lexpr? then
       let dLExprName := ns ++ Name.mkSimple (d.name ++ "_lexpr")
       defineWorkbookConst dLExprName le
-      if (lowerTerm emptyLayoutEnv d.term).isSome then
+      if (lowerTerm metaEmptyLayoutEnv d.term).isSome then
         let optTy := toTypeExpr (Option LExpr)
         let lhs := mkApp2 (mkConst ``lowerTerm) (mkConst ``emptyLayoutEnv) (mkConst dTermName)
         let rhs := mkApp2 (mkConst ``Option.some [Level.zero]) (mkConst ``LExpr) (mkConst dLExprName)
@@ -1215,7 +1711,7 @@ elab "#import_obend " pathLit:str " as " nsId:ident : command => do
   let pathStr := pathLit.getString
   let res : Except String WorkbookPackage ←
     IO.toEIO (fun e => Lean.Exception.error Lean.Syntax.missing (Lean.MessageData.ofFormat (Std.Format.text (toString e))))
-      (loadObendWorkbookFile (System.FilePath.mk pathStr))
+      (metaLoadObendWorkbookFile (System.FilePath.mk pathStr))
   match res with
   | .error err =>
     Lean.throwError m!"#import_obend failed on {pathStr}: {err}"
@@ -1227,11 +1723,13 @@ elab "#import_obend " pathLit:str " as " nsId:ident : command => do
     register the package in `obendWorkbookExt`, and emit typed Lean constants in namespace `Ns`. -/
 elab "#obend_decl " nsId:ident srcLit:str : command => do
   let srcStr := srcLit.getString
-  let modName := sanitizeModuleName nsId.getId.toString
-  match elaborateObendSource srcStr modName none with
+  let modName := metaSanitizeModuleName nsId.getId.toString
+  match metaElaborateObendSource srcStr modName none with
   | .error err =>
     Lean.throwError m!"#obend_decl failed in {nsId.getId}: {err}"
   | .ok pkg =>
     registerAndEmitWorkbook nsId.getId pkg
 
 end Obend.Elab.Workbook
+
+end

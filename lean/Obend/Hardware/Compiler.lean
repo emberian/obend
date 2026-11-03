@@ -25,10 +25,11 @@ into the verified synchronous HDL (`Obend.Hardware.HDL.RtlModule`):
 public import Obend.Core.Term
 public import Obend.Leaf.Emit
 public import Obend.Hardware.HDL
+public import Obend.Hardware.Types
 @[expose] public section
 
 namespace Obend.Hardware.Compiler
-open Obend.Core.Term Obend.Leaf Obend.Hardware.HDL
+open Obend.Core.Term Obend.Leaf Obend.Hardware.HDL Obend.Hardware.Types
 set_option autoImplicit false
 
 /-! ## 1. Hardware Input-Port Substitution & Soundness (`substInputPort0`) -/
@@ -80,6 +81,14 @@ def evalPrimHw (op : Primitive) (a b : BitVec 64) : Option (BitVec 64) :=
   | .conjunction => some (a &&& b)
   | .less        => some (if BitVec.ult a b then 1#64 else 0#64)
   | .lessEqual   => some (if BitVec.ult b a then 0#64 else 1#64)
+  | .bitAnd      => some (a &&& b)
+  | .bitOr       => some (a ||| b)
+  | .bitXor      => some (a ^^^ b)
+  | .shl         => some (a <<< (b.toNat % 64))
+  | .lshr        => some (a >>> (b.toNat % 64))
+  | .ashr        => some (BitVec.sshiftRight a (b.toNat % 64))
+  | .slt         => some (if BitVec.slt a b then 1#64 else 0#64)
+  | .qmul32      => some (((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64)
   | _            => none
 
 /-- Compile an `Obend.Core.Term.Primitive` applied to two compiled `RtlExpr` operands. -/
@@ -92,6 +101,14 @@ def compilePrim (op : Primitive) (l r : RtlExpr) : Option RtlExpr :=
   | .conjunction => some (.alu .bitAnd l r)
   | .less        => some (.alu .ult l r)
   | .lessEqual   => some (.mux (.alu .ult r l) (.const 0#64) (.const 1#64))
+  | .bitAnd      => some (.alu .bitAnd l r)
+  | .bitOr       => some (.alu .bitOr l r)
+  | .bitXor      => some (.alu .bitXor l r)
+  | .shl         => some (.alu .shl l r)
+  | .lshr        => some (.alu .lshr l r)
+  | .ashr        => some (.alu .ashr l r)
+  | .slt         => some (.alu .slt l r)
+  | .qmul32      => some (.alu .qmul32 l r)
   | _            => none
 
 /-- Soundness of `compilePrim`: evaluating the compiled `RtlExpr` matches `evalPrimHw`. -/
@@ -366,9 +383,31 @@ theorem compileTerm_sound
 
 /-! ## 4. Whole-Book Compiler (`compileLeafDef`, `compileBookToRtl`) -/
 
-/-- Extract the inner body of a `LeafDef`'s `code` (`λself. λarg. body`) and compile it to `RtlExpr`. -/
+/-- Count the number of formal arguments (excluding `self`) of a `LeafDef`'s `code` (up to 4). -/
+def leafDefArity : Term → Nat
+  | .lam (.lam (.lam (.lam (.lam _)))) => 4
+  | .lam (.lam (.lam (.lam _)))        => 3
+  | .lam (.lam (.lam _))               => 2
+  | _                                  => 1
+
+/-- Determine the input port list for a compiled `Obend.Leaf.Book` from the maximum method arity
+across all `LeafDef`s in the `Book` (returning `["arg"]` when all slots have arity ≤ 1). -/
+def defInputNames (defs : List LeafDef) : List String :=
+  let maxArity := defs.foldl (fun acc d => max acc (leafDefArity d.code)) 1
+  if maxArity == 4 then ["arg0", "arg1", "arg2", "arg3"]
+  else if maxArity == 3 then ["arg0", "arg1", "arg2"]
+  else if maxArity == 2 then ["arg0", "arg1"]
+  else ["arg"]
+
+/-- Extract the inner body of a `LeafDef`'s `code` (`λself. λarg₀...λargₖ. body`) and compile it to `RtlExpr`. -/
 def compileLeafDef (slots : List String) (slotBodies : List RtlExpr) (d : LeafDef) : Option RtlExpr :=
   match d.code with
+  | .lam (.lam (.lam (.lam (.lam body)))) =>
+    compileTerm slots slotBodies 4 [.inputPort 3, .inputPort 2, .inputPort 1, .inputPort 0] body
+  | .lam (.lam (.lam (.lam body))) =>
+    compileTerm slots slotBodies 3 [.inputPort 2, .inputPort 1, .inputPort 0] body
+  | .lam (.lam (.lam body)) =>
+    compileTerm slots slotBodies 2 [.inputPort 1, .inputPort 0] body
   | .lam (.lam body) => compileTerm slots slotBodies 1 [.inputPort 0] body
   | _ => none
 
@@ -397,7 +436,7 @@ def compileBookDefs
       compileBookDefs slots (slotBodies ++ [expr]) (wires ++ [w]) (regs ++ [r]) (outs ++ [o]) rest
 
 /-- Compile an entire `Obend.Leaf.Book` into a synchronous `RtlModule`:
-* Input port 0 is `"arg"` (the 64-bit method parameter),
+* Input port(s) are `"arg"` (when max method arity ≤ 1) or `"arg0".."arg{k-1}"` (for multi-arg books),
 * Each slot `d` in `B.defs` becomes wire `w_{d.slot}` (`d.member`),
 * Each slot `d` also produces a combinational output port `out_{d.member}` and a registered
   pipeline output `reg_{d.member}` clocked on `coreClk` (`ResetKind.resetFree`). -/
@@ -407,7 +446,7 @@ def compileBookToRtl (modName : String) (B : Book) : Option RtlModule :=
   | some (wires, regs, outs) =>
     some {
       name       := modName
-      inputNames := ["arg"]
+      inputNames := defInputNames B.defs
       wires      := wires
       regs       := regs
       outputs    := outs
@@ -427,6 +466,14 @@ def evalPrimHwSat (op : Primitive) (a b : BitVec 64) : Option (BitVec 64) :=
   | .conjunction => some (a &&& b)
   | .less        => some (if BitVec.ult a b then 1#64 else 0#64)
   | .lessEqual   => some (if BitVec.ult b a then 0#64 else 1#64)
+  | .bitAnd      => some (a &&& b)
+  | .bitOr       => some (a ||| b)
+  | .bitXor      => some (a ^^^ b)
+  | .shl         => some (a <<< (b.toNat % 64))
+  | .lshr        => some (a >>> (b.toNat % 64))
+  | .ashr        => some (BitVec.sshiftRight a (b.toNat % 64))
+  | .slt         => some (if BitVec.slt a b then 1#64 else 0#64)
+  | .qmul32      => some (((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64)
   | _            => none
 
 /-- Compile `Primitive` with saturating subtraction `(l < r) ? 64'd0 : (l - r)`. -/
@@ -439,6 +486,14 @@ def compilePrimSat (op : Primitive) (l r : RtlExpr) : Option RtlExpr :=
   | .conjunction => some (.alu .bitAnd l r)
   | .less        => some (.alu .ult l r)
   | .lessEqual   => some (.mux (.alu .ult r l) (.const 0#64) (.const 1#64))
+  | .bitAnd      => some (.alu .bitAnd l r)
+  | .bitOr       => some (.alu .bitOr l r)
+  | .bitXor      => some (.alu .bitXor l r)
+  | .shl         => some (.alu .shl l r)
+  | .lshr        => some (.alu .lshr l r)
+  | .ashr        => some (.alu .ashr l r)
+  | .slt         => some (.alu .slt l r)
+  | .qmul32      => some (.alu .qmul32 l r)
   | _            => none
 
 /-- Soundness of `compilePrimSat`: evaluating the compiled `RtlExpr` matches `evalPrimHwSat`. -/
@@ -749,15 +804,10 @@ def compileLeafDefSat (slots : List String) (slotBodies : List RtlExpr) (d : Lea
   | .lam (.lam body) => compileTermSat slots slotBodies 1 [.inputPort 0] body
   | _ => none
 
-/-- Determine the input port list for a compiled `Obend.Leaf.Book` based on the method arity. -/
-def defInputNamesSat : List LeafDef → List String
-  | d :: _ =>
-    match d.code with
-    | .lam (.lam (.lam (.lam (.lam _)))) => ["arg0", "arg1", "arg2", "arg3"]
-    | .lam (.lam (.lam (.lam _)))        => ["arg0", "arg1", "arg2"]
-    | .lam (.lam (.lam _))               => ["arg0", "arg1"]
-    | _                                  => ["arg"]
-  | [] => ["arg"]
+/-- Determine the input port list for a compiled `Obend.Leaf.Book` based on the maximum method arity
+across all `LeafDef`s in the `Book`. -/
+def defInputNamesSat (defs : List LeafDef) : List String :=
+  defInputNames defs
 
 /-- Structurally recursive slot-list compiler using `compileLeafDefSat`. -/
 def compileBookDefsSat
@@ -2553,6 +2603,509 @@ theorem golden_multi_arg_and_pipelined_rtl_verified :
        (regs1 2 == 16#64) &&
        (regs2 1 == 22#64)
      | none => false) = true := by
+  decide +kernel
+
+/-! ## 14. Rich Struct/Union/Multi-Arg Term Compiler (`compileRichTerm`) & Stateful `always_ff` Step Compiler (`compileStatefulStepToRtl`) -/
+
+/-- Peel all leading `.lam` binders from a `Term`, returning `(numBinders, innerBody)`. -/
+def peelLambdas : Term → Nat × Term
+  | .lam body =>
+    let (n, inner) := peelLambdas body
+    (n + 1, inner)
+  | other => (0, other)
+
+/-- Peel a curried application spine `((head a₀) … aₖ₋₁)` into `(head, [a₀, …, aₖ₋₁])`. -/
+def peelAppChain : Term → List Term → Term × List Term
+  | .app fn arg, acc => peelAppChain fn (arg :: acc)
+  | head, acc => (head, acc)
+
+/-- Peel `eArgs.length` `.lam` binders from `fn`, pushing each argument expression onto `varEnv`
+in left-to-right application order (`((λx₀. … λxₖ₋₁. body) e₀ … eₖ₋₁)` -> `(selfDepth + k, eₖ₋₁ :: … :: e₀ :: varEnv, body)`). -/
+def peelBetaRedexChain : List RtlExpr → Nat → List RtlExpr → Term → Option (Nat × List RtlExpr × Term)
+  | [], depth, env, body => some (depth, env, body)
+  | eArg :: rest, depth, env, .lam subBody =>
+    peelBetaRedexChain rest (depth + 1) (eArg :: env) subBody
+  | _ :: _, _, _, _ => none
+
+/-- Fuel-bounded compiler from rich `Obend.Core.Term.Term` expressions into `RtlExpr`:
+Supports all 64-bit arithmetic, bitwise, shift, signed order, and `Q32.32` primitives (`compilePrimSat`),
+plus arbitrary-offset struct packing (`.record`), bit-slice field projection (`.get`), functional
+record update (`.extend`), record destructuring (`.split`), tagged-union injection (`.inject`),
+sum case muxing (`.case`), curried multi-argument $\beta$-redexes (`((λx₀. … λxₖ₋₁. body) a₀ … aₖ₋₁)`),
+and curried multi-argument `self.m(a₀, …, aₖ₋₁)` slot calls. -/
+def compileRichTermAux
+    (ctx : RtlLayoutCtx)
+    (slots : List String)
+    (slotBodies : List RtlExpr) :
+    Nat → Nat → List RtlExpr → Term → Option RtlExpr
+  | 0, _, _, _ => none
+  | fuel + 1, selfDepth, varEnv, t =>
+    match t with
+    | .nat n => some (.const (BitVec.ofNat 64 n))
+    | .boolean b => some (.const (if b then 1#64 else 0#64))
+    | .bound idx => varEnv[idx]?
+    | .done v => compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv v
+    | .record fields =>
+      fields.foldlM
+        (fun acc (fname, fterm) =>
+          if fname == "#kind" then
+            some acc
+          else
+            match ctx.lookupField fname,
+                  compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv fterm with
+            | some (off, width), some eField =>
+              some (compileSliceInsertRtl acc eField off width)
+            | _, _ => none)
+        (.const 0#64)
+    | .extend inherited fields =>
+      match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv inherited with
+      | none => none
+      | some eBase =>
+        fields.foldlM
+          (fun acc (fname, fterm) =>
+            if fname == "#kind" then
+              some acc
+            else
+              match ctx.lookupField fname,
+                    compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv fterm with
+              | some (off, width), some eField =>
+                some (compileSliceUpdateRtl acc eField off width)
+              | _, _ => none)
+          eBase
+    | .split target names function =>
+      match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv target with
+      | none => none
+      | some eTarget =>
+        let eFieldsOpt : Option (List RtlExpr) :=
+          names.mapM fun fname =>
+            match ctx.lookupField fname with
+            | some (off, width) => some (compileSliceExtractRtl eTarget off width)
+            | none => none
+        match eFieldsOpt with
+        | none => none
+        | some eFields =>
+          match peelBetaRedexChain eFields selfDepth varEnv function with
+          | some (depth', env', body) =>
+            compileRichTermAux ctx slots slotBodies fuel depth' env' body
+          | none => none
+    | .get target member =>
+      match target with
+      | .bound idx =>
+        if idx == selfDepth then
+          match slots.idxOf? member with
+          | some slotIdx => some (.wireRef slotIdx)
+          | none =>
+            match varEnv[idx]?, ctx.lookupField member with
+            | some eTarget, some (off, width) => some (compileSliceExtractRtl eTarget off width)
+            | _, _ => none
+        else
+          match varEnv[idx]?, ctx.lookupField member with
+          | some eTarget, some (off, width) => some (compileSliceExtractRtl eTarget off width)
+          | _, _ => none
+      | _ =>
+        match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv target,
+              ctx.lookupField member with
+        | some eTarget, some (off, width) => some (compileSliceExtractRtl eTarget off width)
+        | _, _ => none
+    | .inject label payload =>
+      match ctx.lookupArm label,
+            compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv payload with
+      | some (tagIdx, payW), some ePay =>
+        some (compileTagInjectRtl ctx.unionTagBits tagIdx payW ePay)
+      | _, _ => none
+    | .case scrutinee arms =>
+      match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv scrutinee with
+      | none => none
+      | some eScrut =>
+        let eTag := compileTagExtractRtl ctx.unionTagBits eScrut
+        let compiledArmsOpt : Option (List (Nat × RtlExpr)) :=
+          arms.mapM fun (armLabel, armBody) =>
+            match ctx.lookupArm armLabel with
+            | none => none
+            | some (tagIdx, payW) =>
+              let ePay := compilePayloadExtractRtl ctx.unionTagBits payW eScrut
+              match compileRichTermAux ctx slots slotBodies fuel (selfDepth + 1) (ePay :: varEnv) armBody with
+              | some eArm => some (tagIdx, eArm)
+              | none => none
+        match compiledArmsOpt with
+        | some compiledArms => some (compileCaseMuxRtl eTag compiledArms (.const 0#64))
+        | none => none
+    | .app fn arg =>
+      let (head, args) := peelAppChain (.app fn arg) []
+      match head with
+      | .lam _ =>
+        match args.mapM (compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv) with
+        | some eArgs =>
+          match peelBetaRedexChain eArgs selfDepth varEnv head with
+          | some (depth', env', subBody) =>
+            compileRichTermAux ctx slots slotBodies fuel depth' env' subBody
+          | none => none
+        | none => none
+      | Term.get (Term.bound idx) member =>
+        if idx == selfDepth then
+          match slots.idxOf? member with
+          | some slotIdx =>
+            match slotBodies[slotIdx]?,
+                  args.mapM (compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv) with
+            | some slotExpr, some eArgs =>
+              some (substInputPorts eArgs slotExpr)
+            | _, _ => none
+          | none => none
+        else none
+      | _ => none
+    | .binary op l r =>
+      match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv l,
+            compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv r with
+      | some el, some er => compilePrimSat op el er
+      | _, _ => none
+    | .ifBool c tBranch fBranch =>
+      match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv c,
+            compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv tBranch,
+            compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv fBranch with
+      | some ec, some et, some ef => some (.mux ec et ef)
+      | _, _, _ => none
+    | .ifZero v z s =>
+      match compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv v,
+            compileRichTermAux ctx slots slotBodies fuel selfDepth varEnv z with
+      | some ev, some ez =>
+        let predExpr := RtlExpr.alu .sub ev (.const 1#64)
+        match compileRichTermAux ctx slots slotBodies fuel (selfDepth + 1) (predExpr :: varEnv) s with
+        | some es => some (.mux (.alu .eq ev (.const 0#64)) ez es)
+        | none => none
+      | _, _ => none
+    | _ => none
+
+/-- Default-fuel entry point for `compileRichTermAux` (`fuel = 256`). -/
+def compileRichTerm
+    (ctx : RtlLayoutCtx)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (selfDepth : Nat)
+    (varEnv : List RtlExpr)
+    (t : Term) : Option RtlExpr :=
+  compileRichTermAux ctx slots slotBodies 256 selfDepth varEnv t
+
+/-- Compile a multi-argument method `λself. λx₀. … λxₖ₋₁. body` using `compileRichTerm`. -/
+def compileRichMethod
+    (ctx : RtlLayoutCtx)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (t : Term) : Option RtlExpr :=
+  let (nLam, body) := peelLambdas t
+  if nLam == 0 then
+    compileRichTerm ctx slots slotBodies 0 [] body
+  else
+    let arity := nLam - 1
+    let varEnv := mkMultiArgPortEnv arity
+    compileRichTerm ctx slots slotBodies arity varEnv body
+
+/-- Determine the input port list for a `Book` compiled via `compileRichBookToRtl`, supporting
+arbitrary method arity `k ≥ 1`. -/
+def defInputNamesRich (defs : List LeafDef) : List String :=
+  let maxArity := defs.foldl (fun acc d =>
+    let (nLam, _) := peelLambdas d.code
+    max acc (nLam - 1)) 1
+  if maxArity <= 1 then ["arg"]
+  else (List.range maxArity).map (fun i => s!"arg{i}")
+
+/-- Structurally recursive slot-list compiler using `compileRichMethod`. -/
+def compileRichBookDefs
+    (ctx : RtlLayoutCtx)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (wires : List WireAssign)
+    (regs : List RegSpec)
+    (outs : List OutputPort) :
+    List LeafDef → Option (List WireAssign × List RegSpec × List OutputPort)
+  | [] => some (wires, regs, outs)
+  | d :: rest =>
+    match compileRichMethod ctx slots slotBodies d.code with
+    | none => none
+    | some expr =>
+      let w : WireAssign := { wireIdx := d.slot, name := d.member, expr := expr }
+      let r : RegSpec :=
+        { regIdx         := d.slot
+        , name           := s!"reg_{d.member}"
+        , domain         := .coreClk
+        , resetKind      := .resetFree
+        , isSynchronizer := false
+        , nextExpr       := .wireRef d.slot }
+      let o : OutputPort := { name := s!"out_{d.member}", expr := .wireRef d.slot }
+      compileRichBookDefs ctx slots (slotBodies ++ [expr]) (wires ++ [w]) (regs ++ [r]) (outs ++ [o]) rest
+
+/-- Compile an entire `Obend.Leaf.Book` containing structs (`.record`, `.get`, `.extend`, `.split`),
+tagged unions (`.inject`, `.case`), curried multi-argument $\beta$-redexes, and multi-argument
+`self.m(a₀, …, aₖ₋₁)` calls into a synchronous `RtlModule` under `ctx : RtlLayoutCtx`. -/
+def compileRichBookToRtl (modName : String) (ctx : RtlLayoutCtx) (B : Book) : Option RtlModule :=
+  match compileRichBookDefs ctx B.slots [] [] [] [] B.defs with
+  | none => none
+  | some (wires, regs, outs) =>
+    some {
+      name       := modName
+      inputNames := defInputNamesRich B.defs
+      wires      := wires
+      regs       := regs
+      outputs    := outs
+    }
+
+/-- Declaration of a single 64-bit synchronous state register in a `StatefulStepSpec`. -/
+structure StatefulRegDecl where
+  regIdx   : Nat
+  name     : String
+  initVal  : BitVec 64
+  nextExpr : RtlExpr
+  deriving DecidableEq, Repr
+
+/-- Specification of a synchronous `always_ff @(posedge clk)` hardware state machine with AXI4-Stream
+`in_valid` / `in_ready` / `out_valid` handshaking:
+* `inputNames`: data input port names `in_0, …, in_{K-1}` (the compiler appends `in_valid` at index `K`),
+* `stateRegs`: synchronous-reset state registers `r_0, …, r_{R-1}` gated by `in_valid`,
+* `outputExprs`: combinational output ports `(name, expr)`. -/
+structure StatefulStepSpec where
+  moduleName  : String
+  inputNames  : List String
+  stateRegs   : List StatefulRegDecl
+  outputExprs : List (String × RtlExpr)
+  deriving DecidableEq, Repr
+
+/-- Lower a `StatefulRegDecl` into an `Obend.Hardware.HDL.RegSpec` gated by `.inputPort validPortIdx`. -/
+def compileStatefulRegDecl (validPortIdx : Nat) (d : StatefulRegDecl) : RegSpec :=
+  { regIdx         := d.regIdx
+  , name           := d.name
+  , domain         := .coreClk
+  , resetKind      := .syncReset d.initVal
+  , isSynchronizer := false
+  , nextExpr       := .mux (.inputPort validPortIdx) d.nextExpr (.regRead d.regIdx) }
+
+/-- Compile a `StatefulStepSpec` into a synchronous `RtlModule` with `always_ff @(posedge clk)`
+state registers and AXI4-Stream `in_valid`, `in_ready`, and `out_valid` handshake ports. -/
+def compileStatefulStepToRtl (spec : StatefulStepSpec) : RtlModule :=
+  let validPortIdx := spec.inputNames.length
+  { name       := spec.moduleName
+  , inputNames := spec.inputNames ++ ["in_valid"]
+  , wires      := []
+  , regs       := spec.stateRegs.map (compileStatefulRegDecl validPortIdx)
+  , outputs    :=
+      spec.outputExprs.map (fun (oName, oExpr) => { name := oName, expr := oExpr }) ++
+      [ { name := "in_ready",  expr := .const 1#64 }
+      , { name := "out_valid", expr := .inputPort validPortIdx } ] }
+
+/-- Pure single-cycle reference semantics for a `StatefulStepSpec`:
+On `rst = true`, every state register resets to `d.initVal`; on `rst = false`, if `in_valid != 0#64`
+it advances to `evalRtlExpr inputs (fun _ => 0#64) regState d.nextExpr`, and otherwise holds its
+current value `regState d.regIdx`. -/
+def evalStatefulStepPure
+    (spec : StatefulStepSpec)
+    (rst : Bool)
+    (inputs : Nat → BitVec 64)
+    (regState : Nat → BitVec 64) : Nat → BitVec 64 :=
+  let validPortIdx := spec.inputNames.length
+  spec.stateRegs.foldl
+    (fun (nextSt : Nat → BitVec 64) d =>
+      let v :=
+        if rst then
+          d.initVal
+        else if inputs validPortIdx != 0#64 then
+          evalRtlExpr inputs (fun _ => 0#64) regState d.nextExpr
+        else
+          regState d.regIdx
+      fun i => if i == d.regIdx then v else nextSt i)
+    regState
+
+/-- Pure multi-cycle trace semantics for a `StatefulStepSpec` over a list of `(rst, inputs)` cycles. -/
+def runStatefulTracePure
+    (spec : StatefulStepSpec)
+    (initRegs : Nat → BitVec 64)
+    (trace : List (Bool × (Nat → BitVec 64))) : Nat → BitVec 64 :=
+  trace.foldl (fun st (rst, ins) => evalStatefulStepPure spec rst ins st) initRegs
+
+/-- **Theorem (`compileStatefulStepToRtl_simulates_step`)**:
+Stepping the compiled `RtlModule` (`compileStatefulStepToRtl spec`) by one clock edge via
+`stepModuleRegs` produces the exact same next register state as `evalStatefulStepPure` for every
+reset flag `rst`, input assignment `inputs`, and register state `regState`! -/
+theorem compileStatefulStepToRtl_simulates_step
+    (spec : StatefulStepSpec)
+    (rst : Bool)
+    (inputs : Nat → BitVec 64)
+    (regState : Nat → BitVec 64) :
+    stepModuleRegs (compileStatefulStepToRtl spec) rst inputs regState =
+      evalStatefulStepPure spec rst inputs regState := by
+  simp only [stepModuleRegs, compileStatefulStepToRtl, evalWireTable, List.foldl_nil,
+    List.foldl_map, compileStatefulRegDecl, evalRtlExpr, evalStatefulStepPure]
+  rfl
+
+/-- **Theorem (`compileStatefulStepToRtl_trace_sound`)**:
+Over any multi-cycle execution trace `trace : List (Bool × (Nat → BitVec 64))`, `runModuleTrace` on
+`compileStatefulStepToRtl spec` matches `runStatefulTracePure spec initRegs trace` cycle-for-cycle! -/
+theorem compileStatefulStepToRtl_trace_sound
+    (spec : StatefulStepSpec)
+    (initRegs : Nat → BitVec 64)
+    (trace : List (Bool × (Nat → BitVec 64))) :
+    runModuleTrace (compileStatefulStepToRtl spec) initRegs trace =
+      runStatefulTracePure spec initRegs trace := by
+  induction trace generalizing initRegs with
+  | nil => rfl
+  | cons cycle rest _ =>
+    rcases cycle with ⟨rst, ins⟩
+    simp only [runModuleTrace, runStatefulTracePure, List.foldl_cons,
+      compileStatefulStepToRtl_simulates_step]
+
+/-- Compile `.obend` `Term` bodies for a stateful step function (`nextStateTerms` and `outputTerms`)
+into a `StatefulStepSpec` and lower to `RtlModule` via `compileStatefulStepToRtl`.
+Inside each `Term`, the first `stateRegInits.length` arguments after `self` bind to `.regRead 0 .. .regRead (R-1)`
+and the next `inputNames.length` arguments bind to `.inputPort 0 .. .inputPort (K-1)`. -/
+def compileStatefulTermsToRtl
+    (moduleName : String)
+    (ctx : RtlLayoutCtx)
+    (slots : List String)
+    (slotBodies : List RtlExpr)
+    (inputNames : List String)
+    (stateRegInits : List (String × BitVec 64))
+    (nextStateTerms : List Term)
+    (outputTerms : List (String × Term)) : Option RtlModule := do
+  if stateRegInits.length != nextStateTerms.length then none
+  else
+    let numRegs := stateRegInits.length
+    let numInputs := inputNames.length
+    let regEnv : List RtlExpr := (List.range numRegs).map RtlExpr.regRead
+    let inEnv  : List RtlExpr := (List.range numInputs).map RtlExpr.inputPort
+    let baseVarEnv : List RtlExpr := (regEnv ++ inEnv).reverse
+    let baseSelfDepth := numRegs + numInputs
+    let compileBody (t : Term) : Option RtlExpr :=
+      let (_, body) := peelLambdas t
+      compileRichTerm ctx slots slotBodies baseSelfDepth baseVarEnv body
+    let nextExprs ← nextStateTerms.mapM compileBody
+    let outExprs ← outputTerms.mapM (fun (oName, oTerm) => do
+      let e ← compileBody oTerm
+      pure (oName, e))
+    let regDecls : List StatefulRegDecl :=
+      (List.range numRegs).zip (stateRegInits.zip nextExprs) |>.map fun (idx, ((rName, initV), nExpr)) =>
+        { regIdx := idx, name := rName, initVal := initV, nextExpr := nExpr }
+    some (compileStatefulStepToRtl
+      { moduleName  := moduleName
+      , inputNames  := inputNames
+      , stateRegs   := regDecls
+      , outputExprs := outExprs })
+
+/-- **Theorem (`golden_richTerm_and_statefulStep_rtl_verified`)**:
+1. Verifies `compileRichTerm` on a struct `.record`, `.extend`, `.get`, and `.inject` / `.case`
+   under a concrete `RtlLayoutCtx` (`lo` at `(0, 32)`, `hi` at `(32, 32)`; sum arms `Left` tag `0`,
+   `Right` tag `1`),
+2. Verifies `compileStatefulTermsToRtl` on a 2-register synchronous accumulator (`acc_lo`, `acc_hi`),
+   confirming `checkRtlModule m = true` and exact 2-cycle state progression under `stepModuleRegs`. -/
+theorem golden_richTerm_and_statefulStep_rtl_verified :
+    let ctx : RtlLayoutCtx :=
+      { structSlices := [("lo", (0, 32)), ("hi", (32, 32))]
+      , unionTagBits := 8
+      , unionArms    := [("Left", (0, 32)), ("Right", (1, 32))] }
+    let recTerm : Term :=
+      .extend (.record [("lo", .nat 10), ("hi", .nat 20)]) [("lo", .nat 99)]
+    let getLoTerm : Term := .get recTerm "lo"
+    let getHiTerm : Term := .get recTerm "hi"
+    let caseTerm : Term :=
+      .case (.inject "Right" (.nat 42))
+        [("Left", .binary .add (.bound 0) (.nat 1)), ("Right", .binary .multiply (.bound 0) (.nat 2))]
+    let stepLoTerm : Term := .lam (.lam (.lam (.lam (.binary .add (.bound 2) (.bound 0)))))
+    let stepHiTerm : Term := .lam (.lam (.lam (.lam (.binary .add (.bound 1) (.nat 1)))))
+    let outSumTerm : Term := .lam (.lam (.lam (.lam (.binary .add (.bound 2) (.bound 1)))))
+    (match compileRichTerm ctx [] [] 0 [] getLoTerm,
+           compileRichTerm ctx [] [] 0 [] getHiTerm,
+           compileRichTerm ctx [] [] 0 [] caseTerm,
+           compileStatefulTermsToRtl "sync_acc_mod" ctx [] [] ["din"]
+             [("acc_lo", 0#64), ("acc_hi", 0#64)]
+             [stepLoTerm, stepHiTerm]
+             [("sum_out", outSumTerm)] with
+     | some eLo, some eHi, some eCase, some m =>
+       let env0 : Nat → BitVec 64 := fun _ => 0#64
+       let inCycle : Nat → BitVec 64 := fun i => if i == 0 then 7#64 else 1#64
+       let regs1 := stepModuleRegs m false inCycle env0
+       let regs2 := stepModuleRegs m false inCycle regs1
+       (evalRtlExpr env0 env0 env0 eLo == 99#64) &&
+       (evalRtlExpr env0 env0 env0 eHi == 20#64) &&
+       (evalRtlExpr env0 env0 env0 eCase == 84#64) &&
+       checkRtlModule m &&
+       (regs1 0 == 7#64) && (regs1 1 == 1#64) &&
+       (regs2 0 == 14#64) && (regs2 1 == 2#64)
+     | _, _, _, _ => false) = true := by
+  decide +kernel
+
+/-- **Theorem (`compileRichTerm_struct_union_and_stateful_verified`)**:
+End-to-end verification of:
+1. Curried multi-argument $\beta$-redex lowering (`((λx. λy. x * 10 + y) 3 5) = 35`),
+2. Record destructuring `.split` lowering (`let {lo, hi} = {lo: 12, hi: 40} in hi - lo = 28`),
+3. Full 64-bit word boundary `(offset = 0, width = 64)` struct slice packing and functional update,
+4. Whole-book `compileBookToRtl` and `compileBookToRtlSat` on a mixed 0-arg cell + 2-arg method `Book`
+   (`checkRtlModule = true`, `inputNames = ["arg0", "arg1"]`), and
+5. Whole-book `compileRichBookToRtl` on a `Book` combining a packed struct cell, a 2-argument method
+   with curried `super` $\beta$-redex, and a slot calling `self.blend((self.pair).lo, (self.pair).hi)`. -/
+theorem compileRichTerm_struct_union_and_stateful_verified :
+    let ctx : RtlLayoutCtx :=
+      { structSlices := [("lo", (0, 32)), ("hi", (32, 32))]
+      , unionTagBits := 8
+      , unionArms    := [("Left", (0, 32)), ("Right", (1, 32))] }
+    let ctx64 : RtlLayoutCtx :=
+      { structSlices := [("full", (0, 64))]
+      , unionTagBits := 8
+      , unionArms    := [] }
+    let curriedBetaTerm : Term :=
+      .app (.app (.lam (.lam (.binary .add (.binary .multiply (.bound 1) (.nat 10)) (.bound 0))))
+        (.nat 3)) (.nat 5)
+    let splitTerm : Term :=
+      .split (.record [("lo", .nat 12), ("hi", .nat 40)]) ["lo", "hi"]
+        (.lam (.lam (.binary .subtract (.bound 0) (.bound 1))))
+    let fullTerm : Term :=
+      .get (.extend (.record [("full", .nat 0x123456789ABCDEF0)])
+             [("full", .nat 0xFEDCBA9876543210)]) "full"
+    let dBase : LeafDef :=
+      { member := "base", slot := 0, kind := .cell, code := .lam (.lam (.nat 100)), reads := [] }
+    let dComb : LeafDef :=
+      { member := "combine"
+      , slot   := 1
+      , kind   := .method
+      , code   := .lam (.lam (.lam (.binary .add (.get (.bound 2) "base") (.binary .add (.bound 1) (.bound 0)))))
+      , reads  := [0] }
+    let mixedBook : Book := { items := [.slot dBase, .slot dComb] }
+    let rPair : LeafDef :=
+      { member := "pair"
+      , slot   := 0
+      , kind   := .cell
+      , code   := .lam (.lam (.record [("lo", .nat 10), ("hi", .nat 20)]))
+      , reads  := [] }
+    let rBlend : LeafDef :=
+      { member := "blend"
+      , slot   := 1
+      , kind   := .method
+      , code   := .lam (.lam (.lam (.app (.app (.lam (.lam (.binary .add (.bound 1) (.bound 0)))) (.bound 1)) (.bound 0))))
+      , reads  := [] }
+    let rSum : LeafDef :=
+      { member := "sumPair"
+      , slot   := 2
+      , kind   := .cell
+      , code   := .lam (.lam (.app (.app (.get (.bound 1) "blend")
+                    (.get (.get (.bound 1) "pair") "lo"))
+                    (.get (.get (.bound 1) "pair") "hi")))
+      , reads  := [0, 1] }
+    let richBook : Book := { items := [.slot rPair, .slot rBlend, .slot rSum] }
+    (match compileRichTerm ctx [] [] 0 [] curriedBetaTerm,
+           compileRichTerm ctx [] [] 0 [] splitTerm,
+           compileRichTerm ctx64 [] [] 0 [] fullTerm,
+           compileBookToRtl "mixed_wrap" mixedBook,
+           compileBookToRtlSat "mixed_sat" mixedBook,
+           compileRichBookToRtl "rich_book" ctx richBook with
+     | some eBeta, some eSplit, some eFull, some mWrap, some mSat, some mRich =>
+       let env0 : Nat → BitVec 64 := fun _ => 0#64
+       let in2 : Nat → BitVec 64 := fun i => if i == 0 then 7#64 else if i == 1 then 8#64 else 0#64
+       (evalRtlExpr env0 env0 env0 eBeta == 35#64) &&
+       (evalRtlExpr env0 env0 env0 eSplit == 28#64) &&
+       (evalRtlExpr env0 env0 env0 eFull == 0xFEDCBA9876543210#64) &&
+       checkRtlModule mWrap &&
+       checkRtlModule mSat &&
+       checkRtlModule mRich &&
+       (mSat.inputNames == ["arg0", "arg1"]) &&
+       (evalModuleOutputs mSat in2 env0 == [("out_base", 100#64), ("out_combine", 115#64)]) &&
+       (evalModuleOutputs mWrap in2 env0 == [("out_base", 100#64), ("out_combine", 115#64)]) &&
+       ((evalModuleOutputs mRich env0 env0).lookup "out_sumPair" == some 30#64)
+     | _, _, _, _, _, _ => false) = true := by
   decide +kernel
 
 end Obend.Hardware.Compiler

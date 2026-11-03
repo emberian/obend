@@ -1829,6 +1829,283 @@ def futamura2BookCompilerBroken (_B : Book) : Term := .nat 0
 #tooth Obend.Leaf.Futamura.futamura2_compiler_generator_commutes by mutation
   Obend.Leaf.Futamura.futamura2BookCompiler := futamura2BookCompilerBroken
 
+/-! ## 11. True `B`-Independent In-Core Pin Substitution (`encodePinsOnly`, `stageCodeForInCorePins`, `inCoreBookCompiler`, `inCoreBookCompiler_specializes_from_pinsOnly`) -/
+
+/-- Slot key projection for `LeafPin`. -/
+@[reducible] def _root_.Obend.Leaf.LeafPin.slot (p : LeafPin) : String := p.cell.key
+
+/-- Value term projection for `LeafPin`. -/
+@[reducible] def _root_.Obend.Leaf.LeafPin.value (p : LeafPin) : Term := p.code
+
+instance : Coe String LeafCell := ⟨.layer⟩
+
+/-- **Encode ONLY `pins : List LeafPin` into a flat `Core4` `.record` (`encodePinsOnly`)**:
+takes NO `B : Book` parameter and performs NO host-side pre-substitution on any `Book`! -/
+def encodePinsOnly (pins : List LeafPin) : Term :=
+  .record (pins.map fun p => (p.slot, p.value))
+
+/-- Helper for `.get g s` in `stageCodeForInCorePinsAt`: when `g = .bound i` with `i == selfIdx`
+and `s ∈ slotNames`, replaces `.get (.bound selfIdx) s` with `.get (.bound (selfIdx + 1)) s`
+(reading pin `s` from the staged compiler's runtime `pins` record parameter `.bound 0`). -/
+def stagePinGetAt (slotNames : List String) (selfIdx : Nat) : Term → Term → String → Term
+  | .bound i, _, s =>
+    if i == selfIdx && slotNames.contains s then
+      .get (.bound (selfIdx + 1)) s
+    else
+      .get (.bound i) s
+  | _, g', s => .get g' s
+
+/-- Stage all `.get (.bound selfIdx) s` reads (for `s ∈ slotNames`) inside a `Term` at binder depth `selfIdx`
+to read `.get (.bound (selfIdx + 1)) s` from the outer `pins` record binder. -/
+def stageCodeForInCorePinsAt (slotNames : List String) (selfIdx : Nat) : Term → Term
+  | .hole n σ => .hole n (σ.map (stageCodeForInCorePinsAt slotNames selfIdx))
+  | .bound i => .bound i
+  | .lam b => .lam (stageCodeForInCorePinsAt slotNames (selfIdx + 1) b)
+  | .app f a => .app (stageCodeForInCorePinsAt slotNames selfIdx f) (stageCodeForInCorePinsAt slotNames selfIdx a)
+  | .mix l u => .mix (stageCodeForInCorePinsAt slotNames selfIdx l) (stageCodeForInCorePinsAt slotNames selfIdx u)
+  | .fix s i => .fix (stageCodeForInCorePinsAt slotNames selfIdx s) (stageCodeForInCorePinsAt slotNames selfIdx i)
+  | .specification m e => .specification (stageCodeForInCorePinsAt slotNames selfIdx m) (stageCodeForInCorePinsAt slotNames selfIdx e)
+  | .prototype s g => .prototype (stageCodeForInCorePinsAt slotNames selfIdx s) (stageCodeForInCorePinsAt slotNames selfIdx g)
+  | .reflect p => .reflect (stageCodeForInCorePinsAt slotNames selfIdx p)
+  | .metadata p => .metadata (stageCodeForInCorePinsAt slotNames selfIdx p)
+  | .project p => .project (stageCodeForInCorePinsAt slotNames selfIdx p)
+  | .nat n => .nat n
+  | .boolean b => .boolean b
+  | .label l => .label l
+  | .binary op l r => .binary op (stageCodeForInCorePinsAt slotNames selfIdx l) (stageCodeForInCorePinsAt slotNames selfIdx r)
+  | .extend i fs => .extend (stageCodeForInCorePinsAt slotNames selfIdx i) (fs.map fun f => (f.1, stageCodeForInCorePinsAt slotNames selfIdx f.2))
+  | .record fs => .record (fs.map fun f => (f.1, stageCodeForInCorePinsAt slotNames selfIdx f.2))
+  | .get g s => stagePinGetAt slotNames selfIdx g (stageCodeForInCorePinsAt slotNames selfIdx g) s
+  | .ifZero v z s => .ifZero (stageCodeForInCorePinsAt slotNames selfIdx v) (stageCodeForInCorePinsAt slotNames selfIdx z) (stageCodeForInCorePinsAt slotNames (selfIdx + 1) s)
+  | .inject l p => .inject l (stageCodeForInCorePinsAt slotNames selfIdx p)
+  | .case sc arms => .case (stageCodeForInCorePinsAt slotNames selfIdx sc) (arms.map fun a => (a.1, stageCodeForInCorePinsAt slotNames (selfIdx + 1) a.2))
+  | .ifBool c x y => .ifBool (stageCodeForInCorePinsAt slotNames selfIdx c) (stageCodeForInCorePinsAt slotNames selfIdx x) (stageCodeForInCorePinsAt slotNames selfIdx y)
+  | .perform p => .perform (stageCodeForInCorePinsAt slotNames selfIdx p)
+  | .done p => .done (stageCodeForInCorePinsAt slotNames selfIdx p)
+  | .split t ns f => .split (stageCodeForInCorePinsAt slotNames selfIdx t) ns (stageCodeForInCorePinsAt slotNames selfIdx f)
+termination_by t => sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals first
+    | omega
+    | (rename_i hmem; have := List.sizeOf_lt_of_mem hmem; omega)
+    | (rename_i hmem; have := sizeOf_snd_lt_of_mem hmem; omega)
+
+/-- **Stage a definition's `code` for true in-core pin substitution (`stageCodeForInCorePins`)**:
+replaces each `.get (.bound selfIdx) s` (for `s ∈ slotNames`) inside `t` with `.get (.bound (selfIdx + 1)) s`,
+reading pin `s` from the staged compiler's runtime `pins` record parameter `.bound 0`! -/
+def stageCodeForInCorePins (slotNames : List String) : Term → Term
+  | .lam inner => .lam (stageCodeForInCorePinsAt slotNames 0 inner)
+  | other => stageCodeForInCorePinsAt slotNames 0 other
+
+/-- Stage a `LeafDef` for in-core pin substitution. -/
+def stageLeafDefForInCorePins (slotNames : List String) (d : LeafDef) : LeafDef :=
+  { d with
+    code := stageCodeForInCorePins slotNames d.code
+    reads := [] }
+
+/-- Stage a `BookItem` for in-core pin substitution. -/
+def stageBookItemForInCorePins (slotNames : List String) : BookItem → BookItem
+  | .slot d => .slot (stageLeafDefForInCorePins slotNames d)
+  | .static m v => .static m v
+
+/-- Stage a `Book` so that every `self.s` read for `s ∈ B.slots` reads from the outer `pins` binder `.bound 0`. -/
+def stageBookForInCorePins (B : Book) : Book :=
+  { items := B.items.map (stageBookItemForInCorePins B.slots) }
+
+/-- **True In-Core Staged Book Compiler (`inCoreBookCompiler`)**:
+Takes ONLY `(B : Book)` (with zero knowledge of `pins`) and produces a `Core4` lambda
+`.lam (encodeBookTerm (stageBookForInCorePins B))` whose `.bound 0` parameter is the runtime
+`encodePinsOnly pins` record. -/
+def inCoreBookCompiler (B : Book) : Term :=
+  .lam (encodeBookTerm (stageBookForInCorePins B))
+
+/-- In-core specialization of a single definition's `code` via `instantiate` and `dataPinSteps 3`
+after substituting `encodePinsOnly pins`. -/
+def inCoreSpecializeDefCode (slotNames : List String) (pins : List LeafPin) (code : Term) : Term :=
+  dataPinSteps 3
+    (instantiate
+      (dataPinPass (stageCodeForInCorePins slotNames code))
+      (dataPinPass (encodePinsOnly pins)))
+
+/-- In-core specialization of a `LeafDef` from `encodePinsOnly pins`. -/
+def inCoreSpecializeLeafDef (slotNames : List String) (pins : List LeafPin) (d : LeafDef) : LeafDef :=
+  { d with
+    code := inCoreSpecializeDefCode slotNames pins d.code
+    reads := [] }
+
+/-- In-core specialization of a `BookItem` from `encodePinsOnly pins`. -/
+def inCoreSpecializeBookItem (slotNames : List String) (pins : List LeafPin) : BookItem → BookItem
+  | .slot d => .slot (inCoreSpecializeLeafDef slotNames pins d)
+  | .static m v => .static m (dataPinSteps 3 (instantiate (dataPinPass v) (dataPinPass (encodePinsOnly pins))))
+
+/-- In-core specialization of an entire `Book` from `encodePinsOnly pins`. -/
+def inCoreSpecializeBook (B : Book) (pins : List LeafPin) : Book :=
+  { items := B.items.map (inCoreSpecializeBookItem B.slots pins) }
+
+@[simp] private theorem instantiate_encodeNatList : ∀ (ns : List Nat) (v : Term),
+    instantiate (encodeNatList ns) v = encodeNatList ns
+  | [], _ => by simp [encodeNatList]
+  | n :: ns, v => by simp [encodeNatList, instantiate_encodeNatList ns v]
+
+@[simp] private theorem instantiate_encodeLeafDef (d : LeafDef) (v : Term) :
+    instantiate (encodeLeafDef d) v = encodeLeafDef { d with code := instantiate d.code v } := by
+  cases d
+  simp [encodeLeafDef]
+
+@[simp] private theorem instantiate_encodeBookItem (item : BookItem) (v : Term) :
+    instantiate (encodeBookItem item) v = encodeBookItem (mapBookItemCode (fun c => instantiate c v) item) := by
+  cases item <;> simp [encodeBookItem, mapBookItemCode]
+
+@[simp] private theorem instantiate_encodeBookItems : ∀ (items : List BookItem) (v : Term),
+    instantiate (encodeBookItems items) v = encodeBookItems (items.map (mapBookItemCode (fun c => instantiate c v)))
+  | [], _ => by simp [encodeBookItems]
+  | item :: rest, v => by
+    simp [encodeBookItems, instantiate_encodeBookItem, instantiate_encodeBookItems rest v]
+
+/-- **`instantiate` commutes with `encodeBookTerm`**: substituting a runtime `pins` record into
+an encoded `Book` term inside `Core4` substitutes it directly into every item's `"code"` / `"value"` field. -/
+@[simp] theorem instantiate_encodeBookTerm (B : Book) (v : Term) :
+    instantiate (encodeBookTerm B) v = encodeBookTerm (mapBookCode (fun c => instantiate c v) B) := by
+  cases B
+  simp [encodeBookTerm, mapBookCode]
+
+theorem inCoreSpecializeBook_eq_mapBookCode (B : Book) (pins : List LeafPin) :
+    inCoreSpecializeBook B pins =
+      mapBookCode (dataPinSteps 3)
+        (mapBookCode (fun c => instantiate c (dataPinPass (encodePinsOnly pins)))
+          (mapBookCode dataPinPass (stageBookForInCorePins B))) := by
+  unfold inCoreSpecializeBook stageBookForInCorePins mapBookCode
+  simp only [List.map_map, Function.comp_def, Book.mk.injEq]
+  apply List.map_congr_left
+  intro item _
+  cases item <;> rfl
+
+private theorem dataPinPass_app_inCoreBookCompiler (B : Book) (V : Term) :
+    dataPinPass (.app (inCoreBookCompiler B) V) =
+      encodeBookTerm
+        (mapBookCode (fun c => instantiate c (dataPinPass V))
+          (mapBookCode dataPinPass (stageBookForInCorePins B))) := by
+  simp only [inCoreBookCompiler, dataPinPass, dataPinPass_encodeBookTerm,
+    resolveApp, instantiate_encodeBookTerm]
+
+/-- Applying `inCoreBookCompiler B` to `encodePinsOnly pins` and running `dataPinSpecialize`
+reduces purely inside `Core4` to `encodeBookTerm (inCoreSpecializeBook B pins)`. -/
+theorem inCoreBookCompiler_eq_encodeBookTerm (B : Book) (pins : List LeafPin) :
+    dataPinSpecialize (.app (inCoreBookCompiler B) (encodePinsOnly pins)) =
+      encodeBookTerm (inCoreSpecializeBook B pins) := by
+  change dataPinSteps 3 (dataPinPass (.app (inCoreBookCompiler B) (encodePinsOnly pins))) = _
+  rw [dataPinPass_app_inCoreBookCompiler, dataPinSteps_encodeBookTerm, inCoreSpecializeBook_eq_mapBookCode]
+
+/-- Observational equivalence (`≈b`) of `.app (inCoreBookCompiler B) (encodePinsOnly pins)` and
+`encodeBookTerm (inCoreSpecializeBook B pins)`. -/
+theorem bequiv_inCoreBookCompiler (B : Book) (pins : List LeafPin) :
+    .app (inCoreBookCompiler B) (encodePinsOnly pins) ≈b
+      encodeBookTerm (inCoreSpecializeBook B pins) := by
+  rw [← inCoreBookCompiler_eq_encodeBookTerm B pins]
+  exact bequiv_dataPinSpecialize _
+
+@[simp] theorem decodeBookTerm_inCoreBookCompiler (B : Book) (pins : List LeafPin) :
+    decodeBookTerm? (dataPinSpecialize (.app (inCoreBookCompiler B) (encodePinsOnly pins))) =
+      some (inCoreSpecializeBook B pins) := by
+  rw [inCoreBookCompiler_eq_encodeBookTerm, decodeBookTerm_encodeBookTerm]
+
+/-- Canonical `Book` with a `"mode"` slot (slot 0) and a `"compute"` method (slot 1)
+that branches on `self.mode` (`0 ↦ 40 + 2 = 42`, `1 ↦ 99 + pred = 99`). -/
+def modeBranchBook : Book where
+  items :=
+    [ .slot { member := "mode", slot := 0, kind := .cell, code := .lam (.lam (.nat 0)), reads := [] }
+    , .slot
+        { member := "compute"
+          slot := 1
+          kind := .method
+          code :=
+            .lam
+              (.lam
+                (.ifZero (.get (.bound 1) "mode")
+                  (.binary .add (.nat 40) (.nat 2))
+                  (.binary .add (.nat 99) (.bound 0))))
+          reads := [0] } ]
+
+/-- **Universal Theorem (`inCoreBookCompiler_specializes_from_pinsOnly`)**:
+For any `B : Book` and `pins : List LeafPin` (where `encodePinsOnly pins` depends on `pins` alone
+and has zero knowledge of `B`!):
+1. `dataPinSpecialize (.app (inCoreBookCompiler B) (encodePinsOnly pins))` reduces purely inside `Core4`
+   to `encodeBookTerm (inCoreSpecializeBook B pins)`.
+2. Decoding `dataPinSpecialize (.app (inCoreBookCompiler B) (encodePinsOnly pins))` via `decodeBookTerm?`
+   recovers `some (inCoreSpecializeBook B pins)`.
+3. Changing `pins` from `[⟨"mode", .nat 0⟩]` to `[⟨"mode", .nat 1⟩]` on the **exact same**
+   `inCoreBookCompiler modeBranchBook` produces two distinct residual `Core4` programs for `"compute"`
+   (`some (.lam (.lam (.nat 42)))` vs `some (.lam (.lam (.nat 99)))`), which evaluate at `.nat 0`
+   to `some (.nat 42)` vs `some (.nat 99)`!
+4. Applying `inCoreBookCompiler sampleSpecializableBook` to `encodePinsOnly sampleBookPins` inside `Core4`
+   propagates `mode = 0` and `threshold = 9`, eliminates both `.ifZero` and `.ifBool` dead branches,
+   and inlines `self.helper` to produce `some (.lam (.lam (.binary .add (.binary .add (.bound 0) (.nat 16)) (.nat 9))))`. -/
+theorem inCoreBookCompiler_specializes_from_pinsOnly (B : Book) (pins : List LeafPin) :
+    dataPinSpecialize (.app (inCoreBookCompiler B) (encodePinsOnly pins)) =
+      encodeBookTerm (inCoreSpecializeBook B pins) ∧
+    decodeBookTerm? (dataPinSpecialize (.app (inCoreBookCompiler B) (encodePinsOnly pins))) =
+      some (inCoreSpecializeBook B pins) ∧
+    ((decodeBookTerm?
+      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 0⟩])))).bind
+      (fun B_res => lookupBookCode B_res "compute")) =
+      some (.lam (.lam (.nat 42))) ∧
+    ((decodeBookTerm?
+      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 1⟩])))).bind
+      (fun B_res => lookupBookCode B_res "compute")) =
+      some (.lam (.lam (.nat 99))) ∧
+    ((decodeBookTerm?
+      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 0⟩])))).bind
+      (fun B_res => evalResidualBookAt B_res "compute" (.nat 0))) =
+      some (.nat 42) ∧
+    ((decodeBookTerm?
+      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 1⟩])))).bind
+      (fun B_res => evalResidualBookAt B_res "compute" (.nat 0))) =
+      some (.nat 99) ∧
+    ((decodeBookTerm?
+      (dataPinSpecialize (.app (inCoreBookCompiler sampleSpecializableBook) (encodePinsOnly sampleBookPins)))).bind
+      (fun B_res => lookupBookCode B_res "dispatch")) =
+      some (.lam (.lam (.binary .add (.binary .add (.bound 0) (.nat 16)) (.nat 9)))) := by
+  have heq := inCoreBookCompiler_eq_encodeBookTerm B pins
+  have hm0_code :
+      lookupBookCode (inCoreSpecializeBook modeBranchBook [⟨"mode", .nat 0⟩]) "compute" =
+        some (.lam (.lam (.nat 42))) :=
+    optTermEq_sound (by decide +kernel)
+  have hm1_code :
+      lookupBookCode (inCoreSpecializeBook modeBranchBook [⟨"mode", .nat 1⟩]) "compute" =
+        some (.lam (.lam (.nat 99))) :=
+    optTermEq_sound (by decide +kernel)
+  have hm0_eval :
+      evalResidualBookAt (inCoreSpecializeBook modeBranchBook [⟨"mode", .nat 0⟩]) "compute" (.nat 0) =
+        some (.nat 42) :=
+    optTermEq_sound (by decide +kernel)
+  have hm1_eval :
+      evalResidualBookAt (inCoreSpecializeBook modeBranchBook [⟨"mode", .nat 1⟩]) "compute" (.nat 0) =
+        some (.nat 99) :=
+    optTermEq_sound (by decide +kernel)
+  have hsample :
+      lookupBookCode (inCoreSpecializeBook sampleSpecializableBook sampleBookPins) "dispatch" =
+        some (.lam (.lam (.binary .add (.binary .add (.bound 0) (.nat 16)) (.nat 9)))) :=
+    optTermEq_sound (by decide +kernel)
+  refine ⟨heq, decodeBookTerm_inCoreBookCompiler B pins, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [decodeBookTerm_inCoreBookCompiler]; exact hm0_code
+  · rw [decodeBookTerm_inCoreBookCompiler]; exact hm1_code
+  · rw [decodeBookTerm_inCoreBookCompiler]; exact hm0_eval
+  · rw [decodeBookTerm_inCoreBookCompiler]; exact hm1_eval
+  · rw [decodeBookTerm_inCoreBookCompiler]; exact hsample
+
+/-- Mutated `encodePinsOnly` that drops all runtime pins and returns `.record []`. -/
+def encodePinsOnlyBroken (_pins : List LeafPin) : Term := .record []
+
+/-- Mutated `stageCodeForInCorePins` that fails to lift `self.s` reads to the outer `pins` binder. -/
+def stageCodeForInCorePinsBroken (_slotNames : List String) (t : Term) : Term := t
+
+#tooth Obend.Leaf.Futamura.inCoreBookCompiler_specializes_from_pinsOnly by mutation
+  Obend.Leaf.Futamura.encodePinsOnly := encodePinsOnlyBroken
+
+#tooth Obend.Leaf.Futamura.inCoreBookCompiler_specializes_from_pinsOnly by mutation
+  Obend.Leaf.Futamura.stageCodeForInCorePins := stageCodeForInCorePinsBroken
+
 end Obend.Leaf.Futamura
 end
 

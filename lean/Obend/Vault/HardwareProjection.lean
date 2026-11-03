@@ -94,8 +94,11 @@ def aluOpToString : RtlAluOp → String
   | .bitXor => "bitXor"
   | .shl    => "shl"
   | .lshr   => "lshr"
+  | .ashr   => "ashr"
   | .eq     => "eq"
   | .ult    => "ult"
+  | .slt    => "slt"
+  | .qmul32 => "qmul32"
 
 /-- Render clock domain as string label. -/
 def clkDomainToString : ClkDomain → String

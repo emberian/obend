@@ -1,0 +1,54 @@
+edition ObjectiveBend 1
+# Flagship App #7 (`apps/sovereign-drex/BatchClearing.obend`):
+# Sovereign batch-clearing cell delta and `K-CARRY` pin transition (`"world-carry@1"`).
+
+import "./Seat.obend" as SeatMod
+
+law monotone_carry_epoch: monotone(carryEpoch)
+
+record CarryClearingCell:
+  quorumThreshold() -> Nat
+  welfareCrownFloor() -> Nat
+  halfEdgeDeltaCount() -> Nat
+  clearedCbdcAmount(lotCount: Nat) -> Nat
+  carryPinDigest(validatorEpoch: Nat) -> Nat
+
+spec BaseBatchClearingSpec for CarryClearingCell:
+  requires welfareCrownFloor() -> Nat
+  requires halfEdgeDeltaCount() -> Nat
+  def quorumThreshold() -> Nat:
+    3n
+  def welfareCrownFloor() -> Nat:
+    1000n
+  def halfEdgeDeltaCount() -> Nat:
+    4n
+  def clearedCbdcAmount(lotCount: Nat) -> Nat:
+    lotCount * 500n + self.welfareCrownFloor
+  def carryPinDigest(validatorEpoch: Nat) -> Nat:
+    validatorEpoch * 32n + self.halfEdgeDeltaCount
+  claim batch_clearing_open_recursion(lotCount: Nat): self.clearedCbdcAmount(lotCount) == lotCount * 500n + self.welfareCrownFloor
+
+spec SovereignCarryClearingOverride for CarryClearingCell:
+  requires carryPinDigest(validatorEpoch: Nat) -> Nat
+  def halfEdgeDeltaCount() -> Nat:
+    6n
+  def carryPinDigest(validatorEpoch: Nat) -> Nat:
+    super.carryPinDigest(validatorEpoch) + 16n
+
+def seedCarryClearingCell() -> CarryClearingCell:
+  {quorumThreshold: 0n, welfareCrownFloor: 0n, halfEdgeDeltaCount: 0n, clearedCbdcAmount: fn(l: Nat) -> Nat: l, carryPinDigest: fn(e: Nat) -> Nat: e}
+
+def baseBatchClearing() -> CarryClearingCell:
+  fix(BaseBatchClearingSpec, seedCarryClearingCell())
+
+def sovereignCarryClearing() -> CarryClearingCell:
+  fix(compose(BaseBatchClearingSpec, SovereignCarryClearingOverride), seedCarryClearingCell())
+
+def sovereignClearedAt12() -> Nat:
+  sovereignCarryClearing().clearedCbdcAmount(12n)
+
+def sovereignDigestAt5() -> Nat:
+  sovereignCarryClearing().carryPinDigest(5n)
+
+def crossModuleSeatClearing() -> Nat:
+  SeatMod.institutionalMandateAt15() + sovereignClearedAt12()

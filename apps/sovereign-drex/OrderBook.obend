@@ -1,0 +1,55 @@
+edition ObjectiveBend 1
+# Flagship App #7 (`apps/sovereign-drex/OrderBook.obend`):
+# Multi-asset (`CBDC`, `TokenizedTreasury`, `WelfareCredit`) sovereign order book with uniform clearing price.
+
+import "./Seat.obend" as SeatMod
+
+law monotone_book_batch: monotone(batchSeq)
+law conserve_total_cbdc_supply: writeOnce(totalCbdcSupply)
+
+record DrexOrderBook:
+  uniformClearingPriceBps() -> Nat
+  totalCbdcLiquidity() -> Nat
+  totalBondLiquidity() -> Nat
+  matchedVolumeUnits(orderLots: Nat) -> Nat
+  bookConservationSlack(feeBps: Nat) -> Nat
+
+spec BaseUniformOrderBookSpec for DrexOrderBook:
+  requires totalCbdcLiquidity() -> Nat
+  requires uniformClearingPriceBps() -> Nat
+  def uniformClearingPriceBps() -> Nat:
+    9850n
+  def totalCbdcLiquidity() -> Nat:
+    100000n
+  def totalBondLiquidity() -> Nat:
+    50000n
+  def matchedVolumeUnits(orderLots: Nat) -> Nat:
+    self.totalCbdcLiquidity + orderLots * 100n
+  def bookConservationSlack(feeBps: Nat) -> Nat:
+    feeBps * 4n + self.uniformClearingPriceBps
+  claim orderbook_volume_open_recursion(orderLots: Nat): self.matchedVolumeUnits(orderLots) == self.totalCbdcLiquidity + orderLots * 100n
+
+spec WholesaleDvPOrderBookOverride for DrexOrderBook:
+  requires bookConservationSlack(feeBps: Nat) -> Nat
+  def totalCbdcLiquidity() -> Nat:
+    125000n
+  def bookConservationSlack(feeBps: Nat) -> Nat:
+    super.bookConservationSlack(feeBps) + 150n
+
+def seedDrexOrderBook() -> DrexOrderBook:
+  {uniformClearingPriceBps: 0n, totalCbdcLiquidity: 0n, totalBondLiquidity: 0n, matchedVolumeUnits: fn(l: Nat) -> Nat: l, bookConservationSlack: fn(f: Nat) -> Nat: f}
+
+def retailOrderBook() -> DrexOrderBook:
+  fix(BaseUniformOrderBookSpec, seedDrexOrderBook())
+
+def wholesaleDvPOrderBook() -> DrexOrderBook:
+  fix(compose(BaseUniformOrderBookSpec, WholesaleDvPOrderBookOverride), seedDrexOrderBook())
+
+def wholesaleVolumeAt20() -> Nat:
+  wholesaleDvPOrderBook().matchedVolumeUnits(20n)
+
+def wholesaleSlackAt10() -> Nat:
+  wholesaleDvPOrderBook().bookConservationSlack(10n)
+
+def crossModuleSeatBookLiquidity() -> Nat:
+  SeatMod.institutionalSafetyAt80() + wholesaleVolumeAt20()

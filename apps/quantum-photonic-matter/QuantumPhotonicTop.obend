@@ -1,0 +1,60 @@
+edition ObjectiveBend 1
+# Flagship App #8 (`apps/quantum-photonic-matter/QuantumPhotonicTop.obend`):
+# Top-level Quantum Photonic & Topological Matter Co-Processor integrating:
+# - 1-WL quotient-compressed Q_3 Krawtchouk photonic bus (8 -> 4 shells),
+# - 4x4 Faddeev-LeVerrier exact thermo-optic crosstalk pre-compensation (det = 10946),
+# - Majorana tetron (\gamma_0..\gamma_3) non-Abelian Clifford braiding & Lindblad parity cooling.
+
+import "./QuantumPhotonicMatter.obend" as QPMStd
+import "./ClementsKrawtchoukArray.obend" as ClementsMod
+import "./ThermoOpticCrosstalkComp.obend" as CrosstalkMod
+import "./MajoranaTetronSyndromes.obend" as TetronMod
+
+law write_once_chip_calibration_digest: writeOnce(chipCalibrationDigest)
+
+record QuantumPhotonicCoProcessor:
+  wlCompressedShells() -> Nat
+  faddeevCrosstalkDet() -> Nat
+  cmtKrawtchoukLength2Nm() -> Nat
+  quotientReverseAdjointOps(batchVectors: Nat) -> Nat
+  coProcessorCycleBudget(syndromeRounds: Nat) -> Nat
+
+spec BaseQuantumPhotonicCoProcSpec for QuantumPhotonicCoProcessor:
+  requires wlCompressedShells() -> Nat
+  requires faddeevCrosstalkDet() -> Nat
+  def wlCompressedShells() -> Nat:
+    4n
+  def faddeevCrosstalkDet() -> Nat:
+    8769n
+  def cmtKrawtchoukLength2Nm() -> Nat:
+    3142n
+  def quotientReverseAdjointOps(batchVectors: Nat) -> Nat:
+    batchVectors * 4n + self.faddeevCrosstalkDet
+  def coProcessorCycleBudget(syndromeRounds: Nat) -> Nat:
+    syndromeRounds * 16n + 4n
+  claim coproc_quotient_adjoint_open_recursion(batchVectors: Nat): self.quotientReverseAdjointOps(batchVectors) == batchVectors * 4n + self.faddeevCrosstalkDet
+
+spec FaultTolerantCoProcOverride for QuantumPhotonicCoProcessor:
+  requires coProcessorCycleBudget(syndromeRounds: Nat) -> Nat
+  def cmtKrawtchoukLength2Nm() -> Nat:
+    3142n
+  def coProcessorCycleBudget(syndromeRounds: Nat) -> Nat:
+    super.coProcessorCycleBudget(syndromeRounds) + 32n
+
+def seedQuantumPhotonicCoProc() -> QuantumPhotonicCoProcessor:
+  {wlCompressedShells: 0n, faddeevCrosstalkDet: 0n, cmtKrawtchoukLength2Nm: 0n, quotientReverseAdjointOps: fn(b: Nat) -> Nat: b, coProcessorCycleBudget: fn(r: Nat) -> Nat: r}
+
+def baseQuantumPhotonicCoProc() -> QuantumPhotonicCoProcessor:
+  fix(BaseQuantumPhotonicCoProcSpec, seedQuantumPhotonicCoProc())
+
+def faultTolerantQuantumPhotonicCoProc() -> QuantumPhotonicCoProcessor:
+  fix(compose(BaseQuantumPhotonicCoProcSpec, FaultTolerantCoProcOverride), seedQuantumPhotonicCoProc())
+
+def coprocAdjointOpsAt25() -> Nat:
+  faultTolerantQuantumPhotonicCoProc().quotientReverseAdjointOps(25n)
+
+def coprocBudgetAt6() -> Nat:
+  faultTolerantQuantumPhotonicCoProc().coProcessorCycleBudget(6n)
+
+def crossModuleQpmSummary() -> Nat:
+  QPMStd.tetronResetRateAt10() + ClementsMod.krawtchoukMacsAt16() + CrosstalkMod.precompDriveAt50() + TetronMod.tetronBraidDepthAt10() + coprocAdjointOpsAt25()

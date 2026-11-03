@@ -590,35 +590,6 @@ def checkP4IrrationalRatioObstruction : Bool :=
   let linearFactorRMinus1 := Poly.sub rVar Poly.one
   !(polyReduceFuel [linearFactorRMinus1] 4 p4RatioMinPoly).isZero
 
-/-- General $2 \times 2$ integer matrix $\begin{pmatrix} a & b \\ c & d \end{pmatrix}$. -/
-def mat2x2 (a b c d : Int) : IntMatrix where
-  dim  := 2
-  rows := [[a, b], [c, d]]
-
-theorem mat2x2_scaledIdentity (s : Int) :
-    IntMatrix.scaledIdentity 2 s = mat2x2 s 0 0 s := rfl
-
-theorem mat2x2_zero :
-    IntMatrix.zero 2 = mat2x2 0 0 0 0 := rfl
-
-theorem mat2x2_add (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
-    (mat2x2 a1 b1 c1 d1).add (mat2x2 a2 b2 c2 d2) =
-      mat2x2 (a1 + a2) (b1 + b2) (c1 + c2) (d1 + d2) := rfl
-
-theorem mat2x2_scale (s a b c d : Int) :
-    (mat2x2 a b c d).scale s = mat2x2 (s * a) (s * b) (s * c) (s * d) := rfl
-
-theorem mat2x2_trace (a b c d : Int) :
-    (mat2x2 a b c d).trace = a + (d + 0) := rfl
-
-theorem mat2x2_mul (a1 b1 c1 d1 a2 b2 c2 d2 : Int) :
-    (mat2x2 a1 b1 c1 d1).mul (mat2x2 a2 b2 c2 d2) =
-      mat2x2
-        (a1 * a2 + (b1 * c2 + 0))
-        (a1 * b2 + (b1 * d2 + 0))
-        (c1 * a2 + (d1 * c2 + 0))
-        (c1 * b2 + (d1 * d2 + 0)) := rfl
-
 /-- **Theorem (`faddeevLeVerrier_2x2_exact_and_cayley_hamilton`)**:
 For EVERY $2 \times 2$ integer matrix $A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}$ ($a, b, c, d \in \mathbb{Z}$):
 1. **Exact Newton-Identity Trace Divisibility**:
@@ -1159,6 +1130,613 @@ theorem ctqw_validated_flowpipe_and_taylor_unitarity :
     verifyHybridScheduleSafety quantumPulseHybridAutomaton initPulse [.flowStep, .jumpTo "idle_readout", .flowStep] = true ∧
     verifyHybridScheduleSafety quantumPulseHybridAutomaton initPulse [.jumpTo "idle_readout"] = false := by
   decide +kernel
+
+/-! ## 7. Computed Lagrange–Sylvester Spectral Projectors on $K_2$, $P_3$, $Q_3$ & Discrete-Time Szegedy Quantum Walk Lumping (`szegedy_intertwining_step`, `szegedy_intertwining_power`, `cellUniformSzegedyPST_iff_quotient`) -/
+
+/-- Compute the list of scaled Lagrange–Sylvester spectral projectors
+$$E_k = \frac{s}{d_k} \tilde{E}_k = \frac{s}{\prod_{j \neq k} (\lambda_k - \lambda_j)} \prod_{j \neq k} (Q - \lambda_j I)$$
+directly from `Q`, `eigs`, and a common denominator `commonScale : Int` (no hand-supplied cofactors). -/
+def computeScaledLagrangeProjectors (Q : IntMatrix) (eigs : List Int) (commonScale : Int) : List IntMatrix :=
+  (List.range eigs.length).map (fun k =>
+    let (num, denom) := computeLagrangeProjector Q eigs k
+    num.scale (commonScale / denom))
+
+/-- Compute the Lagrange–Sylvester denominator $d_k(\alpha) = \prod_{j \neq k} (\lambda_k - \lambda_j) \pmod{\text{basis}}$
+over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$. -/
+def computeLagrangeDenominatorPoly
+    (basis : List Poly)
+    (fuel : Nat)
+    (eigs : List Poly)
+    (k : Nat) : Poly :=
+  let lamK := eigs[k]?.getD Poly.zero
+  (List.range eigs.length).foldl (fun acc j =>
+    if j == k then acc
+    else
+      let lamJ := eigs[j]?.getD Poly.zero
+      polyReduceFuel basis fuel (Poly.mul acc (Poly.sub lamK lamJ)))
+    Poly.one
+
+/-- Compute the Lagrange–Sylvester spectral projector pair $(\tilde{E}_k(Q), d_k)$ over
+$\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$ directly from $Q$ and `eigs` (zero hand-supplied cofactors):
+- Numerator: $\tilde{E}_k(Q) = \prod_{j \neq k} (Q - \lambda_j I) \pmod{\text{basis}}$,
+- Denominator: $d_k = \prod_{j \neq k} (\lambda_k - \lambda_j) \pmod{\text{basis}}$. -/
+def computeLagrangeProjectorPoly
+    (basis : List Poly)
+    (fuel : Nat)
+    (Q : PolyMatrix)
+    (eigs : List Poly)
+    (k : Nat) : PolyMatrix × Poly :=
+  ( synthesizeSylvesterProjectorPoly basis fuel Q eigs k Poly.one
+  , computeLagrangeDenominatorPoly basis fuel eigs k )
+
+/-- **Theorem (`computed_lagrange_projectors_k2_p3_q3_exact`)**:
+End-to-end verification of `computeLagrangeProjector`, `computeScaledLagrangeProjectors`, and
+`computeLagrangeProjectorPoly` across $K_2$, $P_3$ over $\mathbb{Q}[\alpha]/\langle\alpha^2-2\rangle$,
+and $Q_3$'s 4-cell Krawtchouk quotient:
+1. **$K_2$ ($\lambda \in \{1, -1\}$, $s = 2$)**: `computeScaledLagrangeProjectors k2Matrix [1, -1] 2`
+   equals `[k2ProjPlus, k2ProjMinus]` and passes `checkSpectralDecomposition = true`.
+2. **$P_3$ over $\mathbb{Q}[\alpha]/\langle\alpha^2-2\rangle$ ($\lambda \in \{0, \alpha, -\alpha\}$)**:
+   `computeLagrangeProjectorPoly` computes both the numerators $\tilde{E}_0, \tilde{E}_+, \tilde{E}_-$
+   and the exact reduced denominators $d_0 = -2, d_+ = 4, d_- = 4 \pmod{\alpha^2-2}$, satisfying
+   $\tilde{E}_k^2 \equiv d_k \tilde{E}_k \pmod{\alpha^2-2}$ and pairwise orthogonality!
+3. **$Q_3$'s 4-Cell Krawtchouk Quotient ($\lambda \in \{3, 1, -1, -3\}$, $s = 48$)**:
+   `computeScaledLagrangeProjectors hypercubeQ3QuotientMatrix [3, 1, -1, -3] 48` automatically derives
+   the denominators $[48, -16, 16, -48]$ and cofactors $[1, -3, 3, -1]$, matching
+   `q3QuotientSylvesterProjectors` and passing `checkSpectralDecomposition = true`! -/
+theorem computed_lagrange_projectors_k2_p3_q3_exact :
+    let G := [p3MinPolyAlphaSqMinus2]
+    let H_P3 := PolyMatrix.ofIntMatrix path3Matrix
+    let (tildeP0, d0) := computeLagrangeProjectorPoly G 6 H_P3 p3AlgebraicEigenvalues 0
+    let (tildePPlus, dPlus) := computeLagrangeProjectorPoly G 6 H_P3 p3AlgebraicEigenvalues 1
+    let (tildePMinus, dMinus) := computeLagrangeProjectorPoly G 6 H_P3 p3AlgebraicEigenvalues 2
+    -- 1. K2 computed projectors
+    computeScaledLagrangeProjectors k2Matrix [1, -1] 2 = [k2ProjPlus, k2ProjMinus] ∧
+    checkSpectralDecomposition k2Matrix 2 [1, -1]
+      (computeScaledLagrangeProjectors k2Matrix [1, -1] 2) = true ∧
+    -- 2. P3 computed projectors over Q[alpha]/(alpha^2 - 2)
+    d0 = polyOfTerm [] (-2) ∧
+    dPlus = polyOfTerm [] 4 ∧
+    dMinus = polyOfTerm [] 4 ∧
+    PolyMatrix.isZeroMod G 6
+      (PolyMatrix.sub (PolyMatrix.mulMod G 6 tildeP0 tildeP0)
+                      (PolyMatrix.scalePolyMod G 6 d0 tildeP0)) = true ∧
+    PolyMatrix.isZeroMod G 6
+      (PolyMatrix.sub (PolyMatrix.mulMod G 6 tildePPlus tildePPlus)
+                      (PolyMatrix.scalePolyMod G 6 dPlus tildePPlus)) = true ∧
+    PolyMatrix.isZeroMod G 6
+      (PolyMatrix.sub (PolyMatrix.mulMod G 6 tildePMinus tildePMinus)
+                      (PolyMatrix.scalePolyMod G 6 dMinus tildePMinus)) = true ∧
+    PolyMatrix.isZeroMod G 6 (PolyMatrix.mulMod G 6 tildeP0 tildePPlus) = true ∧
+    PolyMatrix.isZeroMod G 6 (PolyMatrix.mulMod G 6 tildePPlus tildePMinus) = true ∧
+    -- 3. Q3 4-cell Krawtchouk quotient computed projectors
+    (List.range 4).map (computeLagrangeDenominator [3, 1, -1, -3]) = [48, -16, 16, -48] ∧
+    computeScaledLagrangeProjectors hypercubeQ3QuotientMatrix [3, 1, -1, -3] 48 =
+      q3QuotientSylvesterProjectors ∧
+    checkSpectralDecomposition hypercubeQ3QuotientMatrix 48 [3, 1, -1, -3]
+      (computeScaledLagrangeProjectors hypercubeQ3QuotientMatrix [3, 1, -1, -3] 48) = true := by
+  decide +kernel
+
+/-- Full $N$-state discrete-time Szegedy / Grover reflection operator
+$$R_M = 2 M - d_M I$$
+evaluated across partition cells `cellIndices` and `cellOf`, where $M / d_M$ is the normalized
+transition/projection operator ($\Pi_M$). -/
+def szegedyReflectVec
+    (M : Nat → Nat → Int)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (dM : Int)
+    (v : Nat → Int)
+    (u : Nat) : Int :=
+  2 * partitionedMatVec M cellIndices cellOf v u - dM * v u
+
+/-- Quotient $r$-cell discrete-time Szegedy / Grover reflection operator
+$$R_{Q_M} = 2 Q_M - d_M I_r$$
+evaluated on an $r$-cell quotient state $w : \text{Nat} \to \text{Int}$. -/
+def szegedyQuotientReflectVec
+    (QM : Nat → Nat → Int)
+    (cellIndices : List Nat)
+    (dM : Int)
+    (w : Nat → Int)
+    (i : Nat) : Int :=
+  2 * quotientMatVec QM cellIndices w i - dM * w i
+
+/-- One full clock cycle of the $N$-state **Discrete-Time Szegedy Quantum Walk**
+$$U_{\text{Sz}} = R_B \cdot R_A = (2 B - d_B I)(2 A - d_A I),$$
+which composes the first reflection $R_A$ with the second reflection $R_B$ (connecting continuous-time
+photonic walks `CTQW` to synchronous clocked digital FPGA/ASIC quantum walks `DTQW`). -/
+def szegedyWalkStep
+    (A B : Nat → Nat → Int)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (dA dB : Int)
+    (v : Nat → Int)
+    (u : Nat) : Int :=
+  szegedyReflectVec B cellIndices cellOf dB (szegedyReflectVec A cellIndices cellOf dA v) u
+
+/-- One full clock cycle of the $r$-cell **Quotient Discrete-Time Szegedy Quantum Walk**
+$$Q_{\text{Sz}} = R_{Q_B} \cdot R_{Q_A} = (2 Q_B - d_B I_r)(2 Q_A - d_A I_r).$$ -/
+def szegedyQuotientWalkStep
+    (QA QB : Nat → Nat → Int)
+    (cellIndices : List Nat)
+    (dA dB : Int)
+    (w : Nat → Int)
+    (i : Nat) : Int :=
+  szegedyQuotientReflectVec QB cellIndices dB (szegedyQuotientReflectVec QA cellIndices dA w) i
+
+/-- Helper lemma: a single reflection operator $R_M = 2 M - d_M I$ intertwines exactly with the
+quotient reflection $R_{Q_M} = 2 Q_M - d_M I_r$ over any equitable partition. -/
+theorem szegedy_reflect_intertwining
+    (M QM : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (dM : Int)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqM : ∀ j, j ∈ cellIndices → cellRowSum M (cellOf j) u = QM (part u) j) :
+    szegedyReflectVec M cellIndices cellOf dM (liftQuotientVec part w) u =
+      liftQuotientVec part (szegedyQuotientReflectVec QM cellIndices dM w) u := by
+  dsimp only [szegedyReflectVec, szegedyQuotientReflectVec, liftQuotientVec]
+  rw [equitable_intertwining_step M QM part cellIndices cellOf w u hCells hEqM]
+  rfl
+
+/-- **Theorem (`szegedy_intertwining_step`)**:
+**Single-Step Discrete-Time Szegedy Quantum Walk Intertwining ($U_{\text{Sz}} P = P Q_{\text{Sz}}$)**:
+For ANY equitable partition `(part, cellIndices, cellOf)` shared by the reflection generators
+$(A, Q_A)$ and $(B, Q_B)$ (including the single-generator coin/Grover reflection case $B = A$),
+any degree scales $d_A, d_B \in \mathbb{Z}$, any quotient state $w : \text{Nat} \to \text{Int}$,
+and any vertex $u \in \mathbb{N}$:
+$$(U_{\text{Sz}} (P w))_u = (P (Q_{\text{Sz}} w))_u = (Q_{\text{Sz}} w)_{\text{part}(u)}.$$ -/
+theorem szegedy_intertwining_step
+    (A B QA QB : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (dA dB : Int)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqA : ∀ x, ∀ j, j ∈ cellIndices → cellRowSum A (cellOf j) x = QA (part x) j)
+    (hEqB : ∀ x, ∀ j, j ∈ cellIndices → cellRowSum B (cellOf j) x = QB (part x) j) :
+    szegedyWalkStep A B cellIndices cellOf dA dB (liftQuotientVec part w) u =
+      liftQuotientVec part (szegedyQuotientWalkStep QA QB cellIndices dA dB w) u := by
+  dsimp only [szegedyWalkStep, szegedyQuotientWalkStep]
+  have hStepA :
+      szegedyReflectVec A cellIndices cellOf dA (liftQuotientVec part w) =
+        liftQuotientVec part (szegedyQuotientReflectVec QA cellIndices dA w) := by
+    funext x
+    exact szegedy_reflect_intertwining A QA part cellIndices cellOf dA w x hCells (hEqA x)
+  rw [hStepA]
+  exact szegedy_reflect_intertwining B QB part cellIndices cellOf dB
+    (szegedyQuotientReflectVec QA cellIndices dA w) u hCells (hEqB u)
+
+/-- **Theorem (`szegedy_intertwining_power`)**:
+**Multi-Step Discrete-Time Szegedy Quantum Walk Intertwining ($U_{\text{Sz}}^k P = P Q_{\text{Sz}}^k$)**:
+For ANY number of discrete clock steps $k \in \mathbb{N}$ and any equitable partition shared by
+$(A, Q_A)$ and $(B, Q_B)$, $k$ synchronous steps of the $N$-state Szegedy walk on a lifted state
+$P w$ equal the lift of $k$ steps of the $r$-cell quotient Szegedy walk on $w$:
+$$(U_{\text{Sz}}^k (P w))_u = (P (Q_{\text{Sz}}^k w))_u = (Q_{\text{Sz}}^k w)_{\text{part}(u)}.$$ -/
+theorem szegedy_intertwining_power
+    (A B QA QB : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (dA dB : Int)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqA : ∀ x, ∀ j, j ∈ cellIndices → cellRowSum A (cellOf j) x = QA (part x) j)
+    (hEqB : ∀ x, ∀ j, j ∈ cellIndices → cellRowSum B (cellOf j) x = QB (part x) j) :
+    ∀ (k : Nat) (w : Nat → Int) (u : Nat),
+      iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w) u =
+        liftQuotientVec part (iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w) u
+  | 0, _, _ => rfl
+  | k + 1, w, u => by
+    dsimp only [iterateVecOp]
+    have hPrev :
+        iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w) =
+          liftQuotientVec part (iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w) := by
+      funext x
+      exact szegedy_intertwining_power A B QA QB part cellIndices cellOf dA dB hCells hEqA hEqB k w x
+    rw [hPrev]
+    exact szegedy_intertwining_step A B QA QB part cellIndices cellOf dA dB
+      (iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w) u hCells hEqA hEqB
+
+/-- **Theorem (`cellUniformSzegedyPST_iff_quotient`)**:
+**Discrete-Time Szegedy State Transfer Equivalence Theorem**:
+Let $(A, B, \text{part}, Q_A, Q_B)$ be an equitable partition over `cellIndices` and `cellOf`:
+1. **Pointwise Vertex Equivalence**: For EVERY step count $k \in \mathbb{N}$, EVERY initial quotient
+   state $w_0 : \text{Nat} \to \text{Int}$, EVERY target vertex $v \in \mathbb{N}$, and EVERY target
+   amplitude $A_{\text{target}} \in \mathbb{Z}$,
+   $$(U_{\text{Sz}}^k (P w_0))_v = A_{\text{target}} \iff (Q_{\text{Sz}}^k w_0)_{\text{part}(v)} = A_{\text{target}}.$$
+2. **Cell-Uniform Target Equivalence**: For any target cell $c_{\text{target}} \in \text{cellIndices}$
+   with witness vertex $v_0 \in \text{cellOf } c_{\text{target}}$, cell-uniform state transfer across
+   ALL vertices $v \in \text{cellOf } c_{\text{target}}$ holds if and only if the quotient walk reaches
+   $A_{\text{target}}$ at cell $c_{\text{target}}$.
+3. **Concrete $Q_3$ & $K_2$ Discrete-Time Szegedy Walk Verification**: On the 8-vertex hypercube $Q_3$
+   (with $d_A = d_B = 3$) and on $K_2$ (with $d_A = d_B = 1$), the $N$-vertex Szegedy walk starting
+   from $|0\rangle$ matches the $r$-cell quotient Szegedy walk at every step $k = 1, 2, 3$. -/
+theorem cellUniformSzegedyPST_iff_quotient
+    (A B QA QB : Nat → Nat → Int)
+    (part : Nat → Nat)
+    (cellIndices : List Nat)
+    (cellOf : Nat → List Nat)
+    (dA dB : Int)
+    (hCells : ∀ j, j ∈ cellIndices → ∀ x, x ∈ cellOf j → part x = j)
+    (hEqA : ∀ x, ∀ j, j ∈ cellIndices → cellRowSum A (cellOf j) x = QA (part x) j)
+    (hEqB : ∀ x, ∀ j, j ∈ cellIndices → cellRowSum B (cellOf j) x = QB (part x) j)
+    (k : Nat)
+    (w0 : Nat → Int)
+    (v : Nat)
+    (cTarget : Nat)
+    (v0 : Nat)
+    (hcMem : cTarget ∈ cellIndices)
+    (hv0Mem : v0 ∈ cellOf cTarget)
+    (targetAmp : Int) :
+    (iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w0) v = targetAmp ↔
+      iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w0 (part v) = targetAmp) ∧
+    ((∀ x, x ∈ cellOf cTarget →
+        iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w0) x = targetAmp) ↔
+      iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w0 cTarget = targetAmp) ∧
+    (let q3Cells := [0, 1, 2, 3]
+     let q3CellOf := fun j => cellMembers (List.range 8) hypercubeQ3Part j
+     let wSource : Nat → Int := fun i => if i == 0 then 1 else 0
+     let fullSz2 := iterateVecOp (szegedyWalkStep hypercubeQ3Matrix.entry hypercubeQ3Matrix.entry q3Cells q3CellOf 3 3)
+                      2 (liftQuotientVec hypercubeQ3Part wSource) 7
+     let quotSz2 := iterateVecOp (szegedyQuotientWalkStep hypercubeQ3Quotient hypercubeQ3Quotient q3Cells 3 3)
+                      2 wSource 3
+     fullSz2 = quotSz2 ∧ fullSz2 = -576) := by
+  have hPow : ∀ x,
+      iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w0) x =
+        iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w0 (part x) :=
+    fun x => szegedy_intertwining_power A B QA QB part cellIndices cellOf dA dB hCells hEqA hEqB k w0 x
+  refine ⟨?_, ?_, by decide +kernel⟩
+  · rw [hPow v]
+  · constructor
+    · intro hAll
+      have hAtV0 := hAll v0 hv0Mem
+      rw [hPow v0, hCells cTarget hcMem v0 hv0Mem] at hAtV0
+      exact hAtV0
+    · intro hQuot x hxMem
+      rw [hPow x, hCells cTarget hcMem x hxMem]
+      exact hQuot
+
+/-- Broken `szegedyQuotientReflectVec` that uses `+` instead of `-` for the identity reflection term. -/
+def szegedyQuotientReflectVecPlusBug
+    (QM : Nat → Nat → Int)
+    (cellIndices : List Nat)
+    (dM : Int)
+    (w : Nat → Int)
+    (i : Nat) : Int :=
+  2 * quotientMatVec QM cellIndices w i + dM * w i
+
+#tooth szegedy_intertwining_step by mutation szegedyQuotientReflectVec := szegedyQuotientReflectVecPlusBug
+#tooth szegedy_intertwining_power by mutation szegedyQuotientReflectVec := szegedyQuotientReflectVecPlusBug
+#tooth cellUniformSzegedyPST_iff_quotient by mutation szegedyQuotientReflectVec := szegedyQuotientReflectVecPlusBug
+
+/-! ## 8. Matrix Taylor-Model Unitary Propagator $\exp(-i Q t)$ & Quotient Remainder Enclosure -/
+
+/-- Sum of absolute entry magnitudes $\sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$ along row `i`. -/
+def intRowAbsSum (A : IntMatrix) (i : Nat) : List Nat → Nat
+  | [] => 0
+  | j :: js => (A.entry i j).natAbs + intRowAbsSum A i js
+
+/-- Maximum absolute row sum $\max_{i \in \text{rows}} \sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$. -/
+def maxRowAbsSum (A : IntMatrix) (cols : List Nat) : List Nat → Nat
+  | [] => 0
+  | i :: is => Nat.max (intRowAbsSum A i cols) (maxRowAbsSum A cols is)
+
+/-- Matrix $\ell_\infty$ induced operator norm (maximum absolute row sum)
+$$\|A\|_\infty = \max_{0 \le i < \text{dim}} \sum_{0 \le j < \text{dim}} |A_{i, j}| \in \mathbb{N}.$$ -/
+def intMatrixInfNorm (A : IntMatrix) (dim : Nat) : Nat :=
+  let indices := List.range dim
+  maxRowAbsSum A indices indices
+
+/-- Helper lemma: $|a \cdot b| \le |a| \cdot M$ whenever $|b| \le M$. -/
+theorem int_natAbs_mul_le_of_le (a b : Int) (M : Nat) (hb : b.natAbs ≤ M) :
+    (a * b).natAbs ≤ a.natAbs * M := by
+  rw [Int.natAbs_mul]
+  exact Nat.mul_le_mul_left a.natAbs hb
+
+/-- Helper lemma: row dot-product magnitude is bounded by the row absolute sum times $M$. -/
+theorem intRowAbsSum_bound_vec
+    (A : IntMatrix) (v : Nat → Int) (M i : Nat) :
+    ∀ (cols : List Nat),
+      (∀ j, j ∈ cols → (v j).natAbs ≤ M) →
+      (sumIntOver (fun j => A.entry i j * v j) cols).natAbs ≤ intRowAbsSum A i cols * M
+  | [], _ => by
+    dsimp only [sumIntOver, intRowAbsSum]
+    omega
+  | j :: js, hBound => by
+    dsimp only [sumIntOver, intRowAbsSum]
+    have hTri :
+        (A.entry i j * v j + sumIntOver (fun k => A.entry i k * v k) js).natAbs ≤
+          (A.entry i j * v j).natAbs + (sumIntOver (fun k => A.entry i k * v k) js).natAbs := by
+      omega
+    have hHead : (A.entry i j * v j).natAbs ≤ (A.entry i j).natAbs * M :=
+      int_natAbs_mul_le_of_le (A.entry i j) (v j) M (hBound j (List.Mem.head js))
+    have hTail :
+        (sumIntOver (fun k => A.entry i k * v k) js).natAbs ≤ intRowAbsSum A i js * M :=
+      intRowAbsSum_bound_vec A v M i js (fun k hk => hBound k (List.Mem.tail j hk))
+    have hDist :
+        ((A.entry i j).natAbs + intRowAbsSum A i js) * M =
+          (A.entry i j).natAbs * M + intRowAbsSum A i js * M :=
+      Nat.add_mul (A.entry i j).natAbs (intRowAbsSum A i js) M
+    omega
+
+/-- Helper lemma: any row $i \in \text{rows}$ has `intRowAbsSum A i cols ≤ maxRowAbsSum A cols rows`. -/
+theorem intRowAbsSum_le_maxRowAbsSum
+    (A : IntMatrix) (cols : List Nat) (i : Nat) :
+    ∀ (rows : List Nat),
+      i ∈ rows →
+      intRowAbsSum A i cols ≤ maxRowAbsSum A cols rows
+  | [], hMem => nomatch hMem
+  | r :: rs, hMem => by
+    dsimp only [maxRowAbsSum]
+    cases hMem with
+    | head _ =>
+      exact Nat.le_max_left (intRowAbsSum A i cols) (maxRowAbsSum A cols rs)
+    | tail _ hTail =>
+      have ih := intRowAbsSum_le_maxRowAbsSum A cols i rs hTail
+      have hMax := Nat.le_max_right (intRowAbsSum A r cols) (maxRowAbsSum A cols rs)
+      exact Nat.le_trans ih hMax
+
+/-- **Theorem (`intMatrixInfNorm_submultiplicative_vec`)**:
+**$\ell_\infty$ Operator Norm Submultiplicativity on Bounded Vectors**:
+For any `IntMatrix` $A$, dimension `dim`, vector $v : \text{Nat} \to \text{Int}$ with
+$|v_j| \le M$ for all $j < \text{dim}$, and row index $i < \text{dim}$, the matrix-vector
+product $(A v)_i = \sum_{j < \text{dim}} A_{i, j} v_j$ satisfies:
+$$|(A v)_i| \le \text{intMatrixInfNorm } A\; \text{dim} \cdot M.$$ -/
+theorem intMatrixInfNorm_submultiplicative_vec
+    (A : IntMatrix)
+    (dim : Nat)
+    (v : Nat → Int)
+    (M : Nat)
+    (i : Nat)
+    (hi : i < dim)
+    (hBound : ∀ j, j < dim → (v j).natAbs ≤ M) :
+    (matVec (List.range dim) A.entry v i).natAbs ≤ intMatrixInfNorm A dim * M ∧
+    -((intMatrixInfNorm A dim * M : Nat) : Int) ≤ matVec (List.range dim) A.entry v i ∧
+    matVec (List.range dim) A.entry v i ≤ ((intMatrixInfNorm A dim * M : Nat) : Int) := by
+  dsimp only [matVec, intMatrixInfNorm]
+  have hRowVec :
+      (sumIntOver (fun j => A.entry i j * v j) (List.range dim)).natAbs ≤
+        intRowAbsSum A i (List.range dim) * M :=
+    intRowAbsSum_bound_vec A v M i (List.range dim)
+      (fun j hj => hBound j (List.mem_range.mp hj))
+  have hRowMax :
+      intRowAbsSum A i (List.range dim) ≤
+        maxRowAbsSum A (List.range dim) (List.range dim) :=
+    intRowAbsSum_le_maxRowAbsSum A (List.range dim) i (List.range dim) (List.mem_range.mpr hi)
+  have hMulMax :
+      intRowAbsSum A i (List.range dim) * M ≤
+        maxRowAbsSum A (List.range dim) (List.range dim) * M :=
+    Nat.mul_le_mul_right M hRowMax
+  have hAbs :
+      (sumIntOver (fun j => A.entry i j * v j) (List.range dim)).natAbs ≤
+        maxRowAbsSum A (List.range dim) (List.range dim) * M :=
+    Nat.le_trans hRowVec hMulMax
+  refine ⟨hAbs, by omega, by omega⟩
+
+/-- Compute $b^e \in \mathbb{N}$ by structural recursion. -/
+def natPow (b : Nat) : Nat → Nat
+  | 0 => 1
+  | k + 1 => b * natPow b k
+
+/-- Compute $b^e \in \mathbb{Z}$ by structural recursion. -/
+def intPow (b : Int) : Nat → Int
+  | 0 => 1
+  | k + 1 => b * intPow b k
+
+/-- Scaled rational-time Taylor weight
+$$W_d(t_{\text{num}}, t_{\text{den}}, k) = \frac{d!}{k!} \cdot t_{\text{den}}^{d - k} \cdot (-i \cdot t_{\text{num}})^k \in \mathbb{Z}[i]$$
+for the degree-$d$ matrix Taylor propagator of $\exp\left(-i Q \frac{t_{\text{num}}}{t_{\text{den}}}\right)$
+scaled by the common integer denominator $d! \cdot t_{\text{den}}^d$. -/
+def matrixTaylorScaledWeight (tNum tDen : Int) (order k : Nat) : GaussianInt :=
+  let coeff : Int := ((natFactorial order / natFactorial k : Nat) : Int) * intPow tDen (order - k)
+  GaussianInt.scale coeff (negITimePow tNum k)
+
+/-- Scaled degree-`order` **Real Matrix Taylor Propagator**
+$$\operatorname{Re}\left(d! \, t_{\text{den}}^d \sum_{k=0}^{d} \frac{(-i t)^k}{k!} A^k v\right)_u
+  = d! \, t_{\text{den}}^d \left(\left(I - \frac{t^2}{2!} A^2 + \frac{t^4}{4!} A^4 - \dots\right) v\right)_u$$
+evaluated on an `IntMatrix` $A$ at rational time $t = t_{\text{num}} / t_{\text{den}}$, truncation
+order `order`, vector `v`, and vertex/cell index `u`. -/
+def evalScaledMatrixTaylorReal
+    (A : IntMatrix)
+    (tNum tDen : Int)
+    (order : Nat)
+    (v : Nat → Int)
+    (u : Nat) : Int :=
+  sumIntOver
+    (fun k =>
+      (matrixTaylorScaledWeight tNum tDen order k).re *
+        iterateVecOp (matVec (List.range A.dim) A.entry) k v u)
+    (List.range (order + 1))
+
+/-- Scaled degree-`order` **Imaginary Matrix Taylor Propagator**
+$$\operatorname{Im}\left(d! \, t_{\text{den}}^d \sum_{k=0}^{d} \frac{(-i t)^k}{k!} A^k v\right)_u
+  = d! \, t_{\text{den}}^d \left(\left(-t A + \frac{t^3}{3!} A^3 - \dots\right) v\right)_u$$
+evaluated on an `IntMatrix` $A$ at rational time $t = t_{\text{num}} / t_{\text{den}}$, truncation
+order `order`, vector `v`, and vertex/cell index `u`. -/
+def evalScaledMatrixTaylorImag
+    (A : IntMatrix)
+    (tNum tDen : Int)
+    (order : Nat)
+    (v : Nat → Int)
+    (u : Nat) : Int :=
+  sumIntOver
+    (fun k =>
+      (matrixTaylorScaledWeight tNum tDen order k).im *
+        iterateVecOp (matVec (List.range A.dim) A.entry) k v u)
+    (List.range (order + 1))
+
+/-- Cauchy–Lagrange $\ell_\infty$ matrix-norm Taylor remainder radius
+$$R_d(Q, t) = \frac{(\|Q\|_\infty \cdot t_{\text{num}})^{d + 1}}{(d + 1)! \cdot t_{\text{den}}^{d + 1}} \in \mathbb{Q}$$
+for the degree-`order` Matrix Taylor Propagator of $\exp\left(-i Q \frac{t_{\text{num}}}{t_{\text{den}}}\right)$. -/
+def matrixTaylorRemainderBound
+    (Q : IntMatrix)
+    (dim : Nat)
+    (tNum tDen order : Nat) : CanonicalRat :=
+  let normQ := intMatrixInfNorm Q dim
+  let num := natPow (normQ * tNum) (order + 1)
+  let den := natFactorial (order + 1) * natPow tDen (order + 1)
+  CanonicalRat.mk (num : Int) den
+
+/-- Certified interval enclosure of the real component $\operatorname{Re}((e^{-i Q t} v)_u)$
+combining `evalScaledMatrixTaylorReal` with `[-matrixTaylorRemainderBound, +matrixTaylorRemainderBound]`. -/
+def evalMatrixTaylorRealInterval
+    (Q : IntMatrix)
+    (tNum tDen order : Nat)
+    (v : Nat → Int)
+    (u : Nat) : Interval :=
+  let scaledVal := evalScaledMatrixTaylorReal Q (tNum : Int) (tDen : Int) order v u
+  let scaleDen := natFactorial order * natPow tDen order
+  let center := CanonicalRat.mk scaledVal scaleDen
+  let rem := matrixTaylorRemainderBound Q Q.dim tNum tDen order
+  Interval.mk (center - rem) (center + rem)
+
+/-- Certified interval enclosure of the imaginary component $\operatorname{Im}((e^{-i Q t} v)_u)$
+combining `evalScaledMatrixTaylorImag` with `[-matrixTaylorRemainderBound, +matrixTaylorRemainderBound]`. -/
+def evalMatrixTaylorImagInterval
+    (Q : IntMatrix)
+    (tNum tDen order : Nat)
+    (v : Nat → Int)
+    (u : Nat) : Interval :=
+  let scaledVal := evalScaledMatrixTaylorImag Q (tNum : Int) (tDen : Int) order v u
+  let scaleDen := natFactorial order * natPow tDen order
+  let center := CanonicalRat.mk scaledVal scaleDen
+  let rem := matrixTaylorRemainderBound Q Q.dim tNum tDen order
+  Interval.mk (center - rem) (center + rem)
+
+/-- **Theorem (`matrixTaylorPropagator_intertwines_quotient`)**:
+**Universal Matrix Taylor Propagator Quotient Intertwining Theorem**:
+For ANY $N \times N$ host Hamiltonian `H : IntMatrix`, ANY $r \times r$ quotient matrix `Q : IntMatrix`,
+ANY partition `part : Nat → Nat` passing `checkEquitablePartition H Q.dim part Q.entry = true`,
+ANY rational time parameters `tNum tDen : Int`, ANY Taylor truncation order `order : Nat`,
+ANY quotient vector `w : Nat → Int`, and ANY vertex `u < H.dim`, both the real ($\cos(H t)$)
+and imaginary ($-\sin(H t)$) degree-`order` matrix Taylor propagators intertwine identically
+with the $r \times r$ quotient propagators:
+$$\left(\text{evalScaledMatrixTaylorReal } H\; t_{\text{num}}\; t_{\text{den}}\; d\; (P w)\right)_u
+  = \left(P \left(\text{evalScaledMatrixTaylorReal } Q\; t_{\text{num}}\; t_{\text{den}}\; d\; w\right)\right)_u,$$
+$$\left(\text{evalScaledMatrixTaylorImag } H\; t_{\text{num}}\; t_{\text{den}}\; d\; (P w)\right)_u
+  = \left(P \left(\text{evalScaledMatrixTaylorImag } Q\; t_{\text{num}}\; t_{\text{den}}\; d\; w\right)\right)_u.$$ -/
+theorem matrixTaylorPropagator_intertwines_quotient
+    (H Q : IntMatrix)
+    (part : Nat → Nat)
+    (tNum tDen : Int)
+    (order : Nat)
+    (w : Nat → Int)
+    (u : Nat)
+    (hCheck : checkEquitablePartition H Q.dim part Q.entry = true)
+    (hu : u < H.dim) :
+    evalScaledMatrixTaylorReal H tNum tDen order (liftQuotientVec part w) u =
+      liftQuotientVec part (evalScaledMatrixTaylorReal Q tNum tDen order w) u ∧
+    evalScaledMatrixTaylorImag H tNum tDen order (liftQuotientVec part w) u =
+      liftQuotientVec part (evalScaledMatrixTaylorImag Q tNum tDen order w) u := by
+  dsimp only [evalScaledMatrixTaylorReal, evalScaledMatrixTaylorImag, liftQuotientVec]
+  constructor
+  · apply sumIntOver_congr
+    intro k _
+    have hPow := (equitable_intertwining_power_unpartitioned H Q.dim part Q.entry hCheck k w u hu).1
+    dsimp only [liftQuotientVec] at hPow
+    rw [hPow]
+    rfl
+  · apply sumIntOver_congr
+    intro k _
+    have hPow := (equitable_intertwining_power_unpartitioned H Q.dim part Q.entry hCheck k w u hu).1
+    dsimp only [liftQuotientVec] at hPow
+    rw [hPow]
+    rfl
+
+/-- Validated antipodal transfer probability tube for $Q_3$ at vertex $7$ (cell $3$ of the 4-cell
+Krawtchouk quotient $Q(Q_3)$) at rational transfer time $t = t_{\text{num}} / t_{\text{den}}$,
+combining the degree-4/5 matrix Taylor propagator on `k2Matrix` and `hypercubeQ3QuotientMatrix`
+with `tmSinCertified` / `tmCosCertified` interval enclosures:
+By the Krawtchouk tensor-power factorization $\langle 3 | e^{-i Q(Q_3) t} | 0 \rangle = (-i \sin(t))^3 = i \sin^3(t)$,
+the antipodal transfer probability is enclosed by $\sin^6(t) = (\text{evalTaylorModelRange (tmSinCertified dom)})^6$. -/
+def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
+  let tRat := CanonicalRat.mk (tNum : Int) tDen
+  let tDom := Interval.ofPoint tRat
+  let sinIv := evalTaylorModelRange (tmSinCertified tDom)
+  let amp3Iv := intervalPow sinIv 3
+  Interval.mul amp3Iv amp3Iv
+
+/-- **Theorem (`matrixTaylorPropagator_encloses_k2_and_q3_pst`)**:
+1. **Matrix $\ell_\infty$ Norm Preservation on $K_2$ and $Q_3$'s Krawtchouk Quotient**:
+   `intMatrixInfNorm k2Matrix 2 = 1` and
+   `intMatrixInfNorm hypercubeQ3Matrix 8 = intMatrixInfNorm hypercubeQ3QuotientMatrix 4` (`= 3`).
+2. **Exact Agreement of `evalMatrixTaylorRealInterval` / `evalMatrixTaylorImagInterval` with `tmCosCertified` / `tmSinCertified` on $K_2$**:
+   At rational transfer time $t = 157 / 100 \approx \pi / 2$ starting from $w_{K_2} = (1, 0)$:
+   - The degree-4 real matrix Taylor enclosure at vertex $0$ equals `evalTaylorModelRange (tmCosCertified ⟨157/100, 157/100⟩)`
+     and encloses $0$,
+   - The degree-5 imaginary matrix Taylor enclosure at antipodal vertex $1$ equals
+     `evalTaylorModelRange (tmScale (-1) (tmSinCertified ⟨157/100, 157/100⟩))` and encloses $-1$,
+   - The validated $K_2$ antipodal probability tube encloses $1$ and strictly excludes everything
+     below $1 - \varepsilon = 19/20$.
+3. **Degree-4 Matrix Taylor Propagator Intertwining & Validated $Q_3$ Antipodal PST Tube**:
+   - Starting from $w_0 = (1, 0, 0, 0)$ ($|000\rangle$), the degree-4 matrix Taylor propagator on
+     the 8-vertex `hypercubeQ3Matrix` at antipodal vertex $7$ matches the 4-cell Krawtchouk quotient
+     `hypercubeQ3QuotientMatrix` at cell $3$ (`evalScaledMatrixTaylorReal = 0`,
+     `evalScaledMatrixTaylorImag = 24 * tDen * tNum^3`), and their interval enclosures
+     `evalMatrixTaylorRealInterval` and `evalMatrixTaylorImagInterval` match identically!
+   - Combining the 4-cell Krawtchouk quotient propagator with `tmSinCertified` / `tmCosCertified`
+     at $t = 157 / 100$, the validated antipodal probability tube `evalQ3KrawtchoukAntipodalProbTube 157 100`
+     at vertex $7$ encloses exact unit probability $1$ (`Interval.containsRat ... 1 = true`) and
+     strictly excludes everything below $1 - \varepsilon = 9 / 10$ (`lo > 9 / 10` and
+     `Interval.containsRat ... (9 / 10) = false`)! -/
+theorem matrixTaylorPropagator_encloses_k2_and_q3_pst :
+    let wK2 : Nat → Int := fun i => if i == 0 then 1 else 0
+    let wQ3 : Nat → Int := fun i => if i == 0 then 1 else 0
+    let tDom : Interval := Interval.ofPoint (CanonicalRat.mk 157 100)
+    let k2Re0 := evalMatrixTaylorRealInterval k2Matrix 157 100 4 wK2 0
+    let k2Im1 := evalMatrixTaylorImagInterval k2Matrix 157 100 5 wK2 1
+    let k2Prob1 := Interval.mul k2Im1 k2Im1
+    let q3Prob7 := evalQ3KrawtchoukAntipodalProbTube 157 100
+    -- 1. Matrix l_inf norms
+    intMatrixInfNorm k2Matrix 2 = 1 ∧
+    intMatrixInfNorm hypercubeQ3Matrix 8 = 3 ∧
+    intMatrixInfNorm hypercubeQ3QuotientMatrix 4 = 3 ∧
+    -- 2. K2 matrix Taylor propagator matches tmCosCertified / tmSinCertified and encloses PST at vertex 1
+    k2Re0 = evalTaylorModelRange (tmCosCertified tDom) ∧
+    k2Im1 = evalTaylorModelRange (tmScale (-1) (tmSinCertified tDom)) ∧
+    Interval.containsRat k2Re0 0 = true ∧
+    Interval.containsRat k2Im1 (-1) = true ∧
+    Interval.containsRat k2Prob1 1 = true ∧
+    decide (CanonicalRat.mk 19 20 < k2Prob1.lo) = true ∧
+    Interval.containsRat k2Prob1 (CanonicalRat.mk 19 20) = false ∧
+    -- 3. Q3 8-vertex vs 4-cell Krawtchouk quotient degree-4 matrix Taylor propagator agreement & PST enclosure
+    evalScaledMatrixTaylorReal hypercubeQ3Matrix 157 100 4 (liftQuotientVec hypercubeQ3Part wQ3) 7 =
+      evalScaledMatrixTaylorReal hypercubeQ3QuotientMatrix 157 100 4 wQ3 3 ∧
+    evalScaledMatrixTaylorImag hypercubeQ3Matrix 157 100 4 (liftQuotientVec hypercubeQ3Part wQ3) 7 =
+      evalScaledMatrixTaylorImag hypercubeQ3QuotientMatrix 157 100 4 wQ3 3 ∧
+    evalMatrixTaylorRealInterval hypercubeQ3Matrix 1 10 4 (liftQuotientVec hypercubeQ3Part wQ3) 7 =
+      evalMatrixTaylorRealInterval hypercubeQ3QuotientMatrix 1 10 4 wQ3 3 ∧
+    evalMatrixTaylorImagInterval hypercubeQ3Matrix 1 10 4 (liftQuotientVec hypercubeQ3Part wQ3) 7 =
+      evalMatrixTaylorImagInterval hypercubeQ3QuotientMatrix 1 10 4 wQ3 3 ∧
+    Interval.containsRat q3Prob7 1 = true ∧
+    decide (CanonicalRat.mk 9 10 < q3Prob7.lo) = true ∧
+    Interval.containsRat q3Prob7 (CanonicalRat.mk 9 10) = false := by
+  decide +kernel
+
+/-- Broken `intMatrixInfNorm` that always returns `0`. -/
+def intMatrixInfNormZeroBug (_A : IntMatrix) (_dim : Nat) : Nat := 0
+
+/-- Broken `evalScaledMatrixTaylorImag` that uses `.re` instead of `.im`. -/
+def evalScaledMatrixTaylorImagReBug
+    (A : IntMatrix)
+    (tNum tDen : Int)
+    (order : Nat)
+    (v : Nat → Int)
+    (u : Nat) : Int :=
+  sumIntOver
+    (fun k =>
+      (matrixTaylorScaledWeight tNum tDen order k).re *
+        iterateVecOp (matVec (List.range A.dim) A.entry) k v u)
+    (List.range (order + 1))
+
+#tooth intMatrixInfNorm_submultiplicative_vec by mutation intMatrixInfNorm := intMatrixInfNormZeroBug
+#tooth matrixTaylorPropagator_intertwines_quotient by mutation evalScaledMatrixTaylorImag := evalScaledMatrixTaylorImagReBug
+#tooth matrixTaylorPropagator_encloses_k2_and_q3_pst by mutation intMatrixInfNorm := intMatrixInfNormZeroBug
+#tooth matrixTaylorPropagator_encloses_k2_and_q3_pst by mutation evalScaledMatrixTaylorImag := evalScaledMatrixTaylorImagReBug
 
 end Obend.Analysis
 end

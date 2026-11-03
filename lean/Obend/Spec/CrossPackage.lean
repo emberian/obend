@@ -20,9 +20,12 @@ Formalizes Faré's `OB5` / `LT5` open-recursion modularity requirements across p
 -/
 public import Obend.Leaf.Specialize
 public import Obend.Lower.Transport
+public import Obend.Equiv.Clairvoyant
+public import Obend.Tactic.Tooth
 @[expose] public section
 namespace Obend.Spec.CrossPackage
 open Obend.Core.Term
+open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
 open Obend.Lower
@@ -241,6 +244,228 @@ theorem crossPackage_intersecting_override_pinpoints_stale
     transportSlot_blocked_on_override (linkComposition C L) s m provLayer newLayer f_lean u
       hok hmem_sup hunf hdiff
   exact ⟨⟨deadPins, hread, hmem_dead⟩, htrans_blocked⟩
+
+/-! ## Bisimilar / Clairvoyant Intersecting Overrides (`EquivOverrideCert`, `rebindEquivPin`) -/
+
+/-- Context composition for `instantiate`: plugging `F[X]` into `C` equals plugging `X` into `compContext C F`. -/
+def compContext (C F : Term) : Term :=
+  C.substitute (fun
+    | 0 => F
+    | k + 1 => .bound (k + 1))
+
+theorem instantiate_compContext (C F X : Term) :
+    instantiate (compContext C F) X = instantiate C (instantiate F X) := by
+  simp only [compContext, instantiate_eq, Obend.Core.TermTraverse.substitute_comp]
+  congr 1
+  funext i
+  cases i with
+  | zero => rfl
+  | succ k => simp [single]
+
+/-- Observational equivalence (`≈b`) is a congruence under any 1-hole context `instantiate Frame ·`. -/
+theorem bEquiv_instantiate (Frame : Term) {u1 u2 : Term} (h : u1 ≈b u2) :
+    instantiate Frame u1 ≈b instantiate Frame u2 := by
+  intro ρ C
+  have hFrame1 : (instantiate Frame u1).substitute ρ =
+      instantiate (Frame.substitute (liftSubstitution ρ)) (u1.substitute ρ) := by
+    simp only [instantiate_eq, Obend.Core.TermTraverse.substitute_comp]
+    congr 1
+    funext i
+    cases i with
+    | zero => simp [single, liftSubstitution]
+    | succ k =>
+      simp [liftSubstitution, single, Obend.Core.TermTraverse.rename_substitute, substitute_bound]
+  have hFrame2 : (instantiate Frame u2).substitute ρ =
+      instantiate (Frame.substitute (liftSubstitution ρ)) (u2.substitute ρ) := by
+    simp only [instantiate_eq, Obend.Core.TermTraverse.substitute_comp]
+    congr 1
+    funext i
+    cases i with
+    | zero => simp [single, liftSubstitution]
+    | succ k =>
+      simp [liftSubstitution, single, Obend.Core.TermTraverse.rename_substitute, substitute_bound]
+  rw [hFrame1, hFrame2, ← instantiate_compContext, ← instantiate_compContext]
+  exact h ρ (compContext C (Frame.substitute (liftSubstitution ρ)))
+
+/-- Certificate witnessing that an intersecting cross-package override `L` modifies helper method `m`
+to an observationally equivalent (`≈b`) implementation:
+1. `(linkComposition C L).symUnfold m ≈b C.symUnfold m` (symbolic unfolding equivalence), and
+2. `.get (linkComposition C L).object m ≈b .get C.object m` (runtime object projection equivalence). -/
+structure EquivOverrideCert (C : Composition) (L : Layer) (m : String) where
+  newCode : Term := (linkComposition C L).symUnfold m
+  newCode_eq : newCode = (linkComposition C L).symUnfold m := by rfl
+  symUnfold_bEquiv : (linkComposition C L).symUnfold m ≈b C.symUnfold m
+  get_bEquiv : .get (linkComposition C L).object m ≈b .get C.object m
+
+/-- Construct an `EquivOverrideCert C L m` from Clairvoyant dead-let elimination (`deadLetBind deadExpr body → body`),
+together with a strict Clairvoyant heap/step cost reduction witness (`k < k + 2`). -/
+def clairvoyantDeadLetEquivOverrideCert
+    (C : Composition) (L : Layer) (m : String) (deadExpr body : Term)
+    (hsym_base : C.symUnfold m = deadLetBind deadExpr body)
+    (hsym_link : (linkComposition C L).symUnfold m = body)
+    (hget_base : Steps (.get C.object m) (deadLetBind deadExpr body))
+    (hget_link : Steps (.get (linkComposition C L).object m) body) :
+    EquivOverrideCert C L m where
+  newCode := body
+  newCode_eq := hsym_link.symm
+  symUnfold_bEquiv := by
+    rw [hsym_base, hsym_link]
+    exact (clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper deadExpr body).1.symm
+  get_bEquiv := by
+    have h1 : .get (linkComposition C L).object m ≈b body := bequiv_of_steps hget_link
+    have h2 : body ≈b deadLetBind deadExpr body :=
+      (clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper deadExpr body).1.symm
+    have h3 : deadLetBind deadExpr body ≈b .get C.object m := (bequiv_of_steps hget_base).symm
+    exact h1.trans (h2.trans h3)
+
+/-- Re-pin a `LeafPin` `p` for member `m` using an `EquivOverrideCert C L m`:
+replaces `memberConePin C m` with the equivalence-certified pin `memberConePin (linkComposition C L) m`. -/
+def rebindEquivPin {C : Composition} {L : Layer} {m : String}
+    (_cert : EquivOverrideCert C L m) (p : LeafPin) : LeafPin :=
+  if p.cell == (memberConePin C m).cell && Obend.Law.termEq p.code (memberConePin C m).code then
+    memberConePin (linkComposition C L) m
+  else
+    p
+
+theorem rebindEquivPin_memberConePin {C : Composition} {L : Layer} {m : String}
+    (cert : EquivOverrideCert C L m) :
+    rebindEquivPin cert (memberConePin C m) = memberConePin (linkComposition C L) m := by
+  simp [rebindEquivPin, Obend.Logic.termEq_refl']
+
+/-- Re-pin a `Support` `sp` for overridden member `m` to its new equivalence-certified unfolding
+at `(linkComposition C L, s)`. -/
+def rebindEquivSupport {C : Composition} {L : Layer} {m : String}
+    (_cert : EquivOverrideCert C L m) (s : Nat) (sp : Support) : Support :=
+  if sp.member == m then
+    ⟨m, Obend.Logic.symUnfold (linkComposition C L) s m⟩
+  else
+    sp
+
+/-- Re-pin all supports of a `TransportCert` `c` using `rebindEquivSupport cert s`. -/
+def rebindEquivTransportCert {C : Composition} {L : Layer} {m : String}
+    (cert : EquivOverrideCert C L m) (s : Nat) (c : TransportCert) : TransportCert :=
+  { c with supports := c.supports.map (rebindEquivSupport cert s) }
+
+/-- Re-pin a `Candidate.slotBook` for `target` across an equivalence-certified override `cert`. -/
+def rebindEquivSlotCandidate (objectName target : String) {C : Composition} {L : Layer} {m : String}
+    (_cert : EquivOverrideCert C L m) (defItem : LeafDef) : Candidate :=
+  .slotBook objectName target (linkComposition C L) defItem
+
+theorem optEq_refl (x : Option (String × Term)) : optEq x x = true := by
+  cases x with
+  | none => rfl
+  | some p =>
+    obtain ⟨a, t⟩ := p
+    simp [optEq, Obend.Logic.termEq_refl']
+
+/-- **`crossPackage_bEquiv_override_preserves_semantics` (`OB5` / `LT5` Bisimilar Override Preservation)**:
+When an intersecting cross-package override `L` modifies helper method `m ∈ slotReadCone C target`
+and supplies `cert : EquivOverrideCert C L m`, any target method `target` whose body `Frame` reads
+`self.m` preserves its exact observational meaning (`≈b`) across the package boundary:
+1. `instantiate Frame ((linkComposition C L).symUnfold m) ≈b instantiate Frame (C.symUnfold m)`,
+2. `.get (linkComposition C L).object target ≈b .get C.object target`, and
+3. both objects halt with identical observations on `target`. -/
+theorem crossPackage_bEquiv_override_preserves_semantics
+    {C : Composition} {L : Layer} {m target : String}
+    (cert : EquivOverrideCert C L m)
+    (Frame : Term)
+    (htarget_base : .get C.object target ≈b instantiate Frame (.get C.object m))
+    (htarget_link : .get (linkComposition C L).object target ≈b
+      instantiate Frame (.get (linkComposition C L).object m)) :
+    (instantiate Frame ((linkComposition C L).symUnfold m) ≈b instantiate Frame (C.symUnfold m)) ∧
+    (.get (linkComposition C L).object target ≈b .get C.object target) ∧
+    (∀ obs : Observation,
+      Halts (.get (linkComposition C L).object target) obs ↔ Halts (.get C.object target) obs) := by
+  have hsym_frame : instantiate Frame ((linkComposition C L).symUnfold m) ≈b instantiate Frame (C.symUnfold m) :=
+    bEquiv_instantiate Frame cert.symUnfold_bEquiv
+  have hget_frame : instantiate Frame (.get (linkComposition C L).object m) ≈b
+      instantiate Frame (.get C.object m) :=
+    bEquiv_instantiate Frame cert.get_bEquiv
+  have htarget_eq : .get (linkComposition C L).object target ≈b .get C.object target :=
+    htarget_link.trans (hget_frame.trans htarget_base.symm)
+  exact ⟨hsym_frame, htarget_eq, fun obs => htarget_eq.sameRuns.halts obs⟩
+
+/-- **`crossPackage_bEquiv_rebinds_slot_usable` (`OB5` / `LT5` Equivalence-Certified Re-Pinning)**:
+When an intersecting override `L` modifies `m ∈ slotReadCone C target` and supplies
+`cert : EquivOverrideCert C L m`, re-pinning `m` to its new equivalence-certified hash via
+`rebindEquivPin` (and `rebindEquivSlotCandidate` / `rebindEquivTransportCert`) restores
+`specSlot.usable = true` and `transportSlot.usable = true` at `linkComposition C L` while
+preserving `TransportMeaning o` and the exact observational meaning
+`.get (linkComposition C L).object target ≈b .get C.object target`! -/
+theorem crossPackage_bEquiv_rebinds_slot_usable
+    {objectName target m : String} {C : Composition} {L : Layer} {defItem : LeafDef}
+    {v' : LeafView} {o : TransportObj} {c : TransportCert} {s : Nat}
+    (cert : EquivOverrideCert C L m)
+    (Frame : Term)
+    (htarget_base : .get C.object target ≈b instantiate Frame (.get C.object m))
+    (htarget_link : .get (linkComposition C L).object target ≈b
+      instantiate Frame (.get (linkComposition C L).object m))
+    (hcl_link : (linkComposition C L).closedB = true)
+    (hpin_m : holdsAt v' (rebindEquivPin cert (memberConePin C m)) = true)
+    (hcone_rest : ∀ m' ∈ slotReadCone (linkComposition C L) target, m' ≠ m →
+      holdsAt v' (memberConePin (linkComposition C L) m') = true)
+    (htrans_us : (transportSlot o).usable (Support.holds C s) c = true)
+    (htrans_rest : ∀ sp ∈ c.supports, sp.member ≠ m →
+      Obend.Logic.symUnfold (linkComposition C L) s sp.member = Obend.Logic.symUnfold C s sp.member) :
+    holdsAt v' (memberConePin (linkComposition C L) m) = true ∧
+    specSlot.usable (holdsAt v') (rebindEquivSlotCandidate objectName target cert defItem) = true ∧
+    (transportSlot o).usable (Support.holds (linkComposition C L) s) (rebindEquivTransportCert cert s c) = true ∧
+    TransportMeaning o (rebindEquivTransportCert cert s c) ∧
+    (.get (linkComposition C L).object target ≈b .get C.object target) := by
+  have hpin_m' : holdsAt v' (memberConePin (linkComposition C L) m) = true := by
+    rwa [rebindEquivPin_memberConePin cert] at hpin_m
+  have hspec_all : ∀ p ∈ (rebindEquivSlotCandidate objectName target cert defItem).supports,
+      holdsAt v' p = true := by
+    intro p hp
+    simp only [rebindEquivSlotCandidate, Candidate.supports, coneSupports, List.mem_map] at hp
+    obtain ⟨m', hm', rfl⟩ := hp
+    by_cases heq : m' = m
+    · subst heq; exact hpin_m'
+    · exact hcone_rest m' hm' heq
+  have hspec_us : specSlot.usable (holdsAt v') (rebindEquivSlotCandidate objectName target cert defItem) = true :=
+    (usable_iff specSlot (holdsAt v') (rebindEquivSlotCandidate objectName target cert defItem)).2
+      ⟨hcl_link, hspec_all⟩
+  obtain ⟨hj, hall⟩ := (usable_iff (transportSlot o) (Support.holds C s) c).1 htrans_us
+  have hj' : (transportSlot o).judge (rebindEquivTransportCert cert s c) = true := hj
+  have hall' : ∀ sp' ∈ (transportSlot o).supports (rebindEquivTransportCert cert s c),
+      Support.holds (linkComposition C L) s sp' = true := by
+    intro sp' hsp'
+    simp only [transportSlot, rebindEquivTransportCert, List.mem_map] at hsp'
+    obtain ⟨sp, hsp, rfl⟩ := hsp'
+    unfold rebindEquivSupport
+    by_cases hmem : (sp.member == m) = true
+    · simp only [hmem, ite_true, Support.holds]
+      exact optEq_refl _
+    · simp only [hmem, Bool.false_eq_true, ite_false]
+      have hne : sp.member ≠ m := fun he => by simp [he] at hmem
+      have h1 := hall sp hsp
+      have heq := htrans_rest sp hsp hne
+      simpa only [Support.holds, heq] using h1
+  have htrans_us' :
+      (transportSlot o).usable (Support.holds (linkComposition C L) s) (rebindEquivTransportCert cert s c) = true :=
+    (usable_iff (transportSlot o) (Support.holds (linkComposition C L) s) (rebindEquivTransportCert cert s c)).2
+      ⟨hj', hall'⟩
+  have hok' : transportCheck 0 o (rebindEquivTransportCert cert s c) = .ok := by
+    simpa [transportSlot] using hj'
+  have hmean' : TransportMeaning o (rebindEquivTransportCert cert s c) :=
+    transportJudge.sound hok'
+  have hsem := crossPackage_bEquiv_override_preserves_semantics cert Frame htarget_base htarget_link
+  exact ⟨hpin_m', hspec_us, htrans_us', hmean', hsem.2.1⟩
+
+/-- Mutated `rebindEquivPin` that leaves the stale pin untouched instead of re-pinning to `linkComposition C L`. -/
+def rebindEquivPinBroken {C : Composition} {L : Layer} {m : String}
+    (_cert : EquivOverrideCert C L m) (p : LeafPin) : LeafPin :=
+  p
+
+/-- Mutated `compContext` that drops `F` and returns `C` unchanged. -/
+def compContextBroken (C _F : Term) : Term :=
+  C
+
+#tooth Obend.Spec.CrossPackage.crossPackage_bEquiv_override_preserves_semantics by mutation
+  Obend.Spec.CrossPackage.compContext := compContextBroken
+
+#tooth Obend.Spec.CrossPackage.crossPackage_bEquiv_rebinds_slot_usable by mutation
+  Obend.Spec.CrossPackage.rebindEquivPin := rebindEquivPinBroken
 
 end Obend.Spec.CrossPackage
 end

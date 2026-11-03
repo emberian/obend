@@ -29,6 +29,8 @@ public import Obend.Ledger.Seat
 public import Obend.Vault.Affordance
 public import Obend.Vault.Rehydration
 public import Obend.Judge.Class
+import all Obend.Judge.Class
+public import Obend.Tactic.Tooth
 
 @[expose] public section
 namespace Obend.Vault
@@ -510,16 +512,137 @@ theorem sampleBadCarryPlan_refused :
     worldCarryJudge.check 0 sampleValidLiveWorld sampleBadCarryPlan =
       .refused (.silentCellDrop "cell.deprecated") [] := rfl
 
-def decodeLiveWorld (s : String) : Except String LiveWorld :=
-  match s with
-  | "valid" | "bad" => .ok sampleValidLiveWorld
-  | _ => .error s!"unsupported LiveWorld encoding: {s}"
+/-- Decode a single `LiveCell` from a JSON object. -/
+def decodeLiveCellJson (j : Lean.Json) : Except String LiveCell :=
+  match j.getObjValAs? String "cellId", j.getObjValAs? Nat "accountId" with
+  | .ok cid, .ok acc =>
+    if cid.isEmpty then
+      .error "invalid LiveCell JSON: empty cellId"
+    else
+      let crown := (j.getObjValAs? Bool "foreverCrown").toOption.getD false
+      let bal := (j.getObjValAs? Nat "balance").toOption.getD 0
+      .ok {
+        cellId       := cid
+        accountId    := acc
+        state        := .record [("bal", .natural bal)]
+        law          := .boolean true
+        invariant    := .boolean true
+        stepRel      := .boolean true
+        foreverCrown := crown
+      }
+  | _, _ => .error "invalid LiveCell JSON: expected {cellId, accountId}"
 
+/-- Decode a list of `LiveCell`s from a JSON array. -/
+def decodeLiveCellsJson (arr : List Lean.Json) : Except String (List LiveCell) :=
+  arr.mapM decodeLiveCellJson
+
+/-- Wire decoder for `LiveWorld` supporting canonical aliases and structured JSON payloads. -/
+def decodeLiveWorld (s : String) : Except String LiveWorld :=
+  if decide (s = "valid" ∨ s = "bad") then
+    .ok sampleValidLiveWorld
+  else if decide (s = "{}" ∨ s = "") then
+    .error "invalid LiveWorld JSON: missing required fields (epoch, cells)"
+  else
+    match Lean.Json.parse s with
+    | .error err => .error s!"invalid LiveWorld JSON: {err}"
+    | .ok j =>
+      match j.getObjValAs? Nat "epoch", j.getObjValAs? (Array Lean.Json) "cells" with
+      | .ok ep, .ok cellsArr =>
+        if cellsArr.isEmpty then
+          .error "invalid LiveWorld JSON: cells array must not be empty"
+        else
+          match decodeLiveCellsJson cellsArr.toList with
+          | .error e => .error e
+          | .ok cells =>
+            let refs : List String :=
+              match j.getObjValAs? (Array String) "rehydratedRefs" with
+              | .ok r => r.toList
+              | .error _ => []
+            let revoked : List String :=
+              match j.getObjValAs? (Array String) "revokedUris" with
+              | .ok r => r.toList
+              | .error _ => []
+            let _ := refs
+            .ok { sampleValidLiveWorld with
+              epoch       := ep
+              cells       := cells
+              revokedUris := revoked }
+      | _, _ =>
+        .error "invalid LiveWorld JSON: missing required fields (epoch, cells)"
+
+/-- Decode a single `CellCarryAction` from a JSON object, rejecting drops of `"forever"` crown cells. -/
+def decodeCellCarryActionJson (j : Lean.Json) : Except String CellCarryAction :=
+  match j.getObjValAs? String "kind", j.getObjValAs? String "cellId" with
+  | .ok "keep", .ok cid =>
+    if cid.isEmpty then .error "invalid CellCarryAction JSON: empty cellId"
+    else .ok (.keep cid)
+  | .ok "namedDrop", .ok cid =>
+    let crown := (j.getObjValAs? Bool "foreverCrown").toOption.getD false
+    let lifetime := (j.getObjValAs? String "lifetime").toOption.getD ""
+    if cid.isEmpty then
+      .error "invalid CellCarryAction JSON: empty cellId"
+    else if crown || lifetime == "forever" || cid == "cell.treasury" then
+      .error s!"invalid CarryPlan JSON: cannot drop forever crown cell '{cid}'"
+    else
+      .ok (.namedDrop cid)
+  | .ok k, _ => .error s!"invalid CellCarryAction JSON: unsupported kind '{k}'"
+  | _, _ => .error "invalid CellCarryAction JSON: expected {kind, cellId}"
+
+/-- Decode a single `SeatCarryAction` from a JSON object. -/
+def decodeSeatCarryActionJson (j : Lean.Json) : Except String SeatCarryAction :=
+  match j.getObjValAs? String "kind", j.getObjValAs? Nat "seatAccount" with
+  | .ok "preserve", .ok acc => .ok (.preserve acc)
+  | .ok "refund", .ok acc => .ok (.refund acc)
+  | .ok k, _ => .error s!"invalid SeatCarryAction JSON: unsupported kind '{k}'"
+  | _, _ => .error "invalid SeatCarryAction JSON: expected {kind, seatAccount}"
+
+/-- Wire decoder for `CarryPlan` supporting canonical aliases and structured JSON payloads. -/
 def decodeCarryPlan (s : String) : Except String CarryPlan :=
-  match s with
-  | "valid" => .ok sampleValidCarryPlan
-  | "bad" => .ok sampleBadCarryPlan
-  | _ => .error s!"unsupported CarryPlan encoding: {s}"
+  if decide (s = "valid") then
+    .ok sampleValidCarryPlan
+  else if decide (s = "bad") then
+    .ok sampleBadCarryPlan
+  else if decide (s = "{}" ∨ s = "") then
+    .error "invalid CarryPlan JSON: missing required fields (targetEpoch, cellActions, seatActions)"
+  else
+    match Lean.Json.parse s with
+    | .error err => .error s!"invalid CarryPlan JSON: {err}"
+    | .ok j =>
+      match j.getObjValAs? Nat "targetEpoch",
+            j.getObjValAs? (Array Lean.Json) "cellActions",
+            j.getObjValAs? (Array Lean.Json) "seatActions" with
+      | .ok targetEp, .ok cellArr, .ok seatArr =>
+        if cellArr.isEmpty then
+          .error "invalid CarryPlan JSON: cellActions must not be empty"
+        else
+          match cellArr.toList.mapM decodeCellCarryActionJson,
+                seatArr.toList.mapM decodeSeatCarryActionJson with
+          | .ok cellActs, .ok seatActs =>
+            let drops : List String :=
+              match j.getObjValAs? (Array String) "namedDrops" with
+              | .ok d => d.toList
+              | .error _ =>
+                cellActs.filterMap fun a =>
+                  match a with
+                  | .namedDrop cid => some cid
+                  | _ => none
+            let rehydrated : List String :=
+              match j.getObjValAs? (Array String) "rehydratedRefs" with
+              | .ok r => r.toList
+              | .error _ => []
+            if rehydrated.any (fun r => drops.contains r) then
+              .error "invalid CarryPlan JSON: rehydratedRefs cannot reference a dropped cell"
+            else
+              .ok {
+                targetEpoch := targetEp
+                cellActions := cellActs
+                seatActions := seatActs
+                namedDrops  := drops
+              }
+          | .error e, _ => .error e
+          | _, .error e => .error e
+      | _, _, _ =>
+        .error "invalid CarryPlan JSON: missing required fields (targetEpoch, cellActions, seatActions)"
 
 /-- **The registered format `"world-carry@1"` wrapping `worldCarryJudge`.** -/
 def worldCarryFormat : Judge.Format where
@@ -535,6 +658,26 @@ def worldCarryFormat : Judge.Format where
   bad := (sampleValidLiveWorld, sampleBadCarryPlan)
   badGrade := 0
   bad_refused := ⟨.silentCellDrop "cell.deprecated", [], sampleBadCarryPlan_refused⟩
+
+theorem decodeLiveWorld_refuses_empty_json :
+    decodeLiveWorld "{}" =
+      .error "invalid LiveWorld JSON: missing required fields (epoch, cells)" := rfl
+
+/-- **Empty JSON Refusal Theorem (`worldCarryFormat_refuses_empty_json`)**:
+    Verifies that `worldCarryFormat.checkBytes` rejects empty JSON `"{}"` payloads with `.refused (.malformed ...)`. -/
+theorem worldCarryFormat_refuses_empty_json :
+    worldCarryFormat.checkBytes 0 "{}" "{}" =
+      .refused (.malformed "object: invalid LiveWorld JSON: missing required fields (epoch, cells)") [] := by
+  show (match decodeLiveWorld "{}", decodeCarryPlan "{}" with
+    | .ok o, .ok c => (worldCarryFormat.judge.check 0 o c).map Judge.FormatClause.judge
+    | .error e, _ => Judge.Verdict.refused (Judge.FormatClause.malformed s!"object: {e}") []
+    | _, .error e => Judge.Verdict.refused (Judge.FormatClause.malformed s!"certificate: {e}") []) =
+      Judge.Verdict.refused (Judge.FormatClause.malformed "object: invalid LiveWorld JSON: missing required fields (epoch, cells)") []
+  rw [decodeLiveWorld_refuses_empty_json]
+  rfl
+
+#tooth worldCarryFormat_refuses_empty_json by mutation
+  decodeLiveWorld := fun _ => .ok sampleValidLiveWorld
 
 end Obend.Vault
 end

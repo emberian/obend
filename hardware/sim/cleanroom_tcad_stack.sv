@@ -1,0 +1,43 @@
+/* verilator lint_off UNUSED */
+/* verilator lint_off DECLFILENAME */
+module cleanroom_tcad_stack (
+  input  logic        clk,
+  input  logic        rst,
+  input  logic [63:0] arg,
+  output logic [63:0] out_oxideEotPicometers,
+  output logic [63:0] out_vthMilliV,
+  output logic [63:0] out_gateDelayPs,
+  output logic [63:0] out_drainCurrentUa,
+  output logic [63:0] out_calibratedDelayPs
+);
+  logic [63:0] w_0; // oxideEotPicometers
+  logic [63:0] w_1; // vthMilliV
+  logic [63:0] w_2; // gateDelayPs
+  logic [63:0] w_3; // drainCurrentUa
+  logic [63:0] w_4; // calibratedDelayPs
+  logic [63:0] reg_oxideEotPicometers;
+  logic [63:0] reg_vthMilliV;
+  logic [63:0] reg_gateDelayPs;
+  logic [63:0] reg_drainCurrentUa;
+  logic [63:0] reg_calibratedDelayPs;
+  always_comb begin
+    w_0 = 64'd700;
+    w_1 = 64'd250;
+    w_2 = (((arg * 64'd8) + 64'd20) + 64'd4);
+    w_3 = ((arg * 64'd5) + w_1);
+    w_4 = ((((arg + 64'd2) * 64'd8) + 64'd20) + 64'd4);
+    out_oxideEotPicometers = w_0;
+    out_vthMilliV = w_1;
+    out_gateDelayPs = w_2;
+    out_drainCurrentUa = w_3;
+    out_calibratedDelayPs = w_4;
+  end
+  // Reset-free datapath registers
+  always_ff @(posedge clk) begin
+    reg_oxideEotPicometers <= w_0;
+    reg_vthMilliV <= w_1;
+    reg_gateDelayPs <= w_2;
+    reg_drainCurrentUa <= w_3;
+    reg_calibratedDelayPs <= w_4;
+  end
+endmodule

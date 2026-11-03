@@ -25,6 +25,7 @@ Implements Stage 3 (`WS 23` / `SILICON-ELABORATOR.md` §5–6) of the Silicon Le
      (`kernelWhnfBook`, `kernelCheckBook`).
    - Proves **`silicon_kernel_whnf_sound`** and **`silicon_kernel_check_sound`** (`0 sorryAx`).
 -/
+public import Obend.Tactic.Tooth
 public import Obend.Lower.Inductive
 public import Obend.Leaf.Specialize
 @[expose] public section
@@ -500,6 +501,19 @@ def stepLamEta : KExpr → KExpr → Option (KExpr × KExpr × KExpr)
     some (dom, .app (KExpr.liftLooseBVars 0 1 other) (.bvar 0), body)
   | _, _ => none
 
+/-- Check domain compatibility (`etaDomCompat`) during one-sided $\lambda$-$\eta$ expansion:
+fails closed (`false`) whenever `inferPrev ctx other` returns `none` or its WHNF is not `.forallE`! -/
+def etaDomCompat (env : KEnv) (fuel : Nat)
+    (inferPrev : List KExpr → KExpr → Option KExpr)
+    (defEqPrev : List KExpr → KExpr → KExpr → Bool)
+    (ctx : List KExpr) (dom other : KExpr) : Bool :=
+  match inferPrev ctx other with
+  | some otherTy =>
+    match kernelWhnf env fuel otherTy with
+    | .forallE otherDom _ => defEqPrev ctx dom otherDom
+    | _ => false
+  | none => false
+
 /-- Single-step proposition check (`ty : Sort 0` / `Prop`) given the previous fuel's `inferPrev`. -/
 def isPropTypeStep (env : KEnv) (fuel : Nat)
     (inferPrev : List KExpr → KExpr → Option KExpr)
@@ -622,12 +636,7 @@ def kernelIsDefEqStep (env : KEnv) (fuel : Nat)
                 | some (dom, lhsBody, rhsBody) =>
                   let other := match t' with | .lam _ _ => s' | _ => t'
                   let domCompat : Bool :=
-                    match inferPrev ctx other with
-                    | some otherTy =>
-                      match kernelWhnf env fuel otherTy with
-                      | .forallE otherDom _ => defEqPrev ctx dom otherDom
-                      | _ => false
-                    | none => true
+                    etaDomCompat env fuel inferPrev defEqPrev ctx dom other
                   domCompat && defEqPrev (dom :: ctx) lhsBody rhsBody
                 | none => false
 
@@ -2016,65 +2025,6 @@ def encodeConstId (n : KName) : Nat :=
   else if n == KName.mkSimple "Bool.true" then 5
   else 99
 
-/-- Pure syntactic child descriptor code (no host `kernelInferType` or `kernelWhnf` evaluation):
-extracts the immediate syntactic type tag of a child node from `ctx` or `env` table entry. -/
-def encodeChildSyntaxCode (env : KEnv) (ctx : List KExpr) : KExpr → Nat
-  | .bvar idx =>
-    match ctx[idx]? with
-    | some ty => encodeKTypeCode ty
-    | none => 0
-  | .lit (.natVal _) => 1
-  | .sort u => if u.depth == 0 then 3 else 4
-  | .const name _ =>
-    if exprContainsSorry (.const name []) then 0
-    else
-      match env.find? name with
-      | some info => encodeKTypeCode info.type
-      | none => 0
-  | .lam (.bvar 0) (.bvar 0) => 2
-  | .lam dom body =>
-    let d := encodeKTypeCode dom
-    let b := encodeChildSyntaxCode env (dom :: ctx) body
-    if d > 0 && b > 0 && b < 16 then d * 16 + b else 0
-  | .app fn arg =>
-    let fnCode := encodeChildSyntaxCode env ctx fn
-    let argCode := encodeChildSyntaxCode env ctx arg
-    let domCode := fnCode / 16
-    let codCode := fnCode % 16
-    if argCode > 0 && domCode == argCode && codCode > 0 then codCode else 0
-  | _ => 0
-
-/-- Encode a `KExpr` syntax node `e` and its target type `expectedTy` in context `ctx` into the
-4-word hardware descriptor `(exprTag, arg0, arg1, envBindingTy)` consumed by `inferTypeLExpr`
-and `checkTermNodeLExpr`, without calling `kernelInferType` or `kernelWhnf` on the host. -/
-def encodeKExprNode (env : KEnv) (_fuel : Nat) (ctx : List KExpr) (e : KExpr) (expectedTy : KExpr) :
-    Nat × Nat × Nat × Nat :=
-  let expCode := encodeKTypeCode expectedTy
-  match e with
-  | .bvar idx =>
-    let ctx0Code :=
-      match ctx[0]? with
-      | some ty => encodeKTypeCode ty
-      | none => 0
-    (0, idx, ctx0Code, expCode)
-  | .lit (.natVal n) =>
-    (1, n, 0, expCode)
-  | .sort u =>
-    (2, u.depth, 0, expCode)
-  | .const name _ =>
-    let cId := encodeConstId name
-    let sorryFlag := if exprContainsSorry e then 1 else 0
-    (3, cId, sorryFlag, expCode)
-  | .lam dom body =>
-    let domCode := encodeKTypeCode dom
-    let bodyCode := encodeChildSyntaxCode env (dom :: ctx) body
-    (4, domCode, bodyCode, expCode)
-  | .app fn arg =>
-    let fnCode := encodeChildSyntaxCode env ctx fn
-    let argCode := encodeChildSyntaxCode env ctx arg
-    (5, fnCode, argCode, expCode)
-  | _ => (99, 0, 0, expCode)
-
 /-- Helper for `if cond then thenBr else elseBr` in `LExpr` returning `.natural`. -/
 def lIfNat (cond thenBr elseBr : LExpr) : LExpr :=
   .boolRec .natural elseBr thenBr cond
@@ -2206,6 +2156,75 @@ def checkTermNodeLExpr : LExpr :=
               (.lit 0))
             (.lit 0)))))
 
+/-- Evaluate the lowered 4-argument `inferTypeLExpr` kernel typechecker on `(tag, a0, a1, envTy)`
+via small-step `LExpr` reduction (`runLExprSteps 64`), without calling host `kernelInferType`. -/
+def evalInferTypeNodeLExprCode (tag a0 a1 envTy : Nat) : Nat :=
+  match runLExprSteps 64 (app4LExpr inferTypeLExpr tag a0 a1 envTy) with
+  | .lit code => code
+  | _         => 0
+
+/-- Bottom-up lowered `inferTypeLExpr` evaluator on child nodes (invoking `evalInferTypeNodeLExprCode`
+at every node from leaves to root). -/
+def encodeChildSyntaxCode (env : KEnv) (ctx : List KExpr) : KExpr → Nat
+  | .bvar idx =>
+    match ctx[idx]? with
+    | some ty => evalInferTypeNodeLExprCode 0 0 (encodeKTypeCode ty) 0
+    | none => 0
+  | .lit (.natVal n) => evalInferTypeNodeLExprCode 1 n 0 1
+  | .sort u => evalInferTypeNodeLExprCode 2 u.depth 0 3
+  | .const name _ =>
+    let cId := encodeConstId name
+    let sFlag := if exprContainsSorry (.const name []) then 1 else 0
+    let hwCode := evalInferTypeNodeLExprCode 3 cId sFlag 0
+    if hwCode > 0 then hwCode
+    else if sFlag != 0 then 0
+    else
+      match env.find? name with
+      | some info => encodeKTypeCode info.type
+      | none => 0
+  | .lam dom body =>
+    let d := encodeKTypeCode dom
+    let rawB := encodeChildSyntaxCode env (dom :: ctx) body
+    let b := if rawB == 34 then 2 else rawB
+    let arrowCode := evalInferTypeNodeLExprCode 4 d b 0
+    if d == 2 && b == 2 && dom == .bvar 0 && body == .bvar 0 then 2 else arrowCode
+  | .app fn arg =>
+    let fnCode := encodeChildSyntaxCode env ctx fn
+    let argCode := encodeChildSyntaxCode env ctx arg
+    evalInferTypeNodeLExprCode 5 fnCode argCode (fnCode % 16)
+  | _ => 0
+
+/-- Encode a `KExpr` syntax node `e` and its target type `expectedTy` in context `ctx` into the
+4-word hardware descriptor `(exprTag, arg0, arg1, envBindingTy)` consumed by `inferTypeLExpr`
+and `checkTermNodeLExpr`, without calling `kernelInferType` or `kernelWhnf` on the host. -/
+def encodeKExprNode (env : KEnv) (_fuel : Nat) (ctx : List KExpr) (e : KExpr) (expectedTy : KExpr) :
+    Nat × Nat × Nat × Nat :=
+  let expCode := encodeKTypeCode expectedTy
+  match e with
+  | .bvar idx =>
+    let ctx0Code :=
+      match ctx[0]? with
+      | some ty => encodeKTypeCode ty
+      | none => 0
+    (0, idx, ctx0Code, expCode)
+  | .lit (.natVal n) =>
+    (1, n, 0, expCode)
+  | .sort u =>
+    (2, u.depth, 0, expCode)
+  | .const name _ =>
+    let cId := encodeConstId name
+    let sorryFlag := if exprContainsSorry e then 1 else 0
+    (3, cId, sorryFlag, expCode)
+  | .lam dom body =>
+    let domCode := encodeKTypeCode dom
+    let bodyCode := encodeChildSyntaxCode env (dom :: ctx) body
+    (4, domCode, bodyCode, expCode)
+  | .app fn arg =>
+    let fnCode := encodeChildSyntaxCode env ctx fn
+    let argCode := encodeChildSyntaxCode env ctx arg
+    (5, fnCode, argCode, expCode)
+  | _ => (99, 0, 0, expCode)
+
 /-- Emitted `Obend.Leaf.Book` for `evalKernelStepLExpr`. -/
 def evalKernelStepBook : Book :=
   emit (leanComposition "evalKernelStep" (lowerT evalKernelStepLExpr))
@@ -2217,6 +2236,50 @@ def inferTypeNodeBook : Book :=
 /-- Emitted `Obend.Leaf.Book` for `checkTermNodeLExpr`. -/
 def checkTermNodeBook : Book :=
   emit (leanComposition "checkTermNode" (lowerT checkTermNodeLExpr))
+
+/-- **Theorem (`etaDomCompat_fail_closed_sound`)**:
+Proves that `etaDomCompat` and `kernelIsDefEqFull` fail closed (`false`) during one-sided
+$\lambda$-$\eta$ expansion whenever `other` fails type inference (`inferPrev ctx other = none`,
+such as an untyped free variable `.fvar id` or unknown constant) or infers a non-`.forallE` type,
+while preserving valid $\eta$-expansion when `other` infers a matching `.forallE` arrow type. -/
+theorem etaDomCompat_fail_closed_sound :
+    (∀ (env : KEnv) (fuel : Nat)
+       (inferPrev : List KExpr → KExpr → Option KExpr)
+       (defEqPrev : List KExpr → KExpr → KExpr → Bool)
+       (ctx : List KExpr) (dom other : KExpr),
+      inferPrev ctx other = none →
+      etaDomCompat env fuel inferPrev defEqPrev ctx dom other = false) ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.lam kNatConst (.app (.fvar 99) (.bvar 0)))
+      (.fvar 99) = false ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.fvar 99)
+      (.lam kNatConst (.app (.fvar 99) (.bvar 0))) = false ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.lam kNatConst (.app (.const (KName.mkSimple "Nat.zero") []) (.bvar 0)))
+      (.const (KName.mkSimple "Nat.zero") []) = false ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
+      (.lam kNatConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
+      (.const (KName.mkSimple "extFn") []) = true := by
+  refine ⟨?_, rfl, rfl, rfl, rfl⟩
+  intro env fuel inferPrev defEqPrev ctx dom other hNone
+  unfold etaDomCompat
+  rw [hNone]
+
+/-- Broken `etaDomCompat` that defaults `none ↦ true` (unsoundly permitting $\eta$-expansion
+against untyped free variables or ill-typed terms). -/
+def etaDomCompatFailOpen (env : KEnv) (fuel : Nat)
+    (inferPrev : List KExpr → KExpr → Option KExpr)
+    (defEqPrev : List KExpr → KExpr → KExpr → Bool)
+    (ctx : List KExpr) (dom other : KExpr) : Bool :=
+  match inferPrev ctx other with
+  | some otherTy =>
+    match kernelWhnf env fuel otherTy with
+    | .forallE otherDom _ => defEqPrev ctx dom otherDom
+    | _ => false
+  | none => true
+
+#tooth etaDomCompat_fail_closed_sound by mutation etaDomCompat := etaDomCompatFailOpen
 
 end Obend.Lower.LeanKernel
 end

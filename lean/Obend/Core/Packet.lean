@@ -109,6 +109,9 @@ def decodePrimitive (value : Json) : Except String Primitive := do
   | "labelEqual" => pure .labelEqual
   | "subtract" => pure .subtract | "divide" => pure .divide
   | "less" => pure .less | "lessEqual" => pure .lessEqual | "modulo" => pure .modulo
+  | "bitAnd" => pure .bitAnd | "bitOr" => pure .bitOr | "bitXor" => pure .bitXor
+  | "shl" => pure .shl | "lshr" => pure .lshr | "ashr" => pure .ashr
+  | "slt" => pure .slt | "qmul32" => pure .qmul32
   | _ => .error "unknown Objective primitive"
 
 /-- Decodes exactly the existing world lowerer's runtime core wire; no second

@@ -30,6 +30,7 @@ The value forms (`CValue`) are the weak-head values of `Value` whose lazy compon
 a record's fields, a specification's or prototype's components and an injection's payload are
 values, knots, pointers or `skipped`. A value evaluates only to itself, at cost 0. -/
 public import Obend.Equiv.Behaviour
+public import Obend.Tactic.Tooth
 @[expose] public section
 namespace Obend.Equiv
 open Obend.Core.Term
@@ -2594,6 +2595,117 @@ theorem evalCBV_sound : ∀ (fuel : Nat) (t v : Term) (k : Nat),
             exact .done (ih x v2 k2 hx)
           · cases h
         · cases h
+
+/-! ## Dead-`let` Elimination in Prototype Methods (`clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper`) -/
+
+/-- A dead `let` binding `let _ := deadExpr in body` in `Core4`: the bound variable `.bound 0`
+does not occur in `body.rename Nat.succ`. -/
+def deadLetBind (deadExpr body : Term) : Term :=
+  .app (.lam (body.rename Nat.succ)) deadExpr
+
+theorem instantiate_deadLet_body (body arg : Term) :
+    instantiate (body.rename Nat.succ) arg = body := by
+  rw [instantiate_eq, shift_one_cancel]
+
+/-- In `Core4`'s reference reduction, `deadLetBind deadExpr body` steps in 1 β-step to `body`. -/
+theorem steps_deadLetBind (deadExpr body : Term) :
+    Steps (deadLetBind deadExpr body) body := by
+  unfold deadLetBind
+  have hstep : Step (.app (.lam (body.rename Nat.succ)) deadExpr)
+      (instantiate (body.rename Nat.succ) deadExpr) :=
+    Step.beta (body.rename Nat.succ) deadExpr
+  rw [instantiate_deadLet_body] at hstep
+  exact steps_one hstep
+
+/-- `deadLetBind deadExpr body` is `Ahead` of `body`, both at the top level and under method binders. -/
+theorem ahead_deadLetBind (deadExpr body : Term) :
+    Ahead (deadLetBind deadExpr body) body ∧
+    Ahead (.lam (deadLetBind deadExpr body)) (.lam body) :=
+  ⟨Ahead.ofStepsRefl (steps_deadLetBind deadExpr body),
+   .lam (Ahead.ofStepsRefl (steps_deadLetBind deadExpr body))⟩
+
+/-- Eliminating a dead `let` binding preserves `Core4` behavioral equivalence (`≈b`),
+both for the body and for the enclosing prototype method closure `.lam (...)`. -/
+theorem bEquiv_deadLetBind (deadExpr body : Term) :
+    (deadLetBind deadExpr body ≈b body) ∧
+    (.lam (deadLetBind deadExpr body) ≈b .lam body) :=
+  ⟨bequiv_of_ahead (ahead_deadLetBind deadExpr body).1,
+   bequiv_of_ahead (ahead_deadLetBind deadExpr body).2⟩
+
+/-- Any Clairvoyant derivation `CV body v k` lifts via `Run.skip deadExpr` to a derivation
+`CV (deadLetBind deadExpr body) v (k + 2)` at cost `k + 2`. -/
+theorem cv_deadLetBind_of_cv (deadExpr : Term) {body v : Term} {k : Nat}
+    (h : CV body v k) :
+    CV (deadLetBind deadExpr body) v (k + 2) := by
+  unfold deadLetBind
+  have hbody : CV (instantiate (body.rename Nat.succ) skipped) v k := by
+    rwa [instantiate_deadLet_body]
+  have happ := Run.apply (Run.value (.lam (body.rename Nat.succ))) (Run.skip deadExpr) hbody
+  have heq : 0 + 1 + k + 1 = k + 2 := by omega
+  rwa [heq] at happ
+
+/-- Conversely, every Clairvoyant derivation `CV (deadLetBind deadExpr body) v k_unpruned`
+induces a strictly cheaper derivation `CV body v k_pruned` with `k_pruned < k_unpruned`
+(and `k_pruned + 2 ≤ k_unpruned` whenever `¬ Settled deadExpr`). -/
+theorem cv_of_cv_deadLetBind {deadExpr body v : Term} {k_unpruned : Nat}
+    (h : CV (deadLetBind deadExpr body) v k_unpruned) :
+    ∃ k_pruned, CV body v k_pruned ∧
+      k_pruned < k_unpruned ∧
+      (¬ Settled deadExpr → k_pruned + 2 ≤ k_unpruned) := by
+  unfold deadLetBind at h
+  cases h with
+  | value hv => exact absurd hv app_not_ready
+  | applySpec hf _ =>
+    obtain ⟨heq, _⟩ := cv_lam hf
+    cases heq
+  | @apply _ _ _ b x _ k1 k2 k3 hf hb hbody =>
+    obtain ⟨hb_eq, rfl⟩ := cv_lam hf
+    simp only [Term.lam.injEq] at hb_eq
+    subst hb_eq
+    rw [instantiate_deadLet_body] at hbody
+    refine ⟨k3, hbody, by omega, fun hns => ?_⟩
+    rcases bind_of_unsettled hns hb with ⟨_, rfl⟩ | ⟨j, _, rfl⟩
+    · omega
+    · omega
+
+/-- **`clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper`**:
+Eliminating a dead `let` binding in a `Core4` prototype method (`deadLetBind deadExpr body → body`):
+1. Preserves behavioral equivalence (`deadLetBind deadExpr body ≈b body` and `.lam (deadLetBind deadExpr body) ≈b .lam body`),
+2. Preserves all ground halting observations (`Halts (deadLetBind deadExpr body) o ↔ Halts body o`),
+3. Strictly reduces Clairvoyant heap/step cost on every terminating derivation (`k_pruned < k_unpruned`,
+   and saves at least `2` steps whenever `¬ Settled deadExpr`),
+4. Evaluates in `evalClairvoyantMinCost` at cost `0` after elimination vs cost `2` before elimination
+   on `deadLetBind (.binary .add (.nat 10) (.nat 20)) (.nat 42)`. -/
+theorem clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper (deadExpr body : Term) :
+    (deadLetBind deadExpr body ≈b body) ∧
+    (.lam (deadLetBind deadExpr body) ≈b .lam body) ∧
+    (∀ o : Observation, Halts (deadLetBind deadExpr body) o ↔ Halts body o) ∧
+    (∀ v k, CV body v k → CV (deadLetBind deadExpr body) v (k + 2) ∧ k < k + 2) ∧
+    (∀ v k_unpruned, CV (deadLetBind deadExpr body) v k_unpruned →
+      ∃ k_pruned, CV body v k_pruned ∧ k_pruned < k_unpruned ∧
+        (¬ Settled deadExpr → k_pruned + 2 ≤ k_unpruned)) ∧
+    evalClairvoyantMinCost 2 (deadLetBind (.binary .add (.nat 10) (.nat 20)) (.nat 42)) =
+      some (.nat 42, 2) ∧
+    evalClairvoyantMinCost 2 (.nat 42) = some (.nat 42, 0) := by
+  have hbeq := bEquiv_deadLetBind deadExpr body
+  have hns : ¬ Settled (.binary .add (.nat 10) (.nat 20)) := by
+    intro h; cases h with | value hv => cases hv
+  have hev1 : evalClairvoyantMinCost 2 (deadLetBind (.binary .add (.nat 10) (.nat 20)) (.nat 42)) =
+      some (.nat 42, 2) := by
+    simpa [deadLetBind, Term.rename] using
+      (evalClairvoyant_skip_unused_arg_saves_cost (.binary .add (.nat 10) (.nat 20)) hns 1).1
+  have hev2 : evalClairvoyantMinCost 2 (.nat 42) = some (.nat 42, 0) :=
+    (evalClairvoyantMinCost_value_sound (.nat 42) 2).1
+  exact ⟨hbeq.1, hbeq.2, fun o => hbeq.1.sameRuns.halts o,
+    fun v k hcv => ⟨cv_deadLetBind_of_cv deadExpr hcv, by omega⟩,
+    fun v k_unpruned hcv => cv_of_cv_deadLetBind hcv,
+    hev1, hev2⟩
+
+/-- Mutated `deadLetBind` that returns `deadExpr` instead of `body`, breaking dead-let elimination soundness. -/
+def deadLetBindBroken (deadExpr _body : Term) : Term := deadExpr
+
+#tooth Obend.Equiv.clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper by mutation
+  Obend.Equiv.deadLetBind := deadLetBindBroken
 
 end Obend.Equiv
 end

@@ -1,0 +1,59 @@
+edition ObjectiveBend 1
+# Flagship App #4 (Top Level): 3-Layer Composed Goldilocks ZK-NTT + Multilinear Sumcheck Co-Processor
+
+import ./GoldilocksField.obend as Field
+import ./NttButterflyRadix2.obend as Bfly
+import ./SumcheckRoundPoly.obend as Sumcheck
+
+law bounded_ntt_degree: new.nttDegree <= 256
+
+record ZkNttSumcheckTopTarget:
+  goldilocksEpsilon() -> Nat
+  numStages() -> Nat
+  butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat
+  sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat
+  pipelineStep(u: Nat, v: Nat) -> Nat
+
+spec Layer1GoldilocksSpec for ZkNttSumcheckTopTarget:
+  requires goldilocksEpsilon() -> Nat
+  requires numStages() -> Nat
+  def goldilocksEpsilon() -> Nat:
+    4294967295n
+  def numStages() -> Nat:
+    8n
+  def butterflyEven(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    u + v * twiddle
+  def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
+    u - v * twiddle
+  def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
+    f0 + rChallenge * (f1 - f0)
+  def pipelineStep(u: Nat, v: Nat) -> Nat:
+    u + v + self.numStages
+  claim zk_top_pipeline_open_recursion(u: Nat, v: Nat): self.pipelineStep(u, v) == u + v + self.numStages
+
+spec Layer2ButterflyOverride for ZkNttSumcheckTopTarget:
+  requires pipelineStep(u: Nat, v: Nat) -> Nat
+  def numStages() -> Nat:
+    8n
+  def pipelineStep(u: Nat, v: Nat) -> Nat:
+    super.pipelineStep(u, v) + 4n
+
+spec Layer3SumcheckOverride for ZkNttSumcheckTopTarget:
+  requires pipelineStep(u: Nat, v: Nat) -> Nat
+  def goldilocksEpsilon() -> Nat:
+    4294967295n
+  def pipelineStep(u: Nat, v: Nat) -> Nat:
+    super.pipelineStep(u, v) + 8n
+
+def seedZkNttSumcheckTop() -> ZkNttSumcheckTopTarget:
+  {goldilocksEpsilon: 0n, numStages: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n, pipelineStep: fn(u: Nat, v: Nat) -> Nat: 0n}
+
+def zkNttSumcheckTop() -> ZkNttSumcheckTopTarget:
+  fix(compose(compose(Layer1GoldilocksSpec, Layer2ButterflyOverride), Layer3SumcheckOverride), seedZkNttSumcheckTop())
+
+def evalNttButterflyPairSum() -> Nat:
+  zkNttSumcheckTop().butterflyEven(50n, 6n, 7n) + zkNttSumcheckTop().butterflyOdd(50n, 6n, 7n)
+
+def evalSumcheckTwoRounds() -> Nat:
+  zkNttSumcheckTop().sumcheckFold(34n, 42n, 2n)

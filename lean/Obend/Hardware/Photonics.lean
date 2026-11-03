@@ -687,5 +687,312 @@ export Obend.Analysis (
   twoBoson_equitable_intertwining_poly
 )
 
+/-! ## 8. Coupled-Mode Theory (`CMT`) $\cos(g L)$ / $\sin(g L)$ Physical Length-to-Amplitude Synthesis -/
+
+/-- Integer-scaled interval $[\text{lo}, \text{hi}] \subseteq \mathbb{Z}$ for Coupled-Mode Theory (CMT)
+field amplitude (scale $10^6\,\text{ppm}$) and optical power enclosures. -/
+structure CmtInterval where
+  lo : Int
+  hi : Int
+  deriving DecidableEq, Repr
+
+namespace CmtInterval
+
+/-- Check whether `x : Int` belongs to `[iv.lo, iv.hi]`. -/
+def contains (iv : CmtInterval) (x : Int) : Bool :=
+  decide (iv.lo ≤ x) && decide (x ≤ iv.hi)
+
+/-- Propositional membership `iv.lo ≤ x ∧ x ≤ iv.hi`. -/
+def Mem (x : Int) (iv : CmtInterval) : Prop :=
+  iv.lo ≤ x ∧ x ≤ iv.hi
+
+/-- Check whether two intervals overlap (`max a.lo b.lo ≤ min a.hi b.hi`). -/
+def overlaps (a b : CmtInterval) : Bool :=
+  decide (max a.lo b.lo ≤ min a.hi b.hi)
+
+/-- Scale a `CmtInterval` by a non-negative integer factor `c ≥ 0`. -/
+def scaleNonneg (c : Int) (iv : CmtInterval) : CmtInterval :=
+  ⟨c * iv.lo, c * iv.hi⟩
+
+end CmtInterval
+
+/-- Physical Coupled-Mode Theory (CMT) directional coupler specification binding evanescent
+coupling rate $g$ (`couplingRateMradPerUm`, in $\text{mrad}/\mu\text{m}$) and physical interaction
+length $L$ (`interactionLengthUm`, in $\mu\text{m}$) with lithography length tolerance $\Delta L$
+(`lengthTolUm`, in $\mu\text{m}$) to the dimensionless coupling phase $\theta = g \cdot L$ (in $\text{mrad}$):
+$$t(L) = \cos(g L), \qquad \kappa(L) = \sin(g L), \qquad P_{\text{cross}}(L) = \sin^2(g L).$$ -/
+structure PhysicalCmtCouplerSpec where
+  couplingRateMradPerUm : Nat
+  interactionLengthUm   : Nat
+  gapNm                 : Nat
+  lengthTolUm           : Nat
+  deriving DecidableEq, Repr
+
+/-- Nominal dimensionless coupling phase $\theta = g \cdot L$ (in milliradians). -/
+def PhysicalCmtCouplerSpec.nominalPhaseMrad (spec : PhysicalCmtCouplerSpec) : Nat :=
+  spec.couplingRateMradPerUm * spec.interactionLengthUm
+
+/-- Minimum coupling phase $\theta_{\min} = g \cdot (L - \Delta L)$ (in milliradians) across
+fabrication tolerance $\Delta L$. -/
+def PhysicalCmtCouplerSpec.minPhaseMrad (spec : PhysicalCmtCouplerSpec) : Nat :=
+  spec.couplingRateMradPerUm * (spec.interactionLengthUm - spec.lengthTolUm)
+
+/-- Maximum coupling phase $\theta_{\max} = g \cdot (L + \Delta L)$ (in milliradians) across
+fabrication tolerance $\Delta L$. -/
+def PhysicalCmtCouplerSpec.maxPhaseMrad (spec : PhysicalCmtCouplerSpec) : Nat :=
+  spec.couplingRateMradPerUm * (spec.interactionLengthUm + spec.lengthTolUm)
+
+/-- Degree-4 integer-scaled Taylor polynomial for $10^6 \cos(\theta / 1000)$ ($\theta$ in milliradians):
+$$P_{\cos}(\theta) = 10^6 - \frac{\theta^2}{2} + \frac{\theta^4}{24 \cdot 10^6}.$$ -/
+def evalCmtCosPolyPpm (thetaMrad : Nat) : Int :=
+  let th : Int := thetaMrad
+  let th2 := th * th
+  let th4 := th2 * th2
+  1000000 - (th2 / 2) + (th4 / 24000000)
+
+/-- Degree-5 integer-scaled Taylor polynomial for $10^6 \sin(\theta / 1000)$ ($\theta$ in milliradians):
+$$P_{\sin}(\theta) = 1000 \theta - \frac{\theta^3}{6000} + \frac{\theta^5}{120 \cdot 10^9}.$$ -/
+def evalCmtSinPolyPpm (thetaMrad : Nat) : Int :=
+  let th : Int := thetaMrad
+  let th2 := th * th
+  let th3 := th2 * th
+  let th5 := th3 * th2
+  1000 * th - (th3 / 6000) + (th5 / 120000000000)
+
+/-- Symmetric signed Lagrange + milliradian discretization remainder bound (in $\text{ppm}$, scale $10^6$)
+for degree-4/5 CMT $\cos(\theta)$ and $\sin(\theta)$ at phase $\theta$ (in milliradians):
+$$\text{rem}(\theta) = \theta + \frac{\theta^5}{120 \cdot 10^9}.$$ -/
+def evalCmtLagrangeRemPpm (thetaMrad : Nat) : Int :=
+  let th : Int := thetaMrad
+  let th2 := th * th
+  let th3 := th2 * th
+  let th5 := th3 * th2
+  th + (th5 / 120000000000)
+
+/-- Certified degree-4 Taylor-with-Lagrange-remainder enclosure of the straight-through (bar)
+field amplitude $10^6 \cos(g L)$ over $[\theta_{\min}, \theta_{\max}] = [g(L - \Delta L), g(L + \Delta L)]$. -/
+def evalCmtCosInterval (spec : PhysicalCmtCouplerSpec) : CmtInterval :=
+  let thMin := spec.minPhaseMrad
+  let thMax := spec.maxPhaseMrad
+  let cMin := evalCmtCosPolyPpm thMin
+  let cMax := evalCmtCosPolyPpm thMax
+  let rMin := evalCmtLagrangeRemPpm thMin
+  let rMax := evalCmtLagrangeRemPpm thMax
+  let lo := min (cMin - rMin) (cMax - rMax)
+  let hi := max (cMin + rMin) (cMax + rMax)
+  ⟨lo, hi⟩
+
+/-- Certified degree-5 Taylor-with-Lagrange-remainder enclosure of the cross-coupling
+field amplitude $10^6 \sin(g L)$ over $[\theta_{\min}, \theta_{\max}] = [g(L - \Delta L), g(L + \Delta L)]$. -/
+def evalCmtSinInterval (spec : PhysicalCmtCouplerSpec) : CmtInterval :=
+  let thMin := spec.minPhaseMrad
+  let thMax := spec.maxPhaseMrad
+  let sMin := evalCmtSinPolyPpm thMin
+  let sMax := evalCmtSinPolyPpm thMax
+  let rMin := evalCmtLagrangeRemPpm thMin
+  let rMax := evalCmtLagrangeRemPpm thMax
+  let lo := min (sMin - rMin) (sMax - rMax)
+  let hi := max (sMin + rMin) (sMax + rMax)
+  ⟨lo, hi⟩
+
+/-- Certified enclosure of the evanescent cross-transferred optical power $10^6 \sin^2(g L)$ (in $\text{ppm}$)
+over $[\theta_{\min}, \theta_{\max}]$, rounding the lower bound down and the upper bound up. -/
+def evalCmtTransferPowerInterval (spec : PhysicalCmtCouplerSpec) : CmtInterval :=
+  let sinIv := evalCmtSinInterval spec
+  let sinLo := max 0 sinIv.lo
+  let sinHi := max 0 sinIv.hi
+  ⟨(sinLo * sinLo) / 1000000, (sinHi * sinHi + 999999) / 1000000⟩
+
+/-- Certified enclosure of the bar-port (through) optical power $10^6 \cos^2(g L)$ (in $\text{ppm}$)
+over $[\theta_{\min}, \theta_{\max}]$. -/
+def evalCmtThroughPowerInterval (spec : PhysicalCmtCouplerSpec) : CmtInterval :=
+  let cosIv := evalCmtCosInterval spec
+  let cosLo := max 0 cosIv.lo
+  let cosHi := max 0 cosIv.hi
+  ⟨(cosLo * cosLo) / 1000000, (cosHi * cosHi + 999999) / 1000000⟩
+
+/-- Certified CMT unitary total power interval $\cos^2(\theta) + \sin^2(\theta)$ at full quadratic
+scale $10^{12}$ (`(10^6)^2`) across the fabrication tolerance box $\Delta L$. -/
+def evalCmtUnitarityInterval (spec : PhysicalCmtCouplerSpec) : CmtInterval :=
+  let cosIv := evalCmtCosInterval spec
+  let sinIv := evalCmtSinInterval spec
+  let cosLo := max 0 cosIv.lo
+  let cosHi := max 0 cosIv.hi
+  let sinLo := max 0 sinIv.lo
+  let sinHi := max 0 sinIv.hi
+  ⟨cosLo * cosLo + sinLo * sinLo, cosHi * cosHi + sinHi * sinHi⟩
+
+/-- Canonical physical 50:50 ($3\,\text{dB}$) CMT coupler specification at $\theta = 157 \times 5 = 785\,\text{mrad} \approx \pi/4$. -/
+def cmtCoupler3dBPhase785 : PhysicalCmtCouplerSpec where
+  couplingRateMradPerUm := 157
+  interactionLengthUm   := 5
+  gapNm                 := 200
+  lengthTolUm           := 0
+
+/-- Canonical $220\,\text{nm}$ SOI $3\,\text{dB}$ CMT coupler matching `coupler3dB` (`gapNm = 200`,
+`interactionLengthUm = 14`, $g = 56\,\text{mrad}/\mu\text{m} \implies \theta = 784\,\text{mrad}$). -/
+def cmtCoupler3dBSoi14Um (tolUm : Nat := 0) : PhysicalCmtCouplerSpec where
+  couplingRateMradPerUm := 56
+  interactionLengthUm   := 14
+  gapNm                 := 200
+  lengthTolUm           := tolUm
+
+/-- Canonical $220\,\text{nm}$ SOI Krawtchouk boundary CMT coupler matching `couplerKrawtchouk375`
+(`gapNm = 225`, `interactionLengthUm = 11`, $g = 60\,\text{mrad}/\mu\text{m} \implies \theta = 660\,\text{mrad} \approx \arcsin(\sqrt{3/8})$). -/
+def cmtCouplerKrawtchouk01 (tolUm : Nat := 0) : PhysicalCmtCouplerSpec where
+  couplingRateMradPerUm := 60
+  interactionLengthUm   := 11
+  gapNm                 := 225
+  lengthTolUm           := tolUm
+
+/-- **Theorem (`cmt_phase_zero_pure_through`)**:
+For ANY coupling rate `g : Nat` and trench gap `gapNm : Nat`, at zero interaction length
+(`interactionLengthUm = 0, lengthTolUm = 0`, so $\theta = 0$):
+1. The straight-through amplitude interval `evalCmtCosInterval` equals the exact point interval
+   `⟨1000000, 1000000⟩` ($t(0) = \cos(0) = 1$),
+2. The cross-coupling amplitude interval `evalCmtSinInterval` equals `⟨0, 0⟩` ($\kappa(0) = \sin(0) = 0$),
+3. The transferred cross-port power interval `evalCmtTransferPowerInterval` equals `⟨0, 0⟩`, and
+4. The unitary total power interval `evalCmtUnitarityInterval` equals `⟨1000000000000, 1000000000000⟩` ($10^{12}$). -/
+theorem cmt_phase_zero_pure_through (g gapNm : Nat) :
+    let spec : PhysicalCmtCouplerSpec :=
+      { couplingRateMradPerUm := g
+      , interactionLengthUm   := 0
+      , gapNm                 := gapNm
+      , lengthTolUm           := 0 }
+    spec.nominalPhaseMrad = 0 ∧
+    spec.minPhaseMrad = 0 ∧
+    spec.maxPhaseMrad = 0 ∧
+    evalCmtCosInterval spec = ⟨1000000, 1000000⟩ ∧
+    evalCmtSinInterval spec = ⟨0, 0⟩ ∧
+    evalCmtTransferPowerInterval spec = ⟨0, 0⟩ ∧
+    evalCmtUnitarityInterval spec = ⟨1000000000000, 1000000000000⟩ := by
+  dsimp only [PhysicalCmtCouplerSpec.nominalPhaseMrad, PhysicalCmtCouplerSpec.minPhaseMrad,
+    PhysicalCmtCouplerSpec.maxPhaseMrad, evalCmtCosInterval, evalCmtSinInterval,
+    evalCmtTransferPowerInterval, evalCmtUnitarityInterval]
+  have hSub : 0 - 0 = 0 := rfl
+  have hAdd : 0 + 0 = 0 := rfl
+  rw [hSub, hAdd, Nat.mul_zero g]
+  decide +kernel
+
+/-- **Theorem (`cmt_phase_5050_encloses_3db_split`)**:
+**Resolution of the Integer Truncation vs. Exact Half-Power Gap (`ASTRA-COUNCIL:323`)**:
+For both the canonical 3-dB phase $\theta = 785\,\text{mrad} \approx \pi/4$ (`cmtCoupler3dBPhase785`)
+and the $14\,\mu\text{m}$ SOI 3-dB coupler (`cmtCoupler3dBSoi14Um 0`, $\theta = 784\,\text{mrad}$):
+1. Both `evalCmtCosInterval` and `evalCmtSinInterval` enclose the nominal permille field amplitude
+   `1000 * coupler3dB.tFieldPermille = 707000`,
+2. Both `evalCmtTransferPowerInterval` ($\sin^2(g L)$) and `evalCmtThroughPowerInterval` ($\cos^2(g L)$)
+   rigorously enclose **both** the truncated integer square
+   `coupler3dB.kFieldPermille * coupler3dB.kFieldPermille = 707 * 707 = 499849` **and** the exact
+   unitary half-power `coupler3dB.kappaSqPpm = 500000`, while strictly excluding values outside
+   $[490000, 510000]$! -/
+theorem cmt_phase_5050_encloses_3db_split :
+    let truncSq := coupler3dB.kFieldPermille * coupler3dB.kFieldPermille
+    let exactHalf := coupler3dB.kappaSqPpm
+    let fieldScaled := 1000 * coupler3dB.kFieldPermille
+    let p785 := evalCmtTransferPowerInterval cmtCoupler3dBPhase785
+    let t785 := evalCmtThroughPowerInterval cmtCoupler3dBPhase785
+    let p784 := evalCmtTransferPowerInterval (cmtCoupler3dBSoi14Um 0)
+    cmtCoupler3dBPhase785.nominalPhaseMrad = 785 ∧
+    (cmtCoupler3dBSoi14Um 0).interactionLengthUm = coupler3dB.couplingLenUm ∧
+    truncSq = 499849 ∧
+    exactHalf = 500000 ∧
+    (evalCmtCosInterval cmtCoupler3dBPhase785).contains fieldScaled = true ∧
+    (evalCmtSinInterval cmtCoupler3dBPhase785).contains fieldScaled = true ∧
+    p785.contains truncSq = true ∧
+    p785.contains exactHalf = true ∧
+    t785.contains truncSq = true ∧
+    t785.contains exactHalf = true ∧
+    p784.contains truncSq = true ∧
+    p784.contains exactHalf = true ∧
+    p785.contains 490000 = false ∧
+    p785.contains 510000 = false := by
+  decide +kernel
+
+/-- **Theorem (`cmt_unitarity_interval_encloses_one`)**:
+**CMT Unitary Power Conservation Enclosure Across Fabrication Tolerance Boxes $\Delta L$**:
+1. **Universal Non-Negative Monotonicity**: For any `spec : PhysicalCmtCouplerSpec` and any field
+   amplitudes `t, kappa : Int` satisfying `0 ≤ cLo ≤ t ≤ cHi` and `0 ≤ sLo ≤ kappa ≤ sHi`, the sum
+   of squares `t * t + kappa * kappa` lies inside `[cLo^2 + sLo^2, cHi^2 + sHi^2]`.
+2. **Certified $10^{12}$ Unitarity Enclosure Across Fabrication Tolerance Boxes**:
+   Across zero-length couplers ($\theta = 0$), 3-dB couplers ($\theta = 785\,\text{mrad}$ and
+   $\theta = 784\,\text{mrad}$ with fabrication tolerances $\Delta L = 0, 1, 2\,\mu\text{m}$),
+   and Krawtchouk boundary couplers ($\theta = 660\,\text{mrad}$ with $\Delta L = 0, 1, 2\,\mu\text{m}$),
+   `evalCmtUnitarityInterval` ($\cos^2(g L) + \sin^2(g L)$) always encloses exact unit total power
+   $10^{12} = 1{,}000{,}000{,}000{,}000$! -/
+theorem cmt_unitarity_interval_encloses_one
+    (cLo cHi sLo sHi t kappa : Int)
+    (hc0 : 0 ≤ cLo) (hcLo : cLo ≤ t) (hcHi : t ≤ cHi)
+    (hs0 : 0 ≤ sLo) (hsLo : sLo ≤ kappa) (hsHi : kappa ≤ sHi) :
+    (cLo * cLo + sLo * sLo ≤ t * t + kappa * kappa ∧
+     t * t + kappa * kappa ≤ cHi * cHi + sHi * sHi) ∧
+    (evalCmtUnitarityInterval cmtCoupler3dBPhase785).contains 1000000000000 = true ∧
+    (evalCmtUnitarityInterval (cmtCoupler3dBSoi14Um 0)).contains 1000000000000 = true ∧
+    (evalCmtUnitarityInterval (cmtCoupler3dBSoi14Um 1)).contains 1000000000000 = true ∧
+    (evalCmtUnitarityInterval (cmtCoupler3dBSoi14Um 2)).contains 1000000000000 = true ∧
+    (evalCmtUnitarityInterval (cmtCouplerKrawtchouk01 0)).contains 1000000000000 = true ∧
+    (evalCmtUnitarityInterval (cmtCouplerKrawtchouk01 1)).contains 1000000000000 = true ∧
+    (evalCmtUnitarityInterval (cmtCouplerKrawtchouk01 2)).contains 1000000000000 = true := by
+  have ht0 : 0 ≤ t := by omega
+  have hk0 : 0 ≤ kappa := by omega
+  have hCLo1 : cLo * cLo ≤ cLo * t := int_mul_le_mul_of_nonneg_left cLo t cLo hcLo hc0
+  have hCLo2 : cLo * t ≤ t * t := int_mul_le_mul_of_nonneg_right cLo t t hcLo ht0
+  have hCHi1 : t * t ≤ t * cHi := int_mul_le_mul_of_nonneg_left t cHi t hcHi ht0
+  have hCHi2 : t * cHi ≤ cHi * cHi := int_mul_le_mul_of_nonneg_right t cHi cHi hcHi (by omega)
+  have hSLo1 : sLo * sLo ≤ sLo * kappa := int_mul_le_mul_of_nonneg_left sLo kappa sLo hsLo hs0
+  have hSLo2 : sLo * kappa ≤ kappa * kappa := int_mul_le_mul_of_nonneg_right sLo kappa kappa hsLo hk0
+  have hSHi1 : kappa * kappa ≤ kappa * sHi := int_mul_le_mul_of_nonneg_left kappa sHi kappa hsHi hk0
+  have hSHi2 : kappa * sHi ≤ sHi * sHi := int_mul_le_mul_of_nonneg_right kappa sHi sHi hsHi (by omega)
+  refine ⟨⟨by omega, by omega⟩, by decide +kernel⟩
+
+/-- **Theorem (`cmt_krawtchouk_length_synthesis_sound`)**:
+**Physical Interaction-Length Synthesis of the $3 : 4 : 3$ Krawtchouk Waveguide Couplers**:
+Binding the outer boundary coupler interaction length $L_{01} = 11\,\mu\text{m}$ (`cmtCouplerKrawtchouk01 0`,
+$g_{01} = 60\,\text{mrad}/\mu\text{m} \implies \theta_{01} = 660\,\text{mrad}$) and the inner coupler
+interaction length $L_{12} = 14\,\mu\text{m}$ (`cmtCoupler3dBSoi14Um 0`,
+$g_{12} = 56\,\text{mrad}/\mu\text{m} \implies \theta_{12} = 784\,\text{mrad}$) to `couplerKrawtchouk375`
+and `coupler3dB`:
+1. The physical interaction lengths and trench gaps match `couplerKrawtchouk375` ($L_{01} = 11\,\mu\text{m}$,
+   $\text{gap} = 225\,\text{nm}$) and `coupler3dB` ($L_{12} = 14\,\mu\text{m}$, $\text{gap} = 200\,\text{nm}$),
+2. `evalCmtCosInterval (cmtCouplerKrawtchouk01 0)` encloses `1000 * couplerKrawtchouk375.tFieldPermille` (`791,000`)
+   and `evalCmtSinInterval (cmtCouplerKrawtchouk01 0)` encloses `1000 * couplerKrawtchouk375.kFieldPermille` (`612,000`),
+3. `evalCmtTransferPowerInterval (cmtCouplerKrawtchouk01 0)` encloses both `612^2 = 374544` and
+   the exact Krawtchouk target `couplerKrawtchouk375.kappaSqPpm = 375000`,
+4. Cross-multiplying by the Krawtchouk quotient weights $Q_{1,2} Q_{2,1} = 4$ and $Q_{0,1} Q_{1,0} = 3$,
+   both `CmtInterval.scaleNonneg 4 (evalCmtTransferPowerInterval (cmtCouplerKrawtchouk01 0))` and
+   `CmtInterval.scaleNonneg 3 (evalCmtTransferPowerInterval (cmtCoupler3dBSoi14Um 0))` overlap and
+   enclose the exact $3 : 4 : 3$ Krawtchouk coupling invariant $4 \times 375000 = 3 \times 500000 = 1500000$! -/
+theorem cmt_krawtchouk_length_synthesis_sound :
+    let spec01 := cmtCouplerKrawtchouk01 0
+    let spec12 := cmtCoupler3dBSoi14Um 0
+    let pow01 := evalCmtTransferPowerInterval spec01
+    let pow12 := evalCmtTransferPowerInterval spec12
+    let scaled01 := CmtInterval.scaleNonneg 4 pow01
+    let scaled12 := CmtInterval.scaleNonneg 3 pow12
+    spec01.interactionLengthUm = couplerKrawtchouk375.couplingLenUm ∧
+    spec01.gapNm = couplerKrawtchouk375.gapNm ∧
+    spec12.interactionLengthUm = coupler3dB.couplingLenUm ∧
+    spec12.gapNm = coupler3dB.gapNm ∧
+    (evalCmtCosInterval spec01).contains (1000 * couplerKrawtchouk375.tFieldPermille) = true ∧
+    (evalCmtSinInterval spec01).contains (1000 * couplerKrawtchouk375.kFieldPermille) = true ∧
+    pow01.contains (couplerKrawtchouk375.kFieldPermille * couplerKrawtchouk375.kFieldPermille) = true ∧
+    pow01.contains couplerKrawtchouk375.kappaSqPpm = true ∧
+    pow12.contains coupler3dB.kappaSqPpm = true ∧
+    scaled01.contains 1500000 = true ∧
+    scaled12.contains 1500000 = true ∧
+    CmtInterval.overlaps scaled01 scaled12 = true := by
+  decide +kernel
+
+/-- Broken `evalCmtSinPolyPpm` that drops the cubic Taylor term $-\theta^3 / 6000$. -/
+def evalCmtSinPolyLinearOnlyBug (thetaMrad : Nat) : Int :=
+  1000 * (thetaMrad : Int)
+
+/-- Broken `evalCmtCosPolyPpm` that returns `0` at $\theta = 0$. -/
+def evalCmtCosPolyZeroBug (_thetaMrad : Nat) : Int := 0
+
+#tooth cmt_phase_zero_pure_through by mutation evalCmtCosPolyPpm := evalCmtCosPolyZeroBug
+#tooth cmt_phase_5050_encloses_3db_split by mutation evalCmtSinPolyPpm := evalCmtSinPolyLinearOnlyBug
+#tooth cmt_unitarity_interval_encloses_one by mutation evalCmtSinPolyPpm := evalCmtSinPolyLinearOnlyBug
+#tooth cmt_krawtchouk_length_synthesis_sound by mutation evalCmtSinPolyPpm := evalCmtSinPolyLinearOnlyBug
+
 end Obend.Hardware.Photonics
 end

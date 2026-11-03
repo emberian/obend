@@ -378,34 +378,99 @@ def toLeanName : KName → Lean.Name
   | .str p s   => by simp [toLeanName, fromLeanName, fromLeanName_toLeanName p]
   | .num p i   => by simp [toLeanName, fromLeanName, fromLeanName_toLeanName p]
 
-/-- Convert a host `Lean.Level` into `Option KLevel` (handling `.zero`, `.succ`, `.max`, `.imax`, `.param`). -/
+/-- Helper for `KName.toCleanId` preserving `.num` indices for `Lean.FVarId` / `Lean.MVarId` names
+such as `_uniq.42` while hashing string components. -/
+def KName.toCleanIdAux : KName → Nat
+  | .anonymous => 0
+  | .num .anonymous i => i
+  | .num (.str .anonymous "_uniq") i => i
+  | .num p i => p.toCleanIdAux * 31 + i + 1
+  | .str p s =>
+    let hStr := s.toList.foldl (fun acc c => (acc * 131 + c.toNat) % 999983) 0
+    p.toCleanIdAux * 31 + hStr + 1
+
+/-- Extract a clean numeric identifier `< 1000000` from a `KName`. -/
+def KName.toCleanId (n : KName) : Nat :=
+  n.toCleanIdAux % 999983
+
+theorem KName.toCleanId_lt_offset (n : KName) : n.toCleanId < 1000000 := by
+  unfold KName.toCleanId
+  omega
+
+/-- Convert a `KLevel` back to a host `Lean.Level`. -/
+def toLeanLevel : KLevel → Lean.Level
+  | .zero       => .zero
+  | .succ l     => .succ (toLeanLevel l)
+  | .max l1 l2  => .max (toLeanLevel l1) (toLeanLevel l2)
+  | .imax l1 l2 => .imax (toLeanLevel l1) (toLeanLevel l2)
+  | .param n    => .param (toLeanName n)
+
+/-- Convert a host `Lean.Level` into `Option KLevel` (handling `.zero`, `.succ`, `.max`, `.imax`, `.param`, and `.mvar`). -/
 def fromLeanLevel : Lean.Level → Option KLevel
   | .zero       => some .zero
   | .succ l     => do return .succ (← fromLeanLevel l)
   | .max l1 l2  => do return .max (← fromLeanLevel l1) (← fromLeanLevel l2)
   | .imax l1 l2 => do return .imax (← fromLeanLevel l1) (← fromLeanLevel l2)
   | .param n    => some (.param (fromLeanName n))
-  | .mvar _     => none
+  | .mvar id    => some (.param (.str (fromLeanName id.name) "_lmvar"))
+
+@[simp] theorem fromLeanLevel_toLeanLevel : ∀ (l : KLevel), fromLeanLevel (toLeanLevel l) = some l
+  | .zero       => rfl
+  | .succ l     => by simp [toLeanLevel, fromLeanLevel, fromLeanLevel_toLeanLevel l]
+  | .max l1 l2  => by simp [toLeanLevel, fromLeanLevel, fromLeanLevel_toLeanLevel l1, fromLeanLevel_toLeanLevel l2]
+  | .imax l1 l2 => by simp [toLeanLevel, fromLeanLevel, fromLeanLevel_toLeanLevel l1, fromLeanLevel_toLeanLevel l2]
+  | .param n    => by simp [toLeanLevel, fromLeanLevel, fromLeanName_toLeanName n]
 
 /-- Convert a host `Lean.Literal` into `KLiteral`. -/
 def fromLeanLiteral : Lean.Literal → KLiteral
   | .natVal n => .natVal n
   | .strVal s => .strVal s
 
-/-- Convert a host `Lean.Expr` into `Option KExpr` (stripping `.mdata` annotations). -/
+/-- Convert a `KLiteral` back to a host `Lean.Literal`. -/
+def toLeanLiteral : KLiteral → Lean.Literal
+  | .natVal n => .natVal n
+  | .strVal s => .strVal s
+
+@[simp] theorem fromLeanLiteral_toLeanLiteral (l : KLiteral) :
+    fromLeanLiteral (toLeanLiteral l) = l := by
+  cases l <;> rfl
+
+/-- Convert a host `Lean.Expr` into `Option KExpr` (stripping `.mdata` annotations transparently
+and mapping `.fvar` to `< 1000000` and `.mvar` to `1000000 + id` matching `mvarIdOffset` / `hwCamMVarOffset`). -/
 def fromLeanExpr : Lean.Expr → Option KExpr
-  | .bvar i        => some (.bvar i)
-  | .fvar id       => some (.fvar (fromLeanName id.name).height)
-  | .mvar _        => none
-  | .sort u        => do return .sort (← fromLeanLevel u)
-  | .const n us    => do return .const (fromLeanName n) (← us.mapM fromLeanLevel)
-  | .app f a       => do return .app (← fromLeanExpr f) (← fromLeanExpr a)
-  | .lam _ d b _   => do return .lam (← fromLeanExpr d) (← fromLeanExpr b)
+  | .bvar i          => some (.bvar i)
+  | .fvar id         => some (.fvar (fromLeanName id.name).toCleanId)
+  | .mvar id         => some (.fvar (1000000 + (fromLeanName id.name).toCleanId))
+  | .sort u          => do return .sort (← fromLeanLevel u)
+  | .const n us      => do return .const (fromLeanName n) (← us.mapM fromLeanLevel)
+  | .app f a         => do return .app (← fromLeanExpr f) (← fromLeanExpr a)
+  | .lam _ d b _     => do return .lam (← fromLeanExpr d) (← fromLeanExpr b)
   | .forallE _ d b _ => do return .forallE (← fromLeanExpr d) (← fromLeanExpr b)
-  | .letE _ t v b _ => do return .letE (← fromLeanExpr t) (← fromLeanExpr v) (← fromLeanExpr b)
-  | .lit l         => some (.lit (fromLeanLiteral l))
-  | .mdata _ e     => fromLeanExpr e
-  | .proj s i e    => do return .proj (fromLeanName s) i (← fromLeanExpr e)
+  | .letE _ t v b _  => do return .letE (← fromLeanExpr t) (← fromLeanExpr v) (← fromLeanExpr b)
+  | .lit l           => some (.lit (fromLeanLiteral l))
+  | .mdata _ e       => fromLeanExpr e
+  | .proj s i e      => do return .proj (fromLeanName s) i (← fromLeanExpr e)
+
+@[simp] theorem fromLeanExpr_mdata (md : Lean.MData) (e : Lean.Expr) :
+    fromLeanExpr (.mdata md e) = fromLeanExpr e := rfl
+
+/-- Convert a `KExpr` back to a host `Lean.Expr` (mapping `.fvar id` with `id >= 1000000` to `.mvar`
+and `id < 1000000` to `.fvar`). -/
+def toLeanExpr : KExpr → Lean.Expr
+  | .bvar i      => .bvar i
+  | .fvar id     =>
+    if id >= 1000000 then
+      .mvar ⟨Lean.Name.mkNum .anonymous (id - 1000000)⟩
+    else
+      .fvar ⟨Lean.Name.mkNum .anonymous id⟩
+  | .sort u      => .sort (toLeanLevel u)
+  | .const n us  => .const (toLeanName n) (us.map toLeanLevel)
+  | .app f a     => .app (toLeanExpr f) (toLeanExpr a)
+  | .lam d b     => .lam (.str .anonymous "x") (toLeanExpr d) (toLeanExpr b) .default
+  | .forallE d b => .forallE (.str .anonymous "x") (toLeanExpr d) (toLeanExpr b) .default
+  | .letE t v b  => .letE (.str .anonymous "x") (toLeanExpr t) (toLeanExpr v) (toLeanExpr b) false
+  | .lit l       => .lit (toLeanLiteral l)
+  | .proj s i e  => .proj (toLeanName s) i (toLeanExpr e)
 
 /-- Lower an `Obend.Core.Term.Primitive` into `LExpr`. -/
 def primToLExpr : Primitive → LExpr
@@ -419,6 +484,14 @@ def primToLExpr : Primitive → LExpr
   | .less        => .inject "less" []
   | .lessEqual   => .inject "lessEqual" []
   | .modulo      => .inject "modulo" []
+  | .bitAnd      => .inject "bitAnd" []
+  | .bitOr       => .inject "bitOr" []
+  | .bitXor      => .inject "bitXor" []
+  | .shl         => .inject "shl" []
+  | .lshr        => .inject "lshr" []
+  | .ashr        => .inject "ashr" []
+  | .slt         => .inject "slt" []
+  | .qmul32      => .inject "qmul32" []
 
 /-- Decode an `Obend.Core.Term.Primitive` from its lowered `Core4` `Term`. -/
 def decodePrimTerm : Term → Option Primitive
@@ -432,6 +505,14 @@ def decodePrimTerm : Term → Option Primitive
   | .inject "less" (.record [])        => some .less
   | .inject "lessEqual" (.record [])   => some .lessEqual
   | .inject "modulo" (.record [])      => some .modulo
+  | .inject "bitAnd" (.record [])      => some .bitAnd
+  | .inject "bitOr" (.record [])       => some .bitOr
+  | .inject "bitXor" (.record [])      => some .bitXor
+  | .inject "shl" (.record [])         => some .shl
+  | .inject "lshr" (.record [])        => some .lshr
+  | .inject "ashr" (.record [])        => some .ashr
+  | .inject "slt" (.record [])         => some .slt
+  | .inject "qmul32" (.record [])      => some .qmul32
   | _                                  => none
 
 @[simp] theorem decodePrimTerm_lowerT (p : Primitive) :

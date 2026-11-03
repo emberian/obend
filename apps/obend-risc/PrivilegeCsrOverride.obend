@@ -1,0 +1,46 @@
+edition ObjectiveBend 1
+# Flagship App #1 (Layer 2): Machine-Mode Privilege CSR Trap (ECALL) & Return (MRET) Override Layer
+
+import ./BaseRiscCore.obend as Base
+
+law monotone_trap_epoch: monotone(trapEpoch)
+law bounded_mcause_code: new.mcauseCode <= 31
+
+record PrivilegeCsrTarget:
+  mtvecAddr() -> Nat
+  trapCauseCode() -> Nat
+  stepPc(pc: Nat, mepc: Nat) -> Nat
+  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+
+spec BaseUnprivilegedPcSpec for PrivilegeCsrTarget:
+  requires mtvecAddr() -> Nat
+  requires trapCauseCode() -> Nat
+  def mtvecAddr() -> Nat:
+    64n
+  def trapCauseCode() -> Nat:
+    11n
+  def stepPc(pc: Nat, mepc: Nat) -> Nat:
+    self.mtvecAddr + mepc
+  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
+    rs1Val + rs2Val + imm
+  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    rs1Val + rs2Val + self.trapCauseCode
+  claim priv_ecall_redirects_to_mtvec(): self.stepPc(28n, 0n) == 64n
+  claim priv_mret_restores_mepc(): self.stepPc(68n, 32n) == 96n
+  claim priv_preserves_base_add(): self.aluExec(13n, 21n, 0n) == 34n
+
+spec PrivilegeCsrOverrideSpec for PrivilegeCsrTarget:
+  requires execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  def mtvecAddr() -> Nat:
+    64n
+  def trapCauseCode() -> Nat:
+    11n
+  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    super.execInstruction(inst, rs1Val, rs2Val) + 8n
+
+def seedPrivilegeCsr() -> PrivilegeCsrTarget:
+  {mtvecAddr: 0n, trapCauseCode: 0n, stepPc: fn(p: Nat, m: Nat) -> Nat: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
+
+def privilegeRiscCore() -> PrivilegeCsrTarget:
+  fix(compose(BaseUnprivilegedPcSpec, PrivilegeCsrOverrideSpec), seedPrivilegeCsr())

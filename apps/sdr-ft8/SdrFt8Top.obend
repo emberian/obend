@@ -1,0 +1,61 @@
+edition ObjectiveBend 1
+# Flagship App #3 (Top Level): All-Digital 40m (7.074 MHz) Tayloe IQ FT8 SDR Transceiver
+# Reference: QUALIFICATION-AND-SILICON-LEAN.md §4 App #3
+#            Obend/Hardware/RF.lean (tayloe_iq_cancels_image_sideband, rf_transceiver_signoff_poles)
+#            Obend/Hardware/DSP.lean (sdrDdcChain_signoff_sound, cordic_4stage_pipeline_verified)
+
+import ./TayloeQuadratureMixer.obend as Tayloe
+import ./CicDecimatorFir.obend as CicFir
+import ./CordicFt8Demod.obend as CordicDemod
+
+law monotone_sdr_sample_tick: monotone(sdrSampleCounter)
+law write_once_pa_vswr_trip: writeOnce(paVswrTripLatch)
+law bounded_image_rejection_db: new.imageRejectionDb <= 90
+
+record SdrFt8Transceiver:
+  carrierFreqKhz() -> Nat
+  imageRejectionDb() -> Nat
+  friisNoiseFactorMilli() -> Nat
+  ddcFilteredMag(rfMv: Nat) -> Nat
+  demodFt8SymbolStream(rfMv: Nat) -> Nat
+  rxSensitivityMarginDb(snrDb: Nat) -> Nat
+
+spec Nominal40mSdrFt8Transceiver for SdrFt8Transceiver:
+  requires carrierFreqKhz() -> Nat
+  requires imageRejectionDb() -> Nat
+  requires friisNoiseFactorMilli() -> Nat
+  def carrierFreqKhz() -> Nat:
+    7074n
+  def imageRejectionDb() -> Nat:
+    62n
+  def friisNoiseFactorMilli() -> Nat:
+    1450n
+  def ddcFilteredMag(rfMv: Nat) -> Nat:
+    rfMv * 8n + 16n
+  def demodFt8SymbolStream(rfMv: Nat) -> Nat:
+    rfMv * self.imageRejectionDb + 1250n
+  def rxSensitivityMarginDb(snrDb: Nat) -> Nat:
+    snrDb * 10n + self.friisNoiseFactorMilli
+  claim demod_ft8_open_recursion(rfMv: Nat): self.demodFt8SymbolStream(rfMv) == rfMv * self.imageRejectionDb + 1250n
+  claim rx_sensitivity_open_recursion(snrDb: Nat): self.rxSensitivityMarginDb(snrDb) == snrDb * 10n + self.friisNoiseFactorMilli
+
+spec Calibrated40mFt8TransceiverOverride for SdrFt8Transceiver:
+  requires ddcFilteredMag(rfMv: Nat) -> Nat
+  def imageRejectionDb() -> Nat:
+    68n
+  def friisNoiseFactorMilli() -> Nat:
+    1410n
+  def ddcFilteredMag(rfMv: Nat) -> Nat:
+    super.ddcFilteredMag(rfMv) + 12n
+
+def seedSdrFt8Transceiver() -> SdrFt8Transceiver:
+  {carrierFreqKhz: 0n, imageRejectionDb: 0n, friisNoiseFactorMilli: 0n, ddcFilteredMag: fn(rf: Nat) -> Nat: 0n, demodFt8SymbolStream: fn(rf: Nat) -> Nat: 0n, rxSensitivityMarginDb: fn(sn: Nat) -> Nat: 0n}
+
+def nominal40mSdrFt8() -> SdrFt8Transceiver:
+  fix(Nominal40mSdrFt8Transceiver, seedSdrFt8Transceiver())
+
+def calibrated40mSdrFt8() -> SdrFt8Transceiver:
+  fix(compose(Nominal40mSdrFt8Transceiver, Calibrated40mFt8TransceiverOverride), seedSdrFt8Transceiver())
+
+def fullSdrFt8DiagnosticMetric() -> Nat:
+  calibrated40mSdrFt8().demodFt8SymbolStream(100n) + CordicDemod.ratedFt8SymbolMetric() + CicFir.ratedDecimatedFirSample() + Tayloe.rated40mImageCancelMv()

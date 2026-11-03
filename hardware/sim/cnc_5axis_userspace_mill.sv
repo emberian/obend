@@ -1,0 +1,43 @@
+/* verilator lint_off UNUSED */
+/* verilator lint_off DECLFILENAME */
+module cnc_5axis_userspace_mill (
+  input  logic        clk,
+  input  logic        rst,
+  input  logic [63:0] arg,
+  output logic [63:0] out_servoLagUm,
+  output logic [63:0] out_endMillDeflectionUm,
+  output logic [63:0] out_abbeAngularDriftUm,
+  output logic [63:0] out_commandedAxisAt10mmUm,
+  output logic [63:0] out_totalVolumetricErrorUm
+);
+  logic [63:0] w_0; // servoLagUm
+  logic [63:0] w_1; // endMillDeflectionUm
+  logic [63:0] w_2; // abbeAngularDriftUm
+  logic [63:0] w_3; // commandedAxisAt10mmUm
+  logic [63:0] w_4; // totalVolumetricErrorUm
+  logic [63:0] reg_servoLagUm;
+  logic [63:0] reg_endMillDeflectionUm;
+  logic [63:0] reg_abbeAngularDriftUm;
+  logic [63:0] reg_commandedAxisAt10mmUm;
+  logic [63:0] reg_totalVolumetricErrorUm;
+  always_comb begin
+    w_0 = (arg * 64'd1);
+    w_1 = (arg * 64'd2);
+    w_2 = (arg * 64'd1);
+    w_3 = (64'd10000 + (arg * 64'd4));
+    w_4 = (((64'd10 * 64'd1) + (64'd5 * 64'd2)) + (arg * 64'd1));
+    out_servoLagUm = w_0;
+    out_endMillDeflectionUm = w_1;
+    out_abbeAngularDriftUm = w_2;
+    out_commandedAxisAt10mmUm = w_3;
+    out_totalVolumetricErrorUm = w_4;
+  end
+  // Reset-free datapath registers
+  always_ff @(posedge clk) begin
+    reg_servoLagUm <= w_0;
+    reg_endMillDeflectionUm <= w_1;
+    reg_abbeAngularDriftUm <= w_2;
+    reg_commandedAxisAt10mmUm <= w_3;
+    reg_totalVolumetricErrorUm <= w_4;
+  end
+endmodule

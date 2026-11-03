@@ -383,6 +383,14 @@ def primitiveResultB : Primitive → BTerm → BTerm → Option BTerm
   | .less, .nat a, .nat b => some (.bool (decide (a < b)))
   | .lessEqual, .nat a, .nat b => some (.bool (decide (a ≤ b)))
   | .modulo, .nat a, .nat b => some (.nat (a % b))
+  | .bitAnd, .nat a, .nat b => some (.nat ((Obend.Core.Term.word64 a &&& Obend.Core.Term.word64 b).toNat))
+  | .bitOr, .nat a, .nat b => some (.nat ((Obend.Core.Term.word64 a ||| Obend.Core.Term.word64 b).toNat))
+  | .bitXor, .nat a, .nat b => some (.nat ((Obend.Core.Term.word64 a ^^^ Obend.Core.Term.word64 b).toNat))
+  | .shl, .nat a, .nat b => some (.nat ((Obend.Core.Term.word64 a <<< ((Obend.Core.Term.word64 b).toNat % 64)).toNat))
+  | .lshr, .nat a, .nat b => some (.nat ((Obend.Core.Term.word64 a >>> ((Obend.Core.Term.word64 b).toNat % 64)).toNat))
+  | .ashr, .nat a, .nat b => some (.nat ((BitVec.sshiftRight (Obend.Core.Term.word64 a) ((Obend.Core.Term.word64 b).toNat % 64)).toNat))
+  | .slt, .nat a, .nat b => some (.bool (BitVec.slt (Obend.Core.Term.word64 a) (Obend.Core.Term.word64 b)))
+  | .qmul32, .nat a, .nat b => some (.nat ((Obend.Core.Term.qmul32Bv (Obend.Core.Term.word64 a) (Obend.Core.Term.word64 b)).toNat))
   | _, _, _ => none
 
 /-- Small-step evaluator `stepB?` on `BTerm` (`BendTT` operational semantics). -/

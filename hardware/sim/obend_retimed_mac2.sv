@@ -1,0 +1,27 @@
+/* verilator lint_off UNUSED */
+/* verilator lint_off DECLFILENAME */
+module obend_retimed_mac2 (
+  input  logic        clk,
+  input  logic        rst,
+  input  logic [63:0] a,
+  input  logic [63:0] b,
+  input  logic [63:0] c,
+  output logic [63:0] mac_out
+);
+  logic [63:0] w_0; // w_mul
+  logic [63:0] w_1; // w_add
+  logic [63:0] mulReg;
+  logic [63:0] cReg;
+  logic [63:0] outReg;
+  always_comb begin
+    w_0 = (a * b);
+    w_1 = (mulReg + cReg);
+    mac_out = outReg;
+  end
+  // Reset-free datapath registers
+  always_ff @(posedge clk) begin
+    mulReg <= w_0;
+    cReg <= c;
+    outReg <= w_1;
+  end
+endmodule

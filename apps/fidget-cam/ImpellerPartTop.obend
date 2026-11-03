@@ -1,0 +1,60 @@
+edition ObjectiveBend 1
+# Flagship App #6 (`apps/fidget-cam/ImpellerPartTop.obend`):
+# Top-level hierarchical OpenUSD/F-Rep impeller CAD/CAM part composing `BaseImpellerBody`,
+# `CoolingChannelOverride`, and `MountingBossAssembly` under LIVERPS strength ordering.
+
+import ./BaseImpellerBody.obend as BaseBody
+import ./CoolingChannelOverride.obend as Cooling
+import ./MountingBossAssembly.obend as Boss
+
+law monotone_stl_triangles: monotone(triangleCount)
+law bounded_servo_deflection_nm: new.deflectionNm <= 500
+
+record ImpellerCamTop:
+  compactedCenterTapeOps() -> Nat
+  compactedLugTapeOps() -> Nat
+  certifiedWallThicknessUm() -> Nat
+  lipschitzStepPadUm(stepDistUm: Nat) -> Nat
+  octreeActiveVoxels(subdivLevel: Nat) -> Nat
+
+spec OpenUsdSubLayerImpellerSpec for ImpellerCamTop:
+  requires compactedCenterTapeOps() -> Nat
+  requires compactedLugTapeOps() -> Nat
+  def compactedCenterTapeOps() -> Nat:
+    7n
+  def compactedLugTapeOps() -> Nat:
+    9n
+  def certifiedWallThicknessUm() -> Nat:
+    2600n
+  def lipschitzStepPadUm(stepDistUm: Nat) -> Nat:
+    stepDistUm * 72n + self.compactedCenterTapeOps
+  def octreeActiveVoxels(subdivLevel: Nat) -> Nat:
+    subdivLevel * 128n + 9n
+  claim impeller_lipschitz_pad_open_recursion(stepDistUm: Nat): self.lipschitzStepPadUm(stepDistUm) == stepDistUm * 72n + self.compactedCenterTapeOps
+
+spec LiverpsLocalCamOverride for ImpellerCamTop:
+  requires octreeActiveVoxels(subdivLevel: Nat) -> Nat
+  def compactedCenterTapeOps() -> Nat:
+    7n
+  def certifiedWallThicknessUm() -> Nat:
+    2800n
+  def octreeActiveVoxels(subdivLevel: Nat) -> Nat:
+    super.octreeActiveVoxels(subdivLevel) + 64n
+
+def seedImpellerCamTop() -> ImpellerCamTop:
+  {compactedCenterTapeOps: 0n, compactedLugTapeOps: 0n, certifiedWallThicknessUm: 0n, lipschitzStepPadUm: fn(s: Nat) -> Nat: s, octreeActiveVoxels: fn(l: Nat) -> Nat: l}
+
+def subLayerImpellerCam() -> ImpellerCamTop:
+  fix(OpenUsdSubLayerImpellerSpec, seedImpellerCamTop())
+
+def liverpsImpellerCamTop() -> ImpellerCamTop:
+  fix(compose(OpenUsdSubLayerImpellerSpec, LiverpsLocalCamOverride), seedImpellerCamTop())
+
+def impellerPadAtStep2() -> Nat:
+  liverpsImpellerCamTop().lipschitzStepPadUm(2n)
+
+def impellerVoxelsAtLevel4() -> Nat:
+  liverpsImpellerCamTop().octreeActiveVoxels(4n)
+
+def crossModuleAssemblySummary() -> Nat:
+  BaseBody.shroudedMarginAt50() + Cooling.conformalFluxAt30() + Boss.stiffenedGcodeStepsAt5() + impellerVoxelsAtLevel4()

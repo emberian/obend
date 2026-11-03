@@ -410,8 +410,9 @@ def overlay : Ty → Ty → Ty
   | _, inherited => inherited
 
 @[expose] def primitiveTypes : Primitive → Ty × Ty
-  | .add | .multiply | .subtract | .divide | .modulo => (.natural, .natural)
-  | .equal | .less | .lessEqual => (.natural, .boolean)
+  | .add | .multiply | .subtract | .divide | .modulo
+  | .bitAnd | .bitOr | .bitXor | .shl | .lshr | .ashr | .qmul32 => (.natural, .natural)
+  | .equal | .less | .lessEqual | .slt => (.natural, .boolean)
   | .conjunction => (.boolean, .boolean)
   | .labelEqual => (.label, .boolean)
 

@@ -36,8 +36,11 @@ inductive RtlAluOp where
   | bitXor
   | shl
   | lshr
+  | ashr
   | eq
   | ult
+  | slt
+  | qmul32
   deriving DecidableEq, Repr
 
 /-- Evaluate a binary ALU operation on 64-bit bitvectors. -/
@@ -51,8 +54,11 @@ def evalAluOp (op : RtlAluOp) (a b : BitVec 64) : BitVec 64 :=
   | .bitXor => a ^^^ b
   | .shl    => a <<< (b.toNat % 64)
   | .lshr   => a >>> (b.toNat % 64)
+  | .ashr   => BitVec.sshiftRight a (b.toNat % 64)
   | .eq     => if a == b then 1#64 else 0#64
   | .ult    => if BitVec.ult a b then 1#64 else 0#64
+  | .slt    => if BitVec.slt a b then 1#64 else 0#64
+  | .qmul32 => ((a.signExtend 128 * b.signExtend 128) >>> 32).setWidth 64
 
 /-- Combinational RTL expression over input ports, internal wires, and sequential registers. -/
 inductive RtlExpr where
@@ -304,20 +310,28 @@ def emitAluOpSV : RtlAluOp → String
   | .bitXor => "^"
   | .shl    => "<<"
   | .lshr   => ">>"
+  | .ashr   => ">>>"
   | .eq     => "=="
   | .ult    => "<"
+  | .slt    => "<s"
+  | .qmul32 => "*q32"
 
 /-- Render an `RtlExpr` as a SystemVerilog expression string. -/
 def emitExprSV (inNames : List String) (regNames : List String) : RtlExpr → String
-  | .const v       => s!"64'd{v.toNat}"
-  | .inputPort idx => inNames.getD idx s!"in_{idx}"
-  | .wireRef idx   => s!"w_{idx}"
-  | .regRead idx   => regNames.getD idx s!"r_{idx}"
-  | .alu .eq a b   => s!"({emitExprSV inNames regNames a} == {emitExprSV inNames regNames b} ? 64'd1 : 64'd0)"
-  | .alu .ult a b  => s!"({emitExprSV inNames regNames a} < {emitExprSV inNames regNames b} ? 64'd1 : 64'd0)"
-  | .alu op a b    => s!"({emitExprSV inNames regNames a} {emitAluOpSV op} {emitExprSV inNames regNames b})"
-  | .mux c t f     => s!"(({emitExprSV inNames regNames c} != 64'd0) ? {emitExprSV inNames regNames t} : {emitExprSV inNames regNames f})"
-  | .bitNot a      => s!"(~{emitExprSV inNames regNames a})"
+  | .const v         => s!"64'd{v.toNat}"
+  | .inputPort idx   => inNames.getD idx s!"in_{idx}"
+  | .wireRef idx     => s!"w_{idx}"
+  | .regRead idx     => regNames.getD idx s!"r_{idx}"
+  | .alu .eq a b     => s!"({emitExprSV inNames regNames a} == {emitExprSV inNames regNames b} ? 64'd1 : 64'd0)"
+  | .alu .ult a b    => s!"({emitExprSV inNames regNames a} < {emitExprSV inNames regNames b} ? 64'd1 : 64'd0)"
+  | .alu .slt a b    => s!"($signed({emitExprSV inNames regNames a}) < $signed({emitExprSV inNames regNames b}) ? 64'd1 : 64'd0)"
+  | .alu .shl a b    => s!"({emitExprSV inNames regNames a} << ({emitExprSV inNames regNames b} & 64'd63))"
+  | .alu .lshr a b   => s!"({emitExprSV inNames regNames a} >> ({emitExprSV inNames regNames b} & 64'd63))"
+  | .alu .ashr a b   => s!"64'($signed({emitExprSV inNames regNames a}) >>> ({emitExprSV inNames regNames b} & 64'd63))"
+  | .alu .qmul32 a b => s!"64'((128'($signed({emitExprSV inNames regNames a})) * 128'($signed({emitExprSV inNames regNames b}))) >>> 32)"
+  | .alu op a b      => s!"({emitExprSV inNames regNames a} {emitAluOpSV op} {emitExprSV inNames regNames b})"
+  | .mux c t f       => s!"(({emitExprSV inNames regNames c} != 64'd0) ? {emitExprSV inNames regNames t} : {emitExprSV inNames regNames f})"
+  | .bitNot a        => s!"(~{emitExprSV inNames regNames a})"
 
 /-- Emit a complete, synthesizable SystemVerilog-2012 module directly from an `RtlModule` AST.
 Separates reset-free datapath registers from synchronous-reset control registers into distinct
@@ -366,6 +380,196 @@ def emitModuleSV (m : RtlModule) : String :=
   "\n  end\n" ++
   rfBlock ++ srBlock ++
   "endmodule\n"
+
+/-- Emit synthesizable SystemVerilog-2012 for the 4-stage `obend_macro_dsp48e2` DSP48E2 slice (`A -> M -> P`). -/
+def emitMacroDsp48E2SV : String :=
+  "module obend_macro_dsp48e2 (\n" ++
+  "  input  logic        clk,\n" ++
+  "  input  logic        rst,\n" ++
+  "  input  logic [26:0] a_in,\n" ++
+  "  input  logic [17:0] b_in,\n" ++
+  "  input  logic [47:0] c_in,\n" ++
+  "  output logic [47:0] p_out\n" ++
+  ");\n" ++
+  "  logic [26:0] a1_reg, a2_reg;\n" ++
+  "  logic [17:0] b1_reg, b2_reg;\n" ++
+  "  logic [47:0] c_reg, m_reg, p_reg;\n" ++
+  "  always_ff @(posedge clk) begin\n" ++
+  "    if (rst) begin\n" ++
+  "      a1_reg <= 27'd0; a2_reg <= 27'd0;\n" ++
+  "      b1_reg <= 18'd0; b2_reg <= 18'd0;\n" ++
+  "      c_reg  <= 48'd0; m_reg  <= 48'd0; p_reg <= 48'd0;\n" ++
+  "    end else begin\n" ++
+  "      a1_reg <= a_in;  a2_reg <= a1_reg;\n" ++
+  "      b1_reg <= b_in;  b2_reg <= b1_reg;\n" ++
+  "      c_reg  <= c_in;\n" ++
+  "      m_reg  <= 48'(a2_reg) * 48'(b2_reg);\n" ++
+  "      p_reg  <= m_reg + c_reg;\n" ++
+  "    end\n" ++
+  "  end\n" ++
+  "  assign p_out = p_reg;\n" ++
+  "endmodule\n"
+
+/-- Emit synthesizable SystemVerilog-2012 for the `obend_macro_uram288_bypass` URAM288 macro with RAW forwarding. -/
+def emitMacroUram288BypassSV : String :=
+  "module obend_macro_uram288_bypass (\n" ++
+  "  input  logic        clk,\n" ++
+  "  input  logic        rst,\n" ++
+  "  input  logic        we,\n" ++
+  "  input  logic [11:0] waddr,\n" ++
+  "  input  logic [63:0] wdata,\n" ++
+  "  input  logic [11:0] raddr,\n" ++
+  "  output logic [63:0] rdata\n" ++
+  ");\n" ++
+  "  logic [63:0] mem [0:4095];\n" ++
+  "  logic [63:0] s1_rdata, s2_rdata, oreg_rdata;\n" ++
+  "  logic        bp_s1_valid, bp_s2_valid;\n" ++
+  "  logic [11:0] bp_s1_addr, bp_s2_addr;\n" ++
+  "  logic [63:0] bp_s1_data, bp_s2_data;\n" ++
+  "  always_ff @(posedge clk) begin\n" ++
+  "    if (we) mem[waddr] <= wdata;\n" ++
+  "    s1_rdata   <= mem[raddr];\n" ++
+  "    s2_rdata   <= (bp_s1_valid && (bp_s1_addr == raddr)) ? bp_s1_data : s1_rdata;\n" ++
+  "    oreg_rdata <= (bp_s2_valid && (bp_s2_addr == raddr)) ? bp_s2_data : s2_rdata;\n" ++
+  "    if (rst) begin\n" ++
+  "      bp_s1_valid <= 1'b0; bp_s2_valid <= 1'b0;\n" ++
+  "      bp_s1_addr  <= 12'd0; bp_s2_addr <= 12'd0;\n" ++
+  "      bp_s1_data  <= 64'd0; bp_s2_data <= 64'd0;\n" ++
+  "    end else begin\n" ++
+  "      bp_s1_valid <= we;          bp_s2_valid <= bp_s1_valid;\n" ++
+  "      bp_s1_addr  <= waddr;       bp_s2_addr  <= bp_s1_addr;\n" ++
+  "      bp_s1_data  <= wdata;       bp_s2_data  <= bp_s1_data;\n" ++
+  "    end\n" ++
+  "  end\n" ++
+  "  assign rdata = oreg_rdata;\n" ++
+  "endmodule\n"
+
+/-- Emit synthesizable SystemVerilog-2012 for the `obend_macro_axis_skid` Carloni 2-register AXI4-Stream skid buffer. -/
+def emitMacroAxisSkidSV : String :=
+  "module obend_macro_axis_skid (\n" ++
+  "  input  logic        clk,\n" ++
+  "  input  logic        rst,\n" ++
+  "  input  logic        up_valid,\n" ++
+  "  output logic        up_ready,\n" ++
+  "  input  logic [63:0] up_data,\n" ++
+  "  output logic        dn_valid,\n" ++
+  "  input  logic        dn_ready,\n" ++
+  "  output logic [63:0] dn_data\n" ++
+  ");\n" ++
+  "  logic        main_valid, skid_valid;\n" ++
+  "  logic [63:0] main_data,  skid_data;\n" ++
+  "  assign up_ready = ~skid_valid;\n" ++
+  "  assign dn_valid = main_valid;\n" ++
+  "  assign dn_data  = main_data;\n" ++
+  "  always_ff @(posedge clk) begin\n" ++
+  "    if (rst) begin\n" ++
+  "      main_valid <= 1'b0; skid_valid <= 1'b0;\n" ++
+  "      main_data  <= 64'd0; skid_data <= 64'd0;\n" ++
+  "    end else if (skid_valid) begin\n" ++
+  "      if (dn_ready) begin\n" ++
+  "        main_valid <= 1'b1;\n" ++
+  "        main_data  <= skid_data;\n" ++
+  "        skid_valid <= 1'b0;\n" ++
+  "      end\n" ++
+  "    end else if (main_valid) begin\n" ++
+  "      if (dn_ready) begin\n" ++
+  "        main_valid <= up_valid;\n" ++
+  "        if (up_valid) main_data <= up_data;\n" ++
+  "      end else if (up_valid) begin\n" ++
+  "        skid_valid <= 1'b1;\n" ++
+  "        skid_data  <= up_data;\n" ++
+  "      end\n" ++
+  "    end else if (up_valid) begin\n" ++
+  "      main_valid <= 1'b1;\n" ++
+  "      main_data  <= up_data;\n" ++
+  "    end\n" ++
+  "  end\n" ++
+  "endmodule\n"
+
+/-- Emit synthesizable SystemVerilog-2012 for the `obend_macro_icap_dpr_tile` ICAP Dynamic Partial Reconfiguration controller. -/
+def emitMacroIcapDprTileSV : String :=
+  "module obend_macro_icap_dpr_tile (\n" ++
+  "  input  logic        clk,\n" ++
+  "  input  logic        rst,\n" ++
+  "  input  logic        trigger_reconfig,\n" ++
+  "  input  logic        drain_complete,\n" ++
+  "  input  logic        icap_done,\n" ++
+  "  input  logic [63:0] target_spec_digest,\n" ++
+  "  input  logic [63:0] wire_in,\n" ++
+  "  input  logic [63:0] safe_default,\n" ++
+  "  output logic        decouple_en,\n" ++
+  "  output logic [63:0] active_spec_digest,\n" ++
+  "  output logic [63:0] wire_out\n" ++
+  ");\n" ++
+  "  typedef enum logic [1:0] {\n" ++
+  "    DPR_ACTIVE    = 2'd0,\n" ++
+  "    DPR_DRAINING  = 2'd1,\n" ++
+  "    DPR_SWAPPING  = 2'd2,\n" ++
+  "    DPR_WARMING   = 2'd3\n" ++
+  "  } dpr_phase_t;\n" ++
+  "  dpr_phase_t phase;\n" ++
+  "  always_ff @(posedge clk) begin\n" ++
+  "    if (rst) begin\n" ++
+  "      phase              <= DPR_ACTIVE;\n" ++
+  "      decouple_en        <= 1'b0;\n" ++
+  "      active_spec_digest <= 64'd0;\n" ++
+  "    end else begin\n" ++
+  "      case (phase)\n" ++
+  "        DPR_ACTIVE: if (trigger_reconfig) begin phase <= DPR_DRAINING; decouple_en <= 1'b1; end\n" ++
+  "        DPR_DRAINING: if (drain_complete) begin phase <= DPR_SWAPPING; decouple_en <= 1'b1; end\n" ++
+  "        DPR_SWAPPING: if (icap_done) begin phase <= DPR_WARMING; decouple_en <= 1'b1; active_spec_digest <= target_spec_digest; end\n" ++
+  "        DPR_WARMING: begin phase <= DPR_ACTIVE; decouple_en <= 1'b0; end\n" ++
+  "      endcase\n" ++
+  "    end\n" ++
+  "  end\n" ++
+  "  assign wire_out = decouple_en ? safe_default : wire_in;\n" ++
+  "endmodule\n"
+
+/-- Emit synthesizable SystemVerilog-2012 for the `obend_macro_noc_router_xy` dimension-ordered XY wormhole NoC router. -/
+def emitMacroNocRouterXySV : String :=
+  "module obend_macro_noc_router_xy (\n" ++
+  "  input  logic [7:0]  my_x,\n" ++
+  "  input  logic [7:0]  my_y,\n" ++
+  "  input  logic [7:0]  dst_x,\n" ++
+  "  input  logic [7:0]  dst_y,\n" ++
+  "  output logic [2:0]  route_dir\n" ++
+  ");\n" ++
+  "  always_comb begin\n" ++
+  "    if (dst_x < my_x)      route_dir = 3'd3; // WEST\n" ++
+  "    else if (dst_x > my_x) route_dir = 3'd2; // EAST\n" ++
+  "    else if (dst_y < my_y) route_dir = 3'd1; // SOUTH\n" ++
+  "    else if (dst_y > my_y) route_dir = 3'd0; // NORTH\n" ++
+  "    else                   route_dir = 3'd4; // LOCAL\n" ++
+  "  end\n" ++
+  "endmodule\n"
+
+/-- Emit hierarchical SystemVerilog-2012 containing all hard-IP macro modules (`obend_macro_dsp48e2`,
+`obend_macro_uram288_bypass`, `obend_macro_axis_skid`, `obend_macro_icap_dpr_tile`, `obend_macro_noc_router_xy`)
+followed by the top-level `RtlModule`. -/
+def emitHierarchicalSV (m : RtlModule) : String :=
+  emitMacroDsp48E2SV ++ "\n" ++
+  emitMacroUram288BypassSV ++ "\n" ++
+  emitMacroAxisSkidSV ++ "\n" ++
+  emitMacroIcapDprTileSV ++ "\n" ++
+  emitMacroNocRouterXySV ++ "\n" ++
+  emitModuleSV m
+
+/-- `emitHierarchicalSV m` decomposes into the 5 hard-IP macro modules followed by `emitModuleSV m`,
+and all 5 macro emitters begin with their synthesizable SystemVerilog-2012 `module` headers. -/
+theorem emitHierarchicalSV_nonEmpty_and_has_header (m : RtlModule) :
+    emitHierarchicalSV m =
+      emitMacroDsp48E2SV ++ "\n" ++
+      emitMacroUram288BypassSV ++ "\n" ++
+      emitMacroAxisSkidSV ++ "\n" ++
+      emitMacroIcapDprTileSV ++ "\n" ++
+      emitMacroNocRouterXySV ++ "\n" ++
+      emitModuleSV m ∧
+    ("module obend_macro_dsp48e2".toList.isPrefixOf emitMacroDsp48E2SV.toList) = true ∧
+    ("module obend_macro_uram288_bypass".toList.isPrefixOf emitMacroUram288BypassSV.toList) = true ∧
+    ("module obend_macro_axis_skid".toList.isPrefixOf emitMacroAxisSkidSV.toList) = true ∧
+    ("module obend_macro_icap_dpr_tile".toList.isPrefixOf emitMacroIcapDprTileSV.toList) = true ∧
+    ("module obend_macro_noc_router_xy".toList.isPrefixOf emitMacroNocRouterXySV.toList) = true := by
+  exact ⟨rfl, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 end Obend.Hardware.HDL
 end

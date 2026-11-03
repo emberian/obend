@@ -27,6 +27,8 @@ public import Obend.Hardware.FluidThermal
 public import Obend.Hardware.PowerElectronics
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.OpenHypergraph
+public import Obend.Analysis.EqSatHypergraph
+public import Obend.Tactic.Tooth
 @[expose] public section
 
 namespace Obend.Lower
@@ -34,6 +36,8 @@ open Obend.Core.Term Obend.Core.Ty
 open Obend.Equiv Obend.Leaf
 open Obend.Hardware.HDL Obend.Hardware.Compiler
 open Obend.Hardware.Accelerators
+open Obend.Hardware.OpenHypergraph
+open Obend.Analysis
 
 set_option autoImplicit false
 
@@ -55,8 +59,11 @@ inductive AmdGpuVop64Inst where
   | v_xor_b64     (dst src0 src1 : Nat)
   | v_lshl_b64    (dst src0 src1 : Nat)
   | v_lshr_b64    (dst src0 src1 : Nat)
+  | v_ashr_i64    (dst src0 src1 : Nat)
   | v_cmp_eq_u64  (dst src0 src1 : Nat)
   | v_cmp_lt_u64  (dst src0 src1 : Nat)
+  | v_cmp_lt_i64  (dst src0 src1 : Nat)
+  | v_qmul32_i64  (dst src0 src1 : Nat)
   | v_not_b64     (dst src : Nat)
   | v_cndmask_b64 (dst cond srcTrue srcFalse : Nat)
   deriving Repr, DecidableEq
@@ -70,8 +77,11 @@ inductive AmdGpuVop64Inst where
 - `.bitXor` ↦ `v_xor_b64`
 - `.shl`    ↦ `v_lshl_b64`
 - `.lshr`   ↦ `v_lshr_b64`
+- `.ashr`   ↦ `v_ashr_i64`
 - `.eq`     ↦ `v_cmp_eq_u64`
-- `.ult`    ↦ `v_cmp_lt_u64` -/
+- `.ult`    ↦ `v_cmp_lt_u64`
+- `.slt`    ↦ `v_cmp_lt_i64`
+- `.qmul32` ↦ `v_qmul32_i64` -/
 def compileRtlAluToVop (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop64Inst :=
   match op with
   | .add    => .v_add_u64 dst src0 src1
@@ -82,12 +92,41 @@ def compileRtlAluToVop (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop64Inst :
   | .bitXor => .v_xor_b64 dst src0 src1
   | .shl    => .v_lshl_b64 dst src0 src1
   | .lshr   => .v_lshr_b64 dst src0 src1
+  | .ashr   => .v_ashr_i64 dst src0 src1
   | .eq     => .v_cmp_eq_u64 dst src0 src1
   | .ult    => .v_cmp_lt_u64 dst src0 src1
+  | .slt    => .v_cmp_lt_i64 dst src0 src1
+  | .qmul32 => .v_qmul32_i64 dst src0 src1
+
+/-- Extract the destination VGPR index written by an `AmdGpuVop64Inst`. -/
+def AmdGpuVop64Inst.dstReg : AmdGpuVop64Inst → Nat
+  | .v_mov_b64 dst _         => dst
+  | .v_read_in_b64 dst _     => dst
+  | .v_read_w_b64 dst _      => dst
+  | .v_read_r_b64 dst _      => dst
+  | .v_add_u64 dst _ _       => dst
+  | .v_sub_u64 dst _ _       => dst
+  | .v_mul_lo_u64 dst _ _    => dst
+  | .v_and_b64 dst _ _       => dst
+  | .v_or_b64 dst _ _        => dst
+  | .v_xor_b64 dst _ _       => dst
+  | .v_lshl_b64 dst _ _      => dst
+  | .v_lshr_b64 dst _ _      => dst
+  | .v_ashr_i64 dst _ _      => dst
+  | .v_cmp_eq_u64 dst _ _    => dst
+  | .v_cmp_lt_u64 dst _ _    => dst
+  | .v_cmp_lt_i64 dst _ _    => dst
+  | .v_qmul32_i64 dst _ _    => dst
+  | .v_not_b64 dst _         => dst
+  | .v_cndmask_b64 dst _ _ _ => dst
+
+@[simp] theorem dstReg_compileRtlAluToVop (op : RtlAluOp) (dst s0 s1 : Nat) :
+    (compileRtlAluToVop op dst s0 s1).dstReg = dst := by
+  cases op <;> rfl
 
 /-- Compile any `RtlExpr` into a sequence of faithful 64-bit AMD GPU VOP instructions
-(`List AmdGpuVop64Inst`), preserving every `RtlAluOp` via `compileRtlAluToVop`, lowering
-`.bitNot` to `v_not_b64`, and lowering `.mux` to `v_cndmask_b64`. -/
+(`List AmdGpuVop64Inst`) with monotonically increasing VGPR allocation (`nextReg ↦ (resReg, nextFreeReg, code)`),
+ensuring right subexpressions never clobber left subexpression registers. -/
 def compileRtlExprToAmdGpu (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdGpuVop64Inst
   | .const bv =>
     (nextReg, nextReg + 1, [.v_mov_b64 nextReg bv])
@@ -98,21 +137,26 @@ def compileRtlExprToAmdGpu (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdG
   | .regRead idx =>
     (nextReg, nextReg + 1, [.v_read_r_b64 nextReg idx])
   | .alu op lhs rhs =>
-    let (rL, n1, codeL) := compileRtlExprToAmdGpu nextReg lhs
-    let (rR, n2, codeR) := compileRtlExprToAmdGpu n1 rhs
-    let dst := n2
-    let inst := compileRtlAluToVop op dst rL rR
-    (dst, dst + 1, codeL ++ codeR ++ [inst])
+    let resL := compileRtlExprToAmdGpu nextReg lhs
+    let resR := compileRtlExprToAmdGpu resL.2.1 rhs
+    let dst := resR.2.1
+    let inst := compileRtlAluToVop op dst resL.1 resR.1
+    (dst, dst + 1, resL.2.2 ++ resR.2.2 ++ [inst])
   | .mux cond tBranch fBranch =>
-    let (rC, n1, codeC) := compileRtlExprToAmdGpu nextReg cond
-    let (rT, n2, codeT) := compileRtlExprToAmdGpu n1 tBranch
-    let (rF, n3, codeF) := compileRtlExprToAmdGpu n2 fBranch
-    let dst := n3
-    (dst, dst + 1, codeC ++ codeT ++ codeF ++ [.v_cndmask_b64 dst rC rT rF])
+    let resC := compileRtlExprToAmdGpu nextReg cond
+    let resT := compileRtlExprToAmdGpu resC.2.1 tBranch
+    let resF := compileRtlExprToAmdGpu resT.2.1 fBranch
+    let dst := resF.2.1
+    (dst, dst + 1, resC.2.2 ++ resT.2.2 ++ resF.2.2 ++ [.v_cndmask_b64 dst resC.1 resT.1 resF.1])
   | .bitNot src =>
-    let (rS, n1, codeS) := compileRtlExprToAmdGpu nextReg src
-    let dst := n1
-    (dst, dst + 1, codeS ++ [.v_not_b64 dst rS])
+    let resS := compileRtlExprToAmdGpu nextReg src
+    let dst := resS.2.1
+    (dst, dst + 1, resS.2.2 ++ [.v_not_b64 dst resS.1])
+
+/-- Pair-returning wrapper `(code, resReg)` for `compileRtlExprToAmdGpu` starting at `baseReg`. -/
+def compileRtlExprToAmdGpuAux (baseReg : Nat) (e : RtlExpr) : List AmdGpuVop64Inst × Nat :=
+  let res := compileRtlExprToAmdGpu baseReg e
+  (res.2.2, res.1)
 
 /-- Execute a single 64-bit AMD GPU VOP instruction on a 64-bit VGPR file `vgprs : Nat → BitVec 64`. -/
 def execAmdGpuVop64Inst
@@ -134,8 +178,11 @@ def execAmdGpuVop64Inst
   | .v_xor_b64 dst s0 s1     => writeReg dst (vgprs s0 ^^^ vgprs s1)
   | .v_lshl_b64 dst s0 s1    => writeReg dst (vgprs s0 <<< ((vgprs s1).toNat % 64))
   | .v_lshr_b64 dst s0 s1    => writeReg dst (vgprs s0 >>> ((vgprs s1).toNat % 64))
+  | .v_ashr_i64 dst s0 s1    => writeReg dst (BitVec.sshiftRight (vgprs s0) ((vgprs s1).toNat % 64))
   | .v_cmp_eq_u64 dst s0 s1  => writeReg dst (if vgprs s0 == vgprs s1 then 1#64 else 0#64)
   | .v_cmp_lt_u64 dst s0 s1  => writeReg dst (if BitVec.ult (vgprs s0) (vgprs s1) then 1#64 else 0#64)
+  | .v_cmp_lt_i64 dst s0 s1  => writeReg dst (if BitVec.slt (vgprs s0) (vgprs s1) then 1#64 else 0#64)
+  | .v_qmul32_i64 dst s0 s1  => writeReg dst ((((vgprs s0).signExtend 128 * (vgprs s1).signExtend 128) >>> 32).setWidth 64)
   | .v_not_b64 dst src       => writeReg dst (~~~(vgprs src))
   | .v_cndmask_b64 dst c t f => writeReg dst (if vgprs c != 0#64 then vgprs t else vgprs f)
 
@@ -150,8 +197,203 @@ def runAmdGpuVop64Prog
 /-- Compile an `RtlExpr` via `compileRtlExprToAmdGpu`, execute the resulting 64-bit VOP instruction
 sequence on a zero-initialized VGPR file, and return the result VGPR value. -/
 def evalAmdGpuExpr (inputs wires regs : Nat → BitVec 64) (e : RtlExpr) : BitVec 64 :=
-  let (resReg, _, code) := compileRtlExprToAmdGpu 0 e
-  (runAmdGpuVop64Prog inputs wires regs (fun _ => 0#64) code) resReg
+  let res := compileRtlExprToAmdGpu 0 e
+  (runAmdGpuVop64Prog inputs wires regs (fun _ => 0#64) res.2.2) res.1
+
+@[simp] theorem runAmdGpuVop64Prog_append
+    (inputs wires regs vgprs : Nat → BitVec 64) (p1 p2 : List AmdGpuVop64Inst) :
+    runAmdGpuVop64Prog inputs wires regs vgprs (p1 ++ p2) =
+      runAmdGpuVop64Prog inputs wires regs (runAmdGpuVop64Prog inputs wires regs vgprs p1) p2 := by
+  induction p1 generalizing vgprs with
+  | nil => rfl
+  | cons inst rest ih => exact ih _
+
+theorem execAmdGpuVop64Inst_ne
+    (inputs wires regs vgprs : Nat → BitVec 64) (inst : AmdGpuVop64Inst) (r : Nat)
+    (hne : r ≠ inst.dstReg) :
+    execAmdGpuVop64Inst inputs wires regs vgprs inst r = vgprs r := by
+  have hbeq : (r == inst.dstReg) = false := beq_eq_false_iff_ne.mpr hne
+  cases inst <;> dsimp [execAmdGpuVop64Inst, AmdGpuVop64Inst.dstReg] at hbeq ⊢ <;> rw [hbeq] <;> rfl
+
+theorem execAmdGpuVop64Inst_compileRtlAluToVop_self
+    (inputs wires regs vgprs : Nat → BitVec 64) (op : RtlAluOp) (dst s0 s1 : Nat) :
+    execAmdGpuVop64Inst inputs wires regs vgprs (compileRtlAluToVop op dst s0 s1) dst =
+      evalAluOp op (vgprs s0) (vgprs s1) := by
+  cases op <;> simp [compileRtlAluToVop, execAmdGpuVop64Inst, evalAluOp]
+
+/-- **Register Non-Interference Below `baseReg` (`execAmdGpuProg_preserves_below_baseReg`)**:
+Executing any instruction sequence `prog : List AmdGpuVop64Inst` whose destination registers are
+all `≥ baseReg` preserves every VGPR at index `r < baseReg`! -/
+theorem execAmdGpuProg_preserves_below_baseReg
+    (inputs wires regs vgprs : Nat → BitVec 64)
+    (baseReg : Nat) (prog : List AmdGpuVop64Inst)
+    (hDst : ∀ inst ∈ prog, baseReg ≤ inst.dstReg)
+    (r : Nat) (hr : r < baseReg) :
+    runAmdGpuVop64Prog inputs wires regs vgprs prog r = vgprs r := by
+  induction prog generalizing vgprs with
+  | nil => rfl
+  | cons inst rest ih =>
+    unfold runAmdGpuVop64Prog
+    have hInstGe : baseReg ≤ inst.dstReg := hDst inst List.mem_cons_self
+    have hRest : ∀ i ∈ rest, baseReg ≤ i.dstReg :=
+      fun i hi => hDst i (List.mem_cons_of_mem inst hi)
+    rw [ih (execAmdGpuVop64Inst inputs wires regs vgprs inst) hRest]
+    exact execAmdGpuVop64Inst_ne inputs wires regs vgprs inst r (by omega)
+
+/-- **Monotonic VGPR Allocation Invariant (`compileRtlExprToAmdGpu_reg_bounds`)**:
+For every `baseReg : Nat` and `e : RtlExpr`, `compileRtlExprToAmdGpu baseReg e = (resReg, nextReg, code)`
+allocates `resReg ∈ [baseReg, nextReg)` and every emitted instruction writes only to `[baseReg, nextReg)`. -/
+theorem compileRtlExprToAmdGpu_reg_bounds (baseReg : Nat) (e : RtlExpr) :
+    baseReg ≤ (compileRtlExprToAmdGpu baseReg e).1 ∧
+    (compileRtlExprToAmdGpu baseReg e).1 < (compileRtlExprToAmdGpu baseReg e).2.1 ∧
+    ∀ inst ∈ (compileRtlExprToAmdGpu baseReg e).2.2,
+      baseReg ≤ inst.dstReg ∧ inst.dstReg < (compileRtlExprToAmdGpu baseReg e).2.1 := by
+  induction e generalizing baseReg with
+  | const bv =>
+    simp [compileRtlExprToAmdGpu, AmdGpuVop64Inst.dstReg]
+  | inputPort idx =>
+    simp [compileRtlExprToAmdGpu, AmdGpuVop64Inst.dstReg]
+  | wireRef idx =>
+    simp [compileRtlExprToAmdGpu, AmdGpuVop64Inst.dstReg]
+  | regRead idx =>
+    simp [compileRtlExprToAmdGpu, AmdGpuVop64Inst.dstReg]
+  | bitNot src ihs =>
+    have ⟨hGeS, hLtS, hDstS⟩ := ihs baseReg
+    dsimp [compileRtlExprToAmdGpu]
+    refine ⟨by omega, by omega, ?_⟩
+    intro inst hMem
+    rw [List.mem_append, List.mem_singleton] at hMem
+    rcases hMem with hInS | rfl
+    · have ⟨h1, h2⟩ := hDstS inst hInS
+      exact ⟨h1, by omega⟩
+    · dsimp [AmdGpuVop64Inst.dstReg]
+      omega
+  | alu op lhs rhs ihl ihr =>
+    have ⟨hGeL, hLtL, hDstL⟩ := ihl baseReg
+    have ⟨hGeR, hLtR, hDstR⟩ := ihr (compileRtlExprToAmdGpu baseReg lhs).2.1
+    dsimp [compileRtlExprToAmdGpu]
+    refine ⟨by omega, by omega, ?_⟩
+    intro inst hMem
+    rw [List.mem_append, List.mem_append, List.mem_singleton] at hMem
+    rcases hMem with (hInL | hInR) | rfl
+    · have ⟨h1, h2⟩ := hDstL inst hInL
+      exact ⟨h1, by omega⟩
+    · have ⟨h1, h2⟩ := hDstR inst hInR
+      exact ⟨by omega, by omega⟩
+    · rw [dstReg_compileRtlAluToVop]
+      omega
+  | mux cond tBranch fBranch ihc iht ihf =>
+    have ⟨hGeC, hLtC, hDstC⟩ := ihc baseReg
+    have ⟨hGeT, hLtT, hDstT⟩ := iht (compileRtlExprToAmdGpu baseReg cond).2.1
+    have ⟨hGeF, hLtF, hDstF⟩ := ihf (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1
+    dsimp [compileRtlExprToAmdGpu]
+    refine ⟨by omega, by omega, ?_⟩
+    intro inst hMem
+    rw [List.mem_append, List.mem_append, List.mem_append, List.mem_singleton] at hMem
+    rcases hMem with ((hInC | hInT) | hInF) | rfl
+    · have ⟨h1, h2⟩ := hDstC inst hInC
+      exact ⟨h1, by omega⟩
+    · have ⟨h1, h2⟩ := hDstT inst hInT
+      exact ⟨by omega, by omega⟩
+    · have ⟨h1, h2⟩ := hDstF inst hInF
+      exact ⟨by omega, by omega⟩
+    · dsimp [AmdGpuVop64Inst.dstReg]
+      omega
+
+/-- **Inductive VOP64 Evaluation Soundness at Any `baseReg` (`compileRtlExprToAmdGpu_eval_sound`)**:
+For every `baseReg : Nat`, initial VGPR file `vgprs`, and arbitrarily nested `e : RtlExpr`,
+executing `(compileRtlExprToAmdGpu baseReg e).2.2` stores `evalRtlExpr inputs wires regs e` in
+destination register `(compileRtlExprToAmdGpu baseReg e).1`. -/
+theorem compileRtlExprToAmdGpu_eval_sound
+    (inputs wires regs vgprs : Nat → BitVec 64)
+    (baseReg : Nat) (e : RtlExpr) :
+    runAmdGpuVop64Prog inputs wires regs vgprs
+      (compileRtlExprToAmdGpu baseReg e).2.2
+      (compileRtlExprToAmdGpu baseReg e).1 =
+    evalRtlExpr inputs wires regs e := by
+  induction e generalizing baseReg vgprs with
+  | const bv =>
+    simp [compileRtlExprToAmdGpu, runAmdGpuVop64Prog, execAmdGpuVop64Inst, evalRtlExpr]
+  | inputPort idx =>
+    simp [compileRtlExprToAmdGpu, runAmdGpuVop64Prog, execAmdGpuVop64Inst, evalRtlExpr]
+  | wireRef idx =>
+    simp [compileRtlExprToAmdGpu, runAmdGpuVop64Prog, execAmdGpuVop64Inst, evalRtlExpr]
+  | regRead idx =>
+    simp [compileRtlExprToAmdGpu, runAmdGpuVop64Prog, execAmdGpuVop64Inst, evalRtlExpr]
+  | bitNot src ihs =>
+    dsimp [compileRtlExprToAmdGpu, evalRtlExpr]
+    rw [runAmdGpuVop64Prog_append]
+    dsimp [runAmdGpuVop64Prog, execAmdGpuVop64Inst]
+    simp only [beq_self_eq_true, ↓reduceIte, ihs vgprs baseReg]
+  | alu op lhs rhs ihl ihr =>
+    dsimp [compileRtlExprToAmdGpu, evalRtlExpr]
+    rw [runAmdGpuVop64Prog_append, runAmdGpuVop64Prog_append]
+    dsimp [runAmdGpuVop64Prog]
+    rw [execAmdGpuVop64Inst_compileRtlAluToVop_self]
+    have ⟨_, hLtL, _⟩ := compileRtlExprToAmdGpu_reg_bounds baseReg lhs
+    have ⟨_, _, hDstR⟩ := compileRtlExprToAmdGpu_reg_bounds (compileRtlExprToAmdGpu baseReg lhs).2.1 rhs
+    have hPresL := execAmdGpuProg_preserves_below_baseReg inputs wires regs
+      (runAmdGpuVop64Prog inputs wires regs vgprs (compileRtlExprToAmdGpu baseReg lhs).2.2)
+      (compileRtlExprToAmdGpu baseReg lhs).2.1
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg lhs).2.1 rhs).2.2
+      (fun inst hMem => (hDstR inst hMem).1)
+      (compileRtlExprToAmdGpu baseReg lhs).1
+      hLtL
+    rw [hPresL, ihl vgprs baseReg, ihr _ (compileRtlExprToAmdGpu baseReg lhs).2.1]
+  | mux cond tBranch fBranch ihc iht ihf =>
+    dsimp [compileRtlExprToAmdGpu, evalRtlExpr]
+    rw [runAmdGpuVop64Prog_append, runAmdGpuVop64Prog_append, runAmdGpuVop64Prog_append]
+    dsimp [runAmdGpuVop64Prog, execAmdGpuVop64Inst]
+    simp only [beq_self_eq_true, ↓reduceIte]
+    have ⟨_, hLtC, _⟩ := compileRtlExprToAmdGpu_reg_bounds baseReg cond
+    have ⟨hGeT, hLtT, hDstT⟩ := compileRtlExprToAmdGpu_reg_bounds (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch
+    have ⟨_, _, hDstF⟩ := compileRtlExprToAmdGpu_reg_bounds
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1 fBranch
+    have hPresC_T := execAmdGpuProg_preserves_below_baseReg inputs wires regs
+      (runAmdGpuVop64Prog inputs wires regs vgprs (compileRtlExprToAmdGpu baseReg cond).2.2)
+      (compileRtlExprToAmdGpu baseReg cond).2.1
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.2
+      (fun inst hMem => (hDstT inst hMem).1)
+      (compileRtlExprToAmdGpu baseReg cond).1 hLtC
+    have hPresC_F := execAmdGpuProg_preserves_below_baseReg inputs wires regs
+      (runAmdGpuVop64Prog inputs wires regs
+        (runAmdGpuVop64Prog inputs wires regs vgprs (compileRtlExprToAmdGpu baseReg cond).2.2)
+        (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.2)
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1 fBranch).2.2
+      (fun inst hMem => (hDstF inst hMem).1)
+      (compileRtlExprToAmdGpu baseReg cond).1 (by omega)
+    have hPresT_F := execAmdGpuProg_preserves_below_baseReg inputs wires regs
+      (runAmdGpuVop64Prog inputs wires regs
+        (runAmdGpuVop64Prog inputs wires regs vgprs (compileRtlExprToAmdGpu baseReg cond).2.2)
+        (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.2)
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1 fBranch).2.2
+      (fun inst hMem => (hDstF inst hMem).1)
+      (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).1 hLtT
+    rw [hPresC_F, hPresC_T, hPresT_F,
+        ihc vgprs baseReg,
+        iht _ (compileRtlExprToAmdGpu baseReg cond).2.1,
+        ihf _ (compileRtlExprToAmdGpu (compileRtlExprToAmdGpu baseReg cond).2.1 tBranch).2.1]
+
+/-- **Universal Structural Induction Theorem for Nested `RtlExpr` VOP64 GPU Compilation
+(`evalAmdGpuExpr_nested_sound`)**:
+For EVERY `inputs wires regs : Nat → BitVec 64` and EVERY arbitrarily nested `e : RtlExpr`
+(of any tree depth, combining `.const`, `.inputPort`, `.wireRef`, `.regRead`, `.bitNot`,
+`.alu op lhs rhs`, and `.mux cond tBranch fBranch`), `evalAmdGpuExpr inputs wires regs e`
+evaluates to the exact 64-bit `evalRtlExpr inputs wires regs e` result! -/
+theorem evalAmdGpuExpr_nested_sound
+    (inputs wires regs : Nat → BitVec 64) (e : RtlExpr) :
+    evalAmdGpuExpr inputs wires regs e = evalRtlExpr inputs wires regs e :=
+  compileRtlExprToAmdGpu_eval_sound inputs wires regs (fun _ => 0#64) 0 e
+
+/-- Broken `evalAmdGpuExpr` that reads VGPR `0` instead of `res.1`. -/
+def evalAmdGpuExprBroken (inputs wires regs : Nat → BitVec 64) (e : RtlExpr) : BitVec 64 :=
+  let res := compileRtlExprToAmdGpu 0 e
+  (runAmdGpuVop64Prog inputs wires regs (fun _ => 0#64) res.2.2) 0
+
+#tooth evalAmdGpuExpr_nested_sound by mutation
+  evalAmdGpuExpr := evalAmdGpuExprBroken
 
 /-- **Universal Faithfulness Theorem for All 64-bit GPU VOP ALU Operations & `bitNot`
 (`evalAmdGpuExpr_faithful_all_ops`)**:
@@ -654,6 +896,137 @@ theorem coupled_pde_ad_geometry_6stage_universal_self_acceleration
    catgradOpticRevAd_runs_7,
    fidgetChoiceOctreePrune_runs_8,
    rfl, rfl, rfl⟩
+
+/-! ## 6. E-Graph-Optimized Adjoint `RtlModule` VOP64 Compilation & 6-Stage Nested Adjoint Self-Acceleration -/
+
+/-- Evaluate a `WireAssign` table by compiling every wire's nested `RtlExpr` (including fused `.mac`
+lowered to `.alu .add (.alu .mul x y) z`) into 64-bit AMD GPU `AmdGpuVop64Inst` instructions and
+executing via `evalAmdGpuExpr`. -/
+def evalAmdGpuWireTable
+    (inputs regs : Nat → BitVec 64)
+    (assigns : List WireAssign) : Nat → BitVec 64 :=
+  assigns.foldl
+    (fun (env : Nat → BitVec 64) a =>
+      let v := evalAmdGpuExpr inputs env regs a.expr
+      fun i => if i == a.wireIdx then v else env i)
+    (fun _ => 0#64)
+
+/-- Evaluate all output ports of an `RtlModule` `m` by compiling every internal wire's and output
+port's nested `RtlExpr` to `AmdGpuVop64Inst` and executing on the 64-bit VGPR file (`evalAmdGpuWireTable`). -/
+def evalAmdGpuModuleOutputs
+    (m : RtlModule) (inputs regs : Nat → BitVec 64) : List (String × BitVec 64) :=
+  let wireEnv := evalAmdGpuWireTable inputs regs m.wires
+  m.outputs.map fun o => (o.name, evalAmdGpuExpr inputs wireEnv regs o.expr)
+
+/-- **Universal Multi-Wire Table VOP64 Compilation Soundness (`evalAmdGpuWireTable_sound`)**:
+For every wire assignment table `assigns` and every `inputs regs : Nat → BitVec 64`,
+`evalAmdGpuWireTable inputs regs assigns` equals `evalWireTable inputs regs assigns`. -/
+theorem evalAmdGpuWireTable_sound
+    (inputs regs : Nat → BitVec 64) (assigns : List WireAssign) :
+    evalAmdGpuWireTable inputs regs assigns = evalWireTable inputs regs assigns := by
+  unfold evalAmdGpuWireTable evalWireTable
+  have hStep :
+      (fun (env : Nat → BitVec 64) (a : WireAssign) =>
+        let v := evalAmdGpuExpr inputs env regs a.expr
+        fun i => if i == a.wireIdx then v else env i) =
+      (fun (env : Nat → BitVec 64) (a : WireAssign) =>
+        let v := evalRtlExpr inputs env regs a.expr
+        fun i => if i == a.wireIdx then v else env i) := by
+    funext env a
+    dsimp only
+    rw [evalAmdGpuExpr_nested_sound]
+  rw [hStep]
+
+/-- **Universal Multi-Wire `RtlModule` VOP64 Compilation Soundness (`evalAmdGpuModuleOutputs_sound`)**:
+For EVERY `RtlModule` `m` (with arbitrarily nested `RtlExpr`s across any number of internal wires and outputs)
+and EVERY `inputs regs : Nat → BitVec 64`, `evalAmdGpuModuleOutputs m inputs regs` equals
+`evalModuleOutputs m inputs regs`! -/
+theorem evalAmdGpuModuleOutputs_sound
+    (m : RtlModule) (inputs regs : Nat → BitVec 64) :
+    evalAmdGpuModuleOutputs m inputs regs = evalModuleOutputs m inputs regs := by
+  unfold evalAmdGpuModuleOutputs evalModuleOutputs
+  dsimp only
+  rw [evalAmdGpuWireTable_sound]
+  have hMap :
+      (fun (o : OutputPort) => (o.name, evalAmdGpuExpr inputs (evalWireTable inputs regs m.wires) regs o.expr)) =
+      (fun (o : OutputPort) => (o.name, evalRtlExpr inputs (evalWireTable inputs regs m.wires) regs o.expr)) := by
+    funext o
+    rw [evalAmdGpuExpr_nested_sound]
+  rw [hMap]
+
+/-- `Lean-lite` (`LExpr`) kernel for the nested multi-operator stator electro-thermal adjoint
+current sensitivity $\frac{\partial T_{\text{peak}}}{\partial I}(I) = (I + I) \cdot (w_{\text{tooth}} + \alpha_{\text{ch}})$
+at $(w_{\text{tooth}}, \alpha_{\text{ch}}) = (4, 2)$.
+At $I = 3\,\text{A}$, $\frac{\partial T_{\text{peak}}}{\partial I}(3) = (3 + 3) \cdot (4 + 2) = 36$,
+matching the E-Graph-optimized adjoint `statorCoupledLoss_adjoint_eqSat_sound`! -/
+def statorAdjointCurrentGradLExpr : LExpr :=
+  .lam .natural
+    (.natBin .mul
+      (.natBin .add (.bvar 0) (.bvar 0))
+      (.natBin .add (.lit 4) (.lit 2)))
+
+theorem statorAdjointCurrentGrad_runs_3 :
+    SSteps (.app statorAdjointCurrentGradLExpr (.lit 3)) (.lit 36) := by
+  refine .next (.beta .natural _ (.lit 3)) ?_
+  have hinst :
+      (LExpr.natBin .mul
+        (.natBin .add (.bvar 0) (.bvar 0))
+        (.natBin .add (.lit 4) (.lit 2))).inst (.lit 3) =
+      .natBin .mul
+        (.natBin .add (.lit 3) (.lit 3))
+        (.natBin .add (.lit 4) (.lit 2)) := by
+    simp [LExpr.inst, LExpr.subst, LExpr.single]
+  rw [hinst]
+  refine .next (.binLeft .mul (.natBin .add (.lit 4) (.lit 2)) (.binLit .add 3 3)) ?_
+  refine .next (.binRight .mul 6 (.binLit .add 4 2)) ?_
+  exact .next (.binLit .mul 6 6) (.refl _)
+
+/-- Nested 5-operator `RtlExpr` representing the fused `.mac` reverse-mode cotangent accumulation
+$\frac{\partial T_{\text{peak}}}{\partial I} = I \cdot ((w_{\text{tooth}} + \alpha_{\text{ch}}) \cdot \text{dOut}) + I \cdot ((w_{\text{tooth}} + \alpha_{\text{ch}}) \cdot \text{dOut})$
+from `optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph`. -/
+def nestedMacAdjointExpr : RtlExpr :=
+  .alu .add
+    (.alu .mul (.inputPort 0) (.alu .mul (.alu .add (.inputPort 1) (.inputPort 2)) (.inputPort 13)))
+    (.alu .mul (.inputPort 0) (.alu .mul (.alu .add (.inputPort 1) (.inputPort 2)) (.inputPort 13)))
+
+/-- **6-Stage Reflexive Self-Acceleration of E-Graph-Optimized Adjoint `RtlModule` & Nested `AmdGpuVop64Inst`
+(`eqSat_adjoint_nested_vop64_self_accelerates_6stage`)**:
+Proves end-to-end 6-stage self-acceleration on a nested multi-operator adjoint datapath:
+1. `Lean-lite` `SSteps` on `statorAdjointCurrentGradLExpr` at $I = 3$ evaluates to `36`,
+2. `Obend.Core` `Evaluates` evaluates to `36`,
+3. `Obend.Leaf.Book` `Halts` evaluates to `36`,
+4. Synthesized saturating FPGA RTL (`compileBookToRtlSat`) AND pipelined E-Graph-optimized adjoint
+   `RtlModule` (`compileHypergraphToRtlPipelined` on `optimizeAdjointHypergraph defaultRtlCostModel`),
+5. Compiled 64-bit AMD `CDNA3` `AmdGpuVop64Inst` (`evalCompiledAmdGpuModule m 3 == some 36` AND
+   `evalAmdGpuExpr` on `nestedMacAdjointExpr` = `36#64`), and
+6. E-Graph-saturated adjoint hypergraph evaluation (`statorCoupledLoss_adjoint_eqSat_sound` producing
+   `[95, 36, 14, 7, 4]`), TPU Systolic Array (`runSystolicMacChain 0 [3, 3] [6, 6] = 36`), and
+   FPGA `DSP58` Cascade (`runDsp58Cascade 0 [(3, 6), (3, 6)] = 36`)! -/
+theorem eqSat_adjoint_nested_vop64_self_accelerates_6stage :
+    let C := leanComposition "statorAdjGrad" (lowerT statorAdjointCurrentGradLExpr)
+    let B := emit C
+    SSteps (.app statorAdjointCurrentGradLExpr (.lit 3)) (.lit 36) ∧
+    Evaluates (.app (lowerT statorAdjointCurrentGradLExpr) (.nat 3)) (.nat 36) ∧
+    Halts (.app (.get B.link "statorAdjGrad") (.nat 3)) (.natural 36) ∧
+    (match compileBookToRtlSat "lean_stator_adj_grad_rtl" B with
+     | some m =>
+       checkRtlModule m &&
+       (evalModuleOutputs m (fun _ => 3#64) (fun _ => 0#64) == [("out_statorAdjGrad", 36#64)]) &&
+       (evalCompiledAmdGpuModule m 3 == some 36)
+     | none => false) = true ∧
+    evalAmdGpuExpr
+      (fun u => BitVec.ofInt 64 (statorCoupledLossAdjointEnv 3 4 2 5 1 u))
+      (fun _ => 0#64) (fun _ => 0#64) nestedMacAdjointExpr = 36#64 ∧
+    evalHypergraphComb
+      (optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph)
+      (statorCoupledLossAdjointEnv 3 4 2 5 1) = [95, 36, 14, 7, 4] ∧
+    runSystolicMacChain 0 [3, 3] [6, 6] = 36 ∧
+    runDsp58Cascade 0 [(3, 6), (3, 6)] = 36 := by
+  refine ⟨statorAdjointCurrentGrad_runs_3, ?_, ?_, ?_, rfl, ?_, rfl, rfl⟩
+  · simpa [lowerT] using lower_sound_nat statorAdjointCurrentGrad_runs_3
+  · exact lean_to_book "statorAdjGrad" statorAdjointCurrentGradLExpr 3 36 (by decide +kernel) statorAdjointCurrentGrad_runs_3
+  · decide +kernel
+  · decide +kernel
 
 end Obend.Lower
 end

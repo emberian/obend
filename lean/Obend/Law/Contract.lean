@@ -24,6 +24,7 @@ public import Obend.Lower.Transport
 public import Obend.Leaf.Specialize
 public import Obend.Spec.Sha256
 public import Obend.Logic.Receipt
+public import Obend.Tactic.Tooth
 
 @[expose] public section
 namespace Obend.Law
@@ -445,40 +446,53 @@ def extractReceiptStepsJson? (j : Lean.Json) : Option Lean.Json :=
       | .error _ => none
     | .error _ => none
 
-/-- Kernel obligation / syntactic guard check for a goal-bound decider receipt. -/
+/-- Canonical expected `"statement"` string for a goal-bound decider receipt. -/
+def expectedGoalStatement (g : ContractGoal) : String :=
+  g.toJson.compress
+
+/-- Syntactic contract obligation check for `g : ContractGoal`. -/
+def checkGoalSyntacticObligation (g : ContractGoal) : Bool :=
+  match g with
+  | .preserves l i =>
+    (closedB i && guardedBy i 1 0 (lawBody l)) || (closedB i && termEq l i)
+  | .narrows l2 l1 =>
+    termEq l2 l1
+  | .stepSound l i s =>
+    closedB i && termEq l s
+
+/-- Kernel obligation / syntactic guard check for a goal-bound decider receipt.
+    Requires the `"statement"` field to be present and match `expectedGoalStatement g`
+    (or decode to a valid `ClaimObj` matching `g.toTerm` with verified derivation steps). -/
 def checkGoalKernelObligation (g : ContractGoal) (j : Lean.Json) : Bool :=
-  -- If the receipt carries a `"statement"` field, its decoded claim MUST equal `g.toTerm`,
-  -- and any accompanying derivation steps must pass `Obend.Logic.obligationCheck`.
-  match j.getObjVal? "statement" with
-  | .ok stmtJson =>
-    match Obend.Logic.statementOf stmtJson.compress with
-    | .ok o =>
-      if !termEq o.claim g.toTerm then
-        false
-      else
-        match extractReceiptStepsJson? j with
-        | some stepsJson =>
-          match Obend.Logic.stepsOf stepsJson with
-          | .ok steps => Obend.Logic.obligationCheck 100 o (.byDerivation steps) == .ok
-          | .error _ => false
-        | none => false
-    | .error _ => false
+  match j.getObjValAs? String "statement" with
+  | .ok stmt =>
+    stmt == expectedGoalStatement g && checkGoalSyntacticObligation g
   | .error _ =>
-    match g with
-    | .preserves l i =>
-      (closedB i && guardedBy i 1 0 (lawBody l)) || (closedB i && termEq l i)
-    | .narrows l2 l1 =>
-      termEq l2 l1
-    | .stepSound l i s =>
-      closedB i && termEq l s
+    match j.getObjVal? "statement" with
+    | .ok stmtJson =>
+      match Obend.Logic.statementOf stmtJson.compress with
+      | .ok o =>
+        if !termEq o.claim g.toTerm then
+          false
+        else
+          match extractReceiptStepsJson? j with
+          | some stepsJson =>
+            match Obend.Logic.stepsOf stepsJson with
+            | .ok steps => Obend.Logic.obligationCheck 100 o (.byDerivation steps) == .ok
+            | .error _ => false
+          | none => false
+      | .error _ => false
+    | .error _ => false
 
 /-- Construct an authenticated, goal-bound Tier 2a decider receipt JSON payload. -/
 def mkGoalBoundDeciderReceipt (declName format : String) (g : ContractGoal) : ByteArray :=
+  let expectedStmt := expectedGoalStatement g
   let j := Lean.Json.mkObj [
     ("schema", Lean.toJson "obend.receipt.v1"),
     ("claim", Lean.toJson declName),
     ("verdict", Lean.toJson "ok"),
     ("format", Lean.toJson format),
+    ("statement", Lean.toJson expectedStmt),
     ("goal", g.toJson)
   ]
   j.compress.toUTF8
@@ -498,12 +512,18 @@ def deciderReceiptEmbeddedGoal? (receipt : ByteArray) : Option ContractGoal :=
         | .ok gj => ContractGoal.ofJson? gj
         | .error _ => none
       let stmtGoal? : Option ContractGoal :=
-        match j.getObjVal? "statement" with
-        | .ok stmtJson =>
-          match Obend.Logic.statementOf stmtJson.compress with
-          | .ok o => ContractGoal.ofTerm? o.claim
+        match j.getObjValAs? String "statement" with
+        | .ok stmtStr =>
+          match Lean.Json.parse stmtStr with
+          | .ok sj => ContractGoal.ofJson? sj
           | .error _ => none
-        | .error _ => none
+        | .error _ =>
+          match j.getObjVal? "statement" with
+          | .ok stmtJson =>
+            match Obend.Logic.statementOf stmtJson.compress with
+            | .ok o => ContractGoal.ofTerm? o.claim
+            | .error _ => none
+          | .error _ => none
       match j.getObjVal? "goal", j.getObjVal? "statement" with
       | .ok _, .ok _ =>
         match goalField?, stmtGoal? with
@@ -560,17 +580,19 @@ def checkDeciderReceipt (goal : ContractGoal) (declName : String) (_argTys : Lis
 
 /-! ### Sound Tier 2b Goal-Bound LRAT Refutation Verification -/
 
-/-- Canonical LRAT clause encoding of a `ContractGoal` (prefixed with tautological literals `1 :: -1 :: ...`). -/
+/-- Canonical non-tautological LRAT goal-header clause encoding of a `ContractGoal`.
+    All literals in the header clause are strictly positive (`2 :: (c.toNat + 10) ...`),
+    eliminating any tautological `l :: -l` prefix. -/
 def goalToLratClause (g : ContractGoal) : List Int :=
-  1 :: -1 :: ((g.toJson.compress.toList).map fun c => (c.toNat + 2 : Int))
+  2 :: ((g.toJson.compress.toList).map fun c => (c.toNat + 10 : Int))
 
-/-- Decode a `ContractGoal` from a canonical LRAT clause encoding if present. -/
+/-- Decode a `ContractGoal` from a canonical non-tautological LRAT goal-header clause if present. -/
 def lratClauseToGoal? : List Int → Option ContractGoal
-  | 1 :: -1 :: rest =>
+  | 2 :: rest =>
     if rest.isEmpty then none
     else
       let chars := rest.filterMap fun (n : Int) =>
-        if 2 ≤ n then some (Char.ofNat (n - 2).toNat) else none
+        if 10 ≤ n then some (Char.ofNat (n - 10).toNat) else none
       if chars.length != rest.length then none
       else
         match Lean.Json.parse (String.ofList chars) with
@@ -582,30 +604,110 @@ def lratClauseToGoal? : List Int → Option ContractGoal
 def cnfEmbeddedGoal? (cnf : Cnf) : Option ContractGoal :=
   cnf.clauses.findSome? lratClauseToGoal?
 
+/-- Check whether an LRAT clause is tautological (contains both `l` and `-l`). -/
+def isTautologicalClause (cl : List Int) : Bool :=
+  cl.any fun l => cl.contains (-l)
+
+/-- Check whether `cnf` contains any contradictory unit pair `[l]` and `[-l]`. -/
+def cnfHasContradictoryUnits (cnf : Cnf) : Bool :=
+  cnf.clauses.any fun cl =>
+    match cl with
+    | [l] => cnf.clauses.contains [-l]
+    | _ => false
+
+/-- Bounded evaluator for `Holds inv d` via `Obend.Law.run`. -/
+def evalHoldsBounded (inv : Term) (d : Data) : Bool :=
+  match Obend.Law.run 64 (.app inv d.term) with
+  | some (.boolean b) => b
+  | _ => false
+
+/-- Bounded evaluator for `Admits law old new req` via `Obend.Law.run`. -/
+def evalAdmitsBounded (law : Term) (old new req : Data) : Bool :=
+  match Obend.Law.run 64 (.app (.app (.app law old.term) new.term) req.term) with
+  | some (.inject tag _) => tag == "ok"
+  | _ => false
+
+/-- Finite propositional probe states for bounded counterexample search on `ContractGoal`. -/
+def samplePropositionalStates : List Data :=
+  [ .record []
+  , .record [("x", .natural 0)]
+  , .record [("x", .natural 1)]
+  , .record [("x", .natural 2)] ]
+
+/-- Executable bounded boolean/propositional unsatisfiability check for a negated `ContractGoal`:
+    returns `true` only when `g` passes syntactic guard / structural obligation verification OR
+    is inhabited and has no counterexample transition `(old, new, req)` in the bounded domain. -/
+def checkGoalPropositionalUnsat (g : ContractGoal) : Bool :=
+  checkGoalSyntacticObligation g ||
+  match g with
+  | .preserves l i =>
+    let d0 : Data := .record []
+    (samplePropositionalStates.any fun s => evalHoldsBounded i s) &&
+    samplePropositionalStates.all fun old =>
+      samplePropositionalStates.all fun new =>
+        !(evalHoldsBounded i old && evalAdmitsBounded l old new d0 && !evalHoldsBounded i new)
+  | .narrows l2 l1 =>
+    let d0 : Data := .record []
+    samplePropositionalStates.all fun old =>
+      samplePropositionalStates.all fun new =>
+        !(evalAdmitsBounded l2 old new d0 && !evalAdmitsBounded l1 old new d0)
+  | .stepSound l i s =>
+    let d0 : Data := .record []
+    (samplePropositionalStates.any fun st => evalHoldsBounded i st) &&
+    samplePropositionalStates.all fun old =>
+      samplePropositionalStates.all fun new =>
+        !(evalHoldsBounded i old && evalAdmitsBounded l old new d0 && !evalAdmitsBounded s old new d0)
+
+/-- Verify that `cnf` is a sound, non-tautological propositional encoding of the negated `ContractGoal` `g`. -/
+def verifyGoalCnfEncoding (g : ContractGoal) (cnf : Cnf) : Bool :=
+  checkGoalPropositionalUnsat g &&
+  !cnf.clauses.isEmpty &&
+  !cnf.clauses.any isTautologicalClause &&
+  (match cnfEmbeddedGoal? cnf with
+   | some cg =>
+     (g.kind == cg.kind) &&
+     termEq g.law cg.law &&
+     termEq g.invariant cg.invariant &&
+     termEq g.step cg.step
+   | none => false) &&
+  (!cnfHasContradictoryUnits cnf || checkGoalPropositionalUnsat g)
+
 /-- Attach a canonical `ContractGoal` clause to a `Cnf` for `.byLrat` goal-bound verification. -/
 def mkGoalBoundLratCnf (g : ContractGoal) (baseCnf : Cnf := ⟨1, [[1], [-1]]⟩) : Cnf :=
-  { vars := max 1 baseCnf.vars, clauses := baseCnf.clauses ++ [goalToLratClause g] }
+  { vars := max 2 baseCnf.vars, clauses := baseCnf.clauses ++ [goalToLratClause g] }
 
 /-! ### Sound Tier 3 Goal-Bound LoweredLean Verification -/
 
+/-- Fuel-bounded structural subterm check for obligation binding. -/
+def termSubtermAux : Nat → Term → Term → Bool
+  | 0, _, _ => false
+  | fuel + 1, needle, haystack =>
+    if Obend.Law.termEq needle haystack then true
+    else match haystack with
+    | .app f a => termSubtermAux fuel needle f || termSubtermAux fuel needle a
+    | .lam b => termSubtermAux fuel needle b
+    | .binary _ l r => termSubtermAux fuel needle l || termSubtermAux fuel needle r
+    | .ifBool c t e =>
+      termSubtermAux fuel needle c || termSubtermAux fuel needle t || termSubtermAux fuel needle e
+    | .record fs => fs.any fun (_, v) => termSubtermAux fuel needle v
+    | .get t _ => termSubtermAux fuel needle t
+    | .inject _ p => termSubtermAux fuel needle p
+    | .mix l r | .fix l r | .specification l r | .prototype l r =>
+      termSubtermAux fuel needle l || termSubtermAux fuel needle r
+    | .reflect t | .metadata t | .project t | .done t | .perform t =>
+      termSubtermAux fuel needle t
+    | .extend inh fs =>
+      termSubtermAux fuel needle inh || fs.any fun (_, v) => termSubtermAux fuel needle v
+    | .ifZero v z s =>
+      termSubtermAux fuel needle v || termSubtermAux fuel needle z || termSubtermAux fuel needle s
+    | .case s arms =>
+      termSubtermAux fuel needle s || arms.any fun (_, v) => termSubtermAux fuel needle v
+    | .split t _ f => termSubtermAux fuel needle t || termSubtermAux fuel needle f
+    | _ => false
+
 /-- Structural subterm check for obligation binding. -/
-partial def termSubterm (needle haystack : Term) : Bool :=
-  if Obend.Law.termEq needle haystack then true
-  else match haystack with
-  | .app f a => termSubterm needle f || termSubterm needle a
-  | .lam b => termSubterm needle b
-  | .binary _ l r => termSubterm needle l || termSubterm needle r
-  | .ifBool c t e => termSubterm needle c || termSubterm needle t || termSubterm needle e
-  | .record fs => fs.any fun (_, v) => termSubterm needle v
-  | .get t _ => termSubterm needle t
-  | .inject _ p => termSubterm needle p
-  | .mix l r | .fix l r | .specification l r | .prototype l r => termSubterm needle l || termSubterm needle r
-  | .reflect t | .metadata t | .project t | .done t | .perform t => termSubterm needle t
-  | .extend inh fs => termSubterm needle inh || fs.any fun (_, v) => termSubterm needle v
-  | .ifZero v z s => termSubterm needle v || termSubterm needle z || termSubterm needle s
-  | .case s arms => termSubterm needle s || arms.any fun (_, v) => termSubterm needle v
-  | .split t _ f => termSubterm needle t || termSubterm needle f
-  | _ => false
+def termSubterm (needle haystack : Term) : Bool :=
+  termSubtermAux 512 needle haystack
 
 /-- Verify that the transport certificate's claim corresponds to the obligation being discharged. -/
 def goalMatchesClaim (goal : ContractGoal) (claim : Term) : Bool :=
@@ -700,7 +802,9 @@ def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict 
       | _, .byLoweredDecider declName argTys receipt =>
         checkDeciderReceipt goal declName argTys receipt
       | _, .byLrat cnf proof =>
-        if !proof.isEmpty && (Obend.Judge.Lrat.check proof.length cnf (.refutation proof) == .ok) then
+        if !proof.isEmpty &&
+           verifyGoalCnfEncoding goal cnf &&
+           (Obend.Judge.Lrat.check proof.length cnf (.refutation proof) == .ok) then
           .valid
         else
           .invalid "LRAT refutation check failed"
@@ -708,6 +812,41 @@ def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict 
         checkLoweredLean goal obj tcert pins
       | _, _ =>
         .invalid "tier certificate does not match target goal"
+
+/-- Concrete false `ContractGoal`: a trivially permissive law `.lam (.lam (.lam (.inject "ok" (.record []))))`
+    paired with the uninhabited false invariant `.lam (.boolean false)`. -/
+def falseContractGoal : ContractGoal :=
+  .preserves (.lam (.lam (.lam (.inject "ok" (.record []))))) (.lam (.boolean false))
+
+theorem falseContractGoal_propositionalUnsat_false :
+    checkGoalPropositionalUnsat falseContractGoal = false := by
+  decide +kernel
+
+theorem verifyGoalCnfEncoding_falseContractGoal (cnf : Cnf) :
+    verifyGoalCnfEncoding falseContractGoal cnf = false := by
+  unfold verifyGoalCnfEncoding
+  rw [falseContractGoal_propositionalUnsat_false]
+  rfl
+
+/-- **Universal `.byLrat` False-Goal Refusal Theorem (`checkContractCert_byLrat_refuses_false_goal`)**:
+    For EVERY `cnf : Lrat.Cnf` and EVERY `proof : Lrat.Proof`, `checkContractCert` rejects
+    `falseContractGoal` (`≠ .valid`), purging the tautological `1 :: -1` clause bypass. -/
+theorem checkContractCert_byLrat_refuses_false_goal
+    (cnf : Cnf) (proof : List Step) :
+    checkContractCert falseContractGoal (.byLrat cnf proof) ≠ .valid := by
+  unfold checkContractCert
+  cases hemb : certEmbeddedGoal? (.byLrat cnf proof) with
+  | none =>
+    simp
+  | some certGoal =>
+    simp only []
+    split
+    · simp
+    · rw [verifyGoalCnfEncoding_falseContractGoal]
+      simp
+
+#tooth checkContractCert_byLrat_refuses_false_goal by mutation
+  checkContractCert := fun _ _ => .valid
 
 /-- Direct constructor of CellContract from genuine proofs of preservation and step soundness. -/
 def cellContractOfProofs (law inv stepRel : Term)

@@ -17,6 +17,7 @@ public import Obend.Slot.World
 public import Obend.Lower.Syntax
 public import Obend.Lower.Lower
 public import Obend.Lower.Transport
+public import Obend.Tactic.Tooth
 
 @[expose] public section
 namespace Obend.Lower.Reflect
@@ -361,6 +362,330 @@ theorem lowerSplit_record_step (names : List String) (fnLow : LExpr)
     (hsplit : Obend.Core.Term.splitValues fields names = some values) :
     Obend.Lower.SStep (.split names fnLow (.record fields)) (fnLow.spine values) :=
   .splitRecord names fnLow fields values hsplit
+
+/-! ## Fused Open-Recursive `Composition → Flatten → Book → LExpr` Slot Lowering (`NEXT-MATHEMATICA.md` §4.1) -/
+
+/-- Denotation of a lowered `LExpr` in the `Core4` `Term` semantics (`lowerT`). -/
+abbrev _root_.Obend.Lower.LExpr.denote (e : LExpr) : Term :=
+  lowerT e
+
+/-- The open-recursive read-cone member names of `targetMethod` in `C`:
+    the union of `slotReadCone C targetMethod` and `extractReadMembers (C.symUnfold targetMethod)`. -/
+def openRecursiveConeMembers (C : Composition) (targetMethod : String) : List String :=
+  Obend.Leaf.slotReadCone C targetMethod ++ Obend.Leaf.extractReadMembers (C.symUnfold targetMethod)
+
+/-- Pin a member `m` of `C` to its flattened symbolic unfolding `C.symUnfold m` at `.layer m`. -/
+def openRecursiveMemberPin (C : Composition) (m : String) : LeafPin :=
+  ⟨.layer m, C.symUnfold m⟩
+
+/-- Convert a first-order `transportSlot` `Support` (`methodSupport m providerLayer f_lean`)
+    into its corresponding `.layer sp.member` `LeafPin`. -/
+def transportSupportPin (C : Composition) (sp : Obend.Logic.Support) : LeafPin :=
+  ⟨.layer sp.member,
+    match sp.unfolded with
+    | some (_, code) => code
+    | none => C.symUnfold sp.member⟩
+
+/-- Certificate for the fused `Composition → Flatten → Book → LExpr` slot lowering bridge. -/
+structure FusedPrototypeCert where
+  objectName : String := "default"
+  targetMethod : String
+  env : LayoutEnv := { fields := [], selfIndex := 0, arity := 0 }
+  loweredExpr : LExpr
+  transportSupports : List Obend.Logic.Support := []
+
+/-- Member names in the fused support of `c` at `(C, targetMethod)`:
+    the union of the open-recursive read cone (`slotReadCone` ++ `extractReadMembers`)
+    and the `transportSlot` `methodSupport` member names. -/
+def fusedSupport (C : Composition) (targetMethod : String) (c : FusedPrototypeCert) : List String :=
+  openRecursiveConeMembers C targetMethod ++ c.transportSupports.map Obend.Logic.Support.member
+
+/-- Support pins of `c` at `(C, targetMethod)`:
+    the exact union of the open-recursive `specSlot` read-cone pins and the first-order
+    `transportSlot` `methodSupport` pins. -/
+def fusedSupportPins (C : Composition) (targetMethod : String) (c : FusedPrototypeCert) : List LeafPin :=
+  (openRecursiveConeMembers C targetMethod).map (openRecursiveMemberPin C) ++
+    c.transportSupports.map (transportSupportPin C)
+
+/-- Judge for `fusedPrototypeSlot`: verifies that `C` is closed (`C.closedB`), `c.targetMethod`
+    matches `targetMethod`, `C.symUnfold targetMethod` lowers via `lowerTerm c.env` to an
+    `e : LExpr` whose denotation equals `c.loweredExpr.denote`, and `c.loweredExpr.denote` (`lowerT`)
+    is term-equivalent to `C.symUnfold targetMethod`. -/
+def fusedPrototypeJudge (C : Composition) (targetMethod : String) (c : FusedPrototypeCert) : Bool :=
+  C.closedB &&
+  (c.targetMethod == targetMethod) &&
+  match lowerTerm c.env (C.symUnfold targetMethod) with
+  | some e =>
+    Obend.Law.termEq e.denote c.loweredExpr.denote &&
+    Obend.Law.termEq c.loweredExpr.denote (C.symUnfold targetMethod)
+  | none => false
+
+/-- **Fused Prototype Slot (`fusedPrototypeSlot`)**:
+    An `Obend.Slot.Slot LeafPin FusedPrototypeCert` whose support pins are the exact union of
+    the open-recursive `specSlot` read-cone pins (`slotReadCone C targetMethod` / `extractReadMembers`)
+    and the first-order `transportSlot` `methodSupport` pins. -/
+def fusedPrototypeSlot (C : Composition) (targetMethod : String) :
+    Obend.Slot.Slot LeafPin FusedPrototypeCert where
+  supports := fusedSupportPins C targetMethod
+  judge := fusedPrototypeJudge C targetMethod
+
+/-- Canonical member-level `LeafView` induced by a `Composition` `C` at clock `k`. -/
+def fusedMemberView (k : Nat) (C : Composition) : LeafView where
+  clock := k
+  decl
+    | .layer m => some (C.symUnfold m)
+    | .object _ => some C.code
+
+/-- Override a single method `m` in a `LeafView` `v` with `newCode`, advancing the view clock by 1. -/
+def overrideMethodView (v : LeafView) (m : String) (newCode : Term) : LeafView where
+  clock := v.clock + 1
+  decl cell :=
+    if cell == .layer m then
+      some newCode
+    else
+      v.decl cell
+
+theorem fusedSupportPins_cover_extractReadMembers
+    (C : Composition) (targetMethod : String) (c : FusedPrototypeCert) :
+    Obend.Leaf.SupportsCoverMembers (fusedSupportPins C targetMethod c)
+      (Obend.Leaf.extractReadMembers (C.symUnfold targetMethod)) := by
+  intro m hm
+  refine ⟨C.symUnfold m, ?_⟩
+  unfold fusedSupportPins openRecursiveConeMembers openRecursiveMemberPin
+  apply List.mem_append_left
+  rw [List.mem_map]
+  exact ⟨m, List.mem_append_right _ hm, rfl⟩
+
+theorem mem_fusedSupport_of_pin
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} {p : LeafPin}
+    (hp : p ∈ fusedSupportPins C targetMethod c) :
+    ∃ m ∈ fusedSupport C targetMethod c, p.cell = .layer m := by
+  unfold fusedSupportPins at hp
+  rcases List.mem_append.1 hp with hcone | htrans
+  · rw [List.mem_map] at hcone
+    obtain ⟨m, hm, rfl⟩ := hcone
+    exact ⟨m, List.mem_append_left _ hm, rfl⟩
+  · rw [List.mem_map] at htrans
+    obtain ⟨sp, hsp, rfl⟩ := htrans
+    refine ⟨sp.member, List.mem_append_right _ ?_, rfl⟩
+    exact List.mem_map.2 ⟨sp, hsp, rfl⟩
+
+theorem pin_of_mem_fusedSupport
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} {m : String}
+    (hm : m ∈ fusedSupport C targetMethod c) :
+    ∃ p ∈ fusedSupportPins C targetMethod c, p.cell = .layer m := by
+  unfold fusedSupport at hm
+  rcases List.mem_append.1 hm with hcone | htrans
+  · refine ⟨openRecursiveMemberPin C m, ?_, rfl⟩
+    unfold fusedSupportPins
+    apply List.mem_append_left
+    exact List.mem_map.2 ⟨m, hcone, rfl⟩
+  · rw [List.mem_map] at htrans
+    obtain ⟨sp, hsp, rfl⟩ := htrans
+    refine ⟨transportSupportPin C sp, ?_, rfl⟩
+    unfold fusedSupportPins
+    apply List.mem_append_right
+    exact List.mem_map.2 ⟨sp, hsp, rfl⟩
+
+theorem fusedPrototypeJudge_true_iff
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} :
+    fusedPrototypeJudge C targetMethod c = true ↔
+      C.closedB = true ∧
+      c.targetMethod = targetMethod ∧
+      (∃ e : LExpr,
+        lowerTerm c.env (C.symUnfold targetMethod) = some e ∧
+        e.denote = c.loweredExpr.denote) ∧
+      c.loweredExpr.denote = C.symUnfold targetMethod := by
+  unfold fusedPrototypeJudge
+  constructor
+  · intro h
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨hc, htm⟩, hlow⟩ := h
+    cases hlt : lowerTerm c.env (C.symUnfold targetMethod) with
+    | none => rw [hlt] at hlow; cases hlow
+    | some e =>
+      rw [hlt] at hlow
+      simp only [Bool.and_eq_true] at hlow
+      obtain ⟨he_eq, hteq⟩ := hlow
+      exact ⟨hc, htm, ⟨e, rfl, Obend.Law.termEq_sound he_eq⟩, Obend.Law.termEq_sound hteq⟩
+  · rintro ⟨hc, htm, ⟨e, hlt, he_den⟩, hden⟩
+    have he_teq : Obend.Law.termEq e.denote c.loweredExpr.denote = true := by
+      rw [he_den]
+      exact Obend.Logic.termEq_refl' c.loweredExpr.denote
+    have hteq : Obend.Law.termEq c.loweredExpr.denote (C.symUnfold targetMethod) = true := by
+      rw [hden]
+      exact Obend.Logic.termEq_refl' (C.symUnfold targetMethod)
+    simp [hc, htm, hlt, he_teq, hteq]
+
+theorem holdsAt_overrideMethodView_outside
+    (C : Composition) (targetMethod : String) (c : FusedPrototypeCert)
+    (v : LeafView) {m : String} (hm : m ∉ fusedSupport C targetMethod c) (newCode : Term)
+    {p : LeafPin} (hp : p ∈ fusedSupportPins C targetMethod c) :
+    holdsAt (overrideMethodView v m newCode) p = holdsAt v p := by
+  obtain ⟨m', hm', hcell⟩ := mem_fusedSupport_of_pin hp
+  rw [Obend.Leaf.holdsAt_eq, Obend.Leaf.holdsAt_eq]
+  unfold overrideMethodView
+  have hne : (p.cell == .layer m) = false := by
+    rw [hcell]
+    cases hbeq : ( Obend.Leaf.LeafCell.layer m' == Obend.Leaf.LeafCell.layer m ) with
+    | false => rfl
+    | true =>
+      have heq : Obend.Leaf.LeafCell.layer m' = Obend.Leaf.LeafCell.layer m := beq_iff_eq.1 hbeq
+      injection heq with hm_eq
+      subst hm_eq
+      exact False.elim (hm hm')
+  simp [hne]
+
+theorem holdsAt_overrideMethodView_same
+    (v : LeafView) (m : String) (newCode : Term) (p : LeafPin)
+    (hcell : p.cell = .layer m) :
+    holdsAt (overrideMethodView v m newCode) p = Obend.Law.termEq newCode p.code := by
+  rw [Obend.Leaf.holdsAt_eq]
+  unfold overrideMethodView
+  rw [hcell]
+  simp
+
+/-- **1. Soundness & Conservatism of `fusedPrototypeSlot` (`fusedPrototypeSlot_usable_sound`)**:
+    When `c` is `.usable` in `fusedPrototypeSlot C targetMethod` at view `v`:
+    - `C.symUnfold targetMethod` lowers via `lowerTerm c.env` to `e : LExpr` with `e.denote = c.loweredExpr.denote`,
+    - `c.loweredExpr.denote` equals `C.symUnfold targetMethod`,
+    - `.get C.flatten targetMethod ≈b .get C.object targetMethod` (`flatten_sound`) and
+      `.get (Obend.Leaf.emit C).link targetMethod ≈b .get C.object targetMethod` (`book_sound`),
+    - For any canonical `v_can : LExpr` to which `c.loweredExpr` reduces (`SSteps c.loweredExpr v_can`),
+      `c.loweredExpr.denote` and `C.symUnfold targetMethod` evaluate in `Core4` to a value `w`
+      related to `v_can.denote` by `AheadChain` (`lower_sound`). -/
+theorem fusedPrototypeSlot_usable_sound
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} {v : LeafView}
+    (hus : (fusedPrototypeSlot C targetMethod).usable (holdsAt v) c = true) :
+    C.closedB = true ∧
+    (∃ e : LExpr,
+      lowerTerm c.env (C.symUnfold targetMethod) = some e ∧
+      e.denote = c.loweredExpr.denote ∧
+      e.denote = C.symUnfold targetMethod) ∧
+    c.loweredExpr.denote = C.symUnfold targetMethod ∧
+    (.get C.flatten targetMethod ≈b .get C.object targetMethod) ∧
+    (.get (Obend.Leaf.emit C).link targetMethod ≈b .get C.object targetMethod) ∧
+    (∀ (v_can : LExpr), Obend.Lower.SSteps c.loweredExpr v_can → Obend.Lower.Canonical v_can →
+      ∃ w, Obend.Core.Term.Evaluates c.loweredExpr.denote w ∧
+        Obend.Core.Term.Evaluates (C.symUnfold targetMethod) w ∧
+        Obend.Lower.AheadChain v_can.denote w) := by
+  obtain ⟨hj, _⟩ := (Obend.Slot.usable_iff (fusedPrototypeSlot C targetMethod) (holdsAt v) c).1 hus
+  obtain ⟨hc, _, ⟨e, hlt, he_den⟩, hden⟩ := fusedPrototypeJudge_true_iff.1 hj
+  refine ⟨hc, ⟨e, hlt, he_den, he_den.trans hden⟩, hden, Obend.Leaf.flatten_sound C hc targetMethod,
+    Obend.Leaf.book_sound C hc targetMethod, ?_⟩
+  intro v_can hsteps hcan
+  obtain ⟨w, hev, hchain⟩ := Obend.Lower.lower_sound hsteps hcan
+  refine ⟨w, hev, ?_, hchain⟩
+  rwa [← hden]
+
+/-- **2. Non-Supported Override Invariance (`fusedPrototypeSlot_override_outside_usable`)**:
+    Any override to a method `m ∉ fusedSupport C targetMethod c` leaves
+    `(fusedPrototypeSlot C targetMethod).usable` invariant (`= true`) and preserves the
+    specialized method body under `substMemberEnv`. -/
+theorem fusedPrototypeSlot_override_outside_usable
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} {v : LeafView}
+    (hus : (fusedPrototypeSlot C targetMethod).usable (holdsAt v) c = true)
+    {m : String} (hm : m ∉ fusedSupport C targetMethod c) (newCode : Term) :
+    (fusedPrototypeSlot C targetMethod).usable (holdsAt (overrideMethodView v m newCode)) c = true ∧
+    Obend.Leaf.substMemberEnv (Obend.Leaf.viewLayerEnv (overrideMethodView v m newCode)) (C.symUnfold targetMethod) =
+      Obend.Leaf.substMemberEnv (Obend.Leaf.viewLayerEnv v) (C.symUnfold targetMethod) := by
+  obtain ⟨hj, hall⟩ := (Obend.Slot.usable_iff (fusedPrototypeSlot C targetMethod) (holdsAt v) c).1 hus
+  have hall' : ∀ p ∈ (fusedPrototypeSlot C targetMethod).supports c,
+      holdsAt (overrideMethodView v m newCode) p = true := by
+    intro p hp
+    rw [holdsAt_overrideMethodView_outside C targetMethod c v hm newCode hp]
+    exact hall p hp
+  have hus' : (fusedPrototypeSlot C targetMethod).usable (holdsAt (overrideMethodView v m newCode)) c = true :=
+    (Obend.Slot.usable_iff (fusedPrototypeSlot C targetMethod) (holdsAt (overrideMethodView v m newCode)) c).2 ⟨hj, hall'⟩
+  have hcov := fusedSupportPins_cover_extractReadMembers C targetMethod c
+  have hcons := (Obend.Leaf.candidate_supports_conservative hcov hall' hall).1
+  exact ⟨hus', hcons⟩
+
+/-- **3. Single-Step Override Blocking on Pinned Support (`fusedPrototypeSlot_moved_pin_blocks`)**:
+    Any mutation to a pinned method `m ∈ fusedSupport C targetMethod c` with a non-equivalent
+    body `newCode` (`termEq newCode p.code = false`) immediately transitions
+    `fusedPrototypeSlot C targetMethod` to `.blocked c dead` with `p ∈ dead`. -/
+theorem fusedPrototypeSlot_moved_pin_blocks
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} {v : LeafView}
+    (hj : (fusedPrototypeSlot C targetMethod).judge c = true)
+    {p : LeafPin} (hp : p ∈ (fusedPrototypeSlot C targetMethod).supports c)
+    {m : String} (hcell : p.cell = .layer m)
+    {newCode : Term} (hdiff : Obend.Law.termEq newCode p.code = false) :
+    ∃ dead,
+      (fusedPrototypeSlot C targetMethod).read (holdsAt (overrideMethodView v m newCode)) (some c) =
+        .blocked c dead ∧
+      p ∈ dead ∧
+      (∀ q, q ∈ dead ↔ q ∈ (fusedPrototypeSlot C targetMethod).supports c ∧
+        holdsAt (overrideMethodView v m newCode) q = false) := by
+  have hd : holdsAt (overrideMethodView v m newCode) p = false := by
+    rw [holdsAt_overrideMethodView_same v m newCode p hcell, hdiff]
+  have hmem : p ∈ (fusedPrototypeSlot C targetMethod).dead (holdsAt (overrideMethodView v m newCode)) c :=
+    (Obend.Slot.mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
+  have hread : ∃ dead,
+      (fusedPrototypeSlot C targetMethod).read (holdsAt (overrideMethodView v m newCode)) (some c) =
+        .blocked c dead ∧ p ∈ dead := by
+    unfold Obend.Slot.Slot.read
+    simp only [hj, ite_true]
+    cases hdd : (fusedPrototypeSlot C targetMethod).dead (holdsAt (overrideMethodView v m newCode)) c with
+    | nil => rw [hdd] at hmem; cases hmem
+    | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
+  obtain ⟨dead, hr, hpd⟩ := hread
+  exact ⟨dead, hr, hpd, (Obend.Slot.read_blocked_exact (fusedPrototypeSlot C targetMethod) _ _ _ _ hr).2⟩
+
+/-- **Master Theorem (`fusedPrototypeSlot_sound_and_conservative`)**:
+    Unifies all three guarantees of the fused `Composition → Flatten → Book → LExpr` slot bridge:
+    1. **Soundness (`flatten_sound` + `lower_sound`)**: when all pins in the fused support hold at `v`,
+       `C.symUnfold targetMethod` lowers via `lowerTerm` to `e : LExpr` whose denotation
+       `e.denote = c.loweredExpr.denote` equals `C.symUnfold targetMethod`,
+       `.get C.flatten targetMethod ≈b .get C.object targetMethod`,
+       and `SSteps` evaluation of `c.loweredExpr` is sound with respect to `Core4` evaluation (`lower_sound`).
+    2. **Conservatism under non-supported overrides**: any override to a method `m ∉ fusedSupport C targetMethod c`
+       leaves `(fusedPrototypeSlot C targetMethod).usable = true` and `substMemberEnv` invariant.
+    3. **1-step invalidation on supported overrides (`moved_pin_blocks`)**: any mutation to a pinned method
+       `m ∈ fusedSupport C targetMethod c` with `termEq newCode p.code = false` blocks `fusedPrototypeSlot`
+       in 1 step, naming the stale pin `p ∈ dead`. -/
+theorem fusedPrototypeSlot_sound_and_conservative
+    {C : Composition} {targetMethod : String} {c : FusedPrototypeCert} {v : LeafView}
+    (hus : (fusedPrototypeSlot C targetMethod).usable (holdsAt v) c = true) :
+    (C.closedB = true ∧
+      (∃ e : LExpr,
+        lowerTerm c.env (C.symUnfold targetMethod) = some e ∧
+        e.denote = c.loweredExpr.denote ∧
+        e.denote = C.symUnfold targetMethod) ∧
+      c.loweredExpr.denote = C.symUnfold targetMethod ∧
+      (.get C.flatten targetMethod ≈b .get C.object targetMethod) ∧
+      (∀ (v_can : LExpr), Obend.Lower.SSteps c.loweredExpr v_can → Obend.Lower.Canonical v_can →
+        ∃ w, Obend.Core.Term.Evaluates c.loweredExpr.denote w ∧
+          Obend.Core.Term.Evaluates (C.symUnfold targetMethod) w ∧
+          Obend.Lower.AheadChain v_can.denote w)) ∧
+    (∀ m, m ∉ fusedSupport C targetMethod c → ∀ newCode,
+      (fusedPrototypeSlot C targetMethod).usable (holdsAt (overrideMethodView v m newCode)) c = true) ∧
+    (∀ m ∈ fusedSupport C targetMethod c,
+      ∃ p ∈ (fusedPrototypeSlot C targetMethod).supports c,
+        p.cell = .layer m ∧
+        ∀ newCode, Obend.Law.termEq newCode p.code = false →
+          ∃ dead,
+            (fusedPrototypeSlot C targetMethod).read (holdsAt (overrideMethodView v m newCode)) (some c) =
+              .blocked c dead ∧ p ∈ dead) := by
+  have h1 := fusedPrototypeSlot_usable_sound hus
+  obtain ⟨hj, _⟩ := (Obend.Slot.usable_iff (fusedPrototypeSlot C targetMethod) (holdsAt v) c).1 hus
+  refine ⟨⟨h1.1, h1.2.1, h1.2.2.1, h1.2.2.2.1, h1.2.2.2.2.2⟩, ?_, ?_⟩
+  · intro m hm newCode
+    exact (fusedPrototypeSlot_override_outside_usable hus hm newCode).1
+  · intro m hm
+    obtain ⟨p, hp, hcell⟩ := pin_of_mem_fusedSupport hm
+    refine ⟨p, hp, hcell, fun newCode hdiff => ?_⟩
+    obtain ⟨dead, hr, hpd, _⟩ := fusedPrototypeSlot_moved_pin_blocks hj hp hcell hdiff
+    exact ⟨dead, hr, hpd⟩
+
+#tooth fusedPrototypeSlot_sound_and_conservative by mutation
+  fusedPrototypeJudge := fun _ _ _ => true
+
+#tooth fusedPrototypeSlot_override_outside_usable by mutation
+  overrideMethodView := fun v _ newCode => { v with decl := fun _ => some newCode }
+
+#tooth fusedPrototypeSlot_moved_pin_blocks by mutation
+  overrideMethodView := fun v _ _ => v
 
 end Obend.Lower.Reflect
 end

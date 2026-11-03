@@ -1527,5 +1527,208 @@ theorem computeShellWallThicknessAffine3DUm_lipschitz_lower_bound
     (by omega : lipschitzBound ≠ 0)
   omega
 
+/-! ### 6B. Self-Certified Eikonal SDF (`CertifiedSDF`) & Scale-Invariant Shell Wall Thickness (`computeCertifiedShellWallThicknessUm`) -/
+
+/-- A self-certified 3D Signed Distance Field (`CertifiedSDF`) pairing an `FRepExpr` `expr` and
+bounding box `box : Box3D` with a machine-checked Eikonal / gradient bound
+$0 < L_{\min} \le \|\nabla e(B)\| \le L_{\max}$ computed via `computeCertifiedGradMinBox` and
+`computeCertifiedLipschitzBox`. -/
+structure CertifiedSDF where
+  expr     : FRepExpr
+  box      : Box3D
+  lMin     : Nat := computeCertifiedGradMinBox box expr
+  lMax     : Nat := computeCertifiedLipschitzBox box expr
+  hEikonal :
+    0 < lMin ∧
+    lMin ≤ computeCertifiedGradMinBox box expr ∧
+    computeCertifiedGradMinBox box expr ≤ computeCertifiedLipschitzBox box expr ∧
+    computeCertifiedLipschitzBox box expr ≤ lMax
+
+/-- Every `CertifiedSDF` has a strictly positive derived Lipschitz bound over `s.box`. -/
+theorem CertifiedSDF.lipschitz_pos (s : CertifiedSDF) :
+    0 < computeCertifiedLipschitzBox s.box s.expr := by
+  have h := s.hEikonal
+  omega
+
+/-- **Self-Certified 3D F-Rep Shell Wall Thickness (`computeCertifiedShellWallThicknessUm`)**:
+Derives the certified lower-bound wall thickness (in micrometers) directly from `outer`, `inner`,
+and bounding box `B` by dividing `evalFRepPoint p inner - evalFRepPoint p outer` by the
+automatically derived Lipschitz bound `computeCertifiedLipschitzBox B outer` (returning `none`
+if the derived Lipschitz bound is `0`, eliminating any unchecked caller-supplied `lipschitzBound`). -/
+def computeCertifiedShellWallThicknessUm
+    (B : Box3D) (outer inner : FRepExpr) (p : Int × Int × Int) : Option Int :=
+  let L := computeCertifiedLipschitzBox B outer
+  if L == 0 then
+    none
+  else
+    let fOut := evalFRepPoint p.1 p.2.1 p.2.2 outer
+    let fIn  := evalFRepPoint p.1 p.2.1 p.2.2 inner
+    let rawSpan := if fOut ≤ fIn then fIn - fOut else 0
+    some (rawSpan / (L : Int))
+
+/-- **Self-Certified Shell Wall Thickness Soundness (`computeCertifiedShellWallThicknessUm_sound`)**:
+Whenever `computeCertifiedShellWallThicknessUm B outer inner (px, py, pz) = some w`:
+1. The derived Lipschitz bound is strictly positive (`1 ≤ computeCertifiedLipschitzBox B outer`) and `0 ≤ w`,
+2. Whenever `evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner`,
+   `w * (computeCertifiedLipschitzBox B outer : Int) ≤ evalFRepPoint px py pz inner - evalFRepPoint px py pz outer`,
+3. **True Physical Geometric Clearance**: for every probe point `p = (px, py, pz) ∈ B` in the inner
+   cavity (`inSolid px py pz inner`) with `evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner`
+   and every exterior point `q = (qx, qy, qz) ∈ B` outside `outer` (`0 ≤ evalFRepPoint qx qy qz outer`),
+   the physical $L_\infty$ distance between `p` and `q` is at least `w` (`w ≤ linfDist3D (px, py, pz) (qx, qy, qz)`)! -/
+theorem computeCertifiedShellWallThicknessUm_sound
+    (B : Box3D) (outer inner : FRepExpr) (px py pz : Int) (w : Int)
+    (hSome : computeCertifiedShellWallThicknessUm B outer inner (px, py, pz) = some w) :
+    1 ≤ computeCertifiedLipschitzBox B outer ∧
+    0 ≤ w ∧
+    (evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner →
+      w * (computeCertifiedLipschitzBox B outer : Int) ≤
+        evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) ∧
+    (∀ qx qy qz : Int,
+      B.contains px py pz →
+      B.contains qx qy qz →
+      evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner →
+      inSolid px py pz inner →
+      0 ≤ evalFRepPoint qx qy qz outer →
+      w ≤ linfDist3D (px, py, pz) (qx, qy, qz)) := by
+  unfold computeCertifiedShellWallThicknessUm at hSome
+  dsimp only at hSome
+  by_cases hZero : computeCertifiedLipschitzBox B outer == 0
+  · rw [if_pos hZero] at hSome
+    cases hSome
+  · rw [if_neg hZero] at hSome
+    simp only [Option.some.injEq] at hSome
+    have hLNe : computeCertifiedLipschitzBox B outer ≠ 0 := by
+      intro hEq
+      exact hZero (beq_iff_eq.mpr hEq)
+    have hLPos : 1 ≤ computeCertifiedLipschitzBox B outer := by omega
+    have hLIntPos : 1 ≤ (computeCertifiedLipschitzBox B outer : Int) := by omega
+    have hSpanNonneg :
+        0 ≤ (if evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner then
+              evalFRepPoint px py pz inner - evalFRepPoint px py pz outer else 0) := by
+      split <;> omega
+    have hWNonneg : 0 ≤ w := by
+      rw [← hSome]
+      exact Int.ediv_nonneg hSpanNonneg (by omega)
+    have hLower :
+        evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner →
+          w * (computeCertifiedLipschitzBox B outer : Int) ≤
+            evalFRepPoint px py pz inner - evalFRepPoint px py pz outer := by
+      intro hOrd
+      rw [← hSome, if_pos hOrd]
+      exact Int.ediv_mul_le _ (by omega)
+    refine ⟨hLPos, hWNonneg, hLower, ?_⟩
+    intro qx qy qz hp hq hOrd hInInner hOutQ
+    have hWL := hLower hOrd
+    unfold inSolid at hInInner
+    have hLip := evalFRepGradBox_lipschitz_sound B outer px py pz qx qy qz hp hq
+    have hAbs := frepIntAbs_bounds (evalFRepPoint px py pz outer - evalFRepPoint qx qy qz outer)
+    have hLipCast :
+        frepIntAbs (evalFRepPoint px py pz outer - evalFRepPoint qx qy qz outer) ≤
+          (computeCertifiedLipschitzBox B outer : Int) * linfDist3D (px, py, pz) (qx, qy, qz) := hLip
+    have hWL_le_dist :
+        w * (computeCertifiedLipschitzBox B outer : Int) ≤
+          linfDist3D (px, py, pz) (qx, qy, qz) * (computeCertifiedLipschitzBox B outer : Int) := by
+      rw [Int.mul_comm (linfDist3D (px, py, pz) (qx, qy, qz))]
+      omega
+    exact Decidable.byContradiction fun hNotLe => by
+      have hGt : linfDist3D (px, py, pz) (qx, qy, qz) + 1 ≤ w := by omega
+      have hMulGt := int_mul_le_mul_of_nonneg_right
+        (linfDist3D (px, py, pz) (qx, qy, qz) + 1) w
+        (computeCertifiedLipschitzBox B outer : Int) hGt (Int.natCast_nonneg _)
+      rw [Int.add_mul, Int.one_mul] at hMulGt
+      omega
+
+/-- Broken `computeCertifiedShellWallThicknessUm` that divides by `1` instead of `computeCertifiedLipschitzBox`. -/
+def computeCertifiedShellWallThicknessUmBroken
+    (_B : Box3D) (outer inner : FRepExpr) (p : Int × Int × Int) : Option Int :=
+  some (evalFRepPoint p.1 p.2.1 p.2.2 inner - evalFRepPoint p.1 p.2.1 p.2.2 outer)
+
+#tooth computeCertifiedShellWallThicknessUm_sound by mutation
+  computeCertifiedShellWallThicknessUm := computeCertifiedShellWallThicknessUmBroken
+
+/-- **Certified Shell Wall Thickness Scale-100 Invariance Theorem
+(`computeCertifiedShellWallThicknessUm_scale100_invariant`)**:
+Scaling both `outer` and `inner` by `100` ($f \mapsto 100 f$, via `.scalePos 100`) scales both the
+field difference `evalFRepPoint p inner - evalFRepPoint p outer` and `computeCertifiedLipschitzBox B outer`
+by `100`, leaving the certified physical wall thickness `computeCertifiedShellWallThicknessUm`
+completely invariant! -/
+theorem computeCertifiedShellWallThicknessUm_scale100_invariant
+    (B : Box3D) (outer inner : FRepExpr) (px py pz : Int) :
+    let outer100 := FRepExpr.scalePos 100 outer
+    let inner100 := FRepExpr.scalePos 100 inner
+    evalFRepPoint px py pz inner100 - evalFRepPoint px py pz outer100 =
+      100 * (evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) ∧
+    computeCertifiedLipschitzBox B outer100 = 100 * computeCertifiedLipschitzBox B outer ∧
+    computeCertifiedShellWallThicknessUm B outer100 inner100 (px, py, pz) =
+      computeCertifiedShellWallThicknessUm B outer inner (px, py, pz) := by
+  dsimp only
+  have hEvalOut : evalFRepPoint px py pz (.scalePos 100 outer) = 100 * evalFRepPoint px py pz outer := rfl
+  have hEvalIn : evalFRepPoint px py pz (.scalePos 100 inner) = 100 * evalFRepPoint px py pz inner := rfl
+  have hDiff :
+      evalFRepPoint px py pz (.scalePos 100 inner) - evalFRepPoint px py pz (.scalePos 100 outer) =
+        100 * (evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) := by
+    rw [hEvalIn, hEvalOut]
+    omega
+  have hLip := computeCertifiedLipschitzBox_scalePos B 100 outer
+  refine ⟨hDiff, hLip, ?_⟩
+  unfold computeCertifiedShellWallThicknessUm
+  dsimp only
+  rw [hLip, hEvalOut, hEvalIn]
+  by_cases hL0 : computeCertifiedLipschitzBox B outer = 0
+  · simp [hL0]
+  · have h100L0 : (100 * computeCertifiedLipschitzBox B outer == 0) = false := by
+      rw [beq_eq_false_iff_ne]
+      omega
+    have hL0False : (computeCertifiedLipschitzBox B outer == 0) = false := by
+      rw [beq_eq_false_iff_ne]
+      exact hL0
+    rw [h100L0, hL0False]
+    by_cases hOrd : evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner
+    · have hOrd100 :
+          100 * evalFRepPoint px py pz outer ≤ 100 * evalFRepPoint px py pz inner := by
+        omega
+      simp only [hOrd100, hOrd, ↓reduceIte]
+      have hSub100 :
+          100 * evalFRepPoint px py pz inner - 100 * evalFRepPoint px py pz outer =
+            (100 : Int) * (evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) := by
+        omega
+      have hL100 :
+          ((100 * computeCertifiedLipschitzBox B outer : Nat) : Int) =
+            (100 : Int) * (computeCertifiedLipschitzBox B outer : Int) := by
+        omega
+      rw [hSub100, hL100]
+      exact congrArg some (Int.mul_ediv_mul_of_pos _ _ (by decide : (0 : Int) < 100))
+    · have hOrd100 :
+          ¬ (100 * evalFRepPoint px py pz outer ≤ 100 * evalFRepPoint px py pz inner) := by
+        omega
+      simp only [hOrd100, hOrd, ↓reduceIte, Int.zero_ediv]
+
+/-- **Golden Certified SDF & Scale-Invariant Wall Thickness Verification
+(`golden_certified_sdf_wall_thickness_verified`)**:
+Verifies on a 3D planar shell `outer = x - 100`, `inner = x - 80` over box `B = [0, 200]^3`:
+1. `CertifiedSDF` certifies $L_{\min} = 1 \le \|\nabla e(B)\| \le L_{\max} = 1$,
+2. `computeCertifiedShellWallThicknessUm` derives `some 20` at probe `(80, 0, 0)`, and
+3. Scaling both fields by `100` (`100 * (x - 100)` and `100 * (x - 80)`) scales the field difference
+   from `20` to `2000` and scales `computeCertifiedLipschitzBox` from `1` to `100`, preserving
+   the certified physical wall thickness `some 20`! -/
+theorem golden_certified_sdf_wall_thickness_verified :
+    let B : Box3D :=
+      { xIv := { lo := 0, hi := 200 }
+      , yIv := { lo := 0, hi := 200 }
+      , zIv := { lo := 0, hi := 200 } }
+    let outer : FRepExpr := .offset 100 .varX
+    let inner : FRepExpr := .offset 80 .varX
+    let sdf : CertifiedSDF :=
+      { expr := outer
+      , box := B
+      , hEikonal := by decide +kernel }
+    sdf.lMin = 1 ∧
+    sdf.lMax = 1 ∧
+    computeCertifiedShellWallThicknessUm B outer inner (80, 0, 0) = some 20 ∧
+    computeCertifiedShellWallThicknessUm B (.scalePos 100 outer) (.scalePos 100 inner) (80, 0, 0) =
+      some 20 ∧
+    computeCertifiedShellWallThicknessUm B (.const 0) inner (80, 0, 0) = none := by
+  decide +kernel
+
 end Obend.Hardware.OpenUSD
 end

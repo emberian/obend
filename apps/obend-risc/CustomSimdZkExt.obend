@@ -1,0 +1,49 @@
+edition ObjectiveBend 1
+# Flagship App #1 (Layer 3): Custom Opcode 0x2B (43) SIMD/ZK Multiply-Accumulate Extension Layer
+
+import ./BaseRiscCore.obend as Base
+import ./PrivilegeCsrOverride.obend as Priv
+
+law bounded_custom_opcode: new.customOpcode <= 127
+
+record CustomSimdZkTarget:
+  mtvecAddr() -> Nat
+  customExtOpcode() -> Nat
+  extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat
+  stepPc(pc: Nat, mepc: Nat) -> Nat
+  execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+
+spec BaseSimdZkSpec for CustomSimdZkTarget:
+  requires mtvecAddr() -> Nat
+  requires customExtOpcode() -> Nat
+  def mtvecAddr() -> Nat:
+    64n
+  def customExtOpcode() -> Nat:
+    43n
+  def extMacExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
+    rs1Val * rs2Val + imm
+  def aluExec(rs1Val: Nat, rs2Val: Nat, imm: Nat) -> Nat:
+    rs1Val + rs2Val + imm
+  def stepPc(pc: Nat, mepc: Nat) -> Nat:
+    self.mtvecAddr + mepc
+  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    rs1Val * rs2Val + self.customExtOpcode
+  claim custom_simd_zk_mac_exec(): self.extMacExec(7n, 9n, 5n) == 68n
+  claim custom_ext_non_interference_add(): self.aluExec(13n, 21n, 0n) == 34n
+  claim custom_ext_respects_trap_preemption(): self.stepPc(28n, 0n) == 64n
+
+spec CustomSimdZkExtSpec for CustomSimdZkTarget:
+  requires execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat
+  def mtvecAddr() -> Nat:
+    64n
+  def customExtOpcode() -> Nat:
+    43n
+  def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
+    super.execInstruction(inst, rs1Val, rs2Val) + 1n
+
+def seedCustomSimdZk() -> CustomSimdZkTarget:
+  {mtvecAddr: 0n, customExtOpcode: 0n, extMacExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, aluExec: fn(a: Nat, b: Nat, c: Nat) -> Nat: 0n, stepPc: fn(p: Nat, m: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
+
+def customSimdZkRiscCore() -> CustomSimdZkTarget:
+  fix(compose(BaseSimdZkSpec, CustomSimdZkExtSpec), seedCustomSimdZk())
