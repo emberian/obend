@@ -131,6 +131,7 @@ def badPostings : List Posting :=
 def badTB : TBObj × Said String Totals :=
   (⟨11, ⟨badPostings, ""⟩⟩, ⟨["P-0001"], [("Receivables", 500, 0), ("Revenue", 0, 500)]⟩)
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem tb_bad_refused :
     Obend.Analysis.Coverage.check (tb 11) Json.postingsRoot badTB.1.book badTB.2 = .refused (.omitted "P-0003") [] := by
   decide +kernel

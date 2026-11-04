@@ -1159,19 +1159,23 @@ def goldenDiamondOptEdgesLiteral : List HyperEdge :=
   , { opIdx := 9,  op := .scale 1, srcWires := [12],   dstWire := 16 }
   , { opIdx := 10, op := .scale 1, srcWires := [12],   dstWire := 17 } ]
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem extractHyperEdges_goldenDiamondAdj :
     extractHyperEdges (compileGraphAdjoint goldenDiamondHypergraph) = goldenDiamondAdjEdgesLiteral := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem extractHyperEdges_goldenDiamondOpt :
     extractHyperEdges (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph) =
       goldenDiamondOptEdgesLiteral := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem boundaryOut_goldenDiamondAdj :
     (compileGraphAdjoint goldenDiamondHypergraph).boundaryOut.table = [8, 16, 17, 14, 15] := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem boundaryOut_goldenDiamondOpt :
     (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph).boundaryOut.table =
       [8, 16, 17, 14, 15] := by
@@ -1437,20 +1441,24 @@ def rnea2LinkOptEdgesLiteral : List HyperEdge :=
   , { opIdx := 26, op := .add,     srcWires := [36, 43],     dstWire := 44 }
   , { opIdx := 27, op := .scale 1, srcWires := [42],         dstWire := 45 } ]
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem extractHyperEdges_rnea2LinkAdj :
     extractHyperEdges (compileGraphAdjoint rnea2LinkCostHypergraph) = rnea2LinkAdjEdgesLiteral := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem extractHyperEdges_rnea2LinkOpt :
     extractHyperEdges (optimizeAdjointHypergraph defaultRtlCostModel rnea2LinkCostHypergraph) =
       rnea2LinkOptEdgesLiteral := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem boundaryOut_rnea2LinkAdj :
     (compileGraphAdjoint rnea2LinkCostHypergraph).boundaryOut.table =
       [18, 40, 34, 44, 45, 35, 41, 33, 39] := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem boundaryOut_rnea2LinkOpt :
     (optimizeAdjointHypergraph defaultRtlCostModel rnea2LinkCostHypergraph).boundaryOut.table =
       [18, 40, 34, 44, 45, 35, 41, 33, 39] := by
@@ -1627,19 +1635,23 @@ def statorLossOptEdgesLiteral : List HyperEdge :=
   , { opIdx := 19, op := .mul,        srcWires := [0, 23],     dstWire := 29 }
   , { opIdx := 20, op := .mac,        srcWires := [0, 23, 29], dstWire := 31 } ]
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem extractHyperEdges_statorLossAdj :
     extractHyperEdges (compileGraphAdjoint statorCoupledLossHypergraph) = statorLossAdjEdgesLiteral := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem extractHyperEdges_statorLossOpt :
     extractHyperEdges (optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph) =
       statorLossOptEdgesLiteral := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem boundaryOut_statorLossAdj :
     (compileGraphAdjoint statorCoupledLossHypergraph).boundaryOut.table = [12, 31, 26, 28, 22] := by
   decide +kernel
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem boundaryOut_statorLossOpt :
     (optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph).boundaryOut.table =
       [12, 31, 26, 28, 22] := by

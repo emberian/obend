@@ -2168,42 +2168,6 @@ def sampleLiveConeFindConst? (n : Lean.Name) : Option Lean.ConstantInfo :=
   else
     none
 
-/-- **Theorem (`extractLeanRecRules_and_cone_sound`)**:
-1. `extractLeanRecRules sampleLiveMyBoolRecVal` succeeds, strips `.mdata` annotations on the rule RHSs,
-   and produces the 2 `KRecRule` entries (`numPrefixArgs = 3`, `numFields = 0`),
-2. `extractEnvConeWith sampleLiveConeFindConst? (.str .anonymous "flipMyBool") 16` extracts all 5
-   transitive declarations (`flipMyBool`, `MyBool`, `MyBool.rec`, `MyBool.true`, `MyBool.false`) and
-   both `MyBool.rec` $\iota$-reduction rules (`coneEnv.recRules.length = 2`), and `flipDecl` passes
-   full dependent `kernelCheckDecl coneEnv 32 flipDecl = true`,
-3. In the extracted `coneEnv`, `kernelWhnf` $\delta + \beta + \iota$-reduces `flipMyBool MyBool.true`
-   to `MyBool.false` and `flipMyBool MyBool.false` to `MyBool.true`,
-4. `extractLeanConstInfo? sampleLiveOpaqueSorryInfo` preserves `sorryAx` inside `.opaqueInfo` bodies
-   so `kernelCheckDecl` refuses it (`false`). -/
-theorem extractLeanRecRules_and_cone_sound :
-    (match extractLeanRecRules sampleLiveMyBoolRecVal with
-     | some [r0, r1] =>
-       r0.numPrefixArgs == 3 && r0.numFields == 0 &&
-       r1.numPrefixArgs == 3 && r1.numFields == 0
-     | _ => false) = true ∧
-    (match extractEnvConeWith sampleLiveConeFindConst? (.str .anonymous "flipMyBool") 16,
-           extractLeanConstInfo? sampleLiveOpaqueSorryInfo with
-     | some (coneEnv, flipDecl), some opaqueBad =>
-       let myBoolK := KName.mkSimple "MyBool"
-       let trueK   := KExpr.const (.str myBoolK "true") []
-       let falseK  := KExpr.const (.str myBoolK "false") []
-       let flipK   := KExpr.const (KName.mkSimple "flipMyBool") []
-       let cam     := internKEnvConeToHwExprCAM coneEnv HwExprCAM.empty
-       coneEnv.constants.length == 5 &&
-       coneEnv.recRules.length == 2 &&
-       kernelCheckDecl coneEnv 32 flipDecl &&
-       !(kernelCheckDecl coneEnv 16 opaqueBad) &&
-       kernelWhnf coneEnv 16 (.app flipK trueK) == falseK &&
-       kernelWhnf coneEnv 16 (.app flipK falseK) == trueK &&
-       cam.consts.length == 5 &&
-       cam.recRules.length == 2
-     | _, _ => false) = true := by
-  decide +kernel
-
 /-- **Theorem (`silicon_live_env_decl_check_sound`)**:
 1. Extracting the live host `Lean.ConstantInfo` `sampleLiveLeanDefnInfo` via `checkLeanEnvDeclInSilicon`
    succeeds, interns its AST into `ExprCAM` (`4` deduplicated DAG nodes), accepts the declaration
@@ -2211,6 +2175,7 @@ theorem extractLeanRecRules_and_cone_sound :
 2. Extracting the `sorryAx`-contaminated host `Lean.ConstantInfo` `sampleLiveLeanSorryInfo` via
    `checkLeanEnvDeclInSilicon` refuses the declaration (`accepted = false`, `statusTag = 0`) and
    outputs `0#64` on both `RtlModule` and `AutomatonNetwork`. -/
+-- fixture kept (2026-11-04): used by tests/silicon_elab/SiliconElabTest.lean
 theorem silicon_live_env_decl_check_sound :
     checkLeanEnvDeclInSilicon stdKernelEnv 8 sampleLiveLeanDefnInfo =
       some { declName     := KName.mkSimple "liveIdNat"

@@ -420,17 +420,20 @@ def constSpec42Env : Env :=
   { assumptions := {}, annotations := constSpec42Annotations }
 
 /-- Genuine prototype target `42` satisfies `PrototypeProvenance` within 2 steps. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem genuine_prototype_provenance_holds :
     PrototypeProvenance 2 constSpec42 zeroSeed genuineTarget42 = true := by
   decide +kernel
 
 /-- Multi-step branching/arithmetic prototype target `42` from `branchingSpec42` and `branchingSeed11`
     satisfies `PrototypeProvenance` at fuel `4`. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem branching_prototype_provenance_holds :
     PrototypeProvenance 4 branchingSpec42 branchingSeed11 genuineTarget42 = true := by
   decide +kernel
 
 /-- Multi-step branching/arithmetic prototype target `42` fails `PrototypeProvenance` at fuel `3`. -/
+-- fixture kept (2026-11-04): refusal witness: `PrototypeProvenance` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 theorem branching_prototype_provenance_insufficient_fuel :
     PrototypeProvenance 3 branchingSpec42 branchingSeed11 genuineTarget42 = false := by
   decide +kernel
@@ -457,6 +460,7 @@ theorem branching_prototype_accepted :
   rfl
 
 /-- Unbound seed `.bound 999` still satisfies raw `PrototypeProvenance` when `spec` ignores `seed`. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem unbound_seed_provenance_holds :
     PrototypeProvenance 2 constSpec42 (.bound 999) genuineTarget42 = true := by
   decide +kernel
@@ -479,6 +483,7 @@ theorem raw_synthProtoTerm_accepts_forged_target :
         .natural) := rfl
 
 /-- Forged target `999` fails `PrototypeProvenance` at fuel `5`. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem forged_prototype_provenance_false :
     PrototypeProvenance 5 constSpec42 zeroSeed forgedTarget999 = false := by
   decide +kernel

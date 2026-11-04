@@ -370,6 +370,7 @@ def golden7nmToleranceBox : CleanroomToleranceBox where
 /-- **Theorem (`golden7nmCornerEnvelope_verified`)**:
 The golden 7nm TCAD corner envelope closes 500 MHz (`2000 ps`) dual-corner `[SS, FF]` timing signoff
 on `obendStageCritPath`, and satisfies `checkTimingSignoff = true` across all three `[FF, TT, SS]` corners. -/
+-- fixture kept (2026-11-04): would delete (a preset envelope closing timing on a preset path) but cited by tests/metasystem/SiliconSpineTest.lean:164
 theorem golden7nmCornerEnvelope_verified :
     let env := extractTcadCornerEnvelope golden7nmToleranceBox true
     checkEnvelopeTimingSignoff env 2000 obendStageCritPath = true ∧

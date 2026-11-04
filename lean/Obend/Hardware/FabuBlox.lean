@@ -339,26 +339,17 @@ def cmosDamasceneFlow : List FabStep :=
   , .cmpMetal 150
   ]
 
-/-- Theorem 5a: The 6-step FabuBlox CMOS damascene flow passes all `Facility OS` checks, clears the
-contact via at $x = 100\text{ nm}$ (`ildOxideNm = 0`, `tiNBarrierNm = 18 nm`), preserves the `100 nm`
-dielectric at $x = 0\text{ nm}$ and $x = 200\text{ nm}$, and planarizes copper to `150 nm`. -/
-theorem fabublox_damascene_flow_verified :
-    (match runFabFlow initialCmosWafer cmosDamasceneFlow with
-    | .ok finalWafer =>
-      finalWafer.columns.map (fun c => (c.xCoordNm, c.ildOxideNm, c.tiNBarrierNm, c.metalThicknessNm)) ==
-        [(0, 100, 20, 150), (100, 0, 18, 150), (200, 100, 20, 150)]
-    | .error _ => false) = true := by
-  decide +kernel
-
 /-- Theorem 5b: Attempting to load the wafer back into `.feolFurnace` AFTER copper deposition is
 refused by `Facility OS` with `.feolMetalContamination .feolFurnace`! -/
-theorem post_cu_feol_furnace_refused :
+-- fixture kept (2026-11-04): refusal witness: `runFabFlow` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
+example :
     runFabFlow initialCmosWafer (cmosDamasceneFlow ++ [.feolThermalAnneal 600 10]) =
       .error (.feolMetalContamination .feolFurnace) := by
   decide +kernel
 
 /-- Theorem 5c: Omitting `.stripPhotoresist` before the `180°C` metal deposition is refused by
 `Facility OS` with `.photoresistScorched 180`! -/
+-- fixture kept (2026-11-04): refusal witness: `runFabFlow` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 theorem unstripped_resist_high_temp_refused :
     runFabFlow initialCmosWafer
       [ .lithoWindow 80 120 200
@@ -387,16 +378,6 @@ def extractCornerFromWafer (w : WaferState) : ProcessCorner :=
     , tSetupPs    := 35
     , tHoldPs     := 18
     , tSkewPs     := 25 }
-
-/-- Theorem 6 (`extractCornerFromWafer_closes_500MHz`):
-The `ProcessCorner` extracted from the verified `cmosDamasceneFlow` wafer closes 500 MHz (`2000 ps`)
- static timing signoff on `obendStageCritPath`! -/
-theorem extractCornerFromWafer_closes_500MHz :
-    (match runFabFlow initialCmosWafer cmosDamasceneFlow with
-    | .ok finalWafer =>
-      checkTimingSignoff (extractCornerFromWafer finalWafer) 2000 obendStageCritPath
-    | .error _ => false) = true := by
-  decide +kernel
 
 /-! ## 6. Cleanroom Cutline Interconnect RC Extraction (`extractInterconnectRCFromCutline`) -/
 

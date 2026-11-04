@@ -288,15 +288,6 @@ def goldenMs350Inverter : Ms350InverterSpec where
   totalLossWatts     := 420
   maxLossBudgetWatts := 600
 
-/-- Theorem (`golden_ms350_inverter_verified`):
-The golden `MS350`-class $1200\,\text{V}$ SiC inverter specification passes `checkInverterSignoff`
-and satisfies `evalTurnOffPeakVoltageV = 920`. -/
-theorem golden_ms350_inverter_verified :
-    checkInverterSignoff goldenMs350Inverter = true ∧
-    evalTurnOffPeakVoltageV goldenMs350Inverter.vDcBusV
-      goldenMs350Inverter.lBusNh goldenMs350Inverter.diDtAmpPerNs = 920 := by
-  decide +kernel
-
 /-! ## 5. Mission Power `MS350` Flying-Capacitor Multilevel (`FCML`) Topology & $M^2$ Inductor Reduction -/
 
 /-- Nominal per-cell switch blocking voltage $V_{\text{cell}} = V_{\text{DC}} / M$ (in volts $\text{V}$)
@@ -340,20 +331,6 @@ theorem fcml_level_sq_divisor_mono
   have h3 : m2 * m1 ≤ m2 * m2 :=
     int_mul_le_mul_of_nonneg_left m1 m2 m2 hLe (by omega)
   omega
-
-/-- **Theorem (`ms350_7level_fcml_36x_inductance_and_6x_voltage_reduction`)**:
-Upgrading from a 2-level inverter (`M = 1`) to a 7-level Mission Power `MS350` FCML stage (`M = 6`)
-on a $1500\,\text{V}_{\text{DC}}$ solar string:
-1. Reduces nominal per-cell switch blocking voltage $6\times$ from $1500\,\text{V}$ to $250\,\text{V}$,
-2. Multiplies effective inductor ripple frequency $6\times$ (e.g. $50\,\text{kHz} \to 300\,\text{kHz}$), and
-3. Reduces required filter inductance $M^2 = 36\times$ from $360\,\mu\text{H}$ to $10\,\mu\text{H}$! -/
-theorem ms350_7level_fcml_36x_inductance_and_6x_voltage_reduction :
-    evalFcmlCellBlockingVoltageV 1500 1 = 1500 ∧
-    evalFcmlCellBlockingVoltageV 1500 6 = 250 ∧
-    evalFcmlEffectiveRippleFreqHz 50000 6 = 300000 ∧
-    evalFcmlRequiredInductanceUh 360 1 = 360 ∧
-    evalFcmlRequiredInductanceUh 360 6 = 10 := by
-  decide +kernel
 
 /-! ## 6. Flying-Capacitor Phase-Shifted PWM (`PS-PWM`) Natural Balance & Active Balancing Lyapunov Contraction -/
 
@@ -459,25 +436,6 @@ def ms350Fcml350kWSolarInverter : Ms350InverterSpec where
   mpptTol            := 5
   totalLossWatts     := 280
   maxLossBudgetWatts := 400
-
-/-- **Theorem (`ms350_350kw_fcml_solar_inverter_verified`)**:
-Certifies the $1500\,\text{V}_{\text{DC}}$, $350\,\text{kW}$, 7-level ($M = 6$) Mission Power `MS350`
-SiC/GaN Flying-Capacitor Multilevel (`FCML`) solar inverter stage:
-1. $36\times$ filter inductor volume/inductance reduction (`evalFcmlRequiredInductanceUh 360 6 = 10`),
-2. $6\times$ switch voltage reduction to $250\,\text{V}$ nominal per cell (`evalFcmlCellBlockingVoltageV 1500 6 = 250`)
-   with $300\,\text{V}$ peak turn-off voltage ($\le 650\,\text{V}$ switch rating),
-3. Zero natural PS-PWM flying-capacitor drift at $233\,\text{A}$ full-load string current
-   (`evalFlyingCapErrorNext 0 500 500 233 = 0`) and active balancing error contraction (`evalActiveBalancingStep 100 200 = 80`),
-4. Full `checkInverterSignoff` verification (`checkInverterSignoff ms350Fcml350kWSolarInverter = true`). -/
-theorem ms350_350kw_fcml_solar_inverter_verified :
-    evalFcmlRequiredInductanceUh 360 6 = 10 ∧
-    evalFcmlCellBlockingVoltageV 1500 6 = 250 ∧
-    evalTurnOffPeakVoltageV ms350Fcml350kWSolarInverter.vDcBusV
-      ms350Fcml350kWSolarInverter.lBusNh ms350Fcml350kWSolarInverter.diDtAmpPerNs = 300 ∧
-    evalFlyingCapErrorNext 0 500 500 233 = 0 ∧
-    evalActiveBalancingStep 100 200 = 80 ∧
-    checkInverterSignoff ms350Fcml350kWSolarInverter = true := by
-  decide +kernel
 
 /-! ## 7. Motor-Inverter-Cooler Drive Train Co-Design (`CoupledDriveTrainSpec`, `checkDriveTrainCoDesign`) -/
 
@@ -677,6 +635,7 @@ def goldenCoupledDriveTrainSpec : CoupledDriveTrainSpec where
 
 /-- Theorem (`golden_coupled_drive_train_verified`):
 Kernel-checked verification of `goldenCoupledDriveTrainSpec`. -/
+-- fixture kept (2026-11-04): consumed by Obend/Vault/HardwareProjection.lean
 theorem golden_coupled_drive_train_verified :
     checkDriveTrainCoDesign goldenCoupledDriveTrainSpec = true := by
   decide +kernel

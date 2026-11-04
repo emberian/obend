@@ -1566,6 +1566,7 @@ theorem budget_import_tooth (v : Nat) :
 def identityApplied : Term := .app (.lam (.bound 0)) (.nat 0)
 
 /-- Under the empty tree the checker refuses it (no lambda annotation in synthesis position). -/
+-- fixture kept (2026-11-04): refusal witness: `checkAgainst` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 theorem empty_tree_refused :
     (checkAgainst ⟨identityApplied, treeAnnotations (.node none []), {}⟩ [] .natural).toBool = false := by
   decide +kernel
@@ -1575,6 +1576,7 @@ carries, and it exists. -/
 def identityTree : AnnotationTree :=
   .node none [.node (some ⟨.natural, .natural, .unrestricted, .once⟩) []]
 
+-- fixture kept (2026-11-04): cheap closed check of `checkAgainst` on literal data
 theorem identity_tree_accepted :
     (checkAgainst ⟨identityApplied, treeAnnotations identityTree, {}⟩ [] .natural).toBool = true := by
   decide +kernel

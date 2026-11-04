@@ -65,9 +65,11 @@ def vectorsHold : Bool :=
     let names := line.splitOn " "
     precedenceOf supers isStruct names.head! == some names
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem pommette_vectors : vectorsHold = true := by native_decide
 
 /-- CG (inconsistent local orders) and SBc (incompatible suffix parents) refuse. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem pommette_refusals :
     precedenceOf (fun x => if x == "CG" then ["HVG", "VHG"] else supers x) isStruct "CG" = none ∧
     precedenceOf (fun x => if x == "SBc" then ["sBs", "SBB"] else supers x) isStruct "SBc" = none := by
@@ -88,6 +90,7 @@ def refusalKind : Except Refusal (List String × Option String) → String
   | .error (.inconsistent _ _) => "inconsistent"
   | .ok _ => "ok"
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem c4_refusals :
     refusalKind (linearize precedenceGraph [] [["A", "B"], ["B", "C"], ["C", "A"]]) = "inconsistent" ∧
     refusalKind (linearize (⟨fun x => if x == "SBc" then ["SBc", "sBs", "SBB"] else (precedenceOf supers isStruct x).getD [x],
@@ -96,6 +99,7 @@ theorem c4_refusals :
   native_decide
 def dag (order : List (List String)) : Option (List String) := (linearize precedenceGraph [] order).toOption.map (·.1)
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem dag_local_orders :
     dag [["A"], ["B"], ["C"]] = some ["A", "B", "C", "O"] ∧ dag [["A", "B"], ["C", "A"]] = some ["C", "A", "B", "O"] ∧
     dag [["C", "A"], ["C", "B"]] = some ["C", "A", "B", "O"] ∧ dag [["C", "B"], ["C", "A"]] = some ["C", "B", "A", "O"] ∧
@@ -185,6 +189,7 @@ def invariance : Option (Nat × Nat) :=
     return (acc + a, ref + r)
 
 /-- Every trial passes, and the family is not vacuous: it has both accepted and refused nodes. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem ordered_presentation_invariance_4000 :
     invariance.map (fun (accepted, refused) => decide (0 < accepted) && decide (0 < refused)) = some true := by
   native_decide

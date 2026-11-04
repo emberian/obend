@@ -174,6 +174,7 @@ def certificateOf (s : String) : Except String (List RStep) := do
 /-- The planted bad claim: an open claim term (`self` free), refused `illFormed` at every grade. -/
 def badClaim : ClaimObj := ⟨⟨{ name := "", metadata := .record [], fields := [] }, [], []⟩, 0, .bound 0, 0⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badClaim_refused : claimCheck 0 badClaim [] = .refused .illFormed [] := by decide +kernel
 
 /-- **The registered format `rewrite@1`.** -/

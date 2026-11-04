@@ -713,23 +713,27 @@ def goldenFlatRtlModule : RtlModule where
   outputs    := [{ name := "out_y", expr := .wireRef 1 }]
 
 /-- Roundtrip theorem for `encodeRtlSynthObj` / `decodeRtlSynthObj`. -/
+-- fixture kept (2026-11-04): codec round trip on both certificate kinds, cited by the AutoCert tests
 theorem decodeRtlSynthObj_encodeRtlSynthObj_roundtrip :
     decodeRtlSynthObj (encodeRtlSynthObj "test_rtl_synth") = .ok "test_rtl_synth" ∧
     decodeRtlSynthObj (encodeRtlSynthObj "bad_loop_mod") = .ok "bad_loop_mod" := by
   decide +kernel
 
 set_option maxHeartbeats 800000 in
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem decodeRtlSynthCert_encodeRtlSynthCert_golden :
     decodeRtlSynthCert (encodeRtlSynthCert goldenFlatRtlModule) = .ok goldenFlatRtlModule := by
   decide +kernel
 
 set_option maxHeartbeats 800000 in
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem decodeRtlSynthCert_encodeRtlSynthCert_bad :
     decodeRtlSynthCert (encodeRtlSynthCert badLoopRtlModule) = .ok badLoopRtlModule := by
   decide +kernel
 
 set_option maxHeartbeats 1600000 in
 /-- Roundtrip theorem for `encodeRtlSynthCert` / `decodeRtlSynthCert` and `hwSynthFormat.checkBytes` / `rtlSynthFormat.checkBytes`. -/
+-- fixture kept (2026-11-04): used by tests/metasystem/AutoCertTest.lean
 theorem decodeRtlSynthCert_encodeRtlSynthCert_roundtrip :
     decodeRtlSynthCert (encodeRtlSynthCert goldenFlatRtlModule) = .ok goldenFlatRtlModule ∧
     decodeRtlSynthCert (encodeRtlSynthCert badLoopRtlModule) = .ok badLoopRtlModule ∧
@@ -1501,6 +1505,7 @@ instance agenticEdaJudge : Obend.Judge Int EdaVaultPart where
     intro _ _ _ _ _ _
     rfl
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badAgenticEdaSwap_refused :
     checkAgenticEdaJudge 0 400 overbudgetSecondSourcePart =
       .refused (.agenticEdaSwapViolation "U4_LDO") [] := by
@@ -1597,6 +1602,7 @@ instance binaryCborJudge : Obend.Judge HwCertDomain BinaryHwCert where
 def badBinaryPnrCert : BinaryHwCert :=
   { goldenBinaryPnrCert with p5 := 100 }
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badBinaryCborCert_refused :
     checkBinaryCborJudge 0 .pnr badBinaryPnrCert =
       .refused (.binaryCborCertViolation 1) [] := by
@@ -1684,6 +1690,7 @@ instance binaryTapeJudge : Obend.Judge HwCertDomain BinaryTapeCert where
 def badBinaryTapeCert : BinaryTapeCert :=
   { goldenBinaryFemmTapeCert with metric0 := 999 }
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badBinaryTapeCert_refused :
     checkBinaryTapeCert 0 .magnetics badBinaryTapeCert =
       .refused (.binaryCborCertViolation 10) [] := by
@@ -1772,6 +1779,7 @@ def findHardwareFormat? (tag : String) : Option Format :=
 /-- **No-Bypass Verification for `verifyRawBinaryCborCert` on Fixed-Arity `.pnr` (`verifyRawBinaryCborCert_refuses_pnr_tape_bypass`)**:
 Submitting a 1-word variable-length `BinaryTapeCert` claiming `.pnr` to `verifyRawBinaryCborCert .pnr`
 is strictly refused (`.refused (.binaryCborCertViolation 1) []`). -/
+-- fixture kept (2026-11-04): used by tests/metasystem/OpenUsdAndSsaTapeTest.lean
 theorem verifyRawBinaryCborCert_refuses_pnr_tape_bypass :
     let fakePnrTape : BinaryTapeCert := { domain := .pnr, metric0 := 100, metric1 := 100, words := [1] }
     let rawBytes := ByteArray.mk (encodeBinaryTapeCert fakePnrTape).toArray
@@ -1783,6 +1791,7 @@ Verifies that `extractNatField` and `extractIntField` extract unsigned and signe
 from JSON and key-value wire strings, and that overriding numeric fields in `decodeWaferSpaceCert`,
 `decodePhotonicsCert`, `decodePcbBoardCert`, and `decodeAgenticEdaCert` triggers judge refusal on
 out-of-spec numeric values! -/
+-- fixture kept (2026-11-04): used by tests/metasystem/OpenUsdAndSsaTapeTest.lean
 theorem extractNatField_and_extractIntField_verified :
     extractNatField "{\"mode\": \"golden\", \"antennaRatio\": 2400}" "antennaRatio" = some 2400 ∧
     extractIntField "{\"mode\": \"golden\", \"minMarginMv\": -150}" "minMarginMv" = some (-150) ∧
@@ -1802,6 +1811,7 @@ theorem extractNatField_and_extractIntField_verified :
 1. `"fanout"` does *not* match the suffix of `"max_fanout"` in JSON or key-value wire strings,
 2. `decodePhotonicsCert` and `decodePcbBoardCert` require all explicit fields (returning `.error`
    when fields are omitted) and reject out-of-spec numeric parameters in the Lean 4 kernel (`decide +kernel`). -/
+-- fixture kept (2026-11-04): used by tests/metasystem/OpenUsdAndSsaTapeTest.lean
 theorem extractNatField_token_boundary_and_decoders_verified :
     extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
     extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧

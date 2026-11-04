@@ -5,6 +5,7 @@ public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
 public import Obend.Hardware.Photonics
 public import Obend.Hardware.QuantumMatter
+import Obend.Teeth.Hardware.CliffordKernel
 import all Obend.Analysis.Equitable
 import all Obend.Analysis.QuantumWalk
 import all Obend.Hardware.Photonics

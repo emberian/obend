@@ -11,15 +11,18 @@ public import Obend.AssertCompiled
 namespace Obend.Spec.Law
 set_option autoImplicit false
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem parse_tally :
     (parse "new.total <= 1000 and monotone(total)").toOption =
       some (.and (.leC (.field "total") 1000) (.monotone "total")) := by native_decide
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem parse_precedence :
     (parse "not new.a == 1 or new.b in [1, -2] implies request.caller == new.c and new.d <= new.e + 3").toOption =
       some (.implies (.or (.not (.eqC (.field "a") 1)) (.inC (.field "b") [1, -2]))
         (.and (.eqR .caller (.field "c")) (.leROff (.field "d") (.field "e") 3))) := by native_decide
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem parse_refuses_nested :
     (parse "new.a.b == 1").toBool = false ∧ (parse "old.a == 1").toBool = false ∧
       (parse "new.a >= 1").toBool = false ∧ (parse "witnessed(x)").toBool = false ∧

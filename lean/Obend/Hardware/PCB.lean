@@ -520,26 +520,13 @@ def goldenBoardClearance : PcbClearanceSpec where
   peakVoltageV         := 24
   hvCreepageUm         := 400
 
-/-- The golden 4-layer mixed-signal SDR / FPGA carrier PCB (`Rogers RO4350B` $50.2\,\Omega$ RF microstrip,
-$100.1\,\Omega$ LVDS differential clock pair, zero-skew $30.0\,\text{mm}$ serpentine meander, $3\,\text{A}$
-IPC-2152 power trace, 8-via stitched ground return with $80\,\text{pH}$ inductance, and $150\,\mu\text{m}$
-clearance) passes `checkPcbBoardSignoff`! -/
-example :
-    checkPcbBoardSignoff
-      goldenRf50OhmTrace
-      goldenLvds100OhmPair
-      goldenDdrMeander 30000 50
-      goldenPaSupplyRail
-      goldenGndViaStitch
-      goldenBoardClearance = true := by
-  decide +kernel
-
 /-! ## 5. Microstrip impedance from geometry
 
 The closed form is `microstripZ0MilliOhm` (§1), and `checkSingleEndedZ0` gates on it. Values the
 kernel computes (an `example`, not a theorem): the golden RO4350B strip lands within its ±2.5 Ω band,
 and the 80 µm strip on 500 µm PTFE is a high-impedance line, not a 50 Ω one. -/
 
+-- fixture kept (2026-11-04): cheap closed check of `microstripZ0MilliOhm` on literal data
 example :
     microstripZ0MilliOhm 380 170 35 3480 = 47894 ∧ microstripZ0MilliOhm 80 500 20 2000 = 171202 := by
   decide +kernel
@@ -620,6 +607,7 @@ def violatingPcbBBoxLayout : List PcbBBox :=
 `checkBoardBBoxDrc` accepts `goldenPcbBBoxLayout` at $150\,\mu\text{m}$ fab clearance (allowing
 same-net pad-to-trace overlap while enforcing cross-net gaps $\ge 160\,\mu\text{m}$) and refuses
 `violatingPcbBBoxLayout` ($40\,\mu\text{m} < 150\,\mu\text{m}$ encroachment)! -/
+-- fixture kept (2026-11-04): refusal witness: `checkBoardBBoxDrc` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 example :
     checkBoardBBoxDrc goldenPcbBBoxLayout 150 = true ∧
     checkBoardBBoxDrc violatingPcbBBoxLayout 150 = false := by

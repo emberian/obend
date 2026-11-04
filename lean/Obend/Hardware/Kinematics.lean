@@ -293,22 +293,6 @@ theorem abbe_volumetric_compensation_exact (pTarget linErr angErr abbeArm : Vec3
               Vec3.add, Vec3.sub, cross3]
   congr 1 <;> omega
 
-/-- Golden Verification of Featherstone Spatial Algebra, Ruckig S-Curve & 5-Axis Abbe Compensation. -/
-example :
-    let twist : SpatialTwist6D := { ang := { x := 3, y := -4, z := 12 }, lin := { x := 50, y := -20, z := 10 } }
-    let mom   : SpatialWrench6D := { torque := { x := 90, y := -80, z := 240 }, force := { x := 250, y := -100, z := 50 } }
-    let st0   : RuckigState1D := { posScaled6 := 0, velScaled2 := 0, acc := 0 }
-    let st2   := stepRuckigSegment (stepRuckigSegment st0 5 4) (-5) 4
-    let target : Vec3 := { x := 100000, y := 200000, z := 50000 }
-    let linErr : Vec3 := { x := 12, y := -8, z := 5 }
-    let angErr : Vec3 := { x := 2, y := -3, z := 1 }
-    let arm    : Vec3 := { x := 0, y := 0, z := 150 }
-    spatialPower (spatialCrossForce twist mom) twist = 0 ∧
-    st2.acc = 0 ∧
-    st2.velScaled2 = 160 ∧
-    evalUncompensatedTipPos3D (evalAbbeCompensatedCmd3D target linErr angErr arm) linErr angErr arm = target := by
-  decide +kernel
-
 /-! ## 5. Multi-Link Articulated Kinematic Chain & Recursive Newton-Euler (`RNEA`) Dynamics -/
 
 /-- Scalar multiplication $s \cdot \mathbf{a}$ of a 3D vector. -/

@@ -1279,6 +1279,7 @@ def gqa2GroupQuotient : Nat → Nat → Int
    `gqaUntiedOperator` is rejected by `checkEquitablePartition` (`= false`) and
    `checkWl1ColorRefinementStable` (`= false`), and exhibits a strictly positive irreducible
    residual floor `evalEquitableResidualNormSq = 8 > 0`. -/
+-- fixture kept (2026-11-04): the path-3 partition is equitable and WL-stable: the worked instance the Bachman-Tamon theorem is read against
 theorem equitable_partition_and_residual_floor_sound :
     path3Matrix.isSymmetric = true ∧
     checkEquitablePartition path3Matrix 2 path3Part path3Quotient = true ∧
@@ -1669,6 +1670,7 @@ def goldenThermalCrosstalk4x4 : IntMatrix where
     , [0, 1, 2, 10] ]
 
 /-- Explicit Faddeev–LeVerrier adjugate and determinant of `goldenThermalCrosstalk4x4`. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem goldenThermalCrosstalk4x4_adj_eq :
     faddeevAdjugateAndDet goldenThermalCrosstalk4x4 =
       ({ dim := 4
@@ -1684,6 +1686,7 @@ For the $4 \times 4$ thermo-optic crosstalk matrix `goldenThermalCrosstalk4x4`, 
 synthesizes `(adjG, detG)` with $\det(G_{\text{th}}) = 8769 > 0$ such that both left and right
 matrix products cancel all off-diagonal thermal crosstalk identically:
 $$G_{\text{th}} \cdot \operatorname{adj}(G_{\text{th}}) = \operatorname{adj}(G_{\text{th}}) \cdot G_{\text{th}} = \det(G_{\text{th}}) \cdot I_4.$$ -/
+-- fixture kept (2026-11-04): the 4x4 crosstalk adjugate cancels; consumed by Photonics and the QPM app
 theorem faddeevAdjugate_cancels_crosstalk_4x4 :
     let res := faddeevAdjugateAndDet goldenThermalCrosstalk4x4
     res.2 = 8769 ∧

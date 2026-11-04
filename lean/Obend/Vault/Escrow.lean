@@ -548,6 +548,7 @@ def leaseStateTy : Ty :=
 
 def cellTopInv : Term := .lam trueT
 
+-- fixture kept (2026-11-04): cheap closed check of `closedB` on literal data
 example : closedB cellTopInv = true := by decide +kernel
 
 theorem holds_cellTopInv (d : Data) : Holds cellTopInv d := by
@@ -569,6 +570,7 @@ def escrowInvariant : Term :=
   .lam (andT (inRange012T (.get (.bound 0) "statusA"))
              (inRange012T (.get (.bound 0) "statusB")))
 
+-- fixture kept (2026-11-04): closedness of a library invariant, consumed by four proofs
 theorem escrowInvariant_closed : closedB escrowInvariant = true := by decide +kernel
 
 /-- Non-trivial single-state invariant for `PrepaidLease` enforcing `drawn ≤ budget` and `remaining ≤ budget`. -/
@@ -576,6 +578,7 @@ def prepaidLeaseInvariant : Term :=
   .lam (andT (leNat (.get (.bound 0) "drawn") (.get (.bound 0) "budget"))
              (leNat (.get (.bound 0) "remaining") (.get (.bound 0) "budget")))
 
+-- fixture kept (2026-11-04): closedness of a library invariant, consumed by four proofs
 theorem prepaidLeaseInvariant_closed : closedB prepaidLeaseInvariant = true := by decide +kernel
 
 /-- Constructive `CellContract` builder backed by a closed `invariant` (`closedB invariant = true`)

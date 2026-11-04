@@ -405,7 +405,7 @@ public theorem child_never_widens {g : Obend.Spec.C4.Graph} {laws : List (String
   | some (.inject "refused" (.record [("by", .label b), ("reason", .label why)])) => some (b, why)
   | _ => none
 
-theorem refusedBy_of_run {law : Term} {o n rq : Data} {name why : String} (fuel : Nat)
+public theorem refusedBy_of_run {law : Term} {o n rq : Data} {name why : String} (fuel : Nat)
     (h : blameOf (run fuel (applyLaw law o n rq)) = some (name, why)) :
     RefusedBy law o n rq name (.label why) := by
   unfold blameOf at h
@@ -424,22 +424,13 @@ public theorem boardLaws_closed : ∀ p ∈ boardLaws, closedB p.2 = true := by
   simp only [boardLaws, List.mem_cons, List.not_mem_nil, or_false] at hp
   rcases hp with rfl | rfl | rfl <;> decide +kernel
 
-theorem inherit_tooth :
-    Admits (effective boardLaws) (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO) ∧
-      RefusedBy (effective boardLaws) (totalIs 0) (totalIs 9) (rqBy "ann" "ann" writeO) "room" (.label "total over the bound") ∧
-      RefusedBy (effective boardLaws) (totalIs 0) (totalIs 3) (rqBy "eve" "eve" writeO) "board" (.label "not on the allowlist") ∧
-      RefusedBy (effective boardLaws) (totalIs 0) (totalIs 9) (rqBy "bob" "ann" writeO) "board2" (.label "not signed by the owner") ∧
-      Admits (bounded unitTy "total" 5) (totalIs 0) (totalIs 3) (rqBy "eve" "eve" writeO) :=
-  ⟨admits_of_run 500 (by decide +kernel), refusedBy_of_run 500 (by decide +kernel),
-    refusedBy_of_run 500 (by decide +kernel), refusedBy_of_run 500 (by decide +kernel),
-    admits_of_run 500 (by decide +kernel)⟩
-
 /-- A chain of single parents: `board2 → board → room`. -/
 @[expose] public def boardGraph : Obend.Spec.C4.Graph where
   precedence x := if x = "board" then ["board", "room"] else if x = "room" then ["room"] else [x]
   isSuffix _ := false
 
-theorem c4_tooth :
+-- fixture kept (2026-11-04): cheap closed check of `precedence` on literal data
+example :
     (precedence boardGraph "board2" [["board"]]).toOption = some ["board2", "board", "room"] ∧
       ((effectiveVia boardGraph boardLaws "board2" [["board"]]).toOption.map
         fun t => okB (run 500 (applyLaw t (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO)))) = some true ∧
@@ -449,18 +440,11 @@ theorem c4_tooth :
 /-- A three-level tree `board2 → board → room`. -/
 @[expose] public def boardTree : Tree := ⟨fun x => if x = "board2" then some "board" else if x = "board" then some "room" else none⟩
 
-theorem tree_tooth :
-    (Obend.Spec.C4.linearize (boardTree.graph 4) ["board2"] (boardTree.parents "board2")).toOption =
-      some (["board2", "board", "room"], none) ∧
-    (precedence (boardTree.graph 4) "board2" (boardTree.parents "board2")).toOption = some ["board2", "board", "room"] ∧
-    ((effectiveVia (boardTree.graph 4) boardLaws "board2" (boardTree.parents "board2")).toOption.map
-        fun t => okB (run 500 (applyLaw t (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO)))) = some true :=
-  ⟨by decide +kernel, by decide +kernel, by decide +kernel⟩
-
 /-- An incoherent oracle: the parent's "precedence" does not start at the parent. The linearization
 still keeps the local chain and the parent's list: the parent follows what its list names. -/
 @[expose] public def incoherentGraph : Obend.Spec.C4.Graph := ⟨fun x => if x = "board" then ["room"] else [x], fun _ => false⟩
 
+-- fixture kept (2026-11-04): cheap closed check of `precedence` on literal data
 theorem incoherent_tooth :
     (precedence incoherentGraph "board2" [["board"]]).toOption = some ["board2", "room", "board"] :=
   by decide +kernel

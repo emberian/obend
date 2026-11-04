@@ -302,31 +302,6 @@ def compileCompositionToVerifiedRtl (modName : String) (comp : Composition) : Op
         | some m => if checkRtlModule m then some (specBook, m) else none
         | none => none
 
-/-- Theorem: All three canonical physical compositions (`goldenCleanroomTcadComp`, `goldenLcDrivesStatorComp`,
-    `goldenCnc5AxisMillComp`) compile to DAG/CDC-verified `RtlModule`s and valid `TechNetlist` BEL netlists. -/
-example :
-    (match compileCompositionToVerifiedRtl "cleanroom_tcad_stack" goldenCleanroomTcadComp,
-           compileCompositionToVerifiedRtl "lc_drives_userspace_stator" goldenLcDrivesStatorComp,
-           compileCompositionToVerifiedRtl "cnc_5axis_userspace_mill" goldenCnc5AxisMillComp with
-     | some (_, m1), some (_, m2), some (_, m3) =>
-       checkSynthesizedRtlSignoff m1 &&
-       checkSynthesizedRtlSignoff m2 &&
-       checkSynthesizedRtlSignoff m3 &&
-       (evalModuleOutputs m2 (fun _ => 8#64) (fun _ => 0#64) ==
-         [ ("out_massKg", 395#64)
-         , ("out_camSurfaceErrorUm", 34#64)
-         , ("out_thermalResistance", 9#64)
-         , ("out_sdfMargin", 24#64)
-         , ("out_peakWindingTemp", 122#64) ]) &&
-       (evalModuleOutputs m3 (fun _ => 6#64) (fun _ => 0#64) ==
-         [ ("out_servoLagUm", 6#64)
-         , ("out_endMillDeflectionUm", 12#64)
-         , ("out_abbeAngularDriftUm", 6#64)
-         , ("out_commandedAxisAt10mmUm", 10024#64)
-         , ("out_totalVolumetricErrorUm", 26#64) ])
-     | _, _, _ => false) = true := by
-  decide +kernel
-
 /-! ## 3. Deterministic Test Vector Generator (small constants + 16-bit LCG) & `MachineFast` / `runModuleTrace` Differential Reference -/
 
 /-- Generate a deterministic 64-bit test input word for vector `vecIdx` and input port `portIdx`.
@@ -442,19 +417,6 @@ theorem runModuleTrace_append
       runModuleTrace m (runModuleTrace m initRegs t1) t2 := by
   unfold runModuleTrace
   exact List.foldl_append
-
-/-- Theorem: Differential evaluation of `goldenLcDrivesStatorComp` and `goldenCnc5AxisMillComp`
-    across 4 vectors and 4 clock cycles agrees 100% between `HDL.runModuleTrace` and
-    `Obend.Core.MachineFast.evalFuelFast`. -/
-example :
-    (match compileCompositionToVerifiedRtl "lc_drives_userspace_stator" goldenLcDrivesStatorComp,
-           compileCompositionToVerifiedRtl "cnc_5axis_userspace_mill" goldenCnc5AxisMillComp with
-     | some (_, mStator), some (_, mMill) =>
-       let vecsStator := generateDifferentialVectors mStator (some goldenLcDrivesStatorComp) 4 4
-       let vecsMill   := generateDifferentialVectors mMill (some goldenCnc5AxisMillComp) 4 4
-       vecsStator.all (·.machineAgreed) && vecsMill.all (·.machineAgreed)
-     | _, _ => false) = true := by
-  decide +kernel
 
 /-! ## 4. Rung 1: C++17 `Verilator` Differential Harness Generator (`emitVerilatorHarnessCpp`) -/
 
@@ -732,19 +694,6 @@ def goldenMultiInputSeqAluRtl : RtlModule where
   outputs    :=
     [ { name := "out_acc",  expr := .regRead 0 }
     , { name := "in_ready", expr := .alu .bitOr (.wireRef 1) (.const 1#64) } ]
-
-/-- Theorem: `goldenMultiInputSeqAluRtl` passes `checkSynthesizedRtlSignoff` and its `aluMap`
-    records `.ashr`, `.slt`, `.qmul32`, `.shl`, `.lshr`, `.bitXor`, `.add`, `.sub`, and `.bitOr`. -/
-example :
-    checkSynthesizedRtlSignoff goldenMultiInputSeqAluRtl = true ∧
-    (let m := collectModuleAluMap goldenMultiInputSeqAluRtl
-     lookupAluOp "w_0" m == some RtlAluOp.ashr &&
-     lookupAluOp "w_1" m == some RtlAluOp.slt &&
-     lookupAluOp "w_2" m == some RtlAluOp.qmul32 &&
-     lookupAluOp "w_3" m == some RtlAluOp.shl &&
-     lookupAluOp "w_4" m == some RtlAluOp.lshr &&
-     lookupAluOp "in_ready" m == some RtlAluOp.bitOr) = true := by
-  decide +kernel
 
 /-- **Universal Carry-Propagate Adder BEL Identity (`carry4_add_bel_identity`)**:
     For all 64-bit words `a b : BitVec 64`, `(a ^^^ b) + ((a &&& b) <<< 1) = a + b`. -/

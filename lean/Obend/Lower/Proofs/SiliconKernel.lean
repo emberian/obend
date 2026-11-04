@@ -266,6 +266,7 @@ through `LExpr` (`SSteps`), `Core4` (`Evaluates`), `Obend.Leaf.Book` (`Halts`), 
 2. Invalid declarations (`invalidMismatchDecl`, `invalidBadAppDecl`, `invalidUniverseDecl`,
    `invalidSorryDecl`) are refused (`0`) across all 5 stages and output `0#64` on the
    `ReductionMachine` `AutomatonNetwork`. -/
+-- fixture kept (2026-11-04): target of #tooth at tests/silicon_elab/SiliconElabTest.lean:209
 theorem silicon_kernel_5stage_check_sound :
     let tagValid := encodeDeclStatusTag stdKernelEnv 8 validIdNatDecl
     let tagMismatch := encodeDeclStatusTag stdKernelEnv 8 invalidMismatchDecl
@@ -416,6 +417,7 @@ resident kernel checker `kernelGateTile`):
    - Transitions `tile 0` from `10#64 ↦ 11#64` (unspecialized fallback) to `10#64 ↦ 42#64`
      ($4 \times 10 + 2 = 42$) after fence release, while `tile 1` continues checking kernel
      declarations (`1#64 ↦ 1#64`, `2#64 ↦ 0#64`) without interruption! -/
+-- fixture kept (2026-11-04): used by tests/silicon_elab/SiliconElabTest.lean
 theorem silicon_elab_residual_dpr_specialize_sound :
     let initTile0 : ReconfigTileState :=
       { tileId := 0, tileX := 0, tileY := 0
@@ -478,6 +480,7 @@ theorem silicon_elab_residual_dpr_specialize_sound :
 2. **Corrupt / Unauthenticated Bitstream Refusal**: If a bitstream frame with a mismatched digest
    (`computedDigest ≠ expectedDigest`) is streamed into `ICAP`, `runTileGlitchFreeDpr` refuses to
    overwrite `activeTile` and keeps the tile isolated (`isolated = true`) clamped at `skidHeldOutput`. -/
+-- fixture kept (2026-11-04): target of #tooth at tests/silicon_elab/SiliconElabTest.lean:242
 theorem silicon_elab_env_mutation_fallback_sound :
     let tile0 : ReconfigTileState :=
       { tileId := 0, tileX := 0, tileY := 0
@@ -551,24 +554,6 @@ def kernelFuelLoopLExpr : LExpr :=
 def kernelFuelLoopBook : Book :=
   emit (leanComposition "kernelFuelLoop" (lowerT kernelFuelLoopLExpr))
 
-/-- A closed check (it was the theorem `silicon_kernel_seq_rtl_fuel_sound` until 2026-11-04):
-Proves that lowering `kernelFuelLoopLExpr` (`Nat.rec` fuel-bounded accumulator) through `Core4`
-and `Leaf.Book` and synthesizing sequential multi-cycle RTL via `compileBookToSeqRtlSat`:
-1. Produces a valid sequential `RtlModule` (`checkRtlModule m = true`),
-2. Remains busy (`out_done = 0#64`) at cycle `4` when given fuel bound `5#64`, and
-3. Asserts `out_done = 1#64` with the exact accumulated step counts (`0#64`, `15#64`, `36#64`)
-   after `0`, `5`, and `8` clock cycles (`evalSeqModuleAfterCycles`). -/
-example :
-    (match compileBookToSeqRtlSat "silicon_kernel_fuel_seq_rtl" kernelFuelLoopBook with
-     | some m =>
-       checkRtlModule m &&
-       (evalSeqModuleAfterCycles m 0#64 0 == [("out_kernelFuelLoop", 0#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m 5#64 4 == [("out_kernelFuelLoop", 10#64), ("out_done", 0#64)]) &&
-       (evalSeqModuleAfterCycles m 5#64 5 == [("out_kernelFuelLoop", 15#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m 8#64 8 == [("out_kernelFuelLoop", 36#64), ("out_done", 1#64)])
-     | none => false) = true := by
-  decide +kernel
-
 /-- **Theorem (`silicon_elab_mesh_xy_and_icap_codec_sound`)**:
 Verifies the physical eFPGA transport invariants for the specialized elaborator and kernel tiles:
 1. **32-bit `ICAP` Bitstream Word Codec Round-Trip**: A canonical ICAP rule tile (`mkIcapRuleTile 0 .loweredLeanLite .addImm 10`)
@@ -579,6 +564,7 @@ Verifies the physical eFPGA transport invariants for the specialized elaborator 
    hop (`3 → 2 → 1 → 0`) under `stepMeshXy`, reaches `(2, 1)` as a fixed point (`stepMeshXy p3 = p3`), and preserves `payload`.
 3. **Interaction-Net `dup`/`sup` Commutation (`commuteSpawnedNodes`)**: Distinct-label `.dup` (`label = 1`)
    and `.sup` (`label = 2`) nodes commute in 1 cycle into `.commute (commuteSpawnedNodes dupNode supNode 100)` (4 fresh cross-wired nodes). -/
+-- fixture kept (2026-11-04): would delete (ICAP word counts and mesh coordinates of one literal tile) but cited by tests/silicon_elab/SiliconElabTest.lean:179, tests/silicon_elab/SiliconElabTest.lean:395
 theorem silicon_elab_mesh_xy_and_icap_codec_sound :
     let simpRuleTile := mkIcapRuleTile 0 .loweredLeanLite .addImm 10
     (encodeTileIcapWords specializedSimpTile).length = 5 ∧
@@ -681,44 +667,6 @@ def evalLoweredDefEqNodeRtl (node : Nat × Nat × Nat × Nat) : List (String × 
   | some m => evalModuleOutputs m (mkNodeInputEnv node) (fun _ => 0#64)
   | none => []
 
-/-- **Theorem (`stepCamNodeWord_fragment_6stage_sound`)**:
-Proves that the pure decidable hardware-word kernel transition functions (`stepCamWhnfNodeWord`,
-`stepCamDefEqNodeWord`, `stepCamInferNodeWord`) agree with their lowered `LExpr` (`evalKernelStepLExpr`,
-`stepCamDefEqNodeLExpr`, `inferTypeLExpr`), `Core4.Term` (`lowerT`), `Leaf.Book`, and synthesized
-4-port `RtlModule` (`compileBookToRtlSat`) across WHNF $\beta/\iota/\zeta$, `isDefEq` handle identity
-and `Nat.succ` bridging, and `inferType` arrow checking without host precomputation! -/
-theorem stepCamNodeWord_fragment_6stage_sound :
-    stepCamWhnfNodeWord 5 1 35 7 = 42 ∧
-    stepCamWhnfNodeWord 5 2 41 0 = 42 ∧
-    stepCamInferNodeWord 5 17 1 1 = 1 ∧
-    stepCamInferNodeWord 5 17 3 1 = 0 ∧
-    stepCamInferNodeWord 4 1 1 17 = 17 ∧
-    stepCamDefEqNodeWord 1 42 1 42 = 1 ∧
-    stepCamDefEqNodeWord 1 0 3 1 = 1 ∧
-    stepCamDefEqNodeWord 1 5 5 4 = 1 ∧
-    stepCamDefEqNodeWord 1 5 1 6 = 0 ∧
-    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 42 1 42) (.lit 1) ∧
-    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 0 3 1) (.lit 1) ∧
-    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 5 4) (.lit 1) ∧
-    SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 1 6) (.lit 0) ∧
-    Evaluates (lowerT (app4LExpr stepCamDefEqNodeLExpr 1 5 5 4)) (.nat 1) ∧
-    evalLoweredDefEqNodeRtl (1, 42, 1, 42) = [("out_stepCamDefEqNode", 1#64)] ∧
-    evalLoweredDefEqNodeRtl (1, 0, 3, 1) = [("out_stepCamDefEqNode", 1#64)] ∧
-    evalLoweredDefEqNodeRtl (1, 5, 5, 4) = [("out_stepCamDefEqNode", 1#64)] ∧
-    evalLoweredDefEqNodeRtl (1, 5, 1, 6) = [("out_stepCamDefEqNode", 0#64)] := by
-  have sEq1 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 42 1 42) (.lit 1) :=
-    runLExprSteps_sound 64 _ _ rfl
-  have sEq2 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 0 3 1) (.lit 1) :=
-    runLExprSteps_sound 64 _ _ rfl
-  have sEq3 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 5 4) (.lit 1) :=
-    runLExprSteps_sound 64 _ _ rfl
-  have sEq4 : SSteps (app4LExpr stepCamDefEqNodeLExpr 1 5 1 6) (.lit 0) :=
-    runLExprSteps_sound 64 _ _ rfl
-  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-          sEq1, sEq2, sEq3, sEq4,
-          by simpa [lowerT] using lower_sound_nat sEq3,
-          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
-
 /-- **Theorem (`real_silicon_kernel_node_check_sound`)**:
 Proves that the genuine 4-argument lowered term-level kernel typechecker (`inferTypeLExpr` /
 `checkTermNodeLExpr`) and reducer (`evalKernelStepLExpr`), lowered through `Core4` (`lowerT`)
@@ -744,6 +692,7 @@ well-typed and ill-typed `app`, `lam`, `const`, and `bvar` syntax nodes:
    Executes $\beta$-reduction (`(5, 1, 35, 7) ↦ 42#64`), `Nat.succ` folding (`(5, 2, 41, 0) ↦ 42#64`),
    `bvar 0` substitution (`(0, 0, 0, 42) ↦ 42#64`), and `letE` $\zeta$-reduction (`(7, 40, 2, 0) ↦ 42#64`)
    across `SSteps`, `Core4.Evaluates`, and `RtlModule`. -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Lower/Proofs/SiliconKernel.lean:878
 theorem real_silicon_kernel_node_check_sound :
     let eAppGood := KExpr.app (.const (KName.mkSimple "idNat") []) (.lit (.natVal 42))
     let eAppBadDom := KExpr.app (.const (KName.mkSimple "idNat") []) (.sort .zero)

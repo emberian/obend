@@ -650,32 +650,6 @@ theorem csgDiff_right_branch_pruning_sound
   dsimp only [pruneFRepTape]
   rw [hRight]
 
-/-- **Golden Multi-Feature Stator CSG Tape Compaction Certificate (`golden_fidget_tape_pruning_verified`)**:
-On a 3-feature stator CSG expression combining:
-1. Primary stator core cylinder $x^2 + y^2 - 100$,
-2. Unioned mounting lug $(x - 20)^2 + y^2 - 4$, and
-3. Subtracted axial cooling bore $(x + 20)^2 + y^2 - 4$,
-specializing the 24-node CSG tape over an octree sub-box $B = [-2, 2]^3$ near the stator center
-prunes away both the distant mounting lug (`.csgUnion` $\to$ `.left`) and the distant cooling bore
-(`.csgDiff` $\to$ `.left`), compacting the tape from `24` AST nodes down to `6` AST nodes while
-preserving exact point evaluations inside $B$! -/
-example :
-    let statorCore : FRepExpr := .offset 100 (.add (.sq .varX) (.sq .varY))
-    let mountingLug : FRepExpr := .offset 4 (.add (.sq (.sub .varX (.const 20))) (.sq .varY))
-    let coolingBore : FRepExpr := .offset 4 (.add (.sq (.add .varX (.const 20))) (.sq .varY))
-    let fullStatorCsg : FRepExpr := .csgDiff (.csgUnion statorCore mountingLug) coolingBore
-    let centerOctreeCell : Box3D :=
-      { xIv := { lo := -2, hi := 2 }
-        yIv := { lo := -2, hi := 2 }
-        zIv := { lo := -2, hi := 2 } }
-    let prunedTape := pruneFRepTape centerOctreeCell fullStatorCsg
-    frepNodeCount fullStatorCsg = 24 ∧
-    frepNodeCount prunedTape = 6 ∧
-    frepNodeCount prunedTape < frepNodeCount fullStatorCsg ∧
-    prunedTape = statorCore ∧
-    evalFRepPoint 1 (-1) 0 prunedTape = evalFRepPoint 1 (-1) 0 fullStatorCsg := by
-  decide +kernel
-
 /-! ### 2C. Canonical Linear SSA F-Rep Register Tape (`SsaTapeOp`), Interval Pruning & Backward-Liveness Compaction -/
 
 /-- Instruction in a linear Single Static Assignment (`SSA`) 3D F-Rep register tape (`fidget` VM tape):
@@ -1667,6 +1641,7 @@ mounting lug + 1 `minUnion` + 5 ops for cooling bore + 1 `maxInter`):
    stator housing (where the negated cooling bore `reg 18` in the right branch of `.maxInter 13 18`
    dominates `reg 13`) eliminates both the dead stator core and dead mounting lug branches,
    compacting from `20` down to `10` instructions! -/
+-- fixture kept (2026-11-04): would delete (a literal tape pruned and compared to its literal result) but cited by tests/metasystem/OpenUsdAndSsaTapeTest.lean:250
 theorem golden_ssa_tape_prune_and_compact_verified :
     let box : Box3D :=
       { xIv := { lo := -2, hi := 2 }
@@ -1693,6 +1668,7 @@ theorem golden_ssa_tape_prune_and_compact_verified :
     evalSsaTape 1 1 0 compacted (compacted.length - 1) = evalSsaTape 1 1 0 ssaStatorTape 19 := by
   decide +kernel
 
+-- fixture kept (2026-11-04): would delete (a literal tape compacted and compared to its literal result) but cited by tests/metasystem/OpenUsdAndSsaTapeTest.lean:279, tests/metasystem/OpenUsdAndSsaTapeTest.lean:452
 theorem golden_ssa_tape_right_branch_compaction_verified :
     let boxLug : Box3D :=
       { xIv := { lo := 14, hi := 16 }
@@ -2502,32 +2478,6 @@ theorem synthesizeCertifiedSweptVolume_no_gouge_sound
     (by unfold computeCertifiedStepPad; omega)
     (by omega)
 
-/-- **Golden Self-Certified Dual-Interval Gradient & Swept-Volume Verification
-(`golden_certified_lipschitz_swept_volume_verified`)**:
-1. On a 3D plane $f_{\text{plane}}(x, y, z) = 3x - 4y + 2z - 10$, `evalFRepGradBox` derives exact
-   constant gradient intervals $([3, 3], [-4, -4], [2, 2])$ and `computeCertifiedLipschitzBox = 9`,
-2. On a non-Eikonal quadratic sphere polynomial $f_{\text{sphere}}(x, y, z) = x^2 + y^2 + z^2 - 100$
-   over box $B = [10, 12]^3$, `evalFRepGradBox` derives $([-24, 24], [-24, 24], [-24, 24])$ and
-   `computeCertifiedLipschitzBox = 72` ($\neq 1$!),
-3. `synthesizeCertifiedSweptVolume` automatically pads the swept volume by `computeCertifiedStepPad`
-   and certifies `checkVoxelNoGouge = true` without any caller-supplied Lipschitz parameter! -/
-example :
-    let box : Box3D :=
-      { xIv := { lo := 10, hi := 12 }
-      , yIv := { lo := 10, hi := 12 }
-      , zIv := { lo := 10, hi := 12 } }
-    let plane : FRepExpr :=
-      .offset 10 (.add (.sub (.scalePos 3 .varX) (.scalePos 4 .varY)) (.scalePos 2 .varZ))
-    let sphere : FRepExpr :=
-      .offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
-    evalFRepGradBox box plane =
-      ({ lo := 3, hi := 3 }, { lo := -4, hi := -4 }, { lo := 2, hi := 2 }) ∧
-    computeCertifiedLipschitzBox box plane = 9 ∧
-    computeCertifiedLipschitzBox box (.scalePos 100 plane) = 900 ∧
-    computeCertifiedLipschitzBox box sphere = 72 ∧
-    checkVoxelNoGouge box (synthesizeCertifiedSweptVolume box sphere [(0, 0, 0)] 2) = true := by
-  decide +kernel
-
 
 
 /-! ## 4. Machine-Tool Dynamics: Servo Lag, End-Mill Cantilever Deflection & Altintas Chatter -/
@@ -2660,35 +2610,6 @@ theorem evolutionary_search_emits_only_verified_designs
   unfold checkCandidateManufacturingSafe at hOk
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
   exact ⟨hOk.1.1.1, hOk.1.1.2, hOk.1.2, hOk.2⟩
-
-/-- **Golden 5-Axis Stator-Slot Microchannel Milling & Evolutionary Search Certificate
-(`golden_geometry_cam_evolutionary_search_verified`)**:
-Verifies by kernel evaluation (`decide +kernel`):
-1. Octree exterior pruning of a 3D F-Rep sphere $x^2 + y^2 + z^2 - 100$ over box $[10, 12]^3$ (`lo = 200 > 0`),
-2. Zero-gouge CAM material removal on the stator tooth bounding box,
-3. Machine-tool deflection + servo-lag error ($3500\,\text{nm} \le 5000\,\text{nm}$ tolerance), and
-4. Evolutionary filtering of a 3-candidate design population (rejecting a gouging candidate and a
-   chattering candidate, and selecting the verified high-torque candidate `#2`). -/
-example :
-    let sphereR10 := FRepExpr.offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
-    let farBox : Box3D :=
-      { xIv := { lo := 10, hi := 12 }
-        yIv := { lo := 10, hi := 12 }
-        zIv := { lo := 10, hi := 12 } }
-    let candGouge : PhysicalDesignCandidate :=
-      { candidateId := 1, sweptLo := -5, surfaceErrNm := 2000, maxTolNm := 5000,
-        apUm := 1500, kfScaled := 2, negReFrfScaled := 3, chatterLimitScaled := 25000, performanceScore := 950 }
-    let candVerified : PhysicalDesignCandidate :=
-      { candidateId := 2, sweptLo := 200, surfaceErrNm := 3500, maxTolNm := 5000,
-        apUm := 2000, kfScaled := 2, negReFrfScaled := 3, chatterLimitScaled := 25000, performanceScore := 920 }
-    let candChatter : PhysicalDesignCandidate :=
-      { candidateId := 3, sweptLo := 150, surfaceErrNm := 3000, maxTolNm := 5000,
-        apUm := 6000, kfScaled := 2, negReFrfScaled := 3, chatterLimitScaled := 25000, performanceScore := 980 }
-    (evalFRepInterval farBox sphereR10).lo = 200 ∧
-    checkVoxelNoGouge farBox sphereR10 = true ∧
-    evalMachiningDimensionalErrorNm 50 10 3 1000 = 3500 ∧
-    (filterVerifiedDesigns 800 [candGouge, candVerified, candChatter]).map (·.candidateId) = [2] := by
-  decide +kernel
 
 /-! ## 6. One F-Rep: the tree compiles to the tape (`FRepExpr.toTape`)
 

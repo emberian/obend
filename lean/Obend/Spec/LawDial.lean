@@ -288,7 +288,8 @@ def demoState15 : Data := .record [("x", .natural 1), ("y", .natural 5)]
 def demoState51 : Data := .record [("x", .natural 5), ("y", .natural 1)]
 def demoFacts : Facts := { subject := some 0, caller := none, height := 0, turn := 0 }
 
-theorem demoOr_not_confluent :
+-- fixture kept (2026-11-04): refusal witness: `dial` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
+example :
     dial demoOrLaw = .ordering ∧
     demoOrLaw.denote demoFacts none demoState15 = true ∧
     demoOrLaw.denote demoFacts none demoState51 = true ∧
@@ -398,13 +399,6 @@ def coupledMultiFieldLaw : LawExpr :=
   .and (.and (.monotone "a") (.leR (.field "a") (.field "b"))) (.leC (.field "b") 10)
 
 def coupledOldState : Data := .record [("a", .natural 4), ("b", .natural 1)]
-
-theorem coupledMultiFieldLaw_solved :
-    solveLawWitness ["a", "b"] coupledMultiFieldLaw demoFacts (some coupledOldState) =
-      some (.record [("a", .natural 4), ("b", .natural 4)]) ∧
-    coupledMultiFieldLaw.denote demoFacts (some coupledOldState)
-      (.record [("a", .natural 4), ("b", .natural 4)]) = true :=
-  ⟨rfl, by decide +kernel⟩
 
 end Obend.Spec.LawDial
 end

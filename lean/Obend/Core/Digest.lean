@@ -294,6 +294,7 @@ theorem deployed_eq (input : List UInt8) :
 def permutations (a b : Nat) : Nat :=
   (padForRate (customizationPrefix customization ++ preimage a b) 0x04).length / rateBytes
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem customizationPrefix_length : (customizationPrefix customization).length = 136 := by
   decide +kernel
 

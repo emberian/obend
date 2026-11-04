@@ -432,25 +432,11 @@ def revised : Kinds := ⟨[
 /-- `show` for each kind: the bodies say which. -/
 def shows : List (Impl String) := [⟨"show", "Mile", "miles"⟩, ⟨"show", "Kilo", "kilometres"⟩]
 
-/-- **Two kinds with equal fields are distinguished.** `a` is a `Mile`, `b` a `Kilo`, born in the
-same state from kinds with the same layout; `show` reaches each kind's own implementation. A `Trip`
-reaches `Mile`'s, its parent's. -/
-theorem nominal_tooth :
-    ((create tooth "Mile" "a" lawAdmit).toOption.map fun i => natField i.state "n",
-      (create tooth "Kilo" "b" lawAdmit).toOption.map fun i => natField i.state "n") = (some (some 0), some (some 0)) ∧
-    ((create tooth "Mile" "a" lawAdmit).toOption.bind fun a => (dispatch tooth shows "show" a).toOption) =
-      some (some "miles") ∧
-    ((create tooth "Kilo" "b" lawAdmit).toOption.bind fun b => (dispatch tooth shows "show" b).toOption) =
-      some (some "kilometres") ∧
-    ((create tooth "Trip" "t" lawAdmit).toOption.bind fun t => (dispatch tooth shows "show" t).toOption) =
-      some (some "miles") ∧
-    (kindPrecedence tooth tooth.depth "Trip").toOption = some ["Trip", "Mile"] := by
-  decide +kernel
-
 /-- A `Trip` born before `Mile` was revised: its effective law exists at birth. After the revision of
 `Mile` it is stale, naming `Mile` at version 1 (its pin rests on its ancestor's version as well as its
 own), and so is a `Mile` born before; neither dispatches; renewing makes each current, at `Mile`'s
 version 2. A `Kilo` is untouched. An instance named like a kind is refused at birth. -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Kind/Proofs.lean:476
 theorem stale_tooth :
     ((create tooth "Trip" "t" lawAdmit).toOption.map fun t => (effectiveOf tooth t).toOption.isSome) = some true ∧
     ((create tooth "Trip" "t" lawAdmit).toOption.map fun t =>

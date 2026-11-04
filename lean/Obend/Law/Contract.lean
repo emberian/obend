@@ -802,6 +802,7 @@ def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict 
 def falseContractGoal : ContractGoal :=
   .preserves (.lam (.lam (.lam (.inject "ok" (.record []))))) (.lam (.boolean false))
 
+-- fixture kept (2026-11-04): refusal witness: `checkGoalPropositionalUnsat` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 example :
     checkGoalPropositionalUnsat falseContractGoal = false := by
   decide +kernel

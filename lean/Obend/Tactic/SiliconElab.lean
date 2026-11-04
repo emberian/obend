@@ -304,6 +304,7 @@ def quadMinusLinearExpr : RealExpr :=
 def domZeroToTwo : Interval := ⟨0, 2⟩
 def tightQuadBound : Interval := ⟨CanonicalRat.mk (-1) 2, CanonicalRat.mk 5 2⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem quadMinusLinear_subdiv_depth0_and_depth3 :
     verifyRealBoundSubdiv 0 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound = false ∧
     verifyRealBoundSubdiv 3 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound = true := by
@@ -324,6 +325,7 @@ def quadPlusLinearExpr : RealExpr :=
 def negDomMinusOneToZero : Interval := ⟨-1, 0⟩
 def tightNegQuadBound : Interval := ⟨CanonicalRat.mk (-9) 32, CanonicalRat.mk 1 32⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem quadPlusLinear_negDom_depth0_and_depth7 :
     verifyRealBoundSubdiv 0 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound = false ∧
     verifyRealBoundSubdiv 7 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound = true := by
@@ -344,6 +346,7 @@ def quad2DBoxExpr : RealExpr :=
 def box2DZeroToTwo : IntervalEnv := [("x", domZeroToTwo), ("y", domZeroToTwo)]
 def tight2DBoxBound : Interval := ⟨-1, 5⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem quad2DBox_subdiv_certifies :
     verifyRealBoxBoundSubdiv [] box2DZeroToTwo quad2DBoxExpr tight2DBoxBound = false ∧
     verifyRealBoxBoundSubdiv ["x", "y", "x", "y", "x", "y"] box2DZeroToTwo quad2DBoxExpr tight2DBoxBound = true := by
@@ -375,10 +378,12 @@ def sampleSosNonnegCert : SOSCert where
   sigmas  := []
   lambdas := []
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem sampleSosNonneg_holds :
     SOSQuery.SemanticMeaning sampleSosNonnegQuery :=
   sos_cert_implies_nonneg 0 sampleSosNonnegQuery sampleSosNonnegCert (by decide +kernel)
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem goldenSosLyapunovAndCbf_hold :
     checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
     checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true := by

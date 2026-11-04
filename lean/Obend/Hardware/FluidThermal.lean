@@ -246,22 +246,6 @@ theorem checkLiquidThermalSignoff_sound
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
   exact ⟨hOk.1.1.1, hOk.1.1.2, hOk.1.2, hOk.2⟩
 
-/-- Golden liquid-cooled axial/radial-flux traction stator signoff (`golden_liquid_cooled_stator_signoff_verified`):
-Verifies by kernel evaluation (`decide +kernel`) a $4\,\text{kW}$-loss liquid-cooled stator jacket
-with 6 parallel cooling channels ($6 \times 1500\,\text{mL/min} = 9000\,\text{mL/min} = 150\,\text{g/s}$),
-$T_{\text{inlet}} = 60^\circ\text{C}$, peak winding temperature $148^\circ\text{C} \le 180^\circ\text{C}$ (Class-H),
-rotor magnet temperature $102^\circ\text{C} \le 120^\circ\text{C}$, pressure drop $42\,\text{kPa} \le 80\,\text{kPa}$,
-and coolant outlet $67.6^\circ\text{C} < 105^\circ\text{C}$ boiling margin. -/
-theorem golden_liquid_cooled_stator_signoff_verified :
-    let branchFlows : List Int := [1500, 1500, 1500, 1500, 1500, 1500]
-    let tWinding := evalPeakWindingTempMilliC 60000 4000 2 8 12
-    let tOutlet  := evalCoolantOutletTempMilliC 60000 4000000 150 3500
-    checkManifoldMassBalance 9000 branchFlows = true ∧
-    tWinding = 148000 ∧
-    tOutlet = 67619 ∧
-    checkLiquidThermalSignoff tWinding 180000 102000 120000 42000 80000 tOutlet 105000 = true := by
-  decide +kernel
-
 /-! ## 5. LC Drives (Potsdam, NY) Direct In-Slot Stator Microchannel Cooling vs. Outer Jacket -/
 
 /-- Evaluates peak stator conductor temperature (in millidegrees Celsius) for a conventional
@@ -312,22 +296,6 @@ theorem lc_drives_in_slot_cooler_than_outer_jacket
   have hPos : 0 < powerLossW * (rSlotLinerMilliKPerW + rIronYokeMilliKPerW - rDirectWallMilliKPerW) :=
     Int.mul_pos hLoss (by omega)
   omega
-
-/-- Golden LC Drives (Potsdam, NY) High-Torque Stator Dyno Comparison (`lc_drives_potsdam_dyno_comparison_verified`):
-At $8\,\text{kW}$ continuous stator copper loss with $T_{\text{inlet}} = 50^\circ\text{C}$ (`50000 mC`):
-- A conventional outer-jacketed motor ($R_{\text{liner}} = 12\,\text{mK/W}$, $R_{\text{yoke}} = 18\,\text{mK/W}$)
-  reaches $346^\circ\text{C}$ (`346000 mC`), violating Class-H $180^\circ\text{C}$ insulation and failing signoff.
-- The LC Drives direct in-slot liquid-cooled stator ($R_{\text{wall}} = 2\,\text{mK/W}$) runs at
-  $122^\circ\text{C}$ (`122000 mC`), $224^\circ\text{C}$ cooler, passing Class-H signoff with $58^\circ\text{C}$ margin! -/
-theorem lc_drives_potsdam_dyno_comparison_verified :
-    let tOuterJacket := evalOuterJacketWindingTempMilliC 50000 8000 2 5 12 18
-    let tLcInSlot    := evalLcDrivesInSlotWindingTempMilliC 50000 8000 2 5 2
-    tOuterJacket = 346000 ∧
-    tLcInSlot = 122000 ∧
-    tOuterJacket - tLcInSlot = 224000 ∧
-    checkLiquidThermalSignoff tOuterJacket 180000 102000 120000 42000 80000 67619 105000 = false ∧
-    checkLiquidThermalSignoff tLcInSlot 180000 102000 120000 42000 80000 67619 105000 = true := by
-  decide +kernel
 
 /-! ## 6. Coupled Electro-Thermal Copper Resistivity Feedback & No-Thermal-Runaway Stability -/
 

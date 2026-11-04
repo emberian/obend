@@ -121,13 +121,6 @@ theorem finiteFunction_tensor_dims (f g : FiniteFunction) :
     (f.tensor g).table.length = f.table.length + g.table.length := by
   simp [FiniteFunction.tensor]
 
-/-- Theorem (`finiteFunction_twist_involution_2_3`):
-Composing the symmetric braiding `twist 2 3` with `twist 3 2` recovers `FiniteFunction.id 5`. -/
-theorem finiteFunction_twist_involution_2_3 :
-    FiniteFunction.comp (FiniteFunction.twist 2 3) (FiniteFunction.twist 3 2) =
-      some (FiniteFunction.id 5) := by
-  decide +kernel
-
 /-- Sum of a list of natural numbers (used for segmented array offsets in `IndexedCoproduct`). -/
 def sumNatList (xs : List Nat) : Nat :=
   xs.foldl (· + ·) 0

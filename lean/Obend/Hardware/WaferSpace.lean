@@ -491,6 +491,7 @@ def goldenEndToEndSiliconPipeline : EndToEndTapeoutPipeline where
   waferSpaceCert := goldenGf180SignoffCert
 
 /-- Theorem: `goldenEndToEndSiliconPipeline` passes the unified `checkEndToEndSiliconSignoff` gate! -/
+-- fixture kept (2026-11-04): would delete (a preset passing its own signoff) but cited by tests/metasystem/PhysicalSiliconSpineTest.lean:338
 theorem goldenEndToEndSiliconPipeline_verified :
     checkEndToEndSiliconSignoff goldenEndToEndSiliconPipeline = true := by
   decide +kernel

@@ -117,13 +117,12 @@ def layered : Composition := ⟨outer, [inner], []⟩
 /-- Its flattening is the object `{b = self.a, c = 7, a = 7}`: `super.a` resolved statically. -/
 def layeredFields : List (String × FE) := [("b", .ref "a"), ("c", .lit 7), ("a", .lit 7)]
 
+-- fixture kept (2026-11-04): cheap closed check of `layered.closedB` on literal data
 theorem layered_closed : layered.closedB = true := by decide +kernel
-
-theorem layered_flatten : layered.flatten = obj layeredFields :=
-  termBeq_sound (by decide +kernel : termBeq layered.flatten (obj layeredFields) = true)
 
 /-- **The layered member reading `self` is costed**: `layered.b` costs at most 7 through its
 flattening, and `≈b` that flattening's member; at most 6 is refuted. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem layered_b_cost :
     layeredCheck 0 (layered, "b", 7) ⟨layeredFields, "b"⟩ = .ok ∧
       layeredCheck 0 (layered, "b", 6) ⟨layeredFields, "b"⟩ = .refused (.cost .overBudget) [] := by

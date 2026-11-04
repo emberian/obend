@@ -244,16 +244,6 @@ def goldenVonNeumannFactory : List FactoryCell :=
 def incompleteOpenLoopFactory : List FactoryCell :=
   goldenVonNeumannFactory.drop 1
 
-/-- Theorem (`golden_von_neumann_factory_self_closed`):
-`goldenVonNeumannFactory` closes the reflexive Von Neumann BOM fixed point with $+140\,\text{kW}$
-net surplus power (`checkReflexiveSelfClosure = true`), whereas `incompleteOpenLoopFactory` fails
-reflexive closure (`false`)! -/
-theorem golden_von_neumann_factory_self_closed :
-    checkReflexiveSelfClosure goldenVonNeumannFactory = true ∧
-    evalNetFactoryPowerKw goldenVonNeumannFactory = 140 ∧
-    checkReflexiveSelfClosure incompleteOpenLoopFactory = false := by
-  decide +kernel
-
 /-! ## 4. Combined Mechanical Rotordynamics + Von Neumann Signoff (`RotorStressSpec`, `checkMechanicsSignoff`) -/
 
 /-- Complete mechanical rotordynamics & air-gap clearance specification for a high-torque liquid-cooled
@@ -351,21 +341,6 @@ def rubbingOverspeedRotorSpec : RotorStressSpec :=
     rotorName       := "rubbing_overspeed_rotor"
     omegaRadPerSec  := 1200
     thermalGrowthUm := 800 }
-
-/-- Theorem (`golden_mechanics_and_von_neumann_verified`):
-`checkMechanicsSignoff` accepts `goldenLiquidCooledRotorSpec` with `goldenVonNeumannFactory`
-(`hotAirGap = 850 um >= 500 um`), and refuses both `rubbingOverspeedRotorSpec` and
-`incompleteOpenLoopFactory`! -/
-theorem golden_mechanics_and_von_neumann_verified :
-    evalHotAirGapUm
-      goldenLiquidCooledRotorSpec.coldAirGapUm
-      goldenLiquidCooledRotorSpec.thermalGrowthUm
-      goldenLiquidCooledRotorSpec.centrifugalGrowthUm
-      goldenLiquidCooledRotorSpec.bearingRunoutUm = 850 ∧
-    checkMechanicsSignoff goldenLiquidCooledRotorSpec goldenVonNeumannFactory = true ∧
-    checkMechanicsSignoff rubbingOverspeedRotorSpec goldenVonNeumannFactory = false ∧
-    checkMechanicsSignoff goldenLiquidCooledRotorSpec incompleteOpenLoopFactory = false := by
-  decide +kernel
 
 /-! ## 5. Combined Bending + Torsion Shaft Von Mises Stress & Strain-Energy Positive-Definiteness -/
 

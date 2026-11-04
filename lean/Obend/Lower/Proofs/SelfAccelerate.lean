@@ -495,36 +495,6 @@ theorem lcDrivesInSlotThermal_runs_8kw :
   refine .next (.binRight .add 50 (.binLit .mul 8 9)) ?_
   exact .next (.binLit .add 50 72) (.refl _)
 
-/-- **6-Stage Reflexive Self-Acceleration of LC Drives Direct In-Slot Stator Thermal Kernel**:
-Proves that `lcDrivesInSlotThermalLExpr` at $P_{\text{loss}} = 8\,\text{kW}$ evaluates to $122^\circ\text{C}$
-identically across:
-1. `Lean-lite` source semantics (`SSteps`),
-2. `Obend.Core` `Core4` semantics (`Evaluates`),
-3. `Obend.Leaf.Book` graph-reduction semantics (`Halts`),
-4. Synthesized FPGA RTL (`compileBookToRtlSat` + `evalModuleOutputs`),
-5. Compiled AMD `CDNA3` GPU Wavefront ISA (`evalCompiledAmdGpuModule`), and
-6. TPU Systolic Array (`runSystolicMacChain`) & FPGA `DSP58` Cascade (`runDsp58Cascade`),
-while matching `Obend.Hardware.FluidThermal.evalPeakWindingTempMilliC`! -/
-theorem lc_drives_thermal_self_accelerates_6stage :
-    let C := leanComposition "lcThermal" (lowerT lcDrivesInSlotThermalLExpr)
-    let B := emit C
-    SSteps (.app lcDrivesInSlotThermalLExpr (.lit 8)) (.lit 122) ∧
-    Evaluates (.app (lowerT lcDrivesInSlotThermalLExpr) (.nat 8)) (.nat 122) ∧
-    Halts (.app (.get B.link "lcThermal") (.nat 8)) (.natural 122) ∧
-    (match compileBookToRtlSat "lean_lc_thermal_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 8#64) (fun _ => 0#64) == [("out_lcThermal", 122#64)]) &&
-       (evalCompiledAmdGpuModule m 8 == some 122)
-     | none => false) = true ∧
-    runSystolicMacChain 50 [8, 8, 8] [2, 4, 3] = 122 ∧
-    runDsp58Cascade 50 [(8, 2), (8, 4), (8, 3)] = 122 ∧
-    Obend.Hardware.FluidThermal.evalPeakWindingTempMilliC 50 8 2 4 3 = 122 := by
-  refine ⟨lcDrivesInSlotThermal_runs_8kw, ?_, ?_, ?_, rfl, rfl, rfl⟩
-  · simpa [lowerT] using lower_sound_nat lcDrivesInSlotThermal_runs_8kw
-  · exact lean_to_book "lcThermal" lcDrivesInSlotThermalLExpr 8 122 (by decide +kernel) lcDrivesInSlotThermal_runs_8kw
-  · decide +kernel
-
 /-! ## 3. Domain B: Mission Power `MS350` (Potsdam, NY) Solar Inverter MPPT Power Kernel -/
 
 /-- `Lean-lite` (`LExpr`) kernel for Mission Power `MS350` extracted DC solar array power:
@@ -547,42 +517,6 @@ theorem ms350MpptExtractedPower_runs_100v :
   rw [hinst]
   refine .next (.binRight .mul 100 (.binLit .sub 200 100)) ?_
   exact .next (.binLit .mul 100 100) (.refl _)
-
-/-- **6-Stage Reflexive Self-Acceleration of Mission Power `MS350` MPPT Kernel + Ozaki `FP4` Tensor Core**:
-Proves that `ms350MpptExtractedPowerLExpr` at the Maximum Power Point $V^\star = 100 = (-4) + 13 \times 8$
-evaluates to $10000$ identically across:
-1. `Lean-lite` source semantics (`SSteps`),
-2. `Obend.Core` `Core4` semantics (`Evaluates`),
-3. `Obend.Leaf.Book` graph-reduction semantics (`Halts`),
-4. Synthesized saturating FPGA RTL (`compileBookToRtlSat` + `evalModuleOutputs`),
-5. Compiled AMD `CDNA3` GPU Wavefront ISA (`evalCompiledAmdGpuModule`), and
-6. Ozaki Scheme Base-13 `FP4 (E2M1)` Tensor-Core limb multiplication (`evalOzakiBase13Product2 (-4) 8 (-4) 8 = 10000`,
-   where both `-4` and `8` are exact doubled `FP4 (E2M1)` values in $S_{\text{E2M1}}$!),
-while matching `Obend.Hardware.PowerElectronics.evalExtractedPower 200 1 100 = 10000`! -/
-theorem ms350_mppt_self_accelerates_6stage :
-    let C := leanComposition "ms350Mppt" (lowerT ms350MpptExtractedPowerLExpr)
-    let B := emit C
-    SSteps (.app ms350MpptExtractedPowerLExpr (.lit 100)) (.lit 10000) ∧
-    Evaluates (.app (lowerT ms350MpptExtractedPowerLExpr) (.nat 100)) (.nat 10000) ∧
-    Halts (.app (.get B.link "ms350Mppt") (.nat 100)) (.natural 10000) ∧
-    (match compileBookToRtlSat "lean_ms350_mppt_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 100#64) (fun _ => 0#64) == [("out_ms350Mppt", 10000#64)]) &&
-       (evalCompiledAmdGpuModule m 100 == some 10000) &&
-       -- Also check off-MPP voltage V = 80 -> P(80) = 80 * 120 = 9600 < 10000 on both FPGA and AMD GPU!
-       (evalModuleOutputs m (fun _ => 80#64) (fun _ => 0#64) == [("out_ms350Mppt", 9600#64)]) &&
-       (evalCompiledAmdGpuModule m 80 == some 9600)
-     | none => false) = true ∧
-    isDoubledFp4E2M1 (-4) = true ∧
-    isDoubledFp4E2M1 8 = true ∧
-    evalBase13Limb2 (-4) 8 = 100 ∧
-    evalOzakiBase13Product2 (-4) 8 (-4) 8 = 10000 ∧
-    Obend.Hardware.PowerElectronics.evalExtractedPower 200 1 100 = 10000 := by
-  refine ⟨ms350MpptExtractedPower_runs_100v, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl⟩
-  · simpa [lowerT] using lower_sound_nat ms350MpptExtractedPower_runs_100v
-  · exact lean_to_book "ms350Mppt" ms350MpptExtractedPowerLExpr 100 10000 (by decide +kernel) ms350MpptExtractedPower_runs_100v
-  · decide +kernel
 
 /-! ## 4. Domain C: 2D FEMM Triangular Finite-Element Magnetic Co-Energy Kernel -/
 
@@ -638,34 +572,6 @@ def selfAccelFemmTriangle : Obend.Hardware.Magnetics.FemmTriangle2D where
   nuScaled := 5
   jzScaled := 0
 
-/-- **6-Stage Reflexive Self-Acceleration of 2D FEMM Magnetic Energy Kernel**:
-Proves that `femm2dElementEnergyLExpr` at $a_0 = 6$ evaluates to $125$ across:
-1. `Lean-lite` source semantics (`SSteps`),
-2. `Obend.Core` `Core4` semantics (`Evaluates`),
-3. `Obend.Leaf.Book` graph-reduction semantics (`Halts`),
-4. Synthesized saturating FPGA RTL (`compileBookToRtlSat` + `evalModuleOutputs`),
-5. Compiled AMD `CDNA3` GPU Wavefront ISA (`evalCompiledAmdGpuModule`) AND single-instruction
-   AMD Matrix-Core `vMfmaDot4` execution (`execAmdGpuInst`), and
-6. `Obend.Hardware.Magnetics.evalElementMagneticEnergyScaled selfAccelFemmTriangle 6 3 2 = 125`! -/
-theorem femm_2d_energy_self_accelerates_6stage :
-    let C := leanComposition "femmEnergy" (lowerT femm2dElementEnergyLExpr)
-    let B := emit C
-    SSteps (.app femm2dElementEnergyLExpr (.lit 6)) (.lit 125) ∧
-    Evaluates (.app (lowerT femm2dElementEnergyLExpr) (.nat 6)) (.nat 125) ∧
-    Halts (.app (.get B.link "femmEnergy") (.nat 6)) (.natural 125) ∧
-    (match compileBookToRtlSat "lean_femm_energy_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 6#64) (fun _ => 0#64) == [("out_femmEnergy", 125#64)]) &&
-       (evalCompiledAmdGpuModule m 6 == some 125)
-     | none => false) = true ∧
-    readVgpr (execAmdGpuInst [0, 20, 15, 0, 0, 4, 3, 0, 0] (.vMfmaDot4 0 1 5 0)) 0 = 125 ∧
-    Obend.Hardware.Magnetics.evalElementMagneticEnergyScaled selfAccelFemmTriangle 6 3 2 = 125 := by
-  refine ⟨femm2dElementEnergy_runs_6, ?_, ?_, ?_, rfl, rfl⟩
-  · simpa [lowerT] using lower_sound_nat femm2dElementEnergy_runs_6
-  · exact lean_to_book "femmEnergy" femm2dElementEnergyLExpr 6 125 (by decide +kernel) femm2dElementEnergy_runs_6
-  · decide +kernel
-
 /-! ## 5. Coupled PDE, Reverse-AD & Octree Geometry 6-Stage Self-Acceleration (`libCEED` + `catgrad` + `fidget`) -/
 
 /-- `Lean-lite` (`LExpr`) kernel for the `libCEED` matrix-free 2D FEMM nodal residual operator
@@ -712,6 +618,7 @@ Lowers `libCeedFemmNodalOpLExpr` across all 6 stages:
 5. 64-bit AMD `CDNA3` `AmdGpuVop64Inst` (`evalCompiledAmdGpuModule`) + `vMfmaDot4`, and
 6. TPU Systolic Array (`runSystolicMacChain`), $K$-limb Ozaki Base-13 `FP4` (`evalOzakiBase13KLimbDot`),
    and `Obend.Hardware.Magnetics.evalLibCeedElementOp`! -/
+-- fixture kept (2026-11-04): used by tests/metasystem/CoupledPhysicalTest.lean
 theorem self_accelerate_libceed_femm_nodal_op_6stage :
     let C := leanComposition "libCeedNodal" (lowerT libCeedFemmNodalOpLExpr)
     let B := emit C
@@ -771,6 +678,7 @@ Lowers `catgradOpticRevAdLExpr` across all 6 stages:
 5. 64-bit AMD `CDNA3` `AmdGpuVop64Inst` (`evalCompiledAmdGpuModule`) + `vMfmaDot4`, and
 6. TPU Systolic Array (`runSystolicMacChain`), $K$-limb Ozaki Base-13 `FP4` (`evalOzakiBase13KLimbDot`),
    and `Obend.Hardware.OpenHypergraph.evalOpticChain2Rev`! -/
+-- fixture kept (2026-11-04): used by tests/metasystem/CoupledPhysicalTest.lean
 theorem self_accelerate_catgrad_optic_rev_ad_6stage :
     let C := leanComposition "catgradRevAd" (lowerT catgradOpticRevAdLExpr)
     let B := emit C
@@ -842,6 +750,7 @@ Lowers `fidgetChoiceOctreePruneLExpr` across all 6 stages, verifying that branch
 `v_cmp_lt_u64` + `v_cndmask_b64` in `AmdGpuVop64Inst` and saturating FPGA RTL reproduce
 `Obend.Hardware.GeometryCAM.ivMinChoice` across all three octree pruning regimes
 (`.left` at `aHi = 8`, `.right` at `aHi = 30`, and `.both` at `aHi = 15`)! -/
+-- fixture kept (2026-11-04): used by tests/metasystem/CoupledPhysicalTest.lean
 theorem self_accelerate_fidget_choice_octree_6stage :
     let C := leanComposition "fidgetPrune" (lowerT fidgetChoiceOctreePruneLExpr)
     let B := emit C
@@ -988,45 +897,6 @@ def nestedMacAdjointExpr : RtlExpr :=
   .alu .add
     (.alu .mul (.inputPort 0) (.alu .mul (.alu .add (.inputPort 1) (.inputPort 2)) (.inputPort 13)))
     (.alu .mul (.inputPort 0) (.alu .mul (.alu .add (.inputPort 1) (.inputPort 2)) (.inputPort 13)))
-
-/-- **6-Stage Reflexive Self-Acceleration of E-Graph-Optimized Adjoint `RtlModule` & Nested `AmdGpuVop64Inst`
-(`eqSat_adjoint_nested_vop64_self_accelerates_6stage`)**:
-Proves end-to-end 6-stage self-acceleration on a nested multi-operator adjoint datapath:
-1. `Lean-lite` `SSteps` on `statorAdjointCurrentGradLExpr` at $I = 3$ evaluates to `36`,
-2. `Obend.Core` `Evaluates` evaluates to `36`,
-3. `Obend.Leaf.Book` `Halts` evaluates to `36`,
-4. Synthesized saturating FPGA RTL (`compileBookToRtlSat`) AND pipelined E-Graph-optimized adjoint
-   `RtlModule` (`compileHypergraphToRtlPipelined` on `optimizeAdjointHypergraph defaultRtlCostModel`),
-5. Compiled 64-bit AMD `CDNA3` `AmdGpuVop64Inst` (`evalCompiledAmdGpuModule m 3 == some 36` AND
-   `evalAmdGpuExpr` on `nestedMacAdjointExpr` = `36#64`), and
-6. E-Graph-saturated adjoint hypergraph evaluation (`statorCoupledLoss_adjoint_eqSat_sound` producing
-   `[95, 36, 14, 7, 4]`), TPU Systolic Array (`runSystolicMacChain 0 [3, 3] [6, 6] = 36`), and
-   FPGA `DSP58` Cascade (`runDsp58Cascade 0 [(3, 6), (3, 6)] = 36`)! -/
-theorem eqSat_adjoint_nested_vop64_self_accelerates_6stage :
-    let C := leanComposition "statorAdjGrad" (lowerT statorAdjointCurrentGradLExpr)
-    let B := emit C
-    SSteps (.app statorAdjointCurrentGradLExpr (.lit 3)) (.lit 36) ∧
-    Evaluates (.app (lowerT statorAdjointCurrentGradLExpr) (.nat 3)) (.nat 36) ∧
-    Halts (.app (.get B.link "statorAdjGrad") (.nat 3)) (.natural 36) ∧
-    (match compileBookToRtlSat "lean_stator_adj_grad_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 3#64) (fun _ => 0#64) == [("out_statorAdjGrad", 36#64)]) &&
-       (evalCompiledAmdGpuModule m 3 == some 36)
-     | none => false) = true ∧
-    evalAmdGpuExpr
-      (fun u => BitVec.ofInt 64 (statorCoupledLossAdjointEnv 3 4 2 5 1 u))
-      (fun _ => 0#64) (fun _ => 0#64) nestedMacAdjointExpr = 36#64 ∧
-    evalHypergraphComb
-      (optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph)
-      (statorCoupledLossAdjointEnv 3 4 2 5 1) = [95, 36, 14, 7, 4] ∧
-    runSystolicMacChain 0 [3, 3] [6, 6] = 36 ∧
-    runDsp58Cascade 0 [(3, 6), (3, 6)] = 36 := by
-  refine ⟨statorAdjointCurrentGrad_runs_3, ?_, ?_, ?_, rfl, ?_, rfl, rfl⟩
-  · simpa [lowerT] using lower_sound_nat statorAdjointCurrentGrad_runs_3
-  · exact lean_to_book "statorAdjGrad" statorAdjointCurrentGradLExpr 3 36 (by decide +kernel) statorAdjointCurrentGrad_runs_3
-  · decide +kernel
-  · decide +kernel
 
 end Obend.Lower
 end

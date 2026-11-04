@@ -394,50 +394,6 @@ def goldenEdaLaws : List (String × LawExpr) :=
 def defaultEdaFacts : Facts :=
   { caller := some 1, subject := some 1, height := 1, turn := 1 }
 
-/-- Theorem (`goldenAgenticBomSwap_admitted_and_overbudget_refused`):
-1. `goldenEdaLaws` enforces 4 `.obend` smart-contract invariants (`drc_zero`, `thermal_cap`,
-   `rf_vswr_cap`, `bom_budget`),
-2. `judgeAgenticEdaProposal` **admits** `procurement_scout`'s valid QFN-16 second-source swap
-   (`goldenSecondSourcePart`) after executing the compiled `Core4` smart contracts and verifying
-   datasheet freshness, QFN-16 courtyard fit, and $400\,\text{mV}$ CMOS noise margins,
-3. `judgeAgenticEdaProposal` **refuses** `overbudgetSecondSourcePart` by blaming the exact
-   smart-contract law `"bom_budget"` (`new.cost_cents <= 250`),
-4. `judgeAgenticEdaProposal` **refuses** a stale datasheet citation (`pinnedBlockHash ≠ currentDatasheetHash`)
-   with `.refusedByPhysics "stale-datasheet-cite"`. -/
-theorem goldenAgenticBomSwap_admitted_and_overbudget_refused :
-    goldenEdaLaws.length = 4 ∧
-    judgeAgenticEdaProposal
-      goldenEdaLaws
-      goldenBaselinePart
-      goldenSecondSourcePart
-      lvcmos33ReceiverSpec
-      400
-      goldenQfn16Courtyard
-      goldenFreshDatasheetCite
-      "procurement_scout"
-      defaultEdaFacts = .admitted ∧
-    judgeAgenticEdaProposal
-      goldenEdaLaws
-      goldenBaselinePart
-      overbudgetSecondSourcePart
-      lvcmos33ReceiverSpec
-      400
-      goldenQfn16Courtyard
-      goldenFreshDatasheetCite
-      "procurement_scout"
-      defaultEdaFacts = .refusedBySmartContract "bom_budget" "bom_budget" ∧
-    judgeAgenticEdaProposal
-      goldenEdaLaws
-      goldenBaselinePart
-      goldenSecondSourcePart
-      lvcmos33ReceiverSpec
-      400
-      goldenQfn16Courtyard
-      { goldenFreshDatasheetCite with currentDatasheetHash := 0x9A4F2C02 }
-      "procurement_scout"
-      defaultEdaFacts = .refusedByPhysics "stale-datasheet-cite" := by
-  decide +kernel
-
 /-! ## 5. 100% Kernel-Reducible `List Char` Frontmatter & `law:` Parser (`extractEdaVaultPartKernel`) -/
 
 /-- Structural character-list equality (avoids `String` slice/byte-array operations in the kernel). -/
@@ -638,36 +594,6 @@ candidate Markdown page directly in the kernel, then runs `judgeAgenticEdaPropos
       "procurement_scout"
       defaultEdaFacts
   | _, _ => .undecided "markdown-frontmatter-parse-error"
-
-/-- Theorem (`goldenEdaPartMarkdown_kernel_parsed`):
-`extractEdaVaultPartKernel` parses the raw Markdown string `goldenEdaPartMarkdown` inside the
-Lean 4 kernel (`decide +kernel`) to `some goldenBaselinePart`! -/
-theorem goldenEdaPartMarkdown_kernel_parsed :
-    extractEdaVaultPartKernel goldenEdaPartMarkdown = some goldenBaselinePart := by
-  decide +kernel
-
-/-- Theorem (`goldenMarkdown_to_bom_swap_kernel_verified`):
-End-to-end kernel verification (`decide +kernel`) starting from the raw Markdown strings
-`goldenEdaPartMarkdown`, `goldenSecondSourceMarkdown`, and `overbudgetSecondSourceMarkdown`:
-1. Parses the baseline and candidate parts via `extractEdaVaultPartKernel`,
-2. Parses the 4 `.obend` `law:` smart contracts from `goldenEdaPartMarkdown` via `extractVaultLawsKernel`,
-3. Compiles and executes the `Core4` smart contracts and physical CMOS/footprint/datasheet checks via
-   `verifyAgenticBomSwap`, admitting `goldenSecondSourceMarkdown` and refusing `overbudgetSecondSourceMarkdown`! -/
-theorem goldenMarkdown_to_bom_swap_kernel_verified :
-    extractEdaVaultPartKernel goldenEdaPartMarkdown = some goldenBaselinePart ∧
-    extractEdaVaultPartKernel goldenSecondSourceMarkdown = some goldenSecondSourcePart ∧
-    (extractVaultLawsKernel goldenEdaPartMarkdown).length = 4 ∧
-    verifyAgenticBomSwap
-      goldenEdaPartMarkdown
-      goldenSecondSourceMarkdown
-      400
-      goldenFreshDatasheetCite = .admitted ∧
-    verifyAgenticBomSwap
-      goldenEdaPartMarkdown
-      overbudgetSecondSourceMarkdown
-      400
-      goldenFreshDatasheetCite = .refusedBySmartContract "bom_budget" "bom_budget" := by
-  decide +kernel
 
 /-! ## 6. `.obnb` (`NEXT-MATHEMATICA.md` §5) `Obend.Core.Data.Data` Structured Cell Projections -/
 
@@ -1064,6 +990,7 @@ def conflictingMultiAgentCoDesignProposal : MultiAgentBoardMergeProposal :=
 /-- End-to-end kernel verification (`decide +kernel`) of multi-agent 3-way board co-design:
 1. Disjoint power/thermal and RF/BOM edits merge cleanly into `goldenSecondSourcePart` and are admitted,
 2. Concurrent conflicting `costCents` edits are refused with `.refusedByPhysics "concurrent-field-merge-conflict"`. -/
+-- fixture kept (2026-11-04): consumed by Obend/Consensus/SovereignFinality.lean
 theorem goldenMultiAgentCoDesign_admitted_and_conflict_refused :
     mergeEdaPartFields3 goldenBaselinePart goldenPowerAgentBranch goldenRfLayoutAgentBranch =
       goldenSecondSourcePart ∧

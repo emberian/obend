@@ -24,6 +24,48 @@ values), any value raised above its baseline, and any new file. Shrinking the ba
 edit it accepts; a proof that needs more heartbeats than the default is restructured or moved to
 tier 2, and the budget itself moves only by a ledger decision.
 
+## The fixture triage (review/DECISIONS-20261031.md, 2026-11-04)
+
+Every declaration under `Obend/` proved with `decide +kernel`, `native_decide` or `bv_decide` was
+classified once (485 of them). A *proof step* is a decide inside a universal proof: not a fixture,
+untouched. A fixture is *kept* when it guards something a theorem does not state (a refusal the
+checker must produce, a known-answer vector re-run by `#assert_compiled`, a property of a defined
+constant), and then carries a `-- fixture kept` line saying why; it stays a named `theorem` only
+when a proof, a `#tooth` or an `#assert_compiled` consumes the name, otherwise it is an `example`.
+It goes *to Teeth* (`Obend/Teeth/<Dir>/Fixtures.lean`, tier 2) when it is an end-to-end run on a
+golden object worth doing before a push and not on every library build, and its data is `public`
+(a fixture over module-private data stays where it is, as an `example`, and says so). It is *deleted* when it is
+an instance nobody would miss: a preset passing its own signoff, arithmetic on preset numbers, a
+substring check on emitted text, a cycle-count replay. Counts per directory, nothing finer here;
+the per-site reasons are in the files. The Apps and Stdlib rows are classified here and applied by
+the lanes that own those files (one Apps deletion, the 21-cycle CPU run the ledger names).
+
+| directory | proof steps | kept | kept, named (cited) | to Teeth | deleted |
+|---|---|---|---|---|---|
+| Analysis | 19 | 4 | 25 | 4 | 2 |
+| Apps | 24 | 10 | 27 | 0 | 1 |
+| Core | 0 | 6 | 11 | 0 | 0 |
+| Elab | 1 | 0 | 5 | 0 | 0 |
+| Equiv | 0 | 0 | 6 | 0 | 0 |
+| Hardware | 64 | 9 | 30 | 12 | 23 |
+| Judge | 0 | 3 | 2 | 0 | 1 |
+| Kind | 0 | 0 | 1 | 0 | 1 |
+| Law | 1 | 6 | 0 | 8 | 0 |
+| Ledger | 0 | 0 | 1 | 0 | 0 |
+| Logic | 0 | 1 | 2 | 0 | 0 |
+| Lower | 9 | 0 | 13 | 10 | 4 |
+| Slot | 1 | 0 | 2 | 0 | 0 |
+| Spec | 0 | 4 | 23 | 0 | 1 |
+| Stdlib | 1 | 0 | 5 | 0 | 0 |
+| Tactic | 1 | 0 | 5 | 0 | 0 |
+| Teeth | 2 | 62 | 23 | 0 | 1 |
+| Vault | 1 | 1 | 3 | 0 | 1 |
+
+Over budget at this date and recorded here: `Obend/Hardware/QuantumMatter.lean` took 102–112 s in
+tier 1; its three kernel-evaluated Clifford theorems (29 s, 13 s, 10 s) are in
+`Obend/Teeth/Hardware/CliffordKernel.lean`, names unchanged, until the physics lane has a
+structural proof.
+
 The first command refuses a file under `Obend/` that this list does not import, and a module outside
 `Obend/Teeth/` that the `Obend` library's globs in `lakefile.toml` do not name (`lake build` would
 skip it unless something imports it). It runs when this file is rebuilt, that is, when anything it
@@ -38,6 +80,7 @@ import Obend
 import Obend.Analysis.Cli
 import Obend.Analysis.Coverage
 import Obend.Analysis.Diff
+import Obend.Analysis.EqSatHypergraph
 import Obend.Analysis.Equitable
 import Obend.Analysis.Flowpipe
 import Obend.Analysis.Format
@@ -45,23 +88,28 @@ import Obend.Analysis.Groebner
 import Obend.Analysis.Hybrid
 import Obend.Analysis.Impact
 import Obend.Analysis.QuantumWalk
-import Obend.Analysis.Replay
 import Obend.Analysis.RealAnalysis
+import Obend.Analysis.Replay
 import Obend.Analysis.Setup
+import Obend.Analysis.SosLyapunov
 import Obend.Analysis.TaylorModel
 import Obend.Analysis.Worlds
 import Obend.AssertAxioms
 import Obend.AssertCompiled
+import Obend.Consensus
+import Obend.Consensus.Epistemic
+import Obend.Consensus.Finality
+import Obend.Consensus.Simplex
+import Obend.Consensus.SovereignFinality
 import Obend.Core.AliasExposure
 import Obend.Core.Assumptions
 import Obend.Core.Bidirectional
+import Obend.Core.Brand
 import Obend.Core.CanonicalExtension
 import Obend.Core.Capacity
 import Obend.Core.Check
 import Obend.Core.Checkpoint
 import Obend.Core.Code
-import Obend.Core.Nominal
-import Obend.Core.Brand
 import Obend.Core.Collect
 import Obend.Core.Data
 import Obend.Core.Digest
@@ -83,6 +131,7 @@ import Obend.Core.LegacyAgreement
 import Obend.Core.Machine
 import Obend.Core.MachineFast
 import Obend.Core.MachineTyping
+import Obend.Core.Nominal
 import Obend.Core.Packet
 import Obend.Core.Proofs.Adequacy
 import Obend.Core.Proofs.Adequacy.Birth
@@ -103,6 +152,7 @@ import Obend.Core.Proofs.Adequacy.Scoped
 import Obend.Core.Proofs.Adequacy.Sound
 import Obend.Core.Proofs.Adequacy.Source
 import Obend.Core.Proofs.Adequacy.StepRaw
+import Obend.Core.Proofs.Aggregate
 import Obend.Core.Proofs.BidirectionalCompleteness
 import Obend.Core.Proofs.CheckCompletenessObstruction
 import Obend.Core.Proofs.CheckerTransport
@@ -119,11 +169,8 @@ import Obend.Core.Proofs.Collect.Statements
 import Obend.Core.Proofs.Collect.Typing
 import Obend.Core.Proofs.Completeness
 import Obend.Core.Proofs.Conservation
-import Obend.Core.Proofs.Aggregate
-import Obend.Core.Proofs.GradedRecord
 import Obend.Core.Proofs.DataSoundness
 import Obend.Core.Proofs.DigestChecks
-import Obend.Core.Proofs.JoinReading
 import Obend.Core.Proofs.EquiRecursiveBoundary
 import Obend.Core.Proofs.EquiRecursiveSubstitution
 import Obend.Core.Proofs.Force
@@ -139,8 +186,10 @@ import Obend.Core.Proofs.Forcing.Pend
 import Obend.Core.Proofs.Forcing.Run
 import Obend.Core.Proofs.Forcing.Segment
 import Obend.Core.Proofs.Forcing.Switch
+import Obend.Core.Proofs.GradedRecord
 import Obend.Core.Proofs.GroundExecution
 import Obend.Core.Proofs.Hole
+import Obend.Core.Proofs.JoinReading
 import Obend.Core.Proofs.LedgerPoles
 import Obend.Core.Proofs.Preservation
 import Obend.Core.Proofs.Preservation.Base
@@ -157,7 +206,6 @@ import Obend.Core.Proofs.Preservation.Cases.Pairs
 import Obend.Core.Proofs.Preservation.Cases.Records
 import Obend.Core.Proofs.Preservation.Cases.Split
 import Obend.Core.Proofs.Preservation.Cases.Sums
-import Obend.Core.PrototypeProvenance
 import Obend.Core.Proofs.Settle
 import Obend.Core.Proofs.Splice
 import Obend.Core.Proofs.StepCases
@@ -170,6 +218,7 @@ import Obend.Core.Proofs.Templates
 import Obend.Core.Proofs.TickCost
 import Obend.Core.Proofs.TickTrace
 import Obend.Core.Proofs.TypedSubstitution
+import Obend.Core.PrototypeProvenance
 import Obend.Core.RecursiveAgreement
 import Obend.Core.RecursiveRows
 import Obend.Core.RelationalRowSearch
@@ -226,7 +275,6 @@ import Obend.Elab.Proofs.PrepareProbes
 import Obend.Elab.Proofs.Refines
 import Obend.Elab.Work
 import Obend.Elab.Workbook
-import Obend.Format.Reader
 import Obend.Equiv.Ahead
 import Obend.Equiv.Behaviour
 import Obend.Equiv.Clairvoyant
@@ -235,11 +283,16 @@ import Obend.Equiv.CostTests
 import Obend.Equiv.Demand
 import Obend.Equiv.FareTests
 import Obend.Equiv.Fields
-import Obend.Equiv.Quote
 import Obend.Equiv.Improvement
+import Obend.Equiv.Quote
 import Obend.Equiv.Reduction
 import Obend.Equiv.Simulation
+import Obend.Equiv.Yields
+import Obend.FFI
+import Obend.FFI.Bridge
 import Obend.Fold
+import Obend.Fold.Collapse
+import Obend.Format.Reader
 import Obend.Hardware
 import Obend.Hardware.Accelerators
 import Obend.Hardware.AgenticEDA
@@ -251,6 +304,7 @@ import Obend.Hardware.Compiler
 import Obend.Hardware.DRC
 import Obend.Hardware.DSP
 import Obend.Hardware.Datasheet
+import Obend.Hardware.DigitalTwin
 import Obend.Hardware.FSM
 import Obend.Hardware.Fabric
 import Obend.Hardware.FabuBlox
@@ -276,27 +330,28 @@ import Obend.Hardware.Retiming
 import Obend.Hardware.Rules
 import Obend.Hardware.Silicon
 import Obend.Hardware.Synth
+import Obend.Hardware.TapeoutPipeline
+import Obend.Hardware.TcadBridge
 import Obend.Hardware.Thermal
 import Obend.Hardware.Types
 import Obend.Hardware.UserspacePhysical
 import Obend.Hardware.WaferSpace
 import Obend.Intention
-import Obend.Kind
-import Obend.Kind.Proofs
-import Obend.Kind.Registry
-import Obend.Equiv.Yields
 import Obend.Judge
 import Obend.Judge.AutomataConfinement
 import Obend.Judge.Certified
+import Obend.Judge.Class
 import Obend.Judge.Clearing
 import Obend.Judge.Cost
-import Obend.Judge.LayeredCost
-import Obend.Judge.Class
 import Obend.Judge.Identity
 import Obend.Judge.Instances
+import Obend.Judge.LayeredCost
 import Obend.Judge.Lrat
 import Obend.Judge.RealAnalysis
 import Obend.Judge.TranscriptPolicy
+import Obend.Kind
+import Obend.Kind.Proofs
+import Obend.Kind.Registry
 import Obend.Law
 import Obend.Law.Claim
 import Obend.Law.Contract
@@ -343,6 +398,7 @@ import Obend.Lower.ExprCAM
 import Obend.Lower.Fragment
 import Obend.Lower.Inductive
 import Obend.Lower.Judge
+import Obend.Lower.LCNF
 import Obend.Lower.LeanKernel
 import Obend.Lower.Lower
 import Obend.Lower.MetaUnify
@@ -357,6 +413,7 @@ import Obend.Lower.Proofs.Sound
 import Obend.Lower.Proofs.Subst
 import Obend.Lower.Reflect
 import Obend.Lower.Semantics
+import Obend.Lower.SiliconElabFabric
 import Obend.Lower.Syntax
 import Obend.Lower.Transport
 import Obend.Lower.Typing
@@ -407,6 +464,7 @@ import Obend.Spec.Annotated
 import Obend.Spec.C4
 import Obend.Spec.Capture
 import Obend.Spec.Contract
+import Obend.Spec.CrossPackage
 import Obend.Spec.DataWire
 import Obend.Spec.Ecosystem
 import Obend.Spec.Elaborate
@@ -431,10 +489,14 @@ import Obend.Spec.Sha256
 import Obend.Spec.Syntax
 import Obend.Spec.Types
 import Obend.Spec.Workspace
+import Obend.Stdlib
 import Obend.Tactic.Cases
+import Obend.Tactic.DocsCensus
 import Obend.Tactic.MonadicReduction
 import Obend.Tactic.Tooth
 import Obend.Tactic.Weave
+import Obend.Teeth.Analysis.Fixtures
+import Obend.Teeth.Core.AggregateTeeth
 import Obend.Teeth.Core.BackFail
 import Obend.Teeth.Core.CheckTeeth
 import Obend.Teeth.Core.CodeTeeth
@@ -448,11 +510,13 @@ import Obend.Teeth.Core.Force
 import Obend.Teeth.Core.JoinReadingTeeth
 import Obend.Teeth.Core.LinearTeeth
 import Obend.Teeth.Core.NominalTeeth
-import Obend.Teeth.Core.AggregateTeeth
 import Obend.Teeth.Core.SpliceTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
+import Obend.Teeth.Hardware.CliffordKernel
+import Obend.Teeth.Hardware.Fixtures
 import Obend.Teeth.Hardware.SiliconTeeth
+import Obend.Teeth.Law.Fixtures
 import Obend.Teeth.Law.LawJudgeTeeth
 import Obend.Teeth.Law.MachineTeeth
 import Obend.Teeth.Law.TypingTeeth
@@ -462,6 +526,7 @@ import Obend.Teeth.Leaf.StaticTeeth
 import Obend.Teeth.Logic.FrameTeeth
 import Obend.Teeth.Logic.GroundTeeth
 import Obend.Teeth.Logic.LateBindingTeeth
+import Obend.Teeth.Lower.Fixtures
 import Obend.Teeth.Lower.LowerTeeth
 import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
@@ -469,40 +534,22 @@ import Obend.Teeth.Spec.TermWire
 import Obend.Teeth.Tactic.ToothChecks
 import Obend.Teeth.Vault
 import Obend.Vault
+import Obend.Vault.Affordance
+import Obend.Vault.Carry
 import Obend.Vault.Cli
 import Obend.Vault.DragonsExchange
+import Obend.Vault.Escrow
+import Obend.Vault.HardwareProjection
 import Obend.Vault.Hyperedge
 import Obend.Vault.Json
 import Obend.Vault.Law
-import Obend.Vault.Page
-import Obend.Vault.Store
-import Obend.Vault.Escrow
-import Obend.Vault.Affordance
-import Obend.Vault.Projection
 import Obend.Vault.Mandate
-import Obend.Vault.Rehydration
-import Obend.Vault.HardwareProjection
+import Obend.Vault.Page
 import Obend.Vault.PhysicalProjection
-import Obend.Consensus
-import Obend.Consensus.Simplex
-import Obend.Consensus.Finality
-import Obend.Consensus.Epistemic
-import Obend.Consensus.SovereignFinality
-import Obend.Fold.Collapse
-import Obend.FFI.Bridge
-import Obend.FFI
-import Obend.Analysis.EqSatHypergraph
-import Obend.Analysis.SosLyapunov
-import Obend.Hardware.DigitalTwin
-import Obend.Hardware.TapeoutPipeline
-import Obend.Hardware.TcadBridge
-import Obend.Lower.LCNF
-import Obend.Lower.SiliconElabFabric
-import Obend.Spec.CrossPackage
-import Obend.Stdlib
-import Obend.Tactic.DocsCensus
-import Obend.Vault.Carry
+import Obend.Vault.Projection
+import Obend.Vault.Rehydration
 import Obend.Vault.SovereignEngine
+import Obend.Vault.Store
 
 open Lean Elab Command in
 run_cmd do

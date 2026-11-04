@@ -200,6 +200,7 @@ def twiceSource : String :=
   "edition ObjectiveBend 1\n" ++
   "def twice(e: Extension<Nat>) -> Specification<Nat>:\n  compose(e, e)\n"
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem twice_accepted : acceptsSource twiceSource "twice" = true := by native_decide
 
 /-- LTUO probe W02: a spec with a claim inhabits `Specification<T>`. -/
@@ -208,6 +209,7 @@ def claimSpecSource : String :=
   "spec Start for Counter:\n  claim positive: self.n == 41n\n  def n() -> Nat:\n    41n\n" ++
   "def asSpecification() -> Specification<Counter>:\n  Start\n"
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem claim_spec_accepted : acceptsSource claimSpecSource "asSpecification" = true := by native_decide
 
 /-- Teeth: the refusal is not gone wholesale — a claim that is not Bool is still refused
@@ -218,6 +220,7 @@ def badClaimSource : String :=
   "spec Start for Counter:\n  claim positive: self.n + 1n\n  def n() -> Nat:\n    41n\n" ++
   "def asSpecification() -> Specification<Counter>:\n  Start\n"
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem non_boolean_claim_refused : acceptsSource badClaimSource "asSpecification" = false := by native_decide
 
 /-- `law` is no longer a spec clause: it names an ENFORCED predicate (GPT-6 row G), and a
@@ -227,6 +230,7 @@ def lawKeywordSource : String :=
   "spec Start for Counter:\n  law positive: self.n == 41n\n  def n() -> Nat:\n    41n\n" ++
   "def asSpecification() -> Specification<Counter>:\n  Start\n"
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem law_keyword_refused : acceptsSource lawKeywordSource "asSpecification" = false := by native_decide
 
 def wrongTargetSource : String :=
@@ -234,6 +238,7 @@ def wrongTargetSource : String :=
   "spec Start for Counter:\n  def n() -> Nat:\n    41n\n" ++
   "def asSpecification() -> Specification<Other>:\n  Start\n"
 
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem wrong_target_refused : acceptsSource wrongTargetSource "asSpecification" = false := by native_decide
 
 /-! ## The open inherited row of a closed spec (OB-LTUO LT2 D3)
@@ -248,21 +253,25 @@ def reviewSpecs : String :=
   "spec Augmented for Review:\n  def review(value: Nat) -> Nat:\n    super.review(value) + 1n\n"
 
 /-- LTUO probe W05: no placeholder seed. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem empty_seed_accepted :
     acceptsSource (reviewSpecs ++ "def run() -> Nat:\n  fix(compose(Base, Twice, Augmented), {}).twice(3n)\n") "run" = true := by
   native_decide
 
 /-- A target member nobody provides is refused (W06's shape: Twice's requirement unmet). -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem unprovided_requirement_refused :
     acceptsSource (reviewSpecs ++ "def run() -> Nat:\n  fix(compose(Twice, Augmented), {}).twice(3n)\n") "run" = false := by
   native_decide
 
 /-- A `super` read with nothing beneath it is refused. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem inherited_unprovided_refused :
     acceptsSource (reviewSpecs ++ "def run() -> Nat:\n  fix(compose(Augmented, Base, Twice), {}).twice(3n)\n") "run" = false := by
   native_decide
 
 /-- A requirement at another type than the target's member is refused (W07). -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem requires_signature_refused :
     acceptsSource ("edition ObjectiveBend 1\nrecord R:\n  review(value: Nat) -> Nat\n" ++
       "spec S for R:\n  requires review(value: String) -> Nat\n  def review(value: Nat) -> Nat:\n    value\n" ++
@@ -280,6 +289,7 @@ def fourthFieldSource : String :=
   "def run() -> Nat:\n  fix(compose(AddY, AddZW), {x: 5n}).w\n"
 
 /-- An extension written over what it uses is reused at a self it never named (W09b). -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem open_extension_reused_accepted : acceptsSource fourthFieldSource "run" = true := by native_decide
 
 def heavierSpec : String :=
@@ -287,16 +297,19 @@ def heavierSpec : String :=
   "  def heavier(other: Self) -> Self:\n    if other.weight <= self.weight then self else other\n"
 
 /-- An F-bounded binary method closes at a recursive record (W10). -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem binary_self_accepted :
     acceptsSource ("edition ObjectiveBend 1\nrecord Node:\n  weight: Nat\n  heavier(other: Node) -> Node\n" ++
       heavierSpec ++ "def node(n: Nat) -> Node:\n  fix(Heavier, {weight: n})\n") "node" = true := by native_decide
 
 /-- ... and is refused where the self's method has another type (the F-bound is discharged). -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem f_bound_mismatch_refused :
     acceptsSource ("edition ObjectiveBend 1\nrecord Pair:\n  weight: Nat\n  heavier(other: Nat) -> Pair\n" ++
       heavierSpec ++ "def pair(n: Nat) -> Pair:\n  fix(Heavier, {weight: n})\n") "pair" = false := by native_decide
 
 /-- A template is checked against its binder alone: reading an undeclared self member refuses. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem unbound_self_member_refused :
     acceptsSource ("edition ObjectiveBend 1\n" ++
       "extension Bad[Self has {x: Nat}, Super has {x: Nat}](self: Self, super: Super) -> Super with {y: Nat}:\n" ++
@@ -304,6 +317,7 @@ theorem unbound_self_member_refused :
 
 /-- The built-in module declaring `SpecMeta`/`SpecClaims` is Objective Bend source the
 front end's own parser reads. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem builtin_parses : Elaborate.builtinModule.toBool = true := by native_decide
 
 #assert_compiled twice_accepted

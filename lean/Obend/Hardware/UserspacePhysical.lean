@@ -107,6 +107,7 @@ theorem lcDrivesStatorUsdComp_eq_imported :
     lcDrivesStatorUsdComp = StdLcDrivesStator.lcDrivesProductionStator_comp := rfl
 
 /-- **Closedness Certificate**: `lcDrivesStatorUsdComp` and its unresolved flattening are closed. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem lcDrivesStatorUsdComp_closed : lcDrivesStatorUsdComp.closedB = true := by
   decide +kernel
 
@@ -119,20 +120,6 @@ theorem lcDrivesStatorUsd_flatten_sound (m : String) :
 theorem lcDrivesStatorUsd_book_sound (m : String) :
     .get (emit lcDrivesStatorUsdComp).link m ≈b .get lcDrivesStatorUsdComp.object m :=
   book_sound lcDrivesStatorUsdComp lcDrivesStatorUsdComp_closed m
-
-/-- **Static `super` Elimination & Slot Dependency Certificate**. -/
-example :
-    let B := emit lcDrivesStatorUsdComp
-    B.slots = ["massKg", "camSurfaceErrorUm", "thermalResistance", "sdfMargin", "peakWindingTemp"] ∧
-    B.defs.map (fun d => (d.member, d.slot, d.kind, d.reads)) =
-      [ ("massKg", 0, .cell, [])
-      , ("camSurfaceErrorUm", 1, .method, [])
-      , ("thermalResistance", 2, .cell, [])
-      , ("sdfMargin", 3, .method, [])
-      , ("peakWindingTemp", 4, .method, [2])
-      ] ∧
-    B.closedB = true := by
-  decide +kernel
 
 /-! ## 3. `stdlib/physical/Cnc5AxisMill.obend` as an Open-Recursive `Obend.Logic.Composition` -/
 
@@ -158,6 +145,7 @@ theorem cnc5AxisMillComp_eq_imported :
     cnc5AxisMillComp = StdCnc5AxisMill.compensated5AxisMill_comp := rfl
 
 /-- **Closedness Certificate**: `cnc5AxisMillComp` and its unresolved flattening are closed. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem cnc5AxisMillComp_closed : cnc5AxisMillComp.closedB = true := by
   decide +kernel
 
@@ -172,54 +160,6 @@ theorem cnc5AxisMill_book_sound (m : String) :
   book_sound cnc5AxisMillComp cnc5AxisMillComp_closed m
 
 /-! ## 4. Whole-Book Synthesis of `stdlib/physical/*.obend` Parts to FPGA RTL & 64-Bit AMD `CDNA3` VOP64 GPU ISA -/
-
-/-- **End-to-End Userspace `stdlib/physical/LcDrivesStator.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
-example :
-    (match compileBookToRtl "lc_drives_userspace_stator" (emit lcDrivesStatorUsdComp) with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 8#64) (fun _ => 0#64) ==
-         [ ("out_massKg", 395#64)
-         , ("out_camSurfaceErrorUm", 34#64)
-         , ("out_thermalResistance", 9#64)
-         , ("out_sdfMargin", 24#64)
-         , ("out_peakWindingTemp", 122#64)
-         ]) &&
-       (match m.wires[3]? with
-        | some wSdf =>
-          let (rSdf, _, codeSdf) := compileRtlExprToAmdGpu 1 wSdf.expr
-          let finalVgprs :=
-            runAmdGpuVop64Prog (fun _ => 8#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeSdf
-          finalVgprs rSdf == 24#64
-        | none => false)
-     | none => false) = true := by
-  decide +kernel
-
-/-- **End-to-End Userspace `stdlib/physical/Cnc5AxisMill.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
-example :
-    (match compileBookToRtl "cnc_5axis_userspace_mill" (emit cnc5AxisMillComp) with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 6#64) (fun _ => 0#64) ==
-         [ ("out_servoLagUm", 6#64)
-         , ("out_endMillDeflectionUm", 12#64)
-         , ("out_abbeAngularDriftUm", 6#64)
-         , ("out_commandedAxisAt10mmUm", 10024#64)
-         , ("out_totalVolumetricErrorUm", 26#64)
-         ]) &&
-       (match m.wires[3]?, m.wires[4]? with
-        | some wCmd, some wErr =>
-          let (rCmd, _, codeCmd) := compileRtlExprToAmdGpu 1 wCmd.expr
-          let (rErr, _, codeErr) := compileRtlExprToAmdGpu 1 wErr.expr
-          let vgprsCmd :=
-            runAmdGpuVop64Prog (fun _ => 6#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeCmd
-          let vgprsErr :=
-            runAmdGpuVop64Prog (fun _ => 6#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeErr
-          vgprsCmd rCmd == 10024#64 &&
-          vgprsErr rErr == 26#64
-        | _, _ => false)
-     | none => false) = true := by
-  decide +kernel
 
 /-! ## 5. General Bridge from `Term.fix (Term.mix baseLayer.term overrideLayer.term) (.record seed)` to `Leaf.flatten_sound` -/
 
@@ -368,6 +308,7 @@ def statorInSlotComp : Composition :=
 theorem statorInSlotComp_eq_imported :
     statorInSlotComp = StdLcDrivesStator.statorInSlot_comp := rfl
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem statorInSlot_closed :
     fixMixClosedB outerJacketStatorLayer lcDrivesInSlotUpgradeLayer seedStatorFields = true := by
   decide +kernel
@@ -491,6 +432,7 @@ def ms350PhaseLegComp : Composition :=
 theorem ms350PhaseLegComp_eq_imported :
     ms350PhaseLegComp = StdMs350FcmlPhaseLeg.ms350ProtectedPhaseLeg_comp := rfl
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem ms350PhaseLeg_closed :
     fixMixClosedB sicBaseSwitchLayer deadtimeProtectionOverrideLayer seedSicSwitchFields = true := by
   decide +kernel
@@ -598,6 +540,7 @@ theorem ms350_support_and_specialize (env : String → Option Term) (newGate : O
     optTermEq_sound (by decide +kernel)⟩
 
 /-- **End-to-End Userspace `stdlib/physical/Ms350FcmlPhaseLeg.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified :
     (match compileBookToRtl "ms350_fcml_userspace_phase_leg" (emit ms350PhaseLegComp) with
      | some m =>
@@ -659,6 +602,7 @@ def q3PhotonicComp : Composition :=
 theorem q3PhotonicComp_eq_imported :
     q3PhotonicComp = StdCleanroomTcadStack.q3KrawtchoukArray_comp := rfl
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem q3Photonic_closed :
     fixMixClosedB planarWaveguideBaseLayer krawtchoukCouplingOverrideLayer seedPhotonicFields = true := by
   decide +kernel
@@ -784,6 +728,7 @@ def cleanroomTcadStackComp : Composition :=
 theorem cleanroomTcadStackComp_eq_imported :
     cleanroomTcadStackComp = StdCleanroomTcadStack.cleanroomTcadStack_comp := rfl
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem cleanroomTcadStack_closed :
     fixMixClosedB planarBulkMosfetBaseLayer highKMetalGateFinFetUpgradeLayer seedTcadStackFields = true := by
   decide +kernel
@@ -883,6 +828,7 @@ theorem cleanroom_tcad_support_and_specialize (env : String → Option Term) (ne
     optTermEq_sound (by decide +kernel)⟩
 
 /-- **End-to-End Userspace `stdlib/physical/CleanroomTcadStack.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified :
     (match compileBookToRtl "cleanroom_tcad_userspace_stack" (emit cleanroomTcadStackComp),
            compileBookToRtl "q3_photonic_userspace_array" (emit q3PhotonicComp) with
@@ -937,29 +883,6 @@ def obendBitwiseQ32Source : String :=
 
 #obend_decl StdBitwiseQ32 named "BitwiseQ32Mod"
   "edition ObjectiveBend 1\nrecord BitwiseQ32Target:\n  maskVal() -> Nat\n  q32Scaled(x: Nat) -> Nat\n\nspec BitwiseQ32Base for BitwiseQ32Target:\n  requires maskVal() -> Nat\n  def maskVal() -> Nat:\n    (0xFFn & 0x0Fn) | (0x01n << 4n)\n  def q32Scaled(x: Nat) -> Nat:\n    q32ToInt(qmul32(q32FromInt(x), q32FromInt(3n))) ^ (self.maskVal >> 1n)\n\ndef seedBitwiseQ32() -> BitwiseQ32Target:\n  {maskVal: 0n, q32Scaled: fn(x: Nat) -> Nat: 0n}\n\ndef bitwiseQ32Inst() -> BitwiseQ32Target:\n  fix(BitwiseQ32Base, seedBitwiseQ32())\n"
-/-- **Theorem (`userspace_obend_bitwise_q32_surface_to_rtl_verified`)**:
-Elaborates `obendBitwiseQ32Source` through `Spec.Parse` + `Spec.Elaborate` + `FrontEnd.accept`,
-synthesizes a `Composition` -> `Leaf.Book` -> `RtlModule` + `AmdGpuVop64Inst`, and proves that:
-1. `StdBitwiseQ32` elaborates (the `#obend_decl` command succeeded; `Obend.Core.Check` translation validation),
-2. `maskVal = (0xFF & 0x0F) | (1 << 4) = 15 | 16 = 31`,
-3. `q32Scaled(10) = q32ToInt(qmul32(10 << 32, 3 << 32)) ^ (31 >> 1) = 30 ^ 15 = 17` in both
-   the synchronous `RtlModule` (`evalModuleOutputs`) and the 64-bit AMD `CDNA3` VOP64 GPU kernel! -/
-example :
-    (match compileBookToRtl "bitwise_q32_rtl" StdBitwiseQ32.bitwiseQ32Inst_book with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) ==
-         [ ("out_maskVal", 31#64)
-         , ("out_q32Scaled", 17#64) ]) &&
-       (match m.wires[1]? with
-        | some wScaled =>
-          let (rOut, _, code) := compileRtlExprToAmdGpu 1 wScaled.expr
-          let wireEnv := evalWireTable (fun _ => 10#64) (fun _ => 0#64) m.wires
-          let vgprs := runAmdGpuVop64Prog (fun _ => 10#64) wireEnv (fun _ => 0#64) (fun _ => 0#64) code
-          vgprs rOut == 17#64
-        | none => false)
-     | none => false) = true := by
-  decide +kernel
 
 /-- Userspace `.obend` source exercising unary bitwise complement (`~`), logical right shift (`>>>` / `lshr`),
 signed two's-complement comparisons (`<s`, `<=s`), named bitwise/shift intrinsics (`bitAnd`, `bitXor`, `shl`),

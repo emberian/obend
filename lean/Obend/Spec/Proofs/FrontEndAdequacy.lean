@@ -83,6 +83,7 @@ def example_lowering : Except Diagnostic Lowering :=
 
 /-- The front end accepts the example: its packet decodes to the elaborator's erased term
 and the checker returns a derivation. -/
+-- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
 theorem accept_inhabited :
     (match example_lowering with
       | .ok l => (FrontEnd.accept l).toBool

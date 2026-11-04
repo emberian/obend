@@ -222,6 +222,7 @@ public theorem checked_does_not_imply_synthesis :
   | ok _ => rw [e] at named; cases named
 
 /-- Repairing the missing annotation makes synthesis accept this fixture. -/
+-- fixture kept (2026-11-04): cheap closed check of `Bidirectional.infer` on literal data
 theorem annotatedConstant_synthesizes : (Bidirectional.infer annotatedConstant []).toBool = true := by
   decide +kernel
 

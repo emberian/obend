@@ -864,6 +864,7 @@ def badSosCert : SosLyapunovCert where
   cbfWitness      := goldenCbfWitness2D
   daeWitness      := goldenCircleDaeWitness
 
+-- fixture kept (2026-11-04): consumed by a proof in this file, Obend/Elab/AutoCert.lean
 theorem sosLyapunov_bad_refused :
     checkSosLyapunovProblem 0 goldenSosProblem badSosCert = .refused .lyapunovFailed [] := by
   decide +kernel
@@ -1003,6 +1004,7 @@ theorem sosLyapunovFormat_refuses_empty_json :
 /-- **Theorem (`sos_lyapunov_cbf_dae_showcase_sound`)**:
 Verifies that the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier Function certificate,
 Index-1 circle manifold DAE certificate, and unified `"sos-lyapunov-cbf@1"` judge all pass! -/
+-- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean
 theorem sos_lyapunov_cbf_dae_showcase_sound :
     checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
     checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true ∧

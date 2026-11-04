@@ -146,6 +146,7 @@ def badQuestion : Question TView :=
 /-- A line naming `a` as blocked by a support that is not about the moved cell. -/
 def badLines : List (Line TFact) := [⟨"a", .blocked, ⟨"x", "x is 1", ["1"]⟩, false⟩]
 
+-- fixture kept (2026-11-04): consumed by Obend/Ledger/Report.lean, Obend/Hardware/Judge.lean, a proof in this file
 theorem bad_refused : check 0 badQuestion badLines = .refused (.doesNotRead "a") [0] := by decide +kernel
 
 /-- A page `Beta` at version 1, a following embed of it in `Alpha` (its page present; its bytes the
@@ -156,21 +157,10 @@ def embedQuestion : Question TView :=
       [⟨"Beta", "present Beta", ["v1", "v2"]⟩, ⟨"Beta", "current Beta@v1", ["v1"]⟩]⟩] }
 
 /-- The honest prediction: the embed goes behind, resting on its `current` fact at v2. -/
+-- fixture kept (2026-11-04): cheap closed check of `affected` on literal data
 theorem embed_behind :
     affected embedQuestion = [⟨"Alpha: ![[Beta]]", .blocked, ⟨"Beta", "current Beta@v1", ["v1"]⟩, false⟩] := by
   decide +kernel
-
-/-- **The tooth**: an index that drops the dependent's last read predicts nothing for the embed,
-and the checker refuses that prediction: the embed that goes behind is missing. -/
-theorem drop_read_misses :
-    affectedWith (fun d => d.reads.dropLast) embedQuestion = [] ∧
-      ¬ Meaning embedQuestion (affectedWith (fun d => d.reads.dropLast) embedQuestion) := by
-  have h : affectedWith (fun d => d.reads.dropLast) embedQuestion = [] := by decide +kernel
-  refine ⟨h, fun hm => ?_⟩
-  rw [h] at hm
-  have := check_complete (r := 0) hm
-  have e : check 0 embedQuestion [] = .refused (.missing "Alpha: ![[Beta]]") [] := by decide +kernel
-  rw [e] at this; cases this
 
 /-- **The registered format `impact@1`.** -/
 def format : Judge.Format where

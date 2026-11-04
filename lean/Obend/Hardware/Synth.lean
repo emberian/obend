@@ -138,7 +138,8 @@ def retimedStagePath : TimingPath :=
 /-- Theorem: On 16nm FinFET SS at 500 MHz (`2000 ps`), the un-retimed deep path FAILS static timing
 signoff (`checkTimingSignoff = false`, requiring `2718 ps > 2000 ps`), whereas the retimed pipeline
 stages PASS static timing signoff (`checkTimingSignoff = true`, requiring `1084 ps ≤ 2000 ps`)! -/
-theorem retiming_closes_16nm_500MHz :
+-- fixture kept (2026-11-04): a discriminating pair: the same path fails timing unretimed and closes retimed
+example :
     checkTimingSignoff corner16nm_SS 2000 unretimedDeepPath = false ∧
     checkTimingSignoff corner16nm_SS 2000 retimedStagePath = true := by
   decide +kernel

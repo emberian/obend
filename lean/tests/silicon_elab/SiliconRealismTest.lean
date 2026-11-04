@@ -75,27 +75,27 @@ Universally quantified and concrete verification of Upgrade 1:
 4. Full 4-port `LExpr` / `Core4` / `RtlModule` agreement (`real_silicon_kernel_node_check_sound`)
    for well-typed and ill-typed `app`, `lam`, `const`, `bvar`, and $\beta$/$\delta$/$\zeta$-reduction steps. -/
 theorem silicon_realism_defeq_and_lowered_kernel_suite :
-    (∀ (env : KEnv) (fuel : Nat) (ctx : List KExpr) (e : KExpr),
-      kernelIsDefEqFull env fuel ctx e e = true) ∧
-    (∀ (env : KEnv) (fuel : Nat) (ctx : List KExpr) (n : Nat),
-      kernelIsDefEqFull env (fuel + 2) ctx
+    (∀ (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KExpr),
+      kernelIsDefEqFull env fuel e e ctx = true) ∧
+    (∀ (env : KEnv) (fuel : Nat) (n : Nat) (ctx : List KExpr),
+      kernelIsDefEqFull env (fuel + 2)
         (.lit (.natVal (n + 1)))
-        (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))) = true) ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+        (.app (.const (KName.mkSimple "Nat.succ") []) (.lit (.natVal n))) ctx = true) ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kNatConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
-      (.const (KName.mkSimple "extFn") []) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+      (.const (KName.mkSimple "extFn") []) [] = true ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kNatConst (.lit (.natVal 0)))
-      (.lam kBoolConst (.lit (.natVal 0))) = false ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+      (.lam kBoolConst (.lit (.natVal 0))) [] = false ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lam kBoolConst (.app (.const (KName.mkSimple "extFn") []) (.bvar 0)))
-      (.const (KName.mkSimple "extFn") []) = false ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+      (.const (KName.mkSimple "extFn") []) [] = false ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.const (KName.mkSimple "proof1") [])
-      (.const (KName.mkSimple "proof2") []) = true ∧
-    kernelIsDefEqFull defEqFullTestEnv 8 []
+      (.const (KName.mkSimple "proof2") []) [] = true ∧
+    kernelIsDefEqFull defEqFullTestEnv 8
       (.lit (.natVal 0))
-      (.lit (.natVal 1)) = false ∧
+      (.lit (.natVal 1)) [] = false ∧
     encodeKExprNode stdKernelEnv 8 []
       (.app (.const (KName.mkSimple "idNat") []) (.const (KName.mkSimple "Bool.true") []))
       kNatConst = (5, 17, 5, 1) ∧
@@ -110,8 +110,8 @@ theorem silicon_realism_defeq_and_lowered_kernel_suite :
     evalLoweredNodeCheckRtl (3, 3, 0, 17) = [("out_checkTermNode", 1#64)] ∧
     evalLoweredNodeCheckRtl (3, 0, 1, 17) = [("out_checkTermNode", 0#64)] ∧
     evalLoweredKernelStepRtl (5, 1, 35, 7) = [("out_evalKernelStep", 42#64)] := by
-  refine ⟨kernelIsDefEqFull_refl,
-          kernelIsDefEqFull_nat_succ_bridge,
+  refine ⟨fun env fuel e ctx => kernelIsDefEqFull_refl env fuel e ctx,
+          fun env fuel n ctx => kernelIsDefEqFull_nat_succ_bridge env fuel n ctx,
           rfl,
           rfl,
           rfl,
@@ -265,10 +265,11 @@ theorem silicon_realism_compiler_and_gpu_vop64_suite :
 /-- 1. Broken `kernelIsDefEqFull` in `Obend.Lower.LeanKernel` that reverts to syntactic/WHNF
 `kernelIsDefEq` without `Nat` literal ↔ `Nat.succ` bridging, lambda $\eta$-equivalence, or
 `Sort 0` (`Prop`) proof irrelevance. -/
-def kernelIsDefEqFullReverted (env : KEnv) (fuel : Nat) (_ctx : List KExpr) (a b : KExpr) : Bool :=
+def kernelIsDefEqFullReverted (env : KEnv) (fuel : Nat) (a b : KExpr) (_ctx : List KExpr) : Bool :=
   kernelIsDefEq env fuel a b
 
-#tooth Obend.Lower.LeanKernel.kernelIsDefEqFull_sound by mutation Obend.Lower.LeanKernel.kernelIsDefEqFull := kernelIsDefEqFullReverted
+#tooth Obend.Lower.LeanKernel.kernelIsDefEqFull_sound by mutation Obend.Lower.LeanKernel.kernelIsDefEqFull :=
+  fun env fuel a b ctx => kernelIsDefEqFullReverted env fuel a b ctx
 
 /-- 2. Broken `inferTypeNodeBodyLExpr` in `Obend.Lower.LeanKernel` that skips the arrow domain/codomain
 check on `.app` (`exprTag == 5`) and blindly returns `envBindingTy` (`bvar 0`), accepting ill-typed

@@ -459,6 +459,7 @@ def epoch2LeafView : LeafView :=
      `evalSlotGuardedDiscrTile` falls back in 1 cycle (`false`),
    - Hot-swapping `sampleEpoch2Guard.specializedTile` into tile `0` via `runTileGlitchFreeDpr`
      preserves neighbor tile `1` and executes the new Epoch-2 LUT rule (`6 * 10 + 10 = 70#64`). -/
+-- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean, a proof in this file
 theorem discrTree_lut_compile_sound :
     let qSimp := KExpr.app (.const (KName.mkSimple "scaleAdd") []) (.lit (.natVal 10))
     let qAddNat := KExpr.app (.const (KName.mkSimple "Add") []) kNatConst
@@ -592,6 +593,7 @@ def mkCosimInputs
      `evalModuleOutputs exprCamKernelLutRtlModule` produces:
      `out_cam_eq = 0#64`, `out_loose_bvar_a = 0#64`, `out_kernel_accept = 0#64`,
      `out_epoch_guard_ok = 0#64`, and `out_lut_result = 0#64` (1-cycle fallback to `out_kernel_accept`). -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem exprCam_siliconKernel_sv_cosim_sound :
     let wBVar0 := mkExprCamWord64 (.bvar 0) 0 0
     let wNatConst := mkExprCamWord64 kNatConst 1 0

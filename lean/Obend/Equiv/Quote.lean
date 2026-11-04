@@ -718,9 +718,11 @@ theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (Obend.Law.ru
 /-- A program that reads the head of a quotation: `var ↦ 0`, `bind ↦ 1`, `node ↦ 2`. -/
 @[expose] def headReader : Term := .case (.bound 0) [("var", .nat 0), ("bind", .nat 1), ("node", .nat 2)]
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem headReader_selfApplied : Evaluates ((Observer.quote headReader).plug selfApplied) (.nat 2) :=
   natOf_eval 10 (by decide +kernel)
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem headReader_identity : Evaluates ((Observer.quote headReader).plug identityTerm) (.nat 1) :=
   natOf_eval 10 (by decide +kernel)
 
@@ -779,13 +781,16 @@ three counter specifications `A`, `B`, `C`; `compose(a, b)` is
 @[expose] def rightNested : Term := compose specA (compose specB specC)
 
 /-- **R01**: `leftNested()` is `true`. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem probe_R01 : Evaluates ((Observer.run provenanceProbe).plug leftNested) (.boolean true) :=
   boolOf_eval 40 (by decide +kernel)
 
 /-- **R02**: `rightNested()` is `false`. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem probe_R02 : Evaluates ((Observer.run provenanceProbe).plug rightNested) (.boolean false) :=
   boolOf_eval 40 (by decide +kernel)
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem provenanceProbe_census : (Observer.run provenanceProbe).census = .r := by
   decide +kernel
 
@@ -827,6 +832,7 @@ theorem compose_assoc_b {a b c : Term} (ha : ObsFree a) (hb : ObsFree b) (hc : O
   exact Observed.trans left (Observed.trans
     (blind_observed (.specification _ _ (obsFree_mixAssocBody ha hb hc))) (Observed.symm right))
 
+-- fixture kept (2026-11-04): observer-freedom of the three specs, consumed by the Quote proofs
 theorem specs_obsFree : ObsFree specA ∧ ObsFree specB ∧ ObsFree specC :=
   ⟨obsFree_of_observes _ (by decide +kernel), obsFree_of_observes _ (by decide +kernel),
     obsFree_of_observes _ (by decide +kernel)⟩

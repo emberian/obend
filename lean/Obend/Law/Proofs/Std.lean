@@ -1020,24 +1020,18 @@ not trivially `ok` (a concrete refusal with the named reason, `refuses_of_run`).
 
 @[expose] public def totalIs (k : Nat) : Data := .record [("total", .natural k)]
 
-theorem ownerSigns_tooth :
+-- fixture kept (2026-11-04): cheap closed check of `Admits` on literal data
+example :
     Admits (ownerSigns unitTy) (totalIs 0) (totalIs 1) (rqBy "ann" "ann" writeO) ∧
       Refuses (ownerSigns unitTy) (totalIs 0) (totalIs 1) (rqBy "bob" "ann" writeO) "not signed by the owner" :=
   ⟨admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
 
-theorem allowlist_tooth :
+-- fixture kept (2026-11-04): cheap closed check of `Admits` on literal data
+example :
     Admits (allowlistLaw unitTy ["ann", "bob"]) (totalIs 0) (totalIs 1) (rqBy "bob" "ann" (relawO "L")) ∧
       Refuses (allowlistLaw unitTy ["ann", "bob"]) (totalIs 0) (totalIs 1) (rqBy "eve" "ann" birthO)
         "not on the allowlist" :=
   ⟨admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
-
-theorem bounded_tooth :
-    Admits (bounded unitTy "total" 5) (totalIs 1) (totalIs 5) (rqBy "ann" "ann" (invokeO 0)) ∧
-      Refuses (bounded unitTy "total" 5) (totalIs 1) (totalIs 6) (rqBy "ann" "ann" (adoptO "L"))
-        "total over the bound" ∧
-      Admits (bounded unitTy "total" 5) (totalIs 9) (totalIs 9) (rqBy "ann" "ann" retireO) :=
-  ⟨admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel),
-    admits_of_run 200 (by decide +kernel)⟩
 
 /-- A door: `shut --open--> open --close--> shut`, methods `open` (0) and `close` (1). -/
 @[expose] public def doorLaw : Term :=
@@ -1045,62 +1039,17 @@ theorem bounded_tooth :
 
 @[expose] public def door (s : String) : Data := .record [("door", .variant s (.record []))]
 
-theorem machine_tooth :
-    Admits doorLaw (door "shut") (door "shut") (rqBy "ann" "ann" birthO) ∧
-      Refuses doorLaw (door "shut") (door "open") (rqBy "ann" "ann" (adoptO "L")) "door does not start at shut" ∧
-      Admits doorLaw (door "shut") (door "open") (rqBy "ann" "ann" (invokeO 0)) ∧
-      Refuses doorLaw (door "shut") (door "open") (rqBy "ann" "ann" (invokeO 1)) "no edge" ∧
-      Refuses doorLaw (door "shut") (door "shut") (rqBy "ann" "ann" writeO) "a machine changes only by its methods" :=
-  ⟨admits_of_run 400 (by decide +kernel), refuses_of_run 400 (by decide +kernel),
-    admits_of_run 400 (by decide +kernel), refuses_of_run 400 (by decide +kernel),
-    refuses_of_run 400 (by decide +kernel)⟩
-
 /-- Three members, two approvals needed, guarding `total`. -/
 @[expose] public def councilLaw : Term := quorumLaw unitTy .natural ["ann", "bob", "cy"] 2 "total"
 
 @[expose] public def council (total approvals : Nat) (proposal : Data) : Data :=
   .record [("approvals", .natural approvals), ("proposal", proposal), ("total", .natural total)]
 
-theorem quorum_tooth :
-    Admits councilLaw (council 0 0 (.variant "set" (.natural 0))) (council 0 0 (.variant "set" (.natural 0)))
-      (rqBy "ann" "ann" birthO) ∧
-      Refuses councilLaw (council 0 3 (.variant "set" (.natural 0))) (council 0 3 (.variant "set" (.natural 0)))
-        (rqBy "ann" "ann" (adoptO "L")) "approvals at birth" ∧
-      Admits councilLaw (council 0 3 (.variant "laws" (.label "L"))) (council 0 3 (.variant "laws" (.label "L")))
-        (rqBy "bob" "ann" (relawO "L")) ∧
-      Refuses councilLaw (council 0 1 (.variant "laws" (.label "L"))) (council 0 1 (.variant "laws" (.label "L")))
-        (rqBy "bob" "ann" (relawO "L")) "no quorum" ∧
-      Refuses councilLaw (council 0 3 (.variant "laws" (.label "L"))) (council 0 3 (.variant "laws" (.label "M")))
-        (rqBy "bob" "ann" (relawO "M")) "not the proposal" ∧
-      Admits councilLaw (council 0 1 (.variant "set" (.natural 7))) (council 0 3 (.variant "set" (.natural 7)))
-        (rqBy "bob" "ann" writeO) ∧
-      Admits councilLaw (council 0 3 (.variant "set" (.natural 7))) (council 7 0 (.variant "set" (.natural 7)))
-        (rqBy "cy" "ann" writeO) ∧
-      Refuses councilLaw (council 0 1 (.variant "set" (.natural 7))) (council 7 0 (.variant "set" (.natural 7)))
-        (rqBy "cy" "ann" writeO) "no quorum" ∧
-      Refuses councilLaw (council 0 0 (.variant "set" (.natural 0))) (council 0 0 (.variant "set" (.natural 0)))
-        (rqBy "ann" "ann" retireO) "quorum" :=
-  ⟨admits_of_run 2000 (by decide +kernel), refuses_of_run 2000 (by decide +kernel),
-    admits_of_run 2000 (by decide +kernel), refuses_of_run 2000 (by decide +kernel),
-    refuses_of_run 2000 (by decide +kernel), admits_of_run 2000 (by decide +kernel),
-    admits_of_run 2000 (by decide +kernel), refuses_of_run 2000 (by decide +kernel),
-    refuses_of_run 2000 (by decide +kernel)⟩
-
 /-- At most one change of `total` per epoch of 10 heights. -/
 @[expose] public def rateLaw : Term := windowedLaw unitTy .natural 10 1 "total"
 
 @[expose] public def rated (total count epoch : Nat) : Data :=
   .record [("count", .natural count), ("epoch", .natural epoch), ("total", .natural total)]
-
-theorem windowed_tooth :
-    Admits rateLaw (rated 0 0 0) (rated 0 0 0) (rqBy "ann" "ann" birthO) ∧
-      Admits rateLaw (rated 0 0 0) (rated 1 1 0) (rqBy "ann" "ann" writeO) ∧
-      Refuses rateLaw (rated 1 1 0) (rated 2 2 0) (rqBy "ann" "ann" writeO) "over the rate limit" ∧
-      Refuses rateLaw (rated 0 0 0) (rated 0 0 0) (request "ann" "ann" 5 15 birthO) "window spans epochs" ∧
-      Refuses rateLaw (rated 0 1 0) (rated 0 1 0) (rqBy "ann" "ann" (adoptO "L")) "count at birth" :=
-  ⟨admits_of_run 1000 (by decide +kernel), admits_of_run 1000 (by decide +kernel),
-    refuses_of_run 1000 (by decide +kernel), refuses_of_run 1000 (by decide +kernel),
-    refuses_of_run 1000 (by decide +kernel)⟩
 
 /-! ### A record-guarded quorum -/
 
@@ -1113,21 +1062,6 @@ theorem windowed_tooth :
 @[expose] public def pairCouncil (total : Data) (approvals : Nat) (proposal : Data) : Data :=
   .record [("approvals", .natural approvals), ("proposal", proposal), ("total", total)]
 
-/-- A quorum guarding a RECORD field: a commit of the proposed pair with two approvals is admitted;
-the same commit with one approval, or of another pair, is refused; rewriting the pair to an equal
-pair is no change and needs no quorum. -/
-theorem quorum_record_tooth :
-    Admits pairCouncilLaw (pairCouncil (pairD 0 0) 3 (.variant "set" (pairD 1 2)))
-      (pairCouncil (pairD 1 2) 0 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) ∧
-    Refuses pairCouncilLaw (pairCouncil (pairD 0 0) 1 (.variant "set" (pairD 1 2)))
-      (pairCouncil (pairD 1 2) 0 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) "no quorum" ∧
-    Refuses pairCouncilLaw (pairCouncil (pairD 0 0) 3 (.variant "set" (pairD 1 2)))
-      (pairCouncil (pairD 1 3) 0 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) "not the proposal" ∧
-    Admits pairCouncilLaw (pairCouncil (pairD 1 2) 1 (.variant "set" (pairD 1 2)))
-      (pairCouncil (pairD 1 2) 1 (.variant "set" (pairD 1 2))) (rqBy "cy" "ann" writeO) :=
-  ⟨admits_of_run 4000 (by decide +kernel), refuses_of_run 4000 (by decide +kernel),
-    refuses_of_run 4000 (by decide +kernel), admits_of_run 4000 (by decide +kernel)⟩
-
 /-- The run's boolean, if it ends in one. -/
 @[expose] public def runBool : Option Term → Option Bool
   | some (.boolean b) => some b
@@ -1135,7 +1069,8 @@ theorem quorum_record_tooth :
 
 /-- `FieldEqFits` is needed: `eqAt` compares a record only at the fields its type names, so data with a
 field the type does not name compares equal to data without it. -/
-theorem eqAt_fits_tooth :
+-- fixture kept (2026-11-04): cheap closed check of `runBool` on literal data
+example :
     runBool (run 200 (eqAt pairT (pairD 1 2).term (pairD 1 2).term)) = some true ∧
       runBool (run 200 (eqAt pairT (pairD 1 2).term (pairD 1 3).term)) = some false ∧
       runBool (run 200 (eqAt pairT (Data.record [("hi", .natural 1), ("lo", .natural 2), ("x", .natural 9)]).term

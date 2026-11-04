@@ -31,6 +31,7 @@ theorem standIn_lowBit_is_vote (voter vote salt : Nat) (h : vote < 2) :
 
 /-- Under `digest` the low bit is not the vote: voter 1 voting YES under salt 101 commits to an
 even digest, and voting NO under salt 100 to an odd one. -/
+-- fixture kept (2026-11-04): the sealed low bit is not the vote, on the two votes; re-run by #assert_compiled
 theorem sealed_lowBit_not_vote :
     digest (digest 1 1) 101 % 2 = 0 ∧ digest (digest 1 0) 100 % 2 = 1 := by
   native_decide
@@ -40,6 +41,7 @@ theorem sealed_lowBit_not_vote :
 /-- The two openings of voter 1 under one salt commit differently (binding at the deployed hash,
 on this instance), and neither commitment is the other's successor (the stand-in's YES commitment
 was always its NO commitment plus one). -/
+-- fixture kept (2026-11-04): sealed yes and no differ; re-run by #assert_compiled
 theorem sealed_yes_no_differ :
     digest (digest 1 1) 111 ≠ digest (digest 1 0) 111 ∧
       digest (digest 1 1) 111 ≠ digest (digest 1 0) 111 + 1 := by
@@ -49,6 +51,7 @@ theorem sealed_yes_no_differ :
 
 /-- Known answer at the deployed hash, the value the C differential's digest cases reproduce:
 `digest 1 1`. -/
+-- fixture kept (2026-11-04): known-answer test of the digest; re-run by #assert_compiled
 theorem digest_one_one :
     digest 1 1 =
       33544760771157370539093351361262075193213937251298462105196476525256921960532 := by
@@ -58,6 +61,7 @@ theorem digest_one_one :
 
 /-- Known answer for `world/ballot`'s seal: voter 1, YES, salt 111. The ballot preview row
 `BallotSealKnownAnswer` must print this value. -/
+-- fixture kept (2026-11-04): known-answer test of the digest (the KAT a hash carries); re-run by #assert_compiled
 theorem sealed_known_answer :
     digest (digest 1 1) 111 =
       83370838008729781310004166183474027631933533742037976749282545846343963921357 := by

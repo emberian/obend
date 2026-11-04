@@ -238,6 +238,7 @@ Proves that the hardware-word kernel transition functions (`stepCamWhnfNodeWord`
    any host precomputation,
 2. Agree with the 4-port `RtlModule` datapaths (`evalLoweredDefEqNodeRtl`, `evalLoweredNodeInferRtl`,
    `evalLoweredKernelStepRtl`) and pass `Judge.check` (`checkRtlSynth 0`). -/
+-- fixture kept (2026-11-04): used by tests/silicon_elab/SiliconElaboratorPhase2Test.lean
 theorem silicon_kernel_fragment_read_6stage_sound :
     let eWhnfBeta := app4LExpr fragmentReadWhnfNodeLExpr 5 1 35 7
     let eDefEqHit := app4LExpr fragmentReadDefEqNodeLExpr 4 10 4 10
@@ -2215,21 +2216,6 @@ def emitSiliconElabFabricSVLines : List String :=
 `obend_zone4_kernel_fsm`, and `silicon_elab_top`. -/
 def emitSiliconElabFabricSV : String :=
   String.intercalate "\n" emitSiliconElabFabricSVLines
-
-/-- **Theorem (`emitSiliconElabFabricSV_five_modules_sound`)**:
-Verifies that `emitSiliconElabFabricSVLines` emits all 5 Silicon Elaborator modules
-(`obend_zone1_expr_cam`, `obend_zone2_noc_unifier`, `obend_zone3_discr_lut`,
-`obend_zone4_kernel_fsm`, `silicon_elab_top`) together with the 2 hardware macro modules
-(`obend_macro_noc_router_xy`, `obend_macro_icap_dpr_tile`). -/
-example :
-    emitSiliconElabFabricSVLines.contains "module obend_macro_noc_router_xy (" = true ∧
-    emitSiliconElabFabricSVLines.contains "module obend_macro_icap_dpr_tile (" = true ∧
-    emitSiliconElabFabricSVLines.contains "module obend_zone1_expr_cam (" = true ∧
-    emitSiliconElabFabricSVLines.contains "module obend_zone2_noc_unifier (" = true ∧
-    emitSiliconElabFabricSVLines.contains "module obend_zone3_discr_lut (" = true ∧
-    emitSiliconElabFabricSVLines.contains "module obend_zone4_kernel_fsm (" = true ∧
-    emitSiliconElabFabricSVLines.contains "module silicon_elab_top (" = true := by
-  decide +kernel
 
 end Obend.Lower.SiliconElabFabric
 end

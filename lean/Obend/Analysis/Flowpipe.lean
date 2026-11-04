@@ -278,6 +278,7 @@ def coupledOscillatorOde : OdeSystem where
    (`verifyTrajectorySafety = true`).
 3. **Negative Pole (Thermal Runaway Refusal)**: Under `thermalRunawayOde` ($\dot{T} = T + 10$),
    the flowpipe is actively refused (`verifyTrajectorySafety = false`). -/
+-- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean
 theorem flowpipe_step_encloses_euler :
     let X0 : Interval := ⟨28, 30⟩
     let V0 : Interval := ⟨-10, -8⟩

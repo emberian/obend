@@ -90,6 +90,7 @@ def reportLaws (pkg : String) : List (String × Term) :=
   else if pkg = "lab/review" then [("members", allowlistLaw unitTy ["ann", "bob"])]
   else []
 
+-- fixture kept in place (2026-11-04): a 10-line closed evaluation; worth a pre-push run, but its fixture data is private to this module, so it cannot move to Obend/Teeth/
 theorem packages_tooth :
     (effectivePackages reportLaws ["lab/review", "papers/report"]).toOption.isSome = true ∧
       (match effectivePackages reportLaws ["lab/review", "papers/report"] with

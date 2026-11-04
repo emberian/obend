@@ -341,7 +341,8 @@ def unstableFeedbackLnaSParams : TwoPortSParams :=
 The 2m VHF Ham Radio LNA passes Rollett unconditional stability ($K \approx 1.457 > 1, |\Delta| < 1$),
 produces a positive 4-element phased-array coherent gain of $16 \times$ ($+12\,\text{dB}$),
 and the unneutralized high-feedback stage with $K < 1$ is refused! -/
-theorem golden2mHamLna_stable_and_unstable_refused :
+-- fixture kept (2026-11-04): a discriminating pair: Rollett stability admits one S-parameter set and refuses another
+example :
     checkRollettUnconditionalStability golden2mHamLnaSParams = true ∧
     checkRollettUnconditionalStability unstableFeedbackLnaSParams = false ∧
     checkCicOverflowFree
@@ -486,6 +487,7 @@ def goldenCordic4Stages : List CordicMicroStage :=
 Starting from $(x_0, y_0, z_0) = (1000, 0, 442)$ ($442\,\text{mrad} \approx 25.3^\circ$), the 4-stage
 unrolled CORDIC pipeline `goldenCordic4Stages` converges to `(1484, 704, 0)` with zero residual
 angle error (`z4 = 0`) and processing norm gain $x_4^2 + y_4^2 = 2697872 > x_0^2 + y_0^2 = 1000000$. -/
+-- fixture kept (2026-11-04): would delete (one evaluation of the CORDIC pipeline on literal inputs) but cited by Obend/Apps/SdrFt8.lean:573
 theorem cordic_4stage_pipeline_verified :
     runCordicMicroPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0) ∧
     (let (x4, y4, z4) := runCordicMicroPipeline 1000 0 442 goldenCordic4Stages
@@ -550,19 +552,6 @@ theorem ula_4elem_matched_beamformer_coherent (s : IqPhasor) :
   have hQ := Obend.Hardware.Thermal.int_sq_nonneg s.q
   rw [hq]
   refine ⟨by omega, by omega, by omega⟩
-
-/-- Theorem (`ula_4elem_progressive_phase_beamformer_verified`):
-For a 4-element ULA receiving a wavefront with $90^\circ$ progressive inter-element phase shift
-(`⟨80, 60⟩`, `⟨-60, 80⟩`, `⟨-80, -60⟩`, `⟨60, -80⟩`, each of envelope squared $80^2 + 60^2 = 10000$),
-applying conjugate steering weights aligns all 4 elements to `⟨40000, 0⟩` ($4\times$ coherent amplitude,
-$16\times$ power gain)! -/
-theorem ula_4elem_progressive_phase_beamformer_verified :
-    evalUlaIqBeamformer
-      [ (⟨80, 60⟩, ⟨80, 60⟩)
-      , (⟨-60, 80⟩, ⟨-60, 80⟩)
-      , (⟨-80, -60⟩, ⟨-80, -60⟩)
-      , (⟨60, -80⟩, ⟨60, -80⟩) ] = ⟨40000, 0⟩ := by
-  decide +kernel
 
 /-! ## 7. Connected SDR Digital Downconverter (DDC) Datapath (`SdrDdcChainSpec`, `evalSdrDdcSample`, `checkSdrDdcSignoff`) -/
 

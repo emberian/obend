@@ -247,6 +247,7 @@ def tmSqrt1pCertified (dom : Interval) : TaylorModel := tmSqrt1p dom (lagrangeRe
    - Over $x \in [-1/10, 1/10]$, the degree-4 Taylor model for $\sin^2(x) + \cos^2(x)$
      (`tmAdd (tmMul 4 sinTM sinTM) (tmMul 4 cosTM cosTM)`) cancels the $-x^2 + x^2$ quadratic
      and $\pm \frac{1}{3} x^4$ quartic drift and encloses $1$ across the entire domain. -/
+-- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean
 theorem taylorModel_transcendental_enclosure_sound :
     let dom : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
     let posPtDom : Interval := ⟨CanonicalRat.mk 1 10, CanonicalRat.mk 1 10⟩
@@ -336,6 +337,7 @@ def stepNaiveIntervalPicard1D (initBox : Interval) (dt : CanonicalRat) (remPad :
      before applying $X_0$, producing a **strict subinterval** (`Interval.isSubintervalOf = true`
      with strictly smaller width `picardBox.hi - picardBox.lo < naiveBox.hi - naiveBox.lo`) of the
      naive interval Taylor evaluation (`stepNaiveIntervalPicard1D X0 (1/2) R`). -/
+-- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean
 theorem taylorModel_picard_sound :
     let X0 : Interval := ⟨CanonicalRat.mk 9 10, CanonicalRat.mk 11 10⟩
     let dt : CanonicalRat := CanonicalRat.mk 1 2
@@ -838,6 +840,7 @@ Out-of-domain intervals (such as $x = 10$ outside `expValidDomain = [-1, 1]`, $x
 `trigValidDomain = [-4, 4]`, or the branch singularity $x = -1$ outside `ln1pValidDomain = [-1/2, 1/2]`
 and `sqrt1pValidDomain = [-1/2, 1/2]`) are rejected by the validity domain guards (`Interval.subset = false`),
 while in-domain intervals such as $[-1/10, 1/10]$ are accepted (`Interval.subset = true`). -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Analysis/TaylorModel.lean:943
 theorem analyticModel_domain_guard_rejects_out_of_domain :
     let tenthDom := Interval.mk (CanonicalRat.mk (-1) 10) (CanonicalRat.mk 1 10)
     Interval.subset tenthDom expValidDomain = true ∧

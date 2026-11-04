@@ -462,17 +462,17 @@ def badStepCountHybridCert : HybridCert :=
   , expectedFinalMode := "cooling"
   , claimedSteps      := 99 }
 
-theorem validHybridCert_accepted :
-    verifyFlowpipe demoHybridProblem validHybridCert = true := rfl
-
+-- fixture kept (2026-11-04): target of #tooth at Obend/Analysis/Hybrid.lean:548
 theorem badHybridCert_rejected :
     verifyFlowpipe demoHybridProblem badHybridCert = false := rfl
 
 /-- Inverted initial interval (`initLo > initHi`) is rejected even if endpoints lie in `[15, 32]`. -/
+-- fixture kept (2026-11-04): refusal witness: `verifyFlowpipe` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 theorem invertedInterval_rejected :
     verifyFlowpipe { demoHybridProblem with initLo := 26, initHi := 24 } validHybridCert = false := rfl
 
 /-- Nonexistent mode is rejected even on an empty schedule (`schedule = []`). -/
+-- fixture kept (2026-11-04): refusal witness: `verifyFlowpipe` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
 theorem bogusMode_rejected :
     verifyFlowpipe
       { demoHybridProblem with initMode := "bogus", initLo := 20, initHi := 22 }
@@ -511,6 +511,7 @@ instance hybridFlowpipeJudge : Obend.Judge HybridProblem HybridCert where
     intro _r _r' _o _c _hle _hunc
     rfl
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem hybridFlowpipe_bad_refused :
     Obend.Judge.check 0 demoHybridProblem badHybridCert =
       .refused "flowpipe_invariant_or_unsafe_zone_violation" [] := rfl

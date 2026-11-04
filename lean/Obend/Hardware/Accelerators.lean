@@ -90,7 +90,8 @@ def allBase13Digits : List Int :=
 /-- **Hayashi–Mukunoki–Hoshino–Katagiri Base-13 `FP4` Coverage Theorem (`ozaki_fp4_base13_covers_all_25_digits`)**:
 Every integer in $[-12, 12]$ is decomposed error-free into a doubled `FP4 (E2M1)` value $r \in S_{\text{E2M1}}$
 plus a multiple of $13$ ($q \in \{-1, 0, 1\}$) such that $r + 13 q = d$. -/
-theorem ozaki_fp4_base13_covers_all_25_digits :
+-- fixture kept (2026-11-04): exhaustive over the 25 base-13 FP4 digits: this is the whole statement, decided
+example :
     allBase13Digits.all checkBase13Fp4DigitValid = true := by
   decide +kernel
 

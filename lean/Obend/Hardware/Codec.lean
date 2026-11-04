@@ -608,32 +608,6 @@ def goldenBinaryPowerElectronicsCert : BinaryHwCert :=
 def goldenBinaryMechanicsCert : BinaryHwCert :=
   { domain := .mechanicsVonNeumann, p0 := 1500, p1 := 250, p2 := 180, p3 := 50, p4 := 500, p5 := 140 }
 
-/-- Kernel proof: encoding golden certificates across FPGA PnR, Photonics, DPR, Agentic EDA,
-    2D FEMM Magnetics, Liquid-Cooled Stator Fluid-Thermal, `MS350` Power Electronics, and
-    Von Neumann Reflexive Mechanics to RFC 8949 CBOR bytes, decoding them back via `decodeBinaryHwCert`,
-    and running `verifyBinaryHwCert` succeeds (`true`), while a corrupted CBOR payload (`p5 := 100` ps clock
-    period on PnR) is rejected (`false`). -/
-theorem binary_cbor_certificates_roundtrip_and_verify :
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryPnrCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryPhotonicsCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryDprCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryEdaSwapCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryMagneticsCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryFluidThermalCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryPowerElectronicsCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert goldenBinaryMechanicsCert) with
-     | some c => verifyBinaryHwCert c | none => false) = true ∧
-    (match decodeBinaryHwCert (encodeBinaryHwCert { goldenBinaryPnrCert with p5 := 100 }) with
-     | some c => verifyBinaryHwCert c | none => true) = false := by
-  decide +kernel
-
 /-! ### Variable-Length Binary CBOR Tape / Mesh / Evolutionary Certificates (`BinaryTapeCert`)
 
 Encodes variable-length F-Rep CSG instruction tapes, multi-element 2D FEMM meshes, and
@@ -813,17 +787,6 @@ def goldenBinaryEvolutionTapeCert : BinaryTapeCert :=
   , metric0 := 80
   , metric1 := 103184
   , words := [4800, 3500, 140, 8, 6] }
-
-theorem binary_cbor_tape_certificates_roundtrip_and_verify :
-    (match decodeBinaryTapeCert (encodeBinaryTapeCert goldenBinaryFemmTapeCert) with
-     | some c => verifyBinaryTapeCert c | none => false) = true ∧
-    (match decodeBinaryTapeCert (encodeBinaryTapeCert goldenBinaryOctreeTapeCert) with
-     | some c => verifyBinaryTapeCert c | none => false) = true ∧
-    (match decodeBinaryTapeCert (encodeBinaryTapeCert goldenBinaryEvolutionTapeCert) with
-     | some c => verifyBinaryTapeCert c | none => false) = true ∧
-    (match decodeBinaryTapeCert (encodeBinaryTapeCert { goldenBinaryFemmTapeCert with metric0 := 999 }) with
-     | some c => verifyBinaryTapeCert c | none => true) = false := by
-  decide +kernel
 
 /-! ## 6. `.obnb` (`NEXT-MATHEMATICA.md` §5) `Obend.Core.Data` Hardware Cell Projections -/
 

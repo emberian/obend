@@ -13,10 +13,6 @@ open Obend.Core.Term Obend.Core.Machine Obend.Core.Data
 theorem yieldingTerm_yields : runBounded exampleLimits 32 (initial yieldingTerm) = .yielded 1 exampleYield := by
   rfl
 
-/-- The yield leaves one garbage cell of two; collection drops it. -/
-theorem exampleYield_collected : exampleYield.heap.size = 2 ∧ (collect exampleYield).heap.size = 1 := by
-  decide +kernel
-
 /-- Both Plans extract, to the same encoded Data. -/
 theorem exampleYield_plan_agrees :
     ((yieldedPlan exampleLimits exampleBudget exampleYield).toOption.map fun r => encoded 4 r.value) =

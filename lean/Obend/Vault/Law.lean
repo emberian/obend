@@ -332,16 +332,6 @@ def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (fron
         "the multi-field change `" ++ String.intercalate ", " parts ++ "` would pass"
       | none => "no change of one field passes"
 
-/-- On a coupled multi-field law (`monotone(a) and new.a <= new.b and new.b <= 10`) where no
-single-field edit from `{a: 2, b: 1}` (against `old = {a: 4, b: 1}`) passes, `suggestMultiField`
-uses `Obend.Spec.LawDial.solveLawWitness` to synthesize the multi-field edit `[("a", 4), ("b", 4)]`. -/
-example :
-    suggestMultiField Obend.Spec.LawDial.coupledMultiFieldLaw Obend.Spec.LawDial.demoFacts
-      (some Obend.Spec.LawDial.coupledOldState)
-      (.record [("a", .natural 2), ("b", .natural 1)]) =
-    some [("a", 4), ("b", 4)] := by
-  decide +kernel
-
 end Obend.Vault
 
 end

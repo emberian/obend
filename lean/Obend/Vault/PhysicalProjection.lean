@@ -314,6 +314,7 @@ theorem physical_cnc_abbe_projection_sound (spec : CncToolpathViewportSpec) :
    and any verified `timeSamples` chain preserves `checkPartLifecycleInvariant` at `finalUsdState`.
 2. On `goldenOpenUsdViewportSpec` and `goldenStatorMultiphysicsSpec`, both the OpenUSD lifecycle
    track and the coupled `thermalCoolingOde` continuous flowpipe are certified safe. -/
+-- fixture kept (2026-11-04): used by tests/silicon_elab/SiliconElabTest.lean
 theorem physical_openusd_lifecycle_projection_sound :
     let usd := goldenOpenUsdViewportSpec
     let stator := goldenStatorMultiphysicsSpec

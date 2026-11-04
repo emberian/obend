@@ -410,6 +410,7 @@ def refusedResponse : Data := .variant "refused" (.record [])
 
 /-- Ground turn-judge verification of `bump(5)` on `written` (`6`) and `refused` (`5`),
 plus refutation when `written` claims `5`. -/
+-- fixture kept (2026-11-04): cheap closed check of `turnCheck` on literal data
 theorem counter_bump_turnJudge_verified :
     turnCheck 10 ⟨counterBump, [.natural 5], counterBumpPlan 5, writtenResponse, .natural 6⟩ () = .ok ∧
     turnCheck 10 ⟨counterBump, [.natural 5], counterBumpPlan 5, refusedResponse, .natural 5⟩ () = .ok ∧

@@ -938,18 +938,6 @@ theorem decode_encode_icap_words_roundtrip
   simp only [h1, hSync, ↓reduceIte]
   rw [decode_encode_opKind_bv, decode_encode_opcode_bv, h2, h3]
 
-/-- Theorem (`golden_icap_bitstream_roundtrip`):
-Kernel-checked (`decide +kernel`) verification that `incAutomatonTile` and `mul4AutomatonTile`
-round-trip cleanly through 5-word 32-bit ICAP configuration frames headed by `icapSyncWord`,
-while a frame with a corrupted sync word (`0xDEADBEEF#32`) is rejected (`none`). -/
-theorem golden_icap_bitstream_roundtrip :
-    (encodeTileIcapWords incAutomatonTile).length = 5 ∧
-    (encodeTileIcapWords incAutomatonTile).head? = some icapSyncWord ∧
-    decodeTileIcapWords (encodeTileIcapWords incAutomatonTile) = some incAutomatonTile ∧
-    decodeTileIcapWords (encodeTileIcapWords mul4AutomatonTile) = some mul4AutomatonTile ∧
-    decodeTileIcapWords [0xDEADBEEF#32, 0#32, 0#32, 0#32, 1#32] = none := by
-  decide +kernel
-
 /-! ## 8. Multi-Cycle `BendTT` Interaction-Net Active-Pair Hardware Processing Element (`stepInteractionNetPe`, `runInteractionNetCycles`) -/
 
 /-- Construct a `BendTT` Eraser (`ERA`) interaction-net node. -/
@@ -1193,6 +1181,7 @@ principal ports `(⟨10, 0⟩, ⟨11, 0⟩)` belonging to waiting `DUP 1` nodes 
 1. Cycle 1 dynamically promotes `{ left := n10, right := n11 }` from `arenaNodes` into `activeQueue`, and
 2. Cycle 2 dequeues and annihilates the newly formed `DUP 1 - DUP 1` active pair, splicing its
    auxiliary ports `(⟨10, 1⟩, ⟨11, 1⟩)` and `(⟨10, 2⟩, ⟨11, 2⟩)`. -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Teeth/Hardware/SiliconTeeth.lean:627
 theorem inet_dynamic_splice_cascading_reduction :
     let n10 := mkDupNode 10 1 ⟨10, 1⟩ ⟨10, 2⟩
     let n11 := mkDupNode 11 1 ⟨11, 1⟩ ⟨11, 2⟩
@@ -1211,40 +1200,6 @@ theorem inet_dynamic_splice_cascading_reduction :
     st2.rewiredPorts =
       [ (⟨10, 0⟩, ⟨11, 0⟩), (⟨1, 2⟩, ⟨2, 2⟩)
       , (⟨10, 1⟩, ⟨11, 1⟩), (⟨10, 2⟩, ⟨11, 2⟩) ] := by
-  decide +kernel
-
-/-- **Theorem (`golden_multicycle_inet_pe_reduction`)**:
-End-to-end 4-cycle verification of the `BendTT` Interaction-Net Processing Element executing a
-heterogeneous batch of active pairs across 4 clock cycles:
-* **Cycle 1 (`CON 0` - `CON 0` Annihilation)**: splices `(⟨1, 1⟩, ⟨2, 1⟩)` and `(⟨1, 2⟩, ⟨2, 2⟩)`,
-* **Cycle 2 (`CON 0` - `DUP 1` Commutation)**: spawns 4 cross-wired nodes (`IDs 100..103`),
-* **Cycle 3 (`DUP 1` - `DUP 1` Annihilation)**: splices `(⟨5, 1⟩, ⟨6, 1⟩)` and `(⟨5, 2⟩, ⟨6, 2⟩)`,
-* **Cycle 4 ($\beta$-`nat64` Affine Evaluation)**: reduces `(λx. 3x + 7) 10` to `nat64 37` (`ID 104`),
-and reaches a quiescent fixed point at Cycle 5 (`runInteractionNetCycles 5 = runInteractionNetCycles 4`). -/
-theorem golden_multicycle_inet_pe_reduction :
-    let p1 : ActivePair :=
-      { left  := mkConNode 1 0 ⟨1, 1⟩ ⟨1, 2⟩
-      , right := mkConNode 2 0 ⟨2, 1⟩ ⟨2, 2⟩ }
-    let p2 : ActivePair :=
-      { left  := mkConNode 3 0 ⟨3, 1⟩ ⟨3, 2⟩
-      , right := mkDupNode 4 1 ⟨4, 1⟩ ⟨4, 2⟩ }
-    let p3 : ActivePair :=
-      { left  := mkDupNode 5 1 ⟨5, 1⟩ ⟨5, 2⟩
-      , right := mkDupNode 6 1 ⟨6, 1⟩ ⟨6, 2⟩ }
-    let p4 : ActivePair :=
-      { left  := { id := 7, kind := .lam, label := 3, immVal := 7, aux1 := ⟨7, 1⟩, aux2 := ⟨7, 2⟩ }
-      , right := { id := 8, kind := .nat64, label := 0, immVal := 10, aux1 := ⟨8, 1⟩, aux2 := ⟨8, 2⟩ } }
-    let initPe := initInteractionNetPe [p1, p2, p3, p4] 100
-    let finalPe := runInteractionNetCycles 4 initPe
-    finalPe.activeQueue = [] ∧
-    finalPe.cycleCount = 4 ∧
-    finalPe.annihilations = 2 ∧
-    finalPe.commutations = 1 ∧
-    finalPe.arenaNodes.length = 4 ∧
-    finalPe.rewiredPorts.length = 4 ∧
-    finalPe.nextFreeId = 105 ∧
-    finalPe.scalarResults.map (·.immVal) = [37] ∧
-    runInteractionNetCycles 5 initPe = finalPe := by
   decide +kernel
 
 /-! ## 6. Spatial Packet-Switched XY NoC Transition System & `Obend.Slot`-Backed DPR (`WS-A`) -/
@@ -2564,20 +2519,6 @@ Reconfiguration tile (`evalReconfigTile`, `dprPhase1Isolate`, `dprPhase2LoadFram
 `dprPhase3ReleaseFence` per `QUALIFICATION-AND-SILICON-LEAN.md` §1.4). -/
 def emitIcapDprTileSV : String :=
   String.intercalate "\n" emitIcapDprTileSVLines
-
-/-- **Theorem (`noc_router_and_icap_sv_macro_sound`)**:
-Verifies that `emitNocRouterXySV` and `emitIcapDprTileSV` emit complete SystemVerilog-2012
-modules `obend_macro_noc_router_xy` and `obend_macro_icap_dpr_tile` containing the dimension-ordered
-XY routing comparators (`cur_x < dst_x`, `cur_x > dst_x`, `cur_y < dst_y`, `cur_y > dst_y`) and
-the glitch-free isolation mux (`isolated_q ? skid_held_q : active_lut_out`). -/
-theorem noc_router_and_icap_sv_macro_sound :
-    emitNocRouterXySVLines.contains "module obend_macro_noc_router_xy (" = true ∧
-    emitNocRouterXySVLines.contains "  wire go_east  = can_forward && (cur_x < dst_x);" = true ∧
-    emitNocRouterXySVLines.contains "  wire go_north = can_forward && (cur_x == dst_x) && (cur_y < dst_y);" = true ∧
-    emitIcapDprTileSVLines.contains "module obend_macro_icap_dpr_tile (" = true ∧
-    emitIcapDprTileSVLines.contains "  assign tile_out         = isolated_q ? skid_held_q : active_lut_out;" = true ∧
-    emitIcapDprTileSVLines.contains "        if (icap_expected_digest == icap_computed_digest)" = true := by
-  decide +kernel
 
 end Obend.Hardware.ReductionMachine
 end

@@ -117,6 +117,7 @@ attribute [local irreducible] Obend.Core.Check.sameType
 def extendFilling : AnnotatedTerm := ⟨.extend (.record [("a", .nat 1)]) [("b", .nat 2)], fun _ => none, {}⟩
 def extendType : Ty := .field "b" .natural (.field "a" .natural .emptyRow)
 
+-- fixture kept (2026-11-04): consumed by Obend/Judge/Instances.lean
 theorem extend_filling_admitted : judge 4 [] extendFilling extendType = true := by
   simp [judge, extendFilling, extendType, checkWork, Obend.Elab.Work.checkWork,
     Obend.Elab.Work.termWork, Obend.Elab.Work.fieldsWork, Obend.Elab.Work.annotationWork,
@@ -157,6 +158,7 @@ theorem extend_filling_budget_refused : judge 3 [] extendFilling extendType = fa
 /-- A record of 1,000 literal fields: the retired structural depth said 3; the work is 1,001. -/
 def wideRecord : AnnotatedTerm := ⟨.record (List.replicate 1000 ("a", .nat 0)), fun _ => none, {}⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem wide_record_work : Obend.Elab.Work.nestingDepth wideRecord.term = 3 ∧ checkWork wideRecord = 1001 := by
   constructor <;> decide +kernel
 

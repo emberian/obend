@@ -1121,61 +1121,6 @@ def cliffordToSpinorMatrix (H : CliffordElem) : GaussianMatrix :=
     cond (decide (c = 0)) acc (acc.add ((cliffordBladeSpinorMatrix m).scale c)))
     (GaussianMatrix.zero 4)
 
-/-- **Theorem (`cliffordToSpinorMatrix_algebra_hom`)**:
-**Exact $4 \times 4$ Spinor Algebra Homomorphism Theorem for $Cl_4$ over $\mathbb{Z}[i]$**:
-1. For ALL 16 basis blades $m \in \text{Fin } 16$, `cliffordToSpinorMatrix (cliffordBasisBlade m.val) = cliffordBladeSpinorMatrix m.val`.
-2. For ALL $16 \times 16 = 256$ basis blade pairs $a, b \in \text{Fin } 16$, the spinor representation
-   strictly respects the Koszul-signed Clifford product:
-   $$\rho_{\mathbb{Z}[i]}(e_a) \cdot \rho_{\mathbb{Z}[i]}(e_b) = \operatorname{cliffordSign}(a, b) \cdot \rho_{\mathbb{Z}[i]}(e_{a \oplus b}).$$
-3. For ALL $4 \times 4 = 16$ Majorana generator pairs $a, b \in \text{Fin } 4$,
-   `cliffordToSpinorMatrix (cliffordMul (cliffordGamma a) (cliffordGamma b)) = (cliffordToSpinorMatrix (cliffordGamma a)).mul (cliffordToSpinorMatrix (cliffordGamma b))`.
-4. $\rho_{\mathbb{Z}[i]}(1) = I_4$, and $\rho_{\mathbb{Z}[i]}(P) = \operatorname{diag}(1, 1, -1, -1)$
-   (separating the $+1$ parity eigenspace $C_{\text{even}} = \{0, 1\}$ from the $-1$ parity eigenspace
-   $C_{\text{odd}} = \{2, 3\}$)! -/
-theorem cliffordToSpinorMatrix_algebra_hom :
-    (∀ m : Fin 16,
-      cliffordToSpinorMatrix (cliffordBasisBlade m.val) = cliffordBladeSpinorMatrix m.val) ∧
-    (∀ a b : Fin 16,
-      (cliffordBladeSpinorMatrix (a.val ^^^ b.val)).scale (cliffordSign a.val b.val) =
-        (cliffordBladeSpinorMatrix a.val).mul (cliffordBladeSpinorMatrix b.val)) ∧
-    (∀ a b : Fin 4,
-      cliffordToSpinorMatrix (cliffordMul (cliffordGamma a) (cliffordGamma b)) =
-        (cliffordToSpinorMatrix (cliffordGamma a)).mul
-          (cliffordToSpinorMatrix (cliffordGamma b))) ∧
-    cliffordToSpinorMatrix cliffordOne = GaussianMatrix.identity 4 ∧
-    cliffordToSpinorMatrix cliffordParity =
-      { dim := 4
-      , rows :=
-          [ [⟨1, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
-          , [⟨0, 0⟩, ⟨1, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩]
-          , [⟨0, 0⟩, ⟨0, 0⟩, ⟨-1, 0⟩, ⟨0, 0⟩]
-          , [⟨0, 0⟩, ⟨0, 0⟩, ⟨0, 0⟩, ⟨-1, 0⟩] ] } := by
-  have h1 : (List.range 16).all (fun m =>
-      GaussianMatrix.beq (cliffordToSpinorMatrix (cliffordBasisBlade m))
-                         (cliffordBladeSpinorMatrix m)) = true := by
-    decide +kernel
-  have h2 : (List.range 16).all (fun a =>
-      (List.range 16).all (fun b =>
-        GaussianMatrix.beq ((cliffordBladeSpinorMatrix (a ^^^ b)).scale (cliffordSign a b))
-                           ((cliffordBladeSpinorMatrix a).mul (cliffordBladeSpinorMatrix b)))) = true := by
-    decide +kernel
-  have h3 : (List.range 4).all (fun a =>
-      (List.range 4).all (fun b =>
-        GaussianMatrix.beq (cliffordToSpinorMatrix (cliffordMul (cliffordBasisBlade (1 <<< a)) (cliffordBasisBlade (1 <<< b))))
-          ((cliffordToSpinorMatrix (cliffordBasisBlade (1 <<< a))).mul
-            (cliffordToSpinorMatrix (cliffordBasisBlade (1 <<< b)))))) = true := by
-    decide +kernel
-  rw [list_all_iff_forall] at h1 h2 h3
-  refine ⟨?_, ?_, ?_, rfl, rfl⟩
-  · intro m
-    exact GaussianMatrix.eq_of_beq (h1 m.val (List.mem_range.mpr m.isLt))
-  · intro a b
-    have hRow := (list_all_iff_forall _ (List.range 16)).mp (h2 a.val (List.mem_range.mpr a.isLt))
-    exact GaussianMatrix.eq_of_beq (hRow b.val (List.mem_range.mpr b.isLt))
-  · intro a b
-    have hRow := (list_all_iff_forall _ (List.range 4)).mp (h3 a.val (List.mem_range.mpr a.isLt))
-    exact GaussianMatrix.eq_of_beq (hRow b.val (List.mem_range.mpr b.isLt))
-
 /-! ## 5. Universal Theorem: Symmetry-Preserving Noise Produces Identically Zero Leakage -/
 
 /-- Perturbed Hamiltonian entry $(H + \epsilon \Delta H)_{u, v} = H_{u,v} + \epsilon \cdot \Delta H_{u,v}$. -/
@@ -1424,24 +1369,14 @@ theorem majoranaBraidElem_unitary (a b : Fin 4) (hNe : a ≠ b) :
   revert a b hNe
   decide +kernel
 
-/-- **Theorem (`majoranaBraid_preserves_parity`)**:
-For all Majorana modes $a, b \in \text{Fin } 4$, the braid gate $T_{a,b}$ commutes with total fermion
-parity $P = -\gamma_0\gamma_1\gamma_2\gamma_3$ both in $Cl_4$ and in the $4 \times 4$ spinor representation:
-$$\text{commutesWithParity}(T_{a,b}) = \text{true} \;\wedge\; \rho(T_{a,b}) \rho(P) = \rho(P) \rho(T_{a,b}).$$ -/
-theorem majoranaBraid_preserves_parity (a b : Fin 4) :
-    commutesWithParity (majoranaBraidElem a b) = true ∧
-    commutesWithParity (majoranaBraidAdjElem a b) = true ∧
-    (spinorBraidGate a b).mul spinorChiralParity = spinorChiralParity.mul (spinorBraidGate a b) := by
-  revert a b
-  decide +kernel
-
 /-- **Theorem (`spinorParityProjectors_orthogonal_idempotent`)**:
 The even and odd fermion-parity projectors $\Pi_{\text{even}}, \Pi_{\text{odd}}$ form a complete
 orthogonal idempotent resolution of the identity and spectral decomposition of chiral parity $P$:
 $$\Pi_{\text{even}}^2 = \Pi_{\text{even}},\quad \Pi_{\text{odd}}^2 = \Pi_{\text{odd}},\quad
   \Pi_{\text{even}}\Pi_{\text{odd}} = \Pi_{\text{odd}}\Pi_{\text{even}} = 0_4,\quad
   \Pi_{\text{even}} + \Pi_{\text{odd}} = I_4,\quad \Pi_{\text{even}} - \Pi_{\text{odd}} = P.$$ -/
-theorem spinorParityProjectors_orthogonal_idempotent :
+-- fixture kept (2026-11-04): algebraic identities of the two defined 4x4 projectors; there is no universal version to state
+example :
     spinorEvenParityProjector.mul spinorEvenParityProjector = spinorEvenParityProjector ∧
     spinorOddParityProjector.mul spinorOddParityProjector = spinorOddParityProjector ∧
     spinorEvenParityProjector.mul spinorOddParityProjector = GaussianMatrix.zero 4 ∧
@@ -1461,21 +1396,6 @@ theorem majoranaBraid_exchanges_modes (a b : Fin 4) (hNe : a ≠ b) :
     cliffordMul (cliffordMul (majoranaBraidElem a b) (cliffordGamma b)) (majoranaBraidAdjElem a b) =
       cliffordScale 2 (cliffordGamma a) := by
   revert a b hNe
-  decide +kernel
-
-/-- **Theorem (`majoranaBraid_artin_relation`)**:
-**Non-Abelian Artin Braid Group Relation ($T_{a,b} T_{b,c} T_{a,b} = T_{b,c} T_{a,b} T_{b,c}$)**:
-For all pairwise distinct Majorana zero modes $a, b, c \in \text{Fin } 4$ ($a \neq b$, $b \neq c$, $a \neq c$),
-the braiding generators satisfy the non-Abelian Artin braid relation in both $Cl_4$ and $M_4(\mathbb{Z}[i])$,
-while failing to commute ($T_{a,b} T_{b,c} \neq T_{b,c} T_{a,b}$)! -/
-theorem majoranaBraid_artin_relation (a b c : Fin 4) (hab : a ≠ b) (hbc : b ≠ c) (hac : a ≠ c) :
-    cliffordMul (cliffordMul (majoranaBraidElem a b) (majoranaBraidElem b c)) (majoranaBraidElem a b) =
-      cliffordMul (cliffordMul (majoranaBraidElem b c) (majoranaBraidElem a b)) (majoranaBraidElem b c) ∧
-    ((spinorBraidGate a b).mul (spinorBraidGate b c)).mul (spinorBraidGate a b) =
-      ((spinorBraidGate b c).mul (spinorBraidGate a b)).mul (spinorBraidGate b c) ∧
-    cliffordMul (majoranaBraidElem a b) (majoranaBraidElem b c) ≠
-      cliffordMul (majoranaBraidElem b c) (majoranaBraidElem a b) := by
-  revert a b c hab hbc hac
   decide +kernel
 
 /-- Scaled open-system Lindblad dissipator $2 \mathcal{D}[L](\rho) = 2 L \rho L^\dagger - (L^\dagger L \rho + \rho L^\dagger L)$

@@ -631,6 +631,7 @@ def intervalFormat : Format where
   badGrade    := 0
   bad_refused := ⟨_, _, badIntervalCert_refused⟩
 
+-- fixture kept (2026-11-04): used by tests/metasystem/AutoCertTest.lean
 theorem decodeIntervalObj_encodeIntervalObj_golden :
     decodeIntervalObj (encodeIntervalObj goldenBisectIntervalObj) = .ok goldenBisectIntervalObj := by
   decide +kernel
@@ -961,6 +962,7 @@ def badTaylorModelCert : TaylorModel where
   domain := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
   rem    := ⟨0, 0⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badTaylorModelCert_refused :
     checkTaylorModelJudge 0 goldenTaylorModelQuery badTaylorModelCert =
       .refused "taylor_model_enclosure_or_domain_violation" [] := by
@@ -981,6 +983,7 @@ def taylorModelFormat : Format where
   badGrade    := 0
   bad_refused := ⟨_, _, badTaylorModelCert_refused⟩
 
+-- fixture kept (2026-11-04): used by tests/metasystem/AutoCertTest.lean
 theorem decodeTaylorModelQuery_encodeTaylorModelQuery_golden :
     decodeTaylorModelQuery (encodeTaylorModelQuery goldenTaylorModelQuery) = .ok goldenTaylorModelQuery := by
   decide +kernel
@@ -1471,6 +1474,7 @@ def goldenGroebnerQuery : GroebnerQuery :=
 def badGroebnerCert : GroebnerCert :=
   .membership [polyVarPow 0 1] { quotients := [] }
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badGroebnerCert_refused :
     checkGroebnerJudge 0 goldenGroebnerQuery badGroebnerCert =
       .refused "groebner_ideal_or_positivstellensatz_violation" [] := by
@@ -1491,6 +1495,7 @@ def groebnerFormat : Format where
   badGrade    := 0
   bad_refused := ⟨_, _, badGroebnerCert_refused⟩
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem decodeGroebnerQuery_encodeGroebnerQuery_golden :
     decodeGroebnerQuery (encodeGroebnerQuery goldenGroebnerQuery) = .ok goldenGroebnerQuery := by
   decide +kernel

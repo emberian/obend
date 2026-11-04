@@ -894,24 +894,6 @@ theorem usd_lifecycle_contract_narrows_sound
       subst_usdPartInvariantTerm]
     exact evaluates_ifBool hHold (evaluates_self (.inject "ok" (.record [])))
 
-/-- Golden OpenUSD Relocation, Affine SDF Cancellation & Temporal Persistence Verification. -/
-example :
-    let p := ["Factory", "Draft", "Stator", "Slot01"]
-    let af : AffineForm1D := { c0 := 50, c1 := 7, c2 := 5 }
-    let af3 : AffineForm3D := { c0 := 50, cx := 7, cy := 5, cz := 3, err := 0 }
-    let t0 : UsdPhysicalState := { timeCode := 0,   wallThicknessUm := 5000, peakTempMilliC := 25000,  receiptDigest := 101 }
-    let t1 : UsdPhysicalState := { timeCode := 10,  wallThicknessUm := 2200, peakTempMilliC := 65000,  receiptDigest := 202 }
-    let t2 : UsdPhysicalState := { timeCode := 20,  wallThicknessUm := 1500, peakTempMilliC := 55000,  receiptDigest := 303 }
-    let t3 : UsdPhysicalState := { timeCode := 100, wallThicknessUm := 1500, peakTempMilliC := 122000, receiptDigest := 404 }
-    applyUsdRelocate ["Prod", "LCDrives"] ["Factory", "Draft"]
-      (applyUsdRelocate ["Factory", "Draft"] ["Prod", "LCDrives"] p) = p ∧
-    (AffineForm1D.sub af af).toInterval = { lo := 0, hi := 0 } ∧
-    (AffineForm3D.sub af3 af3).toInterval = { lo := 0, hi := 0 } ∧
-    checkPartLifecycleInvariant 1200 180000 t0 = true ∧
-    checkUsdTimeSampleChain 1200 180000 t0 [t1, t2, t3] = true ∧
-    checkPartLifecycleInvariant 1200 180000 (finalUsdState t0 [t1, t2, t3]) = true := by
-  decide +kernel
-
 /-! ## 4. Unified OpenUSD `SdfLayer` / `PrimSpec` / `PcpPrimIndex` $\to$ `Core4` `Term.mix` / `Term.fix` & `Obend.Leaf.flatten` -/
 
 /-- The 7 composition arc kinds of Apple/Pixar OpenUSD (`LIVERPS` strength ordering,

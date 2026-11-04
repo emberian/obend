@@ -486,6 +486,7 @@ budgets: a capacity policy can refuse a run, never change its Data. -/
 /-- `{answer: 6 * 7}`: a lazy record whose field is demanded by extraction. -/
 @[expose] public def sampleRecord : Term := .record [("answer",.binary .multiply (.nat 6) (.nat 7))]
 
+-- fixture kept (2026-11-04): consumed by a proof in this file
 public theorem sampleRecord_closed : Scoped 0 sampleRecord := by
   refine .record ?_
   intro field member

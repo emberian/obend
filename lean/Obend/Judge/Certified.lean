@@ -248,6 +248,7 @@ def grade8 : Nat := 215
 theorem steps8_length : steps8.length = grade8 := by decide
 
 /-- **The kernel checks the solver's certificate.** -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
 theorem steps8_accepted : Lrat.check grade8 (encode (noCarry 8)) (.refutation steps8) = .ok := by
   decide +kernel
 
@@ -262,7 +263,8 @@ theorem dropped_cites : steps8[7]? = some (.add 687 [-43] [73, 78]) ∧ steps8[9
   decide
 
 /-- **The tooth**: the step after the deletion cites the deleted clause and is refused, by name. -/
-theorem dropped_refused : Lrat.check (grade8 + 1) (encode (noCarry 8)) (.refutation dropped) = .refused (.missingHint 687) [10] := by
+-- fixture kept (2026-11-04): refusal witness: `Lrat.check` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
+example : Lrat.check (grade8 + 1) (encode (noCarry 8)) (.refutation dropped) = .refused (.missingHint 687) [10] := by
   decide +kernel
 
 end Obend.Judge.Certified

@@ -885,6 +885,7 @@ and the $14\,\mu\text{m}$ SOI 3-dB coupler (`cmtCoupler3dBSoi14Um 0`, $\theta = 
    `coupler3dB.kFieldPermille * coupler3dB.kFieldPermille = 707 * 707 = 499849` **and** the exact
    unitary half-power `coupler3dB.kappaSqPpm = 500000`, while strictly excluding values outside
    $[490000, 510000]$! -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Hardware/Photonics.lean:993
 theorem cmt_phase_5050_encloses_3db_split :
     let truncSq := coupler3dB.kFieldPermille * coupler3dB.kFieldPermille
     let exactHalf := coupler3dB.kappaSqPpm
@@ -961,6 +962,7 @@ and `coupler3dB`:
    both `CmtInterval.scaleNonneg 4 (evalCmtTransferPowerInterval (cmtCouplerKrawtchouk01 0))` and
    `CmtInterval.scaleNonneg 3 (evalCmtTransferPowerInterval (cmtCoupler3dBSoi14Um 0))` overlap and
    enclose the exact $3 : 4 : 3$ Krawtchouk coupling invariant $4 \times 375000 = 3 \times 500000 = 1500000$! -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Hardware/Photonics.lean:995
 theorem cmt_krawtchouk_length_synthesis_sound :
     let spec01 := cmtCouplerKrawtchouk01 0
     let spec12 := cmtCoupler3dBSoi14Um 0

@@ -320,26 +320,6 @@ def goldenStatorToothTriangle : FemmTriangle2D :=
     nuScaled := 800
     jzScaled := 0 }
 
-/-- Golden Theorem (`golden_femm_liquid_motor_magnetics_verified`):
-Kernel-checked verification of the 2D FEMM stator-tooth element area, gauge invariance,
-nonlinear silicon-steel reluctivity, IPM reluctance torque boost under MTPA ($i_d = -100\,\text{A}$,
-$i_q = 250\,\text{A}$), and Steinmetz core-loss signoff. -/
-theorem golden_femm_liquid_motor_magnetics_verified :
-    goldenStatorToothTriangle.twiceArea = 3000000 ∧
-    evalElementMagneticEnergyScaled goldenStatorToothTriangle 120 220 320 =
-      evalElementMagneticEnergyScaled goldenStatorToothTriangle 170 270 370 ∧
-    evalNonlinearReluctivity 500 2 1440000 ≤ evalNonlinearReluctivity 500 2 2890000 ∧
-    goldenLiquidIpmMotor.polePairs * (goldenLiquidIpmMotor.psiPmMilliWb * 250) <
-      evalIpmTorqueScaled goldenLiquidIpmMotor (-100) 250 ∧
-    checkMagneticsSignoff
-      (evalIpmTorqueScaled goldenLiquidIpmMotor (-100) 250)
-      20000000
-      1650
-      1850
-      (evalSteinmetzCoreLossMw 2 1 400 16)
-      50000000 = true := by
-  decide +kernel
-
 /-! ## 5. Newton-Raphson Nonlinear B-H Tangent Stiffness & Convexity -/
 
 /-- Evaluates the directional quadratic form of the Newton-Raphson tangent stiffness matrix

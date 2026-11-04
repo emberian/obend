@@ -618,6 +618,7 @@ theorem lcnf_to_core4_sound :
 3. Emitting `sampleLcnfRecDecl` to a flat `Obend.Leaf.Book` via `compileLcnfFunDeclToBook`
    produces a closed composition whose book member `"lcnfCountdown42"` applied to `.nat 0`
    halts with `.natural 42` (`Halts`). -/
+-- fixture kept (2026-11-04): consumed by Obend/Lower/Inductive.lean
 theorem lcnf_elab_pass_to_book_sound :
     SSteps (compileLcnfToLExpr sampleLcnfJpCode) (.lit 42) ∧
     Evaluates (compileLcnfToCore4 sampleLcnfJpCode) (.nat 42) ∧

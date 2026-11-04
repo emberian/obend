@@ -999,6 +999,7 @@ theorem relaw_teeth :
   ⟨compile_refuses_relaw, refuses_not_admits compile_refuses_relaw⟩
 
 /-- The kernel's own run agrees with the theorem on the refused tally write. -/
+-- fixture kept (2026-11-04): cheap closed check of `refusalOf` on literal data
 theorem tally_run_agrees :
     refusalOf (run 4000 (applyLaw (compile flagTotal "Tally" "tally" tally) (st false 5) (st true 6)
       (reqOf "ann" "ann" 0 9 writeO facts))) = some "tally" := by decide +kernel

@@ -383,6 +383,7 @@ and verifies by kernel evaluation (`decide +kernel`) that:
 6. Dynamic hot rotor-stator air gap remains at `850 um ≥ 500 um` across all steps, and
 7. Every state `s0, s1, s2` satisfies `checkPowertrainTwinSafety = true` and the projected OpenUSD
    `timeSamples` track satisfies `checkUsdTimeSampleChain 500 180000 ... = true`! -/
+-- fixture kept (2026-11-04): would delete (a three-step replay of a preset plant compared to its own literal trajectory) but cited by Obend/Apps/FocHil.lean:570, tests/metasystem/CoupledPhysicalTest.lean:254
 theorem golden_ms350_ipm_digital_twin_trajectory_verified :
     let s0 := goldenTwinState0
     let s1 := stepSampledDataDigitalTwin goldenMs350IpmPlantSpec s0

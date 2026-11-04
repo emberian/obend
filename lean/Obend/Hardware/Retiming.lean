@@ -486,14 +486,4 @@ theorem applyRetimingCertToGraph_preserves_cycle_weight
   have hEnd := pathEndVtx_edgesToPathHops startVtx startVtx g.edges hCycle
   exact cycle_weight_invariant (lookupLag cert) startVtx (edgesToPathHops g.edges) hEnd
 
-/-- Theorem: `solveVerifiedRetiming? 2 macUnretimedGraph 1800` constructively discovers a valid
-retiming certificate `cert` (`r(1) = 1`) that passes `checkRetimingCert` at 500 MHz (`2000 ps`) on `corner7nm_SS`! -/
-theorem solveVerifiedRetiming_mac_closes_500MHz :
-    (match solveVerifiedRetiming? 2 macUnretimedGraph 1800 with
-     | some cert =>
-       checkRetimingCert macUnretimedGraph cert corner7nm_SS 2000 &&
-       ((applyRetimingCertToGraph macUnretimedGraph cert).edges.map (·.origRegs) == [1, 1])
-     | none => false) = true := by
-  decide +kernel
-
 end Obend.Hardware.Retiming

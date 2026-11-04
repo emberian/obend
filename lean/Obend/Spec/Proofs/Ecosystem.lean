@@ -240,7 +240,8 @@ def view1 : View :=
   ⟨view0.releases,
    [⟨"base", 1, 4, some "1.1.0", "ada"⟩, ⟨"left", 1, 1, some "1.0.0", "bo"⟩, ⟨"right", 1, 7, some "1.0.0", "cy"⟩]⟩
 
-theorem ecosystem_tooth :
+-- fixture kept in place (2026-11-04): a 14-line closed evaluation; worth a pre-push run, but its fixture data is private to this module, so it cannot move to Obend/Teeth/
+example :
     ((close view0 chainR).toOption.map (·.order)) = some ["chain", "left", "base"] ∧
       ((close view0 chainR).toOption.map (·.pins)) =
         some [.intention "left" 1 1 "1.0.0" "bb", .intention "base" 1 3 "1.0.0" "aa"] ∧

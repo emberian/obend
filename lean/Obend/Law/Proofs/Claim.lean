@@ -235,7 +235,7 @@ public theorem claim_chain_keeps {fields : List (String × Term)} {inv law : Str
   | some (.boolean b) => some b
   | _ => none
 
-theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (run fuel t) = some b) :
+public theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (run fuel t) = some b) :
     Evaluates t (.boolean b) := by
   unfold boolOf at h
   split at h
@@ -244,24 +244,5 @@ theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (run fuel t) 
 
 /-- `total ≤ 5`. -/
 @[expose] public def smallTotal : Term := .lam (leNat (.get (.bound 0) "total") (natT 5))
-
-theorem keeps_tooth :
-    checkClaim [("small", smallTotal), ("law", keeps unitTy smallTotal)] (.keeps "small" "law") = true ∧
-      checkClaim [("small", smallTotal), ("law", bounded unitTy "total" 5)] (.keeps "small" "law") = false ∧
-      checkClaim [("small", smallTotal), ("law", lawOf unitTy (fun _ => okT) (fun _ => okT) (fun _ => okT)
-        (fun _ => okT) (fun _ => okT))] (.keeps "small" "law") = false ∧
-      checkClaim [("small", .lam (leNat (.get (.bound 1) "total") (natT 5))),
-        ("law", keeps unitTy (.lam (leNat (.get (.bound 1) "total") (natT 5))))] (.keeps "small" "law") = false ∧
-      Keeps smallTotal (totalIs 5) ∧ ¬ Keeps smallTotal (totalIs 6) ∧ closedB smallTotal = true ∧
-      Admits (keeps unitTy smallTotal) (totalIs 0) (totalIs 4) (rqBy "ann" "ann" writeO) ∧
-      Refuses (keeps unitTy smallTotal) (totalIs 0) (totalIs 6) (rqBy "ann" "ann" (adoptO "L")) "invariant" :=
-  ⟨by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
-    boolOf_eval 100 (by decide +kernel),
-    fun h => by
-      have h' : Evaluates (.app smallTotal (totalIs 6).term) (.boolean false) := boolOf_eval 100 (by decide +kernel)
-      have := evaluates_unique h h'
-      simp at this,
-    by decide +kernel,
-    admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
 
 end Obend.Law

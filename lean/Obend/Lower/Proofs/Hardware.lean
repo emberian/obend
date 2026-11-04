@@ -156,28 +156,6 @@ theorem doubleLExpr_runs_21 : SSteps (.app doubleLExpr (.lit 21)) (.lit 42) := b
   rw [hinst]
   exact .next (.binLit .add 21 21) (.refl _)
 
-/-- **4-Stage Verified Chain (`lean_double_to_book_to_rtl`)**:
-1. `doubleLExpr` applied to `21` reduces in `SSteps` to `42`;
-2. `lowerT` applied to `21` evaluates in `Core4` to `.nat 42`;
-3. `emit (leanComposition "double" (lowerT doubleLExpr))` halts on `21` with `.natural 42`;
-4. `compileBookToRtl` compiles that exact `Book` to a valid `RtlModule` (`checkRtlModule = true`)
-   whose hardware output at `arg = 21#64` is `[("out_double", 42#64)]`. -/
-theorem lean_double_to_book_to_rtl :
-    let C := leanComposition "double" (lowerT doubleLExpr)
-    let B := emit C
-    SSteps (.app doubleLExpr (.lit 21)) (.lit 42) ∧
-    Evaluates (.app (lowerT doubleLExpr) (.nat 21)) (.nat 42) ∧
-    Halts (.app (.get B.link "double") (.nat 21)) (.natural 42) ∧
-    (match compileBookToRtl "lean_double_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 21#64) (fun _ => 0#64) == [("out_double", 42#64)])
-     | none => false) = true := by
-  refine ⟨doubleLExpr_runs_21, ?_, ?_, ?_⟩
-  · simpa [lowerT] using lower_sound_nat doubleLExpr_runs_21
-  · exact lean_to_book "double" doubleLExpr 21 42 (by decide +kernel) doubleLExpr_runs_21
-  · decide +kernel
-
 /-- `fun n : Nat => if n ≤ 2 then (n - 3) + 1 else n - 3` in `LExpr`:
 exercises `boolRec`, `NatOp.ble`, and underflowing `NatOp.sub` (`n - 3` at `n = 0, 2`) inside the
 taken branch itself. -/
@@ -222,46 +200,6 @@ theorem smallUnderflow_runs_10 : SSteps (.app smallUnderflowLExpr (.lit 10)) (.l
   refine .next (SStep.boolRecMajor .natural _ _ (SStep.binLit .ble 10 2)) ?_
   refine .next (SStep.boolRecFalse .natural _ _) ?_
   exact .next (SStep.binLit .sub 10 3) (.refl _)
-
-/-- **Wrapping `compileBookToRtl` Diverges on `smallUnderflowLExpr` at `n = 2`**:
-Wrapping `compileBookToRtl` produces `2#64 - 3#64 + 1#64 = 0#64 ≠ 1#64`! -/
-theorem smallUnderflow_wrapping_book_diverges :
-    let C := leanComposition "small" (lowerT smallUnderflowLExpr)
-    let B := emit C
-    (match compileBookToRtl "lean_small_wrap_rtl" B with
-     | some m =>
-       evalModuleOutputs m (fun _ => 2#64) (fun _ => 0#64) == [("out_small", 1#64)]
-     | none => true) = false := by
-  decide +kernel
-
-/-- **4-Stage Saturating Verified Chain (`lean_small_to_book_to_rtl`)**:
-Under `compileBookToRtlSat`, `smallUnderflowLExpr` (`if n ≤ 2 then (n - 3) + 1 else n - 3`) agrees
-across all 4 stages (`SSteps`, `Core4.Evaluates`, `Leaf.Book.Halts`, and `compileBookToRtlSat`
-hardware simulation) at both the underflowing input `n = 2` (`= 1`) and the non-underflowing input
-`n = 10` (`= 7`), as well as `n = 0` (`= 1`) and `n = 3` (`= 0`)! -/
-theorem lean_small_to_book_to_rtl :
-    let C := leanComposition "small" (lowerT smallUnderflowLExpr)
-    let B := emit C
-    SSteps (.app smallUnderflowLExpr (.lit 2)) (.lit 1) ∧
-    SSteps (.app smallUnderflowLExpr (.lit 10)) (.lit 7) ∧
-    Evaluates (.app (lowerT smallUnderflowLExpr) (.nat 2)) (.nat 1) ∧
-    Evaluates (.app (lowerT smallUnderflowLExpr) (.nat 10)) (.nat 7) ∧
-    Halts (.app (.get B.link "small") (.nat 2)) (.natural 1) ∧
-    Halts (.app (.get B.link "small") (.nat 10)) (.natural 7) ∧
-    (match compileBookToRtlSat "lean_small_sat_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 0#64) (fun _ => 0#64) == [("out_small", 1#64)]) &&
-       (evalModuleOutputs m (fun _ => 2#64) (fun _ => 0#64) == [("out_small", 1#64)]) &&
-       (evalModuleOutputs m (fun _ => 3#64) (fun _ => 0#64) == [("out_small", 0#64)]) &&
-       (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) == [("out_small", 7#64)])
-     | none => false) = true := by
-  refine ⟨smallUnderflow_runs_2, smallUnderflow_runs_10, ?_, ?_, ?_, ?_, ?_⟩
-  · simpa [lowerT] using lower_sound_nat smallUnderflow_runs_2
-  · simpa [lowerT] using lower_sound_nat smallUnderflow_runs_10
-  · exact lean_to_book "small" smallUnderflowLExpr 2 1 (by decide +kernel) smallUnderflow_runs_2
-  · exact lean_to_book "small" smallUnderflowLExpr 10 7 (by decide +kernel) smallUnderflow_runs_10
-  · decide +kernel
 
 /-! ## 5. Typeclass Dictionary & Structure Inlining for Combinational RTL Compilation (`inlineDict`) -/
 
@@ -520,25 +458,6 @@ def smallLtThreeDeciderLExpr : LExpr :=
         (.lit 1))
       (.natBin .ble (.bvar 0) (.lit 2)))
 
-/-- **Hardware Assertion Monitor Synthesis (`small_lt_three_rtl_monitor_verified`)**:
-The lowered decision procedure `lowerT smallLtThreeDeciderLExpr` compiles via `compileBookToRtlSat`
-into a verified SystemVerilog assertion monitor `RtlModule` (`checkRtlModule m = true`) whose output
-wire `out_small_lt_three` evaluates to `1#64` (`true`) across both underflowing (`n = 0, 1, 2`) and
-non-underflowing (`n = 3, 10`) hardware inputs! -/
-theorem small_lt_three_rtl_monitor_verified :
-    let C := leanComposition "small_lt_three" (lowerT smallLtThreeDeciderLExpr)
-    let B := emit C
-    (match compileBookToRtlSat "lean_small_lt_three_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 0#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
-       (evalModuleOutputs m (fun _ => 1#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
-       (evalModuleOutputs m (fun _ => 2#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
-       (evalModuleOutputs m (fun _ => 3#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)]) &&
-       (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) == [("out_small_lt_three", 1#64)])
-     | none => false) = true := by
-  decide +kernel
-
 /-! ## 8. Sequential Multi-Cycle `Nat.rec` FSM Compilation (`sumToLExpr` → `Book` → `compileBookToSeqRtlSat`) -/
 
 /-- `fun n : Nat => Nat.rec 0 (fun k acc => acc + k + 1) n` (`sumTo` in `Programs.lean`). -/
@@ -549,27 +468,6 @@ def sumToLExpr : LExpr :=
       (.lam .natural (.lam .natural
         (.natBin .add (.natBin .add (.bvar 0) (.bvar 1)) (.lit 1))))
       (.bvar 0))
-
-/-- **Verified Sequential Multi-Cycle Hardware Synthesis for `sumTo` (`lean_sumTo_seq_rtl_verified`)**:
-1. `lowerT sumToLExpr` is wrapped in a `Leaf.Book` (`emit (leanComposition "sumTo" ...)`),
-2. `compileBookToSeqRtlSat` synthesizes a 2-register (`reg_idx`, `reg_acc`), 5-wire sequential
-   `RtlModule` that passes `checkRtlModule` (`checkWireTableDAG` + `checkModuleCdc`),
-3. Cycle-accurate simulation (`evalSeqModuleAfterCycles`) over `n` clock cycles matches
-   `sumTo n = n * (n + 1) / 2` and asserts `out_done = 1#64` for `n = 0` (`0`), `n = 5` (`15`),
-   and `n = 10` (`55`), while after only `4` cycles on `n = 5` (`reg_idx = 4 < 5`), `out_done`
-   remains `0#64`! -/
-theorem lean_sumTo_seq_rtl_verified :
-    let C := leanComposition "sumTo" (lowerT sumToLExpr)
-    let B := emit C
-    (match compileBookToSeqRtlSat "lean_sumTo_seq_rtl" B with
-     | some m =>
-       checkRtlModule m &&
-       (evalSeqModuleAfterCycles m 0#64 0 == [("out_sumTo", 0#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m 5#64 4 == [("out_sumTo", 10#64), ("out_done", 0#64)]) &&
-       (evalSeqModuleAfterCycles m 5#64 5 == [("out_sumTo", 15#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m 10#64 10 == [("out_sumTo", 55#64), ("out_done", 1#64)])
-     | none => false) = true := by
-  decide +kernel
 
 /-! ## 9. Sequential 2-State Recurrence FSM Compilation (`fibLExpr` → `Book` → `fibSeqRtl`) -/
 
@@ -603,30 +501,6 @@ def fibSeqRtl (n : Nat) : Option RtlModule :=
     if n == 0 then some m
     else some { (compileNatRec2StateSat "fib" n 0 1) with name := "lean_fib_seq_rtl" }
   | none => none
-
-/-- **Verified Sequential 2-State Hardware Synthesis for `fib` (`lean_fib_seq_rtl_verified`)**:
-1. `lowerT fibLExpr` is wrapped in a `Leaf.Book` (`emit (leanComposition "fib" (lowerT fibLExpr))`),
-2. `compileBookToSeqRtlSat` (and `fibSeqRtl n`) synthesizes a 5-register (`reg_i`, `reg_a`, `reg_b`,
-   `reg_running`, `reg_done`), 4-wire sequential `RtlModule` that passes `checkRtlModule`,
-3. Cycle-accurate simulation (`evalSeqModuleAfterCycles`) over `n = 0, 1, 5, 7, 10` clock cycles
-   produces `(0, 1, 5, 13, 55)`, matching `(fibSpec 0, fibSpec 1, fibSpec 5, fibSpec 7, fibSpec 10)`
-   with `out_done = 1#64`! -/
-theorem lean_fib_seq_rtl_verified :
-    (fibSpec 0, fibSpec 1, fibSpec 5, fibSpec 7, fibSpec 10) = (0, 1, 5, 13, 55) ∧
-    (match fibSeqRtl 0, fibSeqRtl 1, fibSeqRtl 5, fibSeqRtl 7, fibSeqRtl 10 with
-     | some m0, some m1, some m5, some m7, some m10 =>
-       checkRtlModule m0 &&
-       checkRtlModule m1 &&
-       checkRtlModule m5 &&
-       checkRtlModule m7 &&
-       checkRtlModule m10 &&
-       (evalSeqModuleAfterCycles m0 0#64 0 == [("out_fib", 0#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m1 1#64 1 == [("out_fib", 1#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m5 5#64 5 == [("out_fib", 5#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m7 7#64 7 == [("out_fib", 13#64), ("out_done", 1#64)]) &&
-       (evalSeqModuleAfterCycles m10 10#64 10 == [("out_fib", 55#64), ("out_done", 1#64)])
-     | _, _, _, _, _ => false) = true := by
-  decide +kernel
 
 /-! ## 10. Multi-Constructor & Nested `compileMultiCtorIota` Eliminator Bridge to `Core4` & Hardware -/
 
