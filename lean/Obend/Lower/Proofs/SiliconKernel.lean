@@ -551,7 +551,7 @@ def kernelFuelLoopLExpr : LExpr :=
 def kernelFuelLoopBook : Book :=
   emit (leanComposition "kernelFuelLoop" (lowerT kernelFuelLoopLExpr))
 
-/-- **Theorem (`silicon_kernel_seq_rtl_fuel_sound`)**:
+/-- A closed check (it was the theorem `silicon_kernel_seq_rtl_fuel_sound` until 2026-11-04):
 Proves that lowering `kernelFuelLoopLExpr` (`Nat.rec` fuel-bounded accumulator) through `Core4`
 and `Leaf.Book` and synthesizing sequential multi-cycle RTL via `compileBookToSeqRtlSat`:
 1. Produces a valid sequential `RtlModule` (`checkRtlModule m = true`),
