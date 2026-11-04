@@ -1,3 +1,6 @@
+---
+kind: ledger
+---
 # Decisions ledger, 2026-10-29 to 10-31
 
 Every decision a lane or reviewer addressed to Ember, with who took it and on what authority.

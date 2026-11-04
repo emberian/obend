@@ -22,8 +22,12 @@ module
     obend member add NAME --grant VERB:PATTERN [--grant …]
         a member; VERB is post, select, write (re-cite) or relaw; PATTERN is a page, `folder/*` or `*`.
     obend member list
-    obend post PAGE FILE --as NAME
-        NAME's proposed text of PAGE (FILE, or `-` for stdin), as candidates in sections.
+    obend post PAGE FILE [--as NAME] [--append | --into HEADING]
+        a text for PAGE (FILE, or `-` for stdin): the whole page; with `--append`, PAGE's text with
+        FILE's lines after it; with `--into HEADING`, with FILE's lines at the end of the row the
+        heading HEADING begins. By a member (`--as NAME`), NAME's proposal, as candidates in sections;
+        by the owner, the owner's write of PAGE, judged by its laws: admitted, the file is rendered;
+        refused, the file is untouched and the refusal names the law and what would pass.
     obend select PAGE SECTION CANDIDATE [--as NAME]
         keep one candidate of a section; the owner, or a member granted select on PAGE.
     obend recite PAGE [--as NAME]
@@ -203,6 +207,34 @@ def flag (name : String) : List String → Option String × List String
     (r, f :: rest')
   | [x] => (none, [x])
 
+/-- A bare flag (`--append`), and the rest. -/
+def bare (name : String) : List String → Bool × List String
+  | [] => (false, [])
+  | x :: rest => let (b, r) := bare name rest; if x == name then (true, r) else (b, x :: r)
+
+/-- `addition` after `cur`, on its own line. -/
+def appendText (cur addition : String) : String :=
+  cur ++ (if cur.isEmpty || cur.endsWith "\n" then "" else "\n") ++ addition
+
+/-- `addition`'s lines at the end of the row the heading `heading` begins in `cur` (before the blank
+lines that close the row), or why not. -/
+def insertInto (cur heading addition : String) : Except String String :=
+  let ls := cur.splitOn "\n"
+  let titled (l : String) : Option Nat :=
+    (headingLevel l).bind fun lvl => if trim (String.ofList (l.toList.drop (lvl + 1))) == heading then some lvl else none
+  match ls.zipIdx.findSome? (fun (l, i) => (titled l).map (i, ·)) with
+  | none => .error ("no heading `" ++ heading ++ "` in the page")
+  | some (i, lvl) =>
+    let after := ls.drop (i + 1)
+    let n := (after.zipIdx.findSome? fun (l, j) =>
+      (headingLevel l).bind fun k => if k ≤ lvl then some j else none).getD after.length
+    let row := after.take n
+    let blank (l : String) : Bool := l.toList.all isSpace
+    let t := (row.reverse.takeWhile blank).length
+    let newLines := ((addition.splitOn "\n").reverse.dropWhile (· == "")).reverse
+    .ok ("\n".intercalate (ls.take (i + 1) ++ row.take (row.length - t) ++ newLines ++
+      row.drop (row.length - t) ++ after.drop n))
+
 def grants : List String → List String
   | "--grant" :: g :: rest => g :: grants rest
   | _ :: rest => grants rest
@@ -216,6 +248,8 @@ def parseGrant (g : String) : Option (String × String) :=
 /-- Run a vault command in `dir`. `none` when the arguments are not a vault command. -/
 def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   let (asName, args) := flag "--as" args
+  let (into, args) := flag "--into" args
+  let (append, args) := bare "--append" args
   match args with
   | ["open"] => some do
     let (s, _) ← openDir dir true
@@ -252,12 +286,36 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     return 0
   | ["post", page, file] => some do
     let (s, V) ← openDir dir false
-    let text ← if file == "-" then (do let stdin ← IO.getStdin; stdin.readToEnd) else IO.FS.readFile file
-    match s.actor asName >>= fun who => postAs H s who page text with
-    | .ok s' => IO.println ((asName.getD "owner") ++ " posted to " ++ page); finish dir s' V
-                for l in problems s' do IO.println l
-                return 0
+    let addition ← if file == "-" then (do let stdin ← IO.getStdin; stdin.readToEnd) else IO.FS.readFile file
+    let some cur := V.lookup page | fail ("refused: no page named " ++ page)
+    let text? : Except String String :=
+      if append then .ok (appendText cur addition)
+      else match into with
+        | some h => insertInto cur h addition
+        | none => .ok addition
+    match text? with
     | .error e => fail ("refused: " ++ e)
+    | .ok text =>
+      match asName with
+      | none =>
+        -- the owner's post is the owner's write of the page as `text`, judged like an edit of its
+        -- file; refused, nothing is saved and the file stands
+        let some p := s.page? page | fail ("refused: no page named " ++ page)
+        let ch := judgeAt H s.entries s p text
+        match ch.note with
+        | some why => fail (page ++ ": " ++ why)
+        | none =>
+          let s' := s.setPage (p.withChange ch)
+          IO.println ("owner posted to " ++ page ++ " (v" ++ toString ch.history.length ++ ")")
+          finish dir s' V
+          for l in problems s' do IO.println l
+          return 0
+      | some _ =>
+        match s.actor asName >>= fun who => postAs H s who page text with
+        | .ok s' => IO.println ((asName.getD "owner") ++ " posted to " ++ page); finish dir s' V
+                    for l in problems s' do IO.println l
+                    return 0
+        | .error e => fail ("refused: " ++ e)
   | ["select", page, k, i] => some do
     let (s, V) ← openDir dir false
     match k.toNat?, i.toNat? with
