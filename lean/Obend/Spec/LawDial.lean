@@ -242,20 +242,24 @@ theorem dial_free_confluent :
     exact h₁
   | .monotone f, _, facts, old, n₁, n₂, h₁, h₂ => by
     simp only [LawExpr.denote] at h₁ h₂ ⊢
-    cases ho : old.bind (fieldOf f) with
-    | none => simp [ho] at h₁
-    | some b =>
-      cases hx : fieldOf f n₁ with
-      | none => simp [ho, hx] at h₁
-      | some x =>
-        cases hy : fieldOf f n₂ with
-        | none => simp [ho, hy] at h₂
-        | some y =>
-          rw [ho, hx] at h₁; rw [ho, hy] at h₂
-          simp only [decide_eq_true_eq] at h₁ h₂
-          rw [fieldOf_joinData hx hy]
-          simp only [decide_eq_true_eq]
-          omega
+    cases old with
+    | none => rfl
+    | some o =>
+      dsimp only at h₁ h₂ ⊢
+      cases ho : fieldOf f o with
+      | none => simp [ho] at h₁
+      | some b =>
+        cases hx : fieldOf f n₁ with
+        | none => simp [ho, hx] at h₁
+        | some x =>
+          cases hy : fieldOf f n₂ with
+          | none => simp [ho, hy] at h₂
+          | some y =>
+            rw [ho, hx] at h₁; rw [ho, hy] at h₂
+            simp only [decide_eq_true_eq] at h₁ h₂
+            rw [fieldOf_joinData hx hy]
+            simp only [decide_eq_true_eq]
+            omega
   | .writeOnce _, hd, _, _, _, _, _, _ => by simp [dial] at hd
   | .not _, hd, _, _, _, _, _, _ => by simp [dial] at hd
   | .or _ _, hd, _, _, _, _, _, _ => by simp [dial] at hd

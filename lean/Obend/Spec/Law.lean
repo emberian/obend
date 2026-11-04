@@ -23,7 +23,9 @@ The fragment, exactly (G1B-ENFORCED-LAW-DESIGN; anything else refuses
 `implies` binds loosest and associates to the right; `or` then `and` associate to the left;
 `not` applies to the atom (or parenthesised expression) after it. Edition 1 reads TOP-LEVEL
 fields only: `new.a.b` refuses by name. `old.` is readable only through `monotone` and
-`writeOnce` (all the kernel's predicate can say about the old state).
+`writeOnce` (all the kernel's predicate can say about the old state); both hold at a first write,
+so a page or object can be born under them (2026-11-04: before, `monotone` was false with no old
+state, and a page carrying it could never be born).
 -/
 public import Lean
 public import Obend.Core.Data
@@ -134,8 +136,10 @@ structure Facts where
   | .turn => some (Int.ofNat facts.turn)
 
 /-- **The meaning of a law**: does the write from `old` (absent at a first write) to `new`,
-under `facts`, satisfy it? A comparison with an absent reading is false; `monotone` needs both
-readings; `writeOnce` holds when the old reading is absent or 0, else the new one must equal it. -/
+under `facts`, satisfy it? A comparison with an absent reading is false. `monotone` and `writeOnce`
+hold at a first write (there is nothing for the new reading to fall below, nothing it overwrites);
+with an old state, `monotone` needs both readings and `writeOnce` holds when the old reading is 0,
+else the new one must equal it. -/
 @[expose] def LawExpr.denote (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
   | .eqC ref value => decide (ref.read facts new = some value)
   | .leC ref value =>
@@ -159,9 +163,12 @@ readings; `writeOnce` holds when the old reading is absent or 0, else the new on
       | some x, some y => decide (x ≤ y + offset)
       | _, _ => false
   | .monotone field =>
-      match old.bind (fieldOf field), fieldOf field new with
-      | some before, some after => decide (before ≤ after)
-      | _, _ => false
+      match old with
+      | none => true
+      | some o =>
+        match fieldOf field o, fieldOf field new with
+        | some before, some after => decide (before ≤ after)
+        | _, _ => false
   | .writeOnce field =>
       match old.bind (fieldOf field) with
       | none => true

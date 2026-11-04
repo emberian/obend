@@ -406,9 +406,9 @@ public theorem cond_eval {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {f
     have hfn := hf f (by simp [LawExpr.fields])
     by_cases hs : src = .none
     · subst hs
-      simp only [cond, ite_true, subst_falseT, LawExpr.denote, oldOf, Option.bind_none]; exact ev_bool false
+      simp only [cond, ite_true, subst_trueT, LawExpr.denote, oldOf]; exact ev_bool true
     · obtain ⟨ofs, hod, hfo, hread⟩ := old_spec hσ hs ho hf (f := f) (by simp [LawExpr.fields])
-      simp only [cond, hs, ite_false, LawExpr.denote, hod, Option.bind_some]
+      simp only [cond, hs, ite_false, LawExpr.denote, hod]
       cases hk : fieldKind S f with
       | none =>
         simp only [subst_falseT, field_absent hk hfn, field_absent hk hfo]; exact ev_bool false
@@ -721,7 +721,7 @@ public theorem compilePackage_checks {S : Ty} (pkg : String) (laws : List (Strin
 
 The hypotheses are inhabited and the verdicts are not constant: on a state type with a boolean
 `flag` and a natural `total`, the tally law admits a write and refuses one by name; at a birth
-`monotone` has no old state and refuses, `writeOnce` admits; a relaw is admitted; a negative
+`monotone` and `writeOnce` have no old state and admit; a relaw is admitted; a negative
 constant and an absent subject decide statically; and the compiled law checks at its type. Each
 `denote` and `Fits` fact is `decide`d in the kernel. -/
 
@@ -748,15 +748,15 @@ theorem tally_write_refused :
     (compile_refuses_change (.inr ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide)⟩
 
 theorem first_write_teeth :
-    Refuses (compile flagTotal "Tally" "m" (.monotone "total")) (st false 0) (st false 5)
-        (reqOf "ann" "ann" 0 9 birthO facts) "m" ∧
+    Admits (compile flagTotal "Tally" "m" (.monotone "total")) (st false 0) (st false 5)
+        (reqOf "ann" "ann" 0 9 birthO facts) ∧
       Admits (compile flagTotal "Tally" "w" (.writeOnce "total")) (st false 9) (st false 5)
         (reqOf "ann" "ann" 0 9 (adoptO "L") facts) ∧
       Refuses (compile flagTotal "Tally" "w" (.writeOnce "total")) (st false 9) (st false 5)
         (reqOf "ann" "ann" 0 9 writeO facts) "w" ∧
       Admits (compile flagTotal "Tally" "w" (.writeOnce "total")) (st false 0) (st false 5)
         (reqOf "ann" "ann" 0 9 writeO facts) :=
-  ⟨(compile_refuses_birth (by decide)).2 (by decide),
+  ⟨(compile_admits_birth (by decide)).2 (by decide),
     (compile_admits_adopt (by decide)).2 (by decide),
     (compile_refuses_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     (compile_admits_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide)⟩
@@ -780,11 +780,11 @@ theorem static_teeth :
     (compile_admits_change (.inl ⟨_, rfl⟩) (by decide) (by decide)).2 (by decide),
     compile_admits_retire⟩
 
-/-- **Adoption, before and after.** Judged as a first write (no old state), `monotone(total)`
-refused EVERY adoption, whatever the state; judged as the identity write it admits the adoption of
-`total = 5`, and the law's bound still bites an adoption over a state that breaks it. -/
+/-- **Adoption, and a first write.** `monotone(total)` admits a first write (no old state) and,
+judged as the identity write, the adoption of `total = 5`; the law's bound still bites an adoption
+over a state that breaks it. -/
 theorem adopt_teeth :
-    (LawExpr.monotone "total").denote facts none (st false 5) = false ∧
+    (LawExpr.monotone "total").denote facts none (st false 5) = true ∧
       Admits (compile flagTotal "Tally" "m" (.monotone "total")) (st false 0) (st false 5)
         (reqOf "ann" "ann" 0 9 (adoptO "L") facts) ∧
       Refuses (compile flagTotal "Tally" "tally" tally) (st false 0) (st false 2000)

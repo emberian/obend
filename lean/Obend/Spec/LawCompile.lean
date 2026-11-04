@@ -19,15 +19,15 @@ What the fragment reads, and how the compiled term reads it:
   `request.turn`: its natural field; `ledger.height`: the record's `height`, which `requestAt`
   takes from the ledger's `Consensus`, never from the request (`Obend.Law.reqTy`).
 * `monotone(F)` and `writeOnce(F)`: the old state's `F` against the new one's. At a first write
-  there is no old state (`denote … none …`): `monotone` is false and `writeOnce` true.
+  there is no old state (`denote … none …`): both are true.
 * Integer constants: every reading is a natural (`scalarOf`), so a comparison with a negative
   constant is decided statically (`x == -2`, `x <= -2` false; `x <= y + -2` is `x + 2 <= y`).
 
 The occasions (`lawOf6`, LANG-19/24, KERNEL-70): a `write` and an `invoke` are writes of the state,
 judged with the old state; a `birth` is a first write, judged with none; an `adopt` (this law being
 added over a state the object already has) is judged as the identity write of that state, old =
-new, so a law is never installed over a state it would refuse and `monotone` does not refuse it for
-want of a prior state; a `retire` writes no state and is admitted. A refusal's reason is the law's
+new, so a law is never installed over a state it would refuse; a `retire` writes no state and is
+admitted. A refusal's reason is the law's
 name.
 
 A `relaw` of a package law is REFUSED, naming the package (`relawRefusal`). A package law is part
@@ -136,7 +136,7 @@ from (`monotone`, `writeOnce` read it). -/
     if 0 ≤ k then both (refRead S a l) (refRead S a r) fun x y => leNat x (addNat y (natT k.toNat))
     else both (refRead S a l) (refRead S a r) fun x y => leNat (addNat x (natT (-k).toNat)) y
   | .monotone f =>
-    if src = .none then falseT else
+    if src = .none then trueT else
       match fieldKind S f with
       | some k => leNat (scalarRead k (oldRead src a f)) (scalarRead k (a.newF f))
       | none => falseT
