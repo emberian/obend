@@ -499,3 +499,40 @@ Not this lane's, found on the way: HEAD is red at the Leaf seam (`Obend.lean` an
 `Hardware/UserspacePhysical.lean` import the deleted `Obend.Leaf.BendTT`; the working-tree
 `Leaf/Futamura.lean` rewrite leaves HEAD's `Stdlib.lean` without the names it opens).
 `Lower/Proofs/SiliconKernel.lean` in the working tree imports the untracked `Leaf/Static.lean`.
+
+## 8. Second round (2026-11-04, later): the three quests from §7's "still exposed"
+
+Built on bb2 in `~/lane-security` as before; `lake build Obend:shared` 878 jobs, then
+`cargo test -p obend-ffi` 27/27, `obend-node` filtered 21/21 and cluster 2/2 against the library
+with no environment set.
+
+1. **The stub is opt-in and verifies nothing** (`a6c3871`). `obend-ffi/build.rs` requires
+   `libobend_Obend` and stops with the command that builds it; `OBEND_ALLOW_STUB_FFI=1` (or the
+   `stub` feature) is the only way to get the stub, and every verify or weave through it returns
+   `ObendError::StubBackend` with a detail saying no kernel is linked. `obend-ffi` publishes its
+   library directories (`links = "obend_bridge"`) and `obend-node/build.rs` turns them into rpaths,
+   which is why a dependent's test binary now runs without `LD_LIBRARY_PATH`; `obend-gui` needs the
+   same six lines and is not this lane's.
+2. **Simplex as a relation** (`lean/Obend/Consensus/SimplexProtocol.lean`). Chains with one
+   entry per view (block or dummy), messages over a `Nodup` committee of `3f+1` with at most `f`
+   faulty, the adversary as `Step.inject`, honest propose / vote-once / finalize rules, `Reach`
+   and `reach_inv`; from `honest_quorum_intersection`: `notarized_block_unique`,
+   `finalized_no_dummy`, `finalized_prefix_of_notarized`, `finalized_consistent`,
+   `fin_cert_unique_per_height`; `SlashingReceipt` is two conflicting votes by one node with
+   `checks`, `checks_sound`, `accountable` (f+1 signers, no fault bound assumed) and
+   `signers_faulty`. `Simplex.State` is not used (a fragment of a different protocol); the
+   committee model is new. `net.rs`'s header names the rules its one-phase protocol skips (the
+   block-vote and finalize rules) and the theorems it loses; it is not an instance. S1 as a
+   theorem is closed; S1 as the node's behaviour stands, now stated against a proof.
+3. **Blinding on the Merkle module** (`lean/Obend/Vault/Projection.lean`,
+   `Receipt/Merkle.lean`). `BlindedMultiProof` verifies as one `MerkleBatchProof` (distinct
+   positions, every leaf to the root): `verify_blinded_multiproof_complete`,
+   `verifyBlindedMultiProof_sound`, `verifyBlindedMultiProof_binds`,
+   `verifyBlindedMultiProof_revealed_binds`, with `leaf_binds` added to Merkle. The header now
+   says hiding rests on an unpredictable salt, that `Hiding` is assumed, and that the node (S12)
+   derived salts from public data; the module proves binding, not hiding. S13 is closed; S12 in
+   the node is unchanged and named.
+
+Still exposed after this round: S6 (simulator crypto in every signing path), S10 (string-keyed
+mandates), S12 (the node's salt derivation), S15 (JSON wires), S9 (in-memory WAL), and the node's
+one-phase protocol, now measured against `SimplexProtocol` rather than against a description.
