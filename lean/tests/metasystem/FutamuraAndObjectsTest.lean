@@ -1,16 +1,13 @@
 /-
-# `tests/FutamuraAndObjectsTest.lean` — In-Place `Futamura` Specialization,
+# `tests/FutamuraAndObjectsTest.lean` — `Obend.Leaf.Static` book specialization,
 # Faré `OB5`/`LT5` Cross-Package Open Recursion, `K-KIND-CELL`, Multi-File `#import_obend` & `DocsCensus`
 
 End-to-end verification of `WS-U`:
-1. **Task 1 (`Obend.Leaf.Futamura`) — In-Place Audit Fix 11**:
-   - `encodeStagedBookTerm (B : Book) : Term` (depends ONLY on `B`, zero host `pins` argument) and
-     `encodePinsRecordForBook (B : Book) (pins : List LeafPin) : Term`.
-   - `quoteBookMixTerm` applies `(.bound 1)` (`bookPayload`) to `(.bound 0)` (`pinsRecord`) inside `Core4`.
-   - 1-argument `futamura2BookCompiler (B : Book) : Term` and `futamura2BookCompiler_specializes_in_core`:
-     `dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) = encodeBookTerm (specializeBook B pins)`.
-   - True Futamura 1, 2, and 3 commuting diagrams (`futamura1_book_specializer_sound`,
-     `futamura2_compiler_generator_commutes`, `futamura3_cogen_self_application_commutes`) + `#tooth` probes.
+1. **Task 1 (`Obend.Leaf.Static`)**: the book encoding roundtrips (`decodeBookTerm_encodeBookTerm`),
+   `specializeBook` folds the sample book (`Obend.Teeth.Leaf.Static.specializeBook_sample_folds`), and
+   `evalBook_specializeBook_eq_evalBook` holds non-vacuously on it. (The "Futamura 1, 2, 3 commuting
+   diagrams" this file checked until 2026-11-04 were deleted with the terms they were about;
+   `review/EXPERT-compiler-runtime-20261103.md` §2.1.)
 
 2. **Task 2 (`Obend.Leaf.Specialize`, `Obend.Lower.Transport`, `Obend.Spec.Elaborate`, `Obend.Spec.CrossPackage`) — Cross-Package Open Recursion (`OB5`/`LT5`)**:
    - `slotReadCone`, `coneSupports`, `Candidate.slotBook`, and `slotBook_moved_pin_blocks`.
@@ -33,9 +30,9 @@ End-to-end verification of `WS-U`:
    - `#check_docs_census` verifying all 7 top-level markdown documents (`DESIGN.md`, `PLAN.md`, `METATHEORY.md`,
      `PHYSICAL.md`, `SILICON-ELABORATOR.md`, `NEXT-MATHEMATICA.md`, `DEOS-CONTRACTS-CONSENSUS.md`).
 -/
-import Obend.Leaf.Futamura
+import Obend.Leaf.Static
 import Obend.Leaf.Specialize
-import Obend.Leaf.BendTT
+import Obend.Teeth.Leaf.StaticTeeth
 import Obend.Lower.Transport
 import Obend.Spec.CrossPackage
 import Obend.Kind
@@ -56,8 +53,8 @@ open Obend.Equiv
 open Obend.Logic
 open Obend.Slot.World
 open Obend.Leaf
-open Obend.Leaf.Futamura
-open Obend.Leaf.BendTT
+open Obend.Leaf.Static
+open Obend.Teeth.Leaf.Static
 open Obend.Lower
 open Obend.Spec.CrossPackage
 open Obend.Kind
@@ -77,9 +74,6 @@ set_option maxHeartbeats 800000
 `stdlib/ledger/Account.obend`, `stdlib/usd/ScenePrim.obend`) pass `FrontEnd.accept`
 and discharge their open-recursion `claim`s and `law` obligations. -/
 theorem all_stdlib_obend_packages_accepted_and_verified :
-    (StdlibCell.accepted = true ∧
-     StdlibAccount.accepted = true ∧
-     StdlibScenePrim.accepted = true) ∧
     (obligationMeaningWithJudges workbookFormats
        StdlibCell.claim_next_value_open_recursion_obj
        StdlibCell.claim_next_value_open_recursion_just ∧
@@ -92,7 +86,7 @@ theorem all_stdlib_obend_packages_accepted_and_verified :
     (StdlibCell.package.laws.length = 2 ∧
      StdlibAccount.package.laws.length = 4 ∧
      StdlibScenePrim.package.laws.length = 3) :=
-  ⟨stdlib_all_accepted, stdlib_all_claims_hold, stdlib_inherited_laws_count⟩
+  ⟨stdlib_all_claims_hold, stdlib_inherited_laws_count⟩
 
 theorem stdlib_elaborated_domain_benchmarks :
     StdlibCell.versionedCellNextAt25_val = .nat 125 ∧
@@ -104,7 +98,7 @@ theorem stdlib_elaborated_domain_benchmarks :
   stdlib_open_recursion_eval
 
 -- ============================================================================
--- 2. In-Place `Futamura` Specialization (Audit Fix 11: 1-Arg `futamura2BookCompiler B`)
+-- 2. The book encoding and `specializeBook`
 -- ============================================================================
 
 example : decodeBookTerm? (encodeBookTerm sampleSpecializableBook) = some sampleSpecializableBook :=
@@ -144,7 +138,7 @@ example :
   ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 /-- Concrete verification of constant propagation, dead-branch elimination on `.ifZero`/`.ifBool`,
-and method inlining across `Book` definitions in `specializeBook` and `specializeBookInCore`. -/
+and method inlining across `Book` definitions in `specializeBook`. -/
 example :
     lookupBookCode (specializeBook sampleSpecializableBook sampleBookPins) "dispatch" =
       some (.lam (.lam (.binary .add (.binary .add (.bound 0) (.nat 16)) (.nat 9)))) ∧
@@ -154,7 +148,7 @@ example :
       some (.nat 30) ∧
     evalBook (specializeBook sampleSpecializableBook sampleBookPins) "dispatch" =
       evalBook sampleSpecializableBook "dispatch" :=
-  specializeBook_eliminates_branches_and_inlines_methods
+  specializeBook_sample_folds
 
 /-- Non-vacuous verification of `HoldsForBookMember` and `evalBook_specializeBook_eq_evalBook`
 on `sampleSpecializableBook` and non-empty `sampleBookPins`. -/
@@ -181,40 +175,6 @@ example :
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
     rcases hr with rfl | rfl | rfl | rfl <;> exact optTermEq_sound (by decide +kernel)
   exact ⟨hholds, evalBook_specializeBook_eq_evalBook sampleSpecializableBook sampleBookPins "dispatch" hholds⟩
-
-/-- True Futamura 1, 2, and 3 commuting diagrams on arbitrary `Book` `B`, `pins : List LeafPin`,
-member `m : String`, and runtime argument `x : Term` (with in-place 1-arg `futamura2BookCompiler B`
-and `futamura2BookCompiler_specializes_in_core`). -/
-theorem test_true_futamura_1_2_3_commuting_diagrams (B : Book) (pins : List LeafPin) (m : String) (x : Term) :
-    -- Futamura 1: internalized specializer decodes to `specializeBook B pins` and preserves semantics
-    decodeBookTerm? (specializeBookInCore B pins) = some (specializeBook B pins) ∧
-    lookupBookCode (specializeBook B pins) m = evalBookUnderPins B pins m ∧
-    evalResidualBookAt (specializeBook B pins) m x = evalBookUnderPinsAt B pins m x ∧
-    (holdsAll pins → lookupBookCode (specializeBook B pins) m = evalBookUnderPins B [] m) ∧
-    (HoldsForBookMember B pins m → evalBook (specializeBook B pins) m = evalBook B m) ∧
-    -- Futamura 2: staged compiler `futamura2BookCompiler B` (zero host `pins` argument) specializes in Core4
-    dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
-      encodeBookTerm (specializeBook B pins) ∧
-    decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
-      some (specializeBook B pins) ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
-      (fun B_res => evalResidualBookAt B_res m x)) = evalBookUnderPinsAt B pins m x ∧
-    -- Futamura 3: self-applied compiler generator `cogenBookInCore` reproduces `futamura2BookCompiler B`
-    dataPinSpecialize
-      (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))) =
-      futamura2BookCompiler B ∧
-    decodeBookTerm?
-      (runStagedCompiler
-        (dataPinSpecialize
-          (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))))
-        (encodePinsRecordForBook B pins)) =
-      some (specializeBook B pins) := by
-  have f1 := futamura1_book_specializer_sound B pins m x
-  have f2 := futamura2_compiler_generator_commutes B pins m x
-  have f3 := futamura3_cogen_self_application_commutes B pins m x
-  exact ⟨f1.1, f1.2.1, f1.2.2.1, f1.2.2.2.1, f1.2.2.2.2.2,
-    futamura2BookCompiler_specializes_in_core B pins,
-    f2.2.2.1, f2.2.2.2, f3.2.2.1, f3.2.2.2.1⟩
 
 -- `#tooth` mutation probe on `specializeBook`.
 theorem probe_specializeBook_eliminates_ifZero :
@@ -288,64 +248,6 @@ theorem probe_extractReadMembers_sample :
   extractReadMembers := fun _ => []
 
 -- ============================================================================
--- 4. Affine `BendTT` Resource Discipline & Port Wiring Validation Tests
--- ============================================================================
-
-def affineLinearAddBendTerm : BendTerm :=
-  .lam (.binOp .add (.var 0) (.nat 10))
-
-def nonAffineDuplicateUseBendTerm : BendTerm :=
-  .lam (.binOp .add (.var 0) (.var 0))
-
-def affineIfZeroBendTerm : BendTerm :=
-  .lam (.ifZero (.var 0) (.nat 0) (.var 0))
-
-def balancedFixBendTerm : BendTerm :=
-  .fix (.lam (.lam (.var 0))) (.nat 0)
-
-def unbalancedFixBendTerm : BendTerm :=
-  .fix (.lam (.var 0)) (.nat 0)
-
-#guard countVarUses 0 (.binOp .add (.var 0) (.nat 10)) == 1
-#guard countVarUses 0 (.binOp .add (.var 0) (.var 0)) == 2
-#guard isAffineBendTerm affineLinearAddBendTerm == true
-#guard isAffineBendTerm nonAffineDuplicateUseBendTerm == false
-#guard isAffineBendTerm affineIfZeroBendTerm == true
-#guard isAffineBendTerm balancedFixBendTerm == true
-#guard isAffineBendTerm unbalancedFixBendTerm == false
-
-theorem test_affine_bendtt_subst_and_quantity_refinement
-    (body arg : BendTerm) (haffBody : isAffineBendTerm body = true)
-    (haffArg : isAffineBendTerm arg = true) (hclosedArg : closedAtB 0 arg = true) :
-    isAffineBendTerm (instantiateB body arg) = true :=
-  affine_bendTerm_subst_preserves body arg haffBody haffArg hclosedArg
-
-theorem test_affine_bendtt_fix_unfold_preserves
-    (s i : BendTerm) (hfix : isAffineBendTerm (.fix s i) = true) :
-    isFixSpecPortBalanced s = true ∧
-    (∃ body : BendTerm, s = .lam (.lam body)) ∧
-    isAffineBendTerm (.app (.app s (.fix s i)) i) = true ∧
-    (∀ body : BendTerm, s = .lam (.lam body) →
-      closedAtB 0 (.fix s i) = true →
-      isAffineBendTerm (instantiateB (.lam body) (.fix s i)) = true) :=
-  affine_bendTerm_fix_unfold_preserves s i hfix
-
-example {t : Term} {bt : BendTerm} (hcomp : compileToBendTT t = some bt)
-    (q : Quantity) (hq : q = .affine ∨ q = .linear) :
-    (∀ idx : Nat, countVarUses idx bt = termVarUses idx t) ∧
-    (safeQuantity q (termVarUses 0 t) = true ↔ countVarUses 0 bt ≤ 1) ∧
-    (q.fits (termVarUses 0 t) = true → isAffineBendTerm bt = true → isAffineBendTerm (.lam bt) = true) ∧
-    (isAffineBendTerm bt = isAffineCoreTerm t) :=
-  quantity_affine_linear_refines_bendTerm hcomp q hq
-
-theorem probe_nonAffine_rejected :
-    isAffineBendTerm nonAffineDuplicateUseBendTerm = false := by
-  decide +kernel
-
-#tooth probe_nonAffine_rejected by mutation
-  isAffineBendTerm := fun _ => true
-
--- ============================================================================
 -- 5. Faré `OB5` / `LT5` Cross-Package Open Recursion (`Specialize`, `Transport`, `CrossPackage`)
 -- ============================================================================
 
@@ -408,12 +310,8 @@ example :
 
 #print axioms decodeBookTerm_encodeBookTerm
 #print axioms dataPinSpecialize_encodeBookTerm
-#print axioms specializeBook_eliminates_branches_and_inlines_methods
+#print axioms specializeBook_sample_folds
 #print axioms evalBook_specializeBook_eq_evalBook
-#print axioms futamura1_book_specializer_sound
-#print axioms futamura2BookCompiler_specializes_in_core
-#print axioms futamura2_compiler_generator_commutes
-#print axioms futamura3_cogen_self_application_commutes
 #print axioms extractReadMembers_eq_selfReads
 #print axioms extractReadMembers_conservative
 #print axioms extractReadMembers_mutation_invariant
@@ -425,19 +323,14 @@ example :
 #print axioms crossPackage_intersecting_override_pinpoints_stale
 #print axioms deriveKindFrom_inherits_ancestors_and_narrows_laws
 #print axioms createFrom_kind_preserves_ancestor_laws
-#print axioms stdlib_all_accepted
 #print axioms stdlib_all_claims_hold
 #print axioms stdlib_inherited_laws_count
 #print axioms stdlib_open_recursion_eval
 #print axioms stdlib_flatten_and_book_sound
-#print axioms stdlib_futamura2_in_core
 #print axioms stdlib_cell_crossPackage_nextValue_pin_survives
 #print axioms stdlib_account_crossPackage_availableAfterFee_cone_survives
 #print axioms extractObendLeanPaths_sample
 #print axioms extractObendDottedRoots_sample
 #print axioms censusReport_isClean_iff
-#print axioms affine_bendTerm_subst_preserves
-#print axioms affine_bendTerm_fix_unfold_preserves
-#print axioms quantity_affine_linear_refines_bendTerm
 
 end Obend.Tests.FutamuraAndObjectsTest

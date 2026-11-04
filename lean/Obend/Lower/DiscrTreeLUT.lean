@@ -7,14 +7,13 @@ Implements `WS 28` Stage 5 & 6 (`SILICON-ELABORATOR.md` §5.2–7):
    - Extracts preorder `DiscrPath := List DiscrTreeKey` keys from `KExpr` terms for both `@[simp]`
      rewrite rules and `SynthInstance` typeclass instances.
    - Matches candidate rules along exact key edges and wildcard `.star` edges.
-2. **2nd Futamura Specialization to Zone-3 eFPGA `AutomatonTile` LUT Pipelines
-   (`SlotGuardReg`, `futamura2DiscrTreeTerm`, `compileDiscrTreeEpochToTile`, `discrTree_lut_compile_sound`)**:
-   - Applies 2nd Futamura specialization (`Obend/Leaf/Futamura.lean`: `futamura2SelfSpecialize`,
-     `futamura1Specialize`, `specSlot`) so each `Environment` epoch compiles into a single-cycle
-     Zone-3 `AutomatonTile` match pipeline guarded by `SlotGuardReg` (`moved_pin_blocks`).
-   - Proves **`discrTree_lut_compile_sound`**: multi-key trie indexing, 2nd Futamura specialization,
-     glitch-free `ICAP` DPR reconfiguration between environment epochs, and 1-cycle `SlotGuardReg`
-     fallback (`moved_pin_blocks`) when an environment pin mutates.
+2. **Zone-3 eFPGA `AutomatonTile` LUT Pipelines
+   (`SlotGuardReg`, `compileDiscrTreeEpochToTile`, `discrTree_lut_compile_sound`)**:
+   - Each `Environment` epoch compiles into a single-cycle Zone-3 `AutomatonTile` match pipeline
+     guarded by `SlotGuardReg` (`specSlot`, `moved_pin_blocks` of `Obend.Leaf.Specialize`).
+   - Proves **`discrTree_lut_compile_sound`**: multi-key trie indexing, glitch-free `ICAP` DPR
+     reconfiguration between environment epochs, and 1-cycle `SlotGuardReg` fallback
+     (`moved_pin_blocks`) when an environment pin mutates.
 3. **Synthesizable SystemVerilog for `ExprCAM` + `SiliconKernel` + `DiscrTreeLUT`
    (`exprCamKernelLutRtlModule`, `emitExprCamKernelLutSV`, `exprCam_siliconKernel_sv_cosim_sound`)**:
    - Constructs a verified synchronous/combinational `RtlModule` combining 64-bit `ExprCAM` handle/word
@@ -35,7 +34,7 @@ open Obend.Logic
 open Obend.Slot
 open Obend.Slot.World
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel
@@ -358,7 +357,7 @@ theorem queryDiscrTrieNode_star_and_exact_priority_sound :
     (queryDiscrTrieNode trieExactFirst qPath).map (·.lutTag) = [303, 101] :=
   ⟨rfl, rfl⟩
 
-/-! ## 2. 2nd Futamura Specialization of `DiscrTree` Epochs to Zone-3 `AutomatonTile` LUTs -/
+/-! ## 2. `DiscrTree` Epochs to Zone-3 `AutomatonTile` LUTs -/
 
 /-- Hardware `SlotGuardReg` (`SILICON-ELABORATOR.md` §5.3) binding a Zone-3 `AutomatonTile` to a
 pinned `Environment` epoch and `LeafPin` support list. -/
@@ -369,11 +368,6 @@ structure SlotGuardReg where
   candidate       : Candidate
   specializedTile : AutomatonTile
   fallbackTile    : AutomatonTile
-
-/-- Compile an `Environment` epoch's `DiscrTree` rule parameters `(bias, offset)` via the 2nd Futamura
-projection (`futamura2SelfSpecialize` + `futamura1Specialize`) into a residual `Core4.Term`. -/
-def futamura2DiscrTreeTerm (bias offset : Nat) : Term :=
-  futamura1Specialize (futamura2SelfSpecialize (elabRuleSpec bias)) (.nat offset)
 
 /-- Compile a `DiscrTree` epoch's linear/affine rewrite action `(gain, offset)` into a `LiteMethodBody`
 (`λ x => gain * x + offset`) for single-cycle Zone-3 `AutomatonTile` LUT synthesis. -/
@@ -387,7 +381,7 @@ def compileDiscrTreeEpochToTile (epochName : String) (gain offset : Nat) : Autom
   (compileLiteMethodToTile epochName (discrTreeEpochLutBody gain offset)).getD incAutomatonTile
 
 /-- Construct a `SlotGuardReg` for a `DiscrTree` epoch `(slotName, epoch, gain, offset)`:
-binds the Futamura-specialized `Candidate.book` to `leanComposition slotName (futamura2DiscrTreeTerm gain offset)`
+binds the `Candidate.book` of `leanComposition slotName specTerm`
 and pairs the specialized Zone-3 LUT tile with the resident fallback tile (`kernelGateTile`). -/
 def mkDiscrTreeSlotGuard (slotName : String) (epoch gain offset : Nat) : SlotGuardReg :=
   let specTerm := .lam (lowerLiteScalar (discrTreeEpochLutBody gain offset))
@@ -456,8 +450,7 @@ def epoch2LeafView : LeafView :=
    - Querying `sampleEpoch1DiscrTrie` on `Add Nat` matches `[.app "Add", .const "Nat"]` and returns
      `instAddNat` (`lutTag = 202`),
    - Querying `sampleEpoch1DiscrTrie` on `Add Bool` returns `none` (negative pole).
-2. **2nd Futamura Specialization Agreement**:
-   - `futamura2DiscrTreeTerm 10 32` applied to `.nat 5` evaluates in `Core4` (`Evaluates`) to `.nat 47`,
+2. **Zone-3 LUT execution**:
    - At `epoch1LeafView`, `evalSlotGuardedDiscrTile sampleEpoch1Guard` selects the specialized Zone-3
      `AutomatonTile` (`true`) and computes `4 * 10 + 2 = 42#64` in 1 hardware cycle.
 3. **Glitch-Free `ICAP` DPR Epoch Upgrade & 1-Cycle `moved_pin_blocks` Fallback**:
@@ -489,8 +482,7 @@ theorem discrTree_lut_compile_sound :
     (queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qSimp).map (·.lutTag) = some 101 ∧
     (queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qAddNat).map (·.lutTag) = some 202 ∧
     queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qAddBool = none ∧
-    -- 2. 2nd Futamura Core4 evaluation & Zone-3 single-cycle LUT execution
-    Evaluates (.app (futamura2DiscrTreeTerm 10 32) (.nat 5)) (.nat 47) ∧
+    -- 2. Zone-3 single-cycle LUT execution
     evalSlotGuardedDiscrTile sampleEpoch1Guard epoch1LeafView 1 10#64 = (true, 42#64) ∧
     -- 3. moved_pin_blocks 1-cycle invalidation on epoch mutation + ICAP DPR upgrade to Epoch 2
     specSlot.usable (holdsAt epoch2LeafView) sampleEpoch1Guard.candidate = false ∧
@@ -499,8 +491,7 @@ theorem discrTree_lut_compile_sound :
     afterTile0.isolated = false ∧
     evalReconfigTile afterTile0 (fun _ => 0#64) (fun _ => 0#64) 10#64 = 70#64 ∧
     afterTile1 = residentTile1 := by
-  refine ⟨rfl, rfl, rfl, ?_, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, rfl, rfl, rfl⟩
-  exact (futamura2_self_specialize_sound (elabRuleSpec 10) (.nat 32)).2.2.2.2
+  exact ⟨rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, rfl, rfl, rfl⟩
 
 /-! ## 3. Synthesizable SystemVerilog Co-Simulation Module for `ExprCAM` + `SiliconKernel` + `DiscrTreeLUT` -/
 

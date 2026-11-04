@@ -6,16 +6,15 @@ Verifies the complete Silicon Lean Kernel & Elaborator (`WS 23` / `SILICON-ELABO
 1. `Obend.Lower.Inductive`: Recursive algebraic AST datatypes (`KName`, `KLevel`, `KLiteral`, `KExpr`,
    `KSyntax`), structural pattern matching & `recConst` lowering (`lower_inductive_sound`), and LCNF
    lowering (`lcnf_to_core4_sound`).
-2. `Obend.Leaf.Futamura`: Static data-pin specialization (`data_pin_flatten_sound`) and 1st, 2nd,
-   and 3rd Futamura projections (`futamura1_env_specialize_sound`, `futamura2_self_specialize_sound`,
-   `futamura3_cogen_sound`).
+2. `Obend.Leaf.Static`: the folder (`bequiv_dataPinSpecialize`) and static application under the
+   specialization slot (`staticApply_slot_sound`).
 3. `Obend.Lower.LeanKernel`: Pure Lean kernel (`kernelWhnf`, `kernelIsDefEq`, `kernelInferType`,
    `kernelCheckDecl`) and pure elaborator passes (`expandMacrosFuel`, `simpRewriteFuel`,
    `synthInstanceFuel`), plus lowered `Core4` theorems (`silicon_kernel_whnf_sound`,
    `silicon_kernel_check_sound`).
 4. `Obend.Lower.Proofs.SiliconKernel`: End-to-end 5-stage `ReductionMachine` hardware co-simulation
-   (`silicon_kernel_5stage_check_sound`), Futamura `ICAP` DPR specialization
-   (`silicon_elab_futamura_dpr_specialize_sound`), 1-cycle environment mutation fallback
+   (`silicon_kernel_5stage_check_sound`), static-application `ICAP` DPR specialization
+   (`silicon_elab_residual_dpr_specialize_sound`), 1-cycle environment mutation fallback
    (`silicon_elab_env_mutation_fallback_sound`), and hardware interaction-net $\beta$-reduction
    (`silicon_kernel_inet_beta_agrees`).
 5. **8 `#tooth` Kernel Mutation Tests** verifying that weakening any check or lowering pass is
@@ -23,7 +22,7 @@ Verifies the complete Silicon Lean Kernel & Elaborator (`WS 23` / `SILICON-ELABO
 -/
 public import Obend.Tactic.Tooth
 import all Obend.Lower.Inductive
-import all Obend.Leaf.Futamura
+import all Obend.Leaf.Static
 import all Obend.Lower.LeanKernel
 import all Obend.Lower.ExprCAM
 import all Obend.Lower.MetaUnify
@@ -55,7 +54,7 @@ open Obend.Equiv
 open Obend.Slot
 open Obend.Slot.World
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel
@@ -143,10 +142,6 @@ theorem silicon_elaborator_master_suite :
     fromLeanName (toLeanName (KName.mkSimple "LeanKernel")) = KName.mkSimple "LeanKernel" ∧
     Evaluates (lowerLCNF sampleLcnfAstMatch) (.nat 42) ∧
     Evaluates (.app (lowerLCNFFunDecl sampleLcnfRecDecl) (.nat 0)) (.nat 42) ∧
-    -- 2. Futamura Projections (1st, 2nd, 3rd)
-    dataPinSpecialize (.app sampleElabLookupTerm (pinTableToTerm sampleEnvPinTable)) = .nat 50 ∧
-    Evaluates (.app (futamura1Specialize (futamura2SelfSpecialize (elabRuleSpec 10)) (.nat 32)) (.nat 5)) (.nat 47) ∧
-    Evaluates (.app (.app (futamura3Cogen 100) (.nat 23)) (.nat 0)) (.nat 123) ∧
     -- 3. Self-Hosted Lean Kernel Positive & Negative Poles + Parametric Levels + Nat ι-Reduction
     kernelCheckDecl stdKernelEnv 8 validIdNatDecl = true ∧
     kernelCheckDecl stdKernelEnv 8 validPropIdDecl = true ∧
@@ -158,7 +153,7 @@ theorem silicon_elaborator_master_suite :
     kernelLevelEq (.imax (.param (KName.mkSimple "u")) .zero) .zero = true ∧
     kernelWhnf stdKernelEnv 4 (.app (.app (.const (KName.mkSimple "Nat.add") []) (.lit (.natVal 40))) (.lit (.natVal 2))) = .lit (.natVal 42) ∧
     -- 4. SiliconKernel 5-Stage Hardware, Sequential RTL, XY Mesh, ICAP Codec & DPR Co-Simulation
-    futamura1ElabSimpTerm = specializedSimpTerm ∧
+    residualSimpTerm = specializedSimpTerm ∧
     specSlot.usable (holdsAt pinnedSimpView) specializedSimpCand = true ∧
     specSlot.usable (holdsAt mutatedSimpView) specializedSimpCand = false ∧
     specSlot.usable (holdsAt mutatedSimpView) .machine = true ∧
@@ -168,9 +163,6 @@ theorem silicon_elaborator_master_suite :
     fromLeanName_toLeanName (KName.mkSimple "LeanKernel"),
     lcnf_to_core4_sound.2.2.2.2.1,
     lcnf_to_core4_sound.2.2.2.2.2,
-    data_pin_flatten_sound.2.2.2,
-    (futamura2_self_specialize_sound (elabRuleSpec 10) (.nat 32)).2.2.2.2,
-    (futamura3_cogen_sound 100).2.2.2,
     silicon_kernel_check_sound.1,
     silicon_kernel_check_sound.2.1,
     silicon_kernel_check_sound.2.2.1,
@@ -180,8 +172,8 @@ theorem silicon_elaborator_master_suite :
     silicon_kernel_check_sound.2.2.2.2.2.2.1,
     (kernelLevelEq_parametric_laws (KName.mkSimple "u") (KName.mkSimple "v")).2.2.2.1,
     (silicon_kernel_whnf_iota_and_nonLam_sound 0).2.1,
-    futamura1ElabSimpTerm_eq_lowerLite.1,
-    silicon_elab_futamura_dpr_specialize_sound.1,
+    residualSimpTerm_eq_lowerLite.1,
+    silicon_elab_residual_dpr_specialize_sound.1,
     silicon_elab_env_mutation_fallback_sound.1,
     silicon_elab_env_mutation_fallback_sound.2.1,
     silicon_elab_mesh_xy_and_icap_codec_sound.1⟩
@@ -225,13 +217,6 @@ def kernelGateBodyInverted : LExpr :=
     (.natBin .beq (.bvar 0) (.lit 1))
 
 #tooth Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound by mutation Obend.Lower.Proofs.SiliconKernel.kernelGateBody := kernelGateBodyInverted
-
-/-- 6. Broken `dataPinSpecialize` in `Obend.Leaf.Futamura` that performs `0` specialization passes
-(failing to fold static environment lookups and constructor cases). -/
-def dataPinSpecializeNoOp (t : Term) : Term :=
-  t
-
-#tooth Obend.Leaf.Futamura.data_pin_flatten_sound by mutation Obend.Leaf.Futamura.dataPinSpecialize := dataPinSpecializeNoOp
 
 /-- 7. Broken `isZeroLevelLExpr` in `Obend.Lower.Inductive` that maps `"zero"` to `false` instead of `true`. -/
 def isZeroLevelLExprBroken : LExpr :=
@@ -368,10 +353,8 @@ def verifyHybridScheduleSafetyRubberStamp
 #print axioms Obend.Lower.Inductive.decodeCoreTerm_lowerT
 #print axioms Obend.Lower.Inductive.fromLeanName_toLeanName
 #print axioms Obend.Lower.Inductive.lcnf_to_core4_sound
-#print axioms Obend.Leaf.Futamura.data_pin_flatten_sound
-#print axioms Obend.Leaf.Futamura.futamura1_env_specialize_sound
-#print axioms Obend.Leaf.Futamura.futamura2_self_specialize_sound
-#print axioms Obend.Leaf.Futamura.futamura3_cogen_sound
+#print axioms Obend.Leaf.Static.bequiv_dataPinSpecialize
+#print axioms Obend.Leaf.Static.staticApply_slot_sound
 #print axioms Obend.Lower.LeanKernel.kernelLevelEq_parametric_laws
 #print axioms Obend.Lower.LeanKernel.silicon_kernel_whnf_sound
 #print axioms Obend.Lower.LeanKernel.silicon_kernel_whnf_iota_and_nonLam_sound
@@ -406,10 +389,9 @@ def verifyHybridScheduleSafetyRubberStamp
 #print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_projection_sound
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_doc_noninterference
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
-#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_futamura_dpr_specialize_sound
+#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_residual_dpr_specialize_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_env_mutation_fallback_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_inet_beta_agrees
-#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_seq_rtl_fuel_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_mesh_xy_and_icap_codec_sound
 #print axioms Obend.Tests.SiliconElab.silicon_elaborator_master_suite
 

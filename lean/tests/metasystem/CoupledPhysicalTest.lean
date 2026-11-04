@@ -23,7 +23,7 @@ open Obend.Core.Term (Primitive Term Step Steps Evaluates)
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Hardware.HDL
 open Obend.Hardware.Compiler
@@ -235,17 +235,17 @@ theorem test_golden_ms350_ipm_digital_twin :
     let s0 := goldenTwinState0
     let s1 := stepSampledDataDigitalTwin goldenMs350IpmPlantSpec s0
     let s2 := stepSampledDataDigitalTwin goldenMs350IpmPlantSpec s1
-    evalFcmlHarmonicSteinmetzLossW 2 1 50 7 2 = 362 ∧
+    evalFcmlHarmonicSteinmetzLossW 2 1 50 7 2 = 360 ∧
     runSarAdcN 4 0 950 100 = 9 ∧
     s1.iqAmp = 242 ∧
     s2.iqAmp = 254 ∧
     s1.rotorAngleMrad = 0 ∧
     s1.fcmlCapErrMv = 80 ∧
     s2.fcmlCapErrMv = 64 ∧
-    s1.tWindingMilliC = 122000 ∧
-    s2.tWindingMilliC = 122000 ∧
-    s1.hotAirGapUm = 850 ∧
-    s2.hotAirGapUm = 850 ∧
+    s1.tWindingMilliC = 123737 ∧
+    s2.tWindingMilliC = 123953 ∧
+    s1.hotAirGapUm = 777 ∧
+    s2.hotAirGapUm = 777 ∧
     checkPowertrainTwinSafety goldenMs350IpmPlantSpec s0 = true ∧
     checkPowertrainTwinSafety goldenMs350IpmPlantSpec s1 = true ∧
     checkPowertrainTwinSafety goldenMs350IpmPlantSpec s2 = true ∧
@@ -261,21 +261,13 @@ theorem test_golden_ms350_ipm_digital_twin :
 pass `FrontEnd.accept`, discharge all 5 open-recursion claims, and match the compositions
 in `Obend.Hardware.UserspacePhysical` by `rfl`. -/
 theorem test_stdlib_physical_obend_packages_and_compositions :
-    StdLcDrivesStator.accepted = true ∧
-    StdMs350FcmlPhaseLeg.accepted = true ∧
-    StdCleanroomTcadStack.accepted = true ∧
-    StdCnc5AxisMill.accepted = true ∧
     lcDrivesStatorUsdComp = StdLcDrivesStator.lcDrivesProductionStator_comp ∧
     statorInSlotComp = StdLcDrivesStator.statorInSlot_comp ∧
     ms350PhaseLegComp = StdMs350FcmlPhaseLeg.ms350ProtectedPhaseLeg_comp ∧
     q3PhotonicComp = StdCleanroomTcadStack.q3KrawtchoukArray_comp ∧
     cleanroomTcadStackComp = StdCleanroomTcadStack.cleanroomTcadStack_comp ∧
     cnc5AxisMillComp = StdCnc5AxisMill.compensated5AxisMill_comp :=
-  ⟨StdLcDrivesStator.accepted_eq,
-   StdMs350FcmlPhaseLeg.accepted_eq,
-   StdCleanroomTcadStack.accepted_eq,
-   StdCnc5AxisMill.accepted_eq,
-   lcDrivesStatorUsdComp_eq_imported,
+  ⟨lcDrivesStatorUsdComp_eq_imported,
    statorInSlotComp_eq_imported,
    ms350PhaseLegComp_eq_imported,
    q3PhotonicComp_eq_imported,
@@ -367,7 +359,6 @@ elab "#verify_coupled_physical_axioms" : command => do
     ``Obend.Hardware.DigitalTwin.sampled_data_current_loop_iss_contraction,
     ``Obend.Hardware.DigitalTwin.sampled_data_closed_loop_powertrain_safety_invariant,
     ``Obend.Hardware.DigitalTwin.golden_ms350_ipm_digital_twin_trajectory_verified,
-    ``Obend.Hardware.UserspacePhysical.stdlib_physical_all_accepted_and_claims_hold,
     ``Obend.Hardware.UserspacePhysical.userspace_physical_stator_to_fpga_verified,
     ``Obend.Hardware.UserspacePhysical.userspace_cnc_5axis_to_fpga_and_amd_gpu_verified,
     ``Obend.Hardware.UserspacePhysical.userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified,

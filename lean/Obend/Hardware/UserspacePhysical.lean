@@ -12,7 +12,7 @@ at compile time via `#import_obend` (with zero manual de Bruijn `Layer` transcri
 Connects the `#import_obend`-elaborated `Composition`s and `Book`s directly to:
 - `Obend.Logic.Composition` & `Obend.Leaf.Flatten` (`flatten_sound`, `fix_mix_flatten_sound`),
 - `Obend.Leaf.Emit` (`book_sound`),
-- `Obend.Leaf.Futamura` (`futamura2_compiler_generator_commutes`) & `Obend.Leaf.Specialize` (`extractReadMembers_mutation_invariant`),
+- `Obend.Leaf.Static` (`specializeBook`, `evalBook_specializeBook_eq_evalBook`) & `Obend.Leaf.Specialize` (`extractReadMembers_mutation_invariant`),
 - `Obend.Hardware.Compiler` (`compileBookToRtl`) & `Obend.Lower.Proofs.SelfAccelerate` (64-bit `compileRtlExprToAmdGpu` + `runAmdGpuVop64Prog`).
 -/
 public import Lean
@@ -23,7 +23,7 @@ public import Obend.Logic.Program
 public import Obend.Logic.Obligation
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.OpenUSD
@@ -59,7 +59,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Hardware.HDL
 open Obend.Hardware.Compiler
@@ -446,23 +446,18 @@ theorem stator_in_slot_sdf_margin_forall (r : Nat) :
 def statorPeakBody : Term :=
   extractBookMethodInner (emit statorInSlotComp) "peakWindingTemp"
 
-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 1 (`stator_in_slot_support_and_futamura2`)**. -/
-theorem stator_in_slot_support_and_futamura2 (env : String → Option Term) (newMass : Option Term) (loss : Nat) :
+/-- **Support extraction conservatism and `specializeBook` commutation for domain object 1 (`stator_in_slot_support_and_specialize`)**. -/
+theorem stator_in_slot_support_and_specialize (env : String → Option Term) (newMass : Option Term) (loss : Nat) :
     let peakBody : Term := statorPeakBody
     let B := emit statorInSlotComp
     let pins := bookCanonicalPins B
     extractReadMembers peakBody = ["thermalResistance"] ∧
     substMemberEnv (mutateMemberEnv env "massKg" newMass) peakBody = substMemberEnv env peakBody ∧
-    evalBook (specializeBook B pins) "peakWindingTemp" = evalBook B "peakWindingTemp" ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
-      (fun B_res => evalResidualBookAt B_res "peakWindingTemp" (.nat loss))) =
-      evalBookUnderPinsAt B pins "peakWindingTemp" (.nat loss) := by
+    evalBook (specializeBook B pins) "peakWindingTemp" = evalBook B "peakWindingTemp" := by
   dsimp only
   refine ⟨by decide +kernel,
     (extractReadMembers_mutation_invariant statorPeakBody env newMass (by decide +kernel)).1,
-    optTermEq_sound (by decide +kernel),
-    (futamura2_compiler_generator_commutes (emit statorInSlotComp)
-      (bookCanonicalPins (emit statorInSlotComp)) "peakWindingTemp" (.nat loss)).2.2.2⟩
+    optTermEq_sound (by decide +kernel)⟩
 
 /-! ## 7. Domain Object 2: `MS350` SiC Half-Bridge Phase Leg (`stdlib/physical/Ms350FcmlPhaseLeg.obend`) -/
 
@@ -589,23 +584,18 @@ theorem ms350_gate_delay_forall (margin : Nat) :
 def ms350LossBody : Term :=
   extractBookMethodInner (emit ms350PhaseLegComp) "switchingLossUj"
 
-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 2 (`ms350_support_and_futamura2`)**. -/
-theorem ms350_support_and_futamura2 (env : String → Option Term) (newGate : Option Term) (currentA : Nat) :
+/-- **Support extraction conservatism and `specializeBook` commutation for domain object 2 (`ms350_support_and_specialize`)**. -/
+theorem ms350_support_and_specialize (env : String → Option Term) (newGate : Option Term) (currentA : Nat) :
     let lossBody : Term := ms350LossBody
     let B := emit ms350PhaseLegComp
     let pins := bookCanonicalPins B
     extractReadMembers lossBody = ["deadtimeNs"] ∧
     substMemberEnv (mutateMemberEnv env "effectiveGateDelayNs" newGate) lossBody = substMemberEnv env lossBody ∧
-    evalBook (specializeBook B pins) "switchingLossUj" = evalBook B "switchingLossUj" ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
-      (fun B_res => evalResidualBookAt B_res "switchingLossUj" (.nat currentA))) =
-      evalBookUnderPinsAt B pins "switchingLossUj" (.nat currentA) := by
+    evalBook (specializeBook B pins) "switchingLossUj" = evalBook B "switchingLossUj" := by
   dsimp only
   refine ⟨by decide +kernel,
     (extractReadMembers_mutation_invariant ms350LossBody env newGate (by decide +kernel)).1,
-    optTermEq_sound (by decide +kernel),
-    (futamura2_compiler_generator_commutes (emit ms350PhaseLegComp)
-      (bookCanonicalPins (emit ms350PhaseLegComp)) "switchingLossUj" (.nat currentA)).2.2.2⟩
+    optTermEq_sound (by decide +kernel)⟩
 
 /-- **End-to-End Userspace `stdlib/physical/Ms350FcmlPhaseLeg.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
 theorem userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified :
@@ -749,23 +739,18 @@ theorem q3_photonic_phase_shift_forall (modeIdx : Nat) :
 def q3PowerBody : Term :=
   extractBookMethodInner (emit q3PhotonicComp) "transferredPowerMw"
 
-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 3 (`q3_photonic_support_and_futamura2`)**. -/
-theorem q3_photonic_support_and_futamura2 (env : String → Option Term) (newPhase : Option Term) (pIn : Nat) :
+/-- **Support extraction conservatism and `specializeBook` commutation for domain object 3 (`q3_photonic_support_and_specialize`)**. -/
+theorem q3_photonic_support_and_specialize (env : String → Option Term) (newPhase : Option Term) (pIn : Nat) :
     let powerBody : Term := q3PowerBody
     let B := emit q3PhotonicComp
     let pins := bookCanonicalPins B
     extractReadMembers powerBody = ["couplingWeight", "hypercubeDim"] ∧
     substMemberEnv (mutateMemberEnv env "krawtchoukPhaseShiftMrad" newPhase) powerBody = substMemberEnv env powerBody ∧
-    evalBook (specializeBook B pins) "transferredPowerMw" = evalBook B "transferredPowerMw" ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
-      (fun B_res => evalResidualBookAt B_res "transferredPowerMw" (.nat pIn))) =
-      evalBookUnderPinsAt B pins "transferredPowerMw" (.nat pIn) := by
+    evalBook (specializeBook B pins) "transferredPowerMw" = evalBook B "transferredPowerMw" := by
   dsimp only
   refine ⟨by decide +kernel,
     (extractReadMembers_mutation_invariant q3PowerBody env newPhase (by decide +kernel)).1,
-    optTermEq_sound (by decide +kernel),
-    (futamura2_compiler_generator_commutes (emit q3PhotonicComp)
-      (bookCanonicalPins (emit q3PhotonicComp)) "transferredPowerMw" (.nat pIn)).2.2.2⟩
+    optTermEq_sound (by decide +kernel)⟩
 
 /-! ## 9. Domain Object 4: Cleanroom-to-TCAD Semiconductor Wafer Stack (`stdlib/physical/CleanroomTcadStack.obend`) -/
 
@@ -884,23 +869,18 @@ theorem cleanroom_tcad_gate_delay_forall (fanout : Nat) :
 def tcadDrainCurrentBody : Term :=
   extractBookMethodInner (emit cleanroomTcadStackComp) "drainCurrentUa"
 
-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 4 (`cleanroom_tcad_support_and_futamura2`)**. -/
-theorem cleanroom_tcad_support_and_futamura2 (env : String → Option Term) (newEot : Option Term) (vov : Nat) :
+/-- **Support extraction conservatism and `specializeBook` commutation for domain object 4 (`cleanroom_tcad_support_and_specialize`)**. -/
+theorem cleanroom_tcad_support_and_specialize (env : String → Option Term) (newEot : Option Term) (vov : Nat) :
     let drainBody : Term := tcadDrainCurrentBody
     let B := emit cleanroomTcadStackComp
     let pins := bookCanonicalPins B
     extractReadMembers drainBody = ["vthMilliV"] ∧
     substMemberEnv (mutateMemberEnv env "oxideEotPicometers" newEot) drainBody = substMemberEnv env drainBody ∧
-    evalBook (specializeBook B pins) "drainCurrentUa" = evalBook B "drainCurrentUa" ∧
-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
-      (fun B_res => evalResidualBookAt B_res "drainCurrentUa" (.nat vov))) =
-      evalBookUnderPinsAt B pins "drainCurrentUa" (.nat vov) := by
+    evalBook (specializeBook B pins) "drainCurrentUa" = evalBook B "drainCurrentUa" := by
   dsimp only
   refine ⟨by decide +kernel,
     (extractReadMembers_mutation_invariant tcadDrainCurrentBody env newEot (by decide +kernel)).1,
-    optTermEq_sound (by decide +kernel),
-    (futamura2_compiler_generator_commutes (emit cleanroomTcadStackComp)
-      (bookCanonicalPins (emit cleanroomTcadStackComp)) "drainCurrentUa" (.nat vov)).2.2.2⟩
+    optTermEq_sound (by decide +kernel)⟩
 
 /-- **End-to-End Userspace `stdlib/physical/CleanroomTcadStack.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
 theorem userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified :

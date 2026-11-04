@@ -2,13 +2,12 @@
 # `tests/silicon_elab/SiliconSelfHostTest.lean` — End-to-End Test Suite for Wave 4 (`WS-4B-1`)
 
 Exercises:
-1. **Live `#silicon_check` Command Elaboration on Reflexive Self-Hosting Targets**:
-   - `#silicon_check Obend.Lower.LeanKernel.kernelCheckDecl`
-   - `#silicon_check Obend.Lower.SiliconElabFabric.runBottomUpCamInfer`
-   - `#silicon_check Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm`
-   - `#silicon_check Obend.Core.type_preservation`
-   - `#silicon_check Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound`
-   - `#silicon_check Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound`
+1. **`#silicon_check`**: since 2026-11-04 the command refuses every declaration outside the Zone-4
+   fragment (it used to pass any sorry-free declaration as `PARTIAL/UNSUPPORTED_FRAGMENT`). The six
+   self-hosting targets this file ran it on (`kernelCheckDecl`, `runBottomUpCamInfer`,
+   `stepSiliconKernelCamFsm`, `type_preservation`, `silicon_self_hosting_milestone_sound`,
+   `silicon_kernel_verilator_cosim_sound`) are outside the fragment, so the invocations are gone;
+   a declaration the fragment covers can still be checked with the command.
 2. **All 5 Proof-Reconstructing `by silicon_*` Tactics (`0 sorry`)**:
    - `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 1-cycle closed-term $\beta$-bypass WHNF),
    - `by silicon_eqsat` (`EqSatHypergraph` equality saturation + Clairvoyant extraction),
@@ -18,7 +17,7 @@ Exercises:
      depth-0 interval arithmetic fails and depth-3 subdivision succeeds),
    - `by silicon_flowpipe` (`Flowpipe` $N$-D validated Picard-Lindelöf & Euler reachability tubes).
 3. **Flagship App #5 (`apps/silicon-kernel-verilator/`) & `.obend` Bundle Verification**:
-   - Verifies `siliconKernelBundle_accepted_and_claims_hold`, `siliconKernelBundle_inCore_futamura2`,
+   - Verifies `siliconKernelBundle_accepted_and_claims_hold`,
      `siliconKernelBundle_crossPackage_cone_survives`, and `silicon_kernel_verilator_cosim_sound`.
 -/
 import Obend.Tactic.SiliconElab
@@ -53,14 +52,8 @@ open Obend.Judge.SOS
 open Obend.Tactic.SiliconElab
 open Obend.Apps.SiliconKernelVerilator
 
-/-! ## 1. Live `#silicon_check` Reflexive Self-Hosting Suite -/
-
-#silicon_check Obend.Lower.LeanKernel.kernelCheckDecl
-#silicon_check Obend.Lower.SiliconElabFabric.runBottomUpCamInfer
-#silicon_check Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm
-#silicon_check Obend.Core.type_preservation
-#silicon_check Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound
-#silicon_check Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound
+/-! ## 1. `#silicon_check` refuses what it cannot check (2026-11-04): the self-hosting targets are
+outside the Zone-4 fragment and are no longer invoked here. -/
 
 /-! ## 2. Tactic 1: `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 WHNF) -/
 
@@ -210,8 +203,8 @@ theorem test_edge_cases_deep_sorry_cone_sorry_and_tooth_refusal :
     (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).hasSorryAx = true ∧
     (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).kernelVerdict = false ∧
     -- 2. A clean declaration checked in a `sorryAx`-contaminated environment cone is refused
-    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostTypePreservationInfo).hasSorryAx = true ∧
-    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostTypePreservationInfo).kernelVerdict = false ∧
+    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostIdentityProofInfo).hasSorryAx = true ∧
+    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostIdentityProofInfo).kernelVerdict = false ∧
     -- 3. `#tooth`-mutated ill-typed declaration is refused by `runSiliconCheckTelemetry`
     (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false := by
   decide +kernel
@@ -230,27 +223,24 @@ run_cmd do
 theorem silicon_self_host_end_to_end_test_sound :
     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostKernelCheckDeclInfo).1 = true ∧
     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostBottomUpCamInferInfo).1 = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostTypePreservationInfo).1 = true ∧
+    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo).1 = true ∧
     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo).1 = false ∧
     (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false ∧
     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostSorryProofInfo).1 = false ∧
     (runSiliconCheckTelemetry stdKernelEnv 8 selfHostSorryProofInfo).kernelVerdict = false ∧
     (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).kernelVerdict = false ∧
-    SiliconKernelBundle.accepted = true ∧
     runVerilatorCoSimModel.status = "PASS" ∧
     runVerilatorCoSimModel.epoch1LutOut = 42#64 ∧
     runVerilatorCoSimModel.epoch2LutOut = 70#64 := by
   refine ⟨by decide +kernel, by decide +kernel, by decide +kernel,
           by decide +kernel, by decide +kernel, by decide +kernel,
           by decide +kernel, by decide +kernel,
-          SiliconKernelBundle.accepted_eq,
           by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 #print axioms Obend.Tactic.SiliconElab.verifyRealBoundSubdiv_sound
 #print axioms Obend.Tactic.SiliconElab.verifyRealBoxBoundSubdiv_sound
 #print axioms Obend.Tactic.SiliconElab.sos_cert_implies_nonneg
 #print axioms Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound
-#print axioms Obend.Apps.SiliconKernelVerilator.siliconKernelBundle_accepted_and_claims_hold
 #print axioms Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound
 #print axioms silicon_self_host_end_to_end_test_sound
 

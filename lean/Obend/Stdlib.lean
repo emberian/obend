@@ -2,7 +2,7 @@ module
 
 public import Obend.Elab.Workbook
 public meta import Obend.Elab.Workbook
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
 import all Init.Data.String.Defs
 import all Init.Data.ByteArray.Basic
@@ -25,8 +25,7 @@ Imports the multi-file `.obend` domain standard library at compile time via `#im
    `clements_power_open_recursion` and `tetron_braid_open_recursion` claims.
 
 Proves compile-time gate acceptance (`FrontEnd.accept`), open-recursive claim verification,
-`flatten_sound` / `book_sound`, in-place 2nd Futamura specialization (`futamura2BookCompiler_specializes_in_core`,
-`inCoreBookCompiler_specializes_from_pinsOnly`), and `OB5`/`LT5` cross-package cone-pin invariance
+`flatten_sound` / `book_sound`, and `OB5`/`LT5` cross-package cone-pin invariance
 (`coneSupports_linkComposition_of_disjoint`, `crossPackage_bEquiv_rebinds_slot_usable`).
 -/
 
@@ -38,7 +37,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Slot
 open Obend.Slot.World
@@ -94,7 +93,7 @@ theorem stdlib_open_recursion_eval :
     StdlibScenePrim.composedVoxelCostAt5_val = .nat 28 :=
   ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
-/-! ## 2. Flattening, Emitted Books & In-Place 2nd Futamura Specialization on Stdlib Compositions -/
+/-! ## 2. Flattening and Emitted Books on Stdlib Compositions -/
 
 theorem stdlib_compositions_closed :
     StdlibCell.versionedCell_comp.closedB = true ∧
@@ -116,46 +115,6 @@ theorem stdlib_flatten_and_book_sound (m : String) :
   exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
          flatten_sound _ hc2 m, book_sound _ hc2 m,
          flatten_sound _ hc3 m, book_sound _ hc3 m⟩
-
-/-- **`stdlib_futamura2_in_core`**: in-place 1-argument `futamura2BookCompiler` specializes
-the emitted `Book`s of `StdlibCell`, `StdlibAccount`, and `StdlibScenePrim` directly inside `Core4`. -/
-theorem stdlib_futamura2_in_core (pins : List LeafPin) :
-    dataPinSpecialize (.app (futamura2BookCompiler StdlibCell.versionedCell_book)
-      (encodePinsRecordForBook StdlibCell.versionedCell_book pins)) =
-      encodeBookTerm (specializeBook StdlibCell.versionedCell_book pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler StdlibAccount.escrowAccount_book)
-      (encodePinsRecordForBook StdlibAccount.escrowAccount_book pins)) =
-      encodeBookTerm (specializeBook StdlibAccount.escrowAccount_book pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler StdlibScenePrim.composedUsdPrim_book)
-      (encodePinsRecordForBook StdlibScenePrim.composedUsdPrim_book pins)) =
-      encodeBookTerm (specializeBook StdlibScenePrim.composedUsdPrim_book pins) :=
-  ⟨futamura2BookCompiler_specializes_in_core StdlibCell.versionedCell_book pins,
-   futamura2BookCompiler_specializes_in_core StdlibAccount.escrowAccount_book pins,
-   futamura2BookCompiler_specializes_in_core StdlibScenePrim.composedUsdPrim_book pins⟩
-
-/-- **`stdlib_inCoreBookCompiler_pinsOnly`**: true `B`-independent in-core pin specialization
-via `inCoreBookCompiler` and `encodePinsOnly pins` (with NO `Book` argument to `encodePinsOnly`!)
-across `StdlibCell`, `StdlibAccount`, `StdlibScenePrim`, and `modeBranchBook`. -/
-theorem stdlib_inCoreBookCompiler_pinsOnly (pins : List LeafPin) :
-    dataPinSpecialize (.app (inCoreBookCompiler StdlibCell.versionedCell_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook StdlibCell.versionedCell_book pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler StdlibAccount.escrowAccount_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook StdlibAccount.escrowAccount_book pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler StdlibScenePrim.composedUsdPrim_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook StdlibScenePrim.composedUsdPrim_book pins) ∧
-    ((decodeBookTerm?
-      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 0⟩])))).bind
-      (fun B_res => evalResidualBookAt B_res "compute" (.nat 0))) =
-      some (.nat 42) ∧
-    ((decodeBookTerm?
-      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 1⟩])))).bind
-      (fun B_res => evalResidualBookAt B_res "compute" (.nat 0))) =
-      some (.nat 99) :=
-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly StdlibCell.versionedCell_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly StdlibAccount.escrowAccount_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly StdlibScenePrim.composedUsdPrim_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly modeBranchBook pins).2.2.2.2.1,
-   (inCoreBookCompiler_specializes_from_pinsOnly modeBranchBook pins).2.2.2.2.2.1⟩
 
 /-! ## 3. Cross-Package Cone-Pin Survival on Stdlib Compositions (`OB5` / `LT5`) -/
 
@@ -225,30 +184,6 @@ theorem stdlib_quantum_photonic_flatten_and_book_sound (m : String) :
   have ⟨hc1, hc2⟩ := stdlib_quantum_photonic_compositions_closed
   exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
          flatten_sound _ hc2 m, book_sound _ hc2 m⟩
-
-/-- **`stdlib_quantum_photonic_inCore_futamura2`**:
-Specializes `StdQuantumPhotonic`'s emitted `Book`s (`compensatedClementsArray_book` and
-`cooledTetronCell_book`) directly inside `Core4` via `inCoreBookCompiler` and `encodePinsOnly pins`
-(as well as `futamura2BookCompiler`). -/
-theorem stdlib_quantum_photonic_inCore_futamura2 (pins : List LeafPin) :
-    dataPinSpecialize
-      (.app (inCoreBookCompiler StdQuantumPhotonic.compensatedClementsArray_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook StdQuantumPhotonic.compensatedClementsArray_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler StdQuantumPhotonic.cooledTetronCell_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook StdQuantumPhotonic.cooledTetronCell_book pins) ∧
-    dataPinSpecialize
-      (.app (futamura2BookCompiler StdQuantumPhotonic.compensatedClementsArray_book)
-        (encodePinsRecordForBook StdQuantumPhotonic.compensatedClementsArray_book pins)) =
-      encodeBookTerm (specializeBook StdQuantumPhotonic.compensatedClementsArray_book pins) ∧
-    dataPinSpecialize
-      (.app (futamura2BookCompiler StdQuantumPhotonic.cooledTetronCell_book)
-        (encodePinsRecordForBook StdQuantumPhotonic.cooledTetronCell_book pins)) =
-      encodeBookTerm (specializeBook StdQuantumPhotonic.cooledTetronCell_book pins) :=
-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly StdQuantumPhotonic.compensatedClementsArray_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly StdQuantumPhotonic.cooledTetronCell_book pins).1,
-   futamura2BookCompiler_specializes_in_core StdQuantumPhotonic.compensatedClementsArray_book pins,
-   futamura2BookCompiler_specializes_in_core StdQuantumPhotonic.cooledTetronCell_book pins⟩
 
 /-- Disjoint Faddeev–LeVerrier thermal-only override layer modifying only
 `["faddeevThermalResidualPpm", "szegedyQuotientStepPhaseMrad"]` (leaving `krawtchoukRatioWeight`
