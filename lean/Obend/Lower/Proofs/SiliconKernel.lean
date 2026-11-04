@@ -5,7 +5,7 @@ module
 Implements Stage 4 (`WS 23` / `SILICON-ELABORATOR.md` §6–7) of the Silicon Lean Kernel & Elaborator,
 connecting:
 - `Obend.Lower.Inductive` (recursive AST inductives & LCNF lowering),
-- `Obend.Leaf.Futamura` (static data-pin specialization & 1st/2nd/3rd Futamura projections),
+- `Obend.Leaf.Static` (the folder and `staticApply`),
 - `Obend.Lower.LeanKernel` (self-hosted pure Lean kernel `whnf`/`isDefEq`/`inferType`/`checkDecl`
   and elaborator `simp`/typeclass/macro passes),
 - `Obend.Lower.Proofs.Hardware` (`compileBookToRtlSat` 4-stage verified pipeline), and
@@ -21,12 +21,12 @@ connecting:
    (accepted with hardware output `1#64`) and invalid declarations (definitional mismatch,
    ill-typed application, universe mismatch, and `sorryAx` contamination — all refused with
    hardware output `0#64`).
-2. **`silicon_elab_futamura_dpr_specialize_sound`**:
+2. **`silicon_elab_residual_dpr_specialize_sound`**:
    Proves that specializing the elaborator's `simp` rewrite pass against a pinned `Environment`
-   slot (`envPin = 1`) via the 1st Futamura projection (`futamura1Specialize` / `futamura1Book`)
+   slot (`envPin = 1`) by `staticApply` (`staticApplyBook`)
    and hot-swapping the resulting `AutomatonTile` into tile `0` of a multi-tile `EfpgaDprArray`
    via `runTileGlitchFreeDpr`:
-   - Validates `futamura1Candidate` under `specSlot` at the pinned view (`viewOf`),
+   - Validates `staticApplyCandidate` under `specSlot` at the pinned view (`viewOf`),
    - Clamps tile `0`'s output glitch-free during reconfiguration (`isolated_fence_clamps_output_during_write`),
    - Leaves neighbor tile `1` (the resident kernel checker tile) and all in-flight `ReductionPacket`s
      strictly untouched (`dpr_preserves_neighbor_tiles_and_packets`), and
@@ -34,15 +34,15 @@ connecting:
      isolation fence releases (`dpr_specialized_tile_executes_new_book`).
 3. **`silicon_elab_env_mutation_fallback_sound`**:
    Proves that when the `Environment` mutates (producing a mutated `LeafView`), `specSlot`
-   immediately invalidates `futamura1Candidate` (`moved_pin_blocks`), selects the resident
-   `Candidate.machine` fallback in 1 step (`futamura1_env_specialize_sound`, `machine_usable`),
+   immediately invalidates `staticApplyCandidate` (`moved_pin_blocks`), selects the resident
+   `Candidate.machine` fallback in 1 step (`staticApply_slot_sound`, `machine_usable`),
    and rejects any bitstream frame with a mismatched digest (`dpr_corrupt_crc_keeps_tile_isolated`).
 4. **`silicon_kernel_inet_beta_agrees`**:
    Proves that 1-cycle hardware interaction-net $\beta$-reduction (`reduceActivePair` on `.lam` and
    `.nat64`) agrees with both `LeanKernel.kernelWhnf` and `Core4.Evaluates`.
 -/
 public import Obend.Tactic.Tooth
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Lower.LeanKernel
 public import Obend.Lower.Proofs.Hardware
 public import Obend.Hardware.ReductionMachine
@@ -55,7 +55,7 @@ open Obend.Equiv
 open Obend.Slot
 open Obend.Slot.World
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel
@@ -194,25 +194,25 @@ def encodeDeclStatusTag (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Nat :=
         let infCode := stepCamInferNodeWord tag a0 a1 expCode
         if infCode != 0 && stepCamDefEqNodeWord 1 infCode 1 expCode == 1 then 1 else 2
 
-theorem encodeDeclStatusTag_validIdNat :
+example :
     encodeDeclStatusTag stdKernelEnv 8 validIdNatDecl = 1 := rfl
 
-theorem encodeDeclStatusTag_validPropId :
+example :
     encodeDeclStatusTag stdKernelEnv 8 validPropIdDecl = 1 := rfl
 
-theorem encodeDeclStatusTag_validApplyId42 :
+example :
     encodeDeclStatusTag stdKernelEnv 8 validApplyId42Decl = 1 := rfl
 
-theorem encodeDeclStatusTag_invalidMismatch :
+example :
     encodeDeclStatusTag stdKernelEnv 8 invalidMismatchDecl = 2 := rfl
 
-theorem encodeDeclStatusTag_invalidBadApp :
+example :
     encodeDeclStatusTag stdKernelEnv 8 invalidBadAppDecl = 2 := rfl
 
-theorem encodeDeclStatusTag_invalidUniverse :
+example :
     encodeDeclStatusTag stdKernelEnv 8 invalidUniverseDecl = 3 := rfl
 
-theorem encodeDeclStatusTag_invalidSorry :
+example :
     encodeDeclStatusTag stdKernelEnv 8 invalidSorryDecl = 0 := rfl
 
 /-- Unary `LExpr` body for the hardware kernel acceptance gate:
@@ -325,11 +325,11 @@ theorem silicon_kernel_5stage_check_sound :
   · rw [hs]; exact lean_to_book "kernelGate" kernelGateLExpr 0 0 (by decide +kernel) (kernelGateLExpr_runs 0)
   · decide +kernel
 
-/-! ## 2. Futamura-Specialized Elaborator Tile & Glitch-Free `ICAP` DPR Co-Simulation -/
+/-! ## 2. Statically applied elaborator tile & Glitch-Free `ICAP` DPR Co-Simulation -/
 
 /-- Unspecialized elaborator `simp` dispatcher in `Core4`:
 `λ envPin => λ x => if envPin == 1 then 4 * x + 2 else x + 1`.
-When `envPin = 1` is pinned via the 1st Futamura projection (`futamura1Specialize`), the environment
+When `envPin = 1` is pinned by `staticApply`, the environment
 branch folds away to the specialized datapath `λ x => 4 * x + 2`. -/
 def elabSimpInterpreterTerm : Term :=
   .lam -- envPin (bound 1 inside inner)
@@ -342,35 +342,35 @@ def elabSimpInterpreterTerm : Term :=
 /-- Pinned environment value `envPin = .nat 1` (`stdKernelEnv` + `[simp] f x = 4 * x + 2`). -/
 def pinnedElabEnvTerm : Term := .nat 1
 
-/-- 1st Futamura projection of `elabSimpInterpreterTerm` specialized to `pinnedElabEnvTerm`. -/
-def futamura1ElabSimpTerm : Term :=
-  futamura1Specialize elabSimpInterpreterTerm pinnedElabEnvTerm
+/-- `elabSimpInterpreterTerm` applied to `pinnedElabEnvTerm` and folded. -/
+def residualSimpTerm : Term :=
+  staticApply elabSimpInterpreterTerm pinnedElabEnvTerm
 
-/-- Lowered `Lean-lite` body for the Futamura-specialized `simp` datapath ($x \mapsto 4x + 2$). -/
+/-- Lowered `Lean-lite` body for the folded `simp` datapath ($x \mapsto 4x + 2$). -/
 def specializedSimpBody : LExpr :=
   .natBin .add (.natBin .mul (.bvar 0) (.lit 4)) (.lit 2)
 
-/-- Concrete `Core4.Term` produced by the 1st Futamura projection ($x \mapsto 4x + 2$). -/
+/-- Concrete `Core4.Term` produced by `staticApply` ($x \mapsto 4x + 2$). -/
 def specializedSimpTerm : Term :=
   .lam (lowerLiteScalar specializedSimpBody)
 
-/-- Theorem (`futamura1ElabSimpTerm_eq_lowerLite`):
-The 1st Futamura projection `futamura1ElabSimpTerm` folds the static environment check
+/-- Theorem (`residualSimpTerm_eq_lowerLite`):
+`residualSimpTerm` folds the static environment check
 `envPin == 1` at compile time and produces the exact `Core4` term `specializedSimpTerm = lowerT (.lam .natural specializedSimpBody)`! -/
-theorem futamura1ElabSimpTerm_eq_lowerLite :
-    futamura1ElabSimpTerm = specializedSimpTerm ∧
-    futamura1ElabSimpTerm = lowerT (.lam .natural specializedSimpBody) := by
-  have h1 : futamura1ElabSimpTerm = specializedSimpTerm := by
-    simp [futamura1ElabSimpTerm, futamura1Specialize, elabSimpInterpreterTerm, pinnedElabEnvTerm,
-      dataPinSpecialize, dataPinSteps, dataPinPass, Obend.Leaf.Futamura.resolveApp,
-      Obend.Leaf.Futamura.resolveIfBool, Obend.Leaf.Futamura.resolveBinary,
+theorem residualSimpTerm_eq_lowerLite :
+    residualSimpTerm = specializedSimpTerm ∧
+    residualSimpTerm = lowerT (.lam .natural specializedSimpBody) := by
+  have h1 : residualSimpTerm = specializedSimpTerm := by
+    simp [residualSimpTerm, staticApply, elabSimpInterpreterTerm, pinnedElabEnvTerm,
+      dataPinSpecialize, dataPinSteps, dataPinPass, Obend.Leaf.Static.resolveApp,
+      Obend.Leaf.Static.resolveIfBool, Obend.Leaf.Static.resolveBinary,
       instantiate, Term.substitute, liftSubstitution, Term.rename, primitiveResult,
       specializedSimpTerm, specializedSimpBody, lowerLiteScalar, NatOp.prim]
   refine ⟨h1, ?_⟩
   rw [h1]
   simp [specializedSimpTerm, specializedSimpBody, lowerLiteScalar, lowerT, NatOp.prim]
 
-/-- Compiled `AutomatonTile` for the Futamura-specialized `simp` elaborator pass ($x \mapsto 4x + 2$). -/
+/-- Compiled `AutomatonTile` for the folded `simp` elaborator pass ($x \mapsto 4x + 2$). -/
 def specializedSimpTile : AutomatonTile :=
   (compileLiteMethodToTile "specializedSimp" specializedSimpBody).getD incAutomatonTile
 
@@ -378,22 +378,22 @@ def specializedSimpTile : AutomatonTile :=
 def specializedSimpComp :=
   leanComposition "specializedSimp" specializedSimpTerm
 
-theorem futamura1Comp_eq_specializedSimpComp :
-    futamura1Composition "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm =
+theorem residualComp_eq_specializedSimpComp :
+    staticApplyComposition "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm =
       specializedSimpComp := by
-  unfold futamura1Composition specializedSimpComp
-  rw [← futamura1ElabSimpTerm_eq_lowerLite.1]
+  unfold staticApplyComposition specializedSimpComp
+  rw [← residualSimpTerm_eq_lowerLite.1]
   rfl
 
 /-- Specialized `Candidate` (`Candidate.book`) for `specializedSimp`. -/
 def specializedSimpCand : Candidate :=
   .book "specializedSimp" specializedSimpComp
 
-theorem futamura1Cand_eq_specializedSimpCand :
-    futamura1Candidate "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm =
+theorem residualCand_eq_specializedSimpCand :
+    staticApplyCandidate "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm =
       specializedSimpCand := by
-  unfold futamura1Candidate specializedSimpCand
-  rw [futamura1Comp_eq_specializedSimpComp]
+  unfold staticApplyCandidate specializedSimpCand
+  rw [residualComp_eq_specializedSimpComp]
 
 /-- Pinned `LeafView` at Epoch 1 supporting `specializedSimpComp`. -/
 def pinnedSimpView : LeafView :=
@@ -403,12 +403,12 @@ def pinnedSimpView : LeafView :=
 def mutatedSimpView : LeafView :=
   viewOf 2 "specializedSimp" (leanComposition "specializedSimp" (.lam (.binary .add (.bound 0) (.nat 1))))
 
-/-- **Theorem (`silicon_elab_futamura_dpr_specialize_sound`)**:
-End-to-end verification of Futamura specialization + `ICAP` Dynamic Partial Reconfiguration on
+/-- **Theorem (`silicon_elab_residual_dpr_specialize_sound`)**:
+End-to-end verification of static application + `ICAP` Dynamic Partial Reconfiguration on
 a 2-tile `ReductionMachine` eFPGA array (`tile 0` = reconfigurable elaborator slot, `tile 1` =
 resident kernel checker `kernelGateTile`):
 1. Under `pinnedSimpView` (Epoch 1), `specSlot` validates `specializedSimpCand` (`specSlot.usable = true`),
-2. The 1st Futamura projection `futamura1ElabSimpTerm` is behaviorally equivalent (`≈b`) to
+2. `residualSimpTerm` is behaviorally equivalent (`≈b`) to
    `.app elabSimpInterpreterTerm pinnedElabEnvTerm` and equals `lowerT (.lam .natural specializedSimpBody)`,
 3. Reconfiguring `tile 0` with `specializedSimpTile` via `runTileGlitchFreeDpr`:
    - Holds `tile 0`'s output glitch-free at `skidHeldOutput` while the frame loads,
@@ -416,7 +416,7 @@ resident kernel checker `kernelGateTile`):
    - Transitions `tile 0` from `10#64 ↦ 11#64` (unspecialized fallback) to `10#64 ↦ 42#64`
      ($4 \times 10 + 2 = 42$) after fence release, while `tile 1` continues checking kernel
      declarations (`1#64 ↦ 1#64`, `2#64 ↦ 0#64`) without interruption! -/
-theorem silicon_elab_futamura_dpr_specialize_sound :
+theorem silicon_elab_residual_dpr_specialize_sound :
     let initTile0 : ReconfigTileState :=
       { tileId := 0, tileX := 0, tileY := 0
       , activeTile := incAutomatonTile, frameDigest := 0x1001#64
@@ -439,12 +439,12 @@ theorem silicon_elab_futamura_dpr_specialize_sound :
     let afterArray := runGlitchFreeDpr initArray icapFrame
     let afterTile0 := runTileGlitchFreeDpr icapFrame initTile0
     let afterTile1 := runTileGlitchFreeDpr icapFrame residentTile1
-    -- 1. Pin guard & Futamura behavioral equivalence
+    -- 1. Pin guard & behavioral equivalence
     specSlot.usable (holdsAt pinnedSimpView) specializedSimpCand = true ∧
     (slotAdvance : Advance LeafView LeafPin Candidate).advance specSlot pinnedSimpView
       (specOrder "specializedSimp" specializedSimpComp) (some specializedSimpCand) =
       .ok specializedSimpCand ∧
-    (.app elabSimpInterpreterTerm pinnedElabEnvTerm ≈b futamura1ElabSimpTerm) ∧
+    (.app elabSimpInterpreterTerm pinnedElabEnvTerm ≈b residualSimpTerm) ∧
     -- 2. Neighbor tile 1 (resident kernel gate) and in-flight packets are strictly preserved
     afterTile1 = residentTile1 ∧
     afterArray.skidBufferPkts = [inflightPkt] ∧
@@ -457,15 +457,15 @@ theorem silicon_elab_futamura_dpr_specialize_sound :
     evalReconfigTile afterTile0 (fun _ => 0#64) (fun _ => 0#64) 10#64 = 42#64 ∧
     evalReconfigTile afterTile1 (fun _ => 0#64) (fun _ => 0#64) 1#64 = 1#64 ∧
     evalReconfigTile afterTile1 (fun _ => 0#64) (fun _ => 0#64) 2#64 = 0#64 := by
-  have hclosed : (futamura1Composition "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm).closedB = true := by
-    rw [futamura1Comp_eq_specializedSimpComp]
+  have hclosed : (staticApplyComposition "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm).closedB = true := by
+    rw [residualComp_eq_specializedSimpComp]
     decide +kernel
-  have hfut := futamura1_env_specialize_sound "specializedSimp"
+  have hfut := staticApply_slot_sound "specializedSimp"
     elabSimpInterpreterTerm pinnedElabEnvTerm hclosed
   have husable : specSlot.usable (holdsAt pinnedSimpView) specializedSimpCand = true := by
     decide +kernel
   have hadv := hfut.2.2.1 pinnedSimpView
-  rw [futamura1Comp_eq_specializedSimpComp, futamura1Cand_eq_specializedSimpCand] at hadv
+  rw [residualComp_eq_specializedSimpComp, residualCand_eq_specializedSimpCand] at hadv
   simp only [husable, ite_true] at hadv
   refine ⟨husable, hadv, hfut.1, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
@@ -499,15 +499,15 @@ theorem silicon_elab_env_mutation_fallback_sound :
     afterCorrupt.activeTile = specializedSimpTile ∧
     afterCorrupt.isolated = true ∧
     evalReconfigTile afterCorrupt (fun _ => 0#64) (fun _ => 0#64) 100#64 = 42#64 := by
-  have hclosed : (futamura1Composition "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm).closedB = true := by
-    rw [futamura1Comp_eq_specializedSimpComp]
+  have hclosed : (staticApplyComposition "specializedSimp" elabSimpInterpreterTerm pinnedElabEnvTerm).closedB = true := by
+    rw [residualComp_eq_specializedSimpComp]
     decide +kernel
-  have hfut := futamura1_env_specialize_sound "specializedSimp"
+  have hfut := staticApply_slot_sound "specializedSimp"
     elabSimpInterpreterTerm pinnedElabEnvTerm hclosed
   have hunusable : specSlot.usable (holdsAt mutatedSimpView) specializedSimpCand = false := by
     decide +kernel
   have hadv := hfut.2.2.1 mutatedSimpView
-  rw [futamura1Comp_eq_specializedSimpComp, futamura1Cand_eq_specializedSimpCand] at hadv
+  rw [residualComp_eq_specializedSimpComp, residualCand_eq_specializedSimpCand] at hadv
   simp only [hunusable, Bool.false_eq_true, ite_false] at hadv
   exact ⟨hunusable, machine_usable mutatedSimpView, hadv, rfl, rfl, rfl⟩
 
@@ -558,7 +558,7 @@ and `Leaf.Book` and synthesizing sequential multi-cycle RTL via `compileBookToSe
 2. Remains busy (`out_done = 0#64`) at cycle `4` when given fuel bound `5#64`, and
 3. Asserts `out_done = 1#64` with the exact accumulated step counts (`0#64`, `15#64`, `36#64`)
    after `0`, `5`, and `8` clock cycles (`evalSeqModuleAfterCycles`). -/
-theorem silicon_kernel_seq_rtl_fuel_sound :
+example :
     (match compileBookToSeqRtlSat "silicon_kernel_fuel_seq_rtl" kernelFuelLoopBook with
      | some m =>
        checkRtlModule m &&

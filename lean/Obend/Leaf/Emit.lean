@@ -2,9 +2,12 @@ module
 /-
 # Obend.Leaf.Emit — the flattened object as a leaf book
 
-The leaf language (Bend, checked by BendTT) is strict and affine, and its books are lists of
-definitions whose calls go to earlier definitions or descend. The vtable of `Obend.Leaf.Flatten`
-becomes such a book (`emit`):
+A book is a list of closed first-order definitions, one per member of the flattened row, whose only
+recursion goes through `self`, plus the one dispatcher that ties them. The vtable of
+`Obend.Leaf.Flatten` becomes such a book (`emit`). (Until 2026-11-04 this file called the book's
+target "the leaf language (Bend, checked by BendTT)"; no translation to Bend ever existed and Bend
+compatibility is no longer a goal. The book is a `Core4` term run by the demand machine, and the
+input of `Obend.Hardware.Compiler`; `Obend.Leaf.Static` folds it.)
 
 * **the kind's brand is metadata**: a kind's identity (`#kind`, `Obend.Core.Brand`) is one constant
   for every instance, so it takes no slot; the book holds it as a static entry (`Book.statics`) and
@@ -16,8 +19,8 @@ becomes such a book (`emit`):
   another (each `code` is closed whenever the composition is, `emit_closed`), so every recursion
   goes through `self`;
 * **a dispatcher**: `Book.link`, `fix (λself. λ_. {m₀ = def₀ self, …}) {}`, the one place where
-  definitions meet; in the leaf it is the single self-recursive definition (fuel, or a descending
-  column, is BendTT's live-check obligation, `REPORT-LEAF-20261101.md`);
+  definitions meet: the single self-recursive definition; a strict target would have to tie this knot
+  with a static table, which no backend does yet;
 * **thunk cells**: a member whose entry is not a λ (a computed field) is emitted as an explicit cell
   `λself. λ_. body`, forced by the dispatcher with `{}`; method fields are already values and are
   emitted as they are (`DefKind`).

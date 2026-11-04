@@ -297,12 +297,12 @@ import Obend.Law.Proofs.Typing
 import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
-import Obend.Leaf.BendTT
 import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
 import Obend.Leaf.Futamura
 import Obend.Leaf.Residual
 import Obend.Leaf.Specialize
+import Obend.Leaf.Static
 import Obend.Leaf.UpTo
 import Obend.Ledger
 import Obend.Ledger.Book
@@ -442,6 +442,7 @@ import Obend.Teeth.Law.MachineTeeth
 import Obend.Teeth.Law.TypingTeeth
 import Obend.Teeth.Leaf.MachineSeven
 import Obend.Teeth.Leaf.ReviewTeeth
+import Obend.Teeth.Leaf.StaticTeeth
 import Obend.Teeth.Logic.FrameTeeth
 import Obend.Teeth.Logic.GroundTeeth
 import Obend.Teeth.Logic.LateBindingTeeth

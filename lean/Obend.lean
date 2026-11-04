@@ -1,7 +1,9 @@
 module
 -- The public face of the Objective Bend library: the definitional modules, re-exported. The proofs
 -- (Obend.Core.Proofs.*, Obend.Slot.Proofs.*, …) are built by `lake build` too, but nothing imports
--- them; the teeth (Obend.Teeth.*) and the census are tier 2, `lake build Obend.Census Teeth`.
+-- them; the teeth (Obend.Teeth.*), the applications (Obend.Apps.*), the test suites under tests/ and
+-- the census are tier 2, `lake build Obend.Census Teeth Tests`. Tier 1 is the `Obend` library's globs
+-- in lakefile.toml: every module under Obend/ except Obend/Apps/, Obend/Teeth/ and Obend/Census.lean.
 public import Obend.Core.Term
 public import Obend.Core.Ty
 public import Obend.Core.Check
@@ -41,7 +43,6 @@ public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Futamura
-public import Obend.Leaf.BendTT
 public import Obend.Lower.Syntax
 public import Obend.Lower.Semantics
 public import Obend.Lower.Typing

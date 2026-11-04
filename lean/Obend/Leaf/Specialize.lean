@@ -19,6 +19,19 @@ incumbent-first law (`incumbent_choice`) at the order `[book, machine]`: the sto
 exactly while its supports hold, else the machine is selected; `moved_pin_blocks` is
 `read_blocked_exact`: a support that no longer holds blocks the book, and the read names it.
 `specialize_integrity` is `slotFiller_integrity` at this world.
+
+What the pins are, and what the guard costs (2026-11-04, `review/EXPERT-compiler-runtime-20261103.md`
+§2.4). A pin is the **whole code** of a layer or of the object's composition, and it holds when the
+view's term is structurally equal to it: `holdsOfPin` is `Obend.Law.termEq`, a comparison of the two
+encodings, linear in the size of the layer. There is no hash, no epoch and no content address in this
+module; a design that guards by `Obend.Core.Code.address` is `PROPOSED`, not built. The granularity is
+the whole object: a change to any layer or to the seed blocks the whole book. The finer candidate
+`Candidate.slotBook`, pinned to a member's read cone (`coneSupports`), exists and is proved
+(`slotBook_moved_pin_blocks`) but is not in `specOrder`; nothing selects it. The decision is made
+**once, before a run**, by whoever reads the slot (`obend specialize` rebuilds the view from source
+and chooses); the demand machine carries no guard, no activation is invalidated while it runs, and
+there is no on-stack replacement. "One-cycle deoptimization" in older documents named this choice,
+not a mechanism in the machine.
 -/
 public import Obend.Leaf.Emit
 public import Obend.Slot.Selection

@@ -20,12 +20,10 @@ public import Obend.Tactic.Tooth
 public import Obend.Teeth.Logic.FrameTeeth
 import all Obend.Leaf.Flatten
 import all Obend.Leaf.Specialize
-import all Obend.Leaf.BendTT
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Residual
-public import Obend.Leaf.BendTT
 @[expose] public section
-open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Leaf.BendTT Obend.Slot Obend.Slot.World Obend.Equiv
+open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Slot Obend.Slot.World Obend.Equiv
 open Obend.Teeth.Logic.Review (base twice augmented override seed)
 
 namespace Obend.Teeth.Leaf.Review
@@ -39,7 +37,7 @@ def overridden : Composition := ⟨override, [augmented 1, twice, base], seed⟩
 theorem comp_closed : (comp 1).closedB = true := by decide +kernel
 
 /-- The book: two method slots, `twice` reading slot 0 through `self`. -/
-theorem book_shape :
+example :
     (emit (comp 1)).slots = ["review", "twice"] ∧
       (emit (comp 1)).defs.map (fun d => (d.member, d.slot, d.kind, d.reads)) =
         [("review", 0, .method, []), ("twice", 1, .method, [0])] ∧
@@ -47,7 +45,7 @@ theorem book_shape :
   decide +kernel
 
 /-- `Augmented.review` in the book: `super.review` is `Base.review`, read statically. -/
-theorem augmented_resolved :
+example :
     ((emit (comp 1)).defs.head?.map fun d => Obend.Law.termEq d.code
       (.lam (.lam (.binary .add (.app (.lam (.binary .add (.bound 0) (.nat 1))) (.bound 0)) (.nat 1))))) =
       some true := by
@@ -58,7 +56,7 @@ def branded : Composition :=
   ⟨augmented 1, [twice, base], ("#kind", .inject "ReviewBase.Review" (.record [])) :: seed⟩
 
 /-- The brand is the book's static metadata, not a slot; the dispatcher answers it. -/
-theorem brand_static :
+example :
     (emit branded).slots = ["review", "twice"] ∧ (emit branded).statics.map (·.1) = ["#kind"] ∧
       (Obend.Law.run 50 (.get (emit branded).link "#kind")).map
         (Obend.Law.termEq · (.inject "ReviewBase.Review" (.record []))) = some true := by
@@ -78,9 +76,9 @@ def natOf : Option Term → Option Nat
   | some (.nat n) => some n
   | _ => none
 
-theorem book_seven : natOf (Obend.Law.run 200 (bookTwiceOfThree (comp 1))) = some 7 := by decide +kernel
+example : natOf (Obend.Law.run 200 (bookTwiceOfThree (comp 1))) = some 7 := by decide +kernel
 
-theorem object_seven : natOf (Obend.Law.run 200 (objectTwiceOfThree (comp 1))) = some 7 := by decide +kernel
+example : natOf (Obend.Law.run 200 (objectTwiceOfThree (comp 1))) = some 7 := by decide +kernel
 
 /-- `book_sound` at this composition: the two reads are `≈b`. -/
 theorem twice_sound : .get (emit (comp 1)).link "twice" ≈b .get (comp 1).object "twice" :=
@@ -106,7 +104,7 @@ theorem book_kept :
   rw [show specSlot.usable (holdsAt (view (comp 1) 0)) (.book "twiceOfThree" (comp 1)) = true from book_usable_here]
   rfl
 
-theorem override_blocks :
+example :
     deadCells (specSlot.read (holdsAt (view overridden 1)) (some book)) = [.object "twiceOfThree"] := by
   decide +kernel
 
@@ -119,10 +117,10 @@ theorem override_selects_machine :
   rw [this]; rfl
 
 /-- The machine at the overridden program computes `3`; the stale book would still say `7`. -/
-theorem override_machine_three : natOf (Obend.Law.run 200 (objectTwiceOfThree overridden)) = some 3 := by
+example : natOf (Obend.Law.run 200 (objectTwiceOfThree overridden)) = some 3 := by
   decide +kernel
 
-theorem augmented_blocks :
+example :
     deadCells (specSlot.read (holdsAt (view (comp 2) 1)) (some book)) =
       [.object "twiceOfThree", .layer "ReviewMember.Augmented"] := by
   decide +kernel
@@ -145,51 +143,9 @@ def leak : Obend.Logic.Layer :=
 
 def leaky : Composition := ⟨leak, [augmented 1, twice, base], seed⟩
 
-theorem leak_refused_and_residual :
+example :
     superOnlyProjectedRow leaky.seed leaky.layers = false ∧
       leaky.vtable.any (fun e => recordBad (rowShapes leaky) e.2) = true := by decide +kernel
-
-/-! ## BendTT Target Emission & Soundness (`Obend.Leaf.BendTT`) -/
-
-/-- The natural a `BendTT` run reaches. -/
-def natOfB : Option BTerm → Option Nat
-  | some (.nat n) => some n
-  | _ => none
-
-/-- `ReviewMember` (`comp 1`) emits cleanly to `BendTT` (`emitBendTT (emit (comp 1))`) with an
-acyclic leaf call graph (`bb.acyclicDefs = true`, zero `.fix` knots inside its method bodies),
-evaluating `twice(3) = 7` and `review(3) = 5` under `BendTT.runB`. -/
-theorem review_bendtt_verified :
-    (match emitBendTT (emit (comp 1)) with
-     | some bb =>
-       bb.acyclicDefs &&
-       (natOfB (runB 200 (.app (.get bb.dispatch "twice") (BTerm.nat 3))) == some 7) &&
-       (natOfB (runB 200 (.app (.get bb.dispatch "review") (BTerm.nat 3))) == some 5)
-     | none => false) = true := by
-  decide +kernel
-
-/-- End-to-end `book_to_bendtt_sound` on `ReviewMember`: `BendTT.runB` on `emitBendTT (emit (comp 1))`
-establishes `Halts (.app (.get (comp 1).object "twice") (.nat 3)) (.natural 7)` on the source
-Core4 object. -/
-theorem review_bendtt_halts_object :
-    ∃ bb : BBook,
-      emitBendTT (emit (comp 1)) = some bb ∧
-      Halts (.app (.get (comp 1).object "twice") (Term.nat 3)) (.natural 7) := by
-  have hver := review_bendtt_verified
-  cases h : emitBendTT (emit (comp 1)) with
-  | none => simp [h] at hver
-  | some bb =>
-    rw [h] at hver
-    simp only [Bool.and_eq_true, beq_iff_eq] at hver
-    have h7 : natOfB (runB 200 (.app (.get bb.dispatch "twice") (BTerm.nat 3))) = some 7 := hver.1.2
-    unfold natOfB at h7
-    cases hr : runB 200 (.app (.get bb.dispatch "twice") (BTerm.nat 3)) with
-    | none => simp [hr] at h7
-    | some v =>
-      rw [hr] at h7
-      cases v <;> simp at h7
-      subst h7
-      exact ⟨bb, rfl, (book_to_bendtt_sound (comp 1) comp_closed h "twice" 3 200 7 hr).2⟩
 
 /-! ## Teeth -/
 
@@ -205,12 +161,6 @@ def supportsLayersOnly : Candidate → List LeafPin
   | .machine => []
 
 #tooth Obend.Leaf.book_usable_sound by mutation Obend.Leaf.Candidate.supports := supportsLayersOnly
-
-/-- Dropping the outer `.fix` knot in `BBook.dispatch` breaks `emitBendTT_dispatch`. -/
-def bbookDispatchUnfixed (B : BBook) : BTerm :=
-  .record (B.items.map BBookItem.entry)
-
-#tooth Obend.Leaf.BendTT.emitBendTT_dispatch by mutation Obend.Leaf.BendTT.BBook.dispatch := bbookDispatchUnfixed
 
 end Obend.Teeth.Leaf.Review
 end
