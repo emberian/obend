@@ -806,3 +806,131 @@ Nothing of this is taken.
 9. One admission path — **closed**: open and merge admit a write through `admitFootprint`; no retry.
    Open and named: cite resolution against drafts (`openEntries`), `fixDangling`'s judgment in
    `settle`, and `open_idem`'s proof still being the quietness argument rather than determinism.
+
+## What landed, sixth round (2026-11-04): census-backed cites, and the ledger under its kind
+
+Fourth generation of the lane. Commits `31b213a`, `7609e89`, `a61d805`, built module by module on
+bb2 (`Obend.Doc.Render`, `Obend.Vault.{Page,Store,Cli}`, `Obend.Analysis.{Worlds,Replay}`,
+`Obend.Tactic.DocsCensus`, `obend`); runners: decisions 19 + ledger-walkthrough 6, vault 36,
+ledger 24, workspace 44, logic 20, leaf 14, receipts 31, obend-source 30/71/161. No recorded line
+of the vault or ledger walkthroughs changed.
+
+### Gap 4 — cites resolve against the census's list (`7609e89`)
+
+`cafd87c` resolves and classifies; it wrote nothing. The emitter now sits beside it:
+`#census_environment PATH` in `Obend/Tactic/DocsCensus.lean` writes the package's constant names
+(the same filter as `theoremCensus`: module under `Obend`, not internal, no `_tooth`/`_native`)
+plus `metaBareIdentAllowlist`, one per line, `#` lines provenance; `Obend/Census.lean` calls it
+before `#docs_census`, so the tier-2 artifact is `lean/.lake/build/census/environment.txt`.
+**Until the census runs** (it imports every Apps module; `ZkNtt` is still hours), the same file is
+written from the library behind the binary by `lake env lean tests/decisions/Environment.lean`
+(`import Obend.Main`; 28,910 constants of 261 modules, 7 s on bb2). I tried `import Obend` first:
+the umbrella pulls the Apps (`Obend.Apps.SdrFt8`, `ZkNtt`, `ObendRisc` started elaborating) and
+fails on `Obend/Apps.lean` (absent) and `Lower/SiliconElabFabric.lean:375` (missing cases, another
+lane's); I stopped that job by its PID file and its four children's PIDs. So today's environment
+is "what `obend` links", a subset of tier 1; the report below says which names that costs.
+
+The vault side: a kind page's `environment: PATH` names the file (read at every open into
+`Store.environment`, never into the world; a named file that is missing stops the command with the
+two ways to write it). A backticked identifier of the documents census's shape
+(`metaBareIdentToken?`, ported as `Page.citedName?`: one token, last component lowercase with an
+underscore) is a cite of it, resolved as a full name or the last one or two components of one
+(`metaConstantSuffixes`, ported as `environmentOf`/`resolvesIn`, a sorted array bisected). Two
+measures: `unresolved` (state) and `unresolvedInserted` (write: the names the inserted lines
+cite). The ledger's law is the second: `new.unresolvedInserted == 0` says a write introduces no
+unknown name and says nothing of history, which is what a ledger means when a theorem is renamed
+and a section with an old name must still be appendable; a state law would have made every such
+section dead. A refusal names the names (`lackingNote`); `obend status` lists a page's. The
+environment threads through `commit`/`writtenAs`/`editedAs`/`ownerWrite` as a trailing argument
+(the three `_history` theorems and the two `commit_*_needs_relaw` quantify over it); `pageState`
+(the states a `linked.F` law reads) does not carry it, said in the doc. One difference from the
+census, deliberate: the vault skips fenced blocks; `metaExtractInlineBacktickSpansAux` only skips
+the fence line itself (its `'\n'` arm resets the flag), so the census scans code blocks' bodies.
+
+### Gap 8 — `review/` is a vault and the ledger is under its kind (`a61d805`)
+
+`review/ledger/_kind.md` (`environment:`, `appendOnly per ##: new.deletions == 0`, `cited per ##:
+new.unresolvedInserted == 0`); `review/DECISIONS-20261031.md` gains `kind: ledger` and nothing
+else; `review/.obend/world.json` (1.1 MB, committed) holds v1 (the file as it stood, born without
+laws) and v2 (the adoption: the owner's write naming the kind, judged with old = new, the
+project's own rule for adoption), so a clone opens it where it is. Why adoption and not birth under
+the kind: at a birth every row is born and `unresolvedInserted` is every name, so the six names
+below would have refused the whole file; adopting the history and judging writes from here is the
+law the preamble means. `lean/tests/decisions/LEDGER.md` (run by the decisions runner after
+`WALKTHROUGH.md`, on a copy of `review/`) records: v1 without the kind line; `v2 written` with it;
+`obend post DECISIONS-20261031 ../row.md --into "Taken by lanes under standing approval, 2026-11-04"`
+→ `owner posted (v3)`, the row in the file; one table line rewritten in place → `refused by
+ledger/_kind: appendOnly per ## … at ## Decided by Ember: … deletions = 1`; a row citing
+`suggestMultiField_admits` → refused at the post, `names the environment lacks:
+suggestMultiField_admits`, file untouched.
+
+For that to work two things had to change. `obend post` by the owner was a proposal with
+candidates to select; it is now the owner's write of the page, judged (a member's post is the
+proposal it was), with `--into HEADING` (FILE's lines at the end of the section HEADING begins)
+and `--append`. **The command Ember asked for**, from `review/`:
+
+```
+obend post DECISIONS-20261031 ROW.md --into "Open for Ember (2026-11-04)"
+```
+
+with `ROW.md` holding the table row (any section's heading text goes in the quotes; the row is
+judged, the file is rendered on admission and untouched on refusal). It needs
+`lean/.lake/build/census/environment.txt`; on a machine that lacks it the command says so and names
+`cd lean && lake env lean tests/decisions/Environment.lean`.
+
+### Two defects met on the way (`31b213a`)
+
+A line inserted before a kept line re-wrote the kept line: only a kept line closed a stretch of
+the alignment (`Al.sync`), so appending a row inside a table counted `deletions = 1` and
+`appendOnly` refused the append (the editor path and `--into` alike). An inserted or deleted whole
+line is now its own stretch (`Al.delAtom` carries whether its text ended a line). The decisions
+walkthrough's in-place edit is `deletions = 1`, the line rewritten, not 2 (the earlier recording's
+"and the blank line that closes it" was this defect, read as a feature). And `[[Beta]]` inside
+backticks (the ledger's row on what a wikilink is) was a dangling link at every open: `Doc.lex`
+copies an inline code span through as text (`takeCode`), as Obsidian reads it; code blocks' inner
+lines are still lexed.
+
+### Findings, for the record
+
+1. **Six names the ledger cites that the binary's library lacks** (`obend status DECISIONS-20261031`
+   today): `prepare_checks`, `step_preserves_typing`, `overlay_instantiate`, `exposed_once`,
+   `runBounded_mono`, `fidget_toolpath_no_gouge`. INFERRED: `prepare_checks` is
+   `Elab/Proofs/PrepareChecks.lean`, `step_preserves_typing` and `overlay_instantiate` are Core
+   proof modules, none imported by `Main`; `fidget_toolpath_no_gouge` is Apps (tier 2). The full
+   census's artifact would resolve those; `exposed_once` and `runBounded_mono` I could not place
+   and may be renamed or gone — the ledger's own "Still open" row says `slot_repair` is to be
+   renamed, and that name does resolve today. Not corrected: the rows are history; a correction is
+   a new row.
+2. **`## In flight` is a status board, not a ledger section**: its prose is rewritten as lanes
+   finish, which `appendOnly per ##` now refuses. Either it moves to a page of its own or its
+   updates become added lines.
+3. **`e4a108b` appended a question for Ember at the end of the file, under "Decided by Ember
+   (second round)"**, after a paragraph, outside any table: the cost of "append at the end" on a
+   sectioned ledger. `--into "Open for Ember (2026-11-04)"` is the cure; the row itself is history.
+4. **`review/.obend/world.json` is 1.1 MB and grows**: every review document is a page of this
+   vault and keeps its history when it changes and a command runs. Fine for a ledger; a folder of
+   living 50 KB reports is a heavier vault than a folder of notes. A page filter or a vault of its
+   own folder is the question if it grows.
+5. **The umbrella `Obend` pulls the Apps and does not build at HEAD** (`Obend/Apps.lean` named,
+   absent; `Lower/SiliconElabFabric.lean:375`); the tier-1/tier-2 line in `lakefile.toml` is not
+   the import line in `Obend.lean`. For the gate lane.
+6. `dated`, `decider`, `claimed` for the real ledger wait on the per-row fields decision
+   (`e4a108b`); the kind page says so.
+
+### The gap list, updated
+
+1. Unit of law is the page — closed for measures; fields per row Ember's question (`e4a108b`).
+2. No strings — closed for labels; no order or content on labels, no calendar.
+3. Append-only is a count — closed (`deletions`, per row; whole-line insertions no longer count).
+4. Theorem names are a hand-kept census page — **closed**: the census writes the environment, the
+   kind names it, a cite is a backticked name, the refusal names it. Open: the artifact is tier 2
+   and the tier-2 census does not run today, so the file in use is the binary's library.
+5. Authority is not provenance — closed; the poster's grant as a fact open.
+6. No cross-page facts — closed for links; joined states, backlinks as subject open; `linked.F`
+   states lack `unresolved`.
+7. A kind's own laws are unprotected — Ember's question, untouched.
+8. The real `review/` file can only be the index page — **closed**: `review/` is a vault, the
+   ledger is a page under `review/ledger/_kind.md`, rows are added with `obend post --into`.
+9. One admission path — closed; cite resolution against drafts and `fixDangling` in `settle` open.
+10. (new) A section that is a status board (`## In flight`) under an append-only kind: a design
+    question for the ledger's keeper.
