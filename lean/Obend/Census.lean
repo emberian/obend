@@ -13,6 +13,22 @@ fixes the second and not the first. A plain file imports every module with its p
 `Obend.lean` does not import this file. It is tier 2 with the teeth: `lake build Obend.Census Teeth`
 (`lakefile.toml`), run before a push; `lake build` does not build it.
 
+## The time budget (review/DECISIONS-20261031.md, 2026-11-04)
+
+No build step takes an hour. A module of tier 1 may elaborate for 60 s, a module of tier 2 for
+600 s; `tools/build.sh tier1|tier2` reads Lake's own `Built M (12s)` lines back and fails the build
+when a module is over, even when Lake succeeded. The pre-push hook runs tier 1 through it. The other
+way a module gets slow is `set_option maxHeartbeats`: the command below refuses, in tier 1, any such
+site that is not in the baseline it carries (the sites that existed on 2026-11-04, with their
+values), any value raised above its baseline, and any new file. Shrinking the baseline is the only
+edit it accepts; a proof that needs more heartbeats than the default is restructured or moved to
+tier 2, and the budget itself moves only by a ledger decision.
+
+The first command refuses a file under `Obend/` that this list does not import, and a module outside
+`Obend/Teeth/` that the `Obend` library's globs in `lakefile.toml` do not name (`lake build` would
+skip it unless something imports it). It runs when this file is rebuilt, that is, when anything it
+imports changes; a new leaf added alone is caught at the next such rebuild, not at its own.
+
 The first command refuses a file under `Obend/` that this list does not import, and a module outside
 `Obend/Teeth/` that the `Obend` library's globs in `lakefile.toml` do not name (`lake build` would
 skip it unless something imports it). It runs when this file is rebuilt, that is, when anything it
@@ -505,24 +521,62 @@ run_cmd do
   -- Tier 1 is the `Obend` library's `globs` array in `lakefile.toml`: `"M"` names one module, `"M.+"`
   -- its submodules, `"M.*"` both. Read the array between `name = "Obend"` and the next table.
   let lakefile ← IO.FS.readFile "lakefile.toml"
-  let some library := (lakefile.splitOn "name = \"Obend\"")[1]?
-    | throwError "census: no `Obend` library in lakefile.toml"
-  let library := (library.splitOn "[[")[0]!
-  let globs := ((library.splitOn "globs = [")[1]?.getD "").splitOn "]" |>.head!
-    |>.splitOn "," |>.map (·.trimAscii.toString) |>.filter (· != "")
-    |>.map (fun g => (g.drop 1).dropRight 1 |>.toString)
+  -- Tier 2 is the `Teeth` library's `globs` (the teeth, the apps, Obend.Stdlib, this file), read the
+  -- same way.
+  let parseGlobs (libName : String) : CommandElabM (List String) := do
+    let some library := (lakefile.splitOn s!"name = \"{libName}\"")[1]?
+      | throwError "census: no `{libName}` library in lakefile.toml"
+    let library := (library.splitOn "[[")[0]!
+    return ((library.splitOn "globs = [")[1]?.getD "").splitOn "]" |>.head!
+      |>.splitOn "," |>.map (·.trimAscii.toString) |>.filter (· != "")
+      |>.map (fun g => (g.drop 1).dropRight 1 |>.toString)
+  let tier1Globs ← parseGlobs "Obend"
+  let tier2Globs ← parseGlobs "Teeth"
   let base (g : String) : Name := (String.ofList (g.toList.take (g.length - 2))).toName
-  let tier1 (module : Name) : Bool := globs.any fun g =>
+  let inTier (globs : List String) (module : Name) : Bool := globs.any fun g =>
     if g.endsWith ".+" then (base g).isPrefixOf module && base g != module
     else if g.endsWith ".*" then (base g).isPrefixOf module
     else g.toName == module
+  let tier1 (module : Name) : Bool := inTier tier1Globs module
+  let tier2 (module : Name) : Bool := inTier tier2Globs module
   let mut unbuilt : Array Name := #[]
   for file in sources do
     let module := (file.withExtension "").components.foldl Name.str .anonymous
-    unless module == `Obend.Census || (`Obend.Teeth).isPrefixOf module || tier1 module do
+    unless tier1 module || tier2 module do
       unbuilt := unbuilt.push module
   unless unbuilt.isEmpty do
-    throwError "census: {unbuilt.size} modules are in neither tier (add a glob to the `Obend` library in lakefile.toml): {unbuilt.toList}"
+    throwError "census: {unbuilt.size} modules are in neither tier (add a glob to the `Obend` or the `Teeth` library in lakefile.toml): {unbuilt.toList}"
+  -- The heartbeat baseline of tier 1 (see the header). Paths as `walkDir "Obend"` reports them; the
+  -- values of every `set_option maxHeartbeats N` (file-level or `… in`) in that file on 2026-11-04.
+  let heartbeatBaseline : List (String × List Nat) :=
+    [ ("Obend/Analysis/EqSatHypergraph.lean", [800000, 800000])
+    , ("Obend/Analysis/Equitable.lean", [800000])
+    , ("Obend/Core/Proofs/Adequacy/Origins.lean", [800000])
+    , ("Obend/Core/Proofs/Adequacy/Source.lean", [600000, 600000])
+    , ("Obend/Core/Proofs/Adequacy/StepRaw.lean", [800000])
+    , ("Obend/Core/Proofs/EquiRecursiveSubstitution.lean", [4000000])
+    , ("Obend/Digest/Cshake256/Fast.lean", [4000000, 4000000, 4000000, 4000000])
+    , ("Obend/Equiv/Reduction.lean", [600000])
+    , ("Obend/Hardware/Judge.lean", [800000, 800000, 1600000])
+    , ("Obend/Hardware/OpenHypergraph.lean", [1600000, 1600000])
+    , ("Obend/Hardware/QuantumMatter.lean", [1600000]) ]
+  let mut heartbeatOffenders : Array String := #[]
+  for file in sources do
+    let module := (file.withExtension "").components.foldl Name.str .anonymous
+    unless tier1 module do continue
+    let text ← IO.FS.readFile file
+    let mut allowed : List Nat := (heartbeatBaseline.lookup file.toString).getD []
+    for line in text.splitOn "\n" do
+      let l := line.trimAscii.toString
+      unless l.startsWith "set_option maxHeartbeats " do continue
+      let digits := String.ofList ((l.toList.drop "set_option maxHeartbeats ".length).takeWhile Char.isDigit)
+      let n := digits.toNat?.getD 0
+      -- a value at or under the default costs nothing; above it, the site must be in the baseline
+      if n ≤ 200000 then continue
+      if allowed.contains n then allowed := allowed.erase n
+      else heartbeatOffenders := heartbeatOffenders.push s!"{file}: maxHeartbeats {n}"
+  unless heartbeatOffenders.isEmpty do
+    throwError "census: tier 1 has `set_option maxHeartbeats` sites outside the 2026-11-04 baseline (a new site, a raised value, or a file not in the list): {heartbeatOffenders.toList}. Restructure the proof or move it to tier 2; the baseline only shrinks."
 
 #assert_axioms_tree
 #check_docs_census

@@ -3,7 +3,10 @@ version = "0.0.1"
 defaultTargets = ["Obend"]
 
 # Two build tiers (2026-11-01; apps and tests moved to tier 2 on 2026-11-04). `lake build` builds
-# tier 1, the library: every definition and proof under `Obend/` except `Obend/Apps/` and `Obend/Teeth/`.
+# tier 1, the library: every definition and proof under `Obend/` except `Obend/Apps/`, `Obend/Teeth/` and
+# `Obend/Stdlib.lean`. Each tier has a time budget per module, 60 s in tier 1 and 600 s in tier 2,
+# enforced by `tools/build.sh tier1|tier2` from Lake's own timings (review/DECISIONS-20261031.md,
+# 2026-11-04); the pre-push hook runs tier 1 through it.
 # Tier 2 is the teeth (`Obend/Teeth/`: evaluation fixtures, mutation teeth, the legacy leaves), the
 # applications (`Obend/Apps/`, concrete `.obend` programs elaborated at compile time), the test suites
 # under `tests/` (`Tests`) and the census (`Obend/Census.lean`); it is run before a merge on a build box
@@ -17,7 +20,7 @@ globs = [
   "Obend", "Obend.Analysis.+", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Consensus.*", "Obend.Fold.*", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main",
   "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Hardware.*", "Obend.Judge.*",
   "Obend.Law.*", "Obend.Leaf.+", "Obend.Lower.+", "Obend.Ledger", "Obend.Ledger.*", "Obend.Logic.+", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
-  "Obend.Vault.*", "Obend.FFI", "Obend.FFI.*", "Obend.Format.+", "Obend.Stdlib",
+  "Obend.Vault.*", "Obend.FFI", "Obend.FFI.*", "Obend.Format.+",
 ]
 
 # Lane Lower (2026-11-01): the first Lean programs `obend lower` reads (`tests/lower/Programs.lean`, plain
@@ -27,9 +30,11 @@ name = "LowerPrograms"
 srcDir = "tests/lower"
 roots = ["Programs"]
 
+# Obend.Stdlib elaborates the four stdlib/*.obend at compile time (about four minutes on bb2, 2026-11-04):
+# an application of the importer like the Apps, tier 2 with them; nothing in tier 1 imports it.
 [[lean_lib]]
 name = "Teeth"
-globs = ["Obend.Teeth.+", "Obend.Apps.+", "Obend.Census"]
+globs = ["Obend.Teeth.+", "Obend.Apps.+", "Obend.Stdlib", "Obend.Census"]
 
 # Tier 2, the test suites (2026-11-04). Until this target existed the 30 files under
 # `tests/{metasystem,silicon_elab,rehydration}` (308 theorems, 157 `#tooth` commands) belonged to no

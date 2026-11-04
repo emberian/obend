@@ -1,13 +1,24 @@
 #!/bin/sh
-# Tier 1 before a push (definitions and proofs). Tier 2 (the mutation teeth, the kernel-evaluation
-# fixtures and the axiom census) runs on hbox or dregg-build2 where it takes under a minute; on the
-# Mac it took ten under lane load (2026-10-31). Run it there before merging a lane:
-#   ssh hbox 'cd ~/obend/repo && git pull -q && cd lean && swarm-build lake build Obend.Census Teeth 2>&1 | tail -2'
+# Tier 1 before a push (definitions and proofs), within its time budget. Tier 2 (the mutation teeth, the apps, the test suites
+# and the census) runs on a build box (bb2, hbox) where it takes minutes; on the Mac it took ten under
+# lane load (2026-10-31). Run it there before merging a lane:
+#   ssh bb2 'cd ~/obend/lean && swarm-build lake build Obend.Census Teeth Tests 2>&1 | tail -3'
 # Install once per clone: git config core.hooksPath lean/tools/hooks
 cd "$(git rev-parse --show-toplevel)/lean" || exit 1
 log="${TMPDIR:-/tmp}/obend-prepush-$$.log"
-if LEAN_NUM_THREADS=2 lake build >"$log" 2>&1; then
-  grep -E "^Build completed" "$log" | tail -1; rm -f "$log"
+# Tier 2 freshness: the census olean, if present, must be newer than every source it covers. The Mac
+# cannot rebuild tier 2, so this warns (loudly) instead of refusing; the merge gate is the box build.
+census=.lake/build/lib/lean/Obend/Census.olean
+if [ -f "$census" ]; then
+  stale=$(find Obend tests -name '*.lean' -newer "$census" | wc -l | tr -d ' ')
+  [ "$stale" -gt 0 ] && echo "pre-push: WARNING tier 2 is stale here ($stale sources newer than Census.olean); run it on a box before merging"
 else
-  grep -E "^(✖|error)" "$log" | head -20; echo "pre-push: tier 1 failed; full log at $log"; exit 1
+  echo "pre-push: WARNING tier 2 (Obend.Census, Teeth, Tests) has never been built in this tree; run it on a box before merging"
+fi
+# Tier 1 through the budget: tools/build.sh fails a module that elaborated for more than 60 s even when
+# Lake succeeded (the budget is the ledger's, 2026-11-04). On the Mac two threads; the box uses four.
+if LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-2}" tools/build.sh tier1 >"$log" 2>&1; then
+  grep -E "^Build completed|^build.sh: tier1 green" "$log" | tail -2; rm -f "$log"
+else
+  grep -E "^(✖|error|build.sh:)" "$log" | head -20; echo "pre-push: tier 1 failed; full log at $log"; exit 1
 fi
