@@ -135,18 +135,18 @@ theorem admitsOp_mono {t₁ t₂ : FinalityTier} {op : Operation}
 
 /-! ### Concrete Operation Boundaries -/
 
-theorem speculative_admits_readUncommitted : admitsOp .speculative .readUncommitted = true := by decide
-theorem speculative_refuses_executeReadOnly : admitsOp .speculative .executeReadOnly = false := by decide
-theorem speculative_refuses_stateWrite : admitsOp .speculative .stateWrite = false := by decide
-theorem speculative_refuses_immutableArchive : admitsOp .speculative .immutableArchive = false := by decide
+example : admitsOp .speculative .readUncommitted = true := by decide
+example : admitsOp .speculative .executeReadOnly = false := by decide
+example : admitsOp .speculative .stateWrite = false := by decide
+example : admitsOp .speculative .immutableArchive = false := by decide
 
-theorem attested_admits_executeReadOnly : admitsOp .attested .executeReadOnly = true := by decide
-theorem attested_refuses_stateWrite : admitsOp .attested .stateWrite = false := by decide
+example : admitsOp .attested .executeReadOnly = true := by decide
+example : admitsOp .attested .stateWrite = false := by decide
 
 theorem quorum_final_admits_stateWrite : admitsOp .quorum_final .stateWrite = true := by decide
-theorem quorum_final_refuses_immutableArchive : admitsOp .quorum_final .immutableArchive = false := by decide
+example : admitsOp .quorum_final .immutableArchive = false := by decide
 
-theorem collapsed_admits_immutableArchive : admitsOp .collapsed .immutableArchive = true := by decide
+example : admitsOp .collapsed .immutableArchive = true := by decide
 theorem collapsed_admits_all (op : Operation) : admitsOp .collapsed op = true := by
   cases op <;> decide
 
@@ -301,8 +301,9 @@ inductive QuorumBoundPromotionEvent where
   | collapseRoot (merkleRoot : Nat) (signers : List Nat)
   deriving DecidableEq, BEq, Repr, Inhabited
 
-/-- Finality gate binding `FinalityTier` promotion to non-empty quorum signer sets
-    (`2 * faults + 1 ≤ qcSigners.length`) and a non-zero state root (`stateRoot ≠ 0`). -/
+/-- Finality gate binding `FinalityTier` promotion to non-empty, duplicate-free quorum
+    signer sets (`signers.Nodup`, `∀ s ∈ signers, s ∈ committee`, `2 * faults + 1 ≤ qcSigners.length`)
+    and a non-zero state root (`stateRoot ≠ 0`). -/
 structure QuorumBoundFinalityGate where
   turnId        : Nat
   currentTier   : FinalityTier
@@ -312,21 +313,24 @@ structure QuorumBoundFinalityGate where
   qcSigners     : List Nat
   qcDigest      : Option Nat
   merkleRoot    : Option Nat
+  committee     : List Nat := [0, 1, 2, 3]
   deriving DecidableEq, Inhabited
 
 /-- Advance a `QuorumBoundFinalityGate` only when the quorum signer set is non-empty,
-    meets the `2 * faults + 1` threshold, and binds the gate's non-zero `stateRoot`. -/
+    duplicate-free (`signers.Nodup`), drawn from `gate.committee`, meets the `2 * faults + 1`
+    threshold, and binds the gate's non-zero `stateRoot`. -/
 def advanceQuorumBoundGate
     (gate : QuorumBoundFinalityGate)
     (ev : QuorumBoundPromotionEvent) : Option QuorumBoundFinalityGate :=
   match gate.currentTier, ev with
   | .speculative, .attestTurn signer root =>
-    if decide (root = gate.stateRoot ∧ root ≠ 0) then
+    if decide (signer ∈ gate.committee ∧ root = gate.stateRoot ∧ root ≠ 0) then
       some { gate with currentTier := .attested, attestSigners := [signer] }
     else
       none
   | .attested, .formQC qcDigest signers root =>
-    if decide (signers ≠ [] ∧ 2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
+    if decide (signers ≠ [] ∧ signers.Nodup ∧ (∀ s ∈ signers, s ∈ gate.committee) ∧
+               2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
       some
         { gate with
           currentTier := .quorum_final
@@ -335,7 +339,8 @@ def advanceQuorumBoundGate
     else
       none
   | .quorum_final, .collapseRoot root signers =>
-    if decide (signers ≠ [] ∧ 2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
+    if decide (signers ≠ [] ∧ signers.Nodup ∧ (∀ s ∈ signers, s ∈ gate.committee) ∧
+               2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
       some
         { gate with
           currentTier := .collapsed
@@ -345,8 +350,9 @@ def advanceQuorumBoundGate
       none
   | _, _ => none
 
-/-- Promoting to `.quorum_final` via `advanceQuorumBoundGate` guarantees a non-empty quorum
-    (`2 * gate.faults + 1 ≤ next.qcSigners.length`) and a non-zero state root. -/
+/-- Promoting to `.quorum_final` via `advanceQuorumBoundGate` guarantees a non-empty,
+    duplicate-free committee quorum (`next.qcSigners.Nodup`, `∀ s ∈ next.qcSigners, s ∈ gate.committee`,
+    `2 * gate.faults + 1 ≤ next.qcSigners.length`) and a non-zero state root. -/
 theorem advanceQuorumBoundGate_formQC_sound
     (gate next : QuorumBoundFinalityGate)
     (qcDigest : Nat) (signers : List Nat) (root : Nat)
@@ -354,14 +360,23 @@ theorem advanceQuorumBoundGate_formQC_sound
     next.currentTier = .quorum_final ∧
     next.qcSigners = signers ∧
     next.qcSigners ≠ [] ∧
+    next.qcSigners.Nodup ∧
+    (∀ s ∈ next.qcSigners, s ∈ gate.committee) ∧
     2 * gate.faults + 1 ≤ next.qcSigners.length ∧
     root = gate.stateRoot ∧
     next.stateRoot ≠ 0 := by
   cases h_tier : gate.currentTier <;>
     simp [advanceQuorumBoundGate, h_tier] at h
-  rcases h with ⟨⟨h_ne, h_quorum, h_root, h_nz⟩, rfl⟩
-  refine ⟨rfl, rfl, h_ne, h_quorum, h_root, ?_⟩
+  rcases h with ⟨⟨h_ne, h_nodup, h_comm, h_quorum, h_root, h_nz⟩, rfl⟩
+  refine ⟨rfl, rfl, h_ne, h_nodup, h_comm, h_quorum, h_root, ?_⟩
   simpa [h_root] using h_nz
+
+/-- Attempting to form a QC with duplicate signers (`¬ signers.Nodup`, e.g. `[0, 0, 0]`) is strictly refused. -/
+theorem advanceQuorumBoundGate_refuses_duplicate_signers
+    (gate : QuorumBoundFinalityGate) (qcDigest root : Nat) (signers : List Nat)
+    (h_dup : ¬ signers.Nodup) :
+    advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
+  cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier, h_dup]
 
 /-- Attempting to form a QC with an empty signer set is strictly refused. -/
 theorem advanceQuorumBoundGate_refuses_empty_signers

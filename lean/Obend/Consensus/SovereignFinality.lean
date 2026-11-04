@@ -153,7 +153,7 @@ theorem tier2_simplex_quorum_and_accountable_safety
     receipt.blockA ≠ receipt.blockB ∧
     gate.faults + 1 ≤ receipt.equivocatingVoters.length ∧
     (∀ v ∈ receipt.equivocatingVoters, v ∈ committee ∧ votedA v = true ∧ votedB v = true) := by
-  have ⟨h_tier, _, _, h_qlen, _, h_nz⟩ :=
+  have ⟨h_tier, _, _, _, _, h_qlen, _, h_nz⟩ :=
     advanceQuorumBoundGate_formQC_sound gate next qcDigest signers root h_gate
   have ⟨h_neq, h_slash_len, h_slash_mem⟩ :=
     simplex_accountable_safety view blockA blockB gate.faults committee votedA votedB
@@ -161,6 +161,17 @@ theorem tier2_simplex_quorum_and_accountable_safety
   refine ⟨h_tier, ?_, h_qlen, h_nz, h_neq, h_slash_len, h_slash_mem⟩
   rw [h_tier]
   rfl
+
+/-- Promoting to `.quorum_final` via `advanceQuorumBoundGate` guarantees duplicate-free
+    committee signers (`next.qcSigners.Nodup ∧ ∀ s ∈ next.qcSigners, s ∈ gate.committee`). -/
+theorem tier2_quorum_gate_nodup_and_committee_sound
+    (gate next : QuorumBoundFinalityGate)
+    (qcDigest : Nat) (signers : List Nat) (root : Nat)
+    (h_gate : advanceQuorumBoundGate gate (.formQC qcDigest signers root) = some next) :
+    next.qcSigners.Nodup ∧ (∀ s ∈ next.qcSigners, s ∈ gate.committee) := by
+  have ⟨_, _, _, h_nodup, h_comm, _, _, _⟩ :=
+    advanceQuorumBoundGate_formQC_sound gate next qcDigest signers root h_gate
+  exact ⟨h_nodup, h_comm⟩
 
 /-! ## §4. Tier 3 — Epistemic Verifiable Race (`DrEXRace` & `AgenticEDA`) -/
 

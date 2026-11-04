@@ -133,6 +133,7 @@ def cellCarryValid (W : LiveWorld) (plan : CarryPlan) (c : LiveCell) : Bool :=
     (checkContractCert (.preserves newLaw newInv) preservesCert == .valid) &&
     (!c.foreverCrown || termEq newInv c.invariant)
   | some (.namedDrop _) =>
+    !c.foreverCrown &&
     plan.namedDrops.contains c.cellId &&
     W.assets.all (fun ast => W.ledger.balance c.accountId ast == 0)
 
@@ -151,7 +152,9 @@ def diagnoseCellCarryError (_W : LiveWorld) (plan : CarryPlan) (c : LiveCell) : 
     else
       .foreverCrownInvariantChanged c.cellId
   | some (.namedDrop _) =>
-    if !plan.namedDrops.contains c.cellId then
+    if c.foreverCrown then
+      .foreverCrownInvariantChanged c.cellId
+    else if !plan.namedDrops.contains c.cellId then
       .undeclaredNamedDrop c.cellId
     else
       .nonZeroDropBalance c.cellId
@@ -210,6 +213,10 @@ def rehydrateWorldSturdyref (W : LiveWorld) (uri : String) (viewer : MembraneVie
     | some sr => some (rehydrateSturdyref sr viewer)
     | none => none
 
+/-- Collect URIs of sturdyrefs in `W` whose target `cellId` is in `plan.namedDrops`. -/
+def droppedSturdyrefUris (W : LiveWorld) (plan : CarryPlan) : List String :=
+  (W.sturdyrefs.filter (fun sr => plan.namedDrops.contains sr.cellId)).map (·.uri)
+
 /-- **Execute a Live World `K-CARRY` Migration (`executeWorldCarry`)**:
     Verifies epoch progression, ledger account uniqueness, total cell coverage (no silent drops,
     zero-balance named drops, verified narrowing & invariant certificates), refund posting
@@ -241,7 +248,7 @@ def executeWorldCarry (W : LiveWorld) (plan : CarryPlan) : Except CarryRefusal L
           seats       := W.seats.filter (isSeatPreserved plan)
           assets      := W.assets
           sturdyrefs  := W.sturdyrefs
-          revokedUris := W.revokedUris ++ plan.namedDrops
+          revokedUris := W.revokedUris ++ plan.namedDrops ++ droppedSturdyrefUris W plan
         }
 
 /-! ## 3. The 5 Keystone `K-CARRY` Theorems -/
@@ -259,7 +266,7 @@ theorem executeWorldCarry_ok_destruct {W W' : LiveWorld} {plan : CarryPlan}
     W'.seats = W.seats.filter (isSeatPreserved plan) ∧
     W'.assets = W.assets ∧
     W'.sturdyrefs = W.sturdyrefs ∧
-    W'.revokedUris = W.revokedUris ++ plan.namedDrops := by
+    W'.revokedUris = W.revokedUris ++ plan.namedDrops ++ droppedSturdyrefUris W plan := by
   unfold executeWorldCarry at h
   cases h_ep : (W.epoch < plan.targetEpoch : Bool)
   · simp [h_ep] at h
@@ -277,7 +284,8 @@ theorem executeWorldCarry_ok_destruct {W W' : LiveWorld} {plan : CarryPlan}
             split at h <;> cases h
           · simp [h_ep, h_nd, h_cells, h_post, h_seats] at h
             subst h
-            exact ⟨h_ep, h_nodup, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+            exact ⟨h_ep, h_nodup, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+              (List.append_assoc _ _ _).symm⟩
 
 /-- **Keystone Theorem 1 (`carry_no_silent_drop`)**:
     In any admitted `executeWorldCarry W plan = .ok W'`, every cell `c ∈ W.cells` is either
@@ -312,7 +320,7 @@ theorem carry_no_silent_drop {W W' : LiveWorld} {plan : CarryPlan}
     | namedDrop cid =>
       right
       simp only [Bool.and_eq_true, List.contains_iff_mem, List.all_eq_true, beq_iff_eq] at h_valid
-      exact h_valid
+      exact ⟨h_valid.1.2, h_valid.2⟩
 
 /-- **Keystone Theorem 2 (`carry_conserves_total_book`)**:
     In any admitted `executeWorldCarry W plan = .ok W'`, total book balance is strictly
@@ -417,18 +425,39 @@ theorem carry_preserves_zoe_offer_safety {W W' : LiveWorld} {plan : CarryPlan}
 
 /-- **Keystone Theorem 5 (`carry_rehydrates_sturdyrefs`)**:
     In any admitted `executeWorldCarry W plan = .ok W'`, any URI `uri` that is neither
-    previously revoked (`W.revokedUris.contains uri = false`) nor dropped in `plan.namedDrops`
-    (`plan.namedDrops.contains uri = false`) rehydrates to the exact same membrane-attenuated surface
-    and liveness classification in `W'` as in `W` for every `viewer : MembraneViewer`. -/
+    previously revoked (`W.revokedUris.contains uri = false`), nor dropped in `plan.namedDrops`
+    (`plan.namedDrops.contains uri = false`), nor targeting a dropped cell
+    (`(droppedSturdyrefUris W plan).contains uri = false`) rehydrates to the exact same
+    membrane-attenuated surface and liveness classification in `W'` as in `W` for every `viewer`. -/
 theorem carry_rehydrates_sturdyrefs {W W' : LiveWorld} {plan : CarryPlan}
     (h_ok : executeWorldCarry W plan = .ok W')
     (uri : String) (viewer : MembraneViewer)
     (h_unrevoked : W.revokedUris.contains uri = false)
-    (h_not_dropped : plan.namedDrops.contains uri = false) :
+    (h_not_dropped : plan.namedDrops.contains uri = false)
+    (h_cell_not_dropped : (droppedSturdyrefUris W plan).contains uri = false := by rfl) :
     rehydrateWorldSturdyref W' uri viewer = rehydrateWorldSturdyref W uri viewer := by
   obtain ⟨_, _, _, _, _, _, _, _, _, _, h_srs, h_rev⟩ := executeWorldCarry_ok_destruct h_ok
   unfold rehydrateWorldSturdyref
-  rw [h_rev, h_srs, List.contains_append, h_unrevoked, h_not_dropped]
+  rw [h_rev, h_srs, List.contains_append, List.contains_append,
+      h_unrevoked, h_not_dropped, h_cell_not_dropped]
+  rfl
+
+/-- **Dropped-Cell Sturdyref Revocation Theorem (`carry_revokes_dropped_cell_sturdyrefs`)**:
+    If `sr ∈ W.sturdyrefs` targets a cell `sr.cellId` in `plan.namedDrops`, then after
+    `executeWorldCarry W plan = .ok W'`, `rehydrateWorldSturdyref W' sr.uri viewer = none`. -/
+theorem carry_revokes_dropped_cell_sturdyrefs {W W' : LiveWorld} {plan : CarryPlan}
+    (h_ok : executeWorldCarry W plan = .ok W')
+    {sr : Sturdyref Data} (hsr : sr ∈ W.sturdyrefs)
+    (h_dropped : plan.namedDrops.contains sr.cellId = true)
+    (viewer : MembraneViewer) :
+    rehydrateWorldSturdyref W' sr.uri viewer = none := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, h_rev⟩ := executeWorldCarry_ok_destruct h_ok
+  unfold rehydrateWorldSturdyref
+  have h_in_dropped : (droppedSturdyrefUris W plan).contains sr.uri = true := by
+    unfold droppedSturdyrefUris
+    rw [List.contains_iff_mem, List.mem_map]
+    exact ⟨sr, List.mem_filter.mpr ⟨hsr, h_dropped⟩, rfl⟩
+  rw [h_rev, List.contains_append, h_in_dropped, Bool.or_true]
   rfl
 
 /-! ## 4. Registered External Judge Format `"world-carry@1"` -/
@@ -512,6 +541,16 @@ theorem sampleBadCarryPlan_refused :
     worldCarryJudge.check 0 sampleValidLiveWorld sampleBadCarryPlan =
       .refused (.silentCellDrop "cell.deprecated") [] := rfl
 
+/-- Extract the initial integer balance stored in `c.state`. -/
+def liveCellInitialBalance (c : LiveCell) : Int :=
+  match c.state with
+  | .record fields =>
+    match fields.find? (fun (k, _) => k == "bal" || k == "balance") with
+    | some (_, .natural n) => (n : Int)
+    | _ => 0
+  | .natural n => (n : Int)
+  | _ => 0
+
 /-- Decode a single `LiveCell` from a JSON object. -/
 def decodeLiveCellJson (j : Lean.Json) : Except String LiveCell :=
   match j.getObjValAs? String "cellId", j.getObjValAs? Nat "accountId" with
@@ -563,9 +602,21 @@ def decodeLiveWorld (s : String) : Except String LiveWorld :=
               | .ok r => r.toList
               | .error _ => []
             let _ := refs
+            let cellAccs := (cells.map (·.accountId) ++ [Obend.Ledger.protectedBase]).eraseDups
+            let decodedLedger : Book := {
+              accounts := cellAccs
+              balances := fun acc ast =>
+                if ast == 0 then
+                  (cells.filter (fun c => c.accountId == acc)).foldl
+                    (fun s c => s + liveCellInitialBalance c) 0
+                else 0
+              leaseRecords := fun _ => none
+              floors := fun _ _ => 0
+            }
             .ok { sampleValidLiveWorld with
               epoch       := ep
               cells       := cells
+              ledger      := decodedLedger
               revokedUris := revoked }
       | _, _ =>
         .error "invalid LiveWorld JSON: missing required fields (epoch, cells)"
@@ -576,12 +627,30 @@ def decodeCellCarryActionJson (j : Lean.Json) : Except String CellCarryAction :=
   | .ok "keep", .ok cid =>
     if cid.isEmpty then .error "invalid CellCarryAction JSON: empty cellId"
     else .ok (.keep cid)
+  | .ok "migrate", .ok cid =>
+    if cid.isEmpty then .error "invalid CellCarryAction JSON: empty cellId"
+    else
+      let bal := (j.getObjValAs? Nat "balance").toOption.getD
+        ((j.getObjValAs? Nat "newBalance").toOption.getD 0)
+      let newState : Data := .record [("bal", .natural bal)]
+      let newLaw : Term := .boolean true
+      let newInv : Term := .boolean true
+      let newStep : Term := .boolean true
+      let narrowsGoal : ContractGoal := .narrows newLaw newLaw
+      let preservesGoal : ContractGoal := .preserves newLaw newInv
+      let narrowsCert : ContractCert :=
+        .byLoweredDecider "migrate_narrows" []
+          (Obend.Law.mkGoalBoundDeciderReceipt "migrate_narrows" "decider@1" narrowsGoal)
+      let preservesCert : ContractCert :=
+        .byLoweredDecider "migrate_preserves" []
+          (Obend.Law.mkGoalBoundDeciderReceipt "migrate_preserves" "decider@1" preservesGoal)
+      .ok (.migrate cid newState newLaw newInv newStep narrowsCert preservesCert)
   | .ok "namedDrop", .ok cid =>
     let crown := (j.getObjValAs? Bool "foreverCrown").toOption.getD false
     let lifetime := (j.getObjValAs? String "lifetime").toOption.getD ""
     if cid.isEmpty then
       .error "invalid CellCarryAction JSON: empty cellId"
-    else if crown || lifetime == "forever" || cid == "cell.treasury" then
+    else if crown || lifetime == "forever" then
       .error s!"invalid CarryPlan JSON: cannot drop forever crown cell '{cid}'"
     else
       .ok (.namedDrop cid)

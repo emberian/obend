@@ -1,16 +1,29 @@
 module
 /-
-# Obend.Consensus.Simplex — Symbolic-Mode Simplex BFT Consensus
+# Obend.Consensus.Simplex — quorum lemmas and a count-based cell contract (not a protocol)
 
-Feature 30 (Milestone 4):
-Pure Symbolic Simplex BFT Consensus with Exponential View Backoff.
+What this module proves (read the statements, 2026-11-04):
+- `honest_quorum_intersection`, `qc_same_view_unique` (§5): two 2f+1 quorums of a 3f+1 committee
+  with at most f faulty members share an honest member, so two SAME-VIEW quorums agree. These
+  quantify over abstract predicates `p q : α → Bool`; they mention no protocol.
+- `simplex_accountable_safety` (§7): two overlapping quorums yield at least f+1 members in both.
+  The `SlashingReceipt` it extracts names voters and carries no votes, so a third party cannot
+  check it; the checkable object is `crates/obend-node`'s `EquivocationSlashReceipt` (two signed
+  votes), and no theorem relates the two.
+- `simplex_step_respects_law`, `simplexCellContractOf` (§6): a `SimplexState` whose `certSigners`
+  is a COUNT satisfies the `LawExpr` / Core4 laws when the count meets 2f+1. A signer set checked
+  against a committee lives beside it in `Obend.Consensus.Finality.QuorumBoundFinalityGate`;
+  neither checks a signature.
+
+What this module does not contain: a state machine. `State`, `ViewRecord`, `register`,
+`broadcast`, `castVote` (§3–§4) are fragments with no proposal, vote, or view-change handler, and
+no theorem about `State` beyond `castVote_already_voted`. There is no `simplex_safety`,
+`simplex_no_skip_and_fin` or `simplex_bounded_liveness_after_gst`. The executable protocol is the
+one-round simulator in `crates/obend-node/src/net.rs`; `DEOS-CONTRACTS-CONSENSUS.md` §5.2 states
+what is proved about it and what is only argued.
+
 Absorbs `minidregg/Kernel/GenericSimplex.lean`, `GenericSimplexQuorum.lean`,
-and `GenericSimplexCertificateSafety.lean`.
-
-Operates in symbolic mode:
-- Concrete crypto (BLS/Ed25519) is abstracted to symbolic attestations and voter identities.
-- Blocks carry `Option VaultTurn` as payload to drive multi-cell vault state transitions.
-- Quorum intersection and safety metatheorems are proved purely constructively in Lean 4 without Mathlib.
+and `GenericSimplexCertificateSafety.lean`; Mathlib-free.
 -/
 
 public import Obend.Vault.Hyperedge
@@ -567,7 +580,7 @@ theorem simplex_under_quorum_rejected :
     evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexUnderQuorum = false := rfl
 
 /-- Refutation theorem: attempting to bypass quorum by lowering `quorumThreshold` to `1` is rejected. -/
-theorem simplex_lowered_threshold_rejected :
+example :
     evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexLoweredThreshold = false := rfl
 
 #tooth simplex_view_regression_rejected by mutation
@@ -664,9 +677,11 @@ def simplexCellContract : CellContract :=
 
 /-! ## 7. Accountable Safety (`SlashingReceipt`, `extractSlashingReceipt`, `simplex_accountable_safety`) -/
 
-/-- Accountable slashing receipt recording a view, two conflicting block identifiers
-    (`blockA`, `blockB`), and the constructively extracted list of equivocating validator IDs
-    who signed both blocks in the same view. -/
+/-- A record of a view, two conflicting block identifiers (`blockA`, `blockB`), and the validator
+    IDs that a pair of vote predicates put on both sides. It carries no votes and no signatures: it
+    is the OUTPUT of `extractSlashingReceipt` over predicates the caller supplies, not evidence a
+    stranger can check. A checkable receipt holds the two signed votes
+    (`crates/obend-node` `EquivocationSlashReceipt`). -/
 structure SlashingReceipt where
   view               : Nat
   blockA             : Nat

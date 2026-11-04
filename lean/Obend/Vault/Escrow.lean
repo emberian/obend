@@ -548,7 +548,7 @@ def leaseStateTy : Ty :=
 
 def cellTopInv : Term := .lam trueT
 
-theorem cellTopInv_closed : closedB cellTopInv = true := by decide +kernel
+example : closedB cellTopInv = true := by decide +kernel
 
 theorem holds_cellTopInv (d : Data) : Holds cellTopInv d := by
   unfold Holds cellTopInv
@@ -559,6 +559,61 @@ theorem holds_cellTopInv (d : Data) : Holds cellTopInv d := by
   rw [hinst]
   exact evaluates_self (.boolean true)
 
+def inRange012T (x : Term) : Term :=
+  .ifBool (eqNat x (natT 0)) trueT
+    (.ifBool (eqNat x (natT 1)) trueT
+      (.ifBool (eqNat x (natT 2)) trueT falseT))
+
+/-- Non-trivial single-state invariant for `SealedEscrow` enforcing valid leg status tags in `{0, 1, 2}`. -/
+def escrowInvariant : Term :=
+  .lam (andT (inRange012T (.get (.bound 0) "statusA"))
+             (inRange012T (.get (.bound 0) "statusB")))
+
+theorem escrowInvariant_closed : closedB escrowInvariant = true := by decide +kernel
+
+/-- Non-trivial single-state invariant for `PrepaidLease` enforcing `drawn ≤ budget` and `remaining ≤ budget`. -/
+def prepaidLeaseInvariant : Term :=
+  .lam (andT (leNat (.get (.bound 0) "drawn") (.get (.bound 0) "budget"))
+             (leNat (.get (.bound 0) "remaining") (.get (.bound 0) "budget")))
+
+theorem prepaidLeaseInvariant_closed : closedB prepaidLeaseInvariant = true := by decide +kernel
+
+/-- Constructive `CellContract` builder backed by a closed `invariant` (`closedB invariant = true`)
+    and a Core4 `stepBody` (`0 Classical.choice`).
+    The executable `law` guards `stepBody` with `.app invariant (.bound 1)` on the post-state `new`,
+    establishing both `inductive_preserves` (`Holds invariant new`) and `step_sound`
+    (`Admits (law3 stepBody) old new req`). -/
+def mkGuardedStepCellContract (invariant : Term) (hI : closedB invariant = true)
+    (why : String) (stepBody : Term) : CellContract where
+  law := law3 (guard (.app invariant (.bound 1)) why stepBody)
+  invariant := invariant
+  stepRel := law3 stepBody
+  inductive_preserves := by
+    intro old new req _ hadm
+    obtain ⟨w, hw⟩ := (admits_iff (guard (.app invariant (.bound 1)) why stepBody) old new req).1 hadm
+    unfold Obend.Law.guard at hw
+    simp only [subst_ifBool, subst_app, subst_bound, closedB_subst hI, lawEnv] at hw
+    obtain ⟨bb, hc, hr⟩ := ifBool_inv hw
+    cases bb
+    · simp only [Bool.false_eq_true, ↓reduceIte, refusedT, subst_inject, Term.substitute] at hr
+      have hval := evaluates_value (.inject _ _) hr
+      injection hval with htag _
+      exact absurd htag (by decide)
+    · exact hc
+  step_sound := by
+    intro old new req _ hadm
+    obtain ⟨w, hw⟩ := (admits_iff (guard (.app invariant (.bound 1)) why stepBody) old new req).1 hadm
+    unfold Obend.Law.guard at hw
+    simp only [subst_ifBool, subst_app, subst_bound, closedB_subst hI, lawEnv] at hw
+    obtain ⟨bb, _, hr⟩ := ifBool_inv hw
+    cases bb
+    · simp only [Bool.false_eq_true, ↓reduceIte, refusedT, subst_inject, Term.substitute] at hr
+      have hval := evaluates_value (.inject _ _) hr
+      injection hval with htag _
+      exact absurd htag (by decide)
+    · simp only [↓reduceIte] at hr
+      exact (admits_iff stepBody old new req).2 ⟨w, hr⟩
+
 /-- Constructive `CellContract` builder backed by a Core4 `stepBody` and `cellTopInv` (`0 Classical.choice`). -/
 def mkDirectStepCellContract (stepBody : Term) : CellContract where
   law := law3 stepBody
@@ -567,15 +622,12 @@ def mkDirectStepCellContract (stepBody : Term) : CellContract where
   inductive_preserves := fun _ new _ _ _ => holds_cellTopInv new
   step_sound := fun _ _ _ _ hadm => hadm
 
-def inRange012T (x : Term) : Term :=
-  .ifBool (eqNat x (natT 0)) trueT
-    (.ifBool (eqNat x (natT 1)) trueT
-      (.ifBool (eqNat x (natT 2)) trueT falseT))
-
 def escrowCondT : Term :=
   andT (leNat (.get (.bound 2) "settled") (.get (.bound 1) "settled"))
     (andT (inRange012T (.get (.bound 1) "statusA"))
-          (inRange012T (.get (.bound 1) "statusB")))
+      (andT (inRange012T (.get (.bound 1) "statusB"))
+        (andT (leNat (.get (.bound 2) "paidA") (.get (.bound 1) "paidA"))
+              (leNat (.get (.bound 2) "paidB") (.get (.bound 1) "paidB")))))
 
 def escrowStepBody : Term := guard escrowCondT "escrowLaw" okT
 
@@ -587,19 +639,49 @@ def prepaidLeaseCondT : Term :=
     (andT (leNat (.get (.bound 2) "drawn") (.get (.bound 1) "drawn"))
       (andT (leNat (.get (.bound 1) "drawn") (.get (.bound 1) "budget"))
         (andT (writeOnceNatT (.get (.bound 2) "budget") (.get (.bound 1) "budget"))
-              (writeOnceNatT (.get (.bound 2) "rent") (.get (.bound 1) "rent")))))
+          (andT (writeOnceNatT (.get (.bound 2) "rent") (.get (.bound 1) "rent"))
+            (andT (leNat (.get (.bound 1) "remaining") (.get (.bound 2) "remaining"))
+                  (leNat (.get (.bound 1) "remaining") (.get (.bound 1) "budget")))))))
 
 def prepaidLeaseStepBody : Term := guard prepaidLeaseCondT "prepaidLeaseLaw" okT
 
-/-- Proof-carrying inductive `CellContract` for `SealedEscrow` (`0 Classical.choice`). -/
+/-- Proof-carrying inductive `CellContract` for `SealedEscrow` with non-trivial `escrowInvariant` (`0 Classical.choice`). -/
 def escrowCellContract : CellContract :=
-  mkDirectStepCellContract escrowStepBody
+  mkGuardedStepCellContract escrowInvariant escrowInvariant_closed "escrowLaw" escrowStepBody
 
-/-- Proof-carrying inductive `CellContract` for `PrepaidLease` (`0 Classical.choice`). -/
+/-- Proof-carrying inductive `CellContract` for `PrepaidLease` with non-trivial `prepaidLeaseInvariant` (`0 Classical.choice`). -/
 def prepaidLeaseCellContract : CellContract :=
-  mkDirectStepCellContract prepaidLeaseStepBody
+  mkGuardedStepCellContract prepaidLeaseInvariant prepaidLeaseInvariant_closed "prepaidLeaseLaw" prepaidLeaseStepBody
 
 /-! ### 4.3 Constructive Core4 Evaluation & Machine-Checked Bridge/Refusal Theorems -/
+
+theorem guardedLaw_admits_of_holds_and_step {invariant : Term} (hI : closedB invariant = true)
+    {why : String} {stepBody : Term} {old new req : Data}
+    (hinv : Holds invariant new)
+    (hstep : Admits (law3 stepBody) old new req) :
+    Admits (law3 (guard (.app invariant (.bound 1)) why stepBody)) old new req := by
+  obtain ⟨w, hw⟩ := (admits_iff stepBody old new req).1 hstep
+  refine (admits_iff (guard (.app invariant (.bound 1)) why stepBody) old new req).2 ⟨w, ?_⟩
+  unfold Obend.Law.guard
+  simp only [subst_ifBool, subst_app, subst_bound, closedB_subst hI, lawEnv]
+  refine evaluates_ifBool hinv ?_
+  exact hw
+
+theorem guardedLaw_admits_imp_stepRel {invariant : Term} (hI : closedB invariant = true)
+    {why : String} {stepBody : Term} {old new req : Data}
+    (hadm : Admits (law3 (guard (.app invariant (.bound 1)) why stepBody)) old new req) :
+    Admits (law3 stepBody) old new req := by
+  obtain ⟨w, hw⟩ := (admits_iff (guard (.app invariant (.bound 1)) why stepBody) old new req).1 hadm
+  unfold Obend.Law.guard at hw
+  simp only [subst_ifBool, subst_app, subst_bound, closedB_subst hI, lawEnv] at hw
+  obtain ⟨bb, _, hr⟩ := ifBool_inv hw
+  cases bb
+  · simp only [Bool.false_eq_true, ↓reduceIte, refusedT, subst_inject, Term.substitute] at hr
+    have hval := evaluates_value (.inject _ _) hr
+    injection hval with htag _
+    exact absurd htag (by decide)
+  · simp only [↓reduceIte] at hr
+    exact (admits_iff stepBody old new req).2 ⟨w, hr⟩
 
 theorem steps_binaryLeft {p : Primitive} {l l' r : Term} (h : Steps l l') :
     Steps (.binary p l r) (.binary p l' r) := by
@@ -692,7 +774,8 @@ theorem verdictOfBool_iff {B : Term} {o n rq : Data} {why : String} {b : Bool}
 def escrowVerdictBool (st st' : EscrowState) : Bool :=
   decide (escrowSettledTag st ≤ escrowSettledTag st') &&
     (((st'.status .A).toNat == 0 || ((st'.status .A).toNat == 1 || (st'.status .A).toNat == 2)) &&
-     ((st'.status .B).toNat == 0 || ((st'.status .B).toNat == 1 || (st'.status .B).toNat == 2)))
+     (((st'.status .B).toNat == 0 || ((st'.status .B).toNat == 1 || (st'.status .B).toNat == 2)) &&
+      (decide (st.paid .A ≤ st'.paid .A) && decide (st.paid .B ≤ st'.paid .B))))
 
 theorem escrowStepBody_eval (st st' : EscrowState) (rq : Data) :
     Evaluates (escrowStepBody.substitute (lawEnv (escrowStateToData st).term (escrowStateToData st').term rq.term))
@@ -702,14 +785,18 @@ theorem escrowStepBody_eval (st st' : EscrowState) (rq : Data) :
     subst_natT, subst_trueT, subst_falseT, subst_get, subst_bound]
   refine ev_guard_okT ?_
   refine ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) ?_
-  exact ev_andT (ev_inRange012T (ev_get_nat rfl)) (ev_inRange012T (ev_get_nat rfl))
+  refine ev_andT (ev_inRange012T (ev_get_nat rfl)) ?_
+  refine ev_andT (ev_inRange012T (ev_get_nat rfl)) ?_
+  exact ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
+                (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
 
 def prepaidLeaseVerdictBool (t : LeaseTerms) (st st' : LeaseState) : Bool :=
   decide (st.dischargedCount ≤ st'.dischargedCount) &&
     (decide (st.drawn ≤ st'.drawn) &&
       (decide (st'.drawn ≤ t.budget) &&
         (((t.budget == 0) || (t.budget == t.budget)) &&
-         ((t.rent == 0) || (t.rent == t.rent)))))
+         (((t.rent == 0) || (t.rent == t.rent)) &&
+          (decide (st'.remaining ≤ st.remaining) && decide (st'.remaining ≤ t.budget))))))
 
 theorem prepaidLeaseStepBody_eval (t : LeaseTerms) (st st' : LeaseState) (rq : Data) :
     Evaluates (prepaidLeaseStepBody.substitute (lawEnv (leaseStateToData t st).term (leaseStateToData t st').term rq.term))
@@ -721,8 +808,10 @@ theorem prepaidLeaseStepBody_eval (t : LeaseTerms) (st st' : LeaseState) (rq : D
   refine ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) ?_
   refine ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) ?_
   refine ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) ?_
-  exact ev_andT (ev_writeOnceNatT (ev_get_nat rfl) (ev_get_nat rfl))
-                (ev_writeOnceNatT (ev_get_nat rfl) (ev_get_nat rfl))
+  refine ev_andT (ev_writeOnceNatT (ev_get_nat rfl) (ev_get_nat rfl)) ?_
+  refine ev_andT (ev_writeOnceNatT (ev_get_nat rfl) (ev_get_nat rfl)) ?_
+  exact ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
+                (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
 
 theorem legStatus_in_range (s : LegStatus) :
     ([0, 1, 2] : List Int).contains (Int.ofNat s.toNat) = true := by
@@ -731,6 +820,39 @@ theorem legStatus_in_range (s : LegStatus) :
 theorem legStatus_inRange012 (s : LegStatus) :
     (s.toNat == 0 || (s.toNat == 1 || s.toNat == 2)) = true := by
   cases s <;> decide
+
+theorem holds_escrowInvariant (st : EscrowState) :
+    Holds escrowInvariant (escrowStateToData st) := by
+  unfold Holds escrowInvariant
+  refine evaluates_step (.beta _ (escrowStateToData st).term) ?_
+  unfold instantiate
+  simp only [subst_andT, subst_ifBool, subst_eqNat, subst_natT, subst_trueT, subst_falseT,
+    subst_get, subst_bound, inRange012T]
+  have hev : Evaluates
+      (andT (inRange012T (.get (escrowStateToData st).term "statusA"))
+            (inRange012T (.get (escrowStateToData st).term "statusB")))
+      (.boolean (((st.status .A).toNat == 0 || ((st.status .A).toNat == 1 || (st.status .A).toNat == 2)) &&
+                 ((st.status .B).toNat == 0 || ((st.status .B).toNat == 1 || (st.status .B).toNat == 2)))) :=
+    ev_andT (ev_inRange012T (ev_get_nat rfl)) (ev_inRange012T (ev_get_nat rfl))
+  rw [legStatus_inRange012 (st.status .A), legStatus_inRange012 (st.status .B), Bool.and_self] at hev
+  exact hev
+
+theorem holds_prepaidLeaseInvariant (t : LeaseTerms) (st : LeaseState)
+    (hdrawn : st.drawn ≤ t.budget) (hrem : st.remaining ≤ t.budget) :
+    Holds prepaidLeaseInvariant (leaseStateToData t st) := by
+  unfold Holds prepaidLeaseInvariant
+  refine evaluates_step (.beta _ (leaseStateToData t st).term) ?_
+  unfold instantiate
+  simp only [subst_andT, subst_leNat, subst_get, subst_bound]
+  have h1 : decide (st.drawn ≤ t.budget) = true := decide_eq_true hdrawn
+  have h2 : decide (st.remaining ≤ t.budget) = true := decide_eq_true hrem
+  have hev : Evaluates
+      (andT (leNat (.get (leaseStateToData t st).term "drawn") (.get (leaseStateToData t st).term "budget"))
+            (leNat (.get (leaseStateToData t st).term "remaining") (.get (leaseStateToData t st).term "budget")))
+      (.boolean (decide (st.drawn ≤ t.budget) && decide (st.remaining ≤ t.budget))) :=
+    ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
+  rw [h1, h2, Bool.and_self] at hev
+  exact hev
 
 theorem escrowSettledTag_eq_zero_of_not_consumed {st : EscrowState} {s : Side}
     (h : st.status s ≠ .consumed) : escrowSettledTag st = 0 := by
@@ -778,16 +900,33 @@ theorem escrowOp_admitted_by_contract (facts : Facts) {st st' : EscrowState}
         exact escrowSettledTag_eq_zero_of_not_consumed (by rw [hA]; decide)
     | reclaim s hdep =>
         exact escrowSettledTag_eq_zero_of_not_consumed (by rw [hdep]; decide)
+  have hpaidA : decide (st.paid .A ≤ st'.paid .A) = true := by
+    cases hop with
+    | deposit _ _ _ => exact decide_eq_true (Nat.le_refl _)
+    | settle _ _ => exact decide_eq_true (Nat.le_add_right _ _)
+    | reclaim s _ =>
+      apply decide_eq_true
+      cases s <;> dsimp [upd] <;> omega
+  have hpaidB : decide (st.paid .B ≤ st'.paid .B) = true := by
+    cases hop with
+    | deposit _ _ _ => exact decide_eq_true (Nat.le_refl _)
+    | settle _ _ => exact decide_eq_true (Nat.le_add_right _ _)
+    | reclaim s _ =>
+      apply decide_eq_true
+      cases s <;> dsimp [upd] <;> omega
   have hle : decide (escrowSettledTag st ≤ escrowSettledTag st') = true :=
     decide_eq_true (by rw [hzero]; omega)
   have hv : escrowVerdictBool st st' = true := by
-    simp only [escrowVerdictBool, hle, legStatus_inRange012, Bool.and_self]
+    simp only [escrowVerdictBool, hle, legStatus_inRange012, hpaidA, hpaidB, Bool.and_self]
   have hstep : Admits escrowCellContract.stepRel (escrowStateToData st) (escrowStateToData st')
       (reqOf ag pr nb vu writeO facts) :=
     (verdictOfBool_iff (escrowStepBody_eval st st' _)).1.2 hv
   have hinv : Holds escrowCellContract.invariant (escrowStateToData st') :=
-    holds_cellTopInv _
-  exact ⟨hstep, hstep, hinv⟩
+    holds_escrowInvariant st'
+  have hlaw : Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st')
+      (reqOf ag pr nb vu writeO facts) :=
+    guardedLaw_admits_of_holds_and_step escrowInvariant_closed hinv hstep
+  exact ⟨hlaw, hstep, hinv⟩
 
 /-- Every valid `PrepaidLease` `advance` transition (under `DischargeOk` and budget conservation
     `st.remaining + st.drawn ≤ t.budget`) satisfies the non-trivial `prepaidLeaseLaw`. -/
@@ -845,14 +984,21 @@ theorem lease_advance_admitted_by_contract (facts : Facts) (t : LeaseTerms) (st 
     decide_eq_true (by dsimp [advance]; omega)
   have h3 : decide ((advance t st).drawn ≤ t.budget) = true :=
     decide_eq_true (by dsimp [advance]; omega)
+  have h4 : decide ((advance t st).remaining ≤ st.remaining) = true :=
+    decide_eq_true (by dsimp [advance]; omega)
+  have h5 : decide ((advance t st).remaining ≤ t.budget) = true :=
+    decide_eq_true (by dsimp [advance]; omega)
   have hv : prepaidLeaseVerdictBool t st (advance t st) = true := by
-    simp only [prepaidLeaseVerdictBool, h1, h2, h3, beq_self_eq_true, Bool.or_true, Bool.and_self]
+    simp only [prepaidLeaseVerdictBool, h1, h2, h3, h4, h5, beq_self_eq_true, Bool.or_true, Bool.and_self]
   have hstep : Admits prepaidLeaseCellContract.stepRel (leaseStateToData t st)
       (leaseStateToData t (advance t st)) (reqOf ag pr nb vu writeO facts) :=
     (verdictOfBool_iff (prepaidLeaseStepBody_eval t st (advance t st) _)).1.2 hv
   have hinv : Holds prepaidLeaseCellContract.invariant (leaseStateToData t (advance t st)) :=
-    holds_cellTopInv _
-  exact ⟨hstep, hstep, hinv⟩
+    holds_prepaidLeaseInvariant t (advance t st) (by dsimp [advance]; omega) (by dsimp [advance]; omega)
+  have hlaw : Admits prepaidLeaseCellContract.law (leaseStateToData t st)
+      (leaseStateToData t (advance t st)) (reqOf ag pr nb vu writeO facts) :=
+    guardedLaw_admits_of_holds_and_step prepaidLeaseInvariant_closed hinv hstep
+  exact ⟨hlaw, hstep, hinv⟩
 
 /-- Constructive `CellContract` refusal of overdrawing `t.budget < st'.drawn` (`0 Classical.choice`). -/
 theorem lease_overdraw_contract_refused (facts : Facts) (t : LeaseTerms) (st st' : LeaseState)
@@ -870,7 +1016,8 @@ theorem lease_overdraw_contract_refused (facts : Facts) (t : LeaseTerms) (st st'
     (verdictOfBool_iff (prepaidLeaseStepBody_eval t st st' _)).2.2 hv
   have hnotadm : ¬ Admits prepaidLeaseCellContract.law (leaseStateToData t st) (leaseStateToData t st')
       (reqOf ag pr nb vu writeO facts) := by
-    intro ⟨w, hw⟩
+    intro hadm
+    obtain ⟨w, hw⟩ := guardedLaw_admits_imp_stepRel prepaidLeaseInvariant_closed hadm
     have heq := evaluates_unique href hw
     injection heq with hlbl _
     exact absurd hlbl (by decide)
@@ -911,7 +1058,8 @@ theorem lease_rollback_contract_refused (facts : Facts) (t : LeaseTerms) (st st'
     (verdictOfBool_iff (prepaidLeaseStepBody_eval t st st' _)).2.2 hv
   have hnotadm : ¬ Admits prepaidLeaseCellContract.law (leaseStateToData t st) (leaseStateToData t st')
       (reqOf ag pr nb vu writeO facts) := by
-    intro ⟨w, hw⟩
+    intro hadm
+    obtain ⟨w, hw⟩ := guardedLaw_admits_imp_stepRel prepaidLeaseInvariant_closed hadm
     have heq := evaluates_unique href hw
     injection heq with hlbl _
     exact absurd hlbl (by decide)
@@ -951,7 +1099,8 @@ theorem escrow_rollback_contract_refused (facts : Facts) (st st' : EscrowState)
     (verdictOfBool_iff (escrowStepBody_eval st st' _)).2.2 hv
   have hnotadm : ¬ Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st')
       (reqOf ag pr nb vu writeO facts) := by
-    intro ⟨w, hw⟩
+    intro hadm
+    obtain ⟨w, hw⟩ := guardedLaw_admits_imp_stepRel escrowInvariant_closed hadm
     have heq := evaluates_unique href hw
     injection heq with hlbl _
     exact absurd hlbl (by decide)

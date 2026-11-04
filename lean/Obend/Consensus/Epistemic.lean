@@ -339,14 +339,42 @@ structure ClearingCert where
 def clearingCertDigest (c : ClearingCert) : ByteArray :=
   cshake256Kernel (ByteArray.mk #[0x44, 0x52, 0x45, 0x58]) c.turnDigest
 
+/-- Cleared matched volume at `c.cert.price`: `min(demand(p), supply(p))` across `q.orders`. -/
+def clearedMatchedVolume (q : ClearingQuery) (c : ClearingCert) : Nat :=
+  let p := c.cert.price
+  if p == 0 then 0
+  else
+    let demand :=
+      (q.orders.filter (fun o => o.side == .bid && o.qty > 0 && p * o.qty ≤ o.total)).foldl
+        (fun acc o => acc + o.qty) 0
+    let supply :=
+      (q.orders.filter (fun o => o.side == .ask && o.qty > 0 && o.total ≤ p * o.qty)).foldl
+        (fun acc o => acc + o.qty) 0
+    min demand supply
+
+/-- Non-negative primal-dual duality gap `max(0, dualCap - objVol)` for `(q, c)`. -/
+def computeDualityGap (q : ClearingQuery) (c : ClearingCert) : Nat :=
+  let objVol := Obend.Judge.finSum q.orders.length (fun i => (q.orders.get i).fill q.market q.transfers)
+  let dualCap := Obend.Judge.finSum q.orders.length (fun i =>
+    let cap := if (q.orders.get i).crosses c.cert.price then ((q.orders.get i).qty : Int) else 0
+    let s := c.cert.slacks.getD i.val 0
+    cap * s)
+  Int.toNat (dualCap - objVol)
+
+/-- Boolean wrapper for `Obend.Judge.judge` on `(q, c.cert)`. -/
+def checkClearing (q : ClearingQuery) (c : ClearingCert) : Bool :=
+  match Obend.Judge.judge q.market q.orders q.transfers c.cert with
+  | .ok () => (0 < c.cert.price) && (c.cert.price ≤ 1000000000)
+  | .error _ => false
+
 /-- VerifiableRace instance for parallel LP clearing solvers racing on an order book. -/
 instance : VerifiableRace ClearingQuery ClearingCert where
-  isValid _ c :=
-    -- Check positive price and upper bound
-    (0 < c.cert.price) && (c.cert.price ≤ 1000000000)
+  isValid q c := checkClearing q c
   cost q c :=
-    -- Cost is duality gap epsilon plus potential divergence
-    q.market.epsilon + (Int.natAbs (c.cert.potentials.1 - c.cert.potentials.2))
+    -- Rank primarily by negated cleared volume, secondarily by duality gap, then potential spread
+    let volPenalty := (1000000 - min 1000000 (clearedMatchedVolume q c)) * 1000000
+    let gapPenalty := (computeDualityGap q c) * 1000
+    volPenalty + gapPenalty + q.market.epsilon + Int.natAbs (c.cert.potentials.1 - c.cert.potentials.2)
   digest c := clearingCertDigest c
 
 end DrEXRace
@@ -361,18 +389,32 @@ open Obend.Analysis
 structure IntervalCertWrapper where
   cert : IntervalCert
   boundDigest : ByteArray
+  refinedBound : Option Interval := none
 
 def intervalCertDigest (c : IntervalCertWrapper) : ByteArray :=
   cshake256Kernel (ByteArray.mk #[0x49, 0x4E, 0x54, 0x56]) c.boundDigest
 
 instance : VerifiableRace IntervalQuery IntervalCertWrapper where
   isValid q c :=
-    match intervalCheck 100 q c.cert with
-    | .ok => true
-    | _ => false
-  cost q _ :=
-    -- Cost is claimed bound width: tighter bounds achieve strictly lower cost
-    (q.claimedBound.hi - q.claimedBound.lo).num.natAbs
+    let baseOk :=
+      match intervalCheck 100 q c.cert with
+      | .ok => true
+      | _ => false
+    match c.refinedBound with
+    | none => baseOk
+    | some refIv =>
+      baseOk &&
+      match evalInterval q.env q.expr with
+      | some comp =>
+        decide (q.claimedBound.lo ≤ refIv.lo ∧ refIv.lo ≤ comp.lo ∧
+                comp.hi ≤ refIv.hi ∧ refIv.hi ≤ q.claimedBound.hi)
+      | none => false
+  cost q c :=
+    -- Cost is the certificate's refined interval width (or evaluated enclosure width): tighter bounds achieve strictly lower cost
+    let iv := match c.refinedBound with
+      | some refIv => refIv
+      | none => (evalInterval q.env q.expr).getD q.claimedBound
+    (iv.hi - iv.lo).num.natAbs
   digest c := intervalCertDigest c
 
 end IntervalRace

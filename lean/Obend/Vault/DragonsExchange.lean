@@ -157,6 +157,42 @@ def settleRing (balances : List Int) (creditLimits : List Int)
     let legs := mkClosedRingLegs ringParticipants cycleFlow
     some (applyCreditLegs balances legs)
 
+/-- Find and decrement a bilateral obligation matching `(leg.debtor, leg.creditor)` with `ob.amount ≥ leg.amount`. -/
+def decrementObligationLeg : List CreditLeg → CreditLeg → Option (List CreditLeg)
+  | [], _ => none
+  | ob :: rest, leg =>
+    if ob.debtor == leg.debtor && ob.creditor == leg.creditor && decide (leg.amount ≤ ob.amount) then
+      some ({ ob with amount := ob.amount - leg.amount } :: rest)
+    else
+      match decrementObligationLeg rest leg with
+      | some rest' => some (ob :: rest')
+      | none => none
+
+/-- Verify and decrement a list of cycle legs against existing bilateral `obligations`. -/
+def decrementObligationLegs (obligations : List CreditLeg) : List CreditLeg → Option (List CreditLeg)
+  | [] => some obligations
+  | leg :: rest =>
+    match decrementObligationLeg obligations leg with
+    | some obligations' => decrementObligationLegs obligations' rest
+    | none => none
+
+/-- Settle a closed cycle of debt of size `cycleFlow` across distinct `ringParticipants`,
+    additionally verifying (when `obligations` is non-empty) that every cycle leg is backed by an
+    existing bilateral obligation with `amount ≥ cycleFlow` and decrementing those obligation edges. -/
+def settleRingWithObligations (balances : List Int) (creditLimits : List Int)
+    (cycleFlow : Nat) (ringParticipants : List Nat)
+    (obligations : List CreditLeg := []) : Option (List Int × List CreditLeg) :=
+  match settleRing balances creditLimits cycleFlow ringParticipants with
+  | none => none
+  | some postBalances =>
+    if obligations.isEmpty then
+      some (postBalances, [])
+    else
+      let legs := mkClosedRingLegs ringParticipants cycleFlow
+      match decrementObligationLegs obligations legs with
+      | some postObligations => some (postBalances, postObligations)
+      | none => none
+
 theorem settleRing_eq_some_balances {balances creditLimits : List Int}
     {cycleFlow : Nat} {ringParticipants : List Nat} {postBalances : List Int}
     (h : settleRing balances creditLimits cycleFlow ringParticipants = some postBalances) :
@@ -177,11 +213,36 @@ theorem settleRing_eq_some_balances {balances creditLimits : List Int}
             injection h with h_eq
             exact h_eq.symm
 
+theorem settleRingWithObligations_eq_some_balances {balances creditLimits : List Int}
+    {cycleFlow : Nat} {ringParticipants : List Nat} {obligations : List CreditLeg}
+    {postBalances : List Int} {postObligations : List CreditLeg}
+    (h : settleRingWithObligations balances creditLimits cycleFlow ringParticipants obligations =
+      some (postBalances, postObligations)) :
+    postBalances = balances := by
+  unfold settleRingWithObligations at h
+  cases h_ring : settleRing balances creditLimits cycleFlow ringParticipants with
+  | none => rw [h_ring] at h; cases h
+  | some pb =>
+    rw [h_ring] at h
+    dsimp only at h
+    have h_pb := settleRing_eq_some_balances h_ring
+    split at h
+    · injection h with h_pair
+      injection h_pair with h_bal _
+      exact h_bal.symm.trans h_pb
+    · cases h_dec : decrementObligationLegs obligations (mkClosedRingLegs ringParticipants cycleFlow) with
+      | none => rw [h_dec] at h; cases h
+      | some po =>
+        rw [h_dec] at h
+        injection h with h_pair
+        injection h_pair with h_bal _
+        exact h_bal.symm.trans h_pb
+
 /-- **Multilateral Ring Netting Conservation (`settleRing_conserves_net_worth`)**:
     Settling a closed ring of flow `cycleFlow` across `ringParticipants`:
     1. Leaves every participant's net balance (`postBalances.getD i 0 = balances.getD i 0`) unchanged,
     2. Leaves every participant's `assets - liabilities` net position strictly unchanged
-       (`netPosition (assets - cycleFlow) (liabilities - cycleFlow) = netPosition assets liabilities`),
+      (`netPosition (assets - cycleFlow) (liabilities - cycleFlow) = netPosition assets liabilities`),
     3. Reduces gross bilateral debt by `ringParticipants.length * cycleFlow`. -/
 theorem settleRing_conserves_net_worth
     {balances creditLimits : List Int} {cycleFlow : Nat} {ringParticipants : List Nat}
@@ -242,6 +303,7 @@ structure DragonsExchangeState where
   balances : List Int
   creditLimits : List Int
   grossExposure : Nat
+  obligations : List CreditLeg := []
   deriving DecidableEq, Repr
 
 /-- Epoch transition input combining `dclutch` complete-set / KKT clearing with `settleRing`. -/
@@ -261,7 +323,8 @@ def DragonsExchangeInvariant (s : DragonsExchangeState) : Prop :=
 /-- Step a `DragonsExchangeState` across one epoch:
     1. Verifies the `dclutch` KKT `JointClearingCert` (`jointClearingValid`),
     2. Applies the complete-set mint/merge delta `input.clearingCert.sets` to `s.hoardState`,
-    3. Executes multilateral credit-ring netting `settleRing` across `input.ringParticipants`,
+    3. Executes multilateral credit-ring netting `settleRingWithObligations` across `input.ringParticipants`
+       (checking and decrementing bilateral `obligations` when non-empty),
     4. Reduces `grossExposure` by `ringParticipants.length * cycleFlow`. -/
 def stepDragonsExchangeEpoch (s : DragonsExchangeState) (input : DragonsExchangeEpochInput) :
     Option DragonsExchangeState :=
@@ -276,15 +339,16 @@ def stepDragonsExchangeEpoch (s : DragonsExchangeState) (input : DragonsExchange
     if !hoardCollateralValid nextHoard then
       none
     else
-      match settleRing s.balances s.creditLimits input.cycleFlow input.ringParticipants with
+      match settleRingWithObligations s.balances s.creditLimits input.cycleFlow input.ringParticipants s.obligations with
       | none => none
-      | some nextBalances =>
+      | some (nextBalances, nextObligations) =>
         some {
           epoch := s.epoch + 1
           hoardState := nextHoard
           balances := nextBalances
           creditLimits := s.creditLimits
           grossExposure := grossDebtAfterRing s.grossExposure input.ringParticipants input.cycleFlow
+          obligations := nextObligations
         }
 
 /-- **Dragon's Exchange Epoch Preservation Theorem (`stepDragonsExchangeEpoch_preserves_invariant`)**:
@@ -305,20 +369,22 @@ theorem stepDragonsExchangeEpoch_preserves_invariant
       · dsimp only at h_step
         split at h_step
         · cases h_step
-        · cases h_ring : settleRing s.balances s.creditLimits input.cycleFlow input.ringParticipants with
+        · cases h_ring : settleRingWithObligations s.balances s.creditLimits input.cycleFlow input.ringParticipants s.obligations with
           | none =>
             rw [h_ring] at h_step
             cases h_step
-          | some nextBalances =>
-            rw [h_ring] at h_step
-            injection h_step with h_eq
-            subst h_eq
-            have h_bal := settleRing_eq_some_balances h_ring
-            have h_hoard : HoardCollateralInvariant (applyCompleteSetDelta s.hoardState input.clearingCert.sets) :=
-              applyCompleteSetDelta_preserves_invariant s.hoardState input.clearingCert.sets h_inv.1
-            refine ⟨⟨h_hoard, ?_⟩, h_bal⟩
-            rw [h_bal]
-            exact h_inv.2
+          | some pair =>
+            cases pair with
+            | mk nextBalances nextObligations =>
+              rw [h_ring] at h_step
+              injection h_step with h_eq
+              subst h_eq
+              have h_bal := settleRingWithObligations_eq_some_balances h_ring
+              have h_hoard : HoardCollateralInvariant (applyCompleteSetDelta s.hoardState input.clearingCert.sets) :=
+                applyCompleteSetDelta_preserves_invariant s.hoardState input.clearingCert.sets h_inv.1
+              refine ⟨⟨h_hoard, ?_⟩, h_bal⟩
+              rw [h_bal]
+              exact h_inv.2
 
 /-! ## 3. `Core.Data` Roundtrip Codecs -/
 
@@ -404,6 +470,27 @@ def CreditLeg.ofData? : Data → Option CreditLeg
   cases leg
   rfl
 
+/-- Encode a `List CreditLeg` as `Core.Data`. -/
+def creditLegListToData : List CreditLeg → Data
+  | [] => .variant "nil" (.record [])
+  | leg :: rest => .variant "cons" (.record [("head", leg.toData), ("tail", creditLegListToData rest)])
+
+/-- Decode a `List CreditLeg` from `Core.Data`. -/
+def creditLegListOfData? : Data → Option (List CreditLeg)
+  | .variant "nil" (.record []) => some []
+  | .variant "cons" (.record [("head", headData), ("tail", tailData)]) =>
+    match CreditLeg.ofData? headData, creditLegListOfData? tailData with
+    | some leg, some rest => some (leg :: rest)
+    | _, _ => none
+  | _ => none
+
+@[simp] theorem creditLegListOfData?_creditLegListToData (legs : List CreditLeg) :
+    creditLegListOfData? (creditLegListToData legs) = some legs := by
+  induction legs with
+  | nil => rfl
+  | cons leg rest ih =>
+    simp [creditLegListToData, creditLegListOfData?, ih]
+
 /-- Encode a `DragonsExchangeState` as `Core.Data`. -/
 def DragonsExchangeState.toData (s : DragonsExchangeState) : Data :=
   .record [
@@ -413,7 +500,8 @@ def DragonsExchangeState.toData (s : DragonsExchangeState) : Data :=
     ("supply", natListToData s.hoardState.supply),
     ("balances", intListToData s.balances),
     ("creditLimits", intListToData s.creditLimits),
-    ("grossExposure", .natural s.grossExposure)
+    ("grossExposure", .natural s.grossExposure),
+    ("obligations", creditLegListToData s.obligations)
   ]
 
 /-- Decode a `DragonsExchangeState` from `Core.Data`. -/
@@ -425,25 +513,27 @@ def DragonsExchangeState.ofData? : Data → Option DragonsExchangeState
       ("supply", supData),
       ("balances", balData),
       ("creditLimits", limData),
-      ("grossExposure", .natural ge)
+      ("grossExposure", .natural ge),
+      ("obligations", obData)
     ] =>
-    match natListOfData? supData, intListOfData? balData, intListOfData? limData with
-    | some sup, some bal, some lim =>
+    match natListOfData? supData, intListOfData? balData, intListOfData? limData, creditLegListOfData? obData with
+    | some sup, some bal, some lim, some obs =>
       some {
         epoch := ep
         hoardState := { outcomes := outc, hoard := hrd, supply := sup }
         balances := bal
         creditLimits := lim
         grossExposure := ge
+        obligations := obs
       }
-    | _, _, _ => none
+    | _, _, _, _ => none
   | _ => none
 
 /-- **`Core.Data` Roundtrip Theorem (`DragonsExchangeState.ofData?_toData`)**. -/
 @[simp] theorem DragonsExchangeState.ofData?_toData (s : DragonsExchangeState) :
     DragonsExchangeState.ofData? s.toData = some s := by
   cases s with
-  | mk ep hs bal lim ge =>
+  | mk ep hs bal lim ge obs =>
     cases hs with
     | mk outc hrd sup =>
       simp [DragonsExchangeState.toData, DragonsExchangeState.ofData?]
