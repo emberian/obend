@@ -1,20 +1,21 @@
-VERILATOR ?= /opt/homebrew/bin/verilator
+VERILATOR ?= $(shell if [ -x /opt/homebrew/bin/verilator ]; then echo /opt/homebrew/bin/verilator; else echo verilator; fi)
 TOP_MODULE := silicon_elab_top
 SV_SRC := silicon_elab_top.sv
 CPP_SRC := sim_main.cpp
 BIN := obj_dir/V$(TOP_MODULE)
 VCD := silicon_elab_wave.vcd
+GOLDEN := silicon_elab_golden.txt
 
 .PHONY: all run clean
 
 all: $(BIN)
 
 $(BIN): $(SV_SRC) $(CPP_SRC)
-	$(VERILATOR) -Wall -Wno-DECLFILENAME --cc --exe --build --trace \
+	$(VERILATOR) -Wall -Wno-DECLFILENAME --cc --exe --build --trace -j 0 \
 		--top-module $(TOP_MODULE) $(SV_SRC) $(CPP_SRC)
 
 run: $(BIN)
-	./$(BIN) $(VCD)
+	./$(BIN) $(VCD) $(GOLDEN)
 
 clean:
 	rm -rf obj_dir $(VCD)

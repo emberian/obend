@@ -1,6 +1,8 @@
-// Emitted & Verified SystemVerilog for Flagship App #2:
-// Closed-Loop 20 kHz FOC Motor Drive & 6-Level SiC FCML Inverter Controller
-// Corresponds to Obend.Apps.FocHil.focHilSequentialRtlModule + FocDriveTop.obend
+// HAND-WRITTEN reference RTL (2026-11-04). This file is NOT produced by Obend.Hardware.HDL.emitModuleSV:
+// the emitter cannot express signed or narrower-than-64-bit ports, localparams, functions or division.
+// The Lean module of the same name (Obend.Apps.FocHil.focHilSequentialRtlModule) is a separate, smaller model (a six-input, five-register 64-bit toy with Ki*65 integrators and no feed-forward);
+// no theorem in the tree relates it to this file. The Verilator testbench beside it exercises this file
+// against a C++ reference, not against Lean. See review/EXPERT-fpga-silicon-20261103.md §3.1.
 `timescale 1ns / 1ps
 
 module foc_drive_top (

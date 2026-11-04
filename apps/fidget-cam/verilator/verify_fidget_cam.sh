@@ -4,8 +4,24 @@
 # 2. Compiles the `emitModuleSV`-generated pruned SSA F-Rep voxelizer & 5-axis CAM RTL with Verilator,
 # 3. Evaluates the recursive 3D octree in hardware, emits `build/impeller_part.stl` + `build/impeller_5axis.ngc`
 #    + `fidget_cam_trace.vcd`, and verifies full-surface no-gouge + adversarial gouge detection,
-# 4. Verifies Z3 QF_BV LEC (`fidget_cam_lec.smt2`) returns `unsat`.
+# 4. Verifies Z3 property sheet (`fidget_cam_lec.smt2`) returns `unsat`.
 set -euo pipefail
+
+# --- byte equality with the Lean emitter (2026-11-04): the committed .sv must be exactly what
+# --- `obend-emit-sv fidget` writes from the Lean RtlModule. Hand edits fail here.
+EMIT_SV="${OBEND_EMIT_SV:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/lean/.lake/build/bin/obend-emit-sv}"
+if [[ -x "${EMIT_SV}" ]]; then
+  "${EMIT_SV}" fidget --out /tmp/obend_emit_fidget_impeller_voxel_cam.sv >/dev/null
+  if ! cmp -s /tmp/obend_emit_fidget_impeller_voxel_cam.sv "$(dirname "${BASH_SOURCE[0]}")/fidget_impeller_voxel_cam.sv"; then
+    echo "[FAIL] fidget_impeller_voxel_cam.sv is not the output of obend-emit-sv fidget; regenerate it, do not hand-edit" >&2
+    diff /tmp/obend_emit_fidget_impeller_voxel_cam.sv "$(dirname "${BASH_SOURCE[0]}")/fidget_impeller_voxel_cam.sv" | head -20 >&2 || true
+    exit 1
+  fi
+  echo "[OK] fidget_impeller_voxel_cam.sv is byte-identical to obend-emit-sv fidget"
+else
+  echo "[FAIL] obend-emit-sv not built (lake build obend-emit-sv); cannot prove fidget_impeller_voxel_cam.sv is emitter output" >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -48,12 +64,12 @@ test -s "${APP_DIR}/build/impeller_part.stl"
 test -s "${APP_DIR}/build/impeller_5axis.ngc"
 test -s "${SCRIPT_DIR}/fidget_cam_trace.vcd"
 
-echo "[3/3] Running Z3 QF_BV LEC on fidget_cam_lec.smt2..."
+echo "[3/3] Running Z3 property sheet on fidget_cam_lec.smt2..."
 LEC_OUT="$("${Z3_BIN}" -smt2 "${SCRIPT_DIR}/fidget_cam_lec.smt2")"
-echo "Z3 LEC result: ${LEC_OUT}"
+echo "Z3 property sheet result: ${LEC_OUT}"
 if [[ "${LEC_OUT}" != "unsat" ]]; then
-  echo "ERROR: Expected 'unsat' from Z3 LEC, got '${LEC_OUT}'" >&2
+  echo "ERROR: Expected 'unsat' from Z3 property sheet, got '${LEC_OUT}'" >&2
   exit 1
 fi
 
-echo "[PASS] Flagship App #6 (apps/fidget-cam) .obend + Verilator + .stl + 5-axis G-code + Z3 LEC verified!"
+echo "[PASS] Flagship App #6 (apps/fidget-cam) .obend + Verilator + .stl + 5-axis G-code + Z3 property sheet verified!"

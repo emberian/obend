@@ -1,10 +1,8 @@
-// Emitted & Verified SystemVerilog for Flagship App #3:
-// All-Digital 40m (7.074 MHz) Tayloe IQ FT8 SDR Transceiver
-// Corresponds to Obend.Apps.SdrFt8.sdrFt8SequentialRtlModule + SdrFt8Top.obend
-// Closed-loop datapath:
-//   Tayloe I/Q Combiner -> 3-Stage Hogenauer CIC + Folded Symmetric FIR
-//   -> 4-Stage 4-Quadrant Vectoring CORDIC (atan2 + hypot)
-//   -> Stateful always_ff \Delta\phi[m] = \phi[m] - \phi[m-1] FT8 8-FSK Discriminator
+// HAND-WRITTEN reference RTL (2026-11-04). This file is NOT produced by Obend.Hardware.HDL.emitModuleSV:
+// the emitter cannot express signed or narrower-than-64-bit ports, localparams, functions or division.
+// The Lean module of the same name (Obend.Apps.SdrFt8.sdrFt8SequentialRtlModule) is a separate, smaller model (a six-register 64-bit toy);
+// no theorem in the tree relates it to this file. The Verilator testbench beside it exercises this file
+// against a C++ reference, not against Lean. See review/EXPERT-fpga-silicon-20261103.md §3.1.
 `timescale 1ns / 1ps
 
 module sdr_ft8_top (

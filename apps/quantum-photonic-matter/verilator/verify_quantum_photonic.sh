@@ -3,6 +3,22 @@
 # End-to-end obend CLI package check/run + Verilator cycle-accurate simulation + Z3 `QF_BV` LEC.
 set -euo pipefail
 
+# --- byte equality with the Lean emitter (2026-11-04): the committed .sv must be exactly what
+# --- `obend-emit-sv quantum` writes from the Lean RtlModule. Hand edits fail here.
+EMIT_SV="${OBEND_EMIT_SV:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/lean/.lake/build/bin/obend-emit-sv}"
+if [[ -x "${EMIT_SV}" ]]; then
+  "${EMIT_SV}" quantum --out /tmp/obend_emit_quantum_photonic_coproc_top.sv >/dev/null
+  if ! cmp -s /tmp/obend_emit_quantum_photonic_coproc_top.sv "$(dirname "${BASH_SOURCE[0]}")/quantum_photonic_coproc_top.sv"; then
+    echo "[FAIL] quantum_photonic_coproc_top.sv is not the output of obend-emit-sv quantum; regenerate it, do not hand-edit" >&2
+    diff /tmp/obend_emit_quantum_photonic_coproc_top.sv "$(dirname "${BASH_SOURCE[0]}")/quantum_photonic_coproc_top.sv" | head -20 >&2 || true
+    exit 1
+  fi
+  echo "[OK] quantum_photonic_coproc_top.sv is byte-identical to obend-emit-sv quantum"
+else
+  echo "[FAIL] obend-emit-sv not built (lake build obend-emit-sv); cannot prove quantum_photonic_coproc_top.sv is emitter output" >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$SCRIPT_DIR"
@@ -42,10 +58,10 @@ echo "Verified VCD trace: quantum_photonic_trace.vcd ($(wc -c < quantum_photonic
 
 echo "=== [3/3] Proving 64-bit QF_BV RTL/Spec + Crosstalk + 3-Stage Braiding Equivalence in Z3 ==="
 Z3_OUT="$("$Z3" quantum_photonic_lec.smt2)"
-echo "Z3 LEC result: $Z3_OUT"
+echo "Z3 property sheet result: $Z3_OUT"
 if [[ "$Z3_OUT" != "unsat" ]]; then
-  echo "ERROR: Z3 LEC failed (expected unsat, got '$Z3_OUT')" >&2
+  echo "ERROR: Z3 property sheet failed (expected unsat, got '$Z3_OUT')" >&2
   exit 1
 fi
 
-echo "=== SUCCESS: Flagship App #8 (quantum-photonic-matter) obend CLI + Verilator + Z3 LEC verified ==="
+echo "=== SUCCESS: Flagship App #8 (quantum-photonic-matter) obend CLI + Verilator + Z3 property sheet verified ==="

@@ -1,3 +1,8 @@
+// HAND-WRITTEN reference RTL (2026-11-04). This file is NOT produced by Obend.Hardware.HDL.emitModuleSV:
+// the emitter cannot express signed or narrower-than-64-bit ports, localparams, functions or division.
+// The Lean module of the same name (Obend.Apps.ZkNtt.zkNttPipelinedRtlModule / zkSumcheckRoundRtlModule) is a separate, smaller model (64-bit .mul datapaths that never reduce mod the Goldilocks prime);
+// no theorem in the tree relates it to this file. The Verilator testbench beside it exercises this file
+// against a C++ reference, not against Lean. See review/EXPERT-fpga-silicon-20261103.md §3.1.
 module zk_ntt_coproc (
   input  logic        clk,
   input  logic        rst,
@@ -27,14 +32,24 @@ module zk_ntt_coproc (
   output logic [63:0] sc_round_claim_out,
   output logic [63:0] sc_folded_out
 );
-  localparam logic [63:0] GOLDILOCKS_P   = 64'hFFFFFFFF00000001;
-  localparam logic [63:0] GOLDILOCKS_EPS = 64'h00000000FFFFFFFF;
+  localparam logic [63:0] GOLDILOCKS_P = 64'hFFFFFFFF00000001;
 
-  // Goldilocks modular addition: (a + b) mod P
+  // Canonicalize any 64-bit word into [0, P - 1] (since 2^64 < 2*P, at most one subtraction suffices)
+  function automatic logic [63:0] gl_canon(input logic [63:0] x);
+    begin
+      gl_canon = (x >= GOLDILOCKS_P) ? (x - GOLDILOCKS_P) : x;
+    end
+  endfunction
+
+  // Canonical Goldilocks modular addition: (a + b) mod P in [0, P - 1] across all 64-bit inputs
   function automatic logic [63:0] gl_add(input logic [63:0] a, input logic [63:0] b);
+    logic [63:0] ca;
+    logic [63:0] cb;
     logic [64:0] s;
     begin
-      s = {1'b0, a} + {1'b0, b};
+      ca = gl_canon(a);
+      cb = gl_canon(b);
+      s  = {1'b0, ca} + {1'b0, cb};
       if (s >= {1'b0, GOLDILOCKS_P})
         gl_add = s[63:0] - GOLDILOCKS_P;
       else
@@ -42,33 +57,48 @@ module zk_ntt_coproc (
     end
   endfunction
 
-  // Goldilocks modular subtraction: (a - b) mod P
+  // Canonical Goldilocks modular subtraction: (a - b) mod P in [0, P - 1] across all 64-bit inputs
   function automatic logic [63:0] gl_sub(input logic [63:0] a, input logic [63:0] b);
+    logic [63:0] ca;
+    logic [63:0] cb;
     begin
-      if (a >= b)
-        gl_sub = a - b;
+      ca = gl_canon(a);
+      cb = gl_canon(b);
+      if (ca >= cb)
+        gl_sub = ca - cb;
       else
-        gl_sub = (a + GOLDILOCKS_P) - b;
+        gl_sub = GOLDILOCKS_P - (cb - ca);
     end
   endfunction
 
-  // Goldilocks 128-to-64 modular reduction using 2^64 == 2^32 - 1 (mod P) and 2^96 == -1 (mod P)
-  function automatic logic [63:0] gl_mul(input logic [63:0] a, input logic [63:0] b);
-    logic [127:0] prod;
-    logic [63:0]  lo;
-    logic [63:0]  hi_lo32;
-    logic [63:0]  hi_hi32;
-    logic [63:0]  term_mid;
-    logic [63:0]  t1;
+  // Goldilocks 128-to-64 shift/mask modular reduction using 2^64 == 2^32 - 1 (mod P) and 2^96 == -1 (mod P)
+  function automatic logic [63:0] gl_reduce128(input logic [63:0] lo_raw, input logic [63:0] hi_raw);
+    logic [63:0] lo;
+    logic [63:0] hi_lo32;
+    logic [63:0] hi_hi32;
+    logic [63:0] term_mid;
+    logic [63:0] t1;
     begin
-      prod     = a * b;
-      lo       = (prod[63:0] >= GOLDILOCKS_P) ? (prod[63:0] - GOLDILOCKS_P) : prod[63:0];
-      hi_lo32  = {32'd0, prod[95:64]};
-      hi_hi32  = {32'd0, prod[127:96]};
-      // hi_lo32 * (2^32 - 1) < 2^64 - 2^32 < P
-      term_mid = (hi_lo32 << 32) - hi_lo32;
-      t1       = gl_add(lo, term_mid);
-      gl_mul   = gl_sub(t1, hi_hi32);
+      lo          = gl_canon(lo_raw);
+      hi_lo32     = {32'd0, hi_raw[31:0]};
+      hi_hi32     = {32'd0, hi_raw[63:32]};
+      // hi_lo32 * (2^32 - 1) == (hi_lo32 << 32) - hi_lo32 < 2^64 - 2^32 < P
+      term_mid    = (hi_lo32 << 32) - hi_lo32;
+      t1          = gl_add(lo, term_mid);
+      gl_reduce128 = gl_sub(t1, hi_hi32);
+    end
+  endfunction
+
+  // Canonical Goldilocks 64x64 modular multiplication: (a * b) mod P in [0, P - 1]
+  function automatic logic [63:0] gl_mul(input logic [63:0] a, input logic [63:0] b);
+    logic [63:0]  ca;
+    logic [63:0]  cb;
+    logic [127:0] prod;
+    begin
+      ca     = gl_canon(a);
+      cb     = gl_canon(b);
+      prod   = {64'd0, ca} * {64'd0, cb};
+      gl_mul = gl_reduce128(prod[63:0], prod[127:64]);
     end
   endfunction
 
@@ -126,14 +156,14 @@ module zk_ntt_coproc (
   logic [63:0] sc_g2_term, sc_diff, sc_folded_comb;
 
   always_comb begin
-    sc_g2_term        = gl_sub(gl_add(sc_f1_in, sc_f1_in), sc_f0_in);
-    sc_diff           = gl_sub(sc_f1_in, sc_f0_in);
-    sc_folded_comb    = gl_add(sc_f0_in, gl_mul(sc_r_in, sc_diff));
-    sc_g0_out         = acc_g0;
-    sc_g1_out         = acc_g1;
-    sc_g2_out         = acc_g2;
+    sc_g2_term         = gl_sub(gl_add(sc_f1_in, sc_f1_in), sc_f0_in);
+    sc_diff            = gl_sub(sc_f1_in, sc_f0_in);
+    sc_folded_comb     = gl_add(sc_f0_in, gl_mul(sc_r_in, sc_diff));
+    sc_g0_out          = acc_g0;
+    sc_g1_out          = acc_g1;
+    sc_g2_out          = acc_g2;
     sc_round_claim_out = gl_add(acc_g0, acc_g1);
-    sc_folded_out     = last_folded;
+    sc_folded_out      = last_folded;
   end
 
   always_ff @(posedge clk) begin
