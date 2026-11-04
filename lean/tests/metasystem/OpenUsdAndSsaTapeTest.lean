@@ -22,8 +22,7 @@ kernel mutation-killing probes, and `#print axioms` verification (`0 sorryAx`) a
    - `liverps_local_dominates_term`, `liverps_local_overrides_preceding_reference_eval`,
    - `XformOp3D`, `applyXformOpPoint`, `applyXformStackPoint`, `evalFRepAffine3DXform`,
      `xform_translate_inverse_exact`, `xform_rot90Z_fourfold_identity`, `evalFRepAffine3DXform_enclosesAt`,
-   - `computeShellWallThicknessUm`, `mkCertifiedUsdPhysicalState`,
-     `computeShellWallThicknessUm_nonneg`, `computeShellWallThicknessUm_lipschitz_lower_bound`.
+   - `kdAll`, `wallLeaf`, `checkWall_sound` (wall thickness over a whole cavity).
 2. `Obend.Hardware.GeometryCAM`:
    - `.csgDiff` right-branch pruning (`pruneFRepTape_sound`, `pruneFRepTape_size_le`, `csgDiff_right_branch_pruning_sound`),
    - Linear SSA register tape (`SsaTapeOp`, `evalSsaTape`, `pruneSsaTapeForBox`, `compactSsaTape`, `compactSsaTapeFull`),
@@ -176,43 +175,27 @@ theorem test_evalFRepAffine3DXform_enclosesAt
       (evalFRepPointXform ops x y z e) :=
   evalFRepAffine3DXform_enclosesAt ops ax ay az x y z ex ey ez hEx hEy hEz hx hy hz e
 
-/-- 2.3 Certified geometric shell wall thickness (`computeShellWallThicknessUm`) and `mkCertifiedUsdPhysicalState`. -/
+/-- 2.3 Wall thickness over the whole cavity (`GeometryCAM.checkWall_sound`): a radius-6 cavity in a
+radius-10 ball has an L∞ wall of 2 everywhere and not of 3 (the cavity point `(3, 3, 3)` grown by 3 reaches `(6, 6, 6)`, which
+is outside the ball). -/
 def testOuterHousingFRep : FRepExpr :=
-  .offset 10000 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
+  .offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
 
 def testInnerBoreFRep : FRepExpr :=
-  .offset 6400 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
+  .offset 36 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
 
-theorem test_certified_shell_wall_thickness_and_lifecycle_gate :
-    let wallUm := computeShellWallThicknessUm testOuterHousingFRep testInnerBoreFRep (80, 0, 0) 2
-    let st := mkCertifiedUsdPhysicalState 10 testOuterHousingFRep testInnerBoreFRep (80, 0, 0) 2 85000 120
-    wallUm = 1800 ∧
-    st.wallThicknessUm = 1800 ∧
-    checkPartLifecycleInvariant 1200 180000 st = true := by
+def testCavityBox : Box3D := { xIv := ⟨-6, 6⟩, yIv := ⟨-6, 6⟩, zIv := ⟨-6, 6⟩ }
+
+example :
+    kdAll (wallLeaf testOuterHousingFRep testInnerBoreFRep 2 2 2) 30 testCavityBox = true ∧
+    kdAll (wallLeaf testOuterHousingFRep testInnerBoreFRep 3 3 3) 30 testCavityBox = false := by
   decide +kernel
 
-theorem test_computeShellWallThicknessUm_lipschitz_lower_bound
-    (outer inner : FRepExpr) (px py pz L : Int)
-    (hL : 1 ≤ L)
-    (hOrder : evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner) :
-    computeShellWallThicknessUm outer inner (px, py, pz) L * L ≤
-      evalFRepPoint px py pz inner - evalFRepPoint px py pz outer :=
-  computeShellWallThicknessUm_lipschitz_lower_bound outer inner px py pz L hL hOrder
-
-theorem test_computeShellWallThicknessAffine3DUm_lipschitz_lower_bound
-    (ops : List XformOp3D) (outer inner : FRepExpr)
-    (ax ay az : AffineForm3D) (x y z ex ey ez lipschitzBound : Int)
-    (hEx : -1 ≤ ex ∧ ex ≤ 1) (hEy : -1 ≤ ey ∧ ey ≤ 1) (hEz : -1 ≤ ez ∧ ez ≤ 1)
-    (hx : ax.enclosesAt ex ey ez x)
-    (hy : ay.enclosesAt ex ey ez y)
-    (hz : az.enclosesAt ex ey ez z)
-    (hL : 1 ≤ lipschitzBound)
-    (hSep : (evalFRepAffine3DXform ops ax ay az outer).toInterval.hi ≤
-            (evalFRepAffine3DXform ops ax ay az inner).toInterval.lo) :
-    computeShellWallThicknessAffine3DUm ops outer inner ax ay az lipschitzBound * lipschitzBound ≤
-      evalFRepPointXform ops x y z inner - evalFRepPointXform ops x y z outer :=
-  computeShellWallThicknessAffine3DUm_lipschitz_lower_bound
-    ops outer inner ax ay az x y z ex ey ez lipschitzBound hEx hEy hEz hx hy hz hL hSep
+theorem test_checkWall_sound (px py pz qx qy qz : Int) (hp : testCavityBox.contains px py pz)
+    (hc : inSolid px py pz testInnerBoreFRep) (hq : WithinBox 2 2 2 px py pz qx qy qz)
+    (h : kdAll (wallLeaf testOuterHousingFRep testInnerBoreFRep 2 2 2) 30 testCavityBox = true) :
+    inSolid qx qy qz testOuterHousingFRep :=
+  checkWall_sound _ _ 2 2 2 30 _ h px py pz hp hc qx qy qz hq
 
 /-! ## 3. Pillar 3 Tests: `.csgDiff` Right-Branch Pruning, Linear SSA `SsaTapeOp` & Continuous-Time 5-Axis Swept-Volume CAM -/
 
@@ -226,7 +209,7 @@ def testCarvedBox : Box3D where
 def testStockExpr : FRepExpr := .add .varX (.const (-50))
 def testCarvingToolExpr : FRepExpr := .add .varY (.const (-10))
 
-theorem test_csgDiff_right_branch_prunes_stock :
+example :
     let e := FRepExpr.csgDiff testStockExpr testCarvingToolExpr
     let pruned := pruneFRepTape testCarvedBox e
     ivMaxChoice (evalFRepInterval testCarvedBox testStockExpr)
@@ -322,7 +305,7 @@ def testPartBox : Box3D where
   yIv := { lo := -2, hi := 2 }
   zIv := { lo := -2, hi := 2 }
 
-theorem test_concrete_5axis_swept_volume_safe_at_part_origin :
+example :
     let swept := synthesizeSweptVolume testBallEndMill testWaypoints 15
     checkVoxelNoGouge testPartBox swept = true ∧
     0 < evalFRepPoint 0 0 0 (translateFRep 20 5 0 testBallEndMill) := by
@@ -455,8 +438,7 @@ def compactSsaTapeTruncateOnly (tape : List SsaTapeOp) (rootReg : Nat) : List Ss
 #print axioms Obend.Hardware.OpenUSD.liverps_stronger_arc_dominates_term
 #print axioms Obend.Hardware.OpenUSD.liverps_sublayer_tiebreak_dominates_term
 #print axioms Obend.Hardware.OpenUSD.evalFRepAffine3DXform_enclosesAt
-#print axioms Obend.Hardware.OpenUSD.computeShellWallThicknessUm_lipschitz_lower_bound
-#print axioms Obend.Hardware.OpenUSD.computeShellWallThicknessAffine3DUm_lipschitz_lower_bound
+#print axioms Obend.Hardware.GeometryCAM.checkWall_sound
 #print axioms Obend.Hardware.GeometryCAM.pruneFRepTape_sound
 #print axioms Obend.Hardware.GeometryCAM.csgDiff_right_branch_pruning_sound
 #print axioms Obend.Hardware.GeometryCAM.compactSsaTape_length_le

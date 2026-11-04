@@ -37,7 +37,12 @@ in-silico evolutionary physical design** within `Obend.Hardware`:
 5. **In-Silico Evolutionary Physical Design Search (`DesignCandidate`, `filterVerifiedDesigns`)**:
    - Proves **`evolutionary_search_emits_only_verified_designs`**: any candidate surviving the kernel
      manufacturing + multiphysics filter is guaranteed to be gouge-free, chatter-stable, within
-     dimensional deflection tolerance, and within its multiphysics performance floor.
+     dimensional deflection tolerance, and within its multiphysics performance floor.6. **One F-Rep (`FRepExpr.toTape`, `toTape_eval`)**: the tree compiles to the SSA tape the pruner, the
+   compactor and the RTL compiler use, and the two agree at every point.
+7. **Region certificates (`kdAll`, `kdAll_sound`)**: the gouge check (`checkDisjoint_sound`) and the
+   wall check over a whole cavity (`checkWall_sound`).
+8. **Cutters on integer tool axes (`frepBallEndMill`, `checkPathNoGouge_sound`)**: ball, shank and a
+   lattice certificate for a list of cutter locations.
 -/
 public import Obend.Hardware.Accelerators
 public import Obend.Tactic.Tooth
@@ -654,7 +659,7 @@ specializing the 24-node CSG tape over an octree sub-box $B = [-2, 2]^3$ near th
 prunes away both the distant mounting lug (`.csgUnion` $\to$ `.left`) and the distant cooling bore
 (`.csgDiff` $\to$ `.left`), compacting the tape from `24` AST nodes down to `6` AST nodes while
 preserving exact point evaluations inside $B$! -/
-theorem golden_fidget_tape_pruning_verified :
+example :
     let statorCore : FRepExpr := .offset 100 (.add (.sq .varX) (.sq .varY))
     let mountingLug : FRepExpr := .offset 4 (.add (.sq (.sub .varX (.const 20))) (.sq .varY))
     let coolingBore : FRepExpr := .offset 4 (.add (.sq (.add .varX (.const 20))) (.sq .varY))
@@ -2506,7 +2511,7 @@ theorem synthesizeCertifiedSweptVolume_no_gouge_sound
    `computeCertifiedLipschitzBox = 72` ($\neq 1$!),
 3. `synthesizeCertifiedSweptVolume` automatically pads the swept volume by `computeCertifiedStepPad`
    and certifies `checkVoxelNoGouge = true` without any caller-supplied Lipschitz parameter! -/
-theorem golden_certified_lipschitz_swept_volume_verified :
+example :
     let box : Box3D :=
       { xIv := { lo := 10, hi := 12 }
       , yIv := { lo := 10, hi := 12 }
@@ -2664,7 +2669,7 @@ Verifies by kernel evaluation (`decide +kernel`):
 3. Machine-tool deflection + servo-lag error ($3500\,\text{nm} \le 5000\,\text{nm}$ tolerance), and
 4. Evolutionary filtering of a 3-candidate design population (rejecting a gouging candidate and a
    chattering candidate, and selecting the verified high-torque candidate `#2`). -/
-theorem golden_geometry_cam_evolutionary_search_verified :
+example :
     let sphereR10 := FRepExpr.offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
     let farBox : Box3D :=
       { xIv := { lo := 10, hi := 12 }
@@ -2685,28 +2690,524 @@ theorem golden_geometry_cam_evolutionary_search_verified :
     (filterVerifiedDesigns 800 [candGouge, candVerified, candChatter]).map (·.candidateId) = [2] := by
   decide +kernel
 
-/-- The 7 composition arc kinds of Apple/Pixar OpenUSD (`LIVERPS` strength ordering,
-from strongest `localArc` to weakest `specializesArc`), consumed by the canonical OpenUSD
-model in `Obend.Hardware.OpenUSD`. -/
-inductive UsdArcKind where
-  | localArc
-  | inheritsArc
-  | variantArc
-  | relocatesArc
-  | referencesArc
-  | payloadArc
-  | specializesArc
+/-! ## 6. One F-Rep: the tree compiles to the tape (`FRepExpr.toTape`)
+
+The tree (`FRepExpr`) carries the interval, gradient and swept-volume theorems; the tape (`SsaTapeOp`)
+carries pruning, compaction and the RTL compiler. Until 2026-11-04 nothing related them, so every
+caller wrote its tape by hand beside its tree. `toTapeFrom` is the compiler and `toTape_eval` its
+soundness: evaluating the emitted tape at its last register is evaluating the tree. -/
+
+/-- Compile `e` to SSA ops whose registers start at `base` (the length of the register file the ops
+run after); the result is in the last register written. -/
+def FRepExpr.toTapeFrom (base : Nat) : FRepExpr → List SsaTapeOp
+  | .const c => [.const c]
+  | .varX => [.varX]
+  | .varY => [.varY]
+  | .varZ => [.varZ]
+  | .add a b =>
+    let ta := toTapeFrom base a
+    let tb := toTapeFrom (base + ta.length) b
+    ta ++ tb ++ [.add (base + ta.length - 1) (base + ta.length + tb.length - 1)]
+  | .sub a b =>
+    let ta := toTapeFrom base a
+    let tb := toTapeFrom (base + ta.length) b
+    ta ++ tb ++ [.sub (base + ta.length - 1) (base + ta.length + tb.length - 1)]
+  | .scalePos k a =>
+    let ta := toTapeFrom base a
+    ta ++ [.const (Int.ofNat k), .mul (base + ta.length) (base + ta.length - 1)]
+  | .sq a =>
+    let ta := toTapeFrom base a
+    ta ++ [.mul (base + ta.length - 1) (base + ta.length - 1)]
+  | .csgUnion a b =>
+    let ta := toTapeFrom base a
+    let tb := toTapeFrom (base + ta.length) b
+    ta ++ tb ++ [.minUnion (base + ta.length - 1) (base + ta.length + tb.length - 1)]
+  | .csgInter a b =>
+    let ta := toTapeFrom base a
+    let tb := toTapeFrom (base + ta.length) b
+    ta ++ tb ++ [.maxInter (base + ta.length - 1) (base + ta.length + tb.length - 1)]
+  | .csgDiff a b =>
+    let ta := toTapeFrom base a
+    let tb := toTapeFrom (base + ta.length) b
+    ta ++ tb ++ [.neg (base + ta.length + tb.length - 1),
+                 .maxInter (base + ta.length - 1) (base + ta.length + tb.length)]
+  | .offset r a =>
+    let ta := toTapeFrom base a
+    ta ++ [.const r, .sub (base + ta.length - 1) (base + ta.length)]
+
+/-- The tape of `e` on an empty register file. -/
+def FRepExpr.toTape (e : FRepExpr) : List SsaTapeOp := e.toTapeFrom 0
+
+theorem FRepExpr.toTapeFrom_length_pos (base : Nat) (e : FRepExpr) : 0 < (e.toTapeFrom base).length := by
+  cases e <;> simp [FRepExpr.toTapeFrom] <;> omega
+
+/-- One step of the register file: running `[op]` appends one value. -/
+theorem evalSsaTapeRegsAux_singleton (x y z : Int) (regs : List Int) (op : SsaTapeOp) :
+    evalSsaTapeRegsAux x y z regs [op] = regs ++ [evalSsaOpPoint x y z regs op] := rfl
+
+/-- Invariant of `toTapeFrom`: run after a register file of length `base`, the ops keep that file
+as a prefix, add exactly their own length, and leave `e`'s value in the last register. -/
+theorem FRepExpr.toTapeFrom_spec (x y z : Int) (e : FRepExpr) :
+    ∀ (regs : List Int),
+      let out := evalSsaTapeRegsAux x y z regs (e.toTapeFrom regs.length)
+      out.length = regs.length + (e.toTapeFrom regs.length).length ∧
+      (∀ r, r < regs.length → out.getD r 0 = regs.getD r 0) ∧
+      out.getD (out.length - 1) 0 = evalFRepPoint x y z e := by
+  -- The binary cases share one shape: `ta ++ tb ++ tail`.
+  have binary :
+      ∀ (a b : FRepExpr)
+        (iha : ∀ regs : List Int,
+          let out := evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length)
+          out.length = regs.length + (a.toTapeFrom regs.length).length ∧
+          (∀ r, r < regs.length → out.getD r 0 = regs.getD r 0) ∧
+          out.getD (out.length - 1) 0 = evalFRepPoint x y z a)
+        (ihb : ∀ regs : List Int,
+          let out := evalSsaTapeRegsAux x y z regs (b.toTapeFrom regs.length)
+          out.length = regs.length + (b.toTapeFrom regs.length).length ∧
+          (∀ r, r < regs.length → out.getD r 0 = regs.getD r 0) ∧
+          out.getD (out.length - 1) 0 = evalFRepPoint x y z b)
+        (regs : List Int),
+        let ta := a.toTapeFrom regs.length
+        let outA := evalSsaTapeRegsAux x y z regs ta
+        let tb := b.toTapeFrom (regs.length + ta.length)
+        let outB := evalSsaTapeRegsAux x y z outA tb
+        outA.length = regs.length + ta.length ∧
+        outB.length = regs.length + ta.length + tb.length ∧
+        (∀ r, r < regs.length → outB.getD r 0 = regs.getD r 0) ∧
+        outB.getD (regs.length + ta.length - 1) 0 = evalFRepPoint x y z a ∧
+        outB.getD (regs.length + ta.length + tb.length - 1) 0 = evalFRepPoint x y z b ∧
+        0 < ta.length ∧ 0 < tb.length := by
+    intro a b iha ihb regs
+    dsimp only
+    obtain ⟨hA1, hA2, hA3⟩ := iha regs
+    have hTa := FRepExpr.toTapeFrom_length_pos regs.length a
+    have hLenA : (evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length)).length =
+        regs.length + (a.toTapeFrom regs.length).length := hA1
+    have ihb' := ihb (evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length))
+    rw [hLenA] at ihb'
+    obtain ⟨hB1, hB2, hB3⟩ := ihb'
+    have hTb := FRepExpr.toTapeFrom_length_pos (regs.length + (a.toTapeFrom regs.length).length) b
+    refine ⟨hA1, ?_, ?_, ?_, ?_, hTa, hTb⟩
+    · exact hB1
+    · intro r hr
+      rw [hB2 r (by omega)]
+      exact hA2 r hr
+    · rw [hB2 _ (by omega)]
+      rw [hA1] at hA3
+      exact hA3
+    · rw [hB1] at hB3
+      exact hB3
+  intro regs
+  induction e generalizing regs with
+  | const c => exact ⟨by simp [FRepExpr.toTapeFrom, evalSsaTapeRegsAux],
+      fun r hr => getD_append_left_int _ _ r hr,
+      by simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_singleton, List.length_append,
+                    List.length_singleton, Nat.add_sub_cancel]
+         exact getD_snoc_self _ _⟩
+  | varX => exact ⟨by simp [FRepExpr.toTapeFrom, evalSsaTapeRegsAux],
+      fun r hr => getD_append_left_int _ _ r hr,
+      by simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_singleton, List.length_append,
+                    List.length_singleton, Nat.add_sub_cancel]
+         exact getD_snoc_self _ _⟩
+  | varY => exact ⟨by simp [FRepExpr.toTapeFrom, evalSsaTapeRegsAux],
+      fun r hr => getD_append_left_int _ _ r hr,
+      by simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_singleton, List.length_append,
+                    List.length_singleton, Nat.add_sub_cancel]
+         exact getD_snoc_self _ _⟩
+  | varZ => exact ⟨by simp [FRepExpr.toTapeFrom, evalSsaTapeRegsAux],
+      fun r hr => getD_append_left_int _ _ r hr,
+      by simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_singleton, List.length_append,
+                    List.length_singleton, Nat.add_sub_cancel]
+         exact getD_snoc_self _ _⟩
+  | add a b iha ihb | sub a b iha ihb | csgUnion a b iha ihb | csgInter a b iha ihb =>
+    obtain ⟨hLA, hLB, hPre, hVa, hVb, hTa, hTb⟩ := binary a b iha ihb regs
+    simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_append, evalSsaTapeRegsAux_singleton,
+      List.length_append, List.length_singleton]
+    refine ⟨by rw [hLB]; omega, fun r hr => ?_, ?_⟩
+    · rw [getD_append_left_int _ _ r (by rw [hLB]; omega)]; exact hPre r hr
+    · rw [hLB, show regs.length + (a.toTapeFrom regs.length).length +
+            (b.toTapeFrom (regs.length + (a.toTapeFrom regs.length).length)).length + 1 - 1 =
+          (evalSsaTapeRegsAux x y z (evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length))
+            (b.toTapeFrom (regs.length + (a.toTapeFrom regs.length).length))).length by rw [hLB]; omega,
+          getD_snoc_self]
+      simp only [evalSsaOpPoint, evalFRepPoint, hVa, hVb]
+  | csgDiff a b iha ihb =>
+    obtain ⟨hLA, hLB, hPre, hVa, hVb, hTa, hTb⟩ := binary a b iha ihb regs
+    simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_append]
+    simp only [show ∀ (rs : List Int) (o1 o2 : SsaTapeOp),
+        evalSsaTapeRegsAux x y z rs [o1, o2] =
+          (rs ++ [evalSsaOpPoint x y z rs o1]) ++
+            [evalSsaOpPoint x y z (rs ++ [evalSsaOpPoint x y z rs o1]) o2] from fun _ _ _ => rfl,
+      List.length_append, List.length_singleton, List.length_cons, List.length_nil]
+    generalize hOB : evalSsaTapeRegsAux x y z (evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length))
+        (b.toTapeFrom (regs.length + (a.toTapeFrom regs.length).length)) = outB at *
+    refine ⟨by omega, fun r hr => ?_, ?_⟩
+    · rw [getD_append_left_int _ _ r (by simp; omega), getD_append_left_int _ _ r (by omega)]
+      exact hPre r hr
+    · rw [show outB.length + 1 + 1 - 1 = (outB ++ [evalSsaOpPoint x y z outB
+            (.neg (regs.length + (a.toTapeFrom regs.length).length +
+              (b.toTapeFrom (regs.length + (a.toTapeFrom regs.length).length)).length - 1))]).length by
+            simp, getD_snoc_self]
+      simp only [evalSsaOpPoint, evalFRepPoint]
+      rw [getD_append_left_int _ _ _ (by omega), hVa,
+          show regs.length + (a.toTapeFrom regs.length).length +
+            (b.toTapeFrom (regs.length + (a.toTapeFrom regs.length).length)).length = outB.length by omega,
+          getD_snoc_self]
+      rw [show outB.getD (outB.length - 1) 0 = evalFRepPoint x y z b by rw [hLB]; exact hVb]
+  | scalePos k a iha =>
+    obtain ⟨hA1, hA2, hA3⟩ := iha regs
+    simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_append]
+    simp only [show ∀ (rs : List Int) (o1 o2 : SsaTapeOp),
+        evalSsaTapeRegsAux x y z rs [o1, o2] =
+          (rs ++ [evalSsaOpPoint x y z rs o1]) ++
+            [evalSsaOpPoint x y z (rs ++ [evalSsaOpPoint x y z rs o1]) o2] from fun _ _ _ => rfl,
+      List.length_append, List.length_cons, List.length_nil]
+    have hTa := FRepExpr.toTapeFrom_length_pos regs.length a
+    generalize hOA : evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length) = outA at *
+    refine ⟨by omega, fun r hr => ?_, ?_⟩
+    · rw [getD_append_left_int _ _ r (by simp; omega), getD_append_left_int _ _ r (by omega)]
+      exact hA2 r hr
+    · rw [show outA.length + 1 + 1 - 1 = (outA ++ [evalSsaOpPoint x y z outA (.const (Int.ofNat k))]).length by
+            simp, getD_snoc_self]
+      simp only [evalSsaOpPoint, evalFRepPoint]
+      rw [show regs.length + (a.toTapeFrom regs.length).length = outA.length by omega, getD_snoc_self,
+          getD_append_left_int _ _ _ (by omega), hA3]
+  | sq a iha =>
+    obtain ⟨hA1, hA2, hA3⟩ := iha regs
+    simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_append, evalSsaTapeRegsAux_singleton,
+      List.length_append, List.length_singleton]
+    have hTa := FRepExpr.toTapeFrom_length_pos regs.length a
+    generalize hOA : evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length) = outA at *
+    refine ⟨by omega, fun r hr => ?_, ?_⟩
+    · rw [getD_append_left_int _ _ r (by omega)]; exact hA2 r hr
+    · rw [show outA.length + 1 - 1 = outA.length by omega, getD_snoc_self]
+      simp only [evalSsaOpPoint, evalFRepPoint]
+      rw [show regs.length + (a.toTapeFrom regs.length).length - 1 = outA.length - 1 by omega, hA3]
+  | offset r0 a iha =>
+    obtain ⟨hA1, hA2, hA3⟩ := iha regs
+    simp only [FRepExpr.toTapeFrom, evalSsaTapeRegsAux_append]
+    simp only [show ∀ (rs : List Int) (o1 o2 : SsaTapeOp),
+        evalSsaTapeRegsAux x y z rs [o1, o2] =
+          (rs ++ [evalSsaOpPoint x y z rs o1]) ++
+            [evalSsaOpPoint x y z (rs ++ [evalSsaOpPoint x y z rs o1]) o2] from fun _ _ _ => rfl,
+      List.length_append, List.length_cons, List.length_nil]
+    have hTa := FRepExpr.toTapeFrom_length_pos regs.length a
+    generalize hOA : evalSsaTapeRegsAux x y z regs (a.toTapeFrom regs.length) = outA at *
+    refine ⟨by omega, fun r hr => ?_, ?_⟩
+    · rw [getD_append_left_int _ _ r (by simp; omega), getD_append_left_int _ _ r (by omega)]
+      exact hA2 r hr
+    · rw [show outA.length + 1 + 1 - 1 = (outA ++ [evalSsaOpPoint x y z outA (.const r0)]).length by
+            simp, getD_snoc_self]
+      simp only [evalSsaOpPoint, evalFRepPoint]
+      rw [getD_append_left_int _ _ _ (by omega),
+          show regs.length + (a.toTapeFrom regs.length).length - 1 = outA.length - 1 by omega, hA3,
+          show regs.length + (a.toTapeFrom regs.length).length = outA.length by omega, getD_snoc_self]
+
+/-- **`toTape_eval`**: the compiled tape computes the tree, at every point. -/
+theorem FRepExpr.toTape_eval (x y z : Int) (e : FRepExpr) :
+    evalSsaTape x y z e.toTape = evalFRepPoint x y z e := by
+  have h := FRepExpr.toTapeFrom_spec x y z e []
+  dsimp only at h
+  obtain ⟨hLen, _, hVal⟩ := h
+  unfold evalSsaTape evalSsaTapeRegs FRepExpr.toTape
+  simp only [List.length_nil, Nat.zero_add] at hLen
+  rw [← hLen]
+  exact hVal
+
+/-- Pruning and compaction of a compiled tape keep the tree's value on every point of the box. -/
+theorem FRepExpr.toTape_prune_compact_eval (B : Box3D) (x y z : Int) (e : FRepExpr)
+    (hIn : B.contains x y z) :
+    let compacted := compactSsaTape (pruneSsaTapeForBox B e.toTape) (e.toTape.length - 1)
+    evalSsaTape x y z compacted (compacted.length - 1) = evalFRepPoint x y z e ∧
+    compacted.length ≤ e.toTape.length := by
+  have hPos := FRepExpr.toTapeFrom_length_pos 0 e
+  have h := prune_and_compact_ssa_tape_sound B x y z e.toTape (e.toTape.length - 1) hIn
+    (by unfold FRepExpr.toTape; omega)
+  dsimp only at h ⊢
+  refine ⟨?_, h.2⟩
+  rw [h.1]
+  exact FRepExpr.toTape_eval x y z e
+
+/-! ## 7. Region certificates on a k-d tree of boxes (`kdAll`)
+
+One recursion serves every "for all points of this region" question the CAM tier asks: split the
+box across its widest axis until a leaf test settles each piece. `kdAll_sound` turns a leaf test
+that is sound on one box into a statement about every lattice point of the root box. -/
+
+/-- Split an interval at its floor midpoint into `[lo, mid]` and `[mid + 1, hi]`. -/
+def ivHalves (iv : FloatInterval) : FloatInterval × FloatInterval :=
+  let mid := (iv.lo + iv.hi) / 2
+  ({ lo := iv.lo, hi := mid }, { lo := mid + 1, hi := iv.hi })
+
+theorem ivHalves_cover (iv : FloatInterval) (v : Int) (h : iv.contains v) :
+    (ivHalves iv).1.contains v ∨ (ivHalves iv).2.contains v := by
+  unfold ivHalves FloatInterval.contains at *
+  dsimp only
+  omega
+
+/-- Split a box across its widest axis. -/
+def Box3D.halves (B : Box3D) : Box3D × Box3D :=
+  let wx := B.xIv.hi - B.xIv.lo
+  let wy := B.yIv.hi - B.yIv.lo
+  let wz := B.zIv.hi - B.zIv.lo
+  if decide (wy ≤ wx) && decide (wz ≤ wx) then
+    ({ B with xIv := (ivHalves B.xIv).1 }, { B with xIv := (ivHalves B.xIv).2 })
+  else if decide (wz ≤ wy) then
+    ({ B with yIv := (ivHalves B.yIv).1 }, { B with yIv := (ivHalves B.yIv).2 })
+  else
+    ({ B with zIv := (ivHalves B.zIv).1 }, { B with zIv := (ivHalves B.zIv).2 })
+
+theorem Box3D.halves_cover (B : Box3D) (x y z : Int) (h : B.contains x y z) :
+    B.halves.1.contains x y z ∨ B.halves.2.contains x y z := by
+  obtain ⟨hx, hy, hz⟩ := h
+  unfold Box3D.halves
+  dsimp only
+  split
+  · rcases ivHalves_cover B.xIv x hx with h | h
+    · exact Or.inl ⟨h, hy, hz⟩
+    · exact Or.inr ⟨h, hy, hz⟩
+  · split
+    · rcases ivHalves_cover B.yIv y hy with h | h
+      · exact Or.inl ⟨hx, h, hz⟩
+      · exact Or.inr ⟨hx, h, hz⟩
+    · rcases ivHalves_cover B.zIv z hz with h | h
+      · exact Or.inl ⟨hx, hy, h⟩
+      · exact Or.inr ⟨hx, hy, h⟩
+
+/-- A box with an inverted side contains no point. -/
+def Box3D.isEmpty (B : Box3D) : Bool :=
+  decide (B.xIv.hi < B.xIv.lo) || decide (B.yIv.hi < B.yIv.lo) || decide (B.zIv.hi < B.zIv.lo)
+
+theorem Box3D.not_contains_of_isEmpty (B : Box3D) (h : B.isEmpty = true) (x y z : Int) :
+    ¬ B.contains x y z := by
+  intro ⟨hx, hy, hz⟩
+  unfold FloatInterval.contains at hx hy hz
+  simp only [Box3D.isEmpty, Bool.or_eq_true, decide_eq_true_eq] at h
+  omega
+
+/-- Decide `leaf` on `B`, or split and decide both halves, to depth `d`; empty boxes pass. -/
+def kdAll (leaf : Box3D → Bool) : Nat → Box3D → Bool
+  | 0, B => B.isEmpty || leaf B
+  | d + 1, B => B.isEmpty || leaf B || (kdAll leaf d B.halves.1 && kdAll leaf d B.halves.2)
+
+/-- **`kdAll_sound`**: a leaf test sound for a property on each box it accepts gives the property on
+every lattice point of the root box. -/
+theorem kdAll_sound (leaf : Box3D → Bool) (P : Int → Int → Int → Prop)
+    (hLeaf : ∀ B x y z, leaf B = true → B.contains x y z → P x y z) :
+    ∀ (d : Nat) (B : Box3D) (x y z : Int), kdAll leaf d B = true → B.contains x y z → P x y z := by
+  intro d
+  induction d with
+  | zero =>
+    intro B x y z h hIn
+    simp only [kdAll, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact absurd hIn (Box3D.not_contains_of_isEmpty B h x y z)
+    · exact hLeaf B x y z h hIn
+  | succ d ih =>
+    intro B x y z h hIn
+    simp only [kdAll, Bool.or_eq_true, Bool.and_eq_true] at h
+    rcases h with (h | h) | ⟨h1, h2⟩
+    · exact absurd hIn (Box3D.not_contains_of_isEmpty B h x y z)
+    · exact hLeaf B x y z h hIn
+    · rcases Box3D.halves_cover B x y z hIn with hc | hc
+      · exact ih _ x y z h1 hc
+      · exact ih _ x y z h2 hc
+
+/-- Leaf test for disjointness: on `B`, one of the two solids is certainly absent. -/
+def disjointLeaf (f g : FRepExpr) (B : Box3D) : Bool :=
+  decide (0 < (evalFRepInterval B f).lo) || decide (0 < (evalFRepInterval B g).lo)
+
+/-- **`checkDisjoint_sound`**: if `kdAll (disjointLeaf f g) d B` holds, no lattice point of `B` is in
+both `f` and `g`. With `f` the finished part and `g` the cutter, this is the gouge check. -/
+theorem checkDisjoint_sound (f g : FRepExpr) (d : Nat) (B : Box3D)
+    (h : kdAll (disjointLeaf f g) d B = true) (x y z : Int) (hIn : B.contains x y z) :
+    inSolid x y z f → 0 < evalFRepPoint x y z g := by
+  refine kdAll_sound (disjointLeaf f g) (fun x y z => inSolid x y z f → 0 < evalFRepPoint x y z g)
+    ?_ d B x y z h hIn
+  intro b x y z hl hb hf
+  simp only [disjointLeaf, Bool.or_eq_true, decide_eq_true_eq] at hl
+  rcases hl with hl | hl
+  · have := frep_octree_prune_exterior_sound b f hl x y z hb
+    unfold inSolid at hf; omega
+  · exact frep_octree_prune_exterior_sound b g hl x y z hb
+
+/-- `B` grown by `tx`, `ty`, `tz` on the two sides of each axis. -/
+def Box3D.grow (B : Box3D) (tx ty tz : Nat) : Box3D :=
+  { xIv := { lo := B.xIv.lo - tx, hi := B.xIv.hi + tx }
+  , yIv := { lo := B.yIv.lo - ty, hi := B.yIv.hi + ty }
+  , zIv := { lo := B.zIv.lo - tz, hi := B.zIv.hi + tz } }
+
+/-- `q` is within `tx`, `ty`, `tz` of `p`, axis by axis. -/
+def WithinBox (tx ty tz : Nat) (px py pz qx qy qz : Int) : Prop :=
+  frepIntAbs (px - qx) ≤ tx ∧ frepIntAbs (py - qy) ≤ ty ∧ frepIntAbs (pz - qz) ≤ tz
+
+theorem Box3D.grow_contains (B : Box3D) (tx ty tz : Nat) (px py pz qx qy qz : Int)
+    (hp : B.contains px py pz) (hd : WithinBox tx ty tz px py pz qx qy qz) :
+    (B.grow tx ty tz).contains qx qy qz := by
+  obtain ⟨hx, hy, hz⟩ := hp
+  obtain ⟨h1, h2, h3⟩ := hd
+  have hax := frepIntAbs_bounds (px - qx)
+  have hay := frepIntAbs_bounds (py - qy)
+  have haz := frepIntAbs_bounds (pz - qz)
+  unfold FloatInterval.contains at hx hy hz
+  unfold Box3D.grow Box3D.contains FloatInterval.contains
+  dsimp only
+  omega
+
+/-- Leaf test for a wall of `tx`, `ty`, `tz`: on `B` either no cavity point exists, or the whole
+box grown by those amounts is inside the outer solid. -/
+def wallLeaf (outer inner : FRepExpr) (tx ty tz : Nat) (B : Box3D) : Bool :=
+  decide (0 < (evalFRepInterval B inner).lo) ||
+    decide ((evalFRepInterval (B.grow tx ty tz) outer).hi ≤ 0)
+
+/-- **`checkWall_sound`**: if `kdAll (wallLeaf outer inner tx ty tz) d B` holds, every lattice point
+within `(tx, ty, tz)` of a cavity point of `B` is inside the outer solid: the wall between the cavity
+and the outer surface is at least that thick everywhere in `B`, not at one probe point. With
+`tz = 0` it is the wall in the XY plane, which is the one a through-bore has. -/
+theorem checkWall_sound (outer inner : FRepExpr) (tx ty tz d : Nat) (B : Box3D)
+    (h : kdAll (wallLeaf outer inner tx ty tz) d B = true) (px py pz : Int)
+    (hIn : B.contains px py pz) (hCav : inSolid px py pz inner) (qx qy qz : Int)
+    (hq : WithinBox tx ty tz px py pz qx qy qz) :
+    inSolid qx qy qz outer := by
+  refine kdAll_sound (wallLeaf outer inner tx ty tz)
+    (fun px py pz => inSolid px py pz inner → ∀ qx qy qz : Int,
+      WithinBox tx ty tz px py pz qx qy qz → inSolid qx qy qz outer)
+    ?_ d B px py pz h hIn hCav qx qy qz hq
+  intro b px py pz hl hb hc qx qy qz hd
+  simp only [wallLeaf, Bool.or_eq_true, decide_eq_true_eq] at hl
+  rcases hl with hl | hl
+  · have := frep_octree_prune_exterior_sound b inner hl px py pz hb
+    unfold inSolid at hc; omega
+  · exact frep_octree_prune_interior_sound (b.grow tx ty tz) outer hl qx qy qz
+      (Box3D.grow_contains b tx ty tz px py pz qx qy qz hb hd)
+
+/-- A wall test that ignores the growth: it accepts any box whose own points are inside `outer`. -/
+def wallLeafBroken (outer inner : FRepExpr) (_tx _ty _tz : Nat) (B : Box3D) : Bool :=
+  decide (0 < (evalFRepInterval B inner).lo) || decide ((evalFRepInterval B outer).hi ≤ 0)
+
+#tooth checkWall_sound by mutation
+  wallLeaf := wallLeafBroken
+
+/-! ## 8. Cutters as solids: ball end mill with shank on an integer tool axis
+
+A tool axis is an integer vector `(ux, uy, uz)` whose length `n` is an integer (`(0,0,1)`, `(3,0,4)`
+and its quarter turns, …), so every cutter below is a polynomial F-Rep with integer coefficients and
+no square roots. CL data in CAM is exactly this (a point and an `IJK` vector); the post turns the
+vector into rotary angles for printing only. -/
+
+/-- An integer tool axis with integer length `n` (`n * n = ux² + uy² + uz²`, checked by `valid`). -/
+structure ToolAxis where
+  ux : Int
+  uy : Int
+  uz : Int
+  n  : Nat
   deriving DecidableEq, Repr
 
-/-- Numerical strength rank for `LIVERPS` (`7` = strongest `localArc`, `1` = weakest `specializesArc`). -/
-def UsdArcKind.strength : UsdArcKind → Nat
-  | .localArc       => 7
-  | .inheritsArc    => 6
-  | .variantArc     => 5
-  | .relocatesArc   => 4
-  | .referencesArc  => 3
-  | .payloadArc     => 2
-  | .specializesArc => 1
+def ToolAxis.valid (u : ToolAxis) : Bool :=
+  decide (0 < u.n) && decide ((u.n : Int) * u.n = u.ux * u.ux + u.uy * u.uy + u.uz * u.uz)
+
+/-- `k * e` for any integer `k` (`scalePos` takes a `Nat`). -/
+def frepScaleInt (k : Int) (e : FRepExpr) : FRepExpr :=
+  if 0 ≤ k then .scalePos k.toNat e else .sub (.const 0) (.scalePos (-k).toNat e)
+
+theorem evalFRepPoint_frepScaleInt (x y z k : Int) (e : FRepExpr) :
+    evalFRepPoint x y z (frepScaleInt k e) = k * evalFRepPoint x y z e := by
+  unfold frepScaleInt
+  split
+  · simp only [evalFRepPoint]
+    rw [show (Int.ofNat k.toNat) = k from Int.toNat_of_nonneg (by omega)]
+  · simp only [evalFRepPoint]
+    rw [show (Int.ofNat (-k).toNat) = -k from Int.toNat_of_nonneg (by omega)]
+    rw [Int.neg_mul, Int.zero_sub, Int.neg_neg]
+
+/-- Squared distance to `(cx, cy, cz)` minus `r²`: a ball. -/
+def frepBall (cx cy cz : Int) (r : Nat) : FRepExpr :=
+  .offset ((r : Int) * r)
+    (.add (.add (.sq (.sub .varX (.const cx))) (.sq (.sub .varY (.const cy)))) (.sq (.sub .varZ (.const cz))))
+
+/-- `(p - c) · u`. -/
+def frepAxial (cx cy cz : Int) (u : ToolAxis) : FRepExpr :=
+  .add (.add (frepScaleInt u.ux (.sub .varX (.const cx))) (frepScaleInt u.uy (.sub .varY (.const cy))))
+    (frepScaleInt u.uz (.sub .varZ (.const cz)))
+
+/-- Cylinder of radius `r` on the axis through `c` along `u`, from `c` to `len` along the axis:
+`n²|p-c|² - ((p-c)·u)² ≤ n² r²` and `0 ≤ (p-c)·u ≤ n·len`. -/
+def frepShank (cx cy cz : Int) (u : ToolAxis) (r len : Nat) : FRepExpr :=
+  let d := frepAxial cx cy cz u
+  let n2 : Nat := u.n * u.n
+  .csgInter
+    (.offset ((n2 : Int) * r * r)
+      (.sub (.scalePos n2 (.add (.add (.sq (.sub .varX (.const cx))) (.sq (.sub .varY (.const cy))))
+        (.sq (.sub .varZ (.const cz))))) (.sq d)))
+    (.csgInter (.sub (.const 0) d) (.offset ((u.n : Int) * len) d))
+
+/-- Ball end mill of radius `r` with its tip at `(tx, ty, tz)` on axis `u` (ball centre `tip + r·u/n`,
+which is an integer point when `n ∣ r·u`), with a straight shank of radius `r` and length `len`
+above the centre; holder not modelled. -/
+def frepBallEndMill (tx ty tz : Int) (u : ToolAxis) (r len : Nat) : FRepExpr :=
+  let cx := tx + (r : Int) * u.ux / u.n
+  let cy := ty + (r : Int) * u.uy / u.n
+  let cz := tz + (r : Int) * u.uz / u.n
+  .csgUnion (frepBall cx cy cz r) (frepShank cx cy cz u r len)
+
+/-- A cutter location: tool tip and tool axis. -/
+structure CLPoint where
+  x : Int
+  y : Int
+  z : Int
+  axis : ToolAxis
+  deriving DecidableEq, Repr
+
+/-- The gouge certificate for one CL point: the cutter, grown by `δ` in radius and length, misses
+every lattice point of `part` in `B` (k-d depth `d`). -/
+def checkCLNoGouge (part : FRepExpr) (B : Box3D) (d : Nat) (r len δ : Nat) (p : CLPoint) : Bool :=
+  kdAll (disjointLeaf part (frepBallEndMill p.x p.y p.z p.axis (r + δ) (len + δ))) d B
+
+/-- Every CL point of a path passes `checkCLNoGouge`, and consecutive points are at most one lattice
+unit apart in every coordinate. -/
+def checkPathNoGouge (part : FRepExpr) (B : Box3D) (d : Nat) (r len δ : Nat) (path : List CLPoint) :
+    Bool :=
+  path.all (checkCLNoGouge part B d r len δ)
+
+/-- **`checkPathNoGouge_sound`**: for every CL point of an accepted path, the grown cutter there
+contains no lattice point of the part inside `B`.
+
+What is proved is a lattice statement. What it is for is a continuous one, argued here and not
+mechanised (it needs the reals): when consecutive CL points differ by at most one unit per
+coordinate and the axis is constant between them, every point of the straight segment the control
+interpolates is within $\sqrt{3}/2 < 1$ of a CL point, so with `δ ≥ 1` the swept cutter lies inside
+the union of the grown cutters checked here. A rotary move between CL points is not covered; the
+post (`Obend.Hardware.Kinematics.postNgc`) only rotates at the clearance plane. -/
+theorem checkPathNoGouge_sound (part : FRepExpr) (B : Box3D) (d r len δ : Nat) (path : List CLPoint)
+    (h : checkPathNoGouge part B d r len δ path = true) (p : CLPoint) (hp : p ∈ path)
+    (x y z : Int) (hIn : B.contains x y z) (hPart : inSolid x y z part) :
+    0 < evalFRepPoint x y z (frepBallEndMill p.x p.y p.z p.axis (r + δ) (len + δ)) := by
+  unfold checkPathNoGouge at h
+  have hp' := List.all_eq_true.mp h p hp
+  exact checkDisjoint_sound part _ d B hp' x y z hIn hPart
+
+/-- Largest per-coordinate step between consecutive CL points is at most `s`. -/
+def clChainStepLe (s : Nat) : List CLPoint → Bool
+  | p :: q :: rest =>
+    decide (linfDist3D (p.x, p.y, p.z) (q.x, q.y, q.z) ≤ s) && clChainStepLe s (q :: rest)
+  | _ => true
+
+/-- Points `p + round(i·(q - p)/k)` for `i = 1 … k`, `k` the $L_\infty$ distance: a lattice line from
+`p` (excluded) to `q` (included) with unit steps. -/
+def latticeSegment (p q : Int × Int × Int) : List (Int × Int × Int) :=
+  let (px, py, pz) := p
+  let (qx, qy, qz) := q
+  let k := (linfDist3D p q).toNat
+  let rd (a b : Int) (i : Nat) : Int :=
+    a + ((2 * (i : Int) * (b - a) + k) / (2 * (k : Int)))
+  (List.range k).map fun i => (rd px qx (i + 1), rd py qy (i + 1), rd pz qz (i + 1))
+
+/-- Densify a polyline to unit lattice steps (`latticeSegment` between consecutive points). -/
+def densifyPolyline : List (Int × Int × Int) → List (Int × Int × Int)
+  | [] => []
+  | [p] => [p]
+  | p :: q :: rest => p :: (latticeSegment p q).dropLast ++ densifyPolyline (q :: rest)
+
 
 end Obend.Hardware.GeometryCAM
 end

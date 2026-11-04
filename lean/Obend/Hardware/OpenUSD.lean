@@ -241,10 +241,13 @@ def AffineForm3D.offset (r : Int) (a : AffineForm3D) : AffineForm3D where
   cz  := a.cz
   err := a.err
 
-/-- Lift a `FloatInterval` into a conservative `AffineForm3D` centered at `(lo + hi) / 2`. -/
+/-- Lift a `FloatInterval` into an `AffineForm3D` centred at `(lo + hi) / 2` whose error radius is
+the half-width: the larger of the two distances from the centre to an end (they differ by one when
+`lo + hi` is odd, because `/` floors). Before 2026-11-04 the radius was the sum of the two, the full
+width, which doubled every crease that `min`/`max` falls back on. -/
 def AffineForm3D.fromInterval (iv : FloatInterval) : AffineForm3D :=
   let mid := (iv.lo + iv.hi) / 2
-  let rad := (intAbs (iv.hi - mid) + intAbs (mid - iv.lo)).toNat
+  let rad := (Max.max (intAbs (iv.hi - mid)) (intAbs (mid - iv.lo))).toNat
   { c0 := mid, cx := 0, cy := 0, cz := 0, err := rad }
 
 /-- 3D affine multiplication $\hat{a} \cdot \hat{b}$ (Stolfi & de Figueiredo 1997):
@@ -456,8 +459,9 @@ theorem affine3d_fromInterval_enclosesAt (iv : FloatInterval) (ex ey ez v : Int)
   simp only [Int.zero_mul, Int.add_zero]
   have h1 := le_intAbs_and_nonneg (iv.hi - (iv.lo + iv.hi) / 2)
   have h2 := le_intAbs_and_nonneg ((iv.lo + iv.hi) / 2 - iv.lo)
-  have hRad : Int.ofNat (intAbs (iv.hi - (iv.lo + iv.hi) / 2) + intAbs ((iv.lo + iv.hi) / 2 - iv.lo)).toNat =
-      intAbs (iv.hi - (iv.lo + iv.hi) / 2) + intAbs ((iv.lo + iv.hi) / 2 - iv.lo) :=
+  have hRad : Int.ofNat (Max.max (intAbs (iv.hi - (iv.lo + iv.hi) / 2))
+        (intAbs ((iv.lo + iv.hi) / 2 - iv.lo))).toNat =
+      Max.max (intAbs (iv.hi - (iv.lo + iv.hi) / 2)) (intAbs ((iv.lo + iv.hi) / 2 - iv.lo)) :=
     Int.toNat_of_nonneg (by omega)
   omega
 
@@ -891,7 +895,7 @@ theorem usd_lifecycle_contract_narrows_sound
     exact evaluates_ifBool hHold (evaluates_self (.inject "ok" (.record [])))
 
 /-- Golden OpenUSD Relocation, Affine SDF Cancellation & Temporal Persistence Verification. -/
-theorem golden_openusd_metatheory_verified :
+example :
     let p := ["Factory", "Draft", "Stator", "Slot01"]
     let af : AffineForm1D := { c0 := 50, c1 := 7, c2 := 5 }
     let af3 : AffineForm3D := { c0 := 50, cx := 7, cy := 5, cz := 3, err := 0 }
@@ -909,6 +913,32 @@ theorem golden_openusd_metatheory_verified :
   decide +kernel
 
 /-! ## 4. Unified OpenUSD `SdfLayer` / `PrimSpec` / `PcpPrimIndex` $\to$ `Core4` `Term.mix` / `Term.fix` & `Obend.Leaf.flatten` -/
+
+/-- The 7 composition arc kinds of Apple/Pixar OpenUSD (`LIVERPS` strength ordering,
+from strongest `localArc` to weakest `specializesArc`)). Strength here is a rank on authored
+opinions for one attribute, which is what value resolution sees; Pcp builds a graph of arcs
+(a reference points at another layer stack, inherits at a class path), and that graph is not
+modelled. -/
+inductive UsdArcKind where
+  | localArc
+  | inheritsArc
+  | variantArc
+  | relocatesArc
+  | referencesArc
+  | payloadArc
+  | specializesArc
+  deriving DecidableEq, Repr
+
+/-- Numerical strength rank for `LIVERPS` (`7` = strongest `localArc`, `1` = weakest `specializesArc`). -/
+def UsdArcKind.strength : UsdArcKind → Nat
+  | .localArc       => 7
+  | .inheritsArc    => 6
+  | .variantArc     => 5
+  | .relocatesArc   => 4
+  | .referencesArc  => 3
+  | .payloadArc     => 2
+  | .specializesArc => 1
+
 
 /-- An OpenUSD `PrimSpec` authoring attribute/method opinions `fields` at hierarchical path `path`
 through LIVERPS composition arc `arc : UsdArcKind`. -/
@@ -1425,310 +1455,13 @@ theorem evalFRepAffine3DXform_enclosesAt
     e hEx hEy hEz hx' hy' hz'
   exact affine3d_enclosesAt_to_interval _ ex ey ez _ hEx hEy hEz hFRep
 
-/-! ## 6. Certified Geometric Shell Wall Thickness Derived from 3D `FRepExpr` (`computeShellWallThicknessUm`) -/
+/-! ## 6. Wall thickness is `Obend.Hardware.GeometryCAM.checkWall_sound`
 
-/-- **Certified 3D F-Rep Shell Wall Thickness (`computeShellWallThicknessUm`)**:
-Given an outer boundary surface `outer : FRepExpr`, an inner cavity surface `inner : FRepExpr`,
-a witness probe point `probePt : Int × Int × Int`, and a Lipschitz gradient bound `lipschitzBound : Int`,
-derives the certified lower-bound wall thickness (in micrometers):
-$$\text{wallThicknessUm} = \left\lfloor \frac{\max(0,\, f_{\text{inner}}(\text{probePt}) - f_{\text{outer}}(\text{probePt}))}{\max(1,\, L)} \right\rfloor.$$ -/
-def computeShellWallThicknessUm
-    (outer inner : FRepExpr) (probePt : Int × Int × Int) (lipschitzBound : Int) : Int :=
-  let (px, py, pz) := probePt
-  let fOut := evalFRepPoint px py pz outer
-  let fIn  := evalFRepPoint px py pz inner
-  let rawSpan := if fOut ≤ fIn then fIn - fOut else 0
-  let L := if 1 ≤ lipschitzBound then lipschitzBound else 1
-  rawSpan / L
-
-/-- Construct a `UsdPhysicalState` whose `wallThicknessUm` is derived directly from the 3D F-Rep
-shell geometry `(outer, inner)` via `computeShellWallThicknessUm` rather than an uncomputed integer. -/
-def mkCertifiedUsdPhysicalState
-    (timeCode : Nat) (outer inner : FRepExpr) (probePt : Int × Int × Int)
-    (lipschitzBound peakTempMilliC : Int) (receiptDigest : Nat) : UsdPhysicalState :=
-  { timeCode := timeCode
-  , wallThicknessUm := computeShellWallThicknessUm outer inner probePt lipschitzBound
-  , peakTempMilliC := peakTempMilliC
-  , receiptDigest := receiptDigest }
-
-/-- **Universal Non-Negativity of `computeShellWallThicknessUm` (`computeShellWallThicknessUm_nonneg`)**:
-For every outer/inner `FRepExpr` pair, probe point, and Lipschitz bound, the derived wall thickness
-is non-negative (`0 ≤ computeShellWallThicknessUm outer inner probePt lipschitzBound`). -/
-theorem computeShellWallThicknessUm_nonneg
-    (outer inner : FRepExpr) (probePt : Int × Int × Int) (lipschitzBound : Int) :
-    0 ≤ computeShellWallThicknessUm outer inner probePt lipschitzBound := by
-  rcases probePt with ⟨px, py, pz⟩
-  unfold computeShellWallThicknessUm
-  dsimp only
-  have hSpan : 0 ≤ (if evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner then
-      evalFRepPoint px py pz inner - evalFRepPoint px py pz outer else 0) := by
-    split <;> omega
-  have hL : 0 ≤ (if 1 ≤ lipschitzBound then lipschitzBound else 1) := by
-    split <;> omega
-  exact Int.ediv_nonneg hSpan hL
-
-/-- **Certified Lipschitz Shell Clearance Lower Bound (`computeShellWallThicknessUm_lipschitz_lower_bound`)**:
-Whenever `1 ≤ lipschitzBound` and `evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner`,
-the derived wall thickness `w := computeShellWallThicknessUm outer inner (px, py, pz) lipschitzBound`
-satisfies `w * lipschitzBound ≤ evalFRepPoint px py pz inner - evalFRepPoint px py pz outer`. -/
-theorem computeShellWallThicknessUm_lipschitz_lower_bound
-    (outer inner : FRepExpr) (px py pz lipschitzBound : Int)
-    (hL : 1 ≤ lipschitzBound)
-    (hOrder : evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner) :
-    computeShellWallThicknessUm outer inner (px, py, pz) lipschitzBound * lipschitzBound ≤
-      evalFRepPoint px py pz inner - evalFRepPoint px py pz outer := by
-  unfold computeShellWallThicknessUm
-  dsimp only
-  rw [if_pos hOrder, if_pos hL]
-  exact Int.ediv_mul_le _ (by omega)
-
-/-- **Certified 3D Affine-Form & `XformOp3D` Shell Wall Thickness (`computeShellWallThicknessAffine3DUm`)**:
-Given an OpenUSD `XformOp3D` transform stack `ops : List XformOp3D`, outer/inner F-Rep solids
-`outer inner : FRepExpr`, a 3D Affine Arithmetic probe cell `(ax, ay, az : AffineForm3D)`, and a
-Lipschitz bound `lipschitzBound : Int`, derives the worst-case certified lower-bound wall thickness
-across the entire 3D affine cell:
-$$\text{wallThicknessAffine3DUm} = \left\lfloor \frac{\max(0,\, \text{ivIn.lo} - \text{ivOut.hi})}{\max(1,\, L)} \right\rfloor.$$ -/
-def computeShellWallThicknessAffine3DUm
-    (ops : List XformOp3D) (outer inner : FRepExpr)
-    (ax ay az : AffineForm3D) (lipschitzBound : Int) : Int :=
-  let ivOut := (evalFRepAffine3DXform ops ax ay az outer).toInterval
-  let ivIn  := (evalFRepAffine3DXform ops ax ay az inner).toInterval
-  let rawSpan := if ivOut.hi ≤ ivIn.lo then ivIn.lo - ivOut.hi else 0
-  let L := if 1 ≤ lipschitzBound then lipschitzBound else 1
-  rawSpan / L
-
-/-- **3D Affine-Form Shell Wall Thickness Conservative Lower-Bound Theorem
-(`computeShellWallThicknessAffine3DUm_lipschitz_lower_bound`)**:
-For every transform stack `ops : List XformOp3D`, every point `(x, y, z)` enclosed by `(ax, ay, az)` at
-unit noise `(ex, ey, ez) ∈ [-1, 1]^3`, and every `1 ≤ lipschitzBound`: whenever the affine enclosures
-satisfy `ivOut.hi ≤ ivIn.lo`, the affine-derived wall thickness `w` satisfies
-`w * lipschitzBound ≤ evalFRepPointXform ops x y z inner - evalFRepPointXform ops x y z outer`! -/
-theorem computeShellWallThicknessAffine3DUm_lipschitz_lower_bound
-    (ops : List XformOp3D) (outer inner : FRepExpr)
-    (ax ay az : AffineForm3D) (x y z ex ey ez lipschitzBound : Int)
-    (hEx : -1 ≤ ex ∧ ex ≤ 1) (hEy : -1 ≤ ey ∧ ey ≤ 1) (hEz : -1 ≤ ez ∧ ez ≤ 1)
-    (hx : ax.enclosesAt ex ey ez x)
-    (hy : ay.enclosesAt ex ey ez y)
-    (hz : az.enclosesAt ex ey ez z)
-    (hL : 1 ≤ lipschitzBound)
-    (hSep : (evalFRepAffine3DXform ops ax ay az outer).toInterval.hi ≤
-            (evalFRepAffine3DXform ops ax ay az inner).toInterval.lo) :
-    computeShellWallThicknessAffine3DUm ops outer inner ax ay az lipschitzBound * lipschitzBound ≤
-      evalFRepPointXform ops x y z inner - evalFRepPointXform ops x y z outer := by
-  have hOut := evalFRepAffine3DXform_enclosesAt ops ax ay az x y z ex ey ez hEx hEy hEz hx hy hz outer
-  have hIn  := evalFRepAffine3DXform_enclosesAt ops ax ay az x y z ex ey ez hEx hEy hEz hx hy hz inner
-  dsimp only [FloatInterval.contains] at hOut hIn
-  unfold computeShellWallThicknessAffine3DUm
-  dsimp only
-  rw [if_pos hSep, if_pos hL]
-  have hDiv := Int.ediv_mul_le
-    ((evalFRepAffine3DXform ops ax ay az inner).toInterval.lo -
-     (evalFRepAffine3DXform ops ax ay az outer).toInterval.hi)
-    (by omega : lipschitzBound ≠ 0)
-  omega
-
-/-! ### 6B. Self-Certified Eikonal SDF (`CertifiedSDF`) & Scale-Invariant Shell Wall Thickness (`computeCertifiedShellWallThicknessUm`) -/
-
-/-- A self-certified 3D Signed Distance Field (`CertifiedSDF`) pairing an `FRepExpr` `expr` and
-bounding box `box : Box3D` with a machine-checked Eikonal / gradient bound
-$0 < L_{\min} \le \|\nabla e(B)\| \le L_{\max}$ computed via `computeCertifiedGradMinBox` and
-`computeCertifiedLipschitzBox`. -/
-structure CertifiedSDF where
-  expr     : FRepExpr
-  box      : Box3D
-  lMin     : Nat := computeCertifiedGradMinBox box expr
-  lMax     : Nat := computeCertifiedLipschitzBox box expr
-  hEikonal :
-    0 < lMin ∧
-    lMin ≤ computeCertifiedGradMinBox box expr ∧
-    computeCertifiedGradMinBox box expr ≤ computeCertifiedLipschitzBox box expr ∧
-    computeCertifiedLipschitzBox box expr ≤ lMax
-
-/-- Every `CertifiedSDF` has a strictly positive derived Lipschitz bound over `s.box`. -/
-theorem CertifiedSDF.lipschitz_pos (s : CertifiedSDF) :
-    0 < computeCertifiedLipschitzBox s.box s.expr := by
-  have h := s.hEikonal
-  omega
-
-/-- **Self-Certified 3D F-Rep Shell Wall Thickness (`computeCertifiedShellWallThicknessUm`)**:
-Derives the certified lower-bound wall thickness (in micrometers) directly from `outer`, `inner`,
-and bounding box `B` by dividing `evalFRepPoint p inner - evalFRepPoint p outer` by the
-automatically derived Lipschitz bound `computeCertifiedLipschitzBox B outer` (returning `none`
-if the derived Lipschitz bound is `0`, eliminating any unchecked caller-supplied `lipschitzBound`). -/
-def computeCertifiedShellWallThicknessUm
-    (B : Box3D) (outer inner : FRepExpr) (p : Int × Int × Int) : Option Int :=
-  let L := computeCertifiedLipschitzBox B outer
-  if L == 0 then
-    none
-  else
-    let fOut := evalFRepPoint p.1 p.2.1 p.2.2 outer
-    let fIn  := evalFRepPoint p.1 p.2.1 p.2.2 inner
-    let rawSpan := if fOut ≤ fIn then fIn - fOut else 0
-    some (rawSpan / (L : Int))
-
-/-- **Self-Certified Shell Wall Thickness Soundness (`computeCertifiedShellWallThicknessUm_sound`)**:
-Whenever `computeCertifiedShellWallThicknessUm B outer inner (px, py, pz) = some w`:
-1. The derived Lipschitz bound is strictly positive (`1 ≤ computeCertifiedLipschitzBox B outer`) and `0 ≤ w`,
-2. Whenever `evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner`,
-   `w * (computeCertifiedLipschitzBox B outer : Int) ≤ evalFRepPoint px py pz inner - evalFRepPoint px py pz outer`,
-3. **True Physical Geometric Clearance**: for every probe point `p = (px, py, pz) ∈ B` in the inner
-   cavity (`inSolid px py pz inner`) with `evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner`
-   and every exterior point `q = (qx, qy, qz) ∈ B` outside `outer` (`0 ≤ evalFRepPoint qx qy qz outer`),
-   the physical $L_\infty$ distance between `p` and `q` is at least `w` (`w ≤ linfDist3D (px, py, pz) (qx, qy, qz)`)! -/
-theorem computeCertifiedShellWallThicknessUm_sound
-    (B : Box3D) (outer inner : FRepExpr) (px py pz : Int) (w : Int)
-    (hSome : computeCertifiedShellWallThicknessUm B outer inner (px, py, pz) = some w) :
-    1 ≤ computeCertifiedLipschitzBox B outer ∧
-    0 ≤ w ∧
-    (evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner →
-      w * (computeCertifiedLipschitzBox B outer : Int) ≤
-        evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) ∧
-    (∀ qx qy qz : Int,
-      B.contains px py pz →
-      B.contains qx qy qz →
-      evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner →
-      inSolid px py pz inner →
-      0 ≤ evalFRepPoint qx qy qz outer →
-      w ≤ linfDist3D (px, py, pz) (qx, qy, qz)) := by
-  unfold computeCertifiedShellWallThicknessUm at hSome
-  dsimp only at hSome
-  by_cases hZero : computeCertifiedLipschitzBox B outer == 0
-  · rw [if_pos hZero] at hSome
-    cases hSome
-  · rw [if_neg hZero] at hSome
-    simp only [Option.some.injEq] at hSome
-    have hLNe : computeCertifiedLipschitzBox B outer ≠ 0 := by
-      intro hEq
-      exact hZero (beq_iff_eq.mpr hEq)
-    have hLPos : 1 ≤ computeCertifiedLipschitzBox B outer := by omega
-    have hLIntPos : 1 ≤ (computeCertifiedLipschitzBox B outer : Int) := by omega
-    have hSpanNonneg :
-        0 ≤ (if evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner then
-              evalFRepPoint px py pz inner - evalFRepPoint px py pz outer else 0) := by
-      split <;> omega
-    have hWNonneg : 0 ≤ w := by
-      rw [← hSome]
-      exact Int.ediv_nonneg hSpanNonneg (by omega)
-    have hLower :
-        evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner →
-          w * (computeCertifiedLipschitzBox B outer : Int) ≤
-            evalFRepPoint px py pz inner - evalFRepPoint px py pz outer := by
-      intro hOrd
-      rw [← hSome, if_pos hOrd]
-      exact Int.ediv_mul_le _ (by omega)
-    refine ⟨hLPos, hWNonneg, hLower, ?_⟩
-    intro qx qy qz hp hq hOrd hInInner hOutQ
-    have hWL := hLower hOrd
-    unfold inSolid at hInInner
-    have hLip := evalFRepGradBox_lipschitz_sound B outer px py pz qx qy qz hp hq
-    have hAbs := frepIntAbs_bounds (evalFRepPoint px py pz outer - evalFRepPoint qx qy qz outer)
-    have hLipCast :
-        frepIntAbs (evalFRepPoint px py pz outer - evalFRepPoint qx qy qz outer) ≤
-          (computeCertifiedLipschitzBox B outer : Int) * linfDist3D (px, py, pz) (qx, qy, qz) := hLip
-    have hWL_le_dist :
-        w * (computeCertifiedLipschitzBox B outer : Int) ≤
-          linfDist3D (px, py, pz) (qx, qy, qz) * (computeCertifiedLipschitzBox B outer : Int) := by
-      rw [Int.mul_comm (linfDist3D (px, py, pz) (qx, qy, qz))]
-      omega
-    exact Decidable.byContradiction fun hNotLe => by
-      have hGt : linfDist3D (px, py, pz) (qx, qy, qz) + 1 ≤ w := by omega
-      have hMulGt := int_mul_le_mul_of_nonneg_right
-        (linfDist3D (px, py, pz) (qx, qy, qz) + 1) w
-        (computeCertifiedLipschitzBox B outer : Int) hGt (Int.natCast_nonneg _)
-      rw [Int.add_mul, Int.one_mul] at hMulGt
-      omega
-
-/-- Broken `computeCertifiedShellWallThicknessUm` that divides by `1` instead of `computeCertifiedLipschitzBox`. -/
-def computeCertifiedShellWallThicknessUmBroken
-    (_B : Box3D) (outer inner : FRepExpr) (p : Int × Int × Int) : Option Int :=
-  some (evalFRepPoint p.1 p.2.1 p.2.2 inner - evalFRepPoint p.1 p.2.1 p.2.2 outer)
-
-#tooth computeCertifiedShellWallThicknessUm_sound by mutation
-  computeCertifiedShellWallThicknessUm := computeCertifiedShellWallThicknessUmBroken
-
-/-- **Certified Shell Wall Thickness Scale-100 Invariance Theorem
-(`computeCertifiedShellWallThicknessUm_scale100_invariant`)**:
-Scaling both `outer` and `inner` by `100` ($f \mapsto 100 f$, via `.scalePos 100`) scales both the
-field difference `evalFRepPoint p inner - evalFRepPoint p outer` and `computeCertifiedLipschitzBox B outer`
-by `100`, leaving the certified physical wall thickness `computeCertifiedShellWallThicknessUm`
-completely invariant! -/
-theorem computeCertifiedShellWallThicknessUm_scale100_invariant
-    (B : Box3D) (outer inner : FRepExpr) (px py pz : Int) :
-    let outer100 := FRepExpr.scalePos 100 outer
-    let inner100 := FRepExpr.scalePos 100 inner
-    evalFRepPoint px py pz inner100 - evalFRepPoint px py pz outer100 =
-      100 * (evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) ∧
-    computeCertifiedLipschitzBox B outer100 = 100 * computeCertifiedLipschitzBox B outer ∧
-    computeCertifiedShellWallThicknessUm B outer100 inner100 (px, py, pz) =
-      computeCertifiedShellWallThicknessUm B outer inner (px, py, pz) := by
-  dsimp only
-  have hEvalOut : evalFRepPoint px py pz (.scalePos 100 outer) = 100 * evalFRepPoint px py pz outer := rfl
-  have hEvalIn : evalFRepPoint px py pz (.scalePos 100 inner) = 100 * evalFRepPoint px py pz inner := rfl
-  have hDiff :
-      evalFRepPoint px py pz (.scalePos 100 inner) - evalFRepPoint px py pz (.scalePos 100 outer) =
-        100 * (evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) := by
-    rw [hEvalIn, hEvalOut]
-    omega
-  have hLip := computeCertifiedLipschitzBox_scalePos B 100 outer
-  refine ⟨hDiff, hLip, ?_⟩
-  unfold computeCertifiedShellWallThicknessUm
-  dsimp only
-  rw [hLip, hEvalOut, hEvalIn]
-  by_cases hL0 : computeCertifiedLipschitzBox B outer = 0
-  · simp [hL0]
-  · have h100L0 : (100 * computeCertifiedLipschitzBox B outer == 0) = false := by
-      rw [beq_eq_false_iff_ne]
-      omega
-    have hL0False : (computeCertifiedLipschitzBox B outer == 0) = false := by
-      rw [beq_eq_false_iff_ne]
-      exact hL0
-    rw [h100L0, hL0False]
-    by_cases hOrd : evalFRepPoint px py pz outer ≤ evalFRepPoint px py pz inner
-    · have hOrd100 :
-          100 * evalFRepPoint px py pz outer ≤ 100 * evalFRepPoint px py pz inner := by
-        omega
-      simp only [hOrd100, hOrd, ↓reduceIte]
-      have hSub100 :
-          100 * evalFRepPoint px py pz inner - 100 * evalFRepPoint px py pz outer =
-            (100 : Int) * (evalFRepPoint px py pz inner - evalFRepPoint px py pz outer) := by
-        omega
-      have hL100 :
-          ((100 * computeCertifiedLipschitzBox B outer : Nat) : Int) =
-            (100 : Int) * (computeCertifiedLipschitzBox B outer : Int) := by
-        omega
-      rw [hSub100, hL100]
-      exact congrArg some (Int.mul_ediv_mul_of_pos _ _ (by decide : (0 : Int) < 100))
-    · have hOrd100 :
-          ¬ (100 * evalFRepPoint px py pz outer ≤ 100 * evalFRepPoint px py pz inner) := by
-        omega
-      simp only [hOrd100, hOrd, ↓reduceIte, Int.zero_ediv]
-
-/-- **Golden Certified SDF & Scale-Invariant Wall Thickness Verification
-(`golden_certified_sdf_wall_thickness_verified`)**:
-Verifies on a 3D planar shell `outer = x - 100`, `inner = x - 80` over box `B = [0, 200]^3`:
-1. `CertifiedSDF` certifies $L_{\min} = 1 \le \|\nabla e(B)\| \le L_{\max} = 1$,
-2. `computeCertifiedShellWallThicknessUm` derives `some 20` at probe `(80, 0, 0)`, and
-3. Scaling both fields by `100` (`100 * (x - 100)` and `100 * (x - 80)`) scales the field difference
-   from `20` to `2000` and scales `computeCertifiedLipschitzBox` from `1` to `100`, preserving
-   the certified physical wall thickness `some 20`! -/
-theorem golden_certified_sdf_wall_thickness_verified :
-    let B : Box3D :=
-      { xIv := { lo := 0, hi := 200 }
-      , yIv := { lo := 0, hi := 200 }
-      , zIv := { lo := 0, hi := 200 } }
-    let outer : FRepExpr := .offset 100 .varX
-    let inner : FRepExpr := .offset 80 .varX
-    let sdf : CertifiedSDF :=
-      { expr := outer
-      , box := B
-      , hEikonal := by decide +kernel }
-    sdf.lMin = 1 ∧
-    sdf.lMax = 1 ∧
-    computeCertifiedShellWallThicknessUm B outer inner (80, 0, 0) = some 20 ∧
-    computeCertifiedShellWallThicknessUm B (.scalePos 100 outer) (.scalePos 100 inner) (80, 0, 0) =
-      some 20 ∧
-    computeCertifiedShellWallThicknessUm B (.const 0) inner (80, 0, 0) = none := by
-  decide +kernel
+Three probe-point wall-thickness functions stood here until 2026-11-04 (`computeShellWallThicknessUm`
+with a caller's Lipschitz bound, its affine variant, and `computeCertifiedShellWallThicknessUm`),
+each bounding the distance from one chosen point to the outer surface. A wall is a property of the
+whole cavity, so the certificate is now a k-d region check in `GeometryCAM` (`wallLeaf`,
+`checkWall_sound`): every lattice point within `t` of any cavity point of the box is material. -/
 
 end Obend.Hardware.OpenUSD
 end
