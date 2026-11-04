@@ -25,13 +25,18 @@ machine-tool kinematics, and jerk-limited trajectory generation** within `Obend.
     exact initial acceleration while advancing velocity by $2 j\,\Delta t^2$),
   - Proves **`ruckig_directional_limits_sound`** (enforcing asymmetric/directional velocity and acceleration
     bounds $[v_{\min}, v_{\max}]$, $[a_{\min}, a_{\max}]$).
-* **5-Axis CNC 21-Parameter Volumetric Geometric Error & Abbe Lever-Arm Compensation**:
-  - Models carriage translational errors $\boldsymbol{\delta} = (\delta_x, \delta_y, \delta_z)$ coupled with
+* **Small-angle rigid-body error of one carriage (six of the 21 parameters; Abbe lever arm)**:
+  - The 21-parameter model of a three-axis machine is six errors per axis plus three squareness
+    terms, each a function of position; this section has one carriage's six, constant, to first
+    order. Models carriage translational errors $\boldsymbol{\delta} = (\delta_x, \delta_y, \delta_z)$ coupled with
     angular roll/pitch/yaw errors $\boldsymbol{\epsilon} = (\epsilon_x, \epsilon_y, \epsilon_z)$ across a
     spindle/tool-holder Abbe offset vector $\mathbf{L} = (L_x, L_y, L_z)$:
     $$\mathbf{e}_{\text{vol}} = \boldsymbol{\delta} + \boldsymbol{\epsilon} \times \mathbf{L},$$
   - Proves **`abbe_volumetric_compensation_exact`**: pre-compensating the CNC axis command by $-\mathbf{e}_{\text{vol}}$
     cancels both translational error and 3D angular Abbe lever-arm error across all three axes simultaneously.
+* **A post-processor for an A/C trunnion with TCPM (§8)**: typed NC moves, `postNgc` text in the Fanuc
+  30i dialect, and **`postMoves_rotarySafe`**: for every list of 3+2 operations, no feed changes the
+  tool axis and every re-orientation is a rapid on or above the clearance plane.
 -/
 public import Obend.Hardware.GeometryCAM
 @[expose] public section
@@ -289,7 +294,7 @@ theorem abbe_volumetric_compensation_exact (pTarget linErr angErr abbeArm : Vec3
   congr 1 <;> omega
 
 /-- Golden Verification of Featherstone Spatial Algebra, Ruckig S-Curve & 5-Axis Abbe Compensation. -/
-theorem golden_kinematics_featherstone_ruckig_verified :
+example :
     let twist : SpatialTwist6D := { ang := { x := 3, y := -4, z := 12 }, lin := { x := 50, y := -20, z := 10 } }
     let mom   : SpatialWrench6D := { torque := { x := 90, y := -80, z := 240 }, force := { x := 250, y := -100, z := 50 } }
     let st0   : RuckigState1D := { posScaled6 := 0, velScaled2 := 0, acc := 0 }
@@ -696,6 +701,254 @@ theorem spatialPower_propagateSerialChainTwists_append
       spatialPower f (propagateSerialChainTwists chain1) +
       spatialPower f (propagateSerialChainTwists chain2) := by
   rw [propagateSerialChainTwists_append, spatialPower_bilinear_add_right]
+
+
+/-! ## 8. A five-axis post-processor with TCPM (`postNgc`) and the rotary-safety theorem
+
+The CAM side (`Obend.Hardware.GeometryCAM`) produces cutter locations: a tip point in the part frame
+and an integer tool axis. This section turns operations of such points into an NC program for an
+A/C trunnion (C on the table about Z, A tilting the table about X, spindle fixed along machine +Z) in
+the Fanuc 30i dialect with tool centre point management on (`G43.4 H…`): the control, not the post,
+does the inverse kinematics, so the programmed X/Y/Z are tip coordinates in the part frame and
+A/C only orient the tool. (Haas calls this `G234`, Heidenhain `M128`/`FUNCTION TCPM`, Siemens `TRAORI`.)
+
+Each operation is 3+2: the tool axis is fixed while cutting, and the table re-orients only at the
+clearance plane. `postMoves_rotarySafe` proves that of every program the post can emit: a feed never
+changes the tool axis, and any move that does is a rapid between two points on or above the
+clearance plane. The unwind the hand-written fidget program did (C from 345 to 0 under `G01` at
+cutting depth) is therefore not expressible.
+
+Angles are printed from the axis vector (`axisAnglesMilliDeg`, `Float`, printing only); A is the
+tilt from +Z, C the azimuth of the tilt measured from +X. A machine whose rotary signs differ needs
+those two lines changed, which is what a post's machine configuration is. -/
+
+open Obend.Hardware.GeometryCAM (ToolAxis)
+
+/-- A typed NC motion block; coordinates are lattice units of the part frame. -/
+inductive NcMove where
+  | rapid (x y z : Int) (axis : ToolAxis)
+  | feed  (x y z : Int) (axis : ToolAxis) (mmPerMin : Nat)
+  deriving DecidableEq, Repr
+
+def NcMove.z : NcMove → Int
+  | .rapid _ _ z _ => z
+  | .feed _ _ z _ _ => z
+
+def NcMove.axis : NcMove → ToolAxis
+  | .rapid _ _ _ a => a
+  | .feed _ _ _ a _ => a
+
+def NcMove.isFeed : NcMove → Bool
+  | .rapid .. => false
+  | .feed .. => true
+
+/-- A rapid at or above the clearance plane `clear`. -/
+def NcMove.clearRapid (clear : Int) : NcMove → Bool
+  | .rapid _ _ z _ => decide (clear ≤ z)
+  | .feed .. => false
+
+/-- Two consecutive moves are rotary-safe when the axis is unchanged, or when the second is a rapid
+and both are on or above the clearance plane. -/
+def movePairSafe (clear : Int) (m₁ m₂ : NcMove) : Bool :=
+  m₂.axis == m₁.axis || (!m₂.isFeed && decide (clear ≤ m₁.z) && decide (clear ≤ m₂.z))
+
+def movesRotarySafe (clear : Int) : List NcMove → Bool
+  | m₁ :: m₂ :: rest => movePairSafe clear m₁ m₂ && movesRotarySafe clear (m₂ :: rest)
+  | _ => true
+
+/-- One 3+2 operation: a constant tool axis and the tip polyline to cut. -/
+structure CamPass where
+  axis : ToolAxis
+  pts  : List (Int × Int × Int)
+  deriving Repr
+
+structure PostConfig where
+  clearanceZ : Int
+  plungeFeed : Nat
+  cutFeed    : Nat
+  spindleRpm : Nat
+  tool       : Nat
+  unitMicron : Nat
+  deriving Repr
+
+/-- Moves of one pass: rapid to above the first point (re-orienting there), plunge, cut, rapid
+straight up to the clearance plane. -/
+def passMoves (cfg : PostConfig) (p : CamPass) : List NcMove :=
+  match p.pts with
+  | [] => []
+  | q :: rest =>
+    let l := (q :: rest).getLast (List.cons_ne_nil _ _)
+    .rapid q.1 q.2.1 cfg.clearanceZ p.axis :: .feed q.1 q.2.1 q.2.2 p.axis cfg.plungeFeed ::
+      ((rest.map fun r => NcMove.feed r.1 r.2.1 r.2.2 p.axis cfg.cutFeed) ++
+        [.rapid l.1 l.2.1 cfg.clearanceZ p.axis])
+
+def postMoves (cfg : PostConfig) (passes : List CamPass) : List NcMove :=
+  passes.flatMap (passMoves cfg)
+
+theorem movesRotarySafe_of_sameAxis (clear : Int) (a : ToolAxis) :
+    ∀ ms : List NcMove, (∀ m ∈ ms, m.axis = a) → movesRotarySafe clear ms = true
+  | [] , _ => rfl
+  | [_], _ => rfl
+  | m₁ :: m₂ :: rest, h => by
+    simp only [movesRotarySafe, Bool.and_eq_true]
+    refine ⟨?_, movesRotarySafe_of_sameAxis clear a (m₂ :: rest) (fun m hm => h m (List.mem_cons_of_mem _ hm))⟩
+    have h1 := h m₁ (List.mem_cons_self ..)
+    have h2 := h m₂ (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+    simp [movePairSafe, h1, h2]
+
+theorem movesRotarySafe_append (clear : Int) :
+    ∀ (xs ys : List NcMove),
+      movesRotarySafe clear xs = true → movesRotarySafe clear ys = true →
+      (∀ m₁ m₂, xs.getLast? = some m₁ → ys.head? = some m₂ → movePairSafe clear m₁ m₂ = true) →
+      movesRotarySafe clear (xs ++ ys) = true
+  | [], _, _, hy, _ => by simpa using hy
+  | [m], ys, _, hy, hb => by
+    cases ys with
+    | nil => rfl
+    | cons n ys' =>
+      simp only [List.cons_append, List.nil_append, movesRotarySafe, Bool.and_eq_true]
+      exact ⟨hb m n rfl rfl, hy⟩
+  | m₁ :: m₂ :: rest, ys, hx, hy, hb => by
+    simp only [movesRotarySafe, Bool.and_eq_true] at hx
+    simp only [List.cons_append, movesRotarySafe, Bool.and_eq_true]
+    refine ⟨hx.1, ?_⟩
+    have := movesRotarySafe_append clear (m₂ :: rest) ys hx.2 hy (by
+      intro a b ha hbh
+      exact hb a b (by simpa [List.getLast?_cons_cons] using ha) hbh)
+    simpa using this
+
+theorem passMoves_axis (cfg : PostConfig) (p : CamPass) : ∀ m ∈ passMoves cfg p, m.axis = p.axis := by
+  unfold passMoves
+  split
+  · simp
+  · intro m hm
+    simp only [List.mem_cons, List.mem_append, List.mem_map, List.mem_singleton] at hm
+    rcases hm with h | h | ⟨r, _, h⟩ | h | h <;> first | (subst h; rfl) | cases h
+
+theorem passMoves_head (cfg : PostConfig) (p : CamPass) (m : NcMove)
+    (h : (passMoves cfg p).head? = some m) : m.clearRapid cfg.clearanceZ = true := by
+  unfold passMoves at h
+  split at h
+  · cases h
+  · simp only [List.head?_cons, Option.some.injEq] at h
+    subst h
+    simp [NcMove.clearRapid]
+
+theorem passMoves_last (cfg : PostConfig) (p : CamPass) (m : NcMove)
+    (h : (passMoves cfg p).getLast? = some m) : m.clearRapid cfg.clearanceZ = true := by
+  unfold passMoves at h
+  split at h
+  · cases h
+  · dsimp only at h
+    rw [← List.cons_append, ← List.cons_append, List.getLast?_append] at h
+    simp only [List.getLast?_singleton, Option.some_or, Option.some.injEq] at h
+    subst h
+    simp [NcMove.clearRapid]
+
+theorem movePairSafe_of_clearRapid (clear : Int) (m₁ m₂ : NcMove)
+    (h₁ : m₁.clearRapid clear = true) (h₂ : m₂.clearRapid clear = true) :
+    movePairSafe clear m₁ m₂ = true := by
+  cases m₁ <;> cases m₂ <;> simp_all [NcMove.clearRapid, movePairSafe, NcMove.isFeed, NcMove.z]
+
+theorem postMoves_head (cfg : PostConfig) :
+    ∀ (ps : List CamPass) (m : NcMove), (postMoves cfg ps).head? = some m →
+      m.clearRapid cfg.clearanceZ = true
+  | [], _, h => by cases h
+  | p :: ps, m, h => by
+    unfold postMoves at h
+    rw [List.flatMap_cons] at h
+    cases hp : passMoves cfg p with
+    | nil => rw [hp, List.nil_append] at h; exact postMoves_head cfg ps m h
+    | cons a l =>
+      rw [hp, List.cons_append, List.head?_cons] at h
+      exact passMoves_head cfg p m (by rw [hp]; exact h)
+
+/-- **`postMoves_rotarySafe`**: every program the post emits is rotary-safe at its clearance plane,
+for every list of operations. -/
+theorem postMoves_rotarySafe (cfg : PostConfig) :
+    ∀ ps : List CamPass, movesRotarySafe cfg.clearanceZ (postMoves cfg ps) = true
+  | [] => rfl
+  | p :: ps => by
+    have hRest := postMoves_rotarySafe cfg ps
+    unfold postMoves at hRest ⊢
+    rw [List.flatMap_cons]
+    refine movesRotarySafe_append _ _ _
+      (movesRotarySafe_of_sameAxis _ p.axis _ (passMoves_axis cfg p)) hRest ?_
+    intro m₁ m₂ h₁ h₂
+    exact movePairSafe_of_clearRapid _ _ _ (passMoves_last cfg p m₁ h₁) (postMoves_head cfg ps m₂ h₂)
+
+/-- A post that unwinds the rotaries at cutting depth: it re-orients on the plunge feed instead of on
+the rapid above the first point. -/
+def passMovesBroken (cfg : PostConfig) (p : CamPass) : List NcMove :=
+  match p.pts with
+  | [] => []
+  | q :: rest =>
+    .rapid q.1 q.2.1 cfg.clearanceZ ⟨0, 0, 1, 1⟩ :: .feed q.1 q.2.1 q.2.2 p.axis cfg.plungeFeed ::
+      (rest.map fun r => NcMove.feed r.1 r.2.1 r.2.2 p.axis cfg.cutFeed)
+
+#tooth postMoves_rotarySafe by mutation
+  passMoves := passMovesBroken
+
+/-- Every emitted program starts with a rapid at the clearance plane (so the first motion after the
+tool change and `G43.4` is never a cut). -/
+theorem postMoves_starts_clear (cfg : PostConfig) (ps : List CamPass) (m : NcMove)
+    (h : (postMoves cfg ps).head? = some m) : m.clearRapid cfg.clearanceZ = true :=
+  postMoves_head cfg ps m h
+
+/-! ### Text -/
+
+/-- Lattice units to millimetres with three decimals. -/
+def fmtMm (unitMicron : Nat) (v : Int) : String :=
+  let um := v * unitMicron
+  let a := um.natAbs
+  let frac := toString (a % 1000)
+  let frac := String.ofList (List.replicate (3 - frac.length) '0') ++ frac
+  (if um < 0 then "-" else "") ++ s!"{a / 1000}.{frac}"
+
+/-- `Float` degrees with three decimals. -/
+def fmtDeg (d : Float) : String :=
+  let m := (d * 1000.0).round
+  let neg := m < 0.0
+  let a := (if neg then -m else m).toUInt64.toNat
+  let frac := toString (a % 1000)
+  let frac := String.ofList (List.replicate (3 - frac.length) '0') ++ frac
+  (if neg && a != 0 then "-" else "") ++ s!"{a / 1000}.{frac}"
+
+/-- Rotary angles that bring part-frame axis `u` onto the spindle: A the tilt from +Z, C the azimuth
+of the tilt from +X (0 when the axis is vertical). -/
+def axisAngles (u : ToolAxis) : Float × Float :=
+  let n := Float.ofNat u.n
+  let uz := Float.ofInt u.uz
+  let a := Float.acos (uz / n) * 180.0 / 3.141592653589793
+  let c := if u.ux == 0 && u.uy == 0 then 0.0
+    else Float.atan2 (Float.ofInt u.uy) (Float.ofInt u.ux) * 180.0 / 3.141592653589793
+  (a, c)
+
+def NcMove.toLine (unitMicron : Nat) : NcMove → String
+  | .rapid x y z a =>
+    let (ad, cd) := axisAngles a
+    s!"G00 X{fmtMm unitMicron x} Y{fmtMm unitMicron y} Z{fmtMm unitMicron z} A{fmtDeg ad} C{fmtDeg cd}"
+  | .feed x y z a f =>
+    let (ad, cd) := axisAngles a
+    s!"G01 X{fmtMm unitMicron x} Y{fmtMm unitMicron y} Z{fmtMm unitMicron z} A{fmtDeg ad} C{fmtDeg cd} F{f}"
+
+/-- The program text: safe start, tool change, spindle, TCPM on, the moves, TCPM off at the
+clearance plane, machine-coordinate retract and rotary home, spindle off, end. The safe-start line
+cancels any length offset before the tool change, where `G49` belongs; TCPM is cancelled by the
+second `G49` only after the final rapid to clearance. -/
+def postNgc (cfg : PostConfig) (title : String) (passes : List CamPass) : String :=
+  let header :=
+    [ "%"
+    , s!"({title})"
+    , "(Fanuc 30i dialect, A/C trunnion, tool centre point management G43.4)"
+    , "G21 G90 G94 G17 G40 G80 G49"
+    , s!"T{cfg.tool} M06"
+    , "G54"
+    , s!"S{cfg.spindleRpm} M03"
+    , s!"G43.4 H{cfg.tool}" ]
+  let body := (postMoves cfg passes).map (NcMove.toLine cfg.unitMicron)
+  let footer := [ "G49", "G53 G00 Z0.", "G53 G00 A0. C0.", "M05", "M30", "%" ]
+  String.intercalate "\n" (header ++ body ++ footer) ++ "\n"
 
 end Obend.Hardware.Kinematics
 end
