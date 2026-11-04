@@ -139,8 +139,7 @@ open Obend.Judge.SOS
      whereas a premature readout jump before reaching the excited guard is refused (`= false`). -/
 example :
     let dom : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
-    let rem5 : Interval := ⟨CanonicalRat.mk (-1) 100000, CanonicalRat.mk 1 100000⟩
-    let normTM := tmUnitaryNormSq dom rem5
+    let normTM := tmUnitaryNormSq dom
     let dtSmall := CanonicalRat.mk 1 10
     let remSmall : Interval := ⟨CanonicalRat.mk (-1) 100, CanonicalRat.mk 1 100⟩
     let eigenOde := schrodingerEigenmodeOde 1 dtSmall remSmall
