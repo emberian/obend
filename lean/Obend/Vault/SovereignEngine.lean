@@ -48,7 +48,8 @@ open Obend.Law (ContractGoal ContractCert CertVerdict CellContract Holds Admits 
 open Obend.Judge (TableDfa dfaAccepts TlsnTranscriptQuery TlsnTranscriptCert
   verifyTlsnTranscriptPolicy tlsnTranscriptFormat Market Order Certificate ClearingQuery
   drexClearingJudge)
-open Obend.Lower (GrainInstr compilePolicyToGrainProg evalGrainProg compilePolicyToGrainProg_sound)
+open Obend.Lower (GrainInstr compilePolicyToGrainProg evalGrainProg compilePolicyToGrainProg_sound
+  compilePolicyToGrainProg_refuses_excess_tokens)
 open Obend.Ledger (AccountId AssetId Book ResourcePosting Seat safeAt payoutPostings
   applyPostings applyPostings_conserves BatchRealloc applyBatchRealloc)
 open Obend.Vault.Projection (VaultCell ProjectedCell BlindedOpening cellBlind projectCell
@@ -90,9 +91,11 @@ def DeployedGrainContract.WellFormed (c : DeployedGrainContract) : Prop :=
   c.wellFormedB = true
 
 /-- Any well-formed `DeployedGrainContract` has verified `.preserves` and `.stepSound` certificates
-    and evaluates its compiled `grainProg` identically to `dfaAccepts c.oraclePolicy`. -/
+    and evaluates its compiled `grainProg` identically to `dfaAccepts c.oraclePolicy` for token
+    streams within `c.maxTokens`. -/
 theorem DeployedGrainContract.wellFormed_sound (c : DeployedGrainContract)
-    (h : c.WellFormed) (tokens : List String) :
+    (h : c.WellFormed) (tokens : List String)
+    (h_len : tokens.length ≤ c.maxTokens := by omega) :
     c.isarCert.scriptValid = true ∧
     checkContractCert (.preserves c.law c.invariant) c.preservesCert = .valid ∧
     checkContractCert (.stepSound c.law c.invariant c.stepRel) c.stepSoundCert = .valid ∧
@@ -102,7 +105,7 @@ theorem DeployedGrainContract.wellFormed_sound (c : DeployedGrainContract)
   obtain ⟨⟨⟨h_isar, h_pres⟩, h_step⟩, h_prog⟩ := h
   refine ⟨h_isar, h_pres, h_step, ?_⟩
   rw [h_prog]
-  exact compilePolicyToGrainProg_sound c.oraclePolicy c.maxTokens tokens
+  exact compilePolicyToGrainProg_sound c.oraclePolicy c.maxTokens tokens h_len
 
 /-! ## 2. ZK Oracle Fact Envelope (`ZkOracleFactEnvelope` & `verifyZkOracleEnvelope`) -/
 
@@ -135,7 +138,17 @@ theorem verifyZkOracleEnvelope_sound (c : DeployedGrainContract) (env : ZkOracle
   unfold verifyZkOracleEnvelope at h_ver
   simp only [Bool.and_eq_true, beq_iff_eq] at h_ver
   obtain ⟨⟨⟨h_id, h_tlsn⟩, h_wit⟩, h_grain⟩ := h_ver
-  have ⟨_, _, _, h_eval⟩ := c.wellFormed_sound h_wf env.extractedTokens
+  have h_len : env.extractedTokens.length ≤ c.maxTokens := by
+    refine Nat.le_of_not_lt fun h_lt => ?_
+    have h_wf_unf := h_wf
+    unfold DeployedGrainContract.WellFormed DeployedGrainContract.wellFormedB at h_wf_unf
+    simp only [Bool.and_eq_true, beq_iff_eq] at h_wf_unf
+    have h_prog := h_wf_unf.2
+    have h_none := compilePolicyToGrainProg_refuses_excess_tokens c.oraclePolicy c.maxTokens env.extractedTokens h_lt
+    rw [h_prog] at h_grain
+    rw [h_none] at h_grain
+    cases h_grain
+  have ⟨_, _, _, h_eval⟩ := c.wellFormed_sound h_wf env.extractedTokens h_len
   rw [h_eval] at h_grain
   injection h_grain with h_dfa
   exact ⟨h_id, h_tlsn, h_wit, h_dfa⟩
@@ -252,21 +265,41 @@ def exitSeatAdmissibleB (W : SovereignWorldState) (s : Seat) (seatAcc : AccountI
   seats'.all (seatSafeInBook ledger') &&
   W.assets.all (fun a => ledger'.balance s.account a == 0)
 
+/-- Extract a numeric cell payload from `Data` when updating `VaultCell`s after a `VaultTurn`. -/
+def extractVaultCellPayload (fallback : Nat) (d : Data) : Nat :=
+  match d with
+  | .natural n => n
+  | .record fs =>
+    match fs.find? (fun (k, _) => k == "balance" || k == "bal" || k == "payload") with
+    | some (_, .natural n) => n
+    | _ => fallback
+  | _ => fallback
+
+/-- Apply a `VaultTurn`'s `writeCells` deltas to `vaultCells` (matching `toString c.id == d.cell`
+    or `"cell." ++ toString c.id == d.cell`). -/
+def applyTurnToVaultCells (cells : List VaultCell) (turn : VaultTurn) : List VaultCell :=
+  cells.map fun c =>
+    match turn.writeCells.find? (fun d => d.cell == toString c.id || d.cell == "cell." ++ toString c.id) with
+    | some d => { c with content := extractVaultCellPayload c.content d.postState }
+    | none => c
+
 /-- Executable conservation and duplicate-free cell check for `turn : VaultTurn`. -/
 def VaultTurn.conservedB (turn : VaultTurn) : Bool :=
   let assets := ("balance" :: (turn.writeCells.flatMap fun d => d.halfEdges.map Prod.fst)).eraseDups
   assets.all (fun a => sumAssetDelta turn.writeCells a == 0) &&
+  checkTurnStateBalancesBound assets turn &&
   (checkNodupCells (turn.writeCells.map CellDelta.cell)).isOk
 
 /-- Executable turn gate (`checkOracleTurnValidAt`) enforcing:
     1. `(admitFootprint W.store turn.readPins).isOk` (no stale read pins / TOCTOU),
     2. `turn.conservedB` (value conservation across `turn.writeCells` and duplicate-free cell deltas),
-    3. Every written cell delta `d ∈ turn.writeCells` has its `preState` present in `W.store`, and
-    4. Every written cell delta satisfies the deployed contracts' `invariant`, `law`, and `stepRel`. -/
+    3. `checkTurnStateBalancesBound ("balance" :: W.assets.map toString) turn` (blocking unreported cell-balance inflation),
+    4. Every written cell delta `d ∈ turn.writeCells` has its `preState` present in `W.store`, and
+    5. Every written cell delta satisfies the deployed contracts' `invariant`, `law`, and `stepRel`. -/
 def checkOracleTurnValidAt (W : SovereignWorldState) (turn : VaultTurn) : Bool :=
-  (admitFootprint W.store turn.readPins).isOk &&
-  turn.conservedB &&
-  turn.writeCells.all fun d =>
+  ((admitFootprint W.store turn.readPins).isOk &&
+   turn.conservedB) &&
+  ((turn.writeCells.all fun d =>
     let preOk :=
       match W.store d.cell with
       | some cur => Obend.Law.termEq cur.term d.preState.term
@@ -278,7 +311,8 @@ def checkOracleTurnValidAt (W : SovereignWorldState) (turn : VaultTurn) : Bool :
         Obend.Law.evalHoldsBounded c.invariant d.postState &&
         Obend.Law.evalAdmitsBounded c.law d.preState d.postState req &&
         Obend.Law.evalAdmitsBounded c.stepRel d.preState d.postState req
-    preOk && contractsOk
+    preOk && contractsOk) &&
+   checkTurnStateBalancesBound ("balance" :: W.assets.map toString) turn)
 
 /-- **Unified Sovereign Execution Engine Step (`stepSovereignEngine`)**. -/
 def stepSovereignEngine (W : SovereignWorldState) (tx : SovereignTransaction) :
@@ -304,9 +338,10 @@ def stepSovereignEngine (W : SovereignWorldState) (tx : SovereignTransaction) :
            postings.all (bookPostingValid W.ledger) &&
            W.seats.all (seatSafeInBook ledger') then
           some { W with
-            height := W.height + 1
-            store  := applyTurn W.store turn
-            ledger := ledger' }
+            height     := W.height + 1
+            store      := applyTurn W.store turn
+            vaultCells := applyTurnToVaultCells W.vaultCells turn
+            ledger     := ledger' }
         else
           none
     | .lockIntentSeat intent =>
@@ -341,6 +376,9 @@ def stepSovereignEngine (W : SovereignWorldState) (tx : SovereignTransaction) :
             seats  := W.seats.filter (fun x => x.account != seatAcc) }
         else
           none
+
+/-- Alias for `stepSovereignEngine`. -/
+abbrev applySovereignTurn := stepSovereignEngine
 
 /-! ## 6. The 3 Master Compositional Theorems -/
 
@@ -600,16 +638,16 @@ theorem sovereignEngine_enforces_zoe_and_mandates
           exact ⟨h_store, h_inv, h_step_rel⟩
 
 /-- **Master Theorem 3 (`sovereignEngine_blinded_view_non_forgeable`)**:
-    For any world state `W : SovereignWorldState`, viewer `v`, and bounded collision-resistant
-    hash `H`:
+    For any world state `W : SovereignWorldState`, viewer `v`, and bounded hash `H` (stated up
+    to `Collision H`, the spine's form):
     1. The viewer-projected Merkle root `W.merkleRoot H v` is bit-identical to the unredacted
        vault root `mapRoot H (vaultCommits H W.vaultCells)`.
     2. Every honest blinded opening `mkBlindedOpening H v W.vaultCells j` (`j < W.vaultCells.length`,
        `j < 2 ^ 256`) verifies against `W.merkleRoot H v`.
-    3. Any tampered cell `c_tampered` that alters `id` or `readCap` at index `j` is strictly
-       refused by `verifyBlindedOpening` against `W.merkleRoot H v`. -/
+    3. Any tampered cell `c_tampered` that alters `id` or `readCap` at index `j` is refused by
+       `verifyBlindedOpening` against `W.merkleRoot H v`, or `H` collides. -/
 theorem sovereignEngine_blinded_view_non_forgeable
-    {H : Hash} (hb : Bounded H) (h_no_coll : ¬ Collision H)
+    {H : Hash} (hb : Bounded H)
     (W : SovereignWorldState) (v : List Obend.Vault.Projection.Auth)
     (j : Nat) (c_tampered : VaultCell)
     (hj : j < W.vaultCells.length) (hjs : j < 2 ^ 256)
@@ -621,15 +659,15 @@ theorem sovereignEngine_blinded_view_non_forgeable
                   c_tampered.readCap ≠ (W.vaultCells.getD j default).readCap) :
     W.merkleRoot H v = mapRoot H (vaultCommits H W.vaultCells) ∧
     verifyBlindedOpening H (mkBlindedOpening H v W.vaultCells j) (W.merkleRoot H v) = true ∧
-    verifyBlindedOpening H
+    (verifyBlindedOpening H
       { mkBlindedOpening H v W.vaultCells j with cell := projectCell H v c_tampered }
-      (W.merkleRoot H v) = false := by
+      (W.merkleRoot H v) = false ∨ Collision H) := by
   have h_root : W.merkleRoot H v = mapRoot H (vaultCommits H W.vaultCells) :=
     projectedMerkleRoot_eq_vaultRoot H v W.vaultCells
   refine ⟨h_root, ?_, ?_⟩
   · rw [h_root]
     exact verify_blinded_opening_complete hb v W.vaultCells j hj hjs
-  · exact tampered_metadata_opening_refused hb h_no_coll v W.vaultCells j c_tampered
+  · exact tampered_metadata_opening_refused hb v W.vaultCells j c_tampered
       hj hjs hid_orig hsalt_orig hid_tamp hsalt_tamp h_tampered
 
 /-- **Stale-Pin Refusal Theorem (`stepSovereignEngine_oracleTurn_refuses_stale_pin`)**:

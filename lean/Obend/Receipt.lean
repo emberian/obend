@@ -550,26 +550,51 @@ def chained (d : Receipt Cell Pin Fact Clause → Digest) (genesis : Digest) : L
   | [r] => r.prev == genesis
   | r :: s :: rest => r.prev == d s && chained d genesis (s :: rest)
 
-/-- The digest binds: equal digests are equal receipts (an assumption about the hash, discharged
-for any particular pair by `Obend.Core.Digest.binds_or_collides` up to a collision). -/
+/-- The digest binds up to a named failure `Bad`: equal digests are equal receipts, or `Bad`
+holds. At a real hash `Bad` is its collision (`Obend.Core.Digest.binds_or_collides` discharges
+each pair up to `Collision H`); `Binds d` below is the `Bad := False` reading, which no
+fixed-width digest of an infinite type satisfies. -/
+def BindsOr (d : Receipt Cell Pin Fact Clause → Digest) (Bad : Prop) : Prop :=
+  ∀ r r', d r = d r' → r = r' ∨ Bad
+
+/-- The digest binds outright. -/
 def Binds (d : Receipt Cell Pin Fact Clause → Digest) : Prop := ∀ r r', d r = d r' → r = r'
 
-/-- **A verified chain is determined by its head and its length**, under a binding digest. -/
-theorem chain_binds (d : Receipt Cell Pin Fact Clause → Digest) (genesis : Digest) (hb : Binds d) :
+/-- **A verified chain is determined by its head and its length, or the digest failed**: the
+spine's form (`dated_sound`'s `∨ Collision H`), with the failure named. -/
+theorem chain_binds_or (d : Receipt Cell Pin Fact Clause → Digest) (genesis : Digest) {Bad : Prop}
+    (hb : BindsOr d Bad) :
     ∀ (l l' : List (Receipt Cell Pin Fact Clause)), chained d genesis l = true → chained d genesis l' = true →
-      l.length = l'.length → l.head? = l'.head? → l = l'
-  | [], [], _, _, _, _ => rfl
-  | [r], [r'], _, _, _, hh => by simp at hh; rw [hh]
+      l.length = l'.length → l.head? = l'.head? → l = l' ∨ Bad
+  | [], [], _, _, _, _ => .inl rfl
+  | [r], [r'], _, _, _, hh => by
+    simp at hh
+    rw [hh]
+    exact .inl rfl
   | r :: s :: rest, r' :: s' :: rest', h, h', hl, hh => by
     simp only [chained, Bool.and_eq_true, beq_iff_eq] at h h'
     simp only [List.head?_cons, Option.some.injEq] at hh
     subst hh
-    have hs : s = s' := hb s s' (h.1.symm.trans h'.1)
-    subst hs
-    have := chain_binds d genesis hb (s :: rest) (s :: rest') h.2 h'.2 (by simpa using hl) rfl
-    rw [this]
+    rcases hb s s' (h.1.symm.trans h'.1) with hs | bad
+    · subst hs
+      rcases chain_binds_or d genesis hb (s :: rest) (s :: rest') h.2 h'.2 (by simpa using hl) rfl with
+        he | bad
+      · rw [he]
+        exact .inl rfl
+      · exact .inr bad
+    · exact .inr bad
   | [], _ :: _, _, _, hl, _ | _ :: _, [], _, _, hl, _ => by simp at hl
   | [_], _ :: _ :: _, _, _, hl, _ | _ :: _ :: _, [_], _, _, hl, _ => by simp at hl
+
+/-- The outright reading: `chain_binds_or` at `Bad := False`. -/
+theorem chain_binds (d : Receipt Cell Pin Fact Clause → Digest) (genesis : Digest) (hb : Binds d) :
+    ∀ (l l' : List (Receipt Cell Pin Fact Clause)), chained d genesis l = true → chained d genesis l' = true →
+      l.length = l'.length → l.head? = l'.head? → l = l' := by
+  intro l l' h h' hl hh
+  rcases chain_binds_or d genesis (Bad := False) (fun r r' e => .inl (hb r r' e)) l l' h h' hl hh with
+    he | f
+  · exact he
+  · exact f.elim
 
 end Chain
 

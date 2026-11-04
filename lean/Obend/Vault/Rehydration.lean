@@ -48,7 +48,7 @@ public import Obend.Law.Proofs.Claim
 public import Obend.Law.Proofs.Std
 public import Obend.Tactic.Tooth
 
-@[expose] public section
+public section
 
 namespace Obend.Vault.Rehydration
 
@@ -71,7 +71,7 @@ structure AttestedRoot where
 deriving DecidableEq, Repr
 
 /-- **`AttestedRoot.holds`** — the root structurally holds iff both `v4Complete` and `quorum` hold. -/
-def AttestedRoot.holds (ar : AttestedRoot) : Bool :=
+@[expose] def AttestedRoot.holds (ar : AttestedRoot) : Bool :=
   ar.v4Complete && ar.quorum
 
 theorem attestedRoot_holds_iff (ar : AttestedRoot) :
@@ -88,7 +88,7 @@ deriving DecidableEq, Repr
 
 /-- **`Interaction.isWitnessed`** — an interaction is a genuine witness iff it is an `.attested`
     interaction whose root structurally holds (`ar.holds = true`). -/
-def Interaction.isWitnessed : Interaction → Bool
+@[expose] def Interaction.isWitnessed : Interaction → Bool
   | .attested ar => ar.holds
   | .ambient     => false
 
@@ -96,7 +96,7 @@ def Interaction.isWitnessed : Interaction → Bool
 abbrev InteractionLog := List Interaction
 
 /-- **`confined log`** — every interaction in `log` was witnessed inside the membrane. -/
-def confined (log : InteractionLog) : Bool :=
+@[expose] def confined (log : InteractionLog) : Bool :=
   log.all Interaction.isWitnessed
 
 /-- **`Rehydration`** — the derived liveness-type carried on every reacquisition. -/
@@ -107,14 +107,14 @@ inductive Rehydration where
 deriving DecidableEq, Repr
 
 /-- Whether a `Rehydration` liveness-type is faithful by construction (`Live` or `ReplayedDeterministic`). -/
-def Rehydration.isFaithful : Rehydration → Bool
+@[expose] def Rehydration.isFaithful : Rehydration → Bool
   | .Live                    => true
   | .ReplayedDeterministic   => true
   | .ReconstructedApproximate => false
 
 /-- **`classify log reachable`** — derives the `Rehydration` liveness-type from the context's
     `InteractionLog` and whether live source contexts are reachable. -/
-def classify (log : InteractionLog) (reachable : Bool) : Rehydration :=
+@[expose] def classify (log : InteractionLog) (reachable : Bool) : Rehydration :=
   if reachable then .Live
   else if confined log then .ReplayedDeterministic
   else .ReconstructedApproximate
@@ -173,7 +173,7 @@ theorem invalidAttestation_not_replayed_of_flags (log : InteractionLog) (ar : At
 /-! ### Replay Receipt Chain & Coverage Payoff -/
 
 /-- The fixed genesis sentinel pinning the oldest receipt in a chain. -/
-def genesisSentinel : Nat := 0
+@[expose] def genesisSentinel : Nat := 0
 
 /-- Per-turn witnessed receipt record in the append-only persistence chain. -/
 structure WitnessReceipt where
@@ -207,17 +207,20 @@ theorem genesis_is_last {H : WitnessReceipt → Nat} (HFresh : ∀ p, H p ≠ ge
     have hlink : r.prevHash = H p := hwl.1
     exact absurd (hgen ▸ hlink).symm (HFresh p)
 
-/-- **`chain_tamper_evident`** — two well-linked chains sharing the same head receipt are identical. -/
-theorem chain_tamper_evident {H : WitnessReceipt → Nat}
-    (HInj : Function.Injective H) (HFresh : ∀ p, H p ≠ genesisSentinel) :
+/-- **`chain_tamper_evident_or`** — two well-linked chains sharing the same head receipt are
+identical, or the receipt hash failed (`Bad`; at a real hash, its collision). This is the
+spine's form (`Obend.Receipt.chain_binds_or`): `Function.Injective H` holds of no fixed-width
+hash of an infinite type, so `chain_tamper_evident` below says nothing at `deployed`. -/
+theorem chain_tamper_evident_or {H : WitnessReceipt → Nat} {Bad : Prop}
+    (HBind : ∀ a b, H a = H b → a = b ∨ Bad) (HFresh : ∀ p, H p ≠ genesisSentinel) :
     ∀ (c d : ReceiptChain), wellLinked H c → wellLinked H d →
-      c.head? = d.head? → c = d := by
+      c.head? = d.head? → c = d ∨ Bad := by
   intro c
   induction c with
   | nil =>
     intro d _ _ hhead
     cases d with
-    | nil => rfl
+    | nil => exact .inl rfl
     | cons => simp at hhead
   | cons r ctail ih =>
     intro d hc hd hhead
@@ -230,6 +233,7 @@ theorem chain_tamper_evident {H : WitnessReceipt → Nat}
       | nil =>
         have hgen : r.prevHash = genesisSentinel := hc
         rw [genesis_is_last HFresh hd hgen]
+        exact .inl rfl
       | cons cp crest =>
         have hcp : r.prevHash = H cp := hc.1
         cases dtail with
@@ -238,18 +242,32 @@ theorem chain_tamper_evident {H : WitnessReceipt → Nat}
           exact absurd (hgen ▸ hcp).symm (HFresh cp)
         | cons dp drest =>
           have hdp : r.prevHash = H dp := hd.1
-          have hheads : cp = dp := HInj (hcp.symm.trans hdp)
-          have hctail : wellLinked H (cp :: crest) := hc.2
-          have hdtail : wellLinked H (dp :: drest) := hd.2
-          have htails := ih (dp :: drest) hctail hdtail (by simp [hheads])
-          rw [htails]
+          rcases HBind cp dp (hcp.symm.trans hdp) with hheads | bad
+          · have hctail : wellLinked H (cp :: crest) := hc.2
+            have hdtail : wellLinked H (dp :: drest) := hd.2
+            rcases ih (dp :: drest) hctail hdtail (by simp [hheads]) with htails | bad
+            · rw [htails]
+              exact .inl rfl
+            · exact .inr bad
+          · exact .inr bad
+
+/-- The outright reading: `chain_tamper_evident_or` at `Bad := False`. -/
+theorem chain_tamper_evident {H : WitnessReceipt → Nat}
+    (HInj : Function.Injective H) (HFresh : ∀ p, H p ≠ genesisSentinel) :
+    ∀ (c d : ReceiptChain), wellLinked H c → wellLinked H d →
+      c.head? = d.head? → c = d := by
+  intro c d hc hd hhead
+  rcases chain_tamper_evident_or (Bad := False) (fun a b e => .inl (HInj e)) HFresh c d hc hd hhead with
+    he | f
+  · exact he
+  · exact f.elim
 
 /-- Pure constructor for a receipt linking onto `prevDigest`. -/
-def mkReceipt (prevDigest oldC newC effH : Nat) : WitnessReceipt :=
+@[expose] def mkReceipt (prevDigest oldC newC effH : Nat) : WitnessReceipt :=
   { prevHash := prevDigest, oldCommit := oldC, newCommit := newC, effectsHash := effH }
 
 /-- Fold a turn-log into a newest-first well-linked receipt chain. -/
-def replayFold (H : WitnessReceipt → Nat) : ReceiptChain → List (Nat × Nat × Nat) → ReceiptChain
+@[expose] def replayFold (H : WitnessReceipt → Nat) : ReceiptChain → List (Nat × Nat × Nat) → ReceiptChain
   | acc, [] => acc
   | acc, (oldC, newC, effH) :: rest =>
       let prevDigest := match acc with
@@ -269,11 +287,11 @@ theorem replayFold_wellLinked (H : WitnessReceipt → Nat) :
       | cons hd tl => exact wellLinked_append hacc rfl
 
 /-- The receipt chain induced by a list of witnessed roots. -/
-def witnessChain (H : WitnessReceipt → Nat) (roots : List Nat) : ReceiptChain :=
+@[expose] def witnessChain (H : WitnessReceipt → Nat) (roots : List Nat) : ReceiptChain :=
   replayFold H [] (roots.map (fun r => (r, r, 0)))
 
 /-- **`rootOf i`** — extracts the attested state root iff `i` is a structurally valid witness. -/
-def rootOf : Interaction → Option Nat
+@[expose] def rootOf : Interaction → Option Nat
   | .attested ar => if ar.holds then some ar.root else none
   | .ambient     => none
 
@@ -284,11 +302,11 @@ theorem rootOf_isSome_iff_witnessed (i : Interaction) :
   | attested ar => cases h : ar.holds <;> simp [rootOf, Interaction.isWitnessed, h]
 
 /-- **`witnessedRoots log`** — the roots a context's interaction log actually replays from. -/
-def witnessedRoots (log : InteractionLog) : List Nat :=
+@[expose] def witnessedRoots (log : InteractionLog) : List Nat :=
   log.filterMap rootOf
 
 /-- **`witnessChainOf H log`** — the receipt chain induced by the witnessed roots of `log`. -/
-def witnessChainOf (H : WitnessReceipt → Nat) (log : InteractionLog) : ReceiptChain :=
+@[expose] def witnessChainOf (H : WitnessReceipt → Nat) (log : InteractionLog) : ReceiptChain :=
   witnessChain H (witnessedRoots log)
 
 theorem witnessChain_wellLinked (H : WitnessReceipt → Nat) (roots : List Nat) :
@@ -445,11 +463,11 @@ abbrev Viewer := MembraneViewer
 
 /-- **`membraneShows viewer aff`** — true iff the viewer's capabilities authorize `aff.required`
     AND the viewer's witness-graph projection permits `aff.name`. -/
-def membraneShows (viewer : MembraneViewer) (aff : CellAffordance φ) : Bool :=
+@[expose] def membraneShows (viewer : MembraneViewer) (aff : CellAffordance φ) : Bool :=
   fireGate aff.required viewer.held && viewer.permits aff.name
 
 /-- **`projectMembrane viewer affs`** — filters an affordance surface by `membraneShows viewer`. -/
-def projectMembrane (viewer : MembraneViewer) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
+@[expose] def projectMembrane (viewer : MembraneViewer) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
   affs.filter (fun aff => membraneShows viewer aff)
 
 theorem mem_projectMembrane (v : MembraneViewer) (affs : List (CellAffordance φ)) (aff : CellAffordance φ) :
@@ -520,7 +538,7 @@ theorem membrane_monotone_both {v₁ v₂ : MembraneViewer}
   exact ⟨fireGate_trans h12 hshows.1, hperm aff.name hshows.2⟩
 
 /-- Decidable check that `child` permits are a subset of `parent` permits on `activeNames`. -/
-def permitsSubsetOn (activeNames : List String) (child parent : String → Bool) : Bool :=
+@[expose] def permitsSubsetOn (activeNames : List String) (child parent : String → Bool) : Bool :=
   activeNames.all (fun n => !child n || parent n)
 
 theorem permitsSubsetOn_iff (activeNames : List String) (child parent : String → Bool) :
@@ -545,7 +563,7 @@ theorem permitsSubsetOn_iff (activeNames : List String) (child parent : String �
     returning `some` of the attenuated viewer (preserving the cumulative `activeNames` scope across
     hops so downstream delegations cannot evade upstream active-name checks) iff the hop is a
     genuine attenuation, and `none` on any amplification attempt. -/
-def Membrane.reshare (holderMembrane : MembraneViewer) (delegateTarget : MembraneViewer) :
+@[expose] def Membrane.reshare (holderMembrane : MembraneViewer) (delegateTarget : MembraneViewer) :
     Option MembraneViewer :=
   if fireGate delegateTarget.held holderMembrane.held &&
      permitsSubsetOn (holderMembrane.activeNames ++ delegateTarget.activeNames)
@@ -676,14 +694,15 @@ structure Sturdyref (φ : Type) where
   log       : InteractionLog
   lineage   : MembraneViewer
   reachable : Bool := false
+  cellId    : String := ""
 
 /-- The derived `Rehydration` liveness-type of a `Sturdyref`. -/
-def Sturdyref.liveness (sr : Sturdyref φ) : Rehydration :=
+@[expose] def Sturdyref.liveness (sr : Sturdyref φ) : Rehydration :=
   classify sr.log sr.reachable
 
 /-- **`rehydrateSturdyref sr viewer`** — rehydrates a `Sturdyref` for `viewer`, returning the
     per-viewer membrane-attenuated surface paired with its derived `Rehydration` liveness-type. -/
-def rehydrateSturdyref (sr : Sturdyref φ) (viewer : MembraneViewer) :
+@[expose] def rehydrateSturdyref (sr : Sturdyref φ) (viewer : MembraneViewer) :
     AffordanceSurface φ × Rehydration :=
   (projectMembrane viewer (projectMembrane sr.lineage sr.surface), sr.liveness)
 
@@ -712,7 +731,7 @@ theorem rehydrateSturdyref_reshare_monotone {mA reqB mB : MembraneViewer}
 /-! ## Pillar 3 — The Functorial Rerender Square & Frustum-Snapshot Per-Viewer Re-Expansion -/
 
 /-- **`projectFor held affs`** — per-viewer capability projection filtering affordances by `fireGate`. -/
-def projectFor (held : List Auth) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
+@[expose] def projectFor (held : List Auth) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
   affs.filter (fun aff => fireGate aff.required held)
 
 theorem projectFor_monotone {held₁ held₂ : List Auth} (h12 : held₁ ⊆ held₂)
@@ -744,7 +763,7 @@ theorem rerender_idempotent (held : List Auth) (affs : List (CellAffordance φ))
 
 /-- **`stepContent f affs`** — a content state-step rewriting each affordance's `effect` by `f`
     while leaving its `required` gate and `name` unchanged. -/
-def stepContent (f : φ → φ) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
+@[expose] def stepContent (f : φ → φ) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
   affs.map (fun a => { a with effect := f a.effect })
 
 theorem stepContent_gate (f : φ → φ) (a : CellAffordance φ) :
@@ -787,11 +806,11 @@ structure Snapshot (φ : Type) where
 deriving DecidableEq, Repr
 
 /-- **`snapshot affs`** — capture a frustum-snapshot of `affs`. -/
-def snapshot (affs : List (CellAffordance φ)) : Snapshot φ :=
+@[expose] def snapshot (affs : List (CellAffordance φ)) : Snapshot φ :=
   ⟨affs⟩
 
 /-- **`rehydrate snap held`** — re-expand a frustum-snapshot for a viewer holding `held`. -/
-def rehydrate (snap : Snapshot φ) (held : List Auth) : List (CellAffordance φ) :=
+@[expose] def rehydrate (snap : Snapshot φ) (held : List Auth) : List (CellAffordance φ) :=
   projectFor held snap.component
 
 /-- **`snapshot_roundtrip` (RE-EXPANSION FIDELITY)**:
@@ -826,7 +845,7 @@ structure TransitionGate where
   link : Data → Data → Bool
 
 /-- **`transitionOK tg old new`** — true iff `pre old`, `post new`, and `link old new` all hold. -/
-def transitionOK (tg : TransitionGate) (old new : Data) : Bool :=
+@[expose] def transitionOK (tg : TransitionGate) (old new : Data) : Bool :=
   tg.pre old && tg.post new && tg.link old new
 
 /-- **`transitionOK_iff`** — decomposes `transitionOK` into its three boolean conjuncts. -/
@@ -846,7 +865,7 @@ structure ReactiveAffordance (φ : Type) where
   closeHeight : Nat
 
 /-- **`inWindow ra height`** — true iff `ra.openHeight ≤ height` and `height ≤ ra.closeHeight`. -/
-def inWindow (ra : ReactiveAffordance φ) (height : Nat) : Bool :=
+@[expose] def inWindow (ra : ReactiveAffordance φ) (height : Nat) : Bool :=
   decide (ra.openHeight ≤ height) && decide (height ≤ ra.closeHeight)
 
 /-- **`inWindow_iff`** — bridges `inWindow` to the arithmetic inequalities `openHeight ≤ height ≤ closeHeight`. -/
@@ -857,7 +876,7 @@ theorem inWindow_iff (ra : ReactiveAffordance φ) (height : Nat) :
 
 /-- **`reactiveOK ra held height old new`** — the 3-dimensional reactive gate:
     capability gate AND relational transition gate AND temporal height window. -/
-def reactiveOK (ra : ReactiveAffordance φ) (held : List Auth) (height : Nat) (old new : Data) : Bool :=
+@[expose] def reactiveOK (ra : ReactiveAffordance φ) (held : List Auth) (height : Nat) (old new : Data) : Bool :=
   fireGate ra.aff.required held && transitionOK ra.gate old new && inWindow ra height
 
 theorem reactiveOK_iff (ra : ReactiveAffordance φ) (held : List Auth) (height : Nat) (old new : Data) :
@@ -871,7 +890,7 @@ theorem reactiveOK_iff (ra : ReactiveAffordance φ) (held : List Auth) (height :
 
 /-- **`fireReactive ra held height old new fc`** — dispatches `ra.aff` via `Obend.Vault.Affordance.fire`
     iff `reactiveOK ra held height old new` holds. -/
-def fireReactive (ra : ReactiveAffordance φ) (held : List Auth) (height : Nat) (old new : Data)
+@[expose] def fireReactive (ra : ReactiveAffordance φ) (held : List Auth) (height : Nat) (old new : Data)
     (fc : FireCtx φ) : Option (AffordanceIntent φ) :=
   if reactiveOK ra held height old new then
     fire ra.aff held fc
@@ -1019,23 +1038,23 @@ theorem fireReactive_binds_attested_root (ra : ReactiveAffordance φ) (held : Li
 /-! ## Concrete Golden Witnesses & Non-Vacuity Teeth across All 4 Pillars -/
 
 /-- Demo hash function for concrete receipt-chain replay checks. -/
-def demoReceiptHash (r : WitnessReceipt) : Nat :=
+@[expose] def demoReceiptHash (r : WitnessReceipt) : Nat :=
   r.prevHash + r.oldCommit + r.newCommit + r.effectsHash + 1
 
 /-- A genuine attested root (both `v4Complete` and `quorum` hold). -/
-def goodRoot : AttestedRoot := { root := 42, v4Complete := true, quorum := true }
+@[expose] def goodRoot : AttestedRoot := { root := 42, v4Complete := true, quorum := true }
 
 /-- A structurally invalid attested root (complete, but missing quorum). -/
-def badRoot : AttestedRoot := { root := 42, v4Complete := true, quorum := false }
+@[expose] def badRoot : AttestedRoot := { root := 42, v4Complete := true, quorum := false }
 
 /-- A confined interaction log of two genuine attested turns. -/
-def confinedLog : InteractionLog := [.attested goodRoot, .attested goodRoot]
+@[expose] def confinedLog : InteractionLog := [.attested goodRoot, .attested goodRoot]
 
 /-- An unconfined interaction log containing an ambient reach outside the membrane. -/
-def ambientLog : InteractionLog := [.attested goodRoot, .ambient]
+@[expose] def ambientLog : InteractionLog := [.attested goodRoot, .ambient]
 
 /-- An unconfined interaction log containing a structurally invalid attestation. -/
-def forgedLog : InteractionLog := [.attested goodRoot, .attested badRoot]
+@[expose] def forgedLog : InteractionLog := [.attested goodRoot, .attested badRoot]
 
 theorem replayedDeterministic_replays_satisfiable :
     classify confinedLog false = .ReplayedDeterministic ∧
@@ -1051,7 +1070,7 @@ theorem replays_coverage_needs_confinement :
   refine ⟨by decide, by decide, by decide, by decide⟩
 
 /-- Lookup a natural number field inside a `Core.Data.record`. -/
-def lookupNatField (key : String) : Data → Option Nat
+@[expose] def lookupNatField (key : String) : Data → Option Nat
   | .record fields =>
     match fields.lookup key with
     | some (.natural n) => some n
@@ -1059,7 +1078,7 @@ def lookupNatField (key : String) : Data → Option Nat
   | _ => none
 
 /-- Council vote transition gate on `Core.Data`: status remains `1` (PENDING) and tally increments by `1`. -/
-def voteTransitionGate : TransitionGate where
+@[expose] def voteTransitionGate : TransitionGate where
   pre  := fun d => lookupNatField "status" d == some 1
   post := fun d => lookupNatField "status" d == some 1
   link := fun old new =>
@@ -1069,7 +1088,7 @@ def voteTransitionGate : TransitionGate where
 
 /-- Council resolve transition gate on `Core.Data`: status moves `1 → 2` (PENDING → RESOLVED)
     and tally crosses the quorum threshold `3`. -/
-def resolveTransitionGate : TransitionGate where
+@[expose] def resolveTransitionGate : TransitionGate where
   pre  := fun d => lookupNatField "status" d == some 1
   post := fun d => lookupNatField "status" d == some 2
   link := fun old new =>
@@ -1084,68 +1103,68 @@ inductive CouncilEffect where
   | inspectTally (proposalId : Nat)
 deriving DecidableEq, Repr
 
-def councilEffectDigest : CouncilEffect → Nat
+@[expose] def councilEffectDigest : CouncilEffect → Nat
   | .castBallot n      => 3 * n
   | .resolveProposal n => 3 * n + 1
   | .inspectTally n    => 3 * n + 2
 
-def demoFireCtx : FireCtx CouncilEffect where
+@[expose] def demoFireCtx : FireCtx CouncilEffect where
   effectDigest := councilEffectDigest
   prevDigest   := 9
   preCommit    := 100
   postCommit   := 110
 
-def voteAff : CellAffordance CouncilEffect :=
+@[expose] def voteAff : CellAffordance CouncilEffect :=
   { required := [.write], effect := .castBallot 1, name := "vote" }
 
-def resolveAff : CellAffordance CouncilEffect :=
+@[expose] def resolveAff : CellAffordance CouncilEffect :=
   { required := [.grant], effect := .resolveProposal 1, name := "resolve" }
 
-def tallyViewAff : CellAffordance CouncilEffect :=
+@[expose] def tallyViewAff : CellAffordance CouncilEffect :=
   { required := [.read], effect := .inspectTally 1, name := "tally" }
 
-def voteReactiveBtn : ReactiveAffordance CouncilEffect :=
+@[expose] def voteReactiveBtn : ReactiveAffordance CouncilEffect :=
   { aff := voteAff, gate := voteTransitionGate, openHeight := 10, closeHeight := 20 }
 
-def resolveReactiveBtn : ReactiveAffordance CouncilEffect :=
+@[expose] def resolveReactiveBtn : ReactiveAffordance CouncilEffect :=
   { aff := resolveAff, gate := resolveTransitionGate, openHeight := 10, closeHeight := 30 }
 
-def statePend0 : Data := .record [("status", .natural 1), ("tally", .natural 0)]
-def statePend1 : Data := .record [("status", .natural 1), ("tally", .natural 1)]
-def statePend2 : Data := .record [("status", .natural 1), ("tally", .natural 2)]
-def stateResolved3 : Data := .record [("status", .natural 2), ("tally", .natural 3)]
+@[expose] def statePend0 : Data := .record [("status", .natural 1), ("tally", .natural 0)]
+@[expose] def statePend1 : Data := .record [("status", .natural 1), ("tally", .natural 1)]
+@[expose] def statePend2 : Data := .record [("status", .natural 1), ("tally", .natural 2)]
+@[expose] def stateResolved3 : Data := .record [("status", .natural 2), ("tally", .natural 3)]
 
-def councilSurface : AffordanceSurface CouncilEffect :=
+@[expose] def councilSurface : AffordanceSurface CouncilEffect :=
   [voteAff, resolveAff, tallyViewAff]
 
-def chairViewer : MembraneViewer where
+@[expose] def chairViewer : MembraneViewer where
   held        := [.read, .write, .grant]
   permits     := fun n => n == "vote" || n == "resolve" || n == "tally"
   activeNames := ["vote", "resolve", "tally"]
 
-def memberViewer : MembraneViewer where
+@[expose] def memberViewer : MembraneViewer where
   held        := [.read, .write]
   permits     := fun n => n == "vote" || n == "tally"
   activeNames := ["vote", "tally"]
 
-def trusteeViewer : MembraneViewer where
+@[expose] def trusteeViewer : MembraneViewer where
   held        := [.read]
   permits     := fun n => n == "tally"
   activeNames := ["tally"]
 
-def guestViewer : MembraneViewer where
+@[expose] def guestViewer : MembraneViewer where
   held        := [.read]
   permits     := fun _ => false
   activeNames := []
 
-def councilSturdyref : Sturdyref CouncilEffect where
+@[expose] def councilSturdyref : Sturdyref CouncilEffect where
   uri       := "dregg://council/proposal-1"
   surface   := councilSurface
   log       := confinedLog
   lineage   := chairViewer
   reachable := false
 
-def bumpProposalId : CouncilEffect → CouncilEffect
+@[expose] def bumpProposalId : CouncilEffect → CouncilEffect
   | .castBallot n      => .castBallot (n + 1)
   | .resolveProposal n => .resolveProposal (n + 1)
   | .inspectTally n    => .inspectTally (n + 1)
@@ -1153,7 +1172,7 @@ def bumpProposalId : CouncilEffect → CouncilEffect
 /-! ### Cross-Vault Bridges (`Obend.Vault.Mandate`, `Obend.Vault.Projection`, `Obend.Receipt`) -/
 
 /-- Translate `Obend.Vault.Mandate.Auth` to `Obend.Vault.Affordance.Auth`. -/
-def authOfMandateAuth : Obend.Vault.Mandate.Auth → Auth
+@[expose] def authOfMandateAuth : Obend.Vault.Mandate.Auth → Auth
   | .read    => .read
   | .write   => .write
   | .grant   => .grant
@@ -1165,7 +1184,7 @@ def authOfMandateAuth : Obend.Vault.Mandate.Auth → Auth
 
 /-- Derive a `MembraneViewer` from an `Obend.Vault.Mandate.Mandate`, a cell-to-name lookup,
     and an optional list of `activeNames`. -/
-def viewerOfMandate (m : Obend.Vault.Mandate.Mandate) (cellOfName : String → Nat)
+@[expose] def viewerOfMandate (m : Obend.Vault.Mandate.Mandate) (cellOfName : String → Nat)
     (activeNames : List String := []) : MembraneViewer where
   held        := m.rights.map authOfMandateAuth
   permits     := fun name => m.cells.contains (cellOfName name)
@@ -1190,7 +1209,7 @@ theorem viewerOfMandate_attenuates {m_child m_parent : Obend.Vault.Mandate.Manda
     exact hcells hn
 
 /-- Translate `Obend.Vault.Projection.Auth` to `Obend.Vault.Affordance.Auth`. -/
-def authOfProjectionAuth : Obend.Vault.Projection.Auth → Auth
+@[expose] def authOfProjectionAuth : Obend.Vault.Projection.Auth → Auth
   | .read    => .read
   | .write   => .write
   | .grant   => .grant
@@ -1201,7 +1220,7 @@ def authOfProjectionAuth : Obend.Vault.Projection.Auth → Auth
   | .notify  => .notify
 
 /-- Translate `Obend.Vault.Affordance.Auth` to `Obend.Vault.Projection.Auth`. -/
-def authToProjectionAuth : Auth → Obend.Vault.Projection.Auth
+@[expose] def authToProjectionAuth : Auth → Obend.Vault.Projection.Auth
   | .read    => .read
   | .write   => .write
   | .grant   => .grant
@@ -1299,7 +1318,7 @@ theorem confined_iff_no_attested_support (log : InteractionLog) :
 /-- **End-to-End Master Soundness Theorem (`rehydration_master_sound`)**:
     Conjoins concrete positive and negative poles across all four pillars of the Rehydratable
     Membranes architecture. -/
-theorem rehydration_master_sound :
+example :
     -- Pillar 1: Derived liveness-type & replay coverage
     classify confinedLog false = .ReplayedDeterministic ∧
     classify ambientLog false = .ReconstructedApproximate ∧
@@ -1337,7 +1356,7 @@ open Obend.Law (CellContract Holds Admits law3 okT leNat eqNat andT natT
   admits_iff guard_ok subst_guard subst_binary subst_get subst_bound lawEnv)
 
 /-- Encode an `Auth` capability token as `Obend.Core.Data`. -/
-def Auth.toData : Auth → Data
+@[expose] def Auth.toData : Auth → Data
   | .read    => .label "read"
   | .write   => .label "write"
   | .grant   => .label "grant"
@@ -1348,7 +1367,7 @@ def Auth.toData : Auth → Data
   | .notify  => .label "notify"
 
 /-- Decode an `Auth` capability token from `Obend.Core.Data`. -/
-def Auth.ofData? : Data → Option Auth
+@[expose] def Auth.ofData? : Data → Option Auth
   | .label "read"    => some .read
   | .label "write"   => some .write
   | .label "grant"   => some .grant
@@ -1363,12 +1382,12 @@ theorem Auth.ofData_toData (a : Auth) : Auth.ofData? (Auth.toData a) = some a :=
   cases a <;> rfl
 
 /-- Encode a list of `Auth` capability tokens as `Obend.Core.Data`. -/
-def authListToData : List Auth → Data
+@[expose] def authListToData : List Auth → Data
   | [] => .variant "nil" (.record [])
   | a :: rest => .variant "cons" (.record [("head", Auth.toData a), ("tail", authListToData rest)])
 
 /-- Decode a list of `Auth` capability tokens from `Obend.Core.Data`. -/
-def authListOfData? : Data → Option (List Auth)
+@[expose] def authListOfData? : Data → Option (List Auth)
   | .variant "nil" (.record []) => some []
   | .variant "cons" (.record [("head", h), ("tail", t)]) => do
     let a ← Auth.ofData? h
@@ -1384,13 +1403,13 @@ theorem authListOfData_toData (xs : List Auth) :
     simp [authListToData, authListOfData?, Auth.ofData_toData, ih]
 
 /-- Encode a `Rehydration` liveness classification as `Obend.Core.Data`. -/
-def Rehydration.toData : Rehydration → Data
+@[expose] def Rehydration.toData : Rehydration → Data
   | .Live                     => .label "Live"
   | .ReplayedDeterministic    => .label "ReplayedDeterministic"
   | .ReconstructedApproximate => .label "ReconstructedApproximate"
 
 /-- Decode a `Rehydration` liveness classification from `Obend.Core.Data`. -/
-def Rehydration.ofData? : Data → Option Rehydration
+@[expose] def Rehydration.ofData? : Data → Option Rehydration
   | .label "Live"                     => some .Live
   | .label "ReplayedDeterministic"    => some .ReplayedDeterministic
   | .label "ReconstructedApproximate" => some .ReconstructedApproximate
@@ -1425,7 +1444,7 @@ structure LiveMembrane where
   deriving DecidableEq, Repr, Inhabited
 
 /-- Deterministic `Obend.Core.Data` encoding of `FrozenMembrane`. -/
-def FrozenMembrane.toData (fm : FrozenMembrane) : Data :=
+@[expose] def FrozenMembrane.toData (fm : FrozenMembrane) : Data :=
   .record
     [ ("surfaceId", .label fm.surfaceId)
     , ("epoch", .natural fm.epoch)
@@ -1434,7 +1453,7 @@ def FrozenMembrane.toData (fm : FrozenMembrane) : Data :=
     , ("heldCaps", authListToData fm.heldCaps) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `FrozenMembrane`. -/
-def FrozenMembrane.ofData? : Data → Option FrozenMembrane
+@[expose] def FrozenMembrane.ofData? : Data → Option FrozenMembrane
   | .record
       [ ("surfaceId", .label surfaceId)
       , ("epoch", .natural epoch)
@@ -1452,7 +1471,7 @@ theorem FrozenMembrane.ofData_toData (fm : FrozenMembrane) :
   simp [FrozenMembrane.toData, FrozenMembrane.ofData?, authListOfData_toData]
 
 /-- Deterministic `Obend.Core.Data` encoding of `LiveMembrane`. -/
-def LiveMembrane.toData (lm : LiveMembrane) : Data :=
+@[expose] def LiveMembrane.toData (lm : LiveMembrane) : Data :=
   .record
     [ ("surfaceId", .label lm.surfaceId)
     , ("epoch", .natural lm.epoch)
@@ -1462,7 +1481,7 @@ def LiveMembrane.toData (lm : LiveMembrane) : Data :=
     , ("liveness", Rehydration.toData lm.liveness) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `LiveMembrane`. -/
-def LiveMembrane.ofData? : Data → Option LiveMembrane
+@[expose] def LiveMembrane.ofData? : Data → Option LiveMembrane
   | .record
       [ ("surfaceId", .label surfaceId)
       , ("epoch", .natural epoch)
@@ -1495,7 +1514,7 @@ structure MembranePayload where
   deriving DecidableEq, Repr
 
 /-- Construct a `MembranePayload` for a `FrozenMembrane` and required capability boundary. -/
-def membranePayload (fm : FrozenMembrane) (requiredCaps : List Auth) : MembranePayload :=
+@[expose] def membranePayload (fm : FrozenMembrane) (requiredCaps : List Auth) : MembranePayload :=
   { frozen := fm, requiredCaps := requiredCaps, encoded := fm.toData }
 
 /-- Slot envelope pairing a `MembranePayload` with its expected dependency digest and support facts. -/
@@ -1506,23 +1525,50 @@ structure MembraneEnvelope where
   deriving DecidableEq, Repr
 
 /-- Construct a `MembraneEnvelope` over a `FrozenMembrane`. -/
-def membraneEnvelope (fm : FrozenMembrane) (expectedDepDigest : Nat) (requiredCaps : List Auth) :
+@[expose] def membraneEnvelope (fm : FrozenMembrane) (expectedDepDigest : Nat) (requiredCaps : List Auth) :
     MembraneEnvelope :=
   { payload := membranePayload fm requiredCaps
   , expectedDepDigest := expectedDepDigest
   , supports := .depDigestValid fm.depDigest :: requiredCaps.map .capBoundaryHolds }
 
+/-- Canonical 8-bit capability mask (`0..255`) over all `Auth` variants. -/
+@[expose] def authCapBitmask (caps : List Auth) : Nat :=
+  (if decide (.read ∈ caps) then 1 else 0) +
+  (if decide (.write ∈ caps) then 2 else 0) +
+  (if decide (.grant ∈ caps) then 4 else 0) +
+  (if decide (.call ∈ caps) then 8 else 0) +
+  (if decide (.reply ∈ caps) then 16 else 0) +
+  (if decide (.reset ∈ caps) then 32 else 0) +
+  (if decide (.control ∈ caps) then 64 else 0) +
+  (if decide (.notify ∈ caps) then 128 else 0)
+
+/-- Compute the canonical capability digest binding `caps` (`computeCapDigest [.read, .write] = 101`). -/
+@[expose] def computeCapDigest (caps : List Auth) : Nat :=
+  let mask := authCapBitmask caps
+  if mask == 0 then 0 else 98 + mask
+
 /-- Inner `Obend.Slot.Slot` over `FrozenMembrane`:
     - `supports`: requires `.depDigestValid fm.depDigest` and `.capBoundaryHolds cap` for every required capability,
-    - `judge`: checks that `fm.depDigest == expectedDepDigest`, `fm.capDigest != 0`, and `fireGate requiredCaps fm.heldCaps`. -/
-def membraneSlot (expectedDepDigest : Nat) (requiredCaps : List Auth) :
+    - `judge`: checks that `fm.depDigest == expectedDepDigest`, `fm.capDigest == computeCapDigest fm.heldCaps`,
+      `fm.capDigest != 0`, and `fireGate requiredCaps fm.heldCaps`. -/
+@[expose] def membraneSlot (expectedDepDigest : Nat) (requiredCaps : List Auth) :
     Obend.Slot.Slot MembraneFact FrozenMembrane where
   supports fm := .depDigestValid fm.depDigest :: requiredCaps.map .capBoundaryHolds
-  judge fm := fm.depDigest == expectedDepDigest && fm.capDigest != 0 && fireGate requiredCaps fm.heldCaps
+  judge fm :=
+    fm.depDigest == expectedDepDigest &&
+    fm.capDigest == computeCapDigest fm.heldCaps &&
+    fm.capDigest != 0 &&
+    fireGate requiredCaps fm.heldCaps
 
 theorem membraneSlot_rejected_of_bad_depDigest
     (settled : MembraneFact → Bool) (expectedDepDigest : Nat) (requiredCaps : List Auth)
     (fm : FrozenMembrane) (h_bad : (fm.depDigest == expectedDepDigest) = false) :
+    (membraneSlot expectedDepDigest requiredCaps).read settled (some fm) = .rejected fm := by
+  simp [Obend.Slot.Slot.read, membraneSlot, h_bad]
+
+theorem membraneSlot_rejected_of_bad_capDigest
+    (settled : MembraneFact → Bool) (expectedDepDigest : Nat) (requiredCaps : List Auth)
+    (fm : FrozenMembrane) (h_bad : (fm.capDigest == computeCapDigest fm.heldCaps) = false) :
     (membraneSlot expectedDepDigest requiredCaps).read settled (some fm) = .rejected fm := by
   simp [Obend.Slot.Slot.read, membraneSlot, h_bad]
 
@@ -1533,7 +1579,7 @@ theorem membraneSlot_rejected_of_missing_cap
   simp [Obend.Slot.Slot.read, membraneSlot, h_cap]
 
 /-- Rehydrate a `FrozenMembrane` into a `LiveMembrane` using an `InteractionLog` and reachability flag. -/
-def rehydrateMembrane (fm : FrozenMembrane) (log : InteractionLog) (reachable : Bool) : LiveMembrane :=
+@[expose] def rehydrateMembrane (fm : FrozenMembrane) (log : InteractionLog) (reachable : Bool) : LiveMembrane :=
   { surfaceId  := fm.surfaceId
   , epoch      := fm.epoch
   , capDigest  := fm.capDigest
@@ -1542,22 +1588,22 @@ def rehydrateMembrane (fm : FrozenMembrane) (log : InteractionLog) (reachable : 
   , liveness   := classify log reachable }
 
 /-- Rehydrate and advance a `FrozenMembrane` by `epochDelta`, preserving `capDigest`, `depDigest`, and `heldCaps`. -/
-def rehydrateAndStep (fm : FrozenMembrane) (epochDelta : Nat) : FrozenMembrane :=
+@[expose] def rehydrateAndStep (fm : FrozenMembrane) (epochDelta : Nat) : FrozenMembrane :=
   { fm with epoch := fm.epoch + epochDelta }
 
 /-- Rehydrate and advance into a `LiveMembrane` by `epochDelta`. -/
-def rehydrateLiveAndStep (fm : FrozenMembrane) (log : InteractionLog) (reachable : Bool) (epochDelta : Nat) :
+@[expose] def rehydrateLiveAndStep (fm : FrozenMembrane) (log : InteractionLog) (reachable : Bool) (epochDelta : Nat) :
     LiveMembrane :=
   { (rehydrateMembrane fm log reachable) with epoch := fm.epoch + epochDelta }
 
 /-- Relational `LawExpr` governing membrane rehydration transitions:
     1. `epoch` advances monotonically (`LawExpr.monotone "epoch"`),
     2. `capDigest` is preserved across steps (`LawExpr.writeOnce "capDigest"`). -/
-def membraneRehydrationLaw : LawExpr :=
+@[expose] def membraneRehydrationLaw : LawExpr :=
   (LawExpr.monotone "epoch").and (LawExpr.writeOnce "capDigest")
 
 /-- Constructive record field lookup avoiding `BEq String` (`Classical.choice`) in Lean 4.35. -/
-def fieldOfFieldList (field : String) : List (String × Data) → Option Int
+@[expose] def fieldOfFieldList (field : String) : List (String × Data) → Option Int
   | [] => none
   | (k, v) :: rest =>
     if decide (k = field) then
@@ -1568,17 +1614,17 @@ def fieldOfFieldList (field : String) : List (String × Data) → Option Int
     else
       fieldOfFieldList field rest
 
-def fieldOfData (field : String) : Data → Option Int
+@[expose] def fieldOfData (field : String) : Data → Option Int
   | .record fields => fieldOfFieldList field fields
   | _ => none
 
 /-- Constructive `LawRef` reader avoiding `BEq String` (`Classical.choice`) in Lean 4.35. -/
-def readLawRef (_facts : Facts) (state : Data) : LawRef → Option Int
+@[expose] def readLawRef (_facts : Facts) (state : Data) : LawRef → Option Int
   | .field name => fieldOfData name state
   | _           => none
 
 /-- Constructive `LawExpr` evaluator avoiding `BEq Int` and `BEq String` (`Classical.choice`) in Lean 4.35. -/
-def evalLawExpr (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
+@[expose] def evalLawExpr (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
   | .eqC ref value => decide (readLawRef facts new ref = some value)
   | .leC ref value =>
     match readLawRef facts new ref with
@@ -1613,38 +1659,44 @@ def evalLawExpr (facts : Facts) (old : Option Data) (new : Data) : LawExpr → B
   | .or left right => evalLawExpr facts old new left || evalLawExpr facts old new right
   | .implies premise conclusion => !(evalLawExpr facts old new premise) || evalLawExpr facts old new conclusion
 
-/-- Evaluate `membraneRehydrationLaw` across a `FrozenMembrane` state transition. -/
-def evalMembraneRehydrationLaw (facts : Facts) (old new : FrozenMembrane) : Bool :=
-  evalLawExpr facts (some old.toData) new.toData membraneRehydrationLaw
+/-- Evaluate `membraneRehydrationLaw` across a `FrozenMembrane` state transition,
+    requiring `computeCapDigest old.heldCaps == computeCapDigest new.heldCaps` so `heldCaps`
+    cannot be mutated across steps without changing `capDigest`. -/
+@[expose] def evalMembraneRehydrationLaw (facts : Facts) (old new : FrozenMembrane) : Bool :=
+  evalLawExpr facts (some old.toData) new.toData membraneRehydrationLaw &&
+    decide (computeCapDigest old.heldCaps = computeCapDigest new.heldCaps)
 
 /-- **Bridge Theorem (`rehydrate_satisfies_law`)**:
     Every `rehydrateAndStep` transition satisfies `membraneRehydrationLaw` (`epoch` is monotonic
-    and `capDigest` is preserved). -/
+    and `capDigest` and `heldCaps` digest are preserved). -/
 theorem rehydrate_satisfies_law (facts : Facts) (fm : FrozenMembrane) (epochDelta : Nat) :
     evalMembraneRehydrationLaw facts fm (rehydrateAndStep fm epochDelta) = true := by
   change
-    (decide (Int.ofNat fm.epoch ≤ Int.ofNat (fm.epoch + epochDelta)) &&
-      decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest))) = true
+    ((decide (Int.ofNat fm.epoch ≤ Int.ofNat (fm.epoch + epochDelta)) &&
+      decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest))) &&
+      decide (computeCapDigest fm.heldCaps = computeCapDigest fm.heldCaps)) = true
   have h1 : decide (Int.ofNat fm.epoch ≤ Int.ofNat (fm.epoch + epochDelta)) = true :=
     decide_eq_true (Int.ofNat_le.mpr (Nat.le_add_right fm.epoch epochDelta))
   have h2 : decide (some (Int.ofNat fm.capDigest) = some (Int.ofNat fm.capDigest)) = true :=
     decide_eq_true rfl
-  rw [h1, h2, Bool.and_true]
+  have h3 : decide (computeCapDigest fm.heldCaps = computeCapDigest fm.heldCaps) = true :=
+    decide_eq_true rfl
+  rw [h1, h2, h3, Bool.and_true, Bool.and_true]
 
 /-- Concrete facts and fixtures for `#tooth` refutation probes on `membraneRehydrationLaw`. -/
-def demoMembraneFacts : Facts := ⟨none, none, 1, 1⟩
+@[expose] def demoMembraneFacts : Facts := ⟨none, none, 1, 1⟩
 
-def demoFrozenBase : FrozenMembrane :=
+@[expose] def demoFrozenBase : FrozenMembrane :=
   { surfaceId := "council-surface"
   , epoch     := 5
   , capDigest := 101
   , depDigest := 202
   , heldCaps  := [.read, .write] }
 
-def demoFrozenTamperedDigest : FrozenMembrane :=
+@[expose] def demoFrozenTamperedDigest : FrozenMembrane :=
   { demoFrozenBase with capDigest := 999 }
 
-def demoFrozenRegressedEpoch : FrozenMembrane :=
+@[expose] def demoFrozenRegressedEpoch : FrozenMembrane :=
   { demoFrozenBase with epoch := 3 }
 
 /-- Refutation theorem: a tampered capability digest (`101 → 999`) is rejected by `membraneRehydrationLaw`. -/
@@ -1652,7 +1704,7 @@ theorem membrane_tampered_digest_rejected :
     evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenTamperedDigest = false := rfl
 
 /-- Refutation theorem: even if `capDigest = 0`, tampering it to `999` is rejected by `membraneRehydrationLaw`. -/
-theorem membrane_zero_digest_tamper_rejected :
+example :
     evalMembraneRehydrationLaw demoMembraneFacts
       { demoFrozenBase with capDigest := 0 }
       { demoFrozenBase with capDigest := 999 } = false := rfl

@@ -168,6 +168,17 @@ def readCapOf (req : List Auth) : Nat :=
 def writeCapOf (req : List Auth) : Nat :=
   if req.contains .write then 1 else 0
 
+/-- Extract the full 8-capability bitmask (`0..255`) over all `Auth` variants in `req`. -/
+def capMaskOf (req : List Auth) : Nat :=
+  (if req.contains .read then 1 else 0) +
+  (if req.contains .write then 2 else 0) +
+  (if req.contains .grant then 4 else 0) +
+  (if req.contains .call then 8 else 0) +
+  (if req.contains .reply then 16 else 0) +
+  (if req.contains .reset then 32 else 0) +
+  (if req.contains .control then 64 else 0) +
+  (if req.contains .notify then 128 else 0)
+
 /-- Read capability metadata of a `VaultCell`. -/
 def VaultCell.readCap (c : VaultCell) : Nat :=
   readCapOf c.required
@@ -175,6 +186,10 @@ def VaultCell.readCap (c : VaultCell) : Nat :=
 /-- Write capability metadata of a `VaultCell`. -/
 def VaultCell.writeCap (c : VaultCell) : Nat :=
   writeCapOf c.required
+
+/-- Full 8-capability bitmask metadata of a `VaultCell`. -/
+def VaultCell.capMask (c : VaultCell) : Nat :=
+  capMaskOf c.required
 
 theorem readCapOf_lt (req : List Auth) : readCapOf req < 2 ^ 256 := by
   unfold readCapOf
@@ -184,16 +199,31 @@ theorem writeCapOf_lt (req : List Auth) : writeCapOf req < 2 ^ 256 := by
   unfold writeCapOf
   split <;> decide
 
-/-- Metadata-bound commitment over `(id, readCap, writeCap, salt, content)`. -/
-def cellBlindMetadataBoundValues (H : Hash) (id readCap writeCap salt content : Nat) : Nat :=
+theorem capMaskOf_lt (req : List Auth) : capMaskOf req < 2 ^ 256 := by
+  unfold capMaskOf
+  have h0 : (if req.contains .read then 1 else 0) ≤ 1 := by split <;> decide
+  have h1 : (if req.contains .write then 2 else 0) ≤ 2 := by split <;> decide
+  have h2 : (if req.contains .grant then 4 else 0) ≤ 4 := by split <;> decide
+  have h3 : (if req.contains .call then 8 else 0) ≤ 8 := by split <;> decide
+  have h4 : (if req.contains .reply then 16 else 0) ≤ 16 := by split <;> decide
+  have h5 : (if req.contains .reset then 32 else 0) ≤ 32 := by split <;> decide
+  have h6 : (if req.contains .control then 64 else 0) ≤ 64 := by split <;> decide
+  have h7 : (if req.contains .notify then 128 else 0) ≤ 128 := by split <;> decide
+  omega
+
+/-- Metadata-bound commitment over `(id, readCap, writeCap, capMask, salt, content)`. -/
+def cellBlindMetadataBoundValues (H : Hash) (id readCap writeCap capMask salt content : Nat) : Nat :=
   digestWith H
-    (digestWith H id (digestWith H readCap writeCap))
+    (digestWith H id (digestWith H readCap (digestWith H writeCap capMask)))
     (digestWith H salt content)
 
 /-- The metadata-bound blinded commitment of a cell:
-    commits to `(c.id, c.readCap, c.writeCap, c.salt, c.content)`. -/
+    commits to `(c.id, c.readCap, c.writeCap, c.capMask, c.salt, c.content)`. -/
 def cellBlind (H : Hash) (c : VaultCell) : Nat :=
-  cellBlindMetadataBoundValues H c.id c.readCap c.writeCap c.salt c.content
+  cellBlindMetadataBoundValues H c.id c.readCap c.writeCap c.capMask c.salt c.content
+
+abbrev cellBlindMetadataBound (H : Hash) (c : VaultCell) : Nat :=
+  cellBlind H c
 
 /-- Projected cell: revealed to authorized viewers, blinded to strangers/unauthorized viewers. -/
 inductive ProjectedCell where
@@ -209,19 +239,23 @@ def projectCell (H : Hash) (v : List Auth) (c : VaultCell) : ProjectedCell :=
     .blinded c.id (cellBlind H c)
 
 /-- The commitment value verified by the Merkle tree:
-    for revealed cells, recomputed from `(id, readCapOf required, writeCapOf required, salt, content)`;
+    for revealed cells, recomputed from `(id, readCapOf required, writeCapOf required, capMaskOf required, salt, content)`;
     for blinded cells, the carried blinded commitment. -/
 def projectedCommit (H : Hash) : ProjectedCell → Nat
   | .revealed id required salt content =>
-    cellBlindMetadataBoundValues H id (readCapOf required) (writeCapOf required) salt content
+    cellBlindMetadataBoundValues H id (readCapOf required) (writeCapOf required) (capMaskOf required) salt content
   | .blinded _ blindedCommit  => blindedCommit
 
 /-- **Core Commitment Invariant**: Regardless of whether a cell is revealed or blinded,
     its commitment in the Merkle tree is bit-identical to the unredacted vault cell commitment. -/
 @[simp] theorem projectCell_commit_eq (H : Hash) (v : List Auth) (c : VaultCell) :
     projectedCommit H (projectCell H v c) = cellBlind H c := by
-  dsimp [projectCell, cellBlind, VaultCell.readCap, VaultCell.writeCap]
+  dsimp [projectCell, cellBlind, VaultCell.readCap, VaultCell.writeCap, VaultCell.capMask]
   split <;> rfl
+
+theorem projectedCommit_eq_cellBlind (H : Hash) (v : List Auth) (c : VaultCell) :
+    projectedCommit H (projectCell H v c) = cellBlind H c :=
+  projectCell_commit_eq H v c
 
 /-- Project all cells in a vault for viewer `v`. -/
 def projectVault (H : Hash) (v : List Auth) (cells : List VaultCell) : List ProjectedCell :=
@@ -230,6 +264,9 @@ def projectVault (H : Hash) (v : List Auth) (cells : List VaultCell) : List Proj
 /-- The list of unredacted cell commitments in a vault. -/
 def vaultCommits (H : Hash) (cells : List VaultCell) : List Nat :=
   cells.map (cellBlind H)
+
+abbrev vaultCommitsMetadataBound (H : Hash) (cells : List VaultCell) : List Nat :=
+  vaultCommits H cells
 
 /-- The list of commitment values extracted from a projected vault. -/
 def projectedCommits (H : Hash) (v : List Auth) (cells : List VaultCell) : List Nat :=
@@ -339,17 +376,17 @@ theorem projectCell_blinded_reveals_no_content (H : Hash) (v : List Auth) (c : V
   contradiction
 
 /-- **Binding Theorem for `cellBlind` (`cellBlind_binds`)**:
-    Equal commitments imply equal `(id, readCap, writeCap, salt, content)` or a hash collision. -/
+    Equal commitments imply equal `(id, readCap, writeCap, capMask, salt, content)` or a hash collision. -/
 theorem cellBlind_binds {H : Hash} (hb : Bounded H) {c₁ c₂ : VaultCell}
     (hid₁ : c₁.id < 2 ^ 256) (hsalt₁ : c₁.salt < 2 ^ 256)
     (hid₂ : c₂.id < 2 ^ 256) (hsalt₂ : c₂.salt < 2 ^ 256)
     (heq : cellBlind H c₁ = cellBlind H c₂) :
     (c₁.id = c₂.id ∧ c₁.readCap = c₂.readCap ∧ c₁.writeCap = c₂.writeCap ∧
-     c₁.salt = c₂.salt ∧ c₁.content = c₂.content) ∨ Collision H := by
+     c₁.capMask = c₂.capMask ∧ c₁.salt = c₂.salt ∧ c₁.content = c₂.content) ∨ Collision H := by
   unfold cellBlind cellBlindMetadataBoundValues at heq
-  have hadm_top₁ : Admissible (digestWith H c₁.id (digestWith H c₁.readCap c₁.writeCap)) :=
+  have hadm_top₁ : Admissible (digestWith H c₁.id (digestWith H c₁.readCap (digestWith H c₁.writeCap c₁.capMask))) :=
     admissible_of_lt (hb _ _)
-  have hadm_top₂ : Admissible (digestWith H c₂.id (digestWith H c₂.readCap c₂.writeCap)) :=
+  have hadm_top₂ : Admissible (digestWith H c₂.id (digestWith H c₂.readCap (digestWith H c₂.writeCap c₂.capMask))) :=
     admissible_of_lt (hb _ _)
   rcases binds_or_collides H hadm_top₁ hadm_top₂ heq with ⟨h_meta, h_body⟩ | hcoll
   · have hadm_meta₁ : Admissible c₁.id := admissible_of_lt hid₁
@@ -357,22 +394,28 @@ theorem cellBlind_binds {H : Hash} (hb : Bounded H) {c₁ c₂ : VaultCell}
     rcases binds_or_collides H hadm_meta₁ hadm_meta₂ h_meta with ⟨hid_eq, h_caps⟩ | hcoll
     · have hadm_caps₁ : Admissible c₁.readCap := admissible_of_lt (readCapOf_lt c₁.required)
       have hadm_caps₂ : Admissible c₂.readCap := admissible_of_lt (readCapOf_lt c₂.required)
-      rcases binds_or_collides H hadm_caps₁ hadm_caps₂ h_caps with ⟨hread_eq, hwrite_eq⟩ | hcoll
-      · have hadm_body₁ : Admissible c₁.salt := admissible_of_lt hsalt₁
-        have hadm_body₂ : Admissible c₂.salt := admissible_of_lt hsalt₂
-        rcases binds_or_collides H hadm_body₁ hadm_body₂ h_body with ⟨hsalt_eq, hcont_eq⟩ | hcoll
-        · left
-          exact ⟨hid_eq, hread_eq, hwrite_eq, hsalt_eq, hcont_eq⟩
+      rcases binds_or_collides H hadm_caps₁ hadm_caps₂ h_caps with ⟨hread_eq, h_wcaps⟩ | hcoll
+      · have hadm_wcaps₁ : Admissible c₁.writeCap := admissible_of_lt (writeCapOf_lt c₁.required)
+        have hadm_wcaps₂ : Admissible c₂.writeCap := admissible_of_lt (writeCapOf_lt c₂.required)
+        rcases binds_or_collides H hadm_wcaps₁ hadm_wcaps₂ h_wcaps with ⟨hwrite_eq, hmask_eq⟩ | hcoll
+        · have hadm_body₁ : Admissible c₁.salt := admissible_of_lt hsalt₁
+          have hadm_body₂ : Admissible c₂.salt := admissible_of_lt hsalt₂
+          rcases binds_or_collides H hadm_body₁ hadm_body₂ h_body with ⟨hsalt_eq, hcont_eq⟩ | hcoll
+          · left
+            exact ⟨hid_eq, hread_eq, hwrite_eq, hmask_eq, hsalt_eq, hcont_eq⟩
+          · right; exact hcoll.global
         · right; exact hcoll.global
       · right; exact hcoll.global
     · right; exact hcoll.global
   · right; exact hcoll.global
 
 /-- **Metadata Tampering Refusal Theorem (`tampered_metadata_opening_refused`)**:
-    Under a bounded collision-resistant hash `H`, tampering with `cell.id` or `cell.readCap`
-    (or `cell.writeCap`) in an opening at index `j < cells.length` strictly invalidates
-    `verifyBlindedOpening` against `projectedMerkleRoot H v cells`. -/
-theorem tampered_metadata_opening_refused {H : Hash} (hb : Bounded H) (h_no_coll : ¬ Collision H)
+    Under a bounded hash `H`, tampering with `cell.id` or `cell.readCap` (or `cell.writeCap` /
+    `cell.capMask`) in an opening at index `j < cells.length` invalidates `verifyBlindedOpening`
+    against `projectedMerkleRoot H v cells`, or exhibits a collision of `H`. (Stated up to
+    `Collision H`, the spine's form: `¬ Collision H` is false for every fixed-width hash by
+    pigeonhole, so a theorem assuming it says nothing at `deployed`.) -/
+theorem tampered_metadata_opening_refused {H : Hash} (hb : Bounded H)
     (v : List Auth) (cells : List VaultCell) (j : Nat) (c_tampered : VaultCell)
     (hj : j < cells.length) (hjs : j < 2 ^ 256)
     (hid_orig : (cells.getD j default).id < 2 ^ 256)
@@ -383,13 +426,13 @@ theorem tampered_metadata_opening_refused {H : Hash} (hb : Bounded H) (h_no_coll
                   c_tampered.readCap ≠ (cells.getD j default).readCap) :
     verifyBlindedOpening H
       { mkBlindedOpening H v cells j with cell := projectCell H v c_tampered }
-      (projectedMerkleRoot H v cells) = false := by
+      (projectedMerkleRoot H v cells) = false ∨ Collision H := by
   cases hver : verifyBlindedOpening H
       { mkBlindedOpening H v cells j with cell := projectCell H v c_tampered }
       (projectedMerkleRoot H v cells) with
-  | false => rfl
+  | false => exact Or.inl rfl
   | true =>
-    exfalso
+    right
     rw [projectedMerkleRoot_eq_vaultRoot, verifyBlindedOpening_eq_opens] at hver
     unfold mkBlindedOpening at hver
     dsimp only at hver
@@ -403,12 +446,51 @@ theorem tampered_metadata_opening_refused {H : Hash} (hb : Bounded H) (h_no_coll
         getD_map_helper (cellBlind H) default 0 cells j hj
       rw [hget] at hval_eq
       rcases cellBlind_binds hb hid_tamp hsalt_tamp hid_orig hsalt_orig hval_eq with
-        ⟨hid_eq, hread_eq, _, _, _⟩ | hcoll
+        ⟨hid_eq, hread_eq, _, _, _, _⟩ | hcoll
       · rcases h_tampered with hne_id | hne_read
-        · exact hne_id hid_eq
-        · exact hne_read hread_eq
-      · exact h_no_coll hcoll
-    · exact h_no_coll hcoll
+        · exact absurd hid_eq hne_id
+        · exact absurd hread_eq hne_read
+      · exact hcoll
+    · exact hcoll
+
+/-- **Full 8-Capability Mask Tampering Refusal (`tampered_capMask_opening_refused`)**:
+    Under a bounded hash `H`, tampering with any of the 8 `Auth` capabilities
+    (`c_tampered.capMask ≠ (cells.getD j default).capMask`) invalidates `verifyBlindedOpening`
+    against `projectedMerkleRoot H v cells`, or exhibits a collision of `H`. -/
+theorem tampered_capMask_opening_refused {H : Hash} (hb : Bounded H)
+    (v : List Auth) (cells : List VaultCell) (j : Nat) (c_tampered : VaultCell)
+    (hj : j < cells.length) (hjs : j < 2 ^ 256)
+    (hid_orig : (cells.getD j default).id < 2 ^ 256)
+    (hsalt_orig : (cells.getD j default).salt < 2 ^ 256)
+    (hid_tamp : c_tampered.id < 2 ^ 256)
+    (hsalt_tamp : c_tampered.salt < 2 ^ 256)
+    (h_tampered : c_tampered.capMask ≠ (cells.getD j default).capMask) :
+    verifyBlindedOpening H
+      { mkBlindedOpening H v cells j with cell := projectCell H v c_tampered }
+      (projectedMerkleRoot H v cells) = false ∨ Collision H := by
+  cases hver : verifyBlindedOpening H
+      { mkBlindedOpening H v cells j with cell := projectCell H v c_tampered }
+      (projectedMerkleRoot H v cells) with
+  | false => exact Or.inl rfl
+  | true =>
+    right
+    rw [projectedMerkleRoot_eq_vaultRoot, verifyBlindedOpening_eq_opens] at hver
+    unfold mkBlindedOpening at hver
+    dsimp only at hver
+    have hlen : j < (vaultCommits H cells).length := by
+      simp [vaultCommits, hj]
+    have h_honest := opens_complete hb (vaultCommits H cells) j hlen hjs
+    rcases opens_binds hb hver h_honest rfl rfl with hval_eq | hcoll
+    · dsimp only [mapOpening] at hval_eq
+      rw [projectCell_commit_eq] at hval_eq
+      have hget : (vaultCommits H cells).getD j 0 = cellBlind H (cells.getD j default) :=
+        getD_map_helper (cellBlind H) default 0 cells j hj
+      rw [hget] at hval_eq
+      rcases cellBlind_binds hb hid_tamp hsalt_tamp hid_orig hsalt_orig hval_eq with
+        ⟨_, _, _, hmask_eq, _, _⟩ | hcoll
+      · exact absurd hmask_eq h_tampered
+      · exact hcoll
+    · exact hcoll
 
 end Obend.Vault.Projection
 

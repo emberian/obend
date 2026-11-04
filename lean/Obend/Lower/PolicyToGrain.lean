@@ -93,11 +93,13 @@ def stepGrainInstr (vm : GrainVmState) (tokens : List String) : GrainInstr → O
       defaultSinkReg := defaultSink
       fuelReg := vm.fuelReg - 1 }
   | .scanTokens maxTokens =>
-    let scanCost := 2 * min tokens.length maxTokens + 1
-    if vm.fuelReg < scanCost then none
-    else some { vm with
-      stateReg := grainScanLoop vm.transitionsReg vm.stateDefaultsReg vm.defaultSinkReg vm.stateReg tokens
-      fuelReg := vm.fuelReg - scanCost }
+    if maxTokens < tokens.length then none
+    else
+      let scanCost := 2 * tokens.length + 1
+      if vm.fuelReg < scanCost then none
+      else some { vm with
+        stateReg := grainScanLoop vm.transitionsReg vm.stateDefaultsReg vm.defaultSinkReg vm.stateReg tokens
+        fuelReg := vm.fuelReg - scanCost }
   | .checkAccept acceptStates =>
     if vm.fuelReg == 0 then none
     else some { vm with
@@ -141,32 +143,43 @@ theorem grainScanLoop_eq_dfaClassifyFrom (dfa : TableDfa) (q : Nat) (tokens : Li
 theorem fuel_not_lt_four (N : Nat) : ¬ (2 * N + 4 < 4) := by omega
 theorem fuel_step0_ne_zero (N : Nat) : ((2 * N + 4) == 0) = false := by
   rw [beq_eq_false_iff_ne]; omega
-theorem fuel_step1_scan_ok (N len : Nat) : ¬ (2 * N + 4 - 1 < 2 * min len N + 1) := by
-  have hmin : min len N ≤ N := Nat.min_le_right len N
+theorem scan_bound_not_lt {N len : Nat} (h_len : len ≤ N) : ¬ (N < len) := by omega
+theorem fuel_step1_scan_ok {N len : Nat} (h_len : len ≤ N) : ¬ (2 * N + 4 - 1 < 2 * len + 1) := by
   omega
-theorem fuel_step2_ne_zero (N len : Nat) : ((2 * N + 4 - 1 - (2 * min len N + 1)) == 0) = false := by
-  have hmin : min len N ≤ N := Nat.min_le_right len N
+theorem fuel_step2_ne_zero {N len : Nat} (h_len : len ≤ N) : ((2 * N + 4 - 1 - (2 * len + 1)) == 0) = false := by
   rw [beq_eq_false_iff_ne]; omega
-theorem fuel_step3_ne_zero (N len : Nat) : ((2 * N + 4 - 1 - (2 * min len N + 1) - 1) == 0) = false := by
-  have hmin : min len N ≤ N := Nat.min_le_right len N
+theorem fuel_step3_ne_zero {N len : Nat} (h_len : len ≤ N) : ((2 * N + 4 - 1 - (2 * len + 1) - 1) == 0) = false := by
   rw [beq_eq_false_iff_ne]; omega
 
 /-- **Policy-to-Grain Compiler Soundness Theorem (`compilePolicyToGrainProg_sound`)**:
-    For every `dfa : TableDfa`, token budget `N : Nat`, and input stream `tokens : List String`,
-    evaluating `compilePolicyToGrainProg dfa N` in the deterministic `Grain` VM returns
-    `some (dfaAccepts dfa tokens)`. -/
-theorem compilePolicyToGrainProg_sound (dfa : TableDfa) (N : Nat) (tokens : List String) :
+    For every `dfa : TableDfa`, token budget `N : Nat`, and input stream `tokens : List String`
+    within the token bound `tokens.length ≤ N`, evaluating `compilePolicyToGrainProg dfa N`
+    in the deterministic `Grain` VM returns `some (dfaAccepts dfa tokens)`. -/
+theorem compilePolicyToGrainProg_sound (dfa : TableDfa) (N : Nat) (tokens : List String)
+    (h_len : tokens.length ≤ N := by omega) :
     evalGrainProg (compilePolicyToGrainProg dfa N) tokens = some (dfaAccepts dfa tokens) := by
   unfold evalGrainProg compilePolicyToGrainProg grainPolicyFuelBudget
   simp only [runGrainInstrs, stepGrainInstr,
     fuel_not_lt_four N, ↓reduceIte,
     fuel_step0_ne_zero N,
-    fuel_step1_scan_ok N tokens.length,
-    fuel_step2_ne_zero N tokens.length,
-    fuel_step3_ne_zero N tokens.length,
+    scan_bound_not_lt h_len,
+    fuel_step1_scan_ok h_len,
+    fuel_step2_ne_zero h_len,
+    fuel_step3_ne_zero h_len,
     Bool.false_eq_true]
   rw [grainScanLoop_eq_dfaClassifyFrom dfa dfa.start tokens]
   rfl
+
+/-- Exceeding `maxTokens` (`N < tokens.length`) is strictly refused (`none`). -/
+theorem compilePolicyToGrainProg_refuses_excess_tokens
+    (dfa : TableDfa) (N : Nat) (tokens : List String)
+    (h_excess : N < tokens.length) :
+    evalGrainProg (compilePolicyToGrainProg dfa N) tokens = none := by
+  unfold evalGrainProg compilePolicyToGrainProg grainPolicyFuelBudget
+  simp only [runGrainInstrs, stepGrainInstr,
+    fuel_not_lt_four N, ↓reduceIte,
+    fuel_step0_ne_zero N,
+    h_excess, Bool.false_eq_true]
 
 end Obend.Lower
 end
