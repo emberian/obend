@@ -2,7 +2,7 @@
   "schema": "dregg.objective-bend.package-input.v1",
   "edition": "objective-bend-1",
   "entryModule": "3",
-  "entryDefinition": "crossModuleAssemblySummary",
+  "entryDefinition": "toolOffset",
   "modules": [
     {
       "name": "BaseImpellerBody",

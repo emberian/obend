@@ -1,42 +1,32 @@
 edition ObjectiveBend 1
-# Flagship App #6 (`apps/fidget-cam/MountingBossAssembly.obend`):
-# OpenUSD LIVERPS mounting boss CSG union assembly with pruned SSA tape length & 5-axis G-code toolpath steps.
+# apps/fidget-cam/MountingBossAssembly.obend: the mounting lug on the hub rim, in micrometres.
+# The lug is a cylinder parallel to Z at X = lugCentreXUm, Y = 0, as tall as the hub; the stiffened
+# variant is a stronger opinion on its radius.
 
 import ./BaseImpellerBody.obend as BaseBody
 
 record MountingBossLug:
-  bossOffsetMm() -> Nat
-  boltCircleRadiusUm() -> Nat
-  prunedTapeLength() -> Nat
-  fiveAxisGcodeSteps(flutes: Nat) -> Nat
-  clampingTorqueNm(preloadKn: Nat) -> Nat
+  lugCentreXUm() -> Nat
+  lugRadiusUm() -> Nat
+  lugReachUm() -> Nat
 
 spec PayloadBossArcSpec for MountingBossLug:
-  requires bossOffsetMm() -> Nat
-  requires prunedTapeLength() -> Nat
-  def bossOffsetMm() -> Nat:
-    15n
-  def boltCircleRadiusUm() -> Nat:
-    30000n
-  def prunedTapeLength() -> Nat:
-    9n
-  def fiveAxisGcodeSteps(flutes: Nat) -> Nat:
-    flutes * 64n + self.prunedTapeLength
-  def clampingTorqueNm(preloadKn: Nat) -> Nat:
-    preloadKn * self.bossOffsetMm + 10n
-  claim boss_gcode_open_recursion(flutes: Nat): self.fiveAxisGcodeSteps(flutes) == flutes * 64n + self.prunedTapeLength
+  requires lugRadiusUm() -> Nat
+  def lugCentreXUm() -> Nat:
+    10000n
+  def lugRadiusUm() -> Nat:
+    2000n
+  def lugReachUm() -> Nat:
+    self.lugCentreXUm + self.lugRadiusUm
+  claim lug_reach_is_centre_plus_radius(): self.lugReachUm() == self.lugCentreXUm + self.lugRadiusUm
 
 spec VariantStiffenedBossOverride for MountingBossLug:
-  requires clampingTorqueNm(preloadKn: Nat) -> Nat
-  def bossOffsetMm() -> Nat:
-    15n
-  def prunedTapeLength() -> Nat:
-    7n
-  def clampingTorqueNm(preloadKn: Nat) -> Nat:
-    super.clampingTorqueNm(preloadKn) + 25n
+  requires lugRadiusUm() -> Nat
+  def lugRadiusUm() -> Nat:
+    2500n
 
 def seedMountingBoss() -> MountingBossLug:
-  {bossOffsetMm: 0n, boltCircleRadiusUm: 0n, prunedTapeLength: 0n, fiveAxisGcodeSteps: fn(f: Nat) -> Nat: f, clampingTorqueNm: fn(p: Nat) -> Nat: p}
+  {lugCentreXUm: 0n, lugRadiusUm: 0n, lugReachUm: 0n}
 
 def payloadMountingBoss() -> MountingBossLug:
   fix(PayloadBossArcSpec, seedMountingBoss())
@@ -44,11 +34,11 @@ def payloadMountingBoss() -> MountingBossLug:
 def stiffenedMountingBoss() -> MountingBossLug:
   fix(compose(PayloadBossArcSpec, VariantStiffenedBossOverride), seedMountingBoss())
 
-def stiffenedGcodeStepsAt5() -> Nat:
-  stiffenedMountingBoss().fiveAxisGcodeSteps(5n)
+def lugCentreX() -> Nat:
+  stiffenedMountingBoss().lugCentreXUm
 
-def stiffenedTorqueAt12() -> Nat:
-  stiffenedMountingBoss().clampingTorqueNm(12n)
+def lugRadius() -> Nat:
+  stiffenedMountingBoss().lugRadiusUm
 
-def crossModuleBossOps() -> Nat:
-  BaseBody.shroudedTapeOpsAt4() + stiffenedGcodeStepsAt5()
+def lugReach() -> Nat:
+  stiffenedMountingBoss().lugReachUm

@@ -1,25 +1,17 @@
 module
 /-
-# Obend.Apps.FidgetCam — Flagship App #6: Parametric `.obend` OpenUSD/F-Rep CAD -> Pruned SSA Tape -> Verilated Voxelizer, `.stl` Mesh & 5-Axis G-Code
+# Obend.Apps.FidgetCam — the fidget part: `.obend` parameters, one solid, a certified tool path, a post
 
-Connects the 4-module `.obend` hierarchical OpenUSD/F-Rep mechanical part package in `apps/fidget-cam/`:
-1. `apps/fidget-cam/BaseImpellerBody.obend` (`FidgetBaseBody`: `BaseImpellerSubLayerSpec` -> `HighSpeedShroudOverride`)
-2. `apps/fidget-cam/CoolingChannelOverride.obend` (`FidgetCoolingChannel`: `HelicalChannelReferenceSpec` -> `ConformalBoreLocalOverride`)
-3. `apps/fidget-cam/MountingBossAssembly.obend` (`FidgetMountingBoss`: `PayloadBossArcSpec` -> `VariantStiffenedBossOverride`)
-4. `apps/fidget-cam/ImpellerPartTop.obend` (`FidgetImpellerTop`: `OpenUsdSubLayerImpellerSpec` -> `LiverpsLocalCamOverride`)
+`apps/fidget-cam/*.obend` is four parameter records with overrides (hub, cooling bore, mounting lug,
+process). This module builds one F-Rep solid from the composed values (`fidgetParams_eq_obend`),
+certifies the bore wall over the whole bore (`fidget_bore_wall_sound`), generates Z-level contours
+and 3+2 top-edge passes, certifies every lattice point of every interpolated segment against the
+solid with the shank included (`fidget_toolpath_no_gouge`), and posts the program with TCPM
+(`impeller5AxisNgc`, rotary-safe by `Obend.Hardware.Kinematics.postMoves_rotarySafe`). The RTL voxel
+evaluator is compiled from the solid's tape (`FRepExpr.toTape`), not written beside it.
 
-directly to the mechanized physical CAD/CAM & hardware verification stack:
-- `Obend.Hardware.GeometryCAM`:
-  * Linear SSA F-Rep tape interval pruning & backward-liveness compaction (`prune_and_compact_ssa_tape_sound`) across all three geometric sub-boxes (`impellerCenterBox`, `impellerBossBox`, and standalone `impellerBoreBox`),
-  * Forward-mode 3D dual-interval gradients (`evalFRepGradBox`) and self-certified Lipschitz bounds (`computeCertifiedLipschitzBox`, `evalFRepGradBox_lipschitz_sound`),
-  * Self-certified 5-axis swept-volume no-gouge synthesis (`synthesizeCertifiedSweptVolume_no_gouge_sound`),
-- `Obend.Hardware.OpenUSD`:
-  * Universal `LIVERPS` composition arc dominance (`liverps_stronger_arc_dominates_term`),
-  * Self-certified 3D F-Rep shell wall thickness ($2600\,\mu\text{m} \ge 1200\,\mu\text{m}$) & scale-100 invariance (`computeCertifiedShellWallThicknessUm_sound`),
-- `Obend.Leaf.Futamura` & `Obend.Spec.CrossPackage`:
-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), in-core pins-only 2nd Futamura specialization (`inCoreBookCompiler_specializes_from_pinsOnly`), and cross-package cone survival (`coneSupports_linkComposition_of_disjoint`),
-- `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler` & `Obend.Lower.Proofs.SelfAccelerate`:
-  * Direct SSA-tape-to-`RtlModule` hardware compilation (`compileSsaTapeToRtlWires`, `fidgetImpellerVoxelCamRtlModule`, `emitModuleSV`), BEL netlist synthesis (`synthesizeModuleToBels`, `checkBelNetlistValid`), whole-book FPGA RTL synthesis (`compileBookToRtl`), and 64-bit AMD `CDNA3` `VOP64` GPU codegen (`compileRtlExprToAmdGpu`).
+What is not here: blades (the part is a hub, a lug and a bore), the holder, simultaneous five-axis
+motion, and a theorem relating the RTL to `evalFRepPoint` for every input.
 -/
 public import Lean
 public import Obend.Hardware.UserspacePhysical
@@ -33,7 +25,11 @@ public import Obend.Elab.Workbook
 public meta import Lean
 public meta import Obend.Hardware.UserspacePhysical
 public meta import Obend.Elab.Workbook
-@[expose] public section
+public import Obend.Hardware.Kinematics
+public meta import Obend.Hardware.GeometryCAM
+public meta import Obend.Hardware.Kinematics
+public import Obend.AssertCompiled
+public section
 
 namespace Obend.Apps.FidgetCam
 
@@ -55,9 +51,10 @@ open Obend.Hardware.Accelerators
 open Obend.Hardware.GeometryCAM
 open Obend.Hardware.OpenUSD
 open Obend.Hardware.UserspacePhysical
+open Obend.Hardware.Kinematics
 
 set_option autoImplicit false
-set_option maxHeartbeats 800000
+set_option maxHeartbeats 400000
 
 /-! ## 0. `#import_obend` is `Obend.Elab.Workbook`'s (the one importer, 2026-11-04); this module
 only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `claim_*_{obj,just,holds}`,
@@ -70,23 +67,79 @@ only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `
 #import_obend "apps/fidget-cam/MountingBossAssembly.obend" as FidgetMountingBoss
 #import_obend "apps/fidget-cam/ImpellerPartTop.obend" as FidgetImpellerTop
 
-/-- Values the `#import_obend` elaboration of `FidgetBaseBody, FidgetCoolingChannel, FidgetImpellerTop, FidgetMountingBoss` produced (an `example`, not a theorem:
-these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
-the `_holds` theorems themselves are emitted by the importer). -/
-example :
-    FidgetImpellerTop.laws_count = 6 ∧
-    FidgetBaseBody.shroudedMarginAt50_val = .nat 2400 ∧
-    FidgetBaseBody.shroudedTapeOpsAt4_val = .nat 695 ∧
-    FidgetCoolingChannel.conformalClearanceAt100_val = .nat 31300 ∧
-    FidgetCoolingChannel.conformalFluxAt30_val = .nat 1560 ∧
-    FidgetMountingBoss.stiffenedGcodeStepsAt5_val = .nat 327 ∧
-    FidgetMountingBoss.stiffenedTorqueAt12_val = .nat 215 ∧
-    FidgetImpellerTop.impellerPadAtStep2_val = .nat 151 ∧
-    FidgetImpellerTop.impellerVoxelsAtLevel4_val = .nat 585 ∧
-    FidgetImpellerTop.crossModuleAssemblySummary_val = .nat 4872 :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+/-! ## 1a. The parameters the package carries
 
-/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
+The four modules are parameter records with overrides (`apps/fidget-cam/*.obend`). Everything
+below is built from the composed values; `fidgetParams_eq_obend` is the link, decided against the
+constants the importer emitted. -/
+
+/-- The natural number a reduced `.obend` value carries (`0` for anything else). -/
+@[expose] def natOfTerm : Term → Nat
+  | .nat n => n
+  | _ => 0
+
+/-- Part and process parameters, micrometres unless named otherwise. -/
+structure FidgetParams where
+  hubR : Nat
+  hubH : Nat
+  lugX : Nat
+  lugR : Nat
+  boreX : Nat
+  boreR : Nat
+  minWall : Nat
+  unit : Nat
+  toolR : Nat
+  shankLen : Nat
+  toolOffset : Nat
+  clearAbove : Nat
+  stepDown : Nat
+  cutFeed : Nat
+  plungeFeed : Nat
+  rpm : Nat
+  deriving DecidableEq, Repr
+
+/-- The parameters as the importer reduced them from the composed `.obend` objects. -/
+@[expose] def FidgetParams.ofObend : FidgetParams :=
+  { hubR := natOfTerm FidgetBaseBody.hubRadius_val
+  , hubH := natOfTerm FidgetBaseBody.hubHeight_val
+  , lugX := natOfTerm FidgetMountingBoss.lugCentreX_val
+  , lugR := natOfTerm FidgetMountingBoss.lugRadius_val
+  , boreX := natOfTerm FidgetCoolingChannel.boreOffsetX_val
+  , boreR := natOfTerm FidgetCoolingChannel.boreRadius_val
+  , minWall := natOfTerm FidgetCoolingChannel.minWall_val
+  , unit := natOfTerm FidgetImpellerTop.lattice_val
+  , toolR := natOfTerm FidgetImpellerTop.toolRadius_val
+  , shankLen := natOfTerm FidgetImpellerTop.shankLength_val
+  , toolOffset := natOfTerm FidgetImpellerTop.toolOffset_val
+  , clearAbove := natOfTerm FidgetImpellerTop.clearanceAboveTop_val
+  , stepDown := natOfTerm FidgetImpellerTop.stepDown_val
+  , cutFeed := natOfTerm FidgetImpellerTop.cutFeed_val
+  , plungeFeed := natOfTerm FidgetImpellerTop.plungeFeed_val
+  , rpm := natOfTerm FidgetImpellerTop.spindle_val }
+
+/-- The same values as literals, for the compiled checks below (the importer's constants are not
+compiled code). -/
+@[expose] def fidgetParams : FidgetParams :=
+  { hubR := 10000, hubH := 8000, lugX := 10000, lugR := 2500, boreX := 4000, boreR := 2000
+  , minWall := 2000, unit := 100, toolR := 2000, shankLen := 12000, toolOffset := 2400
+  , clearAbove := 5000, stepDown := 2000, cutFeed := 1200, plungeFeed := 300, rpm := 18000 }
+
+/-- The literal parameters are the composed `.obend` values: the overrides (hub height 8 mm,
+lug radius 2.5 mm, bore radius 2 mm, stock 0.4 mm) are what the CAM tier machines. -/
+theorem fidgetParams_eq_obend : fidgetParams = FidgetParams.ofObend := by
+  decide +kernel
+
+/-- Every length is a whole number of lattice units. -/
+@[expose] def FidgetParams.onLattice (p : FidgetParams) : Bool :=
+  [p.hubR, p.hubH, p.lugX, p.lugR, p.boreX, p.boreR, p.minWall, p.toolR, p.shankLen,
+    p.toolOffset, p.clearAbove, p.stepDown].all (fun v => v % p.unit == 0)
+
+example : fidgetParams.onLattice = true := by decide +kernel
+
+/-- Micrometres to lattice units. -/
+@[expose] def FidgetParams.lat (p : FidgetParams) (um : Nat) : Nat := um / p.unit
+
+/-! ## 2. Vtable flattening, `Leaf.Book` emission, pins-only Futamura, cone survival -/
 
 theorem fidgetCam_compositions_closed :
     FidgetBaseBody.shroudedImpellerBody_comp.closedB = true ∧
@@ -95,10 +148,8 @@ theorem fidgetCam_compositions_closed :
     FidgetImpellerTop.liverpsImpellerCamTop_comp.closedB = true := by
   decide +kernel
 
-/-- **`fidgetCam_flatten_and_book_sound`**:
-For every member `m : String`, all 4 composed CAD/CAM objects (`shroudedImpellerBody_comp`,
-`conformalCoolingChannel_comp`, `stiffenedMountingBoss_comp`, and `liverpsImpellerCamTop_comp`)
-are observationally equivalent (`≈b`) to their flattened vtables and emitted `Leaf.Book`s. -/
+/-- For every member `m`, each composed parameter object is observationally equivalent (`≈b`) to
+its flattened vtable and to its emitted `Leaf.Book`. -/
 theorem fidgetCam_flatten_and_book_sound (m : String) :
     (.get FidgetBaseBody.shroudedImpellerBody_comp.flatten m ≈b
       .get FidgetBaseBody.shroudedImpellerBody_comp.object m) ∧
@@ -122,11 +173,8 @@ theorem fidgetCam_flatten_and_book_sound (m : String) :
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
 
-/-- **`fidgetCam_inCore_futamura2`**:
-Specializes all 4 emitted `Leaf.Book`s in `apps/fidget-cam/` directly inside `Core4` using
-`inCoreBookCompiler` and `encodePinsOnly pins` (with no `Book` argument to `encodePinsOnly`!),
-and proves cross-package cone survival (`coneSupports_linkComposition_of_disjoint`) when linking
-`HighSpeedShroudOverride` onto `baseImpellerBody_comp`. -/
+/-- Pins-only in-core specialisation of all four books, and cone survival when the shroud override
+is linked onto the base body (it changes only `hubHeightUm`). -/
 theorem fidgetCam_inCore_futamura2 (pins : List LeafPin) :
     dataPinSpecialize
       (.app (inCoreBookCompiler FidgetBaseBody.shroudedImpellerBody_book) (encodePinsOnly pins)) =
@@ -142,10 +190,10 @@ theorem fidgetCam_inCore_futamura2 (pins : List LeafPin) :
       encodeBookTerm (inCoreSpecializeBook FidgetImpellerTop.liverpsImpellerCamTop_book pins) ∧
     coneSupports
       (linkComposition FidgetBaseBody.baseImpellerBody_comp FidgetBaseBody.shroudedImpellerBody_comp.top)
-      ["shroudRadiusUm", "channelClearanceUm"] =
-      coneSupports FidgetBaseBody.baseImpellerBody_comp ["shroudRadiusUm", "channelClearanceUm"] := by
+      ["hubRadiusUm", "hubCentreXUm"] =
+      coneSupports FidgetBaseBody.baseImpellerBody_comp ["hubRadiusUm", "hubCentreXUm"] := by
   have hflat : FidgetBaseBody.shroudedImpellerBody_comp.top.flat = false := by decide +kernel
-  have hdisj : ∀ m ∈ ["shroudRadiusUm", "channelClearanceUm"],
+  have hdisj : ∀ m ∈ ["hubRadiusUm", "hubCentreXUm"],
       m ∉ overlayModifiedFields FidgetBaseBody.shroudedImpellerBody_comp.top := by
     decide +kernel
   exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly FidgetBaseBody.shroudedImpellerBody_book pins).1,
@@ -155,256 +203,315 @@ theorem fidgetCam_inCore_futamura2 (pins : List LeafPin) :
          coneSupports_linkComposition_of_disjoint
            FidgetBaseBody.baseImpellerBody_comp
            FidgetBaseBody.shroudedImpellerBody_comp.top
-           ["shroudRadiusUm", "channelClearanceUm"] hflat hdisj⟩
+           ["hubRadiusUm", "hubCentreXUm"] hflat hdisj⟩
 
-/-- **`fidgetCam_rtl_and_amd_gpu_verified`**:
-Compiles `FidgetImpellerTop.liverpsImpellerCamTop_book` and `FidgetMountingBoss.stiffenedMountingBoss_book`
-into verified `RtlModule`s (`checkRtlModule = true`) and 64-bit AMD `CDNA3` `VOP64` GPU instructions
-(`compileRtlExprToAmdGpu` + `runAmdGpuVop64Prog`). -/
-theorem fidgetCam_rtl_and_amd_gpu_verified :
-    (match compileBookToRtl "fidget_impeller_cam_top" FidgetImpellerTop.liverpsImpellerCamTop_book,
-           compileBookToRtl "fidget_mounting_boss" FidgetMountingBoss.stiffenedMountingBoss_book with
-     | some mTop, some mBoss =>
-       checkRtlModule mTop &&
-       checkRtlModule mBoss &&
-       (evalModuleOutputs mTop (fun _ => 2#64) (fun _ => 0#64) ==
-         [ ("out_compactedCenterTapeOps", 7#64)
-         , ("out_certifiedWallThicknessUm", 2800#64)
-         , ("out_octreeActiveVoxels", 329#64)
-         , ("out_compactedLugTapeOps", 9#64)
-         , ("out_lipschitzStepPadUm", 151#64)
-         ]) &&
-       (evalModuleOutputs mBoss (fun _ => 5#64) (fun _ => 0#64) ==
-         [ ("out_bossOffsetMm", 15#64)
-         , ("out_prunedTapeLength", 7#64)
-         , ("out_clampingTorqueNm", 110#64)
-         , ("out_boltCircleRadiusUm", 30000#64)
-         , ("out_fiveAxisGcodeSteps", 327#64)
-         ]) &&
-       (match mTop.wires[4]? with
-        | some wPad =>
-          let (rPad, _, codePad) := compileRtlExprToAmdGpu 1 wPad.expr
-          let wires := evalWireTable (fun _ => 2#64) (fun _ => 0#64) mTop.wires
-          let vgprs :=
-            runAmdGpuVop64Prog (fun _ => 2#64) wires (fun _ => 0#64) (fun _ => 0#64) codePad
-          vgprs rPad == 151#64
-        | none => false)
-     | _, _ => false) = true := by
-  decide +kernel
+/-! ## 3. The part as one solid, on a 100 µm lattice -/
 
-/-! ## 3. Connected 3-Feature Linear SSA F-Rep Tape Pruning & Compaction (`prune_and_compact_ssa_tape_sound`) -/
+/-- A Z-parallel cylinder of radius `r` on the axis through `(cx, cy)`, between `z0` and `z1`. -/
+@[expose] def frepCylZ (cx cy : Int) (r : Nat) (z0 z1 : Int) : FRepExpr :=
+  .csgInter (.offset ((r : Int) * r) (.add (.sq (.sub .varX (.const cx))) (.sq (.sub .varY (.const cy)))))
+    (.csgInter (.sub (.const z0) .varZ) (.sub .varZ (.const z1)))
 
-/-- Canonical 20-instruction linear SSA F-Rep tape for the connected centrifugal impeller part
-with OpenUSD `LIVERPS` overrides:
-- Instructions `0..6`: Impeller hub/shroud cylinder $x^2 + y^2 - 100$ (radius $10$ centered at $(0, 0)$, root at `reg 6`),
-- Instructions `7..12`: Rim-attached mounting boss lug $(x - 10)^2 + y^2 - 4$ (radius $2$ centered at $(10, 0)$, overlapping hub on $x \in [8, 10]$ and protruding to $x = 12$, root at `reg 12`),
-- Instruction `13`: CSG union `.minUnion 6 12` (hub $\cup$ mounting boss),
-- Instructions `14..18`: Negated internal cooling channel bore $-((x + 4)^2 + y^2 - 4)$ (radius $2$ centered at $(-4, 0)$ completely inside the radius-$10$ hub, carving a hollow vertical cooling channel, root at `reg 18`),
-- Instruction `19`: CSG difference `.maxInter 13 18` ((hub $\cup$ boss) $\setminus$ cooling bore). -/
-def impellerSsaTape : List SsaTapeOp :=
-  [ -- 0..6: Impeller core cylinder x^2 + y^2 - 100 (root at reg 6)
-    .varX, .mul 0 0, .varY, .mul 2 2, .add 1 3, .const 100, .sub 4 5,
-    -- 7..12: Rim-attached mounting boss lug (x - 10)^2 + y^2 - 4 (root at reg 12)
-    .const 10, .sub 0 7, .mul 8 8, .add 9 3, .const 4, .sub 10 11,
-    -- 13: CSG union of impeller core (6) and mounting boss (12)
-    .minUnion 6 12,
-    -- 14..18: Negated internal cooling channel bore -((x + 4)^2 + y^2 - 4) (root at reg 18)
-    .add 0 11, .mul 14 14, .add 15 3, .sub 16 11, .neg 17,
-    -- 19: CSG difference maxInter 13 18
-    .maxInter 13 18
-  ]
+/-- The bounding box of `frepCylZ`. -/
+@[expose] def cylBox (cx cy : Int) (r : Nat) (z0 z1 : Int) : Box3D :=
+  { xIv := { lo := cx - r, hi := cx + r }, yIv := { lo := cy - r, hi := cy + r }, zIv := { lo := z0, hi := z1 } }
 
-/-- Solid hub octree voxel box $B_{\text{center}} = [5, 6] \times [-1, 1]^2$ inside the impeller hub. -/
-def impellerCenterBox : Box3D :=
-  { xIv := { lo := 5, hi := 6 }
-  , yIv := { lo := -1, hi := 1 }
-  , zIv := { lo := -1, hi := 1 } }
+/-- Smallest box holding two boxes. -/
+@[expose] def Box3D.hull (A B : Box3D) : Box3D :=
+  { xIv := { lo := min A.xIv.lo B.xIv.lo, hi := max A.xIv.hi B.xIv.hi }
+  , yIv := { lo := min A.yIv.lo B.yIv.lo, hi := max A.yIv.hi B.yIv.hi }
+  , zIv := { lo := min A.zIv.lo B.zIv.lo, hi := max A.zIv.hi B.zIv.hi } }
 
-/-- Protruding mounting-boss octree voxel box $B_{\text{boss}} = [11, 12] \times [-1, 1]^2$. -/
-def impellerBossBox : Box3D :=
-  { xIv := { lo := 11, hi := 12 }
-  , yIv := { lo := -1, hi := 1 }
-  , zIv := { lo := -1, hi := 1 } }
+theorem int_mul_self_nonneg (a : Int) : 0 ≤ a * a := by
+  rcases Int.le_total 0 a with h | h
+  · exact Int.mul_nonneg h h
+  · have := Int.mul_nonneg (Int.neg_nonneg_of_nonpos h) (Int.neg_nonneg_of_nonpos h)
+    rwa [Int.neg_mul_neg] at this
 
-/-- Internal cooling-channel bore octree voxel box $B_{\text{bore}} = [-5, -3] \times [-1, 1]^2$ inside the hub. -/
-def impellerBoreBox : Box3D :=
-  { xIv := { lo := -5, hi := -3 }
-  , yIv := { lo := -1, hi := 1 }
-  , zIv := { lo := -1, hi := 1 } }
+theorem abs_le_of_mul_self_le (a : Int) (r : Nat) (h : a * a ≤ (r : Int) * r) : -(r : Int) ≤ a ∧ a ≤ r := by
+  have key : ∀ b : Int, (r : Int) + 1 ≤ b → (r : Int) * r < b * b := by
+    intro b hb
+    have h1 := Int.mul_le_mul hb hb (by omega) (by omega)
+    have e : ((r : Int) + 1) * ((r : Int) + 1) = (r : Int) * r + 2 * r + 1 := by
+      simp only [Int.add_mul, Int.mul_add, Int.mul_one, Int.one_mul]; omega
+    omega
+  constructor
+  · refine Int.not_lt.mp fun hlt => ?_
+    have := key (-a) (by omega)
+    rw [Int.neg_mul_neg] at this
+    omega
+  · refine Int.not_lt.mp fun hlt => ?_
+    have := key a (by omega)
+    omega
 
-/-- Box-pruned and backward-liveness-compacted 7-op SSA tape for `impellerCenterBox`. -/
-def impellerCenterCompactedTape : List SsaTapeOp :=
-  compactSsaTape (pruneSsaTapeForBox impellerCenterBox impellerSsaTape) 19
+theorem frepCylZ_in_box (cx cy : Int) (r : Nat) (z0 z1 x y z : Int)
+    (h : inSolid x y z (frepCylZ cx cy r z0 z1)) : (cylBox cx cy r z0 z1).contains x y z := by
+  unfold inSolid frepCylZ at h
+  simp only [evalFRepPoint, Int.max_le] at h
+  obtain ⟨hr, hz0, hz1⟩ := h
+  have hx2 := int_mul_self_nonneg (x - cx)
+  have hy2 := int_mul_self_nonneg (y - cy)
+  have bx := abs_le_of_mul_self_le (x - cx) r (by omega)
+  have by' := abs_le_of_mul_self_le (y - cy) r (by omega)
+  unfold cylBox Box3D.contains FloatInterval.contains
+  dsimp only
+  omega
 
-/-- Box-pruned and backward-liveness-compacted 9-op SSA tape for `impellerBossBox`. -/
-def impellerBossCompactedTape : List SsaTapeOp :=
-  compactSsaTape (pruneSsaTapeForBox impellerBossBox impellerSsaTape) 19
+theorem hull_contains_left (A B : Box3D) (x y z : Int) (h : A.contains x y z) :
+    (Box3D.hull A B).contains x y z := by
+  obtain ⟨hx, hy, hz⟩ := h
+  unfold FloatInterval.contains at hx hy hz
+  unfold Box3D.hull Box3D.contains FloatInterval.contains
+  dsimp only
+  omega
 
-/-- Box-pruned and backward-liveness-compacted 9-op standalone SSA tape for `impellerBoreBox`
-(eliminating both the hub and boss branches with zero unpruned wire dependencies). -/
-def impellerBoreCompactedTape : List SsaTapeOp :=
-  compactSsaTape (pruneSsaTapeForBox impellerBoreBox impellerSsaTape) 19
+theorem hull_contains_right (A B : Box3D) (x y z : Int) (h : B.contains x y z) :
+    (Box3D.hull A B).contains x y z := by
+  obtain ⟨hx, hy, hz⟩ := h
+  unfold FloatInterval.contains at hx hy hz
+  unfold Box3D.hull Box3D.contains FloatInterval.contains
+  dsimp only
+  omega
 
-/-- **`fidgetCam_ssa_tape_prune_and_compact_sound`**:
-1. **Universal Octree Tape Pruning & Backward-Liveness Compaction (`prune_and_compact_ssa_tape_sound`)**:
-   For EVERY octree bounding box `B : Box3D` and EVERY point `(x, y, z)` in `B`, pruning and
-   compacting `impellerSsaTape` (`rootReg = 19`) produces a compacted tape whose final register
-   evaluates to the **exact** same signed distance value as `evalSsaTape x y z impellerSsaTape 19`
-   with `compacted.length ≤ 20`.
-2. **Concrete `.obend` & Connected 3-Box Compaction Agreement**:
-   - `impellerCenterBox` ($[5, 6] \times [-1, 1]^2$) compacts to `7` instructions (`compactedCenterTapeOps = 7`),
-   - `impellerBossBox` ($[11, 12] \times [-1, 1]^2$) compacts to `9` instructions (`compactedLugTapeOps = 9`),
-   - `impellerBoreBox` ($[-5, -3] \times [-1, 1]^2$) compacts to `9` standalone bore instructions,
-   - At `(-4, 0, 0)` inside the hub, `evalSsaTape (-4) 0 0 impellerSsaTape 19 = 4 > 0` (the cooling bore genuinely carves a hollow channel), while `(9, 0, 0)` (`-19 ≤ 0`) and `(11, 0, 0)` (`-3 ≤ 0`) confirm connected hub-to-boss geometry. -/
-theorem fidgetCam_ssa_tape_prune_and_compact_sound
-    (B : Box3D) (x y z : Int) (hIn : B.contains x y z) :
-    let pruned := pruneSsaTapeForBox B impellerSsaTape
-    let compacted := compactSsaTape pruned 19
-    (evalSsaTape x y z compacted (compacted.length - 1) = evalSsaTape x y z impellerSsaTape 19 ∧
-     compacted.length ≤ impellerSsaTape.length) ∧
-    impellerSsaTape.length = 20 ∧
-    impellerCenterCompactedTape.length = 7 ∧
-    impellerBossCompactedTape.length = 9 ∧
-    impellerBoreCompactedTape.length = 9 ∧
-    evalSsaTape 5 0 0 impellerCenterCompactedTape (impellerCenterCompactedTape.length - 1) =
-      evalSsaTape 5 0 0 impellerSsaTape 19 ∧
-    evalSsaTape 11 0 0 impellerBossCompactedTape (impellerBossCompactedTape.length - 1) =
-      evalSsaTape 11 0 0 impellerSsaTape 19 ∧
-    evalSsaTape (-4) 0 0 impellerBoreCompactedTape (impellerBoreCompactedTape.length - 1) =
-      evalSsaTape (-4) 0 0 impellerSsaTape 19 ∧
-    evalSsaTape (-4) 0 0 impellerSsaTape 19 = 4 ∧
-    evalSsaTape 9 0 0 impellerSsaTape 19 = -19 ∧
-    evalSsaTape 11 0 0 impellerSsaTape 19 = -3 := by
-  have hRoot : 19 < impellerSsaTape.length := by decide +kernel
-  have hUniv := prune_and_compact_ssa_tape_sound B x y z impellerSsaTape 19 hIn hRoot
-  refine ⟨hUniv, by decide +kernel⟩
+/-- Hub ∪ lug, the envelope the bore is cut from. -/
+@[expose] def FidgetParams.outer (p : FidgetParams) : FRepExpr :=
+  .csgUnion (frepCylZ 0 0 (p.lat p.hubR) 0 (p.lat p.hubH))
+    (frepCylZ (p.lat p.lugX) 0 (p.lat p.lugR) 0 (p.lat p.hubH))
 
-/-! ## 4. Dual-Interval Gradients (`evalFRepGradBox`), Certified Lipschitz & No-Gouge 5-Axis CAM -/
+/-- The cooling bore as a cavity of the part's height (for the wall), and as the cut (through). -/
+@[expose] def FidgetParams.cavity (p : FidgetParams) : FRepExpr :=
+  frepCylZ (-(p.lat p.boreX : Int)) 0 (p.lat p.boreR) 0 (p.lat p.hubH)
 
-/-- Quadratic 3D ball-endmill cutter `FRepExpr`: $f_{\text{tool}}(x, y, z) = x^2 + y^2 + z^2 - 100$. -/
-def impellerBallEndmillTool : FRepExpr :=
-  .offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
+@[expose] def FidgetParams.part (p : FidgetParams) : FRepExpr :=
+  .csgDiff p.outer (frepCylZ (-(p.lat p.boreX : Int)) 0 (p.lat p.boreR) (-1) (p.lat p.hubH + 1))
 
-/-- Local tool-relative bounding box $B_{\text{local}} = [10, 12]^3$ for 5-axis finishing. -/
-def impellerFinishBox : Box3D :=
-  { xIv := { lo := 10, hi := 12 }
-  , yIv := { lo := 10, hi := 12 }
-  , zIv := { lo := 10, hi := 12 } }
+@[expose] def FidgetParams.partBox (p : FidgetParams) : Box3D :=
+  Box3D.hull (cylBox 0 0 (p.lat p.hubR) 0 (p.lat p.hubH))
+    (cylBox (p.lat p.lugX) 0 (p.lat p.lugR) 0 (p.lat p.hubH))
 
-/-- **`fidgetCam_dual_interval_lipschitz_and_no_gouge_sound`**:
-1. **Universal Dual-Interval Gradient Lipschitz Bound (`evalFRepGradBox_lipschitz_sound`)**:
-   `evalFRepGradBox impellerFinishBox impellerBallEndmillTool` derives `computeCertifiedLipschitzBox = 72`.
-2. **Universal Self-Certified 5-Axis Swept-Volume No-Gouge (`synthesizeCertifiedSweptVolume_no_gouge_sound`)**:
-   With zero caller-supplied Lipschitz parameter, `synthesizeCertifiedSweptVolume impellerFinishBox impellerBallEndmillTool [(0, 0, 0)] 2`
-   pads the swept volume by `72 * 2 = 144` (`FidgetImpellerTop.impellerPadAtStep2_val = .nat 151 = 2 * 72 + 7`)
-   and guarantees that for EVERY point $(x, y, z) \in \text{impellerFinishBox}$ and EVERY continuous cutter
-   position $(t_x, t_y, t_z)$ within step distance $2$ of waypoint $(0, 0, 0)$, the cutter never gouges `fStock`. -/
-theorem fidgetCam_dual_interval_lipschitz_and_no_gouge_sound
-    (fStock : FRepExpr)
-    (tx ty tz x y z : Int)
-    (hInBox : impellerFinishBox.contains x y z)
-    (hLocalT : impellerFinishBox.contains (x - tx) (y - ty) (z - tz))
-    (hStep : linfDist3D (x - 0, y - 0, z - 0) (x - tx, y - ty, z - tz) ≤ Int.ofNat 2) :
-    evalFRepGradBox impellerFinishBox impellerBallEndmillTool =
-      ({ lo := -24, hi := 24 }, { lo := -24, hi := 24 }, { lo := -24, hi := 24 }) ∧
-    computeCertifiedLipschitzBox impellerFinishBox impellerBallEndmillTool = 72 ∧
-    checkVoxelNoGouge impellerFinishBox
-      (synthesizeCertifiedSweptVolume impellerFinishBox impellerBallEndmillTool [(0, 0, 0)] 2) = true ∧
-    0 < evalFRepPoint x y z (translateFRep tx ty tz impellerBallEndmillTool) ∧
-    (inSolid x y z fStock →
-      inSolid x y z (.csgDiff fStock (translateFRep tx ty tz impellerBallEndmillTool))) := by
-  have hNoGouge :
-      checkVoxelNoGouge impellerFinishBox
-        (synthesizeCertifiedSweptVolume impellerFinishBox impellerBallEndmillTool [(0, 0, 0)] 2) = true := by
-    decide +kernel
-  have hWay : ((0 : Int), (0 : Int), (0 : Int)) ∈ [((0 : Int), (0 : Int), (0 : Int))] :=
-    List.Mem.head []
-  have hLocalW : impellerFinishBox.contains (x - 0) (y - 0) (z - 0) := by
-    simpa only [Int.sub_zero] using hInBox
-  have hSwept := synthesizeCertifiedSweptVolume_no_gouge_sound
-    impellerFinishBox impellerFinishBox fStock impellerBallEndmillTool
-    [(0, 0, 0)] 2 0 0 0 tx ty tz x y z
-    hNoGouge hInBox hWay hLocalW hLocalT hStep
-  exact ⟨by decide +kernel, by decide +kernel, hNoGouge, hSwept.1, hSwept.2⟩
+/-- Every point of the part lies in `partBox`, for any parameters. -/
+theorem FidgetParams.part_in_box (p : FidgetParams) (x y z : Int) (h : inSolid x y z p.part) :
+    p.partBox.contains x y z := by
+  unfold FidgetParams.part inSolid at h
+  simp only [evalFRepPoint, Int.max_le] at h
+  have hu := h.1
+  unfold FidgetParams.outer at hu
+  simp only [evalFRepPoint] at hu
+  unfold FidgetParams.partBox
+  rcases Int.le_total
+      (evalFRepPoint x y z (frepCylZ 0 0 (p.lat p.hubR) 0 (p.lat p.hubH)))
+      (evalFRepPoint x y z (frepCylZ (p.lat p.lugX) 0 (p.lat p.lugR) 0 (p.lat p.hubH))) with hle | hle
+  · rw [Int.min_eq_left hle] at hu
+    exact hull_contains_left _ _ x y z (frepCylZ_in_box _ _ _ _ _ x y z hu)
+  · rw [Int.min_eq_right hle] at hu
+    exact hull_contains_right _ _ x y z (frepCylZ_in_box _ _ _ _ _ x y z hu)
 
-/-! ## 5. OpenUSD `LIVERPS` Dominance & Certified $2600\,\mu\text{m}$ Shell Wall Thickness (`OpenUSD.lean`) -/
+/-- The part's tape is compiled from the solid, not written beside it. -/
+@[expose] def impellerSsaTape : List SsaTapeOp := fidgetParams.part.toTape
 
-/-- Micrometer-scale bounding box $B_{\text{shell}} = [0, 5000]^3$ ($\mu\text{m}$) for the impeller cooling-channel wall. -/
-def impellerShellBox : Box3D :=
-  { xIv := { lo := 0, hi := 5000 }
-  , yIv := { lo := 0, hi := 5000 }
-  , zIv := { lo := 0, hi := 5000 } }
+theorem impellerSsaTape_eval (x y z : Int) :
+    evalSsaTape x y z impellerSsaTape = evalFRepPoint x y z fidgetParams.part :=
+  FRepExpr.toTape_eval x y z fidgetParams.part
 
-/-- Outer impeller shroud surface $f_{\text{outer}}(x, y, z) = x - 3400$ ($\mu\text{m}$). -/
-def impellerOuterShell : FRepExpr := .offset 3400 .varX
+/-! ## 4. The wall between the cooling bore and the outer surface -/
 
-/-- Inner cooling channel cavity surface $f_{\text{inner}}(x, y, z) = x - 800$ ($\mu\text{m}$, matching `boreRadiusUm = 800n`). -/
-def impellerInnerCavity : FRepExpr := .offset 800 .varX
-
-/-- **`fidgetCam_openusd_liverps_and_shell_wall_thickness_sound`**:
-1. **Universal OpenUSD `LIVERPS` Arc Dominance (`liverps_stronger_arc_dominates_term`)**:
-   For `["Factory", "ImpellerAssy", "CoolingChannel"]`, `.localArc` (`ConformalBoreLocalOverride`, strength `7`)
-   strictly dominates `.referencesArc` (`HelicalChannelReferenceSpec`, strength `3`) in both layer orders.
-2. **Self-Certified $2600\,\mu\text{m}$ Shell Wall Thickness (`computeCertifiedShellWallThicknessUm_sound`)**:
-   `computeCertifiedShellWallThicknessUm impellerShellBox impellerOuterShell impellerInnerCavity (800, 0, 0) = some 2600`
-   (matching `CoolingChannelOverride.obend` & `ImpellerPartTop.obend`'s `2600n`, $\ge 1200\,\mu\text{m}$),
-   guaranteeing `2600 ≤ linfDist3D (800, 0, 0) (qx, qy, qz)` for every exterior point $q$ and exact
-   invariance under `.scalePos 100`. -/
-theorem fidgetCam_openusd_liverps_and_shell_wall_thickness_sound
+/-- **`fidget_bore_wall_sound`**: every lattice point within `minWall` (2.0 mm) of any point of the
+cooling bore, in X and in Y, is material of the hub-and-lug envelope: the bore wall is at least the
+minimum the `.obend` package states, everywhere along the bore. -/
+theorem fidget_bore_wall_sound (px py pz : Int) (hCav : inSolid px py pz fidgetParams.cavity)
     (qx qy qz : Int)
-    (hq : impellerShellBox.contains qx qy qz)
-    (hOutQ : 0 ≤ evalFRepPoint qx qy qz impellerOuterShell) :
-    let target : SdfPath := ["Factory", "ImpellerAssy", "CoolingChannel"]
-    let strongSpec : PrimSpec := { path := target, arc := UsdArcKind.localArc, fields := [("boreRadiusUm", .nat 950)] }
-    let weakSpec   : PrimSpec := { path := target, arc := UsdArcKind.referencesArc, fields := [("boreRadiusUm", .nat 800)] }
-    let strongLayer : SdfLayer := { layerId := "strongLayer", prims := [strongSpec] }
-    let weakLayer   : SdfLayer := { layerId := "weakLayer",   prims := [weakSpec] }
-    let layersFwd := [strongLayer, weakLayer]
-    let layersRev := [weakLayer, strongLayer]
-    Steps (.get (composePrimToTerm layersFwd target (.record [])) "boreRadiusUm") (.nat 950) ∧
-    Steps (.get (composePrimToTerm layersRev target (.record [])) "boreRadiusUm") (.nat 950) ∧
-    computeCertifiedShellWallThicknessUm impellerShellBox impellerOuterShell impellerInnerCavity (800, 0, 0) =
-      some 2600 ∧
-    computeCertifiedShellWallThicknessUm impellerShellBox
-      (.scalePos 100 impellerOuterShell) (.scalePos 100 impellerInnerCavity) (800, 0, 0) =
-      some 2600 ∧
-    2600 ≤ linfDist3D (800, 0, 0) (qx, qy, qz) := by
+    (hq : WithinBox (fidgetParams.lat fidgetParams.minWall) (fidgetParams.lat fidgetParams.minWall) 0
+      px py pz qx qy qz) :
+    inSolid qx qy qz fidgetParams.outer := by
+  have hBox := frepCylZ_in_box _ _ _ _ _ px py pz hCav
+  have hCheck : kdAll (wallLeaf fidgetParams.outer fidgetParams.cavity
+      (fidgetParams.lat fidgetParams.minWall) (fidgetParams.lat fidgetParams.minWall) 0) 40
+      (cylBox (-(fidgetParams.lat fidgetParams.boreX : Int)) 0 (fidgetParams.lat fidgetParams.boreR) 0
+        (fidgetParams.lat fidgetParams.hubH)) = true := by
+    native_decide
+  exact checkWall_sound _ _ _ _ _ 40 _ hCheck px py pz hBox hCav qx qy qz hq
+
+#assert_compiled fidget_bore_wall_sound
+
+/-! ## 5. The tool path: generated, certified against the solid, posted
+
+Generation is untrusted integer code: contours at the tool offset around hub ∪ lug for each
+Z level (vertical axis), then four 3+2 passes over the top edge with the axis tilted 36.87°
+outward, one per quadrant. Directions come from rational points of the unit circle, so no
+trigonometry enters. The certificate is the gouge check over every lattice point of every
+segment the control will interpolate, including plunges and retracts. -/
+
+/-- Rational points on the unit circle, `((M²-k², 2kM), M²+k²)` for `k < M`, turned through the four
+quadrants: `4M` exact directions in angular order. -/
+@[expose] def circleDirs (M : Nat) : List (Int × Int × Int) :=
+  let q0 := (List.range M).map fun (i : Nat) =>
+    let m : Int := M
+    let k : Int := i
+    (m * m - k * k, 2 * k * m, m * m + k * k)
+  let rot (d : Int × Int × Int) : Int × Int × Int := (-d.2.1, d.1, d.2.2)
+  let q1 := q0.map rot
+  let q2 := q1.map rot
+  let q3 := q2.map rot
+  q0 ++ q1 ++ q2 ++ q3
+
+/-- `round(ρ·a/c)`. -/
+@[expose] def roundMul (ρ a c : Int) : Int := (2 * ρ * a + c) / (2 * c)
+
+/-- Smallest radius `ρ ≥ ρ0` along direction `d` whose point is at least `clear` from `(ox, oy)`. -/
+@[expose] def searchRho (ox oy : Int) (clear : Nat) (d : Int × Int × Int) : Nat → Int → Int
+  | 0, ρ => ρ
+  | fuel + 1, ρ =>
+    let px := roundMul ρ d.1 d.2.2
+    let py := roundMul ρ d.2.1 d.2.2
+    if (clear : Int) * clear ≤ (px - ox) * (px - ox) + (py - oy) * (py - oy) then ρ
+    else searchRho ox oy clear d fuel (ρ + 1)
+
+/-- The quadrant (0 … 3) whose axis `+X, +Y, -X, -Y` is nearest to direction `d`. -/
+@[expose] def nearestQuadrant (d : Int × Int × Int) : Nat :=
+  let a := d.1
+  let b := d.2.1
+  if (b.natAbs : Int) ≤ a then 0 else if (a.natAbs : Int) ≤ b then 1
+  else if (b.natAbs : Int) ≤ -a then 2 else 3
+
+/-- Tool axis tilted 36.87° (a 3-4-5 triangle) outward over quadrant `q`. -/
+@[expose] def tiltAxis : Nat → ToolAxis
+  | 0 => ⟨3, 0, 4, 5⟩
+  | 1 => ⟨0, 3, 4, 5⟩
+  | 2 => ⟨-3, 0, 4, 5⟩
+  | _ => ⟨0, -3, 4, 5⟩
+
+@[expose] def vertAxis : ToolAxis := ⟨0, 0, 1, 1⟩
+
+@[expose] def FidgetParams.clearanceZ (p : FidgetParams) : Int := p.lat p.hubH + p.lat p.clearAbove
+
+/-- The contour around hub ∪ lug at the tool offset (radius plus stock), closed. -/
+@[expose] def FidgetParams.contour (p : FidgetParams) : List (Int × Int) :=
+  let off := p.lat p.toolOffset
+  let pts := (circleDirs 64).map fun d =>
+    let ρ := searchRho (p.lat p.lugX) 0 (p.lat p.lugR + off) d 400 ((p.lat p.hubR : Int) + off)
+    (roundMul ρ d.1 d.2.2, roundMul ρ d.2.1 d.2.2)
+  pts ++ pts.take 1
+
+/-- Tip heights of the Z-level passes, top down to the base. -/
+@[expose] def FidgetParams.zLevels (p : FidgetParams) : List Int :=
+  (List.range (p.hubH / p.stepDown)).map fun (i : Nat) =>
+    (p.lat p.hubH : Int) - ((i : Int) + 1) * (p.lat p.stepDown : Int)
+
+@[expose] def FidgetParams.zPass (p : FidgetParams) (z : Int) : CamPass :=
+  { axis := vertAxis, pts := p.contour.map fun q => (q.1, q.2, z) }
+
+/-- The top-edge pass over quadrant `q`: ball centre at the tool offset from the edge along the
+tilted axis, pushed out radially where the lug is. -/
+@[expose] def FidgetParams.tiltPass (p : FidgetParams) (q : Nat) : CamPass :=
+  let all := circleDirs 64
+  let src := if q == 0 then all.drop (3 * 64) ++ all.take (3 * 64) else all
+  let u := tiltAxis q
+  let off := p.lat p.toolOffset
+  let r : Int := p.lat p.toolR
+  let dirs := src.filter fun d => nearestQuadrant d == q
+  { axis := u
+  , pts := dirs.map fun d =>
+      let ρc := searchRho (p.lat p.lugX) 0 (p.lat p.lugR + off) d 400 ((p.lat p.hubR : Int) + 3 * off / 5)
+      let cx := roundMul ρc d.1 d.2.2
+      let cy := roundMul ρc d.2.1 d.2.2
+      let cz := (p.lat p.hubH : Int) + 4 * off / 5
+      (cx - r * u.ux / u.n, cy - r * u.uy / u.n, cz - r * u.uz / u.n) }
+
+@[expose] def FidgetParams.passes (p : FidgetParams) : List CamPass :=
+  p.zLevels.map p.zPass ++ [p.tiltPass 0, p.tiltPass 1, p.tiltPass 2, p.tiltPass 3]
+
+/-- Every lattice point the tip passes through in a pass under the post's moves: plunge from the
+clearance plane, the cut polyline, retract to the clearance plane. -/
+@[expose] def FidgetParams.certPath (p : FidgetParams) (pass : CamPass) : List CLPoint :=
+  match pass.pts with
+  | [] => []
+  | q :: rest =>
+    let l := (q :: rest).getLast (List.cons_ne_nil _ _)
+    (densifyPolyline ((q.1, q.2.1, p.clearanceZ) :: q :: rest ++ [(l.1, l.2.1, p.clearanceZ)])).map
+      fun t => ⟨t.1, t.2.1, t.2.2, pass.axis⟩
+
+/-- **`fidget_toolpath_no_gouge`**: at every lattice point of every segment of every pass, the ball
+end mill with its shank, grown by one lattice unit (100 µm) in radius and length, contains no point
+of the part. The part is the one the `.obend` package composes (`fidgetParams_eq_obend`); points
+outside `partBox` are not part (`part_in_box`), so the statement is over all of space. -/
+theorem fidget_toolpath_no_gouge (pass : CamPass) (hPass : pass ∈ fidgetParams.passes)
+    (c : CLPoint) (hc : c ∈ fidgetParams.certPath pass) (x y z : Int)
+    (hPart : inSolid x y z fidgetParams.part) :
+    0 < evalFRepPoint x y z
+      (frepBallEndMill c.x c.y c.z c.axis (fidgetParams.lat fidgetParams.toolR + 1)
+        (fidgetParams.lat fidgetParams.shankLen + 1)) := by
+  have hAll : fidgetParams.passes.all (fun pass =>
+      checkPathNoGouge fidgetParams.part fidgetParams.partBox 48 (fidgetParams.lat fidgetParams.toolR)
+        (fidgetParams.lat fidgetParams.shankLen) 1 (fidgetParams.certPath pass)) = true := by
+    native_decide
+  exact checkPathNoGouge_sound _ _ 48 _ _ 1 _ (List.all_eq_true.mp hAll pass hPass) c hc x y z
+    (fidgetParams.part_in_box x y z hPart) hPart
+
+#assert_compiled fidget_toolpath_no_gouge
+
+/-- Consecutive certified points are at most one lattice unit apart per axis, which is what the
+segment-covering argument of `checkPathNoGouge_sound` needs. -/
+theorem fidget_certPath_unit_steps :
+    fidgetParams.passes.all (fun pass => clChainStepLe 1 (fidgetParams.certPath pass)) = true := by
+  native_decide
+
+#assert_compiled fidget_certPath_unit_steps
+
+@[expose] def FidgetParams.postConfig (p : FidgetParams) : PostConfig :=
+  { clearanceZ := p.clearanceZ, plungeFeed := p.plungeFeed, cutFeed := p.cutFeed
+  , spindleRpm := p.rpm, tool := 1, unitMicron := p.unit }
+
+/-- The program `apps/fidget-cam/build/impeller_5axis.ngc` is this string. -/
+@[expose] def impeller5AxisNgc : String :=
+  postNgc fidgetParams.postConfig "Objective Bend fidget part: Z-level contours and 3+2 top-edge passes"
+    fidgetParams.passes
+
+/-- The posted moves are rotary-safe (an instance of `postMoves_rotarySafe`, which holds for every
+list of passes). -/
+theorem fidget_post_rotarySafe :
+    movesRotarySafe fidgetParams.postConfig.clearanceZ (postMoves fidgetParams.postConfig fidgetParams.passes) = true :=
+  postMoves_rotarySafe _ _
+
+/-! ## 6. OpenUSD `LIVERPS` over the same value the `.obend` override composes
+
+The bore radius is authored twice: `2.0 mm` as a local opinion (`ConformalBoreLocalOverride`) and
+`1.6 mm` through a reference (`HelicalChannelReferenceSpec`). Lowered through `composePrimToTerm`,
+the local opinion wins in either layer order, and it is the value the `.obend` composition reduced. -/
+/-- The cooling channel's prim, authoring the bore radius through arc `arc`. -/
+@[expose] def boreLayer (name : String) (arc : UsdArcKind) (v : Term) : SdfLayer :=
+  { layerId := name
+  , prims := [{ path := ["Factory", "ImpellerAssy", "CoolingChannel"], arc := arc
+              , fields := [("boreRadiusUm", v)] }] }
+
+theorem fidgetCam_liverps_bore_radius :
+    Steps (.get (composePrimToTerm
+        [boreLayer "strongLayer" .localArc FidgetCoolingChannel.boreRadius_val,
+         boreLayer "weakLayer" .referencesArc FidgetCoolingChannel.referenceBoreRadius_val]
+        ["Factory", "ImpellerAssy", "CoolingChannel"] (.record [])) "boreRadiusUm")
+      FidgetCoolingChannel.boreRadius_val ∧
+    Steps (.get (composePrimToTerm
+        [boreLayer "weakLayer" .referencesArc FidgetCoolingChannel.referenceBoreRadius_val,
+         boreLayer "strongLayer" .localArc FidgetCoolingChannel.boreRadius_val]
+        ["Factory", "ImpellerAssy", "CoolingChannel"] (.record [])) "boreRadiusUm")
+      FidgetCoolingChannel.boreRadius_val ∧
+    natOfTerm FidgetCoolingChannel.boreRadius_val = fidgetParams.boreR := by
+  have hv : FidgetCoolingChannel.boreRadius_val = .nat 2000 := rfl
+  have hr : FidgetCoolingChannel.referenceBoreRadius_val = .nat 1600 := rfl
   have hLt : UsdArcKind.referencesArc.strength < UsdArcKind.localArc.strength := by decide +kernel
   have hDom := liverps_stronger_arc_dominates_term
     ["Factory", "ImpellerAssy", "CoolingChannel"] "boreRadiusUm"
-    (.nat 950) (.nat 800) UsdArcKind.localArc UsdArcKind.referencesArc [] hLt
-  have hDomFwd : Steps (.get (composePrimToTerm
-      [ { layerId := "strongLayer", prims := [{ path := ["Factory", "ImpellerAssy", "CoolingChannel"], arc := UsdArcKind.localArc, fields := [("boreRadiusUm", .nat 950)] }] }
-      , { layerId := "weakLayer",   prims := [{ path := ["Factory", "ImpellerAssy", "CoolingChannel"], arc := UsdArcKind.referencesArc, fields := [("boreRadiusUm", .nat 800)] }] } ]
-      ["Factory", "ImpellerAssy", "CoolingChannel"] (.record [])) "boreRadiusUm") (.nat 950) := by
-    simpa [Obend.Logic.openTerm, Obend.Core.Term.Term.substitute] using hDom.1
-  have hDomRev : Steps (.get (composePrimToTerm
-      [ { layerId := "weakLayer",   prims := [{ path := ["Factory", "ImpellerAssy", "CoolingChannel"], arc := UsdArcKind.referencesArc, fields := [("boreRadiusUm", .nat 800)] }] }
-      , { layerId := "strongLayer", prims := [{ path := ["Factory", "ImpellerAssy", "CoolingChannel"], arc := UsdArcKind.localArc, fields := [("boreRadiusUm", .nat 950)] }] } ]
-      ["Factory", "ImpellerAssy", "CoolingChannel"] (.record [])) "boreRadiusUm") (.nat 950) := by
-    simpa [Obend.Logic.openTerm, Obend.Core.Term.Term.substitute] using hDom.2.1
-  have hSome :
-      computeCertifiedShellWallThicknessUm impellerShellBox impellerOuterShell impellerInnerCavity (800, 0, 0) =
-        some 2600 := by
-    decide +kernel
-  have hSound := computeCertifiedShellWallThicknessUm_sound
-    impellerShellBox impellerOuterShell impellerInnerCavity 800 0 0 2600 hSome
-  have hp : impellerShellBox.contains 800 0 0 := by
-    unfold Box3D.contains FloatInterval.contains impellerShellBox
-    decide +kernel
-  have hOrd : evalFRepPoint 800 0 0 impellerOuterShell ≤ evalFRepPoint 800 0 0 impellerInnerCavity := by
-    decide +kernel
-  have hInInner : inSolid 800 0 0 impellerInnerCavity := by
-    unfold inSolid evalFRepPoint impellerInnerCavity
-    decide +kernel
-  have hClear := hSound.2.2.2 qx qy qz hp hq hOrd hInInner hOutQ
-  exact ⟨hDomFwd, hDomRev, hSome, by decide +kernel, hClear⟩
+    (.nat 2000) (.nat 1600) UsdArcKind.localArc UsdArcKind.referencesArc [] hLt
+  unfold boreLayer
+  rw [hv, hr]
+  refine ⟨?_, ?_, by decide +kernel⟩
+  · simpa [Obend.Logic.openTerm, Obend.Core.Term.Term.substitute] using hDom.1
+  · simpa [Obend.Logic.openTerm, Obend.Core.Term.Term.substitute] using hDom.2.1
 
-/-! ## 6. Verified SSA-Tape-to-`RtlModule` Compiler (`compileSsaTapeToRtlWires`, `fidgetImpellerVoxelCamRtlModule`) -/
+/-! ## 7. RTL: the voxel evaluator compiled from the part's tape -/
 
-/-- Compile a single `SsaTapeOp` into an `Obend.Hardware.HDL.RtlExpr` reading `(in_x, in_y, in_z)`
-from input ports `(0, 1, 2)` and previously evaluated SSA registers at `wireOffset + r`. -/
-def compileSsaOpToRtlExpr (wireOffset : Nat) : SsaTapeOp → RtlExpr
+/-- Compile a single `SsaTapeOp` into an `RtlExpr` reading `(in_x, in_y, in_z)` from ports `0, 1, 2`
+and earlier SSA registers at `wireOffset + r`. -/
+@[expose] def compileSsaOpToRtlExpr (wireOffset : Nat) : SsaTapeOp → RtlExpr
   | .const c        => .const (BitVec.ofInt 64 c)
   | .varX           => .inputPort 0
   | .varY           => .inputPort 1
@@ -422,21 +529,36 @@ def compileSsaOpToRtlExpr (wireOffset : Nat) : SsaTapeOp → RtlExpr
     let w2 := RtlExpr.wireRef (wireOffset + r2)
     .mux (.alu .slt w1 w2) w2 w1
 
-/-- Compile an arbitrary linear SSA F-Rep tape `tape : List SsaTapeOp` into sequential topological
-`WireAssign` entries starting at `wireOffset`. -/
-def compileSsaTapeToRtlWires (wireOffset : Nat) (tag : String) (tape : List SsaTapeOp) :
+@[expose] def compileSsaTapeToRtlWires (wireOffset : Nat) (tag : String) (tape : List SsaTapeOp) :
     List WireAssign :=
   tape.zipIdx.map fun (op, idx) =>
     { wireIdx := wireOffset + idx
     , name    := s!"{tag}_op_{idx}"
     , expr    := compileSsaOpToRtlExpr wireOffset op }
 
-/-- Complete verified synchronous `RtlModule` for Flagship App #6 (`fidget_impeller_voxel_cam`):
-compiles `impellerSsaTape` (20 ops) alongside all three box-pruned & compacted SSA tapes
-(`impellerCenterCompactedTape` = 7 ops, `impellerBossCompactedTape` = 9 ops, and standalone
-`impellerBoreCompactedTape` = 9 ops), 3D axial slab intersection, 5-axis ball-endmill swept-volume
-no-gouge checking, OpenUSD `LIVERPS` datapath outputs, and `always_ff` telemetry counters. -/
-def fidgetImpellerVoxelCamRtlModule : RtlModule :=
+/-- A box inside the hub, one at the lug tip, one across the bore (lattice units). -/
+@[expose] def impellerCenterBox : Box3D := { xIv := ⟨40, 60⟩, yIv := ⟨-10, 10⟩, zIv := ⟨30, 50⟩ }
+@[expose] def impellerBossBox : Box3D := { xIv := ⟨112, 124⟩, yIv := ⟨-5, 5⟩, zIv := ⟨30, 50⟩ }
+@[expose] def impellerBoreBox : Box3D := { xIv := ⟨-50, -30⟩, yIv := ⟨-8, 8⟩, zIv := ⟨30, 50⟩ }
+
+@[expose] def compactFor (B : Box3D) : List SsaTapeOp :=
+  compactSsaTape (pruneSsaTapeForBox B impellerSsaTape) (impellerSsaTape.length - 1)
+
+@[expose] def impellerCenterCompactedTape : List SsaTapeOp := compactFor impellerCenterBox
+@[expose] def impellerBossCompactedTape : List SsaTapeOp := compactFor impellerBossBox
+@[expose] def impellerBoreCompactedTape : List SsaTapeOp := compactFor impellerBoreBox
+
+/-- A pruned and compacted tape agrees with the solid on every point of its box. -/
+theorem compactFor_sound (B : Box3D) (x y z : Int) (h : B.contains x y z) :
+    evalSsaTape x y z (compactFor B) ((compactFor B).length - 1) = evalFRepPoint x y z fidgetParams.part := by
+  unfold compactFor impellerSsaTape
+  exact (FRepExpr.toTape_prune_compact_eval B x y z fidgetParams.part h).1
+
+/-- The voxel evaluator: the full tape and the three compacted tapes, the inside test, and a gouge
+flag for a vertical ball end mill of the certified grown radius with its tip at `(in_tx, in_ty,
+in_tz)` (lattice units throughout). The certificate is `fidget_toolpath_no_gouge`; this module is a
+fast re-check of tool positions, not the proof. -/
+@[expose] def fidgetImpellerVoxelCamRtlModule : RtlModule :=
   let fullWires   := compileSsaTapeToRtlWires 0 "full" impellerSsaTape
   let off1        := fullWires.length
   let centerWires := compileSsaTapeToRtlWires off1 "center" impellerCenterCompactedTape
@@ -449,43 +571,26 @@ def fidgetImpellerVoxelCamRtlModule : RtlModule :=
   let rootCenter  := off2 - 1
   let rootBoss    := off3 - 1
   let rootBore    := b - 1
+  let r : Nat := fidgetParams.lat fidgetParams.toolR
+  let rg : Nat := r + 1
   let camWires : List WireAssign :=
-    [ { wireIdx := b + 0,  name := "z_sq",
-        expr := .alu .mul (.inputPort 2) (.inputPort 2) }
-    , { wireIdx := b + 1,  name := "axial_bound_sdf",
-        expr := .alu .sub (.wireRef (b + 0)) (.const 36#64) }
-    , { wireIdx := b + 2,  name := "full_3d_sdf",
-        expr := .mux (.alu .slt (.wireRef rootFull) (.wireRef (b + 1)))
-                     (.wireRef (b + 1)) (.wireRef rootFull) }
-    , { wireIdx := b + 3,  name := "in_solid_3d",
-        expr := .mux (.alu .slt (.const 0#64) (.wireRef (b + 2))) (.const 0#64) (.const 1#64) }
-    , { wireIdx := b + 4,  name := "dx_tool",
-        expr := .alu .sub (.inputPort 0) (.inputPort 3) }
-    , { wireIdx := b + 5,  name := "dy_tool",
-        expr := .alu .sub (.inputPort 1) (.inputPort 4) }
-    , { wireIdx := b + 6,  name := "dz_tool",
-        expr := .alu .sub (.inputPort 2) (.inputPort 5) }
-    , { wireIdx := b + 7,  name := "tool_xy_sq",
-        expr := .alu .add (.alu .mul (.wireRef (b + 4)) (.wireRef (b + 4)))
-                          (.alu .mul (.wireRef (b + 5)) (.wireRef (b + 5))) }
-    , { wireIdx := b + 8,  name := "tool_sdf",
-        expr := .alu .sub (.alu .add (.wireRef (b + 7))
-                                     (.alu .mul (.wireRef (b + 6)) (.wireRef (b + 6))))
-                          (.const 100#64) }
-    , { wireIdx := b + 9,  name := "lip_pad",
-        expr := .alu .mul (.inputPort 6) (.const 72#64) }
-    , { wireIdx := b + 10, name := "tool_padded",
-        expr := .alu .sub (.wireRef (b + 8)) (.wireRef (b + 9)) }
-    , { wireIdx := b + 11, name := "tool_clear",
-        expr := .alu .slt (.const 0#64) (.wireRef (b + 10)) }
-    , { wireIdx := b + 12, name := "no_gouge_ok",
-        expr := .mux (.wireRef (b + 3)) (.wireRef (b + 11)) (.const 1#64) }
-    ]
+    [ { wireIdx := b + 0, name := "in_solid_3d",
+        expr := .mux (.alu .slt (.const 0#64) (.wireRef rootFull)) (.const 0#64) (.const 1#64) }
+    , { wireIdx := b + 1, name := "dx_tool", expr := .alu .sub (.inputPort 0) (.inputPort 3) }
+    , { wireIdx := b + 2, name := "dy_tool", expr := .alu .sub (.inputPort 1) (.inputPort 4) }
+    , { wireIdx := b + 3, name := "dz_tool",
+        expr := .alu .sub (.alu .sub (.inputPort 2) (.inputPort 5)) (.const (BitVec.ofNat 64 r)) }
+    , { wireIdx := b + 4, name := "tool_sdf",
+        expr := .alu .sub
+          (.alu .add (.alu .add (.alu .mul (.wireRef (b + 1)) (.wireRef (b + 1)))
+                                (.alu .mul (.wireRef (b + 2)) (.wireRef (b + 2))))
+                     (.alu .mul (.wireRef (b + 3)) (.wireRef (b + 3))))
+          (.const (BitVec.ofNat 64 (rg * rg))) }
+    , { wireIdx := b + 5, name := "tool_clear", expr := .alu .slt (.const 0#64) (.wireRef (b + 4)) }
+    , { wireIdx := b + 6, name := "no_gouge_ok",
+        expr := .mux (.wireRef (b + 0)) (.wireRef (b + 5)) (.const 1#64) } ]
   { name := "fidget_impeller_voxel_cam"
-  , inputNames :=
-      [ "in_x", "in_y", "in_z"
-      , "in_tx", "in_ty", "in_tz"
-      , "in_step_dist", "in_subdiv_level", "in_liverps_override_en" ]
+  , inputNames := [ "in_x", "in_y", "in_z", "in_tx", "in_ty", "in_tz" ]
   , wires := fullWires ++ centerWires ++ bossWires ++ boreWires ++ camWires
   , regs :=
       [ { regIdx := 0, name := "reg_voxel_eval_cycles", domain := .coreClk,
@@ -493,99 +598,66 @@ def fidgetImpellerVoxelCamRtlModule : RtlModule :=
           nextExpr := .alu .add (.regRead 0) (.const 1#64) }
       , { regIdx := 1, name := "reg_solid_voxel_count", domain := .coreClk,
           resetKind := .syncReset 0#64, isSynchronizer := false,
-          nextExpr := .mux (.wireRef (b + 3))
-                           (.alu .add (.regRead 1) (.const 1#64)) (.regRead 1) }
+          nextExpr := .mux (.wireRef (b + 0)) (.alu .add (.regRead 1) (.const 1#64)) (.regRead 1) }
       , { regIdx := 2, name := "reg_gouge_violations", domain := .coreClk,
           resetKind := .syncReset 0#64, isSynchronizer := false,
-          nextExpr := .mux (.wireRef (b + 12))
-                           (.regRead 2) (.alu .add (.regRead 2) (.const 1#64)) }
-      ]
+          nextExpr := .mux (.wireRef (b + 6)) (.regRead 2) (.alu .add (.regRead 2) (.const 1#64)) } ]
   , outputs :=
       [ { name := "out_frep_full",           expr := .wireRef rootFull }
       , { name := "out_frep_center_pruned",  expr := .wireRef rootCenter }
       , { name := "out_frep_boss_pruned",    expr := .wireRef rootBoss }
       , { name := "out_frep_bore_pruned",    expr := .wireRef rootBore }
-      , { name := "out_in_solid_3d",         expr := .wireRef (b + 3) }
-      , { name := "out_tool_sdf",            expr := .wireRef (b + 8) }
-      , { name := "out_no_gouge_ok",         expr := .wireRef (b + 12) }
-      , { name := "out_compacted_center_ops", expr := .const 7#64 }
-      , { name := "out_compacted_lug_ops",    expr := .const 9#64 }
-      , { name := "out_compacted_bore_ops",   expr := .const 9#64 }
-      , { name := "out_certified_wall_um",
-          expr := .mux (.inputPort 8) (.const 2800#64) (.const 2600#64) }
-      , { name := "out_lipschitz_step_pad_um",
-          expr := .alu .add (.wireRef (b + 9)) (.const 7#64) }
-      , { name := "out_octree_active_voxels",
-          expr := .alu .add (.alu .add (.alu .mul (.inputPort 7) (.const 128#64)) (.const 9#64))
-                            (.mux (.inputPort 8) (.const 64#64) (.const 0#64)) }
+      , { name := "out_in_solid_3d",         expr := .wireRef (b + 0) }
+      , { name := "out_tool_sdf",            expr := .wireRef (b + 4) }
+      , { name := "out_no_gouge_ok",         expr := .wireRef (b + 6) }
       , { name := "out_voxel_eval_cycles",   expr := .regRead 0 }
       , { name := "out_solid_voxel_count",   expr := .regRead 1 }
-      , { name := "out_gouge_violations",    expr := .regRead 2 }
-      ]
-  }
+      , { name := "out_gouge_violations",    expr := .regRead 2 } ] }
 
-/-- Input port environment builder for `fidgetImpellerVoxelCamRtlModule`. -/
-def mkFidgetCamRtlInputs
-    (x y z tx ty tz : Int) (stepDist subdivLevel liverpsEn : Nat) : Nat → BitVec 64
+@[expose] def mkFidgetCamRtlInputs (x y z tx ty tz : Int) : Nat → BitVec 64
   | 0 => BitVec.ofInt 64 x
   | 1 => BitVec.ofInt 64 y
   | 2 => BitVec.ofInt 64 z
   | 3 => BitVec.ofInt 64 tx
   | 4 => BitVec.ofInt 64 ty
   | 5 => BitVec.ofInt 64 tz
-  | 6 => BitVec.ofNat 64 stepDist
-  | 7 => BitVec.ofNat 64 subdivLevel
-  | 8 => BitVec.ofNat 64 liverpsEn
   | _ => 0#64
 
-/-- **`fidgetImpellerVoxelCamRtlModule_verified`**:
-Verifies in the Lean kernel (`decide +kernel`) that `fidgetImpellerVoxelCamRtlModule` (whose exact
-`emitModuleSV` output is Verilated in `apps/fidget-cam/verilator/fidget_impeller_voxel_cam.sv`):
-1. Passes `checkRtlModule = true` and `checkBelNetlistValid (synthesizeModuleToBels ...) = true`,
-2. Evaluates bit-exact pruned sub-box outputs on `B_center` (`(5, 0, 0)`), `B_boss` (`(11, 0, 0)`),
-   and standalone `B_bore` (`(-4, 0, 0)` where `out_in_solid_3d = 0#64`, carving the hollow bore),
-3. Accepts safe cutter positions (`out_no_gouge_ok = 1#64`) and flags gouging plunges (`out_no_gouge_ok = 0#64`)
-   while incrementing `reg_gouge_violations`. -/
-theorem fidgetImpellerVoxelCamRtlModule_verified :
+/-- The emitted module passes the RTL and BEL checks, agrees with the solid at a point in each box,
+reports the bore as empty, and flags a tool tip placed inside the lug. Values the kernel computed
+(an `example`): the theorem relating the RTL to `evalFRepPoint` for every input is not written. -/
+example :
     checkRtlModule fidgetImpellerVoxelCamRtlModule = true ∧
     checkBelNetlistValid (synthesizeModuleToBels fidgetImpellerVoxelCamRtlModule) = true ∧
-    (let outsCenter := evalModuleOutputs fidgetImpellerVoxelCamRtlModule
-                         (mkFidgetCamRtlInputs 5 0 0 26 0 18 2 4 1) (fun _ => 0#64)
-     outsCenter.lookup "out_frep_full" = some (BitVec.ofInt 64 (-75)) ∧
-     outsCenter.lookup "out_frep_center_pruned" = some (BitVec.ofInt 64 (-75)) ∧
-     outsCenter.lookup "out_in_solid_3d" = some 1#64 ∧
-     outsCenter.lookup "out_no_gouge_ok" = some 1#64) ∧
-    (let outsBoss := evalModuleOutputs fidgetImpellerVoxelCamRtlModule
-                       (mkFidgetCamRtlInputs 11 0 0 28 0 18 2 4 1) (fun _ => 0#64)
-     outsBoss.lookup "out_frep_full" = some (BitVec.ofInt 64 (-3)) ∧
-     outsBoss.lookup "out_frep_boss_pruned" = some (BitVec.ofInt 64 (-3)) ∧
-     outsBoss.lookup "out_in_solid_3d" = some 1#64) ∧
-    (let outsBore := evalModuleOutputs fidgetImpellerVoxelCamRtlModule
-                       (mkFidgetCamRtlInputs (-4) 0 0 26 0 18 2 4 1) (fun _ => 0#64)
-     outsBore.lookup "out_frep_full" = some 4#64 ∧
-     outsBore.lookup "out_frep_bore_pruned" = some 4#64 ∧
-     outsBore.lookup "out_in_solid_3d" = some 0#64) ∧
-    (let gougeIn := mkFidgetCamRtlInputs 10 0 0 12 0 0 2 4 1
-     let outsGouge := evalModuleOutputs fidgetImpellerVoxelCamRtlModule gougeIn (fun _ => 0#64)
-     let st1 := stepModuleRegs fidgetImpellerVoxelCamRtlModule false gougeIn (fun _ => 0#64)
-     outsGouge.lookup "out_no_gouge_ok" = some 0#64 ∧
-     st1 2 = 1#64) := by
+    (evalModuleOutputs fidgetImpellerVoxelCamRtlModule (mkFidgetCamRtlInputs 50 0 40 0 124 60)
+        (fun _ => 0#64)).lookup "out_frep_full" =
+      some (BitVec.ofInt 64 (evalFRepPoint 50 0 40 fidgetParams.part)) ∧
+    (evalModuleOutputs fidgetImpellerVoxelCamRtlModule (mkFidgetCamRtlInputs 120 0 40 0 124 60)
+        (fun _ => 0#64)).lookup "out_frep_boss_pruned" =
+      some (BitVec.ofInt 64 (evalFRepPoint 120 0 40 fidgetParams.part)) ∧
+    (evalModuleOutputs fidgetImpellerVoxelCamRtlModule (mkFidgetCamRtlInputs (-40) 0 40 0 124 60)
+        (fun _ => 0#64)).lookup "out_in_solid_3d" = some 0#64 ∧
+    (evalModuleOutputs fidgetImpellerVoxelCamRtlModule (mkFidgetCamRtlInputs 120 0 40 120 0 30)
+        (fun _ => 0#64)).lookup "out_no_gouge_ok" = some 0#64 := by
   decide +kernel
 
-/-! ## 7. `#tooth` Mutation-Killing Guards -/
+/-! ## 8. The composed books through the generic RTL compiler and the GPU code generator -/
 
--- (2026-11-04) the tooth on the deleted `accepted` bundle is gone: a tooth on a fixture only
--- proved the fixture was sensitive to its own data.
-
-def impellerSsaTapeBroken : List SsaTapeOp := [.const 0]
-
-#tooth fidgetCam_ssa_tape_prune_and_compact_sound by mutation
-  impellerSsaTape := impellerSsaTapeBroken
-
-def impellerBallEndmillToolBroken : FRepExpr := .const 0
-
-#tooth fidgetCam_dual_interval_lipschitz_and_no_gouge_sound by mutation
-  impellerBallEndmillTool := impellerBallEndmillToolBroken
+example :
+    (match compileBookToRtl "fidget_impeller_cam_top" FidgetImpellerTop.liverpsImpellerCamTop_book,
+           compileBookToRtl "fidget_mounting_boss" FidgetMountingBoss.stiffenedMountingBoss_book with
+     | some mTop, some mBoss =>
+       checkRtlModule mTop && checkRtlModule mBoss &&
+       ((evalModuleOutputs mTop (fun _ => 1#64) (fun _ => 0#64)).lookup "out_toolOffsetUm" == some 2400#64) &&
+       ((evalModuleOutputs mBoss (fun _ => 1#64) (fun _ => 0#64)).lookup "out_lugReachUm" == some 12500#64) &&
+       (match mTop.wires.find? (fun w => w.name == "toolOffsetUm") with
+        | some w =>
+          let (rOut, _, code) := compileRtlExprToAmdGpu 1 w.expr
+          let wires := evalWireTable (fun _ => 1#64) (fun _ => 0#64) mTop.wires
+          runAmdGpuVop64Prog (fun _ => 1#64) wires (fun _ => 0#64) (fun _ => 0#64) code rOut == 2400#64
+        | none => false)
+     | _, _ => false) = true := by
+  decide +kernel
 
 end Obend.Apps.FidgetCam
 end

@@ -1,43 +1,35 @@
 edition ObjectiveBend 1
-# Flagship App #6 (`apps/fidget-cam/CoolingChannelOverride.obend`):
-# OpenUSD LIVERPS cooling channel CSG difference override with certified shell wall thickness & Lipschitz gradient bound.
+# apps/fidget-cam/CoolingChannelOverride.obend: the through-bore cooling channel, in micrometres.
+# The bore axis is parallel to Z at X = -boreOffsetXUm, Y = 0. The local override widens the bore;
+# `Obend.Apps.FidgetCam` certifies the wall that remains (`checkWall_sound`) for the composed value.
 
 import ./BaseImpellerBody.obend as BaseBody
 
 record ImpellerCoolingChannel:
   boreRadiusUm() -> Nat
-  shellWallThicknessUm() -> Nat
-  lipschitzGradBound() -> Nat
-  certifiedClearanceUm(probeSpanUm: Nat) -> Nat
-  thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat
+  boreOffsetXUm() -> Nat
+  minWallUm() -> Nat
+  boreDiameterUm() -> Nat
 
 spec HelicalChannelReferenceSpec for ImpellerCoolingChannel:
   requires boreRadiusUm() -> Nat
-  requires shellWallThicknessUm() -> Nat
-  requires lipschitzGradBound() -> Nat
   def boreRadiusUm() -> Nat:
-    800n
-  def shellWallThicknessUm() -> Nat:
-    2600n
-  def lipschitzGradBound() -> Nat:
-    9n
-  def certifiedClearanceUm(probeSpanUm: Nat) -> Nat:
-    probeSpanUm + self.shellWallThicknessUm * self.lipschitzGradBound
-  def thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat:
-    flowRateMlMin * 12n + self.boreRadiusUm
-  claim cooling_clearance_open_recursion(probeSpanUm: Nat): self.certifiedClearanceUm(probeSpanUm) == probeSpanUm + self.shellWallThicknessUm * self.lipschitzGradBound
+    1600n
+  def boreOffsetXUm() -> Nat:
+    4000n
+  def minWallUm() -> Nat:
+    2000n
+  def boreDiameterUm() -> Nat:
+    self.boreRadiusUm + self.boreRadiusUm
+  claim bore_diameter_twice_radius(): self.boreDiameterUm() == self.boreRadiusUm + self.boreRadiusUm
 
 spec ConformalBoreLocalOverride for ImpellerCoolingChannel:
-  requires thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat
+  requires boreRadiusUm() -> Nat
   def boreRadiusUm() -> Nat:
-    950n
-  def lipschitzGradBound() -> Nat:
-    12n
-  def thermalFluxCapacityMw(flowRateMlMin: Nat) -> Nat:
-    super.thermalFluxCapacityMw(flowRateMlMin) + 250n
+    2000n
 
 def seedCoolingChannel() -> ImpellerCoolingChannel:
-  {boreRadiusUm: 0n, shellWallThicknessUm: 0n, lipschitzGradBound: 0n, certifiedClearanceUm: fn(p: Nat) -> Nat: p, thermalFluxCapacityMw: fn(f: Nat) -> Nat: f}
+  {boreRadiusUm: 0n, boreOffsetXUm: 0n, minWallUm: 0n, boreDiameterUm: 0n}
 
 def referenceCoolingChannel() -> ImpellerCoolingChannel:
   fix(HelicalChannelReferenceSpec, seedCoolingChannel())
@@ -45,11 +37,17 @@ def referenceCoolingChannel() -> ImpellerCoolingChannel:
 def conformalCoolingChannel() -> ImpellerCoolingChannel:
   fix(compose(HelicalChannelReferenceSpec, ConformalBoreLocalOverride), seedCoolingChannel())
 
-def conformalClearanceAt100() -> Nat:
-  conformalCoolingChannel().certifiedClearanceUm(100n)
+def boreRadius() -> Nat:
+  conformalCoolingChannel().boreRadiusUm
 
-def conformalFluxAt30() -> Nat:
-  conformalCoolingChannel().thermalFluxCapacityMw(30n)
+def boreOffsetX() -> Nat:
+  conformalCoolingChannel().boreOffsetXUm
 
-def crossModuleShroudClearance() -> Nat:
-  BaseBody.shroudedMarginAt50() + conformalClearanceAt100()
+def minWall() -> Nat:
+  conformalCoolingChannel().minWallUm
+
+def referenceBoreRadius() -> Nat:
+  referenceCoolingChannel().boreRadiusUm
+
+def hubRadiusSeenByBore() -> Nat:
+  BaseBody.hubRadius()

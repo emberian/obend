@@ -1,38 +1,34 @@
 edition ObjectiveBend 1
-# Flagship App #6 (`apps/fidget-cam/BaseImpellerBody.obend`):
-# Base OpenUSD/F-Rep centrifugal impeller body primitive with open-recursive shroud & blade specs.
+# apps/fidget-cam/BaseImpellerBody.obend: the hub of the fidget part, in micrometres.
+# `Obend.Apps.FidgetCam` reads these values and builds the solid (`FRepExpr`) from them; the
+# geometry is not restated in Lean. The override is a stronger opinion on the hub height, the way a
+# local layer overrides a referenced one in USD: the composed object is what the CAM tier machines.
 
 record ImpellerBody:
-  shroudRadiusUm() -> Nat
-  bladeThicknessUm() -> Nat
-  channelClearanceUm() -> Nat
-  sweptVolumeMarginUm(feedStepUm: Nat) -> Nat
-  voxelTapeOpsCount(octreeDepth: Nat) -> Nat
+  hubRadiusUm() -> Nat
+  hubHeightUm() -> Nat
+  hubCentreXUm() -> Nat
+  hubTopUm(baseUm: Nat) -> Nat
 
 spec BaseImpellerSubLayerSpec for ImpellerBody:
-  requires bladeThicknessUm() -> Nat
-  requires channelClearanceUm() -> Nat
-  def shroudRadiusUm() -> Nat:
-    25000n
-  def bladeThicknessUm() -> Nat:
-    1800n
-  def channelClearanceUm() -> Nat:
-    600n
-  def sweptVolumeMarginUm(feedStepUm: Nat) -> Nat:
-    self.bladeThicknessUm + feedStepUm * 4n
-  def voxelTapeOpsCount(octreeDepth: Nat) -> Nat:
-    octreeDepth * 20n + self.channelClearanceUm
-  claim swept_margin_open_recursion(feedStepUm: Nat): self.sweptVolumeMarginUm(feedStepUm) == self.bladeThicknessUm + feedStepUm * 4n
+  requires hubHeightUm() -> Nat
+  def hubRadiusUm() -> Nat:
+    10000n
+  def hubHeightUm() -> Nat:
+    6000n
+  def hubCentreXUm() -> Nat:
+    0n
+  def hubTopUm(baseUm: Nat) -> Nat:
+    baseUm + self.hubHeightUm
+  claim hub_top_follows_height(baseUm: Nat): self.hubTopUm(baseUm) == baseUm + self.hubHeightUm
 
 spec HighSpeedShroudOverride for ImpellerBody:
-  requires voxelTapeOpsCount(octreeDepth: Nat) -> Nat
-  def bladeThicknessUm() -> Nat:
-    2200n
-  def voxelTapeOpsCount(octreeDepth: Nat) -> Nat:
-    super.voxelTapeOpsCount(octreeDepth) + 15n
+  requires hubHeightUm() -> Nat
+  def hubHeightUm() -> Nat:
+    8000n
 
 def seedImpellerBody() -> ImpellerBody:
-  {shroudRadiusUm: 0n, bladeThicknessUm: 0n, channelClearanceUm: 0n, sweptVolumeMarginUm: fn(f: Nat) -> Nat: f, voxelTapeOpsCount: fn(d: Nat) -> Nat: d}
+  {hubRadiusUm: 0n, hubHeightUm: 0n, hubCentreXUm: 0n, hubTopUm: fn(b: Nat) -> Nat: b}
 
 def baseImpellerBody() -> ImpellerBody:
   fix(BaseImpellerSubLayerSpec, seedImpellerBody())
@@ -40,8 +36,11 @@ def baseImpellerBody() -> ImpellerBody:
 def shroudedImpellerBody() -> ImpellerBody:
   fix(compose(BaseImpellerSubLayerSpec, HighSpeedShroudOverride), seedImpellerBody())
 
-def shroudedMarginAt50() -> Nat:
-  shroudedImpellerBody().sweptVolumeMarginUm(50n)
+def hubRadius() -> Nat:
+  shroudedImpellerBody().hubRadiusUm
 
-def shroudedTapeOpsAt4() -> Nat:
-  shroudedImpellerBody().voxelTapeOpsCount(4n)
+def hubHeight() -> Nat:
+  shroudedImpellerBody().hubHeightUm
+
+def hubTopAtZero() -> Nat:
+  shroudedImpellerBody().hubTopUm(0n)

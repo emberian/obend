@@ -1,52 +1,56 @@
 edition ObjectiveBend 1
-# Flagship App #6 (`apps/fidget-cam/ImpellerPartTop.obend`):
-# Top-level hierarchical OpenUSD/F-Rep impeller CAD/CAM part composing `BaseImpellerBody`,
-# `CoolingChannelOverride`, and `MountingBossAssembly` under LIVERPS strength ordering.
+# apps/fidget-cam/ImpellerPartTop.obend: the process for the fidget part, in micrometres and
+# machine units. It imports the three geometry modules so one package carries part and process.
+# `Obend.Apps.FidgetCam` generates the tool path from these values, certifies it against the solid
+# (`checkPathNoGouge_sound`) and posts it (`postNgc`, rotary-safe by `postMoves_rotarySafe`).
 
 import ./BaseImpellerBody.obend as BaseBody
 import ./CoolingChannelOverride.obend as Cooling
 import ./MountingBossAssembly.obend as Boss
 
-law monotone_cam_pass: monotone(camPassEpoch)
-law bounded_wall_thickness: new.wallThicknessUm <= 3000
-law monotone_coolant_flow: monotone(flowEpoch)
-law write_once_boss_datum: writeOnce(bossDatumId)
-law monotone_stl_triangles: monotone(triangleCount)
-law bounded_servo_deflection_nm: new.deflectionNm <= 500
-
 record ImpellerCamTop:
-  compactedCenterTapeOps() -> Nat
-  compactedLugTapeOps() -> Nat
-  certifiedWallThicknessUm() -> Nat
-  lipschitzStepPadUm(stepDistUm: Nat) -> Nat
-  octreeActiveVoxels(subdivLevel: Nat) -> Nat
+  latticeUm() -> Nat
+  toolRadiusUm() -> Nat
+  shankLengthUm() -> Nat
+  stockAllowanceUm() -> Nat
+  clearanceAboveTopUm() -> Nat
+  stepDownUm() -> Nat
+  cutFeedMmMin() -> Nat
+  plungeFeedMmMin() -> Nat
+  spindleRpm() -> Nat
+  toolOffsetUm() -> Nat
 
 spec OpenUsdSubLayerImpellerSpec for ImpellerCamTop:
-  requires compactedCenterTapeOps() -> Nat
-  requires compactedLugTapeOps() -> Nat
-  def compactedCenterTapeOps() -> Nat:
-    7n
-  def compactedLugTapeOps() -> Nat:
-    9n
-  def certifiedWallThicknessUm() -> Nat:
-    2600n
-  def lipschitzStepPadUm(stepDistUm: Nat) -> Nat:
-    stepDistUm * 72n + self.compactedCenterTapeOps
-  def octreeActiveVoxels(subdivLevel: Nat) -> Nat:
-    subdivLevel * 128n + 9n
-  claim impeller_lipschitz_pad_open_recursion(stepDistUm: Nat): self.lipschitzStepPadUm(stepDistUm) == stepDistUm * 72n + self.compactedCenterTapeOps
+  requires stockAllowanceUm() -> Nat
+  def latticeUm() -> Nat:
+    100n
+  def toolRadiusUm() -> Nat:
+    2000n
+  def shankLengthUm() -> Nat:
+    12000n
+  def stockAllowanceUm() -> Nat:
+    500n
+  def clearanceAboveTopUm() -> Nat:
+    5000n
+  def stepDownUm() -> Nat:
+    2000n
+  def cutFeedMmMin() -> Nat:
+    1200n
+  def plungeFeedMmMin() -> Nat:
+    300n
+  def spindleRpm() -> Nat:
+    18000n
+  def toolOffsetUm() -> Nat:
+    self.toolRadiusUm + self.stockAllowanceUm
+  claim tool_offset_is_radius_plus_stock(): self.toolOffsetUm() == self.toolRadiusUm + self.stockAllowanceUm
 
 spec LiverpsLocalCamOverride for ImpellerCamTop:
-  requires octreeActiveVoxels(subdivLevel: Nat) -> Nat
-  def compactedCenterTapeOps() -> Nat:
-    7n
-  def certifiedWallThicknessUm() -> Nat:
-    2800n
-  def octreeActiveVoxels(subdivLevel: Nat) -> Nat:
-    super.octreeActiveVoxels(subdivLevel) + 64n
+  requires stockAllowanceUm() -> Nat
+  def stockAllowanceUm() -> Nat:
+    400n
 
 def seedImpellerCamTop() -> ImpellerCamTop:
-  {compactedCenterTapeOps: 0n, compactedLugTapeOps: 0n, certifiedWallThicknessUm: 0n, lipschitzStepPadUm: fn(s: Nat) -> Nat: s, octreeActiveVoxels: fn(l: Nat) -> Nat: l}
+  {latticeUm: 0n, toolRadiusUm: 0n, shankLengthUm: 0n, stockAllowanceUm: 0n, clearanceAboveTopUm: 0n, stepDownUm: 0n, cutFeedMmMin: 0n, plungeFeedMmMin: 0n, spindleRpm: 0n, toolOffsetUm: 0n}
 
 def subLayerImpellerCam() -> ImpellerCamTop:
   fix(OpenUsdSubLayerImpellerSpec, seedImpellerCamTop())
@@ -54,11 +58,30 @@ def subLayerImpellerCam() -> ImpellerCamTop:
 def liverpsImpellerCamTop() -> ImpellerCamTop:
   fix(compose(OpenUsdSubLayerImpellerSpec, LiverpsLocalCamOverride), seedImpellerCamTop())
 
-def impellerPadAtStep2() -> Nat:
-  liverpsImpellerCamTop().lipschitzStepPadUm(2n)
+def lattice() -> Nat:
+  liverpsImpellerCamTop().latticeUm
 
-def impellerVoxelsAtLevel4() -> Nat:
-  liverpsImpellerCamTop().octreeActiveVoxels(4n)
+def toolRadius() -> Nat:
+  liverpsImpellerCamTop().toolRadiusUm
 
-def crossModuleAssemblySummary() -> Nat:
-  BaseBody.shroudedMarginAt50() + Cooling.conformalFluxAt30() + Boss.stiffenedGcodeStepsAt5() + impellerVoxelsAtLevel4()
+def shankLength() -> Nat:
+  liverpsImpellerCamTop().shankLengthUm
+
+def toolOffset() -> Nat:
+  liverpsImpellerCamTop().toolOffsetUm
+
+def clearanceAboveTop() -> Nat:
+  liverpsImpellerCamTop().clearanceAboveTopUm
+
+def stepDown() -> Nat:
+  liverpsImpellerCamTop().stepDownUm
+
+def cutFeed() -> Nat:
+  liverpsImpellerCamTop().cutFeedMmMin
+
+def plungeFeed() -> Nat:
+  liverpsImpellerCamTop().plungeFeedMmMin
+
+def spindle() -> Nat:
+  liverpsImpellerCamTop().spindleRpm
+
