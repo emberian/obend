@@ -1,0 +1,7 @@
+# Lattice iCEstick (iCE40HX1K-TQ144). Pins from the iCEstick user guide.
+set_io clk_12mhz 21
+set_io led[0] 99
+set_io led[1] 98
+set_io led[2] 97
+set_io led[3] 96
+set_io led[4] 95
