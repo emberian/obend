@@ -86,8 +86,12 @@ def changes (s s' : Store) : List String :=
     | some p =>
       if p'.history.length > p.history.length then
         some (p'.name ++ ": v" ++ toString p'.history.length ++ " written")
-      else if p'.note != p.note && p'.note.isSome then some (p'.name ++ ": " ++ p'.note.getD "")
+      -- a refused write is said when it is a new write: a different text (as the reader reads it,
+      -- the view's marks stripped) or a different refusal
+      else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
       else none
+where
+  typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
 
 /-- Cites that do not hold and sections waiting, over every page. -/
 def problems (s : Store) : List String :=

@@ -261,6 +261,22 @@ instance decEffective : (G : Graph) → (p : Patch) → Decidable (Effective G p
 /-- An authored patch: only the four forward operations. -/
 @[expose] def forward (p : Patch) : Bool := p.all Op.forward
 
+/-- The atoms a patch tombstones, in order. -/
+@[expose] def deletes : Patch → List AtomId
+  | [] => []
+  | .delete i :: p => i :: deletes p
+  | _ :: p => deletes p
+
+/-- The atoms a patch adds (runs, cites, cells and field assignments), in order. -/
+@[expose] def adds : Patch → List AtomId
+  | [] => []
+  | .add i _ _ :: p => i :: adds p
+  | .setField i _ _ :: p => i :: adds p
+  | _ :: p => adds p
+
+theorem forward_cons {o : Op} {p : Patch} : forward (o :: p) = (o.forward && forward p) := by
+  simp [forward, List.all_cons]
+
 /-- A field assignment that supersedes the field's live assignments in `G`: assign, and tombstone
 the rest. -/
 def supersede (G : Graph) (i : AtomId) (name value : String) : Patch :=
@@ -319,6 +335,65 @@ theorem apply_invert {G : Graph} {p : Patch} (h : Patch.Effective G p) :
       refine ⟨ihe, ?_⟩
       have hs : (((G.step o).apply p).apply (invert p)).Same (G.step o) := ihs
       exact ⟨(Op.effective_congr hs _).2 hde, trivial⟩
+
+/-- **A forward patch tombstones what it deletes and nothing else**: after an authored patch an
+atom is dead when it was dead before or the patch deletes it. What a write's `deletions` measure
+counts (`Obend.Vault.deletions`) is read through this. -/
+theorem isDead_apply_forward (G : Graph) (p : Patch) (hf : forward p = true) (a : AtomId) :
+    (G.apply p).isDead a = (G.isDead a || (deletes p).contains a) := by
+  induction p generalizing G with
+  | nil => simp [apply, deletes]
+  | cons o p ih =>
+    rw [forward_cons, Bool.and_eq_true] at hf
+    have h := ih (G.step o) hf.2
+    simp only [apply, List.foldl_cons] at h ⊢
+    rw [h]
+    cases o with
+    | delete i => simp [step, isDead, deletes, List.contains_append, List.contains_cons, Bool.or_assoc]
+    | add i c b => simp [step, isDead, deletes]
+    | connect s d => simp [step, isDead, deletes]
+    | setField i n v => simp [step, isDead, deletes]
+    | unadd i c b => simp [Op.forward] at hf
+    | resurrect i => simp [Op.forward] at hf
+    | disconnect s d => simp [Op.forward] at hf
+    | unsetField i n v => simp [Op.forward] at hf
+
+-- Forgetting the deletions makes the theorem claim a delete leaves the atom alive.
+#tooth isDead_apply_forward by mutation deletes := fun _ => []
+
+/-- **A forward patch makes present what it adds and nothing else.** -/
+theorem present_apply_forward (G : Graph) (p : Patch) (hf : forward p = true) (a : AtomId) :
+    (G.apply p).present a = (G.present a || (adds p).contains a) := by
+  induction p generalizing G with
+  | nil => simp [apply, adds]
+  | cons o p ih =>
+    rw [forward_cons, Bool.and_eq_true] at hf
+    have h := ih (G.step o) hf.2
+    simp only [apply, List.foldl_cons] at h ⊢
+    rw [h]
+    cases o with
+    | add i c b =>
+      simp only [step, present, label, adds, lookup_append_single]
+      cases G.atoms.lookup a with
+      | some x => simp
+      | none =>
+        by_cases hi : a = i
+        · subst hi; simp
+        · simp [hi, Ne.symm hi]
+    | setField i n v =>
+      simp only [step, present, label, adds, lookup_append_single]
+      cases G.atoms.lookup a with
+      | some x => simp
+      | none =>
+        by_cases hi : a = i
+        · subst hi; simp
+        · simp [hi, Ne.symm hi]
+    | delete i => simp [step, present, label, adds]
+    | connect s d => simp [step, present, label, adds]
+    | unadd i c b => simp [Op.forward] at hf
+    | resurrect i => simp [Op.forward] at hf
+    | disconnect s d => simp [Op.forward] at hf
+    | unsetField i n v => simp [Op.forward] at hf
 
 /-- **apply_frame.** An atom a patch does not touch keeps its content and its status. -/
 theorem apply_frame (G : Graph) (p : Patch) {a : AtomId} (h : a ∉ touches p) :

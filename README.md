@@ -28,7 +28,8 @@ obend status [PAGE]             # each page, each cite and whether it holds
 ```
 
 A page's frontmatter may carry laws, `law NAME: EXPR`, over its measures (`words`, `lines`,
-`bytes`, `links`, `embeds`, `quotes`, `sections`, `version`) and its numeric fields; a folder's
+`bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`), over the write itself
+(`deletions`, `insertions`: `new.deletions == 0` is append-only, line by line) and its numeric fields; a folder's
 `_kind.md` carries laws for every page in it. An edit that breaks a law is refused by name, with
 the value that would pass, and the file keeps what you typed:
 

@@ -410,7 +410,9 @@ is the owner's, or a member's granted `relaw`; it is judged as the adoption of t
 page as written. So is a write to a page whose kind pin is stale (a kind it rests on was revised,
 `movedKinds`): the owner's write adopts the revised kinds' laws and renews the pin; anyone else's is
 refused, naming the kinds that moved. Otherwise the laws are kept (`lawsKept`), and the new laws are
-the old ones (`lawsFor_of_kept`). A birth is judged as a first write. -/
+the old ones (`lawsFor_of_kept`). A birth is judged as a first write. The new state carries the
+write's own measures (`deletions`, `insertions`: how it changed the current version); the old state
+has none (0). -/
 def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
     (turn : Nat) : Except String Change := do
   let authors := p.authors ++ added
@@ -429,7 +431,7 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
       else if lawsKept (settled G) (settled G') then throw (staleText p.name who.name moved)
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
-  let newMs := measures G' v
+  let newMs := measures G' v ++ writeMeasures p.current G'
   let lin := laws.map fun (n, e, _) => (n, e)
   let keys := sortNames (newMs.map (·.1) ++ oldMs.map (·.1) ++ lin.flatMap fun l => l.2.fields)
   let S := stateTy keys
@@ -488,8 +490,9 @@ def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String
     | some G =>
       let b := editPatch H G (align (pieces G p.name p.who) cs) "owner"
       (G.apply b.ops, b.added, b.ops.isEmpty)
-  -- Only the view's marks changed (one deleted, say): nothing to write; the view is redrawn.
-  if same then ⟨p.history, md, p.authors, p.note, p.kind⟩ else
+  -- Only the view's marks changed (one deleted, say), or a refused edit was put back: nothing to
+  -- write; the view is redrawn, and the page's last write is no longer a refused one.
+  if same then ⟨p.history, md, p.authors, none, p.kind⟩ else
   match commit es p G' (added.map (·, "owner")) .owner turn with
   | .ok ch => ch
   | .error msg => ⟨p.history, md, p.authors, some msg, p.kind⟩

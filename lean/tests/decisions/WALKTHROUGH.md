@@ -17,7 +17,10 @@ Every block below is run, in order, by `python3 tests/decisions/walkthrough.py` 
 A decision is a page under `decisions/`, whose kind says what every decision keeps. Decider codes:
 `1` Ember, `2` the integrator under standing approval, `3` a lane. The environment's theorem names
 are a page of marked lines (a stub census, by hand, until the gate lane's identifier census writes
-it), and a decision that cites a theorem quotes its line.
+it), and a decision that cites a theorem quotes its line. `appendOnly` reads the write, not the
+page: `deletions` counts the atoms of the settled text a write tombstoned (an author's change is
+widened to whole lines), so `new.deletions == 0` admits inserted lines and nothing else, where
+`monotone(bytes)` would admit any rewrite that keeps the count.
 
 ```sh
 mkdir ledger && cd ledger && mkdir decisions environment
@@ -27,14 +30,14 @@ law dated: not (new.date == 0)
 law dateOnce: writeOnce(date)
 law decider: new.decider in [1, 2, 3]
 law deciderOnce: writeOnce(decider)
-law appendOnly: monotone(bytes)
-law appendLines: monotone(lines)
+law appendOnly: new.deletions == 0
 law cited: new.dangling == 0
 date: 0
 decider: 0
 ---
 A decision: dated, decided by Ember (1), the integrator under standing approval (2) or a lane (3),
-appended to and never shortened, and every theorem it names one the environment has.
+appended to line by line and never shortened or rewritten, and every theorem it names one the
+environment has.
 MD
 cat > environment/Theorems.md <<'MD'
 # Theorem names the environment has
@@ -175,6 +178,22 @@ decisions/D-0006: not born: refused by decisions/_kind: decider (the kind of dec
 decisions/D-0007: not born: refused by decisions/_kind: dated (the kind of decisions/, an ancestor of decisions/D-0007): `not (new.date == 0)` does not hold; date = 1 would pass (this write has date = 0)
 ```
 
+A decision rewritten in place at the same length (one character of a commit hash): bytes, lines
+and words are unchanged, so every count law would admit it; `appendOnly` refuses it, because the
+line was deleted and written again.
+
+```sh
+cd ledger
+sed -i.bak 's/393eb2b/393eb2c/' decisions/D-0001.md && rm decisions/D-0001.md.bak
+obend open
+```
+
+```text
+decisions/D-0001: refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `new.deletions == 0` does not hold; deletions = 0 would pass (this write has deletions = 1)
+decisions/D-0006: still not born: refused by decisions/_kind: decider (the kind of decisions/, an ancestor of decisions/D-0006): `new.decider in [1, 2, 3]` does not hold; the line `decider: 3` would pass (the page has `decider: 4`)
+decisions/D-0007: still not born: refused by decisions/_kind: dated (the kind of decisions/, an ancestor of decisions/D-0007): `not (new.date == 0)` does not hold; date = 1 would pass (this write has date = 0)
+```
+
 A decision shortened, a decision re-dated, a decider changed after the fact: each refused by the
 kind's clause, the file keeping what was typed and the world keeping the decision as it was.
 
@@ -188,8 +207,8 @@ obend open && obend status decisions/D-0001 | head -1
 ```text
 decisions/D-0006: deleted (its file is gone; v0 kept; a file decisions/D-0006.md revives it)
 decisions/D-0007: deleted (its file is gone; v0 kept; a file decisions/D-0007.md revives it)
-decisions/D-0001: refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `monotone(bytes)` does not hold; bytes = 158 would pass (this write has bytes = 78)
-decisions/D-0001 v1; its last write was refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `monotone(bytes)` does not hold; bytes = 158 would pass (this write has bytes = 78)
+decisions/D-0001: refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `new.deletions == 0` does not hold; deletions = 0 would pass (this write has deletions = 1)
+decisions/D-0001 v1; its last write was refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `new.deletions == 0` does not hold; deletions = 0 would pass (this write has deletions = 1)
 ```
 
 ```sh
@@ -201,7 +220,7 @@ sed -i.bak 's/^date: 20261101$/date: 20261031/; s/^decider: 1$/decider: 3/' deci
 ```
 
 ```text
-nothing changed
+decisions/D-0001: refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `new.deletions == 0` does not hold; deletions = 0 would pass (this write has deletions = 1)
 decisions/D-0001: refused by decisions/_kind: dateOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(date)` does not hold; the line `date: 20261031` would pass (the page has `date: 20261101`)
 decisions/D-0001: refused by decisions/_kind: deciderOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(decider)` does not hold; the line `decider: 1` would pass (the page has `decider: 3`)
 ```
@@ -217,6 +236,7 @@ obend open && obend status Ledger | head -1
 
 ```text
 Ledger: refused by its law appendOnly: `monotone(links)` does not hold; links = 4 would pass (this write has links = 3)
+decisions/D-0001: refused by decisions/_kind: deciderOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(decider)` does not hold; the line `decider: 1` would pass (the page has `decider: 3`)
 Ledger v2; its last write was refused by its law appendOnly: `monotone(links)` does not hold; links = 4 would pass (this write has links = 3)
 ```
 

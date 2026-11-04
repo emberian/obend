@@ -12,7 +12,8 @@ three more things of a page, and this module is them:
   text of the page: an edit that changes a law line changes the law.
 * **Measures.** What a law may read of a page besides its fields: `bytes`, `lines`, `words` (of the
   body), `dangling` (wikilinks no page resolves), `links` (identity cites), `embeds`, `quotes` (block and byte cites), `sections` (open
-  conflicts), `version`.
+  conflicts), `version`; and of the write itself, `deletions` and `insertions` (the atoms of the
+  settled text the write tombstoned and added: `new.deletions == 0` is append-only, line by line).
 * **Rendering with sections.** `pieces` renders a version as `Graph.source` does, except that a
   conflict (a section with two or more live candidates and no selection, `conflict_is_section`) is
   shown as a block a person can read and act on:
@@ -314,6 +315,66 @@ def danglingCount (G : Graph) : Nat :=
       | some (.text t) => if (t.startsWith "[[" || t.startsWith "![[") && t.endsWith "]]" then acc + 1 else acc
       | _ => acc
     else acc) 0
+
+/-- The atoms of a version's settled text, in order: the atoms `settled` reads. -/
+def settledAtoms (G : Graph) : List AtomId :=
+  G.content.filterMap fun | .run a => some a | _ => none
+
+/-- **The write's deletions**: the atoms of the old version's settled text that the new version
+tombstones. An author's write deletes the pieces the file dropped and, because a change is widened
+to whole lines (`widenStretch`), every atom of a line it changed; so `new.deletions == 0` says the
+write removed or rewrote no line of the page's text, only inserted lines — the append-only a ledger
+means, which `monotone(bytes)` cannot say (an equal-length rewrite keeps the count). A member's post
+deletes nothing (its candidates sit in a section); a selection tombstones the other candidates,
+which were never the settled text. Of the patch: `deletions_apply`. -/
+def deletions (old : Option Graph) (new : Graph) : Nat :=
+  match old with
+  | none => 0
+  | some G => (settledAtoms G).countP fun a => !G.isDead a && new.isDead a
+
+/-- **The write's insertions**: the atoms of the new version's settled text the old version did not
+have (at a birth, all of them). Of the patch: `insertions_apply`. -/
+def insertions (old : Option Graph) (new : Graph) : Nat :=
+  (settledAtoms new).countP fun a => new.present a && !(old.map (·.present a)).getD false
+
+/-- What a law reads of a write besides the new version: how the write changed the page. The old
+version has no reading of these (a law reads them as `new.deletions`, `new.insertions`). -/
+def writeMeasures (old : Option Graph) (new : Graph) : List (String × Nat) :=
+  [("deletions", deletions old new), ("insertions", insertions old new)]
+
+/-- **`deletions` agrees with `Doc.apply`**: for an authored patch, the deletions of the write are
+the atoms of the old settled text, not yet dead, that the patch deletes. -/
+theorem deletions_apply (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
+    deletions (some G) (G.apply p) =
+      (settledAtoms G).countP fun a => !G.isDead a && (Patch.deletes p).contains a := by
+  simp only [deletions]
+  apply List.countP_congr
+  intro a _
+  rw [isDead_apply_forward G p hf a]
+  cases G.isDead a <;> simp
+
+/-- **`new.deletions == 0` means the patch deletes no atom of the settled text.** -/
+theorem deletions_apply_eq_zero (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
+    deletions (some G) (G.apply p) = 0 ↔
+      ∀ a ∈ settledAtoms G, G.isDead a = false → a ∉ Patch.deletes p := by
+  rw [deletions_apply G p hf, List.countP_eq_zero]
+  constructor
+  · intro h a ha hd hm
+    exact h a ha (by simp [hd, List.contains_iff_mem, hm])
+  · intro h a ha hc
+    simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true, List.contains_iff_mem] at hc
+    exact h a ha hc.1 hc.2
+
+/-- **`insertions` agrees with `Doc.apply`**: for an authored patch, the insertions of the write are
+the atoms of the new settled text that the patch adds and the old version did not have. -/
+theorem insertions_apply (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
+    insertions (some G) (G.apply p) =
+      (settledAtoms (G.apply p)).countP fun a => (Patch.adds p).contains a && !G.present a := by
+  simp only [insertions, Option.map_some, Option.getD_some]
+  apply List.countP_congr
+  intro a _
+  rw [present_apply_forward G p hf a]
+  cases G.present a <;> simp
 
 /-- What a law reads of a version: its measures and its frontmatter's scalar fields (a measure
 wins over a field of the same name). -/
