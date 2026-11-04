@@ -1,6 +1,7 @@
 edition ObjectiveBend 1
-# OpenUSD / Objective-Bend Open-Recursive Physical Part:
-# LC Drives (Potsdam, NY) Direct In-Slot Liquid-Cooled Permanent-Magnet Stator.
+# Physical Standard Library (`stdlib/physical/LcDrivesStator.obend`):
+# LC Drives (Potsdam, NY) Direct In-Slot Liquid-Cooled Permanent-Magnet Stator
+# with 5-Axis Finish-Milled Housing.
 
 record PhysicalStator:
   thermalResistance() -> Nat
@@ -42,6 +43,9 @@ def seedStator() -> PhysicalStator:
 
 def outerJacketStator() -> PhysicalStator:
   fix(OuterJacketStator, seedStator())
+
+def statorInSlot() -> PhysicalStator:
+  fix(compose(OuterJacketStator, LcDrivesInSlotUpgrade), seedStator())
 
 def lcDrivesProductionStator() -> PhysicalStator:
   fix(compose(OuterJacketStator, LcDrivesInSlotUpgrade, FiveAxisFinishMilled), seedStator())

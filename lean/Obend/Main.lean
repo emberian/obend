@@ -107,6 +107,10 @@ open Obend.Spec.Preview
 def usage : String :=
   "usage: obend check FILE.obend [ENTRY] | obend run FILE.obend ENTRY [ARGS_JSON] [RESPONSES_JSON] [--ticks N] [--json]\n" ++
   "       obend check --package PACKAGE.json [ENTRY] | obend run --package PACKAGE.json [ARGS_JSON] [RESPONSES_JSON] [--ticks N] [--json]\n" ++
+  "       obend check DIR [ENTRY] | obend run DIR ENTRY …   (every .obend file of DIR, in name order, as one package;\n" ++
+  "             a DIR holding workspace.json or package.json is read through it; PACKAGE may replace --package PACKAGE below)\n" ++
+  "       obend judge --package WORKSPACE.json OLD_JSON NEW_JSON   (a write of the declared state, judged by every package's laws)\n" ++
+  "       obend admit --package WORKSPACE.json TURN.json          (a recorded turn re-derived at the workspace's records)\n" ++
   "       obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]\n" ++
   "             | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition] | preview REQUEST NEW_DIR | batch JOBS OUT\n" ++
   "       obend check-core FILE.json | obend run-core FILE.json [--ticks N] [--heap N] [--stack N]\n" ++
@@ -206,11 +210,131 @@ structure Package where
   /-- A workspace's closure, when the package is one (`Obend.Spec.Workspace`). -/
   closed : Option Obend.Spec.Workspace.Closed := none
 
-/-- One `.obend` file as a package, as `run.ts` builds it. -/
-def packageOfFile (file : String) (entry : Option String) : FE Package := do
+/-- The `import` lines of a source (`import ./X.obend as Y`), by a line scan: enough to say, before
+capture refuses `import count differs`, that a module with imports is checked as a package. -/
+def importLines (bytes : ByteArray) : List String :=
+  match String.fromUTF8? bytes with
+  | some src => (src.splitOn "\n").filter (·.startsWith "import ")
+  | none => []
+
+/-- One `.obend` file as a package, as `run.ts` builds it. A file with `import` lines is not a
+package on its own: the refusal names the two ways to check it. -/
+def packageOfObendFile (file : String) (entry : Option String) : FE Package := do
   let bytes ← readBytes file
+  match importLines bytes with
+  | [] => pure ()
+  | imports =>
+    refuse (s!"{file} imports {imports.length} module(s) ({", ".intercalate imports}); a module with imports is " ++
+      "checked as a package: `obend check DIR` reads every .obend file of DIR in name order (an import " ++
+      "names an earlier file), or `obend check --package PACKAGE.json` names the modules") "package-input"
   let (m, names) ← captureModule #[] (moduleNameOf file) bytes none [] false
   return ⟨[m], 0, entry.getD "", names, none⟩
+
+/-- A string without its trailing whitespace. -/
+def rstrip (s : String) : String := String.ofList (s.toList.reverse.dropWhile Char.isWhitespace).reverse
+
+/-- The sibling imports of a source, `import ./X.obend as Y`, as `(alias, file)` pairs; an import
+of another shape (a package path) is returned under `none` so the caller can name it. -/
+def siblingImports (bytes : ByteArray) : List (Option (String × String) × String) :=
+  (importLines bytes).map fun line =>
+    let rest : String := String.ofList (line.toList.drop "import ".length)
+    match rest.splitOn " as " with
+    | [path, alias] =>
+      let path : String := rstrip path
+      let alias : String := rstrip alias
+      if path.startsWith "./" then (some (alias, String.ofList (path.toList.drop 2)), line) else (none, line)
+    | _ => (none, line)
+
+/-- A directory of `.obend` files as one package: each file a module named after it, its sibling
+imports resolved to the modules captured before it (files are placed in dependency order, ties by
+name), the entry module the last placed. A `.obend` file that imports a package path, or a sibling
+the directory lacks, or a cycle, refuses by name: such a directory is checked through a
+`workspace.json` or `package.json` instead. -/
+def packageOfObendDir (dir : String) (entry : Option String) : FE Package := do
+  let entries ← (do
+    try
+      let es ← (System.FilePath.mk dir).readDir
+      let files := (es.filter fun e => e.fileName.endsWith ".obend").map (·.fileName)
+      return .ok (files.qsort (· < ·)).toList
+    catch e =>
+      return .error (Diagnostic.mk "package-input" e.toString none none) : IO (Except Diagnostic (List String)))
+  let files ← match entries with
+    | [] => refuse ("no .obend files found in directory " ++ dir) "package-input"
+    | fs => pure fs
+  -- read every file once and note its sibling imports
+  let mut sources : List (String × ByteArray × List (String × String)) := []
+  for f in files do
+    let bytes ← readBytes (dir ++ "/" ++ f)
+    let mut deps : List (String × String) := []
+    for (imp, line) in siblingImports bytes do
+      match imp with
+      | some (alias, target) =>
+        if !files.contains target then
+          refuse (s!"{dir}/{f} imports {target}, which is not a file of {dir}; a directory package holds every module it " ++
+            "imports, or is described by a workspace.json / package.json") "package-input"
+        deps := deps ++ [(alias, target)]
+      | none =>
+        refuse (s!"{dir}/{f}: `{line}` imports a package path; a directory of files holds sibling imports " ++
+          "(`import ./X.obend as Y`) only: describe this package by a workspace.json") "package-input"
+    sources := sources ++ [(f, bytes, deps)]
+  -- place files in dependency order, ties by name
+  let mut placed : List String := []
+  let mut remaining := sources
+  while !remaining.isEmpty do
+    match remaining.find? (fun (_, _, deps) => deps.all fun (_, t) => placed.contains t) with
+    | some (f, _, _) =>
+      placed := placed ++ [f]
+      remaining := remaining.filter (·.1 != f)
+    | none =>
+      refuse (s!"{dir}: the imports of {", ".intercalate (remaining.map (·.1))} form a cycle") "package-input"
+  -- capture in that order, each import locked to the module captured for its file
+  let mut acc : Array SourceModule := #[]
+  let mut lastNames : List String := []
+  for f in placed do
+    let some (_, bytes, deps) := sources.find? (·.1 == f) | pure ()
+    let locks := deps.map fun (alias, target) =>
+      Lock.ofJson (Json.mkObj [("alias", toJson alias), ("path", toJson ("./" ++ target)),
+        ("module", toJson (toString (placed.idxOf target)))])
+    let (m, names) ← captureModule acc (moduleNameOf f) bytes none locks false
+    acc := acc.push m
+    lastNames := names
+  return ⟨acc.toList, acc.size - 1, entry.getD "", lastNames, none⟩
+
+/-- A module's `sourcePath` in a `package.json`, as a file that exists: as written (relative to the
+working directory), else relative to the manifest's directory, else relative to each of its
+ancestors (a manifest written with repository-relative paths works from anywhere in the tree). -/
+def resolveSourcePath (specPath : String) (p : String) : IO String := do
+  if ← System.FilePath.pathExists p then return p
+  let mut dir : Option System.FilePath := (System.FilePath.mk specPath).parent
+  let mut fuel := 32
+  while fuel > 0 do
+    fuel := fuel - 1
+    match dir with
+    | none => break
+    | some d =>
+      let cand := d / p
+      if ← cand.pathExists then return cand.toString
+      dir := d.parent
+  return p
+
+/-- A `package.json` with every module's `sourcePath` resolved (`resolveSourcePath`): written to a
+temporary file for `captureSpec`, which reads its request from disk. -/
+def resolvedSpec (specPath : String) (j : Json) : IO String := do
+  let modules := ((j.getObjVal? "modules").bind Json.getArr?).toOption.getD #[]
+  let mut changed := false
+  let mut out : Array Json := #[]
+  for m in modules do
+    match m.getObjValAs? String "sourcePath" with
+    | .ok p =>
+      let r ← resolveSourcePath specPath p
+      if r != p then changed := true
+      out := out.push (m.setObjVal! "sourcePath" (toJson r))
+    | .error _ => out := out.push m
+  if !changed then return specPath
+  let (h, tmp) ← IO.FS.createTempFile
+  h.putStr (j.setObjVal! "modules" (Json.arr out)).compress
+  h.flush
+  return tmp.toString
 
 /-- A workspace as a package: its closure's modules, the entry the workspace names. -/
 def packageOfWorkspace (spec : String) (entry : Option String) : FE Package := do
@@ -221,18 +345,38 @@ def packageOfWorkspace (spec : String) (entry : Option String) : FE Package := d
   let decls := ((ast.getObjVal? "declarations").bind Json.getArr?).toOption.getD #[]
   return ⟨c.modules, c.entryModule, entryDefinition, decls.toList.map declarationName, some c⟩
 
-/-- A `dregg.objective-bend.package-input.v1` as a package (`captureSpec`, nothing written), or a
-workspace (`packageOfWorkspace`). -/
-def packageOfSpec (spec : String) (entry : Option String) : FE Package := do
+/-- Auto-detect `.obend` source files, workspace/package directories, `workspace.v1` JSON, or
+`dregg.objective-bend.package-input.v1` JSON specs. -/
+partial def packageOfSpec (spec : String) (entry : Option String) : FE Package := do
+  let fp := System.FilePath.mk spec
+  let isDir ← (do
+    try return .ok (← fp.isDir)
+    catch _ => return .ok false : IO (Except Diagnostic Bool))
+  if isDir then
+    let wsJson := (fp / "workspace.json").toString
+    let pkgJson := (fp / "package.json").toString
+    let hasWs ← (do try return .ok (← System.FilePath.pathExists wsJson) catch _ => return .ok false : IO (Except Diagnostic Bool))
+    if hasWs then return ← packageOfSpec wsJson entry
+    let hasPkg ← (do try return .ok (← System.FilePath.pathExists pkgJson) catch _ => return .ok false : IO (Except Diagnostic Bool))
+    if hasPkg then return ← packageOfSpec pkgJson entry
+    return ← packageOfObendDir spec entry
+  if spec.endsWith ".obend" then
+    return ← packageOfObendFile spec entry
   let (_, j) ← readJson spec
   if (j.getObjValAs? String "schema").toOption == some Obend.Spec.Workspace.workspaceSchema then
     return ← packageOfWorkspace spec entry
-  let c ← captureSpec spec false
+  let specPath ← (do return .ok (← resolvedSpec spec j) : IO (Except Diagnostic String))
+  let c ← captureSpec specPath false
+  if specPath != spec then (do try IO.FS.removeFile specPath catch _ => pure () : IO Unit)
   let entryDefinition := entry.getD c.entryDefinition
   let m := c.modules[c.entryModule]!
   let ast ← liftFE (parseSource m.name m.source)
   let decls := ((ast.getObjVal? "declarations").bind Json.getArr?).toOption.getD #[]
   return ⟨c.modules.toList, c.entryModule, entryDefinition, decls.toList.map declarationName, none⟩
+
+/-- Load a package from a `.obend` file, directory, or `.json` spec/workspace. -/
+def packageOfFile (file : String) (entry : Option String) : FE Package :=
+  packageOfSpec file entry
 
 def hostLimits (ticks : String) : Json :=
   Json.mkObj [("ticks", toJson ticks), ("heap", toJson "100000"), ("stack", toJson "10000"), ("checkWork", toJson "65536")]
@@ -710,13 +854,26 @@ public def main (args : List String) : IO UInt32 :=
   | ["check", "--obligations", "--package", spec, "--object", entry] => obligationsCommand spec entry none
   | ["check", "--obligations", "--package", spec, "--object", entry, "--receipts", dir] =>
     obligationsCommand spec entry (some dir)
+  | ["check", "--obligations", spec, "--object", entry] => obligationsCommand spec entry none
+  | ["check", "--obligations", spec, "--object", entry, "--receipts", dir] =>
+    obligationsCommand spec entry (some dir)
   | "prove" :: "--package" :: spec :: name :: rest => (proveArgs spec name rest).getD (do IO.eprintln usage; return 64)
+  | "prove" :: spec :: name :: rest => (proveArgs spec name rest).getD (do IO.eprintln usage; return 64)
   | ["ground", "--package", spec, entry, expected] => groundCommand spec entry expected
+  | ["ground", spec, entry, expected] => groundCommand spec entry expected
   | "emit" :: "--package" :: spec :: "--object" :: entry :: "--out" :: out :: rest =>
     match leafCall rest with
     | some call => emitCommand spec entry out call
     | none => do IO.eprintln usage; return 64
+  | "emit" :: spec :: "--object" :: entry :: "--out" :: out :: rest =>
+    match leafCall rest with
+    | some call => emitCommand spec entry out call
+    | none => do IO.eprintln usage; return 64
   | "specialize" :: "--package" :: spec :: "--object" :: entry :: "--book" :: book :: rest =>
+    match leafCall rest with
+    | some call => specializeCommand spec entry book call
+    | none => do IO.eprintln usage; return 64
+  | "specialize" :: spec :: "--object" :: entry :: "--book" :: book :: rest =>
     match leafCall rest with
     | some call => specializeCommand spec entry book call
     | none => do IO.eprintln usage; return 64
@@ -727,7 +884,9 @@ public def main (args : List String) : IO UInt32 :=
   | "run" :: "--package" :: spec :: rest => runSource (packageOfSpec spec none) rest
   | ["admit", "--package", spec, turn] => admitCommand spec turn
   | ["judge", "--package", spec, old, new] => judgeCommand spec old new
+  | "run" :: file :: "--entry" :: entry :: rest => runSource (packageOfFile file (some entry)) rest
   | "run" :: file :: entry :: rest => runSource (packageOfFile file (some entry)) rest
+  | ["run", file] => runSource (packageOfFile file none) []
   | "verify" :: path :: rest =>
     Obend.Ledger.Cli.verifyOr path rest <|
       Obend.Analysis.Cli.verifyOr path <|

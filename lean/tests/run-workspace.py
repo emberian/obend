@@ -111,6 +111,35 @@ for old, new, by in [(3, 13, "app/both law unlucky"), (5, 3, "ext/left law monot
     j = judge(ws, {"total": old}, {"total": new})
     check(f"refusal {old} -> {new} names {by}", j.get("status") == "refused" and j.get("by") == by, repr(j))
 
+# ---------------------------------------------------------------- the apps as packages
+
+# Every directory of .obend modules under apps/ and stdlib/ is a package: `obend check DIR` reads its
+# files in name order (an import names an earlier file). A single file with imports says how to check it.
+ROOT = os.path.dirname(LEAN)
+for d in sorted(os.listdir(os.path.join(ROOT, "apps"))):
+    p = os.path.join(ROOT, "apps", d)
+    if not os.path.isdir(p) or not any(f.endswith(".obend") for f in os.listdir(p)):
+        continue
+    code, out = obend("check", p)
+    rows = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
+    refused = [r for r in rows if r.get("status") == "refused"]
+    if code == 0 and rows and not refused:
+        check(f"apps/{d}: obend check DIR accepts every declaration", True)
+    else:
+        # a refusal the front end names (the program's defect, not the loader's): laws in an imported
+        # module belong to the entry module. Anything else (no such file, import count differs) is a
+        # loader defect and fails here.
+        named = [r for r in refused if r.get("diagnostic", {}).get("message", "").startswith("a law belongs to the package's entry module")]
+        check(f"apps/{d}: obend check DIR accepts, or refuses naming the program's defect",
+              code == 2 and rows and refused and len(named) == len(refused),
+              out[:400])
+        if named:
+            print(f"     ({d}: {named[0]['diagnostic']['message']})")
+r = subprocess.run([OBEND, "check", os.path.join(ROOT, "apps", "foc-hil", "FocDriveTop.obend")],
+                   capture_output=True, text=True, cwd=LEAN)
+check("a single file with imports names the fix", r.returncode != 0 and "obend check DIR" in r.stdout + r.stderr,
+      (r.stdout + r.stderr)[:400])
+
 # ---------------------------------------------------------------- the stranger
 
 S = os.path.join(SOURCE, "stranger")
