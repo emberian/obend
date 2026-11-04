@@ -22,9 +22,10 @@ pub fn propose_and_commit_turn(
     Ok(tid)
 }
 
-/// `true` when this crate was linked against the Lean library (`lean/.lake/build/lib`); `false`
-/// when `build.rs` fell back to the stub, which has no judge registry, so a session cannot weave
-/// a witness and a test that needs the kernel's judgement must say so rather than pass.
+/// `true` when this crate was linked against the Lean library (`lean/.lake/build/lib`), the
+/// default; `false` when it was built with `OBEND_ALLOW_STUB_FFI=1` (or the `stub` feature), in
+/// which case every verify and weave returns `ObendError::StubBackend` and a test that needs the
+/// kernel's judgement should say so rather than fail on the refusal.
 pub fn kernel_is_native() -> bool {
     !cfg!(feature = "stub")
 }

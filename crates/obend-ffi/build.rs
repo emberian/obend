@@ -3,19 +3,22 @@ fn main() {
     println!("cargo:rerun-if-changed=../../lean/c/obend_bridge.c");
     println!("cargo:rerun-if-env-changed=LEAN_SYSROOT");
     println!("cargo:rerun-if-env-changed=OBEND_LEAN_LINK");
-    println!("cargo:rerun-if-env-changed=OBEND_REQUIRE_NATIVE_FFI");
+    println!("cargo:rerun-if-env-changed=OBEND_ALLOW_STUB_FFI");
     println!("cargo:rerun-if-env-changed=OBEND_LAKE_LIB_DIR");
 
-    let require_native = std::env::var("OBEND_REQUIRE_NATIVE_FFI")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    // The Lean library is the default and the only backend that verifies anything. The stub is
+    // opt-in by name (`OBEND_ALLOW_STUB_FFI=1`, or the Cargo feature `stub`) for builds that need
+    // the crate to compile without `lake build Obend:shared`; every verify or weave through it
+    // refuses with `ObendError::StubBackend`, so a receipt cannot pass through a substitute
+    // unnoticed. (Until 2026-11-04 the stub was substituted silently whenever the library was
+    // missing, and its verify accepted what it had itself committed.)
+    let allow_stub = std::env::var("CARGO_FEATURE_STUB").is_ok()
+        || std::env::var("OBEND_ALLOW_STUB_FFI")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
     if std::env::var("CARGO_FEATURE_STUB").is_ok() {
-        if require_native {
-            panic!(
-                "OBEND_REQUIRE_NATIVE_FFI=1 is set, but Cargo feature `stub` is enabled; refusing to build with stub FFI."
-            );
-        }
+        println!("cargo:warning=obend-ffi: Cargo feature `stub` set; no Lean kernel is linked and every verify or weave refuses.");
         return;
     }
 
@@ -38,16 +41,18 @@ fn main() {
     let has_native =
         has_libobend || lib_a.exists() || lib_so2.exists() || lib_dylib2.exists();
 
-    if require_native && !has_libobend {
-        panic!(
-            "OBEND_REQUIRE_NATIVE_FFI=1 is set, but native Lean library `libobend_Obend` (.so/.dylib) was not found in {}",
-            lake_lib_dir.display()
-        );
-    }
-
     if !has_native {
+        if !allow_stub {
+            panic!(
+                "obend-ffi: the Lean library `libobend_Obend` (.so/.dylib) was not found in {}. \
+                 Build it with `lake build Obend:shared` in `lean/` (or point OBEND_LAKE_LIB_DIR at it). \
+                 To compile without a kernel anyway, set OBEND_ALLOW_STUB_FFI=1: the stub refuses every \
+                 verify and weave, so nothing built that way can check a receipt.",
+                lake_lib_dir.display()
+            );
+        }
         println!(
-            "cargo:warning=Native Lean libraries not found at {}. Using stub fallback.",
+            "cargo:warning=obend-ffi: OBEND_ALLOW_STUB_FFI set and no Lean library at {}; building the stub, which refuses every verify or weave.",
             lake_lib_dir.display()
         );
         println!("cargo:rustc-cfg=feature=\"stub\"");
@@ -110,4 +115,9 @@ fn main() {
 
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lake_lib_dir.display());
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}/lib/lean", lean_sysroot);
+    // `rustc-link-arg` reaches only this crate's own binaries. A dependent's test binary or
+    // executable finds the shared library through these (`DEP_OBEND_BRIDGE_LIB_DIR`,
+    // `DEP_OBEND_BRIDGE_LEAN_LIB_DIR`; see `crates/obend-node/build.rs`).
+    println!("cargo:lib_dir={}", lake_lib_dir.display());
+    println!("cargo:lean_lib_dir={}/lib/lean", lean_sysroot);
 }

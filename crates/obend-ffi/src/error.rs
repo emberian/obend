@@ -22,6 +22,8 @@ pub enum ObendError {
     ReceiptInvalid,
     #[error("Lean runtime panic occurred")]
     Panic,
+    #[error("stub FFI: no Lean kernel is linked (built with OBEND_ALLOW_STUB_FFI), so nothing is verified")]
+    StubBackend,
     #[error("Unknown error code {0}")]
     Unknown(i32),
     #[error("{0}: {1}")]
@@ -40,6 +42,7 @@ impl ObendError {
             -6 => Self::CommitFailed,
             -7 => Self::HardwareProjectionFailed,
             -8 => Self::ReceiptInvalid,
+            -10 => Self::StubBackend,
             -99 => Self::Panic,
             n => Self::Unknown(n),
         }

@@ -2,6 +2,8 @@
 name = "obend-ffi"
 version = "0.1.0"
 edition = "2021"
+# Lets dependents read `DEP_OBEND_BRIDGE_LIB_DIR` / `DEP_OBEND_BRIDGE_LEAN_LIB_DIR` from build.rs.
+links = "obend_bridge"
 description = "Safe Rust C-ABI FFI wrapper and persistent worker thread pool for Obend Lean 4 runtime"
 license = "Apache-2.0"
 

@@ -256,10 +256,12 @@ pub mod stub {
         0
     }
 
-    /// Mirror of `Obend.FFI.Bridge.verifyReceiptCore` for the one-leaf case: the frame
-    /// `root(32) || size(8) || index(8) || pathLen(8) || payload` verifies iff `root` was
-    /// committed by this session and is the stub digest of `payload`. Paths are not supported
-    /// by the stub (refused), nor is anything the session did not commit.
+    pub const STUB_REFUSAL: &[u8] =
+        b"stub FFI: no Lean kernel is linked (built with OBEND_ALLOW_STUB_FFI); nothing is verified here";
+
+    /// The stub verifies nothing. It refuses every receipt with `-10` (`ObendError::StubBackend`)
+    /// and says so in the error detail, so a build without the Lean library cannot pass a
+    /// receipt through a substitute. `propose`/`commit` still run, because they claim nothing.
     pub unsafe fn obend_verify_receipt(
         session: *mut Session,
         receipt_ptr: *const u8,
@@ -271,28 +273,10 @@ pub mod stub {
         if receipt_len > 0 && receipt_ptr.is_null() {
             return -1;
         }
-        if receipt_len < 56 {
-            return -8;
-        }
         let stub = &*(session as *mut StubSession);
-        let slice = std::slice::from_raw_parts(receipt_ptr, receipt_len);
-        let root = &slice[..32];
-        let size = u64::from_be_bytes(slice[32..40].try_into().unwrap());
-        let index = u64::from_be_bytes(slice[40..48].try_into().unwrap());
-        let path_len = u64::from_be_bytes(slice[48..56].try_into().unwrap());
-        if size != 1 || index != 0 || path_len != 0 {
-            return -8;
-        }
-        let payload = &slice[56..];
-        let roots = stub.committed_roots.lock().unwrap();
-        if !roots.iter().any(|r| r.as_slice() == root) {
-            return -8;
-        }
-        if build_stub_receipt(RECEIPT_MAGIC, payload).as_slice() == root {
-            0
-        } else {
-            -8
-        }
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        -10
     }
 
     pub unsafe fn obend_get_last_error(
@@ -303,11 +287,14 @@ pub mod stub {
         if session.is_null() || out_ptr.is_null() || out_len.is_null() {
             return -1;
         }
+        // Read once: the message set by the last refusal is returned and cleared, so a later
+        // error does not carry a stale detail.
         let stub = &*(session as *mut StubSession);
         let mut buf = stub.err_buf.lock().unwrap();
-        *buf = b"No error\0".to_vec();
-        *out_ptr = buf.as_mut_ptr();
-        *out_len = buf.len() - 1;
+        let mut scratch = stub.scratch_buf.lock().unwrap();
+        *scratch = if buf.is_empty() { b"No error".to_vec() } else { std::mem::take(&mut *buf) };
+        *out_ptr = scratch.as_mut_ptr();
+        *out_len = scratch.len();
         0
     }
 
@@ -396,8 +383,8 @@ pub mod stub {
         }
         let stub = &*(session as *mut StubSession);
         let mut err = stub.err_buf.lock().unwrap();
-        *err = b"stub FFI has no judge registry; weave refused".to_vec();
-        -8
+        *err = STUB_REFUSAL.to_vec();
+        -10
     }
 }
 #[cfg(feature = "stub")]
