@@ -31,7 +31,9 @@ A page's frontmatter may carry laws, `law NAME: EXPR`, over its measures (`words
 `bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`), over the write itself
 (`deletions`, `insertions`: `new.deletions == 0` is append-only, line by line) and its numeric fields; a folder's
 `_kind.md` carries laws for every page in it; a law that reads `linked.date` instead of `new.date`
-is judged at every page the page links to, when either is written. A frontmatter word is a label
+is judged at every page the page links to, when either is written; `law appendOnly per ##:
+new.deletions == 0` is judged at every `## ` row of the page, on the row's own measures, and a
+refusal names the row. A frontmatter word is a label
 (`new.decider in ["ember", "lane"]`), and `new.poster` is the member whose text a write is. An edit
 that breaks a law is
 refused by name, with

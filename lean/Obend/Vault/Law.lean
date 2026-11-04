@@ -11,6 +11,9 @@ present (at 0 where the page does not have it).
 A law that reads `linked.F` is a law over the page's LINKS: judged at every page the page links to,
 on that page's state, when either side is written (`Obend.Vault.Store`, "Laws over links").
 
+A law named `NAME per ##` is a law over the page's ROWS: judged at every row a `## ` heading
+begins, on that row's measures and its write's (`Obend.Vault.Page`, "Rows").
+
 A folder's `_kind.md` is a KIND, registered as a kind cell of `Obend.Kind` (`Obend.Vault.vaultKinds`):
 its law lines are laws of every page born under it (not of the kind page itself, which the kinds
 above it judge), and its `key: value` lines the fields such a page starts with. A page carries its kind's identity in its frontmatter (`kind: K`, written by

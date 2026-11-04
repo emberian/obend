@@ -77,12 +77,25 @@ def splitFront (src : String) : List String × String :=
 def frontFields (src : String) : List (String × String) :=
   (splitFront src).1.filterMap splitColon
 
-/-- A law line's name: `law` alone is `law`; `law NAME` is `NAME`. -/
+/-- A heading marker: `#`, `##` or `###`. -/
+def isHeadingMark (m : String) : Bool := m == "#" || m == "##" || m == "###"
+
+/-- A law line's name: `law` alone is `law`; `law NAME` is `NAME`; `law NAME per ##` is
+`NAME per ##`, a law over the rows that heading marker begins (`lawSubject`, `rowsOf`). -/
 def lawKey (key : String) : Option String :=
   if key == "law" then some "law"
   else match key.splitOn " " with
     | ["law", name] => if name.isEmpty then none else some name
+    | ["law", name, "per", mark] =>
+      if name.isEmpty || !isHeadingMark mark then none else some (name ++ " per " ++ mark)
     | _ => none
+
+/-- The subject of a law over rows: the heading marker after ` per ` in its name (`appendOnly per
+##`, or named by its owner, `log/_kind: appendOnly per ##`). -/
+def lawSubject (name : String) : Option String :=
+  match name.splitOn " per " with
+  | [_, mark] => if isHeadingMark mark then some mark else none
+  | _ => none
 
 /-- The law lines of a page: `(name, text)`. -/
 def lawLines (src : String) : List (String × String) :=
@@ -384,6 +397,63 @@ theorem insertions_apply (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
   intro a _
   rw [present_apply_forward G p hf a]
   cases G.present a <;> simp
+
+/-! ## Rows: the sections a heading begins
+
+A ROW of a version is what a heading line of one level begins: the heading line and the lines
+after it, up to the next heading of its level or above. A law over rows (`law NAME per ##`) is
+judged at every `##` row of the page, on the row's measures and its write's; a refusal names the row.
+A row has a title (the heading's text) and atoms (one per line, `Obend.Doc.lex`), and the atoms are
+stable across versions, so the write's `deletions` and `insertions` within a row are exact: a row
+edited in place deletes, a row appended to does not. Text before the first heading is no row's;
+rows inside a section with candidates are not judged until one is kept. A row carries no fields:
+the frontmatter's `key: value` lines are the page's, and no syntax of the reader gives a row its
+own (2026-11-04; see `tests/decisions/WALKTHROUGH.md` section 8). -/
+
+/-- The level of a heading line (`# `, `## `, `### `), or none. -/
+def headingLevel (t : String) : Option Nat :=
+  let hs := t.toList.takeWhile (· == '#')
+  if 0 < hs.length && hs.length ≤ 3 && (t.toList.drop hs.length).head? == some ' ' then some hs.length
+  else none
+
+/-- The rows the heading marker `mark` begins in a version: each its title and its atoms, in order. -/
+def rowsOf (mark : String) (G : Graph) : List (String × List AtomId) :=
+  let lvl := mark.length
+  let step (acc : List (String × List AtomId) × Option (String × List AtomId)) (a : AtomId) :
+      List (String × List AtomId) × Option (String × List AtomId) :=
+    let t := G.atomText a
+    match headingLevel t with
+    | some l =>
+      if l == lvl then (acc.1 ++ acc.2.toList, some (trim (String.ofList (t.toList.drop (l + 1))), [a]))
+      else if l < lvl then (acc.1 ++ acc.2.toList, none)
+      else (acc.1, acc.2.map fun (ti, as) => (ti, as ++ [a]))
+    | none => (acc.1, acc.2.map fun (ti, as) => (ti, as ++ [a]))
+  let (done, cur) := (settledAtoms G).foldl step ([], none)
+  done ++ cur.toList
+
+/-- The measures of a row (its atoms `atoms` in the version `G`): of its text, as a page's
+(`measures`), with the write's `deletions` and `insertions` against the row of the same title in
+the old version (`old`: its atoms; none when the row is new): the atoms of the old row the new row
+lacks, and the atoms of the new row the old row lacked. A row the new version lacks has every
+measure 0 and `deletions` the old row's atoms. -/
+def rowMeasures (G : Graph) (version : Nat) (atoms : List AtomId) (old : Option (List AtomId)) :
+    List (String × Nat) :=
+  let src := String.join (atoms.map G.atomText)
+  let counts := atoms.foldl (fun (acc : Nat × Nat × Nat × Nat) a => match G.label a with
+    | some (.cite _ c) => match c.span with
+      | .identity => (acc.1 + 1, acc.2.1, acc.2.2.1, acc.2.2.2)
+      | .page => (acc.1, acc.2.1 + 1, acc.2.2.1, acc.2.2.2)
+      | _ => (acc.1, acc.2.1, acc.2.2.1 + 1, acc.2.2.2)
+    | some (.text t) =>
+      if (t.startsWith "[[" || t.startsWith "![[") && t.endsWith "]]" then (acc.1, acc.2.1, acc.2.2.1, acc.2.2.2 + 1)
+      else acc
+    | _ => acc) (0, 0, 0, 0)
+  let (links, embeds, quotes, dangling) := counts
+  let oldAtoms := old.getD []
+  [("bytes", (bytes src).length), ("dangling", dangling),
+   ("deletions", (oldAtoms.filter fun a => !atoms.contains a).length), ("embeds", embeds),
+   ("insertions", (atoms.filter fun a => !oldAtoms.contains a).length), ("lines", lineCount src),
+   ("links", links), ("quotes", quotes), ("sections", 0), ("version", version), ("words", wordCount src)]
 
 /-- The names of the measures, a version's and a write's. -/
 def measureNames : List String :=

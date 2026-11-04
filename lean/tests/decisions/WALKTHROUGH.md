@@ -386,3 +386,87 @@ kept candidate 2 of section 1 of decisions/D-0008
 rendered decisions/D-0008.md
 decisions/D-0008 v3
 ```
+
+## 8. A law per row
+
+The ledger's natural unit is one decision, and `review/DECISIONS-20261031.md` keeps many on one
+page. A kind law may name the rows a heading begins as its subject: `law appendOnly per ##:
+new.deletions == 0` is judged at every `## ` row of the page, on that row's own measures (its
+words, lines, bytes, links, embeds, quotes and dangling links) and its write's (`deletions`,
+`insertions`: the lines of that row the write removed or rewrote, and added), and a refusal names
+the row. The write is one turn: a row edited in place refuses it, naming the row, and the same rows
+with one appended are admitted.
+
+```sh
+cd ledger && mkdir log
+cat > log/_kind.md <<'MD'
+---
+law appendOnly per ##: new.deletions == 0
+law cited per ##: new.dangling == 0
+---
+A log of decisions, one `## ` row each: a row is appended to and never rewritten, and every
+theorem a row names is one the census has.
+MD
+cat > log/Decisions.md <<'MD'
+# Decisions, as rows
+
+## D-0001
+No per-theorem axiom lists; one crawling census. Rests on [[environment/Theorems#^judge_admits]].
+
+## D-0002
+Package law at adoption and relaw: adoption judged with old = new state.
+
+## D-0003
+The project frame is research into the consequences of its design decisions.
+MD
+obend open
+```
+
+```text
+log/Decisions: new page (v1)
+log/_kind: new page (v1)
+```
+
+One row rewritten in place, and a row appended, in one write: refused at the row rewritten, with
+the value that would pass; the file keeps both. The write has `deletions = 2` there: the line
+rewritten and the blank line that closes it, which the edit's alignment re-writes with the change
+(a change is widened to whole lines, up to the line end that closes it; the page's `deletions`
+counts the same two).
+
+```sh
+cd ledger
+sed -i.bak 's/^Package law at adoption and relaw: adoption judged with old = new state.$/Package law at adoption only./' log/Decisions.md && rm log/Decisions.md.bak
+printf -- '\n## D-0004\nA law per row, taken by the lane. Rests on [[environment/Theorems#^no_toctou]].\n' >> log/Decisions.md
+obend open
+```
+
+```text
+log/Decisions: refused by log/_kind: appendOnly per ## (the kind of log/, an ancestor of log/Decisions) at ## D-0002: `new.deletions == 0` does not hold there; deletions = 0 would pass (this write has deletions = 2)
+```
+
+The row put back as it was, the appended row stays: admitted. A row naming a theorem the census
+lacks is refused at that row.
+
+```sh
+cd ledger
+sed -i.bak 's/^Package law at adoption only.$/Package law at adoption and relaw: adoption judged with old = new state./' log/Decisions.md && rm log/Decisions.md.bak
+obend open
+printf -- '\n## D-0005\nRests on [[environment/Theorems#^suggestMultiField_admits]].\n' >> log/Decisions.md
+obend open
+```
+
+```text
+log/Decisions: v2 written
+log/Decisions: refused by log/_kind: cited per ## (the kind of log/, an ancestor of log/Decisions) at ## D-0005: `new.dangling == 0` does not hold there; dangling = 0 would pass (this write has dangling = 1)
+```
+
+What a row cannot carry. `dated` and `deciderOnce` read fields, and a row has none: the reader
+knows frontmatter fields (`key: value` lines between `---`, the page's), wikilinks, block ids
+(`^id`) and heading lines, and nothing else a row could hold a value in. The real ledger's rows are
+table rows whose columns are their fields (`| decision | choice | where |`), which the reader does
+not read at all. To say `dated` per row the vault would need one of three things, each a decision
+about what a row is: Obsidian's inline fields, `date:: 20261104` on a line of the row (Dataview's
+syntax; `::` does not collide with prose colons, and the frontmatter's `key: value` reader applies
+to it as is); a table whose header row names the columns and each row's cells are its fields
+(markdown's own syntax, read by splitting on `|`, which is a new reader); or heading attributes,
+`## D-0004 {date=20261104 decider=lane}` (Pandoc's). None is taken here.

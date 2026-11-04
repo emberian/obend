@@ -420,6 +420,16 @@ def refusalText (pageName : String) (laws : List (String × LawExpr × String)) 
     "refused by " ++ lawOwnerText pageName law ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts old new front ++ posted
   | none => "refused by " ++ lawOwnerText pageName law ++ ": " ++ reason
 
+/-- Why a law over rows refused a write, at the row it refused. -/
+def rowRefusalText (pageName : String) (laws : Laws) (law reason : String) (facts : Facts)
+    (old : Option Obend.Core.Data.Data) (new : Obend.Core.Data.Data) (mark title : String) : String :=
+  let where_ := " at " ++ mark ++ " " ++ title
+  match laws.find? (·.1 == law) with
+  | some (_, e, txt) =>
+    "refused by " ++ lawOwnerText pageName law ++ where_ ++ ": `" ++ txt ++ "` does not hold there; " ++
+      suggest e facts old new []
+  | none => "refused by " ++ lawOwnerText pageName law ++ where_ ++ ": " ++ reason
+
 /-! ## Laws over links
 
 A law that reads `linked.F` is a LAW OVER LINKS: its subject is not the page but every page the page
@@ -670,7 +680,7 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   let newMs := measures G' v ++ writeMeasures p.current G'
   -- the write's provenance is a label the laws read: `new.poster`, the member whose text this is
   let newLs := ("poster", poster) :: labelsOf G'
-  let lin := (laws.filter fun l => !isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
+  let lin := (laws.filter fun l => !isLinkLaw l.2.2 && (lawSubject l.1).isNone).map fun (n, e, _) => (n, e)
   let labels := (newLs.map (·.1) ++ oldLs.map (·.1)).eraseDups
   let keys := sortNames (newMs.map (·.1) ++ oldMs.map (·.1) ++ labels ++ lin.flatMap fun l => l.2.fields)
   let S := stateTyWith keys labels
@@ -680,6 +690,32 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   let rq := requestBy who.name poster occ facts
   match judge S p.name lin o n rq with
   | .admitted =>
+    -- the laws over rows (`law NAME per ##`): each row the marker begins, in the new version and in
+    -- the old, judged on its own measures and its write's (`rowMeasures`); a row of the old version
+    -- the new lacks is a write of it to nothing
+    for mark in (laws.filterMap fun l => lawSubject l.1).eraseDups do
+      let rl := (laws.filter fun l => lawSubject l.1 == some mark).map fun (n, e, _) => (n, e)
+      let newRows := rowsOf mark G'
+      let oldRows := match p.current with
+        | some G => rowsOf mark G
+        | none => []
+      for title in (newRows.map (·.1) ++ oldRows.map (·.1)).eraseDups do
+        let atoms := (newRows.lookup title).getD []
+        let oldAtoms := oldRows.lookup title
+        let rowLs := [("poster", poster)]
+        let nMs := rowMeasures G' v atoms oldAtoms
+        let keys := sortNames (nMs.map (·.1) ++ ["poster"] ++ rl.flatMap fun l => l.2.fields)
+        let S' := stateTyWith keys ["poster"]
+        let n' := stateOfWith keys ["poster"] nMs rowLs
+        let (occ', o') := match occ, oldAtoms, p.current with
+          | .adopt, _, _ => (Occ.adopt, n')
+          | _, some oa, some G => (Occ.write, stateOfWith keys ["poster"] (rowMeasures G (v - 1) oa none) rowLs)
+          | _, _, _ => (Occ.birth, n')
+        match judge S' p.name rl o' n' (requestBy who.name poster occ' facts) with
+        | .admitted => pure ()
+        | .refused law reason =>
+          throw (rowRefusalText p.name laws law reason facts (occ'.old o' n') n' mark title)
+        | .undecided why => throw ("undecided: " ++ why)
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
     let wt := writeTurn p.name o n (pinsAt es (citedNames res G')) rq
