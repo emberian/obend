@@ -525,3 +525,4 @@ run_cmd do
     throwError "census: {unbuilt.size} modules are in neither tier (add a glob to the `Obend` library in lakefile.toml): {unbuilt.toList}"
 
 #assert_axioms_tree
+#check_docs_census

@@ -379,7 +379,9 @@ theorem extractObendDottedRoots_sample :
     extractObendDottedRoots "Obend.Leaf.Futamura Obend.Spec.CrossPackage" =
       ["Leaf", "Spec"] := rfl
 
-#check_docs_census
+-- `#check_docs_census` is run by `Obend/Census.lean` (tier 2, before a merge), not here: a library
+-- build (`lake build`, tier 1) does not read the root documents, and a stale document must stop a
+-- merge, not the library (2026-11-04).
 
 end Obend.Tactic.DocsCensus
 
