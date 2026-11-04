@@ -1,6 +1,11 @@
-//! Rung 1 Verilator Co-Simulation Backend (`SimBackend`):
-//! POSIX 4 MiB Shared Memory (`mmap`) + Unix Domain Socket Lockstep Bridge +
-//! Cycle-Accurate 4-Zone `silicon_elab_top` & ICAP DPR Co-Simulation Engine.
+//! `MockBackend`: an in-process software model of the BAR0 register map.
+//!
+//! What this is: a 4 MiB `mmap` aperture plus Rust code (`step_one_cycle`) that writes the register
+//! values the `.obend` cores and the 4-zone fabric *would* produce. No Verilated model is linked and
+//! no RTL runs here; the optional Unix-socket notification is a hook nothing in this repository
+//! listens to. It exists so `obend-gui` and `obend-node` have a register map to talk to before a
+//! bitstream exists. The RTL itself is exercised by the Verilator harnesses under
+//! `apps/*/verilator/` and `hardware/sim/`.
 
 use crate::regs::{
     ctrl_bits, csr, AxiStream512Beat, ObcamWireHeader, PackedNodeWord88, SiliconElabWireFrame,
@@ -22,7 +27,7 @@ pub struct PosixShmAperture {
     backing_path: Option<PathBuf>,
 }
 
-// Safety: `PosixShmAperture` owns its exclusively mapped region or synchronizes via `SimBackend`.
+// Safety: `PosixShmAperture` owns its exclusively mapped region or synchronizes via `MockBackend`.
 unsafe impl Send for PosixShmAperture {}
 unsafe impl Sync for PosixShmAperture {}
 
@@ -181,8 +186,8 @@ impl Drop for PosixShmAperture {
     }
 }
 
-/// Rung 1 Verilator Co-Simulation Backend (`SimBackend`).
-pub struct SimBackend {
+/// In-process software model of the BAR0 register map (see the module docs).
+pub struct MockBackend {
     shm: PosixShmAperture,
     unix_sock_path: Option<PathBuf>,
     cam_uram: HashMap<u16, (PackedNodeWord88, u32)>,
@@ -194,8 +199,8 @@ pub struct SimBackend {
     skid_held_outputs: [u64; 32],
 }
 
-impl SimBackend {
-    /// Create an in-process POSIX `mmap` simulation backend.
+impl MockBackend {
+    /// Create an in-process register-map model backed by an anonymous `mmap`.
     pub fn new() -> Result<Self, FpgaHalError> {
         Ok(Self {
             shm: PosixShmAperture::new_anonymous()?,
@@ -210,7 +215,7 @@ impl SimBackend {
         })
     }
 
-    /// Create a file-backed `mmap` + optional Unix domain socket simulation backend.
+    /// Create a file-backed `mmap` model (shareable with another process) with an optional notification socket.
     pub fn with_shm_and_socket(
         shm_path: impl AsRef<Path>,
         sock_path: Option<PathBuf>,
@@ -244,7 +249,7 @@ impl SimBackend {
         Ok(())
     }
 
-    /// Execute one synchronous clock cycle of the 4-zone `silicon_elab_top` and `.obend` physical cores.
+    /// Advance the model by one "cycle": recompute the register values in software (not a simulation of the RTL).
     fn step_one_cycle(&mut self) {
         let cycles = self.shm.read_u64(csr::OBEND_CYCLE_COUNT).wrapping_add(1);
         self.shm.write_u64(csr::OBEND_CYCLE_COUNT, cycles);
@@ -389,9 +394,9 @@ impl SimBackend {
     }
 }
 
-impl FpgaHalBackend for SimBackend {
+impl FpgaHalBackend for MockBackend {
     fn backend_name(&self) -> &'static str {
-        "verilator-shm-sim"
+        "mock-register-model"
     }
 
     fn read_csr32(&self, offset: usize) -> Result<u32, FpgaHalError> {

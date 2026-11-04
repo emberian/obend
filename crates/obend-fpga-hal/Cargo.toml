@@ -2,7 +2,7 @@
 name = "obend-fpga-hal"
 version = "0.1.0"
 edition = "2021"
-description = "Unified Cloud-FPGA Hardware Abstraction Layer (Rung 1 Verilator SHM/Unix-socket daemon & Rung 3/4 AWS EC2 F2 vu47p BAR0 MMIO + 512-bit AXI4-Stream DMA + ICAP DPR)"
+description = "Host-side BAR0 register map for the obend hardware tier and an in-process software model of it (MockBackend); no hardware backend yet"
 license = "Apache-2.0"
 
 [dependencies]

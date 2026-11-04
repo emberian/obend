@@ -1,10 +1,11 @@
-//! `obend-silicon-sim` — Rung 1 Verilator & POSIX SHM/Unix-Socket Co-Simulation Runner.
+//! `obend-silicon-sim` — drives the `MockBackend` register-map model and prints its telemetry.
+//! It does not run any RTL (there is no Verilated model in this crate); see the crate docs.
 //!
 //! Usage:
 //!   obend-silicon-sim [--shm <path>] [--socket <path>] [--cycles <N>] [--dpr-test]
 
 use obend_fpga_hal::regs::{PackedNodeWord88, SiliconElabWireFrame};
-use obend_fpga_hal::sim_backend::SimBackend;
+use obend_fpga_hal::sim_backend::MockBackend;
 use obend_fpga_hal::ObendFpgaHal;
 use std::path::PathBuf;
 
@@ -41,10 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut hal = if let Some(shm) = shm_path {
-        let backend = SimBackend::with_shm_and_socket(shm, sock_path)?;
+        let backend = MockBackend::with_shm_and_socket(shm, sock_path)?;
         ObendFpgaHal::from_backend(backend)
     } else {
-        ObendFpgaHal::new_sim()?
+        ObendFpgaHal::new_mock()?
     };
 
     hal.verify_magic()?;

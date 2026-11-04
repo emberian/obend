@@ -1,21 +1,18 @@
-//! `obend-fpga-hal` — Unified 4-Rung Cloud-FPGA Hardware Abstraction Layer.
+//! `obend-fpga-hal` — the host-side register map (`regs`) and a software model of it (`MockBackend`).
 //!
-//! Provides a single trait (`FpgaHalBackend`) and unified controller (`ObendFpgaHal`)
-//! spanning:
-//! - **Rung 1 (`SimBackend`)**: POSIX 4 MiB shared memory (`mmap`) + Unix domain socket
-//!   Verilator co-simulation daemon (`obend-silicon-sim`),
-//! - **Rung 3 & Rung 4 (`AwsF2Backend`)**: AWS EC2 F2 (`vu47p` `xcvu47p-fsvh2892-2-e`)
-//!   BAR0 OCL MMIO (`/dev/fpga0`) + 512-bit AXI4-Stream DMA (`/dev/xdma0_{h2c,c2h}_0`) +
-//!   3-phase glitch-free ICAP Dynamic Partial Reconfiguration (`obend_macro_icap_dpr_tile`).
+//! One trait (`FpgaHalBackend`) and one controller (`ObendFpgaHal`). The only backend today is
+//! `MockBackend`: Rust code that computes what the registers would read. There is no Verilator
+//! co-simulation behind it and no AWS F2 backend (the previous `AwsF2Backend` was removed on
+//! 2026-11-04: it assumed an AXI4-Stream PCIS port and an `mmap` of `/dev/fpga0`, neither of
+//! which the F2 shell provides; see `hardware/README.md`). A hardware backend is added when a
+//! bitstream exists to talk to; the first physical target is the iCE40 (`hardware/ice40/`).
 
-pub mod aws_f2_backend;
 pub mod regs;
 pub mod sim_backend;
 
-use aws_f2_backend::{AwsF2Backend, AwsF2Config};
 use regs::{ctrl_bits, csr, AxiStream512Beat, SiliconElabWireFrame, OBEND_MAGIC_F20};
 use serde::{Deserialize, Serialize};
-use sim_backend::SimBackend;
+use sim_backend::MockBackend;
 use thiserror::Error;
 
 /// Errors returned by `obend-fpga-hal`.
@@ -63,7 +60,7 @@ pub struct IcapDprSwapReceipt {
     pub held_output_port0_during_isolation: u64,
 }
 
-/// Common trait implemented by both `SimBackend` (Rung 1) and `AwsF2Backend` (Rung 3/4).
+/// Backend trait; implemented by `MockBackend` (and by a hardware backend once one exists).
 pub trait FpgaHalBackend: Send + Sync {
     fn backend_name(&self) -> &'static str;
     fn read_csr32(&self, offset: usize) -> Result<u32, FpgaHalError>;
@@ -82,20 +79,17 @@ pub struct ObendFpgaHal {
 }
 
 impl ObendFpgaHal {
-    /// Construct an `ObendFpgaHal` backed by the in-process POSIX `mmap` Verilator simulation backend.
-    pub fn new_sim() -> Result<Self, FpgaHalError> {
-        let backend = SimBackend::new()?;
+    /// Construct an `ObendFpgaHal` over the in-process register-map model (`MockBackend`).
+    pub fn new_mock() -> Result<Self, FpgaHalError> {
+        let backend = MockBackend::new()?;
         Ok(Self {
             backend: Box::new(backend),
         })
     }
 
-    /// Construct an `ObendFpgaHal` backed by an AWS EC2 F2 (`vu47p`) hardware backend.
-    pub fn new_aws_f2(cfg: AwsF2Config) -> Result<Self, FpgaHalError> {
-        let backend = AwsF2Backend::open(cfg)?;
-        Ok(Self {
-            backend: Box::new(backend),
-        })
+    /// Alias of `new_mock` kept for `obend-gui` / `obend-node`; it has never been a simulator.
+    pub fn new_sim() -> Result<Self, FpgaHalError> {
+        Self::new_mock()
     }
 
     /// Wrap any `FpgaHalBackend` implementation.
@@ -105,16 +99,17 @@ impl ObendFpgaHal {
         }
     }
 
-    /// Auto-select `AwsF2Backend` if `OBEND_FPGA_BACKEND=aws-f2` and `/dev/fpga0` exists,
-    /// otherwise fall back cleanly to `SimBackend`.
+    /// The only backend is the register-map model. `OBEND_FPGA_BACKEND=aws-f2` is refused rather
+    /// than silently falling back, so a caller expecting hardware learns there is none.
     pub fn auto_connect() -> Result<Self, FpgaHalError> {
-        if std::env::var("OBEND_FPGA_BACKEND").as_deref() == Ok("aws-f2") {
-            let cfg = AwsF2Config::default();
-            if cfg.bar0_path.exists() {
-                return Self::new_aws_f2(cfg);
+        if let Ok(v) = std::env::var("OBEND_FPGA_BACKEND") {
+            if v != "mock" && v != "sim" {
+                return Err(FpgaHalError::Io(format!(
+                    "OBEND_FPGA_BACKEND={v}: no hardware backend exists in obend-fpga-hal (the AWS F2 backend was removed 2026-11-04; see hardware/README.md)"
+                )));
             }
         }
-        Self::new_sim()
+        Self::new_mock()
     }
 
     pub fn backend_name(&self) -> &'static str {
@@ -252,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_bar0_magic_and_physical_obend_cores_in_sim() {
-        let mut hal = ObendFpgaHal::new_sim().expect("SimBackend init");
+        let mut hal = ObendFpgaHal::new_mock().expect("MockBackend init");
         assert_eq!(hal.verify_magic().unwrap(), OBEND_MAGIC_F20);
 
         // Drive CleanroomTcadStack (port 0 = 4), LcDrivesStator (port 1 = 8), Cnc5AxisMill (port 2 = 6)
@@ -316,7 +311,7 @@ mod tests {
         assert_eq!(decoded.unify_worklist, frame.unify_worklist);
         assert_eq!(decoded.infer_seeds, frame.infer_seeds);
 
-        let mut hal = ObendFpgaHal::new_sim().unwrap();
+        let mut hal = ObendFpgaHal::new_mock().unwrap();
         let telem = hal.run_silicon_elab_frame(&frame, 4).unwrap();
         assert!(telem.kernel_accepted);
         assert!(telem.cam_allocs >= 1);
@@ -329,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_icap_dpr_3phase_glitch_free_swap_and_moved_pin_fallback() {
-        let mut hal = ObendFpgaHal::new_sim().unwrap();
+        let mut hal = ObendFpgaHal::new_mock().unwrap();
         hal.write_in_port(0, 4).unwrap();
         hal.step_cycles(1).unwrap();
         assert_eq!(hal.read_out_port(0).unwrap(), 700);
@@ -362,63 +357,6 @@ mod tests {
         assert!(receipt_fb.fallback_activated);
         let telem = hal.read_telemetry().unwrap();
         assert!(telem.dpr_fallback_active);
-    }
-
-    #[test]
-    fn test_aws_f2_backend_mock_device_mmio_xdma_and_bad_magic_rejection() {
-        let tmp_dir =
-            std::env::temp_dir().join(format!("obend_aws_f2_test_{}", std::process::id()));
-        let mut f2 = AwsF2Backend::open_mock_in_dir(&tmp_dir).expect("open mock AWS F2");
-        let cfg = f2.config().clone();
-
-        // Populate 2 sequential C2H beats and verify pull_dma_beats advances without rewinding
-        {
-            use std::io::Write;
-            let mut c2h_writer = std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&cfg.xdma_c2h_path)
-                .unwrap();
-            let mut b0 = [0u8; 64];
-            b0[0] = 0xAA;
-            let mut b1 = [0u8; 64];
-            b1[0] = 0x55;
-            c2h_writer.write_all(&b0).unwrap();
-            c2h_writer.write_all(&b1).unwrap();
-            c2h_writer.flush().unwrap();
-        }
-        let first_pull = f2.pull_dma_beats(1).unwrap();
-        assert_eq!(first_pull.len(), 1);
-        assert_eq!(first_pull[0].tdata[0], 0xAA);
-        let second_pull = f2.pull_dma_beats(1).unwrap();
-        assert_eq!(second_pull.len(), 1);
-        assert_eq!(second_pull[0].tdata[0], 0x55);
-
-        let mut hal = ObendFpgaHal::from_backend(f2);
-        assert_eq!(hal.backend_name(), "aws-f2-vu47p");
-        assert_eq!(hal.verify_magic().unwrap(), OBEND_MAGIC_F20);
-
-        hal.write_in_port(0, 200).unwrap();
-        let frame = SiliconElabWireFrame::new(0x2001, 0x2001, 0x0101, 256);
-        let telem = hal.run_silicon_elab_frame(&frame, 3).unwrap();
-        assert!(telem.total_cycles >= 3);
-        drop(hal);
-
-        // Corrupt BAR0 magic and verify AwsF2Backend::open fails closed with InvalidMagic
-        {
-            let mut bad_ap = sim_backend::PosixShmAperture::open_existing_mmio(&cfg.bar0_path).unwrap();
-            bad_ap.write_u64(csr::OBEND_MAGIC, 0xBAD0_BAD0_BAD0_BAD0);
-        }
-        let err = AwsF2Backend::open(cfg).err().expect("must reject bad magic");
-        assert!(matches!(
-            err,
-            FpgaHalError::InvalidMagic {
-                expected: OBEND_MAGIC_F20,
-                found: 0xBAD0_BAD0_BAD0_BAD0
-            }
-        ));
-
-        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 
     #[test]
@@ -480,7 +418,7 @@ mod tests {
             encode_lean_varint(hw.max_loose_bvar as u128, &mut lean_bytes);
         }
 
-        let mut hal = ObendFpgaHal::new_sim().unwrap();
+        let mut hal = ObendFpgaHal::new_mock().unwrap();
         let telem = hal.run_lean_wire_bytes(&lean_bytes, 4).unwrap();
         assert!(telem.kernel_accepted);
         assert!(telem.cam_allocs >= 1);
@@ -505,7 +443,7 @@ mod tests {
         assert!(SiliconElabWireFrame::from_axi_beats(&bad_hdr_beats).is_none());
 
         // 4. Out-of-bounds CSR access returns OutOfBounds error
-        let mut sim = SimBackend::new().unwrap();
+        let mut sim = MockBackend::new().unwrap();
         assert!(matches!(
             sim.read_csr64(regs::SHM_APERTURE_BYTES),
             Err(FpgaHalError::OutOfBounds(_))
@@ -516,7 +454,7 @@ mod tests {
         ));
 
         // 5. Digest mismatch during ICAP DPR triggers fallback (committed = false)
-        let mut hal = ObendFpgaHal::new_sim().unwrap();
+        let mut hal = ObendFpgaHal::new_mock().unwrap();
         let receipt_bad_digest = hal
             .perform_icap_dpr_hot_swap(
                 "corrupted_bitstream_slot",
