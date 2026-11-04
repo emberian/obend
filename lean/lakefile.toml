@@ -2,16 +2,19 @@ name = "obend"
 version = "0.0.1"
 defaultTargets = ["Obend"]
 
-# Two build tiers (2026-11-01). `lake build` builds tier 1, the library: every definition and proof
-# under `Obend/`. Tier 2 is the teeth (`Obend/Teeth/`: evaluation fixtures, mutation teeth, the legacy
-# leaves) and the axiom census (`Obend/Census.lean`); it is run before a push as
-# `lake build Obend.Census Teeth`. Nothing in tier 1 imports tier 2.
+# Two build tiers (2026-11-01; apps and tests moved to tier 2 on 2026-11-04). `lake build` builds
+# tier 1, the library: every definition and proof under `Obend/` except `Obend/Apps/` and `Obend/Teeth/`.
+# Tier 2 is the teeth (`Obend/Teeth/`: evaluation fixtures, mutation teeth, the legacy leaves), the
+# applications (`Obend/Apps/`, concrete `.obend` programs elaborated at compile time), the test suites
+# under `tests/` (`Tests`) and the census (`Obend/Census.lean`); it is run before a merge on a build box
+# as `lake build Obend.Census Teeth Tests`. Nothing in tier 1 imports tier 2.
 # Lake globs cannot exclude, so tier 1 names each top-level module and directory of `Obend/` except
 # `Teeth` and `Census`; the census refuses a module under `Obend/` that neither tier builds.
 [[lean_lib]]
 name = "Obend"
+defaultFacets = ["leanArts", "shared"]
 globs = [
-  "Obend", "Obend.Analysis.+", "Obend.Apps.*", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Consensus.*", "Obend.Fold.*", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main",
+  "Obend", "Obend.Analysis.+", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Consensus.*", "Obend.Fold.*", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main",
   "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Hardware.*", "Obend.Judge.*",
   "Obend.Law.*", "Obend.Leaf.+", "Obend.Lower.+", "Obend.Ledger", "Obend.Ledger.*", "Obend.Logic.+", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
   "Obend.Vault.*", "Obend.FFI", "Obend.FFI.*", "Obend.Format.+", "Obend.Stdlib",
@@ -26,7 +29,15 @@ roots = ["Programs"]
 
 [[lean_lib]]
 name = "Teeth"
-globs = ["Obend.Teeth.+", "Obend.Census"]
+globs = ["Obend.Teeth.+", "Obend.Apps.+", "Obend.Census"]
+
+# Tier 2, the test suites (2026-11-04). Until this target existed the 30 files under
+# `tests/{metasystem,silicon_elab,rehydration}` (308 theorems, 157 `#tooth` commands) belonged to no
+# build target and were never elaborated.
+[[lean_lib]]
+name = "Tests"
+srcDir = "tests"
+globs = ["metasystem.+", "silicon_elab.+", "rehydration.+"]
 
 # Lane B (2026-10-30): the declaration-level obligation journal. `Journal.Export` walks the built
 # environment; `Journal.Journal` reads two exports as slots. The tool does not `needs` the `Obend`
@@ -43,6 +54,15 @@ root = "Main"
 
 # Lane A (2026-10-30): the CLI of SHIP §1, rooted at the library module `Obend.Main` (a root named `Main`
 # would collide with the journal executable). `lake exe obend check FILE.json` / `lake exe obend run FILE.json`.
+# fpga-silicon lane (2026-11-04): regenerates every checked-in `.sv` from its Lean definition; the
+# verify scripts compare bytes. Outside the library tier because it imports `Obend.Apps.*`.
+# `lake build obend-emit-sv`.
+[[lean_exe]]
+name = "obend-emit-sv"
+srcDir = "tools/emitsv"
+root = "EmitSv"
+supportInterpreter = true
+
 [[lean_exe]]
 name = "obend"
 root = "Obend.Main"

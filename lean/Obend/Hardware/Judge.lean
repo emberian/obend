@@ -118,7 +118,7 @@ def badLoopRtlModule : RtlModule where
   inputNames := ["in0"]
   wires      := [⟨0, "w0", .alu .add (.wireRef 0) (.const 1#64)⟩]
   regs       := []
-  outputs    := [⟨"out0", .wireRef 0⟩]
+  outputs    := [{ name := "out0", expr := .wireRef 0 }]
 
 theorem badLoopRtlModule_refused :
     checkRtlSynth 0 "bad_loop_mod" badLoopRtlModule =
@@ -425,7 +425,7 @@ def decodeRtlSynthCert (s : String) : Except String RtlModule := do
     inputNames := [inputPort]
     wires      := wires
     regs       := regs
-    outputs    := [⟨outName, .wireRef outWire⟩]
+    outputs    := [{ name := outName, expr := .wireRef outWire }]
   }
 
 /-- Encode a module name `modName` into a canonical JSON wire object string for `hw-rtl-synth@1` / `rtl-synth@1`. -/
@@ -584,7 +584,7 @@ def normalizeRtlModuleForWire (m : RtlModule) : RtlModule :=
     m.inputNames.length == 1 &&
     m.wires.all isFlatWireAssign &&
     (match m.outputs with
-     | [⟨_, .wireRef w⟩] => (m.wires.isEmpty && w == 0) || w < m.wires.length
+     | [⟨_, .wireRef w, _⟩] => (m.wires.isEmpty && w == 0) || w < m.wires.length
      | _ => false)
   if alreadyFlat then
     m
@@ -616,7 +616,7 @@ def normalizeRtlModuleForWire (m : RtlModule) : RtlModule :=
     , inputNames := [inPort]
     , wires      := flatWires
     , regs       := flatRegs
-    , outputs    := [⟨outName, .wireRef outWire⟩] }
+    , outputs    := [{ name := outName, expr := .wireRef outWire }] }
 
 /-- Encode an `RtlModule` into a canonical JSON wire certificate string for `hw-rtl-synth@1` / `rtl-synth@1`,
 inverting `decodeRtlSynthCert`. -/
@@ -625,8 +625,8 @@ def encodeRtlSynthCert (m : RtlModule) : String :=
   let inputPort := match mNorm.inputNames with | h :: _ => h | [] => "arg"
   let (outName, outWire) :=
     match mNorm.outputs with
-    | ⟨n, .wireRef w⟩ :: _ => (n, w)
-    | ⟨n, _⟩ :: _          => (n, 0)
+    | ⟨n, .wireRef w, _⟩ :: _ => (n, w)
+    | ⟨n, _, _⟩ :: _          => (n, 0)
     | []                   => ("out", 0)
   let wireFields := encodeRtlWiresAux 0 mNorm.wires
   let regFields  := encodeRtlRegsAux 0 mNorm.regs
@@ -710,7 +710,7 @@ def goldenFlatRtlModule : RtlModule where
     , { wireIdx := 1, name := "w1", expr := .alu .add (.wireRef 0) (.const 1#64) } ]
   regs       :=
     [ { regIdx := 0, name := "reg_y", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .wireRef 1 } ]
-  outputs    := [⟨"out_y", .wireRef 1⟩]
+  outputs    := [{ name := "out_y", expr := .wireRef 1 }]
 
 /-- Roundtrip theorem for `encodeRtlSynthObj` / `decodeRtlSynthObj`. -/
 theorem decodeRtlSynthObj_encodeRtlSynthObj_roundtrip :

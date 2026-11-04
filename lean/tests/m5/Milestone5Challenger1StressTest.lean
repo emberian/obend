@@ -396,7 +396,7 @@ def test_complex_rtl_dag_projection : Bool :=
       ⟨1, "w1", .inputPort 0⟩
     ]
     regs := []
-    outputs := [⟨"out", .wireRef 0⟩]
+    outputs := [{ name := "out", expr := .wireRef 0 }]
   }
   let cInvalid := projectCircuit "bad_alu" mInvalid
   let okInvalid := match cInvalid with

@@ -372,7 +372,7 @@ def reduceHwCamIota?
     (cam : HwExprCAM)
     (recSymIdx : Nat)
     (argStack : List CamHandle) : Option (CamHandle × HwExprCAM) := do
-  let .constEntry recName recUs ← cam.symbols[recSymIdx]?
+  let .constEntry recName recUs ← cam.symbols[recSymIdx]? | none
   let r0 ← cam.recRules.find? (fun r => r.recName == recName && decide (argStack.length > r.numParams))
   let prefixArgs := argStack.take r0.numParams
   let majorRawH ← argStack[r0.numParams]?
@@ -2221,7 +2221,7 @@ Verifies that `emitSiliconElabFabricSVLines` emits all 5 Silicon Elaborator modu
 (`obend_zone1_expr_cam`, `obend_zone2_noc_unifier`, `obend_zone3_discr_lut`,
 `obend_zone4_kernel_fsm`, `silicon_elab_top`) together with the 2 hardware macro modules
 (`obend_macro_noc_router_xy`, `obend_macro_icap_dpr_tile`). -/
-theorem emitSiliconElabFabricSV_five_modules_sound :
+example :
     emitSiliconElabFabricSVLines.contains "module obend_macro_noc_router_xy (" = true ∧
     emitSiliconElabFabricSVLines.contains "module obend_macro_icap_dpr_tile (" = true ∧
     emitSiliconElabFabricSVLines.contains "module obend_zone1_expr_cam (" = true ∧

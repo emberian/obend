@@ -29,7 +29,7 @@ def test_project_circuit : Bool :=
     inputNames := ["a", "b"]
     wires      := [⟨0, "w0", .alu .add (.inputPort 0) (.inputPort 1)⟩]
     regs       := []
-    outputs    := [⟨"sum", .wireRef 0⟩]
+    outputs    := [{ name := "sum", expr := .wireRef 0 }]
   }
   let c := projectCircuit "cell_rtl_0" m
   match c with
