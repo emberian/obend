@@ -126,16 +126,14 @@ Why can `Obend` programs be reasoned about *before* their open slots are bound, 
 
  complemented by **`Obend/Analysis/Impact.lean`** (`impact_complete`), which statically computes a sound over-approximation of every transitive dependency of a slot mutation across a Vault.
 
-### 4.2 `Leaf`, `BendTT`, and the First Futamura Projection (`Obend/Leaf/`)
+### 4.2 `Leaf`: flattening, books, folding, and the specialization slot (`Obend/Leaf/`)
 
 In classic OO or capability systems, composing layers of objects/wrappers introduces dynamic dispatch (`vtable` indirection) and environment closures at every boundary. `Obend/Leaf/` eliminates both:
 
 1. **Layer Flattening (`Obend/Leaf/Flatten.lean`, `Residual.lean`)**: Given a composition of layers and pinned slot states, `Flatten.flatten` partially evaluates the composition with respect to known slot bindings. `flatten_sound` proves observational equivalence; `vtable_clean` proves **zero residual vtable/dispatch nodes** remain in the specialized term.
-2. **Supercombinator Book Emission (`Obend/Leaf/Emit.lean`)**: Lambda-lifts residual terms into a flat `Leaf.Book` of top-level supercombinator definitions (`book_sound`).
-3. **Affine Interaction/Supercombinator Nets (`Obend/Leaf/BendTT.lean`)**: Lowers `Leaf.Book` to `BendTT` net rules, preserving `.one` linear wire conservation (`book_to_bendtt_sound`) and erasing `.zero` proof wires (`zero_wires_erased`).
-4. **Slot-Guarded Specialization (`Obend/Leaf/Specialize.lean`)**: `specSlot` attaches a `Candidate.book` specialization to a live slot alongside the `Supports` list of pinned slot hashes it depends on:
-   - `specialize_choice`: Any specialized candidate whose `Supports` match the live environment reduces to the exact same value as the unspecialized `.machine` term.
-   - `moved_pin_blocks`: The instant any supporting slot mutates (`Epoch` advances or `Hash` changes), the guard fails and execution falls back in $O(1)$ to the unspecialized `.machine` without deoptimization bugs.
+2. **Book Emission (`Obend/Leaf/Emit.lean`)**: the vtable becomes a `Leaf.Book`, one closed first-order definition per member plus one dispatcher `Book.link` that ties the knot (`book_sound`: every member of the linked book is `≈b` the member of the object). The book is a `Core4` term run by the demand machine and the input of `Obend/Hardware/Compiler.lean`; there is no other backend. (A module named `BendTT.lean` claimed a translation to Bend's affine calculus plus interaction-net and C emitters; none translated anything and all were deleted on 2026-11-04, `review/EXPERT-compiler-runtime-20261103.md` §2.2. Bend is not a target.)
+3. **Static folding (`Obend/Leaf/Static.lean`)**: `dataPinSpecialize` is four passes of a bottom-up constant folder, each a reduction in context (`ahead_dataPinPass`), so `t ≈b dataPinSpecialize t`; `specializeBook B pins` substitutes the `self.m` reads that `pins` fix into every definition and folds. The per-definition equivalence is proved (`specializeDefCode_bequiv_and_halts`); the equivalence of the specialized book's link with the original's is open. This is the whole of "specialization": there is no self-applicable specializer in `Core4` and no Futamura projection beyond the first.
+4. **The specialization slot (`Obend/Leaf/Specialize.lean`)**: `specSlot` holds `[Candidate.book name C, Candidate.machine]`; a book's supports are the **whole code** of every layer it flattened and of the composition, compared by structural equality (`Obend.Law.termEq`) at the view. `specialize_choice`: the stored book is kept exactly while every support holds, else the machine. `moved_pin_blocks`: a support that does not hold blocks the book and the read names it. The choice is made once, before a run (`obend specialize`); the machine carries no guard, nothing is invalidated mid-run, and nothing is hashed. The finer `Candidate.slotBook` exists and is not selected.
 
 ---
 
@@ -149,7 +147,7 @@ In classic OO or capability systems, composing layers of objects/wrappers introd
         │ Obend/Lower/Fragment.read             │ Obend/Lower/Reflect.reflectTerm
         │ (lower_sound, lower_checks)           │ + Transport.lean + Lean 4 Tactics
         ▼                                       │
-  Core4 Term ──► Leaf.Book ──► BendTT ──► Obend/Hardware/ReductionMachine
+  Core4 Term ──► Leaf.Book ──► Obend/Hardware/Compiler (RTL)
 ```
 
 ### 5.1 Outbound: Lean Kernel `Expr` $\to$ `Core4` (`Obend/Lower/Fragment.lean`)
