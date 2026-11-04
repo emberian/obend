@@ -1,5 +1,5 @@
 /-
-# The axiom census: every constant of the library, one check
+# The census: every constant of the library, one check; every theorem, one classification
 
 Imports every file under `Obend/` and ends in `#assert_axioms_tree` (`Obend/AssertAxioms.lean`):
 the build fails if any constant declared in the library, public or private, rests on `sorryAx` or
@@ -12,6 +12,19 @@ theorem whose body is not exposed only as an axiom, which the census would refus
 fixes the second and not the first. A plain file imports every module with its private part.
 `Obend.lean` does not import this file. It is tier 2 with the teeth: `lake build Obend.Census Teeth`
 (`lakefile.toml`), run before a push; `lake build` does not build it.
+
+## The classification (2026-11-04)
+
+Before the axiom check the census prints, per directory, what replaced the headline counts: how
+many theorems quantify over something (`universal`), how many are closed statements (`closed`: a
+fixture, decided on concrete data), how many `example`s and how many `#tooth` commands the
+directory's files hold (`Obend.AssertAxioms.theoremCensus`). No totals, and none belong in a
+document; the number that matters is `closed`, and after the triage below it should only fall.
+The closed theorems still carrying the keyword are listed by name: each is either consumed by a
+proof, a `#tooth` or an `#assert_compiled` (and says so in a `-- fixture kept` line) or is the next
+conversion. The documents census (`#check_docs_census` for paths and `Obend.*` names,
+`#docs_census` for every backticked identifier against the environment, `Obend/Tactic/DocsCensus.lean`)
+runs last: a governed root document that cites a name the tree does not have stops the merge.
 
 ## The time budget (review/DECISIONS-20261031.md, 2026-11-04)
 
@@ -593,6 +606,29 @@ run_cmd do
       unbuilt := unbuilt.push module
   unless unbuilt.isEmpty do
     throwError "census: {unbuilt.size} modules are in neither tier (add a glob to the `Obend` or the `Teeth` library in lakefile.toml): {unbuilt.toList}"
+  -- Per-directory file facts: `example`s and `#tooth` commands, by the directory the module reports under.
+  let mut examples : NameMap Nat := {}
+  let mut teeth : NameMap Nat := {}
+  for file in sources do
+    let module := (file.withExtension "").components.foldl Name.str .anonymous
+    let dir := Obend.AssertAxioms.directoryOf module
+    let text ← IO.FS.readFile file
+    for line in text.splitOn "\n" do
+      let l := line.trimAscii.toString
+      if l.startsWith "example " || l.startsWith "example:" || l == "example" then
+        examples := examples.insert dir (examples.getD dir 0 + 1)
+      if l.startsWith "#tooth " then
+        teeth := teeth.insert dir (teeth.getD dir 0 + 1)
+  -- The classification: no totals, one line per directory, the closed theorems by name.
+  let rows ← liftTermElabM Obend.AssertAxioms.theoremCensus
+  let mut lines : Array MessageData := #[]
+  let mut closedNames : Array Name := #[]
+  for (dir, universal, closed) in rows do
+    lines := lines.push m!"{dir}: {universal} universal theorems, {closed.size} closed theorems, {examples.getD dir 0} examples, {teeth.getD dir 0} teeth"
+    closedNames := closedNames ++ closed
+  logInfo m!"census: every module under Obend/ is imported here and belongs to a tier.\n{MessageData.joinSep lines.toList "\n"}"
+  unless closedNames.isEmpty do
+    logInfo m!"census: closed theorems still declared with `theorem` (each consumed by a proof, a #tooth or an #assert_compiled, or the next conversion): {closedNames.toList}"
   -- The heartbeat baseline of tier 1 (see the header). Paths as `walkDir "Obend"` reports them; the
   -- values of every `set_option maxHeartbeats N` (file-level or `… in`) in that file on 2026-11-04.
   let heartbeatBaseline : List (String × List Nat) :=
@@ -627,3 +663,4 @@ run_cmd do
 
 #assert_axioms_tree
 #check_docs_census
+#docs_census
