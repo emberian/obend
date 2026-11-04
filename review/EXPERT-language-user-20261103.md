@@ -360,3 +360,71 @@ habit, who wants laws on their own pages — or the one on the current README? T
 "the first" and every document written since Oct 31 answers "the second". Until that is decided no
 one can say which of the two unfinished halves (the garden's daily verbs, or the claim/judge/notebook
 tower) is the one to finish, and the swarms will keep landing on the louder one.
+
+## What landed (2026-11-04)
+
+Ember's answer (`review/DECISIONS-20261031.md`, 2026-11-04): the frame is research into the
+consequences of the design decisions; the user is a lens, never the overriding frame. The report
+above became the plan, read through that answer. Built and checked on bb2 in `~/lane-frame` (a copy
+of the verify tree overlaid with HEAD `85e6fd5` and these files; `swarm-build lake build obend`,
+then `Obend.Vault Obend.Doc Obend.Spec Obend.Law Obend.Ledger Obend.Vault.Escrow Obend.FFI.Bridge
+Obend.Teeth.Spec.LawCompileTeeth Obend.Teeth.Law.LawJudgeTeeth Obend.Teeth.Vault Obend.Analysis.Impact
+Obend.Elab.Workbook Obend.Logic.Program`, 285 jobs, 0 errors; the whole-library target `Obend` does
+not build at HEAD on bb2 for a reason outside this lane: `Obend/Apps.lean` is named and absent).
+Commits, all unsigned:
+
+- `fcad2f8` **law: `monotone(F)` holds at a first write.** `Spec/Law.lean`, `Spec/LawCompile.lean`,
+  `Spec/Proofs/LawCompile.lean` (not in this lane's list; the proof moves with the definition),
+  `Spec/LawDial.lean`. S4's birth defect. Teeth `first_write_teeth`/`adopt_teeth` assert the new
+  verdict.
+- `8efc555` **logic: the object finder reads a seed written as a `def` call.** `Logic/Program.lean`:
+  `seedRecord`, `decodeProgram`, `object_bequiv_of_operands_seed`. S3's reachability gap: on bb2,
+  `obend prove stdlib/physical/Cnc5AxisMill.obend Cnc5AxisMill.Uncompensated5AxisMill.volumetric_decomposition
+  --object compensatedErrorAt6Dm` → `checked … by rewrite@1 (3 steps)`; `apps/sovereign-drex` and
+  `apps/silicon-kernel-verilator` list their claims at their objects (`unchecked`, as restatements
+  the rewriter does not reach through a 0-arity member). `FFI/Bridge.lean`'s private copy
+  (`decodeProgramWithSeed`) is now redundant; its owner can call `Program.findObject`.
+- `1f3d693` **vault: aliases, heading embeds, deletions and renames, refusals said at every open.**
+  `Doc/Render.lean` (`target` drops `|alias`; S-2's heading embed kept), `Doc/Section.lean` and
+  `Vault/Page.lean` (S-2, kept as a pair), `Vault/Store.lean` (`tombs`, `forgetMissing`, `tombLine`),
+  `Vault/Json.lean`, `Vault/Cli.lean` (`forgottenLines`, `unbornLines`, `status` of a tomb or of no
+  page, exit 2). S5 and S6. `tests/vault/WALKTHROUGH.md` §7 is the evidence, recorded on bb2 and
+  read: alias link current; `![[Beta#Results]]` behind after the heading changes while
+  `[[Beta#Results]]` stays current; `mv Delta.md Theta.md` → `Delta: renamed to Theta (same page,
+  v1; links to Delta still hold)` and Gamma's `[[Delta]] ✓ current: Theta exists`; `rm Theta.md` →
+  deleted, `Gamma: [[Delta]] (link) is missing`, second open `nothing changed`; the file returning
+  revives it; `rm journal/Monday.md` → `its file is gone, but it is under the law journal/_kind:
+  brief: not deleted, written back`; a page born under `monotone(words)` and refused when it shrinks;
+  `Lambda: still not born: …` at the second open. 34 steps ok; the ledger walkthrough 24 ok.
+- `cfd6bce` **cli: a directory is a package; manifests resolve from anywhere; a file with imports
+  names the fix.** `Main.lean` (S-2's auto-detecting `packageOfSpec` kept; `packageOfObendDir`
+  rewritten with dependency order and import locks; `resolveSourcePath`/`resolvedSpec`; the single-
+  file refusal; usage), `tests/run-workspace.py` (every `apps/` directory), the two S-6 world
+  programs kept. S1's 24 non-checking programs: 16 now check as directories or through their
+  manifests; the 8 with hex literals parse with a current build; of the eight app directories four
+  accept and four (`foc-hil`, `obend-risc`, `sdr-ft8`, `zk-ntt`) are refused by the front end with
+  `a law belongs to the package's entry module; X is imported and declares N law(s)`, the programs'
+  own defect, for their owners. `run-workspace.py` 42/42, `run-obend-source.py` 30/30, 71/71,
+  161/161, `run-logic.py` 20/20, `run-leaf.py` 14/14, `run-receipts.py` 31/31 on bb2 (32 on the
+  Mac: one check runs only where `cadical` is installed).
+- `7bc9190` **obend-gui: the Lean session opens only where needed; subcommands say what they do.**
+  `crates/obend-gui/src/main.rs`, `tests/challenger_gui_cli.rs`. S1's segfault: the crash was in
+  `ObendSession::new()` run before the subcommand; `viewport` and `help` no longer touch Lean (ran on
+  bb2); `run`→`eval-bytes` (an FFI smoke test, said so), `inspect` removed. The suspended lane's
+  +3,972-line GUI diff is reverted (5 red tests under the stub FFI; HEAD green:
+  `cargo test -p obend-gui` 7+6+1+10 ok). **Not fixed**: why the native session itself segfaults on
+  the Mac. INFERRED from `crates/obend-ffi/src/pool.rs:9-18` and `lean/c/obend_bridge.c:28-50`: the
+  Rust side calls `lean_initialize_thread()` before any `lean_initialize_runtime_module()`; the C
+  bridge initialises the runtime only inside `obend_session_init`. For the FFI owner.
+- `3ccc30d` **docs.** `AMBITION.md` rewritten in the research frame with "What this is not", the
+  stranger's workflow as the measure of a subsystem, the user stories as lenses, no counts.
+  `README.md` a draft in that frame, marked for ember to voice, naming only what the built binary
+  does. `THESIS.md` without counts and without `suggestMultiField_admits`.
+- `review/GEMINI-HANDOFF-20261103.md` §Adjudications: this lane's calls on its dirty files.
+
+Not done, for the record: `obend judge` (package level) still names the refusing law without a
+"would pass"; `obend check` output is still one JSON object per declaration; `prove` still certifies
+restatements only (by design, now said in README); a deletion of a page under a kind's laws is
+refused rather than judged (a deletion is not yet an occasion the law fragment can speak about); the
+tutorial's `bun docs/tutorial/run.ts` lines are unchanged (the runner substitutes `obend run`; the
+prose still points at minidregg); no `.obnb` example exists.

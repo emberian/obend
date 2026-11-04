@@ -136,3 +136,89 @@ Item 1 is done. All three commits are unsigned (1Password refused).
 Warm clean tree for the next pickup: `bb2:~/claude-verify-20261103/obend`. It is not a git repo; its content equals `dd865d6`, and its `.lake` was built from scratch. To verify one lane, rsync that lane's files over a copy of it, never over `~/obend`.
 
 Not started: item 2 (S-1 first).
+
+## Adjudications
+
+Each lane records, for the dirty files it owns, whether it kept or reverted them and why.
+
+### language-user lane (2026-11-04), files it owns
+
+- `AMBITION.md` (S-2 rewrite, +201/-): **replaced**. The S-2 text was the four-realm brochure; rewritten in the research frame per ember's 2026-11-04 answer (`review/DECISIONS-20261031.md`), "What this is not" restored from `26f3ce8`, counts out.
+- `README.md` (S-2, counts 479→480 and two names): **replaced** by a draft in the same frame (marked as a draft for ember to voice); the counts and the quickstart commands the binary lacks are gone.
+- `lean/Obend/Main.lean` (S-2: `packageOfSpec` auto-detects `.obend` files, directories and JSON specs; `--package` optional): **kept**. It is the mechanism that lets `obend check apps/NAME` check the 16 import-using programs; built and run on bb2 (see `review/EXPERT-language-user-20261103.md` §What landed). Added on top: a single file with imports is refused naming `obend check DIR`; `judge`/`admit`/`check DIR` in the usage text.
+- `lean/Obend/Doc/Render.lean`, `lean/Obend/Doc/Section.lean` and their pair `lean/Obend/Vault/Page.lean` (S-2: heading transclusion `![[P#Heading]]`, `renderTranscludedAt`, `atomText` for fields and cells): **kept** as a set (Page.lean is not this lane's file but Section.lean's `atomText_eq` in Page.lean does not build without it). Added on top: `[[P|alias]]` display text in `target`.
+- `lean/tests/obend-source/world/physical/{Cnc5AxisMill,LcDrivesStatorUsd}.obend` (S-6: mirrors of the `stdlib/physical` versions): **kept**; `run-obend-source.py` passes with them (161/161 preview cohort).
+- `crates/obend-gui/src/{apps,fpga,lib,server,viewport}.rs`, `tests/workbench_server_test.rs` (+3,972/-718, S-8 and WS-4C-2), `tests/fpga_and_apps_test.rs` (new): **reverted to HEAD**. On bb2 with the stub FFI the dirty tree failed 5 tests (3 `verified` assertions on the Lean bridge, the S-8 membranes and viewport deliverables); HEAD with this lane's `main.rs` passes all GUI targets (`cargo test -p obend-gui`: 7+6+1+10 ok). The diff is saved as `obend-gui-S8.patch` with the new test file beside it in this lane's scratchpad and is byte-identical to `bb2:~/obend` per §2; nothing in it was consumed by a workflow and the council's §1.6 finding about the bridge stands.
+
+## Adjudications
+
+### fpga-silicon lane (2026-11-04)
+
+Base for the lane build is HEAD `85e6fd5` (bb2 `~/claude-verify-20261103/obend`); a "keep" below means the dirty
+file was carried into the lane and built, a "revert" means `git checkout HEAD --` on the Mac. Every reverted
+file's dirty content survives byte-identical in `bb2:~/obend` (handoff §2), so nothing is lost by reverting.
+
+| file | call | why |
+|---|---|---|
+| `lean/Obend/Hardware/HDL.lean` | keep, then extended | S-5's transitive-wire CDC (`checkRegCdcWithWires`, `cdcSafe_no_unsynchronized_crossing_withWires`) is a real fix; the lane added port widths, per-domain clocks and the two-flop gate on top |
+| `lean/Obend/Hardware/Judge.lean` | revert, then patched | S-5's +311 (reset-kind/extra-port wire format) was unbuilt; HEAD needed only the `OutputPort` constructor updates for the new `width` field |
+| `lean/Obend/Hardware/VerilateRunner.lean` | revert, then rewritten | the dirty +659 was the second `silicon_elab_top` string literal; both literals are gone now |
+| `lean/Obend/Lower/SiliconElabFabric.lean` | revert, then one-line fix | the dirty +1290 (`hwCamIsDefEq`, projection telescopes, `#tooth`) depends on the dirty `Lower/ExprCAM` + `LeanKernel` (S-3, not this lane); HEAD did not build either (`let .constEntry … ← … ` with no fallback, line 375) and is fixed with `| none` |
+| `lean/Obend/Hardware/{Compiler,Synth,Retiming,Silicon,ReductionMachine,WaferSpace,TapeoutPipeline}.lean` | revert | S-5 export-attribute shuffles and the derive-LVS-from-BELs additions; the latter is the "LVS passes by construction" pattern the expert report names (§3.9); `Silicon.lean`'s DSP C-register fix looks right and should be re-applied by whoever next touches it |
+| `lean/Obend/Hardware/RF.lean` | revert | S-4 half-done; not on the bitstream path |
+| `lean/Obend/Hardware/OpenUSD.lean` | revert | S-6 half-done; now the CAD lane's file (panel diff §2), left at HEAD for them |
+| `lean/Obend/Hardware/UserspacePhysical.lean` | revert | S-6's `elabImportAppObend` consolidates `#import_obend` into the wrong home; ember chose `Elab/Workbook` |
+| `hardware/sim/silicon_elab_top.sv`, `hardware/aws-f2/*` | deleted | duplicates / unbuildable interface (`hardware/README.md`) |
+| `hardware/rust-ffi/{Cargo.toml,src/lib.rs}` | keep, unverified | S-6 octree fix + `[workspace]`; physics lane's area, not built by this lane |
+| `crates/obend-fpga-hal/src/{aws_f2_backend,regs,sim_backend}.rs` | superseded | F2 backend removed; `SimBackend` renamed `MockBackend` and documented as a software model |
+| `apps/zk-ntt/verilator/{zk_ntt_coproc.sv,zk_ntt_tb.cpp,zk_ntt_lec.smt2,verify_zk_ntt.sh}` | keep, relabelled | WS-4B-2's canonicalisation (`gl_canon`) is an improvement; the `.sv` is now headed "hand-written reference RTL" and the `.smt2` "hand-written property check" |
+| `apps/sovereign-drex/verilator/sovereign_drex_batch_top.sv` | keep, pending byte gate | emitted-style replacement of a hand-written file; `verify_sovereign_drex.sh` now compares it with `obend-emit-sv drex` |
+| `apps/sovereign-drex/verilator/verify_sovereign_drex.sh` | keep | binary path fix |
+| `apps/fidget-cam/verilator/{fidget_impeller_voxel_cam.sv,fidget_voxel_tb.cpp,fidget_cam_lec.smt2}` | revert | paired with the dirty `Apps/FidgetCam.lean` (CAD lane / Apps gate); the byte gate re-syncs the `.sv` when that lands |
+| `apps/silicon-kernel-verilator/verilator/{silicon_elab_top.sv,sim_main.cpp}` | superseded | the `.sv` is now the emitter's text; the harness reads a Lean-generated golden |
+| `apps/silicon-kernel-verilator/verilator/Makefile` | keep | portable verilator lookup |
+| `SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md` | keep, then rewritten | S-2's name fixes, then §1.4, §1.5, §2.2, §3 rewritten to describe what exists |
+| `lean/tests/m5/{HardwareProjectionTest,Milestone5Challenger1StressTest}.lean` | not dirty; one-token edits | `OutputPort` gained a defaulted `width`; `⟨name, expr⟩` became `{ name, expr }` |
+
+## Adjudications (compiler-runtime lane, 2026-11-04)
+
+Dirty files this lane owns or was asked to read, from Gemini's S-1 and S-3 lanes; each call is
+keep or revert against `85e6fd5`, with the reason. "Revert" means `git checkout HEAD -- <file>`
+in the shared tree; nothing of Gemini's was kept elsewhere.
+
+| file | Gemini's change | call | why |
+|---|---|---|---|
+| `lean/Obend/Leaf/BendTT.lean` | `@[expose]` per def; +400 lines: affine reducer, interaction-net list emitter, C99 string emitter | **deleted** (whole module) | Bend is retired (decision 2026-11-04); the emitters produced text nothing could run (`EXPERT-compiler-runtime` §2.2); S-7's log had it red at `emitBendNetToC_wf` |
+| `lean/Obend/Leaf/Futamura.lean` | `@[expose]` per def; +300 lines: `termRedexWeight` monotonicity (§12) | **replaced** | rebuilt from HEAD as `Obend/Leaf/Static.lean` without the self-application sections; the weight section depended on Gemini's red `Specialize.lean` additions and measured a syntactic rank, not a cost |
+| `lean/Obend/Leaf/Specialize.lean` | `@[expose]` per def; +294 lines `termRedexWeight`, `checkSpecCostMonotone` | **revert** | red on bb2 at `:791` (rfl ×4) and `:913` (omega) in S-1's own last build; the measure is a `max` of constructor ranks and cannot see the duplication the folder causes, so it is not a cost gate. Header rewritten afterwards (pins are whole-term equality decided before the run) |
+| `lean/Obend/Core/Code.lean` | `pureCore4PrimitiveRules`/`word64TargetPrimitiveRules` split, `checkerEdition` bumped to 2026-11-03 C3, primitive clause in `version_fixes_codecs`, dropped `import all Core.Check` | **revert** | the split was the premise of the "revert to 10 primitives" plan Ember declined; bumping the checker edition changes every quotation's `encodingVersion` for a partition nothing consumes |
+| `lean/Obend/Core/Term.lean` | +162: `Primitive.isPureCore4`, `Word64Prim`, `purePrimitiveResult`, `Term.isPureCore4`, `add64`…`qmul32Nonneg`, `core4_pure_primitives_count = 10` | **revert** | same premise; a second primitive evaluator beside `primitiveResult` is "two of everything" in the one file that must not grow; the counting theorems are fixtures. Primitives stay as decided |
+| `lean/Obend/Core/Nominal.lean` | +98: re-exports of the Term.lean section under a `Word64` kind | **revert** | depends on the Term.lean section |
+| `lean/Obend/Core/Check.lean`, `Bidirectional.lean`, `MachineFast.lean` | `@[expose] public section` → `public section` with per-def `@[expose]`; `import all Core.Check` dropped | **revert** | no theorem content; unbuilt in combination with anything; the exposure set is what `module` consumers and the `#print axioms` guards in `MachineFast` were tuned against. Worth doing deliberately later, one file per build |
+| `lean/Obend/Core/Proofs/TickCost.lean` | `cost_indexed_completeness` renamed `fragment_cost_indexed_completeness` with a scope note; `GeneralCostIndexedCompleteness` stated as an open `Prop`; alias kept | **keep** | honest and correct: the bound is on `InFragment` only and the general statement is open (`EXPERT-compiler-runtime` §2.5). Built green in `~/lane-compiler` |
+| `lean/Obend/Equiv/Behaviour.lean` | `REquiv` (`≈r`) named as the reflective equivalence, `BEquiv` an `abbrev` of it; per-def `@[expose]` | **keep** | `Quote.lean` already said Behaviour's `≈b` is the reflective one; the name now agrees. Built green with every importer (Leaf, Lower, Teeth) |
+| `lean/Obend/Equiv/Quote.lean` | `PureBEquiv := Observed .b`, `requiv_implies_pureBEquiv`, strictness example; per-def `@[expose]` | **keep** | the ladder stated with its own names; built green |
+| `lean/Obend/Equiv/Cost.lean` | per-def `@[expose]` only | **keep** | built green |
+| `lean/Obend/Lower/LCNF.lean` | +250: `evalLcnfLetValue`/`evalLcnfCode` scalar interpreter, `isClosedDecisionCode`, `evalLcnfCode_simulates_core4`, three `sample*_runs_42` theorems | **revert** | red on bb2: `:778` `induction` on the nested inductive `LcnfCode`, `:853` max recursion. Also fixture theorems of the kind the 2026-11-04 decision stops. **Consequence for the `Lower/Inductive.lean` owner**: that file's dirty `export` list (`:1035-1046`) names these LCNF symbols and will not build against HEAD LCNF; revert those lines or the whole file |
+| `lean/Obend/Tactic/SiliconElab.lean` | S-5's `gateDecl` removal and telemetry (+125/−63) | **keep, then fixed** | kept as the base; on top: `#silicon_check` refuses outside the Zone-4 fragment, the fixed `scaleAdd 10` probe is gone, `selfHostTypePreservationInfo` is `selfHostIdentityProofInfo` (it was `λ P h. h`) |
+| `METATHEORY.md` | header counts bumped (480 modules, 66,000+, 120+ teeth), §2.6 and §2.7 prose | **keep header untouched, rows rewritten** | the Leaf/Lower rows are this lane's and were rewritten; the headline counts are the frame lane's and the 2026-11-04 decision says they go |
+
+Not adjudicated here (not this lane's): `lean/Obend/Lower/{ExprCAM,Inductive,LeanKernel,PolicyToGrain,SiliconElabFabric}.lean`, `lean/Obend/Spec/FrontEnd.lean`, `lean/tests/metasystem/AutoCertTest.lean`, `lean/Obend/Hardware/UserspacePhysical.lean`. `UserspacePhysical`, `SiliconElabFabric` and `MetaUnify` receive mechanical edits from this lane's cross-lane patch (below) only where they named deleted Leaf symbols.
+
+## Adjudications (lean-proof-engineering lane, 2026-11-04)
+
+Base is HEAD `85e6fd5`. "Revert" means the dirty content was not carried into the commit; it survives
+byte-identical in `bb2:~/obend` (§2) and, where noted, in this lane's scratchpad.
+
+| file | Gemini's change | call | why |
+|---|---|---|---|
+| `lean/Obend/Elab/Workbook.lean` | S-3: contract check moved after the defs (`checkContractIsarCertWithBook`), full `workbookSourceDigest`, blanket `@[expose]` narrowed to per-def | **revert, then patched from HEAD** | `checkContractIsarCertWithBook` lives only in the dirty `Spec/FrontEnd.lean` (WS-4A-2, not landed); the first bb2 build of the importer failed on it. The digest completion and the exposure narrowing are worth re-applying deliberately once FrontEnd lands; a copy of S-3's patched file is at this lane's scratchpad `dirty/Workbook-S3-patched.lean` |
+| `lean/Obend/Hardware/UserspacePhysical.lean` | S-6: `elabImportAppObend`, the app elaborator in the wrong home | **revert** (already done by the fpga lane), then the four `#import_obend` and two `#import_obend_source` calls re-pointed at `Obend.Elab.Workbook` | ember's decision: Workbook is the one importer |
+| `lean/Obend/Apps/{FidgetCam,SovereignDrex}.lean` | S-6 / S-7 app content on top of their importer copies | **committed from HEAD + importer change**; the dirty content stays in the working tree with the same importer change applied, for the CAD/physics lanes that own the files | the commit must be consistent with the `.obend` files HEAD has; the lanes' `.obend` edits are theirs to land |
+| `lean/Obend/Apps/{ObendRisc,ZkNtt}.lean` | WS-4B-2 reviewer, died mid-edit (SoC snapshots, Goldilocks specs, `topologicalSort*Book`) | **committed from HEAD + importer change**; dirty content left in the working tree with the importer change applied | handoff §4.3 says these are unrecoverable as-is; the fpga lane owns them next |
+| `lean/Obend/Census.lean` | S-2: Apps/Teeth imports, tier-2 glob parsing, `#docs_census` | **kept**, then the `run_cmd` rewritten | the per-directory classification replaces the verdict counts (decision 2026-11-04) |
+| `lean/Obend/Tactic/DocsCensus.lean` | S-2: `Slot`/`Intention` instantiation over `DocEnvWorld`, `review/*.md` paths | **kept**, then extended | bare identifiers are now supports; the governed set is the root documents (the Gemini `review/DECISIONS-LEDGER.md` is out: not a source of truth per the record note) |
+| `lean/lakefile.toml` | S-8: `Obend.Apps.*` moved to the `Teeth` library, `defaultFacets` | **kept**, then the `Tests` library added | exactly "Apps leaves tier 1"; `tests/{metasystem,silicon_elab,rehydration}` get a target |
+| `lean/tests/metasystem/AutoCertTest.lean` | WS-4A-2 reviewer: cross-term SOS, Groebner forged-basis refusal, closed-book RTL synth checks | **kept** | first elaborated by the `Tests` target on bb2 (see the lane report for the result) |
+| `PLAN.md`, `METATHEORY.md` | S-2: counts bumped, names reconciled | **kept as base**; every count line removed | decision 2026-11-04 |
+| `lean/tests/obend-source/world/physical/*.obend` | S-6 mirrors | adjudicated by the language-user lane (kept) | — |
