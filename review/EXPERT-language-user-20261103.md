@@ -428,3 +428,112 @@ restatements only (by design, now said in README); a deletion of a page under a 
 refused rather than judged (a deletion is not yet an occasion the law fragment can speak about); the
 tutorial's `bun docs/tutorial/run.ts` lines are unchanged (the runner substitutes `obend run`; the
 prose still points at minidregg); no `.obnb` example exists.
+
+## What landed, second round (2026-11-04): module laws and the dogfood vault
+
+### Quest 1 — a law in an imported module binds the importing package (`48727bb`)
+
+Decision: **yes.** A package's laws are its root (entry) module's, bare, then those of every module
+on the root's C4 precedence list over the module import graph, each named `Module.NAME`
+(`lean/Obend/Spec/Syntax.lean`: `modulePrecedence`, `packageLaws`). Each import is its own C4 chain:
+a module that imports `A` and then a `B` that imports `A` is not claiming `A` precedes `B` (the first
+version, which took import order as a local chain, refused every such package with `no C3
+candidate`, including the three-package and stranger workspaces). `FrontEnd.lowerDecoded` collects
+them for a single package, `Workspace.close'` per package of a workspace (so the workspace rule
+"a package's laws live in its root module" is generalised the same way), and `Workspace.judgeWith`
+judges any `(package, laws)` list: `obend judge --package SPEC` takes a directory, a file or a
+`package.json` as well as a workspace. The refusal names the module:
+
+```
+$ obend judge --package apps/foc-hil '{…, "modulationPermille": 500}' '{…, "modulationPermille": 1001}'
+refused: foc-hil law ClarkePark.bounded_modulation_index (bounded_modulation_index)
+clauses: foc-hil law monotone_hil_step, …, foc-hil law ClarkePark.monotone_electrical_angle, foc-hil law ClarkePark.bounded_modulation_index
+```
+
+READ (bb2): all eight `apps/` directories now `obend check` with every declaration accepted;
+`run-workspace.py` 44/44 (two checks judge `apps/foc-hil` within and against ClarkePark's law);
+`run-obend-source.py` 30/30, 71/71, 161/161; `run-logic` 20, `run-leaf` 14, `run-receipts` 31;
+both walkthroughs. A judge over a state that lacks a field a law reads is refused by that law (an
+absent reading is false, `Spec/Law.lean:136`): the state handed to `obend judge` must carry every
+field the package's laws read, which is why the check builds the full `FOC` state. Files outside
+this lane's list that the change needed: `Spec/Syntax.lean`, `Spec/FrontEnd.lean`,
+`Spec/Workspace.lean` (recorded in the handoff).
+
+### Quest 2 — the decisions ledger as a vault (`f3b832e`)
+
+`lean/tests/decisions/WALKTHROUGH.md`, run by `tests/decisions/walkthrough.py` (the vault runner
+with `--doc`), recorded on bb2 and read: 10 steps. The seed is `review/DECISIONS-20261031.md`: its
+preamble as the index page `Ledger.md`, three of its rows as `decisions/D-000{1,2,3}`, and a kind:
+
+```
+law dated: not (new.date == 0)        law dateOnce: writeOnce(date)
+law decider: new.decider in [1, 2, 3] law deciderOnce: writeOnce(decider)
+law appendOnly: monotone(bytes)       law appendLines: monotone(lines)
+law cited: new.dangling == 0          date: 0   decider: 0
+```
+
+Admitted: a lane's dated decision (`D-0004`, decider 3) quoting `[[environment/Theorems#^judge_admits]]`
+and `…^judge_refuses]]`; the index gains its link. Refused, each naming the ancestor and clause:
+`D-0005` citing `suggestMultiField_admits` (not in the census page) → `refused by decisions/_kind:
+cited (the kind of decisions/, an ancestor of decisions/D-0005): new.dangling == 0 does not hold;
+dangling = 0 would pass`; `decider: 4` → `decider … the line decider: 3 would pass`; no date →
+`dated`; a shortened `D-0001` → `appendOnly: monotone(bytes) … bytes = 158 would pass (this write
+has bytes = 78)`; re-dated → `dateOnce`; re-decided → `deciderOnce`; a link dropped from the index →
+`Ledger: refused by its law appendOnly: monotone(links)`; `rm decisions/D-0002.md` → `its file is
+gone, but it is under the law decisions/_kind: dated: not deleted, written back`; `obend create
+--from decisions` writes the template and says it is not born until dated.
+
+Two things the exercise needed and the vault gained: a `dangling` measure (`Vault/Page.lean`
+`danglingCount`), so a law can say every cite of a page resolves; and a kind page is no longer judged
+by its own law lines (`Store.ownLaws`): before, a kind whose instances must be dated could not be
+born, because its own `date: 0` default violated its own law. (`Vault/Page.lean`, `Vault/Law.lean`
+doc: outside the list, recorded.)
+
+**What the vault could not express about our own process** (the deliverable):
+
+1. **The unit of law is the page; the ledger's unit is the row.** The real ledger is one file of
+   tables. No law can speak about a row: a date or decider per row, a row appended, a row cited.
+   The vault only governs the ledger once each decision is its own page; the file in `review/`
+   stays prose. A `rows` measure, or laws over a page's list items, would be the primitive.
+2. **No strings.** `decider` is a code (1 Ember, 2 integrator, 3 lane), not a name; `date` is a
+   number with no calendar (20261199 is dated); "where" (a commit hash, a file) is unreadable; a
+   decision's text is counted, never read. The fragment reads naturals and booleans so that the
+   difference-constraint solver can repair; every string in our process is outside it.
+3. **Append-only is a count.** `monotone(bytes)` and `monotone(lines)` refuse a shortening and
+   admit any rewrite that keeps or grows the counts: a decision's text can be replaced wholesale.
+   The property we mean is "the old text is a prefix (or sub-sequence) of the new", which is about
+   `old.` and `new.` bytes, and the fragment lets `old.` in only through `monotone`/`writeOnce`.
+   The doc graph knows exactly which atoms a write deleted (`pieces`, `Step.del`); a law cannot
+   ask it. `deleted == 0` as a measure of a write (not of a state) would be the primitive, and it
+   is a different kind of measure: of the patch, not the page.
+4. **"Names a theorem the environment has" is a cite into a page a person maintains.** The census
+   page is a page like any other: anyone who can write it can add a name; nothing ties its lines to
+   the Lean environment. Until the gate lane's identifier census writes that page from the build,
+   the law proves that a name is on a list, not that a declaration exists. And `dangling == 0`
+   forbids every unresolved link on the page, not only theorem cites: a decision cannot mention a
+   page not yet written.
+5. **Authority is not provenance.** `request.caller` is who commits the write; a lane's decision is
+   posted by the lane and selected by the owner, and the selection is the owner's write, so
+   `new.decider == request.caller` (expressible, `REF == REF`) would refuse the owner's selection of
+   a lane's row and admit a lane claiming to be Ember on its own page. The poster of a candidate is
+   in the authors list (`Page.authors`), not among the facts a law reads. "Taken under standing
+   approval" and "reversible, cost to reverse" are prose.
+6. **No cross-page facts.** "Dated no earlier than the previous decision", "the ledger lists every
+   decision page", "`D-0004` cites a decision that exists" are relations between pages; a law reads
+   one page's state and the request. The index page's `monotone(links)` is the nearest thing, and
+   it cannot say which pages.
+7. **A kind's own laws are not protected.** The owner can edit `decisions/_kind.md` and weaken
+   `appendOnly` in one write; the kind page is judged by the kinds above it (none, at the vault's
+   root). A ledger whose rules the keeper can relax silently is the thing the ledger exists to
+   prevent. A root `_kind.md` with `writeOnce` on something could not reach law lines, which are
+   not fields. A member grant `relaw` exists for pages; a kind's law lines need the same door and a
+   law about who may pass it.
+8. **The real file cannot be the vault's page.** `obend open review/` would make every review
+   document a page, which is fine, but the decisions file would be one page with the limits above;
+   the walkthrough therefore seeds pages from its rows by hand. If the ledger moves to pages under
+   `review/decisions/`, the vault governs it and the single file becomes the index page.
+
+What it could express is the shape of the ledger's preamble: dated, decided by one of three,
+appended to, cited into a census, kept when its file is deleted, and a refusal that names the kind,
+the clause, the failing value and a passing one. Items 1, 3 and 5 are the ones a research project
+on laws should take as its next questions; 4 waits on the census; 7 is a design decision for Ember.
