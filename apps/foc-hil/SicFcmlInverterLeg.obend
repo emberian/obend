@@ -40,7 +40,9 @@ spec BaseSicFcmlLegSpec for SicFcmlLegController:
   def safetyBarrierHeadroomC(tempC: Nat) -> Nat:
     self.thermalWarningLimitC + tempC
   claim lyapunov_cap_balance_open_recursion(capErrMv: Nat): self.alwaysFfCapErrMv(capErrMv) == capErrMv * self.activeBalGainPermille + 25n
-  claim fcml_sos_lyapunov_cbf_barrier(capErrMv: Nat) by judge("sos-lyapunov-cbf@1"): capErrMv <= 15000n
+  # The balancer's energy contraction (0.8 e)^2 <= e^2, as a polynomial inequality groebner@1 can bind
+  # (sos-lyapunov-cbf@1 has no claim surface; the old claim `capErrMv <= 15000n` was false).
+  claim fcml_balance_energy_contracts(capErrMv: Nat) by judge("groebner@1"): capErrMv * 8n * (capErrMv * 8n) <= capErrMv * 10n * (capErrMv * 10n)
 
 spec LyapunovBalancedThermalBarrierOverride for SicFcmlLegController:
   requires thermalDeratedDutyPermille(tempC: Nat) -> Nat

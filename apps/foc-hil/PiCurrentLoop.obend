@@ -36,7 +36,9 @@ spec BasePiCurrentSpec for PiCurrentController:
     iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
   claim integral_q_open_recursion(errQMa: Nat): self.alwaysFfIntQ(errQMa) == errQMa * self.kiGainPermille + 200n
   claim vq_decoupling_open_recursion(iqErrAmp: Nat): self.decoupledVqCommandMv(iqErrAmp) == iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
-  claim pi_modulation_interval_bound(x: Nat) by judge("interval@1"): 120n + x * 400n <= 600000n
+  # With the current error bounded by 1400 A, Kp = 400 mOhm keeps the proportional term within the
+  # 600 V integrator clamp of foc_drive_top.sv.
+  claim pi_modulation_interval_bound(x: Nat) given x <= 1400n by judge("interval@1"): 120n + x * 400n <= 600000n
 
 spec CrossCoupledDecouplingOverride for PiCurrentController:
   requires decoupledVdCommandMv(idErrAmp: Nat) -> Nat

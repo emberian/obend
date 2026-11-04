@@ -39,7 +39,10 @@ spec Nominal20kHzFocDrive for FocDriveController:
     45n + lossWatt * self.statorThermalResPermille
   claim closed_loop_vq_open_recursion(iqErrAmp: Nat): self.closedLoopVqMv(iqErrAmp) == iqErrAmp * self.icapDprBandwidthGain + 250n
   claim stator_temp_open_recursion(lossWatt: Nat): self.statorWindingTempC(lossWatt) == 45n + lossWatt * self.statorThermalResPermille
-  claim stator_temp_interval_cbf(lossWatt: Nat) by judge("interval@1"): 45n + lossWatt * 4n <= 180n
+  # Below 14 kW of stator loss the in-slot winding (9 mK/W: 2 caloric + 5 convective + 2 wall,
+  # FluidThermal.lean) stays under Class H at a 45 C coolant inlet. The box is the claim's own `given`;
+  # a claim with no box is refused (AutoCert, 2026-11-04).
+  claim stator_temp_interval_cbf(lossWatt: Nat) given lossWatt <= 14000n by judge("interval@1"): 45000n + lossWatt * 9n <= 180000n
 
 spec IcapDprHighBandwidthFocOverride for FocDriveController:
   requires activeFcmlBalanceMv(capErrMv: Nat) -> Nat

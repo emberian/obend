@@ -30,7 +30,10 @@ spec UncalibratedClarkePark for ClarkeParkTransform:
   def cordicAngleResidualMrad(thetaMrad: Nat) -> Nat:
     thetaMrad + self.phaseOffsetMrad
   claim direct_axis_open_recursion(iaMa: Nat): self.directAxisCurrentMa(iaMa) == iaMa * self.cordicGainPermille + 15n
-  claim cordic_trig_taylor_enclosure(thetaMrad: Nat) by judge("taylor-model@1"): thetaMrad <= 1000n
+  # `taylor-model@1` has no claim surface (the language has no transcendental functions); the CORDIC
+  # gain bound below is what interval@1 can bind: up to the 350 A over-current limit, the scaled
+  # d-axis current stays below 2^31 (fixed-point headroom).
+  claim cordic_gain_interval_bound(iaMa: Nat) given iaMa <= 350000n by judge("interval@1"): iaMa * 607n + 15n <= 212450015n
 
 spec Cordic4StageCompensatedPark for ClarkeParkTransform:
   requires quadratureAxisCurrentMa(ibMa: Nat) -> Nat

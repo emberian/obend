@@ -1,9 +1,26 @@
 // Continuous-Time 4th-Order Runge-Kutta (RK4, dt = 100 ns) Physics Plant
-// for Flagship App #2: Closed-Loop 20 kHz FOC Motor Drive & 6-Level SiC FCML HIL
-// Models:
-//   1. LC Drives 4-pole-pair salient IPM motor (Ld = 150 uH, Lq = 380 uH, Rs = 12 mOhm, psi_PM = 0.18 Wb)
-//   2. MS350 6-level SiC FCML flying-capacitor voltage unbalance & active Lyapunov balancing dynamics
-//   3. Direct in-slot liquid-cooled stator winding thermal ODE + 155 C over-temperature fault injection
+// for App #2: 20 kHz FOC current loop + SiC FCML controller, co-simulated with foc_drive_top.sv
+//
+// What this plant is (2026-11-04):
+//   1. The LC Drives 4-pole-pair IPM stator in the dq frame (Ld = 150 uH, Lq = 380 uH, Rs = 12 mOhm,
+//      psi_PM = 0.18 Wb): the two coupled RL equations below. These are the equations the Lean chain in
+//      lean/Obend/Hardware/CurrentLoop.lean discretizes (per axis, with the cross-coupling and back-EMF
+//      as the feed-forward `vff`); the same R, L, Ts appear there as free parameters.
+//   2. Mechanics, OPT-IN (`enable_mechanics`): J d(omega_m)/dt = T_e - B omega_m - T_load. Off by default so
+//      the existing testbench keeps its constant omega_e = 1000 rad/s; the FPGA lane turns it on and
+//      re-runs. With it off there is no speed loop and the back-EMF is constant.
+//   3. A scalar first-order *phenomenological* model of flying-capacitor unbalance,
+//      d(V_unbal)/dt = -5 V_unbal - 800 cap_bal_cmd + ripple. It is NOT a flying-capacitor model
+//      (that would be dV_c/dt = i_phase (d_k - d_{k+1}) / C per capacitor, with the sign of the phase
+//      current); it responds linearly to the controller's command by construction. Do not read the
+//      testbench's "balancing converges" as evidence about an FCML.
+//   4. A one-node winding thermal ODE (Rth = 0.045 K/W, Cth = 120 J/K, tau = 5.4 s). In a 50 ms run it
+//      moves ~0.4 K; the 155 C trip in the testbench is injected by assignment, so that test exercises
+//      the comparator and the write-once latch, not the thermal physics.
+// What it is not: there is no inverter between vd/vq and the winding (the commands are applied as
+// average voltages; `fcml_duty_permille` from the RTL is not consumed), no PWM, no dead time, no
+// sensor delay or noise. These are the plant-side asks to the FPGA lane, listed in
+// review/EXPERT-physics-numerics-20261103.md ("What landed").
 #pragma once
 
 #include <cmath>
@@ -38,10 +55,17 @@ public:
     PmsmFcmlState state{};
     bool overtemp_injected = false;
 
+    // Opt-in mechanical equation (see header item 2). Units: J in kg m^2, B in N m s/rad, T_load in N m.
+    bool   enable_mechanics  = false;
+    double inertia_kgm2      = 0.12;
+    double viscous_nms       = 0.01;
+    double load_torque_nm    = 150.0;
+
     struct Deriv {
         double d_id;
         double d_iq;
         double d_theta;
+        double d_omega_e;
         double d_cap_unbal;
         double d_temp;
     };
@@ -67,6 +91,16 @@ public:
         d.d_iq = (eff_vq - RS_OHM * s.iq_amp - s.omega_e_rads * LD_HENRY * s.id_amp
                   - s.omega_e_rads * PSI_PM_WB) / LQ_HENRY;
         d.d_theta = s.omega_e_rads;
+
+        // Mechanics (opt-in): omega_e = p * omega_m; T_e = 1.5 p (psi iq + (Ld - Lq) id iq).
+        if (enable_mechanics) {
+            const double te = 1.5 * POLE_PAIRS *
+                (PSI_PM_WB * s.iq_amp + (LD_HENRY - LQ_HENRY) * s.id_amp * s.iq_amp);
+            const double omega_m = s.omega_e_rads / POLE_PAIRS;
+            d.d_omega_e = POLE_PAIRS * (te - viscous_nms * omega_m - load_torque_nm) / inertia_kgm2;
+        } else {
+            d.d_omega_e = 0.0;
+        }
 
         // 6-level SiC FCML flying-capacitor unbalance ODE:
         // Slow passive bleed (-5.0 s^-1, tau = 200 ms) + active Lyapunov balancing driven
@@ -104,6 +138,7 @@ public:
             out.id_amp         += h * k.d_id;
             out.iq_amp         += h * k.d_iq;
             out.theta_e_rad    += h * k.d_theta;
+            out.omega_e_rads   += h * k.d_omega_e;
             out.cap_unbal_volt += h * k.d_cap_unbal;
             out.winding_temp_c += h * k.d_temp;
             return out;
@@ -120,6 +155,7 @@ public:
         state.id_amp += (DT_SEC / 6.0) * (k1.d_id + 2.0 * k2.d_id + 2.0 * k3.d_id + k4.d_id);
         state.iq_amp += (DT_SEC / 6.0) * (k1.d_iq + 2.0 * k2.d_iq + 2.0 * k3.d_iq + k4.d_iq);
         state.theta_e_rad += (DT_SEC / 6.0) * (k1.d_theta + 2.0 * k2.d_theta + 2.0 * k3.d_theta + k4.d_theta);
+        state.omega_e_rads += (DT_SEC / 6.0) * (k1.d_omega_e + 2.0 * k2.d_omega_e + 2.0 * k3.d_omega_e + k4.d_omega_e);
         state.cap_unbal_volt += (DT_SEC / 6.0) *
             (k1.d_cap_unbal + 2.0 * k2.d_cap_unbal + 2.0 * k3.d_cap_unbal + k4.d_cap_unbal);
         state.winding_temp_c += (DT_SEC / 6.0) * (k1.d_temp + 2.0 * k2.d_temp + 2.0 * k3.d_temp + k4.d_temp);
