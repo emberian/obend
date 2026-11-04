@@ -11,7 +11,7 @@ Provides:
 public import Obend.Core.Data
 public import Obend.Tactic.Tooth
 
-@[expose] public section
+public section
 namespace Obend.Analysis
 open Obend.Core.Data (Data)
 set_option autoImplicit false
@@ -24,33 +24,33 @@ abbrev CanonicalRat := Rat
 namespace CanonicalRat
 
 /-- Smart canonicalizing constructor reducing numerator and denominator to lowest terms. -/
-def mk (n : Int) (d : Nat) : CanonicalRat :=
+@[expose] def mk (n : Int) (d : Nat) : CanonicalRat :=
   mkRat n d
 
-def ofInt (n : Int) : CanonicalRat :=
+@[expose] def ofInt (n : Int) : CanonicalRat :=
   Rat.ofInt n
 
-def ofNat (n : Nat) : CanonicalRat :=
+@[expose] def ofNat (n : Nat) : CanonicalRat :=
   Rat.ofInt (Int.ofNat n)
 
-def zero : CanonicalRat := 0
-def one : CanonicalRat := 1
+@[expose] def zero : CanonicalRat := 0
+@[expose] def one : CanonicalRat := 1
 
-def add (a b : CanonicalRat) : CanonicalRat := a + b
-def sub (a b : CanonicalRat) : CanonicalRat := a - b
-def mul (a b : CanonicalRat) : CanonicalRat := a * b
-def div (a b : CanonicalRat) : CanonicalRat := a / b
-def neg (a : CanonicalRat) : CanonicalRat := -a
-def inv (a : CanonicalRat) : CanonicalRat := a⁻¹
+@[expose] def add (a b : CanonicalRat) : CanonicalRat := a + b
+@[expose] def sub (a b : CanonicalRat) : CanonicalRat := a - b
+@[expose] def mul (a b : CanonicalRat) : CanonicalRat := a * b
+@[expose] def div (a b : CanonicalRat) : CanonicalRat := a / b
+@[expose] def neg (a : CanonicalRat) : CanonicalRat := -a
+@[expose] def inv (a : CanonicalRat) : CanonicalRat := a⁻¹
 
-def le (a b : CanonicalRat) : Prop := a ≤ b
-def lt (a b : CanonicalRat) : Prop := a < b
+@[expose] def le (a b : CanonicalRat) : Prop := a ≤ b
+@[expose] def lt (a b : CanonicalRat) : Prop := a < b
 
-def ble (a b : CanonicalRat) : Bool := decide (a ≤ b)
-def blt (a b : CanonicalRat) : Bool := decide (a < b)
+@[expose] def ble (a b : CanonicalRat) : Bool := decide (a ≤ b)
+@[expose] def blt (a b : CanonicalRat) : Bool := decide (a < b)
 
 /-- Wire encoding of CanonicalRat into Core.Data. -/
-def toData (r : CanonicalRat) : Data :=
+@[expose] def toData (r : CanonicalRat) : Data :=
   .variant "rat" (.record [
     ("num", .natural r.num.natAbs),
     ("neg", .boolean (r.num < 0)),
@@ -58,7 +58,7 @@ def toData (r : CanonicalRat) : Data :=
   ])
 
 /-- Wire decoding of Core.Data into CanonicalRat. -/
-def ofData? : Data → Option CanonicalRat
+@[expose] def ofData? : Data → Option CanonicalRat
   | .variant "rat" (.record [("num", .natural n), ("neg", .boolean isNeg), ("den", .natural d)]) =>
     if d == 0 then none
     else
@@ -74,12 +74,12 @@ end CanonicalRat
 structure Interval where
   lo : CanonicalRat
   hi : CanonicalRat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 namespace Interval
 
 /-- Propositional membership of a rational number `x` in closed interval `I = [I.lo, I.hi]`. -/
-def Mem (x : CanonicalRat) (I : Interval) : Prop :=
+@[expose] def Mem (x : CanonicalRat) (I : Interval) : Prop :=
   I.lo ≤ x ∧ x ≤ I.hi
 
 instance : Membership CanonicalRat Interval where
@@ -98,23 +98,23 @@ instance (x : CanonicalRat) (I : Interval) : Decidable (x ∈ I) :=
     Interval.Mem x I ↔ x ∈ I := Iff.rfl
 
 /-- Well-formedness of an interval: `I.lo ≤ I.hi`. -/
-def Wf (I : Interval) : Prop :=
+@[expose] def Wf (I : Interval) : Prop :=
   I.lo ≤ I.hi
 
 /-- Smart constructor verifying that `lo ≤ hi`. -/
-def make (lo hi : CanonicalRat) : Option Interval :=
+@[expose] def make (lo hi : CanonicalRat) : Option Interval :=
   if decide (lo ≤ hi) then some ⟨lo, hi⟩ else none
 
 /-- Degenerate point interval `[q, q]`. -/
-def ofPoint (q : CanonicalRat) : Interval :=
+@[expose] def ofPoint (q : CanonicalRat) : Interval :=
   ⟨q, q⟩
 
 /-- Membership test for a rational point inside the closed interval. -/
-def containsRat (i : Interval) (q : CanonicalRat) : Bool :=
+@[expose] def containsRat (i : Interval) (q : CanonicalRat) : Bool :=
   decide (i.lo ≤ q ∧ q ≤ i.hi)
 
 /-- Boolean sub-interval inclusion test (`outer.lo ≤ inner.lo ∧ inner.hi ≤ outer.hi`). -/
-def subset (inner outer : Interval) : Bool :=
+@[expose] def subset (inner outer : Interval) : Bool :=
   decide (outer.lo ≤ inner.lo ∧ inner.hi ≤ outer.hi)
 
 @[simp] theorem containsRat_iff_mem (I : Interval) (x : CanonicalRat) :
@@ -144,25 +144,25 @@ theorem ofPoint_wf (q : CanonicalRat) : (Interval.ofPoint q).Wf :=
   mem_imp_wf (ofPoint_mem q)
 
 /-- Interval addition: `[a.lo + b.lo, a.hi + b.hi]`. -/
-def add (a b : Interval) : Interval :=
+@[expose] def add (a b : Interval) : Interval :=
   ⟨a.lo + b.lo, a.hi + b.hi⟩
 
 /-- Interval negation: `[-a.hi, -a.lo]`. -/
-def neg (a : Interval) : Interval :=
+@[expose] def neg (a : Interval) : Interval :=
   ⟨-a.hi, -a.lo⟩
 
 /-- Interval subtraction: `[a.lo - b.hi, a.hi - b.lo]`. -/
-def sub (a b : Interval) : Interval :=
+@[expose] def sub (a b : Interval) : Interval :=
   ⟨a.lo - b.hi, a.hi - b.lo⟩
 
-def min4 (a b c d : CanonicalRat) : CanonicalRat :=
+@[expose] def min4 (a b c d : CanonicalRat) : CanonicalRat :=
   min (min a b) (min c d)
 
-def max4 (a b c d : CanonicalRat) : CanonicalRat :=
+@[expose] def max4 (a b c d : CanonicalRat) : CanonicalRat :=
   max (max a b) (max c d)
 
 /-- Interval multiplication: enclosure over all 4 endpoint products. -/
-def mul (a b : Interval) : Interval :=
+@[expose] def mul (a b : Interval) : Interval :=
   let p1 := a.lo * b.lo
   let p2 := a.lo * b.hi
   let p3 := a.hi * b.lo
@@ -170,7 +170,7 @@ def mul (a b : Interval) : Interval :=
   ⟨min4 p1 p2 p3 p4, max4 p1 p2 p3 p4⟩
 
 /-- Interval squaring: handles intervals spanning zero. -/
-def sqr (a : Interval) : Interval :=
+@[expose] def sqr (a : Interval) : Interval :=
   if decide (a.lo ≤ 0 ∧ 0 ≤ a.hi) then
     ⟨0, max (a.lo * a.lo) (a.hi * a.hi)⟩
   else
@@ -318,10 +318,10 @@ inductive RealExpr where
   | sub (l r : RealExpr)
   | mul (l r : RealExpr)
   | sqr (a : RealExpr)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Evaluate a RealExpr over an interval environment. -/
-def evalInterval (env : List (String × Interval)) : RealExpr → Option Interval
+@[expose] def evalInterval (env : List (String × Interval)) : RealExpr → Option Interval
   | .const c => some (Interval.ofPoint c)
   | .var name => (env.find? (·.1 == name)).map (·.2)
   | .add l r => do
@@ -341,7 +341,7 @@ def evalInterval (env : List (String × Interval)) : RealExpr → Option Interva
       pure (Interval.sqr ia)
 
 /-- Total point evaluator for a `RealExpr` at a rational assignment `rho : String → CanonicalRat`. -/
-def evalExpr (rho : String → CanonicalRat) : RealExpr → CanonicalRat
+@[expose] def evalExpr (rho : String → CanonicalRat) : RealExpr → CanonicalRat
   | .const c => c
   | .var name => rho name
   | .add l r => evalExpr rho l + evalExpr rho r
@@ -350,7 +350,7 @@ def evalExpr (rho : String → CanonicalRat) : RealExpr → CanonicalRat
   | .sqr a   => evalExpr rho a * evalExpr rho a
 
 /-- Evaluate a RealExpr at a concrete rational point assignment. -/
-def evalPoint (rho : String → CanonicalRat) : RealExpr → Option CanonicalRat
+@[expose] def evalPoint (rho : String → CanonicalRat) : RealExpr → Option CanonicalRat
   | .const c => some c
   | .var name => some (rho name)
   | .add l r => do
