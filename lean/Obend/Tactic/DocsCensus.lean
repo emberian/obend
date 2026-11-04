@@ -5,7 +5,7 @@ module
 Instantiates `Obend.Intention` and `Obend.Slot` (`lean/Obend/Intention.lean`, `lean/Obend/Slot.lean`)
 over `DocEnvWorld := Lean.Environment × RepoFsSnapshot` so that every canonical markdown
 specification document (`AMBITION.md`, `README.md`, `PLAN.md`, `METATHEORY.md`,
-`SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md`, `review/DECISIONS-LEDGER.md`) is
+`SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md`) is
 governed by a real `Slot` whose `supports` pin:
 1. every Lean module path (`lean/Obend/.../*.lean` / `Obend/.../*.lean`) cited in the doc,
 2. every review/ledger path (`review/*.md`) cited in the doc,
@@ -31,8 +31,10 @@ namespace Obend.Tactic.DocsCensus
 open Lean Elab Command
 open Obend.Slot
 
-/-- The 7 founding and synthesis markdown documents governed by full `DocEnvWorld` slots
-(pinning `.lean` paths, `review/*.md` paths, and backticked `Obend.*` constants in `Lean.Environment`). -/
+/-- The six founding and synthesis markdown documents governed by full `DocEnvWorld` slots
+(pinning `.lean` paths, `review/*.md` paths, and backticked `Obend.*` constants in `Lean.Environment`).
+`review/DECISIONS-LEDGER.md` was listed until 2026-11-04; it is an untracked file of a suspended
+lane, not a source of truth, and a clean checkout does not have it. -/
 def canonicalGovernedDocs : List String :=
   [ "AMBITION.md"
   , "README.md"
@@ -40,10 +42,9 @@ def canonicalGovernedDocs : List String :=
   , "METATHEORY.md"
   , "SILICON-ELABORATOR.md"
   , "QUALIFICATION-AND-SILICON-LEAN.md"
-  , "review/DECISIONS-LEDGER.md"
   ]
 
-/-- All 11 top-level specification and ledger markdown documents. -/
+/-- The ten top-level specification markdown documents. -/
 def topLevelMarkdownDocs : List String :=
   [ "AMBITION.md"
   , "README.md"
@@ -55,7 +56,6 @@ def topLevelMarkdownDocs : List String :=
   , "QUALIFICATION-AND-SILICON-LEAN.md"
   , "NEXT-MATHEMATICA.md"
   , "DEOS-CONTRACTS-CONSENSUS.md"
-  , "review/DECISIONS-LEDGER.md"
   ]
 
 /-- Characters permitted inside a candidate module path or dotted identifier token. -/
@@ -696,7 +696,6 @@ meta def metaTopLevelMarkdownDocs : List String :=
   , "QUALIFICATION-AND-SILICON-LEAN.md"
   , "NEXT-MATHEMATICA.md"
   , "DEOS-CONTRACTS-CONSENSUS.md"
-  , "review/DECISIONS-LEDGER.md"
   ]
 
 meta def metaStringToLeanName (s : String) : Lean.Name :=
@@ -880,7 +879,7 @@ elab "#check_docs_census" : command => do
 
 /-- `#docs_census` — `Obend.Intention` + `Obend.Slot` compile-time gate over `DocEnvWorld`
 verifying that all governed markdown docs (`AMBITION.md`, `README.md`, `PLAN.md`, `METATHEORY.md`,
-`SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md`, `review/DECISIONS-LEDGER.md`) have
+`SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md`) have
 `.usable` slots with 0 missing `.lean`/`review/*.md` files and 0 missing `Obend.*` constants in
 `Lean.Environment`. -/
 elab "#docs_census" : command => do
