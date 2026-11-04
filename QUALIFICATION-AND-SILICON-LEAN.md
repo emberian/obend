@@ -49,21 +49,31 @@ This document is the authoritative, unscoped engineering specification for **Wav
   5. **`"rtl-synth@1"` / `"hw-rtl-synth@1"`**: Synthesizes the target `Leaf.Book` via `compileBookToRtlSat` / `compileStatefulStepToRtl`, checks `checkRtlSynth`, and encodes `encodeRtlSynthObj` / `encodeRtlSynthCert`.
 - **Soundness (`synthesizeClaimExternalJudge_sound`)**: Every synthesized payload is gated by `obligationCheckWithJudges workbookFormats .total c.obligation just == .ok` and proved sound via `Obend.Logic.obligationWithJudges_sound`.
 
-### 1.4 Foundation D — Hierarchical SystemVerilog Macro Emission (`emitHierarchicalSV`) & `hardware/sim/` Cleanup
-- **`lean/Obend/Hardware/HDL.lean` & `Silicon.lean` & `ReductionMachine.lean`**:
-  - Adds `emitHierarchicalSV` emitting standalone, synthesizable SystemVerilog-2012 macro modules for:
-    - `obend_macro_dsp48e2` (4-stage pipelined `DSP48E2` multiply-accumulate matching `Silicon.stepDspMac`),
-    - `obend_macro_uram288_bypass` (synchronous RAM with RAW collision bypass matching `Silicon.stepBypassRAM`),
-    - `obend_macro_axis_skid` (2-slot `AXI4-Stream` skid buffer matching `Silicon.stepSkid`),
-    - `obend_macro_noc_router_xy` (5-port 2D XY dimension-ordered credit-flow router matching `ReductionMachine.stepNocFabric`),
-    - `obend_macro_icap_dpr_tile` (reconfigurable LUT6/carry tile with glitch-free isolation fence `isolated ? skidHeldOutput : activeOut` matching `UserspacePhysical.evalReconfigTile`).
-- **`hardware/sim/` Canonicalization**:
-  - Purges the static Oct 31 files (`obend_hw.sv`, `obend_silicon_process.sv`, `obend_efpga_fabric.sv`, `lec_check.smt2`, `lec_fabric.smt2`, `openlane_sky130_config.json`, `multiphysics_sim`) and wires `hardware/sim/` directly to `obend hardware emit-sv` and `obend verilate`.
+### 1.4 Foundation D — SystemVerilog emission and the one `silicon_elab_top` (status 2026-11-04)
+- `Obend.Hardware.HDL.emitModuleSV` is the only emitter of `RtlModule`s. It writes one `clk`/`rst` pair per
+  single-domain module (or `clk_<d>`/`rst_<d>` per domain), port widths from `inputWidths`/`OutputPort.width`,
+  `(* ASYNC_REG *)` on synchronizers, and is gated by `checkRtlModuleW` (DAG, CDC, widths, two-flop chains).
+- The one `silicon_elab_top.sv` is `Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`, written by
+  `obend hardware emit-silicon-sv` to `apps/silicon-kernel-verilator/verilator/`. The two other copies (a hand-written
+  Verilog-2001 file there and a string literal in `VerilateRunner`) were deleted; `hardware/README.md` says why.
+- `lean/tools/emitsv` (`obend-emit-sv`) regenerates every checked-in emitted `.sv` (`risc`, `fidget`, `drex`, `quantum`,
+  the four `hardware/sim/` cores, `ice40-mac8`) and the Lean golden for the silicon-kernel harness; every verify script
+  compares bytes and fails on a hand edit. Files the tool does not know are hand-written and say so in their header
+  (`foc_drive_top.sv`, `sdr_ft8_top.sv`, `zk_ntt_coproc.sv`).
+- The "hard-IP macro" strings in `HDL.lean` (`emitMacro*SV`) are not instantiated by any emitted design and are not
+  tied to `Silicon.lean`'s models by any theorem; treat them as sketches.
 
-### 1.5 Foundation E — First-Class `obend verilate` Differential Co-Simulation & `Z3` `QF_BV` LEC (`lean/Obend/Hardware/VerilateRunner.lean`)
-- **`obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>] [--lec]`**:
-  - **Rung 1**: Emits SystemVerilog via `emitModuleSV` / `emitHierarchicalSV`, generates a C++17 `Verilator` harness with `Verilated::randReset(2)` (pseudo-random initialization of reset-free pipeline stages) and `VerilatedVcdC` waveform dumping, and verifies $0$ bit mismatches across $N \times C$ clock cycles against both `Obend.Core.MachineFast.evalFuelFast` and `Obend.Hardware.HDL.runModuleTrace`.
-  - **Rung 2 (`--lec`)**: Lowers the module to a gate-level `TechNetlist` (`BelGate.lut2`, `BelGate.carry4`, `BelGate.dsp48`, `BelGate.fdre` via `Synth.synthesizeModuleToBels`, plus `Yosys` `write_smt2` when present), emits `<target>_lec.smt2`, invokes `z3 -smt2 <target>_lec.smt2`, and verifies `unsat` ($0$ counterexamples across all $2^{64 \times k}$ states).
+### 1.5 Foundation E — `obend verilate` (`lean/Obend/Hardware/VerilateRunner.lean`)
+- **Differential simulation**: emit with `emitModuleSV`, drive the Verilated module with `numVectors × numCycles`
+  held-input cycles (small constants and a 16-bit LCG; default 16 × 4 = 64 cycles) and compare every output with
+  Lean's `runModuleTrace`/`evalModuleOutputs` of the same `RtlModule` (and `MachineFast` for `.obend` compositions).
+  This checks the emitter against Lean's own semantics; it is thin and is the thing to grow (wider vectors, more cycles,
+  random reset).
+- **`--lec` is a BEL-mapping consistency miter, not an LEC.** `emitModuleLecSmt2` compares the `RtlModule` with
+  `Synth.synthesizeModuleToBels` of the same AST; every "BEL" is still a 64-bit word operation and no SystemVerilog is
+  read. Output files are named `*_belmiter.smt2`. A logic-equivalence check of the emitted `.sv` would be Yosys
+  `write_smt2` against the Lean-emitted spec; that is not done anywhere in this tree, and the hand-written
+  `apps/*/verilator/*_lec.smt2` files are property sheets, labelled as such in their first lines.
 
 ---
 
@@ -84,42 +94,64 @@ A complete `SiliconElabWireFrame` (`OBCAMv1`) contains:
 6. **Section 5**: `HwCamRecRuleEntry` table ($N_{\text{rec}} \times 16\text{ B}$).
 7. **Section 6 & 7**: Zone 3 `DiscrTreeLutEntry` ($N_{\text{lut}} \times 16\text{ B}$) & `IcapBitstreamFrame` ($N_{\text{icap}} \times 16\text{ B}$) tables.
 
-### 2.2 5-Module Hierarchical `silicon_elab_top.sv` (`emitSiliconElabFabricSV`)
-1. **`obend_zone1_expr_cam`**: 88-bit associative CAM/SRAM, handle-level `hwCamLiftLooseBVars` / `hwCamInstantiateAt`, and 1-cycle closed-term $\beta$-substitution bypass (`!body_has_loose_bvar || body_max_loose_bvar <= depth`).
-2. **`obend_zone2_noc_unifier`**: $2 \times 2$ 2D XY credit-flow NoC mesh parallelizing `.app f1 a1 =?= .app f2 a2` obligations with 1-cycle handle-equality short-circuit (`h1 == h2`), bit-80/81 occurs-check filter, and hardware `joinMCtxAssigns?` conflict detector.
-3. **`obend_zone3_discr_lut`**: 1-cycle `@[simp]` `DiscrTree` LUT gated by `SlotGuardReg` and 3-phase glitch-free `ICAP` DPR isolation fence (`pin_fallback_to_zone1` asserted in 1 cycle on stale pins).
-4. **`obend_zone4_kernel_fsm`**: True handle-level stack-machine typechecker (`stepZone4StackFsm`) with hardware work-stack (`hw_work_stack[0:255]`), de Bruijn binder context stack (`hw_ctx_stack[0:255]`), and universe level evaluator (`level_mem[0:1023]`).
-5. **`silicon_elab_top`**: Top-level AXI4-Lite + 128/512-bit AXI4-Stream wrapper compiled by `Verilator` into `crates/obend-fpga-hal` (`libobend_silicon_rtl` / `obend-silicon-sim`).
+### 2.2 The one `silicon_elab_top.sv` (`Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`)
+What the emitted RTL is today, read from the text, not from the zone names:
+1. `obend_zone1_expr_cam`: a 256 × 88-bit register array (`cam_mem`, asynchronous reads, written under an
+   asynchronous-reset `always_ff`), a focus register and the one-cycle closed-term β bypass
+   (`app` whose function is a `lam` whose body has no loose bvar → focus moves to the body). Handles are assigned by
+   the host; nothing in the RTL matches on content. "CAM" names the Lean structure (`HwExprCAM`), not the hardware.
+2. `obend_zone2_noc_unifier`: the handle-equality short-circuit, the bit-81 mvar filter, and one instance of
+   `obend_macro_noc_router_xy` fed a single flit; there is no mesh.
+3. `obend_zone3_discr_lut`: a pinned-epoch comparator (`pin_valid && pkt_epoch == pinned_epoch`) in front of
+   `obend_macro_icap_dpr_tile`, which is a `gain*x+offset` tile with a shadow configuration, an isolation hold value
+   and a digest compare. It is a register swap behind a mux; there is no ICAP primitive, partial bitstream or
+   reconfigurable partition, and none is claimed by the Lean model either (`ReconfigTileState.isolated : Bool`).
+4. `obend_zone4_kernel_fsm`: a combinational code table (`1` Nat, `2` Prop, `3` Type, `5` Bool, `17` Nat→Nat,
+   `34` ∀P:Prop,P→P) registered on `check_start`, with `sorryAx` and sort-mismatch status tags.
+5. `silicon_elab_top`: wires the four together on one clock, no bus.
+The harness (`apps/silicon-kernel-verilator/verilator/sim_main.cpp`) reads its expected values from
+`silicon_elab_golden.txt`, written from the Lean model (`runVerilatorCoSimModel`) by `obend-emit-sv
+golden-silicon-kernel`, so the Verilated RTL is checked against Lean's numbers rather than against literals.
 
 ### 2.3 Live Lean 4 Commands, All 5 `by silicon_*` Tactics & Reflexive Self-Hosting (`lean/Obend/Tactic/SiliconElab.lean`)
 - **`#silicon_check <DeclName>`**:
   - Extracts the full transitive declaration + inductive + recursor cone from `Lean.Environment` (`extractLeanEnvCone`), serializes `OBCAMv1`, runs both `stepZone4StackFsm` and Verilated `silicon_elab_top.sv`, verifies bit-exact agreement, and logs hardware clock cycles, CAM hit rate, 1-cycle closed-term $\beta$-bypasses, NoC flits, and LUT hits.
 - **Reflexive Self-Hosting Milestone (`silicon_self_hosting_milestone_sound`)**:
-  - Executes `#silicon_check` on `Obend.Lower.LeanKernel.kernelCheckDecl`, `Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm`, and `Obend.Core.type_preservation`—proving and demonstrating the Verilated RTL hardware kernel checking its own Lean 4 source declarations in real clock cycles.
+  - Executes `#silicon_check` on `Obend.Lower.LeanKernel.kernelCheckDecl`, `Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm`, and `Obend.Core.Proofs.Preservation.typed_stepRaw_preserved`—proving and demonstrating the Verilated RTL hardware kernel checking its own Lean 4 source declarations in real clock cycles.
 - **All 5 Proof-Reconstructing Tactics (Untrusted Hardware Oracle $\to$ Kernel-Verified Lean 4 Proof Term)**:
   1. **`by silicon_simp`**: Runs Zone 3 hardware `DiscrTree` LUT matching + Zone 1 WHNF and reconstructs a Lean kernel proof from the matched `@[simp]` theorem trace.
-  2. **`by silicon_eqsat`**: Saturates the goal in `Obend.Analysis.EqSatHypergraph.HyperEGraph`, extracts the Clairvoyant minimum-cost DAG, and closes the goal via `eqSat_preserves_eval_and_adjoint`.
+  2. **`by silicon_eqsat`**: Saturates the goal in `Obend.Analysis.HyperEGraph`, extracts the Clairvoyant minimum-cost DAG, and closes the goal via `eqSat_preserves_eval_and_adjoint`.
   3. **`by silicon_sos`**: Synthesizes the SOS Gram / Lyapunov / CBF witness and closes the goal via `sos_cert_implies_nonneg`, `checkSosLyapunov_sound`, or `checkSosCbf_sound`.
   4. **`by silicon_interval`**: Evaluates Taylor Model / branch-and-bound interval enclosures and closes the goal via `taylorModel_transcendental_enclosure_sound` or `verifyRealBoundSubdiv_sound`.
   5. **`by silicon_flowpipe`**: Synthesizes an $N$-dimensional validated Picard flowpipe enclosure (`Obend.Analysis.Flowpipe`) and closes ODE trajectory reachability goals via `picard_step_encloses_trajectory` / `taylorModel_picard_sound`.
 
 ---
 
-## 3. North Star End-Targets 2 & 3: Unified Cloud-FPGA HAL (`crates/obend-fpga-hal`), Live DPR Deoptimization, `obend-node` & `obend-gui`
+## 3. The host side: `crates/obend-fpga-hal`, and what is documentation until a bitstream exists
 
-### 3.1 Unified BAR0 (`AXI4-Lite`) & 512-Bit `AXI4-Stream` Aperture (`crates/obend-fpga-hal/src/regs.rs`)
+### 3.1 Register map and the `MockBackend` (`crates/obend-fpga-hal/src/regs.rs`, `sim_backend.rs`)
 | BAR0 Offset | Aperture | Registers |
 | :--- | :--- | :--- |
-| `0x0000..0x00FF` | **Global Shell, Clock & DMA Ring CSRs** | `OBEND_MAGIC` (`"OBENDF20"`), `OBEND_VERSION_CAPS`, `OBEND_CTRL` (`AP_START`, `AP_DONE`, `SOFT_RST`, `STEP_ONCE`, `DPR_ISOLATE_EN`), `OBEND_CYCLE_COUNT`, `DMA_TX_RING`, `DMA_RX_RING` |
-| `0x0100..0x03FF` | **Generic `.obend` Core I/O & ILA State Snapshot** | `OBEND_IN_PORT[0..31]`, `OBEND_OUT_PORT[0..31]`, `OBEND_STATE_SNAP[0..31]` (`always_ff` architectural state readback), `OBEND_DPR_SLOT_GUARD_PIN` |
-| `0x0400..0x04FF` | **4-Zone `SiliconElabFabric` Co-Processor CSRs** | `SILICON_CTRL_STATUS`, `TARGET_EXPR_H`, `TARGET_TYPE_H`, `TARGET_DECL_SYM`, `FUEL_BUDGET`, `RESULT_STATUS`, `PERF_CYCLES`, `PERF_CAM_HITS`, `PERF_CAM_ALLOCS`, `PERF_BYPASS_CNT`, `PERF_NOC_FLITS`, `PERF_LUT_HITS`, `ZONE3_MATCH_THM` |
+| `0x0000..0x00FF` | Global, clock & DMA ring CSRs | `OBEND_MAGIC` (`"OBENDF20"`), `OBEND_VERSION_CAPS`, `OBEND_CTRL` (`AP_START`, `AP_DONE`, `SOFT_RST`, `STEP_ONCE`, `DPR_ISOLATE_EN`), `OBEND_CYCLE_COUNT`, `DMA_TX_RING`, `DMA_RX_RING` |
+| `0x0100..0x03FF` | Core I/O & state snapshot | `OBEND_IN_PORT[0..31]`, `OBEND_OUT_PORT[0..31]`, `OBEND_STATE_SNAP[0..31]`, `OBEND_DPR_SLOT_GUARD_PIN` |
+| `0x0400..0x04FF` | Fabric CSRs | `SILICON_CTRL_STATUS`, `TARGET_*`, `FUEL_BUDGET`, `RESULT_STATUS`, `PERF_*`, `ZONE3_MATCH_THM` |
 
-- **Backends**:
-  1. **Rung 3 (`sim_backend.rs` + `verilator_daemon_bridge.hpp`)**: `4 MiB` POSIX shared memory (`shm_open` + `mmap`) + Unix domain control socket driving Verilated `silicon_elab_top.sv` and compiled `.obend` cores at $\ge 1\text{ M cycles/s}$.
-  2. **Rung 4 (`aws_f2_backend.rs` + `hardware/aws-f2/cl_obend_shell_bridge.sv`)**: AWS EC2 F2 (`vu47p` `cl_obend`) `/dev/fpga0` BAR0 MMIO (`sh_ocl_*`) + `/dev/xdma0_{h2c,c2h}_0` 512-bit `AXI4-Stream` (`sh_pcis_*`) driver + `synth_cl_obend.tcl`.
-- **Live Specialization Deoptimization & `obend-gui` / `obend-node` Wiring**:
-  - When a `.obend` layer or environment pin mutates at runtime, `dprTileSlot` / `SlotGuardReg` blocks the stale specialized LUT in 1 cycle (`moved_pin_blocks`), asserts `DPR_ISOLATE_EN` (`skidHeldOutput` clamp), loads the updated `IcapBitstreamFrame` over BAR0/DMA, and releases the fence without dropping a single control tick.
-  - Wired into `crates/obend-node` (for hardware-accelerated batch/turn verification) and `crates/obend-gui` (exposing live Verilator / FPGA cycle counters and waveform telemetry).
+- The only backend is `MockBackend`: Rust that computes what the registers would read. There is no Verilated model
+  behind it (nothing links one) and no hardware backend. `obend-gui` and `obend-node` talk to this model through
+  `ObendFpgaHal::auto_connect()`; `OBEND_FPGA_BACKEND` set to anything but `mock` is refused.
+- The AWS F2 backend and `hardware/aws-f2/` were removed on 2026-11-04 (`hardware/README.md`): the bridge used a PCIS
+  AXI4-Stream the F2 shell does not have and a Tcl flow that cannot produce an AFI. An F2 custom logic is written
+  against the HDK on an instance.
+- First physical target: the iCE40 HX1K on an iCEstick (`hardware/ice40/`), with the width-annotated emitted
+  `obend_ice40_mac8` through yosys/nextpnr-ice40/icestorm.
+
+### 3.2 PDK, DRC, FabuBlox, TCAD, wafer.space, PnR, retiming: documentation until a bitstream exists
+`Obend.Hardware.{DRC,FabuBlox,TcadBridge,WaferSpace,PlaceRoute,Retiming,TapeoutPipeline}` and the `obend hardware
+*-signoff` commands check certificates that are worked examples (`golden*` records in the modules; `TapeoutConfig`
+defaults in the pipeline). No layout, deck, extraction or tool run of any design in this tree feeds them; the LVS
+"signature" in `TapeoutPipeline` is derived from the BEL list on both sides. Their theorems are true of the records
+they quantify over. `obend tapeout` therefore writes no signoff receipt (it refuses `--out-receipt`), and nothing in
+this document should be read as a claim about GF180MCU, Sky130 or SG13G2 signoff.
 
 ---
 

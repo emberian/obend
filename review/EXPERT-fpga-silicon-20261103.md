@@ -443,3 +443,26 @@ cd hardware/aws-f2 && verilator --lint-only -Wall -Wno-DECLFILENAME --top-module
 # artifacts untracked, timestamps
 git ls-files apps hardware | grep -c obj_dir ; ls -la apps/*/verilator apps/*/verilator/obj_dir
 ```
+
+---
+
+## What landed (2026-11-04)
+
+Ember's answer: bitstream soon (F2 or iCE40). Implemented in the order defended, on bb2 lane `~/lane-fpga`
+(base `85e6fd5`), commits unsigned (1Password refused):
+
+| commit | what | verified how |
+|---|---|---|
+| `503adff` | `HDL.lean`: `inputWidths`/`OutputPort.width`, per-domain `clk_<d>`/`rst_<d>`, `ASYNC_REG`, `checkRtlModuleW` (CDC through wires + widths + two-flop chains, `checkCdcTwoFlop_second_stage`); `checkRtlModule` keeps HEAD semantics. `VerilateRunner`: both `silicon_elab_top` string literals deleted; `--lec` renamed `*_belmiter.smt2` and documented as an AST-vs-BEL consistency miter; mismatch count parsed, not assumed. `Cli`: `emit-silicon-sv` writes `SiliconElabFabric.emitSiliconElabFabricSV`; `tapeout` refuses `--out-receipt` (the constant-signature receipt is gone). `SiliconElabFabric`: HEAD did not build (`let .constEntry … ←` without fallback); fixed. New `lean/tools/emitsv` (`obend-emit-sv`), tier 2, regenerates every emitted `.sv` plus the Lean golden. | `swarm-build lake build Obend.Hardware.Cli Obend.Main obend` (534 jobs, 0 errors) and `lake build obend-emit-sv` (532 jobs) on bb2. Emitted text for fidget, quantum and the four `hardware/sim` cores is byte-identical to the previously committed bodies (the emitter is byte-stable for single-domain, all-64 modules). |
+| `e367f9b` | `hardware/aws-f2` removed; `hardware/sim/silicon_elab_top.sv` and the four stale `_lec.smt2` removed; `hardware/README.md`; `hardware/sim/{tb_top.sv,sim_main.cpp,verify_sim.sh}` test the four emitted cores and regenerate `*_belmiter.smt2`; `hardware/ice40/` (iCEstick target: emitted `obend_ice40_mac8.sv` with widths 8/8/16→16, hand-written `top_icestick.sv`, `Makefile`, `icestick.pcf`). | Mac: `verilator -Wall` lint of `tb_top`, harness `mismatches=0`; z3 `unsat` on the three regenerated miters; `make lint && make` in `hardware/ice40` with yosys 0.x/nextpnr-ice40 0.11: **164/1280 LCs, Fmax 131.5 MHz (12 MHz constraint), `top_icestick.bin` produced** — the first bitstream from this tree, not yet loaded on the stick. |
+| `6148a98` | `apps/silicon-kernel-verilator`: the emitted `silicon_elab_top.sv` + `silicon_elab_golden.txt` (from `runVerilatorCoSimModel` via `obend-emit-sv golden-silicon-kernel`), new `sim_main.cpp` against the emitted interface, `verify_silicon_kernel.sh` with byte gates. fidget/quantum `.sv` regenerated with provenance headers; risc/fidget/drex/quantum verify scripts gain the byte gate. `foc_drive_top.sv`, `sdr_ft8_top.sv`, `zk_ntt_coproc.sv` headed hand-written; the seven `_lec.smt2` headed hand-written property sheets; script messages say "property sheet". | Mac: silicon-kernel harness 10/10 checks PASS against the Lean golden (42 / 70 / fallback / clamp / mutant / sorry); quantum testbench PASS + z3 unsat; fidget testbench PASS (676 leaf evals, 99,360 gouge checks); lint of all eight app `.sv` clean. |
+| `9f96f93` | `obend-fpga-hal`: `AwsF2Backend` and `verilator_daemon_bridge.hpp` removed; `SimBackend` → `MockBackend`, documented as a software register-map model; `auto_connect` refuses non-mock backends. | bb2: `cargo test -p obend-fpga-hal` 5 passed; `cargo check -p obend-gui` ok. `obend-node` is red at HEAD on its own (`net.rs` imports a `silicon_bridge` module `lib.rs` does not declare), not from this change. |
+| (this commit) | `QUALIFICATION-AND-SILICON-LEAN.md` §1.4, §1.5, §2.2, §3; `SILICON-ELABORATOR.md` status note; this section. The adjudication table was appended to `review/GEMINI-HANDOFF-20261103.md` and was swept into `bf1bb3c` by another lane's commit (shared index). | — |
+
+Not done / handed on:
+- `obend-emit-sv risc` and `drex` are disabled: `Apps/ObendRisc.lean` and `Apps/SovereignDrex.lean` do not build at HEAD (`decide` proves the §733 proposition false; `checkContractCert` unresolved). Their verify scripts fail at the byte gate until the Apps gate lands; the RISC faults from the panel diff (JAL `imm_i<<1`, signed BLTU/BGEU, x16-x31 read as zero) and the ZkNtt mod-P / transcript faults are queued for when Apps unlock.
+- No Yosys `write_smt2` LEC of the emitted `.sv` yet; the property sheets stay labelled as such.
+- `obend verilate` still runs 16×4 held-input cycles with 16-bit vectors; widened vectors and reset randomisation are next.
+- The iCE40 bitstream has not been loaded on ember's icestick (`make prog` in `hardware/ice40`).
+- `README.md`'s "Hardware" row still describes the old tier (not this lane's file).
+- `hardware/rust-ffi` dirty files (S-6) left for the physics lane, unverified.
