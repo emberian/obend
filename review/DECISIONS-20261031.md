@@ -153,3 +153,18 @@ until 2026-11-04; it no longer is. The file `review/DECISIONS-LEDGER.md` written
 
 Open after these: which of Gemini's eight S-lanes (handoff `review/GEMINI-HANDOFF-20261103.md`) resume
 at all now that Bend is retired (each lane adjudicates the dirty files it owns).
+
+## Taken by lanes under standing approval, 2026-11-04
+
+| decision | what was taken | cost to reverse |
+|---|---|---|
+| A package's laws are its root module's plus each imported module's, in C4 order over the import graph, named `Module.NAME`; each import its own chain (import order is not precedence) | frame lane, `48727bb`; all eight `apps/` now `obend check` | `Spec/Syntax.packageLaws` and `Workspace.close'`; the workspaces suite pins it |
+| The decisions ledger is dogfooded as a vault (`lean/tests/decisions/WALKTHROUGH.md`): dated, decider, append-only, cites-resolve laws; the real `review/` file is the index page | frame lane, `f3b832e` | a test directory |
+
+## Open for Ember (2026-11-04)
+
+| question | raised by |
+|---|---|
+| A kind's own laws are unprotected: the keeper of the ledger kind can relax the ledger's rules in one write. Should a kind's law lines need a stronger occasion (quorum, upgrade-only) than its pages? | frame lane gap list, `review/EXPERT-language-user-20261103.md` second round |
+| Laws see a page, not its patch: append-only is a byte-count monotonicity, not a prefix property. Should laws be able to ask the patch (deletions, edits) directly? | same |
+
