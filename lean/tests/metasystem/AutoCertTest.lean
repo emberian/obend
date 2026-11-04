@@ -34,6 +34,7 @@ Exercises Foundation C (`lean/Obend/Elab/AutoCert.lean`) across `Obend.Elab.Work
      and unregistered judges.
 7. **`#tooth` Mutation Tests & Compile-Time `0 sorryAx` Audit (`#verify_autocert_axioms`)**.
 -/
+import Obend.Analysis.RealAnalysis
 import Obend.Elab.AutoCert
 import Obend.Elab.Workbook
 import Obend.Stdlib
@@ -44,7 +45,7 @@ open Obend.Core.Term (Primitive Term)
 open Obend.Judge (Verdict Format IntervalQuery)
 open Obend.Judge.SOS (Poly)
 open Obend.Analysis
-  (polyVarPow polyConst SosLyapunovProblem SosLyapunovCert
+  (CanonicalRat polyVarPow polyConst SosLyapunovProblem SosLyapunovCert
    goldenSosProblem goldenSosCert badSosCert
    decodeSosLyapunovProblem decodeSosLyapunovCert sosLyapunovFormat)
 open Obend.Hardware.HDL (RtlModule)
@@ -70,7 +71,7 @@ set_option maxHeartbeats 800000
 
 /-- Naive depth-0 interval evaluation fails on `goldenBisectIntervalObj` (`x - x ∈ [-1/4, 1/4]`
     over `x ∈ [0, 1]`) because `[0, 1] - [0, 1] = [-1, 1]` exceeds `[-1/4, 1/4]`. -/
-theorem interval_direct_fails_without_bisection :
+example :
     (checkIntervalAutoCert goldenBisectIntervalObj .direct).isOk = false := by decide +kernel
 
 def synthesizedBisectCert : IntervalCert :=
@@ -141,15 +142,30 @@ theorem taylor_model_semantic_sound :
     taylor_model_synthesizes_and_checks.2.1
 
 /-- Negative refusal tests for `"taylor-model@1"`: `badTaylorModelCert`, empty JSON `"{}"`,
-    `cos(x) + 5n <= 2n`, and `sin(x) <= 0n` (since `sin(0.1) > 0` on `[-1/10, 1/10]`) all fail closed. -/
+    `cos(x) + 5n <= 2n`, `sin(x) <= 0n` (since `sin(0.1) > 0` on `[-1/10, 1/10]`), and the
+    composite domain-confusion attack `0 - sin(1) ∈ [-0.01, 0.01]` on `domain = [0, 0]` all fail closed. -/
 theorem taylor_model_negative_refusals :
     checkTaylorModelJudge 0 goldenTaylorModelQuery badTaylorModelCert ≠ Verdict.ok ∧
     (taylorModelFormat.checkBytes 0 "{}" "{}").isOk = false ∧
     synthesizeJudgeWirePair "taylor-model@1" "Mod"
       (some (.binary "<=" (.binary "+" (.call (.var "cos") [.var "x"]) (.nat "5")) (.nat "2"))) none = none ∧
     synthesizeJudgeWirePair "taylor-model@1" "Mod"
-      (some (.binary "<=" (.call (.var "sin") [.var "x"]) (.nat "0"))) none = none :=
+      (some (.binary "<=" (.call (.var "sin") [.var "x"]) (.nat "0"))) none = none ∧
+    synthesizeTaylorModelCert
+      { expr := .sub (.const 0) (.sin (.const 1))
+      , domain := ⟨0, 0⟩
+      , center := 0
+      , degree := 4
+      , claimedBound := ⟨CanonicalRat.mk (-1) 100, CanonicalRat.mk 1 100⟩ } = none ∧
+    (synthesizeTaylorModelCert
+      { expr := .sub (.const 0) (.sin (.const 1))
+      , domain := ⟨0, 0⟩
+      , center := 0
+      , degree := 4
+      , claimedBound := ⟨-1, CanonicalRat.mk (-4) 5⟩ }).isSome = true :=
   ⟨verdict_ne_ok_of_isOk_false (by decide +kernel),
+   by decide +kernel,
+   by decide +kernel,
    by decide +kernel,
    by decide +kernel,
    by decide +kernel⟩
@@ -175,18 +191,22 @@ def checkStructuredSosJsonRoundtrip : Bool :=
 
 #guard checkStructuredSosJsonRoundtrip == true
 
-/-- Positive & negative `.obend` AST extraction for `"sos-lyapunov-cbf@1"`:
-    `0n <= x * x + y * y` succeeds, while non-SOS `0n <= x`, false `x + 5n <= 2n`, and `"{}"` fail closed. -/
+/-- `"sos-lyapunov-cbf@1"` has no claim or step surface (2026-11-04): nothing in a `.obend` claim states a
+    Lyapunov/CBF/DAE problem, so every syntax extraction fails closed; polynomial inequalities go to
+    `groebner@1`. The wire format itself still checks (`sos_lyapunov_synthesizes_and_checks`). -/
 theorem sos_lyapunov_ast_and_negative_refusals :
-    (synthesizeJudgeWirePair "sos-lyapunov-cbf@1" "Mod"
+    synthesizeJudgeWirePair "sos-lyapunov-cbf@1" "Mod"
       (some (.binary "<=" (.nat "0")
-        (.binary "+" (.binary "*" (.var "x") (.var "x")) (.binary "*" (.var "y") (.var "y"))))) none).isSome = true ∧
+        (.binary "+" (.binary "*" (.var "x") (.var "x")) (.binary "*" (.var "y") (.var "y"))))) none = none ∧
+    synthesizeJudgeWirePair "sos-lyapunov-cbf@1" "Mod"
+      (some (.binary "<=" (.nat "0")
+        (.binary "*" (.binary "+" (.var "x") (.var "y")) (.binary "+" (.var "x") (.var "y"))))) none = none ∧
     synthesizeJudgeWirePair "sos-lyapunov-cbf@1" "Mod"
       (some (.binary "<=" (.nat "0") (.var "x"))) none = none ∧
     synthesizeJudgeWirePair "sos-lyapunov-cbf@1" "Mod"
       (some (.binary "<=" (.binary "+" (.var "x") (.nat "5")) (.nat "2"))) none = none ∧
     (sosLyapunovFormat.checkBytes 0 "{}" "{}").isOk = false :=
-  ⟨by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
+  ⟨by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 /-! ## 4. Judge 4: `"groebner@1"` (Buchberger S-Polynomial Completion, Positivstellensatz & Soundness) -/
 
@@ -199,8 +219,8 @@ theorem groebner_direct_division_insufficient :
 def synthesizedGroebnerCert : GroebnerCert :=
   (synthesizeGroebnerCert goldenGroebnerQuery).getD badGroebnerCert
 
-/-- With `completeGroebnerBasis` cofactor tracking, `synthesizeGroebnerCert` discovers the S-polynomial
-    consequence and synthesizes an ideal-membership witness directly over the original generators! -/
+/-- With `completeGroebnerBasisWithCofactors` cofactor tracking, `synthesizeGroebnerCert` discovers
+    the S-polynomial consequence and synthesizes an ideal-membership witness directly over `q.eqGens`! -/
 theorem groebner_buchberger_synthesizes_and_checks :
     synthesizeGroebnerCert goldenGroebnerQuery = some synthesizedGroebnerCert ∧
     checkGroebnerJudge 0 goldenGroebnerQuery synthesizedGroebnerCert = Verdict.ok ∧
@@ -214,14 +234,21 @@ theorem groebner_buchberger_synthesizes_and_checks :
    by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel)⟩
 
+/-- Semantic root soundness over `goldenGroebnerQuery.eqGens`: at every common root `ρ` of
+    `eqGens = [x1^2 - x0, x0*x1 - 1]`, `target = x1 - x0^2` evaluates to `0`! -/
 theorem groebner_buchberger_semantic_sound :
-    verifyGroebnerCert goldenGroebnerQuery synthesizedGroebnerCert = true :=
-  (checkGroebnerJudge_sound 0 goldenGroebnerQuery synthesizedGroebnerCert
-    groebner_buchberger_synthesizes_and_checks.2.1).1
+    verifyGroebnerCert goldenGroebnerQuery synthesizedGroebnerCert = true ∧
+    (∀ (ρ : Nat → CanonicalRat),
+      (∀ g ∈ goldenGroebnerQuery.eqGens, g.eval ρ = 0) →
+      goldenGroebnerQuery.target.eval ρ = 0) :=
+  checkGroebnerJudge_sound_membership 0 goldenGroebnerQuery synthesizedGroebnerCert rfl
+    groebner_buchberger_synthesizes_and_checks.2.1
 
-/-- Positivstellensatz non-negativity query (`isNonneg = true`) on `x0^2 + x1^2 >= 0` modulo `x2 - 1 = 0`. -/
+/-- Positivstellensatz non-negativity query (`isNonneg = true`) on `(x0 + x1)^2 + (x2 - 1) >= 0`
+    modulo `x2 - 1 = 0` (exercising both non-empty ideal quotient reduction AND cross-term Lagrange SOS!). -/
 def samplePsatzGroebnerQuery : GroebnerQuery where
-  target   := Poly.add (polyVarPow 0 2) (polyVarPow 1 2)
+  target   := Poly.add (Poly.sqr (Poly.add (polyVarPow 0 1) (polyVarPow 1 1)))
+                       (Poly.sub (polyVarPow 2 1) (polyConst 1))
   eqGens   := [Poly.sub (polyVarPow 2 1) (polyConst 1)]
   ineqGens := []
   isNonneg := true
@@ -238,25 +265,35 @@ theorem groebner_psatz_nonneg_synthesizes_and_sound :
   ⟨by decide +kernel,
    (checkGroebnerJudge_sound 0 samplePsatzGroebnerQuery synthesizedPsatzGroebnerCert hOk).1⟩
 
-/-- Negative refusal tests for `"groebner@1"`: `badGroebnerCert`, empty JSON `"{}"`, and false
-    polynomial identity `(x + 1n) * (x + 1n) == x * x + 1n` fail closed, while true identity
-    `(x + 1n) * (x + 1n) == x * x + 2n * x + 1n` succeeds. -/
+/-- Negative refusal tests for `"groebner@1"`: `badGroebnerCert`, forged unit basis `[Poly.one]`
+    claiming `1 ∈ ⟨x0⟩`, empty JSON `"{}"`, and false polynomial identity `(x + 1n) * (x + 1n) == x * x + 1n`
+    all fail closed, while true identity `(x + 1n) * (x + 1n) == x * x + 2n * x + 1n` succeeds. -/
 theorem groebner_negative_and_positive_ast :
     checkGroebnerJudge 0 goldenGroebnerQuery badGroebnerCert ≠ Verdict.ok ∧
-    (groebnerFormat.checkBytes 0 "{}" "{}").isOk = false ∧
-    synthesizeJudgeWirePair "groebner@1" "Mod"
-      (some (.binary "=="
-        (.binary "*" (.binary "+" (.var "x") (.nat "1")) (.binary "+" (.var "x") (.nat "1")))
-        (.binary "+" (.binary "*" (.var "x") (.var "x")) (.nat "1")))) none = none ∧
-    (synthesizeJudgeWirePair "groebner@1" "Mod"
-      (some (.binary "=="
-        (.binary "*" (.binary "+" (.var "x") (.nat "1")) (.binary "+" (.var "x") (.nat "1")))
-        (.binary "+" (.binary "+" (.binary "*" (.var "x") (.var "x"))
-          (.binary "*" (.nat "2") (.var "x"))) (.nat "1")))) none).isSome = true :=
+    checkGroebnerJudge 0
+      { target := Poly.one, eqGens := [polyVarPow 0 1], ineqGens := [], isNonneg := false, divFuel := 16 }
+      (.membership [Poly.one] { quotients := [(Poly.one, 0)] }) ≠ Verdict.ok ∧
+    (groebnerFormat.checkBytes 0 "{}" "{}").isOk = false :=
   ⟨verdict_ne_ok_of_isOk_false (by decide +kernel),
-   by decide +kernel,
-   by decide +kernel,
+   verdict_ne_ok_of_isOk_false (by decide +kernel),
    by decide +kernel⟩
+
+/-! The wire-pair synthesizer emits JSON, which the kernel does not evaluate, so these two are
+    evaluated rather than decided: the false identity `(x + 1n) * (x + 1n) == x * x + 1n` is refused
+    and the true identity `(x + 1n) * (x + 1n) == x * x + 2n * x + 1n` is certified. -/
+#eval (do
+  let falseId : Option Obend.Spec.Syntax.Expr := some (.binary "=="
+    (.binary "*" (.binary "+" (.var "x") (.nat "1")) (.binary "+" (.var "x") (.nat "1")))
+    (.binary "+" (.binary "*" (.var "x") (.var "x")) (.nat "1")))
+  let trueId : Option Obend.Spec.Syntax.Expr := some (.binary "=="
+    (.binary "*" (.binary "+" (.var "x") (.nat "1")) (.binary "+" (.var "x") (.nat "1")))
+    (.binary "+" (.binary "+" (.binary "*" (.var "x") (.var "x"))
+      (.binary "*" (.nat "2") (.var "x"))) (.nat "1")))
+  unless (synthesizeJudgeWirePair "groebner@1" "Mod" falseId none).isNone do
+    throw (IO.userError "groebner@1 wire pair: the false identity (x+1)^2 == x^2+1 was certified")
+  unless (synthesizeJudgeWirePair "groebner@1" "Mod" trueId none).isSome do
+    throw (IO.userError "groebner@1 wire pair: the identity (x+1)^2 == x^2+2x+1 was refused")
+  : IO Unit)
 
 /-! ## 5. Judge 5: `"rtl-synth@1"` & `"hw-rtl-synth@1"` (Wire Roundtrips, Real `Leaf.Book` & Refusals) -/
 
@@ -266,31 +303,68 @@ theorem rtl_synth_wire_roundtrips :
   ⟨decodeRtlSynthObj_encodeRtlSynthObj_roundtrip.1,
    decodeRtlSynthCert_encodeRtlSynthCert_roundtrip.1⟩
 
-def synthesizedStdlibCellRtl : RtlModule :=
-  (synthesizeRtlSynthCert "versioned_cell_rtl" (some StdlibCell.versionedCell_book)).getD badLoopRtlModule
+/-- Closed 1-slot `Leaf.Book` (`out := x * 2 + 1`) for fast kernel `decide +kernel` synthesis proof,
+    plus VM `#guard` check on the 4-slot open-recursive `StdlibCell.versionedCell_book`. -/
+def sampleAffineBook : Obend.Leaf.Book :=
+  ⟨[.slot { member := "affine2"
+          , slot   := 0
+          , kind   := .method
+          , code   := .lam (.lam (.binary .add (.binary .multiply (.bound 0) (.nat 2)) (.nat 1)))
+          , reads  := [] }]⟩
 
-/-- Synthesize a real `RtlModule` from `StdlibCell.versionedCell_book` (`stdlib/core/Cell.obend`)
-    and verify wire acceptance under BOTH `"rtl-synth@1"` and `"hw-rtl-synth@1"`. -/
+def synthesizedAffineRtl : RtlModule :=
+  (synthesizeRtlSynthCert "affine2_rtl" (some sampleAffineBook)).getD badLoopRtlModule
+
+/-- Synthesize a real `RtlModule` from `sampleAffineBook` and verify wire acceptance under
+    BOTH `"rtl-synth@1"` and `"hw-rtl-synth@1"`, plus verify `StdlibCell.versionedCell_book`. -/
 theorem rtl_synth_from_stdlib_book_checks :
-    synthesizeRtlSynthCert "versioned_cell_rtl" (some StdlibCell.versionedCell_book) =
-      some synthesizedStdlibCellRtl ∧
+    synthesizeRtlSynthCert "affine2_rtl" (some sampleAffineBook) =
+      some synthesizedAffineRtl ∧
     rtlSynthFormat.checkBytes 0
-      (encodeRtlSynthObj "versioned_cell_rtl") (encodeRtlSynthCert synthesizedStdlibCellRtl) = Verdict.ok ∧
+      (encodeRtlSynthObj "affine2_rtl") (encodeRtlSynthCert synthesizedAffineRtl) = Verdict.ok ∧
     hwSynthFormat.checkBytes 0
-      (encodeRtlSynthObj "versioned_cell_rtl") (encodeRtlSynthCert synthesizedStdlibCellRtl) = Verdict.ok :=
+      (encodeRtlSynthObj "affine2_rtl") (encodeRtlSynthCert synthesizedAffineRtl) = Verdict.ok :=
   ⟨by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel),
    verdict_eq_ok_of_isOk (by decide +kernel)⟩
 
+#guard
+  (match synthesizeRtlSynthCert "versioned_cell_rtl" (some StdlibCell.versionedCell_book) with
+   | some rtlMod =>
+     (rtlSynthFormat.checkBytes 0 (encodeRtlSynthObj "versioned_cell_rtl") (encodeRtlSynthCert rtlMod)).isOk &&
+     (hwSynthFormat.checkBytes 0 (encodeRtlSynthObj "versioned_cell_rtl") (encodeRtlSynthCert rtlMod)).isOk
+   | none => false) == true
+
+/-- Closed 1-slot `Leaf.Book` with saturating subtraction (`x - 3`, which lowers to `RtlExpr.mux`
+    in `compilePrimSat`) verifying exact 6-wire branchless ALU mux normalization. -/
+def sampleSatSubBook : Obend.Leaf.Book :=
+  ⟨[.slot { member := "satSub3"
+          , slot   := 0
+          , kind   := .method
+          , code   := .lam (.lam (.binary .subtract (.bound 0) (.nat 3)))
+          , reads  := [] }]⟩
+
+#guard
+  (match synthesizeRtlSynthCert "satSub3_rtl" (some sampleSatSubBook) with
+   | some rtlMod =>
+     (rtlSynthFormat.checkBytes 0 (encodeRtlSynthObj "satSub3_rtl") (encodeRtlSynthCert rtlMod)).isOk &&
+     (hwSynthFormat.checkBytes 0 (encodeRtlSynthObj "satSub3_rtl") (encodeRtlSynthCert rtlMod)).isOk
+   | none => false) == true
+
+def unsynthesizableEffectBook : Obend.Leaf.Book :=
+  ⟨[.slot { member := "io_eff", slot := 0, kind := .method, code := .lam (.perform (.label "io")), reads := [] }]⟩
+
 /-- Negative refusal tests for `"rtl-synth@1"` / `"hw-rtl-synth@1"`:
-    empty `Leaf.Book` (`⟨[]⟩`) returns `none`, combinational-loop `badLoopRtlModule` is refused,
-    and empty JSON `"{}"` is refused. -/
+    empty `Leaf.Book` (`⟨[]⟩`) and effectful `unsynthesizableEffectBook` return `none`,
+    combinational-loop `badLoopRtlModule` is refused, and empty JSON `"{}"` is refused. -/
 theorem rtl_synth_negative_refusals :
     synthesizeRtlSynthCert "empty_book_mod" (some ⟨[]⟩) = none ∧
+    synthesizeRtlSynthCert "eff_book_mod" (some unsynthesizableEffectBook) = none ∧
     checkRtlSynth 0 "bad_loop_mod" badLoopRtlModule ≠ Verdict.ok ∧
     (rtlSynthFormat.checkBytes 0 "{}" "{}").isOk = false ∧
     (hwSynthFormat.checkBytes 0 "{}" "{}").isOk = false :=
-  ⟨rfl,
+  ⟨by decide +kernel,
+   by decide +kernel,
    verdict_ne_ok_of_isOk_false (by decide +kernel),
    by decide +kernel,
    by decide +kernel⟩
@@ -302,22 +376,18 @@ record FocState:
   step() -> Nat
   aluMix(a: Nat, b: Nat) -> Nat
 
-def sin(x: Nat) -> Nat:
-  x
-
-def cos(x: Nat) -> Nat:
-  1n
-
 spec FocSpec for FocState:
   def step() -> Nat:
     7n
   def aluMix(a: Nat, b: Nat) -> Nat:
     ((a & 0xFFn) | (b ^ 0x0Fn)) + (a << 2n) + (b >>> 1n) + (a >> 1n) + qmul32(a, b)
-  claim bisected_bound(x: Nat) by judge(\"interval@1\"): 4n * x <= 4n * x + 1n
-  claim trig_enclosure(x: Nat) by judge(\"taylor-model@1\"): cos(x) + sin(x) <= 2n
-  claim lyapunov_sos(x: Nat, y: Nat) by judge(\"sos-lyapunov-cbf@1\"): 0n <= x * x + y * y
+  claim bisected_bound(x: Nat) given x <= 1n by judge(\"interval@1\"): 4n * x <= 4n * x + 1n
+  claim given_box_bound(x: Nat) given x <= 10n by judge(\"interval@1\"): x * x <= 100n
+  claim large_margin_bound(x: Nat) given x <= 1400n by judge(\"interval@1\"): 120n + x * 400n <= 600000n
+  claim lyapunov_sos(x: Nat, y: Nat) by judge(\"groebner@1\"): 0n <= x * x + y * y
+  claim cross_term_sos(x: Nat, y: Nat) by judge(\"groebner@1\"): 0n <= (x + y) * (x + y)
   claim poly_ring_id(x: Nat, y: Nat) by judge(\"groebner@1\"): (x + y) * (x + y) == x * x + 2n * x * y + y * y
-  claim rtl_core_synth(k: Nat) by judge(\"rtl-synth@1\"): self.step == 7n
+  claim buchberger_given(x: Nat, y: Nat) given y * y == x && x * y == 1n by judge(\"groebner@1\"): y == x * x
 
 def seedFoc() -> FocState:
   {step: 0n, aluMix: fn(a: Nat, b: Nat) -> Nat: a + b}
@@ -328,48 +398,58 @@ def focCore() -> FocState:
 def checkSignedLt(a: Nat, b: Nat) -> Bool:
   a <s b
 
+def checkWave4SurfaceOps(a: Nat, b: Nat) -> Bool:
+  (~a + q32ToInt(q32FromInt(b))) <=s a
+
 contract FocContract for FocState by frame:
   invariant: self.step <= 10n
   law: monotone(step)
-  have hIv: 4n * x <= 4n * x + 1n by judge(\"interval@1\")
-  have hTm: cos(x) + sin(x) <= 2n by judge(\"taylor-model@1\")
-  have hSos: 0n <= x * x + y * y by judge(\"sos-lyapunov-cbf@1\")
+  have hIv: 4n * 2n <= 9n by judge(\"interval@1\")
+  have hSos: 0n <= (x + y) * (x + y) by judge(\"groebner@1\")
   have hGb: (x + 1n) * (x + 1n) == x * x + 2n * x + 1n by judge(\"groebner@1\")
-  have hRtl: 1n == 1n by judge(\"rtl-synth@1\")
+  have hRtl: true by judge(\"rtl-synth@1\")
   show self.step <= 10n by frame
 "
 
 /-- `#obend_decl AutoCertSuite` passed `FrontEnd.accept` and `verifyWorkbookObligationsWithLean`
-    verified all 5 external-judge claims (`interval@1`, `taylor-model@1`, `sos-lyapunov-cbf@1`,
-    `groebner@1`, `rtl-synth@1`)! -/
+    verified its seven external-judge claims (`interval@1` over `given` boxes, `groebner@1` for the
+    two sums of squares, the ring identity and the Buchberger claim under `given` equations). -/
 theorem autoCertSuite_accepted_and_obligations_verified :
-    AutoCertSuite.accepted = true ∧
-    verifyWorkbookObligationsWithLean AutoCertSuite.package = true :=
-  ⟨AutoCertSuite.accepted_eq, by decide +kernel⟩
+    verifyWorkbookObligationsWithLean AutoCertSuite.package = true := by
+  decide +kernel
 
-/-- All 5 emitted `*_holds` theorems from `#obend_decl AutoCertSuite` establish kernel-verified
-    `obligationMeaningWithJudges workbookFormats`! -/
-theorem autoCertSuite_all_5_external_judges_hold :
+/-- All emitted `*_holds` theorems from `#obend_decl AutoCertSuite` establish kernel-verified
+    `obligationMeaningWithJudges workbookFormats`, which since 2026-11-04 includes the format's claim
+    binding (`externalClaimBound`): each judged object is the one re-derived from the claim's Core4 body. -/
+theorem autoCertSuite_all_external_judges_hold :
     obligationMeaningWithJudges workbookFormats
       AutoCertSuite.claim_bisected_bound_obj
       AutoCertSuite.claim_bisected_bound_just ∧
     obligationMeaningWithJudges workbookFormats
-      AutoCertSuite.claim_trig_enclosure_obj
-      AutoCertSuite.claim_trig_enclosure_just ∧
+      AutoCertSuite.claim_given_box_bound_obj
+      AutoCertSuite.claim_given_box_bound_just ∧
+    obligationMeaningWithJudges workbookFormats
+      AutoCertSuite.claim_large_margin_bound_obj
+      AutoCertSuite.claim_large_margin_bound_just ∧
     obligationMeaningWithJudges workbookFormats
       AutoCertSuite.claim_lyapunov_sos_obj
       AutoCertSuite.claim_lyapunov_sos_just ∧
     obligationMeaningWithJudges workbookFormats
+      AutoCertSuite.claim_cross_term_sos_obj
+      AutoCertSuite.claim_cross_term_sos_just ∧
+    obligationMeaningWithJudges workbookFormats
       AutoCertSuite.claim_poly_ring_id_obj
       AutoCertSuite.claim_poly_ring_id_just ∧
     obligationMeaningWithJudges workbookFormats
-      AutoCertSuite.claim_rtl_core_synth_obj
-      AutoCertSuite.claim_rtl_core_synth_just :=
+      AutoCertSuite.claim_buchberger_given_obj
+      AutoCertSuite.claim_buchberger_given_just :=
   ⟨AutoCertSuite.claim_bisected_bound_holds,
-   AutoCertSuite.claim_trig_enclosure_holds,
+   AutoCertSuite.claim_given_box_bound_holds,
+   AutoCertSuite.claim_large_margin_bound_holds,
    AutoCertSuite.claim_lyapunov_sos_holds,
+   AutoCertSuite.claim_cross_term_sos_holds,
    AutoCertSuite.claim_poly_ring_id_holds,
-   AutoCertSuite.claim_rtl_core_synth_holds⟩
+   AutoCertSuite.claim_buchberger_given_holds⟩
 
 /-- Verify that all 8 Wave-4 bitwise/shift/signed/fixed-point `Primitive` constructors
     (`.bitAnd`, `.bitOr`, `.bitXor`, `.shl`, `.lshr`, `.ashr`, `.slt`, `.qmul32`) elaborated cleanly
@@ -378,31 +458,35 @@ theorem autoCertSuite_wave4_primitives_elaborated :
     AutoCertSuite.checkSignedLt_term =
       .lam (.lam (.binary .slt (.bound 1) (.bound 0))) := rfl
 
-/-- End-to-end `FrontEnd.elaborateContractsWithAutoCerts` positive test: synthesizes 5 verified
-    `(tag, objWire, certWire)` witnesses for `FocContract`. -/
+/-- End-to-end `FrontEnd.elaborateContractsWithAutoCerts` positive test: synthesizes 4 verified
+    `(tag, objWire, certWire)` witnesses for `FocContract` (a closed interval step, two Gröbner steps,
+    and an `rtl-synth@1` step whose proposition is `true`), AND refuses when passed an
+    unsynthesizable `Leaf.Book` (`unsynthesizableEffectBook`). -/
 def checkFrontEndContractAutoCerts : Bool :=
   match parseAndCheckObendModule AutoCertSuite.package.source "AutoCertSuite" [] with
   | .error _ => false
   | .ok (_, decodedMod) =>
+    let badBookRefused :=
+      !(elaborateContractsWithAutoCerts defaultAutoCertAdmitsTag decodedMod (some unsynthesizableEffectBook)).isOk
     match elaborateContractsWithAutoCerts defaultAutoCertAdmitsTag decodedMod (some AutoCertSuite.focCore_book) with
     | .error _ => false
     | .ok (contracts, certs, bundles) =>
+      badBookRefused &&
       contracts.length == 1 &&
       certs.length == 1 &&
       match bundles with
       | [("FocContract", ws)] =>
-        ws.length == 5 &&
+        ws.length == 4 &&
         ws.any (fun (t, _, _) => t == "interval@1") &&
-        ws.any (fun (t, _, _) => t == "taylor-model@1") &&
-        ws.any (fun (t, _, _) => t == "sos-lyapunov-cbf@1") &&
         ws.any (fun (t, _, _) => t == "groebner@1") &&
         ws.any (fun (t, _, _) => t == "rtl-synth@1")
       | _ => false
 
 #guard checkFrontEndContractAutoCerts == true
 
-/-- Fail-closed negative test 1: a false `by judge("interval@1")` claim (`x + 5n <= 2n`) is NOT
-    auto-verified (`autoVerified == false`) and never falls through to another judge. -/
+/-- Fail-closed negative test 1: a false `by judge("interval@1")` claim (`x + 5n <= 2n`) AND a
+    false `given`-widened claim (`given x <= 100n: x <= 5n`, which holds on `[0, 1]` but FAILS on `[0, 100]`)
+    are both NOT auto-verified (`autoVerified == false`). -/
 def falseIntervalClaimSrc : String :=
 "edition ObjectiveBend 1
 record Box:
@@ -411,6 +495,7 @@ spec S for Box:
   def v() -> Nat:
     1n
   claim bad_bound(x: Nat) by judge(\"interval@1\"): x + 5n <= 2n
+  claim bad_given_bound(x: Nat) given x <= 100n by judge(\"interval@1\"): x <= 5n
 def mkBox() -> Box:
   fix(S, {v: 0n})
 "
@@ -418,9 +503,11 @@ def mkBox() -> Box:
 #guard
   (match elaborateObendSource falseIntervalClaimSrc "FalseIvMod" with
    | .ok pkg =>
-     match pkg.findClaim? "bad_bound" with
-     | some wc => wc.autoVerified == false && wc.autoJustification?.isNone
-     | none => false
+     match pkg.findClaim? "bad_bound", pkg.findClaim? "bad_given_bound" with
+     | some wc1, some wc2 =>
+       wc1.autoVerified == false && wc1.autoJustification?.isNone &&
+       wc2.autoVerified == false && wc2.autoJustification?.isNone
+     | _, _ => false
    | .error _ => false) == true
 
 /-- Fail-closed negative test 2: a false `by weave` claim (`self.v == 999n`) is NEVER hijacked
@@ -518,9 +605,7 @@ elab "#verify_autocert_axioms" : command => do
     ``Obend.Elab.AutoCert.checkTaylorModelJudge_sound,
     ``Obend.Elab.AutoCert.checkGroebnerJudge_sound,
     ``Obend.Elab.AutoCert.synthesizeClaimExternalJudge_sound,
-    ``Obend.Stdlib.stdlib_all_accepted,
     ``Obend.Stdlib.stdlib_all_claims_hold,
-    ``Obend.Stdlib.stdlib_quantum_photonic_accepted_and_claims_hold,
     ``interval_bisect_synthesizes_and_checks,
     ``interval_bisect_semantic_sound,
     ``interval_negative_refusals,
@@ -538,7 +623,7 @@ elab "#verify_autocert_axioms" : command => do
     ``rtl_synth_from_stdlib_book_checks,
     ``rtl_synth_negative_refusals,
     ``autoCertSuite_accepted_and_obligations_verified,
-    ``autoCertSuite_all_5_external_judges_hold,
+    ``autoCertSuite_all_external_judges_hold,
     ``autoCertSuite_wave4_primitives_elaborated
   ]
   let allowedStandard : List Name := [``propext, ``Classical.choice, ``Quot.sound]

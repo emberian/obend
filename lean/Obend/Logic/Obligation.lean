@@ -184,6 +184,10 @@ def claimFormat : Judge.Format where
   Obj := ClaimObj
   Cert := List RStep
   judge := claimJudge
+  bindsClaim := fun claim _ objWire =>
+    match statementOf objWire with
+    | .ok o' => Obend.Law.termEq o'.claim claim
+    | .error _ => false
   decodeObj := statementOf
   decodeCert := certificateOf
   trust := .compiled
@@ -573,6 +577,30 @@ theorem supportsHoldB_sound {o : ClaimObj} {sups : List Support}
   have h1 : Support.holds o.comp o.self sp = true := List.all_eq_true.1 h sp hsp
   exact optEq_sound h1
 
+/-- Verify that an external judge justification is bound to and consistent with `o.claim`:
+    1. When `o.sides` is a well-formed equation, its sides are not distinct ground literals
+       (no external payload certifies `0 = 1` or `true = false`).
+    2. Evaluating `o` at the canonical ground zero point `List.replicate o.arity (.natural 0)`
+       via `groundAt` must not refute `o.claim` (`groundAt ... 16 != some false`).
+    3. The format itself says whether `objStr` states this claim (`F.bindsClaim o.claim o.arity`).
+       `rewrite@1` compares the quoted claim terms;
+       `interval@1` and `groebner@1` re-derive their object from the claim's Core4 body
+       (`Obend.Elab.AutoCert.claimIntervalObj?`, `claimGroebnerQuery?`) and compare; a format
+       with no binder is unbound and refused. Before 2026-11-04 only `rewrite@1` was bound. -/
+def externalClaimBound (F : Judge.Format) (o : ClaimObj) (objStr : String) : Bool :=
+  let distinctGround : Bool :=
+    match o.sides with
+    | some (_, .nat n1, .nat n2) => n1 != n2
+    | some (_, .boolean b1, .boolean b2) => b1 != b2
+    | some (_, .label s1, .label s2) => s1 != s2
+    | _ => false
+  if distinctGround then false
+  else if groundAt ⟨instantiateClaim o.claim o.comp o.layer, List.replicate o.arity (.natural 0)⟩ 16 == some false then
+    false
+  else
+    F.bindsClaim o.claim o.arity objStr
+
+
 /-- Registry-backed obligation checker parameterized by a list of registered `Judge.Format`s. -/
 def obligationCheckWithJudges (formats : List Judge.Format) (k : Nat) (o : ClaimObj) (j : Justification) :
     Judge.Verdict ClaimClause :=
@@ -592,7 +620,11 @@ def obligationCheckWithJudges (formats : List Judge.Format) (k : Nat) (o : Claim
       .refused .illFormed []
     else
       match findFormat formats fmt, decodeExternalPayload o payload with
-      | some F, some (objStr, certStr) => checkFormatBytes F k objStr certStr
+      | some F, some (objStr, certStr) =>
+        if externalClaimBound F o objStr != true then
+          .refused .illFormed []
+        else
+          checkFormatBytes F k objStr certStr
       | _, _ => .refused .illFormed []
   | .byEval samples =>
     -- Finite evaluation samples cannot establish a universal claim; refuse empty and return uncovered for samples
@@ -613,6 +645,7 @@ def obligationMeaningWithJudges (formats : List Judge.Format) (o : ClaimObj) (j 
       o.wellFormed = true ∧
       ∃ F, findFormat formats fmt = some F ∧
         ∃ objStr certStr, decodeExternalPayload o payload = some (objStr, certStr) ∧
+          externalClaimBound F o objStr = true ∧
           ∃ obj cert, F.decodeObj objStr = .ok obj ∧ F.decodeCert certStr = .ok cert ∧
             F.judge.Meaning obj cert
   | .byEval _ => False
@@ -652,8 +685,11 @@ theorem obligationWithJudges_sound (formats : List Judge.Format) {k : Nat} {o : 
         | some pair =>
           obtain ⟨objStr, certStr⟩ := pair
           rw [hf, hd] at h
-          obtain ⟨obj, cert, hobj, hcert, hmean⟩ := checkFormatBytes_sound F h
-          exact ⟨rfl, F, rfl, objStr, certStr, rfl, obj, cert, hobj, hcert, hmean⟩
+          cases hb : externalClaimBound F o objStr
+          · simp [hb] at h
+          · simp only [hb, bne_self_eq_false, Bool.false_eq_true, ite_false] at h
+            obtain ⟨obj, cert, hobj, hcert, hmean⟩ := checkFormatBytes_sound F h
+            exact ⟨rfl, F, rfl, objStr, certStr, rfl, hb, obj, cert, hobj, hcert, hmean⟩
   | byEval samples =>
     dsimp [obligationCheckWithJudges] at h
     split at h <;> cases h
@@ -679,7 +715,11 @@ theorem obligationWithJudges_mono (formats : List Judge.Format) {k k' : Nat} {o 
         | some pair =>
           obtain ⟨objStr, certStr⟩ := pair
           rw [hf, hd] at hne
-          exact checkFormatBytes_mono F le hne
+          dsimp only at hne ⊢
+          cases hb : externalClaimBound F o objStr
+          · simp [hb]
+          · simp only [hb, bne_self_eq_false, Bool.false_eq_true, ite_false] at hne ⊢
+            exact checkFormatBytes_mono F le hne
   | byEval _ => rfl
 
 /-- Construct a `Judge ClaimObj Justification` backed by `formats`. -/
@@ -922,5 +962,26 @@ def verifyByBisimRefinementBroken (_k : Nat) (_baseObj : ClaimObj) (_baseSteps :
 #tooth Obend.Logic.verifyByBisimRefinement_sound by mutation
   Obend.Logic.verifyByBisimRefinement := verifyByBisimRefinementBroken
 
+/-- Well-formed false `ClaimObj` (`0 = 1`) for testing external judge claim binding. -/
+def falseExternalClaimObj : ClaimObj :=
+  { comp := { top := { name := "test", metadata := .record [], fields := [] }, below := [], seed := [] }
+  , layer := 0
+  , claim := .lam (.lam (.binary .equal (.nat 0) (.nat 1)))
+  , arity := 0 }
+
+/-- **External Judge Claim-Binding Refusal Theorem (`obligationCheck_refuses_false_external_claim`)**:
+    Presenting a valid `"lrat@1"` refutation payload for a false claim (`0 = 1`) is refused. -/
+-- fixture kept (2026-11-04): target of #tooth at Obend/Logic/Obligation.lean:980
+theorem obligationCheck_refuses_false_external_claim :
+    obligationCheck 100 falseExternalClaimObj
+      (.byExternalJudge "lrat@1" (mkExternalJudgePayload "[[1],[-1]]" "[{\"id\":3,\"clause\":[],\"hints\":[1,2]}]")) =
+      .refused .illFormed [] := by
+  decide +kernel
+-- Named (not `example`) because the `#tooth` below replays it under a mutated `externalClaimBound`.
+
+#tooth Obend.Logic.obligationCheck_refuses_false_external_claim by mutation
+  Obend.Logic.externalClaimBound := fun _ _ _ => true
+
 end Obend.Logic
 end
+
