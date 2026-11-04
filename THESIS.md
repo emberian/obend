@@ -1,10 +1,11 @@
 # Objective Bend: the thesis, what the research supports, and what is proved
 
 Stated 2026-10-29; revised 2026-11-01 after landing `C1`, `C2`, `Sound`, `OneChecker`, `Demand`/`Ticks`,
-`Impact`, `Logic`, `Leaf`/`BendTT`, `Lower`, `LawDial`, `Ledger`, and `Hardware` (52,368 constants
-across 622 build jobs in `lean/`, zero `sorryAx`, zero custom axioms). Status words: **PROVED** (a
-kernel-checked theorem in `lean/`), **SUPPORTED** (mechanized on a core fragment with the full
-extension underway), **OPEN** (next frontier).
+`Impact`, `Logic`, `Leaf`/`BendTT`, `Lower`, `LawDial`, `Ledger`, and `Hardware`; revised 2026-11-04 in the
+research frame of `AMBITION.md` (counts removed: they measure nothing; a theorem name below is a claim
+that the named declaration exists with a universally quantified statement, and `review/EXPERT-*-20261103.md`
+lists the ones that did not). Status words: **PROVED** (a kernel-checked theorem in `lean/`),
+**SUPPORTED** (mechanized on a core fragment with the full extension underway), **OPEN** (next frontier).
 
 ## 1. The core thesis, stated so it can be wrong
 
@@ -23,10 +24,9 @@ serving as the compiled leaf target.** Specifically:
    binding away at the leaf boundary.** `fix spec seed ⟶ spec (fix spec seed) seed` hands one
    `self` to every layer and uses it as many times as there are methods. Where a composition is
    closed, `Obend/Leaf` flattens `self` and `super` statically into a vtable and emits a first-order
-   `Book` and a `BendTT` net with zero runtime vtable or `super` records left behind.
+   `Book` with zero runtime vtable or `super` records left behind.
    **PROVED**: `late_binding` (`Obend/Logic/LateBinding.lean`), `flatten_sound` (`Obend/Leaf/Flatten.lean`),
-   `vtable_clean` (`Obend/Leaf/Residual.lean`), `book_sound` (`Obend/Leaf/Emit.lean`), and
-   `book_to_bendtt_sound` (`Obend/Leaf/BendTT.lean`).
+   `vtable_clean` (`Obend/Leaf/Residual.lean`), and `book_sound` (`Obend/Leaf/Emit.lean`).
 2. **Laziness is necessary for partial objects and compositional specs, and its two-stage demand
    cost is bounded within a small constant of clairvoyant call-by-value.** `{good=7, bad=self.bad}.good`
    must be 7; a law or view over an object other people are still specifying is a partial
@@ -50,9 +50,11 @@ serving as the compiled leaf target.** Specifically:
    refused.** What users and agents need is a judge on every write that names the refusing ancestor
    and clause, plus a solver that tells a refused caller what multi-field change would be admitted.
    **PROVED**: `judge_sound`/`judge_complete`, `legal_law_admitted`, `package_never_widens`,
-   `judgeEffective_names`, `chain_keeps` (`Obend/Law`), difference-constraint witness synthesis
-   (`solveLawWitness_sound` in `Obend/Spec/LawDial.lean`), and constructive Vault repair suggestions
-   (`suggestMultiField_admits` in `Obend/Vault/Law.lean`).
+   `judgeEffective_names`, `chain_keeps` (`Obend/Law`), the vault's judge (`judge_admits`,
+   `judge_refuses` in `Obend/Vault/Law.lean`), and difference-constraint witness synthesis
+   (`solveLawWitness_sound` in `Obend/Spec/LawDial.lean`). The vault's repair text (`suggest`,
+   `suggestMultiField` in `Obend/Vault/Law.lean`) is checked on examples, not proved complete, and
+   the package-level `obend judge` names the refusing law without a repair (**OPEN**).
 5. **Extensible, contextual theories are all instances of one object: the `Slot` (`Obend.Slot`) and
    its boundary reference, the `Intention` (`Obend.Intention`).** CMTT for contextual typing,
    ATMS/Doyle for withdrawable supports, incumbent-first selection with chooser override, and exact
