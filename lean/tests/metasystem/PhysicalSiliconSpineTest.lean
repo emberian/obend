@@ -32,8 +32,7 @@ kernel mutation-killing probes, and `#print axioms` verification (`0 sorryAx`) a
 3. `Obend.Hardware.DRC` & `Obend.Hardware.FabuBlox`:
    - `LayoutBox2D`, `checkBoxSpacing2D`, `checkViaEnclosure2D`,
    - `boxSpacing2D_disjoint`, `viaEnclosure2D_contained`,
-   - `extractInterconnectRCFromCutline`, `extractInterconnectRC_thick_metal_reduces_res`,
-     `extractInterconnectRC_thick_oxide_reduces_cap`.
+   - (`extractInterconnectRC_*` monotonicity deleted 2026-11-04 with `FabuBlox` §6; the function is tested through `WaferSpace`.)
 4. `Obend.Hardware.Silicon` & `Obend.Hardware.WaferSpace`:
    - `checkAllChannelHops`, `checkAllChannelHops_sound`,
    - `EndToEndTapeoutPipeline`, `checkEndToEndSiliconSignoff`, `checkEndToEndSiliconSignoff_sound`,
@@ -121,7 +120,7 @@ def multiHopChainGraph : SyncGraph where
     , { src := 1, dst := 2, origRegs := 0, combDelayPs := 1100 }
     , { src := 2, dst := 3, origRegs := 2, combDelayPs := 700  } ]
 
-theorem test_retiming_solver_positive_and_negative_poles :
+example :
     (match solveVerifiedRetiming? 2 macUnretimedGraph 1800 with
      | some cert =>
        decide (lookupLag cert 0 = 0) &&
@@ -169,7 +168,7 @@ theorem test_steiner_elmore_monotone_and_nonneg
 
 /-- 2.2 Concrete & universal repeater buffer insertion theorem (`steiner_fanout_buffer_insertion_reduces_elmore_delay`),
 plus boundary check on a single leaf `.sink`. -/
-theorem test_steiner_buffer_insertion_and_edge_cases :
+example :
     downstreamCapFf (.sink 0 25) = 25 ∧
     maxSteinerElmoreDelayFsOhm (.sink 0 25) = 0 ∧
     downstreamCapFf unbufferedFanoutTree = 1050 ∧
@@ -197,7 +196,7 @@ theorem test_drc_2d_box_soundness
 
 /-- 3.2 Concrete 2D `LayoutBox2D` positive & negative boundary poles (overlapping boxes, insufficient spacing,
 degenerate zero-width box, and overhanging via). -/
-theorem test_drc_2d_box_positive_and_negative_poles :
+example :
     let boxA : LayoutBox2D := { layerId := 1, xMinNm := 0,   yMinNm := 0,  xMaxNm := 100, yMaxNm := 100 }
     let boxB : LayoutBox2D := { layerId := 1, xMinNm := 150, yMinNm := 0,  xMaxNm := 250, yMaxNm := 100 }
     let boxOverlap : LayoutBox2D := { layerId := 1, xMinNm := 80, yMinNm := 0, xMaxNm := 180, yMaxNm := 100 }
@@ -210,27 +209,6 @@ theorem test_drc_2d_box_positive_and_negative_poles :
     checkBoxSpacing2D 10 boxA boxDegen = false ∧
     checkViaEnclosure2D 15 viaOk boxA = true ∧
     checkViaEnclosure2D 15 viaOverhang boxA = false := by
-  decide +kernel
-
-/-- 3.3 Universal & concrete `FabuBlox` interconnect RC extraction (`extractInterconnectRCFromCutline`). -/
-theorem test_fabublox_rc_extraction_monotone
-    (c1 c2 : CutlineColumn)
-    (hThick : c1.metalThicknessNm ≤ c2.metalThicknessNm)
-    (hOxide : c1.ildOxideNm ≤ c2.ildOxideNm) :
-    (extractInterconnectRCFromCutline c2).1 ≤ (extractInterconnectRCFromCutline c1).1 ∧
-    (extractInterconnectRCFromCutline c2).2 ≤ (extractInterconnectRCFromCutline c1).2 :=
-  ⟨extractInterconnectRC_thick_metal_reduces_res c1 c2 hThick,
-   extractInterconnectRC_thick_oxide_reduces_cap c1 c2 hOxide⟩
-
-theorem test_fabublox_rc_extraction_concrete_and_zero_boundary :
-    let thinCol  : CutlineColumn := { xCoordNm := 0, siThicknessNm := 500, gateOxideNm := 2, tiNBarrierNm := 20, ildOxideNm := 50,  metalThicknessNm := 60,  resistThicknessNm := 0, sidewallAngleDeg := 90 }
-    let thickCol : CutlineColumn := { xCoordNm := 0, siThicknessNm := 500, gateOxideNm := 2, tiNBarrierNm := 20, ildOxideNm := 100, metalThicknessNm := 150, resistThicknessNm := 0, sidewallAngleDeg := 90 }
-    let zeroCol  : CutlineColumn := { thinCol with ildOxideNm := 0, metalThicknessNm := 0 }
-    extractInterconnectRCFromCutline thinCol = (300, 8) ∧
-    extractInterconnectRCFromCutline thickCol = (120, 4) ∧
-    extractInterconnectRCFromCutline zeroCol = (18000, 400) ∧
-    (extractInterconnectRCFromCutline thickCol).1 < (extractInterconnectRCFromCutline thinCol).1 ∧
-    (extractInterconnectRCFromCutline thickCol).2 < (extractInterconnectRCFromCutline thinCol).2 := by
   decide +kernel
 
 /-! ## 4. Deliverable 3C Tests: Unified `EndToEndTapeoutPipeline` & Stage-by-Stage Negative Poles -/
@@ -270,7 +248,7 @@ theorem test_checkEndToEndSiliconSignoff_sound
 8. Unenclosed 2D via overhangs metal landing pad and fails (`= false`),
 9. Post-Cu FEOL furnace contamination step in `fabSteps` fails (`= false`),
 10. Unprotected `2400:1` plasma-etch antenna net in `waferSpaceCert` fails (`= false`). -/
-theorem test_end_to_end_pipeline_positive_and_negative_poles :
+example :
     checkEndToEndSiliconSignoff goldenEndToEndSiliconPipeline = true ∧
     checkEndToEndSiliconSignoff { goldenEndToEndSiliconPipeline with retimingCert := identityRetimingCert } = false ∧
     checkEndToEndSiliconSignoff { goldenEndToEndSiliconPipeline with retimingCert := negativeWeightBadCert } = false ∧
@@ -317,14 +295,6 @@ def checkBoxSpacing2DAcceptAll (_minSpacingNm : Nat) (b1 b2 : LayoutBox2D) : Boo
 #tooth Obend.Hardware.DRC.boxSpacing2D_disjoint
   by mutation Obend.Hardware.DRC.checkBoxSpacing2D := checkBoxSpacing2DAcceptAll
 
-/-- Broken `extractInterconnectRCFromCutline` that multiplies `18000 * effMetalNm` instead of dividing (inverting metal thickness scaling). -/
-def extractInterconnectRCInvertedMetal (c : CutlineColumn) : Nat × Nat :=
-  let effMetalNm := Nat.max c.metalThicknessNm 1
-  let effIldNm   := Nat.max c.ildOxideNm 1
-  (18000 * effMetalNm, 400 / effIldNm)
-
-#tooth Obend.Hardware.FabuBlox.extractInterconnectRC_thick_metal_reduces_res
-  by mutation Obend.Hardware.FabuBlox.extractInterconnectRCFromCutline := extractInterconnectRCInvertedMetal
 
 #print axioms Obend.Hardware.Retiming.solveVerifiedRetiming_sound
 #print axioms Obend.Hardware.Retiming.applyRetimingCertToGraph_preserves_cycle_weight
@@ -333,7 +303,6 @@ def extractInterconnectRCInvertedMetal (c : CutlineColumn) : Nat × Nat :=
 #print axioms Obend.Hardware.PlaceRoute.steiner_fanout_buffer_insertion_reduces_elmore_delay
 #print axioms Obend.Hardware.DRC.boxSpacing2D_disjoint
 #print axioms Obend.Hardware.DRC.viaEnclosure2D_contained
-#print axioms Obend.Hardware.FabuBlox.extractInterconnectRC_thick_metal_reduces_res
 #print axioms Obend.Hardware.WaferSpace.checkEndToEndSiliconSignoff_sound
 #print axioms Obend.Hardware.WaferSpace.goldenEndToEndSiliconPipeline_verified
 

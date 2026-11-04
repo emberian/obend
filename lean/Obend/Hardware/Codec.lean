@@ -33,7 +33,7 @@ public import Obend.Hardware.Photonics
 public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.AgenticEDA
-public import Obend.Hardware.Physics
+public import Obend.Hardware.ThermalPassivity
 public import Obend.Hardware.Analog
 public import Obend.Hardware.DSP
 public import Obend.Hardware.Magnetics
@@ -535,12 +535,12 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
       defaultEdaFacts == .admitted
   | .multiphysics =>
     -- p0: g01, p1: g12, p2: temp0, p3: temp1, p4: temp2, p5: alpha0
-    let edges : List Obend.Hardware.Physics.ThermalEdge := [
+    let edges : List Obend.Hardware.ThermalPassivity.ThermalEdge := [
       { nodeU := 0, nodeV := 1, conductanceMwPerK := c.p0 },
       { nodeU := 1, nodeV := 2, conductanceMwPerK := c.p1 }
     ]
     let temps : List Int := [c.p2, c.p3, c.p4]
-    decide (c.p0 ≥ 0 ∧ c.p1 ≥ 0 ∧ Obend.Hardware.Physics.evalLaplacianQuadratic temps edges ≥ 0)
+    decide (c.p0 ≥ 0 ∧ c.p1 ≥ 0 ∧ Obend.Hardware.ThermalPassivity.evalLaplacianQuadratic temps edges ≥ 0)
   | .analog2d =>
     -- p0: p0, p1: gx, p2: gy, p3: cxx, p4: cxy, p5: cyy
     decide (Obend.Hardware.Analog.chiralityBalanced2DMismatch c.p0 c.p1 c.p2 c.p3 c.p4 c.p5 10 10 == 0) &&

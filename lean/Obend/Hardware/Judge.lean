@@ -43,7 +43,6 @@ public import Obend.Hardware.Thermal
 public import Obend.Hardware.Datasheet
 public import Obend.Hardware.Circuits
 public import Obend.Hardware.RF
-public import Obend.Hardware.Physics
 public import Obend.Hardware.Photonics
 public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine
@@ -59,7 +58,7 @@ open Obend.Hardware.Process Obend.Hardware.HDL Obend.Hardware.Compiler
 open Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hardware.WaferSpace
 open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
-open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
+open Obend.Hardware.Photonics Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
 open Obend.Hardware.Codec
 set_option autoImplicit false

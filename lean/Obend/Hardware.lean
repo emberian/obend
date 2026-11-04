@@ -18,7 +18,12 @@ public import Obend.Hardware.Thermal
 public import Obend.Hardware.Datasheet
 public import Obend.Hardware.Circuits
 public import Obend.Hardware.RF
-public import Obend.Hardware.Physics
+public import Obend.Hardware.ThermalPassivity
+public import Obend.Hardware.Device.Enclosure
+public import Obend.Hardware.Device.Constants
+public import Obend.Hardware.Device.Wafer
+public import Obend.Hardware.Device.DriftDiffusion
+public import Obend.Hardware.Device.Sky130Diode
 public import Obend.Hardware.Photonics
 public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine

@@ -34,7 +34,6 @@ public import Obend.Hardware.Synth
 public import Obend.Hardware.WaferSpace
 public import Obend.Hardware.Judge
 public import Obend.Hardware.FabuBlox
-public import Obend.Hardware.Physics
 public import Obend.Hardware.TcadBridge
 public import Obend.Hardware.TapeoutPipeline
 public import Obend.Tactic.Tooth
@@ -51,7 +50,6 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.Synth
 open Obend.Hardware.WaferSpace
 open Obend.Hardware.FabuBlox
-open Obend.Hardware.Physics
 open Obend.Hardware.TcadBridge
 open Obend.Hardware.Judge
 open Obend.Hardware.TapeoutPipeline
@@ -116,52 +114,25 @@ theorem judge_decoders_strictly_refuse_missing_fields :
 
 /-! ## 3. Cleanroom-to-TCAD `[FF, TT, SS]` Corner Envelope & Dual-Corner Timing Closure -/
 
-/-- Sample 3-layer GAA superlattice stack (`siSubstrate` / `siGe` / `siSubstrate`). -/
-def sampleGaaStack : List LayerFilm :=
-  [ { mat := .siSubstrate, thicknessPm := 5000, dopant := none,          dopingConcPermille := 0,   stepCoveragePermille := 1000 }
-  , { mat := .siGe,        thicknessPm := 8000, dopant := none,          dopingConcPermille := 0,   stepCoveragePermille := 1000 }
-  , { mat := .siSubstrate, thicknessPm := 5000, dopant := some .boronP,  dopingConcPermille := 500, stepCoveragePermille := 1000 } ]
-
-/-- Master verification bundle for Pillar 2A (`FabuBlox` + `Physics` + `TcadBridge`):
-combines ALD step coverage dominance, Fickian diffusion monotonicity, CMP dishing monotonicity,
-GAA nanosheet selective SiGe release, $\text{HfO}_2$ high-$\kappa$ EOT reduction, thermionic
-subthreshold swing bound ($\ge 60\text{ mV/dec}$), 2D PTM mismatch cancellation, and universal
-intermediate-corner timing safety across `[FF, SS]`. -/
+/-- What survives of the former Pillar 2A bundle (2026-11-04: the integer identities it cited — step
+coverage, GAA release, EOT, subthreshold swing, PTM cancellation, the golden preset — were deleted with
+`Hardware/Physics.lean` §3/§7 and `FabuBlox` §7; the device physics is `Obend/Hardware/Device/`): the
+corner envelope of a well-formed tolerance box is ordered, and dual-corner signoff covers every
+intermediate corner. -/
 theorem cleanroom_to_tcad_envelope_spine_verified :
-    -- 1. ALD step coverage dominates PVD at all aspect ratios
-    (∀ ar : Nat, evalStepCoveragePermille .pvdSputter ar ≤ evalStepCoveragePermille .aldChamber ar) ∧
-    -- 2. GAA nanosheet selective SiGe release preserves silicon channels while clearing sacrificial SiGe to 0 pm
-    ((stepSelectiveReleaseEtch sampleGaaStack).filter (fun f => f.mat == .siSubstrate) =
-       sampleGaaStack.filter (fun f => f.mat == .siSubstrate) ∧
-     ∀ f ∈ stepSelectiveReleaseEtch sampleGaaStack, f.mat = .siGe → f.thicknessPm = 0) ∧
-    -- 3. High-k HfO2 reduces EOT (2000 pm -> 312 pm) and boosts Cox (1726 -> 11067)
-    (evalEquivalentOxideThicknessPm 2000 25000 = 312 ∧
-     evalEquivalentOxideThicknessPm 2000 3900 = 2000 ∧
-     evalGateOxideCapScaled (evalEquivalentOxideThicknessPm 2000 25000) = 11067 ∧
-     evalGateOxideCapScaled (evalEquivalentOxideThicknessPm 2000 3900) = 1726) ∧
-    -- 4. Thermionic subthreshold swing lower bound (>= 60 mV/dec) and temperature monotonicity
-    (∀ t1 t2 cDep cox : Nat, t1 ≤ t2 →
-       60 ≤ evalSubthresholdSwingMvPerDec t1 cDep cox ∧
-       evalSubthresholdSwingMvPerDec t1 cDep cox ≤ evalSubthresholdSwingMvPerDec t2 cDep cox) ∧
-    -- 5. 2D PTM common-centroid cancellation tightens SS corner setup timing
-    (requiredPeriodPs (extractTcadCornerEnvelope golden7nmToleranceBox true).slowCorner obendStageCritPath <
-       requiredPeriodPs (extractTcadCornerEnvelope golden7nmToleranceBox false).slowCorner obendStageCritPath) ∧
-    -- 6. Universal intermediate-corner safety for `golden7nmToleranceBox`
+    (extractTcadCornerEnvelope golden7nmToleranceBox true).Valid ∧
     (∀ c : ProcessCorner,
        CornerBetween
          (extractTcadCornerEnvelope golden7nmToleranceBox true).fastCorner
          c
          (extractTcadCornerEnvelope golden7nmToleranceBox true).slowCorner →
+       checkEnvelopeTimingSignoff (extractTcadCornerEnvelope golden7nmToleranceBox true) 2000 obendStageCritPath = true →
        checkTimingSignoff c 2000 obendStageCritPath = true) := by
-  refine ⟨fun ar => (ald_step_coverage_dominates_pvd ar).1,
-          gaa_nanosheet_selective_release_preserves_channel sampleGaaStack,
-          by decide +kernel,
-          fun t1 t2 cDep cox hT => subthreshold_swing_thermionic_lower_bound t1 t2 cDep cox hT,
-          (ptm_2d_cancellation_tightens_ss_corner_delay golden7nmToleranceBox obendStageCritPath 0 0 0 0 0 0 0 0 0 0).2.2.2.2,
-          fun c hBet =>
+  refine ⟨extractTcadCornerEnvelope_valid golden7nmToleranceBox true
+            (CleanroomToleranceBox.checkWf_sound golden7nmToleranceBox (by decide)),
+          fun c hBet hSign =>
             (envelope_timing_signoff_implies_all_intermediate_corners_safe
-              (extractTcadCornerEnvelope golden7nmToleranceBox true) 2000 obendStageCritPath c hBet
-              golden7nmCornerEnvelope_verified.1).1⟩
+              (extractTcadCornerEnvelope golden7nmToleranceBox true) 2000 obendStageCritPath c hBet hSign).1⟩
 
 /-! ## 4. End-to-End 9-Stage `.obend` Silicon Tapeout Pipeline Verification -/
 

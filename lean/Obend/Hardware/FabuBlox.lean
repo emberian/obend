@@ -1,29 +1,25 @@
 module
 /-
-# Obend.Hardware.FabuBlox — Cleanroom Nanofabrication Process Flows, 2D Cutline Layer-Stack Emulation & Facility OS Rules
+# Obend.Hardware.FabuBlox — cleanroom facility rules and a layer-stack bookkeeping of a process flow
 
-Models semiconductor manufacturing & cleanroom process intelligence in the style of **FabuBlox**
-(`fabublox.com` — Process Design Suite, `StackSimulator` 2D GDS cutline cross-section emulation,
-and `Facility OS` cleanroom equipment & contamination constraint checking):
-1. **2D GDS Cutline Layer-Stack Representation (`FabMaterial`, `CutlineColumn`, `WaferState`)**:
-   - Tracks multi-layer film thicknesses (`siThicknessNm`, `gateOxideNm`, `tiNBarrierNm`,
-     `ildOxideNm`, `metalThicknessNm`, `resistThicknessNm`, `sidewallAngleDeg`) across lateral
-     cutline coordinates $x \in \mathbb{N}$, plus wafer-level contamination (`hasExposedCuOrAu`)
-     and cumulative thermal budget (`thermalBudgetUsedCMin`).
-2. **Cleanroom `Facility OS` Constraint & Contamination Checker (`FacilityError`, `checkFacilityStep`)**:
-   - Prevents FEOL CMOS furnace contamination from exposed `Cu` or `Au` (`feolMetalContamination`),
-   - Prevents photoresist reticulation/scorching under high-temperature steps (`> 150°C`) when
-     photoresist has not been stripped (`photoresistScorched`),
-   - Enforces dopant-diffusion thermal budget limits (`thermalBudgetExceeded`),
-   - Verifies contact/via RIE etch window clearing (`viaUnderEtchUnopened`) and stop-layer landing
-     pad preservation under finite selectivity (`viaOverEtchPunchThrough`).
-3. **Formal Soundness Theorems & Process-to-PDK Timing Extraction (`0 sorry`)**:
-   - `facilityCheck_prevents_scorched_resist`
-   - `facilityCheck_prevents_feol_contamination`
-   - `rie_masked_column_invariant`
-   - `rie_selective_via_landing_sound`
-   - `fabublox_damascene_flow_verified` & `post_cu_feol_furnace_refused`
-   - `extractCornerFromWafer_closes_500MHz`
+A process flow as a checked sequence of steps, in the style of FabuBlox's `Facility OS`: a wafer
+(`WaferState`: cutline columns of film thicknesses, exposed-metal contamination flag, thermal budget
+used) and steps (`FabStep`: anneal, litho window, RIE, strip, deposit, CMP), each step refused by
+`checkFacilityStep` when it would scorch unstripped resist, contaminate a FEOL furnace with exposed
+Cu/Au, exceed the thermal budget, or under/over-etch a via. `runFabFlow` is the flow, `cmosDamasceneFlow`
+one flow, `extractCornerFromWafer` and `extractInterconnectRCFromCutline` the integer bookkeeping
+`WaferSpace` and `TapeoutPipeline` read from the final wafer.
+
+**What this is and is not** (device-physics lane, 2026-11-04). The rules are real cleanroom rules
+and the theorems about them (`facilityCheck_prevents_scorched_resist`,
+`facilityCheck_prevents_feol_contamination`, `rie_masked_column_invariant`,
+`rie_selective_via_landing_sound`) say exactly what the checker refuses. The steps carry no physics:
+an anneal here spends thermal budget, it does not diffuse anything; a deposition adds nanometres.
+The physics of implant, diffusion, oxidation and the device they make is `Obend/Hardware/Device/`
+(`Wafer.lean` for the operators, `DriftDiffusion.lean` for the device). Deleted from this file on
+that date: the "thicker metal, lower resistance" theorems of §6 (integer division monotonicity) and
+all of §7 (an isqrt "Fickian depth", CMP dishing, step coverage, GAA release: affine integer formulas
+under process names).
 -/
 public import Obend.Hardware.Process
 @[expose] public section
@@ -350,7 +346,7 @@ example :
 /-- Theorem 5c: Omitting `.stripPhotoresist` before the `180°C` metal deposition is refused by
 `Facility OS` with `.photoresistScorched 180`! -/
 -- fixture kept (2026-11-04): refusal witness: `runFabFlow` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
-theorem unstripped_resist_high_temp_refused :
+example :
     runFabFlow initialCmosWafer
       [ .lithoWindow 80 120 200
       , .anisotropicRieOxide 120 10
@@ -388,191 +384,6 @@ def extractInterconnectRCFromCutline (c : CutlineColumn) : Nat × Nat :=
   let effMetalNm := max c.metalThicknessNm 1
   let effIldNm   := max c.ildOxideNm 1
   (18000 / effMetalNm, 400 / effIldNm)
-
-/-- **Theorem (`extractInterconnectRC_thick_metal_reduces_res`)**:
-Increasing CMP-polished copper thickness (`c1.metalThicknessNm ≤ c2.metalThicknessNm`) monotonically
-reduces or preserves interconnect sheet resistance:
-`(extractInterconnectRCFromCutline c2).1 ≤ (extractInterconnectRCFromCutline c1).1`. -/
-theorem extractInterconnectRC_thick_metal_reduces_res
-    (c1 c2 : CutlineColumn)
-    (hThick : c1.metalThicknessNm ≤ c2.metalThicknessNm) :
-    (extractInterconnectRCFromCutline c2).1 ≤ (extractInterconnectRCFromCutline c1).1 := by
-  simp only [extractInterconnectRCFromCutline]
-  have hMaxLe : max c1.metalThicknessNm 1 ≤ max c2.metalThicknessNm 1 := by omega
-  have hPos : 0 < max c1.metalThicknessNm 1 := by omega
-  exact Nat.div_le_div_left hMaxLe hPos
-
-/-- **Theorem (`extractInterconnectRC_thick_oxide_reduces_cap`)**:
-Increasing inter-layer dielectric (`ILD`) oxide thickness (`c1.ildOxideNm ≤ c2.ildOxideNm`)
-monotonically reduces or preserves parallel-plate wire capacitance:
-`(extractInterconnectRCFromCutline c2).2 ≤ (extractInterconnectRCFromCutline c1).2`. -/
-theorem extractInterconnectRC_thick_oxide_reduces_cap
-    (c1 c2 : CutlineColumn)
-    (hOxide : c1.ildOxideNm ≤ c2.ildOxideNm) :
-    (extractInterconnectRCFromCutline c2).2 ≤ (extractInterconnectRCFromCutline c1).2 := by
-  simp only [extractInterconnectRCFromCutline]
-  have hMaxLe : max c1.ildOxideNm 1 ≤ max c2.ildOxideNm 1 := by omega
-  have hPos : 0 < max c1.ildOxideNm 1 := by omega
-  exact Nat.div_le_div_left hMaxLe hPos
-
-/-! ## 7. Multi-Layer Film Stacks, Step Coverage, Fickian Diffusion, CMP Dishing & GAA Release -/
-
-/-- Semiconductor substitutional dopant species for FEOL source/drain and channel engineering. -/
-inductive DopantSpecies where
-  | boronP       -- p-type acceptor (B)
-  | phosphorusN  -- n-type donor (P)
-  | arsenicN     -- shallow heavy n-type donor (As)
-  | antimonyN    -- ultra-shallow n-type donor (Sb)
-  deriving DecidableEq, Repr
-
-/-- Multi-layer thin-film stack entry (`LayerFilm`) with picometer-resolution thickness, dopant profile,
-and conformal step coverage (in permille `[0, 1000]`). -/
-structure LayerFilm where
-  mat                  : FabMaterial
-  thicknessPm          : Nat
-  dopant               : Option DopantSpecies := none
-  dopingConcPermille   : Int := 0
-  stepCoveragePermille : Nat := 1000
-  deriving DecidableEq, Repr
-
-/-- Conformal step coverage (in permille `[0, 1000]`) as a function of `ToolClass` and trench
-`aspectRatio` ($AR = H / W$):
-* `.aldChamber`: self-limiting surface-saturated Atomic Layer Deposition achieves `1000` permille
-  (`100%`) conformal sidewall coverage independent of aspect ratio,
-* `.pvdSputter`: directional line-of-sight PVD sputtering suffers cosine shadowing
-  $\lfloor 1000 / (1 + AR) \rfloor$,
-* `.pecvdChamber`: plasma-enhanced CVD achieves intermediate coverage $\lfloor 1000 / (1 + AR / 3) \rfloor$,
-* Other tools default to $\lfloor 1000 / (1 + AR) \rfloor$. -/
-def evalStepCoveragePermille (tool : ToolClass) (aspectRatio : Nat) : Nat :=
-  match tool with
-  | .aldChamber   => 1000
-  | .pvdSputter   => 1000 / (1 + aspectRatio)
-  | .pecvdChamber => 1000 / (1 + aspectRatio / 3)
-  | _             => 1000 / (1 + aspectRatio)
-
-/-- **Theorem (`ald_step_coverage_dominates_pvd`)**:
-For every trench `aspectRatio`, ALD step coverage dominates PVD step coverage
-(`evalStepCoveragePermille .pvdSputter aspectRatio ≤ evalStepCoveragePermille .aldChamber aspectRatio`),
-and strictly dominates (`< 1000`) whenever `0 < aspectRatio`. -/
-theorem ald_step_coverage_dominates_pvd (aspectRatio : Nat) :
-    evalStepCoveragePermille .pvdSputter aspectRatio ≤
-      evalStepCoveragePermille .aldChamber aspectRatio ∧
-    (0 < aspectRatio →
-      evalStepCoveragePermille .pvdSputter aspectRatio <
-        evalStepCoveragePermille .aldChamber aspectRatio) := by
-  simp only [evalStepCoveragePermille]
-  refine ⟨Nat.div_le_self 1000 (1 + aspectRatio), fun hPos => ?_⟩
-  exact Nat.div_lt_self (by decide) (by omega)
-
-/-- Constructive integer square-root counter: counts how many `k ∈ [1, fuel]` satisfy `k * k ≤ n`. -/
-def isqrtCountBelow (n : Nat) : Nat → Nat
-  | 0 => 0
-  | k + 1 => (if (k + 1) * (k + 1) ≤ n then 1 else 0) + isqrtCountBelow n k
-
-theorem isqrtCountBelow_mono_val {m n : Nat} (hmn : m ≤ n) :
-    ∀ k : Nat, isqrtCountBelow m k ≤ isqrtCountBelow n k
-  | 0 => Nat.le_refl 0
-  | k + 1 => by
-    simp only [isqrtCountBelow]
-    have ih := isqrtCountBelow_mono_val hmn k
-    split <;> split <;> omega
-
-theorem isqrtCountBelow_mono_fuel (n : Nat) :
-    ∀ {k1 k2 : Nat}, k1 ≤ k2 → isqrtCountBelow n k1 ≤ isqrtCountBelow n k2
-  | 0, 0, _ => Nat.le_refl 0
-  | 0, k2 + 1, _ => by
-    simp only [isqrtCountBelow]
-    omega
-  | k1 + 1, 0, h => by omega
-  | k1 + 1, k2 + 1, h => by
-    by_cases hEq : k1 + 1 = k2 + 1
-    · rw [hEq]; exact Nat.le_refl _
-    · have hLe : k1 + 1 ≤ k2 := by omega
-      have ih := isqrtCountBelow_mono_fuel n hLe
-      simp only [isqrtCountBelow] at ih ⊢
-      omega
-
-/-- Exact integer square root $\lfloor\sqrt{n}\rfloor$. -/
-def natIsqrt (n : Nat) : Nat :=
-  isqrtCountBelow n n
-
-theorem natIsqrt_monotone {m n : Nat} (hmn : m ≤ n) :
-    natIsqrt m ≤ natIsqrt n :=
-  Nat.le_trans (isqrtCountBelow_mono_val hmn m) (isqrtCountBelow_mono_fuel n hmn)
-
-/-- Fickian thermal dopant diffusion length $L_D = \lfloor\sqrt{D \cdot B_{\text{th}}}\rfloor$ (in picometers),
-where `diffusivityPm2PerCMin` is the effective diffusivity $D$ ($\text{pm}^2 / (^\circ\text{C}\cdot\text{min})$)
-and `thermalBudgetCMin` is the cumulative thermal budget $B_{\text{th}} = \sum T_i \cdot t_i$. -/
-def evalFickianDiffusionDepthPm (diffusivityPm2PerCMin thermalBudgetCMin : Nat) : Nat :=
-  natIsqrt (diffusivityPm2PerCMin * thermalBudgetCMin)
-
-/-- **Theorem (`fickian_diffusion_monotone_in_thermal_budget`)**:
-Increasing the cumulative thermal budget (`b1 ≤ b2`) monotonically increases or preserves the
-Fickian dopant diffusion depth $L_D = \lfloor\sqrt{D \cdot B_{\text{th}}}\rfloor$. -/
-theorem fickian_diffusion_monotone_in_thermal_budget
-    (diffusivityPm2PerCMin b1 b2 : Nat)
-    (hBudget : b1 ≤ b2) :
-    evalFickianDiffusionDepthPm diffusivityPm2PerCMin b1 ≤
-      evalFickianDiffusionDepthPm diffusivityPm2PerCMin b2 := by
-  simp only [evalFickianDiffusionDepthPm]
-  exact natIsqrt_monotone (Nat.mul_le_mul_left diffusivityPm2PerCMin hBudget)
-
-/-- Layout-density-dependent CMP dishing erosion (in picometers): `localDensityPct * dishSlopePmPerPct`. -/
-def evalCmpDishingLossPm (localDensityPct dishSlopePmPerPct : Nat) : Nat :=
-  localDensityPct * dishSlopePmPerPct
-
-/-- Layout-density-dependent post-CMP metal film thickness (in picometers):
-planarizes `initialMetalPm` to `min initialMetalPm targetMaxPm` and subtracts pattern-density dishing
-`localDensityPct * dishSlopePmPerPct`. -/
-def evalCmpDishedThicknessPm
-    (initialMetalPm targetMaxPm localDensityPct dishSlopePmPerPct : Nat) : Nat :=
-  min initialMetalPm targetMaxPm - evalCmpDishingLossPm localDensityPct dishSlopePmPerPct
-
-/-- **Theorem (`cmp_dishing_monotone_in_density`)**:
-As local metal pattern density increases (`d1 ≤ d2`), CMP dishing loss increases monotonically
-(`evalCmpDishingLossPm d1 s ≤ evalCmpDishingLossPm d2 s`) and the remaining dished metal thickness
-decreases monotonically (`evalCmpDishedThicknessPm init tgt d2 s ≤ evalCmpDishedThicknessPm init tgt d1 s`). -/
-theorem cmp_dishing_monotone_in_density
-    (initialMetalPm targetMaxPm d1 d2 dishSlopePmPerPct : Nat)
-    (hDensity : d1 ≤ d2) :
-    evalCmpDishingLossPm d1 dishSlopePmPerPct ≤
-      evalCmpDishingLossPm d2 dishSlopePmPerPct ∧
-    evalCmpDishedThicknessPm initialMetalPm targetMaxPm d2 dishSlopePmPerPct ≤
-      evalCmpDishedThicknessPm initialMetalPm targetMaxPm d1 dishSlopePmPerPct := by
-  simp only [evalCmpDishingLossPm, evalCmpDishedThicknessPm]
-  have hMul : d1 * dishSlopePmPerPct ≤ d2 * dishSlopePmPerPct :=
-    Nat.mul_le_mul_right dishSlopePmPerPct hDensity
-  exact ⟨hMul, Nat.sub_le_sub_left hMul (min initialMetalPm targetMaxPm)⟩
-
-/-- Gate-All-Around (GAA) nanosheet selective isotropic release etch:
-selectively etches sacrificial `.siGe` interlayers (`thicknessPm := 0`) while preserving
-crystalline `.siSubstrate` nanosheet channels intact (`f.thicknessPm` unchanged). -/
-def stepSelectiveReleaseEtch : List LayerFilm → List LayerFilm
-  | [] => []
-  | f :: tl =>
-    (if f.mat == .siGe then { f with thicknessPm := 0 } else f) :: stepSelectiveReleaseEtch tl
-
-/-- **Theorem (`gaa_nanosheet_selective_release_preserves_channel`)**:
-Applying `stepSelectiveReleaseEtch` to any multi-layer superlattice `stack`:
-1. Preserves every `.siSubstrate` channel film identically (`filter (·.mat == .siSubstrate)` invariant),
-2. Releases every sacrificial `.siGe` film to `thicknessPm = 0`. -/
-theorem gaa_nanosheet_selective_release_preserves_channel
-    (stack : List LayerFilm) :
-    (stepSelectiveReleaseEtch stack).filter (fun f => f.mat == .siSubstrate) =
-      stack.filter (fun f => f.mat == .siSubstrate) ∧
-    (∀ f ∈ stepSelectiveReleaseEtch stack, f.mat = .siGe → f.thicknessPm = 0) := by
-  induction stack with
-  | nil => simp [stepSelectiveReleaseEtch]
-  | cons hd tl ih =>
-    rcases hd with ⟨mat, thick, dop, conc, cov⟩
-    refine ⟨?_, ?_⟩
-    · simp only [stepSelectiveReleaseEtch]
-      cases mat <;> simp [FabMaterial.siGe, ih.1]
-    · intro f hf hMat
-      simp only [stepSelectiveReleaseEtch, List.mem_cons] at hf
-      rcases hf with rfl | hInTl
-      · cases mat <;> simp_all [FabMaterial.siGe]
-      · exact ih.2 f hInTl hMat
 
 end Obend.Hardware.FabuBlox
 end

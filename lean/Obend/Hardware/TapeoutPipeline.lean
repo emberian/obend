@@ -54,7 +54,6 @@ public import Obend.Hardware.Retiming
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.DRC
 public import Obend.Hardware.FabuBlox
-public import Obend.Hardware.Physics
 public import Obend.Hardware.TcadBridge
 public import Obend.Hardware.WaferSpace
 public import Obend.Hardware.Judge
@@ -76,7 +75,6 @@ open Obend.Hardware.Retiming
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.DRC
 open Obend.Hardware.FabuBlox
-open Obend.Hardware.Physics
 open Obend.Hardware.TcadBridge
 open Obend.Hardware.Analog
 open Obend.Hardware.WaferSpace

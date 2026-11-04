@@ -1,41 +1,63 @@
 module
 /-
-# Obend.Hardware.TcadBridge — Cleanroom-to-TCAD-to-Timing Closure & `[FF, TT, SS]` Corner Envelope
+# Obend.Hardware.TcadBridge — the `[FF, TT, SS]` corner envelope `TapeoutPipeline` stage 7 reads, and its signoff theorem
 
-Closes the **Pillar 2A Cleanroom-to-TCAD-to-Timing loop**:
-1. **`CleanroomToleranceBox`**:
-   - Models wafer-lot manufacturing tolerances across high-$\kappa$ gate dielectric thickness
-     (`[gateOxideFastPm, gateOxideNomPm, gateOxideSlowPm]`), supply voltage (`[vddSlowMv, vddNomMv, vddFastMv]`),
-     ambient + PRIMA self-heating temperature (`[tempFastK, tempNomK, tempSlowK + primaSelfHeatDeltaK]`),
-     CMP-dished copper thickness (`[metalSlowNm, metalNomNm, metalFastNm]`), and 2D PTM Pelgrom mismatch
-     (`gateAreaUm2 : Nat`).
-2. **`ProcessCornerEnvelope` (`[fastCorner, nomCorner, slowCorner]` = `[FF, TT, SS]`)**:
-   - Defines `CornerBetween (cFast c cSlow : ProcessCorner)` and `ProcessCornerEnvelope.Valid`,
-   - Implements `extractTcadCornerEnvelope`, coupling `FabuBlox` cutline RC extraction,
-     `Physics` high-$\kappa$ EOT / $V_{\text{th}}$ / subthreshold swing / PRIMA self-heating, and
-     `Analog` 2D PTM planar gradient & Hessian curvature cancellation (`chiralityBalanced2DMismatch`,
-     `eval2DCommonCentroidMismatch`),
-   - Proves **`extractTcadCornerEnvelope_valid`** and **`ptm_2d_cancellation_tightens_ss_corner_delay`**.
-3. **Dual-Corner Envelope Timing Signoff (`checkEnvelopeTimingSignoff`)**:
-   - Checks setup timing closure (`requiredPeriodPs env.slowCorner p ≤ clockPeriodPs`) at `slowCorner` (`SS`)
-     and hold timing closure (`env.fastCorner.tHoldPs + env.fastCorner.tSkewPs ≤ minArrivalPs env.fastCorner p`)
-     at `fastCorner` (`FF`),
-   - Proves **`envelope_timing_signoff_implies_all_intermediate_corners_safe`**: if a `TimingPath`
-     closes setup at `SS` and hold at `FF`, then it is guaranteed setup- and hold-safe at EVERY
-     intermediate process corner `c` satisfying `CornerBetween env.fastCorner c env.slowCorner`.
+What a TCAD bridge is in this project after 2026-11-04 is `Obend/Hardware/Device/DriftDiffusion.lean`:
+devsim solves a device fabricated by a recipe, the kernel checks the residual of every equation at every
+node, and the terminal current is a theorem over the material and process parameters
+(`devsim-dd1d@1`). This file is what remains of the earlier "cleanroom-to-TCAD" module once its
+integer identities were deleted (the device-physics lane, `review/EXPERT-device-physics-20261104.md`):
+
+0. **Three hand-typed corner formulas** (`evalEquivalentOxideThicknessPm`, `evalGateOxideCapScaled`,
+   `evalSubthresholdSwingMvPerDec`), moved here from the deleted `Physics.lean` §7 and labelled as
+   what they are: the arithmetic `extractTcadCornerEnvelope` was written against, not a model.
+1. **`CleanroomToleranceBox`**: a wafer-lot tolerance box (gate dielectric, supply, temperature,
+   metal thickness, gate area), with `Wf`/`checkWf`.
+2. **`ProcessCornerEnvelope`**, `CornerBetween`, `ProcessCornerEnvelope.Valid`, and
+   `extractTcadCornerEnvelope` with `extractTcadCornerEnvelope_valid` (the envelope of a well-formed
+   box is ordered `FF ≤ TT ≤ SS`; a monotonicity statement about the formulas of §0).
+3. **Dual-corner timing signoff** `checkEnvelopeTimingSignoff` and
+   `envelope_timing_signoff_implies_all_intermediate_corners_safe`: setup at `SS` and hold at `FF`
+   cover every corner between them. This is the one theorem here a timing engineer would keep.
+
+Deleted: `ptm_2d_cancellation_tightens_ss_corner_delay` (a strict inequality between two literal
+penalties) and `golden7nmCornerEnvelope_verified` (a preset closing timing on a preset path).
+The replacement for stage 7 is a corner envelope derived from device certificates; until
+`TapeoutPipeline` reads one, it runs on §0.
 -/
 public import Obend.Hardware.Process
 public import Obend.Hardware.FabuBlox
-public import Obend.Hardware.Physics
 public import Obend.Hardware.Analog
 @[expose] public section
 
 namespace Obend.Hardware.TcadBridge
 open Obend.Hardware.Process
 open Obend.Hardware.FabuBlox
-open Obend.Hardware.Physics
 open Obend.Hardware.Analog
 set_option autoImplicit false
+
+/-! ## 0. Hand-typed corner formulas (not physics; retained for `TapeoutPipeline` stage 7) -/
+
+/-- `EOT = 3900 · t_phys / κ_permille` (pm). An integer formula, not a model of a dielectric. -/
+def evalEquivalentOxideThicknessPm (physThicknessPm kDielectricPermille : Nat) : Nat :=
+  (3900 * physThicknessPm) / max kDielectricPermille 1
+
+/-- `C_ox = 3453000 / EOT` in scaled units. -/
+def evalGateOxideCapScaled (eotPm : Nat) : Nat :=
+  3453000 / max eotPm 1
+
+/-- `S = 60 + (T − 300)/5 + 60 C_dep / C_ox` (mV/dec): a temperature slope typed as an integer. -/
+def evalSubthresholdSwingMvPerDec (tempK cDepScaled coxScaled : Nat) : Nat :=
+  60 + (tempK - 300) / 5 + (60 * cDepScaled) / max coxScaled 1
+
+/-- The bookkeeping `extractInterconnectRCFromCutline` (`18000 / metal`) is antitone in the metal
+thickness; the envelope proof needs this one line of `Nat.div_le_div_left`. -/
+private theorem rcRes_antitone_in_metal (c1 c2 : CutlineColumn) (hThick : c1.metalThicknessNm ≤ c2.metalThicknessNm) :
+    (extractInterconnectRCFromCutline c2).1 ≤ (extractInterconnectRCFromCutline c1).1 := by
+  simp only [extractInterconnectRCFromCutline]
+  have hMaxLe : max c1.metalThicknessNm 1 ≤ max c2.metalThicknessNm 1 := by omega
+  have hPos : 0 < max c1.metalThicknessNm 1 := by omega
+  exact Nat.div_le_div_left hMaxLe hPos
 
 /-! ## 1. Cleanroom Manufacturing Tolerance Box (`CleanroomToleranceBox`) -/
 
@@ -251,11 +273,11 @@ theorem extractTcadCornerEnvelope_valid
   have hResFN :
       (extractInterconnectRCFromCutline (mkTcadCutlineCol tol.metalFastNm)).1 ≤
         (extractInterconnectRCFromCutline (mkTcadCutlineCol tol.metalNomNm)).1 :=
-    extractInterconnectRC_thick_metal_reduces_res (mkTcadCutlineCol tol.metalNomNm) (mkTcadCutlineCol tol.metalFastNm) hMetNF
+    rcRes_antitone_in_metal (mkTcadCutlineCol tol.metalNomNm) (mkTcadCutlineCol tol.metalFastNm) hMetNF
   have hResNS :
       (extractInterconnectRCFromCutline (mkTcadCutlineCol tol.metalNomNm)).1 ≤
         (extractInterconnectRCFromCutline (mkTcadCutlineCol tol.metalSlowNm)).1 :=
-    extractInterconnectRC_thick_metal_reduces_res (mkTcadCutlineCol tol.metalSlowNm) (mkTcadCutlineCol tol.metalNomNm) hMetSN
+    rcRes_antitone_in_metal (mkTcadCutlineCol tol.metalSlowNm) (mkTcadCutlineCol tol.metalNomNm) hMetSN
   have hPen : 1 ≤ (if usePtm2DCancellation then 2 else 18) := by
     cases usePtm2DCancellation <;> decide
   dsimp only [ProcessCornerEnvelope.Valid, CornerBetween, extractTcadCornerEnvelope, buildTcadCorner]
@@ -263,40 +285,6 @@ theorem extractTcadCornerEnvelope_valid
   · refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
   · refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
   · refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
-
-/-- **Theorem (`ptm_2d_cancellation_tightens_ss_corner_delay`)**:
-1. On any 2D chirality-balanced common-centroid layout, both linear wafer gradients $(g_x, g_y)$
-   and 2D Hessian curvature $(c_{xx}, c_{xy}, c_{yy})$ cancel identically (`chiralityBalanced2DMismatch = 0`
-   and `eval2DCommonCentroidMismatch = 0`), and Pelgrom spacing variance vanishes (`D = 0`),
-2. Enabling 2D PTM gradient cancellation (`usePtm2DCancellation = true`) strictly tightens (reduces)
-   both `tCqMaxPs` and `tGateMaxPs` at the worst-case `SS` corner compared to uncancelled 1D placement
-   (`usePtm2DCancellation = false`), and strictly reduces `requiredPeriodPs` on every `TimingPath`! -/
-theorem ptm_2d_cancellation_tightens_ss_corner_delay
-    (tol : CleanroomToleranceBox)
-    (p : TimingPath)
-    (p0 gx gy cxx cxy cyy px py x0 y0 : Int) :
-    chiralityBalanced2DMismatch p0 gx gy cxx cxy cyy px py = 0 ∧
-    eval2DCommonCentroidMismatch p0 gx gy x0 y0 px py = 0 ∧
-    (extractTcadCornerEnvelope tol true).slowCorner.tGateMaxPs <
-      (extractTcadCornerEnvelope tol false).slowCorner.tGateMaxPs ∧
-    (extractTcadCornerEnvelope tol true).slowCorner.tCqMaxPs <
-      (extractTcadCornerEnvelope tol false).slowCorner.tCqMaxPs ∧
-    requiredPeriodPs (extractTcadCornerEnvelope tol true).slowCorner p <
-      requiredPeriodPs (extractTcadCornerEnvelope tol false).slowCorner p := by
-  have hHess := chiralityBalanced2D_cancels_full_hessian p0 gx gy cxx cxy cyy px py
-  have hGrad := commonCentroid2D_cancels_planar_gradient p0 gx gy x0 y0 px py
-  simp only [extractTcadCornerEnvelope, buildTcadCorner, requiredPeriodPs, maxArrivalPs, Bool.false_eq_true, ↓reduceIte]
-  have hGateMul :
-      p.logicLevels *
-        (20 + evalEquivalentOxideThicknessPm tol.gateOxideSlowPm tol.kDielectricPermille / 10 +
-          evalSubthresholdSwingMvPerDec (tol.tempSlowK + tol.primaSelfHeatDeltaK) 100
-            (evalGateOxideCapScaled (evalEquivalentOxideThicknessPm tol.gateOxideSlowPm tol.kDielectricPermille)) / 4 + 2) ≤
-      p.logicLevels *
-        (20 + evalEquivalentOxideThicknessPm tol.gateOxideSlowPm tol.kDielectricPermille / 10 +
-          evalSubthresholdSwingMvPerDec (tol.tempSlowK + tol.primaSelfHeatDeltaK) 100
-            (evalGateOxideCapScaled (evalEquivalentOxideThicknessPm tol.gateOxideSlowPm tol.kDielectricPermille)) / 4 + 18) :=
-    Nat.mul_le_mul_left p.logicLevels (by omega)
-  refine ⟨hHess, hGrad, by omega, by omega, by omega⟩
 
 /-! ## 4. Dual-Corner `[SS, FF]` Timing Signoff (`checkEnvelopeTimingSignoff`) -/
 
@@ -366,18 +354,6 @@ def golden7nmToleranceBox : CleanroomToleranceBox where
   metalNomNm          := 150
   metalSlowNm         := 135
   gateAreaUm2         := 2
-
-/-- **Theorem (`golden7nmCornerEnvelope_verified`)**:
-The golden 7nm TCAD corner envelope closes 500 MHz (`2000 ps`) dual-corner `[SS, FF]` timing signoff
-on `obendStageCritPath`, and satisfies `checkTimingSignoff = true` across all three `[FF, TT, SS]` corners. -/
--- fixture kept (2026-11-04): would delete (a preset envelope closing timing on a preset path) but cited by tests/metasystem/SiliconSpineTest.lean:164
-theorem golden7nmCornerEnvelope_verified :
-    let env := extractTcadCornerEnvelope golden7nmToleranceBox true
-    checkEnvelopeTimingSignoff env 2000 obendStageCritPath = true ∧
-    checkTimingSignoff env.fastCorner 2000 obendStageCritPath = true ∧
-    checkTimingSignoff env.nomCorner  2000 obendStageCritPath = true ∧
-    checkTimingSignoff env.slowCorner 2000 obendStageCritPath = true := by
-  decide +kernel
 
 end Obend.Hardware.TcadBridge
 end

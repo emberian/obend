@@ -55,7 +55,7 @@ import all Obend.Hardware.Thermal
 import all Obend.Hardware.Datasheet
 import all Obend.Hardware.Circuits
 import all Obend.Hardware.RF
-import all Obend.Hardware.Physics
+import all Obend.Hardware.Device.Wafer
 import all Obend.Hardware.Photonics
 import all Obend.Hardware.PCB
 import all Obend.Hardware.ReductionMachine
@@ -86,7 +86,7 @@ open Obend.Hardware.HDL Obend.Hardware.Types Obend.Hardware.Rules Obend.Hardware
 open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.FabuBlox Obend.Hardware.DRC Obend.Hardware.Analog Obend.Hardware.WaferSpace
 open Obend.Hardware.Thermal Obend.Hardware.Datasheet Obend.Hardware.Circuits Obend.Hardware.RF
-open Obend.Hardware.Physics Obend.Hardware.Photonics Obend.Hardware.PCB
+open Obend.Hardware.Photonics Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
 open Obend.Hardware.Magnetics Obend.Hardware.FluidThermal
 open Obend.Hardware.PowerElectronics Obend.Hardware.Mechanics Obend.Hardware.Accelerators Obend.Hardware.GeometryCAM
@@ -440,11 +440,13 @@ def ptm8BrokenAsAbba4 (p0 gx cxx pitch : Int) : Int :=
 
 #tooth Obend.Hardware.Analog.prouhetThueMorse_cancels_linear_and_quadratic_bow by mutation Obend.Hardware.Analog.prouhetThueMorseMismatch1D := ptm8BrokenAsAbba4
 
-/-- 27. Broken `evalCellContinuityRate` in `Obend.Hardware.Physics` that adds `cell.fluxOut` instead of subtracting it (violating finite-volume Scharfetter-Gummel flux conservation). -/
-def evalCellContinuityAddFluxOut (cell : PddControlVolume) : Int :=
-  cell.fluxIn + cell.fluxOut - cell.recombRate
+/-- 27. Broken `WaferState.anneal` in `Obend.Hardware.Device` that leaves every profile's variance
+unchanged (no diffusion); `anneal_var_mono` (a positive `D` for a positive time widens every profile)
+must reject it. -/
+def annealNoDiffusion (w : Obend.Hardware.Device.WaferState) (_d : Obend.Hardware.Device.Diffusivities)
+    (_timeS : Obend.Analysis.CanonicalRat) : Obend.Hardware.Device.WaferState := w
 
-#tooth Obend.Hardware.Physics.pdd_total_charge_conserved by mutation Obend.Hardware.Physics.evalCellContinuityRate := evalCellContinuityAddFluxOut
+#tooth Obend.Hardware.Device.anneal_var_mono by mutation Obend.Hardware.Device.WaferState.anneal := annealNoDiffusion
 
 /-- 28. Broken `evalCouplerOut1Power` in `Obend.Hardware.Photonics` that drops the cross-coupled `dc.kappaSqPpm * pIn2Uw` term (violating CMT $2 \times 2$ coupler unitarity). -/
 def evalCouplerOut1DropCross (dc : DirectionalCoupler) (pIn1Uw _pIn2Uw : Int) : Int :=

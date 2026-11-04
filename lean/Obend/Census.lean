@@ -322,6 +322,11 @@ import Obend.Hardware.Compiler
 import Obend.Hardware.DRC
 import Obend.Hardware.DSP
 import Obend.Hardware.Datasheet
+import Obend.Hardware.Device.Constants
+import Obend.Hardware.Device.DriftDiffusion
+import Obend.Hardware.Device.Enclosure
+import Obend.Hardware.Device.Sky130Diode
+import Obend.Hardware.Device.Wafer
 import Obend.Hardware.DigitalTwin
 import Obend.Hardware.FSM
 import Obend.Hardware.Fabric
@@ -337,7 +342,7 @@ import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.OpenUSD
 import Obend.Hardware.PCB
 import Obend.Hardware.Photonics
-import Obend.Hardware.Physics
+import Obend.Hardware.ThermalPassivity
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.PowerElectronics
 import Obend.Hardware.Process
