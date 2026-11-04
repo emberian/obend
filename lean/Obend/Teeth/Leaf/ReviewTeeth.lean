@@ -158,6 +158,7 @@ def flatObjectUnshifted (vt : List (String × Term)) : Term := .fix (.lam (.lam 
 def supportsLayersOnly : Candidate → List LeafPin
   | .book _ C => C.layers.map fun L => ⟨.layer L.name, L.code⟩
   | .slotBook _ _ _ _ => []
+  | .specialized _ _ _ => []
   | .machine => []
 
 #tooth Obend.Leaf.book_usable_sound by mutation Obend.Leaf.Candidate.supports := supportsLayersOnly

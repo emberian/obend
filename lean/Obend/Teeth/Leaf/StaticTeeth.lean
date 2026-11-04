@@ -10,6 +10,8 @@ docstrings say it folds, and that a folder which does nothing is refused (`#toot
   applied to `5` the residual folds to `30`, and `evalBook` of the residual is `evalBook` of the
   original. -/
 public import Obend.Tactic.Tooth
+import all Obend.Leaf.Specialize
+import all Obend.Leaf.Served
 import all Obend.Leaf.Static
 public import Obend.Leaf.Static
 @[expose] public section
@@ -92,6 +94,55 @@ def specializeBookNoOp (B : Book) (_pins : List LeafPin) : Book := B
 
 #tooth Obend.Teeth.Leaf.Static.specializeBook_sample_folds by mutation
   Obend.Leaf.Static.specializeBook := specializeBookNoOp
+
+/-! ## A pin that holds at a view is not a pin the dispatcher serves
+
+The counterexample to "pins that hold at a view justify the specialized book": `b = λself. self.a + 1`
+with `a = λself. 1`. The pin `a := 5` holds at a view whose cell `a` holds `5`, but the book's own
+dispatcher serves `1` for `a`, so binding the pin changes `b` from `2` to `6`. The judge of the
+specialized book (`specializedJudgeB`) refuses that pin and admits `a := 1`, under which `b` is
+still `2`; `Obend.Leaf.Served.link_bequiv_bindBookPins` is the theorem whose hypothesis this is. -/
+
+/-- `a = λself. 1`, `b = λself. self.a + 1`. -/
+def servedBook : Book where
+  items :=
+    [ .slot { member := "a", slot := 0, kind := .method, code := .lam (.nat 1), reads := [] }
+    , .slot { member := "b", slot := 1, kind := .method,
+              code := .lam (.binary .add (.get (.bound 0) "a") (.nat 1)), reads := [0] } ]
+
+/-- The pin `a := 5`: not what the dispatcher serves. -/
+def unservedPin : LeafPin := ⟨.layer "a", .nat 5⟩
+
+/-- The pin `a := 1`: what the dispatcher serves. -/
+def servedPin : LeafPin := ⟨.layer "a", .nat 1⟩
+
+/-- A view whose cell `a` holds `5`, so `unservedPin` holds there. -/
+def viewHoldingFive : LeafView := ⟨0, fun c => if c = .layer "a" then some (.nat 5) else none⟩
+
+/-- The unserved pin holds at that view. -/
+example : Obend.Slot.World.holdsAt viewHoldingFive unservedPin = true := by decide +kernel
+
+/-- The book's `b` is `2`. -/
+example : optTermEq (Obend.Law.run 1000 (.get servedBook.link "b")) (some (.nat 2)) = true := by decide +kernel
+
+/-- Under the unserved pin, `b` is `6`: the pin changed the behaviour. -/
+example : optTermEq (Obend.Law.run 1000 (.get (specializeBook servedBook [unservedPin]).link "b")) (some (.nat 6)) = true := by
+  decide +kernel
+
+/-- The judge refuses the unserved pin. -/
+example : specializedJudgeB servedBook [unservedPin] = false := by decide +kernel
+
+/-- The judge admits the served pin, and `b` stays `2`. -/
+example : specializedJudgeB servedBook [servedPin] = true := by decide +kernel
+example : optTermEq (Obend.Law.run 1000 (.get (specializeBook servedBook [servedPin]).link "b")) (some (.nat 2)) = true := by
+  decide +kernel
+
+/-- A judge that does not run the dispatcher. -/
+def judgeWithoutServing (B : Book) (pins : List LeafPin) : Bool :=
+  Obend.Law.closedB B.link && Obend.Law.closedB (bindBookPins B pins).link && B.lamCodesB
+
+#tooth Obend.Leaf.Served.served_of_judgeB by mutation
+  Obend.Leaf.specializedJudgeB := judgeWithoutServing
 
 end Obend.Teeth.Leaf.Static
 

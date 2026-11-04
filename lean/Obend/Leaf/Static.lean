@@ -36,6 +36,7 @@ table so importers compile; new code imports this module.
 public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
+public import Obend.Leaf.Served
 public import Obend.Lower.Proofs.Book
 @[expose] public section
 
@@ -662,43 +663,12 @@ term literally runs `dataPinPass` on every definition body inside the `Book`. -/
     dataPinSpecialize (encodeBookTerm B) = encodeBookTerm (mapBookCode dataPinSpecialize B) :=
   dataPinSteps_encodeBookTerm 4 B
 
-/-! ## 7. The book specializer (`specializeBook`): bind the pinned `self.m` reads, then fold every definition -/
-
-/-- Substitute pinned member values from `pins` for `self.m` reads inside a definition's `code`. -/
-def substPinsInCode (pins : List LeafPin) : Term → Term
-  | .lam inner => .lam (substMemberEnvAt 0 (pinListEnv pins) inner)
-  | other => substMemberEnvAt 0 (pinListEnv pins) other
+/-! ## 7. The book specializer (`specializeBook`): bind the pinned `self.m` reads (`bindBookPins`,
+`Obend.Leaf.Specialize`), then fold every definition -/
 
 /-- A definition's `code` under `pins`: the pinned `self.m` reads substituted, then the four passes. -/
 def specializeDefCode (pins : List LeafPin) (code : Term) : Term :=
   dataPinSpecialize (substPinsInCode pins code)
-
-/-- Compute the residual slot indices still read through `self` after binding `pins`. -/
-def residualSlotReads (slots : List String) (pins : List LeafPin) (d : LeafDef) : List Nat :=
-  let pinnedCode := substPinsInCode pins d.code
-  let bodyForReads := match d.kind, pinnedCode with
-    | .method, .lam b => b
-    | .cell, .lam (.lam b) => b
-    | _, b => b
-  let readDepth := match d.kind with
-    | .method => 0
-    | .cell => 1
-  ((extractReadMembersAt readDepth bodyForReads).filterMap slots.idxOf?).eraseDups
-
-/-- Bind `pins` into a `LeafDef` (prior to running `dataPinSpecialize`). -/
-def bindLeafDef (slots : List String) (pins : List LeafPin) (d : LeafDef) : LeafDef :=
-  { d with
-    code := substPinsInCode pins d.code
-    reads := residualSlotReads slots pins d }
-
-/-- Bind `pins` into a `BookItem` (prior to running `dataPinSpecialize`). -/
-def bindBookItem (slots : List String) (pins : List LeafPin) : BookItem → BookItem
-  | .slot d => .slot (bindLeafDef slots pins d)
-  | .static m v => .static m v
-
-/-- Bind `pins` across all definitions of a `Book` (prior to running `dataPinSpecialize`). -/
-def bindBookPins (B : Book) (pins : List LeafPin) : Book :=
-  { items := B.items.map (bindBookItem B.slots pins) }
 
 /-- Specialize a `LeafDef` against `pins`. -/
 def specializeLeafDef (slots : List String) (pins : List LeafPin) (d : LeafDef) : LeafDef :=
@@ -766,11 +736,6 @@ def evalBook (B : Book) (m : String) : Option Term :=
       some (specializeDefCode (bookCanonicalPins B) d.code)
   | none =>
     (B.statics.find? (·.1 == m)).map (fun (_, v) => dataPinSpecialize v)
-
-/-- Extract the member names read via `self` inside a definition `code` (matching `substPinsInCode`). -/
-def extractReadMembersCode : Term → List String
-  | .lam inner => extractReadMembersAt 0 inner
-  | other => extractReadMembersAt 0 other
 
 theorem substPinsInCode_congr_of_agree {pins1 pins2 : List LeafPin} (code : Term)
     (h : AgreeOnMembers (extractReadMembersCode code) (pinListEnv pins1) (pinListEnv pins2)) :
@@ -1128,6 +1093,109 @@ theorem defs_mapBookCode (f : Term → Term) (B : Book) :
 
 theorem slots_foldBook (B : Book) : (foldBook B).slots = B.slots := by
   simp [foldBook, Book.slots, defs_mapBookCode, List.map_map, Function.comp_def]
+
+
+/-! ## 11. The specialized book's link, and the slot candidate that carries the proof
+
+`specializeBook B pins = foldBook (bindBookPins B pins)`. The binding step is `link_bequiv_bindBookPins`
+(`Obend.Leaf.Served`): sound when the dispatcher serves every pin, which `specializedJudgeB` decides.
+The folding step is `link_bequiv_foldBook`. Together: **`B.link ≈b (specializeBook B pins).link`**,
+and through `book_sound`, every member of the specialized book of a closed composition is the member
+of the object. `Candidate.specialized name C pins` (`Obend.Leaf.Specialize`) carries exactly this:
+its judge is `C.closedB && specializedJudgeB (emit C) pins`, so a usable candidate computes the
+view's object (`specialized_usable_sound`), is kept exactly while its pins hold
+(`specialized_choice`) and is blocked, naming the moved pin, when one does not
+(`specialized_moved_pin_blocks`). -/
+
+/-- The hole of a context read at `m`: the substitution that turns a context `C` into `C[.get hole m]`. -/
+def getHole (m : String) : Nat → Term
+  | 0 => .get (.bound 0) m
+  | n + 1 => .bound (n + 1)
+
+/-- Filling the hole of `C[.get hole m]` with `x` is filling the hole of `C` with `.get x m`. -/
+theorem instantiate_getHole (C x : Term) (m : String) :
+    instantiate (C.substitute (getHole m)) x = instantiate C (.get x m) := by
+  rw [instantiate_eq, instantiate_eq, Obend.Core.TermTraverse.substitute_comp]
+  congr 1; funext i; cases i <;> simp only [getHole, Term.substitute, single]
+
+/-- `≈b` is a congruence for member reads. -/
+theorem bequiv_get {t t' : Term} (h : t ≈b t') (m : String) : .get t m ≈b .get t' m := by
+  intro ρ C
+  have := h ρ (C.substitute (getHole m))
+  rw [instantiate_getHole, instantiate_getHole] at this
+  simpa only [Term.substitute] using this
+
+/-- `specializeBook` is the folder over the bound book. -/
+theorem specializeBook_eq_foldBook_bindBookPins (B : Book) (pins : List LeafPin) :
+    specializeBook B pins = foldBook (bindBookPins B pins) :=
+  specializeBook_eq_mapBookCode_bindBookPins B pins
+
+/-- **The specialized book's link is the book's link**, when the judge admits the pins. -/
+theorem link_bequiv_specializeBook (B : Book) (pins : List LeafPin)
+    (h : specializedJudgeB B pins = true) : B.link ≈b (specializeBook B pins).link := by
+  rw [specializeBook_eq_foldBook_bindBookPins]
+  exact (Served.link_bequiv_bindBookPins_of_judgeB h).trans (link_bequiv_foldBook _)
+
+/-- Every member of the specialized book of a closed composition is the member of the object. -/
+theorem specializeBook_member_sound (C : Composition) (hc : C.closedB = true) (pins : List LeafPin)
+    (h : specializedJudgeB (emit C) pins = true) (m : String) :
+    .get (specializeBook (emit C) pins).link m ≈b .get C.object m :=
+  (bequiv_get (link_bequiv_specializeBook (emit C) pins h) m).symm.trans (book_sound C hc m)
+
+/-- **A usable specialized book is the specialization of the view's book, and computes its object**:
+the view's object has the code the candidate pinned, so it emits the same book; the judge admitted
+the pins against that book; and the object, when closed, computes what the book computes. -/
+theorem specialized_usable_sound {k : Nat} {name : String} {C C' : Composition} {pins : List LeafPin}
+    (h : specSlot.usable (holdsAt (viewOf k name C')) (.specialized name C pins) = true) :
+    emit C = emit C' ∧
+    (emit C').link ≈b (specializeBook (emit C') pins).link ∧
+    (C'.closedB = true → ∀ m, .get (specializeBook (emit C) pins).link m ≈b .get C'.object m) := by
+  obtain ⟨hj, hall⟩ := (usable_iff _ _ _).1 h
+  have ho := hall ⟨.object name, C.code⟩ (by simp [specSlot, Candidate.supports])
+  rw [holdsAt_eq] at ho
+  simp only [viewOf, beq_self_eq_true, ite_true] at ho
+  have e : emit C = emit C' := emit_congr (termEq_sound' ho).symm
+  have hjudge : specializedJudgeB (emit C) pins = true := by
+    simp only [specSlot, Candidate.judge, Bool.and_eq_true] at hj
+    exact hj.2
+  refine ⟨e, e ▸ link_bequiv_specializeBook (emit C) pins hjudge, fun hc m => ?_⟩
+  rw [e]
+  exact specializeBook_member_sound C' hc pins (e ▸ hjudge) m
+
+/-- The order a chooser gives for a specialized book: it first, the machine as the fallback. -/
+def specializedOrder (name : String) (C : Composition) (pins : List LeafPin) : List Candidate :=
+  [.specialized name C pins, .machine]
+
+/-- **Incumbent-first for the specialized book**: kept exactly while usable, else the machine. -/
+theorem specialized_choice (v : LeafView) (name : String) (C : Composition) (pins : List LeafPin) :
+    (slotAdvance : Advance LeafView LeafPin Candidate).advance specSlot v (specializedOrder name C pins)
+        (some (.specialized name C pins)) =
+      if specSlot.usable (holdsAt v) (.specialized name C pins) then .ok (.specialized name C pins)
+      else .ok .machine := by
+  split
+  · rename_i hu
+    exact (incumbent_choice specSlot v _ _ _).2 (.inl ⟨rfl, hu⟩)
+  · rename_i hu
+    have hf : specSlot.usable (holdsAt v) (.specialized name C pins) = false := by simpa using hu
+    refine (incumbent_choice specSlot v _ _ _).2 (.inr ⟨fun c e => by cases e; exact hf, ?_⟩)
+    simp [Slot.select, Slot.alternatives, specializedOrder, hf, machine_usable]
+
+/-- **A moved pin blocks the specialized book by name**, as `moved_pin_blocks` for the book. -/
+theorem specialized_moved_pin_blocks {v : LeafView} {name : String} {C : Composition}
+    {pins : List LeafPin} (hj : specSlot.judge (.specialized name C pins) = true)
+    {p : LeafPin} (hp : p ∈ (Candidate.specialized name C pins).supports) (hd : holdsAt v p = false) :
+    ∃ d, specSlot.read (holdsAt v) (some (.specialized name C pins)) = .blocked (.specialized name C pins) d ∧
+      p ∈ d ∧ ∀ q, q ∈ d ↔ q ∈ (Candidate.specialized name C pins).supports ∧ holdsAt v q = false := by
+  have hmem : p ∈ specSlot.dead (holdsAt v) (.specialized name C pins) := (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
+  have hread : ∃ d, specSlot.read (holdsAt v) (some (.specialized name C pins)) =
+      .blocked (.specialized name C pins) d ∧ p ∈ d := by
+    unfold Slot.read
+    simp only [hj, ite_true]
+    cases hdd : specSlot.dead (holdsAt v) (.specialized name C pins) with
+    | nil => rw [hdd] at hmem; cases hmem
+    | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
+  obtain ⟨d, hr, hpd⟩ := hread
+  exact ⟨d, hr, hpd, (read_blocked_exact specSlot _ _ _ _ hr).2⟩
 
 
 end Obend.Leaf.Static
