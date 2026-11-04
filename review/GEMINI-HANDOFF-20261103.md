@@ -251,3 +251,22 @@ The dirty content survives in `bb2:~/obend` (§2).
 
 Not adjudicated here: `lean/Obend/Lower/PolicyToGrain.lean` (needed by `SovereignEngine`, see above), `lean/Obend/Elab/AutoCert.lean`, `lean/Obend/Core/*`.
 - (second round, `48727bb`, `f3b832e`) Files outside this lane's list it edited because the change did not build or hold without them: `lean/Obend/Spec/Proofs/LawCompile.lean` (the `monotone` proof and teeth, first round), `lean/Obend/Spec/{Syntax,FrontEnd,Workspace}.lean` (module laws), `lean/Obend/Vault/{Page,Json,Law}.lean` (dangling measure, tombs, kind doc). None was dirty from a suspended lane except `Vault/Page.lean` (S-2, kept, above).
+
+## Adjudications (cad-cam lane, 2026-11-04)
+
+Method: each dirty file the lane owns was read against HEAD before any edit; builds in `bb2:~/lane-cad`
+(git HEAD of 11-04 plus this lane's files). Report: `review/EXPERT-cad-cam-20261104.md`.
+
+| file | lane | call | why |
+|---|---|---|---|
+| `apps/fidget-cam/BaseImpellerBody.obend` | S-6 | **reverted, then rewritten** | S-6 added `evalHubBladeFRep = x²+y²+z² + thickness` on `Nat` (not a signed field; no subtraction, so nothing is ever inside) and a sample at `(8,0,4)`. The module is now the hub's parameters (`6db42e8`). |
+| `apps/fidget-cam/CoolingChannelOverride.obend` | S-6 | **reverted, then rewritten** | Same pattern (`evalCoolingBoreFRep`, a sum of squares plus the bore radius). Now the bore's parameters and the 2.0 mm minimum wall. |
+| `apps/fidget-cam/MountingBossAssembly.obend` | S-6 | **reverted, then rewritten** | `evalTcpmRotaryKinematicsUm = aDeg·offset + cDeg·2 + tape length` is not kinematics. Now the lug's parameters. |
+| `apps/fidget-cam/ImpellerPartTop.obend` | S-6 | **reverted, then rewritten** | `evaluateImpeller5AxisPointUm` summed four fields and two angles; the Lipschitz pad changed 72→64 to match a fixture. Now the process parameters; the package entry is `toolOffset`. |
+| `lean/Obend/Apps/FidgetCam.lean` | S-6 body, gate import block | **gate's import block kept; S-6 body replaced** | S-6's no-gouge theorem put one tool at the origin against a box 6 mm away; its wall theorem probed two planes at one point and called `computeCertifiedShellWallThicknessUm` with a list the HEAD signature does not take (red). Replaced by `fidget_bore_wall_sound`, `fidget_toolpath_no_gouge`, `fidget_post_rotarySafe` (`6db42e8`). No `local elab "#import_obend"` was present. |
+| `stdlib/physical/Cnc5AxisMill.obend` | S-6 | **left to the physics lane's call above** | Not in this lane's brief; the physics lane reverted it. |
+| `lean/tests/metasystem/OpenUsdAndSsaTapeTest.lean` | proof-engineering (fixtures→examples) | **kept; §2.3 rewritten** | Its wall section called the deleted probe-point functions; it now tests `checkWall_sound` (`cf3efad`). `:359` is red for a reason outside this lane: `Hardware/Judge.lean`'s `extractNatField_token_boundary_and_decoders_verified` changed its statement. |
+
+Not dirty but changed by this lane: `Hardware/{GeometryCAM,OpenUSD,Kinematics,PCB}.lean` (`cf3efad`,
+`5a74100`, `0da8645`), which also carried the proof-engineering lane's fixture→`example` edits, and
+`PHYSICAL.md` §2 and §3.1 (`023cdc4`; the physics lane's §4 hunk is left in the tree).
