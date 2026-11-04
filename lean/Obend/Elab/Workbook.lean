@@ -1179,6 +1179,7 @@ meta instance : ToExpr LawRef where
     | .caller => mkConst ``LawRef.caller
     | .height => mkConst ``LawRef.height
     | .turn => mkConst ``LawRef.turn
+    | .labelConst v => mkApp (mkConst ``LawRef.labelConst) (toExpr v)
   toTypeExpr := mkConst ``LawRef
 
 meta partial def toExprLawExpr : LawExpr → Expr

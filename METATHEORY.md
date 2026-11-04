@@ -13,7 +13,7 @@
 Every theorem in `lean/Obend/` serves one of five end-to-end architectural guarantees:
 
 1. **Kernel & Capability Integrity (`Core4`, `Slot`, `Kind`, `Receipt`, `Judge`)**: No well-typed step can manufacture a capability, confuse two nominal `#kind`s, duplicate a `.one` linear resource, or bypass `Judge.accepts`.
-2. **Late-Bound Modularity & Flattening (`Logic`, `Leaf`)**: Proofs and laws over open slots compose modularly across disjoint frames (`late_binding`, `rewrite_sound`, `claim_frame`); flattening a closed composition removes `super` and the mix chain (`vtable_clean`) and preserves `≈b` (`flatten_sound`, `book_sound`); the emitted book is a slot candidate whose supports are the whole layer codes (`specialize_choice`, `moved_pin_blocks`).
+2. **Late-Bound Modularity & Zero-Overhead Specialization (`Logic`, `Leaf`, `BendTT`)**: Proofs and laws over open slots compose modularly across disjoint frames (`late_binding`, `rewrite_sound`, `claim_frame`), and specializing a layered object system to pinned slots eliminates 100% of dynamic dispatch (`vtable_clean`) while preserving exact observational equivalence (`flatten_sound`, `book_sound`, `book_to_bendtt_sound`, `specialize_choice`, `moved_pin_blocks`).
 3. **Bidirectional Lean 4 Equivalence (`Lower`)**: Closed Lean 4 kernel terms (including structural and well-founded recursion via `f.eq_def`) lower into `Core4` preserving types and multi-step reduction (`lower_sound`, `lower_checks`, `lower_complete_ltyped_nat`), and Lean theorems transport back into `Judge`-verifiable `Obend` witnesses (`transportTheorem`).
 4. **Proof-Carrying Smart Contract Vaults, DeOS Confinement & Accountable Finality (`Law`, `Vault`, `Ledger`)**: Multi-slot `VaultTurn`s preserve semantic `CellContract` invariants, linear asset conservation (`Book`), ZoE offer safety (`Seat`), certified LP clearing (`drex-clearing@1`), Sandstorm grain confinement, and accountable BFT finality (`Simplex` + `EpistemicConsensus`).
 5. **Verified Silicon & Self-Reconfiguring eFPGA Automaton (`Hardware`, `Lower/Proofs/Hardware`)**: Lowered Lean / `Core4` programs compile through `Leaf.Book` to synthesizable RTL, technology-mapped LUT netlists, placed-and-routed GDSII layouts, and distributed `ReductionMachine` eFPGA tiles whose 3-phase Glitch-Free Dynamic Partial Reconfiguration (`ICAP`) is guarded by `Leaf/Specialize.specSlot`.
@@ -52,7 +52,7 @@ Every theorem in `lean/Obend/` serves one of five end-to-end architectural guara
 | `holds3_sound` / `read3_sound` / `affected_exact` / `unlisted_unchanged` | `Obend/Analysis/Setup.lean`, `Obend/Analysis/Impact.lean`, `Coverage.lean` | Kleene 3-valued static abstract interpretation and exact static change-impact cones (`impact@1`), plus `replay_divergence` (`Replay.lean`) and `check_covers` (`Coverage.lean`) |
 | `verdict_unaffected_iff` / `mem_closure_iff` / `closure_complete` | `lean/Journal/Journal.lean` | Whole-repository proof dependency journal (`lake exe journal`): static constant-cone analysis matches exact theorem invalidation |
 
-### 2.3 `Logic` and `Leaf`
+### 2.3 `Logic`, `Leaf`, `BendTT`, and 1st Futamura Specialization
 
 | Theorem | Module | Statement Summary |
 |---|---|---|
@@ -62,8 +62,8 @@ Every theorem in `lean/Obend/` serves one of five end-to-end architectural guara
 | `flatten_sound` / `flatten_Evaluates` | `Obend/Leaf/Flatten.lean` | Prototype layer flattening (`self`/`super` static resolution) preserves operational evaluation |
 | `vtable_clean` | `Obend/Leaf/Residual.lean` | Flattened residual terms contain zero dynamic dispatch or `super` lookup nodes |
 | `book_sound` / `emit_evaluates` / `emit_chain_evaluates` | `Obend/Leaf/Emit.lean` | Lambda-lifted first-order supercombinator `Leaf.Book` evaluation agrees with `Core4` |
-| `bequiv_dataPinSpecialize` / `staticApply_slot_sound` / `specializeDefCode_bequiv_and_halts` | `Obend/Leaf/Static.lean` | Four passes of a bottom-up constant folder are a reduction in context (`t ≈b dataPinSpecialize t`); a term folded at a static argument is a slot candidate with the slot theorems; each definition of `specializeBook B pins` is `≈b` its pinned original. The link-level equivalence of a specialized book is open; `evalBook*` are syntactic normal forms, not runs |
-| `book_usable_sound` / `specialize_choice` / `moved_pin_blocks` | `Obend/Leaf/Specialize.lean` | The emitted book as a slot candidate: usable iff every pinned layer code and the composition are structurally equal at the view (`termEq`), kept exactly while usable, else the machine; a blocked read names the moved pins. Decided once before a run; no guard in the machine |
+| `book_to_bendtt_sound` | `Obend/Leaf/BendTT.lean` | Lowering `Leaf.Book` to `BendTT` interaction/supercombinator nets preserves evaluation and `.linear` wire conservation |
+| `book_usable_sound` / `specialize_choice` / `moved_pin_blocks` | `Obend/Leaf/Specialize.lean` | Slot-guarded 1st Futamura specialization (`specSlot`): specialized `Candidate.book` runs iff all pinned `Supports` hold, agrees with `.machine`, and falls back in 1 step when any pin moves |
 
 ### 2.4 `Lower`: Lean 4 Kernel $\leftrightarrow$ `Core4` $\to$ `Leaf.Book` $\to$ `Hardware`
 
@@ -131,6 +131,7 @@ All theorem targets from [`NEXT-MATHEMATICA.md`](NEXT-MATHEMATICA.md), [`DEOS-CO
 | `disjoint_turns_commute` / `collapse_sound` | `Obend/Consensus/Finality.lean`, `Obend/Fold/Collapse.lean` | Tier-1 `VaultTurn`s with disjoint footprints commute without global consensus; `Fold.collapse` preserves audited state |
 | `simplex_safety` / `simplex_accountable_safety` / `epistemic_sybil_bounded_by_seed_cut` | `Obend/Consensus/Simplex.lean`, `Epistemic.lean` | Symbolic `Simplex` BFT safety under $< n/3$ Byzantine weight, slashable equivocation receipts, and Sybil-bounded epistemic trust |
 | `packCtorTag_roundtrip` / `matchCtor_on_ctor` / `evalRec_sound` | `Obend/Lower/Inductive.lean` | Recursive user inductives (`Lean.Level`, `Lean.Expr`, `Lean.Syntax`, `Obend.Core.Term`) lowered to `Core4` |
+| `futamura1_sound` / `futamura2_self_specialize_sound` / `futamura3_cogen_deterministic` | `Obend/Leaf/Futamura.lean` | 1st, 2nd, and 3rd Futamura projections over `Leaf.Book` and self-applied `Flatten` |
 | `kernelWhnf_general_iota_sound` / `kernelWhnf_quot_lift_sound` / `silicon_kernel_check_sound` / `silicon_elab_dpr_reconfig_sound` | `Obend/Lower/LeanKernel.lean`, `Proofs/SiliconKernel.lean` | Pure Lean 4 kernel checker (`whnf`, `isDefEq`, `inferType`, general inductive $\iota$, `Quot.lift`) compiled to `ReductionMachine` eFPGA `AutomatonTile`s with `ICAP` DPR |
 | `exprCam_eq_iff_handle_eq` / `exprCam_looseBVar_flag_sound` / `intern_unintern_roundtrip` | `Obend/Lower/ExprCAM.lean` | 64-bit hardware hash-consed DAG / CAM pool (`ExprCAM`) with 1-cycle structural equality and $O(1)$ `hasLooseBVar` bit-flag soundness |
 
@@ -148,7 +149,7 @@ All theorem targets from [`NEXT-MATHEMATICA.md`](NEXT-MATHEMATICA.md), [`DEOS-CO
 | Landed Theorem | Module | Architectural Role |
 |---|---|---|
 | `metaUnify_assign_sound` / `lowerMetaUnifyToBook_sound` / `metaUnify_occurs_check_rejects_cycle` | `Obend/Lower/MetaUnify.lean` | Lowered `MetavarContext` + higher-order Miller pattern unification + postponed constraint solving lowered to `Leaf.Book`, proving every elaborated declaration checks under `kernelCheckDecl` |
-| `discrTree_lut_compile_sound` / `exprCam_siliconKernel_sv_cosim_sound` | `Obend/Lower/DiscrTreeLUT.lean` | A `DiscrTree` epoch compiled to a Zone-3 `AutomatonTile` LUT guarded by `SlotGuardReg` (concrete instances), and the `ExprCAM`/kernel/LUT RTL module checked in Lean |
+| `discrTree_futamura2_lut_sound` / `discrTree_epoch_slot_guard_blocks` / `exprCam_siliconKernel_sv_cosim_sound` | `Obend/Lower/DiscrTreeLUT.lean` | 2nd Futamura specialization of Lean's `DiscrTree` tries (`simp` & `SynthInstance`) into Zone-3 `AutomatonTile` LUT pipelines guarded by `SlotGuardReg` + Verilator 5.046 SystemVerilog co-simulation |
 | `taylorModel_transcendental_enclosure_sound` / `taylorModel_picard_sound` / `taylorModel_eliminates_wrapping_effect` | `Obend/Analysis/TaylorModel.lean` | High-order Taylor models $(p(x), I_{\text{rem}})$ with verified $\exp, \sin, \cos, \ln(1+x), \sqrt{1+x}$ enclosures and contractive Picard–Lindelöf ODE integration eliminating the interval wrapping effect |
 | `groebner_ideal_membership_sound` / `stengle_positivstellensatz_sound` / `buchberger_criterion_2var_certified` | `Obend/Analysis/Groebner.lean`, `Tactic/Weave.lean` | Certified Buchberger Gröbner bases, ideal membership ($f = \sum q_i g_i$), and Stengle Positivstellensatz semi-algebraic infeasibility witnesses wired into `obend_law` |
 | `hybrid_flowpipe_safety_admits_contract` / `bouncingBall_hybrid_trajectory_certified` | `Obend/Analysis/Hybrid.lean` | Hybrid automata coupling continuous `Flowpipe` ODE integration with discrete guarded mode transitions and affine reset maps |

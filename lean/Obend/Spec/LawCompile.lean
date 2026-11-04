@@ -18,6 +18,9 @@ What the fragment reads, and how the compiled term reads it:
 * `request.subject`, `request.caller`: the request's `optNatTy` fields, absent at `none`;
   `request.turn`: its natural field; `ledger.height`: the record's `height`, which `requestAt`
   takes from the ledger's `Consensus`, never from the request (`Obend.Law.reqTy`).
+* a LABEL field (`S` gives it `.label`) and a label constant read as labels (`labelRead`); `==`
+  between two references that both read as labels is `labelEqual`, else the natural comparison
+  with its presence guards (so a label against a natural is false, statically).
 * `monotone(F)` and `writeOnce(F)`: the old state's `F` against the new one's. At a first write
   there is no old state (`denote … none …`): both are true.
 * Integer constants: every reading is a natural (`scalarOf`), so a comparison with a negative
@@ -89,13 +92,27 @@ structure Read where
 /-- An optional request fact. -/
 @[expose] def optRead (t : Term) : Read := ⟨isSomeT t, payloadT t⟩
 
-/-- What a reference reads at cursor `a`. -/
+/-- What a reference reads at cursor `a`, as a natural (a label reads as absent). -/
 @[expose] def refRead (S : Ty) (a : At) : LawRef → Read
   | .field f => fieldRead S f (a.newF f)
   | .subject => optRead (a.reqF "subject")
   | .caller => optRead (a.reqF "caller")
   | .height => ⟨trueT, a.reqF "height"⟩
   | .turn => ⟨trueT, a.reqF "turn"⟩
+  | .labelConst _ => ⟨falseT, natT 0⟩
+
+/-- Field `f` of the state type `S` is a label. -/
+@[expose] def labelField (S : Ty) (f : String) : Bool :=
+  match Obend.Core.Bidirectional.rowMember S f with
+  | some .label => true
+  | _ => false
+
+/-- What a reference reads at cursor `a` as a label, when it does: a label field of `S`, or a label
+constant. -/
+@[expose] def labelRead (S : Ty) (a : At) : LawRef → Option Term
+  | .field f => if labelField S f then some (a.newF f) else none
+  | .labelConst s => some (.label s)
+  | _ => none
 
 @[expose] def orT (a b : Term) : Term := .ifBool a trueT b
 @[expose] def impliesT (a b : Term) : Term := .ifBool a b trueT
@@ -130,7 +147,10 @@ from (`monotone`, `writeOnce` read it). -/
   | .inC r cs =>
     andT (refRead S a r).present
       (anyOf ((cs.filter (0 ≤ ·)).map fun c => eqNat (refRead S a r).value (natT c.toNat)))
-  | .eqR l r => both (refRead S a l) (refRead S a r) eqNat
+  | .eqR l r =>
+    match labelRead S a l, labelRead S a r with
+    | some x, some y => eqLabel x y
+    | _, _ => both (refRead S a l) (refRead S a r) eqNat
   | .leR l r => both (refRead S a l) (refRead S a r) leNat
   | .leROff l r k =>
     if 0 ≤ k then both (refRead S a l) (refRead S a r) fun x y => leNat x (addNat y (natT k.toNat))
@@ -145,7 +165,10 @@ from (`monotone`, `writeOnce` read it). -/
       match fieldKind S f with
       | some k => .ifBool (eqNat (scalarRead k (oldRead src a f)) (natT 0)) trueT
           (eqNat (scalarRead k (a.newF f)) (scalarRead k (oldRead src a f)))
-      | none => trueT
+      | none =>
+        if labelField S f then
+          .ifBool (eqLabel (oldRead src a f) (.label "")) trueT (eqLabel (a.newF f) (oldRead src a f))
+        else trueT
   | .not e => notT (cond S src a e)
   | .and l r => andT (cond S src a l) (cond S src a r)
   | .or l r => orT (cond S src a l) (cond S src a r)
@@ -185,12 +208,17 @@ when each admits). -/
   requestAt agent principal notBefore validUntil occasion facts.subject facts.caller ⟨facts.height⟩ facts.turn
 
 /-- The state's fields fit `S` at field `f`: a natural or boolean field of `S` holds a natural or
-boolean (the first field so named), and a field `S` does not read as a scalar holds no scalar. -/
+boolean (the first field so named); a label field of `S` holds a label there and no scalar under
+that name; a field `S` does not read at all holds neither a scalar nor a label. -/
 @[expose] def fitsField (S : Ty) (fs : List (String × Data)) (f : String) : Bool :=
   match fieldKind S f, fieldsLookup f fs with
   | some .nat, some (.natural _) => true
   | some .bool, some (.boolean _) => true
-  | none, _ => (Obend.Spec.Law.firstScalarField f fs).isNone
+  | none, _ =>
+    if labelField S f then
+      (match fieldsLookup f fs with | some (.label _) => true | _ => false) &&
+        (Obend.Spec.Law.firstScalarField f fs).isNone
+    else (Obend.Spec.Law.firstScalarField f fs).isNone && (Obend.Spec.Law.fieldLabel f (.record fs)).isNone
   | _, _ => false
 
 /-- A state FITS `S` for the law `e`: a record whose fields fit `S` at every field `e` reads. -/

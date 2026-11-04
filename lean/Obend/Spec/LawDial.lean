@@ -142,14 +142,19 @@ inductive DialVerdict where
   | ordering
   deriving DecidableEq, Repr
 
-/-- True when `r` reads only request/ledger facts (`subject`, `caller`, `height`, `turn`), not mutable state. -/
+/-- True when `r` reads no mutable state: a request/ledger fact (`subject`, `caller`, `height`,
+`turn`) or a label constant. -/
 def isFactOnly : LawRef → Bool
   | .field _ => false
-  | .subject | .caller | .height | .turn => true
+  | .subject | .caller | .height | .turn | .labelConst _ => true
 
 theorem read_factOnly {r : LawRef} (hr : isFactOnly r = true) (facts : Facts) (n₁ n₂ : Data) :
     r.read facts n₁ = r.read facts n₂ := by
   cases r <;> simp [isFactOnly, LawRef.read] at hr ⊢
+
+theorem readLabel_factOnly {r : LawRef} (hr : isFactOnly r = true) (n₁ n₂ : Data) :
+    r.readLabel n₁ = r.readLabel n₂ := by
+  cases r <;> simp [isFactOnly, LawRef.readLabel] at hr ⊢
 
 /-- Combine two dial verdicts under conjunction. -/
 def DialVerdict.combine : DialVerdict → DialVerdict → DialVerdict
@@ -157,7 +162,9 @@ def DialVerdict.combine : DialVerdict → DialVerdict → DialVerdict
   | .ordering, _ | _, .ordering => .ordering
   | _, _ => .stepShaped
 
-/-- **The Confluence Dial** on `.obend` `LawExpr`. -/
+/-- **The Confluence Dial** on `.obend` `LawExpr`. A comparison with a label field (`new.decider ==
+"ember"`) is `.ordering`, as every equality on a field is: `joinData` keeps the left state's label,
+so two admitted writes of different labels join to one of them. No label clause is `.free`. -/
 def dial : LawExpr → DialVerdict
   | .leC (.field _) _ => .free
   | .monotone _ => .free
@@ -222,7 +229,9 @@ theorem dial_free_confluent :
     rename_i hlr
     simp only [LawExpr.denote] at h₁ ⊢
     rw [read_factOnly hlr.1 facts (joinData n₁ n₂) n₁,
-        read_factOnly hlr.2 facts (joinData n₁ n₂) n₁]
+        read_factOnly hlr.2 facts (joinData n₁ n₂) n₁,
+        readLabel_factOnly hlr.1 (joinData n₁ n₂) n₁,
+        readLabel_factOnly hlr.2 (joinData n₁ n₂) n₁]
     exact h₁
   | .leR l r, hd, facts, old, n₁, n₂, h₁, _ => by
     simp only [dial, Bool.and_eq_true] at hd

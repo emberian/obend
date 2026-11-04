@@ -134,7 +134,7 @@ $$\mathsf{ElabCompiler} \;=\; \mathsf{mix}(\ulcorner \mathsf{mix} \urcorner, \ul
 How does a `Leaf.Book` / `BendTT` representation of the Lean kernel and elaborator actually execute on silicon, and why is our architecture uniquely suited to it?
 
 ### 5.1 Hash-Consed DAGs + `.one` Linear Wires (`BendTT`)
-In `Lean4Lean`, `Expr` is a DAG with maximal sharing. (This subsection described the `BendTT` module under `Obend/Leaf/`, deleted on 2026-11-04; nothing below is implemented.)
+In `Lean4Lean`, `Expr` is a DAG with maximal sharing. (This subsection described `Obend/Leaf/BendTT.lean`, deleted on 2026-11-04; nothing below is implemented.)
 - `.zero`-quantity proof witnesses and erased type indices are stripped at compile time (`zero_wires_erased` — zero silicon area or bandwidth spent on proof terms that aren't inspected at runtime!).
 - `.one`-quantity linear states (`MetavarContext`, `LocalContext`, mutable unification tables) flow through dedicated point-to-point linear wires without reference-counting locks or garbage collection pauses (`step_conserves_linear`, `book_to_bendtt_sound`).
 - `.many`-quantity shared subterms (`Expr` nodes) are stored in a **Hardware Hash-Consed CAM / BRAM Pool** where structural equality (`Expr.equal`) is a single 1-cycle 64-bit handle comparison, and $\alpha$-equivalence / `hasLooseBVars` metadata is packed directly into the 64-bit word header!

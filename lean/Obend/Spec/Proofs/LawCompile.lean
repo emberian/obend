@@ -108,6 +108,9 @@ theorem ev_anyOf {α : Type} {g : α → Term} {P : α → Bool} : ∀ {l : List
 
 theorem ev_eqNat {a b : Term} {m k : Nat} (ha : Evaluates a (.nat m)) (hb : Evaluates b (.nat k)) :
     Evaluates (eqNat a b) (.boolean (m == k)) := ev_binary ha hb rfl
+theorem ev_eqLabel {a b : Term} {x y : String} (ha : Evaluates a (.label x)) (hb : Evaluates b (.label y)) :
+    Evaluates (eqLabel a b) (.boolean (x == y)) := ev_binary ha hb rfl
+theorem ev_label (s : String) : Evaluates (.label s) (.label s) := evaluates_self (.label s)
 theorem ev_leNat {a b : Term} {m k : Nat} (ha : Evaluates a (.nat m)) (hb : Evaluates b (.nat k)) :
     Evaluates (leNat a b) (.boolean (decide (m ≤ k))) := ev_binary ha hb rfl
 theorem ev_addNat {a b : Term} {m k : Nat} (ha : Evaluates a (.nat m)) (hb : Evaluates b (.nat k)) :
@@ -171,11 +174,78 @@ theorem field_read {S : Ty} {f : String} {k : Kind} {fs : List (String × Data)}
     · refine evaluates_ifBool (ev_get (e := .boolean b) (by simp [Data.field, hl])) ?_
       cases b <;> exact ev_nat _
 
+/-- `fitsField` at a field `S` reads as no scalar. -/
+theorem fitsField_none {S : Ty} {f : String} {fs : List (String × Data)} (hk : fieldKind S f = none) :
+    fitsField S fs f =
+      (if labelField S f then
+        (match fieldsLookup f fs with | some (.label _) => true | _ => false) &&
+          (Obend.Spec.Law.firstScalarField f fs).isNone
+      else (Obend.Spec.Law.firstScalarField f fs).isNone && (Obend.Spec.Law.fieldLabel f (.record fs)).isNone) := by
+  unfold fitsField; rw [hk]
+  cases fieldsLookup f fs with
+  | none => rfl
+  | some d => cases d <;> rfl
+
 theorem field_absent {S : Ty} {f : String} {fs : List (String × Data)} (hk : fieldKind S f = none)
     (hfit : fitsField S fs f = true) : fieldOf f (.record fs) = none := by
+  rw [fitsField_none hk] at hfit
+  simp only [fieldOf]
+  by_cases hl : labelField S f = true
+  · simp only [hl, ite_true, Bool.and_eq_true] at hfit
+    exact Option.isNone_iff_eq_none.1 hfit.2
+  · simp only [hl, Bool.false_eq_true, ite_false, Bool.and_eq_true] at hfit
+    exact Option.isNone_iff_eq_none.1 hfit.1
+
+/-- The reference semantics' lookup is the fragment's first field. -/
+theorem fieldsLookup_eq_firstField (f : String) : ∀ fs : List (String × Data),
+    fieldsLookup f fs = Obend.Spec.Law.firstField f fs
+  | [] => rfl
+  | (g, d) :: rest => by
+    simp only [fieldsLookup, Obend.Spec.Law.firstField]
+    by_cases hg : g = f
+    · simp [hg]
+    · have : (g == f) = false := by simp [hg]
+      simp [this, hg, fieldsLookup_eq_firstField f rest]
+
+theorem label_member {S : Ty} {f : String} (h : labelField S f = true) :
+    Obend.Core.Bidirectional.rowMember S f = some .label := by
+  unfold labelField at h
+  split at h
+  · rename_i heq; exact heq
+  · cases h
+
+theorem fieldKind_none_of_label {S : Ty} {f : String} (h : labelField S f = true) : fieldKind S f = none := by
+  unfold fieldKind; rw [label_member h]
+
+/-- A label field of `S`: in fitting data it holds a label, reads as no scalar, and its term
+evaluates to that label. -/
+theorem label_read {S : Ty} {f : String} {fs : List (String × Data)} (hl : labelField S f = true)
+    (hfit : fitsField S fs f = true) :
+    ∃ s : String, Obend.Spec.Law.fieldLabel f (.record fs) = some s ∧ fieldOf f (.record fs) = none ∧
+      Evaluates (.get (Data.record fs).term f) (.label s) := by
   unfold fitsField at hfit
-  rw [hk] at hfit
-  simpa [fieldOf] using hfit
+  rw [fieldKind_none_of_label hl] at hfit
+  simp only [hl, ite_true, Bool.and_eq_true] at hfit
+  obtain ⟨hlab, hsc⟩ := hfit
+  split at hlab
+  · rename_i s hlk
+    refine ⟨s, ?_, ?_, ev_get (e := .label s) (by simp [Data.field, hlk])⟩
+    · simp only [Obend.Spec.Law.fieldLabel, ← fieldsLookup_eq_firstField, hlk]
+    · simpa [fieldOf] using hsc
+  · cases hlab
+
+/-- A field `S` does not read as a label reads as no label in fitting data. -/
+theorem label_absent {S : Ty} {f : String} {fs : List (String × Data)} (hl : labelField S f = false)
+    (hfit : fitsField S fs f = true) : Obend.Spec.Law.fieldLabel f (.record fs) = none := by
+  unfold fitsField at hfit
+  cases hk : fieldKind S f with
+  | none =>
+    rw [hk] at hfit
+    simp only [hl, Bool.false_eq_true, ite_false, Bool.and_eq_true] at hfit
+    exact Option.isNone_iff_eq_none.1 hfit.2
+  | some k =>
+    rw [hk] at hfit
+    cases k <;> split at hfit <;> simp_all [Obend.Spec.Law.fieldLabel, ← fieldsLookup_eq_firstField]
 
 /-- The environment of a clause at depth `d`: the request, the new state, the old state. -/
 @[expose] public def EnvAt (d : Nat) (σ : Nat → Term) (o n rq : Data) : Prop :=
@@ -246,6 +316,61 @@ theorem read_spec {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {fs : Lis
       fun m h => ?_⟩
     cases h
     simp only [refRead, At.reqF, At.req, subst_get, subst_bound, h0]; exact ev_get ht
+  | labelConst s =>
+    exact ⟨none, by simp [LawRef.read], by simp only [refRead, subst_falseT]; exact ev_bool false,
+      fun _ h => by cases h⟩
+
+/-- **What a reference reads as a label**: when the compiler reads it as a label, a label `s` that
+`LawRef.readLabel` agrees with, which the reference reads as no natural, and whose term evaluates
+to it. -/
+theorem label_spec {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {fs : List (String × Data)}
+    {facts : Facts} {r : LawRef} {t : Term}
+    (hσ : EnvAt d σ o (.record fs) rq) (hl : labelRead S ⟨d⟩ r = some t)
+    (hfit : ∀ f ∈ r.fields, fitsField S fs f = true) :
+    ∃ s : String, r.readLabel (.record fs) = some s ∧ r.read facts (.record fs) = none ∧
+      Evaluates (t.substitute σ) (.label s) := by
+  obtain ⟨_, h1, _⟩ := hσ
+  cases r with
+  | field f =>
+    simp only [labelRead] at hl
+    split at hl
+    · rename_i hlf
+      cases hl
+      obtain ⟨s, hs, hn, hev⟩ := label_read hlf (hfit f (by simp [LawRef.fields]))
+      refine ⟨s, by simpa [LawRef.readLabel] using hs, by simpa [LawRef.read] using hn, ?_⟩
+      simp only [At.newF, At.new, subst_get, subst_bound, h1]
+      exact hev
+    · cases hl
+  | labelConst s =>
+    simp only [labelRead, Option.some.injEq] at hl
+    subst hl
+    refine ⟨s, rfl, rfl, ?_⟩
+    first
+      | exact ev_label s
+      | (simp only [Term.substitute]; exact ev_label s)
+      | simpa using ev_label s
+  | subject => cases hl
+  | caller => cases hl
+  | height => cases hl
+  | turn => cases hl
+
+/-- A reference the compiler does not read as a label reads as none. -/
+theorem label_none {S : Ty} {d : Nat} {fs : List (String × Data)} {r : LawRef}
+    (hl : labelRead S ⟨d⟩ r = none) (hfit : ∀ f ∈ r.fields, fitsField S fs f = true) :
+    r.readLabel (.record fs) = none := by
+  cases r with
+  | field f =>
+    simp only [labelRead] at hl
+    split at hl
+    · cases hl
+    · rename_i hlf
+      simp only [LawRef.readLabel]
+      exact label_absent (by simpa using hlf) (hfit f (by simp [LawRef.fields]))
+  | labelConst s => cases hl
+  | subject => rfl
+  | caller => rfl
+  | height => rfl
+  | turn => rfl
 
 /-! ## The condition evaluates to the meaning -/
 
@@ -376,12 +501,35 @@ public theorem cond_eval {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {f
     | none => rfl
     | some m => simp only [Option.map_some]; rw [contains_filter]
   | .eqR l r, hf, _ => by
-    obtain ⟨rx, hrx, hpx, hvx⟩ := read_spec (S := S) l hσ hrq fun f h => hf f (List.mem_append_left _ h)
-    obtain ⟨ry, hry, hpy, hvy⟩ := read_spec (S := S) r hσ hrq fun f h => hf f (List.mem_append_right _ h)
-    simp only [cond, LawExpr.denote, hrx, hry, subst_both, subst_eqNat]
-    refine ev_eq (ev_both hpx hpy fun a b ha hb => ev_eqNat (hvx a ha) (hvy b hb)) ?_
-    cases rx <;> cases ry <;> simp only [Option.map_some, Option.map_none]
-    (apply Bool.eq_iff_iff.2; simp only [beq_iff_eq, decide_eq_true_eq, Option.some.injEq, Option.map_some, Option.map_none, Bool.false_eq_true, false_iff, Int.ofNat_eq_natCast]; omega)
+    have hfl : ∀ f ∈ l.fields, fitsField S fs f = true := fun f h => hf f (List.mem_append_left _ h)
+    have hfr : ∀ f ∈ r.fields, fitsField S fs f = true := fun f h => hf f (List.mem_append_right _ h)
+    -- the natural comparison, with one side reading as no label
+    have scalar : (l.readLabel (.record fs) = none ∨ r.readLabel (.record fs) = none) →
+        Evaluates ((both (refRead S ⟨d⟩ l) (refRead S ⟨d⟩ r) eqNat).substitute σ)
+          (.boolean ((LawExpr.eqR l r).denote facts (oldOf src o (.record fs)) (.record fs))) := by
+      intro hside
+      obtain ⟨rx, hrx, hpx, hvx⟩ := read_spec (S := S) l hσ hrq hfl
+      obtain ⟨ry, hry, hpy, hvy⟩ := read_spec (S := S) r hσ hrq hfr
+      simp only [LawExpr.denote, hrx, hry, subst_both, subst_eqNat]
+      refine ev_eq (ev_both hpx hpy fun a b ha hb => ev_eqNat (hvx a ha) (hvy b hb)) ?_
+      cases rx <;> cases ry <;> simp only [Option.map_some, Option.map_none]
+      · rcases hside with h | h <;> rw [h] <;> cases l.readLabel (Data.record fs) <;> cases r.readLabel (Data.record fs) <;> rfl
+      · rcases hside with h | h <;> rw [h] <;> cases l.readLabel (Data.record fs) <;> cases r.readLabel (Data.record fs) <;> rfl
+      · rcases hside with h | h <;> rw [h] <;> cases l.readLabel (Data.record fs) <;> cases r.readLabel (Data.record fs) <;> rfl
+      · (apply Bool.eq_iff_iff.2; simp only [beq_iff_eq, decide_eq_true_eq, Option.some.injEq, Option.map_some, Option.map_none, Bool.false_eq_true, false_iff, Int.ofNat_eq_natCast]; omega)
+    simp only [cond]
+    cases hll : labelRead S ⟨d⟩ l with
+    | some x =>
+      cases hlr : labelRead S ⟨d⟩ r with
+      | some y =>
+        obtain ⟨a, hra, hna, heva⟩ := label_spec hσ hll hfl
+        obtain ⟨b, hrb, hnb, hevb⟩ := label_spec hσ hlr hfr
+        have hd : (LawExpr.eqR l r).denote facts (oldOf src o (.record fs)) (.record fs) = (a == b) := by
+          simp only [LawExpr.denote]; rw [hna, hnb, hra, hrb]
+        rw [hd, subst_eqLabel]
+        exact ev_eqLabel heva hevb
+      | none => exact scalar (Or.inr (label_none hlr hfr))
+    | none => exact scalar (Or.inl (label_none hll hfl))
   | .leR l r, hf, _ => by
     obtain ⟨rx, hrx, hpx, hvx⟩ := read_spec (S := S) l hσ hrq fun f h => hf f (List.mem_append_left _ h)
     obtain ⟨ry, hry, hpy, hvy⟩ := read_spec (S := S) r hσ hrq fun f h => hf f (List.mem_append_right _ h)
@@ -427,7 +575,23 @@ public theorem cond_eval {S : Ty} {d : Nat} {σ : Nat → Term} {o rq : Data} {f
     · obtain ⟨ofs, hod, hfo, hread⟩ := old_spec hσ hs ho hf (f := f) (by simp [LawExpr.fields])
       simp only [cond, hs, ite_false, LawExpr.denote, hod, Option.bind_some]
       cases hk : fieldKind S f with
-      | none => simp only [subst_trueT, field_absent hk hfo]; exact ev_bool true
+      | none =>
+        by_cases hl : labelField S f = true
+        · obtain ⟨s', hs', _, hev'⟩ := label_read hl hfo
+          obtain ⟨s, hs, _, hev⟩ := label_read hl hfn
+          simp only [hl, ite_true, subst_ifBool, subst_eqLabel, subst_trueT, subst_label, hread, At.newF, At.new,
+            subst_get, subst_bound, hσ.2.1, field_absent hk hfo, hs', hs]
+          by_cases h0 : s' = ""
+          · have heq : (s' == "") = true := by simp [h0]
+            refine evaluates_ifBool (b := true) (heq ▸ ev_eqLabel hev' (ev_label "")) (ev_eq (ev_bool true) ?_)
+            simp [heq]
+          · have hne : (s' == "") = false := by simpa using h0
+            refine evaluates_ifBool (b := false) (hne ▸ ev_eqLabel hev' (ev_label "")) (ev_eq (ev_eqLabel hev hev') ?_)
+            rw [hne, Bool.false_or]
+            apply Bool.eq_iff_iff.2; simp
+        · simp only [hl, Bool.false_eq_true, ite_false, subst_trueT, field_absent hk hfo,
+            label_absent (by simpa using hl) hfo]
+          exact ev_bool true
       | some k =>
         obtain ⟨m, hm, hev⟩ := field_read hk hfn
         obtain ⟨m', hm', hev'⟩ := field_read hk hfo
@@ -641,6 +805,21 @@ theorem chk_read {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true)
   | caller => exact chk_opt hsh hP "caller" rfl
   | height => exact ⟨chk_boolean _ _, chk_field rfl rfl⟩
   | turn => exact ⟨chk_boolean _ _, chk_field rfl rfl⟩
+  | labelConst _ => exact ⟨chk_boolean _ _, chk_nat _ _⟩
+
+theorem chk_labelRead {S P : Ty} {r : LawRef} {t : Term} (h : labelRead S ⟨1⟩ r = some t) :
+    Chk (clauseCtx S P) t .label := by
+  cases r with
+  | field f =>
+    simp only [labelRead] at h
+    split at h
+    · rename_i hl; cases h; exact chk_field (i := 2) rfl (label_member hl)
+    · cases h
+  | labelConst s => simp only [labelRead, Option.some.injEq] at h; subst h; exact chk_label _ s
+  | subject => cases h
+  | caller => cases h
+  | height => cases h
+  | turn => cases h
 
 theorem chk_oldRead {S P : Ty} {f : String} {k : Kind} (src : OldSrc) (hk : fieldKind S f = some k) :
     Chk (clauseCtx S P) (scalarRead k (oldRead src ⟨1⟩ f)) .natural := by
@@ -648,6 +827,13 @@ theorem chk_oldRead {S P : Ty} {f : String} {k : Kind} (src : OldSrc) (hk : fiel
   · exact chk_scalarRead hk rfl
   · exact chk_scalarRead hk rfl
   · exact chk_scalarRead hk rfl
+
+theorem chk_oldLabel {S P : Ty} {f : String} (src : OldSrc) (hl : labelField S f = true) :
+    Chk (clauseCtx S P) (oldRead src ⟨1⟩ f) .label := by
+  cases src
+  · exact chk_field (i := 3) rfl (label_member hl)
+  · exact chk_field (i := 3) rfl (label_member hl)
+  · exact chk_field (i := 2) rfl (label_member hl)
 
 theorem chk_cond {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true) (src : OldSrc) :
     ∀ e : LawExpr, Chk (clauseCtx S P) (cond S src ⟨1⟩ e) .boolean
@@ -670,7 +856,13 @@ theorem chk_cond {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true)
   | .eqR l r => by
     have hl := chk_read (P := P) hsh hP l
     have hr := chk_read (P := P) hsh hP r
-    exact chk_andT hl.1 (chk_andT hr.1 (chk_bin rfl hl.2 hr.2))
+    simp only [cond]
+    cases hll : labelRead S ⟨1⟩ l with
+    | some x =>
+      cases hlr : labelRead S ⟨1⟩ r with
+      | some y => exact chk_bin rfl (chk_labelRead hll) (chk_labelRead hlr)
+      | none => exact chk_andT hl.1 (chk_andT hr.1 (chk_bin rfl hl.2 hr.2))
+    | none => exact chk_andT hl.1 (chk_andT hr.1 (chk_bin rfl hl.2 hr.2))
   | .leR l r => by
     have hl := chk_read (P := P) hsh hP l
     have hr := chk_read (P := P) hsh hP r
@@ -694,7 +886,12 @@ theorem chk_cond {S P : Ty} (hsh : S.shareable = true) (hP : P.shareable = true)
       | some k =>
         exact chk_ifBool (chk_bin rfl (chk_oldRead src hk) (chk_nat _ _)) (chk_boolean _ _)
           (chk_bin rfl (chk_scalarRead hk rfl) (chk_oldRead src hk))
-      | none => exact chk_boolean _ _
+      | none =>
+        by_cases hl : labelField S f = true
+        · simp only [hl, ite_true]
+          exact chk_ifBool (chk_bin rfl (chk_oldLabel src hl) (chk_label _ _)) (chk_boolean _ _)
+            (chk_bin rfl (chk_field (i := 2) rfl (label_member hl)) (chk_oldLabel src hl))
+        · simp only [hl, Bool.false_eq_true, ite_false]; exact chk_boolean _ _
   | .not e => chk_notT (chk_cond hsh hP src e)
   | .and l r => chk_andT (chk_cond hsh hP src l) (chk_cond hsh hP src r)
   | .or l r => chk_ifBool (chk_cond hsh hP src l) (chk_boolean _ _) (chk_cond hsh hP src r)

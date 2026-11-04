@@ -62,6 +62,17 @@ def stateTy (keys : List String) : Ty := keys.foldr (fun k t => .field k .natura
 def stateOf (keys : List String) (vals : List (String × Nat)) : Data :=
   .record (keys.map fun k => (k, .natural ((vals.lookup k).getD 0)))
 
+/-- The state type of a page whose fields `labels` hold labels (a word in the frontmatter, and the
+vault's `poster`): a record at the names `keys`, each a label or a natural. -/
+def stateTyWith (keys labels : List String) : Ty :=
+  keys.foldr (fun k t => .field k (if labels.contains k then .label else .natural) t) .emptyRow
+
+/-- A page's state as data with its label fields: each name its label (`""` where the page has
+none), or its value, or 0. -/
+def stateOfWith (keys labels : List String) (vals : List (String × Nat)) (lvals : List (String × String)) : Data :=
+  .record (keys.map fun k =>
+    (k, if labels.contains k then .label ((lvals.lookup k).getD "") else .natural ((vals.lookup k).getD 0)))
+
 /-! ## The occasions a page write is judged on -/
 
 /-- A write of an existing page, the birth of a new one, or the adoption of changed laws over the
@@ -84,9 +95,14 @@ def Occ.old (k : Occ) (o n : Data) : Option Data :=
   | .birth => none
   | .adopt => some n
 
-/-- The request of a page write: who signs (a member's name, or `owner`), the version it makes, the
-turn. -/
-def requestOf (who : String) (k : Occ) (facts : Facts) : Data := reqOf who who 0 0 k.data facts
+/-- The request of a page write: who signs it (`who`: a member's name, or `owner`), whose authority
+it carries (`principal`: the member whose text it is, the POSTER; `who` for a write of one's own),
+the occasion and the facts. The poster is also bound into the state the laws read (`new.poster`,
+`Obend.Vault.commit`), so a law can tie a field to it: `new.decider == new.poster`. -/
+def requestBy (who principal : String) (k : Occ) (facts : Facts) : Data := reqOf who principal 0 0 k.data facts
+
+/-- A write of one's own: signer and principal the same. -/
+def requestOf (who : String) (k : Occ) (facts : Facts) : Data := requestBy who who k facts
 
 /-! ## The judge -/
 
@@ -132,8 +148,8 @@ theorem readVerdict_refused {r : Option Term} {b why : String} (h : readVerdict 
 
 /-- The compiled law, at each occasion, evaluates to the verdict the fragment's meaning gives. -/
 theorem compile_occ {S : Ty} {pkg name : String} {e : LawExpr} {o n : Data} {facts : Facts}
-    {who : String} (k : Occ) (hfo : Fits S e o = true) (hfn : Fits S e n = true) :
-    Evaluates (applyLaw (compile S pkg name e) o n (requestOf who k facts))
+    {who pr : String} (k : Occ) (hfo : Fits S e o = true) (hfn : Fits S e n = true) :
+    Evaluates (applyLaw (compile S pkg name e) o n (requestBy who pr k facts))
       (verdictOf name (e.denote facts (k.old o n) n)) := by
   cases k
   · exact compile_change (Or.inl ⟨_, rfl⟩) hfo hfn
@@ -150,8 +166,8 @@ theorem mem_compiled {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {n
 /-- **What the vault admits, every law holds of.** If the judge admits a write (a write, a birth or an
 adoption), every law on the list holds of it by the fragment's meaning. -/
 theorem judge_admits {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {o n : Data}
-    {facts : Facts} {who : String} {k : Occ}
-    (h : judge S pkg lin o n (requestOf who k facts) = .admitted) :
+    {facts : Facts} {who pr : String} {k : Occ}
+    (h : judge S pkg lin o n (requestBy who pr k facts) = .admitted) :
     ∀ p ∈ lin, p.2.denote facts (k.old o n) n = true := by
   unfold judge at h
   split at h
@@ -167,7 +183,7 @@ theorem judge_admits {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {o
       simp only [Bool.and_eq_true] at hf
       have hadm := hall (p.1, compile S pkg p.1 p.2) (List.mem_map.2 ⟨p, hp, rfl⟩)
       obtain ⟨w', hw'⟩ := hadm
-      have := Obend.Law.evaluates_unique hw' (compile_occ (who := who) (facts := facts) (pkg := pkg) (name := p.1) k hf.1 hf.2)
+      have := Obend.Law.evaluates_unique hw' (compile_occ (who := who) (pr := pr) (facts := facts) (pkg := pkg) (name := p.1) k hf.1 hf.2)
       cases hd : p.2.denote facts (k.old o n) n
       · rw [hd] at this; simp [verdictOf, refusedT] at this
       · rfl
@@ -177,8 +193,8 @@ theorem judge_admits {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {o
 /-- **A refusal names a law that does not hold.** If the judge refuses a write naming `b`, then `b` is a
 law on the list, every law before it holds, and `b` does not. -/
 theorem judge_refuses {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {o n : Data}
-    {facts : Facts} {who : String} {k : Occ} {b why : String}
-    (h : judge S pkg lin o n (requestOf who k facts) = .refused b why) :
+    {facts : Facts} {who pr : String} {k : Occ} {b why : String}
+    (h : judge S pkg lin o n (requestBy who pr k facts) = .refused b why) :
     ∃ e, (b, e) ∈ lin ∧ e.denote facts (k.old o n) n = false := by
   unfold judge at h
   split at h
@@ -199,7 +215,7 @@ theorem judge_refuses {S : Ty} {pkg : String} {lin : List (String × LawExpr)} {
       refine ⟨e, he, ?_⟩
       have hf := List.all_eq_true.1 hfit (b, e) he
       simp only [Bool.and_eq_true] at hf
-      have hv := compile_occ (who := who) (facts := facts) (pkg := pkg) (name := b) k hf.1 hf.2
+      have hv := compile_occ (who := who) (pr := pr) (facts := facts) (pkg := pkg) (name := b) k hf.1 hf.2
       have := Obend.Law.evaluates_unique hL hv
       cases hd : e.denote facts (k.old o n) n
       · rfl
@@ -223,6 +239,28 @@ def setNat (d : Data) (f : String) (v : Nat) : Data :=
   match d with
   | .record fs => .record (fs.map fun (k, x) => if k == f then (k, .natural v) else (k, x))
   | other => other
+
+/-- The label at a field of a state. -/
+def labelAt (d : Data) (f : String) : Option String := Obend.Spec.Law.fieldLabel f d
+
+/-- A state with one label field set. -/
+def setLabel (d : Data) (f : String) (v : String) : Data :=
+  match d with
+  | .record fs => .record (fs.map fun (k, x) => if k == f then (k, .label v) else (k, x))
+  | other => other
+
+/-- The labels a state holds. -/
+def labelsIn : Data → List String
+  | .record fs => fs.filterMap fun (_, x) => match x with | .label s => some s | _ => none
+  | _ => []
+
+/-- The label constants a law mentions. -/
+def lawLabels : LawExpr → List String
+  | .eqR l r | .leR l r | .leROff l r _ =>
+    [l, r].filterMap fun | .labelConst s => some s | _ => none
+  | .not e => lawLabels e
+  | .and l r | .or l r | .implies l r => lawLabels l ++ lawLabels r
+  | _ => []
 
 /-- The constants a law mentions. -/
 def lawConsts : LawExpr → List Int
@@ -262,6 +300,18 @@ pass; else a request from the owner, if that passes; else a multi-field change f
 `suggestMultiField` (`Obend.Spec.LawDial.solveLawWitness`); else that nothing near does. -/
 def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (front : List String) : String :=
   let fields := e.fields.eraseDups
+  -- a label field: the label constants the law names, and the labels the state holds
+  let labelFound := fields.findSome? fun f =>
+    match labelAt new f with
+    | some cur =>
+      ((labelsIn new ++ (old.map labelsIn).getD [] ++ lawLabels e).eraseDups.find? fun v =>
+          v != cur && e.denote facts old (setLabel new f v)).map
+        fun v => (f, cur, v)
+    | none => none
+  match labelFound with
+  | some (f, cur, v) =>
+    "the line `" ++ f ++ ": " ++ v ++ "` would pass (the page has `" ++ f ++ ": " ++ cur ++ "`)"
+  | none =>
   let found := fields.findSome? fun f =>
     let cur := natAt new f
     let was := (old.map (natAt · f)).getD cur

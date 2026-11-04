@@ -96,6 +96,15 @@ def scalarFields (src : String) : List (String × Nat) :=
     else if v == "false" then some (k, 0)
     else v.toNat?.map fun n => (k, n)
 
+/-- The label fields of a page's frontmatter: a value that is one word (a letter, then letters,
+digits, `_` or `-`) and not `true`/`false`; a law reads it as a label (`new.decider == "ember"`). -/
+def labelFields (src : String) : List (String × String) :=
+  (frontFields src).filterMap fun (k, v) =>
+    if (lawKey k).isSome || k.isEmpty || k.contains ' ' || v == "true" || v == "false" then none
+    else match v.toList with
+      | c :: _ => if c.isAlpha && v.toList.all (fun ch => ch.isAlphanum || ch == '_' || ch == '-') then some (k, v) else none
+      | [] => none
+
 /-- Words: maximal runs of non-space characters. -/
 def wordCount (s : String) : Nat :=
   (s.toList.foldl (fun (acc : Nat × Bool) c =>
@@ -378,7 +387,8 @@ theorem insertions_apply (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
 
 /-- The names of the measures, a version's and a write's. -/
 def measureNames : List String :=
-  ["bytes", "dangling", "deletions", "embeds", "insertions", "lines", "links", "quotes", "sections", "version", "words"]
+  ["bytes", "dangling", "deletions", "embeds", "insertions", "lines", "links", "poster", "quotes", "sections",
+   "version", "words"]
 
 /-- What a law reads of a version: its measures and its frontmatter's scalar fields (a measure
 wins over a field of the same name). -/

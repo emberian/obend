@@ -16,9 +16,16 @@ The fragment, exactly (G1B-ENFORCED-LAW-DESIGN; anything else refuses
     EXPR  ::= EXPR implies EXPR | EXPR or EXPR | EXPR and EXPR | not EXPR | ( EXPR ) | ATOM
     ATOM  ::= REF == INT | REF <= INT | REF in [INT, …]
             | REF == REF | REF <= REF | REF <= REF + INT
+            | REF == "LABEL" | REF in ["LABEL", …]
             | monotone(FIELD) | writeOnce(FIELD)
-    REF   ::= new.FIELD | request.subject | request.caller | request.turn | ledger.height
+    REF   ::= new.FIELD | request.subject | request.caller | request.turn | ledger.height | "LABEL"
     INT   ::= -?[0-9]+
+A field holds a natural, a boolean or a LABEL (a word, `Data.label`). `==` between two references
+compares naturals when both read as naturals, labels when both read as labels, and is false
+otherwise; a label constant `"ember"` is a reference that reads as that label, so `new.decider ==
+"ember"` and `new.decider in ["ember", "lane"]` (an `or` of equalities) are in the fragment, and so
+is `new.decider == new.poster`. `<=` and the integer forms read naturals only. (2026-11-04: before,
+a label field was unreadable, so a kind said `decider in [1, 2, 3]`.)
 
 `implies` binds loosest and associates to the right; `or` then `and` associate to the left;
 `not` applies to the atom (or parenthesised expression) after it. Edition 1 reads TOP-LEVEL
@@ -44,6 +51,8 @@ inductive LawRef where
   | caller
   | height
   | turn
+  /-- a label constant, `"ember"`: reads as that label, whatever the state -/
+  | labelConst (value : String)
   deriving DecidableEq, Repr, Inhabited
 
 /-- The enforced fragment. `old.` appears only through `monotone` and `writeOnce`. -/
@@ -127,6 +136,26 @@ structure Facts where
   | .record fields => firstScalarField name fields
   | _ => none
 
+/-- The first field called `name` (what the reference semantics' `get` selects). -/
+@[expose] def firstField (name : String) : List (String × Data) → Option Data
+  | [] => none
+  | (field, value) :: rest => if field = name then some value else firstField name rest
+
+/-- The label at the first field called `name` of a declared state, if that field holds one. -/
+@[expose] def fieldLabel (name : String) : Data → Option String
+  | .record fields =>
+    match firstField name fields with
+    | some (.label value) => some value
+    | _ => none
+  | _ => none
+
+/-- What a reference reads as a label on the new state: a field holding a label, or a label
+constant; the request facts and numeric fields read as none. -/
+@[expose] def LawRef.readLabel (new : Data) : LawRef → Option String
+  | .field name => fieldLabel name new
+  | .labelConst value => some value
+  | _ => none
+
 /-- What a reference reads on the new state of a write under `facts`. -/
 @[expose] def LawRef.read (facts : Facts) (new : Data) : LawRef → Option Int
   | .field name => fieldOf name new
@@ -134,12 +163,14 @@ structure Facts where
   | .caller => facts.caller.map Int.ofNat
   | .height => some (Int.ofNat facts.height)
   | .turn => some (Int.ofNat facts.turn)
+  | .labelConst _ => none
 
 /-- **The meaning of a law**: does the write from `old` (absent at a first write) to `new`,
 under `facts`, satisfy it? A comparison with an absent reading is false. `monotone` and `writeOnce`
 hold at a first write (there is nothing for the new reading to fall below, nothing it overwrites);
 with an old state, `monotone` needs both readings and `writeOnce` holds when the old reading is 0,
-else the new one must equal it. -/
+else the new one must equal it; on a label field, `writeOnce` holds when the old label is `""`
+(unset), else the new label must equal it. -/
 @[expose] def LawExpr.denote (facts : Facts) (old : Option Data) (new : Data) : LawExpr → Bool
   | .eqC ref value => decide (ref.read facts new = some value)
   | .leC ref value =>
@@ -153,7 +184,10 @@ else the new one must equal it. -/
   | .eqR left right =>
       match left.read facts new, right.read facts new with
       | some x, some y => decide (x = y)
-      | _, _ => false
+      | _, _ =>
+        match left.readLabel new, right.readLabel new with
+        | some a, some b => a == b
+        | _, _ => false
   | .leR left right =>
       match left.read facts new, right.read facts new with
       | some x, some y => decide (x ≤ y)
@@ -171,8 +205,11 @@ else the new one must equal it. -/
         | _, _ => false
   | .writeOnce field =>
       match old.bind (fieldOf field) with
-      | none => true
       | some before => before == 0 || decide (fieldOf field new = some before)
+      | none =>
+        match old.bind (fieldLabel field) with
+        | some before => before == "" || decide (fieldLabel field new = some before)
+        | none => true
   | .not body => !body.denote facts old new
   | .and left right => left.denote facts old new && right.denote facts old new
   | .or left right => left.denote facts old new || right.denote facts old new
@@ -186,6 +223,7 @@ def LawRef.render : LawRef → String
   | .caller => "request.caller"
   | .height => "ledger.height"
   | .turn => "request.turn"
+  | .labelConst value => "\"" ++ value ++ "\""
 
 def LawExpr.render : LawExpr → String
   | .eqC ref value => s!"{ref.render} == {value}"
@@ -207,12 +245,15 @@ inductive Tok where
   | ident (name : String)
   | int (value : Nat)
   | sym (text : String)
+  /-- a label constant, between double quotes -/
+  | str (text : String)
   deriving DecidableEq, Repr, Inhabited
 
 def Tok.render : Tok → String
   | .ident name => "`" ++ name ++ "`"
   | .int value => "`" ++ toString value ++ "`"
   | .sym text => "`" ++ text ++ "`"
+  | .str text => "`\"" ++ text ++ "\"`"
 
 def refusalPrefix : String := "law outside the enforced fragment: "
 
@@ -236,6 +277,11 @@ def tokenize : Nat → List Char → Except String (List Tok)
     else if digit c then
       let digits := (c :: rest).takeWhile digit
       return Tok.int (digitsValue digits) :: (← tokenize fuel ((c :: rest).dropWhile digit))
+    else if c == '"' then
+      let text := rest.takeWhile (· != '"')
+      match rest.dropWhile (· != '"') with
+      | '"' :: more => return Tok.str (String.ofList text) :: (← tokenize fuel more)
+      | _ => refuse "a label constant missing its closing quote"
     else match c, rest with
       | '=', '=' :: more => return Tok.sym "==" :: (← tokenize fuel more)
       | '<', '=' :: more => return Tok.sym "<=" :: (← tokenize fuel more)
@@ -285,7 +331,8 @@ def parseRef : List Tok → Except String (LawRef × List Tok)
     | none => refuse ("request." ++ fact ++ " (a law reads request.subject, request.caller and request.turn, \
         and ledger.height)")
   | .ident "old" :: _ => refuse "old.FIELD outside monotone(FIELD) and writeOnce(FIELD)"
-  | t :: _ => refuse (t.render ++ " where a reference new.FIELD, request.FACT or ledger.height was expected")
+  | .str value :: rest => .ok (.labelConst value, rest)
+  | t :: _ => refuse (t.render ++ " where a reference new.FIELD, request.FACT, ledger.height or a label \"…\" was expected")
   | [] => refuse "a comparison missing its reference"
 
 def parseIntList : Nat → List Tok → Except String (List Int × List Tok)
@@ -297,6 +344,24 @@ def parseIntList : Nat → List Tok → Except String (List Int × List Tok)
       let (values, after) ← parseIntList fuel more
       return (value :: values, after)
     | _ => return ([value], ← expectSym "]" rest)
+
+/-- A list of label constants after `in [`, to the closing bracket. -/
+def parseStrList : Nat → List Tok → Except String (List String × List Tok)
+  | 0, _ => refuse "list capacity"
+  | fuel + 1, toks =>
+    match toks with
+    | .str value :: .sym "," :: more => do
+      let (values, after) ← parseStrList fuel more
+      return (value :: values, after)
+    | .str value :: rest => return ([value], ← expectSym "]" rest)
+    | t :: _ => refuse ("a list mixing labels and " ++ t.render ++ " (a list is of integers or of labels)")
+    | [] => refuse "a label list missing its closing bracket"
+
+/-- `REF in ["a", "b"]` is `REF == "a" or REF == "b"` (`in []` is false, as for integers). -/
+def inLabels (ref : LawRef) : List String → LawExpr
+  | [] => .inC ref []
+  | [v] => .eqR ref (.labelConst v)
+  | v :: vs => .or (.eqR ref (.labelConst v)) (inLabels ref vs)
 
 def parseComparison (fuel : Nat) (toks : List Tok) : Except String (LawExpr × List Tok) := do
   let (left, rest) ← parseRef toks
@@ -320,6 +385,9 @@ def parseComparison (fuel : Nat) (toks : List Tok) : Except String (LawExpr × L
         return (.leROff left right k, after')
       | _ => return (.leR left right, after)
   | .ident "in" :: .sym "[" :: .sym "]" :: after => return (.inC left [], after)
+  | .ident "in" :: .sym "[" :: .str v :: more =>
+    let (values, after) ← parseStrList fuel (.str v :: more)
+    return (inLabels left values, after)
   | .ident "in" :: .sym "[" :: more =>
     let (values, after) ← parseIntList fuel more
     return (.inC left values, after)
