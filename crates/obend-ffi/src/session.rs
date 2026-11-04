@@ -136,6 +136,16 @@ impl ObendSession {
         }
     }
 
+    /// Propose and commit `payload` in this session and return its receipt: the one-leaf frame
+    /// `encode_receipt(turn_id, 1, 0, [], payload)` that `verify_receipt` accepts here
+    /// (`Obend.FFI.Bridge.buildCommittedReceipt`). A session that did not commit the turn
+    /// refuses the same bytes: receipts are bound to the committing session, not self-admitted.
+    pub fn commit_payload(&mut self, payload: &[u8]) -> Result<Vec<u8>, ObendError> {
+        let tid = self.propose_turn(payload)?;
+        self.commit_turn(&tid)?;
+        Ok(encode_receipt(&tid, 1, 0, &[], payload))
+    }
+
     pub fn get_last_error(&self) -> String {
         let mut out_ptr = ptr::null_mut();
         let mut out_len = 0usize;
@@ -244,3 +254,19 @@ impl Drop for ObendSession {
     }
 }
 
+/// The receipt wire frame `Obend.FFI.Bridge.encodeReceipt`:
+/// `root(32) || size(8) || index(8) || pathLen(8) || path(pathLen x 32) || payload`,
+/// integers big-endian. `verify_receipt` recomputes the payload's digest and climbs the path
+/// (`Obend.Receipt.Merkle.opens`); the root must be one the session committed.
+pub fn encode_receipt(root: &[u8], size: u64, index: u64, path: &[[u8; 32]], payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(56 + 32 * path.len() + payload.len());
+    out.extend_from_slice(root);
+    out.extend_from_slice(&size.to_be_bytes());
+    out.extend_from_slice(&index.to_be_bytes());
+    out.extend_from_slice(&(path.len() as u64).to_be_bytes());
+    for p in path {
+        out.extend_from_slice(p);
+    }
+    out.extend_from_slice(payload);
+    out
+}

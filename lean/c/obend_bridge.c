@@ -18,22 +18,45 @@ extern void lean_initialize_runtime_module(void);
 extern void lean_initialize(void);
 extern void lean_initialize_thread(void);
 extern void lean_finalize_thread(void);
+extern void lean_io_mark_end_initialization(void);
 extern lean_object* initialize_obend_Obend_FFI_Bridge(uint8_t builtin);
 
 static pthread_once_t lean_init_once = PTHREAD_ONCE_INIT;
+static _Thread_local int g_thread_initialized = 0;
 
-static void do_lean_init(void) {
+static void ensure_lean_global_init(void) {
     lean_initialize_runtime_module();
     lean_initialize();
-    lean_object *res = initialize_obend_Obend_FFI_Bridge(1);
+    uint8_t builtin = 1;
+    lean_object *res = initialize_obend_Obend_FFI_Bridge(builtin);
     if (lean_io_result_is_ok(res)) {
         lean_dec_ref(res);
+    } else {
+        lean_io_result_show_error(res);
+        lean_dec_ref(res);
+        abort();
+    }
+    lean_io_mark_end_initialization();
+}
+
+static inline void ensure_lean_init(void) {
+    pthread_once(&lean_init_once, ensure_lean_global_init);
+    if (!g_thread_initialized) {
+        lean_initialize_thread();
+        g_thread_initialized = 1;
     }
 }
 
 static inline void ensure_lean_initialized(void) {
-    pthread_once(&lean_init_once, do_lean_init);
-    lean_initialize_thread();
+    ensure_lean_init();
+}
+
+/* Exported for the Rust side (`obend_ffi::pool::ensure_lean_thread_initialized`): initialize the
+ * Lean runtime once per process and attach the calling thread once. Calling
+ * `lean_initialize_thread` directly before `lean_initialize_runtime_module` is undefined and was
+ * the inferred cause of the obend-gui native segfault (2026-11-04). */
+void obend_ensure_lean_thread(void) {
+    ensure_lean_init();
 }
 
 extern lean_object *obend_session_init_core(lean_object *cfg);

@@ -10,8 +10,9 @@ pub use session::ObendSession;
 /// Propose `turn_bytes` via `session.propose_turn` and immediately commit the returned
 /// 32-byte proposal receipt via `session.commit_turn`, returning the committed 32-byte turn root.
 ///
-/// This enforces the `Bridge.lean` (`turnCommitCore_unproposed_tid_refused`) invariant that every
-/// committed turn ID must first be proposed in `pendingProposals` and admitted into `admittedRoots`.
+/// `Bridge.lean` (`turnCommitCore_unproposed_tid_refused`) commits only an id it proposed, and
+/// only `turnCommitCore` writes `committedRoots`; the receipt a verifier accepts is the frame
+/// `ObendSession::commit_payload` returns, never the bare id.
 pub fn propose_and_commit_turn(
     session: &mut ObendSession,
     turn_bytes: &[u8],
@@ -19,6 +20,13 @@ pub fn propose_and_commit_turn(
     let tid = session.propose_turn(turn_bytes)?;
     session.commit_turn(&tid)?;
     Ok(tid)
+}
+
+/// `true` when this crate was linked against the Lean library (`lean/.lake/build/lib`); `false`
+/// when `build.rs` fell back to the stub, which has no judge registry, so a session cannot weave
+/// a witness and a test that needs the kernel's judgement must say so rather than pass.
+pub fn kernel_is_native() -> bool {
+    !cfg!(feature = "stub")
 }
 
 #[cfg(test)]
@@ -31,7 +39,10 @@ mod tests {
         let tid =
             propose_and_commit_turn(&mut session, b"cell_alpha=42").expect("propose and commit");
         assert_eq!(tid.len(), 32);
-        assert!(session.verify_receipt(&tid).expect("verify admitted tid"));
+        // A bare id is not a receipt: the verifier needs the frame with the payload it opens.
+        assert!(!session.verify_receipt(&tid).expect("bare id"));
+        let receipt = session.commit_payload(b"cell_alpha=42").expect("commit payload");
+        assert!(session.verify_receipt(&receipt).expect("verify committed frame"));
     }
 
     #[test]

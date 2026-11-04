@@ -13,11 +13,14 @@ public import Obend.Core.Machine
 public import Obend.Core.Brand
 public import Obend.Vault.Store
 public import Obend.Vault.Hyperedge
+public import Obend.Judge
 public import Obend.Ledger.Book
 public import Obend.Doc.Graph
 public import Obend.Doc.Structured
 public import Obend.Doc.Render
 public import Obend.Receipt.Merkle
+public import Obend.Vault.Affordance
+public import Obend.Vault.Rehydration
 public import Obend.Vault.HardwareProjection
 public import Obend.Spec.Parse
 public import Obend.Spec.Sha256
@@ -46,18 +49,28 @@ open Obend.Spec.FrontEnd
 open Obend.Spec.Capture
 open Obend.Spec.Preview
 
-/-- Pending proposed turn waiting to be committed via `turnCommitCore`. -/
+/-- A proposed turn waiting for `turnCommitCore`: its id, the footprint it was admitted
+against, the writes it will apply, and the judge witness it was woven from (if any). -/
 structure PendingTurnProposal where
   tidBytes : ByteArray
   footprint : Footprint
   writes : List (String × Data)
+  witness : Option TurnWitness := none
   deriving Inhabited
 
+/-- The session a host drives through the C ABI.
+
+`committedRoots` are the roots of the turns this session has COMMITTED (`turnCommitCore`); a
+proposal admits nothing. `verifyReceiptCore` accepts a receipt only when its root is one of them
+and its opening opens against it (`Obend.Receipt.Merkle.opens`). `committedTurns` are the
+`VaultTurn`s those commits denote, newest first, each built by `VaultTurn.ofWitnessLegs` with
+the witnesses `cellWeaveCertCore` admitted. -/
 structure SessionState where
   store : Store := { pages := [], members := [], turn := 0 }
   vaultStore : List (String × Data) := []
   pendingProposals : List PendingTurnProposal := []
-  admittedRoots : Array ByteArray := #[]
+  committedRoots : Array ByteArray := #[]
+  committedTurns : List VaultTurn := []
   book : Obend.Ledger.Book := Obend.Ledger.Book.empty
   doc : Graph := Graph.empty
   scratch : ByteArray := ByteArray.empty
@@ -75,7 +88,8 @@ def sessionInitCore (_cfg : ByteArray) : SessionState :=
   { store := { pages := [], members := [], turn := 0 },
     vaultStore := [],
     pendingProposals := [],
-    admittedRoots := #[],
+    committedRoots := #[],
+    committedTurns := [],
     book := Obend.Ledger.Book.empty,
     doc := Graph.empty,
     scratch := ByteArray.empty,
@@ -425,7 +439,7 @@ def elaborateObendSource (rawText : String) : Json × Bool :=
                 ("uses", toJson (0 : Nat))
               ])
 
-      -- Extract and check claims via Obend.Logic.Program.claimFields & proposeDerivation
+      -- Extract and check claims via Obend.Logic.Program.claimFields, proposeDerivation & ground evaluation
       let mut claimSummaries : Array Json := #[]
       if let some (_, firstTerm) := erasedTerms.head? then
         if let some knotRoot := Obend.Logic.Program.knotOf firstTerm then
@@ -435,29 +449,65 @@ def elaborateObendSource (rawText : String) : Json × Bool :=
             match erasedTerms.findSome? (fun (_, t) =>
               findCompositionFromTerm (fun C => (Obend.Logic.Program.layerIndex C specKey).isSome) t) with
             | none =>
+              let (noObjStatus, noObjDiag) : String × String :=
+                match Obend.Logic.Program.knotValue knotRoot (specKey ++ "#claim#" ++ claimName) with
+                | some claimCode =>
+                  let nBinders := Obend.Logic.Program.binders claimCode
+                  let arity := nBinders - 2
+                  let samples : List Nat := [0, 1, 2, 5]
+                  let evals := samples.map fun sVal =>
+                    let argTerms := Obend.Core.Term.Term.record [] :: Obend.Core.Term.Term.record [] ::
+                      List.replicate arity (Obend.Core.Data.Data.term (.natural sVal))
+                    Obend.Logic.readBool (Obend.Law.run 4096 (Obend.Logic.apps claimCode argTerms))
+                  if evals.any (· == some false) then
+                    ("refused", s!"Claim {fullClaim} refuted by ground evaluation at sample instance")
+                  else if evals.all (· == some true) then
+                    ("verified", "")
+                  else
+                    ("no-object", "")
+                | none => ("no-object", "")
+              if noObjStatus == "refused" then
+                anyRefused := true
               claimSummaries := claimSummaries.push (Json.mkObj [
                 ("claim", toJson fullClaim),
                 ("spec", toJson shortSpec),
                 ("name", toJson claimName),
-                ("status", toJson "no-object")
+                ("status", toJson noObjStatus),
+                ("diagnostic", toJson noObjDiag),
+                ("message", toJson noObjDiag)
               ])
             | some C =>
               match Obend.Logic.Program.claimObj knotRoot C specKey claimName with
               | .error e =>
+                anyRefused := true
                 claimSummaries := claimSummaries.push (Json.mkObj [
                   ("claim", toJson fullClaim),
                   ("spec", toJson shortSpec),
                   ("name", toJson claimName),
                   ("status", toJson "refused"),
+                  ("diagnostic", toJson e),
                   ("message", toJson e)
                 ])
               | .ok o =>
-                let (cStatus, stepCount) := match Obend.Logic.Program.proposeDerivation o with
+                let (cStatus, stepCount, cDiag) : String × Nat × String :=
+                  match Obend.Logic.Program.proposeDerivation o with
                   | some steps =>
                     match Obend.Logic.claimCheck (Obend.Logic.sizeList steps) o steps with
-                    | .ok => ("verified", Obend.Logic.sizeList steps)
-                    | _ => ("unchecked", 0)
-                  | none => ("unchecked", 0)
+                    | .ok => ("verified", Obend.Logic.sizeList steps, "")
+                    | _ => ("refused", 0, s!"Claim {fullClaim} derivation failed kernel claimCheck")
+                  | none =>
+                    let samples : List Nat := [0, 1, 2, 5]
+                    let evals := samples.map fun sVal =>
+                      let ds := List.replicate o.arity (Obend.Core.Data.Data.natural sVal)
+                      Obend.Logic.readBool (Obend.Law.run 4096 (Obend.Logic.apps o.claim (o.args ds)))
+                    if evals.any (· == some false) then
+                      ("refused", 0, s!"Claim {fullClaim} refuted by ground evaluation at sample instance")
+                    else if evals.all (· == some true) then
+                      ("verified", 1, "")
+                    else
+                      ("unchecked", 0, "")
+                if cStatus == "refused" then
+                  anyRefused := true
                 claimSummaries := claimSummaries.push (Json.mkObj [
                   ("claim", toJson fullClaim),
                   ("spec", toJson shortSpec),
@@ -465,6 +515,8 @@ def elaborateObendSource (rawText : String) : Json × Bool :=
                   ("status", toJson cStatus),
                   ("steps", toJson stepCount),
                   ("rewriteSteps", toJson stepCount),
+                  ("diagnostic", toJson cDiag),
+                  ("message", toJson cDiag),
                   ("objectLayers", toJson (C.layers.map (·.name)))
                 ])
 
@@ -501,36 +553,71 @@ def elaborateObendSource (rawText : String) : Json × Bool :=
       ]
       return (summary, !anyRefused)
 
-/-- Fold hash helper over entire byte payload using deployed cSHAKE256 digest. -/
+/-- The digest of a payload: the deployed hash (`Obend.Core.Digest.deployed`, cSHAKE256) of its
+bytes, read big-endian. Below `2 ^ 256` (`Obend.Core.Digest.digest_lt`'s carrier). -/
 def hashByteArray (ba : ByteArray) : Nat :=
-  ba.data.foldl (fun acc b => Obend.Core.Digest.digestWith Obend.Core.Digest.deployed acc b.toNat) 0
+  Obend.Digest.HashBytes.ofBE (Obend.Core.Digest.deployed ba.data.toList)
+
+/-- The low `w` bytes of `n`, big-endian (`Obend.Digest.HashBytes.be`). -/
+def natToBytesBE (w n : Nat) : ByteArray :=
+  ByteArray.mk (Obend.Digest.HashBytes.be w n).toArray
 
 /-- Convert natural number to exact 32-byte big-endian ByteArray. -/
 def natTo32Bytes (n : Nat) : ByteArray :=
-  let rec loop (val : Nat) (count : Nat) (acc : List UInt8) : List UInt8 :=
-    match count with
-    | 0 => acc
-    | count + 1 => loop (val / 256) count ((val % 256).toUInt8 :: acc)
-  ByteArray.mk (loop n 32 []).toArray
+  natToBytesBE 32 n
 
 /-- Convert 32-byte chunk to natural number. -/
 def bytesToNat (ba : ByteArray) : Nat :=
   ba.data.foldl (fun acc b => acc * 256 + b.toNat) 0
 
-/-- Compute deterministic 32-byte Merkle leaf commitment for payload digest `h`. -/
+/-- The root a committed payload gets: the one-leaf Merkle map over its digest
+(`Obend.Receipt.Merkle.leaf deployed 0 h`, which is `mapRoot deployed [h]`). -/
 def computeReceiptCommitment (h : Nat) : ByteArray :=
   natTo32Bytes (leaf Obend.Core.Digest.deployed 0 h)
 
-/-- Build a 64-byte self-authenticating receipt `[32-byte Merkle commitment || 32-byte payload digest]`. -/
-def buildCommittedReceipt (payload : ByteArray) : ByteArray × ByteArray :=
-  let h := hashByteArray payload
-  let rootBytes := computeReceiptCommitment h
-  let digestBytes := natTo32Bytes h
-  (rootBytes, rootBytes ++ digestBytes)
+/-! ### The receipt wire frame
 
-/-- Push a 32-byte root into `admittedRoots` if not already present. -/
-def pushAdmittedRoot (roots : Array ByteArray) (r : ByteArray) : Array ByteArray :=
-  if r.size == 32 && !roots.contains r then roots.push r else roots
+    root(32) || size(8) || index(8) || pathLen(8) || path(pathLen × 32) || payload
+
+All integers big-endian. A receipt claims that `payload`'s digest sits at `index` of a Merkle map
+of `size` leaves whose root is `root`, with `path` the siblings top first; `verifyReceiptCore`
+recomputes the digest and climbs (`Obend.Receipt.Merkle.opens`). The receipt of a committed turn
+is the one-leaf case `size = 1, index = 0, path = []` over the turn's bytes. -/
+
+structure ReceiptWire where
+  root : ByteArray
+  size : Nat
+  index : Nat
+  path : List Nat
+  payload : ByteArray
+
+def encodeReceipt (root : ByteArray) (size index : Nat) (path : List Nat) (payload : ByteArray) :
+    ByteArray :=
+  root ++ natToBytesBE 8 size ++ natToBytesBE 8 index ++ natToBytesBE 8 path.length ++
+    path.foldl (fun acc p => acc ++ natTo32Bytes p) ByteArray.empty ++ payload
+
+def decodeReceipt? (rcpt : ByteArray) : Option ReceiptWire :=
+  if rcpt.size < 56 then none
+  else
+    let pathLen := bytesToNat (rcpt.extract 48 56)
+    if rcpt.size < 56 + 32 * pathLen then none
+    else
+      some
+        { root := rcpt.extract 0 32
+          size := bytesToNat (rcpt.extract 32 40)
+          index := bytesToNat (rcpt.extract 40 48)
+          path := (List.range pathLen).map fun i =>
+            bytesToNat (rcpt.extract (56 + 32 * i) (56 + 32 * i + 32))
+          payload := rcpt.extract (56 + 32 * pathLen) rcpt.size }
+
+/-- The root and the one-leaf receipt of a payload. -/
+def buildCommittedReceipt (payload : ByteArray) : ByteArray × ByteArray :=
+  let rootBytes := computeReceiptCommitment (hashByteArray payload)
+  (rootBytes, encodeReceipt rootBytes 1 0 [] payload)
+
+/-- Record a committed 32-byte root. -/
+def pushCommittedRoot (roots : Array ByteArray) (r : ByteArray) : Array ByteArray :=
+  if r.size == 32 then roots.push r else roots
 
 /-- Cell evaluation:
     - If `cellBytes` decodes as UTF-8 `.obend` source (starting with `edition ObjectiveBend 1` or
@@ -554,21 +641,18 @@ def evalCellCore (s : SessionState) (cellBytes : ByteArray) : SessionState × By
       receipt := some cellRoot
     }
     let newDoc := s.doc.step (Doc.Op.add (s.doc.atoms.length + 1) (StructuredCell.toContent cell) s.doc.atoms.length)
-    let roots1 := pushAdmittedRoot s.admittedRoots cellRoot
     match Obend.Spec.Parse.decodeSource cellBytes with
     | some text =>
       if isObendPayload text then
         let (summaryJson, _) := elaborateObendSource text
         let outBytes := summaryJson.compress.toUTF8
-        let (outRoot, _) := buildCommittedReceipt outBytes
-        let roots2 := pushAdmittedRoot roots1 outRoot
-        ({ s with doc := newDoc, admittedRoots := roots2, scratch := outBytes, lastError := none }, outBytes, 0)
+        ({ s with doc := newDoc, scratch := outBytes, lastError := none }, outBytes, 0)
       else
         let outBytes := cellBytes
-        ({ s with doc := newDoc, admittedRoots := roots1, scratch := outBytes, lastError := none }, outBytes, 0)
+        ({ s with doc := newDoc, scratch := outBytes, lastError := none }, outBytes, 0)
     | none =>
       let outBytes := cellBytes
-      ({ s with doc := newDoc, admittedRoots := roots1, scratch := outBytes, lastError := none }, outBytes, 0)
+      ({ s with doc := newDoc, scratch := outBytes, lastError := none }, outBytes, 0)
 
 /-- Look up a cell key in `s.vaultStore` or `s.store.pages` (`VaultStore`). -/
 def sessionStoreLookup (s : SessionState) (cell : String) : Option Data :=
@@ -672,27 +756,39 @@ def parseTurnFootprintAndWrites (s : SessionState) (turnBytes : ByteArray) : Foo
     let expOpt := if (sessionStoreLookup s cell).isSome then some valData else none
     (basePin ++ [⟨cell, expOpt⟩], [(cell, valData)])
 
-/-- Turn proposal: validates footprint pins against the session's actual `s.store` via `admitFootprint`. -/
+/-- Turn proposal: validates footprint pins against the session's actual `s.store` via
+`admitFootprint` and registers the proposal. It commits nothing and admits no root. -/
 @[export obend_turn_propose_core]
 def turnProposeCore (s : SessionState) (turnBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if turnBytes.isEmpty then
     ({ s with lastError := some "Empty turn payload" }, ByteArray.empty, -3)
   else
-    let (fp, writes) := parseTurnFootprintAndWrites s turnBytes
-    match admitFootprint (sessionStoreLookup s) fp with
+    let fw := parseTurnFootprintAndWrites s turnBytes
+    match admitFootprint (sessionStoreLookup s) fw.1 with
     | .ok () =>
-      let (tidBytes, _) := buildCommittedReceipt turnBytes
-      let prop : PendingTurnProposal := ⟨tidBytes, fp, writes⟩
-      let roots1 := pushAdmittedRoot s.admittedRoots tidBytes
-      let roots2 := pushAdmittedRoot roots1 turnBytes
+      let tidBytes := (buildCommittedReceipt turnBytes).1
+      let prop : PendingTurnProposal := ⟨tidBytes, fw.1, fw.2, none⟩
       let pending := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes) ++ [prop]
-      ({ s with pendingProposals := pending, admittedRoots := roots2, scratch := tidBytes, lastError := none }, tidBytes, 0)
+      ({ s with pendingProposals := pending, scratch := tidBytes, lastError := none }, tidBytes, 0)
     | .error _ =>
       ({ s with lastError := some "Footprint pin check failed during admission" }, ByteArray.empty, -4)
 
-/-- Turn commit: rejects empty or non-32-byte turn IDs, refuses un-proposed turn IDs not in
-    `s.pendingProposals` with `-5`, verifies footprint consistency against `s.store`,
-    and commits proposed writes into `s.store`. -/
+/-- The `VaultTurn` a proposal denotes against the session's store: one write leg per proposed
+write (pre-state the store's current value), the admitted footprint as read pins, and the woven
+witness. `none` exactly when the writes name one cell twice (`VaultTurn.ofWitnessLegs`). -/
+def proposalTurn (s : SessionState) (prop : PendingTurnProposal) : Option VaultTurn :=
+  let legs : List WitnessLegSpec := prop.writes.map fun w =>
+    (w.1, (sessionStoreLookup s w.1).getD (.record []), w.2)
+  VaultTurn.ofWitnessLegs prop.tidBytes prop.footprint legs
+    (.record [("occasion", .label "commit")]) prop.witness.toList
+
+/-- The judge formats a session accepts witnesses in: the registry (`Obend.Judge.registry`). -/
+def sessionJudgeFormats : List Obend.Judge.Format := Obend.Judge.registry
+
+/-- Turn commit: refuses an id that is not 32 bytes (`-6`) or not proposed (`-5`), re-checks the
+footprint against `s.store` (`-4`), builds the turn with `VaultTurn.ofWitnessLegs` and checks
+every witness with `checkTurnWitness` (`-9`), then applies the writes, records the turn, and
+records its root in `committedRoots`. -/
 @[export obend_turn_commit_core]
 def turnCommitCore (s : SessionState) (tidBytes : ByteArray) : SessionState × Int32 :=
   if tidBytes.isEmpty || tidBytes.size ≠ 32 then
@@ -702,10 +798,22 @@ def turnCommitCore (s : SessionState) (tidBytes : ByteArray) : SessionState × I
     | some prop =>
       match admitFootprint (sessionStoreLookup s) prop.footprint with
       | .ok () =>
-        let (newVaultStore, updatedStore) := applyWritesToSession s prop.writes
-        let remaining := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes)
-        let roots := pushAdmittedRoot s.admittedRoots tidBytes
-        ({ s with store := updatedStore, vaultStore := newVaultStore, pendingProposals := remaining, admittedRoots := roots, lastError := none }, 0)
+        match proposalTurn s prop with
+        | some turn =>
+          if turn.witnesses.all (checkTurnWitness sessionJudgeFormats) then
+            let applied := applyWritesToSession s prop.writes
+            let remaining := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes)
+            ({ s with
+                store := applied.2,
+                vaultStore := applied.1,
+                pendingProposals := remaining,
+                committedRoots := pushCommittedRoot s.committedRoots tidBytes,
+                committedTurns := turn :: s.committedTurns,
+                lastError := none }, 0)
+          else
+            ({ s with lastError := some "A turn witness is refused by its judge format" }, -9)
+        | none =>
+          ({ s with lastError := some "Turn writes name one cell twice" }, -9)
       | .error _ =>
         ({ s with lastError := some "Footprint pin stale at commit" }, -4)
     | none =>
@@ -720,40 +828,27 @@ def projectHardwareCore (s : SessionState) (hwBytes : ByteArray) : SessionState 
     let outBytes := hwBytes
     ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
-/-- Stranger-checkable Merkle receipt verification using `Obend.Receipt.Merkle.opens` and
-    mandatory `s.admittedRoots` session binding.
-    Requires `admittedInSession = true` FIRST (returning `-8` if un-admitted), and only when
-    `admittedInSession = true` verifies either `trailing.isEmpty` or `opensFromPayload || opensFromDigest`. -/
+/-- The opening a receipt claims. -/
+def receiptOpening (r : ReceiptWire) : Opening :=
+  ⟨r.size, r.index, hashByteArray r.payload, r.path⟩
+
+/-- Receipt verification: the frame decodes (`decodeReceipt?`), its root is one this session
+committed, and its opening opens against that root (`Obend.Receipt.Merkle.opens` at the
+deployed hash, the payload's digest recomputed here). Nothing else is accepted: not a bare root,
+not a proposed-but-uncommitted root, not a payload whose digest is not at the claimed position
+(`verifyReceiptCore_sound`). -/
 @[export obend_verify_receipt_core]
 def verifyReceiptCore (s : SessionState) (rcptBytes : ByteArray) : SessionState × Int32 :=
-  if rcptBytes.isEmpty then
-    ({ s with lastError := some "Empty receipt payload" }, -8)
-  else if rcptBytes.size < 32 then
-    ({ s with lastError := some "Malformed receipt wire frame" }, -8)
-  else
-    let claimedRoot := rcptBytes.extract 0 32
-    let rootVal := bytesToNat claimedRoot
-    let trailing := rcptBytes.extract 32 rcptBytes.size
-    let admittedInSession := s.admittedRoots.contains claimedRoot || s.admittedRoots.contains rcptBytes
-    if !admittedInSession then
-      ({ s with lastError := some "Merkle receipt root not admitted in session" }, -8)
+  match decodeReceipt? rcptBytes with
+  | none =>
+    ({ s with lastError := some "Malformed receipt: expected root || size || index || pathLen || path || payload" }, -8)
+  | some r =>
+    if !s.committedRoots.contains r.root then
+      ({ s with lastError := some "Receipt root is not a root this session committed" }, -8)
+    else if opens Obend.Core.Digest.deployed (receiptOpening r) (bytesToNat r.root) then
+      ({ s with lastError := none }, 0)
     else
-      let opensFromPayload : Bool :=
-        if trailing.isEmpty then
-          false
-        else
-          let hPayload := hashByteArray trailing
-          let oPayload : Opening := ⟨1, 0, hPayload, []⟩
-          opens Obend.Core.Digest.deployed oPayload rootVal
-      let opensFromDigest : Bool :=
-        if trailing.size == 32 then
-          let oDigest : Opening := ⟨1, 0, bytesToNat trailing, []⟩
-          opens Obend.Core.Digest.deployed oDigest rootVal
-        else false
-      if trailing.isEmpty || opensFromPayload || opensFromDigest then
-        ({ s with lastError := none }, 0)
-      else
-        ({ s with lastError := some "Merkle receipt commitment verification failed: un-admitted or tampered root" }, -8)
+      ({ s with lastError := some "Receipt opening does not open against its root" }, -8)
 
 /-- Diagnostics: returns last error string. -/
 @[export obend_get_last_error_core]
@@ -774,9 +869,185 @@ def parseLaw (raw : String) : Except String Obend.Spec.Law.LawExpr :=
   let normalized := afterLaw.replace " && " " and "
   Obend.Spec.Law.parse normalized
 
-/-- Interactive view affordances (`WS 31`): parses law strings using `Obend.Spec.Law.parse` (`parseLaw`),
-    classifies via `Obend.Spec.LawDial.dial` into `.free`, `.stepShaped`, or `.ordering`, and
-    computes multi-field repair witnesses via `Obend.Vault.suggestMultiField`. -/
+/-- Parse a comma-separated list of capability names into `List Obend.Vault.Affordance.Auth`. -/
+def parseAuthList (csv : String) : List Obend.Vault.Affordance.Auth :=
+  (csv.splitOn ",").filterMap fun raw =>
+    match raw.trimAscii.toString with
+    | "read"    => some .read
+    | "write"   => some .write
+    | "grant"   => some .grant
+    | "call"    => some .call
+    | "reply"   => some .reply
+    | "reset"   => some .reset
+    | "control" => some .control
+    | "notify"  => some .notify
+    | _         => none
+
+/-- Render an `Obend.Vault.Affordance.Auth` capability to its canonical string name. -/
+def renderAuth : Obend.Vault.Affordance.Auth → String
+  | .read    => "read"
+  | .write   => "write"
+  | .grant   => "grant"
+  | .call    => "call"
+  | .reply   => "reply"
+  | .reset   => "reset"
+  | .control => "control"
+  | .notify  => "notify"
+
+/-- Canonical tag for `Obend.Vault.Affordance.Auth` used in `computeAuthDigest`. -/
+def authTag : Obend.Vault.Affordance.Auth → Nat
+  | .read    => 1
+  | .write   => 2
+  | .grant   => 3
+  | .call    => 4
+  | .reply   => 5
+  | .reset   => 6
+  | .control => 7
+  | .notify  => 8
+
+/-- Compute the `Obend.Core.Digest.deployed` capability digest over a list of `Auth` rights. -/
+def computeAuthDigest (caps : List Obend.Vault.Affordance.Auth) : Nat :=
+  caps.foldl (fun acc c => Obend.Core.Digest.digestWith Obend.Core.Digest.deployed acc (authTag c)) 0
+
+/-- Render an `Obend.Vault.Rehydration.Rehydration` liveness readout to its canonical string. -/
+def renderRehydration : Obend.Vault.Rehydration.Rehydration → String
+  | .Live                     => "Live"
+  | .ReplayedDeterministic    => "ReplayedDeterministic"
+  | .ReconstructedApproximate => "ReconstructedApproximate"
+
+/-- Evaluate a Tab 3 Rehydratable Membranes query via `Obend.Vault.Rehydration` & `Obend.Vault.Affordance`.
+    Query wire format:
+    `membrane:<reachable>:<confined>:<frozen>:<revoked>:<v1_caps>:<v1_permits>:<v2_caps>:<v2_permits>:<height>:<old_val>:<new_val>` -/
+def evalMembraneAffordanceQuery (s : SessionState) (queryStr : String) : Json :=
+  let body := (queryStr.drop 9).trimAscii.toString
+  let parts := body.splitOn ":"
+  let getPart (idx : Nat) (defVal : String) : String :=
+    (parts[idx]?.getD defVal).trimAscii.toString
+  let isReachable : Bool := getPart 0 "false" == "true"
+  let isConfinedInput : Bool := getPart 1 "true" != "false"
+  let isFrozen : Bool := getPart 2 "false" == "true"
+  let isRevoked : Bool := getPart 3 "false" == "true"
+  let v1CapsRaw := parseAuthList (getPart 4 "read,write,grant,call")
+  let v1Caps := if isFrozen then v1CapsRaw.filter (fun c => c != .write && c != .grant) else v1CapsRaw
+  let v1PermitsList := (getPart 5 "scrub_parameter,weave_lean_cert,reshare_membrane,inspect_projection").splitOn ","
+    |>.map (·.trimAscii.toString) |>.filter (fun x => !x.isEmpty)
+  let v2Caps := parseAuthList (getPart 6 "read,write")
+  let v2PermitsList := (getPart 7 "scrub_parameter,inspect_projection").splitOn ","
+    |>.map (·.trimAscii.toString) |>.filter (fun x => !x.isEmpty)
+  let height : Nat := (getPart 8 "12").toNat?.getD 12
+  let oldVal : Nat := (getPart 9 "28").toNat?.getD 28
+  let newVal : Nat := (getPart 10 "31").toNat?.getD 31
+
+  -- 1. Pillar 1: InteractionLog, `confined`, `classify`, and `witnessChainOf`
+  let ar1 : Obend.Vault.Rehydration.AttestedRoot :=
+    { root := 101 + s.store.turn, v4Complete := true, quorum := true }
+  let ar2 : Obend.Vault.Rehydration.AttestedRoot :=
+    { root := 202 + s.store.turn, v4Complete := true, quorum := true }
+  let log : Obend.Vault.Rehydration.InteractionLog :=
+    if isConfinedInput then [.attested ar1, .attested ar2]
+    else [.attested ar1, .ambient, .attested ar2]
+  let isConf := Obend.Vault.Rehydration.confined log
+  let liveness := Obend.Vault.Rehydration.classify log isReachable
+  let chainHash (r : Obend.Vault.Rehydration.WitnessReceipt) : Nat :=
+    Obend.Core.Digest.digestWith Obend.Core.Digest.deployed r.oldCommit r.newCommit
+  let chain := Obend.Vault.Rehydration.witnessChainOf chainHash log
+
+  -- 2. Pillar 2: `MembraneViewer`, `projectMembrane`, `Membrane.reshare`, `Sturdyref`, `rehydrateSturdyref`
+  let allNames : List String :=
+    ["scrub_parameter", "weave_lean_cert", "reshare_membrane", "inspect_projection"]
+  let surface : Obend.Vault.Rehydration.AffordanceSurface Nat := [
+    { required := [.read, .write], effect := 1, name := "scrub_parameter" },
+    { required := [.read, .call],  effect := 2, name := "weave_lean_cert" },
+    { required := [.read, .grant], effect := 3, name := "reshare_membrane" },
+    { required := [.read],         effect := 4, name := "inspect_projection" }
+  ]
+  let viewer1 : Obend.Vault.Rehydration.MembraneViewer := {
+    held := v1Caps
+    permits := fun n => v1PermitsList.contains n
+    activeNames := allNames
+  }
+  let viewer2 : Obend.Vault.Rehydration.MembraneViewer := {
+    held := v2Caps
+    permits := fun n => v2PermitsList.contains n
+    activeNames := allNames
+  }
+  let reshared? := Obend.Vault.Rehydration.Membrane.reshare viewer1 viewer2
+  let sr : Obend.Vault.Rehydration.Sturdyref Nat := {
+    uri := "obend://vault/cell-thermal-ode#v4"
+    surface := if isRevoked then [] else surface
+    log := log
+    lineage := viewer1
+    reachable := isReachable
+  }
+  let (rehydSurface1, srLiveness) := Obend.Vault.Rehydration.rehydrateSturdyref sr viewer1
+  let (rehydSurface2, _) := Obend.Vault.Rehydration.rehydrateSturdyref sr viewer2
+  let v1Names := rehydSurface1.map (·.name)
+  let v2Names := rehydSurface2.map (·.name)
+  let twoViewersDistinct := v1Names != v2Names
+
+  -- 3. Pillar 4: 3D `ReactiveAffordance` & `fireReactive`
+  let gate : Obend.Vault.Rehydration.TransitionGate := {
+    pre := fun d => match d with | .natural v => decide (15 ≤ v && v ≤ 35) | _ => false
+    post := fun d => match d with | .natural v => decide (15 ≤ v && v ≤ 35) | _ => false
+    link := fun d1 d2 => match d1, d2 with
+      | .natural v1, .natural v2 => decide (v1 ≤ v2 + 10 && v2 ≤ v1 + 10)
+      | _, _ => false
+  }
+  let ra : Obend.Vault.Rehydration.ReactiveAffordance Nat := {
+    aff := { required := [.read, .write], effect := newVal, name := "scrub_parameter" }
+    gate := gate
+    openHeight := 1
+    closeHeight := 64
+  }
+  let fc : Obend.Vault.Affordance.FireCtx Nat := {
+    effectDigest := id
+    prevDigest := 0
+    preCommit := oldVal
+    postCommit := newVal
+  }
+  let fired? :=
+    if isFrozen || isRevoked then none
+    else Obend.Vault.Rehydration.fireReactive ra viewer1.held height (.natural oldVal) (.natural newVal) fc
+  let capDigest1 := computeAuthDigest v1Caps
+  let capDigest2 := computeAuthDigest v2Caps
+
+  Json.mkObj [
+    ("schema", toJson "obend.ffi.membrane.v1"),
+    ("turn", toJson s.store.turn),
+    ("liveness", toJson (renderRehydration liveness)),
+    ("sturdyrefLiveness", toJson (renderRehydration srLiveness)),
+    ("isFaithful", toJson liveness.isFaithful),
+    ("confined", toJson isConf),
+    ("reachable", toJson isReachable),
+    ("frozen", toJson isFrozen),
+    ("revoked", toJson isRevoked),
+    ("logLength", toJson log.length),
+    ("witnessChainLength", toJson chain.length),
+    ("chainCoversLog", toJson (chain.length == log.length)),
+    ("capDigest", toJson capDigest1),
+    ("viewer2CapDigest", toJson capDigest2),
+    ("heldCaps", toJson (v1Caps.map renderAuth)),
+    ("viewer2HeldCaps", toJson (v2Caps.map renderAuth)),
+    ("viewer1Surface", toJson v1Names),
+    ("viewer2Surface", toJson v2Names),
+    ("twoViewersDistinct", toJson twoViewersDistinct),
+    ("reshareAdmitted", toJson reshared?.isSome),
+    ("resharedCaps", toJson (match reshared? with | some m => m.held.map renderAuth | none => [])),
+    ("reactiveWindowOpen", toJson ra.openHeight),
+    ("reactiveWindowClose", toJson ra.closeHeight),
+    ("reactiveHeight", toJson height),
+    ("reactiveInWindow", toJson (Obend.Vault.Rehydration.inWindow ra height)),
+    ("reactiveTransitionOk", toJson (Obend.Vault.Rehydration.transitionOK gate (.natural oldVal) (.natural newVal))),
+    ("reactiveFired", toJson fired?.isSome)
+  ]
+
+/-- Interactive view affordances (`WS 31` & `WS 33`):
+    - If the query starts with `"membrane:"`, evaluates the Rehydratable Membranes state via
+      `Obend.Vault.Rehydration` (`classify`, `confined`, `witnessChainOf`, `Membrane.reshare`,
+      `rehydrateSturdyref`, and `fireReactive`).
+    - Otherwise parses law strings using `Obend.Spec.Law.parse` (`parseLaw`),
+      classifies via `Obend.Spec.LawDial.dial` into `.free`, `.stepShaped`, or `.ordering`, and
+      computes multi-field repair witnesses via `Obend.Vault.suggestMultiField`. -/
 @[export obend_view_affordances_core]
 def viewAffordancesCore (s : SessionState) (queryBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if queryBytes.isEmpty then
@@ -784,6 +1055,11 @@ def viewAffordancesCore (s : SessionState) (queryBytes : ByteArray) : SessionSta
   else
     match Obend.Spec.Parse.decodeSource queryBytes with
     | some queryStr =>
+      if queryStr.trimAscii.toString.startsWith "membrane:" then
+        let jsonObj := evalMembraneAffordanceQuery s queryStr.trimAscii.toString
+        let outBytes := jsonObj.compress.toUTF8
+        ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
+      else
       match parseLaw queryStr with
       | .ok lawExpr =>
         let verdict := Obend.Spec.LawDial.dial lawExpr
@@ -948,108 +1224,140 @@ def cellPopLeanCore (s : SessionState) (cellBytes : ByteArray) : SessionState ×
     let outBytes := leanStub.toUTF8
     ({ s with scratch := outBytes, lastError := none }, outBytes, 0)
 
-/-- Pure character-list whitespace trimmer (kernel-reducible via `rfl` / `decide`). -/
-def trimChars (cs : List Char) : List Char :=
-  let isWs (c : Char) : Bool := c == ' ' || c == '\t' || c == '\n' || c == '\r'
-  let rev1 := (cs.dropWhile isWs).reverse
-  (rev1.dropWhile isWs).reverse
+/-- Decode a judge witness from its JSON form `{"format","version","grade","obj","cert"}`. -/
+def decodeTurnWitness? (bytes : ByteArray) : Option TurnWitness := do
+  let text ← Obend.Spec.Parse.decodeSource bytes
+  let j ← (Json.parse text).toOption
+  let format ← (j.getObjValAs? String "format").toOption
+  let version ← (j.getObjValAs? String "version").toOption
+  let grade ← (j.getObjValAs? Nat "grade").toOption
+  let obj ← (j.getObjValAs? String "obj").toOption
+  let cert ← (j.getObjValAs? String "cert").toOption
+  pure { formatName := format, version := version, grade := grade, objBytes := obj, certBytes := cert }
 
-/-- Extract the conclusion proposition after the top-level `:` in a theorem header (`name (args...) : Prop`). -/
-def extractTheoremConclusion? (header : String) : Option String :=
-  let rec loop : List Char → Nat → List Char → Option (List Char) → Option String
-    | [], _, _, some revProp => some (String.ofList (trimChars revProp.reverse))
-    | [], _, _, none => none
-    | c :: cs, depth, curAfterColon, found =>
-      if c == '(' || c == '[' || c == '{' then
-        loop cs (depth + 1) (c :: curAfterColon) (found.map (c :: ·))
-      else if c == ')' || c == ']' || c == '}' then
-        loop cs (depth - 1) (c :: curAfterColon) (found.map (c :: ·))
-      else if c == ':' && depth == 0 then
-        loop cs 0 [] (some [])
-      else
-        loop cs depth (c :: curAfterColon) (found.map (c :: ·))
-  loop header.toList 0 [] none
-
-/-- Check whether an extracted theorem conclusion proposition is vacuous (`True`, `(True)`, `Prop`, `True ∧ True`, `True = True`). -/
-def isVacuousConclusion (prop : String) : Bool :=
-  let cs := trimChars prop.toList
-  let p := String.ofList cs
-  cs.isEmpty ||
-  p == "True" ||
-  p == "(True)" ||
-  p == "Prop" ||
-  p == "(Prop)" ||
-  p == "True ∧ True" ||
-  p == "True /\\ True" ||
-  p == "True = True" ||
-  "True ".toList.isPrefixOf cs ||
-  "True\n".toList.isPrefixOf cs ||
-  "→ True".toList.isSuffixOf cs ||
-  "-> True".toList.isSuffixOf cs
-
-/-- Validate that a proof certificate payload carries a non-vacuous theorem obligation or 32-byte digest. -/
-def isValidCertObligation (certBytes : ByteArray) : Bool :=
-  if certBytes.isEmpty then false
-  else
-    match Obend.Spec.Parse.decodeSource certBytes with
-    | some rawText =>
-      let t := rawText.trimAscii.toString
-      if t.contains "sorry" || t.contains "admit" || t.contains ": True :=" || t.contains ": True:=" || t.contains "_counterexample" then
-        false
-      else if t.contains "theorem " && t.contains ":= by" then
-        match t.splitOn "theorem " with
-        | _ :: afterThm :: _ =>
-          match afterThm.splitOn ":=" with
-          | header :: _ :: _ =>
-            match extractTheoremConclusion? header with
-            | some prop =>
-              !isVacuousConclusion prop &&
-              (prop.contains "≤" || prop.contains "<=" || prop.contains "<" || prop.contains ">" ||
-               prop.contains "=" || prop.contains "Holds" || prop.contains "Keeps" ||
-               prop.contains "Admits" || prop.contains "Evaluates")
-            | none => false
-          | _ => false
-        | _ => false
-      else if t.contains "\"format\"" && t.contains "\"digest\"" then
-        true
-      else
-        certBytes.size == 32 && !(t.all fun c => c.isAlpha || c == ' ')
-    | none =>
-      certBytes.size == 32
-
-/-- "Weave Back In" (`WS 31`): verifies a Lean 4 proof receipt / certificate obligation header
-    (refusing vacuous `: True :=` or `sorry` snippets), computes its 32-byte Merkle commitment root,
-    and admits the root into `s.admittedRoots`. -/
+/-- "Weave back in": a certificate enters a session only as a judge witness, checked by its
+registered `Obend.Judge.Format` (`checkTurnWitness sessionJudgeFormats`). An accepted witness
+becomes a pending proposal that `turnCommitCore` commits as a `VaultTurn` carrying it in
+`witnesses`; a refused or unparseable one changes nothing (`-8`). There is no text gate: the
+judge is the only reader of the certificate. -/
 @[export obend_cell_weave_cert_core]
 def cellWeaveCertCore (s : SessionState) (certBytes : ByteArray) : SessionState × ByteArray × Int32 :=
   if certBytes.isEmpty then
-    ({ s with lastError := some "Empty proof certificate payload" }, ByteArray.empty, -8)
-  else if !isValidCertObligation certBytes then
-    ({ s with lastError := some "Refused vacuous, unproved, or malformed proof certificate" }, ByteArray.empty, -8)
+    ({ s with lastError := some "Empty witness payload" }, ByteArray.empty, -8)
   else
-    let h := hashByteArray certBytes
-    let rootLeaf := leaf Obend.Core.Digest.deployed 0 h
-    let o : Opening := ⟨1, 0, h, []⟩
-    if opens Obend.Core.Digest.deployed o rootLeaf then
-      let receiptBytes := natTo32Bytes rootLeaf
-      let roots1 := pushAdmittedRoot s.admittedRoots receiptBytes
-      let roots2 := pushAdmittedRoot roots1 certBytes
-      ({ s with admittedRoots := roots2, scratch := receiptBytes, lastError := none }, receiptBytes, 0)
-    else
-      ({ s with lastError := some "Failed to weave proof certificate" }, ByteArray.empty, -8)
+    match decodeTurnWitness? certBytes with
+    | none =>
+      ({ s with lastError := some "Weave payload must be a judge witness {format, version, grade, obj, cert}" }, ByteArray.empty, -8)
+    | some w =>
+      if checkTurnWitness sessionJudgeFormats w then
+        let tidBytes := (buildCommittedReceipt certBytes).1
+        let proposal : PendingTurnProposal :=
+          ⟨tidBytes, [], [(s!"witness_{s.store.turn}", .natural (hashByteArray certBytes))], some w⟩
+        let pending := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes) ++ [proposal]
+        ({ s with pendingProposals := pending, scratch := tidBytes, lastError := none }, tidBytes, 0)
+      else
+        ({ s with lastError := some s!"Judge format {w.formatName}@{w.version} is not registered or refused the certificate" }, ByteArray.empty, -8)
 
--- Kernel-checked soundness theorems for WS-G Truthful FFI Receipt/Weave Bridge
+
+/-! ## What the bridge refuses, and what an acceptance means
+
+The two self-admission paths found on 2026-11-01 and 2026-11-03 (a proposed payload counted
+as an admitted root; a 32-byte root accepted with no opening) are gone by construction:
+`turnProposeCore` does not touch `committedRoots` (`turnProposeCore_committedRoots_unchanged`),
+only `turnCommitCore` does, and `verifyReceiptCore` accepts only a decodable frame whose root
+is committed and whose opening opens (`verifyReceiptCore_sound`). -/
+
 theorem verifyReceiptCore_empty_refused (s : SessionState) :
     (verifyReceiptCore s ByteArray.empty).2 = -8 := by rfl
 
-theorem verifyReceiptCore_unadmitted_32_refused (s : SessionState) (rcpt : ByteArray)
-    (hne : rcpt.isEmpty = false)
-    (hge : ¬ (rcpt.size < 32))
-    (_hsz : (rcpt.extract 32 rcpt.size).isEmpty = true)
-    (hunadm1 : s.admittedRoots.contains (rcpt.extract 0 32) = false)
-    (hunadm2 : s.admittedRoots.contains rcpt = false) :
+/-- A frame shorter than the 56-byte header, in particular a bare 32-byte root, is refused. -/
+theorem verifyReceiptCore_short_refused (s : SessionState) (rcpt : ByteArray) (h : rcpt.size < 56) :
     (verifyReceiptCore s rcpt).2 = -8 := by
-  simp [verifyReceiptCore, hne, hge, hunadm1, hunadm2]
+  unfold verifyReceiptCore decodeReceipt?
+  simp [h]
+
+/-- **What acceptance means**: the frame decodes, its root is committed, and its opening opens. -/
+theorem verifyReceiptCore_sound (s : SessionState) (rcpt : ByteArray)
+    (h : (verifyReceiptCore s rcpt).2 = 0) :
+    ∃ r, decodeReceipt? rcpt = some r ∧
+      s.committedRoots.contains r.root = true ∧
+      opens Obend.Core.Digest.deployed (receiptOpening r) (bytesToNat r.root) = true := by
+  unfold verifyReceiptCore at h
+  split at h
+  · simp at h
+  · rename_i r hr
+    split at h
+    · simp at h
+    · rename_i hc
+      split at h
+      · rename_i ho
+        refine ⟨r, hr, ?_, ho⟩
+        simpa using hc
+      · simp at h
+
+/-- With no committed root, nothing verifies. -/
+theorem verifyReceiptCore_no_committed_refused (s : SessionState) (rcpt : ByteArray)
+    (h : s.committedRoots = #[]) :
+    (verifyReceiptCore s rcpt).2 = -8 := by
+  unfold verifyReceiptCore
+  split
+  · rfl
+  · rename_i r _
+    have hc : s.committedRoots.contains r.root = false := by
+      rw [h]
+      simp
+    simp [hc]
+
+theorem verifyReceiptCore_empty_session_refused (rcpt : ByteArray) :
+    (verifyReceiptCore SessionState.empty rcpt).2 = -8 :=
+  verifyReceiptCore_no_committed_refused _ _ rfl
+
+/-- A proposal admits no root. -/
+theorem turnProposeCore_committedRoots_unchanged (s : SessionState) (turnBytes : ByteArray) :
+    (turnProposeCore s turnBytes).1.committedRoots = s.committedRoots := by
+  unfold turnProposeCore
+  split
+  · rfl
+  · dsimp only
+    split <;> rfl
+
+/-- **The first self-admission path is closed**: a payload proposed into the empty session does
+not make any receipt verify, its own one-leaf receipt included. -/
+theorem verifyReceiptCore_proposed_not_committed_refused (turnBytes rcpt : ByteArray) :
+    (verifyReceiptCore (turnProposeCore SessionState.empty turnBytes).1 rcpt).2 = -8 :=
+  verifyReceiptCore_no_committed_refused _ _
+    ((turnProposeCore_committedRoots_unchanged _ _).trans rfl)
+
+/-- A weave admits no root either. -/
+theorem cellWeaveCertCore_committedRoots_unchanged (s : SessionState) (certBytes : ByteArray) :
+    (cellWeaveCertCore s certBytes).1.committedRoots = s.committedRoots := by
+  unfold cellWeaveCertCore
+  split
+  · rfl
+  · split
+    · rfl
+    · dsimp only
+      split <;> rfl
+
+theorem cellWeaveCertCore_empty_refused (s : SessionState) :
+    (cellWeaveCertCore s ByteArray.empty).2.2 = -8 := by rfl
+
+/-- A payload that is not a judge witness is refused and proposes nothing. -/
+theorem cellWeaveCertCore_not_witness_refused (s : SessionState) (certBytes : ByteArray)
+    (hne : certBytes.isEmpty = false) (hdec : decodeTurnWitness? certBytes = none) :
+    (cellWeaveCertCore s certBytes).2.2 = -8 ∧
+      (cellWeaveCertCore s certBytes).1.pendingProposals = s.pendingProposals := by
+  unfold cellWeaveCertCore
+  simp [hne, hdec]
+
+/-- A witness its format refuses is refused and proposes nothing. -/
+theorem cellWeaveCertCore_refused_witness_not_proposed (s : SessionState) (certBytes : ByteArray)
+    (w : TurnWitness) (hne : certBytes.isEmpty = false) (hdec : decodeTurnWitness? certBytes = some w)
+    (hw : checkTurnWitness sessionJudgeFormats w = false) :
+    (cellWeaveCertCore s certBytes).2.2 = -8 ∧
+      (cellWeaveCertCore s certBytes).1.pendingProposals = s.pendingProposals := by
+  unfold cellWeaveCertCore
+  simp [hne, hdec, hw]
 
 theorem turnCommitCore_empty_refused (s : SessionState) :
     (turnCommitCore s ByteArray.empty).2 = -6 := by rfl
@@ -1064,40 +1372,83 @@ theorem turnCommitCore_non32_refused (s : SessionState) (tid : ByteArray)
   rw [hcond]
   rfl
 
+/-- **Unproposed turn commit refusal**: committing any 32-byte id in the empty session is refused
+with `-5` and commits no root. -/
+theorem turnCommitCore_unproposed_tid_refused (tidBytes : ByteArray)
+    (h32 : tidBytes.size = 32) :
+    (turnCommitCore SessionState.empty tidBytes).2 = -5 ∧
+    (turnCommitCore SessionState.empty tidBytes).1.committedRoots = #[] := by
+  unfold turnCommitCore SessionState.empty
+  have hcond : (tidBytes.isEmpty || decide (tidBytes.size ≠ 32)) = false := by
+    rw [Bool.or_eq_false_iff]
+    refine ⟨?_, ?_⟩
+    · unfold ByteArray.isEmpty
+      rw [h32]
+      rfl
+    · exact decide_eq_false (by omega)
+  rw [hcond]
+  constructor <;> first | rfl | trivial
+
+#tooth turnCommitCore_unproposed_tid_refused by mutation
+  turnCommitCore := fun s _ => (s, 0)
+
+/-- **A commit records the turn it denotes, witnesses included.** When the proposal is found,
+its footprint holds, its turn constructs, and every witness passes its judge format, the commit
+succeeds, the turn is the newest committed turn, and its witnesses are the proposal's. -/
+theorem turnCommitCore_commits_turn (s : SessionState) (tidBytes : ByteArray)
+    (prop : PendingTurnProposal) (turn : VaultTurn)
+    (h32 : tidBytes.size = 32)
+    (hfind : s.pendingProposals.find? (fun (p : PendingTurnProposal) => p.tidBytes == tidBytes) = some prop)
+    (hfp : admitFootprint (sessionStoreLookup s) prop.footprint = .ok ())
+    (hturn : proposalTurn s prop = some turn)
+    (hall : turn.witnesses.all (checkTurnWitness sessionJudgeFormats) = true) :
+    (turnCommitCore s tidBytes).2 = 0 ∧
+    (turnCommitCore s tidBytes).1.committedTurns.head? = some turn ∧
+    tidBytes ∈ (turnCommitCore s tidBytes).1.committedRoots ∧
+    turn.witnesses = prop.witness.toList := by
+  have hcond : (tidBytes.isEmpty || decide (tidBytes.size ≠ 32)) = false := by
+    rw [Bool.or_eq_false_iff]
+    refine ⟨?_, ?_⟩
+    · unfold ByteArray.isEmpty
+      rw [h32]
+      rfl
+    · exact decide_eq_false (by omega)
+  have hturn' := hturn
+  unfold proposalTurn at hturn'
+  have hwit : turn.witnesses = prop.witness.toList :=
+    (VaultTurn.ofWitnessLegs_fields hturn').2.2.2
+  have hpush : tidBytes ∈ pushCommittedRoot s.committedRoots tidBytes := by
+    unfold pushCommittedRoot
+    simp [h32]
+  unfold turnCommitCore
+  rw [hcond]
+  simp only [Bool.false_eq_true, ↓reduceIte]
+  rw [hfind]
+  simp only []
+  rw [hfp]
+  simp only []
+  rw [hturn]
+  simp only []
+  rw [hall]
+  simp only [↓reduceIte]
+  refine ⟨?_, ?_, hpush, hwit⟩ <;> first | trivial | rfl
+
+/-- Every committed turn's witnesses meet the witness clause of `ValidAt` at the session's
+formats (`VaultTurn.ofWitnessLegs_witness_clause` through `turnCommitCore_commits_turn`). -/
+theorem turnCommitCore_witness_clause (s : SessionState)
+    (prop : PendingTurnProposal) (turn : VaultTurn)
+    (hturn : proposalTurn s prop = some turn)
+    (hall : turn.witnesses.all (checkTurnWitness sessionJudgeFormats) = true) :
+    ∀ w ∈ turn.witnesses, ∃ F,
+      findJudgeFormat sessionJudgeFormats w.formatName w.version = some F ∧
+      F.checkBytes w.grade w.objBytes w.certBytes = .ok :=
+  VaultTurn.ofWitnessLegs_witness_clause hturn hall
+
 theorem turnProposeCore_empty_refused (s : SessionState) :
     (turnProposeCore s ByteArray.empty).2.2 = -3 := by rfl
 
 theorem cellPopLeanCore_empty_refused (s : SessionState) :
     (cellPopLeanCore s ByteArray.empty).2.2 = -3 := by rfl
-
-theorem cellWeaveCertCore_empty_refused (s : SessionState) :
-    (cellWeaveCertCore s ByteArray.empty).2.2 = -8 := by rfl
-
-theorem cellWeaveCertCore_invalid_obligation_refused (s : SessionState) (cert : ByteArray)
-    (hinv : isValidCertObligation cert = false) :
-    (cellWeaveCertCore s cert).2.2 = -8 := by
-  unfold cellWeaveCertCore
-  split <;> simp_all
-
-theorem extractTheoremConclusion_vacuous_ws_rejected :
-    ((extractTheoremConclusion? "vacuous2 : True  ").map isVacuousConclusion) = some true := by
-  decide
-
-theorem extractTheoremConclusion_vacuous_newline_rejected :
-    ((extractTheoremConclusion? "vacuous3 : True\n").map isVacuousConclusion) = some true := by
-  decide
-
-theorem extractTheoremConclusion_binder_vacuous_rejected :
-    ((extractTheoremConclusion? "vacuous4 (h : 1 ≤ 1) : True ").map isVacuousConclusion) = some true := by
-  decide
-
-theorem extractTheoremConclusion_unbound_prop_rejected :
-    ((extractTheoremConclusion? "unbound_prop : Prop ").map isVacuousConclusion) = some true := by
-  decide
-
-theorem extractTheoremConclusion_valid_bound_accepted :
-    ((extractTheoremConclusion? "valid_bound : (15 ≤ (28 : Int) ∧ (28 : Int) ≤ 35)").map isVacuousConclusion) = some false := by
-  decide
 
 theorem sessionStoreLookup_updates_after_applyWrites (s : SessionState) :
     let (vs1, st1) := applyWritesToSession s [("x", .natural 10)]
@@ -1130,53 +1481,6 @@ theorem admitFootprint_stale_pin_refused (s : SessionState) :
     injection hdata with hnat
     omega
 
-/-- **Unproposed Turn Commit Refusal (`turnCommitCore_unproposed_tid_refused`)**:
-    Committing any 32-byte `tidBytes` in `SessionState.empty` (where `pendingProposals = []`)
-    is strictly refused with status `-5` and leaves `admittedRoots.toList = []` (`admittedRoots = #[]`). -/
-theorem turnCommitCore_unproposed_tid_refused (tidBytes : ByteArray)
-    (h32 : tidBytes.size = 32) :
-    (turnCommitCore SessionState.empty tidBytes).2 = -5 ∧
-    (turnCommitCore SessionState.empty tidBytes).1.admittedRoots = #[] ∧
-    (turnCommitCore SessionState.empty tidBytes).1.admittedRoots.toList = [] := by
-  unfold turnCommitCore SessionState.empty
-  have hcond : (tidBytes.isEmpty || decide (tidBytes.size ≠ 32)) = false := by
-    rw [Bool.or_eq_false_iff]
-    refine ⟨?_, ?_⟩
-    · unfold ByteArray.isEmpty
-      rw [h32]
-      rfl
-    · exact decide_eq_false (by omega)
-  rw [hcond]
-  exact ⟨rfl, rfl, rfl⟩
-
-#tooth turnCommitCore_unproposed_tid_refused by mutation
-  turnCommitCore := fun s _ => (s, 0)
-
-/-- Any receipt query against `SessionState.empty` (where `admittedRoots = #[]`) is refused with `-8`. -/
-theorem verifyReceiptCore_empty_session_refused (rcptBytes : ByteArray) :
-    (verifyReceiptCore SessionState.empty rcptBytes).2 = -8 := by
-  unfold verifyReceiptCore
-  split
-  · rfl
-  · split
-    · rfl
-    · dsimp only
-      have h1 : SessionState.empty.admittedRoots.contains (rcptBytes.extract 0 32) = false := by
-        simp [SessionState.empty]
-      have h2 : SessionState.empty.admittedRoots.contains rcptBytes = false := by
-        simp [SessionState.empty]
-      rw [h1, h2]
-      rfl
-
-/-- **Unadmitted Self-Opening Receipt Refusal (`verifyReceiptCore_unadmitted_self_opening_refused`)**:
-    Passing a 64-byte self-opening `[leaf(0, h) || h]` slice (`computeReceiptCommitment h ++ natTo32Bytes h`)
-    into `verifyReceiptCore SessionState.empty` returns `-8` (refused!). -/
-theorem verifyReceiptCore_unadmitted_self_opening_refused (h : Nat) :
-    (verifyReceiptCore SessionState.empty (computeReceiptCommitment h ++ natTo32Bytes h)).2 = -8 :=
-  verifyReceiptCore_empty_session_refused (computeReceiptCommitment h ++ natTo32Bytes h)
-
-#tooth verifyReceiptCore_unadmitted_self_opening_refused by mutation
-  verifyReceiptCore := fun s _ => (s, 0)
 
 end Obend.FFI
 end

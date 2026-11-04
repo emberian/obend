@@ -34,7 +34,14 @@ fn test_hardware_projection() {
 #[test]
 fn test_receipt_verification() {
     let mut session = ObendSession::new().unwrap();
-    let valid_receipt = vec![0xAB; 32];
+    // A bare 32-byte value is not a receipt, whether or not the session has seen it.
+    let bare_root = vec![0xAB; 32];
+    assert_eq!(session.verify_receipt(&bare_root).unwrap(), false);
+
+    // Proposing admits nothing; committing yields the receipt that verifies.
+    let tid = session.propose_turn(b"turn_for_receipt").unwrap();
+    assert_eq!(session.verify_receipt(&tid).unwrap(), false);
+    let valid_receipt = session.commit_payload(b"turn_for_receipt").unwrap();
     assert_eq!(session.verify_receipt(&valid_receipt).unwrap(), true);
 
     let invalid_receipt = vec![0xAB; 16];

@@ -60,6 +60,13 @@ fn main() {
             .current_dir(workspace_root.join("lean"))
             .output()
             .or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                std::process::Command::new(format!("{home}/.elan/bin/lean"))
+                    .arg("--print-prefix")
+                    .current_dir(workspace_root.join("lean"))
+                    .output()
+            })
+            .or_else(|_| {
                 std::process::Command::new("elan")
                     .args(["run", "leanprover/lean4:v4.35.0", "lean", "--print-prefix"])
                     .current_dir(workspace_root.join("lean"))
@@ -81,7 +88,13 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lake_lib_dir.display());
     println!("cargo:rustc-link-search=native={}/lib/lean", lean_sysroot);
 
-    let link_mode = std::env::var("OBEND_LEAN_LINK").unwrap_or_else(|_| "shared".into());
+    let link_mode = std::env::var("OBEND_LEAN_LINK").unwrap_or_else(|_| {
+        if has_libobend || lib_so2.exists() || lib_dylib2.exists() {
+            "shared".into()
+        } else {
+            "static".into()
+        }
+    });
     if link_mode == "static" {
         println!("cargo:rustc-link-lib=static=Obend");
         println!("cargo:rustc-link-lib=static=leanrt");

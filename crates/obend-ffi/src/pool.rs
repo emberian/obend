@@ -6,11 +6,17 @@ thread_local! {
     static THREAD_ATTACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Attach the calling thread to the Lean runtime, initializing the runtime first if this process
+/// has not yet (`obend_ensure_lean_thread` in `lean/c/obend_bridge.c` orders
+/// `lean_initialize_runtime_module`, `lean_initialize`, the module initializer, then
+/// `lean_initialize_thread`). Calling `lean_initialize_thread` first, as this function did until
+/// 2026-11-04, is undefined behaviour and segfaulted hosts that opened no session before using
+/// the pool.
 pub fn ensure_lean_thread_initialized() {
     THREAD_ATTACHED.with(|attached| {
         if !attached.get() {
             unsafe {
-                crate::sys::lean_initialize_thread();
+                crate::sys::obend_ensure_lean_thread();
             }
             attached.set(true);
         }
@@ -34,7 +40,7 @@ impl LeanWorkerPool {
         for _ in 0..num_threads {
             let rx_clone = Arc::clone(&rx);
             workers.push(spawn(move || {
-                unsafe { crate::sys::lean_initialize_thread() };
+                ensure_lean_thread_initialized();
 
                 while let Ok(Some(job)) = rx_clone.lock().unwrap().recv() {
                     job();

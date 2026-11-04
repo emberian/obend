@@ -28,24 +28,30 @@ fn test_cabi_zero_length_buffers() {
     let res_rcpt = session.verify_receipt(&[]);
     assert_eq!(res_rcpt.unwrap(), false);
 
-    // Turn commit with empty ID is allowed (empty turn id)
+    // Turn commit with empty ID must be refused (-6, turnCommitCore_empty_refused)
     let res_commit = session.commit_turn(&[]);
-    assert!(res_commit.is_ok());
+    assert!(res_commit.is_err());
 }
 
 #[test]
 fn test_cabi_truncated_and_invalid_turn_commits() {
     let mut session = ObendSession::new().expect("Init session");
 
-    // Valid turn ID must be exactly 32 bytes (or empty)
+    // Valid turn ID must be exactly 32 bytes and previously proposed
     for len in [1, 7, 16, 31, 33, 64, 128] {
         let invalid_id = vec![0xAA; len];
         let res = session.commit_turn(&invalid_id);
         assert!(res.is_err(), "Length {} should be rejected", len);
     }
 
-    let valid_id = vec![0xBB; 32];
-    assert!(session.commit_turn(&valid_id).is_ok());
+    // Unproposed 32-byte turn ID must be refused (turnCommitCore_unproposed_tid_refused)
+    let unproposed_id = vec![0xBB; 32];
+    assert!(session.commit_turn(&unproposed_id).is_err());
+
+    // Proposed 32-byte turn ID succeeds
+    let proposed_id = session.propose_turn(b"valid_turn_payload").expect("propose_turn");
+    assert_eq!(proposed_id.len(), 32);
+    assert!(session.commit_turn(&proposed_id).is_ok());
 }
 
 #[test]
@@ -58,11 +64,18 @@ fn test_cabi_truncated_receipts() {
         assert_eq!(session.verify_receipt(&malformed).unwrap(), false);
     }
 
-    let valid_rcpt = vec![0xDD; 32];
-    assert_eq!(session.verify_receipt(&valid_rcpt).unwrap(), true);
+    // Arbitrary 32-byte and 128-byte slices are not receipts.
+    assert_eq!(session.verify_receipt(&vec![0xDD; 32]).unwrap(), false);
+    assert_eq!(session.verify_receipt(&vec![0xEE; 128]).unwrap(), false);
 
-    let large_rcpt = vec![0xEE; 128];
-    assert_eq!(session.verify_receipt(&large_rcpt).unwrap(), true);
+    // A proposal admits nothing; a commit's receipt verifies; junk appended to it does not.
+    let tid = session.propose_turn(b"receipt_payload").expect("propose_turn");
+    assert_eq!(session.verify_receipt(&tid).unwrap(), false);
+    let committed = session.commit_payload(b"receipt_payload").expect("commit_payload");
+    assert_eq!(session.verify_receipt(&committed).unwrap(), true);
+    let mut extended = committed.clone();
+    extended.extend_from_slice(&[0xEE; 96]);
+    assert_eq!(session.verify_receipt(&extended).unwrap(), false);
 }
 
 #[test]

@@ -284,6 +284,107 @@ theorem ValidAt.witness_sound {s : VaultStore} {turn : VaultTurn}
   obtain ⟨F, hF, hchk⟩ := h_wit w hw
   exact ⟨F, hF, F.checkBytes_sound hchk⟩
 
+/-- `checkTurnWitness` decides the witness clause of `ValidAt`: an accepted witness names a
+registered format that accepts its bytes. -/
+theorem checkTurnWitness_sound {formats : List Obend.Judge.Format} {w : TurnWitness}
+    (h : checkTurnWitness formats w = true) :
+    ∃ F, findJudgeFormat formats w.formatName w.version = some F ∧
+      F.checkBytes w.grade w.objBytes w.certBytes = .ok := by
+  unfold checkTurnWitness at h
+  split at h
+  · rename_i F hF
+    split at h
+    · rename_i hok
+      exact ⟨F, hF, hok⟩
+    · cases h
+  · cases h
+
+/-! ### 3b. Constructing turns
+
+`VaultTurn` carries three proof fields. `VaultTurn.ofWitnessLegs` is the constructor a host uses:
+each write leg's contract certificate carries the turn id (so `agree` holds by construction), the
+legs report no half-edges (so `balanced` holds), and the write cells are checked duplicate-free.
+`Obend.FFI.Bridge.turnCommitCore` builds every committed turn through it, with the woven judge
+witnesses in `witnesses`, and checks them with `checkTurnWitness`. -/
+
+/-- A write leg whose contract certificate carries the turn id (`legTurnId_witnessLeg`). -/
+def witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) : CellDelta :=
+  { cell := cell, preState := pre, postState := post,
+    cert := some (.byLoweredDecider "turn-leg" [] tid) }
+
+theorem legTurnId_witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) :
+    legTurnId (witnessLeg tid cell pre post) = tid := rfl
+
+theorem deltaAsset_witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) (asset : String) :
+    deltaAsset (witnessLeg tid cell pre post) asset = 0 := rfl
+
+/-- A write leg before it is bound to a turn: the cell, its pre-state, and its post-state. -/
+abbrev WitnessLegSpec := String × Data × Data
+
+/-- The write legs of a turn `tid` over `legs`. -/
+def witnessLegs (tid : ByteArray) (legs : List WitnessLegSpec) : List CellDelta :=
+  legs.map fun l => witnessLeg tid l.1 l.2.1 l.2.2
+
+theorem foldl_deltaAsset_witnessLegs (tid : ByteArray) (asset : String) :
+    ∀ (legs : List WitnessLegSpec) (acc : Int),
+      ((legs.map fun l => witnessLeg tid l.1 l.2.1 l.2.2).map (fun d => deltaAsset d asset)).foldl
+        (· + ·) acc = acc
+  | [], _ => rfl
+  | l :: rest, acc => by
+    rw [List.map_cons, List.map_cons, List.foldl_cons, deltaAsset_witnessLeg, Int.add_zero]
+    exact foldl_deltaAsset_witnessLegs tid asset rest acc
+
+theorem sumAssetDelta_witnessLegs (tid : ByteArray) (legs : List WitnessLegSpec) (asset : String) :
+    sumAssetDelta (witnessLegs tid legs) asset = 0 :=
+  foldl_deltaAsset_witnessLegs tid asset legs 0
+
+/-- **The turn constructor.** `none` exactly when two legs name one cell. -/
+def VaultTurn.ofWitnessLegs (tid : ByteArray) (readPins : Footprint) (legs : List WitnessLegSpec)
+    (occasion : Data) (witnesses : List TurnWitness) : Option VaultTurn :=
+  if h : (legs.map (·.1)).Nodup then
+    some
+      { turnId := tid
+        readPins := readPins
+        writeCells := witnessLegs tid legs
+        occasion := occasion
+        witnesses := witnesses
+        agree := by
+          intro d hd
+          simp only [witnessLegs, List.mem_map] at hd
+          obtain ⟨l, _, rfl⟩ := hd
+          rfl
+        balanced := fun asset => sumAssetDelta_witnessLegs tid legs asset
+        nodup_cells := by
+          show ((witnessLegs tid legs).map CellDelta.cell).Nodup
+          simp only [witnessLegs, List.map_map]
+          exact h }
+  else
+    none
+
+theorem VaultTurn.ofWitnessLegs_fields {tid : ByteArray} {readPins : Footprint}
+    {legs : List WitnessLegSpec} {occasion : Data} {witnesses : List TurnWitness} {turn : VaultTurn}
+    (h : VaultTurn.ofWitnessLegs tid readPins legs occasion witnesses = some turn) :
+    turn.turnId = tid ∧ turn.readPins = readPins ∧ turn.writeCells = witnessLegs tid legs ∧
+      turn.witnesses = witnesses := by
+  unfold VaultTurn.ofWitnessLegs at h
+  split at h
+  · cases h
+    exact ⟨rfl, rfl, rfl, rfl⟩
+  · cases h
+
+/-- A constructed turn whose witnesses all pass `checkTurnWitness` satisfies the witness clause
+of `ValidAt`. -/
+theorem VaultTurn.ofWitnessLegs_witness_clause {formats : List Obend.Judge.Format}
+    {tid : ByteArray} {readPins : Footprint} {legs : List WitnessLegSpec} {occasion : Data}
+    {witnesses : List TurnWitness} {turn : VaultTurn}
+    (h : VaultTurn.ofWitnessLegs tid readPins legs occasion witnesses = some turn)
+    (hall : turn.witnesses.all (checkTurnWitness formats) = true) :
+    ∀ w ∈ turn.witnesses, ∃ F,
+      findJudgeFormat formats w.formatName w.version = some F ∧
+      F.checkBytes w.grade w.objBytes w.certBytes = .ok := by
+  intro w hw
+  exact checkTurnWitness_sound (List.all_eq_true.mp hall w hw)
+
 theorem mem_of_find?_some {α : Type} {p : α → Bool} {l : List α} {a : α} :
     l.find? p = some a → a ∈ l ∧ p a = true := by
   intro h

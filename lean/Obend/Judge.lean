@@ -24,18 +24,50 @@ public import Obend.Judge.Identity
 public import Obend.Judge.Certified
 public import Obend.Judge.AutomataConfinement
 public import Obend.Judge.TranscriptPolicy
+public import Obend.Judge.Clearing
+public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.SosLyapunov
 public import Obend.Analysis.Format
 public import Obend.Lower.Judge
 public import Obend.Hardware.Judge
+public import Obend.Law.Contract
+public import Obend.Logic.Obligation
+public import Obend.Elab.AutoCert
+public import Obend.Elab.Workbook
 
 public section
 namespace Obend.Judge
 
-/-- The registered formats. -/
-def registry : List Format :=
+/-- Registered `Format` for `"drex-clearing@1"` (backed by `drexClearingJudge`). -/
+@[expose] def drexClearingFormat : Format :=
+  { Obend.Logic.clearingFormat with name := "drex-clearing" }
+
+/-- Registered `Format` for `"interval-bound@1"` (backed by `intervalJudge`). -/
+@[expose] def intervalBoundFormat : Format :=
+  { Obend.Elab.AutoCert.intervalFormat with name := "interval-bound" }
+
+/-- Registered `Format` for `"groebner-ideal@1"` (backed by `groebnerJudge`). -/
+@[expose] def groebnerIdealFormat : Format :=
+  { Obend.Elab.AutoCert.groebnerFormat with name := "groebner-ideal" }
+
+/-- **The one registry.** Every format a node, a session (`Obend.FFI.Bridge.sessionJudgeFormats`)
+or a turn witness (`Obend.Vault.checkTurnWitness`) accepts is listed here, by name and version.
+A format belongs here only if its decoders READ their input: a decoder that accepts any string
+(as the 2026-11-03 `real-analysis@1` draft did, mapping every non-empty query to the trivial SOS
+goal `1 ≥ 0`) makes every witness naming it pass, so it was removed on 2026-11-04. -/
+@[expose] def registry : List Format :=
   [ Lrat.format
+  , drexClearingFormat
+  , Obend.Logic.clearingFormat
+  , intervalBoundFormat
+  , Obend.Elab.AutoCert.intervalFormat
+  , Obend.Elab.AutoCert.taylorModelFormat
+  , groebnerIdealFormat
+  , Obend.Elab.AutoCert.groebnerFormat
+  , Obend.Logic.worldCarryFormat
+  , Obend.Logic.claimFormat
+  , Obend.Elab.Workbook.workbookTransportFormat
   , dfaFormat
   , cfgCompactFormat
   , dclutchHoardFormat
@@ -47,7 +79,7 @@ def registry : List Format :=
   ] ++ Obend.Hardware.Judge.hardwareFormats
 
 /-- Look a format up by name and version. -/
-def Format.find? (name version : String) : Option Format :=
+@[expose] def Format.find? (name version : String) : Option Format :=
   registry.find? fun F => F.name == name && F.version == version
 
 end Obend.Judge
