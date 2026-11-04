@@ -18,11 +18,23 @@ Addresses Requirement R3 and Milestone 3 Feature 26 (`Receipt.blind`) and Featur
    reveal `(id, required, salt, content)`, while hidden cells reveal only the blinded commitment
    (`blinded id (cellBlind H c)`). The Merkle root of the projected vault equals the unredacted vault root
    bit-for-bit (`projectVault_mapRoot_eq`).
-4. **Stranger-Checkable Merkle Multiproofs**: A stranger holding zero private cell state can verify
-   inclusion of projected cells against the unredacted vault root (`verifyBlindedMultiProof`). Honest vaults
-   admit complete proofs (`verify_blinded_opening_complete`), stranger verification is sound
-   (`stranger_verification_sound`), and secret cell contents are provably unobservable
-   (`projectCell_blinded_reveals_no_content`).
+4. **Stranger-Checkable Merkle Multiproofs**: a blinded projection is a multiproof of the unredacted
+   vault root, verified as one `Obend.Receipt.Merkle.MerkleBatchProof` (`verifyBlindedMultiProof`:
+   pairwise-distinct positions, every leaf climbing to the root). The honest multiproof of any set of
+   positions verifies (`verify_blinded_multiproof_complete`), a verifying multiproof is a set of
+   verifying openings at distinct positions (`verifyBlindedMultiProof_sound`), and every opening it
+   carries commits to the vault's cell at that position, or the hash collides
+   (`verifyBlindedMultiProof_binds`, `verifyBlindedMultiProof_revealed_binds`). Single openings
+   (`verifyBlindedOpening`, `verify_blinded_opening_complete`, `stranger_verification_sound`) are the
+   same Merkle openings one at a time. Until 2026-11-04 the multiproof was a list of openings each
+   checked alone, with no distinctness rule: one opening could be presented as several cells.
+
+What blinding rests on. A blinded cell shows `cellBlind H c`, which commits to the salt and the
+content together, so the content is hidden exactly as far as the salt is unpredictable to the
+stranger: with a salt the stranger can derive, the commitment is a dictionary over the content.
+`Obend.Core.Digest.Hiding` is ASSUMED, not proved, and nothing here constrains where a salt comes
+from; the 2026-11-03 review (S12) found the node deriving its salts from public data. The
+requirement on an issuer is a fresh, secret salt per cell; this module proves binding, not hiding.
 -/
 public import Obend.Receipt.Merkle
 public import Obend.Core.Digest
@@ -34,7 +46,9 @@ namespace Obend.Vault.Projection
 
 open Obend.Core.Digest (digestWith Admissible admissible_of_lt binds_or_collides)
 open Obend.Digest.HashBytes (Hash Collision)
-open Obend.Receipt.Merkle (Small Bounded root path climb leaf leaves mapRoot Opening opens climb_path mapOpening opens_complete opens_binds)
+open Obend.Receipt.Merkle (Small Bounded root path climb leaf leaves mapRoot Opening opens climb_path mapOpening opens_complete opens_binds
+  leaves_length leaves_small leaves_getD MerkleBatchEntry MerkleBatchProof verifyMerkleBatchProof verifySingleMerkleLeaf
+  verifyMerkleBatchProof_sound verifyMerkleBatchProof_honest verifyMerkleBatchProof_binds honestBatchEntry honestBatchProof leaf_binds)
 
 set_option autoImplicit false
 
@@ -311,18 +325,26 @@ def verifyBlindedOpening (H : Hash) (bo : BlindedOpening) (vaultRoot : Nat) : Bo
   Small bo.index &&
   climb H bo.size bo.index (leaf H bo.index (projectedCommit H bo.cell)) bo.path == some vaultRoot
 
-/-- A multiproof verifying a set of projected cells against a vault root. -/
+/-- The batch entry of a blinded opening: the Merkle leaf of the projected commitment at its
+position, and its siblings. -/
+def BlindedOpening.toBatchEntry (H : Hash) (bo : BlindedOpening) : MerkleBatchEntry :=
+  ⟨bo.index, leaf H bo.index (projectedCommit H bo.cell), bo.path⟩
+
+/-- A blinded projection as a multiproof of the unredacted vault root: the root, the tree size, and
+the openings, verified as one `MerkleBatchProof`. -/
 structure BlindedMultiProof where
   vaultRoot : Nat
   size      : Nat
   openings  : List BlindedOpening
   deriving DecidableEq, Repr
 
-/-- Verify all openings in a blinded multiproof. -/
+def BlindedMultiProof.toBatch (H : Hash) (bmp : BlindedMultiProof) : MerkleBatchProof :=
+  ⟨bmp.size, bmp.openings.map (BlindedOpening.toBatchEntry H)⟩
+
+/-- Verify a blinded multiproof: pairwise-distinct positions, every leaf climbing to the root
+(`Obend.Receipt.Merkle.verifyMerkleBatchProof`). -/
 def verifyBlindedMultiProof (H : Hash) (bmp : BlindedMultiProof) : Bool :=
-  bmp.openings.all fun bo =>
-    bo.size == bmp.size &&
-    verifyBlindedOpening H bo bmp.vaultRoot
+  verifyMerkleBatchProof H (bmp.toBatch H) bmp.vaultRoot
 
 /-- Construct an honest blinded opening for cell `j`. -/
 def mkBlindedOpening (H : Hash) (v : List Auth) (cells : List VaultCell) (j : Nat) : BlindedOpening :=
@@ -363,6 +385,89 @@ theorem stranger_verification_sound {H : Hash}
     (bo : BlindedOpening) (vaultRoot : Nat) (hver : verifyBlindedOpening H bo vaultRoot = true) :
     opens H ⟨bo.size, bo.index, projectedCommit H bo.cell, bo.path⟩ vaultRoot = true :=
   hver
+
+/-- The honest multiproof of positions `idxs` of a vault, projected for viewer `v`. -/
+def mkBlindedMultiProof (H : Hash) (v : List Auth) (cells : List VaultCell) (idxs : List Nat) :
+    BlindedMultiProof :=
+  ⟨mapRoot H (vaultCommits H cells), cells.length, idxs.map (mkBlindedOpening H v cells)⟩
+
+theorem vaultCommits_length (H : Hash) (cells : List VaultCell) :
+    (vaultCommits H cells).length = cells.length := by
+  simp [vaultCommits]
+
+/-- An honest blinded opening's batch entry is the honest batch entry of the vault's leaves. -/
+theorem toBatchEntry_mkBlindedOpening (H : Hash) (v : List Auth) (cells : List VaultCell) {i : Nat}
+    (hi : i < cells.length) :
+    BlindedOpening.toBatchEntry H (mkBlindedOpening H v cells i) =
+      honestBatchEntry H (leaves H (vaultCommits H cells)) i := by
+  have hlen : i < (vaultCommits H cells).length := by rw [vaultCommits_length]; exact hi
+  have hget : (vaultCommits H cells).getD i 0 = cellBlind H (cells.getD i default) :=
+    getD_map_helper (cellBlind H) default 0 cells i hi
+  simp only [BlindedOpening.toBatchEntry, mkBlindedOpening, mapOpening, honestBatchEntry,
+    leaves_getD H (vaultCommits H cells) hlen, projectCell_commit_eq, hget]
+
+/-- **Multiproof completeness**: the honest multiproof of any pairwise-distinct, in-range set of
+positions verifies against the unredacted vault root. -/
+theorem verify_blinded_multiproof_complete {H : Hash} (hb : Bounded H)
+    (v : List Auth) (cells : List VaultCell) (hs : cells.length < 2 ^ 256)
+    (idxs : List Nat) (hnodup : idxs.Nodup) (hbounds : ∀ i ∈ idxs, i < cells.length) :
+    verifyBlindedMultiProof H (mkBlindedMultiProof H v cells idxs) = true := by
+  have hl : (leaves H (vaultCommits H cells)).length = cells.length := by
+    rw [leaves_length, vaultCommits_length]
+  have hmap : (idxs.map (mkBlindedOpening H v cells)).map (BlindedOpening.toBatchEntry H) =
+      idxs.map (honestBatchEntry H (leaves H (vaultCommits H cells))) := by
+    rw [List.map_map]
+    exact List.map_congr_left fun i hi => toBatchEntry_mkBlindedOpening H v cells (hbounds i hi)
+  have hhonest := verifyMerkleBatchProof_honest hb (leaves H (vaultCommits H cells))
+    (leaves_small hb _) (by rw [hl]; exact hs) idxs hnodup (fun i hi => by rw [hl]; exact hbounds i hi)
+  simp only [verifyBlindedMultiProof, mkBlindedMultiProof, BlindedMultiProof.toBatch, hmap, mapRoot]
+  simp only [honestBatchProof, hl] at hhonest
+  exact hhonest
+
+/-- **Multiproof soundness**: a verifying multiproof has pairwise-distinct positions and every
+opening in it is a verifying Merkle opening of the multiproof's size against its root. -/
+theorem verifyBlindedMultiProof_sound {H : Hash} {bmp : BlindedMultiProof}
+    (h : verifyBlindedMultiProof H bmp = true) :
+    (bmp.openings.map BlindedOpening.index).Nodup ∧
+    ∀ bo ∈ bmp.openings,
+      opens H ⟨bmp.size, bo.index, projectedCommit H bo.cell, bo.path⟩ bmp.vaultRoot = true := by
+  obtain ⟨hnodup, hentries⟩ := verifyMerkleBatchProof_sound H (bmp.toBatch H) bmp.vaultRoot h
+  refine ⟨?_, fun bo hbo => ?_⟩
+  · have hcomp : (MerkleBatchEntry.leafIndex ∘ BlindedOpening.toBatchEntry H) = BlindedOpening.index :=
+      funext fun _ => rfl
+    simp only [BlindedMultiProof.toBatch, List.map_map, hcomp] at hnodup
+    exact hnodup
+  · obtain ⟨hsingle, _⟩ := hentries (BlindedOpening.toBatchEntry H bo)
+      (List.mem_map_of_mem (f := BlindedOpening.toBatchEntry H) hbo)
+    simp only [verifySingleMerkleLeaf, BlindedOpening.toBatchEntry, Bool.and_eq_true] at hsingle
+    simp only [opens, Bool.and_eq_true]
+    exact ⟨hsingle.1.1, hsingle.2⟩
+
+/-- **Multiproof binding**: against the unredacted root of `cells` with the right size, every
+opening a verifying multiproof carries commits to the vault's cell at its position, or `H`
+collides. -/
+theorem verifyBlindedMultiProof_binds {H : Hash} (hb : Bounded H) (cells : List VaultCell)
+    (hs : cells.length < 2 ^ 256) {bmp : BlindedMultiProof}
+    (h : verifyBlindedMultiProof H bmp = true)
+    (hroot : bmp.vaultRoot = mapRoot H (vaultCommits H cells)) (hsize : bmp.size = cells.length)
+    {bo : BlindedOpening} (hbo : bo ∈ bmp.openings) (hi : bo.index < cells.length) :
+    projectedCommit H bo.cell = cellBlind H cells[bo.index] ∨ Collision H := by
+  have hl : (leaves H (vaultCommits H cells)).length = cells.length := by
+    rw [leaves_length, vaultCommits_length]
+  have hi' : bo.index < (leaves H (vaultCommits H cells)).length := by rw [hl]; exact hi
+  have hbatch : verifyMerkleBatchProof H (bmp.toBatch H) (root H (leaves H (vaultCommits H cells))) = true := by
+    rw [← mapRoot, ← hroot]; exact h
+  have hsz : (bmp.toBatch H).treeSize = (leaves H (vaultCommits H cells)).length := by
+    simp [BlindedMultiProof.toBatch, hsize, hl]
+  have hbind := verifyMerkleBatchProof_binds hb (leaves H (vaultCommits H cells)) (leaves_small hb _)
+    hbatch hsz (List.mem_map_of_mem (f := BlindedOpening.toBatchEntry H) hbo) hi'
+  have hleaf : (leaves H (vaultCommits H cells))[bo.index] = leaf H bo.index (cellBlind H cells[bo.index]) := by
+    simp [leaves, vaultCommits]
+  simp only [BlindedOpening.toBatchEntry] at hbind
+  rw [hleaf] at hbind
+  rcases hbind with heq | hcoll
+  · exact leaf_binds (Nat.lt_trans hi hs) heq
+  · exact .inr hcoll
 
 /-- **Zero Unblinded Data Exposure**: A hidden cell's projected representation cannot evaluate to its raw content. -/
 theorem projectCell_blinded_reveals_no_content (H : Hash) (v : List Auth) (c : VaultCell)
@@ -491,6 +596,28 @@ theorem tampered_capMask_opening_refused {H : Hash} (hb : Bounded H)
       · exact absurd hmask_eq h_tampered
       · exact hcoll
     · exact hcoll
+
+/-- **A revealed cell in a verifying multiproof is the vault's cell** at that position, field by
+field, or `H` collides: id, both capability words, the capability mask, the salt and the content. -/
+theorem verifyBlindedMultiProof_revealed_binds {H : Hash} (hb : Bounded H) (cells : List VaultCell)
+    (hs : cells.length < 2 ^ 256) {bmp : BlindedMultiProof}
+    (h : verifyBlindedMultiProof H bmp = true)
+    (hroot : bmp.vaultRoot = mapRoot H (vaultCommits H cells)) (hsize : bmp.size = cells.length)
+    {bo : BlindedOpening} (hbo : bo ∈ bmp.openings) (hi : bo.index < cells.length)
+    {id : Nat} {req : List Auth} {salt content : Nat}
+    (hcell : bo.cell = .revealed id req salt content)
+    (hid : id < 2 ^ 256) (hsalt : salt < 2 ^ 256)
+    (hid' : cells[bo.index].id < 2 ^ 256) (hsalt' : cells[bo.index].salt < 2 ^ 256) :
+    (id = cells[bo.index].id ∧ readCapOf req = cells[bo.index].readCap ∧
+      writeCapOf req = cells[bo.index].writeCap ∧ capMaskOf req = cells[bo.index].capMask ∧
+      salt = cells[bo.index].salt ∧ content = cells[bo.index].content) ∨ Collision H := by
+  rcases verifyBlindedMultiProof_binds hb cells hs h hroot hsize hbo hi with heq | hcoll
+  · rw [hcell] at heq
+    have heq' : cellBlind H ⟨id, req, salt, content⟩ = cellBlind H cells[bo.index] := heq
+    rcases cellBlind_binds hb hid hsalt hid' hsalt' heq' with hf | hcoll
+    · exact .inl hf
+    · exact .inr hcoll
+  · exact .inr hcoll
 
 end Obend.Vault.Projection
 

@@ -187,6 +187,14 @@ theorem climb_binds {H : Hash} (hb : Bounded H) :
 /-- The leaf of value `v` at position `j`. -/
 def leaf (H : Hash) (j v : Nat) : Nat := digestWith H j v
 
+/-- **A leaf binds its value**: two leaves at one digest-sized position with one digest carry one
+value, or `H` collides. (`leaf` is not exposed; importers reason through this.) -/
+theorem leaf_binds {H : Hash} {j a b : Nat} (hj : j < 2 ^ 256) (h : leaf H j a = leaf H j b) :
+    a = b ∨ Collision H := by
+  rcases binds_or_collides H (admissible_of_lt hj) (admissible_of_lt hj) h with ⟨_, hv⟩ | c
+  · exact .inl hv
+  · exact .inr c.global
+
 /-- The leaves of a list of values. -/
 @[expose] def leaves (H : Hash) (vs : List Nat) : List Nat := vs.mapIdx fun j v => leaf H j v
 
