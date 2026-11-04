@@ -42,7 +42,7 @@ connecting:
    `.nat64`) agrees with both `LeanKernel.kernelWhnf` and `Core4.Evaluates`.
 -/
 public import Obend.Tactic.Tooth
-public import Obend.Leaf.Static
+public import Obend.Leaf.Futamura
 public import Obend.Lower.LeanKernel
 public import Obend.Lower.Proofs.Hardware
 public import Obend.Hardware.ReductionMachine

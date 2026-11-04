@@ -15,7 +15,21 @@ gone, not renamed (`review/EXPERT-compiler-runtime-20261103.md` §2.1; the decis
 
 What remains is the folder and the book specializer, in `Obend.Leaf.Static`, under the namespace
 `Obend.Leaf.Static`. This file only re-exports that module so that `import Obend.Leaf.Futamura`
-still resolves; it declares nothing, so `open Obend.Leaf.Futamura` is an error by design. When the
-last importer has moved to `Obend.Leaf.Static`, delete this file.
+still resolves and `open Obend.Leaf.Futamura` still parses: the namespace holds aliases of the four
+surviving entry points (`dataPinSpecialize`, `specializeBook`, `foldBook`, `staticApply`) and nothing
+else. When the last importer has moved to `Obend.Leaf.Static`, delete this file.
 -/
 public import Obend.Leaf.Static
+
+public section
+namespace Obend.Leaf.Futamura
+/-- The folder, under the retired name. -/
+abbrev dataPinSpecialize := Obend.Leaf.Static.dataPinSpecialize
+/-- The book specializer, under the retired name. -/
+abbrev specializeBook := Obend.Leaf.Static.specializeBook
+/-- The folded book, under the retired name. -/
+abbrev foldBook := Obend.Leaf.Static.foldBook
+/-- What was called the first Futamura projection: fold an application. -/
+abbrev staticApply := Obend.Leaf.Static.staticApply
+end Obend.Leaf.Futamura
+end
