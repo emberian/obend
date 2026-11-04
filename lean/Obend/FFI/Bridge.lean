@@ -1256,7 +1256,12 @@ def cellWeaveCertCore (s : SessionState) (certBytes : ByteArray) : SessionState 
         let pending := s.pendingProposals.filter (fun (p : PendingTurnProposal) => p.tidBytes != tidBytes) ++ [proposal]
         ({ s with pendingProposals := pending, scratch := tidBytes, lastError := none }, tidBytes, 0)
       else
-        ({ s with lastError := some s!"Judge format {w.formatName}@{w.version} is not registered or refused the certificate" }, ByteArray.empty, -8)
+        let why := match Obend.Vault.findJudgeFormat sessionJudgeFormats w.formatName w.version with
+          | some F =>
+            let e := F.explain w.grade w.objBytes w.certBytes
+            if e.isEmpty then "refused the certificate" else s!"refused the certificate: {e}"
+          | none => "is not registered"
+        ({ s with lastError := some s!"Judge format {w.formatName}@{w.version} {why}" }, ByteArray.empty, -8)
 
 
 /-! ## What the bridge refuses, and what an acceptance means

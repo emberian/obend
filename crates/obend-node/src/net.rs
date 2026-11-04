@@ -1,18 +1,19 @@
 //! `obend-node::net` — the in-process multi-validator SIMULATION over loopback sockets
 //!
 //! What this protocol is, against `lean/Obend/Consensus/SimplexProtocol.lean` (2026-11-04): a
-//! ONE-PHASE variant. A node casts its finalize vote on the leader's proposal itself; there is no
-//! notarize vote, no notarized parent chain and no dummy entry for a skipped view (a `SkipCert`
-//! is a quorum of skip votes, not a chain entry). So the Lean rules it skips are the block-vote
-//! rule (`VoteRule`: vote only for a block on a notarized chain) and the finalize rule
-//! (`Step.finalize`: finalize only a block seen notarized), and the theorems it loses are
-//! `finalized_notarized`, `finalized_no_dummy` and everything built on them
-//! (`finalized_prefix_of_notarized`, `finalized_consistent`, `fin_cert_unique_per_height`).
-//! What it keeps: vote once per view (`check_can_vote_inner`), the parent/height check on the
-//! current view only, and `accountable` (two conflicting votes by one node;
-//! `EquivocationSlashReceipt` carries the two signed votes). The module is not an instance of
-//! the Lean relation; it is the simulator the relation's §5 of the 2026-11-03 review asks to be
-//! replaced by a step function proved against that module.
+//! node casts ONE vote per view for the leader's proposal (`SimplexVoteKind::Vote`, the
+//! relation's block vote) or for the view's dummy (`Skip`), casts its finalize vote only after it
+//! voted for the block and saw 2f+1 votes for it (`try_cast_finalize`, `Step.finalize`), and a
+//! `FinCert` is 2f+1 finalize votes. The sentence "this is a simulator of the relation" is
+//! CHECKED, not labelled: every message a cluster's nodes send is recorded in send order as a
+//! `SimplexTrace`, a vote for `(view, hash)` read as a vote for the chain that block determines,
+//! and the Lean kernel's `simplex-trace@1` judge (`Obend.Consensus.SimplexTrace.checkTrace`,
+//! sound for `Reach`) decides whether the run was a sequence of steps
+//! (`tests/simplex_trace_kernel.rs`: an honest two-block run is accepted; a second vote by one
+//! node in one view is refused and the refusal names the slashing receipt). What the relation
+//! does not model and the node has anyway: timers (view skips are harness-driven), the WAL, the
+//! wire, signatures (the trace's sender is its signer). What the node still is not: an instance
+//! of the relation by construction; the trace is checked after the fact, per run.
 //!
 //! N simulated validators in one process (`127.0.0.1:0` ephemeral TCP and UDP ports), with:
 //! - Wire-serialized (JSON, ember's 2026-11-02 call), `SimulatorKeypair`-signed, `cSHAKE256`
@@ -2038,6 +2039,174 @@ impl DurableNodeWal {
 }
 
 /// Internal state of a `NetworkedValidatorNode`.
+/// One entry of a chain as `Obend.Consensus.SimplexProtocol.Entry` reads it: the block a view
+/// notarized (its hash as the payload) or the view's dummy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceEntry {
+    Block { view: u64, payload: [u8; 32] },
+    Dummy { view: u64 },
+}
+
+/// What a trace message is for (`SimplexProtocol.Target`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceTarget {
+    Block(Vec<TraceEntry>),
+    Dummy(u64),
+}
+
+/// A message of the run as `SimplexProtocol.Msg` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceMsg {
+    pub sender: usize,
+    pub view: u64,
+    pub kind: &'static str,
+    pub target: TraceTarget,
+}
+
+/// The run as a trace (2026-11-04): every consensus message the cluster's nodes sent, in send
+/// order, translated into the message shape of `lean/Obend/Consensus/SimplexProtocol.lean`.
+/// A node's vote for `(view, block_hash)` is a vote for the chain that block determines: its
+/// parent links (learned from proposals) back to genesis, with a dummy for every view in
+/// between. Certificates, slashing receipts and fast-path messages are not messages of the
+/// relation and are not recorded. `to_json` is the `simplex-trace@1` certificate; the Lean
+/// checker (`Obend.Consensus.SimplexTrace.checkTrace`) decides whether the run is reachable.
+#[derive(Debug, Clone)]
+pub struct SimplexTrace {
+    pub msgs: Vec<TraceMsg>,
+    blocks: BTreeMap<[u8; 32], (u64, [u8; 32])>,
+    genesis: [u8; 32],
+}
+
+impl SimplexTrace {
+    pub fn new(genesis: [u8; 32]) -> Self {
+        Self { msgs: Vec::new(), blocks: BTreeMap::new(), genesis }
+    }
+
+    /// The chain a block at `view` determines: its ancestors' entries, dummies for skipped
+    /// views, then the block itself.
+    pub fn chain_of(&self, view: u64, block_hash: [u8; 32]) -> Vec<TraceEntry> {
+        let mut chain = match self.blocks.get(&block_hash) {
+            Some((v, parent)) if *v == view && *parent != self.genesis => {
+                match self.blocks.get(parent) {
+                    Some((pv, _)) if *pv < view => self.chain_of(*pv, *parent),
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        let mut next = chain.len() as u64 + 1;
+        while next < view {
+            chain.push(TraceEntry::Dummy { view: next });
+            next += 1;
+        }
+        chain.push(TraceEntry::Block { view, payload: block_hash });
+        chain
+    }
+
+    pub fn record(&mut self, msg: &ConsensusNetMessage) {
+        match msg {
+            ConsensusNetMessage::Propose(pc, _) => {
+                self.blocks.insert(pc.block_hash, (pc.view, pc.parent_hash));
+                let chain = self.chain_of(pc.view, pc.block_hash);
+                self.msgs.push(TraceMsg {
+                    sender: pc.leader_vote.voter_id,
+                    view: pc.view,
+                    kind: "propose",
+                    target: TraceTarget::Block(chain),
+                });
+            }
+            ConsensusNetMessage::Vote(v) => match v.kind {
+                SimplexVoteKind::Vote => {
+                    let chain = self.chain_of(v.view, v.block_hash);
+                    self.msgs.push(TraceMsg { sender: v.voter_id, view: v.view, kind: "vote", target: TraceTarget::Block(chain) });
+                }
+                SimplexVoteKind::Skip => {
+                    self.msgs.push(TraceMsg { sender: v.voter_id, view: v.view, kind: "vote", target: TraceTarget::Dummy(v.view) });
+                }
+                SimplexVoteKind::Finalize => {
+                    let chain = self.chain_of(v.view, v.block_hash);
+                    self.msgs.push(TraceMsg { sender: v.voter_id, view: v.view, kind: "finalize", target: TraceTarget::Block(chain) });
+                }
+                SimplexVoteKind::Propose => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// The 256-bit hash as a decimal integer, which Lean's JSON reads as a `Nat`.
+    pub fn u256_decimal(bytes: &[u8; 32]) -> String {
+        let mut digits: Vec<u8> = bytes.to_vec();
+        let mut out = Vec::new();
+        loop {
+            let mut rem: u32 = 0;
+            let mut any = false;
+            for d in digits.iter_mut() {
+                let cur = (rem << 8) | *d as u32;
+                *d = (cur / 10) as u8;
+                rem = cur % 10;
+                if *d != 0 {
+                    any = true;
+                }
+            }
+            out.push(b'0' + rem as u8);
+            if !any {
+                break;
+            }
+        }
+        out.reverse();
+        String::from_utf8(out).expect("decimal digits")
+    }
+
+    fn entry_json(e: &TraceEntry) -> String {
+        match e {
+            TraceEntry::Block { view, payload } => {
+                format!("{{\"block\":{{\"view\":{view},\"payload\":{}}}}}", Self::u256_decimal(payload))
+            }
+            TraceEntry::Dummy { view } => format!("{{\"dummy\":{view}}}"),
+        }
+    }
+
+    fn target_json(t: &TraceTarget) -> String {
+        match t {
+            TraceTarget::Block(chain) => {
+                let entries: Vec<String> = chain.iter().map(Self::entry_json).collect();
+                format!("{{\"block\":[{}]}}", entries.join(","))
+            }
+            TraceTarget::Dummy(v) => format!("{{\"dummy\":{v}}}"),
+        }
+    }
+
+    /// The `simplex-trace@1` certificate: the messages in send order.
+    pub fn to_json(&self) -> String {
+        let items: Vec<String> = self
+            .msgs
+            .iter()
+            .map(|m| {
+                format!(
+                    "{{\"sender\":{},\"view\":{},\"kind\":\"{}\",\"target\":{}}}",
+                    m.sender,
+                    m.view,
+                    m.kind,
+                    Self::target_json(&m.target)
+                )
+            })
+            .collect();
+        format!("[{}]", items.join(","))
+    }
+
+    /// The `simplex-trace@1` object: the committee `0..n`, `f`, and the nodes declared faulty.
+    pub fn protocol_json(num_validators: usize, fault_tolerance: usize, faulty: &[usize]) -> String {
+        let committee: Vec<String> = (0..num_validators).map(|i| i.to_string()).collect();
+        let faulty: Vec<String> = faulty.iter().map(|i| i.to_string()).collect();
+        format!(
+            "{{\"committee\":[{}],\"f\":{},\"faulty\":[{}]}}",
+            committee.join(","),
+            fault_tolerance,
+            faulty.join(",")
+        )
+    }
+}
+
 pub struct ValidatorNodeState {
     pub node_id: usize,
     pub total_parties: usize,
@@ -2090,6 +2259,9 @@ pub struct ValidatorNodeState {
 
     /// Durable Write-Ahead Log (`Obend.Run.Durable`).
     pub wal: DurableNodeWal,
+    /// The cluster's trace of the run (`SimplexTrace`), shared by every node; `None` for a node
+    /// outside a cluster.
+    pub trace: Option<Arc<Mutex<SimplexTrace>>>,
 
     /// Genesis DPR slot name & law pin digest restored before replaying `WalEntry::DprLawUpgraded`.
     pub genesis_slot_name: String,
@@ -2379,6 +2551,7 @@ impl NetworkedValidatorNode {
             turn_finality: BTreeMap::new(),
             epoch_receipts: Vec::new(),
             wal: DurableNodeWal::new(),
+            trace: None,
             genesis_slot_name,
             genesis_law_pin_digest,
             silicon_accel,
@@ -2460,9 +2633,11 @@ impl NetworkedValidatorNode {
 
     /// Broadcast a `ConsensusNetMessage` from this node to all peers over the configured socket transport.
     pub fn broadcast(&self, msg: ConsensusNetMessage) -> Result<(), NodeError> {
-        let env = WireEnvelope::create(&self.keypair, msg);
         let (transport, tcp_addrs, udp_addrs) = {
             let mut st = self.state.lock().unwrap();
+            if let Some(trace) = &st.trace {
+                trace.lock().unwrap().record(&msg);
+            }
             st.wire_frames_sent += st.peer_tcp_addrs.len();
             (
                 st.transport,
@@ -2470,6 +2645,7 @@ impl NetworkedValidatorNode {
                 st.peer_udp_addrs.clone(),
             )
         };
+        let env = WireEnvelope::create(&self.keypair, msg);
         Self::dispatch_envelope_to_peers(transport, &tcp_addrs, &udp_addrs, &env)
     }
 
@@ -2524,6 +2700,12 @@ impl NetworkedValidatorNode {
             }
             st.wire_frames_received += 1;
             let responses = Self::process_consensus_message(&mut st, keypair, env.payload);
+            if let Some(trace) = &st.trace {
+                let mut t = trace.lock().unwrap();
+                for m in &responses {
+                    t.record(m);
+                }
+            }
             st.wire_frames_sent += responses.len() * st.peer_tcp_addrs.len();
             (
                 responses,
@@ -2597,8 +2779,10 @@ impl NetworkedValidatorNode {
                     (prop_cert.clone(), payload),
                 );
 
-                // If this node is not slashed and has not skipped `prop_cert.view`, cast a Finalize vote
-                // for this valid proposal only if WAL confirms no conflicting vote was cast in `prop_cert.view`.
+                // Notarize phase (2026-11-04, `SimplexProtocol.Step.vote`): a node that is not
+                // slashed and has not skipped `prop_cert.view` casts its one vote of the view for
+                // this proposal. The finalize vote comes only when 2f+1 such votes are in
+                // (`try_cast_finalize`, `Step.finalize`).
                 if !st.slashed_validators.contains(&st.node_id)
                     && !st.broadcast_skip_views.contains(&prop_cert.view)
                     && !st.skip_certs.iter().any(|c| c.view == prop_cert.view)
@@ -2606,7 +2790,7 @@ impl NetworkedValidatorNode {
                     let already_voted_in_view = st.seen_votes.iter().any(|v| {
                         v.voter_id == st.node_id
                             && v.view == prop_cert.view
-                            && (v.kind == SimplexVoteKind::Finalize
+                            && (v.kind == SimplexVoteKind::Vote
                                 || v.kind == SimplexVoteKind::Skip)
                     });
                     if !already_voted_in_view
@@ -2614,23 +2798,29 @@ impl NetworkedValidatorNode {
                             .wal
                             .check_can_vote(
                                 prop_cert.view,
-                                SimplexVoteKind::Finalize,
+                                SimplexVoteKind::Vote,
                                 prop_cert.block_hash,
                             )
                             .is_ok()
                     {
-                        let fin_vote = SignedSimplexVote::new(
+                        let notarize_vote = SignedSimplexVote::new(
                             keypair,
                             prop_cert.view,
-                            SimplexVoteKind::Finalize,
+                            SimplexVoteKind::Vote,
                             prop_cert.block_hash,
                         );
-                        if st.wal.record_vote(fin_vote.clone()).is_err() {
+                        if st.wal.record_vote(notarize_vote.clone()).is_err() {
                             return outbound;
                         }
-                        let _ = Self::record_vote_and_check_equivocation(st, &fin_vote);
-                        outbound.push(ConsensusNetMessage::Vote(fin_vote));
+                        let _ = Self::record_vote_and_check_equivocation(st, &notarize_vote);
+                        outbound.push(ConsensusNetMessage::Vote(notarize_vote));
                     }
+                }
+                // Peers' votes may have arrived before the proposal: the notarization may be in.
+                if let Some(fin_vote) =
+                    Self::try_cast_finalize(st, keypair, prop_cert.view, prop_cert.block_hash)
+                {
+                    outbound.push(fin_vote);
                 }
 
                 // Check if quorum is already satisfied
@@ -2658,6 +2848,18 @@ impl NetworkedValidatorNode {
                 }
 
                 match vote.kind {
+                    SimplexVoteKind::Vote => {
+                        if let Some(fin_vote) =
+                            Self::try_cast_finalize(st, keypair, vote.view, vote.block_hash)
+                        {
+                            outbound.push(fin_vote);
+                        }
+                        if let Some(fin_msg) =
+                            Self::try_assemble_fincert_and_finalize(st, vote.view, vote.block_hash)
+                        {
+                            outbound.push(fin_msg);
+                        }
+                    }
                     SimplexVoteKind::Finalize => {
                         if let Some(fin_msg) =
                             Self::try_assemble_fincert_and_finalize(st, vote.view, vote.block_hash)
@@ -2873,6 +3075,58 @@ impl NetworkedValidatorNode {
             st.seen_votes.push(vote.clone());
         }
         None
+    }
+
+    /// `SimplexProtocol.Step.finalize`: cast the finalize vote for `(view, block_hash)` once this
+    /// node voted for it in `view`, has not skipped `view`, and has seen a quorum of votes for it;
+    /// at most once per view.
+    fn try_cast_finalize(
+        st: &mut ValidatorNodeState,
+        keypair: &SimulatorKeypair,
+        view: u64,
+        block_hash: [u8; 32],
+    ) -> Option<ConsensusNetMessage> {
+        if st.slashed_validators.contains(&st.node_id)
+            || st.broadcast_skip_views.contains(&view)
+            || st.skip_certs.iter().any(|c| c.view == view)
+        {
+            return None;
+        }
+        let own_vote = st.seen_votes.iter().any(|v| {
+            v.voter_id == st.node_id
+                && v.view == view
+                && v.kind == SimplexVoteKind::Vote
+                && v.block_hash == block_hash
+        });
+        let own_finalize = st
+            .seen_votes
+            .iter()
+            .any(|v| v.voter_id == st.node_id && v.view == view && v.kind == SimplexVoteKind::Finalize);
+        if !own_vote || own_finalize {
+            return None;
+        }
+        let mut voters = BTreeSet::new();
+        for v in &st.seen_votes {
+            if v.view == view
+                && v.kind == SimplexVoteKind::Vote
+                && v.block_hash == block_hash
+                && !st.slashed_validators.contains(&v.voter_id)
+            {
+                voters.insert(v.voter_id);
+            }
+        }
+        if voters.len() < st.quorum_size {
+            return None;
+        }
+        if st.wal.check_can_vote(view, SimplexVoteKind::Finalize, block_hash).is_err() {
+            return None;
+        }
+        let fin_vote = SignedSimplexVote::new(keypair, view, SimplexVoteKind::Finalize, block_hash);
+        if st.wal.record_vote(fin_vote.clone()).is_err() {
+            return None;
+        }
+        let _ = Self::record_vote_and_check_equivocation(st, &fin_vote);
+        Some(ConsensusNetMessage::Vote(fin_vote))
     }
 
     fn try_assemble_skipcert(
@@ -3424,6 +3678,8 @@ pub enum TurnSubmissionOutcome {
 /// ephemeral loopback sockets with integrated `SandboxRunner` (`Powerbox` / `GrainConfig`).
 pub struct SimplexCluster {
     pub nodes: Vec<NetworkedValidatorNode>,
+    /// The run as a trace of `SimplexProtocol` messages (`SimplexTrace`).
+    pub trace: Arc<Mutex<SimplexTrace>>,
     pub fault_tolerance: usize,
     pub quorum_size: usize,
     pub transport: TransportProtocol,
@@ -3501,9 +3757,15 @@ impl SimplexCluster {
         for node in &nodes {
             node.set_peer_addresses(tcp_addrs.clone(), udp_addrs.clone());
         }
+        let genesis = nodes[0].state.lock().unwrap().committed_tip_hash;
+        let trace = Arc::new(Mutex::new(SimplexTrace::new(genesis)));
+        for node in &nodes {
+            node.state.lock().unwrap().trace = Some(trace.clone());
+        }
 
         Ok(Self {
             nodes,
+            trace,
             fault_tolerance,
             quorum_size,
             transport,
@@ -3850,6 +4112,16 @@ impl SimplexCluster {
     }
 
     /// Execute a networked `SkipCert` view-change round across live honest validators for `view`.
+    /// The run so far as the `simplex-trace@1` certificate (`SimplexTrace::to_json`).
+    pub fn trace_json(&self) -> String {
+        self.trace.lock().unwrap().to_json()
+    }
+
+    /// The `simplex-trace@1` object for this cluster, declaring `faulty` as the faulty set.
+    pub fn protocol_json(&self, faulty: &[usize]) -> String {
+        SimplexTrace::protocol_json(self.nodes.len(), self.fault_tolerance, faulty)
+    }
+
     pub fn run_view_skip(&mut self, view: u64) -> Result<SkipCert, NodeError> {
         let live_honest_ids = self.live_honest_validator_ids();
         if live_honest_ids.len() < self.quorum_size {

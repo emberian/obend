@@ -198,19 +198,18 @@ executable state machine and liveness do not.** What exists:
   gives at least f+1 such signers from two conflicting quorums with no fault bound assumed. No
   signatures (a message's sender is its signer), no timers, no liveness, no executable step
   function; `simplex_bounded_liveness_after_gst` does not exist.
-- **Rust, `crates/obend-node/src/net.rs`, an in-process simulator.** A ONE-ROUND protocol: the
-  leader of view v signs a proposal (`PropCert` is leader-signed, not a quorum); a validator in
-  view v casts a `Finalize` vote for a proposal that extends its committed tip at the next height;
-  `FinCert(v,b)` is 2f+1 such votes; a `SkipCert(v)` is 2f+1 skip votes cast by the harness
-  (`SimplexCluster::run_view_skip`; nodes have no timers). Two executable rules carry it across
-  views: a validator votes only in its current view (`Propose` handler), and never skips a view
-  it finalize-voted in (`DurableNodeWal::check_can_vote_inner`). Same-view agreement follows from
-  `qc_same_view_unique`; that `FinCert(v)` and `SkipCert(v)` never both exist, and that a finalized
-  block is applied only at the next height on the committed tip (`apply_finalized_block`), are
-  argued from those rules and tested, not proved. Against `SimplexProtocol.lean` it skips the
-  block-vote rule and the finalize rule (no notarize phase, no notarized parent chain, no dummy
-  entry), so `finalized_notarized`, `finalized_no_dummy` and the consistency theorems built on
-  them do not apply to it; its header says so. Keys are the simulator's (`SimulatorKeypair`,
+- **Rust, `crates/obend-node/src/net.rs`, an in-process simulator, checked against the
+  relation.** The leader of view v signs a proposal (`PropCert` is leader-signed); a validator
+  casts one vote per view, for the proposal (`Vote`) or the view's dummy (`Skip`); it casts a
+  `Finalize` vote only after voting for the block and seeing 2f+1 votes for it
+  (`try_cast_finalize`); `FinCert(v,b)` is 2f+1 finalize votes; a `SkipCert(v)` is 2f+1 skip
+  votes cast by the harness (nodes have no timers). Every message the cluster sends is recorded
+  as a `SimplexTrace` and judged by the kernel's `simplex-trace@1` format
+  (`Obend.Consensus.SimplexTrace`, `checkTrace_sound`): an honest two-block run is a reachable
+  trace and a second vote by one node in one view is refused with its slashing receipt named
+  (`crates/obend-node/tests/simplex_trace_kernel.rs`). So the consistency theorems apply to a
+  run exactly when its trace is accepted; the node is not an instance of the relation by
+  construction, and the WAL, wire and signatures are outside the relation. Keys are the simulator's (`SimulatorKeypair`,
   a Schnorr variant on edwards25519 with cSHAKE256, derived from the public
   `SimplexCluster::simulator_seed`); the WAL is a `Vec` in memory; wire frames are JSON.
 - **Fixed on 2026-11-04** (`review/EXPERT-distributed-security-20261103.md` S1): until then a

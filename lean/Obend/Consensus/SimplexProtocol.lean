@@ -30,9 +30,9 @@ What is proved, all from `Simplex.honest_quorum_intersection`:
   vote-once rule, and under the fault bound each is faulty (`signers_faulty`).
 
 What is not here: liveness, timers, signatures (a message's sender is taken as its signer), and
-the executable node. `crates/obend-node/src/net.rs` runs a one-phase variant that casts its
-finalize vote on the proposal itself, with no notarize vote and no dummy; its header names the
-rules it skips, and `finalized_no_dummy` / `finalized_notarized` are the ones it loses.
+the executable node. `Obend.Consensus.SimplexTrace` decides whether a recorded run was a sequence
+of these steps (`checkTrace_sound`), and `crates/obend-node/src/net.rs` records its run as that
+trace; the node casts one vote per view and finalizes only after a quorum of votes.
 
 `Obend.Consensus.Simplex.State` is not used: it is a per-node fragment of a five-kind protocol
 (`candidate`, `ready`) that is not this one, and nothing there is needed once the state is the

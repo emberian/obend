@@ -30,6 +30,7 @@ statement a byte-level acceptance establishes is the one the bytes decode to. A 
 a domain into a format's objects carries `encode_sound`; `Translation.sound` composes it with the
 checker.
 -/
+public import Obend.Core.Term
 public section
 namespace Obend
 set_option autoImplicit false
@@ -195,6 +196,17 @@ structure Judge.Format where
   badGrade : Nat
   /-- it is refused there, by a clause (and so at every larger grade, `refused_above`) -/
   bad_refused : ∃ k p, judge.check badGrade bad.1 bad.2 = .refused k p
+  /-- **Claim binding.** Whether the object wire `objWire` states the claim with Core4 code `claim`
+      (`λself. λsuper. λp₁ … λp_arity. body`). An external judge's verdict is about its *object*;
+      without this, a certificate for one object could discharge a claim about another (2026-11-04).
+      The default is "unbound": a format that does not say how its objects state a claim cannot
+      discharge one. The claim is passed as a term, not as its JSON statement, so that binders stay
+      kernel-reducible (`decide`). -/
+  bindsClaim : (claim : Obend.Core.Term.Term) → (arity : Nat) → (objWire : String) → Bool := fun _ _ _ => false
+  /-- **Why a refusal.** What a session reports when this format refuses a witness: the clause,
+      rendered, so the refusal names the thing (a node, a view, a receipt). A format that cannot
+      say returns `""` and the session reports only that it refused (2026-11-04). -/
+  explain : (grade : Nat) → (objWire certWire : String) → String := fun _ _ _ => ""
 
 namespace Judge.Format
 

@@ -35,6 +35,7 @@ public import Obend.Law.Contract
 public import Obend.Logic.Obligation
 public import Obend.Elab.AutoCert
 public import Obend.Elab.Workbook
+public import Obend.Consensus.SimplexTrace
 
 public section
 namespace Obend.Judge
@@ -76,6 +77,7 @@ goal `1 ≥ 0`) makes every witness naming it pass, so it was removed on 2026-11
   , Obend.Analysis.sosLyapunovFormat
   , Obend.Analysis.format
   , Obend.Lower.format
+  , Obend.Consensus.SimplexTrace.simplexTraceFormat
   ] ++ Obend.Hardware.Judge.hardwareFormats
 
 /-- Look a format up by name and version. -/

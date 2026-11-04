@@ -20,8 +20,8 @@ adversary as a step relation over the message list, `Reach`, the invariant every
 satisfies, and `finalized_consistent`, `fin_cert_unique_per_height` and `accountable` derived from
 `honest_quorum_intersection` here. `State`, `ViewRecord`, `register`, `broadcast`, `castVote`
 (§3–§4) are fragments of a five-kind protocol (`candidate`, `ready`) that is not Simplex; that
-module does not use them. There is no liveness theorem. The executable node is the one-phase
-simulator in `crates/obend-node/src/net.rs`, whose header names the rules it skips.
+module does not use them. There is no liveness theorem. `Obend.Consensus.SimplexTrace` checks a node's run against the
+relation (`checkTrace_sound`), and `crates/obend-node/src/net.rs` emits its run as that trace.
 
 Absorbs `minidregg/Kernel/GenericSimplex.lean`, `GenericSimplexQuorum.lean`,
 and `GenericSimplexCertificateSafety.lean`; Mathlib-free.

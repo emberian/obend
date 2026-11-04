@@ -105,6 +105,14 @@ fn main() {
         println!("cargo:rustc-link-lib=static=leanrt");
         println!("cargo:rustc-link-lib=static=leancpp");
     } else {
+        // `libleanshared.so` exports its own `_Unwind_*` (a bundled libgcc). If it precedes
+        // `libgcc_s` in the binary's needed-library order, a Rust panic resolves to Lean's
+        // unwinder and the process aborts ("failed to initiate panic, error 3") instead of
+        // unwinding, which turns every failing native test into a silent SIGABRT. Linking
+        // `gcc_s` first binds the unwinder to the system's (2026-11-04).
+        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+            println!("cargo:rustc-link-lib=dylib=gcc_s");
+        }
         if lib_so.exists() || lib_dylib.exists() {
             println!("cargo:rustc-link-lib=dylib=obend_Obend");
         } else {
