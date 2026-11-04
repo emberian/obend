@@ -100,14 +100,14 @@ pub fn solve_drex_batch(
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
 pub enum SandboxViolation {
-    #[error("agent '{agent}' has no registered mandate in Powerbox")]
-    MissingMandate { agent: String },
-    #[error("turn agent '{actual}' does not match mandate holder '{expected}'")]
-    AgentMismatch { expected: String, actual: String },
+    #[error("no mandate {mandate_id} in the Powerbox (named by {principal})")]
+    MissingMandate { principal: Principal, mandate_id: u64 },
+    #[error("{actual} is not the principal of mandate {mandate_id} ({holder}, under {grant})")]
+    NotThePrincipal { mandate_id: u64, holder: Principal, actual: Principal, grant: Grant },
     #[error("agent '{agent}' attempted unauthorized access to slot {slot_id}")]
     UnauthorizedSlotAccess { agent: String, slot_id: u64 },
-    #[error("agent '{agent}' lacks required capability {required:?}")]
-    MissingCapability { agent: String, required: IpcAuth },
+    #[error("{principal} under {grant} lacks required capability {required:?}")]
+    MissingCapability { principal: Principal, grant: Grant, required: IpcAuth },
     #[error("agent '{agent}' exceeded mandate budget (requested {requested}, remaining {remaining})")]
     BudgetExceeded {
         agent: String,
@@ -218,7 +218,15 @@ impl FinalityTier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultTurn {
     pub turn_id: [u8; 32],
+    /// The acting principal's name; with `principal_id` it is the vault member identity
+    /// (`Principal`) a mandate names.
     pub agent: String,
+    /// The acting principal's member id (`Principal.id`); 0 for a turn that names none.
+    #[serde(default)]
+    pub principal_id: u64,
+    /// The mandate the turn acts under; 0 for a turn that names none.
+    #[serde(default)]
+    pub mandate_id: u64,
     pub read_slots: Vec<u64>,
     pub write_slots: Vec<(u64, Vec<u8>)>,
     pub required_auth: Vec<IpcAuth>,
@@ -246,6 +254,8 @@ impl VaultTurn {
         Self {
             turn_id,
             agent: agent.into(),
+            principal_id: 0,
+            mandate_id: 0,
             read_slots,
             write_slots,
             required_auth,
@@ -254,6 +264,18 @@ impl VaultTurn {
             method: 0,
             witnesses: Vec::new(),
         }
+    }
+
+    /// Name who acts and under which grant: the principal's member id and the mandate id.
+    pub fn with_principal(mut self, principal_id: u64, mandate_id: u64) -> Self {
+        self.principal_id = principal_id;
+        self.mandate_id = mandate_id;
+        self
+    }
+
+    /// The principal this turn claims to act as.
+    pub fn principal(&self) -> Principal {
+        Principal { name: self.agent.clone(), id: self.principal_id }
     }
 
     pub fn with_mandate_params(
@@ -519,11 +541,50 @@ impl FastPathCert {
 // 3. Sandboxed `Grain` Execution (`Powerbox`, `Mandate`, `GrainConfig`, `SandboxRunner`)
 // ============================================================================
 
-/// Confined agent capability mandate mirroring `Obend.Vault.Mandate.Mandate`.
+/// Who may act: a member of the vault, by name and id (`Obend.Vault.Mandate.Principal`; the
+/// identity `Obend.Vault.Store.Member` carries and a write's poster is bound from).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Principal {
+    pub name: String,
+    pub id: u64,
+}
+
+impl Principal {
+    pub fn new(name: impl Into<String>, id: u64) -> Self {
+        Self { name: name.into(), id }
+    }
+}
+
+impl std::fmt::Display for Principal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.name, self.id)
+    }
+}
+
+/// The capability a mandate is under (`Obend.Vault.Mandate.Grant`): the root grant of a target by
+/// its owner, or the parent mandate it was delegated from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Grant {
+    Root { owner: Principal, target: String },
+    Under { parent: u64 },
+}
+
+impl std::fmt::Display for Grant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Grant::Root { owner, target } => write!(f, "the root grant of {target} by {owner}"),
+            Grant::Under { parent } => write!(f, "mandate {parent}"),
+        }
+    }
+}
+
+/// Confined agent capability mandate mirroring `Obend.Vault.Mandate.Mandate` (rekeyed 2026-11-04):
+/// it names who may act (`principal`) and under which grant (`grant`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
-    pub grantor: String,
-    pub holder: String,
+    pub id: u64,
+    pub grant: Grant,
+    pub principal: Principal,
     pub target: String,
     pub rights: Vec<IpcAuth>,
     pub budget: u64,
@@ -540,17 +601,20 @@ impl Mandate {
         }
     }
 
-    /// Strict sub-delegation constructor mirroring `Obend.Vault.Mandate.Mandate.subDelegate`.
-    /// Narrows rights, clamps budget, intersects slot masks, bounds expiration, and conjoins caveats.
-    pub fn sub_delegate(
+    /// Delegation debits the parent by construction (`Obend.Vault.Mandate.Mandate.delegate`):
+    /// returns the parent AFTER and the child. The child's budget is `min(self.budget, quota)` and
+    /// the parent keeps `self.budget - child.budget`; the child's grant is `Under { parent: self.id }`;
+    /// rights are narrowed, slot masks intersected, expiration bounded, method caveats conjoined.
+    pub fn delegate(
         &self,
-        child_holder: impl Into<String>,
+        child_id: u64,
+        child: Principal,
         req_rights: &[IpcAuth],
         quota: u64,
         slot_mask: &[u64],
         term: u64,
         child_methods: Option<Vec<u64>>,
-    ) -> Self {
+    ) -> (Self, Self) {
         let rights = self
             .rights
             .iter()
@@ -565,29 +629,26 @@ impl Mandate {
             .collect();
         let allowed_methods = match (&self.allowed_methods, child_methods) {
             (None, None) => None,
-            (Some(parent_m), None) => Some(parent_m.clone()),
-            (None, Some(child_m)) => Some(child_m),
-            (Some(parent_m), Some(child_m)) => Some(
-                parent_m
-                    .iter()
-                    .copied()
-                    .filter(|m| child_m.contains(m))
-                    .collect(),
-            ),
+            (Some(p), None) => Some(p.clone()),
+            (None, Some(c)) => Some(c),
+            (Some(p), Some(c)) => Some(c.into_iter().filter(|m| p.contains(m)).collect()),
         };
-        Self {
-            grantor: self.holder.clone(),
-            holder: child_holder.into(),
+        let child_budget = self.budget.min(quota);
+        let parent_after = Self { budget: self.budget - child_budget, ..self.clone() };
+        let child = Self {
+            id: child_id,
+            grant: Grant::Under { parent: self.id },
+            principal: child,
             target: self.target.clone(),
             rights,
-            budget: self.budget.min(quota),
+            budget: child_budget,
             allowed_slots,
             expires_at: self.expires_at.min(term),
             allowed_methods,
-        }
+        };
+        (parent_after, child)
     }
 
-    /// Checks `attenuates child parent` (`Obend/Vault/Mandate.lean` lines 94-100).
     pub fn attenuates(&self, parent: &Mandate) -> bool {
         let rights_sub = self.rights.iter().all(|r| parent.rights.contains(r));
         let budget_le = self.budget <= parent.budget;
@@ -608,10 +669,13 @@ impl Mandate {
     /// Validates a `VaultTurn` against this `Mandate`'s identity, capabilities, slot mask,
     /// budget, expiration epoch, and method caveat (`Obend.Vault.Mandate.checkInvocation`).
     pub fn check_turn(&self, turn: &VaultTurn) -> Result<(), SandboxViolation> {
-        if turn.agent != self.holder {
-            return Err(SandboxViolation::AgentMismatch {
-                expected: self.holder.clone(),
-                actual: turn.agent.clone(),
+        let actual = turn.principal();
+        if actual != self.principal {
+            return Err(SandboxViolation::NotThePrincipal {
+                mandate_id: self.id,
+                holder: self.principal.clone(),
+                actual,
+                grant: self.grant.clone(),
             });
         }
         if turn.has_duplicate_write_slots() {
@@ -643,7 +707,8 @@ impl Mandate {
         for req in needed {
             if !self.rights.contains(&req) {
                 return Err(SandboxViolation::MissingCapability {
-                    agent: turn.agent.clone(),
+                    principal: self.principal.clone(),
+                    grant: self.grant.clone(),
                     required: req,
                 });
             }
@@ -672,8 +737,12 @@ impl Mandate {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Powerbox {
     pub target_domain: String,
-    pub mandates: BTreeMap<String, Mandate>,
-    pub spent_budget: BTreeMap<String, u64>,
+    /// Mandates by id: a mandate names its principal and its grant; a turn names its mandate.
+    pub mandates: BTreeMap<u64, Mandate>,
+    /// What each mandate has spent on turns (delegation is not spending: it moves budget to the
+    /// child by construction, `Mandate::delegate`).
+    pub spent_budget: BTreeMap<u64, u64>,
+    pub next_mandate_id: u64,
 }
 
 impl Powerbox {
@@ -682,83 +751,89 @@ impl Powerbox {
             target_domain: target_domain.into(),
             mandates: BTreeMap::new(),
             spent_budget: BTreeMap::new(),
+            next_mandate_id: 1,
         }
     }
 
     pub fn grant_mandate(&mut self, mandate: Mandate) -> Result<(), SandboxViolation> {
-        let holder = mandate.holder.clone();
-        self.mandates.insert(holder.clone(), mandate);
-        self.spent_budget.entry(holder).or_insert(0);
+        let id = mandate.id;
+        self.next_mandate_id = self.next_mandate_id.max(id + 1);
+        self.mandates.insert(id, mandate);
+        self.spent_budget.entry(id).or_insert(0);
         Ok(())
     }
 
-    /// Strictly attenuate an existing parent mandate to a child agent (`subDelegate_attenuates`).
-    /// Requires the parent mandate to hold `IpcAuth::Grant` and clamps the delegated quota
-    /// to the parent's remaining unspent budget.
+    /// The mandate a turn names, if it is the turn's principal's.
+    pub fn mandate_for(&self, turn: &VaultTurn) -> Result<&Mandate, SandboxViolation> {
+        let m = self.mandates.get(&turn.mandate_id).ok_or_else(|| SandboxViolation::MissingMandate {
+            principal: turn.principal(),
+            mandate_id: turn.mandate_id,
+        })?;
+        if m.principal != turn.principal() {
+            return Err(SandboxViolation::NotThePrincipal {
+                mandate_id: m.id,
+                holder: m.principal.clone(),
+                actual: turn.principal(),
+                grant: m.grant.clone(),
+            });
+        }
+        Ok(m)
+    }
+
+    /// Delegate from mandate `parent_id` to `child`: requires the parent to hold `IpcAuth::Grant`;
+    /// the child's budget is carved out of what the parent has not spent, and the parent's record
+    /// shrinks by it (`Mandate::delegate`), so authority is conserved by construction. Returns the
+    /// child, now granted.
     pub fn delegate(
         &mut self,
-        parent_holder: &str,
-        child_holder: &str,
+        parent_id: u64,
+        child: Principal,
         req_rights: &[IpcAuth],
         quota: u64,
         slot_mask: &[u64],
         term: u64,
         allowed_methods: Option<Vec<u64>>,
     ) -> Result<Mandate, SandboxViolation> {
-        let parent = self.mandates.get(parent_holder).ok_or_else(|| {
-            SandboxViolation::MissingMandate {
-                agent: parent_holder.to_string(),
-            }
+        let parent = self.mandates.get(&parent_id).ok_or_else(|| SandboxViolation::MissingMandate {
+            principal: child.clone(),
+            mandate_id: parent_id,
         })?;
         if !parent.rights.contains(&IpcAuth::Grant) {
             return Err(SandboxViolation::MissingCapability {
-                agent: parent_holder.to_string(),
+                principal: parent.principal.clone(),
+                grant: parent.grant.clone(),
                 required: IpcAuth::Grant,
             });
         }
-        let parent_remaining = self.remaining_budget(parent_holder).unwrap_or(0);
-        let clamped_quota = quota.min(parent_remaining);
-        let child = parent.sub_delegate(
-            child_holder,
+        let spent = self.spent_budget.get(&parent_id).copied().unwrap_or(0);
+        let available = parent.budget.saturating_sub(spent);
+        let child_id = self.next_mandate_id;
+        let (parent_after, child_mandate) = parent.delegate(
+            child_id,
+            child,
             req_rights,
-            clamped_quota,
+            quota.min(available),
             slot_mask,
             term,
             allowed_methods,
         );
-        if !child.attenuates(parent) {
-            return Err(SandboxViolation::MissingCapability {
-                agent: child_holder.to_string(),
-                required: IpcAuth::Grant,
-            });
-        }
-        self.grant_mandate(child.clone())?;
-        // Authority is conserved: what the child may spend, the parent can no longer spend.
-        // (Before 2026-11-04 a parent with 100 could delegate 100 to each of any number of
-        // children.)
-        *self
-            .spent_budget
-            .entry(parent_holder.to_string())
-            .or_insert(0) += clamped_quota;
-        Ok(child)
+        debug_assert!(child_mandate.attenuates(parent));
+        self.mandates.insert(parent_id, parent_after);
+        self.grant_mandate(child_mandate.clone())?;
+        Ok(child_mandate)
     }
 
-    pub fn remaining_budget(&self, agent: &str) -> Option<u64> {
-        let m = self.mandates.get(agent)?;
-        let spent = self.spent_budget.get(agent).copied().unwrap_or(0);
+    pub fn remaining_budget(&self, mandate_id: u64) -> Option<u64> {
+        let m = self.mandates.get(&mandate_id)?;
+        let spent = self.spent_budget.get(&mandate_id).copied().unwrap_or(0);
         Some(m.budget.saturating_sub(spent))
     }
 
-    /// Check a `VaultTurn` against its agent's `Mandate` and deduct `turn.cost` from remaining quota.
+    /// Check a `VaultTurn` against the mandate it names and deduct `turn.cost` from that mandate.
     pub fn check_and_consume(&mut self, turn: &VaultTurn) -> Result<(), SandboxViolation> {
-        let mandate = self
-            .mandates
-            .get(&turn.agent)
-            .ok_or_else(|| SandboxViolation::MissingMandate {
-                agent: turn.agent.clone(),
-            })?;
+        let mandate = self.mandate_for(turn)?.clone();
         mandate.check_turn(turn)?;
-        let spent = self.spent_budget.get(&turn.agent).copied().unwrap_or(0);
+        let spent = self.spent_budget.get(&mandate.id).copied().unwrap_or(0);
         let remaining = mandate.budget.saturating_sub(spent);
         if turn.cost > remaining {
             return Err(SandboxViolation::BudgetExceeded {
@@ -767,8 +842,7 @@ impl Powerbox {
                 remaining,
             });
         }
-        self.spent_budget
-            .insert(turn.agent.clone(), spent + turn.cost);
+        self.spent_budget.insert(mandate.id, spent + turn.cost);
         Ok(())
     }
 }
@@ -835,7 +909,8 @@ impl GrainConfig {
 #[derive(Debug, Clone)]
 pub struct SandboxRunner {
     pub powerbox: Powerbox,
-    pub grain_configs: BTreeMap<String, GrainConfig>,
+    /// Grain configurations by (principal id, mandate id): a grain runs as a principal under a grant.
+    pub grain_configs: BTreeMap<(u64, u64), GrainConfig>,
     pub rejected_turns: Vec<(VaultTurn, SandboxViolation)>,
     pub admitted_turns: usize,
 }
@@ -853,7 +928,8 @@ impl SandboxRunner {
     /// Register and arm a confined `Grain` unit via `obend_sandbox::LaunchGate` and `CpuMeter`.
     pub fn register_grain(
         &mut self,
-        agent: &str,
+        principal: &Principal,
+        mandate_id: u64,
         config: GrainConfig,
     ) -> Result<GateStatus, SandboxViolation> {
         config.verify_strict_policy()?;
@@ -882,20 +958,20 @@ impl SandboxRunner {
                 unit: config.unit_id.clone(),
                 status: reason,
             })?;
-        self.grain_configs.insert(agent.to_string(), config);
+        self.grain_configs.insert((principal.id, mandate_id), config);
         Ok(status)
     }
 
-    /// Query the `LaunchGate` status of a registered agent `Grain`.
-    pub fn grain_gate_status(&self, agent: &str) -> Option<GateStatus> {
-        let cfg = self.grain_configs.get(agent)?;
+    /// Query the `LaunchGate` status of a registered `Grain` (by principal and mandate).
+    pub fn grain_gate_status(&self, principal: &Principal, mandate_id: u64) -> Option<GateStatus> {
+        let cfg = self.grain_configs.get(&(principal.id, mandate_id))?;
         let gate = LaunchGate::new(&cfg.state_dir, &cfg.unit_id);
         gate.status().ok()
     }
 
     /// Query the metered CPU usage (`obend-grain-cpu-v1`) of a registered agent `Grain`.
-    pub fn grain_cpu_usec(&self, agent: &str) -> Option<u64> {
-        let cfg = self.grain_configs.get(agent)?;
+    pub fn grain_cpu_usec(&self, principal: &Principal, mandate_id: u64) -> Option<u64> {
+        let cfg = self.grain_configs.get(&(principal.id, mandate_id))?;
         let path = cfg.state_dir.join(format!("{}.cpu", cfg.unit_id));
         CpuMeter::read_cpu_record(&path).ok()
     }
@@ -908,7 +984,7 @@ impl SandboxRunner {
         turn: &VaultTurn,
         cpu_usec_delta: u64,
     ) -> Result<(), SandboxViolation> {
-        if let Some(cfg) = self.grain_configs.get(&turn.agent).cloned() {
+        if let Some(cfg) = self.grain_configs.get(&(turn.principal_id, turn.mandate_id)).cloned() {
             cfg.verify_strict_policy()?;
             let gate = LaunchGate::new(&cfg.state_dir, &cfg.unit_id);
             let status = gate

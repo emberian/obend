@@ -2356,8 +2356,12 @@ impl SimplexState {
                     m
                 } else {
                     default_mandate = Mandate {
-                        grantor: "kernel".to_string(),
-                        holder: turn.agent.clone(),
+                        id: turn.mandate_id,
+                        grant: Grant::Root {
+                            owner: Principal::new("kernel", 0),
+                            target: "obend.vault".to_string(),
+                        },
+                        principal: turn.principal(),
                         target: "obend.vault".to_string(),
                         rights: vec![IpcAuth::Read, IpcAuth::Write, IpcAuth::Grant],
                         budget: u64::MAX,
@@ -3898,9 +3902,15 @@ mod tests {
 
         let mut powerbox = Powerbox::new("obend.vault.prod");
         // Root mandate for `root_agent` covering slots [1, 2] with budget 100
+        let root_agent = Principal::new("root_agent", 1);
+        let grain_worker = Principal::new("grain_worker", 2);
         let root_mandate = Mandate {
-            grantor: "kernel".to_string(),
-            holder: "root_agent".to_string(),
+            id: 1,
+            grant: Grant::Root {
+                owner: Principal::new("kernel", 0),
+                target: "obend.vault.prod".to_string(),
+            },
+            principal: root_agent.clone(),
             target: "obend.vault.prod".to_string(),
             rights: vec![IpcAuth::Read, IpcAuth::Write, IpcAuth::Grant],
             budget: 100,
@@ -3915,8 +3925,8 @@ mod tests {
         // Sub-delegate a strictly attenuated mandate to `grain_worker` covering ONLY slot [1] and budget 10
         let child_mandate = powerbox
             .delegate(
-                "root_agent",
-                "grain_worker",
+                root_mandate.id,
+                grain_worker.clone(),
                 &[IpcAuth::Read, IpcAuth::Write],
                 10,
                 &[1, 3], // Slot 3 is NOT in parent's allowed_slots [1, 2], so intersection yields only [1]!
@@ -3927,6 +3937,11 @@ mod tests {
         assert!(child_mandate.attenuates(&root_mandate));
         assert_eq!(child_mandate.allowed_slots, vec![1]);
         assert_eq!(child_mandate.budget, 10);
+        assert_eq!(child_mandate.grant, Grant::Under { parent: root_mandate.id });
+        // Delegation debited the parent by construction: 100 = 90 + 10.
+        assert_eq!(powerbox.mandates[&root_mandate.id].budget, 90);
+        assert_eq!(powerbox.remaining_budget(root_mandate.id), Some(90));
+        let child_id = child_mandate.id;
 
         let mut runner = SandboxRunner::new(powerbox);
         let grain_cfg = GrainConfig::strict_for_agent("grain_worker", tmp_dir.clone());
@@ -3934,7 +3949,7 @@ mod tests {
             .bwrap_flags()
             .contains(&"--unshare-net".to_string()));
         let gate_status = runner
-            .register_grain("grain_worker", grain_cfg)
+            .register_grain(&grain_worker, child_id, grain_cfg)
             .expect("register strict grain");
         assert_eq!(gate_status, GateStatus::Started);
 
@@ -3949,6 +3964,7 @@ mod tests {
             vec![1],
             vec![(1, b"authorized-grain-write".to_vec())],
         )
+        .with_principal(grain_worker.id, child_id)
         .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 4, 2, 0);
 
         let ok_outcome = cluster
@@ -3967,6 +3983,7 @@ mod tests {
             vec![3],
             vec![(3, b"exfiltrate-dark-pool".to_vec())],
         )
+        .with_principal(grain_worker.id, child_id)
         .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 2, 2, 0);
 
         let err = cluster
@@ -3983,7 +4000,7 @@ mod tests {
         // Verify the grain's LaunchGate was automatically fenced upon violation
         let sbx = cluster.sandbox.as_ref().unwrap();
         assert_eq!(
-            sbx.grain_gate_status("grain_worker"),
+            sbx.grain_gate_status(&grain_worker, child_id),
             Some(GateStatus::Fenced)
         );
         assert_eq!(sbx.rejected_turns.len(), 1);
@@ -3994,7 +4011,8 @@ mod tests {
             "grain_worker",
             vec![1],
             vec![(1, b"retry-after-fence".to_vec())],
-        );
+        )
+        .with_principal(grain_worker.id, child_id);
         let fence_err = cluster
             .submit_turn(post_fence_turn)
             .expect_err("fenced grain must not admit turns");
@@ -4135,8 +4153,9 @@ mod tests {
 
         // 4. Mandate boundary checks: expired epoch, disallowed method, missing Write capability, budget exceeded
         let mandate = Mandate {
-            grantor: "root".to_string(),
-            holder: "worker".to_string(),
+            id: 7,
+            grant: Grant::Under { parent: 1 },
+            principal: Principal::new("worker", 3),
             target: "obend".to_string(),
             rights: vec![IpcAuth::Read], // Read-only!
             budget: 5,
@@ -4145,7 +4164,7 @@ mod tests {
             allowed_methods: Some(vec![7]),
         };
         let expired_turn =
-            VaultTurn::new([0x01; 32], "worker", vec![1], vec![]).with_mandate_params(
+            VaultTurn::new([0x01; 32], "worker", vec![1], vec![]).with_principal(3, 7).with_mandate_params(
                 vec![IpcAuth::Read],
                 1,
                 4, // > expires_at (3)
@@ -4157,7 +4176,7 @@ mod tests {
         ));
 
         let bad_method_turn =
-            VaultTurn::new([0x02; 32], "worker", vec![1], vec![]).with_mandate_params(
+            VaultTurn::new([0x02; 32], "worker", vec![1], vec![]).with_principal(3, 7).with_mandate_params(
                 vec![IpcAuth::Read],
                 1,
                 2,
@@ -4174,7 +4193,7 @@ mod tests {
             vec![1],
             vec![(1, b"illegal-write".to_vec())],
         )
-        .with_mandate_params(vec![IpcAuth::Read], 1, 2, 7);
+        .with_principal(3, 7).with_mandate_params(vec![IpcAuth::Read], 1, 2, 7);
         assert!(matches!(
             mandate.check_turn(&missing_write_turn),
             Err(SandboxViolation::MissingCapability {
@@ -4184,7 +4203,7 @@ mod tests {
         ));
 
         let over_budget_turn =
-            VaultTurn::new([0x04; 32], "worker", vec![1], vec![]).with_mandate_params(
+            VaultTurn::new([0x04; 32], "worker", vec![1], vec![]).with_principal(3, 7).with_mandate_params(
                 vec![IpcAuth::Read],
                 6, // > budget (5)
                 2,
@@ -4463,8 +4482,9 @@ mod tests {
         // 5. Powerbox::delegate requires IpcAuth::Grant and clamps to remaining unspent budget
         let mut pb = Powerbox::new("obend.vault");
         pb.grant_mandate(Mandate {
-            grantor: "kernel".to_string(),
-            holder: "no_grant_agent".to_string(),
+            id: 5,
+            grant: Grant::Root { owner: Principal::new("kernel", 0), target: "obend.vault".to_string() },
+            principal: Principal::new("no_grant_agent", 5),
             target: "obend.vault".to_string(),
             rights: vec![IpcAuth::Read, IpcAuth::Write],
             budget: 50,
@@ -4474,7 +4494,7 @@ mod tests {
         })
         .unwrap();
         assert!(matches!(
-            pb.delegate("no_grant_agent", "child", &[IpcAuth::Read], 10, &[1], 5, None),
+            pb.delegate(5, Principal::new("child", 9), &[IpcAuth::Read], 10, &[1], 5, None),
             Err(SandboxViolation::MissingCapability {
                 required: IpcAuth::Grant,
                 ..
@@ -4505,8 +4525,9 @@ mod tests {
         let mut session = ObendSession::new().expect("session init");
 
         let mandate = Mandate {
-            grantor: "kernel".to_string(),
-            holder: "alice_trader".to_string(),
+            id: 11,
+            grant: Grant::Root { owner: Principal::new("kernel", 0), target: "obend.vault".to_string() },
+            principal: Principal::new("alice_trader", 11),
             target: "obend.vault".to_string(),
             rights: vec![IpcAuth::Read, IpcAuth::Write],
             budget: 50,
@@ -4521,6 +4542,7 @@ mod tests {
             vec![1],
             vec![(1, b"verified-slot-1-v1".to_vec())],
         )
+        .with_principal(11, 11)
         .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 5, 1, 0);
 
         let orders = vec![
@@ -4632,8 +4654,9 @@ mod tests {
         let mut session = ObendSession::new().expect("session init");
 
         let mandate = Mandate {
-            grantor: "kernel".to_string(),
-            holder: "fog_worker".to_string(),
+            id: 12,
+            grant: Grant::Root { owner: Principal::new("kernel", 0), target: "obend.vault".to_string() },
+            principal: Principal::new("fog_worker", 12),
             target: "obend.vault".to_string(),
             rights: vec![IpcAuth::Read, IpcAuth::Write],
             budget: 20,
@@ -4663,6 +4686,7 @@ mod tests {
             vec![1],
             vec![(1, b"fog-cell-updated".to_vec())],
         )
+        .with_principal(12, 12)
         .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 5, 2, 0);
 
         let receipt = mandate
@@ -4702,6 +4726,7 @@ mod tests {
             vec![3],
             vec![(3, b"illegal".to_vec())],
         )
+        .with_principal(12, 12)
         .with_mandate_params(vec![IpcAuth::Read, IpcAuth::Write], 5, 2, 0);
         assert!(matches!(
             mandate.step_with_verified_session(
