@@ -48,8 +48,9 @@ continuum step is argued, not proved.
   (`certPath`), the cutter grown by 100 µm contains no point of the part, anywhere
   (`FidgetParams.part_in_box`, `:293`). Discharged by `native_decide` (4,739 cutter locations,
   `#assert_compiled`).
-- Follow-up the same day (see §3): the continuum is now proved over the rationals,
-  `fidget_toolpath_no_gouge_continuous`. Before that it was argued, not proved: The theorem is over lattice points of space and
+- Follow-up the same day (see §3): the continuum is proved over the rationals and checked from a
+  committed certificate (`Apps/FidgetCamCert.lean`, `fidget_toolpath_no_gouge_continuous`); the
+  lattice theorem below was removed. Before that it was argued, not proved: The theorem is over lattice points of space and
   lattice tool positions; `fidget_certPath_unit_steps` (`:454`) gives unit steps, and with the
   one-unit growth every point of a segment the control interpolates lies in the checked union
   (docstring at `GeometryCAM.lean:3168-3180`). Mechanising it needs the reals.
@@ -152,7 +153,8 @@ continuum step is argued, not proved.
 | `0da8645` | `PCB`: Hammerstad–Jensen `Z₀`, the signoff gates on it |
 | `6db42e8` | `apps/fidget-cam/*.obend` as parameters; `FidgetCam`: one solid, wall, certified path, post, RTL from the tape |
 | `023cdc4` | `PHYSICAL.md` §2 and §3.1 |
-| (follow-up) | `GeometryCAM` §9: `evalFRepQ`, `frepQ_enclosure_sound` (rational interval enclosure), `kdSeg`/`kdSeg_sound` (six-dimensional k-d over part box × tool-position box, Minkowski difference), `segment_in_hull`, `checkMovesContinuous_sound`; `FidgetCam`: `part_in_boxQ`, `fidget_toolpath_no_gouge_continuous` (every rational time of every move, every rational point of the part, cutter at its true radius and shank length; `native_decide`, about 7 min of build) |
+| `ff15b39` | `GeometryCAM` §9: `evalFRepQ`, `frepQ_enclosure_sound`, `segment_in_hull`; the continuous theorem, first as a seven-minute `native_decide` search at build time |
+| (this) | `GeometryCAM` §10: the search's tree is the certificate (`KdCert`), replayed in integers (`checkKdZ_sound`, via `evalFRepInterval_toQ`); the judge `cam-gouge@1` (`camGougeFormat`, in `Obend.Judge.registry`); the shank in cross-product form. `lean/tools/emitcam` (`lake exe obend-emit-cam`) writes `apps/fidget-cam/cam/impeller_5axis.{ngc,obj,cert}`; `Apps/FidgetCamCert.lean` replays the committed certificate. The lattice no-gouge theorem and the build-time search are gone. |
 
 Built in `bb2:~/lane-cad` (HEAD plus these files): the four Hardware modules, `Apps.FidgetCam`,
 `obend-emit-sv`, and every module importing them except `Teeth/Hardware/SiliconTeeth`, which is red
@@ -175,6 +177,14 @@ the arithmetic, and it lets the cutter shrink back to its true size. The Lipschi
 one lemma that does not exist: `evalFRepGradBox_lipschitz_sound` (`GeometryCAM.lean`, over `Int`
 points) restated over rational points; the `Int` secant lemmas it rests on are the bulk of that port.
 Reals are not in core Lean, so "every time" is "every rational time".
+
+Build cost, measured on bb2 (4 threads, other lanes running): `Obend.Apps.FidgetCam` took 427 s at
+`ff15b39` (the search under `native_decide`, `maxHeartbeats 0`); after this change it takes 8.0 s and
+`Obend.Apps.FidgetCamCert` 7.7 s. The certificate is 487 KB (239k leaves over 4,731 moves); outside
+the build, `obend-emit-cam --check` decodes it in 47 ms and replays it in 110 ms. What made the
+difference: replaying instead of searching, integer instead of rational intervals, overlapping
+integer halves on a 5 µm lattice, and the cross-product shank (a sum of squares instead of a
+difference). Grouping moves into larger swept boxes cost more leaves than it saved.
 
 ## 4. The three next changes
 

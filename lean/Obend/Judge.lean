@@ -18,6 +18,7 @@ module
 `registry` is the formats a node accepts certificates in.
 -/
 public import Obend.Judge.Class
+public import Obend.Hardware.GeometryCAM
 public import Obend.Judge.Instances
 public import Obend.Judge.Lrat
 public import Obend.Judge.Identity
@@ -78,6 +79,7 @@ goal `1 ≥ 0`) makes every witness naming it pass, so it was removed on 2026-11
   , Obend.Analysis.format
   , Obend.Lower.format
   , Obend.Consensus.SimplexTrace.simplexTraceFormat
+  , Obend.Hardware.GeometryCAM.camGougeFormat
   ] ++ Obend.Hardware.Judge.hardwareFormats
 
 /-- Look a format up by name and version. -/

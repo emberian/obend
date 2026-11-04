@@ -5,8 +5,8 @@ module
 `apps/fidget-cam/*.obend` is four parameter records with overrides (hub, cooling bore, mounting lug,
 process). This module builds one F-Rep solid from the composed values (`fidgetParams_eq_obend`),
 certifies the bore wall over the whole bore (`fidget_bore_wall_sound`), generates Z-level contours
-and 3+2 top-edge passes, certifies every lattice point of every interpolated segment against the
-solid with the shank included (`fidget_toolpath_no_gouge`), and posts the program with TCPM
+and 3+2 top-edge passes, states the moves as the object of the `cam-gouge@1` judge (whose committed
+certificate `Obend.Apps.FidgetCamCert` checks), and posts the program with TCPM
 (`impeller5AxisNgc`, rotary-safe by `Obend.Hardware.Kinematics.postMoves_rotarySafe`). The RTL voxel
 evaluator is compiled from the solid's tape (`FRepExpr.toTape`), not written beside it.
 
@@ -18,8 +18,9 @@ public import Obend.Hardware.UserspacePhysical
 public import Obend.Hardware.Synth
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.OpenUSD
-public import Obend.Leaf.Futamura
 public import Obend.Spec.CrossPackage
+public import Obend.Leaf.Emit
+public import Obend.Leaf.Flatten
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
 public meta import Lean
@@ -39,7 +40,6 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
 open Obend.Lower
 open Obend.Slot
 open Obend.Slot.World
@@ -139,7 +139,7 @@ example : fidgetParams.onLattice = true := by decide +kernel
 /-- Micrometres to lattice units. -/
 @[expose] def FidgetParams.lat (p : FidgetParams) (um : Nat) : Nat := um / p.unit
 
-/-! ## 2. Vtable flattening, `Leaf.Book` emission, pins-only Futamura, cone survival -/
+/-! ## 2. Vtable flattening, `Leaf.Book` emission, cone survival -/
 
 theorem fidgetCam_compositions_closed :
     FidgetBaseBody.shroudedImpellerBody_comp.closedB = true ∧
@@ -173,21 +173,9 @@ theorem fidgetCam_flatten_and_book_sound (m : String) :
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
 
-/-- Pins-only in-core specialisation of all four books, and cone survival when the shroud override
-is linked onto the base body (it changes only `hubHeightUm`). -/
-theorem fidgetCam_inCore_futamura2 (pins : List LeafPin) :
-    dataPinSpecialize
-      (.app (inCoreBookCompiler FidgetBaseBody.shroudedImpellerBody_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook FidgetBaseBody.shroudedImpellerBody_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler FidgetCoolingChannel.conformalCoolingChannel_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook FidgetCoolingChannel.conformalCoolingChannel_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler FidgetMountingBoss.stiffenedMountingBoss_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook FidgetMountingBoss.stiffenedMountingBoss_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler FidgetImpellerTop.liverpsImpellerCamTop_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook FidgetImpellerTop.liverpsImpellerCamTop_book pins) ∧
+/-- Cone survival when the shroud override is linked onto the base body (it changes only
+`hubHeightUm`). -/
+theorem fidgetCam_cone_survives :
     coneSupports
       (linkComposition FidgetBaseBody.baseImpellerBody_comp FidgetBaseBody.shroudedImpellerBody_comp.top)
       ["hubRadiusUm", "hubCentreXUm"] =
@@ -196,14 +184,10 @@ theorem fidgetCam_inCore_futamura2 (pins : List LeafPin) :
   have hdisj : ∀ m ∈ ["hubRadiusUm", "hubCentreXUm"],
       m ∉ overlayModifiedFields FidgetBaseBody.shroudedImpellerBody_comp.top := by
     decide +kernel
-  exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly FidgetBaseBody.shroudedImpellerBody_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly FidgetCoolingChannel.conformalCoolingChannel_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly FidgetMountingBoss.stiffenedMountingBoss_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly FidgetImpellerTop.liverpsImpellerCamTop_book pins).1,
-         coneSupports_linkComposition_of_disjoint
-           FidgetBaseBody.baseImpellerBody_comp
-           FidgetBaseBody.shroudedImpellerBody_comp.top
-           ["hubRadiusUm", "hubCentreXUm"] hflat hdisj⟩
+  exact coneSupports_linkComposition_of_disjoint
+    FidgetBaseBody.baseImpellerBody_comp
+    FidgetBaseBody.shroudedImpellerBody_comp.top
+    ["hubRadiusUm", "hubCentreXUm"] hflat hdisj
 
 /-! ## 3. The part as one solid, on a 100 µm lattice -/
 
@@ -430,40 +414,13 @@ clearance plane, the cut polyline, retract to the clearance plane. -/
     (densifyPolyline ((q.1, q.2.1, p.clearanceZ) :: q :: rest ++ [(l.1, l.2.1, p.clearanceZ)])).map
       fun t => ⟨t.1, t.2.1, t.2.2, pass.axis⟩
 
-/-- **`fidget_toolpath_no_gouge`**: at every lattice point of every segment of every pass, the ball
-end mill with its shank, grown by one lattice unit (100 µm) in radius and length, contains no point
-of the part. The part is the one the `.obend` package composes (`fidgetParams_eq_obend`); points
-outside `partBox` are not part (`part_in_box`), so the statement is over all of space. -/
-theorem fidget_toolpath_no_gouge (pass : CamPass) (hPass : pass ∈ fidgetParams.passes)
-    (c : CLPoint) (hc : c ∈ fidgetParams.certPath pass) (x y z : Int)
-    (hPart : inSolid x y z fidgetParams.part) :
-    0 < evalFRepPoint x y z
-      (frepBallEndMill c.x c.y c.z c.axis (fidgetParams.lat fidgetParams.toolR + 1)
-        (fidgetParams.lat fidgetParams.shankLen + 1)) := by
-  have hAll : fidgetParams.passes.all (fun pass =>
-      checkPathNoGouge fidgetParams.part fidgetParams.partBox 48 (fidgetParams.lat fidgetParams.toolR)
-        (fidgetParams.lat fidgetParams.shankLen) 1 (fidgetParams.certPath pass)) = true := by
-    native_decide
-  exact checkPathNoGouge_sound _ _ 48 _ _ 1 _ (List.all_eq_true.mp hAll pass hPass) c hc x y z
-    (fidgetParams.part_in_box x y z hPart) hPart
+/-! ## 5b. The object the `cam-gouge@1` judge checks
 
-#assert_compiled fidget_toolpath_no_gouge
-
-/-- Consecutive certified points are at most one lattice unit apart per axis, which is what the
-segment-covering argument of `checkPathNoGouge_sound` needs. -/
-theorem fidget_certPath_unit_steps :
-    fidgetParams.passes.all (fun pass => clChainStepLe 1 (fidgetParams.certPath pass)) = true := by
-  native_decide
-
-#assert_compiled fidget_certPath_unit_steps
-
-/-! ## 5b. The same tool path at every rational time
-
-`fidget_toolpath_no_gouge` is a statement about lattice samples with the cutter grown by one unit.
-This one is about motion: at every rational time of every move the control interpolates, the cutter
-itself (not grown) contains no rational point of the part. It follows from
-`checkMovesContinuous_sound` (`GeometryCAM` §9), which checks each move over the box of tool
-positions it sweeps. -/
+The tool path's no-gouge statement is a certificate, not a search: the moves below are the
+object, `apps/fidget-cam/cam/impeller_5axis.cert` (written once by `lean/tools/emitcam`) is the
+certificate, and `Obend.Apps.FidgetCamCert` checks it. This module only states the object and the
+facts the theorem there needs (the part lies in its box; every certified move carries its pass's
+axis). -/
 
 /-- A Z-cylinder's rational bounding box. -/
 @[expose] def cylBoxQ (cx cy : Int) (r : Nat) (z0 z1 : Int) : QBox :=
@@ -537,30 +494,42 @@ theorem FidgetParams.part_in_boxQ (p : FidgetParams) (x y z : Rat) (h : evalFRep
   · exact hullQ_left _ _ x y z (frepCylZ_in_boxQ _ _ _ _ _ x y z h1)
   · exact hullQ_right _ _ x y z (frepCylZ_in_boxQ _ _ _ _ _ x y z h1)
 
-set_option maxHeartbeats 0 in
-/-- **`fidget_toolpath_no_gouge_continuous`**: for every pass, every move `c₀ → c₁` the control
-interpolates (including plunges and retracts), every rational time `t ∈ [0, 1]`, and every rational
-point of the part, the ball end mill with its shank at `c₀ + t (c₁ - c₀)`, at its true radius and
-length, does not contain the point. -/
-theorem fidget_toolpath_no_gouge_continuous (pass : CamPass) (hPass : pass ∈ fidgetParams.passes)
-    (c₀ c₁ : CLPoint)
-    (hm : (c₀, c₁) ∈ (fidgetParams.certPath pass).zip (fidgetParams.certPath pass).tail)
-    (t : Rat) (h0 : 0 ≤ t) (h1 : t ≤ 1) (x y z : Rat)
-    (hPart : evalFRepQ x y z fidgetParams.part ≤ 0) :
-    0 < evalFRepQ (x - ((c₀.x : Rat) + t * ((c₁.x : Rat) - c₀.x)))
-        (y - ((c₀.y : Rat) + t * ((c₁.y : Rat) - c₀.y)))
-        (z - ((c₀.z : Rat) + t * ((c₁.z : Rat) - c₀.z)))
-      (frepBallEndMill 0 0 0 c₀.axis (fidgetParams.lat fidgetParams.toolR)
-        (fidgetParams.lat fidgetParams.shankLen)) := by
-  have hAll : fidgetParams.passes.all (fun pass =>
-      checkMovesContinuous fidgetParams.part fidgetParams.partBoxQ 60
-        (fidgetParams.lat fidgetParams.toolR) (fidgetParams.lat fidgetParams.shankLen)
-        (fidgetParams.certPath pass)) = true := by
-    native_decide
-  exact checkMovesContinuous_sound _ _ 60 _ _ _ (List.all_eq_true.mp hAll pass hPass) c₀ c₁ hm t h0 h1
-    x y z (fidgetParams.part_in_boxQ x y z hPart) hPart
+/-- The moves of a pass the control interpolates: consecutive certified points. -/
+@[expose] def FidgetParams.passMoves (p : FidgetParams) (pass : CamPass) : List (Pt3 × Pt3) :=
+  ((p.certPath pass).zip (p.certPath pass).tail).map fun m => ((m.1.x, m.1.y, m.1.z), (m.2.x, m.2.y, m.2.z))
 
-#assert_compiled fidget_toolpath_no_gouge_continuous
+/-- The certificate's resolution: the same part on a 5 µm lattice, so the k-d boxes can shrink below
+the 100 µm of the tool path without leaving the integers. -/
+@[expose] def camParams : FidgetParams := { fidgetParams with unit := 5 }
+
+/-- Tool-path lattice units (100 µm) to certificate units (5 µm). -/
+@[expose] def camScale : Int := 20
+
+@[expose] def scaleMove (m : Pt3 × Pt3) : Pt3 × Pt3 :=
+  ((camScale * m.1.1, camScale * m.1.2.1, camScale * m.1.2.2),
+   (camScale * m.2.1, camScale * m.2.2.1, camScale * m.2.2.2))
+
+/-- The object of `cam-gouge@1` for the fidget program: each pass's moves on its axis, in 5 µm
+units, against the part and the cutter at 5 µm. -/
+@[expose] def fidgetCamObj : CamGougeObj :=
+  { part := camParams.part
+  , box := camParams.partBox
+  , toolR := camParams.lat camParams.toolR
+  , shankLen := camParams.lat camParams.shankLen
+  , chunks := fidgetParams.passes.map fun pass =>
+      { axis := pass.axis, moves := (fidgetParams.passMoves pass).map scaleMove } }
+
+theorem FidgetParams.partBox_toQ (p : FidgetParams) : p.partBox.toQ = p.partBoxQ := by
+  simp only [FidgetParams.partBox, FidgetParams.partBoxQ, Box3D.hull, QBox.hullQ, cylBox, cylBoxQ,
+    Box3D.toQ, intCast_min', intCast_max', Rat.intCast_sub, Rat.intCast_add]
+
+theorem FidgetParams.certPath_axis (p : FidgetParams) (pass : CamPass) (c : CLPoint)
+    (h : c ∈ p.certPath pass) : c.axis = pass.axis := by
+  unfold FidgetParams.certPath at h
+  split at h
+  · cases h
+  · obtain ⟨t, _, rfl⟩ := List.mem_map.mp h
+    rfl
 
 @[expose] def FidgetParams.postConfig (p : FidgetParams) : PostConfig :=
   { clearanceZ := p.clearanceZ, plungeFeed := p.plungeFeed, cutFeed := p.cutFeed
@@ -661,8 +630,8 @@ theorem compactFor_sound (B : Box3D) (x y z : Int) (h : B.contains x y z) :
 
 /-- The voxel evaluator: the full tape and the three compacted tapes, the inside test, and a gouge
 flag for a vertical ball end mill of the certified grown radius with its tip at `(in_tx, in_ty,
-in_tz)` (lattice units throughout). The certificate is `fidget_toolpath_no_gouge`; this module is a
-fast re-check of tool positions, not the proof. -/
+in_tz)` (lattice units throughout). The proof is `Obend.Apps.FidgetCamCert`; this module is a
+fast re-check of tool positions. -/
 @[expose] def fidgetImpellerVoxelCamRtlModule : RtlModule :=
   let fullWires   := compileSsaTapeToRtlWires 0 "full" impellerSsaTape
   let off1        := fullWires.length

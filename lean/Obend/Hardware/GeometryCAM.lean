@@ -41,11 +41,13 @@ in-silico evolutionary physical design** within `Obend.Hardware`:
    compactor and the RTL compiler use, and the two agree at every point.
 7. **Region certificates (`kdAll`, `kdAll_sound`)**: the gouge check (`checkDisjoint_sound`) and the
    wall check over a whole cavity (`checkWall_sound`).
-8. **Cutters on integer tool axes (`frepBallEndMill`, `checkPathNoGouge_sound`)**: ball, shank and a
-   lattice certificate for a list of cutter locations.
+8. **Cutters on integer tool axes (`frepBallEndMill`)**: ball and shank as polynomial F-Reps.
+9. **Continuous motion (`frepQ_enclosure_sound`, `segment_in_hull`)** and **10. the motion
+   certificate as a judge (`checkKdZ_sound`, `checkCamGouge_sound`, `camGougeFormat`)**.
 -/
 public import Obend.Hardware.Accelerators
 public import Obend.Tactic.Tooth
+public import Obend.Judge.Class
 @[expose] public section
 
 namespace Obend.Hardware.GeometryCAM
@@ -3046,20 +3048,34 @@ def frepBall (cx cy cz : Int) (r : Nat) : FRepExpr :=
   .offset ((r : Int) * r)
     (.add (.add (.sq (.sub .varX (.const cx))) (.sq (.sub .varY (.const cy)))) (.sq (.sub .varZ (.const cz))))
 
-/-- `(p - c) · u`. -/
+/-- `a·e₁ − b·e₂`, dropping a zero term. -/
+def frepAxb (a : Int) (e₁ : FRepExpr) (b : Int) (e₂ : FRepExpr) : FRepExpr :=
+  if b = 0 then frepScaleInt a e₁
+  else if a = 0 then frepScaleInt (-b) e₂
+  else .sub (frepScaleInt a e₁) (frepScaleInt b e₂)
+
+/-- `(p - c) · u`, dropping zero terms. -/
 def frepAxial (cx cy cz : Int) (u : ToolAxis) : FRepExpr :=
-  .add (.add (frepScaleInt u.ux (.sub .varX (.const cx))) (frepScaleInt u.uy (.sub .varY (.const cy))))
-    (frepScaleInt u.uz (.sub .varZ (.const cz)))
+  let qx : FRepExpr := .sub .varX (.const cx)
+  let qy : FRepExpr := .sub .varY (.const cy)
+  let qz : FRepExpr := .sub .varZ (.const cz)
+  if u.ux = 0 ∧ u.uy = 0 then frepScaleInt u.uz qz
+  else .add (frepAxb u.ux qx (-u.uy) qy) (frepScaleInt u.uz qz)
 
 /-- Cylinder of radius `r` on the axis through `c` along `u`, from `c` to `len` along the axis:
-`n²|p-c|² - ((p-c)·u)² ≤ n² r²` and `0 ≤ (p-c)·u ≤ n·len`. -/
+`|(p-c) × u|² ≤ n² r²` and `0 ≤ (p-c)·u ≤ n·len`. The cross-product form is Lagrange's identity
+`|q × u|² = |q|²|u|² − (q·u)²`; it is a sum of squares of linear forms, which interval arithmetic
+encloses without the cancellation the difference form suffers. -/
 def frepShank (cx cy cz : Int) (u : ToolAxis) (r len : Nat) : FRepExpr :=
+  let qx : FRepExpr := .sub .varX (.const cx)
+  let qy : FRepExpr := .sub .varY (.const cy)
+  let qz : FRepExpr := .sub .varZ (.const cz)
   let d := frepAxial cx cy cz u
   let n2 : Nat := u.n * u.n
   .csgInter
     (.offset ((n2 : Int) * r * r)
-      (.sub (.scalePos n2 (.add (.add (.sq (.sub .varX (.const cx))) (.sq (.sub .varY (.const cy))))
-        (.sq (.sub .varZ (.const cz))))) (.sq d)))
+      (.add (.add (.sq (frepAxb u.uz qy u.uy qz)) (.sq (frepAxb u.ux qz u.uz qx)))
+        (.sq (frepAxb u.uy qx u.ux qy))))
     (.csgInter (.sub (.const 0) d) (.offset ((u.n : Int) * len) d))
 
 /-- Ball end mill of radius `r` with its tip at `(tx, ty, tz)` on axis `u` (ball centre `tip + r·u/n`,
@@ -3078,38 +3094,6 @@ structure CLPoint where
   z : Int
   axis : ToolAxis
   deriving DecidableEq, Repr
-
-/-- The gouge certificate for one CL point: the cutter, grown by `δ` in radius and length, misses
-every lattice point of `part` in `B` (k-d depth `d`). -/
-def checkCLNoGouge (part : FRepExpr) (B : Box3D) (d : Nat) (r len δ : Nat) (p : CLPoint) : Bool :=
-  kdAll (disjointLeaf part (frepBallEndMill p.x p.y p.z p.axis (r + δ) (len + δ))) d B
-
-/-- Every CL point of a path passes `checkCLNoGouge`, and consecutive points are at most one lattice
-unit apart in every coordinate. -/
-def checkPathNoGouge (part : FRepExpr) (B : Box3D) (d : Nat) (r len δ : Nat) (path : List CLPoint) :
-    Bool :=
-  path.all (checkCLNoGouge part B d r len δ)
-
-/-- **`checkPathNoGouge_sound`**: for every CL point of an accepted path, the grown cutter there
-contains no lattice point of the part inside `B`.
-
-This is a lattice statement. The continuous one, every rational time of every move and every
-rational point of the part with the cutter not grown, is `checkMovesContinuous_sound` (§9). A rotary
-move between CL points is covered by neither; the post (`Obend.Hardware.Kinematics.postNgc`) only
-rotates at the clearance plane. -/
-theorem checkPathNoGouge_sound (part : FRepExpr) (B : Box3D) (d r len δ : Nat) (path : List CLPoint)
-    (h : checkPathNoGouge part B d r len δ path = true) (p : CLPoint) (hp : p ∈ path)
-    (x y z : Int) (hIn : B.contains x y z) (hPart : inSolid x y z part) :
-    0 < evalFRepPoint x y z (frepBallEndMill p.x p.y p.z p.axis (r + δ) (len + δ)) := by
-  unfold checkPathNoGouge at h
-  have hp' := List.all_eq_true.mp h p hp
-  exact checkDisjoint_sound part _ d B hp' x y z hIn hPart
-
-/-- Largest per-coordinate step between consecutive CL points is at most `s`. -/
-def clChainStepLe (s : Nat) : List CLPoint → Bool
-  | p :: q :: rest =>
-    decide (linfDist3D (p.x, p.y, p.z) (q.x, q.y, q.z) ≤ s) && clChainStepLe s (q :: rest)
-  | _ => true
 
 /-- Points `p + round(i·(q - p)/k)` for `i = 1 … k`, `k` the $L_\infty$ distance: a lattice line from
 `p` (excluded) to `q` (included) with unit steps. -/
@@ -3135,9 +3119,8 @@ Everything above is about lattice points. Here the solid is evaluated at rationa
 (`evalFRepQ`) and enclosed over rational boxes (`frepQ_enclosure_sound`), so a certificate speaks of
 every rational point of the part and every rational position of the cutter. A move between two
 cutter locations is the segment `c₀ + t (c₁ - c₀)`, `t ∈ [0, 1]`; it lies in the box spanned by its
-ends (`segment_in_hull`), and `kdSeg` checks the cutter against the part over the Minkowski
-difference `B ⊖ H` of a part box and a tool-position box, splitting both until the intervals
-separate. The interval of the cutter over `B ⊖ H` is a Lipschitz argument done by the arithmetic:
+ends (`segment_in_hull`), and a k-d tree over a part box and a tool-position box (§10) checks
+the cutter against the part over their Minkowski difference `B ⊖ H`. The interval of the cutter over `B ⊖ H` is a Lipschitz argument done by the arithmetic:
 no gradient bound is supplied, and none is assumed. The reals are not in core Lean; rationals are
 dense, and the statement is over every rational time. -/
 
@@ -3327,55 +3310,6 @@ theorem QBox.minus_contains (B H : QBox) (x y z cx cy cz : Rat) (hB : B.contains
   dsimp only
   refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> grind
 
-/-- Leaf of the motion check: on part box `B` and tool-position box `H`, either no part point exists
-or the cutter `tool0` (at the origin) translated by any `c ∈ H` misses all of `B`. -/
-def segLeaf (part tool0 : FRepExpr) (B H : QBox) : Bool :=
-  decide (0 < (evalFRepIntervalQ B part).lo) || decide (0 < (evalFRepIntervalQ (B.minus H) tool0).lo)
-
-/-- Six-dimensional k-d check over part box × tool-position box, splitting the wider of the two. -/
-def kdSeg (part tool0 : FRepExpr) : Nat → QBox → QBox → Bool
-  | 0, B, H => segLeaf part tool0 B H
-  | d + 1, B, H =>
-    segLeaf part tool0 B H ||
-      (if H.width ≤ B.width then
-        kdSeg part tool0 d B.halves.1 H && kdSeg part tool0 d B.halves.2 H
-      else
-        kdSeg part tool0 d B H.halves.1 && kdSeg part tool0 d B H.halves.2)
-
-theorem segLeaf_sound (part tool0 : FRepExpr) (B H : QBox) (h : segLeaf part tool0 B H = true)
-    (x y z cx cy cz : Rat) (hB : B.contains x y z) (hH : H.contains cx cy cz)
-    (hPart : evalFRepQ x y z part ≤ 0) : 0 < evalFRepQ (x - cx) (y - cy) (z - cz) tool0 := by
-  simp only [segLeaf, Bool.or_eq_true, decide_eq_true_eq] at h
-  rcases h with h | h
-  · have := (frepQ_enclosure_sound B x y z hB part).1
-    exact absurd hPart (by grind)
-  · have := (frepQ_enclosure_sound _ _ _ _ (QBox.minus_contains B H x y z cx cy cz hB hH) tool0).1
-    grind
-
-/-- **`kdSeg_sound`**: an accepted `kdSeg` means: for every rational point of the part in `B` and
-every rational tool position in `H`, the cutter misses the point. -/
-theorem kdSeg_sound (part tool0 : FRepExpr) :
-    ∀ (d : Nat) (B H : QBox), kdSeg part tool0 d B H = true →
-      ∀ x y z cx cy cz : Rat, B.contains x y z → H.contains cx cy cz →
-        evalFRepQ x y z part ≤ 0 → 0 < evalFRepQ (x - cx) (y - cy) (z - cz) tool0 := by
-  intro d
-  induction d with
-  | zero => intro B H h; exact segLeaf_sound part tool0 B H h
-  | succ d ih =>
-    intro B H h x y z cx cy cz hB hH hP
-    simp only [kdSeg, Bool.or_eq_true] at h
-    rcases h with h | h
-    · exact segLeaf_sound part tool0 B H h x y z cx cy cz hB hH hP
-    · split at h
-      · simp only [Bool.and_eq_true] at h
-        rcases QBox.halves_cover B x y z hB with hc | hc
-        · exact ih _ _ h.1 x y z cx cy cz hc hH hP
-        · exact ih _ _ h.2 x y z cx cy cz hc hH hP
-      · simp only [Bool.and_eq_true] at h
-        rcases QBox.halves_cover H cx cy cz hH with hc | hc
-        · exact ih _ _ h.1 x y z cx cy cz hB hc hP
-        · exact ih _ _ h.2 x y z cx cy cz hB hc hP
-
 /-- The box spanned by two lattice points. -/
 def QBox.hull (p q : Int × Int × Int) : QBox :=
   ⟨⟨min (p.1 : Rat) q.1, max (p.1 : Rat) q.1⟩, ⟨min (p.2.1 : Rat) q.2.1, max (p.2.1 : Rat) q.2.1⟩,
@@ -3405,27 +3339,501 @@ theorem segment_in_hull (p q : Int × Int × Int) (t : Rat) (h0 : 0 ≤ t) (h1 :
 def Box3D.toQ (B : Box3D) : QBox :=
   ⟨⟨B.xIv.lo, B.xIv.hi⟩, ⟨B.yIv.lo, B.yIv.hi⟩, ⟨B.zIv.lo, B.zIv.hi⟩⟩
 
-/-- Every move between consecutive cutter locations, checked as a continuous segment. -/
-def checkMovesContinuous (part : FRepExpr) (B : QBox) (d r len : Nat) (path : List CLPoint) : Bool :=
-  (path.zip path.tail).all fun (c₀, c₁) =>
-    c₀.axis == c₁.axis &&
-      kdSeg part (frepBallEndMill 0 0 0 c₀.axis r len) d B (QBox.hull (c₀.x, c₀.y, c₀.z) (c₁.x, c₁.y, c₁.z))
+/-! ## 10. The motion certificate, checked rather than searched (`cam-gouge@1`)
 
-/-- **`checkMovesContinuous_sound`**: if the moves of a path pass, then at every rational time
-`t ∈ [0, 1]` of every move, the cutter (ball and shank, not grown) at `c₀ + t (c₁ - c₀)` contains no
-rational point of the part inside `B`. -/
-theorem checkMovesContinuous_sound (part : FRepExpr) (B : QBox) (d r len : Nat) (path : List CLPoint)
-    (h : checkMovesContinuous part B d r len path = true) (c₀ c₁ : CLPoint)
-    (hm : (c₀, c₁) ∈ path.zip path.tail) (t : Rat) (h0 : 0 ≤ t) (h1 : t ≤ 1)
-    (x y z : Rat) (hB : B.contains x y z) (hPart : evalFRepQ x y z part ≤ 0) :
-    0 < evalFRepQ (x - ((c₀.x : Rat) + t * ((c₁.x : Rat) - c₀.x)))
-        (y - ((c₀.y : Rat) + t * ((c₁.y : Rat) - c₀.y)))
-        (z - ((c₀.z : Rat) + t * ((c₁.z : Rat) - c₀.z)))
-      (frepBallEndMill 0 0 0 c₀.axis r len) := by
-  have h' := List.all_eq_true.mp h (c₀, c₁) hm
-  simp only [Bool.and_eq_true] at h'
-  exact kdSeg_sound _ _ d _ _ h'.2 x y z _ _ _ hB
-    (segment_in_hull (c₀.x, c₀.y, c₀.z) (c₁.x, c₁.y, c₁.z) t h0 h1) hPart
+Searching for a k-d subdivision at every build is the expensive part; the subdivision found is the
+certificate. `KdCert` records it, `checkKdZ` replays it (one interval evaluation per leaf, no
+search), and `checkKdZ_sound` says what a replayed tree establishes. Moves are grouped into chunks; a chunk's tool
+positions are enclosed by the box of its moves' end points, which holds every point of every move
+(`move_in_box`). `searchKdZ` produces certificates and is run once, outside the build
+(`lean/tools/emitcam`). The judge and its wire format are `camGougeFormat`. -/
+
+/-- A recorded k-d subdivision: a leaf says which test closes the box pair. -/
+inductive KdCert where
+  | part
+  | tool
+  | splitB (l r : KdCert)
+  | splitH (l r : KdCert)
+  deriving Repr, Inhabited
+
+/-! ### Replaying in integers
+
+The tree is replayed over integer boxes with the integer interval evaluator (`evalFRepInterval`),
+which is exact integer arithmetic and an order of magnitude cheaper than `Rat`. On an integer box the
+two evaluators agree up to the cast (`evalFRepInterval_toQ`), so a passing integer leaf is a passing
+rational leaf, and the statement is still about every rational point. Halves overlap at the
+midpoint (`[lo, m]`, `[m, hi]`) so that they cover the rationals between. -/
+
+theorem intCast_min' (a b : Int) : ((min a b : Int) : Rat) = min (a : Rat) (b : Rat) := by
+  rw [Int.min_def, Rat.min_def]
+  by_cases h : a ≤ b
+  · have h' : (a : Rat) ≤ b := by exact_mod_cast h
+    simp [h, h']
+  · have h' : ¬ (a : Rat) ≤ b := by exact_mod_cast h
+    simp [h, h']
+
+theorem intCast_max' (a b : Int) : ((max a b : Int) : Rat) = max (a : Rat) (b : Rat) := by
+  rw [Int.max_def, Rat.max_def]
+  by_cases h : a ≤ b
+  · have h' : (a : Rat) ≤ b := by exact_mod_cast h
+    simp [h, h']
+  · have h' : ¬ (a : Rat) ≤ b := by exact_mod_cast h
+    simp [h, h']
+
+/-- An integer interval as a rational one. -/
+def ivToQ (iv : FloatInterval) : QIv := ⟨iv.lo, iv.hi⟩
+
+theorem ivSq_toQ (a : FloatInterval) : qSq (ivToQ a) = ivToQ (ivSq a) := by
+  unfold qSq ivSq ivToQ
+  dsimp only
+  by_cases h1 : 0 ≤ a.lo
+  · have h1' : (0 : Rat) ≤ a.lo := by exact_mod_cast h1
+    simp [h1, h1', Rat.intCast_mul]
+  · have h1' : ¬ (0 : Rat) ≤ a.lo := by exact_mod_cast h1
+    by_cases h2 : a.hi ≤ 0
+    · have h2' : (a.hi : Rat) ≤ 0 := by exact_mod_cast h2
+      simp [h1, h1', h2, h2', Rat.intCast_mul]
+    · have h2' : ¬ (a.hi : Rat) ≤ 0 := by exact_mod_cast h2
+      simp [h1, h1', h2, h2', Rat.intCast_mul, intCast_max']
+
+theorem natCast_intCast_rat (k : Nat) : (((k : Int)) : Rat) = (k : Rat) := by norm_cast
+
+/-- On an integer box, the rational evaluator is the integer one, cast. -/
+theorem evalFRepInterval_toQ (B : Box3D) (e : FRepExpr) :
+    evalFRepIntervalQ B.toQ e = ivToQ (evalFRepInterval B e) := by
+  induction e with
+  | const c => rfl
+  | varX => rfl
+  | varY => rfl
+  | varZ => rfl
+  | add a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ihb, ivAdd, ivToQ, Rat.intCast_add]
+  | sub a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ihb, ivSub, ivToQ, Rat.intCast_sub]
+  | scalePos k a iha =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ivScalePos, ivToQ, Rat.intCast_mul]
+    rw [show (Int.ofNat k : Int) = (k : Int) from rfl, natCast_intCast_rat]
+  | sq a iha =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ivSq_toQ]
+  | csgUnion a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ihb, ivMin, ivToQ, intCast_min']
+  | csgInter a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ihb, ivMax, ivToQ, intCast_max']
+  | csgDiff a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ihb, ivMax, ivNeg, ivToQ,
+      intCast_max', Rat.intCast_neg]
+  | offset r a iha =>
+    simp only [evalFRepIntervalQ, evalFRepInterval, iha, ivSub, ivToQ, Rat.intCast_sub]
+
+/-- `B ⊖ H` on integer boxes. -/
+def Box3D.minus (B H : Box3D) : Box3D :=
+  ⟨⟨B.xIv.lo - H.xIv.hi, B.xIv.hi - H.xIv.lo⟩, ⟨B.yIv.lo - H.yIv.hi, B.yIv.hi - H.yIv.lo⟩,
+   ⟨B.zIv.lo - H.zIv.hi, B.zIv.hi - H.zIv.lo⟩⟩
+
+theorem Box3D.minus_toQ (B H : Box3D) : (B.minus H).toQ = B.toQ.minus H.toQ := by
+  simp only [Box3D.minus, Box3D.toQ, QBox.minus, Rat.intCast_sub]
+
+def ivHalvesO (iv : FloatInterval) : FloatInterval × FloatInterval :=
+  let mid := (iv.lo + iv.hi) / 2
+  (⟨iv.lo, mid⟩, ⟨mid, iv.hi⟩)
+
+theorem ivHalvesO_cover (iv : FloatInterval) (v : Rat) (h : (ivToQ iv).contains v) :
+    (ivToQ (ivHalvesO iv).1).contains v ∨ (ivToQ (ivHalvesO iv).2).contains v := by
+  unfold ivHalvesO ivToQ QIv.contains at *
+  dsimp only at *
+  rcases @Rat.le_total v (((iv.lo + iv.hi) / 2 : Int) : Rat) with hm | hm
+  · exact Or.inl ⟨h.1, hm⟩
+  · exact Or.inr ⟨hm, h.2⟩
+
+def Box3D.widthZ (B : Box3D) : Int :=
+  max (B.xIv.hi - B.xIv.lo) (max (B.yIv.hi - B.yIv.lo) (B.zIv.hi - B.zIv.lo))
+
+/-- Split an integer box across its widest axis into overlapping halves. -/
+def Box3D.halvesO (B : Box3D) : Box3D × Box3D :=
+  if B.yIv.hi - B.yIv.lo ≤ B.xIv.hi - B.xIv.lo ∧ B.zIv.hi - B.zIv.lo ≤ B.xIv.hi - B.xIv.lo then
+    ({ B with xIv := (ivHalvesO B.xIv).1 }, { B with xIv := (ivHalvesO B.xIv).2 })
+  else if B.zIv.hi - B.zIv.lo ≤ B.yIv.hi - B.yIv.lo then
+    ({ B with yIv := (ivHalvesO B.yIv).1 }, { B with yIv := (ivHalvesO B.yIv).2 })
+  else
+    ({ B with zIv := (ivHalvesO B.zIv).1 }, { B with zIv := (ivHalvesO B.zIv).2 })
+
+theorem Box3D.halvesO_cover (B : Box3D) (x y z : Rat) (h : B.toQ.contains x y z) :
+    B.halvesO.1.toQ.contains x y z ∨ B.halvesO.2.toQ.contains x y z := by
+  obtain ⟨hx, hy, hz⟩ := h
+  have hx' : (ivToQ B.xIv).contains x := hx
+  have hy' : (ivToQ B.yIv).contains y := hy
+  have hz' : (ivToQ B.zIv).contains z := hz
+  unfold Box3D.halvesO
+  split
+  · rcases ivHalvesO_cover _ _ hx' with h | h
+    · exact Or.inl ⟨h, hy, hz⟩
+    · exact Or.inr ⟨h, hy, hz⟩
+  · split
+    · rcases ivHalvesO_cover _ _ hy' with h | h
+      · exact Or.inl ⟨hx, h, hz⟩
+      · exact Or.inr ⟨hx, h, hz⟩
+    · rcases ivHalvesO_cover _ _ hz' with h | h
+      · exact Or.inl ⟨hx, hy, h⟩
+      · exact Or.inr ⟨hx, hy, h⟩
+
+def checkKdZ (part tool0 : FRepExpr) : KdCert → Box3D → Box3D → Bool
+  | .part, B, _ => decide (0 < (evalFRepInterval B part).lo)
+  | .tool, B, H => decide (0 < (evalFRepInterval (B.minus H) tool0).lo)
+  | .splitB l r, B, H => checkKdZ part tool0 l B.halvesO.1 H && checkKdZ part tool0 r B.halvesO.2 H
+  | .splitH l r, B, H => checkKdZ part tool0 l B H.halvesO.1 && checkKdZ part tool0 r B H.halvesO.2
+
+/-- **`checkKdZ_sound`**: a tree replayed in integers clears every rational point of `B` from the
+cutter at every rational position in `H`. -/
+theorem checkKdZ_sound (part tool0 : FRepExpr) :
+    ∀ (c : KdCert) (B H : Box3D), checkKdZ part tool0 c B H = true →
+      ∀ x y z cx cy cz : Rat, B.toQ.contains x y z → H.toQ.contains cx cy cz →
+        evalFRepQ x y z part ≤ 0 → 0 < evalFRepQ (x - cx) (y - cy) (z - cz) tool0 := by
+  intro c
+  induction c with
+  | part =>
+    intro B H h x y z cx cy cz hB _ hP
+    have henc := (frepQ_enclosure_sound B.toQ x y z hB part).1
+    rw [evalFRepInterval_toQ] at henc
+    simp only [checkKdZ, decide_eq_true_eq] at h
+    have h' : (0 : Rat) < ((evalFRepInterval B part).lo : Rat) := by exact_mod_cast h
+    simp only [ivToQ] at henc
+    exact absurd hP (by grind)
+  | tool =>
+    intro B H h x y z cx cy cz hB hH _
+    have hm := QBox.minus_contains B.toQ H.toQ x y z cx cy cz hB hH
+    rw [← Box3D.minus_toQ] at hm
+    have henc := (frepQ_enclosure_sound _ _ _ _ hm tool0).1
+    rw [evalFRepInterval_toQ] at henc
+    simp only [checkKdZ, decide_eq_true_eq] at h
+    have h' : (0 : Rat) < ((evalFRepInterval (B.minus H) tool0).lo : Rat) := by exact_mod_cast h
+    simp only [ivToQ] at henc
+    grind
+  | splitB l r ihl ihr =>
+    intro B H h x y z cx cy cz hB hH hP
+    simp only [checkKdZ, Bool.and_eq_true] at h
+    rcases Box3D.halvesO_cover B x y z hB with hc | hc
+    · exact ihl _ _ h.1 x y z cx cy cz hc hH hP
+    · exact ihr _ _ h.2 x y z cx cy cz hc hH hP
+  | splitH l r ihl ihr =>
+    intro B H h x y z cx cy cz hB hH hP
+    simp only [checkKdZ, Bool.and_eq_true] at h
+    rcases Box3D.halvesO_cover H cx cy cz hH with hc | hc
+    · exact ihl _ _ h.1 x y z cx cy cz hB hc hP
+    · exact ihr _ _ h.2 x y z cx cy cz hB hc hP
+
+/-- Find a tree in integers; a box pair whose wider side is one unit is not split further. -/
+def searchKdZ (part tool0 : FRepExpr) : Nat → Box3D → Box3D → Option KdCert
+  | 0, B, H =>
+    if 0 < (evalFRepInterval B part).lo then some .part
+    else if 0 < (evalFRepInterval (B.minus H) tool0).lo then some .tool else none
+  | d + 1, B, H =>
+    if 0 < (evalFRepInterval B part).lo then some .part
+    else if 0 < (evalFRepInterval (B.minus H) tool0).lo then some .tool
+    else if max B.widthZ H.widthZ ≤ 1 then none
+    else if H.widthZ ≤ B.widthZ then
+      match searchKdZ part tool0 d B.halvesO.1 H with
+      | none => none
+      | some l => (searchKdZ part tool0 d B.halvesO.2 H).map (.splitB l)
+    else
+      match searchKdZ part tool0 d B H.halvesO.1 with
+      | none => none
+      | some l => (searchKdZ part tool0 d B H.halvesO.2).map (.splitH l)
+
+abbrev Pt3 := Int × Int × Int
+
+/-- Lower and upper bound of a list of integers, starting from `(lo, hi)`. -/
+def intBounds : Int × Int → List Int → Int × Int
+  | acc, [] => acc
+  | (lo, hi), a :: rest => intBounds (min lo a, max hi a) rest
+
+theorem intBounds_spec : ∀ (xs : List Int) (lo hi : Int),
+    (intBounds (lo, hi) xs).1 ≤ lo ∧ hi ≤ (intBounds (lo, hi) xs).2 ∧
+    ∀ a ∈ xs, (intBounds (lo, hi) xs).1 ≤ a ∧ a ≤ (intBounds (lo, hi) xs).2
+  | [], lo, hi => ⟨Int.le_refl _, Int.le_refl _, fun _ h => by cases h⟩
+  | a :: rest, lo, hi => by
+    obtain ⟨h1, h2, h3⟩ := intBounds_spec rest (min lo a) (max hi a)
+    simp only [intBounds]
+    refine ⟨by omega, by omega, fun b hb => ?_⟩
+    rcases List.mem_cons.mp hb with rfl | hb
+    · omega
+    · exact h3 b hb
+
+/-- The box of all end points of a list of moves. -/
+def movesBoxZ (ms : List (Pt3 × Pt3)) : Box3D :=
+  let pts := ms.flatMap fun m => [m.1, m.2]
+  let d : Pt3 := (pts.headD (0, 0, 0))
+  let bx := intBounds (d.1, d.1) (pts.map (·.1))
+  let byy := intBounds (d.2.1, d.2.1) (pts.map (·.2.1))
+  let bz := intBounds (d.2.2, d.2.2) (pts.map (·.2.2))
+  ⟨⟨bx.1, bx.2⟩, ⟨byy.1, byy.2⟩, ⟨bz.1, bz.2⟩⟩
+
+def movesBox (ms : List (Pt3 × Pt3)) : QBox := (movesBoxZ ms).toQ
+
+theorem coord_between (lo hi a b t : Rat) (ha : lo ≤ a ∧ a ≤ hi) (hb : lo ≤ b ∧ b ≤ hi)
+    (h0 : 0 ≤ t) (h1 : t ≤ 1) : lo ≤ a + t * (b - a) ∧ a + t * (b - a) ≤ hi := by
+  have := segment_coord_in_hull a b t h0 h1
+  rw [Rat.min_def, Rat.max_def] at this
+  split at this <;> grind
+
+/-- Every point of every move lies in the moves' box. -/
+theorem move_in_box (ms : List (Pt3 × Pt3)) (m : Pt3 × Pt3) (hm : m ∈ ms) (t : Rat) (h0 : 0 ≤ t)
+    (h1 : t ≤ 1) :
+    (movesBox ms).contains ((m.1.1 : Rat) + t * ((m.2.1 : Rat) - m.1.1))
+      ((m.1.2.1 : Rat) + t * ((m.2.2.1 : Rat) - m.1.2.1))
+      ((m.1.2.2 : Rat) + t * ((m.2.2.2 : Rat) - m.1.2.2)) := by
+  have hp : m.1 ∈ ms.flatMap (fun m => [m.1, m.2]) := List.mem_flatMap.mpr ⟨m, hm, by simp⟩
+  have hq : m.2 ∈ ms.flatMap (fun m => [m.1, m.2]) := List.mem_flatMap.mpr ⟨m, hm, by simp⟩
+  unfold movesBox movesBoxZ Box3D.toQ QBox.contains QIv.contains
+  dsimp only
+  generalize ms.flatMap (fun m => [m.1, m.2]) = pts at hp hq
+  have cast2 : ∀ (lo hi a : Int), lo ≤ a ∧ a ≤ hi → (lo : Rat) ≤ (a : Rat) ∧ (a : Rat) ≤ (hi : Rat) :=
+    fun lo hi a h => ⟨by exact_mod_cast h.1, by exact_mod_cast h.2⟩
+  have bx := (intBounds_spec (pts.map (·.1)) (pts.headD (0, 0, 0)).1 (pts.headD (0, 0, 0)).1).2.2
+  have byy := (intBounds_spec (pts.map (·.2.1)) (pts.headD (0, 0, 0)).2.1 (pts.headD (0, 0, 0)).2.1).2.2
+  have bz := (intBounds_spec (pts.map (·.2.2)) (pts.headD (0, 0, 0)).2.2 (pts.headD (0, 0, 0)).2.2).2.2
+  refine ⟨coord_between _ _ _ _ t (cast2 _ _ _ (bx _ (List.mem_map_of_mem hp)))
+      (cast2 _ _ _ (bx _ (List.mem_map_of_mem hq))) h0 h1,
+    coord_between _ _ _ _ t (cast2 _ _ _ (byy _ (List.mem_map_of_mem hp)))
+      (cast2 _ _ _ (byy _ (List.mem_map_of_mem hq))) h0 h1,
+    coord_between _ _ _ _ t (cast2 _ _ _ (bz _ (List.mem_map_of_mem hp)))
+      (cast2 _ _ _ (bz _ (List.mem_map_of_mem hq))) h0 h1⟩
+
+/-- Moves on one tool axis (one pass). -/
+structure CamChunk where
+  axis  : ToolAxis
+  moves : List (Pt3 × Pt3)
+  deriving Repr
+
+/-- The object: a part, a box holding it, a cutter (ball radius, shank length), and the moves of
+each pass. -/
+structure CamGougeObj where
+  part     : FRepExpr
+  box      : Box3D
+  toolR    : Nat
+  shankLen : Nat
+  chunks   : List CamChunk
+  deriving Repr
+
+/-- The certificate of one pass: consecutive groups of moves (`k` moves each, in order), each with
+the k-d tree for the box of its end points. How the moves are grouped is the producer's choice. -/
+abbrev CamPassCert := List (Nat × KdCert)
+
+def checkGroups (part tool0 : FRepExpr) (box : Box3D) : List (Pt3 × Pt3) → CamPassCert → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | ms@(_ :: _), (k, t) :: rest =>
+    checkKdZ part tool0 t box (movesBoxZ (ms.take k)) && checkGroups part tool0 box (ms.drop k) rest
+
+theorem checkGroups_mem (part tool0 : FRepExpr) (box : Box3D) :
+    ∀ (gs : CamPassCert) (ms : List (Pt3 × Pt3)), checkGroups part tool0 box ms gs = true →
+      ∀ m ∈ ms, ∃ g : List (Pt3 × Pt3), ∃ t : KdCert,
+        checkKdZ part tool0 t box (movesBoxZ g) = true ∧ m ∈ g
+  | [], ms, h, m, hm => by
+    cases ms with
+    | nil => cases hm
+    | cons _ _ => simp [checkGroups] at h
+  | (k, t) :: rest, ms, h, m, hm => by
+    cases ms with
+    | nil => cases hm
+    | cons a as =>
+      simp only [checkGroups, Bool.and_eq_true] at h
+      rw [← List.take_append_drop k (a :: as)] at hm
+      rcases List.mem_append.mp hm with hm | hm
+      · exact ⟨_, t, h.1, hm⟩
+      · exact checkGroups_mem part tool0 box rest _ h.2 m hm
+
+inductive CamGougeClause where
+  | chunkCount (expected got : Nat)
+  | notCleared (chunk : Nat)
+  deriving Repr, DecidableEq
+
+def checkCamGouge (o : CamGougeObj) (c : List CamPassCert) : Judge.Verdict CamGougeClause :=
+  if c.length != o.chunks.length then .refused (.chunkCount o.chunks.length c.length) []
+  else
+    match ((o.chunks.zip c).zipIdx.find? fun ((ch, gs), _) =>
+        !checkGroups o.part (frepBallEndMill 0 0 0 ch.axis o.toolR o.shankLen) o.box ch.moves gs) with
+    | some (_, i) => .refused (.notCleared i) []
+    | none => .ok
+
+/-- What an accepted certificate establishes: at every rational time of every move, the cutter at
+its true size contains no rational point of the part inside the box. -/
+def CamGougeMeaning (o : CamGougeObj) : Prop :=
+  ∀ ch ∈ o.chunks, ∀ m ∈ ch.moves, ∀ t : Rat, 0 ≤ t → t ≤ 1 → ∀ x y z : Rat,
+    o.box.toQ.contains x y z → evalFRepQ x y z o.part ≤ 0 →
+    0 < evalFRepQ (x - ((m.1.1 : Rat) + t * ((m.2.1 : Rat) - m.1.1)))
+      (y - ((m.1.2.1 : Rat) + t * ((m.2.2.1 : Rat) - m.1.2.1)))
+      (z - ((m.1.2.2 : Rat) + t * ((m.2.2.2 : Rat) - m.1.2.2)))
+      (frepBallEndMill 0 0 0 ch.axis o.toolR o.shankLen)
+
+theorem checkCamGouge_sound (o : CamGougeObj) (c : List CamPassCert) (h : checkCamGouge o c = .ok) :
+    CamGougeMeaning o := by
+  unfold checkCamGouge at h
+  split at h
+  · cases h
+  · rename_i hlen
+    split at h
+    · cases h
+    · rename_i hnone
+      intro ch hch m hm t h0 h1 x y z hB hP
+      have hl : c.length = o.chunks.length := by simpa using hlen
+      obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hch
+      have hi' : i < c.length := by omega
+      have hz : ((o.chunks[i], c[i]), i) ∈ (o.chunks.zip c).zipIdx := by
+        rw [List.mem_zipIdx_iff_getElem?]
+        simp [List.getElem?_zip_eq_some, hi, hi']
+      have hk := List.find?_eq_none.mp hnone _ hz
+      simp only [Bool.not_eq_true', Bool.not_eq_false] at hk
+      obtain ⟨g, kt, hck, hmg⟩ := checkGroups_mem _ _ _ _ _ (by simpa using hk) m hm
+      exact checkKdZ_sound _ _ _ _ _ hck x y z _ _ _ hB (move_in_box _ m hmg t h0 h1) hP
+
+instance camGougeJudge : Obend.Judge CamGougeObj (List CamPassCert) where
+  Clause := CamGougeClause
+  Meaning o _ := CamGougeMeaning o
+  check _ := checkCamGouge
+  sound := fun {_ o c} h => checkCamGouge_sound o c h
+  refutes _ := false
+  refuted := by intro _ _ _ _ _ _ hRef; cases hRef
+  Fragment _ := False
+  complete := by intro _ h; exact h.elim
+  mono := by intro _ _ _ _ _ _; rfl
+
+/-! ### Wire format: whitespace-separated tokens -/
+
+def FRepExpr.toTokens : FRepExpr → List String
+  | .const c => ["c", toString c]
+  | .varX => ["x"] | .varY => ["y"] | .varZ => ["z"]
+  | .add a b => "+" :: a.toTokens ++ b.toTokens
+  | .sub a b => "-" :: a.toTokens ++ b.toTokens
+  | .scalePos k a => "k" :: toString k :: a.toTokens
+  | .sq a => "q" :: a.toTokens
+  | .csgUnion a b => "u" :: a.toTokens ++ b.toTokens
+  | .csgInter a b => "i" :: a.toTokens ++ b.toTokens
+  | .csgDiff a b => "d" :: a.toTokens ++ b.toTokens
+  | .offset r a => "o" :: toString r :: a.toTokens
+
+def FRepExpr.ofTokens : Nat → List String → Option (FRepExpr × List String)
+  | 0, _ => none
+  | _, [] => none
+  | fuel + 1, t :: ts =>
+    let bin (f : FRepExpr → FRepExpr → FRepExpr) : Option (FRepExpr × List String) := do
+      let (a, r1) ← FRepExpr.ofTokens fuel ts
+      let (b, r2) ← FRepExpr.ofTokens fuel r1
+      pure (f a b, r2)
+    match t with
+    | "c" => match ts with | n :: r => (n.toInt?).map fun v => (.const v, r) | [] => none
+    | "x" => some (.varX, ts) | "y" => some (.varY, ts) | "z" => some (.varZ, ts)
+    | "+" => bin .add | "-" => bin .sub | "u" => bin .csgUnion | "i" => bin .csgInter
+    | "d" => bin .csgDiff
+    | "k" => match ts with
+      | n :: r => do let k ← n.toNat?; let (a, r') ← FRepExpr.ofTokens fuel r; pure (.scalePos k a, r')
+      | [] => none
+    | "q" => do let (a, r) ← FRepExpr.ofTokens fuel ts; pure (.sq a, r)
+    | "o" => match ts with
+      | n :: r => do let v ← n.toInt?; let (a, r') ← FRepExpr.ofTokens fuel r; pure (.offset v a, r')
+      | [] => none
+    | _ => none
+
+/-- A tree as one character per node (`P`, `T`, `B`, `H`, prefix order). -/
+def KdCert.toChars : KdCert → List Char
+  | .part => ['P'] | .tool => ['T']
+  | .splitB l r => 'B' :: l.toChars ++ r.toChars
+  | .splitH l r => 'H' :: l.toChars ++ r.toChars
+
+def KdCert.ofChars : Nat → List Char → Option (KdCert × List Char)
+  | 0, _ => none
+  | _, [] => none
+  | fuel + 1, ch :: cs =>
+    match ch with
+    | 'P' => some (.part, cs)
+    | 'T' => some (.tool, cs)
+    | 'B' => do
+      let (l, r1) ← KdCert.ofChars fuel cs; let (r, r2) ← KdCert.ofChars fuel r1; pure (.splitB l r, r2)
+    | 'H' => do
+      let (l, r1) ← KdCert.ofChars fuel cs; let (r, r2) ← KdCert.ofChars fuel r1; pure (.splitH l r, r2)
+    | _ => none
+
+def wireTokens (s : String) : List String :=
+  ((s.replace "\n" " ").splitOn " ").filter (· ≠ "")
+
+/-- Certificate wire: one line per pass; on it, one `k:TREE` token per group of `k` moves. -/
+def encodeCamCert (c : List CamPassCert) : String :=
+  String.intercalate "\n" (c.map fun gs =>
+    String.intercalate " " (gs.map fun (k, t) => s!"{k}:" ++ String.ofList t.toChars)) ++ "\n"
+
+def decodeCamGroup (tok : String) : Except String (Nat × KdCert) :=
+  match tok.splitOn ":" with
+  | [k, tree] =>
+    match k.toNat?, KdCert.ofChars (tree.length + 1) tree.toList with
+    | some n, some (t, []) => .ok (n, t)
+    | _, _ => .error "malformed group"
+  | _ => .error "malformed group"
+
+def decodeCamCert (s : String) : Except String (List CamPassCert) :=
+  ((s.splitOn "\n").filter (· ≠ "")).mapM fun l => ((l.splitOn " ").filter (· ≠ "")).mapM decodeCamGroup
+
+def pt3Tokens (p : Pt3) : List String := [toString p.1, toString p.2.1, toString p.2.2]
+
+/-- Object wire: `part …`, `box …`, `tool r len`, then one `chunk ux uy uz n` line and its move
+end points per chunk. -/
+def encodeCamObj (o : CamGougeObj) : String :=
+  let b := o.box
+  let header :=
+    [ "part " ++ String.intercalate " " o.part.toTokens
+    , s!"box {b.xIv.lo} {b.xIv.hi} {b.yIv.lo} {b.yIv.hi} {b.zIv.lo} {b.zIv.hi}"
+    , s!"tool {o.toolR} {o.shankLen}" ]
+  let chunks := o.chunks.map fun ch =>
+    String.intercalate " " (["chunk", toString ch.axis.ux, toString ch.axis.uy, toString ch.axis.uz,
+      toString ch.axis.n] ++ ch.moves.flatMap fun m => pt3Tokens m.1 ++ pt3Tokens m.2)
+  String.intercalate "\n" (header ++ chunks) ++ "\n"
+
+def decodeMoves : List Int → Option (List (Pt3 × Pt3))
+  | a :: b :: c :: d :: e :: f :: rest => (decodeMoves rest).map (((a, b, c), (d, e, f)) :: ·)
+  | [] => some []
+  | _ => none
+
+def decodeCamObj (s : String) : Except String CamGougeObj := do
+  let lines := (s.splitOn "\n").filter (· ≠ "")
+  match lines with
+  | pl :: bl :: tl :: cls =>
+    let pt := wireTokens pl
+    let some ("part", pts) := (match pt with | h :: r => some (h, r) | [] => none) | .error "part"
+    let some (part, []) := FRepExpr.ofTokens (pts.length + 1) pts | .error "part expression"
+    let some [x0, x1, y0, y1, z0, z1] := ((wireTokens bl).drop 1).mapM String.toInt? | .error "box"
+    let some [r, len] := ((wireTokens tl).drop 1).mapM String.toNat? | .error "tool"
+    let chunks ← cls.mapM fun l =>
+      match ((wireTokens l).drop 1).mapM String.toInt? with
+      | some (ux :: uy :: uz :: n :: rest) =>
+        match decodeMoves rest with
+        | some ms => .ok { axis := ⟨ux, uy, uz, n.toNat⟩, moves := ms }
+        | none => .error "chunk moves"
+      | _ => .error "chunk header"
+    pure { part, box := ⟨⟨x0, x1⟩, ⟨y0, y1⟩, ⟨z0, z1⟩⟩, toolR := r, shankLen := len, chunks }
+  | _ => .error "object needs part, box, tool lines"
+
+/-- Planted bad object: a vertical ball end mill parked inside a unit cube. -/
+def camGougeBad : CamGougeObj × List CamPassCert :=
+  ({ part := .csgInter (.csgInter (.csgInter (.sub (.const 0) .varX) (.offset 4 .varX))
+        (.csgInter (.sub (.const 0) .varY) (.offset 4 .varY)))
+        (.csgInter (.sub (.const 0) .varZ) (.offset 4 .varZ))
+     box := ⟨⟨0, 4⟩, ⟨0, 4⟩, ⟨0, 4⟩⟩, toolR := 1, shankLen := 2
+     chunks := [{ axis := ⟨0, 0, 1, 1⟩, moves := [((2, 2, 1), (2, 2, 1))] }] }, [[(1, .tool)]])
+
+theorem camGougeBad_refused : checkCamGouge camGougeBad.1 camGougeBad.2 = .refused (.notCleared 0) [] := by
+  decide +kernel
+
+def camGougeFormat : Obend.Judge.Format where
+  name        := "cam-gouge"
+  version     := "1"
+  Obj         := CamGougeObj
+  Cert        := List CamPassCert
+  judge       := camGougeJudge
+  decodeObj   := decodeCamObj
+  decodeCert  := decodeCamCert
+  trust       := .compiled
+  regime      := .decidable
+  bad         := camGougeBad
+  badGrade    := 0
+  bad_refused := ⟨_, _, camGougeBad_refused⟩
 
 end Obend.Hardware.GeometryCAM
 end

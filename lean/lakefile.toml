@@ -74,3 +74,12 @@ root = "Obend.Main"
 # Lane Lower: `obend lower` imports a module with its environment extensions (Lean's equation
 # compiler reads them), whose initializers the interpreter runs; Linux needs the symbols exported.
 supportInterpreter = true
+
+# cad-cam lane (2026-11-04): writes the fidget program and its `cam-gouge@1` certificate
+# (`apps/fidget-cam/cam/`); `Obend.Apps.FidgetCamCert` replays the certificate at build time.
+# Outside the library tier because it imports `Obend.Apps.FidgetCam`. `lake exe obend-emit-cam`.
+[[lean_exe]]
+name = "obend-emit-cam"
+srcDir = "tools/emitcam"
+root = "EmitCam"
+supportInterpreter = true

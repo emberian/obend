@@ -85,10 +85,11 @@ review, `review/EXPERT-cad-cam-20261104.md`):
   the whole cavity, replacing three probe-point functions that bounded the distance from one point).
 - **Cutters.** `frepBallEndMill` is a ball end mill with its shank on an integer tool axis whose length
   is an integer (`(0,0,1)`, `(3,0,4)`, …), so every cutter is a polynomial F-Rep without square roots.
-  `checkPathNoGouge_sound` certifies lattice samples of a path with the cutter grown by `δ`;
-  `checkMovesContinuous_sound` (§9) certifies motion: at every rational time of every move, the
-  cutter at its true size contains no rational point of the part, checked over the Minkowski
-  difference of part boxes and swept tool-position boxes.
+  The motion certificate is a judge, `cam-gouge@1` (`camGougeFormat`, §10): its certificate is a
+  k-d tree per move over a part box × the box of tool positions the move sweeps, replayed in
+  integers (`checkKdZ_sound`); `checkCamGouge_sound` says an accepted certificate means that at
+  every rational time of every move the cutter at its true size contains no rational point of the
+  part.
 - **The post.** [`Kinematics.lean`](lean/Obend/Hardware/Kinematics.lean) §8 turns 3+2 operations into
   a Fanuc 30i program for an A/C trunnion with tool centre point management (`G43.4`).
   `postMoves_rotarySafe` holds for every list of operations: no feed changes the tool axis, and every
@@ -105,8 +106,9 @@ review, `review/EXPERT-cad-cam-20261104.md`):
   values; Lean builds one solid from them (`fidgetParams_eq_obend`), certifies the bore wall
   (`fidget_bore_wall_sound`, 2.0 mm), generates Z-level contours and four 3+2 top-edge passes,
   certifies every lattice point of every segment including plunges and retracts with the shank
-  (`fidget_toolpath_no_gouge`, 100 µm lattice, cutter grown by one unit) and every rational time of
-  every move with the cutter at its true size (`fidget_toolpath_no_gouge_continuous`), and posts the program
+  at every rational time of every move with the cutter at its true size
+  (`Apps/FidgetCamCert.lean`, `fidget_toolpath_no_gouge_continuous`, from the committed certificate
+  `apps/fidget-cam/cam/impeller_5axis.cert` that `lake exe obend-emit-cam` writes), and posts the program
   (`impeller5AxisNgc`). The RTL voxel evaluator is compiled from the same tape.
 
 What is not there: blades (the part is a hub, a lug and a bore), the tool holder, simultaneous
