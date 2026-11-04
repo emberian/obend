@@ -344,15 +344,21 @@ theorem test_wire_numeric_field_parsers :
      checkPcbBoardJudge 0 50 meander = .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []) :=
   extractNatField_and_extractIntField_verified
 
+/-- 4.4 Token boundaries, and the strict decoders: a certificate that omits a field is `.error`, not a
+golden default (the statement is `Judge.extractNatField_token_boundary_and_decoders_verified`'s). -/
 theorem test_wire_token_boundary_and_decoders :
     extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
     extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧
     extractIntField "{\"extra_minMarginMv\": -500}" "minMarginMv" = none ∧
-    (match decodePhotonicsCert "mode=golden,bendRadiusNm=2000,circumferenceUm=50" with
+    (decodePhotonicsCert "mode=golden").isOk = false ∧
+    (decodePcbBoardCert "mode=golden").isOk = false ∧
+    (decodeRtlSynthCert "{\"module\": \"m\"}").isOk = false ∧
+    (decodePnrCert "{\"mode\": \"valid\"}").isOk = false ∧
+    (match decodePhotonicsCert "ringName=mrr_wdm_soi220_r5um,bendRadiusNm=2000,circumferenceUm=50,rSelfPermille=985,aRoundTripPermille=985" with
      | .ok c => c.bendRadiusNm == 2000 && c.circumferenceUm == 50 &&
        checkPhotonicsPicJudge 0 15000 c == .refused (.photonicsPicSignoffViolation Obend.Hardware.Photonics.goldenSoi220Microring.ringName) []
      | .error _ => false) = true ∧
-    (match decodePcbBoardCert "mode=golden,numSegments=0" with
+    (match decodePcbBoardCert "baseLengthUm=24000,numSegments=0,meanderAmplitudeUm=1500,minLoopSpacingUm=600" with
      | .ok c => c.numSegments == 0 &&
        checkPcbBoardJudge 0 50 c == .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []
      | .error _ => false) = true :=

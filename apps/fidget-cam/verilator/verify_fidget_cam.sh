@@ -1,75 +1,71 @@
 #!/usr/bin/env bash
-# Flagship App #6 (`apps/fidget-cam/verilator/verify_fidget_cam.sh`):
-# 1. Verifies the 4-module `.obend` package (`apps/fidget-cam/package.json`) with `obend check` & `obend run`,
-# 2. Compiles the `emitModuleSV`-generated pruned SSA F-Rep voxelizer & 5-axis CAM RTL with Verilator,
-# 3. Evaluates the recursive 3D octree in hardware, emits `build/impeller_part.stl` + `build/impeller_5axis.ngc`
-#    + `fidget_cam_trace.vcd`, and verifies full-surface no-gouge + adversarial gouge detection,
-# 4. Verifies Z3 property sheet (`fidget_cam_lec.smt2`) returns `unsat`.
+# apps/fidget-cam/verilator/verify_fidget_cam.sh
+#
+# 1. the committed .sv is byte-identical to what `obend-emit-sv fidget` writes from the Lean
+#    definition (`fidgetImpellerVoxelCamRtlModule`); hand edits fail here;
+# 2. `obend check` / `obend run` on the four-module package;
+# 3. the posted program is written by Lean (`obend-emit-sv fidget-ngc`, `impeller5AxisNgc`);
+# 4. Verilator builds the emitted RTL and the harness scans the part, writes the STL, and re-checks
+#    the program's waypoints on the hardware (`fidget_voxel_tb.cpp`).
+# There is no SMT step: the hand-typed fidget_cam_lec.smt2 (constants compared with constants) was
+# retired on 2026-11-04, and the generated BEL-mapping miter (`obend-emit-sv fidget-belmiter`) is not
+# decided by z3 in bounded time (twenty 64-bit multiplies into carry chains; >15 min). The RTL/BEL
+# consistency of this module is `checkBelNetlistValid` in the `example` at Apps/FidgetCam.lean:630.
 set -euo pipefail
-
-# --- byte equality with the Lean emitter (2026-11-04): the committed .sv must be exactly what
-# --- `obend-emit-sv fidget` writes from the Lean RtlModule. Hand edits fail here.
-EMIT_SV="${OBEND_EMIT_SV:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/lean/.lake/build/bin/obend-emit-sv}"
-if [[ -x "${EMIT_SV}" ]]; then
-  "${EMIT_SV}" fidget --out /tmp/obend_emit_fidget_impeller_voxel_cam.sv >/dev/null
-  if ! cmp -s /tmp/obend_emit_fidget_impeller_voxel_cam.sv "$(dirname "${BASH_SOURCE[0]}")/fidget_impeller_voxel_cam.sv"; then
-    echo "[FAIL] fidget_impeller_voxel_cam.sv is not the output of obend-emit-sv fidget; regenerate it, do not hand-edit" >&2
-    diff /tmp/obend_emit_fidget_impeller_voxel_cam.sv "$(dirname "${BASH_SOURCE[0]}")/fidget_impeller_voxel_cam.sv" | head -20 >&2 || true
-    exit 1
-  fi
-  echo "[OK] fidget_impeller_voxel_cam.sv is byte-identical to obend-emit-sv fidget"
-else
-  echo "[FAIL] obend-emit-sv not built (lake build obend-emit-sv); cannot prove fidget_impeller_voxel_cam.sv is emitter output" >&2
-  exit 1
-fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-REPO_ROOT="$(cd "${APP_DIR}/.." && cd .. && pwd)"
+REPO_ROOT="$(cd "${APP_DIR}/../.." && pwd)"
 OBEND_BIN="${OBEND_BIN:-${REPO_ROOT}/lean/.lake/build/bin/obend}"
-VERILATOR_BIN="${VERILATOR_BIN:-/opt/homebrew/bin/verilator}"
-Z3_BIN="${Z3_BIN:-/opt/homebrew/bin/z3}"
+EMIT_SV="${OBEND_EMIT_SV:-${REPO_ROOT}/lean/.lake/build/bin/obend-emit-sv}"
+VERILATOR_BIN="${VERILATOR_BIN:-$(command -v verilator || echo /opt/homebrew/bin/verilator)}"
+TMP="${TMPDIR:-/tmp}"
 
-mkdir -p "${APP_DIR}/build" "${SCRIPT_DIR}/build"
+if [[ ! -x "${EMIT_SV}" ]]; then
+  echo "[FAIL] ${EMIT_SV} is not built (lake build obend-emit-sv); nothing here can be shown to be emitter output" >&2
+  exit 1
+fi
+
+echo "=== [1/4] byte equality with obend-emit-sv ==="
+for pair in "fidget:fidget_impeller_voxel_cam.sv"; do
+  target="${pair%%:*}"; file="${pair#*:}"
+  "${EMIT_SV}" "${target}" --out "${TMP}/obend_emit_${file}" >/dev/null
+  if ! cmp -s "${TMP}/obend_emit_${file}" "${SCRIPT_DIR}/${file}"; then
+    echo "[FAIL] ${file} differs from \`obend-emit-sv ${target}\` (regenerate; do not hand-edit)" >&2
+    diff "${TMP}/obend_emit_${file}" "${SCRIPT_DIR}/${file}" | head -20 >&2 || true
+    exit 1
+  fi
+  echo "  ${file}: identical"
+done
+
+mkdir -p "${APP_DIR}/build"
 
 if [[ -x "${OBEND_BIN}" ]]; then
-  echo "[0/3] Checking & running multi-module Objective Bend package apps/fidget-cam/package.json..."
+  echo "=== [2/4] obend check / run on apps/fidget-cam/package.json ==="
   (
     cd "${REPO_ROOT}"
     "${OBEND_BIN}" check --package apps/fidget-cam/package.json
     "${OBEND_BIN}" run --package apps/fidget-cam/package.json
   )
+else
+  echo "=== [2/4] skipped: ${OBEND_BIN} not built ==="
 fi
 
-echo "[1/3] Compiling fidget_impeller_voxel_cam.sv with ${VERILATOR_BIN}..."
-"${VERILATOR_BIN}" --cc --exe --build --trace -Wall \
-  -Wno-DECLFILENAME \
-  -CFLAGS "-std=c++17 -O2" \
+echo "=== [3/4] posted program from Lean (impeller5AxisNgc) ==="
+"${EMIT_SV}" fidget-ngc --out "${APP_DIR}/build/impeller_5axis.ngc"
+test -s "${APP_DIR}/build/impeller_5axis.ngc"
+
+echo "=== [4/4] Verilator: scan, STL, waypoint re-check ==="
+"${VERILATOR_BIN}" --cc --exe --build --trace -Wall -Wno-DECLFILENAME -Wno-UNUSED \
+  -CFLAGS "-std=c++17 -O2" -j 2 \
   -Mdir "${SCRIPT_DIR}/obj_dir" \
   "${SCRIPT_DIR}/fidget_impeller_voxel_cam.sv" \
   "${SCRIPT_DIR}/fidget_voxel_tb.cpp" \
-  -o Vfidget_impeller_voxel_cam
-
-echo "[2/3] Running Verilated 3D Octree Voxelizer, .stl Mesh Emitter & Full-Surface 5-Axis G-Code Verifier..."
+  -o Vfidget_impeller_voxel_cam >/dev/null
 (
   cd "${SCRIPT_DIR}"
-  ./obj_dir/Vfidget_impeller_voxel_cam
+  ./obj_dir/Vfidget_impeller_voxel_cam "${APP_DIR}/build/impeller_5axis.ngc" "${APP_DIR}/build/impeller_part.stl"
 )
-
-cp -f "${SCRIPT_DIR}/build/impeller_part.stl" "${APP_DIR}/build/impeller_part.stl"
-cp -f "${SCRIPT_DIR}/build/impeller_5axis.ngc" "${APP_DIR}/build/impeller_5axis.ngc"
-cp -f "${SCRIPT_DIR}/fidget_cam_trace.vcd" "${APP_DIR}/build/fidget_cam_trace.vcd"
-
 test -s "${APP_DIR}/build/impeller_part.stl"
-test -s "${APP_DIR}/build/impeller_5axis.ngc"
-test -s "${SCRIPT_DIR}/fidget_cam_trace.vcd"
-
-echo "[3/3] Running Z3 property sheet on fidget_cam_lec.smt2..."
-LEC_OUT="$("${Z3_BIN}" -smt2 "${SCRIPT_DIR}/fidget_cam_lec.smt2")"
-echo "Z3 property sheet result: ${LEC_OUT}"
-if [[ "${LEC_OUT}" != "unsat" ]]; then
-  echo "ERROR: Expected 'unsat' from Z3 property sheet, got '${LEC_OUT}'" >&2
-  exit 1
-fi
-
-echo "[PASS] Flagship App #6 (apps/fidget-cam) .obend + Verilator + .stl + 5-axis G-code + Z3 property sheet verified!"
+cp -f "${SCRIPT_DIR}/fidget_cam_trace.vcd" "${APP_DIR}/build/fidget_cam_trace.vcd"
+echo "[PASS] apps/fidget-cam"

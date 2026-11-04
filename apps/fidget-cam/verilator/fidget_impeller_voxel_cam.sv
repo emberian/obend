@@ -9,9 +9,6 @@ module fidget_impeller_voxel_cam (
   input  logic [63:0] in_tx,
   input  logic [63:0] in_ty,
   input  logic [63:0] in_tz,
-  input  logic [63:0] in_step_dist,
-  input  logic [63:0] in_subdiv_level,
-  input  logic [63:0] in_liverps_override_en,
   output logic [63:0] out_frep_full,
   output logic [63:0] out_frep_center_pruned,
   output logic [63:0] out_frep_boss_pruned,
@@ -19,12 +16,6 @@ module fidget_impeller_voxel_cam (
   output logic [63:0] out_in_solid_3d,
   output logic [63:0] out_tool_sdf,
   output logic [63:0] out_no_gouge_ok,
-  output logic [63:0] out_compacted_center_ops,
-  output logic [63:0] out_compacted_lug_ops,
-  output logic [63:0] out_compacted_bore_ops,
-  output logic [63:0] out_certified_wall_um,
-  output logic [63:0] out_lipschitz_step_pad_um,
-  output logic [63:0] out_octree_active_voxels,
   output logic [63:0] out_voxel_eval_cycles,
   output logic [63:0] out_solid_voxel_count,
   output logic [63:0] out_gouge_violations
@@ -49,119 +40,199 @@ module fidget_impeller_voxel_cam (
   logic [63:0] w_17; // full_op_17
   logic [63:0] w_18; // full_op_18
   logic [63:0] w_19; // full_op_19
-  logic [63:0] w_20; // center_op_0
-  logic [63:0] w_21; // center_op_1
-  logic [63:0] w_22; // center_op_2
-  logic [63:0] w_23; // center_op_3
-  logic [63:0] w_24; // center_op_4
-  logic [63:0] w_25; // center_op_5
-  logic [63:0] w_26; // center_op_6
-  logic [63:0] w_27; // boss_op_0
-  logic [63:0] w_28; // boss_op_1
-  logic [63:0] w_29; // boss_op_2
-  logic [63:0] w_30; // boss_op_3
-  logic [63:0] w_31; // boss_op_4
-  logic [63:0] w_32; // boss_op_5
-  logic [63:0] w_33; // boss_op_6
-  logic [63:0] w_34; // boss_op_7
-  logic [63:0] w_35; // boss_op_8
-  logic [63:0] w_36; // bore_op_0
-  logic [63:0] w_37; // bore_op_1
-  logic [63:0] w_38; // bore_op_2
-  logic [63:0] w_39; // bore_op_3
-  logic [63:0] w_40; // bore_op_4
-  logic [63:0] w_41; // bore_op_5
-  logic [63:0] w_42; // bore_op_6
-  logic [63:0] w_43; // bore_op_7
-  logic [63:0] w_44; // bore_op_8
-  logic [63:0] w_45; // z_sq
-  logic [63:0] w_46; // axial_bound_sdf
-  logic [63:0] w_47; // full_3d_sdf
-  logic [63:0] w_48; // in_solid_3d
-  logic [63:0] w_49; // dx_tool
-  logic [63:0] w_50; // dy_tool
-  logic [63:0] w_51; // dz_tool
-  logic [63:0] w_52; // tool_xy_sq
-  logic [63:0] w_53; // tool_sdf
-  logic [63:0] w_54; // lip_pad
-  logic [63:0] w_55; // tool_padded
-  logic [63:0] w_56; // tool_clear
-  logic [63:0] w_57; // no_gouge_ok
+  logic [63:0] w_20; // full_op_20
+  logic [63:0] w_21; // full_op_21
+  logic [63:0] w_22; // full_op_22
+  logic [63:0] w_23; // full_op_23
+  logic [63:0] w_24; // full_op_24
+  logic [63:0] w_25; // full_op_25
+  logic [63:0] w_26; // full_op_26
+  logic [63:0] w_27; // full_op_27
+  logic [63:0] w_28; // full_op_28
+  logic [63:0] w_29; // full_op_29
+  logic [63:0] w_30; // full_op_30
+  logic [63:0] w_31; // full_op_31
+  logic [63:0] w_32; // full_op_32
+  logic [63:0] w_33; // full_op_33
+  logic [63:0] w_34; // full_op_34
+  logic [63:0] w_35; // full_op_35
+  logic [63:0] w_36; // full_op_36
+  logic [63:0] w_37; // full_op_37
+  logic [63:0] w_38; // full_op_38
+  logic [63:0] w_39; // full_op_39
+  logic [63:0] w_40; // full_op_40
+  logic [63:0] w_41; // full_op_41
+  logic [63:0] w_42; // full_op_42
+  logic [63:0] w_43; // full_op_43
+  logic [63:0] w_44; // full_op_44
+  logic [63:0] w_45; // full_op_45
+  logic [63:0] w_46; // full_op_46
+  logic [63:0] w_47; // full_op_47
+  logic [63:0] w_48; // full_op_48
+  logic [63:0] w_49; // full_op_49
+  logic [63:0] w_50; // full_op_50
+  logic [63:0] w_51; // full_op_51
+  logic [63:0] w_52; // full_op_52
+  logic [63:0] w_53; // full_op_53
+  logic [63:0] w_54; // full_op_54
+  logic [63:0] w_55; // full_op_55
+  logic [63:0] w_56; // full_op_56
+  logic [63:0] w_57; // full_op_57
+  logic [63:0] w_58; // full_op_58
+  logic [63:0] w_59; // full_op_59
+  logic [63:0] w_60; // center_op_0
+  logic [63:0] w_61; // center_op_1
+  logic [63:0] w_62; // center_op_2
+  logic [63:0] w_63; // center_op_3
+  logic [63:0] w_64; // center_op_4
+  logic [63:0] w_65; // center_op_5
+  logic [63:0] w_66; // center_op_6
+  logic [63:0] w_67; // boss_op_0
+  logic [63:0] w_68; // boss_op_1
+  logic [63:0] w_69; // boss_op_2
+  logic [63:0] w_70; // boss_op_3
+  logic [63:0] w_71; // boss_op_4
+  logic [63:0] w_72; // boss_op_5
+  logic [63:0] w_73; // boss_op_6
+  logic [63:0] w_74; // boss_op_7
+  logic [63:0] w_75; // boss_op_8
+  logic [63:0] w_76; // boss_op_9
+  logic [63:0] w_77; // boss_op_10
+  logic [63:0] w_78; // boss_op_11
+  logic [63:0] w_79; // boss_op_12
+  logic [63:0] w_80; // boss_op_13
+  logic [63:0] w_81; // boss_op_14
+  logic [63:0] w_82; // boss_op_15
+  logic [63:0] w_83; // boss_op_16
+  logic [63:0] w_84; // boss_op_17
+  logic [63:0] w_85; // boss_op_18
+  logic [63:0] w_86; // bore_op_0
+  logic [63:0] w_87; // bore_op_1
+  logic [63:0] w_88; // bore_op_2
+  logic [63:0] w_89; // bore_op_3
+  logic [63:0] w_90; // bore_op_4
+  logic [63:0] w_91; // bore_op_5
+  logic [63:0] w_92; // bore_op_6
+  logic [63:0] w_93; // bore_op_7
+  logic [63:0] w_94; // in_solid_3d
+  logic [63:0] w_95; // dx_tool
+  logic [63:0] w_96; // dy_tool
+  logic [63:0] w_97; // dz_tool
+  logic [63:0] w_98; // tool_sdf
+  logic [63:0] w_99; // tool_clear
+  logic [63:0] w_100; // no_gouge_ok
   logic [63:0] reg_voxel_eval_cycles;
   logic [63:0] reg_solid_voxel_count;
   logic [63:0] reg_gouge_violations;
   always_comb begin
     w_0 = in_x;
-    w_1 = (w_0 * w_0);
-    w_2 = in_y;
+    w_1 = 64'd0;
+    w_2 = (w_0 - w_1);
     w_3 = (w_2 * w_2);
-    w_4 = (w_1 + w_3);
-    w_5 = 64'd100;
+    w_4 = in_y;
+    w_5 = 64'd0;
     w_6 = (w_4 - w_5);
-    w_7 = 64'd10;
-    w_8 = (w_0 - w_7);
-    w_9 = (w_8 * w_8);
-    w_10 = (w_9 + w_3);
-    w_11 = 64'd4;
-    w_12 = (w_10 - w_11);
-    w_13 = ((($signed(w_12) < $signed(w_6) ? 64'd1 : 64'd0) != 64'd0) ? w_12 : w_6);
-    w_14 = (w_0 + w_11);
-    w_15 = (w_14 * w_14);
-    w_16 = (w_15 + w_3);
-    w_17 = (w_16 - w_11);
-    w_18 = (64'd0 - w_17);
-    w_19 = ((($signed(w_13) < $signed(w_18) ? 64'd1 : 64'd0) != 64'd0) ? w_18 : w_13);
-    w_20 = in_x;
-    w_21 = (w_20 * w_20);
-    w_22 = in_y;
-    w_23 = (w_22 * w_22);
-    w_24 = (w_21 + w_23);
-    w_25 = 64'd100;
-    w_26 = (w_24 - w_25);
-    w_27 = in_x;
-    w_28 = in_y;
-    w_29 = (w_28 * w_28);
-    w_30 = 64'd10;
-    w_31 = (w_27 - w_30);
-    w_32 = (w_31 * w_31);
-    w_33 = (w_32 + w_29);
-    w_34 = 64'd4;
+    w_7 = (w_6 * w_6);
+    w_8 = (w_3 + w_7);
+    w_9 = 64'd10000;
+    w_10 = (w_8 - w_9);
+    w_11 = 64'd0;
+    w_12 = in_z;
+    w_13 = (w_11 - w_12);
+    w_14 = in_z;
+    w_15 = 64'd80;
+    w_16 = (w_14 - w_15);
+    w_17 = ((($signed(w_13) < $signed(w_16) ? 64'd1 : 64'd0) != 64'd0) ? w_16 : w_13);
+    w_18 = ((($signed(w_10) < $signed(w_17) ? 64'd1 : 64'd0) != 64'd0) ? w_17 : w_10);
+    w_19 = in_x;
+    w_20 = 64'd100;
+    w_21 = (w_19 - w_20);
+    w_22 = (w_21 * w_21);
+    w_23 = in_y;
+    w_24 = 64'd0;
+    w_25 = (w_23 - w_24);
+    w_26 = (w_25 * w_25);
+    w_27 = (w_22 + w_26);
+    w_28 = 64'd625;
+    w_29 = (w_27 - w_28);
+    w_30 = 64'd0;
+    w_31 = in_z;
+    w_32 = (w_30 - w_31);
+    w_33 = in_z;
+    w_34 = 64'd80;
     w_35 = (w_33 - w_34);
-    w_36 = in_x;
-    w_37 = in_y;
-    w_38 = (w_37 * w_37);
-    w_39 = 64'd4;
-    w_40 = (w_36 + w_39);
-    w_41 = (w_40 * w_40);
-    w_42 = (w_41 + w_38);
-    w_43 = (w_42 - w_39);
-    w_44 = (64'd0 - w_43);
-    w_45 = (in_z * in_z);
-    w_46 = (w_45 - 64'd36);
-    w_47 = ((($signed(w_19) < $signed(w_46) ? 64'd1 : 64'd0) != 64'd0) ? w_46 : w_19);
-    w_48 = ((($signed(64'd0) < $signed(w_47) ? 64'd1 : 64'd0) != 64'd0) ? 64'd0 : 64'd1);
-    w_49 = (in_x - in_tx);
-    w_50 = (in_y - in_ty);
-    w_51 = (in_z - in_tz);
-    w_52 = ((w_49 * w_49) + (w_50 * w_50));
-    w_53 = ((w_52 + (w_51 * w_51)) - 64'd100);
-    w_54 = (in_step_dist * 64'd72);
+    w_36 = ((($signed(w_32) < $signed(w_35) ? 64'd1 : 64'd0) != 64'd0) ? w_35 : w_32);
+    w_37 = ((($signed(w_29) < $signed(w_36) ? 64'd1 : 64'd0) != 64'd0) ? w_36 : w_29);
+    w_38 = ((($signed(w_37) < $signed(w_18) ? 64'd1 : 64'd0) != 64'd0) ? w_37 : w_18);
+    w_39 = in_x;
+    w_40 = 64'd18446744073709551576;
+    w_41 = (w_39 - w_40);
+    w_42 = (w_41 * w_41);
+    w_43 = in_y;
+    w_44 = 64'd0;
+    w_45 = (w_43 - w_44);
+    w_46 = (w_45 * w_45);
+    w_47 = (w_42 + w_46);
+    w_48 = 64'd400;
+    w_49 = (w_47 - w_48);
+    w_50 = 64'd18446744073709551615;
+    w_51 = in_z;
+    w_52 = (w_50 - w_51);
+    w_53 = in_z;
+    w_54 = 64'd81;
     w_55 = (w_53 - w_54);
-    w_56 = ($signed(64'd0) < $signed(w_55) ? 64'd1 : 64'd0);
-    w_57 = ((w_48 != 64'd0) ? w_56 : 64'd1);
-    out_frep_full = w_19;
-    out_frep_center_pruned = w_26;
-    out_frep_boss_pruned = w_35;
-    out_frep_bore_pruned = w_44;
-    out_in_solid_3d = w_48;
-    out_tool_sdf = w_53;
-    out_no_gouge_ok = w_57;
-    out_compacted_center_ops = 64'd7;
-    out_compacted_lug_ops = 64'd9;
-    out_compacted_bore_ops = 64'd9;
-    out_certified_wall_um = ((in_liverps_override_en != 64'd0) ? 64'd2800 : 64'd2600);
-    out_lipschitz_step_pad_um = (w_54 + 64'd7);
-    out_octree_active_voxels = (((in_subdiv_level * 64'd128) + 64'd9) + ((in_liverps_override_en != 64'd0) ? 64'd64 : 64'd0));
+    w_56 = ((($signed(w_52) < $signed(w_55) ? 64'd1 : 64'd0) != 64'd0) ? w_55 : w_52);
+    w_57 = ((($signed(w_49) < $signed(w_56) ? 64'd1 : 64'd0) != 64'd0) ? w_56 : w_49);
+    w_58 = (64'd0 - w_57);
+    w_59 = ((($signed(w_38) < $signed(w_58) ? 64'd1 : 64'd0) != 64'd0) ? w_58 : w_38);
+    w_60 = 64'd0;
+    w_61 = in_z;
+    w_62 = (w_60 - w_61);
+    w_63 = in_z;
+    w_64 = 64'd80;
+    w_65 = (w_63 - w_64);
+    w_66 = ((($signed(w_62) < $signed(w_65) ? 64'd1 : 64'd0) != 64'd0) ? w_65 : w_62);
+    w_67 = in_x;
+    w_68 = 64'd100;
+    w_69 = (w_67 - w_68);
+    w_70 = (w_69 * w_69);
+    w_71 = in_y;
+    w_72 = 64'd0;
+    w_73 = (w_71 - w_72);
+    w_74 = (w_73 * w_73);
+    w_75 = (w_70 + w_74);
+    w_76 = 64'd625;
+    w_77 = (w_75 - w_76);
+    w_78 = 64'd0;
+    w_79 = in_z;
+    w_80 = (w_78 - w_79);
+    w_81 = in_z;
+    w_82 = 64'd80;
+    w_83 = (w_81 - w_82);
+    w_84 = ((($signed(w_80) < $signed(w_83) ? 64'd1 : 64'd0) != 64'd0) ? w_83 : w_80);
+    w_85 = ((($signed(w_77) < $signed(w_84) ? 64'd1 : 64'd0) != 64'd0) ? w_84 : w_77);
+    w_86 = 64'd18446744073709551615;
+    w_87 = in_z;
+    w_88 = (w_86 - w_87);
+    w_89 = in_z;
+    w_90 = 64'd81;
+    w_91 = (w_89 - w_90);
+    w_92 = ((($signed(w_88) < $signed(w_91) ? 64'd1 : 64'd0) != 64'd0) ? w_91 : w_88);
+    w_93 = (64'd0 - w_92);
+    w_94 = ((($signed(64'd0) < $signed(w_59) ? 64'd1 : 64'd0) != 64'd0) ? 64'd0 : 64'd1);
+    w_95 = (in_x - in_tx);
+    w_96 = (in_y - in_ty);
+    w_97 = ((in_z - in_tz) - 64'd20);
+    w_98 = ((((w_95 * w_95) + (w_96 * w_96)) + (w_97 * w_97)) - 64'd441);
+    w_99 = ($signed(64'd0) < $signed(w_98) ? 64'd1 : 64'd0);
+    w_100 = ((w_94 != 64'd0) ? w_99 : 64'd1);
+    out_frep_full = w_59;
+    out_frep_center_pruned = w_66;
+    out_frep_boss_pruned = w_85;
+    out_frep_bore_pruned = w_93;
+    out_in_solid_3d = w_94;
+    out_tool_sdf = w_98;
+    out_no_gouge_ok = w_100;
     out_voxel_eval_cycles = reg_voxel_eval_cycles;
     out_solid_voxel_count = reg_solid_voxel_count;
     out_gouge_violations = reg_gouge_violations;
@@ -174,8 +245,8 @@ module fidget_impeller_voxel_cam (
       reg_gouge_violations <= 64'd0;
     end else begin
       reg_voxel_eval_cycles <= (reg_voxel_eval_cycles + 64'd1);
-      reg_solid_voxel_count <= ((w_48 != 64'd0) ? (reg_solid_voxel_count + 64'd1) : reg_solid_voxel_count);
-      reg_gouge_violations <= ((w_57 != 64'd0) ? reg_gouge_violations : (reg_gouge_violations + 64'd1));
+      reg_solid_voxel_count <= ((w_94 != 64'd0) ? (reg_solid_voxel_count + 64'd1) : reg_solid_voxel_count);
+      reg_gouge_violations <= ((w_100 != 64'd0) ? reg_gouge_violations : (reg_gouge_violations + 64'd1));
     end
   end
 endmodule

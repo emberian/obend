@@ -1,8 +1,9 @@
 /-
 # `obend-emit-sv` — regenerate every checked-in SystemVerilog file from its Lean definition
 
-    obend-emit-sv <target> [--out FILE]      targets: risc fidget drex quantum silicon-elab mac2 ice40-mac8
-                                                      tcad stator mill golden-silicon-kernel
+    obend-emit-sv <target> [--out FILE]      targets: risc fidget fidget-ngc fidget-belmiter drex quantum
+                                                      silicon-elab mac2 ice40-mac8 tcad stator mill
+                                                      golden-silicon-kernel
     obend-emit-sv list
 
 This executable lives outside the `Obend` library tier because it imports `Obend.Apps.*` (tier 2).
@@ -72,6 +73,8 @@ def iceStickMac8 : RtlModule :=
 def targets : List (String × String) :=
   [ ("risc", "apps/obend-risc/verilator/obend_risc_cpu.sv")
   , ("fidget", "apps/fidget-cam/verilator/fidget_impeller_voxel_cam.sv")
+  , ("fidget-ngc", "apps/fidget-cam/build/impeller_5axis.ngc")
+  , ("fidget-belmiter", "apps/fidget-cam/build/fidget_cam_belmiter.smt2")
   , ("drex", "apps/sovereign-drex/verilator/sovereign_drex_batch_top.sv")
   , ("quantum", "apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv")
   , ("silicon-elab", "apps/silicon-kernel-verilator/verilator/silicon_elab_top.sv")
@@ -85,6 +88,15 @@ def targets : List (String × String) :=
 def render : String → Except String String
   | "risc"    => .error "risc: Obend.Apps.ObendRisc does not build at HEAD; target disabled until the Apps gate lands"
   | "fidget"  => emitWithHeader "Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule" Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule
+  -- The posted program is a Lean string (`postNgc` over the certified passes); the Verilator
+  -- testbench reads this file and re-checks its waypoints against the RTL, it does not write one.
+  | "fidget-ngc" => .ok Obend.Apps.FidgetCam.impeller5AxisNgc
+  -- BEL-mapping consistency miter of the fidget module (not an LEC of the emitted .sv; see hardware/README.md).
+  -- Not checked in and not run by verify_fidget_cam.sh: the tape has twenty 64-bit multiplies feeding
+  -- carry-chain adders and z3 did not return on it in 15 minutes (2026-11-04, Mac); the AST-vs-BEL
+  -- consistency of this module is `checkBelNetlistValid` in the `example` at Apps/FidgetCam.lean:630.
+  | "fidget-belmiter" =>
+    .ok (Obend.Hardware.VerilateRunner.emitModuleLecSmt2 Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule)
   | "drex"    => .error "drex: Obend.Apps.SovereignDrex does not build at HEAD; target disabled until the Apps gate lands"
   | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
