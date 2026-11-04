@@ -374,3 +374,32 @@ module and `Obend/Apps/ZkNtt.lean` elaborates for hours; the budget gate will fa
 can be run at all.
 - (fifth round, `9de897f`, `b8fa08b`) All files in the lane's list (`Vault/{Store,Page,Law}.lean`, `tests/decisions`, `README.md`, `crates/obend-gui`). `crates/obend-gui/build.rs` was rewritten to obend-node's form at the security lane's request (rpaths from `DEP_OBEND_BRIDGE_*`); verified to compile and pass its CLI test under the stub on bb2 only. The shared index held another lane's staged deletion (`apps/zk-ntt/verilator/zk_ntt_lec.smt2`); these commits went through a temporary index and left it as found. `Vault/PhysicalProjection.lean` is dirty from another lane and untouched.
 - (sixth round, `31b213a`, `7609e89`, `a61d805`) Outside the lane's list: `lean/Obend/Tactic/DocsCensus.lean` and `lean/Obend/Census.lean` (gate lane: the `#census_environment` emitter and its one call, appended after `cafd87c`, nothing of theirs changed); `lean/Obend/Analysis/{Worlds,Replay}.lean` (one argument each: the store's environment passed to `ownerWrite`/`commit`, else a replay would count every cite unresolved); `lean/Obend/Doc/Render.lean` (the lexer's inline-code arm). `review/DECISIONS-20261031.md` gains three frontmatter lines (`kind: ledger`); `review/.obend/world.json` is committed as the ledger's world. A misordered commit `02fbb3c` was dropped by moving the ref before anything landed on it; the shared index was left as found except that the four new files were added to it equal to HEAD, so they do not show as staged deletions.
+
+## Adjudications (device-physics lane, 2026-11-04)
+
+Method: `bb2:~/lane-device` is the verify tree with HEAD of 11-04 overlaid (`git archive HEAD lean`); only this
+lane's modules, their importers and the tier-2 modules that cite them were built (`swarm-build lake build
+<modules>`, `LEAN_NUM_THREADS=4`, `SWARM_MEM_MAX=16G`). Report: `review/EXPERT-device-physics-20261104.md`.
+
+| file | lane | call | why |
+|---|---|---|---|
+| `lean/Obend/Hardware/FabuBlox.lean` | proof-engineering (fixture triage) | **keep** | one line, `unstripped_resist_high_temp_refused` theorem → `example`; carried into this lane's rewrite of the file. |
+
+Changed by this lane outside its three files, all mechanical and all from one rename (`Hardware/Physics.lean`
+→ `Hardware/ThermalPassivity.lean`, what the surviving three sections are): `Hardware/Codec.lean` (import and two
+qualified names), `Obend/Hardware.lean` and `Obend/Census.lean` (the rename; the five `Device/` modules added),
+`Hardware/TapeoutPipeline.lean` and `Hardware/Judge.lean` (an import and `open` of `Physics` that nothing used),
+`Teeth/Hardware/SiliconTeeth.lean` (tooth 27, which mutated the three-cell PDD, now mutates `Device.WaferState.anneal`
+against `anneal_var_mono`), `tests/metasystem/SiliconSpineTest.lean` §3 (the bundle keeps the two surviving
+statements) and `tests/metasystem/PhysicalSiliconSpineTest.lean` §3.3 (deleted with the RC monotonicity theorems).
+`TcadBridge.lean` keeps `extractTcadCornerEnvelope`, `extractTcadCornerEnvelope_valid`, `checkEnvelopeTimingSignoff`
+and its theorem because `TapeoutPipeline` stage 7 reads them; the three integer formulas they need moved into it
+from the deleted `Physics` §7 under a section that says what they are.
+
+Added to the sibling's namespace `Obend.Analysis.Interval` (for dot notation, from `Device/Enclosure.lean` and
+`Device/DriftDiffusion.lean`): `powNat`, `invPos`, `divPos?`, `roundOut`, `sqrIterRound`, `within`, `scale`,
+`absMax`, `widenRel`, each with its membership lemma. The physics lane may lift them into `RealAnalysis.lean`.
+
+Seen red at HEAD on bb2, not this lane's: `Obend/Teeth/Analysis/Fixtures.lean:143` (`Function expected`,
+`schrodingerEigenmodeOde`), which stops `Obend.Census`; the Mac working tree carries an uncommitted three-line
+edit of that file by another lane.
