@@ -29,7 +29,7 @@ power integrity (PI), and geometric Design Rule Checking (DRC)** (`FR-4`, `Roger
      and stitched parallel via arrays (`ViaArraySpec`), proving **`viaArray_current_safe`** and
      parallel parasitic inductance reduction (`viaArray_reduces_inductance`),
    - Formalizes complete board-level DRC & creepage/clearance signoff (`checkPcbBoardSignoff`,
-     `pcbBoardSignoff_sound`, `goldenSdrCarrierPcb_passes`).
+     `pcbBoardSignoff_sound`).
 -/
 public import Obend.Hardware.Thermal
 @[expose] public section
@@ -112,13 +112,86 @@ structure PcbTraceSpec where
 def natAbsDiff (a b : Nat) : Nat :=
   if b ≤ a then a - b else b - a
 
-/-- Verify that a single-ended microstrip/stripline trace satisfies minimum fab width ($\ge 75\,\mu\text{m} \approx 3\,\text{mil}$)
-and matches its target characteristic impedance $Z_0$ within `z0MaxTolMilliOhm`. -/
+/-! ### Closed-form microstrip impedance (Hammerstad–Jensen, Wheeler thickness correction)
+
+Fixed point with scale `fxS = 10⁶`; `Nat.sqrt` and an `atanh`-series logarithm, so the kernel can
+evaluate it. The formulas are the standard ones (Pozar, *Microwave Engineering*, §3.8; Hammerstad
+1975; strip thickness after Bahl and Garg), with $u = W_{\text{eff}}/H$:
+$$\varepsilon_{\text{eff}} = \tfrac{\varepsilon_r+1}{2} + \tfrac{\varepsilon_r-1}{2}\Bigl[(1 + 12/u)^{-1/2} + [u<1]\,0.04(1-u)^2\Bigr],$$
+$$Z_0 = \begin{cases} \dfrac{60}{\sqrt{\varepsilon_{\text{eff}}}} \ln\!\bigl(\tfrac{8}{u} + \tfrac{u}{4}\bigr) & u \le 1\\[4pt]
+\dfrac{120\pi}{\sqrt{\varepsilon_{\text{eff}}}\,\bigl(u + 1.393 + 0.667 \ln(u + 1.444)\bigr)} & u \ge 1\end{cases}
+\qquad W_{\text{eff}} = W + \tfrac{T}{\pi}\bigl(1 + \ln\tfrac{2H}{T}\bigr).$$
+Accuracy of the closed form is about 1% against a field solver for $0.1 \le u \le 10$; this replaced,
+on 2026-11-04, a ratio $(4H + W)/(2H + W)$ with neither square root nor logarithm, which gave
+48.7 Ω for an 80 µm strip on 500 µm PTFE (the closed form gives 171 Ω). -/
+
+def fxS : Nat := 1000000
+
+/-- `⌊√(a·S)⌋`: the square root of the fixed-point value `a`. -/
+def fxSqrt (a : Nat) : Nat := Nat.sqrt (a * fxS)
+
+/-- Halve until below `2S` and double until at least `S`, counting the exponent (fuel-bounded). -/
+def fxLnNorm : Nat → Nat → Int → Nat × Int
+  | 0, m, k => (m, k)
+  | fuel + 1, m, k =>
+    if 2 * fxS ≤ m then fxLnNorm fuel (m / 2) (k + 1)
+    else if m < fxS ∧ 0 < m then fxLnNorm fuel (2 * m) (k - 1)
+    else (m, k)
+
+/-- `ln(a/S)·S` for `a > 0`, from `ln m = 2 atanh((m-1)/(m+1))` on `m ∈ [1, 2)` (six terms; the
+truncation error is below `2·(1/3)¹³/13 < 10⁻⁷`). Returns `0` at `a = 0`. -/
+def fxLn (a : Nat) : Int :=
+  if a = 0 then 0 else
+  let (m, k) := fxLnNorm 128 a 0
+  let y : Nat := (m - fxS) * fxS / (m + fxS)
+  let y2 := y * y / fxS
+  let t1 := y
+  let t3 := t1 * y2 / fxS
+  let t5 := t3 * y2 / fxS
+  let t7 := t5 * y2 / fxS
+  let t9 := t7 * y2 / fxS
+  let t11 := t9 * y2 / fxS
+  let s : Nat := t1 + t3 / 3 + t5 / 5 + t7 / 7 + t9 / 9 + t11 / 11
+  k * 693147 + 2 * (s : Int)
+
+/-- Effective strip width in µm after the thickness correction (`T = 0` leaves `W`). -/
+def microstripEffWidthUm (widthUm heightUm copperThickUm : Nat) : Nat :=
+  if copperThickUm = 0 then widthUm else
+  let lnTerm := fxLn (2 * heightUm * fxS / copperThickUm)
+  let dw : Int := (copperThickUm : Int) * ((fxS : Int) + lnTerm) / 3141593
+  widthUm + dw.toNat
+
+/-- Effective permittivity ×10⁶ for `u = Weff/H` ×10⁶ and `εr` ×10⁶. -/
+def microstripEpsEffFx (u er : Nat) : Nat :=
+  let q := fxS + 12 * fxS * fxS / u
+  let inv := fxS * fxS / fxSqrt q
+  let low := if u < fxS then 40000 * (fxS - u) * (fxS - u) / (fxS * fxS) else 0
+  (er + fxS) / 2 + (er - fxS) * (inv + low) / (2 * fxS)
+
+/-- **Closed-form microstrip `Z₀` in mΩ** from geometry (µm) and `εr` ×1000. -/
+def microstripZ0MilliOhm (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
+  if widthUm = 0 ∨ heightUm = 0 then 0 else
+  let wEff := microstripEffWidthUm widthUm heightUm copperThickUm
+  let u := wEff * fxS / heightUm
+  let er := erPermille * 1000
+  let sq := fxSqrt (microstripEpsEffFx u er)
+  if u ≤ fxS then
+    let arg := 8 * fxS * fxS / u + u / 4
+    (60 * 1000 * fxLn arg / (sq : Int)).toNat
+  else
+    let d : Int := (u : Int) + 1393000 + 667 * fxLn (u + 1444000) / 1000
+    if d ≤ 0 then 0 else (376991 * (fxS : Int) * fxS / ((sq : Int) * d)).toNat
+
+/-- Verify that a single-ended microstrip trace satisfies minimum fab width ($\ge 75\,\mu\text{m} \approx 3\,\text{mil}$)
+and that both the field-solver value and the closed form from its own geometry are within
+`z0MaxTolMilliOhm` of the target: an extracted number that the geometry contradicts is refused. -/
 def checkSingleEndedZ0 (trace : PcbTraceSpec) : Bool :=
   decide (75 ≤ trace.widthUm) &&
   decide (trace.heightUm > 0) &&
   decide (trace.copperThicknessUm > 0) &&
-  decide (natAbsDiff trace.z0ExtractedMilliOhm trace.z0TargetMilliOhm ≤ trace.z0MaxTolMilliOhm)
+  decide (natAbsDiff trace.z0ExtractedMilliOhm trace.z0TargetMilliOhm ≤ trace.z0MaxTolMilliOhm) &&
+  decide (natAbsDiff (microstripZ0MilliOhm trace.widthUm trace.heightUm trace.copperThicknessUm
+      trace.dielectric.dkPermille) trace.z0TargetMilliOhm ≤ trace.z0MaxTolMilliOhm)
 
 /-- Theorem (`singleEndedZ0_sound`):
 If `checkSingleEndedZ0 trace = true`, then the trace width is at least $75\,\mu\text{m}$ ($3\,\text{mil}$)
@@ -127,10 +200,12 @@ theorem singleEndedZ0_sound
     (trace : PcbTraceSpec)
     (hOk : checkSingleEndedZ0 trace = true) :
     75 ≤ trace.widthUm ∧
-    natAbsDiff trace.z0ExtractedMilliOhm trace.z0TargetMilliOhm ≤ trace.z0MaxTolMilliOhm := by
+    natAbsDiff trace.z0ExtractedMilliOhm trace.z0TargetMilliOhm ≤ trace.z0MaxTolMilliOhm ∧
+    natAbsDiff (microstripZ0MilliOhm trace.widthUm trace.heightUm trace.copperThicknessUm
+      trace.dielectric.dkPermille) trace.z0TargetMilliOhm ≤ trace.z0MaxTolMilliOhm := by
   unfold checkSingleEndedZ0 at hOk
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
-  exact ⟨hOk.1.1.1, hOk.2⟩
+  exact ⟨hOk.1.1.1.1, hOk.1.2, hOk.2⟩
 
 /-! ## 2. Edge-Coupled Differential Pairs ($Z_{\text{diff}} = 2 Z_{0o}$) & Spacing Monotonicity -/
 
@@ -369,7 +444,6 @@ def checkPcbBoardSignoff
   let zDiff := evalDiffImpedanceMilliOhm diffPair
   let routedLen := evalSerpentineTotalLengthUm meander
   let skewFs := evalFlightTimeSkewFs refLengthUm routedLen seTrace.dielectric.propDelayFsPerUm
-  checkSingleEndedZ0 seTrace &&
   decide (natAbsDiff zDiff diffPair.zDiffTargetMilliOhm ≤ diffPair.zDiffTolMilliOhm) &&
   decide (3 * seTrace.widthUm ≤ meander.minLoopSpacingUm) &&
   decide (skewFs ≤ maxFlightSkewFs) &&
@@ -377,7 +451,9 @@ def checkPcbBoardSignoff
   checkViaArraySafe vias &&
   decide (clearance.fabMinClearanceUm ≤ clearance.minCopperClearanceUm) &&
   decide (300 ≤ clearance.minEdgeKeepoutUm) &&
-  decide (5 * clearance.peakVoltageV ≤ clearance.hvCreepageUm)
+  decide (5 * clearance.peakVoltageV ≤ clearance.hvCreepageUm) &&
+  -- last: the closed-form impedance (`Nat.sqrt`, a logarithm) is the expensive conjunct
+  checkSingleEndedZ0 seTrace
 
 /-- Theorem (`pcbBoardSignoff_sound`):
 Whenever `checkPcbBoardSignoff` returns `true`, the single-ended and differential impedances are
@@ -397,7 +473,7 @@ theorem pcbBoardSignoff_sound
     clearance.fabMinClearanceUm ≤ clearance.minCopperClearanceUm := by
   unfold checkPcbBoardSignoff at hOk
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
-  exact ⟨hOk.1.1.1.1.1.1.1.1, hOk.1.1.1.1.1.1.1.2, hOk.1.1.1.1.1.2, hOk.1.1.1.1.2, hOk.1.1.1.2, hOk.1.1.2⟩
+  exact ⟨hOk.2, hOk.1.1.1.1.1.1.1.1, hOk.1.1.1.1.1.1.2, hOk.1.1.1.1.1.2, hOk.1.1.1.1.2, hOk.1.1.1.2⟩
 
 /-- Golden 4-layer `Rogers RO4350B` + `FR-4` hybrid SDR / FPGA carrier board design. -/
 def goldenRf50OhmTrace : PcbTraceSpec where
@@ -444,77 +520,29 @@ def goldenBoardClearance : PcbClearanceSpec where
   peakVoltageV         := 24
   hvCreepageUm         := 400
 
-/-- Theorem (`goldenSdrCarrierPcb_passes`):
-The golden 4-layer mixed-signal SDR / FPGA carrier PCB (`Rogers RO4350B` $50.2\,\Omega$ RF microstrip,
+/-- The golden 4-layer mixed-signal SDR / FPGA carrier PCB (`Rogers RO4350B` $50.2\,\Omega$ RF microstrip,
 $100.1\,\Omega$ LVDS differential clock pair, zero-skew $30.0\,\text{mm}$ serpentine meander, $3\,\text{A}$
 IPC-2152 power trace, 8-via stitched ground return with $80\,\text{pH}$ inductance, and $150\,\mu\text{m}$
 clearance) passes `checkPcbBoardSignoff`! -/
-theorem goldenSdrCarrierPcb_passes :
+example :
     checkPcbBoardSignoff
       goldenRf50OhmTrace
       goldenLvds100OhmPair
       goldenDdrMeander 30000 50
       goldenPaSupplyRail
       goldenGndViaStitch
-      goldenBoardClearance = true :=
-  rfl
-
-/-! ## 5. Geometry-Derived Microstrip Characteristic Impedance (`computeMicrostripZ0MilliOhm`) -/
-
-/-- Rational Hammerstad-Jensen / IPC-2141 microstrip characteristic impedance $Z_0$ (in milliohms $\text{m}\Omega$)
-computed directly from physical trace geometry `(widthUm, heightUm, copperThickUm, erPermille)`
-rather than an external oracle field:
-$$W_{\text{eff}} = W + T, \qquad Z_0 \approx \frac{87000 \cdot 1000 \cdot (4 H + W_{\text{eff}})}{(\varepsilon_r + 1410) \cdot (W_{\text{eff}} + 2 H)}.$$ -/
-def computeMicrostripZ0MilliOhm (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
-  let effWidthUm := widthUm + copperThickUm
-  let denom := (erPermille + 1410) * (effWidthUm + 2 * heightUm)
-  if denom == 0 then 0
-  else (87000 * 1000 * (4 * heightUm + effWidthUm)) / denom
-
-/-- Denominator $(\varepsilon_r + 1410) \cdot ((W + T) + 2 H)$ of the geometry-derived microstrip
-characteristic impedance formula. -/
-def microstripZ0Denom (widthUm heightUm copperThickUm erPermille : Nat) : Nat :=
-  (erPermille + 1410) * ((widthUm + copperThickUm) + 2 * heightUm)
-
-/-- Theorem (`microstrip_z0_geom_50ohm_in_band`):
-1. A controlled-impedance PTFE microstrip (`widthUm = 80`, `heightUm = 500`, `copperThickUm = 20`,
-   `erPermille = 2000`) has geometry-derived impedance $Z_0 = 48707\,\text{m}\Omega \in [47500, 52500]$
-   ($50\,\Omega \pm 5\%$),
-2. Widening the copper trace from $80\,\mu\text{m}$ to $380\,\mu\text{m}$ and $980\,\mu\text{m}$
-   strictly decreases $Z_0$ from $48.707\,\Omega$ to $43.736\,\Omega$ to $38.269\,\Omega$. -/
-theorem microstrip_z0_geom_50ohm_in_band :
-    computeMicrostripZ0MilliOhm 80 500 20 2000 = 48707 ∧
-    47500 ≤ computeMicrostripZ0MilliOhm 80 500 20 2000 ∧
-    computeMicrostripZ0MilliOhm 80 500 20 2000 ≤ 52500 ∧
-    computeMicrostripZ0MilliOhm 380 500 20 2000 < computeMicrostripZ0MilliOhm 80 500 20 2000 ∧
-    computeMicrostripZ0MilliOhm 980 500 20 2000 < computeMicrostripZ0MilliOhm 380 500 20 2000 := by
+      goldenBoardClearance = true := by
   decide +kernel
 
-/-- Theorem (`microstrip_wider_trace_decreases_z0`):
-Universally for any positive trace width `0 < w1` and wider trace `w1 ≤ w2`, increasing the trace
-width monotonically increases the Hammerstad-Jensen denominator `microstripZ0Denom` and monotonically
-decreases (or preserves) the divided characteristic impedance `num / microstripZ0Denom`:
-$$W_1 \le W_2 \implies Z_0(W_2) \le Z_0(W_1).$$ -/
-theorem microstrip_wider_trace_decreases_z0
-    (num w1 w2 heightUm copperThickUm erPermille : Nat)
-    (hPos : 0 < w1)
-    (hWider : w1 ≤ w2) :
-    microstripZ0Denom w1 heightUm copperThickUm erPermille ≤
-      microstripZ0Denom w2 heightUm copperThickUm erPermille ∧
-    num / microstripZ0Denom w2 heightUm copperThickUm erPermille ≤
-      num / microstripZ0Denom w1 heightUm copperThickUm erPermille := by
-  dsimp only [microstripZ0Denom]
-  have h1 : 0 < erPermille + 1410 := by omega
-  have h2 : 0 < (w1 + copperThickUm) + 2 * heightUm := by omega
-  have hDenomPos : 0 < (erPermille + 1410) * ((w1 + copperThickUm) + 2 * heightUm) :=
-    Nat.mul_pos h1 h2
-  have hWidthLe : (w1 + copperThickUm) + 2 * heightUm ≤ (w2 + copperThickUm) + 2 * heightUm := by
-    omega
-  have hDenomLe :
-      (erPermille + 1410) * ((w1 + copperThickUm) + 2 * heightUm) ≤
-      (erPermille + 1410) * ((w2 + copperThickUm) + 2 * heightUm) :=
-    Nat.mul_le_mul_left (erPermille + 1410) hWidthLe
-  exact ⟨hDenomLe, Nat.div_le_div_left hDenomLe hDenomPos⟩
+/-! ## 5. Microstrip impedance from geometry
+
+The closed form is `microstripZ0MilliOhm` (§1), and `checkSingleEndedZ0` gates on it. Values the
+kernel computes (an `example`, not a theorem): the golden RO4350B strip lands within its ±2.5 Ω band,
+and the 80 µm strip on 500 µm PTFE is a high-impedance line, not a 50 Ω one. -/
+
+example :
+    microstripZ0MilliOhm 380 170 35 3480 = 47894 ∧ microstripZ0MilliOhm 80 500 20 2000 = 171202 := by
+  decide +kernel
 
 /-! ## 6. 2D Axis-Aligned Bounding Box (`PcbBBox`) Geometric Clearance DRC -/
 
@@ -592,7 +620,7 @@ def violatingPcbBBoxLayout : List PcbBBox :=
 `checkBoardBBoxDrc` accepts `goldenPcbBBoxLayout` at $150\,\mu\text{m}$ fab clearance (allowing
 same-net pad-to-trace overlap while enforcing cross-net gaps $\ge 160\,\mu\text{m}$) and refuses
 `violatingPcbBBoxLayout` ($40\,\mu\text{m} < 150\,\mu\text{m}$ encroachment)! -/
-theorem board_bbox_drc_multi_obstacle_verified :
+example :
     checkBoardBBoxDrc goldenPcbBBoxLayout 150 = true ∧
     checkBoardBBoxDrc violatingPcbBBoxLayout 150 = false := by
   decide +kernel
@@ -801,7 +829,7 @@ def zeroHeightClosedEyeSpec : EyeDiagramSpec :=
 `checkEyeOpeningSignoff` accepts `goldenSerdesEyeSpec` and refuses `highLossFr4EyeSpec`
 (excessive FR-4 dielectric insertion loss), `unmatchedSkewEyeSpec` (horizontal eye closure due to skew),
 and `zeroHeightClosedEyeSpec` (`0 mV` closed vertical eye)! -/
-theorem eyeOpeningSignoff_poles :
+example :
     checkEyeOpeningSignoff goldenSerdesEyeSpec = true ∧
     checkEyeOpeningSignoff highLossFr4EyeSpec = false ∧
     checkEyeOpeningSignoff unmatchedSkewEyeSpec = false ∧
