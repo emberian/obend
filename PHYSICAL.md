@@ -143,7 +143,22 @@ the tool-path certificate of §2.
 ## 4. Deep Multiphysics: Magnetics, Direct In-Slot Liquid Cooling, and Multilevel Power
 
 Our physical domain library is built around real, extreme-power hardware systems rather than toy textbook
-examples:
+examples. Two things to hold on to while reading this section (the expert review of 2026-11-03,
+`review/EXPERT-physics-numerics-20261103.md`, and the work of 2026-11-04):
+
+- **Where the physics enters.** Nothing here is a real number. The device parameters enter the theorems
+  either as free rational variables (the universal theorems) or as integer literals in `golden*`
+  fixtures discharged by `decide`; the one place a physical *law* enters is as a named hypothesis, e.g.
+  `ZohRl.Spec` in [`CurrentLoop.lean`](lean/Obend/Hardware/CurrentLoop.lean) (the ZOH pole lies in the
+  exponential's enclosure) and `AnalyticModel` in [`TaylorModel.lean`](lean/Obend/Analysis/TaylorModel.lean).
+  A sentence below that quotes a number is quoting a fixture; the fixture's units are now named.
+- **The one device done end to end.** The LC Drives stator current loop is a chain of theorems with
+  `R`, `L`, `Ts`, `Kp`, `Ki` free: the exact ZOH plant (`stepZoh`), the PI step the RTL computes
+  (`stepLoop`), the closed-loop error map (`stepLoop_error_dynamics`), a discrete Lyapunov certificate
+  checked by interval arithmetic over a parameter box (`checkLoopLyapunovBox_sound`), and the
+  end-to-end bound `lc_drives_current_loop_converges` ([`CurrentLoop.lean`](lean/Obend/Hardware/CurrentLoop.lean)).
+  What it still lacks is listed in that file's header: the inverter between `v` and the winding, the
+  mechanical equation, and the input-to-state version that absorbs the RTL's 1 mV truncation.
 
 1. **2D FEMM-Style Magnetics FEA, Newton-Raphson B-H Saturation & `libCEED` Matrix-Free Contraction ([`Magnetics.lean`](lean/Obend/Hardware/Magnetics.lean))**:
    - Mechanizes first-order triangular finite elements (`FemmTriangle2D`) for $\nabla \cdot (\nu \nabla A_z) + J_z = 0$
@@ -155,13 +170,22 @@ examples:
      ([`femm_matrix_free_nodal_sum_zero`](lean/Obend/Hardware/Magnetics.lean#L386-L401),
      [`femm_matrix_free_energy_identity`](lean/Obend/Hardware/Magnetics.lean#L420-L425))—plus Park/Clarke
      $dq0$ IPM reluctance torque boost ([`ipm_reluctance_torque_boost`](lean/Obend/Hardware/Magnetics.lean#L236-L257))
-     and Steinmetz core-loss signoff.
+     and Steinmetz core-loss signoff. Units were named on 2026-11-04: torque is
+     `evalIpmTorqueTwiceMicroNm` (twice µN·m; the golden LC Drives point at $i_d = -100$ A, $i_q = 250$ A is
+     304.5 N·m, 34.5 N·m of it reluctance; the previous function added mWb to µH and reported a 128:1
+     reluctance:PM ratio), core loss is `evalSteinmetzCoreLossMw` with $f$ in Hz, $B$ in mT and
+     $k_h, k_e$ in mW/(Hz·T²), mW/(Hz²·T²) (the golden point is 599 W at 1.65 T, 400 Hz), and the
+     element residual is the Galerkin residual scaled by $12\Delta$ with the consistent load $J\Delta/3$.
+     The FEM here is element algebra (gauge invariance, energy non-negativity, the Newton–Raphson tangent);
+     there is no assembled solve and no boundary condition.
 2. **LC Drives (Potsdam, NY) Direct In-Slot Microchannel Stator Cooling ([`FluidThermal.lean`](lean/Obend/Hardware/FluidThermal.lean))**:
    - Models hydraulic manifold mass conservation, Darcy–Weisbach microchannel pressure drop, and
      conjugate heat transfer—proving why **LC Drives' direct in-slot microchannel cooling** (placing
      coolant channels directly inside the stator slot in contact with the conductors, bypassing the
      slot liner and laminated iron tooth/yoke thermal barrier) achieves a $224^\circ\text{C}$ lower
      winding temperature at $8\,\text{kW}$ stator copper loss than a conventional outer water jacket
+     *in a one-node series thermal network whose five resistances are inputs* ($224 = 8000 \cdot (12 + 18 - 2)$ mK/W;
+     the identity is `lc_drives_in_slot_temp_drop_identity`, the numbers are a fixture)
      ([`lc_drives_in_slot_temp_drop_identity`](lean/Obend/Hardware/FluidThermal.lean#L291-L298),
      [`lc_drives_in_slot_cooler_than_outer_jacket`](lean/Obend/Hardware/FluidThermal.lean#L305-L314),
      [`lc_drives_potsdam_dyno_comparison_verified`](lean/Obend/Hardware/FluidThermal.lean#L321-L329)).
@@ -294,5 +318,10 @@ Wave 6 unifies the hardware, geometric, kinematic, multiphysics, and quantum sub
    - Implements iterative 2D FEMM Newton-Raphson (`solve_femm_mesh`), 3D octree `Choice` tape pruning (`eval_octree_frep_pruned`), and 80-candidate Pareto optimization (`evolve_physical_design`) in Rust, plus live `obend hardware emit-sv` + Verilator `-Wall` C++ co-simulation in `run-hardware.py`.
 6. **Hybrid Symbolic-Numeric Quantum Walks & The Physical Matter Compiler ([`Equitable.lean`](lean/Obend/Analysis/Equitable.lean), [`QuantumWalk.lean`](lean/Obend/Analysis/QuantumWalk.lean), [`QuantumMatter.lean`](lean/Obend/Hardware/QuantumMatter.lean))**:
    - Mechanizes 100% computable equitable partitions, 1-WL color refinement, the integer handshake identity $|C_i| Q_{i,j} = |C_j| Q_{j,i}$ (`equitable_handshake_identity`), and universal $k$-step walk intertwining $H^k \Pi = \Pi Q^k$ (`equitable_intertwining_power`).
-   - Unifies Godsil spectral projectors and Buchberger Gröbner normal forms (`Groebner.lean`) for exact algebraic $P_3$ Perfect State Transfer (`ctqw_p3_end_to_end_pst_algebraic`) and Bachman–Tamon quotient PST (`bachman_tamon_quotient_pst_iff`) with validated Taylor-model / flowpipe Schrödinger & Lindblad enclosures (`schrodinger_unitary_flowpipe_verified`).
+   - Unifies Godsil spectral projectors and Buchberger Gröbner normal forms (`Groebner.lean`) for exact algebraic $P_3$ Perfect State Transfer (`ctqw_p3_end_to_end_pst_algebraic`) and Bachman–Tamon quotient PST (`bachman_tamon_quotient_pst_iff`) with interval-flowpipe fixtures over $\mathbb{Q}$ (`ctqw_validated_flowpipe_and_taylor_unitarity`, a concrete `decide`).
+     The integrator (`Flowpipe.lean`) is a second-order interval Taylor step, not a symplectic method; its
+     universal theorems are the interval-arithmetic half of a validated step (`picard_step_encloses_trajectory`),
+     and the analytic half, existence of the ODE solution and its membership in the a-priori box, is not
+     proved in this library. The Taylor models' transcendental remainders are relative to `AnalyticModel`,
+     whose only instance is polynomial (`TaylorModel.lean` §5).
    - Synthesizes multi-waveguide photonic CTQW arrays with open-foundry DRC and exact $\mathbb{Z}[i]$ CMT power conservation (`photonic_ctqw_array_power_conserved`, `photonic_matter_compiler_drc_sound`), and proves zero computational leakage under symmetry-preserving noise on IBM Heavy-Hex $C_{12}$ lattices and Microsoft Majorana-1 tetron parity sectors (`symmetry_preserving_noise_zero_leakage`).

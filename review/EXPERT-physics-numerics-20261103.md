@@ -424,3 +424,112 @@ low level physical model". Which single device do you want that done for first, 
 current loop (ODE → ZOH → PI → RTL, with `R, L, T_s` as variables), or the `Q₃` Krawtchouk array
 (Hamiltonian → coupled-mode PDE → coupler lengths)? Both are a month of honest work; doing both at once is
 how the current tree happened.
+
+---
+
+## What landed (2026-11-04)
+
+Ember chose the LC Drives current loop as the one device done honestly first. This section records
+what was implemented in place, with commit hashes and what was verified; it is the plan above turned
+into code. Builds ran on bb2 only, in `~/lane-physics` (a plain copy of the dd865d6 verify tree with my
+files rsynced over it); the Mac did no builds.
+
+### Commits (branch `dev`, unsigned)
+
+| hash | what |
+|---|---|
+| `3ae4e5e` | analysis: S-4 adjudicated (kept); TaylorModel §5 series cut, `partialSumAnalyticModel`; Hybrid decidability; DAE determinant by Laplace expansion |
+| `6ad68e1` | judge: `Format.bindsClaim`, `externalClaimBound F o objStr`; AutoCert fails closed, reads claim objects from the Core4 body; AutoCertTest follows |
+| `3c9066b` | hardware: `Obend/Hardware/CurrentLoop.lean`, the LC Drives current loop over `R, L, Ts, Kp, Ki` |
+| `8123df8` | hardware: units named in Magnetics/PowerElectronics/DigitalTwin; twin sensor fed back; Euler step-size condition in Thermal; tooth and tests follow |
+| `5c4186c` | foc-hil: `.obend` claims carry their boxes; plant header says what it is; opt-in mechanics |
+| `016c3b7` | apps: FocHil, SdrFt8, QuantumPhotonicMatter follow `Static` (compiler lane's hunks); the app imports `CliffordKernel` |
+| (this commit) | docs: PHYSICAL.md §4 opening and corrections; this section |
+
+### The current loop (`lean/Obend/Hardware/CurrentLoop.lean`, 8 KB of theorems, 0 `sorry`)
+
+The chain, each link a theorem over free rational parameters:
+
+1. `RlPlant` (`R`, `L`) → `ZohRl` (`a`, `b`). The exponential enters exactly once, as the hypothesis
+   `ZohRl.Spec`: `0 < x = R Ts/L < 1`, `a ∈ [1 − x, 1 − x + x²/2]`, `b R = 1 − a`. `zoh_pole_in_unit`,
+   `zoh_gain_pos`, `zoh_fixed_point` (Ohm's law survives sampling), `zoh_open_loop_contracts`.
+2. `stepLoop`: the PI step `foc_drive_top.sv` computes. `stepLoop_error_dynamics`: in
+   `(x, z) = (i − r, int − (R r − vff))` the loop is `M = [[a − b(Kp+Ki), b], [−Ki, 1]]`, for all
+   `a, b, R, Kp, Ki, r, vff` with `b R = 1 − a`. Reference, feed-forward and Ohmic drop cancel exactly.
+3. `discrete_lyapunov_decay`, `lyapunov_trajectory_bound`: a rational certificate `(P, ε, c, m)` passing
+   `lyapStaticOk`/`lyapDynamicOk` (2×2 Sylvester minors, proved by
+   `q11·Q(x,z) = (q11 x + q12 z)² + det·z²`) gives `V(Ms) ≤ ρ V(s)`, `ρ c = c − ε`, and
+   `m x_k² ≤ ρ^k c (x₀² + z₀²)` for every initial state. Division-free throughout.
+4. `checkLoopLyapunovBox` evaluates the minors as `RealExpr`s by interval arithmetic over a box in
+   `(a, b, Kp, Ki)`; `checkLoopLyapunovBox_sound` lifts one `decide` to every rational point of the box
+   through `evalInterval_sound` (the spine's own theorem, not a mirror of it).
+   `current_loop_converges_on_box` is the end-to-end statement.
+5. The instantiation is the only place integers live: `R = 12 mΩ`, `L = 150 µH`, `Ts = 50 µs`
+   (`x = 1/250`), the `.obend` gains `Kp = 0.4 V/A`, `Ki = 0.05 V/A·sample`, the box
+   `a ∈ [249/250, 124501/125000]`, `b ∈ [499/1500, 1/3]`, `P = [[112/25, −2247/1000],[−2247/1000, 3291/100]]`,
+   `ε = 1/4`, `c = 34`, `m = 4`, `ρ = 135/136`. `lc_drives_zoh_spec` and `lc_drives_box_certificate` are
+   `decide +kernel`; `lc_drives_current_loop_converges` is their consequence:
+   `4 (i_k − r)² ≤ (135/136)^k · 34 · ((i₀ − r)² + (int₀ − (R r − vff))²)` for all `r, vff, s₀, k`.
+   (The certificate's rate; the closed-loop poles have modulus ≈ 0.929.)
+6. `rtlPiStep` is the RTL's integer arithmetic; `rtlPiStep_within_lsb` bounds each `/1000` below 1 mV.
+
+Named as not done, in the file header: the input-to-state version that absorbs the 1 mV truncation,
+the inverter between `v` and the winding, the mechanical equation.
+
+### Asks to the FPGA lane (plant side; files under `apps/*/verilator` are theirs)
+
+- `foc_drive_top.sv` carries `Ki = 20/25 mΩ·sample⁻¹`; the `.obend` says `50/65` and `focHilSequentialRtlModule`
+  `65`. One value, and the `.sv` emitted from the Lean module (`emitModuleSV`), not hand-written.
+- The `.smt2` "LEC" compares two hand-written restatements; neither has the `/1000`, the feed-forward,
+  the anti-windup clamp or the skid register the `.sv` has. If it is to say anything, its RTL side must be
+  generated from the same `RtlModule`.
+- The plant now has `enable_mechanics` (J, B, T_load; off by default). Turn it on and re-run; expect the
+  current-loop numbers to hold (the loop is 100× faster than the mechanics) and `omega_e` to move.
+- `fcml_duty_permille` is produced by the RTL and consumed by nothing. Either the plant gets an inverter
+  (PWM average with dead-time loss and bus clamp between `vd/vq` and the winding) or the port goes.
+- The over-temperature scenario should say it tests the comparator and the latch; the thermal state moves
+  0.4 K in the run.
+
+### Verified
+
+- Build, on bb2 in `~/lane-physics` (the `dd865d6` verify tree, overlaid with HEAD's version of every file
+  that changed since, then these files): `lake build` of Analysis/{RealAnalysis,TaylorModel,Flowpipe,Hybrid,
+  Groebner,SosLyapunov,QuantumWalk,EqSatHypergraph}, Judge/{Class,RealAnalysis}, Logic/Obligation,
+  Elab/AutoCert, Hardware/{RF,Thermal,Magnetics,PowerElectronics,DigitalTwin,CurrentLoop,Codec,Judge,
+  UserspacePhysical,QuantumMatter}, Vault/{HardwareProjection,PhysicalProjection}, Vault, Lower.Proofs.
+  SelfAccelerate, Teeth.Hardware.SiliconTeeth, Elab.Workbook, Spec.FrontEnd, Judge, Stdlib, Main,
+  Apps.{FocHil (21 s), SdrFt8, QuantumPhotonicMatter}: green at HEAD `7aee61d` (`build-m`, 315 jobs).
+  A last confirming build at HEAD `6bdea10` with `CliffordKernel` present was still running when this
+  was written; its result is in the handoff pickup log, not here.
+- Tests (`lake env lean tests/metasystem/<T>.lean`): `CoupledPhysicalTest` green, `CoupledMultiphysicsTest`
+  green, `AutoCertTest` red on one line that is not this lane's: `#check_docs_census` at `:578` fails
+  because `DESIGN.md` (dirty, another lane) still cites the deleted `Obend/Leaf/BendTT.lean`; every
+  AutoCert-side error it had (the `CanonicalRat` open list, the kernel-opaque derived instances, the
+  incomplete division behind the Positivstellensatz sample, the `#guard`s that are not a command in this
+  toolchain, the fixture's `AutoCertSuite` refusal from a phantom variable in closed steps, a stale audit
+  entry) is fixed in `6ad68e1`. `QuantumCliffordClementsTest`: `:328-340` application-type mismatches that
+  predate this lane (the file is clean at HEAD) and are not mine.
+- Not landed: `stdlib/physical/Cnc5AxisMill.obend` (S-6's; its partner `UserspacePhysical` test is not mine),
+  `lean/tests/metasystem/QuantumMatterTest.lean` (another lane's dirty file; its docstring names the moved
+  theorems).
+- QuantumMatter tier-1 budget: `lake env lean -Dprofiler=true Obend/Hardware/QuantumMatter.lean` on bb2,
+  `LEAN_NUM_THREADS=4`, alone on the box: **103.2 s elapsed before** the move (kernel type checks of
+  28.2 s `majoranaBraid_artin_relation` at `:1466`, 13.4 s `cliffordToSpinorMatrix_algebra_hom` at `:1124`,
+  9.9 s `majoranaBraid_preserves_parity` at `:1427`, positions from `--json`), **50.8 s after** (largest
+  remaining check 3.1 s). The move itself is `92132ed` (gate lane) into `Teeth/Hardware/CliffordKernel.lean`,
+  names and statements unchanged; this lane adds the import the app needed (`016c3b7`). They are theorems
+  over all of `Fin 4`/`Fin 16`, not fixtures, so they stay theorems in tier 2 rather than `example`s.
+- Not run: the Verilator testbenches (no Verilator on bb2; the Mac may not build). `lean/Obend/Apps/FocHil.lean`
+  (tier 2) is expected red until the Lean lane routes its `#import_obend` through `Workbook`: its private path
+  cannot parse the claims' `given`; then its claim names follow the `.obend` and it is mine.
+- `Vault/PhysicalProjection.lean:327`: red with S-4's `verifyTrajectorySafety`, which now checks the
+  continuous a-priori enclosures; the stator fixture's `[15, 35]` was passed only by the discrete slices (the
+  degree-1 interval step widens ~1.9× per half-second step and the third a-priori box reaches 14.6 while the
+  true tube stays in `[19.9, 30]`). The spec now says `[12, 35]`, the method's bound, with the reason in its
+  docstring (`3ae4e5e`); green.
+
+### Adjudications
+
+In `review/GEMINI-HANDOFF-20261103.md`, "Adjudications (physics lane, 2026-11-04)": twelve files, eleven kept
+(three with repairs, one with a cut), `stdlib/physical/Cnc5AxisMill.obend` reverted to HEAD because its S-6
+partner `Hardware/UserspacePhysical.lean:690-700` (not mine) still decides the old outputs.
