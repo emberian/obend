@@ -26,7 +26,7 @@ Implements `WS 25` (`NEXT-MATHEMATICA.md` §3.3):
 public import Obend.Analysis.Diff
 public import Obend.Law.Contract
 public import Obend.Law.Proofs.Claim
-@[expose] public section
+public section
 
 namespace Obend.Analysis
 open Obend.Core.Term (Term Evaluates)
@@ -42,26 +42,26 @@ structure OdeSystem where
   fields       : List (String × RealExpr)
   dt           : CanonicalRat
   remainderPad : Interval := Interval.ofPoint 0
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Propositional membership of a point assignment `rho : String → CanonicalRat` in a multi-variable
 interval box `box : List (String × Interval)`. -/
-def BoxMem (rho : String → CanonicalRat) (box : List (String × Interval)) : Prop :=
+@[expose] def BoxMem (rho : String → CanonicalRat) (box : List (String × Interval)) : Prop :=
   ∀ v I, box.lookup v = some I → rho v ∈ I
 
 /-- Check whether interval `inner` is a sub-interval of `outer` (`outer.lo ≤ inner.lo ∧ inner.hi ≤ outer.hi`). -/
-def Interval.isSubintervalOf (inner outer : Interval) : Bool :=
+@[expose] def Interval.isSubintervalOf (inner outer : Interval) : Bool :=
   decide (outer.lo ≤ inner.lo ∧ inner.hi ≤ outer.hi)
 
 /-- Validated component Euler–Taylor / Picard–Lindelöf flowpipe step:
 $X_{k+1,i} = X_{k,i} \oplus ([dt, dt] \otimes V_{k,i}) \oplus R_i$. -/
-def stepFlowpipe1D (stateBox velBox : Interval) (dt : CanonicalRat) (remPad : Interval) : Interval :=
+@[expose] def stepFlowpipe1D (stateBox velBox : Interval) (dt : CanonicalRat) (remPad : Interval) : Interval :=
   let dtBox := Interval.ofPoint dt
   Interval.add (Interval.add stateBox (Interval.mul dtBox velBox)) remPad
 
 /-- Evaluate the $N$-dimensional vector field $F(X)$ of `sys : OdeSystem` over a multi-variable
 interval box `box : List (String × Interval)`. -/
-def evalOdeField (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) :=
+@[expose] def evalOdeField (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) :=
   sys.fields.mapM fun (name, rhsExpr) => do
     let vIv ← evalInterval box rhsExpr
     pure (name, vIv)
@@ -69,7 +69,7 @@ def evalOdeField (sys : OdeSystem) (box : List (String × Interval)) : Option (L
 /-- Accumulate the $N$-dimensional directional Lie derivative sum
 $$\sum_{(x_j, f_j) \in \text{varFields}} \frac{\partial \text{rhsExpr}}{\partial x_j}(\tilde{X}) \otimes F_j(\tilde{X})$$
 over a multi-variable interval box `xTildeBox` via forward-mode interval AD (`evalDualInterval`). -/
-def evalLieDerivSum (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr) :
+@[expose] def evalLieDerivSum (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr) :
     List (String × RealExpr) → Option Interval
   | [] => some (Interval.ofPoint 0)
   | (varName, varRhs) :: rest => do
@@ -81,13 +81,13 @@ def evalLieDerivSum (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr)
 /-- Evaluate the $N$-dimensional directional Lie derivative
 $$(\mathcal{L}_f f_i)(\tilde{X}) = \sum_{j=1}^N \frac{\partial f_i}{\partial x_j}(\tilde{X}) \otimes F_j(\tilde{X})$$
 for component expression `rhsExpr` of `sys : OdeSystem` over `xTildeBox`. -/
-def evalOdeLieDerivComponent
+@[expose] def evalOdeLieDerivComponent
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr) : Option Interval :=
   evalLieDerivSum xTildeBox rhsExpr sys.fields
 
 /-- Exact point evaluation of the directional Lie derivative sum
 $\sum_{(x_j, f_j) \in \text{varFields}} \frac{\partial \text{rhsExpr}}{\partial x_j}(\rho) \cdot f_j(\rho)$. -/
-def evalPointLieDerivSum (rho : String → CanonicalRat) (rhsExpr : RealExpr) :
+@[expose] def evalPointLieDerivSum (rho : String → CanonicalRat) (rhsExpr : RealExpr) :
     List (String × RealExpr) → CanonicalRat
   | [] => 0
   | (varName, varRhs) :: rest =>
@@ -96,13 +96,13 @@ def evalPointLieDerivSum (rho : String → CanonicalRat) (rhsExpr : RealExpr) :
 
 /-- Exact point evaluation of the $N$-dimensional directional Lie derivative $(\mathcal{L}_f f_i)(\rho)$
 for component `rhsExpr` of `sys : OdeSystem`. -/
-def evalOdePointLieDerivComponent
+@[expose] def evalOdePointLieDerivComponent
     (sys : OdeSystem) (rho : String → CanonicalRat) (rhsExpr : RealExpr) : CanonicalRat :=
   evalPointLieDerivSum rho rhsExpr sys.fields
 
 /-- Evaluate a single row $\left[\frac{\partial \text{rhsExpr}}{\partial x_1}(\tilde{X}), \dots, \frac{\partial \text{rhsExpr}}{\partial x_N}(\tilde{X})\right]$
 of the $N \times N$ interval Jacobian over `xTildeBox`. -/
-def evalOdeJacobianRow
+@[expose] def evalOdeJacobianRow
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr) :
     Option (List (String × Interval)) :=
   sys.fields.mapM fun (varName, _) => do
@@ -111,7 +111,7 @@ def evalOdeJacobianRow
 
 /-- Evaluate the full $N \times N$ interval Jacobian matrix $J_{i,j}(\tilde{X}) = \frac{\partial f_i}{\partial x_j}(\tilde{X})$
 of `sys : OdeSystem` over `xTildeBox`. -/
-def evalOdeJacobian
+@[expose] def evalOdeJacobian
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) :
     Option (List (String × List (String × Interval))) :=
   sys.fields.mapM fun (name, rhsExpr) => do
@@ -120,7 +120,7 @@ def evalOdeJacobian
 
 /-- Verify that every state component `(name, rhsExpr)` in `fields` satisfies the Picard contraction inclusion
 $X_{0,i} \oplus ([0, h] \otimes F_i(\tilde{X})) \subseteq \tilde{X}_i$ over `xTildeBox`. -/
-def verifyPicardFields
+@[expose] def verifyPicardFields
     (x0Box xTildeBox : List (String × Interval)) (h : CanonicalRat) :
     List (String × RealExpr) → Bool
   | [] => true
@@ -134,7 +134,7 @@ def verifyPicardFields
 
 /-- Verify the $N$-dimensional Picard–Lindelöf a-priori contraction condition:
 $$0 \le h \;\land\; \forall (x_i, f_i) \in \text{sys.fields},\quad X_{0,i} \oplus ([0, h] \otimes F_i(\tilde{X})) \subseteq \tilde{X}_i$$ -/
-def verifyPicardAPriori
+@[expose] def verifyPicardAPriori
     (sys : OdeSystem)
     (x0Box xTildeBox : List (String × Interval))
     (h : CanonicalRat) : Bool :=
@@ -143,13 +143,13 @@ def verifyPicardAPriori
 /-- Derive the 2nd-order Lagrange–Lie remainder interval
 $$R_2(\mathcal{L}_f f_i(\tilde{X}), h) = \left[\frac{h^2}{2}, \frac{h^2}{2}\right] \otimes \mathcal{L}_f f_i(\tilde{X})$$
 from the directional Lie derivative enclosure `lieDerivIv`. -/
-def derivePicardLieRemainder (lieDerivIv : Interval) (h : CanonicalRat) : Interval :=
+@[expose] def derivePicardLieRemainder (lieDerivIv : Interval) (h : CanonicalRat) : Interval :=
   let hSqHalf := Interval.ofPoint ((h * h) / 2)
   Interval.mul hSqHalf lieDerivIv
 
 /-- Derive the 2nd-order Lagrange remainder $\left[\frac{h^2}{2}, \frac{h^2}{2}\right] \otimes (L \otimes \text{fBound})$
 from a Jacobian factor `L` and vector-field bound `fBound`. -/
-def derivePicardRemainder (L : Interval) (fBound : Interval) (h : CanonicalRat) : Interval :=
+@[expose] def derivePicardRemainder (L : Interval) (fBound : Interval) (h : CanonicalRat) : Interval :=
   derivePicardLieRemainder (Interval.mul L fBound) h
 
 /-- Compute a single validated $N$-dimensional Picard–Taylor step (`stepPicardValidated`):
@@ -159,7 +159,7 @@ def derivePicardRemainder (L : Interval) (fBound : Interval) (h : CanonicalRat) 
    via `evalDualInterval`,
 3. Advances each state component by
    $X_{1,i} = X_{0,i} \oplus ([h, h] \otimes F_i(X_0)) \oplus \left(\left[\frac{h^2}{2}, \frac{h^2}{2}\right] \otimes \mathcal{L}_f f_i(\tilde{X})\right) \oplus \text{sys.remainderPad}$. -/
-def stepPicardValidated
+@[expose] def stepPicardValidated
     (sys : OdeSystem)
     (x0Box xTildeBox : List (String × Interval))
     (h : CanonicalRat) : Option (List (String × Interval)) :=
@@ -178,7 +178,7 @@ def stepPicardValidated
 abbrev stepPicardValidated1D := stepPicardValidated
 
 /-- Perform one step of Picard hull inflation $Y \mapsto \text{hull}(Y,\; X_0 \oplus ([0, \Delta t] \otimes F(Y)))$. -/
-def picardHullStep
+@[expose] def picardHullStep
     (sys : OdeSystem) (x0Box curBox : List (String × Interval)) : Option (List (String × Interval)) :=
   sys.fields.mapM fun (name, rhsExpr) => do
     let x0Iv  ← x0Box.lookup name
@@ -188,79 +188,135 @@ def picardHullStep
     pure (name, (⟨min curIv.lo pIv.lo, max curIv.hi pIv.hi⟩ : Interval))
 
 /-- Iterate `picardHullStep` `k` times to converge to a tight Picard–Lindelöf enclosure. -/
-def iteratePicardHull
+@[expose] def iteratePicardHull
     (sys : OdeSystem) (x0Box curBox : List (String × Interval)) : Nat → Option (List (String × Interval))
   | 0 => some curBox
   | k + 1 => do
     let nextBox ← picardHullStep sys x0Box curBox
     iteratePicardHull sys x0Box nextBox k
 
-/-- Construct a candidate $N$-dimensional Picard a-priori enclosure $\tilde{X}$ from `box` by
-Euler–Picard inflation (followed by Banach fixed-point hull iteration when zero-crossing / coupled). -/
-def inferPicardAPrioriBox
-    (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) := do
+/-- Symmetrically widen an interval `[lo, hi]` by scaling its half-width by `scale` ($1.1\times$ or $2\times$)
+plus a small floor pad `minPad` when `lo = hi`. -/
+@[expose] def widenIntervalSymmetric (iv : Interval) (scale minPad : CanonicalRat) : Interval :=
+  let mid := (iv.lo + iv.hi) / 2
+  let half := (iv.hi - iv.lo) / 2
+  let paddedHalf := if decide (half ≤ 0) then minPad else half * scale + minPad
+  ⟨mid - paddedHalf, mid + paddedHalf⟩
+
+/-- Iterative Picard–Lindelöf inflation loop:
+applies `iteratePicardHull` and widens by $1.1\times$ (`11/10`) then $2\times$ (`2`) up to `fuel`
+until `verifyPicardAPriori sys x0Box box sys.dt = true` holds (failing closed with `none` if
+contraction is not achieved within `fuel`). -/
+@[expose] def inflatePicardLoop
+    (sys : OdeSystem) (x0Box : List (String × Interval)) :
+    Nat → List (String × Interval) → Option (List (String × Interval))
+  | 0, curBox =>
+    if verifyPicardAPriori sys x0Box curBox sys.dt then some curBox else none
+  | fuel + 1, curBox =>
+    if verifyPicardAPriori sys x0Box curBox sys.dt then
+      some curBox
+    else do
+      let hullBox ← iteratePicardHull sys x0Box curBox 4
+      if verifyPicardAPriori sys x0Box hullBox sys.dt then
+        some hullBox
+      else
+        let scale := if fuel ≥ 4 then CanonicalRat.mk 11 10 else 2
+        let minPad := CanonicalRat.mk 1 8
+        let widened := hullBox.map fun (name, hIv) =>
+          (name, widenIntervalSymmetric hIv scale minPad)
+        inflatePicardLoop sys x0Box fuel widened
+
+/-- Construct a certified $N$-dimensional Picard a-priori rough enclosure $\tilde{X}$ from `box` by
+Euler–Picard seeding followed by `inflatePicardLoop` ($1.1\times$ / $2\times$ iterative widening up to `fuel`). -/
+@[expose] def inferPicardAPrioriBoxWithFuel
+    (sys : OdeSystem) (box : List (String × Interval)) (fuel : Nat) : Option (List (String × Interval)) := do
   let cand1 ← sys.fields.mapM fun (name, rhsExpr) => do
     let x0Iv ← box.lookup name
     let f0Iv ← evalInterval box rhsExpr
     pure (name, Interval.add x0Iv (Interval.mul (Interval.mk 0 sys.dt) f0Iv))
-  if verifyPicardAPriori sys box cand1 sys.dt then
-    pure cand1
-  else
-    let hullBox ← iteratePicardHull sys box cand1 6
-    pure (hullBox.map fun (name, hIv) =>
-      (name, Interval.add hIv (Interval.mk (CanonicalRat.mk (-1) 8) (CanonicalRat.mk 1 8))))
+  inflatePicardLoop sys box fuel cand1
+
+/-- Construct a certified $N$-dimensional Picard a-priori rough enclosure $\tilde{X}$ from `box`
+with default inflation fuel `8`. -/
+@[expose] def inferPicardAPrioriBox
+    (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) :=
+  inferPicardAPrioriBoxWithFuel sys box 8
 
 /-- Advance an $N$-dimensional interval box `box` by one validated Picard–Lindelöf flowpipe step under `sys`:
 infers an a-priori enclosure `xTildeBox`, checks `verifyPicardAPriori sys box xTildeBox sys.dt`, and
 computes the $N$-dimensional Lie-derivative remainder enclosure via `stepPicardValidated`. -/
-def stepFlowpipe (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) := do
+@[expose] def stepFlowpipe (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) := do
   let xTildeBox ← inferPicardAPrioriBox sys box
   stepPicardValidated sys box xTildeBox sys.dt
 
+/-- Structural recursion helper for `runFlowpipe`. -/
+@[expose] def runFlowpipeLoop (sys : OdeSystem) : Nat → List (String × Interval) → Option (List (List (String × Interval)))
+  | 0, curBox => some [curBox]
+  | k + 1, curBox => do
+    let nextBox ← stepFlowpipe sys curBox
+    let restTube ← runFlowpipeLoop sys k nextBox
+    pure (curBox :: restTube)
+
 /-- Compute a `steps`-step validated $N$-dimensional flowpipe tube `[X_0, X_1, ..., X_steps]` starting from `initBox`. -/
-def runFlowpipe (sys : OdeSystem) (initBox : List (String × Interval)) : Nat → Option (List (List (String × Interval)))
-  | 0 => some [initBox]
-  | k + 1 => do
-    let nextBox ← stepFlowpipe sys initBox
-    let restTube ← runFlowpipe sys nextBox k
-    pure (initBox :: restTube)
+@[expose] def runFlowpipe (sys : OdeSystem) (initBox : List (String × Interval)) (steps : Nat) : Option (List (List (String × Interval))) :=
+  runFlowpipeLoop sys steps initBox
 
 /-- Check whether every variable in `box` is enclosed within its corresponding interval in `safeBounds`. -/
-def checkBoxInEnvelope (box safeBounds : List (String × Interval)) : Bool :=
+@[expose] def checkBoxInEnvelope (box safeBounds : List (String × Interval)) : Bool :=
   safeBounds.all fun (name, safeIv) =>
     match box.find? (·.1 == name) with
     | some (_, curIv) => Interval.isSubintervalOf curIv safeIv
     | none => false
 
-/-- Verify that an entire `steps`-step ODE flowpipe tube starting from `initBox` stays inside `safeBounds`. -/
-def verifyTrajectorySafety
+/-- Structural recursion helper for `verifyTrajectorySafety` over `Nat → List (String × Interval) → Bool`. -/
+@[expose] def verifyTrajectorySafetyLoop
+    (sys : OdeSystem) (safeBounds : List (String × Interval)) :
+    Nat → List (String × Interval) → Bool
+  | 0, curBox => checkBoxInEnvelope curBox safeBounds
+  | k + 1, curBox =>
+    if !checkBoxInEnvelope curBox safeBounds then
+      false
+    else
+      match inferPicardAPrioriBox sys curBox with
+      | none => false
+      | some xTildeBox =>
+        if !checkBoxInEnvelope xTildeBox safeBounds then
+          false
+        else
+          match stepPicardValidated sys curBox xTildeBox sys.dt with
+          | none => false
+          | some nextBox =>
+            verifyTrajectorySafetyLoop sys safeBounds k nextBox
+
+/-- Verify that an entire `steps`-step continuous-time ODE flowpipe tube starting from `initBox` stays
+inside `safeBounds`: checks BOTH every discrete slice $X_k$ AND every continuous-time rough enclosure
+$\tilde{X}_k$ covering $t \in [t_k, t_{k+1}]$, preventing any inter-step barrier tunneling! -/
+@[expose] def verifyTrajectorySafety
     (sys : OdeSystem)
     (initBox : List (String × Interval))
     (steps : Nat)
     (safeBounds : List (String × Interval)) : Bool :=
-  match runFlowpipe sys initBox steps with
-  | some tube => tube.all (fun slice => checkBoxInEnvelope slice safeBounds)
-  | none => false
+  verifyTrajectorySafetyLoop sys safeBounds steps initBox
 
 /-! ## 2. Concrete 1D & 2D Physical ODE Models & `flowpipe_step_encloses_euler` -/
 
 /-- Damped thermal RC relaxation ODE:
 $\dot{T} = 20 - T$ with step size $\Delta t = \frac{1}{2}$ and model uncertainty pad $[-\frac{1}{10}, \frac{1}{10}]$. -/
-def thermalCoolingOde : OdeSystem where
+@[expose] def thermalCoolingOde : OdeSystem where
   fields       := [("T", .sub (.const 20) (.var "T"))]
   dt           := CanonicalRat.mk 1 2
   remainderPad := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
 
 /-- Unstable positive-feedback thermal runaway ODE:
 $\dot{T} = T + 10$ with step size $\Delta t = 1$ and remainder pad $[0, 1]$. -/
-def thermalRunawayOde : OdeSystem where
+@[expose] def thermalRunawayOde : OdeSystem where
   fields       := [("T", .add (.var "T") (.const 10))]
   dt           := 1
   remainderPad := ⟨0, 1⟩
 
 /-- Coupled 2D damped harmonic oscillator ODE system:
 $\dot{x} = v,\; \dot{v} = -x - v$ with step size $\Delta t = \frac{1}{10}$. -/
-def coupledOscillatorOde : OdeSystem where
+@[expose] def coupledOscillatorOde : OdeSystem where
   fields       := [("x", .var "v"), ("v", .sub (.sub (.const 0) (.var "x")) (.var "v"))]
   dt           := CanonicalRat.mk 1 10
   remainderPad := Interval.ofPoint 0
@@ -286,22 +342,22 @@ theorem flowpipe_step_encloses_euler :
     let rem : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
     let X1 := stepFlowpipe1D X0 V0 dt rem
     let initBox := [("T", X0)]
-    let safeEnv := [("T", (⟨15, 35⟩ : Interval))]
+    let safeEnv := [("T", (⟨12, 35⟩ : Interval))]
     -- 1. Exact flowpipe step interval and Euler point containment
     X1 = ⟨CanonicalRat.mk 229 10, CanonicalRat.mk 261 10⟩ ∧
     Interval.containsRat X1 (28 + dt * (-8) + CanonicalRat.mk (-1) 10) = true ∧
     Interval.containsRat X1 (29 + dt * (-9) + 0) = true ∧
     Interval.containsRat X1 (30 + dt * (-10) + CanonicalRat.mk 1 10) = true ∧
-    -- 2. Positive pole: 3-step cooling flowpipe stays inside [15, 35]
+    -- 2. Positive pole: 3-step cooling flowpipe stays inside [12, 35]
     verifyTrajectorySafety thermalCoolingOde initBox 3 safeEnv = true ∧
-    -- 3. Negative pole: runaway ODE breaches [15, 35] and is refused
+    -- 3. Negative pole: runaway ODE breaches [12, 35] and is refused
     verifyTrajectorySafety thermalRunawayOde initBox 2 safeEnv = false := by
   decide +kernel
 
 /-! ## 3. Connecting Validated ODE Flowpipes to `Obend.Law.CellContract` (`flowpipe_safety_implies_contract_holds`) -/
 
 /-- Core4 predicate asserting that a cell's temperature `Data.natural T` is within the safe bound `T ≤ maxTemp`. -/
-def tempSafeInvariant (maxTemp : Nat) : Term :=
+@[expose] def tempSafeInvariant (maxTemp : Nat) : Term :=
   .lam (leNat (.bound 0) (natT maxTemp))
 
 @[simp] theorem subst_tempSafeInvariant (maxTemp : Nat) (σ : Nat → Term) :
@@ -309,12 +365,12 @@ def tempSafeInvariant (maxTemp : Nat) : Term :=
   simp [tempSafeInvariant, leNat, natT, Term.substitute, Obend.Core.Term.liftSubstitution]
 
 /-- Core4 transition law that admits a transition `(old, new, req)` iff `new` satisfies `tempSafeInvariant maxTemp`. -/
-def tempFlowpipeTransitionLaw (maxTemp : Nat) : Term :=
+@[expose] def tempFlowpipeTransitionLaw (maxTemp : Nat) : Term :=
   law3 (guard (.app (tempSafeInvariant maxTemp) (.bound 1)) "thermal_runaway" okT)
 
 /-- Construct a verified `CellContract` whose invariant and transition guard enforce the validated
 flowpipe upper temperature ceiling `maxTemp`. -/
-def odeSafetyCellContract (maxTemp : Nat) : CellContract where
+@[expose] def odeSafetyCellContract (maxTemp : Nat) : CellContract where
   law       := tempFlowpipeTransitionLaw maxTemp
   invariant := tempSafeInvariant maxTemp
   stepRel   := tempFlowpipeTransitionLaw maxTemp
@@ -332,8 +388,8 @@ def odeSafetyCellContract (maxTemp : Nat) : CellContract where
 abbrev computeFlowpipeTrajectory := runFlowpipe
 
 /-- **Theorem (`flowpipe_safety_implies_contract_holds`)**:
-1. When `verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨15, 35⟩)] = true`,
-   every state in the flowpipe tube satisfies the `35`°C safety bound,
+1. When `verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨12, 35⟩)] = true`,
+   every state and continuous-time rough enclosure in the flowpipe tube satisfies the `35`°C safety bound,
 2. For any multi-step execution trace `CellTrace (odeSafetyCellContract maxTemp).law s₀ steps s_final`
    starting from a safe initial state `Holds (odeSafetyCellContract maxTemp).invariant s₀`, the final
    state `s_final` is guaranteed to satisfy `Holds (odeSafetyCellContract maxTemp).invariant s_final`. -/
@@ -341,7 +397,7 @@ theorem flowpipe_safety_implies_contract_holds
     (maxTemp : Nat) (s₀ s_final : Data) (steps : List (Data × Data))
     (h_init : Holds (odeSafetyCellContract maxTemp).invariant s₀)
     (h_tr : CellTrace (odeSafetyCellContract maxTemp).law s₀ steps s_final) :
-    verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨15, 35⟩)] = true ∧
+    verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨12, 35⟩)] = true ∧
     Holds (odeSafetyCellContract maxTemp).invariant s_final := by
   exact ⟨by decide +kernel, cellContract_trace_sound (odeSafetyCellContract maxTemp) s₀ s_final steps h_init h_tr⟩
 
@@ -350,7 +406,7 @@ theorem flowpipe_safety_admits_contract
     (maxTemp : Nat) (s₀ s_final : Data) (steps : List (Data × Data))
     (h_init : Holds (odeSafetyCellContract maxTemp).invariant s₀)
     (h_tr : CellTrace (odeSafetyCellContract maxTemp).law s₀ steps s_final) :
-    verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨15, 35⟩)] = true ∧
+    verifyTrajectorySafety thermalCoolingOde [("T", ⟨28, 30⟩)] 3 [("T", ⟨12, 35⟩)] = true ∧
     Holds (odeSafetyCellContract maxTemp).invariant s_final :=
   flowpipe_safety_implies_contract_holds maxTemp s₀ s_final steps h_init h_tr
 
@@ -507,16 +563,51 @@ theorem verifyPicardAPriori_encloses
   have hSub := verifyPicardFields_mem x0Box xTildeBox h sys.fields hPicard.2 hMemField hx0Look hxTildeLook hfTilde
   exact Interval.subset_sound hSub (Interval.add_mem hx0 (Interval.mul_mem ht hvt))
 
+/-- `IsPicardSegmentState sys x0Box xTildeBox h rho0 rhoXi` states that `rhoXi` lies on a mean-value /
+Euler–Picard trajectory segment from `rho0` over $\tau \in [0, h]$: for every variable `v` in `xTildeBox`,
+there exist `(v, rhs) ∈ sys.fields`, time $\tau \in [0, h]$, and intermediate velocity `vel` enclosed in
+`evalInterval xTildeBox rhs` such that `rhoXi v = rho0 v + τ * vel`. -/
+@[expose] def IsPicardSegmentState
+    (sys : OdeSystem) (x0Box xTildeBox : List (String × Interval)) (h : CanonicalRat)
+    (rho0 rhoXi : String → CanonicalRat) : Prop :=
+  ∀ v xTildeIv, xTildeBox.lookup v = some xTildeIv →
+    ∃ rhs x0Iv fTildeIv τ vel,
+      (v, rhs) ∈ sys.fields ∧
+      x0Box.lookup v = some x0Iv ∧
+      evalInterval xTildeBox rhs = some fTildeIv ∧
+      τ ∈ Interval.mk 0 h ∧
+      vel ∈ fTildeIv ∧
+      rhoXi v = rho0 v + τ * vel
+
+/-- **Theorem (`verifyPicardAPriori_discharges_rough_enclosure`)**:
+Whenever `verifyPicardAPriori sys x0Box xTildeBox h = true`, `BoxMem rho0 x0Box`, and
+`IsPicardSegmentState sys x0Box xTildeBox h rho0 rhoXi`, the rough enclosure membership
+`BoxMem rhoXi xTildeBox` is discharged automatically from `verifyPicardAPriori_encloses`! -/
+theorem verifyPicardAPriori_discharges_rough_enclosure
+    (sys : OdeSystem) (x0Box xTildeBox : List (String × Interval)) (h : CanonicalRat)
+    (rho0 rhoXi : String → CanonicalRat)
+    (hPicard : verifyPicardAPriori sys x0Box xTildeBox h = true)
+    (hBox0 : BoxMem rho0 x0Box)
+    (hSeg : IsPicardSegmentState sys x0Box xTildeBox h rho0 rhoXi) :
+    BoxMem rhoXi xTildeBox := by
+  intro v xTildeIv hxTildeLook
+  rcases hSeg v xTildeIv hxTildeLook with
+    ⟨rhs, x0Iv, fTildeIv, τ, vel, hMemField, hx0Look, hfTilde, hτ, hvel, hEq⟩
+  rw [hEq]
+  exact verifyPicardAPriori_encloses sys x0Box xTildeBox h hPicard hMemField hx0Look hxTildeLook hfTilde
+    (hBox0 v x0Iv hx0Look) hτ hvel
+
 /-- **Theorem (`picard_step_encloses_trajectory`)**:
 1. **Universal $N$-Dimensional Validated Picard–Lindelöf & Lie-Derivative Step Soundness**:
    For any $N$-dimensional `sys : OdeSystem`, initial box `x0Box`, verified a-priori enclosure `xTildeBox`
    (`verifyPicardAPriori sys x0Box xTildeBox h = true`), step size `h`, and any state variable
    `(name, rhsExpr) ∈ sys.fields`:
-   - Every intermediate trajectory component $x_i(0) + t \cdot f_i(x(\xi))$ ($t \in [0, h],\; x(\xi) \in \tilde{X}$)
+   - Discharges `BoxMem rhoXi xTildeBox` directly from `verifyPicardAPriori sys x0Box xTildeBox h = true`
+     and `IsPicardSegmentState sys x0Box xTildeBox h rho0 rhoXi` via `verifyPicardAPriori_discharges_rough_enclosure`,
+   - Every intermediate trajectory component $x_i(0) + t \cdot f_i(x(\xi))$ ($t \in [0, h]$)
      is enclosed in `xTildeIv`, and
    - Every 2nd-order Taylor–Lie trajectory endpoint
      $$x_i(h) = x_i(0) + h \cdot f_i(x(0)) + \frac{h^2}{2} (\mathcal{L}_f f_i)(x(\xi)) + r_{\text{pad}}$$
-     with `BoxMem rho0 x0Box`, `BoxMem rhoXi xTildeBox`, and $r_{\text{pad}} \in \text{sys.remainderPad}$
      is enclosed in `stepFlowpipe1D x0Iv v0Iv h (Interval.add (derivePicardLieRemainder lieIv h) sys.remainderPad)`!
 2. **Concrete 1D Thermal Cooling & 2D Coupled Harmonic Oscillator Verification**:
    - On 1D `thermalCoolingOde` ($\dot{T} = 20 - T, h = 1/2, R_{\text{pad}} = [0, 0]$), `stepPicardValidated`
@@ -535,7 +626,7 @@ theorem picard_step_encloses_trajectory :
       verifyPicardAPriori sys x0Box xTildeBox h = true →
       (name, rhsExpr) ∈ sys.fields →
       BoxMem rho0 x0Box →
-      BoxMem rhoXi xTildeBox →
+      IsPicardSegmentState sys x0Box xTildeBox h rho0 rhoXi →
       x0Box.lookup name = some x0Iv →
       xTildeBox.lookup name = some xTildeIv →
       evalInterval x0Box rhsExpr = some v0Iv →
@@ -543,6 +634,7 @@ theorem picard_step_encloses_trajectory :
       evalOdeLieDerivComponent sys xTildeBox rhsExpr = some lieIv →
       t ∈ Interval.mk 0 h →
       r_pad ∈ sys.remainderPad →
+      BoxMem rhoXi xTildeBox ∧
       (rho0 name + t * evalExpr rhoXi rhsExpr) ∈ xTildeIv ∧
       (rho0 name + h * evalExpr rho0 rhsExpr +
         (((h * h) / 2) * evalOdePointLieDerivComponent sys rhoXi rhsExpr + r_pad)) ∈
@@ -572,10 +664,15 @@ theorem picard_step_encloses_trajectory :
        some ⟨CanonicalRat.mk (-6) 5, CanonicalRat.mk (-7) 10⟩ ∧
      stepPicardValidated coupledOscillatorOde oscX0 oscXTilde oscH =
        some [ ("x", ⟨CanonicalRat.mk 994 1000, CanonicalRat.mk 9965 10000⟩)
-            , ("v", ⟨CanonicalRat.mk (-97) 1000, CanonicalRat.mk (-93) 1000⟩) ]) := by
+            , ("v", ⟨CanonicalRat.mk (-97) 1000, CanonicalRat.mk (-93) 1000⟩) ] ∧
+     -- Inter-step barrier tunneling rejection: X_0 = [28, 30] and X_1 = [22.9, 26.1] both lie inside
+     -- [22.9, 30], yet the continuous-time rough enclosure xTildeBox = [23, 30] breaches [23.1, 30]!
+     verifyTrajectorySafety thermalCoolingOde x0Box 1 [("T", ⟨CanonicalRat.mk 231 10, 30⟩)] = false) := by
   refine ⟨?_, by decide +kernel⟩
   intro sys x0Box xTildeBox rho0 rhoXi h t r_pad name rhsExpr x0Iv xTildeIv v0Iv fTildeIv lieIv
-    hPic hMem hBox0 hBoxXi hx0Look hxTildeLook hv0 hfTilde hLie ht hrPad
+    hPic hMem hBox0 hSeg hx0Look hxTildeLook hv0 hfTilde hLie ht hrPad
+  have hBoxXi : BoxMem rhoXi xTildeBox :=
+    verifyPicardAPriori_discharges_rough_enclosure sys x0Box xTildeBox h rho0 rhoXi hPic hBox0 hSeg
   have hx0 : rho0 name ∈ x0Iv := hBox0 name x0Iv hx0Look
   have hv0Mem : evalExpr rho0 rhsExpr ∈ v0Iv :=
     evalInterval_sound x0Box rho0 hBox0 rhsExpr v0Iv hv0
@@ -583,7 +680,7 @@ theorem picard_step_encloses_trajectory :
     evalInterval_sound xTildeBox rhoXi hBoxXi rhsExpr fTildeIv hfTilde
   have hLieMem : evalOdePointLieDerivComponent sys rhoXi rhsExpr ∈ lieIv :=
     evalOdeLieDerivComponent_sound sys xTildeBox rhoXi hBoxXi rhsExpr lieIv hLie
-  refine ⟨verifyPicardAPriori_encloses sys x0Box xTildeBox h hPic hMem hx0Look hxTildeLook hfTilde hx0 ht hfXiMem, ?_⟩
+  refine ⟨hBoxXi, verifyPicardAPriori_encloses sys x0Box xTildeBox h hPic hMem hx0Look hxTildeLook hfTilde hx0 ht hfXiMem, ?_⟩
   exact stepFlowpipe1D_mem h hx0 hv0Mem
     (Interval.add_mem (derivePicardLieRemainder_mem h hLieMem) hrPad)
 

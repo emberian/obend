@@ -12,7 +12,7 @@ Provides:
 public import Obend.Judge.Class
 public import Obend.Analysis.RealAnalysis
 
-@[expose] public section
+public section
 namespace Obend.Judge
 open Obend.Analysis
 open Obend.Analysis.CanonicalRat
@@ -25,23 +25,23 @@ structure IntervalQuery where
   expr : RealExpr
   env : List (String × Interval)
   claimedBound : Interval
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Certificate for an interval query: direct evaluation or counterexample refutation point. -/
 inductive IntervalCert where
   | direct
   | counterexample (point : List (String × CanonicalRat))
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Refusal clauses for interval verification. -/
 inductive IntervalClause where
   | boundViolated (computed claimed : Interval)
   | domainUndefined
   | refutationWitness (point : List (String × CanonicalRat))
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Checker for IntervalJudge. -/
-def intervalCheck (_fuel : Nat) (q : IntervalQuery) (c : IntervalCert) : Judge.Verdict IntervalClause :=
+@[expose] def intervalCheck (_fuel : Nat) (q : IntervalQuery) (c : IntervalCert) : Judge.Verdict IntervalClause :=
   match c with
   | .direct =>
     match evalInterval q.env q.expr with
@@ -72,7 +72,7 @@ def intervalCheck (_fuel : Nat) (q : IntervalQuery) (c : IntervalCert) : Judge.V
 /-- Independent semantic meaning of an `IntervalQuery`:
 for every rational variable assignment `rho : String → CanonicalRat` enclosed by `q.env`,
 evaluating `q.expr` at `rho` lies inside `q.claimedBound`. -/
-def IntervalQuery.SemanticMeaning (q : IntervalQuery) : Prop :=
+@[expose] def IntervalQuery.SemanticMeaning (q : IntervalQuery) : Prop :=
   ∀ (rho : String → CanonicalRat),
     (∀ v iv, q.env.lookup v = some iv → rho v ∈ iv) →
     evalExpr rho q.expr ∈ q.claimedBound
@@ -125,12 +125,12 @@ namespace SOS
 abbrev Monomial := List (Nat × Nat)
 
 /-- Total degree $\sum_{(v, d) \in m} d$ of a monomial $m$. -/
-def monoTotalDeg : Monomial → Nat
+@[expose] def monoTotalDeg : Monomial → Nat
   | [] => 0
   | (_, d) :: rest => d + monoTotalDeg rest
 
 /-- Multiply a canonical monomial by $x_v^d$, dropping zero-exponent factors (`d == 0`). -/
-def mulVarPow (v d : Nat) : Monomial → Monomial
+@[expose] def mulVarPow (v d : Nat) : Monomial → Monomial
   | [] => if d == 0 then [] else [(v, d)]
   | (v2, d2) :: r2 =>
     if d == 0 then (v2, d2) :: r2
@@ -139,17 +139,19 @@ def mulVarPow (v d : Nat) : Monomial → Monomial
     else (v, d + d2) :: r2
 
 /-- Multiply two monomials `m1` and `m2`. -/
-def Monomial.mul : Monomial → Monomial → Monomial
+@[expose] def Monomial.mul : Monomial → Monomial → Monomial
   | [], m2 => m2
   | (v1, d1) :: r1, m2 => mulVarPow v1 d1 (Monomial.mul r1 m2)
 
 /-- Normalize an arbitrary `Monomial` list into canonical strictly-increasing-variable,
 positive-exponent form by multiplying into `[]`. -/
-def monoNormalize (m : Monomial) : Monomial :=
+@[expose] def monoNormalize (m : Monomial) : Monomial :=
   Monomial.mul m []
 
+abbrev Monomial.normalize : Monomial → Monomial := monoNormalize
+
 /-- Every entry in a normalized monomial has strictly positive exponent (`0 < d`). -/
-def monoAllPos : Monomial → Bool
+@[expose] def monoAllPos : Monomial → Bool
   | [] => true
   | (_, d) :: rest => decide (0 < d) && monoAllPos rest
 
@@ -157,7 +159,7 @@ def monoAllPos : Monomial → Bool
 at the smallest variable index $v$ where the exponents of `m1` and `m2` differ,
 `m1` is smaller than `m2` iff `m1` has the **larger** exponent on $x_v$ (so $x_0 < x_1 < x_2$,
 preserving `LT(x_1 - x_0) = x_1` while being strictly invariant under monomial multiplication!). -/
-def monoRevLexLt : Monomial → Monomial → Bool
+@[expose] def monoRevLexLt : Monomial → Monomial → Bool
   | [], m2 =>
     match m2 with
     | [] => false
@@ -175,7 +177,7 @@ def monoRevLexLt : Monomial → Monomial → Bool
 /-- **Graded Lexicographic (`grlex`) Monomial Order**:
 1. Compares total degrees `monoTotalDeg m1` vs `monoTotalDeg m2` first,
 2. Breaks ties using `monoRevLexLt` on the normalized canonical monomials `monoNormalize m1` and `monoNormalize m2`. -/
-def Monomial.grlexLt (m1 m2 : Monomial) : Bool :=
+@[expose] def Monomial.grlexLt (m1 m2 : Monomial) : Bool :=
   let deg1 := monoTotalDeg m1
   let deg2 := monoTotalDeg m2
   if deg1 < deg2 then true
@@ -467,20 +469,27 @@ theorem grlex_mul_left_compatible (m m1 m2 : Monomial)
       rw [monoNormalize_mul m m1, monoNormalize_mul m m2]
       exact monoRevLexLt_mul_left m (monoNormalize m1) (monoNormalize m2) (monoAllPos_monoNormalize m1) h
 
-def insertTerm (m : Monomial) (c : CanonicalRat) : List (Monomial × CanonicalRat) → List (Monomial × CanonicalRat)
+@[expose] def insertNormalizedTerm (m : Monomial) (c : CanonicalRat) :
+    List (Monomial × CanonicalRat) → List (Monomial × CanonicalRat)
   | [] => if c == 0 then [] else [(m, c)]
   | (m', c') :: rest =>
-    if m == m' then
+    let mNorm' := Monomial.normalize m'
+    if m == mNorm' then
       let c_new := c + c'
       if c_new == 0 then rest else (m, c_new) :: rest
-    else if Monomial.lt m m' then
-      if c == 0 then (m', c') :: rest else (m, c) :: (m', c') :: rest
+    else if Monomial.lt m mNorm' then
+      if c == 0 then (mNorm', c') :: rest else (m, c) :: (mNorm', c') :: rest
     else
-      (m', c') :: insertTerm m c rest
+      (mNorm', c') :: insertNormalizedTerm m c rest
+
+@[expose] def insertTerm (m : Monomial) (c : CanonicalRat)
+    (ts : List (Monomial × CanonicalRat)) : List (Monomial × CanonicalRat) :=
+  let mNorm := Monomial.normalize m
+  insertNormalizedTerm mNorm c ts
 
 structure Poly where
   terms : List (Monomial × CanonicalRat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Alias `SparsePoly` for `Poly` (sparse multivariate polynomials over `CanonicalRat`). -/
 abbrev SparsePoly := Poly
@@ -488,7 +497,7 @@ abbrev SparsePoly := Poly
 /-! ### Independent Polynomial Ring Evaluation Semantics (`Monomial.eval`, `Poly.eval`, `SparsePoly.eval`) -/
 
 /-- Exact rational exponentiation $b^e$. -/
-def ratPow (b : CanonicalRat) : Nat → CanonicalRat
+@[expose] def ratPow (b : CanonicalRat) : Nat → CanonicalRat
   | 0 => 1
   | n + 1 => b * ratPow b n
 
@@ -501,7 +510,7 @@ theorem ratPow_add (b : CanonicalRat) (d1 d2 : Nat) :
     grind
 
 /-- Evaluate a monomial $\prod_{(v, d) \in m} \rho(v)^d$ at assignment $\rho : \mathbb{N} \to \mathbb{Q}$. -/
-def Monomial.eval (ρ : Nat → CanonicalRat) : Monomial → CanonicalRat
+@[expose] def Monomial.eval (ρ : Nat → CanonicalRat) : Monomial → CanonicalRat
   | [] => 1
   | (v, d) :: rest => ratPow (ρ v) d * Monomial.eval ρ rest
 
@@ -543,17 +552,23 @@ theorem Monomial.eval_mul (ρ : Nat → CanonicalRat) (m1 m2 : Monomial) :
     simp only [Monomial.mul, eval_mulVarPow, ih, Monomial.eval]
     grind
 
+@[simp] theorem Monomial.eval_normalize (ρ : Nat → CanonicalRat) (m : Monomial) :
+    Monomial.eval ρ (monoNormalize m) = Monomial.eval ρ m := by
+  unfold monoNormalize
+  rw [Monomial.eval_mul]
+  simp [Monomial.eval]
+
 /-- Evaluate a list of `(Monomial × CanonicalRat)` terms at variable assignment `ρ`. -/
-def evalTerms (ρ : Nat → CanonicalRat) : List (Monomial × CanonicalRat) → CanonicalRat
+@[expose] def evalTerms (ρ : Nat → CanonicalRat) : List (Monomial × CanonicalRat) → CanonicalRat
   | [] => 0
   | (m, c) :: rest => c * Monomial.eval ρ m + evalTerms ρ rest
 
-theorem evalTerms_insertTerm (ρ : Nat → CanonicalRat) (m : Monomial) (c : CanonicalRat)
+theorem evalTerms_insertNormalizedTerm (ρ : Nat → CanonicalRat) (m : Monomial) (c : CanonicalRat)
     (ts : List (Monomial × CanonicalRat)) :
-    evalTerms ρ (insertTerm m c ts) = c * Monomial.eval ρ m + evalTerms ρ ts := by
+    evalTerms ρ (insertNormalizedTerm m c ts) = c * Monomial.eval ρ m + evalTerms ρ ts := by
   induction ts with
   | nil =>
-    simp only [insertTerm]
+    simp only [insertNormalizedTerm]
     by_cases hc : c == 0
     · have h0 : c = 0 := beq_iff_eq.mp hc
       subst h0
@@ -562,64 +577,73 @@ theorem evalTerms_insertTerm (ρ : Nat → CanonicalRat) (m : Monomial) (c : Can
     · simp [hc, evalTerms]
   | cons hd tl ih =>
     rcases hd with ⟨m', c'⟩
-    simp only [insertTerm]
-    by_cases hm : m == m'
-    · have hmeq : m = m' := beq_iff_eq.mp hm
-      subst hmeq
-      simp only [beq_self_eq_true, ↓reduceIte]
+    simp only [insertNormalizedTerm, Monomial.normalize]
+    have hmNorm' : Monomial.eval ρ (monoNormalize m') = Monomial.eval ρ m' :=
+      Monomial.eval_normalize ρ m'
+    by_cases hm : m == monoNormalize m'
+    · have hmeq : m = monoNormalize m' := beq_iff_eq.mp hm
+      simp only [hm, ↓reduceIte]
       by_cases hsum : c + c' == 0
       · have hs0 : c + c' = 0 := beq_iff_eq.mp hsum
         simp only [hsum, ↓reduceIte, evalTerms]
-        have hlin : c * Monomial.eval ρ m + c' * Monomial.eval ρ m = (c + c') * Monomial.eval ρ m := by grind
+        have hEvalEq : Monomial.eval ρ m = Monomial.eval ρ m' := by rw [hmeq, hmNorm']
+        have hlin : c * Monomial.eval ρ m + c' * Monomial.eval ρ m' = (c + c') * Monomial.eval ρ m' := by grind
         grind
       · simp only [hsum, Bool.false_eq_true, ↓reduceIte, evalTerms]
+        have hEvalEq : Monomial.eval ρ m = Monomial.eval ρ m' := by rw [hmeq, hmNorm']
         grind
     · simp only [hm, Bool.false_eq_true, ↓reduceIte]
-      by_cases hlt : Monomial.lt m m'
+      by_cases hlt : Monomial.lt m (monoNormalize m')
       · simp only [hlt, ↓reduceIte]
         by_cases hc : c == 0
         · have h0 : c = 0 := beq_iff_eq.mp hc
           subst h0
-          simp [evalTerms]
+          simp [evalTerms, hmNorm']
           grind
-        · simp [hc, evalTerms]
-      · simp only [hlt, Bool.false_eq_true, ↓reduceIte, evalTerms, ih]
+        · simp only [hc, Bool.false_eq_true, ↓reduceIte, evalTerms, hmNorm']
+      · simp only [hlt, Bool.false_eq_true, ↓reduceIte, evalTerms, hmNorm', ih]
         grind
+
+theorem evalTerms_insertTerm (ρ : Nat → CanonicalRat) (m : Monomial) (c : CanonicalRat)
+    (ts : List (Monomial × CanonicalRat)) :
+    evalTerms ρ (insertTerm m c ts) = c * Monomial.eval ρ m + evalTerms ρ ts := by
+  unfold insertTerm Monomial.normalize
+  rw [evalTerms_insertNormalizedTerm, Monomial.eval_normalize]
 
 namespace Poly
 
-def zero : Poly := ⟨[]⟩
+@[expose] def zero : Poly := ⟨[]⟩
 
-def one : Poly := ⟨[([], 1)]⟩
+@[expose] def one : Poly := ⟨[([], 1)]⟩
 
-def isZero (p : Poly) : Bool :=
+@[expose] def isZero (p : Poly) : Bool :=
   p.terms.isEmpty
 
-def add (p1 p2 : Poly) : Poly :=
+@[expose] def add (p1 p2 : Poly) : Poly :=
   ⟨p2.terms.foldl (fun acc (m, c) => insertTerm m c acc) p1.terms⟩
 
-def neg (p : Poly) : Poly :=
+@[expose] def neg (p : Poly) : Poly :=
   ⟨p.terms.map fun (m, c) => (m, -c)⟩
 
-def sub (p1 p2 : Poly) : Poly :=
+@[expose] def sub (p1 p2 : Poly) : Poly :=
   add p1 (neg p2)
 
-def scale (c : CanonicalRat) (p : Poly) : Poly :=
+@[expose] def scale (c : CanonicalRat) (p : Poly) : Poly :=
   if c == 0 then zero
   else ⟨p.terms.map fun (m, k) => (m, c * k)⟩
 
-def mulTerm (t : Monomial × CanonicalRat) (p : Poly) : Poly :=
+@[expose] def mulTerm (t : Monomial × CanonicalRat) (p : Poly) : Poly :=
   if t.2 == 0 then zero
   else ⟨p.terms.map fun (m, c) => (Monomial.mul t.1 m, t.2 * c)⟩
 
-def mul (p1 p2 : Poly) : Poly :=
+@[expose] def mul (p1 p2 : Poly) : Poly :=
   p1.terms.foldl (fun acc t => add acc (mulTerm t p2)) zero
 
-def sqr (p : Poly) : Poly :=
+@[expose] def sqr (p : Poly) : Poly :=
   mul p p
 
 /-- Evaluate a sparse multivariate polynomial `p : Poly` at variable assignment `ρ : Nat → CanonicalRat`. -/
-def eval (ρ : Nat → CanonicalRat) (p : Poly) : CanonicalRat :=
+@[expose] def eval (ρ : Nat → CanonicalRat) (p : Poly) : CanonicalRat :=
   evalTerms ρ p.terms
 
 @[simp] theorem eval_zero (ρ : Nat → CanonicalRat) : Poly.zero.eval ρ = 0 := rfl
@@ -745,7 +769,7 @@ end Poly
 namespace SparsePoly
 
 /-- Evaluate a sparse polynomial `p : SparsePoly` at variable assignment `ρ`. -/
-def eval (ρ : Nat → CanonicalRat) (p : SparsePoly) : CanonicalRat :=
+@[expose] def eval (ρ : Nat → CanonicalRat) (p : SparsePoly) : CanonicalRat :=
   Poly.eval ρ p
 
 theorem eval_add (ρ : Nat → CanonicalRat) (p1 p2 : SparsePoly) :
@@ -772,14 +796,14 @@ end SparsePoly
 
 structure SOSPoly where
   terms : List (CanonicalRat × Poly)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 namespace SOSPoly
 
-def expand (sos : SOSPoly) : Poly :=
+@[expose] def expand (sos : SOSPoly) : Poly :=
   sos.terms.foldl (fun acc (c, p) => Poly.add acc (Poly.scale c (Poly.sqr p))) Poly.zero
 
-def allCoeffsPos (sos : SOSPoly) : Bool :=
+@[expose] def allCoeffsPos (sos : SOSPoly) : Bool :=
   sos.terms.all fun (c, _) => decide (0 < c)
 
 theorem eval_foldl_expand_nonneg (ρ : Nat → CanonicalRat)
@@ -815,23 +839,27 @@ structure SOSQuery where
   goal : Poly
   ineqs : List Poly
   eqs : List Poly
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 structure SOSCert where
   sigma0 : SOSPoly
   sigmas : List (SOSPoly × Nat)
   lambdas : List (Poly × Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 inductive SOSClause where
   | invalidSOSWeights
   | identityMismatch (residual : Poly)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
-def sosCheck (_fuel : Nat) (q : SOSQuery) (c : SOSCert) : Judge.Verdict SOSClause :=
+@[expose] def sosCheck (_fuel : Nat) (q : SOSQuery) (c : SOSCert) : Judge.Verdict SOSClause :=
   if !c.sigma0.allCoeffsPos then
     .refused .invalidSOSWeights []
   else if !c.sigmas.all (fun (s, _) => s.allCoeffsPos) then
+    .refused .invalidSOSWeights []
+  else if !c.sigmas.all (fun (_, idx) => decide (idx < q.ineqs.length)) then
+    .refused .invalidSOSWeights []
+  else if !c.lambdas.all (fun (_, idx) => decide (idx < q.eqs.length)) then
     .refused .invalidSOSWeights []
   else
     let term0 := c.sigma0.expand
@@ -852,7 +880,7 @@ def sosCheck (_fuel : Nat) (q : SOSQuery) (c : SOSCert) : Judge.Verdict SOSClaus
 for every rational variable assignment `ρ : Nat → CanonicalRat`, whenever all inequality generators
 `g ∈ q.ineqs` evaluate to `≥ 0` and all equality generators `h ∈ q.eqs` evaluate to `= 0`,
 the target polynomial `q.goal` evaluates to `≥ 0`. -/
-def SOSQuery.SemanticMeaning (q : SOSQuery) : Prop :=
+@[expose] def SOSQuery.SemanticMeaning (q : SOSQuery) : Prop :=
   ∀ (ρ : Nat → CanonicalRat),
     (∀ g ∈ q.ineqs, 0 ≤ g.eval ρ) →
     (∀ h ∈ q.eqs, h.eval ρ = 0) →
@@ -921,17 +949,43 @@ theorem sosCheck_sound (fuel : Nat) (q : SOSQuery) (c : SOSCert)
   · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
     by_cases hPosS : (c.sigmas.all fun (s, _) => s.allCoeffsPos) = true
     · simp only [hPosS, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-      split at h
-      · rename_i hDiffZero
-        have hSub := Poly.eval_isZero ρ _ hDiffZero
-        rw [Poly.eval_sub, Poly.eval_add, Poly.eval_add] at hSub
-        have h0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 hPos0
-        have hIneq := eval_foldl_sigmas_nonneg ρ q.ineqs hIneqs c.sigmas Poly.zero (by simp) hPosS
-        have hEq := eval_foldl_lambdas_zero ρ q.eqs hEqs c.lambdas Poly.zero (by simp)
-        grind
-      · contradiction
+      by_cases hBndS : (c.sigmas.all fun (_, idx) => decide (idx < q.ineqs.length)) = true
+      · simp only [hBndS, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+        by_cases hBndL : (c.lambdas.all fun (_, idx) => decide (idx < q.eqs.length)) = true
+        · simp only [hBndL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+          split at h
+          · rename_i hDiffZero
+            have hSub := Poly.eval_isZero ρ _ hDiffZero
+            rw [Poly.eval_sub, Poly.eval_add, Poly.eval_add] at hSub
+            have h0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 hPos0
+            have hIneq := eval_foldl_sigmas_nonneg ρ q.ineqs hIneqs c.sigmas Poly.zero (by simp) hPosS
+            have hEq := eval_foldl_lambdas_zero ρ q.eqs hEqs c.lambdas Poly.zero (by simp)
+            grind
+          · contradiction
+        · simp [hBndL] at h
+      · simp [hBndS] at h
     · simp [hPosS] at h
   · simp [hPos0] at h
+
+/-- **Theorem (`insertTerm_normalizes_and_sosCheck_rejects_oob`)**:
+1. `insertTerm` normalizes unreduced monomials (such as `[(0, 1), (1, 0)]` vs `[(0, 1)]`) so they
+   cancel identically instead of coexisting as duplicate monomials under `grlexLt`.
+2. `sosCheck` strictly refuses certificates with out-of-bounds `sigmas` (`idx ≥ q.ineqs.length`)
+   or `lambdas` (`idx ≥ q.eqs.length`) indices instead of silently substituting `Poly.zero`. -/
+-- fixture kept in place (2026-11-04): a 13-line closed evaluation; worth a pre-push run; it moves to Obend/Teeth/ with the lane edit that owns this file
+example :
+    insertTerm [(0, 1), (1, 0)] 1 (insertTerm [(0, 1)] (-1) []) = [] ∧
+    sosCheck 10
+      { goal := Poly.one, ineqs := [], eqs := [] }
+      { sigma0 := { terms := [(1, Poly.one)] }
+      , sigmas := [({ terms := [(1, Poly.one)] }, 0)]
+      , lambdas := [] } = .refused .invalidSOSWeights [] ∧
+    sosCheck 10
+      { goal := Poly.one, ineqs := [], eqs := [] }
+      { sigma0 := { terms := [(1, Poly.one)] }
+      , sigmas := []
+      , lambdas := [(Poly.one, 0)] } = .refused .invalidSOSWeights [] := by
+  decide +kernel
 
 instance sosJudge : Judge SOSQuery SOSCert where
   Clause := SOSClause

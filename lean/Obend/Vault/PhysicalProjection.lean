@@ -263,7 +263,15 @@ def goldenOpenUsdViewportSpec : OpenUsdViewportSpec where
     , { timeCode := 20,  wallThicknessUm := 1500, peakTempMilliC := 55000,  receiptDigest := 303 }
     , { timeCode := 100, wallThicknessUm := 1500, peakTempMilliC := 122000, receiptDigest := 404 } ]
 
-/-- Golden coupled LC-drive stator multiphysics + continuous `Flowpipe` viewport specification. -/
+/-- Golden coupled LC-drive stator multiphysics + continuous `Flowpipe` viewport specification.
+
+`safeBounds` is what the degree-1 interval flowpipe certifies for the whole continuous tube, not what
+the physics does: from `T ∈ [28, 30]` the solutions of `Ṫ = 20 − T` never leave `[19.9, 30]`, but the
+box enclosures widen by about 1.9× per half-second step (the Lie remainder is evaluated over the
+a-priori box), and at the third step the a-priori enclosure reaches down to about 14.6. The earlier
+`[15, 35]` was passed only by the discrete slices; `verifyTrajectorySafety` now checks the a-priori
+enclosures too, so the bound is the method's, `[12, 35]`, as in `Flowpipe`'s own fixture. A tighter
+bound needs a mean-value (Lohner) step, not a looser spec. -/
 def goldenStatorMultiphysicsSpec : StatorMultiphysicsViewportSpec where
   partName   := "LC_Drives_InSlot_Stator_Assy"
   channel    :=
@@ -275,7 +283,7 @@ def goldenStatorMultiphysicsSpec : StatorMultiphysicsViewportSpec where
   ode        := thermalCoolingOde
   initBox    := [("T", ⟨28, 30⟩)]
   steps      := 3
-  safeBounds := [("T", ⟨15, 35⟩)]
+  safeBounds := [("T", ⟨12, 35⟩)]
 
 /-- **Theorem (`physical_projection_deterministic`)**:
 All three physical-world `.obnb` projection functions (`projectCncToolpath`, `projectOpenUsdScene`,

@@ -23,7 +23,7 @@ Implements `WS 29.2` (`NEXT-MATHEMATICA.md` §3.4):
    - Proves `positivstellensatz_eval_infeasible` and `stengle_positivstellensatz_sound` (`0 sorryAx`).
 -/
 public import Obend.Judge.RealAnalysis
-@[expose] public section
+public section
 
 namespace Obend.Analysis
 open Obend.Judge
@@ -33,20 +33,20 @@ set_option autoImplicit false
 /-! ## 1. Monomial Divisibility, LCM, Leading Terms & Buchberger S-Polynomials -/
 
 /-- Construct a single-term polynomial $c \cdot x^m$. -/
-def polyOfTerm (m : Monomial) (c : CanonicalRat) : Poly :=
+@[expose] def polyOfTerm (m : Monomial) (c : CanonicalRat) : Poly :=
   if c == 0 then Poly.zero else ⟨[(m, c)]⟩
 
 /-- Construct a variable polynomial $x_v^d$. -/
-def polyVarPow (v d : Nat) : Poly :=
+@[expose] def polyVarPow (v d : Nat) : Poly :=
   if d == 0 then Poly.one else ⟨[([(v, d)], 1)]⟩
 
 /-- Extract the leading term `(LM(p), LC(p))` of a canonical `Poly` (the highest term under `Monomial.lt`,
 stored at the end of `p.terms`). -/
-def polyLeadTerm? (p : Poly) : Option (Monomial × CanonicalRat) :=
+@[expose] def polyLeadTerm? (p : Poly) : Option (Monomial × CanonicalRat) :=
   p.terms.getLast?
 
 /-- Divide monomial `target` by a single variable power `(vd, dd)` via direct `List.rec`. -/
-def divVarPow? (vd dd : Nat) : Monomial → Option Monomial
+@[expose] def divVarPow? (vd dd : Nat) : Monomial → Option Monomial
   | [] => none
   | (vt, dt) :: tRest =>
     if vt < vd then
@@ -64,7 +64,7 @@ def divVarPow? (vd dd : Nat) : Monomial → Option Monomial
 
 /-- Divide monomial `target` by `divisor` if `divisor` divides `target` (`Monomial.mul divisor q = target`).
 Uses direct structural recursion on `divisor`. -/
-def monomialDiv? : Monomial → Monomial → Option Monomial
+@[expose] def monomialDiv? : Monomial → Monomial → Option Monomial
   | [], target => some target
   | (vd, dd) :: dRest, target =>
     match divVarPow? vd dd target with
@@ -72,7 +72,7 @@ def monomialDiv? : Monomial → Monomial → Option Monomial
     | none => none
 
 /-- Merge a single variable power `(v, d)` into a sorted monomial via $\max$ of exponents. -/
-def lcmVarPow (v d : Nat) : Monomial → Monomial
+@[expose] def lcmVarPow (v d : Nat) : Monomial → Monomial
   | [] => [(v, d)]
   | (v2, d2) :: r2 =>
     if v < v2 then (v, d) :: (v2, d2) :: r2
@@ -80,14 +80,14 @@ def lcmVarPow (v d : Nat) : Monomial → Monomial
     else (v, max d d2) :: r2
 
 /-- Compute the least common multiple $\text{lcm}(m_1, m_2)$ of two sorted monomials via direct structural recursion on `m1`. -/
-def monomialLcm : Monomial → Monomial → Monomial
+@[expose] def monomialLcm : Monomial → Monomial → Monomial
   | [], m2 => m2
   | (v1, d1) :: r1, m2 => lcmVarPow v1 d1 (monomialLcm r1 m2)
 
 /-- Compute Buchberger's S-polynomial:
 $$S(f, g) = \frac{x^{\text{lcm}}}{\text{LT}(f)} f - \frac{x^{\text{lcm}}}{\text{LT}(g)} g$$
 for two non-zero polynomials `f` and `g`. -/
-def sPolynomial (f g : Poly) : Poly :=
+@[expose] def sPolynomial (f g : Poly) : Poly :=
   match polyLeadTerm? f, polyLeadTerm? g with
   | some (lmF, lcF), some (lmG, lcG) =>
     let lcm := monomialLcm lmF lmG
@@ -100,7 +100,7 @@ def sPolynomial (f g : Poly) : Poly :=
   | _, _ => Poly.zero
 
 /-- Attempt a single leading-term reduction step of `f` against the first matching generator in `basis`. -/
-def polyReduceStep? (f : Poly) : List Poly → Option Poly
+@[expose] def polyReduceStep? (f : Poly) : List Poly → Option Poly
   | [] => none
   | g :: gs =>
     match polyLeadTerm? f, polyLeadTerm? g with
@@ -114,7 +114,7 @@ def polyReduceStep? (f : Poly) : List Poly → Option Poly
     | _, _ => none
 
 /-- Multivariate polynomial division reducing `f` modulo `basis` for up to `fuel` reduction steps. -/
-def polyReduceFuel (basis : List Poly) : Nat → Poly → Poly
+@[expose] def polyReduceFuel (basis : List Poly) : Nat → Poly → Poly
   | 0, f => f
   | fuel + 1, f =>
     if f.isZero then f
@@ -125,7 +125,7 @@ def polyReduceFuel (basis : List Poly) : Nat → Poly → Poly
 
 /-- Verify Buchberger's S-polynomial criterion for `basis`:
 every pairwise `sPolynomial g1 g2` reduces to `Poly.zero` modulo `basis` within `fuel` steps. -/
-def checkGroebnerBasis (fuel : Nat) (basis : List Poly) : Bool :=
+@[expose] def checkGroebnerBasis (fuel : Nat) (basis : List Poly) : Bool :=
   basis.all fun g1 =>
     basis.all fun g2 =>
       (polyReduceFuel basis fuel (sPolynomial g1 g2)).isZero
@@ -136,10 +136,10 @@ def checkGroebnerBasis (fuel : Nat) (basis : List Poly) : Bool :=
 via explicit multiplier polynomials `(quotientPoly, generatorIdx)`. -/
 structure IdealMembershipCert where
   quotients : List (Poly × Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Expand the ideal combination $\sum_{(q, i) \in \text{cert}} q \cdot g_i$. -/
-def expandIdealCombination (generators : List Poly) : List (Poly × Nat) → Poly
+@[expose] def expandIdealCombination (generators : List Poly) : List (Poly × Nat) → Poly
   | [] => Poly.zero
   | (q, idx) :: rest =>
     let restPoly := expandIdealCombination generators rest
@@ -149,7 +149,7 @@ def expandIdealCombination (generators : List Poly) : List (Poly × Nat) → Pol
 
 /-- Checked ideal combination $\sum_{(q, i) \in \text{cert}} q \cdot g_i$ that returns `none`
 if any generator index `idx` is out of bounds (`idx ≥ generators.length`). -/
-def expandIdealCombination? (generators : List Poly) : List (Poly × Nat) → Option Poly
+@[expose] def expandIdealCombination? (generators : List Poly) : List (Poly × Nat) → Option Poly
   | [] => some Poly.zero
   | (q, idx) :: rest =>
     match generators[idx]?, expandIdealCombination? generators rest with
@@ -158,7 +158,7 @@ def expandIdealCombination? (generators : List Poly) : List (Poly × Nat) → Op
 
 /-- Verify that `cert` witnesses $f = \sum_{(q, i)} q \cdot g_i$ identically in $\mathbb{Q}[\vec{x}]$
 with all generator indices in bounds. -/
-def checkIdealMembership (target : Poly) (generators : List Poly) (cert : IdealMembershipCert) : Bool :=
+@[expose] def checkIdealMembership (target : Poly) (generators : List Poly) (cert : IdealMembershipCert) : Bool :=
   match expandIdealCombination? generators cert.quotients with
   | some comb => (Poly.sub target comb).isZero
   | none      => false
@@ -278,7 +278,7 @@ structure PositivstellensatzQuery where
   strictPos : List Poly
   nonneg    : List Poly
   eqs       : List Poly
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Stengle Positivstellensatz / Real Nullstellensatz certificate witnessing:
 $$\Big(\prod_{idx \in \text{monoidIndices}} f_{idx}\Big) + \sigma_0 + \sum_{(s_j, j)} s_j \cdot g_j + \sum_{(\lambda_\ell, \ell)} \lambda_\ell \cdot h_\ell = 0$$
@@ -292,17 +292,17 @@ structure PositivstellensatzCert where
   sigma0        : SOSPoly
   coneTerms     : List (SOSPoly × Nat)
   idealTerms    : List (Poly × Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Refusal clauses for `positivstellensatzJudge`. -/
 inductive PositivstellensatzClause where
   | negativeSosWeight
   | invalidGeneratorIndex
   | nonZeroResidual (residual : Poly)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Expand the multiplicative monoid product $\prod_{idx \in \text{indices}} f_{idx}$ (defaulting to $1$ when empty). -/
-def expandMonoidProduct (strictPos : List Poly) : List Nat → Option Poly
+@[expose] def expandMonoidProduct (strictPos : List Poly) : List Nat → Option Poly
   | [] => some Poly.one
   | idx :: rest =>
     match strictPos[idx]?, expandMonoidProduct strictPos rest with
@@ -310,7 +310,7 @@ def expandMonoidProduct (strictPos : List Poly) : List Nat → Option Poly
     | _, _ => none
 
 /-- Expand the quadratic-module cone sum $\sum_{(s, j)} s \cdot g_j$. -/
-def expandConeSum (nonneg : List Poly) : List (SOSPoly × Nat) → Option Poly
+@[expose] def expandConeSum (nonneg : List Poly) : List (SOSPoly × Nat) → Option Poly
   | [] => some Poly.zero
   | (sos, idx) :: rest =>
     if !sos.allCoeffsPos then none
@@ -320,7 +320,7 @@ def expandConeSum (nonneg : List Poly) : List (SOSPoly × Nat) → Option Poly
       | _, _ => none
 
 /-- Verify a Stengle Positivstellensatz certificate `c` for query `q`. -/
-def positivstellensatzCheck
+@[expose] def positivstellensatzCheck
     (_fuel : Nat)
     (q : PositivstellensatzQuery)
     (c : PositivstellensatzCert) : Judge.Verdict PositivstellensatzClause :=
@@ -418,7 +418,7 @@ theorem expandConeSum_eval_nonneg
 no rational assignment `ρ : Nat → CanonicalRat` can simultaneously satisfy all strict-positivity
 constraints `f ∈ q.strictPos`, non-negativity constraints `g ∈ q.nonneg`, and equality constraints
 `h ∈ q.eqs`. -/
-def PositivstellensatzQuery.Infeasible (q : PositivstellensatzQuery) : Prop :=
+@[expose] def PositivstellensatzQuery.Infeasible (q : PositivstellensatzQuery) : Prop :=
   ∀ (ρ : Nat → CanonicalRat),
     (∀ f ∈ q.strictPos, 0 < f.eval ρ) →
     (∀ g ∈ q.nonneg, 0 ≤ g.eval ρ) →

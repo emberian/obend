@@ -35,7 +35,7 @@ public import Obend.Analysis.Equitable
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.Flowpipe
 public import Obend.Analysis.Hybrid
-@[expose] public section
+public section
 
 namespace Obend.Analysis
 open Obend.Judge.SOS
@@ -96,7 +96,7 @@ theorem orthogonal_idempotents_sum_sq
 /-- Evaluate the scaled CTQW transition amplitude $(s \cdot U(t))_{w, u} = \sum_{k \in \text{modes}} \phi_k \cdot (E_k)_{w, u}$
 in $\mathbb{Z}[i]$ from source vertex `u` to target vertex `w`, given scaled spectral projectors
 `E k` and mode phase factors `phase k` ($\phi_k = e^{-i \lambda_k t}$). -/
-def evalSpectralPropagatorEntry
+@[expose] def evalSpectralPropagatorEntry
     (modes : List Nat)
     (E : Nat → Nat → Nat → Int)
     (phase : Nat → GaussianInt)
@@ -175,7 +175,7 @@ theorem godsil_cospectral_parity_implies_pst
 /-- Check strong cospectrality between vertices `u` and `v` across a list of scaled projectors `projectors`:
 for every $E_k$, either column $u$ equals column $v$ ($E_k e_u = +E_k e_v$) or column $u$ equals
 minus column $v$ ($E_k e_u = -E_k e_v$). -/
-def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
+@[expose] def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
   projectors.all (fun E =>
     let indices := List.range E.dim
     let isEven := indices.all (fun w => decide (E.entry w u = E.entry w v))
@@ -186,7 +186,7 @@ def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
 Given matrix `A`, current auxiliary matrix `B_{k-1}`, previous coefficient `c_{n-k+1}`,
 current step `k`, and remaining steps `rem`, computes the list of lower coefficients
 `[c_{n-k}, ..., c_0]`. -/
-def faddeevLeVerrierAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → List Int
+@[expose] def faddeevLeVerrierAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → List Int
   | 0 => []
   | rem + 1 =>
     let bNext := A.mul (B.add (IntMatrix.scaledIdentity A.dim cPrev))
@@ -196,11 +196,11 @@ def faddeevLeVerrierAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → List
 /-- Compute the descending coefficient list `[1, c_{n-1}, ..., c_1, c_0]` of the monic
 characteristic polynomial $\det(\lambda I - A) = \lambda^n + c_{n-1}\lambda^{n-1} + \dots + c_0$
 via the Faddeev–LeVerrier trace recurrence. -/
-def faddeevLeVerrierCoeffs (A : IntMatrix) : List Int :=
+@[expose] def faddeevLeVerrierCoeffs (A : IntMatrix) : List Int :=
   1 :: faddeevLeVerrierAux A (IntMatrix.zero A.dim) 1 1 A.dim
 
 /-- Convert a list of descending polynomial coefficients `[c_d, ..., c_0]` into a `Poly` in variable `0` ($\lambda$). -/
-def coeffsToPolyDesc : List Int → Poly
+@[expose] def coeffsToPolyDesc : List Int → Poly
   | [] => Poly.zero
   | c :: cs =>
     let deg := cs.length
@@ -212,28 +212,28 @@ def coeffsToPolyDesc : List Int → Poly
 
 /-- **Faddeev–LeVerrier Characteristic Polynomial Synthesis** (`faddeevLeVerrier`):
 Computes $\det(\lambda I - A) \in \mathbb{Q}[\lambda]$ directly from the matrix entries of `A`. -/
-def faddeevLeVerrier (A : IntMatrix) : Poly :=
+@[expose] def faddeevLeVerrier (A : IntMatrix) : Poly :=
   coeffsToPolyDesc (faddeevLeVerrierCoeffs A)
 
 /-- Characteristic polynomial $\det(\lambda I - A)$ for $2 \times 2$ integer matrices via Faddeev–LeVerrier. -/
-def charPoly2x2 (A : IntMatrix) : Poly :=
+@[expose] def charPoly2x2 (A : IntMatrix) : Poly :=
   faddeevLeVerrier A
 
 /-- Characteristic polynomial $\det(\lambda I - A)$ for $3 \times 3$ integer matrices via Faddeev–LeVerrier. -/
-def charPoly3x3 (A : IntMatrix) : Poly :=
+@[expose] def charPoly3x3 (A : IntMatrix) : Poly :=
   faddeevLeVerrier A
 
 /-- Characteristic polynomial $\det(\lambda I - A)$ for $4 \times 4$ integer matrices via Faddeev–LeVerrier. -/
-def charPoly4x4 (A : IntMatrix) : Poly :=
+@[expose] def charPoly4x4 (A : IntMatrix) : Poly :=
   faddeevLeVerrier A
 
 /-- Sum a list of `dim × dim` integer matrices: $\sum_{P \in \text{ms}} P$. -/
-def sumIntMatrices (dim : Nat) : List IntMatrix → IntMatrix
+@[expose] def sumIntMatrices (dim : Nat) : List IntMatrix → IntMatrix
   | [] => IntMatrix.zero dim
   | P :: Ps => P.add (sumIntMatrices dim Ps)
 
 /-- Weighted linear combination of `dim × dim` integer matrices: $\sum_{i} \lambda_i P_i$. -/
-def weightedSumIntMatrices (dim : Nat) : List Int → List IntMatrix → IntMatrix
+@[expose] def weightedSumIntMatrices (dim : Nat) : List Int → List IntMatrix → IntMatrix
   | [], _ => IntMatrix.zero dim
   | _, [] => IntMatrix.zero dim
   | c :: cs, P :: Ps => (P.scale c).add (weightedSumIntMatrices dim cs Ps)
@@ -241,7 +241,7 @@ def weightedSumIntMatrices (dim : Nat) : List Int → List IntMatrix → IntMatr
 /-- **Lagrange–Sylvester Spectral Projector Synthesis over $\mathbb{Z}$** (`synthesizeSylvesterProjector`):
 Constructs the scaled spectral projector for eigenvalue index `i`:
 $$P_i(Q) = \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I).$$ -/
-def synthesizeSylvesterProjector
+@[expose] def synthesizeSylvesterProjector
     (Q : IntMatrix)
     (eigs : List Int)
     (i : Nat)
@@ -260,7 +260,7 @@ def synthesizeSylvesterProjector
 2. **Scaled Idempotence**: $\forall P \in \text{projs},\; P^2 = s \cdot P$,
 3. **Pairwise Orthogonality**: $\forall i \neq j,\; P_i P_j = 0$,
 4. **Spectral Reconstruction**: $\sum_i \lambda_i P_i = s \cdot Q$. -/
-def checkSpectralDecomposition
+@[expose] def checkSpectralDecomposition
     (Q : IntMatrix)
     (scale : Int)
     (eigs : List Int)
@@ -313,18 +313,18 @@ theorem checkSpectralDecomposition_sound
 /-! ## 3. Exact $K_2$ Antipodal PST (`ctqw_k2_antipodal_pst_exact`) -/
 
 /-- Adjacency matrix of $K_2$ ($H_{K_2} = X = \begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}$). -/
-def k2Matrix : IntMatrix where
+@[expose] def k2Matrix : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, 0]]
 
 /-- Scaled symmetric projector $2 E_+ = Q + I = \begin{pmatrix} 1 & 1 \\ 1 & 1 \end{pmatrix}$ ($\lambda_+ = +1$),
 synthesized via `synthesizeSylvesterProjector`. -/
-def k2ProjPlus : IntMatrix :=
+@[expose] def k2ProjPlus : IntMatrix :=
   synthesizeSylvesterProjector k2Matrix [1, -1] 0 1
 
 /-- Scaled antisymmetric projector $2 E_- = -(Q - I) = \begin{pmatrix} 1 & -1 \\ -1 & 1 \end{pmatrix}$ ($\lambda_- = -1$),
 synthesized via `synthesizeSylvesterProjector`. -/
-def k2ProjMinus : IntMatrix :=
+@[expose] def k2ProjMinus : IntMatrix :=
   synthesizeSylvesterProjector k2Matrix [1, -1] 1 (-1)
 
 /-- **Theorem (`ctqw_k2_antipodal_pst_exact`)**:
@@ -362,12 +362,12 @@ operators over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) 
 structure PolyMatrix where
   dim  : Nat
   rows : List (List Poly)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 namespace PolyMatrix
 
 /-- Look up polynomial entry $(u, v)$ in a `PolyMatrix` (defaulting to `Poly.zero`). -/
-def entry (m : PolyMatrix) (u v : Nat) : Poly :=
+@[expose] def entry (m : PolyMatrix) (u v : Nat) : Poly :=
   match m.rows[u]? with
   | some row =>
     match row[v]? with
@@ -376,33 +376,33 @@ def entry (m : PolyMatrix) (u v : Nat) : Poly :=
   | none => Poly.zero
 
 /-- Reduce every entry of `m` modulo a Gröbner basis `basis` with `fuel` reduction steps. -/
-def reduceMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : PolyMatrix :=
+@[expose] def reduceMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : PolyMatrix :=
   { dim  := m.dim
   , rows := m.rows.map (fun row => row.map (fun p => polyReduceFuel basis fuel p)) }
 
 /-- Add two `PolyMatrix` instances of dimension `dim`. -/
-def add (A B : PolyMatrix) : PolyMatrix :=
+@[expose] def add (A B : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => Poly.add (A.entry u v) (B.entry u v))) }
 
 /-- Subtract two `PolyMatrix` instances (`A - B`). -/
-def sub (A B : PolyMatrix) : PolyMatrix :=
+@[expose] def sub (A B : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => Poly.sub (A.entry u v) (B.entry u v))) }
 
 /-- Multiply a `PolyMatrix` by a scalar polynomial `c : Poly` modulo `basis`. -/
-def scalePolyMod (basis : List Poly) (fuel : Nat) (c : Poly) (A : PolyMatrix) : PolyMatrix :=
+@[expose] def scalePolyMod (basis : List Poly) (fuel : Nat) (c : Poly) (A : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => polyReduceFuel basis fuel (Poly.mul c (A.entry u v)))) }
 
 /-- Multiply two `PolyMatrix` instances modulo the algebraic minimal-polynomial ideal `basis`. -/
-def mulMod (basis : List Poly) (fuel : Nat) (A B : PolyMatrix) : PolyMatrix :=
+@[expose] def mulMod (basis : List Poly) (fuel : Nat) (A B : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
@@ -412,17 +412,17 @@ def mulMod (basis : List Poly) (fuel : Nat) (A B : PolyMatrix) : PolyMatrix :=
         polyReduceFuel basis fuel rawDot)) }
 
 /-- Check whether every entry of `m` reduces to `Poly.zero` modulo `basis`. -/
-def isZeroMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : Bool :=
+@[expose] def isZeroMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : Bool :=
   (m.reduceMod basis fuel).rows.all (fun row => row.all (fun p => p.isZero))
 
 /-- Embed an `IntMatrix` into `PolyMatrix` as constant polynomials. -/
-def ofIntMatrix (m : IntMatrix) : PolyMatrix :=
+@[expose] def ofIntMatrix (m : IntMatrix) : PolyMatrix :=
   { dim  := m.dim
   , rows := m.rows.map (fun row =>
       row.map (fun c => polyOfTerm [] (CanonicalRat.ofInt c))) }
 
 /-- Scaled $n \times n$ polynomial identity matrix $c \cdot I_n$. -/
-def scaledIdentity (dim : Nat) (c : Poly) : PolyMatrix :=
+@[expose] def scaledIdentity (dim : Nat) (c : Poly) : PolyMatrix :=
   let indices := List.range dim
   { dim  := dim
   , rows := indices.map (fun u =>
@@ -434,7 +434,7 @@ end PolyMatrix
 (`synthesizeSylvesterProjectorPoly`):
 Constructs the scaled spectral projector for eigenvalue index `i`:
 $$P_i(Q) \equiv \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I) \pmod{\text{basis}}.$$ -/
-def synthesizeSylvesterProjectorPoly
+@[expose] def synthesizeSylvesterProjectorPoly
     (basis : List Poly)
     (fuel : Nat)
     (Q : PolyMatrix)
@@ -452,33 +452,33 @@ def synthesizeSylvesterProjectorPoly
   PolyMatrix.scalePolyMod basis fuel cofactor prodMat
 
 /-- Minimal polynomial $m(\alpha) = \alpha^2 - 2$ of $\alpha = \sqrt{2}$ (using variable $0$ for $\alpha$). -/
-def p3MinPolyAlphaSqMinus2 : Poly :=
+@[expose] def p3MinPolyAlphaSqMinus2 : Poly :=
   Poly.sub ( polyVarPow 0 2 ) ( polyOfTerm [] 2 )
 
 /-- Eigenvalue list $[\lambda_0, \lambda_+, \lambda_-] = [0, +\alpha, -\alpha]$ of $P_3$ over $\mathbb{Q}(\alpha)/\langle \alpha^2 - 2 \rangle$. -/
-def p3AlgebraicEigenvalues : List Poly :=
+@[expose] def p3AlgebraicEigenvalues : List Poly :=
   [Poly.zero, polyVarPow 0 1, polyOfTerm [(0, 1)] (-1)]
 
 /-- Scaled spectral projector $4 P_0 = -2 (H_{P_3} - \alpha I)(H_{P_3} + \alpha I) = \begin{pmatrix} 2 & 0 & -2 \\ 0 & 0 & 0 \\ -2 & 0 & 2 \end{pmatrix}$
 for eigenvalue $\lambda_0 = 0$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
-def p3AlgebraicProj0 : PolyMatrix :=
+@[expose] def p3AlgebraicProj0 : PolyMatrix :=
   synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
     (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 0 (polyOfTerm [] (-2))
 
 /-- Scaled spectral projector $4 P_+ = (H_{P_3} - 0 I)(H_{P_3} + \alpha I) = \begin{pmatrix} 1 & \alpha & 1 \\ \alpha & 2 & \alpha \\ 1 & \alpha & 1 \end{pmatrix}$
 for eigenvalue $\lambda_+ = +\alpha = +\sqrt{2}$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
-def p3AlgebraicProjPlus : PolyMatrix :=
+@[expose] def p3AlgebraicProjPlus : PolyMatrix :=
   synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
     (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 1 Poly.one
 
 /-- Scaled spectral projector $4 P_- = (H_{P_3} - 0 I)(H_{P_3} - \alpha I) = \begin{pmatrix} 1 & -\alpha & 1 \\ -\alpha & 2 & -\alpha \\ 1 & -\alpha & 1 \end{pmatrix}$
 for eigenvalue $\lambda_- = -\alpha = -\sqrt{2}$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
-def p3AlgebraicProjMinus : PolyMatrix :=
+@[expose] def p3AlgebraicProjMinus : PolyMatrix :=
   synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
     (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 2 Poly.one
 
 /-- $4 \times 4$ adjacency matrix of the 4-vertex path graph $P_4$ ($0 - 1 - 2 - 3$). -/
-def path4Matrix : IntMatrix where
+@[expose] def path4Matrix : IntMatrix where
   dim  := 4
   rows :=
     [ [0, 1, 0, 0]
@@ -488,28 +488,28 @@ def path4Matrix : IntMatrix where
 
 /-- Antipodal reflection-even $2 \times 2$ quotient block of $P_4$ on $\{e_0 + e_3, e_1 + e_2\}$:
 $$Q_{\text{even}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & 1 \end{pmatrix}, \qquad \det(\lambda I - Q_{\text{even}}) = \lambda^2 - \lambda - 1.$$ -/
-def p4EvenQuotient2x2 : IntMatrix where
+@[expose] def p4EvenQuotient2x2 : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, 1]]
 
 /-- Antipodal reflection-odd $2 \times 2$ quotient block of $P_4$ on $\{e_0 - e_3, e_1 - e_2\}$:
 $$Q_{\text{odd}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & -1 \end{pmatrix}, \qquad \det(\lambda I - Q_{\text{odd}}) = \lambda^2 + \lambda - 1.$$ -/
-def p4OddQuotient2x2 : IntMatrix where
+@[expose] def p4OddQuotient2x2 : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, -1]]
 
 /-- Signed antipodal $2 \times 2$ block $\begin{pmatrix} -1 & 1 \\ 1 & 1 \end{pmatrix}$ with trace $0$ and determinant $-2$. -/
-def p4AntipodalOddBlock2x2 : IntMatrix where
+@[expose] def p4AntipodalOddBlock2x2 : IntMatrix where
   dim  := 2
   rows := [[-1, 1], [1, 1]]
 
 /-- Polynomial power $p^k$ in $\mathbb{Q}[x]$. -/
-def polyPow (p : Poly) : Nat → Poly
+@[expose] def polyPow (p : Poly) : Nat → Poly
   | 0 => Poly.one
   | k + 1 => Poly.mul p (polyPow p k)
 
 /-- Substitute $\lambda \mapsto q$ into a polynomial given by descending coefficients `[c_d, ..., c_0]`. -/
-def evalCoeffsAtPoly ( q : Poly ) : List Int → Poly
+@[expose] def evalCoeffsAtPoly ( q : Poly ) : List Int → Poly
   | [] => Poly.zero
   | c :: cs =>
     let deg := cs.length
@@ -518,7 +518,7 @@ def evalCoeffsAtPoly ( q : Poly ) : List Int → Poly
 
 /-- Multiply two polynomials given by descending integer coefficient lists `[c_d, ..., c_0]`
 via exact Cauchy convolution over `Int` (zero `Rat` and zero `Classical.choice` dependency). -/
-def intPolyMulDesc (p q : List Int) : List Int :=
+@[expose] def intPolyMulDesc (p q : List Int) : List Int :=
   match p, q with
   | [], _ => []
   | _, [] => []
@@ -534,20 +534,20 @@ def intPolyMulDesc (p q : List Int) : List Int :=
 
 /-- Pad the shorter of two descending integer coefficient lists on the left with leading zeros
 and add them termwise over `Int`. -/
-def intPolyAddDesc (p q : List Int) : List Int :=
+@[expose] def intPolyAddDesc (p q : List Int) : List Int :=
   let len := max p.length q.length
   let padP := List.replicate (len - p.length) (0 : Int) ++ p
   let padQ := List.replicate (len - q.length) (0 : Int) ++ q
   List.zipWith (· + ·) padP padQ
 
 /-- Exact polynomial power $q^k$ over descending integer coefficient lists `List Int`. -/
-def intPolyPowDesc (q : List Int) : Nat → List Int
+@[expose] def intPolyPowDesc (q : List Int) : Nat → List Int
   | 0 => [1]
   | k + 1 => intPolyMulDesc q (intPolyPowDesc q k)
 
 /-- Substitute $\lambda \mapsto q(\lambda_+)$ into a polynomial given by descending integer coefficients
 `[c_d, ..., c_0]` over `List Int`. -/
-def evalIntPolyAtPolyDesc (q : List Int) : List Int → List Int
+@[expose] def evalIntPolyAtPolyDesc (q : List Int) : List Int → List Int
   | [] => []
   | c :: cs =>
     let deg := cs.length
@@ -555,14 +555,14 @@ def evalIntPolyAtPolyDesc (q : List Int) : List Int → List Int
     intPolyAddDesc term (evalIntPolyAtPolyDesc q cs)
 
 /-- Evaluate a polynomial with descending integer coefficients `[c_d, ..., c_0]` at `x : Int` via Horner's rule. -/
-def evalIntPolyDesc (coeffs : List Int) (x : Int) : Int :=
+@[expose] def evalIntPolyDesc (coeffs : List Int) (x : Int) : Int :=
   coeffs.foldl (fun acc c => acc * x + c) 0
 
 /-- Synthesize the descending integer coefficients `[1, -3, 1]` ($r^2 - 3r + 1$) of $P_4$'s
 eigenvalue ratio minimal polynomial directly from `faddeevLeVerrierCoeffs p4EvenQuotient2x2`
 ($[c_2, c_1, c_0] = [1, -1, -1]$ for $\lambda^2 - \lambda - 1$) via the substitution $\lambda = r - 1$:
 $$c_2 (r - 1)^2 + c_1 (r - 1) + c_0 = c_2 r^2 + (-2 c_2 + c_1) r + (c_2 - c_1 + c_0).$$ -/
-def synthesizeP4RatioMinPolyCoeffs : List Int :=
+@[expose] def synthesizeP4RatioMinPolyCoeffs : List Int :=
   let cs := faddeevLeVerrierCoeffs p4EvenQuotient2x2
   let c2 := listGetInt cs 0
   let c1 := listGetInt cs 1
@@ -574,17 +574,17 @@ from the Faddeev–LeVerrier characteristic polynomial of `p4EvenQuotient2x2`:
 Since $\lambda_+ \lambda_- = 1$, $r = \lambda_+ / \lambda_- = \lambda_+^2 = \lambda_+ + 1$, so $\lambda_+ = r - 1$.
 Substituting $\lambda = r - 1$ into `faddeevLeVerrierCoeffs p4EvenQuotient2x2` ($\lambda^2 - \lambda - 1$)
 synthesizes $r^2 - 3r + 1$ directly from $P_4$'s matrix entries! -/
-def synthesizeP4RatioMinPoly : Poly :=
+@[expose] def synthesizeP4RatioMinPoly : Poly :=
   coeffsToPolyDesc synthesizeP4RatioMinPolyCoeffs
 
 /-- Backwards-compatible alias for `synthesizeP4RatioMinPoly`. -/
-abbrev p4RatioMinPolyR2Minus3RPlus1 : Poly :=
+@[expose] abbrev p4RatioMinPolyR2Minus3RPlus1 : Poly :=
   synthesizeP4RatioMinPoly
 
 /-- Check Godsil's eigenvalue parity-ratio condition for antipodal PST on $P_4$ by synthesizing
 the ratio minimal polynomial `synthesizeP4RatioMinPoly` via Faddeev–LeVerrier from $P_4$'s quotient
 and verifying that $r = 1$ (and rational parity ratios) cannot divide $r^2 - 3r + 1$. -/
-def checkP4IrrationalRatioObstruction : Bool :=
+@[expose] def checkP4IrrationalRatioObstruction : Bool :=
   let rVar := polyVarPow 0 1
   let p4RatioMinPoly := synthesizeP4RatioMinPoly
   let linearFactorRMinus1 := Poly.sub rVar Poly.one
@@ -695,7 +695,7 @@ theorem faddeevLeVerrier_charPoly_and_p4_obstruction_sound :
 
 /-- Adjacency matrix of the 3-dimensional Hypercube $Q_3$ ($8$ vertices $0 \dots 7$, connected iff
 their 3-bit binary representations differ in exactly 1 bit). -/
-def hypercubeQ3Matrix : IntMatrix where
+@[expose] def hypercubeQ3Matrix : IntMatrix where
   dim  := 8
   rows :=
     [ [0, 1, 1, 0, 1, 0, 0, 0] -- 0 (000, weight 0)
@@ -710,7 +710,7 @@ def hypercubeQ3Matrix : IntMatrix where
 
 /-- Hamming-weight distance partition of $Q_3$ into $4$ cells:
 $C_0 = \{0\}$, $C_1 = \{1, 2, 4\}$, $C_2 = \{3, 5, 6\}$, $C_3 = \{7\}$. -/
-def hypercubeQ3Part : Nat → Nat
+@[expose] def hypercubeQ3Part : Nat → Nat
   | 0 => 0
   | 1 => 1
   | 2 => 1
@@ -724,7 +724,7 @@ def hypercubeQ3Part : Nat → Nat
 /-- $4 \times 4$ Krawtchouk / Ehrenfest tridiagonal quotient matrix of $Q_3$:
 $$Q(Q_3) = \begin{pmatrix} 0 & 3 & 0 & 0 \\ 1 & 0 & 2 & 0 \\ 0 & 2 & 0 & 1 \\ 0 & 0 & 3 & 0 \end{pmatrix},$$
 where row $j$ has lower degree $j$ (into $C_{j-1}$) and upper degree $3 - j$ (into $C_{j+1}$). -/
-def hypercubeQ3Quotient : Nat → Nat → Int
+@[expose] def hypercubeQ3Quotient : Nat → Nat → Int
   | 0, 1 => 3
   | 1, 0 => 1
   | 1, 2 => 2
@@ -734,7 +734,7 @@ def hypercubeQ3Quotient : Nat → Nat → Int
   | _, _ => 0
 
 /-- `IntMatrix` representation of the $4 \times 4$ Krawtchouk quotient $Q(Q_3)$ (eigenvalues $3, 1, -1, -3$). -/
-def hypercubeQ3QuotientMatrix : IntMatrix where
+@[expose] def hypercubeQ3QuotientMatrix : IntMatrix where
   dim  := 4
   rows :=
     [ [0, 3, 0, 0]
@@ -746,7 +746,7 @@ def hypercubeQ3QuotientMatrix : IntMatrix where
 (cofactors $[1, -3, 3, -1]$ for eigenvalues $[3, 1, -1, -3]$ since
 $\prod_{j \neq 0}(\lambda_0 - \lambda_j) = 2 \cdot 4 \cdot 6 = 48$ and
 $\prod_{j \neq 1}(\lambda_1 - \lambda_j) = (-2) \cdot 2 \cdot 4 = -16$). -/
-def q3QuotientSylvesterProjectors : List IntMatrix :=
+@[expose] def q3QuotientSylvesterProjectors : List IntMatrix :=
   let eigs := [3, 1, -1, -3]
   [ synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 0 1
   , synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 1 (-3)
@@ -755,7 +755,7 @@ def q3QuotientSylvesterProjectors : List IntMatrix :=
 
 /-- General $(d+1) \times (d+1)$ Krawtchouk / Ehrenfest tridiagonal quotient entry for the $d$-cube $Q_d$:
 for cell $i \in \{0, \dots, d\}$, $Q_{i, i-1} = i$ and $Q_{i, i+1} = d - i$. -/
-def krawtchoukQuotientEntry (d i j : Nat) : Int :=
+@[expose] def krawtchoukQuotientEntry (d i j : Nat) : Int :=
   if decide (i ≤ d) && decide (j ≤ d) then
     if i + 1 == j then (d - i : Nat)
     else if j + 1 == i then (i : Nat)
@@ -764,7 +764,7 @@ def krawtchoukQuotientEntry (d i j : Nat) : Int :=
 
 /-- Tensor-power antipodal transition amplitude $(-i)^d \in \mathbb{Z}[i]$ for $Q_d = K_2^{\square d}$
 at transfer time $\tau = \pi/2$, where each $K_2$ factor contributes $-i = \langle 0, -1 \rangle$. -/
-def hypercubeAntipodalPhase : Nat → GaussianInt
+@[expose] def hypercubeAntipodalPhase : Nat → GaussianInt
   | 0 => GaussianInt.one
   | d + 1 => GaussianInt.mul ⟨0, -1⟩ (hypercubeAntipodalPhase d)
 
@@ -822,24 +822,24 @@ theorem bachman_tamon_quotient_pst_iff
   rw [hPower]
 
 /-- Compute $(-i t)^k \in \mathbb{Z}[i]$ for integer-scaled time $t \in \mathbb{Z}$. -/
-def negITimePow (t : Int) : Nat → GaussianInt
+@[expose] def negITimePow (t : Int) : Nat → GaussianInt
   | 0 => GaussianInt.one
   | k + 1 => GaussianInt.mul ⟨0, -t⟩ (negITimePow t k)
 
 /-- Compute $k! \in \mathbb{N}$. -/
-def natFactorial : Nat → Nat
+@[expose] def natFactorial : Nat → Nat
   | 0 => 1
   | k + 1 => (k + 1) * natFactorial k
 
 /-- Integer-scaled Taylor coefficient $N! \cdot \frac{(-i t)^k}{k!} \in \mathbb{Z}[i]$ for the
 $N$-th order unitary propagator truncation $N! \sum_{k=0}^N \frac{(-i H t)^k}{k!}$. -/
-def taylorScaledWeight (t : Int) (tOrder k : Nat) : GaussianInt :=
+@[expose] def taylorScaledWeight (t : Int) (tOrder k : Nat) : GaussianInt :=
   GaussianInt.scale ((natFactorial tOrder / natFactorial k : Nat) : Int) (negITimePow t k)
 
 /-- Evaluate the $N$-th order truncated continuous-time Taylor propagator
 $$U_N(t) v = \sum_{k=0}^N \left(N! \frac{(-i t)^k}{k!}\right) A^k v$$
 of a linear operator `op` at time `t`, truncation order `tOrder`, vector `v`, and index `u`. -/
-def evalTaylorPropagator
+@[expose] def evalTaylorPropagator
     (op : (Nat → Int) → (Nat → Int))
     (t : Int)
     (tOrder : Nat)
@@ -850,7 +850,7 @@ def evalTaylorPropagator
     (List.range (tOrder + 1))
 
 /-- Full-space vs. quotient-space $N$-th order Taylor propagator step (`propagatorTaylorStep`). -/
-def propagatorTaylorStep
+@[expose] def propagatorTaylorStep
     (H Q : Nat → Nat → Int)
     (part : Nat → Nat)
     (cellIndices : List Nat)
@@ -925,22 +925,22 @@ theorem continuous_time_taylor_propagator_intertwines_unpartitioned
 
 /-- Construct the validated degree-4/5 Taylor model pair $(\cos(\theta), -\sin(\theta))$ for the
 unitary Schrödinger eigenmode phase factor $e^{-i \theta} = \cos(\theta) - i \sin(\theta)$ over
-$\theta \in \text{dom}$ with Lagrange remainder bound `rem`. -/
-def tmUnitaryPhasePair (dom rem : Interval) : TaylorModel × TaylorModel :=
-  let cosTM := tmCos dom rem
-  let negSinTM := tmScale (-1) (tmSin dom rem)
+$\theta \in \text{dom}$ via domain-guarded `tmCosCertified` and `tmSinCertified`. -/
+@[expose] def tmUnitaryPhasePair (dom : Interval) : TaylorModel × TaylorModel :=
+  let cosTM := tmCosCertified dom
+  let negSinTM := tmScale (-1) (tmSinCertified dom)
   (cosTM, negSinTM)
 
 /-- Construct the validated degree-4 Taylor model for the unitary probability norm
 $|e^{-i\theta}|^2 = \cos^2(\theta) + (-\sin(\theta))^2$ over $\theta \in \text{dom}$. -/
-def tmUnitaryNormSq (dom rem : Interval) : TaylorModel :=
-  let (cosTM, negSinTM) := tmUnitaryPhasePair dom rem
+@[expose] def tmUnitaryNormSq (dom : Interval) : TaylorModel :=
+  let (cosTM, negSinTM) := tmUnitaryPhasePair dom
   tmAdd (tmMul 4 cosTM cosTM) (tmMul 4 negSinTM negSinTM)
 
 /-- Real-symplectic Schrödinger `OdeSystem` for a single eigenmode $\psi_k(t) = x(t) + i y(t)$ with
 eigenvalue $\lambda$:
 $$\dot{x} = \lambda y, \qquad \dot{y} = -\lambda x.$$ -/
-def schrodingerEigenmodeOde (lambda dt : CanonicalRat) (remPad : Interval) : OdeSystem where
+@[expose] def schrodingerEigenmodeOde (lambda dt : CanonicalRat) (remPad : Interval) : OdeSystem where
   fields :=
     [ ("x", .mul (.const lambda) (.var "y"))
     , ("y", .mul (.const (-lambda)) (.var "x")) ]
@@ -949,7 +949,7 @@ def schrodingerEigenmodeOde (lambda dt : CanonicalRat) (remPad : Interval) : Ode
 
 /-- Real-symplectic Schrödinger `OdeSystem` for the coupled 2-site $K_2$ quantum walk
 ($H = \begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}$, $\dot{x}_0 = y_1, \dot{y}_0 = -x_1, \dot{x}_1 = y_0, \dot{y}_1 = -x_0$). -/
-def schrodingerK2CoupledOde (dt : CanonicalRat) (remPad : Interval) : OdeSystem where
+@[expose] def schrodingerK2CoupledOde (dt : CanonicalRat) (remPad : Interval) : OdeSystem where
   fields :=
     [ ("x0", .var "y1")
     , ("y0", .sub (.const 0) (.var "x1"))
@@ -960,14 +960,14 @@ def schrodingerK2CoupledOde (dt : CanonicalRat) (remPad : Interval) : OdeSystem 
 
 /-- Open-system Lindblad dephasing ODE for off-diagonal coherence $c(t)$ with decoherence rate $\gamma > 0$:
 $\dot{c} = -\gamma c$. -/
-def lindbladDephasingOde (gamma dt : CanonicalRat) (remPad : Interval) : OdeSystem where
+@[expose] def lindbladDephasingOde (gamma dt : CanonicalRat) (remPad : Interval) : OdeSystem where
   fields       := [("c", .mul (.const (-gamma)) (.var "c"))]
   dt           := dt
   remainderPad := remPad
 
 /-- Unphysical non-Hermitian anti-damped ODE ($\dot{x} = +2 x + 1$) that violates unitary norm
 conservation and blows up outside the probability envelope $[-2, 2]$. -/
-def nonHermitianGainRunawayOde : OdeSystem where
+@[expose] def nonHermitianGainRunawayOde : OdeSystem where
   fields       := [("x", .add (.mul (.const 2) (.var "x")) (.const 1))]
   dt           := 1
   remainderPad := ⟨0, CanonicalRat.mk 1 10⟩
@@ -979,7 +979,7 @@ def nonHermitianGainRunawayOde : OdeSystem where
   readout with $\Delta t = 1$, invariant $p \in [0, 1]$.
 * Guarded transition `"rabi_drive" → "idle_readout"` enabled when population reaches the target
   excited window $p \in [4/5, 1]$. -/
-def quantumPulseHybridAutomaton : HybridAutomaton where
+@[expose] def quantumPulseHybridAutomaton : HybridAutomaton where
   modes :=
     [ { modeId := "rabi_drive"
       , ode :=
@@ -1005,14 +1005,14 @@ def quantumPulseHybridAutomaton : HybridAutomaton where
 /-- Compute the list of scaled Lagrange–Sylvester spectral projectors
 $$E_k = \frac{s}{d_k} \tilde{E}_k = \frac{s}{\prod_{j \neq k} (\lambda_k - \lambda_j)} \prod_{j \neq k} (Q - \lambda_j I)$$
 directly from `Q`, `eigs`, and a common denominator `commonScale : Int` (no hand-supplied cofactors). -/
-def computeScaledLagrangeProjectors (Q : IntMatrix) (eigs : List Int) (commonScale : Int) : List IntMatrix :=
+@[expose] def computeScaledLagrangeProjectors (Q : IntMatrix) (eigs : List Int) (commonScale : Int) : List IntMatrix :=
   (List.range eigs.length).map (fun k =>
     let (num, denom) := computeLagrangeProjector Q eigs k
     num.scale (commonScale / denom))
 
 /-- Compute the Lagrange–Sylvester denominator $d_k(\alpha) = \prod_{j \neq k} (\lambda_k - \lambda_j) \pmod{\text{basis}}$
 over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$. -/
-def computeLagrangeDenominatorPoly
+@[expose] def computeLagrangeDenominatorPoly
     (basis : List Poly)
     (fuel : Nat)
     (eigs : List Poly)
@@ -1029,7 +1029,7 @@ def computeLagrangeDenominatorPoly
 $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$ directly from $Q$ and `eigs` (zero hand-supplied cofactors):
 - Numerator: $\tilde{E}_k(Q) = \prod_{j \neq k} (Q - \lambda_j I) \pmod{\text{basis}}$,
 - Denominator: $d_k = \prod_{j \neq k} (\lambda_k - \lambda_j) \pmod{\text{basis}}$. -/
-def computeLagrangeProjectorPoly
+@[expose] def computeLagrangeProjectorPoly
     (basis : List Poly)
     (fuel : Nat)
     (Q : PolyMatrix)
@@ -1090,7 +1090,7 @@ theorem computed_lagrange_projectors_k2_p3_q3_exact :
 $$R_M = 2 M - d_M I$$
 evaluated across partition cells `cellIndices` and `cellOf`, where $M / d_M$ is the normalized
 transition/projection operator ($\Pi_M$). -/
-def szegedyReflectVec
+@[expose] def szegedyReflectVec
     (M : Nat → Nat → Int)
     (cellIndices : List Nat)
     (cellOf : Nat → List Nat)
@@ -1102,7 +1102,7 @@ def szegedyReflectVec
 /-- Quotient $r$-cell discrete-time Szegedy / Grover reflection operator
 $$R_{Q_M} = 2 Q_M - d_M I_r$$
 evaluated on an $r$-cell quotient state $w : \text{Nat} \to \text{Int}$. -/
-def szegedyQuotientReflectVec
+@[expose] def szegedyQuotientReflectVec
     (QM : Nat → Nat → Int)
     (cellIndices : List Nat)
     (dM : Int)
@@ -1114,7 +1114,7 @@ def szegedyQuotientReflectVec
 $$U_{\text{Sz}} = R_B \cdot R_A = (2 B - d_B I)(2 A - d_A I),$$
 which composes the first reflection $R_A$ with the second reflection $R_B$ (connecting continuous-time
 photonic walks `CTQW` to synchronous clocked digital FPGA/ASIC quantum walks `DTQW`). -/
-def szegedyWalkStep
+@[expose] def szegedyWalkStep
     (A B : Nat → Nat → Int)
     (cellIndices : List Nat)
     (cellOf : Nat → List Nat)
@@ -1125,7 +1125,7 @@ def szegedyWalkStep
 
 /-- One full clock cycle of the $r$-cell **Quotient Discrete-Time Szegedy Quantum Walk**
 $$Q_{\text{Sz}} = R_{Q_B} \cdot R_{Q_A} = (2 Q_B - d_B I_r)(2 Q_A - d_A I_r).$$ -/
-def szegedyQuotientWalkStep
+@[expose] def szegedyQuotientWalkStep
     (QA QB : Nat → Nat → Int)
     (cellIndices : List Nat)
     (dA dB : Int)
@@ -1271,7 +1271,7 @@ theorem cellUniformSzegedyPST_iff_quotient
       exact hQuot
 
 /-- Broken `szegedyQuotientReflectVec` that uses `+` instead of `-` for the identity reflection term. -/
-def szegedyQuotientReflectVecPlusBug
+@[expose] def szegedyQuotientReflectVecPlusBug
     (QM : Nat → Nat → Int)
     (cellIndices : List Nat)
     (dM : Int)
@@ -1286,18 +1286,18 @@ def szegedyQuotientReflectVecPlusBug
 /-! ## 8. Matrix Taylor-Model Unitary Propagator $\exp(-i Q t)$ & Quotient Remainder Enclosure -/
 
 /-- Sum of absolute entry magnitudes $\sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$ along row `i`. -/
-def intRowAbsSum (A : IntMatrix) (i : Nat) : List Nat → Nat
+@[expose] def intRowAbsSum (A : IntMatrix) (i : Nat) : List Nat → Nat
   | [] => 0
   | j :: js => (A.entry i j).natAbs + intRowAbsSum A i js
 
 /-- Maximum absolute row sum $\max_{i \in \text{rows}} \sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$. -/
-def maxRowAbsSum (A : IntMatrix) (cols : List Nat) : List Nat → Nat
+@[expose] def maxRowAbsSum (A : IntMatrix) (cols : List Nat) : List Nat → Nat
   | [] => 0
   | i :: is => Nat.max (intRowAbsSum A i cols) (maxRowAbsSum A cols is)
 
 /-- Matrix $\ell_\infty$ induced operator norm (maximum absolute row sum)
 $$\|A\|_\infty = \max_{0 \le i < \text{dim}} \sum_{0 \le j < \text{dim}} |A_{i, j}| \in \mathbb{N}.$$ -/
-def intMatrixInfNorm (A : IntMatrix) (dim : Nat) : Nat :=
+@[expose] def intMatrixInfNorm (A : IntMatrix) (dim : Nat) : Nat :=
   let indices := List.range dim
   maxRowAbsSum A indices indices
 
@@ -1388,12 +1388,12 @@ theorem intMatrixInfNorm_submultiplicative_vec
   refine ⟨hAbs, by omega, by omega⟩
 
 /-- Compute $b^e \in \mathbb{N}$ by structural recursion. -/
-def natPow (b : Nat) : Nat → Nat
+@[expose] def natPow (b : Nat) : Nat → Nat
   | 0 => 1
   | k + 1 => b * natPow b k
 
 /-- Compute $b^e \in \mathbb{Z}$ by structural recursion. -/
-def intPow (b : Int) : Nat → Int
+@[expose] def intPow (b : Int) : Nat → Int
   | 0 => 1
   | k + 1 => b * intPow b k
 
@@ -1401,7 +1401,7 @@ def intPow (b : Int) : Nat → Int
 $$W_d(t_{\text{num}}, t_{\text{den}}, k) = \frac{d!}{k!} \cdot t_{\text{den}}^{d - k} \cdot (-i \cdot t_{\text{num}})^k \in \mathbb{Z}[i]$$
 for the degree-$d$ matrix Taylor propagator of $\exp\left(-i Q \frac{t_{\text{num}}}{t_{\text{den}}}\right)$
 scaled by the common integer denominator $d! \cdot t_{\text{den}}^d$. -/
-def matrixTaylorScaledWeight (tNum tDen : Int) (order k : Nat) : GaussianInt :=
+@[expose] def matrixTaylorScaledWeight (tNum tDen : Int) (order k : Nat) : GaussianInt :=
   let coeff : Int := ((natFactorial order / natFactorial k : Nat) : Int) * intPow tDen (order - k)
   GaussianInt.scale coeff (negITimePow tNum k)
 
@@ -1410,7 +1410,7 @@ $$\operatorname{Re}\left(d! \, t_{\text{den}}^d \sum_{k=0}^{d} \frac{(-i t)^k}{k
   = d! \, t_{\text{den}}^d \left(\left(I - \frac{t^2}{2!} A^2 + \frac{t^4}{4!} A^4 - \dots\right) v\right)_u$$
 evaluated on an `IntMatrix` $A$ at rational time $t = t_{\text{num}} / t_{\text{den}}$, truncation
 order `order`, vector `v`, and vertex/cell index `u`. -/
-def evalScaledMatrixTaylorReal
+@[expose] def evalScaledMatrixTaylorReal
     (A : IntMatrix)
     (tNum tDen : Int)
     (order : Nat)
@@ -1427,7 +1427,7 @@ $$\operatorname{Im}\left(d! \, t_{\text{den}}^d \sum_{k=0}^{d} \frac{(-i t)^k}{k
   = d! \, t_{\text{den}}^d \left(\left(-t A + \frac{t^3}{3!} A^3 - \dots\right) v\right)_u$$
 evaluated on an `IntMatrix` $A$ at rational time $t = t_{\text{num}} / t_{\text{den}}$, truncation
 order `order`, vector `v`, and vertex/cell index `u`. -/
-def evalScaledMatrixTaylorImag
+@[expose] def evalScaledMatrixTaylorImag
     (A : IntMatrix)
     (tNum tDen : Int)
     (order : Nat)
@@ -1442,7 +1442,7 @@ def evalScaledMatrixTaylorImag
 /-- Cauchy–Lagrange $\ell_\infty$ matrix-norm Taylor remainder radius
 $$R_d(Q, t) = \frac{(\|Q\|_\infty \cdot t_{\text{num}})^{d + 1}}{(d + 1)! \cdot t_{\text{den}}^{d + 1}} \in \mathbb{Q}$$
 for the degree-`order` Matrix Taylor Propagator of $\exp\left(-i Q \frac{t_{\text{num}}}{t_{\text{den}}}\right)$. -/
-def matrixTaylorRemainderBound
+@[expose] def matrixTaylorRemainderBound
     (Q : IntMatrix)
     (dim : Nat)
     (tNum tDen order : Nat) : CanonicalRat :=
@@ -1453,7 +1453,7 @@ def matrixTaylorRemainderBound
 
 /-- Certified interval enclosure of the real component $\operatorname{Re}((e^{-i Q t} v)_u)$
 combining `evalScaledMatrixTaylorReal` with `[-matrixTaylorRemainderBound, +matrixTaylorRemainderBound]`. -/
-def evalMatrixTaylorRealInterval
+@[expose] def evalMatrixTaylorRealInterval
     (Q : IntMatrix)
     (tNum tDen order : Nat)
     (v : Nat → Int)
@@ -1466,7 +1466,7 @@ def evalMatrixTaylorRealInterval
 
 /-- Certified interval enclosure of the imaginary component $\operatorname{Im}((e^{-i Q t} v)_u)$
 combining `evalScaledMatrixTaylorImag` with `[-matrixTaylorRemainderBound, +matrixTaylorRemainderBound]`. -/
-def evalMatrixTaylorImagInterval
+@[expose] def evalMatrixTaylorImagInterval
     (Q : IntMatrix)
     (tNum tDen order : Nat)
     (v : Nat → Int)
@@ -1520,13 +1520,21 @@ theorem matrixTaylorPropagator_intertwines_quotient
 /-- Validated antipodal transfer probability tube for $Q_3$ at vertex $7$ (cell $3$ of the 4-cell
 Krawtchouk quotient $Q(Q_3)$) at rational transfer time $t = t_{\text{num}} / t_{\text{den}}$,
 combining the degree-4/5 matrix Taylor propagator on `k2Matrix` and `hypercubeQ3QuotientMatrix`
-with `tmSinCertified` / `tmCosCertified` interval enclosures:
-By the Krawtchouk tensor-power factorization $\langle 3 | e^{-i Q(Q_3) t} | 0 \rangle = (-i \sin(t))^3 = i \sin^3(t)$,
-the antipodal transfer probability is enclosed by $\sin^6(t) = (\text{evalTaylorModelRange (tmSinCertified dom)})^6$. -/
-def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
+with domain-guarded `tmSinCertified` / `tmCosCertified` interval enclosures:
+When $|t| > 1$ (such as $t = 157/100 \approx \pi/2$), applies exact half-angle range reduction
+$\sin(t) = 2 \sin(t/2) \cos(t/2)$ with $t/2 \in [-1, 1]$ before computing the Krawtchouk tensor-power
+antipodal probability enclosure $\sin^6(t)$. -/
+@[expose] def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
   let tRat := CanonicalRat.mk (tNum : Int) tDen
   let tDom := Interval.ofPoint tRat
-  let sinIv := evalTaylorModelRange (tmSinCertified tDom)
+  let sinIv :=
+    if Interval.subset tDom trigValidDomain then
+      evalTaylorModelRange (tmSinCertified tDom)
+    else
+      let halfDom := Interval.ofPoint (tRat / 2)
+      let sinHalf := evalTaylorModelRange (tmSinCertified halfDom)
+      let cosHalf := evalTaylorModelRange (tmCosCertified halfDom)
+      Interval.mul (Interval.ofPoint 2) (Interval.mul sinHalf cosHalf)
   let amp3Iv := intervalPow sinIv 3
   Interval.mul amp3Iv amp3Iv
 
@@ -1535,12 +1543,12 @@ def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
    `intMatrixInfNorm k2Matrix 2 = 1` and
    `intMatrixInfNorm hypercubeQ3Matrix 8 = intMatrixInfNorm hypercubeQ3QuotientMatrix 4` (`= 3`).
 2. **Exact Agreement of `evalMatrixTaylorRealInterval` / `evalMatrixTaylorImagInterval` with `tmCosCertified` / `tmSinCertified` on $K_2$**:
-   At rational transfer time $t = 157 / 100 \approx \pi / 2$ starting from $w_{K_2} = (1, 0)$:
-   - The degree-4 real matrix Taylor enclosure at vertex $0$ equals `evalTaylorModelRange (tmCosCertified ⟨157/100, 157/100⟩)`
-     and encloses $0$,
-   - The degree-5 imaginary matrix Taylor enclosure at antipodal vertex $1$ equals
-     `evalTaylorModelRange (tmScale (-1) (tmSinCertified ⟨157/100, 157/100⟩))` and encloses $-1$,
-   - The validated $K_2$ antipodal probability tube encloses $1$ and strictly excludes everything
+   - At half-transfer time $t_{1/2} = 157 / 200 \in [-1, 1]$ starting from $w_{K_2} = (1, 0)$, the degree-4
+     real matrix Taylor enclosure at vertex $0$ equals `evalTaylorModelRange (tmCosCertified ⟨157/200, 157/200⟩)`
+     and the degree-5 imaginary matrix Taylor enclosure at vertex $1$ equals
+     `evalTaylorModelRange (tmScale (-1) (tmSinCertified ⟨157/200, 157/200⟩))`.
+   - At transfer time $t = 157 / 100 \approx \pi / 2$, `k2Re0` encloses $0$, `k2Im1` encloses $-1$,
+     and the validated $K_2$ antipodal probability tube encloses $1$ and strictly excludes everything
      below $1 - \varepsilon = 19/20$.
 3. **Degree-4 Matrix Taylor Propagator Intertwining & Validated $Q_3$ Antipodal PST Tube**:
    - Starting from $w_0 = (1, 0, 0, 0)$ ($|000\rangle$), the degree-4 matrix Taylor propagator on
@@ -1549,14 +1557,16 @@ def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
      `evalScaledMatrixTaylorImag = 24 * tDen * tNum^3`), and their interval enclosures
      `evalMatrixTaylorRealInterval` and `evalMatrixTaylorImagInterval` match identically!
    - Combining the 4-cell Krawtchouk quotient propagator with `tmSinCertified` / `tmCosCertified`
-     at $t = 157 / 100$, the validated antipodal probability tube `evalQ3KrawtchoukAntipodalProbTube 157 100`
-     at vertex $7$ encloses exact unit probability $1$ (`Interval.containsRat ... 1 = true`) and
-     strictly excludes everything below $1 - \varepsilon = 9 / 10$ (`lo > 9 / 10` and
-     `Interval.containsRat ... (9 / 10) = false`)! -/
+     via half-angle range reduction at $t = 157 / 100$, the validated antipodal probability tube
+     `evalQ3KrawtchoukAntipodalProbTube 157 100` at vertex $7$ encloses exact unit probability $1$
+     (`Interval.containsRat ... 1 = true`) and strictly excludes everything below $1 - \varepsilon = 9 / 10$
+     (`lo > 9 / 10` and `Interval.containsRat ... (9 / 10) = false`)! -/
 theorem matrixTaylorPropagator_encloses_k2_and_q3_pst :
     let wK2 : Nat → Int := fun i => if i == 0 then 1 else 0
     let wQ3 : Nat → Int := fun i => if i == 0 then 1 else 0
-    let tDom : Interval := Interval.ofPoint (CanonicalRat.mk 157 100)
+    let tSubDom : Interval := Interval.ofPoint (CanonicalRat.mk 157 200)
+    let k2ReSub := evalMatrixTaylorRealInterval k2Matrix 157 200 4 wK2 0
+    let k2ImSub := evalMatrixTaylorImagInterval k2Matrix 157 200 5 wK2 1
     let k2Re0 := evalMatrixTaylorRealInterval k2Matrix 157 100 4 wK2 0
     let k2Im1 := evalMatrixTaylorImagInterval k2Matrix 157 100 5 wK2 1
     let k2Prob1 := Interval.mul k2Im1 k2Im1
@@ -1565,9 +1575,9 @@ theorem matrixTaylorPropagator_encloses_k2_and_q3_pst :
     intMatrixInfNorm k2Matrix 2 = 1 ∧
     intMatrixInfNorm hypercubeQ3Matrix 8 = 3 ∧
     intMatrixInfNorm hypercubeQ3QuotientMatrix 4 = 3 ∧
-    -- 2. K2 matrix Taylor propagator matches tmCosCertified / tmSinCertified and encloses PST at vertex 1
-    k2Re0 = evalTaylorModelRange (tmCosCertified tDom) ∧
-    k2Im1 = evalTaylorModelRange (tmScale (-1) (tmSinCertified tDom)) ∧
+    -- 2. K2 matrix Taylor propagator matches tmCosCertified / tmSinCertified on [-1, 1] and encloses PST at vertex 1
+    k2ReSub = evalTaylorModelRange (tmCosCertified tSubDom) ∧
+    k2ImSub = evalTaylorModelRange (tmScale (-1) (tmSinCertified tSubDom)) ∧
     Interval.containsRat k2Re0 0 = true ∧
     Interval.containsRat k2Im1 (-1) = true ∧
     Interval.containsRat k2Prob1 1 = true ∧
@@ -1588,10 +1598,10 @@ theorem matrixTaylorPropagator_encloses_k2_and_q3_pst :
   decide +kernel
 
 /-- Broken `intMatrixInfNorm` that always returns `0`. -/
-def intMatrixInfNormZeroBug (_A : IntMatrix) (_dim : Nat) : Nat := 0
+@[expose] def intMatrixInfNormZeroBug (_A : IntMatrix) (_dim : Nat) : Nat := 0
 
 /-- Broken `evalScaledMatrixTaylorImag` that uses `.re` instead of `.im`. -/
-def evalScaledMatrixTaylorImagReBug
+@[expose] def evalScaledMatrixTaylorImagReBug
     (A : IntMatrix)
     (tNum tDen : Int)
     (order : Nat)

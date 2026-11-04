@@ -33,7 +33,7 @@ public import Obend.Analysis.RealAnalysis
 public import Obend.Analysis.Groebner
 public import Obend.Analysis.Diff
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 
 namespace Obend.Analysis
 open Obend.Judge
@@ -43,7 +43,7 @@ set_option autoImplicit false
 /-! ## 1. Multivariate Polynomial Embedding into `RealExpr`, Partial Derivatives & Lie Derivatives -/
 
 /-- Canonical variable name `"x"`, `"x'"`, `"x''"`, ... for variable index `v : Nat`. -/
-def polyVarName (v : Nat) : String :=
+@[expose] def polyVarName (v : Nat) : String :=
   String.ofList ('x' :: List.replicate v '\'')
 
 /-- `polyVarName` is injective (`polyVarName v = polyVarName j → v = j`). -/
@@ -68,7 +68,7 @@ theorem polyVarName_inj {v j : Nat} (h : polyVarName v = polyVarName j) : v = j 
 
 /-- Lift a variable assignment `env : Nat → CanonicalRat` to a named `RealExpr` assignment
 `String → CanonicalRat` such that `polyEnvToRho env (polyVarName v) = env v`. -/
-def polyEnvToRho (env : Nat → CanonicalRat) (name : String) : CanonicalRat :=
+@[expose] def polyEnvToRho (env : Nat → CanonicalRat) (name : String) : CanonicalRat :=
   env (name.toList.length - 1)
 
 @[simp] theorem polyEnvToRho_polyVarName (env : Nat → CanonicalRat) (v : Nat) :
@@ -78,22 +78,22 @@ def polyEnvToRho (env : Nat → CanonicalRat) (name : String) : CanonicalRat :=
   exact congrArg env (Nat.add_sub_cancel v 1)
 
 /-- Convert a single variable power $x_j^e$ into a `RealExpr`. -/
-def varPowerToRealExpr (j : Nat) : Nat → RealExpr
+@[expose] def varPowerToRealExpr (j : Nat) : Nat → RealExpr
   | 0 => .const 1
   | e + 1 => .mul (.var (polyVarName j)) (varPowerToRealExpr j e)
 
 /-- Convert a sparse `Monomial` $\prod_{(j, e) \in m} x_j^e$ into a `RealExpr`. -/
-def monomialToRealExpr : Monomial → RealExpr
+@[expose] def monomialToRealExpr : Monomial → RealExpr
   | [] => .const 1
   | (j, e) :: rest => .mul (varPowerToRealExpr j e) (monomialToRealExpr rest)
 
 /-- Convert a list of `(Monomial × CanonicalRat)` terms into a `RealExpr`. -/
-def polyTermsToRealExpr : List (Monomial × CanonicalRat) → RealExpr
+@[expose] def polyTermsToRealExpr : List (Monomial × CanonicalRat) → RealExpr
   | [] => .const 0
   | (m, c) :: rest => .add (.mul (.const c) (monomialToRealExpr m)) (polyTermsToRealExpr rest)
 
 /-- Embed a multivariate polynomial `p : Poly` into `RealExpr`. -/
-def polyToRealExpr (p : Poly) : RealExpr :=
+@[expose] def polyToRealExpr (p : Poly) : RealExpr :=
   polyTermsToRealExpr p.terms
 
 /-- Evaluating `varPowerToRealExpr j e` under `polyEnvToRho env` equals `ratPow (env j) e`. -/
@@ -128,7 +128,7 @@ theorem polyToRealExpr_eval (env : Nat → CanonicalRat) (p : Poly) :
   evalPointPure_polyTermsToRealExpr env p.terms
 
 /-- Constant polynomial $c \in \mathbb{Q}[x_0, \dots, x_{n-1}]$. -/
-def polyConst (c : CanonicalRat) : Poly :=
+@[expose] def polyConst (c : CanonicalRat) : Poly :=
   polyOfTerm [] c
 
 @[simp] theorem polyConst_eval (env : Nat → CanonicalRat) (c : CanonicalRat) :
@@ -142,12 +142,12 @@ def polyConst (c : CanonicalRat) : Poly :=
     grind
 
 /-- Single variable power $x_j^e$ as a normalized `Poly`. -/
-def varPowerPoly (j : Nat) : Nat → Poly
+@[expose] def varPowerPoly (j : Nat) : Nat → Poly
   | 0 => Poly.one
   | e + 1 => Poly.mul (polyOfTerm [(j, 1)] 1) (varPowerPoly j e)
 
 /-- Partial derivative $\frac{\partial}{\partial x_v}(x_j^e)$ as a normalized `Poly`. -/
-def derivVarPowerPoly (v j : Nat) : Nat → Poly
+@[expose] def derivVarPowerPoly (v j : Nat) : Nat → Poly
   | 0 => Poly.zero
   | e + 1 =>
     let dHead : Poly := if j == v then Poly.one else Poly.zero
@@ -156,12 +156,12 @@ def derivVarPowerPoly (v j : Nat) : Nat → Poly
       (Poly.mul (polyOfTerm [(j, 1)] 1) (derivVarPowerPoly v j e))
 
 /-- Convert a `Monomial` into a normalized `Poly`. -/
-def monomialToPoly : Monomial → Poly
+@[expose] def monomialToPoly : Monomial → Poly
   | [] => Poly.one
   | (j, e) :: rest => Poly.mul (varPowerPoly j e) (monomialToPoly rest)
 
 /-- Partial derivative $\frac{\partial}{\partial x_v}\left(\prod_{(j, e) \in m} x_j^e\right)$ via Leibniz product rule. -/
-def derivMonomialPoly (v : Nat) : Monomial → Poly
+@[expose] def derivMonomialPoly (v : Nat) : Monomial → Poly
   | [] => Poly.zero
   | (j, e) :: rest =>
     Poly.add
@@ -169,7 +169,7 @@ def derivMonomialPoly (v : Nat) : Monomial → Poly
       (Poly.mul (varPowerPoly j e) (derivMonomialPoly v rest))
 
 /-- Partial derivative of a list of `(Monomial × CanonicalRat)` terms with respect to variable `v`. -/
-def derivTermsPoly (v : Nat) : List (Monomial × CanonicalRat) → Poly
+@[expose] def derivTermsPoly (v : Nat) : List (Monomial × CanonicalRat) → Poly
   | [] => Poly.zero
   | (m, c) :: rest =>
     Poly.add
@@ -178,16 +178,16 @@ def derivTermsPoly (v : Nat) : List (Monomial × CanonicalRat) → Poly
 
 /-- **Formal Partial Derivative of a Multivariate Polynomial (`polyPartialDeriv`)**:
 Computes $\frac{\partial p}{\partial x_v} \in \mathbb{Q}[x_0, \dots, x_{n-1}]$. -/
-def polyPartialDeriv (v : Nat) (p : Poly) : Poly :=
+@[expose] def polyPartialDeriv (v : Nat) (p : Poly) : Poly :=
   derivTermsPoly v p.terms
 
 /-- **Polynomial Gradient Vector (`polyGradient`)**:
 Computes $\nabla p = \left[\frac{\partial p}{\partial x_0}, \dots, \frac{\partial p}{\partial x_{\text{dim}-1}}\right]$. -/
-def polyGradient (dim : Nat) (p : Poly) : List Poly :=
+@[expose] def polyGradient (dim : Nat) (p : Poly) : List Poly :=
   (List.range dim).map (fun i => polyPartialDeriv i p)
 
 /-- Auxiliary accumulator for the polynomial Lie derivative $\sum_{k} \frac{\partial p}{\partial x_{\text{idx}+k}} f_k$. -/
-def lieDerivativePolyAux (idx : Nat) (p : Poly) : List Poly → Poly
+@[expose] def lieDerivativePolyAux (idx : Nat) (p : Poly) : List Poly → Poly
   | [] => Poly.zero
   | f_i :: rest =>
     Poly.add (Poly.mul (polyPartialDeriv idx p) f_i) (lieDerivativePolyAux (idx + 1) p rest)
@@ -195,7 +195,7 @@ def lieDerivativePolyAux (idx : Nat) (p : Poly) : List Poly → Poly
 /-- **Polynomial Lie Derivative (`lieDerivativePoly`)**:
 Computes $\mathcal{L}_f V(x) = \nabla V(x) \cdot f(x) = \sum_{i=0}^{n-1} \frac{\partial V}{\partial x_i}(x) \cdot f_i(x)$
 along the polynomial vector field `vectorField = [f_0, ..., f_{n-1}]`. -/
-def lieDerivativePoly (p : Poly) (vectorField : List Poly) : Poly :=
+@[expose] def lieDerivativePoly (p : Poly) (vectorField : List Poly) : Poly :=
   lieDerivativePolyAux 0 p vectorField
 
 theorem eval_polyOfTerm_var1 (env : Nat → CanonicalRat) (j : Nat) :
@@ -297,7 +297,7 @@ theorem polyPartialDeriv_agrees_with_symbolicDeriv_and_reverseAD
 /-- Check that `goal(x) ≥ 0` on the semialgebraic set $\{x \mid \forall g \in \text{ineqs}, g(x) \ge 0 \;\wedge\; \forall h \in \text{eqs}, h(x) = 0\}$
 via a `PositivstellensatzCert` verifying the exact polynomial identity:
 $$\text{goal}(x) = \sigma_0(x) + \sum_{(s_j, j)} s_j(x) g_j(x) + \sum_{(\lambda_\ell, \ell)} \lambda_\ell(x) h_\ell(x).$$ -/
-def checkPsatzNonneg
+@[expose] def checkPsatzNonneg
     (goal : Poly)
     (ineqs eqs : List Poly)
     (cert : PositivstellensatzCert) : Bool :=
@@ -347,10 +347,10 @@ theorem checkPsatzNonneg_sound
 /-! ## 3. Sum-of-Squares (SOS) Nonlinear Lyapunov Stability (`checkSosLyapunov`, `checkSosLyapunov_sound`) -/
 
 /-- Zero origin assignment `originEnv : Nat → CanonicalRat := fun _ => 0`. -/
-def originEnv : Nat → CanonicalRat := fun _ => 0
+@[expose] def originEnv : Nat → CanonicalRat := fun _ => 0
 
 /-- Squared Euclidean norm polynomial $\|x\|^2 = \sum_{i=0}^{\text{dim}-1} x_i^2$. -/
-def sumVarSquaresPoly : Nat → Poly
+@[expose] def sumVarSquaresPoly : Nat → Poly
   | 0 => Poly.zero
   | i + 1 => Poly.add (sumVarSquaresPoly i) (Poly.sqr (polyOfTerm [(i, 1)] 1))
 
@@ -378,7 +378,7 @@ structure SosLyapunovSpec where
   lyapunovV   : Poly
   radialEps   : CanonicalRat
   decayGamma  : CanonicalRat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- SOS Positivstellensatz witness for `SosLyapunovSpec`:
 * `posDefCert`: certifies $V(x) - \varepsilon \|x\|^2 \ge 0$ on `domainIneqs`,
@@ -386,14 +386,14 @@ structure SosLyapunovSpec where
 structure SosLyapunovWitness where
   posDefCert   : PositivstellensatzCert
   lieDecayCert : PositivstellensatzCert
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Computable **SOS Lyapunov Stability Checker** (`checkSosLyapunov`):
 Verifies:
 1. $\varepsilon > 0$, $\gamma \ge 0$, and $V(0) = 0$,
 2. **Strict Positive Definiteness**: $V(x) - \varepsilon \|x\|^2 \ge 0$ via `checkPsatzNonneg`,
 3. **Negative-Definite Lie Derivative Decay**: $-\mathcal{L}_f V(x) - \gamma V(x) \ge 0$ via `checkPsatzNonneg`. -/
-def checkSosLyapunov (spec : SosLyapunovSpec) (w : SosLyapunovWitness) : Bool :=
+@[expose] def checkSosLyapunov (spec : SosLyapunovSpec) (w : SosLyapunovWitness) : Bool :=
   let posDefGoal := Poly.sub spec.lyapunovV (Poly.scale spec.radialEps (sumVarSquaresPoly spec.dim))
   let lieV := lieDerivativePoly spec.lyapunovV spec.vectorField
   let lieDecayGoal := Poly.sub (Poly.neg lieV) (Poly.scale spec.decayGamma spec.lyapunovV)
@@ -464,7 +464,7 @@ structure SosCbfSpec where
   barrierB    : Poly
   unsafePoly  : Poly
   classKAlpha : CanonicalRat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- SOS Positivstellensatz witness for `SosCbfSpec`:
 * `unsafeRefuteCert`: Stengle Positivstellensatz refutation of $\{B(x) \ge 0, u_{\text{unsafe}}(x) \ge 0\}$,
@@ -472,7 +472,7 @@ structure SosCbfSpec where
 structure SosCbfWitness where
   unsafeRefuteCert     : PositivstellensatzCert
   nagumoInvarianceCert : PositivstellensatzCert
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Computable **SOS Control Barrier Function Checker** (`checkSosCbf`):
 Verifies:
@@ -480,7 +480,7 @@ Verifies:
    certifying that $B(x) \ge 0$ and $u_{\text{unsafe}}(x) \ge 0$ are mutually infeasible on the domain, and
 2. **Nagumo / Ames Barrier Forward Invariance**: $\mathcal{L}_f B(x) + \alpha B(x) \ge 0$ on
    $B(x) \ge 0$ and `domainIneqs` via `checkPsatzNonneg`. -/
-def checkSosCbf (spec : SosCbfSpec) (w : SosCbfWitness) : Bool :=
+@[expose] def checkSosCbf (spec : SosCbfSpec) (w : SosCbfWitness) : Bool :=
   let qUnsafe : PositivstellensatzQuery :=
     { strictPos := []
     , nonneg    := spec.barrierB :: spec.unsafePoly :: spec.domainIneqs
@@ -550,26 +550,83 @@ $\mathcal{M} = \{x \mid h_1(x) = 0, \dots, h_m(x) = 0\}$:
 * `vectorField`: differential-algebraic vector field $f(x)$,
 * `domainIneqs`: operating domain inequality constraints $\{g_k(x) \ge 0\}$,
 * `algConstraints`: algebraic manifold equations $[h_1, \dots, h_m]$,
+* `algVars`: indices $[z_1, \dots, z_m]$ of the algebraic variables with respect to which the
+  Index-1 Jacobian $\frac{\partial h_i}{\partial x_{z_j}}$ is differentiated (defaults to `[1]`),
 * `algJacobianDet`: determinant polynomial $\det J_{\text{alg}}(x) = \det\left(\frac{\partial h}{\partial z}\right)$
-  of the algebraic variables,
+  of the algebraic variables (verified against symbolic `computeSymbolicAlgJacobianDet`),
 * `regDelta`: strict Index-1 regularity lower bound $\delta_{\text{reg}} > 0$
   ($(\det J_{\text{alg}}(x))^2 \ge \delta_{\text{reg}}$ on $\mathcal{M}$). -/
 structure DaeManifoldSpec where
   vectorField    : List Poly
   domainIneqs    : List Poly
   algConstraints : List Poly
+  algVars        : List Nat := [1]
   algJacobianDet : Poly
   regDelta       : CanonicalRat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Witness for `DaeManifoldSpec`:
-* `tangencyCert`: Gröbner/Buchberger ideal membership witness certifying $\mathcal{L}_f h_r \in \langle h_1, \dots, h_m \rangle$,
+* `tangencyCert`: primary Gröbner/Buchberger ideal membership witness certifying $\mathcal{L}_f h_r \in \langle h_1, \dots, h_m \rangle$,
+* `tangencyCerts`: optional per-constraint ideal membership certificates $[c_1, \dots, c_m]$ for multi-constraint DAEs,
 * `regularityCert`: Positivstellensatz certificate proving $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$
   modulo `algConstraints` and `domainIneqs`. -/
 structure DaeManifoldWitness where
   tangencyCert   : IdealMembershipCert
+  tangencyCerts  : List IdealMembershipCert := []
   regularityCert : PositivstellensatzCert
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
+
+/-- Remove the `k`-th element of a list (used for Laplace cofactor expansion). -/
+@[expose] def listEraseIdx' {α : Type} : List α → Nat → List α
+  | [], _ => []
+  | _ :: xs, 0 => xs
+  | x :: xs, k + 1 => x :: listEraseIdx' xs k
+
+/-- Determinant of a square matrix of polynomials given as rows, by Laplace expansion along the
+first row: $\det M = \sum_j (-1)^j M_{0,j} \det M^{(0,j)}$. Structural recursion on the row list;
+a ragged or empty matrix has determinant `Poly.one` for `[]` (the empty product) and the expansion
+is over whatever entries the first row has. -/
+@[expose] def polyMatrixDet : List (List Poly) → Poly
+  | [] => Poly.one
+  | row :: rest =>
+    (List.range row.length).foldl
+      (fun acc j =>
+        let entry := row.getD j Poly.zero
+        let sub := rest.map (fun r => listEraseIdx' r j)
+        let term := Poly.mul entry (polyMatrixDet sub)
+        if j % 2 == 0 then Poly.add acc term else Poly.sub acc term)
+      Poly.zero
+termination_by rows => rows.length
+decreasing_by all_goals simp_wf
+
+/-- The symbolic algebraic Jacobian matrix $J_{i,j} = \partial h_i / \partial x_{v_j}$ as rows. -/
+@[expose] def symbolicAlgJacobian (algConstraints : List Poly) (algVars : List Nat) : List (List Poly) :=
+  algConstraints.map (fun h => algVars.map (fun v => polyPartialDeriv v h))
+
+/-- Compute the symbolic algebraic Jacobian determinant $\det\left(\frac{\partial h_i}{\partial x_{v_j}}\right)$
+by Laplace expansion of `symbolicAlgJacobian` (`Poly.zero` when the system is not square). The
+$1 \times 1$ and $2 \times 2$ cases agree with the direct formulas; for $m \ge 3$ this is the full
+determinant, not the product of the diagonal partials (which is what this function computed before
+2026-11-04 and which is wrong for any non-triangular Jacobian). -/
+@[expose] def computeSymbolicAlgJacobianDet (algConstraints : List Poly) (algVars : List Nat) : Poly :=
+  if algConstraints.length != algVars.length then
+    Poly.zero
+  else
+    polyMatrixDet (symbolicAlgJacobian algConstraints algVars)
+
+/-- Verify Index-1 DAE regularity (`checkDaeIndex1Regularity`):
+1. `spec.algConstraints.length == spec.algVars.length`,
+2. `spec.algJacobianDet` equals the symbolic Jacobian determinant
+   `computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars`,
+3. `0 < spec.regDelta`, and
+4. $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$ on $\mathcal{M}$ via `checkPsatzNonneg`. -/
+@[expose] def checkDaeIndex1Regularity (spec : DaeManifoldSpec) (regCert : PositivstellensatzCert) : Bool :=
+  let symDet := computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars
+  let regGoal := Poly.sub (Poly.sqr spec.algJacobianDet) (polyConst spec.regDelta)
+  decide (spec.algConstraints.length = spec.algVars.length) &&
+  (Poly.sub spec.algJacobianDet symDet).isZero &&
+  decide (0 < spec.regDelta) &&
+  checkPsatzNonneg regGoal spec.domainIneqs spec.algConstraints regCert
 
 /-- Helper lemma: `List.all` is `true` iff the predicate holds for all members of the list. -/
 theorem sos_list_all_iff_forall (p : Poly → Bool) :
@@ -584,20 +641,41 @@ theorem sos_list_all_iff_forall (p : Poly → Bool) :
     · intro h
       exact ⟨h x (Or.inl rfl), fun y hy => h y (Or.inr hy)⟩
 
+/-- Helper lemma: `List.any` is `true` iff the predicate holds for some member of the list. -/
+theorem sos_list_any_iff_exists (p : IdealMembershipCert → Bool) :
+    ∀ (cs : List IdealMembershipCert), cs.any p = true ↔ ∃ c, c ∈ cs ∧ p c = true
+  | [] => by
+    constructor
+    · intro h; cases h
+    · rintro ⟨_, h, _⟩; cases h
+  | c :: cs => by
+    simp only [List.any_cons, Bool.or_eq_true, sos_list_any_iff_exists p cs, List.mem_cons]
+    constructor
+    · rintro (hc | ⟨c', hc', hp⟩)
+      · exact ⟨c, Or.inl rfl, hc⟩
+      · exact ⟨c', Or.inr hc', hp⟩
+    · rintro ⟨c', rfl | hc', hp⟩
+      · exact Or.inl hp
+      · exact Or.inr ⟨c', hc', hp⟩
+
+/-- Check ideal membership of $\mathcal{L}_f h_r$ in $\langle h_1, \dots, h_m \rangle$ using either
+the primary `w.tangencyCert` or any per-constraint witness in `w.tangencyCerts`. -/
+@[expose] def checkConstraintTangency (spec : DaeManifoldSpec) (w : DaeManifoldWitness) (h_r : Poly) : Bool :=
+  let lieH := lieDerivativePoly h_r spec.vectorField
+  checkIdealMembershipCert lieH spec.algConstraints w.tangencyCert ||
+  w.tangencyCerts.any (fun c => checkIdealMembershipCert lieH spec.algConstraints c)
+
 /-- Computable **Index-1 DAE Manifold Invariance & Regularity Checker** (`checkDaeManifold`):
 Verifies:
-1. $\delta_{\text{reg}} > 0$,
+1. **Symbolic Index-1 Jacobian Regularity** (`checkDaeIndex1Regularity`):
+   `spec.algJacobianDet` matches `computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars`,
+   $\delta_{\text{reg}} > 0$, and $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$ on $\mathcal{M}$
+   via `checkPsatzNonneg`, and
 2. **Algebraic Manifold Tangency**: for every constraint $h_r \in \text{algConstraints}$, its Lie
-   derivative $\mathcal{L}_f h_r$ is certified in $\langle h_1, \dots, h_m \rangle$ via `checkIdealMembershipCert`, and
-3. **Index-1 Jacobian Regularity**: $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$ on
-   $\mathcal{M}$ via `checkPsatzNonneg`. -/
-def checkDaeManifold (spec : DaeManifoldSpec) (w : DaeManifoldWitness) : Bool :=
-  let regGoal := Poly.sub (Poly.sqr spec.algJacobianDet) (polyConst spec.regDelta)
-  decide (0 < spec.regDelta) &&
-  spec.algConstraints.all (fun h_r =>
-    let lieH := lieDerivativePoly h_r spec.vectorField
-    checkIdealMembershipCert lieH spec.algConstraints w.tangencyCert) &&
-  checkPsatzNonneg regGoal spec.domainIneqs spec.algConstraints w.regularityCert
+   derivative $\mathcal{L}_f h_r$ is certified in $\langle h_1, \dots, h_m \rangle$ via `checkConstraintTangency`. -/
+@[expose] def checkDaeManifold (spec : DaeManifoldSpec) (w : DaeManifoldWitness) : Bool :=
+  spec.algConstraints.all (checkConstraintTangency spec w) &&
+  checkDaeIndex1Regularity spec w.regularityCert
 
 /-- **Theorem (`checkDaeManifold_sound`)**:
 Whenever `checkDaeManifold spec w = true`, for every state `env` on the algebraic constraint manifold
@@ -605,8 +683,9 @@ $\mathcal{M}$ (`∀ h ∈ spec.algConstraints, h.eval env = 0` and `∀ g ∈ sp
 1. **Exact Manifold Tangency**: for every algebraic constraint $h_r \in \text{spec.algConstraints}$,
    the Lie derivative vanishes identically on $\mathcal{M}$:
    `((lieDerivativePoly h_r spec.vectorField).eval env = 0)`,
-2. **Index-1 Jacobian Non-Singularity**:
-   `spec.regDelta ≤ (Poly.sqr spec.algJacobianDet).eval env` and `spec.algJacobianDet.eval env ≠ 0`! -/
+2. **Symbolic Jacobian Agreement & Index-1 Non-Singularity**:
+   `spec.algJacobianDet.eval env = (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval env`,
+   `spec.regDelta ≤ (Poly.sqr spec.algJacobianDet).eval env`, and `spec.algJacobianDet.eval env ≠ 0`! -/
 theorem checkDaeManifold_sound
     (spec : DaeManifoldSpec)
     (w : DaeManifoldWitness)
@@ -619,10 +698,11 @@ theorem checkDaeManifold_sound
       (lieDerivativePoly h_r spec.vectorField).eval env = 0) ∧
     spec.regDelta ≤ (Poly.sqr spec.algJacobianDet).eval env ∧
     spec.algJacobianDet.eval env ≠ 0 := by
-  unfold checkDaeManifold at hCheck
+  unfold checkDaeManifold checkDaeIndex1Regularity at hCheck
   dsimp only at hCheck
-  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨h12, hRegCert⟩
-  rcases (Bool.and_eq_true _ _).mp h12 with ⟨hDeltaB, hTangency⟩
+  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨hTangency, hRegAll⟩
+  rcases (Bool.and_eq_true _ _).mp hRegAll with ⟨hReg123, hRegCert⟩
+  rcases (Bool.and_eq_true _ _).mp hReg123 with ⟨_hReg12, hDeltaB⟩
   have hDelta : 0 < spec.regDelta := of_decide_eq_true hDeltaB
   rw [sos_list_all_iff_forall] at hTangency
   have hRegNonneg := checkPsatzNonneg_sound
@@ -637,9 +717,44 @@ theorem checkDaeManifold_sound
     grind
   refine ⟨hDelta, ?_, by grind, hDetNeZero⟩
   intro h_r hMem
-  have hIdeal := hTangency h_r hMem
-  exact checkIdealMembership_eval_sound
-    (lieDerivativePoly h_r spec.vectorField) spec.algConstraints w.tangencyCert hIdeal env hManifold
+  have hTang := hTangency h_r hMem
+  unfold checkConstraintTangency at hTang
+  dsimp only at hTang
+  rcases (Bool.or_eq_true _ _).mp hTang with hPrimary | hAny
+  · exact checkIdealMembership_eval_sound
+      (lieDerivativePoly h_r spec.vectorField) spec.algConstraints w.tangencyCert hPrimary env hManifold
+  · rw [sos_list_any_iff_exists] at hAny
+    rcases hAny with ⟨c, _hcMem, hcOk⟩
+    exact checkIdealMembership_eval_sound
+      (lieDerivativePoly h_r spec.vectorField) spec.algConstraints c hcOk env hManifold
+
+/-- **Theorem (`checkDaeManifold_symbolic_jacobian_sound`)**:
+Whenever `checkDaeManifold spec w = true`, the user-supplied `spec.algJacobianDet` evaluates
+identically to the symbolic Jacobian determinant `computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars`
+and is strictly non-zero across the manifold! -/
+theorem checkDaeManifold_symbolic_jacobian_sound
+    (spec : DaeManifoldSpec)
+    (w : DaeManifoldWitness)
+    (env : Nat → CanonicalRat)
+    (hCheck : checkDaeManifold spec w = true)
+    (hDom : ∀ g, g ∈ spec.domainIneqs → 0 ≤ g.eval env)
+    (hManifold : ∀ h, h ∈ spec.algConstraints → h.eval env = 0) :
+    spec.algJacobianDet.eval env =
+      (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval env ∧
+    (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval env ≠ 0 := by
+  have hMain := checkDaeManifold_sound spec w env hCheck hDom hManifold
+  unfold checkDaeManifold checkDaeIndex1Regularity at hCheck
+  dsimp only at hCheck
+  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨_, hRegAll⟩
+  rcases (Bool.and_eq_true _ _).mp hRegAll with ⟨hReg123, _⟩
+  rcases (Bool.and_eq_true _ _).mp hReg123 with ⟨hReg12, _⟩
+  rcases (Bool.and_eq_true _ _).mp hReg12 with ⟨_, hSymZero⟩
+  have hSub := Poly.eval_isZero env
+    (Poly.sub spec.algJacobianDet (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars)) hSymZero
+  rw [Poly.eval_sub] at hSub
+  have hEq : spec.algJacobianDet.eval env =
+      (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval env := by grind
+  exact ⟨hEq, by rw [← hEq]; exact hMain.2.2.2⟩
 
 /-! ## 6. Universal Judge & Format Registration (`"sos-lyapunov-cbf@1"`) -/
 
@@ -649,21 +764,21 @@ structure SosLyapunovProblem where
   lyapunov : SosLyapunovSpec
   cbf      : SosCbfSpec
   dae      : DaeManifoldSpec
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Unified certificate bundle for `"sos-lyapunov-cbf@1"`. -/
 structure SosLyapunovCert where
   lyapunovWitness : SosLyapunovWitness
   cbfWitness      : SosCbfWitness
   daeWitness      : DaeManifoldWitness
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Refusal clause for `sosLyapunovJudge`. -/
 inductive SosLyapunovClause where
   | lyapunovFailed
   | cbfFailed
   | daeManifoldFailed
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Independent semantic meaning of `SosLyapunovProblem`. -/
 def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
@@ -689,7 +804,7 @@ def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
      prob.dae.algJacobianDet.eval env ≠ 0)
 
 /-- Verdict checker for `sosLyapunovJudge`. -/
-def checkSosLyapunovProblem
+@[expose] def checkSosLyapunovProblem
     (_fuel : Nat)
     (prob : SosLyapunovProblem)
     (cert : SosLyapunovCert) : Judge.Verdict SosLyapunovClause :=
@@ -732,10 +847,11 @@ theorem checkSosLyapunovProblem_sound
         · intro env hDom hSafe
           exact checkSosCbf_sound prob.cbf cert.cbfWitness env hC hDom hSafe
         · have hDelta : 0 < prob.dae.regDelta := by
-            unfold checkDaeManifold at hD
+            unfold checkDaeManifold checkDaeIndex1Regularity at hD
             dsimp only at hD
-            rcases (Bool.and_eq_true _ _).mp hD with ⟨h12, _⟩
-            rcases (Bool.and_eq_true _ _).mp h12 with ⟨hDeltaB, _⟩
+            rcases (Bool.and_eq_true _ _).mp hD with ⟨_, hRegAll⟩
+            rcases (Bool.and_eq_true _ _).mp hRegAll with ⟨hReg123, _⟩
+            rcases (Bool.and_eq_true _ _).mp hReg123 with ⟨_, hDeltaB⟩
             exact of_decide_eq_true hDeltaB
           refine ⟨hDelta, ?_⟩
           intro env hDom hMan
@@ -757,24 +873,24 @@ instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
   complete := by rintro prob ⟨cert, r, h⟩ _; exact ⟨cert, r, h⟩
   mono := by intro r r' o c le hne; rfl
 
-/-! ## 7. Canonical Showcase Models: 2D Nonlinear Cubic Damping, Barrier Safety & Circle Pendulum DAE -/
+/-! ## 7. Canonical Showcase Models: 2D Nonlinear Cubic Damping, Barrier Safety & Index-1 DAE Manifold -/
 
 /-- Variable $x_0$ as `Poly`. -/
-def x0Poly : Poly := polyOfTerm [(0, 1)] 1
+@[expose] def x0Poly : Poly := polyOfTerm [(0, 1)] 1
 
 /-- Variable $x_1$ as `Poly`. -/
-def x1Poly : Poly := polyOfTerm [(1, 1)] 1
+@[expose] def x1Poly : Poly := polyOfTerm [(1, 1)] 1
 
 /-- 2D nonlinear cubic-damped oscillator vector field:
 $$\dot{x}_0 = -x_0 - x_0^3 + x_1, \qquad \dot{x}_1 = -x_0 - x_1 - x_1^3.$$ -/
-def goldenCubicVectorField2D : List Poly :=
+@[expose] def goldenCubicVectorField2D : List Poly :=
   [ Poly.add (Poly.neg x0Poly) (Poly.add (Poly.neg (Poly.mul x0Poly (Poly.sqr x0Poly))) x1Poly)
   , Poly.sub (Poly.neg x0Poly) (Poly.add x1Poly (Poly.mul x1Poly (Poly.sqr x1Poly))) ]
 
 /-- Candidate Lyapunov function $V(x_0, x_1) = x_0^2 + x_1^2$ with $\varepsilon = 1/2$, $\gamma = 2$:
 $$\mathcal{L}_f V = 2 x_0(-x_0 - x_0^3 + x_1) + 2 x_1(-x_0 - x_1 - x_1^3) = -2(x_0^2 + x_1^2) - 2(x_0^4 + x_1^4),$$
 so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$! -/
-def goldenLyapunovSpec2D : SosLyapunovSpec where
+@[expose] def goldenLyapunovSpec2D : SosLyapunovSpec where
   dim         := 2
   vectorField := goldenCubicVectorField2D
   domainIneqs := []
@@ -785,7 +901,7 @@ def goldenLyapunovSpec2D : SosLyapunovSpec where
 /-- SOS witness for `goldenLyapunovSpec2D`:
 * $V - \frac{1}{2}(x_0^2 + x_1^2) = \frac{1}{2} x_0^2 + \frac{1}{2} x_1^2$,
 * $-\mathcal{L}_f V - 2 V = 2 (x_0^2)^2 + 2 (x_1^2)^2$. -/
-def goldenLyapunovWitness2D : SosLyapunovWitness where
+@[expose] def goldenLyapunovWitness2D : SosLyapunovWitness where
   posDefCert :=
     { monoidIndices := []
     , sigma0        := { terms := [(CanonicalRat.mk 1 2, x0Poly), (CanonicalRat.mk 1 2, x1Poly)] }
@@ -802,7 +918,7 @@ def goldenLyapunovWitness2D : SosLyapunovWitness where
 * Unsafe set $u_{\text{unsafe}}(x) = x_0^2 + x_1^2 - 2 \ge 0$ (exterior of radius $\sqrt{2}$),
 * Class-$\mathcal{K}$ parameter $\alpha = 2$:
   $\mathcal{L}_f B + 2 B = 2(x_0^2 + x_1^2) + 2(1 - x_0^2 - x_1^2) = 2 \cdot 1^2 \ge 0$! -/
-def goldenCbfSpec2D : SosCbfSpec where
+@[expose] def goldenCbfSpec2D : SosCbfSpec where
   vectorField := [Poly.neg x0Poly, Poly.neg x1Poly]
   domainIneqs := []
   barrierB    := Poly.sub Poly.one (Poly.add (Poly.sqr x0Poly) (Poly.sqr x1Poly))
@@ -812,7 +928,7 @@ def goldenCbfSpec2D : SosCbfSpec where
 /-- SOS witness for `goldenCbfSpec2D`:
 * Stengle refutation: $1 + 1 \cdot B(x) + 1 \cdot u_{\text{unsafe}}(x) = 0$,
 * Nagumo invariance: $\mathcal{L}_f B + 2 B = 2 \cdot 1^2$. -/
-def goldenCbfWitness2D : SosCbfWitness where
+@[expose] def goldenCbfWitness2D : SosCbfWitness where
   unsafeRefuteCert :=
     { monoidIndices := []
     , sigma0        := { terms := [] }
@@ -824,40 +940,44 @@ def goldenCbfWitness2D : SosCbfWitness where
     , coneTerms     := []
     , idealTerms    := [] }
 
-/-- Index-1 DAE manifold specification on the unit circle $h_1(x_0, x_1) = x_0^2 + x_1^2 - 1 = 0$
-under orthogonal rotational flow $\dot{x}_0 = -x_1, \dot{x}_1 = x_0$:
-* $\mathcal{L}_f h_1 = 2 x_0(-x_1) + 2 x_1(x_0) = 0 \in \langle h_1 \rangle$,
-* Algebraic Jacobian determinant $\det J_{\text{alg}} = 2$, so $(\det J_{\text{alg}})^2 - 3 = 1^2 \ge 0$! -/
-def goldenCircleDaeSpec : DaeManifoldSpec where
-  vectorField    := [Poly.neg x1Poly, x0Poly]
+/-- Globally non-singular Index-1 DAE manifold specification on the parabolic constraint manifold
+$h_1(x_0, x_1) = x_0^2 + x_1 - 1 = 0$ ($x_1 = 1 - x_0^2$) with algebraic variable $x_1$ (`algVars := [1]`)
+under tangent flow $\dot{x}_0 = -x_0, \dot{x}_1 = 2 x_0^2$:
+* $\mathcal{L}_f h_1 = 2 x_0(-x_0) + 1 \cdot (2 x_0^2) = 0 \in \langle h_1 \rangle$,
+* Exact symbolic algebraic Jacobian $\frac{\partial h_1}{\partial x_1} = 1 = \text{Poly.one}$,
+  so $(\det J_{\text{alg}})^2 - \frac{1}{2} = \frac{1}{2} \cdot 1^2 \ge 0$ everywhere! -/
+@[expose] def goldenCircleDaeSpec : DaeManifoldSpec where
+  vectorField    := [Poly.neg x0Poly, Poly.scale 2 (Poly.sqr x0Poly)]
   domainIneqs    := []
-  algConstraints := [Poly.sub (Poly.add (Poly.sqr x0Poly) (Poly.sqr x1Poly)) Poly.one]
-  algJacobianDet := polyConst 2
-  regDelta       := 3
+  algConstraints := [Poly.sub (Poly.add (Poly.sqr x0Poly) x1Poly) Poly.one]
+  algVars        := [1]
+  algJacobianDet := Poly.one
+  regDelta       := CanonicalRat.mk 1 2
 
 /-- Witness for `goldenCircleDaeSpec`. -/
-def goldenCircleDaeWitness : DaeManifoldWitness where
-  tangencyCert := { quotients := [] }
+@[expose] def goldenCircleDaeWitness : DaeManifoldWitness where
+  tangencyCert  := { quotients := [] }
+  tangencyCerts := [{ quotients := [] }]
   regularityCert :=
     { monoidIndices := []
-    , sigma0        := { terms := [(1, Poly.one)] }
+    , sigma0        := { terms := [(CanonicalRat.mk 1 2, Poly.one)] }
     , coneTerms     := []
     , idealTerms    := [] }
 
 /-- Canonical problem bundle for `"sos-lyapunov-cbf@1"`. -/
-def goldenSosProblem : SosLyapunovProblem where
+@[expose] def goldenSosProblem : SosLyapunovProblem where
   lyapunov := goldenLyapunovSpec2D
   cbf      := goldenCbfSpec2D
   dae      := goldenCircleDaeSpec
 
 /-- Canonical valid certificate bundle for `"sos-lyapunov-cbf@1"`. -/
-def goldenSosCert : SosLyapunovCert where
+@[expose] def goldenSosCert : SosLyapunovCert where
   lyapunovWitness := goldenLyapunovWitness2D
   cbfWitness      := goldenCbfWitness2D
   daeWitness      := goldenCircleDaeWitness
 
 /-- Planted bad certificate bundle for `"sos-lyapunov-cbf@1"` (empty SOS witness for $V - \varepsilon\|x\|^2$). -/
-def badSosCert : SosLyapunovCert where
+@[expose] def badSosCert : SosLyapunovCert where
   lyapunovWitness :=
     { goldenLyapunovWitness2D with
       posDefCert := { monoidIndices := [], sigma0 := { terms := [] }, coneTerms := [], idealTerms := [] } }
@@ -870,7 +990,7 @@ theorem sosLyapunov_bad_refused :
   decide +kernel
 
 /-- Decode a `CanonicalRat` from a JSON integer or `{"num": n, "den": d}` object. -/
-def decodeRatJson (j : Lean.Json) : Except String CanonicalRat :=
+@[expose] def decodeRatJson (j : Lean.Json) : Except String CanonicalRat :=
   match j.getInt? with
   | .ok n => .ok (CanonicalRat.mk n 1)
   | .error _ =>
@@ -881,7 +1001,7 @@ def decodeRatJson (j : Lean.Json) : Except String CanonicalRat :=
     | _, _ => .error "invalid rational JSON: expected integer or {num, den}"
 
 /-- Decode optional polynomial monomials from a JSON array of `{"var": v, "exp": e, "coeff": c}` objects. -/
-def decodePolyTermsJson (arr : List Lean.Json) : Except String Poly :=
+@[expose] def decodePolyTermsJson (arr : List Lean.Json) : Except String Poly :=
   arr.foldlM (fun acc item =>
     match item.getObjValAs? Nat "var", item.getObjValAs? Nat "exp", item.getObjValAs? Int "coeff" with
     | .ok v, .ok e, .ok c =>
@@ -890,7 +1010,7 @@ def decodePolyTermsJson (arr : List Lean.Json) : Except String Poly :=
   ) Poly.zero
 
 /-- Wire decoder for `SosLyapunovProblem` supporting canonical aliases and structured JSON payloads. -/
-def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
+@[expose] def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
   if decide (s = "golden-cubic-cbf-dae") then
     .ok goldenSosProblem
   else if decide (s = "{}" ∨ s = "") then
@@ -944,31 +1064,86 @@ def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
       | _, _, _, _, _, _ =>
         .error "invalid SosLyapunovProblem JSON: missing required fields (kind, dim, epsilon, gamma, alpha, deltaReg)"
 
-/-- Wire decoder for `SosLyapunovCert` supporting canonical aliases and structured JSON payloads. -/
-def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
-  if decide (s = "valid-sos-cert") then
+/-- Build an `SosLyapunovCert` from a parsed list of positive `sigma0Coeffs`. -/
+@[expose] def buildSosCertFromCoeffs (coeffs : List Int) : SosLyapunovCert :=
+  let parsedLieTerms : List (CanonicalRat × Poly) :=
+    coeffs.zipIdx.map fun (c, idx) =>
+      (CanonicalRat.mk c 1, Poly.sqr (polyOfTerm [(idx, 1)] 1))
+  { lyapunovWitness :=
+      { goldenLyapunovWitness2D with
+        lieDecayCert :=
+          { goldenLyapunovWitness2D.lieDecayCert with
+            sigma0 := { terms := parsedLieTerms } } }
+  , cbfWitness := goldenCbfWitness2D
+  , daeWitness := goldenCircleDaeWitness }
+
+/-- Kernel-reducible parser for positive integer bracket lists `[c_0, c_1, ...]` from `List Char`. -/
+@[expose] def parsePosIntBracketChars : List Char → Nat → Bool → List Int → Option (List Int)
+  | [], _, false, _ => none
+  | [], acc, true, rev =>
+    if acc == 0 then none else some ((Int.ofNat acc :: rev).reverse)
+  | ']' :: _, _, false, rev =>
+    if rev.isEmpty then none else some rev.reverse
+  | ']' :: _, acc, true, rev =>
+    if acc == 0 then none else some ((Int.ofNat acc :: rev).reverse)
+  | ',' :: rest, acc, true, rev =>
+    if acc == 0 then none else parsePosIntBracketChars rest 0 false (Int.ofNat acc :: rev)
+  | ' ' :: rest, acc, hasDigit, rev =>
+    parsePosIntBracketChars rest acc hasDigit rev
+  | c :: rest, acc, _, rev =>
+    if '0' ≤ c && c ≤ '9' then
+      parsePosIntBracketChars rest (acc * 10 + (c.toNat - '0'.toNat)) true rev
+    else
+      none
+
+/-- Kernel-reducible scan for `"sigma0Coeffs":[...]` in a canonical `SosLyapunovCert` JSON string. -/
+@[expose] def findSigma0CoeffsBracket : List Char → Option (List Int)
+  | [] => none
+  | '"' :: 's' :: 'i' :: 'g' :: 'm' :: 'a' :: '0' :: 'C' :: 'o' :: 'e' :: 'f' :: 'f' :: 's' :: '"' :: ':' :: '[' :: rest =>
+    parsePosIntBracketChars rest 0 false []
+  | _ :: rest => findSigma0CoeffsBracket rest
+
+/-- Wire decoder for `SosLyapunovCert`:
+* Falls back to `goldenSosCert` only when the payload explicitly requests preset `"golden-cubic-cbf-dae"`
+  or `"valid-sos-cert"`,
+* For structured JSON payloads, parses the actual `sigma0Coeffs` array into `lieDecayCert.sigma0.terms`,
+  so forged/mismatched coefficients never silently swap in `goldenSosCert`! -/
+@[expose] def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
+  if decide (s = "golden-cubic-cbf-dae" ∨ s = "valid-sos-cert") then
     .ok goldenSosCert
   else if decide (s = "bad-sos-cert") then
     .ok badSosCert
   else if decide (s = "{}" ∨ s = "") then
     .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
   else
-    match Lean.Json.parse s with
-    | .error err => .error s!"invalid SosLyapunovCert JSON: {err}"
-    | .ok j =>
-      match j.getObjValAs? String "kind", j.getObjValAs? (Array Int) "sigma0Coeffs" with
-      | .ok kind, .ok coeffs =>
-        if !(kind == "lyapunov" || kind == "cbf" || kind == "dae" || kind == "sos-lyapunov-cbf") then
-          .error s!"invalid SosLyapunovCert JSON: unsupported kind '{kind}'"
-        else if coeffs.isEmpty || coeffs.any (fun c => c ≤ 0) then
-          .error "invalid SosLyapunovCert JSON: sigma0Coeffs must be non-empty and strictly positive"
-        else
-          .ok goldenSosCert
-      | _, _ =>
-        .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
+    match s.toList with
+    | '{' :: '"' :: 'k' :: 'i' :: 'n' :: 'd' :: '"' :: ':' :: '"' :: 's' :: 'o' :: 's' :: '-' ::
+      'l' :: 'y' :: 'a' :: 'p' :: 'u' :: 'n' :: 'o' :: 'v' :: '-' :: 'c' :: 'b' :: 'f' :: '"' :: ',' :: rest =>
+      match findSigma0CoeffsBracket rest with
+      | some coeffs => .ok (buildSosCertFromCoeffs coeffs)
+      | none => .error "invalid SosLyapunovCert JSON: sigma0Coeffs must be non-empty and strictly positive"
+    | _ =>
+      match Lean.Json.parse s with
+      | .error err => .error s!"invalid SosLyapunovCert JSON: {err}"
+      | .ok j =>
+        match j.getObjValAs? String "preset" with
+        | .ok presetName =>
+          if presetName == "golden-cubic-cbf-dae" then .ok goldenSosCert
+          else .error s!"invalid SosLyapunovCert JSON: unknown preset '{presetName}'"
+        | .error _ =>
+          match j.getObjValAs? String "kind", j.getObjValAs? (Array Int) "sigma0Coeffs" with
+          | .ok kind, .ok coeffs =>
+            if !(kind == "lyapunov" || kind == "cbf" || kind == "dae" || kind == "sos-lyapunov-cbf") then
+              .error s!"invalid SosLyapunovCert JSON: unsupported kind '{kind}'"
+            else if coeffs.isEmpty || coeffs.any (fun c => c ≤ 0) then
+              .error "invalid SosLyapunovCert JSON: sigma0Coeffs must be non-empty and strictly positive"
+            else
+              .ok (buildSosCertFromCoeffs coeffs.toList)
+          | _, _ =>
+            .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
 
 /-- Registered `Obend.Judge.Format` for `"sos-lyapunov-cbf@1"`. -/
-def sosLyapunovFormat : Format where
+@[expose] def sosLyapunovFormat : Format where
   name        := "sos-lyapunov-cbf"
   version     := "1"
   Obj         := SosLyapunovProblem
@@ -1003,7 +1178,7 @@ theorem sosLyapunovFormat_refuses_empty_json :
 
 /-- **Theorem (`sos_lyapunov_cbf_dae_showcase_sound`)**:
 Verifies that the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier Function certificate,
-Index-1 circle manifold DAE certificate, and unified `"sos-lyapunov-cbf@1"` judge all pass! -/
+Index-1 algebraic manifold DAE certificate, and unified `"sos-lyapunov-cbf@1"` judge all pass! -/
 -- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean
 theorem sos_lyapunov_cbf_dae_showcase_sound :
     checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
