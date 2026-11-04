@@ -11,9 +11,12 @@ output (the erased term of a package, `Spec.FrontEnd`): nothing here is trusted.
   that field read off the knot (`knotValue`): the `$globals` knot is substituted by the reduction,
   so the code is closed.
 * The object a claim is judged of is reached by reducing an entry of the program until a
-  `fix (compose …) {seed}` stands at the head (`findObject`); its operands, knot references, are
-  reduced to their layers (`decodeProgram`), and `object_bequiv_of_operands` is what makes a fact
-  about the decoded composition a fact about the program's own object.
+  `fix (compose …) seed` stands at the head (`findObject`); its operands, knot references, are
+  reduced to their layers, and its seed, a record literal or a term that runs to one (`seedMill()`,
+  a `def` of the program), to its record (`decodeProgram`). `object_bequiv_of_operands` (a literal
+  seed) and `object_bequiv_of_operands_seed` (a seed that reduces) are what make a fact about the
+  decoded composition a fact about the program's own object. Before 2026-11-04 only a literal seed
+  was read, and no claim of a program whose seed was a `def` could be reached.
 * Producers: `derive`, a rewriter that alternates weak-head runs with late binding at the head of
   the left side; `groundAt` instances for the ground judge.
 -/
@@ -62,10 +65,31 @@ def decodeOperands : Nat → Term → Option (Layer × List Layer)
     pure ({ L with composeMeta := md }, top :: below)
   | _ + 1, t => ((Obend.Law.run readFuel t).bind decodeLayer).map fun L => (L, [])
 
-/-- The program's object as a composition: `fix (compose …) {seed}`, operands reduced. -/
+/-- The seed of a `fix`, as a record: the literal, or what the term runs to when it is a record
+(a seed written as a `def` call, `fix(Spec, seedMill())`). -/
+def seedRecord : Term → Option (List (String × Term))
+  | .record seed => some seed
+  | t => match Obend.Law.run readFuel t with
+    | some (.record seed) => some seed
+    | _ => none
+
+/-- The program's object as a composition: `fix (compose …) seed`, operands reduced, the seed
+reduced to its record (`seedRecord`; the seed is run only once the operands decode). -/
 def decodeProgram : Term → Option Composition
-  | .fix S (.record seed) => (decodeOperands 64 S).map fun (top, below) => ⟨top, below, seed⟩
+  | .fix S seed =>
+    (decodeOperands 64 S).bind fun (top, below) =>
+      (seedRecord seed).map fun seed => ⟨top, below, seed⟩
   | _ => none
+
+/-- **The program's object is the decoded composition's, for a seed that reduces.** As
+`object_bequiv_of_operands`, with the seed a term that steps to the record the composition
+holds (`Obend.Law.run_sound` gives the steps for a seed `seedRecord` read). -/
+theorem object_bequiv_of_operands_seed (C : Composition) (op : Layer → Term) (seed : Term)
+    (h : ∀ L, Steps (op L) L.term) (hs : Steps seed (.record C.seed)) :
+    Obend.Equiv.BEquiv (.fix (composeWith op C.top C.below) seed) C.object :=
+  Obend.Equiv.bequiv_of_ahead
+    (.fix (ahead_composeWith (fun L => Obend.Equiv.Ahead.ofStepsRefl (h L)) C.top C.below)
+      (Obend.Equiv.Ahead.ofStepsRefl hs))
 
 /-- The `fix` at the head of a term that `want` accepts, if one stands there. -/
 def headFix (want : Composition → Bool) : Nat → Term → Option Composition
