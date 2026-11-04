@@ -2,7 +2,7 @@
 name = "obend-node"
 version = "0.1.0"
 edition = "2021"
-description = "Live multi-node runner binding symbolic Simplex BFT, Fog-of-War Merkle multiproofs, and drex-clearing@1 primal-dual LP solving to concrete cryptography and Obend FFI"
+description = "In-process simulator of the Obend consensus, vault and clearing theorems: N simulated validators in one process over loopback, driven against the Lean session; not a deployable validator"
 license = "Apache-2.0"
 
 [dependencies]

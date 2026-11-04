@@ -1,17 +1,29 @@
-//! `obend-node::net` — Multi-Validator Networked `Simplex` BFT Daemon & Sandboxed `Grain` Execution (`WS 32`)
+//! `obend-node::net` — the in-process multi-validator SIMULATION over loopback sockets
 //!
-//! Upgrades `obend-node` into a real multi-validator networked cluster over OS loopback sockets
-//! (`127.0.0.1:0` ephemeral TCP and UDP ports) with:
-//! - Wire-serialized, Ed25519-signed, and `cSHAKE256` domain-separated `PropCert`, `SkipCert`,
-//!   `FinCert`, and `SlashingReceipt` (`EquivocationSlashReceipt`) consensus messages.
+//! N simulated validators in one process (`127.0.0.1:0` ephemeral TCP and UDP ports), with:
+//! - Wire-serialized (JSON, ember's 2026-11-02 call), `SimulatorKeypair`-signed, `cSHAKE256`
+//!   domain-separated `PropCert`, `SkipCert`, `FinCert`, and `SlashingReceipt`
+//!   (`EquivocationSlashReceipt`) consensus messages.
+//! - The protocol is ONE-ROUND: a validator casts its `Finalize` vote on a valid leader proposal
+//!   for its current view and the next height on its committed tip; a `FinCert` is 2f+1 such
+//!   votes. Same-view agreement is `Obend.Consensus.Simplex.qc_same_view_unique` (honest nodes
+//!   vote once per view). Across views it relies on two executable rules, not on a theorem: a
+//!   validator never votes outside its current view, and never skips a view it finalize-voted in
+//!   (`DurableNodeWal::check_can_vote_inner`), so a view ends in a `FinCert` or a `SkipCert`,
+//!   never both. This is not Chan-Pass Simplex (no notarize phase); see
+//!   `DEOS-CONTRACTS-CONSENSUS.md` §5.2. View timeouts are driven by the harness
+//!   (`SimplexCluster::run_view_skip`), not by node timers.
+//! - `DurableNodeWal` is an in-memory model of `Obend.Run.Durable`: `simulate_crash` clears the
+//!   volatile fields and `recover_from_wal` replays the in-memory journal. Nothing touches disk.
 //! - 4-Tier Finality Routing:
 //!   - Tier 0 (`Speculative`): Local uncommitted proposal.
 //!   - Tier 1 (`AttestedFastPath`): Disjoint `VaultTurn` fast-path (`disjoint_turns_commute`)
 //!     committing immediately with a single quorum acknowledgement without waiting for a full
 //!     `Simplex` block height.
 //!   - Tier 2 (`QuorumFinal`): Contended `Simplex` BFT consensus + automated per-epoch
-//!     `solve_drex_batch` primal-dual LP clearing verified via `DrexClearingCertificate::verify_with_kernel`
-//!     (`ObendSession` FFI) and `FogOfWar` Merkle state root updates.
+//!     `solve_drex_batch` primal-dual LP clearing checked by the Rust mirror judge
+//!     (`DrexClearingCertificate::verify_with_kernel`) and, where a session is stepped, by the
+//!     Lean judge through a woven `drex-clearing@1` witness; `FogOfWar` Merkle state root updates.
 //!   - Tier 3 (`Collapsed`): `Fold::collapse` epoch checkpointing compressing finalized multi-height
 //!     epoch chains into a single `CollapsedEpochReceipt` binding initial and final state roots and
 //!     cumulative clearing conservation.
@@ -19,6 +31,10 @@
 //!   `GrainConfig`, and `SandboxRunner` (`BubblewrapRunner`, `ConfinementPolicy`, `LaunchGate`,
 //!   `CpuMeter`) to enforce capability and slot confinement before turn admission.
 
+use crate::judge_witness::{
+    verify_all_turn_witnesses, JudgeWitnessError, TurnJudgeWitness, WorldCarryCellSpec,
+    WorldCarryCert, WorldCarryObject,
+};
 use crate::silicon_bridge::{
     derive_icap_frame_word, DatedSiliconReceipt, FpgaHalError, IcapDprSwapReceipt,
     NodeSiliconAccelerator, SiliconSlotGuardError, SiliconTelemetry,
@@ -27,7 +43,7 @@ use crate::{
     cshake256_domain, merkle_root_from_leaves, net_flow, select_epistemic_winner,
     solve_primal_dual_clearing, BlindedVaultMultiProof, DrexClearingCertificate,
     EquivocationSlashReceipt, FinCert, IpcAuth, LimitOrder, PropCert, SignedSimplexVote,
-    SimplexVoteKind, SkipCert, ValidatorKeypair, VaultCellRecord, VerifiableRaceCandidate,
+    SimplexVoteKind, SkipCert, SimulatorKeypair, VaultCellRecord, VerifiableRaceCandidate,
 };
 use obend_ffi::error::ObendError;
 use obend_ffi::session::ObendSession;
@@ -136,6 +152,8 @@ pub enum NodeError {
     Sandbox(#[from] SandboxViolation),
     #[error("durable WAL / outbox error: {0}")]
     Wal(#[from] ExposedOnceError),
+    #[error("turn judge witness verification failed: {0}")]
+    InvalidTurnWitness(#[from] JudgeWitnessError),
     #[error("FFI kernel error: {0}")]
     Ffi(#[from] ObendError),
     #[error("FPGA HAL error: {0}")]
@@ -180,7 +198,8 @@ impl FinalityTier {
 // 2. `VaultTurn` Footprints & Tier 1 `disjoint_turns_commute` (`Obend.Vault.Hyperedge`)
 // ============================================================================
 
-/// Multi-slot wide-pullback turn structure with explicit read and write slot footprints.
+/// Multi-slot wide-pullback turn structure with explicit read and write slot footprints
+/// and cited kernel judge witnesses (`Obend.Vault.Hyperedge.VaultTurn.witnesses`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultTurn {
     pub turn_id: [u8; 32],
@@ -191,6 +210,8 @@ pub struct VaultTurn {
     pub cost: u64,
     pub epoch: u64,
     pub method: u64,
+    #[serde(default)]
+    pub witnesses: Vec<TurnJudgeWitness>,
 }
 
 impl VaultTurn {
@@ -216,6 +237,7 @@ impl VaultTurn {
             cost: 1,
             epoch: 1,
             method: 0,
+            witnesses: Vec::new(),
         }
     }
 
@@ -231,6 +253,17 @@ impl VaultTurn {
         self.epoch = epoch;
         self.method = method;
         self
+    }
+
+    /// Attach explicit `TurnJudgeWitness` certificates to this turn (`VaultTurn.witnesses`).
+    pub fn with_witnesses(mut self, witnesses: Vec<TurnJudgeWitness>) -> Self {
+        self.witnesses = witnesses;
+        self
+    }
+
+    /// Fail-closed check of every cited `TurnJudgeWitness` on this turn (`VaultTurn.ValidAt`).
+    pub fn verify_witnesses(&self) -> Result<(), JudgeWitnessError> {
+        verify_all_turn_witnesses(&self.witnesses)
     }
 
     /// Read slot footprint (`VaultTurn.readFootprint`).
@@ -271,14 +304,19 @@ impl VaultTurn {
         false
     }
 
-    /// Domain-separated `cSHAKE256` commitment digest of this `VaultTurn`.
+    /// Domain-separated `cSHAKE256` commitment digest of this `VaultTurn` (including `witnesses`).
     pub fn digest(&self) -> [u8; 32] {
+        // Every variable-length field is length-prefixed: without the prefix on `agent`, the
+        // turn `{agent: "x", method: 0, read_slots: [5]}` and `{agent: "x\0\0\0\0\0\0\0\0",
+        // method: 5, read_slots: []}` had one digest, so acks for one validated the other.
         let mut meta = Vec::new();
         meta.extend_from_slice(&self.turn_id);
+        meta.extend_from_slice(&(self.agent.len() as u64).to_be_bytes());
         meta.extend_from_slice(self.agent.as_bytes());
         meta.extend_from_slice(&self.cost.to_be_bytes());
         meta.extend_from_slice(&self.epoch.to_be_bytes());
         meta.extend_from_slice(&self.method.to_be_bytes());
+        meta.extend_from_slice(&(self.read_slots.len() as u64).to_be_bytes());
         for &r in &self.read_slots {
             meta.extend_from_slice(&r.to_be_bytes());
         }
@@ -287,6 +325,13 @@ impl VaultTurn {
             writes.extend_from_slice(&slot_id.to_be_bytes());
             writes.extend_from_slice(&(content.len() as u64).to_be_bytes());
             writes.extend_from_slice(content);
+        }
+        if !self.witnesses.is_empty() {
+            writes.extend_from_slice(b"OBEND-TURN-WITNESSES-V1");
+            writes.extend_from_slice(&(self.witnesses.len() as u64).to_be_bytes());
+            for w in &self.witnesses {
+                writes.extend_from_slice(&w.digest());
+            }
         }
         cshake256_domain(b"obend.vault.turn", &meta, &writes)
     }
@@ -353,7 +398,7 @@ pub fn verify_turns_commute_on_vault(
     order_12 == order_21 && merkle_root_from_leaves(&leaves_12) == merkle_root_from_leaves(&leaves_21)
 }
 
-/// Validator Ed25519 acknowledgement for a Tier 1 Disjoint Fast-Path turn.
+/// Validator acknowledgement (simulator signature, `SimulatorKeypair`) for a Tier 1 Disjoint Fast-Path turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedFastPathAck {
     pub voter_id: usize,
@@ -364,13 +409,20 @@ pub struct SignedFastPathAck {
 }
 
 impl SignedFastPathAck {
-    pub fn canonical_bytes(turn_id: &[u8; 32], turn_digest: &[u8; 32]) -> [u8; 32] {
-        cshake256_domain(b"obend.fastpath.ack", turn_id, turn_digest)
+    pub fn canonical_bytes(
+        voter_id: usize,
+        turn_id: &[u8; 32],
+        turn_digest: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut left = Vec::with_capacity(8 + 32);
+        left.extend_from_slice(&(voter_id as u64).to_be_bytes());
+        left.extend_from_slice(turn_id);
+        cshake256_domain(b"obend.fastpath.ack", &left, turn_digest)
     }
 
-    pub fn new(kp: &ValidatorKeypair, turn: &VaultTurn) -> Self {
+    pub fn new(kp: &SimulatorKeypair, turn: &VaultTurn) -> Self {
         let turn_digest = turn.digest();
-        let msg = Self::canonical_bytes(&turn.turn_id, &turn_digest);
+        let msg = Self::canonical_bytes(kp.node_id, &turn.turn_id, &turn_digest);
         let sig = kp.sign(&msg);
         Self {
             voter_id: kp.node_id,
@@ -387,8 +439,8 @@ impl SignedFastPathAck {
         }
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&self.signature);
-        let msg = Self::canonical_bytes(&self.turn_id, &self.turn_digest);
-        ValidatorKeypair::verify(&self.public_key, &msg, &sig)
+        let msg = Self::canonical_bytes(self.voter_id, &self.turn_id, &self.turn_digest);
+        SimulatorKeypair::verify(&self.public_key, &msg, &sig)
     }
 }
 
@@ -409,6 +461,7 @@ impl FastPathCert {
         if self.tier != FinalityTier::AttestedFastPath
             || self.turn.digest() != self.turn_digest
             || self.turn.has_duplicate_write_slots()
+            || self.turn.verify_witnesses().is_err()
         {
             return false;
         }
@@ -421,6 +474,27 @@ impl FastPathCert {
             {
                 return false;
             }
+        }
+        seen.len() >= quorum_size
+    }
+
+    pub fn verify_with_committee(
+        &self,
+        quorum_size: usize,
+        committee_pks: &[[u8; 32]],
+    ) -> bool {
+        if !self.verify(quorum_size) {
+            return false;
+        }
+        let mut seen = BTreeSet::new();
+        for ack in &self.acks {
+            let Some(expected_pk) = committee_pks.get(ack.voter_id) else {
+                return false;
+            };
+            if &ack.public_key != expected_pk {
+                return false;
+            }
+            seen.insert(ack.voter_id);
         }
         seen.len() >= quorum_size
     }
@@ -637,8 +711,20 @@ impl Powerbox {
             term,
             allowed_methods,
         );
-        debug_assert!(child.attenuates(parent));
+        if !child.attenuates(parent) {
+            return Err(SandboxViolation::MissingCapability {
+                agent: child_holder.to_string(),
+                required: IpcAuth::Grant,
+            });
+        }
         self.grant_mandate(child.clone())?;
+        // Authority is conserved: what the child may spend, the parent can no longer spend.
+        // (Before 2026-11-04 a parent with 100 could delegate 100 to each of any number of
+        // children.)
+        *self
+            .spent_budget
+            .entry(parent_holder.to_string())
+            .or_insert(0) += clamped_quota;
         Ok(child)
     }
 
@@ -883,6 +969,42 @@ impl BlockPayload {
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("BlockPayload serializes to JSON")
     }
+
+    /// Compute the canonical domain-separated `Simplex` block hash, binding `pre_block_fast_path_turns` digests when present.
+    pub fn block_hash(
+        &self,
+        parent_hash: [u8; 32],
+        pre_block_fast_path_turns: &[VaultTurn],
+    ) -> [u8; 32] {
+        let base_hash = cshake256_domain(
+            b"obend.simplex.block",
+            &[
+                &self.view.to_be_bytes()[..],
+                &self.height.to_be_bytes()[..],
+                &parent_hash[..],
+            ]
+            .concat(),
+            &self.to_bytes(),
+        );
+        if pre_block_fast_path_turns.is_empty() {
+            base_hash
+        } else {
+            let fp_leaves: Vec<[u8; 32]> = pre_block_fast_path_turns
+                .iter()
+                .map(|t| t.digest())
+                .collect();
+            let fp_root = merkle_root_from_leaves(&fp_leaves);
+            cshake256_domain(b"obend.simplex.block.fp", &base_hash, &fp_root)
+        }
+    }
+
+    /// Fail-closed check of every cited `TurnJudgeWitness` across all turns in this block payload.
+    pub fn verify_turn_witnesses(&self) -> Result<(), JudgeWitnessError> {
+        for turn in &self.turns {
+            turn.verify_witnesses()?;
+        }
+        Ok(())
+    }
 }
 
 /// Finalized block record produced at each `Simplex` BFT height upon reaching `FinCert` quorum.
@@ -933,6 +1055,10 @@ pub struct CollapsedEpochReceipt {
     pub clearing_conserved: bool,
     pub collapsed_root: [u8; 32],
     pub ffi_verified: bool,
+    /// The Lean session's receipt for `collapsed_root` (`ObendSession::commit_payload`);
+    /// `verify` re-commits the root and requires the same receipt.
+    #[serde(default)]
+    pub kernel_receipt: Vec<u8>,
     pub tier: FinalityTier,
 }
 
@@ -985,9 +1111,7 @@ impl CollapsedEpochReceipt {
             return Ok(false);
         }
         let _guard = FFI_KERNEL_LOCK.lock().unwrap();
-        let tid = session.propose_turn(&self.collapsed_root)?;
-        session.commit_turn(&tid)?;
-        session.verify_receipt(&self.collapsed_root)
+        crate::kernel_receipt_check(session, &self.collapsed_root, &self.kernel_receipt)
     }
 }
 
@@ -1019,12 +1143,32 @@ impl Fold {
         }
         let max_voter_id = blocks
             .iter()
-            .flat_map(|b| b.fin_cert.votes.iter().map(|v| v.voter_id))
+            .flat_map(|b| {
+                b.fin_cert
+                    .votes
+                    .iter()
+                    .map(|v| v.voter_id)
+                    .chain(b.prop_cert.iter().map(|p| p.leader_vote.voter_id))
+            })
             .max()
             .unwrap_or(0);
         let mut epoch_committee_pks = vec![[0u8; 32]; max_voter_id + 1];
         let mut seen_voter_pk: BTreeMap<usize, [u8; 32]> = BTreeMap::new();
         for blk in blocks {
+            if let Some(prop) = &blk.prop_cert {
+                let lv = &prop.leader_vote;
+                if let Some(&prev_pk) = seen_voter_pk.get(&lv.voter_id) {
+                    if prev_pk != lv.public_key {
+                        return Err(NodeError::ConsensusVerification(format!(
+                            "conflicting public keys for voter_id {} across epoch blocks",
+                            lv.voter_id
+                        )));
+                    }
+                } else {
+                    seen_voter_pk.insert(lv.voter_id, lv.public_key);
+                    epoch_committee_pks[lv.voter_id] = lv.public_key;
+                }
+            }
             for v in &blk.fin_cert.votes {
                 if let Some(&prev_pk) = seen_voter_pk.get(&v.voter_id) {
                     if prev_pk != v.public_key {
@@ -1039,13 +1183,17 @@ impl Fold {
                 }
             }
         }
+        let committee_size = epoch_committee_pks.len().max(seen_voter_pk.len());
+        let quorum_threshold = ((committee_size * 2) / 3 + 1).max(2);
         for blk in blocks {
             if blk.fin_cert.block_hash != blk.block_hash
-                || !blk.fin_cert.verify(1, &epoch_committee_pks)
+                || !blk
+                    .fin_cert
+                    .verify(quorum_threshold, &epoch_committee_pks)
             {
                 return Err(NodeError::ConsensusVerification(format!(
-                    "block at height {} has invalid FinCert",
-                    blk.height
+                    "block at height {} has invalid FinCert (required quorum_threshold = {})",
+                    blk.height, quorum_threshold
                 )));
             }
         }
@@ -1165,11 +1313,11 @@ impl Fold {
             cumulative_clearing_volume,
         );
 
-        let ffi_verified = {
+        let (kernel_receipt, ffi_verified) = {
             let _guard = FFI_KERNEL_LOCK.lock().unwrap();
-            let tid = session.propose_turn(&collapsed_root)?;
-            session.commit_turn(&tid)?;
-            session.verify_receipt(&collapsed_root)?
+            let receipt = session.commit_payload(&collapsed_root)?;
+            let ok = session.verify_receipt(&receipt)?;
+            (receipt, ok)
         };
 
         Ok(CollapsedEpochReceipt {
@@ -1189,6 +1337,7 @@ impl Fold {
             clearing_conserved,
             collapsed_root,
             ffi_verified,
+            kernel_receipt,
             tier: FinalityTier::Collapsed,
         })
     }
@@ -1258,7 +1407,7 @@ pub enum ConsensusNetMessage {
     FastPathCommit(FastPathCert),
 }
 
-/// Authenticated wire frame carrying a `cSHAKE256` domain-separated digest and `Ed25519` signature.
+/// Authenticated wire frame carrying a `cSHAKE256` domain-separated digest and a `SimulatorKeypair` signature (not Ed25519).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireEnvelope {
     pub magic: [u8; 4],
@@ -1274,7 +1423,7 @@ impl WireEnvelope {
     pub const MAGIC: [u8; 4] = *b"OBND";
     pub const VERSION: u8 = 1;
 
-    pub fn create(kp: &ValidatorKeypair, payload: ConsensusNetMessage) -> Self {
+    pub fn create(kp: &SimulatorKeypair, payload: ConsensusNetMessage) -> Self {
         let payload_bytes = serde_json::to_vec(&payload).expect("serialize ConsensusNetMessage");
         let payload_digest = cshake256_domain(
             b"obend.net.wire",
@@ -1319,7 +1468,7 @@ impl WireEnvelope {
         }
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&self.signature);
-        ValidatorKeypair::verify(&self.sender_pk, &self.payload_digest, &sig)
+        SimulatorKeypair::verify(&self.sender_pk, &self.payload_digest, &sig)
     }
 }
 
@@ -1349,6 +1498,9 @@ impl From<OutboxReceiptId> for u64 {
     }
 }
 
+/// Accountable equivocation slashing receipt type alias (`EquivocationSlashReceipt`).
+pub type EquivocationReceipt = SlashingReceipt;
+
 /// Write-Ahead Log entry recorded before consensus messages or dispatch effects are exposed (`Obend.Run.Durable`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WalEntry {
@@ -1362,6 +1514,8 @@ pub enum WalEntry {
     SkipCertified(SkipCert),
     /// Tier 3 collapsed epoch receipt (`CollapsedEpochReceipt`).
     EpochCollapsed(CollapsedEpochReceipt),
+    /// Accountable Byzantine equivocation slashing receipt (`EquivocationReceipt`).
+    ValidatorSlashed(EquivocationReceipt),
     /// Accepted dispatch effect (`Obend.Run.Durable.JEvent.dispatch`) with optional one-use token ID.
     DispatchEffect {
         turn: VaultTurn,
@@ -1411,6 +1565,9 @@ pub struct DurableNodeWal {
     pub replayed_skip_certs: Vec<SkipCert>,
     /// Volatile in-memory Tier 3 `CollapsedEpochReceipt`s replayed from the journal.
     pub replayed_epochs: Vec<CollapsedEpochReceipt>,
+    /// Volatile in-memory Byzantine equivocation slashing receipts replayed from the journal.
+    #[serde(default)]
+    pub replayed_slashed: Vec<EquivocationReceipt>,
     /// Volatile in-memory map of `token_id -> journal_pos` enforcing `journal_once` / `exposed_once`.
     pub consumed_tokens: BTreeMap<u64, u64>,
     /// Volatile in-memory DPR bitstream upgrade epochs replayed from the journal.
@@ -1448,6 +1605,7 @@ impl DurableNodeWal {
             replayed_fast_path: Vec::new(),
             replayed_skip_certs: Vec::new(),
             replayed_epochs: Vec::new(),
+            replayed_slashed: Vec::new(),
             consumed_tokens: BTreeMap::new(),
             replayed_dpr_upgrades: Vec::new(),
         }
@@ -1505,6 +1663,15 @@ impl DurableNodeWal {
                     .any(|r| r.epoch_id == receipt.epoch_id)
                 {
                     self.replayed_epochs.push(receipt.clone());
+                }
+            }
+            WalEntry::ValidatorSlashed(receipt) => {
+                if !self
+                    .replayed_slashed
+                    .iter()
+                    .any(|r| r.offender_id == receipt.offender_id && r.view == receipt.view)
+                {
+                    self.replayed_slashed.push(receipt.clone());
                 }
             }
             WalEntry::DispatchEffect { token_id, .. } => {
@@ -1737,6 +1904,7 @@ impl DurableNodeWal {
         self.replayed_fast_path.clear();
         self.replayed_skip_certs.clear();
         self.replayed_epochs.clear();
+        self.replayed_slashed.clear();
         self.consumed_tokens.clear();
         self.replayed_dpr_upgrades.clear();
     }
@@ -1750,6 +1918,7 @@ impl DurableNodeWal {
         self.replayed_fast_path.clear();
         self.replayed_skip_certs.clear();
         self.replayed_epochs.clear();
+        self.replayed_slashed.clear();
         self.consumed_tokens.clear();
         self.replayed_dpr_upgrades.clear();
 
@@ -1908,6 +2077,10 @@ pub struct ValidatorNodeState {
     /// Durable Write-Ahead Log (`Obend.Run.Durable`).
     pub wal: DurableNodeWal,
 
+    /// Genesis DPR slot name & law pin digest restored before replaying `WalEntry::DprLawUpgraded`.
+    pub genesis_slot_name: String,
+    pub genesis_law_pin_digest: u64,
+
     /// Hardware FPGA / 4-Zone Silicon Elaborator accelerator (`ObendFpgaHal` + `SlotGuardReg`).
     pub silicon_accel: NodeSiliconAccelerator,
 
@@ -1949,6 +2122,8 @@ impl ValidatorNodeState {
         self.broadcast_skip_views.clear();
         self.finalized_blocks.clear();
         self.skip_certs.clear();
+        self.slashing_receipts.clear();
+        self.slashed_validators.clear();
         self.inflight_turns.clear();
         self.fast_path_acks.clear();
         self.fast_path_certs.clear();
@@ -1956,8 +2131,8 @@ impl ValidatorNodeState {
         self.turn_finality.clear();
         self.epoch_receipts.clear();
         if let Ok(fresh_accel) = NodeSiliconAccelerator::auto_connect(
-            format!("validator_{}_slot", self.node_id),
-            DEFAULT_NODE_LAW_PIN_DIGEST,
+            self.genesis_slot_name.clone(),
+            self.genesis_law_pin_digest,
         ) {
             self.silicon_accel = fresh_accel;
         }
@@ -1978,6 +2153,8 @@ impl ValidatorNodeState {
         self.broadcast_skip_views.clear();
         self.finalized_blocks.clear();
         self.skip_certs.clear();
+        self.slashing_receipts.clear();
+        self.slashed_validators.clear();
         self.inflight_turns.clear();
         self.fast_path_acks.clear();
         self.fast_path_certs.clear();
@@ -1985,8 +2162,8 @@ impl ValidatorNodeState {
         self.turn_finality.clear();
         self.epoch_receipts.clear();
         if let Ok(fresh_accel) = NodeSiliconAccelerator::auto_connect(
-            format!("validator_{}_slot", self.node_id),
-            DEFAULT_NODE_LAW_PIN_DIGEST,
+            self.genesis_slot_name.clone(),
+            self.genesis_law_pin_digest,
         ) {
             self.silicon_accel = fresh_accel;
         }
@@ -2084,6 +2261,18 @@ impl ValidatorNodeState {
                         self.epoch_receipts.push(receipt);
                     }
                 }
+                WalEntry::ValidatorSlashed(receipt) => {
+                    self.slashed_validators.insert(receipt.offender_id);
+                    self.proposals
+                        .retain(|_, (p, _)| p.leader_vote.voter_id != receipt.offender_id);
+                    if !self
+                        .slashing_receipts
+                        .iter()
+                        .any(|r| r.offender_id == receipt.offender_id && r.view == receipt.view)
+                    {
+                        self.slashing_receipts.push(receipt);
+                    }
+                }
                 WalEntry::DprLawUpgraded {
                     epoch_id,
                     slot_name,
@@ -2110,7 +2299,7 @@ impl ValidatorNodeState {
 /// A live validator daemon listening on real OS TCP and UDP loopback sockets (`127.0.0.1:0`).
 pub struct NetworkedValidatorNode {
     pub node_id: usize,
-    pub keypair: ValidatorKeypair,
+    pub keypair: SimulatorKeypair,
     pub tcp_addr: SocketAddr,
     pub udp_addr: SocketAddr,
     pub state: Arc<Mutex<ValidatorNodeState>>,
@@ -2125,7 +2314,7 @@ impl NetworkedValidatorNode {
         node_id: usize,
         total_parties: usize,
         fault_tolerance: usize,
-        keypair: ValidatorKeypair,
+        keypair: SimulatorKeypair,
         peer_public_keys: Vec<[u8; 32]>,
         initial_cells: Vec<VaultCellRecord>,
         transport: TransportProtocol,
@@ -2141,10 +2330,10 @@ impl NetworkedValidatorNode {
         let leaves: Vec<[u8; 32]> = initial_cells.iter().map(|c| c.leaf_hash()).collect();
         let initial_root = merkle_root_from_leaves(&leaves);
         let quorum_size = 2 * fault_tolerance + 1;
-        let silicon_accel = NodeSiliconAccelerator::auto_connect(
-            format!("validator_{node_id}_slot"),
-            DEFAULT_NODE_LAW_PIN_DIGEST,
-        )?;
+        let genesis_slot_name = format!("validator_{node_id}_slot");
+        let genesis_law_pin_digest = DEFAULT_NODE_LAW_PIN_DIGEST;
+        let silicon_accel =
+            NodeSiliconAccelerator::auto_connect(genesis_slot_name.clone(), genesis_law_pin_digest)?;
 
         let state = Arc::new(Mutex::new(ValidatorNodeState {
             node_id,
@@ -2176,6 +2365,8 @@ impl NetworkedValidatorNode {
             turn_finality: BTreeMap::new(),
             epoch_receipts: Vec::new(),
             wal: DurableNodeWal::new(),
+            genesis_slot_name,
+            genesis_law_pin_digest,
             silicon_accel,
             wire_frames_received: 0,
             wire_frames_sent: 0,
@@ -2302,7 +2493,7 @@ impl NetworkedValidatorNode {
 
     fn on_raw_wire_bytes(
         state: &Arc<Mutex<ValidatorNodeState>>,
-        keypair: &ValidatorKeypair,
+        keypair: &SimulatorKeypair,
         raw: &[u8],
     ) {
         let Ok(env) = serde_json::from_slice::<WireEnvelope>(raw) else {
@@ -2337,7 +2528,7 @@ impl NetworkedValidatorNode {
 
     fn process_consensus_message(
         st: &mut ValidatorNodeState,
-        keypair: &ValidatorKeypair,
+        keypair: &SimulatorKeypair,
         msg: ConsensusNetMessage,
     ) -> Vec<ConsensusNetMessage> {
         let mut outbound = Vec::new();
@@ -2365,10 +2556,21 @@ impl NetworkedValidatorNode {
                 if st.slashed_validators.contains(&prop_cert.leader_vote.voter_id) {
                     return outbound;
                 }
+                // A node votes only in its current view and only for a proposal that extends its
+                // committed tip at the next height. A proposal for a later view is dropped, not
+                // buffered: this protocol has no notarize phase and no lock, so a finalize vote
+                // cast outside the current view could finalize a second block at one height
+                // (review/EXPERT-distributed-security-20261103.md S1). The cross-kind rule in
+                // `DurableNodeWal::check_can_vote_inner` (no skip after finalize in a view) is
+                // what keeps `FinCert(v)` and `SkipCert(v)` from both existing.
                 if !prop_cert.verify(&st.peer_public_keys)
+                    || prop_cert.view != st.current_view
                     || prop_cert.view != payload.view
                     || prop_cert.height != payload.height
+                    || payload.height != st.committed_height + 1
+                    || prop_cert.parent_hash != st.committed_tip_hash
                     || prop_cert.turn_payload != payload.to_bytes()
+                    || payload.verify_turn_witnesses().is_err()
                 {
                     st.rejected_wire_frames += 1;
                     return outbound;
@@ -2381,13 +2583,17 @@ impl NetworkedValidatorNode {
                     (prop_cert.clone(), payload),
                 );
 
-                // If this node is not slashed, cast a Finalize vote for this valid proposal
-                // only if WAL confirms no conflicting vote was cast in `prop_cert.view`.
-                if !st.slashed_validators.contains(&st.node_id) {
+                // If this node is not slashed and has not skipped `prop_cert.view`, cast a Finalize vote
+                // for this valid proposal only if WAL confirms no conflicting vote was cast in `prop_cert.view`.
+                if !st.slashed_validators.contains(&st.node_id)
+                    && !st.broadcast_skip_views.contains(&prop_cert.view)
+                    && !st.skip_certs.iter().any(|c| c.view == prop_cert.view)
+                {
                     let already_voted_in_view = st.seen_votes.iter().any(|v| {
                         v.voter_id == st.node_id
                             && v.view == prop_cert.view
-                            && v.kind == SimplexVoteKind::Finalize
+                            && (v.kind == SimplexVoteKind::Finalize
+                                || v.kind == SimplexVoteKind::Skip)
                     });
                     if !already_voted_in_view
                         && st
@@ -2405,7 +2611,9 @@ impl NetworkedValidatorNode {
                             SimplexVoteKind::Finalize,
                             prop_cert.block_hash,
                         );
-                        let _ = st.wal.record_vote(fin_vote.clone());
+                        if st.wal.record_vote(fin_vote.clone()).is_err() {
+                            return outbound;
+                        }
                         let _ = Self::record_vote_and_check_equivocation(st, &fin_vote);
                         outbound.push(ConsensusNetMessage::Vote(fin_vote));
                     }
@@ -2488,6 +2696,7 @@ impl NetworkedValidatorNode {
                 if !fin_cert.verify(st.quorum_size, &st.peer_public_keys)
                     || valid_peer_votes < st.quorum_size
                     || payload.view != fin_cert.view
+                    || payload.verify_turn_witnesses().is_err()
                 {
                     st.rejected_wire_frames += 1;
                     return outbound;
@@ -2496,27 +2705,12 @@ impl NetworkedValidatorNode {
                     .proposals
                     .get(&(fin_cert.view, fin_cert.block_hash))
                     .map(|(p, _)| p.clone());
-                let parent_hash = stored_prop
-                    .as_ref()
-                    .map(|p| p.parent_hash)
-                    .unwrap_or(st.committed_tip_hash);
-                let expected_hash = cshake256_domain(
-                    b"obend.simplex.block",
-                    &[
-                        &fin_cert.view.to_be_bytes()[..],
-                        &payload.height.to_be_bytes()[..],
-                        &parent_hash[..],
-                    ]
-                    .concat(),
-                    &payload.to_bytes(),
-                );
+                let expected_hash = payload.block_hash(st.committed_tip_hash, &[]);
                 if fin_cert.block_hash != expected_hash {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 }
-                if !st.finalized_blocks.iter().any(|b| b.height == payload.height) {
-                    Self::apply_finalized_block(st, stored_prop, fin_cert, payload);
-                }
+                Self::apply_finalized_block(st, stored_prop, fin_cert, payload);
             }
 
             ConsensusNetMessage::Slashing(receipt) => {
@@ -2536,12 +2730,17 @@ impl NetworkedValidatorNode {
                     .iter()
                     .any(|r| r.offender_id == receipt.offender_id && r.view == receipt.view)
                 {
+                    let _ = st.wal.append_entry(WalEntry::ValidatorSlashed(receipt.clone()));
                     st.slashing_receipts.push(receipt.clone());
                     outbound.push(ConsensusNetMessage::Slashing(receipt));
                 }
             }
 
             ConsensusNetMessage::FastPathPropose(turn) => {
+                if turn.verify_witnesses().is_err() {
+                    st.rejected_wire_frames += 1;
+                    return outbound;
+                }
                 // Verify turn is disjoint from all active in-flight turns on this validator
                 let disjoint = st
                     .inflight_turns
@@ -2588,7 +2787,9 @@ impl NetworkedValidatorNode {
                             && !st.slashed_validators.contains(&a.voter_id)
                     })
                     .count();
-                if !cert.verify(st.quorum_size) || valid_peer_acks < st.quorum_size {
+                if !cert.verify_with_committee(st.quorum_size, &st.peer_public_keys)
+                    || valid_peer_acks < st.quorum_size
+                {
                     st.rejected_wire_frames += 1;
                     return outbound;
                 }
@@ -2636,6 +2837,7 @@ impl NetworkedValidatorNode {
                     .iter()
                     .any(|r| r.offender_id == receipt.offender_id && r.view == receipt.view)
                 {
+                    let _ = st.wal.append_entry(WalEntry::ValidatorSlashed(receipt.clone()));
                     st.slashing_receipts.push(receipt.clone());
                 }
                 return Some(receipt);
@@ -2643,7 +2845,9 @@ impl NetworkedValidatorNode {
         }
 
         if vote.voter_id == st.node_id {
-            let _ = st.wal.record_vote(vote.clone());
+            if st.wal.record_vote(vote.clone()).is_err() {
+                return None;
+            }
         }
 
         if !st.seen_votes.iter().any(|v| {
@@ -2749,11 +2953,21 @@ impl NetworkedValidatorNode {
         fin_cert: FinCert,
         payload: BlockPayload,
     ) {
-        if st
-            .finalized_blocks
-            .iter()
-            .any(|b| b.height == payload.height)
-        {
+        if payload.verify_turn_witnesses().is_err() {
+            st.rejected_wire_frames += 1;
+            return;
+        }
+        // Chain rule: a finalized block is applied only at the next height on the committed tip.
+        // The previous rule ("skip if a block at this height exists") let two nodes keep
+        // different blocks at one height; a block for a later height is not buffered either,
+        // the simulator has no sync.
+        let parent_ok = prop_cert
+            .as_ref()
+            .map_or(true, |p| p.parent_hash == st.committed_tip_hash);
+        if payload.height != st.committed_height + 1 || !parent_ok {
+            if st.finalized_blocks.iter().all(|b| b.height != payload.height) {
+                st.rejected_wire_frames += 1;
+            }
             return;
         }
 
@@ -2813,10 +3027,6 @@ impl NetworkedValidatorNode {
 
         let post_state_root = st.recompute_state_root();
         let multiproof = BlindedVaultMultiProof::generate(&st.vault_cells, &[IpcAuth::Read]);
-        let _ = {
-            let _guard = FFI_KERNEL_LOCK.lock().unwrap();
-            ObendSession::new().and_then(|mut s| multiproof.verify_via_ffi(&mut s))
-        };
 
         let parent_hash = prop_cert
             .as_ref()
@@ -2883,20 +3093,27 @@ impl NetworkedValidatorNode {
             .collect();
 
         if valid_acks.len() >= st.quorum_size {
-            turn.apply_to_cells(&mut st.vault_cells);
-            let post_state_root = st.recompute_state_root();
-            st.inflight_turns.remove(turn_id);
-            st.pending_fast_path_turns.push(turn.clone());
-            st.promote_turn_tier(*turn_id, FinalityTier::AttestedFastPath);
+            let mut next_cells = st.vault_cells.clone();
+            turn.apply_to_cells(&mut next_cells);
+            let next_leaves: Vec<[u8; 32]> = next_cells.iter().map(|c| c.leaf_hash()).collect();
+            let post_state_root = merkle_root_from_leaves(&next_leaves);
 
             let cert = FastPathCert {
                 turn_digest: turn.digest(),
-                turn,
+                turn: turn.clone(),
                 acks: valid_acks,
                 post_state_root,
                 anchor_height: st.committed_height,
                 tier: FinalityTier::AttestedFastPath,
             };
+            if !cert.verify_with_committee(st.quorum_size, &st.peer_public_keys) {
+                return None;
+            }
+            st.vault_cells = next_cells;
+            st.current_state_root = post_state_root;
+            st.inflight_turns.remove(turn_id);
+            st.pending_fast_path_turns.push(turn);
+            st.promote_turn_tier(*turn_id, FinalityTier::AttestedFastPath);
             let _ = st.wal.append_entry(WalEntry::FastPathCommitted(cert.clone()));
             st.fast_path_certs.push(cert.clone());
             return Some(ConsensusNetMessage::FastPathCommit(cert));
@@ -3001,6 +3218,32 @@ impl NetworkedValidatorNode {
         self.state.lock().unwrap().wire_frames_received
     }
 
+    pub fn rejected_wire_frames(&self) -> usize {
+        self.state.lock().unwrap().rejected_wire_frames
+    }
+
+    pub fn is_memory_up(&self) -> bool {
+        self.state.lock().unwrap().wal.memory_up
+    }
+
+    pub fn vault_cells(&self) -> Vec<VaultCellRecord> {
+        self.state.lock().unwrap().vault_cells.clone()
+    }
+
+    /// Configure a custom genesis specialization slot and `SlotGuardReg` law pin digest on this validator.
+    pub fn configure_genesis_law_pin(
+        &self,
+        slot_name: &str,
+        law_pin_digest: u64,
+    ) -> Result<(), NodeError> {
+        let mut st = self.state.lock().unwrap();
+        let pin = law_pin_digest.max(1);
+        st.genesis_slot_name = slot_name.to_string();
+        st.genesis_law_pin_digest = pin;
+        st.silicon_accel = NodeSiliconAccelerator::auto_connect(slot_name, pin)?;
+        Ok(())
+    }
+
     /// Read live `SiliconTelemetry` directly from this validator's `ObendFpgaHal`.
     pub fn read_silicon_telemetry(&self) -> Result<SiliconTelemetry, NodeError> {
         Ok(self.state.lock().unwrap().silicon_accel.read_telemetry()?)
@@ -3035,6 +3278,21 @@ impl NetworkedValidatorNode {
             .active_law_pin_digest()
     }
 
+    /// Return the currently active DPR specialization epoch ID on this validator.
+    pub fn active_dpr_epoch_id(&self) -> u64 {
+        self.state.lock().unwrap().silicon_accel.active_epoch_id()
+    }
+
+    /// Return the currently active DPR specialization slot name on this validator.
+    pub fn active_dpr_slot_name(&self) -> String {
+        self.state
+            .lock()
+            .unwrap()
+            .silicon_accel
+            .active_slot_name()
+            .to_string()
+    }
+
     /// Execute a 3-phase ICAP DPR hot-swap (`perform_icap_dpr_hot_swap`) on this validator's `ObendFpgaHal`,
     /// journaling `WalEntry::DprLawUpgraded` when an authorized pin commits cleanly.
     pub fn hot_swap_law_pin(
@@ -3044,6 +3302,27 @@ impl NetworkedValidatorNode {
         expected_digest: u64,
         computed_digest: u64,
         moved_pin_violation: bool,
+    ) -> Result<IcapDprSwapReceipt, NodeError> {
+        self.hot_swap_law_pin_with_carry(
+            new_epoch_id,
+            slot_name,
+            expected_digest,
+            computed_digest,
+            moved_pin_violation,
+            Vec::new(),
+        )
+    }
+
+    /// Execute a 3-phase ICAP DPR hot-swap (`perform_icap_dpr_hot_swap`) and record the associated
+    /// `"world-carry@1"` `K-CARRY` artifact bytes in `WalEntry::DprLawUpgraded`.
+    pub fn hot_swap_law_pin_with_carry(
+        &self,
+        new_epoch_id: u64,
+        slot_name: &str,
+        expected_digest: u64,
+        computed_digest: u64,
+        moved_pin_violation: bool,
+        carry_artifact_bytes: Vec<u8>,
     ) -> Result<IcapDprSwapReceipt, NodeError> {
         let mut st = self.state.lock().unwrap();
         let frame_word = derive_icap_frame_word(new_epoch_id, slot_name, expected_digest);
@@ -3061,7 +3340,7 @@ impl NetworkedValidatorNode {
             frame_word,
             law_pin_digest: expected_digest,
             receipt: receipt.clone(),
-            carry_artifact_bytes: Vec::new(),
+            carry_artifact_bytes,
         });
         Ok(receipt)
     }
@@ -3163,7 +3442,14 @@ impl SimplexCluster {
         )
     }
 
-    /// Start a live $N$-validator cluster over `127.0.0.1:0` with explicit `TransportProtocol` (`Tcp` or `Udp`).
+    /// The public, deterministic seed of simulated validator `id`. Every key in a simulated
+    /// cluster is derivable from this string: the cluster is one process exercising the
+    /// protocol, not a deployment with secrets.
+    pub fn simulator_seed(id: usize) -> String {
+        format!("obend-simulator-validator-seed-{id}")
+    }
+
+    /// Start an in-process $N$-validator simulation over `127.0.0.1:0` with explicit `TransportProtocol` (`Tcp` or `Udp`).
     pub fn with_transport(
         num_validators: usize,
         fault_tolerance: usize,
@@ -3177,11 +3463,8 @@ impl SimplexCluster {
             )));
         }
 
-        let keypairs: Vec<ValidatorKeypair> = (0..num_validators)
-            .map(|id| {
-                let seed = format!("obend-ws32-validator-seed-{id}");
-                ValidatorKeypair::from_seed(id, seed.as_bytes())
-            })
+        let keypairs: Vec<SimulatorKeypair> = (0..num_validators)
+            .map(|id| SimulatorKeypair::from_simulator_seed(id, Self::simulator_seed(id).as_bytes()))
             .collect();
         let peer_public_keys: Vec<[u8; 32]> = keypairs.iter().map(|kp| kp.public_key).collect();
 
@@ -3238,9 +3521,10 @@ impl SimplexCluster {
         self.mempool_orders.push(order);
     }
 
-    /// Stage an in-flight turn (checking `SandboxRunner` if configured) so subsequent turns
-    /// are tested against it for Bernstein disjointness (`disjoint_turns_commute`).
+    /// Stage an in-flight turn (checking `SandboxRunner` and `TurnJudgeWitness`es fail-closed)
+    /// so subsequent turns are tested against it for Bernstein disjointness (`disjoint_turns_commute`).
     pub fn stage_contended_or_inflight_turn(&mut self, turn: VaultTurn) -> Result<(), NodeError> {
+        turn.verify_witnesses()?;
         if let Some(sandbox) = &mut self.sandbox {
             sandbox.validate_and_meter_turn(&turn, 100)?;
         }
@@ -3253,8 +3537,10 @@ impl SimplexCluster {
         Ok(())
     }
 
-    /// Submit a `VaultTurn` through the `SandboxRunner` (`Powerbox` / `Mandate`) and 4-Tier Finality Router:
-    /// - If `SandboxRunner` is configured, capability-checks the turn against its `Mandate` first.
+    /// Submit a `VaultTurn` through fail-closed `TurnJudgeWitness` verification, `SandboxRunner`
+    /// (`Powerbox` / `Mandate`), and the 4-Tier Finality Router:
+    /// - Validates every cited `TurnJudgeWitness` fail-closed first.
+    /// - If `SandboxRunner` is configured, capability-checks the turn against its `Mandate`.
     /// - Inspects the turn's read/write slot footprints via `disjoint_turns_commute`:
     ///   - **Tier 1 Disjoint Fast-Path**: If disjoint from all active in-flight and queued contended turns,
     ///     commits immediately across the networked validators with a single quorum acknowledgement
@@ -3262,6 +3548,7 @@ impl SimplexCluster {
     ///   - **Tier 2 Contended `Simplex` BFT**: If its footprint conflicts with any in-flight or queued turn,
     ///     routes it into the `Simplex` BFT mempool for block-level ordering and clearing.
     pub fn submit_turn(&mut self, turn: VaultTurn) -> Result<TurnSubmissionOutcome, NodeError> {
+        turn.verify_witnesses()?;
         if let Some(sandbox) = &mut self.sandbox {
             sandbox.validate_and_meter_turn(&turn, 250)?;
         }
@@ -3289,10 +3576,10 @@ impl SimplexCluster {
         } else {
             let turn_id = turn.turn_id;
             for node in &self.nodes {
-                node.state
-                    .lock()
-                    .unwrap()
-                    .promote_turn_tier(turn_id, FinalityTier::Speculative);
+                let mut st = node.state.lock().unwrap();
+                if st.wal.memory_up {
+                    st.promote_turn_tier(turn_id, FinalityTier::Speculative);
+                }
             }
             self.mempool_turns.push(turn);
             Ok(TurnSubmissionOutcome::RoutedToContendedSimplex {
@@ -3309,6 +3596,9 @@ impl SimplexCluster {
         &mut self,
         turns: Vec<VaultTurn>,
     ) -> Result<Vec<TurnSubmissionOutcome>, NodeError> {
+        for turn in &turns {
+            turn.verify_witnesses()?;
+        }
         let mut outcomes = Vec::with_capacity(turns.len());
         for (i, turn) in turns.iter().enumerate() {
             if let Some(sandbox) = &mut self.sandbox {
@@ -3343,10 +3633,10 @@ impl SimplexCluster {
             } else {
                 let turn_id = turn.turn_id;
                 for node in &self.nodes {
-                    node.state
-                        .lock()
-                        .unwrap()
-                        .promote_turn_tier(turn_id, FinalityTier::Speculative);
+                    let mut st = node.state.lock().unwrap();
+                    if st.wal.memory_up {
+                        st.promote_turn_tier(turn_id, FinalityTier::Speculative);
+                    }
                 }
                 self.mempool_turns.push(turn.clone());
                 outcomes.push(TurnSubmissionOutcome::RoutedToContendedSimplex {
@@ -3360,11 +3650,17 @@ impl SimplexCluster {
     }
 
     fn execute_fast_path_turn(&mut self, turn: VaultTurn) -> Result<FastPathCert, NodeError> {
+        turn.verify_witnesses()?;
         let turn_id = turn.turn_id;
-        let honest_ids = self.honest_validator_ids();
-        let proposer_id = *honest_ids.first().ok_or_else(|| {
-            NodeError::ConsensusVerification("no honest validators available".to_string())
-        })?;
+        let live_honest_ids = self.live_honest_validator_ids();
+        if live_honest_ids.len() < self.quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "insufficient live honest validators ({}) for fast-path quorum ({})",
+                live_honest_ids.len(),
+                self.quorum_size
+            )));
+        }
+        let proposer_id = live_honest_ids[0];
 
         self.nodes[proposer_id]
             .broadcast(ConsensusNetMessage::FastPathPropose(turn.clone()))?;
@@ -3375,20 +3671,20 @@ impl SimplexCluster {
         loop {
             iter_count += 1;
             let mut found_cert: Option<FastPathCert> = None;
-            let mut all_honest_committed = true;
+            let mut all_live_committed = true;
 
-            for &id in &honest_ids {
+            for &id in &live_honest_ids {
                 let certs = self.nodes[id].fast_path_certs();
                 if let Some(c) = certs.into_iter().find(|c| c.turn.turn_id == turn_id) {
                     if found_cert.is_none() {
                         found_cert = Some(c);
                     }
                 } else {
-                    all_honest_committed = false;
+                    all_live_committed = false;
                 }
             }
 
-            if all_honest_committed {
+            if all_live_committed {
                 if let Some(cert) = found_cert {
                     return Ok(cert);
                 }
@@ -3416,22 +3712,30 @@ impl SimplexCluster {
     }
 
     /// Execute a full networked `Simplex` BFT block round over the `127.0.0.1:0` sockets,
-    /// draining contended `VaultTurn`s and `drex-clearing@1` limit orders, running `solve_drex_batch`,
-    /// verifying all 13 conditions via `DrexClearingCertificate::verify_with_kernel`, and updating
-    /// the `FogOfWar` Merkle root across all honest validators.
+    /// draining contended `VaultTurn`s and `drex-clearing@1` limit orders, verifying all turn
+    /// `TurnJudgeWitness`es fail-closed, running `solve_drex_batch`, verifying all 13 conditions via
+    /// `DrexClearingCertificate::verify_with_kernel`, and updating the `FogOfWar` Merkle root across
+    /// all live honest validators (`>= 2f + 1`).
     pub fn run_simplex_block(&mut self) -> Result<FinalizedBlockRecord, NodeError> {
-        let honest_ids = self.honest_validator_ids();
-        let first_honest = *honest_ids.first().ok_or_else(|| {
-            NodeError::ConsensusVerification("no honest validators available".to_string())
-        })?;
+        let live_honest_ids = self.live_honest_validator_ids();
+        if live_honest_ids.len() < self.quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "insufficient live honest validators ({}) for Simplex quorum ({})",
+                live_honest_ids.len(),
+                self.quorum_size
+            )));
+        }
+        let first_honest = live_honest_ids[0];
 
-        // If current view's leader is slashed, execute a networked SkipCert view-change first
+        // If current view's leader is slashed OR crashed (`!is_memory_up()`), execute a networked
+        // `SkipCert` view-change across the live honest quorum first.
         loop {
             let view = self.nodes[first_honest].current_view();
             let leader_id = ((view.saturating_sub(1)) as usize) % self.nodes.len();
             if self.nodes[first_honest]
                 .slashed_validators()
                 .contains(&leader_id)
+                || !self.nodes[leader_id].is_memory_up()
             {
                 self.run_view_skip(view)?;
             } else {
@@ -3461,6 +3765,7 @@ impl SimplexCluster {
             drex_epsilon: self.drex_epsilon,
             drex_orders,
         };
+        payload.verify_turn_witnesses()?;
 
         let prop_cert = PropCert::create(
             &self.nodes[leader_id].keypair,
@@ -3485,20 +3790,20 @@ impl SimplexCluster {
         loop {
             iter_count += 1;
             let mut finalized_record: Option<FinalizedBlockRecord> = None;
-            let mut all_honest_finalized = true;
+            let mut all_live_finalized = true;
 
-            for &id in &honest_ids {
+            for &id in &live_honest_ids {
                 let blocks = self.nodes[id].finalized_blocks();
                 if let Some(b) = blocks.into_iter().find(|b| b.height == next_height) {
                     if finalized_record.is_none() {
                         finalized_record = Some(b);
                     }
                 } else {
-                    all_honest_finalized = false;
+                    all_live_finalized = false;
                 }
             }
 
-            if all_honest_finalized {
+            if all_live_finalized {
                 if let Some(rec) = finalized_record {
                     return Ok(rec);
                 }
@@ -3530,10 +3835,17 @@ impl SimplexCluster {
         }
     }
 
-    /// Execute a networked `SkipCert` view-change round across honest validators for `view`.
+    /// Execute a networked `SkipCert` view-change round across live honest validators for `view`.
     pub fn run_view_skip(&mut self, view: u64) -> Result<SkipCert, NodeError> {
-        let honest_ids = self.honest_validator_ids();
-        for &id in &honest_ids {
+        let live_honest_ids = self.live_honest_validator_ids();
+        if live_honest_ids.len() < self.quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "insufficient live honest validators ({}) for SkipCert quorum ({})",
+                live_honest_ids.len(),
+                self.quorum_size
+            )));
+        }
+        for &id in &live_honest_ids {
             let skip_vote = SignedSimplexVote::new(
                 &self.nodes[id].keypair,
                 view,
@@ -3554,7 +3866,7 @@ impl SimplexCluster {
         loop {
             let mut found_skip: Option<SkipCert> = None;
             let mut all_advanced = true;
-            for &id in &honest_ids {
+            for &id in &live_honest_ids {
                 if let Some(sc) = self.nodes[id]
                     .skip_certs()
                     .into_iter()
@@ -3575,7 +3887,7 @@ impl SimplexCluster {
             }
             if !rebroadcasted {
                 if let Some(ref sc) = found_skip {
-                    let first_honest = honest_ids[0];
+                    let first_honest = live_honest_ids[0];
                     let _ = self.nodes[first_honest]
                         .broadcast(ConsensusNetMessage::SkipCertificate(sc.clone()));
                     rebroadcasted = true;
@@ -3620,7 +3932,7 @@ impl SimplexCluster {
         self.nodes[faulty_validator_id].broadcast(ConsensusNetMessage::Vote(vote_b))?;
 
         let honest_ids: Vec<usize> = (0..self.nodes.len())
-            .filter(|&id| id != faulty_validator_id)
+            .filter(|&id| id != faulty_validator_id && self.nodes[id].is_memory_up())
             .collect();
 
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -3682,10 +3994,15 @@ impl SimplexCluster {
             )));
         }
 
-        let honest_ids = self.honest_validator_ids();
-        let ref_node = *honest_ids.first().ok_or_else(|| {
-            NodeError::ConsensusVerification("no honest validators available".to_string())
-        })?;
+        let live_honest_ids = self.live_honest_validator_ids();
+        if live_honest_ids.len() < self.quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "insufficient live honest validators ({}) for epoch collapse ({})",
+                live_honest_ids.len(),
+                self.quorum_size
+            )));
+        }
+        let ref_node = live_honest_ids[0];
 
         let blocks: Vec<FinalizedBlockRecord> = self.nodes[ref_node]
             .finalized_blocks()
@@ -3728,8 +4045,8 @@ impl SimplexCluster {
         let receipt = Fold::collapse(epoch_id, &initial_cells, &blocks, &mut session)?;
 
         // Promote all blocks and turns (including settled Tier 1 fast-path turns) in [start_height..=end_height]
-        // to FinalityTier::Collapsed on all honest nodes
-        for &id in &honest_ids {
+        // to FinalityTier::Collapsed on all live honest nodes
+        for &id in &live_honest_ids {
             let mut st = self.nodes[id].state.lock().unwrap();
             let mut promoted_turns = Vec::new();
             for blk in &mut st.finalized_blocks {
@@ -3767,7 +4084,28 @@ impl SimplexCluster {
             .collect()
     }
 
-    /// Return the ordered 32-byte Ed25519 committee public keys for all validators in this cluster.
+    /// Return all non-slashed validators whose volatile memory is currently up (`is_memory_up() == true`).
+    pub fn live_honest_validator_ids(&self) -> Vec<usize> {
+        self.honest_validator_ids()
+            .into_iter()
+            .filter(|&id| self.nodes[id].is_memory_up())
+            .collect()
+    }
+
+    /// Configure a custom genesis DPR specialization slot and `SlotGuardReg` law pin digest
+    /// across every validator in this cluster.
+    pub fn configure_cluster_genesis_law_pin(
+        &self,
+        slot_name: &str,
+        law_pin_digest: u64,
+    ) -> Result<(), NodeError> {
+        for node in &self.nodes {
+            node.configure_genesis_law_pin(slot_name, law_pin_digest)?;
+        }
+        Ok(())
+    }
+
+    /// Return the ordered 32-byte simulator public keys for all validators in this cluster.
     pub fn committee_pks(&self) -> Vec<[u8; 32]> {
         self.nodes.iter().map(|n| n.keypair.public_key).collect()
     }
@@ -3792,9 +4130,9 @@ impl SimplexCluster {
         self.stage_contended_or_inflight_turn(turn.clone())?;
         let block = self.run_simplex_block()?;
 
-        let honest_ids = self.honest_validator_ids();
-        let leader_id = *honest_ids.first().ok_or_else(|| {
-            NodeError::ConsensusVerification("no honest validators available".to_string())
+        let live_honest_ids = self.live_honest_validator_ids();
+        let leader_id = *live_honest_ids.first().ok_or_else(|| {
+            NodeError::ConsensusVerification("no live honest validators available".to_string())
         })?;
         let outbox_id = self.nodes[leader_id]
             .submit_dispatch_effect(turn, None)
@@ -3814,15 +4152,108 @@ impl SimplexCluster {
         Ok((winner, block, outbox_id))
     }
 
+    /// Execute an authorized `"world-carry@1"` (`K-CARRY`) law/schema upgrade across the BFT quorum
+    /// with a caller-supplied upgrade `VaultTurn` (carrying explicit `"world-carry@1"` `TurnJudgeWitness`es)
+    /// and execute a 3-phase glitch-free `perform_icap_dpr_hot_swap` on every live honest validator's `ObendFpgaHal`.
+    pub fn perform_quorum_icap_dpr_upgrade_with_turn(
+        &mut self,
+        new_epoch_id: u64,
+        slot_name: &str,
+        new_law_pin_digest: u64,
+        upgrade_turn: VaultTurn,
+        carry_artifact_bytes: Vec<u8>,
+    ) -> Result<(FinalizedBlockRecord, Vec<IcapDprSwapReceipt>), NodeError> {
+        let has_world_carry = upgrade_turn
+            .witnesses
+            .iter()
+            .any(|w| w.format_tag == "world-carry@1");
+        if !has_world_carry {
+            return Err(NodeError::ConsensusVerification(
+                "K-CARRY quorum DPR upgrade turn must cite at least one verified 'world-carry@1' TurnJudgeWitness"
+                    .to_string(),
+            ));
+        }
+        upgrade_turn.verify_witnesses()?;
+        self.stage_contended_or_inflight_turn(upgrade_turn)?;
+        let finalized = self.run_simplex_block()?;
+
+        let live_honest_ids = self.live_honest_validator_ids();
+        if live_honest_ids.len() < self.quorum_size {
+            return Err(NodeError::ConsensusVerification(format!(
+                "insufficient live honest validators ({}) for DPR quorum ({})",
+                live_honest_ids.len(),
+                self.quorum_size
+            )));
+        }
+
+        let mut receipts = Vec::with_capacity(live_honest_ids.len());
+        for &id in &live_honest_ids {
+            let r = self.nodes[id].hot_swap_law_pin_with_carry(
+                new_epoch_id,
+                slot_name,
+                new_law_pin_digest,
+                new_law_pin_digest,
+                false,
+                carry_artifact_bytes.clone(),
+            )?;
+            receipts.push(r);
+        }
+        Ok((finalized, receipts))
+    }
+
     /// Execute an authorized `"world-carry@1"` (`K-CARRY`) law/schema upgrade across the BFT quorum:
-    /// Finalizes a quorum-certified upgrade height via `run_simplex_block()` and executes a 3-phase
-    /// glitch-free `perform_icap_dpr_hot_swap` on every honest validator's `ObendFpgaHal`.
+    /// Synthesizes a verified `"world-carry@1"` `TurnJudgeWitness`, finalizes the quorum-certified
+    /// upgrade height via `run_simplex_block()`, and executes a 3-phase glitch-free
+    /// `perform_icap_dpr_hot_swap` on every live honest validator's `ObendFpgaHal`.
     pub fn perform_quorum_icap_dpr_upgrade(
         &mut self,
         new_epoch_id: u64,
         slot_name: &str,
         new_law_pin_digest: u64,
     ) -> Result<(FinalizedBlockRecord, Vec<IcapDprSwapReceipt>), NodeError> {
+        let live_honest_ids = self.live_honest_validator_ids();
+        let ref_id = *live_honest_ids.first().ok_or_else(|| {
+            NodeError::ConsensusVerification("no live honest validators available".to_string())
+        })?;
+        let pre_epoch = self.nodes[ref_id].active_dpr_epoch_id();
+        let pre_pin = self.nodes[ref_id].active_law_pin_digest();
+        let genesis_hash = cshake256_domain(
+            b"obend.simplex.dpr.genesis_carry",
+            &pre_pin.to_be_bytes(),
+            slot_name.as_bytes(),
+        );
+        let carry_obj = WorldCarryObject {
+            epoch: pre_epoch,
+            law_pin_digest: pre_pin,
+            genesis_carry_hash: genesis_hash,
+            cells: vec![WorldCarryCellSpec {
+                name: "cell.treasury".to_string(),
+                mandate_crown: "forever".to_string(),
+                balance: 1000,
+                schema_ver: pre_epoch as u32,
+            }],
+            seats: Vec::new(),
+            total_supply: 1000,
+        };
+        let carry_cert = WorldCarryCert {
+            from_epoch: pre_epoch,
+            target_epoch: new_epoch_id.max(pre_epoch + 1),
+            from_law_pin_digest: pre_pin,
+            to_law_pin_digest: new_law_pin_digest,
+            genesis_carry_hash: genesis_hash,
+            kept_cells: vec![WorldCarryCellSpec {
+                name: "cell.treasury".to_string(),
+                mandate_crown: "forever".to_string(),
+                balance: 1000,
+                schema_ver: new_epoch_id.max(pre_epoch + 1) as u32,
+            }],
+            named_drops: Vec::new(),
+            rehydrated_refs: vec!["cell.treasury".to_string()],
+            migrated_seats: Vec::new(),
+            post_total_supply: 1000,
+        };
+        let carry_witness = TurnJudgeWitness::world_carry(1, &carry_obj, &carry_cert);
+        let carry_bytes = serde_json::to_vec(&carry_cert)?;
         let upgrade_turn = VaultTurn::new(
             cshake256_domain(
                 b"obend.simplex.dpr.upgrade",
@@ -3832,31 +4263,308 @@ impl SimplexCluster {
             "k-carry-quorum-upgrade",
             vec![],
             vec![(0xC0DE_D2E8, new_law_pin_digest.to_be_bytes().to_vec())],
-        );
-        self.stage_contended_or_inflight_turn(upgrade_turn)?;
-        let finalized = self.run_simplex_block()?;
+        )
+        .with_witnesses(vec![carry_witness]);
 
-        let honest_ids = self.honest_validator_ids();
-        if honest_ids.len() < self.quorum_size {
+        self.perform_quorum_icap_dpr_upgrade_with_turn(
+            new_epoch_id,
+            slot_name,
+            new_law_pin_digest,
+            upgrade_turn,
+            carry_bytes,
+        )
+    }
+
+    /// Synchronize a recovered validator (`validator_id`, after `recover_from_wal()`) up to the
+    /// live BFT quorum's finalized height, `SkipCert`s, `CollapsedEpochReceipt`s, and current
+    /// `ObendFpgaHal` DPR specialization epoch **without re-executing already-committed heights**.
+    /// Returns the number of missed finalized blocks applied during catch-up.
+    pub fn catch_up_validator(&mut self, validator_id: usize) -> Result<usize, NodeError> {
+        if validator_id >= self.nodes.len() {
             return Err(NodeError::ConsensusVerification(format!(
-                "insufficient honest validators ({}) for DPR quorum ({})",
-                honest_ids.len(),
-                self.quorum_size
+                "validator_id {validator_id} out of range (num_validators = {})",
+                self.nodes.len()
             )));
         }
-
-        let mut receipts = Vec::with_capacity(honest_ids.len());
-        for &id in &honest_ids {
-            let r = self.nodes[id].hot_swap_law_pin(
-                new_epoch_id,
-                slot_name,
-                new_law_pin_digest,
-                new_law_pin_digest,
-                false,
-            )?;
-            receipts.push(r);
+        if !self.nodes[validator_id].is_memory_up() {
+            return Err(NodeError::Wal(ExposedOnceError::NodeDown));
         }
-        Ok((finalized, receipts))
+
+        let peer_candidates: Vec<usize> = self
+            .live_honest_validator_ids()
+            .into_iter()
+            .filter(|&id| id != validator_id)
+            .collect();
+        let Some(&ref_id) = peer_candidates
+            .iter()
+            .max_by_key(|&&id| self.nodes[id].committed_height())
+        else {
+            return Ok(0);
+        };
+
+        let committee_pks = self.committee_pks();
+        let ref_skip_certs = self.nodes[ref_id].skip_certs();
+        let ref_fast_path_certs = self.nodes[ref_id].fast_path_certs();
+        let mut ref_blocks = self.nodes[ref_id].finalized_blocks();
+        ref_blocks.sort_by_key(|b| b.height);
+        let ref_wal = self.nodes[ref_id].wal_snapshot();
+        let ref_epoch_receipts = self.nodes[ref_id].epoch_receipts();
+        let ref_view = self.nodes[ref_id].current_view();
+
+        let ref_dpr_upgrades: Vec<(u64, String, u64, Vec<u8>)> = ref_wal
+            .journal
+            .iter()
+            .filter_map(|entry| match entry {
+                WalEntry::DprLawUpgraded {
+                    epoch_id,
+                    slot_name,
+                    law_pin_digest,
+                    carry_artifact_bytes,
+                    ..
+                } => Some((
+                    *epoch_id,
+                    slot_name.clone(),
+                    *law_pin_digest,
+                    carry_artifact_bytes.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+
+        // Pre-verify all missed quorum certificates, fast-path turns, and epoch receipts outside the target validator Mutex
+        // (because `apply_finalized_block` and `CollapsedEpochReceipt::verify` acquire `FFI_KERNEL_LOCK` internally).
+        let current_height = self.nodes[validator_id].committed_height();
+        for sc in &ref_skip_certs {
+            if !sc.verify(self.quorum_size, &committee_pks) {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "peer SkipCert at view {} failed quorum signature verification",
+                    sc.view
+                )));
+            }
+        }
+        for blk in &ref_blocks {
+            if blk.height > current_height {
+                if !blk.fin_cert.verify(self.quorum_size, &committee_pks)
+                    || blk.fin_cert.block_hash != blk.block_hash
+                    || blk.payload.block_hash(blk.parent_hash, &[]) != blk.block_hash
+                {
+                    return Err(NodeError::ConsensusVerification(format!(
+                        "peer FinCert at height {} failed quorum signature verification",
+                        blk.height
+                    )));
+                }
+                for fp_turn in &blk.pre_block_fast_path_turns {
+                    fp_turn.verify_witnesses()?;
+                    if fp_turn.has_duplicate_write_slots() {
+                        return Err(NodeError::ConsensusVerification(format!(
+                            "peer fast-path turn {:?} at height {} has duplicate write slots",
+                            fp_turn.turn_id, blk.height
+                        )));
+                    }
+                    if let Some(fp_cert) = ref_fast_path_certs
+                        .iter()
+                        .find(|c| c.turn.turn_id == fp_turn.turn_id)
+                    {
+                        if fp_cert.turn_digest != fp_turn.digest()
+                            || !fp_cert.verify_with_committee(self.quorum_size, &committee_pks)
+                        {
+                            return Err(NodeError::ConsensusVerification(format!(
+                                "peer FastPathCert for turn {:?} failed committee verification",
+                                fp_turn.turn_id
+                            )));
+                        }
+                    }
+                }
+                blk.payload.verify_turn_witnesses()?;
+            }
+        }
+        for receipt in &ref_epoch_receipts {
+            let verified = {
+                let mut session = {
+                    let _guard = FFI_KERNEL_LOCK.lock().unwrap();
+                    ObendSession::new()?
+                };
+                receipt.verify(&mut session)?
+            };
+            if !verified {
+                return Err(NodeError::ConsensusVerification(format!(
+                    "peer CollapsedEpochReceipt for epoch {} failed verification",
+                    receipt.epoch_id
+                )));
+            }
+        }
+
+        let mut st = self.nodes[validator_id].state.lock().unwrap();
+
+        // 1. Verify BFT prefix safety on all heights already committed via local WAL recovery
+        for local_blk in &st.finalized_blocks {
+            if let Some(peer_blk) = ref_blocks.iter().find(|b| b.height == local_blk.height) {
+                if local_blk.block_hash != peer_blk.block_hash {
+                    return Err(NodeError::ConsensusVerification(format!(
+                        "BFT safety violation at height {}: local hash != quorum hash",
+                        local_blk.height
+                    )));
+                }
+            }
+        }
+
+        // 2. Sync verified SkipCerts
+        for sc in ref_skip_certs {
+            if !st.skip_certs.iter().any(|c| c.view == sc.view) {
+                let _ = st.wal.append_entry(WalEntry::SkipCertified(sc.clone()));
+                st.skip_certs.push(sc.clone());
+            }
+            if st.current_view <= sc.view {
+                st.current_view = sc.view + 1;
+            }
+            st.broadcast_skip_views.insert(sc.view);
+        }
+
+        // 3. Apply strictly missed heights (`blk.height > st.committed_height`) in causal order,
+        //    stepping DPR bitstreams whenever `blk.law_pin_digest` transitions to a newer authorized epoch.
+        let mut applied_blocks = 0usize;
+        for blk in ref_blocks {
+            if blk.height <= st.committed_height {
+                continue;
+            }
+            if blk.law_pin_digest != 0
+                && blk.law_pin_digest != st.silicon_accel.active_law_pin_digest()
+            {
+                if let Some((ep, slot_name, pin, carry_bytes)) = ref_dpr_upgrades
+                    .iter()
+                    .find(|(_, _, p, _)| *p == blk.law_pin_digest)
+                {
+                    let frame_word = derive_icap_frame_word(*ep, slot_name, *pin);
+                    let swap_receipt = st.silicon_accel.hot_swap_law_pin(
+                        *ep,
+                        slot_name.clone(),
+                        frame_word,
+                        *pin,
+                        *pin,
+                        false,
+                    )?;
+                    let _ = st.wal.append_entry(WalEntry::DprLawUpgraded {
+                        epoch_id: *ep,
+                        slot_name: slot_name.clone(),
+                        frame_word,
+                        law_pin_digest: *pin,
+                        receipt: swap_receipt,
+                        carry_artifact_bytes: carry_bytes.clone(),
+                    });
+                }
+            }
+
+            // Reconcile any pre-block fast-path turns missed while crashed before applying the block
+            for fp_turn in &blk.pre_block_fast_path_turns {
+                let already_applied = st
+                    .fast_path_certs
+                    .iter()
+                    .any(|c| c.turn.turn_id == fp_turn.turn_id)
+                    || st
+                        .pending_fast_path_turns
+                        .iter()
+                        .any(|t| t.turn_id == fp_turn.turn_id);
+                if !already_applied {
+                    fp_turn.apply_to_cells(&mut st.vault_cells);
+                    st.recompute_state_root();
+                    st.promote_turn_tier(fp_turn.turn_id, FinalityTier::AttestedFastPath);
+                    st.pending_fast_path_turns.push(fp_turn.clone());
+                    if let Some(fp_cert) = ref_fast_path_certs
+                        .iter()
+                        .find(|c| c.turn.turn_id == fp_turn.turn_id)
+                    {
+                        let _ = st
+                            .wal
+                            .append_entry(WalEntry::FastPathCommitted(fp_cert.clone()));
+                        st.fast_path_certs.push(fp_cert.clone());
+                    }
+                }
+            }
+
+            let prev_height = st.committed_height;
+            NetworkedValidatorNode::apply_finalized_block(
+                &mut st,
+                blk.prop_cert.clone(),
+                blk.fin_cert.clone(),
+                blk.payload.clone(),
+            );
+            if st.committed_height > prev_height {
+                applied_blocks += 1;
+            }
+        }
+
+        // 4. Sync any trailing DPR specialization upgrades committed at or after the latest block height
+        for (ep, slot_name, pin, carry_bytes) in ref_dpr_upgrades {
+            if ep > st.silicon_accel.active_epoch_id()
+                || (ep == st.silicon_accel.active_epoch_id()
+                    && pin != st.silicon_accel.active_law_pin_digest())
+            {
+                let frame_word = derive_icap_frame_word(ep, &slot_name, pin);
+                let swap_receipt = st.silicon_accel.hot_swap_law_pin(
+                    ep,
+                    slot_name.clone(),
+                    frame_word,
+                    pin,
+                    pin,
+                    false,
+                )?;
+                let _ = st.wal.append_entry(WalEntry::DprLawUpgraded {
+                    epoch_id: ep,
+                    slot_name,
+                    frame_word,
+                    law_pin_digest: pin,
+                    receipt: swap_receipt,
+                    carry_artifact_bytes: carry_bytes,
+                });
+            }
+        }
+
+        // 5. Sync any missed Tier 3 `CollapsedEpochReceipt`s
+        for receipt in ref_epoch_receipts {
+            if !st
+                .epoch_receipts
+                .iter()
+                .any(|r| r.epoch_id == receipt.epoch_id)
+            {
+                if let Some(end_blk) = st
+                    .finalized_blocks
+                    .iter()
+                    .find(|b| b.height == receipt.end_height)
+                {
+                    if end_blk.post_state_root != receipt.final_state_root {
+                        return Err(NodeError::ConsensusVerification(format!(
+                            "peer CollapsedEpochReceipt for epoch {} final_state_root mismatch",
+                            receipt.epoch_id
+                        )));
+                    }
+                }
+                let mut promoted_turns = Vec::new();
+                for blk in &mut st.finalized_blocks {
+                    if blk.height >= receipt.start_height && blk.height <= receipt.end_height {
+                        blk.tier = FinalityTier::Collapsed;
+                        for t in &blk.pre_block_fast_path_turns {
+                            promoted_turns.push(t.turn_id);
+                        }
+                        for t in &blk.payload.turns {
+                            promoted_turns.push(t.turn_id);
+                        }
+                    }
+                }
+                for tid in promoted_turns {
+                    st.promote_turn_tier(tid, FinalityTier::Collapsed);
+                }
+                let _ = st
+                    .wal
+                    .append_entry(WalEntry::EpochCollapsed(receipt.clone()));
+                st.epoch_receipts.push(receipt);
+            }
+        }
+
+        if st.current_view < ref_view {
+            st.current_view = ref_view;
+        }
+
+        Ok(applied_blocks)
     }
 }
 
@@ -3871,7 +4579,7 @@ mod wal_tests {
     #[test]
     fn wal_expose_once_and_pending_decreases_across_restarts() {
         let mut wal = DurableNodeWal::new();
-        let kp = ValidatorKeypair::from_seed(0, b"wal-test-validator-0");
+        let kp = SimulatorKeypair::from_simulator_seed(0, b"wal-test-validator-0");
 
         // Position 0: a validator vote (not a dispatch effect)
         let vote = SignedSimplexVote::new(&kp, 1, SimplexVoteKind::Finalize, [0xAA; 32]);
@@ -3952,7 +4660,7 @@ mod wal_tests {
     #[test]
     fn wal_multi_crash_recover_idempotent_and_byte_log_roundtrip() {
         let mut wal_single = DurableNodeWal::new();
-        let kp = ValidatorKeypair::from_seed(1, b"wal-idempotent-seed");
+        let kp = SimulatorKeypair::from_simulator_seed(1, b"wal-idempotent-seed");
 
         wal_single
             .record_vote(SignedSimplexVote::new(
@@ -4029,7 +4737,7 @@ mod wal_tests {
     #[test]
     fn wal_prevents_post_crash_validator_equivocation() {
         let mut wal = DurableNodeWal::new();
-        let kp = ValidatorKeypair::from_seed(2, b"equivocation-guard-seed");
+        let kp = SimulatorKeypair::from_simulator_seed(2, b"equivocation-guard-seed");
         let block_a = [0xA1; 32];
         let block_b = [0xB2; 32];
 
@@ -4244,4 +4952,75 @@ mod wal_tests {
             })
         );
     }
+
+    #[test]
+    fn test_fast_path_committee_binding_wal_slashing_durability_and_fold_quorum() {
+        let genesis = vec![VaultCellRecord {
+            id: 1,
+            required: vec![IpcAuth::Read],
+            salt: [0x10; 32],
+            content: b"genesis-cell-1".to_vec(),
+        }];
+        let mut cluster =
+            SimplexCluster::new(4, 1, genesis.clone()).expect("4-node cluster should spawn");
+        let committee_pks = cluster.committee_pks();
+
+        // 1. SignedFastPathAck binds `voter_id` and FastPathCert::verify_with_committee rejects rogue signers
+        let fp_turn = sample_turn(0x91, 1, b"fp-val");
+        let mut ack0 = SignedFastPathAck::new(&cluster.nodes[0].keypair, &fp_turn);
+        assert!(ack0.verify());
+        ack0.voter_id = 1;
+        assert!(
+            !ack0.verify(),
+            "mutating voter_id must invalidate SignedFastPathAck signature"
+        );
+
+        let rogue_kp = SimulatorKeypair::from_simulator_seed(0, b"rogue-non-committee-seed");
+        let rogue_ack = SignedFastPathAck::new(&rogue_kp, &fp_turn);
+        let ack1 = SignedFastPathAck::new(&cluster.nodes[1].keypair, &fp_turn);
+        let ack2 = SignedFastPathAck::new(&cluster.nodes[2].keypair, &fp_turn);
+        let forged_fp_cert = FastPathCert {
+            turn_digest: fp_turn.digest(),
+            turn: fp_turn.clone(),
+            acks: vec![rogue_ack, ack1.clone(), ack2.clone()],
+            post_state_root: [0x11; 32],
+            anchor_height: 0,
+            tier: FinalityTier::AttestedFastPath,
+        };
+        assert!(
+            !forged_fp_cert.verify_with_committee(3, &committee_pks),
+            "FastPathCert::verify_with_committee must reject non-committee public keys"
+        );
+
+        // 2. Durable WAL Slashing (`WalEntry::ValidatorSlashed`) survives simulate_crash + recover_from_wal
+        let slash = cluster
+            .inject_byzantine_equivocation(3, 1, [0xAA; 32], [0xBB; 32])
+            .expect("Byzantine equivocation by validator 3 should be detected");
+        assert!(cluster.nodes[0].slashed_validators().contains(&3));
+        cluster.nodes[0].simulate_crash();
+        assert!(cluster.nodes[0].slashed_validators().is_empty());
+        cluster.nodes[0]
+            .recover_from_wal()
+            .expect("recover_from_wal should restore slashed_validators");
+        assert!(
+            cluster.nodes[0].slashed_validators().contains(&3),
+            "WalEntry::ValidatorSlashed must restore slashed_validators across crash + recovery"
+        );
+        assert!(cluster
+            .nodes[0]
+            .slashing_receipts()
+            .iter()
+            .any(|r| r.offender_id == slash.offender_id && r.view == slash.view));
+
+        // 3. Fold::collapse rejects 1-vote FinCert
+        let blk1 = cluster.run_simplex_block().expect("block 1 should finalize");
+        let mut single_vote_blk = blk1.clone();
+        single_vote_blk.fin_cert.votes.truncate(1);
+        let mut session = ObendSession::new().expect("session");
+        assert!(
+            Fold::collapse(99, &genesis, &[single_vote_blk], &mut session).is_err(),
+            "Fold::collapse must reject a 1-vote FinCert below BFT quorum threshold"
+        );
+    }
 }
+

@@ -14,6 +14,7 @@ pub struct SandboxConfig {
     pub workspace_dir: PathBuf,
     pub runtime_root: PathBuf,
     pub allow_network: bool,
+    pub allow_unsandboxed_fallback: bool,
     pub scratch_mib: Option<u32>,
     pub memory_max_mb: u32,
     pub program: PathBuf,
@@ -27,6 +28,7 @@ impl Default for SandboxConfig {
             workspace_dir: PathBuf::from("/tmp/obend-workspace"),
             runtime_root: PathBuf::from("/opt/obend"),
             allow_network: false,
+            allow_unsandboxed_fallback: false,
             scratch_mib: Some(256),
             memory_max_mb: 2048,
             program: PathBuf::from("/agent/bin/obend"),
@@ -47,6 +49,7 @@ pub enum SandboxBackend {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SandboxError {
     InvalidCommand(String),
+    SandboxUnavailable(String),
     SpawnFailed(String),
     TimeoutExceeded {
         timeout_ms: u64,
@@ -63,6 +66,7 @@ impl std::fmt::Display for SandboxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidCommand(msg) => write!(f, "invalid sandbox command: {msg}"),
+            Self::SandboxUnavailable(msg) => write!(f, "OS sandbox confinement unavailable: {msg}"),
             Self::SpawnFailed(msg) => write!(f, "failed to spawn sandboxed process: {msg}"),
             Self::TimeoutExceeded {
                 timeout_ms,
@@ -100,6 +104,7 @@ pub struct SandboxRunReceipt {
     pub stderr_digest: [u8; 32],
     pub peak_rss_bytes: usize,
     pub backend: SandboxBackend,
+    pub is_fallback: bool,
     pub tier: ReproducibilityTier,
     pub seatbelt_profile: Option<String>,
 }
@@ -115,6 +120,7 @@ impl SandboxRunReceipt {
         buf.extend_from_slice(&self.stdout_digest);
         buf.extend_from_slice(&self.stderr_digest);
         buf.push(self.tier.tag_byte());
+        buf.push(u8::from(self.is_fallback));
         sha256(&buf)
     }
 }
@@ -243,13 +249,14 @@ impl BubblewrapRunner {
     /// Generate a macOS Seatbelt (`sandbox-exec -p`) SBPL confinement profile for `config`.
     pub fn build_seatbelt_profile(config: &SandboxConfig) -> String {
         let workspace = config.workspace_dir.to_string_lossy().replace('"', "\\\"");
+        let runtime_root = config.runtime_root.to_string_lossy().replace('"', "\\\"");
         let net_rule = if config.allow_network {
             "(allow network*)"
         } else {
             "(deny network*)"
         };
         format!(
-            "(version 1) (deny default) (allow process*) (allow sysctl-read) (allow mach-lookup) (allow file-read*) (allow file-write* (subpath \"/private/tmp\") (subpath \"/tmp\") (subpath \"/dev/null\") (subpath \"{workspace}\")) {net_rule}"
+            "(version 1) (deny default) (allow process*) (allow sysctl-read) (allow mach-lookup) (allow file-read* (literal \"/\") (subpath \"/usr\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/AppleInternal\") (subpath \"/private\") (subpath \"/dev\") (subpath \"/tmp\") (subpath \"/var\") (subpath \"/etc\") (subpath \"{runtime_root}\") (subpath \"{workspace}\")) (allow file-write* (subpath \"/private/tmp\") (subpath \"/tmp\") (subpath \"/dev/null\") (subpath \"{workspace}\")) {net_rule}"
         )
     }
 
@@ -302,7 +309,7 @@ impl BubblewrapRunner {
                     vec!["-p".to_string(), profile.clone(), command.to_string()];
                 sb_args.extend(args.iter().map(|s| (*s).to_string()));
                 let sb_arg_refs: Vec<&str> = sb_args.iter().map(String::as_str).collect();
-                if let Ok(mut receipt) = Self::run_metered_child(
+                match Self::run_metered_child(
                     "/usr/bin/sandbox-exec",
                     &sb_arg_refs,
                     command,
@@ -312,16 +319,28 @@ impl BubblewrapRunner {
                     SandboxBackend::MacosSeatbelt,
                     Some(profile.clone()),
                 ) {
-                    let stderr_text = String::from_utf8_lossy(&receipt.stderr);
-                    let nested_sandbox_denied = !receipt.success
-                        && (stderr_text.contains("sandbox_apply")
-                            || stderr_text.contains("Operation not permitted")
-                            || receipt.exit_code == Some(71));
-                    if !nested_sandbox_denied {
-                        receipt.seatbelt_profile = Some(profile);
-                        return Ok(receipt);
+                    Ok(mut receipt) => {
+                        let stderr_text = String::from_utf8_lossy(&receipt.stderr);
+                        let nested_sandbox_denied = !receipt.success
+                            && (stderr_text.contains("sandbox_apply")
+                                || stderr_text.contains("Operation not permitted")
+                                || receipt.exit_code == Some(71));
+                        if !nested_sandbox_denied {
+                            receipt.seatbelt_profile = Some(profile);
+                            return Ok(receipt);
+                        }
                     }
+                    Err(
+                        err @ (SandboxError::TimeoutExceeded { .. }
+                        | SandboxError::OutputLimitExceeded { .. }),
+                    ) => return Err(err),
+                    Err(_) => {}
                 }
+            }
+            if !config.allow_unsandboxed_fallback {
+                return Err(SandboxError::SandboxUnavailable(
+                    "macOS Seatbelt (sandbox-exec) confinement unavailable or denied and allow_unsandboxed_fallback is false".to_string(),
+                ));
             }
             Self::run_metered_child(
                 command,
@@ -347,7 +366,7 @@ impl BubblewrapRunner {
                 let flags = Self::build_flags(&bwrap_cfg);
                 let flag_refs: Vec<&str> = flags.iter().map(String::as_str).collect();
                 let bwrap_bin = config.bwrap_binary.to_string_lossy().to_string();
-                if let Ok(receipt) = Self::run_metered_child(
+                match Self::run_metered_child(
                     &bwrap_bin,
                     &flag_refs,
                     command,
@@ -357,11 +376,23 @@ impl BubblewrapRunner {
                     SandboxBackend::Bubblewrap,
                     None,
                 ) {
-                    let stderr_text = String::from_utf8_lossy(&receipt.stderr);
-                    if receipt.success || !stderr_text.contains("bwrap:") {
-                        return Ok(receipt);
+                    Ok(receipt) => {
+                        let stderr_text = String::from_utf8_lossy(&receipt.stderr);
+                        if receipt.success || !stderr_text.contains("bwrap:") {
+                            return Ok(receipt);
+                        }
                     }
+                    Err(
+                        err @ (SandboxError::TimeoutExceeded { .. }
+                        | SandboxError::OutputLimitExceeded { .. }),
+                    ) => return Err(err),
+                    Err(_) => {}
                 }
+            }
+            if !config.allow_unsandboxed_fallback {
+                return Err(SandboxError::SandboxUnavailable(
+                    "Linux Bubblewrap (bwrap) confinement unavailable or failed and allow_unsandboxed_fallback is false".to_string(),
+                ));
             }
             Self::run_metered_child(
                 command,
@@ -377,6 +408,11 @@ impl BubblewrapRunner {
 
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
+            if !config.allow_unsandboxed_fallback {
+                return Err(SandboxError::SandboxUnavailable(
+                    "OS sandbox confinement unavailable on target platform and allow_unsandboxed_fallback is false".to_string(),
+                ));
+            }
             Self::run_metered_child(
                 command,
                 args,
@@ -478,6 +514,7 @@ impl BubblewrapRunner {
         let io_fuel = (observed_bytes as u64) / 64;
         let fuel_consumed = cpu_fuel.saturating_add(io_fuel);
         let peak_rss_bytes = (4096usize).saturating_add(observed_bytes);
+        let is_fallback = matches!(backend, SandboxBackend::MeteredProcessFallback);
 
         Ok(SandboxRunReceipt {
             command: logical_command.to_string(),
@@ -492,6 +529,7 @@ impl BubblewrapRunner {
             stderr_digest,
             peak_rss_bytes,
             backend,
+            is_fallback,
             tier: ReproducibilityTier::R1MeteredProcess,
             seatbelt_profile,
         })
@@ -505,6 +543,7 @@ mod tests {
     #[test]
     fn test_bwrap_flags_default() {
         let config = SandboxConfig::default();
+        assert!(!config.allow_unsandboxed_fallback);
         let flags = BubblewrapRunner::build_flags(&config);
 
         assert!(flags.contains(&"--die-with-parent".to_string()));
@@ -533,7 +572,8 @@ mod tests {
         assert!(profile_offline.contains("(version 1)"));
         assert!(profile_offline.contains("(deny default)"));
         assert!(profile_offline.contains("(allow process*)"));
-        assert!(profile_offline.contains("(allow file-read*)"));
+        assert!(profile_offline.contains("(allow file-read* (literal \"/\")"));
+        assert!(!profile_offline.contains("(allow file-read*)"));
         assert!(profile_offline.contains("(deny network*)"));
 
         config.allow_network = true;
@@ -542,11 +582,56 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_sandboxed_fails_closed_without_fallback() {
+        let runner = BubblewrapRunner::new();
+        let mut strict_cfg = SandboxConfig::default();
+        strict_cfg.bwrap_binary = PathBuf::from("/nonexistent/bwrap");
+        strict_cfg.workspace_dir = PathBuf::from("/nonexistent/workspace");
+        strict_cfg.runtime_root = PathBuf::from("/nonexistent/runtime");
+        strict_cfg.allow_unsandboxed_fallback = false;
+
+        #[cfg(target_os = "linux")]
+        {
+            let res = runner.execute_sandboxed_with_config(
+                &strict_cfg,
+                "/bin/echo",
+                &["should-fail-closed"],
+                2000,
+                DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+            );
+            assert!(
+                matches!(res, Err(SandboxError::SandboxUnavailable(_))),
+                "strict config without bwrap must fail closed, got {res:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_execute_sandboxed_live_process_and_receipt() {
         let runner = BubblewrapRunner::new();
-        let receipt = runner
-            .execute_sandboxed("/bin/echo", &["obend-sandbox-live"], 5000)
-            .expect("sandboxed /bin/echo should succeed");
+        let receipt = match runner.execute_sandboxed("/bin/echo", &["obend-sandbox-live"], 5000) {
+            Ok(receipt) => {
+                assert!(!receipt.is_fallback);
+                receipt
+            }
+            Err(SandboxError::SandboxUnavailable(_)) => {
+                let mut fallback_cfg = SandboxConfig::default();
+                fallback_cfg.allow_unsandboxed_fallback = true;
+                let receipt = runner
+                    .execute_sandboxed_with_config(
+                        &fallback_cfg,
+                        "/bin/echo",
+                        &["obend-sandbox-live"],
+                        5000,
+                        DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+                    )
+                    .expect("explicitly enabled fallback should succeed in test environment");
+                assert!(receipt.is_fallback);
+                assert_eq!(receipt.backend, SandboxBackend::MeteredProcessFallback);
+                receipt
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+        };
 
         assert!(receipt.success);
         assert_eq!(receipt.exit_code, Some(0));
@@ -557,6 +642,14 @@ mod tests {
         assert!(receipt.fuel_consumed >= 1);
         assert_eq!(receipt.tier, ReproducibilityTier::R1MeteredProcess);
         assert_ne!(receipt.receipt_digest(), [0u8; 32]);
+
+        let mut flipped = receipt.clone();
+        flipped.is_fallback = !receipt.is_fallback;
+        assert_ne!(
+            receipt.receipt_digest(),
+            flipped.receipt_digest(),
+            "receipt_digest must bind is_fallback"
+        );
         #[cfg(target_os = "macos")]
         assert!(receipt.seatbelt_profile.is_some());
     }
@@ -571,8 +664,17 @@ mod tests {
             Err(SandboxError::InvalidCommand(_))
         ));
 
+        let mut cfg = SandboxConfig::default();
+        cfg.allow_unsandboxed_fallback = true;
+
         // 2. Timeout enforcement with kill_on_drop
-        let timeout_res = runner.execute_sandboxed("/bin/sleep", &["2"], 30);
+        let timeout_res = runner.execute_sandboxed_with_config(
+            &cfg,
+            "/bin/sleep",
+            &["2"],
+            30,
+            DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+        );
         match timeout_res {
             Err(SandboxError::TimeoutExceeded {
                 timeout_ms,
@@ -585,7 +687,6 @@ mod tests {
         }
 
         // 3. Output size limit enforcement
-        let cfg = SandboxConfig::default();
         let out_res = runner.execute_sandboxed_with_config(
             &cfg,
             "/bin/echo",

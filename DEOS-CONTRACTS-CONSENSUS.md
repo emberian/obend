@@ -1,6 +1,17 @@
 # Proof-Carrying Smart Contract Vaults, DeOS Surfaces, and 4-Tier Finality
 
-> **Architectural Design Document** — How `Obend` absorbs and unifies the best of **Dregg2** (`breadstuffs`), **DeOS** (`deos-*`, `starbridge-v2`), and **MiniDregg** (`minidregg` Sandstorm grains & `Simplex` BFT) into a single, machine-checked (`0 sorryAx`) capability-linear smart contract and distributed epistemic consensus system.
+> **Architectural Design Document** — How `Obend` absorbs and unifies the best of **Dregg2** (`breadstuffs`), **DeOS** (`deos-*`, `starbridge-v2`), and **MiniDregg** (`minidregg` Sandstorm grains & `Simplex` BFT) into a capability-linear smart contract and distributed epistemic consensus design.
+>
+> **Reading note (2026-11-04).** This document was written as a design and was later relabelled as
+> a ledger. Where it names a theorem, check the tree: `review/FABLE-COUNCIL-20261101.md` §2.2 and
+> `review/EXPERT-distributed-security-20261103.md` §4 list the names cited here that do not exist
+> (`simplex_safety`, `simplex_no_skip_and_fin`, `simplex_bounded_liveness_after_gst`,
+> `blinded_projection_non_forgeable`, `grain_confinement_sound`, `powerbox_attenuation_monotonic`,
+> `mandate_bounds_turn`, `collapse_preserves_accepts`, `disjoint_turns_commute`,
+> `vaultTurn_wide_pullback_sound`, `vaultTurn_conserves_linear_slots`, `zoe_offer_safety`,
+> `relaw_preserves_forever_crown`, `one_checker_to_rule_them_all`). §5.2 below states what the
+> consensus code is and what is proved about it. `crates/obend-node` is an in-process simulator
+> of these theorems, not a validator (`review/DECISIONS-20261031.md`, 2026-11-04).
 
 ---
 
@@ -126,9 +137,8 @@ How do two distrusting agents execute a joint `VaultTurn` when parts of their Va
 Inspired by `minidregg`'s Sandstorm grain architecture and DeOS `starbridge-v2`:
 - **`Grain`**: An isolated sub-Vault compartment with a closed capability table `capTable : List (CapHandle × SlotId × Permission)`.
   - **`grain_confinement_sound`**: A `Grain` transition cannot read, cite, or mutate any `SlotId` not present in its `capTable` with matching permission.
-- **`Powerbox`**: The sole mechanism for introducing a new capability into a `Grain` is an explicit `PowerboxRequest` approved by the parent Vault / user.
-  - **`powerbox_attenuation_monotonic`**: Delegating a capability through the `Powerbox` can only **narrow** permissions (`Narrows attenuatedContract parentContract`), never widen them.
-- **`Mandate`**: Every autonomous subagent operates under a `Mandate`—a human-readable, machine-checked envelope bounding maximum asset spend (`Book`), allowed `SlotId` impact cone (`Obend/Analysis/Impact.lean`), and maximum `Ticks` budget (`mandate_bounds_turn`).
+- **`Powerbox`** (design): The sole mechanism for introducing a new capability into a `Grain` is an explicit `PowerboxRequest` approved by the parent Vault / user. (State 2026-11-04: `crates/obend-node` `Powerbox` is a `BTreeMap<String, Mandate>` keyed by the holder's NAME, and a turn claims a mandate by carrying that name; this is an ACL, not an unforgeable reference. `Mandate.attenuates` / `subDelegate_attenuates` hold per child; delegation debits the parent's budget since 2026-11-04. `powerbox_attenuation_monotonic` does not exist.)
+- **`Mandate`** (design): Every autonomous subagent operates under a `Mandate`—a human-readable, machine-checked envelope bounding maximum asset spend (`Book`), allowed `SlotId` impact cone (`Obend/Analysis/Impact.lean`), and maximum `Ticks` budget. (`mandate_bounds_turn` does not exist; `Obend/Vault/Mandate.lean` proves attenuation and tree-authorization lemmas.)
 
 ### 4.4 Rehydratable Membranes, `Sturdyref`, Derived Liveness-Types & 3D `ReactiveAffordance` (`Obend/Vault/Rehydration.lean`)
 Absorbing `REHYDRATABLE-SURFACES.md` and `Dregg2/Deos/{Rehydration,Rerender,Reactive}.lean`:
@@ -160,18 +170,40 @@ flowchart TD
 - **Tier 0 (`LawDial.free`)**: Local notebook cells edit freely (`dial_free_confluent`), tracking unproven steps in `UnverifiedDebt`.
 - **Tier 1 (`VaultTurn` Fast Path)**: Once `Judge.accepts` verifies the `Core4` witness, if a `VaultTurn` touches only local slots or slots whose footprints are disjoint from concurrent turns, **`disjoint_turns_commute`** (backed by `Obend/Logic/Frame.lean` `claim_frame` and `Obend/Run/Fork.lean` `stitch_atomic`) proves that no global ordering is required! Owned/disjoint capability turns finalize in a single round-trip.
 
-### 5.2 Tier 2: Symbolic-Mode `Simplex` BFT (`Obend/Consensus/Simplex.lean`)
-When multiple agents contend on the *same* shared slot (e.g., a public `drex-clearing@1` orderbook or shared repository root), `Obend` orders the contending `VaultTurn`s using a mechanized **Symbolic `Simplex` BFT** protocol (inspired by Chan–Pass `Simplex` in `minidregg` and `breadstuffs/dregg2`):
-- **Symbolic Cryptographic Abstraction**: Signatures and hashes are modeled in Lean via an abstract `CryptoVerifier` typeclass (`VerifySig`, `HashCollisionFree`) so metatheory proofs are fast and syntactic, while the thin Rust shell binds concrete `ed25519-dalek` / `aws-lc-rs` / `blake3` implementations at runtime.
-- **Protocol Certificates**:
-  - `PropCert(h, b)`: $\ge 2f+1$ validator votes notarizing block $b$ at height $h$.
-  - `SkipCert(h)`: $\ge 2f+1$ timeout votes notarizing the dummy block $\bot_h$ if the leader of height $h$ is slow/Byzantine (advancing immediately without complex view-change state machines!).
-  - `FinCert(h, b)`: $\ge 2f+1$ finalization votes from validators who observed `PropCert(h, b)` and did not vote `skip(h)`.
-- **Mechanized Theorems (`0 sorryAx`)**:
-  - **`simplex_no_skip_and_fin`**: At any height $h$ with $< n/3$ Byzantine weight, `SkipCert(h)` and `FinCert(h, b)` ($b \neq \bot_h$) cannot both exist (quorum intersection $\ge f+1$ honest validators).
-  - **`simplex_safety`**: No two distinct non-dummy blocks $b_1 \neq b_2$ can be finalized at the same height, and every finalized block is an ancestor of all subsequently notarized/finalized blocks.
-  - **`simplex_accountable_safety`**: If a safety violation ever occurs (under $> n/3$ Byzantine corruption), comparing the two conflicting certificates deterministically extracts a concrete **`SlashingReceipt`** containing $\ge f+1$ double-signed equivocations verifiable by `Judge.accepts`.
-  - **`simplex_bounded_liveness_after_gst`**: After Global Stabilization Time (GST), every height with an honest leader finalizes a `VaultTurn` batch within $3\Delta$ network delays.
+### 5.2 Tier 2: what the consensus code is, and what is proved about it (rewritten 2026-11-04)
+
+**The design goal** stays Chan–Pass Simplex: `PropCert(h,b)` as 2f+1 notarize votes, `SkipCert(h)`
+as 2f+1 timeout votes, `FinCert(h,b)` from validators who saw the notarization and did not skip,
+with `no_skip_and_fin`, same-height safety, accountable safety and bounded liveness after GST as
+theorems about one executable state machine. **None of that is built.** What exists:
+
+- **Lean, `Obend/Consensus/Simplex.lean`.** Two combinatorial lemmas over abstract vote
+  predicates: `honest_quorum_intersection` (two 2f+1 quorums of a 3f+1 committee with at most f
+  faulty share an honest member) and `qc_same_view_unique` (two same-view quorums agree on their
+  value). A `State`/`ViewRecord` record with `register`, `broadcast`, `castVote` and no handler for
+  a proposal, a vote, or a view change. A `SimplexState` cell contract that checks a SIGNER COUNT
+  (`certSigners`), beside a `QuorumBoundFinalityGate` (`Finality.lean`) that checks a signer list
+  against a committee; neither checks a signature. `simplex_accountable_safety` extracts a
+  `SlashingReceipt` that names voters but carries no votes, so it cannot be checked by a third
+  party; the Rust `EquivocationSlashReceipt` (two signed votes) can, and no theorem relates them.
+  No theorem named `simplex_safety`, `simplex_no_skip_and_fin` or
+  `simplex_bounded_liveness_after_gst` exists.
+- **Rust, `crates/obend-node/src/net.rs`, an in-process simulator.** A ONE-ROUND protocol: the
+  leader of view v signs a proposal (`PropCert` is leader-signed, not a quorum); a validator in
+  view v casts a `Finalize` vote for a proposal that extends its committed tip at the next height;
+  `FinCert(v,b)` is 2f+1 such votes; a `SkipCert(v)` is 2f+1 skip votes cast by the harness
+  (`SimplexCluster::run_view_skip`; nodes have no timers). Two executable rules carry it across
+  views: a validator votes only in its current view (`Propose` handler), and never skips a view
+  it finalize-voted in (`DurableNodeWal::check_can_vote_inner`). Same-view agreement follows from
+  `qc_same_view_unique`; that `FinCert(v)` and `SkipCert(v)` never both exist, and that a finalized
+  block is applied only at the next height on the committed tip (`apply_finalized_block`), are
+  argued from those rules and tested, not proved. Keys are the simulator's (`SimulatorKeypair`,
+  a Schnorr variant on edwards25519 with cSHAKE256, derived from the public
+  `SimplexCluster::simulator_seed`); the WAL is a `Vec` in memory; wire frames are JSON.
+- **Fixed on 2026-11-04** (`review/EXPERT-distributed-security-20261103.md` S1): until then a
+  validator also finalize-voted for proposals in any view up to `current+64` with the parent check
+  skipped, and applied any finalized block whose height it had not seen, so one Byzantine leader
+  could finalize two blocks at one height and split the honest set.
 
 ### 5.3 Tier 3: `EpistemicConsensus` & `Fold.collapse` (`Obend/Consensus/Epistemic.lean`)
 Ordering bytes (`Simplex`) is not the same as agreeing on **scientific truth, hardware PDK signoff, or oracle validity**. Absorbing Dregg2's `epistemic_consensus.ml`:

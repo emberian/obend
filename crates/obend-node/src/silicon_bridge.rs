@@ -14,6 +14,7 @@
 //!     `fallback_activated == false`) when an authorized `"world-carry@1"` (`K-CARRY`) upgrade commits
 //!     across the BFT quorum.
 
+use crate::judge_witness::JudgeWitnessError;
 use crate::net::VaultTurn;
 use crate::{cshake256_domain, DrexClearingCertificate, LimitOrder};
 pub use obend_fpga_hal::regs::{
@@ -95,6 +96,9 @@ pub enum SiliconSlotGuardError {
         telemetry: SiliconTelemetry,
     },
 
+    #[error("turn judge witness rejected before hardware execution: {0}")]
+    WitnessRejected(#[from] JudgeWitnessError),
+
     #[error("FPGA HAL error: {0}")]
     Hal(#[from] FpgaHalError),
 }
@@ -131,7 +135,9 @@ pub fn build_turn_obcam_wire_frame(
         (u32::from_le_bytes([frame_seed[8], frame_seed[9], frame_seed[10], frame_seed[11]])
             & 0x00FF_FFFF)
             .max(1);
-    let obligation_count = turns.len() + orders.len() + usize::from(clearing_cert.is_some());
+    let witness_count: usize = turns.iter().map(|t| t.witnesses.len()).sum();
+    let obligation_count =
+        turns.len() + witness_count + orders.len() + usize::from(clearing_cert.is_some());
     let fuel_budget = 512u32.saturating_add((obligation_count as u32).saturating_mul(64));
 
     let mut frame =
@@ -176,7 +182,8 @@ pub fn build_turn_obcam_wire_frame(
         ((law_pin_digest >> 32) & 0xFFFF_FFFF) as u32,
     ]);
 
-    // Encode each `VaultTurn` footprint obligation
+    // Encode each `VaultTurn` footprint obligation and its cited `TurnJudgeWitness` certificates
+    let mut witness_sym_cursor = 1000u16;
     for (idx, turn) in turns.iter().enumerate() {
         let td = turn.digest();
         let h0 = u16::from_le_bytes([td[0], td[1]]).max(1);
@@ -205,6 +212,33 @@ pub fn build_turn_obcam_wire_frame(
             .push((turn_handle, target_decl_sym, 100 + idx as u32));
         frame.unify_worklist.push((turn_handle, target_expr_h));
         frame.infer_seeds.push((turn_handle, target_type_h));
+
+        for w in &turn.witnesses {
+            let wd = w.digest();
+            let wh0 = u16::from_le_bytes([wd[0], wd[1]]).max(1);
+            let wh1 = u16::from_le_bytes([wd[2], wd[3]]).max(1);
+            let wh2 = (w.grade.min(u16::MAX as u32) as u16).max(1);
+            let sym = witness_sym_cursor;
+            witness_sym_cursor = witness_sym_cursor.saturating_add(1);
+            let w_hw = HwPackedNodeWord88 {
+                tag: 0x0C,
+                h0: wh0,
+                h1: wh1,
+                h2: wh2,
+                sym_idx: sym,
+                has_loose_bvar: false,
+                has_fvar: false,
+                has_mvar: false,
+                max_loose_bvar: 0,
+            };
+            frame.cam_nodes.push(w_hw.to_cam_node());
+            let w_handle = ((wh0 as u32) << 16) | (wh1 as u32);
+            frame
+                .discr_trie_entries
+                .push((w_handle, target_decl_sym, sym as u32));
+            frame.unify_worklist.push((w_handle, turn_handle));
+            frame.infer_seeds.push((w_handle, target_type_h));
+        }
     }
 
     // Encode each `LimitOrder` obligation
@@ -550,6 +584,10 @@ impl NodeSiliconAccelerator {
                 receipt: fb_receipt,
                 post_telemetry,
             });
+        }
+
+        for turn in turns {
+            turn.verify_witnesses()?;
         }
 
         // If a previous unauthorized/stale pin probe latched `DPR_FALLBACK_ACTIVE`, re-validate and

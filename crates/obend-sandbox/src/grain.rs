@@ -867,6 +867,27 @@ impl GrainExecutor {
                         termination = GrainTermination::CapabilityDenied;
                         break;
                     }
+                    let mut unauthorized_read = false;
+                    for token in expression.split_whitespace() {
+                        if let Some(slot_str) = token.strip_prefix("slot:") {
+                            match slot_str.parse::<u64>() {
+                                Ok(read_slot_id) => {
+                                    if !self.capabilities.can_read_slot(read_slot_id) {
+                                        unauthorized_read = true;
+                                        break;
+                                    }
+                                }
+                                Err(_) => {
+                                    unauthorized_read = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if unauthorized_read {
+                        termination = GrainTermination::CapabilityDenied;
+                        break;
+                    }
                     let cell_val =
                         Self::eval_cell_expression(expression, &stack, &registers, input_slots);
                     let cell_bytes = format!("cell:{}:{}:{}", slot_id, expression.trim(), cell_val)
@@ -1178,7 +1199,10 @@ pub fn step_policy_grain_instr<S: AsRef<str>>(
             }
         }
         PolicyGrainInstr::ScanTokens { max_tokens } => {
-            let scan_cost = 2 * tokens.len().min(*max_tokens) + 1;
+            if tokens.len() > *max_tokens {
+                return None;
+            }
+            let scan_cost = 2 * tokens.len() + 1;
             if vm.fuel_reg < scan_cost {
                 None
             } else {
@@ -1517,6 +1541,35 @@ mod tests {
             PolicyGrainInstr::Halt,
         ];
         assert_eq!(eval_policy_grain_prog(&bad_prog, &accept_tokens), None);
+
+        // Excess tokens (> max_tokens) or max_tokens = 0 with non-empty tokens rejected
+        let zero_max_prog = compile_policy_to_grain_prog(&policy, 0);
+        assert_eq!(eval_policy_grain_prog(&zero_max_prog, &accept_tokens), None);
+        let one_max_prog = compile_policy_to_grain_prog(&policy, 1);
+        assert_eq!(eval_policy_grain_prog(&one_max_prog, &accept_tokens), None);
+
+        // EvalCellStep referencing unauthorized slot:99 is rejected with CapabilityDenied
+        let side_channel_prog = GrainProgram::new(
+            "cell_step_side_channel",
+            vec![
+                GrainOp::EvalCellStep {
+                    slot_id: 2,
+                    expression: "r1 slot:99 7".to_string(),
+                },
+                GrainOp::Halt,
+            ],
+        );
+        let strict_exec = GrainExecutor::new(
+            GrainBudget::default(),
+            GrainCapabilities::strict(vec![1], vec![2], true),
+        );
+        let side_channel_receipt =
+            strict_exec.execute(&side_channel_prog, &[(99, b"secret-slot".to_vec())]);
+        assert_eq!(
+            side_channel_receipt.termination,
+            GrainTermination::CapabilityDenied
+        );
+        assert!(side_channel_receipt.emitted_slots.is_empty());
     }
 }
 
