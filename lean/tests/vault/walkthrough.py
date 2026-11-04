@@ -9,6 +9,7 @@ must exit non-zero; any other must exit 0.
     python3 tests/vault/walkthrough.py            # from lean/, after `lake build obend`
     python3 tests/vault/walkthrough.py --work DIR # run in DIR (must not exist) and keep it
     python3 tests/vault/walkthrough.py --record   # rewrite the expected outputs (then read them!)
+    python3 tests/vault/walkthrough.py --doc PATH # another walkthrough in the same form (tests/decisions/)
 """
 import os
 import re
@@ -44,7 +45,10 @@ def blocks(text):
 
 
 def main():
+    global DOC
     args = sys.argv[1:]
+    if "--doc" in args:
+        DOC = os.path.abspath(args[args.index("--doc") + 1])
     record = "--record" in args
     work = None
     if "--work" in args:

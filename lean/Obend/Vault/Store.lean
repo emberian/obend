@@ -282,9 +282,15 @@ def kindChain (es : List Entry) (name src : String) : List String :=
   | .error _ => []
 
 /-- The laws a write of `pageName` (at version `G`) is judged by: its own, then its kinds' (its kind
-first, along the C4 precedence list). -/
+first, along the C4 precedence list). A kind page's own law lines are the laws of the pages born
+under it, not of the kind page: a kind whose instances must be dated (`not (new.date == 0)`) starts
+them at `date: 0` and is itself born (2026-11-04; before, a kind was judged by its own law lines, so
+such a kind could not be born). A kind page is judged by the kinds above it. -/
+def ownLaws (pageName : String) (G : Graph) : Except String Laws :=
+  if isKind pageName then .ok [] else lawsIn pageName G
+
 def lawsFor (es : List Entry) (pageName : String) (G : Graph) : Except String Laws := do
-  let own ← lawsIn pageName G
+  let own ← ownLaws pageName G
   let kinds ← kindsFor es pageName (settled G)
   return own ++ kinds.laws
 
@@ -340,7 +346,7 @@ def lawsKept (old new : String) : Bool :=
 theorem lawsFor_of_kept (es : List Entry) (name : String) {G G' : Graph}
     (h : lawsKept (settled G) (settled G') = true) : lawsFor es name G = lawsFor es name G' := by
   simp only [lawsKept, Bool.and_eq_true, beq_iff_eq] at h
-  simp only [lawsFor, lawsIn, kindsFor, pageKind, h.1, h.2]
+  simp only [lawsFor, ownLaws, lawsIn, kindsFor, pageKind, h.1, h.2]
 
 /-- Kept laws keep the kinds. -/
 theorem kindChain_of_kept (es : List Entry) (name : String) {old new : String} (h : lawsKept old new = true) :

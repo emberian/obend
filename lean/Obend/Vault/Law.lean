@@ -9,8 +9,8 @@ measures and its frontmatter's scalar fields), every field a natural, every fiel
 present (at 0 where the page does not have it).
 
 A folder's `_kind.md` is a KIND, registered as a kind cell of `Obend.Kind` (`Obend.Vault.vaultKinds`):
-its law lines are laws of every page born under it, and its `key: value` lines the fields such a page
-starts with. A page carries its kind's identity in its frontmatter (`kind: K`, written by
+its law lines are laws of every page born under it (not of the kind page itself, which the kinds
+above it judge), and its `key: value` lines the fields such a page starts with. A page carries its kind's identity in its frontmatter (`kind: K`, written by
 `obend create --from K`); a page that names none is an instance of its nearest folder's kind. A kind
 page names its parents (`parents: a, b`) or has its nearest enclosing folder's kind as its parent.
 The laws a write is judged by are the page's own, then those of every kind on its kind's C4
@@ -282,7 +282,7 @@ def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (fron
 /-- On a coupled multi-field law (`monotone(a) and new.a <= new.b and new.b <= 10`) where no
 single-field edit from `{a: 2, b: 1}` (against `old = {a: 4, b: 1}`) passes, `suggestMultiField`
 uses `Obend.Spec.LawDial.solveLawWitness` to synthesize the multi-field edit `[("a", 4), ("b", 4)]`. -/
-theorem suggestMultiField_coupledMultiFieldLaw :
+example :
     suggestMultiField Obend.Spec.LawDial.coupledMultiFieldLaw Obend.Spec.LawDial.demoFacts
       (some Obend.Spec.LawDial.coupledOldState)
       (.record [("a", .natural 2), ("b", .natural 1)]) =

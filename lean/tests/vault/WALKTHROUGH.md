@@ -101,7 +101,7 @@ Delta v1
 ## 2. A law
 
 A page's frontmatter may carry laws: `law NAME: EXPR`, in the `.obend` law fragment. A law reads the
-page's measures (`words`, `lines`, `bytes`, `links`, `embeds`, `quotes`, `sections`, `version`), its
+page's measures (`words`, `lines`, `bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`), its
 frontmatter's number and true/false fields, and who is writing (`request.caller`: 0 is you). Adding a
 law is itself a write: the new law must hold of the page as it stands.
 

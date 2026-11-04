@@ -11,7 +11,7 @@ three more things of a page, and this module is them:
   `law NAME: EXPR` line is a law of the page (`Obend.Vault.Law`). The frontmatter is ordinary
   text of the page: an edit that changes a law line changes the law.
 * **Measures.** What a law may read of a page besides its fields: `bytes`, `lines`, `words` (of the
-  body), `links` (identity cites), `embeds`, `quotes` (block and byte cites), `sections` (open
+  body), `dangling` (wikilinks no page resolves), `links` (identity cites), `embeds`, `quotes` (block and byte cites), `sections` (open
   conflicts), `version`.
 * **Rendering with sections.** `pieces` renders a version as `Graph.source` does, except that a
   conflict (a section with two or more live candidates and no selection, `conflict_is_section`) is
@@ -305,6 +305,16 @@ def citeCounts (G : Graph) : Nat × Nat × Nat :=
       | _ => acc
     else acc) (0, 0, 0)
 
+/-- The wikilinks of a version that resolved to no page or block, `[[Name]]` or `![[Name]]` left as
+text (what `obend status` reports as dangling): a law `new.dangling == 0` requires every cite of
+the page to resolve. -/
+def danglingCount (G : Graph) : Nat :=
+  (G.atoms.map (·.1)).eraseDups.foldl (fun acc a =>
+    if G.run a then match G.label a with
+      | some (.text t) => if (t.startsWith "[[" || t.startsWith "![[") && t.endsWith "]]" then acc + 1 else acc
+      | _ => acc
+    else acc) 0
+
 /-- What a law reads of a version: its measures and its frontmatter's scalar fields (a measure
 wins over a field of the same name). -/
 def measures (G : Graph) (version : Nat) : List (String × Nat) :=
@@ -312,8 +322,9 @@ def measures (G : Graph) (version : Nat) : List (String × Nat) :=
   let body := (splitFront src).2
   let (links, embeds, quotes) := citeCounts G
   let ms : List (String × Nat) :=
-    [("bytes", (bytes src).length), ("embeds", embeds), ("lines", lineCount body), ("links", links),
-     ("quotes", quotes), ("sections", (sections G).length), ("version", version), ("words", wordCount body)]
+    [("bytes", (bytes src).length), ("dangling", danglingCount G), ("embeds", embeds), ("lines", lineCount body),
+     ("links", links), ("quotes", quotes), ("sections", (sections G).length), ("version", version),
+     ("words", wordCount body)]
   ms ++ (scalarFields src).filter fun (k, _) => !(ms.any (·.1 == k))
 
 /-! ## Lining a file up with a version -/
