@@ -708,3 +708,101 @@ Recorded on bb2: decisions 16, vault 36, ledger 24; tests/run-workspace.py WORKS
 8. The real `review/` file can only be the index page — open (follows from 1).
 9. (new) A merge replays a replica's write with its pins; an `obend open` does not yet admit a
    turn only when its pins hold.
+
+## What landed, fifth round (2026-11-04): one admission path, and a law per row
+
+Third generation of the lane (`cv distill` twice). Commits `9de897f` and `b8fa08b`, built on bb2
+module by module (`Obend.Vault.Store`, `Obend.Analysis.{Worlds,Replay}`, `obend`); every runner as
+before: vault 36, ledger 24, decisions 19 (three new steps), workspace 44, logic 20, leaf 14,
+receipts 31, obend-source 30/71/161. No recorded line of the vault or ledger walkthrough changed.
+
+### Gap 9 — one admission path (`9de897f`)
+
+`obend open` judged every write of an open against entries read before any of them, the drafts of
+all changed files among them (so a write could be admitted against the draft of a page whose own
+write was then refused, and a kind page's draft laws bound pages before the kind was born), and
+retried every refused write at every open that was not quiet. Now (`Vault/Store.lean`, "Admission")
+the writes are turns, `admitWrites`: each is judged against the store at the moment of its
+judgment, so the pins its judgment reads (`writeTurn`) hold at its admission; an admitted write
+enters the store; a refused one is kept with the pins its judgment read (`pinsOf`: its kinds,
+present or not yet; the pages its dangling links name; and where laws over links are judged, the
+pages it links to and the pages that link to it under one), stays refused while they hold, and is
+judged again exactly when a pin moves (an admission writes a page it read). The question "do the
+pins hold here" is asked of `admitFootprint`, the door the merge admits a replica's write through
+(`replicaPins`, third round): one rule for a write authored elsewhere and a write refused earlier.
+The retry loop and the rule "a refused write is tried again at every non-quiet open" are gone
+(`openPage` and the drafts-for-judgment `openEntries` use with it; `openEntries` remains for cite
+resolution only).
+
+What is proved. `admitWrites_ind`, an induction principle for the loop written by hand (nested
+induction on the lexicographic measure, unfolding by the equation lemma): the generated
+`fun_induction` principle depends on `admitWrites._unary.induct_unfolding`, which `#tooth` cannot
+see across a module boundary, and its case binders come out `attach`ed. `admitWrites_admitted` and
+**`open_admitted`**: every write an open refused was judged at pins the door admits at the store
+the open leaves, so the files say what the store would say again. `open_idem` is now stated
+through `openAdmission_{names,nodup,seen,cover}` and `quiet_after_settle`; honestly, its proof is
+still the quietness argument (the second open reads every file as the first left it), and what turn
+determinism bought is `open_admitted` and the deletion of the retry, not a new proof of `open_idem`.
+The two teeth on `open_idem` (`writesFor`, `quiet` mutations) bite.
+
+Two things the loop surfaced, both fixed before recording. A page born in the same open as its
+`_kind` was judged before the kind existed: `journal/Tuesday` was admitted without `brief`, and
+`decisions/D-000x` were refused as unknown-kind and, their kind chain empty, not pinned to the
+absent kind. A kind now precedes its instances in the order (`pendingAt`: kind pages first, the
+enclosing folder's before its folders'), and a write's pins name the kind it would be under whether
+or not that page exists (`readsOf`: `kindLine`, `kindsOf`), so a kind born later is a pin that
+moved. Order otherwise is page order and only matters where two writes in one open read each other
+through laws over links; the backlink judgment at the second write catches what the first did not
+see, as the decisions walkthrough's section 6 still shows.
+
+Open, and said in the code: cite resolution still reads the files as they are about to become
+(`openEntries`), so a cite of a block another changed file introduces is pinned at a version that
+may be refused (it reads `behind` until `recite`); `fixDangling` in `settle` judges its re-cites
+against the pre-settle store. Both are the pattern this round removed from the laws, left in the
+cites, and named here rather than widened into this change.
+
+### Gap 1 — the unit of a law is the page, not the row (`b8fa08b`)
+
+The rows the Doc model already distinguishes are heading lines (`blockLine` resolves `[[P#H]]`),
+and an atom is a line (`Obend.Doc.lex`), so a `## ` row is an atom range with ids stable across
+versions: no new parser. `law NAME per ##: EXPR` (`lawKey`, `lawSubject`) is judged at every row the
+marker begins (`rowsOf`: the heading line and the lines to the next heading of its level or above),
+on the row's own measures (`rowMeasures`: bytes, lines, words, links, embeds, quotes, dangling) and
+its write's (`deletions`, `insertions` within the row), against the row of the same title in the
+old version (a new row is a birth; a vanished row is a write of it to nothing); laws over rows
+inherit along kinds like any law line, and the refusal names the row. Decisions walkthrough
+section 8: `log/_kind` with `appendOnly per ##` and `cited per ##`; one row rewritten in place and
+a row appended in one write is refused `at ## D-0002: new.deletions == 0 does not hold there;
+deletions = 0 would pass (this write has deletions = 2)` (the line and the blank line closing it:
+`widen` re-writes a changed stretch up to the line end that closes it; the page's count is the
+same two); the row put back, the appended row is admitted (v2); a row naming a theorem the census
+lacks is refused `at ## D-0005` by `cited per ##`.
+
+**Stopped at fields, as asked.** `dated` and `deciderOnce` read fields; a row has none. The reader
+knows frontmatter `key: value` lines (the page's), wikilinks, block ids and heading lines, and the
+real ledger (`review/DECISIONS-20261031.md`) keeps its rows in markdown tables whose columns are the
+fields (`| decision | choice | where |`), which the reader does not read at all. To say `dated` per
+row the vault needs one of three syntaxes, each a decision about what a row is, for Ember:
+(a) Obsidian's inline fields, `date:: 20261104` on a line of the row — Dataview's, in wide use, `::`
+does not collide with prose colons, and the frontmatter reader applies as is; (b) a table whose
+header row names the columns and each row's cells are its fields — markdown's own syntax, the form
+the real ledger already has, and a new reader (split on `|`); (c) Pandoc heading attributes,
+`## D-0004 {date=20261104 decider=lane}`. My own order would be (b) then (a): (b) reads the ledger
+as it is written today without touching a row, (a) is what an Obsidian user would type by habit.
+Nothing of this is taken.
+
+### The gap list, updated
+
+1. Unit of law is the page — **closed for measures**: a law per `## ` row, named in the refusal.
+   Open: fields per row (the three syntaxes above; Ember's call), rows of a table, rows inside a
+   section with candidates (judged when one is kept).
+2. No strings — closed for labels (fourth round); no order or content on labels, no calendar.
+3. Append-only is a count — closed (`deletions`), now also per row.
+4. Theorem names are a hand-kept census page — open until the gate lane's census writes it.
+5. Authority is not provenance — closed (`poster`); the poster's grant as a fact, open.
+6. No cross-page facts — closed for laws over links; joined states, backlinks as subject open.
+7. A kind's own laws are unprotected — Ember's question, untouched.
+8. The real `review/` file can only be the index page — open; follows from 1 (fields, tables).
+9. One admission path — **closed**: open and merge admit a write through `admitFootprint`; no retry.
+   Open and named: cite resolution against drafts (`openEntries`), `fixDangling`'s judgment in
+   `settle`, and `open_idem`'s proof still being the quietness argument rather than determinism.

@@ -302,3 +302,74 @@ Not dirty but changed by this lane: `Hardware/{GeometryCAM,OpenUSD,Kinematics,PC
 `PHYSICAL.md` §2 and §3.1 (`023cdc4`; the physics lane's §4 hunk is left in the tree).
 - (third round, `ffb8772` and the laws-over-links commit) Files outside the lane's list it edited because the change did not hold without them: `lean/Obend/Doc/Patch.lean` (`Patch.deletes`/`adds` and the two `apply` theorems the measures rest on), `lean/Obend/Vault/Cli.lean` (the open's report of a repeated refusal). `lean/Obend/Vault/Hyperedge.lean` (security lane) is imported by `Vault/Store.lean` now and not edited; the lane tree builds against HEAD's copy, which lacks the dirty copy's `ofWitnessLegs`, so nothing here depends on the dirty additions.
 - (fourth round, `47e6adc`, `bd160a6`) Outside the lane's list: `lean/Obend/Elab/Workbook.lean` (one line: the `ToExpr LawRef` case for `labelConst`); `lean/Obend/Spec/Proofs/LawCompile.lean` carries another lane's uncommitted `tally_run_agrees` → `example` hunk, kept out of these commits and left in the tree as found. `Vault/Hyperedge.lean` (security lane) is used (`admitFootprint`), not edited.
+
+## Fixture triage edits in files other lanes hold dirty (lean-proof-engineering lane, 2026-11-04)
+
+The triage commit carries HEAD's text of these files plus the triage edit; the working tree carries the
+owning lane's content plus the same edit (`-- fixture kept` lines, `theorem`→`example`, deletions). Nothing
+to re-apply; commit the file as it stands. Two sites exist only in the dirty copy (TaylorModel:929, RealAnalysis:975)
+and stay in place as kept examples there. `Obend/Teeth/Analysis/Fixtures.lean` in the working tree follows the
+analysis lane's uncommitted `tmUnitaryNormSq` signature; it lands with that change, not before.
+
+| file | kept | to Teeth | deleted |
+|---|---|---|---|
+| `lean/Obend/Analysis/Flowpipe.lean` | 1 | 0 | 0 |
+| `lean/Obend/Analysis/Format.lean` | 2 | 1 | 0 |
+| `lean/Obend/Analysis/Hybrid.lean` | 4 | 0 | 1 |
+| `lean/Obend/Analysis/QuantumWalk.lean` | 1 | 3 | 0 |
+| `lean/Obend/Analysis/SosLyapunov.lean` | 2 | 0 | 1 |
+| `lean/Obend/Analysis/TaylorModel.lean` | 3 | 1 | 0 |
+| `lean/Obend/Core/Code.lean` | 2 | 0 | 0 |
+| `lean/Obend/Core/Proofs/CheckCompletenessObstruction.lean` | 1 | 0 | 0 |
+| `lean/Obend/Core/Proofs/CheckerTransport.lean` | 3 | 0 | 0 |
+| `lean/Obend/Core/PrototypeProvenance.lean` | 5 | 0 | 0 |
+| `lean/Obend/Elab/AutoCert.lean` | 5 | 0 | 0 |
+| `lean/Obend/Hardware/Codec.lean` | 0 | 0 | 2 |
+| `lean/Obend/Hardware/CurrentLoop.lean` | 2 | 0 | 0 |
+| `lean/Obend/Hardware/DigitalTwin.lean` | 1 | 0 | 1 |
+| `lean/Obend/Hardware/FabuBlox.lean` | 2 | 0 | 2 |
+| `lean/Obend/Hardware/Magnetics.lean` | 0 | 0 | 1 |
+| `lean/Obend/Hardware/PowerElectronics.lean` | 1 | 1 | 2 |
+| `lean/Obend/Hardware/Retiming.lean` | 0 | 1 | 0 |
+| `lean/Obend/Judge/Certified.lean` | 2 | 0 | 0 |
+| `lean/Obend/Judge/LayeredCost.lean` | 2 | 0 | 1 |
+| `lean/Obend/Judge/RealAnalysis.lean` | 0 | 1 | 0 |
+| `lean/Obend/Law/Proofs/Inherit.lean` | 2 | 2 | 0 |
+| `lean/Obend/Logic/Obligation.lean` | 2 | 0 | 0 |
+| `lean/Obend/Logic/Turn.lean` | 1 | 0 | 0 |
+| `lean/Obend/Lower/ExprCAM.lean` | 1 | 0 | 1 |
+| `lean/Obend/Spec/Proofs/LawCompile.lean` | 1 | 0 | 0 |
+| `lean/Obend/Spec/Proofs/PackageLaw.lean` | 0 | 1 | 0 |
+| `lean/Obend/Teeth/Core/CollectYield.lean` | 1 | 0 | 1 |
+| `lean/Obend/Vault/PhysicalProjection.lean` | 1 | 0 | 0 |
+
+Apps (classified, applied by their owners): FPGA successor, `Obend/Apps/ObendRisc.lean:517`
+`obendRiscCpuRtlModule_firmware_sim_sound` is a deletion (the 21-cycle CPU run the ledger names); physics successor,
+`Obend/Apps/QuantumPhotonicMatter.lean` must `import Obend.Teeth.Hardware.CliffordKernel` for `majoranaBraid_artin_relation`
+(moved there, over budget). The remaining Apps fixtures are kept where they are (already tier 2); their own
+`*_rtl_and_amd_gpu_verified` end-to-end runs are the apps' content, not fixtures of the library.
+
+Two tier-2 tests red for other lanes after this lane's tier-2 pass (2026-11-04): compiler successor,
+`tests/silicon_elab/SiliconRealismTest.lean` lines 234-243 and 365 (`compileTermPipelined` /
+`compileTermPipelinedDiscardArg` take a `List RtlExpr` the test does not pass) and 370 (a `RtlAluOp`
+match missing `ashr`, `slt`, `qmul32`); physics successor, `tests/metasystem/QuantumCliffordClementsTest.lean`
+lines 329 and 341 (`cliffordParityQuotient` is `Nat → Nat → IntMatrix` now). The `kernelIsDefEqFull`
+call sites and the Clifford import are done.
+
+## What the lean-proof-engineering lane landed (2026-11-04, evening)
+
+| commit | what | verified |
+|---|---|---|
+| `459e517` | the last tier-1 import of the deleted `Obend.Leaf.BendTT` (UserspacePhysical) | bb2, `lake build` on a180c75 |
+| `c18ca36` | the documents census runs from `Obend/Census.lean` (tier 2), not inside `DocsCensus` at its build | same build |
+| `7aee61d` | the compiler lane's cross-lane patch for UserspacePhysical, Stdlib, DiscrTreeLUT, four tests | bb2 gate |
+| `4b6c60f` | `tools/build.sh tier1|tier2` with the 60 s / 600 s budget from Lake's timings; the hook through it; `Obend.Stdlib` to tier 2; the census heartbeat baseline and tier-2 globs | bb2: tier 1 green, QuantumMatter named over budget |
+| `92132ed` | the fixture triage applied (158 kept with reasons, 34 to `Teeth/*/Fixtures.lean`, 32 deleted); the Clifford theorems to `Teeth/Hardware/CliffordKernel.lean`; the census table | bb2: tier 1 green within budget (QuantumMatter 50 s); Stdlib and 39 Teeth modules within tier 2 |
+| `cafd87c` | the theorem classification (`theoremCensus`) and the identifier-resolving documents census (`#docs_census`) | bb2: AssertAxioms and DocsCensus build; a reduced census runs the three commands; the full census waits on the Apps |
+
+Rules kept: named-file commits through a temporary index (the shared index held other lanes' staged
+files), unsigned (1Password refused), one build at a time in `bb2:~/lane-gate`, every job with a PID
+file. Not done: a full tier-2 run (`Obend.Census Teeth Tests`), because the census imports every Apps
+module and `Obend/Apps/ZkNtt.lean` elaborates for hours; the budget gate will fail it at 600 s once it
+can be run at all.
+- (fifth round, `9de897f`, `b8fa08b`) All files in the lane's list (`Vault/{Store,Page,Law}.lean`, `tests/decisions`, `README.md`, `crates/obend-gui`). `crates/obend-gui/build.rs` was rewritten to obend-node's form at the security lane's request (rpaths from `DEP_OBEND_BRIDGE_*`); verified to compile and pass its CLI test under the stub on bb2 only. The shared index held another lane's staged deletion (`apps/zk-ntt/verilator/zk_ntt_lec.smt2`); these commits went through a temporary index and left it as found. `Vault/PhysicalProjection.lean` is dirty from another lane and untouched.
