@@ -537,3 +537,101 @@ What it could express is the shape of the ledger's preamble: dated, decided by o
 appended to, cited into a census, kept when its file is deleted, and a refusal that names the kind,
 the clause, the failing value and a passing one. Items 1, 3 and 5 are the ones a research project
 on laws should take as its next questions; 4 waits on the census; 7 is a design decision for Ember.
+
+## What landed, third round (2026-11-04): the write as a measure, and laws over links
+
+Commits `ffb8772` and the one after it, built and run on bb2 in `~/lane-frame` as before. Gap items
+3 and 6 of the second round were the brief; 7 (a kind's own laws unprotected) and "may a law ask the
+patch" are Ember's questions in `review/DECISIONS-20261031.md` and nothing here presumes an answer.
+
+### Gap 3 — append-only is now a prefix law (`ffb8772`)
+
+`deletions` and `insertions` are measures of the write: the atoms of the old version's settled text
+the write tombstones, and the atoms of the new settled text the old lacked (`Vault/Page.lean`).
+They are read through `Doc.apply`: `Patch.deletes`/`adds`, `isDead_apply_forward` and
+`present_apply_forward` (an authored patch tombstones exactly what it deletes and makes present
+exactly what it adds; a tooth that forgets the deletions bites), then `deletions_apply`,
+`deletions_apply_eq_zero` (`new.deletions == 0` iff the patch deletes no atom of the settled text)
+and `insertions_apply`. `commit` adds them to the new state only. The decisions kind now says
+`law appendOnly: new.deletions == 0`, and the recorded walkthrough shows what the count could not:
+one character of a commit hash rewritten in place, bytes, lines and words unchanged, refused with
+`deletions = 1`. What "line" means here is `widenStretch`'s: an author's change is widened to whole
+lines, so the law reads "no line removed or rewritten, lines only inserted"; a member's post deletes
+nothing and a selection tombstones only candidates. Not exposed: an "edited-span count". A span is a
+property of the alignment, not of the patch (two alignments of one edit differ in it; `Same` graphs
+must measure alike), so it would not be tied to `apply`; the atom counts are. Interaction to know:
+`fixDangling` replaces a text atom with a cite when its page appears (one deletion), so a page under
+`deletions == 0` whose link dangled will not have that link resolved until the law's owner says so;
+with `dangling == 0` on the same kind, as in the ledger, the case does not arise.
+
+Two defects found by the walkthrough and fixed in the same commit: a refused edit put back kept the
+page "refused" (now `ownerWrite`'s same-text branch clears the note), and a second refused edit with
+the same message was not reported (`changes` compares the typed text, marks stripped).
+
+### Gap 6 — cross-page facts: laws over links (next commit)
+
+**What `Run/HyperLaw.lean` turned out to be.** READ (`lean/Obend/Run/HyperLaw.lean:1-363`, untracked,
+imported by the dirty `Run.lean` only): two things, neither about pages. Part I is a `k=2`
+non-interference checker over a list of paired world states with a `LowView` projection (Clarkson–
+Schneider hyperproperties, with soundness and completeness on finite traces and a tooth); Part II is
+a Gelfond–Lifschitz stable-model judge for modal programs registered as a `Judge.Format`. Both are
+studies over an abstract `World`; nothing in them names a page, a footprint or a vault store. Not
+used, not replaced: it should stay a study under `Run/` and say so.
+
+**What `Vault/Hyperedge.lean` offered.** READ (`Hyperedge.lean:89-240,465`): a `VaultStore` is
+`String → Option Data`; a `VaultTurn` has read pins (cell, observed state), write cells (pre, post),
+an occasion, and proofs that its legs agree and balance; `applyTurn` writes the post states;
+`no_toctou` says a turn whose pins hold at the authoring store and at the admission store is valid at
+one iff at the other and writes the same cells. It is not connected to the markdown store (pages,
+graphs, laws); the connection is what this round adds.
+
+**The design, smallest honest version.** A law line that reads `linked.F` instead of `new.F` is a
+law over the page's links: its subject is every page the page links to by identity cite (what the
+`links` measure counts), and it is judged at each of them, on that page's state, on two occasions:
+a write of the page (at its links as they stand) and a write of a linked page (at that page as
+written, under the laws over links of every page that links to it). What it can read: the linked
+page's measures and fields, and the request; not the page's own fields (`new.` in it is refused at
+parse; a joined state is the next step). Inheritance: it is a law line, so a kind's `linked.` law
+binds every page under the kind, over that page's links. Refusal: from the page's side, `refused by
+its law listedDated over its links, at notes/Scratch: ... does not hold there; the line date: 1 would
+pass (the page has date: 0)`; from the linked page's side, `refused by Ledger: listedDated (a law
+over Ledger's links, of which notes/Scratch is one): ...`. The footprint is explicit: `writeTurn`
+builds the write as a `VaultTurn` (its one write cell the page, pre and post state; a read pin per
+page its laws over links read, at the state read) and the laws are judged on the store the turn
+describes, `applyTurn turn.readPins.store turn`. `judgeLinksIn_of_turn` (via `Footprint.store_of_holds`
+and `applyTurn_pin`) proves that equals the judgment on any store where the pins hold, which is the
+premise `no_toctou` asks of a turn judged at one store and admitted at another. Hyperedge.lean is
+imported, not edited; nothing is routed to the security lane. HEAD's Hyperedge lacks the dirty
+copy's `ofWitnessLegs`, so `writeTurn` constructs the turn directly (one cert-less leg, empty id).
+
+What the vault does not yet do with the turn: defer it. Every commit judges and applies in one
+step, so the pins are checked against the store that produced them; `no_toctou`'s conclusion becomes
+load-bearing when `merge` replays a replica's commits as turns, which is the natural next use. One
+consequence is visible already: within one `obend open`, pages are committed in order against the
+entries read at the start (a page being written is pinned at the version it is about to become), so
+an index page judged against a draft decision whose own commit is then refused was judged against a
+pin that did not hold. The retry of refused writes at every non-quiet open (`openPage`) is the
+repair in practice; a turn admitted only when its pins hold would be the repair in principle.
+
+**The decisions vault, section 6.** `Ledger.md` gains `law listedDated: not (linked.date == 0)`
+(adopted, judged at D-0001..4); an undated note outside the kind, listed, refuses the ledger's write
+at the note; dating the note mends the ledger at the next open (the retry); the note then cannot
+lose its date while listed. Recorded on bb2 and read: 14 steps.
+
+### The gap list, updated
+
+1. Unit of law is the page, the ledger's is the row — open (a `rows` measure or laws over list
+   items).
+2. No strings — open.
+3. Append-only is a count — **closed** by `deletions`. Remaining: a law still cannot say *which*
+   lines may change (a "status" line that may flip while the body is append-only); that is a measure
+   per section or per field, not per page.
+4. Theorem names are a hand-kept census page — open until the gate lane's census writes it.
+5. Authority is not provenance (`request.caller` is the selector, not the poster) — open.
+6. No cross-page facts — **closed for one shape**: a law over the page's links, reading the linked
+   page. Still not sayable: a comparison between the page and a linked page (`linked.date <=
+   new.date`: needs a joined state), a law over the pages that link *to* a page (backlinks as
+   subject), a law over a page's embeds or quotes rather than its identity links, and a relation
+   between two linked pages (ordering of decisions by date).
+7. A kind's own laws are unprotected — Ember's question, untouched.
+8. The real `review/` file can only be the index page — open (follows from 1).

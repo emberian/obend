@@ -252,6 +252,35 @@ The dirty content survives in `bb2:~/obend` (§2).
 Not adjudicated here: `lean/Obend/Lower/PolicyToGrain.lean` (needed by `SovereignEngine`, see above), `lean/Obend/Elab/AutoCert.lean`, `lean/Obend/Core/*`.
 - (second round, `48727bb`, `f3b832e`) Files outside this lane's list it edited because the change did not build or hold without them: `lean/Obend/Spec/Proofs/LawCompile.lean` (the `monotone` proof and teeth, first round), `lean/Obend/Spec/{Syntax,FrontEnd,Workspace}.lean` (module laws), `lean/Obend/Vault/{Page,Json,Law}.lean` (dangling measure, tombs, kind doc). None was dirty from a suspended lane except `Vault/Page.lean` (S-2, kept, above).
 
+## Adjudications (physics lane, 2026-11-04)
+
+Method: each dirty file I own was read in full (the expert review was written against the working tree),
+diffed against HEAD, rsynced unchanged into a clean copy of `bb2:~/claude-verify-20261103/obend`
+(`~/lane-physics`) and built there before any edit of mine; what did not build was repaired or cut, and the
+call recorded here.
+
+| file | lane | call | why |
+|---|---|---|---|
+| `lean/Obend/Analysis/RealAnalysis.lean` | S-4 | **keep** | adds `Interval.add/sub/mul/sqr_mem`, `evalInterval_sound`, three `#tooth`s: the universal interval soundness the council found missing. Built. |
+| `lean/Obend/Analysis/TaylorModel.lean` | S-4 | **keep, §5 "arbitrary-order series" cut** | `TaylorModel.Models`, `add/sub/scale/mul_models`, `evalTaylorModelRange_encloses` are real and kept. The series section (`expPartialSum`, `expTailCoeff`, `halfPowRat`, `invFactFrom5`, `powRat_mem_unit`, …, 160 lines) never compiled (`decide` on `Rat`, `grind` on `CanonicalRat.mk` numerals: 8 errors) and the `AnalyticModel` instance depended on it; the instance is now `partialSumAnalyticModel` with polynomial stand-ins, and the header no longer says "verified transcendental". Built. |
+| `lean/Obend/Analysis/Flowpipe.lean` | S-4 | **keep** | `picard_step_encloses_trajectory`, `verifyPicardAPriori_encloses`, `evalLieDerivSum_sound` are universal. Built. |
+| `lean/Obend/Analysis/Hybrid.lean` | S-4 | **keep, one repair** | `hybridFlowpipe_bad_refused` stated via `Judge.check` had no `Decidable` instance (`:583`); restated via `checkHybridFlowpipe`, which the format's `bad_refused` accepts by defeq. Built. |
+| `lean/Obend/Analysis/QuantumWalk.lean` | S-4 | **keep** | `@[expose]` plumbing and the matrix-Taylor section with teeth. Built. |
+| `lean/Obend/Analysis/SosLyapunov.lean` | S-4 | **keep, one repair** | `computeSymbolicAlgJacobianDet` used the product of the diagonal partials for ≥3 constraints (panel diff); replaced by a Laplace-expansion determinant (`polyMatrixDet`, `symbolicAlgJacobian`). Built. |
+| `lean/Obend/Analysis/Groebner.lean` | S-4 | **keep** | `@[expose]` plumbing. Built. |
+| `lean/Obend/Judge/RealAnalysis.lean` | S-4 | **keep** | `insertNormalizedTerm` (monomials normalized before insertion), `Poly.eval` semantics, `sosCheck_sound`. Built. |
+| `lean/Obend/Hardware/RF.lean` | S-4 | **keep** | `evalQuadratureImagePower` sums amplitude and phase imbalance in quadrature (the linear sum cancelled for opposite-sign errors). Built. |
+| `lean/Obend/Elab/AutoCert.lean` | S-3 (on WS-4A-2) | **keep as base; rewritten where it lied** | S-3's `given`-hypothesis parsing is kept. The `[0,1]` default for unconstrained claim variables, the golden-object substitutions for `none`/`.bool true`, the Taylor and SOS claim extractors (the surface has no transcendental functions or Lyapunov specs) and `rtl-synth` on non-`true` propositions are removed; claim objects are read from the `ClaimObj`'s Core4 body (`claimIntervalObjOf?`, `claimGroebnerQueryOf?`) and the formats carry `bindsClaim`. Built. |
+| `lean/Obend/Logic/Obligation.lean` | S-3 | **keep as base; two proofs never compiled** | `obligationWithJudges_sound` (`rfl` for the binding) and `obligationWithJudges_mono` (`rw` into a `match` whose pattern variables shadow `F`/`objStr`) were red in S-3's version; fixed. `externalClaimBound` now takes the `Judge.Format` and defers to `F.bindsClaim` (panel diff A C2-5). The toothed fixture had become an `example`; the `#tooth` needs a name, so it is a `theorem` again with a note. Built. |
+| `stdlib/physical/Cnc5AxisMill.obend` | S-6 | **reverted to HEAD** | S-6's change (Abbe sign `+`→`−`, new `commandedAxisUm`) is right, but `lean/Obend/Hardware/UserspacePhysical.lean:690-700` (S-6's, not mine) still `decide`s the old outputs (`10024`, five wires) and goes red with it. The two must land together from the S-6 owner; the language-user lane kept the test mirror `lean/tests/obend-source/world/physical/Cnc5AxisMill.obend`, so the mirror and `stdlib/` now differ until then. |
+
+Not dirty but changed by this lane: `lean/Obend/Judge/Class.lean` gains one defaulted field
+(`bindsClaim : Term → Nat → String → Bool := fun _ _ _ => false`) and imports `Obend.Core.Term`; every
+existing `Format` compiles unchanged and is "unbound" until it says how its objects state a claim.
+`lean/Obend/Teeth/Hardware/SiliconTeeth.lean:503-507` (one tooth retargeted to `evalIpmTorqueTwiceMicroNm`)
+and `lean/tests/metasystem/{AutoCertTest,CoupledPhysicalTest,CoupledMultiphysicsTest}.lean` (fixtures
+follow the renames and the fail-closed extractor) were edited for the same reason.
+
 ## Adjudications (cad-cam lane, 2026-11-04)
 
 Method: each dirty file the lane owns was read against HEAD before any edit; builds in `bb2:~/lane-cad`
@@ -270,3 +299,4 @@ Method: each dirty file the lane owns was read against HEAD before any edit; bui
 Not dirty but changed by this lane: `Hardware/{GeometryCAM,OpenUSD,Kinematics,PCB}.lean` (`cf3efad`,
 `5a74100`, `0da8645`), which also carried the proof-engineering lane's fixture→`example` edits, and
 `PHYSICAL.md` §2 and §3.1 (`023cdc4`; the physics lane's §4 hunk is left in the tree).
+- (third round, `ffb8772` and the laws-over-links commit) Files outside the lane's list it edited because the change did not hold without them: `lean/Obend/Doc/Patch.lean` (`Patch.deletes`/`adds` and the two `apply` theorems the measures rest on), `lean/Obend/Vault/Cli.lean` (the open's report of a repeated refusal). `lean/Obend/Vault/Hyperedge.lean` (security lane) is imported by `Vault/Store.lean` now and not edited; the lane tree builds against HEAD's copy, which lacks the dirty copy's `ofWitnessLegs`, so nothing here depends on the dirty additions.
