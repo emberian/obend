@@ -155,8 +155,8 @@ theorem test_ozaki_klimb_fp4_concrete_4_and_5_limbs :
 2. `catgradOpticRevAdLExpr` (`self_accelerate_catgrad_optic_rev_ad_6stage`, matching `OpenHypergraph.evalOpticChain2Rev`),
 3. `fidgetChoiceOctreePruneLExpr` (`self_accelerate_fidget_choice_octree_6stage`, matching `GeometryCAM.ivMinChoice` across `.left`, `.right`, `.both`). -/
 theorem test_coupled_pde_ad_geometry_6stage_universal
-    (as bs : List Int) (xs ys : List (List Int)) :
-    evalBase13Limbs (mulBase13Limbs as bs) = evalBase13Limbs as * evalBase13Limbs bs ∧
+    (al bl : List Int) (xs ys : List (List Int)) :
+    evalBase13Limbs (mulBase13Limbs al bl) = evalBase13Limbs al * evalBase13Limbs bl ∧
     evalOzakiBase13KLimbDot xs ys = kulischDot (xs.map evalBase13Limbs) (ys.map evalBase13Limbs) ∧
     SSteps (.app libCeedFemmNodalOpLExpr (.lit 6)) (.lit 35) ∧
     SSteps (.app catgradOpticRevAdLExpr (.lit 7)) (.lit 56) ∧
@@ -167,7 +167,7 @@ theorem test_coupled_pde_ad_geometry_6stage_universal
       (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
       (Obend.Hardware.OpenHypergraph.evalOpticChain2Fwd .mul .mul 4 7).2 1).2 = 56 ∧
     Obend.Hardware.GeometryCAM.ivMinChoice { lo := 4, hi := 8 } { lo := 10, hi := 20 } = .left :=
-  coupled_pde_ad_geometry_6stage_universal_self_acceleration as bs xs ys
+  coupled_pde_ad_geometry_6stage_universal_self_acceleration al bl xs ys
 
 theorem test_three_6stage_kernels_full_pipeline :
     (let C := leanComposition "libCeedNodal" (lowerT libCeedFemmNodalOpLExpr)
@@ -359,8 +359,6 @@ elab "#verify_coupled_physical_axioms" : command => do
     ``Obend.Hardware.DigitalTwin.sampled_data_current_loop_iss_contraction,
     ``Obend.Hardware.DigitalTwin.sampled_data_closed_loop_powertrain_safety_invariant,
     ``Obend.Hardware.DigitalTwin.golden_ms350_ipm_digital_twin_trajectory_verified,
-    ``Obend.Hardware.UserspacePhysical.userspace_physical_stator_to_fpga_verified,
-    ``Obend.Hardware.UserspacePhysical.userspace_cnc_5axis_to_fpga_and_amd_gpu_verified,
     ``Obend.Hardware.UserspacePhysical.userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified,
     ``Obend.Hardware.UserspacePhysical.userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified
   ]

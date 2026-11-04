@@ -456,7 +456,35 @@ theorem electroThermal_step_diff_identity
               evalConvectiveHeatRemoval, evalCopperJouleSlope]
   grind
 
-/-- **Thermal Runaway vs. Stable Equilibrium Dichotomy Theorem (`electroThermal_equilibrium_stability_dichotomy`)**:
+/-- **Explicit-Euler contraction with its step-size condition (`electroThermal_explicit_euler_contracts`)**:
+the one-step map on temperature differences is `(1 − dt·(G − β))·(T₁ − T₂)`
+(`electroThermal_step_diff_identity`), so it is a *contraction* iff `0 < dt·(G − β) < 2`. The dichotomy
+theorem below only states `step(T₁) − step(T₂) < T₁ − T₂`, which also holds when `dt·(G − β) ≥ 2` and
+the iteration oscillates and diverges; this theorem is the two-sided statement a discrete-time
+stability claim needs. -/
+theorem electroThermal_explicit_euler_contracts
+    (iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 t2 : Int)
+    (hLo : 0 < dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille))
+    (hHi : dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) < 2)
+    (hOrder : t2 < t1) :
+    -(t1 - t2) <
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 -
+        stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t2 ∧
+    stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 -
+      stepCoupledElectroThermalMap iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t2 <
+      t1 - t2 := by
+  have hId := electroThermal_step_diff_identity iAmp r0Mohm alphaPermille tRef pCore pInv gTh tCoolant dt t1 t2
+  rw [hId]
+  have hDiffPos : 0 < t1 - t2 := by omega
+  -- 0 < k < 2 with k = dt·(G − β): 0 < k·(t1 − t2) < 2·(t1 − t2)
+  have hk1 : 0 < dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) * (t1 - t2) :=
+    Int.mul_pos hLo hDiffPos
+  have hk2 : dt * (gTh - evalCopperJouleSlope iAmp r0Mohm alphaPermille) * (t1 - t2) < 2 * (t1 - t2) :=
+    Int.mul_lt_mul_of_pos_right hHi hDiffPos
+  constructor <;> omega
+
+/-- **Thermal Runaway vs. Stable Equilibrium Dichotomy Theorem (`electroThermal_equilibrium_stability_dichotomy`)**
+(one-sided; see `electroThermal_explicit_euler_contracts` for the two-sided contraction):
 For any positive integration time step $\Delta t > 0$ and any ordered temperature pair $T_2 < T_1$
 (such as $T_1 > T^\star$ above steady-state equilibrium $T_2 = T^\star$):
 1. **Stable Equilibrium Contraction ($G_{\text{th}} > I^2 R_0 \alpha_{\text{permille}}$)**:

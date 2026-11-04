@@ -108,7 +108,10 @@ def fluxDensitySqScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   (gradAxScaled tri a0 a1 a2) * (gradAxScaled tri a0 a1 a2) +
   (gradAyScaled tri a0 a1 a2) * (gradAyScaled tri a0 a1 a2)
 
-/-- Scaled magnetic stored energy numerator $\nu \|\nabla A_z\|^2$ inside element `tri`. -/
+/-- $\nu\,(2\Delta)^2 \|\nabla A_z\|^2$ for element `tri`, i.e. **$8\Delta$ times the element's magnetic
+energy** $W_e = \tfrac{1}{2}\nu\|\nabla A_z\|^2\,\Delta$ (since $\nabla A_z = (\sum b_i A_i, \sum c_i A_i)/(2\Delta)$).
+Summing this over elements of different area is not an energy: each element is weighted by its own
+$\Delta$. Non-negativity and gauge invariance survive the weighting; magnitudes do not. -/
 def evalElementMagneticEnergyScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   tri.nuScaled * fluxDensitySqScaled tri a0 a1 a2
 
@@ -156,7 +159,8 @@ theorem femm_element_energy_nonneg (tri : FemmTriangle2D) (a0 a1 a2 : Int)
     int_sq_nonneg (gradAyScaled tri a0 a1 a2)
   exact int_mul_nonneg tri.nuScaled _ hNu (by omega)
 
-/-- Total magnetic energy numerator summed over a 2D finite-element mesh `mesh : List FemmTriangle2D`. -/
+/-- $\sum_e 8\Delta_e W_e$ over `mesh` with the same three nodal potentials at every element (no
+connectivity): an area-weighted sum, equal to $8\Delta\,W$ only on a uniform mesh. -/
 def evalMeshMagneticEnergyScaled (mesh : List FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   match mesh with
   | [] => 0
@@ -223,21 +227,35 @@ structure IpmMotorSpec where
   lqMicroH     : Int
   deriving DecidableEq, Repr
 
-/-- Scaled electromagnetic torque in the rotor $dq0$ reference frame:
-$T_{\text{scaled}} = p \cdot (\psi_{\text{PM}} i_q + (L_d - L_q) i_d i_q)$. -/
-def evalIpmTorqueScaled (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
-  m.polePairs * (m.psiPmMilliWb * iqAmp + (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp)
+/-- Electromagnetic torque of a salient IPM machine in the rotor $dq$ frame, as **twice the torque
+in µN·m**: $2T = 3\,p\,(\psi_{\text{PM}}\,i_q + (L_d - L_q)\,i_d\,i_q)$ with $\psi_{\text{PM}}$ in µWb
+(`psiPmMilliWb * 1000`), $L_d, L_q$ in µH and currents in A, so every summand is in µWb·A = µH·A² =
+µJ = µN·m. The $3/2$ of the amplitude-invariant $dq$ transform is carried as $3\cdot(\dots)$ on a
+value that is twice the torque, so there is no division. Until 2026-11-04 this function added the
+mWb term to the µH term unconverted (`psiPmMilliWb * iq + (ld - lq) * id * iq`), which overweighted the
+reluctance term by 1000; for the golden motor it reported a reluctance:PM ratio of 128:1 where the
+machine has 7.8:1. -/
+def evalIpmTorqueTwiceMicroNm (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
+  3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp + (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp)
+
+/-- The pre-2026-11-04 name, kept for `Hardware/Codec.lean`; it now computes `evalIpmTorqueTwiceMicroNm`. -/
+abbrev evalIpmTorqueScaled := evalIpmTorqueTwiceMicroNm
+
+/-- Torque in mN·m (`evalIpmTorqueTwiceMicroNm / 2000`, rounding toward zero). -/
+def evalIpmTorqueMilliNm (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
+  evalIpmTorqueTwiceMicroNm m idAmp iqAmp / 2000
 
 /-- Universal Reluctance Torque Boost Under Field Weakening (`ipm_reluctance_torque_boost`):
 For any salient IPM machine (`0 ≤ m.polePairs`, `m.ldMicroH ≤ m.lqMicroH`) driven with negative
 $d$-axis demagnetizing / MTPA current (`idAmp ≤ 0`) and non-negative $q$-axis torque current
 (`0 ≤ iqAmp`), the reluctance torque component is non-negative and boosts total shaft torque
-above the pure permanent-magnet torque `m.polePairs * (m.psiPmMilliWb * iqAmp)`. -/
+above the pure permanent-magnet torque `3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp)` (both in
+twice-µN·m). -/
 theorem ipm_reluctance_torque_boost (m : IpmMotorSpec) (idAmp iqAmp : Int)
     (hPoles : 0 ≤ m.polePairs) (hSal : m.ldMicroH ≤ m.lqMicroH)
     (hId : idAmp ≤ 0) (hIq : 0 ≤ iqAmp) :
-    m.polePairs * (m.psiPmMilliWb * iqAmp) ≤ evalIpmTorqueScaled m idAmp iqAmp := by
-  unfold evalIpmTorqueScaled
+    3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp) ≤ evalIpmTorqueTwiceMicroNm m idAmp iqAmp := by
+  unfold evalIpmTorqueTwiceMicroNm
   have hNegSalId : (m.lqMicroH - m.ldMicroH) * idAmp ≤ 0 := by
     have hLe := int_mul_le_mul_of_nonneg_left idAmp 0 (m.lqMicroH - m.ldMicroH) hId (by omega)
     rw [Int.mul_zero] at hLe
@@ -252,17 +270,20 @@ theorem ipm_reluctance_torque_boost (m : IpmMotorSpec) (idAmp iqAmp : Int)
   have hRelTorque : 0 ≤ (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp :=
     int_mul_nonneg ((m.ldMicroH - m.lqMicroH) * idAmp) iqAmp hRelProd hIq
   rw [Int.mul_add]
-  have hPolesRel : 0 ≤ m.polePairs * ((m.ldMicroH - m.lqMicroH) * idAmp * iqAmp) :=
-    int_mul_nonneg m.polePairs ((m.ldMicroH - m.lqMicroH) * idAmp * iqAmp) hPoles hRelTorque
+  have h3p : 0 ≤ 3 * m.polePairs := by omega
+  have hPolesRel : 0 ≤ 3 * m.polePairs * ((m.ldMicroH - m.lqMicroH) * idAmp * iqAmp) :=
+    int_mul_nonneg (3 * m.polePairs) ((m.ldMicroH - m.lqMicroH) * idAmp * iqAmp) h3p hRelTorque
   omega
 
 /-! ## 4. Steinmetz Core Loss & Liquid-Cooled Electric Machine Signoff -/
 
-/-- Evaluates two-term Steinmetz iron core loss (hysteresis + eddy current):
-$P_{\text{core}} = k_h f B_{\text{pk}}^2 + k_e f^2 B_{\text{pk}}^2$ (in scaled milliwatts). -/
+/-- Two-term Steinmetz iron core loss (hysteresis + eddy current) **in mW**:
+$P_{\text{core}} = (k_h f B_{\text{pk}}^2 + k_e f^2 B_{\text{pk}}^2) / 10^6$ with $f$ in Hz, $B_{\text{pk}}$ in mT,
+$k_h$ in mW/(Hz·T²) and $k_e$ in mW/(Hz²·T²); the $10^6$ converts mT² to T². (Before 2026-11-04 the
+product was returned unscaled and called mW; the golden case then read 41 kW of core loss at 16 mT.) -/
 def evalSteinmetzCoreLossMw (kh ke freqHz bPeakMilliT : Int) : Int :=
-  kh * freqHz * bPeakMilliT * bPeakMilliT +
-  ke * freqHz * freqHz * bPeakMilliT * bPeakMilliT
+  (kh * freqHz * bPeakMilliT * bPeakMilliT +
+   ke * freqHz * freqHz * bPeakMilliT * bPeakMilliT) / 1000000
 
 /-- Theorem (`steinmetz_core_loss_nonneg`):
 For non-negative Steinmetz coefficients `0 ≤ kh`, `0 ≤ ke` and electrical frequency `0 ≤ freqHz`,
@@ -283,7 +304,7 @@ theorem steinmetz_core_loss_nonneg (kh ke freqHz bPeakMilliT : Int)
   rw [Int.mul_assoc (kh * freqHz) bPeakMilliT bPeakMilliT]
   rw [Int.mul_assoc ke freqHz freqHz]
   rw [Int.mul_assoc (ke * (freqHz * freqHz)) bPeakMilliT bPeakMilliT]
-  omega
+  exact Int.ediv_nonneg (by omega) (by decide)
 
 /-- Combined electromagnetic & thermal-loss signoff predicate for a liquid-cooled electric machine:
 verifies that shaft torque meets `minTorqueScaled`, stator tooth peak flux density remains within
@@ -597,18 +618,21 @@ structure FemmMesh2D where
   vertexMap       : Nat → Nat × Nat × Nat
   nodalPotentials : Nat → Int
 
-/-- Evaluates the 3-node magnetostatic residual $(r_0, r_1, r_2)$ of element `tri` with global vertex
-indices `(v0, v1, v2)` under global nodal potential map `nodalPotentials : Nat → Int`, combining
-the magnetic stiffness action $\nu G_e^\top G_e A_e$ with the source current load $J_z \cdot (2\Delta)$:
-$$r_i = \nu (b_i \nabla_x A_z + c_i \nabla_y A_z) - J_z \cdot (2\Delta).$$ -/
+/-- The 3-node magnetostatic residual of element `tri` with global vertex indices `(v0, v1, v2)`,
+**scaled by $12\Delta$** so that it is an integer: the Galerkin residual of a linear triangle is
+$$r_i = \frac{\nu}{4\Delta}\,(b_i\,\textstyle\sum_j b_j A_j + c_i \sum_j c_j A_j) - \frac{J_z\,\Delta}{3},$$
+(stiffness $\nu/(4\Delta)\,(b_i b_j + c_i c_j)$, consistent load $J_z\Delta/3$ per node), and
+$12\Delta\, r_i = 3\,\nu\,(b_i \sum_j b_j A_j + c_i \sum_j c_j A_j) - J_z\,(2\Delta)^2$, which is what this
+computes. Before 2026-11-04 the load was `J·2Δ` per node against an unscaled stiffness, i.e. the two
+terms were mis-weighted by $24\Delta$. -/
 def evalElementResidual
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) : Int × Int × Int :=
   let a0 := nodalPotentials v0
   let a1 := nodalPotentials v1
   let a2 := nodalPotentials v2
   let (y0, y1, y2) := evalMatrixFreeElementAction tri a0 a1 a2
-  let jLoad := tri.jzScaled * tri.twiceArea
-  (y0 - jLoad, y1 - jLoad, y2 - jLoad)
+  let jLoad := tri.jzScaled * (tri.twiceArea * tri.twiceArea)
+  (3 * y0 - jLoad, 3 * y1 - jLoad, 3 * y2 - jLoad)
 
 /-- Gauge invariance of `evalElementResidual`: adding a uniform scalar potential shift $c \in \mathbb{Z}$
 to `nodalPotentials` leaves all three nodal residuals strictly unchanged. -/
@@ -622,13 +646,13 @@ theorem evalElementResidual_gauge_invariant
   unfold evalLibCeedElementOp at hOp
   rw [hOp]
 
-/-- Discrete Ampere's Law for `evalElementResidual` (`evalElementResidual_ampere_sum`):
-The sum of the three nodal residuals of element `tri` equals $-3 J_z (2\Delta)$, independent of
-the nodal vector potential distribution `nodalPotentials`. -/
+/-- Total nodal load of an element (`evalElementResidual_ampere_sum`): the three scaled residuals sum
+to $-3\,J_z\,(2\Delta)^2 = -12\Delta\,(J_z\Delta)$, i.e. the nodal loads sum to the element current
+$J_z\Delta$ and the stiffness part sums to zero, for every nodal potential distribution. -/
 theorem evalElementResidual_ampere_sum
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) :
     let (r0, r1, r2) := evalElementResidual tri v0 v1 v2 nodalPotentials
-    r0 + r1 + r2 = -3 * (tri.jzScaled * tri.twiceArea) := by
+    r0 + r1 + r2 = -3 * (tri.jzScaled * (tri.twiceArea * tri.twiceArea)) := by
   dsimp only [evalElementResidual]
   have hZero := femm_matrix_free_nodal_sum_zero
     tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
@@ -641,10 +665,9 @@ def evalElementCoEnergy
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) : Int :=
   evalElementMagneticEnergyScaled tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
 
-/-- **Galerkin Weak-Form Virtual Work Identity (`evalElementResidual_virtual_work_identity`)**:
-The inner product of the element nodal potentials $(a_0, a_1, a_2)$ with the element magnetostatic
-residual $(r_0, r_1, r_2) = \text{evalElementResidual}\;\text{tri}\;v_0\;v_1\;v_2\;A$ equals the
-element magnetic co-energy minus the virtual source current work $(a_0 + a_1 + a_2) J_z (2\Delta)$. -/
+/-- **Galerkin virtual-work identity (`evalElementResidual_virtual_work_identity`)**, scaled by $12\Delta$:
+$a^\top (12\Delta\, r) = 3\,\nu(2\Delta)^2\|\nabla A_z\|^2 - (a_0 + a_1 + a_2)\,J_z\,(2\Delta)^2$, i.e.
+$a^\top r = 2W_e - (a_0 + a_1 + a_2) J_z \Delta / 3$ after dividing by $12\Delta$. -/
 theorem evalElementResidual_virtual_work_identity
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) :
     let a0 := nodalPotentials v0
@@ -652,8 +675,8 @@ theorem evalElementResidual_virtual_work_identity
     let a2 := nodalPotentials v2
     let (r0, r1, r2) := evalElementResidual tri v0 v1 v2 nodalPotentials
     a0 * r0 + a1 * r1 + a2 * r2 =
-      evalElementCoEnergy tri v0 v1 v2 nodalPotentials -
-      (a0 + a1 + a2) * (tri.jzScaled * tri.twiceArea) := by
+      3 * evalElementCoEnergy tri v0 v1 v2 nodalPotentials -
+      (a0 + a1 + a2) * (tri.jzScaled * (tri.twiceArea * tri.twiceArea)) := by
   dsimp only [evalElementResidual, evalElementCoEnergy]
   have hEn := femm_matrix_free_energy_identity
     tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
@@ -716,8 +739,9 @@ def evalTrianglesCoEnergyAux
     evalElementCoEnergy tri v.1 v.2.1 v.2.2 nodalPotentials +
     evalTrianglesCoEnergyAux rest vertexMap nodalPotentials (idx + 1)
 
-/-- Assembles the global magnetostatic co-energy $\sum_{e \in \mathcal{T}} \nu_e \|\nabla A_z\|_e^2$
-across the entire 2D finite-element mesh `mesh : FemmMesh2D`. -/
+/-- $\sum_e 8\Delta_e W_e$ over `mesh : FemmMesh2D` (each element's energy weighted by its own area;
+see `evalElementMagneticEnergyScaled`). Non-negative and gauge invariant; not the total energy unless
+the mesh is uniform. -/
 def evalMeshTotalCoEnergy (mesh : FemmMesh2D) : Int :=
   evalTrianglesCoEnergyAux mesh.triangles mesh.vertexMap mesh.nodalPotentials 0
 
@@ -835,51 +859,46 @@ theorem maxwell_stress_quadrature_symmetry
     have hR : (-rGapMm) * (-rGapMm) = rGapMm * rGapMm := by grind
     rw [hR]
 
-/-- **Maxwell Stress Tensor Agreement with $dq0$ Permanent-Magnet & Reluctance Torque
-(`maxwell_stress_agrees_with_dq0_pm_torque`)**:
-1. For any IPM/SPM motor `m : IpmMotorSpec` whose permanent-magnet flux linkage satisfies the
-   cylindrical air-gap linkage law $\psi_{\text{PM}} = r_{\text{gap}}^2 L_{\text{stk}} B_{r,\text{PM}} \Delta\theta$,
-   the Maxwell Stress Tensor air-gap torque `evalMaxwellStressTorqueScaled` across the $p$-pole-pair
-   fundamental contour matches the $dq0$ alignment torque `evalIpmTorqueScaled m 0 iqAmp` identically.
-2. For any salient IPM operating point $(i_d, i_q)$, the normalized air-gap Maxwell Stress Tensor
-   with effective radial flux linkage $B_r = \psi_{\text{PM}} + (L_d - L_q) i_d$ and tangential
-   armature reaction $B_\theta = i_q$ matches `evalIpmTorqueScaled m idAmp iqAmp` identically. -/
+/-- **Maxwell Stress Tensor Agreement with $dq$ Permanent-Magnet & Reluctance Torque
+(`maxwell_stress_agrees_with_dq0_pm_torque`)** — by construction: the air-gap samples are built from the
+$dq$ quantities (`bRadialMt := ψ_µWb + (L_d − L_q) i_d`, `bTangentialMt := i_q`, weight `3p`), so this is a
+renaming identity in twice-µN·m, not a field computation.
+1. Under the linkage law $\psi_{\text{PM,µWb}} = r_{\text{gap}}^2 L_{\text{stk}} B_{r,\text{PM}} \Delta\theta$, one sample
+   with weight $3p\,\Delta\theta$ reproduces the alignment torque `evalIpmTorqueTwiceMicroNm m 0 iqAmp`.
+2. With radial "field" $\psi_{\text{µWb}} + (L_d - L_q) i_d$ and tangential $i_q$, weight $3p$, it reproduces
+   `evalIpmTorqueTwiceMicroNm m idAmp iqAmp`. -/
 theorem maxwell_stress_agrees_with_dq0_pm_torque
     (m : IpmMotorSpec) (rGapMm lStackMm bRadialPm dTheta idAmp iqAmp : Int)
-    (hPsi : m.psiPmMilliWb = rGapMm * rGapMm * lStackMm * bRadialPm * dTheta) :
+    (hPsi : m.psiPmMilliWb * 1000 = rGapMm * rGapMm * lStackMm * bRadialPm * dTheta) :
     evalMaxwellStressTorqueScaled rGapMm lStackMm
-      [{ bRadialMt := bRadialPm, bTangentialMt := iqAmp, arcWeight := m.polePairs * dTheta }] =
-      evalIpmTorqueScaled m 0 iqAmp ∧
+      [{ bRadialMt := bRadialPm, bTangentialMt := iqAmp, arcWeight := 3 * m.polePairs * dTheta }] =
+      evalIpmTorqueTwiceMicroNm m 0 iqAmp ∧
     evalMaxwellStressTorqueScaled 1 1
-      [{ bRadialMt     := m.psiPmMilliWb + (m.ldMicroH - m.lqMicroH) * idAmp
+      [{ bRadialMt     := m.psiPmMilliWb * 1000 + (m.ldMicroH - m.lqMicroH) * idAmp
          bTangentialMt := iqAmp
-         arcWeight     := m.polePairs }] =
-      evalIpmTorqueScaled m idAmp iqAmp := by
+         arcWeight     := 3 * m.polePairs }] =
+      evalIpmTorqueTwiceMicroNm m idAmp iqAmp := by
   dsimp only [evalMaxwellStressTorqueScaled, evalMaxwellStressTorque,
-              evalSampleMaxwellShear, evalIpmTorqueScaled]
-  rw [hPsi]
-  refine ⟨by grind, by grind⟩
+              evalSampleMaxwellShear, evalIpmTorqueTwiceMicroNm]
+  refine ⟨?_, by grind⟩
+  have hkey : rGapMm * rGapMm * lStackMm * bRadialPm * dTheta * iqAmp = m.psiPmMilliWb * 1000 * iqAmp := by
+    rw [hPsi]
+  grind
 
 /-! ## 11. Nonlinear B-H Chord/Secant Fixed-Point Step (`stepBhSecantReluctivity`) -/
 
-/-- Evaluates one damped Picard / chord-secant fixed-point update step for nonlinear B-H
-reluctivity (in 2x-scaled integer reluctivity units):
-$$\nu_{\text{next}} = \nu_{\text{cur}} + (\nu_0 + k_{\text{sat}} B^2),$$
-combining the prior iterate $\nu_{\text{cur}}$ with the secant B-H evaluation
-$\nu_{\text{sec}}(B^2) = \nu_0 + k_{\text{sat}} B^2$. -/
-def stepBhSecantReluctivity (nuLinear kSat nuCur bSq : Int) : Int :=
+/-- $\nu_{\text{cur}} + (\nu_0 + k_{\text{sat}} B^2)$: the running sum of secant reluctivities. This is
+**not** a Picard or secant fixed-point step (it has no fixed point for $\nu_0 > 0$); it was named one
+until 2026-11-04. A damped Picard update would be $\nu_{\text{cur}} + \omega(\nu_{\text{sec}} - \nu_{\text{cur}})$. -/
+def accumulateBhSecantReluctivity (nuLinear kSat nuCur bSq : Int) : Int :=
   nuCur + evalNonlinearReluctivity nuLinear kSat bSq
 
-/-- **Nonlinear B-H Secant Fixed-Point Positivity, Lower Boundedness & Monotonicity
-(`bhSecant_positive_and_monotone`)**:
-For any positive linear core reluctivity `0 < nuLinear`, non-negative saturation coefficient `0 ≤ kSat`,
-non-negative prior reluctivity `0 ≤ nuCur1 ≤ nuCur2`, and non-negative squared flux density
-`0 ≤ bSq1 ≤ bSq2`:
-1. The updated secant reluctivity is strictly positive (`0 < stepBhSecantReluctivity ...`) and
-   bounded below by `nuCur1 + nuLinear`, and
-2. `stepBhSecantReluctivity` is monotonically non-decreasing in both the prior reluctivity iterate
-   and the squared magnetic flux density $B^2$. -/
-theorem bhSecant_positive_and_monotone
+/-- Positivity, lower bound and monotonicity of the secant-reluctivity sum
+(`bhSecantAccumulate_positive_and_monotone`): for `0 < nuLinear`, `0 ≤ kSat`,
+`0 ≤ nuCur1 ≤ nuCur2`, `0 ≤ bSq1 ≤ bSq2`, the sum is positive, at least `nuCur1 + nuLinear`, and
+monotone in both arguments. (It says nothing about convergence of a B-H iteration; see
+`accumulateBhSecantReluctivity`.) -/
+theorem bhSecantAccumulate_positive_and_monotone
     (nuLinear kSat nuCur1 nuCur2 bSq1 bSq2 : Int)
     (hNu0 : 0 < nuLinear)
     (hSat : 0 ≤ kSat)
@@ -887,11 +906,11 @@ theorem bhSecant_positive_and_monotone
     (hCurLe  : nuCur1 ≤ nuCur2)
     (hBPos   : 0 ≤ bSq1)
     (hBLe    : bSq1 ≤ bSq2) :
-    0 < stepBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
-    nuCur1 + nuLinear ≤ stepBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
-    stepBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ≤
-      stepBhSecantReluctivity nuLinear kSat nuCur2 bSq2 := by
-  unfold stepBhSecantReluctivity evalNonlinearReluctivity
+    0 < accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
+    nuCur1 + nuLinear ≤ accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
+    accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ≤
+      accumulateBhSecantReluctivity nuLinear kSat nuCur2 bSq2 := by
+  unfold accumulateBhSecantReluctivity evalNonlinearReluctivity
   have hSatB1 : 0 ≤ kSat * bSq1 := int_mul_nonneg kSat bSq1 hSat hBPos
   have hSatMono : kSat * bSq1 ≤ kSat * bSq2 :=
     int_mul_le_mul_of_nonneg_left bSq1 bSq2 kSat hBLe hSat

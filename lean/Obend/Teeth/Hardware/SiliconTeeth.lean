@@ -138,7 +138,7 @@ theorem fabublox_under_and_over_etch_refused :
 
 /-- Kôika-style action log refuses both `read0` after `write0` and double `write0` on register `3`,
 and `checkConflictFreeSchedule` refuses two rules that write to the same target register `0`. -/
-theorem koika_rule_conflicts_refused :
+example :
     runActionTrace emptyActionLog [.write .port0 3 42#64, .read .port0 3] =
       .error (.read0AfterWrite 3) ∧
     checkConflictFreeSchedule
@@ -148,7 +148,7 @@ theorem koika_rule_conflicts_refused :
 
 /-- DRC cleanroom lattice refuses returning a gold-contaminated wafer (`Au`) to `.feolCmosClean`,
 and refuses directional PVD trench fill (`4:1` aspect ratio) due to keyhole void pinch-off. -/
-theorem drc_gold_and_keyhole_refused :
+example :
     checkToolZoneAdmissible (stepWaferZone .feolCmosClean .auMetal) .feolCmosClean = false ∧
     checkTrenchFillVoidFree ⟨200, 50, 20, 60⟩ = false :=
   ⟨rfl, rfl⟩
@@ -163,7 +163,7 @@ theorem analog_thin_oxide_overvoltage_refused :
 
 /-- `wafer.space` GF180MCU signoff refuses both unprotected `2400:1` plasma-etch antenna nets and
 under-dense `15%` CMP Metal1 layers, while accepting `goldenGf180SignoffCert`. -/
-theorem waferspace_refusal_and_acceptance_poles :
+example :
     checkWaferSpaceSignoff goldenGf180SignoffCert = true ∧
     checkWaferSpaceSignoff badAntennaSignoffCert = false ∧
     checkWaferSpaceSignoff badCmpDensitySignoffCert = false := by
@@ -171,7 +171,7 @@ theorem waferspace_refusal_and_acceptance_poles :
 
 /-- Unballasted power BJT electro-thermal feedback ($\gamma_{\text{th}} = 1440 \ge 1000$) is refused
 by `checkThermalLoopStable`, and $155^\circ\text{C}$ junction temperature trips Schmitt TSD cutoff. -/
-theorem thermal_runaway_and_tsd_overtemp_refused :
+example :
     checkThermalLoopStable unballastedPowerBjt = false ∧
     checkThermalLoopStable emitterBallastedPowerBjt = true ∧
     (stepTsdProtection standardTsdSpec ⟨true, 0⟩ 155000).stageEnabled = false :=
@@ -179,7 +179,7 @@ theorem thermal_runaway_and_tsd_overtemp_refused :
 
 /-- Direct `SN74LS00` TTL $\to$ `CD74HC00` CMOS interfacing ($\text{NM}_H = -800\,\text{mV}$) and
 uncalibrated model drift ($\varepsilon_\infty = 620\,\text{mV} > 25\,\text{mV}$) are refused. -/
-theorem datasheet_ttl_to_hc_and_drift_refused :
+example :
     checkLogicInterface sn74ls00Datasheet.logic cd74hc00Datasheet.logic 0 400 = false ∧
     checkModelCalibration uncalibratedDrifted74ls00Preds sn74ls00Datasheet.transferCurve 25 = false ∧
     checkDatasheetFitSignoff goldenDatasheetFitCert = true ∧
@@ -189,14 +189,14 @@ theorem datasheet_ttl_to_hc_and_drift_refused :
 
 /-- `SN74LS00` fanout overload (`25 > 10`) and synchronous Buck inductor saturation (`3691 mA > 3500 mA`)
 are refused by `checkTtlFanout` and `checkBuckCcmSafe`. -/
-theorem circuits_fanout_and_buck_saturation_refused :
+example :
     checkTtlFanout sn74ls00TotemParams 25 = false ∧
     checkBuckCcmSafe overloadedSaturatingBuckSpec = false :=
   ⟨rfl, rfl⟩
 
 /-- Unmatched $300\,\Omega$ twin-lead on $50\,\Omega$ coax ($\text{VSWR} = 6:1$) and unfiltered Class-E
 PA harmonics ($-18\,\text{dBc}$ vs $-43\,\text{dBc}$ FCC Part 97.307 limit) are refused. -/
-theorem rf_vswr_and_unfiltered_pa_harmonics_refused :
+example :
     checkVswrUnder2To1 50 ⟨300, 0⟩ = false ∧
     checkFccPart97Harmonics unfilteredClassEPaSpec = false ∧
     checkRfTransceiverSignoff golden40mFt8TransceiverCert = true ∧
@@ -209,7 +209,7 @@ theorem rf_vswr_and_unfiltered_pa_harmonics_refused :
 /-- Compiling the actual `ReviewMember.obend` leaf book `emit (comp 1)` through `compileBookToRtl`
 produces a valid `RtlModule` (`checkRtlModule = true`) whose hardware evaluation at `arg = 3` yields
 `out_review = 5` (`(3 + 1) + 1`) and `out_twice = 7` (`review(review(3))`)! -/
-theorem review_book_compiled_rtl_verified :
+example :
     (match compileBookToRtl "obend_review_compiled" (emit (comp 1)) with
     | some m =>
       checkRtlModule m &&
@@ -231,19 +231,19 @@ def hwDeadCells : Reading LeafPin HwCandidate → List LeafCell
   | _ => []
 
 /-- At 500 MHz (`2000 ps`) on 7nm FinFET SS, the `ReviewMember` bitstream is admitted and usable. -/
-theorem bitstream_usable_7nm :
+example :
     hwSpecSlot.usable (holdsAt (view (comp 1) 0)) reviewBitstream7nm = true := by
   decide +kernel
 
 /-- When `Override` is composed last, the 7nm bitstream is blocked naming `.object "twiceOfThree"`. -/
-theorem override_blocks_bitstream :
+example :
     hwDeadCells (hwSpecSlot.read (holdsAt (view overridden 1)) (some reviewBitstream7nm)) =
       [.object "twiceOfThree"] := by
   decide +kernel
 
 /-- When overclocked to 500 MHz (`2000 ps`) on 130nm CMOS, the `.bitstream` candidate fails
 `checkTimingSignoff` (`usable = false`), while the software `.book` candidate remains usable! -/
-theorem sky130_overclock_rejects_bitstream_keeps_book :
+example :
     hwSpecSlot.usable (holdsAt (view (comp 1) 0)) reviewBitstream130nmOverclock = false ∧
     hwSpecSlot.usable (holdsAt (view (comp 1) 0)) (.book "twiceOfThree" (comp 1)) = true := by
   decide +kernel
@@ -500,11 +500,11 @@ def femmB0AddInsteadOfSub (tri : FemmTriangle2D) : Int :=
 
 #tooth Obend.Hardware.Magnetics.femm_gauge_invariance by mutation Obend.Hardware.Magnetics.FemmTriangle2D.b0 := femmB0AddInsteadOfSub
 
-/-- 35. Broken `evalIpmTorqueScaled` in `Obend.Hardware.Magnetics` that subtracts `(ld - lq) * id * iq` instead of adding it (reversing the IPM reluctance torque sign). -/
+/-- 35. Broken `evalIpmTorqueTwiceMicroNm` in `Obend.Hardware.Magnetics` that subtracts `(ld - lq) * id * iq` instead of adding it (reversing the IPM reluctance torque sign). -/
 def evalIpmTorqueInvertReluctance (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
-  m.polePairs * (m.psiPmMilliWb * iqAmp - (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp)
+  3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp - (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp)
 
-#tooth Obend.Hardware.Magnetics.ipm_reluctance_torque_boost by mutation Obend.Hardware.Magnetics.evalIpmTorqueScaled := evalIpmTorqueInvertReluctance
+#tooth Obend.Hardware.Magnetics.ipm_reluctance_torque_boost by mutation Obend.Hardware.Magnetics.evalIpmTorqueTwiceMicroNm := evalIpmTorqueInvertReluctance
 
 /-- 36. Broken `evalPeakWindingTempMilliC` in `Obend.Hardware.FluidThermal` that subtracts `rCaloricMilliKPerW` instead of adding it (violating series thermal resistance monotonicity). -/
 def evalPeakWindingTempSubCaloric (tInletMilliC powerLossW rCaloricMilliKPerW rConvMilliKPerW rCondMilliKPerW : Int) : Int :=

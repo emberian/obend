@@ -30,7 +30,7 @@ probes, and `#print axioms` (`0 sorryAx`) across:
    - `evalMeshTotalCoEnergy_nonneg`, `evalMeshTotalCoEnergy_gauge_invariant`,
    - `evalMaxwellStressTorqueScaled`, `maxwell_stress_quadrature_symmetry`,
    - `maxwell_stress_agrees_with_dq0_pm_torque`,
-   - `stepBhSecantReluctivity`, `bhSecant_positive_and_monotone`.
+   - `accumulateBhSecantReluctivity`, `bhSecantAccumulate_positive_and_monotone`.
 2. `Obend.Hardware.Thermal` & `Obend.Hardware.FluidThermal`:
    - `evalCopperJouleHeatingTcr`, `evalCopperJouleSlope`, `evalConvectiveHeatRemoval`,
    - `stepCoupledElectroThermalMap`, `electroThermal_step_diff_identity`,
@@ -120,26 +120,26 @@ theorem test_concrete_femm_mesh_residual_and_coenergy :
 theorem test_maxwell_stress_symmetry_and_dq0_agreement
     (m : IpmMotorSpec) (rGapMm lStackMm bRadialPm dTheta idAmp iqAmp : Int)
     (samples s1 s2 : List AirGapHarmonicSample)
-    (hPsi : m.psiPmMilliWb = rGapMm * rGapMm * lStackMm * bRadialPm * dTheta) :
+    (hPsi : m.psiPmMilliWb * 1000 = rGapMm * rGapMm * lStackMm * bRadialPm * dTheta) :
     (evalMaxwellStressTorqueScaled rGapMm lStackMm (swapAirGapBrBtheta samples) =
       evalMaxwellStressTorqueScaled rGapMm lStackMm samples ∧
      evalMaxwellStressTorqueScaled rGapMm lStackMm (s1 ++ s2) =
       evalMaxwellStressTorqueScaled rGapMm lStackMm s1 +
       evalMaxwellStressTorqueScaled rGapMm lStackMm s2) ∧
     (evalMaxwellStressTorqueScaled rGapMm lStackMm
-      [{ bRadialMt := bRadialPm, bTangentialMt := iqAmp, arcWeight := m.polePairs * dTheta }] =
-      evalIpmTorqueScaled m 0 iqAmp ∧
+      [{ bRadialMt := bRadialPm, bTangentialMt := iqAmp, arcWeight := 3 * m.polePairs * dTheta }] =
+      evalIpmTorqueTwiceMicroNm m 0 iqAmp ∧
      evalMaxwellStressTorqueScaled 1 1
-      [{ bRadialMt := m.psiPmMilliWb + (m.ldMicroH - m.lqMicroH) * idAmp
+      [{ bRadialMt := m.psiPmMilliWb * 1000 + (m.ldMicroH - m.lqMicroH) * idAmp
          bTangentialMt := iqAmp
-         arcWeight := m.polePairs }] =
-      evalIpmTorqueScaled m idAmp iqAmp) :=
+         arcWeight := 3 * m.polePairs }] =
+      evalIpmTorqueTwiceMicroNm m idAmp iqAmp) :=
   ⟨⟨(maxwell_stress_quadrature_symmetry rGapMm lStackMm samples s1 s2).1,
     (maxwell_stress_quadrature_symmetry rGapMm lStackMm samples s1 s2).2.1⟩,
    maxwell_stress_agrees_with_dq0_pm_torque m rGapMm lStackMm bRadialPm dTheta idAmp iqAmp hPsi⟩
 
 /-- 1.4 Concrete Maxwell Stress Tensor evaluation on empty, single-sector, and multi-sector contours. -/
-theorem test_concrete_maxwell_stress_torque_scaled :
+example :
     let contour : List AirGapHarmonicSample :=
       [ { bRadialMt := 1200, bTangentialMt := 300, arcWeight := 4 }
       , { bRadialMt := 1150, bTangentialMt := 280, arcWeight := 4 } ]
@@ -151,17 +151,17 @@ theorem test_concrete_maxwell_stress_torque_scaled :
     0 < evalMaxwellStressTorqueScaled 60 150 contour := by
   decide +kernel
 
-/-- 1.5 Universal B-H Secant Fixed-Point positivity and monotonicity (`bhSecant_positive_and_monotone`). -/
+/-- 1.5 Positivity and monotonicity of the secant-reluctivity sum (`bhSecantAccumulate_positive_and_monotone`). -/
 theorem test_bh_secant_positive_and_monotone
     (nuLinear kSat nuCur1 nuCur2 bSq1 bSq2 : Int)
     (hNu0 : 0 < nuLinear) (hSat : 0 ≤ kSat)
     (hCurPos : 0 ≤ nuCur1) (hCurLe : nuCur1 ≤ nuCur2)
     (hBPos : 0 ≤ bSq1) (hBLe : bSq1 ≤ bSq2) :
-    0 < stepBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
-    nuCur1 + nuLinear ≤ stepBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
-    stepBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ≤
-      stepBhSecantReluctivity nuLinear kSat nuCur2 bSq2 :=
-  bhSecant_positive_and_monotone nuLinear kSat nuCur1 nuCur2 bSq1 bSq2 hNu0 hSat hCurPos hCurLe hBPos hBLe
+    0 < accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
+    nuCur1 + nuLinear ≤ accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
+    accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ≤
+      accumulateBhSecantReluctivity nuLinear kSat nuCur2 bSq2 :=
+  bhSecantAccumulate_positive_and_monotone nuLinear kSat nuCur1 nuCur2 bSq1 bSq2 hNu0 hSat hCurPos hCurLe hBPos hBLe
 
 /-! ## 2. Electro-Thermal Copper TCR Feedback & Runaway vs. Equilibrium Dichotomy -/
 
@@ -204,7 +204,7 @@ theorem test_electroThermal_steady_state_unique
 /-- 2.3 Concrete verification of stable contraction ($G_{\text{th}} > I^2 R_0 \alpha$),
     thermal runaway divergence ($G_{\text{th}} < I^2 R_0 \alpha$), and the exact neutral
     boundary ($G_{\text{th}} = I^2 R_0 \alpha$). -/
-theorem test_concrete_electro_thermal_dichotomy :
+example :
     let iAmp := 10
     let r0Mohm := 5
     let alphaPermille := 4
@@ -252,7 +252,7 @@ theorem test_drive_train_codesign_sound
     - Inadequate cooler conductance ($G_{\text{th}} = 1500000 \le I^2 R_0 \alpha = 1920000$) is refused (`false`),
     - Coolant hotter than winding ($T_{\text{coolant}} = 130000 > T_{\text{winding}} = 122000$) is refused (`false`),
     - Class-H winding overtemperature ($T_{\text{winding}} = 185000 > 180000$) is refused (`false`). -/
-theorem test_drive_train_codesign_positive_and_negative_cases :
+example :
     checkDriveTrainCoDesign goldenCoupledDriveTrainSpec = true ∧
     checkDriveTrainCoDesign { goldenCoupledDriveTrainSpec with modulationPermille := 1050 } = false ∧
     checkDriveTrainCoDesign { goldenCoupledDriveTrainSpec with vDcBusV := -100 } = false ∧
@@ -323,11 +323,11 @@ def evalMaxwellStressTorqueScaledBroken
 
 #tooth Obend.Hardware.Magnetics.maxwell_stress_quadrature_symmetry by mutation Obend.Hardware.Magnetics.evalMaxwellStressTorqueScaled := evalMaxwellStressTorqueScaledBroken
 
-/-- Tooth 2: Broken `stepBhSecantReluctivity` that subtracts `evalNonlinearReluctivity` instead of adding. -/
+/-- Tooth 2: Broken `accumulateBhSecantReluctivity` that subtracts `evalNonlinearReluctivity` instead of adding. -/
 def stepBhSecantReluctivityBroken (nuLinear kSat nuCur bSq : Int) : Int :=
   nuCur - evalNonlinearReluctivity nuLinear kSat bSq
 
-#tooth Obend.Hardware.Magnetics.bhSecant_positive_and_monotone by mutation Obend.Hardware.Magnetics.stepBhSecantReluctivity := stepBhSecantReluctivityBroken
+#tooth Obend.Hardware.Magnetics.bhSecantAccumulate_positive_and_monotone by mutation Obend.Hardware.Magnetics.accumulateBhSecantReluctivity := stepBhSecantReluctivityBroken
 
 /-- Tooth 3: Broken `evalCopperJouleSlope` that ignores `alphaPermille`. -/
 def evalCopperJouleSlopeBroken (iAmp r0Mohm _alphaPermille : Int) : Int :=
@@ -376,7 +376,7 @@ def checkDriveTrainCoDesignBroken (spec : CoupledDriveTrainSpec) : Bool :=
 #print axioms Obend.Hardware.Magnetics.evalMeshTotalCoEnergy_nonneg
 #print axioms Obend.Hardware.Magnetics.maxwell_stress_quadrature_symmetry
 #print axioms Obend.Hardware.Magnetics.maxwell_stress_agrees_with_dq0_pm_torque
-#print axioms Obend.Hardware.Magnetics.bhSecant_positive_and_monotone
+#print axioms Obend.Hardware.Magnetics.bhSecantAccumulate_positive_and_monotone
 #print axioms Obend.Hardware.Thermal.electroThermal_equilibrium_stability_dichotomy
 #print axioms Obend.Hardware.Thermal.electroThermal_steady_state_unique_and_contraction
 #print axioms Obend.Hardware.PowerElectronics.driveTrainCoDesign_sound

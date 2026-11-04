@@ -99,6 +99,8 @@ structure PowertrainPlantSpec where
   minSafeAirGapUm           : Int
   sarAdcBits                : Nat
   sarAdcLsbMv               : Nat
+  /-- current-sensor gain in mV/A: `iPhaseSenseMv = iqAmp · sensorMvPerAmp` (the sensor closes the loop) -/
+  sensorMvPerAmp            : Int
   adcAmpPerCode             : Int
   iqRefAmp                  : Int
   kpCurrentStepNum          : Int
@@ -119,8 +121,8 @@ $f_{\text{eff}} = (N - 1) \cdot f_{\text{sw}} = \text{evalFcmlEffectiveRippleFre
 directly into `Magnetics.evalSteinmetzCoreLossMw`. -/
 def evalFcmlHarmonicSteinmetzLossW
     (kh ke fSwKhz numFcmlLevels bPeakRippleMilliT : Int) : Int :=
-  let fEffKhz := evalFcmlEffectiveRippleFreqHz fSwKhz (numFcmlLevels - 1)
-  evalSteinmetzCoreLossMw kh ke fEffKhz bPeakRippleMilliT / 1000
+  let fEffHz := evalFcmlEffectiveRippleFreqHz (fSwKhz * 1000) (numFcmlLevels - 1)
+  evalSteinmetzCoreLossMw kh ke fEffHz bPeakRippleMilliT / 1000
 
 /-- Theorem (`fcmlHarmonicSteinmetzLossW_nonneg`):
 Whenever Steinmetz coefficients `0 ≤ kh`, `0 ≤ ke`, per-cell switching frequency `0 ≤ fSwKhz`,
@@ -131,10 +133,10 @@ theorem fcmlHarmonicSteinmetzLossW_nonneg
     (hKh : 0 ≤ kh) (hKe : 0 ≤ ke) (hF : 0 ≤ fSwKhz) (hLvl : 1 ≤ numFcmlLevels) :
     0 ≤ evalFcmlHarmonicSteinmetzLossW kh ke fSwKhz numFcmlLevels bPeakRippleMilliT := by
   unfold evalFcmlHarmonicSteinmetzLossW evalFcmlEffectiveRippleFreqHz
-  have hFeff : 0 ≤ (numFcmlLevels - 1) * fSwKhz :=
-    int_mul_nonneg (numFcmlLevels - 1) fSwKhz (by omega) hF
-  have hMw : 0 ≤ evalSteinmetzCoreLossMw kh ke ((numFcmlLevels - 1) * fSwKhz) bPeakRippleMilliT :=
-    steinmetz_core_loss_nonneg kh ke ((numFcmlLevels - 1) * fSwKhz) bPeakRippleMilliT hKh hKe hFeff
+  have hFeff : 0 ≤ (numFcmlLevels - 1) * (fSwKhz * 1000) :=
+    int_mul_nonneg (numFcmlLevels - 1) (fSwKhz * 1000) (by omega) (by omega)
+  have hMw : 0 ≤ evalSteinmetzCoreLossMw kh ke ((numFcmlLevels - 1) * (fSwKhz * 1000)) bPeakRippleMilliT :=
+    steinmetz_core_loss_nonneg kh ke ((numFcmlLevels - 1) * (fSwKhz * 1000)) bPeakRippleMilliT hKh hKe hFeff
   exact int_ediv_nonneg _ 1000 hMw (by omega)
 
 /-- Updates the coupled LC Drives direct in-slot stator winding temperature (in $\text{m}^\circ\text{C}$)
@@ -199,7 +201,8 @@ def stepSampledDataDigitalTwin
   { timeCode       := st.timeCode + 10
     idAmp          := st.idAmp
     iqAmp          := iqNextAmp
-    iPhaseSenseMv  := st.iPhaseSenseMv
+    -- the sensor reads the new current: this is what closes the loop (until 2026-11-04 it was frozen)
+    iPhaseSenseMv  := Int.toNat (iqNextAmp * spec.sensorMvPerAmp)
     fcmlCapErrMv   := capErrNextMv
     tWindingMilliC := tWindingNextMilliC
     tMagnetMilliC  := st.tMagnetMilliC
@@ -265,7 +268,7 @@ theorem sampled_data_current_loop_iss_contraction
 
 /-- Complete closed-loop cyber-physical safety predicate for the powertrain digital twin at state `st`. -/
 def checkPowertrainTwinSafety (spec : PowertrainPlantSpec) (st : PowertrainTwinState) : Bool :=
-  let shaftTorque := evalIpmTorqueScaled spec.motor st.idAmp st.iqAmp
+  let shaftTorque := evalIpmTorqueTwiceMicroNm spec.motor st.idAmp st.iqAmp
   let capNext := evalActiveBalancingStep st.fcmlCapErrMv spec.activeBalGainPermille
   let usdState := toUsdPhysicalState st
   decide (spec.minShaftTorqueScaled ≤ shaftTorque) &&
@@ -292,7 +295,7 @@ simultaneously satisfies:
 theorem sampled_data_closed_loop_powertrain_safety_invariant
     (spec : PowertrainPlantSpec) (st : PowertrainTwinState)
     (hSafe : checkPowertrainTwinSafety spec st = true) :
-    spec.minShaftTorqueScaled ≤ evalIpmTorqueScaled spec.motor st.idAmp st.iqAmp ∧
+    spec.minShaftTorqueScaled ≤ evalIpmTorqueTwiceMicroNm spec.motor st.idAmp st.iqAmp ∧
     st.tWindingMilliC ≤ spec.maxClassHInsulationMilliC ∧
     st.tMagnetMilliC ≤ spec.maxMagnetDemagMilliC ∧
     0 < st.hotAirGapUm ∧
@@ -329,24 +332,28 @@ def goldenMs350IpmPlantSpec : PowertrainPlantSpec where
   bPeakRippleMilliT         := 2
   tInletMilliC              := 50000
   pCuBaseW                  := 7638
-  slopeBetaCu               := 0
+  -- ∂P_Cu/∂T = I²R₀α ≈ 72500·0.012·0.00393 ≈ 3.4 W/K (was 0: the coupling was switched off)
+  slopeBetaCu               := 3
   rCaloricMilliKPerW        := 2
   rConvMilliKPerW           := 5
   rDirectWallMilliKPerW     := 2
   coldAirGapUm              := 1200
   thermalGrowthBaseUm       := 220
-  alphaThermalUmPerK        := 0
+  -- rotor radial growth ≈ 12e-6/K · 100 mm ≈ 1.2 µm/K (was 0)
+  alphaThermalUmPerK        := 1
   centrifugalGrowthBaseUm   := 95
   bearingRunoutUm           := 35
   minSafeAirGapUm           := 500
   sarAdcBits                := 4
   sarAdcLsbMv               := 100
+  sensorMvPerAmp            := 4
   adcAmpPerCode             := 25
   iqRefAmp                  := 250
   kpCurrentStepNum          := 1
   kpCurrentStepDen          := 2
   activeBalGainPermille     := 200
-  minShaftTorqueScaled      := 20000000
+  -- 250 N·m in twice-µN·m
+  minShaftTorqueScaled      := 500000000
   maxClassHInsulationMilliC := 180000
   maxMagnetDemagMilliC      := 120000
 
@@ -373,32 +380,35 @@ def goldenTwinState0 : PowertrainTwinState where
 (`golden_ms350_ipm_digital_twin_trajectory_verified`)**:
 Executes a 2-step closed-loop sampled-data trajectory `s0 → s1 → s2` of `goldenMs350IpmPlantSpec`
 and verifies by kernel evaluation (`decide +kernel`) that:
-1. The `MS350` 7-level ($M = 6$) FCML harmonic Steinmetz iron loss at $f_{\text{eff}} = 6 \times 50 = 300\,\text{kHz}$
-   evaluates to `360 W`, combining with `7640 W` copper loss for `8000 W` total stator loss,
-2. The LC Drives direct in-slot microchannel cooling network stabilizes peak winding temperature at
-   `122000 mC` ($122^\circ\text{C} \le 180^\circ\text{C}$ Class-H limit),
-3. The 4-bit SAR ADC quantizes `950 mV` to digital code `9`, driving $i_q$ from `230 A → 242 A → 254 A`,
+1. The `MS350` 7-level ($M = 6$) FCML harmonic Steinmetz iron loss at $f_{\text{eff}} = 6 \times 50 = 300\,\text{kHz}$,
+   2 mT ripple, evaluates to `360 W`,
+2. With the copper loss now temperature-dependent (`slopeBetaCu = 3` W/K) the in-slot winding goes
+   `115000 → 123737 → 123953 mC` and sits at its fixed point (`123953 mC`, below Class H),
+3. The sensor (4 mV/A) reads the new current, the 4-bit SAR ADC quantizes it (920 mV → 9, 968 mV → 9,
+   1016 mV → 10), and $i_q$ goes `230 A → 242 A → 254 A` and then stays: the loop is closed and settles
+   to within one ADC code (25 A) of the 250 A reference,
 4. The 4-stage CORDIC $dq0$ rotator drives `rotorAngleMrad` from `442 mrad` to `0 mrad` in one control cycle,
-5. Active Lyapunov balancing contracts `fcmlCapErrMv` from `100 mV → 80 mV → 64 mV`,
-6. Dynamic hot rotor-stator air gap remains at `850 um ≥ 500 um` across all steps, and
+5. Active balancing contracts `fcmlCapErrMv` from `100 mV → 80 mV → 64 mV`,
+6. With thermal growth coupled (`alphaThermalUmPerK = 1`) the hot air gap is `777 um ≥ 500 um`, and
 7. Every state `s0, s1, s2` satisfies `checkPowertrainTwinSafety = true` and the projected OpenUSD
-   `timeSamples` track satisfies `checkUsdTimeSampleChain 500 180000 ... = true`! -/
+   `timeSamples` track satisfies `checkUsdTimeSampleChain 500 180000 ... = true`.
+A concrete `decide`; the 15 conjuncts keep their positions because `Apps/FocHil.lean` projects into them. -/
 -- fixture kept (2026-11-04): would delete (a three-step replay of a preset plant compared to its own literal trajectory) but cited by Obend/Apps/FocHil.lean:570, tests/metasystem/CoupledPhysicalTest.lean:254
 theorem golden_ms350_ipm_digital_twin_trajectory_verified :
     let s0 := goldenTwinState0
     let s1 := stepSampledDataDigitalTwin goldenMs350IpmPlantSpec s0
     let s2 := stepSampledDataDigitalTwin goldenMs350IpmPlantSpec s1
-    evalFcmlHarmonicSteinmetzLossW 2 1 50 7 2 = 362 ∧
+    evalFcmlHarmonicSteinmetzLossW 2 1 50 7 2 = 360 ∧
     runSarAdcN 4 0 950 100 = 9 ∧
     s1.iqAmp = 242 ∧
     s2.iqAmp = 254 ∧
     s1.rotorAngleMrad = 0 ∧
     s1.fcmlCapErrMv = 80 ∧
     s2.fcmlCapErrMv = 64 ∧
-    s1.tWindingMilliC = 122000 ∧
-    s2.tWindingMilliC = 122000 ∧
-    s1.hotAirGapUm = 850 ∧
-    s2.hotAirGapUm = 850 ∧
+    s1.tWindingMilliC = 123737 ∧
+    s2.tWindingMilliC = 123953 ∧
+    s1.hotAirGapUm = 777 ∧
+    s2.hotAirGapUm = 777 ∧
     checkPowertrainTwinSafety goldenMs350IpmPlantSpec s0 = true ∧
     checkPowertrainTwinSafety goldenMs350IpmPlantSpec s1 = true ∧
     checkPowertrainTwinSafety goldenMs350IpmPlantSpec s2 = true ∧

@@ -211,7 +211,9 @@ def intAbs (x : Int) : Int :=
 * `diDtAmpPerNs`: worst-case turn-off current slew rate ($\text{A/ns}$),
 * `vDssRatedV`: semiconductor breakdown voltage rating $V_{DSS} / V_{CES}$ ($\text{V}$, e.g. $1200\,\text{V}$ SiC),
 * `deadTimeNs`, `turnOffMaxNs`, `turnOnMinNs`, `safetyMarginNs`: half-bridge gate-drive timing ($\text{ns}$),
-* `mpptDeltaI`, `mpptV`, `mpptI`, `mpptDeltaV`, `mpptTol`: incremental conductance residual parameters,
+* `mpptDeltaI`, `mpptV`, `mpptI`, `mpptDeltaV`, `mpptTol`: incremental conductance residual parameters
+  (for the *linearized* source `I = I_sc − G_s V` of §1; a photovoltaic string is exponential, and
+  `mppt_incremental_conductance_global_max` is the maximum-power-transfer theorem for that linear source),
 * `totalLossWatts`, `maxLossBudgetWatts`: thermal dissipation and heatsink budget ($\text{W}$). -/
 structure Ms350InverterSpec where
   inverterName       : String
@@ -417,8 +419,8 @@ Flying-Capacitor Multilevel (`FCML`) SiC/GaN solar string inverter cell signoff 
   per-cell turn-off peak voltage $250 + 5 \times 10 = 300\,\text{V} \le 650\,\text{V}$,
 * Ultra-fast SiC/GaN gate drive with $120\,\text{ns}$ hardware dead-time ($t_{\text{off,max}} = 45\,\text{ns}$,
   $t_{\text{on,min}} = 15\,\text{ns}$, $t_{\text{margin}} = 30\,\text{ns}$),
-* Exact MPPT tracking at $1500\,\text{V}_{\text{DC}}$, $233\,\text{A}$ ($350\,\text{kW}$) and per-cell
-  loss within thermal budget. -/
+* An MPPT residual check at $1500\,\text{V}_{\text{DC}}$, $300\,\text{A}$ (the 350 kW nameplate is 233 A at
+  1500 V; the fixture's `mpptI` is 300) and per-cell loss within thermal budget. -/
 def ms350Fcml350kWSolarInverter : Ms350InverterSpec where
   inverterName       := "MissionPower_MS350_350kW_1500Vdc_7Level_FCML_Cell"
   vDcBusV            := evalFcmlCellBlockingVoltageV 1500 6
@@ -449,44 +451,49 @@ def evalPwmModulatedVoltageScaled (modulationPermille vDcBusV : Int) : Int :=
 def checkLinearPwmModulation (modulationPermille : Int) : Bool :=
   decide (0 ≤ modulationPermille ∧ modulationPermille ≤ 1000)
 
-/-- Evaluates total 3-phase SiC MOSFET inverter conduction + switching power loss:
-$$P_{\text{inv}}(I_{\text{rms}}, f_{\text{sw}}, V_{\text{DC}}) =
-  3 \cdot I_{\text{rms}}^2 \cdot R_{DS(\text{on})} + k_{\text{sw}} \cdot f_{\text{sw}} \cdot V_{\text{DC}} \cdot I_{\text{rms}}.$$ -/
-def evalSicInverterTotalLoss
-    (iRmsAmp rDsOnMohm kSwScaled fSwKhz vDcBusV : Int) : Int :=
-  3 * (iRmsAmp * iRmsAmp) * rDsOnMohm + kSwScaled * fSwKhz * vDcBusV * iRmsAmp
+/-- Total 3-phase SiC MOSFET inverter loss **in mW**: conduction $3 I_{\text{rms}}^2 R_{DS(on)}$ with
+$R$ in mΩ (A²·mΩ = mW), plus switching $6\,E_{\text{sw}}\,V_{\text{DC}}\,I_{\text{rms}}\,f_{\text{sw}}$ for six
+switches, where `eSwNjPerVoltAmp` is the per-switch turn-on + turn-off energy per volt per amp in
+nJ/(V·A) (so $E_{\text{sw}} V I$ is nJ per cycle, times $f$ in kHz gives µW, `/ 1000` gives mW):
+$$P_{\text{inv}} = 3 I^2 R + \frac{6\,e_{\text{sw}}\,V\,I\,f_{\text{kHz}}}{1000}.$$
+Before 2026-11-04 the second term was `k * f_kHz * V * I` with an unnamed `k`, added to mW. -/
+def evalSicInverterTotalLossMw
+    (iRmsAmp rDsOnMohm eSwNjPerVoltAmp fSwKhz vDcBusV : Int) : Int :=
+  3 * (iRmsAmp * iRmsAmp) * rDsOnMohm + (6 * eSwNjPerVoltAmp * vDcBusV * iRmsAmp * fSwKhz) / 1000
+
+/-- Name kept for `Vault/HardwareProjection` and the tests; the units are those of
+`evalSicInverterTotalLossMw`, and the third argument is `eSwNjPerVoltAmp`. -/
+abbrev evalSicInverterTotalLoss := evalSicInverterTotalLossMw
 
 /-- Non-negativity and switching-frequency monotonicity of 3-phase SiC MOSFET inverter loss
 (`sicInverterLoss_nonneg_and_monotone_freq`). -/
 theorem sicInverterLoss_nonneg_and_monotone_freq
-    (iRmsAmp rDsOnMohm kSwScaled fSw1 fSw2 vDcBusV : Int)
+    (iRmsAmp rDsOnMohm eSw fSw1 fSw2 vDcBusV : Int)
     (hI : 0 ≤ iRmsAmp)
     (hR : 0 ≤ rDsOnMohm)
-    (hK : 0 ≤ kSwScaled)
+    (hK : 0 ≤ eSw)
     (hF1 : 0 ≤ fSw1)
     (hFLe : fSw1 ≤ fSw2)
     (hV : 0 ≤ vDcBusV) :
-    0 ≤ evalSicInverterTotalLoss iRmsAmp rDsOnMohm kSwScaled fSw1 vDcBusV ∧
-    evalSicInverterTotalLoss iRmsAmp rDsOnMohm kSwScaled fSw1 vDcBusV ≤
-      evalSicInverterTotalLoss iRmsAmp rDsOnMohm kSwScaled fSw2 vDcBusV := by
-  dsimp only [evalSicInverterTotalLoss]
+    0 ≤ evalSicInverterTotalLossMw iRmsAmp rDsOnMohm eSw fSw1 vDcBusV ∧
+    evalSicInverterTotalLossMw iRmsAmp rDsOnMohm eSw fSw1 vDcBusV ≤
+      evalSicInverterTotalLossMw iRmsAmp rDsOnMohm eSw fSw2 vDcBusV := by
+  dsimp only [evalSicInverterTotalLossMw]
   have hIsq : 0 ≤ iRmsAmp * iRmsAmp := int_sq_nonneg iRmsAmp
   have h3Isq : 0 ≤ 3 * (iRmsAmp * iRmsAmp) :=
     int_mul_nonneg 3 (iRmsAmp * iRmsAmp) (by omega) hIsq
   have hCond : 0 ≤ 3 * (iRmsAmp * iRmsAmp) * rDsOnMohm :=
     int_mul_nonneg (3 * (iRmsAmp * iRmsAmp)) rDsOnMohm h3Isq hR
-  have hKF1 : 0 ≤ kSwScaled * fSw1 := int_mul_nonneg kSwScaled fSw1 hK hF1
-  have hKFV1 : 0 ≤ kSwScaled * fSw1 * vDcBusV :=
-    int_mul_nonneg (kSwScaled * fSw1) vDcBusV hKF1 hV
-  have hSw1 : 0 ≤ kSwScaled * fSw1 * vDcBusV * iRmsAmp :=
-    int_mul_nonneg (kSwScaled * fSw1 * vDcBusV) iRmsAmp hKFV1 hI
-  have hKFMono : kSwScaled * fSw1 ≤ kSwScaled * fSw2 :=
-    int_mul_le_mul_of_nonneg_left fSw1 fSw2 kSwScaled hFLe hK
-  have hKFVMono : kSwScaled * fSw1 * vDcBusV ≤ kSwScaled * fSw2 * vDcBusV :=
-    int_mul_le_mul_of_nonneg_right (kSwScaled * fSw1) (kSwScaled * fSw2) vDcBusV hKFMono hV
-  have hSwMono : kSwScaled * fSw1 * vDcBusV * iRmsAmp ≤ kSwScaled * fSw2 * vDcBusV * iRmsAmp :=
-    int_mul_le_mul_of_nonneg_right
-      (kSwScaled * fSw1 * vDcBusV) (kSwScaled * fSw2 * vDcBusV) iRmsAmp hKFVMono hI
+  have hE : 0 ≤ 6 * eSw := by omega
+  have hEV : 0 ≤ 6 * eSw * vDcBusV := int_mul_nonneg (6 * eSw) vDcBusV hE hV
+  have hEVI : 0 ≤ 6 * eSw * vDcBusV * iRmsAmp := int_mul_nonneg (6 * eSw * vDcBusV) iRmsAmp hEV hI
+  have hSw1 : 0 ≤ 6 * eSw * vDcBusV * iRmsAmp * fSw1 :=
+    int_mul_nonneg (6 * eSw * vDcBusV * iRmsAmp) fSw1 hEVI hF1
+  have hSwMono : 6 * eSw * vDcBusV * iRmsAmp * fSw1 ≤ 6 * eSw * vDcBusV * iRmsAmp * fSw2 :=
+    int_mul_le_mul_of_nonneg_left fSw1 fSw2 (6 * eSw * vDcBusV * iRmsAmp) hFLe hEVI
+  have hDiv1 : 0 ≤ (6 * eSw * vDcBusV * iRmsAmp * fSw1) / 1000 := Int.ediv_nonneg hSw1 (by decide)
+  have hDivMono : (6 * eSw * vDcBusV * iRmsAmp * fSw1) / 1000 ≤ (6 * eSw * vDcBusV * iRmsAmp * fSw2) / 1000 :=
+    Int.ediv_le_ediv (by decide) hSwMono
   refine ⟨by omega, by omega⟩
 
 /-- Unified Motor-Inverter-Cooler Drive Train Co-Design Specification (`CoupledDriveTrainSpec`):
@@ -508,6 +515,7 @@ structure CoupledDriveTrainSpec where
   safetyMarginNs            : Int
   iRmsAmp                   : Int
   rDsOnMohm                 : Int
+  /-- per-switch switching energy in nJ/(V·A) (`evalSicInverterTotalLossMw`); the field name predates the unit -/
   kSwScaled                 : Int
   fSwKhz                    : Int
   maxInverterLossBudget     : Int
@@ -539,13 +547,13 @@ structure CoupledDriveTrainSpec where
    between coolant inlet and Class-H insulation rating ($T_{\text{coolant}} \le T_{\text{winding}} \le T_{\text{Class-H}}$). -/
 def checkDriveTrainCoDesign (spec : CoupledDriveTrainSpec) : Bool :=
   let vPeakV := evalTurnOffPeakVoltageV spec.vDcBusV spec.lBusNh spec.diDtAmpPerNs
-  let pInv := evalSicInverterTotalLoss spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV
+  let pInv := evalSicInverterTotalLossMw spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV
   let motor : IpmMotorSpec :=
     { polePairs    := spec.polePairs
     , psiPmMilliWb := spec.psiPmMilliWb
     , ldMicroH     := spec.ldMicroH
     , lqMicroH     := spec.lqMicroH }
-  let shaftTorque := evalIpmTorqueScaled motor spec.idAmp spec.iqAmp
+  let shaftTorque := evalIpmTorqueTwiceMicroNm motor spec.idAmp spec.iqAmp
   let cuSlope := evalCopperJouleSlope spec.iRmsAmp spec.r0CuMohm spec.alphaCuPermille
   checkLinearPwmModulation spec.modulationPermille &&
   decide (0 ≤ spec.vDcBusV) &&
@@ -567,10 +575,10 @@ theorem driveTrainCoDesign_sound
     (0 ≤ spec.modulationPermille ∧ spec.modulationPermille ≤ 1000) ∧
     evalTurnOffPeakVoltageV spec.vDcBusV spec.lBusNh spec.diDtAmpPerNs ≤ spec.vDssRatedV ∧
     spec.turnOffMaxNs < spec.deadTimeNs + spec.turnOnMinNs ∧
-    evalSicInverterTotalLoss spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV ≤
+    evalSicInverterTotalLossMw spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV ≤
       spec.maxInverterLossBudget ∧
     spec.minShaftTorqueScaled ≤
-      evalIpmTorqueScaled
+      evalIpmTorqueTwiceMicroNm
         { polePairs := spec.polePairs, psiPmMilliWb := spec.psiPmMilliWb,
           ldMicroH := spec.ldMicroH, lqMicroH := spec.lqMicroH }
         spec.idAmp spec.iqAmp ∧
@@ -601,7 +609,9 @@ theorem driveTrainCoDesign_sound
   exact ⟨hMod, hVpk, hNoShoot, hLoss, hTorque, hSlope, hClassH, hPwmNonneg, hPwmMax, hCore, hCool⟩
 
 /-- Golden coupled $800\,\text{V}_{\text{DC}}$ SiC Inverter + 4-Pole-Pair IPM Motor + Direct In-Slot
-Microchannel Cooler drive-train reference specification (`goldenCoupledDriveTrainSpec`). -/
+Microchannel Cooler drive-train reference specification (`goldenCoupledDriveTrainSpec`). Inverter loss:
+conduction $3 \cdot 200^2 \cdot 5$ mΩ = 600 W, switching $6 \cdot 125$ nJ/(V·A) $\cdot 800 \cdot 200 \cdot 20$ kHz
+= 2400 W, total 3.0 kW ≤ 4.0 kW; shaft torque 304.5 N·m ≥ 250 N·m (`minShaftTorqueScaled` in twice-µN·m). -/
 def goldenCoupledDriveTrainSpec : CoupledDriveTrainSpec where
   driveName                 := "LC_Drives_MS350_SiC_800V_IPM_DriveTrain"
   modulationPermille        := 866
@@ -615,7 +625,7 @@ def goldenCoupledDriveTrainSpec : CoupledDriveTrainSpec where
   safetyMarginNs            := 100
   iRmsAmp                   := 200
   rDsOnMohm                 := 5
-  kSwScaled                 := 1
+  kSwScaled                 := 125
   fSwKhz                    := 20
   maxInverterLossBudget     := 4000000
   polePairs                 : Int := 4
@@ -624,7 +634,7 @@ def goldenCoupledDriveTrainSpec : CoupledDriveTrainSpec where
   lqMicroH                  := 380
   idAmp                     := -100
   iqAmp                     := 250
-  minShaftTorqueScaled      := 20000000
+  minShaftTorqueScaled      := 500000000
   pCoreLoss                 := 800
   r0CuMohm                  := 12
   alphaCuPermille           := 4
