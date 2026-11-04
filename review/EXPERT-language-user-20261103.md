@@ -892,15 +892,17 @@ lines are still lexed.
 
 ### Findings, for the record
 
-1. **Six names the ledger cites that the binary's library lacks** (`obend status DECISIONS-20261031`
-   today): `prepare_checks`, `step_preserves_typing`, `overlay_instantiate`, `exposed_once`,
-   `runBounded_mono`, `fidget_toolpath_no_gouge`. INFERRED: `prepare_checks` is
-   `Elab/Proofs/PrepareChecks.lean`, `step_preserves_typing` and `overlay_instantiate` are Core
-   proof modules, none imported by `Main`; `fidget_toolpath_no_gouge` is Apps (tier 2). The full
-   census's artifact would resolve those; `exposed_once` and `runBounded_mono` I could not place
-   and may be renamed or gone — the ledger's own "Still open" row says `slot_repair` is to be
-   renamed, and that name does resolve today. Not corrected: the rows are history; a correction is
-   a new row.
+1. **Not a finding about the ledger: the environment file is the CLI's closure, not tier 1's.**
+   `obend status DECISIONS-20261031` lists six names today (`prepare_checks`,
+   `step_preserves_typing`, `overlay_instantiate`, `exposed_once`, `runBounded_mono`,
+   `fidget_toolpath_no_gouge`); all six exist in the tree (the coordinator placed them:
+   `Elab/Proofs/PrepareChecks.lean`, `Core/Proofs/SubjectReduction.lean`,
+   `Core/Proofs/Templates.lean`, `Run/Proofs/Durable.lean`, `Core/Proofs/TickCost.lean`,
+   `Apps/FidgetCam.lean`). They are absent from `environment.txt` because
+   `tests/decisions/Environment.lean` imports `Obend.Main`, whose closure is the CLI's and leaves
+   the proof modules out. The gate lane is making `import Obend` the tier-1 line exactly; when that
+   lands, `Environment.lean` imports the umbrella (or the census writes the file in tier 2) and the
+   six resolve. Until then the status line over-reports, and nothing in the ledger is wrong.
 2. **`## In flight` is a status board, not a ledger section**: its prose is rewritten as lanes
    finish, which `appendOnly per ##` now refuses. Either it moves to a page of its own or its
    updates become added lines.
@@ -923,8 +925,9 @@ lines are still lexed.
 2. No strings — closed for labels; no order or content on labels, no calendar.
 3. Append-only is a count — closed (`deletions`, per row; whole-line insertions no longer count).
 4. Theorem names are a hand-kept census page — **closed**: the census writes the environment, the
-   kind names it, a cite is a backticked name, the refusal names it. Open: the artifact is tier 2
-   and the tier-2 census does not run today, so the file in use is the binary's library.
+   kind names it, a cite is a backticked name, the refusal names it. Open: the file in use is
+   written from `Obend.Main`'s closure (the CLI's, no proof modules) until the gate lane's
+   `import Obend` is the tier-1 line; then `Environment.lean` imports it.
 5. Authority is not provenance — closed; the poster's grant as a fact open.
 6. No cross-page facts — closed for links; joined states, backlinks as subject open; `linked.F`
    states lack `unresolved`.
