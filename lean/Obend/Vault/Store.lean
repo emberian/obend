@@ -343,8 +343,8 @@ page's precedence list, its own kind first. -/
 theorem kind_law_inherited {es : List Entry} {name : String} {G : Graph} {laws : Laws}
     (hl : lawsFor es name G = .ok laws) {K : KindsOf} (hK : kindsFor es name (settled G) = .ok K)
     {ks : Obend.Kind.Kinds Laws} (hks : vaultKinds es = .ok ks)
-    {S : Obend.Core.Ty.Ty} {o n : Obend.Core.Data.Data} {facts : Facts} {who : String} {k : Occ}
-    (hj : judge S name (laws.map fun x => (x.1, x.2.1)) o n (requestOf who k facts) = .admitted) :
+    {S : Obend.Core.Ty.Ty} {o n : Obend.Core.Data.Data} {facts : Facts} {who pr : String} {k : Occ}
+    (hj : judge S name (laws.map fun x => (x.1, x.2.1)) o n (requestBy who pr k facts) = .admitted) :
     ∀ kk ∈ K.chain, ∀ c, ks.find kk = some c → ∀ x ∈ c.law, x.2.1.denote facts (k.old o n) n = true := by
   intro kk hkk c hc x hx
   exact judge_admits hj (x.1, x.2.1) (List.mem_map.2 ⟨x, lawsFor_kinds hl hK hks kk hkk c hc x hx, rfl⟩)
@@ -412,7 +412,10 @@ def refusalText (pageName : String) (laws : List (String × LawExpr × String)) 
     (facts : Facts) (old : Option Obend.Core.Data.Data) (new : Obend.Core.Data.Data) (front : List String) : String :=
   match laws.find? (·.1 == law) with
   | some (_, e, txt) =>
-    "refused by " ++ lawOwnerText pageName law ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts old new front
+    let posted := match labelAt new "poster" with
+      | some w => if e.fields.contains "poster" then "; posted by " ++ w else ""
+      | none => ""
+    "refused by " ++ lawOwnerText pageName law ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts old new front ++ posted
   | none => "refused by " ++ lawOwnerText pageName law ++ ": " ++ reason
 
 /-! ## Laws over links
@@ -447,17 +450,48 @@ def linkedEntries (es : List Entry) (G : Graph) : List Entry :=
 def linkLaws (laws : Laws) : List (String × LawExpr) :=
   (laws.filter fun l => isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
 
-/-- A page's state from its measures, by name. -/
-def stateOfMs (ms : List (String × Nat)) : Obend.Core.Data.Data := stateOf (sortNames (ms.map (·.1))) ms
+/-- The label fields of a version: its frontmatter's words, the measures' names excepted. -/
+def labelsOf (G : Graph) : List (String × String) :=
+  (labelFields (settled G)).filter fun (k, _) => !measureNames.contains k
 
-/-- A state with the fields a law reads added, at 0 where the state has none (`stateOf`'s default):
-its keys and itself. -/
-def rekey (lin : List (String × LawExpr)) : Obend.Core.Data.Data → List String × Obend.Core.Data.Data
+/-- A page's state from its measures and label fields, by name. -/
+def pageState (G : Graph) (v : Nat) : Obend.Core.Data.Data :=
+  let ms := measures G v
+  let ls := labelsOf G
+  stateOfWith (sortNames (ms.map (·.1) ++ ls.map (·.1))) (ls.map (·.1)) ms ls
+
+/-- The store of page states a judgment over links reads: each entry's name to its state. -/
+def stateStore (es : List Entry) : VaultStore := fun c =>
+  (es.find? (·.name == c)).map fun e => pageState e.graph e.version
+
+/-- A state's scalar or label, said. -/
+def showDatum : Obend.Core.Data.Data → String
+  | .natural n => toString n
+  | .label s => s
+  | .boolean b => toString b
+  | _ => "…"
+
+/-- How a pinned state differs from the state here, field by field (the first three), said to a
+person. -/
+def stateDiffText (expected current : Option Obend.Core.Data.Data) : String :=
+  match expected, current with
+  | some (.record es), some (.record cs) =>
+    let diffs := es.filterMap fun (k, v) => match cs.lookup k with
+      | some w => if Obend.Law.termEq v.term w.term then none else some (k ++ " " ++ showDatum v ++ " → " ++ showDatum w)
+      | none => some (k ++ " " ++ showDatum v ++ " → none")
+    ", ".intercalate (diffs.take 3) ++ (if diffs.length > 3 then ", …" else "")
+  | _, none => "no page of that name here"
+  | _, _ => "a different state here"
+
+/-- A state with the fields a law reads added, at 0 where the state has none (`stateOfWith`'s
+default): its type and itself. -/
+def rekey (lin : List (String × LawExpr)) : Obend.Core.Data.Data → Obend.Core.Ty.Ty × Obend.Core.Data.Data
   | .record fs =>
     let vals := fs.filterMap fun (k, d) => match d with | .natural n => some (k, n) | _ => none
-    let keys := sortNames (vals.map (·.1) ++ lin.flatMap fun l => l.2.fields)
-    (keys, stateOf keys vals)
-  | d => ([], d)
+    let lvals := fs.filterMap fun (k, d) => match d with | .label s => some (k, s) | _ => none
+    let keys := sortNames (fs.map (·.1) ++ lin.flatMap fun l => l.2.fields)
+    (stateTyWith keys (lvals.map (·.1)), stateOfWith keys (lvals.map (·.1)) vals lvals)
+  | d => (stateTy [], d)
 
 /-- Why a judgment over links refused: the page it was at, that page's state (none: it has no
 version), the law and the reason. -/
@@ -477,8 +511,8 @@ def judgeLinksIn (store : VaultStore) (pkg : String) (lin : List (String × LawE
     match store c with
     | none => some ⟨c, none, "", "the linked page " ++ c ++ " has no version to judge"⟩
     | some d =>
-      let (keys, n) := rekey lin d
-      match judge (stateTy keys) pkg lin n n rq with
+      let (S, n) := rekey lin d
+      match judge S pkg lin n n rq with
       | .admitted => judgeLinksIn store pkg lin rq rest
       | .refused law why => some ⟨c, some n, law, why⟩
       | .undecided why => some ⟨c, some n, "", why⟩
@@ -552,7 +586,7 @@ read pins the pages its laws over links read, at the states read. -/
 def writeTurn (page : String) (o n : Obend.Core.Data.Data) (linked : List Entry)
     (rq : Obend.Core.Data.Data) : VaultTurn where
   turnId := ByteArray.empty
-  readPins := linked.map fun e => ⟨e.name, some (stateOfMs (measures e.graph e.version))⟩
+  readPins := linked.map fun e => ⟨e.name, some (pageState e.graph e.version)⟩
   writeCells := [{ cell := page, preState := o, postState := n }]
   occasion := rq
   agree := by
@@ -603,7 +637,7 @@ the old ones (`lawsFor_of_kept`). A birth is judged as a first write. The new st
 write's own measures (`deletions`, `insertions`: how it changed the current version); the old state
 has none (0). -/
 def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
-    (turn : Nat) : Except String Change := do
+    (turn : Nat) (poster : String := who.name) : Except String Change := do
   let authors := p.authors ++ added
   let p' := { p with authors := authors }
   let v := p.history.length
@@ -612,27 +646,31 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   let moved := match p.kind with
     | some old => movedKinds es old
     | none => []
-  let (occ, laws, oldMs) ← match p.current with
-    | none => pure (Occ.birth, newLaws, [])
+  let (occ, laws, oldMs, oldLs) ← match p.current with
+    | none => pure (Occ.birth, newLaws, [], [])
     | some G =>
-      if lawsKept (settled G) (settled G') && moved.isEmpty then pure (Occ.write, newLaws, measures G (v - 1))
-      else if who.may "relaw" p.name then pure (Occ.adopt, newLaws, measures G (v - 1))
+      if lawsKept (settled G) (settled G') && moved.isEmpty then
+        pure (Occ.write, newLaws, measures G (v - 1), labelsOf G)
+      else if who.may "relaw" p.name then pure (Occ.adopt, newLaws, measures G (v - 1), labelsOf G)
       else if lawsKept (settled G) (settled G') then throw (staleText p.name who.name moved)
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
   let newMs := measures G' v ++ writeMeasures p.current G'
+  -- the write's provenance is a label the laws read: `new.poster`, the member whose text this is
+  let newLs := ("poster", poster) :: labelsOf G'
   let lin := (laws.filter fun l => !isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
-  let keys := sortNames (newMs.map (·.1) ++ oldMs.map (·.1) ++ lin.flatMap fun l => l.2.fields)
-  let S := stateTy keys
-  let n := stateOf keys newMs
-  let o := if oldMs.isEmpty then n else stateOf keys oldMs
+  let labels := (newLs.map (·.1) ++ oldLs.map (·.1)).eraseDups
+  let keys := sortNames (newMs.map (·.1) ++ oldMs.map (·.1) ++ labels ++ lin.flatMap fun l => l.2.fields)
+  let S := stateTyWith keys labels
+  let n := stateOfWith keys labels newMs newLs
+  let o := if oldMs.isEmpty then n else stateOfWith keys labels oldMs oldLs
   let facts : Facts := ⟨some who.id, some who.id, v, turn⟩
-  let rq := requestOf who.name occ facts
+  let rq := requestBy who.name poster occ facts
   match judge S p.name lin o n rq with
   | .admitted =>
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
-    let wt := writeTurn p.name (stateOfMs oldMs) (stateOfMs newMs) (linkedEntries es G') rq
+    let wt := writeTurn p.name o n (linkedEntries es G') rq
     let world := applyTurn wt.readPins.store wt
     let mine := linkLaws laws
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
@@ -643,7 +681,7 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
         | .ok elaws =>
           let theirs := linkLaws elaws
           if let some r := (if theirs.isEmpty then none else judgeLinksIn world e.name theirs rq [p.name]) then
-            throw (backlinkRefusalText e.name p.name elaws r facts (stateOfMs newMs)
+            throw (backlinkRefusalText e.name p.name elaws r facts n
               ((scalarFields (settled G')).map (·.1)))
         | .error _ => pure ()
     pure ⟨p.history ++ [G'], render G' p.name p'.who, authors, none, kinds.pin⟩
@@ -1125,10 +1163,11 @@ Each takes the store as an open left it and returns the new store, or why it ref
 def Store.setPage (s : Store) (p : Page) : Store :=
   { s with pages := s.pages.map fun q => if q.name == p.name then p else q, turn := s.turn + 1 }
 
-/-- A write by `who` of the version `G'` of the page `p`, committed. -/
-def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor) :
-    Except String Store := do
-  match commit s.entries p G' added who s.turn with
+/-- A write by `who` of the version `G'` of the page `p`, committed; `poster` is whose text it is
+when not `who`'s own (a selection: the kept candidate's author). -/
+def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
+    (poster : Option String := none) : Except String Store := do
+  match commit s.entries p G' added who s.turn (poster.getD who.name) with
   | .ok ch => return s.setPage (p.withChange ch)
   | .error msg => throw (p.name ++ ": " ++ msg)
 
@@ -1149,6 +1188,19 @@ theorem mergePage_pushout {A B M : Graph} (h : mergePage A B = some M) : IsPusho
   · rename_i hc; cases h; exact merge_isPushout (compatible_of_compatB hc)
   · cases h
 
+/-- **A replica's write comes with its pins.** The write of a page with laws over links read the
+pages it links to at the replica's states; those are the write's read pins (`writeTurn`), and the
+merged write is admitted only where they hold (`admitFootprint`, `no_toctou`'s premise): by
+`judgeLinksIn_of_turn` the laws over links then say here what they said there. Where a linked page
+moved underneath the write, the merge refuses it by name, with what moved; the change is made again
+here, against that page as it is. A page without laws over links read nothing: no pins. -/
+def replicaPins (o : Store) (q : Page) (B : Graph) : Footprint :=
+  match lawsFor o.entries q.name B with
+  | .ok ls =>
+    if (linkLaws ls).isEmpty then []
+    else (linkedEntries o.entries B).map fun e => ⟨e.name, some (pageState e.graph e.version)⟩
+  | .error _ => []
+
 /-- Merge the pages of another replica's store (`label` names it in the authors of what it added). -/
 def mergeFrom (s o : Store) (label : String) : Store × List String := Id.run do
   let mut st := s
@@ -1167,7 +1219,14 @@ def mergeFrom (s o : Store) (label : String) : Store × List String := Id.run do
       match p.current, q.current with
       | some A, some B =>
         if leB B A then pure ()
-        else match mergePage A B with
+        else match admitFootprint (stateStore st.entries) (replicaPins o q B) with
+          | .error (.footprintStale cell exp cur) =>
+            notes := notes.push (p.name ++ ": not merged: its write at " ++ label ++ " read " ++ cell ++
+              " as it was there (" ++ stateDiffText exp cur ++ "); make the change here, against " ++
+              cell ++ " as it is")
+          | .error _ => notes := notes.push (p.name ++ ": not merged: its pins do not hold here")
+          | .ok _ =>
+          match mergePage A B with
           | none => notes := notes.push (p.name ++ ": not merged: the two versions name one atom differently (they share no base)")
           | some M =>
             let added := (B.atoms.map (·.1)).eraseDups.filter (fun a => !A.present a) |>.map fun a =>
@@ -1225,7 +1284,13 @@ def selectIn (s : Store) (who : Actor) (page : String) (k i : Nat) : Except Stri
   let some alts := sectionAt G k | throw (page ++ " has no section " ++ toString k)
   unless 1 ≤ i && i ≤ alts.length do
     throw ("section " ++ toString k ++ " of " ++ page ++ " has " ++ toString alts.length ++ " candidates")
-  s.write p (G.apply (selectPatch alts (i - 1))) [] who
+  -- the selection is `who`'s act; the text is its author's (the first author among the kept
+  -- candidate's atoms that is not "as it is"; else the owner's)
+  let poster := (alts[i - 1]?.bind fun (_, segs) => (segAtoms segs).findSome? fun a =>
+    match p.authors.lookup a with
+    | some w => if w == "as it is" then none else some w
+    | none => none).getD "owner"
+  s.write p (G.apply (selectPatch alts (i - 1))) [] who (some poster)
 
 /-- **There is no section 0**: selecting in it is refused, whatever the page. -/
 theorem select_section_zero_refused (s : Store) (who : Actor) (page : String) (i : Nat) :

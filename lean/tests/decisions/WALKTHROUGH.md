@@ -14,8 +14,10 @@ Every block below is run, in order, by `python3 tests/decisions/walkthrough.py` 
 
 ## 1. The ledger's kind
 
-A decision is a page under `decisions/`, whose kind says what every decision keeps. Decider codes:
-`1` Ember, `2` the integrator under standing approval, `3` a lane. The environment's theorem names
+A decision is a page under `decisions/`, whose kind says what every decision keeps. The decider is a
+label: `ember`, `integrator` (under standing approval) or `lane`; a decision that claims Ember must
+have been posted by the owner (`new.poster`, the member whose text a write is, bound by the vault
+at every write). The environment's theorem names
 are a page of marked lines (a stub census, by hand, until the gate lane's identifier census writes
 it), and a decision that cites a theorem quotes its line. `appendOnly` reads the write, not the
 page: `deletions` counts the atoms of the settled text a write tombstoned (an author's change is
@@ -28,14 +30,16 @@ cat > decisions/_kind.md <<'MD'
 ---
 law dated: not (new.date == 0)
 law dateOnce: writeOnce(date)
-law decider: new.decider in [1, 2, 3]
+law decider: new.decider in ["ember", "integrator", "lane"]
+law claimed: (new.decider == "ember") implies (new.poster == "owner")
 law deciderOnce: writeOnce(decider)
 law appendOnly: new.deletions == 0
 law cited: new.dangling == 0
 date: 0
-decider: 0
+decider: nobody
 ---
-A decision: dated, decided by Ember (1), the integrator under standing approval (2) or a lane (3),
+A decision: dated, decided by Ember, the integrator under standing approval or a lane, claiming Ember
+only when the owner posted it,
 appended to line by line and never shortened or rewritten, and every theorem it names one the
 environment has.
 MD
@@ -70,7 +74,7 @@ cat > decisions/D-0001.md <<'MD'
 ---
 kind: decisions
 date: 20261031
-decider: 1
+decider: ember
 ---
 No per-theorem axiom lists; one crawling census. Where: `393eb2b`, memory `feedback-no-manual-axiom-lists`.
 MD
@@ -78,7 +82,7 @@ cat > decisions/D-0002.md <<'MD'
 ---
 kind: decisions
 date: 20261101
-decider: 2
+decider: integrator
 ---
 Package law at adoption and relaw: adoption judged with old = new state; a relaw of a package law
 is refused, the change is by upgrade. Cost to reverse: two compiler arms and two theorems.
@@ -87,7 +91,7 @@ cat > decisions/D-0003.md <<'MD'
 ---
 kind: decisions
 date: 20261104
-decider: 1
+decider: ember
 ---
 The project frame is research into the consequences of its design decisions; the user frame is a
 lens taken sometimes, never the overriding one; the root documents say so.
@@ -119,7 +123,7 @@ cat > decisions/D-0004.md <<'MD'
 ---
 kind: decisions
 date: 20261104
-decider: 3
+decider: lane
 ---
 `monotone(F)` holds at a first write, so a page can be born under it. The vault's judge is what it
 was: [[environment/Theorems#^judge_admits]] and [[environment/Theorems#^judge_refuses]] are
@@ -149,7 +153,7 @@ cat > decisions/D-0005.md <<'MD'
 ---
 kind: decisions
 date: 20261104
-decider: 2
+decider: integrator
 ---
 Constructive repair is proved: [[environment/Theorems#^suggestMultiField_admits]].
 MD
@@ -167,14 +171,14 @@ that would pass named.
 ```sh
 cd ledger
 rm decisions/D-0005.md
-printf -- '---\nkind: decisions\ndate: 20261104\ndecider: 4\n---\nTaken by nobody in particular.\n' > decisions/D-0006.md
-printf -- '---\nkind: decisions\ndecider: 1\n---\nUndated.\n' > decisions/D-0007.md
+printf -- '---\nkind: decisions\ndate: 20261104\ndecider: committee\n---\nTaken by nobody in particular.\n' > decisions/D-0006.md
+printf -- '---\nkind: decisions\ndecider: ember\n---\nUndated.\n' > decisions/D-0007.md
 obend open
 ```
 
 ```text
 decisions/D-0005: deleted (its file is gone; v0 kept; a file decisions/D-0005.md revives it)
-decisions/D-0006: not born: refused by decisions/_kind: decider (the kind of decisions/, an ancestor of decisions/D-0006): `new.decider in [1, 2, 3]` does not hold; the line `decider: 3` would pass (the page has `decider: 4`)
+decisions/D-0006: not born: refused by decisions/_kind: decider (the kind of decisions/, an ancestor of decisions/D-0006): `new.decider in ["ember", "integrator", "lane"]` does not hold; the line `decider: ember` would pass (the page has `decider: committee`)
 decisions/D-0007: not born: refused by decisions/_kind: dated (the kind of decisions/, an ancestor of decisions/D-0007): `not (new.date == 0)` does not hold; date = 1 would pass (this write has date = 0)
 ```
 
@@ -190,7 +194,7 @@ obend open
 
 ```text
 decisions/D-0001: refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `new.deletions == 0` does not hold; deletions = 0 would pass (this write has deletions = 1)
-decisions/D-0006: still not born: refused by decisions/_kind: decider (the kind of decisions/, an ancestor of decisions/D-0006): `new.decider in [1, 2, 3]` does not hold; the line `decider: 3` would pass (the page has `decider: 4`)
+decisions/D-0006: still not born: refused by decisions/_kind: decider (the kind of decisions/, an ancestor of decisions/D-0006): `new.decider in ["ember", "integrator", "lane"]` does not hold; the line `decider: ember` would pass (the page has `decider: committee`)
 decisions/D-0007: still not born: refused by decisions/_kind: dated (the kind of decisions/, an ancestor of decisions/D-0007): `not (new.date == 0)` does not hold; date = 1 would pass (this write has date = 0)
 ```
 
@@ -200,7 +204,7 @@ kind's clause, the file keeping what was typed and the world keeping the decisio
 ```sh
 cd ledger
 rm decisions/D-0006.md decisions/D-0007.md
-printf -- '---\nkind: decisions\ndate: 20261031\ndecider: 1\n---\nNo per-theorem axiom lists.\n' > decisions/D-0001.md
+printf -- '---\nkind: decisions\ndate: 20261031\ndecider: ember\n---\nNo per-theorem axiom lists.\n' > decisions/D-0001.md
 obend open && obend status decisions/D-0001 | head -1
 ```
 
@@ -213,23 +217,23 @@ decisions/D-0001 v1; its last write was refused by decisions/_kind: appendOnly (
 
 ```sh
 cd ledger
-printf -- '---\nkind: decisions\ndate: 20261031\ndecider: 1\n---\nNo per-theorem axiom lists; one crawling census. Where: `393eb2b`, memory `feedback-no-manual-axiom-lists`.\n' > decisions/D-0001.md
+printf -- '---\nkind: decisions\ndate: 20261031\ndecider: ember\n---\nNo per-theorem axiom lists; one crawling census. Where: `393eb2b`, memory `feedback-no-manual-axiom-lists`.\n' > decisions/D-0001.md
 obend open
 sed -i.bak 's/^date: 20261031$/date: 20261101/' decisions/D-0001.md && rm decisions/D-0001.md.bak && obend open
-sed -i.bak 's/^date: 20261101$/date: 20261031/; s/^decider: 1$/decider: 3/' decisions/D-0001.md && rm decisions/D-0001.md.bak && obend open
+sed -i.bak 's/^date: 20261101$/date: 20261031/; s/^decider: ember$/decider: lane/' decisions/D-0001.md && rm decisions/D-0001.md.bak && obend open
 ```
 
 ```text
 nothing changed
 decisions/D-0001: refused by decisions/_kind: dateOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(date)` does not hold; the line `date: 20261031` would pass (the page has `date: 20261101`)
-decisions/D-0001: refused by decisions/_kind: deciderOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(decider)` does not hold; the line `decider: 1` would pass (the page has `decider: 3`)
+decisions/D-0001: refused by decisions/_kind: deciderOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(decider)` does not hold; the line `decider: ember` would pass (the page has `decider: lane`)
 ```
 
 The ledger itself cannot lose a decision: removing a link is refused by its own `appendOnly`.
 
 ```sh
 cd ledger
-sed -i.bak 's/^decider: 3$/decider: 1/' decisions/D-0001.md && rm decisions/D-0001.md.bak
+sed -i.bak 's/^decider: lane$/decider: ember/' decisions/D-0001.md && rm decisions/D-0001.md.bak
 grep -v 'D-0002' Ledger.md > Ledger.tmp && mv Ledger.tmp Ledger.md
 obend open && obend status Ledger | head -1
 ```
@@ -276,7 +280,7 @@ decisions/D-0008: not born: refused by decisions/_kind: dated (the kind of decis
 
 ```sh
 cd ledger && cat decisions/D-0008.md
-sed -i.bak 's/^date: 0$/date: 20261104/; s/^decider: 0$/decider: 3/' decisions/D-0008.md && rm decisions/D-0008.md.bak
+sed -i.bak 's/^date: 0$/date: 20261104/; s/^decider: nobody$/decider: lane/' decisions/D-0008.md && rm decisions/D-0008.md.bak
 printf 'A decision the lane took: this walkthrough is the dogfood test.\n' >> decisions/D-0008.md
 obend open && obend status decisions/D-0008
 ```
@@ -285,7 +289,7 @@ obend open && obend status decisions/D-0008
 ---
 kind: decisions/_kind
 date: 0
-decider: 0
+decider: nobody
 ---
 decisions/D-0008: v1 written
 decisions/D-0008 v1
@@ -338,4 +342,47 @@ sed -i.bak 's/^date: 20261104$/date: 0/' notes/Scratch.md && rm notes/Scratch.md
 Ledger: v5 written
 notes/Scratch: v2 written
 notes/Scratch: refused by Ledger: listedDated (a law over Ledger's links, of which notes/Scratch is one): `not (linked.date == 0)` does not hold; the line `date: 1` would pass (the page has `date: 0`)
+```
+
+## 7. Who decided, and who says so
+
+`decider` is a label and `poster` is one the vault binds at every write: the owner for the owner's
+writes, the member for a member's post, and at a selection the author of the candidate kept. The
+kind's `claimed` ties them: a decision that says Ember decided must be the owner's text. A member
+`lane` may be granted a post to a decision Ember took, but the post is a write whose text is the
+lane's, and the row claims Ember: refused at the post, naming the poster and the claimed decider,
+and what would pass (`decider: lane`). (A member's post cannot change the frontmatter itself: that
+is a relaw, the owner's.) The lane's proposal to a decision in its own name is admitted, and the
+selection carries the lane as its poster.
+
+```sh refused
+cd ledger
+obend create --from decisions decisions/D-0009 >/dev/null 2>&1
+sed -i.bak 's/^date: 0$/date: 20261104/; s/^decider: nobody$/decider: ember/' decisions/D-0009.md && rm decisions/D-0009.md.bak
+printf 'Ember: the decisions ledger is a vault from now on.\n' >> decisions/D-0009.md
+obend open
+obend member add lane --grant post:decisions/D-0009 --grant post:decisions/D-0008
+{ cat decisions/D-0009.md; printf 'The lane adds: and the vault is where lanes record what they land.\n'; } > ../claim.md
+obend post decisions/D-0009 ../claim.md --as lane
+```
+
+```text
+decisions/D-0009: v1 written
+member lane may post decisions/D-0009, post decisions/D-0008
+refused: decisions/D-0009: refused by decisions/_kind: claimed (the kind of decisions/, an ancestor of decisions/D-0009): `(new.decider == "ember") implies (new.poster == "owner")` does not hold; the line `decider: lane` would pass (the page has `decider: ember`); posted by lane
+```
+
+```sh
+cd ledger
+{ cat decisions/D-0008.md; printf 'The lane adds: the dogfood test now has seven sections.\n'; } > ../more.md
+obend post decisions/D-0008 ../more.md --as lane && obend select decisions/D-0008 1 2 && obend status decisions/D-0008 | head -1
+```
+
+```text
+lane posted to decisions/D-0008
+rendered decisions/D-0008.md
+decisions/D-0008: section 1: 2 candidates (as it is, lane); keep one with: obend select decisions/D-0008 1 N
+kept candidate 2 of section 1 of decisions/D-0008
+rendered decisions/D-0008.md
+decisions/D-0008 v3
 ```

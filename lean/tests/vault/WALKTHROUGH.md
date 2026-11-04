@@ -103,7 +103,8 @@ Delta v1
 A page's frontmatter may carry laws: `law NAME: EXPR`, in the `.obend` law fragment. A law reads the
 page's measures (`words`, `lines`, `bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`), the
 write's own (`deletions`, `insertions`: the atoms of the text it tombstoned and added), its
-frontmatter's number and true/false fields, and who is writing (`request.caller`: 0 is you). Adding a
+frontmatter's number, true/false and one-word (label) fields, who is writing (`request.caller`: 0 is
+you) and whose text it is (`new.poster`: `owner`, or the member who posted it). Adding a
 law is itself a write: the new law must hold of the page as it stands.
 
 ```sh
@@ -672,4 +673,64 @@ Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold;
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+```
+
+## 8. A merge is judged by what its write read
+
+A write of a page with a law over its links read the pages it links to; a replica's write carries
+those readings as pins, and the merge admits it only where they hold. An index that requires every
+listed page to be settled (no open section), edited on the laptop while Gamma changed here: the
+laptop's write of the index read Gamma as it was there, and is refused here with what moved; the
+change is made here instead.
+
+```sh
+cd vault
+printf -- '---\nlaw settled: linked.sections == 0\n---\n# Index\n\n- [[Gamma]]\n' > Index.md && obend open
+cd .. && rm -rf laptop2 && cp -R vault laptop2
+cd laptop2 && printf -- '- [[Alpha]]\n' >> Index.md && obend open
+cd ../vault && printf 'Gamma gains a line here while the laptop is away.\n' >> Gamma.md && obend open
+obend merge ../laptop2
+```
+
+```text
+Index: new page (v1)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Index: v2 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Gamma: v9 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Index: not merged: its write at laptop2 read Gamma as it was there (bytes 143 → 193, lines 5 → 6, version 7 → 8, …); make the change here, against Gamma as it is
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+```
+
+```sh
+cd vault && printf -- '- [[Alpha]]\n' >> Index.md && obend open && obend status Index | head -1
+```
+
+```text
+Index: v2 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Index v2
 ```
