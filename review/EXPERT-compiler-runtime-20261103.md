@@ -588,3 +588,90 @@ Ember's call; nothing was renamed.
 - In the bb2 lane tree `Apps/SovereignDrex.lean` is red on `checkContractCert` (another lane's
   `Law/Contract.lean`, not synced there) and `Apps/ObendRisc.lean` is red on eight decide/omega
   fixtures unrelated to Leaf; neither was touched here.
+
+### Second quest (2026-11-04, evening): the specialized book's link, and the emit sweep
+
+**The theorem.** `Obend.Leaf.Served.link_bequiv_bindBookPins` (`lean/Obend/Leaf/Served.lean`):
+for a book `B` and pins `pins`, if `B.link` and `(bindBookPins B pins).link` are closed, every
+definition's code is a lambda (`LamCodes B`), and every pin is *served* (`Served B pins`: its code is
+closed and `Meets B p.cell.key p.code`, i.e. the read `.get B.link m` and the code run to one term),
+then `B.link ≈b (bindBookPins B pins).link`. `Obend.Leaf.Static.link_bequiv_specializeBook` composes
+it with the folder (`specializeBook B pins = foldBook (bindBookPins B pins)`): `B.link ≈b
+(specializeBook B pins).link`; `specializeBook_member_sound` goes through `book_sound` to the object.
+The proof is the up-to technique of `UpTo.lean` over the one base pair of the two links: `joins_bind`
+is the unfolding, an induction on a definition's body with `self` substituted by `B.link` on the
+left and by the bound link on the right (`Joins.base` at `self`, the two runs to the meeting term at a
+replaced read, congruence elsewhere); `entry_join` opens each dispatcher entry (one β for a method,
+one under the application for a cell); `pair_base` is `fix` then two βs on each side.
+
+**The honest quantifier.** Not "the pins hold at a view": the counterexample is in
+`Teeth/Leaf/StaticTeeth.lean` as `example`s. `a = λself. 1`, `b = λself. self.a + 1`; the pin `a := 5`
+holds at a view whose cell `a` holds `5` (`holdsAt … = true`), yet `run` of `b` on the book is `2` and
+on `specializeBook B [a := 5]` is `6`. The dispatcher serves `1` for `a`, so that pin is not served;
+`a := 1` is, and `b` stays `2`. `HoldsForBookMember` (per member, syntactic `evalBook`) remains as
+the per-definition statement; the link-level hypothesis is `Served`, over the pins the book uses.
+
+**The slot carries the proof.** `Candidate.specialized name C pins` (`Specialize.lean`), supports as
+`.book`, judge `C.closedB && specializedJudgeB (emit C) pins` where `specializedJudgeB` decides the
+four hypotheses: `closedB` of both links, `lamCodesB`, and `servesB` per pin by running the dispatcher
+and the pin to values with `Obend.Law.run` (sound by `run_sound`) and comparing with `termEq`.
+`Served.served_of_judgeB` reads the judge back as the hypotheses; a `#tooth` refuses a judge that
+does not run the dispatcher (`judgeWithoutServing`). The slot theorems for it are in `Static.lean`
+§11: `specialized_usable_sound` (usable at `viewOf k name C'` ⇒ `emit C = emit C'`, the specialized
+book's link is the view's book's link, and when `C'` is closed every member is the object's),
+`specialized_choice` (incumbent-first) and `specialized_moved_pin_blocks`. The binding definitions
+moved from `Static.lean` to `Specialize.lean` so the judge can name them; `Specialize.lean`'s
+candidate section now comes last, unchanged otherwise. `.slotBook`, whose judge is still `closedB`
+alone and which no theorem connects to behaviour, is left as it was (its consumers are
+`Spec/CrossPackage` and `Stdlib`); it should go the same way or go.
+
+Commit `1bdf049`; built on bb2 against HEAD (`build14`): `Leaf.*`, `Teeth/Leaf/*`,
+`Lower/Proofs/SiliconKernel`, `Tactic/SiliconElab`, `Hardware/{ReductionMachine,Fabric,UserspacePhysical}`,
+`Stdlib`, `Apps/SiliconKernelVerilator` (with its routed hunks), and `obend`.
+
+**The emit sweep** (`scratchpad/emit_sweep.py`, every `def` of every `.obend` under
+`lean/tests/obend-source`, `apps/`, `stdlib/`, as `obend emit --package … --object DEF`), on bb2 with
+the lane tree's `obend`, per directory, no totals:
+
+| directory | defs tried | emitted, `07c04c1` export binary (morning) | emitted at HEAD `20a0459` (before this change) | emitted after `objectRefusal` |
+|---|---|---|---|---|
+| `apps/fidget-cam` | 32 | 0 | 28 | 28 |
+| `apps/foc-hil` | 19 | 0 | 14 | 14 |
+| `apps/obend-risc` | 13 | 0 | 9 | 9 |
+| `apps/quantum-photonic-matter` | 23 | 0 | 19 | 19 |
+| `apps/sdr-ft8` | 19 | 0 | 14 | 14 |
+| `apps/silicon-kernel-verilator` | 9 | 0 | 8 | 8 |
+| `apps/sovereign-drex` | 31 | 0 | 20 | 20 |
+| `apps/zk-ntt` | 13 | 0 | 9 | 9 |
+| `lean/tests/obend-source` | 504 | 9 | 33 | 33 |
+| `stdlib/core` | 12 | 0 | 10 | 10 |
+| `stdlib/physical` | 39 | 0 | 32 | 32 |
+
+Logs: `bb2:~/lane-compiler-logs/sweep-before.log`, `sweep-head.log`, `sweep-after2.log`.
+
+The apps' and stdlib's objects emit at HEAD already: the frame lane's `8efc555` (a seed written as a
+def call) and the single-spec `fix(Spec, seed)` case did that between the morning sweep and this one.
+What does not emit is, by construction, not an object, and `obend emit` now says which constructor
+it reached instead of "no fix (compose …) {seed} is reached" alone (`Main.lean`, `objectRefusal`:
+reduce the entry as `findObject` does, report the first `fix` on the way that misses the fragment and
+why, else what the entry runs to; the package knot's own unnamed layer is skipped, not reported).
+The refusal classes after the change, over the 518 refusals:
+
+| refusals | what `obend emit` says |
+|---|---|
+| 313 | the entry runs to a function |
+| 47 | the entry runs to the natural N |
+| 29 | the entry runs to a record with fields […], not a fix: a record literal has no layers to flatten (the `seed*` defs of every app) |
+| 18 | a fix stands at the head, but its first operand is not a spec or compose(…) of specs (`fix` over a prototype or an extension, `tests/obend-source/Ancestry.obend` and kin) |
+| 17 | the entry runs to the boolean b |
+| 13 | the entry runs to the constructor L |
+| 40 | the elaborator's own refusals (`refused (kind-mismatch)`, `self-rigid`, … the refusal cohorts) and a few labels |
+| 7 | the package spec did not build (a `.obend` whose imports the sweep's package writer does not resolve) |
+
+Not done here, routed: `obend emit --fold` (apply `foldBook`, proved by `foldBook_member_sound`) and an
+`obend specialize --pins` that offers `Candidate.specialized` with the judge above; the CLI knows
+`.book` only. The remaining reds of `tests/metasystem/AutoCertTest.lean` on bb2 are not this lane's:
+a heartbeat timeout at `:272`, `AutoCertSuite.accepted` and `Obend.Stdlib.stdlib_all_accepted`
+unknown (names other lanes renamed); its `#check_docs_census` passes once the tree has the review
+documents and `Hardware/CurrentLoop.lean` (`29f42a7` took the untracked `review/DECISIONS-LEDGER.md`
+out of the census's governed lists and the `BendTT` out of `DESIGN.md`'s hardware row).

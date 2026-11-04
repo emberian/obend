@@ -759,6 +759,60 @@ def groundCommand (spec entry expected : String) : IO UInt32 := do
 
 /-! ## The leaf emitter (lane Leaf, `Obend.Leaf`) -/
 
+/-- What a value is, for a refusal. -/
+def describeValue : Obend.Core.Term.Term → String
+  | .nat n => s!"the natural {n}"
+  | .boolean b => s!"the boolean {b}"
+  | .label l => s!"the label {l}"
+  | .lam _ => "a function"
+  | .record fs => s!"a record with fields {fs.map (·.1)}, not a fix: a record literal has no layers to flatten"
+  | .inject l _ => s!"the constructor {l}"
+  | .specification _ _ => "a spec (a layer, not an object: an object is fix(Spec, seed))"
+  | .prototype _ _ => "a prototype value"
+  | _ => "a term that is not an object"
+
+/-- Why the `fix` at the head of `t`, if one stands there under applications, reads, extensions and
+binary operators, is not an object `obend emit` compiles: which part of the fragment it misses. -/
+def headFixRefusal : Nat → Obend.Core.Term.Term → Option String
+  | 0, _ => none
+  | fuel + 1, t =>
+    match t with
+    | .fix S seed =>
+      match Obend.Logic.Program.decodeOperands 64 S with
+        | none =>
+          some "a fix stands at the head, but its first operand is not a spec or compose(…) of specs (every operand must run to specification(meta, λself. λsuper. …))"
+        | some (top, below) =>
+          match Obend.Logic.Program.seedRecord seed with
+          | none =>
+            some s!"fix(compose({", ".intercalate ((top :: below).reverse.map (·.name))}), seed) stands at the head, but its seed does not run to a record within {Obend.Logic.Program.readFuel} steps (a seed is a record literal or a def that returns one)"
+          | some _ =>
+            let named := (top :: below).filter (·.name != "")
+            if named.isEmpty then
+              -- the package knot's own fix: not an object, keep reducing
+              none
+            else
+              let unnamed := (top :: below).length - named.length
+              some s!"fix(compose({", ".intercalate (named.reverse.map (·.name))}), seed) stands at the head with {unnamed} unnamed layer(s) beside the named ones; only named spec layers are compiled"
+    | .app f _ | .get f _ | .extend f _ | .binary _ f _ => headFixRefusal fuel f
+    | _ => none
+
+/-- The reason `findObject` reached no object from `t`: the first `fix` met on the way that misses
+the fragment, or else what `t` runs to. -/
+def objectRefusal (t : Obend.Core.Term.Term) : String :=
+  go 100000 t
+where
+  go : Nat → Obend.Core.Term.Term → String
+    | 0, _ => "the entry does not run to a value within 100000 steps, and no fix stands at its head on the way"
+    | fuel + 1, t =>
+      match headFixRefusal 64 t with
+      | some why => why
+      | none =>
+        match Obend.Law.step? t with
+        | some t' => go fuel t'
+        | none =>
+          if Obend.Law.isValueB t then s!"the entry runs to {describeValue t}"
+          else "the entry is stuck on a term the reducer does not step"
+
 /-- The program's selection and the composition of spec layers reached from it. -/
 def leafObject (spec entry : String) : IO (Except String (Obend.Core.Term.Term × Obend.Logic.Composition)) := do
   let p ← match ← (packageOfSpec spec none).run with
@@ -770,7 +824,7 @@ def leafObject (spec entry : String) : IO (Except String (Obend.Core.Term.Term �
   -- the first composition of named spec layers (the package knot's own layer is unnamed)
   match Obend.Logic.Program.findObject (fun C => C.layers.all (·.name != "")) 100000 t with
   | some C => return .ok (t, C)
-  | none => return .error s!"no fix (compose …) {"{"}seed{"}"} is reached from {entry}"
+  | none => return .error s!"no fix (compose …) {"{"}seed{"}"} is reached from {entry}: {objectRefusal t}"
 
 /-- The natural the demand machine finishes `t` with. -/
 def machineNat (t : Obend.Core.Term.Term) : Option Nat :=
