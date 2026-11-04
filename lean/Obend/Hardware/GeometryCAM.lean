@@ -3172,12 +3172,10 @@ def checkPathNoGouge (part : FRepExpr) (B : Box3D) (d : Nat) (r len δ : Nat) (p
 /-- **`checkPathNoGouge_sound`**: for every CL point of an accepted path, the grown cutter there
 contains no lattice point of the part inside `B`.
 
-What is proved is a lattice statement. What it is for is a continuous one, argued here and not
-mechanised (it needs the reals): when consecutive CL points differ by at most one unit per
-coordinate and the axis is constant between them, every point of the straight segment the control
-interpolates is within $\sqrt{3}/2 < 1$ of a CL point, so with `δ ≥ 1` the swept cutter lies inside
-the union of the grown cutters checked here. A rotary move between CL points is not covered; the
-post (`Obend.Hardware.Kinematics.postNgc`) only rotates at the clearance plane. -/
+This is a lattice statement. The continuous one, every rational time of every move and every
+rational point of the part with the cutter not grown, is `checkMovesContinuous_sound` (§9). A rotary
+move between CL points is covered by neither; the post (`Obend.Hardware.Kinematics.postNgc`) only
+rotates at the clearance plane. -/
 theorem checkPathNoGouge_sound (part : FRepExpr) (B : Box3D) (d r len δ : Nat) (path : List CLPoint)
     (h : checkPathNoGouge part B d r len δ path = true) (p : CLPoint) (hp : p ∈ path)
     (x y z : Int) (hIn : B.contains x y z) (hPart : inSolid x y z part) :
@@ -3208,6 +3206,305 @@ def densifyPolyline : List (Int × Int × Int) → List (Int × Int × Int)
   | [p] => [p]
   | p :: q :: rest => p :: (latticeSegment p q).dropLast ++ densifyPolyline (q :: rest)
 
+
+
+/-! ## 9. Continuous motion: rational points and rational tool positions
+
+Everything above is about lattice points. Here the solid is evaluated at rational points
+(`evalFRepQ`) and enclosed over rational boxes (`frepQ_enclosure_sound`), so a certificate speaks of
+every rational point of the part and every rational position of the cutter. A move between two
+cutter locations is the segment `c₀ + t (c₁ - c₀)`, `t ∈ [0, 1]`; it lies in the box spanned by its
+ends (`segment_in_hull`), and `kdSeg` checks the cutter against the part over the Minkowski
+difference `B ⊖ H` of a part box and a tool-position box, splitting both until the intervals
+separate. The interval of the cutter over `B ⊖ H` is a Lipschitz argument done by the arithmetic:
+no gradient bound is supplied, and none is assumed. The reals are not in core Lean; rationals are
+dense, and the statement is over every rational time. -/
+
+structure QIv where
+  lo : Rat
+  hi : Rat
+  deriving Repr
+
+def QIv.contains (iv : QIv) (v : Rat) : Prop := iv.lo ≤ v ∧ v ≤ iv.hi
+
+structure QBox where
+  x : QIv
+  y : QIv
+  z : QIv
+  deriving Repr
+
+def QBox.contains (B : QBox) (x y z : Rat) : Prop :=
+  B.x.contains x ∧ B.y.contains y ∧ B.z.contains z
+
+/-- The solid at a rational point. -/
+def evalFRepQ (x y z : Rat) : FRepExpr → Rat
+  | .const c      => (c : Rat)
+  | .varX         => x
+  | .varY         => y
+  | .varZ         => z
+  | .add a b      => evalFRepQ x y z a + evalFRepQ x y z b
+  | .sub a b      => evalFRepQ x y z a - evalFRepQ x y z b
+  | .scalePos k a => (k : Rat) * evalFRepQ x y z a
+  | .sq a         => evalFRepQ x y z a * evalFRepQ x y z a
+  | .csgUnion a b => min (evalFRepQ x y z a) (evalFRepQ x y z b)
+  | .csgInter a b => max (evalFRepQ x y z a) (evalFRepQ x y z b)
+  | .csgDiff a b  => max (evalFRepQ x y z a) (-evalFRepQ x y z b)
+  | .offset r a   => evalFRepQ x y z a - (r : Rat)
+
+def qSq (a : QIv) : QIv :=
+  if 0 ≤ a.lo then ⟨a.lo * a.lo, a.hi * a.hi⟩
+  else if a.hi ≤ 0 then ⟨a.hi * a.hi, a.lo * a.lo⟩
+  else ⟨0, max (a.lo * a.lo) (a.hi * a.hi)⟩
+
+/-- The solid over a rational box, by interval arithmetic. -/
+def evalFRepIntervalQ (B : QBox) : FRepExpr → QIv
+  | .const c      => ⟨c, c⟩
+  | .varX         => B.x
+  | .varY         => B.y
+  | .varZ         => B.z
+  | .add a b      =>
+    let ia := evalFRepIntervalQ B a; let ib := evalFRepIntervalQ B b
+    ⟨ia.lo + ib.lo, ia.hi + ib.hi⟩
+  | .sub a b      =>
+    let ia := evalFRepIntervalQ B a; let ib := evalFRepIntervalQ B b
+    ⟨ia.lo - ib.hi, ia.hi - ib.lo⟩
+  | .scalePos k a =>
+    let ia := evalFRepIntervalQ B a
+    ⟨(k : Rat) * ia.lo, (k : Rat) * ia.hi⟩
+  | .sq a         => qSq (evalFRepIntervalQ B a)
+  | .csgUnion a b =>
+    let ia := evalFRepIntervalQ B a; let ib := evalFRepIntervalQ B b
+    ⟨min ia.lo ib.lo, min ia.hi ib.hi⟩
+  | .csgInter a b =>
+    let ia := evalFRepIntervalQ B a; let ib := evalFRepIntervalQ B b
+    ⟨max ia.lo ib.lo, max ia.hi ib.hi⟩
+  | .csgDiff a b  =>
+    let ia := evalFRepIntervalQ B a; let ib := evalFRepIntervalQ B b
+    ⟨max ia.lo (-ib.hi), max ia.hi (-ib.lo)⟩
+  | .offset r a   =>
+    let ia := evalFRepIntervalQ B a
+    ⟨ia.lo - r, ia.hi - r⟩
+
+theorem rat_sq_le_sq (a b : Rat) (ha : 0 ≤ a) (h : a ≤ b) : a * a ≤ b * b := by
+  have h1 := Rat.mul_le_mul_of_nonneg_left h ha
+  have h2 := Rat.mul_le_mul_of_nonneg_right h (Rat.le_trans ha h)
+  exact Rat.le_trans h1 h2
+
+theorem rat_sq_nonneg' (a : Rat) : 0 ≤ a * a := by
+  rcases @Rat.le_total 0 a with h | h
+  · exact Rat.mul_nonneg h h
+  · have := Rat.mul_nonneg (Rat.neg_le_neg h) (Rat.neg_le_neg h)
+    rw [Rat.neg_mul, Rat.mul_neg, Rat.neg_neg] at this
+    simpa using this
+
+theorem rat_neg_sq (a : Rat) : (-a) * (-a) = a * a := by
+  rw [Rat.neg_mul, Rat.mul_neg, Rat.neg_neg]
+
+theorem qSq_contains (a : QIv) (v : Rat) (h : a.contains v) : (qSq a).contains (v * v) := by
+  obtain ⟨h1, h2⟩ := h
+  unfold qSq
+  split
+  · rename_i hlo
+    exact ⟨rat_sq_le_sq _ _ hlo h1, rat_sq_le_sq _ _ (Rat.le_trans hlo h1) h2⟩
+  · split
+    · rename_i _ hhi
+      have e1 := rat_sq_le_sq (-a.hi) (-v) (by grind) (Rat.neg_le_neg h2)
+      have e2 := rat_sq_le_sq (-v) (-a.lo) (by grind) (Rat.neg_le_neg h1)
+      rw [rat_neg_sq, rat_neg_sq] at e1 e2
+      exact ⟨e1, e2⟩
+    · refine ⟨rat_sq_nonneg' v, ?_⟩
+      rcases @Rat.le_total 0 v with hv | hv
+      · have := rat_sq_le_sq _ _ hv h2
+        rw [Rat.max_def]; split <;> grind
+      · have := rat_sq_le_sq (-v) (-a.lo) (by grind) (Rat.neg_le_neg h1)
+        rw [rat_neg_sq, rat_neg_sq] at this
+        rw [Rat.max_def]; split <;> grind
+
+/-- **`frepQ_enclosure_sound`**: the rational interval of the solid over a box contains its value at
+every rational point of the box. -/
+theorem frepQ_enclosure_sound (B : QBox) (x y z : Rat) (hIn : B.contains x y z) (e : FRepExpr) :
+    (evalFRepIntervalQ B e).contains (evalFRepQ x y z e) := by
+  induction e with
+  | const c => exact ⟨Rat.le_refl, Rat.le_refl⟩
+  | varX => exact hIn.1
+  | varY => exact hIn.2.1
+  | varZ => exact hIn.2.2
+  | add a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *; grind
+  | sub a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *; grind
+  | scalePos k a iha =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *
+    have hk : (0 : Rat) ≤ (k : Rat) := by grind
+    exact ⟨Rat.mul_le_mul_of_nonneg_left iha.1 hk, Rat.mul_le_mul_of_nonneg_left iha.2 hk⟩
+  | sq a iha =>
+    simp only [evalFRepIntervalQ, evalFRepQ]
+    exact qSq_contains _ _ iha
+  | csgUnion a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *
+    rw [Rat.min_def, Rat.min_def, Rat.min_def]; split <;> split <;> split <;> grind
+  | csgInter a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *
+    rw [Rat.max_def, Rat.max_def, Rat.max_def]; split <;> split <;> split <;> grind
+  | csgDiff a b iha ihb =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *
+    rw [Rat.max_def, Rat.max_def, Rat.max_def]; split <;> split <;> split <;> grind
+  | offset r a iha =>
+    simp only [evalFRepIntervalQ, evalFRepQ, QIv.contains] at *; grind
+
+def QIv.halves (iv : QIv) : QIv × QIv :=
+  let mid := (iv.lo + iv.hi) / 2
+  (⟨iv.lo, mid⟩, ⟨mid, iv.hi⟩)
+
+theorem QIv.halves_cover (iv : QIv) (v : Rat) (h : iv.contains v) :
+    iv.halves.1.contains v ∨ iv.halves.2.contains v := by
+  unfold QIv.halves QIv.contains at *
+  dsimp only
+  rcases @Rat.le_total v ((iv.lo + iv.hi) / 2) with hm | hm
+  · exact Or.inl ⟨h.1, hm⟩
+  · exact Or.inr ⟨hm, h.2⟩
+
+def QIv.width (iv : QIv) : Rat := iv.hi - iv.lo
+
+def QBox.width (B : QBox) : Rat := max B.x.width (max B.y.width B.z.width)
+
+/-- Split a rational box across its widest axis. -/
+def QBox.halves (B : QBox) : QBox × QBox :=
+  if B.y.width ≤ B.x.width ∧ B.z.width ≤ B.x.width then
+    ({ B with x := B.x.halves.1 }, { B with x := B.x.halves.2 })
+  else if B.z.width ≤ B.y.width then
+    ({ B with y := B.y.halves.1 }, { B with y := B.y.halves.2 })
+  else
+    ({ B with z := B.z.halves.1 }, { B with z := B.z.halves.2 })
+
+theorem QBox.halves_cover (B : QBox) (x y z : Rat) (h : B.contains x y z) :
+    B.halves.1.contains x y z ∨ B.halves.2.contains x y z := by
+  obtain ⟨hx, hy, hz⟩ := h
+  unfold QBox.halves
+  split
+  · rcases QIv.halves_cover _ _ hx with h | h
+    · exact Or.inl ⟨h, hy, hz⟩
+    · exact Or.inr ⟨h, hy, hz⟩
+  · split
+    · rcases QIv.halves_cover _ _ hy with h | h
+      · exact Or.inl ⟨hx, h, hz⟩
+      · exact Or.inr ⟨hx, h, hz⟩
+    · rcases QIv.halves_cover _ _ hz with h | h
+      · exact Or.inl ⟨hx, hy, h⟩
+      · exact Or.inr ⟨hx, hy, h⟩
+
+/-- `B ⊖ H`: every `p - c` with `p ∈ B`, `c ∈ H`. -/
+def QBox.minus (B H : QBox) : QBox :=
+  ⟨⟨B.x.lo - H.x.hi, B.x.hi - H.x.lo⟩, ⟨B.y.lo - H.y.hi, B.y.hi - H.y.lo⟩,
+   ⟨B.z.lo - H.z.hi, B.z.hi - H.z.lo⟩⟩
+
+theorem QBox.minus_contains (B H : QBox) (x y z cx cy cz : Rat) (hB : B.contains x y z)
+    (hH : H.contains cx cy cz) : (B.minus H).contains (x - cx) (y - cy) (z - cz) := by
+  obtain ⟨⟨a1, a2⟩, ⟨b1, b2⟩, ⟨c1, c2⟩⟩ := hB
+  obtain ⟨⟨d1, d2⟩, ⟨e1, e2⟩, ⟨f1, f2⟩⟩ := hH
+  unfold QBox.minus QBox.contains QIv.contains
+  dsimp only
+  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> grind
+
+/-- Leaf of the motion check: on part box `B` and tool-position box `H`, either no part point exists
+or the cutter `tool0` (at the origin) translated by any `c ∈ H` misses all of `B`. -/
+def segLeaf (part tool0 : FRepExpr) (B H : QBox) : Bool :=
+  decide (0 < (evalFRepIntervalQ B part).lo) || decide (0 < (evalFRepIntervalQ (B.minus H) tool0).lo)
+
+/-- Six-dimensional k-d check over part box × tool-position box, splitting the wider of the two. -/
+def kdSeg (part tool0 : FRepExpr) : Nat → QBox → QBox → Bool
+  | 0, B, H => segLeaf part tool0 B H
+  | d + 1, B, H =>
+    segLeaf part tool0 B H ||
+      (if H.width ≤ B.width then
+        kdSeg part tool0 d B.halves.1 H && kdSeg part tool0 d B.halves.2 H
+      else
+        kdSeg part tool0 d B H.halves.1 && kdSeg part tool0 d B H.halves.2)
+
+theorem segLeaf_sound (part tool0 : FRepExpr) (B H : QBox) (h : segLeaf part tool0 B H = true)
+    (x y z cx cy cz : Rat) (hB : B.contains x y z) (hH : H.contains cx cy cz)
+    (hPart : evalFRepQ x y z part ≤ 0) : 0 < evalFRepQ (x - cx) (y - cy) (z - cz) tool0 := by
+  simp only [segLeaf, Bool.or_eq_true, decide_eq_true_eq] at h
+  rcases h with h | h
+  · have := (frepQ_enclosure_sound B x y z hB part).1
+    exact absurd hPart (by grind)
+  · have := (frepQ_enclosure_sound _ _ _ _ (QBox.minus_contains B H x y z cx cy cz hB hH) tool0).1
+    grind
+
+/-- **`kdSeg_sound`**: an accepted `kdSeg` means: for every rational point of the part in `B` and
+every rational tool position in `H`, the cutter misses the point. -/
+theorem kdSeg_sound (part tool0 : FRepExpr) :
+    ∀ (d : Nat) (B H : QBox), kdSeg part tool0 d B H = true →
+      ∀ x y z cx cy cz : Rat, B.contains x y z → H.contains cx cy cz →
+        evalFRepQ x y z part ≤ 0 → 0 < evalFRepQ (x - cx) (y - cy) (z - cz) tool0 := by
+  intro d
+  induction d with
+  | zero => intro B H h; exact segLeaf_sound part tool0 B H h
+  | succ d ih =>
+    intro B H h x y z cx cy cz hB hH hP
+    simp only [kdSeg, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact segLeaf_sound part tool0 B H h x y z cx cy cz hB hH hP
+    · split at h
+      · simp only [Bool.and_eq_true] at h
+        rcases QBox.halves_cover B x y z hB with hc | hc
+        · exact ih _ _ h.1 x y z cx cy cz hc hH hP
+        · exact ih _ _ h.2 x y z cx cy cz hc hH hP
+      · simp only [Bool.and_eq_true] at h
+        rcases QBox.halves_cover H cx cy cz hH with hc | hc
+        · exact ih _ _ h.1 x y z cx cy cz hB hc hP
+        · exact ih _ _ h.2 x y z cx cy cz hB hc hP
+
+/-- The box spanned by two lattice points. -/
+def QBox.hull (p q : Int × Int × Int) : QBox :=
+  ⟨⟨min (p.1 : Rat) q.1, max (p.1 : Rat) q.1⟩, ⟨min (p.2.1 : Rat) q.2.1, max (p.2.1 : Rat) q.2.1⟩,
+   ⟨min (p.2.2 : Rat) q.2.2, max (p.2.2 : Rat) q.2.2⟩⟩
+
+theorem segment_coord_in_hull (a b t : Rat) (h0 : 0 ≤ t) (h1 : t ≤ 1) :
+    min a b ≤ a + t * (b - a) ∧ a + t * (b - a) ≤ max a b := by
+  rcases @Rat.le_total a b with hab | hab
+  · have hd : 0 ≤ b - a := by grind
+    have e1 := Rat.mul_nonneg h0 hd
+    have e2 := Rat.mul_le_mul_of_nonneg_right h1 hd
+    rw [Rat.min_def, Rat.max_def]; split <;> grind
+  · have hd : 0 ≤ a - b := by grind
+    have e1 := Rat.mul_nonneg h0 hd
+    have e2 := Rat.mul_le_mul_of_nonneg_right h1 hd
+    have e3 : t * (b - a) = -(t * (a - b)) := by grind
+    rw [Rat.min_def, Rat.max_def, e3]; split <;> grind
+
+/-- Every point of the segment from `p` to `q` lies in their hull. -/
+theorem segment_in_hull (p q : Int × Int × Int) (t : Rat) (h0 : 0 ≤ t) (h1 : t ≤ 1) :
+    (QBox.hull p q).contains ((p.1 : Rat) + t * ((q.1 : Rat) - p.1))
+      ((p.2.1 : Rat) + t * ((q.2.1 : Rat) - p.2.1)) ((p.2.2 : Rat) + t * ((q.2.2 : Rat) - p.2.2)) :=
+  ⟨segment_coord_in_hull _ _ _ h0 h1, segment_coord_in_hull _ _ _ h0 h1,
+   segment_coord_in_hull _ _ _ h0 h1⟩
+
+/-- A lattice box as a rational box. -/
+def Box3D.toQ (B : Box3D) : QBox :=
+  ⟨⟨B.xIv.lo, B.xIv.hi⟩, ⟨B.yIv.lo, B.yIv.hi⟩, ⟨B.zIv.lo, B.zIv.hi⟩⟩
+
+/-- Every move between consecutive cutter locations, checked as a continuous segment. -/
+def checkMovesContinuous (part : FRepExpr) (B : QBox) (d r len : Nat) (path : List CLPoint) : Bool :=
+  (path.zip path.tail).all fun (c₀, c₁) =>
+    c₀.axis == c₁.axis &&
+      kdSeg part (frepBallEndMill 0 0 0 c₀.axis r len) d B (QBox.hull (c₀.x, c₀.y, c₀.z) (c₁.x, c₁.y, c₁.z))
+
+/-- **`checkMovesContinuous_sound`**: if the moves of a path pass, then at every rational time
+`t ∈ [0, 1]` of every move, the cutter (ball and shank, not grown) at `c₀ + t (c₁ - c₀)` contains no
+rational point of the part inside `B`. -/
+theorem checkMovesContinuous_sound (part : FRepExpr) (B : QBox) (d r len : Nat) (path : List CLPoint)
+    (h : checkMovesContinuous part B d r len path = true) (c₀ c₁ : CLPoint)
+    (hm : (c₀, c₁) ∈ path.zip path.tail) (t : Rat) (h0 : 0 ≤ t) (h1 : t ≤ 1)
+    (x y z : Rat) (hB : B.contains x y z) (hPart : evalFRepQ x y z part ≤ 0) :
+    0 < evalFRepQ (x - ((c₀.x : Rat) + t * ((c₁.x : Rat) - c₀.x)))
+        (y - ((c₀.y : Rat) + t * ((c₁.y : Rat) - c₀.y)))
+        (z - ((c₀.z : Rat) + t * ((c₁.z : Rat) - c₀.z)))
+      (frepBallEndMill 0 0 0 c₀.axis r len) := by
+  have h' := List.all_eq_true.mp h (c₀, c₁) hm
+  simp only [Bool.and_eq_true] at h'
+  exact kdSeg_sound _ _ d _ _ h'.2 x y z _ _ _ hB
+    (segment_in_hull (c₀.x, c₀.y, c₀.z) (c₁.x, c₁.y, c₁.z) t h0 h1) hPart
 
 end Obend.Hardware.GeometryCAM
 end

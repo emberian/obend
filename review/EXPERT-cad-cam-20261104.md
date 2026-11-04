@@ -48,7 +48,8 @@ continuum step is argued, not proved.
   (`certPath`), the cutter grown by 100 µm contains no point of the part, anywhere
   (`FidgetParams.part_in_box`, `:293`). Discharged by `native_decide` (4,739 cutter locations,
   `#assert_compiled`).
-- What is still argued, not proved: the continuum. The theorem is over lattice points of space and
+- Follow-up the same day (see §3): the continuum is now proved over the rationals,
+  `fidget_toolpath_no_gouge_continuous`. Before that it was argued, not proved: The theorem is over lattice points of space and
   lattice tool positions; `fidget_certPath_unit_steps` (`:454`) gives unit steps, and with the
   one-unit growth every point of a segment the control interpolates lies in the checked union
   (docstring at `GeometryCAM.lean:3168-3180`). Mechanising it needs the reals.
@@ -151,6 +152,7 @@ continuum step is argued, not proved.
 | `0da8645` | `PCB`: Hammerstad–Jensen `Z₀`, the signoff gates on it |
 | `6db42e8` | `apps/fidget-cam/*.obend` as parameters; `FidgetCam`: one solid, wall, certified path, post, RTL from the tape |
 | `023cdc4` | `PHYSICAL.md` §2 and §3.1 |
+| (follow-up) | `GeometryCAM` §9: `evalFRepQ`, `frepQ_enclosure_sound` (rational interval enclosure), `kdSeg`/`kdSeg_sound` (six-dimensional k-d over part box × tool-position box, Minkowski difference), `segment_in_hull`, `checkMovesContinuous_sound`; `FidgetCam`: `part_in_boxQ`, `fidget_toolpath_no_gouge_continuous` (every rational time of every move, every rational point of the part, cutter at its true radius and shank length; `native_decide`, about 7 min of build) |
 
 Built in `bb2:~/lane-cad` (HEAD plus these files): the four Hardware modules, `Apps.FidgetCam`,
 `obend-emit-sv`, and every module importing them except `Teeth/Hardware/SiliconTeeth`, which is red
@@ -165,6 +167,14 @@ testbench to drive the new ports, drop its C++ copy of the geometry, and read th
 constants (`A C4-2`) and should be regenerated or retired. `Hardware/Judge.lean`'s
 `extractNatField_token_boundary_and_decoders_verified` no longer matches
 `tests/metasystem/OpenUsdAndSsaTapeTest.lean:359`.
+
+The coordinator asked for the step as a Lipschitz theorem (`δ − L·h/2`). It is proved by a route that
+needs no Lipschitz constant: the cutter is enclosed by interval arithmetic over `B ⊖ H`, where `H` is
+the box of tool positions a move sweeps, which is the Lipschitz argument with the bound computed by
+the arithmetic, and it lets the cutter shrink back to its true size. The Lipschitz phrasing would need
+one lemma that does not exist: `evalFRepGradBox_lipschitz_sound` (`GeometryCAM.lean`, over `Int`
+points) restated over rational points; the `Int` secant lemmas it rests on are the bulk of that port.
+Reals are not in core Lean, so "every time" is "every rational time".
 
 ## 4. The three next changes
 

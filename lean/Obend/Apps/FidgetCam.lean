@@ -457,6 +457,111 @@ theorem fidget_certPath_unit_steps :
 
 #assert_compiled fidget_certPath_unit_steps
 
+/-! ## 5b. The same tool path at every rational time
+
+`fidget_toolpath_no_gouge` is a statement about lattice samples with the cutter grown by one unit.
+This one is about motion: at every rational time of every move the control interpolates, the cutter
+itself (not grown) contains no rational point of the part. It follows from
+`checkMovesContinuous_sound` (`GeometryCAM` §9), which checks each move over the box of tool
+positions it sweeps. -/
+
+/-- A Z-cylinder's rational bounding box. -/
+@[expose] def cylBoxQ (cx cy : Int) (r : Nat) (z0 z1 : Int) : QBox :=
+  ⟨⟨(cx : Rat) - ((r : Int) : Rat), (cx : Rat) + ((r : Int) : Rat)⟩,
+   ⟨(cy : Rat) - ((r : Int) : Rat), (cy : Rat) + ((r : Int) : Rat)⟩, ⟨(z0 : Rat), (z1 : Rat)⟩⟩
+
+@[expose] def QBox.hullQ (A B : QBox) : QBox :=
+  ⟨⟨min A.x.lo B.x.lo, max A.x.hi B.x.hi⟩, ⟨min A.y.lo B.y.lo, max A.y.hi B.y.hi⟩,
+   ⟨min A.z.lo B.z.lo, max A.z.hi B.z.hi⟩⟩
+
+theorem rat_abs_le_of_sq_le (a R : Rat) (hR : 0 ≤ R) (h : a * a ≤ R * R) : -R ≤ a ∧ a ≤ R := by
+  have key : ∀ b : Rat, R < b → R * R < b * b := by
+    intro b hb
+    have h1 := Rat.mul_le_mul_of_nonneg_left (Rat.le_of_lt hb) hR
+    have h2 := Rat.mul_lt_mul_of_pos_right hb (by grind : (0 : Rat) < b)
+    grind
+  constructor
+  · refine Rat.not_lt.mp fun hlt => ?_
+    have := key (-a) (by grind)
+    rw [rat_neg_sq] at this
+    grind
+  · refine Rat.not_lt.mp fun hlt => ?_
+    have := key a hlt
+    grind
+
+theorem frepCylZ_in_boxQ (cx cy : Int) (r : Nat) (z0 z1 : Int) (x y z : Rat)
+    (h : evalFRepQ x y z (frepCylZ cx cy r z0 z1) ≤ 0) : (cylBoxQ cx cy r z0 z1).contains x y z := by
+  unfold frepCylZ at h
+  simp only [evalFRepQ] at h
+  have hR : (0 : Rat) ≤ ((r : Int) : Rat) := by exact_mod_cast (Int.natCast_nonneg r)
+  have hrr : ((((r : Int) * r : Int)) : Rat) = ((r : Int) : Rat) * ((r : Int) : Rat) := by grind
+  rw [hrr] at h
+  have hx2 := rat_sq_nonneg' (x - (cx : Rat))
+  have hy2 := rat_sq_nonneg' (y - (cy : Rat))
+  have hmax : (x - cx) * (x - cx) + (y - cy) * (y - cy) - ((r : Int) : Rat) * ((r : Int) : Rat) ≤ 0 ∧
+      ((z0 : Rat) - z) ≤ 0 ∧ (z - (z1 : Rat)) ≤ 0 := by grind
+  have bx := rat_abs_le_of_sq_le (x - cx) _ hR (by grind)
+  have by' := rat_abs_le_of_sq_le (y - cy) _ hR (by grind)
+  unfold cylBoxQ QBox.contains QIv.contains
+  dsimp only
+  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> grind
+
+theorem hullQ_left (A B : QBox) (x y z : Rat) (h : A.contains x y z) : (QBox.hullQ A B).contains x y z := by
+  obtain ⟨⟨a1, a2⟩, ⟨b1, b2⟩, ⟨c1, c2⟩⟩ := h
+  unfold QBox.hullQ QBox.contains QIv.contains
+  dsimp only
+  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> grind
+
+theorem hullQ_right (A B : QBox) (x y z : Rat) (h : B.contains x y z) : (QBox.hullQ A B).contains x y z := by
+  obtain ⟨⟨a1, a2⟩, ⟨b1, b2⟩, ⟨c1, c2⟩⟩ := h
+  unfold QBox.hullQ QBox.contains QIv.contains
+  dsimp only
+  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> grind
+
+@[expose] def FidgetParams.partBoxQ (p : FidgetParams) : QBox :=
+  QBox.hullQ (cylBoxQ 0 0 (p.lat p.hubR) 0 (p.lat p.hubH))
+    (cylBoxQ (p.lat p.lugX) 0 (p.lat p.lugR) 0 (p.lat p.hubH))
+
+/-- Every rational point of the part lies in `partBoxQ`, for any parameters. -/
+theorem FidgetParams.part_in_boxQ (p : FidgetParams) (x y z : Rat) (h : evalFRepQ x y z p.part ≤ 0) :
+    p.partBoxQ.contains x y z := by
+  unfold FidgetParams.part at h
+  simp only [evalFRepQ] at h
+  have hu : evalFRepQ x y z p.outer ≤ 0 := by grind
+  unfold FidgetParams.outer at hu
+  simp only [evalFRepQ] at hu
+  unfold FidgetParams.partBoxQ
+  have : evalFRepQ x y z (frepCylZ 0 0 (p.lat p.hubR) 0 (p.lat p.hubH)) ≤ 0 ∨
+      evalFRepQ x y z (frepCylZ (p.lat p.lugX) 0 (p.lat p.lugR) 0 (p.lat p.hubH)) ≤ 0 := by grind
+  rcases this with h1 | h1
+  · exact hullQ_left _ _ x y z (frepCylZ_in_boxQ _ _ _ _ _ x y z h1)
+  · exact hullQ_right _ _ x y z (frepCylZ_in_boxQ _ _ _ _ _ x y z h1)
+
+set_option maxHeartbeats 0 in
+/-- **`fidget_toolpath_no_gouge_continuous`**: for every pass, every move `c₀ → c₁` the control
+interpolates (including plunges and retracts), every rational time `t ∈ [0, 1]`, and every rational
+point of the part, the ball end mill with its shank at `c₀ + t (c₁ - c₀)`, at its true radius and
+length, does not contain the point. -/
+theorem fidget_toolpath_no_gouge_continuous (pass : CamPass) (hPass : pass ∈ fidgetParams.passes)
+    (c₀ c₁ : CLPoint)
+    (hm : (c₀, c₁) ∈ (fidgetParams.certPath pass).zip (fidgetParams.certPath pass).tail)
+    (t : Rat) (h0 : 0 ≤ t) (h1 : t ≤ 1) (x y z : Rat)
+    (hPart : evalFRepQ x y z fidgetParams.part ≤ 0) :
+    0 < evalFRepQ (x - ((c₀.x : Rat) + t * ((c₁.x : Rat) - c₀.x)))
+        (y - ((c₀.y : Rat) + t * ((c₁.y : Rat) - c₀.y)))
+        (z - ((c₀.z : Rat) + t * ((c₁.z : Rat) - c₀.z)))
+      (frepBallEndMill 0 0 0 c₀.axis (fidgetParams.lat fidgetParams.toolR)
+        (fidgetParams.lat fidgetParams.shankLen)) := by
+  have hAll : fidgetParams.passes.all (fun pass =>
+      checkMovesContinuous fidgetParams.part fidgetParams.partBoxQ 60
+        (fidgetParams.lat fidgetParams.toolR) (fidgetParams.lat fidgetParams.shankLen)
+        (fidgetParams.certPath pass)) = true := by
+    native_decide
+  exact checkMovesContinuous_sound _ _ 60 _ _ _ (List.all_eq_true.mp hAll pass hPass) c₀ c₁ hm t h0 h1
+    x y z (fidgetParams.part_in_boxQ x y z hPart) hPart
+
+#assert_compiled fidget_toolpath_no_gouge_continuous
+
 @[expose] def FidgetParams.postConfig (p : FidgetParams) : PostConfig :=
   { clearanceZ := p.clearanceZ, plungeFeed := p.plungeFeed, cutFeed := p.cutFeed
   , spindleRpm := p.rpm, tool := 1, unitMicron := p.unit }
