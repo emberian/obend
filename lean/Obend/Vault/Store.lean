@@ -32,6 +32,7 @@ granted `relaw`).
 -/
 public import Obend.Vault.Law
 public import Obend.Kind.Proofs
+public import Obend.Vault.Hyperedge
 @[expose] public section
 
 namespace Obend.Vault
@@ -192,10 +193,22 @@ def Actor.may : Actor → String → String → Bool
 
 /-! ## Laws, and the commit every write goes through -/
 
-/-- The laws of a page as written in a version, each named `PAGE: NAME`, with its text. -/
+/-- A LAW OVER LINKS reads `linked.F`: its subject is every page the page links to, not the page
+(see "Laws over links" below). -/
+def isLinkLaw (txt : String) : Bool := (txt.splitOn "linked.").length > 1
+
+/-- The text of a law over links as the fragment parses it: `linked.F` is the field `F` of the
+state it is judged on, the linked page's. -/
+def linkLawText (txt : String) : String := txt.replace "linked." "new."
+
+/-- The laws of a page as written in a version, each named `PAGE: NAME`, with its text. A law over
+links reads the linked page only: one that also reads `new.` is refused. -/
 def lawsIn (pageName : String) (G : Graph) : Except String (List (String × LawExpr × String)) :=
   (lawLines (settled G)).mapM fun (n, txt) =>
-    match Obend.Spec.Law.parse txt with
+    if isLinkLaw txt && (txt.splitOn "new.").length > 1 then
+      .error (pageName ++ ": law " ++ n ++ ": a law over links reads the linked page as `linked.`; \
+        the page's own fields (`new.`) are not readable in it")
+    else match Obend.Spec.Law.parse (if isLinkLaw txt then linkLawText txt else txt) with
     | .ok e => .ok (pageName ++ ": " ++ n, e, txt)
     | .error msg => .error (pageName ++ ": law " ++ n ++ ": " ++ msg)
 
@@ -383,20 +396,196 @@ structure Change where
 def Page.withChange (p : Page) (c : Change) : Page :=
   { p with history := c.history, seen := some c.seen, authors := c.authors, note := c.note, kind := c.kind }
 
-/-- Why a write was refused, said to a person. -/
-def refusalText (pageName : String) (laws : List (String × LawExpr × String)) (law reason : String)
-    (facts : Facts) (old : Option Obend.Core.Data.Data) (new : Obend.Core.Data.Data) (front : List String) : String :=
+/-- A law named `PAGE: NAME`, said from the page `pageName` it binds: `its law NAME`, or the law
+with its owner and, for a kind's, whose kind that is. -/
+def lawOwnerText (pageName law : String) : String :=
   let owner := ((law.splitOn ": ").head?).getD law
   let kindNote := if owner != pageName && isKind owner then
       " (the kind of " ++ (if folderOf owner == "" then "the vault" else folderOf owner ++ "/") ++
         ", an ancestor of " ++ pageName ++ ")"
     else ""
-  let who := if owner == pageName then "its law " ++ String.ofList ((law.toList.drop (owner.length + 2)))
-    else law ++ kindNote
+  if owner == pageName then "its law " ++ String.ofList ((law.toList.drop (owner.length + 2)))
+  else law ++ kindNote
+
+/-- Why a write was refused, said to a person. -/
+def refusalText (pageName : String) (laws : List (String × LawExpr × String)) (law reason : String)
+    (facts : Facts) (old : Option Obend.Core.Data.Data) (new : Obend.Core.Data.Data) (front : List String) : String :=
   match laws.find? (·.1 == law) with
   | some (_, e, txt) =>
-    "refused by " ++ who ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts old new front
-  | none => "refused by " ++ who ++ ": " ++ reason
+    "refused by " ++ lawOwnerText pageName law ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts old new front
+  | none => "refused by " ++ lawOwnerText pageName law ++ ": " ++ reason
+
+/-! ## Laws over links
+
+A law that reads `linked.F` is a LAW OVER LINKS: its subject is not the page but every page the page
+links to (`[[Page]]`, an identity cite, what the `links` measure counts), and it is judged at each
+of them, on that page's state, on two occasions: a write of the page (at its links as they stand)
+and a write of a linked page (at that page as written, under the laws over links of every page that
+links to it). So one write is judged by a fact about two pages: a ledger's `law dated: not
+(linked.date == 0)` says every page it lists is dated, and a listed page cannot lose its date.
+A law over links reads the linked page (`linked.`, never `new.`) and the request; `monotone` and
+`writeOnce` in it are judged as identity writes. It inherits along kinds as any law line does.
+
+The pages a judgment read are the write's footprint. `writeTurn` records the write as a
+`VaultTurn` (`Obend.Vault.Hyperedge`): the page written is its one write cell (its state before and
+after), and every page its laws over links read is a read pin at the state read. The judgment reads
+the store the turn's pins and write describe (`applyTurn turn.readPins.store turn`), and
+`judgeLinksIn_of_turn` says it equals the judgment on any store where the pins hold; that is the
+premise `no_toctou` asks of a turn judged at one store and admitted at another. -/
+
+/-- The pages a version links to by identity cite, each once, in order. -/
+def linkTargets (G : Graph) : List PageId :=
+  ((settledAtoms G).filterMap fun a => match G.label a with
+    | some (.cite _ c) => if c.span = .identity then some c.page else none
+    | _ => none).eraseDups
+
+/-- The entries a version links to, each once. -/
+def linkedEntries (es : List Entry) (G : Graph) : List Entry :=
+  (linkTargets G).filterMap fun q => es.find? (·.id == q)
+
+/-- The laws over links among a page's laws, as the judge takes them. -/
+def linkLaws (laws : Laws) : List (String × LawExpr) :=
+  (laws.filter fun l => isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
+
+/-- A page's state from its measures, by name. -/
+def stateOfMs (ms : List (String × Nat)) : Obend.Core.Data.Data := stateOf (sortNames (ms.map (·.1))) ms
+
+/-- A state with the fields a law reads added, at 0 where the state has none (`stateOf`'s default):
+its keys and itself. -/
+def rekey (lin : List (String × LawExpr)) : Obend.Core.Data.Data → List String × Obend.Core.Data.Data
+  | .record fs =>
+    let vals := fs.filterMap fun (k, d) => match d with | .natural n => some (k, n) | _ => none
+    let keys := sortNames (vals.map (·.1) ++ lin.flatMap fun l => l.2.fields)
+    (keys, stateOf keys vals)
+  | d => ([], d)
+
+/-- Why a judgment over links refused: the page it was at, that page's state (none: it has no
+version), the law and the reason. -/
+structure LinkRefusal where
+  page : String
+  state : Option Obend.Core.Data.Data
+  law : String
+  reason : String
+
+/-- Judge the laws over links `lin` (named under `pkg`) at each page of `cells`, on the state `store`
+holds for it: the first refusal, if any. A page the store has no state for cannot be judged and is
+refused as such. -/
+def judgeLinksIn (store : VaultStore) (pkg : String) (lin : List (String × LawExpr))
+    (rq : Obend.Core.Data.Data) : List String → Option LinkRefusal
+  | [] => none
+  | c :: rest =>
+    match store c with
+    | none => some ⟨c, none, "", "the linked page " ++ c ++ " has no version to judge"⟩
+    | some d =>
+      let (keys, n) := rekey lin d
+      match judge (stateTy keys) pkg lin n n rq with
+      | .admitted => judgeLinksIn store pkg lin rq rest
+      | .refused law why => some ⟨c, some n, law, why⟩
+      | .undecided why => some ⟨c, some n, "", why⟩
+
+/-- The store a footprint's pins describe: each pinned page at its observed state. -/
+def Footprint.store (fp : Footprint) : VaultStore := fun c =>
+  (fp.find? (·.cell == c)).bind (·.observed)
+
+/-- Where a footprint holds, the store reads at its pins as the pins say. -/
+theorem Footprint.store_of_holds {store : VaultStore} {fp : Footprint} (h : Footprint.Holds store fp) :
+    ∀ p ∈ fp, store p.cell = fp.store p.cell := by
+  intro p hp
+  induction fp with
+  | nil => cases hp
+  | cons q fp ih =>
+    simp only [Footprint.store]
+    by_cases hq : q.cell = p.cell
+    · rw [List.find?_cons_of_pos (by simp [hq])]
+      simp only [Option.bind_some]
+      rw [← hq]
+      exact h q (List.mem_cons_self ..)
+    · rw [List.find?_cons_of_neg (by simp [hq])]
+      have hp' : p ∈ fp := by
+        rcases List.mem_cons.1 hp with rfl | hp'
+        · exact absurd rfl hq
+        · exact hp'
+      exact ih (fun r hr => h r (List.mem_cons_of_mem _ hr)) hp'
+
+/-- **A turn reads its own footprint**: at a page the turn pins or writes, the store after the turn
+is what the turn's pins and write say, wherever the pins hold. -/
+theorem applyTurn_pin {store : VaultStore} {turn : VaultTurn} (h : Footprint.Holds store turn.readPins)
+    {c : String} (hc : c ∈ turn.readFootprint ∨ c ∈ turn.writeFootprint) :
+    applyTurn store turn c = applyTurn turn.readPins.store turn c := by
+  unfold applyTurn
+  cases hf : turn.writeCells.find? (fun d => d.cell == c) with
+  | some d => rfl
+  | none =>
+    rcases hc with hr | hw
+    · simp only [VaultTurn.readFootprint, List.mem_map] at hr
+      obtain ⟨p, hp, rfl⟩ := hr
+      exact Footprint.store_of_holds h p hp
+    · exfalso
+      simp only [VaultTurn.writeFootprint, List.mem_map] at hw
+      obtain ⟨d, hd, rfl⟩ := hw
+      have := List.find?_eq_none.1 hf d hd
+      simp at this
+
+/-- **The verdict over links is the turn's**: judged at pages the turn pins or writes, on any store
+where its pins hold, the laws over links say what they say on the store the turn describes. -/
+theorem judgeLinksIn_of_turn {store : VaultStore} {turn : VaultTurn} (h : Footprint.Holds store turn.readPins)
+    (pkg : String) (lin : List (String × LawExpr)) (rq : Obend.Core.Data.Data) :
+    ∀ cells : List String, (∀ c ∈ cells, c ∈ turn.readFootprint ∨ c ∈ turn.writeFootprint) →
+      judgeLinksIn (applyTurn store turn) pkg lin rq cells =
+        judgeLinksIn (applyTurn turn.readPins.store turn) pkg lin rq cells
+  | [], _ => rfl
+  | c :: rest, hc => by
+    have ih := judgeLinksIn_of_turn h pkg lin rq rest fun x hx => hc x (List.mem_cons_of_mem _ hx)
+    simp only [judgeLinksIn]
+    rw [applyTurn_pin h (hc c (List.mem_cons_self ..))]
+    cases applyTurn turn.readPins.store turn c with
+    | none => rfl
+    | some d =>
+      simp only
+      split
+      · exact ih
+      · rfl
+      · rfl
+
+/-- The write of `page` as a turn: its one write cell is the page (its state before and after), its
+read pins the pages its laws over links read, at the states read. -/
+def writeTurn (page : String) (o n : Obend.Core.Data.Data) (linked : List Entry)
+    (rq : Obend.Core.Data.Data) : VaultTurn where
+  turnId := ByteArray.empty
+  readPins := linked.map fun e => ⟨e.name, some (stateOfMs (measures e.graph e.version))⟩
+  writeCells := [{ cell := page, preState := o, postState := n }]
+  occasion := rq
+  agree := by
+    intro d hd
+    simp only [List.mem_singleton] at hd
+    subst hd
+    rfl
+  balanced := by
+    intro asset
+    simp [sumAssetDelta, deltaAsset]
+  nodup_cells := by simp
+
+/-- The frontmatter fields among a state's keys: the keys that are not measures. -/
+def frontOf (n : Obend.Core.Data.Data) : List String :=
+  match n with
+  | .record fs => (fs.map (·.1)).filter fun k => !measureNames.contains k
+  | _ => []
+
+/-- Why a page's law over its links refused, at a page it links to. -/
+def linkRefusalText (pageName : String) (laws : Laws) (r : LinkRefusal) (facts : Facts) : String :=
+  match r.state, laws.find? (·.1 == r.law) with
+  | some n, some (_, e, txt) =>
+    "refused by " ++ lawOwnerText pageName r.law ++ " over its links, at " ++ r.page ++ ": `" ++ txt ++
+      "` does not hold there; " ++ suggest e facts none n (frontOf n)
+  | _, _ => "refused by " ++ lawOwnerText pageName r.law ++ " over its links, at " ++ r.page ++ ": " ++ r.reason
+
+/-- Why another page's law over its links refused this write, which that page links to. -/
+def backlinkRefusalText (linker pageName : String) (laws : Laws) (r : LinkRefusal) (facts : Facts)
+    (new : Obend.Core.Data.Data) (front : List String) : String :=
+  let who := r.law ++ " (a law over " ++ linker ++ "'s links, of which " ++ pageName ++ " is one)"
+  match laws.find? (·.1 == r.law) with
+  | some (_, e, txt) => "refused by " ++ who ++ ": `" ++ txt ++ "` does not hold; " ++ suggest e facts none new front
+  | none => "refused by " ++ who ++ ": " ++ r.reason
 
 /-- Why a stale kind refuses a write, said to a person. -/
 def staleText (pageName who : String) (moved : List Obend.Kind.KindVersion) : String :=
@@ -432,14 +621,31 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
   let newMs := measures G' v ++ writeMeasures p.current G'
-  let lin := laws.map fun (n, e, _) => (n, e)
+  let lin := (laws.filter fun l => !isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
   let keys := sortNames (newMs.map (·.1) ++ oldMs.map (·.1) ++ lin.flatMap fun l => l.2.fields)
   let S := stateTy keys
   let n := stateOf keys newMs
   let o := if oldMs.isEmpty then n else stateOf keys oldMs
   let facts : Facts := ⟨some who.id, some who.id, v, turn⟩
-  match judge S p.name lin o n (requestOf who.name occ facts) with
+  let rq := requestOf who.name occ facts
+  match judge S p.name lin o n rq with
   | .admitted =>
+    -- the laws over links, judged through the write's turn: this page's at the pages it links to,
+    -- and every linking page's at this page as written
+    let wt := writeTurn p.name (stateOfMs oldMs) (stateOfMs newMs) (linkedEntries es G') rq
+    let world := applyTurn wt.readPins.store wt
+    let mine := linkLaws laws
+    if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
+      throw (linkRefusalText p.name laws r facts)
+    for e in es do
+      if e.name != p.name && (linkTargets e.graph).contains p.id then
+        match lawsFor es e.name e.graph with
+        | .ok elaws =>
+          let theirs := linkLaws elaws
+          if let some r := (if theirs.isEmpty then none else judgeLinksIn world e.name theirs rq [p.name]) then
+            throw (backlinkRefusalText e.name p.name elaws r facts (stateOfMs newMs)
+              ((scalarFields (settled G')).map (·.1)))
+        | .error _ => pure ()
     pure ⟨p.history ++ [G'], render G' p.name p'.who, authors, none, kinds.pin⟩
   | .refused law reason =>
     throw (refusalText p.name laws law reason facts (occ.old o n) n
@@ -497,11 +703,13 @@ def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String
   | .ok ch => ch
   | .error msg => ⟨p.history, md, p.authors, some msg, p.kind⟩
 
-/-- One page at open: unchanged if its file is missing or is what the store last saw. -/
+/-- One page at open: unchanged if its file is missing or is what the store last saw, unless its
+last write was refused: a refusal may rest on another page (a law over links), and that page may
+have been mended since, so a refused write is tried again at every open that is not quiet. -/
 def openPage (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (file : Option String) : Page :=
   match file with
   | none => p
-  | some md => if some md == p.seen then p else p.withChange (ownerWrite H es turn p md)
+  | some md => if some md == p.seen && p.note.isNone then p else p.withChange (ownerWrite H es turn p md)
 
 /-- The vault is QUIET for the store: every page's file is missing or is what the store last saw,
 and every file is a page's. -/
@@ -722,8 +930,9 @@ theorem openPage_name (H : Hash) (es : List Entry) (t : Nat) (p : Page) (f : Opt
 theorem openPage_seen (H : Hash) (es : List Entry) (t : Nat) (p : Page) (md : String) :
     ∃ u, (openPage H es t p (some md)).seen = some u := by
   simp only [openPage]
-  by_cases h : (some md == p.seen) = true
-  · simp only [h, ite_true]; exact ⟨md, (beq_iff_eq.1 h).symm⟩
+  by_cases h : (some md == p.seen && p.note.isNone) = true
+  · rw [Bool.and_eq_true] at h
+    simp only [h, and_self, ite_true]; exact ⟨md, (beq_iff_eq.1 h.1).symm⟩
   · simp only [h, Bool.false_eq_true, ite_false]; exact ⟨_, rfl⟩
 
 theorem freshPages_names (H : Hash) (s : Store) (names : List String) :

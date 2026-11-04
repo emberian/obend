@@ -376,6 +376,10 @@ theorem insertions_apply (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
   rw [present_apply_forward G p hf a]
   cases G.present a <;> simp
 
+/-- The names of the measures, a version's and a write's. -/
+def measureNames : List String :=
+  ["bytes", "dangling", "deletions", "embeds", "insertions", "lines", "links", "quotes", "sections", "version", "words"]
+
 /-- What a law reads of a version: its measures and its frontmatter's scalar fields (a measure
 wins over a field of the same name). -/
 def measures (G : Graph) (version : Nat) : List (String × Nat) :=

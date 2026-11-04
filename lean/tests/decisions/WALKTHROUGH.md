@@ -220,7 +220,7 @@ sed -i.bak 's/^date: 20261101$/date: 20261031/; s/^decider: 1$/decider: 3/' deci
 ```
 
 ```text
-decisions/D-0001: refused by decisions/_kind: appendOnly (the kind of decisions/, an ancestor of decisions/D-0001): `new.deletions == 0` does not hold; deletions = 0 would pass (this write has deletions = 1)
+nothing changed
 decisions/D-0001: refused by decisions/_kind: dateOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(date)` does not hold; the line `date: 20261031` would pass (the page has `date: 20261101`)
 decisions/D-0001: refused by decisions/_kind: deciderOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(decider)` does not hold; the line `decider: 1` would pass (the page has `decider: 3`)
 ```
@@ -236,7 +236,6 @@ obend open && obend status Ledger | head -1
 
 ```text
 Ledger: refused by its law appendOnly: `monotone(links)` does not hold; links = 4 would pass (this write has links = 3)
-decisions/D-0001: refused by decisions/_kind: deciderOnce (the kind of decisions/, an ancestor of decisions/D-0001): `writeOnce(decider)` does not hold; the line `decider: 1` would pass (the page has `decider: 3`)
 Ledger v2; its last write was refused by its law appendOnly: `monotone(links)` does not hold; links = 4 would pass (this write has links = 3)
 ```
 
@@ -290,4 +289,53 @@ decider: 0
 ---
 decisions/D-0008: v1 written
 decisions/D-0008 v1
+```
+
+## 6. Two pages must agree
+
+A fact about two pages: a decision the ledger lists is dated. No law of one page can say it; a law
+over links can. `linked.date` is read at every page the ledger links to, when the ledger is written
+and when a listed page is. Adding the law is a write of the ledger, judged at its links as they
+stand.
+
+```sh
+cd ledger
+awk '{print} /^law cited:/{print "law listedDated: not (linked.date == 0)"}' Ledger.md > Ledger.tmp && mv Ledger.tmp Ledger.md
+obend open
+```
+
+```text
+Ledger: v4 written
+```
+
+A note outside `decisions/` (no kind dates it), undated, listed: the ledger's write is refused at
+the note, which is named with the clause and what would pass there.
+
+```sh
+cd ledger
+mkdir -p notes && printf -- '---\ndate: 0\n---\nA note, not a decision.\n' > notes/Scratch.md
+printf -- '- [[notes/Scratch]]\n' >> Ledger.md
+obend open && obend status Ledger | head -1
+```
+
+```text
+Ledger: refused by its law listedDated over its links, at notes/Scratch: `not (linked.date == 0)` does not hold there; the line `date: 1` would pass (the page has `date: 0`)
+notes/Scratch: new page (v1)
+Ledger v4; its last write was refused by its law listedDated over its links, at notes/Scratch: `not (linked.date == 0)` does not hold there; the line `date: 1` would pass (the page has `date: 0`)
+```
+
+Dating the note mends the ledger's write at the next open (a refused write is tried again at every
+open that is not quiet). The note then cannot lose its date while the ledger lists it: the ledger's
+law over its links refuses the note's write, naming whose law it is.
+
+```sh
+cd ledger
+sed -i.bak 's/^date: 0$/date: 20261104/' notes/Scratch.md && rm notes/Scratch.md.bak && obend open
+sed -i.bak 's/^date: 20261104$/date: 0/' notes/Scratch.md && rm notes/Scratch.md.bak && obend open
+```
+
+```text
+Ledger: v5 written
+notes/Scratch: v2 written
+notes/Scratch: refused by Ledger: listedDated (a law over Ledger's links, of which notes/Scratch is one): `not (linked.date == 0)` does not hold; the line `date: 1` would pass (the page has `date: 0`)
 ```
