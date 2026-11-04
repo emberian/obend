@@ -517,7 +517,7 @@ def lcs (a b : Array String) : List Step := Id.run do
 inductive Al
   | keepAtom (a : AtomId) (c : Content)
   | keepMark (m : Mark)
-  | delAtom (a : AtomId)
+  | delAtom (a : AtomId) (lineEnd : Bool)
   | delMark
   | ins (c : Content)
 deriving DecidableEq, Repr, Inhabited
@@ -531,20 +531,25 @@ def alignTokens (ps : List Piece) (cs : List Content) : List Al :=
       | Piece.atom a _ => Al.keepAtom a ((ca[j]?).getD (.text ""))
       | Piece.mark m _ => Al.keepMark m
     | .del i => match pa[i]! with
-      | Piece.atom a _ => Al.delAtom a
+      | Piece.atom a t => Al.delAtom a (t.endsWith "\n")
       | Piece.mark _ _ => Al.delMark
     | .ins j => Al.ins ((ca[j]?).getD (.text ""))
 
-/-- Whether an alignment step ends a line on both sides: a kept atom whose text ends a line, or a
-kept section line. -/
+/-- Whether an alignment step ends a line on the side it concerns: a kept atom whose text ends a
+line, an inserted piece that does, a deleted atom that did, or a kept section line. An inserted or
+deleted whole line is so a stretch of its own and re-writes no neighbour (until 2026-11-04 only a
+kept line closed a stretch, so a line inserted before a kept one re-wrote that one, and a row
+appended inside a section counted a deletion). -/
 def Al.sync : Al → Bool
   | .keepAtom _ c => (contentText c).endsWith "\n"
+  | .ins c => (contentText c).endsWith "\n"
+  | .delAtom _ e => e
   | .keepMark _ => true
-  | _ => false
+  | .delMark => false
 
 /-- Whether a step changes the page's atoms. -/
 def Al.dirty : Al → Bool
-  | .delAtom _ | .ins _ => true
+  | .delAtom _ _ | .ins _ => true
   | _ => false
 
 /-- Close a stretch of steps between two line ends: if it changes anything, its kept atoms are
@@ -553,8 +558,8 @@ lines, as a person reads it. -/
 def widenStretch (seg : List Al) : List Al :=
   if seg.any Al.dirty then
     (seg.filterMap fun st => match st with
-      | .delAtom a => some (Al.delAtom a)
-      | .keepAtom a _ => some (Al.delAtom a)
+      | .delAtom a e => some (Al.delAtom a e)
+      | .keepAtom a c => some (Al.delAtom a ((contentText c).endsWith "\n"))
       | .delMark => some Al.delMark
       | _ => none) ++
     (seg.filterMap fun st => match st with
@@ -634,7 +639,7 @@ def editPatch (H : Hash) (G : Graph) (al : List Al) (author : String) : Built :=
   let mut stack : List AtomId := []
   for i in [0:arr.size] do
     match arr[i]! with
-    | .delAtom a =>
+    | .delAtom a _ =>
       ops := ops.push (.delete a); cur := cur.step (.delete a)
     | .delMark => cut := true
     | .keepMark m =>
@@ -703,7 +708,7 @@ def postPatch (H : Hash) (G : Graph) (al : List Al) (member : String) : Built :=
       if let some b := next then anchor := b
     else
       match step with
-      | some (.delAtom _) => dels := dels + 1
+      | some (.delAtom _ _) => dels := dels + 1
       | some (.ins c) => inss := inss.push c
       | _ => pure ()
   return ⟨ops.toList, added.toList, asIs.toList⟩

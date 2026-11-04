@@ -51,11 +51,22 @@ line ends first. -/
   | ']' :: ']' :: rest, acc => some (acc.reverse, rest)
   | c :: rest, acc => takeLink rest (c :: acc)
 
+/-- An inline code span whose opening backtick has been read: its characters reversed (as the run
+being built keeps them), closing backtick included, and what follows; `none` when the line ends
+first. What is in code is text: `[[x]]` there is not a link (Obsidian reads it so too). A fenced
+block's own lines are lexed as any line; only the span on one line is known. -/
+@[expose] def takeCode : List Char → List Char → Option (List Char × List Char)
+  | [], _ => none
+  | '\n' :: _, _ => none
+  | '`' :: rest, acc => some ('`' :: acc, rest)
+  | c :: rest, acc => takeCode rest (c :: acc)
+
 /-- Close the text read so far (kept reversed) as a run, if any. -/
 @[expose] def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
 
 /-- Lex markdown: a run per line, split around wikilinks and embeds (including block and heading
-transclusions `![[P#^b]]` and `![[P#Heading]]`). `n` bounds the steps. -/
+transclusions `![[P#^b]]` and `![[P#Heading]]`); a wikilink inside an inline code span is text.
+`n` bounds the steps. -/
 @[expose] def lex : Nat → List Char → List Char → List Tok
   | 0, _, acc => flush acc
   | _ + 1, [], acc => flush acc
@@ -66,6 +77,9 @@ transclusions `![[P#^b]]` and `![[P#Heading]]`). `n` bounds the steps. -/
   | n + 1, '[' :: '[' :: rest, acc => match takeLink rest [] with
     | some (name, rest') => flush acc ++ .link name :: lex n rest' []
     | none => lex n ('[' :: rest) ('[' :: acc)
+  | n + 1, '`' :: rest, acc => match takeCode rest ['`'] with
+    | some (code, rest') => lex n rest' (code ++ acc)
+    | none => lex n rest ('`' :: acc)
   | n + 1, '\n' :: rest, acc => flush ('\n' :: acc) ++ lex n rest []
   | n + 1, c :: rest, acc => lex n rest (c :: acc)
 
@@ -295,6 +309,9 @@ example : renderAt toy revisedVault 1 =
    ("Beta", "# Beta\nThe answer. ^ans\n")]
 
 example : tokens "![[Beta#^ans]]" = [.embed "Beta#^ans".toList] := by decide
+
+/-- A wikilink in inline code is text; the span after it is read as ever. -/
+example : tokens "a `[[B]]` c [[D]]\n" = [.text "a `[[B]]` c ".toList, .link ['D'], .text "\n".toList] := by decide
 
 /-- An alias is display text: `[[Beta|the answer page]]` cites Beta's identity, and the page's
 text keeps the alias. -/
