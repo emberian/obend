@@ -24,7 +24,6 @@ public import Obend.Logic.Obligation
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Futamura
-public import Obend.Leaf.BendTT
 public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.OpenUSD
@@ -61,7 +60,6 @@ open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
 open Obend.Leaf.Futamura
-open Obend.Leaf.BendTT
 open Obend.Lower
 open Obend.Hardware.HDL
 open Obend.Hardware.Compiler
