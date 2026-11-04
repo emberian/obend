@@ -68,87 +68,49 @@ Industrial physical engineering is currently fractured across four incompatible,
 
 ---
 
-## 2. The Double-`SDF` Synthesis: `Obend` as Verified OpenUSD (`Sdf`) $\times$ Implicit Solids (`SDF`)
+## 2. Solids, scenes and tool paths: what the CAD/CAM tier is
 
-One of the deepest structural alignments in Objective Bend is that **OpenUSD's composition architecture
-is an informal special case of `Obend`'s mechanized `Core4` + `C4` + `Slot` + `Leaf` calculus**—and
-unifying OpenUSD's **`Sdf`** (*Scene Description Foundations*: layers, paths, `LIVERPS`, `timeSamples`,
-binary `.usdc` crates) with mathematical **`SDF`s** (*Signed Distance Fields* / Function Representations
-$f : \mathbb{R}^3 \to \mathbb{R}$, as in Matt Keeter's `fidget`) gives us a verified physical scene
-and solid-modeling kernel ([`Obend/Hardware/GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean)):
+The CAD/CAM tier is four modules and one application. What each holds, as of 2026-11-04 (the CAD
+review, `review/EXPERT-cad-cam-20261104.md`):
 
-```mermaid
-flowchart TD
-    subgraph USD_Obend["1. OpenUSD (LIVERPS) ≅ Obend Open-Recursive Layers"]
-        L["Local / SubLayers (mix lower upper)"]
-        I["Inherits (C4 Nominal Kind Lineage)"]
-        V["VariantSets (Contextual Slot + Supports Pins)"]
-        ERP["Relocates / References / Payloads (Intention Cite + Lazy Demand)"]
-        S["Specializes (fix spec seed Weak Fallback)"]
-    end
+- **One solid representation, two forms.** `FRepExpr` ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean))
+  is an integer implicit solid (`f ≤ 0` inside) with interval enclosure (`frep_interval_enclosure_sound`),
+  a dual-interval Lipschitz bound and CSG. The SSA tape (`SsaTapeOp`) is the form pruning, compaction
+  and the RTL compiler use. `FRepExpr.toTape` compiles the first to the second and `toTape_eval` proves
+  they agree at every point, so an application writes its solid once.
+- **Region certificates.** `kdAll` splits a box until a leaf test settles each piece; `kdAll_sound`
+  turns a sound leaf test into a statement about every lattice point of the box. Two leaf tests use it:
+  `checkDisjoint_sound` (no point is in both the part and the cutter, the gouge check) and
+  `checkWall_sound` (every point within a given distance of a cavity is material, the wall check over
+  the whole cavity, replacing three probe-point functions that bounded the distance from one point).
+- **Cutters.** `frepBallEndMill` is a ball end mill with its shank on an integer tool axis whose length
+  is an integer (`(0,0,1)`, `(3,0,4)`, …), so every cutter is a polynomial F-Rep without square roots.
+  `checkPathNoGouge_sound` certifies a list of cutter locations, each with the cutter grown by `δ`.
+  What is proved is a lattice statement; the step from lattice points to the segments the control
+  interpolates (unit steps and `δ ≥ 1`) is argued in the docstring and not mechanised.
+- **The post.** [`Kinematics.lean`](lean/Obend/Hardware/Kinematics.lean) §8 turns 3+2 operations into
+  a Fanuc 30i program for an A/C trunnion with tool centre point management (`G43.4`).
+  `postMoves_rotarySafe` holds for every list of operations: no feed changes the tool axis, and every
+  re-orientation is a rapid on or above the clearance plane.
+- **OpenUSD** ([`OpenUSD.lean`](lean/Obend/Hardware/OpenUSD.lean)) is one model: `SdfLayer`/`PrimSpec`
+  opinions tagged with an arc kind, sorted by `LIVERPS` strength and lowered to `Term.mix`/`Term.fix`
+  (`composePrimToTerm`, `liverps_stronger_arc_dominates_term`); an `xformOp` stack of translations,
+  quarter turns and scalings over `FRepExpr`; affine-arithmetic enclosures. The arc kinds rank opinions
+  for value resolution; the Pcp graph of arcs (a reference pointing at another layer stack, inherits at
+  a class path, variant selection, list editing) is not modelled, and `timeSamples` here is a part
+  lifecycle track, not USD's per-attribute time samples.
+- **The fidget part** ([`Apps/FidgetCam.lean`](lean/Obend/Apps/FidgetCam.lean), `apps/fidget-cam/*.obend`):
+  four `.obend` parameter records with overrides (hub, cooling bore, mounting lug, process) compose the
+  values; Lean builds one solid from them (`fidgetParams_eq_obend`), certifies the bore wall
+  (`fidget_bore_wall_sound`, 2.0 mm), generates Z-level contours and four 3+2 top-edge passes,
+  certifies every lattice point of every segment including plunges and retracts with the shank
+  (`fidget_toolpath_no_gouge`, 100 µm lattice, cutter grown by one unit), and posts the program
+  (`impeller5AxisNgc`). The RTL voxel evaluator is compiled from the same tape.
 
-    subgraph Solid_CAM["2. F-Rep / SDF Solid Kernel & 5-Axis Machine Physics"]
-        FREP["FRepExpr Solid AST\n(csgUnion, csgInter, csgDiff, offset, sq)"]
-        IV3D["Box3D Interval Arithmetic & Octree Tape Pruning\n(frep_interval_enclosure_sound, frep_octree_prune_exterior_sound)"]
-        CAM["5-Axis Swept-Volume IPW + Machine Dynamics\n(Servo Lag + End-Mill Deflection + Altintas Chatter)"]
-    end
-
-    subgraph Multiphysics["3. Coupled High-Power & Semiconductor Multiphysics"]
-        MAG["2D/3D FEMM + libCEED Matrix-Free Magnetics\n(Newton-Raphson B-H Tangent PSD + IPM Torque)"]
-        COOL["LC Drives Direct In-Slot Microchannel Cooling\n(lc_drives_in_slot_cooler_than_outer_jacket)"]
-        PE["Mission Power MS350 7-Level FCML Inverter\n(M² Inductance Reduction + Lyapunov Cap Balance)"]
-        SEMI["FabuBlox Cleanroom + WaferSpace + Photonics + RF + PCB"]
-    end
-
-    subgraph SelfAccel["4. Reflexive Self-Acceleration & Real-World Loop"]
-        LOWER["Obend/Lower + Leaf.Flatten (1st/2nd Futamura)"]
-        ACCEL["FPGA DSP58 / AMD CDNA3 v_mfma / TPU Systolic / Ozaki FP4"]
-        EVO["In-Silico Evolutionary Search + EpistemicConsensus"]
-        VN["Von Neumann Reflexive Manufacturing Closure"]
-    end
-
-    L & I & V & ERP & S -->|"composeUsdSdfLayers\n+ CellContract"| FREP
-    FREP --> IV3D
-    IV3D --> CAM
-    FREP --> MAG & COOL & PE & SEMI
-    MAG & COOL & PE & CAM --> LOWER
-    LOWER -->|"SelfAccelerate.lean\n(6-Stage Verified)"| ACCEL
-    ACCEL -->|"1000x Faster Sim"| EVO
-    EVO -->|"BinaryCodec CBOR (0x0BED)\n+ .obnb Core.Data"| VN
-    VN -.->|"timeSamples Telemetry\n& Metrology Feedback"| L
-```
-
-### 2.1 The Exact Correspondence Between OpenUSD (`LIVERPS`) and `Obend`
-
-| OpenUSD Concept (`pxr/usd`) | `Obend` Mechanized Primitive | Proved Theorem / Module |
-| :--- | :--- | :--- |
-| **`L` — Local / SubLayers** | `Term.mix lower upper` (`λself. λsuper. upper self (lower self super)`) | `liverps_local_dominates_nonlocal` ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean)), `late_binding` ([`LateBinding.lean`](lean/Obend/Logic/LateBinding.lean)) |
-| **`I` — Inherits (Class Prims)** | C4 Nominal `#kind` Inheritance + Broadcast Law Inheritance | `kind_law_inherited` ([`Vault/Store.lean`](lean/Obend/Vault/Store.lean)), [`Spec/C4.lean`](lean/Obend/Spec/C4.lean) |
-| **`V` — VariantSets** | Contextual `Slot` with `Supports` pins & `Candidate` selection | `stale_iff_blocked`, `moved_pin_blocks` ([`Slot.lean`](lean/Obend/Slot.lean), [`Leaf/Specialize.lean`](lean/Obend/Leaf/Specialize.lean)) |
-| **`E` / `R` — Relocates & References** | `Intention` (`Cite`, `KindPin`, `resolve` / `recite` / `renew`) | [`Intention.lean`](lean/Obend/Intention.lean) |
-| **`P` — Payloads (Deferred Load)** | Call-by-need lazy demand machine (unreferenced sub-assemblies cost 0 ticks) | `demand_is_least` ([`Equiv/Demand.lean`](lean/Obend/Equiv/Demand.lean)) |
-| **`S` — Specializes (Weak Template)** | `seed` in `fix spec seed` (globally weakest fallback; `self` late-binds to final prim) | `liverps_specializes_globally_weakest` ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean)) |
-| **`UsdSdfModifier` Geometry Layers** | Non-destructive `.subtractFeature` (`csgDiff super fCut`), `.unionBoss`, `.offsetShell` | `usd_subtract_feature_monotone` ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean)) |
-| **`timeSamples` Temporal Tracks** | Causal lifecycle tracks (`t = 0` billet $\to$ roughing $\to$ finishing $\to$ field telemetry) | `lookupTimeSample`, `golden_openusd_liverps_sdf_verified` ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean)) |
-| **`.usda` (ASCII) / `.usdc` (`Crate` Binary)** | `.obend` surface syntax / `.obnb` (`Core.Data`) + RFC 8949 Binary CBOR (`Tag 0x0BED`) | `decode_encode_binaryHwCert` ([`Hardware/Codec.lean`](lean/Obend/Hardware/Codec.lean)) |
-
-### 2.2 Why Futamura-Specializing OpenUSD + `F-Rep` in `Obend` Changes Everything
-In Pixar's C++ OpenUSD, composing a deep `LIVERPS` hierarchy happens at runtime via pointer chasing,
-and geometry is a bag of triangles. In `Obend`:
-1. A physical assembly (e.g., an LC Drives stator core with 48 slots, where a `VariantSet` selects
-   `inSlotMicrochannel` cooling and a `Local` layer subtracts the coolant manifold ports via
-   `UsdSdfModifier.subtractFeature`) is a layered `Core4` composition.
-2. When the variant pins are fixed, **`Obend/Leaf/Flatten.lean` (`flatten_sound`) + `Obend/Leaf/Residual.lean` (`vtable_clean`)**
-   executes the **1st Futamura Projection**: all `LIVERPS` layer lookups, `self`/`super` dispatch, and
-   coordinate frame transforms vanish at compile time, emitting a flat, straight-line `FRepExpr` /
-   `Leaf.Book` supercombinator tape!
-3. That straight-line tape is evaluated over 3D octrees (`Box3D`) using **verified interval arithmetic**
-   ([`frep_interval_enclosure_sound`](lean/Obend/Hardware/GeometryCAM.lean#L171-L214),
-   [`frep_octree_prune_exterior_sound`](lean/Obend/Hardware/GeometryCAM.lean#L220-L226)—the exact
-   mathematical core of Matt Keeter's `fidget`), and lowers via [`Obend/Lower/Proofs/SelfAccelerate.lean`](lean/Obend/Lower/Proofs/SelfAccelerate.lean)
-   into native Rust SIMD/JIT (`hardware/rust-ffi`), FPGA `DSP58` pipelines, or AMD `CDNA3` GPU kernels!
-
----
+What is not there: blades (the part is a hub, a lug and a bore), the tool holder, simultaneous
+five-axis motion, the machine's own kinematic chain and travel limits, arcs (`G02`/`G03`) in the
+output, a theorem relating the RTL to `evalFRepPoint` for every input, and mesh extraction with a
+manifold check.
 
 ## 3. Simulating the Machinery Better Than the Tool Runs Itself
 
@@ -156,28 +118,15 @@ To evolve physical designs *in silico* and have the first physical article work 
 we cannot treat manufacturing equipment as an idealized geometry printer. We model the **physics of the
 manufacturing machine itself**:
 
-### 3.1 5-Axis CNC Machining: Swept Volumes, Servo Lag, End-Mill Deflection & Altintas Chatter ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean))
-- **Implicit Swept-Volume Material Removal (`evalMachinedWorkpiece`)**:
-  As the cutter moves along trajectory $\gamma(t) \in SE(3)$, the in-process workpiece (`IPW`) evolves as
-  $f_{\text{IPW}}(p) = \max(f_{\text{stock}}(p), -f_{\text{swept}}(p))$. By
-  [`machining_material_monotone_removal`](lean/Obend/Hardware/GeometryCAM.lean#L248-L252), material
-  removal is strictly monotone; by [`voxel_no_gouge_sound`](lean/Obend/Hardware/GeometryCAM.lean#L263-L273),
-  if the interval evaluation of `fSwept` over a target-part bounding box `B` satisfies `(evalFRepInterval B fSwept).lo > 0`,
-  the tool is **mathematically guaranteed never to gouge** any point of the finished part in `B` (zero
-  discrete time-step tunneling!).
-- **Servo Tracking Lag & Cantilever End-Mill Bending (`evalActualCutterPosNm`)**:
-  Under radial cutting force $F_r = k_r a_p h_{\text{chip}}$, the physical cutter tip deviates from the
-  commanded G-code coordinate $x_{\text{cmd}}$ by:
-  $$x_{\text{cmd}} - x_{\text{actual}} = v_{\text{feed}} \tau_{\text{servo}} + c_{\text{tool}} (k_r a_p h_{\text{chip}}).$$
-  The theorem [`machining_governor_bounds_surface_error`](lean/Obend/Hardware/GeometryCAM.lean#L305-L319)
-  certifies feed-rate and chip-load governors so that the **true deflected cut** lands inside the
-  finished dimensional tolerance band.
-- **Altintas–Budak Regenerative Chatter Stability (`checkAltintasChatterStable`)**:
-  Self-excited regenerative vibrations destroy surface finish and snap carbide cutters when axial depth
-  of cut $a_p$ exceeds the frequency-response stability lobe boundary
-  $2 a_p K_f |\operatorname{Re}[G(\omega_c)]| \le C_{\text{lim}}$. The theorem
-  [`altintas_chatter_depth_monotone`](lean/Obend/Hardware/GeometryCAM.lean#L334-L349) grounds automated
-  axial/radial stepdown scheduling inside the chatter-free envelope.
+### 3.1 Machining dynamics ([`GeometryCAM.lean`](lean/Obend/Hardware/GeometryCAM.lean) §4)
+- `machining_material_monotone_removal`: subtracting a swept volume never adds material.
+- `evalActualCutterPosNm`, `machining_governor_bounds_surface_error`: servo lag `v·τ` plus a linear
+  cantilever deflection under `F_r = k_r a_p h`, as a scalar model with the constants as inputs.
+- `checkAltintasChatterStable`, `altintas_chatter_depth_monotone`: a stability inequality on axial
+  depth with the real part of the tool-point FRF as a given number, not a computed lobe diagram.
+
+These are models with their constants supplied; none is identified from a machine, and none feeds
+the tool-path certificate of §2.
 
 ### 3.2 Semiconductor & Nanofab Process Physics ([`FabuBlox.lean`](lean/Obend/Hardware/FabuBlox.lean), [`DRC.lean`](lean/Obend/Hardware/DRC.lean), [`WaferSpace.lean`](lean/Obend/Hardware/WaferSpace.lean))
 - Just as G-code is not the physical part, a GDSII polygon is not the silicon wafer. `Obend` models:
