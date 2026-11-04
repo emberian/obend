@@ -536,3 +536,34 @@ with no environment set.
 Still exposed after this round: S6 (simulator crypto in every signing path), S10 (string-keyed
 mandates), S12 (the node's salt derivation), S15 (JSON wires), S9 (in-memory WAL), and the node's
 one-phase protocol, now measured against `SimplexProtocol` rather than against a description.
+
+## 9. Third round (2026-11-04): the checked simulator and the rekeyed mandate
+
+Built and tested on bb2 as before; `lake build Obend:shared` 880 jobs; node filtered 21/21
+serial, trace tests 2/2, cluster 2/2, `obend-ffi` 27/27.
+
+1. **"Simulator of the theorems" is checked** (`2043e47`). `Obend.Consensus.SimplexTrace`:
+   `checkTrace` decides, message by message, that a recorded run was a sequence of `Step`s of
+   `SimplexProtocol`; `checkTrace_sound` gives `Reach`; refusals are `TraceClause`s naming the
+   message, and an equivocation refusal carries a `SlashingReceipt` that checks against the trace
+   (`checkStep_equivocation_checks`). Registered as `simplex-trace@1`; `Judge.Format.explain` lets
+   a refusing format say why through the Bridge. The node gained the notarize phase it lacked
+   (one vote per view, finalize after a quorum: `try_cast_finalize`) and records every message it
+   sends as a `SimplexTrace`. Two native tests: an honest two-block run is accepted and its woven
+   turn commits; a second vote by one node in one view is refused with "equivocation … signers :=
+   [3] … view := 2" and accepted when node 3 is declared faulty. Found on the way:
+   `libleanshared.so` exports `_Unwind_*`, so a failing native test aborted the process; `gcc_s`
+   is now linked first. S1 as a protocol is no longer open: the node's runs are measured against
+   the proof, run by run. Not by construction: the node is still Rust that is checked after the
+   fact, not a step function proved against the module.
+2. **Mandates name a principal and a grant** (`lean/Obend/Vault/Mandate.lean`, `net.rs`).
+   `Principal` is the vault member identity the poster is bound from; `Grant` is the root grant
+   or the parent mandate; `delegate` moves budget from parent to child by construction
+   (`delegate_conserves`); `refusal` names principal and grant (`refusal_none_iff`). The node's
+   `Powerbox` is keyed by mandate id, a turn names `principal_id` and `mandate_id`, refusals name
+   the principal, the holder and the grant, and a grain's confinement is keyed on (principal,
+   mandate). S10 is closed at the mandate; what a turn asserts about its principal is for the
+   transport to authenticate, as the vault leaves it to the session.
+
+Still exposed: S6 (simulator crypto), S12 (node salts from public data), S15 (JSON wires), S9
+(in-memory WAL); and a turn's author is unauthenticated below the block's proposer.
