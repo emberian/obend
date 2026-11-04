@@ -55,14 +55,6 @@ set_option maxHeartbeats 800000
 #import_obend "stdlib/usd/ScenePrim.obend" as StdlibScenePrim
 #import_obend "stdlib/physical/QuantumPhotonicMatter.obend" as StdQuantumPhotonic
 
-/-- All three `.obend` standard library modules (`Cell.obend`, `Account.obend`, `ScenePrim.obend`)
-pass `FrontEnd.accept` (including multi-file `import ./Cell.obend as Cell` resolution). -/
-theorem stdlib_all_accepted :
-    StdlibCell.accepted = true ∧
-    StdlibAccount.accepted = true ∧
-    StdlibScenePrim.accepted = true :=
-  ⟨StdlibCell.accepted_eq, StdlibAccount.accepted_eq, StdlibScenePrim.accepted_eq⟩
-
 /-- All open-recursion claims across `Cell.obend`, `Account.obend`, and `ScenePrim.obend`
 are discharged and their semantic obligation meanings hold. -/
 theorem stdlib_all_claims_hold :
@@ -202,30 +194,15 @@ theorem stdlib_account_crossPackage_availableAfterFee_cone_survives :
 
 /-! ## 4. Quantum Photonic Matter Standard Library (`stdlib/physical/QuantumPhotonicMatter.obend`) -/
 
-/-- **`stdlib_quantum_photonic_accepted_and_claims_hold`**:
-`stdlib/physical/QuantumPhotonicMatter.obend` (`StdQuantumPhotonic`) passes `FrontEnd.accept = true`,
-discharges both open-recursion claims (`clements_power_open_recursion` and `tetron_braid_open_recursion`),
-and evaluates the open-recursive methods of both composed quantum/photonic objects:
-- `clementsPowerAt20Mw = 90` (`20 * 4 + 10`)
-- `clementsPhaseAtStep4 = 150` (`(4 * 25) + 50`)
-- `tetronBraidPhaseAt2 = 420` (`2 * 90 + 240`)
-- `tetronResetRateAt10 = 72` (`(10 * 3 + 12) + 30`). -/
-theorem stdlib_quantum_photonic_accepted_and_claims_hold :
-    StdQuantumPhotonic.accepted = true ∧
-    obligationMeaningWithJudges workbookFormats
-      StdQuantumPhotonic.claim_clements_power_open_recursion_obj
-      StdQuantumPhotonic.claim_clements_power_open_recursion_just ∧
-    obligationMeaningWithJudges workbookFormats
-      StdQuantumPhotonic.claim_tetron_braid_open_recursion_obj
-      StdQuantumPhotonic.claim_tetron_braid_open_recursion_just ∧
+/-- Values the `#import_obend` elaboration of `StdQuantumPhotonic` produced (an `example`, not a theorem:
+these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
+the `_holds` theorems themselves are emitted by the importer). -/
+example :
     StdQuantumPhotonic.clementsPowerAt20Mw_val = .nat 90 ∧
     StdQuantumPhotonic.clementsPhaseAtStep4_val = .nat 150 ∧
     StdQuantumPhotonic.tetronBraidPhaseAt2_val = .nat 420 ∧
     StdQuantumPhotonic.tetronResetRateAt10_val = .nat 72 :=
-  ⟨StdQuantumPhotonic.accepted_eq,
-   StdQuantumPhotonic.claim_clements_power_open_recursion_holds,
-   StdQuantumPhotonic.claim_tetron_braid_open_recursion_holds,
-   rfl, rfl, rfl, rfl⟩
+  ⟨rfl, rfl, rfl, rfl⟩
 
 theorem stdlib_quantum_photonic_compositions_closed :
     StdQuantumPhotonic.compensatedClementsArray_comp.closedB = true ∧

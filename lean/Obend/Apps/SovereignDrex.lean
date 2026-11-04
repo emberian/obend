@@ -33,8 +33,10 @@ public import Obend.Consensus.SovereignFinality
 public import Obend.Leaf.Futamura
 public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
+public import Obend.Elab.Workbook
 public meta import Lean
 public meta import Obend.Hardware.UserspacePhysical
+public meta import Obend.Elab.Workbook
 @[expose] public section
 
 namespace Obend.Apps.SovereignDrex
@@ -68,252 +70,9 @@ open Obend.Hardware.UserspacePhysical
 set_option autoImplicit false
 set_option maxHeartbeats 800000
 
-/-! ## 0. Multi-Module `#import_obend` Elaborator for `apps/sovereign-drex/*.obend` -/
-
-meta def sanitizeDrexModuleName (stem : String) : String :=
-  let chars := stem.toList.map fun c => if c.isAlphanum || c == '_' then c else '_'
-  match chars with
-  | [] => "Main"
-  | c :: _ =>
-    let s := String.ofList (if c.isAlpha || c == '_' then chars else '_' :: chars)
-    if Obend.Spec.Parse.isIdent s.toList then s else "Main"
-
-meta def resolveDrexImportedObendPath (parentFile : System.FilePath) (rawImportPath : String) :
-    IO System.FilePath := do
-  let clean := rawImportPath.trimAscii.toString
-  let rel1 := match parentFile.parent with
-    | some dir => dir / clean
-    | none => System.FilePath.mk clean
-  let r1 ← resolvePhysicalObendPath rel1
-  if ← r1.pathExists then return r1
-  let stripped := if clean.startsWith "./" then (clean.drop 2).toString else clean
-  let rel2 := match parentFile.parent with
-    | some dir => dir / stripped
-    | none => System.FilePath.mk stripped
-  let r2 ← resolvePhysicalObendPath rel2
-  if ← r2.pathExists then return r2
-  let fileName := (System.FilePath.mk stripped).fileName.getD stripped
-  for sub in ["apps/sovereign-drex/", "stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/"] do
-    let cand ← resolvePhysicalObendPath (System.FilePath.mk (sub ++ fileName))
-    if ← cand.pathExists then return cand
-  return r1
-
-meta def parseAndCheckDrexObendModule (src : String) (moduleName : String)
-    (prior : List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)) :
-    Except String (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) := do
-  let sha256 := Obend.Spec.Sha256.hex src.toUTF8
-  let ast ← match Obend.Spec.FrontEnd.parseSource moduleName src with
-    | .ok a => pure a
-    | .error d => throw s!"{d.stage}: {d.message}"
-  let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
-  let mut lockedImports : List Obend.Spec.FrontEnd.LockedImport := []
-  for edge in parsedEdges.toList do
-    let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
-    let edgeAlias := (edge.getObjValAs? String "alias").toOption.getD ""
-    let edgeSpan := (edge.getObjVal? "span").toOption.getD .null
-    if !Obend.Spec.Capture.sealedPath edgePath then
-      throw s!"module {moduleName}: unsealed import path '{edgePath}' (expected ./NAME.obend)"
-    let stemMod := sanitizeDrexModuleName ((System.FilePath.mk edgePath).fileStem.getD edgeAlias)
-    let found? := prior.zipIdx.find? fun ((sm, _), _) =>
-      sm.name == stemMod || (edgeAlias != "" && sm.name == edgeAlias)
-    let some ((targetSm, _), targetIdx) := found?
-      | throw s!"module {moduleName}: imported module '{edgePath}' (alias '{edgeAlias}') not found"
-    lockedImports := lockedImports ++ [{
-      path := edgePath
-      importAlias := edgeAlias
-      span := edgeSpan
-      target := targetIdx
-      moduleName := targetSm.name
-      sha256 := targetSm.sha256
-    }]
-  let srcMod : Obend.Spec.FrontEnd.SourceModule := {
-    name := moduleName
-    source := src
-    sha256 := sha256
-    imports := lockedImports
-  }
-  let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
-    | .ok m => pure m
-    | .error d => throw s!"{d.stage}: {d.message}"
-  return (srcMod, decodedMod)
-
-meta def loadDrexObendClosure :
-    Nat → System.FilePath →
-    List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) →
-    IO (Except String (List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)))
-  | 0, path, _ => return .error s!"import depth limit exceeded while loading {path}"
-  | fuel + 1, path, acc => do
-    let resolved ← resolvePhysicalObendPath path
-    let modName := sanitizeDrexModuleName (resolved.fileStem.getD "Main")
-    if acc.any (fun (sm, _) => sm.name == modName) then
-      return .ok acc
-    match ← (IO.FS.readBinFile resolved).toBaseIO with
-    | .error e => return .error (toString e)
-    | .ok bytes =>
-      let some rawSrc := Obend.Spec.Parse.decodeSource bytes
-        | return .error s!"{resolved}: invalid UTF-8"
-      let ast ← match Obend.Spec.FrontEnd.parseSource modName rawSrc with
-        | .ok a => pure a
-        | .error d => return .error s!"{d.stage}: {d.message}"
-      let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
-      let mut curAcc := acc
-      for edge in parsedEdges.toList do
-        let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
-        let impFile ← resolveDrexImportedObendPath resolved edgePath
-        match ← loadDrexObendClosure fuel impFile curAcc with
-        | .error err => return .error err
-        | .ok nextAcc => curAcc := nextAcc
-      match parseAndCheckDrexObendModule rawSrc modName curAcc with
-      | .error err => return .error err
-      | .ok pair => return .ok (curAcc ++ [pair])
-
-meta structure DrexElaboratedDef where
-  name         : String
-  reducedVal?  : Option Term
-  composition? : Option Composition
-  book?        : Option Book
-
-meta structure DrexElaboratedModule where
-  moduleName : String
-  lawsCount  : Nat
-  defs       : List DrexElaboratedDef
-  claims     : List PhysicalElaboratedClaim
-
-meta def elaborateDrexObendFile (pathStr : String) : IO (Except String DrexElaboratedModule) := do
-  match ← loadDrexObendClosure 32 (System.FilePath.mk pathStr) [] with
-  | .error err => return .error err
-  | .ok closure =>
-    let some (srcMod, decodedMod) := closure.getLast?
-      | return .error s!"empty module closure for {pathStr}"
-    let prior := closure.dropLast
-    let modName := srcMod.name
-    let callables := decodedMod.decls.filter fun (d : Obend.Spec.Syntax.Decl) =>
-      match d with
-      | .function .. | .extension .. | .spec .. => true
-      | _ => false
-    let some (lastDecl : Obend.Spec.Syntax.Decl) := callables.getLast?
-      | return .error s!"module {modName} contains no callable declarations"
-    let entryDef := lastDecl.name
-    let allSrcMods := prior.map Prod.fst ++ [srcMod]
-    let allDecodedMods := prior.map Prod.snd ++ [decodedMod]
-    let entryIdx := prior.length
-    match Obend.Spec.FrontEnd.lowerDecoded allSrcMods allDecodedMods entryIdx entryDef
-        (Json.arr #[]) (Json.arr #[]) defaultPhysicalLimits "definition" [] with
-    | .error d => return .error s!"{d.stage}: {d.message}"
-    | .ok lowering =>
-      match Obend.Spec.FrontEnd.accept lowering with
-      | .error d => return .error s!"{d.stage}: {d.message}"
-      | .ok acc =>
-        let erasedTerm := acc.erased
-        let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
-        let rawFields := Obend.Logic.Program.knotFields rootTerm
-        let mut pdefs : List DrexElaboratedDef := []
-        for d in callables do
-          let shortName := d.name
-          let fullKey := modName ++ "." ++ shortName
-          let knotTerm : Term := .get rootTerm fullKey
-          let opened := match rawFields.lookup fullKey with
-            | some rb => Obend.Logic.openTerm rb rootTerm (.record [])
-            | none => knotTerm
-          let rawReduced? := Obend.Law.run 50000 opened
-          let reducedVal? := match rawReduced? with
-            | some (.nat n) => some (.nat n)
-            | some (.boolean b) => some (.boolean b)
-            | some (.label s) => some (.label s)
-            | _ => none
-          let wantNamed : Composition → Bool := fun C => C.top.name != ""
-          let rawComp? :=
-            if reducedVal?.isSome then none
-            else
-              match d with
-              | .function .. =>
-                match findWorkbookObjectPhys wantNamed 64 knotTerm with
-                | some c => some c
-                | none =>
-                  match findWorkbookObjectPhys wantNamed 64 (.app knotTerm (.record [])) with
-                  | some c => some c
-                  | none =>
-                    let inlined := resolveKnotTermPhys rootTerm rawFields [fullKey] 8 opened
-                    decodeWorkbookWithSeedPhys wantNamed inlined
-              | _ => none
-          let foundComp? := rawComp?.map compactCompositionForKernel
-          let book? := foundComp?.map Obend.Leaf.emit
-          pdefs := pdefs ++ [{
-            name := shortName
-            reducedVal? := reducedVal?
-            composition? := foundComp?
-            book? := book?
-          }]
-        let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
-        let mut pclaims : List PhysicalElaboratedClaim := []
-        for (specKey, claimName) in rawClaimPairs do
-          let matchingDefs := pdefs.filter fun wd =>
-            match wd.composition? with
-            | some comp => (Obend.Logic.Program.layerIndex comp specKey).isSome
-            | none => false
-          let chosenDef? :=
-            match matchingDefs.find? (fun wd => wd.composition?.any (fun c => c.top.name == specKey)) with
-            | some wd => some wd
-            | none => matchingDefs.head?
-          if let some wd := chosenDef? then
-            if let some comp := wd.composition? then
-              if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
-                let steps? := proposeWorkbookDerivationPhys co
-                let just? := steps?.map Justification.byDerivation
-                let ok := match just? with
-                  | some j => Obend.Logic.obligationCheck 256 co j == .ok
-                  | none => false
-                pclaims := pclaims ++ [{
-                  name := claimName
-                  claimObj := co
-                  just? := just?
-                  verified := ok
-                }]
-        return .ok {
-          moduleName := modName
-          lawsCount := lowering.laws.length
-          defs := pdefs
-          claims := pclaims
-        }
-
-local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
-  let pathStr := pathLit.getString
-  let res ← IO.toEIO
-    (fun e => Lean.Exception.error Lean.Syntax.missing (Lean.MessageData.ofFormat (Std.Format.text (toString e))))
-    (elaborateDrexObendFile pathStr)
-  match res with
-  | .error err =>
-    Lean.throwError m!"#import_obend failed on {pathStr}: {err}"
-  | .ok pkg =>
-    let ns := nsId.getId
-    let accId := mkIdent (ns ++ `accepted)
-    let accEqId := mkIdent (ns ++ `accepted_eq)
-    let lawsCntId := mkIdent (ns ++ `laws_count)
-    elabCommand (← `(@[expose] public def $accId : Bool := true))
-    elabCommand (← `(public theorem $accEqId : $accId = true := rfl))
-    elabCommand (← `(@[expose] public def $lawsCntId : Nat := $(quote pkg.lawsCount)))
-    for d in pkg.defs do
-      if let some rv := d.reducedVal? then
-        let valId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_val"))
-        elabCommand (← `(@[expose] public def $valId : Term := $(quote rv)))
-      if let some comp := d.composition? then
-        let compId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_comp"))
-        elabCommand (← `(@[expose] public def $compId : Composition := $(quote comp)))
-      if let some bk := d.book? then
-        let bookId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_book"))
-        elabCommand (← `(@[expose] public def $bookId : Book := $(quote bk)))
-    for c in pkg.claims do
-      let objId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_obj"))
-      elabCommand (← `(@[expose] public def $objId : ClaimObj := $(quote c.claimObj)))
-      if let some just := c.just? then
-        let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
-        elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
-        if c.verified then
-          let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
-          elabCommand (← `(
-            public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats $objId $justId :=
-              obligationMeaning_of_check_beq Obend.Logic.defaultExternalFormats (k := 256) (o := $objId) (j := $justId) (by decide +kernel)
-          ))
+/-! ## 0. `#import_obend` is `Obend.Elab.Workbook`'s (the one importer, 2026-11-04); this module
+only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `claim_*_{obj,just,holds}`,
+`laws_count`). -/
 
 /-! ## 1. Compile-Time Elaboration of `apps/sovereign-drex/*.obend` via `#import_obend` -/
 
@@ -322,40 +81,11 @@ local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
 #import_obend "apps/sovereign-drex/BatchClearing.obend" as SovereignDrexClearing
 #import_obend "apps/sovereign-drex/SovereignDrexTop.obend" as SovereignDrexTop
 
-/-- **`sovereignDrex_all_accepted_and_claims_hold`**:
-All 4 `.obend` modules in `apps/sovereign-drex/` (`Seat`, `OrderBook`, `BatchClearing`,
-and `SovereignDrexTop`) pass unmodified `FrontEnd.lower` + `FrontEnd.accept = true`
-(matching `obend check --package apps/sovereign-drex/package.json`), discharge their open-recursion
-claims (`zoe_offer_safety_open_recursion`, `orderbook_volume_open_recursion`,
-`batch_clearing_open_recursion`, and `drex_settlement_open_recursion`), enforce all 6 entry-module
-package laws (`SovereignDrexTop.laws_count = 6`), and evaluate concrete open-recursive exchange methods:
-- `institutionalSafetyAt80 = 95000` (`75000 + 80 * 250`),
-- `institutionalMandateAt15 = 1650` (`(15 * 10 + 1000) + 500`),
-- `wholesaleVolumeAt20 = 127000` (`125000 + 20 * 100`),
-- `wholesaleSlackAt10 = 10040` (`(10 * 4 + 9850) + 150`),
-- `sovereignClearedAt12 = 7000` (`12 * 500 + 1000`),
-- `sovereignDigestAt5 = 182` (`(5 * 32 + 6) + 16`),
-- `drexSettlementAt8 = 5000` (`8 * 500 + 1000`),
-- `drexFinalityTagAt3 = 227` (`(3 * 64 + 3) + 32`),
-- `crossModuleDrexSummary = 110222` (`95000 + 10040 + 182 + 5000`). -/
-theorem sovereignDrex_all_accepted_and_claims_hold :
-    SovereignDrexSeat.accepted = true ∧
-    SovereignDrexOrderBook.accepted = true ∧
-    SovereignDrexClearing.accepted = true ∧
-    SovereignDrexTop.accepted = true ∧
+/-- Values the `#import_obend` elaboration of `SovereignDrexClearing, SovereignDrexOrderBook, SovereignDrexSeat, SovereignDrexTop` produced (an `example`, not a theorem:
+these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
+the `_holds` theorems themselves are emitted by the importer). -/
+example :
     SovereignDrexTop.laws_count = 6 ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      SovereignDrexSeat.claim_zoe_offer_safety_open_recursion_obj
-      SovereignDrexSeat.claim_zoe_offer_safety_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      SovereignDrexOrderBook.claim_orderbook_volume_open_recursion_obj
-      SovereignDrexOrderBook.claim_orderbook_volume_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      SovereignDrexClearing.claim_batch_clearing_open_recursion_obj
-      SovereignDrexClearing.claim_batch_clearing_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      SovereignDrexTop.claim_drex_settlement_open_recursion_obj
-      SovereignDrexTop.claim_drex_settlement_open_recursion_just ∧
     SovereignDrexSeat.institutionalSafetyAt80_val = .nat 95000 ∧
     SovereignDrexSeat.institutionalMandateAt15_val = .nat 1650 ∧
     SovereignDrexOrderBook.wholesaleVolumeAt20_val = .nat 127000 ∧
@@ -365,16 +95,7 @@ theorem sovereignDrex_all_accepted_and_claims_hold :
     SovereignDrexTop.drexSettlementAt8_val = .nat 5000 ∧
     SovereignDrexTop.drexFinalityTagAt3_val = .nat 227 ∧
     SovereignDrexTop.crossModuleDrexSummary_val = .nat 110222 :=
-  ⟨SovereignDrexSeat.accepted_eq,
-   SovereignDrexOrderBook.accepted_eq,
-   SovereignDrexClearing.accepted_eq,
-   SovereignDrexTop.accepted_eq,
-   rfl,
-   SovereignDrexSeat.claim_zoe_offer_safety_open_recursion_holds,
-   SovereignDrexOrderBook.claim_orderbook_volume_open_recursion_holds,
-   SovereignDrexClearing.claim_batch_clearing_open_recursion_holds,
-   SovereignDrexTop.claim_drex_settlement_open_recursion_holds,
-   rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
 
@@ -502,8 +223,8 @@ theorem sovereignDrex_world_carry_and_state_bound_hyperedge_sound
     (∀ {c c' : LiveCell}, c ∈ W.cells → applyCellCarry plan c = some c' →
       (c'.law = c.law ∨
         ∃ narrowsCert preservesCert,
-          checkContractCert (.narrows c'.law c.law) narrowsCert = Obend.Law.CertVerdict.valid ∧
-          checkContractCert (.preserves c'.law c'.invariant) preservesCert = Obend.Law.CertVerdict.valid) ∧
+          Obend.Law.checkContractCert (.narrows c'.law c.law) narrowsCert = Obend.Law.CertVerdict.valid ∧
+          Obend.Law.checkContractCert (.preserves c'.law c'.invariant) preservesCert = Obend.Law.CertVerdict.valid) ∧
       (c.foreverCrown = true → c'.foreverCrown = true ∧ c'.invariant = c.invariant)) ∧
     (∀ {s : Obend.Ledger.Seat}, s ∈ W.seats →
       (s ∈ W'.seats ∧ Obend.Ledger.safeAt W'.ledger s.account s.proposal = true) ∨
@@ -836,10 +557,8 @@ theorem sovereignDrexBatchTopRtlModule_verified :
 
 /-! ## 6. `#tooth` Mutation-Killing Guards -/
 
-def brokenSafetyVal : Term := .nat 0
-
-#tooth sovereignDrex_all_accepted_and_claims_hold by mutation
-  SovereignDrexSeat.institutionalSafetyAt80_val := brokenSafetyVal
+-- (2026-11-04) the tooth on the deleted `accepted` bundle is gone: a tooth on a fixture only
+-- proved the fixture was sensitive to its own data.
 
 def brokenDrexRtlModule : RtlModule :=
   { name := "sovereign_drex_batch_top"

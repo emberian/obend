@@ -58,30 +58,17 @@ set_option maxHeartbeats 800000
 
 #import_obend "apps/silicon-kernel-verilator/SiliconKernelBundle.obend" as SiliconKernelBundle
 
-/-- **`siliconKernelBundle_accepted_and_claims_hold`**:
-`apps/silicon-kernel-verilator/SiliconKernelBundle.obend` passes `FrontEnd.accept = true`,
-discharges the open-recursive LUT claim `epoch1_lut_open_recursion`, and evaluates all
-open-recursive methods across Epoch 1 and Epoch 2 (`ICAP` DPR hot-swap):
-- `epoch1LutAt10_val = .nat 42` (`10 * 4 + 2`)
-- `epoch2LutAt10_val = .nat 70` (`10 * 6 + 10` via late-bound `self`)
-- `zone1BypassAtHandle42_val = .nat 42`
-- `zone4AcceptTag1_val = .nat 1`
-- `zone4RefuseToothMutantTag2_val = .nat 0`
-- `zone4RefuseSorryTag0_val = .nat 0`. -/
-theorem siliconKernelBundle_accepted_and_claims_hold :
-    SiliconKernelBundle.accepted = true ∧
-    obligationMeaningWithJudges workbookFormats
-      SiliconKernelBundle.claim_epoch1_lut_open_recursion_obj
-      SiliconKernelBundle.claim_epoch1_lut_open_recursion_just ∧
+/-- Values the `#import_obend` elaboration of `SiliconKernelBundle` produced (an `example`, not a theorem:
+these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
+the `_holds` theorems themselves are emitted by the importer). -/
+example :
     SiliconKernelBundle.epoch1LutAt10_val = .nat 42 ∧
     SiliconKernelBundle.epoch2LutAt10_val = .nat 70 ∧
     SiliconKernelBundle.zone1BypassAtHandle42_val = .nat 42 ∧
     SiliconKernelBundle.zone4AcceptTag1_val = .nat 1 ∧
     SiliconKernelBundle.zone4RefuseToothMutantTag2_val = .nat 0 ∧
     SiliconKernelBundle.zone4RefuseSorryTag0_val = .nat 0 :=
-  ⟨SiliconKernelBundle.accepted_eq,
-   SiliconKernelBundle.claim_epoch1_lut_open_recursion_holds,
-   rfl, rfl, rfl, rfl, rfl, rfl⟩
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem siliconKernelBundle_compositions_closed :
     SiliconKernelBundle.epoch1SiliconFabric_comp.closedB = true ∧

@@ -63,9 +63,10 @@ without manual de Bruijn transcription:
 2. `obendWorkbookExt`, `#import_obend "path/to/File.obend" as Ns`, and `#obend_decl Ns "..."`:
    Elaborates `.obend` sources at Lean compile time, verifies `FrontEnd.accept`, registers the
    package in `obendWorkbookExt`, and emits concrete kernel-checked Lean constants inside namespace
-   `Ns` (`Ns.package`, `Ns.accepted`, `Ns.accepted_eq`, `<def>_term`, `<def>_lexpr`,
+   `Ns` (`Ns.package`, `Ns.laws_count`, `<def>_term`, `<def>_val`, `<def>_lexpr`,
    `<def>_lowerTerm_eq`, `<def>_comp`, `<def>_book`, `<def>_reflected`, and per-claim obligations
-   with machine-checked proofs).
+   with machine-checked proofs). This is the one `#import_obend`: `Obend.Stdlib`,
+   `Obend.Hardware.UserspacePhysical` and every `Obend.Apps.*` module call it (2026-11-04).
 3. `verifyWorkbookObligationsWithLean` (+ soundness theorems):
    Exports verified Lean `TransportCert`, `LawExpr`, and `Justification` certificates back into
    an `.obend` `WorkbookPackage`'s obligation checker.
@@ -132,6 +133,8 @@ structure WorkbookPackage where
   defs : List WorkbookDef
   claims : List WorkbookClaim
   laws : List (String × LawExpr)
+  /-- Laws declared syntactically in the entry module (emitted as `Ns.laws_count`). -/
+  lawsCount : Nat
 
 instance : Inhabited WorkbookPackage where
   default := {
@@ -145,6 +148,7 @@ instance : Inhabited WorkbookPackage where
     defs := []
     claims := []
     laws := []
+    lawsCount := 0
   }
 
 namespace WorkbookPackage
@@ -254,6 +258,21 @@ def selectCallableDecls (m : Obend.Spec.Syntax.Module) : List Obend.Spec.Syntax.
     match d with
     | .function .. | .extension .. | .spec .. => true
     | _ => false
+
+
+/-- Strip layer metadata and `#kind` fields so the emitted `Composition` reduces in the kernel
+(`decide +kernel` over `_comp`/`_book` constants). The flattened behaviour is unchanged. -/
+def compactLayerForKernel (L : Layer) : Layer :=
+  { L with
+    metadata := .record [("name", .label L.name)]
+    fields := L.fields.filter (fun kv => kv.1 != "#kind")
+    composeMeta := .record [] }
+
+def compactCompositionForKernel (C : Composition) : Composition :=
+  { C with
+    top := compactLayerForKernel C.top
+    below := C.below.map compactLayerForKernel
+    seed := C.seed.filter (fun kv => kv.1 != "#kind") }
 
 /-- Format a `FrontEnd.Diagnostic` into a readable error string. -/
 def formatDiagnostic (d : Obend.Spec.FrontEnd.Diagnostic) : String :=
@@ -451,7 +470,7 @@ def elaborateObendSource (src : String) (moduleName : String := "Main")
         | some c => some c
         | none => decodeWorkbookWithSeed wantNamed inlined
     let composition? : Option Composition :=
-      match foundComp? with
+      match foundComp?.map compactCompositionForKernel with
       | some c => some c
       | none =>
         match d with
@@ -537,6 +556,7 @@ def elaborateObendSource (src : String) (moduleName : String := "Main")
     defs := wdefs
     claims := wclaims
     laws := lowering.laws
+    lawsCount := decodedMod.laws.length
   }
 
 /-- Resolve a workbook `.obend` file path whether invoked from the repo root or `lean/`. -/
@@ -574,7 +594,7 @@ def resolveImportedObendPath (parentFile : System.FilePath) (rawImportPath : Str
   let r3 ← resolveObendPath (System.FilePath.mk stripped)
   if ← r3.pathExists then return r3
   let fileName := (System.FilePath.mk stripped).fileName.getD stripped
-  for sub in ["stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/"] do
+  for sub in ["stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/", "apps/obend-risc/", "apps/zk-ntt/", "apps/foc-hil/", "apps/sdr-ft8/", "apps/fidget-cam/", "apps/quantum-photonic-matter/", "apps/sovereign-drex/", "apps/silicon-kernel-verilator/"] do
     let cand ← resolveObendPath (System.FilePath.mk (sub ++ fileName))
     if ← cand.pathExists then return cand
   return r1
@@ -1196,10 +1216,10 @@ meta instance : ToExpr WorkbookClaim where
 
 meta instance : ToExpr WorkbookPackage where
   toExpr p :=
-    mkApp10 (mkConst ``WorkbookPackage.mk)
-      (toExpr p.moduleName) (toExpr p.entryDef) (toExpr p.source) (toExpr p.sha256)
-      (toExpr p.accepted) (toExpr p.erasedTerm) (toExpr p.rootTerm)
-      (toExpr p.defs) (toExpr p.claims) (toExpr p.laws)
+    Lean.mkAppN (mkConst ``WorkbookPackage.mk)
+      #[toExpr p.moduleName, toExpr p.entryDef, toExpr p.source, toExpr p.sha256,
+        toExpr p.accepted, toExpr p.erasedTerm, toExpr p.rootTerm,
+        toExpr p.defs, toExpr p.claims, toExpr p.laws, toExpr p.lawsCount]
   toTypeExpr := mkConst ``WorkbookPackage
 
 /-! ## 6. Command Elaborators `#import_obend` and `#obend_decl` -/
@@ -1340,6 +1360,21 @@ private meta def metaProposeWorkbookDerivation (o : ClaimObj) : Option (List RSt
     | some (_, l, r) => metaDeriveWorkbook o r 4096 l []
     | none => none
 
+
+/-- Strip layer metadata and `#kind` fields so the emitted `Composition` reduces in the kernel
+(`decide +kernel` over `_comp`/`_book` constants). The flattened behaviour is unchanged. -/
+private meta def metaCompactLayerForKernel (L : Layer) : Layer :=
+  { L with
+    metadata := .record [("name", .label L.name)]
+    fields := L.fields.filter (fun kv => kv.1 != "#kind")
+    composeMeta := .record [] }
+
+private meta def metaCompactCompositionForKernel (C : Composition) : Composition :=
+  { C with
+    top := metaCompactLayerForKernel C.top
+    below := C.below.map metaCompactLayerForKernel
+    seed := C.seed.filter (fun kv => kv.1 != "#kind") }
+
 private meta def metaSanitizeModuleName (stem : String) : String :=
   let chars := stem.toList.map fun c => if c.isAlphanum || c == '_' then c else '_'
   match chars with
@@ -1453,7 +1488,7 @@ private meta def metaElaborateObendSource (src : String) (moduleName : String :=
         | some c => some c
         | none => metaDecodeWorkbookWithSeed wantNamed inlined
     let composition? : Option Composition :=
-      match foundComp? with
+      match foundComp?.map metaCompactCompositionForKernel with
       | some c => some c
       | none =>
         match d with
@@ -1539,6 +1574,7 @@ private meta def metaElaborateObendSource (src : String) (moduleName : String :=
     defs := wdefs
     claims := wclaims
     laws := lowering.laws
+    lawsCount := decodedMod.laws.length
   }
 
 private meta def metaResolveObendPath (path : System.FilePath) : IO System.FilePath := do
@@ -1570,7 +1606,7 @@ private meta def metaResolveImportedObendPath (parentFile : System.FilePath) (ra
   let r3 ← metaResolveObendPath (System.FilePath.mk stripped)
   if ← r3.pathExists then return r3
   let fileName := (System.FilePath.mk stripped).fileName.getD stripped
-  for sub in ["stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/"] do
+  for sub in ["stdlib/core/", "stdlib/ledger/", "stdlib/usd/", "stdlib/physical/", "apps/obend-risc/", "apps/zk-ntt/", "apps/foc-hil/", "apps/sdr-ft8/", "apps/fidget-cam/", "apps/quantum-photonic-matter/", "apps/sovereign-drex/", "apps/silicon-kernel-verilator/"] do
     let cand ← metaResolveObendPath (System.FilePath.mk (sub ++ fileName))
     if ← cand.pathExists then return cand
   return r1
@@ -1614,17 +1650,6 @@ private meta def metaLoadObendWorkbookFile (path : System.FilePath) : IO (Except
     | none => return .error s!"empty module closure for {path}"
     | some (lastSrc, _) =>
       return metaElaborateObendSource lastSrc.source lastSrc.name none closure.dropLast
-
-private meta def metaVerifyWorkbookObligationsWithLean (pkg : WorkbookPackage) : Bool :=
-  let claimsOk := pkg.claims.all fun wc =>
-    match wc.autoJustification? with
-    | some j =>
-      Obend.Logic.obligationCheckWithJudges Obend.Elab.AutoCert.autoCertFormats 4096 wc.claimObj j ==
-        Obend.Judge.Verdict.ok
-    | none => false
-  let lawsOk := pkg.laws.all fun (lawName, lawExpr) =>
-    Obend.Law.closedB (Obend.Spec.LawCompile.compile .emptyRow pkg.moduleName lawName lawExpr)
-  pkg.accepted && claimsOk && lawsOk
 
 meta def defineWorkbookConst {α : Type} [ToExpr α] (declName : Name) (val : α) :
     CommandElabM Unit := do
@@ -1676,15 +1701,9 @@ meta def tryDefineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Un
 meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM Unit := do
   modifyEnv fun env => obendWorkbookExt.addEntry env (ns, pkg)
   defineWorkbookConst (ns ++ `package) pkg
-  defineWorkbookConst (ns ++ `accepted) pkg.accepted
-  if pkg.accepted then
-    let eqTy := mkApp3 (mkConst ``Eq [Level.succ Level.zero])
-      (mkConst ``Bool) (mkConst (ns ++ `accepted)) (toExpr true)
-    let eqPrf := mkApp2 (mkConst ``Eq.refl [Level.succ Level.zero])
-      (mkConst ``Bool) (toExpr true)
-    defineWorkbookThm (ns ++ `accepted_eq) eqTy eqPrf
-  let obOk := metaVerifyWorkbookObligationsWithLean pkg
-  defineWorkbookConst (ns ++ `obligations_ok) obOk
+  -- No `Ns.accepted`/`Ns.accepted_eq`: reaching this line is the acceptance; a `true = true`
+  -- theorem recorded nothing (review/EXPERT-lean-proof-engineering-20261103.md §4).
+  defineWorkbookConst (ns ++ `laws_count) pkg.lawsCount
   for d in pkg.defs do
     let dTermName := ns ++ Name.mkSimple (d.name ++ "_term")
     let dKnotName := ns ++ Name.mkSimple (d.name ++ "_knot_term")
@@ -1757,6 +1776,17 @@ elab "#import_obend " pathLit:str " as " nsId:ident : command => do
 elab "#obend_decl " nsId:ident srcLit:str : command => do
   let srcStr := srcLit.getString
   let modName := metaSanitizeModuleName nsId.getId.toString
+  match metaElaborateObendSource srcStr modName none with
+  | .error err =>
+    Lean.throwError m!"#obend_decl failed in {nsId.getId}: {err}"
+  | .ok pkg =>
+    registerAndEmitWorkbook nsId.getId pkg
+
+/-- `#obend_decl Ns named "ModName" "..."`: as `#obend_decl`, with the `.obend` module name given
+    explicitly (the inline sources of `Obend.Hardware.UserspacePhysical` name their modules). -/
+elab "#obend_decl " nsId:ident " named " modLit:str srcLit:str : command => do
+  let srcStr := srcLit.getString
+  let modName := metaSanitizeModuleName modLit.getString
   match metaElaborateObendSource srcStr modName none with
   | .error err =>
     Lean.throwError m!"#obend_decl failed in {nsId.getId}: {err}"

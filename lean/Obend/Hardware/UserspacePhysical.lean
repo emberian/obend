@@ -32,6 +32,7 @@ public import Obend.Hardware.FluidThermal
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.Silicon
 public import Obend.Hardware.Types
+public import Obend.Elab.Workbook
 public meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
@@ -49,6 +50,7 @@ public meta import Obend.Logic.Obligation
 public meta import Obend.Logic.Program
 public meta import Obend.Leaf.Flatten
 public meta import Obend.Leaf.Emit
+public meta import Obend.Elab.Workbook
 @[expose] public section
 
 namespace Obend.Hardware.UserspacePhysical
@@ -67,456 +69,9 @@ open Obend.Hardware.Accelerators
 
 set_option autoImplicit false
 
-/-! ## 0. Compile-Time `#import_obend` Elaborator for `stdlib/physical/*.obend` -/
-
-def mkByteArrayOfNatList (xs : List Nat) : ByteArray :=
-  ByteArray.mk (xs.map UInt8.ofNat).toArray
-
-meta instance : Quote Primitive where
-  quote
-    | .add         => mkIdent ``Primitive.add
-    | .multiply    => mkIdent ``Primitive.multiply
-    | .equal       => mkIdent ``Primitive.equal
-    | .conjunction => mkIdent ``Primitive.conjunction
-    | .labelEqual  => mkIdent ``Primitive.labelEqual
-    | .subtract    => mkIdent ``Primitive.subtract
-    | .divide      => mkIdent ``Primitive.divide
-    | .less        => mkIdent ``Primitive.less
-    | .lessEqual   => mkIdent ``Primitive.lessEqual
-    | .modulo      => mkIdent ``Primitive.modulo
-    | .bitAnd      => mkIdent ``Primitive.bitAnd
-    | .bitOr       => mkIdent ``Primitive.bitOr
-    | .bitXor      => mkIdent ``Primitive.bitXor
-    | .shl         => mkIdent ``Primitive.shl
-    | .lshr        => mkIdent ``Primitive.lshr
-    | .ashr        => mkIdent ``Primitive.ashr
-    | .slt         => mkIdent ``Primitive.slt
-    | .qmul32      => mkIdent ``Primitive.qmul32
-
-mutual
-  meta partial def quoteTermAux : Term → TSyntax `term
-    | .hole n σ =>
-      let sArr := (σ.map quoteTermAux).toArray
-      Lean.Unhygienic.run `(Term.hole $(quote n) [ $[$sArr],* ])
-    | .bound i => Lean.Unhygienic.run `(Term.bound $(quote i))
-    | .lam b => Lean.Unhygienic.run `(Term.lam $(quoteTermAux b))
-    | .app f a => Lean.Unhygienic.run `(Term.app $(quoteTermAux f) $(quoteTermAux a))
-    | .mix l u => Lean.Unhygienic.run `(Term.mix $(quoteTermAux l) $(quoteTermAux u))
-    | .fix s i => Lean.Unhygienic.run `(Term.fix $(quoteTermAux s) $(quoteTermAux i))
-    | .specification m e => Lean.Unhygienic.run `(Term.specification $(quoteTermAux m) $(quoteTermAux e))
-    | .prototype s g => Lean.Unhygienic.run `(Term.prototype $(quoteTermAux s) $(quoteTermAux g))
-    | .reflect p => Lean.Unhygienic.run `(Term.reflect $(quoteTermAux p))
-    | .metadata p => Lean.Unhygienic.run `(Term.metadata $(quoteTermAux p))
-    | .project p => Lean.Unhygienic.run `(Term.project $(quoteTermAux p))
-    | .nat n => Lean.Unhygienic.run `(Term.nat $(quote n))
-    | .boolean b => Lean.Unhygienic.run `(Term.boolean $(quote b))
-    | .label l => Lean.Unhygienic.run `(Term.label $(quote l))
-    | .binary op l r => Lean.Unhygienic.run `(Term.binary $(quote op) $(quoteTermAux l) $(quoteTermAux r))
-    | .extend i fs =>
-      let qfs := (fs.map quoteFieldAux).toArray
-      Lean.Unhygienic.run `(Term.extend $(quoteTermAux i) [ $[$qfs],* ])
-    | .record fs =>
-      let qfs := (fs.map quoteFieldAux).toArray
-      Lean.Unhygienic.run `(Term.record [ $[$qfs],* ])
-    | .get g p => Lean.Unhygienic.run `(Term.get $(quoteTermAux g) $(quote p))
-    | .ifZero v z s => Lean.Unhygienic.run `(Term.ifZero $(quoteTermAux v) $(quoteTermAux z) $(quoteTermAux s))
-    | .inject l p => Lean.Unhygienic.run `(Term.inject $(quote l) $(quoteTermAux p))
-    | .case sc arms =>
-      let qarms := (arms.map quoteFieldAux).toArray
-      Lean.Unhygienic.run `(Term.case $(quoteTermAux sc) [ $[$qarms],* ])
-    | .ifBool c x y => Lean.Unhygienic.run `(Term.ifBool $(quoteTermAux c) $(quoteTermAux x) $(quoteTermAux y))
-    | .perform p => Lean.Unhygienic.run `(Term.perform $(quoteTermAux p))
-    | .done v => Lean.Unhygienic.run `(Term.done $(quoteTermAux v))
-    | .split t names f =>
-      Lean.Unhygienic.run `(Term.split $(quoteTermAux t) $(quote names) $(quoteTermAux f))
-
-  meta partial def quoteFieldAux (kv : String × Term) : TSyntax `term :=
-    Lean.Unhygienic.run `(($(quote kv.1), $(quoteTermAux kv.2)))
-end
-
-meta instance : Quote Term where
-  quote := quoteTermAux
-
-meta instance : Quote Layer where
-  quote L :=
-    Lean.Unhygienic.run `(Layer.mk $(quote L.name) $(quote L.metadata) $(quote L.fields) $(quote L.flat) $(quote L.composeMeta))
-
-meta instance : Quote Composition where
-  quote C :=
-    Lean.Unhygienic.run `(Composition.mk $(quote C.top) $(quote C.below) $(quote C.seed))
-
-meta instance : Quote DefKind where
-  quote
-    | .method => mkIdent ``DefKind.method
-    | .cell   => mkIdent ``DefKind.cell
-
-meta instance : Quote LeafDef where
-  quote d :=
-    Lean.Unhygienic.run `(LeafDef.mk $(quote d.member) $(quote d.slot) $(quote d.kind) $(quote d.code) $(quote d.reads))
-
-meta instance : Quote BookItem where
-  quote
-    | .slot d => Lean.Unhygienic.run `(BookItem.slot $(quote d))
-    | .static m v => Lean.Unhygienic.run `(BookItem.static $(quote m) $(quote v))
-
-meta instance : Quote Book where
-  quote B :=
-    Lean.Unhygienic.run `(Book.mk $(quote B.items))
-
-meta partial def quoteRStepAux : RStep → TSyntax `term
-  | .run n => Lean.Unhygienic.run `(RStep.run $(quote n))
-  | .lateBinding m L => Lean.Unhygienic.run `(RStep.lateBinding $(quote m) $(quote L))
-  | .assoc d => Lean.Unhygienic.run `(RStep.assoc $(quote d))
-  | .composeAssoc d => Lean.Unhygienic.run `(RStep.composeAssoc $(quote d))
-  | .congr ctx focus sub =>
-    let qsub := (sub.map quoteRStepAux).toArray
-    Lean.Unhygienic.run `(RStep.congr $(quote ctx) $(quote focus) [ $[$qsub],* ])
-  | .trans f s =>
-    let qf := (f.map quoteRStepAux).toArray
-    let qs := (s.map quoteRStepAux).toArray
-    Lean.Unhygienic.run `(RStep.trans [ $[$qf],* ] [ $[$qs],* ])
-
-meta instance : Quote RStep where
-  quote := quoteRStepAux
-
-meta instance : Quote ClaimObj where
-  quote c :=
-    Lean.Unhygienic.run `(ClaimObj.mk $(quote c.comp) $(quote c.layer) $(quote c.claim) $(quote c.arity))
-
-meta instance : Quote Support where
-  quote sp :=
-    Lean.Unhygienic.run `(Support.mk $(quote sp.member) $(quote sp.unfolded))
-
-meta instance : Quote Justification where
-  quote
-    | .byDerivation steps => Lean.Unhygienic.run `(Justification.byDerivation $(quote steps))
-    | .byLoweredLean lowered sups receipt =>
-      Lean.Unhygienic.run `(Justification.byLoweredLean $(quote lowered) $(quote sups) (mkByteArrayOfNatList $(quote (receipt.toList.map UInt8.toNat))))
-    | .byExternalJudge fmt bs =>
-      Lean.Unhygienic.run `(Justification.byExternalJudge $(quote fmt) (mkByteArrayOfNatList $(quote (bs.toList.map UInt8.toNat))))
-    | .byEval rows => Lean.Unhygienic.run `(Justification.byEval $(quote rows))
-
-meta def defaultPhysicalLimits : Json :=
-  Json.mkObj [
-    ("heap", toJson "100000"),
-    ("stack", toJson "100000"),
-    ("ticks", toJson "100000"),
-    ("checkWork", toJson "65536")
-  ]
-
-meta def resolveKnotTermPhys (root : Term) (rawFields : List (String × Term)) (visiting : List String) :
-    Nat → Term → Term
-  | 0, t => t
-  | fuel + 1, .get target name =>
-    if Obend.Law.termEq target root then
-      if visiting.contains name then .get root name
-      else
-        match rawFields.lookup name with
-        | some rawBody =>
-          let opened := Obend.Logic.openTerm rawBody root (.record [])
-          resolveKnotTermPhys root rawFields (name :: visiting) fuel opened
-        | none => .get root name
-    else
-      .get (resolveKnotTermPhys root rawFields visiting fuel target) name
-  | fuel + 1, .lam b => .lam (resolveKnotTermPhys root rawFields visiting fuel b)
-  | fuel + 1, .app f a =>
-    .app (resolveKnotTermPhys root rawFields visiting fuel f) (resolveKnotTermPhys root rawFields visiting fuel a)
-  | fuel + 1, .mix l u =>
-    .mix (resolveKnotTermPhys root rawFields visiting fuel l) (resolveKnotTermPhys root rawFields visiting fuel u)
-  | fuel + 1, .fix s i =>
-    .fix (resolveKnotTermPhys root rawFields visiting fuel s) (resolveKnotTermPhys root rawFields visiting fuel i)
-  | fuel + 1, .specification m e =>
-    .specification (resolveKnotTermPhys root rawFields visiting fuel m) (resolveKnotTermPhys root rawFields visiting fuel e)
-  | fuel + 1, .prototype s g =>
-    .prototype (resolveKnotTermPhys root rawFields visiting fuel s) (resolveKnotTermPhys root rawFields visiting fuel g)
-  | fuel + 1, .reflect p => .reflect (resolveKnotTermPhys root rawFields visiting fuel p)
-  | fuel + 1, .metadata p => .metadata (resolveKnotTermPhys root rawFields visiting fuel p)
-  | fuel + 1, .project p => .project (resolveKnotTermPhys root rawFields visiting fuel p)
-  | fuel + 1, .binary op l r =>
-    .binary op (resolveKnotTermPhys root rawFields visiting fuel l) (resolveKnotTermPhys root rawFields visiting fuel r)
-  | fuel + 1, .extend i fs =>
-    .extend (resolveKnotTermPhys root rawFields visiting fuel i)
-      (fs.map fun (k, v) => (k, resolveKnotTermPhys root rawFields visiting fuel v))
-  | fuel + 1, .record fs =>
-    .record (fs.map fun (k, v) => (k, resolveKnotTermPhys root rawFields visiting fuel v))
-  | fuel + 1, .ifZero v z s =>
-    .ifZero (resolveKnotTermPhys root rawFields visiting fuel v)
-      (resolveKnotTermPhys root rawFields visiting fuel z)
-      (resolveKnotTermPhys root rawFields visiting fuel s)
-  | fuel + 1, .inject l p => .inject l (resolveKnotTermPhys root rawFields visiting fuel p)
-  | fuel + 1, .case sc arms =>
-    .case (resolveKnotTermPhys root rawFields visiting fuel sc)
-      (arms.map fun (k, v) => (k, resolveKnotTermPhys root rawFields visiting fuel v))
-  | fuel + 1, .ifBool c x y =>
-    .ifBool (resolveKnotTermPhys root rawFields visiting fuel c)
-      (resolveKnotTermPhys root rawFields visiting fuel x)
-      (resolveKnotTermPhys root rawFields visiting fuel y)
-  | fuel + 1, .perform p => .perform (resolveKnotTermPhys root rawFields visiting fuel p)
-  | fuel + 1, .done v => .done (resolveKnotTermPhys root rawFields visiting fuel v)
-  | fuel + 1, .split t names f =>
-    .split (resolveKnotTermPhys root rawFields visiting fuel t) names
-      (resolveKnotTermPhys root rawFields visiting fuel f)
-  | _ + 1, t => t
-
-meta def decodeWorkbookWithSeedPhys (want : Composition → Bool) : Term → Option Composition
-  | .fix S (.record seed) =>
-    (Obend.Logic.Program.decodeOperands 64 S).bind fun (top, below) =>
-      let C : Composition := ⟨top, below, seed⟩
-      if want C then some C else none
-  | .fix S seedTerm =>
-    (Obend.Logic.Program.decodeOperands 64 S).bind fun (top, below) =>
-      if top.name == "" then none
-      else
-        match Obend.Law.run 20000 seedTerm with
-        | some (.record seed) =>
-          let C : Composition := ⟨top, below, seed⟩
-          if want C then some C else none
-        | _ => none
-  | _ => none
-
-meta def findWorkbookObjectPhys (want : Composition → Bool) : Nat → Term → Option Composition
-  | 0, _ => none
-  | fuel + 1, t =>
-    match decodeWorkbookWithSeedPhys want t with
-    | some C => some C
-    | none => (Obend.Law.step? t).bind (findWorkbookObjectPhys want fuel)
-
-meta def findSelfGetCtxPhys (selfIdx : Nat) : Term → Option (Term × String)
-  | .get (.bound i) m =>
-    if i == selfIdx then some (.bound 0, m) else none
-  | .app f a =>
-    match findSelfGetCtxPhys selfIdx f with
-    | some (ctxF, m) => some (.app ctxF (a.rename Nat.succ), m)
-    | none =>
-      (findSelfGetCtxPhys selfIdx a).map fun (ctxA, m) => (.app (f.rename Nat.succ) ctxA, m)
-  | .binary op l r =>
-    match findSelfGetCtxPhys selfIdx l with
-    | some (ctxL, m) => some (.binary op ctxL (r.rename Nat.succ), m)
-    | none =>
-      (findSelfGetCtxPhys selfIdx r).map fun (ctxR, m) => (.binary op (l.rename Nat.succ) ctxR, m)
-  | _ => none
-
-meta def deriveWorkbookPhys (o : ClaimObj) (r : Term) : Nat → Term → List RStep → Option (List RStep)
-  | 0, _, _ => none
-  | fuel + 1, t, acc =>
-    if Obend.Law.termEq t r then some acc.reverse
-    else match Obend.Law.step? t with
-    | some t' => deriveWorkbookPhys o r fuel t' (Obend.Logic.Program.pushRun acc)
-    | none =>
-      match findSelfGetCtxPhys o.self t with
-      | some (ctx, m) =>
-        match Obend.Logic.symUnfold o.comp o.self m with
-        | some (L, _) =>
-          let step : RStep :=
-            if Obend.Law.termEq ctx (.bound 0) then .lateBinding m L
-            else .congr ctx (.get (.bound o.self) m) [.lateBinding m L]
-          match Obend.Logic.apply (Obend.Logic.claimResolver o.comp o.self) step t with
-          | .ok t' => deriveWorkbookPhys o r fuel t' (step :: acc)
-          | .error _ => none
-        | none => none
-      | none => none
-
-meta def proposeWorkbookDerivationPhys (o : ClaimObj) : Option (List RStep) :=
-  match Obend.Logic.Program.proposeDerivation o with
-  | some steps => some steps
-  | none =>
-    match o.sides with
-    | some (_, l, r) => deriveWorkbookPhys o r 4096 l []
-    | none => none
-
-meta def resolvePhysicalObendPath (path : System.FilePath) : IO System.FilePath := do
-  if ← path.pathExists then
-    return path
-  let s := path.toString
-  let parentPath := System.FilePath.mk ("../" ++ s)
-  if ← parentPath.pathExists then
-    return parentPath
-  if s.startsWith "lean/" then
-    let stripped := System.FilePath.mk (s.drop 5).toString
-    if ← stripped.pathExists then
-      return stripped
-  let prefixed := System.FilePath.mk ("lean/" ++ s)
-  if ← prefixed.pathExists then
-    return prefixed
-  return path
-
-meta structure PhysicalElaboratedDef where
-  name         : String
-  composition? : Option Composition
-  book?        : Option Book
-
-meta structure PhysicalElaboratedClaim where
-  name     : String
-  claimObj : ClaimObj
-  just?    : Option Justification
-  verified : Bool
-
-meta structure PhysicalElaboratedModule where
-  moduleName : String
-  defs       : List PhysicalElaboratedDef
-  claims     : List PhysicalElaboratedClaim
-
-meta def compactLayerForKernel (L : Layer) : Layer :=
-  { L with
-    metadata := .record [("name", .label L.name)]
-    fields := L.fields.filter (fun kv => kv.1 != "#kind")
-    composeMeta := .record [] }
-
-meta def compactCompositionForKernel (C : Composition) : Composition :=
-  { C with
-    top := compactLayerForKernel C.top
-    below := C.below.map compactLayerForKernel
-    seed := C.seed.filter (fun kv => kv.1 != "#kind") }
-
-meta def elaboratePhysicalObendBytes (modName : String) (bytes : ByteArray) :
-    IO (Except String PhysicalElaboratedModule) := do
-  let capRes ← (Obend.Spec.Capture.captureModule #[] modName bytes none [] false).run
-  match capRes with
-  | .error d => return .error s!"{d.stage}: {d.message}"
-  | .ok (srcMod, _) =>
-    let ast ← match Obend.Spec.FrontEnd.parseSource modName srcMod.source with
-      | .ok a => pure a
-      | .error d => return .error s!"{d.stage}: {d.message}"
-    let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
-      | .ok m => pure m
-      | .error d => return .error s!"{d.stage}: {d.message}"
-    let callables := decodedMod.decls.filter fun (d : Obend.Spec.Syntax.Decl) =>
-      match d with
-      | .function .. | .extension .. | .spec .. => true
-      | _ => false
-    let some (lastDecl : Obend.Spec.Syntax.Decl) := callables.getLast?
-      | return .error s!"module {modName} contains no callable declarations"
-    let entryDef := lastDecl.name
-    match Obend.Spec.FrontEnd.lowerDecoded [srcMod] [decodedMod] 0 entryDef
-        (Json.arr #[]) (Json.arr #[]) defaultPhysicalLimits "definition" [] with
-    | .error d => return .error s!"{d.stage}: {d.message}"
-    | .ok lowering =>
-      match Obend.Spec.FrontEnd.accept lowering with
-      | .error d => return .error s!"{d.stage}: {d.message}"
-      | .ok acc =>
-        let erasedTerm := acc.erased
-        let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
-        let rawFields := Obend.Logic.Program.knotFields rootTerm
-        let mut pdefs : List PhysicalElaboratedDef := []
-        for d in callables do
-          let shortName := d.name
-          let fullKey := modName ++ "." ++ shortName
-          let knotTerm : Term := .get rootTerm fullKey
-          let opened := match rawFields.lookup fullKey with
-            | some rb => Obend.Logic.openTerm rb rootTerm (.record [])
-            | none => knotTerm
-          let wantNamed : Composition → Bool := fun C => C.top.name != ""
-          let rawComp? :=
-            match findWorkbookObjectPhys wantNamed 64 knotTerm with
-            | some c => some c
-            | none =>
-              match findWorkbookObjectPhys wantNamed 64 (.app knotTerm (.record [])) with
-              | some c => some c
-              | none =>
-                let inlined := resolveKnotTermPhys rootTerm rawFields [fullKey] 4 opened
-                decodeWorkbookWithSeedPhys wantNamed inlined
-          let foundComp? := rawComp?.map compactCompositionForKernel
-          let book? := foundComp?.map Obend.Leaf.emit
-          pdefs := pdefs ++ [{
-            name := shortName
-            composition? := foundComp?
-            book? := book?
-          }]
-        let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
-        let mut pclaims : List PhysicalElaboratedClaim := []
-        for (specKey, claimName) in rawClaimPairs do
-          let matchingDefs := pdefs.filter fun wd =>
-            match wd.composition? with
-            | some comp => (Obend.Logic.Program.layerIndex comp specKey).isSome
-            | none => false
-          let chosenDef? :=
-            match matchingDefs.find? (fun wd => wd.composition?.any (fun c => c.top.name == specKey)) with
-            | some wd => some wd
-            | none => matchingDefs.head?
-          if let some wd := chosenDef? then
-            if let some comp := wd.composition? then
-              if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
-                let steps? := proposeWorkbookDerivationPhys co
-                let just? := steps?.map Justification.byDerivation
-                let ok := match just? with
-                  | some j => Obend.Logic.obligationCheck 64 co j == .ok
-                  | none => false
-                pclaims := pclaims ++ [{
-                  name := claimName
-                  claimObj := co
-                  just? := just?
-                  verified := ok
-                }]
-        return .ok {
-          moduleName := modName
-          defs := pdefs
-          claims := pclaims
-        }
-
-meta def elaboratePhysicalObendFile (pathStr : String) : IO (Except String PhysicalElaboratedModule) := do
-  let resolved ← resolvePhysicalObendPath (System.FilePath.mk pathStr)
-  let modName := resolved.fileStem.getD "Main"
-  match ← (IO.FS.readBinFile resolved).toBaseIO with
-  | .error e => return .error (toString e)
-  | .ok bytes => elaboratePhysicalObendBytes modName bytes
-
-theorem obligationMeaning_of_check_beq
-    (formats : List Judge.Format) {k : Nat} {o : ClaimObj} {j : Justification}
-    (h : (Obend.Logic.obligationCheckWithJudges formats k o j == .ok) = true) :
-    Obend.Logic.obligationMeaningWithJudges formats o j :=
-  Obend.Logic.obligationWithJudges_sound formats (beq_iff_eq.1 h)
-
-meta def emitPhysicalElaboratedModule (pkg : PhysicalElaboratedModule) (ns : Name) : CommandElabM Unit := do
-  let accId := mkIdent (ns ++ `accepted)
-  let accEqId := mkIdent (ns ++ `accepted_eq)
-  elabCommand (← `(@[expose] public def $accId : Bool := true))
-  elabCommand (← `(public theorem $accEqId : $accId = true := rfl))
-  for d in pkg.defs do
-    if let some comp := d.composition? then
-      let compId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_comp"))
-      elabCommand (← `(@[expose] public def $compId : Composition := $(quote comp)))
-    if let some bk := d.book? then
-      let bookId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_book"))
-      elabCommand (← `(@[expose] public def $bookId : Book := $(quote bk)))
-  for c in pkg.claims do
-    let objId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_obj"))
-    elabCommand (← `(@[expose] public def $objId : ClaimObj := $(quote c.claimObj)))
-    if let some just := c.just? then
-      let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
-      elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
-      if c.verified then
-        let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
-        elabCommand (← `(
-          public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats $objId $justId :=
-            obligationMeaning_of_check_beq Obend.Logic.defaultExternalFormats (k := 64) (o := $objId) (j := $justId) (by decide +kernel)
-        ))
-
-/-- Compile-time `.obend` physical library elaborator `#import_obend "stdlib/physical/..." as Ns`.
-    Parses, typechecks, lowers (`FrontEnd.lowerDecoded`), verifies `FrontEnd.accept`, extracts all
-    open-recursive `Composition`s and `Leaf.Book`s, and emits kernel-checked `@[expose] public def`
-    and `public theorem` declarations into namespace `Ns`. -/
-local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
-  let pathStr := pathLit.getString
-  let res ← IO.toEIO
-    (fun e => Lean.Exception.error Lean.Syntax.missing (Lean.MessageData.ofFormat (Std.Format.text (toString e))))
-    (elaboratePhysicalObendFile pathStr)
-  match res with
-  | .error err =>
-    Lean.throwError m!"#import_obend failed on {pathStr}: {err}"
-  | .ok pkg =>
-    emitPhysicalElaboratedModule pkg nsId.getId
-
-local elab "#import_obend_source " modLit:str srcLit:str " as " nsId:ident : command => do
-  let modName := modLit.getString
-  let src := srcLit.getString
-  let res ← IO.toEIO
-    (fun e => Lean.Exception.error Lean.Syntax.missing (Lean.MessageData.ofFormat (Std.Format.text (toString e))))
-    (elaboratePhysicalObendBytes modName src.toUTF8)
-  match res with
-  | .error err =>
-    Lean.throwError m!"#import_obend_source failed on {modName}: {err}"
-  | .ok pkg =>
-    emitPhysicalElaboratedModule pkg nsId.getId
+/-! ## 0. `#import_obend` is `Obend.Elab.Workbook`'s (the one importer, 2026-11-04); this module
+only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `claim_*_{obj,just,holds}`,
+`laws_count`). -/
 
 /-! ## 1. Compile-Time Elaboration of the 4 Canonical `stdlib/physical/*.obend` Modules via `#import_obend` -/
 
@@ -524,37 +79,6 @@ local elab "#import_obend_source " modLit:str srcLit:str " as " nsId:ident : com
 #import_obend "stdlib/physical/Ms350FcmlPhaseLeg.obend" as StdMs350FcmlPhaseLeg
 #import_obend "stdlib/physical/CleanroomTcadStack.obend" as StdCleanroomTcadStack
 #import_obend "stdlib/physical/Cnc5AxisMill.obend" as StdCnc5AxisMill
-
-/-- All 4 `stdlib/physical/*.obend` modules pass `FrontEnd.accept` and discharge their open-recursion claims! -/
-theorem stdlib_physical_all_accepted_and_claims_hold :
-    StdLcDrivesStator.accepted = true ∧
-    StdMs350FcmlPhaseLeg.accepted = true ∧
-    StdCleanroomTcadStack.accepted = true ∧
-    StdCnc5AxisMill.accepted = true ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      StdLcDrivesStator.claim_peak_temp_open_recursion_obj
-      StdLcDrivesStator.claim_peak_temp_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      StdMs350FcmlPhaseLeg.claim_switching_loss_open_recursion_obj
-      StdMs350FcmlPhaseLeg.claim_switching_loss_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      StdCleanroomTcadStack.claim_drain_current_open_recursion_obj
-      StdCleanroomTcadStack.claim_drain_current_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      StdCleanroomTcadStack.claim_transferred_power_open_recursion_obj
-      StdCleanroomTcadStack.claim_transferred_power_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      StdCnc5AxisMill.claim_volumetric_decomposition_obj
-      StdCnc5AxisMill.claim_volumetric_decomposition_just :=
-  ⟨StdLcDrivesStator.accepted_eq,
-   StdMs350FcmlPhaseLeg.accepted_eq,
-   StdCleanroomTcadStack.accepted_eq,
-   StdCnc5AxisMill.accepted_eq,
-   StdLcDrivesStator.claim_peak_temp_open_recursion_holds,
-   StdMs350FcmlPhaseLeg.claim_switching_loss_open_recursion_holds,
-   StdCleanroomTcadStack.claim_drain_current_open_recursion_holds,
-   StdCleanroomTcadStack.claim_transferred_power_open_recursion_holds,
-   StdCnc5AxisMill.claim_volumetric_decomposition_holds⟩
 
 /-! ## 2. `stdlib/physical/LcDrivesStator.obend` as an Open-Recursive `Obend.Logic.Composition` -/
 
@@ -599,7 +123,7 @@ theorem lcDrivesStatorUsd_book_sound (m : String) :
   book_sound lcDrivesStatorUsdComp lcDrivesStatorUsdComp_closed m
 
 /-- **Static `super` Elimination & Slot Dependency Certificate**. -/
-theorem lcDrivesStatorUsd_book_shape_verified :
+example :
     let B := emit lcDrivesStatorUsdComp
     B.slots = ["massKg", "camSurfaceErrorUm", "thermalResistance", "sdfMargin", "peakWindingTemp"] ∧
     B.defs.map (fun d => (d.member, d.slot, d.kind, d.reads)) =
@@ -652,7 +176,7 @@ theorem cnc5AxisMill_book_sound (m : String) :
 /-! ## 4. Whole-Book Synthesis of `stdlib/physical/*.obend` Parts to FPGA RTL & 64-Bit AMD `CDNA3` VOP64 GPU ISA -/
 
 /-- **End-to-End Userspace `stdlib/physical/LcDrivesStator.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
-theorem userspace_physical_stator_to_fpga_verified :
+example :
     (match compileBookToRtl "lc_drives_userspace_stator" (emit lcDrivesStatorUsdComp) with
      | some m =>
        checkRtlModule m &&
@@ -674,7 +198,7 @@ theorem userspace_physical_stator_to_fpga_verified :
   decide +kernel
 
 /-- **End-to-End Userspace `stdlib/physical/Cnc5AxisMill.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
-theorem userspace_cnc_5axis_to_fpga_and_amd_gpu_verified :
+example :
     (match compileBookToRtl "cnc_5axis_userspace_mill" (emit cnc5AxisMillComp) with
      | some m =>
        checkRtlModule m &&
@@ -1433,20 +957,17 @@ def obendBitwiseQ32Source : String :=
   "def bitwiseQ32Inst() -> BitwiseQ32Target:\n" ++
   "  fix(BitwiseQ32Base, seedBitwiseQ32())\n"
 
-#import_obend_source "BitwiseQ32Mod"
+#obend_decl StdBitwiseQ32 named "BitwiseQ32Mod"
   "edition ObjectiveBend 1\nrecord BitwiseQ32Target:\n  maskVal() -> Nat\n  q32Scaled(x: Nat) -> Nat\n\nspec BitwiseQ32Base for BitwiseQ32Target:\n  requires maskVal() -> Nat\n  def maskVal() -> Nat:\n    (0xFFn & 0x0Fn) | (0x01n << 4n)\n  def q32Scaled(x: Nat) -> Nat:\n    q32ToInt(qmul32(q32FromInt(x), q32FromInt(3n))) ^ (self.maskVal >> 1n)\n\ndef seedBitwiseQ32() -> BitwiseQ32Target:\n  {maskVal: 0n, q32Scaled: fn(x: Nat) -> Nat: 0n}\n\ndef bitwiseQ32Inst() -> BitwiseQ32Target:\n  fix(BitwiseQ32Base, seedBitwiseQ32())\n"
-  as StdBitwiseQ32
-
 /-- **Theorem (`userspace_obend_bitwise_q32_surface_to_rtl_verified`)**:
 Elaborates `obendBitwiseQ32Source` through `Spec.Parse` + `Spec.Elaborate` + `FrontEnd.accept`,
 synthesizes a `Composition` -> `Leaf.Book` -> `RtlModule` + `AmdGpuVop64Inst`, and proves that:
-1. `StdBitwiseQ32.accepted = true` (passes `Obend.Core.Check` translation validation),
+1. `StdBitwiseQ32` elaborates (the `#obend_decl` command succeeded; `Obend.Core.Check` translation validation),
 2. `maskVal = (0xFF & 0x0F) | (1 << 4) = 15 | 16 = 31`,
 3. `q32Scaled(10) = q32ToInt(qmul32(10 << 32, 3 << 32)) ^ (31 >> 1) = 30 ^ 15 = 17` in both
    the synchronous `RtlModule` (`evalModuleOutputs`) and the 64-bit AMD `CDNA3` VOP64 GPU kernel! -/
-theorem userspace_obend_bitwise_q32_surface_to_rtl_verified :
-    (StdBitwiseQ32.accepted &&
-     match compileBookToRtl "bitwise_q32_rtl" StdBitwiseQ32.bitwiseQ32Inst_book with
+example :
+    (match compileBookToRtl "bitwise_q32_rtl" StdBitwiseQ32.bitwiseQ32Inst_book with
      | some m =>
        checkRtlModule m &&
        (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) ==
@@ -1484,14 +1005,12 @@ def obendFullSurfaceSource : String :=
   "def fullSurfaceInst() -> FullSurfaceTarget:\n" ++
   "  fix(FullSurfaceBase, seedFullSurface())\n"
 
-#import_obend_source "FullSurfaceRichMod"
+#obend_decl StdFullSurface named "FullSurfaceRichMod"
   "edition ObjectiveBend 1\nrecord FullSurfaceTarget:\n  negOneMask() -> Nat\n  lshrCheck(x: Nat) -> Nat\n  signedCmpBlend(a: Nat, b: Nat) -> Nat\n\nspec FullSurfaceBase for FullSurfaceTarget:\n  requires negOneMask() -> Nat\n  def negOneMask() -> Nat:\n    ~0n\n  def lshrCheck(x: Nat) -> Nat:\n    (self.negOneMask >>> 60n) + lshr(x, 2n)\n  def signedCmpBlend(a: Nat, b: Nat) -> Nat:\n    if (self.negOneMask <s a) && (a <=s b) then bitAnd(a, 0xFFn) | shl(b, 4n) else bitXor(a, b)\n\ndef seedFullSurface() -> FullSurfaceTarget:\n  {negOneMask: 0n, lshrCheck: fn(x: Nat) -> Nat: 0n, signedCmpBlend: fn(a: Nat, b: Nat) -> Nat: 0n}\n\ndef fullSurfaceInst() -> FullSurfaceTarget:\n  fix(FullSurfaceBase, seedFullSurface())\n"
-  as StdFullSurface
-
 /-- **Theorem (`userspace_obend_full_surface_rich_and_stateful_verified`)**:
 Elaborates `FullSurfaceRichMod` (`~`, `>>>`, `lshr`, `<s`, `<=s`, `bitAnd`, `bitXor`, `shl`, and a
 mixed 0-arg cell + 2-argument method `Book`) and verifies:
-1. `StdFullSurface.accepted = true`,
+1. `StdFullSurface` elaborates (the `#obend_decl` command succeeded),
 2. `compileBookToRtl`, `compileBookToRtlSat`, and `compileRichBookToRtl` all synthesize valid
    2-input `RtlModule`s (`checkRtlModule = true`, `inputNames = ["arg0", "arg1"]`),
 3. `~0n = 0xFFFFFFFFFFFFFFFF#64` (`-1` in signed two's complement), `(negOneMask >>> 60) + lshr(16, 2) = 19#64`,
@@ -1500,8 +1019,7 @@ mixed 0-arg cell + 2-argument method `Book`) and verifies:
 theorem userspace_obend_full_surface_rich_and_stateful_verified :
     let emptyCtx : Obend.Hardware.Types.RtlLayoutCtx :=
       { structSlices := [], unionTagBits := 8, unionArms := [] }
-    (StdFullSurface.accepted &&
-     match compileBookToRtl "full_surface_wrap" StdFullSurface.fullSurfaceInst_book,
+    (match compileBookToRtl "full_surface_wrap" StdFullSurface.fullSurfaceInst_book,
            compileBookToRtlSat "full_surface_sat" StdFullSurface.fullSurfaceInst_book,
            compileRichBookToRtl "full_surface_rich" emptyCtx StdFullSurface.fullSurfaceInst_book with
      | some mWrap, some mSat, some mRich =>

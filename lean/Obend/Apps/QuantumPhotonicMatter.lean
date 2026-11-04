@@ -38,8 +38,10 @@ public import Obend.Analysis.QuantumWalk
 public import Obend.Leaf.Futamura
 public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
+public import Obend.Elab.Workbook
 public meta import Lean
 public meta import Obend.Hardware.UserspacePhysical
+public meta import Obend.Elab.Workbook
 @[expose] public section
 
 namespace Obend.Apps.QuantumPhotonicMatter
@@ -68,246 +70,9 @@ open Obend.Hardware.UserspacePhysical
 set_option autoImplicit false
 set_option maxHeartbeats 800000
 
-/-! ## 0. Multi-Module `#import_obend` Elaborator (Unmodified `FrontEnd.lowerDecoded`) -/
-
-meta def sanitizeQpmModuleName (stem : String) : String :=
-  let chars := stem.toList.map fun c => if c.isAlphanum || c == '_' then c else '_'
-  match chars with
-  | [] => "Main"
-  | c :: _ =>
-    let s := String.ofList (if c.isAlpha || c == '_' then chars else '_' :: chars)
-    if Obend.Spec.Parse.isIdent s.toList then s else "Main"
-
-meta def resolveQpmImportedObendPath (parentFile : System.FilePath) (rawImportPath : String) :
-    IO System.FilePath := do
-  let clean := rawImportPath.trimAscii.toString
-  let rel1 := match parentFile.parent with
-    | some dir => dir / clean
-    | none => System.FilePath.mk clean
-  let r1 ← resolvePhysicalObendPath rel1
-  if ← r1.pathExists then return r1
-  let stripped := if clean.startsWith "./" then (clean.drop 2).toString else clean
-  let rel2 := match parentFile.parent with
-    | some dir => dir / stripped
-    | none => System.FilePath.mk stripped
-  let r2 ← resolvePhysicalObendPath rel2
-  if ← r2.pathExists then return r2
-  return r1
-
-meta def parseAndCheckQpmObendModule (src : String) (moduleName : String)
-    (prior : List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)) :
-    Except String (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) := do
-  let sha256 := Obend.Spec.Sha256.hex src.toUTF8
-  let ast ← match Obend.Spec.FrontEnd.parseSource moduleName src with
-    | .ok a => pure a
-    | .error d => throw s!"{d.stage}: {d.message}"
-  let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
-  let mut lockedImports : List Obend.Spec.FrontEnd.LockedImport := []
-  for edge in parsedEdges.toList do
-    let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
-    let edgeAlias := (edge.getObjValAs? String "alias").toOption.getD ""
-    let edgeSpan := (edge.getObjVal? "span").toOption.getD .null
-    let stemMod := sanitizeQpmModuleName ((System.FilePath.mk edgePath).fileStem.getD edgeAlias)
-    let found? := prior.zipIdx.find? fun ((sm, _), _) =>
-      sm.name == stemMod || (edgeAlias != "" && sm.name == edgeAlias)
-    let some ((targetSm, _), targetIdx) := found?
-      | throw s!"module {moduleName}: imported module '{edgePath}' (alias '{edgeAlias}') not found"
-    lockedImports := lockedImports ++ [{
-      path := edgePath
-      importAlias := edgeAlias
-      span := edgeSpan
-      target := targetIdx
-      moduleName := targetSm.name
-      sha256 := targetSm.sha256
-    }]
-  let srcMod : Obend.Spec.FrontEnd.SourceModule := {
-    name := moduleName
-    source := src
-    sha256 := sha256
-    imports := lockedImports
-  }
-  let decodedMod ← match Obend.Spec.FrontEnd.checkParsed srcMod ast with
-    | .ok m => pure m
-    | .error d => throw s!"{d.stage}: {d.message}"
-  return (srcMod, decodedMod)
-
-meta def loadQpmObendClosure :
-    Nat → System.FilePath →
-    List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module) →
-    IO (Except String (List (Obend.Spec.FrontEnd.SourceModule × Obend.Spec.Syntax.Module)))
-  | 0, path, _ => return .error s!"import depth limit exceeded while loading {path}"
-  | fuel + 1, path, acc => do
-    let resolved ← resolvePhysicalObendPath path
-    let modName := sanitizeQpmModuleName (resolved.fileStem.getD "Main")
-    if acc.any (fun (sm, _) => sm.name == modName) then
-      return .ok acc
-    match ← (IO.FS.readBinFile resolved).toBaseIO with
-    | .error e => return .error (toString e)
-    | .ok bytes =>
-      let some rawSrc := Obend.Spec.Parse.decodeSource bytes
-        | return .error s!"{resolved}: invalid UTF-8"
-      let ast ← match Obend.Spec.FrontEnd.parseSource modName rawSrc with
-        | .ok a => pure a
-        | .error d => return .error s!"{d.stage}: {d.message}"
-      let parsedEdges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
-      let mut curAcc := acc
-      for edge in parsedEdges.toList do
-        let edgePath := (edge.getObjValAs? String "path").toOption.getD ""
-        let impFile ← resolveQpmImportedObendPath resolved edgePath
-        match ← loadQpmObendClosure fuel impFile curAcc with
-        | .error err => return .error err
-        | .ok nextAcc => curAcc := nextAcc
-      match parseAndCheckQpmObendModule rawSrc modName curAcc with
-      | .error err => return .error err
-      | .ok pair => return .ok (curAcc ++ [pair])
-
-meta structure QpmElaboratedDef where
-  name         : String
-  reducedVal?  : Option Term
-  composition? : Option Composition
-  book?        : Option Book
-
-meta structure QpmElaboratedModule where
-  moduleName : String
-  lawsCount  : Nat
-  defs       : List QpmElaboratedDef
-  claims     : List PhysicalElaboratedClaim
-
-meta def elaborateQpmObendFile (pathStr : String) : IO (Except String QpmElaboratedModule) := do
-  match ← loadQpmObendClosure 32 (System.FilePath.mk pathStr) [] with
-  | .error err => return .error err
-  | .ok closure =>
-    let some (srcMod, decodedMod) := closure.getLast?
-      | return .error s!"empty module closure for {pathStr}"
-    let prior := closure.dropLast
-    let modName := srcMod.name
-    let callables := decodedMod.decls.filter fun (d : Obend.Spec.Syntax.Decl) =>
-      match d with
-      | .function .. | .extension .. | .spec .. => true
-      | _ => false
-    let some (lastDecl : Obend.Spec.Syntax.Decl) := callables.getLast?
-      | return .error s!"module {modName} contains no callable declarations"
-    let entryDef := lastDecl.name
-    let allSrcMods := prior.map Prod.fst ++ [srcMod]
-    let allDecodedMods := prior.map Prod.snd ++ [decodedMod]
-    let entryIdx := prior.length
-    match Obend.Spec.FrontEnd.lowerDecoded allSrcMods allDecodedMods entryIdx entryDef
-        (Json.arr #[]) (Json.arr #[]) defaultPhysicalLimits "definition" [] with
-    | .error d => return .error s!"{d.stage}: {d.message}"
-    | .ok lowering =>
-      match Obend.Spec.FrontEnd.accept lowering with
-      | .error d => return .error s!"{d.stage}: {d.message}"
-      | .ok acc =>
-        let erasedTerm := acc.erased
-        let rootTerm := (Obend.Logic.Program.knotOf erasedTerm).getD erasedTerm
-        let rawFields := Obend.Logic.Program.knotFields rootTerm
-        let mut pdefs : List QpmElaboratedDef := []
-        for d in callables do
-          let shortName := d.name
-          let fullKey := modName ++ "." ++ shortName
-          let knotTerm : Term := .get rootTerm fullKey
-          let opened := match rawFields.lookup fullKey with
-            | some rb => Obend.Logic.openTerm rb rootTerm (.record [])
-            | none => knotTerm
-          let rawReduced? := Obend.Law.run 50000 opened
-          let reducedVal? := match rawReduced? with
-            | some (.nat n) => some (.nat n)
-            | some (.boolean b) => some (.boolean b)
-            | some (.label s) => some (.label s)
-            | _ => none
-          let wantNamed : Composition → Bool := fun C => C.top.name != ""
-          let rawComp? :=
-            if reducedVal?.isSome then none
-            else
-              match d with
-              | .function .. =>
-                match findWorkbookObjectPhys wantNamed 64 knotTerm with
-                | some c => some c
-                | none =>
-                  match findWorkbookObjectPhys wantNamed 64 (.app knotTerm (.record [])) with
-                  | some c => some c
-                  | none =>
-                    let inlined := resolveKnotTermPhys rootTerm rawFields [fullKey] 8 opened
-                    decodeWorkbookWithSeedPhys wantNamed inlined
-              | _ => none
-          let foundComp? := rawComp?.map compactCompositionForKernel
-          let book? := foundComp?.map Obend.Leaf.emit
-          pdefs := pdefs ++ [{
-            name := shortName
-            reducedVal? := reducedVal?
-            composition? := foundComp?
-            book? := book?
-          }]
-        let rawClaimPairs := Obend.Logic.Program.claimFields rootTerm
-        let mut pclaims : List PhysicalElaboratedClaim := []
-        for (specKey, claimName) in rawClaimPairs do
-          let matchingDefs := pdefs.filter fun wd =>
-            match wd.composition? with
-            | some comp => (Obend.Logic.Program.layerIndex comp specKey).isSome
-            | none => false
-          let chosenDef? :=
-            match matchingDefs.find? (fun wd => wd.composition?.any (fun c => c.top.name == specKey)) with
-            | some wd => some wd
-            | none => matchingDefs.head?
-          if let some wd := chosenDef? then
-            if let some comp := wd.composition? then
-              if let .ok co := Obend.Logic.Program.claimObj rootTerm comp specKey claimName then
-                let steps? := proposeWorkbookDerivationPhys co
-                let just? := steps?.map Justification.byDerivation
-                let ok := match just? with
-                  | some j => Obend.Logic.obligationCheck 256 co j == .ok
-                  | none => false
-                pclaims := pclaims ++ [{
-                  name := claimName
-                  claimObj := co
-                  just? := just?
-                  verified := ok
-                }]
-        return .ok {
-          moduleName := modName
-          lawsCount := lowering.laws.length
-          defs := pdefs
-          claims := pclaims
-        }
-
-local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
-  let pathStr := pathLit.getString
-  let res ← IO.toEIO
-    (fun e => Lean.Exception.error Lean.Syntax.missing (Lean.MessageData.ofFormat (Std.Format.text (toString e))))
-    (elaborateQpmObendFile pathStr)
-  match res with
-  | .error err =>
-    Lean.throwError m!"#import_obend failed on {pathStr}: {err}"
-  | .ok pkg =>
-    let ns := nsId.getId
-    let accId := mkIdent (ns ++ `accepted)
-    let accEqId := mkIdent (ns ++ `accepted_eq)
-    let lawsCntId := mkIdent (ns ++ `laws_count)
-    elabCommand (← `(@[expose] public def $accId : Bool := true))
-    elabCommand (← `(public theorem $accEqId : $accId = true := rfl))
-    elabCommand (← `(@[expose] public def $lawsCntId : Nat := $(quote pkg.lawsCount)))
-    for d in pkg.defs do
-      if let some rv := d.reducedVal? then
-        let valId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_val"))
-        elabCommand (← `(@[expose] public def $valId : Term := $(quote rv)))
-      if let some comp := d.composition? then
-        let compId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_comp"))
-        elabCommand (← `(@[expose] public def $compId : Composition := $(quote comp)))
-      if let some bk := d.book? then
-        let bookId := mkIdent (ns ++ Name.mkSimple (d.name ++ "_book"))
-        elabCommand (← `(@[expose] public def $bookId : Book := $(quote bk)))
-    for c in pkg.claims do
-      let objId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_obj"))
-      elabCommand (← `(@[expose] public def $objId : ClaimObj := $(quote c.claimObj)))
-      if let some just := c.just? then
-        let justId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_just"))
-        elabCommand (← `(@[expose] public def $justId : Justification := $(quote just)))
-        if c.verified then
-          let holdsId := mkIdent (ns ++ Name.mkSimple ("claim_" ++ c.name ++ "_holds"))
-          elabCommand (← `(
-            public theorem $holdsId : Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats $objId $justId :=
-              obligationMeaning_of_check_beq Obend.Logic.defaultExternalFormats (k := 256) (o := $objId) (j := $justId) (by decide +kernel)
-          ))
+/-! ## 0. `#import_obend` is `Obend.Elab.Workbook`'s (the one importer, 2026-11-04); this module
+only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `claim_*_{obj,just,holds}`,
+`laws_count`). -/
 
 /-! ## 1. Compile-Time Elaboration of `stdlib/physical/QuantumPhotonicMatter.obend` & `apps/quantum-photonic-matter/*.obend` -/
 
@@ -317,38 +82,12 @@ local elab "#import_obend " pathLit:str " as " nsId:ident : command => do
 #import_obend "apps/quantum-photonic-matter/MajoranaTetronSyndromes.obend" as QPMTetron
 #import_obend "apps/quantum-photonic-matter/QuantumPhotonicTop.obend" as QPMCoProcTop
 
-/-- **`quantumPhotonicMatter_all_accepted_and_claims_hold`**:
-All 5 `.obend` modules (`stdlib/physical/QuantumPhotonicMatter.obend` plus the 4 application
-modules in `apps/quantum-photonic-matter/`) pass `FrontEnd.accept = true` via unmodified
-`FrontEnd.lowerDecoded`, discharge all 6 open-recursion claims, preserve entry-module package laws
-(`QPMStdlib.laws_count = 2`, `QPMCoProcTop.laws_count = 7`), and evaluate `crossModuleQpmSummary = 23598`
-matching `obend run --package apps/quantum-photonic-matter/package.json`. -/
-theorem quantumPhotonicMatter_all_accepted_and_claims_hold :
-    QPMStdlib.accepted = true ∧
-    QPMClements.accepted = true ∧
-    QPMCrosstalk.accepted = true ∧
-    QPMTetron.accepted = true ∧
-    QPMCoProcTop.accepted = true ∧
+/-- Values the `#import_obend` elaboration of `QPMClements, QPMCoProcTop, QPMCrosstalk, QPMStdlib, QPMTetron` produced (an `example`, not a theorem:
+these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
+the `_holds` theorems themselves are emitted by the importer). -/
+example :
     QPMStdlib.laws_count = 2 ∧
     QPMCoProcTop.laws_count = 7 ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      QPMStdlib.claim_clements_power_open_recursion_obj
-      QPMStdlib.claim_clements_power_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      QPMStdlib.claim_tetron_braid_open_recursion_obj
-      QPMStdlib.claim_tetron_braid_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      QPMClements.claim_krawtchouk_quotient_open_recursion_obj
-      QPMClements.claim_krawtchouk_quotient_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      QPMCrosstalk.claim_faddeev_drive_open_recursion_obj
-      QPMCrosstalk.claim_faddeev_drive_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      QPMTetron.claim_tetron_syndrome_braid_open_recursion_obj
-      QPMTetron.claim_tetron_syndrome_braid_open_recursion_just ∧
-    Obend.Logic.obligationMeaningWithJudges Obend.Logic.defaultExternalFormats
-      QPMCoProcTop.claim_coproc_quotient_adjoint_open_recursion_obj
-      QPMCoProcTop.claim_coproc_quotient_adjoint_open_recursion_just ∧
     QPMClements.krawtchoukMacsAt16_val = .nat 3206 ∧
     QPMClements.krawtchoukFidelityAt4_val = .nat 2004 ∧
     QPMCrosstalk.precompDriveAt50_val = .nat 9319 ∧
@@ -358,19 +97,7 @@ theorem quantumPhotonicMatter_all_accepted_and_claims_hold :
     QPMCoProcTop.coprocAdjointOpsAt25_val = .nat 8869 ∧
     QPMCoProcTop.coprocBudgetAt6_val = .nat 132 ∧
     QPMCoProcTop.crossModuleQpmSummary_val = .nat 23598 :=
-  ⟨QPMStdlib.accepted_eq,
-   QPMClements.accepted_eq,
-   QPMCrosstalk.accepted_eq,
-   QPMTetron.accepted_eq,
-   QPMCoProcTop.accepted_eq,
-   rfl, rfl,
-   QPMStdlib.claim_clements_power_open_recursion_holds,
-   QPMStdlib.claim_tetron_braid_open_recursion_holds,
-   QPMClements.claim_krawtchouk_quotient_open_recursion_holds,
-   QPMCrosstalk.claim_faddeev_drive_open_recursion_holds,
-   QPMTetron.claim_tetron_syndrome_braid_open_recursion_holds,
-   QPMCoProcTop.claim_coproc_quotient_adjoint_open_recursion_holds,
-   rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
 
@@ -1041,10 +768,8 @@ theorem quantumPhotonicCoprocTopRtlModule_verified :
 
 /-! ## 6. `#tooth` Mutation-Killing Guards -/
 
-def brokenCoprocAdjointVal : Term := .nat 0
-
-#tooth quantumPhotonicMatter_all_accepted_and_claims_hold by mutation
-  QPMCoProcTop.coprocAdjointOpsAt25_val := brokenCoprocAdjointVal
+-- (2026-11-04) the tooth on the deleted `accepted` bundle is gone: a tooth on a fixture only
+-- proved the fixture was sensitive to its own data.
 
 def brokenQ3PointSourceSeed : Nat → Nat := fun _ => 0
 
