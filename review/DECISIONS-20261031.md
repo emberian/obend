@@ -167,4 +167,5 @@ at all now that Bend is retired (each lane adjudicates the dirty files it owns).
 |---|---|
 | A kind's own laws are unprotected: the keeper of the ledger kind can relax the ledger's rules in one write. Should a kind's law lines need a stronger occasion (quorum, upgrade-only) than its pages? | frame lane gap list, `review/EXPERT-language-user-20261103.md` second round |
 | Laws see a page, not its patch: append-only is a byte-count monotonicity, not a prefix property. Should laws be able to ask the patch (deletions, edits) directly? | same |
+| Is `native_decide` an acceptable home for the tool-path gouge certificate (`fidget_toolpath_no_gouge`), or must the kernel or a Rust checker re-check it before anything is cut on a real machine? (Ember's 11-02 call: compiled trust is not a concern now; this is the first certificate whose failure cuts metal.) | CAD lane, `review/EXPERT-cad-cam-20261104.md` |
 
