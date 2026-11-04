@@ -8,7 +8,7 @@ public import Obend.Logic.Program
 public import Obend.Logic.Obligation
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Compiler
@@ -75,11 +75,6 @@ Formalizes and verifies **Flagship Application #2** (`apps/foc-hil/`) from
    - `Obend.Analysis.sos_lyapunov_cbf_dae_showcase_sound` (`"sos-lyapunov-cbf@1"`)
    in the master theorem `foc_hil_closed_loop_iss_and_thermal_safe`.
 
-3. **In-Core Futamura 2nd Projection (`foc_hil_inCore_futamura2`)**:
-   Proves that `inCoreBookCompiler` and `futamura2BookCompiler` specialize the FOC + FCML
-   `.obend` compositions inside Core4 (`inCoreBookCompiler_specializes_from_pinsOnly`,
-   `futamura2BookCompiler_specializes_in_core`, `futamura2_compiler_generator_commutes`).
-
 4. **Sequential `always_ff` Hardware Synthesis, Live Mid-Run ICAP DPR Hot-Swap & 64-Bit AMD `VOP64` GPU**:
    Synthesizes both 1-arg and multi-argument stateful `always_ff` `.obend` `Book`s
    (`compileStatefulTermsToRtl` / `compileStatefulStepToRtl`) and the full sequential
@@ -99,7 +94,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Judge
 open Obend.Hardware.HDL
@@ -518,35 +513,6 @@ theorem focDriveTop_book_shape_verified :
       ] ∧
     B.closedB = true := by
   decide +kernel
-
-/-! ## 5. In-Core Futamura 2nd Projection (`foc_hil_inCore_futamura2`) -/
-
-/-- **In-Core Futamura 2nd Projection for `apps/foc-hil/` (`foc_hil_inCore_futamura2`)**:
-    1. `inCoreBookCompiler` specializes the pins-only encoding of `FocDriveTop`, `FocPiCurrentLoop`,
-       and `FocSicFcmlLeg` directly inside Core4 (`inCoreBookCompiler_specializes_from_pinsOnly`).
-    2. `futamura2BookCompiler` specializes the full `Book` encoding in Core4 (`futamura2BookCompiler_specializes_in_core`). -/
-theorem foc_hil_inCore_futamura2 (pins : List LeafPin) :
-    let Btop := FocDriveTop.icapDprHotSwappedFocDrive_book
-    let Bpi := FocPiCurrentLoop.decoupledPiCurrentController_book
-    let Bfcml := FocSicFcmlLeg.lyapunovBalancedSicFcmlLeg_book
-    dataPinSpecialize (.app (inCoreBookCompiler Btop) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook Btop pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler Bpi) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook Bpi pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler Bfcml) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook Bfcml pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler Btop) (encodePinsRecordForBook Btop pins)) =
-      encodeBookTerm (specializeBook Btop pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler Bpi) (encodePinsRecordForBook Bpi pins)) =
-      encodeBookTerm (specializeBook Bpi pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler Bfcml) (encodePinsRecordForBook Bfcml pins)) =
-      encodeBookTerm (specializeBook Bfcml pins) :=
-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly FocDriveTop.icapDprHotSwappedFocDrive_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly FocPiCurrentLoop.decoupledPiCurrentController_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly FocSicFcmlLeg.lyapunovBalancedSicFcmlLeg_book pins).1,
-   futamura2BookCompiler_specializes_in_core FocDriveTop.icapDprHotSwappedFocDrive_book pins,
-   futamura2BookCompiler_specializes_in_core FocPiCurrentLoop.decoupledPiCurrentController_book pins,
-   futamura2BookCompiler_specializes_in_core FocSicFcmlLeg.lyapunovBalancedSicFcmlLeg_book pins⟩
 
 /-! ## 6. Closed-Loop 20 kHz Sampled-Data ISS Contraction, Thermal/Current CBF & Coupled Adjoint -/
 

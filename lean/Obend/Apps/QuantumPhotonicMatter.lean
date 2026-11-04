@@ -25,17 +25,18 @@ directly to the mechanized quantum/photonic/topological hardware & spectral anal
   * Computed Lagrange–Sylvester projectors on $K_2, P_3, Q_3$ (`computed_lagrange_projectors_k2_p3_q3_exact`),
   * Multi-step discrete-time Szegedy quantum walk lumping (`szegedy_intertwining_power`, `cellUniformSzegedyPST_iff_quotient`),
   * Matrix Taylor propagator quotient intertwining & $\ell_\infty$ remainder enclosure (`matrixTaylorPropagator_intertwines_quotient`, `matrixTaylorPropagator_encloses_k2_and_q3_pst`),
-- `Obend.Leaf.Futamura`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Silicon`:
-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), in-core pins-only 2nd Futamura specialization (`inCoreBookCompiler_specializes_from_pinsOnly`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous `RtlModule` (`quantumPhotonicCoprocTopRtlModule`) emitted directly to `apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv`.
+- `Obend.Leaf.Static`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Silicon`:
+  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous `RtlModule` (`quantumPhotonicCoprocTopRtlModule`) emitted directly to `apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv`.
 -/
 public import Lean
 public import Obend.Hardware.UserspacePhysical
 public import Obend.Hardware.QuantumMatter
+public import Obend.Teeth.Hardware.CliffordKernel
 public import Obend.Hardware.Photonics
 public import Obend.Hardware.Synth
 public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
@@ -52,7 +53,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Slot
 open Obend.Slot.World
@@ -99,7 +100,7 @@ example :
     QPMCoProcTop.crossModuleQpmSummary_val = .nat 23598 :=
   ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
-/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
+/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Cross-Package Cone Survival -/
 
 theorem quantumPhotonicMatter_compositions_closed :
     QPMClements.calibratedKrawtchoukBus_comp.closedB = true ∧
@@ -130,36 +131,6 @@ theorem quantumPhotonicMatter_flatten_and_book_sound (m : String) :
          flatten_sound _ hc2 m, book_sound _ hc2 m,
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
-
-theorem quantumPhotonicMatter_inCore_futamura2 (pins : List LeafPin) :
-    dataPinSpecialize
-      (.app (inCoreBookCompiler QPMClements.calibratedKrawtchoukBus_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook QPMClements.calibratedKrawtchoukBus_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler QPMCrosstalk.closedLoopThermoOpticComp_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook QPMCrosstalk.closedLoopThermoOpticComp_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler QPMTetron.parityCooledTetronDecoder_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook QPMTetron.parityCooledTetronDecoder_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book pins) ∧
-    coneSupports
-      (linkComposition QPMCoProcTop.baseQuantumPhotonicCoProc_comp QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top)
-      ["wlCompressedShells", "faddeevCrosstalkDet"] =
-      coneSupports QPMCoProcTop.baseQuantumPhotonicCoProc_comp ["wlCompressedShells", "faddeevCrosstalkDet"] := by
-  have hflat : QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top.flat = false := by decide +kernel
-  have hdisj : ∀ m ∈ ["wlCompressedShells", "faddeevCrosstalkDet"],
-      m ∉ overlayModifiedFields QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top := by
-    decide +kernel
-  exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly QPMClements.calibratedKrawtchoukBus_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly QPMCrosstalk.closedLoopThermoOpticComp_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly QPMTetron.parityCooledTetronDecoder_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book pins).1,
-         coneSupports_linkComposition_of_disjoint
-           QPMCoProcTop.baseQuantumPhotonicCoProc_comp
-           QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top
-           ["wlCompressedShells", "faddeevCrosstalkDet"] hflat hdisj⟩
 
 theorem quantumPhotonicMatter_rtl_and_amd_gpu_verified :
     (match compileBookToRtl "qpm_coproc_top" QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book,
@@ -330,7 +301,7 @@ theorem quantumPhotonicMatter_wl_quotient_clements_and_cmt_sound
 2. **Computed Lagrange–Sylvester Projectors & Matrix Taylor Propagator PST (`QuantumWalk.lean`)**:
    - `computed_lagrange_projectors_k2_p3_q3_exact` and `matrixTaylorPropagator_encloses_k2_and_q3_pst`,
    - Exact 64-bit integer agreement `evalScaledMatrixTaylorImag hypercubeQ3Matrix 157 100 4 (liftQuotientVec hypercubeQ3Part wQ3) 7 = 9287743200`.
-3. **Topological Majorana Tetron Braiding & Lindblad Parity-Cooling (`QuantumMatter.lean`)**:
+3. **Topological Majorana Tetron Braiding & Lindblad Parity-Cooling (`QuantumMatter.lean`; the braid relation is proved in `Teeth/Hardware/CliffordKernel.lean`, tier 2)**:
    - `majoranaBraid_artin_relation` in both $Cl_4$ and $M_4(\mathbb{Z}[i])$ (`spinorBraidGate`) + non-commutativity,
    - `parityCoolingJumpOp_dark_on_even_and_corrects_odd` across all $a \in \text{Fin } 4$. -/
 theorem quantumPhotonicMatter_szegedy_taylor_and_majorana_sound

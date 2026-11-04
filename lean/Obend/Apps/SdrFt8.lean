@@ -9,7 +9,7 @@ public import Obend.Logic.Obligation
 public import Obend.Logic.Program
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Spec.Parse
 public import Obend.Spec.Elaborate
 public import Obend.Spec.Workspace
@@ -60,8 +60,7 @@ import all Obend.Logic.Obligation
 # Flagship App #3: All-Digital 40m (7.074 MHz) Tayloe IQ FT8 SDR Transceiver (`Obend.Apps.SdrFt8`)
 
 End-to-end formalization, multi-layer `.obend` elaboration, compile-time `AutoCert` external-judge
-synthesis (`"taylor-model@1"`, `"interval@1"`), RF/DSP signoff proofs, in-core Futamura 2nd
-projection specialization, stateful `always_ff` 3-stage CIC + folded symmetric FIR + 4-stage
+synthesis (`"taylor-model@1"`, `"interval@1"`), RF/DSP signoff proofs, stateful `always_ff` 3-stage CIC + folded symmetric FIR + 4-stage
 CORDIC + $\Delta\phi[n] = \phi[n] - \phi[n-1]$ 8-FSK FT8 hardware synthesis (`compileStatefulTermsToRtl` /
 `compileStatefulStepToRtl`), 64-bit AMD `VOP64` GPU equivalence, and cross-package dependency cone
 verification for **Flagship App #3 (`apps/sdr-ft8/`)**:
@@ -90,7 +89,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Judge
 open Obend.Analysis
@@ -497,35 +496,6 @@ theorem sdrFt8Top_book_shape_verified :
       ] ∧
     B.closedB = true := by
   decide +kernel
-
-/-! ## 4. In-Core Futamura 2nd Projection (`sdr_ft8_inCore_futamura2`) -/
-
-/-- **In-Core Futamura 2nd Projection for `apps/sdr-ft8/` (`sdr_ft8_inCore_futamura2`)**:
-    1. `inCoreBookCompiler` specializes the pins-only encoding of `SdrFt8Top`, `SdrCicFir`,
-       and `SdrCordicFt8` directly inside Core4 (`inCoreBookCompiler_specializes_from_pinsOnly`).
-    2. `futamura2BookCompiler` specializes the full `Book` encoding in Core4 (`futamura2BookCompiler_specializes_in_core`). -/
-theorem sdr_ft8_inCore_futamura2 (pins : List LeafPin) :
-    let Btop := SdrFt8Top.calibrated40mSdrFt8_book
-    let Bcic := SdrCicFir.compensatedCicFirChain_book
-    let Bcordic := SdrCordicFt8.unrolled4StageCordicFt8Demod_book
-    dataPinSpecialize (.app (inCoreBookCompiler Btop) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook Btop pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler Bcic) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook Bcic pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler Bcordic) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook Bcordic pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler Btop) (encodePinsRecordForBook Btop pins)) =
-      encodeBookTerm (specializeBook Btop pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler Bcic) (encodePinsRecordForBook Bcic pins)) =
-      encodeBookTerm (specializeBook Bcic pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler Bcordic) (encodePinsRecordForBook Bcordic pins)) =
-      encodeBookTerm (specializeBook Bcordic pins) :=
-  ⟨ (inCoreBookCompiler_specializes_from_pinsOnly SdrFt8Top.calibrated40mSdrFt8_book pins).1
-  , (inCoreBookCompiler_specializes_from_pinsOnly SdrCicFir.compensatedCicFirChain_book pins).1
-  , (inCoreBookCompiler_specializes_from_pinsOnly SdrCordicFt8.unrolled4StageCordicFt8Demod_book pins).1
-  , futamura2BookCompiler_specializes_in_core SdrFt8Top.calibrated40mSdrFt8_book pins
-  , futamura2BookCompiler_specializes_in_core SdrCicFir.compensatedCicFirChain_book pins
-  , futamura2BookCompiler_specializes_in_core SdrCordicFt8.unrolled4StageCordicFt8Demod_book pins ⟩
 
 /-! ## 5. Tayloe IQ Image Rejection, Hogenauer CIC Bit-Width, Folded Symmetric FIR & 4-Stage CORDIC Proofs -/
 
