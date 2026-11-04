@@ -214,6 +214,7 @@ obend open && obend create --from recipes recipes/Soup && cat recipes/Soup.md
 
 ```text
 recipes/_kind: new page (v1)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 created recipes/Soup (kind recipes/_kind)
 ---
@@ -233,6 +234,7 @@ obend open
 
 ```text
 Toast: not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
@@ -328,6 +330,8 @@ cd laptop && sed -i.bak 's/^Gamma is a stub./Gamma, written on the train./' Gamm
 
 ```text
 Gamma: v3 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
@@ -337,6 +341,8 @@ cd vault && sed -i.bak 's/^Gamma is a stub./Gamma, written at my desk./' Gamma.m
 
 ```text
 Gamma: v3 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
@@ -374,6 +380,8 @@ rendered Gamma.md
 
 Gamma, written on the train. See [[Alpha]], and [[Delta]], which I have not written yet.
 nothing changed
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 ```
 
@@ -388,16 +396,24 @@ obend open && obend open && cat Gamma.md
 
 ```text
 Gamma: v4 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 Gamma: v6 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 Gamma: merged from laptop, 1 section(s) to select
 rendered Gamma.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 Gamma: section 1: 2 candidates (owner, owner@laptop); keep one with: obend select Gamma 1 N
 Gamma: v8 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 nothing changed
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
 # Gamma
 
@@ -436,6 +452,8 @@ cd vault && echo 'Beta has grown a line.' >> Beta.md && obend open && obend stat
 
 ```text
 Beta: v4 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 rendered Alpha.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v4) and the bytes it quotes changed
 Alpha v4
@@ -453,6 +471,8 @@ cd vault && sed -i.bak 's/forty-two/42/' Beta.md && rm Beta.md.bak && obend open
 
 ```text
 Beta: v5 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 rendered Alpha.md
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v5) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v5) and the bytes it quotes changed
@@ -472,9 +492,183 @@ cd vault && obend open && obend open
 
 ```text
 nothing changed
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v5) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v5) and the bytes it quotes changed
 nothing changed
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v5) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v5) and the bytes it quotes changed
+```
+
+## 7. Aliases, headings, renames and deletions
+
+Obsidian's daily verbs. An alias, `[[Beta|the answer page]]`, is display text: the link cites Beta.
+A heading embed, `![[Beta#Results]]`, quotes the heading line and goes behind when it changes; a
+heading link, `[[Beta#Results]]`, cites Beta's identity only.
+
+```sh
+cd vault
+printf '# Epsilon\n\nRead [[Beta|the answer page]] and ![[Beta#Results]]; see [[Beta#Results]].\n' > Epsilon.md
+printf '# Beta\n\n## Results\nThe answer is 42. ^answer\n' > Beta.md
+obend open && obend status Epsilon
+```
+
+```text
+Beta: v6 written
+Epsilon: new page (v1)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v6) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v6) and the bytes it quotes changed
+Epsilon v1
+  [[Beta|the answer page]] (link) ✓ current: Beta exists
+  ![[Beta#Results]] (block quote) ✓ current: the bytes it quotes are Beta's now
+  [[Beta#Results]] (link) ✓ current: Beta exists
+```
+
+Change the heading's line, and the heading embed goes behind while the heading link stays current:
+
+```sh
+cd vault && sed -i.bak 's/^## Results$/## Findings/' Beta.md && rm Beta.md.bak && obend open && obend status Epsilon
+```
+
+```text
+Beta: v7 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+rendered Epsilon.md
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Epsilon v1
+  [[Beta|the answer page]] (link) ✓ current: Beta exists
+  ![[Beta#Results]] (block quote) ✗ behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+  [[Beta#Results]] (link) ✓ current: Beta exists
+```
+
+Rename a file, and the page is renamed: same page, same history, and links to the old name still
+hold (they cite the page, not its name):
+
+```sh
+cd vault && mv Delta.md Theta.md && obend open && obend status Gamma
+```
+
+```text
+Delta: renamed to Theta (same page, v1; links to Delta still hold)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Gamma v8
+  [[Alpha]] (link) ✓ current: Alpha exists
+  [[Delta]] (link) ✓ current: Theta exists
+```
+
+Delete a file, and the page is deleted: its cites go missing, its history is kept, and a file of
+its name revives it. Opening again changes nothing.
+
+```sh
+cd vault && rm Theta.md && obend open && obend status Theta && obend open
+```
+
+```text
+Theta: deleted (its file is gone; v1 kept; a file Theta.md revives it)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Gamma: [[Delta]] (link) is missing: Delta has no version
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Theta: deleted (was v1; a file Theta.md revives it, a new file with its text renames it)
+nothing changed
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Gamma: [[Delta]] (link) is missing: Delta has no version
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+```
+
+```sh
+cd vault && printf '# Theta\n\nDelta, at last.\n' > Theta.md && obend open && obend status Theta
+```
+
+```text
+Theta: revived (v1)
+Theta: v2 written
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Theta v2
+```
+
+A page under a kind's laws is not deleted by removing its file: the register's postings, a journal's
+days. The open says which law keeps it and writes it back.
+
+```sh
+cd vault && rm journal/Monday.md && obend open && ls journal
+```
+
+```text
+journal/Monday: its file is gone, but it is under the law journal/_kind: brief: not deleted, written back
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+rendered journal/Monday.md
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Monday.md
+Tuesday.md
+_kind.md
+```
+
+A law may be `monotone(FIELD)` or `writeOnce(FIELD)`; both hold at a page's birth (there is nothing
+for the first reading to fall below), and bite from the second write on:
+
+```sh
+cd vault && printf -- '---\nlaw growing: monotone(words)\n---\nOne two three.\n' > Kappa.md && obend open
+printf -- '---\nlaw growing: monotone(words)\n---\nOne.\n' > Kappa.md && obend open
+```
+
+```text
+Kappa: new page (v1)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Kappa: refused by its law growing: `monotone(words)` does not hold; words = 3 would pass (this write has words = 1)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+```
+
+A page whose birth a law refused says so at every open, not only the first:
+
+```sh
+cd vault && printf -- '---\nlaw tiny: new.words <= 1\n---\nTwo words.\n' > Lambda.md && obend open && obend open
+```
+
+```text
+Lambda: not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+nothing changed
+journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
+Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
+Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
 ```

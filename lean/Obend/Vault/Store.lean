@@ -71,6 +71,10 @@ structure Store where
   pages : List Page := []
   members : List Member := []
   turn : Nat := 0
+  /-- pages whose files were deleted (`forgetMissing`): kept with their history but out of the
+  world, so a cite of one fails `missing`; revived when a file returns under their name, or under
+  a new name carrying their last text (a rename) -/
+  tombs : List Page := []
 deriving Repr
 
 def Page.current (p : Page) : Option Graph := p.history.getLast?
@@ -629,6 +633,73 @@ def openVault (H : Hash) (s : Store) (V : List (String × String)) : Opened :=
   let pages := all.zipIdx.map fun (p, i) => openPage H es (s.turn + i) p (V.lookup p.name)
   let s' : Store := settle H { s with pages := pages, turn := s.turn + all.length }
   ⟨s', writesFor s' V⟩
+
+/-! ### Files that are gone: deletions and renames -/
+
+/-- What an open did about files that are gone. -/
+structure Forgotten where
+  store : Store
+  /-- pages deleted: their files gone, moved to the tombs -/
+  deleted : List String := []
+  /-- pages renamed: a new file carrying a deleted page's last text, `(old name, new name)` -/
+  renamed : List (String × String) := []
+  /-- tombs revived by a file returning under their own name -/
+  revived : List String := []
+  /-- pages whose files are gone but which stay, each with the kind whose laws keep it -/
+  kept : List (String × String) := []
+
+/-- The kind laws a page is under (its own law lines go with its text; its kinds' do not), or
+`none` when its kind does not resolve (then the page is kept, fail closed). -/
+def kindLawsOf (s : Store) (p : Page) : Option Laws :=
+  match p.current with
+  | none => some []
+  | some G =>
+    match kindsFor s.entries p.name (settled G) with
+    | .ok K => some K.laws
+    | .error _ => none
+
+/-- **Deleted and renamed files.** A page the store once saw whose file is gone is DELETED: it
+moves to the tombs, out of the world (every cite of it fails `missing`; its history is kept), unless
+a kind's laws govern it (a posting under the register's kind, a journal page under its kind): such a
+page is not deleted by removing its file, and the open writes it back. A file new to the store that
+carries a tomb's last text REVIVES that tomb under the new name (a rename: same id, same history, and
+cites of it by other pages still hold); a file returning under a tomb's own name revives it there.
+Pages the store has not written yet (never `seen`) are never deleted here: a page born this open has
+no file to lose. -/
+def forgetMissing (s : Store) (V : List (String × String)) : Forgotten := Id.run do
+  let gone := s.pages.filter fun p => p.seen.isSome && (V.lookup p.name).isNone
+  let mut kept : List (String × String) := []
+  let mut deleted : List Page := []
+  for p in gone do
+    match kindLawsOf s p with
+    | some [] => deleted := deleted ++ [p]
+    | some ((law, _) :: _) =>
+      kept := kept ++ [(p.name, "the law " ++ law)]
+    | none => kept := kept ++ [(p.name, "a kind that does not resolve")]
+  let mut pages := s.pages.filter fun p => !deleted.any (·.name == p.name)
+  let mut tombs := s.tombs ++ deleted
+  let mut renamed : List (String × String) := []
+  let mut revived : List String := []
+  for (n, md) in V do
+    if pages.any (·.name == n) then continue
+    match tombs.find? (·.name == n) with
+    | some t =>
+      pages := pages ++ [t]
+      tombs := tombs.filter (·.name != n)
+      revived := revived ++ [n]
+    | none =>
+      match tombs.find? (fun t => t.seen == some md) with
+      | some t =>
+        pages := pages ++ [{ t with name := n }]
+        tombs := tombs.filter (·.name != t.name)
+        renamed := renamed ++ [(t.name, n)]
+      | none => pure ()
+  return ⟨{ s with pages := pages, tombs := tombs }, deleted.map (·.name), renamed, revived, kept⟩
+
+/-- A tomb's line in a status: its name and the version it was at. -/
+def tombLine (p : Page) : String :=
+  p.name ++ ": deleted (was v" ++ toString p.history.length ++ "; a file " ++ p.name ++
+    ".md revives it, a new file with its text renames it)"
 
 /-! ### Opening twice is a no-op -/
 

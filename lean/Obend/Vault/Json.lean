@@ -183,9 +183,12 @@ def memberOf (j : Json) : Except String Member := do
 def schema : String := "obend.vault.world.v1"
 
 def storeJson (s : Store) : Json :=
-  Json.mkObj [("schema", schema), ("turn", toJson s.turn),
+  let base : List (String × Json) := [("schema", schema), ("turn", toJson s.turn),
     ("members", Json.arr (s.members.map memberJson).toArray),
     ("pages", Json.arr (s.pages.map pageJson).toArray)]
+  let tombs : List (String × Json) :=
+    if s.tombs.isEmpty then [] else [("tombs", Json.arr (s.tombs.map pageJson).toArray)]
+  Json.mkObj (base ++ tombs)
 
 def storeOf (j : Json) : Except String Store := do
   let sc ← j.getObjValAs? String "schema"
@@ -193,7 +196,10 @@ def storeOf (j : Json) : Except String Store := do
   let turn ← j.getObjValAs? Nat "turn"
   let members ← (← j.getObjValAs? (Array Json) "members").toList.mapM memberOf
   let pages ← (← j.getObjValAs? (Array Json) "pages").toList.mapM pageOf
-  return { pages := pages, members := members, turn := turn }
+  let tombs ← match j.getObjVal? "tombs" with
+    | .ok (.arr ts) => ts.toList.mapM pageOf
+    | _ => pure []
+  return { pages := pages, members := members, turn := turn, tombs := tombs }
 
 end Obend.Vault.Json
 

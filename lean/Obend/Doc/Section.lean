@@ -67,15 +67,28 @@ open Obend.Slot Obend.Digest.HashBytes
 
 namespace Graph
 
+/-- Canonical source text for a structured cell AST (`Obend.Core.Data.Data`). -/
+@[expose] def cellAstSource : Obend.Core.Data.Data → String
+  | .label s => s
+  | .natural n => toString n
+  | .boolean b => toString b
+  | d => reprStr d
+
 /-- How one atom reads in the page's source: a run its text, a cite its wikilink (an embed with
-its `!`). -/
+its `!`), a field `:key: value`, and a structured cell its canonical fenced `obend #<id>` block. -/
 @[expose] def atomText (G : Graph) (a : AtomId) : String :=
   match G.label a with
   | some (.text s) => s
-  | some (.cite n c) => match c.span with
-    | .page => "![[" ++ n ++ "]]"
-    | _ => "[[" ++ n ++ "]]"
-  | _ => ""
+  | some (.cite n c) =>
+    match n.toList with
+    | '!' :: rest => "![[" ++ String.ofList rest ++ "]]"
+    | _ =>
+      match c.span with
+      | .page => "![[" ++ n ++ "]]"
+      | _ => "[[" ++ n ++ "]]"
+  | some (.field k v) => ":" ++ k ++ ": " ++ v
+  | some (.cell id _ ast _ _) => "```obend #" ++ id ++ "\n" ++ cellAstSource ast ++ "\n```"
+  | none => ""
 
 mutual
 /-- Segments as text, each atom read by `f`. -/
@@ -117,9 +130,17 @@ abbrev World := PageId → List Graph
     | l :: ls => if c = '\n' then [] :: l :: ls else (c :: l) :: ls
     | [] => [[c]]
 
-/-- The block marked `^b`: the first line ending ` ^b` (Obsidian's block identifier). -/
+/-- The block marked `^b` or heading `# b`: the first line ending ` ^b` (Obsidian's block
+identifier), or if none, the first markdown heading line `# b` / `## b` / `### b`. -/
 @[expose] def blockLine (b : String) (src : List Char) : Option (List Char) :=
-  (lines src).find? fun l => (' ' :: '^' :: b.toList).isSuffixOf l
+  let ls := lines src
+  match ls.find? (fun l => (' ' :: '^' :: b.toList).isSuffixOf l) with
+  | some l => some l
+  | none =>
+    ls.find? (fun l =>
+      l == ('#' :: ' ' :: b.toList) ||
+      l == ('#' :: '#' :: ' ' :: b.toList) ||
+      l == ('#' :: '#' :: '#' :: ' ' :: b.toList))
 
 /-- The bytes a span quotes in a page version: none for an identity cite, or for a block the
 version does not mark. -/

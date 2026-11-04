@@ -8,7 +8,10 @@ module
         each page at the current view back to its file (a cite that does not hold is marked,
         `![[Beta]]{behind}`; the reader strips the marks, so a mark is never read as an edit), and
         report what changed, what was refused, which cites are behind and which sections wait for a
-        selection. Twice in a row, the second changes nothing.
+        selection. A file removed is a page deleted (its cites go `missing`; its history is kept and
+        a file of its name revives it), unless a kind's laws govern the page, which is then written
+        back; a new file carrying a deleted page's text is that page renamed (`Store.forgetMissing`).
+        Twice in a row, the second changes nothing.
     obend status [PAGE]
         open, then every page (or PAGE) with its version, each cite and whether it holds, its sections.
     obend merge OTHER_DIR
@@ -92,19 +95,49 @@ def problems (s : Store) : List String :=
     ((citeReport H s p).filterMap fun (c, ok, why) => if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) ++
       (sectionReport p).map (p.name ++ ": " ++ ·)
 
-/-- Open the vault: read, judge, render, write, save. Returns the store and the files as they now are. -/
+/-- What `forgetMissing` did, as lines: a page renamed is not also reported deleted. -/
+def forgottenLines (f : Forgotten) : List String :=
+  ((f.deleted.filter fun n => !f.renamed.any (·.1 == n)).map fun n => n ++ ": deleted (its file is gone; v" ++
+      toString (((f.store.tombs.find? (·.name == n)).map (·.history.length)).getD 0) ++
+      " kept; a file " ++ n ++ ".md revives it)") ++
+    (f.renamed.map fun (o, n) => o ++ ": renamed to " ++ n ++ " (same page, v" ++
+      toString (((f.store.page? n).map (·.history.length)).getD 0) ++ "; links to " ++ o ++ " still hold)") ++
+    (f.revived.map fun n => n ++ ": revived (v" ++
+      toString (((f.store.page? n).map (·.history.length)).getD 0) ++ ")") ++
+    (f.kept.map fun (n, by_) => n ++ ": its file is gone, but it is under " ++ by_ ++ ": not deleted, written back")
+
+/-- Pages whose birth stays refused: said again at every open, so a refusal is not seen once. -/
+def unbornLines (s : Store) (already : List String) : List String :=
+  s.pages.filterMap fun p =>
+    if p.history.isEmpty then
+      match p.note with
+      | some n => if already.any (·.startsWith (p.name ++ ": not born")) then none
+          else some (p.name ++ ": still not born: " ++ n)
+      | none => none
+    else none
+
+/-- Open the vault: read, forget the files that are gone, judge, render, write, save. Returns the
+store and the files as they now are. -/
 def openDir (dir : System.FilePath) (verbose : Bool) : IO (Store × List (String × String)) := do
   let s ← loadStore dir
   let V ← readVault dir
-  let o := openVault H s V
-  writeFiles dir o.writes
+  let f := forgetMissing s V
+  let o := openVault H f.store V
+  -- a page a kind's laws keep is written back from the text the store holds for it
+  let back := f.kept.filterMap fun (n, _) => (o.store.page? n).bind fun p => p.seen.map (n, ·)
+  writeFiles dir (o.writes ++ back)
   saveStore dir o.store
   if verbose then
-    let cs := changes s o.store
-    if cs.isEmpty then IO.println "nothing changed"
+    -- changes are read against the store after deletions and renames: a renamed page is not new
+    let cs := changes f.store o.store
+    let fl := forgottenLines f
+    let ul := unbornLines o.store cs
+    if cs.isEmpty && fl.isEmpty then IO.println "nothing changed"
+    for c in fl do IO.println c
     for c in cs do IO.println c
-    for (n, _) in o.writes do IO.println ("rendered " ++ n ++ ".md")
-  return (o.store, overwrite V o.writes)
+    for c in ul do IO.println c
+    for (n, _) in o.writes ++ back do IO.println ("rendered " ++ n ++ ".md")
+  return (o.store, overwrite (V ++ back) o.writes)
 
 /-- Save a store a command made, and write the files it renders. -/
 def finish (dir : System.FilePath) (s : Store) (V : List (String × String)) : IO Unit := do
@@ -119,10 +152,14 @@ def finish (dir : System.FilePath) (s : Store) (V : List (String × String)) : I
   for (n, _) in w ++ missing do IO.println ("rendered " ++ n ++ ".md")
 
 def statusOf (s : Store) (only : Option String) : List String :=
-  (s.pages.filter fun p => only.all (· == p.name)).flatMap fun p =>
+  ((s.pages.filter fun p => only.all (· == p.name)).flatMap fun p =>
     [p.name ++ " v" ++ toString p.history.length ++ (match p.note with | some n => "; its last write was " ++ n | none => "")] ++
       (citeReport H s p).map (fun (c, ok, why) => "  " ++ c ++ (if ok then " ✓ " else " ✗ ") ++ why) ++
-      (sectionReport p).map ("  " ++ ·)
+      (sectionReport p).map ("  " ++ ·)) ++
+  ((s.tombs.filter fun p => only.all (· == p.name)).map tombLine) ++
+  (match only with
+    | some n => if s.pages.any (·.name == n) || s.tombs.any (·.name == n) then [] else [n ++ ": no such page"]
+    | none => [])
 
 def fail (msg : String) : IO UInt32 := do IO.eprintln msg; return 2
 
@@ -154,8 +191,9 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     return 0
   | ["status"] | ["status", _] => some do
     let (s, _) ← openDir dir false
-    for l in statusOf s (args[1]?) do IO.println l
-    return 0
+    let ls := statusOf s (args[1]?)
+    for l in ls do IO.println l
+    return (if ls.any (·.endsWith ": no such page") then 2 else 0)
   | ["merge", other] => some do
     let (s, V) ← openDir dir false
     let (o, _) ← openDir other false

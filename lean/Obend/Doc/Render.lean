@@ -7,9 +7,11 @@ DESIGN §5, the Obsidian-shaped person's day one: every `.md` is a page, every w
 * `readPage` lexes markdown into runs (one per line, split around wikilinks) and wikilinks, and
   builds the page as a PATCH from the empty page: a chain of `Add`s, so a page read from disk is
   one authored patch like any other. What a wikilink to a page of the vault becomes (Ember's
-  decision (c), REPORT-DOC-20261030 §5): `[[Beta]]` (and `[[Beta#Heading]]`) cites Beta's IDENTITY
-  only, no bytes, current while Beta exists; `![[Beta]]`, an embed, is a following cite of Beta's
-  whole text; `[[Beta#^b]]`, a block reference, a following cite of the line Beta marks `^b`. A
+  decision (c), REPORT-DOC-20261030 §5): `[[Beta]]` (and `[[Beta#Heading]]`, and `[[Beta|shown
+  as]]`, whose alias is display text) cites Beta's IDENTITY only, no bytes, current while Beta
+  exists; `![[Beta]]`, an embed, is a following cite of Beta's whole text; `[[Beta#^b]]`, a block
+  reference, a following cite of the line Beta marks `^b`; `![[Beta#Heading]]` a following cite
+  of the heading line. A
   following byte cite stays current while the bytes it quotes are unchanged (rule (b),
   `Obend.Doc.Section`). A wikilink to no page, or to a block its page does not mark, stays text.
 * `readVault` reads every page twice: once to learn each page's bytes (a page's source does not
@@ -52,15 +54,14 @@ line ends first. -/
 /-- Close the text read so far (kept reversed) as a run, if any. -/
 @[expose] def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
 
-/-- Lex markdown: a run per line, split around wikilinks and embeds. An embed of a block
-(`![[P#^b]]`) is read as a `!` and a block reference. `n` bounds the steps. -/
+/-- Lex markdown: a run per line, split around wikilinks and embeds (including block and heading
+transclusions `![[P#^b]]` and `![[P#Heading]]`). `n` bounds the steps. -/
 @[expose] def lex : Nat → List Char → List Char → List Tok
   | 0, _, acc => flush acc
   | _ + 1, [], acc => flush acc
   | n + 1, '!' :: '[' :: '[' :: rest, acc => match takeLink rest [] with
     | some (name, rest') =>
-      if name.contains '#' then lex n ('[' :: '[' :: rest) ('!' :: acc)
-      else flush acc ++ .embed name :: lex n rest' []
+      flush acc ++ .embed name :: lex n rest' []
     | none => lex n ('[' :: '[' :: rest) ('!' :: acc)
   | n + 1, '[' :: '[' :: rest, acc => match takeLink rest [] with
     | some (name, rest') => flush acc ++ .link name :: lex n rest' []
@@ -71,13 +72,18 @@ line ends first. -/
 /-- The tokens of a markdown text. -/
 @[expose] def tokens (md : String) : List Tok := lex (md.length + 1) md.toList []
 
-/-- A wikilink's page and what of it the link cites: the text before the first `#` names the page;
-`#^b` after it is the block `b`; any other `#…` (a heading) is still the page's identity. An embed
-cites the page's whole text. -/
+/-- A wikilink's page and what of it the link cites. An alias, `[[P|shown as]]`, is display text:
+everything from the first `|` is dropped before the name is read (Obsidian's alias syntax; the
+atom's text keeps it). Of what is left, the text before the first `#` names the page; `#^b` after
+it is the block `b`; for an embed `![[P#Heading]]`, `#Heading` cites the heading block, while for
+an ordinary link `[[P#Heading]]` it cites the page's identity; a bare `![[P]]` cites the page's
+whole text. -/
 @[expose] def target (embed : Bool) (name : List Char) : List Char × Span :=
+  let name := name.takeWhile (· != '|')
   let page := name.takeWhile (· != '#')
   match name.dropWhile (· != '#') with
   | '#' :: '^' :: b => (page, .block (String.ofList b))
+  | '#' :: h => (page, if embed then .block (String.ofList h) else .identity)
   | _ => (page, if embed then .page else .identity)
 
 /-- How a wikilink is resolved: from its page name and span to the cite it becomes, or to nothing
@@ -95,8 +101,11 @@ abbrev Resolve := String → Span → Option Cite
       | none => .text ("[[" ++ String.ofList n ++ "]]")) :: contents resolve ts
   | .embed n :: ts =>
     let (p, sp) := target true n
+    let labelName := match sp with
+      | .page => String.ofList n
+      | _ => "!" ++ String.ofList n
     (match resolve (String.ofList p) sp with
-      | some c => .cite (String.ofList n) c
+      | some c => .cite labelName c
       | none => .text ("![[" ++ String.ofList n ++ "]]")) :: contents resolve ts
 
 /-- A chain of `Add`s: atom `i + 1` after atom `i`, the first after `root`. -/
@@ -147,6 +156,22 @@ def commas : List String → String
   | [s] => s
   | s :: ss => s ++ "," ++ commas ss
 
+/-- Resolve the transcluded text of a cite `c` from the world `W` (at its cited version, or current
+version when present): returns the full page source for `.page`, the matched `^blockId` or
+`# Heading` line for `.block b`, and `none` for `.identity`. -/
+@[expose] def resolveTranscludedText (W : World) (c : Cite) : Option String :=
+  let targetG? := match (W c.page)[c.version]? with
+    | some G => some G
+    | none => W.current c.page
+  match targetG? with
+  | none => none
+  | some G =>
+    match c.span with
+    | .identity => none
+    | .page => some G.source
+    | .block b => (blockLine b G.source.toList).map String.ofList
+    | .bytes r => some (String.ofList ((G.source.toList.drop r.start).take r.len))
+
 /-- How an atom reads at a view: a cite carries the names of its facts that fail. -/
 def viewAtom (H : Hash) (W : World) (G : Graph) (a : AtomId) : String :=
   match G.label a with
@@ -156,10 +181,38 @@ def viewAtom (H : Hash) (W : World) (G : Graph) (a : AtomId) : String :=
     | d => G.atomText a ++ "{" ++ commas (d.map Fact.reason) ++ "}"
   | _ => G.atomText a
 
+/-- How an atom reads when expanding transclusions (`![[Page]]`, `![[Page#^id]]`, `![[Page#Heading]]`)
+from the world `W`: verified embeds inline their resolved target text from `W`, while failed cites
+carry their failure reasons `{...}`. -/
+@[expose] def viewAtomTranscluded (H : Hash) (W : World) (G : Graph) (a : AtomId) : String :=
+  match G.label a with
+  | some (.cite n c) =>
+    match (citeFacts c).filter fun f => !holds H W f with
+    | [] =>
+      let isEmbed : Bool := match n.toList, c.span with
+        | '!' :: _, _ => true
+        | _, .page => true
+        | _, _ => false
+      if isEmbed then
+        match resolveTranscludedText W c with
+        | some txt => txt
+        | none => G.atomText a
+      else
+        G.atomText a
+    | d => G.atomText a ++ "{" ++ commas (d.map Fact.reason) ++ "}"
+  | _ => G.atomText a
+
 /-- A page's rendering at a view: its current version, each cite marked by what fails. -/
 def renderAt (H : Hash) (W : World) (p : PageId) : String :=
   match W.current p with
   | some G => Graph.segsWith (viewAtom H W G) G.content
+  | none => ""
+
+/-- Render page `p` at view `(H, W)` with verified `![[...]]` page/block/heading transclusions
+resolved from the store's world `W`. -/
+@[expose] def renderTranscludedAt (H : Hash) (W : World) (p : PageId) : String :=
+  match W.current p with
+  | some G => Graph.segsWith (viewAtomTranscluded H W G) G.content
   | none => ""
 
 /-- **A page whose cites all hold renders as its source.** -/
@@ -234,6 +287,30 @@ example : renderAt toy revisedVault 2 = "# Beta\nBack to [[Alpha]].\nThe answer,
   decide
 example : renderAt toy revisedVault 1 =
     "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]{behind}\nQuote: [[Beta#^ans]]{behind}\n" := by decide
+
+/-- Block transclusion `![[Beta#^ans]]` lexes as `.embed`, round-trips in `renderAt`, and inlines
+    the cited block line `"The answer. ^ans"` in `renderTranscludedAt`. -/
+@[expose] def blockTransclusionVault : Vault :=
+  [("Alpha", "# Alpha\n![[Beta#^ans]]\n"),
+   ("Beta", "# Beta\nThe answer. ^ans\n")]
+
+example : tokens "![[Beta#^ans]]" = [.embed "Beta#^ans".toList] := by decide
+
+/-- An alias is display text: `[[Beta|the answer page]]` cites Beta's identity, and the page's
+text keeps the alias. -/
+@[expose] def aliasVault : Vault :=
+  [("Alpha", "# Alpha\nSee [[Beta|the answer page]] and [[Beta#^ans|its answer]].\n"),
+   ("Beta", "# Beta\nThe answer. ^ans\n")]
+
+example : target false "Beta|the answer page".toList = ("Beta".toList, .identity) := by decide
+example : target false "Beta#^ans|its answer".toList = ("Beta".toList, .block "ans") := by decide
+example : renderAt toy (aliasVault.read toy) 1 =
+    "# Alpha\nSee [[Beta|the answer page]] and [[Beta#^ans|its answer]].\n" := by decide
+
+example : renderAt toy (blockTransclusionVault.read toy) 1 = "# Alpha\n![[Beta#^ans]]\n" := by decide
+
+example : renderTranscludedAt toy (blockTransclusionVault.read toy) 1 =
+    "# Alpha\nThe answer. ^ans\n" := by decide
 
 end Teeth
 

@@ -127,11 +127,15 @@ def Piece.text : Piece → String
 /-- How a content reads in a page's source (`Graph.atomText` for a stored atom). -/
 def contentText : Content → String
   | .text s => s
-  | .cite n c => match c.span with
-    | .page => "![[" ++ n ++ "]]"
-    | _ => "[[" ++ n ++ "]]"
-  | .field _ _ => ""
-  | .cell _ _ _ _ _ => ""
+  | .cite n c =>
+    match n.toList with
+    | '!' :: rest => "![[" ++ String.ofList rest ++ "]]"
+    | _ =>
+      match c.span with
+      | .page => "![[" ++ n ++ "]]"
+      | _ => "[[" ++ n ++ "]]"
+  | .field k v => ":" ++ k ++ ": " ++ v
+  | .cell id _ ast _ _ => "```obend #" ++ id ++ "\n" ++ Graph.cellAstSource ast ++ "\n```"
 
 theorem atomText_eq (G : Graph) (a : AtomId) :
     G.atomText a = match G.label a with | some c => contentText c | none => "" := by
