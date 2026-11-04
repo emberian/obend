@@ -17,24 +17,27 @@ Every block below is run, in order, by `python3 tests/decisions/walkthrough.py` 
 A decision is a page under `decisions/`, whose kind says what every decision keeps. The decider is a
 label: `ember`, `integrator` (under standing approval) or `lane`; a decision that claims Ember must
 have been posted by the owner (`new.poster`, the member whose text a write is, bound by the vault
-at every write). The environment's theorem names
-are a page of marked lines (a stub census, by hand, until the gate lane's identifier census writes
-it), and a decision that cites a theorem quotes its line. `appendOnly` reads the write, not the
+at every write). The environment's names are the census's list, which the kind names as its
+`environment:` (`lean/.lake/build/census/environment.txt`: the library's constants, written by
+`tests/decisions/Environment.lean` from the tier-1 library, or by `lake build Obend.Census` over
+the whole tree); a decision cites a theorem in backticks, and `cited` refuses a write whose added
+lines name one the list lacks, naming it. `appendOnly` reads the write, not the
 page: `deletions` counts the atoms of the settled text a write tombstoned (an author's change is
 widened to whole lines), so `new.deletions == 0` admits inserted lines and nothing else, where
 `monotone(bytes)` would admit any rewrite that keeps the count.
 
 ```sh
-mkdir ledger && cd ledger && mkdir decisions environment
+ln -s "$OBEND_ROOT/lean" lean && mkdir ledger && cd ledger && mkdir decisions
 cat > decisions/_kind.md <<'MD'
 ---
+environment: ../lean/.lake/build/census/environment.txt
 law dated: not (new.date == 0)
 law dateOnce: writeOnce(date)
 law decider: new.decider in ["ember", "integrator", "lane"]
 law claimed: (new.decider == "ember") implies (new.poster == "owner")
 law deciderOnce: writeOnce(decider)
 law appendOnly: new.deletions == 0
-law cited: new.dangling == 0
+law cited: new.unresolvedInserted == 0
 date: 0
 decider: nobody
 ---
@@ -42,18 +45,6 @@ A decision: dated, decided by Ember, the integrator under standing approval or a
 only when the owner posted it,
 appended to line by line and never shortened or rewritten, and every theorem it names one the
 environment has.
-MD
-cat > environment/Theorems.md <<'MD'
-# Theorem names the environment has
-
-A stub census, by hand. One line per name, each marked so a decision can quote it.
-
-judge_admits ^judge_admits
-judge_refuses ^judge_refuses
-dated_sound ^dated_sound
-no_toctou ^no_toctou
-flatten_sound ^flatten_sound
-solveLawWitness_sound ^solveLawWitness_sound
 MD
 cat > Ledger.md <<'MD'
 ---
@@ -105,7 +96,6 @@ decisions/D-0001: new page (v1)
 decisions/D-0002: new page (v1)
 decisions/D-0003: new page (v1)
 decisions/_kind: new page (v1)
-environment/Theorems: new page (v1)
 Ledger v1
   [[decisions/D-0001]] (link) ✓ current: decisions/D-0001 exists
   [[decisions/D-0002]] (link) ✓ current: decisions/D-0002 exists
@@ -114,8 +104,8 @@ Ledger v1
 
 ## 2. A decision appended
 
-A lane records what it landed, dated, as a lane, resting on two theorems the census has. The
-ledger gains a link (its `appendOnly` holds), the decision is born under the kind's six laws.
+A lane records what it landed, dated, as a lane, resting on two theorems the environment has. The
+ledger gains a link (its `appendOnly` holds), the decision is born under the kind's laws.
 
 ```sh
 cd ledger
@@ -126,8 +116,8 @@ date: 20261104
 decider: lane
 ---
 `monotone(F)` holds at a first write, so a page can be born under it. The vault's judge is what it
-was: [[environment/Theorems#^judge_admits]] and [[environment/Theorems#^judge_refuses]] are
-unchanged. Cost to reverse: one `denote` arm, one `cond` arm, two teeth.
+was: `judge_admits` and `judge_refuses` are unchanged. Cost to reverse: one `denote` arm, one
+`cond` arm, two teeth.
 MD
 printf -- '- [[decisions/D-0004]]\n' >> Ledger.md
 obend open && obend status decisions/D-0004
@@ -137,15 +127,13 @@ obend open && obend status decisions/D-0004
 Ledger: v2 written
 decisions/D-0004: new page (v1)
 decisions/D-0004 v1
-  [[environment/Theorems#^judge_admits]] (block quote) ✓ current: the bytes it quotes are environment/Theorems's now
-  [[environment/Theorems#^judge_refuses]] (block quote) ✓ current: the bytes it quotes are environment/Theorems's now
 ```
 
 ## 3. Refusals, each naming the ancestor and the clause
 
 A decision resting on a theorem the environment does not have (the report's `suggestMultiField_admits`,
-which was cited in THESIS.md and did not exist): its cite dangles, the kind's `cited` refuses, and
-the decision is not born.
+which was cited in THESIS.md and did not exist): the name is not in the census's list, the kind's
+`cited` refuses naming it, and the decision is not born.
 
 ```sh
 cd ledger
@@ -155,14 +143,14 @@ kind: decisions
 date: 20261104
 decider: integrator
 ---
-Constructive repair is proved: [[environment/Theorems#^suggestMultiField_admits]].
+Constructive repair is proved: `suggestMultiField_admits`.
 MD
 obend open && obend status decisions/D-0005
 ```
 
 ```text
-decisions/D-0005: not born: refused by decisions/_kind: cited (the kind of decisions/, an ancestor of decisions/D-0005): `new.dangling == 0` does not hold; dangling = 0 would pass (this write has dangling = 1)
-decisions/D-0005 v0; its last write was refused by decisions/_kind: cited (the kind of decisions/, an ancestor of decisions/D-0005): `new.dangling == 0` does not hold; dangling = 0 would pass (this write has dangling = 1)
+decisions/D-0005: not born: refused by decisions/_kind: cited (the kind of decisions/, an ancestor of decisions/D-0005): `new.unresolvedInserted == 0` does not hold; unresolvedInserted = 0 would pass (this write has unresolvedInserted = 1); names the environment lacks: suggestMultiField_admits
+decisions/D-0005 v0; its last write was refused by decisions/_kind: cited (the kind of decisions/, an ancestor of decisions/D-0005): `new.unresolvedInserted == 0` does not hold; unresolvedInserted = 0 would pass (this write has unresolvedInserted = 1); names the environment lacks: suggestMultiField_admits
 ```
 
 A decider that is none of the three, and a decision without a date: refused by the kind, the line
@@ -392,26 +380,28 @@ decisions/D-0008 v3
 The ledger's natural unit is one decision, and `review/DECISIONS-20261031.md` keeps many on one
 page. A kind law may name the rows a heading begins as its subject: `law appendOnly per ##:
 new.deletions == 0` is judged at every `## ` row of the page, on that row's own measures (its
-words, lines, bytes, links, embeds, quotes and dangling links) and its write's (`deletions`,
-`insertions`: the lines of that row the write removed or rewrote, and added), and a refusal names
-the row. The write is one turn: a row edited in place refuses it, naming the row, and the same rows
+words, lines, bytes, links, embeds, quotes, dangling links and unresolved names) and its write's
+(`deletions`, `insertions`: the lines of that row the write removed or rewrote, and added;
+`unresolvedInserted`: the names the added lines cite that the environment lacks), and a refusal
+names the row. The write is one turn: a row edited in place refuses it, naming the row, and the same rows
 with one appended are admitted.
 
 ```sh
 cd ledger && mkdir log
 cat > log/_kind.md <<'MD'
 ---
+environment: ../lean/.lake/build/census/environment.txt
 law appendOnly per ##: new.deletions == 0
-law cited per ##: new.dangling == 0
+law cited per ##: new.unresolvedInserted == 0
 ---
 A log of decisions, one `## ` row each: a row is appended to and never rewritten, and every
-theorem a row names is one the census has.
+theorem a row names is one the environment has.
 MD
 cat > log/Decisions.md <<'MD'
 # Decisions, as rows
 
 ## D-0001
-No per-theorem axiom lists; one crawling census. Rests on [[environment/Theorems#^judge_admits]].
+No per-theorem axiom lists; one crawling census. Rests on `judge_admits`.
 
 ## D-0002
 Package law at adoption and relaw: adoption judged with old = new state.
@@ -428,36 +418,35 @@ log/_kind: new page (v1)
 ```
 
 One row rewritten in place, and a row appended, in one write: refused at the row rewritten, with
-the value that would pass; the file keeps both. The write has `deletions = 2` there: the line
-rewritten and the blank line that closes it, which the edit's alignment re-writes with the change
-(a change is widened to whole lines, up to the line end that closes it; the page's `deletions`
-counts the same two).
+the value that would pass; the file keeps both. The write has `deletions = 1` there, the line
+rewritten: a change is widened to whole lines, and a whole line inserted or removed re-writes no
+neighbour.
 
 ```sh
 cd ledger
 sed -i.bak 's/^Package law at adoption and relaw: adoption judged with old = new state.$/Package law at adoption only./' log/Decisions.md && rm log/Decisions.md.bak
-printf -- '\n## D-0004\nA law per row, taken by the lane. Rests on [[environment/Theorems#^no_toctou]].\n' >> log/Decisions.md
+printf -- '\n## D-0004\nA law per row, taken by the lane. Rests on `no_toctou`.\n' >> log/Decisions.md
 obend open
 ```
 
 ```text
-log/Decisions: refused by log/_kind: appendOnly per ## (the kind of log/, an ancestor of log/Decisions) at ## D-0002: `new.deletions == 0` does not hold there; deletions = 0 would pass (this write has deletions = 2)
+log/Decisions: refused by log/_kind: appendOnly per ## (the kind of log/, an ancestor of log/Decisions) at ## D-0002: `new.deletions == 0` does not hold there; deletions = 0 would pass (this write has deletions = 1)
 ```
 
-The row put back as it was, the appended row stays: admitted. A row naming a theorem the census
-lacks is refused at that row.
+The row put back as it was, the appended row stays: admitted. A row naming a theorem the
+environment lacks is refused at that row, the name said.
 
 ```sh
 cd ledger
 sed -i.bak 's/^Package law at adoption only.$/Package law at adoption and relaw: adoption judged with old = new state./' log/Decisions.md && rm log/Decisions.md.bak
 obend open
-printf -- '\n## D-0005\nRests on [[environment/Theorems#^suggestMultiField_admits]].\n' >> log/Decisions.md
+printf -- '\n## D-0005\nRests on `suggestMultiField_admits`.\n' >> log/Decisions.md
 obend open
 ```
 
 ```text
 log/Decisions: v2 written
-log/Decisions: refused by log/_kind: cited per ## (the kind of log/, an ancestor of log/Decisions) at ## D-0005: `new.dangling == 0` does not hold there; dangling = 0 would pass (this write has dangling = 1)
+log/Decisions: refused by log/_kind: cited per ## (the kind of log/, an ancestor of log/Decisions) at ## D-0005: `new.unresolvedInserted == 0` does not hold there; unresolvedInserted = 0 would pass (this write has unresolvedInserted = 1); names the environment lacks: suggestMultiField_admits
 ```
 
 What a row cannot carry. `dated` and `deciderOnce` read fields, and a row has none: the reader

@@ -14,6 +14,11 @@ on that page's state, when either side is written (`Obend.Vault.Store`, "Laws ov
 A law named `NAME per ##` is a law over the page's ROWS: judged at every row a `## ` heading
 begins, on that row's measures and its write's (`Obend.Vault.Page`, "Rows").
 
+A backticked name is a cite of the ENVIRONMENT a kind page names (`environment: PATH`, the census's
+list of the library's constants): `new.unresolved` counts the names the page or row cites that it
+lacks, `new.unresolvedInserted` the names a write's inserted lines cite that it lacks
+(`Obend.Vault.Page`, "Names cited in backticks"); a refusal names the names.
+
 A folder's `_kind.md` is a KIND, registered as a kind cell of `Obend.Kind` (`Obend.Vault.vaultKinds`):
 its law lines are laws of every page born under it (not of the kind page itself, which the kinds
 above it judge), and its `key: value` lines the fields such a page starts with. A page carries its kind's identity in its frontmatter (`kind: K`, written by

@@ -58,7 +58,8 @@ def main():
         work = tempfile.mkdtemp(prefix="obend-walkthrough-")
     if not os.path.exists(os.path.join(BIN, "obend")):
         sys.exit("build obend first: lake build obend")
-    env = dict(os.environ, PATH=BIN + os.pathsep + os.environ["PATH"], LC_ALL="C.UTF-8")
+    env = dict(os.environ, PATH=BIN + os.pathsep + os.environ["PATH"], LC_ALL="C.UTF-8",
+               OBEND_ROOT=os.path.dirname(LEAN))
     text = open(DOC, encoding="utf-8").read()
     bs = blocks(text)
     lines = text.split("\n")

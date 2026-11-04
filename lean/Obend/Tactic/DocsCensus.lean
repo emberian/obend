@@ -893,6 +893,47 @@ elab "#docs_census" : command => do
     throwError m!"#docs_census FAIL: {blockedSlots.length} governed doc slot(s) blocked on missing files, modules or constants (paths, `Obend.*` names and bare identifiers in backticks are all supports): {blockedSlots}"
   logInfo m!"#docs_census: {docsChecked} governed markdown docs usable ({totalPaths} path supports, {totalConsts} constant and identifier supports, none dead)."
 
+/-! ## The environment, written for the vaults (2026-11-04)
+
+`#census_environment PATH` writes the names a document may cite, one per line: every constant of
+the package (a module under `Obend`; not internal; no `_tooth` or `_native` component, as
+`Obend.AssertAxioms.theoremCensus` reads them) and the tactics and commands of
+`metaBareIdentAllowlist`, sorted; lines starting with `#` are provenance. A vault whose kind page
+says `environment: PATH` reads it as the set a backticked name resolves against
+(`Obend.Vault.Page.backtickNames`, `unresolvedNames`), by this module's rule for a bare identifier: a
+full name, or the last one or two components of one (`metaConstantSuffixes`). The census writes it
+to `.lake/build/census/environment.txt` (`Obend/Census.lean`, tier 2, the whole tree);
+`tests/decisions/Environment.lean` writes the tier-1 library's to the same path. -/
+
+/-- The package's constant names, sorted. -/
+meta def metaEnvironmentNames (env : Lean.Environment) : Array String := Id.run do
+  let mut names : Array String := #[]
+  for (constant, _) in env.constants.map₁.toList do
+    if constant.isInternal || constant.isInternalDetail then continue
+    if constant.components.any (fun c => c == `_tooth || c == `_native) then continue
+    let some idx := env.getModuleIdxFor? constant | continue
+    let some module := env.header.moduleNames[idx]? | continue
+    unless module.getRoot == `Obend do continue
+    names := names.push constant.toString
+  return names.qsort (fun a b => a < b)
+
+/-- Write the environment to `path`; the number of constant names written. -/
+meta def metaWriteEnvironment (env : Lean.Environment) (path : String) : IO Nat := do
+  let names := metaEnvironmentNames env
+  let modules := (env.header.moduleNames.filter (·.getRoot == `Obend)).size
+  if let some parent := (System.FilePath.mk path).parent then IO.FS.createDirAll parent
+  let header := s!"# environment: {names.size} constants of {modules} Obend modules, written by #census_environment (Obend/Tactic/DocsCensus.lean); a backticked name resolves as one of these or as the last one or two components of one\n# tactics and commands a document may cite (metaBareIdentAllowlist)\n"
+  let allow := String.join (metaBareIdentAllowlist.map (· ++ "\n"))
+  IO.FS.writeFile path (header ++ allow ++ String.join (names.toList.map (· ++ "\n")))
+  return names.size
+
+/-- `#census_environment "PATH"`: write the names the loaded environment has for the vaults to
+resolve cites against. -/
+elab "#census_environment " path:str : command => do
+  let env ← getEnv
+  let n ← liftIO (metaWriteEnvironment env path.getString)
+  logInfo m!"#census_environment: {n} names written to {path.getString}"
+
 set_option maxRecDepth 20000 in
 theorem extractObendLeanPaths_sample :
     extractObendLeanPaths "Obend/Leaf/Futamura.lean lean/Obend/Spec/CrossPackage.lean" =

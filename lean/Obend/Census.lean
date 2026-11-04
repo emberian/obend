@@ -25,6 +25,11 @@ proof, a `#tooth` or an `#assert_compiled` (and says so in a `-- fixture kept` l
 conversion. The documents census (`#check_docs_census` for paths and `Obend.*` names,
 `#docs_census` for every backticked identifier against the environment, `Obend/Tactic/DocsCensus.lean`)
 runs last: a governed root document that cites a name the tree does not have stops the merge.
+Before it, `#census_environment` writes the names the tree has to `.lake/build/census/environment.txt`
+(the package's constants and the allowlisted tactics, one per line): the file a vault's kind page
+names as its `environment:`, against which `obend open` resolves the backticked names a page cites
+(`review/ledger/_kind.md` for the decisions ledger; `Obend/Vault/Page.lean`, "Names cited in
+backticks"). `tests/decisions/Environment.lean` writes the same file from the tier-1 library alone.
 
 ## The time budget (review/DECISIONS-20261031.md, 2026-11-04)
 
@@ -662,5 +667,6 @@ run_cmd do
     throwError "census: tier 1 has `set_option maxHeartbeats` sites outside the 2026-11-04 baseline (a new site, a raised value, or a file not in the list): {heartbeatOffenders.toList}. Restructure the proof or move it to tier 2; the baseline only shrinks."
 
 #assert_axioms_tree
+#census_environment ".lake/build/census/environment.txt"
 #check_docs_census
 #docs_census

@@ -13,7 +13,9 @@ module
         back; a new file carrying a deleted page's text is that page renamed (`Store.forgetMissing`).
         Twice in a row, the second changes nothing.
     obend status [PAGE]
-        open, then every page (or PAGE) with its version, each cite and whether it holds, its sections.
+        open, then every page (or PAGE) with its version, each cite and whether it holds, its sections,
+        and, where a kind page names an `environment:`, the backticked names it cites that the
+        environment lacks.
     obend merge OTHER_DIR
         open both, then merge every page of OTHER_DIR's world into this one (the pushout of the two
         current versions); a page OTHER_DIR has alone is imported.
@@ -32,7 +34,11 @@ module
 
 Every command but `member` opens the vault first (an edit on disk is the owner's write, judged by
 the page's laws), so no command overwrites a file the person changed. `-C DIR` before or after a
-command runs it in DIR.
+command runs it in DIR. A kind page's line `environment: PATH` (PATH relative to the vault) names
+the census's list of the library's names, `.lake/build/census/environment.txt` (`lake build
+Obend.Census`, or `lake env lean tests/decisions/Environment.lean`): the open reads it and the
+page's backticked names resolve against it (`new.unresolved`, `new.unresolvedInserted`); a named
+file that is not there stops the command.
 -/
 public import Obend.Vault.Json
 public import Obend.Digest.Cshake256
@@ -58,6 +64,22 @@ def readVault (dir : System.FilePath) : IO (List (String × String)) := do
   return (out.toList.mergeSort fun a b => decide (a.1 ≤ b.1))
 
 def worldPath (dir : System.FilePath) : System.FilePath := dir / ".obend" / "world.json"
+
+/-- The environment the vault's pages name (`environment: PATH` in a frontmatter; a kind page's, as
+a rule), read from PATH relative to the vault: the census's file, its `#` lines dropped
+(`Obend.Vault.Page`, "Names cited in backticks"). A named file that is not there stops the command. -/
+def loadEnvironment (dir : System.FilePath) (V : List (String × String)) : IO Environment := do
+  let mut names : List String := []
+  for (n, md) in V do
+    for (k, path) in frontFields md do
+      if k == "environment" then
+        let f := dir / path
+        unless ← f.pathExists do
+          throw (IO.userError (n ++ ": its environment " ++ path ++ " is not there; write it with " ++
+            "`lake build Obend.Census` (tier 2) or `cd lean && lake env lean tests/decisions/Environment.lean`"))
+        let txt ← IO.FS.readFile f
+        names := names ++ (txt.splitOn "\n").filter fun l => !l.isEmpty && !l.startsWith "#"
+  return environmentOf names
 
 def loadStore (dir : System.FilePath) : IO Store := do
   if !(← (worldPath dir).pathExists) then return {}
@@ -125,6 +147,7 @@ store and the files as they now are. -/
 def openDir (dir : System.FilePath) (verbose : Bool) : IO (Store × List (String × String)) := do
   let s ← loadStore dir
   let V ← readVault dir
+  let s := { s with environment := ← loadEnvironment dir V }
   let f := forgetMissing s V
   let o := openVault H f.store V
   -- a page a kind's laws keep is written back from the text the store holds for it
@@ -158,6 +181,11 @@ def finish (dir : System.FilePath) (s : Store) (V : List (String × String)) : I
 def statusOf (s : Store) (only : Option String) : List String :=
   ((s.pages.filter fun p => only.all (· == p.name)).flatMap fun p =>
     [p.name ++ " v" ++ toString p.history.length ++ (match p.note with | some n => "; its last write was " ++ n | none => "")] ++
+      (if s.environment.isEmpty then [] else match p.current with
+        | some G =>
+          let ns := unresolvedNames s.environment (settled G)
+          if ns.isEmpty then [] else ["  names the environment lacks: " ++ ", ".intercalate ns]
+        | none => []) ++
       (citeReport H s p).map (fun (c, ok, why) => "  " ++ c ++ (if ok then " ✓ " else " ✗ ") ++ why) ++
       (sectionReport p).map ("  " ++ ·)) ++
   ((s.tombs.filter fun p => only.all (· == p.name)).map tombLine) ++

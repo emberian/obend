@@ -28,8 +28,11 @@ obend status [PAGE]             # each page, each cite and whether it holds
 ```
 
 A page's frontmatter may carry laws, `law NAME: EXPR`, over its measures (`words`, `lines`,
-`bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`), over the write itself
-(`deletions`, `insertions`: `new.deletions == 0` is append-only, line by line) and its numeric fields; a folder's
+`bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`; `unresolved`, the
+backticked names the page cites that the library does not have, where a kind page names the
+census's list as its `environment:`), over the write itself (`deletions`, `insertions`:
+`new.deletions == 0` is append-only, line by line; `unresolvedInserted`: `== 0` says the lines a
+write adds cite no name the library lacks) and its numeric fields; a folder's
 `_kind.md` carries laws for every page in it; a law that reads `linked.date` instead of `new.date`
 is judged at every page the page links to, when either is written; `law appendOnly per ##:
 new.deletions == 0` is judged at every `## ` row of the page, on the row's own measures, and a

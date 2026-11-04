@@ -28,6 +28,12 @@ and the files; `Obend.Vault.Cli` reads and writes them.
 * `reciteIn`: re-justify the cites of a page that are behind (or unverified) against their sources'
   current versions, and resolve the links that dangled.
 
+A backticked name (`judge_admits`) is a cite of the ENVIRONMENT, the census's list of the library's
+constants that a kind page names (`environment: PATH`; `Obend.Vault.Page`, "Names cited in
+backticks"); `new.unresolved` counts the page's (or the row's) names the environment lacks and
+`new.unresolvedInserted` the names a write's inserted lines cite that it lacks, and a refusal of a
+law reading either names the names.
+
 Every write goes through `commit`, which judges it by the page's laws and its kinds'
 (`Obend.Vault.Law.judge`), and refuses a change of a law line by anyone but the owner (or a member
 granted `relaw`).
@@ -78,6 +84,10 @@ structure Store where
   world, so a cite of one fails `missing`; revived when a file returns under their name, or under
   a new name carrying their last text (a rename) -/
   tombs : List Page := []
+  /-- the names a cite in backticks resolves against (`Obend.Vault.Page.Environment`), read from
+  the file a kind page names (`environment: PATH`) at every open (`Obend.Vault.Cli.openDir`); not
+  kept in the world, since it is the machine's library, not the vault's -/
+  environment : Environment := #[]
 deriving Repr
 
 def Page.current (p : Page) : Option Graph := p.history.getLast?
@@ -430,6 +440,19 @@ def rowRefusalText (pageName : String) (laws : Laws) (law reason : String) (fact
       suggest e facts old new []
   | none => "refused by " ++ lawOwnerText pageName law ++ where_ ++ ": " ++ reason
 
+/-- The state's reading of the names a version cites that the environment lacks. -/
+def unresolvedOf (env : Environment) (G : Graph) : List (String × Nat) :=
+  [("unresolved", (unresolvedNames env (settled G)).length)]
+
+/-- The names a refusal of a law over `unresolved` or `unresolvedInserted` is about. -/
+def lackingNote (laws : Laws) (law : String) (unresolved inserted : List String) : String :=
+  match laws.find? (·.1 == law) with
+  | some (_, e, _) =>
+    let names := (if e.fields.contains "unresolvedInserted" then inserted else []) ++
+      (if e.fields.contains "unresolved" then unresolved else [])
+    if names.isEmpty then "" else "; names the environment lacks: " ++ ", ".intercalate names.eraseDups
+  | none => ""
+
 /-! ## Laws over links
 
 A law that reads `linked.F` is a LAW OVER LINKS: its subject is not the page but every page the page
@@ -659,7 +682,8 @@ has none (0). The laws and the states a law over links reads are the store's (`e
 `G'` were resolved against `res` (at an open, the files as they are about to become), which names
 the pages they link to. -/
 def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
-    (turn : Nat) (poster : String := who.name) (res : List Entry := es) : Except String Change := do
+    (turn : Nat) (poster : String := who.name) (res : List Entry := es) (env : Environment := #[]) :
+    Except String Change := do
   let authors := p.authors ++ added
   let p' := { p with authors := authors }
   let v := p.history.length
@@ -672,12 +696,13 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
     | none => pure (Occ.birth, newLaws, [], [])
     | some G =>
       if lawsKept (settled G) (settled G') && moved.isEmpty then
-        pure (Occ.write, newLaws, measures G (v - 1), labelsOf G)
-      else if who.may "relaw" p.name then pure (Occ.adopt, newLaws, measures G (v - 1), labelsOf G)
+        pure (Occ.write, newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
+      else if who.may "relaw" p.name then
+        pure (Occ.adopt, newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
       else if lawsKept (settled G) (settled G') then throw (staleText p.name who.name moved)
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
-  let newMs := measures G' v ++ writeMeasures p.current G'
+  let newMs := measures G' v ++ unresolvedOf env G' ++ writeMeasures env p.current G'
   -- the write's provenance is a label the laws read: `new.poster`, the member whose text this is
   let newLs := ("poster", poster) :: labelsOf G'
   let lin := (laws.filter fun l => !isLinkLaw l.2.2 && (lawSubject l.1).isNone).map fun (n, e, _) => (n, e)
@@ -703,18 +728,21 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
         let atoms := (newRows.lookup title).getD []
         let oldAtoms := oldRows.lookup title
         let rowLs := [("poster", poster)]
-        let nMs := rowMeasures G' v atoms oldAtoms
+        let nMs := rowMeasures env G' v atoms oldAtoms
         let keys := sortNames (nMs.map (·.1) ++ ["poster"] ++ rl.flatMap fun l => l.2.fields)
         let S' := stateTyWith keys ["poster"]
         let n' := stateOfWith keys ["poster"] nMs rowLs
         let (occ', o') := match occ, oldAtoms, p.current with
           | .adopt, _, _ => (Occ.adopt, n')
-          | _, some oa, some G => (Occ.write, stateOfWith keys ["poster"] (rowMeasures G (v - 1) oa none) rowLs)
+          | _, some oa, some G => (Occ.write, stateOfWith keys ["poster"] (rowMeasures env G (v - 1) oa none) rowLs)
           | _, _, _ => (Occ.birth, n')
         match judge S' p.name rl o' n' (requestBy who.name poster occ' facts) with
         | .admitted => pure ()
         | .refused law reason =>
-          throw (rowRefusalText p.name laws law reason facts (occ'.old o' n') n' mark title)
+          let rowText := String.join (atoms.map G'.atomText)
+          let insText := String.join (((atoms.filter fun a => !(oldAtoms.getD []).contains a)).map G'.atomText)
+          throw (rowRefusalText p.name laws law reason facts (occ'.old o' n') n' mark title ++
+            lackingNote laws law (unresolvedNames env rowText) (unresolvedNames env insText))
         | .undecided why => throw ("undecided: " ++ why)
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
@@ -735,14 +763,16 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
     pure ⟨p.history ++ [G'], render G' p.name p'.who, authors, none, kinds.pin⟩
   | .refused law reason =>
     throw (refusalText p.name laws law reason facts (occ.old o n) n
-      ((scalarFields (settled G')).map (·.1)))
+      ((scalarFields (settled G')).map (·.1)) ++
+      lackingNote laws law (unresolvedNames env (settled G')) (unresolvedInsertedNames env p.current G'))
   | .undecided why => throw ("undecided: " ++ why)
 
 /-- **Retargeting the kind needs the grant**: a write that changes the kind a page names, by an actor
 without `relaw` on the page, is refused, whatever its law lines. -/
 theorem commit_kind_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (added : List (AtomId × String))
     (who : Actor) (turn : Nat) (hc : p.current = some G) (hk : kindLine (settled G) ≠ kindLine (settled G'))
-    (hw : who.may "relaw" p.name = false) : ∃ msg, commit es p G' added who turn = .error msg := by
+    (hw : who.may "relaw" p.name = false) {env : Environment} :
+    ∃ msg, commit es p G' added who turn (env := env) = .error msg := by
   have hkept : lawsKept (settled G) (settled G') = false := by
     simp [lawsKept, hk]
   unfold commit
@@ -760,7 +790,8 @@ actor without `relaw` on the page, is refused (`staleText` names the kinds that 
 theorem commit_stale_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (added : List (AtomId × String))
     (who : Actor) (turn : Nat) (hc : p.current = some G) {old : Obend.Kind.KindPin} (hp : p.kind = some old)
     (hm : (movedKinds es old).isEmpty = false)
-    (hw : who.may "relaw" p.name = false) : ∃ msg, commit es p G' added who turn = .error msg := by
+    (hw : who.may "relaw" p.name = false) {env : Environment} :
+    ∃ msg, commit es p G' added who turn (env := env) = .error msg := by
   unfold commit
   cases lawsFor es p.name G' with
   | error m => exact ⟨m, rfl⟩
@@ -780,8 +811,8 @@ def readAs (H : Hash) (res : List Entry) (md : String) : Graph :=
 /-- The version `G'` committed as the owner's write of `md` to `p`, judged at `es` with its cites
 resolved against `res`; or the refusal, with the text it refused. -/
 def writtenAs (es : List Entry) (turn : Nat) (p : Page) (md : String) (G' : Graph) (added : List AtomId)
-    (res : List Entry) : Change :=
-  match commit es p G' (added.map (·, "owner")) .owner turn (res := res) with
+    (res : List Entry) (env : Environment := #[]) : Change :=
+  match commit es p G' (added.map (·, "owner")) .owner turn (res := res) (env := env) with
   | .ok ch => { ch with note := none }
   | .error msg => ⟨p.history, md, p.authors, some msg, p.kind⟩
 
@@ -789,21 +820,21 @@ def writtenAs (es : List Entry) (turn : Nat) (p : Page) (md : String) (G' : Grap
 say), or a refused edit was put back: nothing to write; the view is redrawn, and the page's last
 write is no longer a refused one. Else the edited version, committed. -/
 def editedAs (es : List Entry) (turn : Nat) (p : Page) (md : String) (G : Graph) (b : Built)
-    (res : List Entry) : Change :=
+    (res : List Entry) (env : Environment := #[]) : Change :=
   if b.ops.isEmpty then ⟨p.history, md, p.authors, none, p.kind⟩
-  else writtenAs es turn p md (G.apply b.ops) b.added res
+  else writtenAs es turn p md (G.apply b.ops) b.added res env
 
 /-- The owner's write of the text `md` to page `p`: the file lined up against the current rendering,
 or a birth, its cites resolved against `res` (the store's entries, or at an open the files as they
 are about to become) and judged at the store `es`. -/
 def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String)
-    (res : List Entry := es) : Change :=
+    (res : List Entry := es) (env : Environment := #[]) : Change :=
   match p.current with
-  | none => writtenAs es turn p md (readAs H res md) [] res
+  | none => writtenAs es turn p md (readAs H res md) [] res env
   | some G =>
     editedAs es turn p md G
       (editPatch H G (align (pieces G p.name p.who) (contents (resolveIn H res) (stripToks (tokens md)))) "owner")
-      res
+      res env
 
 /-! ### Admission: a write is a turn, admitted when its pins hold -/
 
@@ -867,7 +898,7 @@ def Store.setPage (s : Store) (p : Page) : Store :=
 
 /-- A write judged at a store: the owner's write of `md` to `p`, its cites resolved against `res`. -/
 def judgeAt (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String) : Change :=
-  ownerWrite H s.entries s.turn p md res
+  ownerWrite H s.entries s.turn p md res s.environment
 
 /-- The store after the write of `md` to `p` is judged: the page with the change, one turn later. -/
 def afterAdmit (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String) : Store :=
@@ -1094,7 +1125,7 @@ def fixDangling (H : Hash) (s : Store) (p : Page) : Page :=
   | some G =>
     let (G', added, n) := replaceAll H G (pieces G p.name p.who) (danglingOf H s.entries) "owner"
     if n = 0 then p else
-    match commit s.entries p G' (added.map (·, "owner")) .owner s.turn with
+    match commit s.entries p G' (added.map (·, "owner")) .owner s.turn (env := s.environment) with
     | .ok ch => p.withChange ch
     | .error _ => p
 
@@ -1465,19 +1496,19 @@ theorem pinsAt_holds (es : List Entry) (cells : List String) :
   obtain ⟨c, _, rfl⟩ := List.mem_map.1 hq
   rfl
 
-theorem writtenAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String} {G' : Graph}
+theorem writtenAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String} {G' : Graph} {env : Environment}
     {added : List AtomId} {res : List Entry} {m : String}
-    (h : (writtenAs es turn p md G' added res).note = some m) :
-    (writtenAs es turn p md G' added res).history = p.history := by
+    (h : (writtenAs es turn p md G' added res env).note = some m) :
+    (writtenAs es turn p md G' added res env).history = p.history := by
   unfold writtenAs at h ⊢
   split at h
   · simp at h
   · rfl
 
-theorem editedAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String} {G : Graph}
+theorem editedAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String} {G : Graph} {env : Environment}
     {b : Built} {res : List Entry} {m : String}
-    (h : (editedAs es turn p md G b res).note = some m) :
-    (editedAs es turn p md G b res).history = p.history := by
+    (h : (editedAs es turn p md G b res env).note = some m) :
+    (editedAs es turn p md G b res env).history = p.history := by
   by_cases hb : b.ops.isEmpty = true
   · simp only [editedAs, hb, ite_true] at h
     simp at h
@@ -1486,8 +1517,9 @@ theorem editedAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String}
 
 /-- A refused write leaves the page's history. -/
 theorem ownerWrite_history_of_note {H : Hash} {es res : List Entry} {turn : Nat} {p : Page} {md m : String}
-    (h : (ownerWrite H es turn p md res).note = some m) :
-    (ownerWrite H es turn p md res).history = p.history := by
+    {env : Environment}
+    (h : (ownerWrite H es turn p md res env).note = some m) :
+    (ownerWrite H es turn p md res env).history = p.history := by
   unfold ownerWrite at h ⊢
   revert h
   cases p.current with
@@ -1649,7 +1681,7 @@ Each takes the store as an open left it and returns the new store, or why it ref
 when not `who`'s own (a selection: the kept candidate's author). -/
 def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
     (poster : Option String := none) : Except String Store := do
-  match commit s.entries p G' added who s.turn (poster.getD who.name) with
+  match commit s.entries p G' added who s.turn (poster.getD who.name) (env := s.environment) with
   | .ok ch => return s.setPage (p.withChange ch)
   | .error msg => throw (p.name ++ ": " ++ msg)
 
@@ -1836,7 +1868,7 @@ def createFrom (s : Store) (k page : String) : Except String String := do
   if (s.page? page).isSome then throw ("refused: " ++ page ++ " exists")
   let some kp := s.page? kn | throw ("refused (unknown-kind): no kind page " ++ kn)
   let some G := kp.current | throw ("refused (unknown-kind): " ++ kn ++ " has no version")
-  let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents"
+  let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents" && key != "environment"
   if isKind page then
     if kn == page then throw ("refused (kind-cycle): " ++ page ++ " is its own ancestor")
     let laws := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isSome
@@ -1864,7 +1896,7 @@ theorem createFrom_kind_preserves_ancestor_laws
     (∃ kp G,
       s.page? (kindName k) = some kp ∧
       kp.current = some G ∧
-      let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents"
+      let fields := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isNone && key != "kind" && key != "parents" && key != "environment"
       let laws := (frontFields (settled G)).filter fun (key, _) => (lawKey key).isSome
       md = "---\nparents: " ++ kindName k ++ "\n" ++
         String.join (fields.map fun (key, v) => key ++ ": " ++ v ++ "\n") ++

@@ -342,9 +342,94 @@ def danglingCount (G : Graph) : Nat :=
 def settledAtoms (G : Graph) : List AtomId :=
   G.content.filterMap fun | .run a => some a | _ => none
 
+/-! ## Names cited in backticks
+
+A backticked identifier is a CITE OF THE ENVIRONMENT: `judge_admits`, `Checked.eq_of_type`,
+`Obend.Vault.judge_admits`. Which spans are cites is the documents census's rule
+(`Obend.Tactic.DocsCensus`, `metaBareIdentToken?`): a single-backtick span on one line, outside a
+fenced block, holding one token (no space, `(`, `:`, `/`, `-` or `@`), whose last dotted component
+starts lowercase and has an underscore; anything else in backticks (a path, a flag, a hash, prose)
+is not a cite. The environment they resolve against is the file a kind page names
+(`environment: PATH`, read at every open by `Obend.Vault.Cli.openDir`): the census's list of the
+package's constants, one full name per line (`#census_environment`, written by `lake build
+Obend.Census` or `lake env lean tests/decisions/Environment.lean`). A name resolves as a full name
+or as the last one or two components of one, the census's rule (`metaConstantSuffixes`). A vault
+that names no environment resolves nothing: every cite is unresolved there.
+
+Two measures read them. `unresolved` is of the state: the names the page (or the row) cites that
+the environment lacks. `unresolvedInserted` is of the write: the names the lines this write
+inserted cite that the environment lacks; `new.unresolvedInserted == 0` says a write introduces no
+unknown name and says nothing of the names already there, which is what a ledger means (its
+history stands when a theorem is renamed, and a section with an old name can still be appended to).
+A refusal of either names the names. Neither is a reading of a linked page (`linked.F`). -/
+
+/-- The single-backtick spans of a text, line by line; a fenced block (` ``` ` lines) is skipped. -/
+def backtickSpans (src : String) : List String :=
+  let step (acc : List String × Bool) (line : String) : List String × Bool :=
+    if line.startsWith "```" then (acc.1, !acc.2)
+    else if acc.2 then acc
+    else
+      let parts := line.splitOn "`"
+      (acc.1 ++ ((parts.zipIdx.filter fun (_, i) => i % 2 == 1).map (·.1)).filter (· != ""), acc.2)
+  ((src.splitOn "\n").foldl step ([], false)).1
+
+/-- The name a span cites, when the span is one identifier-shaped token. -/
+def citedName? (span : String) : Option String :=
+  if span.any (fun c => c == ' ' || c == '(' || c == ':' || c == '/' || c == '-' || c == '@') then none
+  else
+    let tok := String.ofList (span.toList.reverse.dropWhile (· == '.')).reverse
+    let parts := tok.splitOn "."
+    match parts.getLast? with
+    | none => none
+    | some last =>
+      match last.toList with
+      | [] => none
+      | c :: _ =>
+        if !c.isLower || !(last.toList.contains '_') then none
+        else if !(last.toList.all fun ch => ch.isAlphanum || ch == '_' || ch == '\'') then none
+        else if parts.any (·.isEmpty) then none
+        else some tok
+
+/-- The names a text cites, each once, in order. -/
+def backtickNames (src : String) : List String := ((backtickSpans src).filterMap citedName?).eraseDups
+
+/-- An environment as a vault holds it: the names a cite may resolve to, sorted and searched by
+bisection: every full name of the census's file and, for each, its last one or two components. -/
+abbrev Environment := Array String
+
+/-- Drop the repeats of a sorted array. -/
+def dedupSorted (xs : Array String) : Array String :=
+  xs.foldl (fun acc x => if acc.back? == some x then acc else acc.push x) #[]
+
+/-- The environment of a list of full names (the census's file, its `#` lines dropped). -/
+def environmentOf (fullNames : List String) : Environment :=
+  dedupSorted ((fullNames.flatMap fun n =>
+    match (n.splitOn ".").reverse with
+    | last :: penult :: _ => [n, last, penult ++ "." ++ last]
+    | [last] => [n, last]
+    | [] => []).toArray.qsort (fun a b => a < b))
+
+/-- Whether a name resolves in an environment. -/
+def resolvesIn (env : Environment) (name : String) : Bool :=
+  (env.binSearch name (fun a b => a < b)).isSome
+
+/-- The names a text cites that the environment lacks (`unresolved`). -/
+def unresolvedNames (env : Environment) (src : String) : List String :=
+  (backtickNames src).filter fun n => !resolvesIn env n
+
+/-- The atoms of the new version's settled text the old version did not have: the write's
+insertions, as atoms (`insertions` counts them). -/
+def insertedAtoms (old : Option Graph) (new : Graph) : List AtomId :=
+  (settledAtoms new).filter fun a => new.present a && !(old.map (·.present a)).getD false
+
+/-- The names the lines a write inserted cite that the environment lacks (`unresolvedInserted`). -/
+def unresolvedInsertedNames (env : Environment) (old : Option Graph) (new : Graph) : List String :=
+  unresolvedNames env (String.join ((insertedAtoms old new).map new.atomText))
+
 /-- **The write's deletions**: the atoms of the old version's settled text that the new version
 tombstones. An author's write deletes the pieces the file dropped and, because a change is widened
-to whole lines (`widenStretch`), every atom of a line it changed; so `new.deletions == 0` says the
+to whole lines (`widenStretch`), every atom of a line it changed, and nothing of a line it only
+inserted before or after; so `new.deletions == 0` says the
 write removed or rewrote no line of the page's text, only inserted lines — the append-only a ledger
 means, which `monotone(bytes)` cannot say (an equal-length rewrite keeps the count). A member's post
 deletes nothing (its candidates sit in a section); a selection tombstones the other candidates,
@@ -359,10 +444,23 @@ have (at a birth, all of them). Of the patch: `insertions_apply`. -/
 def insertions (old : Option Graph) (new : Graph) : Nat :=
   (settledAtoms new).countP fun a => new.present a && !(old.map (·.present a)).getD false
 
-/-- What a law reads of a write besides the new version: how the write changed the page. The old
-version has no reading of these (a law reads them as `new.deletions`, `new.insertions`). -/
-def writeMeasures (old : Option Graph) (new : Graph) : List (String × Nat) :=
-  [("deletions", deletions old new), ("insertions", insertions old new)]
+/-- What a law reads of a write besides the new version: how the write changed the page, and
+which names its inserted lines cite that the environment lacks. The old version has no reading of
+these (a law reads them as `new.deletions`, `new.insertions`, `new.unresolvedInserted`). -/
+def writeMeasures (env : Environment) (old : Option Graph) (new : Graph) : List (String × Nat) :=
+  [("deletions", deletions old new), ("insertions", insertions old new),
+   ("unresolvedInserted", (unresolvedInsertedNames env old new).length)]
+
+/-- **`insertedAtoms` agrees with `Doc.apply`**: for an authored patch, the inserted atoms of the
+write are the atoms of the new settled text the patch adds that were not present before. -/
+theorem insertedAtoms_apply (G : Graph) (p : Patch) (hf : Patch.forward p = true) :
+    insertedAtoms (some G) (G.apply p) =
+      (settledAtoms (G.apply p)).filter fun a => (Patch.adds p).contains a && !G.present a := by
+  simp only [insertedAtoms, Option.map_some, Option.getD_some]
+  apply List.filter_congr
+  intro a _
+  rw [present_apply_forward G p hf a]
+  cases G.present a <;> simp
 
 /-- **`deletions` agrees with `Doc.apply`**: for an authored patch, the deletions of the write are
 the atoms of the old settled text, not yet dead, that the patch deletes. -/
@@ -434,10 +532,11 @@ def rowsOf (mark : String) (G : Graph) : List (String × List AtomId) :=
 /-- The measures of a row (its atoms `atoms` in the version `G`): of its text, as a page's
 (`measures`), with the write's `deletions` and `insertions` against the row of the same title in
 the old version (`old`: its atoms; none when the row is new): the atoms of the old row the new row
-lacks, and the atoms of the new row the old row lacked. A row the new version lacks has every
-measure 0 and `deletions` the old row's atoms. -/
-def rowMeasures (G : Graph) (version : Nat) (atoms : List AtomId) (old : Option (List AtomId)) :
-    List (String × Nat) :=
+lacks, and the atoms of the new row the old row lacked; `unresolved` and `unresolvedInserted` over
+the row's text and its inserted lines. A row the new version lacks has every measure 0 and
+`deletions` the old row's atoms. -/
+def rowMeasures (env : Environment) (G : Graph) (version : Nat) (atoms : List AtomId)
+    (old : Option (List AtomId)) : List (String × Nat) :=
   let src := String.join (atoms.map G.atomText)
   let counts := atoms.foldl (fun (acc : Nat × Nat × Nat × Nat) a => match G.label a with
     | some (.cite _ c) => match c.span with
@@ -450,15 +549,19 @@ def rowMeasures (G : Graph) (version : Nat) (atoms : List AtomId) (old : Option 
     | _ => acc) (0, 0, 0, 0)
   let (links, embeds, quotes, dangling) := counts
   let oldAtoms := old.getD []
+  let inserted := atoms.filter fun a => !oldAtoms.contains a
   [("bytes", (bytes src).length), ("dangling", dangling),
    ("deletions", (oldAtoms.filter fun a => !atoms.contains a).length), ("embeds", embeds),
-   ("insertions", (atoms.filter fun a => !oldAtoms.contains a).length), ("lines", lineCount src),
-   ("links", links), ("quotes", quotes), ("sections", 0), ("version", version), ("words", wordCount src)]
+   ("insertions", inserted.length), ("lines", lineCount src),
+   ("links", links), ("quotes", quotes), ("sections", 0),
+   ("unresolved", (unresolvedNames env src).length),
+   ("unresolvedInserted", (unresolvedNames env (String.join (inserted.map G.atomText))).length),
+   ("version", version), ("words", wordCount src)]
 
 /-- The names of the measures, a version's and a write's. -/
 def measureNames : List String :=
   ["bytes", "dangling", "deletions", "embeds", "insertions", "lines", "links", "poster", "quotes", "sections",
-   "version", "words"]
+   "unresolved", "unresolvedInserted", "version", "words"]
 
 /-- What a law reads of a version: its measures and its frontmatter's scalar fields (a measure
 wins over a field of the same name). -/
@@ -513,7 +616,7 @@ def lcs (a b : Array String) : List Step := Id.run do
       out := out.push (.ins j); j := j + 1
   return out.toList
 
-/-- An alignment step with what it carries. -/
+/-- An alignment step with what it carries; a deleted atom carries whether its text ended a line. -/
 inductive Al
   | keepAtom (a : AtomId) (c : Content)
   | keepMark (m : Mark)

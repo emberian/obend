@@ -67,8 +67,9 @@ namespace VaultWorld
 open Obend.Doc Obend.Vault
 
 /-- How one write is judged on replay. -/
-def judgeWrite (es : List Entry) (p : Page) (i : Nat) : Option (Except String Unit) :=
-  p.history[i]?.map fun G => (commit es { p with history := p.history.take i } G [] .owner i).map fun _ => ()
+def judgeWrite (es : List Entry) (p : Page) (i : Nat) (env : Environment := #[]) : Option (Except String Unit) :=
+  p.history[i]?.map fun G =>
+    (commit es { p with history := p.history.take i } G [] .owner i (env := env)).map fun _ => ()
 
 def sameVerdict : Except String Unit → Except String Unit → Bool
   | .ok _, .ok _ => true
@@ -83,12 +84,12 @@ structure PageReplay where
   divergence : Option (Nat × Except String Unit × Except String Unit)
 
 /-- Replay one page's writes under the laws in force (`es`) and the amended ones (`es'`). -/
-def replayPage (es es' : List Entry) (p : Page) : PageReplay :=
+def replayPage (es es' : List Entry) (p : Page) (env : Environment := #[]) : PageReplay :=
   let rec go (i : Nat) (fuel : Nat) : PageReplay :=
     match fuel with
     | 0 => ⟨p.name, i, none⟩
     | fuel + 1 =>
-      match judgeWrite es p i, judgeWrite es' p i with
+      match judgeWrite es p i env, judgeWrite es' p i env with
       | some v, some v' => if sameVerdict v v' then go (i + 1) fuel else ⟨p.name, i, some (i + 1, v, v')⟩
       | _, _ => ⟨p.name, i, none⟩
   go 0 (p.history.length + 1)
@@ -103,12 +104,12 @@ def judgedBy (s : Store) (k : String) : List Page :=
 judged as any write), then every write of every page its laws judge, under both. -/
 def replay (s : Store) (k : String) (md : String) : Except String (List PageReplay) := do
   let some p := s.page? k | throw ("no page named " ++ k)
-  let ch := ownerWrite Obend.Vault.Cli.H s.entries s.turn p md
+  let ch := ownerWrite Obend.Vault.Cli.H s.entries s.turn p md (env := s.environment)
   if let some n := ch.note then throw ("the amendment itself is refused: " ++ n)
   let some G' := ch.history.getLast? | throw (k ++ " has no version")
   let es := s.entries
   let es' := es.map fun e => if e.name == k then { e with graph := G' } else e
-  return (judgedBy s k).map (replayPage es es')
+  return (judgedBy s k).map fun p => replayPage es es' p s.environment
 
 end VaultWorld
 

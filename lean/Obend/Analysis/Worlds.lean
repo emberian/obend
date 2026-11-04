@@ -131,7 +131,7 @@ def move (s : Store) (page spec : String) : IO (Except String Move) := do
     if !(← System.FilePath.pathExists spec) then
       return .error ("PIN is a version (N or vN), `retired`, `?`, or a file to write: " ++ spec)
     let md ← IO.FS.readFile spec
-    let ch := ownerWrite Obend.Vault.Cli.H s.entries s.turn p md
+    let ch := ownerWrite Obend.Vault.Cli.H s.entries s.turn p md (env := s.environment)
     return .ok ⟨p.id, p.name, ch.history, ch.note⟩
 
 end VaultWorld
