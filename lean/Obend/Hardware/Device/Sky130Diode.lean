@@ -1,0 +1,87 @@
+module
+/-
+# Obend.Hardware.Device.Sky130Diode — the recipe of a p-well/n⁺ diode in the terms of the sky130 process
+
+One device end to end: the recipe below, run through `Device/Wafer.lean`, gives the doping profile
+that `Device/DriftDiffusion.lean` solves (by devsim) and checks (by the kernel). The fixtures in
+`Obend/Teeth/Hardware/DeviceFixtures.lean` check the devsim certificates for this recipe at two
+p-well doses and refuse the certificate of one dose against the device of the other.
+
+**What SkyWater publishes and what is derived.** The sky130 documentation gives the p-well as a
+peak of `4·10¹⁷ cm⁻³` at `0.42 µm` with characteristic length `0.13 µm`, the substrate background
+`8·10¹⁴ cm⁻³`, the n⁺ junction depth `0.1 µm`, and the n⁺ concentration `10²⁰ cm⁻³` (BSIM `nsd`); see
+`Constants.Sky130`. **It does not publish implant energies, doses or thermal budgets.** Each step
+below is therefore derived from the public numbers through the process model of `Wafer.lean` and
+the literature tables of `Constants.lean`, and the derivation is in its docstring. The recipe is a
+literature reconstruction consistent with the public profile, not SkyWater's flow.
+
+1. **p-well implant, B 160 keV, `1.3·10¹³ cm⁻²`.** Plummer's table gives `R_p = 0.428 µm` at
+   160 keV, the public peak depth is `0.42 µm`. The dose makes the peak `Q/√(2πσ²)` equal to the
+   public `4·10¹⁷` at the post-drive `σ ≈ 0.13 µm`: `4·10¹⁷ · √(2π) · 1.3·10⁻⁵ cm = 1.3·10¹³`.
+2. **Well drive, 1000 °C, 30 min.** With `D_B(1000 °C) = 1.0·exp(−3.5/(k·1273 K)) = 1.4·10⁻¹⁴ cm²/s`
+   (Plummer Table 7-5), `σ² = ΔR_p² + 2Dt = (0.102 µm)² + 5.0·10⁻¹¹ cm²`, `σ = 0.124 µm`, against the
+   public `y.char = 0.13 µm`. (A 1050 °C, 60 min drive would give `0.21 µm`; the public number selects
+   the lighter drive.)
+3. **Screen oxide, dry O₂, 900 °C, 60 min.** Deal–Grove with the Plummer fits for (100) silicon:
+   `B = 1.1·10⁻¹⁴ cm²/s`, `B/A = 2.6·10⁻¹⁰ cm/s`, `A = 0.42 µm`; the linear regime gives
+   `x ≈ B t/A = 9.3 nm`, consuming `0.44 · 9.3 = 4.1 nm` of silicon. The step also anneals the
+   boron at 900 °C (negligible: `2Dt = 2·10⁻¹³ cm²`).
+4. **n⁺ implant, As 50 keV, `10¹⁵ cm⁻²`, through the screen oxide.** `R_p = 36.2 nm`, `ΔR_p = 15.2 nm`;
+   behind 9.3 nm of oxide the peak sits at 27 nm with `2.6·10²⁰ cm⁻³` (the `10²⁰` of BSIM `nsd`,
+   before the clustering and solubility limits this model does not have). The junction with the
+   p-well falls at 97 nm (device A) against the public `0.1 µm`.
+5. **Activation anneal, 900 °C, 30 min.** `D_As(900 °C) = 6.6·10⁻¹⁷ cm²/s`; in the intrinsic model
+   this moves nothing (`2Dt = 2.4·10⁻¹³ cm²` against `ΔR_p² = 2.3·10⁻¹² cm²`). The real n⁺ layer
+   diffuses by concentration-enhanced mechanisms the intrinsic table omits; the junction depth is set
+   here by the implant, which is why the recipe lands at 97 nm without them.
+6. **Strip the oxide** (contact opening) and **deposit 0.5 µm of metal**: geometry steps; the 1D
+   device model places the top contact at the silicon surface.
+
+**Device B** is the same recipe with the p-well dose doubled (`2.6·10¹³`): the junction moves to
+95 nm and the forward current at −0.5 V drops from 4.19 to 1.54 mA/cm² (devsim, `apps/sky130-diode/
+certs/iv_{a,b}.json`), and a certificate of A is refused against B at the first node whose doping is
+not B's (`DeviceFixtures.lean`).
+
+**The device object.** The bottom contact is at a depth of 1.0 µm inside the p-well (a 1D stand-in
+for the well tap), the area `10⁻⁶ cm²` (10 µm × 10 µm), the top (n⁺) contact biased, forward bias
+negative. Tolerances: residuals `10⁻¹²` of their term scale (measured floor `3·10⁻¹⁴`), mobility
+brackets `10⁻⁹`, Deal–Grove residual `10⁻¹²`.
+-/
+public import Obend.Hardware.Device.DriftDiffusion
+public section
+
+namespace Obend.Hardware.Device
+open Obend.Analysis
+set_option autoImplicit false
+
+/-- Substrate: p-type, the public background concentration. -/
+def sky130Background : CanonicalRat := -Sky130.backgroundCm3
+
+/-- The recipe (temperatures in K, times in s, energies in keV, doses in cm⁻², thicknesses in cm). -/
+def sky130DiodeRecipe (pWellDose : CanonicalRat := 1.3e13) (nPlusDose : CanonicalRat := 1.0e15) : List ProcessStep :=
+  [ .implant .boron 160 pWellDose
+  , .anneal 1273.15 1800
+  , .oxidize .dryO2 1173.15 3600
+  , .implant .arsenic 50 nPlusDose
+  , .anneal 1173.15 1800
+  , .strip .oxide
+  , .deposit .metal 5.0e-5 ]
+
+/-- The device object for a bias, given the mesh the producer solved on. -/
+def sky130DiodeSpec (pWellDose biasV : CanonicalRat) (xCm : List CanonicalRat) : DdSpec where
+  si := silicon300K
+  ctN := caugheyThomasElectrons1967
+  ctP := caugheyThomasHoles1967
+  tauN := 1.0e-5
+  tauP := 1.0e-5
+  background := sky130Background
+  recipe := sky130DiodeRecipe pWellDose
+  xCm := xCm
+  areaCm2 := 1.0e-6
+  biasV := biasV
+  tolRel := 1.0e-12
+  mobDelta := 1.0e-9
+  dealGroveTol := 1.0e-12
+
+end Obend.Hardware.Device
+end
