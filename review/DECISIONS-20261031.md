@@ -146,8 +146,10 @@ until 2026-11-04; it no longer is. The file `review/DECISIONS-LEDGER.md` written
 | Bend is not "the leaf"; the phrase is retired; Bend compatibility is no longer a goal ("what is it doing for us"); the BendTT and C emitters and the interaction-net vocabulary go unless something consumes them | yes | `EXPERT-compiler-runtime` |
 | `obend-node` is an in-process simulator of the Lean theorems; it may become a validator later, but the validator is redone at the minidregg/dregg integration, so no investment in hand-rolled crypto now; the Bridge self-admission paths are removed regardless | yes | `EXPERT-distributed-security` |
 | Physics: the LC Drives current loop is the one device that gets the honest low-level-model-to-valid-approximation treatment first (ODE → ZOH → PI → RTL with `R`, `L`, `T_s` as variables) | yes | `EXPERT-physics-numerics` |
+| The eight bit-level primitives (`bitAnd`, `bitOr`, `bitXor`, `shl`, `lshr`, `ashr`, `slt`, `qmul32`) stay in `Core4.Primitive`; the calculus may carry machine primitives | yes | handoff §decisions |
+| `Obend/Elab/Workbook.lean` is the single `#import_obend`; `UserspacePhysical` and the eight `Apps` copies call it | yes | handoff §decisions |
+| Six implementation lanes launched by resuming the six expert reviewers; builds on bb2 only, one clean tree per lane | yes | this ledger |
 | The project frame is research into the consequences of its design decisions; the user frame (the Oct 29 gardener, the README's user) is a lens taken sometimes, never the overriding one; the root documents say so | yes | `EXPERT-language-user` |
 
 Open after these: which of Gemini's eight S-lanes (handoff `review/GEMINI-HANDOFF-20261103.md`) resume
-at all now that Bend is retired; whether "Core4 does not grow" holds for the eight bit-level
-primitives; which file is the single `#import_obend`.
+at all now that Bend is retired (each lane adjudicates the dirty files it owns).
