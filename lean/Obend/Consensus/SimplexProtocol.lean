@@ -1,0 +1,601 @@
+module
+/-
+# Obend.Consensus.SimplexProtocol — the honest-node relation, the adversary, and chain consistency
+
+`Obend.Consensus.Simplex` proves quorum lemmas over abstract predicates and says in its header that
+it holds no protocol. This module is the protocol, as a relation (2026-11-04):
+
+- A CHAIN has one entry per view, oldest first: the block the view notarized, or the view's dummy
+  (`Entry`, `Chain`). Its height is its number of blocks.
+- A MESSAGE is a sender, a view, a kind (`propose`, `vote`, `finalize`) and a target: a block,
+  named by the whole chain it ends, or a view's dummy. The global state is the list of messages
+  ever sent (`Sent`); an honest node's own state is read from its own messages, so "vote once per
+  view" needs no other field.
+- The ADVERSARY is `Step.inject`: any message whose sender the `Protocol` marks faulty. Honest
+  steps are `propose` (the view's leader), `vote` (once per view; for a block only if the block
+  extends a chain whose every entry is notarized) and `finalize` (only a block the node voted for
+  in that view and has seen notarized). `Reach` closes the steps from the empty message list.
+- `Inv` is what every reachable message list satisfies (`reach_inv`); the theorems below take
+  `Inv` and the `Protocol`'s bounds (`committee.length = 3f+1`, at most `f` faulty, `Nodup`).
+
+What is proved, all from `Simplex.honest_quorum_intersection`:
+- `notarized_block_unique`: one view notarizes one block.
+- `finalized_no_dummy`: a view that finalized a block did not notarize its dummy.
+- `finalized_prefix_of_notarized`: a finalized chain is a prefix of every notarized chain that
+  reaches its view; hence `finalized_consistent` (two finalized chains, one is a prefix of the
+  other) and `fin_cert_unique_per_height` (two finalized chains of one height carry the same
+  blocks).
+- `accountable`: two conflicting quorums in one view name at least `f+1` signers, each with its
+  two votes in the message list, which `SlashingReceipt.checks` re-reads; none of them kept the
+  vote-once rule, and under the fault bound each is faulty (`signers_faulty`).
+
+What is not here: liveness, timers, signatures (a message's sender is taken as its signer), and
+the executable node. `crates/obend-node/src/net.rs` runs a one-phase variant that casts its
+finalize vote on the proposal itself, with no notarize vote and no dummy; its header names the
+rules it skips, and `finalized_no_dummy` / `finalized_notarized` are the ones it loses.
+
+`Obend.Consensus.Simplex.State` is not used: it is a per-node fragment of a five-kind protocol
+(`candidate`, `ready`) that is not this one, and nothing there is needed once the state is the
+message list.
+-/
+
+public import Obend.Consensus.Simplex
+
+@[expose] public section
+
+namespace Obend.Consensus.SimplexProtocol
+
+open Obend.Consensus.Simplex (NodeId honest_quorum_intersection list_filter_add_card
+  list_filter_length_le nodup_filter_simplex)
+
+set_option autoImplicit false
+
+/-! ## 1. Chains, targets, messages -/
+
+/-- One view's entry in a chain: the block that view notarized (`payload` names it), or the
+view's dummy. -/
+inductive Entry where
+  | block (view : Nat) (payload : Nat)
+  | dummy (view : Nat)
+  deriving DecidableEq, Repr
+
+def Entry.view : Entry → Nat
+  | .block v _ => v
+  | .dummy v => v
+
+def Entry.isBlock : Entry → Bool
+  | .block _ _ => true
+  | .dummy _ => false
+
+/-- A chain: one entry per view, oldest first; the entry at index `k` is view `k + 1`'s. -/
+abbrev Chain := List Entry
+
+/-- The height of a chain: its number of blocks (dummies do not count). -/
+def Chain.height (c : Chain) : Nat := (c.filter Entry.isBlock).length
+
+/-- The blocks of a chain, in order. -/
+def Chain.blocks (c : Chain) : Chain := c.filter Entry.isBlock
+
+/-- What a vote is for: a block, named by the whole chain it ends, or a view's dummy. -/
+inductive Target where
+  | block (c : Chain)
+  | dummy (v : Nat)
+  deriving DecidableEq, Repr
+
+inductive Kind where
+  | propose
+  | vote
+  | finalize
+  deriving DecidableEq, Repr
+
+structure Msg where
+  sender : NodeId
+  view : Nat
+  kind : Kind
+  target : Target
+  deriving DecidableEq, Repr
+
+/-- Every message ever sent, newest first. -/
+abbrev Sent := List Msg
+
+/-! Views are `Nat` here, not `Obend.Consensus.Simplex.View`: `omega` does not see through the
+imported abbreviation. -/
+
+/-! ## 2. The committee and the adversary -/
+
+/-- A committee of `3f+1` distinct nodes of which at most `f` are faulty. -/
+structure Protocol where
+  committee : List NodeId
+  f : Nat
+  faulty : NodeId → Bool
+  nodup : committee.Nodup
+  size : committee.length = 3 * f + 1
+  faultBound : (committee.filter faulty).length ≤ f
+
+def Protocol.quorum (P : Protocol) : Nat := 2 * P.f + 1
+
+def Protocol.honest (P : Protocol) (n : NodeId) : Prop := n ∈ P.committee ∧ P.faulty n = false
+
+/-- The leader of a view: round-robin over the committee. -/
+def Protocol.leader (P : Protocol) (v : Nat) : NodeId :=
+  P.committee.getD ((v - 1) % P.committee.length) 0
+
+/-! ## 3. What the message list says -/
+
+/-- `n` voted for `t` in view `v`. -/
+def voted (sent : Sent) (n : NodeId) (v : Nat) (t : Target) : Bool :=
+  sent.contains ⟨n, v, .vote, t⟩
+
+/-- `n` cast some vote in view `v`. -/
+def votedAny (sent : Sent) (n : NodeId) (v : Nat) : Bool :=
+  sent.any fun m => m.sender == n && m.view == v && m.kind == .vote
+
+/-- `n` cast a finalize vote for the block `c` in view `v`. -/
+def finalizeVoted (sent : Sent) (n : NodeId) (v : Nat) (c : Chain) : Bool :=
+  sent.contains ⟨n, v, .finalize, .block c⟩
+
+theorem voted_iff (sent : Sent) (n : NodeId) (v : Nat) (t : Target) :
+    voted sent n v t = true ↔ (⟨n, v, .vote, t⟩ : Msg) ∈ sent :=
+  List.contains_iff_mem
+
+theorem finalizeVoted_iff (sent : Sent) (n : NodeId) (v : Nat) (c : Chain) :
+    finalizeVoted sent n v c = true ↔ (⟨n, v, .finalize, .block c⟩ : Msg) ∈ sent :=
+  List.contains_iff_mem
+
+theorem votedAny_of_mem {sent : Sent} {m : Msg} (hm : m ∈ sent) (hk : m.kind = .vote) :
+    votedAny sent m.sender m.view = true := by
+  unfold votedAny
+  rw [List.any_eq_true]
+  exact ⟨m, hm, by simp [hk]⟩
+
+/-- The committee members who voted for `t` in `v`. -/
+def voters (P : Protocol) (sent : Sent) (v : Nat) (t : Target) : List NodeId :=
+  P.committee.filter fun n => voted sent n v t
+
+def votesFor (P : Protocol) (sent : Sent) (v : Nat) (t : Target) : Nat :=
+  (voters P sent v t).length
+
+/-- A block is notarized in its view by a quorum of votes for the chain it ends. -/
+def NotarizedBlock (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Prop :=
+  P.quorum ≤ votesFor P sent v (.block c)
+
+/-- A view's dummy is notarized by a quorum of votes for it. -/
+def NotarizedDummy (P : Protocol) (sent : Sent) (v : Nat) : Prop :=
+  P.quorum ≤ votesFor P sent v (.dummy v)
+
+/-- A block is finalized in its view by a quorum of finalize votes. -/
+def Finalized (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Prop :=
+  P.quorum ≤ (P.committee.filter fun n => finalizeVoted sent n v c).length
+
+/-- The entry at index `k` of a chain is notarized: a dummy by its view's dummy notarization, a
+block by a notarization of the chain up to it (`upto = c.take (k+1)`); and it is view `k+1`'s. -/
+def EntryNotarized (P : Protocol) (sent : Sent) (k : Nat) (upto : Chain) : Entry → Prop
+  | .dummy v => v = k + 1 ∧ NotarizedDummy P sent (k + 1)
+  | .block v _ => v = k + 1 ∧ NotarizedBlock P sent (k + 1) upto
+
+/-- Every entry of the chain is notarized in its view. -/
+def ChainNotarized (P : Protocol) (sent : Sent) (c : Chain) : Prop :=
+  ∀ k (hk : k < c.length), EntryNotarized P sent k (c.take (k + 1)) c[k]
+
+/-! ## 4. The honest rules and the steps -/
+
+/-- The honest vote rule in view `v` (`1 ≤ v`): a dummy vote is for this view's dummy; a block
+vote is for a chain that ends in a block of this view, extends a chain of `v-1` entries each of
+which is notarized, and was proposed by the view's leader. -/
+def VoteRule (P : Protocol) (sent : Sent) (v : Nat) : Target → Prop
+  | .block c => 1 ≤ v ∧ ∃ p x, c = p ++ [.block v x] ∧ p.length = v - 1 ∧ ChainNotarized P sent p ∧
+      (⟨P.leader v, v, .propose, .block c⟩ : Msg) ∈ sent
+  | .dummy w => 1 ≤ v ∧ w = v
+
+/-- One step of the system: the adversary injects any message from a faulty sender; an honest
+node proposes (if it leads the view), votes (once per view, by `VoteRule`) or finalizes (a block
+it voted for in that view and has seen notarized). -/
+inductive Step (P : Protocol) : Sent → Sent → Prop
+  | inject (sent : Sent) (m : Msg) (hf : P.faulty m.sender = true) :
+      Step P sent (m :: sent)
+  | propose (sent : Sent) (n : NodeId) (v : Nat) (c : Chain)
+      (hn : P.honest n) (hl : n = P.leader v) :
+      Step P sent (⟨n, v, .propose, .block c⟩ :: sent)
+  | vote (sent : Sent) (n : NodeId) (v : Nat) (t : Target)
+      (hn : P.honest n) (hfresh : votedAny sent n v = false) (hrule : VoteRule P sent v t) :
+      Step P sent (⟨n, v, .vote, t⟩ :: sent)
+  | finalize (sent : Sent) (n : NodeId) (v : Nat) (c : Chain)
+      (hn : P.honest n) (hvote : voted sent n v (.block c) = true)
+      (hnot : NotarizedBlock P sent v c) :
+      Step P sent (⟨n, v, .finalize, .block c⟩ :: sent)
+
+inductive Reach (P : Protocol) : Sent → Prop
+  | nil : Reach P []
+  | step {s s' : Sent} (h : Reach P s) (hs : Step P s s') : Reach P s'
+
+/-! ## 5. Monotonicity: a notarization, once seen, stays -/
+
+theorem filter_length_mono {α : Type} (p q : α → Bool) (l : List α)
+    (h : ∀ x, p x = true → q x = true) : (l.filter p).length ≤ (l.filter q).length := by
+  induction l with
+  | nil => simp
+  | cons x xs ih =>
+    simp only [List.filter_cons]
+    cases hp : p x with
+    | false => cases q x <;> simp <;> omega
+    | true => rw [h x hp]; simp; omega
+
+theorem voted_cons (sent : Sent) (m : Msg) (n : NodeId) (v : Nat) (t : Target)
+    (h : voted sent n v t = true) : voted (m :: sent) n v t = true := by
+  rw [voted_iff] at h ⊢
+  exact List.mem_cons_of_mem m h
+
+theorem finalizeVoted_cons (sent : Sent) (m : Msg) (n : NodeId) (v : Nat) (c : Chain)
+    (h : finalizeVoted sent n v c = true) : finalizeVoted (m :: sent) n v c = true := by
+  rw [finalizeVoted_iff] at h ⊢
+  exact List.mem_cons_of_mem m h
+
+theorem votesFor_cons (P : Protocol) (sent : Sent) (m : Msg) (v : Nat) (t : Target) :
+    votesFor P sent v t ≤ votesFor P (m :: sent) v t :=
+  filter_length_mono _ _ P.committee fun n h => voted_cons sent m n v t h
+
+theorem notarizedBlock_cons {P : Protocol} {sent : Sent} (m : Msg) {v : Nat} {c : Chain}
+    (h : NotarizedBlock P sent v c) : NotarizedBlock P (m :: sent) v c :=
+  Nat.le_trans h (votesFor_cons P sent m v (.block c))
+
+theorem notarizedDummy_cons {P : Protocol} {sent : Sent} (m : Msg) {v : Nat}
+    (h : NotarizedDummy P sent v) : NotarizedDummy P (m :: sent) v :=
+  Nat.le_trans h (votesFor_cons P sent m v (.dummy v))
+
+theorem entryNotarized_cons {P : Protocol} {sent : Sent} (m : Msg) {k : Nat} {upto : Chain}
+    {e : Entry} (h : EntryNotarized P sent k upto e) : EntryNotarized P (m :: sent) k upto e := by
+  cases e with
+  | dummy v => exact ⟨h.1, notarizedDummy_cons m h.2⟩
+  | block v x => exact ⟨h.1, notarizedBlock_cons m h.2⟩
+
+theorem chainNotarized_cons {P : Protocol} {sent : Sent} (m : Msg) {c : Chain}
+    (h : ChainNotarized P sent c) : ChainNotarized P (m :: sent) c :=
+  fun k hk => entryNotarized_cons m (h k hk)
+
+theorem take_append_left {α : Type} :
+    ∀ (l₁ l₂ : List α) (n : Nat), n ≤ l₁.length → (l₁ ++ l₂).take n = l₁.take n
+  | _, _, 0, _ => by simp
+  | [], _, n + 1, h => by simp at h
+  | x :: xs, l₂, n + 1, h => by
+    simp only [List.cons_append, List.take_succ_cons]
+    rw [take_append_left xs l₂ n (by simpa using h)]
+
+/-- Extending a notarized chain of `v-1` entries by a block of view `v` that is itself notarized
+gives a notarized chain. -/
+theorem chainNotarized_snoc {P : Protocol} {sent : Sent} {p : Chain} {v : Nat} {x : Nat}
+    (hp : ChainNotarized P sent p) (hlen : p.length = v - 1) (hv : 1 ≤ v)
+    (hn : NotarizedBlock P sent v (p ++ [.block v x])) :
+    ChainNotarized P sent (p ++ [.block v x]) := by
+  intro k hk
+  simp only [List.length_append, List.length_singleton] at hk
+  by_cases hkp : k < p.length
+  · have hget : (p ++ [Entry.block v x])[k] = p[k] := List.getElem_append_left hkp
+    have htake : (p ++ [Entry.block v x]).take (k + 1) = p.take (k + 1) :=
+      take_append_left p [Entry.block v x] (k + 1) (by omega)
+    rw [hget, htake]
+    exact hp k hkp
+  · have hkeq : k = p.length := by omega
+    have hget : (p ++ [Entry.block v x])[k] = Entry.block v x := by
+      rw [List.getElem_append_right (by omega)]
+      simp [hkeq]
+    have htake : (p ++ [Entry.block v x]).take (k + 1) = p ++ [Entry.block v x] :=
+      List.take_of_length_le (by simp; omega)
+    rw [hget, htake]
+    have hvk : v = k + 1 := by omega
+    show v = k + 1 ∧ NotarizedBlock P sent (k + 1) (p ++ [Entry.block v x])
+    refine ⟨hvk, ?_⟩
+    rw [← hvk]
+    exact hn
+
+/-! ## 6. The invariant of every reachable message list -/
+
+/-- What honest senders' messages satisfy in every reachable message list. -/
+structure Inv (P : Protocol) (sent : Sent) : Prop where
+  /-- An honest node votes once per view: two of its votes in one view have one target. -/
+  voteOnce : ∀ m ∈ sent, ∀ m' ∈ sent, P.honest m.sender → m.kind = .vote → m'.kind = .vote →
+    m.sender = m'.sender → m.view = m'.view → m.target = m'.target
+  /-- An honest block vote is for a chain that ends in a block of its view and extends a
+  notarized chain of `view - 1` entries. -/
+  voteRule : ∀ m ∈ sent, P.honest m.sender → m.kind = .vote → ∀ c, m.target = .block c →
+    1 ≤ m.view ∧ ∃ p x, c = p ++ [.block m.view x] ∧ p.length = m.view - 1 ∧ ChainNotarized P sent p
+  /-- An honest finalize vote is for a block the node voted for in that view and that is
+  notarized. -/
+  finRule : ∀ m ∈ sent, P.honest m.sender → m.kind = .finalize → ∀ c, m.target = .block c →
+    voted sent m.sender m.view (.block c) = true ∧ NotarizedBlock P sent m.view c
+
+theorem inv_nil (P : Protocol) : Inv P [] where
+  voteOnce := fun _ h => absurd h (List.not_mem_nil)
+  voteRule := fun _ h => absurd h (List.not_mem_nil)
+  finRule := fun _ h => absurd h (List.not_mem_nil)
+
+theorem honest_not_faulty {P : Protocol} {n : NodeId} (h : P.honest n) (hf : P.faulty n = true) : False := by
+  rw [h.2] at hf; cases hf
+
+/-- Adding a message that keeps the three rules for itself keeps the invariant: the old messages'
+clauses are monotone in the message list. -/
+theorem inv_cons {P : Protocol} {sent : Sent} (hI : Inv P sent) (m : Msg)
+    (hOnce : ∀ m' ∈ sent, P.honest m.sender → m.kind = .vote → m'.kind = .vote →
+      m.sender = m'.sender → m.view = m'.view → m.target = m'.target)
+    (hVote : P.honest m.sender → m.kind = .vote → ∀ c, m.target = .block c →
+      1 ≤ m.view ∧ ∃ p x, c = p ++ [.block m.view x] ∧ p.length = m.view - 1 ∧ ChainNotarized P sent p)
+    (hFin : P.honest m.sender → m.kind = .finalize → ∀ c, m.target = .block c →
+      voted sent m.sender m.view (.block c) = true ∧ NotarizedBlock P sent m.view c) :
+    Inv P (m :: sent) where
+  voteOnce := by
+    intro a ha b hb hon hka hkb hs hv
+    rcases List.mem_cons.1 ha with ha' | ha'
+    · rcases List.mem_cons.1 hb with hb' | hb'
+      · rw [ha', hb']
+      · rw [ha'] at hon hka hs hv ⊢
+        exact hOnce b hb' hon hka hkb hs hv
+    · rcases List.mem_cons.1 hb with hb' | hb'
+      · rw [hb'] at hkb hs hv ⊢
+        have hon' : P.honest m.sender := hs ▸ hon
+        exact (hOnce a ha' hon' hkb hka hs.symm hv.symm).symm
+      · exact hI.voteOnce a ha' b hb' hon hka hkb hs hv
+  voteRule := by
+    intro a ha hon hk c hc
+    rcases List.mem_cons.1 ha with rfl | ha
+    · obtain ⟨h1, p, x, hcp, hlen, hnot⟩ := hVote hon hk c hc
+      exact ⟨h1, p, x, hcp, hlen, chainNotarized_cons a hnot⟩
+    · obtain ⟨h1, p, x, hcp, hlen, hnot⟩ := hI.voteRule a ha hon hk c hc
+      exact ⟨h1, p, x, hcp, hlen, chainNotarized_cons m hnot⟩
+  finRule := by
+    intro a ha hon hk c hc
+    rcases List.mem_cons.1 ha with rfl | ha
+    · obtain ⟨hv, hn⟩ := hFin hon hk c hc
+      exact ⟨voted_cons sent a _ _ _ hv, notarizedBlock_cons a hn⟩
+    · obtain ⟨hv, hn⟩ := hI.finRule a ha hon hk c hc
+      exact ⟨voted_cons sent m _ _ _ hv, notarizedBlock_cons m hn⟩
+
+theorem inv_step {P : Protocol} {s s' : Sent} (hI : Inv P s) (hs : Step P s s') : Inv P s' := by
+  cases hs with
+  | inject m hf =>
+    refine inv_cons hI m ?_ ?_ ?_
+    · intro m' _ hon _ _ _ _; exact absurd hf (fun h => honest_not_faulty hon h)
+    · intro hon; exact absurd hf (fun h => honest_not_faulty hon h)
+    · intro hon; exact absurd hf (fun h => honest_not_faulty hon h)
+  | propose n v c hn hl =>
+    refine inv_cons hI _ ?_ ?_ ?_
+    · intro _ _ _ hk; cases hk
+    · intro _ hk; cases hk
+    · intro _ hk; cases hk
+  | vote n v t hn hfresh hrule =>
+    refine inv_cons hI _ ?_ ?_ ?_
+    · intro m' hm' _ _ hk' hs hv
+      have := votedAny_of_mem hm' hk'
+      simp only at hs hv
+      rw [← hs, ← hv] at this
+      rw [this] at hfresh; cases hfresh
+    · intro _ _ c hc
+      simp only at hc
+      subst hc
+      obtain ⟨h1, p, x, hcp, hlen, hnot, _⟩ := hrule
+      exact ⟨h1, p, x, hcp, hlen, hnot⟩
+    · intro _ hk; cases hk
+  | finalize n v c hn hvote hnot =>
+    refine inv_cons hI _ ?_ ?_ ?_
+    · intro _ _ _ hk; cases hk
+    · intro _ hk; cases hk
+    · intro _ _ c' hc'
+      simp only at hc'
+      cases hc'
+      exact ⟨hvote, hnot⟩
+
+/-- **Every reachable message list satisfies the invariant.** -/
+theorem reach_inv {P : Protocol} {s : Sent} (h : Reach P s) : Inv P s := by
+  induction h with
+  | nil => exact inv_nil P
+  | step _ hs ih => exact inv_step ih hs
+
+/-! ## 7. Safety, from the quorum lemma -/
+
+/-- A quorum of committee members with a property contains an honest one. -/
+theorem honest_of_quorum (P : Protocol) (p : NodeId → Bool)
+    (h : P.quorum ≤ (P.committee.filter p).length) :
+    ∃ n ∈ P.committee, p n = true ∧ P.faulty n = false := by
+  obtain ⟨n, hn, hp, _, hf⟩ :=
+    honest_quorum_intersection P.committee P.f p p P.faulty P.size h h P.faultBound
+  exact ⟨n, hn, hp, hf⟩
+
+/-- **One view notarizes one block.** Two notarizing quorums share an honest member, who voted
+once. -/
+theorem notarized_block_unique {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat}
+    {c₁ c₂ : Chain} (h₁ : NotarizedBlock P sent v c₁) (h₂ : NotarizedBlock P sent v c₂) :
+    c₁ = c₂ := by
+  obtain ⟨n, hn, hv₁, hv₂, hf⟩ :=
+    honest_quorum_intersection P.committee P.f (fun n => voted sent n v (.block c₁))
+      (fun n => voted sent n v (.block c₂)) P.faulty P.size h₁ h₂ P.faultBound
+  have hm₁ := (voted_iff sent n v (.block c₁)).1 hv₁
+  have hm₂ := (voted_iff sent n v (.block c₂)).1 hv₂
+  have := hI.voteOnce _ hm₁ _ hm₂ ⟨hn, hf⟩ rfl rfl rfl rfl
+  exact Target.block.inj this
+
+/-- **A view that finalized a block did not notarize its dummy.** An honest member of both quorums
+would have voted for the block (it finalized it) and for the dummy. -/
+theorem finalized_no_dummy {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat} {c : Chain}
+    (hf : Finalized P sent v c) : ¬ NotarizedDummy P sent v := by
+  intro hd
+  obtain ⟨n, hn, hfin, hdum, hfault⟩ :=
+    honest_quorum_intersection P.committee P.f (fun n => finalizeVoted sent n v c)
+      (fun n => voted sent n v (.dummy v)) P.faulty P.size hf hd P.faultBound
+  have hmf := (finalizeVoted_iff sent n v c).1 hfin
+  have hvb := (hI.finRule _ hmf ⟨hn, hfault⟩ rfl c rfl).1
+  have hmb := (voted_iff sent n v (.block c)).1 hvb
+  have hmd := (voted_iff sent n v (.dummy v)).1 hdum
+  have := hI.voteOnce _ hmb _ hmd ⟨hn, hfault⟩ rfl rfl rfl rfl
+  cases this
+
+/-- **A finalized block is notarized**, and its chain is a block of its view on a notarized
+chain of `v - 1` entries. -/
+theorem finalized_shape {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat} {c : Chain}
+    (hf : Finalized P sent v c) :
+    NotarizedBlock P sent v c ∧ 1 ≤ v ∧
+      ∃ p x, c = p ++ [.block v x] ∧ p.length = v - 1 ∧ ChainNotarized P sent p := by
+  obtain ⟨n, hn, hfin, hfault⟩ := honest_of_quorum P (fun n => finalizeVoted sent n v c) hf
+  have hmf := (finalizeVoted_iff sent n v c).1 hfin
+  obtain ⟨hvb, hnot⟩ := hI.finRule _ hmf ⟨hn, hfault⟩ rfl c rfl
+  have hmb := (voted_iff sent n v (.block c)).1 hvb
+  obtain ⟨h1, p, x, hcp, hlen, hpn⟩ := hI.voteRule _ hmb ⟨hn, hfault⟩ rfl c rfl
+  simp only at h1 hcp hlen
+  exact ⟨hnot, h1, p, x, hcp, hlen, hpn⟩
+
+theorem finalized_notarized {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat} {c : Chain}
+    (hf : Finalized P sent v c) : NotarizedBlock P sent v c :=
+  (finalized_shape hI hf).1
+
+theorem finalized_length {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat} {c : Chain}
+    (hf : Finalized P sent v c) : c.length = v := by
+  obtain ⟨_, h1, p, x, hcp, hlen, _⟩ := finalized_shape hI hf
+  rw [hcp, List.length_append, List.length_singleton]
+  omega
+
+/-- A finalized chain is itself a notarized chain. -/
+theorem finalized_chainNotarized {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat}
+    {c : Chain} (hf : Finalized P sent v c) : ChainNotarized P sent c := by
+  obtain ⟨hnot, h1, p, x, hcp, hlen, hpn⟩ := finalized_shape hI hf
+  subst hcp
+  exact chainNotarized_snoc hpn hlen h1 hnot
+
+/-- **A finalized chain is a prefix of every notarized chain that reaches its view.** The notarized
+chain's entry for that view is notarized: not the dummy (`finalized_no_dummy`), so a block, and
+one view notarizes one block (`notarized_block_unique`). -/
+theorem finalized_prefix_of_notarized {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat}
+    {c c' : Chain} (hf : Finalized P sent v c) (hc' : ChainNotarized P sent c')
+    (hlen : v ≤ c'.length) : c <+: c' := by
+  obtain ⟨hnot, h1, _, _, _, _, _⟩ := finalized_shape hI hf
+  have hk : v - 1 < c'.length := by omega
+  have he := hc' (v - 1) hk
+  have hv : v - 1 + 1 = v := by omega
+  cases hget : c'[v - 1] with
+  | dummy w =>
+    rw [hget] at he
+    have hd : NotarizedDummy P sent (v - 1 + 1) := he.2
+    rw [hv] at hd
+    exact absurd hd (finalized_no_dummy hI hf)
+  | block w x =>
+    rw [hget] at he
+    have hb : NotarizedBlock P sent (v - 1 + 1) (c'.take (v - 1 + 1)) := he.2
+    rw [hv] at hb
+    have heq := notarized_block_unique hI hnot hb
+    rw [heq]
+    exact List.take_prefix v c'
+
+/-- **Two finalized chains are consistent**: one is a prefix of the other. -/
+theorem finalized_consistent {P : Protocol} {sent : Sent} (hI : Inv P sent) {v₁ v₂ : Nat}
+    {c₁ c₂ : Chain} (h₁ : Finalized P sent v₁ c₁) (h₂ : Finalized P sent v₂ c₂) :
+    c₁ <+: c₂ ∨ c₂ <+: c₁ := by
+  have l₁ := finalized_length hI h₁
+  have l₂ := finalized_length hI h₂
+  by_cases hle : v₁ ≤ v₂
+  · left
+    exact finalized_prefix_of_notarized hI h₁ (finalized_chainNotarized hI h₂) (by omega)
+  · right
+    exact finalized_prefix_of_notarized hI h₂ (finalized_chainNotarized hI h₁) (by omega)
+
+theorem blocks_prefix {c c' : Chain} (h : c <+: c') : c.blocks <+: c'.blocks := by
+  obtain ⟨t, rfl⟩ := h
+  unfold Chain.blocks
+  rw [List.filter_append]
+  exact List.prefix_append _ _
+
+/-- **Finality is unique per height**: two finalized chains of one height carry the same blocks,
+so a stranger holding two finalization certificates for one height holds one block. -/
+theorem fin_cert_unique_per_height {P : Protocol} {sent : Sent} (hI : Inv P sent) {v₁ v₂ : Nat}
+    {c₁ c₂ : Chain} (h₁ : Finalized P sent v₁ c₁) (h₂ : Finalized P sent v₂ c₂)
+    (hh : c₁.height = c₂.height) : c₁.blocks = c₂.blocks := by
+  have hpre : c₁.blocks <+: c₂.blocks ∨ c₂.blocks <+: c₁.blocks := by
+    rcases finalized_consistent hI h₁ h₂ with h | h
+    · exact .inl (blocks_prefix h)
+    · exact .inr (blocks_prefix h)
+  unfold Chain.height at hh
+  rcases hpre with h | h
+  · exact h.eq_of_length hh
+  · exact (h.eq_of_length hh.symm).symm
+
+/-- The same, for every reachable message list. -/
+theorem fin_cert_unique_per_height_reach {P : Protocol} {sent : Sent} (hr : Reach P sent)
+    {v₁ v₂ : Nat} {c₁ c₂ : Chain} (h₁ : Finalized P sent v₁ c₁) (h₂ : Finalized P sent v₂ c₂)
+    (hh : c₁.height = c₂.height) : c₁.blocks = c₂.blocks :=
+  fin_cert_unique_per_height (reach_inv hr) h₁ h₂ hh
+
+/-! ## 8. Accountability: a receipt is two votes by one node -/
+
+/-- Two conflicting targets in one view and the nodes that voted for both. A stranger holding the
+message list checks it with `checks`; nothing is taken on the issuer's word. -/
+structure SlashingReceipt where
+  view : Nat
+  a : Target
+  b : Target
+  signers : List NodeId
+  deriving DecidableEq, Repr
+
+/-- The receipt checks against a message list: the targets differ and every signer's two votes
+are in it. -/
+def SlashingReceipt.checks (r : SlashingReceipt) (sent : Sent) : Bool :=
+  decide (r.a ≠ r.b) && r.signers.all fun n => voted sent n r.view r.a && voted sent n r.view r.b
+
+/-- A node kept the vote-once rule in a view. -/
+def VoteOnce (sent : Sent) (n : NodeId) (v : Nat) : Prop :=
+  ∀ t t', voted sent n v t = true → voted sent n v t' = true → t = t'
+
+/-- **What a checking receipt establishes**: each signer cast both votes, so none kept the
+vote-once rule in that view. -/
+theorem SlashingReceipt.checks_sound {r : SlashingReceipt} {sent : Sent} (h : r.checks sent = true) :
+    r.a ≠ r.b ∧ ∀ n ∈ r.signers,
+      (⟨n, r.view, .vote, r.a⟩ : Msg) ∈ sent ∧ (⟨n, r.view, .vote, r.b⟩ : Msg) ∈ sent ∧
+      ¬ VoteOnce sent n r.view := by
+  simp only [SlashingReceipt.checks, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h
+  refine ⟨h.1, fun n hn => ?_⟩
+  obtain ⟨ha, hb⟩ := h.2 n hn
+  refine ⟨(voted_iff _ _ _ _).1 ha, (voted_iff _ _ _ _).1 hb, fun once => h.1 (once _ _ ha hb)⟩
+
+/-- The receipt a committee extracts from two conflicting quorums. -/
+def extractReceipt (committee : List NodeId) (sent : Sent) (v : Nat) (a b : Target) :
+    SlashingReceipt :=
+  ⟨v, a, b, committee.filter fun n => voted sent n v a && voted sent n v b⟩
+
+/-- **Accountability**: two conflicting quorums of `2f+1` in a committee of at most `3f+1` name at
+least `f+1` signers, each with both votes in the message list (`checks`), none of whom kept the
+vote-once rule. No fault bound is assumed: this is what a stranger learns when the bound failed. -/
+theorem accountable (committee : List NodeId) (f : Nat) (sent : Sent) (v : Nat) (a b : Target)
+    (hsize : committee.length ≤ 3 * f + 1) (hne : a ≠ b)
+    (ha : 2 * f + 1 ≤ (committee.filter fun n => voted sent n v a).length)
+    (hb : 2 * f + 1 ≤ (committee.filter fun n => voted sent n v b).length) :
+    let r := extractReceipt committee sent v a b
+    r.checks sent = true ∧ f + 1 ≤ r.signers.length ∧
+      ∀ n ∈ r.signers, n ∈ committee ∧ ¬ VoteOnce sent n v := by
+  intro r
+  have hsum := list_filter_add_card (fun n => voted sent n v a) (fun n => voted sent n v b) committee
+  have hunion := list_filter_length_le (fun n => voted sent n v a || voted sent n v b) committee
+  have hbound : f + 1 ≤ (committee.filter fun n => voted sent n v a && voted sent n v b).length := by
+    omega
+  have hchecks : r.checks sent = true := by
+    simp only [r, extractReceipt, SlashingReceipt.checks, Bool.and_eq_true, decide_eq_true_eq,
+      List.all_eq_true, List.mem_filter]
+    exact ⟨hne, fun n hn => hn.2⟩
+  refine ⟨hchecks, hbound, fun n hn => ?_⟩
+  have hmem := List.mem_filter.1 hn
+  exact ⟨hmem.1, ((SlashingReceipt.checks_sound hchecks).2 n hn).2.2⟩
+
+/-- Under the fault bound and the invariant, every signer of an extracted receipt is faulty: an
+honest node votes once. -/
+theorem signers_faulty {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : Nat} {a b : Target}
+    (hne : a ≠ b) : ∀ n ∈ (extractReceipt P.committee sent v a b).signers, P.faulty n = true := by
+  intro n hn
+  simp only [extractReceipt, List.mem_filter, Bool.and_eq_true] at hn
+  obtain ⟨hmem, ha, hb⟩ := hn
+  cases hf : P.faulty n with
+  | true => rfl
+  | false =>
+    exfalso
+    have hma := (voted_iff sent n v a).1 ha
+    have hmb := (voted_iff sent n v b).1 hb
+    exact hne (hI.voteOnce _ hma _ hmb ⟨hmem, hf⟩ rfl rfl rfl rfl)
+
+theorem extractReceipt_nodup (P : Protocol) (sent : Sent) (v : Nat) (a b : Target) :
+    (extractReceipt P.committee sent v a b).signers.Nodup :=
+  nodup_filter_simplex _ P.nodup
+
+end Obend.Consensus.SimplexProtocol
+end

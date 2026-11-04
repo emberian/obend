@@ -175,19 +175,29 @@ flowchart TD
 **The design goal** stays Chan–Pass Simplex: `PropCert(h,b)` as 2f+1 notarize votes, `SkipCert(h)`
 as 2f+1 timeout votes, `FinCert(h,b)` from validators who saw the notarization and did not skip,
 with `no_skip_and_fin`, same-height safety, accountable safety and bounded liveness after GST as
-theorems about one executable state machine. **None of that is built.** What exists:
+theorems about one executable state machine. **The safety half of that exists as a relation; the
+executable state machine and liveness do not.** What exists:
 
 - **Lean, `Obend/Consensus/Simplex.lean`.** Two combinatorial lemmas over abstract vote
   predicates: `honest_quorum_intersection` (two 2f+1 quorums of a 3f+1 committee with at most f
   faulty share an honest member) and `qc_same_view_unique` (two same-view quorums agree on their
-  value). A `State`/`ViewRecord` record with `register`, `broadcast`, `castVote` and no handler for
-  a proposal, a vote, or a view change. A `SimplexState` cell contract that checks a SIGNER COUNT
-  (`certSigners`), beside a `QuorumBoundFinalityGate` (`Finality.lean`) that checks a signer list
-  against a committee; neither checks a signature. `simplex_accountable_safety` extracts a
-  `SlashingReceipt` that names voters but carries no votes, so it cannot be checked by a third
-  party; the Rust `EquivocationSlashReceipt` (two signed votes) can, and no theorem relates them.
-  No theorem named `simplex_safety`, `simplex_no_skip_and_fin` or
-  `simplex_bounded_liveness_after_gst` exists.
+  value). A `SimplexState` cell contract that checks a SIGNER COUNT (`certSigners`), beside a
+  `QuorumBoundFinalityGate` (`Finality.lean`) that checks a signer list against a committee;
+  neither checks a signature. The `State`/`ViewRecord` fragments there are of a different,
+  five-kind protocol and are used by nothing.
+- **Lean, `Obend/Consensus/SimplexProtocol.lean` (2026-11-04).** The protocol as a step relation
+  over the list of messages ever sent: a `Protocol` (a `Nodup` committee of 3f+1, at most f
+  faulty), the adversary as any message from a faulty sender (`Step.inject`), and the honest
+  rules — the leader proposes, a node votes once per view and for a block only if it extends a
+  chain whose every entry is notarized, and finalizes only a block it voted for and has seen
+  notarized. `reach_inv` is the invariant of every reachable message list, and from
+  `honest_quorum_intersection`: `notarized_block_unique`, `finalized_no_dummy`,
+  `finalized_prefix_of_notarized`, `finalized_consistent` (two finalized chains, one is a prefix
+  of the other) and `fin_cert_unique_per_height`. `SlashingReceipt` is two conflicting votes by
+  one node, re-checkable against the message list (`checks`, `checks_sound`), and `accountable`
+  gives at least f+1 such signers from two conflicting quorums with no fault bound assumed. No
+  signatures (a message's sender is its signer), no timers, no liveness, no executable step
+  function; `simplex_bounded_liveness_after_gst` does not exist.
 - **Rust, `crates/obend-node/src/net.rs`, an in-process simulator.** A ONE-ROUND protocol: the
   leader of view v signs a proposal (`PropCert` is leader-signed, not a quorum); a validator in
   view v casts a `Finalize` vote for a proposal that extends its committed tip at the next height;
@@ -197,7 +207,10 @@ theorems about one executable state machine. **None of that is built.** What exi
   it finalize-voted in (`DurableNodeWal::check_can_vote_inner`). Same-view agreement follows from
   `qc_same_view_unique`; that `FinCert(v)` and `SkipCert(v)` never both exist, and that a finalized
   block is applied only at the next height on the committed tip (`apply_finalized_block`), are
-  argued from those rules and tested, not proved. Keys are the simulator's (`SimulatorKeypair`,
+  argued from those rules and tested, not proved. Against `SimplexProtocol.lean` it skips the
+  block-vote rule and the finalize rule (no notarize phase, no notarized parent chain, no dummy
+  entry), so `finalized_notarized`, `finalized_no_dummy` and the consistency theorems built on
+  them do not apply to it; its header says so. Keys are the simulator's (`SimulatorKeypair`,
   a Schnorr variant on edwards25519 with cSHAKE256, derived from the public
   `SimplexCluster::simulator_seed`); the WAL is a `Vec` in memory; wire frames are JSON.
 - **Fixed on 2026-11-04** (`review/EXPERT-distributed-security-20261103.md` S1): until then a

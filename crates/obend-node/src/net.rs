@@ -1,5 +1,19 @@
 //! `obend-node::net` — the in-process multi-validator SIMULATION over loopback sockets
 //!
+//! What this protocol is, against `lean/Obend/Consensus/SimplexProtocol.lean` (2026-11-04): a
+//! ONE-PHASE variant. A node casts its finalize vote on the leader's proposal itself; there is no
+//! notarize vote, no notarized parent chain and no dummy entry for a skipped view (a `SkipCert`
+//! is a quorum of skip votes, not a chain entry). So the Lean rules it skips are the block-vote
+//! rule (`VoteRule`: vote only for a block on a notarized chain) and the finalize rule
+//! (`Step.finalize`: finalize only a block seen notarized), and the theorems it loses are
+//! `finalized_notarized`, `finalized_no_dummy` and everything built on them
+//! (`finalized_prefix_of_notarized`, `finalized_consistent`, `fin_cert_unique_per_height`).
+//! What it keeps: vote once per view (`check_can_vote_inner`), the parent/height check on the
+//! current view only, and `accountable` (two conflicting votes by one node;
+//! `EquivocationSlashReceipt` carries the two signed votes). The module is not an instance of
+//! the Lean relation; it is the simulator the relation's §5 of the 2026-11-03 review asks to be
+//! replaced by a step function proved against that module.
+//!
 //! N simulated validators in one process (`127.0.0.1:0` ephemeral TCP and UDP ports), with:
 //! - Wire-serialized (JSON, ember's 2026-11-02 call), `SimulatorKeypair`-signed, `cSHAKE256`
 //!   domain-separated `PropCert`, `SkipCert`, `FinCert`, and `SlashingReceipt`

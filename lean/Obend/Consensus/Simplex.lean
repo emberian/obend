@@ -15,12 +15,13 @@ What this module proves (read the statements, 2026-11-04):
   against a committee lives beside it in `Obend.Consensus.Finality.QuorumBoundFinalityGate`;
   neither checks a signature.
 
-What this module does not contain: a state machine. `State`, `ViewRecord`, `register`,
-`broadcast`, `castVote` (§3–§4) are fragments with no proposal, vote, or view-change handler, and
-no theorem about `State` beyond `castVote_already_voted`. There is no `simplex_safety`,
-`simplex_no_skip_and_fin` or `simplex_bounded_liveness_after_gst`. The executable protocol is the
-one-round simulator in `crates/obend-node/src/net.rs`; `DEOS-CONTRACTS-CONSENSUS.md` §5.2 states
-what is proved about it and what is only argued.
+The protocol itself is `Obend.Consensus.SimplexProtocol` (2026-11-04): the honest rules and the
+adversary as a step relation over the message list, `Reach`, the invariant every reachable list
+satisfies, and `finalized_consistent`, `fin_cert_unique_per_height` and `accountable` derived from
+`honest_quorum_intersection` here. `State`, `ViewRecord`, `register`, `broadcast`, `castVote`
+(§3–§4) are fragments of a five-kind protocol (`candidate`, `ready`) that is not Simplex; that
+module does not use them. There is no liveness theorem. The executable node is the one-phase
+simulator in `crates/obend-node/src/net.rs`, whose header names the rules it skips.
 
 Absorbs `minidregg/Kernel/GenericSimplex.lean`, `GenericSimplexQuorum.lean`,
 and `GenericSimplexCertificateSafety.lean`; Mathlib-free.
