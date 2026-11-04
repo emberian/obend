@@ -403,3 +403,16 @@ Added to the sibling's namespace `Obend.Analysis.Interval` (for dot notation, fr
 Seen red at HEAD on bb2, not this lane's: `Obend/Teeth/Analysis/Fixtures.lean:143` (`Function expected`,
 `schrodingerEigenmodeOde`), which stops `Obend.Census`; the Mac working tree carries an uncommitted three-line
 edit of that file by another lane.
+
+### Pickup, physics lane, 2026-11-04 14:10 (Mac)
+
+Landed `3c9066b 3ae4e5e 6ad68e1 8123df8 5c4186c 016c3b7 888cf9b 164d5cf` (named files, explicit paths).
+Confirming build on bb2 at HEAD `6bdea10` plus these files, `CliffordKernel` present (`~/lane-logs/build-o.log`):
+green, Apps.FocHil/SdrFt8/QuantumPhotonicMatter included. Tests (`test6-*`): `CoupledMultiphysicsTest` green;
+`AutoCertTest` red only at `:580` `#check_docs_census` (`DESIGN.md` cites the deleted `Obend/Leaf/BendTT.lean`,
+`review/DECISIONS-LEDGER.md` lacks a doc entry; neither file is this lane's); `QuantumCliffordClementsTest`
+red at `:329-341`: `cliffordParityQuotient : Nat → Nat → IntMatrix` (`Hardware/QuantumMatter.lean:934`, HEAD)
+is passed where `checkEquitablePartition`/`perturbedQuotient` take `Nat → Nat → Int`; both files are clean at
+HEAD and untouched by this lane's commits, so it is the gate lane's (`92132ed` rewired that test).
+`Teeth/Analysis/Fixtures.lean:143` (device lane's report) is fixed in `164d5cf`. QuantumMatter: 103.2 s before
+`92132ed`'s move, 50.8 s after, measured alone on bb2.
