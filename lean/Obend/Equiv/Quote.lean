@@ -26,7 +26,7 @@ metadata of specifications, with no `metadata` observer", which is a weak-head s
 public import Obend.Equiv.Behaviour
 public import Obend.Core.Code
 public import Obend.Law.Proofs.Run
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 open Obend.Core.TermTraverse (encode encode_injective substitute_comp)
@@ -76,7 +76,7 @@ inductive Blind : Term → Term → Prop where
       Blind (.split g names f) (.split g' names f')
 
 /-- A term no context of census `b` could tell from itself by metadata: it never asks. -/
-def ObsFree (t : Term) : Prop := Blind t t
+@[expose] def ObsFree (t : Term) : Prop := Blind t t
 
 theorem zip_swap_rel {α : Type} {R : α → α → Prop} :
     ∀ {l l' : List α}, (∀ p ∈ l.zip l', R p.1 p.2) → ∀ p ∈ l'.zip l, R p.2 p.1
@@ -382,7 +382,7 @@ theorem sameRuns_of_blind {t t' : Term} (h : Blind t t') : SameRuns t t' where
 /-! ## §2. The census: which observer a context is -/
 
 /-- Does `t` hold a `metadata` observer outside a specification's own metadata field? -/
-def observes : Term → Bool
+@[expose] def observes : Term → Bool
   | .hole _ σ => (σ.map observes).any id
   | .bound _ | .nat _ | .boolean _ | .label _ => false
   | .lam b => observes b
@@ -412,14 +412,14 @@ inductive Level where
   | b | r | q
   deriving DecidableEq, Repr
 
-def Level.rank : Level → Nat
+@[expose] def Level.rank : Level → Nat
   | .b => 0 | .r => 1 | .q => 2
 
-instance : LE Level := ⟨fun x y => x.rank ≤ y.rank⟩
-instance (x y : Level) : Decidable (x ≤ y) := inferInstanceAs (Decidable (x.rank ≤ y.rank))
+@[expose] instance : LE Level := ⟨fun x y => x.rank ≤ y.rank⟩
+@[expose] instance (x y : Level) : Decidable (x ≤ y) := inferInstanceAs (Decidable (x.rank ≤ y.rank))
 
 /-- **The census** of a Core4 context: `r` if it holds a `metadata` observer, else `b`. -/
-def census (t : Term) : Level := if observes t then .r else .b
+@[expose] def census (t : Term) : Level := if observes t then .r else .b
 
 theorem any_false {xs : List Term} (h : (xs.map observes).any id = false) :
     ∀ x ∈ xs, observes x = false := by
@@ -514,21 +514,26 @@ theorem census_le_r (t : Term) : census t ≤ .r := by
 /-! ## §3. The three equivalences and the ladder -/
 
 /-- Which (closing substitution, context) pairs an observer of level `k` may use. -/
-def Admits : Level → (Nat → Term) → Term → Prop
+@[expose] def Admits : Level → (Nat → Term) → Term → Prop
   | .b, ρ, C => (∀ n, ObsFree (ρ n)) ∧ ObsFree C
   | .r, _, _ => True
   | .q, _, _ => True
 
 /-- Indistinguishable by every Core4 observer of level `k`. -/
-def Observed (k : Level) (t t' : Term) : Prop :=
+@[expose] def Observed (k : Level) (t t' : Term) : Prop :=
   ∀ (ρ : Nat → Term) (C : Term), Admits k ρ C →
     SameRuns (instantiate C (t.substitute ρ)) (instantiate C (t'.substitute ρ))
 
+/-- **`PureBEquiv`**: metadata-blind contextual equivalence (`Observed .b`), quantifying only over
+substitutions and contexts of census `b` (`ObsFree`: no `.metadata` observer outside a
+specification's own metadata field). -/
+@[expose] def PureBEquiv (a b : Term) : Prop := Observed .b a b
+
 /-- `≈q`: α-equality, what the kernel's `quote` sees. -/
-def QEquiv (t t' : Term) : Prop := encode t = encode t'
+@[expose] def QEquiv (t t' : Term) : Prop := encode t = encode t'
 
 /-- The ladder's equivalences: `≈[q]`, `≈[r]`, `≈[b]`. -/
-def LEquiv : Level → Term → Term → Prop
+@[expose] def LEquiv : Level → Term → Term → Prop
   | .q => QEquiv
   | .r => Observed .r
   | .b => Observed .b
@@ -538,9 +543,13 @@ def LEquiv : Level → Term → Term → Prop
 theorem qequiv_iff {t t' : Term} : QEquiv t t' ↔ t = t' :=
   ⟨encode_injective, fun h => h ▸ rfl⟩
 
-/-- `Equiv/Behaviour`'s `≈b` quantifies over every context, `metadata` included: it is `≈[r]`. -/
-theorem observed_r_iff {t t' : Term} : (t ≈[.r] t') ↔ t ≈b t' :=
+/-- `Equiv/Behaviour`'s `REquiv` (`≈r`, also aliased as `BEquiv` / `≈b`) quantifies over every
+context, `metadata` included: it is `≈[.r]`. -/
+theorem observed_r_iff_requiv {t t' : Term} : (t ≈[.r] t') ↔ t ≈r t' :=
   ⟨fun h ρ C => h ρ C trivial, fun h ρ C _ => h ρ C⟩
+
+theorem observed_r_iff {t t' : Term} : (t ≈[.r] t') ↔ t ≈b t' :=
+  observed_r_iff_requiv
 
 theorem Observed.refl (k : Level) (t : Term) : Observed k t t := fun _ _ _ =>
   ⟨fun _ => Iff.rfl, Iff.rfl⟩
@@ -573,6 +582,11 @@ theorem observer_ladder {t t' : Term} :
   subst this
   exact Observed.refl .r t
 
+/-- Reflective contextual equivalence (`a ≈r b`) refines metadata-blind contextual equivalence
+(`PureBEquiv a b`). -/
+theorem requiv_implies_pureBEquiv {a b : Term} (h : a ≈r b) : PureBEquiv a b :=
+  observer_ladder.2 (observed_r_iff_requiv.mpr h)
+
 /-- Blind terms are `≈b`: no observer of census `b` reads the metadata they differ in. -/
 theorem blind_observed {t t' : Term} (h : Blind t t') : t ≈[.b] t' := fun _ _ a =>
   sameRuns_of_blind (blind_instantiate a.2 (blind_substitute h a.1))
@@ -585,17 +599,17 @@ inductive Observer where
   | run (C : Term)
   | quote (C : Term)
 
-def Observer.plug : Observer → Term → Term
+@[expose] def Observer.plug : Observer → Term → Term
   | .run C, t => instantiate C t
   | .quote C, t => instantiate C (Obend.Core.Data.Data.term (Obend.Core.Code.quote t))
 
 /-- A `quote` position has census `q`; a Core4 context has its own census. -/
-def Observer.census : Observer → Level
+@[expose] def Observer.census : Observer → Level
   | .run C => Obend.Equiv.census C
   | .quote _ => .q
 
 /-- Plug `D` into the hole of `C'`, keeping every other variable of `C'` where it was. -/
-def plugContext (C' D : Term) : Term :=
+@[expose] def plugContext (C' D : Term) : Term :=
   C'.substitute (fun i => match i with | 0 => D | n + 1 => .bound (n + 1))
 
 theorem instantiate_plugContext (C' D x : Term) :
@@ -672,11 +686,11 @@ theorem not_observed_b {t t' : Term} {o o' : Observation} {v v' : Term}
   cases ow <;> cases ov' <;> simp_all
 
 /-- A Bool read-back of a run, for `decide`. -/
-def natOf : Option Term → Option Nat
+@[expose] def natOf : Option Term → Option Nat
   | some (.nat n) => some n
   | _ => none
 
-def boolOf : Option Term → Option Bool
+@[expose] def boolOf : Option Term → Option Bool
   | some (.boolean b) => some b
   | _ => none
 
@@ -697,12 +711,12 @@ theorem boolOf_eval {t : Term} {b : Bool} (fuel : Nat) (h : boolOf (Obend.Law.ru
 /-! ### Barendregt's pair: `≈r` and not `≈q`, and a `quote` observer separates them -/
 
 /-- `(λx. x)(λx. x)`. -/
-def selfApplied : Term := .app (.lam (.bound 0)) (.lam (.bound 0))
+@[expose] def selfApplied : Term := .app (.lam (.bound 0)) (.lam (.bound 0))
 /-- `λx. x`. -/
-def identityTerm : Term := .lam (.bound 0)
+@[expose] def identityTerm : Term := .lam (.bound 0)
 
 /-- A program that reads the head of a quotation: `var ↦ 0`, `bind ↦ 1`, `node ↦ 2`. -/
-def headReader : Term := .case (.bound 0) [("var", .nat 0), ("bind", .nat 1), ("node", .nat 2)]
+@[expose] def headReader : Term := .case (.bound 0) [("var", .nat 0), ("bind", .nat 1), ("node", .nat 2)]
 
 theorem headReader_selfApplied : Evaluates ((Observer.quote headReader).plug selfApplied) (.nat 2) :=
   natOf_eval 10 (by decide +kernel)
@@ -737,32 +751,32 @@ three counter specifications `A`, `B`, `C`; `compose(a, b)` is
 `leftNested` asks whether the inherited provenance of `compose(compose(A, B), C)` is composed. -/
 
 /-- `SpecMeta.declared{name, interface, claims: SpecClaims.none{}}`. -/
-def declared (name : String) : Term :=
+@[expose] def declared (name : String) : Term :=
   .inject "declared" (.record [("name", .label name), ("interface", .label "Counter"),
     ("claims", .inject "none" (.record []))])
 
 /-- `λself. λsuper. super with n = super.n op k`. -/
-def counterExtension (op : Primitive) (k : Nat) : Term :=
+@[expose] def counterExtension (op : Primitive) (k : Nat) : Term :=
   .lam (.lam (.extend (.bound 0) [("n", .binary op (.get (.bound 0) "n") (.nat k))]))
 
-def specA : Term := .specification (declared "AssociationProvenance.A") (counterExtension .add 1)
-def specB : Term := .specification (declared "AssociationProvenance.B") (counterExtension .multiply 2)
-def specC : Term := .specification (declared "AssociationProvenance.C") (counterExtension .add 3)
+@[expose] def specA : Term := .specification (declared "AssociationProvenance.A") (counterExtension .add 1)
+@[expose] def specB : Term := .specification (declared "AssociationProvenance.B") (counterExtension .multiply 2)
+@[expose] def specC : Term := .specification (declared "AssociationProvenance.C") (counterExtension .add 3)
 
 /-- `compose(a, b)`, as the elaborator lowers it for two specification operands. -/
-def compose (a b : Term) : Term :=
+@[expose] def compose (a b : Term) : Term :=
   .specification (.inject "composed" (.record [("inherited", .metadata a), ("wrapping", .metadata b)]))
     (.mix a b)
 
 /-- `isComposed(inheritedOf(metadata(·)))`: the probes' observer, a context with its hole at 0. -/
-def provenanceProbe : Term :=
+@[expose] def provenanceProbe : Term :=
   .case (.case (.metadata (.bound 0))
       [("declared", .metadata (.bound 1)), ("composed", .get (.bound 0) "inherited"),
         ("extension", .metadata (.bound 1))])
     [("declared", .boolean false), ("composed", .boolean true), ("extension", .boolean false)]
 
-def leftNested : Term := compose (compose specA specB) specC
-def rightNested : Term := compose specA (compose specB specC)
+@[expose] def leftNested : Term := compose (compose specA specB) specC
+@[expose] def rightNested : Term := compose specA (compose specB specC)
 
 /-- **R01**: `leftNested()` is `true`. -/
 theorem probe_R01 : Evaluates ((Observer.run provenanceProbe).plug leftNested) (.boolean true) :=
@@ -827,6 +841,13 @@ theorem compose_not_assoc_r : ¬ (leftNested ≈[.r] rightNested) := by
   have := rewrite_sound_below .r h (.run provenanceProbe) (census_le_r _)
   exact not_observed_b probe_R01 (.boolean true) probe_R02 (.boolean false) (by decide)
     (observer_ladder.2 this)
+
+/-- `REquiv` (`≈r`) is strictly finer than `PureBEquiv` (`Observed .b`): `leftNested` and
+`rightNested` are `PureBEquiv` (`compose_assoc_probe`), yet not `REquiv` (`compose_not_assoc_r`). -/
+theorem requiv_strictly_stronger_than_pureBEquiv :
+    ∃ a b : Term, PureBEquiv a b ∧ ¬ (a ≈r b) :=
+  ⟨leftNested, rightNested, compose_assoc_probe,
+    fun h => compose_not_assoc_r (observed_r_iff_requiv.mpr h)⟩
 
 /-- **The `k = b` tooth of T5**: without its census premise the licence is false. A `metadata`
 frame on the hole (census `r`) separates two `≈b` specifications. -/

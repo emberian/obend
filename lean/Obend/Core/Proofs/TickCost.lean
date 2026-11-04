@@ -547,15 +547,31 @@ theorem finishedNat_mono {L : Limits} {k k' : Nat} {s : State} {n : Nat}
     | _ => simp [finishedNat]
   | _ => simp [finishedNat]
 
-/-- **Theorem (`cost_indexed_completeness`, WS 27 G1)**:
+/-- **Theorem (`fragment_cost_indexed_completeness`, Chair 7 Finding 9)**:
 Every bounded-closure program in `InFragment` that completes on the machine and has a clairvoyant
 derivation `CV t v k` possesses a verified cost-indexed ledger (`CostIndexedRun 4 t`) whose machine
-ticks are bounded by $4 \times$ the least clairvoyant demand cost. -/
-theorem cost_indexed_completeness :
+ticks are bounded by $4 \times$ the least clairvoyant demand cost.
+
+**Scope Note**: This theorem applies specifically to the `InFragment` fragment (projections of
+literal records under `FieldChain`). General `Core4` cost-indexed completeness outside `InFragment`
+(`GeneralCostIndexedCompleteness c`) remains an open research problem and is not claimed here. -/
+theorem fragment_cost_indexed_completeness :
     ∀ t, InFragment t → ∀ T n, FirstFinish t T n → ∀ v k, CV t v k → Nonempty (CostIndexedRun 4 t) := by
   rintro t ⟨fs, x, rfl, nd⟩ _ _ _ _ _ cv
   obtain ⟨u, m, hd, _, _⟩ := demand_minimal nd cv
   exact fragment_cost_indexed nd hd
+
+/-- Statement of general `Core4` cost-indexed completeness (without the `InFragment` restriction)
+at constant factor `c`. Kept as an explicit open proposition (`Prop`), never asserted as an axiom. -/
+def GeneralCostIndexedCompleteness (c : Nat) : Prop :=
+  ∀ t T n, FirstFinish t T n → ∀ v k, CV t v k → Nonempty (CostIndexedRun c t)
+
+/-- Backwards-compatible alias for `fragment_cost_indexed_completeness`.
+Note: this theorem is restricted to `InFragment t`; general `Core4` `CostIndexedCompleteness`
+outside `InFragment` (`GeneralCostIndexedCompleteness`) remains open. -/
+theorem cost_indexed_completeness :
+    ∀ t, InFragment t → ∀ T n, FirstFinish t T n → ∀ v k, CV t v k → Nonempty (CostIndexedRun 4 t) :=
+  fragment_cost_indexed_completeness
 
 end Obend.Core.Proofs.TickCost
 end

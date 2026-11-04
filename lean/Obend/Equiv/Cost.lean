@@ -15,7 +15,7 @@ both directions. `mix_assoc_cost`: the two associations of `mix` are within a fa
 other in every context. The factor is a constant, not an additive bound: a context that applies
 the association `n` times pays the per-application difference `n` times. -/
 public import Obend.Equiv.Improvement
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 set_option autoImplicit false
@@ -73,7 +73,7 @@ theorem sim_single {x x' : Term} (h : Sim x x') : ∀ n, Sim (single x n) (singl
 
 /-- The cost `k'` on the right is within a factor of 8 of the cost `k` on the left, and 7 less
 than `8k` when `k > 0`. -/
-def Within (k k' : Nat) : Prop := k' + 7 * min k 1 ≤ 8 * k
+@[expose] def Within (k k' : Nat) : Prop := k' + 7 * min k 1 ≤ 8 * k
 
 theorem Within.add {a a' b b' : Nat} (h1 : Within a a') (h2 : Within b b') : Within (a + b) (a' + b') := by
   unfold Within at *; omega
@@ -81,7 +81,7 @@ theorem Within.add {a a' b b' : Nat} (h1 : Within a a') (h2 : Within b b') : Wit
 theorem Within.zero : Within 0 0 := by simp [Within]
 
 /-- The simulation, for every evaluation or template derivation cheaper than `n`. -/
-def SimBelow (n : Nat) : Prop :=
+@[expose] def SimBelow (n : Nat) : Prop :=
   ∀ (r : Tail), ∀ j < n, ∀ {t t' v : Term}, Sim t t' → Run (.tail r) t v j →
     ∃ v' j', Run (.tail r) t' v' j' ∧ Sim v v' ∧ Within j j'
 
@@ -634,12 +634,12 @@ theorem sim_cv {t t' v : Term} {k : Nat} (hs : Sim t t') (h : CV t v k) :
 /-- Improvement within a constant factor (Moran–Sands Def. 4.1) for the clairvoyant semantics: in
 every substitution and context, a derivation of `C[t]` of cost `k` gives one of `C[t']` of cost at
 most `A * k`, with the same result when the result is a literal. -/
-def CostWithin (A : Nat) (t t' : Term) : Prop :=
+@[expose] def CostWithin (A : Nat) (t t' : Term) : Prop :=
   ∀ (ρ : Nat → Term) (C v : Term) (k : Nat), CV (instantiate C (t.substitute ρ)) v k →
     ∃ v' k', CV (instantiate C (t'.substitute ρ)) v' k' ∧ k' ≤ A * k ∧ (Literal v → v' = v)
 
 /-- `t ≈c t'`: each is within a constant factor of the other, in every context. -/
-def CEquiv (t t' : Term) : Prop := ∃ A, CostWithin A t t' ∧ CostWithin A t' t
+@[expose] def CEquiv (t t' : Term) : Prop := ∃ A, CostWithin A t t' ∧ CostWithin A t' t
 
 @[inherit_doc] infix:50 " ≈c " => CEquiv
 
