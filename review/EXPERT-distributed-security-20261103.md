@@ -427,3 +427,75 @@ change), while every document and the `#tooth`/test names describe the first. Th
 a simulator is to say so in its module header and strip the words "Ed25519", "durable", and
 "stranger-checkable" from what it emits; the honest fix for a validator is §5. They are different
 projects and I cannot tell which one you want.
+
+## 7. What landed (2026-11-04)
+
+Built and tested on bb2 in `~/lane-security`: HEAD `a180c75` plus this lane's files. The Lean
+library was built as `lake build Obend:shared` with, locally on bb2 only, the `Obend` umbrella
+module dropped from the lib globs (HEAD's lakefile had already moved `Obend.Apps.*` to tier 2)
+and `Hardware/UserspacePhysical.lean` taken from the working tree, because HEAD's copy and HEAD's
+`Obend.lean` import `Obend.Leaf.BendTT`, which HEAD deleted in `fb35622`; HEAD is red there and
+that is the compiler lane's. 876 jobs, no errors, `libobend_Obend.so` 45.8 MB. Rust against that
+library with `OBEND_REQUIRE_NATIVE_FFI=1`: `cargo test -p obend-ffi` 27/27 (unit 2, C-ABI edges
+8, pool stress 7, integration 5, receipt-session binding 5); `cargo test -p obend-node --lib`
+filtered to the protocol, WAL, mandate, witness and clearing tests 23/23; the cluster integration
+test 2/2; `cargo test -p obend-sandbox` 22/22; `python3 -I tests/run-receipts.py` 32/32 on the Mac.
+Five named-file commits, Bridge first; the sixth is this section.
+
+**Closed in place.**
+- S2 (the self-admission loop). `admittedRoots` is gone; `committedRoots` is written only by
+  `turnCommitCore` (`turnProposeCore_committedRoots_unchanged`); `verifyReceiptCore` takes the
+  frame `root || size || index || pathLen || path || payload`, refuses anything under 56 bytes
+  (so the bare 32-byte root of 11-01), and opens the payload with `Merkle.opens` against a
+  committed root (`verifyReceiptCore_sound`). The prose gate `checkObligationPropHolds` and
+  `isValidCertObligation` are deleted. A certificate enters a session only as a
+  `TurnWitness {format, version, grade, obj, cert}` checked by `Obend.Judge.registry`
+  (`Bridge.lean:1228-1260`). The Rust session's `commit_payload` returns the frame
+  `verify_receipt` accepts, and the stub refuses every weave because it has no judge registry;
+  `kernel_is_native()` exists so a test that needs the kernel says so rather than pass.
+  Receipts are bound to the committing session (`receipt_session_binding.rs`, 5 tests).
+- `VaultTurn.witnesses` is populated. `VaultTurn.ofWitnessLegs` (`Vault/Hyperedge.lean`) is the
+  constructor; every Bridge commit goes through it; in the node, the clearing step encodes the
+  batch and certificate as the Lean `drex-clearing@1` witness (`lean_clearing_witness_json`,
+  `Nat` ids as `decodeClearingObj` reads them), weaves it, and commits the woven turn. The two
+  node tests that step a verified session with a clearing batch now pass only when the Lean judge
+  accepts that witness, and do (natively, 2/2).
+- S14 (the unkeyed `ok` receipt): no such receipt is produced by any path that survived; the
+  registry is the one seam (`sessionJudgeFormats := registry`) and six entries whose decoders
+  read nothing, or named formats that exist nowhere, are out of it (`Judge.lean:54-79`).
+- S11 (false `¬ Collision H` hypotheses): the eight theorems conclude `P ∨ Collision H` with the
+  pair exhibited (`Receipt.lean`, `Vault/Projection.lean`, `Vault/Rehydration.lean`,
+  `Vault/SovereignEngine.lean`). SovereignEngine's token bound needed `Lower/PolicyToGrain` to
+  refuse a stream longer than `maxTokens` instead of scanning its prefix; that change is in the
+  same commit.
+- Panel-diff items. `Law/Contract.lean`: reverted to HEAD (the working-tree "soundness theorem"
+  was a check over eight sampled states and never built), then the `.byLrat` tier refused
+  outright (`checkContractCert_byLrat_refused`; its default clause set `[[1],[-1]]` was
+  unsatisfiable alone, so any refutation passed). `Judge/Clearing.lean`: a batch with two orders
+  from one account is refused (`duplicateAccount`, `judge_ok_accounts_nodup`), the condition
+  under which a per-account net-flow fill is an order's fill. `Ledger/Seat.lean`: duplicate asset
+  keys summed. `sovereign-drex`: `obend check` accepts, `verilator --lint-only` clean.
+- S10, in part: delegating a mandate debits the parent's budget (`net.rs:704-727`).
+- The obend-gui segfault: the C bridge initialises the runtime once under `pthread_once` and
+  `pool.rs` attaches threads through `obend_ensure_lean_thread` instead of calling
+  `lean_initialize_thread` first. `silicon_bridge` builds against the HAL without the F2 backend.
+
+**Renamed, not fixed.** `obend-node` is now described everywhere (crate, module headers, PLAN
+WS 21/26/32, DEOS §5.2) as the in-process simulator it is. The curve arithmetic is
+`SimulatorKeypair` under a quarantine header; no doc line calls it Ed25519. The `Propose` handler
+casts its finalize vote only in its current view and only for a proposal extending its committed
+tip (`net.rs:2540-2580`), which removes the future-view split of S1, but the protocol is still one
+phase without a lock and `Consensus/Simplex.lean`'s header now says that no state machine, timer
+or cross-view safety theorem exists. `DrexClearingCertificate::verify_with_kernel` is documented
+as the Rust mirror judge it always was (it never used its session).
+
+**Still exposed** (the ranking of §3 stands for these): S1 as a protocol (no notarize phase, no
+lock, no Lean step function; the fix is §5.1); S6 (the simulator crypto is in the signing path
+of every certificate the simulator emits); S10 (mandates keyed by a self-asserted holder string);
+S12 (blinding salt from public data); S15 (JSON on every wire); S9 (the WAL is a `Vec<u8>`);
+the stub FFI is still a silent fallback unless `OBEND_REQUIRE_NATIVE_FFI=1` is set.
+
+Not this lane's, found on the way: HEAD is red at the Leaf seam (`Obend.lean` and
+`Hardware/UserspacePhysical.lean` import the deleted `Obend.Leaf.BendTT`; the working-tree
+`Leaf/Futamura.lean` rewrite leaves HEAD's `Stdlib.lean` without the names it opens).
+`Lower/Proofs/SiliconKernel.lean` in the working tree imports the untracked `Leaf/Static.lean`.
