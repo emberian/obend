@@ -46,5 +46,12 @@ def institutionalZoeSeat() -> ZoeSeat:
 def institutionalSafetyAt80() -> Nat:
   institutionalZoeSeat().offerSafetyMargin(80n)
 
+def zoeOfferSafeCheck(giveUsed: Nat, giveLimit: Nat, wantFloor: Nat, gotAllocated: Nat, crownBefore: Nat, crownAfter: Nat) -> Bool:
+  (giveUsed <= giveLimit) && ((wantFloor <= gotAllocated) || (giveUsed == 0n)) && (crownBefore <= crownAfter)
+
+def institutionalOfferSafeValid() -> Bool:
+  let seat = institutionalZoeSeat()
+  zoeOfferSafeCheck(20000n, seat.cbdcEscrow, 80000n, institutionalSafetyAt80(), seat.welfareCreditCrown, seat.welfareCreditCrown)
+
 def institutionalMandateAt15() -> Nat:
   institutionalZoeSeat().mandateReserveCheck(15n)

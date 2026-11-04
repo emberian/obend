@@ -42,22 +42,42 @@ structure Proposal where
 def Proposal.assets (p : Proposal) : List AssetId :=
   ((p.give ++ p.want).map Prod.fst).eraseDups
 
-/-- Offer safety: either every `want` is met, or every `give` is refunded. -/
+/-- Check that `p.give` and `p.want` each have duplicate-free asset keys. -/
+def Proposal.assetsNodupB (p : Proposal) : Bool :=
+  decide ((p.give.map Prod.fst).Nodup ∧ (p.want.map Prod.fst).Nodup)
+
+/-- Total amount requested or offered for `ast` across all entries in `pairs`
+    (summing duplicate asset keys so `[(0, 50), (0, 50)]` requires `100` of asset `0`). -/
+def assetAmountSum (pairs : List (AssetId × Nat)) (ast : AssetId) : Nat :=
+  ((pairs.filter (fun (a, _) => a == ast)).map Prod.snd).sum
+
+/-- Offer safety: either every `want` is met, or every `give` is refunded,
+    with per-asset amounts summed across any duplicate keys. -/
 def safeAt (b : Book) (account : AccountId) (p : Proposal) : Bool :=
-  let wantMet := p.want.all fun (ast, amt) => (amt : Int) ≤ b.balance account ast
-  let giveRefunded := p.give.all fun (ast, amt) => (amt : Int) ≤ b.balance account ast
+  let wantMet :=
+    p.want.all fun (ast, amt) =>
+      decide ((amt : Int) ≤ b.balance account ast) &&
+      decide ((assetAmountSum p.want ast : Int) ≤ b.balance account ast)
+  let giveRefunded :=
+    p.give.all fun (ast, amt) =>
+      decide ((amt : Int) ≤ b.balance account ast) &&
+      decide ((assetAmountSum p.give ast : Int) ≤ b.balance account ast)
   wantMet || giveRefunded
 
 theorem atLeast_mono {b b' : Book} {account account' : AccountId}
     (hmore : ∀ ast, b.balance account ast ≤ b'.balance account' ast)
-    (pairs : List (AssetId × Nat))
-    (hall : pairs.all (fun (ast, amt) => (amt : Int) ≤ b.balance account ast) = true) :
-    pairs.all (fun (ast, amt) => (amt : Int) ≤ b'.balance account' ast) = true := by
+    (pairs fullPairs : List (AssetId × Nat))
+    (hall : pairs.all (fun (ast, amt) =>
+      decide ((amt : Int) ≤ b.balance account ast) &&
+      decide ((assetAmountSum fullPairs ast : Int) ≤ b.balance account ast)) = true) :
+    pairs.all (fun (ast, amt) =>
+      decide ((amt : Int) ≤ b'.balance account' ast) &&
+      decide ((assetAmountSum fullPairs ast : Int) ≤ b'.balance account' ast)) = true := by
   induction pairs with
   | nil => rfl
   | cons pair rest ih =>
     simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at hall ⊢
-    refine ⟨Int.le_trans hall.1 (hmore pair.1), ih hall.2⟩
+    refine ⟨⟨Int.le_trans hall.1.1 (hmore pair.1), Int.le_trans hall.1.2 (hmore pair.1)⟩, ih hall.2⟩
 
 /-- The law is monotone: crediting an account never violates offer safety. -/
 theorem safeAt_mono {b b' : Book} {account account' : AccountId} {p : Proposal}
@@ -67,8 +87,24 @@ theorem safeAt_mono {b b' : Book} {account account' : AccountId} {p : Proposal}
   unfold safeAt at hsafe ⊢
   simp only [Bool.or_eq_true] at hsafe ⊢
   rcases hsafe with hwant | hgive
-  · left; exact atLeast_mono hmore p.want hwant
-  · right; exact atLeast_mono hmore p.give hgive
+  · left; exact atLeast_mono hmore p.want p.want hwant
+  · right; exact atLeast_mono hmore p.give p.give hgive
+
+/-- Duplicate asset keys in `want` cannot double-count a single asset balance under `safeAt`. -/
+example :
+    let b : Book := {
+      accounts := [protectedBase]
+      balances := fun acc ast => if acc == protectedBase && ast == 0 then 60 else 0
+      leaseRecords := fun _ => none
+      floors := fun _ _ => 0
+    }
+    let p : Proposal := {
+      give := [(1, 100)]
+      want := [(0, 50), (0, 50)]
+      exit := .onDemand
+      donate := false
+    }
+    safeAt b protectedBase p = false := rfl
 
 /-! ## The Seat Structure & Protected Coordinates (Major Finding 4) -/
 

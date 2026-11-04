@@ -57,5 +57,12 @@ def drexSettlementAt8() -> Nat:
 def drexFinalityTagAt3() -> Nat:
   carryUpgradedSovereignDrex().finalityCommitTag(3n)
 
+def verifySovereignBatchGate(quorumVotes: Nat, prevEpoch: Nat, curEpoch: Nat, txPinDigest: Nat, expectedPinDigest: Nat, deltaDebit: Nat, deltaCredit: Nat, seatWantFloor: Nat, seatGotAfter: Nat, crownDropReq: Nat) -> Bool:
+  let ex = carryUpgradedSovereignDrex()
+  (ex.validatorQuorum <= quorumVotes) && ((prevEpoch + 1n) <= curEpoch) && (txPinDigest == expectedPinDigest) && (deltaDebit == deltaCredit) && (seatWantFloor <= seatGotAfter) && (crownDropReq == 0n)
+
+def sovereignDrexEndToEndSafetyValid() -> Bool:
+  SeatMod.institutionalOfferSafeValid() && BookMod.wholesaleCrossingConservedValid() && ClearingMod.sovereignBatchConservationValid() && verifySovereignBatchGate(3n, 2n, 3n, ClearingMod.sovereignDigestAt5(), 182n, drexSettlementAt8(), 5000n, 4000n, 5000n, 0n)
+
 def crossModuleDrexSummary() -> Nat:
   SeatMod.institutionalSafetyAt80() + BookMod.wholesaleSlackAt10() + ClearingMod.sovereignDigestAt5() + drexSettlementAt8()

@@ -60,6 +60,36 @@ structure ClearingQuery where
 def isOrderAccount (orders : List Order) (account : AccountId) : Bool :=
   orders.any fun order => order.account == account
 
+/-- The first account two orders share, if any. Fills are read off the account's net flow
+(`Order.fill`), so a batch with two orders from one account would let them share one fill;
+`judge` refuses such a batch (`duplicateAccount`, `judge_ok_accounts_nodup`). -/
+def firstDuplicateAccount? : List Order → Option AccountId
+  | [] => none
+  | o :: rest =>
+    if rest.any (fun o' => o'.account == o.account) then some o.account
+    else firstDuplicateAccount? rest
+
+theorem firstDuplicateAccount?_none_iff :
+    ∀ (os : List Order), firstDuplicateAccount? os = none ↔ (os.map (·.account)).Nodup
+  | [] => by simp [firstDuplicateAccount?]
+  | o :: rest => by
+    simp only [firstDuplicateAccount?, List.map_cons, List.nodup_cons, List.mem_map]
+    constructor
+    · intro h
+      split at h
+      · cases h
+      · rename_i hany
+        refine ⟨?_, (firstDuplicateAccount?_none_iff rest).1 h⟩
+        rintro ⟨o', ho', he⟩
+        apply hany
+        exact List.any_eq_true.2 ⟨o', ho', by simp [he]⟩
+    · rintro ⟨hnot, hnd⟩
+      split
+      · rename_i hany
+        obtain ⟨o', ho', he⟩ := List.any_eq_true.1 hany
+        exact absurd ⟨o', ho', by simpa using he⟩ hnot
+      · exact (firstDuplicateAccount?_none_iff rest).2 hnd
+
 /-- The best (highest limit price) bid with positive quantity.
     b₁ has higher limit than b₂ iff b₂.total * b₁.qty < b₁.total * b₂.qty. -/
 def highestBid? (orders : List Order) : Option Order :=
@@ -78,23 +108,32 @@ def lowestAsk? (orders : List Order) : Option Order :=
   | a :: as => some (as.foldl (fun best a =>
       if a.total * best.qty < best.total * a.qty then a else best) a)
 
-/-- A crossing pair exists iff the highest bid can trade with the lowest ask. -/
+/-- A crossing pair exists at an integer tick iff the highest bid can trade with the lowest ask
+    at some integer price (`ceil(aMin.total / aMin.qty) ≤ floor(bMax.total / bMax.qty)`). -/
 def hasCrossingPair (orders : List Order) : Bool :=
   match highestBid? orders, lowestAsk? orders with
-  | some bMax, some aMin => aMin.total * bMax.qty ≤ bMax.total * aMin.qty
+  | some bMax, some aMin =>
+    let askUnit := (aMin.total + aMin.qty - 1) / aMin.qty
+    let bidUnit := bMax.total / bMax.qty
+    aMin.total * bMax.qty ≤ bMax.total * aMin.qty && askUnit ≤ bidUnit
   | _, _ => false
 
-/-- Price validity: when crossed orders exist, the proposed price must lie within
+/-- Price validity: when integer-crossing orders exist, the proposed price must lie within
     the crossing interval [lowest ask, highest bid] (i.e. cross both endpoints). -/
 def priceInCrossingInterval (orders : List Order) (price : Nat) : Bool :=
   match highestBid? orders, lowestAsk? orders with
   | some bMax, some aMin =>
-    if aMin.total * bMax.qty ≤ bMax.total * aMin.qty then
+    let askUnit := (aMin.total + aMin.qty - 1) / aMin.qty
+    let bidUnit := bMax.total / bMax.qty
+    if aMin.total * bMax.qty ≤ bMax.total * aMin.qty && askUnit ≤ bidUnit then
       aMin.crosses price && bMax.crosses price
     else true
   | _, _ => true
 
-/-! ## Net Flow & Order Fills -/
+/-! ## Net Flow & Order Fills
+
+A fill is read off the ACCOUNT's net flow in the goods asset, so it is an order's fill only when
+the account placed one order in the batch. `judge` enforces that (`judge_ok_accounts_nodup`). -/
 
 def netFlow (transfers : List ResourcePosting) (account : AccountId) (asset : AssetId) : Int :=
   (transfers.map fun t =>
@@ -117,6 +156,7 @@ inductive ClearingRefusal where
   | marketMalformed
   | foreignAsset (posting : ResourcePosting)
   | notAnOrder (posting : ResourcePosting)
+  | duplicateAccount (account : AccountId)
   | invalidPrice (price : Nat)
   | slackCount (orders slacks : Nat)
   | notUniform (account : AccountId)
@@ -142,6 +182,9 @@ def judge (m : Market) (orders : List Order) (transfers : List ResourcePosting) 
     match transfers.find? (fun t => !isOrderAccount orders t.source || !isOrderAccount orders t.destination) with
     | some t => .error (.notAnOrder t)
     | none =>
+      match firstDuplicateAccount? orders with
+      | some a => .error (.duplicateAccount a)
+      | none =>
       if !priceInCrossingInterval orders c.price then
         .error (.invalidPrice c.price)
       else if c.slacks.length ≠ orders.length then
@@ -193,6 +236,20 @@ def judge (m : Market) (orders : List Order) (transfers : List ResourcePosting) 
                     .error .unservedCrossing
                   else .ok ()
                 else .error (.uncertified gap m.epsilon)
+
+/-- **One order per account**: an accepted batch names every account once, so every
+`Order.fill` is that order's fill and not a sum over the account's orders. -/
+theorem judge_ok_accounts_nodup (m : Market) (orders : List Order) (transfers : List ResourcePosting)
+    (c : Certificate) (h : judge m orders transfers c = .ok ()) :
+    (orders.map (·.account)).Nodup := by
+  unfold judge at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h
+  · contradiction
+  · rename_i hdup
+    exact (firstDuplicateAccount?_none_iff orders).1 hdup
 
 /-! ## Soundness: Weak Duality & ε-Optimality (Full Machine-Checked Proofs) -/
 
@@ -300,6 +357,7 @@ theorem judge_certifies_epsilon_optimal (m : Market) (orders : List Order)
       (∀ i, f' i ≤ cap i) →
       finSum n f' ≤ finSum n f + (m.epsilon : Int) := by
   unfold judge at h_judge
+  split at h_judge <;> try contradiction
   split at h_judge <;> try contradiction
   split at h_judge <;> try contradiction
   split at h_judge <;> try contradiction

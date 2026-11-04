@@ -48,5 +48,12 @@ def wholesaleVolumeAt20() -> Nat:
 def wholesaleSlackAt10() -> Nat:
   wholesaleDvPOrderBook().bookConservationSlack(10n)
 
+def uniformCrossingAndConservationCheck(askUnit: Nat, clearingPrice: Nat, bidUnit: Nat, buyerPaid: Nat, sellerReceived: Nat) -> Bool:
+  (askUnit <= clearingPrice) && (clearingPrice <= bidUnit) && (buyerPaid == sellerReceived)
+
+def wholesaleCrossingConservedValid() -> Bool:
+  let book = wholesaleDvPOrderBook()
+  uniformCrossingAndConservationCheck(9800n, book.uniformClearingPriceBps, 9900n, wholesaleVolumeAt20(), 127000n)
+
 def crossModuleSeatBookLiquidity() -> Nat:
   SeatMod.institutionalSafetyAt80() + wholesaleVolumeAt20()

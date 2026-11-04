@@ -147,7 +147,11 @@ inductive ContractCert where
   | byLawDial (lawExpr invExpr : LawExpr) (keys : List String)
   /-- Tier 2a: Lowered decider synthesized from a verified Lean proposition. -/
   | byLoweredDecider (declName : String) (argTys : List Ty) (receipt : ByteArray)
-  /-- Tier 2b: Verified LRAT SAT refutation certificate. -/
+  /-- Tier 2b, WITHDRAWN 2026-11-04: an LRAT refutation of a CNF. No CNF encoding of a Core4
+      goal exists, so no refutation says anything about the goal (the old default base CNF
+      `[[1], [-1]]` was unsatisfiable on its own, so any appended goal clause was "refuted" for
+      free). `checkContractCert` refuses this tier outright (`checkContractCert_byLrat_refused`);
+      the constructor stays so stored certificates still decode, and are refused. -/
   | byLrat (cnf : Cnf) (proof : List Step)
   /-- Tier 3: Full interactive Lean 4 tactic reflection proof woven as TransportCert. -/
   | byLoweredLean (obj : TransportObj) (cert : TransportCert) (pins : List LeafPin)
@@ -627,16 +631,20 @@ def evalAdmitsBounded (law : Term) (old new req : Data) : Bool :=
   | some (.inject tag _) => tag == "ok"
   | _ => false
 
-/-- Finite propositional probe states for bounded counterexample search on `ContractGoal`. -/
+/-- The four probe states of the bounded counterexample search (`checkGoalPropositionalUnsat`). -/
 def samplePropositionalStates : List Data :=
   [ .record []
   , .record [("x", .natural 0)]
   , .record [("x", .natural 1)]
   , .record [("x", .natural 2)] ]
 
-/-- Executable bounded boolean/propositional unsatisfiability check for a negated `ContractGoal`:
-    returns `true` only when `g` passes syntactic guard / structural obligation verification OR
-    is inhabited and has no counterexample transition `(old, new, req)` in the bounded domain. -/
+/-- A FILTER, not a proof: `true` when `g` passes the syntactic guard check, or when it is
+    inhabited at one of `samplePropositionalStates` and no transition `(old, new, req)` drawn from
+    the 4 × 4 sample grid with the empty request is a counterexample. A law can pass this and break
+    its invariant at a state outside the grid (`x ≥ 3`, a non-empty request). The semantic
+    statements are `CellContract.inductive_preserves` and `Narrows`; the Vault cell contracts
+    discharge them by proof (`Obend.Vault.Escrow`, `cellContractOfProofs`), never by this check,
+    and no theorem in this file claims more of it than its definition. -/
 def checkGoalPropositionalUnsat (g : ContractGoal) : Bool :=
   checkGoalSyntacticObligation g ||
   match g with
@@ -657,24 +665,6 @@ def checkGoalPropositionalUnsat (g : ContractGoal) : Bool :=
     samplePropositionalStates.all fun old =>
       samplePropositionalStates.all fun new =>
         !(evalHoldsBounded i old && evalAdmitsBounded l old new d0 && !evalAdmitsBounded s old new d0)
-
-/-- Verify that `cnf` is a sound, non-tautological propositional encoding of the negated `ContractGoal` `g`. -/
-def verifyGoalCnfEncoding (g : ContractGoal) (cnf : Cnf) : Bool :=
-  checkGoalPropositionalUnsat g &&
-  !cnf.clauses.isEmpty &&
-  !cnf.clauses.any isTautologicalClause &&
-  (match cnfEmbeddedGoal? cnf with
-   | some cg =>
-     (g.kind == cg.kind) &&
-     termEq g.law cg.law &&
-     termEq g.invariant cg.invariant &&
-     termEq g.step cg.step
-   | none => false) &&
-  (!cnfHasContradictoryUnits cnf || checkGoalPropositionalUnsat g)
-
-/-- Attach a canonical `ContractGoal` clause to a `Cnf` for `.byLrat` goal-bound verification. -/
-def mkGoalBoundLratCnf (g : ContractGoal) (baseCnf : Cnf := ⟨1, [[1], [-1]]⟩) : Cnf :=
-  { vars := max 2 baseCnf.vars, clauses := baseCnf.clauses ++ [goalToLratClause g] }
 
 /-! ### Sound Tier 3 Goal-Bound LoweredLean Verification -/
 
@@ -759,8 +749,7 @@ def certEmbeddedGoal? (cert : ContractCert) : Option ContractGoal :=
     | _ => some (.preserves (lawExprToTerm l) (lawExprToTerm i))
   | .byLoweredDecider _ _ receipt =>
     deciderReceiptEmbeddedGoal? receipt
-  | .byLrat cnf proof =>
-    if proof.isEmpty then none else cnfEmbeddedGoal? cnf
+  | .byLrat _ _ => none
   | .byLoweredLean _ tcert pins =>
     match ContractGoal.ofTerm? tcert.claim with
     | some g => some g
@@ -775,7 +764,7 @@ def certEmbeddedGoal? (cert : ContractCert) : Option ContractGoal :=
        `goal.invariant`, and `goal.step`.
     2. Requires universal implication (not merely finite sampling) for `.byLawDial`.
     3. Binds the canonical encoding of `(goal.kind, goal.law, goal.invariant, goal.step)` and
-       kernel obligation verification in `.byLoweredDecider` and `.byLrat`. -/
+       kernel obligation verification in `.byLoweredDecider`; refuses `.byLrat` outright. -/
 def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict :=
   match certEmbeddedGoal? cert with
   | none =>
@@ -801,13 +790,8 @@ def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict 
         checkLawDialStepSound l stepRel keys
       | _, .byLoweredDecider declName argTys receipt =>
         checkDeciderReceipt goal declName argTys receipt
-      | _, .byLrat cnf proof =>
-        if !proof.isEmpty &&
-           verifyGoalCnfEncoding goal cnf &&
-           (Obend.Judge.Lrat.check proof.length cnf (.refutation proof) == .ok) then
-          .valid
-        else
-          .invalid "LRAT refutation check failed"
+      | _, .byLrat _ _ =>
+        .invalid "lrat tier withdrawn: no CNF encoding of a Core4 goal exists, so a refutation proves nothing about the goal"
       | _, .byLoweredLean obj tcert pins =>
         checkLoweredLean goal obj tcert pins
       | _, _ =>
@@ -818,32 +802,19 @@ def checkContractCert (goal : ContractGoal) (cert : ContractCert) : CertVerdict 
 def falseContractGoal : ContractGoal :=
   .preserves (.lam (.lam (.lam (.inject "ok" (.record []))))) (.lam (.boolean false))
 
-theorem falseContractGoal_propositionalUnsat_false :
+example :
     checkGoalPropositionalUnsat falseContractGoal = false := by
   decide +kernel
 
-theorem verifyGoalCnfEncoding_falseContractGoal (cnf : Cnf) :
-    verifyGoalCnfEncoding falseContractGoal cnf = false := by
-  unfold verifyGoalCnfEncoding
-  rw [falseContractGoal_propositionalUnsat_false]
-  rfl
+/-- **The LRAT tier is refused for every goal and every certificate.** -/
+theorem checkContractCert_byLrat_refused (goal : ContractGoal) (cnf : Cnf) (proof : List Step) :
+    checkContractCert goal (.byLrat cnf proof) ≠ .valid := by
+  intro h
+  simp [checkContractCert, certEmbeddedGoal?] at h
 
-/-- **Universal `.byLrat` False-Goal Refusal Theorem (`checkContractCert_byLrat_refuses_false_goal`)**:
-    For EVERY `cnf : Lrat.Cnf` and EVERY `proof : Lrat.Proof`, `checkContractCert` rejects
-    `falseContractGoal` (`≠ .valid`), purging the tautological `1 :: -1` clause bypass. -/
-theorem checkContractCert_byLrat_refuses_false_goal
-    (cnf : Cnf) (proof : List Step) :
-    checkContractCert falseContractGoal (.byLrat cnf proof) ≠ .valid := by
-  unfold checkContractCert
-  cases hemb : certEmbeddedGoal? (.byLrat cnf proof) with
-  | none =>
-    simp
-  | some certGoal =>
-    simp only []
-    split
-    · simp
-    · rw [verifyGoalCnfEncoding_falseContractGoal]
-      simp
+theorem checkContractCert_byLrat_refuses_false_goal (cnf : Cnf) (proof : List Step) :
+    checkContractCert falseContractGoal (.byLrat cnf proof) ≠ .valid :=
+  checkContractCert_byLrat_refused falseContractGoal cnf proof
 
 #tooth checkContractCert_byLrat_refuses_false_goal by mutation
   checkContractCert := fun _ _ => .valid

@@ -48,5 +48,12 @@ def sovereignClearedAt12() -> Nat:
 def sovereignDigestAt5() -> Nat:
   sovereignCarryClearing().carryPinDigest(5n)
 
+def batchHalfEdgeAndPinCheck(quorumVotes: Nat, deltaDebit: Nat, deltaCredit: Nat, crownAfter: Nat, txPinDigest: Nat, expectedPinDigest: Nat) -> Bool:
+  let cell = sovereignCarryClearing()
+  (cell.quorumThreshold <= quorumVotes) && (deltaDebit == deltaCredit) && (cell.welfareCrownFloor <= crownAfter) && (txPinDigest == expectedPinDigest)
+
+def sovereignBatchConservationValid() -> Bool:
+  batchHalfEdgeAndPinCheck(3n, sovereignClearedAt12(), 7000n, 1000n, sovereignDigestAt5(), 182n)
+
 def crossModuleSeatClearing() -> Nat:
   SeatMod.institutionalMandateAt15() + sovereignClearedAt12()
