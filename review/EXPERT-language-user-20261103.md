@@ -635,3 +635,76 @@ lose its date while listed. Recorded on bb2 and read: 14 steps.
    between two linked pages (ordering of decisions by date).
 7. A kind's own laws are unprotected — Ember's question, untouched.
 8. The real `review/` file can only be the index page — open (follows from 1).
+
+## What landed, fourth round (2026-11-04): labels, the poster, merges through pins
+
+Gaps 2 and 5 of the second-round list, and the TOCTOU note of the third. Commits `47e6adc`
+(fragment) and `bd160a6` (vault), built on bb2 module by module (never the umbrella: `Obend.Apps.*`
+is an hour per build until the gate lane's change lands).
+
+### Gap 2 — no strings in laws (`47e6adc`)
+
+The fragment reads labels. A label constant `"ember"` is a reference (`LawRef.labelConst`), and
+`==` between two references compares labels when both read as labels (`LawRef.readLabel`: a field
+holding `Data.label`, or a constant) and naturals when both read as naturals, false otherwise; `REF
+in ["a", "b"]` is an `or` of equalities; `writeOnce(F)` on a label field holds at a first write,
+when the old label is unset, or when the new equals the old. `<=` stays numeric. Compiled by Core4's
+`labelEqual` (`labelRead`, `labelField`); `fitsField` now says what a label field holds. The proof
+chain carries (`cond_eval`'s `eqR`/`writeOnce` cases, `chk_cond`), `compile_checks`, `judge_admits`,
+`judge_refuses` unchanged in statement. **`dial_free_confluent` stays true**: a label constant is
+fact-only; a comparison with a label field is `.ordering` like every equality on a field
+(`joinData` keeps the left state's label, so two admitted writes of different labels join to one of
+them); no label clause is `.free`, and `dial`'s doc says so. The vault types a frontmatter word as
+a label (`labelFields`, `stateTyWith`/`stateOfWith`) and suggests a label that would pass. The
+decisions kind now says `new.decider in ["ember", "integrator", "lane"]`; D-0006 with `decider:
+committee` is refused with `the line decider: ember would pass (the page has decider: committee)`,
+and the re-decided D-0001 by `writeOnce(decider)` with `decider: ember` as the line that would pass.
+A date is still a number: a calendar check is beyond the fragment (no `/`, no `%`); `20261199` is
+dated. Blast radius outside my files: one line in `Elab/Workbook.lean` (`ToExpr LawRef`).
+
+### Gap 5 — authority is not provenance (`bd160a6`)
+
+The vault binds the POSTER at every write: the owner, the member who posted, or at a selection the
+author of the candidate kept. It is the label `new.poster` (a measure; a frontmatter line of that
+name cannot override it) and the request's `principal` (`requestBy who poster`; the kernel request
+already had the field, so no change to `reqTy`). A refusal of a law reading it ends `; posted by
+NAME`. The kind's `law claimed: (new.decider == "ember") implies (new.poster == "owner")`: a lane's
+post to a decision of Ember's is refused at the post (`…does not hold; the line decider: lane would
+pass (the page has decider: ember); posted by lane`); its post to a decision in its own name is
+admitted and the selection carries the lane as poster. Found on the way: a member's post that
+rewrites a frontmatter line is refused earlier as a relaw attempt (owner's), so the only way a lane's
+text claims Ember is on a row the owner opened as Ember's, and that is what the law catches. Not
+done: `request.poster` as a LawRef reading the request rather than the bound field (one more
+hypothesis through the whole proof chain, `pr = facts.poster`; the bound field is the same value).
+
+### The TOCTOU note — merges through pins (`bd160a6`)
+
+`replicaPins`: the replica's write of a page with laws over links read the pages it links to at the
+replica's states; `mergeFrom` admits the merged write only where those pins hold in the receiving
+store (`admitFootprint` from Hyperedge, `no_toctou`'s premise), so by `judgeLinksIn_of_turn` the
+laws over links say here what they said there. Where a linked page moved underneath, the merge
+refuses by name with what moved and the change is made here (vault walkthrough §8: `Index: not
+merged: its write at laptop2 read Gamma as it was there (bytes 143 → 193, lines 5 → 6, version 7 →
+8, …); make the change here, against Gamma as it is`). A page without laws over links read nothing
+and carries no pins. Hyperedge.lean is used, not changed; nothing to route. Open: within one
+`obend open`, pins are still read at the start and refused writes retried (the practical repair);
+the merge path is the first place the turn is admitted only when its pins hold.
+
+Recorded on bb2: decisions 16, vault 36, ledger 24; tests/run-workspace.py WORKSPACES: 44/44 checks hold;tests/run-logic.py 20/20 checks hold;tests/run-leaf.py 14/14 checks hold;tests/run-receipts.py 31/31 receipt checks hold;tests/run-obend-source.py OBEND SOURCE COHORTS: probes 30/30, tutorial 71/71, preview cohort 161 items with 0 failures
+
+### The gap list, updated
+
+1. Unit of law is the page, the ledger's is the row — open.
+2. No strings — **closed** for labels (one word): `==`, `in [...]`, `writeOnce`. Open: no order on
+   labels, no string content (prefix, length), no calendar on dates.
+3. Append-only is a count — closed (`deletions`); per-section measures open.
+4. Theorem names are a hand-kept census page — open until the gate lane's census writes it.
+5. Authority is not provenance — **closed**: `new.poster` and the request's principal; the owner's
+   rows cannot carry a member's text claiming Ember. Open: the poster's *grant* is not a fact (a
+   law cannot say "posted by someone with select"), and `request.poster` as a request fact.
+6. No cross-page facts — closed for laws over links; joined states, backlinks as subject, relations
+   between two linked pages open.
+7. A kind's own laws are unprotected — Ember's question, untouched.
+8. The real `review/` file can only be the index page — open (follows from 1).
+9. (new) A merge replays a replica's write with its pins; an `obend open` does not yet admit a
+   turn only when its pins hold.
