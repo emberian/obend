@@ -581,7 +581,7 @@ def affineToIntervalCollapsed (af : AffineForm1D) : FloatInterval where
 
 #tooth Obend.Hardware.OpenUSD.affine_to_interval_encloses_eval by mutation Obend.Hardware.OpenUSD.AffineForm1D.toInterval := affineToIntervalCollapsed
 
-/-- 48. Broken `lcDrivesInSlotUpgradeLayer` in `Obend.Hardware.UserspacePhysical` that keeps outer-jacket `thermalResistance = 29` instead of `9` (breaking `.obend` userspace `LcDrivesStatorUsd.obend` -> `Leaf.Book` -> FPGA RTL lowering). -/
+/-- 48. Broken `lcDrivesInSlotUpgradeLayer` in `Obend.Hardware.UserspacePhysical` that keeps outer-jacket `thermalResistance = 29` instead of `9`: `stator_in_slot_peak_temp_forall` late-binds that field (`50 + loss * 9`) and is what the mutation must break (the stator-to-RTL statement it used to target is an `example` since `f5cad68`). -/
 def lcDrivesInSlotUpgradeBrokenLayer : Layer where
   name := "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
   metadata := .label "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
@@ -591,7 +591,7 @@ def lcDrivesInSlotUpgradeBrokenLayer : Layer where
         .lam (.binary .add (.app (.get (.bound 1) "sdfMargin") (.bound 0)) (.nat 6)))
     ]
 
-#tooth Obend.Hardware.UserspacePhysical.userspace_physical_stator_to_fpga_verified by mutation Obend.Hardware.UserspacePhysical.lcDrivesInSlotUpgradeLayer := lcDrivesInSlotUpgradeBrokenLayer
+#tooth Obend.Hardware.UserspacePhysical.stator_in_slot_peak_temp_forall by mutation Obend.Hardware.UserspacePhysical.lcDrivesInSlotUpgradeLayer := lcDrivesInSlotUpgradeBrokenLayer
 
 /-- 49. Broken `compileOpticAdjoint` in `Obend.Hardware.OpenHypergraph` that maps every `OpticOp` to `.add` (breaking `catgrad` reverse-mode AD cotangent soundness for `.sub` and `.mul`). -/
 def compileOpticAdjointAlwaysAdd (_op : OpticOp) : OpticAdjoint :=

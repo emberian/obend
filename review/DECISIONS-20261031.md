@@ -169,3 +169,12 @@ at all now that Bend is retired (each lane adjudicates the dirty files it owns).
 | Laws see a page, not its patch: append-only is a byte-count monotonicity, not a prefix property. Should laws be able to ask the patch (deletions, edits) directly? | same |
 | Is `native_decide` an acceptable home for the tool-path gouge certificate (`fidget_toolpath_no_gouge`), or must the kernel or a Rust checker re-check it before anything is cut on a real machine? (Ember's 11-02 call: compiled trust is not a concern now; this is the first certificate whose failure cuts metal.) | CAD lane, `review/EXPERT-cad-cam-20261104.md` |
 
+## Decided by Ember, 2026-11-04 (second round)
+
+| decision | choice | where |
+|---|---|---|
+| No build step takes an hour: measured 2026-11-04 on bb2, `Obend/Apps/ZkNtt.lean` elaborated for over three hours in one lane tree and over an hour in six others, `FidgetCam.lean` behind it; "we need to either restructure that immediately or make the thing faster" | yes | this ledger |
+| Decide-fixtures are triaged, not accumulated: "some test fixtures are important but only actually important ones and we prefer to be mindful about them instead of just accumulating whatever garbage got generated the first time"; each surviving fixture carries the reason it is kept | yes | this ledger |
+
+Taken under standing approval to implement the two above (reversible, one lakefile and one tools script): tier-1 modules carry a per-module elaboration budget of 60 s and tier 2 of 10 min, enforced by the build script from Lake's timings and by refusing `set_option maxHeartbeats` increases in tier 1; `Obend.Apps.*` leaves tier 1 at once; every `decide +kernel`/`native_decide` fixture is classified keep / tier 2 / delete with a one-line reason in the census doc.
+
