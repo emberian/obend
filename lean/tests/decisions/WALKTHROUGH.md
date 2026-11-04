@@ -328,8 +328,8 @@ notes/Scratch: new page (v1)
 Ledger v4; its last write was refused by its law listedDated over its links, at notes/Scratch: `not (linked.date == 0)` does not hold there; the line `date: 1` would pass (the page has `date: 0`)
 ```
 
-Dating the note mends the ledger's write at the next open (a refused write is tried again at every
-open that is not quiet). The note then cannot lose its date while the ledger lists it: the ledger's
+Dating the note mends the ledger's write at the next open (a refused write is judged again when a
+page it read is written; the note is one the ledger's write read, so dating it wakes that write). The note then cannot lose its date while the ledger lists it: the ledger's
 law over its links refuses the note's write, naming whose law it is.
 
 ```sh

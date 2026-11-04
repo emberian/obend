@@ -9,12 +9,14 @@ and the files; `Obend.Vault.Cli` reads and writes them.
 
 * `openVault`: every file whose text is not what the store last saw is a write by the owner: an edit
   of an existing page (`editPatch`, the file lined up against the current rendering) or the birth of
-  a new one (`readPage`). Each write is judged by the page's laws (`commit`); an admitted write is a
-  new version, a refused one is recorded with its refusal and changes nothing else. Then each page
-  is rendered at its current version, and a file is written where its text differs (`writesFor`).
-  **Opening twice is a no-op** (`open_idem`): the second open finds every file as the first left it
-  and changes neither the store nor any file. This holds for every store and every vault the reader
-  accepts (page names unique, as a directory's paths are).
+  a new one (`readPage`). Each write is a turn (`admitWrites`): judged by the page's laws (`commit`)
+  against the store at the moment of its judgment, a kind before its instances; an admitted write is
+  a new version, a refused one is kept with the pins its judgment read and is judged again exactly
+  when a pin moves (a page it read is written). An open leaves every refused write's pins holding
+  (`open_admitted`). Then each page is rendered at its current version, and a file is written where
+  its text differs (`writesFor`). **Opening twice is a no-op** (`open_idem`): the second open finds
+  every file as the first left it and changes neither the store nor any file. This holds for every
+  store and every vault the reader accepts (page names unique, as a directory's paths are).
 * `mergeFrom`: each page of another replica's store (an offline copy, another process) is merged
   into this one by the pushout of the two current versions (`mergePage_pushout`); a page the other
   has alone is imported. Two replicas that edited one place differently leave a section with two
@@ -442,10 +444,6 @@ def linkTargets (G : Graph) : List PageId :=
     | some (.cite _ c) => if c.span = .identity then some c.page else none
     | _ => none).eraseDups
 
-/-- The entries a version links to, each once. -/
-def linkedEntries (es : List Entry) (G : Graph) : List Entry :=
-  (linkTargets G).filterMap fun q => es.find? (·.id == q)
-
 /-- The laws over links among a page's laws, as the judge takes them. -/
 def linkLaws (laws : Laws) : List (String × LawExpr) :=
   (laws.filter fun l => isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
@@ -581,12 +579,24 @@ theorem judgeLinksIn_of_turn {store : VaultStore} {turn : VaultTurn} (h : Footpr
       · rfl
       · rfl
 
+/-- The pages a version links to (identity cites), by name as the entries `res` the cites were
+resolved against name them. At an open a page not yet born is among them: a law over links is judged
+at it and refused there (it has no version) until it is. -/
+def citedNames (res : List Entry) (G : Graph) : List String :=
+  ((settledAtoms G).filterMap fun a => match G.label a with
+    | some (.cite _ c) => if c.span = .identity then (res.find? (·.id == c.page)).map (·.name) else none
+    | _ => none).eraseDups
+
+/-- The pins of a write over the pages `cells`: each at the state the store `es` holds for it. -/
+def pinsAt (es : List Entry) (cells : List String) : Footprint :=
+  cells.map fun c => ⟨c, stateStore es c⟩
+
 /-- The write of `page` as a turn: its one write cell is the page (its state before and after), its
 read pins the pages its laws over links read, at the states read. -/
-def writeTurn (page : String) (o n : Obend.Core.Data.Data) (linked : List Entry)
+def writeTurn (page : String) (o n : Obend.Core.Data.Data) (pins : Footprint)
     (rq : Obend.Core.Data.Data) : VaultTurn where
   turnId := ByteArray.empty
-  readPins := linked.map fun e => ⟨e.name, some (pageState e.graph e.version)⟩
+  readPins := pins
   writeCells := [{ cell := page, preState := o, postState := n }]
   occasion := rq
   agree := by
@@ -635,9 +645,11 @@ page as written. So is a write to a page whose kind pin is stale (a kind it rest
 refused, naming the kinds that moved. Otherwise the laws are kept (`lawsKept`), and the new laws are
 the old ones (`lawsFor_of_kept`). A birth is judged as a first write. The new state carries the
 write's own measures (`deletions`, `insertions`: how it changed the current version); the old state
-has none (0). -/
+has none (0). The laws and the states a law over links reads are the store's (`es`); the cites of
+`G'` were resolved against `res` (at an open, the files as they are about to become), which names
+the pages they link to. -/
 def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
-    (turn : Nat) (poster : String := who.name) : Except String Change := do
+    (turn : Nat) (poster : String := who.name) (res : List Entry := es) : Except String Change := do
   let authors := p.authors ++ added
   let p' := { p with authors := authors }
   let v := p.history.length
@@ -670,7 +682,7 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   | .admitted =>
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
-    let wt := writeTurn p.name o n (linkedEntries es G') rq
+    let wt := writeTurn p.name o n (pinsAt es (citedNames res G')) rq
     let world := applyTurn wt.readPins.store wt
     let mine := linkLaws laws
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
@@ -725,29 +737,254 @@ theorem commit_stale_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (ad
 
 /-! ## Open -/
 
-/-- The owner's write of the text `md` to page `p`: the file lined up against the current rendering,
-or a birth. A refused write records the refusal and the text it refused. -/
-def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String) : Change :=
-  let cs := contents (resolveIn H es) (stripToks (tokens md))
-  let (G', added, same) : Graph × List AtomId × Bool := match p.current with
-    | none => (Graph.empty.apply (chain root cs), [], false)
-    | some G =>
-      let b := editPatch H G (align (pieces G p.name p.who) cs) "owner"
-      (G.apply b.ops, b.added, b.ops.isEmpty)
-  -- Only the view's marks changed (one deleted, say), or a refused edit was put back: nothing to
-  -- write; the view is redrawn, and the page's last write is no longer a refused one.
-  if same then ⟨p.history, md, p.authors, none, p.kind⟩ else
-  match commit es p G' (added.map (·, "owner")) .owner turn with
-  | .ok ch => ch
+/-- The page a file's text reads as, its cites resolved against `res`. -/
+def readAs (H : Hash) (res : List Entry) (md : String) : Graph :=
+  Graph.empty.apply (chain root (contents (resolveIn H res) (stripToks (tokens md))))
+
+/-- The version `G'` committed as the owner's write of `md` to `p`, judged at `es` with its cites
+resolved against `res`; or the refusal, with the text it refused. -/
+def writtenAs (es : List Entry) (turn : Nat) (p : Page) (md : String) (G' : Graph) (added : List AtomId)
+    (res : List Entry) : Change :=
+  match commit es p G' (added.map (·, "owner")) .owner turn (res := res) with
+  | .ok ch => { ch with note := none }
   | .error msg => ⟨p.history, md, p.authors, some msg, p.kind⟩
 
-/-- One page at open: unchanged if its file is missing or is what the store last saw, unless its
-last write was refused: a refusal may rest on another page (a law over links), and that page may
-have been mended since, so a refused write is tried again at every open that is not quiet. -/
-def openPage (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (file : Option String) : Page :=
-  match file with
-  | none => p
-  | some md => if some md == p.seen && p.note.isNone then p else p.withChange (ownerWrite H es turn p md)
+/-- The owner's edit `b` of the current version `G`. Only the view's marks changed (one deleted,
+say), or a refused edit was put back: nothing to write; the view is redrawn, and the page's last
+write is no longer a refused one. Else the edited version, committed. -/
+def editedAs (es : List Entry) (turn : Nat) (p : Page) (md : String) (G : Graph) (b : Built)
+    (res : List Entry) : Change :=
+  if b.ops.isEmpty then ⟨p.history, md, p.authors, none, p.kind⟩
+  else writtenAs es turn p md (G.apply b.ops) b.added res
+
+/-- The owner's write of the text `md` to page `p`: the file lined up against the current rendering,
+or a birth, its cites resolved against `res` (the store's entries, or at an open the files as they
+are about to become) and judged at the store `es`. -/
+def ownerWrite (H : Hash) (es : List Entry) (turn : Nat) (p : Page) (md : String)
+    (res : List Entry := es) : Change :=
+  match p.current with
+  | none => writtenAs es turn p md (readAs H res md) [] res
+  | some G =>
+    editedAs es turn p md G
+      (editPatch H G (align (pieces G p.name p.who) (contents (resolveIn H res) (stripToks (tokens md)))) "owner")
+      res
+
+/-! ### Admission: a write is a turn, admitted when its pins hold -/
+
+/-- The page a wikilink written as text names: a link that resolved to nothing when written. -/
+def danglingTarget : Content → Option String
+  | .text t =>
+    match tokens t with
+    | [.link n] => some (String.ofList (target false n).1)
+    | [.embed n] => some (String.ofList (target true n).1)
+    | _ => none
+  | _ => none
+
+/-- Whether a page's laws (at version `G`) include a law over links. A page whose laws cannot be
+read is taken to have one (its refusal may rest on any page it links to). -/
+def hasLinkLaws (es : List Entry) (name : String) (G : Graph) : Bool :=
+  match lawsFor es name G with
+  | .ok ls => !(linkLaws ls).isEmpty
+  | .error _ => true
+
+/-- The pages a write of `name` (the page `pid`) as `G'` READS, by name: its kinds (the chain when
+the registry has it, and the kind it names or its folders' whether or not a page of that name
+exists yet: born later, it is a pin that moved), every page a link of it names without resolving
+(whether the link resolves), and, where laws over links are judged, every page it links to (the
+state such a law reads) and every page that links to it under one. The page itself is the write's
+cell, not a pin. -/
+def readsOf (es res : List Entry) (name : String) (pid : PageId) (G' : Graph) : List String :=
+  let src := settled G'
+  let kinds := kindChain es name src ++ (kindLine src).toList.map kindName ++ kindsOf name
+  let mine := hasLinkLaws es name G'
+  let cited := (settledAtoms G').filterMap fun a => match G'.label a with
+    | some (.cite _ c) => if mine then (res.find? (·.id == c.page)).map (·.name) else none
+    | some c => danglingTarget c
+    | none => none
+  let back := (es.filter fun e =>
+    e.name != name && (linkTargets e.graph).contains pid && hasLinkLaws es e.name e.graph).map (·.name)
+  ((kinds ++ cited ++ back).filter (· != name)).eraseDups
+
+/-- The pins of a write: what it reads, at the states the store holds. -/
+def pinsOf (es res : List Entry) (name : String) (pid : PageId) (G' : Graph) : Footprint :=
+  pinsAt es (readsOf es res name pid G')
+
+/-- Whether a footprint's pins hold at a store, asked at the door a turn is admitted through
+(`admitFootprint`; the merge admits a replica's write through the same one). -/
+def pinsHold (store : VaultStore) (fp : Footprint) : Bool :=
+  match admitFootprint store fp with
+  | .ok _ => true
+  | .error _ => false
+
+/-- A write waiting to be judged: a page's name and the text its file holds. -/
+abbrev Write := String × String
+
+/-- A write refused, with the pins its judgment read. -/
+structure RefusedWrite where
+  name : String
+  md : String
+  pins : Footprint
+
+/-- The store with one page replaced (by name), one turn later. -/
+def Store.setPage (s : Store) (p : Page) : Store :=
+  { s with pages := s.pages.map fun q => if q.name == p.name then p else q, turn := s.turn + 1 }
+
+/-- A write judged at a store: the owner's write of `md` to `p`, its cites resolved against `res`. -/
+def judgeAt (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String) : Change :=
+  ownerWrite H s.entries s.turn p md res
+
+/-- The store after the write of `md` to `p` is judged: the page with the change, one turn later. -/
+def afterAdmit (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String) : Store :=
+  s.setPage (p.withChange (judgeAt H res s p md))
+
+/-- The refused writes whose pins no longer hold at `st`: woken, to be judged again. -/
+def woken (st : Store) (refused : List RefusedWrite) : List Write :=
+  (refused.filter fun r => !pinsHold (stateStore st.entries) r.pins).map fun r => (r.name, r.md)
+
+/-- The refused writes whose pins hold at `st`: still refused. -/
+def held (st : Store) (refused : List RefusedWrite) : List RefusedWrite :=
+  refused.filter fun r => pinsHold (stateStore st.entries) r.pins
+
+theorem length_filter_add_length_filter_not {α : Type} (p : α → Bool) :
+    ∀ l : List α, (l.filter p).length + (l.filter fun a => !p a).length = l.length
+  | [] => rfl
+  | a :: l => by
+    have ih := length_filter_add_length_filter_not p l
+    cases hp : p a <;> simp only [List.filter_cons, hp, Bool.not_true, Bool.not_false, List.length_cons] <;>
+      simp <;> omega
+
+theorem woken_held_length (st : Store) (refused : List RefusedWrite) :
+    (woken st refused).length + (held st refused).length = refused.length := by
+  simp only [woken, held, List.length_map]
+  rw [Nat.add_comm]
+  exact length_filter_add_length_filter_not _ refused
+
+/-- **Admit the writes of an open, each a turn.** The writes are judged in order, each against the
+store at the moment of its judgment, so the pins its judgment reads (`writeTurn`) hold at its
+admission. An admitted write enters the store. A refused one is kept with its pins (`pinsOf`): it
+stays refused while they hold, and is judged again, as the turn it is, exactly when a pin moves,
+that is, when an admission writes a page it read. The loop ends with every pending write judged and
+every refused write's pins admitted by the door at the store it leaves (`admitWrites_admitted`): the
+verdicts are the turns' at that store, and a second open of the same files has nothing to judge
+again (`open_idem`). Before 2026-11-04 every write of an open was judged at pins read before any of
+them, among them the drafts of pages whose writes were then refused, and a refused write was tried
+again at every open that was not quiet. -/
+def admitWrites (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
+    (refused : List RefusedWrite) : Store × List RefusedWrite :=
+  match pending with
+  | [] => (s, refused)
+  | (n, md) :: rest =>
+    match s.page? n with
+    | none => admitWrites H res s rest refused
+    | some p =>
+      match (judgeAt H res s p md).note with
+      | none =>
+        admitWrites H res (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
+          (held (afterAdmit H res s p md) refused)
+      | some _ =>
+        admitWrites H res (afterAdmit H res s p md) rest
+          (refused ++ [⟨n, md, pinsOf (afterAdmit H res s p md).entries res n p.id (readAs H res md)⟩])
+termination_by (pending.length + refused.length, pending.length)
+decreasing_by
+  all_goals simp only [Prod.lex_def, List.length_cons, List.length_append, List.length_nil]
+  · omega
+  · have := woken_held_length (afterAdmit H res s p md) refused
+    omega
+  · omega
+
+/-- **Induction on the admission**: what holds when nothing is pending, follows a write of a page
+the store lacks, follows an admission and follows a refusal, holds of every admission. -/
+theorem admitWrites_ind (H : Hash) (res : List Entry)
+    (P : Store → List Write → List RefusedWrite → Store × List RefusedWrite → Prop)
+    (h0 : ∀ s refused, P s [] refused (s, refused))
+    (hnone : ∀ s n md rest refused, s.page? n = none →
+      P s rest refused (admitWrites H res s rest refused) →
+      P s ((n, md) :: rest) refused (admitWrites H res s rest refused))
+    (hadm : ∀ s n md rest refused p, s.page? n = some p → (judgeAt H res s p md).note = none →
+      P (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
+        (held (afterAdmit H res s p md) refused)
+        (admitWrites H res (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
+          (held (afterAdmit H res s p md) refused)) →
+      P s ((n, md) :: rest) refused
+        (admitWrites H res (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
+          (held (afterAdmit H res s p md) refused)))
+    (href : ∀ s n md rest refused p m, s.page? n = some p → (judgeAt H res s p md).note = some m →
+      P (afterAdmit H res s p md) rest
+        (refused ++ [⟨n, md, pinsOf (afterAdmit H res s p md).entries res n p.id (readAs H res md)⟩])
+        (admitWrites H res (afterAdmit H res s p md) rest
+          (refused ++ [⟨n, md, pinsOf (afterAdmit H res s p md).entries res n p.id (readAs H res md)⟩])) →
+      P s ((n, md) :: rest) refused
+        (admitWrites H res (afterAdmit H res s p md) rest
+          (refused ++ [⟨n, md, pinsOf (afterAdmit H res s p md).entries res n p.id (readAs H res md)⟩]))) :
+    ∀ (s : Store) (pending : List Write) (refused : List RefusedWrite),
+      P s pending refused (admitWrites H res s pending refused) := by
+  have key : ∀ N M (s : Store) (pending : List Write) (refused : List RefusedWrite),
+      pending.length + refused.length ≤ N → pending.length ≤ M →
+      P s pending refused (admitWrites H res s pending refused) := by
+    intro N
+    induction N with
+    | zero =>
+      intro M s pending refused hN _
+      cases pending with
+      | nil => rw [admitWrites]; exact h0 s refused
+      | cons w rest => simp at hN
+    | succ N ihN =>
+      intro M
+      induction M with
+      | zero =>
+        intro s pending refused hN hM
+        cases pending with
+        | nil => rw [admitWrites]; exact h0 s refused
+        | cons w rest => simp at hM
+      | succ M ihM =>
+        intro s pending refused hN hM
+        cases pending with
+        | nil => rw [admitWrites]; exact h0 s refused
+        | cons w rest =>
+          obtain ⟨n, md⟩ := w
+          simp only [List.length_cons] at hN hM
+          rw [admitWrites]
+          cases hp : s.page? n with
+          | none =>
+            dsimp only
+            exact hnone s n md rest refused hp (ihN M s rest refused (by omega) (by omega))
+          | some p =>
+            dsimp only
+            cases hnote : (judgeAt H res s p md).note with
+            | none =>
+              dsimp only
+              refine hadm s n md rest refused p hp hnote (ihN _ _ _ _ ?_ (Nat.le_refl _))
+              have := woken_held_length (afterAdmit H res s p md) refused
+              simp only [List.length_append]
+              omega
+            | some m =>
+              dsimp only
+              exact href s n md rest refused p m hp hnote
+                (ihM (afterAdmit H res s p md) rest _ (by simp only [List.length_append, List.length_singleton]; omega)
+                  (by omega))
+  intro s pending refused
+  exact key _ _ s pending refused (Nat.le_refl _) (Nat.le_refl _)
+
+/-- The folders enclosing a page name, counted. -/
+def depthOf (name : String) : Nat := (name.splitOn "/").length
+
+/-- The writes an open finds: every page whose file is not the text the store last saw. A kind
+precedes its instances: the kind pages come first, an enclosing folder's before its folders', so a
+page born in the same open as its kind is judged under it. -/
+def pendingAt (s : Store) (V : List (String × String)) : List Write :=
+  let ws := s.pages.filterMap fun p => (V.lookup p.name).bind fun md =>
+    if some md == p.seen then none else some (p.name, md)
+  (ws.filter fun w => isKind w.1).mergeSort (fun a b => depthOf a.1 ≤ depthOf b.1) ++
+    ws.filter fun w => !isKind w.1
+
+/-- The writes an earlier open refused, nothing having moved since: each page whose file is the text
+of its refused write, with its pins at the store as it is (they hold). -/
+def refusedAt (H : Hash) (res : List Entry) (s : Store) (V : List (String × String)) :
+    List RefusedWrite :=
+  s.pages.filterMap fun p => (V.lookup p.name).bind fun md =>
+    if some md == p.seen && p.note.isSome then
+      some ⟨p.name, md, pinsOf s.entries res p.name p.id (readAs H res md)⟩
+    else none
 
 /-- The vault is QUIET for the store: every page's file is missing or is what the store last saw,
 and every file is a page's. -/
@@ -879,14 +1116,24 @@ structure Opened where
   store : Store
   writes : List (String × String)
 
+/-- The files the store has no page for. -/
+def freshNames (s : Store) (V : List (String × String)) : List String :=
+  (V.filter fun e => !s.pages.any (·.name == e.1)).map (·.1)
+
+/-- The store an open starts from: a fresh page for every file it has none for. -/
+def withFresh (H : Hash) (s : Store) (V : List (String × String)) : Store :=
+  { s with pages := s.pages ++ freshPages H s (freshNames s V) }
+
+/-- **The admission of an open**: its writes judged (`admitWrites`) from the store with the fresh
+pages, cites resolved against the files as they are about to become (`openEntries`). -/
+def openAdmission (H : Hash) (s : Store) (V : List (String × String)) : Store × List RefusedWrite :=
+  admitWrites H (openEntries (withFresh H s V).pages V) (withFresh H s V) (pendingAt (withFresh H s V) V)
+    (refusedAt H (openEntries (withFresh H s V).pages V) (withFresh H s V) V)
+
 /-- **Open a vault.** -/
 def openVault (H : Hash) (s : Store) (V : List (String × String)) : Opened :=
   if quiet s V then ⟨s, []⟩ else
-  let fresh := (V.filter fun e => !s.pages.any (·.name == e.1)).map (·.1)
-  let all := s.pages ++ freshPages H s fresh
-  let es := openEntries all V
-  let pages := all.zipIdx.map fun (p, i) => openPage H es (s.turn + i) p (V.lookup p.name)
-  let s' : Store := settle H { s with pages := pages, turn := s.turn + all.length }
+  let s' : Store := settle H (openAdmission H s V).1
   ⟨s', writesFor s' V⟩
 
 /-! ### Files that are gone: deletions and renames -/
@@ -957,21 +1204,6 @@ def tombLine (p : Page) : String :=
     ".md revives it, a new file with its text renames it)"
 
 /-! ### Opening twice is a no-op -/
-
-theorem openPage_name (H : Hash) (es : List Entry) (t : Nat) (p : Page) (f : Option String) :
-    (openPage H es t p f).name = p.name := by
-  unfold openPage; split
-  · rfl
-  · split <;> rfl
-
-/-- After an open, a page whose file exists holds some text for it. -/
-theorem openPage_seen (H : Hash) (es : List Entry) (t : Nat) (p : Page) (md : String) :
-    ∃ u, (openPage H es t p (some md)).seen = some u := by
-  simp only [openPage]
-  by_cases h : (some md == p.seen && p.note.isNone) = true
-  · rw [Bool.and_eq_true] at h
-    simp only [h, and_self, ite_true]; exact ⟨md, (beq_iff_eq.1 h.1).symm⟩
-  · simp only [h, Bool.false_eq_true, ite_false]; exact ⟨_, rfl⟩
 
 theorem freshPages_names (H : Hash) (s : Store) (names : List String) :
     (freshPages H s names).map (·.name) = names := by
@@ -1075,9 +1307,264 @@ theorem quiet_after_settle (H : Hash) (s : Store) (V : List (String × String))
   obtain ⟨p, hp, hn, hs⟩ := settle_seen H s q hq
   exact hs (hseen p hp (hn ▸ hl))
 
+theorem eq_of_nodup_map {α β : Type} {f : α → β} :
+    ∀ {l : List α}, (l.map f).Nodup → ∀ {a b : α}, a ∈ l → b ∈ l → f a = f b → a = b
+  | [], _, _, _, ha, _, _ => by cases ha
+  | x :: xs, hnd, a, b, ha, hb, hab => by
+    simp only [List.map_cons, List.nodup_cons] at hnd
+    obtain ⟨hx, hxs⟩ := hnd
+    obtain rfl | ha' := List.mem_cons.1 ha
+    · obtain rfl | hb' := List.mem_cons.1 hb
+      · rfl
+      · exact absurd (hab ▸ List.mem_map_of_mem hb') hx
+    · obtain rfl | hb' := List.mem_cons.1 hb
+      · exact absurd (hab ▸ List.mem_map_of_mem ha') hx
+      · exact eq_of_nodup_map hxs ha' hb' hab
+
+theorem setPage_names (s : Store) (q : Page) :
+    (s.setPage q).pages.map (·.name) = s.pages.map (·.name) := by
+  simp only [Store.setPage, List.map_map]
+  apply List.map_congr_left
+  intro r _
+  simp only [Function.comp]
+  split
+  · rename_i h; exact (beq_iff_eq.1 h).symm
+  · rfl
+
+theorem admitWrites_names (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
+    (refused : List RefusedWrite) :
+    (admitWrites H res s pending refused).1.pages.map (·.name) = s.pages.map (·.name) :=
+  admitWrites_ind H res
+    (fun s _ _ out => out.1.pages.map (fun q : Page => q.name) = s.pages.map (fun q : Page => q.name))
+    (fun _ _ => rfl)
+    (fun _ _ _ _ _ _ ih => ih)
+    (fun s n md rest refused p _ _ ih => by
+      rw [ih]; exact setPage_names s (p.withChange (judgeAt H res s p md)))
+    (fun s n md rest refused p _ _ _ ih => by
+      rw [ih]; exact setPage_names s (p.withChange (judgeAt H res s p md)))
+    s pending refused
+
+/-- A page with a file is seen after it is judged, or still to be judged. -/
+theorem seen_setPage {s : Store} {p : Page} {n md : String} (hp : s.page? n = some p) (ch : Change)
+    {V : List (String × String)} {rest : List Write}
+    (h : ∀ q ∈ s.pages, (V.lookup q.name).isSome → q.seen.isSome ∨ q.name ∈ ((n, md) :: rest).map (·.1)) :
+    ∀ q ∈ (s.setPage (p.withChange ch)).pages, (V.lookup q.name).isSome →
+      q.seen.isSome ∨ q.name ∈ rest.map (·.1) := by
+  intro q hq hl
+  simp only [Store.setPage, List.mem_map] at hq
+  obtain ⟨r, hr, rfl⟩ := hq
+  by_cases hrn : (r.name == p.name) = true
+  · simp only [Page.withChange, hrn, ite_true] at hl ⊢
+    exact .inl rfl
+  · simp only [Page.withChange, hrn, Bool.false_eq_true, ite_false] at hl ⊢
+    rcases h r hr hl with hs | hm
+    · exact .inl hs
+    · right
+      have hpn : p.name = n := by simpa using List.find?_some hp
+      simp only [List.map_cons, List.mem_cons] at hm
+      rcases hm with hm | hm
+      · exact absurd (by simp [hm, hpn]) hrn
+      · exact hm
+
+theorem admitWrites_seen (H : Hash) (res : List Entry) (V : List (String × String)) (s : Store)
+    (pending : List Write) (refused : List RefusedWrite)
+    (h : ∀ p ∈ s.pages, (V.lookup p.name).isSome → p.seen.isSome ∨ p.name ∈ pending.map (·.1)) :
+    ∀ p ∈ (admitWrites H res s pending refused).1.pages, (V.lookup p.name).isSome → p.seen.isSome :=
+  admitWrites_ind H res (fun s pending _ out =>
+      (∀ p ∈ s.pages, (V.lookup p.name).isSome → p.seen.isSome ∨ p.name ∈ pending.map (fun w : Write => w.1)) →
+      ∀ p ∈ out.1.pages, (V.lookup p.name).isSome → p.seen.isSome)
+    (fun _ _ h p hp hl => by
+      rcases h p hp hl with hs | hm
+      · exact hs
+      · simp at hm)
+    (fun s n md rest _ hn ih h => ih fun p hp hl => by
+      rcases h p hp hl with hs | hm
+      · exact .inl hs
+      · simp only [List.map_cons, List.mem_cons] at hm
+        rcases hm with hm | hm
+        · exact absurd (List.find?_eq_none.1 hn p hp) (by simp [hm])
+        · exact .inr hm)
+    (fun s n md rest refused p hp _ ih h => by
+      refine ih fun q hq hl => ?_
+      have := seen_setPage hp (judgeAt H res s p md) h q hq hl
+      exact this.imp_right fun hm => by simp only [List.map_append, List.mem_append]; exact .inl hm)
+    (fun s n md rest refused p _ hp _ ih h => by
+      refine ih fun q hq hl => ?_
+      exact seen_setPage hp (judgeAt H res s p md) h q hq hl)
+    s pending refused h
+
+theorem mem_pendingAt {s : Store} {V : List (String × String)} {q : Page} (hq : q ∈ s.pages) {md : String}
+    (hmd : V.lookup q.name = some md) (hne : ¬ some md = q.seen) : q.name ∈ (pendingAt s V).map (·.1) := by
+  have hw : (q.name, md) ∈ (s.pages.filterMap fun p => (V.lookup p.name).bind fun md =>
+      if some md == p.seen then none else some (p.name, md)) :=
+    List.mem_filterMap.2 ⟨q, hq, by simp [hmd, hne]⟩
+  refine List.mem_map.2 ⟨(q.name, md), ?_, rfl⟩
+  simp only [pendingAt, List.mem_append, List.mem_mergeSort, List.mem_filter]
+  by_cases hk : isKind q.name = true
+  · exact .inl ⟨hw, hk⟩
+  · exact .inr ⟨hw, by simpa using hk⟩
+
+/-! ### The door: a refused write's pins hold where the open leaves them -/
+
+theorem firstStale?_none_of_holds {store : VaultStore} :
+    ∀ {fp : Footprint}, Footprint.Holds store fp → Footprint.firstStale? store fp = none
+  | [], _ => rfl
+  | p :: rest, h => by
+    have hp := h p (List.mem_cons_self ..)
+    have ih := firstStale?_none_of_holds fun q hq => h q (List.mem_cons_of_mem _ hq)
+    simp only [Footprint.firstStale?, hp]
+    cases p.observed with
+    | none => exact ih
+    | some d => simp [Obend.Law.termEq_refl_local, ih]
+
+/-- Pins that hold are admitted by the door. -/
+theorem pinsHold_of_holds {store : VaultStore} {fp : Footprint} (h : Footprint.Holds store fp) :
+    pinsHold store fp = true := by
+  simp [pinsHold, admitFootprint, firstStale?_none_of_holds h]
+
+/-- Pins read from a store hold there. -/
+theorem pinsAt_holds (es : List Entry) (cells : List String) :
+    Footprint.Holds (stateStore es) (pinsAt es cells) := by
+  intro q hq
+  obtain ⟨c, _, rfl⟩ := List.mem_map.1 hq
+  rfl
+
+theorem writtenAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String} {G' : Graph}
+    {added : List AtomId} {res : List Entry} {m : String}
+    (h : (writtenAs es turn p md G' added res).note = some m) :
+    (writtenAs es turn p md G' added res).history = p.history := by
+  unfold writtenAs at h ⊢
+  split at h
+  · simp at h
+  · rfl
+
+theorem editedAs_history {es : List Entry} {turn : Nat} {p : Page} {md : String} {G : Graph}
+    {b : Built} {res : List Entry} {m : String}
+    (h : (editedAs es turn p md G b res).note = some m) :
+    (editedAs es turn p md G b res).history = p.history := by
+  by_cases hb : b.ops.isEmpty = true
+  · simp only [editedAs, hb, ite_true] at h
+    simp at h
+  · simp only [editedAs, hb, Bool.false_eq_true, ite_false] at h ⊢
+    exact writtenAs_history h
+
+/-- A refused write leaves the page's history. -/
+theorem ownerWrite_history_of_note {H : Hash} {es res : List Entry} {turn : Nat} {p : Page} {md m : String}
+    (h : (ownerWrite H es turn p md res).note = some m) :
+    (ownerWrite H es turn p md res).history = p.history := by
+  unfold ownerWrite at h ⊢
+  revert h
+  cases p.current with
+  | none => intro h; exact writtenAs_history h
+  | some G => intro h; exact editedAs_history h
+
+/-- A page replaced by one of the same name, id and history leaves the store's entries. -/
+theorem entries_setPage {s : Store} {n : String} {p q : Page} (hnd : (s.pages.map (·.name)).Nodup)
+    (hp : s.page? n = some p) (hq : q.name = p.name) (hid : q.id = p.id) (hh : q.history = p.history) :
+    (s.setPage q).entries = s.entries := by
+  simp only [Store.entries, Store.setPage, List.filterMap_map]
+  apply filterMap_congr'
+  intro r hr
+  simp only [Function.comp]
+  split
+  · rename_i h
+    have hpm := List.mem_of_find?_eq_some hp
+    have hrn : r.name = p.name := by rw [← hq]; exact beq_iff_eq.1 h
+    have := eq_of_nodup_map hnd hr hpm hrn
+    subst this
+    simp [Page.current, hh, hid, hq]
+  · rfl
+
+theorem admitWrites_admitted (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
+    (refused : List RefusedWrite) (hnd : (s.pages.map (·.name)).Nodup)
+    (h : ∀ r ∈ refused, pinsHold (stateStore s.entries) r.pins = true) :
+    ∀ r ∈ (admitWrites H res s pending refused).2,
+      pinsHold (stateStore (admitWrites H res s pending refused).1.entries) r.pins = true :=
+  admitWrites_ind H res (fun s _ refused out =>
+      (s.pages.map (fun q : Page => q.name)).Nodup →
+      (∀ r ∈ refused, pinsHold (stateStore s.entries) r.pins = true) →
+      ∀ r ∈ out.2, pinsHold (stateStore out.1.entries) r.pins = true)
+    (fun _ _ _ h => h)
+    (fun _ _ _ _ _ _ ih hnd h => ih hnd h)
+    (fun s n md rest refused p hp _ ih hnd _ =>
+      ih (by rw [afterAdmit, setPage_names]; exact hnd) fun r hr => by
+        simp only [held, List.mem_filter] at hr
+        exact hr.2)
+    (fun s n md rest refused p m hp hnote ih hnd h =>
+      ih (by rw [afterAdmit, setPage_names]; exact hnd) fun r hr => by
+        have hent : (afterAdmit H res s p md).entries = s.entries :=
+          entries_setPage hnd hp rfl rfl (ownerWrite_history_of_note hnote)
+        rcases List.mem_append.1 hr with hr | hr
+        · rw [hent]; exact h r hr
+        · simp only [List.mem_singleton] at hr
+          subst hr
+          simp only [pinsOf]
+          exact pinsHold_of_holds (pinsAt_holds _ _))
+    s pending refused hnd h
+
+theorem withFresh_names (H : Hash) (s : Store) (V : List (String × String)) :
+    (withFresh H s V).pages.map (·.name) = s.pages.map (·.name) ++ freshNames s V := by
+  simp [withFresh, freshPages_names]
+
+theorem openAdmission_names (H : Hash) (s : Store) (V : List (String × String)) :
+    (openAdmission H s V).1.pages.map (·.name) = s.pages.map (·.name) ++ freshNames s V := by
+  rw [openAdmission, admitWrites_names, withFresh_names]
+
+theorem withFresh_nodup (H : Hash) (s : Store) (V : List (String × String))
+    (hs : (s.pages.map (·.name)).Nodup) (hV : (V.map (·.1)).Nodup) :
+    ((withFresh H s V).pages.map (·.name)).Nodup := by
+  rw [withFresh_names, List.nodup_append]
+  refine ⟨hs, nodup_fresh s V hV, ?_⟩
+  intro a ha b hb hab
+  subst hab
+  obtain ⟨e, he, rfl⟩ := List.mem_map.1 hb
+  have := (List.mem_filter.1 he).2
+  obtain ⟨p, hp, hpn⟩ := List.mem_map.1 ha
+  simp only [Bool.not_eq_true', List.any_eq_false, beq_iff_eq] at this
+  exact this p hp hpn
+
+theorem openAdmission_nodup (H : Hash) (s : Store) (V : List (String × String))
+    (hs : (s.pages.map (·.name)).Nodup) (hV : (V.map (·.1)).Nodup) :
+    ((openAdmission H s V).1.pages.map (·.name)).Nodup := by
+  rw [openAdmission, admitWrites_names]; exact withFresh_nodup H s V hs hV
+
+theorem openAdmission_seen (H : Hash) (s : Store) (V : List (String × String)) :
+    ∀ p ∈ (openAdmission H s V).1.pages, (V.lookup p.name).isSome → p.seen.isSome := by
+  refine admitWrites_seen H _ V _ _ _ fun q hq hlq => ?_
+  obtain ⟨md, hmd⟩ := Option.isSome_iff_exists.1 hlq
+  by_cases hseen : some md = q.seen
+  · exact .inl (by rw [← hseen]; rfl)
+  · exact .inr (mem_pendingAt hq hmd hseen)
+
+theorem openAdmission_cover (H : Hash) (s : Store) (V : List (String × String)) :
+    ∀ e ∈ V, e.1 ∈ (openAdmission H s V).1.pages.map (·.name) := by
+  intro e he
+  rw [openAdmission_names, List.mem_append]
+  by_cases h : s.pages.any (·.name == e.1) = true
+  · obtain ⟨p, hp, hpn⟩ := List.any_eq_true.1 h
+    exact .inl (List.mem_map.2 ⟨p, hp, by simpa using hpn⟩)
+  · exact .inr (List.mem_map.2 ⟨e, List.mem_filter.2 ⟨he, by simpa using h⟩, rfl⟩)
+
+/-- **An open leaves no stale refusal.** Every write the open refused was judged at pins that hold
+in the store the open leaves (the door admits them there): the verdict is the turn's at that store,
+and the files say what the store would say again. -/
+theorem open_admitted (H : Hash) (s : Store) (V : List (String × String))
+    (hs : (s.pages.map (·.name)).Nodup) (hV : (V.map (·.1)).Nodup) :
+    ∀ r ∈ (openAdmission H s V).2, pinsHold (stateStore (openAdmission H s V).1.entries) r.pins = true := by
+  refine admitWrites_admitted H _ _ _ _ (withFresh_nodup H s V hs hV) fun r hr => ?_
+  obtain ⟨p, _, hp⟩ := List.mem_filterMap.1 hr
+  simp only [Option.bind_eq_some_iff] at hp
+  obtain ⟨md, _, hp⟩ := hp
+  split at hp
+  · cases hp
+    exact pinsHold_of_holds (pinsAt_holds _ _)
+  · cases hp
+
 /-- **Opening twice is a no-op.** For every store whose page names are distinct and every vault the
 reader accepts (file names distinct, as a directory's are): open it, write the files the open says
-to write, and open again; the second open changes neither the store nor any file. -/
+to write, and open again; the second open changes neither the store nor any file. The second open
+is quiet: every admitted write is in its file, every refused write's file keeps the refused text,
+and no refused write has a reason to be judged again (`open_admitted`). -/
 theorem open_idem (H : Hash) (s : Store) (V : List (String × String))
     (hs : (s.pages.map (·.name)).Nodup) (hV : (V.map (·.1)).Nodup) :
     openVault H (openVault H s V).store (overwrite V (openVault H s V).writes) =
@@ -1086,47 +1573,10 @@ theorem open_idem (H : Hash) (s : Store) (V : List (String × String))
   · simp only [openVault, hq, ite_true, overwrite_nil]
   · have hq' : quiet s V = false := by simpa using hq
     simp only [openVault, hq', Bool.false_eq_true, ite_false]
-    generalize hfresh : (V.filter fun e => !s.pages.any (·.name == e.1)).map (·.1) = fresh
-    generalize hall : s.pages ++ freshPages H s fresh = all
-    generalize hps : (all.zipIdx.map fun (x : Page × Nat) =>
-      openPage H (openEntries all V) (s.turn + x.2) x.1 (V.lookup x.1.name)) = pages
-    have hnames : pages.map (·.name) = s.pages.map (·.name) ++ fresh := by
-      rw [← hps, ← hall, List.map_map]
-      have : ((·.name) ∘ fun (x : Page × Nat) =>
-          openPage H (openEntries (s.pages ++ freshPages H s fresh) V) (s.turn + x.2) x.1 (V.lookup x.1.name)) =
-          (·.name) ∘ Prod.fst := by
-        funext x; simp [openPage_name]
-      rw [this, ← List.map_map, List.zipIdx_map_fst, List.map_append, freshPages_names]
-    have hq2 : quiet (settle H { s with pages := pages, turn := s.turn + all.length })
-        (overwrite V (writesFor (settle H { s with pages := pages, turn := s.turn + all.length }) V)) = true := by
-      refine quiet_after_settle H _ V ?_ ?_ ?_
-      · show (pages.map (·.name)).Nodup
-        rw [hnames, List.nodup_append]
-        refine ⟨hs, hfresh ▸ nodup_fresh s V hV, ?_⟩
-        intro a ha b hb hab
-        subst hab
-        rw [← hfresh] at hb
-        obtain ⟨e, he, rfl⟩ := List.mem_map.1 hb
-        have := (List.mem_filter.1 he).2
-        obtain ⟨p, hp, hpn⟩ := List.mem_map.1 ha
-        simp only [Bool.not_eq_true', List.any_eq_false, beq_iff_eq] at this
-        exact this p hp hpn
-      · intro p hp hl
-        show p.seen.isSome
-        rw [← hps] at hp
-        obtain ⟨⟨q, i⟩, _, rfl⟩ := List.mem_map.1 hp
-        simp only [openPage_name] at hl ⊢
-        obtain ⟨md, hmd⟩ := Option.isSome_iff_exists.1 hl
-        rw [hmd]
-        obtain ⟨u, hu⟩ := openPage_seen H (openEntries all V) (s.turn + i) q md
-        simp [hu]
-      · intro e he
-        show e.1 ∈ pages.map (·.name)
-        rw [hnames, List.mem_append]
-        by_cases h : s.pages.any (·.name == e.1) = true
-        · obtain ⟨p, hp, hpn⟩ := List.any_eq_true.1 h
-          exact .inl (List.mem_map.2 ⟨p, hp, by simpa using hpn⟩)
-        · exact .inr (hfresh ▸ List.mem_map.2 ⟨e, List.mem_filter.2 ⟨he, by simpa using h⟩, rfl⟩)
+    have hq2 : quiet (settle H (openAdmission H s V).1)
+        (overwrite V (writesFor (settle H (openAdmission H s V).1) V)) = true :=
+      quiet_after_settle H _ V (openAdmission_nodup H s V hs hV) (openAdmission_seen H s V)
+        (openAdmission_cover H s V)
     simp only [hq2, ite_true]
 
 /-- An open writes a file only where the page's text in the store differs from it, and writes that
@@ -1158,10 +1608,6 @@ theorem mem_writes {s : Store} {V : List (String × String)} {n t : String}
 /-! ## The other commands
 
 Each takes the store as an open left it and returns the new store, or why it refused. -/
-
-/-- Replace the page of that name. -/
-def Store.setPage (s : Store) (p : Page) : Store :=
-  { s with pages := s.pages.map fun q => if q.name == p.name then p else q, turn := s.turn + 1 }
 
 /-- A write by `who` of the version `G'` of the page `p`, committed; `poster` is whose text it is
 when not `who`'s own (a selection: the kept candidate's author). -/
@@ -1198,7 +1644,7 @@ def replicaPins (o : Store) (q : Page) (B : Graph) : Footprint :=
   match lawsFor o.entries q.name B with
   | .ok ls =>
     if (linkLaws ls).isEmpty then []
-    else (linkedEntries o.entries B).map fun e => ⟨e.name, some (pageState e.graph e.version)⟩
+    else pinsAt o.entries (citedNames o.entries B)
   | .error _ => []
 
 /-- Merge the pages of another replica's store (`label` names it in the authors of what it added). -/
