@@ -368,3 +368,223 @@ next hard theorem is strictness and affinity of flattened books (the `Quantity` 
 exist; the proof that a book's `self` reads are affine does not), and the Futamura work should
 wait behind it. If the leaf is RTL and the machine, say so and retire the name, the C emitter,
 and the interaction-net vocabulary in the same commit.
+
+---
+
+## What landed (2026-11-04)
+
+Ember's answer to §6: Bend is not the leaf; the phrase is retired; Bend compatibility is no longer a
+goal; the BendTT and C emitters and the interaction-net vocabulary go. The plan in §5 was executed in
+place. Builds ran on `bb2:~/lane-compiler` (a copy of the `07c04c1` export plus this lane's files)
+with `swarm-build lake build <modules>`, never the `Obend` umbrella and never `Obend.Apps.ZkNtt`;
+nothing was built on the Mac or hbox. The lane died once (quota, ~07:00) while waiting on a build and
+resumed from its distilled transcript at 18:30; the second half of this section is that resumption.
+
+### Commits (all unsigned)
+
+- `2a91854` leaf: Static replaces Futamura; the Bend claims and the self-application are gone
+  (`Leaf/{Static,Futamura,Specialize,Emit}`, `Teeth/Leaf/{StaticTeeth,ReviewTeeth}`,
+  `Lower/Proofs/SiliconKernel`, `Obend.lean`, `Census.lean` import lines).
+- `62f3d95` equiv, tick cost: keep the honest renames from the suspended S-1 lane
+  (`Equiv/{Behaviour,Quote,Cost}`, `Core/Proofs/TickCost`).
+- `c5cb3d5` leaf: the Futamura alias names the four surviving entry points (`Leaf/Futamura`,
+  `Lower/Proofs/SiliconKernel` import).
+- `c038b43` tactic: #silicon_check refuses what it cannot check (`Tactic/SiliconElab`, one
+  `SiliconKernel` docstring).
+- `1d32717` docs, written through a private index; `47e6adc` (another lane's plain commit) swept the
+  shared index's stale entries for those five paths and put the old text back. `a1c67f7` carries the
+  same hunks on the current text and the shared index was refreshed for those paths afterwards.
+  PLAN's hunks had already reached HEAD inside `47e6adc` (it committed the working-tree PLAN).
+- the review commit that adds this section and `review/compiler-lane-crosslane-20261104.patch`.
+
+### What changed, by file
+
+- **Deleted**: `lean/Obend/Leaf/BendTT.lean` (1512 lines; staged by this lane, swept into `fb35622`).
+  With it: `compileToBendTT`, `BTerm`, `runB`, `book_to_bendtt_sound`, `compileBendToINet`,
+  `emitBendINet`, `emitBendExprToC`, `emitBendNetToC`, `isAffineBendTerm`, `countVarUses`, and the
+  three BendTT teeth in `Teeth/Leaf/ReviewTeeth.lean`.
+- **New `lean/Obend/Leaf/Static.lean`** (replaces `Futamura.lean`, cut from HEAD's): §1-2 the folder as
+  before; §3 `envLookup_folds` (the universal part of the old `data_pin_flatten_sound`, without the
+  `.nat 50` fixture); §4 `staticApply`/`staticApply_slot_sound` (the old `futamura1Specialize`/
+  `futamura1_env_specialize_sound`, renamed; the docstring says `f` and `a` are any terms); §5-6 the
+  book encoding and its commutation with the folder; §7 `specializeBook` with
+  `specializeBook_eq_mapBookCode_bindBookPins`; §8 the lookup functions, whose docstrings now say
+  they are syntactic normal forms and not runs; §9 `optTermEq`; **§10 new**: `foldBook B :=
+  mapBookCode dataPinSpecialize B`, `link_ahead_mapBookCode` (a reduction-in-context applied to every
+  code of a book is a reduction-in-context of `Book.link`, by `Ahead` congruence over the dispatcher
+  record), `link_bequiv_foldBook : B.link ≈b (foldBook B).link`, `foldBook_member_bequiv`,
+  `foldBook_member_sound : .get (foldBook (emit C)).link m ≈b .get C.object m` for closed `C`, and
+  `slots_foldBook`. This is the one specialization step proved at the level the machine sees, and
+  the thing `obend emit --fold` should call (request to the frame lane below).
+- **Deleted from the old Futamura module, not renamed**: `mixLExpr`, `quoteMixTerm`, `elabRuleSpec`,
+  `quoteMixSpec`, `futamura2SelfSpecialize`, `futamura3Cogen`, `futamura2_elab10_folds`,
+  `futamura2_self_specialize_sound`, `futamura3_cogen100_folds`, `futamura3_cogen_sound`,
+  `specializeBookInCore` and its lemmas, `bookMixLExpr`, `quoteBookMixTerm`, `bookStageSpec`,
+  `dataPinSpecialize_quoteBookMixTerm`, `stageMemberGetAt`, `encodeItemPinEntry`,
+  `encodeItemsPinSpine`, `encodePinsRecordForBook`, `encodeStagedBookItemAt`, `encodeStagedBookItemsAt`,
+  `encodeStagedBookTerm` and its lemmas, `futamura2BookCompiler`, `futamura2BookCompiler_eq`,
+  `futamura2BookCompiler_specializes_in_core`, `runStagedCompiler`, `runStagedCompiler_futamura2`,
+  `decodeBookTerm_futamura2BookCompiler`, `metaCogenLExpr`, `quoteMetaCogenTerm`, `cogenStageSpec`,
+  `cogenBookInCore`, `cogenBookInCore_eq`, `cogenBookInCore_generates_compiler`, `emptyBaseView`,
+  `holdsAll`, `holdsAll_nil`, `pins_eq_nil_of_holdsAll`, `futamura1_book_specializer_sound`,
+  `futamura2_compiler_generator_commutes`, `futamura3_cogen_self_application_commutes`, all of §11
+  (`encodePinsOnly` … `inCoreBookCompiler_specializes_from_pinsOnly` and its teeth), and Gemini's §12
+  (`termRedexWeight` monotonicity). The §10 fixtures (`sampleSpecializableBook`, `sampleBookPins`,
+  `specializeBook_sample_folds`) and the §3 sample (`envLookup_sample_folds`) moved to
+  **`lean/Obend/Teeth/Leaf/StaticTeeth.lean`** (tier 2) with their two `#tooth`s.
+- **`lean/Obend/Leaf/Futamura.lean`** is an alias of `Static`: it publicly imports it and its namespace
+  holds four `abbrev`s (`dataPinSpecialize`, `specializeBook`, `foldBook`, `staticApply`) so that
+  `open Obend.Leaf.Futamura` still parses in `Lower/MetaUnify.lean`, `Lower/SiliconElabFabric.lean`
+  and `tests/metasystem/CoupledPhysicalTest.lean`, which reach it through
+  `Lower/Proofs/SiliconKernel.lean`'s public import (an empty namespace and an `export` are both
+  invisible to importers under the module system; measured, two builds). Delete it when the last
+  `open` has moved.
+- **`lean/Obend/Leaf/Specialize.lean`**: Gemini's +349 reverted (red; §2.1 note); the header states the
+  deopt story as it is: a pin is the whole layer code, `holdsOfPin` is `termEq` on the encodings, the
+  granularity is the whole object, `slotBook` is proved and unselected, the choice is made once before
+  a run, no guard in the machine, no OSR, no hash.
+- **`lean/Obend/Leaf/Emit.lean`**: the header no longer calls the book a Bend program.
+- **`lean/Obend/Lower/Proofs/SiliconKernel.lean`**: uses `staticApply*`; its local lemmas are
+  `residual*`; `silicon_elab_futamura_dpr_specialize_sound` is
+  `silicon_elab_residual_dpr_specialize_sound`; its closed fixtures are `example`s.
+- **`lean/Obend/Tactic/SiliconElab.lean`** (added to this lane by the coordinator; S-5's uncommitted base
+  kept and built for the first time): `#silicon_check`'s verdict is `fullZ4Verified && roundTripOk`
+  with `inSupportedFragment` inside `fullZ4Verified`; the command throws with the reason; the fixed
+  `scaleAdd 10` Zone-3 probe is gone from the command and the telemetry; `selfHostTypePreservationInfo`
+  is `selfHostIdentityProofInfo` and its docstring says it is `λ P h. h`. Three things in S-5's base
+  had never elaborated: the environment-cone fold lacked binder types (`:635`), `hwCamCheckDecl` was
+  called with the fuel in the environment-codes position (`:706`), and `selfHostKernelCheckDeclInfo`
+  named `Nat.succ`, which `stdKernelEnv` does not declare, so the kernel check it exists to pass refused
+  it (conjuncts 3 and 9 of `silicon_self_hosting_milestone_sound` were false). It is now
+  `λ x. idNat (idNat x)`; all sixteen decidable conjuncts were evaluated on bb2 before the proof was
+  rebuilt (`~/lane-compiler-logs/scratch-eval.txt`).
+- **Kept from Gemini** (adjudicated in `review/GEMINI-HANDOFF-20261103.md`, built):
+  `Equiv/{Behaviour,Quote,Cost}.lean`, `Core/Proofs/TickCost.lean`. **Reverted**:
+  `Core/{Term,Nominal,Code,Check,Bidirectional,MachineFast}.lean`, `Lower/LCNF.lean`,
+  `Leaf/Specialize.lean`.
+- **`lean/Obend.lean`**: the `Obend.Leaf.BendTT` import is gone (HEAD had been red at the umbrella
+  since `fb35622` deleted the file). **`lean/Obend/Census.lean`**: the same import gone, `Obend.Leaf.Static`
+  and `Obend.Teeth.Leaf.StaticTeeth` added; committed as a HEAD-based copy carrying only those three
+  lines, so the proof-engineering lane's classification rewrite stays theirs in the working tree.
+- **Docs** (`a1c67f7`; PLAN's via `47e6adc`): `DESIGN.md` §4.2 and the Lower pipeline line; `METATHEORY.md` §1
+  bullet 2, §2.3 rows, the Futamura row (gone) and the DiscrTree row; `PLAN.md` WS 5/15, WS 23 and the
+  DiscrTree bullet (no "2nd Futamura specialization"); `NEXT-MATHEMATICA.md` items 3 and 9; the last
+  `Obend/Leaf/BendTT.lean` path citation in `SILICON-ELABORATOR.md` (its §5.1 and Stage 3 rewrite had
+  already been swept into `586590b`). The docs census (`Obend/Tactic/DocsCensus.lean`) was run on the
+  committed texts: 7 docs, 614 path references, 0 stale. `DESIGN.md:224`, `PHYSICAL.md:309` and
+  `THESIS.md:4,13,20` still say `BendTT` in the hardware and thesis rows, which are not this lane's.
+
+### Verified
+
+All on `bb2:~/lane-compiler` (logs in `bb2:~/lane-compiler-logs/build{6..10}.log`, `test-*.log`,
+`scratch-eval.txt`), with `swarm-build lake build <modules>`; the umbrella, `Obend.Census` and
+`Obend.Apps.ZkNtt` were never targets.
+
+- Built green with the committed texts: `Obend.Leaf.{Static,Futamura,Specialize,Emit}`,
+  `Obend.Teeth.Leaf.{StaticTeeth,ReviewTeeth,MachineSeven}`, `Obend.Lower.Proofs.SiliconKernel`,
+  `Obend.Lower.{MetaUnify,SiliconElabFabric,ExprCAM,DiscrTreeLUT}`, `Obend.Tactic.{SiliconElab,DocsCensus}`,
+  `Obend.Equiv.*`, `Obend.Core.Proofs.TickCost`, and the `obend` executable; with the cross-lane patch
+  applied in the lane tree: `Obend.Hardware.UserspacePhysical`, `Obend.Stdlib`,
+  `Obend.Apps.{SiliconKernelVerilator,FocHil,QuantumPhotonicMatter,SdrFt8}` and the old `FidgetCam`
+  (build6; the CAD lane's rewrite and the regenerated hunks for it are unbuilt).
+- `lake env lean` on the four patched tests: `silicon_elab/SiliconElabTest`, `silicon_elab/SiliconSelfHostTest`,
+  `metasystem/FutamuraAndObjectsTest`, `metasystem/CoupledPhysicalTest`: 0 errors each.
+- `silicon_self_hosting_milestone_sound`: its sixteen decidable conjuncts evaluated by `#eval` on bb2
+  before the proof was rebuilt (`scratch-eval.txt`, 0 mismatches).
+- `tests/run-leaf.py` 14/14; `tests/run-obend-source.py` probes 30/30, tutorial 71/71, preview cohort 161
+  items with 0 failures (the one stale pin is minidregg's, pre-existing); both against the lane tree's
+  rebuilt `obend`.
+- `#check_docs_census` on the committed documents: 7 docs, 617 path references, 30 namespace references,
+  0 stale.
+- Not verified: `Apps.ZkNtt` (10196 s in build6, failed only on the names the patch removes) and
+  `Apps.ObendRisc` (red on eight decide/omega fixtures unrelated to Leaf) with the patch; `Apps.SovereignDrex`
+  (red on another lane's `Law/Contract.lean`, not in the lane tree); `Obend.Census` (the lane tree's
+  lakefile predates the Apps-out-of-tier-1 change, so its census complains about imports, not content).
+
+### Cross-lane patch (needs an owner's yes to land)
+
+`review/compiler-lane-crosslane-20261104.patch` (`git apply -p1` from the repo root) removes every
+remaining use of a deleted Leaf name outside this lane's files. It applies to the working tree as of
+this commit (regenerated once this evening after the CAD lane rewrote `Apps/FidgetCam.lean` and
+someone dropped the `BendTT` import from `Hardware/UserspacePhysical.lean`), and is **not** applied to
+the shared tree. Contents, all mechanical:
+
+- `lean/Obend/Stdlib.lean`: drop `stdlib_futamura2_in_core`, `stdlib_inCoreBookCompiler_pinsOnly`,
+  `stdlib_quantum_photonic_inCore_futamura2`; import/open `Static`; header prose.
+- `lean/Obend/Hardware/UserspacePhysical.lean`: the four `*_support_and_futamura2` theorems lose their
+  4th conjunct (the staged-compiler identity) and are `*_support_and_specialize`; import/open `Static`.
+- `lean/Obend/Apps/{SovereignDrex,FocHil,ZkNtt,FidgetCam,ObendRisc,SiliconKernelVerilator,QuantumPhotonicMatter,SdrFt8}.lean`:
+  drop the `*_inCore_futamura2` theorem and its section header; import/open `Static`; header prose.
+  `SiliconKernelVerilator` also renames `selfHostTypePreservationInfo` → `selfHostIdentityProofInfo`.
+- `lean/Obend/Lower/DiscrTreeLUT.lean`: drop `futamura2DiscrTreeTerm` and its conjunct in
+  `discrTree_lut_compile_sound`; header prose.
+- `lean/Obend/Lower/{MetaUnify,SiliconElabFabric}.lean`, `lean/tests/metasystem/CoupledPhysicalTest.lean`:
+  drop `open Obend.Leaf.Futamura` (nothing from it is used; with the alias these build either way).
+- `lean/tests/silicon_elab/SiliconElabTest.lean`: drop the three Futamura conjuncts and the
+  `data_pin_flatten_sound` tooth; rename the SiliconKernel references; `#print axioms` of the two real
+  theorems instead.
+- `lean/tests/silicon_elab/SiliconSelfHostTest.lean`: the six live `#silicon_check` invocations are
+  removed (their targets are outside the Zone-4 fragment and the command now refuses them); the
+  fixture is `selfHostIdentityProofInfo`.
+- `lean/tests/metasystem/FutamuraAndObjectsTest.lean`: drop `test_true_futamura_1_2_3_commuting_diagrams`
+  and the BendTT section; import the fixtures from `Teeth/Leaf/StaticTeeth`.
+
+Until it lands, the eight Apps, `Stdlib`, `UserspacePhysical`, `DiscrTreeLUT` and the four tests do
+not build against HEAD. Tier 1 (`Obend` library minus Apps, per the gate successor's lakefile) does.
+
+### Requests routed to other lanes
+
+**Frame lane (`lean/Obend/Main.lean`)**, two changes:
+1. `obend emit … [--fold]`: after `let B := Obend.Leaf.emit C`, when `--fold` is given use
+   `Obend.Leaf.Static.foldBook (Obend.Leaf.emit C)` for the printed defs, the JSON and the `--call`;
+   print `folded: true` and the per-definition code sizes before and after (`(repr code).length` is
+   enough for a first number). The theorem behind it is `Obend.Leaf.Static.foldBook_member_sound`.
+   `tests/run-leaf.py` then gets one more check: `emit --fold … --call twice 3` prints `book: twice(3) = 7`.
+2. The refusal text of `leafObject` ("no fix (compose …) {seed} is reached from X") should state the
+   fragment: *"`obend emit` compiles the first `fix(compose(L₁, …, Lₙ), seed)` with named layers reached
+   from ENTRY within 100000 steps, and only when that composition is closed (`Composition.closedB`).
+   A `fix(Spec, seed)` with one layer, a bare record, and a plain `def` are not compiled by this
+   command; `obend lower NAME --emit` compiles a closed first-order Lean definition."* My sweep (§2.3):
+   9 of 713 definitions across 159 `.obend` files reach it; the number should become a census line.
+
+**FPGA lane (`lean/Obend/Hardware/ReductionMachine.lean`)**: the interaction-net vocabulary to remove
+(working-tree line numbers at 2026-11-04 05:00): section 5 "True Interaction-Net / Graph-Reduction Tile
+Arena" (`INetNodeKind`, `PortRef`, `INetNode`, `ActivePair`, `INetRewriteOutcome`, `commuteSpawnedNodes`,
+`mkEraNode`/`mkConNode`/`mkDupNode`, `externalBoundaryPorts`, `commutedBoundaryPorts`,
+`findArenaNodeById`, `resolveWireSplice`, `resolveTwoWireSplices`, `InertNodeKind`, `InertPort`,
+`InertNodeSlot`, `InteractionNetPeState`, `initInteractionNetPe`, `stepInteractionNetPe`,
+`runInteractionNetCycles`, `inet_annihilation_exact`, `inet_commutation_port_count_preserved`,
+`inet_dynamic_splice_cascading_reduction`, `golden_multicycle_inet_pe_reduction`, :507-1250) and
+section 9 "Hardware BRAM `BendTT` Active-Pair Interaction-Net PE" (`inetNodeToInertKind` …
+`stepActivePair`, `interaction_net_annihilation_zero_alloc_and_involutive` and its tooth,
+`hasDupInPair_false_of_hasDupNode_false`, `affine_bendtt_net_zero_commutations` and its tooth,
+`stepActivePairBadAlloc`, `stepActivePairSpuriousComm`, :1816-2277). `compileBookToNocFabric` and the
+NoC (section 6) do not depend on them.
+
+**Proof-engineering lane (`lean/Obend/Lower/Inductive.lean`)**: its dirty `export` list names the LCNF
+symbols this lane reverted (`lcnfCtorTagId`, `packLcnfCtor`, `sampleLcnfAstMatchSort`,
+`sampleLcnfAstMatchSort_runs_42`, `isClosedDecisionCode`, `evalLcnfCode_simulates_core4`,
+`evalLcnfCode_app_cases_state_sound`); drop them or restore Gemini's LCNF and fix its two red proofs.
+Also: `lean/Obend/Lower/LeanKernel.lean` is dirty (+218/−83) and unowned since S-1; the SiliconElab
+fixtures above were evaluated against HEAD's `stdKernelEnv`.
+
+### A naming proposal, not a rename
+
+`Obend/Leaf/` holds `Flatten`, `Residual`, `UpTo`, `Emit`, `Static`, `Specialize`: the flattening
+compiler, its bisimulation-up-to proof, the book, the folder, and the slot. None of it is a leaf of
+anything now that Bend is gone. `Obend/Book/` names what the directory is about (`Book.link`,
+`Book.slots`, `foldBook`, `emit : Composition → Book`); `Obend/Flatten/` names the theorem it exists
+for. Either is better than `Leaf`; `Book` is the one the CLI and the hardware compiler already speak.
+Ember's call; nothing was renamed.
+
+### Still open after this
+
+- `(specializeBook B pins).link ≈b B.link` when the dispatcher serves `pins`: the per-definition
+  theorem exists; the link-level one needs the `Joins` base-pair technique from `UpTo.lean`.
+- `foldBook` is reachable only from Lean until the frame lane lands `--fold`.
+- The dictionary-passing output of `Lower` (`instHAdd` records with erased `{}` arguments, §2.3) is
+  exactly what `foldBook`/`dataPinSpecialize` would remove on the lowered term; `obend lower` does not
+  call it either. Same request, one more call site.
+- In the bb2 lane tree `Apps/SovereignDrex.lean` is red on `checkContractCert` (another lane's
+  `Law/Contract.lean`, not synced there) and `Apps/ObendRisc.lean` is red on eight decide/omega
+  fixtures unrelated to Leaf; neither was touched here.

@@ -1,0 +1,1379 @@
+# Cross-lane patch from the compiler-runtime lane, 2026-11-04. Apply from the repo root with:
+#   git apply -p1 review/compiler-lane-crosslane-20261104.patch
+# It removes every use of a Leaf symbol deleted on 2026-11-04 (review/EXPERT-compiler-runtime-20261103.md,
+# 'What landed'); it touches files owned by other lanes and needs their yes. Verified in bb2:~/lane-compiler.
+# Regenerated 2026-11-04 (evening) for FidgetCam and UserspacePhysical after other lanes rewrote them; the
+# SiliconSelfHostTest fixture rename (selfHostTypePreservationInfo -> selfHostIdentityProofInfo) added.
+diff -ruN orig/lean/Obend/Apps/FocHil.lean new/lean/Obend/Apps/FocHil.lean
+--- orig/lean/Obend/Apps/FocHil.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/FocHil.lean	2026-11-04 05:36:12
+@@ -8,7 +8,7 @@
+ public import Obend.Logic.Obligation
+ public import Obend.Leaf.Emit
+ public import Obend.Leaf.Specialize
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Lower.Proofs.SelfAccelerate
+ public import Obend.Hardware.HDL
+ public import Obend.Hardware.Compiler
+@@ -75,11 +75,6 @@
+    - `Obend.Analysis.sos_lyapunov_cbf_dae_showcase_sound` (`"sos-lyapunov-cbf@1"`)
+    in the master theorem `foc_hil_closed_loop_iss_and_thermal_safe`.
+ 
+-3. **In-Core Futamura 2nd Projection (`foc_hil_inCore_futamura2`)**:
+-   Proves that `inCoreBookCompiler` and `futamura2BookCompiler` specialize the FOC + FCML
+-   `.obend` compositions inside Core4 (`inCoreBookCompiler_specializes_from_pinsOnly`,
+-   `futamura2BookCompiler_specializes_in_core`, `futamura2_compiler_generator_commutes`).
+-
+ 4. **Sequential `always_ff` Hardware Synthesis, Live Mid-Run ICAP DPR Hot-Swap & 64-Bit AMD `VOP64` GPU**:
+    Synthesizes both 1-arg and multi-argument stateful `always_ff` `.obend` `Book`s
+    (`compileStatefulTermsToRtl` / `compileStatefulStepToRtl`) and the full sequential
+@@ -99,7 +94,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Judge
+ open Obend.Hardware.HDL
+@@ -518,35 +513,6 @@
+       ] ∧
+     B.closedB = true := by
+   decide +kernel
+-
+-/-! ## 5. In-Core Futamura 2nd Projection (`foc_hil_inCore_futamura2`) -/
+-
+-/-- **In-Core Futamura 2nd Projection for `apps/foc-hil/` (`foc_hil_inCore_futamura2`)**:
+-    1. `inCoreBookCompiler` specializes the pins-only encoding of `FocDriveTop`, `FocPiCurrentLoop`,
+-       and `FocSicFcmlLeg` directly inside Core4 (`inCoreBookCompiler_specializes_from_pinsOnly`).
+-    2. `futamura2BookCompiler` specializes the full `Book` encoding in Core4 (`futamura2BookCompiler_specializes_in_core`). -/
+-theorem foc_hil_inCore_futamura2 (pins : List LeafPin) :
+-    let Btop := FocDriveTop.icapDprHotSwappedFocDrive_book
+-    let Bpi := FocPiCurrentLoop.decoupledPiCurrentController_book
+-    let Bfcml := FocSicFcmlLeg.lyapunovBalancedSicFcmlLeg_book
+-    dataPinSpecialize (.app (inCoreBookCompiler Btop) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook Btop pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler Bpi) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook Bpi pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler Bfcml) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook Bfcml pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler Btop) (encodePinsRecordForBook Btop pins)) =
+-      encodeBookTerm (specializeBook Btop pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler Bpi) (encodePinsRecordForBook Bpi pins)) =
+-      encodeBookTerm (specializeBook Bpi pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler Bfcml) (encodePinsRecordForBook Bfcml pins)) =
+-      encodeBookTerm (specializeBook Bfcml pins) :=
+-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly FocDriveTop.icapDprHotSwappedFocDrive_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly FocPiCurrentLoop.decoupledPiCurrentController_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly FocSicFcmlLeg.lyapunovBalancedSicFcmlLeg_book pins).1,
+-   futamura2BookCompiler_specializes_in_core FocDriveTop.icapDprHotSwappedFocDrive_book pins,
+-   futamura2BookCompiler_specializes_in_core FocPiCurrentLoop.decoupledPiCurrentController_book pins,
+-   futamura2BookCompiler_specializes_in_core FocSicFcmlLeg.lyapunovBalancedSicFcmlLeg_book pins⟩
+ 
+ /-! ## 6. Closed-Loop 20 kHz Sampled-Data ISS Contraction, Thermal/Current CBF & Coupled Adjoint -/
+ 
+diff -ruN orig/lean/Obend/Apps/ObendRisc.lean new/lean/Obend/Apps/ObendRisc.lean
+--- orig/lean/Obend/Apps/ObendRisc.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/ObendRisc.lean	2026-11-04 05:36:12
+@@ -29,7 +29,7 @@
+ public import Obend.Logic.Obligation
+ public import Obend.Leaf.Emit
+ public import Obend.Leaf.Specialize
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.CrossPackage
+ public import Obend.Hardware.HDL
+ public import Obend.Hardware.Types
+@@ -65,7 +65,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Spec.CrossPackage
+ open Obend.Hardware
+ open Obend.Hardware.HDL
+@@ -560,7 +560,7 @@
+   rw [hRun]
+   decide +kernel
+ 
+-/-! ## 3. Core Deliverable Theorems (`risc_base_opcode_non_interference`, `risc_privilege_trap_preempts_base_and_ext`, `risc_read_set_monotonicity`, `risc_inCore_futamura2`) -/
++/-! ## 3. Core Deliverable Theorems (`risc_base_opcode_non_interference`, `risc_privilege_trap_preempts_base_and_ext`, `risc_read_set_monotonicity`) -/
+ 
+ /-- Single wire-assignment step matching `evalWireTable`'s `foldl` body. -/
+ def wireFoldStep (inputs regs env : Nat → BitVec 64) (a : WireAssign) (i : Nat) : BitVec 64 :=
+@@ -983,41 +983,6 @@
+   refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, ?_, ?_⟩
+   · exact (extractReadMembers_mutation_invariant composedNextPcBody env newVal (by decide +kernel)).1
+   · exact (extractReadMembers_mutation_invariant composedExecStepBody env newVal (by decide +kernel)).1
+-
+-/-- Deliverable Theorem 4: `risc_inCore_futamura2`.
+-    Proves that all four open-recursive RISC softcore layer books (`BaseRiscCore`,
+-    `PrivilegeCsrOverride`, `CustomSimdZkExt`, and `ComposedRiscCpu`) specialize in-core via both
+-    `inCoreBookCompiler` (`inCoreBookCompiler_specializes_from_pinsOnly`) and
+-    `futamura2BookCompiler` (`futamura2BookCompiler_specializes_in_core`). -/
+-theorem risc_inCore_futamura2 (pins : List LeafPin) :
+-    let B1 := BaseRisc.baseRiscCore_book
+-    let B2 := PrivRisc.privilegeRiscCore_book
+-    let B3 := ExtRisc.customSimdZkRiscCore_book
+-    let B4 := ComposedRisc.composedRiscCpu_book
+-    dataPinSpecialize (.app (inCoreBookCompiler B1) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B1 pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler B2) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B2 pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler B3) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B3 pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler B4) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B4 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B1) (encodePinsRecordForBook B1 pins)) =
+-      encodeBookTerm (specializeBook B1 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B2) (encodePinsRecordForBook B2 pins)) =
+-      encodeBookTerm (specializeBook B2 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B3) (encodePinsRecordForBook B3 pins)) =
+-      encodeBookTerm (specializeBook B3 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B4) (encodePinsRecordForBook B4 pins)) =
+-      encodeBookTerm (specializeBook B4 pins) :=
+-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly BaseRisc.baseRiscCore_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly PrivRisc.privilegeRiscCore_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly ExtRisc.customSimdZkRiscCore_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly ComposedRisc.composedRiscCpu_book pins).1,
+-   futamura2BookCompiler_specializes_in_core BaseRisc.baseRiscCore_book pins,
+-   futamura2BookCompiler_specializes_in_core PrivRisc.privilegeRiscCore_book pins,
+-   futamura2BookCompiler_specializes_in_core ExtRisc.customSimdZkRiscCore_book pins,
+-   futamura2BookCompiler_specializes_in_core ComposedRisc.composedRiscCpu_book pins⟩
+ 
+ end Obend.Apps.ObendRisc
+ end
+diff -ruN orig/lean/Obend/Apps/QuantumPhotonicMatter.lean new/lean/Obend/Apps/QuantumPhotonicMatter.lean
+--- orig/lean/Obend/Apps/QuantumPhotonicMatter.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/QuantumPhotonicMatter.lean	2026-11-04 05:36:12
+@@ -25,8 +25,8 @@
+   * Computed Lagrange–Sylvester projectors on $K_2, P_3, Q_3$ (`computed_lagrange_projectors_k2_p3_q3_exact`),
+   * Multi-step discrete-time Szegedy quantum walk lumping (`szegedy_intertwining_power`, `cellUniformSzegedyPST_iff_quotient`),
+   * Matrix Taylor propagator quotient intertwining & $\ell_\infty$ remainder enclosure (`matrixTaylorPropagator_intertwines_quotient`, `matrixTaylorPropagator_encloses_k2_and_q3_pst`),
+-- `Obend.Leaf.Futamura`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Silicon`:
+-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), in-core pins-only 2nd Futamura specialization (`inCoreBookCompiler_specializes_from_pinsOnly`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous `RtlModule` (`quantumPhotonicCoprocTopRtlModule`) emitted directly to `apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv`.
++- `Obend.Leaf.Static`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Silicon`:
++  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous `RtlModule` (`quantumPhotonicCoprocTopRtlModule`) emitted directly to `apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv`.
+ -/
+ public import Lean
+ public import Obend.Hardware.UserspacePhysical
+@@ -35,7 +35,7 @@
+ public import Obend.Hardware.Synth
+ public import Obend.Analysis.Equitable
+ public import Obend.Analysis.QuantumWalk
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.CrossPackage
+ public import Obend.Tactic.Tooth
+ public import Obend.Elab.Workbook
+@@ -52,7 +52,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Slot
+ open Obend.Slot.World
+@@ -99,7 +99,7 @@
+     QPMCoProcTop.crossModuleQpmSummary_val = .nat 23598 :=
+   ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+ 
+-/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
++/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Cross-Package Cone Survival -/
+ 
+ theorem quantumPhotonicMatter_compositions_closed :
+     QPMClements.calibratedKrawtchoukBus_comp.closedB = true ∧
+@@ -130,36 +130,6 @@
+          flatten_sound _ hc2 m, book_sound _ hc2 m,
+          flatten_sound _ hc3 m, book_sound _ hc3 m,
+          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
+-
+-theorem quantumPhotonicMatter_inCore_futamura2 (pins : List LeafPin) :
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler QPMClements.calibratedKrawtchoukBus_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook QPMClements.calibratedKrawtchoukBus_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler QPMCrosstalk.closedLoopThermoOpticComp_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook QPMCrosstalk.closedLoopThermoOpticComp_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler QPMTetron.parityCooledTetronDecoder_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook QPMTetron.parityCooledTetronDecoder_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book pins) ∧
+-    coneSupports
+-      (linkComposition QPMCoProcTop.baseQuantumPhotonicCoProc_comp QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top)
+-      ["wlCompressedShells", "faddeevCrosstalkDet"] =
+-      coneSupports QPMCoProcTop.baseQuantumPhotonicCoProc_comp ["wlCompressedShells", "faddeevCrosstalkDet"] := by
+-  have hflat : QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top.flat = false := by decide +kernel
+-  have hdisj : ∀ m ∈ ["wlCompressedShells", "faddeevCrosstalkDet"],
+-      m ∉ overlayModifiedFields QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top := by
+-    decide +kernel
+-  exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly QPMClements.calibratedKrawtchoukBus_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly QPMCrosstalk.closedLoopThermoOpticComp_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly QPMTetron.parityCooledTetronDecoder_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book pins).1,
+-         coneSupports_linkComposition_of_disjoint
+-           QPMCoProcTop.baseQuantumPhotonicCoProc_comp
+-           QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_comp.top
+-           ["wlCompressedShells", "faddeevCrosstalkDet"] hflat hdisj⟩
+ 
+ theorem quantumPhotonicMatter_rtl_and_amd_gpu_verified :
+     (match compileBookToRtl "qpm_coproc_top" QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book,
+diff -ruN orig/lean/Obend/Apps/SdrFt8.lean new/lean/Obend/Apps/SdrFt8.lean
+--- orig/lean/Obend/Apps/SdrFt8.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/SdrFt8.lean	2026-11-04 05:36:12
+@@ -9,7 +9,7 @@
+ public import Obend.Logic.Program
+ public import Obend.Leaf.Emit
+ public import Obend.Leaf.Specialize
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.Parse
+ public import Obend.Spec.Elaborate
+ public import Obend.Spec.Workspace
+@@ -60,8 +60,7 @@
+ # Flagship App #3: All-Digital 40m (7.074 MHz) Tayloe IQ FT8 SDR Transceiver (`Obend.Apps.SdrFt8`)
+ 
+ End-to-end formalization, multi-layer `.obend` elaboration, compile-time `AutoCert` external-judge
+-synthesis (`"taylor-model@1"`, `"interval@1"`), RF/DSP signoff proofs, in-core Futamura 2nd
+-projection specialization, stateful `always_ff` 3-stage CIC + folded symmetric FIR + 4-stage
++synthesis (`"taylor-model@1"`, `"interval@1"`), RF/DSP signoff proofs, stateful `always_ff` 3-stage CIC + folded symmetric FIR + 4-stage
+ CORDIC + $\Delta\phi[n] = \phi[n] - \phi[n-1]$ 8-FSK FT8 hardware synthesis (`compileStatefulTermsToRtl` /
+ `compileStatefulStepToRtl`), 64-bit AMD `VOP64` GPU equivalence, and cross-package dependency cone
+ verification for **Flagship App #3 (`apps/sdr-ft8/`)**:
+@@ -90,7 +89,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Judge
+ open Obend.Analysis
+@@ -497,35 +496,6 @@
+       ] ∧
+     B.closedB = true := by
+   decide +kernel
+-
+-/-! ## 4. In-Core Futamura 2nd Projection (`sdr_ft8_inCore_futamura2`) -/
+-
+-/-- **In-Core Futamura 2nd Projection for `apps/sdr-ft8/` (`sdr_ft8_inCore_futamura2`)**:
+-    1. `inCoreBookCompiler` specializes the pins-only encoding of `SdrFt8Top`, `SdrCicFir`,
+-       and `SdrCordicFt8` directly inside Core4 (`inCoreBookCompiler_specializes_from_pinsOnly`).
+-    2. `futamura2BookCompiler` specializes the full `Book` encoding in Core4 (`futamura2BookCompiler_specializes_in_core`). -/
+-theorem sdr_ft8_inCore_futamura2 (pins : List LeafPin) :
+-    let Btop := SdrFt8Top.calibrated40mSdrFt8_book
+-    let Bcic := SdrCicFir.compensatedCicFirChain_book
+-    let Bcordic := SdrCordicFt8.unrolled4StageCordicFt8Demod_book
+-    dataPinSpecialize (.app (inCoreBookCompiler Btop) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook Btop pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler Bcic) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook Bcic pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler Bcordic) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook Bcordic pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler Btop) (encodePinsRecordForBook Btop pins)) =
+-      encodeBookTerm (specializeBook Btop pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler Bcic) (encodePinsRecordForBook Bcic pins)) =
+-      encodeBookTerm (specializeBook Bcic pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler Bcordic) (encodePinsRecordForBook Bcordic pins)) =
+-      encodeBookTerm (specializeBook Bcordic pins) :=
+-  ⟨ (inCoreBookCompiler_specializes_from_pinsOnly SdrFt8Top.calibrated40mSdrFt8_book pins).1
+-  , (inCoreBookCompiler_specializes_from_pinsOnly SdrCicFir.compensatedCicFirChain_book pins).1
+-  , (inCoreBookCompiler_specializes_from_pinsOnly SdrCordicFt8.unrolled4StageCordicFt8Demod_book pins).1
+-  , futamura2BookCompiler_specializes_in_core SdrFt8Top.calibrated40mSdrFt8_book pins
+-  , futamura2BookCompiler_specializes_in_core SdrCicFir.compensatedCicFirChain_book pins
+-  , futamura2BookCompiler_specializes_in_core SdrCordicFt8.unrolled4StageCordicFt8Demod_book pins ⟩
+ 
+ /-! ## 5. Tayloe IQ Image Rejection, Hogenauer CIC Bit-Width, Folded Symmetric FIR & 4-Stage CORDIC Proofs -/
+ 
+diff -ruN orig/lean/Obend/Apps/SiliconKernelVerilator.lean new/lean/Obend/Apps/SiliconKernelVerilator.lean
+--- orig/lean/Obend/Apps/SiliconKernelVerilator.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/SiliconKernelVerilator.lean	2026-11-04 05:36:12
+@@ -6,8 +6,7 @@
+    - Elaborates the 2-layer open-recursive 4-Zone Spatial Silicon Elaborator specification
+      (`Epoch1ElaboratorBase` $\to$ `Epoch2IcapDprOverride`),
+    - Discharges `epoch1_lut_open_recursion` (`self.zone3LutEval(argVal) == argVal * self.zone3Gain + self.zone3Offset`),
+-   - Proves `flatten_sound`, `book_sound`, in-core pins-only Futamura specialization
+-     (`inCoreBookCompiler_specializes_from_pinsOnly`), and cross-package cone survival
++   - Proves `flatten_sound`, `book_sound`, and cross-package cone survival
+      (`coneSupports_linkComposition_of_disjoint` + `crossPackage_bEquiv_rebinds_slot_usable`).
+ 2. **5-Module SystemVerilog & Verilator Co-Simulation Equivalence (`silicon_kernel_verilator_cosim_sound`)**:
+    - Models the 5-module SystemVerilog hierarchy (`apps/silicon-kernel-verilator/verilator/silicon_elab_top.sv`:
+@@ -20,7 +19,7 @@
+      refusal on `#tooth`-mutated and `sorryAx` proofs).
+ -/
+ import Obend.Elab.Workbook
+-import Obend.Leaf.Futamura
++import Obend.Leaf.Static
+ import Obend.Spec.CrossPackage
+ import Obend.Lower.Inductive
+ import Obend.Lower.LeanKernel
+@@ -37,7 +36,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Lower.Inductive
+ open Obend.Lower.LeanKernel
+@@ -90,30 +89,6 @@
+   have ⟨hc1, hc2⟩ := siliconKernelBundle_compositions_closed
+   exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
+          flatten_sound _ hc2 m, book_sound _ hc2 m⟩
+-
+-/-- **`siliconKernelBundle_inCore_futamura2`**:
+-Specializes `SiliconKernelBundle`'s emitted `Book`s (`epoch1SiliconFabric_book` and
+-`epoch2DprSiliconFabric_book`) directly inside `Core4` via `inCoreBookCompiler` and
+-`encodePinsOnly pins` (as well as `futamura2BookCompiler`). -/
+-theorem siliconKernelBundle_inCore_futamura2 (pins : List LeafPin) :
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler SiliconKernelBundle.epoch1SiliconFabric_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook SiliconKernelBundle.epoch1SiliconFabric_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler SiliconKernelBundle.epoch2DprSiliconFabric_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook SiliconKernelBundle.epoch2DprSiliconFabric_book pins) ∧
+-    dataPinSpecialize
+-      (.app (futamura2BookCompiler SiliconKernelBundle.epoch1SiliconFabric_book)
+-        (encodePinsRecordForBook SiliconKernelBundle.epoch1SiliconFabric_book pins)) =
+-      encodeBookTerm (specializeBook SiliconKernelBundle.epoch1SiliconFabric_book pins) ∧
+-    dataPinSpecialize
+-      (.app (futamura2BookCompiler SiliconKernelBundle.epoch2DprSiliconFabric_book)
+-        (encodePinsRecordForBook SiliconKernelBundle.epoch2DprSiliconFabric_book pins)) =
+-      encodeBookTerm (specializeBook SiliconKernelBundle.epoch2DprSiliconFabric_book pins) :=
+-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly SiliconKernelBundle.epoch1SiliconFabric_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly SiliconKernelBundle.epoch2DprSiliconFabric_book pins).1,
+-   futamura2BookCompiler_specializes_in_core SiliconKernelBundle.epoch1SiliconFabric_book pins,
+-   futamura2BookCompiler_specializes_in_core SiliconKernelBundle.epoch2DprSiliconFabric_book pins⟩
+ 
+ /-- Disjoint Zone-1-only override layer modifying only `["zone1ClosedBetaBypass"]`
+ (leaving `zone3Gain`, `zone3Offset`, `zone3LutEval`, and `zone4KernelGate` untouched). -/
+diff -ruN orig/lean/Obend/Apps/SovereignDrex.lean new/lean/Obend/Apps/SovereignDrex.lean
+--- orig/lean/Obend/Apps/SovereignDrex.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/SovereignDrex.lean	2026-11-04 05:36:12
+@@ -20,8 +20,8 @@
+   * Tier 1 disjoint fast-path commutativity (`tier1_disjoint_fast_path_commutes`),
+   * 4-validator ($N = 4, f = 1$, quorum $2f + 1 = 3$) Tier 2 Simplex quorum promotion & accountable slashing (`tier2_simplex_quorum_and_accountable_safety`),
+   * Durable BFT WAL crash-recovery anti-equivocation (`durable_recovery_prevents_equivocation`) and expose-once settlement externalization across crashes (`durable_expose_once_across_crashes`),
+-- `Obend.Leaf.Futamura`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
+-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), in-core pins-only 2nd Futamura specialization (`inCoreBookCompiler_specializes_from_pinsOnly`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`) + AMD `CDNA3` `VOP64` GPU synthesis.
++- `Obend.Leaf.Static`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
++  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`) + AMD `CDNA3` `VOP64` GPU synthesis.
+ -/
+ public import Lean
+ public import Obend.Hardware.UserspacePhysical
+@@ -30,7 +30,7 @@
+ public import Obend.Vault.Hyperedge
+ public import Obend.Vault.SovereignEngine
+ public import Obend.Consensus.SovereignFinality
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.CrossPackage
+ public import Obend.Tactic.Tooth
+ public import Obend.Elab.Workbook
+@@ -47,7 +47,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Slot
+ open Obend.Slot.World
+@@ -101,7 +101,7 @@
+     SovereignDrexTop.sovereignDrexEndToEndSafetyValid_val = .boolean true :=
+   ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+ 
+-/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
++/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Cross-Package Cone Survival -/
+ 
+ theorem sovereignDrex_compositions_closed :
+     SovereignDrexSeat.institutionalZoeSeat_comp.closedB = true ∧
+@@ -132,36 +132,6 @@
+          flatten_sound _ hc2 m, book_sound _ hc2 m,
+          flatten_sound _ hc3 m, book_sound _ hc3 m,
+          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
+-
+-theorem sovereignDrex_inCore_futamura2 (pins : List LeafPin) :
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler SovereignDrexSeat.institutionalZoeSeat_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook SovereignDrexSeat.institutionalZoeSeat_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler SovereignDrexOrderBook.wholesaleDvPOrderBook_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook SovereignDrexOrderBook.wholesaleDvPOrderBook_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler SovereignDrexClearing.sovereignCarryClearing_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook SovereignDrexClearing.sovereignCarryClearing_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler SovereignDrexTop.carryUpgradedSovereignDrex_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook SovereignDrexTop.carryUpgradedSovereignDrex_book pins) ∧
+-    coneSupports
+-      (linkComposition SovereignDrexTop.baseSovereignDrex_comp SovereignDrexTop.carryUpgradedSovereignDrex_comp.top)
+-      ["validatorQuorum", "protectedWelfareCrown"] =
+-      coneSupports SovereignDrexTop.baseSovereignDrex_comp ["validatorQuorum", "protectedWelfareCrown"] := by
+-  have hflat : SovereignDrexTop.carryUpgradedSovereignDrex_comp.top.flat = false := by decide +kernel
+-  have hdisj : ∀ m ∈ ["validatorQuorum", "protectedWelfareCrown"],
+-      m ∉ overlayModifiedFields SovereignDrexTop.carryUpgradedSovereignDrex_comp.top := by
+-    decide +kernel
+-  exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexSeat.institutionalZoeSeat_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexOrderBook.wholesaleDvPOrderBook_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexClearing.sovereignCarryClearing_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexTop.carryUpgradedSovereignDrex_book pins).1,
+-         coneSupports_linkComposition_of_disjoint
+-           SovereignDrexTop.baseSovereignDrex_comp
+-           SovereignDrexTop.carryUpgradedSovereignDrex_comp.top
+-           ["validatorQuorum", "protectedWelfareCrown"] hflat hdisj⟩
+ 
+ /-- **`sovereignDrex_rtl_and_amd_gpu_verified`**:
+ Compiles `SovereignDrexTop.carryUpgradedSovereignDrex_book` and
+diff -ruN orig/lean/Obend/Apps/ZkNtt.lean new/lean/Obend/Apps/ZkNtt.lean
+--- orig/lean/Obend/Apps/ZkNtt.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Apps/ZkNtt.lean	2026-11-04 05:36:12
+@@ -34,7 +34,7 @@
+ public import Obend.Logic.Obligation
+ public import Obend.Leaf.Emit
+ public import Obend.Leaf.Specialize
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.CrossPackage
+ public import Obend.Hardware.Types
+ public import Obend.Hardware.HDL
+@@ -73,7 +73,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Spec.CrossPackage
+ open Obend.Hardware
+ open Obend.Hardware.HDL
+@@ -140,39 +140,6 @@
+     ((compileRichBookToRtl "sumcheck_book_rtl" {} (topologicalSortZkBook SumcheckMod.sumcheckEngine_book)).map checkRtlModule) = some true ∧
+     ((compileRichBookToRtl "zk_ntt_top_book_rtl" {} (topologicalSortZkBook ZkNttTopMod.zkNttSumcheckTop_book)).map checkRtlModule) = some true := by
+   decide +kernel
+-
+-/-- Theorem: All 4 ZK-NTT + Sumcheck `.obend` layer books specialize in-core via both
+-    `inCoreBookCompiler` (`inCoreBookCompiler_specializes_from_pinsOnly`) and
+-    `futamura2BookCompiler` (`futamura2BookCompiler_specializes_in_core`). -/
+-theorem zk_ntt_inCore_futamura2 (pins : List LeafPin) :
+-    let B1 := GoldilocksMod.goldilocksEngine_book
+-    let B2 := ButterflyMod.nttButterflyEngine_book
+-    let B3 := SumcheckMod.sumcheckEngine_book
+-    let B4 := ZkNttTopMod.zkNttSumcheckTop_book
+-    dataPinSpecialize (.app (inCoreBookCompiler B1) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B1 pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler B2) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B2 pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler B3) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B3 pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler B4) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook B4 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B1) (encodePinsRecordForBook B1 pins)) =
+-      encodeBookTerm (specializeBook B1 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B2) (encodePinsRecordForBook B2 pins)) =
+-      encodeBookTerm (specializeBook B2 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B3) (encodePinsRecordForBook B3 pins)) =
+-      encodeBookTerm (specializeBook B3 pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler B4) (encodePinsRecordForBook B4 pins)) =
+-      encodeBookTerm (specializeBook B4 pins) :=
+-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly GoldilocksMod.goldilocksEngine_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly ButterflyMod.nttButterflyEngine_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly SumcheckMod.sumcheckEngine_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly ZkNttTopMod.zkNttSumcheckTop_book pins).1,
+-   futamura2BookCompiler_specializes_in_core GoldilocksMod.goldilocksEngine_book pins,
+-   futamura2BookCompiler_specializes_in_core ButterflyMod.nttButterflyEngine_book pins,
+-   futamura2BookCompiler_specializes_in_core SumcheckMod.sumcheckEngine_book pins,
+-   futamura2BookCompiler_specializes_in_core ZkNttTopMod.zkNttSumcheckTop_book pins⟩
+ 
+ /-! ## 2. Universal Goldilocks Prime ($p = 2^{64} - 2^{32} + 1$) 128-to-64 Shift/Mask Reduction Soundness -/
+ 
+diff -ruN orig/lean/Obend/Lower/DiscrTreeLUT.lean new/lean/Obend/Lower/DiscrTreeLUT.lean
+--- orig/lean/Obend/Lower/DiscrTreeLUT.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Lower/DiscrTreeLUT.lean	2026-11-04 05:36:12
+@@ -7,14 +7,13 @@
+    - Extracts preorder `DiscrPath := List DiscrTreeKey` keys from `KExpr` terms for both `@[simp]`
+      rewrite rules and `SynthInstance` typeclass instances.
+    - Matches candidate rules along exact key edges and wildcard `.star` edges.
+-2. **2nd Futamura Specialization to Zone-3 eFPGA `AutomatonTile` LUT Pipelines
+-   (`SlotGuardReg`, `futamura2DiscrTreeTerm`, `compileDiscrTreeEpochToTile`, `discrTree_lut_compile_sound`)**:
+-   - Applies 2nd Futamura specialization (`Obend/Leaf/Futamura.lean`: `futamura2SelfSpecialize`,
+-     `futamura1Specialize`, `specSlot`) so each `Environment` epoch compiles into a single-cycle
+-     Zone-3 `AutomatonTile` match pipeline guarded by `SlotGuardReg` (`moved_pin_blocks`).
+-   - Proves **`discrTree_lut_compile_sound`**: multi-key trie indexing, 2nd Futamura specialization,
+-     glitch-free `ICAP` DPR reconfiguration between environment epochs, and 1-cycle `SlotGuardReg`
+-     fallback (`moved_pin_blocks`) when an environment pin mutates.
++2. **Zone-3 eFPGA `AutomatonTile` LUT Pipelines
++   (`SlotGuardReg`, `compileDiscrTreeEpochToTile`, `discrTree_lut_compile_sound`)**:
++   - Each `Environment` epoch compiles into a single-cycle Zone-3 `AutomatonTile` match pipeline
++     guarded by `SlotGuardReg` (`specSlot`, `moved_pin_blocks` of `Obend.Leaf.Specialize`).
++   - Proves **`discrTree_lut_compile_sound`**: multi-key trie indexing, glitch-free `ICAP` DPR
++     reconfiguration between environment epochs, and 1-cycle `SlotGuardReg` fallback
++     (`moved_pin_blocks`) when an environment pin mutates.
+ 3. **Synthesizable SystemVerilog for `ExprCAM` + `SiliconKernel` + `DiscrTreeLUT`
+    (`exprCamKernelLutRtlModule`, `emitExprCamKernelLutSV`, `exprCam_siliconKernel_sv_cosim_sound`)**:
+    - Constructs a verified synchronous/combinational `RtlModule` combining 64-bit `ExprCAM` handle/word
+@@ -35,7 +34,7 @@
+ open Obend.Slot
+ open Obend.Slot.World
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Lower.Inductive
+ open Obend.Lower.LeanKernel
+@@ -358,7 +357,7 @@
+     (queryDiscrTrieNode trieExactFirst qPath).map (·.lutTag) = [303, 101] :=
+   ⟨rfl, rfl⟩
+ 
+-/-! ## 2. 2nd Futamura Specialization of `DiscrTree` Epochs to Zone-3 `AutomatonTile` LUTs -/
++/-! ## 2. `DiscrTree` Epochs to Zone-3 `AutomatonTile` LUTs -/
+ 
+ /-- Hardware `SlotGuardReg` (`SILICON-ELABORATOR.md` §5.3) binding a Zone-3 `AutomatonTile` to a
+ pinned `Environment` epoch and `LeafPin` support list. -/
+@@ -370,11 +369,6 @@
+   specializedTile : AutomatonTile
+   fallbackTile    : AutomatonTile
+ 
+-/-- Compile an `Environment` epoch's `DiscrTree` rule parameters `(bias, offset)` via the 2nd Futamura
+-projection (`futamura2SelfSpecialize` + `futamura1Specialize`) into a residual `Core4.Term`. -/
+-def futamura2DiscrTreeTerm (bias offset : Nat) : Term :=
+-  futamura1Specialize (futamura2SelfSpecialize (elabRuleSpec bias)) (.nat offset)
+-
+ /-- Compile a `DiscrTree` epoch's linear/affine rewrite action `(gain, offset)` into a `LiteMethodBody`
+ (`λ x => gain * x + offset`) for single-cycle Zone-3 `AutomatonTile` LUT synthesis. -/
+ def discrTreeEpochLutBody (gain offset : Nat) : LExpr :=
+@@ -387,7 +381,7 @@
+   (compileLiteMethodToTile epochName (discrTreeEpochLutBody gain offset)).getD incAutomatonTile
+ 
+ /-- Construct a `SlotGuardReg` for a `DiscrTree` epoch `(slotName, epoch, gain, offset)`:
+-binds the Futamura-specialized `Candidate.book` to `leanComposition slotName (futamura2DiscrTreeTerm gain offset)`
++binds the `Candidate.book` of `leanComposition slotName specTerm`
+ and pairs the specialized Zone-3 LUT tile with the resident fallback tile (`kernelGateTile`). -/
+ def mkDiscrTreeSlotGuard (slotName : String) (epoch gain offset : Nat) : SlotGuardReg :=
+   let specTerm := .lam (lowerLiteScalar (discrTreeEpochLutBody gain offset))
+@@ -456,8 +450,7 @@
+    - Querying `sampleEpoch1DiscrTrie` on `Add Nat` matches `[.app "Add", .const "Nat"]` and returns
+      `instAddNat` (`lutTag = 202`),
+    - Querying `sampleEpoch1DiscrTrie` on `Add Bool` returns `none` (negative pole).
+-2. **2nd Futamura Specialization Agreement**:
+-   - `futamura2DiscrTreeTerm 10 32` applied to `.nat 5` evaluates in `Core4` (`Evaluates`) to `.nat 47`,
++2. **Zone-3 LUT execution**:
+    - At `epoch1LeafView`, `evalSlotGuardedDiscrTile sampleEpoch1Guard` selects the specialized Zone-3
+      `AutomatonTile` (`true`) and computes `4 * 10 + 2 = 42#64` in 1 hardware cycle.
+ 3. **Glitch-Free `ICAP` DPR Epoch Upgrade & 1-Cycle `moved_pin_blocks` Fallback**:
+@@ -489,8 +482,7 @@
+     (queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qSimp).map (·.lutTag) = some 101 ∧
+     (queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qAddNat).map (·.lutTag) = some 202 ∧
+     queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qAddBool = none ∧
+-    -- 2. 2nd Futamura Core4 evaluation & Zone-3 single-cycle LUT execution
+-    Evaluates (.app (futamura2DiscrTreeTerm 10 32) (.nat 5)) (.nat 47) ∧
++    -- 2. Zone-3 single-cycle LUT execution
+     evalSlotGuardedDiscrTile sampleEpoch1Guard epoch1LeafView 1 10#64 = (true, 42#64) ∧
+     -- 3. moved_pin_blocks 1-cycle invalidation on epoch mutation + ICAP DPR upgrade to Epoch 2
+     specSlot.usable (holdsAt epoch2LeafView) sampleEpoch1Guard.candidate = false ∧
+@@ -499,8 +491,7 @@
+     afterTile0.isolated = false ∧
+     evalReconfigTile afterTile0 (fun _ => 0#64) (fun _ => 0#64) 10#64 = 70#64 ∧
+     afterTile1 = residentTile1 := by
+-  refine ⟨rfl, rfl, rfl, ?_, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, rfl, rfl, rfl⟩
+-  exact (futamura2_self_specialize_sound (elabRuleSpec 10) (.nat 32)).2.2.2.2
++  exact ⟨rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, rfl, rfl, rfl⟩
+ 
+ /-! ## 3. Synthesizable SystemVerilog Co-Simulation Module for `ExprCAM` + `SiliconKernel` + `DiscrTreeLUT` -/
+ 
+diff -ruN orig/lean/Obend/Stdlib.lean new/lean/Obend/Stdlib.lean
+--- orig/lean/Obend/Stdlib.lean	2026-11-04 05:36:12
++++ new/lean/Obend/Stdlib.lean	2026-11-04 05:36:12
+@@ -2,7 +2,7 @@
+ 
+ public import Obend.Elab.Workbook
+ public meta import Obend.Elab.Workbook
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.CrossPackage
+ import all Init.Data.String.Defs
+ import all Init.Data.ByteArray.Basic
+@@ -25,8 +25,7 @@
+    `clements_power_open_recursion` and `tetron_braid_open_recursion` claims.
+ 
+ Proves compile-time gate acceptance (`FrontEnd.accept`), open-recursive claim verification,
+-`flatten_sound` / `book_sound`, in-place 2nd Futamura specialization (`futamura2BookCompiler_specializes_in_core`,
+-`inCoreBookCompiler_specializes_from_pinsOnly`), and `OB5`/`LT5` cross-package cone-pin invariance
++`flatten_sound` / `book_sound`, and `OB5`/`LT5` cross-package cone-pin invariance
+ (`coneSupports_linkComposition_of_disjoint`, `crossPackage_bEquiv_rebinds_slot_usable`).
+ -/
+ 
+@@ -38,7 +37,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Slot
+ open Obend.Slot.World
+@@ -94,7 +93,7 @@
+     StdlibScenePrim.composedVoxelCostAt5_val = .nat 28 :=
+   ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+ 
+-/-! ## 2. Flattening, Emitted Books & In-Place 2nd Futamura Specialization on Stdlib Compositions -/
++/-! ## 2. Flattening and Emitted Books on Stdlib Compositions -/
+ 
+ theorem stdlib_compositions_closed :
+     StdlibCell.versionedCell_comp.closedB = true ∧
+@@ -117,46 +116,6 @@
+          flatten_sound _ hc2 m, book_sound _ hc2 m,
+          flatten_sound _ hc3 m, book_sound _ hc3 m⟩
+ 
+-/-- **`stdlib_futamura2_in_core`**: in-place 1-argument `futamura2BookCompiler` specializes
+-the emitted `Book`s of `StdlibCell`, `StdlibAccount`, and `StdlibScenePrim` directly inside `Core4`. -/
+-theorem stdlib_futamura2_in_core (pins : List LeafPin) :
+-    dataPinSpecialize (.app (futamura2BookCompiler StdlibCell.versionedCell_book)
+-      (encodePinsRecordForBook StdlibCell.versionedCell_book pins)) =
+-      encodeBookTerm (specializeBook StdlibCell.versionedCell_book pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler StdlibAccount.escrowAccount_book)
+-      (encodePinsRecordForBook StdlibAccount.escrowAccount_book pins)) =
+-      encodeBookTerm (specializeBook StdlibAccount.escrowAccount_book pins) ∧
+-    dataPinSpecialize (.app (futamura2BookCompiler StdlibScenePrim.composedUsdPrim_book)
+-      (encodePinsRecordForBook StdlibScenePrim.composedUsdPrim_book pins)) =
+-      encodeBookTerm (specializeBook StdlibScenePrim.composedUsdPrim_book pins) :=
+-  ⟨futamura2BookCompiler_specializes_in_core StdlibCell.versionedCell_book pins,
+-   futamura2BookCompiler_specializes_in_core StdlibAccount.escrowAccount_book pins,
+-   futamura2BookCompiler_specializes_in_core StdlibScenePrim.composedUsdPrim_book pins⟩
+-
+-/-- **`stdlib_inCoreBookCompiler_pinsOnly`**: true `B`-independent in-core pin specialization
+-via `inCoreBookCompiler` and `encodePinsOnly pins` (with NO `Book` argument to `encodePinsOnly`!)
+-across `StdlibCell`, `StdlibAccount`, `StdlibScenePrim`, and `modeBranchBook`. -/
+-theorem stdlib_inCoreBookCompiler_pinsOnly (pins : List LeafPin) :
+-    dataPinSpecialize (.app (inCoreBookCompiler StdlibCell.versionedCell_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook StdlibCell.versionedCell_book pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler StdlibAccount.escrowAccount_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook StdlibAccount.escrowAccount_book pins) ∧
+-    dataPinSpecialize (.app (inCoreBookCompiler StdlibScenePrim.composedUsdPrim_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook StdlibScenePrim.composedUsdPrim_book pins) ∧
+-    ((decodeBookTerm?
+-      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 0⟩])))).bind
+-      (fun B_res => evalResidualBookAt B_res "compute" (.nat 0))) =
+-      some (.nat 42) ∧
+-    ((decodeBookTerm?
+-      (dataPinSpecialize (.app (inCoreBookCompiler modeBranchBook) (encodePinsOnly [⟨"mode", .nat 1⟩])))).bind
+-      (fun B_res => evalResidualBookAt B_res "compute" (.nat 0))) =
+-      some (.nat 99) :=
+-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly StdlibCell.versionedCell_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly StdlibAccount.escrowAccount_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly StdlibScenePrim.composedUsdPrim_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly modeBranchBook pins).2.2.2.2.1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly modeBranchBook pins).2.2.2.2.2.1⟩
+-
+ /-! ## 3. Cross-Package Cone-Pin Survival on Stdlib Compositions (`OB5` / `LT5`) -/
+ 
+ /-- `VersionedCellOverride` modifies `["epoch", "gasCost"]`, which is disjoint from `"value"`
+@@ -225,30 +184,6 @@
+   have ⟨hc1, hc2⟩ := stdlib_quantum_photonic_compositions_closed
+   exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
+          flatten_sound _ hc2 m, book_sound _ hc2 m⟩
+-
+-/-- **`stdlib_quantum_photonic_inCore_futamura2`**:
+-Specializes `StdQuantumPhotonic`'s emitted `Book`s (`compensatedClementsArray_book` and
+-`cooledTetronCell_book`) directly inside `Core4` via `inCoreBookCompiler` and `encodePinsOnly pins`
+-(as well as `futamura2BookCompiler`). -/
+-theorem stdlib_quantum_photonic_inCore_futamura2 (pins : List LeafPin) :
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler StdQuantumPhotonic.compensatedClementsArray_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook StdQuantumPhotonic.compensatedClementsArray_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler StdQuantumPhotonic.cooledTetronCell_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook StdQuantumPhotonic.cooledTetronCell_book pins) ∧
+-    dataPinSpecialize
+-      (.app (futamura2BookCompiler StdQuantumPhotonic.compensatedClementsArray_book)
+-        (encodePinsRecordForBook StdQuantumPhotonic.compensatedClementsArray_book pins)) =
+-      encodeBookTerm (specializeBook StdQuantumPhotonic.compensatedClementsArray_book pins) ∧
+-    dataPinSpecialize
+-      (.app (futamura2BookCompiler StdQuantumPhotonic.cooledTetronCell_book)
+-        (encodePinsRecordForBook StdQuantumPhotonic.cooledTetronCell_book pins)) =
+-      encodeBookTerm (specializeBook StdQuantumPhotonic.cooledTetronCell_book pins) :=
+-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly StdQuantumPhotonic.compensatedClementsArray_book pins).1,
+-   (inCoreBookCompiler_specializes_from_pinsOnly StdQuantumPhotonic.cooledTetronCell_book pins).1,
+-   futamura2BookCompiler_specializes_in_core StdQuantumPhotonic.compensatedClementsArray_book pins,
+-   futamura2BookCompiler_specializes_in_core StdQuantumPhotonic.cooledTetronCell_book pins⟩
+ 
+ /-- Disjoint Faddeev–LeVerrier thermal-only override layer modifying only
+ `["faddeevThermalResidualPpm", "szegedyQuotientStepPhaseMrad"]` (leaving `krawtchoukRatioWeight`
+diff -ruN orig/lean/tests/metasystem/FutamuraAndObjectsTest.lean new/lean/tests/metasystem/FutamuraAndObjectsTest.lean
+--- orig/lean/tests/metasystem/FutamuraAndObjectsTest.lean	2026-11-04 05:36:12
++++ new/lean/tests/metasystem/FutamuraAndObjectsTest.lean	2026-11-04 05:36:12
+@@ -1,16 +1,13 @@
+ /-
+-# `tests/FutamuraAndObjectsTest.lean` — In-Place `Futamura` Specialization,
++# `tests/FutamuraAndObjectsTest.lean` — `Obend.Leaf.Static` book specialization,
+ # Faré `OB5`/`LT5` Cross-Package Open Recursion, `K-KIND-CELL`, Multi-File `#import_obend` & `DocsCensus`
+ 
+ End-to-end verification of `WS-U`:
+-1. **Task 1 (`Obend.Leaf.Futamura`) — In-Place Audit Fix 11**:
+-   - `encodeStagedBookTerm (B : Book) : Term` (depends ONLY on `B`, zero host `pins` argument) and
+-     `encodePinsRecordForBook (B : Book) (pins : List LeafPin) : Term`.
+-   - `quoteBookMixTerm` applies `(.bound 1)` (`bookPayload`) to `(.bound 0)` (`pinsRecord`) inside `Core4`.
+-   - 1-argument `futamura2BookCompiler (B : Book) : Term` and `futamura2BookCompiler_specializes_in_core`:
+-     `dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) = encodeBookTerm (specializeBook B pins)`.
+-   - True Futamura 1, 2, and 3 commuting diagrams (`futamura1_book_specializer_sound`,
+-     `futamura2_compiler_generator_commutes`, `futamura3_cogen_self_application_commutes`) + `#tooth` probes.
++1. **Task 1 (`Obend.Leaf.Static`)**: the book encoding roundtrips (`decodeBookTerm_encodeBookTerm`),
++   `specializeBook` folds the sample book (`Obend.Teeth.Leaf.Static.specializeBook_sample_folds`), and
++   `evalBook_specializeBook_eq_evalBook` holds non-vacuously on it. (The "Futamura 1, 2, 3 commuting
++   diagrams" this file checked until 2026-11-04 were deleted with the terms they were about;
++   `review/EXPERT-compiler-runtime-20261103.md` §2.1.)
+ 
+ 2. **Task 2 (`Obend.Leaf.Specialize`, `Obend.Lower.Transport`, `Obend.Spec.Elaborate`, `Obend.Spec.CrossPackage`) — Cross-Package Open Recursion (`OB5`/`LT5`)**:
+    - `slotReadCone`, `coneSupports`, `Candidate.slotBook`, and `slotBook_moved_pin_blocks`.
+@@ -33,9 +30,9 @@
+    - `#check_docs_census` verifying all 7 top-level markdown documents (`DESIGN.md`, `PLAN.md`, `METATHEORY.md`,
+      `PHYSICAL.md`, `SILICON-ELABORATOR.md`, `NEXT-MATHEMATICA.md`, `DEOS-CONTRACTS-CONSENSUS.md`).
+ -/
+-import Obend.Leaf.Futamura
++import Obend.Leaf.Static
+ import Obend.Leaf.Specialize
+-import Obend.Leaf.BendTT
++import Obend.Teeth.Leaf.StaticTeeth
+ import Obend.Lower.Transport
+ import Obend.Spec.CrossPackage
+ import Obend.Kind
+@@ -56,8 +53,8 @@
+ open Obend.Logic
+ open Obend.Slot.World
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
+-open Obend.Leaf.BendTT
++open Obend.Leaf.Static
++open Obend.Teeth.Leaf.Static
+ open Obend.Lower
+ open Obend.Spec.CrossPackage
+ open Obend.Kind
+@@ -104,7 +101,7 @@
+   stdlib_open_recursion_eval
+ 
+ -- ============================================================================
+--- 2. In-Place `Futamura` Specialization (Audit Fix 11: 1-Arg `futamura2BookCompiler B`)
++-- 2. The book encoding and `specializeBook`
+ -- ============================================================================
+ 
+ example : decodeBookTerm? (encodeBookTerm sampleSpecializableBook) = some sampleSpecializableBook :=
+@@ -144,7 +141,7 @@
+   ⟨rfl, rfl, rfl, rfl, rfl⟩
+ 
+ /-- Concrete verification of constant propagation, dead-branch elimination on `.ifZero`/`.ifBool`,
+-and method inlining across `Book` definitions in `specializeBook` and `specializeBookInCore`. -/
++and method inlining across `Book` definitions in `specializeBook`. -/
+ example :
+     lookupBookCode (specializeBook sampleSpecializableBook sampleBookPins) "dispatch" =
+       some (.lam (.lam (.binary .add (.binary .add (.bound 0) (.nat 16)) (.nat 9)))) ∧
+@@ -154,7 +151,7 @@
+       some (.nat 30) ∧
+     evalBook (specializeBook sampleSpecializableBook sampleBookPins) "dispatch" =
+       evalBook sampleSpecializableBook "dispatch" :=
+-  specializeBook_eliminates_branches_and_inlines_methods
++  specializeBook_sample_folds
+ 
+ /-- Non-vacuous verification of `HoldsForBookMember` and `evalBook_specializeBook_eq_evalBook`
+ on `sampleSpecializableBook` and non-empty `sampleBookPins`. -/
+@@ -182,40 +179,6 @@
+     rcases hr with rfl | rfl | rfl | rfl <;> exact optTermEq_sound (by decide +kernel)
+   exact ⟨hholds, evalBook_specializeBook_eq_evalBook sampleSpecializableBook sampleBookPins "dispatch" hholds⟩
+ 
+-/-- True Futamura 1, 2, and 3 commuting diagrams on arbitrary `Book` `B`, `pins : List LeafPin`,
+-member `m : String`, and runtime argument `x : Term` (with in-place 1-arg `futamura2BookCompiler B`
+-and `futamura2BookCompiler_specializes_in_core`). -/
+-theorem test_true_futamura_1_2_3_commuting_diagrams (B : Book) (pins : List LeafPin) (m : String) (x : Term) :
+-    -- Futamura 1: internalized specializer decodes to `specializeBook B pins` and preserves semantics
+-    decodeBookTerm? (specializeBookInCore B pins) = some (specializeBook B pins) ∧
+-    lookupBookCode (specializeBook B pins) m = evalBookUnderPins B pins m ∧
+-    evalResidualBookAt (specializeBook B pins) m x = evalBookUnderPinsAt B pins m x ∧
+-    (holdsAll pins → lookupBookCode (specializeBook B pins) m = evalBookUnderPins B [] m) ∧
+-    (HoldsForBookMember B pins m → evalBook (specializeBook B pins) m = evalBook B m) ∧
+-    -- Futamura 2: staged compiler `futamura2BookCompiler B` (zero host `pins` argument) specializes in Core4
+-    dataPinSpecialize (.app (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
+-      encodeBookTerm (specializeBook B pins) ∧
+-    decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins)) =
+-      some (specializeBook B pins) ∧
+-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
+-      (fun B_res => evalResidualBookAt B_res m x)) = evalBookUnderPinsAt B pins m x ∧
+-    -- Futamura 3: self-applied compiler generator `cogenBookInCore` reproduces `futamura2BookCompiler B`
+-    dataPinSpecialize
+-      (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))) =
+-      futamura2BookCompiler B ∧
+-    decodeBookTerm?
+-      (runStagedCompiler
+-        (dataPinSpecialize
+-          (resolveApp cogenBookInCore (bookStageSpec (encodeStagedBookTerm B))))
+-        (encodePinsRecordForBook B pins)) =
+-      some (specializeBook B pins) := by
+-  have f1 := futamura1_book_specializer_sound B pins m x
+-  have f2 := futamura2_compiler_generator_commutes B pins m x
+-  have f3 := futamura3_cogen_self_application_commutes B pins m x
+-  exact ⟨f1.1, f1.2.1, f1.2.2.1, f1.2.2.2.1, f1.2.2.2.2.2,
+-    futamura2BookCompiler_specializes_in_core B pins,
+-    f2.2.2.1, f2.2.2.2, f3.2.2.1, f3.2.2.2.1⟩
+-
+ -- `#tooth` mutation probe on `specializeBook`.
+ theorem probe_specializeBook_eliminates_ifZero :
+     lookupBookCode (specializeBook sampleSpecializableBook sampleBookPins) "dispatch" =
+@@ -288,64 +251,6 @@
+   extractReadMembers := fun _ => []
+ 
+ -- ============================================================================
+--- 4. Affine `BendTT` Resource Discipline & Port Wiring Validation Tests
+--- ============================================================================
+-
+-def affineLinearAddBendTerm : BendTerm :=
+-  .lam (.binOp .add (.var 0) (.nat 10))
+-
+-def nonAffineDuplicateUseBendTerm : BendTerm :=
+-  .lam (.binOp .add (.var 0) (.var 0))
+-
+-def affineIfZeroBendTerm : BendTerm :=
+-  .lam (.ifZero (.var 0) (.nat 0) (.var 0))
+-
+-def balancedFixBendTerm : BendTerm :=
+-  .fix (.lam (.lam (.var 0))) (.nat 0)
+-
+-def unbalancedFixBendTerm : BendTerm :=
+-  .fix (.lam (.var 0)) (.nat 0)
+-
+-#guard countVarUses 0 (.binOp .add (.var 0) (.nat 10)) == 1
+-#guard countVarUses 0 (.binOp .add (.var 0) (.var 0)) == 2
+-#guard isAffineBendTerm affineLinearAddBendTerm == true
+-#guard isAffineBendTerm nonAffineDuplicateUseBendTerm == false
+-#guard isAffineBendTerm affineIfZeroBendTerm == true
+-#guard isAffineBendTerm balancedFixBendTerm == true
+-#guard isAffineBendTerm unbalancedFixBendTerm == false
+-
+-theorem test_affine_bendtt_subst_and_quantity_refinement
+-    (body arg : BendTerm) (haffBody : isAffineBendTerm body = true)
+-    (haffArg : isAffineBendTerm arg = true) (hclosedArg : closedAtB 0 arg = true) :
+-    isAffineBendTerm (instantiateB body arg) = true :=
+-  affine_bendTerm_subst_preserves body arg haffBody haffArg hclosedArg
+-
+-theorem test_affine_bendtt_fix_unfold_preserves
+-    (s i : BendTerm) (hfix : isAffineBendTerm (.fix s i) = true) :
+-    isFixSpecPortBalanced s = true ∧
+-    (∃ body : BendTerm, s = .lam (.lam body)) ∧
+-    isAffineBendTerm (.app (.app s (.fix s i)) i) = true ∧
+-    (∀ body : BendTerm, s = .lam (.lam body) →
+-      closedAtB 0 (.fix s i) = true →
+-      isAffineBendTerm (instantiateB (.lam body) (.fix s i)) = true) :=
+-  affine_bendTerm_fix_unfold_preserves s i hfix
+-
+-example {t : Term} {bt : BendTerm} (hcomp : compileToBendTT t = some bt)
+-    (q : Quantity) (hq : q = .affine ∨ q = .linear) :
+-    (∀ idx : Nat, countVarUses idx bt = termVarUses idx t) ∧
+-    (safeQuantity q (termVarUses 0 t) = true ↔ countVarUses 0 bt ≤ 1) ∧
+-    (q.fits (termVarUses 0 t) = true → isAffineBendTerm bt = true → isAffineBendTerm (.lam bt) = true) ∧
+-    (isAffineBendTerm bt = isAffineCoreTerm t) :=
+-  quantity_affine_linear_refines_bendTerm hcomp q hq
+-
+-theorem probe_nonAffine_rejected :
+-    isAffineBendTerm nonAffineDuplicateUseBendTerm = false := by
+-  decide +kernel
+-
+-#tooth probe_nonAffine_rejected by mutation
+-  isAffineBendTerm := fun _ => true
+-
+--- ============================================================================
+ -- 5. Faré `OB5` / `LT5` Cross-Package Open Recursion (`Specialize`, `Transport`, `CrossPackage`)
+ -- ============================================================================
+ 
+@@ -408,12 +313,8 @@
+ 
+ #print axioms decodeBookTerm_encodeBookTerm
+ #print axioms dataPinSpecialize_encodeBookTerm
+-#print axioms specializeBook_eliminates_branches_and_inlines_methods
++#print axioms specializeBook_sample_folds
+ #print axioms evalBook_specializeBook_eq_evalBook
+-#print axioms futamura1_book_specializer_sound
+-#print axioms futamura2BookCompiler_specializes_in_core
+-#print axioms futamura2_compiler_generator_commutes
+-#print axioms futamura3_cogen_self_application_commutes
+ #print axioms extractReadMembers_eq_selfReads
+ #print axioms extractReadMembers_conservative
+ #print axioms extractReadMembers_mutation_invariant
+@@ -430,14 +331,10 @@
+ #print axioms stdlib_inherited_laws_count
+ #print axioms stdlib_open_recursion_eval
+ #print axioms stdlib_flatten_and_book_sound
+-#print axioms stdlib_futamura2_in_core
+ #print axioms stdlib_cell_crossPackage_nextValue_pin_survives
+ #print axioms stdlib_account_crossPackage_availableAfterFee_cone_survives
+ #print axioms extractObendLeanPaths_sample
+ #print axioms extractObendDottedRoots_sample
+ #print axioms censusReport_isClean_iff
+-#print axioms affine_bendTerm_subst_preserves
+-#print axioms affine_bendTerm_fix_unfold_preserves
+-#print axioms quantity_affine_linear_refines_bendTerm
+ 
+ end Obend.Tests.FutamuraAndObjectsTest
+diff -ruN orig/lean/tests/silicon_elab/SiliconElabTest.lean new/lean/tests/silicon_elab/SiliconElabTest.lean
+--- orig/lean/tests/silicon_elab/SiliconElabTest.lean
++++ new/lean/tests/silicon_elab/SiliconElabTest.lean
+@@ -6,16 +6,15 @@
+ 1. `Obend.Lower.Inductive`: Recursive algebraic AST datatypes (`KName`, `KLevel`, `KLiteral`, `KExpr`,
+    `KSyntax`), structural pattern matching & `recConst` lowering (`lower_inductive_sound`), and LCNF
+    lowering (`lcnf_to_core4_sound`).
+-2. `Obend.Leaf.Futamura`: Static data-pin specialization (`data_pin_flatten_sound`) and 1st, 2nd,
+-   and 3rd Futamura projections (`futamura1_env_specialize_sound`, `futamura2_self_specialize_sound`,
+-   `futamura3_cogen_sound`).
++2. `Obend.Leaf.Static`: the folder (`bequiv_dataPinSpecialize`) and static application under the
++   specialization slot (`staticApply_slot_sound`).
+ 3. `Obend.Lower.LeanKernel`: Pure Lean kernel (`kernelWhnf`, `kernelIsDefEq`, `kernelInferType`,
+    `kernelCheckDecl`) and pure elaborator passes (`expandMacrosFuel`, `simpRewriteFuel`,
+    `synthInstanceFuel`), plus lowered `Core4` theorems (`silicon_kernel_whnf_sound`,
+    `silicon_kernel_check_sound`).
+ 4. `Obend.Lower.Proofs.SiliconKernel`: End-to-end 5-stage `ReductionMachine` hardware co-simulation
+-   (`silicon_kernel_5stage_check_sound`), Futamura `ICAP` DPR specialization
+-   (`silicon_elab_futamura_dpr_specialize_sound`), 1-cycle environment mutation fallback
++   (`silicon_kernel_5stage_check_sound`), static-application `ICAP` DPR specialization
++   (`silicon_elab_residual_dpr_specialize_sound`), 1-cycle environment mutation fallback
+    (`silicon_elab_env_mutation_fallback_sound`), and hardware interaction-net $\beta$-reduction
+    (`silicon_kernel_inet_beta_agrees`).
+ 5. **8 `#tooth` Kernel Mutation Tests** verifying that weakening any check or lowering pass is
+@@ -23,7 +22,7 @@
+ -/
+ public import Obend.Tactic.Tooth
+ import all Obend.Lower.Inductive
+-import all Obend.Leaf.Futamura
++import all Obend.Leaf.Static
+ import all Obend.Lower.LeanKernel
+ import all Obend.Lower.ExprCAM
+ import all Obend.Lower.MetaUnify
+@@ -55,7 +54,7 @@
+ open Obend.Slot
+ open Obend.Slot.World
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Lower.Inductive
+ open Obend.Lower.LeanKernel
+@@ -143,10 +142,6 @@
+     fromLeanName (toLeanName (KName.mkSimple "LeanKernel")) = KName.mkSimple "LeanKernel" ∧
+     Evaluates (lowerLCNF sampleLcnfAstMatch) (.nat 42) ∧
+     Evaluates (.app (lowerLCNFFunDecl sampleLcnfRecDecl) (.nat 0)) (.nat 42) ∧
+-    -- 2. Futamura Projections (1st, 2nd, 3rd)
+-    dataPinSpecialize (.app sampleElabLookupTerm (pinTableToTerm sampleEnvPinTable)) = .nat 50 ∧
+-    Evaluates (.app (futamura1Specialize (futamura2SelfSpecialize (elabRuleSpec 10)) (.nat 32)) (.nat 5)) (.nat 47) ∧
+-    Evaluates (.app (.app (futamura3Cogen 100) (.nat 23)) (.nat 0)) (.nat 123) ∧
+     -- 3. Self-Hosted Lean Kernel Positive & Negative Poles + Parametric Levels + Nat ι-Reduction
+     kernelCheckDecl stdKernelEnv 8 validIdNatDecl = true ∧
+     kernelCheckDecl stdKernelEnv 8 validPropIdDecl = true ∧
+@@ -158,7 +153,7 @@
+     kernelLevelEq (.imax (.param (KName.mkSimple "u")) .zero) .zero = true ∧
+     kernelWhnf stdKernelEnv 4 (.app (.app (.const (KName.mkSimple "Nat.add") []) (.lit (.natVal 40))) (.lit (.natVal 2))) = .lit (.natVal 42) ∧
+     -- 4. SiliconKernel 5-Stage Hardware, Sequential RTL, XY Mesh, ICAP Codec & DPR Co-Simulation
+-    futamura1ElabSimpTerm = specializedSimpTerm ∧
++    residualSimpTerm = specializedSimpTerm ∧
+     specSlot.usable (holdsAt pinnedSimpView) specializedSimpCand = true ∧
+     specSlot.usable (holdsAt mutatedSimpView) specializedSimpCand = false ∧
+     specSlot.usable (holdsAt mutatedSimpView) .machine = true ∧
+@@ -168,9 +163,6 @@
+     fromLeanName_toLeanName (KName.mkSimple "LeanKernel"),
+     lcnf_to_core4_sound.2.2.2.2.1,
+     lcnf_to_core4_sound.2.2.2.2.2,
+-    data_pin_flatten_sound.2.2.2,
+-    (futamura2_self_specialize_sound (elabRuleSpec 10) (.nat 32)).2.2.2.2,
+-    (futamura3_cogen_sound 100).2.2.2,
+     silicon_kernel_check_sound.1,
+     silicon_kernel_check_sound.2.1,
+     silicon_kernel_check_sound.2.2.1,
+@@ -180,8 +172,8 @@
+     silicon_kernel_check_sound.2.2.2.2.2.2.1,
+     (kernelLevelEq_parametric_laws (KName.mkSimple "u") (KName.mkSimple "v")).2.2.2.1,
+     (silicon_kernel_whnf_iota_and_nonLam_sound 0).2.1,
+-    futamura1ElabSimpTerm_eq_lowerLite.1,
+-    silicon_elab_futamura_dpr_specialize_sound.1,
++    residualSimpTerm_eq_lowerLite.1,
++    silicon_elab_residual_dpr_specialize_sound.1,
+     silicon_elab_env_mutation_fallback_sound.1,
+     silicon_elab_env_mutation_fallback_sound.2.1,
+     silicon_elab_mesh_xy_and_icap_codec_sound.1⟩
+@@ -226,13 +218,6 @@
+ 
+ #tooth Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound by mutation Obend.Lower.Proofs.SiliconKernel.kernelGateBody := kernelGateBodyInverted
+ 
+-/-- 6. Broken `dataPinSpecialize` in `Obend.Leaf.Futamura` that performs `0` specialization passes
+-(failing to fold static environment lookups and constructor cases). -/
+-def dataPinSpecializeNoOp (t : Term) : Term :=
+-  t
+-
+-#tooth Obend.Leaf.Futamura.data_pin_flatten_sound by mutation Obend.Leaf.Futamura.dataPinSpecialize := dataPinSpecializeNoOp
+-
+ /-- 7. Broken `isZeroLevelLExpr` in `Obend.Lower.Inductive` that maps `"zero"` to `false` instead of `true`. -/
+ def isZeroLevelLExprBroken : LExpr :=
+   .lam .emptyRow
+@@ -368,10 +353,8 @@
+ #print axioms Obend.Lower.Inductive.decodeCoreTerm_lowerT
+ #print axioms Obend.Lower.Inductive.fromLeanName_toLeanName
+ #print axioms Obend.Lower.Inductive.lcnf_to_core4_sound
+-#print axioms Obend.Leaf.Futamura.data_pin_flatten_sound
+-#print axioms Obend.Leaf.Futamura.futamura1_env_specialize_sound
+-#print axioms Obend.Leaf.Futamura.futamura2_self_specialize_sound
+-#print axioms Obend.Leaf.Futamura.futamura3_cogen_sound
++#print axioms Obend.Leaf.Static.bequiv_dataPinSpecialize
++#print axioms Obend.Leaf.Static.staticApply_slot_sound
+ #print axioms Obend.Lower.LeanKernel.kernelLevelEq_parametric_laws
+ #print axioms Obend.Lower.LeanKernel.silicon_kernel_whnf_sound
+ #print axioms Obend.Lower.LeanKernel.silicon_kernel_whnf_iota_and_nonLam_sound
+@@ -406,10 +389,9 @@
+ #print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_projection_sound
+ #print axioms Obend.Vault.PhysicalProjection.physical_projection_doc_noninterference
+ #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
+-#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_futamura_dpr_specialize_sound
++#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_residual_dpr_specialize_sound
+ #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_env_mutation_fallback_sound
+ #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_inet_beta_agrees
+-#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_seq_rtl_fuel_sound
+ #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_mesh_xy_and_icap_codec_sound
+ #print axioms Obend.Tests.SiliconElab.silicon_elaborator_master_suite
+ 
+diff -ruN orig/lean/tests/silicon_elab/SiliconSelfHostTest.lean new/lean/tests/silicon_elab/SiliconSelfHostTest.lean
+--- orig/lean/tests/silicon_elab/SiliconSelfHostTest.lean	2026-11-04 05:36:12
++++ new/lean/tests/silicon_elab/SiliconSelfHostTest.lean	2026-11-04 05:36:12
+@@ -18,7 +18,7 @@
+      depth-0 interval arithmetic fails and depth-3 subdivision succeeds),
+    - `by silicon_flowpipe` (`Flowpipe` $N$-D validated Picard-Lindelöf & Euler reachability tubes).
+ 3. **Flagship App #5 (`apps/silicon-kernel-verilator/`) & `.obend` Bundle Verification**:
+-   - Verifies `siliconKernelBundle_accepted_and_claims_hold`, `siliconKernelBundle_inCore_futamura2`,
++   - Verifies `siliconKernelBundle_accepted_and_claims_hold`,
+      `siliconKernelBundle_crossPackage_cone_survives`, and `silicon_kernel_verilator_cosim_sound`.
+ -/
+ import Obend.Tactic.SiliconElab
+diff -ruN orig/lean/Obend/Apps/SiliconKernelVerilator.lean new/lean/Obend/Apps/SiliconKernelVerilator.lean
+--- orig/lean/Obend/Apps/SiliconKernelVerilator.lean	2026-11-04 05:41:51
++++ new/lean/Obend/Apps/SiliconKernelVerilator.lean	2026-11-04 05:41:51
+@@ -203,7 +203,7 @@
+   let clampedVal :=
+     evalReconfigTile { isolatedPhase1 with activeTile := mul4AutomatonTile } (fun _ => 0#64) (fun _ => 0#64) 10#64
+   let dprAdmitted? :=
+-    admitSimpTheoremDpr stdKernelEnv 8 selfHostTypePreservationInfo "discrEpoch" 2 6 10 0x600A#64 initTile
++    admitSimpTheoremDpr stdKernelEnv 8 selfHostIdentityProofInfo "discrEpoch" 2 6 10 0x600A#64 initTile
+   let dprRefusedMutant? :=
+     admitSimpTheoremDpr stdKernelEnv 8 selfHostMutatedBadProofInfo "discrEpoch" 2 6 10 0x600A#64 initTile
+   let dprRefusedSorry? :=
+@@ -218,7 +218,7 @@
+   let clampOk :=
+     isolatedPhase1.isolated && (clampedVal == 42#64) &&
+     dprSwappedOk && dprRefusedMutant?.isNone && dprRefusedSorry?.isNone
+-  let (okValid, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostTypePreservationInfo
++  let (okValid, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo
+   let (okMutant, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo
+   let (okSorry, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostSorryProofInfo
+   let allPass :=
+diff -ruN orig/lean/Obend/Lower/MetaUnify.lean new/lean/Obend/Lower/MetaUnify.lean
+--- orig/lean/Obend/Lower/MetaUnify.lean	2026-11-04 05:41:51
++++ new/lean/Obend/Lower/MetaUnify.lean	2026-11-04 05:47:04
+@@ -36,7 +36,6 @@
+ open Obend.Core.Ty (Ty)
+ open Obend.Equiv
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
+ open Obend.Lower
+ open Obend.Lower.Inductive
+ open Obend.Lower.LeanKernel
+diff -ruN orig/lean/Obend/Lower/SiliconElabFabric.lean new/lean/Obend/Lower/SiliconElabFabric.lean
+--- orig/lean/Obend/Lower/SiliconElabFabric.lean	2026-11-04 05:41:51
++++ new/lean/Obend/Lower/SiliconElabFabric.lean	2026-11-04 05:47:04
+@@ -61,7 +61,6 @@
+ open Obend.Slot.World
+ open Obend.Judge
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
+ open Obend.Lower
+ open Obend.Lower.Inductive
+ open Obend.Lower.LeanKernel
+diff -ruN orig/lean/tests/metasystem/CoupledPhysicalTest.lean new/lean/tests/metasystem/CoupledPhysicalTest.lean
+--- orig/lean/tests/metasystem/CoupledPhysicalTest.lean	2026-11-04 05:41:51
++++ new/lean/tests/metasystem/CoupledPhysicalTest.lean	2026-11-04 05:41:51
+@@ -23,7 +23,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Hardware.HDL
+ open Obend.Hardware.Compiler
+diff -ruN orig/lean/tests/silicon_elab/SiliconSelfHostTest.lean new/lean/tests/silicon_elab/SiliconSelfHostTest.lean
+--- orig/lean/tests/silicon_elab/SiliconSelfHostTest.lean	2026-11-04 05:41:51
++++ new/lean/tests/silicon_elab/SiliconSelfHostTest.lean	2026-11-04 05:42:53
+@@ -2,13 +2,12 @@
+ # `tests/silicon_elab/SiliconSelfHostTest.lean` — End-to-End Test Suite for Wave 4 (`WS-4B-1`)
+ 
+ Exercises:
+-1. **Live `#silicon_check` Command Elaboration on Reflexive Self-Hosting Targets**:
+-   - `#silicon_check Obend.Lower.LeanKernel.kernelCheckDecl`
+-   - `#silicon_check Obend.Lower.SiliconElabFabric.runBottomUpCamInfer`
+-   - `#silicon_check Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm`
+-   - `#silicon_check Obend.Core.type_preservation`
+-   - `#silicon_check Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound`
+-   - `#silicon_check Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound`
++1. **`#silicon_check`**: since 2026-11-04 the command refuses every declaration outside the Zone-4
++   fragment (it used to pass any sorry-free declaration as `PARTIAL/UNSUPPORTED_FRAGMENT`). The six
++   self-hosting targets this file ran it on (`kernelCheckDecl`, `runBottomUpCamInfer`,
++   `stepSiliconKernelCamFsm`, `type_preservation`, `silicon_self_hosting_milestone_sound`,
++   `silicon_kernel_verilator_cosim_sound`) are outside the fragment, so the invocations are gone;
++   a declaration the fragment covers can still be checked with the command.
+ 2. **All 5 Proof-Reconstructing `by silicon_*` Tactics (`0 sorry`)**:
+    - `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 1-cycle closed-term $\beta$-bypass WHNF),
+    - `by silicon_eqsat` (`EqSatHypergraph` equality saturation + Clairvoyant extraction),
+@@ -53,14 +52,8 @@
+ open Obend.Tactic.SiliconElab
+ open Obend.Apps.SiliconKernelVerilator
+ 
+-/-! ## 1. Live `#silicon_check` Reflexive Self-Hosting Suite -/
+-
+-#silicon_check Obend.Lower.LeanKernel.kernelCheckDecl
+-#silicon_check Obend.Lower.SiliconElabFabric.runBottomUpCamInfer
+-#silicon_check Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm
+-#silicon_check Obend.Core.type_preservation
+-#silicon_check Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound
+-#silicon_check Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound
++/-! ## 1. `#silicon_check` refuses what it cannot check (2026-11-04): the self-hosting targets are
++outside the Zone-4 fragment and are no longer invoked here. -/
+ 
+ /-! ## 2. Tactic 1: `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 WHNF) -/
+ 
+diff -ruN orig/lean/Obend/Apps/FidgetCam.lean new/lean/Obend/Apps/FidgetCam.lean
+--- orig/lean/Obend/Apps/FidgetCam.lean
++++ new/lean/Obend/Apps/FidgetCam.lean
+@@ -18,7 +18,7 @@
+ public import Obend.Hardware.Synth
+ public import Obend.Hardware.GeometryCAM
+ public import Obend.Hardware.OpenUSD
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Spec.CrossPackage
+ public import Obend.Tactic.Tooth
+ public import Obend.Elab.Workbook
+@@ -39,7 +39,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Slot
+ open Obend.Slot.World
+@@ -139,7 +139,7 @@
+ /-- Micrometres to lattice units. -/
+ @[expose] def FidgetParams.lat (p : FidgetParams) (um : Nat) : Nat := um / p.unit
+ 
+-/-! ## 2. Vtable flattening, `Leaf.Book` emission, pins-only Futamura, cone survival -/
++/-! ## 2. Vtable flattening, `Leaf.Book` emission, cone survival -/
+ 
+ theorem fidgetCam_compositions_closed :
+     FidgetBaseBody.shroudedImpellerBody_comp.closedB = true ∧
+@@ -172,38 +172,6 @@
+          flatten_sound _ hc2 m, book_sound _ hc2 m,
+          flatten_sound _ hc3 m, book_sound _ hc3 m,
+          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
+-
+-/-- Pins-only in-core specialisation of all four books, and cone survival when the shroud override
+-is linked onto the base body (it changes only `hubHeightUm`). -/
+-theorem fidgetCam_inCore_futamura2 (pins : List LeafPin) :
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler FidgetBaseBody.shroudedImpellerBody_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook FidgetBaseBody.shroudedImpellerBody_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler FidgetCoolingChannel.conformalCoolingChannel_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook FidgetCoolingChannel.conformalCoolingChannel_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler FidgetMountingBoss.stiffenedMountingBoss_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook FidgetMountingBoss.stiffenedMountingBoss_book pins) ∧
+-    dataPinSpecialize
+-      (.app (inCoreBookCompiler FidgetImpellerTop.liverpsImpellerCamTop_book) (encodePinsOnly pins)) =
+-      encodeBookTerm (inCoreSpecializeBook FidgetImpellerTop.liverpsImpellerCamTop_book pins) ∧
+-    coneSupports
+-      (linkComposition FidgetBaseBody.baseImpellerBody_comp FidgetBaseBody.shroudedImpellerBody_comp.top)
+-      ["hubRadiusUm", "hubCentreXUm"] =
+-      coneSupports FidgetBaseBody.baseImpellerBody_comp ["hubRadiusUm", "hubCentreXUm"] := by
+-  have hflat : FidgetBaseBody.shroudedImpellerBody_comp.top.flat = false := by decide +kernel
+-  have hdisj : ∀ m ∈ ["hubRadiusUm", "hubCentreXUm"],
+-      m ∉ overlayModifiedFields FidgetBaseBody.shroudedImpellerBody_comp.top := by
+-    decide +kernel
+-  exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly FidgetBaseBody.shroudedImpellerBody_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly FidgetCoolingChannel.conformalCoolingChannel_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly FidgetMountingBoss.stiffenedMountingBoss_book pins).1,
+-         (inCoreBookCompiler_specializes_from_pinsOnly FidgetImpellerTop.liverpsImpellerCamTop_book pins).1,
+-         coneSupports_linkComposition_of_disjoint
+-           FidgetBaseBody.baseImpellerBody_comp
+-           FidgetBaseBody.shroudedImpellerBody_comp.top
+-           ["hubRadiusUm", "hubCentreXUm"] hflat hdisj⟩
+ 
+ /-! ## 3. The part as one solid, on a 100 µm lattice -/
+ 
+diff -ruN orig/lean/Obend/Hardware/UserspacePhysical.lean new/lean/Obend/Hardware/UserspacePhysical.lean
+--- orig/lean/Obend/Hardware/UserspacePhysical.lean
++++ new/lean/Obend/Hardware/UserspacePhysical.lean
+@@ -12,7 +12,7 @@
+ Connects the `#import_obend`-elaborated `Composition`s and `Book`s directly to:
+ - `Obend.Logic.Composition` & `Obend.Leaf.Flatten` (`flatten_sound`, `fix_mix_flatten_sound`),
+ - `Obend.Leaf.Emit` (`book_sound`),
+-- `Obend.Leaf.Futamura` (`futamura2_compiler_generator_commutes`) & `Obend.Leaf.Specialize` (`extractReadMembers_mutation_invariant`),
++- `Obend.Leaf.Static` (`specializeBook`, `evalBook_specializeBook_eq_evalBook`) & `Obend.Leaf.Specialize` (`extractReadMembers_mutation_invariant`),
+ - `Obend.Hardware.Compiler` (`compileBookToRtl`) & `Obend.Lower.Proofs.SelfAccelerate` (64-bit `compileRtlExprToAmdGpu` + `runAmdGpuVop64Prog`).
+ -/
+ public import Lean
+@@ -23,7 +23,7 @@
+ public import Obend.Logic.Obligation
+ public import Obend.Leaf.Emit
+ public import Obend.Leaf.Specialize
+-public import Obend.Leaf.Futamura
++public import Obend.Leaf.Static
+ public import Obend.Lower.Proofs.SelfAccelerate
+ public import Obend.Hardware.Kinematics
+ public import Obend.Hardware.OpenUSD
+@@ -59,7 +59,7 @@
+ open Obend.Equiv
+ open Obend.Logic
+ open Obend.Leaf
+-open Obend.Leaf.Futamura
++open Obend.Leaf.Static
+ open Obend.Lower
+ open Obend.Hardware.HDL
+ open Obend.Hardware.Compiler
+@@ -446,23 +446,18 @@
+ def statorPeakBody : Term :=
+   extractBookMethodInner (emit statorInSlotComp) "peakWindingTemp"
+ 
+-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 1 (`stator_in_slot_support_and_futamura2`)**. -/
+-theorem stator_in_slot_support_and_futamura2 (env : String → Option Term) (newMass : Option Term) (loss : Nat) :
++/-- **Support extraction conservatism and `specializeBook` commutation for domain object 1 (`stator_in_slot_support_and_specialize`)**. -/
++theorem stator_in_slot_support_and_specialize (env : String → Option Term) (newMass : Option Term) (loss : Nat) :
+     let peakBody : Term := statorPeakBody
+     let B := emit statorInSlotComp
+     let pins := bookCanonicalPins B
+     extractReadMembers peakBody = ["thermalResistance"] ∧
+     substMemberEnv (mutateMemberEnv env "massKg" newMass) peakBody = substMemberEnv env peakBody ∧
+-    evalBook (specializeBook B pins) "peakWindingTemp" = evalBook B "peakWindingTemp" ∧
+-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
+-      (fun B_res => evalResidualBookAt B_res "peakWindingTemp" (.nat loss))) =
+-      evalBookUnderPinsAt B pins "peakWindingTemp" (.nat loss) := by
++    evalBook (specializeBook B pins) "peakWindingTemp" = evalBook B "peakWindingTemp" := by
+   dsimp only
+   refine ⟨by decide +kernel,
+     (extractReadMembers_mutation_invariant statorPeakBody env newMass (by decide +kernel)).1,
+-    optTermEq_sound (by decide +kernel),
+-    (futamura2_compiler_generator_commutes (emit statorInSlotComp)
+-      (bookCanonicalPins (emit statorInSlotComp)) "peakWindingTemp" (.nat loss)).2.2.2⟩
++    optTermEq_sound (by decide +kernel)⟩
+ 
+ /-! ## 7. Domain Object 2: `MS350` SiC Half-Bridge Phase Leg (`stdlib/physical/Ms350FcmlPhaseLeg.obend`) -/
+ 
+@@ -589,23 +584,18 @@
+ def ms350LossBody : Term :=
+   extractBookMethodInner (emit ms350PhaseLegComp) "switchingLossUj"
+ 
+-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 2 (`ms350_support_and_futamura2`)**. -/
+-theorem ms350_support_and_futamura2 (env : String → Option Term) (newGate : Option Term) (currentA : Nat) :
++/-- **Support extraction conservatism and `specializeBook` commutation for domain object 2 (`ms350_support_and_specialize`)**. -/
++theorem ms350_support_and_specialize (env : String → Option Term) (newGate : Option Term) (currentA : Nat) :
+     let lossBody : Term := ms350LossBody
+     let B := emit ms350PhaseLegComp
+     let pins := bookCanonicalPins B
+     extractReadMembers lossBody = ["deadtimeNs"] ∧
+     substMemberEnv (mutateMemberEnv env "effectiveGateDelayNs" newGate) lossBody = substMemberEnv env lossBody ∧
+-    evalBook (specializeBook B pins) "switchingLossUj" = evalBook B "switchingLossUj" ∧
+-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
+-      (fun B_res => evalResidualBookAt B_res "switchingLossUj" (.nat currentA))) =
+-      evalBookUnderPinsAt B pins "switchingLossUj" (.nat currentA) := by
++    evalBook (specializeBook B pins) "switchingLossUj" = evalBook B "switchingLossUj" := by
+   dsimp only
+   refine ⟨by decide +kernel,
+     (extractReadMembers_mutation_invariant ms350LossBody env newGate (by decide +kernel)).1,
+-    optTermEq_sound (by decide +kernel),
+-    (futamura2_compiler_generator_commutes (emit ms350PhaseLegComp)
+-      (bookCanonicalPins (emit ms350PhaseLegComp)) "switchingLossUj" (.nat currentA)).2.2.2⟩
++    optTermEq_sound (by decide +kernel)⟩
+ 
+ /-- **End-to-End Userspace `stdlib/physical/Ms350FcmlPhaseLeg.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
+ theorem userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified :
+@@ -749,23 +739,18 @@
+ def q3PowerBody : Term :=
+   extractBookMethodInner (emit q3PhotonicComp) "transferredPowerMw"
+ 
+-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 3 (`q3_photonic_support_and_futamura2`)**. -/
+-theorem q3_photonic_support_and_futamura2 (env : String → Option Term) (newPhase : Option Term) (pIn : Nat) :
++/-- **Support extraction conservatism and `specializeBook` commutation for domain object 3 (`q3_photonic_support_and_specialize`)**. -/
++theorem q3_photonic_support_and_specialize (env : String → Option Term) (newPhase : Option Term) (pIn : Nat) :
+     let powerBody : Term := q3PowerBody
+     let B := emit q3PhotonicComp
+     let pins := bookCanonicalPins B
+     extractReadMembers powerBody = ["couplingWeight", "hypercubeDim"] ∧
+     substMemberEnv (mutateMemberEnv env "krawtchoukPhaseShiftMrad" newPhase) powerBody = substMemberEnv env powerBody ∧
+-    evalBook (specializeBook B pins) "transferredPowerMw" = evalBook B "transferredPowerMw" ∧
+-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
+-      (fun B_res => evalResidualBookAt B_res "transferredPowerMw" (.nat pIn))) =
+-      evalBookUnderPinsAt B pins "transferredPowerMw" (.nat pIn) := by
++    evalBook (specializeBook B pins) "transferredPowerMw" = evalBook B "transferredPowerMw" := by
+   dsimp only
+   refine ⟨by decide +kernel,
+     (extractReadMembers_mutation_invariant q3PowerBody env newPhase (by decide +kernel)).1,
+-    optTermEq_sound (by decide +kernel),
+-    (futamura2_compiler_generator_commutes (emit q3PhotonicComp)
+-      (bookCanonicalPins (emit q3PhotonicComp)) "transferredPowerMw" (.nat pIn)).2.2.2⟩
++    optTermEq_sound (by decide +kernel)⟩
+ 
+ /-! ## 9. Domain Object 4: Cleanroom-to-TCAD Semiconductor Wafer Stack (`stdlib/physical/CleanroomTcadStack.obend`) -/
+ 
+@@ -884,23 +869,18 @@
+ def tcadDrainCurrentBody : Term :=
+   extractBookMethodInner (emit cleanroomTcadStackComp) "drainCurrentUa"
+ 
+-/-- **Support Extraction Conservatism & Futamura 2 Commutation for Domain Object 4 (`cleanroom_tcad_support_and_futamura2`)**. -/
+-theorem cleanroom_tcad_support_and_futamura2 (env : String → Option Term) (newEot : Option Term) (vov : Nat) :
++/-- **Support extraction conservatism and `specializeBook` commutation for domain object 4 (`cleanroom_tcad_support_and_specialize`)**. -/
++theorem cleanroom_tcad_support_and_specialize (env : String → Option Term) (newEot : Option Term) (vov : Nat) :
+     let drainBody : Term := tcadDrainCurrentBody
+     let B := emit cleanroomTcadStackComp
+     let pins := bookCanonicalPins B
+     extractReadMembers drainBody = ["vthMilliV"] ∧
+     substMemberEnv (mutateMemberEnv env "oxideEotPicometers" newEot) drainBody = substMemberEnv env drainBody ∧
+-    evalBook (specializeBook B pins) "drainCurrentUa" = evalBook B "drainCurrentUa" ∧
+-    ((decodeBookTerm? (runStagedCompiler (futamura2BookCompiler B) (encodePinsRecordForBook B pins))).bind
+-      (fun B_res => evalResidualBookAt B_res "drainCurrentUa" (.nat vov))) =
+-      evalBookUnderPinsAt B pins "drainCurrentUa" (.nat vov) := by
++    evalBook (specializeBook B pins) "drainCurrentUa" = evalBook B "drainCurrentUa" := by
+   dsimp only
+   refine ⟨by decide +kernel,
+     (extractReadMembers_mutation_invariant tcadDrainCurrentBody env newEot (by decide +kernel)).1,
+-    optTermEq_sound (by decide +kernel),
+-    (futamura2_compiler_generator_commutes (emit cleanroomTcadStackComp)
+-      (bookCanonicalPins (emit cleanroomTcadStackComp)) "drainCurrentUa" (.nat vov)).2.2.2⟩
++    optTermEq_sound (by decide +kernel)⟩
+ 
+ /-- **End-to-End Userspace `stdlib/physical/CleanroomTcadStack.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
+ theorem userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified :
+diff -ruN orig/lean/tests/silicon_elab/SiliconSelfHostTest.lean new/lean/tests/silicon_elab/SiliconSelfHostTest.lean
+--- orig/lean/tests/silicon_elab/SiliconSelfHostTest.lean
++++ new/lean/tests/silicon_elab/SiliconSelfHostTest.lean
+@@ -203,8 +203,8 @@
+     (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).hasSorryAx = true ∧
+     (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).kernelVerdict = false ∧
+     -- 2. A clean declaration checked in a `sorryAx`-contaminated environment cone is refused
+-    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostTypePreservationInfo).hasSorryAx = true ∧
+-    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostTypePreservationInfo).kernelVerdict = false ∧
++    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostIdentityProofInfo).hasSorryAx = true ∧
++    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostIdentityProofInfo).kernelVerdict = false ∧
+     -- 3. `#tooth`-mutated ill-typed declaration is refused by `runSiliconCheckTelemetry`
+     (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false := by
+   decide +kernel
+@@ -223,7 +223,7 @@
+ theorem silicon_self_host_end_to_end_test_sound :
+     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostKernelCheckDeclInfo).1 = true ∧
+     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostBottomUpCamInferInfo).1 = true ∧
+-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostTypePreservationInfo).1 = true ∧
++    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo).1 = true ∧
+     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo).1 = false ∧
+     (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false ∧
+     (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostSorryProofInfo).1 = false ∧
