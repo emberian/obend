@@ -72,19 +72,19 @@ fn test_challenger_runner_large_batch() {
 fn test_challenger_cli_nonexistent_files_fail() {
     let bin_path = env!("CARGO_BIN_EXE_obend-gui");
 
-    // Missing file on 'run'
+    // Missing file on 'eval-bytes'
     let output = Command::new(bin_path)
-        .args(["run", "/path/to/definitely_nonexistent_notebook.obnb"])
-        .output()
-        .expect("Failed to execute obend-gui binary");
-    assert!(!output.status.success(), "CLI must return non-zero on missing notebook");
-
-    // Missing file on 'inspect'
-    let output = Command::new(bin_path)
-        .args(["inspect", "/path/to/definitely_nonexistent_file.obnb"])
+        .args(["eval-bytes", "/path/to/definitely_nonexistent_notebook.obnb"])
         .output()
         .expect("Failed to execute obend-gui binary");
     assert!(!output.status.success(), "CLI must return non-zero on missing file");
+
+    // 'viewport' never opens a Lean session: it must succeed whatever the FFI library's state
+    let output = Command::new(bin_path)
+        .args(["viewport", "--kind", "prose", "--title", "Hello"])
+        .output()
+        .expect("Failed to execute obend-gui binary");
+    assert!(output.status.success(), "CLI viewport must not need the Lean library");
 
     // Missing file on 'project-hw'
     let output = Command::new(bin_path)
@@ -102,7 +102,7 @@ fn test_challenger_cli_empty_file_fails_eval() {
     fs::write(&empty_file, b"").expect("write empty file");
 
     let output = Command::new(bin_path)
-        .args(["run", empty_file.to_str().unwrap()])
+        .args(["eval-bytes", empty_file.to_str().unwrap()])
         .output()
         .expect("Failed to execute obend-gui binary");
 
