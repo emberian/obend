@@ -135,6 +135,16 @@ for d in sorted(os.listdir(os.path.join(ROOT, "apps"))):
               out[:400])
         if named:
             print(f"     ({d}: {named[0]['diagnostic']['message']})")
+# A law declared in an imported module binds the package: judged under the package's name, the
+# clause names the module (`foc-hil law ClarkePark.bounded_modulation_index`).
+FOC = {"hilStepCounter": 1, "overtempGateKill": 0, "dcBusVoltageV": 800, "faultCounter": 0, "thermalTripLatch": 0,
+       "windingTempC": 90, "phaseCurrentAmp": 100, "controlEpoch": 1, "integralStateMv": 10,
+       "electricalAngleStep": 1, "modulationPermille": 500}
+j = judge(os.path.join(ROOT, "apps", "foc-hil"), FOC, dict(FOC, modulationPermille=900))
+check("foc-hil: a write within every module's law is admitted", j.get("status") == "admitted", repr(j)[:300])
+j = judge(os.path.join(ROOT, "apps", "foc-hil"), FOC, dict(FOC, modulationPermille=1001))
+check("foc-hil: an imported module's law refuses, named by module",
+      j.get("status") == "refused" and j.get("by") == "foc-hil law ClarkePark.bounded_modulation_index", repr(j)[:300])
 r = subprocess.run([OBEND, "check", os.path.join(ROOT, "apps", "foc-hil", "FocDriveTop.obend")],
                    capture_output=True, text=True, cwd=LEAN)
 check("a single file with imports names the fix", r.returncode != 0 and "obend check DIR" in r.stdout + r.stderr,

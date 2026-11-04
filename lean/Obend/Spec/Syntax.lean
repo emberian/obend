@@ -10,6 +10,7 @@ AST is a leaf the elaborator, the front end and the tests can import without the
 -/
 public import Lean
 public import Obend.Spec.Law
+public import Obend.Spec.C4
 public section
 namespace Obend.Spec.Syntax
 open Lean
@@ -214,7 +215,8 @@ structure Module where
   imports : List (String × String)
   decls : List Decl
   /-- The module's top-level enforced laws (`law NAME: EXPR`), in source order. They are not
-  terms: the elaborator never sees them; the front end hands the entry module's to the artifact. -/
+  terms: the elaborator never sees them; the front end hands the package's (`packageLaws`: the
+  root module's and, named by module, those of every module it imports) to the artifact. -/
   laws : List (String × Law.LawExpr) := []
   /-- `package NAME extends ...`, when this module is a package's root module. -/
   header : Option PackageHeader := none
@@ -429,6 +431,46 @@ def decodeModule (j : Json) : Except String Module := do
     unless decls.any (fun d => d.name == inv) do throw s!"keeps {inv} by {law}: {inv} is not declared in this module"
   return ⟨← str j "name", ← (← arr j "imports").mapM (fun i => do return (← str i "alias", ← str i "moduleName")),
     decls, laws, header, keeps, lawMethods, contracts⟩
+
+/-! ## A package's laws across its modules
+
+A law declared in a module binds the package that imports the module: the package's laws are its
+root module's (bare names), then those of every module on the root's C4 precedence list over the
+import graph (each module's parents its imports, in source order), each named `Module.NAME`, so a
+refusal names the module whose law refused. Before 2026-11-04 a law outside the root module was
+refused at elaboration ("a law belongs to the package's entry module"). -/
+
+/-- The C4 precedence list of module `root` over the import graph of `ms`: an import names an
+earlier module, so each module's list is memoized in list order; a module the list lacks (another
+package's, in a workspace) is a leaf. Each import is its own chain: the order of a module's
+imports is not a precedence claim between them (a module may import `A` and then a `B` that itself
+imports `A`), and ties fall to import order through the candidates. -/
+def modulePrecedence (ms : List Module) (root : String) : Except String (List String) := Id.run do
+  let mut table : List (String × List String) := []
+  for m in ms do
+    let parents := (m.imports.map (·.2)).eraseDups
+    let g : C4.Graph := ⟨fun x => (table.lookup x).getD [x], fun _ => false⟩
+    match C4.linearize g [m.name] (parents.map fun p => [p]) with
+    | .ok (l, _) => table := table ++ [(m.name, l)]
+    | .error e => return .error (m.name ++ ": " ++ e.message)
+  match table.lookup root with
+  | some l => return .ok l
+  | none => return .error ("no module " ++ root)
+
+/-- A module's name without its package (`pkg::Module` in a workspace). -/
+def moduleShortName (n : String) : String :=
+  match n.splitOn "::" with
+  | [_, m] => m
+  | _ => n
+
+/-- **The laws of the package rooted at `root`**: `root`'s own, then each module on its C4
+precedence list, its laws named `Module.NAME`. -/
+def packageLaws (ms : List Module) (root : String) : Except String (List (String × Law.LawExpr)) := do
+  let order ← modulePrecedence ms root
+  return order.flatMap fun n =>
+    match ms.find? (·.name == n) with
+    | some m => if n == root then m.laws else m.laws.map fun (k, e) => (moduleShortName n ++ "." ++ k, e)
+    | none => []
 
 end Obend.Spec.Syntax
 

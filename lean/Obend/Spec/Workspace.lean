@@ -203,8 +203,14 @@ def close' (w : Workspace) : FE Closed := do
     packages := ⟨pkg, rr.modules.map (qualified pkg ·.name), precedence⟩ :: packages
   let moduleList := modules.toList
   let decoded ← liftFE (moduleList.mapM parseModule)
+  -- a package's laws: its root module's, then its other modules' named by module (`Syntax.packageLaws`)
   for (m, d) in moduleList.zip decoded do
-    if d.header.isSome then laws := laws ++ [(Elaborate.packageOfModule m.name, d.laws)]
+    if d.header.isSome then
+      let pkg := Elaborate.packageOfModule m.name
+      let own := decoded.filter fun x => Elaborate.packageOfModule x.name == pkg
+      match Obend.Spec.Syntax.packageLaws own m.name with
+      | .ok ls => laws := laws ++ [(pkg, ls)]
+      | .error e => wsRefuse ("Error: " ++ e)
   let entryKey := qualified w.entry.release.name w.entryModule
   let some entryModule := moduleList.findIdx? (·.name == entryKey)
     | wsRefuse ("Error: entry module absent: " ++ entryKey)
@@ -283,16 +289,17 @@ def effectiveLaw (c : Closed) (S : Obend.Core.Ty.Ty) : Except PackageLaw.OpenCla
 
 /-- Judge `old → new` as a write by member `agent`: `admitted`, or the refusal naming the
 ancestor package and clause, or `undecided` when the reference step runs out. -/
-def judge (c : Closed) (old new : Json) : Except String Json := do
+def judgeWith (laws : List (String × List (String × Law.LawExpr))) (order : List String) (old new : Json) :
+    Except String Json := do
   let (o, S) ← stateOf old
   let (n, S') ← stateOf new
   if S != S' then throw "old and new states have different fields"
-  let law ← match effectiveLaw c S with
+  let law ← match PackageLaw.effectivePackages (fun pkg => LawCompile.compilePackage S pkg ((laws.lookup pkg).getD [])) order with
     | .ok t => pure t
     | .error e => throw ("open clause " ++ e.name)
   let rq := Law.requestAt "member" "member" 0 1000000 Law.writeO none none ⟨0⟩ 0
   let r := Law.run 200000 (Law.applyLaw law o n rq)
-  let clauses := c.closure.order.flatMap fun pkg => ((c.laws.lookup pkg).getD []).map (PackageLaw.clauseName pkg ·.1)
+  let clauses := order.flatMap fun pkg => ((laws.lookup pkg).getD []).map (PackageLaw.clauseName pkg ·.1)
   if Law.okB r then return Json.mkObj [("status", toJson "admitted"), ("clauses", toJson clauses)]
   match r with
   | some (.inject "refused" (.record [("by", .label by_), ("reason", .label why)])) =>
@@ -301,6 +308,11 @@ def judge (c : Closed) (old new : Json) : Except String Json := do
   | _ => return Json.mkObj [("status", toJson "undecided"), ("clauses", toJson clauses)]
 
 /-! ## Multi-Module Topological Dependency Graph & `#^block` Stale-Pin Propagation -/
+
+
+/-- Judge `old → new` against the closure's packages, in precedence order (`judgeWith`). -/
+def judge (c : Closed) (old new : Json) : Except String Json :=
+  judgeWith c.laws c.closure.order old new
 
 /-- A pinned `#^block` citation `(targetModule, blockAnchor, pinnedHash)`. -/
 abbrev PinnedBlockRef := String × String × String

@@ -109,7 +109,8 @@ def usage : String :=
   "       obend check --package PACKAGE.json [ENTRY] | obend run --package PACKAGE.json [ARGS_JSON] [RESPONSES_JSON] [--ticks N] [--json]\n" ++
   "       obend check DIR [ENTRY] | obend run DIR ENTRY …   (every .obend file of DIR, in name order, as one package;\n" ++
   "             a DIR holding workspace.json or package.json is read through it; PACKAGE may replace --package PACKAGE below)\n" ++
-  "       obend judge --package WORKSPACE.json OLD_JSON NEW_JSON   (a write of the declared state, judged by every package's laws)\n" ++
+  "       obend judge --package SPEC OLD_JSON NEW_JSON   (a write of the declared state judged by every law: a workspace's packages\n" ++
+  "             in precedence order, or one package's, its imported modules' laws named Module.NAME)\n" ++
   "       obend admit --package WORKSPACE.json TURN.json          (a recorded turn re-derived at the workspace's records)\n" ++
   "       obend identity | parse FILE.obend | capture PACKAGE_SPEC NEW_DIR [--objective-edition-1]\n" ++
   "             | elaborate CAPTURE PREFIX [ARGS] [PROJECTIONS] [LIMITS] [application|definition] | preview REQUEST NEW_DIR | batch JOBS OUT\n" ++
@@ -576,13 +577,48 @@ def admitCommand (spec turnPath : String) : IO UInt32 := do
     IO.println (Obend.Spec.Workspace.admissionJson a).pretty
     return (match a with | .admitted _ => 0 | _ => 3)
 
+/-- The name a single package is judged under: a directory's or a manifest's directory's name, a
+file's module name. -/
+def packageNameOf (spec : String) : String :=
+  if spec.endsWith ".obend" then moduleNameOf spec
+  else if spec.endsWith ".json" then (((System.FilePath.mk spec).parent.bind (·.fileName)).getD spec)
+  else ((System.FilePath.mk spec).fileName.getD spec)
+
+/-- `obend judge`: a write of the declared state judged by every law in precedence order. A
+workspace's packages along its closure; a single package (a `.obend` file, a directory, a
+`package.json`) under its own name, its laws the entry module's and its imported modules' named
+by module (`Syntax.packageLaws`): a refusal names `PKG law Module.NAME`. -/
 def judgeCommand (spec old new : String) : IO UInt32 := do
   let result ← (do
-    let c ← Obend.Spec.Workspace.readClosed spec
+    let isWs ← (do
+      try
+        if spec.endsWith ".json" then
+          let txt ← IO.FS.readFile spec
+          match Json.parse txt with
+          | .ok j => return .ok ((j.getObjValAs? String "schema").toOption == some Obend.Spec.Workspace.workspaceSchema)
+          | .error _ => return .ok false
+        else return .ok false
+      catch _ => return .ok false : IO (Except Diagnostic Bool))
+    let laws ← if isWs then
+        let c ← Obend.Spec.Workspace.readClosed spec
+        pure (c.laws, c.closure.order)
+      else
+        let p ← packageOfSpec spec none
+        -- the laws are the package's whatever the entry: the first definition that lowers serves
+        let candidates := if p.entryDefinition.isEmpty then p.declarations.reverse else [p.entryDefinition]
+        let mut found : Option Obend.Spec.FrontEnd.Lowering := none
+        for name in candidates do
+          if found.isNone then
+            match lowerPackage p name (Json.arr #[]) (hostLimits "100000") "definition" with
+            | .ok l => found := some l
+            | .error _ => pure ()
+        let some l := found | refuse "no definition of the entry module lowers; name one with --entry" "objective-law"
+        let pkg := packageNameOf spec
+        pure ([(pkg, l.laws)], [pkg])
     let parsed : Except String Json := do
       let o ← Json.parse old
       let n ← Json.parse new
-      Obend.Spec.Workspace.judge c o n
+      Obend.Spec.Workspace.judgeWith laws.1 laws.2 o n
     match parsed with
     | .ok j => pure j
     | .error e => refuse e "objective-law" : FE Json).run

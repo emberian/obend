@@ -208,9 +208,9 @@ structure Lowering where
   modules : List SourceModule
   limits : Json
   checkWork : Nat
-  /-- The package's enforced laws: the entry module's top-level `law` declarations (a law in any
-  other module refuses). The artifact commits them; the kernel installs them on every object
-  pinned to the artifact. -/
+  /-- The package's enforced laws: the entry module's top-level `law` declarations and, named
+  `Module.NAME`, those of every module it imports, in C4 order (`Syntax.packageLaws`). The
+  artifact commits them; the kernel installs them on every object pinned to the artifact. -/
   laws : List (String × Law.LawExpr)
 
 def project (term : ATerm) (projections : List Json) : Except Diagnostic ATerm :=
@@ -269,14 +269,13 @@ def lowerDecoded (modules : List SourceModule) (decoded : List Syntax.Module)
       | .arr _ => "legacy-canonical-nat-bool-record"
       | _ => "dregg.objective-bend.argument-values.v1"
   checkTemplates output (entry.name ++ "." ++ entryDefinition) modules checkWork
-  for (m, index) in decoded.zipIdx do
-    -- In a workspace each package's root module (the one declaring `package`) holds its laws.
-    let lawful := if packages.isEmpty then index == entryModule else m.header.isSome
-    if !lawful && !m.laws.isEmpty then
-      throw (elaborationRefusal ((if packages.isEmpty then "a law belongs to the package's entry module; "
-        else "a law belongs to its package's root module; ") ++ m.name ++
-        " is imported and declares " ++ toString m.laws.length ++ " law(s)"))
-  let laws := (decoded[entryModule]?.map (·.laws)).getD []
+  -- The package's laws: its entry module's, then, named by module, those of every module on the
+  -- entry's C4 precedence list over the import graph (`Syntax.packageLaws`). In a workspace each
+  -- package's laws are collected the same way by its root module (`Workspace.close'`), and the
+  -- entry package's are what this lowering carries.
+  let laws ← match Syntax.packageLaws decoded ((decoded[entryModule]?.map (·.name)).getD "") with
+    | .ok ls => pure ls
+    | .error e => throw (elaborationRefusal e)
   return ⟨output, term, entry.name ++ "." ++ entryDefinition, argumentCodec, mode, modules, limits, checkWork, laws⟩
 
 /-- The whole front end on read modules: options, parse and check every module, elaborate,
@@ -441,10 +440,13 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
   Obend.Elab.AutoCert.verifyContractAutoCertSteps
     Obend.Elab.AutoCert.autoCertFormats m.name book? c
 
-/-- Elaborate and check a single `Syntax.ContractDecl`'s Isar proof script and external judge tags,
-    returning its `ElaboratedIsarCert` or a front-end `Diagnostic` refusal. -/
-@[expose] def checkContractIsarCert (admitsTag : String → Bool := defaultAutoCertAdmitsTag) (m : Syntax.Module)
-    (c : Syntax.ContractDecl) : Except Diagnostic Elaborate.ElaboratedIsarCert := do
+/-- Elaborate and check a single `Syntax.ContractDecl`'s Isar proof script, external judge tags,
+    and `AutoCert` witness synthesis against an optional lowered `Leaf.Book`. -/
+@[expose] def checkContractIsarCertWithBook
+    (admitsTag : String → Bool := defaultAutoCertAdmitsTag)
+    (m : Syntax.Module)
+    (c : Syntax.ContractDecl)
+    (book? : Option Obend.Leaf.Book := none) : Except Diagnostic Elaborate.ElaboratedIsarCert := do
   let cert := Elaborate.elaborateContractIsarCert m c
   if !cert.scriptValid then
     throw (elaborationRefusal ("refused (isar-proof-script): contract " ++ c.name ++
@@ -453,16 +455,30 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
     if !admitsTag tag then
       throw (elaborationRefusal ("refused (isar-unregistered-judge): contract " ++ c.name ++
         " cites judge(" ++ tag ++ "), which is not registered or refused its certificate"))
-  if !verifyContractAutoCertSteps m c none then
+  if !verifyContractAutoCertSteps m c book? then
     throw (elaborationRefusal ("refused (autocert-synthesis): contract " ++ c.name ++
       " failed automatic certificate synthesis for one or more judge steps"))
   return cert
+
+/-- Elaborate and check a single `Syntax.ContractDecl`'s Isar proof script and external judge tags,
+    returning its `ElaboratedIsarCert` or a front-end `Diagnostic` refusal. -/
+@[expose] def checkContractIsarCert (admitsTag : String → Bool := defaultAutoCertAdmitsTag) (m : Syntax.Module)
+    (c : Syntax.ContractDecl) : Except Diagnostic Elaborate.ElaboratedIsarCert :=
+  checkContractIsarCertWithBook admitsTag m c none
+
+/-- Elaborate and verify all `contract` blocks in `m : Syntax.Module` with an optional lowered `Leaf.Book`. -/
+@[expose] def checkModuleIsarCertsWithBook
+    (admitsTag : String → Bool := defaultAutoCertAdmitsTag)
+    (m : Syntax.Module)
+    (book? : Option Obend.Leaf.Book := none) :
+    Except Diagnostic (List Elaborate.ElaboratedIsarCert) :=
+  m.contracts.mapM (fun c => checkContractIsarCertWithBook admitsTag m c book?)
 
 /-- Elaborate and verify all `contract` blocks in `m : Syntax.Module`, checking both structural
     Isar step validity and external judge tag admission + `AutoCert` witness synthesis. -/
 @[expose] def checkModuleIsarCerts (admitsTag : String → Bool := defaultAutoCertAdmitsTag) (m : Syntax.Module) :
     Except Diagnostic (List Elaborate.ElaboratedIsarCert) :=
-  m.contracts.mapM (checkContractIsarCert admitsTag m)
+  checkModuleIsarCertsWithBook admitsTag m none
 
 /-- Elaborate all contracts in `m : Syntax.Module` together with their verified Isar certificates,
     synthesizing and checking `AutoCert` witnesses for all synthesizable `by judge(...)` steps and
@@ -473,7 +489,8 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
   return (Elaborate.elaborateContracts m, certs)
 
 /-- Elaborate all contracts in `m : Syntax.Module` together with their verified Isar certificates
-    and the synthesized `(contractName, [(judgeTag, objWire, certWire), ...])` `AutoCert` witnesses. -/
+    and the synthesized `(contractName, [(judgeTag, objWire, certWire), ...])` `AutoCert` witnesses,
+    verifying every synthesizable judge step against `book?`. -/
 @[expose] def elaborateContractsWithAutoCerts
     (admitsTag : String → Bool := defaultAutoCertAdmitsTag)
     (m : Syntax.Module)
@@ -482,7 +499,8 @@ theorem verifyContractIsarCert_sound (admitsTag : String → Bool) (m : Syntax.M
       (List (String × Obend.Law.CellContract) ×
        List Elaborate.ElaboratedIsarCert ×
        List (String × List (String × String × String))) := do
-  let (contracts, certs) ← elaborateContractsWithCerts admitsTag m
+  let certs ← checkModuleIsarCertsWithBook admitsTag m book?
+  let contracts := Elaborate.elaborateContracts m
   let synthBundles := m.contracts.map fun c =>
     (c.name,
      Obend.Elab.AutoCert.synthesizeContractExternalJudges
