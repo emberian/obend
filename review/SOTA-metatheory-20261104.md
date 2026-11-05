@@ -496,3 +496,56 @@ patterns are the model to copy.
   `LedgerBalance.biasedLimbs_valid`.
 
 The Exec kernel and CapTP slice follows as a second addendum when its two readers report.
+
+### I. The executable kernel and the FFI boundary (second addendum, two readers)
+
+The kernel is `execFullA` over a 31-constructor per-asset action type, with a step invariant of
+four conjuncts (per-asset ledger vector, log suffix with receipt membership, strict log growth, a
+per-kind obligation) proved for every arm (`execFullA_attests_per_asset`), a handler registry whose
+obligations are proof fields on the handler record so that a generic `turn_conserves` falls out by
+list induction, and an admission gate of eight legs with a prologue that is never rolled back. The
+deployed entry is `dregg_exec_full_forest_auth` in `Exec/FFI.lean`, and `FFI/Refine` proves, by
+`rfl`, that the export equals the model on parseable input; it is the only export with such a
+theorem. Production prefers the no-copy `execDirect` twin, which has no theorem and four `#guard`
+fixtures; the Rust side installs Lean's verdict unconditionally on the covered set and treats
+disagreement as a Rust bug. Corrections the skeptic made: conservation does not reach `Core`
+through the `ConservesStep` instance (its proof is a simp over a zero measure); the Claims ledger
+pins a different `recCexec_attests` from the one the executor proves; the record-cell
+step-completeness predicates are disjunctions with no conservation conjunct.
+
+What is missing at this layer is exactly the orthogonal-persistence row of §3: no replay-determinism
+or log-determines-state theorem over the deployed entry; `Durability`'s headline theorems are `rfl`
+(recover and live are the same definition); `Receipt.replay_deterministic` is a tautology; the
+hash-linked receipt chain is a separate structure under injectivity and freshness hypotheses,
+connected to admission only through those hypotheses, while the kernel's chain-link conjunct is a
+list-length fact. Gas is scalar-only and unwired. Migration is modelled (`addField`, `renameField`)
+but no executor arm calls it and there is no explicit-drop obligation. The Lean compiler, C codegen
+and runtime are unverified TCB, and the project does not claim otherwise. Behind CompCert and
+CakeML on the executable chain; parallel to seL4's layering without its refinement to code;
+Verus, Aeneas and CertiCoq absent.
+
+### J. Capabilities, cells, forests, Argus and the firmament
+
+Non-amplification is a theorem at four layers (attenuation on the cap set and on conferred rights;
+CapTP handoff over an abstract semilattice and over the concrete Bool lattice; the executed
+delegate-attenuate arm in the gated forest), with handoff unforgeability under a named
+`K.unforgeable`, GC by lease with the undecidability of distributed death proved rather than
+assumed, pipelining shown unable to mint authority, and the N-ary conservation discipline (derived
+within a cell, carried as an explicit and proved-irreducible hypothesis across cells). Against the
+state of the art this is ahead of OCapN and Genode, which have no machine-checked semantics, and
+parallel to the third-party model checking of SwingSet. The seL4 transcription is one
+derivation rule with the architecture branch opaque and three bridge fields unproved; nothing in
+the firmament states scheduling, interleaving or confidentiality. The Rust binding is a runtime
+gate seam that captp can fill with a non-Lean "assume non-amplifying" implementation (two such
+fillers exist), the cell crate declares itself the legacy unverified duplicate, and six effects
+lack an Argus weld. `EmitRoundtrip` relates Lean's emitter to Lean's parser only.
+
+For obend, the two readers agree on the ports: `Vault/Mandate` takes `Agent/Mandate` wholesale
+(target, keep at most held, budget, caveat, sub-delegation that clamps and narrows, the
+well-attenuated tree invariant and its four theorems); `Vault/Hyperedge` keeps the wide-pullback
+statement with `hyperedge_sound_needs_binding` as the honest negative; the ChainLink conjunct of
+the deployed entry becomes the hash-linked receipt chain with injectivity and freshness as named
+hypotheses, with log-determines-state proved over the entry the FFI actually calls; host-fed
+inputs become an explicit `HostFacts` record with a `Reflects` relation; the handler-registry
+shape replaces an effects-by-invariants matrix; the FFI root is one manifest module whose import
+closure is the export surface, with the gate mandatory rather than a seam.
