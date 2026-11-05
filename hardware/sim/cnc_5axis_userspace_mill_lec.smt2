@@ -17,7 +17,7 @@
 (define-fun r_3 () (_ BitVec 64) (|cnc_5axis_userspace_mill_n reg_commandedAxisAt10mmUm| s))
 (define-fun r_4 () (_ BitVec 64) (|cnc_5axis_userspace_mill_n reg_totalVolumetricErrorUm| s))
 
-; 3. Lean's model of the RtlModule (emitExprSmt2 of evalRtlExpr) over those values
+; 3. Lean's model of the RtlModule over those values (smtOf; smtOf_sound proves it is evalRtlExpr)
 (define-fun spec_w_0 () (_ BitVec 64) (bvmul in_0 #x0000000000000001))
 (define-fun spec_w_1 () (_ BitVec 64) (bvmul in_0 #x0000000000000002))
 (define-fun spec_w_2 () (_ BitVec 64) (bvmul in_0 #x0000000000000001))

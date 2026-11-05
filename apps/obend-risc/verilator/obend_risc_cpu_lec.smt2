@@ -49,7 +49,7 @@
 (define-fun r_34 () (_ BitVec 64) (|obend_risc_cpu_n x30| s))
 (define-fun r_35 () (_ BitVec 64) (|obend_risc_cpu_n x31| s))
 
-; 3. Lean's model of the RtlModule (emitExprSmt2 of evalRtlExpr) over those values
+; 3. Lean's model of the RtlModule over those values (smtOf; smtOf_sound proves it is evalRtlExpr)
 (define-fun spec_w_0 () (_ BitVec 64) (bvand in_0 #x000000000000007f))
 (define-fun spec_w_1 () (_ BitVec 64) (bvand (bvlshr in_0 (bvand #x0000000000000007 #x000000000000003f)) #x000000000000001f))
 (define-fun spec_w_2 () (_ BitVec 64) (bvand (bvlshr in_0 (bvand #x000000000000000c #x000000000000003f)) #x0000000000000007))

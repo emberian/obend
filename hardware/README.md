@@ -42,8 +42,8 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
 
 - **The emitted SV against Lean's model (all of them).** `obend-emit-sv <target> --lec` writes
   `X_lec.smt2` from the same `RtlModule` (`Obend.Hardware.YosysLec.emitYosysLecSmt2`; checked in,
-  regenerated and byte-compared like the `.sv`). It is Lean's model of the module rendered as
-  `QF_BV` by `emitExprSmt2`, read over the port and register names of Yosys's `write_smt2` of
+  regenerated and byte-compared like the `.sv`). It is Lean's model of the module as `QF_BV` terms
+  (`smtOf`, printed by `SmtBV.print`), read over the port and register names of Yosys's `write_smt2` of
   `X.sv` (frontend and `proc` only, no optimization passes), and a miter. z3 `unsat` proves: for every input and every register state, the module
   Yosys reads from `X.sv` and Lean's `RtlModule` agree on every output (truncated to its port width)
   and on every register's next value, synchronous resets included. With registers matched by name
@@ -53,8 +53,13 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
   holds for every interpretation of multiplication, so for the real one (the risc core needs this:
   bit-precise, its register-file writeback through two 64-bit multiplies did not finish in 20
   minutes; abstracted it is `unsat` within two minutes). A `sat` that appears only under the abstraction is
-  reported as undecided and fails the step. Trusted: Yosys's SystemVerilog frontend and `write_smt2`, z3, and the thirteen-line
-  operator table `emitAluOpSmt2` against `evalAluOp` (not yet a Lean theorem). Read into the model,
+  reported as undecided and fails the step. The Lean half is proved:
+  `Obend.Hardware.YosysLec.emitExprSmt2_sound` says the SMT-LIB semantics of `smtOf e`
+  (`SmtBV.eval`, over Lean's `BitVec`) is `evalRtlExpr` for every `e` that `inferWidthE` accepts,
+  and the file is `SmtBV.print` of those terms. Trusted: that
+  `SmtBV.print` writes each constructor's SMT-LIB syntax (a dozen one-line cases; `#guard`s compare
+  it with `emitExprSmt2` on every operator), Yosys's SystemVerilog frontend and `write_smt2`, and
+  z3. Read into the model,
   not proved: narrow input ports are zero-extended into the 64-bit `inputPort`, and with several
   clock domains each register resets on its own domain's `rst_<d>`.
 - **The emitted SV against its own gate-level netlist (EQY, where it terminates).** `synth` makes
