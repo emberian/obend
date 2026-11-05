@@ -338,18 +338,6 @@ def initialModuleRegs (m : RtlModule) : Nat → BitVec 64 := fun rIdx =>
   | some r => match r.resetKind with | .syncReset v => v | .resetFree => 0#64
   | none => 0#64
 
-/-- `runModuleTrace` with the register file held in an array between cycles, for the harness.
-`runModuleTrace` returns a closure whose every read re-runs the earlier cycles (the compiler
-eta-expands `stepModuleRegsImpl`, so its array is rebuilt per read): a probe with six registers
-reading one another took 80 s for ten cycles. Here each cycle reads the previous array. Same value
-as `runModuleTrace` at every index below `n` when `n` exceeds every `regIdx` (no register writes
-above it, and both fall through to the initial state there). -/
-def runModuleTraceArr (m : RtlModule) (n : Nat) (init : Array (BitVec 64))
-    (trace : List (Bool × (Nat → BitVec 64))) : Array (BitVec 64) :=
-  trace.foldl (fun arr c =>
-    let st : Nat → BitVec 64 := fun i => arr.getD i 0#64
-    (List.range n).toArray.map (stepModuleRegs m c.1 c.2 st)) init
-
 /-- Evaluate a single `DifferentialVector` starting from register state `curRegs` across `numCycles`
     clock cycles via `HDL.runModuleTrace`, returning `(nextRegs, DifferentialVector)`. -/
 def evaluateDifferentialVectorFromRegs
@@ -364,9 +352,12 @@ def evaluateDifferentialVectorFromRegs
     (List.range m.inputNames.length).map fun pIdx =>
       (m.inputNames.getD pIdx "in_0", inEnv pIdx)
   let nRegs := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
-  let finalArr := runModuleTraceArr m nRegs ((List.range nRegs).toArray.map curRegs)
-    (mkHeldCycleTrace numCycles inEnv)
-  let finalRegs : Nat → BitVec 64 := fun i => finalArr.getD i 0#64
+  -- `runModuleTrace` runs compiled as `runModuleTraceImpl` (`@[csimp]`, proved); its result is a
+  -- closure that re-runs this vector's cycles per read, so it is read once per register into an
+  -- array, and the next vector starts from that array rather than from a chain of closures.
+  let traced := runModuleTrace m curRegs (mkHeldCycleTrace numCycles inEnv)
+  let finalArr : Array (BitVec 64) := (List.range nRegs).toArray.map traced
+  let finalRegs : Nat → BitVec 64 := fun i => if i < nRegs then finalArr.getD i 0#64 else curRegs i
   let expectedOuts := evalModuleOutputsW m inEnv finalRegs
   let arg0Nat := (inEnv 0).toNat
   let allArgNats := (List.range (max m.inputNames.length 1)).map (fun i => (inEnv i).toNat)

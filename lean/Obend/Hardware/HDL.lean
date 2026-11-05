@@ -197,33 +197,7 @@ def checkWireTableDAG (numInputs numRegs : Nat) (assigns : List WireAssign) : Bo
       go (expectedIdx + 1) rest
   go 0 assigns
 
-/-- Executable twin of `evalWireTable` (`implemented_by`): the same fold with the environment held
-in an array, so every wire is evaluated once and a `wireRef` read is an index. Compiled, the
-closure chain the definition builds re-evaluated upstream wires on every read, and
-`evalModuleOutputs` of a 250-wire module did not return. Same results: `0#64` for an index never
-assigned, the last assignment wins on a repeated index; the definition itself is unchanged and is
-what the proofs unfold. Indices beyond a million fall back to the definition's fold. -/
-def evalWireTableImpl
-    (inputs regs : Nat → BitVec 64)
-    (assigns : List WireAssign) : Nat → BitVec 64 :=
-  let n := assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0
-  if n > 1000000 then
-    assigns.foldl
-      (fun (env : Nat → BitVec 64) a =>
-        let v := evalRtlExpr inputs env regs a.expr
-        fun i => if i == a.wireIdx then v else env i)
-      (fun _ => 0#64)
-  else
-    let arr := assigns.foldl
-      (fun (arr : Array (BitVec 64)) a =>
-        let env : Nat → BitVec 64 := fun i => arr.getD i 0#64
-        let v := evalRtlExpr inputs env regs a.expr
-        arr.set! a.wireIdx v)
-      (Array.replicate n 0#64)
-    fun i => arr.getD i 0#64
-
 /-- Evaluate a wire assignment table in a single forward pass. -/
-@[implemented_by evalWireTableImpl]
 def evalWireTable
     (inputs regs : Nat → BitVec 64)
     (assigns : List WireAssign) : Nat → BitVec 64 :=
@@ -232,6 +206,91 @@ def evalWireTable
       let v := evalRtlExpr inputs env regs a.expr
       fun i => if i == a.wireIdx then v else env i)
     (fun _ => 0#64)
+
+/-- The wire table as an array: wire `i` at index `i`, `0#64` where nothing is assigned, the last
+assignment winning (`evalWireTableArr_getD`). -/
+def evalWireTableArr (inputs regs : Nat → BitVec 64) (assigns : List WireAssign) : Array (BitVec 64) :=
+  let n := assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0
+  assigns.foldl
+    (fun (arr : Array (BitVec 64)) a =>
+      let env : Nat → BitVec 64 := fun i => arr.getD i 0#64
+      arr.set! a.wireIdx (evalRtlExpr inputs env regs a.expr))
+    (Array.replicate n 0#64)
+
+/-- The compiled form of `evalWireTable` (`evalWireTable_eq_impl`, `@[csimp]`): the environment
+is an array, so every wire is evaluated once and a `wireRef` read is an index. Compiled, the
+definition's closure chain re-evaluated upstream wires on every read, and `evalModuleOutputs` of a
+250-wire module did not return. Indices beyond a million use the definition's fold. -/
+def evalWireTableImpl
+    (inputs regs : Nat → BitVec 64)
+    (assigns : List WireAssign) : Nat → BitVec 64 :=
+  let n := assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0
+  if n > 1000000 then evalWireTable inputs regs assigns
+  else
+    let arr := evalWireTableArr inputs regs assigns
+    fun i => arr.getD i 0#64
+
+theorem le_foldl_max {α : Type} (g : α → Nat) :
+    ∀ (l : List α) (k : Nat), k ≤ l.foldl (fun k a => max k (g a)) k
+  | [], _ => Nat.le_refl _
+  | a :: rest, k => Nat.le_trans (Nat.le_max_left k (g a)) (le_foldl_max g rest _)
+
+theorem mem_le_foldl_max {α : Type} (g : α → Nat) :
+    ∀ (l : List α) (k : Nat), ∀ a ∈ l, g a ≤ l.foldl (fun k a => max k (g a)) k
+  | [], _, _, h => nomatch h
+  | b :: rest, k, a, h => by
+    rcases List.mem_cons.mp h with rfl | h'
+    · exact Nat.le_trans (Nat.le_max_right k (g a)) (le_foldl_max g rest _)
+    · exact mem_le_foldl_max g rest _ a h'
+
+theorem array_getD_set! {α : Type} (a : Array α) (j i : Nat) (v d : α) (hj : j < a.size) :
+    (a.set! j v).getD i d = if i = j then v else a.getD i d := by
+  simp only [Array.getD_eq_getD_getElem?, Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds]
+  by_cases h : i = j
+  · subst h; simp [hj]
+  · simp [h, Ne.symm h]
+
+theorem array_getD_replicate {α : Type} (n i : Nat) (d : α) : (Array.replicate n d).getD i d = d := by
+  simp [Array.getD_eq_getD_getElem?, Array.getElem?_replicate]; split <;> rfl
+
+/-- The array wire table agrees with `evalWireTable` at every index. -/
+theorem evalWireTableArr_getD (inputs regs : Nat → BitVec 64) (assigns : List WireAssign) (i : Nat) :
+    (evalWireTableArr inputs regs assigns).getD i 0#64 = evalWireTable inputs regs assigns i := by
+  unfold evalWireTableArr evalWireTable
+  generalize hn : assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0 = n
+  have hBound : ∀ a ∈ assigns, a.wireIdx < n := fun a ha => by
+    have := mem_le_foldl_max (fun a : WireAssign => a.wireIdx + 1) assigns 0 a ha
+    omega
+  suffices ∀ (l : List WireAssign), (∀ a ∈ l, a.wireIdx < n) →
+      ∀ (arr : Array (BitVec 64)) (env : Nat → BitVec 64),
+        arr.size = n → (∀ i, arr.getD i 0#64 = env i) →
+        ∀ i, (l.foldl (fun (arr : Array (BitVec 64)) a =>
+            arr.set! a.wireIdx (evalRtlExpr inputs (fun i => arr.getD i 0#64) regs a.expr)) arr).getD i 0#64 =
+          (l.foldl (fun (env : Nat → BitVec 64) a =>
+            fun i => if i == a.wireIdx then evalRtlExpr inputs env regs a.expr else env i) env) i from
+    this assigns hBound _ _ (by simp) (fun i => array_getD_replicate n i 0#64) i
+  intro l
+  induction l with
+  | nil => intro _ arr env _ h; exact h
+  | cons a rest ih =>
+    intro hB arr env hSize hEq
+    simp only [List.foldl_cons]
+    have hEnv : (fun i => arr.getD i 0#64) = env := funext hEq
+    apply ih (fun x hx => hB x (List.mem_cons_of_mem _ hx))
+    · simp [hSize]
+    · intro i
+      rw [array_getD_set! _ _ _ _ _ (by rw [hSize]; exact hB a List.mem_cons_self), hEnv]
+      by_cases h : i = a.wireIdx
+      · simp [h]
+      · simp [h, hEq]
+
+/-- **The compiled wire table is the definition.** -/
+@[csimp] theorem evalWireTable_eq_impl : @evalWireTable = @evalWireTableImpl := by
+  funext inputs regs assigns i
+  unfold evalWireTableImpl
+  split
+  · rfl
+  · exact (evalWireTableArr_getD inputs regs assigns i).symm
 
 /-! ## 3. Clock Domains, Reset Discipline & Static CDC Verification -/
 
@@ -443,43 +502,7 @@ def evalModuleOutputs
   let wireEnv := evalWireTable inputs regState m.wires
   m.outputs.map fun o => (o.name, evalRtlExpr inputs wireEnv regState o.expr)
 
-/-- Executable twin of `stepModuleRegs` (`implemented_by`): every register's next value computed
-once into an array; a read of a slot no register writes falls through to `regState`, as in the
-definition. Compiled, the definition's closure chain re-evaluated the previous cycles on every
-read, and 21 cycles of the softcore did not return. -/
-def stepModuleRegsImpl
-    (m : RtlModule)
-    (rst : Bool)
-    (inputs : Nat → BitVec 64)
-    (regState : Nat → BitVec 64) : Nat → BitVec 64 :=
-  let wireEnv := evalWireTable inputs regState m.wires
-  let n := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
-  if n > 1000000 then
-    m.regs.foldl
-      (fun (nextSt : Nat → BitVec 64) r =>
-        let v :=
-          match r.resetKind with
-          | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
-          | .syncReset initVal =>
-            if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
-        fun i => if i == r.regIdx then v else nextSt i)
-      regState
-  else
-    let vals := m.regs.foldl
-      (fun (arr : Array (Option (BitVec 64))) r =>
-        let v :=
-          match r.resetKind with
-          | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
-          | .syncReset initVal =>
-            if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
-        arr.set! r.regIdx (some v))
-      (Array.replicate n none)
-    fun i => match vals.getD i none with
-      | some v => v
-      | none => regState i
-
 /-- Step all sequential registers of `m` by one clock edge (`rst = true` triggers synchronous resets). -/
-@[implemented_by stepModuleRegsImpl]
 def stepModuleRegs
     (m : RtlModule)
     (rst : Bool)
@@ -496,59 +519,179 @@ def stepModuleRegs
       fun i => if i == r.regIdx then v else nextSt i)
     regState
 
-/-- The wire table as an array (the executable core of `evalWireTableImpl`): wire `i` at index `i`,
-`0#64` where nothing is assigned, the last assignment winning. -/
-def evalWireTableArr (inputs regs : Nat → BitVec 64) (assigns : List WireAssign) : Array (BitVec 64) :=
-  let n := assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0
-  assigns.foldl
-    (fun (arr : Array (BitVec 64)) a =>
-      let env : Nat → BitVec 64 := fun i => arr.getD i 0#64
-      arr.set! a.wireIdx (evalRtlExpr inputs env regs a.expr))
-    (Array.replicate n 0#64)
+/-- The value register `r` latches on an edge, from the old state and the wire table. -/
+def regNextValue (rst : Bool) (inputs wireEnv regState : Nat → BitVec 64) (r : RegSpec) : BitVec 64 :=
+  match r.resetKind with
+  | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
+  | .syncReset initVal => if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
 
-/-- One clock edge on a register file held as an array (`st`, with `init` above its end): the
-executable core of `runModuleTraceImpl`, same values as `stepModuleRegs`. -/
+/-- The compiled form of `stepModuleRegs` (`stepModuleRegs_eq_impl`, `@[csimp]`): every register's
+next value computed once into an array; a slot no register writes falls through to `regState`.
+Its result is still a function, and the compiler eta-expands a definition that returns one, so a
+chain of these re-runs earlier steps per read: iterate with `runModuleTrace`, whose compiled form
+keeps the register file in an array between cycles. -/
+def stepModuleRegsImpl
+    (m : RtlModule)
+    (rst : Bool)
+    (inputs : Nat → BitVec 64)
+    (regState : Nat → BitVec 64) : Nat → BitVec 64 :=
+  let n := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
+  if n > 1000000 then stepModuleRegs m rst inputs regState
+  else
+    let wireEnv := evalWireTable inputs regState m.wires
+    let vals := m.regs.foldl
+      (fun (arr : Array (Option (BitVec 64))) r =>
+        arr.set! r.regIdx (some (regNextValue rst inputs wireEnv regState r)))
+      (Array.replicate n none)
+    fun i => match vals.getD i none with
+      | some v => v
+      | none => regState i
+
+theorem stepModuleRegs_eq_foldl_next (m : RtlModule) (rst : Bool) (inputs regState : Nat → BitVec 64) :
+    stepModuleRegs m rst inputs regState =
+      m.regs.foldl (fun (nextSt : Nat → BitVec 64) r =>
+        fun i => if i == r.regIdx then regNextValue rst inputs (evalWireTable inputs regState m.wires) regState r
+          else nextSt i) regState := by
+  unfold stepModuleRegs regNextValue
+  rfl
+
+/-- **The compiled register step is the definition.** -/
+@[csimp] theorem stepModuleRegs_eq_impl : @stepModuleRegs = @stepModuleRegsImpl := by
+  funext m rst inputs regState i
+  unfold stepModuleRegsImpl
+  split
+  · rfl
+  · rename_i hLarge
+    rw [stepModuleRegs_eq_foldl_next]
+    generalize evalWireTable inputs regState m.wires = wireEnv
+    generalize hn : m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0 = n
+    have hBound : ∀ r ∈ m.regs, r.regIdx < n := fun r hr => by
+      have := mem_le_foldl_max (fun r : RegSpec => r.regIdx + 1) m.regs 0 r hr
+      omega
+    suffices ∀ (l : List RegSpec), (∀ r ∈ l, r.regIdx < n) →
+        ∀ (arr : Array (Option (BitVec 64))) (st : Nat → BitVec 64), arr.size = n →
+          (∀ i, (match arr.getD i none with | some v => v | none => regState i) = st i) →
+          ∀ i, (l.foldl (fun (nextSt : Nat → BitVec 64) r =>
+              fun i => if i == r.regIdx then regNextValue rst inputs wireEnv regState r else nextSt i) st) i =
+            (match (l.foldl (fun (arr : Array (Option (BitVec 64))) r =>
+              arr.set! r.regIdx (some (regNextValue rst inputs wireEnv regState r))) arr).getD i none with
+              | some v => v | none => regState i) from
+      this m.regs hBound _ _ (by simp) (fun i => by rw [array_getD_replicate]) i
+    intro l
+    induction l with
+    | nil => intro _ arr st _ h i; exact (h i).symm
+    | cons r rest ih =>
+      intro hB arr st hSize hEq i
+      simp only [List.foldl_cons]
+      apply ih (fun x hx => hB x (List.mem_cons_of_mem _ hx))
+      · simp [hSize]
+      · intro j
+        rw [array_getD_set! _ _ _ _ _ (by rw [hSize]; exact hB r List.mem_cons_self)]
+        by_cases h : j = r.regIdx
+        · simp [h]
+        · rw [if_neg h]
+          simp only [beq_iff_eq, h, if_false]
+          exact hEq j
+
+/-- Run an `RtlModule` over a trace of `(rst, inputs)` cycles, returning the final register state. -/
+def runModuleTrace
+    (m : RtlModule)
+    (initRegs : Nat → BitVec 64)
+    (trace : List (Bool × (Nat → BitVec 64))) : Nat → BitVec 64 :=
+  trace.foldl (fun st (rst, ins) => stepModuleRegs m rst ins st) initRegs
+
+/-- One clock edge on a register file held as an array (`st`, with `init` above its end); the
+array form of `stepModuleRegs` (`stepRegsArr_getD`). -/
 def stepRegsArr (m : RtlModule) (rst : Bool) (inputs : Nat → BitVec 64)
     (init : Nat → BitVec 64) (st : Array (BitVec 64)) : Array (BitVec 64) :=
   let regState : Nat → BitVec 64 := fun i => st.getD i (init i)
   let wArr := evalWireTableArr inputs regState m.wires
   let wireEnv : Nat → BitVec 64 := fun i => wArr.getD i 0#64
   m.regs.foldl
-    (fun (arr : Array (BitVec 64)) r =>
-      let v :=
-        match r.resetKind with
-        | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
-        | .syncReset initVal =>
-          if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
-      arr.set! r.regIdx v)
+    (fun (arr : Array (BitVec 64)) r => arr.set! r.regIdx (regNextValue rst inputs wireEnv regState r))
     st
 
-/-- Executable twin of `runModuleTrace` (`implemented_by`): the register file is an array from
-cycle to cycle. Lean's compiler eta-expands a definition that returns a function, so the array a
-`stepModuleRegsImpl` builds is rebuilt on every read of its result, and a trace of closures re-ran
-every earlier cycle per read: exponential in the cycle count once registers read each other
-(`obend-emit-sv` did not finish initialising the RISC firmware run, 2026-11-05). Here each cycle
-reads the previous array. The returned closure still re-runs the trace per read, linearly.
-Indices beyond a million fall back to the definition's fold. -/
+/-- The compiled form of `runModuleTrace` (`runModuleTrace_eq_impl`, `@[csimp]`): the register
+file is an array from cycle to cycle. The compiler eta-expands a definition that returns a
+function, so the closure a `stepModuleRegs` step returns re-runs that step on every read, and a
+trace of such closures re-ran every earlier cycle per read: exponential in the cycle count once
+registers read each other (`obend-emit-sv` did not finish initialising the RISC firmware run,
+2026-11-05). Here each cycle reads the previous array; the returned closure re-runs the trace per
+read, linearly. Indices beyond a million use the definition. -/
 def runModuleTraceImpl
     (m : RtlModule)
     (initRegs : Nat → BitVec 64)
     (trace : List (Bool × (Nat → BitVec 64))) : Nat → BitVec 64 :=
   let n := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
-  if n > 1000000 then
-    trace.foldl (fun st (rst, ins) => stepModuleRegs m rst ins st) initRegs
+  if n > 1000000 then runModuleTrace m initRegs trace
   else
     let a0 : Array (BitVec 64) := (List.range n).toArray.map initRegs
     let fin := trace.foldl (fun st c => stepRegsArr m c.1 c.2 initRegs st) a0
     fun i => fin.getD i (initRegs i)
 
-/-- Run an `RtlModule` over a trace of `(rst, inputs)` cycles, returning the final register state. -/
-@[implemented_by runModuleTraceImpl]
-def runModuleTrace
-    (m : RtlModule)
-    (initRegs : Nat → BitVec 64)
-    (trace : List (Bool × (Nat → BitVec 64))) : Nat → BitVec 64 :=
-  trace.foldl (fun st (rst, ins) => stepModuleRegs m rst ins st) initRegs
+/-- `stepRegsArr` is `stepModuleRegs` on the array's register file: with `st` of the module's size
+`n` reading as `F` (and `init` above `n`), the stepped array reads as `stepModuleRegs … F`. -/
+theorem stepRegsArr_getD (m : RtlModule) (rst : Bool) (inputs init F : Nat → BitVec 64)
+    (st : Array (BitVec 64)) (n : Nat) (hBound : ∀ r ∈ m.regs, r.regIdx < n)
+    (hSize : st.size = n) (hEq : ∀ i, st.getD i (init i) = F i) :
+    (stepRegsArr m rst inputs init st).size = n ∧
+    ∀ i, (stepRegsArr m rst inputs init st).getD i (init i) = stepModuleRegs m rst inputs F i := by
+  have hF : (fun i => st.getD i (init i)) = F := funext hEq
+  have hW : (fun i => (evalWireTableArr inputs F m.wires).getD i 0#64) = evalWireTable inputs F m.wires :=
+    funext (evalWireTableArr_getD inputs F m.wires)
+  unfold stepRegsArr
+  simp only [hF, hW]
+  rw [stepModuleRegs_eq_foldl_next]
+  generalize evalWireTable inputs F m.wires = wireEnv
+  suffices ∀ (l : List RegSpec), (∀ r ∈ l, r.regIdx < n) →
+      ∀ (arr : Array (BitVec 64)) (G : Nat → BitVec 64), arr.size = n → (∀ i, arr.getD i (init i) = G i) →
+        (l.foldl (fun (arr : Array (BitVec 64)) r => arr.set! r.regIdx (regNextValue rst inputs wireEnv F r)) arr).size = n ∧
+        ∀ i, (l.foldl (fun (arr : Array (BitVec 64)) r =>
+            arr.set! r.regIdx (regNextValue rst inputs wireEnv F r)) arr).getD i (init i) =
+          (l.foldl (fun (nextSt : Nat → BitVec 64) r =>
+            fun i => if i == r.regIdx then regNextValue rst inputs wireEnv F r else nextSt i) G) i from
+    this m.regs hBound st F hSize hEq
+  intro l
+  induction l with
+  | nil => intro _ arr G hS h; exact ⟨hS, h⟩
+  | cons r rest ih =>
+    intro hB arr G hS hE
+    simp only [List.foldl_cons]
+    apply ih (fun x hx => hB x (List.mem_cons_of_mem _ hx))
+    · simp [hS]
+    · intro j
+      rw [array_getD_set! _ _ _ _ _ (by rw [hS]; exact hB r List.mem_cons_self)]
+      by_cases h : j = r.regIdx
+      · simp [h]
+      · simp [h, hE]
+
+/-- **The compiled trace is the definition.** -/
+@[csimp] theorem runModuleTrace_eq_impl : @runModuleTrace = @runModuleTraceImpl := by
+  funext m initRegs trace i
+  unfold runModuleTraceImpl
+  split
+  · rfl
+  · generalize hn : m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0 = n
+    have hBound : ∀ r ∈ m.regs, r.regIdx < n := fun r hr => by
+      have := mem_le_foldl_max (fun r : RegSpec => r.regIdx + 1) m.regs 0 r hr
+      omega
+    unfold runModuleTrace
+    suffices ∀ (tr : List (Bool × (Nat → BitVec 64))) (arr : Array (BitVec 64)) (F : Nat → BitVec 64),
+        arr.size = n → (∀ i, arr.getD i (initRegs i) = F i) →
+        (tr.foldl (fun st c => stepRegsArr m c.1 c.2 initRegs st) arr).getD i (initRegs i) =
+          tr.foldl (fun st (rst, ins) => stepModuleRegs m rst ins st) F i from
+      (this trace _ initRegs (by simp) (fun j => by
+        by_cases h : j < n
+        · simp [Array.getD_eq_getD_getElem?, h]
+        · simp [Array.getD_eq_getD_getElem?, h])).symm
+    intro tr
+    induction tr with
+    | nil => intro arr F _ h; exact h i
+    | cons c rest ih =>
+      intro arr F hS hE
+      simp only [List.foldl_cons]
+      obtain ⟨hS', hE'⟩ := stepRegsArr_getD m c.1 c.2 initRegs F arr n hBound hS hE
+      exact ih _ _ hS' hE'
 
 /-! ## 4b. Port Widths, Two-Flop Synchronizer Chains & the Emission Gate (`checkRtlModuleW`)
 
