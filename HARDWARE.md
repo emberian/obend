@@ -1,0 +1,60 @@
+# Hardware: the program (2026-11-05)
+
+The hardware tier's ambition is the one the deleted November modules gestured at and did not
+reach: Objective Bend programs lowered, with proofs, to things that run on silicon, and silicon that
+is itself an obend object. The reduction machine (`Hardware/ReductionMachine`: a Leaf book on a
+spatial grid of interaction-net tiles) and the silicon elaborator (`Lower/SiliconElabFabric`: Lean's
+kernel operations as zones of that grid) are the targets. An iCE40 MAC is not a target; it is the
+first Verilated model that happens to be a chip.
+
+What changed since the FPGA review (`review/EXPERT-fpga-silicon-20261103.md`) asked whether this is
+a verified model in Lean or an image on a board: both, because every rung below is now an external
+tool flow someone else maintains, and the only thing nobody has is the proof spine from a
+dependently typed source to the bitstream. That spine is what we build. We write no EDA.
+
+## The chain
+
+Each rung names the external artifact it produces, the theorem over it, and the gate that can go
+red. A rung is not claimed until its gate runs in `verify_*.sh` against the artifact.
+
+| rung | from → to | external artifact | theorem | gate |
+|---|---|---|---|---|
+| 0 | Lean fragment → Core4 | none | `Obend.Lower.Fragment.lower_sound` (have) | tests |
+| 1 | Core4 → Leaf book | none | `Obend.Leaf.Emit.book_sound` (have) | tests |
+| 2 | Leaf book → HVM2 net | HVM2's IR, run by `hvm` (C and CUDA) | `lowerBookToHvm_sound`: the net's normal form denotes `evalBook` | `hvm run` on the emitted net agrees with `evalBook` on a vector set; a planted wrong rule fails |
+| 3 | Leaf book → `RtlModule` with widths | none | `lower_to_rtl_sat_sound` restated over `BitVec w` per port | width-check pass refuses a mismatched slice; emitted SV declares `logic [w-1:0]` |
+| 4 | `RtlModule` → SystemVerilog | Yosys netlist | emitter faithfulness, by `obend verilate` (have) | **EQY** proves the emitted SV against a Yosys-synthesized copy; the old hand-typed `*_lec.smt2` are gone |
+| 5 | SV → eFPGA bitstream | FABulous fabric and bitstream | tile semantics of FABulous's primitive library proved in Lean; `hwBitstream_usable_sound` over that tile | the bitstream's frames are checked against the Lean tile model; DPR is FABulous's frame loader |
+| 6 | bitstream → board | ECP5 (prjtrellis, nextpnr, openFPGALoader), then AWS F2 against `cl_ports.vh` | none new; rung 4 and 5 compose | a signed turn enters, the board answers, the answer matches `runModuleTrace` |
+| 7 | tile → wafer | wafer.space GF180 quarter slot, or Tiny Tapeout IHP/sky130 | the physics in `Hardware/Device/` answers for the tile's corners | measured silicon against the enclosure, with withdrawal conditions |
+
+The reduction machine rides rungs 2 to 6: `automaton_simulates_book` becomes a theorem about the HVM2
+net first (where it runs today, on a GPU) and about the FABulous tile second. The silicon elaborator's
+zones are books lowered through the same chain, which is what makes `by silicon_whnf` honest.
+
+## Standing on
+
+- HVM2 (HigherOrderCO, paper in repo; HVM3 and Bend active 2025-11): the parallel evaluator for
+  interaction combinators. Our lowering targets its IR; we do not write an evaluator.
+- YosysHQ EQY and SBY: equivalence and property checking. LEC means EQY.
+- Lakeroad (ASPLOS 2024) and its equality-saturation successor (2024): technology mapping by program
+  synthesis. `Hardware/Synth` and `TechMap` become checkers of its certificate, not mappers.
+- Kami (ICFP 2017), Kôika (PLDI 2020), "Making Concurrent Hardware Verification Sequential" (2025),
+  SilverOak/Cava: the guarded-rule compilation theorems `Hardware/Rules` and `HDL` should instance.
+- FABulous (FPGA-Research): silicon-proven eFPGA generator with a tapeout flow (FOSDEM 2026).
+- OpenROAD and LibreLane; the agentic-EDA survey (arXiv 2512.23189) for what certificate each
+  agent step must emit to `Judge`.
+- wafer.space (GF180MCU quarter slot, 1000 dies, $2-3K) and Tiny Tapeout (IHP 130nm, sky130 via
+  ChipFoundry, several runs a year).
+
+## What is not done by us
+
+Place and route, synthesis heuristics, timing analysis engines, a process design kit, a NoC IP, an
+evaluator. Each is an untrusted producer whose witness a small checker in `Obend.Judge` validates,
+as the November orientation said and the November modules did not do.
+
+## First three lanes (2026-11-05)
+
+1. Widths and clocks in `RtlExpr` (rung 3).
+2. Leaf book to HVM2 (rung 2).
+3. EQY as the LEC in every `verify_*.sh` (rung 4).

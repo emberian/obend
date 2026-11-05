@@ -50,7 +50,7 @@ Today that measure is met by the vault and the package spine, and by nothing els
   not, emitted to a first-order book and specialized behind a pinned slot (`obend check`, `run`,
   `judge`, `prove`, `verify`, `ground`, `emit`, `specialize`; `lean/tests/run-*.py`).
 
-Everything else in `lean/Obend/` (analysis, hardware, consensus, the silicon elaborator, the
+Everything else in `lean/Obend/` (analysis, consensus, the notebook format; the hardware tier has its own program in `HARDWARE.md`, the
 notebook format) is a study of what the same primitives can carry. Its documents say what is
 proved and what is a worked example, and claim no workflow until one runs.
 
