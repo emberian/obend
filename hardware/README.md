@@ -29,10 +29,49 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
 - `sim/silicon_elab_top.sv`. It was one of three different `silicon_elab_top` designs in the tree.
   The single one is emitted by `Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`
   (`obend hardware emit-silicon-sv`) and checked in under `apps/silicon-kernel-verilator/verilator/`.
-- `sim/*_lec.smt2`. They were stale output of an older miter generator and did not match the `.sv`
-  beside them. The current generator (`obend hardware emit-lec-smt2`) writes `*_belmiter.smt2`: a
-  consistency check between the Lean AST and its BEL mapping, not a logic-equivalence check of the
-  emitted SystemVerilog. `verify_sim.sh` regenerates them.
+- `sim/*_lec.smt2` (the stale ones) and, on 2026-11-05, `sim/*_belmiter.smt2` with the
+  `verify_sim.sh` step that ran them. A BEL miter compared the Lean AST with `synthesizeModuleToBels`
+  of the same AST, every "BEL" a 64-bit word operation; it read no SystemVerilog and no netlist,
+  and no artifact is produced from those BELs. The LEC below replaces it.
+
+## LEC
+
+`lec/lec.sh` is the logic-equivalence step (yosys, eqy and sby from the YosysHQ OSS CAD Suite under
+`/Users/ember/tools/oss-cad-suite`, or `OSS_CAD`). Every `verify_*.sh` whose `.sv` is printed by
+`emitModuleSV` from an `RtlModule` runs it after byte equality and before Verilator.
+
+- **The emitted SV against Lean's model (all of them).** `obend-emit-sv <target> --lec` writes
+  `X_lec.smt2` from the same `RtlModule` (`Obend.Hardware.YosysLec.emitYosysLecSmt2`; checked in,
+  regenerated and byte-compared like the `.sv`). It is Lean's model of the module rendered as
+  `QF_BV` by `emitExprSmt2`, read over the port and register names of Yosys's `write_smt2` of
+  `X.sv` (frontend and `proc` only, no optimization passes), and a miter. z3 `unsat` proves: for every input and every register state, the module
+  Yosys reads from `X.sv` and Lean's `RtlModule` agree on every output (truncated to its port width)
+  and on every register's next value, synchronous resets included. With registers matched by name
+  that is sequential equivalence from any common state. Nothing between the two halves is
+  hand-written. z3 decides it bit-precisely within `LEC_SECS` (60 s) or, failing that, with every
+  multiplication of width W in both halves replaced by one free function `lec_mul_W`; `unsat` then
+  holds for every interpretation of multiplication, so for the real one (the risc core needs this:
+  bit-precise, its register-file writeback through two 64-bit multiplies did not finish in 20
+  minutes; abstracted it is `unsat` within two minutes). A `sat` that appears only under the abstraction is
+  reported as undecided and fails the step. Trusted: Yosys's SystemVerilog frontend and `write_smt2`, z3, and the thirteen-line
+  operator table `emitAluOpSmt2` against `evalAluOp` (not yet a Lean theorem). Read into the model,
+  not proved: narrow input ports are zero-extended into the 64-bit `inputPort`, and with several
+  clock domains each register resets on its own domain's `rst_<d>`.
+- **The emitted SV against its own gate-level netlist (EQY, where it terminates).** `synth` makes
+  `X.gl.v`; EQY proves gold `X.sv` equivalent to gate `X.gl.v`, matching ports and flip-flops.
+  This says synthesis preserved what Yosys read; it says nothing about Lean by itself, but composed
+  with the LEC it puts the gate netlist, not only the SV, equal to the `RtlModule`. It runs for
+  `cleanroom_tcad_stack`, `lc_drives_userspace_stator` and `cnc_5axis_userspace_mill`. It does not
+  run for modules with a 64-bit variable multiply (`obend_retimed_mac2`, risc, zk, fidget, quantum):
+  SAT-based equivalence of a word-level multiply against a gate-level multiplier does not terminate
+  (mac2's `a * b` partition ran for five minutes without an answer).
+- **Gates.** Each run flips bit 0 of the first output in a copy of `X.sv` (never the committed file);
+  the LEC must answer `sat` and prints the failing obligation with both values, and EQY must fail.
+
+Not covered: `foc-hil` and `sdr-ft8` (hand-written `.sv`, no `RtlModule`; their `*_props.smt2` are
+property sheets of hand-typed formulas), `silicon-kernel-verilator` (its `.sv` is printed by a string
+emitter, not from an `RtlModule`), and `sovereign-drex` (`Obend.Apps.SovereignDrex` does not build,
+so `obend-emit-sv drex` refuses).
 
 `rust-ffi/` is unrelated to the FPGA path (CBOR codec, FEMM/octree engines) and is owned by the
 physics lane.

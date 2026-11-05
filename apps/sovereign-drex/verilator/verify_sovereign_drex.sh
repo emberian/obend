@@ -48,8 +48,8 @@ echo "[2/3] Running Verilated 4-Validator Sovereign DReX + K-CARRY + WAL Simulat
 
 test -s "sovereign_drex_trace.vcd"
 
-echo "[3/3] Running Z3 property sheet on sovereign_drex_lec.smt2..."
-LEC_OUT="$("$Z3_BIN" -smt2 sovereign_drex_lec.smt2)"
+echo "[3/3] Running Z3 property sheet on sovereign_drex_props.smt2..."
+LEC_OUT="$("$Z3_BIN" -smt2 sovereign_drex_props.smt2)"
 echo "Z3 property sheet result: $LEC_OUT"
 if [[ "$LEC_OUT" != "unsat" ]]; then
   echo "ERROR: Expected unsat from Z3 property sheet, got: $LEC_OUT" >&2

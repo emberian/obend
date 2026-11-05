@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Flagship App #8 (`apps/quantum-photonic-matter/verilator/verify_quantum_photonic.sh`):
-# End-to-end obend CLI package check/run + Verilator cycle-accurate simulation + Z3 `QF_BV` LEC.
+# byte equality with the Lean emitter, the LEC of the emitted .sv against Lean's model of its RtlModule
+# (`hardware/lec/lec.sh`), obend CLI package check/run, Verilator simulation, and the hand-written
+# z3 property sheet `quantum_photonic_props.smt2` (properties of its own formulas, not an LEC).
 set -euo pipefail
 
 # --- byte equality with the Lean emitter (2026-11-04): the committed .sv must be exactly what
@@ -22,6 +24,10 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$SCRIPT_DIR"
+
+echo "=== LEC: the emitted .sv against Lean's model of quantumPhotonicCoprocTopRtlModule ==="
+"$REPO_ROOT/hardware/lec/lec.sh" quantum quantum_photonic_coproc_top.sv quantum_photonic_coproc_top_lec.smt2 \
+  --no-eqy "a 64-bit variable multiply; gate-level SAT equivalence of it does not terminate"
 
 OBEND_BIN="${OBEND_BIN:-$REPO_ROOT/lean/.lake/build/bin/obend}"
 VERILATOR="${VERILATOR:-/opt/homebrew/bin/verilator}"
@@ -56,8 +62,8 @@ if [[ ! -s "quantum_photonic_trace.vcd" ]]; then
 fi
 echo "Verified VCD trace: quantum_photonic_trace.vcd ($(wc -c < quantum_photonic_trace.vcd) bytes)"
 
-echo "=== [3/3] Proving 64-bit QF_BV RTL/Spec + Crosstalk + 3-Stage Braiding Equivalence in Z3 ==="
-Z3_OUT="$("$Z3" quantum_photonic_lec.smt2)"
+echo "=== [3/3] hand-written z3 property sheet (crosstalk, braiding; not an LEC) ==="
+Z3_OUT="$("$Z3" quantum_photonic_props.smt2)"
 echo "Z3 property sheet result: $Z3_OUT"
 if [[ "$Z3_OUT" != "unsat" ]]; then
   echo "ERROR: Z3 property sheet failed (expected unsat, got '$Z3_OUT')" >&2

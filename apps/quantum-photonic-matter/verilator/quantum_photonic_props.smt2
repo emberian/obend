@@ -1,8 +1,8 @@
 ; HAND-WRITTEN property check (relabelled 2026-11-04). This file was typed by hand: it is not derived
 ; from the .sv beside it nor from the Lean RtlModule, so z3 `unsat` establishes properties of the
 ; formulas written here, not equivalence of the RTL with anything. It is kept as a worked property
-; sheet; a logic-equivalence check of the emitted .sv needs Yosys write_smt2 against the Lean emitter
-; (not done yet). See review/EXPERT-fpga-silicon-20261103.md §3.2.
+; sheet (renamed from *_lec.smt2 on 2026-11-05). The logic-equivalence check of the emitted .sv is
+; hardware/lec/lec.sh with the generated quantum_photonic_coproc_top_lec.smt2. See review/EXPERT-fpga-silicon-20261103.md §3.2.
 ; Flagship App #8 (`apps/quantum-photonic-matter/verilator/quantum_photonic_lec.smt2`):
 ; Z3 `QF_BV` 64-bit Logic Equivalence Check (LEC) & Algebraic Invariant Miter for
 ; `quantum_photonic_coproc_top.sv` (`emitModuleSV quantumPhotonicCoprocTopRtlModule`):

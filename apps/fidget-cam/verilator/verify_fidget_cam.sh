@@ -3,14 +3,13 @@
 #
 # 1. the committed .sv is byte-identical to what `obend-emit-sv fidget` writes from the Lean
 #    definition (`fidgetImpellerVoxelCamRtlModule`); hand edits fail here;
-# 2. `obend check` / `obend run` on the four-module package;
-# 3. the posted program is written by Lean (`obend-emit-sv fidget-ngc`, `impeller5AxisNgc`);
-# 4. Verilator builds the emitted RTL and the harness scans the part, writes the STL, and re-checks
+# 2. LEC: Yosys's reading of the .sv against Lean's model of the same RtlModule
+#    (`hardware/lec/lec.sh`, `fidget_impeller_voxel_cam_lec.smt2` from `obend-emit-sv fidget --lec`);
+#    a planted one-bit mutation must be caught with a counterexample;
+# 3. `obend check` / `obend run` on the four-module package;
+# 4. the posted program is written by Lean (`obend-emit-sv fidget-ngc`, `impeller5AxisNgc`);
+# 5. Verilator builds the emitted RTL and the harness scans the part, writes the STL, and re-checks
 #    the program's waypoints on the hardware (`fidget_voxel_tb.cpp`).
-# There is no SMT step: the hand-typed fidget_cam_lec.smt2 (constants compared with constants) was
-# retired on 2026-11-04, and the generated BEL-mapping miter (`obend-emit-sv fidget-belmiter`) is not
-# decided by z3 in bounded time (twenty 64-bit multiplies into carry chains; >15 min). The RTL/BEL
-# consistency of this module is `checkBelNetlistValid` in the `example` at Apps/FidgetCam.lean:630.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +25,7 @@ if [[ ! -x "${EMIT_SV}" ]]; then
   exit 1
 fi
 
-echo "=== [1/4] byte equality with obend-emit-sv ==="
+echo "=== [1/5] byte equality with obend-emit-sv ==="
 for pair in "fidget:fidget_impeller_voxel_cam.sv"; do
   target="${pair%%:*}"; file="${pair#*:}"
   "${EMIT_SV}" "${target}" --out "${TMP}/obend_emit_${file}" >/dev/null
@@ -38,24 +37,28 @@ for pair in "fidget:fidget_impeller_voxel_cam.sv"; do
   echo "  ${file}: identical"
 done
 
+echo "=== [2/5] LEC: the emitted .sv against Lean's model of fidgetImpellerVoxelCamRtlModule ==="
+"${REPO_ROOT}/hardware/lec/lec.sh" fidget "${SCRIPT_DIR}/fidget_impeller_voxel_cam.sv" \
+  "${SCRIPT_DIR}/fidget_impeller_voxel_cam_lec.smt2" --no-eqy "a 64-bit variable multiply; gate-level SAT equivalence of it does not terminate"
+
 mkdir -p "${APP_DIR}/build"
 
 if [[ -x "${OBEND_BIN}" ]]; then
-  echo "=== [2/4] obend check / run on apps/fidget-cam/package.json ==="
+  echo "=== [3/5] obend check / run on apps/fidget-cam/package.json ==="
   (
     cd "${REPO_ROOT}"
     "${OBEND_BIN}" check --package apps/fidget-cam/package.json
     "${OBEND_BIN}" run --package apps/fidget-cam/package.json
   )
 else
-  echo "=== [2/4] skipped: ${OBEND_BIN} not built ==="
+  echo "=== [3/5] skipped: ${OBEND_BIN} not built ==="
 fi
 
-echo "=== [3/4] posted program from Lean (impeller5AxisNgc) ==="
+echo "=== [4/5] posted program from Lean (impeller5AxisNgc) ==="
 "${EMIT_SV}" fidget-ngc --out "${APP_DIR}/build/impeller_5axis.ngc"
 test -s "${APP_DIR}/build/impeller_5axis.ngc"
 
-echo "=== [4/4] Verilator: scan, STL, waypoint re-check ==="
+echo "=== [5/5] Verilator: scan, STL, waypoint re-check ==="
 "${VERILATOR_BIN}" --cc --exe --build --trace -Wall -Wno-DECLFILENAME -Wno-UNUSED \
   -CFLAGS "-std=c++17 -O2" -j 2 \
   -Mdir "${SCRIPT_DIR}/obj_dir" \
