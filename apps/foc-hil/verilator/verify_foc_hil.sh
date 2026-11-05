@@ -10,8 +10,8 @@ cd "$SCRIPT_DIR"
 VERILATOR_BIN="${VERILATOR_BIN:-/opt/homebrew/bin/verilator}"
 Z3_BIN="${Z3_BIN:-/opt/homebrew/bin/z3}"
 
-echo "=== [1/3] Running Z3 QF_BV hand-written property sheet (not an LEC) (foc_drive_lec.smt2) ==="
-Z3_OUT="$("$Z3_BIN" -smt2 foc_drive_lec.smt2)"
+echo "=== [1/3] Running Z3 QF_BV hand-written property sheet (not an LEC) (foc_drive_props.smt2) ==="
+Z3_OUT="$("$Z3_BIN" -smt2 foc_drive_props.smt2)"
 echo "Z3 output: $Z3_OUT"
 if [[ "$Z3_OUT" != "unsat" ]]; then
     echo "ERROR: Expected 'unsat' from Z3 property sheet check, got '$Z3_OUT'" >&2

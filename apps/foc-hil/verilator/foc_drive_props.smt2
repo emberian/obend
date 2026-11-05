@@ -1,8 +1,8 @@
 ; HAND-WRITTEN property check (relabelled 2026-11-04). This file was typed by hand: it is not derived
 ; from the .sv beside it nor from the Lean RtlModule, so z3 `unsat` establishes properties of the
 ; formulas written here, not equivalence of the RTL with anything. It is kept as a worked property
-; sheet; a logic-equivalence check of the emitted .sv needs Yosys write_smt2 against the Lean emitter
-; (not done yet). See review/EXPERT-fpga-silicon-20261103.md §3.2.
+; sheet (renamed from *_lec.smt2 on 2026-11-05). The .sv beside it is hand-written, so there is no
+; RtlModule to check it against and no LEC. See review/EXPERT-fpga-silicon-20261103.md §3.2.
 ; Z3 QF_BV Logic Equivalence & Safety Barrier Check (LEC) for Flagship App #2
 ; Closed-Loop 20 kHz FOC Motor Drive & 6-Level SiC FCML Inverter Controller
 ; Verifies:

@@ -2,8 +2,11 @@
 # `obend-emit-sv` — regenerate every checked-in SystemVerilog file from its Lean definition
 
     obend-emit-sv <target> [--out FILE]      targets: risc golden-risc zk golden-zk fidget fidget-ngc
-                                                      fidget-belmiter drex quantum silicon-elab mac2
+                                                      drex quantum silicon-elab mac2
                                                       ice40-mac8 tcad stator mill golden-silicon-kernel
+    obend-emit-sv <target> --lec [--out FILE]  the Lean half of the LEC of an `RtlModule` target
+                                             (`Obend.Hardware.YosysLec.emitYosysLecSmt2`), appended to
+                                             Yosys `write_smt2` of the emitted .sv; `unsat` = equivalent
     obend-emit-sv check-risc | check-zk      the native checks the Apps modules name (gates, corners,
                                              the firmware state); exit 3 with the failing check
     obend-emit-sv list
@@ -17,6 +20,7 @@ import Obend.Hardware.HDL
 import Obend.Hardware.Synth
 import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
+import Obend.Hardware.YosysLec
 import Obend.Apps.ObendRisc
 import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
@@ -37,10 +41,10 @@ def emitWithHeader (qualified : String) (m : RtlModule) : Except String String :
          emitModuleSV m)
 
 /-- The compositions `obend verilate` knows, compiled through the same path (`compileCompositionToVerifiedRtl`). -/
-def builtIn (choice : String) : Except String String :=
+def builtInModule (choice : String) : Except String (String × RtlModule) :=
   let (modName, comp) := Obend.Hardware.VerilateRunner.selectBuiltInComposition choice
   match Obend.Hardware.VerilateRunner.compileCompositionToVerifiedRtl modName comp with
-  | some (_, m) => emitWithHeader s!"Obend.Hardware.VerilateRunner.selectBuiltInComposition \"{choice}\"" m
+  | some (_, m) => .ok (s!"Obend.Hardware.VerilateRunner.selectBuiltInComposition \"{choice}\"", m)
   | none => .error s!"built-in composition {choice} did not compile to an RtlModule"
 
 /-- Expected values of the silicon-kernel co-simulation, from the Lean model, as `key=value` lines the
@@ -100,7 +104,6 @@ def targets : List (String × String) :=
   , ("golden-zk", "apps/zk-ntt/verilator/zk_ntt_golden.txt")
   , ("fidget", "apps/fidget-cam/verilator/fidget_impeller_voxel_cam.sv")
   , ("fidget-ngc", "apps/fidget-cam/build/impeller_5axis.ngc")
-  , ("fidget-belmiter", "apps/fidget-cam/build/fidget_cam_belmiter.smt2")
   , ("drex", "apps/sovereign-drex/verilator/sovereign_drex_batch_top.sv")
   , ("quantum", "apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv")
   , ("silicon-elab", "apps/silicon-kernel-verilator/verilator/silicon_elab_top.sv")
@@ -111,44 +114,65 @@ def targets : List (String × String) :=
   , ("stator", "hardware/sim/lc_drives_userspace_stator.sv")
   , ("mill", "hardware/sim/cnc_5axis_userspace_mill.sv") ]
 
+/-- The targets that are one `RtlModule` printed by `emitModuleSV`: the qualified name of the Lean
+definition and the module. `render` prints these with `emitWithHeader`; `--lec` prints their LEC half. -/
+def moduleTarget : String → Option (Except String (String × RtlModule))
+  | "risc"    => some (.ok ("Obend.Apps.ObendRisc.obendRiscCpuRtlModule", Obend.Apps.ObendRisc.obendRiscCpuRtlModule))
+  | "zk"      => some (.ok ("Obend.Apps.ZkNtt.zkNttCoprocRtlModule", Obend.Apps.ZkNtt.zkNttCoprocRtlModule))
+  | "fidget"  => some (.ok ("Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule", Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule))
+  | "quantum" => some (.ok ("Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule", Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule))
+  | "mac2"    => some (.ok ("Obend.Hardware.Synth.goldenRetimedMacRtl", Obend.Hardware.Synth.goldenRetimedMacRtl))
+  | "ice40-mac8" => some (.ok ("EmitSv.iceStickMac8 (lean/tools/emitsv/EmitSv.lean)", iceStickMac8))
+  | "tcad"    => some (builtInModule "cleanroom_tcad_stack")
+  | "stator"  => some (builtInModule "lc_drives_userspace_stator")
+  | "mill"    => some (builtInModule "cnc_5axis_userspace_mill")
+  | _ => none
+
+/-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
+def moduleTargetNames : List String :=
+  ["risc", "zk", "fidget", "quantum", "mac2", "ice40-mac8", "tcad", "stator", "mill"]
+
+/-- `--lec`: the Lean half of the LEC of a module target, behind the same emission gate as its `.sv`. -/
+def renderLec (target : String) : Except String String :=
+  match moduleTarget target with
+  | none => .error s!"--lec: {target} is not an RtlModule target (`obend-emit-sv list` marks those)"
+  | some (.error e) => .error e
+  | some (.ok (qualified, m)) =>
+    if !checkRtlModuleW m then
+      .error s!"{qualified} fails checkRtlModuleW (DAG/CDC/width/two-flop); not emitted"
+    else
+      .ok (s!"; Generated by obend-emit-sv {target} --lec from {qualified}\n" ++
+           Obend.Hardware.YosysLec.emitYosysLecSmt2 m)
+
 def render : String → Except String String
-  | "risc"    => emitWithHeader "Obend.Apps.ObendRisc.obendRiscCpuRtlModule" Obend.Apps.ObendRisc.obendRiscCpuRtlModule
   -- 21 cycles of firmware/test_prog.hex on the Lean model; risc_soc_tb.cpp compares every register and dmem word.
   | "golden-risc" => .ok (Obend.Apps.ObendRisc.riscFirmwareGolden 21)
-  | "zk"      => emitWithHeader "Obend.Apps.ZkNtt.zkNttCoprocRtlModule" Obend.Apps.ZkNtt.zkNttCoprocRtlModule
   -- The 8-round sumcheck with the transcript, run at the Nat level; zk_ntt_tb.cpp compares the RTL per round.
   | "golden-zk" => .ok Obend.Apps.ZkNtt.zkSumcheckGolden
-  | "fidget"  => emitWithHeader "Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule" Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule
   -- The posted program is a Lean string (`postNgc` over the certified passes); the Verilator
   -- testbench reads this file and re-checks its waypoints against the RTL, it does not write one.
   | "fidget-ngc" => .ok Obend.Apps.FidgetCam.impeller5AxisNgc
-  -- BEL-mapping consistency miter of the fidget module (not an LEC of the emitted .sv; see hardware/README.md).
-  -- Not checked in and not run by verify_fidget_cam.sh: the tape has twenty 64-bit multiplies feeding
-  -- carry-chain adders and z3 did not return on it in 15 minutes (2026-11-04, Mac); the AST-vs-BEL
-  -- consistency of this module is `checkBelNetlistValid` in the `example` at Apps/FidgetCam.lean:630.
-  | "fidget-belmiter" =>
-    .ok (Obend.Hardware.VerilateRunner.emitModuleLecSmt2 Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule)
   | "drex"    => .error "drex: Obend.Apps.SovereignDrex does not build at HEAD; target disabled until the Apps gate lands"
-  | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
   | "golden-silicon-kernel" => .ok goldenSiliconKernel
-  | "mac2"    => emitWithHeader "Obend.Hardware.Synth.goldenRetimedMacRtl" Obend.Hardware.Synth.goldenRetimedMacRtl
-  | "ice40-mac8" => emitWithHeader "EmitSv.iceStickMac8 (lean/tools/emitsv/EmitSv.lean)" iceStickMac8
-  | "tcad"    => builtIn "cleanroom_tcad_stack"
-  | "stator"  => builtIn "lc_drives_userspace_stator"
-  | "mill"    => builtIn "cnc_5axis_userspace_mill"
   | "check-risc" => checkRisc
   | "check-zk" => checkZk
-  | other     => .error s!"unknown target {other}; `obend-emit-sv list`"
+  | other     =>
+    match moduleTarget other with
+    | some (.ok (qualified, m)) => emitWithHeader qualified m
+    | some (.error e) => .error e
+    | none => .error s!"unknown target {other}; `obend-emit-sv list`"
 
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["list"] =>
-    for (t, path) in targets do IO.println s!"{t}\t{path}"
+    for (t, path) in targets do
+      IO.println s!"{t}\t{path}{if moduleTargetNames.contains t then "\t(RtlModule; --lec)" else ""}"
     return 0
   | target :: rest =>
-    let outPath? := match rest with | "--out" :: p :: _ => some p | _ => none
-    match render target with
+    let outPath? := match rest.dropWhile (· != "--out") with | "--out" :: p :: _ => some p | _ => none
+    let text? := if rest.contains "--lec" then renderLec target else render target
+    match text? with
     | .error e => IO.eprintln s!"refused: {e}"; return 3
     | .ok text =>
       match outPath? with
