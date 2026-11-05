@@ -38,37 +38,27 @@ structure LayoutEnv where
   arity : Nat
   deriving DecidableEq, Repr
 
-/-- Structural byte-index comparison helper for `ByteArray` (`0 Classical.choice`). -/
-def byteArrayEqAux (a b : ByteArray) : Nat → Bool
-  | 0 => true
-  | k + 1 =>
-    let ba := if h : k < a.size then a[k]'h else 0
-    let bb := if h : k < b.size then b[k]'h else 0
-    (ba == bb) && byteArrayEqAux a b k
+/-- The UTF-8 bytes of a string: the `String.toByteArray` projection, read as a list. Not
+`String.toUTF8`, whose body `Init` does not expose: inside a `module` the kernel cannot unfold it,
+so the earlier `toUTF8` walk left `labelToNat` and `strEq` stuck, and every `#import_obend`
+`<def>_lowerTerm_eq` whose term carries a label failed its kernel `Eq.refl` (2026-11-05). Not
+`String.toList` either, which depends on `Classical.choice`. -/
+def utf8Bytes (s : String) : List UInt8 :=
+  s.toByteArray.data.toList
 
-/-- Structural byte-level equality on `String` (avoids `Array.toList` / `Classical.choice`). -/
+/-- Byte-level equality on `String` (kernel-reducible and choice-free, see `utf8Bytes`). -/
 def strEq (a b : String) : Bool :=
-  let ba := a.toUTF8
-  let bb := b.toUTF8
-  (ba.size == bb.size) && byteArrayEqAux ba bb ba.size
+  utf8Bytes a == utf8Bytes b
 
 /-- Structural lookup by `strEq`. -/
 def lookupByStr {α : Type} (k : String) : List (String × α) → Option α
   | [] => none
   | (m, v) :: rest => if strEq k m then some v else lookupByStr k rest
 
-/-- Structural byte-index accumulator for `labelToNat` (`0 Classical.choice`). -/
-def labelToNatAux (b : ByteArray) : Nat → Nat → Nat
-  | 0, acc => acc
-  | k + 1, acc =>
-    let idx := b.size - (k + 1)
-    let byte := if h : idx < b.size then (b[idx]'h).toNat else 0
-    labelToNatAux b k (acc * 257 + byte + 1)
-
-/-- Deterministic numeric encoding of surface labels for `.label`, `.inject`, and `.case`. -/
+/-- Deterministic numeric encoding of surface labels for `.label`, `.inject`, and `.case`: the
+UTF-8 bytes in order, `acc * 257 + byte + 1` (the same number the earlier `ByteArray` walk gave). -/
 def labelToNat (s : String) : Nat :=
-  let b := s.toUTF8
-  labelToNatAux b b.size 0
+  (utf8Bytes s).foldl (fun acc b => acc * 257 + b.toNat + 1) 0
 
 /-- Structural insertion helper for `canonicalizeFields` (avoids `Array.qsort` / `Classical.choice`). -/
 def insertFieldByLayout (env : LayoutEnv) (x : String × LExpr) : List (String × LExpr) → List (String × LExpr)

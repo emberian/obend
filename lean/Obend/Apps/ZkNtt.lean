@@ -277,7 +277,7 @@ def goldilocksMulSpec (a b : Nat) : Nat := glN (glN a * glN b)
 state `0x4F42454E44`. -/
 def transcriptAlpha : Nat := 4294967296
 def transcriptConst : Nat := 23063
-def transcriptIv : Nat := 340688748100
+def transcriptIv : Nat := 0x4F42454E44
 
 /-- `transcriptAbsorb` of `SumcheckRoundPoly.obend`: the next transcript state, and the round challenge,
 is `(((t + g0) * 2^32 + g1) * 2^32 + g2 + c)^7` in `F_p`. `x^7` is a permutation of `F_p`

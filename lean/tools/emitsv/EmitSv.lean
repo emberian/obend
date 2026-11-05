@@ -21,8 +21,7 @@ import Obend.Hardware.Cli
 import Obend.Apps.ObendRisc
 import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
--- `Obend.Apps.SovereignDrex` is red at HEAD (`checkContractCert` unresolved, line 505) until the Apps gate
--- lands; the `drex` target returns to this list then and `verify_sovereign_drex.sh` fails honestly meanwhile.
+import Obend.Apps.SovereignDrex
 import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SiliconKernelVerilator
 
@@ -132,7 +131,7 @@ def render : String → Except String String
   -- consistency of this module is `checkBelNetlistValid` in the `example` at Apps/FidgetCam.lean:630.
   | "fidget-belmiter" =>
     .ok (Obend.Hardware.VerilateRunner.emitModuleLecSmt2 Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule)
-  | "drex"    => .error "drex: Obend.Apps.SovereignDrex does not build at HEAD; target disabled until the Apps gate lands"
+  | "drex"    => emitWithHeader "Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule" Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule
   | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
   | "golden-silicon-kernel" => .ok goldenSiliconKernel

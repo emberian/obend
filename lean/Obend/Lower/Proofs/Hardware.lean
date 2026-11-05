@@ -126,6 +126,35 @@ theorem lower_to_rtl_sat_sound
       some (evalRtlExpr inputs wires regs rtl) :=
   compileTermSat_sound inputs wires regs slots slotBodies (lowerT e) selfDepth varEnv rtl h
 
+/-- **`lower_to_rtl_sat_sound` at a `w`-bit port (rung 3 of HARDWARE.md).** Under declared widths
+`env` that the input, wire and register values fit, if `lowerT e` compiles via `compileTermSat` to
+`rtl` and `inferWidthE env rtl` bounds it by `w' ≤ w ≤ 64` (what `checkWidths` asks of a `w`-bit
+signal), then the source-level hardware value of `lowerT e` is exactly a `BitVec w`: the value the
+`w`-bit port carries, `(evalRtlExpr … rtl).setWidth w`, zero-extended back to the carrier. -/
+theorem lower_to_rtl_sat_sound_width
+    (env : WidthEnv) (inputs wires regs : Nat → BitVec 64)
+    (hIn : ∀ i, (inputs i).toNat < 2 ^ env.input i)
+    (hW : ∀ i, (wires i).toNat < 2 ^ env.wire i)
+    (hR : ∀ i, (regs i).toNat < 2 ^ env.reg i)
+    (slots : List String) (slotBodies : List RtlExpr) (e : LExpr)
+    (selfDepth : Nat) (varEnv : List RtlExpr) (rtl : RtlExpr)
+    (h : compileTermSat slots slotBodies selfDepth varEnv (lowerT e) = some rtl)
+    (w w' : Nat) (hw : w ≤ 64) (hInfer : inferWidthE env rtl = .ok w') (hle : w' ≤ w) :
+    ∃ v : BitVec w,
+      evalTermHwSat slots slotBodies inputs wires regs selfDepth
+        (varEnv.map (evalRtlExpr inputs wires regs)) (lowerT e) = some (v.setWidth 64) ∧
+      v = (evalRtlExpr inputs wires regs rtl).setWidth w := by
+  refine ⟨(evalRtlExpr inputs wires regs rtl).setWidth w, ?_, rfl⟩
+  rw [lower_to_rtl_sat_sound inputs wires regs slots slotBodies e selfDepth varEnv rtl h]
+  have hlt : (evalRtlExpr inputs wires regs rtl).toNat < 2 ^ w :=
+    Nat.lt_of_lt_of_le
+      (evalRtlExpr_lt_of_inferWidthE env inputs wires regs hIn hW hR rtl w' hInfer)
+      (Nat.pow_le_pow_right (by decide) hle)
+  congr 1
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_setWidth, BitVec.toNat_setWidth, Nat.mod_eq_of_lt hlt,
+    Nat.mod_eq_of_lt (Nat.lt_of_lt_of_le hlt (Nat.pow_le_pow_right (by decide) hw))]
+
 /-- **End-to-End Agreement of `SSteps`, `Core4`, and `compileTermSat` (`lower_sat_rtl_agrees_with_source`)**:
 for any closed `e : LExpr` and `n : Nat` with `SSteps e (.lit n)` and `compileTermSat [] [] 0 [] (lowerT e) = some rtl`,
 if `evalTermHwSat` on `lowerT e` agrees with `BitVec.ofNat 64 n`, then:

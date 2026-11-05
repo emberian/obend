@@ -63,6 +63,9 @@ This document is the authoritative, unscoped engineering specification for **Wav
   and the port truncation is the identity (`evalModuleOutputsW_eq_of_checkWidths`). The emitter declares each signal
   `logic [w-1:0]`, reads narrow signals zero-extended and stores through `w'(...)`, so all arithmetic is still 64-bit
   in the text; a module whose signals are all 64 bits emits the bytes it did before.
+  `Obend.Lower.lower_to_rtl_sat_sound_width` restates the apex at a `w`-bit port: when the compiled
+  expression's inferred width fits `w`, the source-level hardware value of `lowerT e` is exactly a `BitVec w`, the
+  value the port carries, zero-extended.
 - Clock domains (§3.6): `stepModuleDomain m d` is one edge of `clk_<d>` (`d`'s registers latch, the rest hold,
   `stepModuleDomain_other_holds`), equal to `stepModuleRegs` for a one-domain module; `stepDomain_nonSync_reads_own_domain`
   says a non-synchronizer register passing `checkRegCdc` samples only its own domain's registers at its clock's edge
@@ -71,10 +74,13 @@ This document is the authoritative, unscoped engineering specification for **Wav
 - The one `silicon_elab_top.sv` is `Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`, written by
   `obend hardware emit-silicon-sv` to `apps/silicon-kernel-verilator/verilator/`. The two other copies (a hand-written
   Verilog-2001 file there and a string literal in `VerilateRunner`) were deleted; `hardware/README.md` says why.
-- `lean/tools/emitsv` (`obend-emit-sv`) regenerates every checked-in emitted `.sv` (`risc`, `fidget`, `drex`, `quantum`,
-  the four `hardware/sim/` cores, `ice40-mac8`) and the Lean golden for the silicon-kernel harness; every verify script
-  compares bytes and fails on a hand edit. Files the tool does not know are hand-written and say so in their header
-  (`foc_drive_top.sv`, `sdr_ft8_top.sv`, `zk_ntt_coproc.sv`).
+- `lean/tools/emitsv` (`obend-emit-sv`) regenerates every checked-in emitted `.sv` (`risc`, `zk`, `fidget`, `drex`,
+  `quantum`, the `hardware/sim/` cores and `obend_width_probe`, `ice40-mac8`) and the Lean goldens (`risc_golden.txt`,
+  `zk_ntt_golden.txt`, the silicon-kernel harness); every verify script compares bytes and fails on a hand edit. Files
+  the tool does not know are hand-written and say so in their header (`foc_drive_top.sv`, `sdr_ft8_top.sv`).
+  (2026-11-05: `obend_risc_cpu.sv`, `zk_ntt_coproc.sv` and `sovereign_drex_batch_top.sv` regenerated once the apps built
+  again; the zk transcript initial state in Lean was `340688748100`, not the documented `0x4F42454E44` = "OBEND",
+  which the C++ reference in `goldilocks_ref.hpp` uses, and is now the latter.)
 - The "hard-IP macro" strings in `HDL.lean` (`emitMacro*SV`) are not instantiated by any emitted design and are not
   tied to `Silicon.lean`'s models by any theorem; treat them as sketches.
 
