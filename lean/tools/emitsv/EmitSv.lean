@@ -129,6 +129,7 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "tcad"    => some (builtInModule "cleanroom_tcad_stack")
   | "stator"  => some (builtInModule "lc_drives_userspace_stator")
   | "mill"    => some (builtInModule "cnc_5axis_userspace_mill")
+  | "width-probe" => some (.ok ("Obend.Hardware.VerilateRunner.goldenWidthProbeRtl", Obend.Hardware.VerilateRunner.goldenWidthProbeRtl))
   | _ => none
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
@@ -159,12 +160,6 @@ def render : String → Except String String
   | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
   | "golden-silicon-kernel" => .ok goldenSiliconKernel
-  | "mac2"    => emitWithHeader "Obend.Hardware.Synth.goldenRetimedMacRtl" Obend.Hardware.Synth.goldenRetimedMacRtl
-  | "ice40-mac8" => emitWithHeader "EmitSv.iceStickMac8 (lean/tools/emitsv/EmitSv.lean)" iceStickMac8
-  | "tcad"    => builtIn "cleanroom_tcad_stack"
-  | "stator"  => builtIn "lc_drives_userspace_stator"
-  | "mill"    => builtIn "cnc_5axis_userspace_mill"
-  | "width-probe" => emitWithHeader "Obend.Hardware.VerilateRunner.goldenWidthProbeRtl" Obend.Hardware.VerilateRunner.goldenWidthProbeRtl
   | "check-risc" => checkRisc
   | "check-zk" => checkZk
   | other     =>

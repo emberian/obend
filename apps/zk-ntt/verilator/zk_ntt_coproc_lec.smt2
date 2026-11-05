@@ -248,7 +248,7 @@
 (define-fun |spec_next_acc_g2| () (_ BitVec 64) (ite (|zk_ntt_coproc_n rst| s) #x0000000000000000 spec_w_176))
 (define-fun |lec_next_acc_g2| () Bool (= |rtl_next_acc_g2| |spec_next_acc_g2|))
 (define-fun |rtl_next_transcript| () (_ BitVec 64) (|zk_ntt_coproc_n transcript| s1))
-(define-fun |spec_next_transcript| () (_ BitVec 64) (ite (|zk_ntt_coproc_n rst| s) #x0000004f52a1be44 spec_w_177))
+(define-fun |spec_next_transcript| () (_ BitVec 64) (ite (|zk_ntt_coproc_n rst| s) #x0000004f42454e44 spec_w_177))
 (define-fun |lec_next_transcript| () Bool (= |rtl_next_transcript| |spec_next_transcript|))
 (define-fun |rtl_next_challenge| () (_ BitVec 64) (|zk_ntt_coproc_n challenge| s1))
 (define-fun |spec_next_challenge| () (_ BitVec 64) (ite (|zk_ntt_coproc_n rst| s) #x0000000000000000 spec_w_178))
