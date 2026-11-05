@@ -27,6 +27,7 @@ public import Obend.Hardware.Device.Sky130Diode
 public import Obend.Hardware.Photonics
 public import Obend.Hardware.PCB
 public import Obend.Hardware.ReductionMachine
+public import Obend.Hardware.Hvm
 public import Obend.Hardware.DSP
 public import Obend.Hardware.AgenticEDA
 public import Obend.Hardware.Magnetics

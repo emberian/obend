@@ -11,6 +11,9 @@ What is here, and what is not.
   Lattice iCE40 HX1K on an iCEstick with the open toolchain (yosys, nextpnr-ice40, icestorm).
   `make` there produces a `.bin` bitstream; `make prog` loads it over `iceprog`.
 
+- `hvm/` — rung 2: Leaf books lowered to HVM2 interaction nets (`Obend.Hardware.Hvm`), run by HVM2
+  itself. See below.
+
 Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
 
 - `aws-f2/` (`cl_obend_shell_bridge.sv`, `synth_cl_obend.tcl`). The file declared a PCIS
@@ -28,3 +31,32 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
 
 `rust-ffi/` is unrelated to the FPGA path (CBOR codec, FEMM/octree engines) and is owned by the
 physics lane.
+
+## `hvm/`: a Leaf book on HVM2 (rung 2)
+
+HVM2 (HigherOrderCO, crate `hvm` 2.0.22, paper `paper/HVM2.typst` in its repository) is the target,
+not HVM3: HVM3 is a work-in-progress Haskell runtime for the Interaction Calculus (a term language)
+with no paper, no net IR and no GPU backend, while HVM2 runs a documented net language on Rust, C and
+CUDA runtimes. `Obend.Hardware.Hvm` holds a model of that language (nodes, `operate`, the ten
+interaction rules as a relation `Step`), the lowering `lowerBookToHvm` and the emitter `emitHvm`.
+
+What is proved, `lowerBookToHvm_sound`: for a book the lowering accepts, a member it lowered and an
+argument on which the lowered expression's exact evaluation stays below `2^24`, the model reduces
+`@main = r & @m ~ (#x r)` to the normal form whose root is the number `w` and whose bag is empty, and
+`evalBookAt B m (.nat x)` halts under Core4's reference reduction with the observation `w` decodes to
+(a natural, or a Boolean as `0`/`1`). The model's departures from HVM2 are named in the module header:
+LINK is the paper's global substitution, the theorem exhibits one schedule (HVM2's strong confluence
+carries it to the others; not proved), U24 only, the C runtime's answer for a zero divisor.
+
+The fragment: first-order methods over naturals and Booleans: literals, the argument, `let`
+(`app (lam b) a`), `ifZero`, `ifBool`, and `add multiply subtract divide modulo equal less lessEqual
+conjunction`; `self` reads only as `evalBook`'s pins resolve them. Refused by name: `fix`, λ as a
+value, records and `get`, sums, labels, the object forms, activities, the bitwise and fixed-point
+primitives.
+
+`verify_hvm.sh` regenerates `arith.hvm` and compares bytes, checks the book `refused` is refused,
+runs every vector under `hvm run` and `hvm run-c` against `evalBookAt` (as a literal and on the
+demand machine) and against the model's own run, and requires each planted emitter rule
+(`--plant swapSwitch`, `--plant addAsSub`; `verify_hvm.sh --plant NAME` runs one alone) to make the
+comparison fail. Build `lake build obend-emit-hvm` in `lean/` first; HVM2 from `cargo install hvm`
+or `HVM_BIN`. `hvm run-cu` needs an NVIDIA GPU, which none of our machines has.

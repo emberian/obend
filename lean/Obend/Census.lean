@@ -334,6 +334,7 @@ import Obend.Hardware.FabuBlox
 import Obend.Hardware.FluidThermal
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.HDL
+import Obend.Hardware.Hvm
 import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
