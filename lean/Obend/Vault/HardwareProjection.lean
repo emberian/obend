@@ -131,6 +131,13 @@ def rtlExprToData : RtlExpr → Data
     ])
   | .bitNot a =>
     .variant "bitNot" (rtlExprToData a)
+  | .resize op a =>
+    let opData : Data := match op with
+      | .slice hi lo => .variant "slice" (.record [("hi", .natural hi), ("lo", .natural lo)])
+      | .zext w      => .variant "zext" (.natural w)
+      | .sext f t    => .variant "sext" (.record [("from", .natural f), ("to", .natural t)])
+      | .trunc w     => .variant "trunc" (.natural w)
+    .variant "resize" (.record [("op", opData), ("arg", rtlExprToData a)])
 
 /-- Project a wire assignment into `Core.Data`. -/
 def wireAssignToData (w : WireAssign) : Data :=

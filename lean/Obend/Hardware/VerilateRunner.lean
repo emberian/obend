@@ -338,6 +338,18 @@ def initialModuleRegs (m : RtlModule) : Nat → BitVec 64 := fun rIdx =>
   | some r => match r.resetKind with | .syncReset v => v | .resetFree => 0#64
   | none => 0#64
 
+/-- `runModuleTrace` with the register file held in an array between cycles, for the harness.
+`runModuleTrace` returns a closure whose every read re-runs the earlier cycles (the compiler
+eta-expands `stepModuleRegsImpl`, so its array is rebuilt per read): a probe with six registers
+reading one another took 80 s for ten cycles. Here each cycle reads the previous array. Same value
+as `runModuleTrace` at every index below `n` when `n` exceeds every `regIdx` (no register writes
+above it, and both fall through to the initial state there). -/
+def runModuleTraceArr (m : RtlModule) (n : Nat) (init : Array (BitVec 64))
+    (trace : List (Bool × (Nat → BitVec 64))) : Array (BitVec 64) :=
+  trace.foldl (fun arr c =>
+    let st : Nat → BitVec 64 := fun i => arr.getD i 0#64
+    (List.range n).toArray.map (stepModuleRegs m c.1 c.2 st)) init
+
 /-- Evaluate a single `DifferentialVector` starting from register state `curRegs` across `numCycles`
     clock cycles via `HDL.runModuleTrace`, returning `(nextRegs, DifferentialVector)`. -/
 def evaluateDifferentialVectorFromRegs
@@ -346,12 +358,16 @@ def evaluateDifferentialVectorFromRegs
     (numCycles : Nat)
     (curRegs : Nat → BitVec 64)
     (vecIdx : Nat) : (Nat → BitVec 64) × DifferentialVector :=
+  -- A vector word is masked to its port's width, so the Lean side sees what the port can carry.
+  let inEnv : Nat → BitVec 64 := fun pIdx => truncToWidth (inputWidth m pIdx) (genVectorWord vecIdx pIdx)
   let portPairs : List (String × BitVec 64) :=
     (List.range m.inputNames.length).map fun pIdx =>
-      (m.inputNames.getD pIdx "in_0", genVectorWord vecIdx pIdx)
-  let inEnv : Nat → BitVec 64 := fun pIdx => genVectorWord vecIdx pIdx
-  let finalRegs := runModuleTrace m curRegs (mkHeldCycleTrace numCycles inEnv)
-  let expectedOuts := evalModuleOutputs m inEnv finalRegs
+      (m.inputNames.getD pIdx "in_0", inEnv pIdx)
+  let nRegs := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
+  let finalArr := runModuleTraceArr m nRegs ((List.range nRegs).toArray.map curRegs)
+    (mkHeldCycleTrace numCycles inEnv)
+  let finalRegs : Nat → BitVec 64 := fun i => finalArr.getD i 0#64
+  let expectedOuts := evalModuleOutputsW m inEnv finalRegs
   let arg0Nat := (inEnv 0).toNat
   let allArgNats := (List.range (max m.inputNames.length 1)).map (fun i => (inEnv i).toNat)
   let machineOk : Bool :=
@@ -431,6 +447,9 @@ def emitVerilatorHarnessCpp
     (numCycles : Nat)
     (vcdPath? : Option String) : String :=
   let vClass := s!"V{m.name}"
+  -- Every domain's clock rises on the same tick: the harness checks `stepModuleRegs`, the
+  -- all-clocks-together edge (`stepModuleDomain_eq_of_single` for one domain).
+  let clocks := moduleClockPorts m
   let traceHeader :=
     match vcdPath? with
     | some _ => "#include \"verilated_vcd_c.h\"\n"
@@ -475,17 +494,17 @@ def emitVerilatorHarnessCpp
   "  uint64_t sim_time = 0;\n" ++
   traceInit ++
   "  auto tick = [&]() {\n" ++
-  "    top->clk = 0;\n" ++
+  String.join (clocks.map fun (_, clk, _) => s!"    top->{clk} = 0;\n") ++
   "    top->eval();\n" ++
   traceDump0 ++
-  "    top->clk = 1;\n" ++
+  String.join (clocks.map fun (_, clk, _) => s!"    top->{clk} = 1;\n") ++
   "    top->eval();\n" ++
   traceDump0 ++
   "  };\n" ++
-  "  top->rst = 1;\n" ++
+  String.join (clocks.map fun (_, _, rst) => s!"  top->{rst} = 1;\n") ++
   String.intercalate "\n" zeroInputs ++ "\n" ++
   "  tick();\n" ++
-  "  top->rst = 0;\n" ++
+  String.join (clocks.map fun (_, _, rst) => s!"  top->{rst} = 0;\n") ++
   "  top->eval();\n" ++
   "  uint64_t mismatches = 0;\n" ++
   String.intercalate "\n" vecBlocks ++ "\n" ++
@@ -523,6 +542,19 @@ def emitAluOpSmt2 (op : RtlAluOp) (lhs rhs : String) : String :=
   | .slt    => s!"(ite (bvslt {lhs} {rhs}) #x0000000000000001 #x0000000000000000)"
   | .qmul32 => s!"((_ extract 95 32) (bvmul ((_ sign_extend 64) {lhs}) ((_ sign_extend 64) {rhs})))"
 
+/-- A width operator over a 64-bit SMT-LIB2 term `x`, as `HDL.evalWidthOp` defines it (for the
+parameters `checkWidths` accepts; an out-of-range `sext` is rendered as `x`). -/
+def emitWidthOpSmt2 (op : RtlWidthOp) (x : String) : String :=
+  let mask (w : Nat) : String := bitVec64ToSmtHex (BitVec.ofNat 64 (2 ^ (min w 64) - 1))
+  match op with
+  | .slice hi lo => s!"(bvand (bvlshr {x} {bitVec64ToSmtHex (BitVec.ofNat 64 lo)}) {mask (hi + 1 - lo)})"
+  | .zext _ => x
+  | .sext f t =>
+    if 0 < f ∧ f ≤ t ∧ t ≤ 64 then
+      s!"((_ zero_extend {64 - t}) ((_ sign_extend {t - f}) ((_ extract {f - 1} 0) {x})))"
+    else x
+  | .trunc w => s!"(bvand {x} {mask w})"
+
 /-- Render an `RtlExpr` as a word-level SMT-LIB2 `QF_BV` expression over `spec_` wires. -/
 def emitExprSmt2 (wirePrefix : String) : RtlExpr → String
   | .const v       => bitVec64ToSmtHex v
@@ -533,11 +565,13 @@ def emitExprSmt2 (wirePrefix : String) : RtlExpr → String
   | .mux c t f     =>
     s!"(ite (distinct {emitExprSmt2 wirePrefix c} #x0000000000000000) {emitExprSmt2 wirePrefix t} {emitExprSmt2 wirePrefix f})"
   | .bitNot a      => s!"(bvnot {emitExprSmt2 wirePrefix a})"
+  | .resize op a   => emitWidthOpSmt2 op (emitExprSmt2 wirePrefix a)
 
 /-- Collect the exact `(dstName, RtlAluOp)` mapping corresponding to `Synth.synthesizeExprToBels`. -/
 def collectExprAluMap (dstName : String) : RtlExpr → List (String × RtlAluOp)
   | .const _ | .inputPort _ | .wireRef _ | .regRead _ => []
   | .bitNot a => collectExprAluMap (dstName ++ "_not_in") a
+  | .resize _ a => collectExprAluMap (dstName ++ "_route_in") a
   | .mux c t f =>
     collectExprAluMap (dstName ++ "_d0") f ++
     collectExprAluMap (dstName ++ "_d1") t ++
@@ -632,6 +666,7 @@ def emitBelCellSmt2 (aluMap : List (String × RtlAluOp)) (c : BelCell) : String 
         s!"(bvmul {in0} {in1})"
     | .ff _ =>
       in0
+    | .route op => emitWidthOpSmt2 op in0
   s!"(define-fun {dst} () (_ BitVec 64) {body})"
 
 /-- Emit an SMT-LIB2 `QF_BV` miter between the word-level `RtlModule` and `Synth.synthesizeModuleToBels m`.
@@ -694,6 +729,41 @@ def goldenMultiInputSeqAluRtl : RtlModule where
   outputs    :=
     [ { name := "out_acc",  expr := .regRead 0 }
     , { name := "in_ready", expr := .alu .bitOr (.wireRef 1) (.const 1#64) } ]
+
+/-- Widths and two clock domains in one module, for `obend verilate --top obend_width_probe` and
+    `hardware/sim/obend_width_probe.sv`: 8/8/16/1-bit inputs; a 9-bit sum, a 24-bit concatenation,
+    a 4-bit slice, an 8-to-16 sign extension and a 16-bit truncation; a 16-bit accumulator and a
+    resetless 4-bit register in `coreClk`; a 1-bit flag crossing into `axiIoClk` through a two-flop
+    synchronizer (`ASYNC_REG`) and counted there by an 8-bit register. It passes `checkRtlModuleW`. -/
+def goldenWidthProbeRtl : RtlModule where
+  name        := "obend_width_probe"
+  inputNames  := ["a", "b", "c", "flag"]
+  inputWidths := [8, 8, 16, 1]
+  wires       :=
+    [ { wireIdx := 0, name := "w_sum", width := 9,  expr := .alu .add (.inputPort 0) (.inputPort 1) }
+    , { wireIdx := 1, name := "w_cat", width := 24, expr := RtlExpr.concat (.inputPort 2) (.inputPort 0) 8 }
+    , { wireIdx := 2, name := "w_hi",  width := 4,  expr := .resize (.slice 23 20) (.wireRef 1) }
+    , { wireIdx := 3, name := "w_sx",  width := 16, expr := .resize (.sext 8 16) (.inputPort 0) }
+    , { wireIdx := 4, name := "w_mix", width := 16,
+        expr := .resize (.trunc 16) (.alu .sub (.wireRef 3) (.resize (.zext 16) (.wireRef 0))) } ]
+  regs        :=
+    [ { regIdx := 0, name := "acc", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false
+      , width := 16, nextExpr := .resize (.trunc 16) (.alu .add (.regRead 0) (.wireRef 4)) }
+    , { regIdx := 1, name := "hi_q", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false
+      , width := 4, nextExpr := .wireRef 2 }
+    , { regIdx := 2, name := "flag_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false
+      , width := 1, nextExpr := .inputPort 3 }
+    , { regIdx := 3, name := "flag_s1", domain := .axiIoClk, resetKind := .syncReset 0#64, isSynchronizer := true
+      , width := 1, nextExpr := .regRead 2 }
+    , { regIdx := 4, name := "flag_s2", domain := .axiIoClk, resetKind := .syncReset 0#64, isSynchronizer := true
+      , width := 1, nextExpr := .regRead 3 }
+    , { regIdx := 5, name := "axi_cnt", domain := .axiIoClk, resetKind := .syncReset 0#64, isSynchronizer := false
+      , width := 8, nextExpr := .resize (.trunc 8) (.alu .add (.regRead 5) (.regRead 4)) } ]
+  outputs     :=
+    [ { name := "acc_out", expr := .regRead 0, width := 16 }
+    , { name := "hi_out",  expr := .regRead 1, width := 4 }
+    , { name := "cnt_out", expr := .regRead 5, width := 8 }
+    , { name := "cat_out", expr := .wireRef 1, width := 24 } ]
 
 /-- **Universal Carry-Propagate Adder BEL Identity (`carry4_add_bel_identity`)**:
     For all 64-bit words `a b : BitVec 64`, `(a ^^^ b) + ((a &&& b) <<< 1) = a + b`. -/
@@ -882,6 +952,8 @@ def resolveTargetRtlModule (cfg : VerilateConfig) : IO (Except String (String ×
     return .ok ("obend_retimed_mac2", none, goldenRetimedMacRtl)
   if cfg.topModule == "obend_multi_input_seq_alu" || cfg.inputPath == "obend_multi_input_seq_alu" then
     return .ok ("obend_multi_input_seq_alu", none, goldenMultiInputSeqAluRtl)
+  if cfg.topModule == "obend_width_probe" || cfg.inputPath == "obend_width_probe" then
+    return .ok ("obend_width_probe", none, goldenWidthProbeRtl)
   let pathExists ←
     if cfg.inputPath != "" then (System.FilePath.mk cfg.inputPath).pathExists
     else pure false
@@ -942,6 +1014,8 @@ def runVerilatePipeline (cfg : VerilateConfig) : IO (Except String VerilateRepor
   match ← resolveTargetRtlModule cfg with
   | .error err => return .error err
   | .ok (modName, comp?, m) =>
+    if !checkRtlModuleW m then
+      return .error s!"{m.name} fails checkRtlModuleW:\n{String.intercalate "\n" (widthErrors m)}"
     IO.FS.createDirAll (System.FilePath.mk cfg.workDir)
     let svPath := cfg.svOutPath.getD s!"{cfg.workDir}/{modName}.sv"
     let tbCppPath := s!"{cfg.workDir}/{modName}_verilate_tb.cpp"
@@ -1032,6 +1106,7 @@ def cmdEmitSv (args : List String) : IO UInt32 := do
     | .ok (_, _, m) =>
       if !checkRtlModuleW m then
         IO.eprintln s!"refused: synthesized RtlModule {m.name} failed DAG/CDC/width/two-flop check (checkRtlModuleW)"
+        for e in widthErrors m do IO.eprintln s!"  {e}"
         return 3
       else
         let svText := "/* verilator lint_off UNUSED */\n/* verilator lint_off DECLFILENAME */\n" ++

@@ -115,7 +115,7 @@ instance rtlSynthJudge : Obend.Judge String RtlModule where
 def badLoopRtlModule : RtlModule where
   name       := "bad_loop_mod"
   inputNames := ["in0"]
-  wires      := [⟨0, "w0", .alu .add (.wireRef 0) (.const 1#64)⟩]
+  wires      := [{ wireIdx := 0, name := "w0", expr := .alu .add (.wireRef 0) (.const 1#64) }]
   regs       := []
   outputs    := [{ name := "out0", expr := .wireRef 0 }]
 
@@ -565,6 +565,26 @@ def flattenRtlExprAux (numInputs numRegs : Nat) (wireMap : List (Nat × Nat)) :
     let (acc1, aIdx) := flattenRtlExprAux numInputs numRegs wireMap a acc
     let idx := acc1.length
     (acc1 ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := .alu .bitXor (.wireRef aIdx) (.const 0xFFFFFFFFFFFFFFFF#64) }], idx)
+  | .resize op a, acc =>
+    -- A width operator as 3-address ALU wires: masks, a shift, and for `sext` the
+    -- `((x & m_f) ^ s) - s` sign-extension identity with `s = 2^(f-1)`.
+    let (acc1, aIdx) := flattenRtlExprAux numInputs numRegs wireMap a acc
+    let mkW (acc : List WireAssign) (e : RtlExpr) : List WireAssign × Nat :=
+      let idx := acc.length
+      (acc ++ [{ wireIdx := idx, name := "w" ++ rtlNatToStr idx, expr := e }], idx)
+    let mask (w : Nat) : RtlExpr := .const (BitVec.ofNat 64 (2 ^ (min w 64) - 1))
+    match op with
+    | .zext _ => (acc1, aIdx)
+    | .trunc w => mkW acc1 (.alu .bitAnd (.wireRef aIdx) (mask w))
+    | .slice hi lo =>
+      let (acc2, sIdx) := mkW acc1 (.alu .lshr (.wireRef aIdx) (.const (BitVec.ofNat 64 lo)))
+      mkW acc2 (.alu .bitAnd (.wireRef sIdx) (mask (hi + 1 - lo)))
+    | .sext f t =>
+      let s : RtlExpr := .const (BitVec.ofNat 64 (2 ^ (f - 1)))
+      let (acc2, i1) := mkW acc1 (.alu .bitAnd (.wireRef aIdx) (mask f))
+      let (acc3, i2) := mkW acc2 (.alu .bitXor (.wireRef i1) s)
+      let (acc4, i3) := mkW acc3 (.alu .sub (.wireRef i2) s)
+      mkW acc4 (.alu .bitAnd (.wireRef i3) (mask t))
 
 /-- Flatten a list of `WireAssign` entries into topological 3-address `WireAssign` entries. -/
 def flattenWireListAux (numInputs numRegs : Nat) :

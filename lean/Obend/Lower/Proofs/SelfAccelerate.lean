@@ -65,6 +65,7 @@ inductive AmdGpuVop64Inst where
   | v_cmp_lt_i64  (dst src0 src1 : Nat)
   | v_qmul32_i64  (dst src0 src1 : Nat)
   | v_not_b64     (dst src : Nat)
+  | v_bfe_b64     (dst : Nat) (op : RtlWidthOp) (src : Nat)  -- bit-field extract / extend / mask
   | v_cndmask_b64 (dst cond srcTrue srcFalse : Nat)
   deriving Repr, DecidableEq
 
@@ -118,6 +119,7 @@ def AmdGpuVop64Inst.dstReg : AmdGpuVop64Inst → Nat
   | .v_cmp_lt_i64 dst _ _    => dst
   | .v_qmul32_i64 dst _ _    => dst
   | .v_not_b64 dst _         => dst
+  | .v_bfe_b64 dst _ _       => dst
   | .v_cndmask_b64 dst _ _ _ => dst
 
 @[simp] theorem dstReg_compileRtlAluToVop (op : RtlAluOp) (dst s0 s1 : Nat) :
@@ -152,6 +154,10 @@ def compileRtlExprToAmdGpu (nextReg : Nat) : RtlExpr → Nat × Nat × List AmdG
     let resS := compileRtlExprToAmdGpu nextReg src
     let dst := resS.2.1
     (dst, dst + 1, resS.2.2 ++ [.v_not_b64 dst resS.1])
+  | .resize op src =>
+    let resS := compileRtlExprToAmdGpu nextReg src
+    let dst := resS.2.1
+    (dst, dst + 1, resS.2.2 ++ [.v_bfe_b64 dst op resS.1])
 
 /-- Pair-returning wrapper `(code, resReg)` for `compileRtlExprToAmdGpu` starting at `baseReg`. -/
 def compileRtlExprToAmdGpuAux (baseReg : Nat) (e : RtlExpr) : List AmdGpuVop64Inst × Nat :=
@@ -184,6 +190,7 @@ def execAmdGpuVop64Inst
   | .v_cmp_lt_i64 dst s0 s1  => writeReg dst (if BitVec.slt (vgprs s0) (vgprs s1) then 1#64 else 0#64)
   | .v_qmul32_i64 dst s0 s1  => writeReg dst ((((vgprs s0).signExtend 128 * (vgprs s1).signExtend 128) >>> 32).setWidth 64)
   | .v_not_b64 dst src       => writeReg dst (~~~(vgprs src))
+  | .v_bfe_b64 dst op src    => writeReg dst (evalWidthOp op (vgprs src))
   | .v_cndmask_b64 dst c t f => writeReg dst (if vgprs c != 0#64 then vgprs t else vgprs f)
 
 /-- Execute a program of 64-bit AMD GPU VOP instructions (`List AmdGpuVop64Inst`). -/
@@ -268,6 +275,17 @@ theorem compileRtlExprToAmdGpu_reg_bounds (baseReg : Nat) (e : RtlExpr) :
       exact ⟨h1, by omega⟩
     · dsimp [AmdGpuVop64Inst.dstReg]
       omega
+  | resize op src ihs =>
+    have ⟨hGeS, hLtS, hDstS⟩ := ihs baseReg
+    dsimp [compileRtlExprToAmdGpu]
+    refine ⟨by omega, by omega, ?_⟩
+    intro inst hMem
+    rw [List.mem_append, List.mem_singleton] at hMem
+    rcases hMem with hInS | rfl
+    · have ⟨h1, h2⟩ := hDstS inst hInS
+      exact ⟨h1, by omega⟩
+    · dsimp [AmdGpuVop64Inst.dstReg]
+      omega
   | alu op lhs rhs ihl ihr =>
     have ⟨hGeL, hLtL, hDstL⟩ := ihl baseReg
     have ⟨hGeR, hLtR, hDstR⟩ := ihr (compileRtlExprToAmdGpu baseReg lhs).2.1
@@ -321,6 +339,11 @@ theorem compileRtlExprToAmdGpu_eval_sound
   | regRead idx =>
     simp [compileRtlExprToAmdGpu, runAmdGpuVop64Prog, execAmdGpuVop64Inst, evalRtlExpr]
   | bitNot src ihs =>
+    dsimp [compileRtlExprToAmdGpu, evalRtlExpr]
+    rw [runAmdGpuVop64Prog_append]
+    dsimp [runAmdGpuVop64Prog, execAmdGpuVop64Inst]
+    simp only [beq_self_eq_true, ↓reduceIte, ihs vgprs baseReg]
+  | resize op src ihs =>
     dsimp [compileRtlExprToAmdGpu, evalRtlExpr]
     rw [runAmdGpuVop64Prog_append]
     dsimp [runAmdGpuVop64Prog, execAmdGpuVop64Inst]

@@ -116,14 +116,14 @@ theorem unregistered_slr_crossing_refused :
 
 /-- A combinational wire table containing a self-loop (`w_0 := w_0 + 1`) is refused by `checkWireTableDAG`. -/
 theorem combinational_loop_refused :
-    checkWireTableDAG 1 0 [⟨0, "loop", .alu .add (.wireRef 0) (.const 1#64)⟩] = false :=
+    checkWireTableDAG 1 0 [{ wireIdx := 0, name := "loop", expr := .alu .add (.wireRef 0) (.const 1#64) }] = false :=
   rfl
 
 /-- An unsynchronized clock-domain crossing from `.coreClk` (`reg 0`) to `.axiIoClk` (`reg 1`,
 `isSynchronizer = false`) is refused by `checkModuleCdc`. -/
 theorem unsynchronized_cdc_refused :
-    let r0 : RegSpec := ⟨0, "core_r", .coreClk, .resetFree, false, .inputPort 0⟩
-    let r1 : RegSpec := ⟨1, "axi_r", .axiIoClk, .resetFree, false, .regRead 0⟩
+    let r0 : RegSpec := { regIdx := 0, name := "core_r", domain := .coreClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .inputPort 0 }
+    let r1 : RegSpec := { regIdx := 1, name := "axi_r", domain := .axiIoClk, resetKind := .resetFree, isSynchronizer := false, nextExpr := .regRead 0 }
     checkModuleCdc [r0, r1] = false :=
   rfl
 

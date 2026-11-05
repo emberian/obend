@@ -51,8 +51,23 @@ This document is the authoritative, unscoped engineering specification for **Wav
 
 ### 1.4 Foundation D — SystemVerilog emission and the one `silicon_elab_top` (status 2026-11-04)
 - `Obend.Hardware.HDL.emitModuleSV` is the only emitter of `RtlModule`s. It writes one `clk`/`rst` pair per
-  single-domain module (or `clk_<d>`/`rst_<d>` per domain), port widths from `inputWidths`/`OutputPort.width`,
-  `(* ASYNC_REG *)` on synchronizers, and is gated by `checkRtlModuleW` (DAG, CDC, widths, two-flop chains).
+  single-domain module (or `clk_<d>`/`rst_<d>` per domain), `(* ASYNC_REG = "TRUE" *)` on synchronizers, and is
+  gated by `checkRtlModuleW` (DAG, CDC, two-flop chains, `checkWidths`).
+- Widths (2026-11-05, answering `review/EXPERT-fpga-silicon-20261103.md` §3.5): values are still carried as
+  `BitVec 64`, so `Compiler.lean` and `lower_to_rtl_sat_sound` are unchanged, and width is a checked refinement on
+  top. Inputs, wires (`WireAssign.width`), registers (`RegSpec.width`) and outputs declare 1..64 bits (default 64);
+  `RtlExpr.resize` carries `slice hi lo`, `zext w`, `sext from to` and `trunc w`, and `RtlExpr.concat` is a shift and
+  an or. `inferWidthE` bounds every expression; `checkWidths` refuses, naming the signal, a signal driven by a wider
+  expression or a slice outside its source. The theorems: a checked expression's value is below `2^w`
+  (`evalRtlExpr_lt_of_inferWidthE`), every register stays inside its width through any trace (`runModuleTrace_lt`),
+  and the port truncation is the identity (`evalModuleOutputsW_eq_of_checkWidths`). The emitter declares each signal
+  `logic [w-1:0]`, reads narrow signals zero-extended and stores through `w'(...)`, so all arithmetic is still 64-bit
+  in the text; a module whose signals are all 64 bits emits the bytes it did before.
+- Clock domains (§3.6): `stepModuleDomain m d` is one edge of `clk_<d>` (`d`'s registers latch, the rest hold,
+  `stepModuleDomain_other_holds`), equal to `stepModuleRegs` for a one-domain module; `stepDomain_nonSync_reads_own_domain`
+  says a non-synchronizer register passing `checkRegCdc` samples only its own domain's registers at its clock's edge
+  (direct reads, the wire table held fixed; the wire-transitive form is not proved). `obend verilate` still drives
+  all clocks on the same tick, so it checks the emitter, not asynchronous behaviour.
 - The one `silicon_elab_top.sv` is `Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`, written by
   `obend hardware emit-silicon-sv` to `apps/silicon-kernel-verilator/verilator/`. The two other copies (a hand-written
   Verilog-2001 file there and a string literal in `VerilateRunner`) were deleted; `hardware/README.md` says why.
@@ -65,8 +80,11 @@ This document is the authoritative, unscoped engineering specification for **Wav
 
 ### 1.5 Foundation E — `obend verilate` (`lean/Obend/Hardware/VerilateRunner.lean`)
 - **Differential simulation**: emit with `emitModuleSV`, drive the Verilated module with `numVectors × numCycles`
-  held-input cycles (small constants and a 16-bit LCG; default 16 × 4 = 64 cycles) and compare every output with
-  Lean's `runModuleTrace`/`evalModuleOutputs` of the same `RtlModule` (and `MachineFast` for `.obend` compositions).
+  held-input cycles (small constants and a 16-bit LCG, masked to each input's width; default 16 × 4 = 64 cycles) and
+  compare every output with Lean's `runModuleTrace`/`evalModuleOutputsW` of the same `RtlModule` (and `MachineFast` for
+  `.obend` compositions). A module with several domains gets every `clk_<d>` toggled together. It refuses a module that
+  fails `checkRtlModuleW`, printing the width reasons. `--top obend_width_probe` (`goldenWidthProbeRtl`) exercises
+  narrow signals, every width operator and a two-flop crossing.
   This checks the emitter against Lean's own semantics; it is thin and is the thing to grow (wider vectors, more cycles,
   random reset).
 - **`--lec` is a BEL-mapping consistency miter, not an LEC.** `emitModuleLecSmt2` compares the `RtlModule` with

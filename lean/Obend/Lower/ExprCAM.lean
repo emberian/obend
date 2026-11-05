@@ -3057,6 +3057,7 @@ inductive RtlExprRpnToken where
   | alu       (op : RtlAluOp)
   | mux
   | bitNot
+  | resize    (op : RtlWidthOp)
   deriving DecidableEq, Repr
 
 /-- Convert an `RtlExpr` into a postfix RPN token list. -/
@@ -3068,6 +3069,7 @@ def rtlExprToRpn : RtlExpr → List RtlExprRpnToken
   | .alu op a b    => rtlExprToRpn a ++ rtlExprToRpn b ++ [.alu op]
   | .mux c t f     => rtlExprToRpn c ++ rtlExprToRpn t ++ rtlExprToRpn f ++ [.mux]
   | .bitNot a      => rtlExprToRpn a ++ [.bitNot]
+  | .resize op a   => rtlExprToRpn a ++ [.resize op]
 
 /-- Execute a postfix `RtlExprRpnToken` stream on a stack `stk : List RtlExpr`. -/
 def evalRtlExprRpn : List RtlExpr → List RtlExprRpnToken → Option (List RtlExpr)
@@ -3079,6 +3081,7 @@ def evalRtlExprRpn : List RtlExpr → List RtlExprRpnToken → Option (List RtlE
   | b :: a :: stk, .alu op :: ts => evalRtlExprRpn (.alu op a b :: stk) ts
   | f :: t :: c :: stk, .mux :: ts => evalRtlExprRpn (.mux c t f :: stk) ts
   | a :: stk, .bitNot :: ts      => evalRtlExprRpn (.bitNot a :: stk) ts
+  | a :: stk, .resize op :: ts   => evalRtlExprRpn (.resize op a :: stk) ts
   | _, _                         => none
 
 theorem evalRtlExprRpn_rtlExprToRpn :
@@ -3106,6 +3109,32 @@ theorem evalRtlExprRpn_rtlExprToRpn :
     rw [List.append_assoc, List.singleton_append,
         evalRtlExprRpn_rtlExprToRpn a stk (.bitNot :: more)]
     rfl
+  | .resize op a, stk, more => by
+    unfold rtlExprToRpn
+    rw [List.append_assoc, List.singleton_append,
+        evalRtlExprRpn_rtlExprToRpn a stk (.resize op :: more)]
+    rfl
+
+/-- Encode an `RtlWidthOp`. -/
+def encodeWireRtlWidthOp : RtlWidthOp → List UInt8
+  | .slice hi lo => natToVarBytes 0 ++ natToVarBytes hi ++ natToVarBytes lo
+  | .zext w      => natToVarBytes 1 ++ natToVarBytes w
+  | .sext f t    => natToVarBytes 2 ++ natToVarBytes f ++ natToVarBytes t
+  | .trunc w     => natToVarBytes 3 ++ natToVarBytes w
+
+/-- Decode an `RtlWidthOp`. -/
+def decodeWireRtlWidthOp (bs : List UInt8) : Option (RtlWidthOp × List UInt8) :=
+  match decodeVarBytes bs with
+  | some (0, r) => do let (hi, r2) ← decodeVarBytes r; let (lo, r3) ← decodeVarBytes r2; pure (.slice hi lo, r3)
+  | some (1, r) => do let (w, r2) ← decodeVarBytes r; pure (.zext w, r2)
+  | some (2, r) => do let (f, r2) ← decodeVarBytes r; let (t, r3) ← decodeVarBytes r2; pure (.sext f t, r3)
+  | some (3, r) => do let (w, r2) ← decodeVarBytes r; pure (.trunc w, r2)
+  | _           => none
+
+@[simp] theorem decodeWireRtlWidthOp_encodeWireRtlWidthOp (op : RtlWidthOp) (rest : List UInt8) :
+    decodeWireRtlWidthOp (encodeWireRtlWidthOp op ++ rest) = some (op, rest) := by
+  cases op <;>
+    simp [encodeWireRtlWidthOp, decodeWireRtlWidthOp, List.append_assoc, decodeVarBytes_natToVarBytes] <;> rfl
 
 /-- Encode an `RtlExprRpnToken`. -/
 def encodeRtlExprRpnToken : RtlExprRpnToken → List UInt8
@@ -3116,6 +3145,7 @@ def encodeRtlExprRpnToken : RtlExprRpnToken → List UInt8
   | .alu op        => natToVarBytes 4 ++ encodeWireRtlAluOp op
   | .mux           => natToVarBytes 5
   | .bitNot        => natToVarBytes 6
+  | .resize op     => natToVarBytes 7 ++ encodeWireRtlWidthOp op
 
 /-- Decode an `RtlExprRpnToken`. -/
 def decodeRtlExprRpnToken (bs : List UInt8) : Option (RtlExprRpnToken × List UInt8) :=
@@ -3127,6 +3157,7 @@ def decodeRtlExprRpnToken (bs : List UInt8) : Option (RtlExprRpnToken × List UI
   | some (4, r) => do let (op, r2) ← decodeWireRtlAluOp r; pure (.alu op, r2)
   | some (5, r) => some (.mux, r)
   | some (6, r) => some (.bitNot, r)
+  | some (7, r) => do let (op, r2) ← decodeWireRtlWidthOp r; pure (.resize op, r2)
   | _           => none
 
 @[simp] theorem decodeRtlExprRpnToken_encodeRtlExprRpnToken (t : RtlExprRpnToken) (rest : List UInt8) :
@@ -3141,6 +3172,10 @@ def decodeRtlExprRpnToken (bs : List UInt8) : Option (RtlExprRpnToken × List UI
     rw [List.append_assoc, decodeVarBytes_natToVarBytes]
     simp
   | alu op =>
+    unfold encodeRtlExprRpnToken decodeRtlExprRpnToken
+    rw [List.append_assoc, decodeVarBytes_natToVarBytes]
+    simp
+  | resize op =>
     unfold encodeRtlExprRpnToken decodeRtlExprRpnToken
     rw [List.append_assoc, decodeVarBytes_natToVarBytes]
     simp

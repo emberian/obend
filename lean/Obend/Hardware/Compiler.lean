@@ -45,6 +45,7 @@ def substInputPort0 (argExpr : RtlExpr) : RtlExpr → RtlExpr
   | .mux c t f     =>
     .mux (substInputPort0 argExpr c) (substInputPort0 argExpr t) (substInputPort0 argExpr f)
   | .bitNot a      => .bitNot (substInputPort0 argExpr a)
+  | .resize op a   => .resize op (substInputPort0 argExpr a)
 
 /-- Soundness of `substInputPort0`: evaluating `substInputPort0 argExpr e` is identical to evaluating
 `e` with input port `0` bound to `evalRtlExpr inputs wires regs argExpr`. -/
@@ -67,6 +68,8 @@ theorem substInputPort0_sound
   | mux c t f ihc iht ihf =>
     simp only [substInputPort0, evalRtlExpr, ihc, iht, ihf]
   | bitNot a iha =>
+    simp only [substInputPort0, evalRtlExpr, iha]
+  | resize op a iha =>
     simp only [substInputPort0, evalRtlExpr, iha]
 
 /-! ## 2. Primitive Operations Compilation & Soundness -/
@@ -1452,6 +1455,7 @@ def substInputPorts (argExprs : List RtlExpr) : RtlExpr → RtlExpr
   | .mux c t f     =>
     .mux (substInputPorts argExprs c) (substInputPorts argExprs t) (substInputPorts argExprs f)
   | .bitNot a      => .bitNot (substInputPorts argExprs a)
+  | .resize op a   => .resize op (substInputPorts argExprs a)
 
 /-- **Universal Soundness of Multi-Port Substitution (`substInputPorts_sound`)**:
 Evaluating `substInputPorts argExprs e` is identical to evaluating `e` in an input environment where
@@ -1477,6 +1481,8 @@ theorem substInputPorts_sound
   | mux c t f ihc iht ihf =>
     simp only [substInputPorts, evalRtlExpr, ihc, iht, ihf]
   | bitNot a iha =>
+    simp only [substInputPorts, evalRtlExpr, iha]
+  | resize op a iha =>
     simp only [substInputPorts, evalRtlExpr, iha]
 
 /-- Reference 64-bit hardware semantics for multi-argument `Term`s (`evalMultiArgTermHw`):
@@ -1941,6 +1947,7 @@ def substRtlInputPort0 (argExpr : RtlExpr) : RtlExpr → RtlExpr
   | .mux c t f     =>
     .mux (substRtlInputPort0 argExpr c) (substRtlInputPort0 argExpr t) (substRtlInputPort0 argExpr f)
   | .bitNot a      => .bitNot (substRtlInputPort0 argExpr a)
+  | .resize op a   => .resize op (substRtlInputPort0 argExpr a)
 
 /-- Soundness of `substRtlInputPort0`: evaluating `substRtlInputPort0 argExpr e` is identical to
 evaluating `e` with input port `0` bound to `evalRtlExpr inputs wires regs argExpr`. -/
@@ -1963,6 +1970,8 @@ theorem substRtlInputPort0_sound
   | mux c t f ihc iht ihf =>
     simp only [substRtlInputPort0, evalRtlExpr, ihc, iht, ihf]
   | bitNot a iha =>
+    simp only [substRtlInputPort0, evalRtlExpr, iha]
+  | resize op a iha =>
     simp only [substRtlInputPort0, evalRtlExpr, iha]
 
 /-- Check whether a pipelined method argument is the unmodified stage input `.bound 0`. -/
