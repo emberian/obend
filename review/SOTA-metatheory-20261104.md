@@ -316,3 +316,183 @@ proofs (arXiv 2209.03398), Coda (arXiv 2304.07648), Picus (ePrint 2023/547), Ark
 Bailis I-confluence, CALM, Velisarios, IronFleet, Verdi, LiDO, Bythos, Cordial Miners, HyperLTL,
 Hyper Hoare Logic, VeriFx, Viand et al. 2023 (arXiv 2301.07041), Rinocchio, VERITAS, Jambon
 (2026/2290), Okada (2026/957), Cong et al. (2026/2403), CatCrypt (2026/604), Zama lattice folding.
+
+---
+
+## Addendum, pass 2 (same day): the regions pass 1 did not open
+
+Nine inventory-driven readers with a skeptic each; eight returned (the Exec kernel and CapTP
+reader overflowed its context and is re-running as two narrower slices). Every reader opened every
+file in its slice at least to header depth; skeptics reopened every cited line; a quarter of the
+claims were corrected on specifics, none refuted outright. Reports and verdicts: session scratchpad
+`pass2-results.json`. What follows is what the coverage table in §0 was missing.
+
+### A. The emitted circuits (Circuit/Emit, 305 files outside Mina and Gnark)
+
+`DescriptorIR2.Satisfied2` is the denotation everything hangs on: per-row constraints over a
+(local, next, public, challenge) window, lookups as table membership, memory as a global leg
+(`Nodup`, closed, disciplined, `MemCheck` by the Blum weld). The lowering is certified at the
+compiler level (`EffectLowerCertified.lowerAir_forces_gates`: every lowered gate that holds forces
+the source constraint), `EffectVmEmitV2.graduateV1` is sound and complete, and the transfer
+effect has the full chain (`transferDescriptor_full_sound`, pinned). The 28 IR2 effect descriptors
+and the rotation registries are consumed by Rust by sha256 fingerprint; 132 by-name descriptors
+carry Lean byte goldens. What is hypothesis everywhere: lookup soundness and chip-table
+genuineness (`ChipTableSound` on the Poseidon2 chip; `LogUpSoundness` exists and is reachable but
+`Satisfied2` takes membership as primitive). Thirty-three refinement rungs (Temporal, Quantified,
+Fold, NoteSpendingLeaf, CommittedThreshold, MultiStepChain, IvcStateTransition, the Rung-2
+bindings) are compiled by no target and sit on an orphan allowlist. Temporal until and since and
+the bounded quantifiers have no emitted circuit. The compound predicate's AND/OR/threshold is not
+recomputed in circuit, with a machine-checked countermodel. `Exec/CircuitEmit`'s rail is dead:
+its theorems are about a wire no Rust path interprets. State of the art: parallel to Coda and to
+CompCert-style lowering; behind ArkLib and FlashProve on the step from satisfaction to verifier
+acceptance; Picus-style under-constraint analysis absent.
+
+### B. Mina, Kimchi, Pickles (219 files)
+
+A Lean model of the Kimchi verifier, the Pickles step and wrap statements, Lean-synthesized
+step-main and wrap-main circuits proved by a pure-Rust prover, and Lean-authored BabyBear AIRs for
+the wrap verifier legs. The Mina specification objects (binprot, state hash, chain selection,
+sliding window, VRF threshold) are kernel-proved with real-block differentials; everything
+wrap-arithmetic is one-block kernel plus seven-block compiled conformance. No theorem says an
+accepted wrap proof implies a valid Mina transition: `ipaOk` and `transcriptOk` are Bool carriers,
+and `real_block_accepts` passes all three carriers as literal `true`. The deployed Pasta MSM
+descriptors still ride the 9×30 multiplier core whose forcing lemma is over ℤ only, while
+`PastaFieldSound` exists and has not been rebased under them. Heavy `native_decide` in the welds,
+with the tree's own record of three such theorems being false for 62 commits because the module
+did not build. The `#assert_compiled` discipline (re-run the oracle, refuse name recognition) is
+the right answer to that and obend should take it. Ahead of Mina Foundation's own RFC-0011
+deliverables, which have no public artifact; behind Nethermind's verified-verifier and the
+Bailey–Miller Groth16 soundness on having a soundness theorem at all.
+
+### C. Light clients and the oracle (70 Bridge and Lightclient files, 14 crates)
+
+The central finding is a shape error repeated across every inbound client: the `CryptoLeaf` and
+`EthLeaf` collision-resistance carriers entail global injectivity, so they are uninhabitable at
+any compressing hash, and every no-forgery theorem that takes them (`eth_no_forgery`,
+`tmNoForgery`, `sol_no_forgery`, `mid_no_forgery`, `mpt_noForgery`) is vacuous at a production
+leaf. The Emit fold modules know this and carry the honest `pairSepOn` floor; the Bridge modules
+never do. Solana and Midnight have no export and no Rust caller, so the deployed decisions are
+Rust's, with inconsistent strictness between its two tallies; Midnight's path verifies no GRANDPA
+justification. The ETH and Tendermint AIRs have every public anchor decorative
+(`AnchorConnectivity` census), so the portable proof binds no chain state. BLS and Ed25519 are
+witnessed bits; the gadgets stop before the pairing and the signature equation. The Tendermint
+path is the healthy one: Lean gate first, Informal's verifier second, conjunction. zkOracle is a
+TLSNotary deployment with a verified parse certificate and injection-free matcher downstream; the
+2PC and notary trust are not modelled. Behind SP1 Helios, Telepathy, zkBridge, Plumo; parallel to
+Informal's Tendermint client; Etheorem is the executable spec to refine against if Ethereum is
+ever modelled again.
+
+### D. Games (53 files plus Automatafl's 32 emitters)
+
+Automatafl is the strongest application chain in the group: the rules are proved (conservation,
+permutation invariance, n² termination) and the emitted AIR is proved to refine them from
+`Satisfied2` of byte-pinned descriptors (`astep_sat_imp_automatonStepCfgN`,
+`resolve_sat_imp_roundBoard11`, the capstones), with executable falsifiers for earlier wounds. No
+prior work has both halves. Honest residuals: capstones carry clash and resolvability as
+hypotheses instead of deriving them; the winner is never a public input; seat identity is outside
+the proof; the sealed-move leg is proved not to compose with the live host; the full match fold is
+`#[ignore]`d everywhere with one documented run. MultiwayTug's AIR and program are reachable from
+no target. The private descriptors (preference, raid, shuffle) never state hiding; the shuffle
+proves no randomness. The beacon relation used by dice and procgen is in Rust only; `Dungeon`
+takes it as an opaque natural. Behind Bayer–Groth shuffles and drand; ahead of every formalized
+game-rules effort on the rules-to-circuit refinement.
+
+### E. Path of Angels (161 files, 14 crates)
+
+The consumer map of the substrate. The content contract forbids prose and admits only numeric
+authored content through a validator proved sound and complete against a Prop; the judge wire is
+one exported function with empty string as the sole refusal, a strict decoder with injective
+accepted bytes, and a success-iff theorem; hidden instances are derived at judge time from a
+per-slot commitment and re-derived inside admission; event sourcing has kernel-checked replay and
+snapshot-cache equivalence laws; constructor-privacy boundaries are pinned per runtime. Those six
+shapes are the application discipline obend `apps/` should adopt. Gaps: byte-layer parser
+adequacy is named (`CanonicalCodec.ParserAdequate`) and proved nowhere; the hidden-instance
+commitment has no hiding or binding theorem; signature verification is external; the network
+judge is sound only under a prose precondition about the node; `native_decide` remains inside
+the FFI closure in ten non-fixture modules, contrary to the fixture split's own claim; the
+dreggnet game-infrastructure crates have no Lean at all. Ahead of MUD and of every surveyed
+interactive-fiction engine on verifiable content and event sourcing; behind Dojo on proved
+execution leaving the node; no attested-inference seam by design.
+
+### F. The instruments (Verify/, Claims, Tactics, scripts, wip)
+
+breadstuffs has the richest refutation-armed gating of the three trees: `FloorRatchet` with a
+baseline that may only shrink and five throw sites before a floor is honoured,
+`FreeConclusionRatchet`, `KeystoneLint` with satisfiable and teeth companions, `ToothCheck`,
+`ApexPremiseVacuity` (the four injectivity floors refuted at BabyBear through `compress` alone),
+`#assert_compiled`, `#assert_depends_on`. It is behind the 2026 Lean dataset-defects checkers on
+the generic contradiction attempt, empty-domain and unused-binder checks, and it has no catch for
+tautological statements, Prop-valued typeclass fields entering as instance arguments, empty-carrier
+quantification, fixture-only decides, checker-verdict meanings, or duplicate baseline rows (426
+names registered twice with slack logged only). `CLAIMS.md` is stale on its own headline
+statements (zero `native_decide` against 603 files that use it; twenty parked pins against
+hundreds live) and its rows are checked by nothing in any workflow; the prose-claims script, the
+orphan check and the ratchet-darkness check are hand-run. The reader produced the unified design
+obebuilder §2.6 asked for: one census pass over the elaborated environment emitting typed findings
+`(decl, class, evidence, verdict)` against a checked-in baseline, ten classes each with its honest
+source module (obend Census for reachability, `#assert_compiled` and `#assert_depends_on` from
+Dregg2 Tactics, `FloorRatchet.surface` and `InjSpelling` generalized for refuted families,
+`FreeConclusionRatchet` over every theorem rather than tagged keystones, minidregg's STALE and
+TOOTHLESS verdicts and inhabitation check, `atp-checkers` VacuousCheck, `ToothCheck` same-object
+companions, `#docs_census` with the mechanical subset of prose claims, and new code only for
+tautology detection and baseline hygiene).
+
+### G. Foundations (158 files)
+
+Paco is a faithful lattice-level port with the full up-to and companion tower, sorry-free, used
+load-bearingly only by `CoinductiveAdversary`; its respectfulness route rests on a class
+(`ExtCompatImpliesCompat`) that Coq's paco proves unconditionally; the vendored source says MIT
+while its LICENSE is Apache 2.0 and the upstream repository could not be found. The Realizability
+layer is a clean evidenced-frame and tripos-fragment library interpreting nothing in Dregg2;
+`CONSTRUCTIVE-KNOWLEDGE.md`'s link from the authority thesis to realizability is prose. The
+categorical semantics has `Initiality` partial inside its own file but discharged tree-wide by
+`Argus/CompileFold`. Deos: `PatchCategory` is the best mechanized categorical patch theory the
+reader could find anywhere (pushout-up-to-iso uniqueness, conflict as missing pushout), with
+dregg-doc linked by comment only; `FogOfWar.noninterference` and `Vault.donation_immunity` are
+tautologies inside pin lists; `InfoFlow/Confinement` refutes full noninterference on the kernel
+(credit signal, refusal timing) and proves the integrity half, which is the honest statement §3
+should cite instead. `ForMathlib/PolishchukSpielman` is a full mechanization of the corrected
+bivariate lemma with no public counterpart found; Guruswami–Sudan's interpolation half is a named
+Prop; Berry–Esseen is a tilt identity, not the bound. One real `sorry` in the whole pass:
+`Bignum/LedgerBalance.biasedLimbs_valid`, imported by nothing.
+
+### H. The Rust prover stack (37 crates)
+
+Plonky3 at a pinned revision (BabyBear, Poseidon2 width 16, LogUp, FRI arity 8, log blowup 6, 19
+queries), with a Lean-owned parametric FRI ledger (`FriLedgerSound`, `FriArityTransfer`) whose
+per-fold bound holds only for words at least 496 of 512 far and is false in the Johnson band;
+`DeployedRefines` (Rust verify implies Lean `verifyAlgo`) is an undischarged Prop with mutation
+tests as its only evidence; `EngineSound` is assumed. The Lean to Rust binding is 227 exported
+symbols through `dregg-lean-ffi` with a C shim, archive-freshness tests and a cfg ledger, plus
+819 `include_str` sites of Lean-emitted artifacts; the archive seed is not in the repository, so
+a fresh checkout builds dark with every Lean-backed decision silently absent. The verifier shares
+the prover's descriptor interpreter and links the recursion prover. Whole-history proofs for
+grains are not minted (`WHOLE_HISTORY_GAP`). The post-quantum and threshold crates are reference
+implementations bound to Lean by API models and doc comments, not vectors; dregg-pq's fallback is
+unaudited RustCrypto behind an abort gate where libcrux would be the verified drop-in. Nothing is
+extracted; hax 0.4's Lean backend is the stated upstream path and the FRI ledger's config types
+are the first candidate. obend's `hardware/rust-ffi` has no build script, no C linkage and a
+Rust-versus-Rust codec test; the dregg-lean-ffi build, shim, freshness and fail-closed oracle
+patterns are the model to copy.
+
+### What pass 2 changes in §5
+
+- **A seventh system-level row.** The light-client carriers are the same shape error as
+  `FogOfWar`: a hypothesis that cannot be inhabited at the deployed instance, carried through
+  `#assert_axioms`-clean theorems. The unified instrument's class 3 (refuted families) and class 6
+  (inhabitation) would have caught both; it moves ahead of item 1 in §5, because every other item
+  lands theorems that the instrument must be able to refuse.
+- **Rebase, do not rewrite.** The Pasta MSM tower onto `PastaFieldSound`; the Bridge no-forgery
+  theorems onto the `pairSepOn` floor the Emit folds already carry; the thirty-three orphan rungs
+  into the default build or out of the tree.
+- **The application discipline is settled** by Automatafl and Path of Angels: rules first with
+  conservation and invariance proved, the emitter second with a `Satisfied2` capstone, a
+  single-export judge wire with a success-iff theorem, numeric content contracts, event sourcing
+  with replay laws, constructor-privacy boundaries. obend `apps/` adopts those six shapes.
+- **obend's FFI is the first concrete port**: build script, C shim, freshness ledger, fail-closed
+  oracle registration, one Lean root for the exported closure, Lean-emitted goldens in place of
+  the Rust-versus-Rust test.
+- **Two licences and one sorry to settle by hand**: the Paco provenance, and
+  `LedgerBalance.biasedLimbs_valid`.
+
+The Exec kernel and CapTP slice follows as a second addendum when its two readers report.
