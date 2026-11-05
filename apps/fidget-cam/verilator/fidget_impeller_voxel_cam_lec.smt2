@@ -20,7 +20,7 @@
 (define-fun r_1 () (_ BitVec 64) (|fidget_impeller_voxel_cam_n reg_solid_voxel_count| s))
 (define-fun r_2 () (_ BitVec 64) (|fidget_impeller_voxel_cam_n reg_gouge_violations| s))
 
-; 3. Lean's model of the RtlModule (emitExprSmt2 of evalRtlExpr) over those values
+; 3. Lean's model of the RtlModule over those values (smtOf; smtOf_sound proves it is evalRtlExpr)
 (define-fun spec_w_0 () (_ BitVec 64) in_0)
 (define-fun spec_w_1 () (_ BitVec 64) #x0000000000000000)
 (define-fun spec_w_2 () (_ BitVec 64) (bvsub spec_w_0 spec_w_1))

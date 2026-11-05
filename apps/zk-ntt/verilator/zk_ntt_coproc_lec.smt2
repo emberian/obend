@@ -25,7 +25,7 @@
 (define-fun r_4 () (_ BitVec 64) (|zk_ntt_coproc_n challenge| s))
 (define-fun r_5 () (_ BitVec 64) (|zk_ntt_coproc_n pair_cnt| s))
 
-; 3. Lean's model of the RtlModule (emitExprSmt2 of evalRtlExpr) over those values
+; 3. Lean's model of the RtlModule over those values (smtOf; smtOf_sound proves it is evalRtlExpr)
 (define-fun spec_w_0 () (_ BitVec 64) (ite (distinct (ite (bvult in_0 #xffffffff00000001) #x0000000000000001 #x0000000000000000) #x0000000000000000) in_0 (bvsub in_0 #xffffffff00000001)))
 (define-fun spec_w_1 () (_ BitVec 64) (ite (distinct (ite (bvult in_1 #xffffffff00000001) #x0000000000000001 #x0000000000000000) #x0000000000000000) in_1 (bvsub in_1 #xffffffff00000001)))
 (define-fun spec_w_2 () (_ BitVec 64) (ite (distinct (ite (bvult in_2 #xffffffff00000001) #x0000000000000001 #x0000000000000000) #x0000000000000000) in_2 (bvsub in_2 #xffffffff00000001)))

@@ -17,7 +17,7 @@
 (define-fun r_1 () (_ BitVec 64) (|obend_retimed_mac2_n cReg| s))
 (define-fun r_2 () (_ BitVec 64) (|obend_retimed_mac2_n outReg| s))
 
-; 3. Lean's model of the RtlModule (emitExprSmt2 of evalRtlExpr) over those values
+; 3. Lean's model of the RtlModule over those values (smtOf; smtOf_sound proves it is evalRtlExpr)
 (define-fun spec_w_0 () (_ BitVec 64) (bvmul in_0 in_1))
 (define-fun spec_w_1 () (_ BitVec 64) (bvadd r_0 r_1))
 

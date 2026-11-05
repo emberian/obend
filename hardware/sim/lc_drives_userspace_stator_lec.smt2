@@ -17,7 +17,7 @@
 (define-fun r_3 () (_ BitVec 64) (|lc_drives_userspace_stator_n reg_sdfMargin| s))
 (define-fun r_4 () (_ BitVec 64) (|lc_drives_userspace_stator_n reg_peakWindingTemp| s))
 
-; 3. Lean's model of the RtlModule (emitExprSmt2 of evalRtlExpr) over those values
+; 3. Lean's model of the RtlModule over those values (smtOf; smtOf_sound proves it is evalRtlExpr)
 (define-fun spec_w_0 () (_ BitVec 64) #x000000000000018b)
 (define-fun spec_w_1 () (_ BitVec 64) (bvadd (bvmul in_0 #x0000000000000004) #x0000000000000002))
 (define-fun spec_w_2 () (_ BitVec 64) #x0000000000000009)
