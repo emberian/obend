@@ -8,28 +8,26 @@ module obend_ice40_mac8 (
   input  logic [15:0] c,
   output logic [15:0] mac_out
 );
-  logic [63:0] w_0; // w_mul
-  logic [63:0] w_1; // w_add
-  logic [63:0] mulReg;
-  logic [63:0] cReg;
-  logic [63:0] outReg;
-  logic [63:0] o_mac_out;
+  logic [15:0] w_0; // w_mul
+  logic [15:0] w_1; // w_add
+  logic [15:0] mulReg;
+  logic [15:0] cReg;
+  logic [15:0] outReg;
   always_comb begin
-    w_0 = (64'(a) * 64'(b));
-    w_1 = (mulReg + cReg);
-    o_mac_out = outReg;
+    w_0 = 16'((64'(a) * 64'(b)));
+    w_1 = 16'(((64'(mulReg) + 64'(cReg)) & 64'd65535));
+    mac_out = 16'(64'(outReg));
   end
-  assign mac_out = o_mac_out[15:0];
   // Synchronous-reset control registers
   always_ff @(posedge clk) begin
     if (rst) begin
-      mulReg <= 64'd0;
-      cReg <= 64'd0;
-      outReg <= 64'd0;
+      mulReg <= 16'd0;
+      cReg <= 16'd0;
+      outReg <= 16'd0;
     end else begin
-      mulReg <= w_0;
-      cReg <= 64'(c);
-      outReg <= w_1;
+      mulReg <= 16'(64'(w_0));
+      cReg <= 16'(64'(c));
+      outReg <= 16'(64'(w_1));
     end
   end
 endmodule

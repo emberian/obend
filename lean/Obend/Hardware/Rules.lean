@@ -143,6 +143,7 @@ def exprAvoidsReg (rIdx : Nat) : RtlExpr → Bool
   | .alu _ a b     => exprAvoidsReg rIdx a && exprAvoidsReg rIdx b
   | .mux c t f     => exprAvoidsReg rIdx c && exprAvoidsReg rIdx t && exprAvoidsReg rIdx f
   | .bitNot a      => exprAvoidsReg rIdx a
+  | .resize _ a    => exprAvoidsReg rIdx a
 
 /-- Check statically that neither the guard nor the value expression of `rule` reads `rIdx`. -/
 def ruleAvoidsReg (rIdx : Nat) (rule : HwRule) : Bool :=
@@ -176,6 +177,9 @@ theorem evalRtlExpr_update_irrelevant
     simp only [exprAvoidsReg, Bool.and_eq_true] at hAvoid
     simp only [evalRtlExpr, ihc hAvoid.1.1, iht hAvoid.1.2, ihf hAvoid.2]
   | bitNot a iha =>
+    simp only [exprAvoidsReg] at hAvoid
+    simp only [evalRtlExpr, iha hAvoid]
+  | resize op a iha =>
     simp only [exprAvoidsReg] at hAvoid
     simp only [evalRtlExpr, iha hAvoid]
 

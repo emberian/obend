@@ -13,7 +13,8 @@ cd "${SCRIPT_DIR}"
 
 echo "=== [1/4] byte equality: committed .sv == obend-emit-sv output ==="
 for pair in "mac2:obend_retimed_mac2.sv" "tcad:cleanroom_tcad_stack.sv" \
-            "stator:lc_drives_userspace_stator.sv" "mill:cnc_5axis_userspace_mill.sv"; do
+            "stator:lc_drives_userspace_stator.sv" "mill:cnc_5axis_userspace_mill.sv" \
+            "width-probe:obend_width_probe.sv"; do
   target="${pair%%:*}"; file="${pair#*:}"
   "${EMIT}" "${target}" --out "/tmp/obend_emit_${file}" >/dev/null
   if ! cmp -s "/tmp/obend_emit_${file}" "${file}"; then
@@ -26,13 +27,15 @@ done
 
 echo "=== [2/4] Verilator -Wall lint + harness ==="
 "${VERILATOR}" --lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSED --top-module tb_top tb_top.sv
+# Widths and two clock domains: the emitted probe lints clean under -Wall on its own.
+"${VERILATOR}" --lint-only -Wall --top-module obend_width_probe obend_width_probe.sv
 rm -rf obj_dir
 "${VERILATOR}" -Wall -Wno-DECLFILENAME -Wno-UNUSED --cc --exe --build --trace -j 0 \
   --top-module tb_top tb_top.sv sim_main.cpp -o Vtb_top >/dev/null
 ./obj_dir/Vtb_top
 
 echo "=== [3/4] obend verilate: Lean model vs Verilated emitted SV (16 vectors x 4 cycles) ==="
-for top in cleanroom_tcad_stack lc_drives_userspace_stator cnc_5axis_userspace_mill; do
+for top in cleanroom_tcad_stack lc_drives_userspace_stator cnc_5axis_userspace_mill obend_width_probe; do
   (cd "${REPO_ROOT}" && "${OBEND}" verilate --top "${top}" --work-dir hardware/sim/obj_dir/verilate)
 done
 

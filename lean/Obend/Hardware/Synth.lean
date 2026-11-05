@@ -157,6 +157,7 @@ inductive BelKind where
   | carry4                      -- Fast lookahead carry chain primitive (`CARRY4` / `CARRY8`)
   | dspMul                      -- Hard DSP multiplier slice (`DSP48E2` / `DSP58`)
   | ff       (resetKind : ResetKind) -- Synchronous flip-flop BEL (`FDRE` / `FDPE`)
+  | route    (op : RtlWidthOp)  -- A width operator: routing, constant zeros and sign fan-out, no logic
   deriving DecidableEq, Repr
 
 /-- A technology-mapped Basic Element of Logic (`BelCell`) in the post-synthesis FPGA netlist. -/
@@ -205,7 +206,8 @@ FPGA `BelCell` primitives:
 * `.alu .bitXor` $\mapsto$ `BelKind.lut2 0x6`,
 * `.alu .add` $\mapsto$ `BelKind.lut2 0x6` (propagate XOR) + `BelKind.carry4`,
 * `.mux` $\mapsto$ `BelKind.lut3 0xCA`,
-* `.bitNot` $\mapsto$ `BelKind.lut1 0x1`. -/
+* `.bitNot` $\mapsto$ `BelKind.lut1 0x1`,
+* `.resize` $\mapsto$ `BelKind.route` (a slice, extension or truncation is wiring). -/
 def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
   | .const v       => [{ dstName := dstName, kind := .constBel v, inputs := [] }]
   | .inputPort idx => [{ dstName := dstName, kind := .portIn idx, inputs := [s!"in_{idx}"] }]
@@ -215,6 +217,10 @@ def synthesizeExprToBels (dstName : String) : RtlExpr → List BelCell
     let aName := dstName ++ "_not_in"
     synthesizeExprToBels aName a ++
       [{ dstName := dstName, kind := .lut1 0x1, inputs := [aName] }]
+  | .resize op a   =>
+    let aName := dstName ++ "_route_in"
+    synthesizeExprToBels aName a ++
+      [{ dstName := dstName, kind := .route op, inputs := [aName] }]
   | .mux c t f     =>
     let fName := dstName ++ "_d0"
     let tName := dstName ++ "_d1"
@@ -308,6 +314,7 @@ def checkBelCellValid (c : BelCell) : Bool :=
   | .carry4     => c.inputs.length == 2 || c.inputs.length == 3
   | .dspMul     => c.inputs.length == 2
   | .ff _       => c.inputs.length == 1
+  | .route _    => c.inputs.length == 1
 
 /-- Check that every cell in a `BelNetlist` satisfies `checkBelCellValid`. -/
 def checkBelNetlistValid (nl : BelNetlist) : Bool :=
@@ -321,6 +328,8 @@ theorem synthesizeExprToBels_no_ff (dstName : String) (e : RtlExpr) :
   | wireRef _ => rfl
   | regRead _ => rfl
   | bitNot a iha =>
+    simp [synthesizeExprToBels, List.filter_append, iha, isFfBel]
+  | resize op a iha =>
     simp [synthesizeExprToBels, List.filter_append, iha, isFfBel]
   | mux c t f ihc iht ihf =>
     simp [synthesizeExprToBels, List.filter_append, ihc, iht, ihf, isFfBel]
@@ -351,6 +360,8 @@ theorem synthesizeExprToBels_valid (dstName : String) (e : RtlExpr) :
   | wireRef _ => rfl
   | regRead _ => rfl
   | bitNot a iha =>
+    simp [synthesizeExprToBels, List.all_append, iha, checkBelCellValid]
+  | resize op a iha =>
     simp [synthesizeExprToBels, List.all_append, iha, checkBelCellValid]
   | mux c t f ihc iht ihf =>
     simp [synthesizeExprToBels, List.all_append, ihc, iht, ihf, checkBelCellValid]
