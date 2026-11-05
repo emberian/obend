@@ -496,7 +496,54 @@ def stepModuleRegs
       fun i => if i == r.regIdx then v else nextSt i)
     regState
 
+/-- The wire table as an array (the executable core of `evalWireTableImpl`): wire `i` at index `i`,
+`0#64` where nothing is assigned, the last assignment winning. -/
+def evalWireTableArr (inputs regs : Nat → BitVec 64) (assigns : List WireAssign) : Array (BitVec 64) :=
+  let n := assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0
+  assigns.foldl
+    (fun (arr : Array (BitVec 64)) a =>
+      let env : Nat → BitVec 64 := fun i => arr.getD i 0#64
+      arr.set! a.wireIdx (evalRtlExpr inputs env regs a.expr))
+    (Array.replicate n 0#64)
+
+/-- One clock edge on a register file held as an array (`st`, with `init` above its end): the
+executable core of `runModuleTraceImpl`, same values as `stepModuleRegs`. -/
+def stepRegsArr (m : RtlModule) (rst : Bool) (inputs : Nat → BitVec 64)
+    (init : Nat → BitVec 64) (st : Array (BitVec 64)) : Array (BitVec 64) :=
+  let regState : Nat → BitVec 64 := fun i => st.getD i (init i)
+  let wArr := evalWireTableArr inputs regState m.wires
+  let wireEnv : Nat → BitVec 64 := fun i => wArr.getD i 0#64
+  m.regs.foldl
+    (fun (arr : Array (BitVec 64)) r =>
+      let v :=
+        match r.resetKind with
+        | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
+        | .syncReset initVal =>
+          if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
+      arr.set! r.regIdx v)
+    st
+
+/-- Executable twin of `runModuleTrace` (`implemented_by`): the register file is an array from
+cycle to cycle. Lean's compiler eta-expands a definition that returns a function, so the array a
+`stepModuleRegsImpl` builds is rebuilt on every read of its result, and a trace of closures re-ran
+every earlier cycle per read: exponential in the cycle count once registers read each other
+(`obend-emit-sv` did not finish initialising the RISC firmware run, 2026-11-05). Here each cycle
+reads the previous array. The returned closure still re-runs the trace per read, linearly.
+Indices beyond a million fall back to the definition's fold. -/
+def runModuleTraceImpl
+    (m : RtlModule)
+    (initRegs : Nat → BitVec 64)
+    (trace : List (Bool × (Nat → BitVec 64))) : Nat → BitVec 64 :=
+  let n := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
+  if n > 1000000 then
+    trace.foldl (fun st (rst, ins) => stepModuleRegs m rst ins st) initRegs
+  else
+    let a0 : Array (BitVec 64) := (List.range n).toArray.map initRegs
+    let fin := trace.foldl (fun st c => stepRegsArr m c.1 c.2 initRegs st) a0
+    fun i => fin.getD i (initRegs i)
+
 /-- Run an `RtlModule` over a trace of `(rst, inputs)` cycles, returning the final register state. -/
+@[implemented_by runModuleTraceImpl]
 def runModuleTrace
     (m : RtlModule)
     (initRegs : Nat → BitVec 64)

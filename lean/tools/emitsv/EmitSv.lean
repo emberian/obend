@@ -25,8 +25,7 @@ import Obend.Hardware.YosysLec
 import Obend.Apps.ObendRisc
 import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
--- `Obend.Apps.SovereignDrex` is red at HEAD (`checkContractCert` unresolved, line 505) until the Apps gate
--- lands; the `drex` target returns to this list then and `verify_sovereign_drex.sh` fails honestly meanwhile.
+import Obend.Apps.SovereignDrex
 import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SiliconKernelVerilator
 
@@ -156,7 +155,8 @@ def render : String → Except String String
   -- The posted program is a Lean string (`postNgc` over the certified passes); the Verilator
   -- testbench reads this file and re-checks its waypoints against the RTL, it does not write one.
   | "fidget-ngc" => .ok Obend.Apps.FidgetCam.impeller5AxisNgc
-  | "drex"    => .error "drex: Obend.Apps.SovereignDrex does not build at HEAD; target disabled until the Apps gate lands"
+  | "drex"    => emitWithHeader "Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule" Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule
+  | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
   | "golden-silicon-kernel" => .ok goldenSiliconKernel
   | "mac2"    => emitWithHeader "Obend.Hardware.Synth.goldenRetimedMacRtl" Obend.Hardware.Synth.goldenRetimedMacRtl

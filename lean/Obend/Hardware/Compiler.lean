@@ -1181,7 +1181,16 @@ def compileBookToSeqRtlSat (modName : String) (B : Book) : Option RtlModule :=
       }
   | _ => none
 
+/-- Executable twin of `stepSeqModuleN`: the same cycles through `runModuleTraceImpl`, whose
+register file is an array between cycles (a chain of `stepModuleRegs` closures re-runs every earlier
+cycle on each read; see `HDL.runModuleTraceImpl`). -/
+def stepSeqModuleNImpl
+    (m : RtlModule)
+    (inputs : Nat → BitVec 64) (numCycles : Nat) (regSt : Nat → BitVec 64) : Nat → BitVec 64 :=
+  runModuleTraceImpl m regSt (List.replicate numCycles (false, inputs))
+
 /-- Step a sequential `RtlModule` for `numCycles` clock edges (`rst = false`). -/
+@[implemented_by stepSeqModuleNImpl]
 def stepSeqModuleN
     (m : RtlModule)
     (inputs : Nat → BitVec 64) : Nat → (Nat → BitVec 64) → (Nat → BitVec 64)

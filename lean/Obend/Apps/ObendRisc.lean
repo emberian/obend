@@ -458,7 +458,15 @@ def runRiscFirmwareSocCycles :
         fun addr => if addr == dAddr then dmemWdata else dmem addr
       else
         dmem
-    let st' := stepModuleRegs obendRiscCpuRtlModule false inputs st
+    -- The next register file, read once per register into an array: passing the closure
+    -- `stepModuleRegs` returns down 21 cycles re-ran every earlier cycle on each read (its
+    -- executable twin is eta-expanded by the compiler; `HDL.runModuleTraceImpl`), and
+    -- `obend-emit-sv` did not finish initialising (2026-11-05). Same values: registers no
+    -- `RegSpec` writes fall through to `st`, as in `stepModuleRegs`.
+    let next := stepModuleRegs obendRiscCpuRtlModule false inputs st
+    let nRegs := obendRiscCpuRtlModule.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
+    let regArr : Array (BitVec 64) := (List.range nRegs).toArray.map next
+    let st' : Nat → BitVec 64 := fun i => if i < nRegs then regArr.getD i 0#64 else st i
     runRiscFirmwareSocCycles k st' dmem'
 
 /-- The architectural state after `n` cycles of the firmware, as `key=value` lines: the golden the
