@@ -1032,18 +1032,14 @@ theorem lower_inductive_sound
 export Obend.Lower.LCNF (
   LcnfQuantity LcnfParam LcnfArg LCNFArg LcnfLetValue LCNFLetValue LcnfAlt LcnfCode LCNFCode
   LcnfFunDecl LCNFFunDecl LcnfModule
-  eraseZeroQtyArgs evalLcnfArgNat readLinearStore writeLinearStore lcnfCtorTagId packLcnfCtor
-  evalLcnfLetValue evalLcnfCode
+  eraseZeroQtyArgs evalLcnfArgNat readLinearStore writeLinearStore evalLcnfLetValue evalLcnfCode
   checkLinearLetValue checkLinearStateToken checkLinearArms
   lcnfArgToLExpr lcnfLetValueToLExpr wrapMinorBvars applyLcnfArgs
   compileLcnfToLExpr lcnfToLExpr lcnfArmsToLExpr compileLcnfToCore4 lowerLCNF
   lcnfFunDeclToLExpr lowerLCNFFunDecl compileLcnfToBook compileLcnfFunDeclToBook
   sampleLcnfRecDecl sampleLcnfRecBody sampleLcnfRecDecl_runs_zero
   sampleLcnfAstMatch sampleLcnfAstMatch_runs_42
-  sampleLcnfAstMatchSort sampleLcnfAstMatchSort_runs_42
-  sampleLcnfJpCode sampleLcnfJpCode_runs_42 sampleLcnfAppCode
-  sampleLinearStateCode sampleLinearStateOverwriteCode sampleDuplicatedStateTokCode
-  isClosedDecisionCode evalLcnfCode_simulates_core4 evalLcnfCode_app_cases_state_sound
+  sampleLcnfJpCode sampleLcnfJpCode_runs_42 sampleLinearStateCode sampleDuplicatedStateTokCode
   lcnf_zero_erasure_sound lcnf_linear_state_conserved lcnf_elab_pass_to_book_sound
 )
 
