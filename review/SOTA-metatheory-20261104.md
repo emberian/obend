@@ -157,7 +157,53 @@ twice with different objects) and no registry uniqueness theorem; the dfa-policy
 obend automata port sets `Judge.Meaning` to the checker verdict in all three instances, so its
 format-level soundness is tautological; the semantic theorems sit beside the judge, not in it.
 
-## 3. The ingredients, named
+## 3. The frame §1 and §2 had wrong: the system is the object
+
+Ember's correction (2026-11-04): the ambition is formally verified, zero-knowledge, distributed
+Houyhnhnm computing. The eleven chapters of Rideau's manifesto are the spec; dregg and deos are
+the construction (`docs/deos/HOUYHNHNM-CONVERGENCE.md`, the 2026-06-19 frontier memory); the
+metatheory is constructive knowledge: a principal's authority over a resource is its ability to
+produce a witness the kernel accepts, under non-forgeability, monotone attenuation, kernel
+enforcement and zk-checkability (`metatheory/CONSTRUCTIVE-KNOWLEDGE.md` §0). Read that way, §2's
+comparisons are the comparison for one slice: chapter 10 says global deterministic semantics
+matters only to verify other parties' computations, so Selvage, FlashProve and ArkLib are measured
+by whether a light client holding no secrets can check a production, not by prover throughput.
+The rest of the manifesto has its own theorems, and the trees already carry some of them. The
+table is the ledger to keep; "exists" means a reader or the tree's own ledger located the
+declaration, "pass 2" means the running second pass reopens it.
+
+| principle (chapter) | the theorem it needs | what exists | status |
+|---|---|---|---|
+| orthogonal persistence; the log fully determines state (2, 3) | replay of the witnessed input stream over the deployed kernel is deterministic and reaches the same image | `Exec/CellRuntime` `replay_deterministic_run`, `checkpoint_restore_roundtrip`; `World::open_recovering` in Rust | pass 2 reopens; the Rust boot path is bound by no theorem |
+| virtualization is branching; errors stay imaginary in unmerged branches (3, 4) | a branch holds no capability to main, so its effects cannot reach main: noninterference across the membrane | `Exec/CellRuntime.time_travel_fork`; `Deos/FogOfWar.noninterference`, whose hypothesis is its conclusion (pass 1, confirmed); `Proof/Noninterference` covers the `setFieldA` slice only | the central theorem of the branch story is vacuous today |
+| settlement; revocation as the one non-monotone operation (3 and the frontier memory) | accept implies a genuine transition whose authority was live at the settlement tip | `Metatheory/SettlementSoundness.lean:153` and `Dregg2/Circuit/SettlementSoundness.lean:244`, pinned per the tree's own ledger; `finalized_commit_binds_revoked` | pass 2 reopens; rests on the STARK floor of §2 |
+| the Monitor: an external, simple, complete watcher that reads the live artifact (3, 6) | claimed-versus-actual divergence is a decidable judge over the live state, recursively | `sel4/dregg-firmament/src/recovery_monitor.rs`, Rust only | no Lean statement; obend's `Judge.Format` is the natural home |
+| non-stop change; code change as a transaction; linear-logic upgrade (5) | migration conforms, conserves and cannot brick; dropped data is dropped explicitly | `Exec/StateMigration` `migrate_conforms`, `migrate_conserves`, `migrate_anti_brick`; `Exec/CellUpgrade` | pass 2 reopens; the "explicit drop" half is prose |
+| polycentric kernels; full abstraction enforced (6, 8) | every cell is its own kernel; no amplification; CapTP handoff and GC sound across vats | `Spec/Authority` (Granovetter with origin), `Exec/CapTP*` (`handoff_non_amplifying`, GC by lease), `Firmament/SeL4*` | pass 2 reopens; crypto enters as classes throughout (pass 1) |
+| platforms not applications; no difference between using and programming (7) | the inspector and the document language are turns over the same cells | `Deos/PatchCategory`, `DocMerge`, `BranchStitch` (merge as pushout); dregg-doc crate; the self-hosting loop (`docs/deos/SELF-HOSTING-LOOP.md`) | pass 2 reopens; `BranchStitch` has no importer (pass 1) |
+| turtles: building down, no turtle special; meta is down (4) | each lowering preserves behaviour, so an abstraction can be re-chosen later | obend `Lower` (Lean to Core4 to Leaf to RTL to silicon) with `link_bequiv_bindBookPins` landed today; Dregg2 `Metatheory/CertifiedPresentationChange` | obend is the turtle tower of the group; the hardware floor is the FPGA lane |
+| the Urbit critique: metaprogramming plus proven equivalence, not a frozen VM with jets (10) | a fast path is admitted only with an equivalence proof to the semantics | obend's bisimulation-up-to and the specialization judge are exactly jets-with-proofs; `Theory/NockCost` in minidregg prices the alternative | ahead of Urbit by construction; the claim needs the lowering chain closed to silicon |
+| build system as the dev system at the meta level; hermetic, source-addressed (9) | the demand-driven memo is the build | the M2 memo (frontier memory); obebuilder's segment ledger | not a theorem anywhere; obebuilder is where it would live |
+| bad tools not bad users; preemptive enforcement (8, 11) | the harness refuses, the agent does not promise | obend `#tooth`, minidregg hypothesis ledger, Dregg2 `Verify/` ratchets, obebuilder lints | the method, not a feature; pass 2 compares the three instrument sets |
+
+System-level state of the art the earlier sections never named, which is what "beyond" has to
+be measured against: seL4 and l4v (integrity and confidentiality theorems the authority spine
+already templates on), CertiKOS and Hyperkernel (verified kernels with no capability network),
+Spritely Goblins and OCapN (object capabilities with transactional heaps and time travel, no
+proofs), Agoric SwingSet (vats, upgrade, no proofs), Croquet and TeaTime (replicated deterministic
+computation, the persistence-by-replay story without a verifier), Unison (content-addressed code
+and abilities), Nix and Guix (hermetic source-addressed builds, chapter 9 realized without
+verification), Pijul and the local-first line (Automerge, Willow: patch theory and sheaf
+restriction without authority), Sandstorm (the grain model the tree already bridges to), Urbit
+(the foil), Mina (the succinct cross-party verification slice, from ember's own history), and
+Robigalia (the 2015 idea this continues). No system on that list has the combination: capability
+kernel, conservation, verified executor exported into the running node, light-client checkable
+settlement, branching with consent, and a hardware lowering with equivalence proofs. The trees
+have each piece in some state; the proof-system items in §4 are what the settlement and
+light-client rows rest on, and the three vacuous or absent rows (membrane noninterference, the
+Monitor as a judge, the build as a theorem) are the system-level gaps.
+
+## 4. The proof-system ingredients, named
 
 What "formal to the bones" needs that is not in any of the three trees, or is in one and not the
 others:
@@ -213,10 +259,16 @@ others:
     GST-style delivery and honest-leader recurrence some wave has `Committed`", and a Hyper
     Hoare-style logic over `execFullTurnA` so noninterference grows past one slice.
 
-## 4. The program, in order of leverage
+## 5. The program, in order of leverage
 
-Each item names the source module and the destination; nothing here is a spike.
+Each item names the source module and the destination; nothing here is a spike. Reordered after
+§3: the system theorems lead, the proof-system items are what they rest on.
 
+0. The three system-level gaps of §3: membrane noninterference as a real theorem over
+   `execFullTurnA` (a Hyper Hoare-style unwinding, replacing `FogOfWar.noninterference`); the
+   Monitor as a registered judge whose object is the live cell state and whose certificate is the
+   divergence witness; settlement soundness reopened with its STARK floor named as a hypothesis in
+   the `Judge.Format` sense rather than carried as a class.
 1. obend `Judge/Air.lean` from minidregg `PredCompile` + `Air` + `AirFlatten`; `Judge.Format`
    grows an assumption field and a sigma object; one registry with a uniqueness theorem
    (`Logic/Obligation.findFormat` and `Vault/Hyperedge.findJudgeFormat` collapse to one).
@@ -237,14 +289,15 @@ Each item names the source module and the destination; nothing here is a spike.
    and cross-cell forms from `Authority/*`.
 5. Instruments: the hypothesis ledger core into `Obend/Census.lean` (prefix `Obend`, no Mathlib,
    obend plants); pass-2's matrix of vacuity classes against the three instrument sets decides what
-   is written new; the lints in `obebuilder/DESIGN.md` §2.6 are its consumers.
+   is written new; the lints in `obebuilder/DESIGN.md` §2.6 are its consumers. The §3 ledger of
+   principles against theorems becomes a row family in the same instrument.
 6. Interaction nets: a `Chain.Cert` of active-pair steps over obend `ReductionMachine`'s net, one
    descriptor, a refinement theorem from its satisfaction to the net reduction; compare 2022/1211
    and HVM2 for the step shape; `EqSatHypergraph` emits rewrite certificates.
 7. FHE: the `SameOpening` gadget on RLWE well-formedness, then t-of-n, then the zkml patch decision.
 8. Distributed: DAG liveness; Hyper Hoare over the executor; Polis beyond two subjects.
 
-## 5. What pass 2 is reading
+## 6. What pass 2 is reading
 
 The Emit families and whether each has a refinement theorem and a Rust consumer; the Lean Kimchi
 and Pickles models and what accept implies; the inbound light clients and the zkOracle stack; the
