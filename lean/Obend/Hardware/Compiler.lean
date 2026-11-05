@@ -1181,21 +1181,32 @@ def compileBookToSeqRtlSat (modName : String) (B : Book) : Option RtlModule :=
       }
   | _ => none
 
-/-- Executable twin of `stepSeqModuleN`: the same cycles through `runModuleTraceImpl`, whose
-register file is an array between cycles (a chain of `stepModuleRegs` closures re-runs every earlier
-cycle on each read; see `HDL.runModuleTraceImpl`). -/
+/-- The compiled form of `stepSeqModuleN` (`stepSeqModuleN_eq_impl`, `@[csimp]`): the same
+cycles as one `runModuleTrace`, whose compiled form keeps the register file in an array between
+cycles (a chain of `stepModuleRegs` closures re-runs every earlier cycle on each read). -/
 def stepSeqModuleNImpl
     (m : RtlModule)
     (inputs : Nat → BitVec 64) (numCycles : Nat) (regSt : Nat → BitVec 64) : Nat → BitVec 64 :=
-  runModuleTraceImpl m regSt (List.replicate numCycles (false, inputs))
+  runModuleTrace m regSt (List.replicate numCycles (false, inputs))
 
 /-- Step a sequential `RtlModule` for `numCycles` clock edges (`rst = false`). -/
-@[implemented_by stepSeqModuleNImpl]
 def stepSeqModuleN
     (m : RtlModule)
     (inputs : Nat → BitVec 64) : Nat → (Nat → BitVec 64) → (Nat → BitVec 64)
   | 0, regSt => regSt
   | k + 1, regSt => stepSeqModuleN m inputs k (stepModuleRegs m false inputs regSt)
+
+/-- **`numCycles` steps are a held-input trace of that length.** -/
+@[csimp] theorem stepSeqModuleN_eq_impl : @stepSeqModuleN = @stepSeqModuleNImpl := by
+  funext m inputs k
+  induction k with
+  | zero => funext regSt; rfl
+  | succ k ih =>
+    funext regSt
+    simp only [stepSeqModuleN, stepSeqModuleNImpl, List.replicate_succ, runModuleTrace,
+      List.foldl_cons]
+    rw [ih]
+    rfl
 
 /-- Reset a sequential `RtlModule` (`rst = true` for 1 cycle) and then step it for `numCycles`
 active clock cycles (`rst = false`) with input port 0 driven by `argVal`, returning the resulting
