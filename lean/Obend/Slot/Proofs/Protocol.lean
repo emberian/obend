@@ -793,7 +793,7 @@ public theorem response_indexed_names_have_foresight :
     (by intro h; cases h)
 
 /-- `planHole` is the response-free naming. -/
-theorem planHole_named : planHole = planNamed (Hn := HoleN) fun _ => () := rfl
+example : planHole = planNamed (Hn := HoleN) fun _ => () := rfl
 
 /-- **An `.other` hole is never planned**: declared chosen by `.other`, the hole is never filled by our plan, so
 every run of the open plan stops at the hole. It "loses" only because `wins` scores a stuck run as

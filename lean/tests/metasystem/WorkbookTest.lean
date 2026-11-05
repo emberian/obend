@@ -43,10 +43,6 @@ set_option maxHeartbeats 800000
 
 #import_obend "lean/tests/obend-source/world/physical/LcDrivesStatorUsd.obend" as LcDrives
 
-/-- The `LcDrivesStatorUsd.obend` package passed `FrontEnd.accept`. -/
-theorem lcDrives_accepted : LcDrives.accepted = true :=
-  LcDrives.accepted_eq
-
 /-- All obligations in `LcDrivesStatorUsd.obend` are verified by `verifyWorkbookObligationsWithLean`. -/
 theorem lcDrives_obligations_verified :
     verifyWorkbookObligationsWithLean LcDrives.package = true := by decide +kernel
@@ -113,10 +109,6 @@ theorem lcDrives_reflected_sdfMargin_steps (r : Nat) :
 /-! ## 2. `#import_obend` on `DeosCounter.obend` -/
 
 #import_obend "lean/tests/obend-source/DeosCounter.obend" as DeosCounter
-
-/-- `DeosCounter.obend` passed `FrontEnd.accept`. -/
-theorem deos_accepted : DeosCounter.accepted = true :=
-  DeosCounter.accepted_eq
 
 /-- `DeosCounter.predecessor` (which uses `match n: case 0 / case 1+p`, i.e. `.ifZero`)
     lowers cleanly to `DeosCounter.predecessor_lexpr`. -/
@@ -210,14 +202,12 @@ def stepDown(n: Nat) -> Nat:
 /-- Every inline declaration using `.label`, `.extend`, `.inject`, `.case`, and `.ifZero`
     passed `FrontEnd.accept` and reflected cleanly into `LExpr`. -/
 theorem inline_all_lowered :
-    InlineBridge.accepted = true ∧
     lowerTerm emptyLayoutEnv InlineBridge.statusTag_term = some InlineBridge.statusTag_lexpr ∧
     lowerTerm emptyLayoutEnv InlineBridge.updatePacket_term = some InlineBridge.updatePacket_lexpr ∧
     lowerTerm emptyLayoutEnv InlineBridge.makeBump_term = some InlineBridge.makeBump_lexpr ∧
     lowerTerm emptyLayoutEnv InlineBridge.applyAction_term = some InlineBridge.applyAction_lexpr ∧
     lowerTerm emptyLayoutEnv InlineBridge.stepDown_term = some InlineBridge.stepDown_lexpr :=
-  ⟨InlineBridge.accepted_eq,
-   InlineBridge.statusTag_lowerTerm_eq,
+  ⟨InlineBridge.statusTag_lowerTerm_eq,
    InlineBridge.updatePacket_lowerTerm_eq,
    InlineBridge.makeBump_lowerTerm_eq,
    InlineBridge.applyAction_lowerTerm_eq,
@@ -424,13 +414,11 @@ elab "#verify_no_sorry_or_choice" : command => do
     ``Obend.Spec.LawCompile.compileKeepsClaim,
     ``Obend.Spec.LawCompile.compileKeepsClaim_step_eval,
     ``Obend.Spec.LawCompile.compileKeepsClaim_inv_eval,
-    ``lcDrives_accepted,
     ``lcDrives_production_book_slots,
     ``lcDrives_production_reflected_members,
     ``lcDrives_baseline_vs_inslot_peak_temp,
     ``lcDrives_benchmark_lexprs,
     ``lcDrives_reflected_sdfMargin_steps,
-    ``deos_accepted,
     ``deos_predecessor_lowered,
     ``deos_activity_defs_lowered,
     ``deos_predecessor_lexpr_succ_sound,

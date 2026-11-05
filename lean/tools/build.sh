@@ -20,13 +20,25 @@ case "$tier" in
   *) echo "usage: tools/build.sh [--parse LOG] tier1|tier2 [lake args]" >&2; exit 2 ;;
 esac
 if [ -n "$parse_only" ]; then
+  # Reading a log back: Lake's own closing line is the status.
   log="$parse_only"; lake_status=0
+  grep -qE "^error: build failed" "$log" && lake_status=1
 else
   mkdir -p .lake/build
   log=".lake/build/$tier.log"
+  # Lake's status is what counts, not tee's: in a POSIX sh pipeline `$?` is the last command's, and a
+  # build whose log ends in `error: build failed` was once reported green this way (2026-11-04).
   # shellcheck disable=SC2086
-  lake build $targets "$@" 2>&1 | tee "$log"
-  lake_status=$?
+  { lake build $targets "$@" 2>&1; echo $? > "$log.status"; } | tee "$log"
+  lake_status=$(cat "$log.status"); rm -f "$log.status"
+fi
+# A build that was stopped (timeout, kill, the box's OOM killer) leaves no line for the module it was
+# elaborating: Lake prints a module only when it finishes. The absence of Lake's closing line is the
+# only trace, and it fails the tier: the module it was in is by construction over budget.
+if ! grep -qE "^Build completed successfully" "$log"; then
+  unfinished=1
+else
+  unfinished=0
 fi
 # Lake prints durations as 123ms, 1.2s, 12s, 3m 4s, 1h 2m. Reduce each `Built <Module> (<dur>)` line to
 # seconds; `:c.o`/`:o` and other facet lines are not module elaborations and are skipped. The line's
@@ -51,6 +63,9 @@ echo "$over" | head -10 | sed 's/^/  /'
 offenders=$(echo "$over" | awk -v budget="$budget" '$1 > budget')
 if [ "$lake_status" -ne 0 ]; then
   echo "build.sh: $tier FAILED (lake exit $lake_status); log at $log"; exit "$lake_status"
+fi
+if [ "$unfinished" -ne 0 ]; then
+  echo "build.sh: $tier did not finish (no 'Build completed successfully' in $log): the module it was elaborating when it stopped is over budget"; exit 4
 fi
 if [ -n "$offenders" ]; then
   echo "build.sh: $tier is over budget; these modules took more than ${budget}s each:"

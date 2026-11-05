@@ -1,12 +1,13 @@
 #!/bin/bash
 # The one-edit measurement (REPORT-20261030 §4; repeated 2026-11-01 after the tiers and the splits, and
 # again after the expose confinement): after a green tier-1 build, (1) a private proof edit in
-# Adequacy's largest piece, (2) an exposed def appended to Term, (3) a body edit of `checkExtension`,
-# a definition of Check that is not exposed; record the rebuilt modules and the wall time of each
-# tier-1 `lake build`.
+# Adequacy's largest piece, (2) an exposed def appended to Term, (3) a body edit of `isRowV`, a
+# definition of Check that is not exposed (`checkExtension`, the 2026-11-01 subject, is gone; the edit is a
+# `let _measurement := 0;` prefix, an Expr change that `simp only`'s zeta removes and `rfl` never sees);
+# record the rebuilt modules and the wall time of each tier-1 `lake build`.
 # Run from lean/ as `tools/measure.sh`. Reverts both edits. One measurement, not a harness.
 set -u
-export LEAN_NUM_THREADS=2
+export LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-2}"
 LOG=docs/MEASURE-$(date +%Y%m%d).log
 PIECE=Obend/Core/Proofs/Adequacy/Safety.lean
 WORK=$(mktemp -d)
@@ -29,13 +30,13 @@ PY
 t lake build
 cp $WORK/Term.bak Obend/Core/Term.lean
 t lake build
-echo "== 3. body edit of an unexposed definition: checkExtension in Obend/Core/Check.lean (fuel + 0)" >> $LOG
+echo "== 3. body edit of an unexposed definition: isRowV in Obend/Core/Check.lean (a let prefix)" >> $LOG
 cp Obend/Core/Check.lean $WORK/Check.bak
 python3 - <<'PY'
 p='Obend/Core/Check.lean'; s=open(p).read()
-old='  let result ← check source context fuel\n  if ht : result.type = family.functionType futureSelf then'
-assert s.count(old)==1
-open(p,'w').write(s.replace(old,old.replace('context fuel','context (fuel + 0)')))
+old='def isRowV (bounds : Bounds) (visited : List Nat) (type : Ty) : Bool :=\n  isRowW bounds (unvisited bounds visited) visited type'
+assert s.count(old)==1, 'isRowV anchor'
+open(p,'w').write(s.replace(old,old.replace('\n  isRowW','\n  let _measurement : Nat := 0; isRowW')))
 PY
 t lake build
 cp $WORK/Check.bak Obend/Core/Check.lean

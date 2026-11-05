@@ -1,0 +1,64 @@
+edition ObjectiveBend 1
+# Objective Bend Standard Library (`stdlib/core/Word64.obend`)
+# Nominal `#kind` ("Word64.Word64Ops") specification for 64-bit machine words (`Word64`)
+# and `Q32.32` fixed-point arithmetic over pure unbounded Peano `Nat` (`Core4` primitives).
+
+record Word64Ops:
+  modulus64() -> Nat
+  signBit64() -> Nat
+  q32Scale() -> Nat
+  add64(a: Nat, b: Nat) -> Nat
+  sub64(a: Nat, b: Nat) -> Nat
+  shl64(a: Nat, pow2: Nat) -> Nat
+  lshr64(a: Nat, pow2: Nat) -> Nat
+  slt64(a: Nat, b: Nat) -> Bool
+  qmul32(a: Nat, b: Nat) -> Nat
+
+spec PureWord64Spec for Word64Ops:
+  requires modulus64() -> Nat
+  requires signBit64() -> Nat
+  requires q32Scale() -> Nat
+  def modulus64() -> Nat:
+    18446744073709551616n
+  def signBit64() -> Nat:
+    9223372036854775808n
+  def q32Scale() -> Nat:
+    4294967296n
+  def add64(a: Nat, b: Nat) -> Nat:
+    (a + b) % self.modulus64
+  def sub64(a: Nat, b: Nat) -> Nat:
+    (a + (self.modulus64 - (b % self.modulus64))) % self.modulus64
+  def shl64(a: Nat, pow2: Nat) -> Nat:
+    (a * pow2) % self.modulus64
+  def lshr64(a: Nat, pow2: Nat) -> Nat:
+    (a % self.modulus64) / pow2
+  def slt64(a: Nat, b: Nat) -> Bool:
+    ((a + self.signBit64) % self.modulus64) < ((b + self.signBit64) % self.modulus64)
+  def qmul32(a: Nat, b: Nat) -> Nat:
+    ((a * b) / self.q32Scale) % self.modulus64
+  claim add64_open_recursion(a: Nat, b: Nat): self.add64(a, b) == (a + b) % self.modulus64
+  claim sub64_open_recursion(a: Nat, b: Nat): self.sub64(a, b) == (a + (self.modulus64 - (b % self.modulus64))) % self.modulus64
+  claim shl64_open_recursion(a: Nat, pow2: Nat): self.shl64(a, pow2) == (a * pow2) % self.modulus64
+  claim lshr64_open_recursion(a: Nat, pow2: Nat): self.lshr64(a, pow2) == (a % self.modulus64) / pow2
+  claim qmul32_open_recursion(a: Nat, b: Nat): self.qmul32(a, b) == ((a * b) / self.q32Scale) % self.modulus64
+
+def seedWord64() -> Word64Ops:
+  {modulus64: 0n, signBit64: 0n, q32Scale: 0n, add64: fn(a: Nat, b: Nat) -> Nat: 0n, sub64: fn(a: Nat, b: Nat) -> Nat: 0n, shl64: fn(a: Nat, p: Nat) -> Nat: 0n, lshr64: fn(a: Nat, p: Nat) -> Nat: 0n, slt64: fn(a: Nat, b: Nat) -> Bool: 0n < 0n, qmul32: fn(a: Nat, b: Nat) -> Nat: 0n}
+
+def pureWord64() -> Word64Ops:
+  fix(PureWord64Spec, seedWord64())
+
+def word64AddSample() -> Nat:
+  pureWord64().add64(100n, 55n)
+
+def word64SubSample() -> Nat:
+  pureWord64().sub64(100n, 35n)
+
+def word64ShlSample() -> Nat:
+  pureWord64().shl64(7n, 8n)
+
+def word64LshrSample() -> Nat:
+  pureWord64().lshr64(64n, 8n)
+
+def word64Qmul32Sample() -> Nat:
+  pureWord64().qmul32(12884901888n, 8589934592n)

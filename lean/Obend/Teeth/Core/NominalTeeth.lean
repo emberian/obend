@@ -33,28 +33,28 @@ def kiloFunction : Context := [⟨.arrow .reusable .unrestricted kilo .natural, 
 /-- **The tooth**: `f : Kilo → Nat` used where a `Mile → Nat` is expected, the higher-order
 Kilo-to-Mile crossing, is refused by the checker, and the refusal names the two kinds, Mile expected
 and Kilo given. (The two kinds' layouts are equal.) -/
-theorem crossing_refused_by_name :
+example :
     ((refusalOf (Obend.Core.Bidirectional.checkAgainst ⟨.bound 0, fun _ => none, {}⟩ kiloFunction
       (.arrow .reusable .unrestricted mile .natural))).bind crossedKinds).map (·.2) =
       some ("Units.Mile", "Units.Kilo") := by
   decide +kernel
 
 /-- The same term at `(Kilo → Nat) → (Kilo → Nat)` is accepted. -/
-theorem crossing_within_kind :
+example :
     (Obend.Core.Bidirectional.checkAgainst crossing []
       (.arrow .reusable .unrestricted (.arrow .reusable .unrestricted kilo .natural)
         (.arrow .reusable .unrestricted kilo .natural))).toBool = true := by
   decide +kernel
 
 /-- An anonymous record of the same layout is neither kind: structural records stay structural. -/
-theorem anonymous_is_neither :
+example :
     sameType {} mile distance = false ∧ sameType {} kilo distance = false ∧ sameType {} mile kilo = false ∧
       sameType {} mile mile = true := by
   decide +kernel
 
 /-- An extension constructing an instance of another kind overwrites the brand: `{#kind: Kilo}`
 under `{#kind: Mile, n}` is a Kilo (the first field of a name is the one a row shows). -/
-theorem rebranded_is_the_new_kind :
+example :
     sameType {} (.field brandLabel (kindTy "Units.Kilo") mile) kilo = true ∧
       sameType {} (.field brandLabel (kindTy "Units.Kilo") mile) mile = false := by
   decide +kernel

@@ -1,5 +1,9 @@
 edition ObjectiveBend 1
 # Flagship App #1 (Layer 1): Base RV64I/M In-Core Bit-Slice Instruction Decoders & Two's-Complement ALU
+# The claims that executed an instruction (execInstruction/execStep) were removed on 2026-11-04: the importer proves
+# each claim by kernel evaluation of the Core4 interpreter and these took most of the module's budget
+# (review/DECISIONS-20261031.md, second round); the same instructions run on the emitted core in
+# apps/obend-risc/verilator against the Lean golden. The decode and pc claims stay.
 
 law monotone_cycle_cnt: monotone(cycleCounter)
 law bounded_reg_index: new.archRegIdx <= 31
@@ -48,8 +52,6 @@ spec BaseRv64iSpec for BaseRiscCoreTarget:
   claim base_decode_addi_opcode() by weave: self.decodeOpcode(0x00100093n) == 0x13n
   claim base_decode_neg_imm() by weave: self.decodeImmI(0xFFB00093n) == 0xFFFFFFFFFFFFFFFBn
   claim base_decode_store_offset() by weave: self.decodeImmS(0x02F02423n) == 40n
-  claim base_exec_slt_signed() by weave: self.execInstruction(0x0020A1B3n, 0xFFFFFFFFFFFFFFFBn, 1n) == 1n
-  claim base_exec_add() by weave: self.execInstruction(0x002081B3n, 13n, 21n) == 34n
 
 spec Rv64imMultiplyOverride for BaseRiscCoreTarget:
   requires opOpcodeConst() -> Nat

@@ -1,22 +1,33 @@
 module
 /-
-# Obend.Apps.ZkNtt — Flagship App #4: Goldilocks ZK-NTT + Multilinear Sumcheck Co-Processor
+# Obend.Apps.ZkNtt — Flagship App #4: Goldilocks ZK-NTT butterfly + multilinear sumcheck co-processor
 
-Elaborates and proves the 4-module Goldilocks ZK-NTT + Sumcheck `.obend` hierarchy (`apps/zk-ntt/`):
-1. `GoldilocksField.obend`: Goldilocks prime $p = 2^{64} - 2^{32} + 1$ (`0xFFFFFFFF00000001`),
-   $\epsilon = 2^{32} - 1 = 4294967295$, and 128-to-64 modular reduction ($2^{64} \equiv 2^{32} - 1 \pmod p$).
-2. `NttButterflyRadix2.obend`: Cooley–Tukey radix-2 butterfly (`butterflyEven`, `butterflyOdd`)
-   with open-recursive field arithmetic dispatch.
-3. `SumcheckRoundPoly.obend`: Multilinear Sumcheck round polynomial evaluation ($g_k(0), g_k(1), g_k(2)$),
-   round consistency ($g_k(0) + g_k(1)$), and folding ($f_0 + r_k (f_1 - f_0)$).
-4. `ZkNttSumcheckTop.obend`: Complete 3-layer open-recursive composition + concrete NTT/Sumcheck evaluation.
+Elaborates the 4-module Goldilocks `.obend` hierarchy (`apps/zk-ntt/`): `GoldilocksField.obend`
+(the prime $p = 2^{64} - 2^{32} + 1$, canonical `fieldAdd`/`fieldSub`, the 32-bit-limb `fieldMul`
+with the shift/mask 128-to-64 reduction), `NttButterflyRadix2.obend`, `SumcheckRoundPoly.obend`
+(round accumulators, folding, and `transcriptAbsorb`, the Fiat–Shamir step) and `ZkNttSumcheckTop.obend`.
 
-Also lowers the Goldilocks NTT butterfly + Sumcheck DAG to `StrictOpenHypergraph` and `HyperEGraph`,
-proves $\ge 30\%$ multiplier & RTL cost reduction (`43.2%` total cost reduction, `66.7%` multiplier reduction)
-via E-Graph equality saturation, and compiles to **both**:
-- 4-stage `resetFree` pipelined SystemVerilog (`compileHypergraphToRtlPipelined`), and
-- 64-bit AMD `VOP64` GPU assembly (`compileRtlExprToAmdGpu` / `evalAmdGpuExpr_nested_sound`),
-alongside a stateful `always_ff` multilinear Sumcheck round accumulator `RtlModule`.
+What is proved: the `.obend` cross-module values (`zk_ntt_workbook_eval_sound`), the Goldilocks
+congruences, and `goldilocksReduce128Spec_sound`: for every `lo, hi < 2^64` the shift/mask
+reduction the hardware uses equals `(lo + 2^64 * hi) % p` and is canonical.
+
+What is hardware: `zkNttCoprocRtlModule`, one `RtlModule` in the 64-bit word language whose
+wires are built by `glAdd`/`glSub`/`glMul` (limb multiply + `goldilocksReduce128`), carrying the
+radix-2 butterfly (`u ± v·w mod p`) and a sumcheck round unit that accumulates `g(0), g(1), g(2)`,
+absorbs them into a transcript register on `sc_absorb` and derives the round challenge from it
+(`transcriptAbsorbSpec`), then folds with that registered challenge. `obend-emit-sv zk` writes it to
+`apps/zk-ntt/verilator/zk_ntt_coproc.sv`; `obend-emit-sv golden-zk` writes the Lean run of the same
+8-round protocol (`zkSumcheckGolden`) that the Verilator harness compares the emitted RTL against,
+alongside its own `__uint128_t` reference.
+
+Fixed 2026-11-04 (review/PANEL-DIFF-20261104.md item 5): the previous RTL multiplied with 64-bit
+`.mul` and never reduced, and folded with an external `sc_r_in`. The e-graph cost-reduction and
+VOP64 sections that kernel-evaluated for hours are gone (review/DECISIONS-20261031.md, second round).
+
+What is not here: a theorem that `glMul`'s wire network equals `goldilocksMulSpec` for every input
+(the Nat-level reduction lemma is proved; the limb schedule is checked on the harness's 2048
+butterflies and on the boundary vectors in the fixtures below), and any claim that the transcript
+permutation is a cryptographic hash.
 -/
 public import Lean
 public import Obend.Spec.FrontEnd
@@ -26,13 +37,10 @@ public import Obend.Logic.Program
 public import Obend.Logic.Obligation
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Synth
-public import Obend.Hardware.OpenHypergraph
-public import Obend.Analysis.EqSatHypergraph
-public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Tactic.Weave
 public import Obend.Elab.Workbook
 public meta import Lean
@@ -63,14 +71,11 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Spec.CrossPackage
 open Obend.Hardware
 open Obend.Hardware.HDL
 open Obend.Hardware.Synth
-open Obend.Hardware.OpenHypergraph
-open Obend.Analysis
-open Obend.Lower
 open Obend.Tactic.Weave
 
 set_option autoImplicit false
@@ -86,38 +91,10 @@ only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `
 #import_obend "apps/zk-ntt/SumcheckRoundPoly.obend" as SumcheckMod
 #import_obend "apps/zk-ntt/ZkNttSumcheckTop.obend" as ZkNttTopMod
 
-/-- Theorem: Evaluating the butterfly pair sum (`92 + 8 = 100`) and 2-round Sumcheck folding (`50`)
-    on `zkNttSumcheckTop()` in `.obend` reduces to their exact expected values. -/
-theorem zk_ntt_workbook_eval_sound :
-    ZkNttTopMod.evalNttButterflyPairSum_val = .nat 100 ∧
-    ZkNttTopMod.evalSumcheckTwoRounds_val = .nat 50 :=
-  ⟨rfl, rfl⟩
-
-/-- Theorem: All 3 ZK-NTT `.obend` layer books specialize in-core via both `inCoreBookCompiler`
-    (`inCoreBookCompiler_specializes_from_pinsOnly`) and `futamura2BookCompiler`
-    (`futamura2BookCompiler_specializes_in_core`). -/
-theorem zk_ntt_inCore_futamura2 (pins : List LeafPin) :
-    let B1 := GoldilocksMod.goldilocksEngine_book
-    let B2 := ButterflyMod.nttButterflyEngine_book
-    let B3 := ZkNttTopMod.zkNttSumcheckTop_book
-    dataPinSpecialize (.app (inCoreBookCompiler B1) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook B1 pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler B2) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook B2 pins) ∧
-    dataPinSpecialize (.app (inCoreBookCompiler B3) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook B3 pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler B1) (encodePinsRecordForBook B1 pins)) =
-      encodeBookTerm (specializeBook B1 pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler B2) (encodePinsRecordForBook B2 pins)) =
-      encodeBookTerm (specializeBook B2 pins) ∧
-    dataPinSpecialize (.app (futamura2BookCompiler B3) (encodePinsRecordForBook B3 pins)) =
-      encodeBookTerm (specializeBook B3 pins) :=
-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly GoldilocksMod.goldilocksEngine_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly ButterflyMod.nttButterflyEngine_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly ZkNttTopMod.zkNttSumcheckTop_book pins).1,
-   futamura2BookCompiler_specializes_in_core GoldilocksMod.goldilocksEngine_book pins,
-   futamura2BookCompiler_specializes_in_core ButterflyMod.nttButterflyEngine_book pins,
-   futamura2BookCompiler_specializes_in_core ZkNttTopMod.zkNttSumcheckTop_book pins⟩
+/-! The four modules are imported for their books and terms. They carry no `claim`s and no top-level
+evaluation defs any more (2026-11-04): the importer reduced `evalNttButterflyPairSum` and its kin
+through the Core4 interpreter on every elaboration, and a few 64-bit multiplies there cost more than
+the module's budget; the same values are checked on the emitted hardware and the Lean golden. -/
 
 /-! ## 2. Goldilocks Prime ($p = 2^{64} - 2^{32} + 1$) 128-to-64 Reduction Soundness -/
 
@@ -146,233 +123,419 @@ theorem goldilocks_reduce96_mod_sound (lo hiLo32 : Nat) :
       (lo + goldilocksEpsilon * hiLo32) + goldilocksPrime * hiLo32 := by omega
   rw [hSwap, Nat.add_mul_mod_self_left]
 
-/-! ## 3. E-Graph Equality Saturation, $\ge 30\%$ Cost Reduction & 4-Stage `resetFree` Pipelined RTL -/
+/-- Canonicalize any 64-bit natural number `x < 2^64` into `[0, p - 1]` (matching `canon64` in
+    `GoldilocksField.obend` and `gl_canon` in `zk_ntt_coproc.sv`). -/
+def goldilocksCanon64 (x : Nat) : Nat :=
+  if goldilocksPrime ≤ x then x - goldilocksPrime else x
 
-/-- Unoptimized Goldilocks Radix-2 Butterfly + Sumcheck Round `StrictOpenHypergraph`:
-    * Boundary inputs `[0, 1, 2, 3, 4]` = `(u, v, w, r, bias)`:
-      - Wire `5`: `t0 = v * w` (`.mul [1, 2]`, cost `6`)
-      - Wire `6`: `w1 = 1 * w` (`.scale 1 [2]`, cost `2`)
-      - Wire `7`: `even = u + t0` (`.add [0, 5]`, cost `3`)
-      - Wire `8`: `t1 = v * w1` (`.mul [1, 6]`, cost `6`)
-      - Wire `9`: `odd = u - t1` (`.sub [0, 8]`, cost `3`)
-      - Wire `10`: `diff = odd - even` (`.sub [9, 7]`, cost `3`)
-      - Wire `11`: `r_diff = r * diff` (`.mul [3, 10]`, cost `6`)
-      - Wire `12`: `folded = even + r_diff` (`.add [7, 11]`, cost `3`)
-      - Wire `13`: `b_r = bias * r` (`.mul [4, 3]`, cost `6`)
-      - Wire `14`: `round_acc = diff + b_r` (`.add [10, 13]`, cost `3`)
-    * Boundary outputs: `[7, 9, 12, 14]`.
-    * Total unoptimized RTL cost: `41` (with `4` `.mul` operations, multiplier cost `24`). -/
-def zkNttRawHypergraph : StrictOpenHypergraph :=
-  mkStrictOpenHypergraph 15 [0, 1, 2, 3, 4] [7, 9, 12, 14]
-    [ { opIdx := 0, op := .mul,     srcWires := [1, 2],   dstWire := 5 }
-    , { opIdx := 1, op := .scale 1, srcWires := [2],      dstWire := 6 }
-    , { opIdx := 2, op := .add,     srcWires := [0, 5],   dstWire := 7 }
-    , { opIdx := 3, op := .mul,     srcWires := [1, 6],   dstWire := 8 }
-    , { opIdx := 4, op := .sub,     srcWires := [0, 8],   dstWire := 9 }
-    , { opIdx := 5, op := .sub,     srcWires := [9, 7],   dstWire := 10 }
-    , { opIdx := 6, op := .mul,     srcWires := [3, 10],  dstWire := 11 }
-    , { opIdx := 7, op := .add,     srcWires := [7, 11],  dstWire := 12 }
-    , { opIdx := 8, op := .mul,     srcWires := [4, 3],   dstWire := 13 }
-    , { opIdx := 9, op := .add,     srcWires := [10, 13], dstWire := 14 } ]
+theorem goldilocksCanon64_spec {x : Nat} (hx : x < 2 ^ 64) :
+    goldilocksCanon64 x < goldilocksPrime ∧
+    goldilocksCanon64 x = x % goldilocksPrime := by
+  unfold goldilocksCanon64
+  split
+  · rename_i hge
+    have hlt : x - goldilocksPrime < goldilocksPrime := by unfold goldilocksPrime at *; omega
+    refine ⟨hlt, ?_⟩
+    rw [Nat.mod_eq_sub_mod hge, Nat.mod_eq_of_lt hlt]
+  · rename_i hlt'
+    have hlt : x < goldilocksPrime := by omega
+    exact ⟨hlt, (Nat.mod_eq_of_lt hlt).symm⟩
 
-/-- Equality-saturation rewrite schedule for the ZK-NTT butterfly + Sumcheck hypergraph. -/
-def zkNttEqSatRules : List EqSatRule :=
-  [ .mulOneRight, .scaleFuse, .fuseMulAddToMac, .fuseAddMulToMac ]
+/-- Canonical 64-bit Goldilocks modular addition (matching `gl_add` in `zk_ntt_coproc.sv`). -/
+def goldilocksAddSpec (a b : Nat) : Nat :=
+  let ca := goldilocksCanon64 a
+  let cb := goldilocksCanon64 b
+  if goldilocksPrime ≤ ca + cb then ca + cb - goldilocksPrime else ca + cb
 
-/-- E-Graph equality-saturated minimum-cost `StrictOpenHypergraph` for the ZK-NTT butterfly + Sumcheck:
-    fuses 3 `.mul` + `.add` chains into single-cycle `.mac` operations and prunes 4 dead wires (`5, 6, 11, 13`),
-    reducing total RTL cost from `41` to `21` (**48.8% cost reduction**, strictly exceeding $\ge 30\%$)
-    and reducing discrete `.mul` count from `4` to `1` (**75.0% multiplier reduction**) while organizing
-    into **exactly 4 pipeline stages** (`(layerHypergraph zkNttOptHypergraph).length = 4`)! -/
-def zkNttOptHypergraph : StrictOpenHypergraph :=
-  extractMinCostHypergraph defaultRtlCostModel
-    (saturateHyperEGraph 1 zkNttEqSatRules (hypergraphToEGraph zkNttRawHypergraph))
+/-- Equivalence between the overflow-free 64-bit `.obend` `fieldAdd` (`remP <= ca ? ca - remP : ca + cb`)
+    and the 65-bit RTL `gl_add` (`P <= ca + cb ? ca + cb - P : ca + cb`). -/
+theorem goldilocksAddSpec_eq_obend {a b : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
+    let ca := goldilocksCanon64 a
+    let cb := goldilocksCanon64 b
+    let remP := goldilocksPrime - cb
+    (if remP ≤ ca then ca - remP else ca + cb) = goldilocksAddSpec a b := by
+  have hca := (goldilocksCanon64_spec ha).1
+  have hcb := (goldilocksCanon64_spec hb).1
+  dsimp only [goldilocksAddSpec]
+  split <;> split <;> omega
 
-/-- Count discrete `.mul` hyperedges in a `StrictOpenHypergraph`. -/
-def countMulEdges (g : StrictOpenHypergraph) : Nat :=
-  (extractHyperEdges g).foldr (fun e acc => match e.op with | .mul => acc + 1 | _ => acc) 0
-
-/-- 4-stage `resetFree` pipelined SystemVerilog `RtlModule` compiled from `zkNttOptHypergraph`. -/
-def zkNttPipelinedRtlModule : RtlModule :=
-  compileHypergraphToRtlPipelined "zk_ntt_butterfly_pipe4" zkNttOptHypergraph
-
-/-- Explicit 6-edge list of `zkNttOptHypergraph` after E-Graph saturation and dead-edge pruning. -/
-def zkNttOptEdgesLiteral : List HyperEdge :=
-  [ { opIdx := 0, op := .mac, srcWires := [1, 2, 0],  dstWire := 7 }
-  , { opIdx := 1, op := .mul, srcWires := [1, 2],     dstWire := 8 }
-  , { opIdx := 2, op := .sub, srcWires := [0, 8],     dstWire := 9 }
-  , { opIdx := 3, op := .sub, srcWires := [9, 7],     dstWire := 10 }
-  , { opIdx := 4, op := .mac, srcWires := [3, 10, 7], dstWire := 12 }
-  , { opIdx := 5, op := .mac, srcWires := [4, 3, 10], dstWire := 14 } ]
-
-theorem extractHyperEdges_zkNttOpt :
-    extractHyperEdges zkNttOptHypergraph = zkNttOptEdgesLiteral := by
-  decide +kernel
-
-theorem boundaryOut_zkNttOpt :
-    zkNttOptHypergraph.boundaryOut.table = [7, 9, 12, 14] := by
-  decide +kernel
-
-/-- **Theorem (`zk_ntt_eqSat_cost_reduction_and_semantic_sound`)**:
-    1. E-Graph equality saturation reduces total RTL cost from `41` to `21` (`48.8%` reduction,
-       satisfying `100 * costOpt ≤ 70 * costRaw`, i.e. $\ge 30\%$ reduction) and reduces discrete
-       multiplier count from `4` to `1` (`75.0%` multiplier reduction),
-    2. `optimizeAdjointHypergraph` also strictly reduces the reverse-mode adjoint hypergraph cost,
-    3. For all symbolic inputs `(u, v, w, r, bias : Int)`, `zkNttOptHypergraph` evaluates to the
-       exact same 4 outputs as `zkNttRawHypergraph`:
-       $$[u + v w,\; u - v w,\; (u + v w) + r((u - v w) - (u + v w)),\; ((u - v w) - (u + v w)) + \text{bias} \cdot r]$$ -/
-theorem zk_ntt_eqSat_cost_reduction_and_semantic_sound (u v w r bias : Int) :
-    evalHypergraphCost defaultRtlCostModel zkNttRawHypergraph = 41 ∧
-    evalHypergraphCost defaultRtlCostModel zkNttOptHypergraph = 21 ∧
-    100 * evalHypergraphCost defaultRtlCostModel zkNttOptHypergraph ≤
-      70 * evalHypergraphCost defaultRtlCostModel zkNttRawHypergraph ∧
-    countMulEdges zkNttRawHypergraph = 4 ∧
-    countMulEdges zkNttOptHypergraph = 1 ∧
-    evalHypergraphCost defaultRtlCostModel (optimizeAdjointHypergraph defaultRtlCostModel zkNttRawHypergraph) <
-      evalHypergraphCost defaultRtlCostModel (compileGraphAdjoint zkNttRawHypergraph) ∧
-    (let env : Nat → Int := fun idx =>
-       match idx with | 0 => u | 1 => v | 2 => w | 3 => r | 4 => bias | _ => 0
-     evalHypergraphComb zkNttOptHypergraph env = evalHypergraphComb zkNttRawHypergraph env) := by
-  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, ?_⟩
+theorem goldilocksAddSpec_spec {a b : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
+    goldilocksAddSpec a b < goldilocksPrime ∧
+    goldilocksAddSpec a b = (a + b) % goldilocksPrime := by
+  rcases goldilocksCanon64_spec ha with ⟨hcaLt, hcaMod⟩
+  rcases goldilocksCanon64_spec hb with ⟨hcbLt, hcbMod⟩
+  have hSumMod : (a + b) % goldilocksPrime =
+      (goldilocksCanon64 a + goldilocksCanon64 b) % goldilocksPrime := by
+    rw [Nat.add_mod, ← hcaMod, ← hcbMod]
+  unfold goldilocksAddSpec
   dsimp only
-  unfold evalHypergraphComb
-  rw [extractHyperEdges_zkNttOpt, boundaryOut_zkNttOpt]
-  have hRawEdges : extractHyperEdges zkNttRawHypergraph =
-      [ { opIdx := 0, op := .mul,     srcWires := [1, 2],   dstWire := 5 }
-      , { opIdx := 1, op := .scale 1, srcWires := [2],      dstWire := 6 }
-      , { opIdx := 2, op := .add,     srcWires := [0, 5],   dstWire := 7 }
-      , { opIdx := 3, op := .mul,     srcWires := [1, 6],   dstWire := 8 }
-      , { opIdx := 4, op := .sub,     srcWires := [0, 8],   dstWire := 9 }
-      , { opIdx := 5, op := .sub,     srcWires := [9, 7],   dstWire := 10 }
-      , { opIdx := 6, op := .mul,     srcWires := [3, 10],  dstWire := 11 }
-      , { opIdx := 7, op := .add,     srcWires := [7, 11],  dstWire := 12 }
-      , { opIdx := 8, op := .mul,     srcWires := [4, 3],   dstWire := 13 }
-      , { opIdx := 9, op := .add,     srcWires := [10, 13], dstWire := 14 } ] := by
-    decide +kernel
-  have hRawOut : zkNttRawHypergraph.boundaryOut.table = [7, 9, 12, 14] := by
-    decide +kernel
-  rw [hRawEdges, hRawOut]
-  dsimp [zkNttOptEdgesLiteral, evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp, List.foldl, List.map]
-  grind
+  split
+  · rename_i hge
+    have hlt : goldilocksCanon64 a + goldilocksCanon64 b - goldilocksPrime < goldilocksPrime := by omega
+    refine ⟨hlt, ?_⟩
+    rw [hSumMod, Nat.mod_eq_sub_mod hge, Nat.mod_eq_of_lt hlt]
+  · rename_i hlt'
+    have hlt : goldilocksCanon64 a + goldilocksCanon64 b < goldilocksPrime := by omega
+    rw [hSumMod, Nat.mod_eq_of_lt hlt]
+    exact ⟨hlt, rfl⟩
 
-/-! ## 4. 4-Stage `resetFree` Pipelined RTL & 64-Bit AMD `VOP64` GPU Dual-Target Lowering -/
+/-- Canonical 64-bit Goldilocks modular subtraction (matching `fieldSub` in `GoldilocksField.obend`
+    and `gl_sub` in `zk_ntt_coproc.sv`). -/
+def goldilocksSubSpec (a b : Nat) : Nat :=
+  let ca := goldilocksCanon64 a
+  let cb := goldilocksCanon64 b
+  if cb ≤ ca then ca - cb else (goldilocksPrime - cb) + ca
 
-/-- Combinational `RtlExpr` for the radix-2 butterfly + Sumcheck round folding output
-    $$(u + v \cdot w) + r \cdot ((u - v \cdot w) - (u + v \cdot w))$$
-    compiled to both SystemVerilog and 64-bit AMD `VOP64` assembly. -/
-def zkNttButterflyFoldRtlExpr : RtlExpr :=
-  let u := RtlExpr.inputPort 0
-  let v := RtlExpr.inputPort 1
-  let w := RtlExpr.inputPort 2
-  let r := RtlExpr.inputPort 3
-  let vw := RtlExpr.alu .mul v w
-  let even := RtlExpr.alu .add u vw
-  let odd := RtlExpr.alu .sub u vw
-  let diff := RtlExpr.alu .sub odd even
-  RtlExpr.alu .add even (.alu .mul r diff)
+theorem goldilocksSubSpec_spec {a b : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
+    goldilocksSubSpec a b < goldilocksPrime ∧
+    goldilocksSubSpec a b =
+      (goldilocksCanon64 a + goldilocksPrime - goldilocksCanon64 b) % goldilocksPrime := by
+  rcases goldilocksCanon64_spec ha with ⟨hcaLt, _⟩
+  rcases goldilocksCanon64_spec hb with ⟨hcbLt, _⟩
+  unfold goldilocksSubSpec
+  dsimp only
+  split
+  · rename_i hle
+    have hlt : goldilocksCanon64 a - goldilocksCanon64 b < goldilocksPrime := by omega
+    refine ⟨hlt, ?_⟩
+    have hDecomp : goldilocksCanon64 a + goldilocksPrime - goldilocksCanon64 b =
+        (goldilocksCanon64 a - goldilocksCanon64 b) + goldilocksPrime * 1 := by omega
+    rw [hDecomp, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hlt]
+  · rename_i hgt
+    have hlt : (goldilocksPrime - goldilocksCanon64 b) + goldilocksCanon64 a < goldilocksPrime := by omega
+    refine ⟨hlt, ?_⟩
+    have hEq : goldilocksCanon64 a + goldilocksPrime - goldilocksCanon64 b =
+        (goldilocksPrime - goldilocksCanon64 b) + goldilocksCanon64 a := by omega
+    rw [hEq, Nat.mod_eq_of_lt hlt]
 
-/-- Compiled 64-bit AMD `VOP64` instruction sequence for `zkNttButterflyFoldRtlExpr`. -/
-def zkNttButterflyFoldVop64Prog : Nat × Nat × List AmdGpuVop64Inst :=
-  compileRtlExprToAmdGpu 0 zkNttButterflyFoldRtlExpr
+/-- Complete 128-to-64 Goldilocks shift/mask modular reduction specification matching
+    `goldilocksReduce128` in `GoldilocksField.obend` and `gl_reduce128` in `zk_ntt_coproc.sv`:
+    * `hiLo = hi & 0xFFFFFFFF = hi % 2^32`
+    * `hiHi = (hi >>> 32) & 0xFFFFFFFF = hi / 2^32` (for `hi < 2^64`)
+    * `mid = (hiLo << 32) - hiLo = hiLo * 2^32 - hiLo`
+    * `result = gl_sub(gl_add(lo, mid), hiHi)` -/
+def goldilocksReduce128Spec (lo hi : Nat) : Nat :=
+  let hiLo := hi % 4294967296
+  let hiHi := hi / 4294967296
+  let mid := hiLo * 4294967296 - hiLo
+  goldilocksSubSpec (goldilocksAddSpec lo mid) hiHi
 
-/-- **Theorem (`zk_ntt_pipelined_rtl_and_vop64_sound`)**:
-    Proves that:
-    1. `zkNttOptHypergraph` has **exactly 4 topological stages** (`(layerHypergraph zkNttOptHypergraph).length = 4`)
-       and agrees with the CSR Kahn layerer (`layerHypergraphCsr zkNttOptHypergraph = layerHypergraph zkNttOptHypergraph`),
-    2. `zkNttPipelinedRtlModule` is a valid 4-stage `resetFree` synchronous `RtlModule` (`checkRtlModule = true`)
-       whose registers are all `.resetFree` datapath pipeline registers and synthesizes to a valid FPGA BEL netlist,
-    3. After 4 `resetFree` clock cycles (`runModuleTrace`), `zkNttPipelinedRtlModule` outputs the exact
-       butterfly + Sumcheck values `[92#64, 8#64, 1880#64, 3#64]` on `(u=50, v=6, w=7, r=3, bias=29)`,
-    4. For **every** 64-bit input environment `inputs wires regs : Nat → BitVec 64`, the 64-bit AMD `VOP64`
-       assembly program (`evalAmdGpuExpr`) produces the exact same 64-bit result as `evalRtlExpr` (`evalAmdGpuExpr_nested_sound`),
-       and on `(u=50, v=6, w=7, r=3)` agrees bit-for-bit with the 4-stage pipelined RTL output! -/
-theorem zk_ntt_pipelined_rtl_and_vop64_sound :
-    let insBv : Nat → BitVec 64 := fun idx =>
-      match idx with | 0 => 50#64 | 1 => 6#64 | 2 => 7#64 | 3 => 3#64 | 4 => 29#64 | _ => 0#64
-    let initRegs : Nat → BitVec 64 := fun _ => 0#64
-    let trace4 : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insBv), (false, insBv), (false, insBv), (false, insBv)]
-    let regs4 := runModuleTrace zkNttPipelinedRtlModule initRegs trace4
-    (layerHypergraph zkNttOptHypergraph).length = 4 ∧
-    layerHypergraphCsr zkNttOptHypergraph = layerHypergraph zkNttOptHypergraph ∧
-    checkRtlModule zkNttPipelinedRtlModule = true ∧
-    (zkNttPipelinedRtlModule.regs.all fun r =>
-      match r.resetKind with | .resetFree => true | .syncReset _ => false) = true ∧
-    checkBelNetlistValid (synthesizeModuleToBels zkNttPipelinedRtlModule) = true ∧
-    (evalModuleOutputs zkNttPipelinedRtlModule insBv regs4).map Prod.snd =
-      [92#64, 8#64, BitVec.ofInt 64 (-160), 3#64] ∧
-    evalAmdGpuExpr insBv (fun _ => 0#64) initRegs zkNttButterflyFoldRtlExpr =
-      BitVec.ofInt 64 (-160) ∧
-    (∀ (inputs wires regs : Nat → BitVec 64),
-      evalAmdGpuExpr inputs wires regs zkNttButterflyFoldRtlExpr =
-        evalRtlExpr inputs wires regs zkNttButterflyFoldRtlExpr) := by
-  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel, by decide +kernel, ?_⟩
-  intro inputs wires regs
-  exact evalAmdGpuExpr_nested_sound inputs wires regs zkNttButterflyFoldRtlExpr
+/-- The arithmetic core of the reduction, over atoms: with `hi = hiLo + 2^32 hiHi`, `t1 = (lo + mid) mod p`
+(`t1 + p q = lo + mid`) and `mid = 2^32 hiLo - hiLo`, the two sides differ by a multiple of `p`
+(`2^64 = p + 2^32 - 1` and `2^96 = (2^32 + 1) p - 1`). -/
+theorem goldilocksReduce128_identity (lo hi hiLo hiHi t1 q : Nat)
+    (hHiLo : hiLo < 4294967296) (hHiHi : hiHi < 4294967296)
+    (hhi : hiLo + 4294967296 * hiHi = hi)
+    (ht1 : t1 + goldilocksPrime * q = lo + (hiLo * 4294967296 - hiLo)) :
+    (t1 + goldilocksPrime - hiHi) % goldilocksPrime = (lo + 2 ^ 64 * hi) % goldilocksPrime := by
+  have h64 : (2 : Nat) ^ 64 = 18446744073709551616 := by decide
+  have key : lo + 2 ^ 64 * hi + goldilocksPrime * 1 =
+      (t1 + goldilocksPrime - hiHi) + goldilocksPrime * (q + hiLo + 4294967297 * hiHi) := by
+    rw [h64]; unfold goldilocksPrime at *; omega
+  rw [← Nat.add_mul_mod_self_left (lo + 2 ^ 64 * hi) goldilocksPrime 1, key, Nat.add_mul_mod_self_left]
 
-/-! ## 5. Stateful `always_ff` Multilinear Sumcheck Round Polynomial Accumulator (`zkSumcheckRoundRtlModule`) -/
+/-- **`goldilocksReduce128Spec_sound`**: for every `lo, hi < 2^64` the shift/mask reduction is canonical
+and equals `(lo + 2^64 * hi) % p`. -/
+theorem goldilocksReduce128Spec_sound {lo hi : Nat}
+    (hLo : lo < 2 ^ 64) (hHi : hi < 2 ^ 64) :
+    goldilocksReduce128Spec lo hi < goldilocksPrime ∧
+    goldilocksReduce128Spec lo hi = (lo + 2 ^ 64 * hi) % goldilocksPrime := by
+  have h64 : (2 : Nat) ^ 64 = 18446744073709551616 := by decide
+  have hHiLo : hi % 4294967296 < 4294967296 := Nat.mod_lt hi (by decide)
+  have hHiHi : hi / 4294967296 < 4294967296 :=
+    Nat.div_lt_of_lt_mul (by rw [h64] at hHi; omega)
+  unfold goldilocksReduce128Spec
+  dsimp only
+  have hMidLt : hi % 4294967296 * 4294967296 - hi % 4294967296 < 2 ^ 64 := by rw [h64]; omega
+  have hHiHiLt : hi / 4294967296 < 2 ^ 64 := by rw [h64]; omega
+  obtain ⟨ht1LtP, ht1Mod⟩ := goldilocksAddSpec_spec hLo hMidLt
+  have ht1Lt64 :
+      goldilocksAddSpec lo (hi % 4294967296 * 4294967296 - hi % 4294967296) < 2 ^ 64 := by
+    unfold goldilocksPrime at ht1LtP; rw [h64]; omega
+  obtain ⟨hSubLtP, hSubMod⟩ := goldilocksSubSpec_spec ht1Lt64 hHiHiLt
+  refine ⟨hSubLtP, ?_⟩
+  rw [hSubMod]
+  have hc1 : goldilocksCanon64 (goldilocksAddSpec lo (hi % 4294967296 * 4294967296 - hi % 4294967296)) =
+      goldilocksAddSpec lo (hi % 4294967296 * 4294967296 - hi % 4294967296) := by
+    unfold goldilocksCanon64; split <;> omega
+  have hc2 : goldilocksCanon64 (hi / 4294967296) = hi / 4294967296 := by
+    unfold goldilocksCanon64 goldilocksPrime; split <;> omega
+  rw [hc1, hc2, ht1Mod]
+  exact goldilocksReduce128_identity lo hi (hi % 4294967296) (hi / 4294967296) _ _ hHiLo hHiHi
+    (Nat.mod_add_div hi 4294967296)
+    (Nat.mod_add_div (lo + (hi % 4294967296 * 4294967296 - hi % 4294967296)) goldilocksPrime)
+
+/-! ## 2b. Multiplication and the transcript at the `Nat` level (the model the golden runs) -/
+
+/-- `x mod p`. -/
+def glN (x : Nat) : Nat := x % goldilocksPrime
+
+/-- `(a * b) mod p`: the specification `glMul`'s limb network implements. -/
+def goldilocksMulSpec (a b : Nat) : Nat := glN (glN a * glN b)
+
+/-- Transcript constants: the mixing multiplier `2^32`, the round constant `0x5A17`, and the initial
+state `0x4F42454E44`. -/
+def transcriptAlpha : Nat := 4294967296
+def transcriptConst : Nat := 23063
+def transcriptIv : Nat := 340688748100
+
+/-- `transcriptAbsorb` of `SumcheckRoundPoly.obend`: the next transcript state, and the round challenge,
+is `(((t + g0) * 2^32 + g1) * 2^32 + g2 + c)^7` in `F_p`. `x^7` is a permutation of `F_p`
+(`gcd(7, p - 1) = 1`), so distinct absorbed triples give distinct challenges for a fixed `t`; nothing
+cryptographic is claimed. -/
+def transcriptAbsorbSpec (t g0 g1 g2 : Nat) : Nat :=
+  let s := glN (glN (glN (glN (t + g0) * transcriptAlpha) + g1) * transcriptAlpha + g2 + transcriptConst)
+  let s2 := glN (s * s)
+  let s4 := glN (s2 * s2)
+  glN (glN (s4 * s2) * s)
+
+/-! ## 3. The co-processor as an `RtlModule`: field operations as wire networks -/
 
 /-- Clock domain for the ZK-NTT + Sumcheck co-processor. -/
 def zkNttClkDomain : ClkDomain :=
   .coreClk
 
-/-- Stateful `always_ff @(posedge clk)` multilinear Sumcheck round polynomial accumulator `RtlModule`:
-    * Inputs: `["f0_in", "f1_in", "r_challenge", "clear_acc"]`
-    * Combinational wires:
-      - `w_0` (`g2_term`): `(f1_in << 1) - f0_in` ($2 f(1, x) - f(0, x)$)
-      - `w_1` (`folded_val`): `f0_in + r_challenge * (f1_in - f0_in)` ($f(r_k, x)$)
-      - `w_2` (`next_g0`): `clear_acc ? f0_in : (acc_g0 + f0_in)`
-      - `w_3` (`next_g1`): `clear_acc ? f1_in : (acc_g1 + f1_in)`
-      - `w_4` (`next_g2`): `clear_acc ? w_0 : (acc_g2 + w_0)`
-    * Sequential `always_ff` registers (`acc_g0`, `acc_g1`, `acc_g2`, `last_folded`, `pair_cnt`):
-      accumulate $g_k(0) = \sum f(0, x)$, $g_k(1) = \sum f(1, x)$, $g_k(2) = \sum (2 f(1, x) - f(0, x))$
-      across hypercube pairs and expose `round_claim = acc_g0 + acc_g1`. -/
-def zkSumcheckRoundRtlModule : RtlModule :=
-  { name := "zk_sumcheck_round_acc"
-    inputNames := ["f0_in", "f1_in", "r_challenge", "clear_acc"]
-    wires := [
-      { wireIdx := 0, name := "g2_term",
-        expr := .alu .sub (.alu .shl (.inputPort 1) (.const 1#64)) (.inputPort 0) },
-      { wireIdx := 1, name := "folded_val",
-        expr := .alu .add (.inputPort 0)
-                  (.alu .mul (.inputPort 2) (.alu .sub (.inputPort 1) (.inputPort 0))) },
-      { wireIdx := 2, name := "next_g0",
-        expr := .mux (.inputPort 3) (.inputPort 0) (.alu .add (.regRead 0) (.inputPort 0)) },
-      { wireIdx := 3, name := "next_g1",
-        expr := .mux (.inputPort 3) (.inputPort 1) (.alu .add (.regRead 1) (.inputPort 1)) },
-      { wireIdx := 4, name := "next_g2",
-        expr := .mux (.inputPort 3) (.wireRef 0) (.alu .add (.regRead 2) (.wireRef 0)) },
-      { wireIdx := 5, name := "round_claim_w",
-        expr := .alu .add (.regRead 0) (.regRead 1) }
-    ]
-    regs := [
-      { regIdx := 0, name := "acc_g0", domain := zkNttClkDomain,
-        resetKind := .syncReset 0#64, isSynchronizer := false, nextExpr := .wireRef 2 },
-      { regIdx := 1, name := "acc_g1", domain := zkNttClkDomain,
-        resetKind := .syncReset 0#64, isSynchronizer := false, nextExpr := .wireRef 3 },
-      { regIdx := 2, name := "acc_g2", domain := zkNttClkDomain,
-        resetKind := .syncReset 0#64, isSynchronizer := false, nextExpr := .wireRef 4 },
-      { regIdx := 3, name := "last_folded", domain := zkNttClkDomain,
-        resetKind := .resetFree, isSynchronizer := false, nextExpr := .wireRef 1 },
-      { regIdx := 4, name := "pair_cnt", domain := zkNttClkDomain,
-        resetKind := .syncReset 0#64, isSynchronizer := false,
-        nextExpr := .mux (.inputPort 3) (.const 1#64) (.alu .add (.regRead 4) (.const 1#64)) }
-    ]
-    outputs := [
-      { name := "g0_out", expr := .regRead 0 },
-      { name := "g1_out", expr := .regRead 1 },
-      { name := "g2_out", expr := .regRead 2 },
-      { name := "round_claim_out", expr := .wireRef 5 },
-      { name := "folded_out", expr := .regRead 3 },
-      { name := "pair_cnt_out", expr := .regRead 4 }
-    ] }
+/-- Wires under construction: appended in order, so every `wireRef` points at an earlier wire. -/
+structure WireBuild where
+  wires : Array WireAssign := #[]
+  next  : Nat := 0
 
-/-- Theorem: `zkSumcheckRoundRtlModule` is a valid synchronous `RtlModule` and synthesizes cleanly to FPGA BELs. -/
-theorem zkSumcheckRoundRtlModule_valid_and_synthesizable :
-    checkRtlModule zkSumcheckRoundRtlModule = true ∧
-    checkBelNetlistValid (synthesizeModuleToBels zkSumcheckRoundRtlModule) = true := by
-  constructor <;> decide +kernel
+abbrev WireM := StateM WireBuild
+
+/-- Name and append a wire; the result is a reference to it. -/
+def wire (name : String) (e : RtlExpr) : WireM RtlExpr := do
+  let idx := (← get).next
+  modify fun s => { wires := s.wires.push { wireIdx := idx, name := name, expr := e }, next := idx + 1 }
+  pure (.wireRef idx)
+
+def glP : RtlExpr := .const 0xFFFFFFFF00000001#64
+def glMask32 : RtlExpr := .const 0xFFFFFFFF#64
+def glShift32 : RtlExpr := .const 32#64
+
+/-- `x < p ? x : x - p` (every 64-bit word is below `2p`, so one subtraction canonicalizes). -/
+def glCanon (tag : String) (x : RtlExpr) : WireM RtlExpr :=
+  wire s!"{tag}_canon" (.mux (.alu .ult x glP) x (.alu .sub x glP))
+
+/-- `(a + b) mod p` for canonical `a b`, without a 65th bit: `remP = p - b`; if `remP ≤ a` the sum
+wraps and equals `a - remP`, else it is `a + b` (`fieldAdd` in `GoldilocksField.obend`). -/
+def glAdd (tag : String) (a b : RtlExpr) : WireM RtlExpr := do
+  let remP ← wire s!"{tag}_remp" (.alu .sub glP b)
+  wire s!"{tag}_add" (.mux (.alu .ult a remP) (.alu .add a b) (.alu .sub a remP))
+
+/-- `(a - b) mod p` for canonical `a b` (`fieldSub`). -/
+def glSub (tag : String) (a b : RtlExpr) : WireM RtlExpr :=
+  wire s!"{tag}_sub" (.mux (.alu .ult a b) (.alu .add (.alu .sub glP b) a) (.alu .sub a b))
+
+/-- `(a * b) mod p` for any 64-bit `a b`: four 32×32 limb products (each exact in 64 bits), the
+128-bit product `(lo, hi)` assembled from them, then `goldilocksReduce128` (`fieldMul` in
+`GoldilocksField.obend`; the reduction is `goldilocksReduce128Spec`, proved sound above). -/
+def glMul (tag : String) (a b : RtlExpr) : WireM RtlExpr := do
+  let aLo ← wire s!"{tag}_alo" (.alu .bitAnd a glMask32)
+  let aHi ← wire s!"{tag}_ahi" (.alu .lshr a glShift32)
+  let bLo ← wire s!"{tag}_blo" (.alu .bitAnd b glMask32)
+  let bHi ← wire s!"{tag}_bhi" (.alu .lshr b glShift32)
+  let p00 ← wire s!"{tag}_p00" (.alu .mul aLo bLo)
+  let p01 ← wire s!"{tag}_p01" (.alu .mul aLo bHi)
+  let p10 ← wire s!"{tag}_p10" (.alu .mul aHi bLo)
+  let p11 ← wire s!"{tag}_p11" (.alu .mul aHi bHi)
+  let mid32 ← wire s!"{tag}_mid32"
+    (.alu .add (.alu .add (.alu .lshr p00 glShift32) (.alu .bitAnd p01 glMask32)) (.alu .bitAnd p10 glMask32))
+  let lo ← wire s!"{tag}_lo"
+    (.alu .bitOr (.alu .bitAnd p00 glMask32) (.alu .shl (.alu .bitAnd mid32 glMask32) glShift32))
+  let hi ← wire s!"{tag}_hi"
+    (.alu .add (.alu .add (.alu .add p11 (.alu .lshr p01 glShift32)) (.alu .lshr p10 glShift32))
+      (.alu .lshr mid32 glShift32))
+  let hiLo ← wire s!"{tag}_hilo" (.alu .bitAnd hi glMask32)
+  let hiHi ← wire s!"{tag}_hihi" (.alu .lshr hi glShift32)
+  let mid ← wire s!"{tag}_mid" (.alu .sub (.alu .shl hiLo glShift32) hiLo)
+  let loC ← glCanon s!"{tag}_lo" lo
+  let t1 ← glAdd s!"{tag}_t1" loC mid
+  glSub s!"{tag}_red" t1 hiHi
+
+/-- Ports: `u_in v_in w_in` (butterfly), `sc_clear sc_enable sc_absorb` (1-bit strobes),
+`sc_f0_in sc_f1_in` (a hypercube pair). Registers: `acc_g0 acc_g1 acc_g2`, `transcript`,
+`challenge`, `pair_cnt`. -/
+def buildZkNttCoproc : WireM (List OutputPort × List RegSpec) := do
+  let u ← glCanon "u" (.inputPort 0)
+  let v ← glCanon "v" (.inputPort 1)
+  let w ← glCanon "w" (.inputPort 2)
+  let clear := RtlExpr.inputPort 3
+  let en := RtlExpr.inputPort 4
+  let absorb := RtlExpr.inputPort 5
+  let f0 ← glCanon "f0" (.inputPort 6)
+  let f1 ← glCanon "f1" (.inputPort 7)
+  let g0 := RtlExpr.regRead 0
+  let g1 := RtlExpr.regRead 1
+  let g2 := RtlExpr.regRead 2
+  let tr := RtlExpr.regRead 3
+  let chal := RtlExpr.regRead 4
+  let cnt := RtlExpr.regRead 5
+  -- radix-2 butterfly
+  let vw ← glMul "vw" v w
+  let even ← glAdd "even" u vw
+  let odd ← glSub "odd" u vw
+  -- round polynomial accumulation and the fold with the registered challenge
+  let f1x2 ← glAdd "f1x2" f1 f1
+  let g2term ← glSub "g2term" f1x2 f0
+  let diff ← glSub "diff" f1 f0
+  let rdiff ← glMul "rdiff" chal diff
+  let folded ← glAdd "folded" f0 rdiff
+  let g0acc ← glAdd "g0acc" g0 f0
+  let g1acc ← glAdd "g1acc" g1 f1
+  let g2acc ← glAdd "g2acc" g2 g2term
+  let claim ← glAdd "claim" g0 g1
+  -- transcript: (((t + g0) * 2^32 + g1) * 2^32 + g2 + c)^7
+  let alpha := RtlExpr.const (BitVec.ofNat 64 transcriptAlpha)
+  let rc := RtlExpr.const (BitVec.ofNat 64 transcriptConst)
+  let a1 ← glAdd "tr_a1" tr g0
+  let m1 ← glMul "tr_m1" a1 alpha
+  let a2 ← glAdd "tr_a2" m1 g1
+  let m2 ← glMul "tr_m2" a2 alpha
+  let gc ← glAdd "tr_gc" g2 rc
+  let s1 ← glAdd "tr_s" m2 gc
+  let s2 ← glMul "tr_s2" s1 s1
+  let s4 ← glMul "tr_s4" s2 s2
+  let s6 ← glMul "tr_s6" s4 s2
+  let s7 ← glMul "tr_s7" s6 s1
+  let nextG0 ← wire "next_g0" (.mux clear (.const 0#64) (.mux en g0acc g0))
+  let nextG1 ← wire "next_g1" (.mux clear (.const 0#64) (.mux en g1acc g1))
+  let nextG2 ← wire "next_g2" (.mux clear (.const 0#64) (.mux en g2acc g2))
+  let nextTr ← wire "next_transcript" (.mux absorb s7 tr)
+  let nextChal ← wire "next_challenge" (.mux absorb s7 chal)
+  let nextCnt ← wire "next_pair_cnt" (.mux clear (.const 0#64) (.mux en (.alu .add cnt (.const 1#64)) cnt))
+  let mkReg (idx : Nat) (name : String) (init : BitVec 64) (nx : RtlExpr) : RegSpec :=
+    { regIdx := idx, name := name, domain := zkNttClkDomain, resetKind := .syncReset init,
+      isSynchronizer := false, nextExpr := nx }
+  let regs :=
+    [ mkReg 0 "acc_g0" 0#64 nextG0
+    , mkReg 1 "acc_g1" 0#64 nextG1
+    , mkReg 2 "acc_g2" 0#64 nextG2
+    , mkReg 3 "transcript" (BitVec.ofNat 64 transcriptIv) nextTr
+    , mkReg 4 "challenge" 0#64 nextChal
+    , mkReg 5 "pair_cnt" 0#64 nextCnt ]
+  let outs : List OutputPort :=
+    [ { name := "goldilocks_even_out", expr := even }
+    , { name := "goldilocks_odd_out", expr := odd }
+    , { name := "sc_g0_out", expr := g0 }
+    , { name := "sc_g1_out", expr := g1 }
+    , { name := "sc_g2_out", expr := g2 }
+    , { name := "sc_round_claim_out", expr := claim }
+    , { name := "sc_folded_out", expr := folded }
+    , { name := "sc_challenge_out", expr := chal }
+    , { name := "sc_transcript_out", expr := tr }
+    , { name := "sc_pair_cnt_out", expr := cnt } ]
+  pure (outs, regs)
+
+/-- The co-processor. Emitted by `obend-emit-sv zk` to `apps/zk-ntt/verilator/zk_ntt_coproc.sv`. -/
+def zkNttCoprocRtlModule : RtlModule :=
+  let r := Id.run (buildZkNttCoproc.run {})
+  { name := "zk_ntt_coproc"
+    inputNames := ["u_in", "v_in", "w_in", "sc_clear", "sc_enable", "sc_absorb", "sc_f0_in", "sc_f1_in"]
+    inputWidths := [64, 64, 64, 1, 1, 1, 64, 64]
+    wires := r.2.wires.toList
+    regs := r.1.2
+    outputs := r.1.1 }
+
+/-- Butterfly inputs `(u, v, w)` with the strobes low. -/
+def zkButterflyInputs (u v w : Nat) : Nat → BitVec 64
+  | 0 => BitVec.ofNat 64 u
+  | 1 => BitVec.ofNat 64 v
+  | 2 => BitVec.ofNat 64 w
+  | _ => 0#64
+
+/-- Sumcheck-side inputs: strobes and a pair. -/
+def zkSumcheckInputs (clear en absorb f0 f1 : Nat) : Nat → BitVec 64
+  | 3 => BitVec.ofNat 64 clear
+  | 4 => BitVec.ofNat 64 en
+  | 5 => BitVec.ofNat 64 absorb
+  | 6 => BitVec.ofNat 64 f0
+  | 7 => BitVec.ofNat 64 f1
+  | _ => 0#64
+
+/-- The checks `obend-emit-sv check-zk` runs natively, each with its reason; none is evaluated while
+this file elaborates (per-module kernel and native fixtures were what cost the previous version
+hours, review/DECISIONS-20261031.md, second round):
+1. the module is a DAG and passes the emission gate (`checkRtlModuleW`) and maps to BELs: what lets
+   `obend-emit-sv zk` write the file;
+2. the butterfly on the carry and borrow corners (`u ≥ p`, all `2^64 - 1`, all `p - 1`,
+   `(p-1)^2 = 1`) equals the `Nat` specification: `glMul`'s limb schedule is not proved against
+   `goldilocksMulSpec`, and these are the inputs that distinguish a wrong carry;
+3. one round through `runModuleTrace` (clear, `(10, 18)`, `(4, 8)`, absorb) reads `14, 26, 38`,
+   claim `40`, and a challenge equal to `transcriptAbsorbSpec iv 14 26 38`: the challenge register is
+   a function of the absorbed messages and nothing else. -/
+def zkBoundaryVectors : List (Nat × Nat × Nat) :=
+  [ (0xFFFFFFFF00000003, 2, 1), (0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF),
+    (18446744069414584320, 18446744069414584320, 18446744069414584320),
+    (1, 0xFFFFFFFF00000000, 0xFFFFFFFF00000000), (0, 18446744069414584320, 1),
+    (0x00000000FFFFFFFF, 0xFFFFFFFF00000005, 0xFFFFFFFF00000007) ]
+
+def zkCheckGate : Bool :=
+  checkRtlModule zkNttCoprocRtlModule && checkRtlModuleW zkNttCoprocRtlModule &&
+  checkBelNetlistValid (synthesizeModuleToBels zkNttCoprocRtlModule)
+
+def zkCheckButterfly : Bool :=
+  zkBoundaryVectors.all fun (u, v, w) =>
+    let outs := evalModuleOutputs zkNttCoprocRtlModule (zkButterflyInputs u v w) (fun _ => 0#64)
+    outs.lookup "goldilocks_even_out" == some (BitVec.ofNat 64 (glN (u + goldilocksMulSpec v w))) &&
+    outs.lookup "goldilocks_odd_out" ==
+      some (BitVec.ofNat 64 (glN (glN u + goldilocksPrime - goldilocksMulSpec v w)))
+
+def zkCheckTranscriptRound : Bool :=
+  let regs := runModuleTrace zkNttCoprocRtlModule (fun _ => 0#64)
+    [ (true, fun _ => 0#64)
+    , (false, zkSumcheckInputs 1 0 0 0 0)
+    , (false, zkSumcheckInputs 0 1 0 10 18)
+    , (false, zkSumcheckInputs 0 1 0 4 8)
+    , (false, zkSumcheckInputs 0 0 1 0 0) ]
+  let outs := evalModuleOutputs zkNttCoprocRtlModule (zkSumcheckInputs 0 0 0 0 0) regs
+  outs.lookup "sc_g0_out" == some 14#64 && outs.lookup "sc_g1_out" == some 26#64 &&
+  outs.lookup "sc_g2_out" == some 38#64 && outs.lookup "sc_round_claim_out" == some 40#64 &&
+  outs.lookup "sc_pair_cnt_out" == some 2#64 &&
+  outs.lookup "sc_challenge_out" == some (BitVec.ofNat 64 (transcriptAbsorbSpec transcriptIv 14 26 38))
+
+/-! ## 4. The Lean run of the 8-round protocol (the golden the harness compares the RTL against) -/
+
+/-- The 256 hypercube values the harness uses: `p - 17 - (i + 1) * K`, full-width so every round wraps. -/
+def zkGoldenTable : List Nat :=
+  (List.range 256).map fun i =>
+    glN (goldilocksPrime - 17 + goldilocksPrime - glN ((i + 1) * 0x7FEDBCA987654321))
+
+def pairsOf : List Nat → List (Nat × Nat)
+  | f0 :: f1 :: rest => (f0, f1) :: pairsOf rest
+  | _ => []
+
+/-- One round at the `Nat` level: the three accumulators, the transcript absorb, the verifier's
+claim check and update, and the fold with the new challenge. -/
+def zkGoldenRound (table : List Nat) (t claim : Nat) :
+    (List Nat × Nat × Nat × Nat × Nat × Nat × Bool) :=
+  let ps := pairsOf table
+  let g0 := ps.foldl (fun a p => glN (a + p.1)) 0
+  let g1 := ps.foldl (fun a p => glN (a + p.2)) 0
+  let g2 := ps.foldl (fun a p => glN (a + glN (p.2 + p.2 + goldilocksPrime - p.1))) 0
+  let t' := transcriptAbsorbSpec t g0 g1 g2
+  let ok := glN (g0 + g1) == claim
+  let claim' := glN (g0 + goldilocksMulSpec t' (glN (g1 + goldilocksPrime - g0)))
+  let table' := ps.map fun p => glN (p.1 + goldilocksMulSpec t' (glN (p.2 + goldilocksPrime - p.1)))
+  (table', t', claim', g0, g1, g2, ok)
+
+def zkGoldenRounds : Nat → Nat → List Nat → Nat → Nat → List String → List String
+  | 0, _, table, _, claim, acc =>
+    acc.reverse ++ [s!"final={table.headD 0}", s!"final_claim={claim}"]
+  | k + 1, round, table, t, claim, acc =>
+    let (table', t', claim', g0, g1, g2, ok) := zkGoldenRound table t claim
+    let lines :=
+      [ s!"round{round}_g0={g0}", s!"round{round}_g1={g1}", s!"round{round}_g2={g2}"
+      , s!"round{round}_challenge={t'}", s!"round{round}_claim_ok={if ok then 1 else 0}"
+      , s!"round{round}_next_claim={claim'}" ]
+    zkGoldenRounds k (round + 1) table' t' claim' (lines.reverse ++ acc)
+
+/-- `key=value` lines of the 8-round run (`obend-emit-sv golden-zk`,
+`apps/zk-ntt/verilator/zk_ntt_golden.txt`). -/
+def zkSumcheckGolden : String :=
+  let claim0 := zkGoldenTable.foldl (fun a x => glN (a + x)) 0
+  let lines := zkGoldenRounds 8 0 zkGoldenTable transcriptIv claim0 []
+  "# Generated by obend-emit-sv golden-zk from Obend.Apps.ZkNtt.zkSumcheckGolden\n" ++
+  s!"iv={transcriptIv}\nclaim0={claim0}\n" ++ String.intercalate "\n" lines ++ "\n"
 
 end Obend.Apps.ZkNtt
 end

@@ -347,9 +347,9 @@ def acc4 : Wv × NRest :=
 
 def row4 : NRow := .dispatch (commitOp .p2)
 
-theorem log_row4 : log[4]? = some row4 := by rfl
+example : log[4]? = some row4 := by rfl
 
-theorem prefix_runs : admission.run start (log.take 4) = .ok acc4 := by rfl
+example : admission.run start (log.take 4) = .ok acc4 := by rfl
 
 /-- **The dispatch of the commitment to `p2` is admitted.** -/
 theorem row4_admitted : (admission.step acc4 row4).toBool = true := by rfl
@@ -385,7 +385,7 @@ def pins4 : List (Fact × Option (Nat × Bool)) := pinsOfReads acc4.1 (admission
 
 theorem receipt4_pins (prev : Digest) : (receipt4 prev).pins = pins4 := by rfl
 
-theorem pins4_eq : pins4 = [(.auth .p2, some (1, true)), (.beforeDeadline, some (1, true)),
+example : pins4 = [(.auth .p2, some (1, true)), (.beforeDeadline, some (1, true)),
     (.auth .p2, some (1, true)), (.beforeDeadline, some (1, true))] := by rfl
 
 /-- **The realized view's reads are the pins'**: every world fact the receipt pins reads, at the
@@ -447,7 +447,7 @@ end Control
 /-- **The stranger's example, as outcomes**: the refused commitment on `p1` is refused by its clause;
 the three re-plans while the commitment to `p2` is in flight and the three events after it is
 abandoned are `executionFrozen`, not failures of the candidates. -/
-theorem script_outcomes :
+example :
     ((nsession spec c₀ script).2.map fun r => r.map controlOutcome).map (fun o => o.map Outcome.isOk) =
       [none, none, none, some false, none, none, none, some false, some false, some false, some false,
         some false, none, some false, none, some false, some false, some false, none] ∧

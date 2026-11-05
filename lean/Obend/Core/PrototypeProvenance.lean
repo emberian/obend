@@ -434,7 +434,7 @@ theorem branching_prototype_provenance_holds :
 
 /-- Multi-step branching/arithmetic prototype target `42` fails `PrototypeProvenance` at fuel `3`. -/
 -- fixture kept (2026-11-04): refusal witness: `PrototypeProvenance` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
-theorem branching_prototype_provenance_insufficient_fuel :
+example :
     PrototypeProvenance 3 branchingSpec42 branchingSeed11 genuineTarget42 = false := by
   decide +kernel
 
@@ -476,7 +476,7 @@ theorem illTyped_seed_refused :
 
 /-- Raw `synthProtoTerm` WITHOUT provenance checking accepts the forged target `999` at the exact
     same type as `genuineTarget42` (demonstrating the `LT4` vulnerability in raw `Term.prototype`). -/
-theorem raw_synthProtoTerm_accepts_forged_target :
+example :
     (synthProtoTerm constSpec42Env [] [] (.prototype constSpec42 forgedTarget999)).map (·.type) =
       .ok (.prototype
         (.arrow .reusable .unrestricted .natural (.arrow .reusable .unrestricted .natural .natural))

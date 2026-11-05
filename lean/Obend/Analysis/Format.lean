@@ -158,7 +158,7 @@ def embedQuestion : Question TView :=
 
 /-- The honest prediction: the embed goes behind, resting on its `current` fact at v2. -/
 -- fixture kept (2026-11-04): cheap closed check of `affected` on literal data
-theorem embed_behind :
+example :
     affected embedQuestion = [⟨"Alpha: ![[Beta]]", .blocked, ⟨"Beta", "current Beta@v1", ["v1"]⟩, false⟩] := by
   decide +kernel
 

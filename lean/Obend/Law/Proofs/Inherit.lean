@@ -445,7 +445,7 @@ still keeps the local chain and the parent's list: the parent follows what its l
 @[expose] public def incoherentGraph : Obend.Spec.C4.Graph := ⟨fun x => if x = "board" then ["room"] else [x], fun _ => false⟩
 
 -- fixture kept (2026-11-04): cheap closed check of `precedence` on literal data
-theorem incoherent_tooth :
+example :
     (precedence incoherentGraph "board2" [["board"]]).toOption = some ["board2", "room", "board"] :=
   by decide +kernel
 

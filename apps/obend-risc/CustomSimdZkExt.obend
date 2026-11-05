@@ -1,5 +1,9 @@
 edition ObjectiveBend 1
 # Flagship App #1 (Layer 3): Custom Opcode 0x2B (43) SIMD/ZK Multiply-Accumulate & Goldilocks Fold Layer
+# The claims that executed an instruction (execInstruction/execStep) were removed on 2026-11-04: the importer proves
+# each claim by kernel evaluation of the Core4 interpreter and these took most of the module's budget
+# (review/DECISIONS-20261031.md, second round); the same instructions run on the emitted core in
+# apps/obend-risc/verilator against the Lean golden. The decode and pc claims stay.
 
 import ./BaseRiscCore.obend as Base
 import ./PrivilegeCsrOverride.obend as Priv
@@ -37,8 +41,6 @@ spec CustomSimdZkExtSpec for CustomSimdZkTarget:
     0x2Bn
   def execInstruction(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
     let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let f7 = (inst >>> 25n) & 0x7Fn in if op == self.customExtOpcode then self.extMacExec(f3, f7, rs1Val, rs2Val) else super.execInstruction(inst, rs1Val, rs2Val)
-  claim custom_simd_zk_mac_exec() by weave: self.execInstruction(0x027305ABn, 8n, 13n) == 105n
-  claim custom_ext_non_interference_add() by weave: self.execInstruction(0x002081B3n, 13n, 21n) == 34n
   claim custom_ext_respects_trap_preemption() by weave: self.stepPc(0x00000073n, 32n, 0n) == 0x50n
 
 def seedCustomSimdZk() -> CustomSimdZkTarget:
@@ -46,6 +48,3 @@ def seedCustomSimdZk() -> CustomSimdZkTarget:
 
 def customSimdZkRiscCore() -> CustomSimdZkTarget:
   fix(compose(BaseSimdZkSpec, CustomSimdZkExtSpec), seedCustomSimdZk())
-
-def verifyExtCrossModuleConsistency() -> Bool:
-  (Base.baseRiscCore().execInstruction(0x002081B3n, 13n, 21n) == customSimdZkRiscCore().execInstruction(0x002081B3n, 13n, 21n)) && (Priv.privilegeRiscCore().stepPc(0x00000073n, 32n, 0n) == customSimdZkRiscCore().stepPc(0x00000073n, 32n, 0n))

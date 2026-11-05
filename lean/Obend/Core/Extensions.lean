@@ -26,7 +26,7 @@ def OpenFixedPoint {C : Type} {U : C → Type}
 
 /-- A genuine changing-target witness: Unit→List Nat→Nat under final context
 Nat. This cannot be expressed as a homogeneous Nat endomorphism composition. -/
-theorem heterogeneous_fixed_point :
+example :
     OpenFixedPoint (composeOpen
       (fun (self : Nat) (_ : Unit) => [self])
       (fun (_ : Nat) (inherited : List Nat) => inherited.length)) 1 () := rfl
@@ -78,13 +78,13 @@ theorem composed_law_retained {A : Type} (first second : Specification A)
   closed.2.2 law (List.mem_append_left _ member)
 
 /-- Composition is deliberately noncommutative, already for a non-record target. -/
-theorem replacing_then_wrapping :
+example :
     mix [replacement (fun (_ : Nat) => 0), wrapping (fun _ super => super + 1)] 99 7 = 1 := rfl
-theorem wrapping_then_replacing :
+example :
     mix [wrapping (fun (_ : Nat) super => super + 1), replacement (fun _ => 0)] 99 7 = 0 := rfl
 
 /-- This is an inhabited non-record fixed point, independent of any linker. -/
-theorem scalar_fixed_point :
+example :
     FixedPoint [replacement (fun (_ : Nat) => 0), wrapping (fun _ super => super + 1)] 7 1 := rfl
 
 /-- Unrestricted fix is partial: an extension need not have a fixed point. A

@@ -39,7 +39,7 @@ public theorem dropped_linear_custody_refused :
       | _ => false) = true := by decide
 
 /-- The same program with an `affine` custody is accepted: dropping is within "at most once". -/
-public theorem dropped_affine_custody_accepted :
+example :
     (checkAgainst (droppedCustody .affine) [] (droppedCustodyType .affine)).toBool = true := by decide
 
 #tooth dropped_linear_custody_refused by mutation custodyQuantity := .affine
@@ -68,7 +68,7 @@ public theorem laundered_custody_refused :
 
 /-- With a `linear` callee the obligation moves to it, and it is refused at the callee's own binder,
 which drops it: the drop is found wherever the custody goes. -/
-public theorem handed_to_linear_refused_at_callee :
+example :
     (match checkAgainst (handedCustody .linear) [] (droppedCustodyType .linear) with
       | .error (.linearBinderUnused [0, 0]) => true
       | _ => false) = true := by decide
@@ -82,7 +82,7 @@ public theorem handed_to_linear_refused_at_callee :
     else if path = [0, 0] then some ⟨.custody 0, .custody 0, .linear, .once⟩
     else none, {}⟩
 
-public theorem passed_linear_custody_accepted :
+example :
     (checkAgainst passedCustody [] (.arrow .once .linear (.custody 0) (.custody 0))).toBool = true := by decide
 
 /-! ### The two gaps exact discharge left at the binder, closed
@@ -108,12 +108,12 @@ public theorem dropped_on_branch_refused :
 #tooth dropped_on_branch_refused by mutation falseBranch := .bound 0
 
 /-- Both branches use it once: one use on every path, accepted (by sum it was two, refused). -/
-public theorem used_on_every_branch_accepted :
+example :
     (checkAgainst (branching .linear (.bound 0)) [] (.arrow .once .linear .natural .natural)).toBool = true := by
   decide
 
 /-- An `affine` hypothesis joins by maximum: used on one branch, or on both, it is used at most once. -/
-public theorem affine_branches_accepted :
+example :
     (checkAgainst (branching .affine falseBranch) [] (.arrow .once .affine .natural .natural)).toBool = true ∧
     (checkAgainst (branching .affine (.bound 0)) [] (.arrow .once .affine .natural .natural)).toBool = true := by
   decide
@@ -136,7 +136,7 @@ public theorem sibling_projection_refused :
 #tooth sibling_projection_refused by mutation siblingQuantity := .affine
 
 /-- At `affine` the same projection is accepted: the dropped sibling may be dropped. -/
-public theorem sibling_projection_affine_accepted :
+example :
     (checkAgainst (siblingDropped .affine) [] (.arrow .once .affine .natural .natural)).toBool = true := by decide
 
 
@@ -211,7 +211,7 @@ public theorem case_scrutinee_refused :
 
 /-- The same scrutinee with no case annotation: the checker binds the payload `linear` itself
 (`caseQuantity`), and refuses the same arm. -/
-public theorem case_scrutinee_refused_unannotated :
+example :
     (match checkAgainst ⟨.lam (.case (.inject "l" (.bound 0)) [("l", .nat 0)]), fun p =>
         if p = [] then some ⟨.natural, .natural, .linear, .once⟩
         else if p = [0, 0] then some ⟨.natural, oneLabel, .unrestricted, .reusable⟩ else none, {}⟩
@@ -220,14 +220,14 @@ public theorem case_scrutinee_refused_unannotated :
       | _ => false) = true := by decide
 
 /-- A `linear` sum is matched: the arm uses its `linear` payload once, `λh. case l h of l x. x`. -/
-public theorem linear_sum_matched :
+example :
     (checkAgainst ⟨.lam (.case (.inject "l" (.bound 0)) [("l", .bound 0)]), fun p =>
         if p = [] then some ⟨.natural, .natural, .linear, .once⟩
         else if p = [0] then some ⟨oneLabel, .natural, .linear, .reusable⟩ else none, {}⟩
         [] (.arrow .once .linear .natural .natural)).toBool = true := by decide
 
 /-- An annotation that binds a `linear` scrutinee's payload `unrestricted` is refused at the case. -/
-public theorem linear_scrutinee_unrestricted_payload_refused :
+example :
     (match checkAgainst ⟨.lam (.case (.inject "l" (.bound 0)) [("l", .bound 0)]), fun p =>
         if p = [] then some ⟨.natural, .natural, .linear, .once⟩
         else if p = [0] then some ⟨oneLabel, .natural, .unrestricted, .reusable⟩ else none, {}⟩
@@ -275,21 +275,21 @@ accepted at `linear`: the test is the one use of `h`. `Step.successor` fires onl
 holds no hypothesis, and binds the predecessor, a fresh literal; `step_conserves_linear` covers both
 rules with no new premise. -/
 @[expose] public def ifZeroBody : Term := .ifZero (.bound 0) (.nat 0) (.binary .add (.bound 0) (.bound 0))
-public theorem ifZero_scrutinee_accepted :
+example :
     (checkAgainst ⟨.lam ifZeroBody, fun p => if p = [] then some ⟨.natural, .natural, .linear, .once⟩ else none, {}⟩
       [] (.arrow .once .linear .natural .natural)).toBool = true := by decide
 
 /-! ### Refusals that name their own clause (Kimi's review A) -/
 
 /-- `λ(h : linear Nat). h + h`: overuse names the binder's quantity (it said `affine` for every one). -/
-public theorem linear_overuse_named :
+example :
     (match checkAgainst ⟨.lam (.binary .add (.bound 0) (.bound 0)),
         fun p => if p = [] then some ⟨.natural, .natural, .linear, .once⟩ else none, {}⟩
         [] (.arrow .once .linear .natural .natural) with
       | .error (.binderOverused [] 0 .linear 2) => true
       | _ => false) = true := by decide
 
-public theorem erased_use_named :
+example :
     (match checkAgainst ⟨.lam (.bound 0),
         fun p => if p = [] then some ⟨.natural, .natural, .erased, .once⟩ else none, {}⟩
         [] (.arrow .once .erased .natural .natural) with
@@ -298,7 +298,7 @@ public theorem erased_use_named :
 
 /-- An `affine` hypothesis passed to an `unrestricted` parameter of shareable type: the captures, not
 the type, are what is not shareable (it said `notShareable` of the type). -/
-public theorem unrestricted_argument_captures_named :
+example :
     (match checkAgainst ⟨.lam (.app (.lam (.bound 0)) (.bound 0)), fun p =>
         if p = [] then some ⟨.natural, .natural, .affine, .once⟩
         else if p = [0, 0] then some ⟨.natural, .natural, .unrestricted, .reusable⟩ else none, {}⟩
@@ -307,7 +307,7 @@ public theorem unrestricted_argument_captures_named :
       | _ => false) = true := by decide
 
 /-- An activity passed as an argument is `activityMisplaced` (it said `notShareable`). -/
-public theorem activity_argument_named :
+example :
     (match checkAgainst ⟨.app (.lam (.nat 0)) (.done (.nat 0)), fun p =>
         if p = [0] then some ⟨activity .natural, .natural, .affine, .reusable⟩ else none, {}⟩
         [] .natural with
@@ -316,7 +316,7 @@ public theorem activity_argument_named :
 
 /-- An empty record against a row with a field: expected the row, actual the empty row (the two were
 reversed). -/
-public theorem empty_fields_mismatch_ordered :
+example :
     (match checkAgainst ⟨.record [], fun p => if p = [] then some ⟨.emptyRow, oneField, .unrestricted, .reusable⟩
         else none, {}⟩ [] oneField with
       | .error (.typeMismatch [] expected actual) => expected == oneField && actual == .emptyRow

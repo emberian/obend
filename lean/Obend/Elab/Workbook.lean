@@ -46,6 +46,8 @@ public import Obend.Lower.Reflect
 public meta import Obend.Lower.Reflect
 public import Obend.Elab.AutoCert
 public meta import Obend.Elab.AutoCert
+public import Obend.AssertCompiled
+public meta import Obend.AssertCompiled
 import all Obend.Judge.Class
 import all Obend.Logic.Obligation
 
@@ -65,6 +67,8 @@ without manual de Bruijn transcription:
    package in `obendWorkbookExt`, and emits concrete kernel-checked Lean constants inside namespace
    `Ns` (`Ns.package`, `Ns.laws_count`, `<def>_term`, `<def>_val`, `<def>_lexpr`,
    `<def>_lowerTerm_eq`, `<def>_comp`, `<def>_book`, `<def>_reflected`, and per-claim obligations
+   (`claim_<name>_obj`, `_just`, `_check` by compiled evaluation with its `#assert_compiled`, `_holds`
+   the meaning; a claim the importer cannot discharge fails the import, 2026-11-04)
    with machine-checked proofs). This is the one `#import_obend`: `Obend.Stdlib`,
    `Obend.Hardware.UserspacePhysical` and every `Obend.Apps.*` module call it (2026-11-04).
 3. `verifyWorkbookObligationsWithLean` (+ soundness theorems):
@@ -1679,25 +1683,6 @@ meta def defineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit 
   }
   liftCoreM <| Lean.withExporting (isExporting := true) <| addDecl decl
 
-meta def tryDefineWorkbookThm (thmName : Name) (ty val : Expr) : CommandElabM Unit := do
-  let env ← getEnv
-  if env.contains thmName then
-    return ()
-  let decl : Declaration := .thmDecl {
-    name := thmName
-    levelParams := []
-    type := ty
-    value := val
-  }
-  let checkRes ← liftCoreM do
-    let opts ← Lean.getOptions
-    return (env.setExporting true).unlockAsync.addDeclCore
-      (Lean.Core.getMaxHeartbeats opts).toUSize
-      (Lean.maxRecDepth.get opts).toUSize
-      decl none (doCheck := true)
-  if let .ok _ := checkRes then
-    liftCoreM <| Lean.withExporting (isExporting := true) <| addDecl decl
-
 /-- Emit all kernel-checked constants and theorems for a `WorkbookPackage` into namespace `ns`. -/
 meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandElabM Unit := do
   modifyEnv fun env => obendWorkbookExt.addEntry env (ns, pkg)
@@ -1721,7 +1706,8 @@ meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandEl
         let rhs := mkApp2 (mkConst ``Option.some [Level.zero]) (mkConst ``LExpr) (mkConst dLExprName)
         let eqTy := mkApp3 (mkConst ``Eq [Level.succ Level.zero]) optTy lhs rhs
         let eqPrf := mkApp2 (mkConst ``Eq.refl [Level.succ Level.zero]) optTy rhs
-        tryDefineWorkbookThm (ns ++ Name.mkSimple (d.name ++ "_lowerTerm_eq")) eqTy eqPrf
+        -- Kernel `Eq.refl`: the lowering is structural and cheap; a failure is an error, not a skip.
+        defineWorkbookThm (ns ++ Name.mkSimple (d.name ++ "_lowerTerm_eq")) eqTy eqPrf
     if let some comp := d.composition? then
       defineWorkbookConst (ns ++ Name.mkSimple (d.name ++ "_comp")) comp
     if let some bk := d.book? then
@@ -1741,21 +1727,39 @@ meta def registerAndEmitWorkbook (ns : Name) (pkg : WorkbookPackage) : CommandEl
     for pfx in prefixes do
       let objName := ns ++ Name.mkSimple (pfx ++ "_obj")
       defineWorkbookConst objName c.claimObj
-      if let some just := c.autoJustification? then
-        let justName := ns ++ Name.mkSimple (pfx ++ "_just")
-        defineWorkbookConst justName just
-        if c.autoVerified then
-          let holdsName := ns ++ Name.mkSimple (pfx ++ "_holds")
-          let fmtsE := mkConst ``workbookFormats
-          let gradeE := toExpr (4096 : Nat)
-          let verdictTy := mkApp (mkConst ``Obend.Judge.Verdict) (mkConst ``ClaimClause)
-          let okE := mkApp (mkConst ``Obend.Judge.Verdict.ok) (mkConst ``ClaimClause)
-          let checkEqPrf := mkApp2 (mkConst ``Eq.refl [Level.succ Level.zero]) verdictTy okE
-          let holdsTy := mkApp3 (mkConst ``Obend.Logic.obligationMeaningWithJudges)
-            fmtsE (mkConst objName) (mkConst justName)
-          let holdsPrf := mkApp5 (mkConst ``Obend.Logic.obligationWithJudges_sound)
-            fmtsE gradeE (mkConst objName) (mkConst justName) checkEqPrf
-          defineWorkbookThm holdsName holdsTy holdsPrf
+      let some just := c.autoJustification?
+        | Lean.throwError m!"#import_obend: claim `{c.name}` (target `{c.targetDef}`) carries no justification the importer can derive. A claim the importer cannot discharge fails the import; it does not skip the theorem (2026-11-04)."
+      let justName := ns ++ Name.mkSimple (pfx ++ "_just")
+      defineWorkbookConst justName just
+      unless c.autoVerified do
+        Lean.throwError m!"#import_obend: claim `{c.name}` (target `{c.targetDef}`) is not discharged: the obligation check of its justification did not return `.ok`. A claim the importer cannot discharge fails the import (2026-11-04)."
+      -- The claim's check is a closed computation of the obligation checker on `_obj` and `_just`.
+      -- It is proved by compiled evaluation (`native_decide`, one auxiliary axiom per claim that
+      -- `#assert_compiled` re-runs), never by kernel evaluation of the Core4 interpreter: that
+      -- took hours for a 64-bit multiply and, when it hit the heartbeat limit, left the theorem
+      -- out silently (2026-11-04). `_holds` is the meaning, by `obligationWithJudges_sound`.
+      let checkName := ns ++ Name.mkSimple (pfx ++ "_check")
+      let holdsName := ns ++ Name.mkSimple (pfx ++ "_holds")
+      let fmtsE := mkConst ``workbookFormats
+      let gradeE := toExpr (4096 : Nat)
+      let verdictTy := mkApp (mkConst ``Obend.Judge.Verdict) (mkConst ``ClaimClause)
+      let okE := mkApp (mkConst ``Obend.Judge.Verdict.ok) (mkConst ``ClaimClause)
+      let checkE := mkApp4 (mkConst ``Obend.Logic.obligationCheckWithJudges)
+        fmtsE gradeE (mkConst objName) (mkConst justName)
+      let checkTy := mkApp3 (mkConst ``Eq [Level.succ Level.zero]) verdictTy checkE okE
+      unless (← getEnv).contains checkName do
+        let checkPrf ← Lean.Elab.Command.liftTermElabM <| Lean.Elab.Term.withDeclName checkName do
+          let stx ← `(by native_decide)
+          let v ← Lean.Elab.Term.elabTermEnsuringType stx (some checkTy)
+          Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
+          Lean.instantiateMVars v
+        defineWorkbookThm checkName checkTy checkPrf
+        Lean.Elab.Command.elabCommand (← `(#assert_compiled $(Lean.mkIdent checkName):ident))
+      let holdsTy := mkApp3 (mkConst ``Obend.Logic.obligationMeaningWithJudges)
+        fmtsE (mkConst objName) (mkConst justName)
+      let holdsPrf := mkApp5 (mkConst ``Obend.Logic.obligationWithJudges_sound)
+        fmtsE gradeE (mkConst objName) (mkConst justName) (mkConst checkName)
+      defineWorkbookThm holdsName holdsTy holdsPrf
 
 /-- `#import_obend "path/to/File.obend" as Ns`:
     Elaborate an `.obend` file at compile time, verify `FrontEnd.accept`, register the package in

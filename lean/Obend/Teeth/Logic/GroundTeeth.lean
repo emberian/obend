@@ -34,15 +34,15 @@ theorem twiceOfThree_mutated_false : ¬ Holds (twiceOfThree 2).claim [] := groun
 def repeatedOverridden : ClaimProblem :=
   ⟨instantiateClaim repeated overridden.comp overridden.layer, [.natural 3]⟩
 
-theorem repeated_overridden_refuted : groundCheck 160 repeatedOverridden () = .refused .falseAt [] := by
+example : groundCheck 160 repeatedOverridden () = .refused .falseAt [] := by
   decide +kernel
 
 /-- And at the composed object it holds at `3`, `0` and `41`. -/
-theorem repeated_ground_3 : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 3]⟩ () = .ok := by
+example : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 3]⟩ () = .ok := by
   decide +kernel
-theorem repeated_ground_0 : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 0]⟩ () = .ok := by
+example : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 0]⟩ () = .ok := by
   decide +kernel
-theorem repeated_ground_41 : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 41]⟩ () = .ok := by
+example : groundCheck 400 ⟨instantiateClaim repeated (object 1).comp 1, [.natural 41]⟩ () = .ok := by
   decide +kernel
 
 /-- Accepting a turn without checking `termEq v p.expectedResult.term` breaks `turn_sound`. -/

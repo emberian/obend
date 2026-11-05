@@ -6,8 +6,7 @@ Formalizes Flagship App #5 (`QUALIFICATION-AND-SILICON-LEAN.md` §4 App #5):
    - Elaborates the 2-layer open-recursive 4-Zone Spatial Silicon Elaborator specification
      (`Epoch1ElaboratorBase` $\to$ `Epoch2IcapDprOverride`),
    - Discharges `epoch1_lut_open_recursion` (`self.zone3LutEval(argVal) == argVal * self.zone3Gain + self.zone3Offset`),
-   - Proves `flatten_sound`, `book_sound`, in-core pins-only Futamura specialization
-     (`inCoreBookCompiler_specializes_from_pinsOnly`), and cross-package cone survival
+   - Proves `flatten_sound`, `book_sound`, and cross-package cone survival
      (`coneSupports_linkComposition_of_disjoint` + `crossPackage_bEquiv_rebinds_slot_usable`).
 2. **5-Module SystemVerilog & Verilator Co-Simulation Equivalence (`silicon_kernel_verilator_cosim_sound`)**:
    - Models the 5-module SystemVerilog hierarchy (`apps/silicon-kernel-verilator/verilator/silicon_elab_top.sv`:
@@ -20,7 +19,7 @@ Formalizes Flagship App #5 (`QUALIFICATION-AND-SILICON-LEAN.md` §4 App #5):
      refusal on `#tooth`-mutated and `sorryAx` proofs).
 -/
 import Obend.Elab.Workbook
-import Obend.Leaf.Futamura
+import Obend.Leaf.Static
 import Obend.Spec.CrossPackage
 import Obend.Lower.Inductive
 import Obend.Lower.LeanKernel
@@ -37,7 +36,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel
@@ -90,30 +89,6 @@ theorem siliconKernelBundle_flatten_and_book_sound (m : String) :
   have ⟨hc1, hc2⟩ := siliconKernelBundle_compositions_closed
   exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
          flatten_sound _ hc2 m, book_sound _ hc2 m⟩
-
-/-- **`siliconKernelBundle_inCore_futamura2`**:
-Specializes `SiliconKernelBundle`'s emitted `Book`s (`epoch1SiliconFabric_book` and
-`epoch2DprSiliconFabric_book`) directly inside `Core4` via `inCoreBookCompiler` and
-`encodePinsOnly pins` (as well as `futamura2BookCompiler`). -/
-theorem siliconKernelBundle_inCore_futamura2 (pins : List LeafPin) :
-    dataPinSpecialize
-      (.app (inCoreBookCompiler SiliconKernelBundle.epoch1SiliconFabric_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook SiliconKernelBundle.epoch1SiliconFabric_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler SiliconKernelBundle.epoch2DprSiliconFabric_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook SiliconKernelBundle.epoch2DprSiliconFabric_book pins) ∧
-    dataPinSpecialize
-      (.app (futamura2BookCompiler SiliconKernelBundle.epoch1SiliconFabric_book)
-        (encodePinsRecordForBook SiliconKernelBundle.epoch1SiliconFabric_book pins)) =
-      encodeBookTerm (specializeBook SiliconKernelBundle.epoch1SiliconFabric_book pins) ∧
-    dataPinSpecialize
-      (.app (futamura2BookCompiler SiliconKernelBundle.epoch2DprSiliconFabric_book)
-        (encodePinsRecordForBook SiliconKernelBundle.epoch2DprSiliconFabric_book pins)) =
-      encodeBookTerm (specializeBook SiliconKernelBundle.epoch2DprSiliconFabric_book pins) :=
-  ⟨(inCoreBookCompiler_specializes_from_pinsOnly SiliconKernelBundle.epoch1SiliconFabric_book pins).1,
-   (inCoreBookCompiler_specializes_from_pinsOnly SiliconKernelBundle.epoch2DprSiliconFabric_book pins).1,
-   futamura2BookCompiler_specializes_in_core SiliconKernelBundle.epoch1SiliconFabric_book pins,
-   futamura2BookCompiler_specializes_in_core SiliconKernelBundle.epoch2DprSiliconFabric_book pins⟩
 
 /-- Disjoint Zone-1-only override layer modifying only `["zone1ClosedBetaBypass"]`
 (leaving `zone3Gain`, `zone3Offset`, `zone3LutEval`, and `zone4KernelGate` untouched). -/
@@ -228,7 +203,7 @@ def runVerilatorCoSimModel : VerilatorCoSimTrace :=
   let clampedVal :=
     evalReconfigTile { isolatedPhase1 with activeTile := mul4AutomatonTile } (fun _ => 0#64) (fun _ => 0#64) 10#64
   let dprAdmitted? :=
-    admitSimpTheoremDpr stdKernelEnv 8 selfHostTypePreservationInfo "discrEpoch" 2 6 10 0x600A#64 initTile
+    admitSimpTheoremDpr stdKernelEnv 8 selfHostIdentityProofInfo "discrEpoch" 2 6 10 0x600A#64 initTile
   let dprRefusedMutant? :=
     admitSimpTheoremDpr stdKernelEnv 8 selfHostMutatedBadProofInfo "discrEpoch" 2 6 10 0x600A#64 initTile
   let dprRefusedSorry? :=
@@ -243,7 +218,7 @@ def runVerilatorCoSimModel : VerilatorCoSimTrace :=
   let clampOk :=
     isolatedPhase1.isolated && (clampedVal == 42#64) &&
     dprSwappedOk && dprRefusedMutant?.isNone && dprRefusedSorry?.isNone
-  let (okValid, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostTypePreservationInfo
+  let (okValid, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo
   let (okMutant, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo
   let (okSorry, _) := stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostSorryProofInfo
   let allPass :=

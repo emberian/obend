@@ -1,51 +1,47 @@
 #!/usr/bin/env bash
+# apps/obend-risc/verilator/verify_risc.sh
+# 1. the committed .sv and the Lean golden are byte-identical to what `obend-emit-sv` writes from
+#    Obend.Apps.ObendRisc (`obendRiscCpuRtlModule`, `runRiscFirmwareSocCycles 21`); hand edits fail here;
+# 2. verilator -Wall lint and build of the emitted core with risc_soc_tb.cpp;
+# 3. Phase A: firmware/test_prog.hex for 21 cycles, every register and dmem word against the Lean golden;
+#    Phase B: the ISA torture program (negative immediates, SLT/SLTU/SRAI, S-type, backward BNE,
+#    ECALL/MRET, JAL/JALR, BLTU/BGEU/BLT/BGE, x16..x31).
+# The hand-typed risc_lec.smt2 was retired on 2026-11-04: it described the 15-register core.
 set -euo pipefail
 
-# --- byte equality with the Lean emitter (2026-11-04): the committed .sv must be exactly what
-# --- `obend-emit-sv risc` writes from the Lean RtlModule. Hand edits fail here.
-EMIT_SV="${OBEND_EMIT_SV:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/lean/.lake/build/bin/obend-emit-sv}"
-if [[ -x "${EMIT_SV}" ]]; then
-  "${EMIT_SV}" risc --out /tmp/obend_emit_obend_risc_cpu.sv >/dev/null
-  if ! cmp -s /tmp/obend_emit_obend_risc_cpu.sv "$(dirname "${BASH_SOURCE[0]}")/obend_risc_cpu.sv"; then
-    echo "[FAIL] obend_risc_cpu.sv is not the output of obend-emit-sv risc; regenerate it, do not hand-edit" >&2
-    diff /tmp/obend_emit_obend_risc_cpu.sv "$(dirname "${BASH_SOURCE[0]}")/obend_risc_cpu.sv" | head -20 >&2 || true
-    exit 1
-  fi
-  echo "[OK] obend_risc_cpu.sv is byte-identical to obend-emit-sv risc"
-else
-  echo "[FAIL] obend-emit-sv not built (lake build obend-emit-sv); cannot prove obend_risc_cpu.sv is emitter output" >&2
-  exit 1
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+EMIT_SV="${OBEND_EMIT_SV:-${REPO_ROOT}/lean/.lake/build/bin/obend-emit-sv}"
+VERILATOR="${VERILATOR:-$(command -v verilator || echo /opt/homebrew/bin/verilator)}"
+TMP="${TMPDIR:-/tmp}"
 cd "${SCRIPT_DIR}"
 
-VERILATOR="${VERILATOR:-/opt/homebrew/bin/verilator}"
-Z3="${Z3:-/opt/homebrew/bin/z3}"
+if [[ ! -x "${EMIT_SV}" ]]; then
+  echo "[FAIL] ${EMIT_SV} is not built (lake build obend-emit-sv)" >&2
+  exit 1
+fi
 
-echo "=== [1/4] Strict Verilator -Wall lint check on obend_risc_cpu.sv ==="
+echo "=== [0/3] native checks the Lean module names ==="
+"${EMIT_SV}" check-risc
+
+echo "=== [1/3] byte equality with obend-emit-sv ==="
+for pair in "risc:obend_risc_cpu.sv" "golden-risc:risc_golden.txt"; do
+  target="${pair%%:*}"; file="${pair#*:}"
+  "${EMIT_SV}" "${target}" --out "${TMP}/obend_emit_${file}" >/dev/null
+  if ! cmp -s "${TMP}/obend_emit_${file}" "${file}"; then
+    echo "[FAIL] ${file} differs from \`obend-emit-sv ${target}\` (regenerate; do not hand-edit)" >&2
+    diff "${TMP}/obend_emit_${file}" "${file}" | head -20 >&2 || true
+    exit 1
+  fi
+  echo "  ${file}: identical"
+done
+
+echo "=== [2/3] verilator -Wall lint + build ==="
 "${VERILATOR}" -Wall --lint-only obend_risc_cpu.sv
-
-echo "=== [2/4] Clean & compile obend_risc_cpu.sv + risc_soc_tb.cpp via Verilator ==="
 rm -rf obj_dir obend_risc_trace.vcd
-"${VERILATOR}" -Wall --cc --exe --build --trace -j 0 \
-  obend_risc_cpu.sv risc_soc_tb.cpp \
-  -o Vobend_risc_cpu
+"${VERILATOR}" -Wall --cc --exe --build --trace -j 2 obend_risc_cpu.sv risc_soc_tb.cpp -o Vobend_risc_cpu >/dev/null
 
-echo "=== [3/4] Execute cycle-accurate RISC SoC simulation (randReset(2) + VCD trace + ISA torture) ==="
-./obj_dir/Vobend_risc_cpu ../firmware/test_prog.hex obend_risc_trace.vcd
-
-if [[ ! -s "obend_risc_trace.vcd" ]]; then
-  echo "[FATAL] Expected non-empty VCD waveform obend_risc_trace.vcd" >&2
-  exit 1
-fi
-echo "[OK] Generated waveform trace: $(wc -c < obend_risc_trace.vcd) bytes -> ${SCRIPT_DIR}/obend_risc_trace.vcd"
-
-echo "=== [4/4] Run Z3 QF_BV Logical Equivalence & Non-Interference Check (risc_lec.smt2) ==="
-LEC_OUT="$("${Z3}" -smt2 risc_lec.smt2)"
-echo "Z3 output: ${LEC_OUT}"
-if [[ "${LEC_OUT}" != "unsat" ]]; then
-  echo "[FATAL] Expected 'unsat' from Z3 property sheet check, got '${LEC_OUT}'" >&2
-  exit 1
-fi
-echo "[PASS] All Verilator -Wall, Firmware, ISA Torture & Z3 property sheet checks succeeded!"
+echo "=== [3/3] firmware vs Lean golden, then the ISA torture program ==="
+./obj_dir/Vobend_risc_cpu ../firmware/test_prog.hex obend_risc_trace.vcd risc_golden.txt
+test -s obend_risc_trace.vcd
+echo "[PASS] apps/obend-risc"

@@ -302,7 +302,7 @@ def shortedWirePnrCert : PnrCertificate :=
 
 /-- Theorem: `checkPnrCertificate` accepts `validAdderPnrCert` and refuses both BEL placement
 collisions (`collidingBelPnrCert`) and PIP routing shorts (`shortedWirePnrCert`)! -/
-theorem pnr_certificate_verification_poles :
+example :
     checkPnrCertificate corner7nm_SS 2000 validAdderPnrCert = true ∧
     checkPnrCertificate corner7nm_SS 2000 collidingBelPnrCert = false ∧
     checkPnrCertificate corner7nm_SS 2000 shortedWirePnrCert = false :=

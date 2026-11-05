@@ -156,7 +156,7 @@ def c₁ : NCfg := (nsession spec c₀ opening).1
 
 /-- At the revoked view the stored `p1` is no longer usable and the descriptor's policy chooses
 `p2` (the former `resolves_p2` / `resolvesBy_p2`). -/
-theorem advances_p2 :
+example :
     propose providers desc (host.view c₁.cfg.world).holds (c₁.stored .reserved ())
       (latchedOf host ctl c₁ (j := Phase.reserved) ()) = .chosen (.prov .p2) := by rfl
 
@@ -263,7 +263,7 @@ theorem withdrawn_refused :
 #tooth withdrawn_refused by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => true
 
 /-- At a world where everything holds, the driven run is `interpret`'s. -/
-theorem everything_delivers :
+example :
     (drive host spec (env true) 3 c₀.cfg 0).result? =
       some (interpret (env true) (fill Ω (choose (plan .p1)) template) 0) := by rfl
 
@@ -364,7 +364,7 @@ theorem initial_decision_rechecked :
 #tooth initial_decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
 /-- The contrast: started without citations, the same run goes out. -/
-theorem uncited_start_admitted :
+example :
     (nsession laxSpec c₀ (opening ++ [.base (.dispatch (commitOp .p1))])).2 = [none, none, none, none] :=
   by rfl
 

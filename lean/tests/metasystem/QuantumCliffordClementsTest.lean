@@ -326,8 +326,8 @@ example (H : CliffordElem) :
 example :
     let H := { cliffordZero with b6 := 1 }
     commutesWithParity H = true ∧
-    checkEquitablePartition (cliffordToTetronMatrix H) 2 majoranaParityPart (cliffordParityQuotient H) = true :=
-  ⟨rfl, (clifford_commutesWithParity_iff_offblock_and_equitable { cliffordZero with b6 := 1 }).2 rfl⟩
+    checkBlockEquitablePartition (cliffordToTetronMatrix H) 2 2 majoranaParityPart (cliffordParityQuotient H) = true :=
+  ⟨rfl, (clifford_commutesWithParity_iff_offblock_and_equitable { cliffordZero with b6 := 1 }).2.1.mp rfl⟩
 
 -- Odd-blade combination `b4 = 1, b11 = -1, b13 = -1` fails `commutesWithParity` and has non-zero off-sector entries
 example :
@@ -338,7 +338,7 @@ example :
 
 example (cH cDH : CliffordElem) (eps : Int) (w : Nat → Int)
     (hH : commutesWithParity cH = true) (hDH : commutesWithParity cDH = true) (hw : w 1 = 0) :
-    quotientMatVec (perturbedQuotient (cliffordParityQuotient cH) (cliffordParityQuotient cDH) eps) [0, 1] w 1 = 0 ∧
+    perturbedBlockQuotient (cliffordParityQuotient cH) (cliffordParityQuotient cDH) eps 1 0 = IntMatrix.zero 2 ∧
     matVec [0, 1, 2, 3]
       (perturbedHamiltonian (cliffordToTetronMatrix cH).entry (cliffordToTetronMatrix cDH).entry eps)
       (liftQuotientVec majoranaParityPart w) 2 = 0 ∧

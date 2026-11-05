@@ -297,7 +297,7 @@ theorem hole_payload_roundTrip (identity : Nat) (payload : List Term) (rest : To
   term_roundTrip _ _ _ (Nat.le_refl _)
 
 /-- Concrete nested, nonempty payload and trailing-token boundary regression. -/
-theorem hole_checkpoint_tooth :
+example :
     decodeTerm 12 (encodeTerm (.hole 7 [.nat 3, .hole 9 [.bound 2]]) ++ [.text "tail"]) =
       some (.hole 7 [.nat 3, .hole 9 [.bound 2]], [.text "tail"]) := by
   rfl

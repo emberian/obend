@@ -80,25 +80,19 @@ inline std::vector<uint64_t> ntt_256_ref(const std::vector<uint64_t>& in, uint64
 
 // Reference 64-bit AMD VOP64 instruction sequence emulator matching Obend.Lower.compileRtlExprToAmdGpu
 // for zkNttButterflyFoldRtlExpr: (u + v * w) + r * ((u - v * w) - (u + v * w))
-inline uint64_t emulate_amd_vop64_butterfly_fold(uint64_t u, uint64_t v, uint64_t w, uint64_t r) {
-    uint64_t vgpr[16] = {0};
-    // v_mov_b64 v0, u ; v_mov_b64 v1, v ; v_mov_b64 v2, w
-    vgpr[0] = u;
-    vgpr[1] = v;
-    vgpr[2] = w;
-    // v_mul_lo_u64 v3, v1, v2
-    vgpr[3] = vgpr[1] * vgpr[2];
-    // v_add_u64 v4, v0, v3  (even)
-    vgpr[4] = vgpr[0] + vgpr[3];
-    // v_sub_u64 v5, v0, v3  (odd)
-    vgpr[5] = vgpr[0] - vgpr[3];
-    // v_sub_u64 v6, v5, v4  (diff)
-    vgpr[6] = vgpr[5] - vgpr[4];
-    // v_mov_b64 v7, r
-    vgpr[7] = r;
-    // v_mad_u64_u32 / v_mul + v_add -> v8 = v4 + v7 * v6
-    vgpr[8] = vgpr[4] + (vgpr[7] * vgpr[6]);
-    return vgpr[8];
+// The Fiat-Shamir transcript step of SumcheckRoundPoly.obend / Obend.Apps.ZkNtt.transcriptAbsorbSpec:
+// (((t + g0) * 2^32 + g1) * 2^32 + g2 + 0x5A17)^7 in F_p. A fixed permutation binding the challenge
+// to the three round messages; not a cryptographic hash.
+static constexpr uint64_t TRANSCRIPT_ALPHA = 0x100000000ULL;
+static constexpr uint64_t TRANSCRIPT_CONST = 0x5A17ULL;
+static constexpr uint64_t TRANSCRIPT_IV    = 0x4F42454E44ULL;
+
+inline uint64_t transcript_absorb(uint64_t t, uint64_t g0, uint64_t g1, uint64_t g2) {
+    uint64_t s  = add_mod(mul_mod(add_mod(mul_mod(add_mod(t, g0), TRANSCRIPT_ALPHA), g1), TRANSCRIPT_ALPHA),
+                          add_mod(g2, TRANSCRIPT_CONST));
+    uint64_t s2 = mul_mod(s, s);
+    uint64_t s4 = mul_mod(s2, s2);
+    return mul_mod(mul_mod(s4, s2), s);
 }
 
 } // namespace goldilocks_ref

@@ -1,5 +1,10 @@
 edition ObjectiveBend 1
 # Flagship App #4 (Layer 2): Modular Cooley-Tukey Radix-2 Goldilocks NTT Butterfly Layer
+# This module carries no `claim`s (removed 2026-11-04): the importer proves each claim by kernel evaluation of the
+# Core4 interpreter, and on this 64-bit arithmetic that took longer than the whole module's budget
+# (review/DECISIONS-20261031.md, second round). The arithmetic is checked on the hardware instead
+# (apps/zk-ntt/verilator: boundary vectors, 2048 butterflies and the 8-round sumcheck against a __uint128_t
+# reference and the Lean golden), and at the Nat level by Obend.Apps.ZkNtt.goldilocksReduce128Spec_sound.
 
 import ./GoldilocksField.obend as Field
 
@@ -33,9 +38,6 @@ spec BaseRadix2ButterflySpec for NttButterflyTarget:
     self.fieldAdd(u, self.fieldMul(v, twiddle))
   def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
     self.fieldSub(u, self.fieldMul(v, twiddle))
-  claim butterfly_even_radix2() by weave: self.butterflyEven(50n, 6n, 7n) == 92n
-  claim butterfly_odd_radix2() by weave: self.butterflyOdd(50n, 6n, 7n) == 8n
-  claim butterfly_odd_wrap_mod_p() by weave: self.butterflyOdd(10n, 6n, 7n) == 0xFFFFFFFEFFFFFFE1n
 
 spec PipelinedButterflyOverride for NttButterflyTarget:
   requires fieldAdd(a: Nat, b: Nat) -> Nat
@@ -48,15 +50,9 @@ spec PipelinedButterflyOverride for NttButterflyTarget:
     if twiddle == 1n then self.fieldAdd(u, v) else super.butterflyEven(u, v, twiddle)
   def butterflyOdd(u: Nat, v: Nat, twiddle: Nat) -> Nat:
     if twiddle == 1n then self.fieldSub(u, v) else super.butterflyOdd(u, v, twiddle)
-  claim butterfly_sum_involution() by weave: self.fieldAdd(self.butterflyEven(10n, 6n, 7n), self.butterflyOdd(10n, 6n, 7n)) == 20n
 
 def seedNttButterfly() -> NttButterflyTarget:
   {goldilocksPrime: 0n, canon64: fn(x: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, goldilocksReduce128: fn(lo: Nat, hi: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n}
 
 def nttButterflyEngine() -> NttButterflyTarget:
   fix(compose(BaseRadix2ButterflySpec, PipelinedButterflyOverride), seedNttButterfly())
-
-def verifyButterflyMatchesField() -> Bool:
-  let f = Field.goldilocksEngine()
-  let b = nttButterflyEngine()
-  b.butterflyOdd(10n, 6n, 7n) == f.fieldSub(10n, f.fieldMul(6n, 7n))

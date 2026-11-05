@@ -1,9 +1,11 @@
 /-
 # `obend-emit-sv` — regenerate every checked-in SystemVerilog file from its Lean definition
 
-    obend-emit-sv <target> [--out FILE]      targets: risc fidget fidget-ngc fidget-belmiter drex quantum
-                                                      silicon-elab mac2 ice40-mac8 tcad stator mill
-                                                      golden-silicon-kernel
+    obend-emit-sv <target> [--out FILE]      targets: risc golden-risc zk golden-zk fidget fidget-ngc
+                                                      fidget-belmiter drex quantum silicon-elab mac2
+                                                      ice40-mac8 tcad stator mill golden-silicon-kernel
+    obend-emit-sv check-risc | check-zk      the native checks the Apps modules name (gates, corners,
+                                             the firmware state); exit 3 with the failing check
     obend-emit-sv list
 
 This executable lives outside the `Obend` library tier because it imports `Obend.Apps.*` (tier 2).
@@ -15,8 +17,8 @@ import Obend.Hardware.HDL
 import Obend.Hardware.Synth
 import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
--- `Obend.Apps.ObendRisc` is red at HEAD (decide/omega failures from line 733 on) until the Apps gate lands;
--- the `risc` target returns then (the fpga lane owns the JAL/BLTU/x16-x31 fixes), and verify_risc.sh fails honestly meanwhile.
+import Obend.Apps.ObendRisc
+import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
 -- `Obend.Apps.SovereignDrex` is red at HEAD (`checkContractCert` unresolved, line 505) until the Apps gate
 -- lands; the `drex` target returns to this list then and `verify_sovereign_drex.sh` fails honestly meanwhile.
@@ -70,8 +72,32 @@ def iceStickMac8 : RtlModule :=
       , { regIdx := 2, name := "outReg", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, nextExpr := .wireRef 1 } ]
     outputs    := [ { name := "mac_out", expr := .regRead 2, width := 16 } ] }
 
+/-- `check-risc`: the gates on both RISC cores and the recorded end state of the firmware run
+(`Obend.Apps.ObendRisc.riscFirmwareExpected*`). -/
+def checkRisc : Except String String :=
+  let b := Obend.Apps.ObendRisc.baseRiscCpuRtlModule
+  let m := Obend.Apps.ObendRisc.obendRiscCpuRtlModule
+  let st := Obend.Apps.ObendRisc.riscFinalState
+  let regsOk := Obend.Apps.ObendRisc.riscFirmwareExpectedRegs.all fun (slot, v) => (st.1 slot).toNat == v
+  let dmemOk := Obend.Apps.ObendRisc.riscFirmwareExpectedDmem.all fun (a, v) => (st.2 a).toNat == v
+  if !checkRtlModule b then .error "check-risc: base_risc_cpu fails checkRtlModule"
+  else if !checkRtlModuleW m then .error "check-risc: obend_risc_cpu fails checkRtlModuleW"
+  else if m.regs.length != 36 then .error s!"check-risc: {m.regs.length} registers, expected 36"
+  else if !(regsOk && dmemOk) then .error "check-risc: the 21-cycle firmware run does not reach the recorded state"
+  else .ok "check-risc: gates ok, 36 registers, firmware end state as recorded\n"
+
+/-- `check-zk`: the three checks `Obend.Apps.ZkNtt` documents (gate, carry/borrow corners, one transcript round). -/
+def checkZk : Except String String :=
+  if !Obend.Apps.ZkNtt.zkCheckGate then .error "check-zk: zk_ntt_coproc fails checkRtlModule/checkRtlModuleW/BEL validity"
+  else if !Obend.Apps.ZkNtt.zkCheckButterfly then .error "check-zk: butterfly differs from the Nat specification on a boundary vector"
+  else if !Obend.Apps.ZkNtt.zkCheckTranscriptRound then .error "check-zk: one accumulate/absorb round does not match transcriptAbsorbSpec"
+  else .ok s!"check-zk: gate ok ({Obend.Apps.ZkNtt.zkNttCoprocRtlModule.wires.length} wires), 6 boundary vectors, transcript round ok\n"
+
 def targets : List (String × String) :=
   [ ("risc", "apps/obend-risc/verilator/obend_risc_cpu.sv")
+  , ("golden-risc", "apps/obend-risc/verilator/risc_golden.txt")
+  , ("zk", "apps/zk-ntt/verilator/zk_ntt_coproc.sv")
+  , ("golden-zk", "apps/zk-ntt/verilator/zk_ntt_golden.txt")
   , ("fidget", "apps/fidget-cam/verilator/fidget_impeller_voxel_cam.sv")
   , ("fidget-ngc", "apps/fidget-cam/build/impeller_5axis.ngc")
   , ("fidget-belmiter", "apps/fidget-cam/build/fidget_cam_belmiter.smt2")
@@ -86,7 +112,12 @@ def targets : List (String × String) :=
   , ("mill", "hardware/sim/cnc_5axis_userspace_mill.sv") ]
 
 def render : String → Except String String
-  | "risc"    => .error "risc: Obend.Apps.ObendRisc does not build at HEAD; target disabled until the Apps gate lands"
+  | "risc"    => emitWithHeader "Obend.Apps.ObendRisc.obendRiscCpuRtlModule" Obend.Apps.ObendRisc.obendRiscCpuRtlModule
+  -- 21 cycles of firmware/test_prog.hex on the Lean model; risc_soc_tb.cpp compares every register and dmem word.
+  | "golden-risc" => .ok (Obend.Apps.ObendRisc.riscFirmwareGolden 21)
+  | "zk"      => emitWithHeader "Obend.Apps.ZkNtt.zkNttCoprocRtlModule" Obend.Apps.ZkNtt.zkNttCoprocRtlModule
+  -- The 8-round sumcheck with the transcript, run at the Nat level; zk_ntt_tb.cpp compares the RTL per round.
+  | "golden-zk" => .ok Obend.Apps.ZkNtt.zkSumcheckGolden
   | "fidget"  => emitWithHeader "Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule" Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule
   -- The posted program is a Lean string (`postNgc` over the certified passes); the Verilator
   -- testbench reads this file and re-checks its waypoints against the RTL, it does not write one.
@@ -106,6 +137,8 @@ def render : String → Except String String
   | "tcad"    => builtIn "cleanroom_tcad_stack"
   | "stator"  => builtIn "lc_drives_userspace_stator"
   | "mill"    => builtIn "cnc_5axis_userspace_mill"
+  | "check-risc" => checkRisc
+  | "check-zk" => checkZk
   | other     => .error s!"unknown target {other}; `obend-emit-sv list`"
 
 def main (args : List String) : IO UInt32 := do

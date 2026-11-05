@@ -245,7 +245,7 @@ def steps8 : List Step := [
 /-- The grade: the number of steps. -/
 def grade8 : Nat := 215
 
-theorem steps8_length : steps8.length = grade8 := by decide
+example : steps8.length = grade8 := by decide
 
 /-- **The kernel checks the solver's certificate.** -/
 -- fixture kept (2026-11-04): consumed by a proof in this file
@@ -259,7 +259,7 @@ theorem noCarry8_holds : (noCarry 8).Holds :=
 /-- The certificate with clause `687` deleted as soon as it is added. -/
 def dropped : List Step := steps8.take 8 ++ [.del [687]] ++ steps8.drop 8
 
-theorem dropped_cites : steps8[7]? = some (.add 687 [-43] [73, 78]) ∧ steps8[9]? = some (.add 688 [-44, 40] [687, 83]) := by
+example : steps8[7]? = some (.add 687 [-43] [73, 78]) ∧ steps8[9]? = some (.add 688 [-44, 40] [687, 83]) := by
   decide
 
 /-- **The tooth**: the step after the deletion cites the deleted clause and is refused, by name. -/

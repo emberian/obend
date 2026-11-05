@@ -255,7 +255,7 @@ def negativeWeightBadCert : RetimingCert where
 
 /-- Theorem: At 500 MHz (`2000 ps` on `corner7nm_SS`), the unretimed graph fails timing closure,
 the negative-weight certificate is refused, and `balancedRetimingCert` is accepted! -/
-theorem mac_retiming_500MHz_verified :
+example :
     checkRetimingCert macUnretimedGraph identityRetimingCert corner7nm_SS 2000 = false ∧
     checkRetimingCert macUnretimedGraph negativeWeightBadCert corner7nm_SS 2000 = false ∧
     checkRetimingCert macUnretimedGraph balancedRetimingCert corner7nm_SS 2000 = true :=

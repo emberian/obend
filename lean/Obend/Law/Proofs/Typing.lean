@@ -991,10 +991,10 @@ theorem machine_typed : ChecksAt (machineLaw doorTy "door" ["open", "shut"] "shu
   machine_checks (isCanonical_of (by decide)) rfl rfl (by decide) (by simp)
 
 /-- The field hypothesis is needed: a bound on a field the state lacks does not check. -/
-theorem bounded_missing_refused :
+example :
     (checkAgainst ⟨bounded totalTy "count" 5, noAnn, {}⟩ [] (lawTy totalTy)).toBool = false := by decide
 /-- And the type is the law's: `bounded` does not check at a type whose verdict is not `verdictTy`. -/
-theorem bounded_not_at_state :
+example :
     (checkAgainst ⟨bounded totalTy "total" 5, noAnn, {}⟩ [] (fnTy totalTy totalTy)).toBool = false := by decide
 
 /-- A record type: a pair of naturals. -/

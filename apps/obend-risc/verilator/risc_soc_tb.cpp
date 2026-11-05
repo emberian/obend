@@ -3,6 +3,9 @@
 #include "verilated_vcd_c.h"
 
 #include <cstdint>
+#include <fstream>
+#include <map>
+#include <sstream>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -134,6 +137,58 @@ int main(int argc, char** argv) {
         top->x1_out, top->x2_out, top->x3_out, top->x4_out,
         top->x5_out, top->x6_out, top->x7_out, top->x8_out
     };
+    // Lean golden (obend-emit-sv golden-risc, from runRiscFirmwareSocCycles 21): every architectural
+    // register, the CSRs and the data memory after the same 21 cycles must agree bit for bit.
+    {
+        const char* golden_path = (argc > 3) ? argv[3] : "risc_golden.txt";
+        std::ifstream gin(golden_path);
+        if (!gin.is_open()) {
+            std::cerr << "[FAIL] cannot open Lean golden " << golden_path << " (run obend-emit-sv golden-risc)" << std::endl;
+            return 1;
+        }
+        std::map<std::string, uint64_t> golden;
+        std::string line;
+        while (std::getline(gin, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            golden[line.substr(0, eq)] = std::stoull(line.substr(eq + 1));
+        }
+        const uint64_t hw_regs[36] = {
+            top->pc_out, top->mstatus_out, top->mepc_out, top->mcause_out, top->cycle_cnt_out,
+            top->x1_out, top->x2_out, top->x3_out, top->x4_out, top->x5_out, top->x6_out, top->x7_out,
+            top->x8_out, top->x9_out, top->x10_out, top->x11_out, top->x12_out, top->x13_out, top->x14_out,
+            top->x15_out, top->x16_out, top->x17_out, top->x18_out, top->x19_out, top->x20_out, top->x21_out,
+            top->x22_out, top->x23_out, top->x24_out, top->x25_out, top->x26_out, top->x27_out, top->x28_out,
+            top->x29_out, top->x30_out, top->x31_out };
+        const char* names[36] = { "pc", "mstatus", "mepc", "mcause", "cycle_cnt",
+            "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+            "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29",
+            "x30", "x31" };
+        size_t compared = 0;
+        for (int k = 0; k < 36; ++k) {
+            auto it = golden.find(names[k]);
+            if (it == golden.end()) { std::cerr << "[FAIL] golden lacks " << names[k] << std::endl; return 1; }
+            if (it->second != hw_regs[k]) {
+                std::cerr << "[FAIL] Lean golden mismatch on " << names[k] << ": lean=" << it->second
+                          << " verilator=" << hw_regs[k] << std::endl;
+                return 1;
+            }
+            compared++;
+        }
+        for (int a = 0; a < 64; ++a) {
+            auto it = golden.find("dmem" + std::to_string(a));
+            if (it == golden.end()) { std::cerr << "[FAIL] golden lacks dmem" << a << std::endl; return 1; }
+            if (it->second != dmem[a]) {
+                std::cerr << "[FAIL] Lean golden mismatch on dmem[" << a << "]: lean=" << it->second
+                          << " verilator=" << dmem[a] << std::endl;
+                return 1;
+            }
+            compared++;
+        }
+        std::cout << "[PASS] Phase A matches the Lean golden (" << compared << " values, 21 cycles)" << std::endl;
+    }
+
     for (int i = 0; i < 8; ++i) {
         if (actual_fib[i] != expected_fib[i]) {
             std::cerr << "[FAIL] Fibonacci mismatch at x" << (i + 1)
@@ -210,14 +265,43 @@ int main(int argc, char** argv) {
     imem[15] = 0x06458613ULL;
     imem[20] = 0x00158593ULL;
     imem[21] = 0x30200073ULL;
+    // Control flow and the upper register file (fixed 2026-11-04: JAL target, BLTU/BGEU, x16..x31):
+    // 0x40: jal  x16, +0x20         (0x0200086F -> pc = 0x60, x16 = 0x44)
+    // 0x44: addi x17, x0, 7         (0x00700893 -> reached only through the JALR return)
+    // 0x48: jal  x0, 0              (0x0000006F -> self-loop; pc parks at 0x48)
+    // 0x60: addi x31, x0, -1        (0xFFF00F93 -> x31 = all ones)
+    // 0x64: bltu x16, x31, +8       (0x01F86463 -> 0x44 <u 2^64-1: taken, skips 0x68)
+    // 0x68: addi x18, x0, 99        (0x06300913 -> skipped, x18 stays 0)
+    // 0x6C: bgeu x16, x31, +8       (0x01F87463 -> not taken)
+    // 0x70: addi x19, x0, 5         (0x00500993 -> x19 = 5)
+    // 0x74: blt  x31, x16, +8       (0x010FC463 -> -1 <s 0x44: taken, skips 0x78)
+    // 0x78: addi x20, x0, 77        (0x04D00A13 -> skipped, x20 stays 0)
+    // 0x7C: bge  x31, x16, +8       (0x010FD463 -> not taken)
+    // 0x80: add  x21, x31, x16      (0x010F8AB3 -> x21 = 0x43)
+    // 0x84: jalr x22, 0(x16)        (0x00080B67 -> pc = 0x44, x22 = 0x88)
+    imem[16] = 0x0200086FULL;
+    imem[17] = 0x00700893ULL;
+    imem[18] = 0x0000006FULL;
+    imem[24] = 0xFFF00F93ULL;
+    imem[25] = 0x01F86463ULL;
+    imem[26] = 0x06300913ULL;
+    imem[27] = 0x01F87463ULL;
+    imem[28] = 0x00500993ULL;
+    imem[29] = 0x010FC463ULL;
+    imem[30] = 0x04D00A13ULL;
+    imem[31] = 0x010FD463ULL;
+    imem[32] = 0x010F8AB3ULL;
+    imem[33] = 0x00080B67ULL;
 
     top->rst = 1;
     tick();
     tick();
     top->rst = 0;
 
-    // 11 setup + 6 loop (3x (addi -1 + bne)) + 2*(ecall + handler addi + mret) + 1 final addi = 24 cycles
-    for (int cycle = 0; cycle < 24; ++cycle) {
+    // 11 setup + 6 loop (3x (addi -1 + bne)) + 2*(ecall + handler addi + mret) + 1 final addi = 24 cycles,
+    // then 11 more for the control-flow block (jal, 8 at 0x60.., jalr, the addi at 0x44, the self-loop);
+    // 40 cycles leaves the pc parked at 0x48.
+    for (int cycle = 0; cycle < 40; ++cycle) {
         tick();
     }
 
@@ -230,7 +314,10 @@ int main(int argc, char** argv) {
         top->x4_out != neg60 || top->x5_out != 1ULL || top->x6_out != 0ULL ||
         top->x7_out != neg15 || dmem[24] != neg60 || top->x9_out != neg60 ||
         top->x10_out != 0ULL || top->x11_out != 2ULL || top->x12_out != 102ULL ||
-        top->mepc_out != 0x3CULL) {
+        top->mepc_out != 0x3CULL ||
+        top->x16_out != 0x44ULL || top->x17_out != 7ULL || top->x18_out != 0ULL || top->x19_out != 5ULL ||
+        top->x20_out != 0ULL || top->x21_out != 0x43ULL || top->x22_out != 0x88ULL ||
+        top->x31_out != 0xFFFFFFFFFFFFFFFFULL || top->pc_out != 0x48ULL) {
         std::cerr << "[FAIL] Phase B ISA torture mismatch:"
                   << " x1=0x" << std::hex << top->x1_out
                   << " x3=0x" << top->x3_out
@@ -243,11 +330,15 @@ int main(int argc, char** argv) {
                   << " x10=" << std::dec << top->x10_out
                   << " x11=" << top->x11_out
                   << " x12=" << top->x12_out
-                  << " mepc=0x" << std::hex << top->mepc_out << std::dec << std::endl;
+                  << " mepc=0x" << std::hex << top->mepc_out
+                  << " x16=0x" << top->x16_out << " x17=" << std::dec << top->x17_out
+                  << " x18=" << top->x18_out << " x19=" << top->x19_out << " x20=" << top->x20_out
+                  << " x21=0x" << std::hex << top->x21_out << " x22=0x" << top->x22_out
+                  << " x31=0x" << top->x31_out << " pc=0x" << top->pc_out << std::dec << std::endl;
         return 1;
     }
     std::cout << "[PASS] Phase B (ISA Torture): neg ADDI/SUB/MUL/SLT/SLTU/SRAI, neg S-type SW/LW, "
-              << "backward BNE loop, and back-to-back ECALL/MRET verified!" << std::endl;
+              << "backward BNE loop, back-to-back ECALL/MRET, JAL/JALR, BLTU/BGEU/BLT/BGE and x16..x31 verified!" << std::endl;
 
     tfp->close();
     delete tfp;

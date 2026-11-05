@@ -204,7 +204,7 @@ theorem lasting_receipt :
        some (.run (.busy (commitOp .p2)))] := by rfl
 
 /-- The decisions recorded under `whileInOffice`: Alice's at revision 0 and Bob's at revision 1. -/
-theorem editorial_decisions :
+example :
     ((esession (edesc .incumbentFirst .whileInOffice .automatic) w₀ editorial).1.decisions.map
       fun d => (d.cand, d.by_, d.rev)) = [(some .p2, some .alice, 0), (some .p2, some .bob, 1)] := by rfl
 

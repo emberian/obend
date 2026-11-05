@@ -293,7 +293,7 @@ def internExpr (cam : ExprCAM) : KExpr → ExprCAM × CamHandle
   | e@(.bvar idx) => internRootNode cam e idx 0
   | e@(.fvar id)  => internRootNode cam e id 0
   | e@(.sort u)   => internRootNode cam e u.depth 0
-  | e@(.const n us) => internRootNode cam e n.height us.length
+  | e@(.const n us) => internRootNode cam e n.toCleanId us.length
   | e@(.lit (.natVal n)) => internRootNode cam e n 0
   | e@(.lit (.strVal s)) => internRootNode cam e s.length 1
   | e@(.app f a) =>
@@ -312,7 +312,7 @@ def internExpr (cam : ExprCAM) : KExpr → ExprCAM × CamHandle
     let (cam1, ht) := internExpr cam t
     let (cam2, hv) := internExpr cam1 v
     let (cam3, hb) := internExpr cam2 b
-    internRootNode cam3 e ht (hv + hb)
+    internRootNode cam3 e ht ((hv + hb) * (hv + hb + 1) / 2 + hb)
   | e@(.proj _ idx s) =>
     let (cam1, hs) := internExpr cam s
     internRootNode cam1 e idx hs
@@ -552,7 +552,7 @@ theorem uninternExpr_internExpr_mono : ∀ (e : KExpr) (cam : ExprCAM) {h : CamH
   | .sort u, cam, _, _, hun =>
     uninternExpr_internRootNode_mono cam (.sort u) u.depth 0 hun
   | .const n us, cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.const n us) n.height us.length hun
+    uninternExpr_internRootNode_mono cam (.const n us) n.toCleanId us.length hun
   | .lit (.natVal n), cam, _, _, hun =>
     uninternExpr_internRootNode_mono cam (.lit (.natVal n)) n 0 hun
   | .lit (.strVal s), cam, _, _, hun =>
@@ -649,7 +649,7 @@ theorem intern_unintern_roundtrip : ∀ (e : KExpr) {cam : ExprCAM},
   | .bvar idx, _, hv => internRootNode_valid_and_unintern hv (.bvar idx) idx 0
   | .fvar id, _, hv => internRootNode_valid_and_unintern hv (.fvar id) id 0
   | .sort u, _, hv => internRootNode_valid_and_unintern hv (.sort u) u.depth 0
-  | .const n us, _, hv => internRootNode_valid_and_unintern hv (.const n us) n.height us.length
+  | .const n us, _, hv => internRootNode_valid_and_unintern hv (.const n us) n.toCleanId us.length
   | .lit (.natVal n), _, hv => internRootNode_valid_and_unintern hv (.lit (.natVal n)) n 0
   | .lit (.strVal s), _, hv => internRootNode_valid_and_unintern hv (.lit (.strVal s)) s.length 1
   | .app f a, _, hv => by

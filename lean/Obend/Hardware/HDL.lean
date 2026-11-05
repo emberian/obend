@@ -151,7 +151,33 @@ def checkWireTableDAG (numInputs numRegs : Nat) (assigns : List WireAssign) : Bo
       go (expectedIdx + 1) rest
   go 0 assigns
 
+/-- Executable twin of `evalWireTable` (`implemented_by`): the same fold with the environment held
+in an array, so every wire is evaluated once and a `wireRef` read is an index. Compiled, the
+closure chain the definition builds re-evaluated upstream wires on every read, and
+`evalModuleOutputs` of a 250-wire module did not return. Same results: `0#64` for an index never
+assigned, the last assignment wins on a repeated index; the definition itself is unchanged and is
+what the proofs unfold. Indices beyond a million fall back to the definition's fold. -/
+def evalWireTableImpl
+    (inputs regs : Nat → BitVec 64)
+    (assigns : List WireAssign) : Nat → BitVec 64 :=
+  let n := assigns.foldl (fun k a => max k (a.wireIdx + 1)) 0
+  if n > 1000000 then
+    assigns.foldl
+      (fun (env : Nat → BitVec 64) a =>
+        let v := evalRtlExpr inputs env regs a.expr
+        fun i => if i == a.wireIdx then v else env i)
+      (fun _ => 0#64)
+  else
+    let arr := assigns.foldl
+      (fun (arr : Array (BitVec 64)) a =>
+        let env : Nat → BitVec 64 := fun i => arr.getD i 0#64
+        let v := evalRtlExpr inputs env regs a.expr
+        arr.set! a.wireIdx v)
+      (Array.replicate n 0#64)
+    fun i => arr.getD i 0#64
+
 /-- Evaluate a wire assignment table in a single forward pass. -/
+@[implemented_by evalWireTableImpl]
 def evalWireTable
     (inputs regs : Nat → BitVec 64)
     (assigns : List WireAssign) : Nat → BitVec 64 :=
@@ -213,27 +239,32 @@ def exprReadRegsAndWires : RtlExpr → List Nat × List Nat
   | .bitNot a      =>
     exprReadRegsAndWires a
 
-/-- Expand `.wireRef` indices transitively through `wires` up to `fuel` hops
-(pure structural recursion on `Nat` for kernel reduction). -/
-def expandWiresToRegs : Nat → List WireAssign → List Nat → List Nat
-  | 0, _, _ => []
-  | fuel + 1, wires, wireIdxs =>
-    wireIdxs.foldl
-      (fun acc idx =>
-        match wires.find? (fun w => w.wireIdx == idx) with
-        | none   => acc
-        | some w =>
-          let (rDirect, wNext) := exprReadRegsAndWires w.expr
-          acc ++ rDirect ++ expandWiresToRegs fuel wires wNext)
-      []
+/-- The register indices reachable from the wires `work` through `wires`: a worklist walk that
+visits each wire once (`visited`), so a shared sub-cone is expanded once, not once per path. The
+earlier version re-expanded the cone under every reference and was exponential on wire graphs with
+fan-out (a Goldilocks multiply chain of 250 wires did not finish); the fuel is spent once per pop
+and `exprReadRegs` passes enough for every wire and every edge. -/
+def expandWiresToRegs : Nat → List WireAssign → List Nat → List Nat → List Nat → List Nat
+  | 0, _, _, _, acc => acc
+  | _ + 1, _, [], _, acc => acc
+  | fuel + 1, wires, idx :: rest, visited, acc =>
+    if visited.contains idx then expandWiresToRegs fuel wires rest visited acc
+    else
+      match wires.find? (fun w => w.wireIdx == idx) with
+      | none   => expandWiresToRegs fuel wires rest (idx :: visited) acc
+      | some w =>
+        let (rDirect, wNext) := exprReadRegsAndWires w.expr
+        expandWiresToRegs fuel wires (wNext ++ rest) (idx :: visited) (acc ++ rDirect)
 
 /-- Collect all register indices referenced by an `RtlExpr` (expanding `.wireRef` transitively
-through `wires` bounded by `wires.length` fuel). -/
+through `wires`). -/
 def exprReadRegs (e : RtlExpr) (wires : List WireAssign := []) : List Nat :=
   let (rDirect, wDirect) := exprReadRegsAndWires e
   match wires with
   | [] => rDirect
-  | _  => rDirect ++ expandWiresToRegs wires.length wires wDirect
+  | _  =>
+    let edges := wires.foldl (fun n w => n + (exprReadRegsAndWires w.expr).2.length) 0
+    rDirect ++ expandWiresToRegs (wires.length + edges + wDirect.length + 1) wires wDirect [] []
 
 /-- Look up the clock domain of register `idx` in `regs`. -/
 def lookupRegDomain (regs : List RegSpec) (idx : Nat) : Option ClkDomain :=
@@ -361,7 +392,43 @@ def evalModuleOutputs
   let wireEnv := evalWireTable inputs regState m.wires
   m.outputs.map fun o => (o.name, evalRtlExpr inputs wireEnv regState o.expr)
 
+/-- Executable twin of `stepModuleRegs` (`implemented_by`): every register's next value computed
+once into an array; a read of a slot no register writes falls through to `regState`, as in the
+definition. Compiled, the definition's closure chain re-evaluated the previous cycles on every
+read, and 21 cycles of the softcore did not return. -/
+def stepModuleRegsImpl
+    (m : RtlModule)
+    (rst : Bool)
+    (inputs : Nat → BitVec 64)
+    (regState : Nat → BitVec 64) : Nat → BitVec 64 :=
+  let wireEnv := evalWireTable inputs regState m.wires
+  let n := m.regs.foldl (fun k r => max k (r.regIdx + 1)) 0
+  if n > 1000000 then
+    m.regs.foldl
+      (fun (nextSt : Nat → BitVec 64) r =>
+        let v :=
+          match r.resetKind with
+          | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
+          | .syncReset initVal =>
+            if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
+        fun i => if i == r.regIdx then v else nextSt i)
+      regState
+  else
+    let vals := m.regs.foldl
+      (fun (arr : Array (Option (BitVec 64))) r =>
+        let v :=
+          match r.resetKind with
+          | .resetFree => evalRtlExpr inputs wireEnv regState r.nextExpr
+          | .syncReset initVal =>
+            if rst then initVal else evalRtlExpr inputs wireEnv regState r.nextExpr
+        arr.set! r.regIdx (some v))
+      (Array.replicate n none)
+    fun i => match vals.getD i none with
+      | some v => v
+      | none => regState i
+
 /-- Step all sequential registers of `m` by one clock edge (`rst = true` triggers synchronous resets). -/
+@[implemented_by stepModuleRegsImpl]
 def stepModuleRegs
     (m : RtlModule)
     (rst : Bool)

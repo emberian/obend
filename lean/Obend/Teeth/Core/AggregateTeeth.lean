@@ -51,7 +51,7 @@ public theorem round_trip_affine_refused :
 
 /-- The projection the destructor replaces is still refused: `{held = h}.held` drops the record's
 other fields (there are none here, and the rule does not count them). -/
-public theorem round_trip_projection_refused :
+example :
     (match checkAgainst ⟨.lam (.get (.record [("held", .bound 0)]) "held"),
         fun path => if path = [] then some handleAnnotation else none, {}⟩ [] handleType with
       | .error (.linearProjected [0] 0) => true
@@ -81,7 +81,7 @@ public theorem dropped_field_refused :
 /-- Naming both fields, `tag` bound `affine` and unused (a shareable field holds no handle here, but
 the target uses one, so every parameter is `linear`): refused at the `tag` parameter, which drops
 it. The coarse quantity rule is stated in `SplitSpine`: the target's uses decide every parameter. -/
-public theorem both_fields_tag_affine_refused :
+example :
     (match checkAgainst (partialSplit ["held", "tag"] (.lam (.lam (.bound 1)))
         (.arrow .once .affine .natural custody)) [] handleType with
       | .error (.linearArgumentDropped [0] 0 .affine) => true
@@ -104,7 +104,7 @@ public theorem both_fields_tag_affine_refused :
 /-- The outer parameter's quantity in the nesting fixture. -/
 @[expose] public def nestedQuantity : Quantity := .affine
 
-public theorem nested_accepted : (checkAgainst (nested .linear) [] handleType).toBool = true := by decide
+example : (checkAgainst (nested .linear) [] handleType).toBool = true := by decide
 
 /-- TOOTH (a nested aggregate is consumed whole at each level): the outer field bound `affine` is
 refused. -/
@@ -132,7 +132,7 @@ public theorem nested_affine_refused :
 @[expose] public def matchedQuantity : Quantity := .affine
 
 /-- A `linear` sum's payload is bound `linear`, and the destructor consumes it. -/
-public theorem matched_accepted : (checkAgainst (matched .linear) [] handleType).toBool = true := by decide
+example : (checkAgainst (matched .linear) [] handleType).toBool = true := by decide
 
 /-- TOOTH (the matched payload is a `linear` hypothesis; its destructor binds its field `linear`). -/
 public theorem matched_affine_refused :
@@ -157,7 +157,7 @@ in a record; the destructor hands the closure to `g` at quantity `q`, and the ca
 
 @[expose] public def capturedQuantity : Quantity := .affine
 
-public theorem captured_accepted : (checkAgainst (captured .linear) [] handleType).toBool = true := by decide
+example : (checkAgainst (captured .linear) [] handleType).toBool = true := by decide
 
 /-- TOOTH (a captured handle is not dropped): the closure bound `affine`, which may never call it, is
 refused at the destructor, naming the handle. (Bound `unrestricted` it is refused at its own binder:
@@ -169,7 +169,7 @@ public theorem captured_dropped_refused :
 
 #tooth captured_dropped_refused by mutation capturedQuantity := .linear
 
-public theorem captured_shared_refused :
+example :
     (checkAgainst (captured .unrestricted) [] handleType).toBool = false := by decide
 
 /-! ### Crossing a quotation -/

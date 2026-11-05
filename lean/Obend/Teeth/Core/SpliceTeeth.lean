@@ -26,7 +26,7 @@ theorem laundered_term : splice 0 linearTemplate.term linearFilling.term = .bina
   simp [splice, fillAt, linearTemplate, linearFilling, Term.substitute]
 
 /-- The composed uses put `2` at the `linear` hypothesis, and both premises refuse the splice. -/
-theorem open_filling_composed :
+example :
     spliceUses (occurrences 2 linearTemplate.term) 0 (occurrences 2 linearFilling.term) 1 = 2 ∧
     spliceSafe linearContext (occurrences 2 linearTemplate.term) 0 (occurrences 2 linearFilling.term) = false ∧
     spliceAllowed {} .unrestricted linearContext (occurrences 2 linearFilling.term) = false := by

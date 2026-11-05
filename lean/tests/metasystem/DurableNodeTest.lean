@@ -38,7 +38,7 @@ open Obend.FFI
 set_option autoImplicit false
 
 /-- 1. Concrete verification of `DurableSimplexHost` crash + recovery preventing post-crash double-voting. -/
-theorem test_durable_simplex_host_recovery_blocks_double_vote :
+example :
     (let initialState : State := { self := 0, deadline := 10 }
      let initialHost : DurableSimplexHost :=
        { self := 0, deadline := 10, journaledViews := [], volatileState := some initialState }
@@ -58,7 +58,7 @@ theorem test_durable_simplex_host_recovery_blocks_double_vote :
   decide +kernel
 
 /-- 2. Concrete verification of Tier 2 `QuorumBoundFinalityGate` promotion + accountable slashing receipt extraction. -/
-theorem test_tier2_quorum_gate_and_slashing_extraction :
+example :
     let gate0 : QuorumBoundFinalityGate :=
       { turnId := 1
         currentTier := .attested

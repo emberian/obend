@@ -32,7 +32,7 @@ open Obend.Judge
 def logicalPauliZL : CliffordElem :=
   { cliffordZero with b6 := 1, b9 := -1 }
 
-theorem logicalPauliZL_block_equitable_and_distinguishes_spinor_states :
+example :
     commutesWithParity logicalPauliZL = true ∧
     checkBlockEquitablePartition
       (cliffordToTetronMatrix logicalPauliZL) 2 2 majoranaParityPart (cliffordParityQuotient logicalPauliZL) = true ∧
@@ -84,7 +84,7 @@ theorem test_two_boson_bose_symmetry (U : GaussianMatrix) (a b c d : Fin 4) :
 
 /-! ## 3. Ivanov Majorana Braiding, Artin Braid Group & Lindblad Parity Cooling -/
 
-theorem test_majorana_braiding_and_artin_group :
+example :
     let m0 : Fin 4 := ⟨0, by decide⟩
     let m1 : Fin 4 := ⟨1, by decide⟩
     let m2 : Fin 4 := ⟨2, by decide⟩

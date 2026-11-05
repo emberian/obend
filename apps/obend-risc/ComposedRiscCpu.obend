@@ -1,5 +1,9 @@
 edition ObjectiveBend 1
 # Flagship App #1 (Top Level): 3-Layer Composed Open-Recursive RISC Softcore
+# The claims that executed an instruction (execInstruction/execStep) were removed on 2026-11-04: the importer proves
+# each claim by kernel evaluation of the Core4 interpreter and these took most of the module's budget
+# (review/DECISIONS-20261031.md, second round); the same instructions run on the emitted core in
+# apps/obend-risc/verilator against the Lean golden. The decode and pc claims stay.
 
 import ./BaseRiscCore.obend as Base
 import ./PrivilegeCsrOverride.obend as Priv
@@ -67,40 +71,11 @@ spec Layer3CustomSimdZkOverride for ComposedRiscCpuTarget:
     0x2Bn
   def execStep(inst: Nat, rs1Val: Nat, rs2Val: Nat) -> Nat:
     let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let f7 = (inst >>> 25n) & 0x7Fn in if op == self.customExtOpcode then self.extMacExec(f3, f7, rs1Val, rs2Val) else super.execStep(inst, rs1Val, rs2Val)
-  claim composed_base_non_interference() by weave: self.execStep(0x002081B3n, 13n, 21n) == 34n
   claim composed_trap_preempts_pc() by weave: self.nextPc(0x00000073n, 32n, 0n) == 0x50n
   claim composed_mret_restores_mepc() by weave: self.nextPc(0x30200073n, 88n, 36n) == 36n
-  claim composed_csrrs_reads_mcause() by weave: self.execStep(0x342024F3n, 0n, 0n) == 11n
-  claim composed_custom_mac_exec() by weave: self.execStep(0x027305ABn, 8n, 13n) == 105n
 
 def seedComposedRiscCpu() -> ComposedRiscCpuTarget:
   {mtvecAddr: 0n, trapCauseCode: 0n, customExtOpcode: 0n, decodeOpcode: fn(i: Nat) -> Nat: 0n, decodeImmI: fn(i: Nat) -> Nat: 0n, decodeImmS: fn(i: Nat) -> Nat: 0n, aluExec: fn(o: Nat, f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, extMacExec: fn(f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, nextPc: fn(i: Nat, p: Nat, m: Nat) -> Nat: 0n, execStep: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
 
 def composedRiscCpu() -> ComposedRiscCpuTarget:
   fix(compose(compose(Layer1BaseRiscSpec, Layer2PrivCsrOverride), Layer3CustomSimdZkOverride), seedComposedRiscCpu())
-
-# Execute real 32-bit RV64I machine words from firmware/test_prog.hex across all 8 Fibonacci elements (sum = 54)
-def evalFibonacci8Sum() -> Nat:
-  let cpu = composedRiscCpu()
-  let x1 = cpu.execStep(0x00100093n, 0n, 0n)
-  let x2 = cpu.execStep(0x00100113n, 0n, 0n)
-  let x3 = cpu.execStep(0x002081B3n, x1, x2)
-  let x4 = cpu.execStep(0x00310233n, x2, x3)
-  let x5 = cpu.execStep(0x004182B3n, x3, x4)
-  let x6 = cpu.execStep(0x00520333n, x4, x5)
-  let x7 = cpu.execStep(0x006283B3n, x5, x6)
-  let x8 = cpu.execStep(0x00730433n, x6, x7)
-  x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8
-
-# Execute all 4 custom 0x2B zk.mac machine words from firmware/test_prog.hex (x11=105 -> x12=212 -> x13=639 -> x14=1282)
-def evalCustomSimdMac4() -> Nat:
-  let cpu = composedRiscCpu()
-  let x11 = cpu.execStep(0x027305ABn, 8n, 13n)
-  let x12 = cpu.execStep(0x0435862Bn, x11, 2n)
-  let x13 = cpu.execStep(0x064606ABn, x12, 3n)
-  cpu.execStep(0x0836872Bn, x13, 2n)
-
-# Cross-check imported Base, Priv, and Ext modules against ComposedRiscCpu
-def evalCrossLayerConsistency() -> Bool:
-  let cpu = composedRiscCpu()
-  (Base.baseRiscCore().decodeImmI(0xFFB00093n) == cpu.decodeImmI(0xFFB00093n)) && (Priv.privilegeRiscCore().stepPc(0x30200073n, 88n, 36n) == cpu.nextPc(0x30200073n, 88n, 36n)) && (Ext.customSimdZkRiscCore().execInstruction(0x027305ABn, 8n, 13n) == cpu.execStep(0x027305ABn, 8n, 13n))

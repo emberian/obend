@@ -1,5 +1,9 @@
 edition ObjectiveBend 1
 # Flagship App #1 (Layer 2): Machine-Mode Privilege CSR Trap (ECALL), CSRRS Readback & Return (MRET) Override
+# The claims that executed an instruction (execInstruction/execStep) were removed on 2026-11-04: the importer proves
+# each claim by kernel evaluation of the Core4 interpreter and these took most of the module's budget
+# (review/DECISIONS-20261031.md, second round); the same instructions run on the emitted core in
+# apps/obend-risc/verilator against the Lean golden. The decode and pc claims stay.
 
 import ./BaseRiscCore.obend as Base
 
@@ -42,14 +46,9 @@ spec PrivilegeCsrOverrideSpec for PrivilegeCsrTarget:
     let op = inst & 0x7Fn in let f3 = (inst >>> 12n) & 0x7n in let immU12 = (inst >>> 20n) & 0xFFFn in if (op == 0x73n) && (f3 == 2n) then (if immU12 == 0x342n then self.trapCauseCode else self.mtvecAddr) else super.execInstruction(inst, rs1Val, rs2Val)
   claim priv_ecall_redirects_to_mtvec() by weave: self.stepPc(0x00000073n, 32n, 0n) == 0x50n
   claim priv_mret_restores_mepc() by weave: self.stepPc(0x30200073n, 88n, 36n) == 36n
-  claim priv_csrrs_reads_mcause() by weave: self.execInstruction(0x342024F3n, 0n, 0n) == 11n
-  claim priv_preserves_base_add() by weave: self.execInstruction(0x002081B3n, 13n, 21n) == 34n
 
 def seedPrivilegeCsr() -> PrivilegeCsrTarget:
   {mtvecAddr: 0n, trapCauseCode: 0n, stepPc: fn(i: Nat, p: Nat, m: Nat) -> Nat: 0n, aluExec: fn(o: Nat, f3: Nat, f7: Nat, a: Nat, b: Nat) -> Nat: 0n, execInstruction: fn(i: Nat, a: Nat, b: Nat) -> Nat: 0n}
 
 def privilegeRiscCore() -> PrivilegeCsrTarget:
   fix(compose(BaseUnprivilegedPcSpec, PrivilegeCsrOverrideSpec), seedPrivilegeCsr())
-
-def verifyBaseAddMatchesPriv() -> Bool:
-  Base.baseRiscCore().execInstruction(0x002081B3n, 13n, 21n) == privilegeRiscCore().execInstruction(0x002081B3n, 13n, 21n)

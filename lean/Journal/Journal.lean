@@ -58,7 +58,9 @@ was chosen to resist an adversary who picks the edit; an accidental collision on
 two exports is the 2^-64 kind of event, a crafted one is not ruled out. A dead support is exact
 (different hashes are different terms); only "holds" carries the caveat.
 -/
+public import Obend.Intention
 public import Obend.Slot
+import Obend.Tactic.Tooth
 public import Std.Data.HashMap
 public import Std.Data.HashSet
 @[expose] public section
@@ -169,7 +171,7 @@ theorem dropWhile_mem {p : α → Bool} : ∀ {l : List α} {x : α},
   | y :: ys, x, h => by
     rw [List.dropWhile_cons]
     by_cases hy : p y = true
-    · simp only [hy, if_true]
+    · simp only [hy, ite_true]
       rcases List.mem_cons.1 h with rfl | h
       · exact .inr hy
       · exact dropWhile_mem h
@@ -432,6 +434,28 @@ def slot : Slot Support Candidate where
   supports c := c.stmtSupports ++ c.proofSupports
   judge _ := true
 
+/-- Each theorem candidate is also governed by an `Obend.Intention` over `Export` worlds:
+resolving `c` in `new` succeeds iff all statement and proof supports hold in `new`, and
+otherwise refuses with the exact dead-support list `slot.dead (holdsIn new) c`. -/
+def theoremIntention : Obend.Intention Export Candidate Candidate Support (List Support) where
+  ref c := c
+  supports c := slot.supports c
+  holds := holdsIn
+  resolve w c :=
+    if (slot.supports c).all (holdsIn w) then .ok c
+    else .error (slot.dead (holdsIn w) c)
+  resolve_ref w r p h := by
+    split at h
+    · injection h with h'; exact h'.symm
+    · contradiction
+  resolve_holds w r p h f hf := by
+    split at h
+    · rename_i hall
+      injection h with h'
+      subst h'
+      exact List.all_eq_true.1 hall f hf
+    · contradiction
+
 /-- What the journal says of one theorem whose statement is what it was. -/
 inductive Verdict where
   /-- every support holds -/
@@ -468,6 +492,11 @@ theorem verdict_unaffected_iff (new : Export) (c : Candidate) :
   rw [verdict_eq_unaffected_iff_dead_nil, read_usable_iff, usable_iff, dead_eq_nil_iff]
   simp [slot]
 
+theorem theoremIntention_current_iff_unaffected (new : Export) (c : Candidate) :
+    theoremIntention.current new c = true ↔ verdict new c = .unaffected := by
+  rw [verdict_eq_unaffected_iff_dead_nil, dead_eq_nil_iff, Obend.Intention.current_iff]
+  rfl
+
 /-- A verdict that names dead supports names exactly what the slot's read names: the list is the
 read's `blocked` list, which (`read_blocked_exact`) holds every support of the candidate that does not
 hold at the new view and nothing else. -/
@@ -484,6 +513,8 @@ theorem verdict_blocked (new : Export) (c : Candidate) (dead : List Support)
     simp only [Slot.read]
     rw [hd]
     simp [slot]
+
+#tooth verdict_blocked by mutation verdict := fun _ _ => .statementCited []
 
 /-! ## The report over two exports -/
 

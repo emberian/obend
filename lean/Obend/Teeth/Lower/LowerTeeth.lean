@@ -41,7 +41,7 @@ set_option autoImplicit false
 /-! ## 1. Positive and Negative Poles for `checkL`, `nonEmptySplits`, and `transportCheck` -/
 
 /-- `checkL` accepts `doubleLExpr` at `fn .natural .natural` and refuses `.lit 5` at `.boolean`. -/
-theorem checkL_acceptance_and_refusal_poles :
+example :
     checkL [] doubleLExpr (fn .natural .natural) = true ∧
     checkL [] smallUnderflowLExpr (fn .natural .natural) = true ∧
     checkL [] (.lit 5) .boolean = false ∧

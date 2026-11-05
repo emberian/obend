@@ -395,7 +395,6 @@ import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
 import Obend.Leaf.Futamura
 import Obend.Leaf.Residual
-import Obend.Leaf.Served
 import Obend.Leaf.Specialize
 import Obend.Leaf.Static
 import Obend.Leaf.UpTo

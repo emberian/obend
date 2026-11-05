@@ -245,14 +245,14 @@ def demoRoot (l : List (Nat × Nat)) : Nat := l.foldl (fun h r => h * 1000003 + 
 def demoBook : Book (Nat × Nat) Nat :=
   ⟨[(10, 5), (11, 500), (11, 120), (12, 9)], demoRoot [(10, 5), (11, 500), (11, 120), (12, 9)]⟩
 
-theorem demo_honest : check demo demoRoot demoBook (demo.run demoBook.rows) = .ok := by decide
+example : check demo demoRoot demoBook (demo.run demoBook.rows) = .ok := by decide
 
 /-- **A report that drops a selected row is refused, naming it.** -/
 theorem drop_last_refused :
     check demo demoRoot demoBook ⟨[500], 500⟩ = .refused (.omitted 120) [] := by decide
 
 /-- A report of other rows at the book's root is refuted by the root. -/
-theorem other_rows_refuted :
+example :
     check demo demoRoot ⟨[(11, 500)], demoBook.root⟩ ⟨[500], 500⟩ = .refused .root [] := by decide
 
 end Obend.Analysis.Coverage

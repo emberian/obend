@@ -35,7 +35,7 @@ them together and holds the literature audits.
 | `~/dev/o7vn` | 579 | Oracle7 native reasoning; stable models with evidence-token revision | `native/oracle-logic/{README,DEMOS}.md`, `native/experiments/{README,REVIEW}.md`, `maintained-views/README.md` |
 | `~/dev/redregg` | 201 | intent archive, design memos, literature audits, scholar comparisons | `intent/WHY-OBJECTIVE-BEND-20261003.txt`, `designs/ARCHITECTURAL-ARGUMENT.txt`, `work/{DELVETALK-LEARNINGS,CONTEXTUAL-PROGRAM-20261020,LITERATURE-CONTEXTUAL-20261020,ACTIVITIES-DESIGN-20261022,REORIENTATION-20261022,HOLES-FOR-PROOF-ENGINEERING-20261020,COMPARE-20261021}.md`, `work/promo/DESIGN-{CTX,PCC,META}.md` |
 | `~/dev/bend` (upstream) | 3416 | Taelin's Bend 2: the calculus and the thesis we diverge from | `README.md`, `guide/GUIDE.md`, `paper/BendTT.pdf`, `bend2/bend.ts` |
-| fareoo archive (gh `emberian/fareoo-archive`) | | Faré's corpus mirrored; the principles file and the Mini audit | `FAREOO.md` (1002 lines), `AUDIT.md` (791), `sources/ltuo-objective-bend-20261003.txt`, `raw/mirrors/ltuo/2026-10-03/ltuo-readable.txt` |
+| fareoo archive (gh `emberian/fareoo-archive`) | — | Faré's corpus mirrored; the principles file and the Mini audit | `FAREOO.md` (1002 lines), `AUDIT.md` (791), `sources/ltuo-objective-bend-20261003.txt`, `raw/mirrors/ltuo/2026-10-03/ltuo-readable.txt` |
 
 ## 2. The calculus (minidregg Core4, 2026-10-03 → 10-07)
 
@@ -70,7 +70,7 @@ a *cell law* (`Pred`, enforced on every write); a package `law NAME: EXPR` (enfo
 `REF == INT`, `monotone`, `writeOnce`, …); a spec `claim` (typed, retained, *never evaluated*;
 renamed from `law` on 2026-10-07 so the word could not be borrowed). Domain laws over several
 objects' joint state (`registerDomain`). Admission is **re-execution**: the receiver re-runs the
-Lean front end and admits only a byte-identical core (`admitted_front_end`).
+Lean front end and admits only a byte-identical core .
 
 **Open (their own list, `OBJECTIVE-BEND.md` §"What is open")**: no surface semantics (the front
 end is trusted); laws only in the fragment, claims never checked; no cross-package extension ("no
@@ -156,7 +156,7 @@ Ember (CARD 9): "these techniques are for OUR verification/proof engineering too
 What nanodregg deliberately *cut* from Mini's Objective Bend (LANG-6, LANG-18, ACTIVITIES-DESIGN §0.11):
 call-by-need (CBV CEK instead; "a program that is linear under call-by-need is exponential here"
 is its own unmeasured critique), `perform` in the term language, reflection, `Activity<P,R,A>` as a
-type; and `extend` keeps the *old* self (`bigStep_extend_keeps_old_self`), so open recursion is
+type; and `extend` keeps the *old* self , so open recursion is
 `fix` over a mixin "the authoring tool writes" — which DELVETALK-LEARNINGS §3.2 calls the wrong
 choice for authoring.
 
@@ -226,13 +226,13 @@ This is the Flavors innovation (1979). It is a property of *composition*, not of
 obend night · 10-16 nanodregg charter and Lang core · 10-17 DELVETALK-LEARNINGS · 10-20 GPT-6
 docs; LANG-66..68; literature audit · 10-22 ACTIVITIES-DESIGN, REORIENTATION, LANG-75 promotion
 program · 10-26 DESIGN-CTX, LANG-83/84/92 · 10-27 Mini demo definition; OVERLOOKED · 10-29 o7vn
-experiments review · 11-01 `obend` reaches 408+ Lean modules (52,368 constants, `0 sorryAx`),
+experiments review · 11-01 `obend` reaches its Lean tree (the census is the record),
 full RTL-to-GDSII + eFPGA DPR hardware suite, bidirectional Lean 4 lowering, and the Next Mathematica
 / Dregg2 / DeOS / Simplex synthesis.
 
 ## 10. What `obend` (2026-10-30 → 2026-11-01) Synthesized and Surpassed
 
-Where the earlier trees each held one piece of the elephant, `obend` unifies and proves them in a single `0 sorryAx` Lean 4 codebase:
+Where the earlier trees each held one piece of the elephant, `obend` unifies and proves them in a single Lean 4 codebase:
 
 1. **Closing the Faré Audit & C1/C2/Sound Gaps**:
    - First-class nominal `#kind` branding (`Obend/Core/Nominal.lean`) and `_kind.md` C4 Vault cells (`Obend/Vault/Store.lean`) answer Faré's `K-KIND-CELL` critique.
@@ -244,4 +244,4 @@ Where the earlier trees each held one piece of the elephant, `obend` unifies and
    - **`minidregg` `Simplex` BFT**: Mechanized in symbolic mode as Tier 2 of the 4-tier finality ladder (`LawDial.free` CRDT $\to$ disjoint `VaultTurn` fast-path $\to$ `Simplex` BFT with accountable slashing $\to$ `EpistemicConsensus` + `Fold.collapse`).
 3. **The Bidirectional Lean 4 Bridge, Real Analysis & Silicon Lean Elaborator**:
    - `Obend/Lower/` lowers Lean 4 kernel terms (including `f.eq_def` recursion) into `Core4` (`lower_sound`, `lower_checks`, `lower_complete_ltyped_nat`) and reflects `Obend` obligations back into Lean 4 tactics (`obend_law`, `byLoweredLean`) and verified interval/automatic-differentiation analysis (`Obend/Analysis/`).
-   - `Obend/Hardware/` (26 modules, 32 `#tooth` checks) compiles `Leaf.Book` to synthesizable RTL, LUT netlists, STA, Place & Route, DRC/LVS, GDSII, multiphysics/photonics/PCB/RF signoff, and the self-reconfiguring `ReductionMachine` eFPGA where `Leaf/Specialize.specSlot` drives 3-phase Glitch-Free `ICAP` Dynamic Partial Reconfiguration—laying the direct path to the **Silicon Lean Kernel & Elaborator** (see [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md)).
+   - `Obend/Hardware/` compiles `Leaf.Book` to synthesizable RTL, LUT netlists, STA, Place & Route, DRC/LVS, GDSII, multiphysics/photonics/PCB/RF signoff, and the self-reconfiguring `ReductionMachine` eFPGA where `Leaf/Specialize.specSlot` drives 3-phase Glitch-Free `ICAP` Dynamic Partial Reconfiguration—laying the direct path to the **Silicon Lean Kernel & Elaborator** (see [`SILICON-ELABORATOR.md`](SILICON-ELABORATOR.md)).

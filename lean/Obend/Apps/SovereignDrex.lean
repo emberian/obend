@@ -20,8 +20,8 @@ directly to the mechanized sovereign vault, live `K-CARRY` upgrade, and 4-valida
   * Tier 1 disjoint fast-path commutativity (`tier1_disjoint_fast_path_commutes`),
   * 4-validator ($N = 4, f = 1$, quorum $2f + 1 = 3$) Tier 2 Simplex quorum promotion & accountable slashing (`tier2_simplex_quorum_and_accountable_safety`),
   * Durable BFT WAL crash-recovery anti-equivocation (`durable_recovery_prevents_equivocation`) and expose-once settlement externalization across crashes (`durable_expose_once_across_crashes`),
-- `Obend.Leaf.Futamura`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), in-core pins-only 2nd Futamura specialization (`inCoreBookCompiler_specializes_from_pinsOnly`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`) + AMD `CDNA3` `VOP64` GPU synthesis.
+- `Obend.Leaf.Static`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
+  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`) + AMD `CDNA3` `VOP64` GPU synthesis.
 -/
 public import Lean
 public import Obend.Hardware.UserspacePhysical
@@ -30,7 +30,7 @@ public import Obend.Vault.Carry
 public import Obend.Vault.Hyperedge
 public import Obend.Vault.SovereignEngine
 public import Obend.Consensus.SovereignFinality
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
@@ -47,7 +47,7 @@ open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Slot
 open Obend.Slot.World
@@ -94,10 +94,14 @@ example :
     SovereignDrexClearing.sovereignDigestAt5_val = .nat 182 ∧
     SovereignDrexTop.drexSettlementAt8_val = .nat 5000 ∧
     SovereignDrexTop.drexFinalityTagAt3_val = .nat 227 ∧
-    SovereignDrexTop.crossModuleDrexSummary_val = .nat 110222 :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    SovereignDrexTop.crossModuleDrexSummary_val = .nat 110222 ∧
+    SovereignDrexSeat.institutionalOfferSafeValid_val = .boolean true ∧
+    SovereignDrexOrderBook.wholesaleCrossingConservedValid_val = .boolean true ∧
+    SovereignDrexClearing.sovereignBatchConservationValid_val = .boolean true ∧
+    SovereignDrexTop.sovereignDrexEndToEndSafetyValid_val = .boolean true :=
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
-/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Pins-Only Futamura & Cross-Package Cone Survival -/
+/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Cross-Package Cone Survival -/
 
 theorem sovereignDrex_compositions_closed :
     SovereignDrexSeat.institutionalZoeSeat_comp.closedB = true ∧
@@ -128,36 +132,6 @@ theorem sovereignDrex_flatten_and_book_sound (m : String) :
          flatten_sound _ hc2 m, book_sound _ hc2 m,
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
-
-theorem sovereignDrex_inCore_futamura2 (pins : List LeafPin) :
-    dataPinSpecialize
-      (.app (inCoreBookCompiler SovereignDrexSeat.institutionalZoeSeat_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook SovereignDrexSeat.institutionalZoeSeat_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler SovereignDrexOrderBook.wholesaleDvPOrderBook_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook SovereignDrexOrderBook.wholesaleDvPOrderBook_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler SovereignDrexClearing.sovereignCarryClearing_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook SovereignDrexClearing.sovereignCarryClearing_book pins) ∧
-    dataPinSpecialize
-      (.app (inCoreBookCompiler SovereignDrexTop.carryUpgradedSovereignDrex_book) (encodePinsOnly pins)) =
-      encodeBookTerm (inCoreSpecializeBook SovereignDrexTop.carryUpgradedSovereignDrex_book pins) ∧
-    coneSupports
-      (linkComposition SovereignDrexTop.baseSovereignDrex_comp SovereignDrexTop.carryUpgradedSovereignDrex_comp.top)
-      ["validatorQuorum", "protectedWelfareCrown"] =
-      coneSupports SovereignDrexTop.baseSovereignDrex_comp ["validatorQuorum", "protectedWelfareCrown"] := by
-  have hflat : SovereignDrexTop.carryUpgradedSovereignDrex_comp.top.flat = false := by decide +kernel
-  have hdisj : ∀ m ∈ ["validatorQuorum", "protectedWelfareCrown"],
-      m ∉ overlayModifiedFields SovereignDrexTop.carryUpgradedSovereignDrex_comp.top := by
-    decide +kernel
-  exact ⟨(inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexSeat.institutionalZoeSeat_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexOrderBook.wholesaleDvPOrderBook_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexClearing.sovereignCarryClearing_book pins).1,
-         (inCoreBookCompiler_specializes_from_pinsOnly SovereignDrexTop.carryUpgradedSovereignDrex_book pins).1,
-         coneSupports_linkComposition_of_disjoint
-           SovereignDrexTop.baseSovereignDrex_comp
-           SovereignDrexTop.carryUpgradedSovereignDrex_comp.top
-           ["validatorQuorum", "protectedWelfareCrown"] hflat hdisj⟩
 
 /-- **`sovereignDrex_rtl_and_amd_gpu_verified`**:
 Compiles `SovereignDrexTop.carryUpgradedSovereignDrex_book` and

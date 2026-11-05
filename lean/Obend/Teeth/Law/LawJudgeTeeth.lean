@@ -71,12 +71,12 @@ def accepted : Except (Refusal sig NoHole Unit Fact) (Cfg sig NoHole (fun _ => U
 
 /-- **Writing 9 is refused, naming `room`**: the runner's missing facts are the verdict and the
 `room` clause. -/
-theorem room_refused :
+example :
     missingIn (Obend.Run.run (lawHost host (J "ann")) (lawSpec sp (J "ann")) (Cfg.init (obj 9) 0) (.dispatch ⟨(), 9⟩)) =
       [.admitted ⟨(), 9⟩, .clause ⟨(), 9⟩ "room"] := by decide +kernel
 
 /-- **Eve writing 3 is refused, naming `board`.** -/
-theorem board_refused :
+example :
     missingIn (Obend.Run.run (lawHost host (J "eve")) (lawSpec sp (J "eve")) (Cfg.init (obj 3) 0) (.dispatch ⟨(), 3⟩)) =
       [.admitted ⟨(), 3⟩, .clause ⟨(), 3⟩ "board"] := by decide +kernel
 
@@ -120,7 +120,7 @@ theorem future_refused :
       (.dispatch ⟨(), 3⟩)) = [.current ⟨(), 3⟩, .admitted ⟨(), 3⟩] := by decide +kernel
 
 /-- **A claim at the ledger's height is the same write**: Ann claiming height 0 is admitted. -/
-theorem past_admitted :
+example :
     accepted (Obend.Run.run (lawHost host (J "ann" (some 0))) (lawSpec sp (J "ann" (some 0))) (Cfg.init (obj 3) 0)
       (.dispatch ⟨(), 3⟩)) = true := by decide +kernel
 

@@ -1210,29 +1210,43 @@ pub fn eval_octree_frep_pruned() -> OctreeFrepReport {
     let mut zero_discrepancy = true;
     let mut octant_active_ops = Vec::with_capacity(8);
 
-    let x_halves = [Interval::new(-80, -40), Interval::new(40, 80)];
-    let y_halves = [Interval::new(-80, -40), Interval::new(40, 80)];
-    let z_halves = [Interval::new(-80, -40), Interval::new(40, 80)];
+    let x_halves = [Interval::new(-80, 0), Interval::new(0, 80)];
+    let y_halves = [Interval::new(-80, 0), Interval::new(0, 80)];
+    let z_halves = [Interval::new(-80, 0), Interval::new(0, 80)];
 
     for &xh in &x_halves {
         for &yh in &y_halves {
             for &zh in &z_halves {
                 let octant_box = Interval3D { x: xh, y: yh, z: zh };
-                let (_iv, choices, pruned) = prune_tape_for_interval(&full_tape, octant_box);
-                choice_left_or_right_count += choices
+                let (_iv_oct, oct_choices, oct_pruned) = prune_tape_for_interval(&full_tape, octant_box);
+                choice_left_or_right_count += oct_choices
                     .iter()
                     .filter(|&&c| c == Choice::Left || c == Choice::Right)
                     .count();
 
                 let mut octant_ops = 0u32;
-                // Evaluate 8 sub-voxel centers inside this octant
-                let sub_xs = [(xh.lo * 3 + xh.hi) / 4, (xh.lo + xh.hi * 3) / 4];
-                let sub_ys = [(yh.lo * 3 + yh.hi) / 4, (yh.lo + yh.hi * 3) / 4];
-                let sub_zs = [(zh.lo * 3 + zh.hi) / 4, (zh.lo + zh.hi * 3) / 4];
+                // Subdivide each octant into 8 contiguous sub-voxel boxes covering all of [-80, 80]^3
+                let xm = (xh.lo + xh.hi) / 2;
+                let ym = (yh.lo + yh.hi) / 2;
+                let zm = (zh.lo + zh.hi) / 2;
+                let sub_x_boxes = [Interval::new(xh.lo, xm), Interval::new(xm, xh.hi)];
+                let sub_y_boxes = [Interval::new(yh.lo, ym), Interval::new(ym, yh.hi)];
+                let sub_z_boxes = [Interval::new(zh.lo, zm), Interval::new(zm, zh.hi)];
 
-                for &px in &sub_xs {
-                    for &py in &sub_ys {
-                        for &pz in &sub_zs {
+                for &sx in &sub_x_boxes {
+                    for &sy in &sub_y_boxes {
+                        for &sz in &sub_z_boxes {
+                            let sub_box = Interval3D { x: sx, y: sy, z: sz };
+                            let (_iv, sub_choices, pruned) =
+                                prune_tape_for_interval(&oct_pruned, sub_box);
+                            choice_left_or_right_count += sub_choices
+                                .iter()
+                                .filter(|&&c| c == Choice::Left || c == Choice::Right)
+                                .count();
+
+                            let px = (sx.lo + sx.hi) / 2;
+                            let py = (sy.lo + sy.hi) / 2;
+                            let pz = (sz.lo + sz.hi) / 2;
                             unpruned_tape_ops += full_tape.len() as u32;
                             pruned_tape_ops += pruned.len() as u32;
                             octant_ops += pruned.len() as u32;

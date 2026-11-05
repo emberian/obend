@@ -97,7 +97,7 @@ def selfObject (n1 n2 m : String) : Term := .fix (selfLam n1 n2 m) (.record [])
 /-- Its template: the record with `self` open. -/
 def selfTemplate (n1 n2 m : String) : Term := .record [(n1, .nat 7), (n2, .get (.bound 0) m)]
 
-theorem object_eq : object = selfObject "good" "bad" "bad" := rfl
+example : object = selfObject "good" "bad" "bad" := rfl
 
 theorem selfObject_selfBody (n1 n2 m : String) :
     selfBody (selfLam n1 n2 m) (.record []) = .app (.app (selfLam n1 n2 m) (.bound 0)) (.record []) := by

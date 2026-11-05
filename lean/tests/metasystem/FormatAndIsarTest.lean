@@ -166,7 +166,7 @@ theorem prepaidLease_planted_replay_rollback_rejected :
     is refused by `prepaidLeaseLaw`. -/
 def mutatedBudgetTerms : LeaseTerms := { sampleLeaseTerms with budget := 2000 }
 
-theorem prepaidLease_writeOnce_budget_violation_rejected :
+example :
     prepaidLeaseLaw.denote sampleFacts (some (leaseStateToData sampleLeaseTerms leaseSt0))
       (leaseStateToData mutatedBudgetTerms leaseSt1) = false := by decide +kernel
 

@@ -118,7 +118,7 @@ def layered : Composition := ⟨outer, [inner], []⟩
 def layeredFields : List (String × FE) := [("b", .ref "a"), ("c", .lit 7), ("a", .lit 7)]
 
 -- fixture kept (2026-11-04): cheap closed check of `layered.closedB` on literal data
-theorem layered_closed : layered.closedB = true := by decide +kernel
+example : layered.closedB = true := by decide +kernel
 
 /-- **The layered member reading `self` is costed**: `layered.b` costs at most 7 through its
 flattening, and `≈b` that flattening's member; at most 6 is refuted. -/

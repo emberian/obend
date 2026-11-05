@@ -14,3 +14,5 @@ name = "obend_hw_host"
 path = "src/bin/obend_hw_host.rs"
 
 [dependencies]
+
+[workspace]

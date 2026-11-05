@@ -13,6 +13,42 @@ open Obend.Tactic.Weave
 open Obend.Tactic.Tooth
 open Obend.Tactic.MonadicReduction
 
+namespace Obend.Tactic.Tooth
+/-! The "dual-pole tooth" fixture checker. Moved here from `Obend/Tactic/Tooth.lean` on 2026-11-04:
+it checks a Boolean evaluator against one positive and some negative fixtures, which is a test
+helper, not a kernel mutation tooth, and it borrowed the name. -/
+
+structure ToothSpec (α : Type) where
+  name        : String := "tooth"
+  eval        : α → Bool
+  posFixture  : α
+  negFixtures : List α
+
+def verifyDualPoleTooth {α : Type} (spec : ToothSpec α) : Bool :=
+  spec.eval spec.posFixture && spec.negFixtures.all (fun x => !spec.eval x)
+
+theorem all_neg_eval_false {α : Type} (eval : α → Bool) :
+    ∀ {xs : List α} {x : α},
+      xs.all (fun y => !eval y) = true →
+      x ∈ xs →
+      eval x = false
+  | [], _, _, hmem => by cases hmem
+  | _ :: _, _, hall, hmem => by
+    simp only [List.all_cons, Bool.and_eq_true, Bool.not_eq_true'] at hall
+    cases hmem with
+    | head _ => exact hall.1
+    | tail _ htail => exact all_neg_eval_false eval hall.2 htail
+
+theorem verifyDualPoleTooth_sound {α : Type} (spec : ToothSpec α)
+    (h : verifyDualPoleTooth spec = true) :
+    spec.eval spec.posFixture = true ∧
+    spec.negFixtures.all (fun x => !spec.eval x) = true ∧
+    (∀ x ∈ spec.negFixtures, spec.eval x = false) := by
+  unfold verifyDualPoleTooth at h
+  simp only [Bool.and_eq_true] at h
+  exact ⟨h.1, h.2, fun x hx => all_neg_eval_false spec.eval h.2 hx⟩
+end Obend.Tactic.Tooth
+
 set_option autoImplicit false
 
 /-!

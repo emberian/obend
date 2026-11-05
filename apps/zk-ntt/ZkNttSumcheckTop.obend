@@ -1,5 +1,10 @@
 edition ObjectiveBend 1
 # Flagship App #4 (Top Level): 3-Layer Composed Goldilocks ZK-NTT + Multilinear Sumcheck Co-Processor
+# This module carries no `claim`s (removed 2026-11-04): the importer proves each claim by kernel evaluation of the
+# Core4 interpreter, and on this 64-bit arithmetic that took longer than the whole module's budget
+# (review/DECISIONS-20261031.md, second round). The arithmetic is checked on the hardware instead
+# (apps/zk-ntt/verilator: boundary vectors, 2048 butterflies and the 8-round sumcheck against a __uint128_t
+# reference and the Lean golden), and at the Nat level by Obend.Apps.ZkNtt.goldilocksReduce128Spec_sound.
 
 import ./GoldilocksField.obend as Field
 import ./NttButterflyRadix2.obend as Bfly
@@ -75,24 +80,9 @@ spec Layer3SumcheckOverride for ZkNttSumcheckTopTarget:
     0xFFFFFFFFn
   def sumcheckFold(f0: Nat, f1: Nat, rChallenge: Nat) -> Nat:
     if rChallenge == 0n then self.canon64(f0) else (if rChallenge == 1n then self.canon64(f1) else super.sumcheckFold(f0, f1, rChallenge))
-  claim zk_top_reduce_max128() by weave: self.goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn) == 0xFFFFFFFC00000004n
-  claim zk_top_butterfly_involution() by weave: self.fieldAdd(self.butterflyEven(10n, 6n, 7n), self.butterflyOdd(10n, 6n, 7n)) == 20n
-  claim zk_top_sumcheck_fold() by weave: self.sumcheckFold(18n, 10n, 2n) == 2n
 
 def seedZkNttSumcheckTop() -> ZkNttSumcheckTopTarget:
   {goldilocksPrime: 0n, goldilocksEpsilon: 0n, numStages: 0n, canon64: fn(x: Nat) -> Nat: 0n, fieldAdd: fn(a: Nat, b: Nat) -> Nat: 0n, fieldSub: fn(a: Nat, b: Nat) -> Nat: 0n, goldilocksReduce128: fn(lo: Nat, hi: Nat) -> Nat: 0n, fieldMul: fn(a: Nat, b: Nat) -> Nat: 0n, butterflyEven: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, butterflyOdd: fn(u: Nat, v: Nat, w: Nat) -> Nat: 0n, stepAccG0: fn(a: Nat, f: Nat, c: Nat) -> Nat: 0n, stepAccG1: fn(a: Nat, f: Nat, c: Nat) -> Nat: 0n, sumcheckRoundClaim: fn(a: Nat, b: Nat) -> Nat: 0n, sumcheckFold: fn(a: Nat, b: Nat, r: Nat) -> Nat: 0n}
 
 def zkNttSumcheckTop() -> ZkNttSumcheckTopTarget:
   fix(compose(compose(Layer1GoldilocksSpec, Layer2ButterflyOverride), Layer3SumcheckOverride), seedZkNttSumcheckTop())
-
-def evalNttButterflyPairSum() -> Nat:
-  let top = zkNttSumcheckTop()
-  top.fieldAdd(top.butterflyEven(50n, 6n, 7n), top.butterflyOdd(50n, 6n, 7n))
-
-def evalSumcheckTwoRounds() -> Nat:
-  let top = zkNttSumcheckTop()
-  top.sumcheckFold(34n, 42n, 2n)
-
-def evalZkCrossLayerConsistency() -> Bool:
-  let top = zkNttSumcheckTop()
-  (Field.goldilocksEngine().goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn) == top.goldilocksReduce128(1n, 0xFFFFFFFFFFFFFFFEn)) && (Bfly.nttButterflyEngine().butterflyOdd(10n, 6n, 7n) == top.butterflyOdd(10n, 6n, 7n)) && (Sumcheck.sumcheckEngine().sumcheckFold(18n, 10n, 2n) == top.sumcheckFold(18n, 10n, 2n))

@@ -19,10 +19,10 @@ def machineNat (t : Obend.Core.Term.Term) : Option Nat :=
   | .finished (.natural n) _ => some n
   | _ => none
 
-theorem machine_book_seven : machineNat (bookTwiceOfThree (comp 1)) = some 7 := by decide +kernel
+example : machineNat (bookTwiceOfThree (comp 1)) = some 7 := by decide +kernel
 
-theorem machine_object_seven : machineNat (objectTwiceOfThree (comp 1)) = some 7 := by decide +kernel
+example : machineNat (objectTwiceOfThree (comp 1)) = some 7 := by decide +kernel
 
-theorem machine_overridden_three : machineNat (objectTwiceOfThree overridden) = some 3 := by decide +kernel
+example : machineNat (objectTwiceOfThree overridden) = some 3 := by decide +kernel
 
 end Obend.Teeth.Leaf.Review

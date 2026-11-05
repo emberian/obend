@@ -111,12 +111,12 @@ theorem coloured_instance_checks :
 /-- D2's tooth on the checker: `self` returned where the bound row is declared. With `Self` an alias
 of its bound the checker accepts it; with `Self` rigid it refuses it. -/
 -- fixture kept (2026-11-04): cheap closed check of `checkAgainst` on literal data
-theorem self_as_bound_row_alias_checks :
+example :
     (checkAgainst (selfAsBoundRow []) [] (.arrow .reusable .unrestricted (.variable 5) weightBound)).toBool = true := by
   decide +kernel
 
 -- fixture kept (2026-11-04): refusal witness: `checkAgainst` says no to a forged/ill-formed input; no soundness theorem shows a checker can refuse
-theorem self_as_bound_row_rigid_refused_by_checker :
+example :
     (checkAgainst (selfAsBoundRow [5]) [] (.arrow .reusable .unrestricted (.variable 5) weightBound)).toBool = false := by
   decide +kernel
 

@@ -46,14 +46,14 @@ theorem Obend.Core.DecisionReduction.Probes.redundant_shadow :
 theorem Obend.Core.DecisionReduction.Probes.checker_atomic_mismatch :
     sameType ⟨[],[],[]⟩ .natural .boolean = false := by decide +kernel
 
-theorem Obend.Core.EquiRecursiveTeeth.sameType_alias_cycle_kernel : sameType ⟨[(0, .arrow .once .linear .natural (.variable 0)),
+example : sameType ⟨[(0, .arrow .once .linear .natural (.variable 0)),
     (1, .arrow .once .linear .natural (.variable 2)),
     (2, .arrow .once .linear .natural (.variable 1))], [], []⟩ (.variable 0) (.variable 1) = true := by
   decide +kernel
 
-theorem Obend.Core.EquiRecursiveTeeth.sameType_row_permutation_kernel : sameType {} (.field "b" .boolean (.field "a" .natural .emptyRow))
+example : sameType {} (.field "b" .boolean (.field "a" .natural .emptyRow))
     (.field "a" .natural (.field "b" .boolean .emptyRow)) = true := by decide +kernel
 
-theorem Obend.Core.EquiRecursiveTeeth.sameType_custody_shadow_kernel :
+example :
     sameType {} (.field "a" .boolean (.field "a" (.custody 7) .emptyRow))
       (.field "a" .boolean .emptyRow) = false := by decide +kernel

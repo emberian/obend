@@ -379,23 +379,22 @@ def toLeanName : KName → Lean.Name
   | .num p i   => by simp [toLeanName, fromLeanName, fromLeanName_toLeanName p]
 
 /-- Helper for `KName.toCleanId` preserving `.num` indices for `Lean.FVarId` / `Lean.MVarId` names
-such as `_uniq.42` while hashing string components. -/
+such as `_uniq.42` while mixing the full un-truncated hash of string and numeric components. -/
 def KName.toCleanIdAux : KName → Nat
   | .anonymous => 0
   | .num .anonymous i => i
   | .num (.str .anonymous "_uniq") i => i
-  | .num p i => p.toCleanIdAux * 31 + i + 1
+  | .num p i => p.toCleanIdAux * 65537 + i + 1
   | .str p s =>
-    let hStr := s.toList.foldl (fun acc c => (acc * 131 + c.toNat) % 999983) 0
-    p.toCleanIdAux * 31 + hStr + 1
+    let hStr := s.toList.foldl (fun acc c => acc * 1114112 + c.toNat + 1) 0
+    p.toCleanIdAux * 65537 + hStr + 1
 
-/-- Extract a clean numeric identifier `< 1000000` from a `KName`. -/
+/-- Extract a collision-free numeric identifier from a `KName` without `% 1000000` truncation. -/
 def KName.toCleanId (n : KName) : Nat :=
-  n.toCleanIdAux % 1000000
+  n.toCleanIdAux
 
-theorem KName.toCleanId_lt_offset (n : KName) : n.toCleanId < 1000000 := by
-  unfold KName.toCleanId
-  omega
+theorem KName.toCleanId_num_exact (i : Nat) :
+    (KName.num .anonymous i).toCleanId = i := rfl
 
 /-- Convert a `KLevel` back to a host `Lean.Level`. -/
 def toLeanLevel : KLevel → Lean.Level
@@ -500,13 +499,10 @@ theorem fromLeanExpr_toLeanExpr :
     by_cases hGe : id >= 1000000
     · simp only [hGe, ↓reduceIte, fromLeanExpr, Lean.Name.mkNum, fromLeanName,
         KName.toCleanId, KName.toCleanIdAux]
-      have hMod : (id - 1000000) % 1000000 = id - 1000000 := by omega
       have hAdd : 1000000 + (id - 1000000) = id := by omega
-      rw [hMod, hAdd]
+      rw [hAdd]
     · simp only [hGe, ↓reduceIte, fromLeanExpr, Lean.Name.mkNum, fromLeanName,
         KName.toCleanId, KName.toCleanIdAux]
-      have hMod : id % 1000000 = id := by omega
-      rw [hMod]
   | .sort u, _ => by simp [toLeanExpr, fromLeanExpr, fromLeanLevel_toLeanLevel]
   | .const n us, _ => by
     unfold toLeanExpr fromLeanExpr
@@ -1036,14 +1032,18 @@ theorem lower_inductive_sound
 export Obend.Lower.LCNF (
   LcnfQuantity LcnfParam LcnfArg LCNFArg LcnfLetValue LCNFLetValue LcnfAlt LcnfCode LCNFCode
   LcnfFunDecl LCNFFunDecl LcnfModule
-  eraseZeroQtyArgs evalLcnfArgNat readLinearStore writeLinearStore evalLcnfLetValue evalLcnfCode
+  eraseZeroQtyArgs evalLcnfArgNat readLinearStore writeLinearStore lcnfCtorTagId packLcnfCtor
+  evalLcnfLetValue evalLcnfCode
   checkLinearLetValue checkLinearStateToken checkLinearArms
   lcnfArgToLExpr lcnfLetValueToLExpr wrapMinorBvars applyLcnfArgs
   compileLcnfToLExpr lcnfToLExpr lcnfArmsToLExpr compileLcnfToCore4 lowerLCNF
   lcnfFunDeclToLExpr lowerLCNFFunDecl compileLcnfToBook compileLcnfFunDeclToBook
   sampleLcnfRecDecl sampleLcnfRecBody sampleLcnfRecDecl_runs_zero
   sampleLcnfAstMatch sampleLcnfAstMatch_runs_42
-  sampleLcnfJpCode sampleLcnfJpCode_runs_42 sampleLinearStateCode sampleDuplicatedStateTokCode
+  sampleLcnfAstMatchSort sampleLcnfAstMatchSort_runs_42
+  sampleLcnfJpCode sampleLcnfJpCode_runs_42 sampleLcnfAppCode
+  sampleLinearStateCode sampleLinearStateOverwriteCode sampleDuplicatedStateTokCode
+  isClosedDecisionCode evalLcnfCode_simulates_core4 evalLcnfCode_app_cases_state_sound
   lcnf_zero_erasure_sound lcnf_linear_state_conserved lcnf_elab_pass_to_book_sound
 )
 

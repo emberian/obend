@@ -47,14 +47,14 @@ def derivation : List RStep :=
 
 theorem accepted : claimCheck 4 (object 1) derivation = .ok := by decide +kernel
 
-theorem accepted_mutated : claimCheck 4 (object 2) derivation = .ok := by decide +kernel
+example : claimCheck 4 (object 2) derivation = .ok := by decide +kernel
 
 def overridden : ClaimObj := ⟨⟨override, [augmented 1, twice, base], seed⟩, 2, repeated, 1⟩
 
 theorem frame_refused : claimCheck 4 overridden derivation = .refused (.rewrite .stepMismatch) [0, 0] := by
   decide +kernel
 
-theorem frame_support_moves :
+example :
     (symUnfold overridden.comp 2 "twice").map (·.1) = some "ReviewMember.Override" ∧
       (symUnfold (object 1).comp 2 "twice").map (·.1) = some "ReviewMember.Twice" := by decide +kernel
 
@@ -69,10 +69,10 @@ def blockedOf : Status → List String
   | .blocked ms => ms
   | _ => []
 
-theorem slot_blocked_twice : blockedOf (readStatus (object 1) 4 overridden.comp (some derivation) none none) = ["twice"] := by
+example : blockedOf (readStatus (object 1) 4 overridden.comp (some derivation) none none) = ["twice"] := by
   decide +kernel
 
-theorem slot_checked : (readStatus (object 1) 4 (object 1).comp (some derivation) none none).label = "checked" ∧
+example : (readStatus (object 1) 4 (object 1).comp (some derivation) none none).label = "checked" ∧
     (readStatus (object 1) 4 extended.comp (some derivation) none none).label = "checked" := by
   decide +kernel
 

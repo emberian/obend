@@ -53,7 +53,7 @@ theorem turn_is_trace : ∃ s',
 
 /-- **Where `Preview` admits nothing, the runner admits**: with the ticket not live the same Plan is
 refused before the program sees a response, naming the ticket. -/
-theorem dead_ticket_refused :
+example :
     (session (host false) spec (Cfg.init O ()) (eventsOf [⟨(), .natural 5, .natural 7⟩])).2 =
       [some (.unadmitted ⟨(), .natural 5⟩ [] (some ())), some (.unsolicited ⟨(), .natural 5, .natural 7⟩)] :=
   rfl
@@ -81,7 +81,7 @@ def plain : Deploy Unit Unit Unit Bool := deploy (fun _ => none) (fun _ => []) t
 
 /-- **Response typing.** The bare adapter accepts the reply `true` to a Plan whose declared response
 type is a natural; the adapter refuses it by name and takes the natural. -/
-theorem bare_illTyped :
+example :
     (session bhost spec (Cfg.init (activity exampleLimits 32 exampleBudget 2 (initial yieldingTerm)
       ([] : List Unit) [()] ([] : List Unit)) true)
       [.dispatch ⟨(), .natural 5⟩, .respond ⟨(), .natural 5, .boolean true⟩]).2 = [none, none] := rfl
@@ -93,24 +93,24 @@ theorem typed_receipt :
 
 /-- **Depth.** Unfolded to depth 0, the bare adapter can never dispatch the first Plan; the adapter
 deepens mid-run and dispatches it. -/
-theorem bare_depth_stuck :
+example :
     (session bhost spec (Cfg.init (activity exampleLimits 32 exampleBudget 0 (initial yieldingTerm)
       ([] : List Unit) [()] ([] : List Unit)) true) [.dispatch ⟨(), .natural 5⟩]).2 =
       [some (.notNext ⟨(), .natural 5⟩)] := rfl
 
-theorem deepen_receipt :
+example :
     (asession plain bhost spec (plain.start ⟨0, 32, []⟩)
       [.dispatch (.natural 5), .deepen 1, .dispatch (.natural 5), .respond (.natural 5) (.natural 7)]).2 =
       [some (.run (.notNext ⟨(), .natural 5⟩)), none, none, none] := rfl
 
 /-- **Ticks.** With one tick a turn the first turn is cut short: the bare adapter's protocol has
 ended; the adapter gives the turns more ticks and the Plan is yielded and dispatched. -/
-theorem bare_ticks_ended :
+example :
     (session bhost spec (Cfg.init (activity exampleLimits 1 exampleBudget 2 (initial yieldingTerm)
       ([] : List Unit) [()] ([] : List Unit)) true) [.dispatch ⟨(), .natural 5⟩]).2 =
       [some (.notNext ⟨(), .natural 5⟩)] := rfl
 
-theorem ticks_receipt :
+example :
     (asession plain bhost spec (plain.start ⟨2, 1, []⟩)
       [.dispatch (.natural 5), .moreTicks 31, .dispatch (.natural 5)]).2 =
       [some (.run (.notNext ⟨(), .natural 5⟩)), none, none] := rfl
@@ -124,7 +124,7 @@ def chooser : Deploy Unit Unit Unit Bool :=
 operation. The adapter refuses it (the run stands at a choice point), refuses `8` (not an
 alternative), takes `7`; once `7`'s support is revoked its dispatch is refused naming it; the
 choice is changed to `6` before anything was dispatched, and `6` goes out and is answered. -/
-theorem bare_choice_dispatched :
+example :
     (session bhost spec (Cfg.init (activity exampleLimits 32 exampleBudget 2 (initial yieldingTerm)
       ([] : List Unit) [()] ([] : List Unit)) true) [.dispatch ⟨(), .natural 5⟩]).2 = [none] := rfl
 
