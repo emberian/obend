@@ -83,3 +83,11 @@ name = "obend-emit-cam"
 srcDir = "tools/emitcam"
 root = "EmitCam"
 supportInterpreter = true
+
+# Lane HVM (2026-11-05, rung 2 of HARDWARE.md): lowers the Leaf books of `tools/emithvm` to HVM2's
+# textual nets (`Obend.Hardware.Hvm`), with the vectors and expected values `hardware/hvm/verify_hvm.sh`
+# runs `hvm run` against. `lake build obend-emit-hvm`.
+[[lean_exe]]
+name = "obend-emit-hvm"
+srcDir = "tools/emithvm"
+root = "EmitHvm"
