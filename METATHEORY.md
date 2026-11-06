@@ -79,14 +79,14 @@ Every theorem in `lean/Obend/` serves one of five end-to-end architectural guara
 | `lower_complete_ltyped_nat` | `Obend/Lower/Proofs/Complete.lean` | Tait–Girard reducibility (`LRed`): every closed `LTyped [] e .nat` term normalizes in `LSteps` and agrees with `Core4` |
 | `lean_to_book` | `Obend/Lower/Proofs/Book.lean` | End-to-end compilation from Lean kernel `Expr` through `Core4` and `Leaf.Flatten` to `Leaf.Book` preserves evaluation |
 | `transportTheorem` / `readTheoremDecider` | `Obend/Lower/Transport.lean` | Outward reflection (`lowerTerm`) and inward proof transport (`transport@1`) turning Lean 4 theorems into `Judge`-verified `Slot` candidates with `Supports` pins |
-| `lower_to_rtl_sat_sound` / `lean_small_to_book_to_rtl` | `Obend/Lower/Proofs/Hardware.lean` | 4-stage verified pipeline (`Lean-lite → Core4 → Leaf.Book → Hardware.RTL`) preserving evaluation down to cycle-accurate RTL simulation |
+| `lower_to_rtl_sat_sound` | `Obend/Lower/Proofs/Hardware.lean` | 4-stage verified pipeline (`Lean-lite → Core4 → Leaf.Book → Hardware.RTL`) preserving evaluation down to cycle-accurate RTL simulation; the four-stage run on `smallUnderflowLExpr` is an example in `Obend/Teeth/Lower/Fixtures.lean` |
 
 ### 2.5 `Law`, `Spec/LawDial`, `Doc`, `Vault`, and `Ledger`
 
 | Theorem | Module | Statement Summary |
 |---|---|---|
 | `judge_sound` / `judge_complete` / `judgeEffective_names` / `chain_keeps` | `Obend/Law/Proofs/Eval.lean`, `Inherit.lean`, `Claim.lean` | Point-of-use law judgment by machine probe re-execution, C4 law inheritance naming the refusing ancestor and clause, and `keeps` invariant preservation |
-| `dial_free_confluent` / `demoOr_not_confluent` / `solveLawWitness_sound` | `Obend/Spec/LawDial.lean` | 3-mode `LawDial` classification: `.free` monotone bounds close under join-semilattice `joinData` (`dial_free_confluent`); `.press` Bellman-Ford difference-constraint solver synthesizes valid multi-field witnesses (`solveLawWitness_sound`) |
+| `dial_free_confluent` / `solveLawWitness_sound` | `Obend/Spec/LawDial.lean` | 3-mode `LawDial` classification: `.free` monotone bounds close under join-semilattice `joinData` (`dial_free_confluent`); a disjunction does not (`demoOrLaw` passes both orders and fails their join, a kept example in the same file); `.press` Bellman-Ford difference-constraint solver synthesizes valid multi-field witnesses (`solveLawWitness_sound`) |
 | `mergePage_pushout` / `commit_kind_needs_relaw` | `Obend/Vault/Law.lean`, `Obend/Vault/Store.lean`, `Obend/Doc/Merge.lean` | Constructive multi-field repair synthesis on Vault refusals, Pijul pushout document merge (`merge_isPushout`) with conflicts as section slots, and C4 `_kind.md` vault governance |
 | `conserved` / `net_conserved` / `closed_forever` / `reversal_cancels` / `vault_conserved` | `Obend/Ledger/Register.lean`, `Obend/Ledger/Report.lean`, `Obend/Ledger/Vault.lean` | Double-entry streaming ledger fold conservation, `trial-balance@1` non-omission coverage , and `stitch_twice_refused` |
 

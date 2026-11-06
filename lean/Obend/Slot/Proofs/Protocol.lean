@@ -565,7 +565,7 @@ theorem locality {Name Key V : Type} [DecidableEq Key] {f : Frag Name Key V} (hf
 /-- **Selective repair agrees with checking from scratch** (family 3): from correct verdicts for
 `w₁`, re-checking only the fragments a change of `changed` affects gives exactly the verdicts a
 full re-check of `w₂` gives. -/
-theorem repair_agrees_from_scratch {Name Key V : Type} [DecidableEq Key]
+public theorem repair_agrees_from_scratch {Name Key V : Type} [DecidableEq Key]
     (fs : List (Frag Name Key V)) (hfs : ∀ f ∈ fs, f.ReadsOnly) {changed : List Key}
     {w₁ w₂ : Key → V} (hout : ∀ k, k ∉ changed → w₁ k = w₂ k) :
     repair fs (fromScratch fs w₁) changed w₂ = fromScratch fs w₂ := by

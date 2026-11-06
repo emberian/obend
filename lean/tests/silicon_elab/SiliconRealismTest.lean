@@ -229,18 +229,23 @@ theorem silicon_realism_compiler_and_gpu_vop64_suite :
       extractTwoStateCombCoeffs
         (.binary .add (.binary .multiply (.bound 0) (.nat cCurr)) (.bound 6)) =
         some (cCurr, 1)) ∧
-    (∀ (inputs wires regs : Nat → BitVec 64) (slots : List String)
+    (∀ (inputs wires regs : Nat → BitVec 64) (slots : List String) (slotBodies : List RtlExpr)
        (t : Term) (selfDepth : Nat) (varEnv : List RtlExpr) (e : RtlExpr),
-      compileTermPipelined slots selfDepth varEnv t = some e →
-      evalTermPipelinedHw slots inputs regs selfDepth (varEnv.map (evalRtlExpr inputs wires regs)) t =
+      compileTermPipelined slots slotBodies selfDepth varEnv t = some e →
+      evalTermPipelinedHw slots slotBodies inputs wires regs selfDepth
+        (varEnv.map (evalRtlExpr inputs wires regs)) t =
         some (evalRtlExpr inputs wires regs e)) ∧
     (∀ (k : Nat) (inputs wires regs : Nat → BitVec 64),
-      let callExpr := Term.app (.get (.bound 1) "inc") (.nat k)
-      let expectedRtl := RtlExpr.alu .add (.regRead 0) (.const (BitVec.ofNat 64 k))
-      compileTermPipelined ["inc", "caller"] 1 [.inputPort 0] callExpr = some expectedRtl ∧
-      evalRtlExpr inputs wires regs expectedRtl = regs 0 + BitVec.ofNat 64 k ∧
-      evalTermPipelinedHw ["inc", "caller"] inputs regs 1 [inputs 0] callExpr =
-        some (regs 0 + BitVec.ofNat 64 k)) ∧
+      let calleeBody := RtlExpr.alu .mul (.inputPort 0) (.const 3#64)
+      let directCall := Term.app (.get (.bound 1) "scale3") (.bound 0)
+      let nonDirectCall := Term.app (.get (.bound 1) "scale3") (.nat k)
+      let expectedRtl := RtlExpr.alu .mul (.const (BitVec.ofNat 64 k)) (.const 3#64)
+      compileTermPipelined ["scale3", "caller"] [calleeBody] 1 [.inputPort 0] directCall = some (.regRead 0) ∧
+      compileTermPipelined ["scale3", "caller"] [calleeBody] 1 [.inputPort 0] nonDirectCall = some expectedRtl ∧
+      compileTermPipelined ["scale3", "caller"] [] 1 [.inputPort 0] nonDirectCall = none ∧
+      evalRtlExpr inputs wires regs expectedRtl = BitVec.ofNat 64 k * 3#64 ∧
+      evalTermPipelinedHw ["scale3", "caller"] [calleeBody] inputs wires regs 1 [inputs 0] nonDirectCall =
+        some (BitVec.ofNat 64 k * 3#64)) ∧
     (∀ (op : RtlAluOp) (inputs wires regs : Nat → BitVec 64) (a b : BitVec 64),
       evalAmdGpuExpr inputs wires regs (.alu op (.const a) (.const b)) =
         evalRtlExpr inputs wires regs (.alu op (.const a) (.const b))) ∧
@@ -337,6 +342,7 @@ compiling `arg` on `.app (.get (.bound idx) member) arg` and discarding the resu
 return `.regRead slotIdx` directly! -/
 def compileTermPipelinedDiscardArg
     (slots : List String)
+    (slotBodies : List RtlExpr)
     (selfDepth : Nat)
     (varEnv : List RtlExpr) :
     Term → Option RtlExpr
@@ -355,7 +361,7 @@ def compileTermPipelinedDiscardArg
     | .get (.bound idx) member =>
       if idx == selfDepth then
         match slots.idxOf? member,
-              compileTermPipelinedDiscardArg slots selfDepth varEnv arg with
+              compileTermPipelinedDiscardArg slots slotBodies selfDepth varEnv arg with
         | some slotIdx, some _eArg =>
           some (.regRead slotIdx)
         | _, _ => none
@@ -377,8 +383,11 @@ def compileRtlAluToVopCorrupt (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop6
   | .bitXor => .v_xor_b64 dst src0 src1
   | .shl    => .v_lshl_b64 dst src0 src1
   | .lshr   => .v_lshr_b64 dst src0 src1
+  | .ashr   => .v_ashr_i64 dst src0 src1
   | .eq     => .v_add_u64 dst src0 src1
   | .ult    => .v_sub_u64 dst src0 src1
+  | .slt    => .v_cmp_lt_i64 dst src0 src1
+  | .qmul32 => .v_qmul32_i64 dst src0 src1
 
 #tooth Obend.Lower.evalAmdGpuExpr_faithful_all_ops by mutation Obend.Lower.compileRtlAluToVop := compileRtlAluToVopCorrupt
 

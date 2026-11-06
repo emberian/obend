@@ -61,7 +61,7 @@ serving as the compiled leaf target.** Specifically:
    stale-pin blocking (`stale_iff_blocked`).
    **PROVED**: `Obend.Slot` (`Integrity.contextual`), `Obend.Intention` (unifying package parents,
    document cites, and `KindPin`s with `resolve`/`recite`/`renew`), `Obend.Analysis.Impact`
-   (`read3_sound`, `impact_complete`), and `Obend.Run.Fork` (`stitch_atomic`).
+   (`read3_sound`, `affected_exact`), and `Obend.Run.Fork` (`stitch_atomic`).
 
 ## 2. The extended thesis: "The Next Mathematica," DeOS, Simplex, and the Silicon Elaborator
 
@@ -77,7 +77,8 @@ serving as the compiled leaf target.** Specifically:
 7. **Syntactic `keeps` is only Tier 0; real smart-contract and notebook specifications require
    inductive `CellContract`s, `Narrows` forever-crowns, and fluid bidirectional Lean 4 reflection.**
    Because `Claim.checkKeeps` demands raw AST identity (`isGuardCond`), it rejects compiled surface
-   laws and non-inductive invariants (`keeps_tooth`). Superseding `keeps` with semantic 2-state
+   laws and non-inductive invariants (the fixture that exhibited this was deleted on 2026-11-04; no
+   test now does). Superseding `keeps` with semantic 2-state
    inductive `CellContract`s (`Holds inv old → Admits law old new req → Holds inv new`) and piping
    `Leaf.Flatten` into `Lower.Transport.lowerTerm` lets any `Obend` prototype method or law pop out
    into Lean 4 (`obend_unfold`, `obend_law`, `obend_split`, `obend_tooth`) and weave back as a
@@ -88,13 +89,14 @@ serving as the compiled leaf target.** Specifically:
 8. **Confluent laws (`LawDial.free`) and contended multi-cell turns (`Simplex` BFT) belong to one
    4-tier finality ladder, and distributed proof/EDA search is `EpistemicConsensus`.** Monotone
    per-field bounds (`DialVerdict.free`) close under pointwise `max` (`joinData`) and merge in
-   0.5 RTT without coordination, whereas non-confluent disjunctions/sums (`demoOr_not_confluent`)
+   0.5 RTT without coordination, whereas non-confluent disjunctions/sums (`demoOrLaw`)
    require atomic wide-pullback `VaultTurn` hyperedges ordered in 1 RTT (single-owner/disjoint
    footprint) or 2 RTT (contended `GenericSimplex` BFT). Conversely, when multiple agents race to
    prove a `ClaimObj`, clear an order book, or place-and-route a circuit, any valid certificate
    suffices and canonical cost+digest tie-breaking (`EpistemicConsensus`) achieves agreement without
    BFT rounds.
-   **PROVED**: `dial_free_confluent` and `demoOr_not_confluent` (`Obend/Spec/LawDial.lean`), plus
+   **PROVED**: `dial_free_confluent` (`Obend/Spec/LawDial.lean`), with a kept example there that
+   `demoOrLaw` passes both orders and fails their join; plus
    `GenericSimplex`, `Hyperedge`, `Seat`, `CertifiedClearing`, and `EpistemicConsensus` in
    `~/dev/minidregg`, now being absorbed into `Obend/{Vault,Ledger,Judge,Consensus}` (`DEOS-CONTRACTS-CONSENSUS.md`).
 9. **A compiler's assumptions are supports, its deoptimization is slot repair, and on an eFPGA that
@@ -118,7 +120,8 @@ serving as the compiled leaf target.** Specifically:
 - A member who cannot extend a stranger's package without reading or copying it (tested by
   `tests/obend-source/stranger/`).
 - A law refusal that fails to name the refusing ancestor/clause or fails to synthesize a passing
-  delta when one exists in the `LawDial` fragment (tested by `suggestMultiField_admits`).
+  delta when one exists in the `LawDial` fragment (tested by `crates/obend-gui/tests/workbench_server_test.rs`, through
+  `obend_gui::server::suggest_multi_field_admits`).
 - A theorem in `lean/` that still compiles when the definition it claims to guard is mutated (refuted
   mechanically by `#tooth` across `Obend/Teeth/`).
 - A receipt accepted by `obend verify` whose openings omit a read fact, whose trust claims `checked`
