@@ -331,6 +331,10 @@ import Obend.Hardware.Cli
 import Obend.Hardware.Codec
 import Obend.Hardware.Compiler
 import Obend.Hardware.CurrentLoop
+import Obend.Hardware.Fabulous.Mac8Bin
+import Obend.Hardware.Fabulous.Mac8Cert
+import Obend.Hardware.Fabulous.Mac8CertCheck
+import Obend.Hardware.Fabulous.Mac8Tiles
 import Obend.Hardware.DRC
 import Obend.Hardware.DSP
 import Obend.Hardware.Datasheet

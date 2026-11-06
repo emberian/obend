@@ -34,7 +34,7 @@ roots = ["Programs"]
 # an application of the importer like the Apps, tier 2 with them; nothing in tier 1 imports it.
 [[lean_lib]]
 name = "Teeth"
-globs = ["Obend.Teeth.+", "Obend.Apps.+", "Obend.Stdlib", "Obend.Census"]
+globs = ["Obend.Teeth.+", "Obend.Apps.+", "Obend.Stdlib", "Obend.Census", "Obend.Hardware.Fabulous.Mac8Tiles"]
 
 # Tier 2, the test suites (2026-11-04). Until this target existed the 30 files under
 # `tests/{metasystem,silicon_elab,rehydration}` (308 theorems, 157 `#tooth` commands) belonged to no

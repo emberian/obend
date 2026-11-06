@@ -17,6 +17,8 @@ namespace Obend.Hardware.Fabulous
 
 open Obend.Hardware Obend.Hardware.HDL Std
 
+deriving instance Hashable for Node
+
 /-- The modelled tile types, in the order of `Cert.models`. -/
 def tileModels : List (String × String × TileModel) :=
   [("LUT4AB", "lut4abModel", lut4abModel), ("W_IO", "wioModel", wioModel)]
@@ -42,42 +44,72 @@ def nodeOf (n : String) : Except String Node :=
   | some (x, y) => .ok ⟨x, y, w⟩
   | none => .error s!"{n}: not a tile wire"
 
-/-- The certificate of an extraction. -/
+/-- The certificate of an extraction: every pip the extraction followed becomes the entry of the wire
+it drives, sorted by `Node.lt`, with the entry of the wire it reads and its distance to a terminal. -/
 def buildCert (fab : Fabric) (cfg : HashMap String Nat) (types : HashMap (Nat × Nat) String) (pm : List Pin)
     (s : ExState) : Except String Cert := do
   let modelIdx (x y : Nat) : Option Nat := (types.get? (x, y)) >>= fun t => tileModels.findIdx? (·.1 == t)
   let model (x y : Nat) : Option TileModel := (modelIdx x y) >>= fun i => (tileModels[i]?.map (·.2.2))
   let mut used : HashSet (Nat × Nat) := {}
-  let hopsOf (start : String) : StateT (HashSet (Nat × Nat)) (Except String) (List Hop) := do
-    let some (steps, _) := s.paths.get? start | throw s!"{start}: the extraction did not trace it"
-    let mut hops := #[]
+  -- node ↦ (hop, the node it reads, or none for a constant)
+  let mut drv : HashMap Node (Hop × Option Node) := {}
+  for (_, (steps, _)) in s.paths.toList do
     for (d, src) in steps do
       let dn ← nodeOf d
       let sn ← nodeOf src
       let pips := fab.into.getD d #[]
       let fixed := pips.size == 1 && (pips.toList.all fun (st, _, f) => (fab.spec.getD (st ++ "." ++ f) []).isEmpty)
-      match model dn.x dn.y with
-      | some tm =>
-        match tm.sm.prims.findIdx? (·.1 == dn.w) with
-        | some k =>
-          if dn.x != sn.x || dn.y != sn.y then throw s!"{d}: a switch-matrix output driven from another tile"
-          let p := (tm.sm.prims[k]?.map (·.2)).getD default
-          let bits := cfg.getD (tileName dn.x dn.y) 0
-          let i := p.sel (tm.smCfg bits.testBit)
-          match p.ins[i]? with
-          | some src' =>
-            if src'.name != sn.w then
-              throw s!"{d}: the tile model selects {src'.name}, the decoder {sn.w}"
-          | none => throw s!"{d}: the tile model's select {i} is past its inputs"
-          modify (·.insert (dn.x, dn.y))
-          hops := hops.push (Hop.sm k i)
+      let (hop, nxt) ← match model dn.x dn.y with
+        | some tm =>
+          match tm.sm.prims.findIdx? (·.1 == dn.w) with
+          | some k =>
+            if dn.x != sn.x || dn.y != sn.y then throw s!"{d}: a switch-matrix output driven from another tile"
+            let p := (tm.sm.prims[k]?.map (·.2)).getD default
+            let i := p.sel (tm.smCfg (cfg.getD (tileName dn.x dn.y) 0).testBit)
+            match p.ins[i]? with
+            | some src' =>
+              if src'.name != sn.w then throw s!"{d}: the tile model selects {src'.name}, the decoder {sn.w}"
+              used := used.insert (dn.x, dn.y)
+              pure (Hop.sm k i, match src' with | .port _ => some sn | .const _ => none)
+            | none => throw s!"{d}: the tile model's select {i} is past its inputs"
+          | none =>
+            if !fixed then throw s!"{d}: a configurable pip outside the switch-matrix model"
+            pure (Hop.wire sn, some sn)
         | none =>
-          if !fixed then throw s!"{d}: a configurable pip outside the switch-matrix model"
-          hops := hops.push (Hop.wire sn)
-      | none =>
-        if !fixed then throw s!"{d}: a configurable pip in a tile with no model"
-        hops := hops.push (Hop.wire sn)
-    return hops.toList
+          if !fixed then throw s!"{d}: a configurable pip in a tile with no model"
+          pure (Hop.wire sn, some sn)
+      if let some (h', n') := drv.get? dn then
+        if h' != hop || n' != nxt then throw s!"{d}: two different drivers"
+      drv := drv.insert dn (hop, nxt)
+  let nodes := drv.toList.map (·.1) |>.mergeSort (fun a b =>
+    a.x < b.x || (a.x == b.x && (a.y < b.y || (a.y == b.y && decide (a.w ≤ b.w)))))
+  let idx : HashMap Node Nat := nodes.zipIdx.foldl (fun m (n, i) => m.insert n i) {}
+  -- distance to a terminal, along the drivers
+  let mut rank : HashMap Node Nat := {}
+  for n in nodes do
+    let mut chain : Array Node := #[]
+    let mut cur := n
+    let mut base := 0
+    repeat
+      if let some r := rank.get? cur then base := r + 1; break
+      chain := chain.push cur
+      match drv.get? cur with
+      | some (_, some m) => if drv.contains m then cur := m else base := 0; break
+      | _ => base := 0; break
+      if chain.size > nodes.length then throw s!"{tileName n.x n.y}.{n.w}: the drivers loop"
+    let mut r := base
+    for c in chain.reverse do
+      rank := rank.insert c r
+      r := r + 1
+  let entries ← nodes.mapM fun n => do
+    let some (hop, nxt) := drv.get? n | throw "internal"
+    let next := nxt >>= idx.get?
+    pure ({ node := n, rank := rank.getD n 0, hop, next } : Entry)
+  let entryOf (n : String) : Except String Nat := do
+    let nd ← nodeOf n
+    match idx.get? nd with
+    | some j => pure j
+    | none => throw s!"{n}: no pip drives it"
   let cellOf (site : String) : Except String (Nat × Nat × String) := do
     let (t, l) := splitNode site
     let some (x, y) := parseTile t | throw s!"{site}: not a tile"
@@ -91,11 +123,7 @@ def buildCert (fab : Fabric) (cfg : HashMap String Nat) (types : HashMap (Nat ×
     let t := tileName x y
     let mut ins := #[]
     for i in List.range 4 do
-      if usesInput g.init.toNat i then
-        let (h, u) ← (hopsOf s!"{t}.{pre}I{i}").run used
-        used := u
-        ins := ins.push (some h)
-      else ins := ins.push none
+      ins := ins.push (← if usesInput g.init.toNat i then some <$> entryOf s!"{t}.{pre}I{i}" else pure none)
     gates := gates.push { x, y, pre, isFlop := flopSites.contains g.site, ins := ins.toList : GateCert }
   let mut flops := #[]
   for f in s.flops do
@@ -103,26 +131,24 @@ def buildCert (fab : Fabric) (cfg : HashMap String Nat) (types : HashMap (Nat ×
     let (x, y, pre) ← cellOf f.site
     let t := tileName x y
     let some gate := s.gateOf.get? f.site | throw s!"{f.site}: its LUT is not a gate"
-    let (en, u) ← (hopsOf s!"{t}.{pre}EN").run used
-    let (sr, u) ← (hopsOf s!"{t}.{pre}SR").run u
-    used := u
-    flops := flops.push { x, y, pre, gate, en, sr : FlopCert }
+    flops := flops.push { x, y, pre, gate, en := ← entryOf s!"{t}.{pre}EN", sr := ← entryOf s!"{t}.{pre}SR" : FlopCert }
   let mut outs := #[]
   let mut pads := #[]
   for h : k in [0:pm.length] do
     let p := pm[k]
     let some (x, y) := parseTile p.tile | throw s!"{p.tile}: not a tile"
     match p.role with
-    | .output _ _ =>
-      let n := s!"{p.tile}.{p.bel}_I"
-      let (hs, u) ← (hopsOf n).run used
-      used := u
-      outs := outs.push (k, (⟨x, y, p.bel ++ "_I"⟩ : Node), hs)
+    | .output _ _ => outs := outs.push (k, (⟨x, y, p.bel ++ "_I"⟩ : Node), ← entryOf s!"{p.tile}.{p.bel}_I")
     | _ => pads := pads.push (k, (⟨x, y, p.bel ++ "_O"⟩ : Node))
   let tiles := used.toList.mergeSort (fun a b => a.1 < b.1 || (a.1 == b.1 && a.2 ≤ b.2)) |>.filterMap fun (x, y) =>
     (modelIdx x y).map fun i => ((x, y), i)
-  return { models := tileModels.map (·.2.2), tiles, gates := gates.toList, flops := flops.toList,
-           outs := outs.toList, pads := pads.toList }
+  let chunks := entries.foldl (fun (acc : Array ((Nat × Nat) × Array Entry)) e =>
+    match acc.back? with
+    | some ((x, y), es) =>
+      if x == e.node.x && y == e.node.y then acc.pop.push ((x, y), es.push e) else acc.push ((e.node.x, e.node.y), #[e])
+    | none => acc.push ((e.node.x, e.node.y), #[e])) #[]
+  return { models := tileModels.map (·.2.2), tiles, chunks := chunks.toList.map fun (k, es) => (k, es.toList),
+           gates := gates.toList, flops := flops.toList, outs := outs.toList, pads := pads.toList }
 
 def nodeLean (n : Node) : String := s!"⟨{n.x}, {n.y}, \"{n.w}\"⟩"
 
@@ -130,28 +156,78 @@ def hopLean : Hop → String
   | .sm k i => s!".sm {k} {i}"
   | .wire n => s!".wire {nodeLean n}"
 
-def hopsLean (hs : List Hop) : String := "[" ++ ", ".intercalate (hs.map hopLean) ++ "]"
 
-/-- The text of `Mac8Cert.lean`: one definition per gate, flop and output path. -/
+def optLean : Option Nat → String
+  | some j => s!"some {j}"
+  | none => "none"
+
+/-- The text of `Mac8Cert.lean`: one definition per chunk, then the gates, flops and outputs. -/
 def certLean (C : Cert) (source : String) : String := Id.run do
   let mut out := "module\n/-\n# Obend.Hardware.Fabulous.Mac8Cert — the readback certificate of `hardware/fabulous/obend_ice40_mac8.bin`\n\n" ++
-    s!"Generated by `obend fabric cert` from {source}; do not edit. Every input of every gate and flop of\n" ++
-    "`mac8Net` and every output pin, with the hops the extraction followed back to its source.\n-/\n" ++
+    s!"Generated by `obend fabric cert` from {source}; do not edit. Every wire the extraction followed for\n" ++
+    "`mac8Net`, once, with the hop that drives it, chunked by tile; gates, flops and output pins index the table.\n-/\n" ++
     "public import Obend.Hardware.Fabulous.Readback\npublic import Obend.Hardware.Fabulous.LUT4ABSwitchMatrix\n" ++
     "public import Obend.Hardware.Fabulous.WIOSwitchMatrix\n@[expose] public section\n\nnamespace Obend.Hardware.Fabulous\n\n"
-  for (g, k) in C.gates.zipIdx do
-    let ins := g.ins.map fun | some hs => s!"some {hopsLean hs}" | none => "none"
-    out := out ++ s!"def mac8CertG{k} : GateCert := ⟨{g.x}, {g.y}, \"{g.pre}\", {g.isFlop}, [{", ".intercalate ins}]⟩\n"
-  for (f, k) in C.flops.zipIdx do
-    out := out ++ s!"def mac8CertF{k} : FlopCert := ⟨{f.x}, {f.y}, \"{f.pre}\", {f.gate}, {hopsLean f.en}, {hopsLean f.sr}⟩\n"
-  for ((p, n, hs), k) in C.outs.zipIdx do
-    out := out ++ s!"def mac8CertO{k} : Nat × Node × List Hop := ({p}, {nodeLean n}, {hopsLean hs})\n"
-  let names (pre : String) (n : Nat) := "[" ++ ", ".intercalate ((List.range n).map (s!"{pre}{·}")) ++ "]"
-  out := out ++ "\ndef mac8Cert : Cert where\n  models := [" ++ ", ".intercalate (tileModels.map (·.2.1)) ++ "]\n" ++
+  for ((k, es), c) in C.chunks.zipIdx do
+    out := out ++ s!"def mac8C{c} : (Nat × Nat) × List Entry := (({k.1}, {k.2}), [\n" ++ ",\n".intercalate (es.map fun e =>
+      s!"  ⟨{nodeLean e.node}, {e.rank}, {hopLean e.hop}, {optLean e.next}⟩") ++ "])\n\n"
+  let gl (g : GateCert) := s!"⟨{g.x}, {g.y}, \"{g.pre}\", {g.isFlop}, [{", ".intercalate (g.ins.map optLean)}]⟩"
+  let fl (f : FlopCert) := s!"⟨{f.x}, {f.y}, \"{f.pre}\", {f.gate}, {f.en}, {f.sr}⟩"
+  out := out ++ "def mac8Chunks : List ((Nat × Nat) × List Entry) := [" ++
+    ", ".intercalate ((List.range C.chunks.length).map (s!"mac8C{·}")) ++ "]\n\n"
+  out := out ++ "def mac8CertGates : List GateCert := [\n" ++ ",\n".intercalate (C.gates.map (s!"  {gl ·}")) ++ "]\n\n"
+  out := out ++ "def mac8CertFlops : List FlopCert := [\n" ++ ",\n".intercalate (C.flops.map (s!"  {fl ·}")) ++ "]\n\n"
+  out := out ++ "def mac8Cert : Cert where\n  models := [" ++ ", ".intercalate (tileModels.map (·.2.1)) ++ "]\n" ++
     "  tiles := [" ++ ", ".intercalate (C.tiles.map fun ((x, y), i) => s!"(({x}, {y}), {i})") ++ "]\n" ++
-    s!"  gates := {names "mac8CertG" C.gates.length}\n  flops := {names "mac8CertF" C.flops.length}\n" ++
-    s!"  outs := {names "mac8CertO" C.outs.length}\n" ++
+    "  chunks := mac8Chunks\n  gates := mac8CertGates\n  flops := mac8CertFlops\n" ++
+    "  outs := [" ++ ", ".intercalate (C.outs.map fun (p, n, j) => s!"({p}, {nodeLean n}, {j})") ++ "]\n" ++
     "  pads := [" ++ ", ".intercalate (C.pads.map fun (k, n) => s!"({k}, {nodeLean n})") ++ "]\n\nend Obend.Hardware.Fabulous\n"
+  return out
+
+/-- Blocks of `w` covering `0..n-1`. -/
+def blocksOf (n w : Nat) : List (Nat × Nat) :=
+  (List.range ((n + w - 1) / w)).map fun c => (w * c, min w (n - w * c))
+
+/-- The text of `Mac8CertCheck.lean`: `mac8Cert_check` and the bitstream's required bits, each assembled from
+pieces small enough that every `decide` stays small (one per chunk, one per block). -/
+def checkLean (C : Cert) (nG nF nO : Nat) : String := Id.run do
+  let nC := C.chunks.length
+  let names (f : Nat → String) (n : Nat) := ", ".intercalate ((List.range n).map f)
+  let bl (n : Nat) := blocksOf n 16
+  let blLean (n : Nat) := "[" ++ ", ".intercalate ((bl n).map fun (a, l) => s!"({a}, {l})") ++ "]"
+  let bitP := "(fun r => binBits mac8BinRows mac8Bin r.1 r.2.1 r.2.2.1 == r.2.2.2)"
+  let mut out := "module\n/-\n# Obend.Hardware.Fabulous.Mac8CertCheck — `mac8Cert` checked, and the committed bitstream's bits\n\n" ++
+    "Generated by `obend fabric cert`; do not edit. Every `decide +kernel` here is one chunk of the table or one block of\n" ++
+    "gates, flops or outputs; `Cert.check_of`, `Cert.required_of` and `all_of_blocks` assemble them. Build on hbox only.\n-/\n" ++
+    "public import Obend.Hardware.Fabulous.Mac8Cert\npublic import Obend.Hardware.Fabulous.Mac8Bin\n" ++
+    "public import Obend.Hardware.Fabulous.Mac8Net\n@[expose] public section\n\nnamespace Obend.Hardware.Fabulous\n\n" ++
+    "set_option maxRecDepth 100000\n\n"
+  for c in List.range nC do
+    out := out ++ s!"theorem mac8C{c}_ok : mac8Cert.chunkOK mac8C{c} = true := by decide +kernel\n"
+    out := out ++ s!"theorem mac8C{c}_bits : ((mac8C{c}).2.flatMap mac8Cert.entryReqs).all {bitP} = true := by decide +kernel\n"
+  let blocks (tag pred : String) (n : Nat) : String := Id.run do
+    let mut o := ""
+    for ((a, l), i) in (bl n).zipIdx do
+      o := o ++ s!"theorem mac8{tag}{i} : (List.range' {a} {l}).all ({pred}) = true := by decide +kernel\n"
+    o := o ++ s!"theorem mac8{tag}_all : (List.range {n}).all ({pred}) = true :=\n  all_of_blocks (blocks := {blLean n}) (by decide +kernel)\n" ++
+      s!"    (by simp only [List.forall_mem_cons]; exact ⟨{names (s!"mac8{tag}{·}") (bl n).length}, fun _ h => by cases h⟩)\n\n"
+    return o
+  out := out ++ "\n" ++ blocks "G" "mac8Cert.gateAt mac8Net" nG ++ blocks "F" "mac8Cert.flopAt mac8Net" nF ++
+    blocks "O" "mac8Cert.outAt mac8Net" nO
+  let gReq := s!"fun k => (match mac8Net.gates[k]?, mac8Cert.gates[k]? with | some g, some gc => mac8Cert.cellReqs gc.x gc.y gc.pre g.init gc.isFlop | _, _ => []).all {bitP}"
+  let fReq := s!"fun k => (match mac8Net.flops[k]?, mac8Cert.flops[k]? with | some f, some fc => mac8Cert.rvReq fc.x fc.y fc.pre f.rv | _, _ => []).all {bitP}"
+  out := out ++ blocks "GB" gReq nG ++ blocks "FB" fReq nF
+  out := out ++ s!"theorem mac8_chunks_ok : ∀ ch ∈ mac8Chunks, mac8Cert.chunkOK ch = true := by\n" ++
+    s!"  simp only [mac8Chunks, List.forall_mem_cons]; exact ⟨{names (s!"mac8C{·}_ok") nC}, fun _ h => by cases h⟩\n\n"
+  out := out ++ s!"theorem mac8_chunks_bits : ∀ ch ∈ mac8Chunks, (ch.2.flatMap mac8Cert.entryReqs).all {bitP} = true := by\n" ++
+    s!"  simp only [mac8Chunks, List.forall_mem_cons]; exact ⟨{names (s!"mac8C{·}_bits") nC}, fun _ h => by cases h⟩\n\n"
+  out := out ++ s!"theorem mac8Cert_check : mac8Cert.check mac8Net = true :=\n  Cert.check_of mac8Cert mac8Net (by decide +kernel) (by decide +kernel) (by decide +kernel) mac8_chunks_ok\n" ++
+    "    (by decide +kernel) mac8G_all mac8F_all mac8O_all\n\n"
+  out := out ++ "/-- The committed bitstream is laid out as `binBits` reads it. -/\n" ++
+    "theorem mac8Bin_framed : binFramed mac8BinCols mac8BinRows mac8Bin mac8BinSize = true := by decide +kernel\n\n" ++
+    "/-- **The committed bitstream has every bit `mac8Cert` requires.** -/\n" ++
+    "theorem mac8_bin_required : ∀ r ∈ mac8Cert.required mac8Net, binBits mac8BinRows mac8Bin r.1 r.2.1 r.2.2.1 = r.2.2.2 :=\n" ++
+    "  Cert.required_of mac8Cert mac8Net _ mac8_chunks_bits mac8GB_all mac8FB_all\n\nend Obend.Hardware.Fabulous\n"
   return out
 
 end Obend.Hardware.Fabulous
