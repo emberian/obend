@@ -382,17 +382,33 @@ def judgeNew (w : World) (name digest : String) (hops : List Grant) (a : Assignm
         .ok ({ w with store := settle H s, receipts := w.receipts ++ [r] }, .judged s ad t r (w.receipts.length + 1),
           ⟨"", name, ad.holder, Transport.fillPages f a, sups, w.receipts.length + 1⟩)
 
+/-- A landing of ours come back: the other replica holds it as merged in from elsewhere (`receipt` 0)
+and its intent landed here. -/
+def returned (w : World) (l : Landing) : Bool :=
+  l.receipt == 0 && (Transport.duplicateOf w.landed l.intent).isSome
+
 /-- What a merge does with the other replica's landings (those this replica does not hold already):
 each whose intent landed here is a duplicate; each none of whose grants stands after the merge (revocation wins,
 `Obend.Vault.Transport.merge_revocation_wins`) is refused; the rest are admitted. -/
 def sortLandings (w : World) (G : Grants) (theirs0 : List Landing) : List Landing × List Landing × List Landing :=
-  -- a landing both replicas hold (from before they parted, or merged since) is no act of the other's
-  let theirs := theirs0.filter fun l => !w.landed.contains l
+  -- a landing both replicas hold (from before they parted, or merged since) is no act of the other's;
+  -- nor is a landing of ours that the other pulled in and brings back (2026-11-06: a fork that merged
+  -- the tip after its taker's acceptance landed there, then merged back, had every later write to the
+  -- landing's pages, its spent runs among them, dropped as "not landed twice")
+  let theirs := theirs0.filter fun l => !w.landed.contains l && !returned w l
   let fresh := theirs.filter fun l => (Transport.duplicateOf w.landed l.intent).isNone
   let dups := theirs.filter fun l => (Transport.duplicateOf w.landed l.intent).isSome
   let refused := fresh.filter fun l => !(l.supports.any fun id => G.live.any (·.id == id))
   let admitted := fresh.filter fun l => l.supports.any fun id => G.live.any (·.id == id)
   (admitted, refused, dups)
+
+/-- **A landing of ours that comes back is not the other's**: it is neither admitted, refused nor held
+as a duplicate, so the merge skips none of its pages and the other replica's later writes to them
+come in. -/
+theorem sortLandings_returned (w : World) (G : Grants) (theirs : List Landing) (l : Landing)
+    (h : returned w l = true) :
+    l ∉ (sortLandings w G theirs).1 ∧ l ∉ (sortLandings w G theirs).2.1 ∧ l ∉ (sortLandings w G theirs).2.2 := by
+  refine ⟨?_, ?_, ?_⟩ <;> simp [sortLandings, h]
 
 /-- The merge of another replica's store (with its grants and landings, when the record carries them). -/
 def mergeStep (w : World) (label : String) (other : Store) (skipLedger : Bool) (og : Option Grants)

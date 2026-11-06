@@ -817,6 +817,21 @@ def Prepared.change (pr : Prepared) : Change :=
   ⟨pr.p.history ++ [pr.G'], render pr.G' pr.p.name ({ pr.p with authors := pr.authors }).who, pr.authors,
     none, pr.kinds.pin⟩
 
+/-- The occasion of a write that adopts new laws (its own law lines changed, or its kind's): an
+ADOPTION judges the laws at the new state alone (`Occ.old .adopt`), which is right only when the write
+says nothing new but its laws; a write that also changes a field of its frontmatter is judged as the
+write it is, from its old state, under the new laws (2026-11-06: the first write after a kind gained
+`monotone(spent)` lowered `spent` and was admitted, the law holding vacuously). -/
+def adoptionOccasion (old new : String) : Occ :=
+  if scalarFields old == scalarFields new && labelFields old == labelFields new then Occ.adopt else Occ.write
+
+theorem adoptionOccasion_adopt {old new : String} (h : adoptionOccasion old new = Occ.adopt) :
+    scalarFields old = scalarFields new ∧ labelFields old = labelFields new := by
+  unfold adoptionOccasion at h
+  split at h
+  · rename_i hc; simp only [Bool.and_eq_true, beq_iff_eq] at hc; exact hc
+  · cases h
+
 /-- Prepare the write of `G'` to `p` (see `commit`): the refusals that come before the laws are
 asked (a change of a law line or of the kind by an actor without `relaw`, a stale kind), the laws,
 the states and the request. -/
@@ -835,7 +850,7 @@ def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId
       if lawsKept (settled G) (settled G') && moved.isEmpty then
         pure (Occ.write, newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
       else if who.may "relaw" p.name then
-        pure (Occ.adopt, newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
+        pure (adoptionOccasion (settled G) (settled G'), newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
       else if lawsKept (settled G) (settled G') then throw (staleText p.name who.name moved)
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
