@@ -5,6 +5,11 @@
                                                       drex quantum silicon-elab mac2
                                                       ice40-mac8 tcad stator mill golden-silicon-kernel
                                                       width-probe
+    obend-emit-sv square-<graph> [--out FILE] the RTL lowering of a graph of `Obend.Hardware.SquareGraphs`
+                                             (`hardware/gpu/square/`); with --tb the Verilator harness
+                                             (`emitVerilatorHarnessCpp`) over the graph's vectors against
+                                             the HDL model (`evalModuleOutputs`); with --expected the HDL
+                                             model's `expected.tsv`, to compare with the array model's
     obend-emit-sv <target> --lec [--out FILE]  the Lean half of the LEC of an `RtlModule` target
                                              (`Obend.Hardware.YosysLec.emitYosysLecSmt2`), appended to
                                              Yosys `write_smt2` of the emitted .sv; `unsat` = equivalent
@@ -25,6 +30,7 @@ import Obend.Hardware.Synth
 import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
 import Obend.Hardware.YosysLec
+import Obend.Hardware.SquareGraphs
 import Obend.Apps.ObendRisc
 import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
@@ -33,6 +39,7 @@ import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SiliconKernelVerilator
 
 open Obend.Hardware.HDL
+open Obend.Hardware.SquareGraphs
 
 /-- Provenance header + emitted module text. The header names the Lean definition and this tool. -/
 def emitWithHeader (qualified : String) (m : RtlModule) : Except String String :=
@@ -105,7 +112,20 @@ def targets : List (String × String) :=
   , ("lut4ab-sm", "hardware/fabulous/tile/LUT4AB_switch_matrix_lec.sv")
   , ("wio-sm", "hardware/fabulous/tile/W_IO_switch_matrix_lec.sv")
   , ("lut4c", "hardware/fabulous/tile/LUT4c_frame_config_dffesr.sv")
-  , ("mux8lut", "hardware/fabulous/tile/MUX8LUT_frame_config_mux.sv") ]
+  , ("mux8lut", "hardware/fabulous/tile/MUX8LUT_frame_config_mux.sv") ] ++
+  squareGraphs.map fun sq => (s!"square-{sq.name}", s!"hardware/gpu/square/sv/{svName sq.name}.sv")
+
+/-- `square-<graph>`: a graph of `squareGraphs`. The theorems' hypotheses (`ArrayGraph.wf` and
+`SquareGraph.hyp`) are checked here, so a module this prints is one `rtl_eq_gpu`/`rtl_eq_gpu_array` is about. -/
+def squareTarget (t : String) : Option (Except String SquareGraph) :=
+  if t.startsWith "square-" then
+    match squareGraphs.find? (fun sq => s!"square-{sq.name}" == t) with
+    | some sq =>
+      if !sq.graph.wf then some (.error s!"{t}: the graph fails ArrayGraph.wf")
+      else if !sq.hyp then some (.error s!"{t}: the square theorem's hypothesis fails (a wire defined twice, or an edge reading its own destination)")
+      else some (.ok sq)
+    | none => some (.error s!"unknown square graph {t}; `obend-emit-sv list`")
+  else none
 
 /-- The targets that are one `RtlModule` printed by `emitModuleSV`: the qualified name of the Lean
 definition and the module. `render` prints these with `emitWithHeader`; `--lec` prints their LEC half. -/
@@ -125,11 +145,42 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "wio-sm" => some (.ok ("Obend.Hardware.Fabulous.smModule wioSwitchMatrix", Obend.Hardware.Fabulous.smModule Obend.Hardware.Fabulous.wioSwitchMatrix))
   | "lut4c"   => some (.ok ("Obend.Hardware.Fabulous.lut4cModule", Obend.Hardware.Fabulous.lut4cModule))
   | "mux8lut" => some (.ok ("Obend.Hardware.Fabulous.mux8lutModule", Obend.Hardware.Fabulous.mux8lutModule))
-  | _ => none
+  | other =>
+    match squareTarget other with
+    | some (.ok sq) => some (.ok (sq.lean, sq.rtl))
+    | some (.error err) => some (.error err)
+    | none => none
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
-  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"]
+  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"] ++
+  squareGraphs.map fun sq => s!"square-{sq.name}"
+
+/-- `--tb`: the Verilator harness of a square target: every vector of the graph on the module's input
+ports, each output port against `evalModuleOutputs` (the HDL semantics, the side `rtl_eq_gpu` is about).
+One cycle per vector: the module is combinational. -/
+def renderSquareTb (target : String) : Except String String :=
+  match squareTarget target with
+  | none => .error s!"--tb: {target} is not a square target"
+  | some (.error err) => .error err
+  | some (.ok sq) =>
+    if !checkRtlModuleW sq.rtl then .error s!"{sq.lean} fails checkRtlModuleW; not emitted" else
+    let vecs : List Obend.Hardware.VerilateRunner.DifferentialVector :=
+      (graphVectors sq.graph sq.kind).zipIdx.map fun (vals, v) =>
+        let ins := squareInputs vals
+        { vecIdx := v
+        , portInputs := sq.rtl.inputNames.zipIdx.map fun (n, p) => (n, ins p)
+        , expectedOutputs := evalModuleOutputs sq.rtl ins (fun _ => 0#64)
+        , machineAgreed := true }
+    .ok (s!"// Generated by obend-emit-sv {target} --tb from {sq.lean}: Verilator against evalModuleOutputs\n" ++
+         Obend.Hardware.VerilateRunner.emitVerilatorHarnessCpp sq.rtl vecs 1 none)
+
+/-- `--expected`: the HDL model's `expected.tsv` of a square target (`squareExpectedTsv`). -/
+def renderSquareExpected (target : String) : Except String String :=
+  match squareTarget target with
+  | none => .error s!"--expected: {target} is not a square target"
+  | some (.error err) => .error err
+  | some (.ok sq) => .ok (squareExpectedTsv sq)
 
 /-- `--lec`: the Lean half of the LEC of a module target, behind the same emission gate as its `.sv`
 (`checkRtlModuleW` includes `checkWidths`, which implies the `moduleFaithful` hypothesis of
@@ -172,7 +223,11 @@ def main (args : List String) : IO UInt32 := do
     return 0
   | target :: rest =>
     let outPath? := match rest.dropWhile (· != "--out") with | "--out" :: p :: _ => some p | _ => none
-    let text? := if rest.contains "--lec" then renderLec target else render target
+    let text? :=
+      if rest.contains "--lec" then renderLec target
+      else if rest.contains "--tb" then renderSquareTb target
+      else if rest.contains "--expected" then renderSquareExpected target
+      else render target
     match text? with
     | .error e => IO.eprintln s!"refused: {e}"; return 3
     | .ok text =>

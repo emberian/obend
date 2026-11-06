@@ -239,6 +239,62 @@ command buffer where RADV and Metal do not (the runner submits in chunks of 128)
 evaluator above.
 
 Not here: a semantics of the ISA (rung G2 reads the dump against AMD's machine-readable RDNA2 spec), the
-memory model (G4), resource grading (G5), a layering better than the scalar module's greedy one (the
-64-point NTT lowers to 1670 dispatches where a few dozen would do), and the RTL path of the same array
-graphs (the commuting square with `compileHypergraphToRtl` is the next rung).
+memory model (G4), resource grading (G5), and a layering better than the scalar module's greedy one (the
+64-point NTT lowers to 1670 dispatches where a few dozen would do).
+
+### `gpu/square/`: the same graph through two devices (rung G1s)
+
+`Obend.Hardware.Square` closes the square the council asked for honestly: one open hypergraph lowered to
+the GPU program above and to a combinational `RtlModule`, each leg run outside Lean on the same vectors,
+and one theorem that the two lowerings denote one evaluation. The graphs are `Obend.Hardware.SquareGraphs`,
+the one list `obend-emit-gpu` and `obend-emit-sv`'s `square-<graph>` targets share (the fixtures, the
+Goldilocks network, the NTT, the vectors and the `expected.tsv` printer moved there from the GPU emitter).
+
+The RTL side. `compileHypergraphToRtl` (`Obend.Hardware.OpenHypergraph`) now defines module wire `i` as
+the `i`-th definition, boundary inputs then destinations in edge order, and reads sources through that
+table (`wireExprOf`): the adjoint and optic graphs number their wires out of topological order, and
+`checkWireTableDAG` asks for the table to be indexed in order. Its whole-module theorem,
+`compileHypergraphToRtl_sound`, says for every graph that defines each wire once (`(wireDefs g).Nodup`)
+and every input, `evalModuleOutputs` of the module is `evalHypergraphCombBv`, the single combinational
+pass at 64 bits, from the environment the input ports induce (`inputEnv`); `compileHypergraphToRtl_sound_ofInt`
+is the same over `Int` for graphs without `mux`. The three operation lowerings (input port, wire,
+pipeline stage) are one function, `compileHypergraphOpExpr`, with one theorem. `compileArrayGraphToRtl`
+(`Obend.Hardware.Square`) unrolls an `ArrayGraph` into scalar wires: element `e` of wire `w` is RTL wire
+`base w + e`, the GPU program's flat buffer address, so a map is one `RtlExpr` per element
+(`elemOpToRtl`, whose shifts are exact on every amount), a gather is wiring, a concatenation is renaming
+and a constant is constants; `compileArrayGraphToRtl_sound` is its whole module, for a graph that
+passes `ArrayGraph.wf` and `edgesAcyclic` (no edge reads its own destination). The pipelined module has
+its whole-module theorem too, `compileHypergraphToRtlPipelined_sound`: one clock edge per wavefront
+stage with the inputs held shows the layered evaluation, from any initial register state.
+
+The square. `rtl_eq_gpu`: on every input, `runProgram (lowerHypergraphToGpu g)` from the environment
+the RTL ports induce is the RTL module's output ports, wire by wire as singletons; proved by joining
+`compileHypergraphToRtl_sound` with `lowerHypergraphToGpu_sound` through the layering theorem read on
+the one-element instance (`evalLayeredStagesSyncBv_eq_comb`). `rtl_eq_gpu_array` restates it over array
+graphs with `compileArrayGraphToRtl_sound` and `lowerArrayToGpu_sound` on the same flat input, and
+`pipelined_eq_comb` puts the pipelined module at a third corner. The emitter decides every hypothesis
+before it writes a `square-<graph>` module (`SquareGraph.hyp`).
+
+The gate, `verify_square.sh`, per graph: the committed `sv/<top>.sv` regenerates byte for byte;
+`obend-emit-sv square-<graph> --expected`, the HDL model's `expected.tsv` from `evalModuleOutputs`, equals
+`../graphs/<graph>/expected.tsv`, the array model's, byte for byte; `hardware/lec/lec.sh` (the LEC of
+Yosys's reading against Lean's model, its planted bit flip, EQY against the synthesized netlist for the
+graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --tb`
+(`emitVerilatorHarnessCpp`, the one harness `obend verilate` uses, over the graph's vectors against
+`evalModuleOutputs`) reports no mismatch on the committed `.sv`; `obend-gpu-run` agrees with
+`expected.tsv` on the card; and a swapped operator in a copy of the `.sv` (`+` to `-`, else `*` to `+`)
+makes Verilator report mismatches and the LEC answer sat. Three parties agree on every vector,
+Verilator, the card and the model, and the theorem says the two models are one. It runs on the Mac
+(Verilator, Yosys, EQY, z3 and Metal are there; hbox has the card and no Verilator or Yosys). The
+first run of the tooth found the vectors thin: `muxchain`'s only binary operator reaches an output
+through a test against zero, and no vector had a zero operand, so Verilator could not see the swap
+that the LEC sees on every input. The scalar graphs' vectors now include four one-hot ones (one input
+`7`, the rest `0`); the GPU gate's expected values moved with them.
+
+Lengths. The graphs are the nine scalar ones, the field multiply at length 4 and the 16-point NTT
+(`sq_ntt_16`: 3801 lines of SystemVerilog, 16 input and 16 output ports). Verilator takes the NTT in a
+few minutes of compilation; the LEC decides every module bit-precisely or with multiplication
+uninterpreted within its time limit. EQY, SAT against the gate-level netlist, terminates on `tree512`
+(511 adders, no multiply) and on nothing with a 64-bit multiply, as `hardware/sim`'s `mac2` already
+showed, so the field graphs run the LEC only; `glmul-256`, `ntt-64` and `mac-reverse-1000` are not in
+the square (tens of thousands of wires; Verilator would take them, the LEC would not).
