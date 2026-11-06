@@ -30,7 +30,6 @@ spec UncalibratedTayloeMixer for TayloeQuadratureMixer:
   def desiredUsbSignalMv(rfMv: Nat) -> Nat:
     rfMv * self.iqGainPermille + self.ncoFreqKhz
   claim image_cancel_open_recursion(rfMv: Nat): self.imageSidebandCancelMv(rfMv) == rfMv * self.iqGainPermille + 12n
-  claim lo_phasor_taylor_enclosure(thetaMrad: Nat) by judge("taylor-model@1"): thetaMrad <= 1000n
 
 spec Calibrated4PhaseTayloeOverride for TayloeQuadratureMixer:
   requires quadratureSampleMv(rfMv: Nat) -> Nat

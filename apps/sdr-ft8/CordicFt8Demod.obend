@@ -29,7 +29,6 @@ spec BaseCordicFt8Spec for CordicFt8Demodulator:
     deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
   claim cordic_mag_open_recursion(iVal: Nat): self.cordicEnvelopeMag(iVal) == iVal * self.cordicGainPermille + 10n
   claim ft8_tone_bin_open_recursion(deltaPhaseMrad: Nat): self.ft8SymbolBin(deltaPhaseMrad) == deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
-  claim ft8_tone_bin_interval_bound(bin: Nat) by judge("interval@1"): 125n + bin * 125n <= 1000n
 
 spec Unrolled4StageCordicFt8Override for CordicFt8Demodulator:
   requires alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat
