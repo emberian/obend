@@ -420,14 +420,14 @@ def mergeStep (w : World) (label : String) (other : Store) (skipLedger : Bool) (
     (theirs : List Landing) : Except String (World × Outcome) :=
   match og, theirs with
   | none, _ =>
-      let (s, notes) := Merge.mergeVault w.store other label
+      let (s, notes) := Merge.mergeVault H w.store other label
         (skip := if skipLedger then Obend.Ledger.Cli.ledgerOwned else fun _ => false)
       .ok ({ w with store := settle H s }, .merged s notes)
   | some og, theirs =>
       let G := w.grants.merge og
       let (admitted, refused, dups) := sortLandings w G theirs
       let held := (refused ++ dups).flatMap (·.pages)
-      let (s, notes) := Merge.mergeVault w.store other label
+      let (s, notes) := Merge.mergeVault H w.store other label
         (skip := fun n => (skipLedger && Obend.Ledger.Cli.ledgerOwned n) || held.contains n)
       let said := refused.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++
           l.form ++ " (intent " ++ l.intent ++ ", by " ++ l.holder ++ ") rested on " ++ ", ".intercalate l.supports ++
@@ -624,6 +624,11 @@ def eventText : Obend.Reasons.Event → String
   | .defeat d => "defeat of " ++ d.target ++ " by " ++ d.by'
   | .propose a => "proposal " ++ a.name
 
+/-- A replica's bookkeeping of what another has seen (`behind-LABEL`, `stale-LABEL`): its own, never
+joined elsewhere, and no part of what an explanation says (an explanation that went out and came back
+with another replica's flag on it is the same explanation). -/
+def bookkeeping (a : String) : Bool := a.startsWith "behind-" || a.startsWith "stale-"
+
 /-- **A fork's reasons come back with it**: what the other replica observed, assumed, explained,
 defeated and proposed that this one does not hold joins this one's reasons, each event stepped here,
 so the judgment is this vault's over the union (`Obend.Reasons.State.step`: consistent after each);
@@ -642,18 +647,29 @@ def joinReasons (label : String) (r o : Obend.Reasons.State) (behind : List (Str
       | .error _ => (r, [])
     else if behind.isEmpty && r.base.held.contains flag then
       match r.step (.withdraw flag) with
-      | .ok st => (st, [flag ++ ": withdrawn, " ++ label ++ " has seen what moved here"])
+      | .ok st =>
+        -- what the other explained before it saw what moved here does not hold again now that it has:
+        -- each of its explanations joined here in an earlier merge (they carry the flag) is defeated by
+        -- `stale-LABEL`, held from now on; what it explains anew joins as any explanation does
+        let stale := "stale-" ++ label
+        let olds := (st.base.explanations.filter fun e => e.neg.contains flag &&
+          !st.base.defeaters.contains ⟨e.name, stale⟩).map (·.name)
+        if olds.isEmpty then (st, [flag ++ ": withdrawn, " ++ label ++ " has seen what moved here"]) else
+        let st1 := if st.base.held.contains stale then st else (st.step (.assume stale)).toOption.getD st
+        let st2 := olds.foldl (fun acc n => (acc.step (.defeat ⟨n, stale⟩)).toOption.getD acc) st1
+        (st2, [flag ++ ": withdrawn, " ++ label ++ " has seen what moved here; what it explained before ("
+          ++ ", ".intercalate olds ++ ") is defeated by " ++ stale ++ ": explain it anew to count"])
       | .error _ => (r, [])
     else (r, [])
   let mine := r.base
   let clash := (b.observations.filter fun x => mine.observations.any fun y => y.name == x.name && y != x).map
       (fun x => label ++ "'s observation " ++ x.name ++ ": not joined: observed here otherwise") ++
     (b.explanations.filter fun x => mine.explanations.any fun y =>
-        y.name == x.name && { y with neg := y.neg.filter (· != flag) } != { x with neg := x.neg.filter (· != flag) }).map
+        y.name == x.name && { y with neg := y.neg.filter (!bookkeeping ·) } != { x with neg := x.neg.filter (!bookkeeping ·) }).map
       (fun x => label ++ "'s explanation " ++ x.name ++ ": not joined: a different explanation has that name here")
   let evs : List Obend.Reasons.Event :=
     (b.observations.filter fun x => !mine.observations.any (·.name == x.name)).map .observe ++
-    (b.held.filter fun a => !mine.held.contains a).map .assume ++
+    (b.held.filter fun a => !mine.held.contains a && !bookkeeping a).map .assume ++
     (b.explanations.filter fun e => !mine.explanations.any (·.name == e.name)).map
       (fun e => .explain { e with neg := e.neg ++ [flag] }) ++
     (b.defeaters.filter fun d => !mine.defeaters.contains d).map .defeat ++
@@ -1152,6 +1168,14 @@ def decodeTurn (b : Bytes) : Except String Turn := do
 /-- **The world's canonical bytes**, whose digest a receipt names as its commitment, and which a
 checkpoint holds. -/
 def encodeWorld (w : World) : Bytes := textBytes (worldJson w).compress
+
+/-- A world in the encoding before histories were written as growth: what a record written by an
+earlier binary commits to (`fullHistories`). -/
+def encodeWorldFull (w : World) : Bytes :=
+  let j := worldJson w
+  textBytes ((match j.getObjVal? "store" with
+    | .ok st => j.setObjVal! "store" (fullHistories st)
+    | .error _ => j).compress)
 
 def decodeWorld (b : Bytes) : Option World :=
   (bytesText b).bind fun s => (Json.parse s >>= worldOf).toOption

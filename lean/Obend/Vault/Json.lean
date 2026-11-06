@@ -142,8 +142,63 @@ def pinOf (j : Json) : Except String Obend.Kind.KindPin := do
   | f :: rest => return ⟨f.name, f.version, rest⟩
   | [] => throw "a kind pin names its kind"
 
+/-- A page's history, written as its versions' growth: each version that extends the one before it
+(its atoms, tombstones and edges the earlier ones and then more, as every authored operation and every
+merge leaves it) is written as what it adds (`{"more": …}`); any other in full. A history kept as
+whole graphs is the sum of its versions' sizes, quadratic in a page's versions (2026-11-06: a status
+of ten pages of 220 versions read and wrote a 17 MB checkpoint); written as growth it is its last
+version's size. -/
+def historyJson : List Graph → List Json
+  | [] => []
+  | G :: rest => graphJson G :: go G rest
+where
+  go (prev : Graph) : List Graph → List Json
+    | [] => []
+    | G :: rest =>
+      let grown := prev.atoms.isPrefixOf G.atoms && prev.dead.isPrefixOf G.dead && prev.edges.isPrefixOf G.edges
+      let more : Graph := ⟨G.atoms.drop prev.atoms.length, G.dead.drop prev.dead.length, G.edges.drop prev.edges.length⟩
+      (if grown then Json.mkObj [("more", graphJson more)] else graphJson G) :: go G rest
+
+/-- A history as `historyJson` writes it (or every version in full, as earlier logs hold it). -/
+def historyOf (js : List Json) : Except String (List Graph) := do
+  let (_, out) ← js.foldlM (fun (acc : Option Graph × Array Graph) j => do
+    match j.getObjVal? "more", acc.1 with
+    | .ok m, some prev =>
+      let d ← graphOf m
+      let G : Graph := ⟨prev.atoms ++ d.atoms, prev.dead ++ d.dead, prev.edges ++ d.edges⟩
+      pure (some G, acc.2.push G)
+    | .ok _, none => throw "a history begins with a whole version"
+    | .error _, _ =>
+      let G ← graphOf j
+      pure (some G, acc.2.push G)) ((none : Option Graph), #[])
+  return out.toList
+
+/-- A page's JSON with its history in full: each `{"more": …}` written as the whole version it grows
+to, as histories were written before `historyJson` (a world those binaries committed to is committed
+to in this encoding). -/
+def fullHistoryPage (j : Json) : Json :=
+  match j.getObjValAs? (Array Json) "history" with
+  | .error _ => j
+  | .ok hs =>
+    let arr (g : Json) (k : String) : Array Json := (g.getObjValAs? (Array Json) k).toOption.getD #[]
+    let (_, out) := hs.foldl (fun (acc : Option Json × Array Json) h =>
+      match h.getObjVal? "more", acc.1 with
+      | .ok m, some prev =>
+        let g := Json.mkObj [("atoms", Json.arr (arr prev "atoms" ++ arr m "atoms")),
+          ("dead", Json.arr (arr prev "dead" ++ arr m "dead")), ("edges", Json.arr (arr prev "edges" ++ arr m "edges"))]
+        (some g, acc.2.push g)
+      | _, _ => (some h, acc.2.push h)) ((none : Option Json), #[])
+    j.setObjVal! "history" (Json.arr out)
+
+/-- A store's JSON with every history in full (`fullHistoryPage`). -/
+def fullHistories (j : Json) : Json :=
+  let pages (k : String) (j : Json) : Json := match j.getObjValAs? (Array Json) k with
+    | .ok ps => j.setObjVal! k (Json.arr (ps.map fullHistoryPage))
+    | .error _ => j
+  pages "tombs" (pages "pages" j)
+
 def pageJson (p : Page) : Json :=
-  Json.mkObj ([("name", Json.str p.name), ("id", toJson p.id), ("history", Json.arr (p.history.map graphJson).toArray),
+  Json.mkObj ([("name", Json.str p.name), ("id", toJson p.id), ("history", Json.arr (historyJson p.history).toArray),
     ("seen", match p.seen with | some t => Json.str t | none => Json.null),
     ("authors", Json.arr (p.authors.map fun (a, w) => Json.arr #[toJson a, Json.str w]).toArray),
     ("note", match p.note with | some t => Json.str t | none => Json.null)] ++
@@ -157,7 +212,7 @@ def optStr (j : Json) (k : String) : Option String :=
 def pageOf (j : Json) : Except String Page := do
   let name ← j.getObjValAs? String "name"
   let id ← j.getObjValAs? Nat "id"
-  let history ← (← j.getObjValAs? (Array Json) "history").toList.mapM graphOf
+  let history ← historyOf (← j.getObjValAs? (Array Json) "history").toList
   let authors ← (← j.getObjValAs? (Array Json) "authors").toList.mapM fun e => do
     let a ← e.getArrVal? 0 >>= fromJson?
     let w ← e.getArrVal? 1 >>= fromJson?
