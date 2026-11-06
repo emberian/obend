@@ -9,7 +9,9 @@
 #   [5/6] FABulous's fabric RTL, configured with the bitstream through its self-write port, simulated
 #         by Icarus, shows mac_out as `moduleRun iceStickMac8` computes it on every cycle after reset
 #   [6/6] the LUT4AB tile model is read from the regenerated RTL byte for byte and LEC'd against it
-#         (lec_tile.sh), with a planted change to the switch-matrix table refused
+#         (lec_tile.sh), with a planted change to the switch-matrix table refused; every switch-matrix
+#         pip and BEL feature of bitStreamSpec.csv agrees with the model (tile-agree, the hypothesis
+#         of pip_sound), and the planted change is refused there too
 # Needs: lake build obend (lean/), FABulous at FAB_HOME, oss-cad-suite at OSS_CAD_SUITE.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -72,5 +74,10 @@ cmp "${W}/LUT4ABSwitchMatrix.lean" "${ROOT}/lean/Obend/Hardware/Fabulous/LUT4ABS
 cmp "${W}/LUT4AB_switch_matrix_lec.v" "${HERE}/tile/LUT4AB_switch_matrix_lec.v"
 echo "LUT4ABSwitchMatrix.lean and the LEC harness identical"
 "${HERE}/lec_tile.sh" "${P}"
+"${OBEND}" fabric tile-agree --project "${P}"
+if "${OBEND}" fabric tile-agree --project "${P}" --mutant 2> "${W}/agree_mutant.txt"; then
+  echo "[FAIL] tile-agree accepted the mutant switch matrix"; exit 1
+fi
+echo "tile-agree against the mutant switch matrix: $(tail -1 "${W}/agree_mutant.txt"); $(head -1 "${W}/agree_mutant.txt" | sed 's/^ *//')"
 
 echo "[PASS] hardware/fabulous"

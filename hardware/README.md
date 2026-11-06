@@ -39,6 +39,12 @@ What is here, and what is not.
   same Lean half against Yosys's reading of FABulous's own tile Verilog (z3 `unsat`), and refuses a model
   with one switch-matrix table entry changed (`sat`). `verify_fabric.sh` also refuses a bitstream with a
   switch-matrix select bit of a used route flipped.
+  `obend fabric tile-agree` checks every switch-matrix pip of every LUT4AB tile in `bitStreamSpec.csv`
+  (99,675) against the model (`pipAgrees`) and every LUT4/MUX8LUT feature against the `ConfigBits`
+  `LUT4AB.v` gives it (11,550); `Obend.Hardware.Fabulous.pip_sound` says an agreeing pip means the
+  model's output is the pip's source whenever the decoder says so. Not yet proved: that
+  `SmPrim.eval` is the semantics of `smModule` (the LEC'd module), and the grid-level `readback_sound`
+  composing tiles; the configuration latches are taken as holding the frame bits.
   Not modelled, and refused by name if a bitstream uses them: the carry chain, `MUX8LUT`, the IO's
   registered output, block RAM, DSP and register-file tiles. The link from `.bin` to `mac8Net` is
   `obend fabric check` (compiled evaluation of the decoder), not a kernel proof.

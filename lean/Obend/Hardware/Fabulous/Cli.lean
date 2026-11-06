@@ -193,6 +193,54 @@ def cmdTileMutant (args : List String) : IO UInt32 := do
   IO.println s!"mutant switch matrix: {what}"
   return 0
 
+/-- `obend fabric tile-agree --project DIR`: every switch-matrix pip of every `LUT4AB` tile in the
+project's `bitStreamSpec.csv` / `pips.txt` against `lut4abSwitchMatrix` (`pipAgrees`, the hypothesis
+of `pip_sound`), and every LUT4 cell and MUX8LUT feature against the `ConfigBits` slice `LUT4AB.v`
+gives that BEL, through `LUT4AB_ConfigMem.v`'s index-to-position map. -/
+def cmdTileAgree (args : List String) : IO UInt32 := do
+  let dir ← need "--project" args
+  let fab ← loadProject dir
+  let posMap := parseConfigMap (← IO.FS.readFile s!"{dir}/Tile/LUT4AB/LUT4AB_ConfigMem.v")
+  let posOf (i : Nat) : Nat := posMap.getD i 100000
+  -- `--mutant`: against `smMutant lut4abSwitchMatrix`, which must be refused
+  let sm := if args.contains "--mutant" then (smMutant lut4abSwitchMatrix).1 else lut4abSwitchMatrix
+  let off := 154
+  let prims : Std.HashMap String SmPrim := sm.prims.foldl (fun m (o, p) => m.insert o p) {}
+  let tiles := fab.bels.toList.filterMap fun (t, bs) => if bs.any (·.2.1 == lutType) then some t else none
+  let mut pips := 0
+  let mut feats := 0
+  let mut bad : Array String := #[]
+  for t in tiles do
+    for (o, p) in sm.prims do
+      -- distinct sources carry distinct names (the `hNames` hypothesis of `pip_sound`)
+      let names := p.ins.map (·.name)
+      if p.ins.any (fun a => p.ins.any fun b => a.name == b.name && a != b) then bad := bad.push s!"{t}.{o}: two inputs share a name"
+      let _ := names
+      for (st, sw, f) in fab.into.getD (t ++ "." ++ o) #[] do
+        if st != t then continue
+        let pat := fab.spec.getD (st ++ "." ++ f) []
+        pips := pips + 1
+        if !pipAgrees p posOf off sw pat then bad := bad.push s!"{t}: pip {f} disagrees with the switch-matrix model"
+    let _ := prims
+    for (l, k) in ["A", "B", "C", "D", "E", "F", "G", "H"].zipIdx do
+      let feat (name : String) (b : Nat) : List (String × Nat) := [(name, 19 * k + b)]
+      let fs := (List.range 16).flatMap (fun b => feat (if b == 0 then l ++ ".INIT" else s!"{l}.INIT[{b}]") b) ++
+        feat (l ++ ".FF") 16 ++ feat (l ++ ".I0mux") 17 ++ feat (l ++ ".SET_NORESET") 18
+      for (name, idx) in fs do
+        feats := feats + 1
+        if fab.spec.get? (t ++ "." ++ name) != some [(posOf idx, true)] then
+          bad := bad.push s!"{t}: feature {name} is not ConfigBits[{idx}] (position {posOf idx})"
+    for (name, idx) in [("I.c0", 152), ("I.c1", 153)] do
+      feats := feats + 1
+      if fab.spec.get? (t ++ "." ++ name) != some [(posOf idx, true)] then
+        bad := bad.push s!"{t}: feature {name} is not ConfigBits[{idx}]"
+  if bad.isEmpty then
+    IO.println s!"tile-agree: {tiles.length} LUT4AB tiles, {pips} switch-matrix pips agree with lut4abSwitchMatrix (pipAgrees), {feats} BEL features are the ConfigBits LUT4AB.v gives them"
+    return 0
+  for b in bad.toList.take 20 do IO.eprintln s!"  {b}"
+  IO.eprintln s!"refused: {bad.size} disagreements"
+  return 1
+
 def cmdFabric : List String → IO UInt32
   | "wrapper" :: args => do
     IO.FS.writeFile (← need "--out" args) (topWrapper iceStickMac8 mac8Pins); return 0
@@ -202,6 +250,7 @@ def cmdFabric : List String → IO UInt32
   | "vectors" :: args => cmdVectors args
   | "tile" :: args => cmdTile args
   | "tile-mutant" :: args => cmdTileMutant args
-  | _ => do IO.eprintln "usage: obend fabric (wrapper|extract|check|flip|vectors|tile|tile-mutant) ..."; return 2
+  | "tile-agree" :: args => cmdTileAgree args
+  | _ => do IO.eprintln "usage: obend fabric (wrapper|extract|check|flip|vectors|tile|tile-mutant|tile-agree) ..."; return 2
 
 end Obend.Hardware.Fabulous

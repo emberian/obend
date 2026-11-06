@@ -284,4 +284,96 @@ module {sm.name}_lec (
 endmodule
 "
 
+/-! ## The decoder's routing table against the switch-matrix model
+
+The decoder (`Obend.Hardware.Fabulous.Bitstream.driver`) reads a switch-matrix pip `src.dst` of
+`bitStreamSpec.csv` as: when the tile's configuration bits match the pip's pattern, `dst` carries `src`.
+`pipAgrees` checks one pip against the model, through `posOf` (the tile's `ConfigBits` index ↦ frame
+position, `LUT4AB_ConfigMem.v`) and `off` (where the switch matrix's `ConfigBits` start in the tile's,
+`LUT4AB.v`); `pip_sound` says that under it the model's `dst` is `src` whenever the decoder says so. -/
+
+/-- The name a pip gives a multiplexer input (`GND0`, `VCC0` for the constants). -/
+def SmSrc.name : SmSrc → String
+  | .port n => n
+  | .const false => "GND0"
+  | .const true => "VCC0"
+
+/-- The select value a pattern sets, read at the frame positions of select bits `base + c`. -/
+def patSel (pat : List (Nat × Bool)) (posOf : Nat → Nat) (off base w : Nat) : Nat :=
+  ((List.range w).map fun c => if pat.lookup (posOf (off + base + c)) == some true then 2 ^ c else 0).sum
+
+/-- Pip `src.dst` with pattern `pat` against the switch-matrix primitive driving `dst`. -/
+def pipAgrees (p : SmPrim) (posOf : Nat → Nat) (off : Nat) (src : String) (pat : List (Nat × Bool)) : Bool :=
+  if pat.isEmpty then (match p with | .assign s => s.name == src | _ => false)
+  else
+    pat.length == p.selBits && p.selBits > 0 &&
+    (List.range p.selBits).all (fun c => (pat.lookup (posOf (off + p.base + c))).isSome) &&
+    ((p.ins[patSel pat posOf off p.base p.selBits]?).map (·.name)) == some src
+
+theorem lookup_of_mem_holds {pat : List (Nat × Bool)} {f : Nat → Bool} (h : ∀ e ∈ pat, f e.1 = e.2)
+    {q : Nat} {v : Bool} (hl : pat.lookup q = some v) : f q = v := by
+  induction pat with
+  | nil => simp at hl
+  | cons e rest ih =>
+    obtain ⟨a, b⟩ := e
+    simp only [List.lookup_cons] at hl
+    by_cases hq : q = a
+    · subst hq; simp at hl; subst hl; exact h _ (List.mem_cons_self ..)
+    · have : (q == a) = false := by simpa using hq
+      rw [this] at hl
+      exact ih (fun e he => h e (List.mem_cons_of_mem _ he)) hl
+
+/-- **`pip_sound`**: if a pip agrees with the switch-matrix primitive driving its destination, then
+for every configuration whose frame bits satisfy the pip's pattern (`bits`, read through `posOf` and
+`off` as the tile's `ConfigBits`) and every value of the inputs, the primitive's output is the pip's
+source, which is what the decoder takes it to be. -/
+theorem pip_sound (p : SmPrim) (posOf : Nat → Nat) (off : Nat) (src : SmSrc) (pat : List (Nat × Bool))
+    (hAg : pipAgrees p posOf off src.name pat = true) (bits : Nat → Bool)
+    (hPat : ∀ e ∈ pat, bits e.1 = e.2) (cfg : Nat → Bool) (hCfg : ∀ i, cfg i = bits (posOf (off + i)))
+    (hNames : ∀ s ∈ p.ins, s.name = src.name → s = src) (inp : String → Bool) :
+    p.eval cfg inp = src.eval inp := by
+  unfold pipAgrees at hAg
+  split at hAg
+  · -- a hard-wired connection
+    cases p with
+    | assign s =>
+      simp only [beq_iff_eq] at hAg
+      have := hNames s (by simp [SmPrim.ins]) hAg
+      subst this; simp [SmPrim.eval, SmPrim.ins, SmPrim.sel, SmPrim.selBits]
+    | _ => simp at hAg
+  · simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, List.all_eq_true, List.mem_range] at hAg
+    obtain ⟨⟨⟨_, _⟩, hSome⟩, hIdx⟩ := hAg
+    have hsel : p.sel cfg = patSel pat (posOf) off p.base p.selBits := by
+      unfold SmPrim.sel patSel
+      congr 1
+      apply List.map_congr_left
+      intro c hc
+      simp only [List.mem_range] at hc
+      obtain ⟨v, hv⟩ := Option.isSome_iff_exists.mp (hSome c hc)
+      have hb := lookup_of_mem_holds hPat hv
+      rw [hCfg, show off + (p.base + c) = off + p.base + c by omega, hb, hv]
+      cases v <;> simp
+    unfold SmPrim.eval
+    rw [hsel]
+    cases hget : p.ins[patSel pat posOf off p.base p.selBits]? with
+    | none => rw [hget] at hIdx; simp at hIdx
+    | some s =>
+      rw [hget] at hIdx
+      simp only [Option.map_some, Option.some.injEq] at hIdx
+      have hs := hNames s (List.mem_of_getElem? hget) hIdx
+      subst hs; rfl
+
+/-- `ConfigBits[i] = Emulate_Bitstream[j]` of `LUT4AB_ConfigMem.v`'s emulation branch: index ↦ frame position. -/
+def parseConfigMap (txt : String) : Std.HashMap Nat Nat := Id.run do
+  let mut m : Std.HashMap Nat Nat := {}
+  for l in txt.splitOn "\n" do
+    let l := stripWs l
+    if l.startsWith "assignConfigBits[" then
+      match (l.drop 17).toString.splitOn "]=Emulate_Bitstream[" with
+      | [i, rest] => match i.toNat?, ((rest.splitOn "]").headD "").toNat? with
+        | some i, some j => m := m.insert i j
+        | _, _ => pure ()
+      | _ => pure ()
+  return m
+
 end Obend.Hardware.Fabulous
