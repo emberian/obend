@@ -738,9 +738,12 @@ Index v2
 ## 9. A merge is settled at the tip
 
 `obend merge` reads the two worlds as two branches of what they share (each page's common history)
-and merges them at the TIP (`Obend.Vault.Merge`, `Obend.Vault.Branch.merge`): every write of either
-side is judged there by every law of every page in its cone, with both sides' laws in force. A law
-written on the laptop over its links judges a write made here, which neither replica saw together.
+and merges them at the TIP (`Obend.Vault.Merge`, `Obend.Vault.Branch.merge`). The tip keeps the
+vault's store itself, and every write of either side is judged and landed there by the store's own
+write, the same judgment an open makes: landed at the tip and landed in the store are one event
+(`tip_lands_iff_store_lands`). The tip is a serial order, here's writes first. The laptop's Brief,
+whose law over its links lists Note, read Note as it was there; Note moved here, so Brief is refused
+by name. Made again here, Brief's own law refuses it, judged at Note as it is.
 
 ```sh
 cd vault && printf -- '# Note\n\nShort.\n' > Note.md && obend open > /dev/null
@@ -748,20 +751,54 @@ cd .. && rm -rf laptop3 && cp -R vault laptop3
 cd laptop3 && printf -- '---\nlaw brief: linked.words <= 6\n---\n# Brief\n\n- [[Note]]\n' > Brief.md && obend open > /dev/null
 cd ../vault && printf 'Here it grows by a sentence of ten words or so.\n' >> Note.md && obend open > /dev/null
 obend merge ../laptop3 | grep -e Note -e Brief
-obend status Note | head -1 && obend open | head -1
+cp ../laptop3/Brief.md . && obend open | grep Brief
 ```
 
 ```text
-Note: here's write was not settled at the merge with laptop3: refused by Brief: brief (owner's law `linked.words <= 6`), judged at Note
-Brief: imported from laptop3
-rendered Brief.md
-Note v1; its last write was not settled at the merge with laptop3: refused by Brief: brief (owner's law `linked.words <= 6`), judged at Note
-nothing changed
+Brief: not merged: its write at laptop3 read Note as it was there (bytes 15 → 63, lines 3 → 4, version 0 → 1, …); make the change here, against Note as it is
+Brief: refused by its law brief over its links, at Note: `linked.words <= 6` does not hold there; words = 6 would pass (this write has words = 14)
+Brief: still not born: refused by its law brief over its links, at Note: `linked.words <= 6` does not hold there; words = 6 would pass (this write has words = 14)
 ```
 
-Here's write of Note was not settled: the store holds Note at the version both replicas share, and
-`Note.md` keeps the text as a refused write, judged again when a page it read moves (the next open
-has nothing to do); the laptop's Brief, which lists Note, landed.
+Two writes of one page that do not merge are a CONFLICT, and a conflict is a state of the store:
+both candidates kept (`.obend/world.json`), neither landed, here's text waiting in the file as a
+refused write, every open keeping it, `obend status` listing it. Both replicas wrote a new page
+`Pair`, each its own text: two births that name one atom differently, so their texts do not merge.
+
+```sh
+rm -rf laptop4 && cp -R vault laptop4
+cd laptop4 && printf -- '# Pair\n\nWritten on the train.\n' > Pair.md && obend open > /dev/null
+cd ../vault && printf -- '# Pair\n\nWritten at the desk.\n' > Pair.md && obend open > /dev/null
+obend merge ../laptop4 | grep Pair
+obend open | grep Pair; obend status Pair
+```
+
+```text
+Pair: here's write was not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
+conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed); keep one with: obend branch resolve 0 left|right
+Pair: still not born: not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
+Pair v0; its last write was not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
+conflict 0 at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed); keep one with: obend branch resolve 0 left|right
+```
+
+Resolve it by landing one candidate: the store's own write of it, judged as any write, and the
+receipt names the candidate dropped.
+
+```sh
+cd vault && obend branch resolve 0 right && cat Pair.md && obend status Pair
+```
+
+```text
+resolved conflict 0: landed Pair (resolving; dropped here's Pair)
+rendered Pair.md
+Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
+Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
+Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+# Pair
+
+Written on the train.
+Pair v1
+```
 
 ## Branches: two stores fork from one, post offline, and merge at the tip
 

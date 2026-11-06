@@ -26,8 +26,9 @@ its frontmatter lines), the members and their grants.
   page in a write's cone (`landed_consents`), authority read where every revocation is visible
   (`settled_at_tip`). Its walkthrough is `lean/tests/vault/Branch.lean`.
 * `Obend.Vault.Merge` — `obend merge`: two vault stores read as branches of their base and merged by
-  `Branch.merge`, a page both sides wrote merged by `mergePage`; what the tip landed lands through the
-  vault's own write.
+  `Branch.merge`, a page both sides wrote merged by `mergePage`; the tip keeps the store and judges
+  every write by the store's own write (`tip_lands_iff_store_lands`); conflicts are kept in the store
+  and resolved by `obend branch resolve`.
 
 The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
 the forms' is `lean/tests/vault/FORMS.md`, executed by the same with `--doc`, and planted by

@@ -34,8 +34,9 @@ tip when it merges; the difference is only the configuration it is judged at.
   the page's own laws, and the laws over links of every page linking to it (`linkedLaws`). The
   merged state keeps every own law both sides kept (`iconfluent_merge_lawful`, `mergeCell_lawful`)
   and every such law over links, on the identity occasion it is judged on at the cell
-  (`iconfluent_merge_links_lawful`, `mergeCell_links_lawful`); a linked law that is not I-confluent
-  leaves the pair a conflict, both candidates kept. A store that keeps texts merges a page both
+  (`iconfluent_merge_links_lawful`, `mergeCell_links_lawful`). A linked law that is not I-confluent
+  leaves the pair a conflict, not a refusal: a refused merged pair would drop both writes, where a
+  conflict keeps both as candidates until one is chosen. A store that keeps texts merges a page both
   sides wrote by its texts instead (`TextMerge`: the markdown vault's `mergePage` pushout,
   `Obend.Vault.Merge`), and that merged write is judged at the tip like any other; and
   the merged write lands once, as one receipt from both sides (`Side.both`), each side's authority
@@ -43,6 +44,13 @@ tip when it merges; the difference is only the configuration it is judged at.
   with no declaration. The store theorem covers it (`merge_is_pushout`'s third part). Two relaws of one page that differ
   are a `Conflict.laws`, and the page keeps its base laws. The merged history extends the base
   (`merge_extends_history`).
+* **One judge, in a vault.** A configuration may keep the vault's store itself (`Config.vault`), and a
+  write may carry its text (`BTurn.text`). Then the write is judged and landed by the store's own
+  write (`Store.writeText`: `prepareWrite`, `judgePrepared` with rows, kind pins, `poster` and
+  `unresolved`), and by nothing else: admitted at the tip exactly when the store's write lands, the
+  tip keeping exactly the store it reaches, refused in the store's own words
+  (`tip_lands_iff_store_lands`, `tip_refuses_iff_store_refuses`). The page's laws are lines of its
+  text, so in a vault they are the store's, not the book's.
 * **Consent from the causal cone.** A write is judged by every law of every page in its cone at the
   tip: the written page's own laws (old to new), its laws over links at every page it links to, and
   the laws over links of every page that links to it, at it as written. A landed write has the
@@ -202,6 +210,8 @@ structure BTurn where
   actor : String
   turn : VaultTurn
   relies : List String := []
+  /-- the text the write lands, in a configuration that keeps the store's texts (`Config.vault`) -/
+  text : Option PageWrite := none
 
 def BTurn.writes (t : BTurn) : List String := t.turn.writeFootprint
 
@@ -245,6 +255,8 @@ inductive Refusal
   | notOwner (page owner actor : String)
   /-- an authority reason and a stale pin at once: both named, the authority first -/
   | also (authority stale : Refusal)
+  /-- refused by the store's own judgment of the page's write (`Store.writeText`), its text -/
+  | store (page reason : String)
 
 def Refusal.text : Refusal → String
   | .stale c e cur => "stale: it read " ++ c ++ " as it was on its branch (" ++ stateDiffText e cur ++ ")"
@@ -257,6 +269,7 @@ def Refusal.text : Refusal → String
   | .undecided p r => "undecided at " ++ p ++ ": " ++ r
   | .notOwner p o a => p ++ " is " ++ o ++ "'s; " ++ a ++ " may not change its laws or its sturdyrefs"
   | .also a p => a.text ++ "; and " ++ p.text
+  | .store _ r => r
 
 /-- A merge's open question, kept in the state. -/
 inductive Conflict
@@ -271,13 +284,17 @@ def Conflict.text : Conflict → String
   | .laws p ln rn => "conflict at the laws of " ++ p ++ ": " ++ ln ++ " and " ++ rn ++
       " both changed them (the base laws stand)"
 
-/-- A configuration: the store, the law book, the authority, the history, the open conflicts. -/
+/-- A configuration: the store, the law book, the authority, the history, the open conflicts, and,
+for a vault, the vault's store itself (its pages' texts and histories, its members, kinds and
+environment): where it is kept, a write that carries its text is judged and landed by the store's
+own write, and nothing else (`tip_lands_iff_store_lands`). -/
 structure Config where
   store : VaultStore
   book : LawBook := []
   auth : Authority := {}
   history : List Receipt := []
   conflicts : List Conflict := []
+  vault : Option Store := none
 
 /-! ## The judgment of a write -/
 
@@ -355,16 +372,39 @@ def preRefusal (c : Config) (t : BTurn) : Option Refusal :=
   | none, some p => some p
   | none, none => none
 
-/-- **Admit a write**: its authority is live, its pins hold, every page in its cone consents. -/
+/-- A store's refusal, said without the page's name it begins with. -/
+def dropPage (page msg : String) : String :=
+  if msg.startsWith (page ++ ": ") then String.ofList (msg.toList.drop (page.length + 2)) else msg
+
+/-- **The judgment of a write, and what it lands.** In a vault (`Config.vault`), a write of one page
+that carries its text is the store's write of it (`Store.writeText`: `prepareWrite`, `judgePrepared`
+with its rows, kind pins, `poster` and `unresolved`, and the landing rule), refused by name with the
+store's own words; the vault it reaches is the configuration's next. Otherwise every page in the
+write's cone is judged on the store of states (`coneRefusal`). -/
+def judgeWrite (c : Config) (t : BTurn) : Except Refusal (Option Store) :=
+  match c.vault, t.text, t.writes with
+  | some s, some w, [page] =>
+    match s.writeText page w with
+    | .ok s' => .ok (some s')
+    | .error m => .error (.store page (dropPage page m))
+  | _, _, _ =>
+    match t.turn.writeCells.findSome? (coneRefusal c.book (applyTurn c.store t.turn)
+        (requestAt t.actor c.history.length)) with
+    | some r => .error r
+    | none => .ok c.vault
+
+/-- **Admit a write**: its authority is live, its pins hold, and it is judged (`judgeWrite`): in a
+vault by the store's own write, which lands it; otherwise by every page in its cone. -/
 def admitWrite (c : Config) (origin : String) (t : BTurn) : Except Refusal Config :=
   match preRefusal c t with
   | some r => .error r
   | none =>
-  match t.turn.writeCells.findSome? (coneRefusal c.book (applyTurn c.store t.turn)
-      (requestAt t.actor c.history.length)) with
-  | some r => .error r
-  | none => .ok { c with store := applyTurn c.store t.turn,
-                         history := c.history ++ [receiptOf c origin t.label t.writes] }
+  match judgeWrite c t with
+  | .error r => .error r
+  | .ok v => .ok { c with
+      store := applyTurn c.store t.turn
+      vault := v
+      history := c.history ++ [receiptOf c origin t.label t.writes] }
 
 def ownerOf (book : LawBook) (page : String) : Option String := (book.lookup page).map (·.owner)
 
@@ -503,10 +543,13 @@ store keeps no text for the cell (its state merges by its page's declared merges
 two texts do not merge (a conflict); `some (some m)`, the two texts merge into one whose state is
 `m` (for the markdown vault, `Obend.Vault.mergePage`'s pushout of the two versions, rendered as
 `Obend.Vault.pageState`). A text merge is judged at the tip like any other write. -/
-abbrev TextMerge := String → Option (Option Data)
+structure TextMerge where
+  state : String → Option (Option Data) := fun _ => none
+  /-- the text the merged write of a page lands (`BTurn.text`), where the store keeps texts -/
+  write : String → Option PageWrite := fun _ => none
 
 /-- A store of states only: no texts. -/
-def noText : TextMerge := fun _ => none
+def noText : TextMerge := {}
 
 /-- The laws over links judged at `c`: those of every other page that links to it, as
 `backlinkRefusal` judges them at `c` on the identity occasion. -/
@@ -537,7 +580,7 @@ of every page linking to it, `linkedLaws`) and the two directions agree (so ever
 is the same on both sides). -/
 def mergeCell (text : TextMerge) (book : LawBook) (da db : CellDelta) : Option Data :=
   if !Obend.Law.termEq da.preState.term db.preState.term then none
-  else match text da.cell with
+  else match text.state da.cell with
   | some r => r
   | none =>
   if Obend.Law.termEq da.postState.term db.postState.term then some da.postState
@@ -578,7 +621,10 @@ def mergeFor (text : TextMerge) (book : LawBook) (lw rw : List BTurn) (a b : BTu
       (VaultTurn.ofWitnessLegs ByteArray.empty (a.turn.readPins ++ b.turn.readPins) legs a.turn.occasion []).map
         fun vt => { label := a.label ++ " + " ++ b.label,
                     actor := if a.actor == b.actor then a.actor else a.actor ++ "+" ++ b.actor,
-                    turn := vt, relies := a.relies ++ b.relies }
+                    turn := vt, relies := a.relies ++ b.relies,
+                    text := match a.writes with
+                      | [c] => text.write c
+                      | _ => none }
 
 /-- The writes of the left that clash with no write of the right. -/
 def freeLeft (lw rw : List BTurn) : List BTurn :=
@@ -670,9 +716,8 @@ theorem admitWrite_names_authority {c : Config} {o : String} {t : BTurn} {r : Re
 
 theorem admitWrite_ok {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
     pinRefusal c.store t.turn = none ∧ authRefusal c.auth c.book t = none ∧
-    t.turn.writeCells.findSome? (coneRefusal c.book (applyTurn c.store t.turn)
-      (requestAt t.actor c.history.length)) = none ∧
-    c' = { c with store := applyTurn c.store t.turn,
+    ∃ v, judgeWrite c t = .ok v ∧
+    c' = { c with store := applyTurn c.store t.turn, vault := v,
                   history := c.history ++ [receiptOf c o t.label t.writes] } := by
   unfold admitWrite at h
   split at h
@@ -681,9 +726,41 @@ theorem admitWrite_ok {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c
     obtain ⟨ha, hp⟩ := preRefusal_none hpre
     split at h
     · cases h
-    · rename_i hc
+    · rename_i v hc
       cases h
-      exact ⟨hp, ha, hc, rfl⟩
+      exact ⟨hp, ha, v, hc, rfl⟩
+
+/-- **Landed at the tip is landed in the store.** In a vault, a write of one page that carries its
+text and whose authority and pins hold is admitted exactly when the store's own write of that text
+lands (`Store.writeText`), and the configuration it reaches keeps exactly the store that write
+reaches; refused, it is refused with the store's own words. One judgment, one event. -/
+theorem tip_lands_iff_store_lands {c : Config} {o : String} {t : BTurn} {s s' : Store} {w : PageWrite}
+    {page : String} (hv : c.vault = some s) (ht : t.text = some w) (hw : t.writes = [page])
+    (hpre : preRefusal c t = none) :
+    (∃ c', admitWrite c o t = .ok c' ∧ c'.vault = some s') ↔ s.writeText page w = .ok s' := by
+  have hj : judgeWrite c t = match s.writeText page w with
+      | .ok s' => .ok (some s')
+      | .error m => .error (.store page (dropPage page m)) := by
+    unfold judgeWrite; rw [hv, ht, hw]
+  unfold admitWrite
+  rw [hpre]
+  simp only
+  rw [hj]
+  cases hs : s.writeText page w with
+  | error m => simp
+  | ok s'' =>
+    simp only [Except.ok.injEq, exists_eq_left', Option.some.injEq]
+
+/-- The store's refusal of a vault write is the tip's, in the store's words. -/
+theorem tip_refuses_iff_store_refuses {c : Config} {o : String} {t : BTurn} {s : Store} {w : PageWrite}
+    {page m : String} (hv : c.vault = some s) (ht : t.text = some w) (hw : t.writes = [page])
+    (hpre : preRefusal c t = none) (hm : s.writeText page w = .error m) :
+    admitWrite c o t = .error (.store page (dropPage page m)) := by
+  unfold admitWrite judgeWrite
+  rw [hpre]
+  simp only
+  rw [hv, ht, hw]
+  simp only [hm]
 
 /-- What the authority check passing says: every sturdyref relied on is live, and every page written
 is the actor's or granted by a sturdyref relied on. -/
@@ -796,19 +873,32 @@ theorem coneRefusal_none {book : LawBook} {s' : VaultStore} {actor : String} {h 
         rw [ite_eq_left hcond] at hb
         exact linksRefusal_none hb d.cell (List.mem_singleton_self _) p hp
 
-/-- **A write admitted is consented to by its cone**: every law of every page in the cone of every
-cell it writes holds, at the configuration it was admitted at. -/
+/-- A vault write landed by the store's own write: the configuration keeps a store, the write carries
+its text for one page, and `Store.writeText` lands it. -/
+def StoreLanded (c : Config) (t : BTurn) : Prop :=
+  ∃ s w page s', c.vault = some s ∧ t.text = some w ∧ t.writes = [page] ∧ s.writeText page w = .ok s'
+
+/-- **An admitted write was consented to**: by every page of its cone on the store of states, or, in
+a vault, by the store's own judgment of its text (`Store.writeText`). -/
 theorem admitWrite_consents {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
-    ∀ d ∈ t.turn.writeCells, Consents c.book c'.store (factsAt c.history.length) d := by
-  obtain ⟨_, _, hc, rfl⟩ := admitWrite_ok h
-  intro d hd
-  exact coneRefusal_none (List.findSome?_eq_none_iff.1 hc d hd)
+    (∀ d ∈ t.turn.writeCells, Consents c.book c'.store (factsAt c.history.length) d) ∨ StoreLanded c t := by
+  obtain ⟨_, _, v, hj, rfl⟩ := admitWrite_ok h
+  unfold judgeWrite at hj
+  split at hj
+  · rename_i s w page hv ht hw
+    cases hs : s.writeText page w with
+    | ok s' => exact .inr ⟨s, w, page, s', hv, ht, hw, hs⟩
+    | error m => rw [hs] at hj; cases hj
+  · split at hj
+    · cases hj
+    · rename_i hc
+      refine .inl fun d hd => coneRefusal_none (List.findSome?_eq_none_iff.1 hc d hd)
 
 /-! ## Runs -/
 
 theorem admitWrite_keeps {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
     c'.book = c.book ∧ c'.auth = c.auth ∧ c'.conflicts = c.conflicts := by
-  obtain ⟨_, _, _, rfl⟩ := admitWrite_ok h
+  obtain ⟨_, _, _, _, rfl⟩ := admitWrite_ok h
   exact ⟨rfl, rfl, rfl⟩
 
 /-- Every write a run of writes landed was admitted at a configuration with the run's final law book
@@ -1061,15 +1151,17 @@ theorem revoked_elsewhere_never_lands {base : Config} {L R : Branch} {text : Tex
   have hrev := tip_sees_every_revocation h hr
   simp [Authority.live, hrev] at hlive
 
-/-- **A landed write is consented to by its cone at the tip**: by every law of every page in the cone
-of every cell it writes, read from the tip's law book. -/
+/-- **A landed write is consented to at the tip**: by every law of every page in the cone of every
+cell it writes, read from the tip's law book, or, in a vault, by the store's own judgment of its text
+at the tip (`StoreLanded`, `tip_lands_iff_store_lands`). -/
 theorem landed_consents {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {sd : Side} {t : BTurn} (ht : (sd, .write t) ∈ m.landed) :
-    ∃ s' height, ∀ d ∈ t.turn.writeCells, Consents m.tip.book s' (factsAt height) d := by
-  obtain ⟨c₀, c₁, hb, _, h0⟩ := merge_landed_write h ht
-  refine ⟨c₁.store, c₀.history.length, ?_⟩
-  rw [← hb]
-  exact admitWrite_consents h0
+    (∃ s' height, ∀ d ∈ t.turn.writeCells, Consents m.tip.book s' (factsAt height) d) ∨
+      ∃ c₀, c₀.book = m.tip.book ∧ c₀.auth = m.tip.auth ∧ StoreLanded c₀ t := by
+  obtain ⟨c₀, c₁, hb, ha, h0⟩ := merge_landed_write h ht
+  rcases admitWrite_consents h0 with hc | hs
+  · exact .inl ⟨c₁.store, c₀.history.length, by rw [← hb]; exact hc⟩
+  · exact .inr ⟨c₀, hb, ha, hs⟩
 
 /-! ### The merge is a pushout over the base -/
 
@@ -1142,7 +1234,7 @@ theorem runWrites_store {name : Side → String} :
     simp only [runWrites]
     split
     · rename_i c' hc
-      obtain ⟨_, _, _, rfl⟩ := admitWrite_ok hc
+      obtain ⟨_, _, _, _, rfl⟩ := admitWrite_ok hc
       simp only [turnsOf, List.filterMap_cons]
       exact runWrites_store
     · exact runWrites_store
@@ -1873,7 +1965,7 @@ theorem iconfluent_merge_links_lawful {facts : Facts} {pre r : Data} :
 /-- The declared merge `mergeCell` reaches, when the store keeps no text for the cell: the same
 write, or both directions of `mergeState` agreeing, with every law of the cell's cone I-confluent. -/
 theorem mergeCell_declared {text : TextMerge} {book : LawBook} {da db : CellDelta} {m : Data}
-    (h : mergeCell text book da db = some m) (ht : text da.cell = none) {pl : PageLaws}
+    (h : mergeCell text book da db = some m) (ht : text.state da.cell = none) {pl : PageLaws}
     (hpl : book.lookup da.cell = some pl) :
     m = da.postState ∨
       (mergeState da.preState db.postState pl.merges da.postState = some m ∧
@@ -1905,7 +1997,7 @@ theorem mergeCell_declared {text : TextMerge} {book : LawBook} {da db : CellDelt
 no text for the cell, keeps every own law of the page that both sides' post-states kept: the same
 write trivially, a declared merge by `iconfluent_merge_lawful`. -/
 theorem mergeCell_lawful {text : TextMerge} {book : LawBook} {da db : CellDelta} {m : Data}
-    (h : mergeCell text book da db = some m) (ht : text da.cell = none)
+    (h : mergeCell text book da db = some m) (ht : text.state da.cell = none)
     {pl : PageLaws} (hpl : book.lookup da.cell = some pl) {facts : Facts} {old : Option Data} :
     ∀ p ∈ pl.own, p.2.denote facts old da.postState = true → p.2.denote facts old db.postState = true →
       p.2.denote facts old m = true := by
@@ -1919,7 +2011,7 @@ to the cell (`linkedLaws`, what `backlinkRefusal` judges at the cell) that both 
 kept, the merged state keeps, on the occasion it is judged there (`iconfluent_merge_links_lawful`):
 a declared merge whose linked laws are I-confluent merges, and is not refused by them at the tip. -/
 theorem mergeCell_links_lawful {text : TextMerge} {book : LawBook} {da db : CellDelta} {m : Data}
-    (h : mergeCell text book da db = some m) (ht : text da.cell = none)
+    (h : mergeCell text book da db = some m) (ht : text.state da.cell = none)
     {pl : PageLaws} (hpl : book.lookup da.cell = some pl) {facts : Facts} :
     ∀ p ∈ linkedLaws book da.cell, p.2.denote facts (some da.postState) da.postState = true →
       p.2.denote facts (some db.postState) db.postState = true → p.2.denote facts (some m) m = true := by
@@ -1993,7 +2085,7 @@ theorem merge_swap_store {base : Config} {L R : Branch} {text : TextMerge} {m₁
 theorem admitAct_extends {c c' : Config} {o : String} {a : Act} (h : admitAct c o a = .ok c') :
     c.history <+: c'.history := by
   cases a with
-  | write t => obtain ⟨_, _, _, rfl⟩ := admitWrite_ok (show admitWrite c o t = .ok c' from h); exact List.prefix_append _ _
+  | write t => obtain ⟨_, _, _, _, rfl⟩ := admitWrite_ok (show admitWrite c o t = .ok c' from h); exact List.prefix_append _ _
   | relaw l w p pl =>
     simp only [admitAct] at h
     split at h
@@ -2132,5 +2224,9 @@ theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {text : Tex
 
 /- Removing the tip check (`authRefusal` always passing) loses `settled_at_tip`'s proof. -/
 #tooth settled_at_tip by mutation authRefusal := fun _ _ _ => none
+
+/- Judging every write on the store of states, the vault's store kept but not asked, loses the one
+judgment. -/
+#tooth tip_lands_iff_store_lands by mutation judgeWrite := fun c _ => .ok c.vault
 
 end Obend.Vault.Branch
