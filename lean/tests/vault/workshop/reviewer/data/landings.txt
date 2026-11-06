@@ -1,0 +1,2 @@
+751b497 landed on workshop at 11:59: research.py: an offline suite against fake Kagi and Scry, and help that is true
+_post keeps its signature, looked up per call; endpoints are kagi_url() and scry_url() (RESEARCH_KAGI_URL, RESEARCH_SCRY_URL)

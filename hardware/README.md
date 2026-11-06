@@ -275,11 +275,11 @@ AMDVLK runs out of memory with 1670 dispatches in one command buffer where RADV 
 runner submits in chunks of 128; the greedy layering that made the 64-point NTT 1670 dispatches is
 replaced, and it is now 19); and the closure-based evaluator above.
 
-Not here (G4 landed below): resource grading (G5), a layout that skips the wires fusion made dead (the buffer is
-still the source graph's prefix sum, 29M words for the 65536-point NTT), fusion of a gather into its
-elementwise consumer (TVM's injective rule; it would fold the Stockham gathers into the field kernels),
-radix-4 stages, and the RTL path of the same array graphs (the commuting square with
-`compileHypergraphToRtl` is the next rung).
+Not here (G2 and G4 landed below; the RTL path of the same graphs is `gpu/square/`, below): resource
+grading (G5, whose grade the `shaderstats` line of each dump now carries), a layout that skips the wires
+fusion made dead (the buffer is still the source graph's prefix sum, 29M words for the 65536-point NTT),
+fusion of a gather into its elementwise consumer (TVM's injective rule; it would fold the Stockham gathers
+into the field kernels), and radix-4 stages.
 
 ### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
 
@@ -369,5 +369,79 @@ The shapes are each thread's whole program with every barrier of the kernel body
 both roles of GPUHarbor's pseudo-code), which forbids the `seq0` class of the workgroup barrier tests as
 well as their weak class; no device showed `seq0` either. `verify_litmus.sh` is the gate (`gpu/litmus/README.md`).
 
-Not here: resource grading (G5, whose grade the `shaderstats` line of each dump now carries), a layering
-better than the scalar module's greedy one and the RTL path of the same array graphs (both in lanes).
+### `gpu/square/`: the same graph through two devices (rung G1s)
+
+`Obend.Hardware.Square` is the square the council asked for, done with external runs: one open hypergraph
+lowered to the GPU program above and to a combinational `RtlModule`, each leg run outside Lean on the
+same vectors, and theorems that the two lowerings denote one evaluation.
+
+One lowering. `compileArrayGraphToRtl` is single assignment: module wire `i` is the `i`-th SSA
+definition (input elements, then accumulator temporaries and destination elements), and an array
+of slots (`LowerSt`) records, per array wire, where its current definition starts. A reader is lowered
+against the definition current at that point, which is what `stepEdge` reads, so the graph's own wire
+numbering, a wire defined twice and an edge reading its own destination all lower faithfully: the only
+hypothesis is `ArrayGraph.wf`. A map's `ElemProg` is run symbolically into one expression per element
+(`progExpr`; the shifts are exact for every amount, `evalRtlExpr_elemOpToRtl`), a gather is wiring, a
+concatenation renaming, a constant constants. `RtlFold.compile` gives folds shared accumulator
+wires; scan outputs reuse prefixes, so circuit size is linear, with sequential depth.
+`RtlFold.compile_sound` proves equality with `evalFold`, including empty segments.
+The lowering takes the graph before fusion; the GPU lowering
+fuses (`fuseGraph`); the theorems meet at `evalGraph`. A scalar graph is the one-element instance,
+`compileHypergraphToRtl g = compileArrayGraphToRtl (ofScalar g)`, as `lowerHypergraphToGpu` is on the
+GPU side; the scalar lowering this replaced needed every wire defined once as a side condition and failed
+the emission check on the adjoint graphs, whose wires are numbered out of definition order. The three
+operation lowerings of `Obend.Hardware.OpenHypergraph` are one, `compileHypergraphOpExpr`, which the
+pipelined compiler and `elemOpToRtl` share.
+
+The theorems. `compileArrayGraphToRtl_sound`: for every well-formed array graph and every input, the
+module's output ports are `evalGraph` from the environment the input ports induce (`inputEnvOf`),
+flattened. `rtl_eq_gpu_array`: the GPU program, run from any buffer that holds that environment at its
+layout (`Flat`), shows the same words. `compileHypergraphToRtl_sound` and `rtl_eq_gpu` are the scalar
+corollaries, against the scalar single pass `evalHyperEdgesCombBv`. `compileHypergraphToRtlPipelined_sound`
+is the pipelined compiler's whole module (one clock edge per wavefront stage with the inputs held shows the
+layered evaluation, from any register state), and `pipelined_eq_comb` puts it at a third corner. The
+diamond-specific pipelined theorems it replaces are gone; the diamond's `87` is a `#guard` in
+`tests/metasystem/NextMathematicaSoundnessTest.lean`.
+
+The graphs (`squarePlan` in `Obend.Hardware.SquareGraphs`, the one list both emitters share), each for
+what no other one exercises:
+
+| graph | for |
+|---|---|
+| `allops` | every scalar operation: a negative constant, add, sub, mul, scale by `-2^40`, mac, mux, with wrap-around |
+| `muxchain` | a multiply that reaches an output only through a mux's test against zero, so its planted swap is seen only by a vector with a zero operand (the scalar vectors include four one-hot ones for this) |
+| `adjoint-square-bilinear` | a `compileGraphAdjoint` graph, wires numbered out of definition order: the single-assignment lowering's reason |
+| `tree512` | size: 511 chained adders, where the LEC's time goes |
+| `glmul-4` | the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays |
+| `ntt-16` | gathers, concatenation and constant arrays: the Stockham NTT |
+| `soac-boundaries` | segmented reductions/scans, empty segments, modular monoids and producer/consumer composition |
+
+The gate, `verify_square.sh`, per graph: the committed `sv/<top>.sv` regenerates byte for byte;
+`obend-emit-sv square-<graph> --expected`, the HDL model's `expected.tsv` from `evalModuleOutputs`, equals
+`../graphs/<graph>/expected.tsv`, the array model's, byte for byte; `hardware/lec/lec.sh` (the LEC of
+Yosys's reading against Lean's model and its planted bit flip; EQY against the synthesized netlist for the
+graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --tb`
+(`emitVerilatorHarnessCpp`, the harness `obend verilate` uses, over the graph's vectors against
+`evalModuleOutputs`) reports no mismatch on the committed `.sv`; `obend-gpu-run` agrees with
+`expected.tsv` on the card; and a swapped operator in a copy of the `.sv` (`+` to `-`, else `*` to `+`,
+trying operators nearest the outputs first) makes the LEC answer sat and Verilator report mismatches. A
+swap the LEC proves equivalent, or cannot decide within its limits (`lec.sh`'s `LEC_ABS_SECS`, set by the
+tooth, bounds the query with multiplication uninterpreted, under which a sat reads only as undecided), is
+skipped and counted. It runs on the Mac and hbox. The frontend integration used hbox's Yosys and
+an isolated source build of Verilator 5.024; `YOSYS_BIN` and `VERILATOR_BIN` select these executables.
+The gate removes its `VERILATOR_BIN` override from the child environment because Verilator reserves
+that variable for its internal binary, rather than its launcher.
+
+Lengths. The SystemVerilog runs from 33 lines (`muxchain`) to 3673 (`ntt-16`, 16 input and 16 output
+ports); Verilator takes the NTT in a few minutes of compilation. The LEC answers unsat on every module.
+The previous `tree512` run took about an hour on the M2 Max. Recovery on hbox localized the cost
+to counterexample search: exact equivalence took 0.042 s, while the planted bit-flip query exceeded
+a 20 s limit. The shared LEC now first tries bounded exact witnesses with input/register carriers
+set to zero or one. Only SAT returns from this path; constrained UNSAT never proves equivalence.
+The original unconstrained exact and multiplication-abstraction checks remain. The bit-flip and
+root-operator faults then produced exact witnesses in 0.147 s and 0.129 s respectively. These are
+shared-host diagnostic measurements, not performance guarantees. EQY, SAT against the gate-level netlist, finished on none
+of these in the time given (15 minutes on a graph with one 64-bit multiply, as `hardware/sim`'s `mac2`
+already showed; 55 minutes on `tree512`, whose one output puts all 511 adders in one partition), so it is
+opt-in (`EQY_GRAPHS`) and the LEC is this gate's equivalence step. `glmul-256`, `ntt-64` and larger are not
+in the square: Verilator would take them, the LEC would not.

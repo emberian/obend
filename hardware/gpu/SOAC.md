@@ -67,15 +67,15 @@ cover submission through device completion, excluding shader compilation and tra
 They have different timing scopes and are not reported as an end-to-end speedup. The
 recorded run and exact versions are in `soac-results.json` and the accompanying gate log.
 
-Rerun during recovery on 2026-11-06: RX 6750 XT, RADV Mesa 24.2.8; Core i9-12900, Python 3.12.7,
+Rerun after the dev merge on 2026-11-06: RX 6750 XT, RADV Mesa 24.2.8; Core i9-12900, Python 3.12.7,
 NumPy 2.5.4 (101 CPU repetitions). The boundary, empty-segment, overflow and composed-operation
 cases matched both references and the device; the planted arithmetic defect caused wrong output.
 
 | Input / segmentation | GPU full pipeline, ms/vector | NumPy full pipeline, ms | NumPy sum+cumsum, ms |
 |---|---:|---:|---:|
-| 8 elements, empty and nonempty segments | 0.358 | 0.173 | 0.003 |
-| 65,536 elements, one segment | 95.125 | 2.881 | 0.137 |
-| 65,536 elements, 64 segments of 1,024 | 19.224 | 3.060 | 0.140 |
+| 8 elements, empty and nonempty segments | 0.333 | 0.178 | 0.003 |
+| 65,536 elements, one segment | 92.492 | 2.936 | 0.136 |
+| 65,536 elements, 64 segments of 1,024 | 19.518 | 2.939 | 0.137 |
 
 The full pipeline includes both unsegmented and segmented operations, so the final row
 still executes long single-segment reductions/scans. This experiment exposes the

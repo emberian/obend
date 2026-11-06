@@ -1,64 +1,66 @@
 === [1/4] byte equality: committed plan, shaders and expected.tsv == obend-emit-gpu ===
-    diamond: 9 wires (9 words), 5 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/diamond
-    optic-mul: 9 wires (9 words), 3 edges, 3 after fusion, 0 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/optic-mul
-    optic-linearmac: 9 wires (9 words), 4 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/optic-linearmac
-    optic-bilinear: 9 wires (9 words), 6 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/optic-bilinear
-    adjoint-mul-add: 12 wires (12 words), 7 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/adjoint-mul-add
-    adjoint-square-bilinear: 13 wires (13 words), 9 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/adjoint-square-bilinear
-    allops: 11 wires (11 words), 8 edges, 3 after fusion, 6 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/allops
-    muxchain: 8 wires (8 words), 4 edges, 2 after fusion, 1 constants, 0 indices, 1 dispatches (2 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/muxchain
-    tree512: 1023 wires (1023 words), 511 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 6 vectors -> /tmp/verify_gpu.REocyw/emit/tree512
-    mac-reverse-1000: 5 wires (5000 words), 3 edges, 3 after fusion, 1000 constants, 1000 indices, 3 dispatches (1,1,1 kernels), 6 vectors -> /tmp/verify_gpu.REocyw/emit/mac-reverse-1000
-    glmul-256: 45 wires (11520 words), 43 edges, 4 after fusion, 768 constants, 0 indices, 2 dispatches (3,1 kernels), 6 vectors -> /tmp/verify_gpu.REocyw/emit/glmul-256
-    ntt-4: 113 wires (232 words), 112 edges, 16 after fusion, 8 constants, 12 indices, 7 dispatches (6,2,2,1,2,2,1 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/ntt-4
-    ntt-16: 221 wires (1808 words), 220 edges, 28 after fusion, 32 constants, 96 indices, 13 dispatches (6,4,2,1,2,2,1,2,2,1,2,2,1 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/ntt-16
-    ntt-64: 329 wires (10752 words), 328 edges, 40 after fusion, 128 constants, 576 indices, 19 dispatches (6,6,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 6 vectors -> /tmp/verify_gpu.REocyw/emit/ntt-64
-    ntt-1024: 545 wires (284672 words), 544 edges, 64 after fusion, 2048 constants, 15360 indices, 31 dispatches (6,10,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 6 vectors -> /tmp/verify_gpu.REocyw/emit/ntt-1024
-    ntt-65536: 869 wires (29032448 words), 868 edges, 100 after fusion, 131072 constants, 1572864 indices, 49 dispatches (6,16,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/ntt-65536
-    soac-boundaries: 27 wires (184 words), 26 edges, 26 after fusion, 0 constants, 8 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/soac-boundaries
-    soac-empty: 27 wires (16 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/soac-empty
-    soac-no-segments: 27 wires (4 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.REocyw/emit/soac-no-segments
-    soac-single-65536: 27 wires (1245192 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/soac-single-65536
-    soac-segments-64x1024: 27 wires (1245444 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/soac-segments-64x1024
-    source-leaf-affine: 5 wires (55 words), 4 edges, 1 after fusion, 2 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/source-leaf-affine
-    source-leaf-mux: 10 wires (110 words), 9 edges, 1 after fusion, 4 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/source-leaf-mux
-    source-leaf-shl: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/source-leaf-shl
-    source-leaf-shr: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/source-leaf-shr
-    source-leaf-fixed-square: 2 wires (22 words), 1 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.REocyw/emit/source-leaf-fixed-square
+    diamond: 9 wires (9 words), 5 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/diamond
+    optic-mul: 9 wires (9 words), 3 edges, 3 after fusion, 0 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/optic-mul
+    optic-linearmac: 9 wires (9 words), 4 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/optic-linearmac
+    optic-bilinear: 9 wires (9 words), 6 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/optic-bilinear
+    adjoint-mul-add: 12 wires (12 words), 7 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/adjoint-mul-add
+    adjoint-square-bilinear: 13 wires (13 words), 9 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/adjoint-square-bilinear
+    allops: 11 wires (11 words), 8 edges, 3 after fusion, 6 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/allops
+    muxchain: 8 wires (8 words), 4 edges, 2 after fusion, 1 constants, 0 indices, 1 dispatches (2 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/muxchain
+    tree512: 1023 wires (1023 words), 511 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/tree512
+    mac-reverse-1000: 5 wires (5000 words), 3 edges, 3 after fusion, 1000 constants, 1000 indices, 3 dispatches (1,1,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/mac-reverse-1000
+    glmul-4: 45 wires (180 words), 43 edges, 4 after fusion, 12 constants, 0 indices, 2 dispatches (3,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/glmul-4
+    glmul-256: 45 wires (11520 words), 43 edges, 4 after fusion, 768 constants, 0 indices, 2 dispatches (3,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/glmul-256
+    ntt-4: 113 wires (232 words), 112 edges, 16 after fusion, 8 constants, 12 indices, 7 dispatches (6,2,2,1,2,2,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-4
+    ntt-16: 221 wires (1808 words), 220 edges, 28 after fusion, 32 constants, 96 indices, 13 dispatches (6,4,2,1,2,2,1,2,2,1,2,2,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-16
+    ntt-64: 329 wires (10752 words), 328 edges, 40 after fusion, 128 constants, 576 indices, 19 dispatches (6,6,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-64
+    ntt-1024: 545 wires (284672 words), 544 edges, 64 after fusion, 2048 constants, 15360 indices, 31 dispatches (6,10,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-1024
+    ntt-65536: 869 wires (29032448 words), 868 edges, 100 after fusion, 131072 constants, 1572864 indices, 49 dispatches (6,16,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-65536
+    soac-boundaries: 27 wires (184 words), 26 edges, 26 after fusion, 0 constants, 8 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-boundaries
+    soac-empty: 27 wires (16 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-empty
+    soac-no-segments: 27 wires (4 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-no-segments
+    soac-single-65536: 27 wires (1245192 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-single-65536
+    soac-segments-64x1024: 27 wires (1245444 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-segments-64x1024
+    source-leaf-affine: 5 wires (55 words), 4 edges, 1 after fusion, 2 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-affine
+    source-leaf-mux: 10 wires (110 words), 9 edges, 1 after fusion, 4 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-mux
+    source-leaf-shl: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-shl
+    source-leaf-shr: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-shr
+    source-leaf-fixed-square: 2 wires (22 words), 1 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-fixed-square
   ntt-65536: digests identical (kept as graphs/ntt-65536.sha256)
   soac-single-65536: digests identical (kept as graphs/soac-single-65536.sha256)
   soac-segments-64x1024: digests identical (kept as graphs/soac-segments-64x1024.sha256)
-  26 graphs identical
+  27 graphs identical
 === [2/4] the device against runProgram ===
-  diamond: 12 vectors, 1 dispatches, 0 disagree, 0.252 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  optic-mul: 12 vectors, 1 dispatches, 0 disagree, 0.250 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  optic-linearmac: 12 vectors, 1 dispatches, 0 disagree, 0.274 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  optic-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.279 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  adjoint-mul-add: 12 vectors, 1 dispatches, 0 disagree, 0.268 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  adjoint-square-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.248 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  allops: 12 vectors, 1 dispatches, 0 disagree, 0.262 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  muxchain: 12 vectors, 1 dispatches, 0 disagree, 0.276 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  tree512: 6 vectors, 1 dispatches, 0 disagree, 0.450 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  diamond: 12 vectors, 1 dispatches, 0 disagree, 0.263 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-mul: 12 vectors, 1 dispatches, 0 disagree, 0.264 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-linearmac: 12 vectors, 1 dispatches, 0 disagree, 0.268 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.249 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  adjoint-mul-add: 12 vectors, 1 dispatches, 0 disagree, 0.289 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  adjoint-square-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.291 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  allops: 12 vectors, 1 dispatches, 0 disagree, 0.266 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  muxchain: 12 vectors, 1 dispatches, 0 disagree, 0.264 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  tree512: 6 vectors, 1 dispatches, 0 disagree, 0.482 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
   mac-reverse-1000: 6 vectors, 3 dispatches, 0 disagree, 0.495 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  glmul-256: 6 vectors, 2 dispatches, 0 disagree, 0.480 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  ntt-4: 12 vectors, 7 dispatches, 0 disagree, 0.360 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  ntt-16: 12 vectors, 13 dispatches, 0 disagree, 0.573 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  ntt-64: 6 vectors, 19 dispatches, 0 disagree, 1.193 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  ntt-1024: 6 vectors, 31 dispatches, 0 disagree, 1.893 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  ntt-65536: 2 vectors, 49 dispatches, 0 disagree, 45.847 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  soac-boundaries: 12 vectors, 3 dispatches, 0 disagree, 0.319 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  soac-empty: 12 vectors, 3 dispatches, 0 disagree, 0.296 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  soac-no-segments: 12 vectors, 3 dispatches, 0 disagree, 0.300 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  soac-single-65536: 2 vectors, 3 dispatches, 0 disagree, 92.347 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  soac-segments-64x1024: 2 vectors, 3 dispatches, 0 disagree, 19.115 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  source-leaf-affine: 2 vectors, 1 dispatches, 0 disagree, 1.239 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  source-leaf-mux: 2 vectors, 1 dispatches, 0 disagree, 1.128 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  source-leaf-shl: 2 vectors, 1 dispatches, 0 disagree, 1.067 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  source-leaf-shr: 2 vectors, 1 dispatches, 0 disagree, 1.095 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
-  source-leaf-fixed-square: 2 vectors, 1 dispatches, 0 disagree, 1.135 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  glmul-4: 12 vectors, 2 dispatches, 0 disagree, 0.284 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  glmul-256: 6 vectors, 2 dispatches, 0 disagree, 0.488 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-4: 12 vectors, 7 dispatches, 0 disagree, 0.440 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-16: 12 vectors, 13 dispatches, 0 disagree, 0.582 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-64: 6 vectors, 19 dispatches, 0 disagree, 1.250 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-1024: 6 vectors, 31 dispatches, 0 disagree, 1.917 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-65536: 2 vectors, 49 dispatches, 0 disagree, 49.943 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-boundaries: 12 vectors, 3 dispatches, 0 disagree, 0.330 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-empty: 12 vectors, 3 dispatches, 0 disagree, 0.311 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-no-segments: 12 vectors, 3 dispatches, 0 disagree, 0.299 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-single-65536: 2 vectors, 3 dispatches, 0 disagree, 94.633 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-segments-64x1024: 2 vectors, 3 dispatches, 0 disagree, 19.648 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-affine: 2 vectors, 1 dispatches, 0 disagree, 1.116 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-mux: 2 vectors, 1 dispatches, 0 disagree, 1.182 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shl: 2 vectors, 1 dispatches, 0 disagree, 1.090 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shr: 2 vectors, 1 dispatches, 0 disagree, 1.143 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-fixed-square: 2 vectors, 1 dispatches, 0 disagree, 1.072 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
 === [3/4] teeth: each planted rule must make some graph's comparison fail ===
-  addAsSub: caught on diamond optic-linearmac adjoint-mul-add adjoint-square-bilinear allops tree512 glmul-256 ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 soac-boundaries soac-single-65536 soac-segments-64x1024 source-leaf-affine source-leaf-mux
-  swapMux: caught on allops muxchain glmul-256 ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 source-leaf-mux
+  addAsSub: caught on diamond optic-linearmac adjoint-mul-add adjoint-square-bilinear allops tree512 glmul-4 glmul-256 ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 soac-boundaries soac-single-65536 soac-segments-64x1024 source-leaf-affine source-leaf-mux
+  swapMux: caught on allops muxchain glmul-4 glmul-256 ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 source-leaf-mux
 === [4/4] the ISA: RADV's final assembly and resource usage of every stage, under isa/ ===
   diamond:
     stage 0: 1 threads -> 32 instructions, 1 stores; VGPRs 16, LDS 0
@@ -82,6 +84,9 @@
     stage 0: 1000 threads -> 14 instructions, 1 stores; VGPRs 8, LDS 0
     stage 1: 1000 threads -> 25 instructions, 1 stores; VGPRs 16, LDS 0
     stage 2: 1000 threads -> 17 instructions, 1 stores; VGPRs 8, LDS 0
+  glmul-4:
+    stage 0: 12 threads -> 45 instructions, 3 stores; VGPRs 8, LDS 0
+    stage 1: 4 threads -> 136 instructions, 1 stores; VGPRs 32, LDS 0
   glmul-256:
     stage 0: 768 threads -> 48 instructions, 3 stores; VGPRs 8, LDS 0
     stage 1: 256 threads -> 140 instructions, 1 stores; VGPRs 32, LDS 0

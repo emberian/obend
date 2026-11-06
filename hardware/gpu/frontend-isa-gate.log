@@ -1,0 +1,159 @@
+=== [1/6] the generated modules == gen_encodings.py on the committed XML ===
+  42 encodings, 35 operand types, 1153 instructions in 13 chunks -> /tmp/isa_check.hsnCk9/gen
+  identical
+=== [2/6] the decoder against llvm-mc on every instruction of every dump ===
+  adjoint-mul-add: 88 instructions agree
+  adjoint-square-bilinear: 110 instructions agree
+  allops: 131 instructions agree
+  diamond: 32 instructions agree
+  glmul-256: 188 instructions agree
+  glmul-4: 181 instructions agree
+  mac-reverse-1000: 56 instructions agree
+  muxchain: 54 instructions agree
+  ntt-1024: 3965 instructions agree
+  ntt-16: 1580 instructions agree
+  ntt-4: 807 instructions agree
+  ntt-64: 2359 instructions agree
+  ntt-65536: 6305 instructions agree
+  optic-bilinear: 88 instructions agree
+  optic-linearmac: 68 instructions agree
+  optic-mul: 61 instructions agree
+  soac-boundaries: 1401 instructions agree
+  soac-empty: 103 instructions agree
+  soac-no-segments: 51 instructions agree
+  soac-segments-64x1024: 1241 instructions agree
+  soac-single-65536: 1050 instructions agree
+  source-leaf-affine: 23 instructions agree
+  source-leaf-fixed-square: 16 instructions agree
+  source-leaf-mux: 31 instructions agree
+  source-leaf-shl: 20 instructions agree
+  source-leaf-shr: 20 instructions agree
+  tree512: 1890 instructions agree
+  every instruction of every dump agrees
+=== [3/6] teeth: every bit of every instruction's machine code, flipped ===
+  adjoint-mul-add: flip: 3767 bit flips changed the decoding, 614 made it fail, 67 lay in no field of their encoding
+  adjoint-square-bilinear: flip: 4724 bit flips changed the decoding, 761 made it fail, 83 lay in no field of their encoding
+  allops: flip: 5762 bit flips changed the decoding, 928 made it fail, 94 lay in no field of their encoding
+  diamond: flip: 1318 bit flips changed the decoding, 219 made it fail, 31 lay in no field of their encoding
+  glmul-256: flip: 7815 bit flips changed the decoding, 1072 made it fail, 73 lay in no field of their encoding
+  glmul-4: flip: 7193 bit flips changed the decoding, 1054 made it fail, 73 lay in no field of their encoding
+  mac-reverse-1000: flip: 2482 bit flips changed the decoding, 345 made it fail, 53 lay in no field of their encoding
+  muxchain: flip: 2037 bit flips changed the decoding, 317 made it fail, 46 lay in no field of their encoding
+  ntt-1024: flip: 169087 bit flips changed the decoding, 22715 made it fail, 1222 lay in no field of their encoding
+  ntt-16: flip: 63645 bit flips changed the decoding, 9007 made it fail, 532 lay in no field of their encoding
+  ntt-4: flip: 31837 bit flips changed the decoding, 4629 made it fail, 302 lay in no field of their encoding
+  ntt-64: flip: 96547 bit flips changed the decoding, 13443 made it fail, 762 lay in no field of their encoding
+  ntt-65536: flip: 269035 bit flips changed the decoding, 36125 made it fail, 1912 lay in no field of their encoding
+  optic-bilinear: flip: 3747 bit flips changed the decoding, 620 made it fail, 81 lay in no field of their encoding
+  optic-linearmac: flip: 2760 bit flips changed the decoding, 459 made it fail, 77 lay in no field of their encoding
+  optic-mul: flip: 2473 bit flips changed the decoding, 400 made it fail, 39 lay in no field of their encoding
+  soac-boundaries: flip: 48363 bit flips changed the decoding, 7034 made it fail, 443 lay in no field of their encoding
+  soac-empty: flip: 4033 bit flips changed the decoding, 631 made it fail, 72 lay in no field of their encoding
+  soac-no-segments: flip: 1961 bit flips changed the decoding, 307 made it fail, 36 lay in no field of their encoding
+  soac-segments-64x1024: flip: 43949 bit flips changed the decoding, 6976 made it fail, 371 lay in no field of their encoding
+  soac-single-65536: flip: 33913 bit flips changed the decoding, 6240 made it fail, 295 lay in no field of their encoding
+  source-leaf-affine: flip: 941 bit flips changed the decoding, 154 made it fail, 25 lay in no field of their encoding
+  source-leaf-fixed-square: flip: 634 bit flips changed the decoding, 91 made it fail, 11 lay in no field of their encoding
+  source-leaf-mux: flip: 1264 bit flips changed the decoding, 208 made it fail, 32 lay in no field of their encoding
+  source-leaf-shl: flip: 718 bit flips changed the decoding, 121 made it fail, 25 lay in no field of their encoding
+  source-leaf-shr: flip: 724 bit flips changed the decoding, 115 made it fail, 25 lay in no field of their encoding
+  tree512: flip: 78923 bit flips changed the decoding, 13388 made it fail, 1033 lay in no field of their encoding
+=== [4/6] the model: every graph's programs on every vector; a planted store flip caught ===
+  adjoint-mul-add: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  adjoint-square-bilinear: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  allops: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  diamond: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  glmul-256: 2 stages, 6 vectors: the dumped programs on the model give expected.tsv
+  glmul-4: 2 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  mac-reverse-1000: 3 stages, 6 vectors: the dumped programs on the model give expected.tsv
+  muxchain: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  ntt-1024: 31 stages, 6 vectors: the dumped programs on the model give expected.tsv
+  ntt-16: 13 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  ntt-4: 7 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  ntt-64: 19 stages, 6 vectors: the dumped programs on the model give expected.tsv
+  ntt-65536: 49 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  optic-bilinear: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  optic-linearmac: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  optic-mul: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  soac-boundaries: 3 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  soac-empty: 3 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  soac-no-segments: 3 stages, 12 vectors: the dumped programs on the model give expected.tsv
+  soac-segments-64x1024: 3 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  soac-single-65536: 3 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  source-leaf-affine: 1 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  source-leaf-fixed-square: 1 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  source-leaf-mux: 1 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  source-leaf-shl: 1 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  source-leaf-shr: 1 stages, 2 vectors: the dumped programs on the model give expected.tsv
+  tree512: 1 stages, 6 vectors: the dumped programs on the model give expected.tsv
+  diamond: planted flip 0:30:40 caught: vector 0, output 0 (wire 8), element 0: the model gives 4294967296 where expected.tsv has 11
+  optic-bilinear: planted flip 0:26:40 caught: vector 0, output 0 (wire 3), element 0: the model gives 4294967296 where expected.tsv has 0
+  optic-linearmac: planted flip 0:23:40 caught: vector 0, output 0 (wire 3), element 0: the model gives 4294967296 where expected.tsv has 1
+  optic-mul: planted flip 0:17:40 caught: vector 1, output 0 (wire 3), element 0: the model gives 0 where expected.tsv has 6
+  soac-boundaries: planted flip 1:48:40 caught: vector 0, output 0 (wire 2), element 0: the model gives 0 where expected.tsv has 534
+  soac-empty: planted flip 1:35:40 caught: vector 0, output 6 (wire 8), element 0: the model gives 0 where expected.tsv has 1
+  soac-no-segments: planted flip 1:22:40 caught: vector 0, output 6 (wire 8), element 0: the model gives 0 where expected.tsv has 1
+  soac-segments-64x1024: planted flip 1:40:40 caught: vector 0, output 0 (wire 2), element 0: the model gives 5510 where expected.tsv has 23665901968390
+  soac-single-65536: planted flip 1:40:40 caught: vector 0, output 0 (wire 2), element 0: the model gives 5510 where expected.tsv has 23665901968390
+  soac-boundaries: retained pool unread on this vector suite (complete removal still replays); no pool negative applies
+  soac-segments-64x1024: corrupted embedded descriptor caught at stage 1, byte offset 6236
+    [FAIL] soac-segments-64x1024: vector 0, output 3 (wire 5), element 0: the model gives 372505522122 where expected.tsv has 372258608544
+=== [5/6] the model against gem5's Vega bodies on random register states ===
+  62 instructions x 6 trials -> /tmp/isa_check.hsnCk9/gem5_vectors.tsv
+  372 gem5 vectors over 62 instructions agree with the model
+=== [6/6] the waits: every load awaited before its destination is touched; a removed wait refused ===
+  adjoint-mul-add: 1 stages: every load is waited for before its destination is touched
+  adjoint-square-bilinear: 1 stages: every load is waited for before its destination is touched
+  allops: 1 stages: every load is waited for before its destination is touched
+  diamond: 1 stages: every load is waited for before its destination is touched
+  glmul-256: 2 stages: every load is waited for before its destination is touched
+  glmul-4: 2 stages: every load is waited for before its destination is touched
+  mac-reverse-1000: 3 stages: every load is waited for before its destination is touched
+  muxchain: 1 stages: every load is waited for before its destination is touched
+  ntt-1024: 31 stages: every load is waited for before its destination is touched
+  ntt-16: 13 stages: every load is waited for before its destination is touched
+  ntt-4: 7 stages: every load is waited for before its destination is touched
+  ntt-64: 19 stages: every load is waited for before its destination is touched
+  ntt-65536: 49 stages: every load is waited for before its destination is touched
+  optic-bilinear: 1 stages: every load is waited for before its destination is touched
+  optic-linearmac: 1 stages: every load is waited for before its destination is touched
+  optic-mul: 1 stages: every load is waited for before its destination is touched
+  soac-boundaries: 3 stages: every load is waited for before its destination is touched
+  soac-empty: 3 stages: every load is waited for before its destination is touched
+  soac-no-segments: 3 stages: every load is waited for before its destination is touched
+  soac-segments-64x1024: 3 stages: every load is waited for before its destination is touched
+  soac-single-65536: 3 stages: every load is waited for before its destination is touched
+  source-leaf-affine: 1 stages: every load is waited for before its destination is touched
+  source-leaf-fixed-square: 1 stages: every load is waited for before its destination is touched
+  source-leaf-mux: 1 stages: every load is waited for before its destination is touched
+  source-leaf-shl: 1 stages: every load is waited for before its destination is touched
+  source-leaf-shr: 1 stages: every load is waited for before its destination is touched
+  tree512: 1 stages: every load is waited for before its destination is touched
+  adjoint-mul-add: wait replaced by s_nop at 0:11 refused: stage 0: dword 16: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  adjoint-square-bilinear: wait replaced by s_nop at 0:14 refused: stage 0: dword 21: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  allops: wait replaced by s_nop at 0:15 refused: stage 0: dword 23: V_MUL_LO_U32 reads s4 while a scalar load to it is outstanding
+  diamond: wait replaced by s_nop at 0:15 refused: stage 0: dword 24: V_ADD_CO_U32 reads v2 while a vector load to it is outstanding
+  glmul-256: wait replaced by s_nop at 0:12 refused: stage 0: dword 19: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  glmul-4: wait replaced by s_nop at 0:11 refused: stage 0: dword 16: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  mac-reverse-1000: wait replaced by s_nop at 0:11 refused: stage 0: dword 18: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  muxchain: wait replaced by s_nop at 0:13 refused: stage 0: dword 19: V_CMP_NE_I64 reads v6 while a vector load to it is outstanding
+  ntt-1024: wait replaced by s_nop at 0:12 refused: stage 0: dword 19: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  ntt-16: wait replaced by s_nop at 0:11 refused: stage 0: dword 16: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  ntt-4: wait replaced by s_nop at 0:11 refused: stage 0: dword 16: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  ntt-64: wait replaced by s_nop at 0:11 refused: stage 0: dword 16: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  ntt-65536: wait replaced by s_nop at 0:12 refused: stage 0: dword 19: BUFFER_STORE_DWORDX2 reads v2 while a vector load to it is outstanding
+  optic-bilinear: wait replaced by s_nop at 0:14 refused: stage 0: dword 21: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  optic-linearmac: wait replaced by s_nop at 0:14 refused: stage 0: dword 21: V_MUL_HI_U32 reads s0 while a scalar load to it is outstanding
+  optic-mul: wait replaced by s_nop at 0:11 refused: stage 0: dword 16: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  soac-boundaries: wait replaced by s_nop at 0:8 refused: stage 0: dword 12: V_ADD_CO_U32 reads v2 while a vector load to it is outstanding
+  soac-empty: wait replaced by s_nop at 1:8 refused: stage 1: dword 12: BUFFER_STORE_DWORDX2 reads s4 while a scalar load to it is outstanding
+  soac-no-segments: wait replaced by s_nop at 1:8 refused: stage 1: dword 12: BUFFER_STORE_DWORDX2 reads s4 while a scalar load to it is outstanding
+  soac-segments-64x1024: wait replaced by s_nop at 0:9 refused: stage 0: dword 15: V_ADD_CO_U32 reads v2 while a vector load to it is outstanding
+  soac-single-65536: wait replaced by s_nop at 0:9 refused: stage 0: dword 15: V_ADD_CO_U32 reads v2 while a vector load to it is outstanding
+  source-leaf-affine: wait replaced by s_nop at 0:13 refused: stage 0: dword 19: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  source-leaf-fixed-square: wait replaced by s_nop at 0:8 refused: stage 0: dword 12: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  source-leaf-mux: wait replaced by s_nop at 0:16 refused: stage 0: dword 23: V_MUL_HI_U32 reads v2 while a vector load to it is outstanding
+  source-leaf-shl: wait replaced by s_nop at 0:12 refused: stage 0: dword 18: V_CMP_GT_U64 reads v2 while a vector load to it is outstanding
+  source-leaf-shr: wait replaced by s_nop at 0:12 refused: stage 0: dword 18: V_CMP_GT_U64 reads v2 while a vector load to it is outstanding
+  tree512: wait replaced by s_nop at 0:21 refused: stage 0: dword 37: V_ADD_CO_U32 reads v2 while a vector load to it is outstanding
+[PASS] hardware/gpu/isa_check.sh

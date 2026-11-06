@@ -138,8 +138,8 @@ cd alice && obend judge ../pay.json
 ```
 
 ```text
-pay: refused: stale (authority): no grant that stands lets bob write ledger/alice, ledger/carol (g2r (read on ledger/alice, ledger/carol) stands; pay, g2 revoked)
 work: performed 0, retained 61 of 61
+pay: refused: stale (authority): no grant that stands lets bob write ledger/alice, ledger/carol (g2r (read on ledger/alice, ledger/carol) stands; pay, g2 revoked)
 ```
 
 ```sh
@@ -204,8 +204,8 @@ ledger/alice: v4 written
 pay: display: as it was
 pay: support moved under ledger/alice (bytes 29 → 64, version 0 → 3); the values it read are as captured
 pay: authority: g2r (read on ledger/alice, ledger/carol), g3 (read, write on ledger/*) stand; pay, g2 revoked
-pay: effect: stale (the laws over ledger/alice moved); refused by its contract: the laws over ledger/alice no longer admit amount = 31, which it promised (1..40)
 work: performed 50, retained 0 of 51
+pay: effect: stale (the laws over ledger/alice moved); refused by its contract: the laws over ledger/alice no longer admit amount = 31, which it promised (1..40)
 ```
 
 Alice puts the floor back at 50. The laws are again those the form was last transported under: there
@@ -250,8 +250,8 @@ cd alice && obend judge ../pay.json --receipt ../pay.receipt
 ```
 
 ```text
-pay: waits: ledger/carol is not here now: its file is gone, its history kept; nothing landed, and the proposal may be judged again when it returns
 work: performed 0, retained 51 of 51
+pay: waits: ledger/carol is not here now: its file is gone, its history kept; nothing landed, and the proposal may be judged again when it returns
 ```
 
 The file comes back. The same proposal, judged again, lands, with its receipt written for Bob.
@@ -345,9 +345,9 @@ cd alice && obend judge ../pay2.json --receipt ../pay2.receipt
 
 ```text
 recovered: record 41 (judge) was whole and its files were not: wrote ledger/alice.md, ledger/carol.md
-pay2: refused: a duplicate: intent ece6c6ffe02a8294 has landed here as receipt b1a06d2196b16752 (2 in the chain); it is not landed again
 wrote ../pay2.receipt
 work: performed 0, retained 1 of 1
+pay2: refused: a duplicate: intent ece6c6ffe02a8294 has landed here as receipt b1a06d2196b16752 (2 in the chain); it is not landed again
 ```
 
 ```sh
@@ -367,8 +367,8 @@ cd alice && obend judge ../pay2-again.json
 ```
 
 ```text
-pay2: refused: stale (value): the form read ledger/alice balance 70 → 60, ledger/carol balance 36 → 46; capture it again
 work: performed 0, retained 0 of 1
+pay2: refused: stale (value): the form read ledger/alice balance 70 → 60, ledger/carol balance 36 → 46; capture it again
 ```
 
 ## 7. An old branch rejoins after a revocation
@@ -394,17 +394,18 @@ The laptop comes home. The grants join, and a revocation made on either side sta
 rested on them alone, so its pages are not merged, by name; the note is.
 
 ```sh
-cd alice && obend merge ../laptop && obend grants
+cd alice && obend merge ../laptop; echo "exit $?"; obend grants
 ```
 
 ```text
-ledger/alice, ledger/carol: not merged from laptop: the landing of pay (intent 275ecb5241f29055, by bob) rested on pay, g2, revoked here
 Notes: imported from laptop
 rendered Notes.md
 work: performed 0, retained 0 of 1
+exit 1
 pay: bob (read, write on ledger/*), revoked
 g2: bob (read, write on ledger/alice, ledger/carol), revoked
 g2r: bob (read on ledger/alice, ledger/carol)
 g3: bob (read, write on ledger/*)
 pay2: bob (read, write on ledger/*)
+ledger/alice, ledger/carol: not merged from laptop: the landing of pay (intent 275ecb5241f29055, by bob) rested on pay, g2, revoked here
 ```

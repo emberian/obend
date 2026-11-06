@@ -159,8 +159,8 @@ cd alice && obend judge ../pay.json
 ```
 
 ```text
-pay: refused: late: the form was retired by the retention contract q4; a proposal for it rests on a forgotten prefix of the log
 work: performed 0, retained 1 of 1
+pay: refused: late: the form was retired by the retention contract q4; a proposal for it rests on a forgotten prefix of the log
 ```
 
 The laptop is a branch the contract abandoned:

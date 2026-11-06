@@ -114,6 +114,18 @@ witness; arbitrary Core4 SOAC recovery from a book file is not implemented.
 ## Validation and measured limits
 
 The named hbox builds for the frontend, core fold proofs, typing and admission/refusal tests pass.
+The final merged build ran under `swarm-build` in `/home/hbox/obend/frontend/lean`:
+
+```sh
+swarm-build lake build obend-emit-gpu obend-emit-sv obend-rdna2 obend \
+  Obend.Teeth.Hardware.Rdna2Runs Obend.Teeth.Hardware.ArrayTyping \
+  Obend.Teeth.Hardware.GpuArrayMember Obend.Teeth.Hardware.GpuArrayEncoding \
+  Obend.Teeth.Hardware.GpuSourcePrograms
+```
+
+Its log is `/home/hbox/obend/frontend-merged-build-final.log`. The emitter targets were rebuilt
+again after the final registry comment cleanup; that log is
+`/home/hbox/obend/frontend-merged-build-emitter-final.log`.
 The large literal test exercises compact encoding and equality at the NTT's input scale. Actual
 field emission is checked against exact natural multiplication modulo the Goldilocks prime; the
 NTT emission is checked against recursive radix-2 arithmetic and, at smaller sizes, the naive DFT.
@@ -132,13 +144,13 @@ Measured baselines, with full timing scope and versions in the linked reports:
 | Workload | RX 6750 XT / RADV, ms | CPU baseline, ms | Interpretation |
 |---|---:|---:|---|
 | Adapted upstream MLP forward pass | 3.107 | 0.421578, catgrad interpreter | GPU submission/completion is about 7.37× longer |
-| SOAC full pipeline, 65,536-element single segment | 95.125 | 2.881, NumPy | about 33.0× longer |
-| SOAC full pipeline, 64×1,024 segmentation | 19.224 | 3.060, NumPy | about 6.28× longer; pipeline also contains unsegmented operators |
+| SOAC full pipeline, 65,536-element single segment | 92.492 | 2.936, NumPy | about 31.5× longer |
+| SOAC full pipeline, 64×1,024 segmentation | 19.518 | 2.939, NumPy | about 6.64× longer; pipeline also contains unsegmented operators |
 
 These are measurements, not correctness theorems or gated performance claims. The GPU timings
 exclude compilation and transfer; CPU timings include allocations and host dispatch. See
 [SOAC results](../hardware/gpu/SOAC.md) and [catgrad results](../hardware/gpu/catgrad/README.md).
-These figures replace the predecessor's draft measurements and come from recovery runs.
+These figures replace the predecessor's draft measurements and come from recovery runs (SOAC rerun after merging dev).
 The catgrad CPU timer includes source-term cloning and lang-to-core lowering on every pass;
 the GPU timer excludes compilation. The host was shared with other work. These differing scopes
 and shared-host conditions preclude treating the ratios as stable speedup bounds.
@@ -151,10 +163,71 @@ mutations cause wrong values, and final RDNA2 assembly is extracted. Its retaine
 [`frontend-gpu-gate.log`](../hardware/gpu/frontend-gpu-gate.log). The source gate's output is
 [`source-gate.log`](../hardware/gpu/source-gate.log).
 
-Final integration still running: ISA stages 1–6 with the new segmented-loop instructions and
-PC-relative constant pools. Its final log must be attached before this lane is described as passing G2.
+The final merged run of `isa_check.sh` passed stages 1–6, including the full large-workload replay,
+store faults, used constant-pool descriptor corruption, gem5 instruction probes and removed waits.
+Its output is [`frontend-isa-gate.log`](../hardware/gpu/frontend-isa-gate.log). The boundary workload's
+retained pool is unused on its vectors: complete removal still replays. The segmented large workload
+reads its pool, and corrupting a descriptor is detected. Neither case is silently waived.
+
+The requested dev merge imports `402378a` (including GPU-square `2af7cf7`). `SquareGraphs` now
+holds one lazy, checked source registry and shared vector printer for both emitters; the moved
+handwritten field/NTT builder is removed there too. Dev's one-hot scalar vectors are preserved.
+`RtlFold` emits accumulator SSA wires and reuses scan prefixes, avoiding quadratic circuit growth;
+`range_size` proves one added wire per consumed input, and `compile_sound` proves the circuit's
+results equal `evalFold`:
+
+```lean
+theorem compile_sound (op : ReduceOp) (shape : FoldShape) (read : Nat → RtlExpr) (values : Nat → Word)
+    (ins regs : Nat → Word) (defs : Defs)
+    (hr : ∀ i, Denotes ins regs defs (read i) (values i)) :
+    Extends ins regs defs (compile op shape read defs).1 ∧
+    (compile op shape read defs).2.size = shape.outLen ∧
+    ∀ i, Denotes ins regs (compile op shape read defs).1
+      ((compile op shape read defs).2.getD i (.const 0#64)) ((evalFold op shape values).getD i 0#64)
+```
+
+The existing square theorem retains its statement:
+
+```lean
+theorem rtl_eq_gpu_array (name : String) (g : ArrayGraph) (hwf : g.wf = true) (ins regs : Nat → Word)
+    (flat : Nat → Word) (hFlat : Flat g.lengths (inputEnvOf g ins) flat) :
+    (runProgram (lowerArrayToGpu g) flat).flatten =
+      (evalModuleOutputs (compileArrayGraphToRtl name g) ins regs).map Prod.snd
+```
+
+The fold circuit is linear size but sequential depth. The new `soac-boundaries` square passes
+artifact regeneration, HDL/array-model equality, bit-precise Yosys/Lean equivalence, Verilator,
+RADV, and both the output-bit-flip and swapped-operator negatives. The complete merged square
+run remains in progress.
+
+The square gate's executable override collided with Verilator's internal `VERILATOR_BIN`:
+the launcher recursively invoked itself. The gate now removes that variable from the child
+environment. Verification uses unmodified Verilator v5.024 source at
+`522bead374d6b7b2adb316304126e5361b18bcf1`, with its compiled binary in the lane's external directory,
+Yosys 0.33 and Z3 4.8.12. No system installation was changed. EQY synthesis equivalence is
+opt-in and was not run.
+
+The addition-tree slowdown was counterexample search, not the positive equivalence query.
+The shared LEC now tries bounded exact zero/one carrier witnesses before its existing solver paths.
+Only SAT is accepted from a constrained query; constrained UNSAT cannot establish equivalence.
+This caught the planted output bit flip and root-operator swap while retaining the complete
+unconstrained equivalence obligation. Diagnostic runs are recorded in
+[`frontend-lec-probe.log`](../hardware/gpu/square/frontend-lec-probe.log).
 
 Open engineering work: work-efficient parallel intra-segment schedules; a production ec-gpu
 throughput comparison; broader source syntax recovery; a proof for catgrad specialization/import;
 fixed-point rescaling and a no-overflow rational interpretation; and a specified floating-point
 backend. The new source/GPU theorem and shape discipline do not imply those additional results.
+The proved result ends at abstract `runProgram`; the emitted WGSL, driver compilation and final
+machine code are externally checked, not connected by a machine-checked compiler theorem.
+New source, fold and catgrad device coverage is RADV only.
+
+## Replacement and integration
+
+Removed the handwritten graph-wire field/NTT builder from GPU emission and, after dev moved it,
+from `SquareGraphs`. Both emitters now consume the same checked source registry. Removed eager
+square construction and duplicate vector formatting; listing targets does not build a large NTT
+or its RTL. Collective execution uses the proved array-backed cached-prefix implementation;
+the clean list reference remains only as a specification. RTL scan prefixes share accumulator
+wires rather than expanding repeated expression trees. Dev's scalar-to-array RTL delegation
+and one-hot mux vectors remain in place.

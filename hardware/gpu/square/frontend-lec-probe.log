@@ -1,0 +1,14 @@
+baseline-positive: 0.042275s rc=0 'unsat'
+ac-positive: 0.043243s rc=0 'unsat'
+ac-bitflip: 20.010294s rc=0 'timeout'
+zero-positive: 0.058132s rc=1 'unsat'
+zero-bitflip: 0.146898s rc=0 'sat'
+zero-operator: 0.049730s rc=1 'unsat'
+one-operator: 0.128503s rc=0 'sat'
+positive-and-bitflip: 2.162313s rc=0 expected=0
+  LEC sq_tree512: unsat, bit-precise (Yosys's reading of sq_tree512.sv == Lean's model of the RtlModule)
+  mutation `out_w1022_0 = 64'd1 ^ (w_1022);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+    (|lec_out_out_w1022_0| false) (|rtl_out_out_w1022_0| #x0000000000000001) (|spec_out_out_w1022_0| #x0000000000000000)
+operator: 2.048422s rc=1 expected=1
+[FAIL] LEC sq_tree512: z3 says sat (bit-precise, uniform carrier witness 1); Yosys's reading of tree.operator.sv is not shown equal to Lean's model
+ (|lec_out_out_w1022_0| false)
