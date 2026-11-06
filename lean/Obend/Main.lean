@@ -951,7 +951,7 @@ def proveArgs (spec name : String) : List String → Option (IO UInt32)
 
 /-! ## Dispatch -/
 
-public def main (args : List String) : IO UInt32 :=
+def dispatch (args : List String) : IO UInt32 :=
   match args with
   | ["identity"] => do IO.println identityJson.compress; return 0
   | ["parse", path] => parseCommand path
@@ -1028,3 +1028,15 @@ public def main (args : List String) : IO UInt32 :=
     | none => match Obend.Vault.Cli.main? args with
       | some act => act
       | none => do IO.eprintln usage; return 64
+
+/-- Every command, then what it cost (`Obend.Vault.Cost`: said only when `OBEND_COST` is set). -/
+public def main (args : List String) : IO UInt32 := do
+  let t0 ← IO.monoMsNow
+  try dispatch args
+  finally
+    let words := args.filter (fun a => !a.startsWith "-")
+    let cmd := match words with
+      | w :: v :: _ => if w == "ledger" || w == "branch" || w == "report" then w ++ " " ++ v else w
+      | [w] => w
+      | [] => ""
+    Obend.Vault.Cost.emit ((← IO.monoMsNow) - t0) cmd
