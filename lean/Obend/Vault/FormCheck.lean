@@ -34,6 +34,8 @@ def natDecls : Nat → List (String × HoleTy) → List (Nat × HoleDecl)
   | _, [] => []
   | i, (_, .nat) :: hs => (i, ⟨[], .natural⟩) :: natDecls (i + 1) hs
   | i, (_, .page) :: hs => natDecls (i + 1) hs
+  | i, (_, .label) :: hs => natDecls (i + 1) hs
+  | i, (_, .text) :: hs => natDecls (i + 1) hs
 
 theorem natDecls_lookup : ∀ (i : Nat) (hs : List (String × HoleTy)) (n : Nat) (d : HoleDecl),
     (natDecls i hs).lookup n = some d → d = ⟨[], .natural⟩
@@ -44,6 +46,12 @@ theorem natDecls_lookup : ∀ (i : Nat) (hs : List (String × HoleTy)) (n : Nat)
     · cases h; rfl
     · exact natDecls_lookup (i + 1) hs n d h
   | i, (_, .page) :: hs, n, d, h => by
+    simp only [natDecls] at h
+    exact natDecls_lookup (i + 1) hs n d h
+  | i, (_, .label) :: hs, n, d, h => by
+    simp only [natDecls] at h
+    exact natDecls_lookup (i + 1) hs n d h
+  | i, (_, .text) :: hs, n, d, h => by
     simp only [natDecls] at h
     exact natDecls_lookup (i + 1) hs n d h
 
@@ -170,7 +178,7 @@ def Form.legPages (f : Form) : PRef → List String
 /-- The residual of a move with the leg's page put: a hole of it filled with `s`. -/
 def legResidual (f : Form) (r : RMove) (side : PRef) (s : String) : RMove :=
   match side with
-  | .hole h => (r.subst ⟨[], [(h, s)]⟩).peval f.known
+  | .hole h => (r.subst ⟨[], [(h, s)], []⟩).peval f.known
   | .page _ => r
 
 /-- Every law over every leg a fill of the form may write, at the store `es`. -/

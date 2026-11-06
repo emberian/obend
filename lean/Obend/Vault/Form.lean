@@ -50,6 +50,14 @@ reads of uncaptured pages left in place.
   field the form moves (`judgeProposal_sound`); the conservation of the landed turn is checked at the
   door (`landedTurn`), since what the text edit did to the field is the kernel's reading, not a proof.
 
+* Label and text holes (section 7b): a form may SET label and text fields of a page (`SetMove`), so
+  a brief is a form and a lane's report its fill (`obend brief`). The substitution lemma holds of the
+  sets (`eval_fill_eq_subst_residual_sets`); a fill with sets amplifies nothing
+  (`admitFill_no_amplification`, `admitFill_gate_first`: the membrane over the sets' pages reads no
+  store), moves no natural (`natAt_putLabels`) and so conserves every total (`admitFill_conserves_total`);
+  landed, it stays inside the membrane (`judgeFill_sound`). A form without sets is admitted and judged
+  as before (`admitFill_no_sets`, `judgeFill_no_sets`), and every theorem above stands as stated.
+
 **What is not.** The residual language is the form's own (`NExpr`: naturals, holes, field reads, `+`,
 a `-` that may not go below zero), not Core's `Term` with `.hole n σ`: lifting it there needs Core's
 step relation stable under hole filling, which is not done. A hole carries a type (a natural, a

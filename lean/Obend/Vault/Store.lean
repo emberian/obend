@@ -12,8 +12,10 @@ and the files; `Obend.Vault.Cli` reads and writes them.
   a new one (`readPage`). Each write is a turn (`admitWrites`): judged by the page's laws (`commit`)
   against the store at the moment of its judgment, a kind before its instances; an admitted write is
   a new version, a refused one is kept with the pins its judgment read and is judged again exactly
-  when a pin moves (a page it read is written). An open leaves every refused write's pins holding
-  (`open_admitted`). Then each page is rendered at its current version, and a file is written where
+  when a pin moves (a page it read is written). The writes still refused are then judged together,
+  as one turn on the tip of all of them (`bornWith`, `bornTogether_turn`), so pages that need each
+  other (born together, or a lane marked merged with the page that lists it) land at once. An open
+  leaves every refused write's pins holding (`open_admitted`). Then each page is rendered at its current version, and a file is written where
   its text differs (`writesFor`). **Opening twice is a no-op** (`open_idem`): the second open finds
   every file as the first left it and changes neither the store nor any file. This holds for every
   store and every vault the reader accepts (page names unique, as a directory's paths are).
@@ -37,7 +39,9 @@ law reading either names the names.
 
 Every write goes through `commit`, which judges it by the page's laws and its kinds'
 (`Obend.Vault.Law.judge`), and refuses a change of a law line by anyone but the owner (or a member
-granted `relaw`).
+granted `relaw`). A law reading `linked.F` is judged at every page the page links to; one reading
+`linked_by.F` (a law over backlinks) at every page linking to it, with `linked_by.listed` saying
+whether the page links back, so "every lane marked merged is listed on DEV" is DEV's law.
 -/
 public import Obend.Vault.Law
 public import Obend.Kind.Proofs
@@ -948,7 +952,7 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
     let wt := writeTurn p.name o n (pinsAt es (citedNames res G' ++ if mineBy.isEmpty then [] else linkers)) rq
     let world := overlay over (applyTurn wt.readPins.store wt)
     let mine := linkLaws laws
-    if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
+    if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq (citedNames res G')) then
       throw (linkRefusalText p.name laws r facts)
     for e in es do
       -- `citesPage_and_contains`: the scan first, the walk only for a page that cites this one
@@ -971,8 +975,11 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
           match lawsFor es e.name e.graph with
           | .ok elaws =>
             let theirsBy := byLaws elaws
+            -- in a turn over several pages (`over`), whether the page links back is read on the
+            -- turn's tip: `res` carries each page the turn writes at its new version
+            let gx := if over.isEmpty then e.graph else ((res.find? (·.name == x)).map (·.graph)).getD e.graph
             if let some r := (if theirsBy.isEmpty then none
-                else judgeLinksIn (listedStore world (if (linkTargets e.graph).contains p.id then [p.name] else [])) e.name theirsBy rq [p.name]) then
+                else judgeLinksIn (listedStore world (if (linkTargets gx).contains p.id then [p.name] else [])) e.name theirsBy rq [p.name]) then
               throw (byRefusalText p.name e.name elaws r facts)
           | .error _ => pure ()
     pure ()
@@ -1646,26 +1653,37 @@ def freshNames (s : Store) (V : List (String × String)) : List String :=
 def withFresh (H : Hash) (s : Store) (V : List (String × String)) : Store :=
   { s with pages := s.pages ++ freshPages H s (freshNames s V) }
 
-/-! ### Births together
+/-! ### Writes together
 
-Pages that link each other under laws over links cannot be born one at a time: each birth reads the
-others, which have no version yet, and is refused. The births an open refused are judged again as
-ONE turn (`commitTurn`, lane-form2's turn over several pages): every birth prepared, each judged by
-its own laws and the laws over links on the turn's tip (the other births at their new states), and
-landed all at once (`Store.landAll`) or not at all. A birth that is refused at the tip of the others
-is set aside and the rest judged again, until a turn is admitted or none is left; a birth set aside
-keeps its refusal, which names its law. -/
+Pages that link each other under laws over links (or over backlinks) cannot be written one at a time
+when each write needs the other: two pages born in one open each read the other, which has no version
+yet; a lane marked merged and DEV listing it are each refused while the other stands as it was. The
+writes an open refused are judged again as ONE turn (`commitTurn`, lane-form2's turn over several
+pages): every write prepared, each judged by its own laws and the laws over links and backlinks on the
+turn's tip (the other writes at their new states), and landed all at once (`Store.landAll`) or not at
+all. A write refused at the tip of the others is set aside and the rest judged again, until a turn is
+admitted or none is left; a write set aside keeps its refusal, which names its law. -/
 
-/-- The refused writes of an open that are births: pages with no version yet. -/
+/-- The refused writes of an open whose pages the store has. -/
 def refusedBirths (s : Store) (refused : List RefusedWrite) : List RefusedWrite :=
-  refused.filter fun r => match s.page? r.name with
-    | some p => p.history.isEmpty
-    | none => false
+  refused.filter fun r => (s.page? r.name).isSome
 
-/-- The births as the writes of one turn: each page and the version its file reads as. -/
+/-- The refused writes as the writes of one turn: a birth, the page and the version its file reads
+as; an edit, the current version with the file lined up against it (`ownerWrite`'s edit). -/
 def birthWrites (H : Hash) (res : List Entry) (s : Store) (bs : List RefusedWrite) :
     List (Page × Graph × List (AtomId × String)) :=
-  bs.filterMap fun r => (s.page? r.name).map fun p => (p, readAs H res r.md, [])
+  bs.filterMap fun r => (s.page? r.name).bind fun p =>
+    match p.current with
+    | none => some (p, readAs H res r.md, [])
+    | some G =>
+      let b := editPatch H G (align (pieces G p.name p.who) (contents (resolveIn H res) (stripToks (tokens r.md))))
+        "owner"
+      if b.ops.isEmpty then none else some (p, G.apply b.ops, b.added.map (·, "owner"))
+
+/-- The entries a turn's cites resolve against: `res`, with each page the turn writes at its new
+version. -/
+def turnEntries (res : List Entry) (ws : List (Page × Graph × List (AtomId × String))) : List Entry :=
+  ws.foldl (fun acc w => (acc.filter (·.name != w.1.name)) ++ [⟨w.1.name, w.1.id, w.2.1, w.1.history.length⟩]) res
 
 /-- **Births judged as one turn**: the writes `ws` committed as one turn of the owner's
 (`commitTurn`); refused, the writes that do not prepare, or are refused at the tip of those that do,
@@ -1675,18 +1693,18 @@ def bornTogether (H : Hash) (res : List Entry) (s : Store) :
   | _, 0 => none
   | [], _ + 1 => none
   | ws, fuel + 1 =>
-    match commitTurn s.entries res ws .owner s.turn "owner" s.environment with
+    match commitTurn s.entries (turnEntries res ws) ws .owner s.turn "owner" s.environment with
     | .ok prs => some prs
     | .error _ =>
       let prs := ws.filterMap fun (p, G', a) =>
         (prepareWrite s.entries p G' a .owner s.turn "owner" s.environment).toOption
       let keep := ws.filter fun (p, _, _) => match prs.find? (·.p.name == p.name) with
-        | some pr => (judgePrepared s.entries res pr (tipOf prs)).toBool
+        | some pr => (judgePrepared s.entries (turnEntries res ws) pr (tipOf prs)).toBool
         | none => false
       if keep.length < ws.length then bornTogether H res s keep fuel else none
 
-/-- **The births of an open, together**: when two or more births stay refused, the largest set of
-them that is admitted as one turn lands (`bornTogether`), and the writes it wakes are judged again
+/-- **The refused writes of an open, together**: when two or more writes stay refused, the largest set
+of them that is admitted as one turn lands (`bornTogether`), and the writes it wakes are judged again
 (`admitWrites`); otherwise the admission is as it was. -/
 def bornWith (H : Hash) (res : List Entry) (sr : Store × List RefusedWrite) : Store × List RefusedWrite :=
   let bs := refusedBirths sr.1 sr.2
@@ -1696,7 +1714,9 @@ def bornWith (H : Hash) (res : List Entry) (sr : Store × List RefusedWrite) : S
   | some prs =>
     let s2 := sr.1.landAll prs
     let rest := sr.2.filter fun r => !(prs.map (·.p.name)).contains r.name
-    admitWrites H res s2 (woken s2 rest) (held s2 rest)
+    -- a turn writes several pages: every write whose pins it moved is judged again
+    admitWrites H res s2 ((rest.filter fun r => !pinsHold (stateStore s2.entries) r.pins).map fun r => (r.name, r.md))
+      (rest.filter fun r => pinsHold (stateStore s2.entries) r.pins)
 
 /-- **The admission of an open**: its writes judged (`admitWrites`) from the store with the fresh
 pages, cites resolved against the files as they are about to become (`openEntries`), then the births
@@ -2214,17 +2234,18 @@ theorem bornWith_admitted (H : Hash) (res : List Entry) (sr : Store × List Refu
     | some prs =>
       dsimp only
       refine admitWrites_admitted H res _ _ _ (by rw [landAll_names]; exact hnd) fun r hr => ?_
-      simp only [held, List.mem_filter] at hr
+      simp only [List.mem_filter] at hr
       exact hr.2
 
-/-- **Births together are one turn**: what `bornTogether` lands is a turn the owner committed over
-some of the births it was given (`commitTurn`): each of them prepared and judged by its own laws and
-the laws over links on the tip of all of them. -/
+/-- **Writes together are one turn**: what `bornTogether` lands is a turn the owner committed over
+some of the writes it was given (`commitTurn`): each of them prepared and judged by its own laws and
+the laws over links and backlinks on the tip of all of them. -/
 theorem bornTogether_turn {H : Hash} {res : List Entry} {s : Store} :
     ∀ {ws : List (Page × Graph × List (AtomId × String))} {fuel : Nat} {prs : List Prepared},
       bornTogether H res s ws fuel = some prs →
-        ∃ ws', (∀ w ∈ ws', w ∈ ws) ∧ commitTurn s.entries res ws' .owner s.turn "owner" s.environment = .ok prs ∧
-          prs.map (·.p) = ws'.map (·.1) ∧ ∀ pr ∈ prs, judgePrepared s.entries res pr (tipOf prs) = .ok ()
+        ∃ ws', (∀ w ∈ ws', w ∈ ws) ∧
+          commitTurn s.entries (turnEntries res ws') ws' .owner s.turn "owner" s.environment = .ok prs ∧
+          prs.map (·.p) = ws'.map (·.1) ∧ ∀ pr ∈ prs, judgePrepared s.entries (turnEntries res ws') pr (tipOf prs) = .ok ()
   | _, 0, _, h => by simp [bornTogether] at h
   | [], _ + 1, _, h => by simp [bornTogether] at h
   | w :: ws, fuel + 1, prs, h => by

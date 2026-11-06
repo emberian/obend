@@ -791,13 +791,16 @@ def openWorld (dir : System.FilePath) (verbose : Bool) : IO (Replay.World × Lis
       -- a refusal is said on stderr, by every command that opens, and makes its exit status 1
       let cs := changes f.store o.store
       let rs := refusalsOf f.store o.store
-      let ul := if verbose then unbornLines o.store cs else []
       if verbose then
         let fl := forgottenLines f
         if cs.isEmpty && fl.isEmpty then IO.println "nothing changed"
         for c in fl do IO.println c
         for c in cs do unless rs.contains c do IO.println c
-      sayRefused (rs ++ ul)
+      -- a refusal this command made; a page an earlier open left unborn is said again, as before,
+      -- and is not this command's refusal
+      sayRefused rs
+      if verbose then
+        for c in unbornLines o.store cs do IO.println c
       if verbose then
         for (n, _) in o.writes ++ back do IO.println ("rendered " ++ n ++ ".md")
       return (h'.world, overwrite (V ++ back) o.writes)
@@ -1172,7 +1175,7 @@ def reasonsRun (dir : System.FilePath) : List String → Option (IO UInt32)
     match w.reasons.admit name with
     | .ok a => IO.println (name ++ ": admitted (" ++ a.because ++ " is supported by " ++
         ((w.reasons.standing a.because).getD "observation or assumption") ++ ")"); return 0
-    | .error e => IO.println e; return 1
+    | .error e => IO.eprintln e; return 1
   | ["status"] => some do
     let w ← readWorld dir
     for x in w.reasons.atoms do IO.println (w.reasons.line x)
@@ -1222,7 +1225,10 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       | .error _ => pure none
     match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches) V with
     | .ok (_, .merged s' notes, rendered) =>
-      for n in notes do IO.println n
+      -- a write of the other side the tip did not land is a refused write of this merge
+      let refused := notes.filter fun n => (n.splitOn ": not merged").length > 1
+      for n in notes do unless refused.contains n do IO.println n
+      sayRefused refused
       for l in rendered do IO.println l
       for l in problems s' do IO.println l
       -- of the other replica's landings, how many stand here (none is judged again)
@@ -1494,7 +1500,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     if !ls.isEmpty then
       match ← commitWith dir (.transported name) (fun _ o => pure o) with
       | .error e =>
-        IO.println (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+        IO.eprintln (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
           " moved); " ++ e)
         IO.println (workLine (((iss.contract.map (·.offer.length)).getD 0)) 0 T)
         return 1
@@ -1611,7 +1617,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     -- a proposal whose intent landed here: refused, and its receipt written again
     if let some i := intent then
       if let some l := Transport.duplicateOf w0.landed i then
-        IO.println (dupText w0 name l)
+        IO.eprintln (dupText w0 name l)
         writeReceipt w0 l
         if let some f := w0.forms.find? (·.name == name) then
           IO.println (workLine 0 (carried f (issueOf w0 f).contract) (carried f (issueOf w0 f).contract))
@@ -1624,7 +1630,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         let ls := Transport.lawMoves w0.store f (issueOf w0 f).basis
         if (valueMoves ms).isEmpty && (waiting ms).isEmpty && !ls.isEmpty then
           match ← commitWith dir (.transported name) (fun _ o => pure o) with
-          | .error e => IO.println (name ++ ": " ++ e); return 1
+          | .error e => IO.eprintln (name ++ ": " ++ e); return 1
           | .ok (.transported v p _) =>
             performed := p
             IO.println (verdictLine name ls v (issueOf w0 f).contract)
@@ -1637,7 +1643,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       | none => .judged name digest hops a intent
     match ← finishTurn dir turn V with
     | .error e =>
-      IO.println e
+      IO.eprintln e
       let w ← readWorld dir
       if let some f := w.forms.find? (·.name == name) then
         let T := carried f (issueOf w f).contract
