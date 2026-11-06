@@ -124,9 +124,9 @@ def receiptsDir (dir : System.FilePath) : System.FilePath := dir / ".obend" / "r
 def writeRowFiles (dir : System.FilePath) (fs : List RowFiles) : IO Unit :=
   for rf in fs do
     IO.FS.createDirAll (receiptsDir dir)
-    IO.FS.writeFile (receiptsDir dir / (rf.id ++ ".json")) rf.receipt
+    Obend.Vault.Cost.writeFile (receiptsDir dir / (rf.id ++ ".json")) rf.receipt
     IO.FS.createDirAll (dir / "register")
-    IO.FS.writeFile (dir / "register" / (rf.id ++ ".md")) rf.page
+    Obend.Vault.Cost.writeFile (dir / "register" / (rf.id ++ ".md")) rf.page
 
 /-- **Commit rows** as one turn of the vault's log (`Obend.Vault.Replay.Turn.rows`, all or none) and
 write their files. -/
@@ -270,11 +270,11 @@ def trialBalance (dir : System.FilePath) (P : Nat) (out : Option String) : IO UI
     let v := Obend.Analysis.Coverage.check (tb P) postingsRoot o.book said
     IO.println (verdictText v ++ ": every posting of period " ++ toString P ++ " is in it")
     IO.FS.createDirAll (dir / "reports")
-    IO.FS.writeFile (dir / "reports" / ("TB-" ++ toString P ++ ".md")) (tbPage P said)
+    Obend.Vault.Cost.writeFile (dir / "reports" / ("TB-" ++ toString P ++ ".md")) (tbPage P said)
     let _ ← openDir dir false
     IO.println ("wrote reports/TB-" ++ toString P ++ ".md")
     if let some path := out then
-      IO.FS.writeFile path ((tbJson o said).pretty ++ "\n")
+      Obend.Vault.Cost.writeFile path ((tbJson o said).pretty ++ "\n")
       IO.println ("wrote " ++ path)
     return (if v == .ok then 0 else 3)
 
@@ -407,7 +407,7 @@ def verifyTB (j : Json) (root : Option String) : IO UInt32 := do
 
 /-- `obend verify PATH [--root ROOT]`: a ledger receipt here, anything else by `otherwise`. -/
 def verifyOr (path : String) (rest : List String) (otherwise : IO UInt32) : IO UInt32 := do
-  let j? := Json.parse (← IO.FS.readFile path)
+  let j? := Json.parse (← Obend.Vault.Cost.readFile path)
   let root := match rest with
     | ["--root", r] => some r
     | _ => none

@@ -10,25 +10,6 @@
   "outputs": [44],
   "stages": [
     {"file":"stage_0.wgsl","threads":768},
-    {"file":"stage_1.wgsl","threads":1024},
-    {"file":"stage_2.wgsl","threads":512},
-    {"file":"stage_3.wgsl","threads":1024},
-    {"file":"stage_4.wgsl","threads":512},
-    {"file":"stage_5.wgsl","threads":256},
-    {"file":"stage_6.wgsl","threads":512},
-    {"file":"stage_7.wgsl","threads":256},
-    {"file":"stage_8.wgsl","threads":512},
-    {"file":"stage_9.wgsl","threads":768},
-    {"file":"stage_10.wgsl","threads":256},
-    {"file":"stage_11.wgsl","threads":256},
-    {"file":"stage_12.wgsl","threads":256},
-    {"file":"stage_13.wgsl","threads":512},
-    {"file":"stage_14.wgsl","threads":768},
-    {"file":"stage_15.wgsl","threads":512},
-    {"file":"stage_16.wgsl","threads":768},
-    {"file":"stage_17.wgsl","threads":256},
-    {"file":"stage_18.wgsl","threads":512},
-    {"file":"stage_19.wgsl","threads":512},
-    {"file":"stage_20.wgsl","threads":256}
+    {"file":"stage_1.wgsl","threads":256}
   ]
 }

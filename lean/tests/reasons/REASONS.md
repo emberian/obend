@@ -274,7 +274,7 @@ obend reasons admit split-the-table
 ```
 
 ```text
-forgot 19 records (5425 bytes) under the retention contract swarm-1: the log is one checkpoint record of 2411 bytes
+forgot 19 records (5429 bytes) under the retention contract swarm-1: the log is one checkpoint record of 2412 bytes
 split-the-table: admitted (kernel-bound is supported by R2)
 ```
 

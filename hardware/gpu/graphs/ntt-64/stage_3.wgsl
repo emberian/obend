@@ -1,4 +1,4 @@
-// obend-emit-gpu: ntt-64, stage 3 of 1670: 2 kernels, 12 threads.
+// obend-emit-gpu: ntt-64, stage 3 of 19: 1 kernels, 64 threads.
 // Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
 @group(0) @binding(0) var<storage, read_write> w : array<i64>;
 @group(0) @binding(1) var<storage, read> c : array<i64>;
@@ -7,6 +7,8 @@
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
   let t : u32 = gid.x;
-  if (t < 8u) { let e : u32 = t - 0u; w[168u + e] = w[128u + ix[104u + e]]; }
-  if (t >= 8u && t < 12u) { let e : u32 = t - 8u; w[176u + e] = w[160u + ix[112u + e]]; }
+  if (t < 64u) {
+    let e : u32 = t - 0u;
+    w[1888u + e] = select(w[1856u + (e - 32u)], w[1696u + e], e < 32u);
+  }
 }

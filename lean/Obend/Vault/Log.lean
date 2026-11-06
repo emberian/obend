@@ -573,6 +573,13 @@ def admit (w : W) (prev : Nat) (b : Bytes) : Except String (W × O × Record) :=
     | .error e => .error e
   else .error "a turn is under 4 GiB"
 
+/-- **Admit, step by step**: a process that has stepped the turn (and knows the commitment of the world
+it stepped from) builds the same record `admit` would. -/
+theorem admit_of_step {w w' : W} {o : O} {prev : Nat} {b : Bytes} (hl : b.length < 256 ^ 4)
+    (hs : M.step w b = .ok (w', o)) {oldC : Nat} (hc : oldC = dig Hb (M.encW w)) :
+    admit Hb M w prev b = .ok (w', o, ⟨⟨prev, oldC, dig Hb (M.encW w'), dig Hb b⟩, b⟩) := by
+  subst hc; simp [admit, hl, hs]
+
 /-- A session: the world a process serves and the records it appended, oldest first. -/
 structure Session (W : Type) where
   world : W

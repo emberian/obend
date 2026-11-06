@@ -126,6 +126,8 @@ deriving DecidableEq
 inductive Turn
   | base (w : World)
   | opened (files : List (String × Option String)) (env : Option (List String))
+  /-- an open of the files the world has seen, by the same names: only the files whose text moved -/
+  | reopened (changed : List (String × String)) (env : Option (List String))
   | member (name : String) (grants : List (String × String))
   | wrote (page text : String)
   | posted (who page text : String)
@@ -182,6 +184,70 @@ def readingOf (s : Store) (V : List (String × String)) : List (String × Option
 /-- The files a record of an open names, read back against the world before it. -/
 def reconstruct (s : Store) (files : List (String × Option String)) : List (String × String) :=
   files.map fun (n, o) => (n, o.getD ((seenOf s n).getD ""))
+
+/-- The names of the files the world has seen, in the order a vault is read (by name). -/
+def seenNames (s : Store) : List String :=
+  (s.pages.filterMap fun p => p.seen.map fun _ => p.name).mergeSort fun a b => decide (a ≤ b)
+
+/-- **What an open of the files the world has seen read**: only the files whose text is not the
+text the world last saw of them (the record of an open that changed one page names one page). -/
+def changedOf (s : Store) (V : List (String × String)) : List (String × String) :=
+  V.filter fun (n, t) => seenOf s n != some t
+
+/-- The files a record of such an open names, read back against the world before it: every file
+the world has seen, with the changed ones' new text. -/
+def reconstructSeen (s : Store) (changed : List (String × String)) : List (String × String) :=
+  (seenNames s).map fun n => (n, (changed.lookup n).getD ((seenOf s n).getD ""))
+
+theorem lookup_mem_pair {l : List (String × String)} {a b : String} (h : l.lookup a = some b) : (a, b) ∈ l := by
+  induction l with
+  | nil => simp [List.lookup] at h
+  | cons x l ih =>
+    obtain ⟨k, v⟩ := x
+    by_cases hk : a = k
+    · subst hk; simp [List.lookup] at h; subst h; exact List.mem_cons_self
+    · have hb : (a == k) = false := by simp [hk]
+      simp only [List.lookup, hb] at h; exact List.mem_cons_of_mem _ (ih h)
+
+theorem lookup_changedOf (s : Store) : ∀ {V : List (String × String)}, (V.map Prod.fst).Nodup →
+    ∀ {n t : String}, (n, t) ∈ V → (changedOf s V).lookup n = if seenOf s n = some t then none else some t
+  | [], _, _, _, h => by cases h
+  | (m, u) :: V, hnd, n, t, hm => by
+    simp only [List.map_cons, List.nodup_cons, List.mem_map] at hnd
+    obtain ⟨hmV, hnd⟩ := hnd
+    simp only [changedOf, List.filter_cons] at *
+    have hnone : (V.filter fun x => seenOf s x.1 != some x.2).lookup m = none := by
+      cases hl : (V.filter fun x => seenOf s x.1 != some x.2).lookup m with
+      | none => rfl
+      | some v =>
+        exfalso
+        have := lookup_mem_pair hl
+        exact hmV ⟨(m, v), (List.mem_filter.1 this).1, rfl⟩
+    rcases List.mem_cons.1 hm with he | hV
+    · obtain ⟨rfl, rfl⟩ := Prod.mk.inj he
+      by_cases hs : seenOf s n = some t
+      · simp [hs, hnone]
+      · simp [hs]
+    · have hne : n ≠ m := fun h => hmV ⟨(n, t), hV, h⟩
+      have ih := lookup_changedOf s (V := V) hnd hV
+      by_cases hc : (seenOf s m != some u) = true
+      · simp only [hc, ↓reduceIte, List.lookup, show (n == m) = false from by simp [hne]]
+        exact ih
+      · simp only [Bool.not_eq_true] at hc
+        simp only [hc, Bool.false_eq_true, ↓reduceIte]
+        exact ih
+
+/-- **The record of an open of the files the world has seen carries exactly the files it read.** -/
+theorem reconstructSeen_changedOf (s : Store) (V : List (String × String))
+    (hV : V.map Prod.fst = seenNames s) (hnd : (V.map Prod.fst).Nodup) :
+    reconstructSeen s (changedOf s V) = V := by
+  simp only [reconstructSeen, ← hV, List.map_map]
+  conv => rhs; rw [← List.map_id V]
+  apply List.map_congr_left
+  intro ⟨n, t⟩ hm
+  simp only [Function.comp, id]
+  rw [lookup_changedOf s hnd hm]
+  by_cases hs : seenOf s n = some t <;> simp [hs]
 
 /-- The environment an open read, as its record carries it: none when it is the world's. -/
 def envOf (s : Store) (env : Environment) : Option (List String) :=
@@ -440,6 +506,12 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     let f := forgetMissing s V
     let o := openVault H f.store V
     .ok ({ w with store := o.store }, .opened f o)
+  | .reopened changed env =>
+    let V := reconstructSeen w.store changed
+    let s := { w.store with environment := (env.map List.toArray).getD w.store.environment }
+    let f := forgetMissing s V
+    let o := openVault H f.store V
+    .ok ({ w with store := o.store }, .opened f o)
   | .member name grants =>
     match addMember w.store name grants with
     | .ok s => .ok ({ w with store := s }, .quiet)
@@ -603,6 +675,14 @@ theorem open_replays (w : World) (V : List (String × String)) (env : Environmen
       .ok ({ w with store := o.store }, .opened f o) := by
   simp only [stepTurn, reconstruct_readingOf, envOf_read]
 
+/-- **An open of the files the world has seen replays as that open**, from a record naming only the
+files that moved: the same step as the record naming every file (`open_replays`). -/
+theorem reopen_replays (w : World) (V : List (String × String)) (env : Environment)
+    (hV : V.map Prod.fst = seenNames w.store) (hnd : (V.map Prod.fst).Nodup) :
+    stepTurn w (.reopened (changedOf w.store V) (envOf w.store env)) =
+      stepTurn w (.opened (readingOf w.store V) (envOf w.store env)) := by
+  simp only [stepTurn, reconstruct_readingOf, reconstructSeen_changedOf w.store V hV hnd]
+
 /-! ## Bytes -/
 
 def strsJson (xs : List String) : Json := Json.arr (xs.map Json.str).toArray
@@ -682,6 +762,8 @@ def turnJson : Turn → Json
   | .opened files env => Json.mkObj [("turn", "open"),
       ("files", Json.arr (files.map fun (n, t) => Json.arr #[Json.str n, optStrJson t]).toArray),
       ("environment", match env with | some e => strsJson e | none => Json.null)]
+  | .reopened changed env => Json.mkObj [("turn", "reopen"), ("changed", pairsJson changed),
+      ("environment", match env with | some e => strsJson e | none => Json.null)]
   | .member name grants => Json.mkObj [("turn", "member"), ("name", Json.str name), ("grants", pairsJson grants)]
   | .wrote page text => Json.mkObj [("turn", "write"), ("page", Json.str page), ("text", Json.str text)]
   | .posted who page text => Json.mkObj [("turn", "post"), ("as", Json.str who), ("page", Json.str page),
@@ -739,6 +821,11 @@ def turnOf (j : Json) : Except String Turn := do
       | .null => pure none
       | e => some <$> strsOf e
     return .opened files env
+  | "reopen" =>
+    let env ← match ← j.getObjVal? "environment" with
+      | .null => pure none
+      | e => some <$> strsOf e
+    return .reopened (← pairsOf (← j.getObjVal? "changed")) env
   | "member" => return .member (← j.getObjValAs? String "name") (← pairsOf (← j.getObjVal? "grants"))
   | "write" => return .wrote (← j.getObjValAs? String "page") (← j.getObjValAs? String "text")
   | "post" =>
@@ -839,6 +926,7 @@ def decodeWorld (b : Bytes) : Option World :=
 def Turn.kind : Turn → String
   | .base _ => "base"
   | .opened .. => "open"
+  | .reopened .. => "open"
   | .member .. => "member"
   | .wrote .. => "write"
   | .posted .. => "post"

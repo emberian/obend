@@ -89,6 +89,8 @@ static std::string execute(const std::string &name, State &st, int nwords) {
         LANES { vdst(lane, (src0(lane) << bits(src1(lane), 4, 0)) + src2(lane)); }
     } else if (name == "V_ADD3_U32") {                          // vop3.cc:7368
         LANES { vdst(lane, src0(lane) + src1(lane) + src2(lane)); }
+    } else if (name == "V_AND_OR_B32") {                        // vop3.cc:7457
+        LANES { vdst(lane, (src0(lane) & src1(lane)) | src2(lane)); }
     } else if (name == "V_MUL_LO_U32") {                        // vop3.cc:8694
         LANES { VecElemI64 s0 = (VecElemI64)src0(lane); VecElemI64 s1 = (VecElemI64)src1(lane); vdst(lane, (VecElemU32)((s0 * s1) & 0xffffffffLL)); }
     } else if (name == "V_MUL_HI_U32") {                        // vop3.cc:8738
