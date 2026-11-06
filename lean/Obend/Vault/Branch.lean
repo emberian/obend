@@ -166,10 +166,13 @@ def PageLaws.ofLines (page owner : String) (links : List String) (lines : List (
 
 /-- A page's own laws (judged on its write, old to new). -/
 def PageLaws.own (pl : PageLaws) : List (String × LawExpr) :=
-  (pl.laws.filter fun l => !isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
+  (pl.laws.filter fun l => isOwnLaw l.2.2).map fun (n, e, _) => (n, e)
 
 /-- A page's laws over its links (judged at every page it links to). -/
 def PageLaws.overLinks (pl : PageLaws) : List (String × LawExpr) := linkLaws pl.laws
+
+/-- A page's laws over its backlinks (judged at every page that links to it, with `listed`). -/
+def PageLaws.overLinkedBy (pl : PageLaws) : List (String × LawExpr) := byLaws pl.laws
 
 /-- The text of one of a page's laws, by name. -/
 def PageLaws.text (pl : PageLaws) (law : String) : String :=
@@ -328,7 +331,7 @@ def judgeOwn (page : String) (lin : List (String × LawExpr)) (o n rq : Data) : 
   else judge (rekey lin n).1 page lin (rekey lin o).2 (rekey lin n).2 rq
 
 def ofLinkRefusal (pl : PageLaws) (r : LinkRefusal) : Refusal :=
-  if r.law == "" then .undecided r.page r.reason
+  if r.law == "" || r.state.isNone then .undecided r.page r.reason
   else .law r.law pl.owner r.page (pl.text r.law) r.reason
 
 /-- The laws over links of `page` judged at the pages `at_`. -/
@@ -340,8 +343,25 @@ def linksRefusal (s : VaultStore) (page : String) (pl : PageLaws) (rq : Data) (a
 def backlinkRefusal (book : LawBook) (s : VaultStore) (rq : Data) (c : String) : Option Refusal :=
   book.findSome? fun e => if e.1 != c && e.2.links.contains c then linksRefusal s e.1 e.2 rq [c] else none
 
-/-- **The cone of a written cell**: its page's own laws, its laws over links at its links, and the
-laws over links of the pages linking to it, on the store as written. -/
+/-- The pages of the book that link to `c`. -/
+def linkersOf (book : LawBook) (c : String) : List String :=
+  (book.filter fun e => e.1 != c && e.2.links.contains c).map (·.1)
+
+/-- The laws over backlinks in a write's cone: `c`'s own at every page linking to it (each read with
+`listed`, whether `c` links back), and those of every page `c` links to, at `c` (with `listed`,
+whether that page links back to `c`). -/
+def byRefusal (book : LawBook) (s : VaultStore) (rq : Data) (c : String) (pl : PageLaws) : Option Refusal :=
+  match (if pl.overLinkedBy.isEmpty then none
+      else (judgeLinksIn (listedStore s pl.links) c pl.overLinkedBy rq (linkersOf book c)).map (ofLinkRefusal pl)) with
+  | some r => some r
+  | none => pl.links.findSome? fun q => match book.lookup q with
+    | some ql => if q != c && !ql.overLinkedBy.isEmpty then
+        (judgeLinksIn (listedStore s ql.links) q ql.overLinkedBy rq [c]).map (ofLinkRefusal ql) else none
+    | none => none
+
+/-- **The cone of a written cell**: its page's own laws, its laws over links at its links, the
+laws over links of the pages linking to it, and the laws over backlinks both ways (`byRefusal`), on
+the store as written. -/
 def coneRefusal (book : LawBook) (s' : VaultStore) (rq : Data) (d : CellDelta) : Option Refusal :=
   match book.lookup d.cell with
   | none => some (.noPage d.cell)
@@ -352,7 +372,10 @@ def coneRefusal (book : LawBook) (s' : VaultStore) (rq : Data) (d : CellDelta) :
     | .admitted =>
       match linksRefusal s' d.cell pl rq pl.links with
       | some r => some r
-      | none => backlinkRefusal book s' rq d.cell
+      | none =>
+        match backlinkRefusal book s' rq d.cell with
+        | some r => some r
+        | none => byRefusal book s' rq d.cell pl
 
 /-- A turn's pins: its read pins and every write cell at its pre-state. -/
 def turnPins (t : VaultTurn) : Footprint :=
@@ -896,7 +919,13 @@ def Consents (book : LawBook) (s' : VaultStore) (facts : Facts) (d : CellDelta) 
     (∀ q ∈ pl.links, ∀ p ∈ pl.overLinks, ∃ x, s' q = some x ∧
       p.2.denote facts (some (rekey pl.overLinks x).2) (rekey pl.overLinks x).2 = true) ∧
     (∀ q ql, (q, ql) ∈ book → q ≠ d.cell → d.cell ∈ ql.links → ∀ p ∈ ql.overLinks, ∃ x, s' d.cell = some x ∧
-      p.2.denote facts (some (rekey ql.overLinks x).2) (rekey ql.overLinks x).2 = true)
+      p.2.denote facts (some (rekey ql.overLinks x).2) (rekey ql.overLinks x).2 = true) ∧
+    (∀ q ql, (q, ql) ∈ book → q ≠ d.cell → d.cell ∈ ql.links → ∀ p ∈ pl.overLinkedBy, ∃ y, s' q = some y ∧
+      let x := withListed y (pl.links.contains q)
+      p.2.denote facts (some (rekey pl.overLinkedBy x).2) (rekey pl.overLinkedBy x).2 = true) ∧
+    (∀ q ∈ pl.links, ∀ ql, book.lookup q = some ql → q ≠ d.cell → ∀ p ∈ ql.overLinkedBy, ∃ y, s' d.cell = some y ∧
+      let x := withListed y (ql.links.contains d.cell)
+      p.2.denote facts (some (rekey ql.overLinkedBy x).2) (rekey ql.overLinkedBy x).2 = true)
 
 theorem linksRefusal_none {s : VaultStore} {page : String} {pl : PageLaws} {actor : String} {h : Nat}
     {at_ : List String} (hr : linksRefusal s page pl (requestAt actor h) at_ = none) :
@@ -913,6 +942,65 @@ theorem linksRefusal_none {s : VaultStore} {page : String} {pl : PageLaws} {acto
     | none =>
       obtain ⟨x, hx, ha⟩ := judgeLinksIn_none hj q hq
       exact ⟨x, hx, judge_admits (k := .write) ha p hp⟩
+
+/-- Laws over backlinks that passed, read through `listedStore`: at each page, its state with
+`listed`, and every law holds there. -/
+theorem byLinks_none {s : VaultStore} {L : List String} {pkg : String} {lin : List (String × LawExpr)}
+    {actor : String} {h : Nat} {cells : List String}
+    (hj : judgeLinksIn (listedStore s L) pkg lin (requestAt actor h) cells = none) :
+    ∀ c ∈ cells, ∀ p ∈ lin, ∃ y, s c = some y ∧
+      let x := withListed y (L.contains c)
+      p.2.denote (factsAt h) (some (rekey lin x).2) (rekey lin x).2 = true := by
+  intro c hc p hp
+  obtain ⟨x, hx, ha⟩ := judgeLinksIn_none hj c hc
+  simp only [listedStore] at hx
+  cases hy : s c with
+  | none => rw [hy] at hx; cases hx
+  | some y =>
+    rw [hy] at hx
+    simp only [Option.map_some, Option.some.injEq] at hx
+    subst hx
+    exact ⟨y, rfl, judge_admits (k := .write) ha p hp⟩
+
+/-- **The laws over backlinks of a write's cone hold where `byRefusal` found nothing**: the written
+page's at every page of the book linking to it, and those of every page it links to, at it. -/
+theorem byRefusal_none {book : LawBook} {s : VaultStore} {actor : String} {h : Nat} {c : String}
+    {pl : PageLaws} (hr : byRefusal book s (requestAt actor h) c pl = none) :
+    (∀ q ql, (q, ql) ∈ book → q ≠ c → c ∈ ql.links → ∀ p ∈ pl.overLinkedBy, ∃ y, s q = some y ∧
+      let x := withListed y (pl.links.contains q)
+      p.2.denote (factsAt h) (some (rekey pl.overLinkedBy x).2) (rekey pl.overLinkedBy x).2 = true) ∧
+    (∀ q ∈ pl.links, ∀ ql, book.lookup q = some ql → q ≠ c → ∀ p ∈ ql.overLinkedBy, ∃ y, s c = some y ∧
+      let x := withListed y (ql.links.contains c)
+      p.2.denote (factsAt h) (some (rekey ql.overLinkedBy x).2) (rekey ql.overLinkedBy x).2 = true) := by
+  unfold byRefusal at hr
+  split at hr
+  · cases hr
+  · rename_i hm
+    refine ⟨?_, ?_⟩
+    · intro q ql hq hne hlink p hp
+      split at hm
+      · rename_i he
+        rw [List.isEmpty_iff] at he
+        rw [he] at hp; cases hp
+      · cases hj : judgeLinksIn (listedStore s pl.links) c pl.overLinkedBy (requestAt actor h) (linkersOf book c) with
+        | some r => rw [hj] at hm; cases hm
+        | none =>
+          have hmem : q ∈ linkersOf book c := by
+            simp only [linkersOf, List.mem_map, List.mem_filter]
+            exact ⟨(q, ql), ⟨hq, by simp [hne, hlink]⟩, rfl⟩
+          exact byLinks_none hj q hmem p hp
+    · intro q hq ql hql hne p hp
+      have hb := List.findSome?_eq_none_iff.1 hr q hq
+      simp only [hql] at hb
+      have hne' : ql.overLinkedBy.isEmpty = false := by
+        cases hx : ql.overLinkedBy with
+        | nil => rw [hx] at hp; cases hp
+        | cons _ _ => rfl
+      have hcond : (q != c && !ql.overLinkedBy.isEmpty) = true := by simp [hne, hne']
+      rw [if_pos hcond] at hb
+      cases hj : judgeLinksIn (listedStore s ql.links) q ql.overLinkedBy (requestAt actor h) [c] with
+      | some r => rw [hj] at hb; cases hb
+      | none => exact byLinks_none hj c (List.mem_singleton_self _) p hp
 
 theorem coneRefusal_none {book : LawBook} {s' : VaultStore} {actor : String} {h : Nat} {d : CellDelta}
     (hr : coneRefusal book s' (requestAt actor h) d = none) : Consents book s' (factsAt h) d := by
@@ -939,14 +1027,19 @@ theorem coneRefusal_none {book : LawBook} {s' : VaultStore} {actor : String} {h 
       | some r => rw [hl'] at hr; cases hr
       | none =>
         rw [hl'] at hr
-        refine ⟨hown, linksRefusal_none hl', ?_⟩
-        intro q ql hq hne hlink p hp
-        have hb := List.findSome?_eq_none_iff.1 hr (q, ql) hq
-        simp only at hb
-        have hcond : (q != d.cell && ql.links.contains d.cell) = true := by
-          simp [hne, hlink]
-        rw [ite_eq_left hcond] at hb
-        exact linksRefusal_none hb d.cell (List.mem_singleton_self _) p hp
+        cases hbk : backlinkRefusal book s' (requestAt actor h) d.cell with
+        | some r => rw [hbk] at hr; cases hr
+        | none =>
+          rw [hbk] at hr
+          obtain ⟨hby1, hby2⟩ := byRefusal_none hr
+          refine ⟨hown, linksRefusal_none hl', ?_, hby1, hby2⟩
+          intro q ql hq hne hlink p hp
+          have hb := List.findSome?_eq_none_iff.1 hbk (q, ql) hq
+          simp only at hb
+          have hcond : (q != d.cell && ql.links.contains d.cell) = true := by
+            simp [hne, hlink]
+          rw [ite_eq_left hcond] at hb
+          exact linksRefusal_none hb d.cell (List.mem_singleton_self _) p hp
 
 /-- **A store's consent to a page write**: each version of it prepared (`prepareWrite`) and admitted
 by the store's judgment (`judgePrepared`: its own laws and its kinds', its laws over rows, the laws

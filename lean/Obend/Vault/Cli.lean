@@ -605,6 +605,27 @@ def changes (s s' : Store) : List String :=
 where
   typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
 
+/-- The refusals among what changed between two stores: a birth refused, or a write refused anew
+(as `changes` says them). -/
+def refusalsOf (s s' : Store) : List String :=
+  s'.pages.filterMap fun p' =>
+    match s.page? p'.name with
+    | none => if p'.history.isEmpty then some (p'.name ++ ": not born: " ++ p'.note.getD "") else none
+    | some p =>
+      if p'.history.length > p.history.length then none
+      else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
+      else none
+where
+  typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+
+/-- The refusals a command has said, this run: each makes its exit status 1 (`main?`). -/
+initialize refusedRef : IO.Ref (List String) ← IO.mkRef []
+
+/-- Say refusals on stderr and remember them for the exit status. -/
+def sayRefused (ls : List String) : IO Unit := do
+  for l in ls do IO.eprintln l
+  refusedRef.modify (· ++ ls)
+
 /-- Cites that do not hold and sections waiting, over every page. -/
 def problems (s : Store) : List String :=
   s.pages.flatMap fun p =>
@@ -646,15 +667,18 @@ def openWorld (dir : System.FilePath) (verbose : Bool) : IO (Replay.World × Lis
       let back := f.kept.filterMap fun (n, _) => (o.store.page? n).bind fun p => p.seen.map (n, ·)
       writeFiles dir (o.writes ++ back)
       saveCheckpoint dir h'
+      -- changes are read against the store after deletions and renames: a renamed page is not new;
+      -- a refusal is said on stderr, by every command that opens, and makes its exit status 1
+      let cs := changes f.store o.store
+      let rs := refusalsOf f.store o.store
+      let ul := if verbose then unbornLines o.store cs else []
       if verbose then
-        -- changes are read against the store after deletions and renames: a renamed page is not new
-        let cs := changes f.store o.store
         let fl := forgottenLines f
-        let ul := unbornLines o.store cs
         if cs.isEmpty && fl.isEmpty then IO.println "nothing changed"
         for c in fl do IO.println c
-        for c in cs do IO.println c
-        for c in ul do IO.println c
+        for c in cs do unless rs.contains c do IO.println c
+      sayRefused (rs ++ ul)
+      if verbose then
         for (n, _) in o.writes ++ back do IO.println ("rendered " ++ n ++ ".md")
       return (h'.world, overwrite (V ++ back) o.writes)
     | .ok (_, _) => throw (IO.userError "the open said what an open does not")
@@ -673,6 +697,7 @@ def finishTurn (dir : System.FilePath) (t : Turn) (V : List (String × String)) 
     | .error e => return .error e
     | .ok (h', o) =>
       let s := h'.world.store
+      sayRefused (refusalsOf h.world.store s)
       let w := writesFor s V
       let missing := s.pages.filterMap fun p => if V.any (·.1 == p.name) then none else
         match p.seen, p.history with
@@ -852,18 +877,24 @@ def parseFill (f : Form) : List String → Except String Obend.Vault.Form.Assign
   | [] => .ok ({} : Obend.Vault.Form.Assignment)
   | x :: rest => do
     let a ← parseFill f rest
-    match x.splitOn "=" with
-    | [h, v] =>
+    match (x.splitOn "=") with
+    | h :: v :: more =>
+      let v := "=".intercalate (v :: more)
       match f.holes.lookup h with
       | some .nat => match v.toNat? with
         | some n => return { a with nats := (h, n) :: a.nats }
         | none => throw ("the hole " ++ h ++ " is a natural; " ++ v ++ " is not")
       | some .page => return { a with pages := (h, v) :: a.pages }
+      | some .label =>
+        if v.isEmpty || v.any Char.isWhitespace then throw ("the hole " ++ h ++ " is a label (one word); " ++ v ++ " is not")
+        else return { a with labels := (h, v) :: a.labels }
+      | some .text => return { a with labels := (h, v) :: a.labels }
       | none => throw ("the form " ++ f.name ++ " has no hole " ++ h)
     | _ => throw ("a fill is HOLE=VALUE, not " ++ x)
 
 def fillText (a : Obend.Vault.Form.Assignment) : String :=
-  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map fun (h, n) => h ++ " = " ++ n)
+  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map (fun (h, n) => h ++ " = " ++ n) ++
+    a.labels.map fun (h, v) => h ++ " = \"" ++ v ++ "\"")
 
 /-- A received form: the form, its digest, the vault that issued it, the hops it was handed on by, and
 the continuity contract it was issued with, if any. -/
@@ -1162,6 +1193,33 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           return 0
         | .ok _ => fail "the capture said what a capture does not"
     | _, _, _, _ => fail "capture SITUATION FORM --for WHO --grant PATTERN … [--held CAPS] --move FROM TO AMOUNT [--field FIELD] [--ref PAGE …]"
+  | "brief" :: page :: name :: rest => some do
+    let (who, rest) := flag "--for" rest
+    let (held, rest) := flag "--held" rest
+    let (pats, rest) := allFlags "--grant" rest
+    let (sets, rest) := allFlags "--set" rest
+    let (holes, rest) := allFlags "--hole" rest
+    let lits := sets.filterMap fun x => match x.splitOn "=" with
+      | f :: v :: more => some (f, "=".intercalate (v :: more))
+      | _ => none
+    let hs := holes.filterMap fun x => match x.splitOn ":" with
+      | [h, t] => if ["label", "text", "natural", "page"].contains t then some (h, t) else none
+      | _ => none
+    match who, rest, parseCaps (held.getD "read,write") with
+    | some who, [], some caps =>
+      if lits.length != sets.length || hs.length != holes.length then
+        return ← fail "brief: a set is FIELD=VALUE, a hole FIELD:label or FIELD:text"
+      let _ ← openDir dir false
+      match ← commitWith dir (.briefed page name ⟨who, caps, pats⟩ lits hs) (fun _ o => pure o) with
+      | .error e => fail e
+      | .ok (.form f culled) =>
+        if let .error e ← commitWith dir (.issued name) (fun _ _ => pure ()) then return ← fail e
+        IO.println ("briefed " ++ name ++ " on " ++ page ++ " for " ++ who ++ ": " ++
+          toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
+        for l in f.describe do IO.println l
+        return 0
+      | .ok _ => fail "the brief said what a brief does not"
+    | _, _, _ => fail "brief PAGE FORM --for WHO --grant PATTERN … [--held CAPS] [--set FIELD=VALUE …] [--hole FIELD:label|text …]"
   | "offer" :: name :: hole :: range :: rest => some do
     let (promise, rest) := flag "--promise" rest
     unless rest.isEmpty do return ← fail "offer FORM HOLE LO..HI [--promise LO..HI]"
@@ -1434,9 +1492,15 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
 /-- `obend` vault commands: `-C DIR` anywhere, `open DIR`. -/
 def main? (args : List String) : Option (IO UInt32) :=
   let (dirFlag, args) := flag "-C" args
-  match args with
-  | ["open", d] => run (System.FilePath.mk d) ["open"]
-  | _ => run (System.FilePath.mk (dirFlag.getD ".")) args
+  let act := match args with
+    | ["open", d] => run (System.FilePath.mk d) ["open"]
+    | _ => run (System.FilePath.mk (dirFlag.getD ".")) args
+  -- a command that ran but whose writes were refused (said on stderr) exits 1
+  act.map fun a => do
+    refusedRef.set []
+    let rc ← a
+    let rs ← refusedRef.get
+    return (if rc == 0 && !rs.isEmpty then 1 else rc)
 
 end Obend.Vault.Cli
 

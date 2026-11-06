@@ -99,10 +99,12 @@ def Agrees (k' k : Known) : Prop := ∀ n d, k' n = some d → k n = some d
 
 theorem Agrees.refl (k : Known) : Agrees k k := fun _ _ h => h
 
-/-- A fill: a natural for each natural hole, a page for each page hole. -/
+/-- A fill: a natural for each natural hole, a page for each page hole, a string for each label or
+text hole. -/
 structure Assignment where
   nats : List (String × Nat) := []
   pages : List (String × String) := []
+  labels : List (String × String) := []
 deriving DecidableEq, Repr
 
 def PRef.subst (a : Assignment) : PRef → PRef
@@ -253,7 +255,7 @@ def NExpr.holes : NExpr → List String
 
 theorem PRef.subst_abstractPage_cons (n h : String) (a : Assignment) :
     ∀ p : PRef, h ∉ p.holes →
-      (p.abstractPage n h).subst ⟨a.nats, (h, n) :: a.pages⟩ = p.subst a
+      (p.abstractPage n h).subst ⟨a.nats, (h, n) :: a.pages, a.labels⟩ = p.subst a
   | .page m, _ => by
     by_cases hm : m = n
     · subst hm; simp [PRef.abstractPage, PRef.subst]
@@ -264,7 +266,7 @@ theorem PRef.subst_abstractPage_cons (n h : String) (a : Assignment) :
 
 theorem NExpr.subst_abstractNat_cons (v : Nat) (h : String) (a : Assignment) :
     ∀ e : NExpr, h ∉ e.holes →
-      (e.abstractNat v h).subst ⟨(h, v) :: a.nats, a.pages⟩ = e.subst a
+      (e.abstractNat v h).subst ⟨(h, v) :: a.nats, a.pages, a.labels⟩ = e.subst a
   | .lit n, _ => by
     by_cases hn : n = v
     · subst hn; simp [NExpr.abstractNat, NExpr.subst]
@@ -284,7 +286,7 @@ theorem NExpr.subst_abstractNat_cons (v : Nat) (h : String) (a : Assignment) :
 
 theorem NExpr.subst_abstractPage_cons (n h : String) (a : Assignment) :
     ∀ e : NExpr, h ∉ e.holes →
-      (e.abstractPage n h).subst ⟨a.nats, (h, n) :: a.pages⟩ = e.subst a
+      (e.abstractPage n h).subst ⟨a.nats, (h, n) :: a.pages, a.labels⟩ = e.subst a
   | .lit _, _ => rfl
   | .hole x, hx => by
     simp [NExpr.abstractPage, NExpr.subst]
@@ -336,6 +338,10 @@ inductive Refusal where
   | unevaluated (what : String)
   /-- the fill's turn writes one page twice -/
   | twice (page : String)
+  /-- a set would write a label over a field the page holds as a nonzero natural -/
+  | numeric (page field : String)
+  /-- a label or text value that cannot be a frontmatter line (a newline or a double quote) -/
+  | illFormed (page field : String)
 deriving DecidableEq, Repr
 
 /-- **The reshare chain**, from the viewer `cur` held by `who`: each grant is a hop through
@@ -399,7 +405,87 @@ theorem capture_hidden_change (v : MembraneViewer) (pre post : List Cell) (c c' 
 inductive HoleTy where
   | nat
   | page
+  /-- a word: a commit, a state -/
+  | label
+  /-- a line of text: a gate line, a list of what was left out -/
+  | text
 deriving DecidableEq, Repr
+
+/-- A string position of a form: a literal, a hole a label or text will fill, or a label field of a
+page (read in the capture). -/
+inductive SExpr where
+  | lit (s : String)
+  | hole (name : String)
+  | field (p : PRef) (f : String)
+deriving DecidableEq, Repr
+
+/-- The label a state holds at a field, or the empty label. -/
+def labelAt (d : Data) (f : String) : String :=
+  match d with
+  | .record fs => match fs.lookup f with
+    | some (.label s) => s
+    | _ => ""
+  | _ => ""
+
+def SExpr.subst (a : Assignment) : SExpr → SExpr
+  | .lit s => .lit s
+  | .hole h => match a.labels.lookup h with
+    | some v => .lit v
+    | none => .hole h
+  | .field p f => .field (p.subst a) f
+
+def SExpr.eval (k : Known) : SExpr → Option String
+  | .lit s => some s
+  | .hole _ => none
+  | .field (.page n) f => (k n).map (labelAt · f)
+  | .field (.hole _) _ => none
+
+/-- A string position evaluated as far as `k` allows. -/
+def SExpr.peval (k : Known) : SExpr → SExpr
+  | .lit s => .lit s
+  | .hole h => .hole h
+  | .field (.page n) f => match k n with
+    | some d => .lit (labelAt d f)
+    | none => .field (.page n) f
+  | .field (.hole h) f => .field (.hole h) f
+
+def SExpr.holes : SExpr → List String
+  | .lit _ => []
+  | .hole h => [h]
+  | .field p _ => p.holes
+
+/-- **The substitution lemma, for strings**: evaluating a string position with the fill substituted
+into its residual (computed with less knowledge `k'`) is evaluating it with the fill substituted. -/
+theorem SExpr.eval_subst_peval {k' k : Known} (hk : Agrees k' k) (a : Assignment) :
+    ∀ e : SExpr, ((e.peval k').subst a).eval k = (e.subst a).eval k
+  | .lit _ => rfl
+  | .hole _ => rfl
+  | .field (.page n) f => by
+    simp only [SExpr.peval]
+    cases hn : k' n with
+    | none => rfl
+    | some d => simp [SExpr.subst, SExpr.eval, PRef.subst, hk n d hn]
+  | .field (.hole _) _ => rfl
+
+theorem SExpr.holes_subst_peval (k : Known) (a : Assignment) :
+    ∀ e : SExpr, ((e.peval k).subst a).holes = (e.subst a).holes
+  | .lit _ | .hole _ | .field (.hole _) _ => rfl
+  | .field (.page n) f => by
+    simp only [SExpr.peval]
+    cases k n <;> rfl
+
+/-- A set: label or text fields of one page set to string positions. A report is one: the lane's
+page, its `state` set to a literal, its `commit`, `gate` and `leftout` to holes. -/
+structure SetMove where
+  page : PRef
+  fields : List (String × SExpr)
+deriving DecidableEq, Repr
+
+def SetMove.subst (a : Assignment) (m : SetMove) : SetMove :=
+  { page := m.page.subst a, fields := m.fields.map fun x => (x.1, x.2.subst a) }
+
+def SetMove.peval (k : Known) (m : SetMove) : SetMove :=
+  { m with fields := m.fields.map fun x => (x.1, x.2.peval k) }
 
 /-- A move: `amount` of the field `asset` from the page `src` to the page `dst`. -/
 structure Move where
@@ -418,6 +504,7 @@ structure Form where
   refs : List String := []
   holes : List (String × HoleTy) := []
   moves : List Move
+  sets : List SetMove := []
 deriving Repr
 
 /-- The pages a form may name: the cells it captured and the pages it refers to. -/
@@ -469,6 +556,68 @@ def RMove.subst (a : Assignment) (r : RMove) : RMove :=
 
 /-- **The residual of a form**: each move evaluated as far as `k` allows. -/
 def Form.residual (k : Known) (f : Form) : List RMove := f.moves.map fun m => m.unfold.peval k
+
+/-- The residual of a form's sets: each string position evaluated as far as `k` allows. -/
+def Form.setResidual (k : Known) (f : Form) : List SetMove := f.sets.map (·.peval k)
+
+/-- A set, evaluated: the page, its state before, and each field with the string it is set to. -/
+structure SetLeg where
+  page : String
+  pre : Data
+  vals : List (String × String)
+deriving Repr
+
+/-- A string a frontmatter line can hold, quoted: no newline, no double quote. -/
+def lineSafe (v : String) : Bool := !v.contains '\n' && !v.contains '"'
+
+/-- Evaluate the fields of a set: each string position at `kv` (the capture: a set reads only what
+the form was shown), each value one a frontmatter line can hold, each field not a nonzero natural of
+the page's state `pre`. -/
+def evalFields (kv : Known) (page : String) (pre : Data) :
+    List (String × SExpr) → Except Refusal (List (String × String))
+  | [] => .ok []
+  | (f, e) :: rest =>
+    match e.eval kv with
+    | none => .error (if e.holes.isEmpty then .unevaluated (page ++ "." ++ f) else .unfilled (e.holes.headD "?"))
+    | some v =>
+      if natAt pre f != 0 then .error (.numeric page f)
+      else if !lineSafe v then .error (.illFormed page f)
+      else match evalFields kv page pre rest with
+        | .error r => .error r
+        | .ok vs => .ok ((f, v) :: vs)
+
+/-- Evaluate a substituted set: its page's state at `kp` (what the kernel knows), its values at `kv`. -/
+def SetMove.leg (kv kp : Known) (m : SetMove) : Except Refusal SetLeg :=
+  match m.page with
+  | .hole h => .error (.unfilled h)
+  | .page n =>
+    match kp n with
+    | none => .error (.unknownPage n)
+    | some d =>
+      match evalFields kv n d m.fields with
+      | .error r => .error r
+      | .ok vs => .ok ⟨n, d, vs⟩
+
+/-- Every set of a fill, evaluated, in order. -/
+def setsOf (kv kp : Known) : List SetMove → Except Refusal (List SetLeg)
+  | [] => .ok []
+  | m :: ms => do
+    let l ← m.leg kv kp
+    let ls ← setsOf kv kp ms
+    pure (l :: ls)
+
+theorem evalFields_peval_subst {k' kv : Known} (hk : Agrees k' kv) (a : Assignment) (page : String) (pre : Data)
+    (fs : List (String × SExpr)) :
+    evalFields kv page pre ((fs.map fun x => (x.1, x.2.peval k')).map fun x => (x.1, x.2.subst a)) =
+      evalFields kv page pre (fs.map fun x => (x.1, x.2.subst a)) := by
+  induction fs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp only [List.map_cons, evalFields, SExpr.eval_subst_peval hk, SExpr.holes_subst_peval, ih]
+
+theorem SetMove.leg_peval_subst {k' kv : Known} (hk : Agrees k' kv) (kp : Known) (a : Assignment) (m : SetMove) :
+    ((m.peval k').subst a).leg kv kp = (m.subst a).leg kv kp := by
+  simp only [SetMove.peval, SetMove.subst, SetMove.leg, evalFields_peval_subst hk]
 
 /-- One move's two legs, evaluated: the pages, their states before, the amount, the moved field's
 value after at each. -/
@@ -648,6 +797,99 @@ theorem natAt_putNat_ne (d : Data) (f g : String) (v : Nat) (hg : g ≠ f) :
     cases d with
     | record fs => exact absurd rfl (hnot fs)
     | _ => simp [natAt, List.lookup, hne]
+
+/-- A state with the field `f` set to the label `v`. -/
+def putLabel (d : Data) (f v : String) : Data :=
+  match d with
+  | .record fs => if fs.any (·.1 == f) then .record (fs.map fun e => if e.1 == f then (f, .label v) else e)
+    else .record (fs ++ [(f, .label v)])
+  | _ => .record [(f, .label v)]
+
+def setLabelEntry (f v : String) (e : String × Data) : String × Data :=
+  if e.1 == f then (f, .label v) else e
+
+theorem lookup_map_label_ne (f v g : String) (hg : g ≠ f) :
+    ∀ fs : List (String × Data), (fs.map (setLabelEntry f v)).lookup g = fs.lookup g
+  | [] => rfl
+  | (k, x) :: rest => by
+    have ih := lookup_map_label_ne f v g hg rest
+    by_cases hk : k = f
+    · subst hk
+      have hne : (g == k) = false := by simpa using hg
+      simp only [List.map_cons, setLabelEntry, beq_self_eq_true, ↓reduceIte, List.lookup, hne]
+      exact ih
+    · have hne' : (k == f) = false := by simpa using hk
+      simp only [List.map_cons, setLabelEntry, hne', Bool.false_eq_true, ↓reduceIte, List.lookup]
+      split
+      · rfl
+      · exact ih
+
+theorem lookup_map_label_eq (f v : String) :
+    ∀ fs : List (String × Data), fs.any (·.1 == f) = true → (fs.map (setLabelEntry f v)).lookup f = some (.label v)
+  | [], h => by cases h
+  | (k, x) :: rest, h => by
+    by_cases hk : k = f
+    · subst hk; simp [setLabelEntry, List.lookup]
+    · have hne' : (k == f) = false := by simpa using hk
+      have hne : (f == k) = false := by simpa using Ne.symm hk
+      simp only [List.any_cons, hne', Bool.false_or] at h
+      simp only [List.map_cons, setLabelEntry, hne', Bool.false_eq_true, ↓reduceIte, List.lookup, hne]
+      exact lookup_map_label_eq f v rest h
+
+theorem natAt_putLabel (d : Data) (f v A : String) :
+    natAt (putLabel d f v) A = if A = f then 0 else natAt d A := by
+  cases d with
+  | record fs =>
+    simp only [putLabel]
+    split
+    · rename_i hany
+      have hm : (fs.map fun e => if e.1 == f then (f, Data.label v) else e) = fs.map (setLabelEntry f v) := rfl
+      rw [hm]
+      by_cases hA : A = f
+      · subst hA; simp [natAt, lookup_map_label_eq A v fs hany]
+      · simp [natAt, lookup_map_label_ne f v A hA fs, hA]
+    · rename_i hno
+      have hno' : fs.any (·.1 == f) = false := Bool.eq_false_iff.mpr hno
+      by_cases hA : A = f
+      · subst hA; simp [natAt, lookup_append_absent A (.label v) fs hno']
+      · simp [natAt, lookup_append_ne f A (.label v) hA fs, hA]
+  | _ =>
+    by_cases hA : A = f
+    · simp [putLabel, natAt, List.lookup, hA]
+    · have hne : (A == f) = false := by simpa using hA
+      simp [putLabel, natAt, List.lookup, hne, hA]
+
+/-- A state with each of `vals` set as a label, in order. -/
+def putLabels (d : Data) (vals : List (String × String)) : Data :=
+  vals.foldl (fun d fv => putLabel d fv.1 fv.2) d
+
+/-- **A set moves no natural**: setting labels over fields that hold no nonzero natural leaves every
+field's natural as it was. -/
+theorem natAt_putLabels (A : String) :
+    ∀ (vals : List (String × String)) (d : Data), (∀ fv ∈ vals, natAt d fv.1 = 0) →
+      natAt (putLabels d vals) A = natAt d A
+  | [], _, _ => rfl
+  | (f, v) :: rest, d, h => by
+    simp only [putLabels, List.foldl_cons] at h ⊢
+    have h' : ∀ fv ∈ rest, natAt (putLabel d f v) fv.1 = 0 := by
+      intro fv hfv
+      rw [natAt_putLabel]
+      split
+      · rfl
+      · exact h fv (List.mem_cons_of_mem _ hfv)
+    rw [show List.foldl (fun d fv => putLabel d fv.1 fv.2) (putLabel d f v) rest =
+        putLabels (putLabel d f v) rest from rfl, natAt_putLabels A rest _ h', natAt_putLabel]
+    split
+    · rename_i hA; subst hA; exact (h (A, v) (List.mem_cons_self ..)).symm
+    · rfl
+
+/-- The write of a set, in turn `tid`: no half-edge (it moves no natural). -/
+def SetLeg.delta (tid : ByteArray) (l : SetLeg) : CellDelta :=
+  { cell := l.page, preState := l.pre, postState := putLabels l.pre l.vals,
+    touchedFields := l.vals.map (·.1), halfEdges := [],
+    cert := some (.byLoweredDecider "form-set" [] tid) }
+
+def setDeltas (tid : ByteArray) (ls : List SetLeg) : List CellDelta := ls.map (SetLeg.delta tid)
 
 /-- The source leg of a move, in turn `tid`: its half-edge is the amount, taken. -/
 def LegPair.srcDelta (tid : ByteArray) (p : LegPair) : CellDelta :=
@@ -1230,6 +1472,296 @@ theorem admit_conserves_total {root : MembraneViewer} {f : Form} {hops : List Gr
     total (applyTurn s ad.turn) A cs = total s A cs :=
   applyTurn_conserves_total s ad.turn A cs hcs hw hpre fun d hd => admit_halfEdges_honest hk h d hd A
 
+/-! ## 7b. Label and text holes: a report is a filled form
+
+A form may also SET label and text fields of a page (`SetMove`): a brief is a form whose set is the
+report its lane owes (the lane page's `state`, and holes for its `commit`, its `gate` line and what it
+`leftout`), and the lane's report is its fill, judged by the lane page's laws as any write of the page
+is. A set's values read only the capture (`f.known`: a set copies what the form was shown, never a
+page it was not); its page is read where the form is judged, as a move's are. A set moves no natural:
+it may not write a label over a field the page holds as a nonzero natural (`numeric`), so every
+field's natural, and so every total a move conserves, is as it was (`natAt_putLabels`). The admission
+of a fill with sets (`admitFill`) is the membrane over the moves' and the sets' pages first, reading
+no store; then `admit` (the moves, as before: `admit_no_amplification` and `admit_conserves_total`
+stand as they were); then the sets' legs, written in the same turn. -/
+
+/-- The fill of a form's sets: the fill substituted into their residual (the capture's). -/
+def Form.fillSets (f : Form) (a : Assignment) : List SetMove := (f.setResidual f.known).map (·.subst a)
+
+/-- **The substitution lemma, for the sets**: evaluating the sets with the fill substituted into the
+residual (computed with the capture's knowledge `k'`) is evaluating them with the fill substituted,
+at any knowledge `kv ⊇ k'` of the values and any `kp` of the pages. -/
+theorem eval_fill_eq_subst_residual_sets {k' kv : Known} (hk : Agrees k' kv) (kp : Known) (f : Form)
+    (a : Assignment) :
+    setsOf kv kp ((f.setResidual k').map (·.subst a)) = setsOf kv kp (f.sets.map (·.subst a)) := by
+  unfold Form.setResidual
+  induction f.sets with
+  | nil => rfl
+  | cons m ms ih =>
+    simp only [List.map_cons, setsOf]
+    rw [SetMove.leg_peval_subst hk]
+    simp only [List.map_map] at ih ⊢
+    rw [ih]
+
+/-- The membrane over the pages a fill's sets write. -/
+def checkSets (f : Form) (v : MembraneViewer) (holder : String) : List SetMove → Except Refusal Unit
+  | [] => .ok ()
+  | m :: ms => do
+    checkPage f v holder m.page
+    checkSets f v holder ms
+
+theorem checkSets_ok {f : Form} {v : MembraneViewer} {holder : String} :
+    ∀ {ms : List SetMove}, checkSets f v holder ms = .ok () → ∀ m ∈ ms, checkPage f v holder m.page = .ok ()
+  | [], _, m, hm => by cases hm
+  | q :: qs, h, m, hm => by
+    simp only [checkSets, bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i hq
+      rcases List.mem_cons.1 hm with rfl | hm
+      · exact hq
+      · exact checkSets_ok h m hm
+
+theorem evalFields_ok {kv : Known} {page : String} {pre : Data} :
+    ∀ {fs : List (String × SExpr)} {vs : List (String × String)}, evalFields kv page pre fs = .ok vs →
+      ∀ fv ∈ vs, natAt pre fv.1 = 0
+  | [], vs, h, fv, hfv => by simp only [evalFields, Except.ok.injEq] at h; subst h; cases hfv
+  | (f, e) :: rest, vs, h, fv, hfv => by
+    simp only [evalFields] at h
+    split at h
+    · cases h
+    · rename_i v hv
+      split at h
+      · cases h
+      · rename_i hnat
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · rename_i vs' hrest
+            simp only [Except.ok.injEq] at h
+            subst h
+            rcases List.mem_cons.1 hfv with rfl | hfv
+            · simpa using hnat
+            · exact evalFields_ok hrest fv hfv
+
+theorem SetMove.leg_ok {kv kp : Known} {m : SetMove} {l : SetLeg} (h : m.leg kv kp = .ok l) :
+    m.page = .page l.page ∧ kp l.page = some l.pre ∧ ∀ fv ∈ l.vals, natAt l.pre fv.1 = 0 := by
+  unfold SetMove.leg at h
+  split at h
+  · cases h
+  · rename_i n hn
+    split at h
+    · cases h
+    · rename_i d hd
+      split at h
+      · cases h
+      · rename_i vs hvs
+        simp only [Except.ok.injEq] at h
+        subst h
+        exact ⟨hn, hd, evalFields_ok hvs⟩
+
+theorem setsOf_ok {kv kp : Known} :
+    ∀ {ms : List SetMove} {ls : List SetLeg}, setsOf kv kp ms = .ok ls → ∀ l ∈ ls, ∃ m ∈ ms, m.leg kv kp = .ok l
+  | [], ls, h, l, hl => by simp only [setsOf, Except.ok.injEq] at h; subst h; cases hl
+  | m :: ms, ls, h, l, hl => by
+    simp only [setsOf, bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i q hq
+      split at h
+      · cases h
+      · rename_i qs hqs
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        rcases List.mem_cons.1 hl with rfl | hl
+        · exact ⟨m, List.mem_cons_self .., hq⟩
+        · obtain ⟨m', hm', h'⟩ := setsOf_ok hqs l hl
+          exact ⟨m', List.mem_cons_of_mem _ hm', h'⟩
+
+theorem sum_deltaAsset_setDeltas (tid : ByteArray) (ls : List SetLeg) (a : String) :
+    ((setDeltas tid ls).map fun d => deltaAsset d a).sum = 0 := by
+  induction ls with
+  | nil => rfl
+  | cons l ls ih =>
+    simp only [setDeltas, List.map_cons, List.sum_cons] at ih ⊢
+    rw [ih]
+    simp [deltaAsset, SetLeg.delta]
+
+/-- **The turn of a fill with sets**: the moves' turn, and a write per set, with no half-edge. -/
+def fillTurn (t : VaultTurn) (ls : List SetLeg)
+    (h : ((t.writeCells ++ setDeltas t.turnId ls).map CellDelta.cell).Nodup) : VaultTurn where
+  turnId := t.turnId
+  readPins := t.readPins
+  writeCells := t.writeCells ++ setDeltas t.turnId ls
+  occasion := t.occasion
+  agree := by
+    intro d hd
+    rcases List.mem_append.1 hd with hd | hd
+    · exact t.agree d hd
+    · simp only [setDeltas, List.mem_map] at hd
+      obtain ⟨l, _, rfl⟩ := hd
+      rfl
+  balanced := fun a => by
+    have hb := t.balanced a
+    unfold sumAssetDelta at hb ⊢
+    rw [foldl_add_int, Int.zero_add] at hb ⊢
+    rw [List.map_append, List.sum_append, hb, sum_deltaAsset_setDeltas, Int.add_zero]
+  nodup_cells := h
+
+/-- An admitted fill with sets: the moves' admission, the sets' legs, and the turn of both. -/
+structure Filled where
+  ad : Admitted
+  sets : List SetLeg
+  turn : VaultTurn
+
+/-- **Admit a fill with sets**: the membrane over the moves and the sets (reading no store), the
+moves' admission (`admit`), the sets evaluated (their values at the capture, their pages at `k`),
+and one turn of both, which may not write a page twice. -/
+def admitFill (root : MembraneViewer) (f : Form) (hops : List Grant) (k : Known) (a : Assignment)
+    (tid : ByteArray) (occ : Data) : Except Refusal Filled :=
+  match gate root f hops (f.fill a) with
+  | .error r => .error r
+  | .ok (v, holder) =>
+    match checkSets f v holder (f.fillSets a) with
+    | .error r => .error r
+    | .ok () =>
+      match admit root f hops k a tid occ with
+      | .error r => .error r
+      | .ok ad =>
+        match setsOf f.known k (f.fillSets a) with
+        | .error r => .error r
+        | .ok ls =>
+          if h : ((ad.turn.writeCells ++ setDeltas ad.turn.turnId ls).map CellDelta.cell).Nodup then
+            .ok ⟨ad, ls, fillTurn ad.turn ls h⟩
+          else .error (.twice ((firstDuplicateCell?
+            ((ad.turn.writeCells ++ setDeltas ad.turn.turnId ls).map CellDelta.cell)).getD "?"))
+
+theorem admitFill_ok {root : MembraneViewer} {f : Form} {hops : List Grant} {k : Known} {a : Assignment}
+    {tid : ByteArray} {occ : Data} {fl : Filled} (h : admitFill root f hops k a tid occ = .ok fl) :
+    admit root f hops k a tid occ = .ok fl.ad ∧
+      checkSets f fl.ad.viewer fl.ad.holder (f.fillSets a) = .ok () ∧
+      setsOf f.known k (f.fillSets a) = .ok fl.sets ∧
+      fl.turn.writeCells = fl.ad.turn.writeCells ++ setDeltas fl.ad.turn.turnId fl.sets ∧
+      fl.turn.readPins = fl.ad.turn.readPins := by
+  unfold admitFill at h
+  split at h
+  · cases h
+  · rename_i v holder hg
+    split at h
+    · cases h
+    · rename_i hc
+      split at h
+      · cases h
+      · rename_i ad had
+        have hg' := (admit_ok had).1
+        rw [hg] at hg'
+        simp only [Except.ok.injEq, Prod.mk.injEq] at hg'
+        obtain ⟨rfl, rfl⟩ := hg'
+        split at h
+        · cases h
+        · rename_i ls hls
+          split at h
+          · simp only [Except.ok.injEq] at h
+            subst h
+            exact ⟨had, hc, hls, rfl, rfl⟩
+          · cases h
+
+/-- Every page an admitted fill writes, moves and sets alike, is a page of the form its final viewer
+may write. -/
+theorem admitFill_writes {root : MembraneViewer} {f : Form} {hops : List Grant} {k : Known}
+    {a : Assignment} {tid : ByteArray} {occ : Data} {fl : Filled}
+    (h : admitFill root f hops k a tid occ = .ok fl) :
+    ∀ d ∈ fl.turn.writeCells, mayWrite fl.ad.viewer d.cell = true ∧ d.cell ∈ f.scope := by
+  obtain ⟨had, hc, hls, hw, _⟩ := admitFill_ok h
+  intro d hd
+  rw [hw] at hd
+  rcases List.mem_append.1 hd with hd | hd
+  · exact admit_writes had d hd
+  · simp only [setDeltas, List.mem_map] at hd
+    obtain ⟨l, hl, rfl⟩ := hd
+    obtain ⟨m, hm, hleg⟩ := setsOf_ok hls l hl
+    obtain ⟨hpage, _, _⟩ := SetMove.leg_ok hleg
+    have hcp := checkSets_ok hc m hm
+    rw [hpage] at hcp
+    obtain ⟨n, hn, hscope, hmay⟩ := checkPage_ok hcp
+    cases hn
+    exact ⟨hmay, hscope⟩
+
+/-- **No amplification through forms, with label and text holes.** An admitted fill's turn, its sets'
+writes among it, is one the membrane's final viewer could have written directly, and so is one the
+root could have: whatever strings fill the holes, a set writes only a page the viewer may write, and
+reads nothing the form was not shown. -/
+theorem admitFill_no_amplification {root : MembraneViewer} {f : Form} {hops : List Grant} {k : Known}
+    {a : Assignment} {tid : ByteArray} {occ : Data} {fl : Filled}
+    (h : admitFill root f hops k a tid occ = .ok fl) :
+    DirectlyAdmits fl.ad.viewer fl.turn ∧ DirectlyAdmits root fl.turn ∧
+      fl.ad.viewer.held ⊆ root.held ∧ (∀ n, fl.ad.viewer.permits n = true → root.permits n = true) := by
+  obtain ⟨had, _, _, _, hpins⟩ := admitFill_ok h
+  obtain ⟨⟨_, hvr⟩, ⟨_, hrr⟩, hheld, hperm⟩ := admit_no_amplification had
+  have hwrites := admitFill_writes h
+  refine ⟨⟨fun d hd => (hwrites d hd).1, fun q hq => hvr q (hpins ▸ hq)⟩,
+    ⟨fun d hd => mayWrite_mono hheld hperm (hwrites d hd).1, fun q hq => hrr q (hpins ▸ hq)⟩, hheld, hperm⟩
+
+/-- The half-edges of a fill with sets report the change: the moves' legs as before
+(`admit_halfEdges_honest`), and a set moves no natural at all. -/
+theorem admitFill_halfEdges_honest {root : MembraneViewer} {f : Form} {hops : List Grant} {k : Known}
+    (hk : Agrees f.known k) {a : Assignment} {tid : ByteArray} {occ : Data} {fl : Filled}
+    (h : admitFill root f hops k a tid occ = .ok fl) :
+    ∀ d ∈ fl.turn.writeCells, ∀ A : String,
+      (natAt d.postState A : Int) = natAt d.preState A + deltaAsset d A := by
+  obtain ⟨had, _, hls, hw, _⟩ := admitFill_ok h
+  intro d hd A
+  rw [hw] at hd
+  rcases List.mem_append.1 hd with hd | hd
+  · exact admit_halfEdges_honest hk had d hd A
+  · simp only [setDeltas, List.mem_map] at hd
+    obtain ⟨l, hl, rfl⟩ := hd
+    obtain ⟨m, _, hleg⟩ := setsOf_ok hls l hl
+    obtain ⟨_, _, hzero⟩ := SetMove.leg_ok hleg
+    simp only [SetLeg.delta, deltaAsset, List.find?_nil, Int.add_zero]
+    rw [natAt_putLabels A l.vals l.pre hzero]
+
+/-- **`admit_conserves_total`, for a fill with sets**: the turn of any fill the gate admits, its
+sets' writes among it, leaves the total of every field over any pages that include those it writes as
+it was. -/
+theorem admitFill_conserves_total {root : MembraneViewer} {f : Form} {hops : List Grant} {k : Known}
+    (hk : Agrees f.known k) {a : Assignment} {tid : ByteArray} {occ : Data} {fl : Filled}
+    (h : admitFill root f hops k a tid occ = .ok fl) (s : VaultStore)
+    (hpre : ∀ d ∈ fl.turn.writeCells, s d.cell = some d.preState) (A : String) (cs : List String)
+    (hcs : cs.Nodup) (hw : ∀ c ∈ fl.turn.writeFootprint, c ∈ cs) :
+    total (applyTurn s fl.turn) A cs = total s A cs :=
+  applyTurn_conserves_total s fl.turn A cs hcs hw hpre fun d hd => admitFill_halfEdges_honest hk h d hd A
+
+/-- **The membrane refuses before anything is read**, with sets: a fill whose sets name a page the
+viewer may not write is refused with the same words at every knowledge. -/
+theorem admitFill_gate_first {root : MembraneViewer} {f : Form} {hops : List Grant} {a : Assignment}
+    {v : MembraneViewer} {holder : String} {r : Refusal}
+    (hg : gate root f hops (f.fill a) = .ok (v, holder)) (hc : checkSets f v holder (f.fillSets a) = .error r)
+    (k : Known) (tid : ByteArray) (occ : Data) : admitFill root f hops k a tid occ = .error r := by
+  simp only [admitFill, hg, hc]
+
+/-- A form without sets is admitted as `admit` admits it. -/
+theorem admitFill_no_sets {root : MembraneViewer} {f : Form} (hs : f.sets = []) (hops : List Grant) (k : Known)
+    (a : Assignment) (tid : ByteArray) (occ : Data) :
+    (admitFill root f hops k a tid occ).map (·.ad) = admit root f hops k a tid occ := by
+  have hfs : f.fillSets a = [] := by simp [Form.fillSets, Form.setResidual, hs]
+  unfold admitFill
+  rw [hfs]
+  cases hg : gate root f hops (f.fill a) with
+  | error r =>
+    simp only [Except.map]
+    simp only [admit, hg]
+  | ok vh =>
+    obtain ⟨v, holder⟩ := vh
+    simp only [checkSets]
+    cases had : admit root f hops k a tid occ with
+    | error r => rfl
+    | ok ad =>
+      simp only [setsOf, setDeltas, List.map_nil, List.append_nil]
+      rw [dif_pos (by simpa using ad.turn.nodup_cells)]
+      rfl
+
 /-! ## 8. Abstraction of a form: the screenshot stays live -/
 
 def Move.abstractNat (v : Nat) (h : String) (m : Move) : Move := { m with amount := m.amount.abstractNat v h }
@@ -1240,19 +1772,19 @@ def Move.abstractPage (n h : String) (m : Move) : Move :=
 def Move.holes (m : Move) : List String := m.src.holes ++ m.dst.holes ++ m.amount.holes
 
 theorem PRef.subst_nats (p : PRef) (a : Assignment) (x : String × Nat) :
-    p.subst ⟨x :: a.nats, a.pages⟩ = p.subst a := by
+    p.subst ⟨x :: a.nats, a.pages, a.labels⟩ = p.subst a := by
   cases p <;> rfl
 
 theorem Move.unfold_subst_abstractNat (v : Nat) (h : String) (a : Assignment) (m : Move)
     (hf : h ∉ m.holes) :
-    (m.abstractNat v h).unfold.subst ⟨(h, v) :: a.nats, a.pages⟩ = m.unfold.subst a := by
+    (m.abstractNat v h).unfold.subst ⟨(h, v) :: a.nats, a.pages, a.labels⟩ = m.unfold.subst a := by
   simp only [Move.holes, List.mem_append, not_or] at hf
   simp only [Move.abstractNat, Move.unfold, RMove.subst, NExpr.subst, PRef.subst_nats,
     NExpr.subst_abstractNat_cons v h a m.amount hf.2]
 
 theorem Move.unfold_subst_abstractPage (n h : String) (a : Assignment) (m : Move)
     (hf : h ∉ m.holes) :
-    (m.abstractPage n h).unfold.subst ⟨a.nats, (h, n) :: a.pages⟩ = m.unfold.subst a := by
+    (m.abstractPage n h).unfold.subst ⟨a.nats, (h, n) :: a.pages, a.labels⟩ = m.unfold.subst a := by
   simp only [Move.holes, List.mem_append, not_or] at hf
   simp only [Move.abstractPage, Move.unfold, RMove.subst, NExpr.subst,
     PRef.subst_abstractPage_cons n h a m.src hf.1.1, PRef.subst_abstractPage_cons n h a m.dst hf.1.2,
@@ -1272,8 +1804,8 @@ knowledge `k` the judgment has. A captured turn with no holes is the live turn i
 screenshot with some of its data replaced by variables, and filling them back gives it back. -/
 theorem abstract_then_fill {k : Known} (f : Form) (hk : Agrees f.known k) (a : Assignment) (h : String)
     (hf : ∀ m ∈ f.moves, h ∉ m.holes) :
-    (∀ v : Nat, pairsOf k ((f.abstractNat v h).fill ⟨(h, v) :: a.nats, a.pages⟩) = pairsOf k (f.fill a)) ∧
-    (∀ n : String, pairsOf k ((f.abstractPage n h).fill ⟨a.nats, (h, n) :: a.pages⟩) = pairsOf k (f.fill a)) := by
+    (∀ v : Nat, pairsOf k ((f.abstractNat v h).fill ⟨(h, v) :: a.nats, a.pages, a.labels⟩) = pairsOf k (f.fill a)) ∧
+    (∀ n : String, pairsOf k ((f.abstractPage n h).fill ⟨a.nats, (h, n) :: a.pages, a.labels⟩) = pairsOf k (f.fill a)) := by
   constructor
   · intro v
     have hk' : Agrees (f.abstractNat v h).known k := hk
@@ -1317,6 +1849,36 @@ def setFront (md field : String) (v : Nat) : Option String :=
     if after.isEmpty || !(fm.any isField) then none
     else some ("\n".intercalate (first :: fm.map (fun l => if isField l then field ++ ": " ++ toString v else l) ++ after))
   | [] => none
+
+/-- Set the frontmatter line `field: VALUE` of a page's text to the rendered `value`; when the page has
+no such line, add it before the frontmatter's end if `insert`, else none. -/
+def setFrontLine (md field value : String) (insert : Bool) : Option String :=
+  match md.splitOn "\n" with
+  | first :: rest =>
+    if trim first != "---" then none else
+    let fm := rest.takeWhile fun l => trim l != "---"
+    let after := rest.drop fm.length
+    let isField (l : String) : Bool := (splitColon l).map (·.1) == some field
+    if after.isEmpty then none
+    else if fm.any isField then
+      some ("\n".intercalate (first :: fm.map (fun l => if isField l then field ++ ": " ++ value else l) ++ after))
+    else if insert then some ("\n".intercalate (first :: fm ++ [field ++ ": " ++ value] ++ after))
+    else none
+  | [] => none
+
+/-- A field of a written state as its frontmatter line renders it: a label quoted (and added if the
+page lacks the line), anything else as its natural (the line must exist). -/
+def frontValue (d : Data) (f : String) : String × Bool :=
+  match d with
+  | .record fs => match fs.lookup f with
+    | some (.label v) => ("\"" ++ v ++ "\"", true)
+    | _ => (toString (natAt d f), false)
+  | _ => (toString (natAt d f), false)
+
+/-- Set every touched field's line of a page's text. -/
+def setFronts (md : String) (d : Data) : List String → Option String
+  | [] => some md
+  | f :: fs => (setFrontLine md f (frontValue d f).1 (frontValue d f).2).bind fun md' => setFronts md' d fs
 
 /-- The write of each leg of an admitted turn: the page, its text with the field's line set, and the
 version that text is as the owner's edit of the page (the atoms it adds, the poster's). -/
@@ -1368,6 +1930,53 @@ theorem legWritesOf_ok {H : Obend.Digest.HashBytes.Hash} {s : Store} {poster : S
               rcases List.mem_cons.1 hw with rfl | hw
               · simpa [hpn] using hp
               · exact ih2 w hw
+      · cases h
+
+/-- The write of each set of an admitted fill: the page, its text with every field's label line set
+(added where the page lacks it), and the version that text is as the owner's edit of the page. -/
+def setWritesOf (H : Obend.Digest.HashBytes.Hash) (s : Store) (poster : String) :
+    List CellDelta → Except String (List (Page × Graph × List (AtomId × String)))
+  | [] => .ok []
+  | d :: ds =>
+    match s.page? d.cell with
+    | none => .error (d.cell ++ " is not a page here")
+    | some p =>
+      match p.current, p.render? with
+      | some G, some md =>
+        match setFronts md d.postState d.touchedFields with
+        | none => .error (d.cell ++ " has no frontmatter to set " ++ ", ".intercalate d.touchedFields ++ " in")
+        | some md' =>
+          let b := editPatch H G (align (pieces G p.name p.who) (Obend.Doc.contents (resolveIn H s.entries)
+            (stripToks (Obend.Doc.tokens md')))) "owner"
+          if b.ops.isEmpty then .error ("at " ++ d.cell ++ ": the fill changes nothing")
+          else match setWritesOf H s poster ds with
+            | .error e => .error e
+            | .ok ws => .ok ((p, G.apply b.ops, b.added.map (·, poster)) :: ws)
+      | _, _ => .error (d.cell ++ " has no version to write")
+
+theorem setWritesOf_ok {H : Obend.Digest.HashBytes.Hash} {s : Store} {poster : String} :
+    ∀ {ds : List CellDelta} {ws : List (Page × Graph × List (AtomId × String))},
+      setWritesOf H s poster ds = .ok ws → ws.map (·.1.name) = ds.map (·.cell)
+  | [], ws, h => by simp only [setWritesOf, Except.ok.injEq] at h; subst h; simp
+  | d :: ds, ws, h => by
+    simp only [setWritesOf] at h
+    split at h
+    · cases h
+    · rename_i p hp
+      have hpn : p.name = d.cell := by
+        unfold Store.page? at hp
+        simpa using List.find?_some hp
+      split at h
+      · split at h
+        · cases h
+        · split at h
+          · cases h
+          · split at h
+            · cases h
+            · rename_i ws' hws
+              simp only [Except.ok.injEq] at h
+              subst h
+              simp [hpn, setWritesOf_ok hws]
       · cases h
 
 /-- A landed leg: the page, its states as `commit` judged them (`Prepared.o`, `Prepared.n`), and a
@@ -1462,6 +2071,9 @@ def refusalText (f : Form) : Refusal → String
       "; the fill moves " ++ toString moves
   | .unevaluated what => "refused: " ++ what ++ " does not evaluate"
   | .twice page => "refused: the fill writes " ++ page ++ " twice"
+  | .numeric page field => "refused: " ++ page ++ " holds " ++ field ++ " as a number; a set writes labels only"
+  | .illFormed page field => "refused: the value for " ++ page ++ "." ++ field ++
+      " cannot be a frontmatter line (it holds a newline or a double quote)"
 
 /-- The viewer of the vault's owner over a form's scope: the root of every chain. -/
 def ownerViewer (f : Form) : MembraneViewer := ownerGrant.viewer f.scope
@@ -1613,6 +2225,128 @@ theorem judgeProposal_sound {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f 
     rw [foldl_add_int, Int.zero_add] at hb
     rw [hb, Int.add_zero]
 
+/-- **Judge a fill with sets**, as a proposal is judged (`judgeProposal`): the membrane over the moves
+and the sets and the moves' resources (`admitFill`), the pins, the turn over every page it writes
+(each set page with its label lines set, judged by its own laws and the laws over links on the tip),
+the turn as it lands, and the store with all of it landed at once. -/
+def judgeFill (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) (hops : List Grant)
+    (a : Assignment) : Except String (Store × Admitted × VaultTurn) :=
+  if f.sets.isEmpty then judgeProposal H s f hops a else
+  match admitFill (ownerViewer f) f hops (f.knownLive (stateStore s.entries)) a ByteArray.empty
+      (.label f.name) with
+  | .error r => .error (refusalText f r)
+  | .ok fl =>
+    match admitFootprint (stateStore s.entries) fl.turn.readPins with
+    | .error (.footprintStale cell exp cur) =>
+      .error ("refused: stale: the form read " ++ cell ++ " as it was when captured (" ++
+        stateDiffText exp cur ++ "); capture it again")
+    | .error _ => .error "refused: its pins do not hold here"
+    | .ok _ =>
+      match legWritesOf H s fl.ad.holder fl.ad.turn.writeCells,
+          setWritesOf H s fl.ad.holder (setDeltas fl.ad.turn.turnId fl.sets) with
+      | .error e, _ => .error e
+      | _, .error e => .error e
+      | .ok ws1, .ok ws2 =>
+        let ws := ws1 ++ ws2
+        match commitTurn s.entries s.entries ws .owner s.turn fl.ad.holder s.environment with
+        | .error e => .error e
+        | .ok prs =>
+          match landedTurn f fl.turn.readPins fl.turn.occasion prs with
+          | .error e => .error e
+          | .ok t => .ok (s.landAll prs, fl.ad, t)
+
+/-- A form without sets is judged as a proposal is. -/
+theorem judgeFill_no_sets (H : Obend.Digest.HashBytes.Hash) (s : Store) {f : Form} (hs : f.sets = [])
+    (hops : List Grant) (a : Assignment) : judgeFill H s f hops a = judgeProposal H s f hops a := by
+  simp [judgeFill, hs]
+
+/-- What the kernel landed of a fill with sets, it admitted (moves and sets), read, wrote and judged. -/
+theorem judgeFill_ok {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f : Form} {hops : List Grant}
+    {a : Assignment} {ad : Admitted} {t : VaultTurn} (hs : f.sets ≠ []) (h : judgeFill H s f hops a = .ok (s', ad, t)) :
+    ∃ fl, admitFill (ownerViewer f) f hops (f.knownLive (stateStore s.entries)) a ByteArray.empty (.label f.name) = .ok fl ∧
+      fl.ad = ad ∧ ∃ ws1 ws2 prs, legWritesOf H s ad.holder ad.turn.writeCells = .ok ws1 ∧
+        setWritesOf H s ad.holder (setDeltas ad.turn.turnId fl.sets) = .ok ws2 ∧
+        commitTurn s.entries s.entries (ws1 ++ ws2) .owner s.turn ad.holder s.environment = .ok prs ∧
+        landedTurn f fl.turn.readPins fl.turn.occasion prs = .ok t ∧ s' = s.landAll prs := by
+  have he : f.sets.isEmpty = false := by cases hx : f.sets with
+    | nil => exact absurd hx hs
+    | cons _ _ => rfl
+  unfold judgeFill at h
+  rw [he] at h
+  simp only [Bool.false_eq_true, if_false] at h
+  split at h
+  · cases h
+  · rename_i fl hfl
+    split at h
+    · cases h
+    · cases h
+    · split at h
+      · cases h
+      · cases h
+      · rename_i ws1 ws2 hws1 hws2
+        split at h
+        · cases h
+        · rename_i prs hprs
+          split at h
+          · cases h
+          · rename_i t' ht
+            simp only [Except.ok.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl, rfl⟩ := h
+            exact ⟨fl, hfl, rfl, ws1, ws2, prs, hws1, hws2, hprs, ht, rfl⟩
+
+/-- **A landed fill with sets stays inside the membrane**: the turn as it lands writes and reads
+only what the membrane's final viewer and the root could have written and seen directly, every page
+it writes is the form's, and every field the form moves keeps its total over the pages written. -/
+theorem judgeFill_sound {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f : Form} {hops : List Grant}
+    {a : Assignment} {ad : Admitted} {t : VaultTurn} (h : judgeFill H s f hops a = .ok (s', ad, t)) :
+    DirectlyAdmits (ownerViewer f) t ∧ DirectlyAdmits ad.viewer t ∧
+      (∀ c ∈ t.writeFootprint, c ∈ f.scope) ∧
+      ∀ A ∈ f.assets, (t.writeCells.map fun d => (natAt d.postState A : Int)).sum =
+        (t.writeCells.map fun d => (natAt d.preState A : Int)).sum := by
+  by_cases hs : f.sets = []
+  · rw [judgeFill_no_sets H s hs] at h
+    exact judgeProposal_sound h
+  obtain ⟨fl, hfl, rfl, ws1, ws2, prs, hws1, hws2, hprs, ht, _⟩ := judgeFill_ok hs h
+  obtain ⟨⟨hvw, hvr⟩, ⟨hrw, hrr⟩, _, _⟩ := admitFill_no_amplification hfl
+  obtain ⟨_, _, _, hflw, _⟩ := admitFill_ok hfl
+  have hwn : (ws1 ++ ws2).map (·.1.name) = fl.turn.writeCells.map (·.cell) := by
+    rw [hflw, List.map_append, List.map_append, (legWritesOf_ok hws1).1, setWritesOf_ok hws2]
+  obtain ⟨hpw, _⟩ := commitTurn_ok hprs
+  obtain ⟨htw, htp⟩ := landedTurn_ok ht
+  have hnames : prs.map (·.p.name) = (ws1 ++ ws2).map (·.1.name) := by
+    rw [show (prs.map fun pr => pr.p.name) = (prs.map (·.p)).map (·.name) by simp, hpw]; simp [Function.comp_def]
+  have hfoot : t.writeFootprint = fl.turn.writeFootprint := by
+    simp only [VaultTurn.writeFootprint, htw, List.map_map]
+    have : (prs.map (CellDelta.cell ∘ landedDelta f.assets)) = prs.map (·.p.name) := by
+      simp [Function.comp, landedDelta]
+    rw [this, hnames, hwn]
+  have hcell : ∀ d ∈ t.writeCells, ∃ e ∈ fl.turn.writeCells, e.cell = d.cell := by
+    intro d hd
+    have : d.cell ∈ fl.turn.writeFootprint := hfoot ▸ List.mem_map_of_mem hd
+    simpa [VaultTurn.writeFootprint] using this
+  have hwrites := admitFill_writes hfl
+  refine ⟨⟨fun d hd => ?_, fun q hq => hrr q (htp ▸ hq)⟩, ⟨fun d hd => ?_, fun q hq => hvr q (htp ▸ hq)⟩,
+    fun c hc => ?_, fun A hA => ?_⟩
+  · obtain ⟨e, he, hec⟩ := hcell d hd; rw [← hec]; exact hrw e he
+  · obtain ⟨e, he, hec⟩ := hcell d hd; rw [← hec]; exact hvw e he
+  · rw [hfoot] at hc
+    simp only [VaultTurn.writeFootprint, List.mem_map] at hc
+    obtain ⟨e, he, rfl⟩ := hc
+    exact (hwrites e he).2
+  · have hhon : ∀ d ∈ t.writeCells, (natAt d.postState A : Int) = natAt d.preState A + deltaAsset d A := by
+      intro d hd
+      rw [htw] at hd
+      obtain ⟨pr, _, rfl⟩ := List.mem_map.1 hd
+      rw [deltaAsset_landed]
+      simp only [hA, ite_true, landedDelta]
+      omega
+    rw [sum_map_add (post := fun d => (natAt d.postState A : Int)) (pre := fun d => (natAt d.preState A : Int))
+      (δ := fun d => deltaAsset d A) hhon]
+    have hb := t.balanced A
+    unfold sumAssetDelta at hb
+    rw [foldl_add_int, Int.zero_add] at hb
+    rw [hb, Int.add_zero]
+
 /-! ## 10. On the wire: a form, a proposal, a receipt -/
 
 open Lean (Json toJson)
@@ -1687,12 +2421,42 @@ def cellOf (j : Json) : Except String Cell := do
 def holeTyName : HoleTy → String
   | .nat => "natural"
   | .page => "page"
+  | .label => "label"
+  | .text => "text"
+
+def holeTyOf : String → HoleTy
+  | "page" => .page
+  | "label" => .label
+  | "text" => .text
+  | _ => .nat
+
+def sexprJson : SExpr → Json
+  | .lit v => Json.mkObj [("lit", Json.str v)]
+  | .hole h => Json.mkObj [("hole", h)]
+  | .field p f => Json.mkObj [("field", f), ("of", prefJson p)]
+
+def sexprOf (j : Json) : Except String SExpr :=
+  match j.getObjValAs? String "lit", j.getObjValAs? String "hole", j.getObjValAs? String "field" with
+  | .ok v, _, _ => .ok (.lit v)
+  | _, .ok h, _ => .ok (.hole h)
+  | _, _, .ok f => do return .field (← prefOf (← j.getObjVal? "of")) f
+  | _, _, _ => .error "not a string position"
+
+def setJson (m : SetMove) : Json :=
+  Json.mkObj [("page", prefJson m.page),
+    ("fields", Json.arr (m.fields.map fun x => Json.mkObj [("field", x.1), ("value", sexprJson x.2)]).toArray)]
+
+def setOf (j : Json) : Except String SetMove := do
+  let fs ← (← j.getObjValAs? (Array Json) "fields").toList.mapM fun x => do
+    return ((← x.getObjValAs? String "field"), ← sexprOf (← x.getObjVal? "value"))
+  return ⟨← prefOf (← j.getObjVal? "page"), fs⟩
 
 def formJson (f : Form) : Json :=
   Json.mkObj [("name", f.name), ("grants", Json.arr (f.grants.map grantJson).toArray),
     ("cells", Json.arr (f.cells.map cellJson).toArray), ("refs", Json.arr (f.refs.map toJson).toArray),
     ("holes", Json.arr (f.holes.map fun (h, t) => Json.mkObj [("hole", h), ("type", holeTyName t)]).toArray),
-    ("moves", Json.arr (f.moves.map moveJson).toArray)]
+    ("moves", Json.arr (f.moves.map moveJson).toArray)] |>.mergeObj
+    (if f.sets.isEmpty then Json.mkObj [] else Json.mkObj [("sets", Json.arr (f.sets.map setJson).toArray)])
 
 def formOf (j : Json) : Except String Form := do
   let grants ← (← j.getObjValAs? (Array Json) "grants").toList.mapM grantOf
@@ -1700,21 +2464,30 @@ def formOf (j : Json) : Except String Form := do
   let refs ← j.getObjValAs? (Array String) "refs"
   let holes ← (← j.getObjValAs? (Array Json) "holes").toList.mapM fun h => do
     let t ← h.getObjValAs? String "type"
-    return (← h.getObjValAs? String "hole", if t == "page" then HoleTy.page else .nat)
+    return (← h.getObjValAs? String "hole", holeTyOf t)
   let moves ← (← j.getObjValAs? (Array Json) "moves").toList.mapM moveOf
+  let sets ← match j.getObjValAs? (Array Json) "sets" with
+    | .ok xs => xs.toList.mapM setOf
+    | .error _ => pure []
   return { name := ← j.getObjValAs? String "name", grants := grants, cells := cells, refs := refs.toList,
-           holes := holes, moves := moves }
+           holes := holes, moves := moves, sets := sets }
 
 def assignmentJson (a : Assignment) : Json :=
   Json.mkObj [("nats", Json.arr (a.nats.map fun (h, n) => Json.mkObj [("hole", h), ("value", toJson n)]).toArray),
-    ("pages", Json.arr (a.pages.map fun (h, n) => Json.mkObj [("hole", h), ("page", n)]).toArray)]
+    ("pages", Json.arr (a.pages.map fun (h, n) => Json.mkObj [("hole", h), ("page", n)]).toArray)] |>.mergeObj
+    (if a.labels.isEmpty then Json.mkObj []
+     else Json.mkObj [("labels", Json.arr (a.labels.map fun (h, v) => Json.mkObj [("hole", h), ("value", Json.str v)]).toArray)])
 
 def assignmentOf (j : Json) : Except String Assignment := do
   let nats ← (← j.getObjValAs? (Array Json) "nats").toList.mapM fun x => do
     return (← x.getObjValAs? String "hole", ← x.getObjValAs? Nat "value")
   let pages ← (← j.getObjValAs? (Array Json) "pages").toList.mapM fun x => do
     return (← x.getObjValAs? String "hole", ← x.getObjValAs? String "page")
-  return ⟨nats, pages⟩
+  let labels ← match j.getObjValAs? (Array Json) "labels" with
+    | .ok xs => xs.toList.mapM fun x => do
+      return (← x.getObjValAs? String "hole", ← x.getObjValAs? String "value")
+    | .error _ => pure []
+  return ⟨nats, pages, labels⟩
 
 /-- A string's digest, as a natural: the first eight bytes of the vault's hash. -/
 def digestNat (H : Obend.Digest.HashBytes.Hash) (s : String) : Nat :=
@@ -1764,6 +2537,15 @@ def NExpr.show : NExpr → String
   | .sub x (.sub a b) => x.show ++ " - (" ++ (NExpr.sub a b).show ++ ")"
   | .sub x y => x.show ++ " - " ++ y.show
 
+def SExpr.show : SExpr → String
+  | .lit v => "\"" ++ v ++ "\""
+  | .hole h => h
+  | .field p f => p.show ++ "." ++ f
+
+/-- A set, said: a line per field it writes. -/
+def SetMove.lines (m : SetMove) : List String :=
+  m.fields.map fun x => m.page.show ++ "." ++ x.1 ++ " := " ++ x.2.show
+
 /-- A residual move, said: the two lines it writes. -/
 def RMove.lines (r : RMove) : List String :=
   [r.src.show ++ "." ++ r.asset ++ " := " ++ r.debit.show,
@@ -1777,11 +2559,12 @@ def Form.describe (f : Form) : List String :=
   [f.name ++ ": a form for " ++ holder ++ (match g with
       | some g => " (" ++ showAuths g.held ++ " on " ++ ", ".intercalate g.patterns ++ ")"
       | none => "")] ++
-  (f.cells.map fun c => "  " ++ c.name ++ ": " ++ ", ".intercalate
-      (((f.moves.map (·.asset)).eraseDups).map fun a => a ++ " " ++ toString (natAt c.state a))) ++
+  (f.cells.map fun c => "  " ++ c.name ++ ": " ++ (if f.moves.isEmpty then "shown" else ", ".intercalate
+      (((f.moves.map (·.asset)).eraseDups).map fun a => a ++ " " ++ toString (natAt c.state a)))) ++
   (f.refs.map fun r => "  " ++ r ++ ": a reference (read where the form is judged)") ++
   (f.holes.map fun (h, t) => "  hole " ++ h ++ ": a " ++ holeTyName t) ++
-  ((f.residual f.known).flatMap fun r => r.lines.map ("  " ++ ·))
+  ((f.residual f.known).flatMap fun r => r.lines.map ("  " ++ ·)) ++
+  ((f.setResidual f.known).flatMap fun m => m.lines.map ("  " ++ ·))
 
 /-! ## 12. Capturing a page situation from the vault -/
 
@@ -1817,7 +2600,33 @@ def captureFrom (s : Store) (situation name : String) (g : Grant) (src dst : Str
 /-- What a fill makes of a form where the form is: the fill substituted into the residual, evaluated
 again as far as the capture allows (a page the form did not capture stays a read). -/
 def Form.preview (f : Form) (a : Assignment) : List String :=
-  (f.fill a).flatMap fun r => (r.peval f.known).lines
+  (f.fill a).flatMap (fun r => (r.peval f.known).lines) ++ (f.fillSets a).flatMap (·.lines)
+
+/-- **Capture a brief**: the page `page` (and every page it links to) as the form `name` for the grant
+`g`, whose one set is the report the page owes: each of `lits` set to its literal, each of `holes` a
+hole of its type, named after its field. The page must be shown to the grant. -/
+def briefFrom (s : Store) (page name : String) (g : Grant) (lits : List (String × String))
+    (holes : List (String × HoleTy)) : Except String (Form × Nat) := do
+  let some p := s.page? page | throw ("no page named " ++ page)
+  let some G := p.current | throw (page ++ " has no version yet")
+  let names := ([page] ++ citedNames s.entries G).eraseDups
+  let live := stateStore s.entries
+  let cands : List Cell := names.filterMap fun n => (live n).map fun d => { name := n, state := d }
+  let scope := cands.map (·.name)
+  let root := ownerGrant.viewer scope
+  if (Membrane.reshare root (g.viewer scope)).isNone then
+    throw (refusalText { name := name, grants := [], cells := [], moves := [] }
+      (.amplifies "owner" g.holder root.held g.held))
+  let cells := capture (g.viewer scope) cands
+  unless cells.any (·.name == page) do
+    throw (page ++ " is not shown to " ++ g.holder ++ "'s grant (" ++ showAuths g.held ++ " on " ++
+      ", ".intercalate g.patterns ++ ")")
+  for (f, v) in lits do
+    unless lineSafe v do throw ("the value for " ++ f ++ " cannot be a frontmatter line")
+  let fields := lits.map (fun (f, v) => (f, SExpr.lit v)) ++ holes.map fun (h, _) => (h, SExpr.hole h)
+  let f : Form := { name := name, grants := [g], cells := cells, holes := holes, moves := [],
+                    sets := [{ page := .page page, fields := fields }] }
+  return (f, cands.length - cells.length)
 
 end Obend.Vault.Form
 
