@@ -21,6 +21,9 @@ module
         branches of the base they share, merged at the tip (`Obend.Vault.Branch.merge`); a page both
         wrote merges by the pushout of the two versions; here's writes the tip does not land wait as
         refused writes.
+    obend branch resolve K left|right
+        resolve the merge conflict K the store keeps (`obend status` lists them) by landing one
+        candidate through the store's own write; the receipt names the one dropped.
     obend member add NAME --grant VERB:PATTERN [--grant …]
         a member; VERB is post, select, write (re-cite) or relaw; PATTERN is a page, `folder/*` or `*`.
     obend member list
@@ -219,6 +222,10 @@ def statusOf (s : Store) (only : Option String) : List String :=
       (citeReport H s p).map (fun (c, ok, why) => "  " ++ c ++ (if ok then " ✓ " else " ✗ ") ++ why) ++
       (sectionReport p).map ("  " ++ ·)) ++
   ((s.tombs.filter fun p => only.all (· == p.name)).map tombLine) ++
+  ((s.conflicts.zipIdx.filter fun (c, _) => only.all (· == c.page)).map fun (c, k) =>
+    "conflict " ++ toString k ++ " at " ++ c.page ++ ": " ++ c.left.1 ++ "'s " ++ c.left.2.1 ++ " and " ++
+      c.right.1 ++ "'s " ++ c.right.2.1 ++ " (both kept as candidates; neither landed); keep one with: " ++
+      "obend branch resolve " ++ toString k ++ " left|right") ++
   (match only with
     | some n => if s.pages.any (·.name == n) || s.tombs.any (·.name == n) then [] else [n ++ ": no such page"]
     | none => [])
@@ -382,6 +389,17 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     finish dir s' V
     for l in problems s' do IO.println l
     return 0
+  | ["branch", "resolve", k, side] => some do
+    let (s, V) ← openDir dir false
+    let some k := k.toNat? | fail "branch resolve K left|right: K is a number"
+    let pick := if side == "right" then Obend.Vault.Branch.Side.right else Obend.Vault.Branch.Side.left
+    match Obend.Vault.Merge.resolveIn s k pick with
+    | .error e => fail ("not resolved: " ++ e)
+    | .ok (s', receipt) =>
+      IO.println ("resolved conflict " ++ toString k ++ ": landed " ++ receipt)
+      finish dir s' V
+      for l in problems s' do IO.println l
+      return 0
   | "member" :: "add" :: name :: rest => some do
     let gs := grants rest
     let parsed := gs.filterMap parseGrant

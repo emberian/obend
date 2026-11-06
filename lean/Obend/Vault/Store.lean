@@ -77,6 +77,22 @@ structure Member where
   grants : List (String × String)
 deriving Repr, DecidableEq
 
+/-- The text of a write to a page: the versions it appends, each with the authors of the atoms it
+adds, and whose text it is (`new.poster`; the writer's own when none). -/
+structure PageWrite where
+  versions : List (Graph × List (AtomId × String)) := []
+  poster : Option String := none
+deriving Repr
+
+/-- A merge's open question about a page (`Obend.Vault.Merge`): two writes of it that do not merge,
+each with the replica it came from and its label, both kept until one is chosen
+(`obend branch resolve`); neither has landed. -/
+structure PageConflict where
+  page : String
+  left : String × String × PageWrite
+  right : String × String × PageWrite
+deriving Repr
+
 structure Store where
   pages : List Page := []
   members : List Member := []
@@ -89,6 +105,8 @@ structure Store where
   the file a kind page names (`environment: PATH`) at every open (`Obend.Vault.Cli.openDir`); not
   kept in the world, since it is the machine's library, not the vault's -/
   environment : Environment := #[]
+  /-- the merges' open conflicts, each a page's two candidate writes (`PageConflict`) -/
+  conflicts : List PageConflict := []
 deriving Repr
 
 def Page.current (p : Page) : Option Graph := p.history.getLast?
@@ -1915,6 +1933,14 @@ def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × Str
   match commit s.entries p G' added who s.turn (poster.getD who.name) (env := s.environment) with
   | .ok ch => return s.setPage (p.withChange ch)
   | .error msg => throw (p.name ++ ": " ++ msg)
+
+/-- **A page write lands**: each of its versions in turn, through `Store.write`, the one judgment and
+the one landing rule every write of the store goes through. -/
+def Store.writeText (s : Store) (page : String) (w : PageWrite) : Except String Store :=
+  w.versions.foldlM (fun s (G, added) =>
+    match s.page? page with
+    | some p => s.write p G added .owner w.poster
+    | none => .error (page ++ ": no such page")) s
 
 /-! ### Merge -/
 

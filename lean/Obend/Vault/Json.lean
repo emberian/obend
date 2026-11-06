@@ -180,6 +180,37 @@ def memberOf (j : Json) : Except String Member := do
     return (v, p)
   return ⟨name, id, grants⟩
 
+def authorsJson (as : List (AtomId × String)) : Json :=
+  Json.arr (as.map fun (a, w) => Json.arr #[toJson a, Json.str w]).toArray
+
+def authorsOf (j : Json) : Except String (List (AtomId × String)) := do
+  (← j.getArr?).toList.mapM fun e => do
+    let a ← e.getArrVal? 0 >>= fromJson?
+    let w ← e.getArrVal? 1 >>= fromJson?
+    return (a, w)
+
+def pageWriteJson (w : PageWrite) : Json :=
+  Json.mkObj ([("versions", Json.arr (w.versions.map fun (G, as) =>
+      Json.mkObj [("graph", graphJson G), ("added", authorsJson as)]).toArray)] ++
+    (match w.poster with | some p => [("poster", Json.str p)] | none => []))
+
+def pageWriteOf (j : Json) : Except String PageWrite := do
+  let vs ← (← j.getObjValAs? (Array Json) "versions").toList.mapM fun v => do
+    return (← graphOf (← v.getObjVal? "graph"), ← authorsOf (← v.getObjVal? "added"))
+  return { versions := vs, poster := optStr j "poster" }
+
+def candidateJson (c : String × String × PageWrite) : Json :=
+  Json.mkObj [("origin", Json.str c.1), ("label", Json.str c.2.1), ("write", pageWriteJson c.2.2)]
+
+def candidateOf (j : Json) : Except String (String × String × PageWrite) := do
+  return (← j.getObjValAs? String "origin", ← j.getObjValAs? String "label", ← pageWriteOf (← j.getObjVal? "write"))
+
+def conflictJson (c : PageConflict) : Json :=
+  Json.mkObj [("page", Json.str c.page), ("left", candidateJson c.left), ("right", candidateJson c.right)]
+
+def conflictOf (j : Json) : Except String PageConflict := do
+  return ⟨← j.getObjValAs? String "page", ← candidateOf (← j.getObjVal? "left"), ← candidateOf (← j.getObjVal? "right")⟩
+
 def schema : String := "obend.vault.world.v1"
 
 def storeJson (s : Store) : Json :=
@@ -188,7 +219,9 @@ def storeJson (s : Store) : Json :=
     ("pages", Json.arr (s.pages.map pageJson).toArray)]
   let tombs : List (String × Json) :=
     if s.tombs.isEmpty then [] else [("tombs", Json.arr (s.tombs.map pageJson).toArray)]
-  Json.mkObj (base ++ tombs)
+  let conflicts : List (String × Json) :=
+    if s.conflicts.isEmpty then [] else [("conflicts", Json.arr (s.conflicts.map conflictJson).toArray)]
+  Json.mkObj (base ++ tombs ++ conflicts)
 
 def storeOf (j : Json) : Except String Store := do
   let sc ← j.getObjValAs? String "schema"
@@ -199,7 +232,10 @@ def storeOf (j : Json) : Except String Store := do
   let tombs ← match j.getObjVal? "tombs" with
     | .ok (.arr ts) => ts.toList.mapM pageOf
     | _ => pure []
-  return { pages := pages, members := members, turn := turn, tombs := tombs }
+  let conflicts ← match j.getObjVal? "conflicts" with
+    | .ok (.arr cs) => cs.toList.mapM conflictOf
+    | _ => pure []
+  return { pages := pages, members := members, turn := turn, tombs := tombs, conflicts := conflicts }
 
 end Obend.Vault.Json
 
