@@ -10,8 +10,8 @@
 #                                 graph agrees on the device, with the dispatch time per vector printed and
 #                                 not gated, [3] each planted shader rule makes at least one graph's
 #                                 comparison fail, [4] with Mesa's RADV, the final ISA of every stage is
-#                                 extracted under isa/ (isa_extract.py: one program per stage, one 64-bit
-#                                 store per thread)
+#                                 extracted under isa/ with its machine code and resource usage
+#                                 (isa_extract.py: one program per stage, at least one 64-bit store)
 #   verify_gpu.sh --plant NAME    only the comparison, on shaders emitted with the planted rule NAME
 #                                 (addAsSub, swapMux); it fails, and says where
 #   verify_gpu.sh --stage N       only stage N of the gate (1-4)
@@ -149,7 +149,7 @@ done
 fi
 
 if run_stage 4; then
-echo "=== [4/4] the ISA: RADV's final assembly of every stage, under isa/ ==="
+echo "=== [4/4] the ISA: RADV's final assembly and resource usage of every stage, under isa/ ==="
 probe="$("${RUN}" --list-adapters 2>/dev/null | grep -i "driver=radv" || true)"
 if [[ "$(uname -s)" != Linux || -z "${probe}" ]]; then
   echo "  skipped: no RADV adapter here (the dump is Mesa's); the shaders ran on: $("${RUN}" --list-adapters 2>/dev/null | head -1)"
@@ -158,7 +158,7 @@ else
   adapter="$(echo "${probe}" | head -1 | sed 's/ type=.*//')"
   for g in "${GRAPHS[@]}"; do
     dir="$(graph_dir "${g}")"
-    RADV_DEBUG=shaders "${RUN}" "${dir}" --adapter radv >/dev/null 2>"${WORK}/isa-${g}.txt" || {
+    RADV_DEBUG=shaders,shaderstats "${RUN}" "${dir}" --adapter radv >/dev/null 2>"${WORK}/isa-${g}.txt" || {
       echo "[FAIL] ${g} under RADV_DEBUG=shaders" >&2; exit 1; }
     echo "  ${g}:"
     python3 -I "${SCRIPT_DIR}/isa_extract.py" "${WORK}/isa-${g}.txt" "${dir}/plan.json" \

@@ -263,9 +263,61 @@ AMDVLK runs out of memory with 1670 dispatches in one command buffer where RADV 
 runner submits in chunks of 128; the greedy layering that made the 64-point NTT 1670 dispatches is
 replaced, and it is now 19); and the closure-based evaluator above.
 
-Not here: a semantics of the ISA (rung G2 reads the dump against AMD's machine-readable RDNA2 spec), the
-memory model (G4), resource grading (G5), a layout that skips the wires fusion made dead (the buffer is
+Not here: the memory model (G4), resource grading (G5), a layout that skips the wires fusion made dead (the buffer is
 still the source graph's prefix sum, 29M words for the 65536-point NTT), fusion of a gather into its
 elementwise consumer (TVM's injective rule; it would fold the Stockham gathers into the field kernels),
 radix-4 stages, and the RTL path of the same array graphs (the commuting square with
 `compileHypergraphToRtl` is the next rung).
+
+### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
+
+`rdna2/amdgpu_isa_rdna2.xml` is AMD's machine-readable RDNA 2 specification (GPUOpen, bundle of 2026-08-06;
+`rdna2/README.md` has the URL, date and hashes). `rdna2/gen_encodings.py` writes
+`Obend.Hardware.Gpu.Rdna2.Encodings` and `Insts.*` from it: every encoding with its identifier mask,
+identifiers, condition expressions and bit fields, every instruction with every encoding entry and
+operand, every operand type with its predefined values; nothing in them is typed. `Obend.Hardware.Gpu.Rdna2.Decode`
+reads a dword stream as GPUOpen's `IsaDecoder` does (mask and identifiers in `Order`, the opcode, then
+the XML's condition picks the literal/DPP/SDWA variant and its width) and renders the instruction in
+LLVM's syntax. `isa_extract.py` now keeps the machine code RADV prints after each instruction and, with
+`RADV_DEBUG=shaderstats`, the resource line per stage (VGPRs, SGPRs, LDS, scratch, code size: every stage
+of every graph needs few VGPRs and no LDS, the grade rung G5 will read).
+
+`Obend.Hardware.Gpu.Rdna2.Semantics` is the wave64 model of the instructions RADV emits for our kernels:
+SGPRs, VCC, EXEC, SCC, M0, the VGPRs per lane, a dword program counter, dword memory and an error field,
+after LNSym's `ArmState` (accessors, a `step` that decodes and executes, a `run`), with the stores as
+arrays so the compiled check runs the largest dump in seconds. Each instruction follows the
+pseudo-code of the RDNA 2 ISA reference guide (chapter 12, cited per instruction) and, where the
+instruction exists in gem5's executable Vega model, was checked against gem5's `execute` body:
+`rdna2/gem5_ref.cpp` ports those bodies line by line, `rdna2/gem5_ref.py` assembles each twin with
+llvm-mc and writes `rdna2/gem5_vectors.tsv` (random register states before and after), and the model's
+`step` must reproduce every register of every row. The subset: `s_mov_b32/b64`, `s_movk_i32`,
+`s_and_b64`, `s_cbranch_execz`, `s_endpgm`, `s_waitcnt`, `s_clause`, `s_load_dword*`,
+`s_buffer_load_dword*`, `buffer_load/store_dword{,x2,x4}`, `v_mov_b32`, `v_add_nc_u32`, `v_and/or_b32`,
+`v_lshlrev_b32`, `v_lshl_add_u32`, `v_add3_u32`, `v_mul_lo/hi_u32`, `v_cndmask_b32`, `v_add/sub_co_u32`,
+`v_add/sub_co_ci_u32`, `v_lshlrev/lshrrev_b64`, `v_cmp_le/gt_u32`, `v_cmpx_gt_u32`, `v_cmp_lt_u64`,
+`v_cmp_ne_i64`; everything else, every operand code outside the integer and register codes, VOP3
+modifiers on integer operations and swizzled or indexed buffers are refused by the model, not guessed.
+`S_CLAUSE` and the `v_*_co_ci` and `v_add_nc` names have no Vega twin and rest on the manual; `V_CMPX`
+writes EXEC only here where Vega's also wrote VCC (the vectors exclude VCC for it). The universal
+statements are at the instruction level: `mulHi_mulLo` (the two halves of the 64-bit product, which
+`glmul-256` and the NTTs chain), `addCo_spec`, `addCi_spec`, `subCo_spec` (the carries are exactly the
+dropped bits).
+
+`Obend.Hardware.Gpu.Rdna2.Check` is the correspondence as a decidable check per graph: the plan's three
+buffers laid out as RADV binds them (`ac_build_raw_buffer_descriptor`, Mesa 24.2.8; the set's address in
+`s2`, the workgroup id in `s3`, the thread id in `v0`, per `radv_shader_args.c` and the manual's 3.12),
+every stage's dumped program run once per workgroup on the model from each vector's inputs, the output
+wires read back against `expected.tsv`. `Obend.Teeth.Hardware.Rdna2Runs` pins diamond, the three optics,
+`allops`, `glmul-256`, `ntt-4` and the gem5 vectors with `native_decide` and `#assert_compiled` (checks,
+not theorems). `isa_check.sh` is the gate, on hbox: the generated modules are byte-identical to the
+generator's output; the Lean decoder's text equals `llvm-mc --disassemble` (LLVM 19, gfx1031, wave64)
+on every instruction of every dump; every bit of every instruction's machine code, flipped, changes the
+decoding or fails it unless it lies in no field the specification names; every graph's programs on the
+model give `expected.tsv` and a planted bit flip in a store's register is caught; the gem5 vectors are
+the generator's bytes and replay. Passed 2026-11-06 on the sixteen dumps.
+
+What the model does not do, named: it completes memory accesses when they issue, so `s_waitcnt` is a
+no-op and a missing wait would read fresh registers here and stale ones on the device (the device run of
+`verify_gpu.sh` is what catches that); it runs a dispatch's waves one after another, sound for G1's
+programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model (G4) is not
+here, nor the RTL path of the same array graphs.
