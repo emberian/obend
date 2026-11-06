@@ -194,49 +194,80 @@ AMD and HVM2 has no HIP backend, so the CUDA runtime stays unrun here.
 ## `gpu/`: open hypergraphs on a GPU (rung G1 of `review/GPU-PROGRAM-20261105.md`)
 
 `Obend.Hardware.ArrayHypergraph` is the scalar `StrictOpenHypergraph` with wires carrying vectors of
-64-bit words: a hyperedge is an elementwise map of a scalar operation (the `HypergraphOp`s plus the bit
-operations a Goldilocks multiply needs), a gather along a `FiniteFunction` (Wilson–Zanasi's permutation
-datum), a concatenation or a constant array. The wavefront layering and its theorems are the scalar ones
-restated (`layerGraph_sound`), and the scalar graphs are the one-element instance: `ofScalar` lifts every
+64-bit words: a hyperedge is an elementwise program (instructions `dst := op args` over names that are
+wires, the `HypergraphOp`s plus the bit operations a Goldilocks multiply needs; a graph as built has one
+instruction per map edge), a gather along a `FiniteFunction` (Wilson–Zanasi's permutation datum), a
+concatenation or a constant array. The scalar graphs are the one-element instance: `ofScalar` lifts every
 hyperedge to a map over length-one wires and `ofScalar_layered_sound` says the array evaluation of the
 image is the scalar 64-bit evaluation, wire by wire. `evalGraphArr` is the same evaluation with the wires
-stored in an array (`evalGraphArr_eq`); the closure-based model, compiled, re-evaluated an edge on every
-read and took exponential time in dependency depth, so the emitter computes expected values with the
-array form.
+stored as arrays and a program's locals in a hash map (`evalGraphArr_eq`); the closure-based model,
+compiled, re-evaluated an edge on every read and took exponential time in dependency depth, so the emitter
+computes expected values with the array form.
 
-`Obend.Hardware.Gpu` lowers an `ArrayGraph` to one WGSL compute shader per wavefront stage: every wire
+Two passes sit between the graph and the shaders. `fuseGraph` is Halide's `compute_inline` and TVM's
+elementwise fusion: every map edge recomputes the elementwise producers of its sources (their instructions
+precede its own, their sources become its sources), and a producer read by nothing but map edges and not
+an output is dropped; `fuseGraph_sound` says the fused graph has the same outputs on a well-formed graph
+(`ArrayGraph.wf`: every edge passes `edgeOk`, destinations written once and after every read of them, map
+edges primitive) and its edges still pass `edgeOk`. `layerEdges` is the frontier algorithm of
+Wilson–Zanasi's `open-hypergraphs` crate (`strict/graph.rs`, `kahn`) over the hazard relation: a stage is
+the edges whose predecessors have all been dispatched; `layerGraph_sound` says every stage is pairwise
+independent, the stages flatten to a permutation of the edges, and the synchronous stage-by-stage
+evaluation is the single-pass one (independent edges commute, `stepEdge_comm`). The scalar module's
+greedy `layerHyperEdges` stays there as its own.
+
+`Obend.Hardware.Gpu` lowers the fused, layered graph to one WGSL compute shader per stage: every wire
 has a base in one flat buffer `w` (`base`, a prefix sum; `base_disjoint`), every hyperedge of a stage is a
 kernel whose threads are its elements, a constant buffer `c` holds constants and an index buffer `ix` the
-gather tables, and thread `t` of a stage finds its kernel by the thread ranges laid end to end.
-`lowerArrayToGpu_sound`: for a graph whose edges pass `edgeOk` and whose outputs exist (`ArrayGraph.wf`
-checks both), from any flattening of an environment of the declared lengths, `runProgram` (the order-free
-reading of a dispatch: a word's value is the write of the one thread that owns it) shows `evalGraph` on
-every output wire; distinct destinations within a stage come from the layering's independence, disjoint
-word ranges from the layout. `lowerHypergraphToGpu_sound` is the scalar corollary. Nothing a stage reads
-is written in that stage and no two threads write one word, so no claim about the device's memory model
-is made or needed; the stages are separate dispatches.
+gather tables, and thread `t` of a stage finds its kernel by the thread ranges laid end to end. A map
+kernel is its program as one `let` per instruction (a source name reads `w` at its base, a scalar constant
+is `c[i] + 0`, a scale `c[i] * x`, every other name a local) and the store of its value.
+`lowerArrayToGpu_sound`: for a well-formed graph, from any flattening of an environment of the declared
+lengths, `runProgram` (the order-free reading of a dispatch: a word's value is the write of the one
+thread that owns it) shows `evalGraph` on every output wire; it composes `fuseGraph_sound`,
+`layerGraph_sound` (membership through the permutation), the per-stage flattening invariant, and an
+instruction-by-instruction simulation of each program kernel (`runKCode_sim`); distinct destinations
+within a stage come from the layering's independence, disjoint word ranges from the layout.
+`lowerHypergraphToGpu_sound` is the scalar corollary. Nothing a stage reads is written in that stage and
+no two threads write one word, so no claim about the device's memory model is made or needed; the
+stages are separate dispatches.
 
 `lean/tools/emitgpu` (`obend-emit-gpu`) writes `gpu/graphs/<graph>/`: `plan.json`, `stage_<k>.wgsl` and
-`expected.tsv` (the model's output wires per vector, signed 64-bit) for fourteen graphs: nine scalar ones
+`expected.tsv` (the model's output wires per vector, signed 64-bit) for sixteen graphs: nine scalar ones
 through `ofScalar` (the golden diamond, three single-op optics, two whole-graph adjoints, every operation
 with wrap-around, a `mux` chain, a 512-input addition tree), an elementwise multiply-accumulate with a
 reversing gather over a thousand elements, the Goldilocks field multiply over 256 elements (the limb
-network of `Obend.Apps.ZkNtt.glMul`, elementwise), and radix-2 Goldilocks NTTs of 4, 16 and 64 points
-built from gathers, the field operations and concatenations. The emitter refuses a graph that fails
-`ArrayGraph.wf` and an NTT whose model disagrees with the naive DFT (`nttReference`). `gpu/runner`
-(`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the workspace) runs a plan on a chosen adapter
-and compares. `verify_gpu.sh` is the gate: bytes, every vector on the device, planted `addAsSub` and
-`swapMux` caught, and with Mesa's RADV the final ISA of every stage extracted to `gpu/isa/<graph>.txt` by
+network of `Obend.Apps.ZkNtt.glMul`, elementwise), and Stockham radix-2 Goldilocks NTTs of 4, 16, 64,
+1024 and 65536 points. The NTT is ec-gpu's `radix_fft` kernel with `deg = 1` (Govindaraju et al. 2008):
+each of the `log₂ n` stages reads the two halves of the previous output as wires of `n/2`, multiplies the
+upper half by `ω_{2Ns}^{j mod Ns}` gathered from one table of the powers of `ω_n`, and gathers the next
+halves from the sum and difference by the Stockham expansion, so there is no bit reversal and the edges
+are a few dozen per stage over whole wires; after fusion each stage is the two field kernels (sum and
+difference, each one thread running the limb network as `let`s), the concatenation and the two gathers,
+and an NTT of `n` points is `3 log₂ n + 1` dispatches. The emitter refuses a graph that fails
+`ArrayGraph.wf` and an NTT whose model disagrees with a recursive radix-2 NTT in `Nat` arithmetic
+(`nttFast`), itself checked against the naive DFT (`nttReference`) up to 4096 points. `gpu/runner`
+(`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the workspace) runs a plan on a chosen
+adapter, compares, and prints the dispatch time per vector (not gated). `verify_gpu.sh` is the gate:
+bytes (the 65536-point NTT's plan is tens of megabytes, so it is kept as `graphs/ntt-65536.sha256` and
+regenerated, `verify_gpu.sh --digest`), every vector on the device, planted `addAsSub` and `swapMux`
+caught, and with Mesa's RADV the final ISA of every stage extracted to `gpu/isa/<graph>.txt` by
 `isa_extract.py` (one program per stage, its 64-bit stores counted; the compiler merges cases).
 
-Passed 2026-11-05 on hbox's RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK
-2025.Q2.1 (`GPU_ICD=any GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal. Four
-things the gate caught on the way, each a departure between a device and a model that reads correct:
-Metal's compiler refuses an `else if` chain 256 deep (the kernel tests are now a flat sequence of disjoint
-ranges); WGSL's `>>` on `i64` is arithmetic where the model's is logical (shifts and the unsigned
-comparison go through `u64`); AMDVLK runs out of memory with the 64-point NTT's 1670 dispatches in one
-command buffer where RADV and Metal do not (the runner submits in chunks of 128); and the closure-based
-evaluator above.
+Passed 2026-11-06 on hbox's RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK
+2025.Q2.1 (`GPU_ICD=any GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal. Things the
+gates have caught, each a departure between a device and a model that reads correct: Metal's compiler
+refuses an `else if` chain 256 deep (the kernel tests are a flat sequence of disjoint ranges); WGSL's `>>`
+on `i64` is arithmetic where the model's is logical (shifts and the unsigned comparison go through `u64`);
+AMDVLK runs out of memory with 1670 dispatches in one command buffer where RADV and Metal do not (the
+runner submits in chunks of 128; the greedy layering that made the 64-point NTT 1670 dispatches is
+replaced, and it is now 19); and the closure-based evaluator above.
+
+Not here: the memory model (G4), resource grading (G5), a layout that skips the wires fusion made dead (the buffer is
+still the source graph's prefix sum, 29M words for the 65536-point NTT), fusion of a gather into its
+elementwise consumer (TVM's injective rule; it would fold the Stockham gathers into the field kernels),
+radix-4 stages, and the RTL path of the same array graphs (the commuting square with
+`compileHypergraphToRtl` is the next rung).
 
 ### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
 
@@ -262,7 +293,7 @@ llvm-mc and writes `rdna2/gem5_vectors.tsv` (random register states before and a
 `step` must reproduce every register of every row. The subset: `s_mov_b32/b64`, `s_movk_i32`,
 `s_and_b64`, `s_cbranch_execz`, `s_endpgm`, `s_waitcnt`, `s_clause`, `s_load_dword*`,
 `s_buffer_load_dword*`, `buffer_load/store_dword{,x2,x4}`, `v_mov_b32`, `v_add_nc_u32`, `v_and/or_b32`,
-`v_lshlrev_b32`, `v_lshl_add_u32`, `v_add3_u32`, `v_mul_lo/hi_u32`, `v_cndmask_b32`, `v_add/sub_co_u32`,
+`v_lshlrev_b32`, `v_lshl_add_u32`, `v_add3_u32`, `v_and_or_b32`, `v_mul_lo/hi_u32`, `v_cndmask_b32`, `v_add/sub_co_u32`,
 `v_add/sub_co_ci_u32`, `v_lshlrev/lshrrev_b64`, `v_cmp_le/gt_u32`, `v_cmpx_gt_u32`, `v_cmp_lt_u64`,
 `v_cmp_ne_i64`; everything else, every operand code outside the integer and register codes, VOP3
 modifiers on integer operations and swizzled or indexed buffers are refused by the model, not guessed.
@@ -283,7 +314,7 @@ generator's output; the Lean decoder's text equals `llvm-mc --disassemble` (LLVM
 on every instruction of every dump; every bit of every instruction's machine code, flipped, changes the
 decoding or fails it unless it lies in no field the specification names; every graph's programs on the
 model give `expected.tsv` and a planted bit flip in a store's register is caught; the gem5 vectors are
-the generator's bytes and replay. Passed 2026-11-06 on the fourteen dumps.
+the generator's bytes and replay. Passed 2026-11-06 on the sixteen dumps.
 
 `Obend.Hardware.Gpu.Rdna2.Waitcnt` closes the gap the model's immediate memory leaves: the model
 completes an access when it issues, so a program that read a load's destination before waiting for it
@@ -299,5 +330,7 @@ shader cache, for the measurement reported in `rdna2/README.md`.
 
 What the model does not do, named: it runs a dispatch's waves one after another, sound for G1's
 programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model (G4) is not
-here, nor a layering better than the scalar module's greedy one (the 64-point NTT lowers to 1670
-dispatches where a few dozen would do), nor the RTL path of the same array graphs.
+here, nor the RTL path of the same array graphs. Since the fusion of 2026-11-06 RADV emits `v_and_or_b32`
+in the field kernels (glmul-256 and the five NTTs), which the model refuses by name; the decoder reads it
+and equals `llvm-mc` on all sixteen dumps, and those six graphs' runs on the model (`isa_check.sh` stage
+4, the pins `glmul_runs` and `ntt4_runs`) are open until the instruction has a semantics.

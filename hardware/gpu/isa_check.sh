@@ -30,6 +30,18 @@ if [[ "${1:-}" == "--stage" ]]; then STAGE="${2:?--stage N}"; fi
 run_stage() { [[ -z "${STAGE}" || "${STAGE}" == "$1" ]]; }
 [[ -x "${RDNA2}" ]] || { echo "[FAIL] ${RDNA2} missing: run \`lake build obend-rdna2\` in lean/" >&2; exit 1; }
 mapfile -t DUMPS < <(ls "${SCRIPT_DIR}"/isa/*.txt)
+EMIT="${OBEND_EMIT_GPU:-${REPO_ROOT}/lean/.lake/build/bin/obend-emit-gpu}"
+
+# graph_dir NAME : the committed directory, or a fresh emission under WORK for a graph kept as a digest
+# (verify_gpu.sh keeps the 65536-point NTT as graphs/ntt-65536.sha256)
+graph_dir() {
+  if [[ -d "${SCRIPT_DIR}/graphs/$1" ]]; then
+    echo "${SCRIPT_DIR}/graphs/$1"
+  else
+    [[ -d "${WORK}/emit/$1" ]] || "${EMIT}" "$1" --out "${WORK}/emit/$1" >/dev/null
+    echo "${WORK}/emit/$1"
+  fi
+}
 
 if run_stage 1; then
 echo "=== [1/6] the generated modules == gen_encodings.py on the committed XML ==="
@@ -79,7 +91,7 @@ if run_stage 4; then
 echo "=== [4/6] the model: every graph's programs on every vector; a planted store flip caught ==="
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
-  "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" | sed 's/^/  /' || exit 1
+  "${RDNA2}" run "$(graph_dir "${g}")" | sed 's/^/  /' || exit 1
 done
 for g in diamond optic-mul optic-bilinear optic-linearmac; do
   # the first buffer_store of stage 0: VDATA's low bit (bit 40 of the instruction) names another register

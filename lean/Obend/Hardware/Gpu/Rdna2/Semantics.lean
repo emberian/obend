@@ -213,6 +213,9 @@ def lshlAdd (a sh c : UInt32) : UInt32 := (a <<< (sh &&& 31)) + c
 /-- V_ADD3_U32 (manual 12.11): `D.u = S0.u + S1.u + S2.u`. -/
 def add3 (a b c : UInt32) : UInt32 := a + b + c
 
+/-- V_AND_OR_B32 (manual 12.11): `D.u = (S0.u & S1.u) | S2.u`. -/
+def andOr (a b c : UInt32) : UInt32 := (a &&& b) ||| c
+
 /-- V_CNDMASK_B32 (manual 12.7): `D.u32 = VCC ? S1.u32 : S0.u32`, VCC's bit for the lane. -/
 def cndmask (sel : Bool) (s0 s1 : UInt32) : UInt32 := if sel then s1 else s0
 
@@ -507,6 +510,7 @@ def execInst (i : Inst) (s : WaveState) : WaveState :=
   | "V_LSHLREV_B32" => valuLanes i s 2 fun src _ => lshlrev32 (src.getD 0 0) (src.getD 1 0)
   | "V_LSHL_ADD_U32" => valuLanes i s 3 fun src _ => lshlAdd (src.getD 0 0) (src.getD 1 0) (src.getD 2 0)
   | "V_ADD3_U32" => valuLanes i s 3 fun src _ => add3 (src.getD 0 0) (src.getD 1 0) (src.getD 2 0)
+  | "V_AND_OR_B32" => valuLanes i s 3 fun src _ => andOr (src.getD 0 0) (src.getD 1 0) (src.getD 2 0)
   | "V_MUL_LO_U32" => valuLanes i s 2 fun src _ => mulLo (src.getD 0 0) (src.getD 1 0)
   | "V_MUL_HI_U32" => valuLanes i s 2 fun src _ => mulHi (src.getD 0 0) (src.getD 1 0)
   | "V_CNDMASK_B32" => match maskSource s (maskSrcCode i) with
