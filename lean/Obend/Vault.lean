@@ -16,9 +16,15 @@ its frontmatter lines), the members and their grants.
   twice is a no-op), `mergeFrom` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
   `select_needs_grant`), `reciteIn`.
 * `Obend.Vault.Json` — `.obend/world.json`.
-* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`.
+* `Obend.Vault.Form` — a captured membrane as a form: holes for data, a residual, a fill as a
+  proposal the kernel judges through `commit` (`admit_no_amplification`, `eval_fill_eq_subst_residual`,
+  `admit_conserves_total`).
+* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, and the
+  forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`.
 
-The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`.
+The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
+the forms' is `lean/tests/vault/FORMS.md`, executed by the same with `--doc`, and planted by
+`lean/tests/vault/forms_planted.py`.
 -/
 public import Obend.Vault.Page
 public import Obend.Vault.Law
@@ -30,6 +36,7 @@ public import Obend.Vault.Affordance
 public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
 public import Obend.Vault.Rehydration
+public import Obend.Vault.Form
 public import Obend.Vault.Carry
 public import Obend.Vault.DragonsExchange
 public import Obend.Vault.HardwareProjection

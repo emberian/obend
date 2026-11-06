@@ -563,6 +563,7 @@ import Obend.Vault.Carry
 import Obend.Vault.Cli
 import Obend.Vault.DragonsExchange
 import Obend.Vault.Escrow
+import Obend.Vault.Form
 import Obend.Vault.HardwareProjection
 import Obend.Vault.Hyperedge
 import Obend.Vault.Json
