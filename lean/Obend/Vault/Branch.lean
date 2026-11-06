@@ -25,7 +25,14 @@ tip when it merges; the difference is only the configuration it is judged at.
   right's on theirs, and with the base everywhere else, and the two write sets are disjoint
   (`merge_is_pushout`). A pair that clashes is kept as a `Conflict.writes` in the tip's state, both
   candidates and the cells named, and neither lands (`clash_is_conflict_state`); `resolve` lands one
-  candidate through the same judgment and names the one it drops. Two relaws of one page that differ
+  candidate through the same judgment and names the one it drops.
+* **Their laws agree.** A clashing pair writing the same cells from the same base merges instead of
+  conflicting when every differing field is one its page declares mergeable (`merge FIELD: add`,
+  `max`, `union`) and every own law of the page is I-confluent for that merge (`confluentLaw`); the
+  merged state keeps every law both sides kept (`iconfluent_merge_lawful`, `mergeCell_lawful`), and
+  the merged write lands once, as one receipt from both sides (`Side.both`), each side's authority
+  checked on its own and the merged write judged at the tip like any other. Identical writes merge
+  with no declaration. The store theorem covers it (`merge_is_pushout`'s third part). Two relaws of one page that differ
   are a `Conflict.laws`, and the page keeps its base laws. The merged history extends the base
   (`merge_extends_history`).
 * **Consent from the causal cone.** A write is judged by every law of every page in its cone at the
@@ -39,10 +46,16 @@ tip when it merges; the difference is only the configuration it is judged at.
   only on sturdyrefs live at the tip, and every page it wrote that is not its actor's was granted to
   it by one of them (`settled_at_tip`); a revocation landed by either side is visible at the tip
   (`tip_sees_every_revocation`), so no write relying on a sturdyref revoked on the other side lands
-  (`revoked_elsewhere_never_lands`). Revocation is the one non-monotone act: every other act keeps
+  (`revoked_elsewhere_never_lands`). A write's authority is checked before its pins, and when both
+  fail the refusal carries both, the authority reason first (`Refusal.also`,
+  `admitWrite_names_authority`): a revoked sturdyref is never hidden behind a moved pin. Revocation is the one non-monotone act: every other act keeps
   every live sturdyref live, and no act unrevokes (`revocation_only_nonmonotone`). A consequence of
   the strict reading: a branch's own write made before its own revocation of the sturdyref it relied
   on does not settle either; authority is read at settlement, not at authoring.
+* **Order.** Swapping the sides is not the identity: the tip settles non-write acts left first, and a
+  write is judged at the height it lands at (see "Order" below, with both counterexamples as tests).
+  The clash relation is symmetric (`clash_comm`, `freeLeft_swap`) and the store depends only on what
+  landed (`merge_swap_store`).
 * **What a branch cannot learn of the other side's hidden cells** (after `InfoFlow/Confinement` in
   breadstuffs). Integrity: a landed write of a page that is not its actor's carries a live grant
   for it (`settled_at_tip`). Confinement of the store: when the right side's writes access only
@@ -75,19 +88,51 @@ set_option autoImplicit false
 
 /-! ## The law book -/
 
+/-- How a page's field merges when both sides wrote it: a counter that adds (both sides' increases
+over the base), a maximum, or a set (a natural read as a bitmask) that unions. -/
+inductive MergeKind
+  | add
+  | max
+  | union
+deriving DecidableEq, Repr
+
+def MergeKind.ofString? : String → Option MergeKind
+  | "add" => some .add
+  | "max" => some .max
+  | "union" => some .union
+  | _ => none
+
+def MergeKind.name : MergeKind → String
+  | .add => "add"
+  | .max => "max"
+  | .union => "union"
+
+/-- The merged value of a field from its base `b` and the two sides' `x` and `y`. -/
+def MergeKind.join : MergeKind → Nat → Nat → Nat → Nat
+  | .add, b, x, y => b + (x - b) + (y - b)
+  | .max, _, x, y => Max.max x y
+  | .union, _, x, y => x ||| y
+
+/-- When a field's two writes merge by its kind at all: a counter only grows. -/
+def MergeKind.fits : MergeKind → Nat → Nat → Nat → Bool
+  | .add, b, x, y => b ≤ x && b ≤ y
+  | _, _, _, _ => true
+
 /-- A page's entry in the law book: whose page it is, its laws (`PAGE: NAME`, expression, text, as
-`lawOfLine` reads a law line), and the pages it links to. -/
+`lawOfLine` reads a law line), the pages it links to, and how its fields merge (`merge FIELD: KIND`;
+a field with no declared merge does not merge). -/
 structure PageLaws where
   owner : String
   laws : Laws := []
   links : List String := []
+  merges : List (String × MergeKind) := []
 deriving DecidableEq
 
 /-- A page's law book entry from its law lines `(NAME, TEXT)`, read as the vault reads them. -/
 def PageLaws.ofLines (page owner : String) (links : List String) (lines : List (String × String)) :
     Except String PageLaws := do
   let laws ← lines.mapM (lawOfLine page)
-  pure ⟨owner, laws, links⟩
+  pure ⟨owner, laws, links, []⟩
 
 /-- A page's own laws (judged on its write, old to new). -/
 def PageLaws.own (pl : PageLaws) : List (String × LawExpr) :=
@@ -189,6 +234,8 @@ inductive Refusal
   | law (law owner page text reason : String)
   | undecided (page reason : String)
   | notOwner (page owner actor : String)
+  /-- an authority reason and a stale pin at once: both named, the authority first -/
+  | also (authority stale : Refusal)
 
 def Refusal.text : Refusal → String
   | .stale c e cur => "stale: it read " ++ c ++ " as it was on its branch (" ++ stateDiffText e cur ++ ")"
@@ -200,6 +247,7 @@ def Refusal.text : Refusal → String
   | .law l o p txt _ => "refused by " ++ l ++ " (" ++ o ++ "'s law `" ++ txt ++ "`), judged at " ++ p
   | .undecided p r => "undecided at " ++ p ++ ": " ++ r
   | .notOwner p o a => p ++ " is " ++ o ++ "'s; " ++ a ++ " may not change its laws or its sturdyrefs"
+  | .also a p => a.text ++ "; and " ++ p.text
 
 /-- A merge's open question, kept in the state. -/
 inductive Conflict
@@ -288,12 +336,19 @@ def authRefusal (a : Authority) (book : LawBook) (t : BTurn) : Option Refusal :=
 def receiptOf (c : Config) (origin label : String) (cells : List String) : Receipt :=
   ⟨c.history.length, origin, label, cells⟩
 
-/-- **Admit a write**: its pins hold, its authority is live, every page in its cone consents. -/
+/-- The refusal of a write's preconditions: its authority and its pins, both checked; when both fail
+the authority reason comes first and the stale pin is kept beside it (`Refusal.also`), so a revoked
+sturdyref is never hidden behind a moved pin (`admitWrite_names_authority`). -/
+def preRefusal (c : Config) (t : BTurn) : Option Refusal :=
+  match authRefusal c.auth c.book t, pinRefusal c.store t.turn with
+  | some a, some p => some (.also a p)
+  | some a, none => some a
+  | none, some p => some p
+  | none, none => none
+
+/-- **Admit a write**: its authority is live, its pins hold, every page in its cone consents. -/
 def admitWrite (c : Config) (origin : String) (t : BTurn) : Except Refusal Config :=
-  match pinRefusal c.store t.turn with
-  | some r => .error r
-  | none =>
-  match authRefusal c.auth c.book t with
+  match preRefusal c t with
   | some r => .error r
   | none =>
   match t.turn.writeCells.findSome? (coneRefusal c.book (applyTurn c.store t.turn)
@@ -335,9 +390,11 @@ def admitAct (c : Config) (origin : String) : Act → Except Refusal Config
 
 /-! ## Runs, branches, the merge -/
 
+/-- Where a landed write came from: one side, or both (two writes merged by their page's law). -/
 inductive Side
   | left
   | right
+  | both
 deriving DecidableEq, Repr
 
 /-- A run of acts: the configuration reached, the acts that landed, the ones refused and why. -/
@@ -399,6 +456,7 @@ def heldRelaw (pages : List String) : Act → Bool
 def sideName (ln rn : String) : Side → String
   | .left => ln
   | .right => rn
+  | .both => ln ++ "+" ++ rn
 
 /-- **The tip**: the base with both sides' relaws (those that do not clash), grants and revocations
 applied, the left's first. Every write of the merge is judged here. -/
@@ -412,6 +470,84 @@ def clash (book : LawBook) (a b : BTurn) : List String :=
   ((a.writes.filter fun c => (b.access book).contains c) ++
     (b.writes.filter fun c => (a.access book).contains c)).eraseDups
 
+/-! ### Their laws agree: I-confluent merges
+
+A page may declare how a field merges (`MergeKind`). Two writes of the page from the same base merge
+by those declarations when every other field agrees, and the merged state satisfies every own law
+of the page whenever both sides did: each law is I-confluent for the merge, decided by `confluentLaw`
+(a law that does not read the field; `monotone`; a lower bound `not (new.f <= v)`; an upper bound
+`new.f <= v` under `max` only; conjunctions of those), with `iconfluent_merge_lawful` its soundness.
+A disjunction reading the field, or an upper bound under `add` or `union`, is not I-confluent: the
+two writes stay a conflict. Identical writes merge with no declaration at all, and land once. -/
+
+/-- Is the law `e` I-confluent for merging the field `f` by `k`? -/
+def confluentLaw (k : MergeKind) (f : String) : LawExpr → Bool
+  | .and a b => confluentLaw k f a && confluentLaw k f b
+  | .monotone _ => true
+  | .not (.leC (.field _) _) => true
+  | .leC (.field g) _ => g != f || k == .max
+  | e => !(e.fields.contains f)
+
+/-- Merge one declared field into `m` (which starts as the left's state) from the right's `r` over
+the base `pre`: equal readings stay; differing readings join by the kind, if it fits. -/
+def mergeStep (pre r m : Data) (fk : String × MergeKind) : Option Data :=
+  match Obend.Spec.Law.fieldOf fk.1 m, Obend.Spec.Law.fieldOf fk.1 r with
+  | some x, some y =>
+    if x = y then some m
+    else
+      let b := ((Obend.Spec.Law.fieldOf fk.1 pre).getD 0).toNat
+      if fk.2.fits b x.toNat y.toNat then some (setNat m fk.1 (fk.2.join b x.toNat y.toNat)) else none
+  | none, none => some m
+  | _, _ => none
+
+/-- The merged state of the left's `l` and the right's `r` over `pre`, field by declared field. -/
+def mergeState (pre r : Data) : List (String × MergeKind) → Data → Option Data
+  | [], m => some m
+  | fk :: rest, m => (mergeStep pre r m fk).bind (mergeState pre r rest)
+
+/-- The merged post-state of one cell both sides wrote from the same pre-state: the same write, or
+the merge its page declares, when every own law is I-confluent for it and the two directions agree
+(so every undeclared field is the same on both sides). -/
+def mergeCell (book : LawBook) (da db : CellDelta) : Option Data :=
+  if !Obend.Law.termEq da.preState.term db.preState.term then none
+  else if Obend.Law.termEq da.postState.term db.postState.term then some da.postState
+  else match book.lookup da.cell with
+    | none => none
+    | some pl =>
+      if pl.merges.isEmpty then none
+      else if !(pl.own.all fun e => pl.merges.all fun fk => confluentLaw fk.2 fk.1 e.2) then none
+      else match mergeState da.preState db.postState pl.merges da.postState,
+                 mergeState da.preState da.postState pl.merges db.postState with
+        | some m, some m' => if Obend.Law.termEq m.term m'.term then some m else none
+        | _, _ => none
+
+/-- The merged legs of two writes: every cell of the left's, with the right's write of it. -/
+def mergeLegs (book : LawBook) (bs : List CellDelta) : List CellDelta → Option (List WitnessLegSpec)
+  | [] => some []
+  | da :: rest =>
+    match bs.find? (·.cell == da.cell) with
+    | none => none
+    | some db =>
+      match mergeCell book da db with
+      | none => none
+      | some m => (mergeLegs book bs rest).map ((da.cell, da.preState, m) :: ·)
+
+/-- **Two writes that merge**: they write the same cells, read nothing the other writes beyond them,
+each clashes with no other write of the other side, and every cell merges. The merged write relies
+on both sides' sturdyrefs; its actor is the two actors. -/
+def mergeFor (book : LawBook) (lw rw : List BTurn) (a b : BTurn) : Option BTurn :=
+  if !(b.writes.all a.writes.contains && a.writes.all b.writes.contains) then none
+  else if (rw.filter fun b' => !(clash book a b').isEmpty).length != 1 then none
+  else if (lw.filter fun a' => !(clash book a' b).isEmpty).length != 1 then none
+  else
+    match mergeLegs book b.turn.writeCells a.turn.writeCells with
+    | none => none
+    | some legs =>
+      (VaultTurn.ofWitnessLegs ByteArray.empty (a.turn.readPins ++ b.turn.readPins) legs a.turn.occasion []).map
+        fun vt => { label := a.label ++ " + " ++ b.label,
+                    actor := if a.actor == b.actor then a.actor else a.actor ++ "+" ++ b.actor,
+                    turn := vt, relies := a.relies ++ b.relies }
+
 /-- The writes of the left that clash with no write of the right. -/
 def freeLeft (book : LawBook) (lw rw : List BTurn) : List BTurn :=
   lw.filter fun a => rw.all fun b => (clash book a b).isEmpty
@@ -419,10 +555,23 @@ def freeLeft (book : LawBook) (lw rw : List BTurn) : List BTurn :=
 def freeRight (book : LawBook) (lw rw : List BTurn) : List BTurn :=
   rw.filter fun b => lw.all fun a => (clash book a b).isEmpty
 
+/-- The clashing pairs that do not merge: conflicts. -/
 def writeConflicts (book : LawBook) (ln rn : String) (lw rw : List BTurn) : List Conflict :=
   lw.flatMap fun a => rw.filterMap fun b =>
     let cs := clash book a b
-    if cs.isEmpty then none else some (.writes cs (ln, a) (rn, b))
+    if cs.isEmpty then none else if (mergeFor book lw rw a b).isSome then none else some (.writes cs (ln, a) (rn, b))
+
+/-- The clashing pairs that merge by their pages' laws: each pair and its merged write. -/
+def mergedPairs (book : LawBook) (lw rw : List BTurn) : List (BTurn × BTurn × BTurn) :=
+  lw.flatMap fun a => rw.filterMap fun b =>
+    if (clash book a b).isEmpty then none else (mergeFor book lw rw a b).map fun m => (a, b, m)
+
+/-- A merged pair lands only when each of its two writes has its own authority at the tip. -/
+def pairAuthority (auth : Authority) (book : LawBook) (p : BTurn × BTurn × BTurn) : Option Refusal :=
+  match authRefusal auth book p.1, authRefusal auth book p.2.1 with
+  | some r, _ => some r
+  | none, some r => some r
+  | none, none => none
 
 /-- A merge: the tip configuration, what landed, what was refused and why, the conflicts. -/
 structure Merged where
@@ -444,10 +593,14 @@ def merge (base : Config) (L R : Branch) : Except String Merged :=
     let rw := writesOf R.acts
     let cs := (lawClashes (nonWrites L.acts) (nonWrites R.acts)).map (fun p => Conflict.laws p L.name R.name) ++
       writeConflicts book L.name R.name lw rw
+    let mp := mergedPairs book lw rw
+    let pre : List (Side × String × Refusal) := mp.filterMap fun p =>
+      (pairAuthority t.config.auth book p).map fun r => (.both, p.2.2.label, r)
     let w := runWrites (sideName L.name R.name) t.config
-      ((freeLeft book lw rw).map (.left, ·) ++ (freeRight book lw rw).map (.right, ·))
+      ((freeLeft book lw rw).map (.left, ·) ++ (freeRight book lw rw).map (.right, ·) ++
+        ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2)))
     .ok ⟨{ w.config with conflicts := w.config.conflicts ++ cs }, t.landed ++ w.landed,
-      t.refused ++ w.refused, cs⟩
+      t.refused ++ pre ++ w.refused, cs⟩
 
 /-- **Resolve** the `k`th open conflict (from 0) by landing one candidate at the configuration as it
 is; the other candidate is dropped, and the receipt says so. -/
@@ -455,8 +608,8 @@ def resolve (c : Config) (k : Nat) (pick : Side) : Except String Config :=
   match c.conflicts[k]? with
   | some (.writes _ (ln, l) (rn, r)) =>
     let (o, t, dropped) := match pick with
-      | .left => (ln, l, rn ++ "'s " ++ r.label)
       | .right => (rn, r, ln ++ "'s " ++ l.label)
+      | _ => (ln, l, rn ++ "'s " ++ r.label)
     match admitWrite { c with conflicts := c.conflicts.eraseIdx k } o
         { t with label := t.label ++ " (resolving; dropped " ++ dropped ++ ")" } with
     | .ok c' => .ok c'
@@ -465,6 +618,23 @@ def resolve (c : Config) (k : Nat) (pick : Side) : Except String Config :=
   | none => .error ("no open conflict " ++ toString k)
 
 /-! ## What a write's admission says -/
+
+theorem preRefusal_none {c : Config} {t : BTurn} (h : preRefusal c t = none) :
+    authRefusal c.auth c.book t = none ∧ pinRefusal c.store t.turn = none := by
+  unfold preRefusal at h
+  cases ha : authRefusal c.auth c.book t <;> cases hp : pinRefusal c.store t.turn <;>
+    rw [ha, hp] at h <;> first | exact ⟨rfl, rfl⟩ | cases h
+
+/-- **The authority reason is never hidden.** A write whose authority check refuses is refused with
+that reason, alone or followed by the stale pin it also has. -/
+theorem admitWrite_names_authority {c : Config} {o : String} {t : BTurn} {r : Refusal}
+    (h : authRefusal c.auth c.book t = some r) :
+    admitWrite c o t = .error r ∨ ∃ p, admitWrite c o t = .error (.also r p) := by
+  unfold admitWrite preRefusal
+  rw [h]
+  cases hp : pinRefusal c.store t.turn with
+  | none => exact .inl rfl
+  | some p => exact .inr ⟨p, rfl⟩
 
 theorem admitWrite_ok {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
     pinRefusal c.store t.turn = none ∧ authRefusal c.auth c.book t = none ∧
@@ -475,15 +645,13 @@ theorem admitWrite_ok {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c
   unfold admitWrite at h
   split at h
   · cases h
-  · rename_i hp
+  · rename_i hpre
+    obtain ⟨ha, hp⟩ := preRefusal_none hpre
     split at h
     · cases h
-    · rename_i ha
-      split at h
-      · cases h
-      · rename_i hc
-        cases h
-        exact ⟨hp, ha, hc, rfl⟩
+    · rename_i hc
+      cases h
+      exact ⟨hp, ha, hc, rfl⟩
 
 /-- What the authority check passing says: every sturdyref relied on is live, and every page written
 is the actor's or granted by a sturdyref relied on. -/
@@ -637,6 +805,24 @@ theorem runWrites_landed {name : Side → String} :
       obtain ⟨sd', t', rfl, hm, rest'⟩ := il x hx
       exact ⟨sd', t', rfl, List.mem_cons_of_mem _ hm, rest'⟩
 
+theorem runWrites_book {name : Side → String} {c : Config} {xs : List (Side × BTurn)} :
+    (runWrites name c xs).config.book = c.book := runWrites_landed.1
+
+theorem runWrites_auth {name : Side → String} {c : Config} {xs : List (Side × BTurn)} :
+    (runWrites name c xs).config.auth = c.auth := runWrites_landed.2.1
+
+theorem runWrites_landed_shape {name : Side → String} {c : Config} {xs : List (Side × BTurn)}
+    {x : Side × Act} (h : x ∈ (runWrites name c xs).landed) : ∃ sd t, x = (sd, .write t) ∧ (sd, t) ∈ xs := by
+  obtain ⟨sd, t, he, hm, _⟩ := runWrites_landed.2.2.2 x h
+  exact ⟨sd, t, he, hm⟩
+
+theorem runWrites_mem_landed {name : Side → String} {c : Config} {xs : List (Side × BTurn)}
+    {sd : Side} {t : BTurn} (h : (sd, .write t) ∈ (runWrites name c xs).landed) :
+    ∃ c₀ c₁, c₀.book = c.book ∧ c₀.auth = c.auth ∧ admitWrite c₀ (name sd) t = .ok c₁ := by
+  obtain ⟨sd', t', he, _, rest⟩ := runWrites_landed.2.2.2 _ h
+  cases he
+  exact rest
+
 theorem runActs_landed_sub {name : Side → String} :
     ∀ {c : Config} {xs : List (Side × Act)}, ∀ x ∈ (runActs name c xs).landed, x ∈ xs
   | _, [], _, h => by cases h
@@ -752,10 +938,14 @@ theorem merge_ok {base : Config} {L R : Branch} {m : Merged} (h : merge base L R
     let rw := writesOf R.acts
     let cs := (lawClashes (nonWrites L.acts) (nonWrites R.acts)).map (fun p => Conflict.laws p L.name R.name) ++
       writeConflicts book L.name R.name lw rw
+    let mp := mergedPairs book lw rw
+    let pre : List (Side × String × Refusal) := mp.filterMap fun p =>
+      (pairAuthority t.config.auth book p).map fun r => (.both, p.2.2.label, r)
     let w := runWrites (sideName L.name R.name) t.config
-      ((freeLeft book lw rw).map (.left, ·) ++ (freeRight book lw rw).map (.right, ·))
+      ((freeLeft book lw rw).map (.left, ·) ++ (freeRight book lw rw).map (.right, ·) ++
+        ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2)))
     m = ⟨{ w.config with conflicts := w.config.conflicts ++ cs }, t.landed ++ w.landed,
-      t.refused ++ w.refused, cs⟩ := by
+      t.refused ++ pre ++ w.refused, cs⟩ := by
   unfold merge at h
   split at h
   · cases h
@@ -800,15 +990,8 @@ theorem merge_landed_write {base : Config} {L R : Branch} {m : Merged} (h : merg
   simp only at ht ⊢
   rcases List.mem_append.1 ht with ht | ht
   · exact absurd ht (tip_landed_not_write nonWrites_isWrite nonWrites_isWrite)
-  · obtain ⟨ib, ia, _, il⟩ := runWrites_landed (name := sideName L.name R.name)
-      (c := (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config)
-      (xs := ((freeLeft (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
-          (writesOf L.acts) (writesOf R.acts)).map (.left, ·) ++
-        (freeRight (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
-          (writesOf L.acts) (writesOf R.acts)).map (.right, ·)))
-    obtain ⟨sd', t', he, _, c₀, c₁, h0b, h0a, h0⟩ := il _ ht
-    cases he
-    exact ⟨c₀, c₁, h0b.trans ib.symm, h0a.trans ia.symm, h0⟩
+  · obtain ⟨c₀, c₁, h0b, h0a, h0⟩ := runWrites_mem_landed ht
+    exact ⟨c₀, c₁, h0b.trans runWrites_book.symm, h0a.trans runWrites_auth.symm, h0⟩
 
 /-- **Settlement at the tip.** A write a merge landed relied only on sturdyrefs live at the tip, and
 every page it wrote is its actor's or granted to it by one of them, live at the tip: authority read
@@ -830,16 +1013,10 @@ theorem tip_sees_every_revocation {base : Config} {L R : Branch} {m : Merged} (h
   obtain ⟨_, _, hm⟩ := merge_ok h
   subst hm
   simp only at hr ⊢
-  obtain ⟨_, ia, _, il⟩ := runWrites_landed (name := sideName L.name R.name)
-    (c := (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config)
-    (xs := ((freeLeft (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
-        (writesOf L.acts) (writesOf R.acts)).map (.left, ·) ++
-      (freeRight (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
-        (writesOf L.acts) (writesOf R.acts)).map (.right, ·)))
-  rw [ia]
+  rw [runWrites_auth]
   rcases List.mem_append.1 hr with hr | hr
   · exact runActs_revocation_visible hr
-  · obtain ⟨_, _, he, _⟩ := il _ hr
+  · obtain ⟨_, _, he, _⟩ := runWrites_landed_shape hr
     cases he
 
 /-- **A sturdyref revoked on either side carries no write into the merge**: no write relying on it
@@ -1086,13 +1263,87 @@ theorem tip_landed_nonwrites (base : Config) (ln rn : String) (lacts racts : Lis
     ∀ x ∈ (tipConfig base ln rn (nonWrites lacts) (nonWrites racts)).landed, x.2.isWrite = false :=
   fun x hx => tip_input_nonwrites _ _ nonWrites_isWrite nonWrites_isWrite _ x (runActs_landed_sub x hx)
 
-/-- **The merge is the pushout over the base.** The two sides' landed writes write disjoint cells,
-and the tip's store is the left's landed writes on the cells they write, the right's on theirs, and
-the base everywhere else: the one store that extends both along their writes. -/
+theorem mergeLegs_cells {book : LawBook} {bs : List CellDelta} :
+    ∀ {as : List CellDelta} {legs : List WitnessLegSpec}, mergeLegs book bs as = some legs →
+      legs.map (·.1) = as.map (·.cell)
+  | [], legs, h => by simp only [mergeLegs, Option.some.injEq] at h; subst h; rfl
+  | da :: rest, legs, h => by
+    simp only [mergeLegs] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · cases hr : mergeLegs book bs rest with
+        | none => rw [hr] at h; cases h
+        | some ls =>
+          rw [hr] at h
+          simp only [Option.map_some, Option.some.injEq] at h
+          subst h
+          simp [mergeLegs_cells hr]
+
+/-- A merged write writes exactly the left's cells, which the right's write writes too. -/
+theorem mergeFor_writes {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
+    (h : mergeFor book lw rw a b = some m) : m.writes = a.writes ∧ ∀ c ∈ a.writes, c ∈ b.writes := by
+  unfold mergeFor at h
+  split at h
+  · cases h
+  · rename_i hsame
+    simp only [Bool.not_eq_true', Bool.not_eq_false, Bool.and_eq_true, List.all_eq_true,
+      List.contains_iff_mem] at hsame
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · rename_i legs hlegs
+          cases hv : VaultTurn.ofWitnessLegs ByteArray.empty (a.turn.readPins ++ b.turn.readPins) legs
+              a.turn.occasion [] with
+          | none => rw [hv] at h; cases h
+          | some vt =>
+            rw [hv] at h
+            simp only [Option.map_some, Option.some.injEq] at h
+            subst h
+            refine ⟨?_, hsame.2⟩
+            obtain ⟨_, _, hw, _⟩ := VaultTurn.ofWitnessLegs_fields hv
+            simp only [BTurn.writes, VaultTurn.writeFootprint, hw, witnessLegs, List.map_map]
+            rw [← mergeLegs_cells hlegs]
+            rfl
+
+theorem mem_mergedPairs {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
+    (h : (a, b, m) ∈ mergedPairs book lw rw) : a ∈ lw ∧ b ∈ rw ∧ mergeFor book lw rw a b = some m := by
+  unfold mergedPairs at h
+  obtain ⟨a', ha', hm⟩ := List.mem_flatMap.1 h
+  obtain ⟨b', hb', he⟩ := List.mem_filterMap.1 hm
+  split at he
+  · cases he
+  · cases hf : mergeFor book lw rw a' b' with
+    | none => rw [hf] at he; cases he
+    | some m' =>
+      rw [hf] at he
+      simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at he
+      obtain ⟨rfl, rfl, rfl⟩ := he
+      exact ⟨ha', hb', hf⟩
+
+/-- The merged writes a merge replays, each with the pair it came from. -/
+theorem mem_mergedTurns {book : LawBook} {lw rw : List BTurn} {auth : Authority} {m : BTurn}
+    (h : m ∈ ((mergedPairs book lw rw).filter fun p => (pairAuthority auth book p).isNone).map (·.2.2)) :
+    ∃ a b, a ∈ lw ∧ b ∈ rw ∧ mergeFor book lw rw a b = some m := by
+  obtain ⟨⟨a, b, m'⟩, hp, rfl⟩ := List.mem_map.1 h
+  obtain ⟨ha, hb, hm⟩ := mem_mergedPairs (List.mem_filter.1 hp).1
+  exact ⟨a, b, ha, hb, hm⟩
+
+/-- **The merge is the pushout over the base.** The left's landed writes, the right's, and the
+merged writes (pairs merged by their pages' laws) write pairwise disjoint cells — the left's and
+the right's apart, the merged apart from both — and the tip's store is the merged writes on their
+cells, the left's on theirs, the right's on theirs, and the base everywhere else. -/
 theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m) :
     (∀ c ∈ writesAll (landedOn .left m.landed), c ∉ writesAll (landedOn .right m.landed)) ∧
+    (∀ c ∈ writesAll (landedOn .both m.landed),
+      c ∉ writesAll (landedOn .left m.landed) ∧ c ∉ writesAll (landedOn .right m.landed)) ∧
     ∀ c, m.tip.store c =
-      if c ∈ writesAll (landedOn .left m.landed) then applyAll base.store (landedOn .left m.landed) c
+      if c ∈ writesAll (landedOn .both m.landed) then applyAll base.store (landedOn .both m.landed) c
+      else if c ∈ writesAll (landedOn .left m.landed) then applyAll base.store (landedOn .left m.landed) c
       else if c ∈ writesAll (landedOn .right m.landed) then applyAll base.store (landedOn .right m.landed) c
       else base.store c := by
   obtain ⟨_, _, hm⟩ := merge_ok h
@@ -1103,67 +1354,114 @@ theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge 
   generalize tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts) = t at hts htl ⊢
   generalize hlf : freeLeft t.config.book (writesOf L.acts) (writesOf R.acts) = lf
   generalize hrf : freeRight t.config.book (writesOf L.acts) (writesOf R.acts) = rf
-  rw [runWrites_append]
+  have hmf : ((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+      fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (fun p => (Side.both, p.2.2)) =
+      (((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+      fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2)).map (Side.both, ·) := by
+    rw [List.map_map]; rfl
+  rw [hmf]
+  have hmem := fun (x : BTurn) (hx : x ∈ ((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+      fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2)) => mem_mergedTurns hx
+  generalize ((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+      fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2) = mf at hmem ⊢
+  rw [runWrites_append, runWrites_append]
   simp only
   generalize hr1 : runWrites (sideName L.name R.name) t.config (lf.map (Side.left, ·)) = r1
   generalize hr2 : runWrites (sideName L.name R.name) r1.config (rf.map (Side.right, ·)) = r2
+  generalize hr3 : runWrites (sideName L.name R.name) r2.config (mf.map (Side.both, ·)) = r3
   have h1 : ∀ x ∈ r1.landed, x.1 = .left := fun x hx => by
     obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R.name) .left x (hr1 ▸ hx)
     rfl
   have h2 : ∀ x ∈ r2.landed, x.1 = .right := fun x hx => by
     obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R.name) .right x (hr2 ▸ hx)
     rfl
-  have hLL : landedOn .left (t.landed ++ (r1.landed ++ r2.landed)) = turnsOf r1.landed := by
-    rw [landedOn_append, landedOn_append, landedOn_nonwrites _ htl, (landedOn_side .left h1).1,
-      (landedOn_side .right h2).2 .left (by decide)]
+  have h3 : ∀ x ∈ r3.landed, x.1 = .both := fun x hx => by
+    obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R.name) .both x (hr3 ▸ hx)
+    rfl
+  have hLL : landedOn .left (t.landed ++ (r1.landed ++ r2.landed ++ r3.landed)) = turnsOf r1.landed := by
+    rw [landedOn_append, landedOn_append, landedOn_append, landedOn_nonwrites _ htl, (landedOn_side .left h1).1,
+      (landedOn_side .right h2).2 .left (by decide), (landedOn_side .both h3).2 .left (by decide)]
     simp
-  have hRR : landedOn .right (t.landed ++ (r1.landed ++ r2.landed)) = turnsOf r2.landed := by
-    rw [landedOn_append, landedOn_append, landedOn_nonwrites _ htl, (landedOn_side .left h1).2 .right (by decide),
-      (landedOn_side .right h2).1]
+  have hRR : landedOn .right (t.landed ++ (r1.landed ++ r2.landed ++ r3.landed)) = turnsOf r2.landed := by
+    rw [landedOn_append, landedOn_append, landedOn_append, landedOn_nonwrites _ htl,
+      (landedOn_side .left h1).2 .right (by decide), (landedOn_side .right h2).1,
+      (landedOn_side .both h3).2 .right (by decide)]
     simp
-  rw [hLL, hRR]
-  have hsub1 : ∀ a ∈ turnsOf r1.landed, a ∈ lf := by
-    intro a ha
-    obtain ⟨sd, hx⟩ := mem_turnsOf ha
-    obtain ⟨a', ha', he⟩ := runWrites_landed_side (name := sideName L.name R.name) .left _ (hr1 ▸ hx)
+  have hBB : landedOn .both (t.landed ++ (r1.landed ++ r2.landed ++ r3.landed)) = turnsOf r3.landed := by
+    rw [landedOn_append, landedOn_append, landedOn_append, landedOn_nonwrites _ htl,
+      (landedOn_side .left h1).2 .both (by decide), (landedOn_side .right h2).2 .both (by decide),
+      (landedOn_side .both h3).1]
+    simp
+  rw [hLL, hRR, hBB]
+  have hsub : ∀ {r : Run} {sd : Side} {xs : List BTurn} {c : Config},
+      runWrites (sideName L.name R.name) c (xs.map (sd, ·)) = r → ∀ a ∈ turnsOf r.landed, a ∈ xs := by
+    intro r sd xs c hr a ha
+    obtain ⟨sd', hx⟩ := mem_turnsOf ha
+    obtain ⟨a', ha', he⟩ := runWrites_landed_side (name := sideName L.name R.name) sd _ (hr ▸ hx)
     cases he; exact ha'
-  have hsub2 : ∀ b ∈ turnsOf r2.landed, b ∈ rf := by
-    intro b hb
-    obtain ⟨sd, hx⟩ := mem_turnsOf hb
-    obtain ⟨b', hb', he⟩ := runWrites_landed_side (name := sideName L.name R.name) .right _ (hr2 ▸ hx)
-    cases he; exact hb'
   have hdisj : ∀ c ∈ writesAll (turnsOf r1.landed), c ∉ writesAll (turnsOf r2.landed) := by
     intro c hc hc'
     simp only [writesAll, List.mem_flatMap] at hc hc'
     obtain ⟨a, ha, hca⟩ := hc
     obtain ⟨b, hb, hcb⟩ := hc'
-    have ha' := hsub1 a ha
-    have hb' := hsub2 b hb
+    have ha' := hsub hr1 a ha
+    have hb' := hsub hr2 b hb
     rw [← hlf] at ha'
     rw [← hrf] at hb'
     have hcl := (freeLeft_sub ha').2 b (freeRight_sub hb').1
     exact (clash_nil_iff.1 hcl).1 c hca (writes_sub_access _ b c hcb)
+  have hdisjM : ∀ c ∈ writesAll (turnsOf r3.landed),
+      c ∉ writesAll (turnsOf r1.landed) ∧ c ∉ writesAll (turnsOf r2.landed) := by
+    intro c hc
+    simp only [writesAll, List.mem_flatMap] at hc
+    obtain ⟨x, hx, hcx⟩ := hc
+    obtain ⟨a, b, ha, hb, hab⟩ := hmem x (hsub hr3 x hx)
+    obtain ⟨hxw, hab'⟩ := mergeFor_writes hab
+    rw [hxw] at hcx
+    refine ⟨fun hc1 => ?_, fun hc2 => ?_⟩
+    · simp only [writesAll, List.mem_flatMap] at hc1
+      obtain ⟨a', ha', hca'⟩ := hc1
+      have ha'' := hsub hr1 a' ha'
+      rw [← hlf] at ha''
+      have hcl := (freeLeft_sub ha'').2 b hb
+      exact (clash_nil_iff.1 hcl).1 c hca' (writes_sub_access _ b c (hab' c hcx))
+    · simp only [writesAll, List.mem_flatMap] at hc2
+      obtain ⟨b', hb', hcb'⟩ := hc2
+      have hb'' := hsub hr2 b' hb'
+      rw [← hrf] at hb''
+      have hcl := (freeRight_sub hb'').2 a ha
+      exact (clash_nil_iff.1 hcl).2 c hcb' (writes_sub_access _ a c hcx)
   have hs1 : r1.config.store = applyAll base.store (turnsOf r1.landed) := by
     rw [← hr1, runWrites_store, hts]
   have hs2 : r2.config.store = applyAll r1.config.store (turnsOf r2.landed) := by
     rw [← hr2, runWrites_store]
-  refine ⟨hdisj, fun c => ?_⟩
-  rw [hs2]
+  have hs3 : r3.config.store = applyAll r2.config.store (turnsOf r3.landed) := by
+    rw [← hr3, runWrites_store]
+  refine ⟨hdisj, hdisjM, fun c => ?_⟩
+  rw [hs3]
   split
   · rename_i hc
-    rw [applyAll_not_mem (hdisj c hc), hs1]
-  · split
-    · rename_i _ hc
-      exact applyAll_mem hc
-    · rename_i hc1 hc2
-      rw [applyAll_not_mem hc2, hs1, applyAll_not_mem hc1]
+    exact applyAll_mem hc
+  · rename_i hc3
+    rw [applyAll_not_mem hc3, hs2]
+    split
+    · rename_i hc
+      rw [applyAll_not_mem (hdisj c hc), hs1]
+    · split
+      · rename_i _ hc
+        exact applyAll_mem hc
+      · rename_i hc1 hc2
+        rw [applyAll_not_mem hc2, hs1, applyAll_not_mem hc1]
 
 /-! ### A conflict is a state -/
 
-/-- **A clashing pair is a conflict kept in the tip's state, and neither write lands.** -/
+/-- **A clashing pair that does not merge is a conflict kept in the tip's state, and neither write
+lands.** -/
 theorem clash_is_conflict_state {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m)
     {a b : BTurn} (ha : a ∈ writesOf L.acts) (hb : b ∈ writesOf R.acts)
-    (hc : (clash (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book a b).isEmpty = false) :
+    (hc : (clash (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book a b).isEmpty = false)
+    (hn : mergeFor (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
+      (writesOf L.acts) (writesOf R.acts) a b = none) :
     Conflict.writes (clash (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book a b)
         (L.name, a) (R.name, b) ∈ m.tip.conflicts ∧
       (Side.left, Act.write a) ∉ m.landed ∧ (Side.right, Act.write b) ∉ m.landed := by
@@ -1171,34 +1469,389 @@ theorem clash_is_conflict_state {base : Config} {L R : Branch} {m : Merged} (h :
   subst hm
   simp only
   have htl := tip_landed_nonwrites base L.name R.name L.acts R.acts
-  generalize tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts) = t at hc htl ⊢
+  generalize tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts) = t at hc hn htl ⊢
   refine ⟨?_, ?_, ?_⟩
   · refine List.mem_append_right _ (List.mem_append_right _ ?_)
     unfold writeConflicts
     refine List.mem_flatMap.2 ⟨a, ha, List.mem_filterMap.2 ⟨b, hb, ?_⟩⟩
-    simp [hc]
+    simp [hc, hn]
   · intro hl
     rcases List.mem_append.1 hl with hl | hl
     · have := htl _ hl; simp [Act.isWrite] at this
-    · rw [runWrites_append] at hl
-      rcases List.mem_append.1 hl with hl | hl
-      · obtain ⟨t', ht', he⟩ := runWrites_landed_side (name := sideName L.name R.name) .left _ hl
-        cases he
-        have hfree := (freeLeft_sub ht').2 b hb
-        rw [hc] at hfree; cases hfree
-      · obtain ⟨t', _, he⟩ := runWrites_landed_side (name := sideName L.name R.name) .right _ hl
-        cases he
+    · obtain ⟨sd, t', he, hx⟩ := runWrites_landed_shape hl
+      cases he
+      rcases List.mem_append.1 hx with hx | hx
+      · rcases List.mem_append.1 hx with hx | hx
+        · obtain ⟨t'', ht'', he⟩ := List.mem_map.1 hx
+          cases he
+          have hfree := (freeLeft_sub ht'').2 b hb
+          rw [hc] at hfree; cases hfree
+        · obtain ⟨_, _, he⟩ := List.mem_map.1 hx; cases he
+      · obtain ⟨_, _, he⟩ := List.mem_map.1 hx; cases he
   · intro hl
     rcases List.mem_append.1 hl with hl | hl
     · have := htl _ hl; simp [Act.isWrite] at this
-    · rw [runWrites_append] at hl
-      rcases List.mem_append.1 hl with hl | hl
-      · obtain ⟨t', _, he⟩ := runWrites_landed_side (name := sideName L.name R.name) .left _ hl
-        cases he
-      · obtain ⟨t', ht', he⟩ := runWrites_landed_side (name := sideName L.name R.name) .right _ hl
-        cases he
-        have hfree := (freeRight_sub ht').2 a ha
-        rw [hc] at hfree; cases hfree
+    · obtain ⟨sd, t', he, hx⟩ := runWrites_landed_shape hl
+      cases he
+      rcases List.mem_append.1 hx with hx | hx
+      · rcases List.mem_append.1 hx with hx | hx
+        · obtain ⟨_, _, he⟩ := List.mem_map.1 hx; cases he
+        · obtain ⟨t'', ht'', he⟩ := List.mem_map.1 hx
+          cases he
+          have hfree := (freeRight_sub ht'').2 a ha
+          rw [hc] at hfree; cases hfree
+      · obtain ⟨_, _, he⟩ := List.mem_map.1 hx; cases he
+
+/-! ### I-confluence: the merged state keeps every law both sides kept -/
+
+section IConfluence
+
+open Obend.Spec.Law (fieldOf fieldLabel firstScalarField firstField LawRef)
+
+/-- The entry map `setNat` applies to a record's fields. -/
+def setEntry (f : String) (n : Nat) : String × Data → String × Data :=
+  fun (k, x) => if k == f then (k, .natural n) else (k, x)
+
+theorem setNat_record (fs : List (String × Data)) (f : String) (n : Nat) :
+    setNat (.record fs) f n = .record (fs.map (setEntry f n)) := rfl
+
+theorem setEntry_fst (f : String) (n : Nat) (p : String × Data) : (setEntry f n p).1 = p.1 := by
+  obtain ⟨k, x⟩ := p
+  simp only [setEntry]
+  split <;> rfl
+
+theorem setEntry_ne {f : String} {n : Nat} {p : String × Data} (h : p.1 ≠ f) : setEntry f n p = p := by
+  obtain ⟨k, x⟩ := p
+  unfold setEntry
+  simp only at h
+  simp [h]
+
+theorem setEntry_self {f : String} {n : Nat} {x : Data} : setEntry f n (f, x) = (f, .natural n) := by
+  simp [setEntry]
+
+theorem firstScalarField_set_ne {f g : String} {n : Nat} (hg : g ≠ f) :
+    ∀ fs : List (String × Data), firstScalarField g (fs.map (setEntry f n)) = firstScalarField g fs
+  | [] => rfl
+  | (k, x) :: rest => by
+    have ih := firstScalarField_set_ne (n := n) hg rest
+    rw [List.map_cons]
+    by_cases hk : k = f
+    · subst hk
+      rw [setEntry_self]
+      have hkg : ¬ k = g := fun h => hg h.symm
+      simp [firstScalarField, hkg, ih]
+    · rw [setEntry_ne (by simpa using hk)]
+      simp [firstScalarField, ih]
+
+theorem firstField_set_ne {f g : String} {n : Nat} (hg : g ≠ f) :
+    ∀ fs : List (String × Data), firstField g (fs.map (setEntry f n)) = firstField g fs
+  | [] => rfl
+  | (k, x) :: rest => by
+    have ih := firstField_set_ne (n := n) hg rest
+    rw [List.map_cons]
+    by_cases hk : k = f
+    · subst hk
+      rw [setEntry_self]
+      have hkg : ¬ k = g := fun h => hg h.symm
+      simp [firstField, hkg, ih]
+    · rw [setEntry_ne (by simpa using hk)]
+      simp [firstField, ih]
+
+theorem fieldOf_setNat_ne {f g : String} {n : Nat} (hg : g ≠ f) (d : Data) :
+    fieldOf g (setNat d f n) = fieldOf g d := by
+  cases d with
+  | record fs => rw [setNat_record]; exact firstScalarField_set_ne hg fs
+  | _ => rfl
+
+theorem fieldLabel_setNat_ne {f g : String} {n : Nat} (hg : g ≠ f) (d : Data) :
+    fieldLabel g (setNat d f n) = fieldLabel g d := by
+  cases d with
+  | record fs => rw [setNat_record]; simp only [fieldLabel, firstField_set_ne hg fs]
+  | _ => rfl
+
+theorem firstScalarField_set_self {f : String} {n : Nat} :
+    ∀ {fs : List (String × Data)} {x : Int}, firstScalarField f fs = some x →
+      firstScalarField f (fs.map (setEntry f n)) = some (n : Int)
+  | [], _, h => by cases h
+  | (k, v) :: rest, x, h => by
+    rw [List.map_cons]
+    by_cases hk : k = f
+    · subst hk; rw [setEntry_self]; simp [firstScalarField, Obend.Spec.Law.scalarOf]
+    · rw [setEntry_ne (by simpa using hk)]
+      simp only [firstScalarField, hk, ite_false] at h ⊢
+      exact firstScalarField_set_self h
+
+theorem fieldOf_setNat_self {f : String} {n : Nat} {d : Data} {x : Int} (h : fieldOf f d = some x) :
+    fieldOf f (setNat d f n) = some (n : Int) := by
+  cases d with
+  | record fs => rw [setNat_record]; exact firstScalarField_set_self h
+  | _ => cases h
+
+theorem firstScalarField_nonneg {f : String} :
+    ∀ {fs : List (String × Data)} {x : Int}, firstScalarField f fs = some x → 0 ≤ x
+  | [], _, h => by cases h
+  | (k, v) :: rest, x, h => by
+    simp only [firstScalarField] at h
+    split at h
+    · split at h
+      · rename_i s hs
+        cases h
+        cases v <;> simp [Obend.Spec.Law.scalarOf] at hs <;> (try subst hs) <;> (try split at hs) <;>
+          (try subst hs) <;> omega
+      · exact firstScalarField_nonneg h
+    · exact firstScalarField_nonneg h
+
+theorem fieldOf_nonneg {f : String} {d : Data} {x : Int} (h : fieldOf f d = some x) : 0 ≤ x := by
+  cases d <;> simp only [fieldOf] at h <;> try cases h
+  exact firstScalarField_nonneg h
+
+theorem read_setNat {facts : Facts} {f : String} {n : Nat} {d : Data} {ref : LawRef}
+    (h : f ∉ ref.fields) : ref.read facts (setNat d f n) = ref.read facts d := by
+  cases ref with
+  | field g =>
+    have : g ≠ f := fun he => h (by simp [LawRef.fields, he])
+    simp [LawRef.read, fieldOf_setNat_ne this]
+  | _ => rfl
+
+theorem readLabel_setNat {f : String} {n : Nat} {d : Data} {ref : LawRef}
+    (h : f ∉ ref.fields) : ref.readLabel (setNat d f n) = ref.readLabel d := by
+  cases ref with
+  | field g =>
+    have : g ≠ f := fun he => h (by simp [LawRef.fields, he])
+    simp [LawRef.readLabel, fieldLabel_setNat_ne this]
+  | _ => rfl
+
+/-- A law that does not read a field says the same of a state with that field set. -/
+theorem denote_setNat_of_not_mem {facts : Facts} {old : Option Data} {f : String} {n : Nat} {d : Data} :
+    ∀ {e : LawExpr}, f ∉ e.fields → e.denote facts old (setNat d f n) = e.denote facts old d
+  | .eqC ref v, h => by simp only [LawExpr.denote, read_setNat (by simpa [LawExpr.fields] using h)]
+  | .leC ref v, h => by simp only [LawExpr.denote, read_setNat (by simpa [LawExpr.fields] using h)]
+  | .inC ref v, h => by simp only [LawExpr.denote, read_setNat (by simpa [LawExpr.fields] using h)]
+  | .eqR a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, read_setNat h.1, read_setNat h.2, readLabel_setNat h.1, readLabel_setNat h.2]
+  | .leR a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, read_setNat h.1, read_setNat h.2]
+  | .leROff a b o, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, read_setNat h.1, read_setNat h.2]
+  | .monotone g, h => by
+    have : g ≠ f := fun he => h (by simp [LawExpr.fields, he])
+    simp only [LawExpr.denote, fieldOf_setNat_ne this]
+  | .writeOnce g, h => by
+    have : g ≠ f := fun he => h (by simp [LawExpr.fields, he])
+    simp only [LawExpr.denote, fieldOf_setNat_ne this, fieldLabel_setNat_ne this]
+  | .not a, h => by
+    simp only [LawExpr.fields] at h
+    simp only [LawExpr.denote, denote_setNat_of_not_mem h]
+  | .and a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, denote_setNat_of_not_mem h.1, denote_setNat_of_not_mem h.2]
+  | .or a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, denote_setNat_of_not_mem h.1, denote_setNat_of_not_mem h.2]
+  | .implies a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, denote_setNat_of_not_mem h.1, denote_setNat_of_not_mem h.2]
+
+theorem MergeKind.le_join (k : MergeKind) (b x y : Nat) : x ≤ k.join b x y := by
+  cases k
+  · simp only [MergeKind.join]; omega
+  · exact Nat.le_max_left x y
+  · exact Nat.left_le_or
+
+theorem confluentLaw_fallback {k : MergeKind} {f : String} {e : LawExpr}
+    (hc : confluentLaw k f e = true) (hf : f ∈ e.fields) :
+    (∃ a b, e = .and a b) ∨ (∃ g, e = .monotone g) ∨ (∃ g v, e = .not (.leC (.field g) v)) ∨
+      (∃ g v, e = .leC (.field g) v) := by
+  cases e with
+  | and a b => exact .inl ⟨a, b, rfl⟩
+  | monotone g => exact .inr (.inl ⟨g, rfl⟩)
+  | leC ref v =>
+    cases ref with
+    | field g => exact .inr (.inr (.inr ⟨g, v, rfl⟩))
+    | _ => simp [LawExpr.fields, LawRef.fields] at hf
+  | not body =>
+    cases body with
+    | leC ref v =>
+      cases ref with
+      | field g => exact .inr (.inr (.inl ⟨g, v, rfl⟩))
+      | _ => simp [LawExpr.fields, LawRef.fields] at hf
+    | _ => simp [confluentLaw, hf] at hc
+  | _ => simp [confluentLaw, hf] at hc
+
+/-- One field merged: a law I-confluent for the merge, kept by the left's state `m` and the
+right's `r`, is kept by `m` with the field set to the join. -/
+theorem confluent_step {k : MergeKind} {f : String} {facts : Facts} {old : Option Data} {m r : Data}
+    {x y : Int} (b : Nat) (hx : fieldOf f m = some x) (hy : fieldOf f r = some y) :
+    ∀ {e : LawExpr}, confluentLaw k f e = true → e.denote facts old m = true → e.denote facts old r = true →
+      e.denote facts old (setNat m f (k.join b x.toNat y.toNat)) = true
+  | e, hc, hm, hr => by
+    have hx0 := fieldOf_nonneg hx
+    have hy0 := fieldOf_nonneg hy
+    have hj : x ≤ ((k.join b x.toNat y.toNat : Nat) : Int) := by
+      have := k.le_join b x.toNat y.toNat; omega
+    by_cases hf : f ∈ e.fields
+    · rcases confluentLaw_fallback hc hf with ⟨a, c, rfl⟩ | ⟨g, rfl⟩ | ⟨g, v, rfl⟩ | ⟨g, v, rfl⟩
+      · simp only [confluentLaw, Bool.and_eq_true] at hc
+        simp only [LawExpr.denote, Bool.and_eq_true] at hm hr ⊢
+        exact ⟨confluent_step b hx hy hc.1 hm.1 hr.1, confluent_step b hx hy hc.2 hm.2 hr.2⟩
+      · have hg : g = f := by simpa [LawExpr.fields, eq_comm] using hf
+        subst hg
+        cases old with
+        | none => rfl
+        | some o =>
+          simp only [LawExpr.denote, hx] at hm
+          simp only [LawExpr.denote, fieldOf_setNat_self (n := k.join b x.toNat y.toNat) hx]
+          split at hm
+          · rename_i before after h1 h2
+            cases h2
+            rw [h1]
+            simp only [decide_eq_true_eq] at hm ⊢
+            omega
+          · cases hm
+      · have hg : g = f := by simpa [LawExpr.fields, LawRef.fields, eq_comm] using hf
+        subst hg
+        simp only [LawExpr.denote, LawRef.read, hx, Bool.not_eq_true', decide_eq_false_iff_not] at hm
+        simp only [LawExpr.denote, LawRef.read, fieldOf_setNat_self (n := k.join b x.toNat y.toNat) hx,
+          Bool.not_eq_true', decide_eq_false_iff_not]
+        omega
+      · have hg : g = f := by simpa [LawExpr.fields, LawRef.fields, eq_comm] using hf
+        subst hg
+        have hk : k = .max := by simpa [confluentLaw] using hc
+        subst hk
+        simp only [LawExpr.denote, LawRef.read, hx, decide_eq_true_eq] at hm
+        simp only [LawExpr.denote, LawRef.read, hy, decide_eq_true_eq] at hr
+        have hmax : ((MergeKind.max.join b x.toNat y.toNat : Nat) : Int) ≤ v := by
+          show ((Max.max x.toNat y.toNat : Nat) : Int) ≤ v
+          rcases Nat.le_total x.toNat y.toNat with h | h
+          · rw [Nat.max_eq_right h]; omega
+          · rw [Nat.max_eq_left h]; omega
+        simp only [LawExpr.denote, LawRef.read]
+        rw [fieldOf_setNat_self hx]
+        exact decide_eq_true hmax
+    · rw [denote_setNat_of_not_mem hf]; exact hm
+
+/-- **I-confluent merge is lawful.** If every law is I-confluent for every declared merge of a page,
+the state `mergeState` reaches from the left's `l` and the right's `r` keeps every law both kept. -/
+theorem iconfluent_merge_lawful {facts : Facts} {old : Option Data} {pre r : Data} :
+    ∀ {merges : List (String × MergeKind)} {l m : Data}, mergeState pre r merges l = some m →
+      ∀ {e : LawExpr}, (∀ fk ∈ merges, confluentLaw fk.2 fk.1 e = true) →
+        e.denote facts old l = true → e.denote facts old r = true → e.denote facts old m = true
+  | [], l, m, h, e, _, hl, _ => by simp only [mergeState, Option.some.injEq] at h; subst h; exact hl
+  | fk :: rest, l, m, h, e, hc, hl, hr => by
+    simp only [mergeState] at h
+    cases hs : mergeStep pre r l fk with
+    | none => rw [hs] at h; cases h
+    | some l' =>
+      rw [hs] at h
+      simp only [Option.bind_some] at h
+      refine iconfluent_merge_lawful h (fun fk' hfk' => hc fk' (List.mem_cons_of_mem _ hfk')) ?_ hr
+      unfold mergeStep at hs
+      dsimp only at hs
+      split at hs
+      · rename_i x y hx hy
+        split at hs
+        · cases hs; exact hl
+        · split at hs
+          · cases hs
+            exact confluent_step _ hx hy (hc fk (List.mem_cons_self ..)) hl hr
+          · cases hs
+      · cases hs; exact hl
+      · cases hs
+
+/-- **A merged cell keeps its page's laws.** The post-state `mergeCell` gives keeps every own law of
+the page that both sides' post-states kept: the same write trivially, a declared merge by
+`iconfluent_merge_lawful`. -/
+theorem mergeCell_lawful {book : LawBook} {da db : CellDelta} {m : Data} (h : mergeCell book da db = some m)
+    {pl : PageLaws} (hpl : book.lookup da.cell = some pl) {facts : Facts} {old : Option Data} :
+    ∀ p ∈ pl.own, p.2.denote facts old da.postState = true → p.2.denote facts old db.postState = true →
+      p.2.denote facts old m = true := by
+  intro p hp hl hr
+  unfold mergeCell at h
+  split at h
+  · cases h
+  · split at h
+    · cases h; exact hl
+    · rw [hpl] at h
+      simp only at h
+      split at h
+      · cases h
+      · rename_i hall
+        split at h
+        · cases h
+        · rename_i hconf
+          simp only [Bool.not_eq_true', Bool.not_eq_false, List.all_eq_true] at hconf
+          split at h
+          · rename_i m₁ m₂ h₁ h₂
+            split at h
+            · cases h
+              exact iconfluent_merge_lawful h₁ (fun fk hfk => hconf p hp fk hfk) hl hr
+            · cases h
+          · cases h
+
+end IConfluence
+
+/-! ### Order: what swapping the two sides changes
+
+`merge base L R` and `merge base R L` are not the same function, for two reasons, each exhibited in
+`lean/tests/vault/Branch.lean`:
+1. the tip settles the non-write acts left first, and their admission depends on order: a grant on
+   one side and a revocation of the same sturdyref on the other land in one order (grant, then
+   revoke) and not in the other (the revocation finds nothing to revoke), so the tip's authority, and
+   every write relying on that sturdyref, depend on which side is called left;
+2. a write is judged at the height of the history when it lands (`requestAt`), and the left's free
+   writes land before the right's, so a law reading `ledger.height` can admit a write in one order
+   and refuse it in the other.
+What does not depend on order is proved: the clash relation is symmetric (`clash_comm`), so the free
+writes of each side and the held pairs are the same whichever side is left (`freeLeft_swap`), and
+the tip's store depends only on which writes landed, not on the order they landed in
+(`merge_swap_store`). Merged pairs are left out of `merge_swap_store`: the two orders compute the
+merged state from opposite sides and agree on it only up to `termEq`. -/
+
+theorem clash_comm (book : LawBook) (a b : BTurn) (c : String) : c ∈ clash book a b ↔ c ∈ clash book b a := by
+  rw [mem_clash, mem_clash]
+  constructor <;> rintro (h | h) <;> first | exact .inl h | exact .inr h
+
+theorem clash_isEmpty_comm (book : LawBook) (a b : BTurn) :
+    (clash book a b).isEmpty = (clash book b a).isEmpty := by
+  cases h1 : (clash book a b).isEmpty <;> cases h2 : (clash book b a).isEmpty <;> try rfl
+  · rw [clash_nil_iff] at h2
+    have : (clash book a b).isEmpty = true := clash_nil_iff.2 ⟨h2.2, h2.1⟩
+    rw [h1] at this; cases this
+  · rw [clash_nil_iff] at h1
+    have : (clash book b a).isEmpty = true := clash_nil_iff.2 ⟨h1.2, h1.1⟩
+    rw [h2] at this; cases this
+
+/-- **The free writes do not depend on which side is left.** -/
+theorem freeLeft_swap (book : LawBook) (lw rw : List BTurn) : freeLeft book lw rw = freeRight book rw lw := by
+  unfold freeLeft freeRight
+  congr 1
+  funext a
+  congr 1
+  funext b
+  exact clash_isEmpty_comm book a b
+
+/-- **The store depends on what landed, not on the order it landed in.** When the two orders of a
+merge land the same writes of each side (and merge no pair), they reach the same store. -/
+theorem merge_swap_store {base : Config} {L R : Branch} {m₁ m₂ : Merged}
+    (h₁ : merge base L R = .ok m₁) (h₂ : merge base R L = .ok m₂)
+    (hl : landedOn .left m₁.landed = landedOn .right m₂.landed)
+    (hr : landedOn .right m₁.landed = landedOn .left m₂.landed)
+    (hb₁ : landedOn .both m₁.landed = []) (hb₂ : landedOn .both m₂.landed = []) :
+    ∀ c, m₁.tip.store c = m₂.tip.store c := by
+  obtain ⟨hd₁, _, hs₁⟩ := merge_is_pushout h₁
+  obtain ⟨_, _, hs₂⟩ := merge_is_pushout h₂
+  intro c
+  rw [hs₁ c, hs₂ c, hb₁, hb₂, ← hl, ← hr]
+  simp only [writesAll, List.flatMap_nil, List.not_mem_nil, ite_false]
+  by_cases hcl : c ∈ writesAll (landedOn .left m₁.landed)
+  · have hcr := hd₁ c hcl
+    simp only [writesAll] at hcl hcr
+    simp [hcl, hcr]
+  · simp only [writesAll] at hcl
+    simp [hcl]
 
 /-! ### The history -/
 
@@ -1291,6 +1944,21 @@ theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {m₁ m₂ 
     intro b hb
     exact clash_nil_iff.2 ⟨fun c hc hcb => hL a ha c (writes_sub_access _ a c hc) (hrw b hb c hcb),
       fun c hc hca => hL a ha c hca (hrw b hb c (writes_sub_access _ b c hc))⟩
+  have hnomerge : ∀ (rw : List BTurn), (∀ b ∈ rw, ∀ c ∈ b.access t.config.book, c ∈ H) →
+      mergedPairs t.config.book (writesOf L.acts) rw = [] := by
+    intro rw hrw
+    rw [List.eq_nil_iff_forall_not_mem]
+    rintro ⟨a, b, m⟩ hp
+    unfold mergedPairs at hp
+    obtain ⟨a', ha', hm⟩ := List.mem_flatMap.1 hp
+    obtain ⟨b', hb', he⟩ := List.mem_filterMap.1 hm
+    have hcl : (clash t.config.book a' b').isEmpty = true :=
+      clash_nil_iff.2 ⟨fun c hc hcb => hL a' ha' c (writes_sub_access _ a' c hc) (hrw b' hb' c hcb),
+        fun c hc hca => hL a' ha' c hca (hrw b' hb' c (writes_sub_access _ b' c hc))⟩
+    rw [ite_eq_left hcl] at he
+    cases he
+  rw [hnomerge _ hR₁, hnomerge _ hR₂]
+  simp only [List.filter_nil, List.map_nil, List.append_nil]
   rw [hfree _ hR₁, hfree _ hR₂, runWrites_append, runWrites_append]
   simp only
   generalize hr1 : runWrites (sideName L.name R₁.name) t.config ((writesOf L.acts).map (Side.left, ·)) = r1

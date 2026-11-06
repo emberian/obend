@@ -40,4 +40,5 @@ public import Obend.Vault.HardwareProjection
 public import Obend.Vault.PhysicalProjection
 public import Obend.Vault.SovereignEngine
 public import Obend.Vault.Branch
+public import Obend.Vault.BranchCli
 public import Obend.Vault.Cli

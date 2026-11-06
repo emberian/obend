@@ -734,3 +734,108 @@ Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and t
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
 Index v2
 ```
+
+## Branches: two stores fork from one, post offline, and merge at the tip
+
+`obend branch` works on a store file (`Obend.Vault.BranchCli`): pages with owners, law lines, links,
+declared merges and states; sturdyrefs; a receipted history. alice and bob each fork it, post
+offline (every act is judged on its own branch as it is posted), and the two branches merge at the
+tip, where every act is judged again: authority read with both sides' revocations visible, every
+write judged by every law of every page in its cone.
+
+```sh
+mkdir branch && cd branch && cat > base.json <<'JSON'
+{"pages": [
+  {"name": "notes/Alpha", "owner": "alice", "state": {"count": 1}},
+  {"name": "notes/Beta", "owner": "bob", "state": {"count": 1}},
+  {"name": "Shared", "owner": "alice", "state": {"v": 0}},
+  {"name": "board/Bob", "owner": "bob", "state": {"posts": 0}},
+  {"name": "notes/Gamma", "owner": "bob", "state": {"date": 3}},
+  {"name": "Ledger", "owner": "alice", "state": {"date": 1}},
+  {"name": "Counter", "owner": "alice", "laws": [["up", "monotone(count)"]], "merges": [["count", "add"]],
+   "state": {"count": 1}}],
+ "sturdyrefs": [{"uri": "sr:board", "cell": "board/Bob", "held": ["write"]},
+                {"uri": "sr:shared", "cell": "Shared", "held": ["write"]},
+                {"uri": "sr:counter", "cell": "Counter", "held": ["write"]}],
+ "history": [{"seq": 0, "origin": "genesis", "label": "open", "cells": []}]}
+JSON
+obend branch fork base.json left.json left && obend branch fork base.json right.json right
+```
+
+```text
+left: forked at receipt 0
+right: forked at receipt 0
+```
+
+alice, offline: a write of her own page, a write of `Shared`, a post on bob's board through
+`sr:board`, an increment of the counter, and a law over `Ledger`'s links listing `notes/Gamma`.
+
+```sh
+cd branch && obend branch write left.json alpha notes/Alpha count=2 --as alice &&
+  obend branch write left.json shared-a Shared v=1 --as alice &&
+  obend branch write left.json post-on-board board/Bob posts=1 --as alice --relies sr:board &&
+  obend branch write left.json inc-a Counter count=3 --as alice &&
+  obend branch relaw left.json list-gamma Ledger --as alice --links notes/Gamma --law 'dated=not (linked.date == 0)'
+```
+
+```text
+left: alpha admitted on its branch
+left: shared-a admitted on its branch
+left: post-on-board admitted on its branch
+left: inc-a admitted on its branch
+left: list-gamma admitted on its branch
+```
+
+bob, offline: a write of his own page, a write of `Shared` through `sr:shared`, an increment of the
+counter through `sr:counter`, the revocation of `sr:board`, and the undating of `notes/Gamma`.
+
+```sh
+cd branch && obend branch write right.json beta notes/Beta count=5 --as bob &&
+  obend branch write right.json shared-b Shared v=2 --as bob --relies sr:shared &&
+  obend branch write right.json inc-b Counter count=4 --as bob --relies sr:counter &&
+  obend branch revoke right.json revoke-board sr:board --as bob &&
+  obend branch write right.json undate-gamma notes/Gamma date=0 --as bob
+```
+
+```text
+right: beta admitted on its branch
+right: shared-b admitted on its branch
+right: inc-b admitted on its branch
+right: revoke-board admitted on its branch
+right: undate-gamma admitted on its branch
+```
+
+The merge: the disjoint writes land as one receipted history after the base's; the two counter
+increments merge by `Counter`'s declared `add` (its law `monotone(count)` is I-confluent for it) and
+land once; alice's board post is refused for the sturdyref bob revoked; alice's law over `Ledger`'s
+links refuses bob's undating of `notes/Gamma`; the two writes of `Shared` are a conflict, kept in
+the tip with both candidates.
+
+```sh
+cd branch && obend branch merge base.json left.json right.json tip.json &&
+  obend branch show tip.json Counter && obend branch show tip.json Shared
+```
+
+```text
+landed 1: left's list-gamma
+landed 2: right's revoke-board
+landed 3: left's alpha
+landed 4: right's beta
+landed 5: left+right's inc-a + inc-b
+refused: left's post-on-board: relied on the sturdyref sr:board, revoked at the tip by right's revoke-board
+refused: right's undate-gamma: refused by Ledger: dated (alice's law `not (linked.date == 0)`), judged at notes/Gamma
+conflict 0: conflict at Shared: left's shared-a and right's shared-b (both kept as candidates; neither landed)
+Counter: count 6
+Shared: v 0
+```
+
+The conflict is resolved by landing one candidate; the receipt names the one dropped.
+
+```sh
+cd branch && obend branch resolve tip.json 0 left && obend branch show tip.json Shared
+```
+
+```text
+resolved conflict 0: landed shared-a (resolving; dropped right's shared-b)
+Shared: v 1
+```
